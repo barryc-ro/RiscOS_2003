@@ -52,9 +52,8 @@ RESDIR = <resource$dir>.Resources.${COMPONENT}
 # Program specific options:
 #
 COMPONENT = msadpcm
-TARGET    = aof.${COMPONENT}
+TARGET    = rm.${COMPONENT}
 OBJS=	  o.modhdr o.msadpcmasm
-ROMOBJS=  o.modhdrz o.msadpcmasm
 
 #
 # Rule patterns
@@ -66,13 +65,7 @@ ROMOBJS=  o.modhdrz o.msadpcmasm
 #
 # build a relocatable module:
 #
-all: rm.${COMPONENT}
-
-o.modhdrz: s.modhdr
-	${AS} ${AFLAGS} s.modhdr $@ -Predefine "ROM SETL {TRUE}"
-
-o.modhdr: s.modhdr
-	${AS} ${AFLAGS} s.modhdr $@ -Predefine "ROM SETL {FALSE}"
+all: ${TARGET}
 
 #
 # RISC OS ROM build rules:
@@ -84,34 +77,21 @@ install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
-install: rm.${COMPONENT} 
-	${CP} rm.${COMPONENT} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+install: ${TARGET} 
+	${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: installed
 
 clean:
-        ${WIPE} o.* ${WFLAGS}
-        ${WIPE} rm.* ${WFLAGS}
-        ${WIPE} linked.* ${WFLAGS}
-        ${WIPE} map.* ${WFLAGS}
+        ${RM} o.modhdr
+        ${RM} o.msadpcmasm
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
 
-#
-# ROM target (re-linked at ROM Image build time)
-#
-${TARGET}: ${ROMOBJS}
-        ${LD} -o $@ -aof ${ROMOBJS}
-#
-# Final link for the ROM Image (using given base address)
-#
-rom_link:
-	${MKDIR} linked
-	${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
-        ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom_link complete
-
-rm.${COMPONENT}: ${OBJS}
+${TARGET}: ${OBJS} local_dirs
         ${LD} -o $@ -module ${OBJS}
+
+local_dirs:
+        ${MKDIR} o
+        ${MKDIR} rm
 
 # Dynamic dependencies:
