@@ -6,6 +6,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <ctype.h>
 #include <string.h>
 #include <time.h>
@@ -50,6 +51,23 @@
 #else
 #define  LIB_START          "_clib_entermodule"
 #endif
+
+/*
+ * This macro indicates that the fast service call table should
+ * be generated if possible
+ */
+#define URSULA_KERNEL
+
+/*
+ * Maximum number of entries in a fast dispatch table.  MJS reckons
+ * that around 256 is the benefit cut off point for Ursula.
+ */
+#ifdef URSULA_KERNEL
+#define MAX_SVC_TABLE_SIZE	256
+#else
+#define MAX_SVC_TABLE_SIZE	100
+#endif
+
 
 #define  SUFFIXES           "c c++ cmhg h o p s"
 /*
@@ -320,31 +338,44 @@ static int an_error;
  * Generate an error message
  */
 
-static void warnf(char *fmt, char *s)
+static void warnf(const char *fmt, ...)
 {
+  char buf[256];
+  va_list ap;
+
+  va_start(ap, fmt);
+  vsprintf(buf, fmt, ap);
+  va_end(ap);
+
   fputs(SELF, stderr);
+
   if (lineno == 0)
     fputs(": ", stderr);
   else
     fprintf(stderr, ", line %u: ", lineno);
-  fprintf(stderr, fmt, s);
+  fputs(buf, stderr);
 
 #ifdef __riscos
   if (throwback_flag && lineno)
   {
-      char buf[256];
-      sprintf(buf, fmt, s);
       throwback_send(an_error, lineno, buf, in_name, in_name);
       an_error = 0;
   }
 #endif
 }
 
-static void errf(char *fmt, char *s)
+static void errf(const char *fmt, ...)
 {
+  char buf[256];
+  va_list ap;
+
+  va_start(ap, fmt);
+  vsprintf(buf, fmt, ap);
+  va_end(ap);
+
   ++nerrs;
   an_error = 1;
-  warnf(fmt, s);
+  warnf("%s", buf);
 }
 
 static void fatal_error()
@@ -652,7 +683,8 @@ static int int_compare(const void *m1, const void *m2)
 
 static unsigned read_fast_calls(unsigned * *fast_calls)
 { int ch;
-  unsigned n_fast, fast[100];
+  unsigned n_fast, fast[MAX_SVC_TABLE_SIZE];
+  int err=0;
 
   n_fast = 0;
   ch = skip_spaces();
@@ -660,12 +692,16 @@ static unsigned read_fast_calls(unsigned * *fast_calls)
   { unsigned n;
     unget(ch);
     n = (unsigned) read_number();
-    if (n_fast < 100)
-      fast[n_fast++] = n;
+    if (n_fast < MAX_SVC_TABLE_SIZE)
+    {
+      /* Must not allow zero into this table - it will destroy the fast service call table */
+      if (n != 0 && err == 0) fast[n_fast++] = n;
+    }
     else
     {
-      errf("more than 100 'fast' service calls\n", NULL);
+      errf("more than %d 'fast' service calls\n", MAX_SVC_TABLE_SIZE);
       n_fast = 0;
+      err=1;
     }
     ch = skip_spaces();
     if (ch == ',') ch = skip_past_ch();
@@ -675,6 +711,10 @@ static unsigned read_fast_calls(unsigned * *fast_calls)
   {
     *fast_calls = (unsigned *) malloc(n_fast * sizeof(unsigned));
     memcpy(*fast_calls, fast, n_fast * sizeof(unsigned));
+  }
+  else
+  {
+    warnf("warning: omitting 'fast' service call list impairs system performance\n", NULL);
   }
 
   qsort(*fast_calls, n_fast, sizeof(unsigned), int_compare);
@@ -696,8 +736,8 @@ static void read_title_string()
   { int l = strlen(name);
     if (l > WARN_TITLE_LEN)
     {
-      warnf("warning: title string longer than preferred max len of %s\n",
-            STRINGIFY(WARN_TITLE_LEN));
+      warnf("warning: title string longer than preferred max len of %d\n",
+            WARN_TITLE_LEN);
     }
     title_string = strcpy(malloc(l+1), name);
   }
@@ -1190,6 +1230,15 @@ static unsigned32 save_word(unsigned32 w)
   return offset;
 }
 
+static unsigned32 save_word_at(unsigned32 w, unsigned32 atdot)
+{
+  char *const pre_dot = dot;
+  dot = atdot + module_area;
+  (void) save_word(w);
+  dot = pre_dot;
+  return dot_offset();
+}
+
 #define  PCRelative  1
 #define  Additive    0
 
@@ -1288,6 +1337,7 @@ static void save_inst(unsigned32 cond, unsigned32 inst1, unsigned32 inst2, unsig
  * produce tighter code than CMHG 5.02, which would MOV each hard
  * constant from scratch for each TEQ.
  */
+#define  PULL_LR      0x08BD4000ul
 #if 1
 static void cg_service_call_fast_returns(void)
 {
@@ -1302,8 +1352,9 @@ static void cg_service_call_fast_returns(void)
 #define  MOV_R14      0x03A0E000ul
 #define  ADD_R14_R14  0x028EE000ul
 #define  TEQS_R1_R14  0x0131000Eul
+#define  STACK_LR     0x052DE004ul /* STR r14, [r13, #-4]! */
+#define  UNSTACK_LR   0x049DE004ul /* LDR r14, [r13], #4 */
   if (nfast_calls == 0) {
-    save_word(PUSH_LR | AL);
     return;
   }
   need_to_push_r14 = 1;
@@ -1318,7 +1369,7 @@ static void cg_service_call_fast_returns(void)
     {
       if (need_to_push_r14)
       {
-        save_word(PUSH_LR | AL);
+        save_word(STACK_LR | AL);
         need_to_push_r14 = 0;
       }
       save_inst(j ? NE : AL, r14 ? ADD_R14_R14 : MOV_R14, ADD_R14_R14, fast_calls[j] - r14);
@@ -1327,12 +1378,13 @@ static void cg_service_call_fast_returns(void)
     }
   }
 
-  if (!need_to_push_r14)
+  if (!need_to_push_r14) {
     save_word(PULL_PC | NE);
+    save_word(UNSTACK_LR | AL);
+  }
   else
   {
     save_word(MOVS_PC_LR | NE);
-    save_word(PUSH_LR | AL);
   }
 }
 #else
@@ -1387,7 +1439,6 @@ static void cg_service_call_fast_returns(void)
                                            calls are < 256, then this wont have been done */
 
   }
-
 
 }
 #endif
@@ -1991,6 +2042,8 @@ static void write_defs_file(void)
   fclose(f);
 }
 
+#define MOV_A1_A1	0xE1A00000ul
+
 static void write_output(char *out_name)
 { struct module_header *mh;
   FILE *out;
@@ -2113,8 +2166,42 @@ static void write_output(char *out_name)
    */
   if (service_call_handler != NULL)
   {
+    unsigned int service_jumpin_offset = 0;
+
+    #ifdef URSULA_KERNEL
+    if (nfast_calls > 0) {
+      /*
+      typedef struct {
+        unsigned int flags;
+        unsigned int fast_entry_offset;
+        unsigned int services[nfast_calls];
+        unsigned int zeroterminator;
+	unsigned int offset_into_module_of_this_table;
+	unsigned int magic_MOV_A1_A1;
+      } ursula_fast_svc_dispatch_tab_layout;
+      */
+      unsigned int service_list, ctr;
+
+      service_list = dot_offset();
+      save_word(0ul); /* flags */
+      service_jumpin_offset = save_word(0ul); /* will be filled in later when we know where to jump */
+      for (ctr=0; ctr<nfast_calls; ++ctr)
+        save_word(fast_calls[ctr]);
+      save_word(0ul);
+      save_word(service_list);
+      mh->service_call_handler = save_word(MOV_A1_A1);
+    }
+    else {
+      save_word(0ul);
+      mh->service_call_handler = save_word(MOV_A1_A1);
+    }
+    #else
     mh->service_call_handler = dot_offset();
+    #endif
     cg_service_call_fast_returns();
+    if (nfast_calls > 0 && service_jumpin_offset > 0) {
+        save_word_at(dot_offset(),service_jumpin_offset);
+    }
     save_veneer(&service_call_veneer, service_call_handler);
   }
 
