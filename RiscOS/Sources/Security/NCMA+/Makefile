@@ -158,6 +158,9 @@ resources:
         ${MKDIR} <resource$dir>.Resources.NCMA
         ${CP} Resources.MFRCERT  <resource$dir>.Resources.NCMA.MFRCERT ${CPFLAGS}
         ${CP} Resources.MFRKEY <resource$dir>.Resources.NCMA.MFRKEY ${CPFLAGS}
+        ${CP} Resources.Boot <resource$dir>.Resources.NCMA.Boot ${CPFLAGS}
+        ${CP} Resources.BootFast <resource$dir>.Resources.NCMA.BootFast ${CPFLAGS}
+        ${CP} Resources.BootUpdate <resource$dir>.Resources.NCMA.BootUpdate ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 #
