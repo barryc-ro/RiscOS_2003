@@ -64,6 +64,12 @@
 #			has NOT been done by default here. Added also
 #			lines to wipe CVS control files from exported
 #			"About" directories (WFLAGS used at last!).
+# 1998-10-08	ADH	ResJ now used for Res file of JavaScript builds;
+#			needed as the Choices dialogue now has JS
+#			specific regions. install_common now installs
+#			anything in 'User' dir and wipes CVS control files
+#			from the exported copy. 'resources' rule updated
+#			similarly for both 'User' and 'About' directories.
 
 # -----------------------------------------------------------------------------
 # Program specific options
@@ -114,10 +120,14 @@ WFLAGS		= ~cf~vr
 # Intertalk build (plus debug).
 
 BASEFLAGS	= -DCOMPAT_INET4 -DRISCOS -DNSPR20
-#BASEFLAGS	= -DCOMPAT_INET4 -DRISCOS -DNSPR20 -DUSE_NSPRLIB_ALLOC_REGISTRATIONS
-#BASEFLAGS	= -DCOMPAT_INET4 -DRISCOS -DNSPR20 -DUNIFONT
 
-# Note JSUFFIX *must* be defined on the command line.
+# Examples of other possibly useful BASEFLAGS settings
+
+# BASEFLAGS	= -DCOMPAT_INET4 -DRISCOS -DNSPR20 -DUSE_NSPRLIB_ALLOC_REGISTRATIONS
+# BASEFLAGS	= -DCOMPAT_INET4 -DRISCOS -DNSPR20 -DUNIFONT
+
+# Additional build-dependent flags. Note JSUFFIX *must* be defined on the
+# command line.
 
 DFLAGS		= ${BASEFLAGS} ${JSUFFIX} -DSINGLE_USER
 DDFLAGS		= ${DFLAGS} -fn -DSTRICT_PARSER -DTRACE
@@ -862,16 +872,16 @@ install_common: ${FILES}
 	${CP} ${LDIR}.Choices			${INSTDIR}.Choices		${CPFLAGS}n
 	${CP} ${LDIR}.Controls			${INSTDIR}.Controls		${CPFLAGS}n
 	${CP} ${LDIR}.Messages			${INSTDIR}.Messages		${CPFLAGS}n
-	${CP} ${LDIR}.Res			${INSTDIR}.Res			${CPFLAGS}n
 	${CP} ${LDIR}.Sprites			${INSTDIR}.Sprites		${CPFLAGS}n
 	-${CP} ${LDIR}.Sprites22		${INSTDIR}.Sprites22		${CPFLAGS}n
-	${MKDIR} ${INSTDIR}.User
-	-${CP} ${LDIR}.User.Hotlist		${INSTDIR}.User.Hotlist		${CPFLAGS}n
+	-${CP} ${LDIR}.User			${INSTDIR}.User			${CPFLAGS}n
+	${WIPE} ${INSTDIR}.User.CVS	${WFLAGS}
 
 install: install_common
 	${CP} ${LDIR}.!Boot		${INSTDIR}.!Boot	${CPFLAGS}~n
 	${CP} ${LDIR}.!Run		${INSTDIR}.!Run		${CPFLAGS}~n
 	-${CP} ${LDIR}.About		${INSTDIR}.About	${CPFLAGS}~n
+	-${CP} ${LDIR}.Res		${INSTDIR}.Res		${CPFLAGS}~n
 	${WIPE} ${INSTDIR}.About.CVS	${WFLAGS}
 	-Access ${INSTDIR}.*		wr/r
 	-Access ${INSTDIR}.User.*	wr/r
@@ -883,6 +893,7 @@ installd: install_common
 	${CP} ${LDIR}.!Boot		${INSTDIR}.!Boot	${CPFLAGS}~n
 	${CP} ${LDIR}.!RunD		${INSTDIR}.!Run		${CPFLAGS}~n
 	-${CP} ${LDIR}.About		${INSTDIR}.About	${CPFLAGS}~n
+	-${CP} ${LDIR}.Res		${INSTDIR}.Res		${CPFLAGS}~n
 	${WIPE} ${INSTDIR}.About.CVS	${WFLAGS}
 	@echo
 	@echo ${COMPONENT}: Debug application installed ${INSTDIR}
@@ -891,6 +902,7 @@ installj: install_common
 	${CP} ${LDIR}.!BootJ		${INSTDIR}.!Boot	${CPFLAGS}~n
 	${CP} ${LDIR}.!RunJ		${INSTDIR}.!Run		${CPFLAGS}~n
 	${CP} ${LDIR}.AboutJ		${INSTDIR}.About	${CPFLAGS}~n
+	${CP} ${LDIR}.ResJ		${INSTDIR}.Res		${CPFLAGS}~n
 	${WIPE} ${INSTDIR}.About.CVS	${WFLAGS}
 	-Access ${INSTDIR}.*		wr/r
 	-Access ${INSTDIR}.User.*	wr/r
@@ -916,7 +928,10 @@ resources:
 	${CP} ${LDIR}.Messages		${RESDIR}.Messages	${CPFLAGS}
 	${CP} ${LDIR}.Res		${RESDIR}.Res		${CPFLAGS}
 	${CP} ${LDIR}.Sprites		${RESDIR}.Sprites	${CPFLAGS}
-	${CP} ${LDIR}.User.Hotlist	${RESDIR}.User.Hotlist	${CPFLAGS}
+	${CP} ${LDIR}.User		${RESDIR}.User		${CPFLAGS}
+	${CP} ${LDIR}.About		${RESDIR}.About		${CPFLAGS}
+	${WIPE} ${RESDIR}.User.CVS	${WFLAGS}
+	${WIPE} ${RESDIR}.About.CVS	${WFLAGS}
 	@echo
 	@echo ${COMPONENT}: Resource files copied to Messages module
 
