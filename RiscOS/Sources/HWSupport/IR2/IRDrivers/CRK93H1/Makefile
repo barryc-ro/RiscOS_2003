@@ -60,7 +60,7 @@ dirs:
 # Rule patterns
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} -o $@ $<
+.cmhg.o:;   ${CMHG} -p -o $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
 
 #
@@ -115,24 +115,3 @@ rom_link:
 
 
 # Dynamic dependencies:
-o.ir_api:	c.ir_api
-o.ir_api:	C:h.kernel
-o.ir_api:	C:h.swis
-o.ir_api:	h.utils
-o.ir_api:	h.ir_api
-o.ir_api:	h.veneers
-o.module:	c.module
-o.module:	C:h.kernel
-o.module:	C:h.swis
-o.module:	h.utils
-o.module:	h.ir_api
-o.module:	h.module
-o.module:	h.handset
-o.handset:	c.handset
-o.handset:	C:h.kernel
-o.handset:	C:h.swis
-o.handset:	h.utils
-o.handset:	h.irqs
-o.handset:	h.ir_api
-o.handset:	h.handset
-o.handset:	h.veneers
