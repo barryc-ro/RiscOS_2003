@@ -53,6 +53,7 @@ RSTUBS		= RISCOSLIB:o.rstubs
 ROMSTUBS	= RISCOSLIB:o.romstubs
 ROMCSTUBS	= RISCOSLIB:o.romcstubs
 ABSSYM		= RISC_OSLib:o.c_AbsSym
+ASMUTILS        = C:AsmUtils.o.AsmUtilsZM
 
 DEBUGLIB	= $(LIBDIR).DebugLib.o.DebugLibzm
 INETLIB		= TCPIPLibs:o.inetlibzm
@@ -63,7 +64,7 @@ LIBSD		= $(DEBUGLIB) $(SOCKLIB) $(INETLIB)
 # ------------------------------------------------------------------------------
 # Include files
 #
-INCLUDES	= -IC:
+INCLUDES	= -IC: -IC:AsmUtils
 
 
 # ------------------------------------------------------------------------------
@@ -75,7 +76,6 @@ ROMTARGET	= aof.Dialler
 EXPORTS		= $(EXP_C_H).$(COMPONENT)
 
 OBJS =\
- o.asmutils\
  o.chat\
  o.dialler\
  o.error\
@@ -90,7 +90,6 @@ OBJS =\
  o.utils
 
 OBJSD =\
- od.asmutils\
  od.chat\
  od.dialler\
  od.error\
@@ -105,7 +104,6 @@ OBJSD =\
  od.utils
 
 OLDOBJS =\
- o.asmutils\
  o_old.chat\
  o_old.dialler\
  o_old.error\
@@ -120,7 +118,6 @@ OLDOBJS =\
  o_old.utils
 
 OLDOBJSD =\
- o.asmutils\
  od_old.chat\
  od_old.dialler\
  od_old.error\
@@ -206,21 +203,21 @@ clean:
 # RAM Target 
 #
 ram_old: $(OLDOBJS) $(OLDHDR) $(LIBS) $(CLIB)
-	$(LD) -rmf -o $(RAMTARGET) $(OLDOBJS) $(LIBS) $(CLIB)
+	$(LD) -rmf -o $(RAMTARGET) $(OLDOBJS) $(LIBS) $(CLIB) ${ASMUTILS}
 	$(MODSQZ) $(RAMTARGET)
 
 ram_ ram_new: $(OBJS) $(HDR) $(LIBS) $(CLIB)
-	$(LD) -rmf -o $(RAMTARGET)B $(OBJS) $(LIBS) $(CLIB)
+	$(LD) -rmf -o $(RAMTARGET)B $(OBJS) $(LIBS) $(CLIB) ${ASMUTILS}
 	$(MODSQZ) $(RAMTARGET)B
 
 #
 # ROM Target (re-linked at ROM Image build time)
 #
 rom_old: $(OLDOBJS) $(OLDHDR) $(LIBS) $(ROMCSTUBS)
-	$(LD) -o $(ROMTARGET) -aof $(OLDOBJS) $(LIBS) $(ROMCSTUBS)
+	$(LD) -o $(ROMTARGET) -aof $(OLDOBJS) $(LIBS) ${ASMUTILS} $(ROMCSTUBS)
 
 rom_ rom_new: $(OBJS) $(HDR) $(LIBS) $(ROMCSTUBS)
-	$(LD) -o $(ROMTARGET)B -aof $(OBJS) $(LIBS) $(ROMCSTUBS)
+	$(LD) -o $(ROMTARGET)B -aof $(OBJS) $(LIBS) ${ASMUTILS} $(ROMCSTUBS)
 
 #
 # Final link for the ROM Image (using given base address)
@@ -228,14 +225,12 @@ rom_ rom_new: $(OBJS) $(HDR) $(LIBS) $(ROMCSTUBS)
 rom_link: rom_link_$(TYPE)
 
 rom_link_old:
-	$(LD) -o linked.$(COMPONENT) -map -bin -base $(ADDRESS) $(ROMTARGET) $(ABSSYM) > map.$(COMPONENT)
-	truncate map.$(COMPONENT) linked.$(COMPONENT)
+	$(LD) -o linked.$(COMPONENT) -rmf -base $(ADDRESS) $(ROMTARGET) $(ABSSYM)
 	$(CP) linked.$(COMPONENT) $(LINKDIR).$(COMPONENT) $(CPFLAGS)
 	@echo $(COMPONENT): rom_link complete
 
 rom_link_ rom_link_new:
-	$(LD) -o linked.$(COMPONENT)B -map -bin -base $(ADDRESS) $(ROMTARGET)B $(ABSSYM) > map.$(COMPONENT)B
-	truncate map.$(COMPONENT)B linked.$(COMPONENT)B
+	$(LD) -o linked.$(COMPONENT)B -rmf -base $(ADDRESS) $(ROMTARGET)B $(ABSSYM)
 	$(CP) linked.$(COMPONENT)B $(LINKDIR).$(COMPONENT)B $(CPFLAGS)
 	@echo $(COMPONENT)B: rom_link complete
 
@@ -243,6 +238,6 @@ $(EXP_C_H).$(COMPONENT): h.$(COMPONENT)
 	$(CP) h.$(COMPONENT) $@ $(CPFLAGS)
 
 rm.DiallerD: $(OBJSD) $(HDR) $(LIBSD) $(CLIB)
-	$(LD) -rmf -o $@ $(OBJSD) $(LIBSD) $(CLIB)
+	$(LD) -rmf -o $@ $(OBJSD) $(LIBSD) $(CLIB) ${ASMUTILS}
 
 # Dynamic dependencies:
