@@ -26,7 +26,7 @@ CD	= dir
 # MULTITABLESIZE is set as described above. 
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -ff -zps1 -Wp -zM -I${INCLUDES} -DINET ${OPTIONS} -DMULTITABLESIZE=8 -DFILTER_IP_ADDR \
+CFLAGS  = -c -ff -zps1 -Wp -zM -I${INCLUDES} -DINET ${OPTIONS} -DHASHED_MULTICAST \
 	${DEBUG} -depend !Depend ${THROWBACK} -DCOMPAT_INET4# -DSUPPORT_TRADITIONAL_MBUFS
 
 
@@ -103,6 +103,7 @@ clean:
 ${TARGET}: ${OBJS}
         ${LD} -o $@ -rmf ${OBJS} ${CLIB} ${INETLIB}
         $(MODSQZ) $(TARGET)
+        Access $@ WR/r
 
 #
 # ROM Target 
