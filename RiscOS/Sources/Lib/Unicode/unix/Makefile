@@ -30,7 +30,8 @@ Objects =  autojp.o unictype.o \
 	enc_utf16.o \
 	enc_ucs4.o \
 	acorn.o \
-	combine.o
+	combine.o \
+	riscos.o
 
 ObjectsD =  autojp.od unictype.od \
 	utf8.od \
@@ -45,7 +46,8 @@ ObjectsD =  autojp.od unictype.od \
 	enc_utf16.od \
 	enc_ucs4.od \
 	acorn.od \
-	combine.od
+	combine.od \
+	riscos.od
 
 ObjectsZ =  autojp.oz unictype.oz \
 	utf8.oz \
@@ -60,7 +62,8 @@ ObjectsZ =  autojp.oz unictype.oz \
 	enc_utf16.oz \
 	enc_ucs4.oz \
 	acorn.oz \
-	combine.oz
+	combine.oz \
+	riscos.oz
 
 all: ucodelib
 

@@ -76,7 +76,8 @@ OBJS = autojp.o \
 	enc_utf16.o \
 	enc_ucs4.o \
 	acorn.o \
-	combine.o
+	combine.o \
+	riscos.o
 
 OBJSZ = \
 	oz.autojp \
@@ -93,7 +94,8 @@ OBJSZ = \
 	oz.enc_utf16 \
 	oz.enc_ucs4 \
 	oz.acorn \
-	oz.combine
+	oz.combine \
+	oz.riscos
 
 
 OBJSD = \
@@ -111,7 +113,8 @@ OBJSD = \
 	od.enc_utf16 \
 	od.enc_ucs4 \
 	od.acorn \
-	od.combine
+	od.combine \
+	od.riscos
 
 HDRS = autojp.h charsets.h encoding.h iso10646.h languages.h unictype.h utf8.h combine.h
 
