@@ -54,11 +54,15 @@ INCLUDES= -IC:
 # use DEFEAT_BROWSER_LIMIT to prevent MA parsing NCIBrowserMode tags for restricting URLs
 # use SECURE_RELATIONSHIP_SERVER to speak to the relationship server via SSL
 #use MANUFACTURER_KEY_X509 if the root public key is in an x.509 certificate, otherwise raw DER RSA key is assumed
+# use LIMIT_RUNAWAY_UIDS if you've got development NVRAM/OTP, otherwise weird stuff may happen
+# use HIDEOUS_PROXY_HACK if you want https proxy to always be set to whatever the http proxy is
+# use NVRAM_DEBUG if you know what it does, otherwise don't
 
 # no debugging
 CCFLAGS  = -c ${THROWBACK} -depend !Depend ${INCLUDES} -zM -UREMOTE_DEBUG -UENABLE_DEBUGGING -DPOINTLESS_BUTTONS -DUSE_TINY \
 		-DCHIMPANZEE_INTERFACE -DAUTHENTICATE_SIGNATURES -DDIALING_FROM_UK -UDEFEAT_BROWSER_LIMIT \
-		-USECURE_RELATIONSHIP_SERVER -DMANUFACTURER_KEY_X509
+		-DSECURE_RELATIONSHIP_SERVER -UMANUFACTURER_KEY_X509 -DLIMIT_RUNAWAY_UIDS -DHIDEOUS_PROXY_HACK \
+		-UNVRAM_DEBUG
 
 # debugging
 #CCFLAGS  = -c ${THROWBACK} -depend !Depend ${INCLUDES} -zM -DREMOTE_DEBUG -DENABLE_DEBUGGING -DCHIMPANZEE_INTERFACE \
