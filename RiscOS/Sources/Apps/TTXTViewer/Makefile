@@ -91,7 +91,7 @@ clean:
 #
 ${RDIR}.!RunImage: ${OBJS} ${CLIB} ${WIMPLIB}
         ${LD} ${LINKFLAGS} -o $@ ${OBJS} ${CLIB} ${WIMPLIB} 
-#        ${SQUEEZE} $@
+        ${SQUEEZE} $@
 
 dirs:
         ${MKDIR} o
