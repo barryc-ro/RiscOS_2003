@@ -20,6 +20,9 @@
 # 29-Oct-98	ADH	-DFUNAI3_POLL removed from DFLAGS.
 # 12-Nov-98     SBF     Removed -DFUNAI3; define this in the build components
 #                       file instead using ${BUILDFLAGS}
+# 08-Oct-99     SNB     Added support to build STB Baseline style NCKeyboard.
+#                       This is a ram module plus a !NCKeyboard psuedo-app.
+#                       Builds if OPTIONS=STB passed into makefile.
 
 # -----------------------------------------------------------------------------
 # Paths
@@ -31,7 +34,7 @@ EXP_HDR = <export$dir>
 # Generic options
 #
 
-MKDIR   = cdir
+MKDIR   = mkdir -p
 AS      = objasm
 CC      = cc
 CMHG    = cmhg
@@ -164,18 +167,30 @@ resources:
 	@echo ${COMPONENT}: resource files copied
 	@echo
 
-install: ${APP}
-	${MKDIR} ${INSTALLDIR}
-	${CP} LocalUserIFRes:!BootROM ${INSTALLDIR}.!Boot ${CPFLAGS}
-	${CP} LocalUserIFRes:!Run ${INSTALLDIR}.!Run ${CPFLAGS}
-	${CP} LocalUserIFRes:Messages ${INSTALLDIR}.Messages ${CPFLAGS}
-       -${CP} LocalUserIFRes:Graphics ${INSTALLDIR}.Sprites ${CPFLAGS}
-       -${CP} LocalUserIFRes:Sprites ${INSTALLDIR}.Sprites ${CPFLAGS}
-       -${CP} LocalUserIFRes:TVSprs ${INSTALLDIR}.TVSprs ${CPFLAGS}
-	${CP} LocalUserIFRes:Res ${INSTALLDIR}.Res ${CPFLAGS}
-	${CP} ${APP} ${INSTALLDIR}.!RunImage ${CPFLAGS}
+install: install_${OPTIONS} install_common
+	@echo INSTDIR: ${INSTDIR}: resource files copied
 	@echo ${COMPONENT}: resource files copied
 	@echo
+
+install_common:
+	${MKDIR} ${INSTDIR}
+
+install_STB: ram
+	${CP} LocalUserIFRes:!Boot ${INSTDIR}.!Boot ${CPFLAGS}
+	${CP} LocalUserIFRes:!Run ${INSTDIR}.!Run ${CPFLAGS}
+	${CP} LocalUserIFRes:Messages ${INSTDIR}.Messages ${CPFLAGS}
+	${CP} LocalUserIFRes:Res ${INSTDIR}.Res ${CPFLAGS}
+	${CP} rm.${COMPONENT} ${INSTDIR}.${RMDIR}.${COMPONENT} ${CPFLAGS}
+
+install_: ${APP}
+	${CP} LocalUserIFRes:!BootROM ${INSTDIR}.!Boot ${CPFLAGS}
+	${CP} LocalUserIFRes:!Run ${INSTDIR}.!Run ${CPFLAGS}
+	${CP} LocalUserIFRes:Messages ${INSTDIR}.Messages ${CPFLAGS}
+       -${CP} LocalUserIFRes:Graphics ${INSTDIR}.Sprites ${CPFLAGS}
+       -${CP} LocalUserIFRes:Sprites ${INSTDIR}.Sprites ${CPFLAGS}
+       -${CP} LocalUserIFRes:TVSprs ${INSTDIR}.TVSprs ${CPFLAGS}
+	${CP} LocalUserIFRes:Res ${INSTDIR}.Res ${CPFLAGS}
+	${CP} ${APP} ${INSTDIR}.!RunImage ${CPFLAGS}
 
 # -----------------------------------------------------------------------------
 # Static dependencies
