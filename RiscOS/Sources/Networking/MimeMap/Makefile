@@ -2,6 +2,9 @@
 # ====================
 #
 
+COMPONENT = MimeMap
+TARGET    = MimeMap
+
 # ------------------------------------------------------------------------------
 # Paths
 #
@@ -12,7 +15,7 @@ EXP_C_H = <CExport$dir>.h
 # Generic options:
 #
 
-MKDIR		= cdir
+MKDIR		= do mkdir -p
 AS		= objasm
 CC		= ${MemCheckCC} cc
 CMHG		= cmhg
@@ -20,14 +23,14 @@ CP		= copy
 LD		= link #${MemCheckLD} link
 RM		= remove
 MODSQZ		= modsqz
-RESGEN		= resgen
 WIPE    	= -wipe
 STRIP		= stripdepnd
+TOUCH           = create
 
 AFLAGS		= -depend !Depend -Stamp -quit ${THROWBACK}
 CFLAGS		= -c -depend !Depend -zM -zps1 -ffah ${INCLUDES} ${THROWBACK} 
 CPFLAGS		= ~cfr~v
-CMHGFLAGS	= -depend !Depend -p -throwback ${DFLAGS}
+CMHGFLAGS	= -depend !Depend -p ${THROWBACK} ${DFLAGS}
 WFLAGS		= ~c~v
 
 DFLAGS		= 
@@ -69,8 +72,7 @@ DIRS = o._dirs
 # Program specific options:
 #
 
-COMPONENT 	= MimeMap
-TARGET		= aof.MimeMap
+ROM_TARGET      = aof.${TARGET}
 TARGET_D	= aof.MimeMap_D
 TARGETSA	= rm.MimeMap
 TARGETSA_D	= rm.MimeMap_D
@@ -109,7 +111,7 @@ debug: $(TARGETSA_D)
 normal: ${TARGETSA}
         @echo ${COMPONENT}: normal module built
 
-rom: ${TARGET}
+rom: ${ROM_TARGET}
         @echo ${COMPONENT}: rom module built
 
 export: ${EXPORTS}
@@ -119,8 +121,8 @@ install: ${TARGETSA}
         ${CP} ${TARGETSA} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: module installed
 
-install_rom: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+install_rom: ${ROM_TARGET}
+        ${CP} ${ROM_TARGET} ${INSTDIR}.${TARGET} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
 ${DIRS}:
@@ -129,9 +131,7 @@ ${DIRS}:
 	${MKDIR} rm
 	${MKDIR} linked
 	${MKDIR} aof
-	${MKDIR} map
-	create ${DIRS}
-	stamp ${DIRS}
+        ${TOUCH} $@
 
 clean:
         ${WIPE} h.ModHead ${WFLAGS}
@@ -145,7 +145,7 @@ clean:
         @echo ${COMPONENT}: cleaned
 
 resources:
-        @echo ${COMPONENT}: resource files copied
+        @echo ${COMPONENT}: no resources
 
 
 # ------------------------------------------------------------------------------
@@ -162,7 +162,7 @@ ${TARGETSA_D}: ${OBJSD} ${LIBSD} ${EXTRALIBS} ${CLIB} ${DIRS}
 # Final link for the ROM Image (re-linked at ROM Image build time)
 #
 
-${TARGET}: ${OBJS} ${LIBS} ${EXTRALIBS} ${ROMCSTUBS} ${DIRS}
+${ROM_TARGET}: ${OBJS} ${LIBS} ${EXTRALIBS} ${ROMCSTUBS} ${DIRS}
         ${LD} -o $@ -aof ${OBJS} ${LIBS} ${EXTRALIBS} ${ROMCSTUBS}
 
 ${TARGET_D}: ${OBJSD} ${LIBSD} ${EXTRALIBS} ${ROMCSTUBS} ${DIRS}
@@ -173,8 +173,7 @@ ${TARGET_D}: ${OBJSD} ${LIBSD} ${EXTRALIBS} ${ROMCSTUBS} ${DIRS}
 #
 
 rom_link:
-        ${LD} -o linked.${COMPONENT} -map -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM} \
-              > map.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROM_TARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
