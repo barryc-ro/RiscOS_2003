@@ -58,7 +58,7 @@ WSSLIB    = C:ThirdParty.WSS.WSSLib.o.WSSLibZM
 # Rule patterns
 #
 .SUFFIXES:
-.SUFFIXES:  .o .o_6 .o_fp .o26 .o26_6 .o26_fp .a .c .h .cmhg
+.SUFFIXES:  .o .o_6 .o_fp .o26 .o26_6 .o26_fp .s .a .c .h .cmhg
 
 .c.o:;      ${CC} ${CFLAGS} ${CFLAGS_LM_noFP}   -o $@ $< -apcs 3/32/fpe3/fpr
 .c.o_6:;    ${CC} ${CFLAGS} ${CFLAGS_noLM_noFP} -o $@ $< -apcs 3/32/fpe3/fpr
@@ -91,6 +91,13 @@ WSSLIB    = C:ThirdParty.WSS.WSSLib.o.WSSLibZM
 .a.o26_fp:;  ${CC} -E >s.$* $<
             /bin.asclean s.$*
             ${AS} ${ASFLAGS} ${ASFLAGS_noLM_FP} -o $@ s.$*
+
+.s.o:; ${AS} ${ASFLAGS} ${ASFLAGS_LM_noFP} -o $@ s.$*
+.s.o_6:; ${AS} ${ASFLAGS} ${ASFLAGS_noLM_noFP} -o $@ s.$*
+.s.o_fp:; ${AS} ${ASFLAGS} ${ASFLAGS_noLM_FP} -o $@ s.$*
+.s.o26:; ${AS} ${ASFLAGS} ${ASFLAGS_LM_noFP} -o $@ s.$*
+.s.o26_6:; ${AS} ${ASFLAGS} ${ASFLAGS_noLM_noFP} -o $@ s.$*
+.s.o26_fp:; ${AS} ${ASFLAGS} ${ASFLAGS_noLM_FP} -o $@ s.$*
 
 OBJSFP    = \
  o_fp.main o.metadata o.common o_fp.output o_fp.dct64 o_fp.dctfp \
