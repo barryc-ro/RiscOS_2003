@@ -46,8 +46,10 @@
 
 /* Static function prototypes */
 
-static int               object_get_token_object (browser_data * b, HStream * t);
-static _kernel_oserror * object_get_object_size  (browser_data * b, int object, BBox * size);
+static int               object_get_token_object  (browser_data * b, HStream * t);
+static _kernel_oserror * object_get_object_size   (browser_data * b, int object, BBox * size);
+static _kernel_oserror * object_get_object_plugin (browser_data * b, int object, unsigned int * plugin_instance, unsigned int * plugin_task);
+static _kernel_oserror * object_set_object_plugin (browser_data * b, int object, unsigned int plugin_instance, unsigned int plugin_task);
 
 /*************************************************/
 /* object_new_object()                           */
@@ -98,7 +100,6 @@ _kernel_oserror * object_new_object(browser_data * b, HStream * t)
 
   /* Fill in the new item */
 
-  b->odata[b->nobjects].browser_instance_handle = 0;
   b->odata[b->nobjects].plugin_instance_handle  = 0;
   b->odata[b->nobjects].plugin_task_handle      = 0;
   b->odata[b->nobjects].token                   = t;
@@ -116,12 +117,14 @@ _kernel_oserror * object_new_object(browser_data * b, HStream * t)
   /* 'height' fields.                                            */
 
   b->odata[b->nobjects].units                   = UNITS_PIXELS;
-  b->odata[b->nobjects].width                   = t->rows;
-  b->odata[b->nobjects].height                  = t->cols;
+  b->odata[b->nobjects].width                   = t->cols;
+  b->odata[b->nobjects].height                  = t->rows;
 
   /* Set up initial flags values */
 
   b->odata[b->nobjects].isimage                 = 0;
+  b->odata[b->nobjects].isplugin                = 0;
+  b->odata[b->nobjects].broadcast_sent          = 0;
 
   /* Finally, increment the objects counter */
 
@@ -162,16 +165,13 @@ _kernel_oserror * object_new_object(browser_data * b, HStream * t)
 
   /* Deal with external objects */
 
-  if (!data)
+  else
   {
     data = HtmlOBJECTclassid(t);
     type = HtmlOBJECTcodetype(t);
-  }
 
-//  if (data && *data && type && *type)
-//  {
-//    return plugin_broadcast_plugin_open(
-//  }
+    if (data && type) b->odata[b->nobjects - 1].isplugin = 1;
+  }
 
   return NULL;
 }
@@ -187,9 +187,32 @@ _kernel_oserror * object_new_object(browser_data * b, HStream * t)
 
 _kernel_oserror * object_discard(browser_data * b)
 {
+  _kernel_oserror * e = NULL;
+  int               i;
+
+  /* Close down any Plug-Ins */
+
+  for (i = 0; i < b->nobjects; i++)
+  {
+    if (
+         b->odata[i].isplugin       &&
+         b->odata[i].broadcast_sent &&
+         b->odata[i].plugin_task_handle
+       )
+    {
+      e = plugin_send_plugin_close(b,
+                                   b->odata[i].plugin_instance_handle,
+                                   b->odata[i].plugin_task_handle);
+    }
+  }
+
+  /* Remove the Objects */
+
   b->nobjects = 0;
 
-  return memory_set_chunk_size(b, NULL, CK_OBJB, 0);
+  memory_set_chunk_size(b, NULL, CK_OBJB, 0);
+
+  return e;
 }
 
 /*************************************************/
@@ -199,7 +222,7 @@ _kernel_oserror * object_discard(browser_data * b)
 /* in the given browser by the given token.      */
 /*                                               */
 /* Parameters: Pointer to a browser_data struct  */
-/*             relevant to the Objects;          */
+/*             relevant to the Object;           */
 /*                                               */
 /*             Pointer to a token representing   */
 /*             the Object (OBJECT, EMBED or      */
@@ -339,7 +362,7 @@ static _kernel_oserror * object_get_object_size(browser_data * b, int object, BB
 /* Returns the size of a given Object.           */
 /*                                               */
 /* Parameters: Pointer to a browser_data struct  */
-/*             to add to;                        */
+/*             relevant to the Object;           */
 /*                                               */
 /*             Pointer to a token representing   */
 /*             the Object (OBJECT, EMBED or      */
@@ -422,6 +445,11 @@ int object_set_token_object_position(browser_data * b, HStream * t, int x, int y
 
   if (object >= 0)
   {
+    int oldx, oldy;
+
+    oldx = b->odata[object].x;
+    oldy = b->odata[object].y;
+
     b->odata[object].x = x;
     b->odata[object].y = y;
 
@@ -429,9 +457,278 @@ int object_set_token_object_position(browser_data * b, HStream * t, int x, int y
     /* the image structure too.                         */
 
     if (b->odata[object].isimage) image_set_token_image_position(b, t, x, y);
+
+    /* If this item is a Plug-In, this could be the first time we've */
+    /* known for sure what position the item should be plotted at;   */
+    /* pr we may want to tell the Plug-In to move to a new position. */
+
+    if (b->odata[object].isplugin)
+    {
+      BBox position;
+
+      show_error_ret(object_get_object_size(b, object, &position));
+
+      /* If this is the first time we've tried to set a position for */
+      /* the Object and a broadcast to start up an associated        */
+      /* Plug-In has not yet been sent, send it.                     */
+
+      if (!b->odata[object].broadcast_sent)
+      {
+        if (x < 0)
+        {
+          /* Object position is invalid, so hide the Plug-In */
+
+          position.xmin = -position.xmax - 16;
+          position.xmax = -16;
+
+          position.ymin = position.ymax + 16;
+          position.ymin = 16;
+        }
+        else
+        {
+          /* Object position is valid, we can place it in the right position initially */
+
+          position.xmin += x;
+          position.ymin += y;
+          position.xmax += x;
+          position.ymax += y;
+        }
+
+        b->odata[object].broadcast_sent = 1; /* Don't try over and over if the first gives an error */
+
+        show_error_ret(plugin_broadcast_plugin_open(b, t, &position));
+      }
+
+      /* If the Plug-In has been started, and the position of the Object */
+      /* has changed, tell the Plug-In to move.                          */
+
+      else if (
+                (
+                  oldx != x ||
+                  oldy != y
+                )
+                && b->odata[object].plugin_task_handle
+              )
+      {
+        if (x < 0)
+        {
+          /* Object position has been invalidated, so hide the Plug-In */
+
+          position.xmin = -position.xmax - 16;
+          position.xmax = -16;
+
+          position.ymin = position.ymax + 16;
+          position.ymin = 16;
+        }
+        else
+        {
+          /* Object position has been updated */
+
+          position.xmin += x;
+          position.ymin += y;
+          position.xmax += x;
+          position.ymax += y;
+        }
+
+        /* Send the reshape message */
+
+        show_error_ret(plugin_send_original_plugin_reshape(b,
+                                                           b->odata[object].plugin_instance_handle,
+                                                           b->odata[object].plugin_task_handle,
+                                                           &position));
+      }
+    }
   }
 
   return object;
+}
+
+/*************************************************/
+/* object_get_object_plugin()                    */
+/*                                               */
+/* Returns details of any Plug-In associated     */
+/* with a given Object (referenced by number).   */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the Object;           */
+/*                                               */
+/*             Number of the Object;             */
+/*                                               */
+/*             Pointer to an int, in which the   */
+/*             Plug-In instance handle will be   */
+/*             written;                          */
+/*                                               */
+/*             Pointer to an int, in which the   */
+/*             Plug-In task handle will be       */
+/*             written, or 0 if the Object       */
+/*             does not have an associated       */
+/*             Plug-In or can't be found.        */
+/*                                               */
+/* Assumes:    Either pointer may be NULL.       */
+/*************************************************/
+
+static _kernel_oserror * object_get_object_plugin(browser_data * b, int object, unsigned int * plugin_instance, unsigned int * plugin_task)
+{
+  /* Fill in zeros to start with */
+
+  if (plugin_instance) *plugin_instance = 0;
+  if (plugin_task)     *plugin_task     = 0;
+
+  /* Is this a valid object number? */
+
+  if (object < 0 || object >= b->nobjects)
+  {
+    #ifdef TRACE
+
+      erb.errnum = Utils_Error_Custom_Normal;
+
+      sprintf(erb.errmess,
+              "Invalid object number %d passed to object_get_token_object_plugin (browser %08x, nobjects = %d)",
+              object,
+              (int) b,
+              b->nobjects);
+
+      return &erb;
+
+    #endif
+
+    return NULL;
+  }
+
+  /* If not associated with a Plug-In, exit */
+
+  if (!b->odata[object].isplugin) return NULL;
+
+  /* Otherwise, return the details */
+
+  if (plugin_instance) *plugin_instance = b->odata[object].plugin_instance_handle;
+  if (plugin_task)     *plugin_task     = b->odata[object].plugin_task_handle;
+
+  /* Finished */
+
+  return NULL;
+}
+
+/*************************************************/
+/* object_get_token_object_plugin()              */
+/*                                               */
+/* Returns details of any Plug-In associated     */
+/* with a given Object (referenced by token).    */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the Object;           */
+/*                                               */
+/*             Pointer to the token representing */
+/*             the Object;                       */
+/*                                               */
+/*             Pointer to an int, in which the   */
+/*             Plug-In instance handle will be   */
+/*             written;                          */
+/*                                               */
+/*             Pointer to an int, in which the   */
+/*             Plug-In task handle will be       */
+/*             written, or 0 if the Object       */
+/*             does not have an associated       */
+/*             Plug-In or can't be found.        */
+/*                                               */
+/* Assumes:    Either pointer may be NULL.       */
+/*************************************************/
+
+_kernel_oserror * object_get_token_object_plugin(browser_data * b, HStream * t, unsigned int * plugin_instance, unsigned int * plugin_task)
+{
+  return object_get_object_plugin(b,
+                                  object_get_token_object(b, t),
+                                  plugin_instance,
+                                  plugin_task);
+}
+
+/*************************************************/
+/* object_set_object_plugin()                    */
+/*                                               */
+/* Sets details of any Plug-In associated with   */
+/* a given Object (referenced by number).        */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the Object;           */
+/*                                               */
+/*             Number of the Object;             */
+/*                                               */
+/*             Plug-In instance handle to set;   */
+/*                                               */
+/*             Plug-In task handle to set.       */
+/*                                               */
+/* Assumes:    Either pointer may be NULL.       */
+/*************************************************/
+
+static _kernel_oserror * object_set_object_plugin(browser_data * b, int object, unsigned int plugin_instance, unsigned int plugin_task)
+{
+  /* Is this a valid object number? */
+
+  if (object < 0 || object >= b->nobjects)
+  {
+    #ifdef TRACE
+
+      erb.errnum = Utils_Error_Custom_Normal;
+
+      sprintf(erb.errmess,
+              "Invalid object number %d for passed to object_set_token_object_plugin (browser %08x, nobjects = %d)",
+              object,
+              (int) b,
+              b->nobjects);
+
+      return &erb;
+
+    #endif
+
+    return NULL;
+  }
+
+  /* If not associated with a Plug-In, exit */
+
+  if (!b->odata[object].isplugin) return NULL;
+
+  /* Otherwise, set the details */
+
+  b->odata[object].plugin_instance_handle = plugin_instance;
+  b->odata[object].plugin_task_handle     = plugin_task;
+
+  /* Finished */
+
+  return NULL;
+}
+
+/*************************************************/
+/* object_set_token_object_plugin()              */
+/*                                               */
+/* Sets details of any Plug-In associated with   */
+/* a given Object (referenced by token).         */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the Object - usually  */
+/*             set as the browser instance       */
+/*             handle for the Plug-In, so cast   */
+/*             as an int;                        */
+/*                                               */
+/*             Pointer to the token representing */
+/*             the Object (usually have to       */
+/*             remember this when the initial    */
+/*             Message_PlugIn_Open is sent);     */
+/*                                               */
+/*             Plug-In instance handle to set;   */
+/*                                               */
+/*             Plug-In task handle to set.       */
+/*                                               */
+/* Assumes:    Either pointer may be NULL.       */
+/*************************************************/
+
+_kernel_oserror * object_set_token_object_plugin(unsigned int browser_instance, HStream * t, unsigned int plugin_instance, unsigned int plugin_task)
+{
+  browser_data * b = (browser_data *) browser_instance;
+
+  return object_set_object_plugin(b,
+                                  object_get_token_object(b, t),
+                                  plugin_instance,
+                                  plugin_task);
 }
 
 /*************************************************/
@@ -488,46 +785,11 @@ _kernel_oserror * object_redraw(browser_data * b, WimpRedrawWindowBlock * r, HSt
     box.xmin &= ~(wimpt_dx() - 1);
     box.ymin &= ~(wimpt_dy() - 1);
 
-    if (box.xmax > 8 && box.ymax > 8)
-    {
-      /* xmin, ymin hold the bottom left hand corner coordinates, whilst */
-      /* xmax, ymax hold the width and height. The adjustments are to    */
-      /* account for the way the bbc_rectanglefill function works; e.g., */
-      /* to get a width of 4 OS units, ask for 3 (as it adds this to the */
-      /* x coordinate and treats it as an inclusive x coordinate max).   */
-      /* There are corrections to plot 2 OS units inside of the real     */
-      /* bounding box (looks better when images touch each other) and to */
-      /* get the darker sides of the 'slabbed in' box overlapping the    */
-      /* lighter sides by the right amount.                              */
-
-      redraw_set_colour(Redraw_Colour_AlmostWhite);
-      bbc_rectanglefill(box.xmin + 2,
-                        box.ymin + 2,
-                        box.xmax - 5,
-                        3);
-      bbc_rectanglefill(box.xmax + box.xmin - 6,
-                        box.ymin + 2,
-                        3,
-                        box.ymax - 5);
-
-      redraw_set_colour(Redraw_Colour_MidGrey);
-      bbc_rectanglefill(box.xmin + 2,
-                        box.ymax + box.ymin - 6,
-                        box.xmax - 7,
-                        3);
-      bbc_rectanglefill(box.xmin + 2,
-                        box.ymin + 4,
-                        3,
-                        box.ymax - 7);
-    }
-    else
-    {
-      if (box.xmax < 2) box.xmax = 2;
-      if (box.ymax < 2) box.ymax = 2;
-
-      redraw_set_colour(0);
-      bbc_rectangle(box.xmin,box.ymin,box.xmax - 1,box.ymax - 1);
-    }
+    redraw_draw_placeholder(b,
+                            r,
+                            &box,
+                            token,
+                            HtmlOBJECTstandby(token));
   }
 
   return e;
