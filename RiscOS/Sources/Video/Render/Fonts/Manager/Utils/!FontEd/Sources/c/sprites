@@ -37,7 +37,8 @@ sprite_pixtrans pixtrans[16] = { 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 };
 sprite_area   * sprstatic;        /* points to spritearea.hdr */
 sprite_header * sprbpp1;          /* points to 'bpp1' sprite */
 
-static sprite_id spriteid = { NULL, sprite_id_name };
+static sprite_id spriteid  = { NULL, sprite_id_addr };
+static sprite_id spriteidn = { NULL, sprite_id_name };
 
 
 /* ---- Read mode info ----------------------------------------------------- */
@@ -91,9 +92,6 @@ os_error * readmodeinfo(void)
       superx = (SUPERX >> xfac),
       supery = (SUPERY>>yfac)|3,
                            mode ));
-
-    spriteid.s.name = "bpp1";
-    erx(sprite_select_rp(sprstatic, &spriteid, (sprite_ptr *)&sprbpp1));
 
     sprbpp1 = getspriteaddr(sprstatic,"bpp1");
   }
@@ -154,7 +152,7 @@ os_error * scalefont(Font_Block *infont,
   er(newfontwindow(thisfont));
 
   f = infont->filedata;
-  strcpy(buffer1, ((char *)f->table) + f->table[0]);    /* copy parent font's name */
+  strcpy(buffer1, tableend(f));    /* copy parent font's name */
   sprintf(buffer2,"%dx%d points at %dx%d dpi",xpoints,ypoints,xres,yres);
   er(changetitle(thisfont, 10, buffer1, buffer2));
 
@@ -193,8 +191,6 @@ os_error * scalefont(Font_Block *infont,
 
 
 #define dividedown(x,y) ((x)<0?((x)-(y)+1)/(y):(x)/(y))
-
-#define Super_Sample4    0x40D81
 
 /*
  * Out: x0,y0,x1,y1 = char bounding box (design units)
@@ -457,14 +453,16 @@ os_error * makesprite1bpp(Char_Block * charptr, int plotrule)
 
   {
     if (heaptrace)
-    mytracef("Switching output to '%s' in area %p ...", charptr->sprname,charptr->parent->spritedata);
+    mytracef("Switching output to '%s' in area %p ...",
+                ((sprite_header *) sprptr(charptr->parent->spritedata,charptr->sproffset))->name,
+                charptr->parent->spritedata);
 
     {
       int fillpath[MAXPATH], strokepath[MAXPATH];
       os_error * err;
       sprite_state oldstate;
 
-      spriteid.s.name = charptr->sprname;
+      spriteid.s.addr = sprptr(charptr->parent->spritedata, charptr->sproffset);
       er(sprite_outputtosprite(charptr->parent->spritedata, &spriteid, NULL, &oldstate));
 
       if (heaptrace) mytracef("switched\n");
@@ -498,7 +496,7 @@ os_error * makesprite1bpp(Char_Block * charptr, int plotrule)
   To generate a 4bpp sprite from an outline char:
 
       a) draw character 4x final size into 'bpp1'
-      b) use SWI Super_Sample4 to produce image in final sprite
+      b) use SWI Super_Sample90/45 to produce image in final sprite
       c) use SpriteReason_PutSpriteScaled with pixtrans to display sprite
 */
 
@@ -533,8 +531,8 @@ os_error * makesprite(Char_Block * charptr, int plotrule)
     os_error * err;
     sprite_state oldstate;
 
-    spriteid.s.name = "bpp1";
-    er(sprite_outputtosprite(sprstatic, &spriteid, NULL, &oldstate));
+    spriteidn.s.name = "bpp1";
+    er(sprite_outputtosprite(sprstatic, &spriteidn, NULL, &oldstate));
 
     if (heaptrace) mytracef("switched\n");
 
@@ -564,12 +562,12 @@ os_error * makesprite(Char_Block * charptr, int plotrule)
 
   er(my_sprite_create(charptr,sprite_nopalette,superx>>2,supery>>2,spritemode));
 
-  /* Call Super_Sample4 to do the anti-aliasing */
+  /* Call Super_Sample90/45 to do the anti-aliasing */
   {
     os_regset r;
     sprite_header *spraddr;
 
-    spraddr = getspriteaddr(font->spritedata,charptr->sprname);
+    spraddr = sprptr(font->spritedata,charptr->sproffset);
 
     if (heaptrace)
     mytracef("Super-sampling from %p to %p\n",sprbpp1,spraddr);
@@ -578,7 +576,7 @@ os_error * makesprite(Char_Block * charptr, int plotrule)
     r.r[2] = 4*(sprbpp1->width+1);
     r.r[3] = sprbpp1->height+1;
     r.r[4] = (int) (((char *)spraddr) + spraddr->image);
-    er(os_swix(Super_Sample4, &r));
+    er(os_swix(spritemode == 12 ? Super_Sample45 : Super_Sample90, &r));
 
     if (heaptrace)
     mytracef("Final sprite address = &%p\n",r.r[4]);
@@ -644,7 +642,7 @@ os_error * pack1bpp(Char_Block * charptr)
 
   outptr = scratchbuffer;
 
-  spr = getspriteaddr(charptr->parent->spritedata,charptr->sprname);
+  spr = sprptr(charptr->parent->spritedata,charptr->sproffset);
   llen = spr->width+1;
   base = (((int *)(((char *)spr)+spr->image))) + llen * spr->height;
   currstate = (*base >> spr->lbit) & 1;
@@ -865,7 +863,7 @@ os_error * unpack1bpp(Char_Block * charptr)
   mytracef("new ch = &%x, ch/2 = &%x\n",ch,ch>>1);
 #endif
 
-  spr = getspriteaddr(charptr->parent->spritedata,charptr->sprname);
+  spr = sprptr(charptr->parent->spritedata,charptr->sproffset);
   llen = spr->width+1;
   ptr = (((int *)(((char *)spr)+spr->image))) + llen * spr->height;
 #if TR_unpack
@@ -981,6 +979,7 @@ os_error * my_sprite_create(Char_Block *charptr, sprite_palflag palflag,
 {
   os_error *e;
   Font_Block * font = charptr->parent;
+  char sprname[12];
 
 /*
   mytracef("Creating sprite for block at %p ...", charptr);
@@ -988,18 +987,25 @@ os_error * my_sprite_create(Char_Block *charptr, sprite_palflag palflag,
 
   er(ensuresprites(font));          /* make null sprite area if none present yet */
 
-  putspritename(charptr->sprname, "s%x", charptr);    /* construct name */
+  if (charptr->sproffset) {
+    er(my_sprite_delete(font, charptr->sproffset));
+    charptr->sproffset = 0;
+  }
 
-  e = sprite_create(font->spritedata,charptr->sprname,palflag,width,height,mode);
+  putspritename(sprname, "s%x", charptr);    /* construct name */
+
+  e = sprite_create(font->spritedata,sprname,palflag,width,height,mode);
 
   while (e && e->errnum == 130)    /* No room to get sprite */
   {
     if (flex_extend((flex_ptr)&font->spritedata,font->spritedata->size+4096)) {
       font->spritedata->size += 4096;
-      e = sprite_create(font->spritedata,charptr->sprname,palflag,width,height,mode);
+      e = sprite_create(font->spritedata,sprname,palflag,width,height,mode);
     } else returnerr("Flex area full");
   }
-  if (e) charptr->sprname[0] = 0;     /* sprite not created correctly */
+  if (!e)
+    charptr->sproffset = (char *) getspriteaddr(font->spritedata, sprname) -
+                         (char *) font->spritedata;
 
   return(e);
 }
@@ -1007,12 +1013,23 @@ os_error * my_sprite_create(Char_Block *charptr, sprite_palflag palflag,
 
 /* Delete sprite and close up sprite area */
 
-os_error *my_sprite_delete(Font_Block *font, char *sprname)
+os_error *my_sprite_delete(Font_Block *font, int sproff)
 {
+  int c, sprsize;
 
-  spriteid.s.name = sprname;
+  spriteid.s.addr = sprptr(font->spritedata, sproff);
+  sprsize = ((sprite_header *) spriteid.s.addr)->next;
 
   er(sprite_delete(font->spritedata, &spriteid));
+
+  for (c=0;c<font->nchars;c++) {
+    if (font->chars[c]!=NULL) {
+      if (font->chars[c]->sproffset > sproff)
+        font->chars[c]->sproffset -= sprsize;
+      if (font->chars[c]->backspriteoff > sproff)
+        font->chars[c]->backspriteoff -= sprsize;
+    }
+  }
 
   return(sprite_alloc(font, font->spritedata->freeoff));     /* shrink sprite area */
 }
@@ -1045,8 +1062,8 @@ sprite_header *getspriteaddr(sprite_area *areaCBptr, char *name)
 {
   sprite_ptr ptr;
 
-  spriteid.s.name = name;
-  erx(sprite_select_rp(areaCBptr, &spriteid, &ptr));
+  spriteidn.s.name = name;
+  erx(sprite_select_rp(areaCBptr, &spriteidn, &ptr));
 
   return((sprite_header *)ptr);
 }
@@ -1068,9 +1085,9 @@ os_error * loadbacksprite(Char_Block *charptr, char * filename)
   Font_Block *font = charptr->parent;
   Wind_Link *wlink;
 
-  if (charptr->backsprite[0]) {
-    er(my_sprite_delete(font,charptr->backsprite));
-    charptr->backsprite[0] = 0;
+  if (charptr->backspriteoff) {
+    er(my_sprite_delete(font,charptr->backspriteoff));
+    charptr->backspriteoff = 0;
   }
 
   wlink = findwindinfo(W_SKELETON, charptr);
@@ -1090,9 +1107,9 @@ os_error * loadbacksprite(Char_Block *charptr, char * filename)
     font->spritedata->freeoff += spritelen;
 
     putspritename(spaddr->name, "b%x", charptr);
-    putspritename(charptr->backsprite, "b%x", charptr);
+    charptr->backspriteoff = (char *)spaddr - (char *)font->spritedata;
 
-    erc(h,read_sprite_size(font,charptr->backsprite,&charptr->backsprbox.p1[0],&charptr->backsprbox.p3[1]));
+    erc(h,read_sprite_size(font,charptr->backspriteoff,&charptr->backsprbox.p1[0],&charptr->backsprbox.p3[1]));
 
     charptr->backsprbox.p0[0] =
     charptr->backsprbox.p0[1] =
@@ -1110,11 +1127,11 @@ os_error * loadbacksprite(Char_Block *charptr, char * filename)
 
 /* Routine to read the size of a sprite in OS units */
 
-os_error * read_sprite_size(Font_Block *font, char *sprname, int *xp, int *yp)
+os_error * read_sprite_size(Font_Block *font, int sproff, int *xp, int *yp)
 {
   sprite_info sprinfo;
 
-  spriteid.s.name = sprname;
+  spriteid.s.addr = sprptr(font->spritedata, sproff);
   er(sprite_readsize(font->spritedata, &spriteid, &sprinfo));
 
   *xp = sprinfo.width  << bbc_modevar(sprinfo.mode, bbc_XEigFactor);
