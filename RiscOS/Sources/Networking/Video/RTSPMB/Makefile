@@ -72,7 +72,7 @@ CLIB		= CLIB:o.stubs
 RLIB		= RISCOSLIB:o.risc_oslib
 ROMCSTUBS	= RISCOSLIB:o.romcstubs
 ABSSYM		= RISC_OSLib:o.abssym
-TCPIPLIBS	= TCPIPLibs:o.inetlibzm TCPIPLIBS:o.socklibzm
+TCPIPLIBS	= TCPIPLibs:o.inetlibzm TCPIPLIBS:o.socklibzm TCPIPLIBS:o.unixlibzm
 DEBUGLIB	= <Lib$Dir>.Debuglib.o.debuglibzm
 ASMUTILS	= <Lib$Dir>.AsmUtils.o.AsmUtilszm
 
@@ -92,6 +92,7 @@ ROM_OBJS =	\
  o.MoreInfo	\
  o.Options	\
  o.Play		\
+ o.Response	\
  o.Setup	\
  o.Session	\
  o.Status	\
@@ -114,6 +115,7 @@ RAM_OBJS =	\
  oSL.MoreInfo	\
  oSL.Options	\
  oSL.Play	\
+ oSL.Response	\
  oSL.Setup	\
  oSL.Session	\
  oSL.Status	\
@@ -136,6 +138,7 @@ DBG_OBJS =	\
  oSLd.MoreInfo	\
  oSLd.Options	\
  oSLd.Play	\
+ oSLd.Response	\
  oSLd.Setup	\
  oSLd.Session	\
  oSLd.Status	\

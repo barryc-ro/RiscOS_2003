@@ -38,6 +38,7 @@
 #include "Headers.h"
 #include "Module.h"
 #include "MPEGCtrl.h"
+#include "Response.h"
 #include "RTSPMErrors.h"
 #include "Session.h"
 #include "Status.h"
@@ -57,34 +58,39 @@ play_state;
 
 /* Local functions - miscellaneous */
 
-static bool              play_slowmofwd            (const char * scale);
-static int               play_process_speed        (const char * scale);
+static bool              play_slowmofwd                (const char * scale);
+static int               play_process_speed            (const char * scale);
 
 /* Local functions - general command sending assitance */
 
-static _kernel_oserror * play_preamble             (session * s);
-static _kernel_oserror * play_send                 (session * s);
+static _kernel_oserror * play_preamble                 (session * s);
+static _kernel_oserror * play_send                     (session * s);
 
 /* Local functions - stuff called from the state machine as callback */
 /* functions during execution of a command chain                     */
 
-static _kernel_oserror * play_send_set_playmode    (session * s);
-static _kernel_oserror * play_send_play            (session * s);
-static _kernel_oserror * play_send_state_command   (session * s, play_state state);
+static _kernel_oserror * play_send_set_playmode        (session * s);
+static _kernel_oserror * play_send_play                (session * s);
+static _kernel_oserror * play_send_state_command       (session * s, play_state state);
 
 /* Local functions - stuff used to build a set of command headers */
 /* ready for sending out                                          */
 
-static _kernel_oserror * play_build_pause          (session * s);
-static _kernel_oserror * play_build_set_playmode   (session * s);
-static _kernel_oserror * play_build_play           (session * s);
-static _kernel_oserror * play_build_play_or_pause  (session * s, bool force_pause);
-static bool              play_filter_range          (session * s, const char * range, int * start_pos, int * end_pos);
+static _kernel_oserror * play_build_pause              (session * s);
+static _kernel_oserror * play_build_set_playmode       (session * s);
+static _kernel_oserror * play_build_play               (session * s);
+static _kernel_oserror * play_build_play_or_pause      (session * s, bool force_pause);
+static bool              play_filter_range             (session * s, const char * range, int * start_pos, int * end_pos);
+static void              play_reconstruct_range_header (session * s, char * temp);
 
 /* Local functions - floating point code used within */
 
-static unsigned int      play_get_frame_number     (session * s, unsigned int seconds);
-static unsigned int      play_get_trick_stream_npt (session * s, unsigned int npt);
+static unsigned int      play_get_trick_stream_npt     (session * s, unsigned int npt);
+static void              play_copy_frame_info          (session * dst, session * src);
+
+#if 0
+  static unsigned int    play_get_frame_number         (session * s, unsigned int npt);
+#endif
 
 /**************************************************************/
 /* play_slowmofwd()                                           */
@@ -284,6 +290,45 @@ _kernel_oserror * play_play(_kernel_swi_regs * r)
     return make_error(rtspmb_ERROR_MEMORY_EXHAUSTED, 0);
   }
 
+  /* Is there a mapping between the request and the server? Not if this */
+  /* is a slow motion play request; in that case return a 501 response. */
+
+  if (scale_rec != NULL)
+  {
+    int type = play_process_speed(scale_rec);
+
+    if (type == MPEGCtrl_MCRS_Trick_SFWD || type == MPEGCtrl_MCRS_Trick_SRWD)
+    {
+      rtsp_header * r = response_501(s->headers);
+
+      if (r == NULL) return make_error(rtspmb_ERROR_MEMORY_EXHAUSTED, 0);
+
+      headers_free_headers(&s->headers);
+
+      s->next_command_cb = NULL;
+      s->headers         = r;
+      s->state           = protostate_COMPLETED;
+      s->response_code   = (unsigned int) strtoul(Headers_Supported_Prefix_NI, NULL, 10);
+      s->reported_state  = VC_Status_ConnectionEstablished |
+                           VC_Status_NewStatus;
+
+      s->data_len = headers_construct_specific_header_buffer(s->headers,
+                                                             &s->data,
+                                                             0,
+                                                             1);
+
+      if (s->data_len != 0) s->reported_state |= VC_Status_MoreInformationAvailable;
+
+      if (s->callout_set == 0)
+      {
+        s->callout_set = 1;
+        timeout(status_proceed_on_callout, s, Session_State_Timer);
+      }
+
+      return NULL;
+    }
+  }
+
   /* Work out the command order required (SET_PLAYMODE   */
   /* then PLAY, maybe with a PAUSE first, or just PAUSE) */
 
@@ -445,16 +490,13 @@ _kernel_oserror * play_replay(session * s)
 
     new_s->server_session = Strdup(s->server_session ? s->server_session : "");
     new_s->play_record    = Strdup(s->play_record    ? s->play_record    : "");
-
-    /* Sigh */
-
-    if (s->playmode == Play_MB_Trick_FRWD) new_s->range_record = Strdup("2147483647-");
-    else                                   new_s->range_record = Strdup("0-");
+    new_s->range_record   = Strdup(s->range_record   ? s->range_record   : "");
 
     if (s->url->full != NULL)
     {
       (void) urlutils_return_description(s->url->full, &new_s->url);
     }
+
   }
 
   if (
@@ -475,10 +517,19 @@ _kernel_oserror * play_replay(session * s)
   }
 
   new_s->server_timeout  = s->server_timeout;
-  new_s->frames_per_sec  = s->frames_per_sec;
-  new_s->i_frame_ratio   = s->i_frame_ratio;
-  new_s->cached_npt      = 0;
   new_s->playmode        = s->playmode;
+  new_s->multicast       = s->multicast;
+
+  new_s->duration        = s->duration;
+  new_s->cached_npt      = s->cached_npt;
+
+  {
+    modulefp_buf buf;
+
+    modulefp_enable(&buf);
+    play_copy_frame_info(new_s, s);
+    modulefp_disable(&buf);
+  }
 
   new_s->next_command_cb = play_send_set_playmode;
 
@@ -506,6 +557,8 @@ _kernel_oserror * play_replay(session * s)
                      NULL,
                      &new_s->state,
                      -1);
+
+    if (s->state == protostate_ERROR) s->err_no = -s->sd;
   }
   else new_s->state = protostate_CONNECTED;
 
@@ -612,12 +665,16 @@ static _kernel_oserror * play_send(session * s)
   if (s->url->port && *s->url->port) port = atoi(s->url->port);
   else                               port = RTSPMB_DefaultPort;
 
-  if (s->sd == -1) s->sd = opensock(s->url->host,
-                                    port,
-                                    NULL,
-                                    &s->state,
-                                    -1);
+  if (s->sd == -1)
+  {
+    s->sd = opensock(s->url->host,
+                     port,
+                     NULL,
+                     &s->state,
+                     -1);
 
+    if (s->state == protostate_ERROR) s->err_no = -s->sd;
+  }
   else s->state = protostate_CONNECTED;
 
   s->last = utils_read_time();
@@ -1060,105 +1117,14 @@ static _kernel_oserror * play_build_play_or_pause(session * s, bool force_pause)
 
   else if (play && s->multicast == 0)
   {
-    _kernel_oserror * e;
-    int               opts [4];
-    char              temp [sizeof("npt = 0-0") + 48]; /* (+48 ensures we overestimate for up to 4 digits) */
-    unsigned int      csecs; //, tc;
-    int               from, to;
-    bool              accept;
+    char new_range[sizeof("npt = 0-0") + 48]; /* (+48 ensures we overestimate for up to 4 digits) */
 
-    accept = play_filter_range(s, s->range_record, &from, &to);
-
-    if (accept == false || from < -1 || to < -1)
-    {
-      from = to = -1;
-
-      /* Read NPT */
-
-      opts[0] = vc_tags_npt;
-      opts[1] = 1;
-      opts[2] = 0;
-      opts[3] = vc_tags__end;
-
-      e = _swix(VideoControl_ProtocolOptions,
-                _INR(0,2),
-
-                0,
-                s->vcid,
-                opts);
-
-      if (e != NULL) csecs = 0;
-      else           csecs = (unsigned int) opts[2] * 100; /* seconds -> centiseconds */
-
-      /* If NPT is zero, could be at a transition point - use cached value */
-
-      if (csecs == 0) csecs         = s->cached_npt;
-      else            s->cached_npt = csecs;
-    }
-    else
-    {
-      if (from != -1) csecs = from * 100;
-      else            csecs = 0;
-
-      s->cached_npt = csecs;
-
-      if (s->playmode == Play_MB_Trick_FRWD && to == 0)
-      {
-        /* MediaBase raises error 500 (doh) if you say "100-0" for reverse */
-        /* play, but happily accepts "100-"...!                            */
-
-        to = -1;
-      }
-      else if (to != -1)
-      {
-        to *= 100;
-
-        /* MediaBase seemed to need from < to at all times even for reverse */
-        /* play, but then again it may just not support 'to' at all. Since  */
-        /* it just erroneously raises "500 Internal Server Error" for any   */
-        /* request it doesn't like, I've no idea what the real problem is.  */
-
-        if (csecs > to) Swap(csecs, to); /* See Utils.h */
-      }
-    }
-
-    /* Turn this into a trick mode seek time for MediaBase (ick) */
-
-    if (s->playmode != Play_MB_Trick_Play && s->playmode != Play_MB_Trick_Freeze)
-    {
-      modulefp_buf buf;
-
-      modulefp_enable(&buf);
-
-      csecs = play_get_trick_stream_npt(s, csecs);
-      if (to != -1) to = play_get_trick_stream_npt(s, to);
-
-      modulefp_disable(&buf);
-    }
-
-    if (from == -1 && to == -1)
-    {
-      if (s->playmode == Play_MB_Trick_FRWD) sprintf(temp, "npt=2147483647-");
-      else                                   sprintf(temp, "npt=0-");
-    }
-    else if (from == -1)
-    {
-      if (s->playmode == Play_MB_Trick_FRWD) sprintf(temp, "npt=-%d.%d", to / 100, to % 100);
-      else                                   sprintf(temp, "npt=0-");
-    }
-    else if (to == -1)
-    {
-      sprintf(temp, "npt = %d.%d-", csecs / 100, csecs % 100);
-    }
-    else
-    {
-      sprintf(temp, "npt = %d.%d-%d.%d", csecs / 100, csecs % 100, to / 100, to % 100);
-    }
+    play_reconstruct_range_header(s, new_range);
 
     if (
          headers_add_header(&s->headers,
                             Headers_HeaderName_Range,
-                            temp)
+                            new_range)
          == NULL
        )
        fail = true;
@@ -1354,7 +1320,7 @@ _kernel_oserror * play_alter_playback_characteristics(session * s, int playmode)
 /*                                                            */
 /* Filter a Range header value - can we deal with it? The     */
 /* function also parses start and end values, and returns if  */
-/* required the values in seconds - this includes parsing     */
+/* required the values in centiseconds; this includes parsing */
 /* key words like 'now' or 'end' and converting to times or   */
 /* an indication of no direct specifier.                      */
 /*                                                            */
@@ -1459,7 +1425,7 @@ static bool play_filter_range(session * s, const char * range, int * start_pos, 
     num = atoi(range);
     while (isdigit(*(++range)));
 
-    *start_pos = (int) num;
+    *start_pos = (int) num * 100;
   }
 
   /* If there's something before the '-' and we get as far as this check, */
@@ -1496,7 +1462,7 @@ static bool play_filter_range(session * s, const char * range, int * start_pos, 
 
       if (e == NULL)
       {
-        if (opts[2] != 0) *start_pos = (int) opts[2];
+        if (opts[2] != 0) *start_pos = (int) opts[2] * 100;
         else              *start_pos = (int) s->cached_npt;
       }
       else *start_pos = 0;
@@ -1583,8 +1549,8 @@ static bool play_filter_range(session * s, const char * range, int * start_pos, 
 
       if (e == NULL)
       {
-        if (opts[2] != 0) *end_pos = (int) opts[2];
-        else              *end_pos = (int) s->cached_npt;
+        if (opts[2] != 0) *end_pos = (int) opts[2] * 100;
+        else              *end_pos = (int) s->cached_npt * 100;
       }
       else *end_pos = 0;
     }
@@ -1594,37 +1560,37 @@ static bool play_filter_range(session * s, const char * range, int * start_pos, 
 }
 
 /**************************************************************/
-/* play_get_frame_number()                                    */
+/* play_reconstruct_range_header()                            */
 /*                                                            */
-/* Given a time in seconds, return a frame number based on    */
-/* the frames/second value read from DESCRIBE (if present,    */
-/* else assume 25fps or 30fps depending on PAL / NTSC         */
-/* options).                                                  */
+/* Rebuild a Range header based on the range_record from a    */
+/* client's VideoControl_Play command (-> RTSPMB_Play) into a */
+/* form that the server will understand.                      */
 /*                                                            */
-/* Must only be used after modulefp_enable has been called.   */
+/* Parameters: Pointer to a session structure holding the     */
+/*             range record;                                  */
 /*                                                            */
-/* Parameters: Pointer to the session relating to the time;   */
-/*                                                            */
-/*             Play time in seconds from start of clip.       */
-/*                                                            */
-/* Returns:    Approximate frame number.                      */
+/*             Pointer to a buffer to hold the new header -   */
+/*             the minimum size should be something like      */
+/*             sizeof("npt = 0-0") + 48.                      */
 /**************************************************************/
 
-static unsigned int play_get_frame_number(session * s, unsigned int seconds)
+static void play_reconstruct_range_header(session * s, char * temp)
 {
-  if (s->frames_per_sec != 0)
-  {
-    double d = s->frames_per_sec * seconds;
+  _kernel_oserror * e;
+  int               opts [4];
+  unsigned int      csecs;
+  int               from, to;
+  bool              accept;
 
-    return (unsigned int) d;
-  }
-  else
-  {
-    _kernel_oserror * e;
-    int               opts[4];
-    int               fps;
+  accept = play_filter_range(s, s->range_record, &from, &to);
 
-    opts[0] = vc_tags_ntsc;
+  if (accept == false || from < -1 || to < -1)
+  {
+    from = to = -1;
+
+    /* Read NPT */
+
+    opts[0] = vc_tags_npt;
     opts[1] = 1;
     opts[2] = 0;
     opts[3] = vc_tags__end;
@@ -1636,11 +1602,73 @@ static unsigned int play_get_frame_number(session * s, unsigned int seconds)
               s->vcid,
               opts);
 
-    if (e == NULL) fps = (opts[2] == 0) ? 25 : 30; /* That's slightly inaccurate for NTSC of course... */
-    else           fps = 25;
+    if (e != NULL) csecs = 0;
+    else           csecs = (unsigned int) opts[2] * 100; /* seconds -> centiseconds */
 
-    return fps * seconds;
+    /* If NPT is zero, could be at a transition point - use cached value */
+
+    if (csecs == 0) csecs         = s->cached_npt;
+    else            s->cached_npt = csecs;
   }
+  else
+  {
+    if (from != -1) csecs = from;
+    else            csecs = 0;
+
+    s->cached_npt = csecs;
+
+    if (s->playmode == Play_MB_Trick_FRWD && to == 0)
+    {
+      /* MediaBase raises error 500 (doh) if you say "100-0" for reverse */
+      /* play, but happily accepts "100-"...!                            */
+
+      to = -1;
+    }
+    else if (to != -1)
+    {
+      /* MediaBase seemed to need from < to at all times even for reverse */
+      /* play, but then again it may just not support 'to' at all. Since  */
+      /* it just erroneously raises "500 Internal Server Error" for any   */
+      /* request it doesn't like, I've no idea what the real problem is.  */
+
+      if (csecs > to) Swap(csecs, to); /* See Utils.h */
+    }
+  }
+
+  /* Turn this into a trick mode seek time for MediaBase (ick) */
+
+  if (s->playmode != Play_MB_Trick_Play && s->playmode != Play_MB_Trick_Freeze)
+  {
+    modulefp_buf buf;
+
+    modulefp_enable(&buf);
+
+    csecs = play_get_trick_stream_npt(s, csecs);
+    if (to != -1) to = play_get_trick_stream_npt(s, to);
+
+    modulefp_disable(&buf);
+  }
+
+  if (from == -1 && to == -1)
+  {
+    if (s->playmode == Play_MB_Trick_FRWD) sprintf(temp, "npt=2147483647-");
+    else                                   sprintf(temp, "npt=0-");
+  }
+  else if (from == -1)
+  {
+    if (s->playmode == Play_MB_Trick_FRWD) sprintf(temp, "npt=-%d.%d", to / 100, to % 100);
+    else                                   sprintf(temp, "npt=0-");
+  }
+  else if (to == -1)
+  {
+    sprintf(temp, "npt = %d.%d-", csecs / 100, csecs % 100);
+  }
+  else
+  {
+    sprintf(temp, "npt = %d.%d-%d.%d", csecs / 100, csecs % 100, to / 100, to % 100);
+  }
+
+  return;
 }
 
 /**************************************************************/
@@ -1680,3 +1708,78 @@ static unsigned int play_get_trick_stream_npt(session * s, unsigned int npt)
     return (unsigned int) ((double) npt / d);
   }
 }
+
+/**************************************************************/
+/* play_copy_frame_info()                                     */
+/*                                                            */
+/* Copy the frames per second and frame to I-frame ratio      */
+/* values from one session to another.                        */
+/*                                                            */
+/* Must only be used after modulefp_enable has been called.   */
+/*                                                            */
+/* Parameters: Pointer to destination session structure;      */
+/*                                                            */
+/*             Pointer to source session structure.           */
+/**************************************************************/
+
+static void play_copy_frame_info(session * dst, session * src)
+{
+  dst->frames_per_sec = src->frames_per_sec;
+  dst->i_frame_ratio  = src->i_frame_ratio;
+
+  return;
+}
+
+#if 0
+
+  /**************************************************************/
+  /* play_get_frame_number()                                    */
+  /*                                                            */
+  /* Given a time in seconds, return a frame number based on    */
+  /* the frames/second value read from DESCRIBE (if present,    */
+  /* else assume 25fps or 30fps depending on PAL / NTSC         */
+  /* options).                                                  */
+  /*                                                            */
+  /* Must only be used after modulefp_enable has been called.   */
+  /*                                                            */
+  /* Parameters: Pointer to the session relating to the time;   */
+  /*                                                            */
+  /*             Play time in seconds from start of clip.       */
+  /*                                                            */
+  /* Returns:    Approximate frame number.                      */
+  /**************************************************************/
+
+  static unsigned int play_get_frame_number(session * s, unsigned int npt)
+  {
+    if (s->frames_per_sec != 0)
+    {
+      double d = s->frames_per_sec * npt;
+
+      return (unsigned int) d;
+    }
+    else
+    {
+      _kernel_oserror * e;
+      int               opts[4];
+      int               fps;
+
+      opts[0] = vc_tags_ntsc;
+      opts[1] = 1;
+      opts[2] = 0;
+      opts[3] = vc_tags__end;
+
+      e = _swix(VideoControl_ProtocolOptions,
+                _INR(0,2),
+
+                0,
+                s->vcid,
+                opts);
+
+      if (e == NULL) fps = (opts[2] == 0) ? 25 : 30; /* That's slightly inaccurate for NTSC of course... */
+      else           fps = 25;
+
+      return fps * npt;
+    }
+  }
+
+#endif
