@@ -329,7 +329,7 @@ resources:
         $(CP) $(LPATH)Read_H      $(RESDIR).Read_H        $(CPFLAGS)
         $(CP) $(LPATH)UserSel     $(RESDIR).UserSel       $(CPFLAGS)
         $(MKDIR) $(RESDIR).pics
-        $(CP) $(LPATH).pics.*     $(RESDIR).pics.*        $(CPFLAGS)
+        $(CP) $(LPATH)pics.*     $(RESDIR).pics.*        $(CPFLAGS)
         @echo
         @echo $(COMPONENT): Resource files copied to Messages module
 
