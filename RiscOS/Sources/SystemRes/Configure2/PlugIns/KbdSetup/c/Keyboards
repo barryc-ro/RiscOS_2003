@@ -1,0 +1,206 @@
+/******	Keyboards.c *******************************************************\
+
+Project:	Ursula (RISC OS for Risc PC II)
+Component:	Keyboard configuration plug-in
+This file:	Keyboard handler routines
+
+History:
+Date		Who	Change
+----------------------------------------------------------------------------
+09/12/1997	BJGA	Added these headers
+
+\**************************************************************************/
+
+/* Clib */
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include "swis.h"
+/* Toolbox */
+#include "wimplib.h"
+/* Common */
+#include "cmos.h"
+#include "message.h"
+#include "misc.h"
+#include "str.h"
+/* Local headers */
+#include "Main.h"
+#include "Keyboards.h"  /* includes prototypes for this file */
+
+/* Statics */
+
+#define Service_International 0x43
+
+static const cmos territory_cmos = { 0x18, 0, 8 } ; /* Held as Territory EOR 1 */
+
+static BOOL getfullstring (int handler, int current_territory, char **buffer, int *space);
+
+/******	getfullstring() ***************************************************\
+
+Purpose:	Adds verbose handler name (as used on menu) to specified buffer
+In:		Handler number, current territory number (for comparison),
+		  buffer pointer / remaining passed by reference
+Out:		If it fits, name is added to buffer;
+		  buffer pointer / remaining adjusted to compensate
+
+\**************************************************************************/
+
+static BOOL getfullstring (int handler, int current_territory, char **buffer, int *space)
+{
+  int written;
+  char buf [100] = "";
+  char pcext [10], pc [40], sdefault [20];
+  if (!_swi (OS_ServiceCall, _INR(1,5)|_RETURN(1)|_OUT(5), Service_International, 2, handler, buf, sizeof(buf), &written)) {
+    /* handler number claimed */
+    *(buf + written) = (char) 0; /* null-terminate */
+    message_lookup_buffer(pcext,messages,"PCExt");
+    if (_swi (Territory_Collate, _INR(0,3)|_RETURN(0), -1, (int) pcext, (int) (buf + written - strlen (pcext)), 1) == 0) {
+      /* is a PC delete handler */
+      message_lookup_buffer(pc,messages,"PCDel");
+      strcpy (buf + written - strlen (pcext), pc);
+      written += strlen (pc) - strlen (pcext);
+    }
+    if (handler == current_territory) {
+      /* is the default handler for this territory */
+      message_lookup_buffer(sdefault,messages,"Default");
+      strcpy (buf+written, sdefault);
+      written += strlen (sdefault);
+    }
+    if (*space > written + 1) {
+      strcpy (*buffer, buf);
+      *buffer += strlen (buf) + 1;
+      *space -= strlen (buf) + 1;
+    }
+    return TRUE;
+  }
+  return FALSE;
+}
+
+/******	keyboards_getavailable() ******************************************\
+
+Purpose:	Builds a comma-separated, sorted list of available keyboard handlers
+In:		Buffer to place result in
+Out:		CRC of result
+
+\**************************************************************************/
+
+int keyboards_getavailable (char *buffer, int bufsize)
+{
+  int handlers = 0, h, country, territory = cmos_read (territory_cmos, NULL) ^ 1;
+  char *handler_ptr [80], *ptr, *tmpbuf;
+  ptr = tmpbuf = (char *) malloc (bufsize);
+  
+  for (country = 1; country < 80; country == 1 ? country = 4 : country++) {
+    handler_ptr [handlers] = ptr;
+    if (getfullstring (country, territory, &ptr, &bufsize)) handlers++;
+  }
+  if (handlers == 0) {
+    handlers=1;
+    strcpy ((char *) tmpbuf, message_lookup_direct(messages, "NoneAvail"));
+  }
+  
+  _swi (OS_HeapSort, _INR(0,2), handlers, (int) handler_ptr, 4);
+  
+  ptr = buffer;
+  for (h = 0; h < handlers; h++) {
+    strcpy (ptr, handler_ptr [h]);
+    ptr += strlen (handler_ptr [h]);
+    *ptr = (h == handlers-1) ? 0 : ',';
+    ptr += 1;
+  }
+  free (tmpbuf);
+  return _swi (OS_CRC, _INR(0,3)|_RETURN(0), 0, (int) buffer, (int) buffer + strlen (buffer), 1);
+}
+
+/******	keyboards_get() ***************************************************\
+
+Purpose:	Reads the current / default keyboard handler
+In:		Buffer to place result in, and function to use
+Out:		Buffer pointer, as passed in;
+		  buffer holds (verbose) handler name
+
+\**************************************************************************/
+
+char *keyboards_get (char *buffer, int bufsize, int(get)(cmos item, void *messages))
+{
+  char *ptr = buffer;
+  int territory = cmos_read (territory_cmos, NULL) ^ 1;
+  
+  if (get == cmos_default || misc_fileisunreadable (status_file)) {
+    /* default is default for current territory, ie the same number as the configured territory */
+    /* no status file means configured keyboard is the default */
+    if (!getfullstring (territory, territory, &ptr, &bufsize))
+      str_ncpy (buffer, message_lookup_direct(messages,"Mystery"), bufsize);
+  }
+  else {
+    FILE *handle;
+    if (NULL == (handle = fopen (status_file, "r"))) {
+      if (!getfullstring (territory, territory, &ptr, &bufsize))
+        str_ncpy (buffer, message_lookup_direct(messages,"Mystery"), bufsize);
+    }
+    else {
+      char line [100];
+      int claimed, country;
+      if (!misc_readline (line, sizeof (line), handle)) {
+        str_ncpy (buffer, message_lookup_direct(messages,"Mystery2"), bufsize);
+      }
+      else {
+        if (!_swix (OS_ServiceCall, _INR(1,3)|_OUT(1)|_OUT(4), Service_International, 0, 9 + (int) line, &claimed, &country))
+          str_ncpy (buffer, message_lookup_direct(messages,"Mystery"), bufsize);
+        if (claimed != 0) str_ncpy (buffer, message_lookup_direct(messages,"Mystery"), bufsize);
+        if (!getfullstring (country, territory, &ptr, &bufsize))
+          str_ncpy (buffer, message_lookup_direct(messages,"Mystery"), bufsize);
+      }
+      fclose (handle);
+    }
+  }
+  return buffer;
+}
+
+/******	keyboards_set() ***************************************************\
+
+Purpose:	Sets the current and configured keyboard handler
+In:		Pointer to (verbose) handler name
+
+\**************************************************************************/
+
+void keyboards_set (char *value)
+{
+  char buf [100] = "Keyboard ";
+  char pcext [10], pc [40], sdefault [20];
+  
+  char tmpbuf [3] [100];
+  message_lookup_buffer(tmpbuf[0],messages,"Mystery");
+  message_lookup_buffer(tmpbuf[1],messages,"Mystery2");
+  message_lookup_buffer(tmpbuf[2],messages,"NoneAvail");
+  if ((_swi (Territory_Collate, _INR(0,3)|_RETURN(0), -1, value, tmpbuf[0]) == 0)
+    || (_swi (Territory_Collate, _INR(0,3)|_RETURN(0), -1, value, tmpbuf[1]) == 0)
+    || (_swi (Territory_Collate, _INR(0,3)|_RETURN(0), -1, value, tmpbuf[2]) == 0)) return; /* nothing we can do for these */
+
+  str_cpy (buf + strlen (buf), value);
+  message_lookup_buffer(sdefault,messages,"Default");
+  if (_swi (Territory_Collate, _INR(0,3)|_RETURN(0), -1, (int) sdefault, (int) (buf + strlen (buf) - strlen (sdefault)), 1) == 0) {
+    char command [256];
+    sprintf (command, "Remove %s", status_file);          /* a lack of status file is sufficient to configure the default keyboard */
+    _swi (OS_CLI, _IN(0), (int) command);
+    return;
+  }
+
+  message_lookup_buffer(pc,messages,"PCDel");
+  if (_swi (Territory_Collate, _INR(0,3)|_RETURN(0), -1, (int) pc, (int) (buf + strlen (buf) - strlen (pc)), 1) == 0) {
+    *(buf + strlen (buf) - strlen (pc)) = (char) 0;       /* remove verbose postfix */
+    message_lookup_buffer(pcext,messages,"PCExt");
+    strcat (buf, pcext);                                  /* replace with concise postfix */
+  }
+  
+  _swi (OS_CLI, _IN(0), buf);
+  if (!misc_fileislocked (status_file)) {
+    if (!_swix (OS_FSControl, _INR(0,3), 26, (int) "<KbdSetup$Dir>.Blank", (int) status_file, 2)) {
+      FILE *handle;
+      if (NULL != (handle = fopen (status_file, "a"))) {
+        fprintf (handle, "%s\n", buf);
+        fclose (handle);
+      }
+    }
+  }
+}
