@@ -1,13 +1,10 @@
 # -*-Text-*-
 #
-# $Header$
-# $Source$
-#
 # Copyright (c) 1995 Acorn Computers Ltd., Cambridge, England
 #
 # Makefile for Freeway module
 #
-# $Log$
+# :RCS Log discontinued:
 # Revision 1.3  95/01/09  14:13:24  kwelton
 # Added ifswrap.c into the list of C source files, remade dependencies
 # (again).
@@ -31,9 +28,9 @@ WIPE=           -wipe
 CPFLAGS=        ~cfr~v
 WFLAGS=         ~c~v
 
-CFLAGS=         -zM -zps1 -ffah ${DFLAGS}
+CFLAGS=         -zM -zps1 -ffah -IC: ${DFLAGS}
 DFLAGS=         -DLOOKUPERR
-ASFLAGS=        -I<Hdr$Dir>.Global.,<Hdr$Dir>.Interface. -Stamp -quit
+ASFLAGS=        -IHdr:Global.,Hdr:Interface. -Stamp -quit
 
 CFILES=         _Args.c _Close.c _File.c _Func.c _Free.c _GBPB.c \
                 _GetBytes.c _Open.c _PutBytes.c command.c debug.c \
@@ -45,7 +42,7 @@ FSOBJS=         _Args.o _Close.o _File.o _Func.o _GBPB.o command.o \
                 _GetBytes.o _Open.o _PutBytes.o Interface.o _Free.o \
                 cstart.o ticker.o dropper.o privw.o
 
-FSOBJS1=        stricmp.o strins.o readwidth.o stampinfo.o esc.o swiv.o \
+FSOBJS1=        stricmp.o strins.o readwidth.o stampinfo.o esc.o \
                 debug.o noimage.o fixsf.o callcnpv.o callinsv.o callmore.o \
                 callremv.o visdelay.o fswrap.o lookup.o robase.o asw.o \
                 fwupcall.o leaf.o
@@ -228,7 +225,6 @@ o.esc:	C:h.swis
 o.esc:	h.util
 o.esc:	h.interface
 o.esc:	h.lookup
-o.swiv: s.swiv
 o.debug:	c.debug
 o.debug:	h.debug
 o.noimage:	c.noimage
@@ -265,11 +261,11 @@ o.lookup:	C:h.swis
 o.lookup:	h.lookup
 o.robase: s.robase
 o.asw: s.asw
-o.asw: <Hdr$Dir>.Global.ListOpts
-o.asw: <Hdr$Dir>.Global.CPU.Generic26
-o.asw: <Hdr$Dir>.Global.Macros
-o.asw: <Hdr$Dir>.Global.SWIs
-o.asw: <Hdr$Dir>.Interface.RISCOS
+o.asw: Hdr:ListOpts
+o.asw: Hdr:CPU.Generic26
+o.asw: Hdr:Macros
+o.asw: Hdr:SWIs
+o.asw: Hdr:RISCOS
 o.fwupcall: s.fwupcall
 o.leaf:	c.leaf
 o.leaf:	h.util

@@ -1,13 +1,10 @@
 # -*-Text-*-
 #
-# $Header$
-# $Source$
-#
 # Copyright (c) 1995 Acorn Computers Ltd., Cambridge, England
 #
 # Makefile for Freeway module
 #
-# $Log$
+# :RCS Log discontinued:
 # Revision 1.2  95/01/09  13:43:39  kwelton
 # Now use system versions of "kernel.h" and "swis.h", "_swis.h" no longer
 # exists - remade dependencies.
@@ -43,7 +40,7 @@ OBJS=           ralloc.o rallocd.o roverwr.o caller.o
 #
 # Rule patterns
 #
-.c.o:;      ${CC} -depend !Depend -c ${CFLAGS} -o $@ $<
+.c.o:;      ${CC} -depend !Depend -IC: -c ${CFLAGS} -o $@ $<
 .s.o:;      ${AS} -depend !Depend ${AFLAGS} $< $@
 
 all:            rmalib.o
@@ -56,6 +53,7 @@ clean:
 
 
 # Dynamic dependencies:
+o.caller: s.caller
 o.ralloc:	c.ralloc
 o.ralloc:	C:h.kernel
 o.ralloc:	C:h.swis
@@ -68,4 +66,3 @@ o.roverwr:	c.roverwr
 o.roverwr:	C:h.kernel
 o.roverwr:	C:h.swis
 o.roverwr:	h.ralloc
-o.caller: s.caller
