@@ -31,7 +31,7 @@ modsqz: clx
 
 unmodsqz: clx
 	(cd RiscOS/Tools/Sources/unmodsqz/ports/solaris; ./mklinks; make)
-	cp RiscOS/Tools/Sources/modsqz/ports/solaris/unmodsqz ${TARDIR}/unmodsqz
+	cp RiscOS/Tools/Sources/unmodsqz/ports/solaris/unmodsqz ${TARDIR}/unmodsqz
 
 mtftpd:
 	(cd RiscOS/Sources/Networking/TFTPserver/ports/solaris; ./mklinks; make ARCH=${ARCH})
