@@ -28,6 +28,9 @@
 #include <sys/filio.h>
 #include <sys/mbuf.h>
 
+#include <Global/SWIs.h>
+#include <MPEG/MPEGCtrl.h>
+
 #include "bufs.h"
 #include "global.h"
 #include "mbuf.h"
@@ -61,12 +64,6 @@
 
 #define BUFFER_SIZE (524288u)
 
-/* If we don't have the MPEGControl_FullBuffers SWI number already... */
-
-#ifndef MPEGControl_FullBuffers
-  #define MPEGControl_FullBuffers 0x492c1
-#endif
-
 /* Local variables */
 
 #ifdef TRACE
@@ -79,30 +76,40 @@
   static unsigned int sequence_expected;
 #endif
 
-static void         * module_wsp         = 0;
+static void            * module_wsp         = 0;
+static _kernel_oserror   erb;
 
-static int            v_state            = IDLE;
-static int            vsock              = -1;
-static int            default_video_port = 0;
-static int            video_port         = 0;
-static bool           mbuf_session_alive = false;
+static int               v_state            = IDLE;
+static int               vsock              = -1;
+static int               default_video_port = 0;
+static int               video_port         = 0;
+static bool              mbuf_session_alive = false;
 
-static int            skipcount          = 0;
+static int               skipcount          = 0;
 
-static unsigned int   bytes_received     = 0;
-static unsigned int   datagrams_received = 0;
+static unsigned int      bytes_received     = 0;
+static unsigned int      datagrams_received = 0;
+
+#ifdef FAST
+
+  /* Direct interface to MPEG system */
+
+  typedef void (*mpeg_fn_ptr)(unsigned int flags, bs_buffer * bsb);
+  static mpeg_fn_ptr mpeg_rx_direct;
+
+#endif
 
 /* Local functions */
 
 static void udpv_atexit       (void);
 static void udpv_show         (void);
 
-static int  udpv_startofplay  (_kernel_swi_regs *r);
-static int  udpv_endofplay    (_kernel_swi_regs *r);
-static int  udpv_emptybuffer  (_kernel_swi_regs *r);
-static int  udpv_nullswi      (_kernel_swi_regs *r);
-static int  udpv_rxdirect     (_kernel_swi_regs *r);
-static int  udpv_streamstatus (_kernel_swi_regs *r);
+static _kernel_oserror * udpv_startofplay  (_kernel_swi_regs *r);
+static _kernel_oserror * udpv_endofplay    (_kernel_swi_regs *r);
+static _kernel_oserror * udpv_emptybuffer  (_kernel_swi_regs *r);
+static _kernel_oserror * udpv_nullswi      (_kernel_swi_regs *r);
+static _kernel_oserror * udpv_rxdirect     (_kernel_swi_regs *r);
+static _kernel_oserror * udpv_streamstatus (_kernel_swi_regs *r);
 
 static int  read_sysvar       (char *var, char *buf, int buflen);
 
@@ -116,7 +123,7 @@ static int  vs_process_input  (int a, int b, char * ack_src, int ack_unit, int a
 
 struct swient
 {
-  int (*swi_call)();
+  _kernel_oserror *(*swi_call)();
 };
 
 #define MAXSWI 31
@@ -152,7 +159,7 @@ struct swient udpv_ent[MAXSWI] =
   udpv_nullswi,
   udpv_nullswi,
   udpv_nullswi,
-  udpv_rxdirect,        /* Trailing ',' ensures rest is filled with zeros */
+  udpv_rxdirect, /* Trailing ',' ensures rest is filled with zeros */
 };
 
 /* Star command dispatch table */
@@ -175,7 +182,7 @@ struct client udpv_cli_call[MAXCLIENT] =
 /* Standard module initialisation code.                       */
 /**************************************************************/
 
-_kernel_oserror *udpv_init(const char *cmd_tail, int podule_base, void *pw)
+_kernel_oserror * udpv_init(const char * cmd_tail, int podule_base, void * pw)
 {
   _kernel_oserror * e;
   char              buf[32];
@@ -184,6 +191,19 @@ _kernel_oserror *udpv_init(const char *cmd_tail, int podule_base, void *pw)
   atexit(udpv_atexit);
 
   if (!mbuf_present()) return NULL;
+
+  #ifdef FAST
+
+    /* We need Internet 5.44 or later */
+
+    if (socketversion() < 544)
+    {
+      erb.errnum = 1;
+      sprintf(erb.errmess, Module_Title " " Module_VersionString " needs Internet 5.44 or later");
+      return &erb;
+    }
+
+  #endif
 
   e = mbuf_opensession();
   if (e != NULL) return e;
@@ -319,12 +339,12 @@ static void udpv_show(void)
 /* Standard module SWI handler.                               */
 /**************************************************************/
 
-_kernel_oserror *udpv_swi_handler(int swi_offset, _kernel_swi_regs *r, void *pw)
+_kernel_oserror * udpv_swi_handler(int swi_offset, _kernel_swi_regs *r, void *pw)
 {
   struct swient * callp;
 
   callp = &udpv_ent[swi_offset];
-  return ((_kernel_oserror *)(*(callp->swi_call))(r));
+  return (*(callp->swi_call))(r);
 }
 
 /**************************************************************/
@@ -339,7 +359,7 @@ _kernel_oserror *udpv_swi_handler(int swi_offset, _kernel_swi_regs *r, void *pw)
 /*             of each packet (if any).                       */
 /**************************************************************/
 
-static int udpv_startofplay(_kernel_swi_regs *r)
+static _kernel_oserror * udpv_startofplay(_kernel_swi_regs *r)
 {
   int  port = r->r[2];
   bool extif;
@@ -400,7 +420,55 @@ static int udpv_startofplay(_kernel_swi_regs *r)
     init_session(r->r[3], r->r[4]);
   }
 
-  return 0;
+  #ifdef FAST
+
+    /* Find out where the direct call interface for us to the MPEG */
+    /* software is, if available                                   */
+
+    mpeg_rx_direct = NULL;
+
+    {
+      unsigned int * written;
+      unsigned int   statsin  [2];
+      unsigned int   statsout [3] = {0,0,0};
+
+      statsin[0] = 0x0C; /* Read MPEG direct call RX interface */
+      statsin[1] = -1;
+
+      if (
+           _swix(MPEGControl_Stats,
+                 _INR(0,4) | _OUT(3),
+
+                 0,
+                 mpeg_handle,
+                 statsin,
+                 statsout,
+                 sizeof(statsout),
+
+                 &written)
+
+           == NULL
+         )
+      {
+        if (statsout[1] != 0 && written != statsout) mpeg_rx_direct = (mpeg_fn_ptr) statsout[2];
+      }
+    }
+
+    /* Hmm, grim error message really. Best I can think of though. */
+
+    if (mpeg_rx_direct == NULL)
+    {
+      erb.errnum = 1;
+      sprintf(erb.errmess, Module_Title " needs a newer MPEGTransport or MPEGSystem as it cannot find a direct call interface in the current versions");
+
+      udpv_endofplay(NULL);
+
+      return &erb;
+    }
+
+  #endif
+
+  return NULL;
 }
 
 /**************************************************************/
@@ -408,10 +476,11 @@ static int udpv_startofplay(_kernel_swi_regs *r)
 /*                                                            */
 /* Handle SWI UDPV_EndOfPlay.                                 */
 /*                                                            */
-/* Parameters: Pointer to a register block, contents ignored. */
+/* Parameters: Pointer to a register block, contents ignored, */
+/*             or NULL for direct internal calls.             */
 /**************************************************************/
 
-static int udpv_endofplay(_kernel_swi_regs *r)
+static _kernel_oserror * udpv_endofplay(_kernel_swi_regs *r)
 {
   (void) r;
 
@@ -423,7 +492,7 @@ static int udpv_endofplay(_kernel_swi_regs *r)
 
   close_session();
 
-  return 0;
+  return NULL;
 }
 
 /**************************************************************/
@@ -437,12 +506,12 @@ static int udpv_endofplay(_kernel_swi_regs *r)
 /*             free, and on exit is set to zero.              */
 /**************************************************************/
 
-static int udpv_emptybuffer(_kernel_swi_regs *r)
+static _kernel_oserror * udpv_emptybuffer(_kernel_swi_regs *r)
 {
   if (r->r[2] != 0) bufs_release_bs_buffer((bs_buffer *) r->r[2]);
   r->r[2] = 0;
 
-  return 0;
+  return NULL;
 }
 
 /**************************************************************/
@@ -453,11 +522,11 @@ static int udpv_emptybuffer(_kernel_swi_regs *r)
 /* Parameters: Pointer to a register block, contents ignored. */
 /**************************************************************/
 
-static int udpv_nullswi(_kernel_swi_regs *r)
+static _kernel_oserror * udpv_nullswi(_kernel_swi_regs *r)
 {
   (void) r;
 
-  return 0;
+  return NULL;
 }
 
 /**************************************************************/
@@ -476,21 +545,28 @@ static int udpv_nullswi(_kernel_swi_regs *r)
 /*             mbuf chain we're given with m_freem().         */
 /**************************************************************/
 
-static int udpv_rxdirect(_kernel_swi_regs *r)
+static _kernel_oserror * udpv_rxdirect(_kernel_swi_regs *r)
 {
   #ifdef TRACE
     if (r->r[0] != vsock) not_my_socket++;
     else                  is_my_socket++;
   #endif
 
-  if (r->r[0] == vsock) vs_process_input(r->r[1],            /* Received data as mbuf */
-                                         r->r[2],            /* struct sock_addr holding the source address [unused] */
-                                         (char *) (r->r[3]), /* Pointer to the MAC address the source as a 6-byte structure [unused] */
-                                         r->r[4],            /* DCI unit number of the interface the packet was received upon [unused] */
-                                         r->r[5],            /* Number of the transmit SWI in the DCI driver that received the packet [unused] */
-                                         r->r[6]);           /* May be an mbuf (chain) setup to contain an AUN acknowledgement packet (we discard it) */
+  if (r->r[0] == vsock)
+  {
+    vs_process_input(r->r[1],            /* Received data as mbuf */
+                     r->r[2],            /* struct sock_addr holding the source address [unused] */
+                     (char *) (r->r[3]), /* Pointer to the MAC address the source as a 6-byte structure [unused] */
+                     r->r[4],            /* DCI unit number of the interface the packet was received upon [unused] */
+                     r->r[5],            /* Number of the transmit SWI in the DCI driver that received the packet [unused] */
+                     r->r[6]);           /* May be an mbuf chain containing an AUN acknowledgement packet (we discard it) */
 
-  return 0;
+    #ifdef FAST
+      r->r[1] = 0;
+    #endif
+  }
+
+  return NULL;
 }
 
 /**************************************************************/
@@ -503,14 +579,14 @@ static int udpv_rxdirect(_kernel_swi_regs *r)
 /*             all set to zero on exit.                       */
 /**************************************************************/
 
-static int udpv_streamstatus (_kernel_swi_regs *r)
+static _kernel_oserror * udpv_streamstatus (_kernel_swi_regs *r)
 {
   r->r[0] = (v_state == PLAYING) ? PLAY_INPROGRESS : PLAY_TERMINATED;
   r->r[1] = 0;
   r->r[2] = 0;
   r->r[3] = 0;
 
-  return 0;
+  return NULL;
 }
 
 /**************************************************************/
@@ -677,6 +753,19 @@ static int vs_process_input(int a, int b, char * ack_src, int ack_unit, int ack_
   struct mbuf * m0, * m1;
   int           mlen;
 
+  #ifdef FAST
+
+    static int   running = 0;
+    bs_buffer  * head    = NULL;
+    bs_buffer  * last    = NULL;
+
+    /* We should never be reentered, but... */
+
+    if (running) return 0;
+    else running = 1;
+
+  #endif
+
   /* m1 is an old interface and we need to free the chain that (might) point */
   /* to before exitting. On exit if we leave m0 untouched it'll get passed   */
   /* to the socket in the usual fashion; or engineer it so it's zero length  */
@@ -688,6 +777,8 @@ static int vs_process_input(int a, int b, char * ack_src, int ack_unit, int ack_
 
   if (m0 != NULL)
   {
+    unsigned int mph = mpeg_handle;
+
     /*
      * Replacement for block of Keith's code:
      * use MBuf manager supplied routines rather
@@ -776,50 +867,144 @@ static int vs_process_input(int a, int b, char * ack_src, int ack_unit, int ack_
 
     /* If we have any data [left], send it all to the buffer (if possible) */
 
-    if (mlen > 0)
-    {
-      bs_buffer * bsb = bufs_claim_bs_buffer(mlen + sizeof(bs_buffer));
+    #ifdef FAST
 
-      if (bsb == NULL)
+      for (;;)
       {
-        /* Erk, overrun - drop this buffer */
+        struct mbuf * next = m0->m_next;
 
-        (void) TRIM(m0, M_COPYALL, NULL);
+        /* The fast build does suffer one nasty problem; since the MBuf     */
+        /* data block may span across several items we need to send each of */
+        /* them individually. With the slow interface we just copy the data */
+        /* payload of the whole chain into our local buffer.                */
+
+        mlen = m0->m_len;
+
+        if (mlen > 0)
+        {
+          bs_buffer * bsb = bufs_claim_bs_buffer(sizeof(bs_buffer));
+
+          if (bsb == NULL)
+          {
+            /* Erk, overrun */
+
+            m_free(m0); /* Drop this single item */
+          }
+          else
+          {
+            /* Each bs_buffer points to the data payload of each item */
+
+            char * bptr = mtod(m0, char *);
+
+            if (head == NULL) head          = bsb;
+            if (last != NULL) last->bs_next = bsb;
+
+            bsb->bs_next          = NULL;             /* Used by both us and the MPEG software            */
+            bsb->bs_handle        = (int) mpeg_entry; /* Address of direct call routine                   */
+            bsb->bs_flags         = (int) module_wsp; /* Value for R12 on entry to routine                */
+            bsb->bs_offset        = bptr;             /* Pointer to data payload                          */
+            bsb->bs_len           = mlen;             /* We rely on this being intact at all times        */
+            bsb->bs_packets       = (1u<<31);         /* Flag that we're using an extended interface      */
+            bsb->bs_stream_handle = mph;              /* MPEG stream handle                               */
+            bsb->bs_mbuf          = m0;               /* Record the mbuf for freeing later                */
+
+            last = bsb;
+          }
+        }
+        else m_free(m0); /* Drop this item, it has no attached data */
+
+        /* Get the next item in the chain */
+
+        if (next != NULL) m0 = next;
+        else break;
       }
-      else
+
+      /* Sent the chain to the MPEG software */
+
+      if (head != NULL) (mpeg_rx_direct)(0, head);
+
+    #else
+
+      if (mlen > 0)
       {
-        /* We'll put the actual data straight after the structure */
+        bs_buffer * bsb = bufs_claim_bs_buffer(mlen + sizeof(bs_buffer));
 
-        char * bptr = ((char *) bsb) + sizeof(bs_buffer);
+        if (bsb == NULL)
+        {
+          /* Erk, overrun */
 
-        bsb->bs_next    = NULL;             /* We don't use this, the MPEG software does.       */
-        bsb->bs_handle  = 0;                /* If zero, flags = SWI to call...                  */
-        bsb->bs_flags   = UDPV_EmptyBuffer; /* ...so call UDPV_EmptyBuffer please.              */
-        bsb->bs_packets = 0;                /* Must be zero on entry to MPEGControl_FullBuffers */
-        bsb->bs_data    = bptr;
-        bsb->bs_offset  = bsb->bs_data;
-        bsb->bs_len     = mlen;             /* We rely on this being intact at all times.       */
+          (void) TRIM(m0, M_COPYALL, NULL); /* Drop the whole chain */
+        }
+        else
+        {
+          /* We'll put the actual data straight after the structure */
 
-        /* Copy the data into our buffer */
+          char * bptr = (char *) (((size_t) bsb) + sizeof(bs_buffer));
 
-        (void) TRIM(m0, mlen, bptr);
+          bsb->bs_next          = NULL;             /* We don't use this, the MPEG software does.       */
+          bsb->bs_handle        = 0;                /* If zero, flags = SWI to call...                  */
+          bsb->bs_flags         = UDPV_EmptyBuffer; /* ...so call UDPV_EmptyBuffer please.              */
+          bsb->bs_offset        = bptr;             /* Pointer to data payload                          */
+          bsb->bs_len           = mlen;             /* We rely on this being intact at all times.       */
+          bsb->bs_packets       = (1u<<31);         /* Flag that we're using an extended interface      */
+          bsb->bs_stream_handle = mph;              /* MPEG stream handle                               */
 
-        /* Sent it to the MPEG software */
+          /* Copy the data into our buffer (slow builds only) */
 
-        _swix(MPEGControl_FullBuffers,
-              _INR(0,2),
+          (void) TRIM(m0, mlen, bptr);
 
-              0,
-              mpeg_handle,
-              bsb);
+          /* Sent it to the MPEG software */
+
+          _swix(MPEGControl_FullBuffers,
+                _INR(0,2),
+
+                1, /* 1 -> understand 'new' MPEGTrans with stream handle field in bs_buffer */
+                mph,
+                bsb);
+        }
       }
-    }
-  }
+
+    #endif
+
+  } /* 'if (m0 != NULL) ' */
 
   if (m1 != NULL) /* Tidy up the KSR back door approach to the stack */
   {
     m_freem(m1);
   }
 
+  #ifdef FAST
+    running = 0;
+  #endif
+
   return 0;
 }
+
+#ifdef FAST
+
+  /**************************************************************/
+  /* mpeg_handler()                                             */
+  /*                                                            */
+  /* Direct call interface for the MPEG system - it's telling   */
+  /* us a bs_buffer is no longer needed.                        */
+  /*                                                            */
+  /* Parameters: Register block, of which R1 is important -     */
+  /*             points to the buffer to be freed;              */
+  /*                                                            */
+  /*             Module private word.                           */
+  /**************************************************************/
+
+  _kernel_oserror * mpeg_handler(_kernel_swi_regs * r, void * pw)
+  {
+    bufs_release_bs_buffer((bs_buffer *) r->r[1]);
+    return NULL;
+  }
+
+#else
+
+  _kernel_oserror * mpeg_handler(_kernel_swi_regs * r, void * pw)
+  {
+    return NULL;
+  }
+
+#endif
