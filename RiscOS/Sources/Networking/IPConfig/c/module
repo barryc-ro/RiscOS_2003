@@ -16,6 +16,7 @@
 
 #include "Global/Services.h"
 #include "Global/RISCOS.h"
+#include "Interface/HighFSI.h"
 
 #include "sys/dcistructs.h"
 #include "sys/types.h"
@@ -83,11 +84,10 @@ static void *module_wsp = 0;
 static int ifcnt = 0;
 
 
-#ifdef TRACE
-/* TRACE builds claim FSCV in order to notice the boot filing system OS_FSControl
- * call being sent around by the kernel.  By noting this, debug versions can ensure
- * that all the initialisation behaviour is completed before the arrival of this
- * call
+/* IPConfig claims FSCV in order to notice the boot filing system OS_FSControl
+ * call being sent around by the kernel.  By noting this, we can ensure that we
+ * check the keyboard at the right point *after* the keyboard driver has been
+ * started properly.
  */
 static volatile int fscontrolv_claimed = 0;
 
@@ -110,7 +110,6 @@ static void release_fscv(void)
 		fscontrolv_claimed = !!_swix(OS_Release, _INR(0,2), FSCV, fsboot, module_wsp);
 	}
 }
-#endif
 
 
 /* ========== Initialisation command line option management ========== */
@@ -335,9 +334,7 @@ static void clearcallback(void)
  */
 static void release_module_resources(void)
 {
-	#ifdef TRACE
 	release_fscv();
-	#endif
 	clearcallback();
 	(void) messages_file_close();
 	#ifndef ROM
@@ -458,9 +455,7 @@ _kernel_oserror *module_init(const char *cmd_tail, int podule_base, void *pw)
 		release_module_resources();
 	}
 	else {
-		#ifdef TRACE
 		claim_fscv();
-		#endif
 	}
 
 #ifdef TRACE
@@ -835,6 +830,7 @@ static void establish_addresses(void)
  */
 void module_service(int sn, _kernel_swi_regs *r, void *pw)
 {
+        (void) pw;
 
 	#ifdef TRACE
 	module_printf(NULL, Module_Title ": service &%x (R0=%d; R2=%d)\n"
@@ -851,10 +847,9 @@ void module_service(int sn, _kernel_swi_regs *r, void *pw)
 			}
 			break;
 		case Service_PostInit:
-			#ifdef TRACE
+#if 0
 			release_fscv();
 			claim_fscv();
-			#endif
 			if (module_check_sysvar()) {
 				/* Inhibit behaviour if the system variable exists */
 			}
@@ -870,7 +865,7 @@ void module_service(int sn, _kernel_swi_regs *r, void *pw)
 				if (ifcnt == 0) setcallback();
 			}
 			break;
-	#ifdef TRACE
+#endif
 		case Service_Reset:
 		case Service_FSRedeclare:
 			release_fscv();
@@ -878,6 +873,7 @@ void module_service(int sn, _kernel_swi_regs *r, void *pw)
 			break;
 		case Service_PreReset:
 		        break;
+	#ifdef TRACE
 		case Service_InternetStatus:
 		        switch (r->r[0]) {
 		                case InternetStatus_DynamicBootStart:
@@ -917,10 +913,10 @@ _kernel_oserror *module_commands(const char *arg_string, int argc, int cmd_no, v
 				_kernel_oserror *e;
 
 				/* Select the appropriate filing system */
-				e = _swix(OS_FSControl, _INR(0,1), 14, nvram_read_configured_fs());
+				e = _swix(OS_FSControl, _INR(0,1), FSControl_SelectFS, nvram_read_configured_fs());
 				if (e) return e;
 				/* And boot from it */
-				return _swix(OS_FSControl, _IN(0), 15);
+				return _swix(OS_FSControl, _IN(0), FSControl_BootupFS);
 			}
 			#else
 			setcallback();
@@ -954,21 +950,35 @@ _kernel_oserror *module_commands(const char *arg_string, int argc, int cmd_no, v
 	return 0;
 }
 
-#ifdef TRACE
 /* This is the routine called when the kernel boots the current filing system
- * by issuing OS_FSControl 15.
+ * by issuing the appropriate OS_FSControl.
  */
 int fsboot_handler(_kernel_swi_regs *r, void *pw)
 {
 	(void) pw;
-	if (r->r[0] == 15) {
+	if (r->r[0] == FSControl_BootupFS) {
 		#ifdef TRACE
-		module_printf(NULL, "FSCV: OS_FSControl 15 issued\n");
+		module_printf(NULL, "FSCV: OS_FSControl (boot fs) issued\n");
 		#endif
+                if (editconfig_initialise() == NULL) {
+		        module_set_flags(flag_RUN_EDITOR|flag_NO_DO_BOOT);
+                }
+		if (module_check_sysvar()) {
+			/* Inhibit behaviour if the system variable exists */
+		}
+		else if (module_read_command_options() & flag_RUN_EDITOR) {
+			module_start_editor(pw);
+			/* will not return in non-TRACE builds */
+		}
+		else {
+			/* Try and initialise, and if it did not succeed, set a
+			 * callback to have a go a moment later too
+			 */
+			establish_addresses();
+		}
 	}
 	return 1;
 }
-#endif
 
 #ifdef TRACE
 /* Debugging routine.  If str is NULL, then the log is printed to 'f' (or stderr
