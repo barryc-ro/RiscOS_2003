@@ -88,13 +88,13 @@ clean:
         ${RM} ${APPTARGET}
         @echo ${COMPONENT}: cleaned
 
-resources: ${APPTARGET}
-        ${MKDIR} ${RESDIR}.ScrSaver
-        ${CP} ${APPTARGET}                     ${RESDIR}.ScrSaver.!RunImage  ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.!Run         ${RESDIR}.ScrSaver.!Run       ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.Templates    ${RESDIR}.ScrSaver.Templates  ${CPFLAGS}
-        ${SHRINK} Resources.${LOCALE}.Sprites  ${RESDIR}.ScrSaver.Sprites
-        @echo ${COMPONENT}: resource files copied
+#resources: ${APPTARGET}
+#        ${MKDIR} ${RESDIR}.ScrSaver
+#        ${CP} ${APPTARGET}                     ${RESDIR}.ScrSaver.!RunImage  ${CPFLAGS}
+#        ${CP} Resources.${LOCALE}.!Run         ${RESDIR}.ScrSaver.!Run       ${CPFLAGS}
+#        ${CP} Resources.${LOCALE}.Templates    ${RESDIR}.ScrSaver.Templates  ${CPFLAGS}
+#        ${SHRINK} Resources.${LOCALE}.Sprites  ${RESDIR}.ScrSaver.Sprites
+#        @echo ${COMPONENT}: resource files copied
 
 #
 # ROM target (re-linked at ROM Image build time)
