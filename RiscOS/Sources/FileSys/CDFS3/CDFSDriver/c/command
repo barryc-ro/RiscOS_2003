@@ -1,0 +1,240 @@
+/* File:    command.c
+ * Purpose: Handling of star commands
+ * Author:  Timothy Roddis
+ * History: 15-Apr-97: TGR: created
+ */
+
+/* ANSI headers */
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+
+/* RISC OS headers */
+
+#include "kernel.h"
+#include "swis.h"
+
+/* commonlib headers */
+
+#include "defines.h"
+#include "debug.h"
+#include "msgs.h"
+
+/* local headers */
+
+#include "ascii.h"
+#include "standards.h"
+#include "swiextra.h"
+#include "cdfs3.h"
+#include "cdmgr.h"
+#include "cdfsdriver.h"
+#include "module.h"
+#include "errors.h"
+#include "globals.h"
+#include "aux.h"
+#include "drive.h"
+
+/* command_handler
+ *
+ *
+ * on entry:
+ *    arg_string - string containing RISCOS command arguments.
+ *                 NB: not argv formatting (sadly)
+ *    argc - argument count
+ *    no of command - see auto-generated module.h header
+ *    pw - private word
+ *
+ * Handles OSCLI commands.
+ */
+
+_kernel_oserror *command_handler (char *arg_string, int argc, int cmd_no, void *pw) {
+
+  size_t size;
+  int i;
+  int drive_no = -1;
+  char *cmd_tail;
+  static char output_buffer[64];
+  _kernel_oserror *e = NULL;
+
+  IGNORE(pw);
+
+  /* arg_string doesn't appear to have to be NUL terminated */
+
+  DEBUG debug_output ("c", "CDFSDriver: command = %d, no of arguments = %d\n", cmd_no, argc);
+
+  if (argc) {
+     if (arg_string == (char *) 1 || !*arg_string) {
+        cmd_tail = NULL;
+     } else {
+        for (i=0; arg_string[i] >= ' '; i++) ;
+        if ((cmd_tail = malloc (i+1)) == NULL) return msgs_make_error (Error_MemAlloc);
+        for (i=0; arg_string[i] >= ' '; i++) cmd_tail[i] = arg_string[i];
+        cmd_tail[i] = 0;
+     }
+  } else {
+     cmd_tail = NULL;
+  }
+
+  /* Could check the filing system here to see if it's CDFS ??? */
+
+  if (argc) {
+    if ((e = _swix (OS_ReadUnsigned, I0|I1|O2, 10 | OS_ReadUnsignedFlags_CheckTerminator,
+                    cmd_tail, &drive_no)) != NULL) return e;
+  }
+  if (drive_no == -1) {
+    e = _swix (CDFS_CurrentDrive, I0|O0, 0, &drive_no);
+    if (e) return e;
+  }
+
+  e = drive_check (drive_no, 1);
+
+  if (e) return e;
+
+  switch (cmd_no) {
+    case CMD_Playlist:
+    {
+      unsigned int             i;
+      int                      m, s, f;
+      char                    *ptr;
+      CDMgr_ReadTOC_Block     *toc_hdr;
+      CDMgr_ReadTOC_TrackInfo *trk_info;
+
+      e = _swix (CDMgr_ReadTOC, I0|I1|I2|I3|I4|O3,
+                 CDMgr_ReadTOCFlags_ReturnTrackInfo,
+                 drive_no,
+                 global_drive_info[drive_no].sequence_count,
+                 0,
+                 0,
+                 &size);
+
+      DEBUG if (e) debug_output ("c", "CDFSDriver: reading TOC returned %s\n", e->errmess);
+
+      if (e) break;
+
+      if ((toc_hdr = malloc (size)) == NULL) {
+        return msgs_make_error (Error_MemAlloc);
+      }
+
+      e = _swix (CDMgr_ReadTOC, I0|I1|I2|I3|I4|O3|O4,
+                 CDMgr_ReadTOCFlags_ReturnTrackInfo,
+                 drive_no,
+                 global_drive_info[drive_no].sequence_count,
+                 toc_hdr,
+                 0,
+                 &toc_hdr,
+                 &trk_info);
+
+      if (e) {
+        free (toc_hdr);
+        return e;
+      }
+
+      sprintf (output_buffer, "Track number, contains, starts from MM:SS:FF");
+      for (ptr=output_buffer; *ptr; ptr++)  _swix(OS_WriteC, I0, *ptr);
+      _swix(OS_WriteC, I0, ASCII_LF);
+      _swix(OS_WriteC, I0, ASCII_CR);
+
+      for (i = toc_hdr->first_track; i <= toc_hdr->last_track; i++) {
+
+        f = aux_convert_addr (CDFSDriver_AddressMode_LBA, trk_info[i-1].address + 150,
+                              CDFSDriver_AddressMode_MSF);
+        s  = (f >> 8)  & 0xff;
+        m  = (f >> 16) & 0xff;
+        f &= 0xff;
+
+        sprintf (output_buffer, "Track   %02d   is %s   %02d:%02d:%02d   ",
+                 i,
+                 (trk_info->audio_mode & CDMgr_AudioModeFlags_Data) ? "data " : "audio",
+                 m, s, f);
+
+        for (ptr=output_buffer; *ptr; ptr++) _swix(OS_WriteC, I0, *ptr);
+        os_write_c(ASCII_LF);
+        os_write_c(ASCII_CR);
+      }
+      f = aux_convert_addr (CDFSDriver_AddressMode_LBA, toc_hdr->disc_size + 150,
+                            CDFSDriver_AddressMode_MSF);
+      s  = (f >> 8)  & 0xff;
+      m  = (f >> 16) & 0xff;
+      f &= 0xff;
+
+      sprintf (output_buffer, "Total   %02d   track(s)   %02d:%02d:%02d",
+                               i-1, m, s, f);
+
+      for (ptr=output_buffer; *ptr; ptr++)  _swix(OS_WriteC, I0, *ptr);
+      _swix(OS_WriteC, I0, ASCII_LF);
+      _swix(OS_WriteC, I0, ASCII_CR);
+      break;
+    }
+    case CMD_WhichDisc:
+    {
+      unsigned int             size, disc_size, crc;
+      char                     *ptr, *buffer;
+      CDMgr_ReadTOC_Block     *toc_hdr;
+
+      e = _swix (CDMgr_ReadTOC, I0|I1|I2|I3|O3,
+                 0,
+                 drive_no,
+                 global_drive_info[drive_no].sequence_count,
+                 0,
+                 &size);
+
+      if (e) break;
+
+      if ((toc_hdr = malloc (size)) == NULL) {
+        e = msgs_make_error (Error_MemAlloc);
+        break;
+      }
+      e = _swix (CDMgr_ReadTOC, I0|I1|I2|I3|O3,
+                 0,
+                 drive_no,
+                 global_drive_info[drive_no].sequence_count,
+                 toc_hdr,
+                 &toc_hdr);
+
+      if (e) {
+        free (toc_hdr);
+        return e;
+      }
+
+       /* If there hasn't been an error, translate the data */
+
+      disc_size = toc_hdr->disc_size;
+
+      free (toc_hdr);
+
+      if ((buffer = malloc (ISO9660_LogicalSectorSize)) == NULL)
+        return msgs_make_error (Error_MemAlloc);
+
+       e = _swix (CDMgr_ReadData, I0|I1|I2|I3|I4|I5|I6,
+                  CDMgr_ReadData_User,
+                  drive_no,
+                  global_drive_info[drive_no].sequence_count,
+                  buffer,
+                  ISO9660_SessionOffsetForPVD,
+                  1,
+                  CDMgr_DataMode_Mode1OrMode2Form1);
+
+      if (e) {
+        crc = 0;
+        e = NULL;
+      } else {
+        e = _swix (OS_CRC, I0|I1|I2|I3|O0, 0, buffer, buffer + 60, 1, &crc);
+      }
+      free (buffer);
+
+      sprintf (output_buffer, "%d", disc_size ^ crc);
+
+      DEBUG debug_output ("c", "CDFSDriver: Disc: %s @%p\n", output_buffer, output_buffer);
+
+      for (ptr=output_buffer; *ptr; ptr++) _swix(OS_WriteC, I0, *ptr);
+
+      _swix(OS_WriteC, I0, ASCII_LF);
+      _swix(OS_WriteC, I0, ASCII_CR);
+
+      break;
+    }
+  }
+  if (cmd_tail) free (cmd_tail);
+  return e;
+}
