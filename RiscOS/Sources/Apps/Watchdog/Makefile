@@ -114,9 +114,9 @@ clean:
         @echo ${COMPONENT}: cleaned
 
 resources:
-        ${MKDIR} ${RESAPP}
-        ${CP} ${RDIR}.!BootROM ${RESAPP}.!Boot ${CPFLAGS}
-        ${CP} ${RDIR}.!RunROM ${RESAPP}.!Run ${CPFLAGS}
+        ${MKDIR} ${APPDIR}
+        ${CP} ${RDIR}.!BootROM ${RESAPP}.!Boot
+        ${CP} ${RDIR}.!RunROM ${RESAPP}.!Run
         @echo ${COMPONENT}: resource files copied
 
 #
@@ -158,6 +158,49 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 #       ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
+oz.ModuleWrap: s.ModuleWrap
+oz.ModuleWrap: s.AppName
+oz.ModuleWrap: Hdr:ListOpts
+oz.ModuleWrap: Hdr:Macros
+oz.ModuleWrap: Hdr:System
+oz.ModuleWrap: Hdr:SWIs
+oz.ModuleWrap: Hdr:CPU.Generic26
+oz.ModuleWrap: Hdr:IO.GenericIO
+oz.ModuleWrap: Hdr:RISCOS
+oz.ModuleWrap: Hdr:ModHand
+oz.ModuleWrap: Hdr:EnvNumbers
+oz.ModuleWrap: Hdr:Proc
+oz.ModuleWrap: Hdr:FSNumbers
+oz.ModuleWrap: Hdr:NewErrors
+oz.ModuleWrap: Hdr:Services
+oz.ModuleWrap: Hdr:ResourceFS
+oz.ModuleWrap: Hdr:MsgTrans
+oz.ModuleWrap: Hdr:Variables
+oz.ModuleWrap: Hdr:UpCall
+oz.ModuleWrap: s.ResFiles
+oz.ModuleWrap: s.sutil
+oz.kill:	c.kill
+oz.kill:	h.defs
+oz.kill:	C:h.kernel
+oz.kill:	h.inlines
+oz.kill:	C:h.swis
+oz.kill:	h.wimp
+oz.kill:	h.defs
+oz.main:	c.main
+oz.main:	h.defs
+oz.main:	C:h.kernel
+oz.main:	h.inlines
+oz.main:	C:h.swis
+oz.main:	h.screen
+oz.main:	h.defs
+oz.main:	h.SmartCard
+oz.main:	h.wimp
+oz.main:	h.defs
+oz.screen:	c.screen
+oz.screen:	h.defs
+oz.screen:	C:h.kernel
+oz.screen:	h.inlines
+oz.screen:	C:h.swis
 oz.ModuleWra1: s.ModuleWrap
 oz.ModuleWra1: s.AppName
 oz.ModuleWra1: Hdr:ListOpts
@@ -211,46 +254,3 @@ o.main:	h.defs
 o.main:	h.SmartCard
 o.main:	h.wimp
 o.main:	h.defs
-oz.kill:	c.kill
-oz.kill:	h.defs
-oz.kill:	C:h.kernel
-oz.kill:	h.inlines
-oz.kill:	C:h.swis
-oz.kill:	h.wimp
-oz.kill:	h.defs
-oz.main:	c.main
-oz.main:	h.defs
-oz.main:	C:h.kernel
-oz.main:	h.inlines
-oz.main:	C:h.swis
-oz.main:	h.screen
-oz.main:	h.defs
-oz.main:	h.SmartCard
-oz.main:	h.wimp
-oz.main:	h.defs
-oz.screen:	c.screen
-oz.screen:	h.defs
-oz.screen:	C:h.kernel
-oz.screen:	h.inlines
-oz.screen:	C:h.swis
-oz.ModuleWrap: s.ModuleWrap
-oz.ModuleWrap: s.AppName
-oz.ModuleWrap: Hdr:ListOpts
-oz.ModuleWrap: Hdr:Macros
-oz.ModuleWrap: Hdr:System
-oz.ModuleWrap: Hdr:SWIs
-oz.ModuleWrap: Hdr:CPU.Generic26
-oz.ModuleWrap: Hdr:IO.GenericIO
-oz.ModuleWrap: Hdr:RISCOS
-oz.ModuleWrap: Hdr:ModHand
-oz.ModuleWrap: Hdr:EnvNumbers
-oz.ModuleWrap: Hdr:Proc
-oz.ModuleWrap: Hdr:FSNumbers
-oz.ModuleWrap: Hdr:NewErrors
-oz.ModuleWrap: Hdr:Services
-oz.ModuleWrap: Hdr:ResourceFS
-oz.ModuleWrap: Hdr:MsgTrans
-oz.ModuleWrap: Hdr:Variables
-oz.ModuleWrap: Hdr:UpCall
-oz.ModuleWrap: s.ResFiles
-oz.ModuleWrap: s.sutil
