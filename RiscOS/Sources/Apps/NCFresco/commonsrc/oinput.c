@@ -322,7 +322,7 @@ void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
     case rid_it_SUBMIT:
     case rid_it_RESET:
 
-#ifdef STBWEB
+#ifndef BUILDERS
 	whichfont = antweb_getwebfont(doc, ti, -1);
 #else
 	whichfont = ii->src ? ALT_FONT : WEBFONT_BUTTON;
@@ -352,7 +352,7 @@ void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
 	}
 	else
 	{
-#ifdef STBWEB
+#ifndef BUILDERS
 	    ti->width = ii->ww.type == value_absunit ? (int)ii->ww.u.f : webfont_font_width(whichfont, t) + INPUT_BUTTON_BORDER_X*2;
 	    if (ii->hh.type != value_absunit)
 	    {
