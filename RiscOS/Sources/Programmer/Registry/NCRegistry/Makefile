@@ -80,7 +80,7 @@ ABSSYM     = RISC_OSLib:o.AbsSym
 COMPONENT = NCRegistry
 TARGET    = aof.NCRegistry
 TARGETSA  = rm.NCRegistry
-EXPORTS   = ${EXP_C_H}.sc_const ${EXP_C_H}.reg_scbb ${EXP_C_H}.s_card
+EXPORTS   = ${EXP_C_H}.sc_const ${EXP_C_H}.reg_scbb ${EXP_C_H}.reg_object ${EXP_C_H}.s_card
 OBJS      = module.o header.o reg_swis.o reg_events.o enum_ddi.o \
 	reg_scbb.o reg_tags.o reg_cmds.o reg_status.o reg_utils.o \
 	machine.o DBUG.o reg_spprt.o dynalloc.o reg_auth.o reg_versn.o \
@@ -126,6 +126,8 @@ ${EXP_C_H}.sc_const:	h.sc_const
 ${EXP_C_H}.s_card:	h.s_card
 	${CP} h.s_card $@ ${CPFLAGS}
 
+${EXP_C_H}.reg_object:  h.reg_object
+	${CP} h.reg_object $@ ${CPFLAGS}
 #
 # ROM target (re-linked at ROM Image build time)
 #
