@@ -13,47 +13,23 @@
 #
 
 #
-# Paths
-#
-EXP_HDR = <export$dir>
-
-#
 # Generic options:
 #
-MKDIR   = cdir
-CC      = cc
-CP      = copy
-LD      = link
-RM      = remove
-WIPE    = -wipe
-CD	= dir
+CINCLUDES = -IC:CLX -IC:
+CDEFINES  = -DRISCOS
+CFLAGS    = -Wc
 
-AFLAGS		= -depend !Depend -Stamp -quit
-CFLAGS		= -c -depend !Depend ${INCLUDES} ${THROWBACK} -Wc
-CPFLAGS		= ~cfr~v
-WFLAGS		= ~c~v
-
-DIRS		=o._dirs
+include Makefiles:StdTools
 
 #
 # Libraries
 #
-CLIB       = CLIB:o.stubs
-RLIB       = RISCOSLIB:o.risc_oslib
-RSTUBS     = RISCOSLIB:o.rstubs
-ROMSTUBS   = RISCOSLIB:o.romstubs
-ROMCSTUBS  = RISCOSLIB:o.romcstubs
-ABSSYM     = RISC_OSLib:o.AbsSym
-
-#
-# Include files
-#
-INCLUDES = -IC:
+include Makefiles:AppLibs
 
 # Program specific options:
 #
 COMPONENT = srcbuild
-TARGET	  = ${COMPONENT}
+TARGET    = ${COMPONENT}
 
 OBJS =\
  srcbuild.o\
@@ -61,11 +37,14 @@ OBJS =\
  build.o\
  parse.o
 
+LIBS = ${CLXLIB} ${CLIB}
+
+DIRS      =o._dirs
+
 #
 # Rule patterns
 #
-.c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.s.o:;      ${AS} ${AFLAGS} $< $@
+include Makefiles:StdRules
 
 #
 # Build
@@ -79,20 +58,19 @@ clean:
         @echo ${COMPONENT}: cleaned
 
 install: ${TARGET}
-	${CP} ${TARGET} <Build$Dir>.Library.Build.${COMPONENT} ${CPFLAGS}
+	${CP} ${TARGET} ${INSTDIR}.Library.Build.${COMPONENT} ${CPFLAGS}
 	@echo ${COMPONENT}: installed
 
 ${DIRS}:
-	${MKDIR} o
-	create ${DIRS}
-	stamp ${DIRS}
+        ${MKDIR} o
+        ${TOUCH} $@
 
 #
 # Target
 #
 ${TARGET}: ${OBJS} ${DIRS}
-        ${LD} -o $@ ${OBJS} ${CLIB}
-        Access ${TARGET} RW/R
+        ${LD} -o $@ ${OBJS} ${LIBS}
+        ${CHMOD} a+rx $@
 
 #
 # Dynamic dependencies:
