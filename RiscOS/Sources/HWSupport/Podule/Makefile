@@ -9,8 +9,10 @@
 # 28-Jun-94  AMcC         Added extra development rules.
 # 30-Aug-94  AMcC         Added resources: target
 # 16-Jan-96  JRH          Makes different targets for different machines
-#
-
+# 11-Jan-00  PMS          Converted to use objasm instead of aasm so that we
+#                         can pass in assembly-time constants to control
+#                         fake podule header for Funai 5 Ethernet NC
+#                         which doesn't have a podule ROM. Paul Skirrow.
 #
 # Paths
 #
@@ -20,13 +22,15 @@ EXP_CHDR = <CExport$Dir>.h
 #
 # Generic options:
 #
+
 MKDIR   = cdir
-AS      = aasm
+AS      = objasm
 CP      = copy
 MODGEN   = modgen
+LD      = link
 RM      = remove
 CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
+ASFLAGS = -depend !Depend -Stamp -quit -module -PreDefine ${OPTIONS} -To $@ -From
 CPFLAGS = ~cfr~v
 
 TOKENISE = tokenise
@@ -36,8 +40,9 @@ TOKENS   = Hdr:Tokens
 # Program specific options:
 #
 COMPONENT = Podule
-SOURCE    = s.GetAll
+SOURCE    = Commands.s Errors.s GetAll.s HelpTokens.s Interface.s Module.s MsgCode.s ROMExtend.s
 TARGET    = rm.${MACHINE}.Podule
+ROMTARGET = Podule.o
 EXPORTS   = ${EXP_HDR}.${COMPONENT} \
             ${EXP_CHDR}.${COMPONENT}
 
@@ -80,10 +85,6 @@ clean:
         ${RM} setversion
         @echo ${COMPONENT}: cleaned
 
-${TARGET}: ${SOURCE} s.HelpTokens
-        ${MKDIR} rm.${MACHINE}
-        ${AS} ${ASFLAGS} ${SOURCE}
-
 s.HelpTokens: ${TOKENS} HelpTexts
         ${TOKENISE} ${TOKENS} HelpTexts $@
 
@@ -92,6 +93,25 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 
 ${EXP_CHDR}.${COMPONENT}: h.${COMPONENT}
         ${CP} h.${COMPONENT} $@ ${CPFLAGS}
+
+#
+# Target 
+#
+${TARGET}: ${SOURCE}
+        ${AS} ${AFLAGS} GetAll.s Podule.o 
+        ${MKDIR} rm.${MACHINE}
+        ${LD} -o $@ -bin Podule.o
+	SetType $@ &FFA
+
+#
+# Final link for the ROM Image (using given base address)
+#
+rom_link:
+        ${MKDIR} linked
+        ${LD} -o linked.${COMPONENT} -bin -base ${ADDRESS} ${ROMTARGET} ${ABSSYM}
+	SetType $@ &FFA
+        ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: rom_link complete
 
 
 # 
