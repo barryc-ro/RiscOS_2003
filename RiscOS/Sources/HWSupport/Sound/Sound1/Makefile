@@ -44,10 +44,20 @@ clean:
         ${RM} s.TokHelpSrc
         @echo ${COMPONENT}: cleaned
 
-resources:
-        ${MKDIR} ${RESDIR}.SoundChann
-        ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.SoundChann.Messages  ${CPFLAGS}
+resources: resources-${CMDHELP}
         @echo ${COMPONENT}: resource files copied
+
+resources_common:
+        ${MKDIR} ${RESDIR}.SoundChann
+	TokenCheck LocalRes:Messages
+        ${CP} LocalRes:Messages  ${RESDIR}.SoundChann.Messages  ${CPFLAGS}
+
+resources-None: resources_common
+	@
+
+resources-: resources_common
+	TokenCheck LocalRes:CmdHelp
+	print LocalRes:CmdHelp { >> ${RESDIR}.SoundChann.Messages }
 
 ${TARGET}: ${SOURCE} s.TokHelpSrc
         ${MKDIR} rm.${MACHINE}
@@ -57,66 +67,3 @@ s.TokHelpSrc: Hdr:Tokens HelpSrc
         tokenise Hdr:Tokens HelpSrc $@
 
 # Dynamic dependencies:
-rm.Jordan.Sound1: Hdr:ListOpts
-rm.Jordan.Sound1: Hdr:Macros
-rm.Jordan.Sound1: Hdr:System
-rm.Jordan.Sound1: Hdr:SWIs
-rm.Jordan.Sound1: Hdr:CPU.Generic26
-rm.Jordan.Sound1: Hdr:IO.GenericIO
-rm.Jordan.Sound1: Hdr:RISCOS
-rm.Jordan.Sound1: Hdr:Machine.<Machine>
-rm.Jordan.Sound1: Hdr:ModHand
-rm.Jordan.Sound1: Hdr:Services
-rm.Jordan.Sound1: Hdr:FSNumbers
-rm.Jordan.Sound1: Hdr:NewErrors
-rm.Jordan.Sound1: Hdr:PublicWS
-rm.Jordan.Sound1: Hdr:Proc
-rm.Jordan.Sound1: Hdr:CMOS
-rm.Jordan.Sound1: Hdr:Tokens
-rm.Jordan.Sound1: Hdr:MsgTrans
-rm.Jordan.Sound1: Hdr:Debug
-rm.Jordan.Sound1: Hdr:Sound
-rm.Jordan.Sound1: Version
-rm.Jordan.Sound1: s.TokHelpSrc
-rm.Morris.Sound1: Hdr:ListOpts
-rm.Morris.Sound1: Hdr:Macros
-rm.Morris.Sound1: Hdr:System
-rm.Morris.Sound1: Hdr:SWIs
-rm.Morris.Sound1: Hdr:CPU.Generic26
-rm.Morris.Sound1: Hdr:IO.GenericIO
-rm.Morris.Sound1: Hdr:RISCOS
-rm.Morris.Sound1: Hdr:Machine.<Machine>
-rm.Morris.Sound1: Hdr:ModHand
-rm.Morris.Sound1: Hdr:Services
-rm.Morris.Sound1: Hdr:FSNumbers
-rm.Morris.Sound1: Hdr:NewErrors
-rm.Morris.Sound1: Hdr:PublicWS
-rm.Morris.Sound1: Hdr:Proc
-rm.Morris.Sound1: Hdr:CMOS
-rm.Morris.Sound1: Hdr:Tokens
-rm.Morris.Sound1: Hdr:MsgTrans
-rm.Morris.Sound1: Hdr:Debug
-rm.Morris.Sound1: Hdr:Sound
-rm.Morris.Sound1: Version
-rm.Morris.Sound1: s.TokHelpSrc
-rm.Omega.Sound1: Hdr:ListOpts
-rm.Omega.Sound1: Hdr:Macros
-rm.Omega.Sound1: Hdr:System
-rm.Omega.Sound1: Hdr:SWIs
-rm.Omega.Sound1: Hdr:CPU.Generic26
-rm.Omega.Sound1: Hdr:IO.GenericIO
-rm.Omega.Sound1: Hdr:RISCOS
-rm.Omega.Sound1: Hdr:Machine.<Machine>
-rm.Omega.Sound1: Hdr:ModHand
-rm.Omega.Sound1: Hdr:Services
-rm.Omega.Sound1: Hdr:FSNumbers
-rm.Omega.Sound1: Hdr:NewErrors
-rm.Omega.Sound1: Hdr:PublicWS
-rm.Omega.Sound1: Hdr:Proc
-rm.Omega.Sound1: Hdr:CMOS
-rm.Omega.Sound1: Hdr:Tokens
-rm.Omega.Sound1: Hdr:MsgTrans
-rm.Omega.Sound1: Hdr:Debug
-rm.Omega.Sound1: Hdr:Sound
-rm.Omega.Sound1: Version
-rm.Omega.Sound1: s.TokHelpSrc
