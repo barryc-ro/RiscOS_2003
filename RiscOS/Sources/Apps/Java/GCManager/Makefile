@@ -6,6 +6,7 @@
 # Date       Name   Description
 # ----       ----   -----------
 # 07/01/98  RLougher Created
+# 18/08/98  MRobertshaw  Modified For Funai II Build 
 #
 
 #
@@ -30,7 +31,7 @@ CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
 CFLAGS   = -c ${INCLUDES} -zM -ffah -zps1
-INCLUDES = -Itbox:,C:
+INCLUDES = -Itbox:,C:,C:MemLib
 
 #
 # Libraries
@@ -39,9 +40,10 @@ ANSILIB   = CLib:o.ansilib
 CLIB      = CLIB:o.stubs
 RLIB      = RISCOSLIB:o.risc_oslib
 ROMCSTUBS = RISCOSLIB:o.romcstubs
-ABSSYM    = RISC_OSLib:o.abssym
+ABSSYM    = RISC_OSLib:o.c_abssym
 TBOXLIB   = tbox:o.toolboxlib
 WIMPLIB   = tbox:o.wimplib
+MEMLIB    = C:MemLib.o.memlib
 
 OBJS =\
 	o.ModHdr \
@@ -74,6 +76,7 @@ OBJS =\
 	o.task \
 	o.utils \
 	o.memory \
+	o.mpeg  \
 	o.antiTwit
 #
 # Rule patterns
@@ -103,7 +106,7 @@ clean:
 
 ${ROM_MODULE}: ${OBJS}
         ${MKDIR} aof
-        ${LD} -o $@ -aof ${OBJS} $(WIMPLIB) ${ROMCSTUBS}
+        ${LD} -o $@ -aof ${OBJS} $(MEMLIB) $(WIMPLIB) ${ROMCSTUBS}
 
 # final link for ROM Image (using given base address)
 rom_link:
