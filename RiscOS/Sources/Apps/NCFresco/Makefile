@@ -24,7 +24,6 @@
 # ffu		Fresco for Unix - (FFU)
 # html		Run attrgen.py on attrconf, generating basic SGML tables
 # links		Build any necessary soft links
-# plotcheck	Plotting checker
 # realclean	Clean and also delete generated source files/state
 # riscoslib     Build RISC_OSLib on Unix
 # sanity	Perform directory tree sanity checks
@@ -47,8 +46,7 @@ POSS_TARGETS=	br bu cu BUILDERS BUILDERS_RISCOS BUILDERS_UNIX CHECKERS_UNIX clea
 		HTMLCHECK HTMLCHECK_RISCOS HTMLCHECK_UNIX links    \
 		memlib mu \
 		MOST MOST_UNIX realclean sanity srclist sr NCFRESCO \
-		NCFRESCO_RISCOS riscoslib TAGS TESTS xref \
-		pu PLOTCHECK PLOTCHECK_UNIX
+		NCFRESCO_RISCOS riscoslib TAGS TESTS xref
 
 all:
 		@echo
@@ -73,9 +71,10 @@ RM=		rm -f
 #############################################################################
 
 #PREDEPS=	builddate.h sanity
-#POSTACTS=	@$(RM) $(PREDEPS)
-PREDEPS=        sanity
-POSTACTS=
+PREDEPS=	builddate.h
+POSTACTS=	@$(RM) $(PREDEPS)
+#PREDEPS=
+#POSTACTS=
 
 #############################################################################
 
@@ -95,8 +94,7 @@ COMM_OBJS=	Serial.o access.o auth.o backend.o bittabs.o config.o \
 		unwind.o url.o util.o version.o webfonts.o \
 		cookie.o cache2.o cache3.o stream.o debug.o usrtrc.o \
 		tablesize.o oobject.o objects.o plugin.o pluginfile.o \
-		files.o rlib_alloc.o fvpr.o remote.o coalesce.o keyhl.o \
-		buildtime.o
+		files.o rlib_alloc.o fvpr.o remote.o coalesce.o keyhl.o
 
 BASE_VPATH=	..:../commonsrc:../fresparse:../parser
 BASE_INCS=	-I.. -I../commonsrc -I../fresparse -I../parser
@@ -185,18 +183,22 @@ FRESCO_LIBS=    ../webimage/webimage ../memlib/memlib
 
 # ----------------------------------------------------------------------
 
-RISCOS_BUILD_EXPORT=../../../../Export
+# Consider changing to OLD_COMMENTS=0
 
 NCFRESCO_INCS=	-I../\!NCFresco
-NCFRESCO_BASECFLAGS= -wp -DSTBWEB $(NCFRESCO_INCS) -DOLD_COMMENTS=0 -DSGML_PC_UNDEF_KEYS -DUSE_MARGINS=1 -DMEMLIB=1 -DCOMPAT_INET4 -DPREVENT_ELEMENT_GUESSING
+NCFRESCO_BASECFLAGS= -wp -DSTBWEB $(NCFRESCO_INCS) -DOLD_COMMENTS=0 -DSGML_PC_UNDEF_KEYS -DUSE_MARGINS=1 -DMEMLIB=1 -DCOMPAT_INET4
 
 # Production flag set
-NCFRESCO_PRODUCTION_CFLAGS= $(NCFRESCO_BASECFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -DSGML_REPORTING=0 -DNDEBUG
-NCFRESCO_DEBUG_CFLAGS= $(NCFRESCO_BASECFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=2 -Fn -DSGML_REPORTING=1 -DLINK_DEBUG=1
-NCFRESCO_MEMCHECK_CFLAGS= $(NCFRESCO_BASECFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=0 -Fn -DSGML_REPORTING=1 -DLINK_DEBUG=0 -zpc1 -DMemCheck_MEMCHECK -fw -g
-NCFRESCO_HIERPROF_CFLAGS= $(NCFRESCO_BASECFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -Fn -DSGML_REPORTING=0 -DNDEBUG -DHierProf_PROFILE
+# NCFRESCO_CFLAGS= $(NCFRESCO_BASECFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -DSGML_REPORTING=0 -DNDEBUG
 
-NCFRESCO_CFLAGS= $(NCFRESCO_DEBUG_CFLAGS)
+# standard debug set
+NCFRESCO_CFLAGS= $(NCFRESCO_BASECFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=2 -Fn -DSGML_REPORTING=1 -DLINK_DEBUG=1
+
+# MemCheck debug set
+# NCFRESCO_CFLAGS= $(NCFRESCO_BASECFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=0 -Fn -DSGML_REPORTING=1 -DLINK_DEBUG=0 -zpc1 -DMemCheck_MEMCHECK -fw -g
+
+# Hierprof debug set
+#NCFRESCO_CFLAGS= $(NCFRESCO_BASECFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -Fn -DSGML_REPORTING=0 -DNDEBUG -DHierProf_PROFILE
 
 NCFRESCO_VPATH=	../!NCFresco
 NCFRESCO_BASEOBJS=	clipboard.o stbfe.o stbhist.o stbhots.o stbkeys.o stbmap.o \
@@ -233,7 +235,7 @@ CBFRESCO_CFLAGSD= $(CBFRESCO_BASECFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=2 -Fn -DSGML
 # -------------
 
 BUILDERS_INCS=	-I../bunix -I../RISC_OSLib
-BUILDERS_CFLAGS=-DBUILDERS $(BUILDERS_INCS)  -DDEVELOPMENT=2 -DSGML_REPORTING=0 -g
+BUILDERS_CFLAGS=-DBUILDERS $(BUILDERS_INCS)  -DDEVELOPMENT=2 -DSGML_REPORTING=1 -g
 BUILDERS_VPATH=	$(RISCOS_VPATH)
 BUILDERS_OBJS=	tables.o memwatch.o myassert.o bldrs.o debug.o rid.o \
 		$(SGML_OBJS) $(HTML_OBJS) dump.o tablesize.o backend.o \
@@ -242,8 +244,7 @@ BUILDERS_OBJS=	tables.o memwatch.o myassert.o bldrs.o debug.o rid.o \
 		oobject.o objects.o usrtrc.o textplot.o rectplot.o \
 		coalesce.o fvpr.o
 BUILDERS_LIBS=	-lefence
-
-CHECKERS_CFLAGS=-DCHECKER -DBUILDERS -DNO_PTRS $(BUILDERS_INCS)  -DDEVELOPMENT=2 -DSGML_REPORTING=1
+CHECKERS_CFLAGS=-DCHECKER -DBUILDERS $(BUILDERS_INCS)  -DDEVELOPMENT=2 -DSGML_REPORTING=1
 CHECKERS_OBJS=	tables.o memwatch.o myassert.o debug.o rid.o \
 		$(SGML_OBJS) $(HTML_OBJS) dump.o tablesize.o backend.o \
 		obreak.o obullet.o oimage.o oinput.o oselect.o otable.o \
@@ -269,17 +270,6 @@ FIXL_INCS=	-I../!Fresco -I../commonsrc
 FIXL_CFLAGS=	$(FIXL_INCS)
 FIXL_VPATH=	../!Fresco ../commonsrc
 FIXL_OBJS=	SerialEnc.o bittabenc.o fixlicence.o
-
-PLOTCHECK_INCS=	-I../plotcheck -I../RISC_OSLib
-PLOTCHECK_CFLAGS=-DBUILDERS -DPLOTCHECK -DNO_PTRS $(PLOTCHECK_INCS)  -DDEVELOPMENT=0 -DSGML_REPORTING=0 -O9
-PLOTCHECK_VPATH=$(RISCOS_VPATH)
-PLOTCHECK_OBJS=	tables.o memwatch.o myassert.o bldrs.o debug.o rid.o \
-		$(SGML_OBJS) $(HTML_OBJS) dump.o tablesize.o backend.o \
-		obreak.o obullet.o oimage.o oinput.o oselect.o otable.o \
-		otext.o otextarea.o basic2.o stream.o object.o config.o \
-		oobject.o objects.o usrtrc.o rectplot.o \
-		coalesce.o fvpr.o
-PLOTCHECK_LIBS=
 
 #############################################################################
 
@@ -361,17 +351,17 @@ cu: CHECKERS_UNIX
 # problem to be avoid is an error preventing individual targets
 # completing enough to remove builddate.h themselves.
 
-#builddate.h:	buildstamp buildstamp-trigger
-#		@echo "Building builddate.h"
-#		@./buildstamp "%d-%b-%y (%H%M)" > builddate.h
-#		@$(RM) buildstamp-trigger
-#
-#buildstamp:	buildstamp.c
-#		@echo "Building buildstamp"
-#		@$(CC) -o buildstamp buildstamp.c
+builddate.h:	buildstamp buildstamp-trigger
+		@echo "Building builddate.h"
+		@./buildstamp "%d-%b-%y (%H%M)" > builddate.h
+		@$(RM) buildstamp-trigger
 
-#buildstamp-trigger:
-#		@echo "Hi there" > buildstamp-trigger
+buildstamp:	buildstamp.c
+		@echo "Building buildstamp"
+		@$(CC) -o buildstamp buildstamp.c
+
+buildstamp-trigger:
+		@echo "Hi there" > buildstamp-trigger
 
 # Arrange that all files will be recompiled. See also realclean
 # Note the use of cd && rm - this is for directories that might
@@ -379,7 +369,7 @@ cu: CHECKERS_UNIX
 # directory (as happened to me!!!).
 clean:		sanity
 		@echo "Cleaning out objects and executables"
-		-@cd ./fresco_pc && $(RM) *.o *,ff8 *,fd3
+		-cd ./fresco_pc && $(RM) *.o *,ff8 *,fd3
 		-@cd ./fresco ; $(RM) *.o *,ff8 *,fd3
 		-@cd ./cbfresco && $(RM) *.o
 		-@cd ./cbfresco_pc && $(RM) *.o
@@ -393,8 +383,6 @@ clean:		sanity
 		-@cd ./\!Fresco ; $(RM) *,ff8 *,fd3
 		-@cd ./\!NCFresco ; $(RM) *,ff8 *,fd3
 		-@cd ./abs && $(RM) *
-		-@cd ./aof && $(RM) *
-		-@cd ./plotcheck ; $(RM) plotcheck *.o
 		@echo "Removing some build control files"
 		@$(RM) */builddate.h $(PREDEPS)
 
@@ -548,7 +536,7 @@ riscoslib:
 srclist:
 		@for dir in fresco parser commonsrc ./!Fresco ./!NCFresco ./plingcbfresco \
 		fresparse ncfresco stdalone unix bunix rocompat html http libs mimemapmod \
-		tabtests webftp webgopher webimage clib RISC_OSLib include plotcheck \
+		tabtests webftp webgopher webimage clib RISC_OSLib include \
 		tcpiplibs ; do find $$dir -type f \
 		\( -name \*.h -o -name \*.c \) ; done > srclist
 
@@ -592,41 +580,13 @@ NCFRESCO_BUILD_CFLAGS=	$(NCFRESCO_CFLAGS) -DRISCOS -fa -Fn \
 			-I$(RISCOS_BUILD_EXPORT)/Lib/MemLib \
 			$(BASE_INCS) -J$(RISCOS_BUILD_EXPORT)/Lib/CLib
 
-NCFRESCO_ROM_CFLAGS=	$(NCFRESCO_PRODUCTION_CFLAGS) -DRISCOS -fa -zM -zps1 \
+NCFRESCO_ROM_CFLAGS=	$(NCFRESCO_CFLAGS) -DRISCOS -fa -zM -zps1 \
 			-I$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib \
 			-I$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs \
 			-I$(RISCOS_BUILD_EXPORT)/Lib/MemLib \
 			$(BASE_INCS) -J$(RISCOS_BUILD_EXPORT)/Lib/CLib
 
 NCFRESCO_ROM_LDFLAGS=	
-
-NCFRESCO_DEPENDS:
-		cd ncfresco ; armdepend -M Makefile $(NCFRESCO_BUILD_CFLAGS) ../parser/*.c ../fresparse/*.c ../parser/*.c ../!NCFresco/*.c
-		@echo NCFresco dependencies generated
-
-# Export the NCFresco resources for ROM building
-
-NCFRESCO_BUILD_RESOURCES=$(RISCOS_BUILD_RESOURCES)/Resources/NCFresco
-NCFRESCO_BUILD_APPS	=$(RISCOS_BUILD_RESOURCES)/Apps/!NCFresco
-CP=cp
-CPOPTIONS=-p
-
-NCFRESCO_BUILD_ROM_RESOURCES:
-		@-mkdir $(RISCOS_BUILD_RESOURCES)
-		@-mkdir $(RISCOS_BUILD_RESOURCES)/Resources
-		@-mkdir $(RISCOS_BUILD_RESOURCES)/Resources/NCFresco
-		@-mkdir $(RISCOS_BUILD_RESOURCES)/Apps
-		@-mkdir $(RISCOS_BUILD_RESOURCES)/Apps/!NCFresco
-		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/!Boot2,feb	$(NCFRESCO_BUILD_APPS)/!Boot,feb
-		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/!Run4,feb	$(NCFRESCO_BUILD_APPS)/!Run,feb
-		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/!Sprites3,ff9	$(NCFRESCO_BUILD_APPS)/!Sprites,ff9
-		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/Res,fae	$(NCFRESCO_BUILD_RESOURCES)
-		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/Sprites,ff9	$(NCFRESCO_BUILD_RESOURCES)
-		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/SetScrap,ffb	$(NCFRESCO_BUILD_RESOURCES)
-		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/Config	$(NCFRESCO_BUILD_RESOURCES)
-		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/Messages	$(NCFRESCO_BUILD_RESOURCES)
-		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/MimeMap	$(NCFRESCO_BUILD_RESOURCES)
-
 
 # This one is for NCFresco in the new style CVS controlled RISC OS build tree
 NCFRESCO_BUILD:		$(PREDEPS)
@@ -645,12 +605,11 @@ NCFRESCO_BUILD_ROM:	$(PREDEPS)
 		@-mkdir aof
 		@cd ./ncfresco; $(MAKE) NCFRESCO_AOF \
 		LIBS="$(NCFRESCO_ROM_LIBS)" \
-		OBJS="$(NCFRESCO_OBJS) $(RISCOS_OBJS)" \
+		OBJS="$(NCFRESCO_ROM_OBJS) $(RISCOS_OBJS)" \
 		VPATH="$(NCFRESCO_VPATH):$(RISCOS_VPATH)" \
 		CFLAGS="$(NCFRESCO_ROM_CFLAGS)" \
 		LDFLAGS="$(NCFRESCO_ROM_LDFLAGS)"
-		$(POSTACTS) \
-		cp -p aof/ncfresco $(RISCOS_BUILD_OBJECTS)
+		$(POSTACTS)
 
 NCFRESCO_RISCOS:	$(PREDEPS)
 		@echo "Making NCFRESCO for RISCOS"
@@ -835,21 +794,6 @@ wg:		WEBGOPHER
 WEBGOPHER:
 		@echo "Building WebGopher module"
 		@cd webgopher ; $(MAKE) WEBGOPHER
-
-#############################################################################
-
-pu:		PLOTCHECK
-
-PLOTCHECK:	PLOTCHECK_UNIX
-
-PLOTCHECK_UNIX:	$(PREDEPS)
-		@echo "Making PLOTCHECK for UNIX"
-		@cd ./plotcheck; $(MAKE) $@ \
-		LIBS="$(PLOTCHECK_LIBS) $(UNIX_LIBS)" \
-		OBJS="$(PLOTCHECK_OBJS) $(UNIX_OBJS)" \
-		VPATH="$(PLOTCHECK_VPATH):$(UNIX_VPATH)" \
-		CFLAGS="$(PLOTCHECK_CFLAGS) $(UNIX_CFLAGS)"
-		$(POSTACTS)
 
 #############################################################################
 

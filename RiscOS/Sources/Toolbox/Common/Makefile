@@ -56,11 +56,6 @@ o.mem:	C:h.kernel
 o.mem:	C:h.swis
 o.mem:	h.debug
 o.mem:	h.mem
-o.mem:	c.mem
-o.mem:	C:h.kernel
-o.mem:	C:h.swis
-o.mem:	h.debug
-o.mem:	h.mem
 o.messages:	c.messages
 o.messages:	C:h.kernel
 o.messages:	C:h.swis

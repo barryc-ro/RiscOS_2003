@@ -15,7 +15,6 @@
 #include "akbd.h"
 #include "alarm.h"
 #include "bbc.h"
-#include "coords.h"
 #include "colourtran.h"
 #include "msgs.h"
 #include "swis.h"
@@ -2121,21 +2120,6 @@ void tb_events(int *event, fe_view v)
     }
 }
 
-static void return_highlight(fe_view v, tb_bar_info *tbi, int flags)
-{
-    int cmp = tbi->buttons[tbi->highlight].cmp;
-    wimp_box box;
-    wimp_wstate state;
-
-    _swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, tbi->object_handle, 72, cmp, &box);
-    wimp_get_wind_state(tbi->window_handle, &state);
-    coords_box_toscreen(&box, (coords_cvtstr *)&state.o.box);
-
-    setstate(tbi->object_handle, cmp, 0);
-
-    fe_move_highlight_xy(v, &box, flags | be_link_XY);
-}
-
 void tb_event_handler(int event, fe_view v)
 {
     tb_bar_info *tbi = bar_list;
@@ -2175,14 +2159,16 @@ void tb_event_handler(int event, fe_view v)
 	    }
 	    else
 	    {
-		return_highlight(v, tbi, be_link_VERT | be_link_BACK);
+		setstate(tbi->object_handle, tbi->buttons[tbi->highlight].cmp, 0);
+		fe_move_highlight(v, be_link_VERT | be_link_BACK);
 	    }
 	    break;
 
 	case fevent_TOOLBAR_MOVE_DOWN:
 	    if (config_display_control_top)
 	    {
-		return_highlight(v, tbi, be_link_VERT);
+		setstate(tbi->object_handle, tbi->buttons[tbi->highlight].cmp, 0);
+		fe_move_highlight(v, be_link_VERT);
 	    }
 	    else
 	    {

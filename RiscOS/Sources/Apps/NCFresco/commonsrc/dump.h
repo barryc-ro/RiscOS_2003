@@ -27,6 +27,5 @@ extern void dump_table_width_details(rid_table_item *table);
 extern void dump_htmlctx(HTMLCTX *ptr);
 extern void dump_float_item(rid_float_item *ptr);
 extern void dump_floats_link(rid_floats_link *ptr);
-extern void dump_cell_map(rid_table_item *ptr, char *msg);
 
 extern char *item_names[];

@@ -67,9 +67,9 @@ void otable_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	    {
 		if ( object_table[ti->tag].size != NULL )
 		{
-		    /*TABDBGN( ("Calling size for type %d at %p\n", ti->tag, ti) );*/
+		    TABDBGN( ("Calling size for type %d at %p\n", ti->tag, ti) );
 		    (object_table[ti->tag].size)(ti, doc->rh, doc);
-		    /*TABDBGN( ("Size returned fine\n") );*/
+		    TABDBGN( ("Size returned fine\n") );
 		}
 	    }
         }

@@ -862,10 +862,6 @@ typedef struct rid_header {
     int extracolours;
     int extracolourarray[rid_EXTRACOLOURS];
 
-#ifdef BUILDERS
-    int cwidth;			/* Width of monospaced text font */
-#endif
-
 } rid_header;
 
 typedef struct {

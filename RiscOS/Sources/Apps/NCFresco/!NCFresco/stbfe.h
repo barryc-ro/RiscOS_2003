@@ -38,7 +38,6 @@ extern os_error *fe_home(fe_view v);
 extern void fe_move_highlight(fe_view v, int flags);
 extern void fe_move_highlight_frame(fe_view v, BOOL next);
 extern void fe_move_highlight_frame_direction(fe_view v, int x, int y);
-extern void fe_move_highlight_xy(fe_view v, wimp_box *box, int flags);
 
 extern os_error *fe_handle_enter(fe_view v);
 

@@ -401,9 +401,7 @@ extern be_item backend_find(be_doc doc, be_item start, char *text, int flags);
 #define be_find_BACKWARDS	(1 << 0) /* Search back from item (or from end) */
 #define be_find_CASELESS	(1 << 1) /* Do caseless comparisons */
 
-/* highlight next link from given link or position */
 extern be_item backend_highlight_link(be_doc doc, be_item item, int flags);
-extern be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box, int flags);
 #define be_link_VERT		(1 << 0)	/* UP/down not left/right */
 #define be_link_BACK		(1 << 1)	/* left/up not right/down */
 #define be_link_VISIBLE	        (1 << 2)	/* only consider visible items */
@@ -413,9 +411,6 @@ extern be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_bo
 #define be_link_TEXT		(1 << 6)	/* only find INPUT TEXT and TEXTAREA items */
 #define be_link_ONLY_CURRENT	(1 << 7)	/* only consider the current item */
 #define be_link_CLEAR_REST	(1 << 8)	/* clear out all selected items */
-#define be_link_XY		(1 << 9)	/* x,y coordinates given */
-#define be_link_DONT_WRAP_H	(1 << 10)	/* don't wrap in h direction */
-#define be_link_CARETISE	(1 << 11)	/* if a writeabnle ends up with the highlight then caretise it */
 
 /* Activate a given link */
 extern os_error *backend_activate_link(be_doc doc, be_item item, int flags);

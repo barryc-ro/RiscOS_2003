@@ -806,17 +806,17 @@ void feutils_init_2(void)
 {
     int offset;
 
-    if (config_display_margin_auto && tv_safe_area(&text_safe_box))
+    if (config_display_margin_auto && !is_a_tv())
+    {
+	memset(&margin_box, 0, sizeof(margin_box));
+	text_safe_box = screen_box;
+    }
+    else if (config_display_margin_auto && tv_safe_area(&text_safe_box))
     {
 	margin_box.x0 = text_safe_box.x0 - screen_box.x0;
 	margin_box.x1 = text_safe_box.x1 - screen_box.x1;
 	margin_box.y0 = text_safe_box.y0 - screen_box.y0;
 	margin_box.y1 = text_safe_box.y1 - screen_box.y1;
-    }
-    else if (config_display_margin_auto && !is_a_tv())
-    {
-	memset(&margin_box, 0, sizeof(margin_box));
-	text_safe_box = screen_box;
     }
     else
     {

@@ -52,10 +52,10 @@ void otext_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     size_t str_len;
 #ifdef BUILDERS
     str_len = strlen(rh->texts.data + tit->data_off);
-    ti->width = str_len * rh->cwidth;
-    ti->pad = str_len == 0 ? 0 : rh->cwidth;
+    ti->width = str_len * 10;
+    ti->pad = str_len == 0 ? 0 : 1;
     ti->max_up = 1;
-    ti->max_down = rh->cwidth == 1 ? 0 : 1;
+    ti->max_down = 1;
 #else /* BUILDERS */
     font_string fs;
     struct webfont *wf;

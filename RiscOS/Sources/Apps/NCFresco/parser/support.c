@@ -1,9 +1,6 @@
 /* support.c - assorted support routines */
 /* (C) Copyright ANT Limited 1996. All rights reserved. */
 
-/* PREVENT_ELEMENT_GUESSING   */
-/* PREVENT_ATTRIBUTE_GUESSING */
-
 #include "sgmlparser.h"
 
 #ifdef STDALONE
@@ -548,11 +545,7 @@ extern void element_set_bit(BITS *elems, int tag)
     elems[word] |= bit;
 }
 
-/*****************************************************************************
-
-  Element matching now does a best-guess, much as attribute matching does.
-
- */
+/*****************************************************************************/
 
 #if 0
 extern int string_str_cmp(const void *a, const void *b)
@@ -595,79 +588,15 @@ extern int find_element(SGMLCTX *context, STRING s)
 		      sizeof(ELEMENT),
 		      element_search_fn);
 
-#ifndef PREVENT_ELEMENT_GUESSING
-
-    if (element == NULL)
-    {
-	/* Linear search, but only in user-error cases */
-
-	int best_ix, best_len, ix;
-
-	PRSDBGN(("Attempting to guess-match '%.*s'\n", s.bytes, s.ptr));
-
-	for (ix = 0, element = context->elements, best_ix = best_len = -1; 
-	     ix < NUMBER_SGML_ELEMENTS; 
-	     ix++, element++)
-	{
-	    int x;
-
-	    for (x = 1; x <= s.bytes; x++)
-	    {
-		if (x > element->name.bytes)
-		    break;
-
-		if ( strnicmp(element->name.ptr, s.ptr, x) != 0 )
-		    continue;
-
-		PRSDBG(("%.*s against %.*s, x %d, best_ix %d, best_len %d\n",
-			s.bytes, s.ptr, 
-			element->name.bytes, element->name.ptr,
-			x, best_ix, best_len));
-
-		if (x > best_len)
-		{
-		    best_len = x;
-		    best_ix = ix;
-		}
-	    }
-	}
-
-	if (best_ix != -1)
-	{
-	    element = &context->elements[best_ix];
-	    PRSDBGN(("Guessed '%.*s' best matches '%.*s'\n",
-		     element->name.bytes, element->name.ptr, s.bytes, s.ptr));
-	}
-	else
-	{
-	    PRSDBGN(("No guess what element '%.*s' is meant to be\n", s.bytes, s.ptr));
-	}
-    }
-#endif
-
     return element == NULL ? SGML_NO_ELEMENT : element->id;
 }
 
-/*****************************************************************************
-
-  For a given element, which attribute BEST matches the one spelt by
-  the user. We should always return some element if the 1st character
-  of the users spelling is also a 1st character of a valid attribute
-  to the element supplied. As the alternative is to simply ignore
-  unknown attributes, this is believed to be beneficial in nearly all
-  circumstances. Note that this might cause us to match the wrong
-  attribute if we encounter HTML to a later standard: eg imagine
-  <FONT> gets the CORPUS attribute. We don't know this and will
-  believe it is COLOR. This SHOULD be safe, as browsing is meant to be
-  a non-destructive operation. However, keep a note of caution!
-
-  */
+/*****************************************************************************/
 
 extern int find_attribute(SGMLCTX *context, ELEMENT *element, STRING s)
 {
     int ix = 0;
     ATTRIBUTE **attributep = element->attributes, *attribute;
-    int len;
 
     while ( (attribute = *attributep)->name.ptr != NULL )
     {
@@ -681,30 +610,7 @@ extern int find_attribute(SGMLCTX *context, ELEMENT *element, STRING s)
 	attributep++;
     }
 
-    PRSDBGN(("Attribute '%.*s' does not match - guessing\n", s.bytes, s.ptr));
-
-#ifndef PREVENT_ATTRIBUTE_GUESSING
-    for (len = s.bytes; len > 0; len--)
-    {
-	attributep = element->attributes;
-	ix = 0;
-
-	while ( (attribute = *attributep)->name.ptr != NULL )
-	{
-	    if ( strnicmp(s.ptr, attribute->name.ptr, len) == 0 )
-	    {
-		PRSDBGN(("Guessed attribute '%.*s' is %d ('%.*s')\n", 
-			 s.bytes, s.ptr, ix, attribute->name.bytes, attribute->name.ptr));
-		return ix;
-	    }
-	    
-	    ix++;
-	    attributep++;
-	}
-    }
-#endif
-
-    PRSDBGN(("Failed to make any form of guess on the attribute!\n"));
+    PRSDBGN(("Attribute '%.*s' is %d\n", s.bytes, s.ptr, SGML_NO_ATTRIBUTE));
 
     return SGML_NO_ATTRIBUTE;
 }
@@ -804,7 +710,7 @@ extern void reset_lexer_state(SGMLCTX *context)
     context->apply_heuristics = FALSE;
 }
 
-#if 0 /*not called? - debugging and htmlcheck *can* use this */
+#if 0 /*not called?*/
 extern char *elements_name(SGMLCTX *context, int ix)
 {
     static char buf[32];
@@ -971,7 +877,7 @@ extern void pull_stack_item_to_top (SGMLCTX *context, STACK_ITEM *item)
          */
 
         memcpy (item->elements_seen, tos->elements_seen, sizeof (item->elements_seen));
-#if DEBUG
+#if 1
         PRSDBG(("Stack before pull of %p:\n", item));
         dump_stack (context);
 #endif
@@ -986,7 +892,7 @@ extern void pull_stack_item_to_top (SGMLCTX *context, STACK_ITEM *item)
         if (inner != NULL) inner->outer = item;
 
         context->tos = item;
-#if DEBUG
+#if 1
         PRSDBG(("Stack after pull:\n"));
         dump_stack (context);
 #endif

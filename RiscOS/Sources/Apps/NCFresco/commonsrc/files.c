@@ -5,21 +5,10 @@
 #include "kernel.h"
 
 #include "files.h"
-#include "version.h"
 
 int ro_fopen(const char *fname, int mode)
 {
-    int e = _kernel_osfind( (mode == RO_OPEN_READ) ? 0x43: 0x83 , (char *)fname);
-    if (e == _kernel_ERROR)
-    {
-	_kernel_oserror *ep = _kernel_last_oserror();
-	if (ep)
-	    usrtrc("fopen: %s - %x %s\n", fname, ep->errnum, ep->errmess);
-	else
-	    usrtrc("fopen: %s - error\n", fname);
-	e = 0;
-    }
-    return e;
+    return _kernel_osfind( (mode == RO_OPEN_READ) ? 0x43: 0x83 , (char *)fname);
 }
 
 void ro_fclose(int fh)
