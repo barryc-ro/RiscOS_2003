@@ -32,10 +32,9 @@
 #			the MakeFile very tall, so a consistent comment
 #			syntax has been ensured to allow folding text
 #			editors to fold the text sensibly - start on
-#			NL, hash, NL; end on '# -'.
+#			NL, hash, NL; end on hash, space, hyphen.
 # 1997-08-28	ADH	Added Argonet build. Not much to do in the Makefile
 #			but needs the appropriate TaskObey files.
-#
 
 # -----------------------------------------------------------------------------
 # Program specific options
