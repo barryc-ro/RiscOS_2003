@@ -54,13 +54,15 @@ resources: resources-${CMDHELP}
 
 resources_common:
         ${MKDIR} ${RESDIR}.ScrBlanker
-        ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.ScrBlanker.Messages  ${CPFLAGS}
+	TokenCheck LocalRes:Messages
+        ${CP} LocalRes:Messages  ${RESDIR}.ScrBlanker.Messages  ${CPFLAGS}
 
 resources-None: resources_common
 	@
 
 resources-: resources_common
-	print Resources.${LOCALE}.CmdHelp { >> ${RESDIR}.ScrBlanker.Messages }
+	TokenCheck LocalRes:CmdHelp
+	print LocalRes:CmdHelp { >> ${RESDIR}.ScrBlanker.Messages }
 
 ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}
