@@ -165,7 +165,7 @@ static int riscos_alphabet_to_mib(int a)
     static int lookup[] =
     {
 	csASCII,
-	csISOLatin1,
+	csAcornLatin1,
 	csISOLatin2,
 	csISOLatin3,
 	csISOLatin4,
