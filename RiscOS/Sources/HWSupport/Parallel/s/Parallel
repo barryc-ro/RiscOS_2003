@@ -94,6 +94,7 @@
 ; 25 Oct 99 0.59 KJB Added support for version 2 parallel (just a different IRQ line).
 ; 26 Oct 99 0.60 KJB Completed interrupt changes.
 ; 1  Nov 00 0.63 AR  added device discovery
+; 20 Jul 01      MW  added advanced error handling support (UpCall_DeviceError)
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -145,6 +146,14 @@ OldHardware     SETL    {FALSE} ;{TRUE}         ; switched off to save space for
                 GBLL    NewHardware             ; assemble code for new serial hardware (ie PC combo chips)
 NewHardware     SETL    {TRUE}
 
+		GBLL	AdvancedErrorHandling   ; use UpCall_DeviceError for error handling?
+AdvancedErrorHandling 	SETL	{TRUE}
+
+ [ AdvancedErrorHandling
+		; the advanced error handling mechanism is only available with IOEB
+		ASSERT	NewHardware
+ ]
+
 ; The following are defined because the new buffer manager interface uses r2 to
 ; insert and remove bytes whereas the old interface uses r0.
  [ FastBufferMan
@@ -174,6 +183,11 @@ out             SETD    true
 in              SETD    true
 irq             SETD    true
 j		SETD	true
+ioctl           SETD    true
+nibble		SETD	true
+ioctl_err       SETD    true
+nibble_err      SETD    true
+adverr          SETD    true
 
                 GET     VersionASM
                 GET     s.Errors
@@ -240,6 +254,10 @@ localerrorblock		# 256		; do not use MessageTrans error block, as it gets trashe
 LoopFactor		# 4		; factor for tight loops giving a delay
 					; of 40 us
 
+ [ AdvancedErrorHandling
+FileSwitchHandle	# 4             ; file switch handle of current stream (undefined if no open stream)
+ ]
+
 wsrequired              * :INDEX: @
 
 
@@ -253,6 +271,9 @@ f_OpenForRead           * 1:SHL:2       ; bit 2 set => open for read
 f_OpenForWrite          * 1:SHL:3       ; bit 3 set => open for write
  [ FastCentronics
 f_UseFIFO               * 1:SHL:4       ; bit 4 set => register fastparallel: device
+ ]
+ [ AdvancedErrorHandling
+f_UpCallVectorClaimed   * 1:SHL:5       ; bit 5 set => UpCall vector has been claimed
  ]
 
 ; Bits in IRQFlags
@@ -335,6 +356,8 @@ resource_file   =	"ParallelDeviceDriver:Messages", 0
 		MakeErrorBlock Parallel_Offline
 		MakeErrorBlock Parallel_OtherError
 
+                MakeErrorBlock Escape
+                
                 ALIGN
 
         [ :LNOT: No32bitCode
@@ -520,6 +543,26 @@ init            Entry   "r7"
                 STR     r0, power_state                         ; show power_state as ON, to
                 BL      SetPower_Off                            ; force SetPower_Off to call XPortable_Control
  ]
+
+ [ AdvancedErrorHandling
+		; We want to use the UpCall_DeviceError mechanism for handling errors, so
+		; whenever there is a parallel stream open, we need its FileSwitch handle.
+		; We can get this by monitoring the UpCall vector and checking for
+		; UpCall_StreamCreated.
+		MOV	r0, #UpCallV
+		ADRL	r1, common_check_upcall
+		MOV	r2, r12
+		SWI	XOS_Claim
+
+		; if, for some reason, we are not able to claim the UpCall vector, we
+		; simply do not set the UpCallVectorClaimed flag, which means that we
+		; will fall back onto the previous error handling strategy in
+		; IOEB_monitorTX
+		LDRVCB	r0, Flags
+		ORRVC	r0, r0, #f_UpCallVectorClaimed
+		STRVCB	r0, Flags
+ ]
+
                 CLRV
                 EXIT
 
@@ -574,6 +617,18 @@ final           Entry
         [ international
                 BL      CloseMessages                           ; we are definitely dying - close msgs
         ]
+
+	[ AdvancedErrorHandling
+		; we may have claimed the UpCall vector, so release it if we have
+		LDRB    r0, Flags
+		TST	r0, #f_UpCallVectorClaimed
+		MOVNE	r0, #UpCallV
+		ADRNEL	r1, common_check_upcall
+		MOVNE	r2, r12
+		SWINE	XOS_Release
+
+		; we are definitely dying, so there is no point in resetting f_UpCallVectorClaimed
+	]
                 CLRV
                 EXIT
 
@@ -702,6 +757,18 @@ svc_devicedead
 
 svc_reset
                 Push    "r0-r2, lr"
+
+	[ AdvancedErrorHandling
+		; we need to claim the UpCall vector again after a reset
+		MOV	r0, #UpCallV
+		ADRL	r1, common_check_upcall
+		MOV	r2, r12
+		SWI	XOS_Claim
+		LDRB	r0, Flags
+		ORRVC	r0, r0, #f_UpCallVectorClaimed
+		BICVS	r0, r0, #f_UpCallVectorClaimed
+		STRB	r0, Flags
+	]
 
                 MOV     r0, #&FD                                ; read last reset type
                 MOV     r1, #0
