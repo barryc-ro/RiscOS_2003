@@ -136,7 +136,8 @@ void oobject_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, i
 
 	if (obj->state.plugin.pp == NULL &&
 	    (obj->classid_ftype != -1 || obj->data_ftype != -1) &&
-	    !gbf_active(GBF_LOW_MEMORY))
+	    !gbf_active(GBF_LOW_MEMORY) &&				/* don't start in low memory */
+	    (config_sound_background || width > 1 || height > 1))	/* don't start if invisible(ish) and bgsound configured off */
 	{
 	    obj->state.plugin.pp = plugin_new(obj, doc, ti);
 	    

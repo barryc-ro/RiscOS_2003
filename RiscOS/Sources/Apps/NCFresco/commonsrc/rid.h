@@ -1386,6 +1386,7 @@ typedef struct
 
 /*extern void nullfree(void **vpp);*/
 extern void rid_free_object(rid_object_item *obj);
+extern void rid_free_pos_term(rid_pos_item *p, rid_pos_item *term, rid_text_stream *stream);
 extern void rid_free_pos(rid_pos_item *p);
 extern void rid_free_pos_tree(rid_pos_item *p);
 extern void rid_free_text(rid_text_item *p);

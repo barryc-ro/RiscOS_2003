@@ -1285,27 +1285,41 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 		    pp->instance = opening->instance.plugin;
 		    pp->task = msg->hdr.task;
 		    pp->opening_flags = opening->flags;
-
+#if 0
 		    /* if it wasn't asked to be a helper but it is  */
 		    if ((opening->flags & plugin_opening_HELPER) && (pp->priv_flags & plugin_priv_HELPER) == 0)
 		    {
+			/* check for enabling the helper message handler before adding to that list */
+			if (helper_list == NULL)
+			    frontend_message_add_handler(plugin_message_handler, NULL);
+			
 			/* then swap list */
 			unlink(&plugin_list, pp);
 			link(&helper_list, pp);
 
-			/* remove from the page */
-			if (pp->parent_item)
-			    ((rid_text_item_object *)pp->parent_item)->object->state.plugin.pp = NULL;
+			/* remove from the page - can't do this as NULL means not fetched */
+/* 			if (pp->parent_item) */
+/* 			    ((rid_text_item_object *)pp->parent_item)->object->state.plugin.pp = NULL; */
 
-			/* remove the message handler */
+			/* check for removing the page message handler */
 			if (pp->doc && --pp->doc->object_handler_count == 0)
 			    frontend_message_remove_handler(plugin_message_handler, pp->doc);
 			
+			/* transfer the view handle */
+			if (pp->doc)
+			    pp->helper.parent = pp->doc->parent;
+
 			/* and zero the document and parent item handles */
 			pp->doc = NULL;
 			pp->parent_item = NULL;
-		    }
 
+			/* no point in a reshape now */
+			pp->pending_reshape = FALSE;
+
+			/* set the priv helper flag - so destroy works properly */
+			pp->priv_flags |= plugin_priv_HELPER;
+		    }
+#endif
 		    /* set HELPER flag in case they didn't */
 		    if (pp->priv_flags & plugin_priv_HELPER)
 			pp->opening_flags |= plugin_opening_HELPER;
@@ -1317,7 +1331,6 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 		    }
 
 		    /* Now we need to open a stream for the data/code for the plugin */
-
 		    if (opening->flags & plugin_opening_FETCH_DATA && pp->objd.data)
 		    {
 			url = url_join(doc ? BASE(doc) : NULL, pp->objd.data);
@@ -1336,6 +1349,7 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 			mm_free(url);
 		    }
 
+		    /* tell the front end about the plugin opening */
 		    frontend_view_status(pp->doc ? pp->doc->parent : pp->helper.parent, sb_status_PLUGIN, pp,
 					 (pp->opening_flags & plugin_opening_BUSY) != 0, pp->play_state,
 					 pp->opening_flags & plugin_opening_HELPER, 0);

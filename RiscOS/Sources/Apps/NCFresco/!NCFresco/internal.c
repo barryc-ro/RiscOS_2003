@@ -671,7 +671,7 @@ static int internal_decode_custom(const char *query, char **url, int *flags)
     if (sound)
     {
 	int sound_val = !atoi(sound);
-	nvram_write(NVRAM_SOUND_TAG, sound_val);
+/* 	nvram_write(NVRAM_SOUND_TAG, sound_val); moved into fe_bgsound_set */
 
 	fe_bgsound_set(sound_val);
 

@@ -1126,8 +1126,11 @@ void tb_status_new(fe_view v, int bar_num)
 	/* set the highlight appropriately */
 	tb_status_show(old_state == status_OPEN_SMALL);
 
-	tb_bar_set_highlight(tbi, tbd->open_component, FALSE);
-	setfocus(tbi->object_handle);
+	if (tbd->open_component != -1)
+	{
+	    tb_bar_set_highlight(tbi, tbd->open_component, FALSE);
+	    setfocus(tbi->object_handle);
+	}
 
 	if (secure_light)
 	    setstate(tbi->object_handle, I_SECURE, TRUE);

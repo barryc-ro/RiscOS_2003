@@ -722,6 +722,7 @@ RECONS_UNIX:	$(PREDEPS)
 #RISCOS_BUILD_OBJECTS=../../../../Objects
 RISCOS_BUILD_RESOURCES=../NCFrescoRO/Resources
 RISCOS_BUILD_OBJECTS=../NCFrescoRO/aof
+RISCOS_BUILD_HEADERS=../NCFrescoRO/h
 
 NCFRESCO_COUNTRY=		UK
 NCFRESCO_WHICH=			RCA
@@ -846,7 +847,7 @@ NCFRESCO_BUILD_ROM_EXPORT:
 		$(CP) $(CPOPTIONS) Resources/$(NCFRESCO_WHICH)/$(NCFRESCO_COUNTRY)/Messages		$(NCFRESCO_BUILD_RESOURCES)
 		@-mkdir $(RISCOS_BUILD_OBJECTS)
 		$(CP) $(CPOPTIONS) aof/ncfresco $(RISCOS_BUILD_OBJECTS)
-		$(CP) $(CPOPTIONS) commonsrc/plugin.h $(RISCOS_BUILD_OBJECTS)/h/plugin
+		$(CP) $(CPOPTIONS) commonsrc/plugin.h $(RISCOS_BUILD_HEADERS)/plugin
 
 
 # NCFresco application in the new style CVS controlled RISC OS build tree

@@ -97,7 +97,7 @@ extern os_error *netloc_resolve(char *location, int def_port, int *status, void 
 	    ep = makeerror(ERR_NO_SUCH_HOST);
 	}
     }
-    else
+    else if (ep->errnum == 0x1E6) /* no such swi */
     {
 	if ((hp = gethostbyname(location)) == NULL)
 	{

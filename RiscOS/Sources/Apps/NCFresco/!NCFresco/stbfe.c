@@ -749,12 +749,13 @@ enum
     content_tag_FASTLOAD,
     content_tag_URL,
     content_tag_USER,
-    content_tag_USERNAME
+    content_tag_USERNAME,
+    content_tag_BLANKRESET
 };
 
 static const char *content_tag_list[] =
 {
-    "SELECTED", "TOOLBAR", "MODE", "LINEDROP", "POSITION", "NOHISTORY", "SOLIDHIGHLIGHT", "NOSCROLL", "FASTLOAD", "URL", "USER", "USERNAME"
+    "SELECTED", "TOOLBAR", "MODE", "LINEDROP", "POSITION", "NOHISTORY", "SOLIDHIGHLIGHT", "NOSCROLL", "FASTLOAD", "URL", "USER", "USERNAME", "BLANKRESET"
 };
 
 /*
@@ -927,7 +928,7 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 		    {
 			int user = atoi(vals[content_tag_USER].value);
 			char *current_user_s = getenv(PROFILE_NUM_VAR);
-			if (current_user_s && atoi(current_user_s) != user)
+			if (current_user_s == NULL || atoi(current_user_s) != user)
 			{
 			    char buffer[64];
 
@@ -941,6 +942,9 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 
 			    /* re read the config and flush the cache */
 			    re_read_config(0);
+			    
+			    /* close and open popups */
+			    
 			}
 		    }
 		}
@@ -989,6 +993,10 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 
 		/* check for override URL for ncoptions pages */
 		v->real_url = strdup(vals[content_tag_URL].value);
+
+		/* check for resetting the screen blanker */
+		if (vals[content_tag_BLANKRESET].value)
+		    _swix(ScreenBlanker_Control, _IN(0), 1);
 	    }
 
 	    /* check highlight flag */
@@ -2358,6 +2366,20 @@ static void fe_font_size_init(void)
 
 /* ------------------------------------------------------------------------------------------- */
 
+static os_error *fe__bgsound_set(fe_view v, void *handle)
+{
+    if (config_sound_background)
+    {
+	backend_plugin_action(v->displaying, be_plugin_action_item_ALL, plugin_state_STOP);
+    }
+    else
+    {
+	backend_plugin_action(v->displaying, be_plugin_action_item_ALL, plugin_state_PLAY);
+    }
+
+    return NULL;
+}
+
 void fe_bgsound_set(int state)
 {
     if (state == -1)
@@ -2365,15 +2387,11 @@ void fe_bgsound_set(int state)
     else
 	config_sound_background = state;
 
+    /* set nvram here so that SOUND key toggles it as well as menu */
+    nvram_write(NVRAM_SOUND_TAG, config_sound_background);
+
     /* cancel playback on all sounds : FIXME: this should iterate through the frames */
-    if (config_sound_background)
-    {
-	backend_plugin_action(main_view->displaying, be_plugin_action_item_ALL, plugin_state_STOP);
-    }
-    else
-    {
-	backend_plugin_action(main_view->displaying, be_plugin_action_item_ALL, plugin_state_PLAY);
-    }
+    iterate_frames(main_view, fe__bgsound_set, NULL);
 }
 
 void fe_beeps_set(int state, BOOL sound)
@@ -3142,7 +3160,7 @@ void fe_status_unstack_all(void)
 
     if (v && v->open_transient)
     {
-	fe_internal_deleting_view(v);
+/* 	    fe_internal_deleting_view(v); */
 	fe_dispose_view(v);
     }
 
@@ -4689,6 +4707,12 @@ static int offer_window_focus_handler(wimp_w w, int flags)
 
 /* ------------------------------------------------------------------------------------------- */
 
+static void fe_handle_prequit(void)
+{
+}
+
+/* ------------------------------------------------------------------------------------------- */
+
 static void re_read_config(int flags)
 {
     STBDBG(("stbfe: reading config flags %x\n", flags));
@@ -4844,12 +4868,14 @@ static void check_error(void)
 
 /* ------------------------------------------------------------------------------------------- */
 
+#if DEBUG
 extern void *my_kernel_alloc(unsigned int size);
 
 static void setup_allocs(void)
 {
     _kernel_register_allocs(my_kernel_alloc, free);
 }
+#endif
 
 /* ------------------------------------------------------------------------------------------- */
 /* Main event process loop  */
@@ -5194,6 +5220,10 @@ void fe_event_process(void)
 		offer_window_focus_handler((wimp_w)msg->data.words[0], msg->data.words[1]);
 		break;
 
+	    case wimp_MPREQUIT:
+		fe_handle_prequit();
+		break;
+		
 	    case wimp_MCLOSEDOWN:
 		usrtrc("closedown:\n");
 		exit(0);
@@ -5408,6 +5438,7 @@ static int message_codes[] =
     wimp_PALETTECHANGE,
     wimp_MSERVICE,
     MESSAGE_OFFER_FOCUS,
+    wimp_MPREQUIT,
     wimp_MCLOSEDOWN
 };
 
@@ -5602,7 +5633,9 @@ int main(int argc, char **argv)
 {
     int init_ok;
 
+#if DEBUG
     setup_allocs();
+#endif
     
 /* #if STBWEB_ROM */
 /*     disable_stack_extension = 1; */

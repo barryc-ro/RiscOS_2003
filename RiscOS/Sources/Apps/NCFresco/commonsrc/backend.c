@@ -3435,7 +3435,11 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
 	/* SJM: the above is not good enough with floating images around */
 	pi = clonedposlist;
 
-        first_ti = pi->first;
+        /* pdh: if all our items are floating, pi->first may never get set.
+         * In this case we use the first item in the text list... if this is
+         * null too there can't be any images and we won't be here.
+         */
+        first_ti = pi->first ? pi->first : doc->rh->stream.text_list;
 
  	line_top = pi->top;
 
@@ -3562,14 +3566,14 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
 	    be_set_dimensions(doc);
 	}
 
-	DICDBG(("Checking what has changed\n"));
+	DICDBG(("Checking what has changed (first_ti=%p first_ti->line=%p)\n",
+	        first_ti, first_ti ? first_ti->line : NULL ));
 
 	if (changed & 3)
 	{
 	    net_shift = 0;
 	    shift_pending = first_ti->line->top - line_top;
 	    top_of_zone = first_ti->line->top; /* Always in new format coordinates */
-
 
             is_shift_pending = TRUE;
 
@@ -3788,7 +3792,7 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
 	/* If told to UPDATE when we don't need a full redraw */
 	do_redraw = (status == image_cb_status_UPDATE || status == image_cb_status_UPDATE_ANIM) ? 0 : 1;
 
-	DICDBGN(("Updating images with no size change.  Top=%d, borrom=%d, redraw = %d\n",
+	DICDBG(("Updating images with no size change.  Top=%d, borrom=%d, redraw = %d\n",
 		top, bottom, do_redraw));
 
 	/* The new image must be the same size.  Redraw the image when on the screen. 	*/
@@ -4660,16 +4664,16 @@ int antweb_doc_abort_all(int level)
 		    access_abort(doc->ah);
 		    doc->ah = NULL;
 		}
-		
+
  		if (doc->ph)
  		{
  		    doc->rh = ((pparse_details*)doc->pd)->close(doc->ph, NULL);
- 		    doc->ph = NULL; 
- 		}		     
+ 		    doc->ph = NULL;
+ 		}
 
 		if (doc->rh)
 		    fvpr_progress_stream_flush( &doc->rh->stream );
-		
+
 		frontend_view_status(doc->parent, sb_status_ABORTED);
 
 		count++;

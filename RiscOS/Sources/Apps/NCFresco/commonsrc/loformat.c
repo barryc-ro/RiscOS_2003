@@ -1363,6 +1363,21 @@ static void close_down_current_line(RID_FMT_STATE *fmt)
     if (debug_get("FMTDBGN"))
 	dump_pos(pi);
 #endif
+
+    /* EXPERIMENT: Once a line has been finished with, free the
+       pos_item to lower the transient memory overheads. */
+#if 1
+    if (fmt->fmt_method != MAYBE)
+    {
+	/* Only free once past any floating areas, which have more
+           complex dependencies. */
+	if (pi->floats == NULL)
+	{
+	    rid_free_pos_term(fmt->stream->pos_list, pi, fmt->stream);
+	    FMTDBG(("close_down_current_line: freeing pos list until %p\n", pi));
+	}
+    }
+#endif
 }
 
 /*****************************************************************************

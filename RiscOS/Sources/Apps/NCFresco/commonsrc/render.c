@@ -368,11 +368,14 @@ int render_link_colour(rid_text_item *ti, antweb_doc *doc)
  * as NULL (in this case aref should never be null though)
  * SJM: 210597 reordered as check activated, check font colout, check non-link, check link
  * previously was non-link (including font colour check), activated, link.
+ * SJM: 110697 now passes FALSE to above, negating the whole point of the change as
+ * it appears I was wrong about font colour and links. This may change again if I can
+ * find the original bug that made me change it.
  */
 
 int render_text_link_colour(rid_text_item *ti, antweb_doc *doc)
 {
-    return render__text_link_colour(ti, doc, TRUE);
+    return render__text_link_colour(ti, doc, FALSE);
 }
 
 /*

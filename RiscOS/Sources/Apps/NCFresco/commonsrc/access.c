@@ -254,11 +254,13 @@ static http_header_item user_agent_hdr = {
 #endif
 };
 
+#ifndef NO_LICENSEE
 static http_header_item licence_hdr = {
     NULL,
     "X-Licensee",
     NULL
     };
+#endif
 
 static http_header_item content_type_hdr = {
     NULL,
@@ -3265,60 +3267,69 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 
 #endif /*ndef FILEONLY */
 
-	else if (strcasecomp(scheme, "mailto") == 0 && config_proxy_mailto_on && config_proxy_mailto)
+	else if (strcasecomp(scheme, "mailto") == 0)
 	{
-	    char *buffer;
-	    char *scheme1, *netloc1, *path1, *params1, *query1, *frag1;
-	    char *new_url;
-
-	    url_parse(config_proxy_mailto, &scheme1, &netloc1, &path1, &params1, &query1, &frag1);
-	    new_url = url_unparse(scheme1, netloc1, path1 ? path1 : "/", params1, query1, frag1);
-
-	    buffer = strcatx1(NULL, new_url);
-
-	    /* ensure current URL ends with & or ? before adding query information */
-	    switch (buffer[strlen(buffer)-1])
+	    char *proxy = NULL;
+	    if (config_proxy_mailto_on &&
+		config_proxy_mailto &&
+		(proxy = strdup_gstrans(config_proxy_mailto)) != NULL &&
+		proxy[0])
 	    {
-	    case '&':
-	    case '?':
-	    case '=':
-		break;
-	    default:
-		buffer = strcatx1(buffer, "?");
-		break;
-	    }
+		char *buffer;
+		char *scheme1, *netloc1, *path1, *params1, *query1, *frag1;
+		char *new_url;
 
-	    /* add on the mailto details */
-	    if (path)
-	    {
-		buffer = strcatx1(buffer, "to=");
-		buffer = strcatx1(buffer, path);
-	    }
+		url_parse(proxy, &scheme1, &netloc1, &path1, &params1, &query1, &frag1);
+	    
+		new_url = url_unparse(scheme1, netloc1, path1 ? path1 : "/", params1, query1, frag1);
 
-	    if (query)
-	    {
+		buffer = strcatx1(NULL, new_url);
+
+		/* ensure current URL ends with & or ? before adding query information */
+		switch (buffer[strlen(buffer)-1])
+		{
+		case '&':
+		case '?':
+		case '=':
+		    break;
+		default:
+		    buffer = strcatx1(buffer, "?");
+		    break;
+		}
+
+		/* add on the mailto details */
 		if (path)
-		    buffer = strcatx1(buffer, "&");
-		buffer = strcatx1(buffer, query);
-	    }
+		{
+		    buffer = strcatx1(buffer, "to=");
+		    buffer = strcatx1(buffer, path);
+		}
 
-	    /* fetch direct or via proxy? */
-	    if (strcasecomp(scheme1, "http") == 0 &&
-		config_proxy_http_on &&
-		config_proxy_http &&
-		!access_match_host(netloc1, config_proxy_http_ignore))
-	    {
-		ep = access_new_http(buffer, flags | access_PROXY, ofile, bfile, referer, progress, complete, h, result, config_proxy_http, buffer);
-	    }
-	    else
-	    {
-		int offset = strlen(scheme1) + sizeof("//:")-1 + strlen(netloc1);
-		ep = access_new_http(buffer, flags, ofile, bfile, referer, progress, complete, h, result, netloc1, buffer + offset);
-	    }
+		if (query)
+		{
+		    if (path)
+			buffer = strcatx1(buffer, "&");
+		    buffer = strcatx1(buffer, query);
+		}
 
-	    url_free_parts(scheme1, netloc1, path1, params1, query1, frag1);
-	    mm_free(new_url);
-	    mm_free(buffer);
+		/* fetch direct or via proxy? */
+		if (strcasecomp(scheme1, "http") == 0 &&
+		    config_proxy_http_on &&
+		    config_proxy_http &&
+		    !access_match_host(netloc1, config_proxy_http_ignore))
+		{
+		    ep = access_new_http(buffer, flags | access_PROXY, ofile, bfile, referer, progress, complete, h, result, config_proxy_http, buffer);
+		}
+		else
+		{
+		    int offset = strlen(scheme1) + sizeof("//:")-1 + strlen(netloc1);
+		    ep = access_new_http(buffer, flags, ofile, bfile, referer, progress, complete, h, result, netloc1, buffer + offset);
+		}
+
+		url_free_parts(scheme1, netloc1, path1, params1, query1, frag1);
+		mm_free(new_url);
+		mm_free(buffer);
+	    }
+	    mm_free(proxy);
 	}
 #if INTERNAL_URLS
 	else if (strcasecomp(scheme, "ncfrescointernal") == 0 || strcasecomp(scheme, "ncint") == 0)

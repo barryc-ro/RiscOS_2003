@@ -38,6 +38,12 @@
 #define ITERATIVE_PANIC 0
 #endif
 
+#if 0
+#define SCNDBG(a) DBG(a)
+#else
+#define SCNDBG(a)
+#endif
+
 /*****************************************************************************
 
   We now do a lot of freeing and allocating of rid_pos_item chains. To speed
@@ -150,13 +156,77 @@ static void rid_free_map(rid_map_item *p)
     }
 }
 
+/* Free list of pos items, stopping just before the specified
+   terminating pos item, making term the head of the pos list and
+   messing with pointers as needed. Note that we need to NULL
+   rid_text_item->line pointers, else they will reference memory that
+   has been released. */
+
+extern void rid_free_pos_term(rid_pos_item *p, rid_pos_item *term, rid_text_stream *stream)
+{
+    rid_float_item *fl = NULL;
+
+    while (p != term && p != NULL)
+    {
+	rid_pos_item *next = p->next ;
+	rid_text_item *ti = p->first;
+
+	/* NULL pointers for non-floating items */
+	for (; ti != NULL; ti = rid_scanf(ti))
+	{
+	    if ( !FLOATING_ITEM(ti) )
+	    {
+		if (ti->line != p)
+		    break;
+		ti->line = NULL;
+	    }
+	}
+
+	if (p->floats)
+	{
+            for (fl = p->floats->left; fl != NULL; )
+            {
+                rid_float_item *nextfl = fl->next;
+		/* NULL pointers for floating items */
+		fl->ti->line = NULL;
+                mm_free(fl);
+                fl = nextfl;
+            }
+
+            for (fl = p->floats->right; fl != NULL; )
+            {
+                rid_float_item *nextfl = fl->next;
+		fl->ti->line = NULL;
+                mm_free(fl);
+                fl = nextfl;
+            }
+
+	    mm_free(p->floats);
+	}
+
+	mm_free(p);
+	p = next;
+    }
+
+    if (term == NULL)
+    {
+	/* NB: This case should probably not be required, but just in case */
+	stream->pos_list = stream->pos_last = NULL;
+    }
+    else
+    {
+	term->prev = NULL;
+	stream->pos_list = term;
+    }
+}
+
 /* Free list of pos items. */
 
 extern void rid_free_pos(rid_pos_item *p)
 {
     rid_float_item *fl = NULL;
 
-    while (p)
+    while (p != NULL)
     {
 	rid_pos_item *next = p->next ;
 
@@ -189,13 +259,6 @@ extern void rid_free_pos(rid_pos_item *p)
 	mm_free(p);
 	p = next;
     }
-
-#if 0
-    if (fl)
-	mm_free(fl);
-    if (fr)
-	mm_free(fr);
-#endif
 }
 
 /* Free list of pos items with a bit more. */
@@ -1007,6 +1070,8 @@ extern rid_text_item *rid_outermost_item(rid_text_item *item)
 
 static rid_text_item *scanfwd_recurse_if_table(rid_text_item *item)
 {
+    SCNDBG(("scanfwd_recurse_if_table: %p\n", item));
+
         if (item == NULL)
                 return NULL;
         if (item->tag != rid_tag_TABLE)
@@ -1017,6 +1082,8 @@ static rid_text_item *scanfwd_recurse_if_table(rid_text_item *item)
 
 static rid_text_item *scanfwd_recurse_first_in_caption(rid_table_item *table)
 {
+    SCNDBG(("scanfwd_recurse_first_in_caption: %p\n", table));
+    
   	if (table == NULL)
 		return NULL;
 
@@ -1028,6 +1095,8 @@ static rid_text_item *scanfwd_recurse_first_in_caption(rid_table_item *table)
 
 static rid_text_item *scanfwd_recurse_first_in_table(rid_table_item *table)
 {
+    SCNDBG(("scanfwd_recurse_first_if_table: %p\n", table));
+
         return scanfwd_recurse_first_in_caption(table);
 }
 
@@ -1035,6 +1104,10 @@ static rid_text_item *scanfwd_recurse_items_parent(rid_text_item *item)
 {
         rid_pos_item *pos;
         rid_text_stream *stream;
+
+    SCNDBG(("scanfwd_recurse_items_parent: %p line %p\n", item, item->line));
+    SCNDBG(("scanfwd_recurse_items_parent: stream %p\n", item->line ? item->line->st : 0));
+    SCNDBG(("scanfwd_recurse_items_parent: stream parent %p\n", item->line && item->line->st ? item->line->st->parent : 0));
 
 	if (item == NULL)
 		return NULL;
@@ -1066,6 +1139,8 @@ static rid_text_item *scanfwd_recurse_after_table(rid_table_item *table)
 {
         rid_text_item_table *rtit;
 
+    SCNDBG(("scanfwd_recurse_after_table: %p\n", table));
+    
         if (table == NULL)
         	return NULL;
 
@@ -1080,6 +1155,8 @@ static rid_text_item *scanfwd_recurse_after_table(rid_table_item *table)
 static rid_text_item *scanfwd_recurse_cell_after(rid_table_item *table, int x, int y)
 {
         rid_table_cell *cell;
+
+    SCNDBG(("scanfwd_recurse_cell_after: %p %d,%d\n", table, x, y));
 
 	if (table == NULL)
 		return NULL;
@@ -1098,6 +1175,8 @@ static rid_text_item *scanback_recurse_parent_prev(rid_text_item *item)
         rid_pos_item *pos;
         rid_text_stream *stream;
 
+    SCNDBG(("scanfwd_recurse_parent_prev: %p\n", item));
+    
 	if (item == NULL)
 		return NULL;
 
@@ -1126,6 +1205,8 @@ static rid_text_item *scanback_recurse_parent_prev(rid_text_item *item)
 
 static rid_text_item *scanback_recurse_tables_caption(rid_table_item *table)
 {
+    SCNDBG(("scanfwd_recurse_tables_caption: %p\n", table));
+    
   	if (table == NULL)
   		return NULL;
 
@@ -1144,6 +1225,8 @@ static rid_text_item *scanback_recurse_cell_before(rid_table_item *table, int x,
 {
         rid_table_cell *cell;
 
+    SCNDBG(("scanfwd_recurse_cell_before: %p %d,%d\n", table, x, y));
+    
 	if (table == NULL)
 		return NULL;
 
@@ -1163,7 +1246,9 @@ static rid_text_item *scanback_recurse_cell_before(rid_table_item *table, int x,
 
 static rid_text_item *scanback_recurse_if_table(rid_text_item *item)
 {
-    	if (item == NULL)
+    SCNDBG(("scanfwd_recurse_if_table: %p\n", item));
+    
+	if (item == NULL)
   		return NULL;
 
         if (item->tag == rid_tag_TABLE)
@@ -1248,6 +1333,8 @@ static rid_text_item *scanback(rid_text_item *item)
 
 static rid_text_item *scanfwd_recurse(rid_text_item *item)
 {
+    SCNDBG(("scanfwd_recurse: %p\n", item));
+    
         if (item == NULL)
                 return NULL;
 
@@ -1279,7 +1366,9 @@ static rid_text_item *scanback_recurse(rid_text_item *item)
 
 extern rid_text_item * rid_scan(rid_text_item * item, int action)
 {
-        if (item == NULL)
+    SCNDBG(("rid_scan: %p %x\n", item, action));
+
+	if (item == NULL)
                 return NULL;
 
         /* Call ourselves for the filter stuff for now */

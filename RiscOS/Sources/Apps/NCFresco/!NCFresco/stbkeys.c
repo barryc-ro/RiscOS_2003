@@ -427,24 +427,24 @@ static key_list rca_web_keys[] =
     { 30,				fevent_HOME + fevent_WINDOW },
     { kbd_handset_HOME,			fevent_HOME + fevent_WINDOW },
 
-    { kbd_handset_PRINT,		fevent_PRINT },
+    { kbd_handset_PRINT,		fevent_PRINT+fevent_WINDOW },
     { akbd_PrintK,			fevent_TOOLBAR_PRINT + fevent_WINDOW },
 
     { kbd_handset_MENU,			fevent_TOGGLE_STATUS },
 
     { kbd_handset_TOOLBAR,          fevent_TOGGLE_STATUS },
     { kbd_handset_OPEN,             fevent_OPEN_URL+fevent_WINDOW },
-    { kbd_handset_BACK,             fevent_TOOLBAR_EXIT },
+    { kbd_handset_BACK,             fevent_TOOLBAR_EXIT+fevent_WINDOW },
     { kbd_handset_FORWARD,          fevent_HISTORY_FORWARD+fevent_WINDOW },
 
     { kbd_rca_SOUND,		fevent_SOUND_TOGGLE },
-    { kbd_rca_RELOAD,		fevent_RELOAD },
+    { kbd_rca_RELOAD,		fevent_RELOAD+fevent_WINDOW },
 
     { kbd_rca_FAV,		fevent_TOOLBAR_FAVS },
-    { kbd_rca_SAVE,		fevent_HOTLIST_ADD },
+    { kbd_rca_SAVE,		fevent_HOTLIST_ADD+fevent_WINDOW },
     { kbd_rca_GOTO,		fevent_OPEN_URL },
-    { kbd_rca_SEARCH,		fevent_SEARCH_PAGE },
-    { kbd_rca_SEND,		fevent_SEND_URL },
+    { kbd_rca_SEARCH,		fevent_SEARCH_PAGE+fevent_WINDOW },
+    { kbd_rca_SEND,		fevent_SEND_URL+fevent_WINDOW },
     { kbd_rca_INFO,		fevent_TOOLBAR_DETAILS },
 
     { 0 }
@@ -454,7 +454,7 @@ static key_list rca_desktop_keys[] =
 {
     { kbd_handset_MENU,		fevent_OFFLINE_PAGE },
 
-    { kbd_handset_BACK,         fevent_TOOLBAR_EXIT },
+/*   { kbd_handset_BACK,         fevent_TOOLBAR_EXIT }, */
 
     { kbd_rca_SOUND,		fevent_SOUND_TOGGLE },
 
@@ -569,6 +569,8 @@ static key_list rca_external_popup_keys[] =
     { akbd_TabK,                        fevent_SCROLL_OR_CURSOR_DOWN, key_list_REPEAT },
 
     { 13,                   fevent_HIGHLIGHT_ACTIVATE },
+
+    { kbd_rca_SOUND,		fevent_SOUND_TOGGLE },
 
     { 0 }
 };
