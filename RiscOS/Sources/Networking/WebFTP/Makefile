@@ -24,10 +24,11 @@ CP      = copy
 LD      = link
 RM      = remove
 WIPE    = -wipe
+STRIP   = stripdepnd
 
 AFLAGS = -depend !Depend -Stamp -quit
 CFLAGS  = -c -Wc -depend !Depend ${THROWBACK} -zM -zps1 -ff ${INCLUDES} ${DFLAGS} -wp
-CMHGFLAGS = -p ${DFLAGS} ${INCLUDES}
+CMHGFLAGS = -p ${THROWBACK} ${DFLAGS} ${INCLUDES}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 #
@@ -51,6 +52,8 @@ REMOTEDB  =
 #
 
 INCLUDES  = -IC:,TCPIPLibs:,<Lib$Dir>.
+
+DIRS      = o._dirs
 
 # enable malloc debugging using the following define.
 #-DDEBUG_MALLOC
@@ -94,12 +97,22 @@ install: rm.${COMPONENT}
         @echo ${COMPONENT}: installed
 
 clean:
-        ${WIPE} o.* ${WFLAGS}
-        ${WIPE} rm.* ${WFLAGS}
-        ${WIPE} linked.* ${WFLAGS}
-        ${WIPE} map.* ${WFLAGS}
-        ${RM} ${TARGET}
+        ${WIPE} aof ${WFLAGS}
+        ${WIPE} o ${WFLAGS}
+        ${WIPE} rm ${WFLAGS}
+        ${WIPE} linked ${WFLAGS}
+        ${WIPE} map ${WFLAGS}
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
+
+${DIRS}:
+        @${MKDIR} aof
+        @${MKDIR} linked
+        @${MKDIR} map
+        @${MKDIR} o
+        @${MKDIR} rm
+        create ${DIRS}
+        stamp  ${DIRS}
 
 resources:
 #        ${MKDIR} ${RESDIR}.${COMPONENT}
@@ -109,7 +122,7 @@ resources:
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS} ${ROMCSTUBS} ${INETLIB} ${SOCKLIB} ${REMOTEDB}
+${TARGET}: ${OBJS} ${ROMCSTUBS} ${INETLIB} ${SOCKLIB} ${REMOTEDB} ${DIRS}
         ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS} ${INETLIB} ${SOCKLIB} ${REMOTEDB}
 
 #
@@ -121,7 +134,7 @@ rom_link:
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-rm.${COMPONENT}: ${OBJS} ${CLIB} ${INETLIB} ${SOCKLIB} ${REMOTEDB}
+rm.${COMPONENT}: ${OBJS} ${CLIB} ${INETLIB} ${SOCKLIB} ${REMOTEDB} ${DIRS}
         ${LD} -o $@ -module ${OBJS} ${CLIB} ${INETLIB} ${SOCKLIB} ${REMOTEDB}
         Access rm.${COMPONENT} RW/R
 
