@@ -118,6 +118,8 @@ Date		Who	Change
 			underrun, pending reattainment of a minimal audio buffer level; now counts
 			audio frame-sync losses; manually searches for start-code prefixes between
 			adjacent video headers - works around unreliability of VID_SCM
+02/05/2000	BJGA	Implemented video scaling and positioning; accommodates differences between
+			PAL and NTSC displays automatically; counts internal resets
 
 ***************************************************************************/
 
@@ -125,6 +127,7 @@ Date		Who	Change
 /* Includes */
 /************/
 
+#include <stdlib.h>
 #include "kernel.h"
 #include "swis.h"
 
@@ -140,16 +143,42 @@ Date		Who	Change
 #include "Clk.h"
 #include "Co.h"
 #include "Defs.h"
+#include "Fixed.h"
 #include "IRQ.h"
 #include "ModHdr.h"
 #include "Module.h"
 #include "Registers.h"
 #include "STi3520L.h"
 #include "Types.h"
+#include "WSS.h"
 
 /*****************/
 /* Private types */
 /*****************/
+
+typedef enum
+{
+  vsf_x0_5,
+  vsf_x0_75,
+  vsf_x1,
+  vsf_x1_5, /* not available for interlaced video */
+  vsf_x2,
+  vsf_x4,   /* not available for interlaced video */
+  vsf_LIMIT
+}
+vertical_scaling_factor;
+
+typedef enum
+{
+  tvm_collapsed,  /* 4:3 TVs only (16:9 mode) */
+  tvm_full_frame, /* traditional academy ratio */
+  tvm_anamorphic, /* 16:9 TVs only */
+  tvm_14_9,       /* 16:9 TVs only */
+  tvm_16_9,       /* 16:9 TVs only */
+  /* below 3x vertical upscaling, 2.35:1 mode only gains us scales very similar to others with better horizontal bandwidth - and 2.35:1 isn't supported on all widescreen TVs anyway */
+  tvm_LIMIT
+}
+tv_mode;
 
 /**********************/
 /* Private prototypes */
@@ -190,6 +219,9 @@ static void static_WriteDecodeInstruction (bool FIS);
 static void static_WriteSkipInstruction (bool FIS);
 static void static_RemoveFrameFromList (frame_t *removed_frame, bool D_list);
 static void static_SetNextDisplayField (bool top_field);
+static void static_PositionVideo (signed short frame_centre_horizontal_offset, signed short frame_centre_vertical_offset, unsigned char active_format);
+static void static_SetUpScalingRegisters (signed int centre_x, signed int centre_y, fixed horizontal_downscaling, vertical_scaling_factor vertical_scaling_index);
+static void static_SetDFP (void);
 
 /********************/
 /* Public variables */
@@ -202,6 +234,9 @@ static void static_SetNextDisplayField (bool top_field);
 static int CommonIRQsClaimedCount = 0;
 static int VideoPrefillSize = -1; /* in units of 256 bytes */
 static char Deferred_VID_TIS;
+static bool Deferred_VID_DCF_LB_Pending;
+static char Deferred_VID_DCF_LB;
+static int DisplayFrameHackyScanOffset; /* in units of macroblock row pairs */
 
 /*********************/
 /* Private constants */
@@ -235,32 +270,58 @@ static char Deferred_VID_TIS;
 #define BOTTOM_FIELD_PICTURE    0x2
 #define FRAME_PICTURE           0x3
 
-static const unsigned int frame_rate_table[16] =
+#define ASPECT_4_TO_3           ((fixed) 0x15555)
+#define ASPECT_14_TO_9          ((fixed) 0x18E39)
+#define ASPECT_16_TO_9          ((fixed) 0x1C71C)
+#define ASPECT_2_21_TO_1        ((fixed) 0x235C3)
+#define ASPECT_2_35_TO_1        ((fixed) 0x2599A)
+
+static const unsigned int frame_rate_table [16] =
 {
   0, 23976, 24000, 25000, 29970, 30000, 50000, 59940, 60000, 0, 0, 0, 0, 0, 0, 0
 };
 
-static const unsigned int mpeg_1_pixel_aspect_ratio_table[16] =
+static const fixed mpeg_1_pixel_aspect_ratio_table [16] =
 {
-  0,
-  (unsigned int) (0x10000 / 1.0000),
-  (unsigned int) (0x10000 / 0.6735),
-  (unsigned int) (0x10000 / 0.7031),
-  (unsigned int) (0x10000 / 0.7615),
-  (unsigned int) (0x10000 / 0.8055),
-  (unsigned int) (0x10000 / 0.8437),
-  (unsigned int) (0x10000 / 0.8935),
-  (unsigned int) (0x10000 / 0.9157),
-  (unsigned int) (0x10000 / 0.9815),
-  (unsigned int) (0x10000 / 1.0255),
-  (unsigned int) (0x10000 / 1.0695),
-  (unsigned int) (0x10000 / 1.0950),
-  (unsigned int) (0x10000 / 1.1575),
-  (unsigned int) (0x10000 / 1.2015),
-  0
+  0x10000,
+  (fixed) (0x10000 / 1.0000),
+  (fixed) (0x10000 / 0.6735),
+  (fixed) (0x10000 / 0.7031),
+  (fixed) (0x10000 / 0.7615),
+  (fixed) (0x10000 / 0.8055),
+  (fixed) (0x10000 / 0.8437),
+  (fixed) (0x10000 / 0.8935),
+  (fixed) (0x10000 / 0.9157),
+  (fixed) (0x10000 / 0.9815),
+  (fixed) (0x10000 / 1.0255),
+  (fixed) (0x10000 / 1.0695),
+  (fixed) (0x10000 / 1.0950),
+  (fixed) (0x10000 / 1.1575),
+  (fixed) (0x10000 / 1.2015),
+  0x10000
 };
 
-static const unsigned char default_intra_quantizer_matrix[64] =
+static const struct { fixed active; fixed protect; bool top; } active_formats [16] =
+{
+  { 0,                0,                false },
+  { 0,                0,                false },
+  { ASPECT_16_TO_9,   ASPECT_16_TO_9,   true  },
+  { ASPECT_14_TO_9,   ASPECT_14_TO_9,   true  },
+  { ASPECT_2_35_TO_1, ASPECT_2_35_TO_1, false },
+  { 0,                0,                false },
+  { 0,                0,                false },
+  { 0,                0,                false },
+  { 0,                0,                false }, /* official as-the-coded-frame value */
+  { ASPECT_4_TO_3,    ASPECT_4_TO_3,    false },
+  { ASPECT_16_TO_9,   ASPECT_16_TO_9,   false },
+  { ASPECT_14_TO_9,   ASPECT_14_TO_9,   false },
+  { ASPECT_4_TO_3,    ASPECT_16_TO_9,   false }, /* not officially defined, but useful for open matte or Super35 movies */
+  { ASPECT_4_TO_3,    ASPECT_14_TO_9,   false },
+  { ASPECT_16_TO_9,   ASPECT_14_TO_9,   false },
+  { ASPECT_16_TO_9,   ASPECT_4_TO_3,    false }
+};
+
+static const unsigned char default_intra_quantizer_matrix [64] =
 {
   0x08, 0x10, 0x10, 0x13, 0x10, 0x13, 0x16, 0x16,
   0x16, 0x16, 0x16, 0x16, 0x1A, 0x18, 0x1A, 0x1B,
@@ -270,6 +331,16 @@ static const unsigned char default_intra_quantizer_matrix[64] =
   0x22, 0x22, 0x25, 0x26, 0x25, 0x23, 0x23, 0x22,
   0x23, 0x26, 0x26, 0x28, 0x28, 0x28, 0x30, 0x30,
   0x2E, 0x2E, 0x38, 0x38, 0x3A, 0x45, 0x45, 0x53
+};
+
+static const fixed upscaling_lut [vsf_LIMIT] =
+{
+  0x08000,
+  0x0C000,
+  0x10000,
+  0x18000,
+  0x20000,
+  0x40000
 };
 
 /********************/
@@ -445,6 +516,7 @@ _kernel_oserror *IRQ_EnableVideoPrefillIRQs (void)
     Stream.video.header_parser = Co_Create (&static_ProcessVideoHdr); /* initialise coroutine */
     VideoPrefillSize = -1; /* special value to flag that it hasn't been calculated yet */
     Deferred_VID_TIS = 0;
+    Deferred_VID_DCF_LB_Pending = false;
     
     /* Enable appropriate interrupts (BBE is deferred until we've parsed the first headers, PSD until we enable decoding) */
     WRITE_VID_ITM(VID_ITM | VIDEO_INT_SCH | VIDEO_INT_BBF | VIDEO_INT_PER | VIDEO_INT_PID | VIDEO_INT_SER | VIDEO_INT_PDE);
@@ -658,10 +730,9 @@ Notes:		This is enabled when video goes into normal play mode. It is used
 
 static void static_INT_VS (bool field, unsigned int *video_ints)
 {
-// PAL
-  clk one_frame_time = { 3600, 0 };
-// NTSC
-//clk one_frame_time = { 3003, 0 };
+  static const clk PAL_frame_time = { 3600, 0 };
+  static const clk NTSC_frame_time = { 3003, 0 };
+  clk one_frame_time = Module_Display525_60 ? NTSC_frame_time : PAL_frame_time;
   
   dprintf (("IRQ", "INT_VS%c\n", field ? 'T' : 'B'));
   
@@ -737,6 +808,37 @@ static void static_INT_VS (bool field, unsigned int *video_ints)
       dprintf (("IRQ", "INT_VS: video.fast_slow_state = normal_speed\n"));
     }
     
+    if (Deferred_VID_DCF_LB_Pending)
+    {
+      VID_DCF_16 = (VID_DCF_16 & 0xEF) | Deferred_VID_DCF_LB;
+      Deferred_VID_DCF_LB_Pending = false;
+    }
+    if (Stream.video.speed_indicator == 1 && Stream.rs_flags.trick_play_mode == false)
+    {
+      /* If the frame centre offsets change within a frame, or if the second of two field  */
+      /* pictures has a different AFD, then the display scaling/positioning needs updating */
+      if (Stream.vid_flags.display_needs_setting_up
+          || (Stream.fields_into_this_PU < 2 &&
+                 (Stream.display_frames->frame_centre_horizontal_offset [Stream.fields_into_this_PU + 1] != Stream.display_frames->frame_centre_horizontal_offset [Stream.fields_into_this_PU] ||
+                  Stream.display_frames->frame_centre_vertical_offset [Stream.fields_into_this_PU + 1] != Stream.display_frames->frame_centre_vertical_offset [Stream.fields_into_this_PU]))
+          || (Stream.fields_into_this_PU == 0 &&
+                 Stream.display_frames->lastpic->active_format != Stream.display_frames->pic1.active_format))
+      {
+        static_PositionVideo (Stream.display_frames->frame_centre_horizontal_offset [Stream.fields_into_this_PU + 1],
+                              Stream.display_frames->frame_centre_vertical_offset [Stream.fields_into_this_PU + 1],
+                              Stream.display_frames->lastpic->active_format);
+      }
+    }
+    else
+    {
+      if (Stream.vid_flags.display_needs_setting_up)
+      {
+        static_PositionVideo (Stream.display_frames->frame_centre_horizontal_offset [0],
+                              Stream.display_frames->frame_centre_vertical_offset [0],
+                              Stream.display_frames->pic1.active_format);
+      }
+    }
+    /* Select appropriate field display pattern */
     if (Stream.current_picture_structure == ps_frame_picture || Stream.current_picture_structure == ps_frame_picture_extension)
     {
       if (Stream.display_frames->progressive_frame == true)
@@ -842,6 +944,8 @@ static void static_INT_VS (bool field, unsigned int *video_ints)
         {
           /* Badly locked up - do a complete video reset */
           _swix (OS_AddCallBack, _INR(0,1), video_reset_callback, Module_PrivateWord);
+          Stream.video.since_open.internal_resets ++;
+          Stream.video.since_reset.internal_resets ++;
         }
         else if (Stream.consecutive_pipeline_stalls % 8 == 0)
         {
@@ -944,7 +1048,7 @@ static void static_INT_VS (bool field, unsigned int *video_ints)
             /* To implement video repeats, we simply extend the display time by 2 */
             Stream.fields_till_next_AU += 2;
             Stream.video.fast_slow_state = fss_normal_speed;
-dprintf (("IRQ", "INT_VS: video.fast_slow_state = normal_speed\n"));
+            dprintf (("IRQ", "INT_VS: video.fast_slow_state = normal_speed\n"));
           }
           Stream.fields_till_next_AU *= Stream.video.speed_indicator;
           if (Stream.fields_till_next_AU == 0)
@@ -1415,15 +1519,6 @@ static void static_ProcessVideoSequenceHdr (void)
     Stream.decode_frames->seq.coded_horizontal_size = static_GetVideoHdrBits (12);
   Stream.decode_frames->seq.display_vertical_size =
     Stream.decode_frames->seq.coded_vertical_size = static_GetVideoHdrBits (12);
-  Stream.decode_frames->seq.active_horizontal_size =
-    Stream.decode_frames->seq.protected_horizontal_size =
-    Stream.decode_frames->seq.active_vertical_size =
-    Stream.decode_frames->seq.protected_vertical_size = 0; /* these cannot be determined until we have calculated seq.coded_aspect_ratio */
-  Stream.decode_frames->seq.display_aspect_ratio =
-    Stream.decode_frames->seq.coded_aspect_ratio = 0;  /* these aren't calculated until picture is displayed */
-  Stream.decode_frames->seq.active_aspect_ratio =
-    Stream.decode_frames->seq.protected_aspect_ratio = 0;  /* flag value => match coded aspect ratio unless Active Format Description is found */
-  Stream.decode_frames->seq.active_area_is_at_top = false; /* default setting, unless changed by Active Format Description */
   WRITE_VID_DFS(((Stream.decode_frames->seq.coded_horizontal_size + 15) / 16) * ((Stream.decode_frames->seq.coded_vertical_size + 15) / 16));
   WRITE_VID_DFW((Stream.decode_frames->seq.coded_horizontal_size + 15) / 16);
   Stream.decode_frames->seq.aspect_ratio_information = static_GetVideoHdrBits (4);
@@ -1443,6 +1538,14 @@ static void static_ProcessVideoSequenceHdr (void)
   Stream.decode_frames->seq.colour_primaries = 1;              /* ITU-R BT.709 */
   Stream.decode_frames->seq.transfer_characteristics = 1;      /* ITU-R BT.709 */
   Stream.decode_frames->seq.matrix_coefficients = 1;           /* ITU-R BT.709 */
+  Stream.decode_frames->frame_centre_horizontal_offset [0] =
+  Stream.decode_frames->frame_centre_horizontal_offset [1] =
+  Stream.decode_frames->frame_centre_horizontal_offset [2] = 0;
+  Stream.decode_frames->frame_centre_vertical_offset [0] =
+  Stream.decode_frames->frame_centre_vertical_offset [1] =
+  Stream.decode_frames->frame_centre_vertical_offset [2] = 0;
+  Stream.decode_frames->pic1.active_format = 8; /* default AFD = 8 (as the coded frame) */
+  Stream.decode_frames->pic2.active_format = 8;
 }
 
 /******	static_ProcessVideoSequenceExt() ***********************************
@@ -1524,8 +1627,61 @@ static void static_ProcessVideoPictureHdr (void)
   /* If necessary, clone sequence and GOP-related variables from the previously-decoded picture */
   if (Stream.current_picture_structure != ps_first_field_picture)
   {
-    if (!Stream.vid_flags.sequence_header_received_since_picture_header) Stream.decode_frames->seq = Stream.decode_frames->decode_link->seq;
-    if (!Stream.vid_flags.gop_header_received_since_picture_header) Stream.decode_frames->gop = Stream.decode_frames->decode_link->gop;
+    if (!Stream.vid_flags.sequence_header_received_since_picture_header)
+    {
+      Stream.decode_frames->seq = Stream.decode_frames->decode_link->seq;
+      Stream.decode_frames->frame_centre_horizontal_offset [0] =
+      Stream.decode_frames->frame_centre_horizontal_offset [1] =
+      Stream.decode_frames->frame_centre_horizontal_offset [2] = Stream.decode_frames->decode_link->frame_centre_horizontal_offset [2];
+      Stream.decode_frames->frame_centre_vertical_offset [0] =
+      Stream.decode_frames->frame_centre_vertical_offset [1] =
+      Stream.decode_frames->frame_centre_vertical_offset [2] = Stream.decode_frames->decode_link->frame_centre_vertical_offset [2];
+      if (Stream.current_picture_structure != ps_first_field_picture)
+      {
+        Stream.decode_frames->lastpic->active_format = Stream.decode_frames->decode_link->lastpic->active_format;
+      }
+      else
+      {
+        Stream.decode_frames->lastpic->active_format = Stream.decode_frames->pic1.active_format;
+      }
+    }
+    if (!Stream.vid_flags.gop_header_received_since_picture_header)
+    {
+      Stream.decode_frames->gop = Stream.decode_frames->decode_link->gop;
+    }
+  }
+  if (Stream.vid_flags.sequence_header_received_since_picture_header)
+  {
+    /* Now that new sequence headers have been parsed, recalculate the aspect ratios and mark the display parameters as needing recalculating */
+    if (Stream.decode_frames->seq.mpeg2 && Stream.decode_frames->seq.aspect_ratio_information != 1)
+    {
+      /* Specified aspect ratio is display aspect ratio */
+      switch (Stream.decode_frames->seq.aspect_ratio_information)
+      {
+        default: /* illegal MPEG-2 syntax - but most of our test clips seem to be encoded this way :-( */
+        case 2:  /* DAR = 4:3 */
+          Stream.decode_frames->seq.display_aspect_ratio = ASPECT_4_TO_3;
+          break;
+        case 3:  /* DAR = 16:9 */
+          Stream.decode_frames->seq.display_aspect_ratio = ASPECT_16_TO_9;
+          break;
+        case 4:  /* DAR = 2.21:1 */
+          Stream.decode_frames->seq.display_aspect_ratio = ASPECT_2_21_TO_1;
+          break;
+      }
+      /* IAR can be calcuated from DAR and the relevant sizes; the sizes are all 14-bit numbers, so it's safe to multiply them (saves an extra division) */
+      Stream.decode_frames->seq.coded_aspect_ratio = Fixed_IntDivide (Stream.decode_frames->seq.coded_horizontal_size * Stream.decode_frames->seq.display_vertical_size,
+          Stream.decode_frames->seq.coded_vertical_size * Stream.decode_frames->seq.display_horizontal_size);
+      Stream.decode_frames->seq.coded_aspect_ratio = Fixed_FixedMultiply (Stream.decode_frames->seq.display_aspect_ratio, Stream.decode_frames->seq.coded_aspect_ratio);
+    }
+    else
+    {
+      /* Specified aspect ratio is sample (pixel) aspect ratio */
+      Stream.decode_frames->seq.display_aspect_ratio = Fixed_IntDivide (Stream.decode_frames->seq.display_horizontal_size, Stream.decode_frames->seq.display_vertical_size);
+      Stream.decode_frames->seq.display_aspect_ratio = Fixed_FixedMultiply (mpeg_1_pixel_aspect_ratio_table [Stream.decode_frames->seq.aspect_ratio_information], Stream.decode_frames->seq.display_aspect_ratio);
+      Stream.decode_frames->seq.coded_aspect_ratio = Fixed_IntDivide (Stream.decode_frames->seq.coded_horizontal_size, Stream.decode_frames->seq.coded_vertical_size);
+      Stream.decode_frames->seq.coded_aspect_ratio = Fixed_FixedMultiply (mpeg_1_pixel_aspect_ratio_table [Stream.decode_frames->seq.aspect_ratio_information], Stream.decode_frames->seq.coded_aspect_ratio);
+    }
   }
   
   Stream.decode_frames->temporal_reference = static_GetVideoHdrBits (10);
@@ -1591,14 +1747,7 @@ static void static_ProcessVideoPictureHdr (void)
   Stream.decode_frames->lastpic->picture_flags.byte = 0;  /**/
   Stream.decode_frames->top_field_first = true;
   Stream.decode_frames->repeat_first_field = false;
-  Stream.decode_frames->progressive_frame = true; /* although value is meaningless, because both fields are the same in MPEG-1 */
-  Stream.decode_frames->frame_center_horizontal_offset [0] = 0;
-  Stream.decode_frames->frame_center_horizontal_offset [1] = 0;
-  Stream.decode_frames->frame_center_horizontal_offset [2] = 0;
-  Stream.decode_frames->frame_center_vertical_offset [0] = 0;
-  Stream.decode_frames->frame_center_vertical_offset [1] = 0;
-  Stream.decode_frames->frame_center_vertical_offset [2] = 0;
-  Stream.decode_frames->lastpic->active_format = 0xFF; /* magic value to flag that AFD hasn't been found */
+  Stream.decode_frames->progressive_frame = true;
   
   /* Get a new reconstruction frame pointer */
   if (Stream.decode_frames->lastpic->picture_coding_type == B_PICTURE)
@@ -1841,7 +1990,7 @@ Purpose:	Parses MPEG picture_display_extension()
 
 static void static_ProcessVideoPictureDisplayExt (void)
 {
-  unsigned char number_of_frame_center_offsets;
+  unsigned char number_of_frame_centre_offsets;
   unsigned char offset_no;
   signed short horizontal_offset = 0;
   signed short vertical_offset = 0;
@@ -1853,16 +2002,16 @@ static void static_ProcessVideoPictureDisplayExt (void)
     {
       if (Stream.decode_frames->lastpic->picture_flags.bits.top_field_first == 1)
       {
-        number_of_frame_center_offsets = 3;
+        number_of_frame_centre_offsets = 3;
       }
       else
       {
-        number_of_frame_center_offsets = 2;
+        number_of_frame_centre_offsets = 2;
       }
     }
     else
     {
-      number_of_frame_center_offsets = 1;
+      number_of_frame_centre_offsets = 1;
     }
   }
   else
@@ -1871,32 +2020,32 @@ static void static_ProcessVideoPictureDisplayExt (void)
     {
       if (Stream.decode_frames->repeat_first_field == true)
       {
-        number_of_frame_center_offsets = 3;
+        number_of_frame_centre_offsets = 3;
       }
       else
       {
-        number_of_frame_center_offsets = 2;
+        number_of_frame_centre_offsets = 2;
       }
     }
     else
     {
-      number_of_frame_center_offsets = 1;
+      number_of_frame_centre_offsets = 1;
     }
   }
   
   /* Set up all three pairs of offsets, repeating the final coded pair if necessary, */
   /* in case the picture is displayed for longer than expected */
-  for (offset_no = 0; offset_no < 3; offset_no++)
+  for (offset_no = (Stream.next_picture_structure == ps_second_field_picture) ? 1 : 0; offset_no < 3; offset_no++)
   {
-    if (offset_no < number_of_frame_center_offsets)
+    if (offset_no < number_of_frame_centre_offsets)
     {
       horizontal_offset = (signed short) static_GetVideoHdrBits (16);
       static_GetVideoHdrBits (1); /* skip marker bit */
       vertical_offset = (signed short) static_GetVideoHdrBits (16);
       static_GetVideoHdrBits (1); /* skip marker bit */
     }
-    Stream.decode_frames->frame_center_horizontal_offset [offset_no] = horizontal_offset;
-    Stream.decode_frames->frame_center_vertical_offset [offset_no] = vertical_offset;
+    Stream.decode_frames->frame_centre_horizontal_offset [offset_no] = horizontal_offset;
+    Stream.decode_frames->frame_centre_vertical_offset [offset_no] = vertical_offset;
   }
 }
 
@@ -2207,6 +2356,23 @@ static void static_SetUpDisplayForNewAU (void)
         (Stream.next_picture_structure == ps_frame_picture && Stream.current_picture_structure == ps_frame_picture) ||
         (Stream.current_picture_structure == ps_frame_picture_extension && Stream.fields_into_this_PU == -1))
     {
+      /* Before we remove the struct for the currently displaying frame, check to see if anything   */
+      /* is different in the new frame that would require the display parameters to be recalculated */
+      if (!Stream.vid_flags.display_needs_setting_up) /* if already true, there's no point in checking */
+      {
+        if (Stream.display_frames->display_link->seq.coded_horizontal_size          != Stream.display_frames->seq.coded_horizontal_size          ||
+            Stream.display_frames->display_link->seq.coded_vertical_size            != Stream.display_frames->seq.coded_vertical_size            ||
+            Stream.display_frames->display_link->seq.display_horizontal_size        != Stream.display_frames->seq.display_horizontal_size        ||
+            Stream.display_frames->display_link->seq.display_vertical_size          != Stream.display_frames->seq.display_vertical_size          ||
+            Stream.display_frames->display_link->seq.aspect_ratio_information       != Stream.display_frames->seq.aspect_ratio_information       ||
+            Stream.display_frames->display_link->progressive_frame                  != Stream.display_frames->progressive_frame                  ||
+            Stream.display_frames->display_link->frame_centre_horizontal_offset [0] != Stream.display_frames->frame_centre_horizontal_offset [2] ||
+            Stream.display_frames->display_link->frame_centre_vertical_offset [0]   != Stream.display_frames->frame_centre_vertical_offset [2]   ||
+            Stream.display_frames->display_link->pic1.active_format                 != Stream.display_frames->lastpic->active_format             )
+        {
+          Stream.vid_flags.display_needs_setting_up = true;
+        }
+      }
       /* Remove the previously displayed frame from the display list (but not if there wasn't a previously decoded frame!) */
       if (Stream.vid_flags.first_frame_displayed == true)
       {
@@ -2214,23 +2380,11 @@ static void static_SetUpDisplayForNewAU (void)
         static_RemoveFrameFromList (Stream.display_frames, false);
       }
       dprintf (("IRQ", "SetUpDisplayForNewAU: about to display frame %d\n", ((int) Stream.display_frames - (int) Stream.frame) / sizeof (frame_t)));
-      /* Set up display parameters for the new frame */
-      WRITE_VID_XFS(((Stream.display_frames->seq.coded_horizontal_size + 15) / 16) * ((Stream.display_frames->seq.coded_vertical_size + 15) / 16));
-      WRITE_VID_XFW((Stream.display_frames->seq.coded_horizontal_size + 15) / 16);
+      if (Stream.vid_flags.display_needs_setting_up)
       {
-        unsigned int adder;
-        unsigned int actual_display_width;
-        adder = (Stream.display_frames->seq.coded_horizontal_size-1)*256;
-        if (adder % 719 == 0) adder = adder / 719; else adder = adder / 719 + 1;
-        WRITE_VID_LSR(adder - 1);
-        actual_display_width = (Stream.display_frames->seq.coded_horizontal_size-1)*256/adder+1;
-// NTSC
-//        WRITE_VID_XDS(102+actual_display_width+6-1);
-// PAL
-        WRITE_VID_XDS(112+actual_display_width+6-1);
+        static_PositionVideo (Stream.display_frames->frame_centre_horizontal_offset [0], Stream.display_frames->frame_centre_vertical_offset [0], Stream.display_frames->pic1.active_format);
       }
-      VID_DCF_0 |= VID_DCF_EVD>>0;
-      WRITE_VID_DFP(Stream.display_frames->frame_buffer);
+      static_SetDFP ();
       /* Set state flags/variables */
       Stream.fields_into_this_PU = -1; /* start an incrementing count of how many fields the frame has been displayed for */
       Stream.field_to_trigger_second_decode_on = 0; /* default, used unless first decode stalls */
@@ -2241,7 +2395,7 @@ static void static_SetUpDisplayForNewAU (void)
       /* However, if the frame decode followed a field decode, then we're just coming up to the second (or fourth, sixth etc.) VSync of the PU */
       /* so we may need to display the opposite field (but only for progressive_frames or when in normal-speed play) */
       if (Stream.current_picture_structure != ps_frame_picture &&
-          (Stream.display_frames->display_link->progressive_frame || (Stream.video.speed_indicator == 1 && Stream.rs_flags.trick_play_mode == false)))
+          (Stream.display_frames->progressive_frame || (Stream.video.speed_indicator == 1 && Stream.rs_flags.trick_play_mode == false)))
       {
         static_SetNextDisplayField (!Stream.display_frames->top_field_first);
       }
@@ -2307,7 +2461,7 @@ static void static_WriteDecodeInstruction (bool FIS)
   {
     if (Stream.decode_frames->decode_link != NULL) /* exempt the first frame, since there's no previous in this case! */
     {
-      /* If we just finished decoding a B-frame, remove it from the decoding list, since it's never going to be used as a predictor */
+      /* If we just finished decoding a B-frame, remove it from the decoding list, since it's never going to be used as a predictor, and its frame_centre_offsets have already been copied */
       if (Stream.decode_frames->decode_link->lastpic->picture_coding_type == B_PICTURE)
       {
         dprintf (("IRQ", "WriteDecodeInstruction: removing B-frame %d from decode list\n", ((int) Stream.decode_frames->decode_link - (int) Stream.frame) / sizeof (frame_t)));
@@ -2501,4 +2655,633 @@ static void static_SetNextDisplayField (bool top_field)
   };
   dprintf (("IRQ", "SetNextDisplayField: %s\n", top_field ? "top" : "bottom"));
   VID_DCF_8 = VID_DCF_8 & ~0x0F | dam_fld [VID_DCF_0 & 0x7] [top_field == false];
+}
+
+/******	static_PositionVideo() *********************************************
+
+Purpose:	Sets up all video scaling/positioning parameters
+In:		Encoded frame centre offsets; active format value
+
+***************************************************************************/
+
+static void static_PositionVideo (signed short frame_centre_horizontal_offset, signed short frame_centre_vertical_offset, unsigned char active_format)
+{
+  signed int centre_x /* in 256ths of a luma sample */;
+  signed int centre_y /* in 256ths of a field scanline (down from top) */;
+  fixed horizontal_downscaling;
+  fixed vertical_upscaling;
+  unsigned int source_width;  /* width of the coded area we're interested in (in samples) */
+  unsigned int source_height; /* height of the coded area we're interested int (in samples) */
+  fixed source_aspect = 0;    /* overall aspect ratio of the area we're interested in - only used when aspect preservation *is* required */
+  unsigned int ideal_dest_width = 0; /* the post-scaling width we're aiming for (in luma samples or 720ths of the TV tube width) - only used when aspect preservation is *not* required */
+  unsigned int ideal_dest_height;    /* the post-scaling height we're aiming for (in frame scanlines, or 576ths (PAL) / 480ths (NTSC) of the TV tube height) */
+  bool preserve_aspect_ratio;      /* useful flag */
+  bool using_pan_and_scan_vectors; /* useful flag */
+  bool allow_tv [tvm_LIMIT]; /* intermediate flags, used to determine allowed items in scaling_mode[] below */
+  static struct /* contains all the precalculated details needed to select the best combination of STB / TV scaling for a particular clip */
+  {
+    const fixed total_factor;
+    const vertical_scaling_factor stb_factor;
+    const tv_mode tv_factor;
+    bool allowed;
+  }
+  scaling_mode [vsf_LIMIT * tvm_LIMIT] =
+  {                                         /* factor */
+    { 0x51111, vsf_x4,    tvm_16_9       }, /* 5.3333 */
+    { 0x46EEF, vsf_x4,    tvm_14_9       }, /* 4.6667 */
+    { 0x3CCCD, vsf_x4,    tvm_full_frame }, /* 4      */
+    { 0x3CCCD, vsf_x4,    tvm_anamorphic }, /* 4      */
+    { 0x2D99A, vsf_x4,    tvm_collapsed  }, /* 3      */
+    { 0x28889, vsf_x2,    tvm_16_9       }, /* 2.6667 */
+    { 0x23777, vsf_x2,    tvm_14_9       }, /* 2.3333 */
+    { 0x1E666, vsf_x2,    tvm_full_frame }, /* 2      */
+    { 0x1E666, vsf_x2,    tvm_anamorphic }, /* 2      */
+    { 0x1E666, vsf_x1_5,  tvm_16_9       }, /* 2      */
+    { 0x1A99A, vsf_x1_5,  tvm_14_9       }, /* 1.75   */
+    { 0x16CCD, vsf_x2,    tvm_collapsed  }, /* 1.5    */
+    { 0x16CCD, vsf_x1_5,  tvm_full_frame }, /* 1.5    */
+    { 0x16CCD, vsf_x1_5,  tvm_anamorphic }, /* 1.5    */
+    { 0x14444, vsf_x1,    tvm_16_9       }, /* 1.3333 */
+    { 0x11BBC, vsf_x1,    tvm_14_9       }, /* 1.1667 */
+    { 0x1119A, vsf_x1_5,  tvm_collapsed  }, /* 1.125  */
+    { 0x0F333, vsf_x1,    tvm_full_frame }, /* 1      */
+    { 0x0F333, vsf_x1,    tvm_anamorphic }, /* 1      */
+    { 0x0F333, vsf_x0_75, tvm_16_9       }, /* 1      */
+    { 0x0D4CD, vsf_x0_75, tvm_14_9       }, /* 0.875  */
+    { 0x0B666, vsf_x1,    tvm_collapsed  }, /* 0.75   */
+    { 0x0B666, vsf_x0_75, tvm_full_frame }, /* 0.75   */
+    { 0x0B666, vsf_x0_75, tvm_anamorphic }, /* 0.75   */
+    { 0x0A222, vsf_x0_5,  tvm_16_9       }, /* 0.6667 */
+    { 0x08DDE, vsf_x0_5,  tvm_14_9       }, /* 0.5833 */
+    { 0x088CD, vsf_x0_75, tvm_collapsed  }, /* 0.5625 */
+    { 0x0799A, vsf_x0_5,  tvm_full_frame }, /* 0.5    */
+    { 0x0799A, vsf_x0_5,  tvm_anamorphic }, /* 0.5    */
+    { 0x05B33, vsf_x0_5,  tvm_collapsed  }  /* 0.375  */
+  };
+  unsigned int first_allowed_scaling_mode = -1; /* index into scaling_mode[] of first allowed mode */
+  unsigned int last_allowed_scaling_mode = -1;  /* index into scaling_mode[] of last allowed mode */
+  unsigned int mode;                            /* counter; later, the index of the selected mode */
+  unsigned char group_settings [4] = { 0xFF, 0xFF, 0xFF, 0xFF };
+  scart_feature scart_setting;
+  
+  dprintf (("IRQ", "PositionVideo\n"));
+  
+  /* Calculate the active area and protected area */
+  if (active_formats[active_format].active == (fixed) 0)
+  {
+    /* Active format is as-the-coded-frame */
+    Stream.active_aspect_ratio = Stream.protected_aspect_ratio = Stream.display_frames->seq.coded_aspect_ratio;
+    Stream.active_area_is_at_top = false;
+    Stream.active_horizontal_size = Stream.protected_horizontal_size = Stream.display_frames->seq.coded_horizontal_size;
+    Stream.active_vertical_size = Stream.protected_vertical_size = Stream.display_frames->seq.coded_vertical_size;
+  }
+  else
+  {
+    fixed ratio_of_ratios;
+    Stream.active_aspect_ratio = active_formats[active_format].active;
+    Stream.protected_aspect_ratio = active_formats[active_format].protect;
+    Stream.active_area_is_at_top = active_formats[active_format].top;
+    ratio_of_ratios = Fixed_FixedDivide (Stream.active_aspect_ratio, Stream.display_frames->seq.coded_aspect_ratio);
+    if (ratio_of_ratios > 0x10000)
+    {
+      /* Wider aspect: keep same width, but use reduced height */
+      Stream.active_horizontal_size = Stream.display_frames->seq.coded_horizontal_size;
+      Stream.active_vertical_size = Fixed_FixedDivide (Stream.display_frames->seq.coded_vertical_size << 16, ratio_of_ratios) >> 16;
+    }
+    else
+    {
+      /* Narrower aspect: keep same height, but use reduced width */
+      Stream.active_horizontal_size = (Stream.display_frames->seq.coded_horizontal_size * ratio_of_ratios) >> 16;
+      Stream.active_vertical_size = Stream.display_frames->seq.coded_vertical_size;
+    }
+    ratio_of_ratios = Fixed_FixedDivide (Stream.protected_aspect_ratio, Stream.active_aspect_ratio);
+    if (ratio_of_ratios > 0x10000)
+    {
+      /* Wider aspect: keep same width, but use reduced height */
+      Stream.protected_horizontal_size = Stream.active_horizontal_size;
+      Stream.protected_vertical_size = Fixed_FixedDivide (Stream.active_vertical_size << 16, ratio_of_ratios) >> 16;
+    }
+    else
+    {
+      /* Narrower aspect: keep same height, but use reduced width */
+      Stream.protected_horizontal_size = (Stream.active_horizontal_size * ratio_of_ratios) >> 16;
+      Stream.protected_vertical_size = Stream.active_vertical_size;
+    }
+  }
+  
+  /* Calculate the required horizontal and vertical scaling for the given ScalingType */
+  if (Stream.video_parms.scaling_type.type == st_free && Stream.video_parms.scaling_type.param.free.preference == vm_zoom && active_format == 8 /* ie not specified */ &&
+      ((Stream.video_parms.scaling_type.param.free.ratio == tv_regular && Stream.display_frames->seq.display_aspect_ratio >= 0x15555) ||
+       (Stream.video_parms.scaling_type.param.free.ratio == tv_widescreen && Stream.display_frames->seq.display_aspect_ratio >= 0x1C71C)))
+  {
+    using_pan_and_scan_vectors = true;
+    source_width = Stream.display_frames->seq.display_horizontal_size;
+    source_height = Stream.display_frames->seq.display_vertical_size;
+    source_aspect = Stream.display_frames->seq.display_aspect_ratio;
+    ideal_dest_height = (Module_Display525_60 ? 480 : 576);
+    preserve_aspect_ratio = true;
+  }
+  else
+  {
+    using_pan_and_scan_vectors = false;
+    switch (Stream.video_parms.scaling_type.type)
+    {
+      default:
+      case st_free:
+        switch (Stream.video_parms.scaling_type.param.free.preference)
+        {
+          default:
+          case vm_box:
+            source_width = Stream.protected_horizontal_size;
+            source_height = Stream.protected_vertical_size;
+            source_aspect = Stream.protected_aspect_ratio;
+            if (source_aspect > (Stream.video_parms.scaling_type.param.free.ratio == tv_widescreen ? 0x1C71C : 0x15555))
+            {
+              ideal_dest_height = (Module_Display525_60 ? 480 : 576) * (Stream.video_parms.scaling_type.param.free.ratio == tv_widescreen ? 0x1C71C : 0x15555) / source_aspect;
+            }
+            else
+            {
+              ideal_dest_height = (Module_Display525_60 ? 480 : 576);
+            }
+            preserve_aspect_ratio = true;
+            break;
+          case vm_zoom:
+            source_width = Stream.active_horizontal_size;
+            source_height = Stream.active_vertical_size;
+            source_aspect = Stream.active_aspect_ratio;
+            if (source_aspect > (Stream.video_parms.scaling_type.param.free.ratio == tv_widescreen ? 0x1C71C : 0x15555))
+            {
+              ideal_dest_height = (Module_Display525_60 ? 480 : 576);
+            }
+            else
+            {
+              ideal_dest_height = (Module_Display525_60 ? 480 : 576) * (Stream.video_parms.scaling_type.param.free.ratio == tv_widescreen ? 0x1C71C : 0x15555) / source_aspect;
+            }
+            preserve_aspect_ratio = true;
+            break;
+          case vm_stretch:
+            source_width = Stream.active_horizontal_size;
+            source_height = Stream.active_vertical_size;
+            ideal_dest_width = 720;
+            ideal_dest_height = (Module_Display525_60 ? 480 : 576);
+            preserve_aspect_ratio = false;
+            break;
+        }
+        break;
+      case st_fixed_width:
+        source_width = Stream.active_horizontal_size;
+        source_height = Stream.active_vertical_size;
+        source_aspect = Stream.active_aspect_ratio;
+        ideal_dest_height = (Stream.video_parms.scaling_type.param.fixed_width.width >> 1) * (Module_Display525_60 ? 0x0E38E : 0x11111);
+        if (Stream.video_parms.scaling_type.param.fixed_width.anamorphic)
+        {
+          ideal_dest_height = ideal_dest_height * 4 / (3 * source_aspect);
+        }
+        else
+        {
+          ideal_dest_height /= source_aspect;
+        }
+        preserve_aspect_ratio = true;
+        break;
+      case st_fixed_height:
+        source_width = Stream.active_horizontal_size;
+        source_height = Stream.active_vertical_size;
+        source_aspect = Stream.active_aspect_ratio;
+        ideal_dest_height = Stream.video_parms.scaling_type.param.fixed_height.height >> 1;
+        preserve_aspect_ratio = true;
+        break;
+      case st_fixed:
+        source_width = Stream.active_horizontal_size;
+        source_height = Stream.active_vertical_size;
+        ideal_dest_width = Stream.video_parms.scaling_type.param.fixed.width >> 1;
+        if (ideal_dest_width == 0) ideal_dest_width = 1;
+        ideal_dest_height = Stream.video_parms.scaling_type.param.fixed.height >> 1;
+        if (ideal_dest_height == 0) ideal_dest_height = 1;
+        preserve_aspect_ratio = false;
+        break;
+    }
+  }
+  
+  if (Module_Display525_60 || Stream.video_parms.scaling_type.type != st_free || (Stream.video_parms.scaling_type.type == st_free && Stream.video_parms.scaling_type.param.free.preference == vm_stretch))
+  {
+    allow_tv [tvm_collapsed]  = allow_tv [tvm_anamorphic] = allow_tv [tvm_14_9] = allow_tv [tvm_16_9] = false;
+    allow_tv [tvm_full_frame] = true;
+    if (((Stream.video_parms.scaling_type.type == st_fixed_width || Stream.video_parms.scaling_type.type == st_fixed_height) && Stream.video_parms.scaling_type.param.fixed_width.anamorphic) ||
+        (Stream.video_parms.scaling_type.type == st_free && Stream.video_parms.scaling_type.param.free.preference == vm_stretch && Stream.video_parms.scaling_type.param.free.ratio == tv_widescreen))
+    {
+      allow_tv [tvm_full_frame] = false;
+      allow_tv [tvm_anamorphic] = true;
+    }
+  }
+  else
+  {
+    allow_tv [tvm_collapsed]  = Stream.video_parms.scaling_type.param.free.ratio == tv_regular &&
+                                (Stream.video_parms.scaling_type.param.free.use_SCART_pin_8 || Stream.video_parms.scaling_type.param.free.use_WSS) &&
+                                source_aspect >= 0x1B8E4 /* 15�:9 */;
+    allow_tv [tvm_full_frame] = Stream.video_parms.scaling_type.param.free.ratio == tv_regular ||
+                                (Stream.video_parms.scaling_type.param.free.ratio == tv_widescreen &&
+                                 (Stream.video_parms.scaling_type.param.free.use_SCART_pin_8 || Stream.video_parms.scaling_type.param.free.use_WSS) &&
+                                 source_aspect <= 0x1638E /* 12�:9 */);
+    allow_tv [tvm_anamorphic] = Stream.video_parms.scaling_type.param.free.ratio == tv_widescreen;
+    allow_tv [tvm_14_9]       = Stream.video_parms.scaling_type.param.free.ratio == tv_widescreen &&
+                                Stream.video_parms.scaling_type.param.free.use_WSS &&
+                                source_aspect <= 0x19C72 /* 14�:9 */;
+    allow_tv [tvm_16_9]       = Stream.video_parms.scaling_type.param.free.ratio == tv_widescreen &&
+                                Stream.video_parms.scaling_type.param.free.use_WSS;
+  }
+  
+  for (mode = 0; mode < (vsf_LIMIT * tvm_LIMIT); mode++)
+  {
+    scaling_mode[mode].allowed = allow_tv[scaling_mode[mode].tv_factor] && (Stream.display_frames->progressive_frame || (scaling_mode[mode].stb_factor != vsf_x1_5 && scaling_mode[mode].stb_factor != vsf_x4));
+    if (scaling_mode[mode].allowed)
+    {
+      last_allowed_scaling_mode = mode;
+      if (first_allowed_scaling_mode == -1) first_allowed_scaling_mode = mode;
+    }
+  }
+  
+  vertical_upscaling = Fixed_IntDivide (ideal_dest_height, source_height);
+  for (mode = first_allowed_scaling_mode; mode <= last_allowed_scaling_mode; mode++)
+  {
+    if (scaling_mode[mode].allowed && (vertical_upscaling > scaling_mode[mode].total_factor || mode == last_allowed_scaling_mode))
+    {
+      break;
+    }
+  }
+  
+  if (preserve_aspect_ratio)
+  {
+    fixed numerator;
+    fixed denominator;
+    numerator = (Module_Display525_60 ? 0x0E38E : 0x11111) * source_width;
+    if (scaling_mode[mode].tv_factor == tvm_collapsed || scaling_mode[mode].tv_factor == tvm_anamorphic)
+    {
+      numerator = Fixed_FixedMultiply (numerator, 0x15555);
+    }
+    denominator = Fixed_FixedMultiply (source_aspect * source_height, upscaling_lut[scaling_mode[mode].stb_factor]);
+    horizontal_downscaling = Fixed_FixedDivide (numerator, denominator);
+  }
+  else
+  {
+    horizontal_downscaling = Fixed_IntDivide (source_width - 1, ideal_dest_width - 1);
+  }
+  if (horizontal_downscaling > 0x20000) horizontal_downscaling = 0x20000;
+  if (horizontal_downscaling < 1) horizontal_downscaling = 1;
+  
+  if (Stream.video_parms.scaling_type.type == st_free)
+  {
+    centre_x = 360 << 8;
+    if (!active_formats[active_format].top)
+    {
+      /* Active area is at centre of coded area; position their common centre at the centre of the TV */
+      centre_y = Module_Display525_60 ? (240 << 7) : (288 << 7);
+    }
+    else
+    {
+      /* Active area is at top of coded area; position their common top at the top of the TV */
+      centre_y = (Stream.display_frames->seq.coded_vertical_size * upscaling_lut[scaling_mode[mode].stb_factor]) >> 6;
+    }
+    if (using_pan_and_scan_vectors)
+    {
+      bool horizontal_negative = (frame_centre_horizontal_offset < 0);
+      bool vertical_negative = (frame_centre_vertical_offset < 0);
+      fixed horizontal_offset = Fixed_FixedDivide (abs(frame_centre_horizontal_offset) << 4, horizontal_downscaling);
+      fixed vertical_offset = Fixed_FixedMultiply (abs(frame_centre_vertical_offset) << 3, upscaling_lut[scaling_mode[mode].stb_factor]);
+      if (horizontal_negative)
+      {
+        centre_x -= horizontal_offset;
+      }
+      else
+      {
+        centre_x += horizontal_offset;
+      }
+      if (vertical_negative)
+      {
+        centre_y -= vertical_offset;
+      }
+      else
+      {
+        centre_y += vertical_offset;
+      }
+    }
+  }
+  else
+  {
+    /* Use centre-x and centre-y from ScalingType parameters (in same place for ScalingTypes 1-3); adjust for VIDC borders and graphics origin */
+    int in_block [3] = { 136, 137, -1 };
+    int out_block [2];
+    _swix (OS_ReadVduVariables, _INR(0,1), in_block, out_block);
+    centre_x = (Stream.video_parms.scaling_type.param.fixed.x + Module_OriginXOffset + out_block [0]) * 128;
+    centre_y = ((Module_Display525_60 ? 960 : 1152) - Stream.video_parms.scaling_type.param.fixed.y - Module_OriginYOffset - out_block [1]) * 64;
+    if (active_formats[active_format].top)
+    {
+      /* Coded frame centre is below active area centre, so adjust centre_y appropriately */
+      centre_y += ((Stream.display_frames->seq.coded_vertical_size - Stream.active_vertical_size) * upscaling_lut[scaling_mode[mode].stb_factor]) >> 7;
+    }
+  }
+  
+  /* Do lower-level work to set up scaling */
+  static_SetUpScalingRegisters (centre_x, centre_y, horizontal_downscaling, scaling_mode[mode].stb_factor);
+  
+  /* Do overriding widescreen signalling, if necessary */
+  if (Stream.video_parms.scaling_type.type == st_free && Stream.video_parms.scaling_type.param.free.use_SCART_pin_8)
+  {
+    if (scaling_mode[mode].tv_factor == tvm_collapsed || scaling_mode[mode].tv_factor == tvm_anamorphic)
+    {
+      scart_setting = scart_enable;
+    }
+    else
+    {
+      scart_setting = scart_disable;
+    }
+  }
+  else
+  {
+    scart_setting = scart_dontcare;
+  }
+  WSS_SetSCART (NULL, NULL, NULL, &scart_setting);
+  if (Stream.video_parms.scaling_type.type == st_free && Stream.video_parms.scaling_type.param.free.use_WSS)
+  {
+    switch (scaling_mode[mode].tv_factor)
+    {
+      default:
+      case tvm_full_frame:
+        group_settings [0] = 0 | 8;
+        break;
+      case tvm_collapsed:
+      case tvm_anamorphic:
+        group_settings [0] = 7;
+        break;
+      case tvm_14_9:
+        if (active_formats[active_format].top)
+        {
+          group_settings [0] = 2;
+        }
+        else
+        {
+          group_settings [0] = 1;
+        }
+        break;
+      case tvm_16_9:
+        if (active_formats[active_format].top)
+        {
+          group_settings [0] = 4;
+        }
+        else
+        {
+          group_settings [0] = 3 | 8;
+        }
+        break;
+    }
+    group_settings [1] = Stream.display_frames->progressive_frame;
+  }
+  else
+  {
+    group_settings [0] = 0;
+  }
+  WSS_Set (group_settings, true, NULL, NULL);
+  
+  Stream.vid_flags.display_needs_setting_up = false;
+}
+
+/******	static_SetUpScalingRegisters() *************************************
+
+Purpose:	Lower level than static_PositionVideo(), this takes the
+		display_relative frame centre and the H/V scaling factors,
+		and sets up the various registers to best achieve them
+In:		Frame centre, in 256ths of a luma sample and 256ths of a
+		field scanline; horizontal downscaling and vertical upscaling
+		ratios, both of which have already been verified to be within
+		the capabilities of the 3520
+
+***************************************************************************/
+
+static void static_SetUpScalingRegisters (signed int centre_x, signed int centre_y, fixed horizontal_downscaling, vertical_scaling_factor vertical_scaling_index)
+{
+  fixed vertical_upscaling = upscaling_lut [vertical_scaling_index];
+  unsigned int display_width;  /* in 256ths of a luma sample */
+  signed int display_x_start;  /* in 256ths of a luma sample */
+  unsigned int pan_offset = 0; /* in 256ths of a luma sample */
+  unsigned int real_display_x_start = 0; /* in whole luma samples */
+  unsigned int real_display_x_end = 0;   /* in whole luma samples */
+  unsigned int display_height; /* in 256ths of a field scanline */
+  signed int display_y_start;  /* in 256ths of a field scanline (down from top) */
+  unsigned int scan_offset = 0;      /* in scanlines output from vertical filter (field or frame scanlines) */
+  unsigned int real_display_y_start; /* in whole field scanlines (down from top) */
+  unsigned int real_display_y_end;   /* in whole field scanlines (down from top) */
+  bool off_screen = false;
+  unsigned int real_YDO = 0;
+  unsigned int real_YDS = 0;
+  static enum { none = 0, down = 1, up = 3 } UDS_lut [2][6] = { { down, none, none, none, up, none }, { down, none, none, none, none, up } };
+  static unsigned char                       VFC_lut [2][6] = { { 1,    1,    1,    0,    1,  0    }, { 3,    3,    3,    6,    6,    6  } };
+  static enum { off = 0, on = (VID_DCF_LB>>16) } LB_lut [6] = { off,  on,   off,  on,   off,  off };
+  bool filter_does_scaling;
+  bool vertically_downscaled;
+  bool letterbox_used;
+  unsigned int lines_output_from_filter = Stream.display_frames->seq.coded_vertical_size;
+  filter_does_scaling = (VFC_lut [Stream.display_frames->progressive_frame] [vertical_scaling_index] > 3);
+  vertically_downscaled = (UDS_lut [Stream.display_frames->progressive_frame] [vertical_scaling_index] == down);
+  letterbox_used = (LB_lut [vertical_scaling_index] == on);
+  if (!filter_does_scaling) lines_output_from_filter /= 2;
+  
+  /* Calculate the "ideal" positions and scales */
+  
+  display_width = ((Stream.display_frames->seq.coded_horizontal_size - 1) << 16) / (horizontal_downscaling >> 8); /* in 256ths of a luma sample */
+  display_x_start = centre_x - display_width / 2; /* in 256ths of a luma sample */
+  display_height = ((Stream.display_frames->seq.coded_vertical_size / 2) * vertical_upscaling) >> 8; /* in 256ths of a field scanline */
+  display_y_start = centre_y - display_height / 2; /* in 256ths of a field scanline */
+  
+  /* Calculate the actual horizontal parameters, adjusting for hardware deficiencies */
+  
+  if (display_x_start < 0)
+  {
+    real_display_x_start = 0;
+  }
+  else
+  {
+    real_display_x_start = ((display_x_start + 0x1FF) &~ 0x1FF) >> 8; /* start at first 2-sample boundary at or after the theoretical start */
+    if (real_display_x_start >= 720)
+    {
+      off_screen = true;
+    }
+  }
+  if ((display_x_start + (signed) display_width) <= 0)
+  {
+    off_screen = true;
+  }
+  else
+  {
+    real_display_x_end = (display_x_start + display_width) >> 8; /* automatically rounded down to the next whole luma sample */
+    real_display_x_end = MIN(real_display_x_end, 708); /* Give the 3520 an extra .89 탎 gap between displaying the last sample and the HSync */
+                                                       /* Without this, some combinations of horizontal scaling, left border and scan vector */
+                                                       /* can lead to horizontal dashes appearing in the resultant video!                    */
+  }
+  pan_offset = (real_display_x_start << 8) - display_x_start; /* 256ths of an (output) luma sample */
+  pan_offset = Fixed_FixedMultiply (pan_offset, horizontal_downscaling); /* convert to 256ths of an input sample */
+  if (letterbox_used && (pan_offset & 0x800) != 0)
+  {
+    /* The oh-so-wonderful 3520 corrupts the display if the letterbox circuitry is in use and it has to start in the latter half of a macroblock */
+    unsigned int new_pan_offset_lwm = (pan_offset + 0x800) &~ 0x7FF;
+    real_display_x_start += ((Fixed_IntDivide (new_pan_offset_lwm - pan_offset, horizontal_downscaling) + 0x1FF) &~ 0x1FF) >> 8;
+    pan_offset = (real_display_x_start << 8) - display_x_start; /* 256ths of an (output) luma sample */
+    pan_offset = Fixed_FixedMultiply (pan_offset, horizontal_downscaling); /* convert to 256ths of an input sample */
+  }
+  if (real_display_x_start >= real_display_x_end)
+  {
+    off_screen = true;
+  }
+  
+  /* Calculate the actual vertical parameters, adjusting for hardware deficiencies */
+  
+  if (display_y_start < 0)
+  {
+    scan_offset = Fixed_FixedDivide (-display_y_start, vertical_upscaling); /* 256ths of an input sample */
+    if (filter_does_scaling) scan_offset <<= 1; /* convert to 256ths lines output from the vertical filter */
+    /* Round up the next highest whole number of scanlines */
+    scan_offset = (scan_offset + 0xFF) >> 8;
+    /* When downscaling, only scan even numbers of input lines */
+    if (vertically_downscaled)
+    {
+      if ((scan_offset & 1) == 1) scan_offset += 1;
+    }
+    /* With 3/4 or 3/2 scaling, we get artifacts if VID_SCN isn't a multiple of 4 */
+    else if (letterbox_used)
+    {
+      scan_offset = (scan_offset + 3) &~ 3;
+    }
+    if (scan_offset >= lines_output_from_filter)
+    {
+      /* In this case, the image is off the top of the screen */
+      off_screen = true;
+      real_display_y_start = 0;
+    }
+    else if (scan_offset < 0x200)
+    {
+      /* This is the normal case: convert back to 256ths of an output sample, and calculate real_display_y_start - may be beyond line 0! */
+      unsigned int scaled_scan = Fixed_FixedMultiply (scan_offset << 8, vertical_upscaling);
+      if (filter_does_scaling) scaled_scan >>= 1;
+      real_display_y_start = (display_y_start + (signed) scaled_scan + 0x80) >> 8;
+    }
+    else
+    {
+      /* But when the size of VID_SCN is a limitation, just position the video as high as possible */
+      real_display_y_start = 0;
+      if (vertically_downscaled)
+      {
+        scan_offset = 0x1FE;
+      }
+      else if (letterbox_used)
+      {
+        scan_offset = 0x1FC;
+      }
+      else
+      {
+        scan_offset = 0x1FF;
+      }
+    }
+  }
+  else
+  {
+    scan_offset = 4; /* skip first scanline (is often a half-line, so looks horrid) but keep to the multiple-of-4 rule */
+    real_display_y_start = ((display_y_start + 0x80) >> 8) + (filter_does_scaling ? 3 : 1); /* start at next-nearest field scanline */
+    if (real_display_y_start > (Module_Display525_60 ? 240 : 288))
+    {
+      off_screen = true;
+    }
+  }
+  real_display_y_end = Fixed_FixedMultiply (lines_output_from_filter - scan_offset, vertical_upscaling);
+  if (filter_does_scaling) real_display_y_end >>= 1;
+  real_display_y_end += real_display_y_start;
+  if (vertical_scaling_index == vsf_x4) real_display_y_end -= 1; /* mask off the flickering last line that's present in this mode only */
+  real_display_y_end = MIN(real_display_y_end, (Module_Display525_60 ? 240 : 288));
+  
+  /* Finally, write the registers */
+  
+  if (off_screen)
+  {
+    VID_DCF_0 &= ~VID_DCF_EVD>>0; /* disable display */
+  }
+  else
+  {
+    WRITE_VID_LSR((horizontal_downscaling >> 8) - 1);
+    WRITE_VID_UDS(UDS_lut [Stream.display_frames->progressive_frame] [vertical_scaling_index]);
+    WRITE_VID_DCF_0((VID_DCF_0 & 0xF8) | VFC_lut [Stream.display_frames->progressive_frame] [vertical_scaling_index]);
+    Deferred_VID_DCF_LB = LB_lut [vertical_scaling_index]; /* this bit isn't latched, so we have to write it on the next VSync */
+    Deferred_VID_DCF_LB_Pending = true;
+    if (Module_Display525_60)
+    {
+      WRITE_VID_XDO(102 + real_display_x_start - 1);   /* -1 to get the chroma phases right on this system */
+      WRITE_VID_XDS(102 + real_display_x_end + 6 - 1);
+      real_YDO = 21 + real_display_y_start;
+      real_YDS = 21 + real_display_y_end - 1;
+    }
+    else
+    {
+      WRITE_VID_XDO(112 + real_display_x_start - 1);   /* -1 to get the chroma phases right on this system */
+      WRITE_VID_XDS(112 + real_display_x_end + 6 - 1);
+      real_YDO = 22 + real_display_y_start;
+      real_YDS = 22 + real_display_y_end - 1;
+    }
+    if (real_YDO < 256)
+    {
+      DisplayFrameHackyScanOffset = 0;
+      VID_YDO = real_YDO;
+    }
+    else
+    {
+      unsigned int size_of_row_pair = vertical_upscaling >> 12; /* 2 rows * 16 samples / 2 fields * fixed-point >> 16 */
+      DisplayFrameHackyScanOffset = (real_YDO - 0xFF + size_of_row_pair - 1) / size_of_row_pair;
+      VID_YDO = real_YDO - (DisplayFrameHackyScanOffset * size_of_row_pair);
+    }
+    if (real_YDS < 128)
+    {
+      VID_RYDS = 1;
+      VID_YDS = real_YDS;
+    }
+    else
+    {
+      VID_RYDS = 0;
+      VID_YDS = real_YDS - 128;
+    }
+    WRITE_VID_PAN(pan_offset >> 8);
+    WRITE_VID_LSO(pan_offset);
+    WRITE_VID_CSO(pan_offset >> 1);
+    WRITE_VID_SCN(scan_offset);
+    WRITE_VID_XFS(((Stream.display_frames->seq.coded_horizontal_size + 15) / 16) * ((Stream.display_frames->seq.coded_vertical_size + 15) / 16));
+    WRITE_VID_XFW((Stream.display_frames->seq.coded_horizontal_size + 15) / 16);
+    static_SetDFP ();
+    VID_DCF_0 |= VID_DCF_EVD>>0; /* enable display */
+  }
+}
+
+/******	static_SetDFP() ****************************************************
+
+Purpose:	Sets VID_DFP and VID_XFA - part of the bodge to work around
+		the fact that VID_YDO is only 8 bits wide
+
+***************************************************************************/
+
+static void static_SetDFP (void)
+{
+  if (DisplayFrameHackyScanOffset == 0)
+  {
+    WRITE_VID_DFP(Stream.display_frames->frame_buffer);
+    WRITE_VID_XFA(0);
+  }
+  else
+  {
+    unsigned int luma_offset = ((Stream.display_frames->seq.coded_horizontal_size + 15) / 16) * DisplayFrameHackyScanOffset * 2;
+    frame_t *best_frame = Stream.display_frames; /* emergency fallback */
+    frame_t *rover;
+    for (rover = Stream.display_frames; rover != NULL; rover = rover->display_link)
+    {
+      if (rover->lastpic->picture_coding_type != B_PICTURE)
+      {
+        best_frame = rover;
+        break;
+      }
+    }
+    WRITE_VID_DFP(best_frame->frame_buffer - luma_offset);
+    WRITE_VID_XFA(luma_offset / 2);
+  }
 }

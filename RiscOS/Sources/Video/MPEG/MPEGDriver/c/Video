@@ -53,6 +53,10 @@ Date		Who	Change
 			deferred set-speed now applied when going faster as well as when going slower;
 			implemented MPEGVideo_ReadParameters 3;
 			various initialisations for synchronisation added
+02/05/2000	BJGA	Changed format of ScalingType 0 parameters (allows partial defaulting to NVRAM settings);
+			now returns internal line 23 and SCART WSS states from MPEGVideo_SetVideoParameters 1 and 2;
+			enumeration of line 23 WSS states made more sane (ignores parity bit);
+			internal WSS states deactivated on CloseStream
 
 ***************************************************************************/
 
@@ -67,6 +71,7 @@ Date		Who	Change
 #include "DebugLib/DebugLib.h"
 #include "MPEG/MPEGCtrl.h"
 #include "MPEG/MPEGVideo.h"
+#include "NVRAM.h"
 
 #include "Defs.h"
 #include "IRQ.h"
@@ -90,6 +95,7 @@ Date		Who	Change
 
 static _kernel_oserror *static_VideoStart (void);
 static unsigned int static_VideoStop (bool play_out);
+static void static_CompleteScalingTypeParameters (bool recache);
 
 /********************/
 /* Public variables */
@@ -130,6 +136,16 @@ _kernel_oserror *Video_SWIOpenStream (stream_flags_t *flags, control_stream_hand
   Stream.s_flags.audio_present = old_audio_present_flag;
   Stream.csh = csh;
   Stream.video_parms = *vps;
+  if (!Stream.video_parms.scaling_type_present)
+  {
+    Stream.video_parms.scaling_type.type = st_free;
+    Stream.video_parms.scaling_type.param.free.valid_ratio =
+      Stream.video_parms.scaling_type.param.free.valid_WSS =
+      Stream.video_parms.scaling_type.param.free.valid_preference =
+      Stream.video_parms.scaling_type.param.free.reserved1 =
+      Stream.video_parms.scaling_type.param.free.reserved2 = 0;
+  }
+  static_CompleteScalingTypeParameters (true);
   
   /* Initialise various variables */
   Stream.rs_flags.video_present = Stream.s_flags.video_present;
@@ -146,6 +162,7 @@ _kernel_oserror *Video_SWIOpenStream (stream_flags_t *flags, control_stream_hand
   Stream.video.since_open.picture_decode_errors = 0;
   Stream.video.since_open.severe_errors = 0;
   Stream.video.since_open.pipeline_errors = 0;
+  Stream.video.since_open.internal_resets = 0;
   Stream.video.since_open.underruns = 0;
   
   /* Initialise the new stream */
@@ -266,6 +283,8 @@ Out:		Pointer to error block
 _kernel_oserror *Video_SWICloseStream (unsigned int flags, stream_handle_t vsh)
 {
   _kernel_oserror *e = NULL;
+  unsigned char group_settings [4] = { 0, 0xFF, 0xFF, 0xFF };
+  scart_feature scart_setting = scart_dontcare;
   IGNORE(flags);
   IGNORE(vsh);
   dprintf (("Video", "SWICloseStream\n"));
@@ -277,7 +296,11 @@ _kernel_oserror *Video_SWICloseStream (unsigned int flags, stream_handle_t vsh)
   static_VideoStop (Stream.video.speed_indicator == 1 && Stream.video.state == stream_open && !Stream.rs_flags.trick_play_mode);
   
   /* We now only blank the video output on CloseStream, not on ResetStream */
-  VID_DCF_0 &= ~ VID_DCF_EVD;
+  VID_DCF_0 &= ~VID_DCF_EVD>>0;
+  
+  /* Stop overriding the widescreen signalling */
+  WSS_SetSCART (NULL, NULL, NULL, &scart_setting);
+  WSS_Set (group_settings, true, NULL, NULL);
   
   Stream.s_flags.video_present = false;
   return e;
@@ -371,12 +394,12 @@ _kernel_oserror *Video_SWICardControl2 (unsigned int EOR_mask, unsigned int AND_
   
   if (irqs_were_enabled) _kernel_irqs_off ();
   
-  WSS_SetSCART (&rgb, &tvassert, NULL, scart_preserve);
+  WSS_SetSCART (&rgb, &tvassert, NULL, NULL);
   *return_old_value = ((rgb == scart_enable) ? UpdateControlRegister_CTRL1 : 0) | ((tvassert == scart_enable) ? UpdateControlRegister_CTRL0 : 0);
   *return_new_value = (*return_old_value & AND_mask) ^ EOR_mask;
   rgb = ((*return_new_value & UpdateControlRegister_CTRL1) != 0) ? scart_enable : scart_disable;
   tvassert = ((*return_new_value & UpdateControlRegister_CTRL0) != 0) ? scart_enable : scart_disable;
-  WSS_SetSCART (&rgb, &tvassert, NULL, scart_preserve);
+  WSS_SetSCART (&rgb, &tvassert, NULL, NULL);
   
   if (irqs_were_enabled) _kernel_irqs_on ();
   
@@ -546,49 +569,95 @@ Out:		Pointer to error block
 _kernel_oserror *Video_SWISetVideoParameters0 (stream_handle_t vsh, scaling_type_block_t *block_in_out)
 {
   _kernel_oserror *e = NULL;
+  scaling_type_block_t temp_scaling_type_block;
+  bool irqs_were_enabled = !_kernel_irqs_disabled ();
   IGNORE(vsh);
-  IGNORE(block_in_out);
+  
+  temp_scaling_type_block = *block_in_out;
+  if (irqs_were_enabled) _kernel_irqs_off ();
+  *block_in_out = Stream.video_parms.scaling_type;
+  if (temp_scaling_type_block.type != (scaling_type) -1)
+  {
+    Stream.video_parms.scaling_type = temp_scaling_type_block;
+    Stream.vid_flags.display_needs_setting_up = true;
+    static_CompleteScalingTypeParameters (false);
+  }
+  if (irqs_were_enabled) _kernel_irqs_on ();
   return e;
 }
 
 /******	Video_SWISetVideoParameters1() *************************************
 
 Purpose:	Handles MPEGVideo_SetVideoParameters 1
-In:		Video stream handle; new WSS state (or -1 just to read
-		old state); address to write old state into
+In:		New WSS state (or -1 just to read old state);
+		address to write old state into
 Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *Video_SWISetVideoParameters1 (stream_handle_t vsh, unsigned int new_state, unsigned int *return_old_state)
+_kernel_oserror *Video_SWISetVideoParameters1 (unsigned int new_state, unsigned int *return_old_ext_state, unsigned int *return_old_int_state)
 {
   _kernel_oserror *e = NULL;
   unsigned char new_group_settings [4] = { 0xFF, 0xFF, 0xFF, 0xFF };
-  unsigned char old_state;
-  IGNORE(vsh);
+  unsigned char old_state_ext;
+  unsigned char old_state_int;
   
-  new_group_settings [0] = new_state;
-  e = WSS_Set (new_group_settings, false, &old_state);
-  *return_old_state = old_state;
+  if (new_state == 0 || new_state == -1)
+  {
+    new_group_settings [0] = new_state;
+  }
+  else
+  {
+    unsigned int temp;
+    new_state -= 1;
+    temp = new_state ^ (new_state >> 1);
+    temp = temp ^ (temp >> 2);
+    if ((temp & 1) == 0) new_state ^= 8; /* set odd parity */
+    new_group_settings [0] = new_state;
+  }
+  e = WSS_Set (new_group_settings, false, &old_state_ext, &old_state_int);
+  if (old_state_ext == 0)
+  {
+    *return_old_ext_state = 0;
+  }
+  else
+  {
+    *return_old_ext_state = (old_state_ext & 7) + 1;
+  }
+  if (old_state_int == 0)
+  {
+    *return_old_int_state = 0;
+  }
+  else
+  {
+    *return_old_int_state = (old_state_int & 7) + 1;
+  }
   return e;
 }
 
 /******	Video_SWISetVideoParameters2() *************************************
 
 Purpose:	Handles MPEGVideo_SetVideoParameters 2
-In:		Video stream handle; new SCART pin 8 state (or -1 just to
-		read old state); address to write old state into
+In:		New SCART pin 8 state (or -1 just to read old state);
+		address to write old state into
 Out:		Pointer to error block
 
 ***************************************************************************/
 
-_kernel_oserror *Video_SWISetVideoParameters2 (stream_handle_t vsh, unsigned int new_state, unsigned int *return_old_state)
+_kernel_oserror *Video_SWISetVideoParameters2 (unsigned int new_state, unsigned int *return_old_ext_state, unsigned int *return_old_int_state)
 {
   _kernel_oserror *e = NULL;
-  IGNORE(vsh);
   
-  *return_old_state = new_state;
-  WSS_SetSCART (NULL, NULL, (scart_feature *) return_old_state, scart_preserve);
+  if (new_state == -1)
+  {
+    *return_old_ext_state = scart_preserve;
+  }
+  else
+  {
+    *return_old_ext_state = new_state;
+  }
+  *return_old_int_state = scart_preserve;
+  WSS_SetSCART (NULL, NULL, (scart_feature *) return_old_ext_state, (scart_feature *) return_old_int_state);
   return e;
 }
 
@@ -651,6 +720,7 @@ static _kernel_oserror *static_VideoStart (void)
     Stream.video.since_reset.picture_decode_errors = 0;
     Stream.video.since_reset.severe_errors = 0;
     Stream.video.since_reset.pipeline_errors = 0;
+    Stream.video.since_reset.internal_resets = 0;
     Stream.video.since_reset.underruns = 0;
   }
   Stream.video.first_PTS.msb = 0x80; /* flag that no PTS has been found yet */
@@ -670,6 +740,7 @@ static _kernel_oserror *static_VideoStart (void)
   Stream.vid_flags.stalled_while_closing = false;
   Stream.vid_flags.going_faster = false;
   Stream.vid_flags.going_slower = false;
+  Stream.vid_flags.display_needs_setting_up = true;
   Stream.fields_till_next_AU = -1; /* can't accidentally take value +1 before display is properly initialised */
   Stream.consecutive_pipeline_stalls = 0;
   Stream.decode_frames = NULL;
@@ -681,7 +752,7 @@ static _kernel_oserror *static_VideoStart (void)
   Stream.unused_frames->decode_link->decode_link->decode_link->decode_link = &(Stream.frame[4]);
   Stream.unused_frames->decode_link->decode_link->decode_link->decode_link->decode_link = NULL;
   /* If we are displaying one of the anchor frames, then we must decode the prefill anchor frames into the *other* two anchor frame buffers */
-  switch (VID_DFP & 0x3FFF)
+  switch ((VID_DFP & 0x3FFF) + 2 * (VID_XFA & 0x3FFF))
   {
     case SDRAM_FRAME_BUFFER_1_START/256:
       Stream.next_anchor_frame_buffer = SDRAM_FRAME_BUFFER_2_START/256;
@@ -750,4 +821,48 @@ static unsigned int static_VideoStop (bool play_out)
   IRQ_DisableVideoIRQs ();
   
   return discarded_data;
+}
+
+/******	static_CompleteScalingTypeParameters() *****************************
+
+Purpose:	Fills in missing ScalinType parameters from NVRAM
+In:		Whether to recache NVRAM settings
+
+***************************************************************************/
+
+static void static_CompleteScalingTypeParameters (bool recache)
+{
+  static TV_aspect shape;
+  static bool use_switching;
+  static viewing_mode mode;
+  
+  if (recache)
+  {
+    shape = tv_regular;
+    use_switching = false;
+    mode = vm_zoom;
+    _swix (NVRAM_Read, _INR(0,2), "TVAspectRatio", &shape, 0);
+    _swix (NVRAM_Read, _INR(0,2), "WideScreenSignalling", &use_switching, 0);
+    _swix (NVRAM_Read, _INR(0,2), "TVViewingMode", &mode, 0);
+  }
+  
+  if (Stream.video_parms.scaling_type.type == st_free)
+  {
+    if (!Stream.video_parms.scaling_type.param.free.valid_ratio)
+    {
+      Stream.video_parms.scaling_type.param.free.ratio = shape;
+      Stream.video_parms.scaling_type.param.free.valid_ratio = true;
+    }
+    if (!Stream.video_parms.scaling_type.param.free.valid_WSS)
+    {
+      Stream.video_parms.scaling_type.param.free.use_WSS = use_switching;
+      Stream.video_parms.scaling_type.param.free.use_SCART_pin_8 = use_switching;
+      Stream.video_parms.scaling_type.param.free.valid_WSS = true;
+    }
+    if (!Stream.video_parms.scaling_type.param.free.valid_preference)
+    {
+      Stream.video_parms.scaling_type.param.free.preference = mode;
+      Stream.video_parms.scaling_type.param.free.valid_preference = true;
+    }
+  }
 }

@@ -25,6 +25,7 @@ Date		Who	Change
 			video/audio (as appropriate) in the most recently opened stream
 27/03/2000	BJGA	Now outputs counts of PES packets and PTSs and the first PTS for
 			each of video and audio, and also audio frame-sync losses
+02/05/2000	BJGA	Split *AudioInfo from *VideoInfo; implemented *Configure commands
 
 ***************************************************************************/
 
@@ -32,12 +33,15 @@ Date		Who	Change
 /* Includes */
 /************/
 
+#include <stdlib.h>
 #include <stdio.h>
+#include <ctype.h>
 #include <stdbool.h>
 #include "kernel.h"
 #include "swis.h"
 
 #include "MPEG/MPEG2cCard.h"
+#include "NVRAM.h"
 
 #include "CLI.h"
 #include "Defs.h"
@@ -52,6 +56,8 @@ Date		Who	Change
 /**********************/
 /* Private prototypes */
 /**********************/
+
+static bool static_MatchStrings (const char *s1, const char *s2);
 
 /********************/
 /* Public variables */
@@ -83,8 +89,6 @@ Out:		Pointer to error block
 _kernel_oserror *CLI_VideoInfo (void)
 {
   _kernel_oserror *e = NULL;
-  printf ("Video:\n");
-  printf ("----------------------------------------------\n");
   printf ("                       Since open  Since reset\n");
   printf ("Bytes received:        %10u   %10u\n", Stream.video.since_open.amount_received, Stream.video.since_reset.amount_received);
   printf ("Bytes sent to 3520:    %10u   %10u\n", Stream.video.since_open.amount_sent, Stream.video.since_reset.amount_sent);
@@ -98,6 +102,7 @@ _kernel_oserror *CLI_VideoInfo (void)
   printf ("Severe errors:         %10u   %10u\n", Stream.video.since_open.severe_errors, Stream.video.since_reset.severe_errors);
   printf ("Pipeline errors:       %10u   %10u\n", Stream.video.since_open.pipeline_errors, Stream.video.since_reset.pipeline_errors);  
   printf ("Underruns:             %10u   %10u\n", Stream.video.since_open.underruns, Stream.video.since_reset.underruns);
+  printf ("Software auto-resets:  %10u   %10u\n", Stream.video.since_open.internal_resets, Stream.video.since_reset.internal_resets);
   printf ("\n");
   
   printf ("First PTS received:             ");
@@ -117,10 +122,23 @@ _kernel_oserror *CLI_VideoInfo (void)
   }
   else
   {
+    unsigned char frame_centre_offset;
+    unsigned char number_of_frame_centre_offsets = Stream.display_frames->seq.progressive_sequence
+      ? (Stream.display_frames->repeat_first_field ? (Stream.display_frames->top_field_first ? 3 : 2) : 1)
+      : (Stream.display_frames->repeat_first_field ? 3 : 2); /* pairs of field pictures have been amalgamated by this point */
+    
     printf ("\nSequence headers information:\n");
     printf ("    standard:                   %s\n", Stream.display_frames->seq.mpeg2 ? "MPEG-2" : "MPEG-1");
-    printf ("    display size:               X:%4u Y:%4u\n", Stream.display_frames->seq.display_horizontal_size, Stream.display_frames->seq.display_vertical_size);
-    printf ("    coded size:                 X:%4u Y:%4u\n", Stream.display_frames->seq.coded_horizontal_size, Stream.display_frames->seq.coded_vertical_size);
+    printf ("    coded size:                 X:%4u Y:%4u aspect:%2u.%04u:1\n",
+      Stream.display_frames->seq.coded_horizontal_size,
+      Stream.display_frames->seq.coded_vertical_size,
+      Stream.display_frames->seq.coded_aspect_ratio >> 16,
+      ((Stream.display_frames->seq.coded_aspect_ratio & 0xFFFF) * 10000) >> 16);
+    printf ("    display size:               X:%4u Y:%4u aspect:%2u.%04u:1\n",
+      Stream.display_frames->seq.display_horizontal_size,
+      Stream.display_frames->seq.display_vertical_size,
+      Stream.display_frames->seq.display_aspect_ratio >> 16,
+      ((Stream.display_frames->seq.display_aspect_ratio & 0xFFFF) * 10000) >> 16);
     printf ("    frame rate:                 %2u.%03u Hz\n", Stream.display_frames->seq.frame_rate / 1000, Stream.display_frames->seq.frame_rate % 1000);
     printf ("    bitrate:                    %u.%04u Mbit/s\n", Stream.display_frames->seq.bit_rate / 2500, Stream.display_frames->seq.bit_rate % 2500 * 4);
     printf ("    vbv_buffer_size:            %u Kbytes\n", Stream.display_frames->seq.vbv_buffer_size * 16);
@@ -254,22 +272,42 @@ _kernel_oserror *CLI_VideoInfo (void)
     printf ("    alternate_scan:             %u\n", Stream.display_frames->lastpic->picture_flags.bits.alternate_scan);
     printf ("    repeat_first_field:         %u\n", Stream.display_frames->repeat_first_field);
     printf ("    progressive_frame:          %u\n", Stream.display_frames->progressive_frame);
-    printf ("    active format:              ");
-    if (Stream.display_frames->lastpic->active_format > 15)
+    for (frame_centre_offset = 0; frame_centre_offset < number_of_frame_centre_offsets; frame_centre_offset ++)
     {
-      printf ("not specified\n");
+      printf ("    %s(%+05d.%04d,%+05d.%04d)\n", frame_centre_offset ? "                            " : "frame centre offset(s):     ",
+        Stream.display_frames->frame_centre_horizontal_offset [frame_centre_offset] / 16,
+        abs (Stream.display_frames->frame_centre_horizontal_offset [frame_centre_offset] % 16) * 625,
+        Stream.display_frames->frame_centre_vertical_offset [frame_centre_offset] / 16,
+        abs (Stream.display_frames->frame_centre_vertical_offset [frame_centre_offset] % 16) * 625);
     }
-    else
-    {
-      printf ("%d\n", Stream.display_frames->lastpic->active_format);
-    }
-    printf ("    active area size:           X:%4u Y:%4u\n", Stream.display_frames->seq.active_horizontal_size, Stream.display_frames->seq.active_vertical_size);
-    printf ("    protected area size:        X:%4u Y:%4u\n", Stream.display_frames->seq.protected_horizontal_size, Stream.display_frames->seq.protected_vertical_size);
+    printf ("    active format:              %d\n", Stream.display_frames->lastpic->active_format);
+    printf ("    active area:                X:%4u Y:%4u aspect:%2u.%04u:1 %s\n",
+      Stream.active_horizontal_size,
+      Stream.active_vertical_size,
+      Stream.active_aspect_ratio >> 16,
+      ((Stream.active_aspect_ratio & 0xFFFF) * 10000) >> 16,
+      Stream.active_area_is_at_top ? "top" : "centre");
+    printf ("    protected area:             X:%4u Y:%4u aspect:%2u.%04u:1 %s\n",
+      Stream.protected_horizontal_size,
+      Stream.protected_vertical_size,
+      Stream.protected_aspect_ratio >> 16,
+      ((Stream.protected_aspect_ratio & 0xFFFF) * 10000) >> 16,
+      Stream.active_area_is_at_top ? "top" : "centre");
   }
   
-  
-  printf ("\nAudio:\n");
-  printf ("----------------------------------------------\n");
+  return e;
+}
+
+/******	CLI_AudioInfo() ****************************************************
+
+Purpose:	Handles *AudioInfo
+Out:		Pointer to error block
+
+***************************************************************************/
+
+_kernel_oserror *CLI_AudioInfo (void)
+{
+  _kernel_oserror *e = NULL;
   printf ("                       Since open  Since reset\n");
   printf ("Bytes received:        %10u   %10u\n", Stream.audio.since_open.amount_received, Stream.audio.since_reset.amount_received);
   printf ("Bytes sent to 3520:    %10u   %10u\n", Stream.audio.since_open.amount_sent, Stream.audio.since_reset.amount_sent);
@@ -402,6 +440,187 @@ _kernel_oserror *CLI_VideoInfo (void)
   return e;
 }
 
+/******	CLI_TVAspect() *****************************************************
+
+Purpose:	Configures a new TV aspect ratio
+In:		TV aspect string
+Out:		Pointer to error block
+
+***************************************************************************/
+
+_kernel_oserror *CLI_TVAspect (const char *arg_string)
+{
+  _kernel_oserror *e = NULL;
+  int value;
+  
+  if (static_MatchStrings (arg_string, "4:3"))
+  {
+    value = 0;
+  }
+  else if (static_MatchStrings (arg_string, "16:9"))
+  {
+    value = 1;
+  }
+  else
+  {
+    e = Mess_GenerateError ("Err_BadAspect", 0, 0);
+  }
+  
+  if (!e)
+  {
+    _swix (NVRAM_Write, _INR(0,2), "TVAspectRatio", &value, 0);
+  }
+  
+  return e;
+}
+
+/******	CLI_TVAspect_Status() **********************************************
+
+Purpose:	Displays currently configured TV aspect ratio
+
+***************************************************************************/
+
+void CLI_TVAspect_Status (void)
+{
+  int value = -1;
+  _swix (NVRAM_Read, _INR(0,2), "TVAspectRatio", &value, 0);
+  switch (value)
+  {
+    case 0:
+      printf ("TVAspect   4:3\n");
+      break;
+    case 1:
+      printf ("TVAspect   16:9\n");
+      break;
+    default:
+      printf ("TVAspect   unknown\n");
+      break;
+  }
+}
+
+/******	CLI_TVWSS() ********************************************************
+
+Purpose:	Configures a new TV widescreen switching state
+In:		On/off string
+Out:		Pointer to error block
+
+***************************************************************************/
+
+_kernel_oserror *CLI_TVWSS (const char *arg_string)
+{
+  _kernel_oserror *e = NULL;
+  int value;
+  
+  if (static_MatchStrings (arg_string, "off"))
+  {
+    value = 0;
+  }
+  else if (static_MatchStrings (arg_string, "on"))
+  {
+    value = 1;
+  }
+  else
+  {
+    e = Mess_GenerateError ("SMPDTVW", 0, 0);
+  }
+  
+  if (!e)
+  {
+    _swix (NVRAM_Write, _INR(0,2), "WideScreenSignalling", &value, 0);
+  }
+  
+  return e;
+}
+
+/******	CLI_TVWSS_Status() *************************************************
+
+Purpose:	Displays currently configured TV widescreen switching state
+
+***************************************************************************/
+
+void CLI_TVWSS_Status (void)
+{
+  int value = -1;
+  _swix (NVRAM_Read, _INR(0,2), "WideScreenSignalling", &value, 0);
+  switch (value)
+  {
+    case 0:
+      printf ("TVWSS      off\n");
+      break;
+    case 1:
+      printf ("TVWSS      on\n");
+      break;
+    default:
+      printf ("TVWSS      unknown\n");
+      break;
+  }
+}
+
+/******	CLI_TVViewingMode() ************************************************
+
+Purpose:	Configures a new TV viewing mode
+In:		Mode string
+Out:		Pointer to error block
+
+***************************************************************************/
+
+_kernel_oserror *CLI_TVViewingMode (const char *arg_string)
+{
+  _kernel_oserror *e = NULL;
+  int value;
+  
+  if (static_MatchStrings (arg_string, "Box"))
+  {
+    value = 0;
+  }
+  else if (static_MatchStrings (arg_string, "Zoom"))
+  {
+    value = 2;
+  }
+  else if (static_MatchStrings (arg_string, "Stretch"))
+  {
+    value = 3;
+  }
+  else
+  {
+    e = Mess_GenerateError ("Err_BadViewingMode", 0, 0);
+  }
+  
+  if (!e)
+  {
+    _swix (NVRAM_Write, _INR(0,2), "TVViewingMode", &value, 0);
+  }
+  
+  return e;
+}
+
+/******	CLI_TVViewingMode_Status() *****************************************
+
+Purpose:	Displays currently configured TV viewing mode
+
+***************************************************************************/
+
+void CLI_TVViewingMode_Status (void)
+{
+  int value = -1;
+  _swix (NVRAM_Read, _INR(0,2), "TVViewingMode", &value, 0);
+  switch (value)
+  {
+    case 0:
+      printf ("TVViewingMode Box\n");
+      break;
+    case 2:
+      printf ("TVViewingMode Zoom\n");
+      break;
+    case 3:
+      printf ("TVViewingMode Stretch\n");
+      break;
+    default:
+      printf ("TVViewingMode unknown\n");
+      break;
+  }
+}
+
 /******	CLI_Read3520() *****************************************************
 
 Purpose:	Handles *Read3520
@@ -495,4 +714,40 @@ _kernel_oserror *CLI_Write3520 (const char *arg_string)
         ) = value;
   }
   return e;
+}
+
+/*********************/
+/* Private functions */
+/*********************/
+
+/******	static_MatchStrings() **********************************************
+
+Purpose:	Case insensitive control-terminated string compare
+In:		Two string pointers
+Out:		|true| if they match
+
+***************************************************************************/
+
+static bool static_MatchStrings (const char *s1, const char *s2)
+{
+  unsigned int i = 0;
+  bool match = false;
+  do
+  {
+    if ((s1[i] < ' ') ^ (s2[i] < ' '))
+    {
+      break;
+    }
+    else if ((s1[i] < ' ') && (s2[i] < ' '))
+    {
+      match = true;
+    }
+    else if (toupper(s1[i]) != toupper(s2[i]))
+    {
+      break;
+    }
+    i++;
+  }
+  while (!match);
+  return match;
 }
