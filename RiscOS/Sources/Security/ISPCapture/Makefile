@@ -225,6 +225,10 @@ resources:
         ${CP} ${LDIR}.HTML.ISPC2 ${HTMLDIR}.ISPCapture.ISPC2 ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
+BBETYPE = ispcapture
+bbe-ispcapture: bbe-generic-resources-get-alias
+        BBE_Export_Dir Resources.${LOCALE}.${USERIF}
+
 #
 # Executable target (static link)
 #
