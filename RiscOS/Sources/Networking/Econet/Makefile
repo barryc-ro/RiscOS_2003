@@ -57,11 +57,15 @@ all200: ${TARGET200}
 #
 # Generic Build rules:
 #
-rom:
-        @echo ${COMPONENT}: not built for OS ROM
+rom: ${TARGET}
+        @echo ${COMPONENT}: rom module built
 
 export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
+
+install_rom: $(TARGET)
+        $(CP) $(TARGET) $(INSTDIR).$(COMPONENT) $(CPFLAGS)
+        @echo ${COMPONENT}: rom module installed
 
 install: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
