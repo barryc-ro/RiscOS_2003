@@ -91,6 +91,7 @@
 
 #include "windows.h"
 #include "fileio.h"
+#include "vdu.h"
 
 /*
  *  Includes
@@ -205,8 +206,8 @@ extern VDTWCACHE vVdTWCache;
 #define DEFAULT_SVGAPREF        "Off"
 static USHORT VirtualThinWire;
 
-STATIC ULONG PrefHRes;
-STATIC ULONG PrefVRes;
+STATIC int PrefHRes;
+STATIC int PrefVRes;
 STATIC BOOL  vfFullScreen = FALSE;
 
 extern int vwScreen, vhScreen, vSVGAmode;
@@ -256,6 +257,8 @@ typedef struct _TWBUFFERHEAD {
 TWBUFFERHEAD      ICAWriteQ = { NULL, NULL, 0, 0 };
 
 STATIC int CacheHasBeenAllocated = FALSE;
+
+static BOOL UnderScanEnabled = FALSE;
 
 /*******************************************************************************
  *
@@ -352,21 +355,32 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
         vSVGAmode = 1;
     }
 
-    /*
-     *  Force to resonable values (defined in wfengapi.h)
-     */
-    if ( (((USHORT)PrefHRes & 0xffff) == 0xffff) && 
-         (((USHORT)PrefVRes & 0xffff) == 0xffff) ) {
-	GetModeSpec((int *)&PrefHRes, (int *)&PrefVRes);
+    if (PrefHRes == -1 || PrefVRes == -1)
+    {
         vfFullScreen = TRUE;
+
+	if (IsATV())
+	    UnderScanEnabled = TRUE;
+	else
+	    UnderScanEnabled = bGetPrivateProfileBool( pVdOpen->pIniSection,
+						       "UseSafeArea", FALSE);
+
+	if (!UnderScanEnabled ||
+	    !GetSafeModeSpec(&PrefHRes, &PrefVRes))
+	{
+	    GetModeSpec(&PrefHRes, &PrefVRes);
+	}
     }
-    else {
+    else
+    {
         if((PrefHRes==0) || (PrefHRes > MAX_DESIREDHRES ))
             PrefHRes = DEF_DESIREDHRES;
+
         if((PrefVRes==0) || (PrefVRes > MAX_DESIREDVRES ))
             PrefVRes = DEF_DESIREDVRES;
     }
-    
+
+   
     /*
      *  Get preferred color depth
      */
@@ -523,6 +537,9 @@ DriverInfo( PVD pVd, PDLLINFO pVdInfo )
     PMODULE_C2H pHeader;
     PTHINWIRECAPS pCaps, pPref;
 
+    WDQUERYINFORMATION wdqi;
+    ENCRYPTIONINIT     eieio;
+
     /*
      *  Get byte count necessary to hold data
      */
@@ -587,21 +604,52 @@ DriverInfo( PVD pVd, PDLLINFO pVdInfo )
 
     viBitsPerPixel = iColorDepth == CCAPS_4_BIT ? 4 : 8;
 
-    pCaps->ResCapsCnt = EnumerateModes(&pCaps->ResCaps,
-				       sizeof(pVdData->ResCaps)/sizeof(pVdData->ResCaps[0]) + 1, &viBitsPerPixel);
-    if (!vSVGAmode)
-	pCaps->ResCapsCnt = 1;
+    /*
+     *  Get host encryption level 
+     */
+    eieio.EncryptionLevel    = 1;
+    wdqi.WdInformationClass  = WdEncryptionInit;
+    wdqi.pWdInformation      = &eieio;
+    wdqi.WdInformationLength = sizeof(VDWRITEHOOK);
+    WdCall(pVd, WD__QUERYINFORMATION, &wdqi);
+
+    /*
+     *  On encryption level >1 variable resolution is supported
+     */
+    if ( (cHostLevel = eieio.EncryptionLevel) > 1 )
+    {
+        /*
+         *  Variable res
+         */
+        pPref->flGraphicsCaps |= (GCAPS_RES_VARIABLE | GCAPS_SSB_1BYTE_PP);
+        pCaps->flGraphicsCaps |= (GCAPS_RES_VARIABLE | GCAPS_SSB_1BYTE_PP);
+
+        /*
+         *  Max resolution
+         */
+        pCaps->ResCaps.HRes = 1280;
+        pCaps->ResCaps.VRes = 1024;
+
+	/* set pref to the first in the list */
+	pPref->ResCaps.HRes   = PrefHRes;
+	pPref->ResCaps.VRes   = PrefVRes;
+    }
+    else
+    {
+	pCaps->ResCapsCnt = EnumerateModes(&pCaps->ResCaps,
+					   sizeof(pVdData->ResCaps)/sizeof(pVdData->ResCaps[0]) + 1, &viBitsPerPixel);
+	if (!vSVGAmode)
+	    pCaps->ResCapsCnt = 1;
     
-    pPref->ResCaps.HRes   = pCaps->ResCaps.HRes;
-    pPref->ResCaps.VRes   = pCaps->ResCaps.VRes;
+	/* set pref to the first in the list */
+	pPref->ResCaps.HRes   = pCaps->ResCaps.HRes;
+	pPref->ResCaps.VRes   = pCaps->ResCaps.VRes;
+    }
 
     if (viBitsPerPixel == 8)
     {
-	pCaps->fColorCaps     |= CCAPS_8_BIT;
-	pCaps->flGraphicsCaps |= GCAPS_SSB_1BYTE_PP;
-
-	pPref->fColorCaps     |= CCAPS_8_BIT;
-	pPref->flGraphicsCaps |= GCAPS_SSB_1BYTE_PP;
+	pCaps->fColorCaps |= CCAPS_8_BIT;
+	pPref->fColorCaps |= CCAPS_8_BIT;
     }
 
     TRACE((TC_TW,TT_TW_PALETTE, "VDTW: %d modes sent %d bpp", pCaps->ResCapsCnt, viBitsPerPixel));

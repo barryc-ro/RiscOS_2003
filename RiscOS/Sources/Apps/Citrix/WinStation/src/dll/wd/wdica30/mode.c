@@ -92,11 +92,7 @@
 #include "citrix/ica30.h"
 #include "citrix/ica-c2h.h"
 
-#ifdef DOS
-#include "../../../inc/dos.h"
 #include "../../../inc/mouapi.h"
-#endif
-
 #include "../../../inc/clib.h"
 #include "../../../inc/wdapi.h"
 #include "../../../inc/pdapi.h"
@@ -149,7 +145,7 @@ static USHORT G_VGAVideoModes[] =
 static WDTEXTMODE G_VGATextModes[] = {
  /*  index   flags  cols  rows   xres  yres  xfont  yfont */
 //     0,     0,     40,   25,   640,   200,   8,    16,
-       1,     0,     80,   25,  1280,   800,   8,     8,
+       1,     0,     80,   25,   640,   400,   8,     8,
 //     2,     0,     80,   43,   640,   344,   8,     8,
 //     3,     0,     80,   50,   640,   400,   8,     8,
 
@@ -170,7 +166,7 @@ static USHORT G_CGAVideoModes[] =
 static WDTEXTMODE G_CGATextModes[] = {
  /*  index   flags  cols  rows   xres  yres  xfont  yfont */
 //     0,     0,     40,   25,   640,   200,   8,    16,
-       1,     0,     80,   25,  1280,   800,   8,     8
+       1,     0,     80,   25,   640,   400,   8,     8
 //     2,     0,     80,   43,   640,   344,   8,     8,
 //     3,     0,     80,   50,   640,   400,   8,     8,
 
@@ -248,6 +244,8 @@ IcaSetGraphics( PWD pWd, LPBYTE pInputBuffer, USHORT InputCount )
     (void) VioDestroyWindow( pIca->hVio );
 #endif
 
+    VioUnsetMode( pIca->hVio );
+    
     /*
      *  Give thinwire focus of the screen
      *  -- enables graphics mode
@@ -556,7 +554,7 @@ _SetTextMode( PWD pWd, USHORT TextIndex )
     // (void) MouseSetScreenDimensions(0,0);
     {
 	PWDTEXTMODE info = GetTextMode(pIca->TextIndex);
-	(void) MouseSetScreenDimensions(info->ResolutionX, info->ResolutionY);
+	(void) MouseSetScreenDimensions(info->ResolutionX * 2, info->ResolutionY * 2);
     }
 #endif
 }

@@ -158,6 +158,24 @@ KbdOpen(void)
    return( CLIENT_STATUS_SUCCESS );
 }
 
+int WFCAPI
+KbdReopen(void)
+{
+   int i;
+
+   TRACE((TC_KEY, TT_API1, "KbdReopen: mode %d", CurrentKbdMode));
+   
+   // kbd open?
+   if ( CurrentKbdMode == Kbd_Closed ) {
+
+      // set current keyboard mode
+      CurrentKbdMode = Kbd_Ascii;
+      set_mode();
+   }
+
+   return( CLIENT_STATUS_SUCCESS );
+}
+
 /*******************************************************************************
  *
  * KbdClose

@@ -525,24 +525,24 @@ INT WFCAPI UiOpen( PVOID pNotUsed, PEXEOPEN pUiOpen )
 
     G_fEchoTTY = bGetPrivateProfileBool( pIni, INI_ECHO_TTY, DEF_ECHO_TTY );
 
-    // determine layout from local machine
-#ifdef WIN32
-    if(!gbIPCEngine && (GetKeyboardLayoutName(szKeyboardLayout)==TRUE) ) {
-       char *p;
 
-       G_pUiData->KeyboardLayout = strtoul(szKeyboardLayout,&p,16);
-       }
-    else {
-#else
-       {
-#endif
-       bGetPrivateProfileString( pIni, INI_KEYBOARDLAYOUT, DEF_KEYBOARDLAYOUT,
-                                 szKeyboardLayout, sizeof(szKeyboardLayout) );
-       G_pUiData->KeyboardLayout = bGetPrivateProfileLong( pIni,
-                                                           szKeyboardLayout,
-                                                           (long)0 );
-       }
+    bGetPrivateProfileString( pIni, INI_KEYBOARDLAYOUT, DEF_KEYBOARDLAYOUT,
+			      szKeyboardLayout, sizeof(szKeyboardLayout) );
 
+    // special new string to say pick up from local machine configuration
+    if (strcmpi(szKeyboardLayout, "(Auto Detect)") == 0)
+    {
+	KEYBOARDLAYOUT LocalLayout;
+	
+	if (GetLocalKeyboard(LocalLayout, sizeof(LocalLayout)) == CLIENT_STATUS_SUCCESS)
+	    strcpy(szKeyboardLayout, LocalLayout);
+    }
+
+    G_pUiData->KeyboardLayout = bGetPrivateProfileLong( pIni,
+							szKeyboardLayout,
+							(long)0 );
+
+#if 0
     G_pUiData->Lpt1  = bGetPrivateProfileInt( pIni, INI_LPT1, DEF_LPT1 );
     G_pUiData->Port1 = bGetPrivateProfileInt( pIni, INI_PORT1, DEF_PORT1 );
 
@@ -551,6 +551,7 @@ INT WFCAPI UiOpen( PVOID pNotUsed, PEXEOPEN pUiOpen )
 
     G_pUiData->Lpt3  = bGetPrivateProfileInt( pIni, INI_LPT3, DEF_LPT3 );
     G_pUiData->Port3 = bGetPrivateProfileInt( pIni, INI_PORT3, DEF_PORT3 );
+#endif
 
     /*
      *  Copy client build number
@@ -1390,111 +1391,6 @@ INT WFCAPI WFEngConnect( HANDLE hWFE )
 {
    return(srvWFEngConnect( hWFE ));
 }
-
-#if 0
-/*******************************************************************************
- *
- *  Function: srvWFEngMessageLoop
- *
- *  Purpose: Service WFEngine driver stack (main loop)
- *
- *  Entry:
- *     hWFE (input)
- *        instance handle
- *
- *  Exit:
- *     0 - success, or error code
- *
- ******************************************************************************/
-INT WFCAPI srvWFEngMessageLoop( HANDLE hWFE )
-{
-    INT rc = CLIENT_STATUS_SUCCESS;
-    BOOL fSdLoaded = FALSE;
-    BOOL fSdPoll = FALSE;
-
-
-    TRACE(( TC_WENG, TT_L1, "WFEngx.Exe: srvWFEngMessageLoop (entered)" ));
-
-
-    /*
-     *  Load script driver
-     */
-    if ( gScriptFile ) {
-        fSdPoll = fSdLoaded = sdLoad( gScriptFile, gScriptDriver );
-        free( gScriptDriver );
-        free( gScriptFile );
-        gScriptFile = NULL;
-
-    }
-
-    /*
-     * Do the WD-PD-TD poll
-     */
-    for ( gbContinuePolling = TRUE; gbContinuePolling; ) {
-       int rc2;
-
-       /*
-        *  Poll WD
-        */
-       wWFEngPoll();
-
-       /*
-        *  Check for input
-        */
-       rc2 = InputPoll();
-       StatusMsgProc( hWFE, rc2 );
-
-
-       /*
-        *  Poll SD
-        */
-       if ( fSdPoll ) {
-           fSdPoll = sdPoll();
-       }
-
-#ifdef DOS
-       /*
-        * If ui has the focus and a UIPoll procedure was provided, call it
-        */
-       if ( gbContinuePolling &&
-            !(gState & WFES_FOCUS) &&
-            (gpfnUIPoll) ) {
-           (*(gpfnUIPoll))();
-       }      
-#endif
-
-    }
-
-    /*
-     *  Unload script driver
-     */
-    if ( fSdLoaded ) {
-        sdUnload();
-    }
-
-    ASSERT( rc == CLIENT_STATUS_SUCCESS, rc );
-    return( rc );
-}
-
-/*******************************************************************************
- *
- *  Function: WFEngMessageLoop
- *
- *  Purpose: Service WFEngine driver stack (main loop)
- *
- *  Entry:
- *     hWFE (input)
- *        instance handle
- *
- *  Exit:
- *     0 - success, or error code
- *
- ******************************************************************************/
-INT WFCAPI WFEngMessageLoop( HANDLE hWFE )
-{
-   return(srvWFEngMessageLoop( hWFE ));
-}
-#endif
 
 /*******************************************************************************
  *

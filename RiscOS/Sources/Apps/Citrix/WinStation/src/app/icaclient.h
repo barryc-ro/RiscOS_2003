@@ -18,6 +18,7 @@
 #define message_ICACLIENT_STATUS	(message_ICACLIENT_BASE+0)
 #define message_ICACLIENT_CONTROL	(message_ICACLIENT_BASE+1)
 #define message_ICACLIENT_CONTROL_ACK	(message_ICACLIENT_BASE+2)
+#define message_ICACLIENT_CONFIG	(message_ICACLIENT_BASE+3)
 
 /* --------------------------------------------------------------------------------------------- */
 
@@ -105,6 +106,23 @@ typedef struct
     int errnum;				/* not a RISC OS error number */
     char errmess[220];			/* textual error message */
 } icaclient_message_control_ack;
+
+/* --------------------------------------------------------------------------------------------- */
+
+/* CONFIG message, sent between !ICAClient and !ICAMgr */
+
+#define icaclient_CONFIG_FILE_UPDATED	0
+
+#define icaclient_config_APPSRV_CHANGED		0x00000001
+#define icaclient_config_WFCLIENT_CHANGED	0x00000002
+#define icaclient_config_APPSRV_MOVED		0x00000004
+#define icaclient_config_WFCLIENT_MOVED		0x00000008
+
+typedef struct
+{
+    int reason;
+    int flags;
+} icaclient_message_config;
 
 /* --------------------------------------------------------------------------------------------- */
 

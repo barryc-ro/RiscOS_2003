@@ -105,39 +105,8 @@ int WFCAPI VioScrollDn (USHORT usTopRow, USHORT usLeftCol,
       cbLines = usBotRow - usTopRow + 1;
 
    textwindow(usTopRow, usLeftCol, usBotRow, usRightCol);
-   scrollwindow(cbLines, 2);
+   scrollwindow(cbLines, SCROLL_DOWN);
    resettextwindow();
-#if 0
-   /*
-    * Get the phys address.
-    */
-   pLVB = fMONO ? (LPBYTE) 0xB0000000 : (LPBYTE) 0xB8000000;
-
-   /*
-    * Add in regen offset.
-    */
-   pLVB += *_CRT_START;
-
-   /*
-    * Calculate the bytes to xfer.
-    */
-   cb  = usRightCol - usLeftCol + 1;
-   cb2 = cb << 1;
-   lw  = usMaxCol << 1;
-   lo  = usLeftCol << 1;
-
-   /*
-    *  Scroll down
-    */
-   j = (usBotRow - usTopRow + 1) - cbLines;
-   k = usBotRow * lw + lo;
-   for ( i=0; i<j; i++ ) {
-      if ( fCGA )
-         (void) _CGA_READ( pLVB+k-(i*lw), pLVB+k-((i+cbLines)*lw), cb2 );
-      else
-         memcpy( pLVB+k-(i*lw), pLVB+k-((i+cbLines)*lw), cb2 );
-   }
-#endif
    
    /*
     * Fill the remainder with the requested character.
@@ -146,18 +115,10 @@ int WFCAPI VioScrollDn (USHORT usTopRow, USHORT usLeftCol,
    if ( pCell[0] || pCell[1] ) {
        for ( i=usTopRow; i<usTopRow+cbLines; i++ ) {
 	   WriteCounted( pCell[0], pCell[1], usRightCol - usLeftCol + 1, i, usLeftCol);
-#if 0
-         k = i * lw + lo;
-         for ( j=0; j<cb2; j+=2 ) {
-            if ( fCGA )
-               (void) _CGA_WRITE( pLVB+k+j, pCell, 2 );
-            else
-               memcpy( pLVB+k+j, pCell, 2 );
-         }
-#endif
       }
    }
 
+  
    return( CLIENT_STATUS_SUCCESS );
 }
 
@@ -201,54 +162,14 @@ int WFCAPI VioScrollUp (USHORT usTopRow, USHORT usLeftCol,
       cbLines = usBotRow - usTopRow + 1;
 
    textwindow(usTopRow, usLeftCol, usBotRow, usRightCol);
-   scrollwindow(cbLines, 3);
+   scrollwindow(cbLines, SCROLL_UP);
    resettextwindow();
-#if 0
-   /*
-    * Get the phys address.
-    */
-   pLVB = fMONO ? (LPBYTE) 0xB0000000 : (LPBYTE) 0xB8000000;
-
-   /*
-    * Add in regen offset.
-    */
-   pLVB += *_CRT_START;
-
-   /*
-    * Calculate the bytes to xfer.
-    */
-   cb  = usRightCol - usLeftCol + 1;
-   cb2 = cb << 1;
-   lw  = usMaxCol << 1;
-   lo  = usLeftCol << 1;
-
-   /*
-    *  Scroll up
-    */
-   j = (usBotRow - usTopRow + 1) - cbLines;
-   k = usTopRow * lw + lo;
-   for ( i=0; i<j; i++ ) {
-      if ( fCGA )
-         (void) _CGA_READ( pLVB+k+(i*lw), pLVB+k+((i+cbLines)*lw), cb2 );
-      else
-         memcpy( pLVB+k+(i*lw), pLVB+k+((i+cbLines)*lw), cb2 );
-   }
-#endif
    /*
     * Fill the remainder with the requested character.
     */
    if ( pCell[0] || pCell[1] ) {
       for ( i=(usBotRow-cbLines+1); i<=usBotRow; i++ ) {
 	  WriteCounted( pCell[0], pCell[1], usRightCol - usLeftCol + 1, i, usLeftCol);
-#if 0
-	 k = i * lw + lo;
-         for ( j=0; j<cb2; j+=2 ) {
-            if ( fCGA )
-               (void) _CGA_WRITE( pLVB+k+j, pCell, 2 );
-            else
-               memcpy( pLVB+k+j, pCell, 2 );
-         }
-#endif
       }
    }
 
@@ -295,43 +216,9 @@ int WFCAPI VioScrollLf (USHORT usTopRow, USHORT usLeftCol,
       cbCol = usRightCol - usLeftCol + 1;
 
    textwindow(usTopRow, usLeftCol, usBotRow, usRightCol);
-   scrollwindow(cbCol, 1);
+   scrollwindow(cbCol, SCROLL_LEFT);
    resettextwindow();
 
-#if 0
-   /*
-    * Get the phys address.
-    */
-   pLVB = fMONO ? (LPBYTE) 0xB0000000 : (LPBYTE) 0xB8000000;
-
-   /*
-    * Add in regen offset.
-    */
-   pLVB += *_CRT_START;
-
-   /*
-    * Calculate the bytes to xfer.
-    */
-   cb  = usRightCol - usLeftCol + 1;
-   cb3 = cbCol << 1;
-   lw  = usMaxCol << 1;
-   lo  = usLeftCol << 1;
-
-   /*
-    *  Scroll left
-    */
-   if ( cbCol < cb ) {
-      j = usBotRow - usTopRow + 1;
-      k = usTopRow * lw + lo;
-      l = (cb - cbCol) << 1;
-      for ( i=0; i<j; i++ ) {
-         if ( fCGA )
-            (void) _CGA_READ( pLVB+k+(i*lw), pLVB+k+(i*lw)+cb3, l );
-         else
-            memcpy( pLVB+k+(i*lw), pLVB+k+(i*lw)+cb3, l );
-      }
-   }
-#endif
    /*
     * Fill the remainder with the requested character.
     */
@@ -339,15 +226,6 @@ int WFCAPI VioScrollLf (USHORT usTopRow, USHORT usLeftCol,
 //    lo = (usRightCol - cbCol + 1) << 1;
       for ( i=usTopRow; i<=usBotRow; i++ ) {
 	  WriteCounted(pCell[0], pCell[1], usRightCol - cbCol + 1, i, cbCol);
-#if 0
-	 k = i * lw + lo;
-         for ( j=0; j<cb3; j+=2 ) {
-            if ( fCGA )
-               (void) _CGA_WRITE( pLVB+k+j, pCell, 2 );
-            else
-               memcpy( pLVB+k+j, pCell, 2 );
-         }
-#endif
       }
    }
 
@@ -395,45 +273,8 @@ int WFCAPI VioScrollRt (USHORT usTopRow, USHORT usLeftCol,
       cbCol = usRightCol - usLeftCol + 1;
 
    textwindow(usTopRow, usLeftCol, usBotRow, usRightCol);
-   scrollwindow(cbCol, 0);
+   scrollwindow(cbCol, SCROLL_RIGHT);
    resettextwindow();
-
-#if 0
-   /*
-    * Get the phys address.
-    */
-   pLVB = fMONO ? (LPBYTE) 0xB0000000 : (LPBYTE) 0xB8000000;
-
-   /*
-    * Add in regen offset.
-    */
-   pLVB += *_CRT_START;
-
-   /*
-    * Calculate the bytes to xfer.
-    */
-   cb  = usRightCol - usLeftCol + 1;
-   cb3 = cbCol << 1;
-   lw  = usMaxCol << 1;
-   lo  = (usLeftCol << 1);
-
-   /*
-    *  Scroll right
-    */
-   if ( cbCol < cb ) {
-      j = usBotRow - usTopRow + 1;
-      k = usTopRow * lw + lo;
-      l = (cb - cbCol) << 1;
-      for ( i=0; i<j; i++ ) {
-         if ( fCGA ) {
-            (void) _CGA_READ( Buffer, pLVB + k + (i * lw), l );
-            (void) _CGA_WRITE( pLVB + k + (i * lw) + cb3, Buffer, l );
-         } else {
-            memmove( pLVB + k + (i * lw) + cb3, pLVB + k + (i * lw), l );
-         }
-      }
-   }
-#endif
    
    /*
     * Fill the remainder with the requested character.
@@ -441,15 +282,6 @@ int WFCAPI VioScrollRt (USHORT usTopRow, USHORT usLeftCol,
    if ( pCell[0] || pCell[1] ) {
       for ( i=usTopRow; i<=usBotRow; i++ ) {
 	  WriteCounted(pCell[0], pCell[1], usLeftCol, i, cbCol);
-#if 0
-         k = i * lw + lo;
-         for ( j=0; j<cb3; j+=2 ) {
-            if ( fCGA )
-               (void) _CGA_WRITE( pLVB+k+j, pCell, 2 );
-            else
-               memcpy( pLVB+k+j, pCell, 2 );
-         }
-#endif
       }
    }
 

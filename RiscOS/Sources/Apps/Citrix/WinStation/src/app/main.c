@@ -31,6 +31,7 @@
 #include "utils.h"
 #include "version.h"
 #include "session.h"
+#include "main.h"
 
 #include "icaclient.h"
 
@@ -112,9 +113,18 @@ typedef struct
 
 /* --------------------------------------------------------------------------------------------- */
 
-#define connection_OPENED		0
-#define connection_PRINTINFO_RECEIVED	1
-#define connection_SPLASH_REMOVED	2
+/* redialling stuff */
+
+#define TaskModule_RegisterService      0x4D302
+#define TaskModule_DeRegisterService    0x4D303
+#define wimp_MSERVICE                   0x4D300
+
+#define Service_DiallerStatus           0xB4
+
+#define dialler_DISCONNECTED            0
+#define dialler_CONNECTED_OUTGOING      (1<<2)
+
+#define NCDialUI_Start			0x4E880
 
 /* --------------------------------------------------------------------------------------------- */
 
@@ -155,21 +165,28 @@ static int event_mask =
     | Wimp_Poll_PointerEnteringWindowMask
     | Wimp_Poll_PollWordNonZeroMask;
 
-static void *splash_ptr = NULL;
-static void *splash_coltrans = NULL;
-static ObjectId splash_id = NULL_ObjectId;
-static int splash_timer = 0;
 
 static icaclient_session current_session = NULL;
 
 static int scrap_ref = -1;
 
+static int task_handle = 0;
 static BOOL running = TRUE;
 static int quitting = 0;
 
 static ObjectId disconnect_id = NULL_ObjectId;
 
-static int printinfo_dialogue_in_progress = FALSE;
+/* --------------------------------------------------------------------------------------------- */
+
+static void *splash_ptr = NULL;
+static void *splash_coltrans = NULL;
+static ObjectId splash_id = NULL_ObjectId;
+static int splash_timer = 0;
+
+static int splash_state = initop_UNSTARTED;
+static int printinfo_state = initop_UNSTARTED;
+static int dial_state = initop_UNSTARTED;
+static int connectopen_state = initop_UNSTARTED;
 
 /* --------------------------------------------------------------------------------------------- */
 
@@ -191,6 +208,8 @@ static int cli_file_debug = FALSE;
 static int cli_suspendable = FALSE;
 static int cli_file_is_url = FALSE;
 static int cli_loop = FALSE;
+static int cli_multitask = FALSE;
+static int cli_modem = FALSE;
 
 /* --------------------------------------------------------------------------------------------- */
 
@@ -203,11 +222,14 @@ static BOOL splash_check_close(void);
 static void printinfo_deregister(void);
 static void printinfo_request(void);
 
+static void dial_start(void);
+
 /* --------------------------------------------------------------------------------------------- */
 
 /* External references */
 
 extern void KbdClose(void);
+extern void reset_char_defs(void);
 
 /* --------------------------------------------------------------------------------------------- */
 
@@ -262,42 +284,69 @@ static void signal_setup(void)
 
 void main_close_session(icaclient_session sess)
 {
-    if (current_session == sess)
-	current_session = NULL;
-    
-    session_close(sess);
+    if (sess)
+    {
+	if (current_session == sess)
+	{
+	    current_session = NULL;
+
+	    if (!cli_suspendable)
+		running = FALSE;
+	}
+	
+	session_close(sess);
+
+	/* reset the state markers */
+	dial_state = initop_UNSTARTED;
+	connectopen_state = initop_UNSTARTED;
+	printinfo_state = initop_UNSTARTED;
+    }
 }
 
 static void kill_current_session(void)
 {
-    icaclient_session s = current_session;
-    if (s)
-    {
-	current_session = NULL;
-	session_close(s);
-    }
+    main_close_session(current_session);
 }
 
-static void connection_state(int new_state)
+static void connection_state(int event)
 {
-    switch (new_state)
+    TRACE((TC_UI, TT_API1, "connection_state: event %d current_session %p printinfo_state %d splash_state %d dial_state %d connectopen_state %d",
+	   event, current_session, printinfo_state, splash_state, dial_state, connectopen_state));
+
+    if (event != connection_NULL)
+	return;
+
+    if (current_session)
     {
-    case connection_OPENED:
-	connect_open(current_session);
-	printinfo_request();
-	break;
+	if (printinfo_state == initop_UNSTARTED)
+	    printinfo_request();
 
-    case connection_SPLASH_REMOVED:
-	if (current_session && !printinfo_dialogue_in_progress)
-	    if (!session_connect(current_session))
-		current_session = NULL;
-	break;
+	if (splash_state == initop_COMPLETED)
+	{
+	    if (dial_state == initop_UNSTARTED)
+		dial_start();
 
-    case connection_PRINTINFO_RECEIVED:
-	if (current_session && !splash_timer)
-	    if (!session_connect(current_session))
-		current_session = NULL;
-	break;
+	    if (dial_state == initop_COMPLETED)
+	    {
+		if (connectopen_state == initop_UNSTARTED)
+		{
+		    connect_open(current_session);
+		    connectopen_state = initop_COMPLETED;
+		}
+
+		if (printinfo_state == initop_COMPLETED && connectopen_state != initop_UNSTARTED)
+		{
+		    if (!session_connect(current_session))
+		    {
+			current_session = NULL;
+			
+			dial_state = initop_UNSTARTED;
+			connectopen_state = initop_UNSTARTED;
+			printinfo_state = initop_UNSTARTED;
+		    }
+		}
+	    }
+	}
     }
 }
 
@@ -342,7 +391,7 @@ static int connect_handler(int event_code, ToolboxEvent *event, IdBlock *id_bloc
 {
     TRACE((TC_UI, TT_API1, "connect_handler:\n"));
 
-    if (current_session)
+    if (session_connected(current_session))
 	session_resume(current_session);
     else
 	msg_report("Run an ICA file to make a connection");
@@ -367,8 +416,9 @@ static int proginfo_handler(int event_code, ToolboxEvent *event, IdBlock *id_blo
 static int icon_menu_handler(int event_code, ToolboxEvent *event, IdBlock *id_block,
                          void *handle)
 {
-    LOGERR(menu_set_fade(0, id_block->self_id, tbres_c_CONNECT, current_session == NULL));
-    LOGERR(menu_set_fade(0, id_block->self_id, tbres_c_DISCONNECT, current_session == NULL));
+    BOOL connected = session_connected(current_session);
+    LOGERR(menu_set_fade(0, id_block->self_id, tbres_c_CONNECT, !connected));
+    LOGERR(menu_set_fade(0, id_block->self_id, tbres_c_DISCONNECT, !connected));
     return 1;
     NOT_USED(event_code);
     NOT_USED(event);
@@ -390,6 +440,8 @@ static void cleanup(void)
     LOGERR(_swix(Hourglass_Smash, 0));	/* just in case */
     KbdClose();				/* just in case */
 
+    reset_char_defs();
+    
 #ifdef DEBUG
     {
     time_t tp;
@@ -445,7 +497,7 @@ static int try_disconnect_handler(int event_code, ToolboxEvent *event, IdBlock *
 static int try_quit_handler(int event_code, ToolboxEvent *event, IdBlock *id_block,
                          void *handle)
 {
-    if (current_session == NULL)
+    if (!session_connected(current_session))
     {
 	running = FALSE;
     }
@@ -468,7 +520,7 @@ static int try_quit_handler(int event_code, ToolboxEvent *event, IdBlock *id_blo
 
 static int pre_quit_handler(WimpMessage *message, void *handle)
 {
-    if (current_session)
+    if (session_connected(current_session))
     {
 	WimpMessage reply;
 
@@ -506,21 +558,22 @@ static int null_handler(int event_code, WimpPollBlock *event, IdBlock *id_block,
 {
     DTRACE((TC_UI, TT_API1, "null_handler: sess %p\n", current_session));
 
-    if (splash_timer)
-    {
-	if (splash_check_close())
-	    connection_state(connection_SPLASH_REMOVED);
-	else
-	    splash_force_top();
-    }
+    if (!splash_check_close())
+	splash_force_top();
     
-    if (current_session)
+    if (session_connected(current_session))
+    {
 	if (!session_poll(current_session))
 	{
 	    TRACE((TC_UI, TT_API1, "null_handler: poll returned 0\n"));
 
 	    kill_current_session();
-	}    
+	}
+    }
+    else if (current_session)
+    {
+	connection_state(connection_NULL);
+    }
     
     return 0;
     NOT_USED(event_code);
@@ -602,6 +655,8 @@ static int dataload_handler(WimpMessage *message, void *handle)
 static int dataopen_handler(WimpMessage *message, void *handle)
 {
     WimpDataOpen *msg = &message->data.data_open;
+
+    TRACE((TC_UI, TT_API1, "dataopen_handler: filetype %x\n", msg->file_type));
 
     if (msg->file_type == filetype_ICA)
     {
@@ -811,8 +866,7 @@ static int control_handler(WimpMessage *message, void *handle)
 
 	control_ack(message, current_session, 0);
 
-	session_close(current_session);
-	current_session = NULL;
+	main_close_session(current_session);
 	break;
     }
     
@@ -917,9 +971,9 @@ static void printinfo_deregister(void)
     err_fatal(event_deregister_message_handler(message_PSPrinterAck, printer_handler, NULL));
     err_fatal(event_deregister_wimp_handler(0, Wimp_EUserMessageAcknowledge, printer_ack_handler, NULL));
 
-    printinfo_dialogue_in_progress = FALSE;
+    printinfo_state = initop_COMPLETED;
     
-    connection_state(connection_PRINTINFO_RECEIVED);
+    connection_state(connection_PRINTINFO_COMPLETED);
 }
 
 static void printinfo_register(void)
@@ -928,7 +982,7 @@ static void printinfo_register(void)
     err_fatal(event_register_message_handler(message_PSPrinterAck, printer_handler, NULL));
     err_fatal(event_register_wimp_handler(0, Wimp_EUserMessageAcknowledge, printer_ack_handler, NULL));
 
-    printinfo_dialogue_in_progress = TRUE;
+    printinfo_state = initop_RUNNING;
 }
 
 static void printinfo_request(void)
@@ -955,6 +1009,71 @@ static void printinfo_request(void)
     
     /* register handlers */
     printinfo_register();
+}
+
+/* --------------------------------------------------------------------------------------------- */
+
+static void dial_end(BOOL success);
+
+static int dial_service_handler(WimpMessage *message, void *handle)
+{
+    _kernel_swi_regs *r = (_kernel_swi_regs *)&message->data.words[0];
+
+    if (r->r[1] == Service_DiallerStatus)
+    {
+	int new_state = r->r[2];
+
+	/* IP is up */
+	if (new_state == dialler_CONNECTED_OUTGOING)
+	{
+	    dial_end(TRUE);
+	}
+	/* IP is down */
+	else if (new_state == dialler_DISCONNECTED)
+	{
+	    dial_end(FALSE);
+	}
+	/* error has occurred */
+	else if ((new_state & 0xf0) == 0x80)
+	{
+	    dial_end(FALSE);
+	}
+	return 1;
+    }
+
+    return 0;
+}
+
+static void dial_end(BOOL success)
+{
+    LOGERR(event_deregister_message_handler(wimp_MSERVICE, dial_service_handler, NULL));
+    LOGERR(_swix(TaskModule_DeRegisterService, _INR(0,2), 0, Service_DiallerStatus, task_handle));
+
+    dial_state = initop_COMPLETED;
+    connection_state(connection_DIAL_COMPLETED);
+}
+
+static void dial_start(void)
+{
+    if (!cli_modem)
+    {
+	dial_state = initop_COMPLETED;
+	return;
+    }
+    
+    if (LOGERR(_swix(TaskModule_RegisterService, _INR(0,2), 0, Service_DiallerStatus, task_handle)) == NULL &&
+	LOGERR(event_register_message_handler(wimp_MSERVICE, dial_service_handler, NULL)) == NULL &&
+	LOGERR(_swix(NCDialUI_Start, _IN(0), 0)) == NULL)
+    {
+	dial_state = initop_RUNNING;
+    }
+    else
+    {
+	event_deregister_message_handler(wimp_MSERVICE, dial_service_handler, NULL);
+	_swix(TaskModule_DeRegisterService, _INR(0,2), 0, Service_DiallerStatus, task_handle);
+
+	dial_state = initop_COMPLETED;
+    }
 }
 
 /* --------------------------------------------------------------------------------------------- */
@@ -1054,7 +1173,7 @@ static void splash_open(void)
 	    y = (screen_h - h)/2 * 2;
 	
 	    /* open window if we are multitasking */
-	    if (cli_iconbar)
+	    if (cli_multitask)
 	    {
 		WindowShowObjectBlock show;
 		LOGERR(toolbox_create_object(0, tbres_SPLASH_W, &splash_id));
@@ -1095,6 +1214,7 @@ static void splash_open(void)
 	    }
 
 	    splash_timer = clock() + SPLASH_TIME;
+	    splash_state = initop_RUNNING;
 	}
     }
 }
@@ -1135,14 +1255,14 @@ static void splash_close(void)
 	splash_id = NULL_ObjectId;
     }
 
-    splash_timer = 0;
+    splash_state = initop_COMPLETED;
 }
 
 static BOOL splash_check_close(void)
 {
-    if (!splash_timer)
+    if (splash_state != initop_RUNNING)
 	return TRUE;
-    
+
     if (clock() > splash_timer)
     {
 	splash_close();
@@ -1154,7 +1274,6 @@ static BOOL splash_check_close(void)
 
 /* --------------------------------------------------------------------------------------------- */
 
-#ifdef DEBUG
 /*
  * EMLogInit
  *
@@ -1176,7 +1295,7 @@ static int log_init(void)
        EMLogInfo.LogFlags |= LOG_FILE;
 
 #if 1
-   EMLogInfo.LogClass    = LOG_CLASS | TC_UI;
+   EMLogInfo.LogClass    = LOG_ASSERT | TC_UI;
    EMLogInfo.LogEnable   = TT_ERROR;
    EMLogInfo.LogTWEnable = TT_TW_DIM | TT_TW_CACHE;
 #else
@@ -1186,13 +1305,11 @@ static int log_init(void)
 #endif
 
    strcpy(EMLogInfo.LogFile, cli_logfile ? cli_logfile : "");
-   //lstrcpy(EMLogInfo.LogFile, "<Wimp$ScrapDir>." APP_NAME ".Log");
 
    rc = LogOpen(&EMLogInfo);
 
    return(rc);
 }
-#endif //DEBUG
 
 static void process_args(int argc, char *argv[])
 {
@@ -1208,6 +1325,10 @@ static void process_args(int argc, char *argv[])
 	{
 	    switch (tolower(*(s+1)))
 	    {
+	    case 'c':	    /* connect via modem on startup */
+		cli_modem = TRUE;
+		break;
+
 	    case 'd':	    /* output post mortem on abort? */
 		cli_dopostmortem = TRUE;
 		break;
@@ -1224,11 +1345,16 @@ static void process_args(int argc, char *argv[])
 	    case 'i':      /* create iconbar icon */
 		cli_iconbar = TRUE;
 		cli_suspendable = TRUE;
+		cli_multitask = TRUE;
 		break;
 
 	    case 'l':	    /* log file */
 		if (i+1 < argc && argv[i+1][0] != '-')
 		    cli_logfile = strdup(argv[++i]);
+		break;
+
+	    case 'm':      /* multitasking startup */
+		cli_multitask = TRUE;
 		break;
 
 	    case 'o':	    /* loop */
@@ -1241,6 +1367,7 @@ static void process_args(int argc, char *argv[])
 
 	    case 's':      /* allow suspend and resume */
 		cli_suspendable = TRUE;
+		cli_multitask = TRUE;
 		break;
 
 	    case 'u':      /* filename is a URL */
@@ -1285,7 +1412,7 @@ static void process_options(const char *val)
 
 static void initialise(int argc, char *argv[])
 {
-    int current_wimp, task;
+    int current_wimp;
     void *sprite;
 
     /* usual library things */
@@ -1307,7 +1434,7 @@ static void initialise(int argc, char *argv[])
     /* initialise toolbox first to get messages file */
     err_fatal(toolbox_initialise(0, 310, &Wimp_MessageList[0], ToolBox_EventList, APP_DIR,
 				     &message_block, &event_id_block,
-				     &current_wimp, &task, &sprite));
+				     &current_wimp, &task_handle, &sprite));
 
     LOGERR(MemFlex_Initialise2(APP_NAME " flex"));
     LOGERR(MemHeap_Initialise(APP_NAME " heap"));
@@ -1373,17 +1500,37 @@ int main(int argc, char *argv[])
 
     initialise(argc, argv);
 
-    if (cli_filename && cli_filename[0] != '\0')
+    if (cli_filename != NULL && cli_filename[0] != '\0')
     {
-	while (!splash_check_close())
-	    ;
-	
-	do
-	    session_run(cli_filename, cli_file_is_url, cli_postfile);
-	while (cli_loop);
+	if (cli_multitask)
+	{
+	    if (cli_file_is_url)
+		current_session = session_open_url(cli_filename, cli_postfile);
+	    else
+		current_session = session_open(cli_filename, FALSE);
 
-	if (!cli_suspendable)
+	    if (current_session)
+		connection_state(connection_OPENED);
+	}
+	else
+	{
+	    while (!splash_check_close())
+		;
+
+	    /* do anything here that we can without relying on messages */
+	    printer_name = printinfo_name();
+	
+	    do
+		session_run(cli_filename, cli_file_is_url, cli_postfile);
+	    while (cli_loop);
+
 	    return EXIT_SUCCESS;
+	}
+    }
+    else
+    {
+	if (!cli_iconbar && !cli_suspendable)
+	    return EXIT_FAILURE;
     }
 
     err_fatal(event_set_mask(event_mask));

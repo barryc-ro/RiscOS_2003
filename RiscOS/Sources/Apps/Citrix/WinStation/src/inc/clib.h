@@ -103,4 +103,6 @@ extern void write_long(void *a, int b);
 extern void *write_rect(void *out, const RECT *r);
 extern void *read_rect(const void *in, RECT *r);
 
+extern int GetLocalKeyboard(char *s, int len);
+
 #endif //__CLIB_H__

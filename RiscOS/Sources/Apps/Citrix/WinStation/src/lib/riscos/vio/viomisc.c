@@ -9,7 +9,12 @@
 *
 *  Author: Kurt Perry (3/29/1994)
 *
-*  $Log$
+*  viomisc.c,v
+*  Revision 1.1  1998/01/12 11:37:38  smiddle
+*  Newly added.#
+*
+*  Version 0.01. Not tagged
+*
 *  Revision 1.1  1998/01/08 10:41:19  smiddle
 *  Initial revision
 *
@@ -223,48 +228,15 @@ VioBeep (USHORT usFrequency, USHORT usDuration)
 
    TRACE(( TC_LIB, TT_API1, "VioBeep: freq %u, dur %u", usFrequency, usDuration ));
 
-   _swix(OS_WriteI + 7, 0);
-   
-#if 0
    /* a 0, 0 means speaker off */
-   if ( usFrequency == 0 && usDuration == 0 ) {
+   if ( usFrequency == 0 && usDuration == 0 )
+   {
+       sound_off();
 
-      /* turn off speaker */
-      status = inp( OUT_8255 );
-      outp( OUT_8255, (status & ~SPKRON) );
-
-      return( CLIENT_STATUS_SUCCESS );
+       return( CLIENT_STATUS_SUCCESS );
    }
 
-   status = inp( OUT_8255 );
-   outp( TIMER_MODE, TIMER_OSC );
-
-   /* set oscillator */
-   ratio = (unsigned) (TIMER_FREQ / usFrequency);
-
-   /* output the frequency/oscillator bytes */
-   part_ratio = ratio & 0xff;
-   outp( TIMER_COUNT, part_ratio );
-   part_ratio = (ratio >> 8) & 0xff;
-   outp( TIMER_COUNT, part_ratio );
-
-   /* turn the speaker on */
-   outp( OUT_8255, (status | SPKRON) );
-
-   /* a -1 means async beep */
-   if ( usDuration == -1 ) {
-      /* generate a minimal delay to allow sound to be heard */
-      Delay( 10L );
-      return( CLIENT_STATUS_SUCCESS );
-   }
-
-   /* delay for duration */
-   Delay( (ULONG) usDuration );
-
-   /* turn off speaker */
-   status = inp( OUT_8255 );
-   outp( OUT_8255, (status & ~SPKRON) );
-#endif
+   sound_beep(usFrequency, usDuration);
    
    return( CLIENT_STATUS_SUCCESS );
 }

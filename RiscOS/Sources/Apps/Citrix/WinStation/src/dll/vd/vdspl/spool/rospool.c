@@ -377,6 +377,7 @@ CpmEnumPrinter(
     char *ptr;
     PENUMSTRUCT p;
     int size;
+    char *type;
 
     ASSERT( pCount != NULL, (int)pCount );
     ASSERT( pReturnSize != NULL, (int)pReturnSize );
@@ -410,11 +411,20 @@ CpmEnumPrinter(
 	ptr += p->NameSize;
     }
 
-    if (printer_type || gcDefaultQueueName[0])
+    type = NULL;
+    if (printer_type)					// this is set in the frontend 
+	type = printer_type;
+    else  if (gcDefaultQueueName[0])			// this is set in the ini file
+	type = gcDefaultQueueName;
+    else 
+	// on NCOS the printer name is the printer type so may match a
+	// windows name if we're lucky.
+	type = printer_name;
+
+    if (type)
     {
-	const char *s = gcDefaultQueueName[0] ? gcDefaultQueueName : printer_type;
-	p->DriverSize = strlen(s) + 1;			// Size of the driver name following this header
-	memcpy(ptr, s, p->DriverSize);
+	p->DriverSize = strlen(type) + 1;			// Size of the driver name following this header
+	memcpy(ptr, type, p->DriverSize);
 	ptr += p->DriverSize;
     }
     

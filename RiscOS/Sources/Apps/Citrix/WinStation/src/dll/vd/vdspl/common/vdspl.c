@@ -13,25 +13,6 @@
 *    Rewrote to support client-server model printers and
 *    Windows like print queues. This is to allow better integration
 *    of Windows printers into WinFrame.
-*
-* $Log$
-* Revision 1.1  1998/03/10 16:20:53  smiddle
-* Redid the !Run files to allow command line options to be configured externally.
-* Added cpm and spl virtual drivers - two versions of the printer spooling mechanism.
-* Not properly tested but client still works if ClientPrinter is enabled. Doesn't work if
-* ClientPrinter1.5 is enabled though.
-* Made Module list in session.c dependant on #defines set in the Makefile.
-* Split off exported defines into winframe.h which is exported to WinFrameRO and thence to
-* the Export directory.
-* Added a Message control interface to main.c. Not complete or tested.
-* Added a loop forever option (CLI) for Xemplar.
-* Added support for an ica: pseudo-URL scheme. ANT protocol only at the moment.
-*
-* Version 0.14. Tagged as 'WinStation-0_14'
-*
-* Revision 1.1  1997/11/27 16:57:04  smiddle
-* Initial revision
-*
 *  
 *     Rev 1.5   15 Apr 1997 18:05:20   TOMA
 *  autoput for remove source 4/12/97
@@ -98,7 +79,7 @@ PLIBPROCEDURE VdSplDriverProcedures[VDDRIVER__COUNT] =
 
 extern int WdCall( PVD pVd, USHORT ProcIndex, PVOID pParam );
 
-extern int SplPollAllPorts( );
+extern int SplPollAllPorts(void );
 
 /*=============================================================================
 ==   Data
@@ -118,6 +99,8 @@ static POUTBUFRESERVEPROC OutBufReserve   = NULL;
 static POUTBUFAPPENDPROC OutBufAppend     = NULL;
 static POUTBUFWRITEPROC OutBufWrite       = NULL;
 static PAPPENDVDHEADERPROC AppendVdHeader = NULL;
+
+extern char *printer_name;	// from frontend
 
 /*******************************************************************************
  *
@@ -173,6 +156,20 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
 
    TRACE(( TC_CPM, TT_API1, "VDCPM: MaxWindowSize %d, WindowSize %d, Queue '%s'",MaxWindowSize,WindowSize,gcDefaultQueueName));
 
+   if (gcDefaultQueueName[0] == '\0' && printer_name)
+   {
+       /* try looking the printer name up in the INI file
+	* there may be a mapping from RISC OS printer name to Windows printer name.
+	*/
+       bGetPrivateProfileString(
+	   pVdOpen->pIniSection,
+	   printer_name,
+	   "",
+	   gcDefaultQueueName,
+	   sizeof(gcDefaultQueueName)
+	   );
+   }
+   
    /*
     *  Initialize to zero
     */

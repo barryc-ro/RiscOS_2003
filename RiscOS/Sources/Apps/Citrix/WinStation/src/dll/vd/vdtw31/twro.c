@@ -159,6 +159,7 @@ struct DC__
 	int bpp;
 	int width;		// in pixels
 	int height;
+	POINT origin;		// screen origin offset
 
 	int line_length;	// in bytes
 	void *display_start;
@@ -280,8 +281,8 @@ struct GDIOBJ__
 
  */
 
-#define cvtx(dc, x)	((int)(x)*2)
-#define cvty(dc, y)	(((dc)->data.height - 1 - (int)(y))*2)
+//#define cvtx(dc, x)	((int)(x)*2)
+//#define cvty(dc, y)	(((dc)->data.height - 1 - (int)(y))*2)
 
 #ifdef DEBUG
 #define is_screen(dc)	(((dc) == screen_dc) ? " (screen)" : "")
@@ -673,6 +674,16 @@ static int getlog2bpp(int bpp)
     return 5;
 }
 #endif
+
+static int cvtx(HDC dc, int x)
+{
+    return (x + dc->data.origin.x) * 2;
+}
+		
+static int cvty(HDC dc, int y)
+{
+    return (dc->data.height - 1 - y + dc->data.origin.y) * 2;
+}
 
 static int getspritemode(int bpp)
 {
@@ -1719,16 +1730,16 @@ static BOOL set_clip(HDC dc, region_rect **context)
 static void copysinglerectangle(HDC dc, const RECT *final, int dx, int dy)
 {
     LOGERR(_swix(OS_Plot, _INR(0,2), 0+4,
-		 cvtx(dc, final->left - dx),
-		 cvty(dc, final->bottom - 1 - dy)));
+		 cvtx(dc, (int)final->left - dx),
+		 cvty(dc, (int)final->bottom - 1 - dy)));
     
     LOGERR(_swix(OS_Plot, _INR(0,2), 0+4,
-		 cvtx(dc, final->right - 1 - dx),
-		 cvty(dc, final->top - dy)));
+		 cvtx(dc, (int)final->right - 1 - dx),
+		 cvty(dc, (int)final->top - dy)));
     
     LOGERR(_swix(OS_Plot, _INR(0,2), 7+184,
-		 cvtx(dc, final->left),
-		 cvty(dc, final->bottom - 1)));
+		 cvtx(dc, (int)final->left),
+		 cvty(dc, (int)final->bottom - 1)));
 }
 
 static void set_colour(HDC dc, int new_col, int new_action)
@@ -1850,9 +1861,9 @@ static void copyrectangle(HDC dc, const bitblt_info *info)
     {
 	RECT rect;
 	rect.left = info->xDest;
-	rect.right = info->xDest + info->Width;
+	rect.right = (LONG)info->xDest + info->Width;
 	rect.top = info->yDest;
-	rect.bottom = info->yDest + info->Height;
+	rect.bottom = (LONG)info->yDest + info->Height;
 	copysinglerectangle(dc, &rect, dx, dy);
     }
 }
@@ -2035,11 +2046,11 @@ static BOOL tilebitmapbrush(HDC dc, const bitblt_info *info, int rop3)
     {
 	int x, y, xs, ys, xe, ye;
 
-	xs = cvtx(dc, (context->rect.left &~ 7)/* - dc->data.brush_org.x*/);
-	xe = cvtx(dc, context->rect.right);
+	xs = cvtx(dc, (int)(context->rect.left &~ 7)/* - dc->data.brush_org.x*/);
+	xe = cvtx(dc, (int)context->rect.right);
 
-	ys = cvty(dc, (context->rect.top &~ 7)/* - dc->data.brush_org.y*/ + (BRUSH_HEIGHT-1));
-	ye = cvty(dc, context->rect.bottom + (BRUSH_HEIGHT-1));
+	ys = cvty(dc, (int)((context->rect.top &~ 7)/* - dc->data.brush_org.y*/ + (BRUSH_HEIGHT-1)));
+	ye = cvty(dc, (int)(context->rect.bottom + (BRUSH_HEIGHT-1)));
 
 	TRACE((TC_TW, TT_TW_res3, "tilebrush: sprite OS %d,%d %d,%d reason %d", xs, ys, xe, ye, reason));
 
@@ -2267,7 +2278,9 @@ static void dc_line_ptr(line_info *line, HDC dc, int y)
 {
     if (dc->gdi.tag == OBJ_DC)
     {
-	line->data = (unsigned *)((char *)dc->data.display_start + y * dc->data.line_length);
+	line->data = (unsigned *)((char *)dc->data.display_start +
+				  (y + dc->data.origin.y + (dc->data.height & 1)) * dc->data.line_length +
+				  dc->data.origin.x * dc->data.bpp / 8);
 	line->bpp = dc->data.bpp;
 	line->mask = (1 << line->bpp) - 1;
     }	
@@ -2313,6 +2326,35 @@ static void line_init(line_info *line, const void *coltrans, int x)
     }
 }
 
+#if 0
+rn_PIXEL
+rn_SOURCE
+rn_SOURCE_PTR
+rn_SOURCE_PHASE
+rn_SOURCE_MASK
+rn_SOURCE_BPP
+rn_COLTRANS
+
+#define CONST(n)
+#define PREINC(n)
+#define SHIFT(reg, shift)
+
+static void construct_pixel(int *code)
+{
+    *code++ = construct_arith	(code_ALWAYS,	rn_PIXEL,		code_AND, rn_SOURCE,		rn_SOURCE_MASK);
+    *code++ = construct_arith	(code_ALWAYS,	rn_SOURCE_PHASE,	code_ADD, rn_SOURCE_PHASE,	rn_SOURCE_BPP);
+    *code++ = construct_cmp	(code_ALWAYS,				code_CMP, rn_SOURCE_PHASE,	CONST(32));
+
+    *code++ = construct_load	(code_EQ,	rn_SOURCE,		rn_SOURCE_PTR,			PREINC(4));
+    *code++ = construct_arith	(code_EQ,	rn_SOURCE_PHASE,	code_MOV, 0,			CONST(0));
+
+    *code++ = construct_arith	(code_NE,	rn_SOURCE,		code_MOV, 0,			REGSHIFT(rn_SOURCE, rn_SOURCE_BPP));
+
+    if (line->coltrans)
+	*code++ = construct_load(code_ALWAYS,	rn_PIXEL,		rn_COLTRANS,			REGINDEX(rn_PIXEL));
+}
+#endif
+
 static int pixel(line_info *line)
 {
     unsigned pixel;
@@ -2346,224 +2388,6 @@ static int pixel(line_info *line)
 
     return pixel;
 }
-
-#if 0
-static void pixel_out(line_info *line, unsigned pixel)
-{
-    TRACE((TC_TW, TT_TW_res5, "p_out:               pixel %2x phase %2d word %8x", pixel, line->phase, line->word_out));
-
-    line->word_out |= (pixel & line->mask) << ((line->phase - line->bpp) & 31);
-
-    if (line->phase == 0)
-    {
-	TRACE((TC_TW, TT_TW_res5, "p_out: write %08x", line->word_out));
-
-	line->ptr[-1] = line->word_out;	// subtract 1 because we've just loaded a new word at this point
-	line->word_out = 0;
-    }
-}
-
-static void pixel_flush(line_info *line)
-{
-    if (line->phase != 0)
-    {
-	line->word_out |= line->word << line->phase;
-	    
-	TRACE((TC_TW, TT_TW_res5, "p_fls: write %08x", line->word_out));
-	
-	line->ptr[0] = line->word_out;
-    }
-}
-#endif
-
-#if 0
-static void bitblt_nosource(HDC dcDest, const bitblt_info *info, int rop3)
-{
-    void *bitmap_coltrans;
-    region_rect *context;
-    pp_function fn;
-    sprite_descr *brush;
-
-    realize_brush(dcDest);
-
-    /* get the pixel processor function */
-    fn = make_function(rop3);
-
-    TRACE((TC_TW, TT_TW_res1, "bitblt_nosource: destDC %p (bitmap %p) brush %p (coltrans %p) solid %d (%x)",
-	   dcDest, dcDest->data.bitmap, 
-	   dcDest->data.brush, dcDest->data.realized.brush,
-	   dcDest->data.brush ? dcDest->data.brush->data.solid : 0,
-	   dcDest->data.brush ? dcDest->data.local.brush_solid : 0));
-
-    brush = &dcDest->data.realized.brush;
-    if (!brush->area)
-	brush = &dcDest->data.brush->data.sprite;
-    
-    /* enumerate the clip regions */
-    context = NULL;
-    while (set__clip(dcDest, info->rgn, &context))
-    {
-	int x, y, x0, y0, x1, y1; // these are all in dest dc space
-	int brush_phase_x, brush_phase_y;
-	int brush_phase_x0, brush_phase_y0;
-	
-	// use windows coords as they map to pixels
-	// not pixel 0,0 is top left of screen (ie screen base + 0)
-	x0 = context->rect.left;
-	x1 = context->rect.right;
-	y0 = context->rect.top;
-	y1 = context->rect.bottom;
-
-	// get starting phase of brush pixels
-	brush_phase_x0 = x0 & (BRUSH_WIDTH - 1);
-	brush_phase_y0 = y0 & (BRUSH_HEIGHT - 1);
-	
-	TRACE((TC_TW, TT_TW_res4, "complex_blt: %d,%d to %d,%d brush phase %d,%d",
-	       x0, y0, x1, y1, brush_phase_x0, brush_phase_y0));
-
-	/* enumerate the lines */
-	brush_phase_y = brush_phase_y0;
-	for (y = y0; y != y1; y ++)
-	{
-	    line_info p_line, d_line;
-
-	    /* get line ptrs */
-	    dc_line_ptr(&d_line, dcDest, y);
-	    line_ptr(&p_line, brush, brush_phase_y);
-
-	    p_line.solid_colour = dcDest->data.local.brush_solid;
-	    p_line.bpp = dcDest->data.bpp;
-
-	    line_init(&d_line, NULL, x0);
-	    line_init(&p_line, NULL, brush_phase_x0);
-
-	    /* enumerate the pixels */
-	    brush_phase_x = brush_phase_x0;
-	    for (x = x0; x != x1; x ++)
-	    {
-		unsigned d, p, val;
-
-		d = pixel(&d_line);
-		p = pixel(&p_line);
-
-		val = fn(d, 0, p);
-
-		pixel_out(&d_line, val);
-
-		if (++brush_phase_x == BRUSH_WIDTH)
-		{
-		    brush_phase_x = 0;
-		    line_init(&p_line, NULL, 0);
-		}
-	    }
-
-	    pixel_flush(&d_line);
-	    
-	    brush_phase_y = (brush_phase_y + 1) & (BRUSH_HEIGHT-1);
-	}
-    }
-}
-#endif
-
-#if 0
-static void bitblt_generic(HDC dcDest, HDC dcSrc, const bitblt_info *info, int rop3)
-{
-    void *bitmap_coltrans;
-    region_rect *context;
-    pp_function fn;
-    sprite_descr *brush;
-
-    /* get colour lookup for source (if bitmap), none if from screen */
-    if (dcSrc->data.bitmap)
-	bitmap_coltrans = get_colour_lookup_table(dcDest, &dcSrc->data.bitmap->data.sprite, dcSrc->data.bitmap->data.color_table_type);
-    else
-	bitmap_coltrans = NULL;
-
-    realize_brush(dcDest);
-
-    /* get the pixel processor function */
-    fn = make_function(rop3);
-
-    TRACE((TC_TW, TT_TW_res1, "bitblt_generic: destDC %p (bitmap %p) srcDC %p (bitmap %p coltrans %p) brush %p (realized %p) solid %d (%x)",
-	   dcDest, dcDest->data.bitmap, dcSrc, dcSrc->data.bitmap, bitmap_coltrans,
-	   dcDest->data.brush, dcDest->data.realized.brush,
-	   dcDest->data.brush ? dcDest->data.brush->data.solid : 0,
-	   dcDest->data.brush ? dcDest->data.local.brush_solid : 0));
-
-    brush = &dcDest->data.realized.brush;
-    if (!brush->area)
-	brush = &dcDest->data.brush->data.sprite;
-    
-    /* enumerate the clip regions */
-    context = NULL;
-    while (set__clip(dcDest, info->rgn, &context))
-    {
-	int x, y, x0, y0, x1, y1; // these are all in dest dc space
-	int brush_phase_x, brush_phase_y;
-	int brush_phase_x0, brush_phase_y0;
-	
-	// use windows coords as they map to pixels
-	// not pixel 0,0 is top left of screen (ie screen base + 0)
-	x0 = context->rect.left;
-	x1 = context->rect.right;
-	y0 = context->rect.top;
-	y1 = context->rect.bottom;
-
-	// get starting phase of brush pixels
-	brush_phase_x0 = x0 & (BRUSH_WIDTH - 1);
-	brush_phase_y0 = y0 & (BRUSH_HEIGHT - 1);
-	
-	TRACE((TC_TW, TT_TW_res4, "complex_blt: %d,%d to %d,%d brush phase %d,%d",
-	       x0, y0, x1, y1, brush_phase_x0, brush_phase_y0));
-
-	/* enumerate the lines */
-	brush_phase_y = brush_phase_y0;
-	for (y = y0; y != y1; y ++)
-	{
-	    line_info s_line, p_line, d_line;
-
-	    /* get line ptrs */
-	    dc_line_ptr(&d_line, dcDest, y);
-	    dc_line_ptr(&s_line, dcSrc, info->ySrc + (y - info->yDest));
-	    line_ptr(&p_line, brush, brush_phase_y);
-
-	    p_line.solid_colour = dcDest->data.local.brush_solid;
-	    p_line.bpp = dcDest->data.bpp;
-
-	    line_init(&d_line, NULL, x0);
-	    line_init(&s_line, bitmap_coltrans, info->xSrc + (x0 - info->xDest));
-	    line_init(&p_line, NULL, brush_phase_x0);
-
-	    /* enumerate the pixels */
-	    brush_phase_x = brush_phase_x0;
-	    for (x = x0; x != x1; x ++)
-	    {
-		unsigned s, d, p, val;
-
-		d = pixel(&d_line);
-		s = pixel(&s_line);
-		p = pixel(&p_line);
-
-		val = fn(d, s, p);
-
-		pixel_out(&d_line, val);
-
-		if (++brush_phase_x == BRUSH_WIDTH)
-		{
-		    brush_phase_x = 0;
-		    line_init(&p_line, NULL, 0);
-		}
-	    }
-
-	    pixel_flush(&d_line);
-	    
-	    brush_phase_y = (brush_phase_y + 1) & (BRUSH_HEIGHT-1);
-	}
-    }
-
-    free(bitmap_coltrans);
-}
-#endif
 
 #define bitblt_nosource(d,i,r) bitblt_generic(d,d,i,r)
 
@@ -4381,9 +4205,29 @@ static int get_mode_index(const SCREENRES *res, int n, const SCREENRES *new_res)
     return -1;
 }
 
-/* On entry the res_array contins one entry which is the preferred
- * *resolution.  depth contains the flag for 4bit or 8bit. If that res
- * *and depth can't be satisfied then update with one that can.
+static int get_close_mode_index(const SCREENRES *res, int n, const SCREENRES *desired)
+{
+    SCREENRES best_res;
+    int i, best_i;
+
+    best_res.HRes = 0xFFFF;	// USHORT
+    best_res.VRes = 0xFFFF;
+    best_i = -1;
+    
+    for (i = 0; i < n; i++, res++)
+	if (res->HRes >= desired->HRes && res->VRes >= desired->VRes &&
+	    res->HRes <= best_res.HRes && res->VRes <= best_res.VRes)
+	{
+	    best_res = *res;
+	    best_i = i;
+	}
+
+    return best_i;
+}
+
+/* On entry the res_array contains one entry which is the preferred
+ * resolution.  depth contains the flag for 4bit or 8bit. If that res
+ * and depth can't be satisfied then update with one that can.
  */
 
 int EnumerateModes(SCREENRES *res, int max, int *bpp)
@@ -4397,6 +4241,8 @@ int EnumerateModes(SCREENRES *res, int max, int *bpp)
     int n_skip = 0;
     BOOL had_pref = FALSE;
     
+    TRACE((TC_TW, TT_TW_PALETTE, "EnumerateModes: looking for %dx%d in %d bpp max returned %d", res->HRes, res->VRes, *bpp, max));
+
     /* enumerate modes the new way */
     do
     {
@@ -4415,15 +4261,19 @@ int EnumerateModes(SCREENRES *res, int max, int *bpp)
 	{
 	    if ((mode->flags & 0xff) == 1) // bit 0 set, format 0
 	    {
+		/* We only care about modes in out bpp, square pixels >= 640 wide */
 		if ((1 << mode->log2_bpp) == *bpp &&
 		    mode->xres >= 640 &&
 		    mode->yres >= mode->xres/2)
 		{
+		    /* copy out to the caller */
 		    res[used].HRes = mode->xres;
 		    res[used].VRes = mode->yres;
 
+		    /* see if it was already in the list */
 		    index = get_mode_index(res, used, &res[used]);
 
+		    /* if it matches the first then it is the one they wanted */
 		    if (index == 0)
 		    {
 			had_pref = TRUE;
@@ -4467,6 +4317,7 @@ int EnumerateModes(SCREENRES *res, int max, int *bpp)
 	    if (_swix(OS_CheckModeValid, _IN(0) | _FLAGS, i, &flags) == NULL &&
 		(flags & _C) == 0)
 	    {
+		/* only interested in 4bpp, square pixel, non-textonly/teletext modes */
 		if (modeval(i, vduvar_Log2BPP) == 2 &&
 		    (modeval(i, vduvar_ModeFlags) & 3) == 0 &&
 		    modeval(i, vduvar_XEig) == 1 &&
@@ -4502,13 +4353,24 @@ int EnumerateModes(SCREENRES *res, int max, int *bpp)
 	}
     }
     
-    /* found modes but not the preferred mode: go to 640x480 */
+    /* found modes but not the preferred mode
+     * find the next largest one or 640x480 as last resort
+     */
     if (!had_pref)
     {
-	res->HRes = 640;
-	res->VRes = 480;
+	int best = get_close_mode_index(&res[1], used-1, res);
 
-	TRACE((TC_TW, TT_TW_PALETTE, "EnumerateModes: not had pref resetting"));
+	if (best == -1)
+	{
+	    res->HRes = 640;
+	    res->VRes = 480;
+	}
+	else
+	{
+	    *res = res[best + 1];
+	}
+
+	TRACE((TC_TW, TT_TW_PALETTE, "EnumerateModes: not had pref using %dx%d in %d bpp (index %d)", res->HRes, res->VRes, *bpp, best));
     }
     
     return used;
@@ -4516,17 +4378,24 @@ int EnumerateModes(SCREENRES *res, int max, int *bpp)
 
 void SetMode(int colorcaps, int xres, int yres)
 {
-    int old_bpp;
+    int bpp, old_bpp;
+    SCREENRES resolutions[32];
+
+    resolutions[0].HRes = xres;
+    resolutions[0].VRes = yres;
+    bpp = colorcaps == Color_Cap_16 ? 4 : 8;
+
+    /* get the available modes, builds mode numbers array if not already,
+     * returns most suitable mode in res[0]
+     */
+    EnumerateModes(resolutions, sizeof(resolutions)/sizeof(resolutions[0]), &bpp);
+
+    FadeScreen(0);
 
     if (mode_numbers)
     {
-	SCREENRES res;
-	int index;
+	int index = get_close_mode_index(mode_defs, mode_count, &resolutions[0]);
 
-	res.HRes = xres;
-	res.VRes = yres;
-
-	index = get_mode_index(mode_defs, mode_count, &res);
 	if (index != -1)
 	{
 	    _swix(OS_WriteI + 22, 0);
@@ -4540,9 +4409,9 @@ void SetMode(int colorcaps, int xres, int yres)
 	int m[14];
 
 	m[0] = 1;
-	m[1] = xres;
-	m[2] = yres;
-	m[3] = colorcaps == Color_Cap_16 ? 2 : 3;
+	m[1] = resolutions[0].HRes;
+	m[2] = resolutions[0].VRes;
+	m[3] = bpp == 4 ? 2 : 3;	// colour depth
 	m[4] = -1;			// highest frame rate
 
 	if (m[3] == 3)
@@ -4553,7 +4422,7 @@ void SetMode(int colorcaps, int xres, int yres)
 	    m[7] = vduvar_NColours;
 	    m[8] = 255;
 
-	    m[9] = vduvar_XEig;
+	    m[9] = vduvar_XEig;			// square pixels
 	    m[10] = 1;
 	    m[11] = vduvar_YEig;
 	    m[12] = 1;
@@ -4573,6 +4442,14 @@ void SetMode(int colorcaps, int xres, int yres)
     uncache_dc(screen_dc);
     set_current_dc(screen_dc);
 
+    /* we must round x origin to guarantee virtual screen starts on a
+     * word boundary but we don't need to do this for the y origin
+     */
+    screen_dc->data.origin.x = ((screen_dc->data.width  - xres)/2) &~ 7;
+    screen_dc->data.origin.y = ( screen_dc->data.height - yres)/2;
+    screen_dc->data.width = xres;
+    screen_dc->data.height = yres;
+    
     // get palette again if bpp has changed
     if (old_bpp != screen_dc->data.bpp)
     {
@@ -4590,6 +4467,8 @@ void SetMode(int colorcaps, int xres, int yres)
     LOGERR(_swix(OS_WriteN, _INR(0,1), MOUSE_COLOURS, sizeof(MOUSE_COLOURS)-1));
 
     LOGERR(_swix(OS_RemoveCursors, 0));
+
+    MouseSetScreenOrigin(screen_dc->data.origin.x * 2, screen_dc->data.origin.y * 2);
 }
 
 /* ---------------------------------------------------------------------------------------------------- */

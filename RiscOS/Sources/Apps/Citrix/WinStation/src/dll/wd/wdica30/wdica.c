@@ -874,7 +874,9 @@ EmulSetInformation( PWD pWd, PWDSETINFORMATION pWdSetInformation )
                 pIca->cbMouBufferSize = 0;
             }
 
-
+	    /* close down the keyboard support */
+	    KbdClose();
+	    
             if ( pWd->fConnected ) {
                 pIca->fSendStopRequest = TRUE;
             } else {
@@ -885,6 +887,9 @@ EmulSetInformation( PWD pWd, PWDSETINFORMATION pWdSetInformation )
 
         case WdSetFocus :
 
+	    /* reopen the keyboard */
+	    KbdReopen();
+	    
             /*
              *  Restore saved kbd mode
              */

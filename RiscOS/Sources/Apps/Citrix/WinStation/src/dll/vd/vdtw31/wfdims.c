@@ -63,6 +63,7 @@
 
 #include "wfglobal.h"
 
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1041,10 +1042,14 @@ finishedTWDIMCacheRead()
  *
  ******************************************************************************/
 
+#ifdef WIN32
+static int iPriorityDims = DIMS_PRIORITY_0;
+static BOOL fPriorityDims = TRUE;
+#endif
+
 BOOL
 TWDIMCacheInit( PVD pvd, BOOL fContinue ) 
 {
-
 #ifdef WIN32
 
     struct _finddata_t FileInfo;
@@ -1055,8 +1060,6 @@ TWDIMCacheInit( PVD pvd, BOOL fContinue )
 
 static long hFind;
 static PCACHE_FILE_CONTEXT pcf;
-static int iPriorityDims = DIMS_PRIORITY_0;
-static BOOL fPriorityDims = TRUE;
 
     /*
      *  Continuation?
@@ -1064,7 +1067,11 @@ static BOOL fPriorityDims = TRUE;
     if ( fContinue ) {
         goto w32_keep_going;
     }
-     
+
+    /* SJM: can set them here as this will only be called once (when Continue is FALSE) per session */
+    iPriorityDims = DIMS_PRIORITY_0;
+    fPriorityDims = TRUE;
+    
     /*
      *  Create and initialize cache file context records
      */
@@ -1158,7 +1165,7 @@ static BOOL fPriorityDims = TRUE;
                         tmp_pcf.SignatureLevel = gDIMHeader.sigLevel;
                         *((PULONG)&(tmp_pcf.Filehandle[0])) =  DIMHeader.sigH;
                         *((PULONG)&(tmp_pcf.Filehandle[4])) =  DIMHeader.sigL;
-			memcpy(pcf + count * sizeof_CACHE_FILE_CONTEXT, &tmp_pcf, sizeof_CACHE_FILE_CONTEXT);
+			memcpy((char *)pcf + count * sizeof_CACHE_FILE_CONTEXT, &tmp_pcf, sizeof_CACHE_FILE_CONTEXT);
         
                         /*
                          *  Update disk usage
@@ -1595,7 +1602,9 @@ twDIMCacheError( PVD pvd, CACHE_FILE_HANDLE fh  )
     INT rc = CLIENT_STATUS_SUCCESS;
     WDSETINFORMATION WdSetInfo;
     PICA_CACHE_ERROR pCacheInfo;
- 
+
+    ASSERT(offsetof(ICA_CACHE_ERROR, FileHandle) == 3, offsetof(ICA_CACHE_ERROR, FileHandle));
+    
     /*
      *  Allocate ICA packet
      */
@@ -1894,9 +1903,10 @@ twGetDiskFreeSpace()
     
 #elif defined(RISCOS)
 
-    int len = strlen(vpszDimCachePath);
+    int len;
     int size;
 
+    len = strlen(vpszDimCachePath);
     vpszDimCachePath[len-1] = '\0';
     LOGERR(_swix(OS_FSControl, _INR(0,1) | _OUT(2), 49, vpszDimCachePath, &size));
     vpszDimCachePath[len-1] = '.';

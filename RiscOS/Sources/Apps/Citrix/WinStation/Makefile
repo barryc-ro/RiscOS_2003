@@ -156,10 +156,10 @@ SRC=		${APPSRC} ${CITRIXLIBSRC} ${NRLIBSRC} ${TDLIBSRC} ${PDLIBSRC} ${WDLIBSRC} 
 all:	${APP}
 
 clean:	cleanlib cleandll cleanapp
-	echo cleaned all
+	@echo cleaned all
 
 realclean: clean cleanmisc cleaninstall cleanmakepass
-	echo realcleaned all
+	@echo realcleaned all
 
 cleanmisc:
 	${RM} TAGS
@@ -172,7 +172,7 @@ srclist:
 	find . -name '*.[ch]' > srclist
 
 refreshtags: cleanmisc srclist tags
-	echo refreshed tags
+	@echo refreshed tags
 
 depends: ${SRC}
 	armdepend -M Makefile $(CCFLAGS) -DDEBUG ${SRC}
@@ -185,8 +185,8 @@ local_dirs:
 	@-${MKDIR} rm
 
 install_base:
-	-${MKDIR} ${INSTALLDIR}/${APPNAME}
-	-${MKDIR} ${INSTALLDIR}/${APPNAME}/ini
+	@-${MKDIR} ${INSTALLDIR}/${APPNAME}
+	@-${MKDIR} ${INSTALLDIR}/${APPNAME}/ini
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!Boot,feb	${INSTALLDIR}/${APPNAME}/
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!Help		${INSTALLDIR}/${APPNAME}/
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!Run,feb	${INSTALLDIR}/${APPNAME}/
@@ -203,23 +203,23 @@ install_base:
 
 install: ${APP} install_base
 	${CP} ${CPFLAGS} ${APP}					${INSTALLDIR}/${APPNAME}/!RunImage,ff8
-	echo Installed ${COMPONENT}
+	@echo Installed ${COMPONENT}
 
 installd: ${APPD} install_base
 	${CP} ${CPFLAGS} ${APPD}				${INSTALLDIR}/${APPNAME}/!RunImage,ff8
-	echo Installed ${COMPONENT} debug
+	@echo Installed ${COMPONENT} debug
 
 installrm: ${APPRM} install_base
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!RunRAM,feb	${INSTALLDIR}/${APPNAME}/!Run,feb
 	${CP} ${CPFLAGS} ${APPRM}				${INSTALLDIR}/${APPNAME}/!RunImage,ffa
-	echo Installed ${COMPONENT} module
+	@echo Installed ${COMPONENT} module
 
 installrom: ${APPZ}
-	-${MKDIR} ${ROMDIR}
-	-${MKDIR} ${ROMDIR}/h
-	-${MKDIR} ${ROMDIR}/Resources/
-	-${MKDIR} ${ROMDIR}/Resources/${COUNTRY}
-	-${MKDIR} ${ROMDIR}/Resources/${COUNTRY}/ini
+	@-${MKDIR} ${ROMDIR}
+	@-${MKDIR} ${ROMDIR}/h
+	@-${MKDIR} ${ROMDIR}/Resources/
+	@-${MKDIR} ${ROMDIR}/Resources/${COUNTRY}
+	@-${MKDIR} ${ROMDIR}/Resources/${COUNTRY}/ini
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!BootROM,feb	${ROMDIR}/Resources/${COUNTRY}/!Boot,feb
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!Help		${ROMDIR}/Resources/${COUNTRY}
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!RunROM,feb	${ROMDIR}/Resources/${COUNTRY}/!Run,feb
@@ -232,7 +232,7 @@ installrom: ${APPZ}
 	${CP} ${CPFLAGS} Resources/ini/module			${ROMDIR}/Resources/${COUNTRY}/ini
 	${CP} ${CPFLAGS} Resources/ini/wfclient			${ROMDIR}/Resources/${COUNTRY}/ini
 	${CP} ${CPFLAGS} ${APPZ}				${ROMDIR}/aof/${COMPONENT}
-	echo Installed ${COMPONENT} aof in ${ROMDIR}
+	@echo Installed ${COMPONENT} aof in ${ROMDIR}
 	${CP} ${CPFLAGS} src/app/icaclient.h			${ROMDIR}/h/icaclient
 
 #	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Sprites,ff9	${ROMDIR}/Resources/${COUNTRY}
@@ -242,7 +242,15 @@ cleaninstall:
 	-${RMDIR} ${APPNAME}/ini
 	-${RM}	  ${APPNAME}/*
 	-${RMDIR} ${APPNAME}
-	echo Cleaned install
+	@echo Cleaned install
+
+installnc: install
+	@rcp -pr ${INSTALLDIR}/${APPNAME} 'bungle:/export/ftp/Custom/Apps'
+	@echo Installed ${COMPONENT} on NC
+
+installncd: installd
+	@rcp -pr ${INSTALLDIR}/${APPNAME} 'bungle:/export/ftp/Custom/Apps'
+	@echo Installed ${COMPONENT} on NC
 
 # ----------------------------------------------------------------------------------------------------
 
@@ -255,7 +263,7 @@ makepass,ff8: src/app/makepass.o ${CITRIXLIB}
 
 cleanmakepass:
 	${RM} src/app/makepass.o 'makepass,ff8'
-	echo cleaned makepass
+	@echo cleaned makepass
 
 # ----------------------------------------------------------------------------------------------------
 
@@ -265,7 +273,8 @@ cleanmakepass:
 
 CITRIXLIBSRC=	src/lib/cfgini/cfgini.c \
 		src/lib/cfgload/cfgload.c \
-		src/lib/clib/delay.c src/lib/clib/fileio.c src/lib/clib/loadstr.c src/lib/clib/misc.c src/lib/clib/string.c src/lib/clib/vdu.c \
+		src/lib/clib/delay.c src/lib/clib/fileio.c src/lib/clib/loadstr.c src/lib/clib/machine.c \
+		src/lib/clib/misc.c src/lib/clib/string.c src/lib/clib/vdu.c \
 		src/lib/encrypt/encrypt.c \
 		src/lib/ini/iniapi.c \
 		src/lib/log/logapi.c \
@@ -274,13 +283,14 @@ CITRIXLIBSRC=	src/lib/cfgini/cfgini.c \
 		src/lib/riscos/mou/mouapi.c \
 		src/lib/riscos/vio/viocfg.c src/lib/riscos/vio/viocur.c src/lib/riscos/vio/viomisc.c \
 		src/lib/riscos/vio/vioread.c src/lib/riscos/vio/vioscrll.c src/lib/riscos/vio/viowrt.c \
-		src/lib/riscos/vio/vioro.c 
+		src/lib/riscos/vio/vioro.c src/lib/riscos/vio/viochars.c 
 
 #		src/lib/io/icabrows/icabrows.c rc/lib/io/tcpro/tcpro.c \
 
 CITRIXLIBOBJS=	src/lib/cfgini/cfgini.o \
 		src/lib/cfgload/cfgload.o \
-		src/lib/clib/delay.o src/lib/clib/fileio.o src/lib/clib/loadstr.o src/lib/clib/misc.o src/lib/clib/string.o src/lib/clib/vdu.o \
+		src/lib/clib/delay.o src/lib/clib/fileio.o src/lib/clib/loadstr.o src/lib/clib/machine.o \
+		src/lib/clib/misc.o src/lib/clib/string.o src/lib/clib/vdu.o \
 		src/lib/encrypt/encrypt.o \
 		src/lib/ini/iniapi.o \
 		src/lib/log/logapi.o \
@@ -289,11 +299,12 @@ CITRIXLIBOBJS=	src/lib/cfgini/cfgini.o \
 		src/lib/riscos/mou/mouapi.o \
 		src/lib/riscos/vio/viocfg.o src/lib/riscos/vio/viocur.o src/lib/riscos/vio/viomisc.o \
 		src/lib/riscos/vio/vioread.o src/lib/riscos/vio/vioscrll.o src/lib/riscos/vio/viowrt.o \
-		src/lib/riscos/vio/vioro.o 
+		src/lib/riscos/vio/vioro.o src/lib/riscos/vio/viochars.o
 
 CITRIXLIBOBJSD=	src/lib/cfgini/cfgini.od \
 		src/lib/cfgload/cfgload.od \
-		src/lib/clib/delay.od src/lib/clib/fileio.od src/lib/clib/loadstr.od src/lib/clib/misc.od src/lib/clib/string.od src/lib/clib/vdu.od \
+		src/lib/clib/delay.od src/lib/clib/fileio.od src/lib/clib/loadstr.od src/lib/clib/machine.od \
+		 src/lib/clib/misc.od src/lib/clib/string.od src/lib/clib/vdu.od \
 		src/lib/encrypt/encrypt.od \
 		src/lib/ini/iniapi.od \
 		src/lib/log/logapi.od \
@@ -302,11 +313,12 @@ CITRIXLIBOBJSD=	src/lib/cfgini/cfgini.od \
 		src/lib/riscos/mou/mouapi.od \
 		src/lib/riscos/vio/viocfg.od src/lib/riscos/vio/viocur.od src/lib/riscos/vio/viomisc.od \
 		src/lib/riscos/vio/vioread.od src/lib/riscos/vio/vioscrll.od src/lib/riscos/vio/viowrt.od \
-		src/lib/riscos/vio/vioro.od
+		src/lib/riscos/vio/vioro.od src/lib/riscos/vio/viochars.od
 
 CITRIXLIBOBJSZ=	src/lib/cfgini/cfgini.oz \
 		src/lib/cfgload/cfgload.oz \
-		src/lib/clib/delay.oz src/lib/clib/fileio.oz src/lib/clib/loadstr.oz src/lib/clib/misc.oz src/lib/clib/string.oz src/lib/clib/vdu.oz \
+		src/lib/clib/delay.oz src/lib/clib/fileio.oz src/lib/clib/loadstr.oz src/lib/clib/machine.oz \
+		src/lib/clib/misc.oz src/lib/clib/string.oz src/lib/clib/vdu.oz \
 		src/lib/encrypt/encrypt.oz \
 		src/lib/ini/iniapi.oz \
 		src/lib/log/logapi.oz \
@@ -315,7 +327,7 @@ CITRIXLIBOBJSZ=	src/lib/cfgini/cfgini.oz \
 		src/lib/riscos/mou/mouapi.oz \
 		src/lib/riscos/vio/viocfg.oz src/lib/riscos/vio/viocur.oz src/lib/riscos/vio/viomisc.oz \
 		src/lib/riscos/vio/vioread.oz src/lib/riscos/vio/vioscrll.oz src/lib/riscos/vio/viowrt.oz \
-		src/lib/riscos/vio/vioro.oz
+		src/lib/riscos/vio/vioro.oz src/lib/riscos/vio/viochars.oz
 
 ${CITRIXLIB}: ${CITRIXLIBOBJS}
 	${LIBFILE} ${LIBFILEFLAGS} -o ${CITRIXLIB} ${CITRIXLIBOBJS}
@@ -333,7 +345,7 @@ cleanlib:
 	-${RM} ${CITRIXLIBOBJSD}
 	-${RM} ${CITRIXLIBZ}
 	-${RM} ${CITRIXLIBOBJSZ}
-	echo cleaned lib
+	@echo cleaned lib
 
 src/lib/cfgini/cfgini.o src/lib/cfgini/cfgini.od src/lib/cfgini/cfgini.oz: src/lib/bini/biniguts.c src/lib/ini/helpers.c
 src/lib/ini/iniapi.o src/lib/ini/iniapi.od src/lib/ini/iniapi.oz: src/lib/ini/helpers.c
@@ -365,7 +377,7 @@ cleannr:
 	-${RM} ${NRLIBOBJSD}
 	-${RM} ${NRLIBZ}
 	-${RM} ${NRLIBOBJSZ}
-	echo cleaned nr libs
+	@echo cleaned nr libs
 
 # NE
 
@@ -389,7 +401,7 @@ cleanne:
 	-${RM} ${NELIBOBJSD}
 	-${RM} ${NELIBZ}
 	-${RM} ${NELIBOBJSZ}
-	echo cleaned ne libs
+	@echo cleaned ne libs
 
 # WENGINE
 
@@ -421,7 +433,7 @@ cleanwengine:
 	-${RM} ${WENGINELIBOBJSD}
 	-${RM} ${WENGINELIBZ}
 	-${RM} ${WENGINELIBOBJSZ}
-	echo cleaned wengine libs
+	@echo cleaned wengine libs
 
 
 # TD
@@ -457,7 +469,7 @@ cleantd:
 	-${RM} ${TDLIBOBJSD}
 	-${RM} ${TDLIBZ}
 	-${RM} ${TDLIBOBJSZ}
-	echo cleaned td libs
+	@echo cleaned td libs
 
 # PD
 
@@ -502,7 +514,7 @@ cleanpd:
 	-${RM} ${PDLIBOBJS}
 	-${RM} ${PDLIBOBJSD}
 	-${RM} ${PDLIBOBJSZ}
-	echo cleaned pd libs
+	@echo cleaned pd libs
 
 # WD
 
@@ -558,7 +570,7 @@ cleanwd:
 	-${RM} ${WDLIBOBJS}
 	-${RM} ${WDLIBOBJSD}
 	-${RM} ${WDLIBOBJSZ}
-	echo cleaned wd libs
+	@echo cleaned wd libs
 
 # VD
 
@@ -766,7 +778,7 @@ cleanvd:
 	-${RM} ${VDLIBOBJS}
 	-${RM} ${VDLIBOBJSD}
 	-${RM} ${VDLIBOBJSZ}
-	echo cleaned vd libs
+	@echo cleaned vd libs
 
 # SD
 
@@ -802,12 +814,12 @@ cleansd:
 	-${RM} ${SDLIBOBJSD}
 	-${RM} ${SDLIBZ}
 	-${RM} ${SDLIBOBJSZ}
-	echo cleaned sd libs
+	@echo cleaned sd libs
 
 # generic dll
 
 cleandll: cleanwengine cleantd cleanpd cleanwd cleanvd cleannr cleanne cleansd
-	echo cleaned dll files
+	@echo cleaned dll files
 
 # ----------------------------------------------------------------------------------------------------
 
@@ -838,9 +850,9 @@ ${APPZ}: ${APPOBJSZ} ${MODULEWRAP_ROM} ${APPLIBSZ} ${BASELIBSZ} local_dirs
 	ls -l $@
 
 ${APPRM}: ${APPOBJSZ} ${MODULEWRAP_RAM} ${APPLIBSZ} ${BASELIBSRM} local_dirs
-	echo Current armlink cannot generate relocatable modules correctly. Use RISC OS instead.
-	echo ${LD} -rmf -o ${APPRM} ${APPOBJSZ} ${MODULEWRAP_RAM} ${APPLIBSZ} ${BASELIBSRM}
-	echo ls -l $@
+	@echo Current armlink cannot generate relocatable modules correctly. Use RISC OS instead.
+	@echo ${LD} -rmf -o ${APPRM} ${APPOBJSZ} ${MODULEWRAP_RAM} ${APPLIBSZ} ${BASELIBSRM}
+	@echo ls -l $@
 
 cleanapp:
 	-${RM} ${APPOBJS}
@@ -852,7 +864,7 @@ cleanapp:
 	-${RM} ${APPD}
 	-${RM} ${APPZ}
 	-${RM} ${APPRM}
-	echo cleaned app files
+	@echo cleaned app files
 
 # ----------------------------------------------------------------------------------------------------
 

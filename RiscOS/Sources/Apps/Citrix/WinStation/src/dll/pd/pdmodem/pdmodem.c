@@ -10,6 +10,14 @@
 *  Author: Kurt Perry (6/2/94)
 *
 *  $Log$
+*  Revision 1.1  1998/01/19 19:12:16  smiddle
+*  Added loads of new files (the thinwire, modem, script and ne drivers).
+*  Discovered I was working around the non-ansi bitfield packing in totally
+*  the wrong way. When fixed suddenly the screen starts doing things. Time to
+*  check in.
+*
+*  Version 0.02. Tagged as 'WinStation-0_02'
+*
 *  
 *     Rev 1.21   15 Apr 1997 16:52:30   TOMA
 *  autoput for remove source 4/12/97
@@ -293,7 +301,7 @@ DeviceInfo( PPD pPd, PDLLINFO pPdInfo )
     /*
      *  Get byte count necessary to hold data
      */
-    ByteCount = sizeof(PDMODEM_C2H);
+    ByteCount = sizeof_PDMODEM_C2H;
     ModemNameLength = strlen( pPdModem->pModemName );
     if ( ModemNameLength > 0 )
         ByteCount += (ModemNameLength + 1);
@@ -331,8 +339,8 @@ DeviceInfo( PPD pPd, PDLLINFO pPdInfo )
      *  Initialize modem name string
      */
     if ( ModemNameLength > 0 ) {
-        pPdData->oModemName = sizeof(PDMODEM_C2H);
-        strcpy( (LPBYTE)pPdData + sizeof(PDMODEM_C2H), pPdModem->pModemName );
+        pPdData->oModemName = sizeof_PDMODEM_C2H;
+        strcpy( (LPBYTE)pPdData + sizeof_PDMODEM_C2H, pPdModem->pModemName );
     }
 
     return( CLIENT_STATUS_SUCCESS );

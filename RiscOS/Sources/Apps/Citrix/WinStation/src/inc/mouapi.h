@@ -212,6 +212,8 @@ int WFCAPI MouseSetRanges( USHORT uHoriMin, USHORT uHoriMax,
                            USHORT uVertMin, USHORT uVertMax );
 int WFCAPI MouseLoadPreferences( PMOUPREFERENCES pPref );
 
+int MouseSetScreenOrigin(USHORT x, USHORT y);
+
 #endif
 
 int WFCAPI MouseLoad( PPLIBPROCEDURE pfnMouseProcedures );

@@ -35,6 +35,7 @@ struct icaclient_session_
     int fSdLoaded;
     int HaveFocus;
     int Connected;
+    int SetUp;			// everything is setup and going
 
     ObjectId connect_d;		// connection dialogue box
 

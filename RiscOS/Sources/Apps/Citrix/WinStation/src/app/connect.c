@@ -38,7 +38,7 @@ static int cancel_connect_handler(int event_code, ToolboxEvent *event, IdBlock *
     NOT_USED(handle);
 }
 
-void connect_open(icaclient_session sess)
+int connect_open(icaclient_session sess)
 {
     TRACE((TC_UI, TT_API1, "connect_open: %p d %p", sess, sess->connect_d));
 
@@ -47,12 +47,14 @@ void connect_open(icaclient_session sess)
 
     if (sess->connect_d)
     {
-	LOGERR(toolbox_show_object(0, sess->connect_d, Toolbox_ShowObject_Default, NULL, NULL_ObjectId, NULL_ComponentId));
+	LOGERR(toolbox_show_object(0, sess->connect_d, Toolbox_ShowObject_Centre, NULL, NULL_ObjectId, NULL_ComponentId));
 	LOGERR(button_set_value(0, sess->connect_d, I_MESSAGE, ""));
 	LOGERR(window_set_title(0, sess->connect_d, (char *)sess->gszServerLabel));
 
 	LOGERR(event_register_toolbox_handler(sess->connect_d, tbres_event_CANCEL, cancel_connect_handler, sess));
     }
+
+    return sess->connect_d != NULL;
 }
 
 void connect_status(icaclient_session sess, int state)

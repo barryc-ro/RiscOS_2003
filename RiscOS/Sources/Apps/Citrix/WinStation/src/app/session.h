@@ -19,6 +19,7 @@ extern void session_close(icaclient_session sess);
 extern void session_run(const char *file, int file_is_url, const char *bfile);
 extern void session_resume(icaclient_session sess);
 extern int session_connect(icaclient_session sess);
+extern int session_connected(icaclient_session sess);
 
 /* main.c */
 
@@ -26,7 +27,7 @@ extern void main_close_session(icaclient_session sess);
 
 /* connect.c */
 
-extern void connect_open(icaclient_session sess);
+extern int connect_open(icaclient_session sess);
 extern void connect_status(icaclient_session sess, int state);
 extern void connect_close(icaclient_session sess);
 

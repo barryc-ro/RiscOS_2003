@@ -1249,7 +1249,7 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 #define INIT_DIMMINBITMAP_UI    8       // (UI) initially 8K (WIN32)
 #endif
 #define INI_DIMCACHEPATH        "PersistentCachePath"
-#define DEF_DIMCACHEPATH        "<Wimp$ScrapDir>." APP_NAME
+#define DEF_DIMCACHEPATH        "<Wimp$ScrapDir>." APP_NAME ".Cache"
 
 
 /*

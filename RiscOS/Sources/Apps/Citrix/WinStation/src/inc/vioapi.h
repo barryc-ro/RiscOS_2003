@@ -8,7 +8,12 @@
 *
 *  Author: Kurt Perry
 *
-*  $Log$
+*  vioapi.h,v
+*  Revision 1.1  1998/01/12 11:37:05  smiddle
+*  Newly added.#
+*
+*  Version 0.01. Not tagged
+*
 *  
 *     Rev 1.13   15 Apr 1997 18:46:06   TOMA
 *  autoput for remove source 4/12/97
@@ -343,6 +348,7 @@ int WFCAPI        VioReadCharStr (PCH pchCellStr, PUSHORT pcb, USHORT usRow,
 int WFCAPI        VioInitWindow( HWND hWnd, INT rowTotal, INT columnTotal, BOOL fTTY );
 int WFCAPI        VioDestroyWindow( HWND hWnd );
 int WFCAPI        VioPaint( HWND hWnd );
+void VioUnsetMode(HVIO hvio);
 
 #else
 

@@ -267,8 +267,12 @@ static void restore_desktop(void)
 {
     int mode;
 
+    FadeScreen(0);
+
     LOGERR(_swix(OS_RestoreCursors, 0));
 
+    reset_char_defs();
+    
     LOGERR(_swix(Wimp_ReadSysInfo, _IN(0)|_OUT(0), 1, &mode));
     LOGERR(_swix(Wimp_SetMode, _IN(0), mode));
 }
@@ -516,6 +520,21 @@ static int EMEngLoadwinframe_session(icaclient_session sess)
 
 /* --------------------------------------------------------------------------------------------- */
 
+#if 0
+
+static BOOL ppp_up(void)
+{
+}
+
+static void ppp_redial(void)
+{
+    LOGERR(wimp_start_task("NCDialUI_Start", 0));
+}
+
+#endif
+
+/* --------------------------------------------------------------------------------------------- */
+
 static void session_free(icaclient_session sess)
 {
     TRACE((TC_UI, TT_API1, "session_free: %p", sess));
@@ -612,6 +631,8 @@ static int session__open(icaclient_session sess)
 	gScriptDriver = NULL;
     }
 
+    sess->SetUp = TRUE;
+    
     // initialise this here as it is statically inited in wengine
     gbContinuePolling = TRUE;
 
@@ -1018,6 +1039,11 @@ int session_connect(icaclient_session sess)
 	return FALSE;
     }
     return TRUE;
+}
+
+int session_connected(icaclient_session sess)
+{
+    return sess && sess->SetUp;
 }
 
 int session_poll(icaclient_session sess)

@@ -152,8 +152,12 @@ char gcLastButton3=0;
 USHORT guLastX=0;
 USHORT guLastY=0;
 char gcLastQueueState=0;
+
 USHORT gWidth = 0;
 USHORT gHeight = 0;
+
+static USHORT gOriginX = 0;
+static USHORT gOriginY = 0;
 
 #define ADJUP(n) ((n)=((n)<(gInfo.uQueueSize-1))?(n)+1:0)
 #define ADJDOWN(n) ((n)=(n)?(n)-1:gInfo.uQueueSize-1)
@@ -188,8 +192,8 @@ int MouseRead(PMOUSEDATA pMouData, PUSHORT puCount)
     if (diff ||
 	((x != LastX || y != LastY) && (t - LastT) > gInfo.uTimerGran))
     {
-	pMouData->X = (               x  * 0x10000) / gWidth;
-	pMouData->Y = ((gHeight - 1 - y) * 0x10000) / gHeight;
+	pMouData->X = ((              x - gOriginX) * 0x10000) / gWidth + 1;
+	pMouData->Y = ((gHeight - 1 - y + gOriginY) * 0x10000) / gHeight + 1;
 	pMouData->cMouState = x != LastX || y != LastY ? MOU_STATUS_MOVED : 0;
 
 	if (diff & 1)		// right
@@ -635,6 +639,9 @@ int far  MousePosition( USHORT X, USHORT Y )
    Y = (USHORT)(((ULONG)Y * gHeight)/0x10000);
 
    Y = (gHeight - 1 - Y);
+
+   X += gOriginX;
+   Y += gOriginY;
    
    TRACE(( TC_MOU, TT_API1, "MousePosition: X=%u Y=%u",X,Y ));
 
@@ -675,6 +682,9 @@ int far  MousePositionAbs( USHORT X, USHORT Y )
    X = X * 2;
    Y = (gHeight - 1 - Y) * 2;
    
+   X += gOriginX;
+   Y += gOriginY;
+
    //  Make a position call to mouse driver
    //  Make a position call to mouse driver
    s[0] = 3;
@@ -711,6 +721,11 @@ int far  MouseSetRanges( USHORT uHoriMin, USHORT uHoriMax,
    TRACE(( TC_MOU, TT_API1, "MouseSetRanges: hmin=%u hmax=%u vmin=%u vmax=%u",
                                        uHoriMin,uHoriMax,uVertMin,uVertMax ));
 
+   uHoriMin = uHoriMin*2 + gOriginX;
+   uHoriMax = uHoriMax*2 + gOriginX;
+   uVertMin = (gHeight - 1 - uVertMin)*2 + gOriginY;
+   uVertMax = (gHeight - 1 - uVertMax)*2 + gOriginY;
+   
    //  set horizontal
    //  set vertical
 
@@ -723,7 +738,7 @@ int far  MouseSetRanges( USHORT uHoriMin, USHORT uHoriMax,
    s[6] = uHoriMax >> 8;
    s[7] = uVertMax;
    s[8] = uVertMax >> 8;
-// _swix(OS_Word, _INR(0,1), 21, s);
+   _swix(OS_Word, _INR(0,1), 21, s);
   
    return(CLIENT_STATUS_SUCCESS);
 }
@@ -762,6 +777,18 @@ int far  MouseSetScreenDimensions( USHORT uWidth, USHORT uHeight )
    TRACE(( TC_MOU, TT_API1, "MouseSetScreenDimensions: in: w=%u h=%u, set: w=%u h=%u",uWidth, uHeight,gWidth, gHeight ));
 
    return(CLIENT_STATUS_SUCCESS);
+}
+
+/*
+ * In OS units
+ */
+
+int MouseSetScreenOrigin( USHORT x, USHORT y )
+{
+    gOriginX = x;
+    gOriginY = y;
+
+    return(CLIENT_STATUS_SUCCESS);
 }
 
 /*******************************************************************************

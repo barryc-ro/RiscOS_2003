@@ -18,6 +18,9 @@
 extern int vduval(int var);
 extern int modeval(int mode, int var);
 extern void GetModeSpec(int *width, int *height);
+extern int GetSafeModeSpec(int *width, int *height);
 extern int GetModeNumber(void);
+extern int IsATV(void);
+extern void FadeScreen(unsigned colour);
 
 /* eof vdu.h */

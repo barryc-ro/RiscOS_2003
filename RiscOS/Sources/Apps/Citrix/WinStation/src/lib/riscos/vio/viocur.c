@@ -58,9 +58,6 @@ static USHORT attr = 0x0000;
  ==   Global Variables
  ============================================================================*/
 
-extern unsigned int usMaxRow;
-extern unsigned int usMaxCol;
-
 /*****************************************************************************
 *
 *  FUNCTION: Get Cursor Position
@@ -126,30 +123,17 @@ VioGetCurType (PVIOCURSORINFO pvioCursorInfo, HVIO hvio)
 int WFCAPI
 VioSetCurType (PVIOCURSORINFO pvioCursorInfo, HVIO hvio)
 {
-    char s[10];
-   
     /* save the requested start/end */
     yStart = pvioCursorInfo->yStart;
     cEnd   = pvioCursorInfo->cEnd;
     attr   = pvioCursorInfo->attr;
    
-    memset(s, 0, sizeof(s));
-    s[0] = 23;
-
     /* hide cursor and note state */
     if ( attr == 0xffff ) {
-	s[2] = 10;
-	s[3] = 1<<5;
-	_swix(OS_WriteI, _INR(0,1), s, sizeof(s));
+	cursor_off();
     }
     else {
-	s[2] = 10;
-	s[3] = yStart;
-	_swix(OS_WriteI, _INR(0,1), s, sizeof(s));
-
-	s[2] = 11;
-	s[3] = cEnd;
-	_swix(OS_WriteI, _INR(0,1), s, sizeof(s));
+	cursor_set_height(yStart, cEnd);
     }
    
     /* no return from int 10h */

@@ -143,13 +143,13 @@ extern CLIENTNAME   gszClientName;
  *          NULL if no overrides, or points to array of CFGINIOVERRIDE 
  *          structures to combine into the pConnection entry's section.
  *      pServerFile (input)
- *          Server INI file name.
+ *          Server INI file name.   -- ICA or AppSrv file
  *      pProtocolFile (input)
- *          Protocol INI file name.
+ *          Protocol INI file name. -- Module.ini
  *      pModemFile (input)
- *          Modem INI file name.
+ *          Modem INI file name.    -- Modem.ini (unused)
  *      pConfigFile (input)
- *          Config INI file name.
+ *          Config INI file name.   -- WFClient.ini
  *
  *  EXIT:
  *      (int) return code: CLIENT_STATUS_SUCCESS - if no error;
