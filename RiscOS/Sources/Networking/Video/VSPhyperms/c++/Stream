@@ -17,8 +17,7 @@ Date      Who     Description of change
 #include "Stream.h"	// Source Element
 #include "swis.h"
 #include "string.h"
-
-#include "VideoCtrl.h"
+#include "rtsp_defs.h"
 
 StreamToken::StreamToken()
 {
@@ -51,8 +50,8 @@ Stream::test_empty_buffers(void)
   error_flag result = ErrorState();
   int token_id = -1;
 
-  if ((state != state_step)||( (--state_value) >= 0)){
-
+  if ((state != state_step)||((--state_value) >= 0))
+  {
    	if ( (result != ErrorOccurred)&&(state != state_stop)&&(mysink.validHandle()) ) {
 
 		_kernel_irqs_off();
@@ -71,7 +70,10 @@ Stream::test_empty_buffers(void)
 
 			int scene_num = 0;
 			int play_id = 0;
-	    		result = mysource->getBlock(&(buffers[token_id].block), &(buffers[token_id].mpeg_buffer), ((int)VSP_MPEGCall), ((int)pw), &scene_num, &play_id);
+	    		result = mysource->getBlock(&(buffers[token_id].block),
+	    		                            &(buffers[token_id].mpeg_buffer),
+	    		                            ((int)VSP_MPEGCall), ((int)pw),
+	    		                            &scene_num, &play_id);
 
 	 		if (result != ErrorOccurred){
 	 			if(buffers[token_id].block != NULL){
@@ -107,7 +109,9 @@ Stream::test_empty_buffers(void)
   }
   else
   if (result != ErrorOccurred)
-  	result = change_state(state_pause);
+  {
+      result = change_state(state_pause);
+  }
 
    return result;
 }
@@ -136,13 +140,15 @@ Stream::Stream(int inet_timeout, InternetObject *server, int MPEGid, int source_
   // 08/11/1999 variable tokens to pass must be set.
   num_tokens_to_pass = 4;	// define use of all of the tokens (stream -> MPEG buffers)
   RTSP_client_identity = 0;
-  RTSP_stat_word = 1;
+  RTSP_StatusChanged = false;
+  RTSP_RequestInProgress = false;
   RTSP_code = 200;
   amount_read = 0;			// used for multiple reads of more info
   moreInfo = NULL;				// used in the more info call
   pw = pwork;
   comms_timeout = inet_timeout;
-  from = endofstream = 0;
+  from = to = end = 0;
+  looping = false;
   callback_pending = callback_bufferswait;	// buffer management is in a state of waiting for buffer blocks
 #ifdef DEBUGLIB
   if (Debug(debug_callbacks)) Debug("=callback_bufferswait mccon");
@@ -187,7 +193,8 @@ Stream::Stream(int inet_timeout, int initial_block, int MPEGid, PlayList playlis
   amount_read = 0;			// used for multiple reads of more info
   moreInfo = NULL;				// used in the more info call
   RTSP_client_identity = 0;
-  RTSP_stat_word = 0;
+  RTSP_StatusChanged = false;
+  RTSP_RequestInProgress = true;
   RTSP_code = 200;
   num_tokens_to_pass = 4;	// 08/11/1999 AR define use of all of the tokens (stream -> MPEG buffers)
 
@@ -205,6 +212,7 @@ Stream::Stream(int inet_timeout, int initial_block, int MPEGid, PlayList playlis
   stream_flags = flags;
   inet_udp_reenter = inet_tcp_reenter = 0;
   from = in_from;
+  looping = false;
   srcNumBlocks = NumBlocks;
   srcInitBlock = initial_block;
 
@@ -247,19 +255,32 @@ Stream::Stream(int inet_timeout, int initial_block, int MPEGid, PlayList playlis
 }
 
 error_flag
-Stream::PostPresentationSetup(char** datablock)
+Stream::PostPresentationSetup()
 {
-    in_addr ipAddress;		// structure defined in internet library
+    in_addr ipAddress;  // structure defined in internet library
     int portnum = 0;
     ULINT bitrate = 0;
     ULINT dgram_size = 0;
     ULINT fast_playback = 0;
     int BlockSize = 0, num_dgrams = 0;
-
-  if ((!ErrorExists()) && (((Server*)myserver)->get_assetpresentation_response(&ipAddress, (ULINT*)&portnum, &endofstream, &dgram_size, &bitrate, &fast_playback, datablock) == ErrorOccurred))
-  {
-	if (err_ptr == NULL) err_ptr = &myserver->ReturnCopyOfError();
-  }
+    trick_modes_available = implemented_trick_modes;
+    
+    if (stream_flags & flags_informvideoctrl)
+    {
+        if ((!ErrorExists()) && (((Server*)myserver)->get_assetpresentation_response(&ipAddress, (ULINT*)&portnum,
+                          &end, &dgram_size, &bitrate, &fast_playback_ratio, &trick_modes_available, &moreInfo, &RTSP_code) == ErrorOccurred))
+        {
+           if (err_ptr == NULL) err_ptr = &myserver->ReturnCopyOfError();
+        }
+    }
+    else
+    {
+        if ((!ErrorExists()) && (((Server*)myserver)->get_assetpresentation_response(&ipAddress, (ULINT*)&portnum,
+                                                 &end, &dgram_size, &bitrate, &fast_playback, &trick_modes_available) == ErrorOccurred))
+        {
+           if (err_ptr == NULL) err_ptr = &myserver->ReturnCopyOfError();
+        }
+    }
 
   // set the server to listen to the port returned from the presentation
   ipAddress.s_addr = ntohl(ipAddress.s_addr);		// ipaddress of server as port are set in the asset presentation
@@ -268,14 +289,10 @@ Stream::PostPresentationSetup(char** datablock)
   {
 	if (err_ptr == NULL) err_ptr = &mysource->ReturnCopyOfError();
   }
-  // calculate trick modes for this stream
-  trick_modes_available = implemented_trick_modes | (fast_playback >> 24);
-  fast_playback_ratio = fast_playback & 0xFFFFFF;
-  if (endofstream == 0xFFFFFFFF){	// if stream live
-  	trick_modes_available |=  trick_jump_most_rec;
-  }
+  to = end;
+
   // start and end are set in the play element, we set them here so as to get notifications
-  if (from >= endofstream)	// this in most cases is zero
+  if (from >= to)	// this in most cases is zero
   	MakeError(VSP_InvalidValue);
 
   // calculate the size of the source buffering
@@ -308,7 +325,7 @@ Stream::PostPresentationSetup(char** datablock)
     	if (trick_modes_available & trick_jump_most_rec)
 		Debug("Being Registered tricks %8.8X, initial block %i", trick_modes_available, srcInitBlock);
 	else
-		Debug("Registered Video %i to %i (secs), tricks %8.8X", from/2, endofstream/2, trick_modes_available);
+		Debug("Registered Video %i to %i (secs), tricks %8.8X", from/2, end/2, trick_modes_available);
 
   }
 #endif
@@ -335,11 +352,10 @@ Stream::~Stream(void)
     	while (change_state(state_stop) == ErrorOccurred);
     	delete mysource; mysource = NULL;
   }
-  RTSP_stat_word = 0;
-  RTSP_code = 0;
+
   if (moreInfo)
   {
-    	delete[] moreInfo;
+    	my_free(moreInfo);
     	moreInfo = NULL;
     	amount_read = 0;
   }
@@ -361,39 +377,45 @@ Stream::~Stream(void)
 inline error_flag
 Stream::swap_source(void)
 {
-  	if (source == source_streamlive){
-     		Source *tmp = mysource;
-   		_kernel_irqs_off();
-     		mysource = new Source((*tmp));
-     		delete tmp; tmp = NULL;
-   		_kernel_irqs_on();
-     		if (mysource->ErrorExists()){
-     			if (err_ptr == NULL) err_ptr = &mysource->ReturnCopyOfError();
-     		}
-     		source = source_vod;
-     		num_tokens_to_pass = 2;
-     		// 08/11/1999 AR this allows larger buffers to be passed with accuracy.
+    if (source == source_streamlive)
+    {
+        Source *tmp = mysource;
+        Source *tmp2 = new Source((*tmp));
+        _kernel_irqs_off();
+        source = source_vod;
+        num_tokens_to_pass = 2;
+        mysource = tmp2;
+        _kernel_irqs_on();
+        delete tmp; tmp = NULL;
+        if (mysource->ErrorExists())
+        {
+            if (err_ptr == NULL) err_ptr = &mysource->ReturnCopyOfError();
+        }
+        // 08/11/1999 AR this allows larger buffers to be passed with accuracy.
 #ifdef DEBUGLIB
-        	Debug("LIVE -> Stored");
+        Debug("LIVE -> Stored");
 #endif
         }
-        else {
-        	if (source == source_vod){
-    	  		Source *tmp = mysource;
-   			_kernel_irqs_off();
-     	  		mysource = new SourceLIVE((*tmp));
-     	  		delete tmp; tmp = NULL;
-   			_kernel_irqs_on();
-     			if (mysource->ErrorExists()){
-     			  	if (err_ptr == NULL) err_ptr = &ReturnCopyOfError();
-     			}
-     			source = source_streamlive;
-     			// 08/11/1999 AR this allows smaller buffers to be passed
-     			num_tokens_to_pass = 4;
-#ifdef DEBUGLIB
-        	Debug("Stored -> LIVE");
-#endif
+        else
+        {
+            if (source == source_vod)
+            {
+                Source *tmp = mysource;
+                Source *tmp2 = new Source((*tmp));
+                _kernel_irqs_off();
+                source = source_streamlive;
+                num_tokens_to_pass = 4;
+                mysource = tmp2;
+                _kernel_irqs_on();
+                delete tmp; tmp = NULL;
+                if (mysource->ErrorExists())
+                {
+                    if (err_ptr == NULL) err_ptr = &ReturnCopyOfError();
                 }
+#ifdef DEBUGLIB
+                Debug("Stored -> LIVE");
+#endif
+            }
         }
 
         return (ErrorExists() ? ErrorOccurred : NoError);
@@ -417,180 +439,228 @@ Stream::trick_modes(void)
 error_flag
 Stream::change_state(state_of_play new_state)
 {
-  	state_of_play old_state = state;
-	// if from time has not already been set, ie jump
-	if (!(callback_pending & callback_trickplay))
-		from = getNECTime();
+    state_of_play old_state = state;
+    // if from time has not already been set, ie jump
+    if (!(callback_pending & callback_trickplay))
+        from = getNECTime();
+
+    typedef struct {
+      state_of_play state;
+      void* next;
+    } re_entrancy_struct;
+
+    static bool re_entered = false;
+    static re_entrancy_struct* requests = NULL;
+
+    if (re_entered == true)
+    {
+       re_entrancy_struct* tmp = new re_entrancy_struct;
+#ifdef DEBUGLIB
+       if (Debug(debug_streaminfo)) Debug("change state re-entered\n");
+#endif
+       tmp->state = new_state;
+       tmp->next = requests;
+       requests = tmp;
+    }
+    else
+    {
+       re_entered = true;
+    }
 
 #ifdef DEBUGLIB
    	if (Debug(debug_streaminfo)) Debug("state %i -> %i, from = %i", state, new_state, from);
 #endif
-
-  	_kernel_irqs_off();
-	switch (new_state) {
-     		case state_slow:
-     			if (trick_modes() & trick_slow_play)
-                        {
-     				state = state_slow;
-     				if (stream_flags & flags_setspeeds)
-                                  	mysink.SetSpeed(state_value);
-                        }
-     			break;
-     		case state_step:
-     			if (trick_modes() & trick_step_play){
-     				state = state_step;
-     				if ((!(callback_pending & callback_bufferswait))&&(mysink.SetSpeed(1) == ErrorOccurred)){// play
-       					if (err_ptr == NULL) err_ptr = &mysink.ReturnCopyOfError();
-       				}
-       		        }
-     			break;
-     		case state_endreceived:
-     			if (state != state_stop) {
+        /*_kernel_irqs_off();*/
+        switch (new_state) {
+            case state_slow:
+                if (trick_modes() & trick_slow_play)
+                {
+                    state = state_slow;
+                    if (stream_flags & flags_setspeeds)
+                    {
+                        mysink.SetSpeed(state_value);
+                    }
+                }
+                break;
+            case state_step:
+                if (trick_modes() & trick_step_play)
+                {
+                    state = state_step;
+                    if ((!(callback_pending & callback_bufferswait))&&(mysink.SetSpeed(1) == ErrorOccurred))// play
+                    {
+                        if (err_ptr == NULL) err_ptr = &mysink.ReturnCopyOfError();
+                    }
+                }
+                break;
+            case state_endreceived:
+                if (state != state_stop)
+                {
 #ifdef DEBUGLIB
-				if (Debug(debug_streaminfo))
-					Debug("end received");
+                    if (Debug(debug_streaminfo))
+                        Debug("end received");
 #endif
+                    state = state_endreceived;
+                }
+                break;
+            case state_stop:
+                {
+                    bool used_buffer = false;
 
-     				state = state_endreceived;
-     			}
-     			break;
-     		case state_stop:
-        			if (ErrorExists()) RemoveErr(); // just try to stop
+                    if (ErrorExists()) RemoveErr(); // just try to stop
+                    if (state != state_stop)
+                    {
+                        if ((myserver->streamrunning())&&
+                            (myserver->AssetEnd(0, (state != state_endreceived)) == ErrorOccurred))
+                        {
+                            if (err_ptr == NULL) err_ptr = &(myserver->ReturnCopyOfError());
+                        }
+                        mysource->setEndPlayState(); // this ensures no more data is copied upriver.
 
-   				if (state != state_stop){
-   				    	_kernel_irqs_on();
+                        state = state_stop;
+                    }
 
-  					if ((myserver->streamrunning())&&(myserver->AssetEnd(0, (state != state_endreceived)) == ErrorOccurred)){
-  						if (err_ptr == NULL) err_ptr = &(myserver->ReturnCopyOfError());
-  					}
-   					mysource->setEndPlayState();		// this ensures no more data is copied upriver.
-   					_kernel_irqs_off();
-
-     					state = state_stop;
-        			}
-        			{
-        				bool used_buffer = false;
-
-     					for (int i=0; i < MAX_NUM_MPEG_Tokens; i++){
-     						if (buffers[i].in_use != free_token)
-     							used_buffer = true;
-     	                        	}
+                    for (int i=0; i < MAX_NUM_MPEG_Tokens; i++)
+                    {
+                        if (buffers[i].in_use != free_token)
+                            used_buffer = true;
+                    }
 #ifdef DEBUGLIB
 #if (MAX_NUM_MPEG_Tokens != 4)
 #error debug is looking for 4 tokens
 #endif
-     					if (Debug(debug_streaminfo))
-     						Debug("close stream; flags %3.3X, tokens (%i)(%i)(%i)(%i)", callback_pending,
-     						(buffers[0].in_use == claim_token),(buffers[1].in_use == claim_token),
-     						(buffers[2].in_use == claim_token),(buffers[3].in_use == claim_token));
+                     if (Debug(debug_streaminfo))
+                              Debug("close stream; flags %3.3X, tokens (%i)(%i)(%i)(%i)", callback_pending,
+                              (buffers[0].in_use == claim_token),(buffers[1].in_use == claim_token),
+                              (buffers[2].in_use == claim_token),(buffers[3].in_use == claim_token));
 #endif
-     					if (used_buffer == true)
-     						MakeError(VSP_CantDeleteSharedMemory);
-     				}
-   			break;
-     		case state_pause:
-     			if (trick_modes() & trick_pause){
-     				state = state_pause;
-     				if (mysink.SetSpeed(0) == ErrorOccurred){// pause
-       					if (err_ptr == NULL) err_ptr = &mysink.ReturnCopyOfError();
-       		                }
-     			}
-     			break;
-     		case state_play:
-        		if (trick_modes() & trick_normal_play) {
-     	  			if (source == source_streamlive){
-   					_kernel_irqs_on();
-     	  				swap_source();
-   					_kernel_irqs_off();
-   				}
+                     if (used_buffer == true)
+                         MakeError(VSP_CantDeleteSharedMemory);
+                    }
+                    break;
+               case state_pause:
+                    if (trick_modes() & trick_pause)
+                    {
+                        state = state_pause;
+                        if (mysink.SetSpeed(0) == ErrorOccurred)// pause
+                        {
+                            if (err_ptr == NULL) err_ptr = &mysink.ReturnCopyOfError();
+                        }
+                    }
+                    break;
+               case state_play:
+                    if (trick_modes() & trick_normal_play)
+                    {
+                        if (source == source_streamlive)
+                        {
+                            swap_source();
+                        }
 #ifdef DEBUGLIB
-				if (Debug(debug_RTSP)) Debug("change state to play msig mode (%i)", mysource->get_most_significant_mode());
+                        if (Debug(debug_RTSP)) Debug("change state to play msig mode (%i)", mysource->get_most_significant_mode());
 #endif
-         	      		if ((mysource->get_most_significant_mode() != mode_normalplay)||(state == state_prestart))	// do we need to change server file
-                                {
-                                  	if (state == state_prestart)
-                                        {
-                                        }
-					callback_pending += callback_trickplay;
-                                }
+                        // do we need to change server file
+                        if ((mysource->get_most_significant_mode() != mode_normalplay)||(state == state_prestart))
+                        {
+                            if (state == state_prestart)
+                            {
+                            }
+                            callback_pending += callback_trickplay;
+                        }
 #ifdef DEBUGLIB
-				if (Debug(debug_callbacks)) Debug("+callback_trickplay cs");
+                        if (Debug(debug_callbacks)) Debug("+callback_trickplay cs");
 #endif
+                        if (stream_flags & flags_setspeeds)
+                            mysink.SetSpeed(1);
 
-     				if (stream_flags & flags_setspeeds)
-                                  	mysink.SetSpeed(1);
+                        state = state_play;
+                    }
+                    break;
+               case state_streamlive:
+                    if (trick_modes() & trick_jump_most_rec)
+                    {
+                        if (mysource->get_most_significant_mode() != mode_streamlive)// do we need to change server file
+                        {
+                            callback_pending += callback_trickplay;
+#ifdef DEBUGLIB
+                            if (Debug(debug_callbacks)) Debug("+callback_trickplay cs");
+#endif
+                            swap_source();
+                            from = 0xFFFFFFFF;
+                            if (stream_flags & flags_setspeeds)
+                                mysink.SetSpeed(1);
+                            state = state_streamlive;
+                        }
+                    }
+                    break;
+               case state_fast_forward:
+                    if (trick_modes() & trick_fast_forward)
+                    {
+                        if (mysource->get_most_significant_mode() != mode_fastforward) // do we need to change server file
+                            callback_pending += callback_trickplay;
+#ifdef DEBUGLIB
+                        if (Debug(debug_callbacks)) Debug("+callback_trickplay cs");
+#endif
+                        if (stream_flags & flags_setspeeds)
+                            mysink.SetSpeed(1);
+                         state =  state_fast_forward;
+                    }
+                    break;
+               case state_fast_rewind:
+                    if (trick_modes() & trick_fast_rewind)
+                    {
+                        if (mysource->get_most_significant_mode() != mode_fastrewind) // do we need to change server file
+                            callback_pending += callback_trickplay;
+#ifdef DEBUGLIB
+                        if (Debug(debug_callbacks)) Debug("+callback_trickplay cs");
+#endif
+                        if (stream_flags & flags_setspeeds)
+                            mysink.SetSpeed(1);
+                        state =  state_fast_rewind;
+                    }
+                    break;
+        } /* switch */
+        /*_kernel_irqs_on();*/
 
-   				state = state_play;
-			}
-		     	break;
-     		case state_streamlive:
-     			if (trick_modes() & trick_jump_most_rec){
-     	  			if (mysource->get_most_significant_mode() != mode_streamlive){	// do we need to change server file
-					callback_pending += callback_trickplay;
-#ifdef DEBUGLIB
-					if (Debug(debug_callbacks)) Debug("+callback_trickplay cs");
-#endif
-   					_kernel_irqs_on();
-					swap_source();
-   					_kernel_irqs_off();
-     					from = 0xFFFFFFFF;
-     					if (stream_flags & flags_setspeeds)
-                                  		mysink.SetSpeed(1);
+        if (old_state == state_step)
+            test_empty_buffers();
 
-     					state = state_streamlive;
-     				}
-     			}
-        		break;
-     		case state_fast_forward:
-        		if (trick_modes() & trick_fast_forward){
-        		  	if (mysource->get_most_significant_mode() != mode_fastforward)	// do we need to change server file
-					callback_pending += callback_trickplay;
+    // the trick flag is set if this trick requires dialogue with the server ie change file or jump.
+    if ((!ErrorExists())&&(callback_pending & callback_trickplay))
+    {
 #ifdef DEBUGLIB
-					if (Debug(debug_callbacks)) Debug("+callback_trickplay cs");
+        ULINT current_min, future_min;
+
+        current_min = (int)((getNECTime() >> 1) / 60);
+        future_min = (int)((from >> 1)/ 60);
+        if (Debug(debug_time))
+            Debug("trick play (%i) (%2i:%2i:%2i) -> (%2i:%2i:%2i) %i -> %i", state,
+                 (int)(current_min/60), (int)(current_min % 60), (int)((getNECTime()>>1) % 60),
+                 (int)(future_min/60), (int)(future_min % 60), (int)((from >> 1) % 60),
+                 getNECTime(), from);
 #endif
-     					if (stream_flags & flags_setspeeds)
-                                  		mysink.SetSpeed(1);
-         			state =  state_fast_forward;
-			}
-     			break;
-     		case state_fast_rewind:
-        		if (trick_modes() & trick_fast_rewind){
-        		  	if (mysource->get_most_significant_mode() != mode_fastrewind)	// do we need to change server file
-					callback_pending += callback_trickplay;
-#ifdef DEBUGLIB
-					if (Debug(debug_callbacks)) Debug("+callback_trickplay cs");
-#endif
-     					if (stream_flags & flags_setspeeds)
-                                  		mysink.SetSpeed(1);
-     		  		state =  state_fast_rewind;
-			}
-     			break;
+        MakeErrorOnError(_swix(OS_AddCallBack, _INR(0,1), VSP_CallBack, pw));
+
+        if (!(stream_flags & flags_nochangepause) && (mysink.SetSpeed(0) == ErrorOccurred))// pause
+        {
+            if (err_ptr == NULL) err_ptr = &mysink.ReturnCopyOfError();
         }
-   	_kernel_irqs_on();
+    }
 
-   	if (old_state == state_step)
-     		test_empty_buffers();
+    re_entered = false;
 
-   	// the trick flag is set if this trick requires dialogue with the server ie change file or jump.
-   	if ((!ErrorExists())&&(callback_pending & callback_trickplay)) {
-#ifdef DEBUGLIB
-  		ULINT current_min, future_min;
+    if ((!ErrorExists()) && (requests != NULL))
+    {
+        re_entrancy_struct* tmp = requests;
+        state_of_play state = tmp->state;
 
-  		current_min = (int)((getNECTime() >> 1) / 60);
-  		future_min = (int)((from >> 1)/ 60);
-  		if (Debug(debug_time))
-  			Debug("trick play (%i) (%2i:%2i:%2i) -> (%2i:%2i:%2i) %i -> %i", state,
-  							   (int)(current_min/60), (int)(current_min % 60), (int)((getNECTime()>>1) % 60),
-  							   (int)(future_min/60), (int)(future_min % 60), (int)((from >> 1) % 60),
-  							   getNECTime(), from);
-#endif
-  		MakeErrorOnError(_swix(OS_AddCallBack, _INR(0,1), VSP_CallBack, pw));
+        requests = (re_entrancy_struct*)requests->next;
+        tmp->next = NULL;
 
-  		if (!(stream_flags & flags_nochangepause) && (mysink.SetSpeed(0) == ErrorOccurred)){// pause
-       			if (err_ptr == NULL) err_ptr = &mysink.ReturnCopyOfError();
-       		}
-        }
-   	return (ErrorExists() ? ErrorOccurred : NoError);
+        delete tmp;
+
+        change_state(state);
+    }
+
+    return (ErrorExists() ? ErrorOccurred : NoError);
 }
 
 error_flag
@@ -620,55 +690,61 @@ Stream::CheckEOS(int *play_state)			// call to Decoder
 }
 
 error_flag
-Stream::SetSpeed(int direction, int speed, int identity)		// call to Decoder
+Stream::SetSpeed(int direction, int speed)		// call to Decoder
 {
- if (ErrorState() != ErrorOccurred){
-
- 	if ((direction == 2)&&(trick_modes() & trick_step_play)){
- 		state_value = speed;		// this is the number of blocks to play
- 		change_state(state_step);
- 	}
- 	else
- 	switch(speed) {
- 	   case 0:
- 	   	if (speed == 0)
- 	   		change_state(state_pause);
- 	   	else
- 	 		MakeError(VSP_Unimplemented);
- 	   	break;
- 	   case 1:
- 	   	if (direction == 1)
- 	   		change_state(state_fast_forward);
- 	   	else
- 	   		change_state(state_play);
- 	   	break;
- 	   case -1:
- 	    	if (direction == 1)
- 	   		change_state(state_fast_rewind);
- 	   	break;
- 	   default:
- 	   	if (direction == 0){
- 			state_value = speed;		// this is the speed of the mpeg player
- 	   		change_state(state_slow);
- 	   	}
-		else
-	  		MakeError(VSP_Unimplemented);
- 	}
- }
- if ((stream_flags & flags_informvideoctrl) && !(callback_pending & callback_trickplay))
- {
-   	MakeErrorOnError(_swix(VideoControl_ProtocolNotify, _INR(0,4), 0, identity, 0, 0, 0));
-
-   	RTSP_stat_word = 3;
-   	RTSP_code = 200;
- }
-
- return (ErrorExists() ? ErrorOccurred : NoError );
+    if (stream_flags &  flags_informvideoctrl)
+    {
+        if (!err_ptr) MakeError(VSP_InvalidUsage);
+    }
+    else
+    if (ErrorState() != ErrorOccurred)
+    {
+        if ((direction == 2)&&(trick_modes() & trick_step_play))
+        {
+     	state_value = speed;		// this is the number of blocks to play
+     	change_state(state_step);
+        }
+        else
+        {
+            switch(speed)
+            {
+                case 0:
+                	if (speed == 0)
+                		change_state(state_pause);
+                	else
+                	MakeError(VSP_Unimplemented);
+                	break;
+                case 1:
+                	if (direction == 1)
+                		change_state(state_fast_forward);
+                	else
+                		change_state(state_play);
+                	break;
+                case -1:
+                 	if (direction == 1)
+                		change_state(state_fast_rewind);
+                	break;
+                default:
+                	if (direction == 0){
+                	state_value = speed;		// this is the speed of the mpeg player
+                		change_state(state_slow);
+                	}
+                else
+                	MakeError(VSP_Unimplemented);
+            }
+        }
+    }
+    return (ErrorExists() ? ErrorOccurred : NoError );
 }
 
 error_flag
 Stream::SetPosition(int flags, int pos_time, bool do_statechange)	 // call to Decoder
 {
+  if (stream_flags &  flags_informvideoctrl)
+  {
+      if (!err_ptr) MakeError(VSP_InvalidUsage);
+  }
+  else
   if (ErrorState() != ErrorOccurred){
   	ULINT NEC_time = getNECTime();
   	ULINT abs_time;
@@ -681,13 +757,13 @@ Stream::SetPosition(int flags, int pos_time, bool do_statechange)	 // call to De
   		abs_time = NEC_time - (pos_time * 2);
   	}
   	else {
-  		if ((pos_time < 0)&&(endofstream == 0xFFFFFFFF))
+  		if ((pos_time < 0)&&(end == 0xFFFFFFFF))
      			abs_time = 0xFFFFFFFF;
      		else
      			abs_time = (pos_time << 1);
         }
 
-  	if (((abs_time & 0x80000000)&&(endofstream != 0xFFFFFFFF))||(abs_time > endofstream))
+  	if (((abs_time & 0x80000000)&&(end != 0xFFFFFFFF))||(abs_time > end))
   		MakeError(VSP_InvalidValue);
   	else {
   		from = abs_time;
@@ -804,6 +880,283 @@ Stream::GetMiscInfo(ULINT *reg_r0, misc_5_10 *ptr, int *size)
   return (ErrorExists() ? ErrorOccurred : NoError );
 }
 
+error_flag
+Stream::create_RTSP_playblock(server_response_type server_response)
+{
+    const RTSP_status *response = RTSP_get_status(server_response);
+
+    RTSP_StatusChanged = true;
+    RTSP_RequestInProgress = false;
+
+    if (moreInfo)
+    {
+        amount_read = 0;
+        my_free(moreInfo);
+        moreInfo = NULL;
+    }
+
+    if (moreInfo == NULL)
+    {
+        char num_strings[4][20];
+
+        sprintf(num_strings[0], "%u",   (NULL != myserver) ? myserver->getCertCode() : 0);
+        sprintf(num_strings[1], "%.2f", (double)from/2);
+        sprintf(num_strings[2], "%.2f", (double)to/2);
+
+        switch (state)
+        {
+            case state_fast_rewind:
+                sprintf(num_strings[3], "-%i.00", fast_playback_ratio);
+                break;
+            case state_fast_forward:
+                sprintf(num_strings[3], "%i.00", fast_playback_ratio);
+                break;
+            case state_slow:
+                sprintf(num_strings[3], "1/%i", state_value);
+                break;
+            default:
+                sprintf(num_strings[3], "1.0000");
+        }
+#ifdef DEBUGLIB
+        if (Debug(debug_RTSP)) Debug("times (%i) - {(%i)|(%i)}", getNECTime(), from, to);
+#endif
+        moreInfo = (char*)my_malloc(strlen(RTSP_play_response) +
+                             strlen(response->number) +
+                             strlen(response->message) +
+                             strlen(num_strings[0]) +
+                             strlen(num_strings[1]) +
+                             strlen(num_strings[2]) +
+                             strlen(num_strings[3]));
+
+        if (moreInfo)
+        {
+            sprintf(moreInfo, RTSP_play_response,
+                    response->number,
+                    response->message,
+                    num_strings[0], num_strings[1], num_strings[2], num_strings[3]
+                    );
+
+            amount_read = strlen(moreInfo);
+
+#ifdef DEBUGLIB
+            if (Debug(debug_RTSP)) Debug("generate play response block:\n%s", moreInfo);
+#endif
+        }
+        else
+        {
+            MakeError(VSP_Alloc);
+        }
+    }
+    return (ErrorExists() ? ErrorOccurred : NoError );
+}
+
+error_flag
+Stream::RTSP_play(bool forward, ULINT numerator, ULINT denominator, position_type *pos_from, position_type *pos_to)
+{
+    state_of_play n_state = state_play;
+    LINT speed = 1;
+    ULINT start = 0, finish = end;
+    bool update_state = false;
+    server_response_type server_response = NEC_OK;
+
+    /*initial checks*/
+    if ((denominator == 0) || (numerator/denominator > fast_playback_ratio * 2))
+    {
+        server_response = NEC_NoGOPatJump;
+    }
+
+    /* check speed first as this has more limitations */
+    if (forward == false)
+    {
+        if (numerator >= denominator)
+        {
+            if (trick_modes() & trick_fast_rewind)
+            {
+                n_state = state_fast_rewind;
+            }
+            else
+            {
+                server_response =  RTSP_MethodNotAllowed;
+            }
+        }
+        else
+        {
+            server_response = NEC_NoGOPatJump;
+        }
+    }
+    else
+    if (numerator > denominator)
+    {
+        if (trick_modes() & trick_fast_forward)
+        {
+            n_state = state_fast_forward;
+        }
+        else
+        {
+            server_response = RTSP_MethodNotAllowed;
+        }
+    }
+    else
+    if (numerator == 0)
+    { /* pause */
+
+        if (trick_modes() & trick_pause)
+        {
+            n_state = state_pause;
+        }
+        else
+        {
+            server_response = RTSP_MethodNotAllowed;
+        }
+    }
+    else
+    if (numerator < denominator)
+    { /* slow play */
+        speed = (LINT)(denominator/numerator); /* which cannot be zero */
+        n_state = state_slow;
+
+        if (!(trick_modes() & trick_slow_play) ||
+            ((stream_flags & flags_limit_on_slow)&&(speed > 8)))
+        {
+                server_response = RTSP_MethodNotAllowed;
+        }
+    }
+#ifdef DEBUGLIB
+    if (Debug(debug_streaminfo))
+        Debug("parsed speed [n_state = %i], checking position\n", n_state);
+#endif
+    /* check position */
+    if (!ErrorExists())
+    {
+        if (pos_from->denom == 0)
+        {
+            if (pos_from->numer == TIME_live)
+            {
+                if (trick_modes() & trick_jump_most_rec)
+                {
+                    n_state = state_streamlive;
+                    start = 0xFFFFFFFF;
+                }
+                else
+                {
+                    server_response = NEC_NoGOPatJump;
+                }
+            }
+            else
+            if (pos_from->numer == TIME_end)
+            {
+                start = end;
+                update_state = true;
+            }
+            else
+            {
+                start = getNECTime();
+            }
+        }
+        else
+        {
+            start = (pos_from->numer *2)/pos_from->denom; /* != 0 */
+            update_state = true;
+        }
+
+        if (!ErrorExists())
+        {
+            if (pos_to->denom == 0)
+            {
+                if (pos_to->numer == TIME_live)
+                {
+                    if (trick_modes() & trick_jump_most_rec)
+                    {
+                        finish = end;
+                    }
+                    else
+                    {
+                        server_response = NEC_NoGOPatJump;
+                    }
+                }
+                else
+                if (pos_to->numer == TIME_end)
+                {
+                    if (n_state == state_fast_rewind)
+                    {
+                        finish = 0;
+                    }
+                    else
+                    {
+                        finish = end;
+                    }
+                }
+                else
+                {
+                    if (n_state == state_fast_rewind)
+                    {
+                       finish = 0;
+                    }
+                    else
+                    {
+                       finish = end;
+                    }
+                }
+            }
+            else
+            {
+                finish = (pos_to->numer *2)/pos_to->denom; /* != 0 */
+                update_state = true;
+            }
+        }
+    }
+#ifdef DEBUGLIB
+    if (Debug(debug_RTSP)) Debug("calculating server response (%i) start (%i) finish (%i) end (%i) state (%i)\n",
+                                                                     server_response, start, finish, end, n_state);
+#endif
+    if (!ErrorExists())
+    {
+        if ( (finish == start) ||
+             ((n_state == state_fast_rewind) && (finish > start)) ||
+             ((n_state != state_fast_rewind) && (finish < start)) ||
+             ((0xFFFFFFFF != end)&&(finish > end)) )
+        {
+            server_response = NEC_NoGOPatJump;
+        }
+        else
+        {
+            if (NEC_OK == server_response)
+            {
+                from = start;
+                to = finish;
+
+                state_value = speed;
+
+                if ((true == update_state)||(state_prestart == state))
+                {
+                    RTSP_RequestInProgress = true;
+                    callback_pending += callback_trickplay;
+                    update_state = true;
+                }
+
+                /* thus avoiding play requests on current blocks */
+                if ((true == update_state) || ((n_state != state) || (speed != 1)))
+                {
+                    update_state = true;
+                    change_state(n_state);
+                }
+            }
+        }
+
+        if ( (stream_flags & flags_informvideoctrl) &&
+             (( NEC_OK != server_response) ||
+             (!(callback_pending & callback_trickplay)) )
+           )
+        {
+            create_RTSP_playblock(server_response);
+            MakeErrorOnError(VideoControlInformNewStatus(RTSP_proto_identity));
+        }
+        /* else caught in play response */
+    }
+
+    return (ErrorExists() ? ErrorOccurred : NoError );
+}
+
 void
 Stream::setRTSPClientId(ULINT id)
 {
@@ -814,77 +1167,84 @@ Stream::setRTSPClientId(ULINT id)
 error_flag
 Stream::RTSP_getStatus(ULINT *reg_r0, ULINT *reg_r2)
 {
-#ifdef DEBUGLIB
-	if (Debug(debug_RTSP))
-	{
-		Debug("getStatus = word = (%2.2X), response = (%i) error = (%i)\n", RTSP_stat_word, RTSP_code, ErrorExists());
-	}
-#endif
-  (*reg_r0) = RTSP_stat_word;
-  RTSP_stat_word &= ~2;
-  (*reg_r2) = RTSP_code;
+    (*reg_r0) = (((NULL != myserver) ? 0x01 : 0x00) |
+                 ((true == RTSP_StatusChanged) ? 0x02 : 0x00) |
+                 ((NULL != moreInfo) ? 0x04 : 0x00) );
 
-  return ErrorState();
+#ifdef DEBUGLIB
+    if (Debug(debug_RTSP))
+    {
+        Debug("getStatus word = (%2.2X), response = (%i) error = (%i)\n", (*reg_r0), RTSP_code, ErrorExists());
+    }
+#endif
+
+    RTSP_StatusChanged = false;
+
+    (*reg_r2) = RTSP_code;
+
+    return ErrorState();
 }
 
 error_flag
 Stream::RTSP_getMoreInfo(int reason_code, char* buffer, int* size, int* copied_size)
 {
-  	if (reason_code == 0)
-        {
-          	(*size) = (amount_read) ? amount_read + 1: 0;
 #ifdef DEBUGLIB
-		if (Debug(debug_streaminfo))
-		  	Debug("read more info (reason (%i) size (%i) amount_read (%i))\n", reason_code, (*size), amount_read);
+    if (Debug(debug_streaminfo))
+        Debug("amount read (%i)\n", amount_read);
+#endif
+    if (reason_code == 0)
+    {
+        (*size) = (amount_read) ? amount_read + 1: 0;
+    }
+    else
+    {
+        if ((1 == reason_code)&&(moreInfo))
+        {
+            int copy_size = (((*size-1) < amount_read) ? (*size-1):amount_read);
+            int len_info = strlen(moreInfo) - amount_read;
+#ifdef DEBUGLIB
+            if (Debug(debug_streaminfo))
+            {
+                Debug("read more info (size = (%i) amount read (%i) len info(%i) copy size (%i))\n",
+                                                                     (*size), amount_read, len_info, copy_size);
+                Debug("%s\n", moreInfo);
+            }
+#endif
+            if (len_info <= amount_read)
+            {
+                memcpy(buffer, (moreInfo + len_info), copy_size);
+                (*size) = (*size) - amount_read;
+                (*copied_size) = copy_size;
+                amount_read -= copy_size;
+
+                buffer[copy_size] = '\0'; // ensure it is null terminated
+
+                if (amount_read == 0)
+                {
+                    my_free(moreInfo);
+                    moreInfo = NULL;
+                    amount_read = 0;
+                }
+            }
+            else
+            {
+                MakeError(VSP_BadErr);
+            }
+#ifdef DEBUGLIB
+            if (Debug(debug_streaminfo))
+            {
+                Debug("done read more info (reason (%i) size (%i) amount_read (%i) error (%i))\n",
+                                                             reason_code, (*size), amount_read, ErrorExists());
+                Debug("%s\n", buffer);
+            }
 #endif
         }
         else
         {
-          	if (moreInfo)
-                {
-          		int copy_size = (((*size-1) < amount_read) ? (*size-1):amount_read);
-          		int len_info = strlen(moreInfo) - amount_read;
-#ifdef DEBUGLIB
-			if (Debug(debug_streaminfo))
-			{
-		  		Debug("read more info (size = (%i) amount read (%i) len info(%i) copy size (%i))\n",
-		  			(*size), amount_read, len_info, copy_size);
-		  		Debug("%s\n", moreInfo);
-			}
-#endif
-
-          		if (len_info <= amount_read)
-                	{
-          			memcpy(buffer, (moreInfo + len_info), copy_size);
-          			(*size) = (*size) - amount_read;
-          			(*copied_size) = copy_size;
-          			amount_read -= copy_size;
-
-          			buffer[copy_size] = '\0'; // ensure it is null terminated
-
-          			if (amount_read == 0)
-                	        {
-                	          	delete[] moreInfo;
-                	          	moreInfo = NULL;
-                	          	amount_read = 0;
-  					RTSP_stat_word &= ~4;
-                	        }
-          		}
-          		else
-                	{
-                	  	MakeError(VSP_BadErr);
-          		}
-#ifdef DEBUGLIB
-			if (Debug(debug_streaminfo))
-			{
-			  	Debug("done read more info (reason (%i) size (%i) amount_read (%i) error (%i))\n",
-			  		reason_code, (*size), amount_read, ErrorExists());
-			  	Debug("%s\n", buffer);
-			}
-#endif
-          	}
+            MakeError(VSP_InvalidValue);
         }
-        return ErrorState();
+    }
+    return ErrorState();
 }
 
 error_flag
@@ -901,364 +1261,357 @@ Stream::stop_stream(ULONG *new_block_number)
 inline error_flag
 Stream::timeslice(Statistics *stats)
 {
-  if ((ErrorState() == NoError)&&(state != state_stop)){
+    bool returned_end_block = false;
 
-    	// 08/11/1999 AR this has been extended to check for the other possible buffers.
-  	if (callback_pending & callback_tokenfree){
- 		_kernel_irqs_off();
+    if ((ErrorState() == NoError)&&(state != state_stop))
+    {
+        // 08/11/1999 AR this has been extended to check for the other possible buffers.
+        if (callback_pending & callback_tokenfree)
+        {
+            _kernel_irqs_off();
 #if (MAX_NUM_MPEG_Tokens != 4)
-		callback_pending -= callback_tokenfree;
+            callback_pending -= callback_tokenfree;
 #else
-		if (callback_pending & callback_token1free) {
-  			callback_pending -= callback_token1free;
-  		} else {
-			if (callback_pending & callback_token2free) {
-  				callback_pending -= callback_token2free;
-  			} else {
-  				if (callback_pending & callback_token3free)
-  					callback_pending -= callback_token3free;
-  				else
- 					callback_pending -= callback_token4free;
- 			}
- 		}
+            if (callback_pending & callback_token1free)
+                callback_pending -= callback_token1free;
+            else
+            if (callback_pending & callback_token2free)
+                callback_pending -= callback_token2free;
+            else
+            if (callback_pending & callback_token3free)
+                callback_pending -= callback_token3free;
+            else
+                callback_pending -= callback_token4free;
 #endif
-  		_kernel_irqs_on();
-
+            _kernel_irqs_on();
 #ifdef DEBUGLIB
-		if (Debug(debug_callbacks)) Debug("-callback_token?free ts");
+            if (Debug(debug_callbacks)) Debug("-callback_token?free ts");
 #endif
-  		if ((mysource->calculate_freeBlocks(myserver, &callback_pending, stats, comms_timeout))&&(err_ptr == NULL))
-  			err_ptr = &(mysource->ReturnCopyOfError());
+            if ((mysource->calculate_freeBlocks(myserver, &callback_pending, stats, comms_timeout, &returned_end_block)) &&
+                (err_ptr == NULL))
+            {
+                err_ptr = &(mysource->ReturnCopyOfError());
+            }
 
-  		if ((!(callback_pending & callback_bufferswait))&&(tokenfree())){
-  		  	--state_value;
-  		  	test_empty_buffers();
-  		}
+            if ((!(callback_pending & callback_bufferswait))&&(tokenfree()))
+            {
+                --state_value;
+                test_empty_buffers();
+            }
 
-                // this reinitialises the block callback vector if we fill up the blocks
-  		if (!(callback_pending & callback_timeout)){
-			MakeErrorOnError(_swix(OS_CallAfter, _INR(0,2), comms_timeout, VSP_CallAfterVeneer, pw));
-  			callback_pending += callback_nak_after;
+            // this reinitialises the block callback vector if we fill up the blocks
+            if (!(callback_pending & callback_timeout))
+            {
+                MakeErrorOnError(_swix(OS_CallAfter, _INR(0,2), comms_timeout, VSP_CallAfterVeneer, pw));
+                callback_pending += callback_nak_after;
 #ifdef DEBUGLIB
-			if (Debug(debug_callbacks)) Debug("+callback_nak_after %i ts", comms_timeout);
+                if (Debug(debug_callbacks)) Debug("+callback_nak_after %i ts", comms_timeout);
 #endif
- 		}
+            }
 
- 	}
-  	else {
-		if (callback_pending & callback_trickplay){
+        }
+        else
+        {
+            if (callback_pending & callback_trickplay)
+            {
+                ULINT timetoplay = to - from;
+                ULONG RequestNum;
+                size_t AckNum;
+                play_mode mode = mode_normalplay;
 
-        		ULONG RequestNum;
-        		size_t AckNum;
-        		play_mode mode = mode_normalplay;
-
-        		callback_pending -= callback_trickplay;
-        		callback_pending -= callback_startend;
+                callback_pending -= callback_trickplay;
+                callback_pending -= callback_startend;
 #ifdef DEBUGLIB
-	  		ULINT from_min = (int)((from >> 1) / 60);
-  			if (Debug(debug_callbacks))
-  				Debug("-callback_trickplay ts\n-callback_startend ts\nplay from NPT %2i:%2i:%2i, %i",
-  							(int)(from_min/60), (int)(from_min % 60), (int)(from_min % 60), from );
+                ULINT from_min = (int)((from >> 1) / 60);
+                if (Debug(debug_callbacks))
+                    Debug("-callback_trickplay ts\n-callback_startend ts\nplay from NPT %2i:%2i:%2i, %i",
+                                       (int)(from_min/60), (int)(from_min % 60), (int)(from_min % 60), from );
 #endif
-       			switch (state){
-        			case state_fast_forward:
-        				from /= fast_playback_ratio;
-        	  			mode = mode_fastforward;
-        	  			break;
-        	  		case state_fast_rewind:
-        				from /= fast_playback_ratio;
-        	  			mode = mode_fastrewind;
-        	  			break;
-        	  		case state_streamlive:
-        	  			mode = mode_streamlive;
-        	  			break;
-        	  		default:
-        				mode = mode_normalplay;
-        				break;
-        		}
-#ifdef DEBUGLIB
-			if (Debug(debug_time)) Debug("play from timestamp %i", from);
-#endif
-        		if (mysource->setNewPlayState(&RequestNum, &AckNum, mode, from, comms_timeout) == ErrorOccurred){
-
-        			 if (err_ptr == NULL)	err_ptr = &(mysource->ReturnCopyOfError());
-   			}
-                	else {
-                		// clear callback vector
-   			  	if (callback_pending & callback_timeout){
-   			  		callback_pending -= callback_timeout;
-#ifdef DEBUGLIB
-					if (Debug(debug_callbacks)) Debug("-callback_timeout ts");
-#endif
-     					_swix(OS_RemoveTickerEvent, _INR(0,1), VSP_CallAfterVeneer, pw);
-     				}
-
-     				myserver->send_playback_request( mysource->get_current_play_id(), RequestNum, AckNum, from, mode );
-
-     	 			if (myserver->ErrorExists()){
-     	 			  	if (myserver->ErrorNum() == IP_NoBuffer){
-     	 			  	  	myserver->RemoveErr();
-     	 			 	  	callback_pending += callback_trickplay;
-#ifdef DEBUGLIB
-						if (Debug(debug_callbacks)) Debug("+callback_trickplay %i ts", comms_timeout);
-#endif
-     	 			 	  	MakeErrorOnError(_swix(OS_CallAfter, _INR(0,2), (comms_timeout), VSP_CallAfterVeneer, pw));
-     	 			 	}
-     	 			 	else
-     	 			 		if (err_ptr == NULL) err_ptr = &(myserver->ReturnCopyOfError());
-     	 			}
-     	 			else{
-     	 			  	myserver->reset_message_sent();
-     	 			  	callback_pending += callback_bufferswait;
-#ifdef DEBUGLIB
-					if (Debug(debug_callbacks)) Debug("+callback_bufferswait ts");
-#endif
-
-     	 			  	if ((!ErrorExists())&&(state != state_streamlive)){
-     	 					callback_pending += callback_nak_after;
-#ifdef DEBUGLIB
-						if (Debug(debug_callbacks)) Debug("+callback_nak_after %i ts", comms_timeout);
-#endif
-                				MakeErrorOnError(_swix(OS_CallAfter, _INR(0,2), comms_timeout, VSP_CallAfterVeneer, pw));
- 					}
- 				}
- 			}
-
+                switch (state)
+                {
+                    case state_fast_forward:
+                        from /= fast_playback_ratio;
+                        to   /= fast_playback_ratio;
+                        mode = mode_fastforward;
+                        break;
+                    case state_fast_rewind:
+                        from /= fast_playback_ratio;
+                        to   /= fast_playback_ratio;
+                        timetoplay = from - to;
+                        mode = mode_fastrewind;
+                        break;
+                    case state_streamlive:
+                        mode = mode_streamlive;
+                        break;
+                    default:
+                        mode = mode_normalplay;
+                        break;
                 }
- 		else {// default event foreground execute (save stream)
- 			callback_pending -= callback_nak_now;
 #ifdef DEBUGLIB
-			if (Debug(debug_callbacks)) Debug("-callback_nak_now ts");
+                if (Debug(debug_time)) Debug("play from timestamp %i, %i", from, to);
 #endif
- 		  	if (!(callback_pending & callback_startend)) {
- 				ULINT timeout = comms_timeout;
- 		  		if (mysource->foregroundExecute(myserver, stats, &timeout) == ErrorOccurred){
-  					if (err_ptr == NULL) err_ptr = &mysource->ReturnCopyOfError();
-  				}
-  				else {
-  				  	// test this as we may have deleted a block revealing others
-  					if ((!(callback_pending & callback_bufferswait))&&(tokenfree()))
-  		  				test_empty_buffers();
-
-  					if (callback_pending & callback_nak_after){
-  						_swix(OS_RemoveTickerEvent, _INR(0,1), VSP_CallAfterVeneer, pw);
+                if (mysource->setNewPlayState(&RequestNum, &AckNum, mode, from, comms_timeout) == ErrorOccurred)
+                {
+                    if (err_ptr == NULL) err_ptr = &(mysource->ReturnCopyOfError());
+                }
+                else
+                {
+                    // clear callback vector
+                    if (callback_pending & callback_timeout)
+                    {
+                        callback_pending -= callback_timeout;
 #ifdef DEBUGLIB
-  					  	if (Debug(debug_callbacks)) Debug("move callback_nak_after %i ts", timeout);
+                        if (Debug(debug_callbacks)) Debug("-callback_timeout ts");
 #endif
-  					}
-  					callback_pending += callback_nak_after;
-  					MakeErrorOnError(_swix(OS_CallAfter, _INR(0,2), timeout, VSP_CallAfterVeneer, pw));
-  				}
+                        _swix(OS_RemoveTickerEvent, _INR(0,1), VSP_CallAfterVeneer, pw);
+                    }
 
-  			}
- 		}
-  	}
-  }
+                    mysource->setStartEnd(AckNum + timetoplay);
 
-  if (mysource->getStartEnd()){
-    	if (callback_pending & callback_bufferswait){
-    	  	reset_sink(mysource->get_most_significant_mode());
-    		callback_pending -= callback_bufferswait;
+                    myserver->send_playback_request( mysource->get_current_play_id(), RequestNum, AckNum, from, mode );
+
+                    if (myserver->ErrorExists())
+                    {
+                        if (myserver->ErrorNum() == IP_NoBuffer)
+                        {
+                            myserver->RemoveErr();
+                            callback_pending += callback_trickplay;
 #ifdef DEBUGLIB
-		if (Debug(debug_callbacks)) Debug("-callback_bufferswait ie");
+                            if (Debug(debug_callbacks)) Debug("+callback_trickplay %i ts", comms_timeout);
 #endif
-    		test_empty_buffers();
-    	}
-
-   	bool used_buffer = false;
-
- 	for (int i=0; i < MAX_NUM_MPEG_Tokens; i++){
-     		if (buffers[i].in_use != free_token)
-     		used_buffer = true;
-     	}
+                            MakeErrorOnError(_swix(OS_CallAfter, _INR(0,2), (comms_timeout), VSP_CallAfterVeneer, pw));
+                        }
+                        else
+                        {
+                            if (err_ptr == NULL) err_ptr = &(myserver->ReturnCopyOfError());
+                        }
+                    }
+                    else
+                    {
+                        myserver->reset_message_sent();
+                        callback_pending += callback_bufferswait;
 #ifdef DEBUGLIB
-     	if (Debug(debug_startend))
-     		Debug("getStartEnd() used buffer = %i, full blocks = %i", used_buffer, mysource->getFullBlocks());
+                        if (Debug(debug_callbacks)) Debug("+callback_bufferswait ts");
 #endif
-	if ((used_buffer == false)&&(mysource->getFullBlocks() == 0)){
- 	    		if ((mysource->get_most_significant_mode() == mode_fastrewind)||(mysource->get_most_significant_mode() == mode_backwardskip)){
- 	       			myserver->send_message_StartNotification(mysource->getStartEnd());
- 				callback_pending += callback_startend;
- 			}
- 			else {
-				myserver->send_message_EndNotification(mysource->getStartEnd());
-				callback_pending += callback_startend;
-				if (!(stream_flags & flags_terminate_eos))
-					change_state(state_endreceived);
-	       		}
+                        if ((!ErrorExists())&&(state != state_streamlive))
+                        {
+                            callback_pending += callback_nak_after;
 #ifdef DEBUGLIB
-			if (Debug(debug_callbacks)) Debug("+callback_startend ts");
+                            if (Debug(debug_callbacks)) Debug("+callback_nak_after %i ts", comms_timeout);
 #endif
-	}
-  }
+                            MakeErrorOnError(_swix(OS_CallAfter, _INR(0,2), comms_timeout, VSP_CallAfterVeneer, pw));
+                        }
+                    }
+                }
+            }
+            else // default event foreground execute (save stream)
+            {
+                callback_pending -= callback_nak_now;
+#ifdef DEBUGLIB
+                if (Debug(debug_callbacks)) Debug("-callback_nak_now ts");
+#endif
+                if (!(callback_pending & callback_startend))
+                {
+                    ULINT timeout = comms_timeout;
+                    if (mysource->foregroundExecute(myserver, stats, &timeout) == ErrorOccurred)
+                    {
+                        if (err_ptr == NULL) err_ptr = &mysource->ReturnCopyOfError();
+                    }
+                    else
+                    {
+                        // test this as we may have deleted a block revealing others
+                        if ((!(callback_pending & callback_bufferswait))&&(tokenfree()))
+                            test_empty_buffers();
 
-  if ((state != state_stop)&&(ErrorExists())){
-    	myserver->send_message_Error(err_ptr);
-  }
+                        if (callback_pending & callback_nak_after)
+                        {
+                            _swix(OS_RemoveTickerEvent, _INR(0,1), VSP_CallAfterVeneer, pw);
+#ifdef DEBUGLIB
+                            if (Debug(debug_callbacks)) Debug("move callback_nak_after %i ts", timeout);
+#endif
+                        }
+                        callback_pending += callback_nak_after;
+                        MakeErrorOnError(_swix(OS_CallAfter, _INR(0,2), timeout, VSP_CallAfterVeneer, pw));
+                    }
+                }
+            }
+        }
+    }
 
-  return NoError;
+    if (returned_end_block)
+    {
+        if (callback_pending & callback_bufferswait)
+        {
+            reset_sink(mysource->get_most_significant_mode());
+            callback_pending -= callback_bufferswait;
+#ifdef DEBUGLIB
+            if (Debug(debug_callbacks)) Debug("-callback_bufferswait ie");
+#endif
+            test_empty_buffers();
+        }
+        bool used_buffer = false;
+
+        for (int i=0; i < MAX_NUM_MPEG_Tokens; i++)
+        {
+            if (buffers[i].in_use != free_token)
+            used_buffer = true;
+        }
+#ifdef DEBUGLIB
+        if (Debug(debug_startend))
+            Debug("getStartEnd() used buffer = %i, full blocks = %i", used_buffer, mysource->getFullBlocks());
+#endif
+        if ((used_buffer == false)&&(mysource->getFullBlocks() == 0))
+        {
+            if ((mysource->get_most_significant_mode() == mode_fastrewind)||
+                (mysource->get_most_significant_mode() == mode_backwardskip))
+            {
+                myserver->send_message_StartNotification(mysource->getStartEnd());
+                callback_pending += callback_startend;
+            }
+            else
+            {
+                myserver->send_message_EndNotification(mysource->getStartEnd());
+                callback_pending += callback_startend;
+                if (!(stream_flags & flags_terminate_eos))
+                {
+                    change_state(state_endreceived);
+                }
+                else
+                {
+#ifdef DEBUGLIB
+                    if (Debug(debug_startend))
+                    {
+                        Debug("determined end of stream looping (%i)\n", looping);
+                    }
+#endif
+                    if (true == looping)
+                    {
+                        from = 0;
+                        to = end;                        
+                        callback_pending += callback_trickplay;
+                        change_state(state_play);
+                    }
+                    else
+                    {
+                        if ((mysink.NotifyEndOfStream() == ErrorOccurred)&&(err_ptr == NULL))
+                        {
+                            err_ptr = &(mysink.ReturnCopyOfError());
+                        }
+                    }
+                }
+            }
+#ifdef DEBUGLIB
+            if (Debug(debug_callbacks)) Debug("+callback_startend ts");
+#endif
+
+        }
+    }
+    if ((state != state_stop)&&(ErrorExists()))
+    {
+        myserver->send_message_Error(err_ptr);
+    }
+    return NoError;
 }
 
 inline error_flag
 Stream::server_inetevent(int code, int identity)
 {
-  UCHAR event = 0;
-  ULINT comms_result;
-  ULINT CSeq;
-  ULINT play_id = mysource->get_current_play_id();
+    UCHAR event = 0;
+    ULINT comms_result;
+    ULINT CSeq;
+    ULINT play_id = mysource->get_current_play_id();
 
-  if (ErrorState() != ErrorOccurred){
-  	if ( myserver->inetevent(&event, &comms_result, play_id, code, &CSeq) == ErrorOccurred) {
-  		if (err_ptr == NULL) err_ptr = &myserver->ReturnCopyOfError();
-	}
-	if (!ErrorExists())
-	{
-	  switch (event)
-	  {
-		case COMMAND_startend_notification:
-  			mysource->setStartEnd(comms_result);
-#ifdef DEBUGLIB
-			if (Debug(debug_startend)){
-				Debug("START/END %i, current block %i", comms_result, mysource->get_most_significant_block());
-				//mysource->getMiscInfo(type_debug, NULL);
-			}
-#endif
-        		break;
-        	case COMMAND_assetpres_response:
-                  	if (stream_flags & flags_informvideoctrl)
-                        {
-                  		RTSP_stat_word = 3;
-                  		RTSP_code = 200;
-                  		RTSP_proto_identity = identity;
-
-                       		PostPresentationSetup(&moreInfo);
-
-                        	if (moreInfo != NULL)
-                                {
-					amount_read = strlen(moreInfo);
-					RTSP_stat_word |= 0x04;
-                                }
-                                else
-                                {
-                                	amount_read = 0;
-                                }
-
-                        	MakeErrorOnError(_swix(VideoControl_ProtocolNotify, _INR(0,4), 0, identity, 0, 0, 0));
-#ifdef DEBUGLIB
-				if (Debug(debug_RTSP))
-				{
-					Debug("Done Post Setup (%i) moreInfo(%8.8X), size (%i)", ErrorExists(), moreInfo, strlen(moreInfo));
-				}
-#endif
-                        }
-                        else
-                        {
-#ifdef DEBUGLIB
-				if (Debug(debug_RTSP)) Debug("not using RTSP interface (%8.8x)", stream_flags);
-#endif
-                        	PostPresentationSetup();
-                        }
-                        break;
-                case COMMAND_playback_response:
-                  	if (stream_flags & flags_informvideoctrl)
-                        {
-                               	RTSP_stat_word = 3;
-
-                  		switch (comms_result)
-                  		{
-                        		case 0:
-                   				MakeErrorOnError(_swix(VideoControl_ProtocolNotify, _INR(0,4), 0, RTSP_proto_identity, 0, 1, 0));
-
-                  				if (!ErrorExists())
-                        			{
-                        	  			int tag[4];
-                        	  			tag[0] = 21; tag[1] = 1; tag[3] = -1;
-
-                        	  			MakeErrorOnError(_swix(VideoControl_ProtocolOptions, _INR(0,2), 0, RTSP_client_identity, tag));
-
-                        	  			if (!ErrorExists())
-                        	        		{
-#ifdef DEBUGLIB
-								if (Debug(debug_RTSP))
-									Debug("setting MPEG handle (%i), reentrance = (%i)", tag[2], inet_tcp_reenter);
-#endif
-                                                        }
-                        	        		mysink.SetHandle(tag[2]);
-                                                }
-
-                       	          		RTSP_code = 200;
-                        	          	if (moreInfo)
-                                                {
-                                                  	amount_read = 0;
-                                                  	delete[] moreInfo;
-                                                  	moreInfo = NULL;
-                                                }
-
-                        	          	if (moreInfo == NULL)
-                                                {
-							char *block = "RTSP/1.0 200 OK\r\nCSeq: %s\r\nRange: %s-%s\r\nSpeed: %s\r\n";
-							char num_strings[4][20];
-
-                                                  	sprintf(num_strings[0], "%u", CSeq);// CSeq
-                                                  	sprintf(num_strings[1], "%.2f", ((double)getNECTime())/2);
-                                                  	sprintf(num_strings[2], "%.2f", (state == state_fast_rewind)?0.00:((double)endofstream)/2);
-                                                  	switch (state)
-                                                  	{
-                                                          	case state_fast_rewind:
-                                                                  	sprintf(num_strings[3], "%.4f", -1*(double)fast_playback_ratio);
-                                                                  	break;
-                                                                case state_fast_forward:
-                                                                  	sprintf(num_strings[3], "%.4f", (double)fast_playback_ratio);
-                                                                  	break;
-                                                                case state_slow:
-                                                                  	sprintf(num_strings[3], "%.4f", 1/(double)state_value);
-                                                                  	break;
-                                                                default:
-                                                                  	sprintf(num_strings[3], "1.0000");
-                                                        }
-#ifdef DEBUGLIB
-							if (Debug(debug_RTSP)) Debug("times (%i) - {(%i)|(%i)}", getNECTime(), from, endofstream);
-#endif
-							moreInfo = new char[strlen(block) + strlen(num_strings[0]) + strlen(num_strings[1]) + strlen(num_strings[2]) + strlen(num_strings[3])];
-
-							if (moreInfo)
-							{
-							  	sprintf(moreInfo, block, num_strings[0], num_strings[1], num_strings[2], num_strings[3]);
-							  	amount_read = strlen(moreInfo);
-                               					RTSP_stat_word = 7;
-							}
-                                                }
-                        	          	break;
-                        	        case 1:
-                        	          	RTSP_code = 404;
-                        	          	break;
-                        	        case 2:
-                        	        case 5:
-                        	          	RTSP_code = 455;
-                        	          	break;
-                        	        case 3:
-                        	        case 4:
-                        	          	RTSP_code = 457;
-                        	          	break;
-                        	        case 99:
-                        	          	RTSP_code = 500;
-                        	        default:
-                        	          	MakeError(VSP_ServerError, comms_result);
-                        	}
-                        }
-                        else
-                        {
-                        	if ((!ErrorExists())&&(comms_result != 0))
-  					MakeError(VSP_ServerError, comms_result);
-                        }
-                }
+    if (ErrorState() != ErrorOccurred)
+    {
+        if ( myserver->inetevent(&event, &comms_result, play_id, code, &CSeq) == ErrorOccurred)
+        {
+            if (err_ptr == NULL) err_ptr = &myserver->ReturnCopyOfError();
         }
-  }
 
-  if ((state != state_stop)&&(ErrorExists())) {
-    	myserver->send_message_Error(err_ptr);
-  }
-  return NoError;
+        if (!ErrorExists())
+        {
+            switch (event)
+            {
+                case COMMAND_startend_notification:
+                    mysource->setStartEnd(comms_result);
+#ifdef DEBUGLIB
+                    if (Debug(debug_startend))
+                    {
+                        Debug("START/END %i, current block %i", comms_result, mysource->get_most_significant_block());
+                    }
+#endif
+                    break;
+                case COMMAND_assetpres_response:
+                    if (stream_flags & flags_informvideoctrl)
+                    {
+                        RTSP_StatusChanged = true;
+                        RTSP_RequestInProgress = false;
+                        RTSP_code = 500;
+                        RTSP_proto_identity = identity;
+
+                        PostPresentationSetup(); /* this will fill in the status/moreinfo stuff */
+
+                        if (moreInfo != NULL)
+                        {
+                            amount_read = strlen(moreInfo);
+                        }
+                        else
+                        {
+                            amount_read = 0;
+                        }
+#ifdef DEBUGLIB
+                        if (Debug(debug_RTSP))
+                        {
+                            Debug("Done Post Setup (%i) moreInfo(%8.8X), size (%i)", ErrorExists(), moreInfo, strlen(moreInfo));
+                        }
+#endif
+                        MakeErrorOnError(VideoControlInformNewStatus(RTSP_proto_identity));
+                    }
+                    else
+                    { /* don't inform video control */
+                        PostPresentationSetup();
+                    }
+                    break;
+                case COMMAND_playback_response:
+                    /* looping may cause a play request but we need to hide this from VideoCtrl */
+                    if ((stream_flags & flags_informvideoctrl)&&(true == RTSP_RequestInProgress))
+                    {
+                        create_RTSP_playblock((server_response_type)comms_result);
+                        if (!mysink.validHandle())
+                        {
+                            int handle = 0;
+                            MakeErrorOnError(VideoControlInformPrepareForData(RTSP_proto_identity, RTSP_client_identity, &handle));
+
+                            if (!ErrorExists())
+                            {
+#ifdef DEBUGLIB
+                                if (Debug(debug_RTSP))
+                                    Debug("setting MPEG handle (%i), reentrance = (%i)", handle, inet_tcp_reenter);
+#endif
+                                mysink.SetHandle(handle);
+                            }
+                        }
+                        if ((!ErrorExists())&&(true == RTSP_RequestInProgress))
+                        {
+                            RTSP_RequestInProgress = false;
+                            MakeErrorOnError(VideoControlInformNewStatus(RTSP_proto_identity));
+                        }
+                    }
+                    else
+                    {
+                        if ((!ErrorExists())&&(comms_result != 0))
+                            MakeError(VSP_ServerError, comms_result);
+                    }
+                /* case switch */
+            }
+        }
+    }
+
+    if ((state != state_stop)&&(ErrorExists()))
+    {
+        myserver->send_message_Error(err_ptr);
+    }
+    return NoError;
 }
 
 inline error_flag

@@ -728,168 +728,193 @@ Server::send_assetpresentation_request(ULINT init_value, PlayElementRequest play
 
 error_flag
 Server::get_assetpresentation_response(struct in_addr *ipaddr, ULINT *port, ULINT *stream_time,
-						ULINT *dgram_size, ULINT *bitrate, ULINT *fast_playback_ratio, char** datablock)
+		ULINT *dgram_size, ULINT *bitrate, ULINT *fast_playback_ratio, ULINT* trick_modes, char** datablock, ULINT* status)
 {
-  PacketHeader header;
-  AssetPresentationResponse response;
-  size_t buffersize;
-  UCHAR *buffer;
+    PacketHeader header;
+    AssetPresentationResponse response;
+    size_t buffersize;
+    UCHAR *buffer;
+  
+    UCHAR event;
+    while (PeekHeaderWait(&event) != ErrorOccurred){
+      	if ((event == COMMAND_assetpres_response)||(asyncInetEventHandler(&event) == ErrorOccurred))
+      		break;
+    }
+  
+    if (ErrorExists())
+    	return ErrorOccurred;
+  
+    if (GetData((void*)&header, sizeof(PacketHeader)) == ErrorOccurred)
+    	return ErrorOccurred;	//Null
+  
+    if (ntoh_structure(&header, map_PacketHeader, PacketHeader) == ErrorOccurred) {
+      	return MakeError(IP_ReadFail);
+    }
+  
+    if (header.command_number != COMMAND_assetpres_response) {
+      	return MakeError(VSP_BadErr);
+    }
+      // certification code
+    if (GetData((void*)&response, sizeof(AssetPresentationResponse)) == ErrorOccurred)
+    	return ErrorOccurred;	//Null
+  
+    if (ntoh_structure(&response, map_AssetPresentationResponse, AssetPresentationResponse) == ErrorOccurred) {
+      	return MakeError(IP_ReadFail);
+    }
+  
+    if (response.certification_code != certification_code++){
+    	return MakeError(VSP_ServerCertError);
+    }
+  
+    buffersize = (size_t)(header.command_length) - sizeof(AssetPresentationResponse);
+  
+    if (buffersize != 0) {	// get scene information
+     	if ( (buffer = new UCHAR[buffersize]) == NULL)
+          {
+  	    return MakeError(VSP_Alloc);
+          }
+    	else
+          {
+  		if (GetData((void*)buffer, buffersize) == ErrorOccurred)
+    			return ErrorOccurred;	//Null
+    		delete buffer;
+    		buffer = NULL;
+    	}
+    } // scene info exists
+  
+    ipaddr->s_addr = (u_long) response.server_IP;
+    *port = response.server_port;
+    //if (response.datagram_size != 0)
+    	*dgram_size = assetresponse_dgram_size = response.datagram_size;
+    //else
+    //	*dgram_size = assetresponse_dgram_size = SocketDescriptor.getDgramSize();
+  
+    (*bitrate) = response.bit_rate;
+    
+    (*fast_playback_ratio) = (ULINT)response.ff_ratio;
+    
+    (*trick_modes) |= response.fast_playback;
+  
+    if (response.video_status != 0)
+    {
+    	(*trick_modes) |=  trick_jump_most_rec;
+    	(*stream_time) = 0xFFFFFFFF;
+    }
+    else
+    {
+    	(*stream_time) = (unsigned int)response.total_time;
+    }
 
-  UCHAR event;
-  while (PeekHeaderWait(&event) != ErrorOccurred){
-    	if ((event == COMMAND_assetpres_response)||(asyncInetEventHandler(&event) == ErrorOccurred))
-    		break;
-  }
-
-  if (ErrorExists())
-  	return ErrorOccurred;
-
-  if (GetData((void*)&header, sizeof(PacketHeader)) == ErrorOccurred)
-  	return ErrorOccurred;	//Null
-
-  if (ntoh_structure(&header, map_PacketHeader, PacketHeader) == ErrorOccurred) {
-    	return MakeError(IP_ReadFail);
-  }
-
-  if (header.command_number != COMMAND_assetpres_response) {
-    	return MakeError(VSP_BadErr);
-  }
-    // certification code
-  if (GetData((void*)&response, sizeof(AssetPresentationResponse)) == ErrorOccurred)
-  	return ErrorOccurred;	//Null
-
-  if (ntoh_structure(&response, map_AssetPresentationResponse, AssetPresentationResponse) == ErrorOccurred) {
-    	return MakeError(IP_ReadFail);
-  }
-
-  if (response.certification_code != certification_code++){
-  	return MakeError(VSP_ServerCertError);
-  }
-
-  buffersize = (size_t)(header.command_length) - sizeof(AssetPresentationResponse);
-
-  if (buffersize != 0) {	// get scene information
-   	if ( (buffer = new UCHAR[buffersize]) == NULL)
-	    return MakeError(VSP_Alloc);
-  	else {
-		if (GetData((void*)buffer, buffersize) == ErrorOccurred)
-  			return ErrorOccurred;	//Null
-  		delete buffer;
-  		buffer = NULL;
-  	}
-  } // scene info exists
-
-  ipaddr->s_addr = (u_long) response.server_IP;
-  *port = response.server_port;
-  //if (response.datagram_size != 0)
-  	*dgram_size = assetresponse_dgram_size = response.datagram_size;
-  //else
-  //	*dgram_size = assetresponse_dgram_size = SocketDescriptor.getDgramSize();
-
-  *bitrate = response.bit_rate;
-  *fast_playback_ratio = (ULINT)response.ff_ratio;
-  *fast_playback_ratio |= (ULINT)((response.fast_playback)<<24);
-
-  if (datablock)
-  {
+    if (datablock)
+    {
 #ifdef DEBUGLIB
-	if (Debug(debug_servercontrol))
-		Debug("more info datablock = (%8.8X)\n", (*datablock));
+        if (Debug(debug_servercontrol))
+            Debug("more info datablock = (%8.8X)\n", (*datablock));
 #endif
-	int header_length = 0;
-	int body_length = 0;
- 	unsigned int systime;
+        int header_length = 0;
+        int body_length = 0;
+        unsigned int systime;
 
- 	const RTSP_status *status = RTSP_get_status(response.result);
-
-  	_swix(OS_ReadMonotonicTime, _OUT(0), &systime);
-
-	char num_strings[6][16];
-
-	sprintf(num_strings[2], "%u",  header.interface_number);// session number
-	sprintf(num_strings[3], "%u",  systime);// version number
-	sprintf(num_strings[4], "%u.%u.%u.%u", ((response.server_IP>>24)& 0xff),((response.server_IP>>16)& 0xff),
-		((response.server_IP>>8)& 0xff),(response.server_IP& 0xff));// ipaddress
-
-	sprintf(num_strings[5], "%.2f", ((double)response.total_time)/2);  // range
-	sprintf(num_strings[6], "%.3f", ((double)response.bit_rate)/1000); // bitrate
-
-	body_length = strlen(RTSP_describe_body) +
-	              strlen(num_strings[2]) +
-	              strlen(num_strings[3]) +
-	              strlen(num_strings[4]) +
-	              strlen(num_strings[5]) +
-	              strlen(num_strings[6]) +
-	              RTSP_content_type_length +
-                      RTSP_content_disk_status +
-                      RTSP_content_video_type;
-
-	sprintf(num_strings[0], "%u",  response.certification_code);//CSeq
-	sprintf(num_strings[1], "%u",  body_length);                 /* calculate the length of the body */
-
-	header_length = strlen(RTSP_describe_header) +
-	                strlen(status->number) +
-	                strlen(status->message) +
-	                strlen(num_strings[0] +
-	                strlen(num_strings[1]));
-
-
-    	if ((*datablock) != NULL)
+        const RTSP_status *status_block = RTSP_get_status((server_response_type)response.result);
+        char* trick_play_description = RTSP_get_alloc_tricks_array(*trick_modes);
+        
+        if (!trick_play_description)
         {
-          	free (*datablock);
-          	(*datablock) = NULL;
-        }
-
-        (*datablock) = malloc(header_length + body_length + 1);
-
-        if (*datablock)
-        {
-          	const char* content_type = RTSP_get_encoding_type(response.encoding_type);
-
-		// add the header to the response block
-          	sprintf((*datablock), RTSP_describe_header,
-          	        status->number,
-          	        status->message,
-          	        num_strings[0],
-          	        num_strings[1]);
-
-		// add the body to the block
-          	sprintf((*datablock) + strlen(*datablock), RTSP_describe_body,
-          	        num_strings[2],
-          	        num_strings[3],
-          	        num_strings[4],
-          	        num_strings[5],
-          	        content_type,
-          	        RTSP_get_disk_status(response.video_status),
-          	        RTSP_get_video_type(response.video_type),
-          	        num_strings[6]);
-#ifdef DEBUGLIB
-		if (Debug(debug_servercontrol))
-	  		Debug("more info size = (%i)\n%s\n", strlen(*datablock), (*datablock));
-#endif
+            MakeError(VSP_Alloc);
         }
         else
         {
-          	return MakeError(VSP_Alloc);
-        }
-  }
-
-  if (response.video_status != 0)
-  	(*stream_time) = 0xFFFFFFFF;
-  else
-  	(*stream_time) = (unsigned int)response.total_time;
-
-  if (response.result != 0){
+            if (status) (*status) = status_block->status_value;
+            
+            _swix(OS_ReadMonotonicTime, _OUT(0), &systime);
+            
+            char num_strings[8][16]; /* for printing numeric values */
+            
+            sprintf(num_strings[2], "%u",  header.interface_number);// session number
+            sprintf(num_strings[3], "%u",  systime);// version number
+            sprintf(num_strings[4], "%u.%u.%u.%u", ((response.server_IP>>24)& 0xff),((response.server_IP>>16)& 0xff),
+                    ((response.server_IP>>8)& 0xff),(response.server_IP& 0xff));// ipaddress
+            
+            sprintf(num_strings[5], "%.2f", ((double)response.total_time)/2);  // range
+            sprintf(num_strings[6], "%2i",  response.ff_ratio);                 // fast playback ratio
+            sprintf(num_strings[7], "%.3f", ((double)response.bit_rate)/1000); // bitrate
+            
+            body_length = strlen(RTSP_describe_body) +
+                          strlen(num_strings[2]) +
+                          strlen(num_strings[3]) +
+                          strlen(num_strings[4]) +
+                          strlen(num_strings[5]) +
+                          strlen(num_strings[6]) +
+                          strlen(trick_play_description) +
+                          strlen(num_strings[7]) +
+                          RTSP_content_type_length +
+                          RTSP_content_disk_status +
+                          RTSP_content_video_type;
+            
+            sprintf(num_strings[0], "%u",  response.certification_code);//CSeq
+            sprintf(num_strings[1], "%u",  body_length);                 /* calculate the length of the body */
+            
+            header_length = strlen(RTSP_describe_header) +
+                            strlen(status_block->number) +
+                            strlen(status_block->message) +
+                            strlen(num_strings[0] +
+                            strlen(num_strings[1]));
+            
+            if ((*datablock) != NULL)
+            {
+                my_free (*datablock);
+                (*datablock) = NULL;
+            }
+            
+            (*datablock) = (char*)my_malloc(header_length + body_length + 1);
+            
+            if (*datablock)
+            {
+                const char* content_type = RTSP_get_encoding_type(response.encoding_type);
+            
+                // add the header to the response block
+                sprintf((*datablock), RTSP_describe_header,
+                        status_block->number,
+                        status_block->message,
+                        num_strings[0],
+                        num_strings[1]);
+            
+                // add the body to the block
+                sprintf((*datablock) + strlen(*datablock), RTSP_describe_body,
+                        num_strings[2],
+                        num_strings[3],
+                        num_strings[4],
+                        num_strings[5],
+                        content_type,
+                        RTSP_get_disk_status(response.video_status),
+                        num_strings[6],
+                        trick_play_description,
+                        RTSP_get_video_type(response.video_type),
+                        num_strings[7]);
 #ifdef DEBUGLIB
-	if (Debug(debug_servercontrol))
-	  	Debug("asset presentation response != 0 (%i)\n", response.result);
+                if (Debug(debug_servercontrol))
+                    Debug("more info size = (%i)\n%s\n", strlen(*datablock), (*datablock));
+#endif      
+            }
+            else
+            {
+                return MakeError(VSP_Alloc);
+            }
+            my_free(trick_play_description);
+        }
+    }
+    else
+    if (response.result != 0)
+    {
+#ifdef DEBUGLIB
+        if (Debug(debug_servercontrol))
+            Debug("asset presentation response != 0 (%i)\n", response.result);
 #endif
-    return MakeError(VSP_ServerError, response.result);
-  }
+        return MakeError(VSP_ServerError, response.result);
+    }
+    set_streamrunning();
 
-  set_streamrunning();
-
-  return NoError;
+    return NoError;
 }
 
 error_flag
@@ -951,33 +976,29 @@ Server::send_playback_request(ULINT state_id, ULINT MAX_storableBlock, ULONG Ack
 error_flag
 Server::get_playback_response(ULINT *comms_result)
 {
-  error_flag  result = NoError;
-  PlayBackResponse response;
+    error_flag  result = NoError;
+    PlayBackResponse response;
 
-  if (GetData((void*)&response, sizeof(PlayBackResponse)) == ErrorOccurred)
-  	result = ErrorOccurred;	//Null
+    if (GetData((void*)&response, sizeof(PlayBackResponse)) == ErrorOccurred)
+        result = ErrorOccurred; //Null
 
-  if ((result != ErrorOccurred)&&(ntoh_structure(&response, map_PlayBackResponse, PlayBackResponse) == ErrorOccurred))
-  {
-    	result = MakeError(IP_ReadFail);
-  }
+    if ((result != ErrorOccurred)&&(ntoh_structure(&response, map_PlayBackResponse, PlayBackResponse) == ErrorOccurred))
+    {
+        result = MakeError(IP_ReadFail);
+    }
 
 #ifdef DEBUGLIB
-   if ((Debug(debug_servercontrol))&&((result != ErrorOccurred)&&(response.certification_code != certification_code)))
-   {
-     	Debug("incorrect server response code (%i) required (%i)\n", response.certification_code, certification_code);
-   }
+    if ((Debug(debug_servercontrol))&&((result != ErrorOccurred)&&(response.certification_code != certification_code)))
+    {
+        Debug("incorrect server response code (%i) required (%i)\n", response.certification_code, certification_code);
+    }
 #endif
-  certification_code++;
+     certification_code++;
 
-  if (*comms_result != NULL)
-    	*comms_result = response.result;
+    if (*comms_result != NULL)
+         *comms_result = response.result;
 
-  //if ((result != ErrorOccurred)&&(response.result != 0)){
-  //	result = MakeError(VSP_ServerError, response.result);
-  //}
-
-  return result;
+    return result;
 }
 
 //--------------------------------------------------------public methods---------------

@@ -215,6 +215,10 @@ Interface::~Interface(void)
         delete errors[errorsOffset];
         errors[errorsOffset] = NULL;
     }
+
+#ifdef DEBUGLIB
+    malloc_check();
+#endif
 }
 
 //---- error list methods --
@@ -279,14 +283,14 @@ error_flag
 Interface::RTSP_Register()
 {
     _kernel_oserror* err = NULL;
-    
+
 #ifdef DEBUGLIB
     if (Debug(debug_RTSP))
         {
           Debug("register with video control\n");
         }
 #endif
-    
+
     int register_flags =    VC_ProtocolRegister_IDoReducedRateSlowmoForward |\
                     VC_ProtocolRegister_DoNotResetOrSetSpeed |\
                     VC_ProtocolRegister_DoNotCallUDPV|\
@@ -300,7 +304,7 @@ Interface::RTSP_Register()
     err = _swix(VideoControl_ProtocolRegister, _INR(0,5), register_flags, VSP_Protocol_Setup,
                                                    "rtsp:", Module_VersionNumber,
                                                    "NEC HyperMS, Generic RTSP", ctrlflags);
-    
+
     if (err)
     {
         AddError(new ErrorBlk(err));
@@ -313,16 +317,16 @@ error_flag
 Interface::RTSP_Deregister()
 {
     _kernel_oserror* err = NULL;
-    
+
 #ifdef DEBUGLIB
     if (Debug(debug_RTSP))
         {
           Debug("de-register with video control\n");
         }
 #endif
-    
+
     err = _swix(VideoControl_ProtocolDeregister, _INR(0,1), 0, VSP_Protocol_Setup);
-    
+
     if (err)
     {
         AddError(new ErrorBlk(err));
@@ -1006,102 +1010,95 @@ Interface::GetMiscInfo(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
 error_flag
 Interface::Protocol_Setup(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
 {
-    if (regs->r[0] > R0_Protocol_Setup)
+    PlayElementRequest *play_elements = NULL;
+    Server *server = NULL;
+    const char* sub_query;
+    struct in_addr address;
+    int port, assets;
+    _kernel_oserror* err = NULL;
+
+    err = parse_URL_server((char*)regs->r[2], &sub_query, &address, &port, &play_elements, &assets);
+
+    if (!err)
     {
-        (*non_fatal) = AddError(new ErrorBlk(VSP_Unimplemented));
-    }// this ensures that no expected functionality is requested
-    else
-    {
-        PlayElementRequest *play_elements = NULL;
-        Server *server = NULL;
-        const char* sub_query;
-        struct in_addr address;
-        int port, assets;
-        _kernel_oserror* err = NULL;
+        if (port == 0) port = EnvPortNum;
 
-        err = parse_URL_server((char*)regs->r[2], &sub_query, &address, &port, &play_elements, &assets);
-
-        if (!err)
+        if ((0 == address.s_addr)&&(false == parse_server_address(EnvServerString, &address)))
         {
-            if (port == 0) port = EnvPortNum;
-            
-            if ((0 == address.s_addr)&&(false == parse_server_address(EnvServerString, &address)))
-            {
-                (*non_fatal) = AddError(new ErrorBlk(IP_UnknownServer));
-            }
-            else
-            {
-                server = new Server(&address, port, EnvTCPtimeout);
-            }
-        }
-
-        if (err)
-        {
-              (*non_fatal) = AddError(new ErrorBlk(err));
+            (*non_fatal) = AddError(new ErrorBlk(IP_UnknownServer));
         }
         else
         {
-            if (server == NULL)
-            {   
-                if (NULL == (*non_fatal))
-                {
-                    (*non_fatal) = AddError(new ErrorBlk(IP_UnknownServer));
-                }
+            server = new Server(&address, port, EnvTCPtimeout);
+        }
+    }
+
+    if (err)
+    {
+        (*non_fatal) = AddError(new ErrorBlk(err));
+    }
+    else
+    {
+        if (server == NULL)
+        {
+            if (NULL == (*non_fatal))
+            {
+                (*non_fatal) = AddError(new ErrorBlk(IP_UnknownServer));
+            }
+        }
+        else
+        {
+            if (server->ErrorExists())
+            {
+                (*non_fatal) = AddError(&server->ReturnCopyOfError());
+                delete server; server = NULL;
             }
             else
             {
-                if (server->ErrorExists())
+                Stream *stream = NULL;
+
+                if (assets <= 0)
                 {
-                    (*non_fatal) = AddError(&server->ReturnCopyOfError());
-                    delete server; server = NULL;
+                    if (!(*non_fatal))
+                    {
+                        (*non_fatal) = AddError(new ErrorBlk(VSP_InvalidValue));
+                    }
                 }
                 else
                 {
-                    Stream *stream = NULL;
-                    
-                    if (assets <= 0)
-                    {
-                         if (!(*non_fatal))
-                         {
-                             (*non_fatal) = AddError(new ErrorBlk(VSP_InvalidValue ));
-                         }
-                    }
-                    else
-                    {
-                        stream = new Stream(EnvINETtimeout, init_block_val, 0, play_elements, assets,
+                    stream = new Stream(EnvINETtimeout, init_block_val, 0, play_elements, assets,
                                             server, EnvNumBlocks, EnvSourceRecvSpace,
                                             EnvBufferBlocks, pw, EnvFlagsWord);
-                        if (stream)
+                    if (stream)
+                    {
+                        if (stream->ErrorExists())
                         {
-                            if (stream->ErrorExists())
+                            (*non_fatal) = AddError(&stream->ReturnCopyOfError());
+                            delete stream; stream = NULL;
+                        }
+                        else
+                        {
+                            stream->setRTSPClientId(regs->r[1]);
+                            if (CurrentStreams.Add(stream, &(regs->r[1]) ) == ErrorOccurred)
                             {
-                                (*non_fatal) = AddError(&stream->ReturnCopyOfError());
-                                delete stream; stream = NULL;
-                            }
-                            else
+                                (*non_fatal) = AddError(&CurrentStreams.ReturnCopyOfError());
+                            } // this sets the handle as well.
+#ifdef DEBUGLIB
+                            if (Debug(debug_RTSP))
                             {
-                                stream->setRTSPClientId(regs->r[1]);
-                                if (CurrentStreams.Add(stream, &(regs->r[1]) ) == ErrorOccurred)
-                                {
-                                    (*non_fatal) = AddError(&CurrentStreams.ReturnCopyOfError());
-                                } // this sets the handle as well.
-#ifdef DEBUGLIB     
-                                if (Debug(debug_RTSP))
-                                {
-                                     Debug("loaded id = (%i)\n", regs->r[1]);
-                                }
-#endif              
+                                Debug("loaded id = (%i)\n", regs->r[1]);
                             }
+#endif
                         }
                     }
                 }
             }
         }
-        if (play_elements)
-        {
-            free(play_elements);
-            play_elements = NULL;
-        }
+    }
+    if (play_elements)
+    {
+        my_free(play_elements);
+        play_elements = NULL;
     }
     return ErrorState();
 }
@@ -1109,32 +1106,50 @@ Interface::Protocol_Setup(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
 error_flag
 Interface::Protocol_Options(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
 {
-    if (regs->r[0] > R0_Protocol_Options)
+    Stream *tmp;
+    bool setting = (regs->r[0] & 0x01) ? false : true;
+
+    if (CurrentStreams.identify((ListObject**)&tmp, regs->r[1]) == ErrorOccurred)
     {
-#ifdef DEBUGLIB
-        if (Debug(debug_RTSP))
-        {
-            int i = 0;
-            const int* params = (int*)regs->r[2];
-            
-            Debug("Options r0(%i) for id = (%i)\n", regs->r[0], regs->r[1]);
-            
-            while (params[i] != -1)
-            {
-                Debug("Option (%i)\n", i);
-                i += (params[i+1] + 2);
-                if (params[i] == 18) /* normal play time */
-                   Debug ("Normal Play Time\n");
-                else
-                if (params[i] == 19)
-                   Debug ("Loop mode\n");
-            }
-        }
-#endif
-        /*(*non_fatal) = AddError(new ErrorBlk(VSP_Unimplemented));*/
-    }// this ensures that no expected functionality is requested
+        (*non_fatal) = AddError(&CurrentStreams.ReturnCopyOfError());
+    }
     else
     {
+        int i = 0;
+        int* params = (int*)regs->r[2];
+        
+
+        while (params[i] != -1)
+        {
+#ifdef DEBUGLIB
+            if (Debug(debug_RTSP))
+                Debug("setting [r0(%i)] param(%i)\n", regs->r[0], params[i]);
+#endif 
+            if (params[i] == 18) /* normal play time */
+            {
+               if (tmp->ReadNPT((ULINT*)&params[i+2]) == ErrorOccurred)
+                   (*non_fatal) = AddError(&tmp->ReturnCopyOfError());
+            }
+            else
+            if (params[i] == 19)
+            {
+               bool looping = (0 != params[i+2])?true:false;
+#ifdef DEBUGLIB
+               if (Debug(debug_RTSP))
+                   Debug("setting [if (%i)] looping to (%i)\n", setting, looping);
+#endif
+               if (setting)
+               {
+                   tmp->set_looping(looping);
+               }
+               else
+               {
+                   looping = tmp->get_looping();
+                   params[i+2] = ((true == looping) ? 1 :0);
+               }
+            }
+            i += (params[i+1] + 2);
+        }
     }
     return ErrorState();
 }
@@ -1142,48 +1157,35 @@ Interface::Protocol_Options(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
 error_flag
 Interface::Protocol_Status(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
 {
-    if (regs->r[0] > R0_Protocol_Status)
-    {
-        (*non_fatal) = AddError(new ErrorBlk(VSP_Unimplemented));
-    }// this ensures that no expected functionality is requested
-    else
-    {
-        Stream *tmp;
+    Stream *tmp;
 #ifdef DEBUGLIB
-        if (Debug(debug_RTSP))
-        {
-            Debug("get Status for id = (%i)\n", regs->r[1]);
-        }
+    if (Debug(debug_RTSP))
+    {
+        Debug("get Status for id = (%i)\n", regs->r[1]);
+    }
 #endif
+    if (CurrentStreams.identify((ListObject**)&tmp, regs->r[1]) == ErrorOccurred)
+    {
+        (*non_fatal) = AddError(&CurrentStreams.ReturnCopyOfError());
+    }
+    else
+    if (tmp->RTSP_getStatus((ULINT*)&(regs->r[0]), (ULINT*)&(regs->r[2])) == ErrorOccurred)
+        (*non_fatal) = AddError(&tmp->ReturnCopyOfError());
 
-         if (CurrentStreams.identify((ListObject**)&tmp, regs->r[1]) == ErrorOccurred)
-            {
-          (*non_fatal) = AddError(&CurrentStreams.ReturnCopyOfError());
-            }
-          else
-            if (tmp->RTSP_getStatus((ULINT*)&(regs->r[0]), (ULINT*)&(regs->r[2])) == ErrorOccurred)
-              (*non_fatal) = AddError(&tmp->ReturnCopyOfError());
-  }
-  return ErrorState();
+    return ErrorState();
 }
 /*************************/
 error_flag
 Interface::Protocol_MoreInformation(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
 {
-    if (regs->r[0] > R0_Protocol_MoreInformation)
+    Stream *tmp;
+    if (CurrentStreams.identify((ListObject**)&tmp, regs->r[1]) == ErrorOccurred)
     {
-        (*non_fatal) = AddError(new ErrorBlk(VSP_Unimplemented));
-    }// this ensures that no expected functionality is requested
+        (*non_fatal) = AddError(&CurrentStreams.ReturnCopyOfError());
+    }
     else
     {
-        Stream *tmp;
-         if (CurrentStreams.identify((ListObject**)&tmp, regs->r[1]) == ErrorOccurred)
-            {
-          (*non_fatal) = AddError(&CurrentStreams.ReturnCopyOfError());
-            }
-          else
-            {
-                  regs->r[0] = regs->r[4];
+        regs->r[0] = regs->r[4];
 #ifdef DEBUGLIB
         if (Debug(debug_RTSP))
         {
@@ -1191,107 +1193,71 @@ Interface::Protocol_MoreInformation(_kernel_swi_regs *regs, ErrorBlk **non_fatal
         }
 #endif
 
-            if (tmp->RTSP_getMoreInfo(regs->r[2], (char*)regs->r[3], &(regs->r[0]), &regs->r[1]) == ErrorOccurred)
-                {
-              (*non_fatal) = AddError(&tmp->ReturnCopyOfError());
-                }
-            }
+        if (tmp->RTSP_getMoreInfo(regs->r[2], (char*)regs->r[3], &(regs->r[0]), &regs->r[1]) == ErrorOccurred)
+        {
+            (*non_fatal) = AddError(&tmp->ReturnCopyOfError());
+        }
     }
-      return ErrorState();
+    return ErrorState();
 }
 /*************************/
 error_flag
 Interface::Protocol_Play(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
 {
-    if (regs->r[0] > R0_Protocol_Play)
+    Stream *tmp;
+
+    if (CurrentStreams.identify((ListObject**)&tmp, regs->r[1]) == ErrorOccurred)
     {
-        (*non_fatal) = AddError(new ErrorBlk(VSP_Unimplemented));
-    }// this ensures that no expected functionality is requested
+        regs->r[0] = -1;    // as per spec, if we cannot find the stream
+    }
     else
     {
-        Stream *tmp;
-
-        if (CurrentStreams.identify((ListObject**)&tmp, regs->r[1]) == ErrorOccurred)
+        if (tmp->RTSP_requestinprogress() == true)
         {
-            regs->r[0] = -1;    // as per spec, if we cannot find the stream
+            (*non_fatal) = AddError(new ErrorBlk(VSP_ObjectInUse));
         }
         else
         {
-            if (tmp->RTSP_requestinprogress() == true)
+            _kernel_oserror *err = NULL;
+            position_type from, to;
+            bool forward;
+            ULINT numerator, denominator;
+
+            if (!parse_position((char*)regs->r[2], NULL, &from, &to))
             {
-                (*non_fatal) = AddError(new ErrorBlk(VSP_ObjectInUse));
+                from.numer = TIME_undef;
+                from.denom = 0;
+
+                to.numer = TIME_undef;
+                to.denom = 0;
             }
-            else
+
+            if (!parse_speed((char*)regs->r[3], NULL, &forward, (int*)&numerator, (int*)&denominator))
             {
-                int val1=0, val2=0;
-                bool call = false;
-                 position_type from, to;
-                _kernel_oserror *err = NULL;
-                
-                parse_position((char*)regs->r[2], NULL, &from, &to);
-                
-                val1 = from.numer;
-                val2 = to.numer;                
-
-                if (err)
-                {
-                    (*non_fatal) = AddError(new ErrorBlk(err));
-                }
+                forward = true;
+                numerator = 1;
+                denominator = 1;
+            }
+#ifdef DEBUGLIB
+            if (Debug(debug_RTSP))
+            {
+                Debug("speed [forward (%s), %i/%i]\n", (forward)?"TRUE":"FALSE", numerator, denominator);
+                Debug("position\n");
+                if (from.denom ==0)
+                    Debug(" from (%s)\n", get_TIME(&from));
                 else
-                {
-                    if (call == true)
-                    {
-#ifdef DEBUGLIB
-                        if (Debug(debug_RTSP))
-                            Debug("set position (%s) -> (%i)(%i)",
-                                   (regs->r[2])?(char*)regs->r[2]:"NULL", val1, val2);
-#endif
-                        if (tmp->SetPosition(0, val1, false) == ErrorOccurred)
-                            (*non_fatal) = AddError(&tmp->ReturnCopyOfError());
-                    }
+                    Debug(" from (%i/%i)\n", from.numer, from.denom);
 
-                    if ((*non_fatal) == NULL)
-                    {
-                        bool direction;
-                        int numerator, denominator;
-                        
-                        parse_speed((char*)regs->r[3], NULL, &direction, &numerator, &denominator);
-                        
-                        if (direction == false)
-                        {
-                            val1 = 1;
-                            val2 = -1;
-                        }
-                        else
-                        {
-                           if (numerator > denominator)
-                           {
-                               val1 = 1;
-                               val2 = 1;
-                           }
-                           else
-                           {
-                               val2 = denominator;
-                               val1 = 0;
-                           }
-                        }
-#ifdef DEBUGLIB
-                        if (Debug(debug_RTSP))
-                            Debug("set speed (%s) -> (%i)(%i)",
-                                   (regs->r[2])?(char*)regs->r[2]:"NULL", val1, val2);
+                if (to.denom ==0)
+                    Debug(" to   (%s)\n", get_TIME(&to));
+                else
+                    Debug(" to  (%i/%i)\n", to.numer, to.denom);
+            }
 #endif
-                    }
-
-                    if (err == NULL)
-                    {
-                        if (tmp->SetSpeed(val1, val2, regs->r[1]) == ErrorOccurred)
-                            (*non_fatal) = AddError(&tmp->ReturnCopyOfError());
-                    }
-                    else
-                    {
-                        (*non_fatal) = AddError(new ErrorBlk(err));
-                    }
-                }
+            if (tmp->RTSP_play(forward, numerator, denominator, &from, &to) == ErrorOccurred)
+            {
+                (*non_fatal) = AddError(&tmp->ReturnCopyOfError());
+                tmp->RemoveErr();
             }
         }
     }
