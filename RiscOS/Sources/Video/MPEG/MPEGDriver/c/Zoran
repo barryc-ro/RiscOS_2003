@@ -1,0 +1,861 @@
+/******	Zoran.c ************************************************************
+
+Project:	STB-400
+Component:	MPEGDriver
+This file:	Generic Zoran ZR38601 support (independent of interface)
+
+Copyright 2001 Pace Micro Technology plc. All rights reserved.
+
+This material is the confidential trade secret and proprietary information
+of Pace Micro Technology plc. It may not be reproduced, used, sold, or
+transferred to any third party without the prior written consent of
+Pace Micro Technology plc.
+
+History:
+Date		Who	Change
+----------------------------------------------------------------------------
+10/10/2001	BJGA	Created
+
+***************************************************************************/
+
+#ifdef GENERIC
+
+/************/
+/* Includes */
+/************/
+
+#include <stdlib.h>
+#include <string.h>
+//#include <stdio.h>
+//#include "kernel.h"
+#include "swis.h"
+
+//#include "Global/SWIs.h"
+//#include "Global/IO/GenericIO.h"
+//#include "Global/IO/IOMD.h"
+//#include "DebugLib/DebugLib.h"
+//#include "MPEG/MPEGAudio.h"
+//#include "MPEG/MPEGCtrl.h"
+
+//#include "AudGeneric.h"
+//#include "IRQ.h"
+//#include "Mess.h"
+//#include "Module.h"
+//#include "Registers.h"
+//#include "Stuffing.h"
+//#include "Types.h"
+
+#include "Defs.h"
+#include "MiscAsm.h"
+#include "RecogMPA.h"
+#include "Zoran.h"
+#include "ZoranPara.h"
+
+#include "Debug.h"
+#if Debugging==1
+#include "DWrite.h"
+#endif
+
+/*****************/
+/* Private types */
+/*****************/
+
+/**********************/
+/* Private prototypes */
+/**********************/
+
+static _kernel_oserror *static_StreamRecognised (unsigned int flags, void *handle);
+static _kernel_oserror *static_HowMuchData (unsigned int flags, void *handle, unsigned int *bytes);
+static _kernel_oserror *static_GiveMeData (unsigned int flags, void *handle);
+
+static void static_SetPLLs (zoran_interface_t *zoran, unsigned int samplerate);
+static void static_SetSPDIF (zoran_interface_t *zoran, unsigned int samplerate);
+static void static_SendFunctionCommand (zoran_interface_t *zoran);
+
+/********************/
+/* Public variables */
+/********************/
+
+/*********************/
+/* Private variables */
+/*********************/
+
+static const buffer_fns_t Buffer = { NULL /* HowMuchData not called by recognisers */, NULL /* DataAvailable not called, so GiveMeData not called back */ };
+static const recogniser_fns_t Recogniser = { static_StreamRecognised };
+static void *MPA_Characteriser;
+static void *AC3_Characteriser;
+static zoran_interface_t *Interfaces = NULL;
+
+/*********************/
+/* Private constants */
+/*********************/
+
+#define ZCMD_NOP          ( (0<<10) | (0x00<<5) |  (0<<0))
+#define ZCMD_VER          ( (0<<10) | (0x01<<5) |  (4<<0))
+#define ZCMD_CFG          ( (8<<10) | (0x02<<5) |  (0<<0))
+#define ZCMD_PNG          ( (8<<10) | (0x03<<5) |  (0<<0))
+#define ZCMD_AC3          ( (8<<10) | (0x05<<5) |  (0<<0))
+#define ZCMD_PCMPROL      ( (8<<10) | (0x06<<5) |  (0<<0))
+#define ZCMD_MPEG         ( (8<<10) | (0x07<<5) |  (0<<0))
+#define ZCMD_USER         ( (8<<10) | (0x08<<5) |  (0<<0))
+#define ZCMD_UNMUTE       ( (0<<10) | (0x09<<5) |  (0<<0))
+#define ZCMD_PLAY         ( (0<<10) | (0x0A<<5) |  (0<<0))
+#define ZCMD_MUTE         ( (0<<10) | (0x0B<<5) |  (0<<0))
+#define ZCMD_STOP         ( (0<<10) | (0x0C<<5) |  (0<<0))
+#define ZCMD_STOPF        ( (0<<10) | (0x0D<<5) |  (0<<0))
+#define ZCMD_STAT_AC3     ( (0<<10) | (0x0E<<5) | (16<<0))
+#define ZCMD_STAT_PCMPROL ( (0<<10) | (0x0E<<5) |  (8<<0))
+#define ZCMD_STAT_MPEG    ( (0<<10) | (0x0E<<5) | (12<<0))
+#define ZCMD_STAT_PNG     ( (0<<10) | (0x0E<<5) |  (8<<0))
+#define ZCMD_STAT_USER    ( (0<<10) | (0x0E<<5) |  (0<<0))
+#define ZCMD_SPDIFSTAT    ( (0<<10) | (0x0F<<5) |  (4<<0))
+#define ZCMD_BOOT         ( (0<<10) | (0x10<<5) |  (0<<0))
+#define ZCMD_INTRP        ( (4<<10) | (0x11<<5) |  (0<<0))
+#define ZCMD_SETIO        ( (4<<10) | (0x12<<5) |  (2<<0))
+#define ZCMD_POKE         ((11<<10) | (0x13<<5) |  (0<<0))
+#define ZCMD_PEEK         ( (7<<10) | (0x14<<5) |  (4<<0))
+#define ZCMD_SPDIFCS      ( (4<<10) | (0x15<<5) |  (0<<0))
+#define ZCMD_PARAM_1      ( (4<<10) | (0x16<<5) |  (0<<0))
+#define ZCMD_PARAM_2      ( (7<<10) | (0x16<<5) |  (0<<0))
+#define ZCMD_SETSTC       ( (7<<10) | (0x17<<5) |  (0<<0))
+#define ZCMD_PLLTAB       ( (6<<10) | (0x18<<5) |  (0<<0))
+#define ZCMD_PLLCFG       ( (1<<10) | (0x19<<5) |  (1<<0))
+#define ZCMD_GETPTC       ( (0<<10) | (0x1A<<5) |  (0<<0))
+
+/********************/
+/* Public functions */
+/********************/
+
+/******	Zoran_Init() *******************************************************
+
+Purpose:	Set up Zoran chip
+In:		Pointer to interface struct for this stream
+Out:		Error pointer if we can't initialise
+
+***************************************************************************/
+
+_kernel_oserror *Zoran_Init (zoran_interface_t *zoran)
+{
+  _kernel_oserror *e = NULL;
+  /* Set up the recognisers to characterise the streams for us */
+  e = RecogMPA_RegisterCharacterisationClient (0, &Buffer, &Recogniser, &MPA_Characteriser);
+/*  if (!e)
+  {
+    e = RecogAC3_RegisterCharacterisationClient (0, &Buffer, &Recogniser, &AC3_Characteriser);
+    if (e)
+    {
+      RecogMPA_DeregisterCharacterisationClient (0, MPA_Characteriser);
+    }
+  }*/
+  
+  if (!e)
+  {
+    /* Set up the hardware */
+    static const struct
+    {
+      unsigned WAIT: 2;       unsigned : 4;           unsigned WFB: 1;        unsigned WFA: 1;
+      unsigned : 2;           unsigned MA: 1;         unsigned MB: 1;         unsigned CB: 1;         unsigned DVD: 1;        unsigned : 1;           unsigned PES: 1;
+      unsigned FRA: 3;        unsigned FRB: 3;        unsigned CBA: 1;        unsigned CBP: 1;
+      unsigned OSP: 1;        unsigned ISP: 1;        unsigned : 2;           unsigned EPE: 1;        unsigned MPE: 1;        unsigned : 1;           unsigned DRQ: 1;
+      unsigned PDI: 1;        unsigned OUTW: 2;       unsigned INW: 2;        unsigned SPO: 1;        unsigned AVS: 1;        unsigned SEN: 1;
+      unsigned SPAS: 8;
+      unsigned SPBS: 8;
+      unsigned FMA: 3;        unsigned FMB: 3;        unsigned : 2;
+    }
+    CFG_Params =
+    {
+      0, 1, 1,
+  //    1, 1, 1, 0, 1,
+      1, 1, 1, 0, 0,
+      1, 1, 0, 0,
+      0, 0, 0, 0, 1,
+  //    1, 1, 2, 1, 1, 0,
+      1, 1, 2, 1, 0, 0,
+      3,
+      3,
+      1, 1
+    };
+    static const char SETIO_Params [4] = { 0x20, 0x20, 0x20, 0x20 };
+    
+    zoran->completeop (false);
+    zoran->command (ZCMD_CFG, (const char *) &CFG_Params, 0);
+    {
+      char result [2]; /* throwaway space */
+      zoran->command (ZCMD_SETIO, SETIO_Params, result);
+    }
+  }
+  return e;
+}
+
+/******	Zoran_Final() ******************************************************
+
+Purpose:	Return hardware to state before module initialised
+In:		Pointer to interface struct for this stream
+Out:		Error pointer if we can't finalise
+
+***************************************************************************/
+
+_kernel_oserror *Zoran_Final (zoran_interface_t *zoran)
+{
+  _kernel_oserror *e = NULL;
+  IGNORE (zoran);
+  /* Finalise the recognisers */
+//e = RecogAC3_DeregisterCharacterisationClient (0, AC3_Characteriser);
+  if (!e)
+  {
+    e = RecogMPA_DeregisterCharacterisationClient (0, MPA_Characteriser);
+    if (e)
+    {
+//    RecogAC3_RegisterCharacterisationClient (0, &Buffer, &Recogniser, &AC3_Characteriser);
+    }
+  }
+  return e;
+}
+
+/******	Zoran_EstablishMPA() ***********************************************
+
+Purpose:	Stream initialisation (MPEG audio case)
+In:		Flags; pointer to interface struct for this stream
+Out:		Error pointer
+
+***************************************************************************/
+
+_kernel_oserror *Zoran_EstablishMPA (unsigned int flags, zoran_interface_t *zoran)
+{
+  _kernel_oserror *e = NULL;
+  static const zoran_characteriser_protocol_fns_t mpacharacterisermodule =
+    { RecogMPA_Establish, RecogMPA_Annul, RecogMPA_Commence, RecogMPA_Discontinue, RecogMPA_DataAvailable, RecogMPA_ConsumeData, RecogMPA_ReadStreamInfo };
+  zoran->characteriser = &mpacharacterisermodule;
+  e = zoran->characteriser->establish (flags, MPA_Characteriser, zoran, &zoran->characteriserhandle);
+  if (!e)
+  {
+    /* Add to global list */
+    zoran->link = Interfaces;
+    Interfaces = zoran;
+    /* Flag as MPEG audio */
+    zoran->flag_ac3notmpa = false;
+    zoran->flag_started = false;
+  }
+  return e;
+}
+
+/******	Zoran_EstablishAC3() ***********************************************
+
+Purpose:	Stream initialisation (AC-3 audio case)
+In:		Flags; pointer to interface struct for this stream
+Out:		Error pointer
+
+***************************************************************************/
+
+_kernel_oserror *Zoran_EstablishAC3 (unsigned int flags, zoran_interface_t *zoran)
+{
+  _kernel_oserror *e = NULL;
+//static const zoran_characteriser_protocol_fns_t ac3characterisermodule =
+//  { RecogAC3_Establish, RecogAC3_Annul, RecogAC3_Commence, RecogAC3_Discontinue, RecogAC3_DataAvailable, RecogAC3_ConsumeData, RecogAC3_ReadStreamInfo };
+//zoran->characteriser = &ac3characterisermodule;
+//e = zoran->characteriser->establish (flags, AC3_Characteriser, zoran, &zoran->characteriserhandle);
+  if (!e)
+  {
+    /* Add to global list */
+    zoran->link = Interfaces;
+    Interfaces = zoran;
+    /* Flag as AC-3 audio */
+    zoran->flag_ac3notmpa = true;
+    zoran->flag_started = false;
+  }
+  return e;
+}
+
+/******	Zoran_Annul() ******************************************************
+
+Purpose:	Stream finalisation
+In:		Flags; pointer to interface struct for this stream
+Out:		Error pointer
+
+***************************************************************************/
+
+_kernel_oserror *Zoran_Annul (unsigned int flags, zoran_interface_t *zoran)
+{
+  _kernel_oserror *e = NULL;
+  e = zoran->characteriser->annul (flags, zoran->characteriserhandle);
+  if (!e)
+  {
+    /* Remove from global list */
+    zoran_interface_t *prev = NULL;
+    zoran_interface_t *ptr = Interfaces;
+    for (; ptr != NULL; prev = ptr, ptr = ptr->link)
+    {
+      if (ptr == zoran)
+      {
+        if (prev == NULL)
+        {
+          Interfaces = zoran->link;
+        }
+        else
+        {
+          prev->link = zoran->link;
+        }
+      }
+    }
+  }
+  return e;
+}
+
+/******	Zoran_Commence() ***************************************************
+
+Purpose:	Stream segment initialisation
+In:		Flags; session ID (pointer to interface struct)
+Out:		Error pointer
+
+***************************************************************************/
+
+_kernel_oserror *Zoran_Commence (unsigned int flags, void *session_id)
+{
+  zoran_interface_t *zoran = session_id;
+  _kernel_oserror *e = NULL;
+  e = zoran->characteriser->commence (flags, zoran->characteriserhandle);
+  if (!e)
+  {
+    zoran->howmuchdata = static_HowMuchData;
+    zoran->givemedata = static_GiveMeData;
+    zoran->flag_characterising = true;
+    zoran->flag_receivingcharacterisationdata = false;
+    zoran->block_queue_head = NULL;
+    zoran->block_queue_tail = NULL;
+  }
+  return e;
+}
+
+/******	Zoran_Discontinue() ************************************************
+
+Purpose:	Stream segment finalisation
+In:		Flags; session ID (pointer to interface struct)
+Out:		Error pointer
+
+***************************************************************************/
+
+_kernel_oserror *Zoran_Discontinue (unsigned int flags, void *session_id)
+{
+  zoran_interface_t *zoran = session_id;
+  _kernel_oserror *e = NULL;
+  e = zoran->characteriser->discontinue (flags, zoran->characteriserhandle);
+  if (!e)
+  {
+    /* Free any queued data */
+    block_header_t *ptr = zoran->block_queue_head;
+    block_header_t *next;
+    for (; ptr != NULL; ptr = next)
+    {
+      next = ptr->next;
+      free (ptr);
+    }
+  }
+  return e;
+}
+
+/******	Zoran_ReadSystemInfo() *********************************************
+
+Purpose:	Return stream-agnostic information
+In:		Tag word; pointer to interface struct for this interface
+Out:		Error pointer; value associated with tag
+
+***************************************************************************/
+
+_kernel_oserror *Zoran_ReadSystemInfo (unsigned int tag, unsigned int *result, zoran_interface_t *zoran)
+{
+  _kernel_oserror *e = NULL;
+  return e;
+}
+
+/******	Zoran_DataAvailable() **********************************************
+
+Purpose:	Notification that data has arrived in a hitherto empty buffer
+In:		Flags; session ID (pointer to interface struct)
+Out:		Error pointer
+
+***************************************************************************/
+
+_kernel_oserror *Zoran_DataAvailable (unsigned int flags, void *session_id)
+{
+  zoran_interface_t *zoran = session_id;
+  _kernel_oserror *e = NULL;
+  if (zoran->flag_characterising) /* we're only a pull interface during characterisation */
+  {
+    zoran->flag_receivingcharacterisationdata = true;
+    zoran->buffer->givemedata (1 /* we want PES headers */, zoran->toplevelhandle);
+    zoran->flag_receivingcharacterisationdata = false;
+  }
+  return e;
+}
+
+/******	Zoran_ConsumeData() ************************************************
+
+Purpose:	Accept contiguous data block (called multiple times in response to givemedata())
+In:		Flags; session ID (pointer to interface struct); start/length pair
+Out:		Error pointer; amount of the block that was not used and should be queued
+Note:		This function is only called during the characterisation phase
+
+***************************************************************************/
+
+_kernel_oserror *Zoran_ConsumeData (unsigned int flags, void *session_id, const unsigned char *start, unsigned int length, unsigned int *not_consumed)
+{
+  zoran_interface_t *zoran = session_id;
+  _kernel_oserror *e = NULL;
+  unsigned int not_consumed_by_characteriser;
+  IGNORE (flags);
+
+  /* Send to characteriser (unless it's a PES header block) */
+  if ((length != 14 && length != 9) /* won't have 19-byte PES headers (PTS+DTS) for audio */
+    || start[0] != 0 || start[1] != 0 || start[2] != 1)
+  {
+    zoran->characteriser->consumedata (0, zoran->characteriserhandle, start, length, &not_consumed_by_characteriser);
+  }
+  
+  if (zoran->flag_characterising)
+  {
+    /* Still need more data - queue this block locally */
+    block_header_t *newblock = malloc (sizeof (block_header_t) + length);
+    if (newblock != NULL) /* tough luck if it failed */
+    {
+      newblock->next = NULL;
+      newblock->offset = sizeof (block_header_t);
+      newblock->length = length;
+      memcpy (((char *) newblock) + sizeof (block_header_t), start, length);
+      /* Yep, a copy is needed. Good thing it's only during characterisation! */
+      if (zoran->block_queue_tail == NULL)
+      {
+        zoran->block_queue_head = newblock;
+      }
+      else
+      {
+        zoran->block_queue_tail->next = newblock;
+      }
+      zoran->block_queue_tail = newblock;
+    }
+    *not_consumed = 0;
+  }
+  else
+  {
+    /* Don't send me any more - leave current block queued at buffer manager */
+    *not_consumed = length;
+    {
+      /* Now, finally, we can really get things going... */
+      unsigned int samplerate = 32000; /* default in case of error */
+      zoran->characteriser->readstreaminfo (zoran->characteriserhandle, 2, &samplerate);
+      
+      zoran->completeop (false);
+      
+      static_SetPLLs (zoran, samplerate);
+      
+      static_SetSPDIF (zoran, samplerate);
+      
+      static_SendFunctionCommand (zoran);
+      
+      zoran->unmaskstuffingirq ();
+      
+      if (zoran->flag_started)
+      {
+        zoran->command (ZCMD_PLAY, 0, 0);
+        zoran->command (ZCMD_UNMUTE, 0, 0);
+      }
+    }
+  }
+  return e;
+}
+
+static void static_SetPLLs (zoran_interface_t *zoran, unsigned int samplerate)
+{
+  static struct
+  {
+    unsigned AUDD12_8: 5;   unsigned : 3;
+    unsigned AUDD7_0: 8;
+    unsigned AUDM12_8: 5;   unsigned : 3;
+    unsigned AUDM7_0: 8;
+    unsigned DSPD: 6;       unsigned : 2;
+    unsigned DSPM: 8;
+  }
+  PLLTAB_Params =
+  {
+    0,
+    0,
+    0,
+    0,
+    2,
+    13
+  };
+  static struct
+  {
+    unsigned DS: 1;         unsigned AS: 1;         unsigned F2: 1;         unsigned F1: 1;         unsigned F3: 1;         unsigned SR: 3;
+  }
+  PLLCFG_Params =
+  {
+    0, 0, 0, 0, 0, 0
+  };
+  struct
+  {
+    unsigned PD: 1;         unsigned PA: 1;         unsigned : 6;
+  }
+  PLLCFG_Reply;
+  unsigned int retries = 0;
+  
+  switch (samplerate)
+  {
+    case 44100:
+//      PLLTAB_Params.AUDD7_0 = 160;
+//      PLLTAB_Params.AUDM7_0 = 147;
+      PLLTAB_Params.AUDD7_0 = 320 & 0xFF;
+      PLLTAB_Params.AUDD12_8 = 320 >> 8;
+      PLLTAB_Params.AUDM7_0 = 441 & 0xFF;
+      PLLTAB_Params.AUDM12_8 = 441 >> 8;
+      break;
+    case 48000:
+//      PLLTAB_Params.AUDD7_0 = 1;
+//      PLLTAB_Params.AUDM7_0 = 1;
+      PLLTAB_Params.AUDD7_0 = 2;
+      PLLTAB_Params.AUDD12_8 = 0;
+      PLLTAB_Params.AUDM7_0 = 3;
+      PLLTAB_Params.AUDM12_8 = 0;
+      break;
+    default:
+//      PLLTAB_Params.AUDD7_0 = 3;
+//      PLLTAB_Params.AUDM7_0 = 2;
+      PLLTAB_Params.AUDD7_0 = 1;
+      PLLTAB_Params.AUDD12_8 = 0;
+      PLLTAB_Params.AUDM7_0 = 1;
+      PLLTAB_Params.AUDM12_8 = 0;
+      break;
+  }
+  zoran->command (ZCMD_PLLTAB, (const char *) &PLLTAB_Params, 0);
+  
+  PLLCFG_Params.AS = 1;
+  zoran->command (ZCMD_PLLCFG, (const char *) &PLLCFG_Params, (char *) &PLLCFG_Reply);
+  PLLCFG_Params.AS = 0;
+  do
+  {
+    zoran->command (ZCMD_PLLCFG, (const char *) &PLLCFG_Params, (char *) &PLLCFG_Reply);
+    retries++;
+    if (retries == 1000)
+    {
+      printf ("PLL did not lock!!");
+      break;
+    }
+  }
+  while (PLLCFG_Reply.PA == 0);
+  printf ("PLL locked in %d tries", retries);
+}
+
+static void static_SetSPDIF (zoran_interface_t *zoran, unsigned int samplerate)
+{
+  static struct
+  {
+    unsigned SR: 4;         unsigned : 4;
+    unsigned CC: 8;
+    unsigned : 1;           unsigned P: 1;          unsigned C: 1;          unsigned PE: 1;         unsigned : 4;
+    unsigned : 8;
+  }
+  SPDIFCS_Params =
+  {
+    0,
+    0x64, // 0x04=Japan, 0x64=USA, 0x0C=Europe, 0x44=Electronic software delivery
+    0, 0, 0
+  };
+  
+  // init things as necessary, eg
+  switch (samplerate)
+  {
+    case 44100: SPDIFCS_Params.SR = 0; break;
+    case 48000: SPDIFCS_Params.SR = 2; break;
+    default: SPDIFCS_Params.SR = 3; break;
+  }
+  
+  zoran->command (ZCMD_SPDIFCS, (const char *) &SPDIFCS_Params, 0);
+}
+
+static void static_SendFunctionCommand (zoran_interface_t *zoran)
+{
+  unsigned int temp;
+  if (zoran->flag_ac3notmpa)
+  {
+  }
+  else
+  {
+    static struct
+    {
+      unsigned DMM: 2;        unsigned DE: 2;         unsigned : 1;           unsigned SIF: 1;        unsigned PRLG: 2;
+      unsigned OCFG: 3;       unsigned SW: 1;         unsigned BCFG: 2;       unsigned AB: 1;         unsigned SF: 1;
+      unsigned SRDLY: 5;      unsigned CDLY: 3;
+      unsigned : 8;
+      unsigned : 8;
+      unsigned : 5;           unsigned DSN: 3;
+      unsigned PCMSFH: 8;
+      unsigned PCMSFL: 8;
+    }
+    MPEG_Params =
+    {
+      0, 0, 0, 0,
+      2, 0, 0, 1, 1,
+      0, 0,
+      0,
+      0x7F,
+      0xFF
+    };
+//    zoran->characteriser->readstreaminfo (zoran->characteriserhandle, 
+// set dual mono options appropriately
+    zoran->command (ZCMD_MPEG, (const char *) &MPEG_Params, 0);
+    MiscAsm_WaitMicroseconds (10000); /* yes, a whole centisecond! */
+  }
+}
+
+/******	static_StreamRecognised() ******************************************
+
+Purpose:	Stream type positively or negatively identified
+In:		flags:          bit 0 set => positive rather than negative identification (should always be positive in our case!!)
+		handle:         our handle (= zoran_interface_t pointer)
+Out:		Error pointer
+
+***************************************************************************/
+
+static _kernel_oserror *static_StreamRecognised (unsigned int flags, void *handle)
+{
+  zoran_interface_t *zoran = handle;
+  _kernel_oserror *e = NULL;
+  if (flags & 1)
+  {
+    zoran->flag_characterising = false;
+  }
+  else
+  {
+    /* Recognition failure - we shouldn't just keep queuing data indefinitely in case the */
+    /* stream is malformed. Instead, throw away all queued data at this point, but keep */
+    /* chucking new data at the recogniser in case it sorts itself out after a time. */
+    block_header_t *ptr = zoran->block_queue_head;
+    block_header_t *next;
+    for (; ptr != NULL; ptr = next)
+    {
+      next = ptr->next;
+      free (ptr);
+    }
+    zoran->block_queue_head = NULL;
+    zoran->block_queue_tail = NULL;
+  }
+  return e;
+}
+
+/******	Zoran_ReadFullness() ***********************************************
+
+Purpose:	Return amount of data currently buffered
+In:		Flags; session ID (pointer to interface struct)
+Out:		Error pointer; amount buffered
+
+***************************************************************************/
+
+_kernel_oserror *Zoran_ReadFullness (unsigned int flags, void *session_id, unsigned int *occupancy)
+{
+  zoran_interface_t *zoran = session_id;
+  _kernel_oserror *e = NULL;
+  block_header_t *ptr;
+  unsigned int amount = 0;
+  IGNORE (flags);
+  /* We can't read the amount buffered within Zoran chip, but it is negligible */
+  /* However, we ought to count the amount queued */
+  for (ptr = zoran->block_queue_head; ptr != NULL; ptr = ptr->next)
+  {
+    amount += ptr->length;
+  }
+  *occupancy = amount;
+  return e;
+}
+
+/******	static_HowMuchData() ***********************************************
+
+Purpose:	Enquire how much data is available to be stuffed
+In:		flags:          reserved, mbz
+		handle:         *top-level* handle
+Out:		Error pointer
+		bytes:          number of bytes available for stuffing (excluding PES headers)
+Note:		This is a veneer over the buffer manager's equivalent call,
+		and is only used while characterisation data is queued
+
+***************************************************************************/
+
+static _kernel_oserror *static_HowMuchData (unsigned int flags, void *handle, unsigned int *bytes)
+{
+  zoran_interface_t *zoran = Interfaces;
+  _kernel_oserror *e = NULL;
+  unsigned int datacount = 0;
+  block_header_t *ptr;
+  /* First, deduce our own handle */
+  while (zoran->toplevelhandle != handle) zoran = zoran->link;
+  /* Find out how much is available in the main buffer */
+  e = zoran->buffer->howmuchdata (flags, handle, &datacount);
+  /* Add on the amount of data queuing here */
+  if (!e)
+  {
+    for (ptr = zoran->block_queue_head; ptr != NULL; ptr = ptr->next)
+    {
+      datacount += ptr->length;
+    }
+    *bytes = datacount;
+  }
+  return e;
+}
+
+/******	static_GiveMeData() ************************************************
+
+Purpose:	Request for stuffing
+In:		flags:          bit 0 set => wrap data in PES packets, bit 0 clear => no PES wrapping (implies no timestamps conveyed!)
+		handle:         *top-level* handle
+Out:		Error pointer
+Note:		This is a veneer over the buffer manager's equivalent call,
+		and is only used while characterisation data is queued
+
+***************************************************************************/
+
+static _kernel_oserror *static_GiveMeData (unsigned int flags, void *handle)
+{
+  zoran_interface_t *zoran = Interfaces;
+  _kernel_oserror *e = NULL;
+  block_header_t *ptr;
+  unsigned int not_consumed;
+  /* First, deduce our own handle */
+  while (zoran->toplevelhandle != handle) zoran = zoran->link;
+  /* Send data until it won't take any more */
+  while (zoran->block_queue_head != NULL)
+  {
+    ptr = zoran->block_queue_head;
+    e = zoran->consumedata (0, zoran, ((const unsigned char *) ptr) + ptr->offset, ptr->length, &not_consumed);
+    if (e)
+    {
+      not_consumed = ptr->length;
+      e = NULL;
+    }
+    if (not_consumed == 0)
+    {
+      zoran->block_queue_head = ptr->next;
+      if (ptr->next == NULL)
+      {
+        zoran->block_queue_tail = NULL;
+      }
+      free (ptr);
+    }
+    else
+    {
+      ptr->offset += ptr->length - not_consumed;
+      ptr->length = not_consumed;
+      return NULL;
+    }
+  }
+  /* We have now exhausted the queued data - drop back to the main buffer routines */
+  zoran->howmuchdata = zoran->buffer->howmuchdata;
+  zoran->givemedata = zoran->buffer->givemedata;
+  return zoran->givemedata (flags, handle);
+}
+
+/******	Zoran_Start() ******************************************************
+
+Purpose:	Enable decoding/display
+In:		flags:          bit 0 set => decode data in reverse, bit 0 clear => decode data forwards
+		session_id:	session ID (pointer to interface struct)
+Out:		Error pointer
+
+***************************************************************************/
+
+_kernel_oserror *Zoran_Start (unsigned int flags, void *session_id)
+{
+  zoran_interface_t *zoran = session_id;
+  _kernel_oserror *e = NULL;
+  if (!zoran->flag_characterising) /* else we have to wait! */
+  {
+    zoran->completeop (false);
+    zoran->command (ZCMD_PLAY, 0, 0);
+    zoran->command (ZCMD_UNMUTE, 0, 0);
+  }
+  zoran->flag_started = true;
+  return e;
+}
+
+/******	Zoran_Stop() *******************************************************
+
+Purpose:	Disable decoding/display
+In:		flags:          reserved, mbz
+		session_id:	session ID (pointer to interface struct)
+Out:		Error pointer
+
+***************************************************************************/
+
+_kernel_oserror *Zoran_Stop (unsigned int flags, void *session_id)
+{
+  zoran_interface_t *zoran = session_id;
+  _kernel_oserror *e = NULL;
+  zoran->completeop (true);
+  zoran->command (ZCMD_STOPF, 0, 0);
+  zoran->flag_started = false;
+  return e;
+}
+
+_kernel_oserror *Zoran_SetClock (unsigned int flags, void *session_id, clk time)
+{
+  zoran_interface_t *zoran = session_id;
+  _kernel_oserror *e = NULL;
+  return e;
+}
+
+_kernel_oserror *Zoran_Speed (unsigned int flags, void *session_id, unsigned int factor)
+{
+  zoran_interface_t *zoran = session_id;
+  _kernel_oserror *e = NULL;
+  return e;
+}
+
+_kernel_oserror *Zoran_Fast (unsigned int flags, void *session_id)
+{
+  zoran_interface_t *zoran = session_id;
+  _kernel_oserror *e = NULL;
+  return e;
+}
+
+_kernel_oserror *Zoran_Slow (unsigned int flags, void *session_id)
+{
+  zoran_interface_t *zoran = session_id;
+  _kernel_oserror *e = NULL;
+  return e;
+}
+
+_kernel_oserror *Zoran_Normal (unsigned int flags, void *session_id)
+{
+  zoran_interface_t *zoran = session_id;
+  _kernel_oserror *e = NULL;
+  return e;
+}
+
+_kernel_oserror *Zoran_Volume (unsigned int flags, void *session_id, unsigned int left, unsigned int right)
+{
+  zoran_interface_t *zoran = session_id;
+  _kernel_oserror *e = NULL;
+  return e;
+}
+
+_kernel_oserror *Zoran_Downmix (unsigned int flags, void *session_id, unsigned int mode)
+{
+  zoran_interface_t *zoran = session_id;
+  _kernel_oserror *e = NULL;
+  return e;
+}
+
+_kernel_oserror *Zoran_SPDIF (unsigned int flags, void *session_id)
+{
+  zoran_interface_t *zoran = session_id;
+  _kernel_oserror *e = NULL;
+  return e;
+}
+
+_kernel_oserror *Zoran_ReadStreamInfo (void *session_id, unsigned int tag, unsigned int *result)
+{
+  zoran_interface_t *zoran = session_id;
+  _kernel_oserror *e = NULL;
+  return e;
+}
+
+#else
+extern int Zoran_NotUsed;
+#endif

@@ -26,15 +26,17 @@ ATTR    = attr
 AS      = objasm
 CMHG    = cmhg
 CP      = copy
-LD      = link
+#LD      = link
+#LD      = /ATAFS::BAvison.$.link.link
+LD      = /ATAFS::BAvison.$.Incoming.link.link
 RM      = remove
 WIPE    = wipe
 
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
-CFLAGS   = -depend !Depend ${THROWBACK} ${INCLUDES} -c -ffah -zM -zps1
-SFLAGS   = -depend !Depend ${THROWBACK} ${INCLUDES} -s -ffah -zM -zps1 -DDEBUGLIB
-PFLAGS   = -depend !Depend ${THROWBACK} ${INCLUDES} -c -E -C -DDEBUGLIB
+CFLAGS   = ${VARIANT} -depend !Depend ${THROWBACK} ${INCLUDES} -c -ffah -zM -zps1
+SFLAGS   = ${VARIANT} -depend !Depend ${THROWBACK} ${INCLUDES} -s -ffah -zM -zps1 -DDEBUGLIB
+PFLAGS   = ${VARIANT} -depend !Depend ${THROWBACK} ${INCLUDES} -c -E -C -DDEBUGLIB
 OFLAGS   = -depend !Depend ${THROWBACK}
 INCLUDES = -IC:
 CMHGFLAGS= -p ${THROWBACK}
@@ -48,12 +50,12 @@ C_ABSSYM = RISC_OSLib:o.c_abssym
 LIBSD    = <Lib$Dir>.DebugLib.o.debuglibzm TCPIPLibs:o.socklib5zm TCPIPLibs:o.inetlibzm
 UNIXLIB  = TCPIPLibs:o.UnixLibzm
 
-RAMOBJS  =  o.Audio  o.CLI o.Clk o.Co o.DivRem64 o.Fixed  o.IRQ  o.Mess o.MiscAsm o.ModHdr2  o.Module    o.ResMess  o.Service  o.STi3520L  o.Stuffing  o.Video  o.WSS o.ModHdr o.DWrite o.ReEntDebug o.TrapVect
-ROMOBJS  =  o.Audio  o.CLI o.Clk o.Co o.DivRem64 o.Fixed  o.IRQ  o.Mess o.MiscAsm o.ModHdr2  o.ModuleROM            o.Service  o.STi3520L  o.Stuffing  o.Video  o.WSS o.ModHdr
-SOBJS    =  s.Audio  s.CLI                                s.IRQ  s.Mess                      s.Module               s.Service  s.STi3520L  s.Stuffing  s.Video  s.WSS o.ModHdr
-IOBJS    =  i.Audio  i.CLI                                i.IRQ  i.Mess                      i.Module               i.Service  i.STi3520L  i.Stuffing  i.Video  i.WSS o.ModHdr
-IOOBJS   = io.Audio io.CLI o.Clk o.Co o.DivRem64 o.Fixed io.IRQ io.Mess o.MiscAsm o.ModHdr2 io.Module    o.ResMess io.Service io.STi3520L io.Stuffing io.Video io.WSS o.ModHdr
-DOOBJS   = do.Audio do.CLI o.Clk o.Co o.DivRem64 o.Fixed do.IRQ do.Mess o.MiscAsm o.ModHdr2 do.Module    o.ResMess do.Service do.STi3520L do.Stuffing do.Video do.WSS o.ModHdr
+RAMOBJS  =  o.AudGeneric  o.Audio  o.CLI o.Clk o.Co o.DivRem64 o.Fixed  o.IRQ  o.Mess o.MiscAsm o.ModHdr2  o.Module     o.RecogMPA o.ResMess  o.Service  o.STi3520L  o.Stuffing  o.Video  o.WSS  o.Zoran o.ZoranPara o.ModHdr o.DWrite o.ReEntDebug o.TrapVect
+ROMOBJS  =  o.AudGeneric  o.Audio  o.CLI o.Clk o.Co o.DivRem64 o.Fixed  o.IRQ  o.Mess o.MiscAsm o.ModHdr2  o.ModuleROM  o.RecogMPA            o.Service  o.STi3520L  o.Stuffing  o.Video  o.WSS  o.Zoran o.ZoranPara o.ModHdr
+SOBJS    =  s.AudGeneric  s.Audio  s.CLI                                s.IRQ  s.Mess                      s.Module     s.RecogMPA            s.Service  s.STi3520L  s.Stuffing  s.Video  s.WSS  s.Zoran             o.ModHdr
+IOBJS    =  i.AudGeneric  i.Audio  i.CLI                                i.IRQ  i.Mess                      i.Module     i.RecogMPA            i.Service  i.STi3520L  i.Stuffing  i.Video  i.WSS  i.Zoran             o.ModHdr
+IOOBJS   = io.AudGeneric io.Audio io.CLI o.Clk o.Co o.DivRem64 o.Fixed io.IRQ io.Mess o.MiscAsm o.ModHdr2 io.Module    io.RecogMPA o.ResMess io.Service io.STi3520L io.Stuffing io.Video io.WSS io.Zoran o.ZoranPara o.ModHdr o.DWrite o.ReEntDebug o.TrapVect
+DOOBJS   = do.AudGeneric do.Audio do.CLI o.Clk o.Co o.DivRem64 o.Fixed do.IRQ do.Mess o.MiscAsm o.ModHdr2 do.Module    do.RecogMPA o.ResMess do.Service do.STi3520L do.Stuffing do.Video do.WSS do.Zoran o.ZoranPara o.ModHdr o.DWrite o.ReEntDebug o.TrapVect
 
 
 #
@@ -112,7 +114,6 @@ clean:
         ${RM} h.Debug
         ${RM} h.Registers
         ${RM} h.ModHdr
-        stripdepnd
         @echo ${COMPONENT}: Cleaned
 
 asm: ${SOBJS} o h.Debug h.Registers
@@ -132,7 +133,7 @@ debug: drm ${DOOBJS} do o h.Debug h.Registers messages-${CMDHELP} ${LIBSD} ${CLI
         @echo ${COMPONENT}: Debug module built (RAM)
 
 ${RAM_MODULE}: rm ${RAMOBJS} o h.Debug h.Registers messages-${CMDHELP} ${CLIB}
-        ${LD} -o $@ -rmf ${RAMOBJS} ${CLIB}
+        ${LD} -symbols symbols -o $@ -rmf ${RAMOBJS} ${CLIB}
         ${ATTR} -files +or +ow +wr -ww $@
         ${RM} Messages
 

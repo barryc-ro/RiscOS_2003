@@ -66,6 +66,7 @@ Date		Who	Change
 #include "MPEG/MPEGCtrl.h"
 #include "MPEG/MPEGVideo.h"
 
+#include "AudGeneric.h"
 #include "Audio.h"
 #include "CLI.h"
 #include "Defs.h"
@@ -110,6 +111,9 @@ program_element_structure_t Stream;
      *  it's the only way to make everything stream-handle-relative. The naming convention is broken
      *  because it's going to be referenced all the time, and Module_Stream feels too long a name...
      */
+#ifdef GENERIC
+bool Module_UseGenericAudio;
+#endif
 handler_t *Module_Handlers = NULL; /* head pointer of list of currently-registered handler structs */
 int Module_AudioSpeedIndicatorOffset; /* needed by Clk_ConvertSTCtoPCR */
 bool Module_Display525_60; /* whether the display is set up NTSC-like or PAL-like */
@@ -124,6 +128,9 @@ bool Module_Dying = false; /* for the use of ModHdr2.s */
 /*********************/
 
 static bool CallBack_Pending = false; /* is there a CallBack for our init service calls pending? */
+static control_stream_handle_t MostRecentControlStreamHandle;
+static stream_handle_t MostRecentVideoStreamHandle;
+static stream_handle_t MostRecentAudioStreamHandle;
 
 /*********************/
 /* Private constants */
@@ -192,6 +199,13 @@ extern _kernel_oserror *Module_Init(const char *cmd_tail, int podule_base, void 
   if (!e)
   {
     
+#ifdef GENERIC
+    e = AudGeneric_Initialise (&Module_UseGenericAudio);
+  }
+  if (!e)
+  {
+#endif
+    
     e = WSS_Initialise ();
   }
   if (!e)
@@ -215,6 +229,8 @@ extern _kernel_oserror *Module_Init(const char *cmd_tail, int podule_base, void 
         1 << PEHFlags_RequiredFlag_Shift, 2 /* MPEG-2 video */, video_program_element_handler, pw);
     _swix (MPEGControl_RegisterProgramElementHandler, _INR(0,3),
         2 << PEHFlags_RequiredFlag_Shift, 3 /* MPEG-1 audio */, audio_program_element_handler, pw);
+    _swix (MPEGControl_RegisterProgramElementHandler, _INR(0,3),
+        2 << PEHFlags_RequiredFlag_Shift, 0x81 /* AC-3 audio */, ac3_program_element_handler, pw);
     
     /* Set up Module_AudioSpeedIndicatorOffset (can't be done on static init) */
     Module_AudioSpeedIndicatorOffset = (char *) &Stream.audio.speed_indicator - (char *) &Stream;
@@ -249,19 +265,16 @@ Out:		Pointer to error block if failed
 
 _kernel_oserror *Module_ModuleInitCallBack(_kernel_swi_regs *r, void *pw)
 {
-  _kernel_oserror *e = NULL;
   IGNORE(r);
   IGNORE(pw);
   
   /* Issue the "video unit has started" service call */
-  e = _swix (OS_ServiceCall, _INR(0,1), (3<<1) | 1, Service_MPEGControlStarting);
-  if (!e)
-  {
-    /* Issue the "audio unit has started" service call */
-    e = _swix (OS_ServiceCall, _INR(0,1), (5<<1) | 1, Service_MPEGControlStarting);
-  }
+  _swix (OS_ServiceCall, _INR(0,1), (3<<1) | 1, Service_MPEGControlStarting);
   
-  return e;
+  /* Issue the "audio unit has started" service call */
+  _swix (OS_ServiceCall, _INR(0,1), (5<<1) | 1, Service_MPEGControlStarting);
+  
+  return NULL;
 }
 
 /******	Module_Final() *****************************************************
@@ -312,6 +325,15 @@ extern _kernel_oserror *Module_Final(int fatal, int podule, void *pw)
       ptr = next;
     }
     
+#ifdef GENERIC
+    if (Module_UseGenericAudio)
+    {
+      AudGeneric_Finalise ();
+    }
+#endif
+    
+    _swix (MPEGControl_DeregisterProgramElementHandler, _INR(0,3),
+        2 << PEHFlags_RequiredFlag_Shift, 0x81, ac3_program_element_handler, pw);
     _swix (MPEGControl_DeregisterProgramElementHandler, _INR(0,3),
         2 << PEHFlags_RequiredFlag_Shift, 3, audio_program_element_handler, pw);
     _swix (MPEGControl_DeregisterProgramElementHandler, _INR(0,3),
@@ -448,6 +470,9 @@ extern _kernel_oserror *Module_SWI(int swi_offset, _kernel_swi_regs *r, void *pw
   _kernel_oserror *e = NULL;
   _kernel_swi_regs rout;
   char reason_string [12];
+#ifdef GENERIC
+  _kernel_oserror *(*fn)();
+#endif
   IGNORE(pw);
   switch (swi_offset)
   {
@@ -459,6 +484,8 @@ extern _kernel_oserror *Module_SWI(int swi_offset, _kernel_swi_regs *r, void *pw
           (stream_handle_t *) &(rout.r[0])
           );
       r->r[0] = rout.r[0];
+      MostRecentVideoStreamHandle = (stream_handle_t) r->r[0];
+      MostRecentControlStreamHandle = (control_stream_handle_t) r->r[1];
       break;
     case MPEGVideo_FullPackets - MPEGVideoSWI_Base:
       e = Video_SWIFullPackets (
@@ -627,42 +654,75 @@ extern _kernel_oserror *Module_SWI(int swi_offset, _kernel_swi_regs *r, void *pw
           );
       break;
     case MPEGAudio_OpenStream - MPEGVideoSWI_Base:
+#ifdef GENERIC
+      if (Module_UseGenericAudio) fn = AudGeneric_SWIOpenStream; else fn = Audio_SWIOpenStream;
+      e = fn (
+#else
       e = Audio_SWIOpenStream (
+#endif
           (stream_flags_t *) &(r->r[0]),
           (control_stream_handle_t) (r->r[1]),
           (audio_parameters_structure_t *) (r->r[2]),
           (stream_handle_t *) &(rout.r[0])
           );
       r->r[0] = rout.r[0];
+      MostRecentAudioStreamHandle = (stream_handle_t) r->r[0];
+      MostRecentControlStreamHandle = (control_stream_handle_t) r->r[1];
       break;
     case MPEGAudio_FullPackets - MPEGVideoSWI_Base:
+#ifdef GENERIC
+      if (Module_UseGenericAudio) fn = AudGeneric_SWIFullPackets; else fn = Audio_SWIFullPackets;
+      e = fn (
+#else
       e = Audio_SWIFullPackets (
+#endif
+          0,
           (unsigned int) (r->r[0]),
           (stream_handle_t) (r->r[1]),
           (bitstream_packet_t *) (r->r[2])
           );
       break;
     case MPEGAudio_CloseStream - MPEGVideoSWI_Base:
+#ifdef GENERIC
+      if (Module_UseGenericAudio) fn = AudGeneric_SWICloseStream; else fn = Audio_SWICloseStream;
+      e = fn (
+#else
       e = Audio_SWICloseStream (
+#endif
           (unsigned int) (r->r[0]),
           (stream_handle_t) (r->r[1])
           );
       break;
     case MPEGAudio_Play - MPEGVideoSWI_Base:
+#ifdef GENERIC
+      if (Module_UseGenericAudio) fn = AudGeneric_SWIPlay; else fn = Audio_SWIPlay;
+      e = fn (
+#else
       e = Audio_SWIPlay (
+#endif
           (unsigned int) (r->r[0]),
           (stream_handle_t) (r->r[1])
           );
       break;
     case MPEGAudio_SetSpeed - MPEGVideoSWI_Base:
+#ifdef GENERIC
+      if (Module_UseGenericAudio) fn = AudGeneric_SWISetSpeed; else fn = Audio_SWISetSpeed;
+      e = fn (
+#else
       e = Audio_SWISetSpeed (
+#endif
           (unsigned int) (r->r[0]),
           (stream_handle_t) (r->r[1]),
           (unsigned int) (r->r[2])
           );
       break;
     case MPEGAudio_ResetStream - MPEGVideoSWI_Base:
+#ifdef GENERIC
+      if (Module_UseGenericAudio) fn = AudGeneric_SWIResetStream; else fn = Audio_SWIResetStream;
+      e = fn (
+#else
       e = Audio_SWIResetStream (
+#endif
           (reset_stream_flags_t *) &(r->r[0]),
           (stream_handle_t) (r->r[1]),
           (unsigned int *) &(rout.r[2])
@@ -670,13 +730,23 @@ extern _kernel_oserror *Module_SWI(int swi_offset, _kernel_swi_regs *r, void *pw
       r->r[2] = rout.r[2];
       break;
     case MPEGAudio_MuteSound - MPEGVideoSWI_Base:
+#ifdef GENERIC
+      if (Module_UseGenericAudio) fn = AudGeneric_SWIMuteSound; else fn = Audio_SWIMuteSound;
+      e = fn (
+#else
       e = Audio_SWIMuteSound (
+#endif
           (unsigned int) (r->r[0]),
           (stream_handle_t) (r->r[1])
           );
       break;
     case MPEGAudio_SoundVolume - MPEGVideoSWI_Base:
+#ifdef GENERIC
+      if (Module_UseGenericAudio) fn = AudGeneric_SWISoundVolume; else fn = Audio_SWISoundVolume;
+      e = fn (
+#else
       e = Audio_SWISoundVolume (
+#endif
           (unsigned int) (r->r[0]),
           (stream_handle_t) (r->r[1]),
           (int) (r->r[2]),
@@ -685,7 +755,12 @@ extern _kernel_oserror *Module_SWI(int swi_offset, _kernel_swi_regs *r, void *pw
       r->r[2] = rout.r[2];
       break;
     case MPEGAudio_Stats - MPEGVideoSWI_Base:
+#ifdef GENERIC
+      if (Module_UseGenericAudio) fn = AudGeneric_SWIStats; else fn = Audio_SWIStats;
+      e = fn (
+#else
       e = Audio_SWIStats (
+#endif
           (unsigned int) (r->r[0]),
           (stream_handle_t) (r->r[1]),
           (unsigned int *) (r->r[2]),
@@ -701,7 +776,12 @@ extern _kernel_oserror *Module_SWI(int swi_offset, _kernel_swi_regs *r, void *pw
       switch (r->r[0])
       {
         case 0:
+#ifdef GENERIC
+          if (Module_UseGenericAudio) fn = AudGeneric_SWISetAudioParameters0; else fn = Audio_SWISetAudioParameters0;
+          e = fn (
+#else
           e = Audio_SWISetAudioParameters0 (
+#endif
               (stream_handle_t) (r->r[1]),
               (int) (r->r[2]),
               (int *) &(rout.r[2])
@@ -709,7 +789,12 @@ extern _kernel_oserror *Module_SWI(int swi_offset, _kernel_swi_regs *r, void *pw
           r->r[2] = rout.r[2];
           break;
         case 1:
+#ifdef GENERIC
+          if (Module_UseGenericAudio) fn = AudGeneric_SWISetAudioParameters1; else fn = Audio_SWISetAudioParameters1;
+          e = fn (
+#else
           e = Audio_SWISetAudioParameters1 (
+#endif
               (stream_handle_t) (r->r[1]),
               (dual_channel_specifier) (r->r[2]),
               (dual_channel_specifier *) &(rout.r[2]),
@@ -719,7 +804,12 @@ extern _kernel_oserror *Module_SWI(int swi_offset, _kernel_swi_regs *r, void *pw
           r->r[3] = rout.r[3];
           break;
         case 2:
+#ifdef GENERIC
+          if (Module_UseGenericAudio) fn = AudGeneric_SWISetAudioParameters2; else fn = Audio_SWISetAudioParameters2;
+          e = fn (
+#else
           e = Audio_SWISetAudioParameters2 (
+#endif
               (stream_handle_t) (r->r[1]),
               (int) (r->r[2]),
               (int *) &(rout.r[2])
@@ -773,7 +863,7 @@ extern _kernel_oserror *Module_VideoPEH(_kernel_swi_regs *r, void *pw)
       /* We don't have to take any action here, because MPEGVideo_OpenStream is still called by MPEGTransport */
       /* However, we still need to return the stream handle here, because MPEGTransport will use it in        */
       /* preference to that returned from MPEGVideo_OpenStream (but only when calling PEH entry points)       */
-      r->r[0] = (unsigned int) &Stream;
+      r->r[0] = (unsigned int) MostRecentVideoStreamHandle;
       break;
     case PEHReason_DataTransfer:
       e = Video_SWIFullPackets(
@@ -791,7 +881,7 @@ extern _kernel_oserror *Module_VideoPEH(_kernel_swi_regs *r, void *pw)
 
 /******	Module_AudioPEH() **************************************************
 
-Purpose:	Audio program element handler
+Purpose:	MPEG audio program element handler
 In:		Registers in/out, module private word
 Out:		Pointer to error block (if required)
 
@@ -800,24 +890,76 @@ Out:		Pointer to error block (if required)
 extern _kernel_oserror *Module_AudioPEH(_kernel_swi_regs *r, void *pw)
 {
   _kernel_oserror *e = NULL;
+#ifdef GENERIC
+  _kernel_oserror *(*fn)();
+#endif
   IGNORE(pw);
   switch (r->r[0])
   {
     case PEHReason_OpenStream:
-      /* We don't have to take any action here, because MPEGAudio_OpenStream is still called by MPEGTransport */
-      /* However, we still need to return the stream handle here, because MPEGTransport will use it in        */
-      /* preference to that returned from MPEGAudio_OpenStream (but only when calling PEH entry points)       */
-      r->r[0] = (unsigned int) &Stream;
+      /* We don't have to take any action here, because MPEGAudio_OpenStream is still called by MPEGControl */
+      /* However, we still need to return the stream handle here, because MPEGControl will use it in        */
+      /* preference to that returned from MPEGAudio_OpenStream (but only when calling PEH entry points)     */
+      r->r[0] = (unsigned int) MostRecentAudioStreamHandle;
       break;
     case PEHReason_DataTransfer:
+#ifdef GENERIC
+      if (Module_UseGenericAudio) fn = AudGeneric_SWIFullPackets; else fn = Audio_SWIFullPackets;
+      e = fn (
+#else
       e = Audio_SWIFullPackets(
+#endif
+          0,
           (unsigned int) (r->r[1]),
           (stream_handle_t) (r->r[2]),
           (bitstream_packet_t *) (r->r[3])
           );
       break;
     default:
-      /* do nothing (MPEGAudioCloseStream is still called by MPEGTransport) */
+      /* do nothing (MPEGAudio_CloseStream is still called by MPEGControl) */
+      break;
+  }
+  return e;
+}
+
+/******	Module_AC3PEH() ****************************************************
+
+Purpose:	AC-3 audio program element handler
+In:		Registers in/out, module private word
+Out:		Pointer to error block (if required)
+
+***************************************************************************/
+
+extern _kernel_oserror *Module_AC3PEH(_kernel_swi_regs *r, void *pw)
+{
+  _kernel_oserror *e = NULL;
+#ifdef GENERIC
+  _kernel_oserror *(*fn)();
+#endif
+  IGNORE(pw);
+  switch (r->r[0])
+  {
+    case PEHReason_OpenStream:
+      /* We don't have to take any action here, because MPEGAudio_OpenStream is still called by MPEGControl */
+      /* However, we still need to return the stream handle here, because MPEGControl will use it in        */
+      /* preference to that returned from MPEGAudio_OpenStream (but only when calling PEH entry points)     */
+      r->r[0] = (unsigned int) MostRecentAudioStreamHandle;
+      break;
+    case PEHReason_DataTransfer:
+#ifdef GENERIC
+      if (Module_UseGenericAudio) fn = AudGeneric_SWIFullPackets; else fn = Audio_SWIFullPackets;
+      e = fn (
+#else
+      e = Audio_SWIFullPackets(
+#endif
+          1,
+          (unsigned int) (r->r[1]),
+          (stream_handle_t) (r->r[2]),
+          (bitstream_packet_t *) (r->r[3])
+          );
+      break;
+    default:
+      /* do nothing (MPEGAudio_CloseStream is still called by MPEGControl) */
       break;
   }
   return e;
@@ -920,10 +1062,17 @@ int Module_TickerVHandler(_kernel_swi_regs *r, void *pw)
 {
   IGNORE(r);
   IGNORE(pw);
-  if (Stream.audio.state != stream_closed)
+#ifdef GENERIC
+  if (!Module_UseGenericAudio)
   {
-    Stuffing_StuffAudio ();  /* do audio first, the brain is more responsive to audio glitches */
+#endif
+    if (Stream.audio.state != stream_closed)
+    {
+      Stuffing_StuffAudio ();  /* do audio first, the brain is more responsive to audio glitches */
+    }
+#ifdef GENERIC
   }
+#endif
   if (Stream.video.state != stream_closed)
   {
     Stuffing_StuffVideo ();

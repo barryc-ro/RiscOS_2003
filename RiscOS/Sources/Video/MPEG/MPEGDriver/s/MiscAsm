@@ -32,11 +32,17 @@
         GET     Hdr:Macros
         GET     Hdr:System
         GET     Hdr:APCS.<APCS>
+        GET     Hdr:IO.IOMD
         GET     Hdr:MPEGCtrl
       [ "$MPEGPoduleType" <> "MPEG2cCard"
         !       1, "MPEGDriver is only suitable for STi3520L hardware"
       ]
         GET     Hdr:$MPEGPoduleType
+
+
+        IMPORT  malloc
+        IMPORT  free
+        IMPORT  memcpy
 
 
         AREA    |Asm$$Code|, CODE, READONLY
@@ -405,10 +411,101 @@ MiscAsm_CallHandler
         Return  "r8, v6, fp"
 
 
+; extern void MiscAsm_WaitMicroseconds (unsigned int wait);
+
+        EXPORT  MiscAsm_WaitMicroseconds
+MiscAsm_WaitMicroseconds
+        FunctionEntry
+        ADD     a1, a1, a1              ; convert to 2MHz ticks
+        SUB     a1, a1, #1              ; subtract 1 so that completion condition is it going -ve
+        MOV     a2, #0                  ; a2 holds old timer count (zero-init forces wrap case)
+        MOV     lr, #IOMD_Base
+01      STRB    lr, [lr, #Timer0LR]
+        LDRB    a3, [lr, #Timer0CL]
+        LDRB    a4, [lr, #Timer0CH]
+        ORR     a3, a3, a4, LSL #8      ; a3 = new timer count
+        SUBS    a2, a3, a2              ; difference (>= 0 means we have wrapped or not ticked)
+        ADDMIS  a1, a1, a2              ; subtract any tick count from total - have we finished?
+        MOVPL   a2, a3                  ; old timer count := new timer count
+        BPL     %BT01
+        Return
+
+
+; extern void (*MiscAsm_CreateSimpleVeneer (_kernel_oserror *(*function) (void *parameter))) (void);
+; In:  pointer to  _kernel_oserror *function (void *parameter)
+; Out: pointer to  void veneer (void)  or 0 if failed
+
+        EXPORT  MiscAsm_CreateSimpleVeneer
+MiscAsm_CreateSimpleVeneer
+        FunctionEntry "v1"
+        MOV     v1, a1
+        MOV     a1, #VeneerTemplateEnd - VeneerTemplateStart
+        BL      malloc                  ; a1 -> allocated block (or 0)
+        TEQ     a1, #0
+        Return  "v1",, EQ               ; error exit
+        ADR     a2, VeneerTemplateStart
+        MOV     a3, #VeneerTemplateEnd - VeneerTemplateStart
+        BL      memcpy                  ; a1 still points to our block afterwards
+        ADD     a2, a1, #VeneerTemplateData - VeneerTemplateStart
+        StaticBaseFromSL lr
+        LDRVar  ip, lr, Module_PrivateWord
+        LDR     ip, [ip]
+        LDMIB   ip, {a3, a4}
+        STMIA   a2, {a3, a4, v1}
+        MOV     a4, a1
+        MOV     a1, #1
+        MOV     a2, a4
+        ADD     a3, a2, #VeneerTemplateData - VeneerTemplateStart - 4
+        SWI     XOS_SynchroniseCodeAreas
+        MOV     a1, a4                  ; return pointer to block
+        Return  "v1"
+
+VeneerTemplateStart
+        Push    "a1-a4,v1-v3,sl,fp,lr"
+        MOV     a1, ip                  ; ip on entry holds the parameter to the function
+        MRS     v3, CPSR
+        ORR     a2, v3, #SVC_mode
+        MSR     CPSR_c, a2
+        Push    "lr_svc"
+        MOV     sl, sp, LSR #20
+        MOV     sl, sl, LSL #20
+        LDMIA   sl, {v1, v2}
+        ADR     ip, VeneerTemplateData
+        LDMIA   ip, {a2, a3, a4}
+        STMIA   sl, {a2, a3}
+        ADD     sl, sl, #540
+        MOV     fp, #0
+        MOV     lr, pc
+        MOV     pc, a4
+        SUB     sl, sl, #540
+        STMIA   sl, {v1, v2}
+        TEQ     a1, #0
+        BICEQ   v3, v3, #V_bit
+        ORRNE   v3, v3, #V_bit
+        Pull    "lr_svc"
+        MSR     CPSR_cf, v3
+        Pull    "a1-a4,v1-v3,sl,fp,pc", VC
+        ADD     sp, sp, #4
+        Pull    "a2-a4,v1-v3,sl,fp,pc"
+VeneerTemplateData
+        DCD     0                       ; lib reloc offset
+        DCD     0                       ; client reloc offset
+        DCD     0                       ; function pointer
+VeneerTemplateEnd
+
+
+; extern void MiscAsm_DestroySimpleVeneer (void (*veneer) (void));
+
+        EXPORT  MiscAsm_DestroySimpleVeneer
+MiscAsm_DestroySimpleVeneer
+        B       free
+
+
 ; Static variable indirection table
 ; ---------------------------------
 
         IMPORTVar Module_Handlers
+        IMPORTVar Module_PrivateWord
 
 
         END
