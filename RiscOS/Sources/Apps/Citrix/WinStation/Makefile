@@ -18,8 +18,9 @@ RMDIR=		rmdir
 # ----------------------------------------------------------------------------------------------------
 
 # Flags
+# disable warnings on non-ansi headers, narrowing casts and = in comparisons
 
-CCFLAGS=	-c -fa -wanp -Fn ${INCLUDES} ${DFLAGS}
+CCFLAGS=	-c -fa -wanp ${INCLUDES} ${DFLAGS}
 ASFLAGS=	-Stamp -quit ${ASINCLUDES}
 LIBFILEFLAGS=	-c
 CPFLAGS=	-p
@@ -149,8 +150,8 @@ SRC=		${APPSRC} ${CITRIXLIBSRC} ${NRLIBSRC} ${TDLIBSRC} ${PDLIBSRC} ${WDLIBSRC} 
 .c.o:;	$(CC) $< -o $@     -DROM=0             $(CCFLAGS)
 #.c.o:;	$(CC) $<     -E -C -DROM=0             $(CCFLAGS) > $@
 
-#.c.od:;	$(CC) $< -o $@     -DROM=0 -DDEBUG -Fn $(CCFLAGS)
-.c.od:;	$(CC) $< -o $@     -DROM=0 -DDEBUG -Fn $(CCFLAGS) ${MCFLAGS}
+.c.od:;$(CC) $< -o $@     -DROM=0 -DDEBUG -Fn $(CCFLAGS)
+#.c.od:;	$(CC) $< -o $@     -DROM=0 -DDEBUG -Fn $(CCFLAGS) ${MCFLAGS}
 
 .c.oz:;	$(CC) $< -o $@ -zM -DROM=1             $(CCFLAGS)
 
@@ -328,7 +329,7 @@ cleanicaenum:
 CITRIXLIBSRC=	src/lib/cfgini/cfgini.c \
 		src/lib/cfgload/cfgload.c \
 		src/lib/clib/delay.c src/lib/clib/fileio.c src/lib/clib/loadstr.c src/lib/clib/machine.c \
-		src/lib/clib/mem.c src/lib/clib/misc.c src/lib/clib/string.c src/lib/clib/vdu.c \
+		src/lib/clib/mem.c src/lib/clib/misc.c src/lib/clib/string.c src/lib/clib/upcall.s src/lib/clib/vdu.c \
 		src/lib/encrypt/encrypt.c \
 		src/lib/ini/iniapi.c src/lib/ini/helpers.c \
 		src/lib/io/icabrows/icabrows.c src/lib/io/tcpro/tcpro.c \
@@ -344,7 +345,7 @@ CITRIXLIBSRC=	src/lib/cfgini/cfgini.c \
 CITRIXLIBOBJS=	src/lib/cfgini/cfgini.o \
 		src/lib/cfgload/cfgload.o \
 		src/lib/clib/delay.o src/lib/clib/fileio.o src/lib/clib/loadstr.o src/lib/clib/machine.o \
-		src/lib/clib/mem.o src/lib/clib/misc.o src/lib/clib/string.o src/lib/clib/vdu.o \
+		src/lib/clib/mem.o src/lib/clib/misc.o src/lib/clib/string.o src/lib/clib/upcall.o src/lib/clib/vdu.o \
 		src/lib/encrypt/encrypt.o \
 		src/lib/ini/iniapi.o src/lib/ini/helpers.o \
 		src/lib/io/icabrows/icabrows.o src/lib/io/tcpro/tcpro.o \
@@ -360,7 +361,7 @@ CITRIXLIBOBJS=	src/lib/cfgini/cfgini.o \
 CITRIXLIBOBJSD=	src/lib/cfgini/cfgini.od \
 		src/lib/cfgload/cfgload.od \
 		src/lib/clib/delay.od src/lib/clib/fileio.od src/lib/clib/loadstr.od src/lib/clib/machine.od \
-		src/lib/clib/mem.od src/lib/clib/misc.od src/lib/clib/string.od src/lib/clib/vdu.od \
+		src/lib/clib/mem.od src/lib/clib/misc.od src/lib/clib/string.od src/lib/clib/upcall.od src/lib/clib/vdu.od \
 		src/lib/encrypt/encrypt.od \
 		src/lib/ini/iniapi.od src/lib/ini/helpers.od \
 		src/lib/io/icabrows/icabrows.od src/lib/io/tcpro/tcpro.od \
@@ -377,7 +378,7 @@ CITRIXLIBOBJSD=	src/lib/cfgini/cfgini.od \
 CITRIXLIBOBJSZ=	src/lib/cfgini/cfgini.oz \
 		src/lib/cfgload/cfgload.oz \
 		src/lib/clib/delay.oz src/lib/clib/fileio.oz src/lib/clib/loadstr.oz src/lib/clib/machine.oz \
-		src/lib/clib/mem.oz src/lib/clib/misc.oz src/lib/clib/string.oz src/lib/clib/vdu.oz \
+		src/lib/clib/mem.oz src/lib/clib/misc.oz src/lib/clib/string.oz src/lib/clib/upcall.oz src/lib/clib/vdu.oz \
 		src/lib/encrypt/encrypt.oz \
 		src/lib/ini/iniapi.oz src/lib/ini/helpers.oz \
 		src/lib/io/icabrows/icabrows.oz src/lib/io/tcpro/tcpro.oz \

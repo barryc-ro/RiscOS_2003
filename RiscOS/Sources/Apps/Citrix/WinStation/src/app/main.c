@@ -211,11 +211,11 @@ static int cli_iconbar = FALSE;
 static int cli_dopostmortem = FALSE;
 static int cli_remote_debug = FALSE;
 static int cli_file_debug = FALSE;
-       int cli_suspendable = FALSE; /* this is exported to wengine.c */
+       int cli_suspendable = FALSE;	/* this is exported to wengine.c */
 static int cli_file_is_url = FALSE;
 static int cli_loop = FALSE;
 static int cli_multitask = FALSE;
-static int cli_modem = FALSE;
+       int cli_modem = FALSE;		/* exported to session.c */
 
 /* --------------------------------------------------------------------------------------------- */
 
@@ -392,7 +392,7 @@ static void control_ack(WimpMessage *message, icaclient_session session_handle, 
 static void status_message(int status, icaclient_session session_handle)
 {
     WimpMessage message;
-    icaclient_message_status *s = (icaclient_message_status *) &s;
+    icaclient_message_status *s = (icaclient_message_status *) &message.data;
 
     message.hdr.size = sizeof(message.hdr) + sizeof(icaclient_message_status);
     message.hdr.your_ref = 0;
@@ -400,6 +400,34 @@ static void status_message(int status, icaclient_session session_handle)
     s->reason = status;
     s->flags = 0;
     s->session_handle = session_handle;
+
+    LOGERR(wimp_send_message(Wimp_EUserMessage, &message, 0, 0, NULL));
+}
+
+static void openurl_message(const char *url, const char *target)
+{
+    WimpMessage message;
+    urlopen_data *u = (urlopen_data *) &message.data;
+    int offset;
+
+    memset(&message, 0, sizeof(message));
+    
+    message.hdr.size = sizeof(message.hdr) + sizeof(urlopen_data);
+    message.hdr.your_ref = 0;
+    message.hdr.action_code = wimp_MOPENURL;
+
+    u->indirect.tag = 0;
+
+    offset = sizeof(u->indirect);
+    u->indirect.url.offset = offset;
+    strncpy( u->url + offset, url, sizeof(u->url) - offset );
+
+    offset += strlen( url ) + 1;
+    if (offset < sizeof(u->url))
+    {
+	u->indirect.target.offset = offset;
+	strncpy( u->url + offset, target, sizeof(u->url) - offset );
+    }
 
     LOGERR(wimp_send_message(Wimp_EUserMessage, &message, 0, 0, NULL));
 }
@@ -1459,7 +1487,7 @@ static int log_init(void)
        EMLogInfo.LogFlags |= LOG_FILE;
 
 #if 1
-   EMLogInfo.LogClass    = LOG_ASSERT | TC_UI;
+   EMLogInfo.LogClass    = LOG_ASSERT | TC_UI | TC_PD | TC_TD;
    EMLogInfo.LogEnable   = TT_ERROR;
    EMLogInfo.LogTWEnable = 0;
 #else
@@ -1734,12 +1762,13 @@ int main(int argc, char *argv[])
     }
 
     /* check and see if we were the startup application */
-    if (!cli_suspendable && browser_home_is_ica())
+    if (!cli_suspendable && cli_modem && browser_home_is_ica())
     {
-	char *s = getenv( HANGUP_VAR );
+	char *s;
 
 	TRACE((TC_UI, TT_API1, "Hanging up"));
 
+	s = getenv( HANGUP_VAR );
 	_swix(OS_CLI, _IN(0), s ? s : HANGUP_DEFAULT);
     }
 

@@ -168,7 +168,7 @@
 
 // local includes
 #include "cfginip.h"
-#ifndef DOS
+#if !defined(DOS) && !defined(RISCOS)
 #include "inidef.h"
 #endif
 
@@ -207,7 +207,7 @@ char  * basename( char *);
 void  GetString( PCHAR, PCHAR, PCHAR, PCHAR, PCHAR, PCHAR, int );
 int   SupportRequired( PCHAR, PCHAR, PCHAR, PCHAR, PCHAR, PCHAR, PCHAR, BOOL );
 int   GetSection( PCHAR, PCHAR, PCHAR *, PLIST );
-#ifndef DOS
+#if !defined(DOS) && !defined(RISCOS)
 int   GetPrivateProfileStringDefault( PCHAR pSection, PCHAR pKey,
                                       PCHAR pBuf, int cbLen, PCHAR pFile);
 int   GetPrivateProfileSectionDefault( PCHAR pSection, PCHAR pBuf,
@@ -309,7 +309,7 @@ CfgIniLoad( HANDLE   hClientHandle,
                                                pProtocolFile );
 #endif
 
-#ifdef RISCOS
+#if 0
     DefIniSect[0].pINISect = ModuleSect;
     DefIniSect[1].pINISect = WfclientSect;
 
@@ -422,7 +422,7 @@ CfgIniLoad( HANDLE   hClientHandle,
     TRACE((TC_LIB, TT_API1, "CfgIniLoad: WinStation Type %s", pWdType));
 
 
-#ifndef DOS
+#if !defined(DOS) && !defined(RISCOS)
     /*
      * find out if this connection was made by an Internet client
      * this will update the bInternetConnection boolean.
@@ -471,7 +471,7 @@ CfgIniLoad( HANDLE   hClientHandle,
     }
 
 
-#ifndef DOS
+#if !defined(DOS) && !defined(RISCOS)
     //We need to find out if this is a non-encrypted internet client..
     // ....backward compatibility. we will not call this an internet client/connection :)
     if ( bInternetConnection ) {
@@ -841,7 +841,7 @@ MakeProfileAndLoadSession( HANDLE hClientHandle,
     PCHAR   pTemp;
     int     len;
 
-#ifndef DOS
+#if !defined(DOS) && !defined(RISCOS)
     PDEFINISECT    pDefIniSect;
 #endif
     WFELOAD        WFELoad;
@@ -937,7 +937,7 @@ MakeProfileAndLoadSession( HANDLE hClientHandle,
     free(pSection1);
     pSection1 = NULL;
 
-#ifndef DOS
+#if !defined(DOS) && !defined(RISCOS)
     if (bInternet) {
        //merge WFClient section into the profile
        if ((pSection1 =
@@ -1061,7 +1061,7 @@ skipcombine1:
      * sections not currently connected to.
      */
 
-#ifndef DOS
+#if !defined(DOS) && !defined(RISCOS)
     if (bInternet) {
        /*
         * only build a list out of the server file since internet
@@ -1123,7 +1123,7 @@ skipcombine1:
 #endif
        pSectionsList = BuildAllSectionsList(pConnection, pTransportDriver,
                                   pServerFile, pConfigFile, pProtocolFile);
-#ifndef DOS
+#if !defined(DOS) && !defined(RISCOS)
     }
 #endif
 
@@ -1439,13 +1439,13 @@ LoadPdDll( HANDLE hClientHandle, PCHAR pPdSection, PCHAR pFile )
 
     if ( !GetPrivateProfileString(pPdSection, INI_DRIVERNAME, INI_EMPTY,
                                   pModuleName, MAX_INI_LINE, pFile)) {
-#ifndef DOS
+#if !defined(DOS) && !defined(RISCOS)
        if (!GetPrivateProfileStringDefault(pPdSection, INI_DRIVERNAME,
             pModuleName, MAX_INI_LINE, pFile)) {
 #endif
           rc = CLIENT_ERROR_PD_NAME_NOT_FOUND;
           goto done;
-#ifndef DOS
+#if !defined(DOS) && !defined(RISCOS)
        }
 #endif
     }
@@ -1501,13 +1501,13 @@ LoadWdDll( HANDLE hClientHandle, PCHAR pWdSection, PCHAR pProtocolFile )
 
     if ( !GetPrivateProfileString(pWdSection, INI_DRIVERNAME, INI_EMPTY,
                                   pModuleName, MAX_INI_LINE, pProtocolFile)) {
-#ifndef DOS
+#if !defined(DOS) && !defined(RISCOS)
        if (!GetPrivateProfileStringDefault(pWdSection, INI_DRIVERNAME,
             pModuleName, MAX_INI_LINE, pProtocolFile)) {
 #endif
           rc = CLIENT_ERROR_WD_NAME_NOT_FOUND;
           goto done;
-#ifndef DOS
+#if !defined(DOS) && !defined(RISCOS)
        }
 #endif
     }
@@ -1565,13 +1565,13 @@ LoadVdDll( HANDLE hClientHandle, PCHAR pVdSection, PCHAR pProtocolFile, PCHAR pD
 
     if ( !GetPrivateProfileString(pVdSection, pDriverName, INI_EMPTY,
                                   pModuleName, MAX_INI_LINE, pProtocolFile)) {
-#ifndef DOS
+#if !defined(DOS) && !defined(RISCOS)
        if (!GetPrivateProfileStringDefault(pVdSection, pDriverName,
             pModuleName, MAX_INI_LINE, pProtocolFile)) {
 #endif
           rc = CLIENT_ERROR_VD_NAME_NOT_FOUND;
           goto done;
-#ifndef DOS
+#if !defined(DOS) && !defined(RISCOS)
        }
 #endif
     }
@@ -1674,7 +1674,7 @@ BuildList( PCHAR pPFile, PCHAR pPSec, PCHAR pSFile, PCHAR pSSec, PCHAR pEntry )
                                    pEntryBuf,
                                    MAX_INI_LINE,
                                    pPFile ) ) {
-#ifndef DOS
+#if !defined(DOS) && !defined(RISCOS)
         if( !GetPrivateProfileStringDefault( pPSec,
                                              pEntry,
                                              pEntryBuf,
@@ -1739,7 +1739,7 @@ second:
                                    pEntryBuf,
                                    MAX_INI_LINE,
                                    pSFile ) ) {
-#ifndef DOS
+#if !defined(DOS) && !defined(RISCOS)
     if ( !GetPrivateProfileStringDefault( pSSec,
                                    pEntry,
                                    pEntryBuf,
@@ -1974,7 +1974,7 @@ GetString( PCHAR pPSec, PCHAR pPFile, PCHAR pSSec, PCHAR pSFile,
         if( ! GetPrivateProfileString( pPSec, pEntry, INI_EMPTY,
                                         pString, cbString, pPFile )) {
 
-#ifndef DOS
+#if !defined(DOS) && !defined(RISCOS)
            GetPrivateProfileStringDefault( pPSec, pEntry, pString, cbString, pPFile);
 #endif
            }
@@ -2079,7 +2079,7 @@ GetSection( PCHAR pSectionName,
                                               cbSection,
                                               pFileName )) ) {
 #endif
-#ifndef DOS
+#if !defined(DOS) && !defined(RISCOS)
             cb = GetPrivateProfileSectionDefault( pSectionName,
                                                   pTempBuffer,
                                                   cbSection,
@@ -2301,7 +2301,7 @@ GetSection( PCHAR pSectionName,
                                              cbEntries,
                                              pFileName )) ) {
 
-#ifndef DOS
+#if !defined(DOS) && !defined(RISCOS)
             // try using default section values before
             // giving up
             cb = GetPrivateProfileSectionDefault( pSectionName,pEntriesBuffer,
@@ -2843,7 +2843,7 @@ NoMemory:
     goto Done;
 }
 
-#ifndef DOS
+#if !defined(DOS) && !defined(RISCOS)
 /*
  * GetPrivateProfileSectionDefault
  *

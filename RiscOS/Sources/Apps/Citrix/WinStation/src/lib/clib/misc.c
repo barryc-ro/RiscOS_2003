@@ -78,4 +78,16 @@ void *read_rect(const void *in, RECT *rect)
     return (void *)(p + 6);
 }
 
+static int last_error;
+
+void GlobalSetLastError(int error)
+{
+    last_error = error;
+}
+
+int GetLastError(void)
+{
+    return last_error;
+}
+
 /* eof misc.c */

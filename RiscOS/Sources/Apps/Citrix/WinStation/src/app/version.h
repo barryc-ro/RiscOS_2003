@@ -30,8 +30,10 @@
 
 #define APPSRV_FILE	INI_PATH "AppSrv"
 
+/* --------------------------------------------------------------------------------------------- */
+
 #define HANGUP_VAR	APP_NAME"$Hangup"
-#define HANGUP_DEFAULT	"NCDial_Hangup"
+#define HANGUP_DEFAULT	"ncma_urc hangup"
 
 /* --------------------------------------------------------------------------------------------- */
 

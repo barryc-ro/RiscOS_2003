@@ -620,6 +620,11 @@ extern BOOL DestroyCursor(HCURSOR hCursor);
 
 /* ---------------------------------------------------------------------------------------------------- */
 
+extern void GlobalSetLastError(int error);
+extern int GetLastError(void);
+
+/* ---------------------------------------------------------------------------------------------------- */
+
 #endif
 
 /* eof windows.h */
