@@ -1,0 +1,7372 @@
+# Makefile for Browser
+# ====================
+#
+
+# -----------------------------------------------------------------------------
+# Change List
+#
+
+# Date		Name	Description
+# ====		====	===========
+# 1997-06-24	BAL	Created
+# 1997-07-18	BAL	Tidied up for CVS.  Hooks are in place for a debug
+#			build, but I'm not sure exactly what's required for
+#			one so it'll probably need tweaking.
+# 1997-07-22	ADH	Duly tweaked. Extras added to cope with test Browser
+#			(bouncy blue arrow), Surfboard browser, Phoenix
+#			(acorn on fire), and Intertalk browser (spinning
+#			acorn)  (spinning acorn) variants.
+#			See ReadMe for details on which of these use
+#			different object directories and which just have
+#			different compile time options. Updated the clean
+#			and clean_all rules. Took DFLAGS out of CFLAGS to
+#			make changing options more flexible. Note that the
+#			same .s directory is still currently used for all
+#			builds. Did lots of other stuff, too.
+# 1997-08-08	ADH	Got sick of having to scroll the task window right
+#			all the time to see what was compiling, so played
+#			around with the SUFFIXES (rule patterns) section
+#			to make the run-time output more readable.
+# 1997-08-17	ADH	Adding object files was a nightmare, so the objects
+#			list has been unrolled to one per line. This makes
+#			the MakeFile very tall, so a consistent comment
+#			syntax has been ensured to allow folding text
+#			editors to fold the text sensibly - start on
+#			NL, hash, NL; end on hash, space, hyphen.
+# 1997-08-28	ADH	Added Argonet build. Not much to do in the Makefile
+#			but needs the appropriate TaskObey files.
+
+# -----------------------------------------------------------------------------
+# Program specific options
+#
+
+COMPONENT	= Browse
+APP		= !Browse
+MODULE		= rm.!Browse
+ROM_MODULE	= aof.Browse
+LDIR		= Resources.${LOCALE}.${SYSTEM}
+
+
+# -----------------------------------------------------------------------------
+# Export Paths for Messages module
+#
+
+RESDIR		= <resource$dir>.Resources2.${COMPONENT}
+RESAPP		= <resource$dir>.Apps.${APP}
+
+
+# -----------------------------------------------------------------------------
+# Generic options
+#
+
+MKDIR		= cdir
+AS		= objasm
+CC		= cc
+CMHG		= cmhg
+CP		= copy
+LD		= link
+RM		= remove
+SQUEEZE		= squeeze
+WIPE		= -wipe
+
+AFLAGS		= ${THROWBACK} -depend !Depend -nocache -stamp -quit
+CFLAGS		= ${THROWBACK} -depend !Depend -ffa ${INCLUDES} -wp
+CPFLAGS		= ~cfr~v
+SQFLAGS		= -f
+WFLAGS		= ~cf~vr
+
+
+# -----------------------------------------------------------------------------
+# Flags
+#
+
+# These are for the standard Desktop build (plus debug), the Surfboard ROM
+# build (plus debug), the Surfboard RAM build (plus debug), and the
+# Intertalk build (plus debug).
+
+DFLAGS		= -DCOMPAT_INET4 -DSINGLE_USER -DALIAS_URLS
+DDFLAGS		= ${DFLAGS} -fn -DSTRICT_PARSER -DTRACE
+DZFLAGS		= -DCOMPAT_INET4 -DSINGLE_USER -DHIDE_CGI -DANTI_TWITTER
+DDZFLAGS	= ${DZFLAGS} -fn -DSTRICT_PARSER -DTRACE
+D_SURFFLAGS	= -DCOMPAT_INET4 -DSINGLE_USER -DANTI_TWITTER -DREMOTE_HOTLIST -DHIDE_CGI -DHACK_LINEONE
+DD_SURFFLAGS	= ${D_SURFFLAGS} -fn -DSTRICT_PARSER -DTRACE
+D_ITALKFLAGS	= -DCOMPAT_INET4 -DALIAS_URLS
+DD_ITALKFLAGS	= ${D_ITALKFLAGS} -fn -DSTRICT_PARSER -DTRACE
+
+
+# -----------------------------------------------------------------------------
+# Libraries
+#
+
+CLIB		= CLib:o.stubs
+ROMCSTUBS	= RISC_OSLib:o.romcstubs
+ABSSYM		= RISC_OSLib:o.c_abssym
+WRAPPER		= RISC_OSLib:s.ModuleWrap
+HTMLLIB		= HTMLLib:o.HTMLLib
+IMAGELIB	= ImageLib:o.ImageLib
+PNGLIB		= ImageLib:o.libpng-lib
+PNGLIBZ		= ImageLib:o.libpng-lzm
+JPEGLIB		= ImageLib:o.libjpeg
+JPEGLIBZ	= ImageLib:o.libjpeg-zm
+ZLIB		= ImageLib:o.zlib_lib
+URILIB		= Libraries.URILib.o.URILib
+FLEXLIB		= tbox:o.flexlib
+EVENTLIB	= tbox:o.eventlib
+TOOLBOXLIB	= tbox:o.toolboxlib
+WIMPLIB		= tbox:o.wimplib
+INETLIB		= TCPIPLibs:o.inetlib
+UNICODELIB	= C:Unicode.o.ucodelib
+
+LIBSM = \
+ ${HTMLLIB}zm \
+ ${URILIB} \
+ ${FLEXLIB}zm \
+ ${EVENTLIB}m \
+ ${TOOLBOXLIB} \
+ ${WIMPLIB} \
+ ${INETLIB}zm \
+ ${IMAGELIB}zm \
+ ${PNGLIBZ} \
+ ${JPEGLIBZ} \
+ ${ZLIB}zm \
+ ${UNICODELIB}z
+
+LIBS = \
+ ${CLIB} \
+ ${HTMLLib} \
+ ${URILib} \
+ ${FLEXLIB} \
+ ${EVENTLIB} \
+ ${TOOLBOXLIB} \
+ ${WIMPLIB} \
+ ${INETLIB} \
+ ${IMAGELIB} \
+ ${PNGLIB} \
+ ${JPEGLIB} \
+ ${ZLIB} \
+ ${UNICODELIB}
+
+LIBSD = \
+ ${CLIB} \
+ ${HTMLLib} \
+ ${URILib} \
+ ${FLEXLIB} \
+ ${EVENTLIB} \
+ ${TOOLBOXLIB} \
+ ${WIMPLIB} \
+ ${INETLIB} \
+ ${IMAGELIB} \
+ ${PNGLIB} \
+ ${JPEGLIB} \
+ ${ZLIB} \
+ ${UNICODELIB}
+
+
+# -----------------------------------------------------------------------------
+# Include files (libraries and resources)
+#
+
+INCLUDES	= -Itbox:,C:,HTMLLib:,ImageLib:,Libraries.URILib.,TCPIPLibs:
+
+FILES = \
+ ${LDIR}.!Boot \
+ ${LDIR}.!Run \
+ ${LDIR}.!Sprites \
+ ${LDIR}.!Sprites22 \
+ ${LDIR}.Messages \
+ ${LDIR}.Res \
+ ${TARGET}
+
+# Include these in the ROM module
+RESFILES = \
+ ${LDIR}.Sprites \
+ ${LDIR}.!Sprites \
+ ${LDIR}.!Sprites22
+
+
+# -----------------------------------------------------------------------------
+# Include files (objects)
+#
+
+OBJS = \
+ o.About		\
+ o.Authorise		\
+ o.Browser		\
+ o.Choices		\
+ o.Cookies		\
+ o.CSIM			\
+ o.DragBox		\
+ o.Encoding		\
+ o.Fetch		\
+ o.FetchHTML		\
+ o.FetchPage		\
+ o.Find			\
+ o.FontManage		\
+ o.Forms		\
+ o.Frames		\
+ o.FromROSLib		\
+ o.Global		\
+ o.Handlers		\
+ o.History		\
+ o.Hotlist		\
+ o.Images		\
+ o.ImgHistory		\
+ o.ItemInfo		\
+ o.JavaScript		\
+ o.LineOne		\
+ o.Main			\
+ o.Markers		\
+ o.Memory		\
+ o.Menus		\
+ o.Meta			\
+ o.MimeMap		\
+ o.Mouse		\
+ o.Multiuser		\
+ o.Object		\
+ o.OpenURL		\
+ o.PlugIn		\
+ o.Printing		\
+ o.PrintStyle		\
+ o.Protocols		\
+ o.Redraw		\
+ o.Reformat		\
+ o.RMA			\
+ o.Save			\
+ o.SaveDraw		\
+ o.SaveFile		\
+ o.SaveObject		\
+ o.SaveText		\
+ o.SetPBoxes		\
+ o.Tables		\
+ o.TokenUtils		\
+ o.Toolbars		\
+ o.Unifont		\
+ o.URLstat		\
+ o.URLutils		\
+ o.URLveneer		\
+ o.Utils		\
+ o.Windows		\
+ o.ROSLib
+
+OBJSZ = \
+ oz.About		\
+ oz.Authorise		\
+ oz.Browser		\
+ oz.Choices		\
+ oz.Cookies		\
+ oz.CSIM		\
+ oz.DragBox		\
+ oz.Encoding		\
+ oz.Fetch		\
+ oz.FetchHTML		\
+ oz.FetchPage		\
+ oz.Find		\
+ oz.FontManage		\
+ oz.Forms		\
+ oz.Frames		\
+ oz.FromROSLib		\
+ oz.Global		\
+ oz.Handlers		\
+ oz.History		\
+ oz.Hotlist		\
+ oz.Images		\
+ oz.ImgHistory		\
+ oz.ItemInfo		\
+ oz.JavaScript		\
+ oz.LineOne		\
+ oz.Main		\
+ oz.Markers		\
+ oz.Memory		\
+ oz.Menus		\
+ oz.Meta		\
+ oz.MimeMap		\
+ oz.Mouse		\
+ oz.Multiuser		\
+ oz.Object		\
+ oz.OpenURL		\
+ oz.PlugIn		\
+ oz.Printing		\
+ oz.PrintStyle		\
+ oz.Protocols		\
+ oz.Redraw		\
+ oz.Reformat		\
+ oz.RMA			\
+ oz.Save		\
+ oz.SaveDraw		\
+ oz.SaveFile		\
+ oz.SaveObject		\
+ oz.SaveText		\
+ oz.SetPBoxes		\
+ oz.Tables		\
+ oz.TokenUtils		\
+ oz.Toolbars		\
+ oz.Unifont		\
+ oz.URLstat		\
+ oz.URLutils		\
+ oz.URLveneer		\
+ oz.Utils		\
+ oz.Windows		\
+ o.ROSLib
+
+OBJSD = \
+ od.About		\
+ od.Authorise		\
+ od.Browser		\
+ od.Choices		\
+ od.Cookies		\
+ od.CSIM		\
+ od.DragBox		\
+ od.Encoding		\
+ od.Fetch		\
+ od.FetchHTML		\
+ od.FetchPage		\
+ od.Find		\
+ od.FontManage		\
+ od.Forms		\
+ od.Frames		\
+ od.FromROSLib		\
+ od.Global		\
+ od.Handlers		\
+ od.History		\
+ od.Hotlist		\
+ od.Images		\
+ od.ImgHistory		\
+ od.ItemInfo		\
+ od.JavaScript		\
+ od.LineOne		\
+ od.Main		\
+ od.Markers		\
+ od.Memory		\
+ od.Menus		\
+ od.Meta		\
+ od.MimeMap		\
+ od.Mouse		\
+ od.Multiuser		\
+ od.Object		\
+ od.OpenURL		\
+ od.PlugIn		\
+ od.Printing		\
+ od.PrintStyle		\
+ od.Protocols		\
+ od.Redraw		\
+ od.Reformat		\
+ od.RMA			\
+ od.Save		\
+ od.SaveDraw		\
+ od.SaveFile		\
+ od.SaveObject		\
+ od.SaveText		\
+ od.SetPBoxes		\
+ od.svcprint		\
+ od.Tables		\
+ od.TokenUtils		\
+ od.Toolbars		\
+ od.Trace		\
+ od.Unifont		\
+ od.URLstat		\
+ od.URLutils		\
+ od.URLveneer		\
+ od.Utils		\
+ od.Windows		\
+ o.ROSLib
+
+OBJSDZ = \
+ odz.About		\
+ odz.Authorise		\
+ odz.Browser		\
+ odz.Choices		\
+ odz.Cookies		\
+ odz.CSIM		\
+ odz.DragBox		\
+ odz.Encoding		\
+ odz.Fetch		\
+ odz.FetchHTML		\
+ odz.FetchPage		\
+ odz.Find		\
+ odz.FontManage		\
+ odz.Forms		\
+ odz.Frames		\
+ odz.FromROSLib		\
+ odz.Global		\
+ odz.Handlers		\
+ odz.History		\
+ odz.Hotlist		\
+ odz.Images		\
+ odz.ImgHistory		\
+ odz.ItemInfo		\
+ odz.JavaScript		\
+ odz.LineOne		\
+ odz.Main		\
+ odz.Markers		\
+ odz.Memory		\
+ odz.Menus		\
+ odz.Meta		\
+ odz.MimeMap		\
+ odz.Mouse		\
+ odz.Multiuser		\
+ odz.Object		\
+ odz.OpenURL		\
+ odz.PlugIn		\
+ odz.Printing		\
+ odz.PrintStyle		\
+ odz.Protocols		\
+ odz.Redraw		\
+ odz.Reformat		\
+ odz.RMA		\
+ odz.Save		\
+ odz.SaveDraw		\
+ odz.SaveFile		\
+ odz.SaveObject		\
+ odz.SaveText		\
+ odz.SetPBoxes		\
+ odz.svcprint		\
+ odz.Tables		\
+ odz.TokenUtils		\
+ odz.Toolbars		\
+ odz.Trace		\
+ odz.Unifont		\
+ odz.URLstat		\
+ odz.URLutils		\
+ odz.URLveneer		\
+ odz.Utils		\
+ odz.Windows		\
+ o.ROSLib
+
+OBJS_SURF = \
+ o_surf.About		\
+ o_surf.Authorise	\
+ o_surf.Browser		\
+ o_surf.Choices		\
+ o_surf.Cookies		\
+ o_surf.CSIM		\
+ o_surf.DragBox		\
+ o_surf.Encoding	\
+ o_surf.Fetch		\
+ o_surf.FetchHTML	\
+ o_surf.FetchPage	\
+ o_surf.Find		\
+ o_surf.FontManage	\
+ o_surf.Forms		\
+ o_surf.Frames		\
+ o_surf.FromROSLib	\
+ o_surf.Global		\
+ o_surf.Handlers	\
+ o_surf.History		\
+ o_surf.Images		\
+ o_surf.ImgHistory	\
+ o_surf.ItemInfo	\
+ o_surf.JavaScript	\
+ o_surf.LineOne		\
+ o_surf.Main		\
+ o_surf.Markers		\
+ o_surf.Memory		\
+ o_surf.Menus		\
+ o_surf.Meta		\
+ o_surf.MimeMap		\
+ o_surf.Mouse		\
+ o_surf.Multiuser	\
+ o_surf.Object		\
+ o_surf.OpenURL		\
+ o_surf.PlugIn		\
+ o_surf.Printing	\
+ o_surf.PrintStyle	\
+ o_surf.Protocols	\
+ o_surf.Redraw		\
+ o_surf.Reformat	\
+ o_surf.RMA		\
+ o_surf.Save		\
+ o_surf.SaveDraw	\
+ o_surf.SaveFile	\
+ o_surf.SaveObject	\
+ o_surf.SaveText	\
+ o_surf.SetPBoxes	\
+ o_surf.Tables		\
+ o_surf.TokenUtils	\
+ o_surf.Toolbars	\
+ o_surf.Unifont		\
+ o_surf.URLstat		\
+ o_surf.URLutils	\
+ o_surf.URLveneer	\
+ o_surf.Utils		\
+ o_surf.Windows		\
+ o.ROSLib
+
+OBJSD_SURF = \
+ od_surf.About		\
+ od_surf.Authorise	\
+ od_surf.Browser	\
+ od_surf.Choices	\
+ od_surf.Cookies	\
+ od_surf.CSIM		\
+ od_surf.DragBox	\
+ od_surf.Encoding	\
+ od_surf.Fetch		\
+ od_surf.FetchHTML	\
+ od_surf.FetchPage	\
+ od_surf.Find		\
+ od_surf.FontManage	\
+ od_surf.Forms		\
+ od_surf.Frames		\
+ od_surf.FromROSLib	\
+ od_surf.Global		\
+ od_surf.Handlers	\
+ od_surf.History	\
+ od_surf.Images		\
+ od_surf.ImgHistory	\
+ od_surf.ItemInfo	\
+ od_surf.JavaScript	\
+ od_surf.LineOne	\
+ od_surf.Main		\
+ od_surf.Markers	\
+ od_surf.Memory		\
+ od_surf.Menus		\
+ od_surf.Meta		\
+ od_surf.MimeMap	\
+ od_surf.Mouse		\
+ od_surf.Multiuser	\
+ od_surf.Object		\
+ od_surf.OpenURL	\
+ od_surf.PlugIn		\
+ od_surf.Printing	\
+ od_surf.PrintStyle	\
+ od_surf.Protocols	\
+ od_surf.Redraw		\
+ od_surf.Reformat	\
+ od_surf.RMA		\
+ od_surf.Save		\
+ od_surf.SaveDraw	\
+ od_surf.SaveFile	\
+ od_surf.SaveObject	\
+ od_surf.SaveText	\
+ od_surf.SetPBoxes	\
+ od_surf.svcprint	\
+ od_surf.Tables		\
+ od_surf.TokenUtils	\
+ od_surf.Toolbars	\
+ od_surf.Trace		\
+ od_surf.Unifont	\
+ od_surf.URLstat	\
+ od_surf.URLutils	\
+ od_surf.URLveneer	\
+ od_surf.Utils		\
+ od_surf.Windows	\
+ o.ROSLib
+
+OBJS_ITALK = \
+ o_italk.About		\
+ o_italk.Authorise	\
+ o_italk.Browser	\
+ o_italk.Choices	\
+ o_italk.Cookies	\
+ o_italk.CSIM		\
+ o_italk.DragBox	\
+ o_italk.Encoding	\
+ o_italk.Fetch		\
+ o_italk.FetchHTML	\
+ o_italk.FetchPage	\
+ o_italk.Find		\
+ o_italk.FontManage	\
+ o_italk.Forms		\
+ o_italk.Frames		\
+ o_italk.FromROSLib	\
+ o_italk.Global		\
+ o_italk.Handlers	\
+ o_italk.History	\
+ o_italk.Hotlist	\
+ o_italk.Images		\
+ o_italk.ImgHistory	\
+ o_italk.ItemInfo	\
+ o_italk.JavaScript	\
+ o_italk.LineOne	\
+ o_italk.Main		\
+ o_italk.Markers	\
+ o_italk.Memory		\
+ o_italk.Menus		\
+ o_italk.Meta		\
+ o_italk.MimeMap	\
+ o_italk.Mouse		\
+ o_italk.Multiuser	\
+ o_italk.Object		\
+ o_italk.OpenURL	\
+ o_italk.PlugIn		\
+ o_italk.Printing	\
+ o_italk.PrintStyle	\
+ o_italk.Protocols	\
+ o_italk.Redraw		\
+ o_italk.Reformat	\
+ o_italk.RMA		\
+ o_italk.Save		\
+ o_italk.SaveDraw	\
+ o_italk.SaveFile	\
+ o_italk.SaveObject	\
+ o_italk.SaveText	\
+ o_italk.SetPBoxes	\
+ o_italk.Tables		\
+ o_italk.TokenUtils	\
+ o_italk.Toolbars	\
+ o_italk.Unifont	\
+ o_italk.URLstat	\
+ o_italk.URLutils	\
+ o_italk.URLveneer	\
+ o_italk.Utils		\
+ o_italk.Windows	\
+ o.ROSLib
+
+OBJSD_ITALK = \
+ od_italk.About		\
+ od_italk.Authorise	\
+ od_italk.Browser	\
+ od_italk.Choices	\
+ od_italk.Cookies	\
+ od_italk.CSIM		\
+ od_italk.DragBox	\
+ od_italk.Encoding	\
+ od_italk.Fetch		\
+ od_italk.FetchHTML	\
+ od_italk.FetchPage	\
+ od_italk.Find		\
+ od_italk.FontManage	\
+ od_italk.Forms		\
+ od_italk.Frames	\
+ od_italk.FromROSLib	\
+ od_italk.Global	\
+ od_italk.Handlers	\
+ od_italk.History	\
+ od_italk.Hotlist	\
+ od_italk.Images	\
+ od_italk.ImgHistory	\
+ od_italk.ItemInfo	\
+ od_italk.JavaScript	\
+ od_italk.LineOne	\
+ od_italk.Main		\
+ od_italk.Markers	\
+ od_italk.Memory	\
+ od_italk.Menus		\
+ od_italk.Meta		\
+ od_italk.MimeMap	\
+ od_italk.Mouse		\
+ od_italk.Multiuser	\
+ od_italk.Object	\
+ od_italk.OpenURL	\
+ od_italk.PlugIn	\
+ od_italk.Printing	\
+ od_italk.PrintStyle	\
+ od_italk.Protocols	\
+ od_italk.Redraw	\
+ od_italk.Reformat	\
+ od_italk.RMA		\
+ od_italk.Save		\
+ od_italk.SaveDraw	\
+ od_italk.SaveFile	\
+ od_italk.SaveObject	\
+ od_italk.SaveText	\
+ od_italk.SetPBoxes	\
+ od_italk.svcprint	\
+ od_italk.Tables	\
+ od_italk.TokenUtils	\
+ od_italk.Toolbars	\
+ od_italk.Trace		\
+ od_italk.Unifont	\
+ od_italk.URLstat	\
+ od_italk.URLutils	\
+ od_italk.URLveneer	\
+ od_italk.Utils		\
+ od_italk.Windows	\
+ o.ROSLib
+
+
+# -----------------------------------------------------------------------------
+# Rule patterns
+#
+
+.SUFFIXES: .o .oz .od .odz .o_surf .od_surf .o_italk .od_italk .s .c
+
+.c.o:;		@echo
+		@echo Compiling $<
+		@echo ${DFLAGS}
+		@${CC} ${CFLAGS} ${DFLAGS}        -c -o $@ $<
+
+.c.oz:;		@echo
+		@echo Compiling $<
+		@echo ${DZFLAGS}
+		@${CC} ${CFLAGS} ${DZFLAGS}       -c -zM -DROM -o $@ $<
+
+.c.od:;		@echo
+		@echo Compiling $<
+		@echo ${DDFLAGS}
+		@${CC} ${CFLAGS} ${DDFLAGS}       -c -g -o $@ $<
+
+.c.odz:;	@echo
+		@echo Compiling $<
+		@echo ${DDZFLAGS}
+		@${CC} ${CFLAGS} ${DDZFLAGS}      -c -zM -DROM -o $@ $<
+
+.c.o_surf:;	@echo
+		@echo Compiling $<
+		@echo ${D_SURFFLAGS}
+		@${CC} ${CFLAGS} ${D_SURFFLAGS}   -c -o $@ $<
+
+.c.od_surf:;	@echo
+		@echo Compiling $<
+		@echo ${DD_SURFFLAGS}
+		@${CC} ${CFLAGS} ${DD_SURFFLAGS}  -c -g -o $@ $<
+
+.c.o_italk:;	@echo
+		@echo Compiling $<
+		@echo ${D_ITALKFLAGS}
+		@${CC} ${CFLAGS} ${D_ITALKFLAGS}  -c -o $@ $<
+
+.c.od_italk:;	@echo
+		@echo Compiling $<
+		@echo ${DD_ITALKFLAGS}
+		@${CC} ${CFLAGS} ${DD_ITALKFLAGS} -c -g -o $@ $<
+
+.s.o:;		@echo
+		@echo Assembling $<
+		@echo ${AFLAGS}
+		@${AS} ${AFLAGS} $< $@
+
+
+
+# -----------------------------------------------------------------------------
+# Main rules
+#
+
+all: ${FILES}
+	@echo ${COMPONENT}: Application built (Disc)
+
+rom: ${ROM_MODULE}
+	@echo ${COMPONENT}: Module built (ROM)
+
+install_common: ${FILES}
+	@echo
+	${CP} ${LDIR}.!Boot			${INSTDIR}.!Boot		${CPFLAGS}n
+	${CP} ${TARGET}				${INSTDIR}.!RunImage		${CPFLAGS}~n
+	${CP} ${LDIR}.!Sprites			${INSTDIR}.!Sprites		${CPFLAGS}n
+	${CP} ${LDIR}.!Sprites22		${INSTDIR}.!Sprites22		${CPFLAGS}n
+	${CP} ${LDIR}.8desktop			${INSTDIR}.8desktop		${CPFLAGS}n
+	${CP} ${LDIR}.Choices			${INSTDIR}.Choices		${CPFLAGS}n
+	${CP} ${LDIR}.Controls			${INSTDIR}.Controls		${CPFLAGS}n
+	${CP} ${LDIR}.Messages			${INSTDIR}.Messages		${CPFLAGS}n
+	${CP} ${LDIR}.Res			${INSTDIR}.Res			${CPFLAGS}n
+	${CP} ${LDIR}.Sprites			${INSTDIR}.Sprites		${CPFLAGS}n
+	-${CP} ${LDIR}.Sprites22		${INSTDIR}.Sprites22		${CPFLAGS}n
+	${MKDIR} ${INSTDIR}.User
+	-${CP} ${LDIR}.User.Hotlist		${INSTDIR}.User.Hotlist		${CPFLAGS}n
+
+install: install_common
+	${CP} ${LDIR}.!Run		${INSTDIR}.!Run		${CPFLAGS}~n
+	-Access ${INSTDIR}.!Boot	wr/r
+	-Access ${INSTDIR}.!Run		wr/r
+	-Access ${INSTDIR}.!RunImage	wr/r
+	-Access ${INSTDIR}.!Sprites	wr/r
+	-Access ${INSTDIR}.!Sprites22	wr/r
+	-Access ${INSTDIR}.8desktop	wr/r
+	-Access ${INSTDIR}.Choices	wr/r
+	-Access ${INSTDIR}.Controls	wr/r
+	-Access ${INSTDIR}.Messages	wr/r
+	-Access ${INSTDIR}.Res		wr/r
+	-Access ${INSTDIR}.Sprites	wr/r
+	-Access ${INSTDIR}.User.Hotlist	wr/r
+	@echo
+	@echo ${COMPONENT}: Application installed to ${INSTDIR}
+
+installd: install_common
+	${CP} ${LDIR}.!RunD		${INSTDIR}.!Run		${CPFLAGS}~n
+	@echo
+	@echo ${COMPONENT}: Debug application installed ${INSTDIR}
+
+install_rom: ${ROM_MODULE}
+	${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+	@echo
+	@echo ${COMPONENT}: Module installed (ROM)
+
+resources:
+	${MKDIR} ${RESDIR}
+	${MKDIR} ${RESAPP}
+	${MKDIR} ${RESDIR}.User
+	${CP} ${LDIR}.ROM.!Boot		${RESAPP}.!Boot		${CPFLAGS}
+	${CP} ${LDIR}.ROM.!Run		${RESAPP}.!Run		${CPFLAGS}
+	${CP} ${LDIR}.!Sprites		${RESDIR}.!Sprites	${CPFLAGS}
+	${CP} ${LDIR}.!Sprites22	${RESDIR}.!Sprites22	${CPFLAGS}
+	${CP} ${LDIR}.Choices		${RESDIR}.Choices	${CPFLAGS}
+	${CP} ${LDIR}.Controls		${RESDIR}.Controls	${CPFLAGS}
+	${CP} ${LDIR}.Messages		${RESDIR}.Messages	${CPFLAGS}
+	${CP} ${LDIR}.Res		${RESDIR}.Res		${CPFLAGS}
+	${CP} ${LDIR}.Sprites		${RESDIR}.Sprites	${CPFLAGS}
+	${CP} ${LDIR}.User.Hotlist	${RESDIR}.User.Hotlist	${CPFLAGS}
+	@echo
+	@echo ${COMPONENT}: Resource files copied to Messages module
+
+clean:
+	@echo starting
+	${WIPE}	abs		${WFLAGS}
+	${WIPE}	aof		${WFLAGS}
+	${WIPE}	linked		${WFLAGS}
+	${WIPE}	map		${WFLAGS}
+	${WIPE}	o		${WFLAGS}
+	${WIPE}	od		${WFLAGS}
+	${WIPE}	oz		${WFLAGS}
+	${WIPE}	odz		${WFLAGS}
+	${WIPE}	o_surf		${WFLAGS}
+	${WIPE}	od_surf		${WFLAGS}
+	${WIPE}	o_italk		${WFLAGS}
+	${WIPE}	od_italk	${WFLAGS}
+	${WIPE}	rm		${WFLAGS}
+	${RM}	s.AppName
+	${RM}	s.ModuleWrap
+	${RM}	o.dirs
+	@echo
+	@echo ${COMPONENT}: Cleaned
+
+o.dirs:
+	@${MKDIR} abs
+	@${MKDIR} aof
+	@${MKDIR} linked
+	@${MKDIR} map
+	@${MKDIR} o
+	@${MKDIR} od
+	@${MKDIR} oz
+	@${MKDIR} odz
+	@${MKDIR} o_surf
+	@${MKDIR} od_surf
+	@${MKDIR} o_italk
+	@${MKDIR} od_italk
+	@${MKDIR} rm
+	@${MKDIR} syms
+	@${MKDIR} Targets
+	@${MKDIR} Targets.Argonet
+	@${MKDIR} Targets.Argonet.!VoyBrowse
+	@${MKDIR} Targets.Browse
+	@${MKDIR} Targets.Browse.!Browse
+	@${MKDIR} Targets.Intertalk
+	@${MKDIR} Targets.Intertalk.!Browse
+	@${MKDIR} Targets.Surfboard
+	@${MKDIR} Targets.Surfboard.!Browse
+	@${MKDIR} Targets.Desktop
+	@${MKDIR} Targets.Desktop.!Browse
+	@${MKDIR} Targets.Phoenix
+	@${MKDIR} Targets.Phoenix.!Phoenix
+	create o.dirs
+	stamp  o.dirs
+
+
+# -----------------------------------------------------------------------------
+# Development rules
+#
+
+linkmap: ${OBJS} ${LIBS}
+	${LD} -map -o null:x ${OBJS} ${LIBS} > map.linked
+
+map:
+	${LD} -map -bin -base 0 -o null: ${OBJS} ${LIBS} > map.base0
+
+clean_all: clean
+	${WIPE}	Targets		${WFLAGS}
+	@echo ${COMPONENT}: Cleaned all
+
+
+# -----------------------------------------------------------------------------
+# Final linkfor ROM Image (using given base address)
+#
+
+rom_link:
+	${LD} -o linked.${COMPONENT} -bin -base ${ADDRESS} \
+		${ROM_MODULE} ${ABSSYM} -map > map.${COMPONENT}
+	truncate map.${COMPONENT} linked.${COMPONENT}
+	${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
+	@echo ${COMPONENT}: rom_link complete
+
+oz.ModuleWrap: s.ModuleWrap s.AppName ${RESFILES}
+	${AS} ${AFLAGS} s.ModuleWrap $@
+
+s.ModuleWrap: ${WRAPPER}
+	${CP} ${WRAPPER} $@ ${CPFLAGS}
+
+s.AppName: ${LDIR}.Messages
+	awk -f awk.AppName ${LDIR}.Messages > $@
+
+
+# -----------------------------------------------------------------------------
+# Static dependencies
+#
+
+abs.!RI: ${OBJS} ${LIBS} o.dirs
+	@echo
+	${LD} -s syms.!RI -o $@ ${OBJS} ${LIBS}
+	${SQUEEZE} ${SQFLAGS} $@
+
+abs.!RI_D: ${OBJSD} ${LIBSD} o.dirs
+	@echo
+	${LD} -debug -s syms.!RI_D -o $@ ${OBJSD} ${LIBSD}
+
+abs.!RI_Surf: ${OBJS_SURF} ${LIBS} o.dirs
+	@echo
+	${LD}  -s syms.!RI_Surf -o $@ ${OBJS_SURF} ${LIBS}
+
+abs.!RI_DSurf: ${OBJSD_SURF} ${LIBSD} o.dirs
+	@echo
+	${LD} -debug -s syms.!RI_DSurf -o $@ ${OBJSD_SURF} ${LIBSD}
+
+abs.!RI_ITalk: ${OBJS_ITALK} ${LIBS} o.dirs
+	@echo
+	${LD} -s syms.!RI_ITalk -o $@ ${OBJS_ITALK} ${LIBS}
+	${SQUEEZE} ${SQFLAGS} $@
+
+abs.!RI_DITalk: ${OBJSD_ITALK} ${LIBSD} o.dirs
+	@echo
+	${LD} -debug -s syms.!RI_DITalk -o $@ ${OBJSD_ITALK} ${LIBSD}
+
+${MODULE}: oz.ModuleWrap ${OBJSZ} ${LIBSM} ${CLIB} o.dirs
+	@echo
+	${LD} -s syms.RAMMod -o $@ -module oz.ModuleWrap ${OBJSZ} ${LIBSM} ${CLIB}
+
+${ROM_MODULE}: oz.ModuleWrap ${OBJSZ} ${ROMCSTUBS} ${LIBSM} o.dirs
+	@echo
+	${LD} -s syms.ROMMod -o $@ -aof oz.ModuleWrap ${OBJSZ} ${LIBSM} ${ROMCSTUBS}
+
+rm.!BrowseD: odz.ModuleWrap ${OBJSDZ} ${LIBSM} o.dirs
+	@echo
+	${LD} -s syms.ROMDMod -o $@ -module oz.ModuleWrap ${OBJSDZ} ${LIBSM}
+
+
+# -----------------------------------------------------------------------------
+# Dynamic dependencies:
+od.FromROSLib:	c.FromROSLib
+od.FromROSLib:	C:h.swis
+od.FromROSLib:	C:h.kernel
+od.FromROSLib:	tbox:h.wimp
+od.FromROSLib:	h.FromROSLib
+od.LineOne:	c.LineOne
+od.svcprint:	c.svcprint
+od.svcprint:	C:h.kernel
+od.svcprint:	C:h.swis
+od.svcprint:	h.svcprint
+od.svcprint:	TCPIPLibs:h.inetlib
+od.svcprint:	TCPIPLibs:sys.h.types
+od.svcprint:	TCPIPLibs:sys.h.cdefs
+od.svcprint:	TCPIPLibs:machine.h.endian
+od.svcprint:	TCPIPLibs:machine.h.ansi
+od.svcprint:	TCPIPLibs:machine.h.types
+od.svcprint:	TCPIPLibs:netinet.h.in
+o.ROSLib: s.ROSLib
+o.FromROSLib:	c.FromROSLib
+o.FromROSLib:	C:h.swis
+o.FromROSLib:	C:h.kernel
+o.FromROSLib:	tbox:h.wimp
+o.FromROSLib:	h.FromROSLib
+o.LineOne:	c.LineOne
+od.About:	c.About
+od.About:	C:h.kernel
+od.About:	C:h.swis
+od.About:	tbox:h.flex
+od.About:	tbox:h.wimp
+od.About:	tbox:h.wimplib
+od.About:	tbox:h.event
+od.About:	tbox:h.toolbox
+od.About:	tbox:h.toolbox
+od.About:	tbox:h.window
+od.About:	tbox:h.gadgets
+od.About:	tbox:h.gadgets
+od.About:	h.svcprint
+od.About:	h.Global
+od.About:	HTMLLib:h.struct
+od.About:	HTMLLib:h.html2_ext
+od.About:	HTMLLib:h.tablestruc
+od.About:	HTMLLib:h.tablestruc
+od.About:	ImageLib:h.imagetrans
+od.About:	C:h.setjmp
+od.About:	tbox:h.window
+od.About:	h.Bitfields
+od.About:	h.Limits
+od.About:	h.Limits
+od.About:	h.Utils
+od.Authorise:	c.Authorise
+od.Authorise:	tbox:h.flex
+od.Authorise:	tbox:h.wimp
+od.Authorise:	tbox:h.wimplib
+od.Authorise:	C:h.kernel
+od.Authorise:	tbox:h.event
+od.Authorise:	tbox:h.toolbox
+od.Authorise:	tbox:h.toolbox
+od.Authorise:	tbox:h.window
+od.Authorise:	tbox:h.gadgets
+od.Authorise:	tbox:h.gadgets
+od.Authorise:	h.svcprint
+od.Authorise:	h.Global
+od.Authorise:	HTMLLib:h.struct
+od.Authorise:	HTMLLib:h.html2_ext
+od.Authorise:	HTMLLib:h.tablestruc
+od.Authorise:	HTMLLib:h.tablestruc
+od.Authorise:	ImageLib:h.imagetrans
+od.Authorise:	C:h.setjmp
+od.Authorise:	tbox:h.window
+od.Authorise:	h.Bitfields
+od.Authorise:	h.Limits
+od.Authorise:	h.Limits
+od.Authorise:	h.Utils
+od.Authorise:	h.Browser
+od.Authorise:	h.Fetch
+od.Authorise:	h.URLstat
+od.Authorise:	h.Toolbars
+od.Authorise:	h.URLutils
+od.Authorise:	Libraries.URILib.h.URI
+od.Authorise:	C:h.kernel
+od.Authorise:	h.Windows
+od.Authorise:	h.Authorise
+od.Choices:	c.Choices
+od.Choices:	C:h.swis
+od.Choices:	C:h.kernel
+od.Choices:	HTMLLib:h.HTMLLib
+od.Choices:	HTMLLib:h.html2_ext
+od.Choices:	HTMLLib:h.tablestruc
+od.Choices:	HTMLLib:h.tags
+od.Choices:	HTMLLib:h.struct
+od.Choices:	HTMLLib:h.html2_ext
+od.Choices:	tbox:h.wimp
+od.Choices:	tbox:h.wimplib
+od.Choices:	tbox:h.event
+od.Choices:	tbox:h.toolbox
+od.Choices:	tbox:h.toolbox
+od.Choices:	tbox:h.window
+od.Choices:	tbox:h.gadgets
+od.Choices:	tbox:h.menu
+od.Choices:	tbox:h.ColourDbox
+od.Choices:	tbox:h.FontMenu
+od.Choices:	h.svcprint
+od.Choices:	h.Global
+od.Choices:	HTMLLib:h.struct
+od.Choices:	HTMLLib:h.tablestruc
+od.Choices:	ImageLib:h.imagetrans
+od.Choices:	tbox:h.flex
+od.Choices:	C:h.setjmp
+od.Choices:	tbox:h.window
+od.Choices:	h.Bitfields
+od.Choices:	h.Limits
+od.Choices:	h.Limits
+od.Choices:	h.FromROSLib
+od.Choices:	h.Utils
+od.Choices:	h.ChoiceDefs
+od.Choices:	h.Encoding
+od.Choices:	h.FetchPage
+od.Choices:	h.FontManage
+od.Choices:	h.History
+od.Choices:	h.Limits
+od.Choices:	h.Menus
+od.Choices:	h.NestWimp
+od.Choices:	h.Redraw
+od.Choices:	h.Reformat
+od.Choices:	HTMLLib:h.HTMLLib
+od.Choices:	h.Save
+od.Choices:	h.URLutils
+od.Choices:	Libraries.URILib.h.URI
+od.Choices:	C:h.kernel
+od.Choices:	h.Windows
+od.Choices:	h.Choices
+od.Cookies:	c.Cookies
+od.Cookies:	C:h.swis
+od.Cookies:	C:h.kernel
+od.Cookies:	tbox:h.wimp
+od.Cookies:	tbox:h.wimplib
+od.Cookies:	tbox:h.event
+od.Cookies:	tbox:h.toolbox
+od.Cookies:	h.svcprint
+od.Cookies:	h.Global
+od.Cookies:	HTMLLib:h.struct
+od.Cookies:	HTMLLib:h.html2_ext
+od.Cookies:	HTMLLib:h.tablestruc
+od.Cookies:	HTMLLib:h.tablestruc
+od.Cookies:	ImageLib:h.imagetrans
+od.Cookies:	tbox:h.flex
+od.Cookies:	C:h.setjmp
+od.Cookies:	tbox:h.window
+od.Cookies:	tbox:h.gadgets
+od.Cookies:	h.Bitfields
+od.Cookies:	h.Limits
+od.Cookies:	h.Limits
+od.Cookies:	h.Utils
+od.Cookies:	h.ChoiceDefs
+od.Cookies:	h.MiscDefs
+od.Cookies:	h.Cookies
+od.CSIM:	c.CSIM
+od.CSIM:	C:h.swis
+od.CSIM:	C:h.kernel
+od.CSIM:	HTMLLib:h.HTMLLib
+od.CSIM:	HTMLLib:h.html2_ext
+od.CSIM:	HTMLLib:h.tablestruc
+od.CSIM:	HTMLLib:h.tags
+od.CSIM:	HTMLLib:h.struct
+od.CSIM:	HTMLLib:h.html2_ext
+od.CSIM:	tbox:h.wimp
+od.CSIM:	tbox:h.wimplib
+od.CSIM:	tbox:h.event
+od.CSIM:	tbox:h.toolbox
+od.CSIM:	h.svcprint
+od.CSIM:	h.Global
+od.CSIM:	HTMLLib:h.struct
+od.CSIM:	HTMLLib:h.tablestruc
+od.CSIM:	ImageLib:h.imagetrans
+od.CSIM:	tbox:h.flex
+od.CSIM:	C:h.setjmp
+od.CSIM:	tbox:h.window
+od.CSIM:	tbox:h.gadgets
+od.CSIM:	h.Bitfields
+od.CSIM:	h.Limits
+od.CSIM:	h.Limits
+od.CSIM:	h.FromROSLib
+od.CSIM:	h.MiscDefs
+od.CSIM:	h.Utils
+od.CSIM:	h.Fetch
+od.CSIM:	h.URLstat
+od.CSIM:	h.Redraw
+od.CSIM:	h.CSIM
+od.DragBox:	c.DragBox
+od.DragBox:	C:h.swis
+od.DragBox:	C:h.kernel
+od.DragBox:	tbox:h.wimp
+od.DragBox:	tbox:h.wimplib
+od.DragBox:	tbox:h.event
+od.DragBox:	tbox:h.toolbox
+od.DragBox:	h.svcprint
+od.DragBox:	h.Global
+od.DragBox:	HTMLLib:h.struct
+od.DragBox:	HTMLLib:h.html2_ext
+od.DragBox:	HTMLLib:h.tablestruc
+od.DragBox:	HTMLLib:h.tablestruc
+od.DragBox:	ImageLib:h.imagetrans
+od.DragBox:	tbox:h.flex
+od.DragBox:	C:h.setjmp
+od.DragBox:	tbox:h.window
+od.DragBox:	tbox:h.gadgets
+od.DragBox:	h.Bitfields
+od.DragBox:	h.Limits
+od.DragBox:	h.Limits
+od.DragBox:	h.FromROSLib
+od.DragBox:	h.Utils
+od.DragBox:	h.DragBox
+od.Encoding:	c.Encoding
+od.Encoding:	C:h.swis
+od.Encoding:	C:h.kernel
+od.Encoding:	tbox:h.wimp
+od.Encoding:	tbox:h.toolbox
+od.Encoding:	tbox:h.menu
+od.Encoding:	tbox:h.event
+od.Encoding:	C:Unicode.h.iso10646
+od.Encoding:	h.Global
+od.Encoding:	HTMLLib:h.struct
+od.Encoding:	HTMLLib:h.html2_ext
+od.Encoding:	HTMLLib:h.tablestruc
+od.Encoding:	HTMLLib:h.tablestruc
+od.Encoding:	ImageLib:h.imagetrans
+od.Encoding:	tbox:h.flex
+od.Encoding:	C:h.setjmp
+od.Encoding:	tbox:h.window
+od.Encoding:	tbox:h.gadgets
+od.Encoding:	h.Bitfields
+od.Encoding:	h.Limits
+od.Encoding:	h.Limits
+od.Encoding:	h.Utils
+od.Encoding:	h.Choices
+od.Encoding:	h.Encoding
+od.FetchHTML:	c.FetchHTML
+od.FetchHTML:	C:h.swis
+od.FetchHTML:	C:h.kernel
+od.FetchHTML:	tbox:h.flex
+od.FetchHTML:	HTMLLib:h.HTMLLib
+od.FetchHTML:	HTMLLib:h.html2_ext
+od.FetchHTML:	HTMLLib:h.tablestruc
+od.FetchHTML:	HTMLLib:h.tags
+od.FetchHTML:	HTMLLib:h.struct
+od.FetchHTML:	HTMLLib:h.html2_ext
+od.FetchHTML:	tbox:h.wimp
+od.FetchHTML:	tbox:h.event
+od.FetchHTML:	tbox:h.toolbox
+od.FetchHTML:	h.svcprint
+od.FetchHTML:	h.Global
+od.FetchHTML:	HTMLLib:h.struct
+od.FetchHTML:	HTMLLib:h.tablestruc
+od.FetchHTML:	ImageLib:h.imagetrans
+od.FetchHTML:	C:h.setjmp
+od.FetchHTML:	tbox:h.window
+od.FetchHTML:	tbox:h.gadgets
+od.FetchHTML:	h.Bitfields
+od.FetchHTML:	h.Limits
+od.FetchHTML:	h.Limits
+od.FetchHTML:	h.MiscDefs
+od.FetchHTML:	h.Utils
+od.FetchHTML:	h.About
+od.FetchHTML:	h.Authorise
+od.FetchHTML:	h.Browser
+od.FetchHTML:	h.Cookies
+od.FetchHTML:	h.Encoding
+od.FetchHTML:	h.Fetch
+od.FetchHTML:	h.URLstat
+od.FetchHTML:	h.Filetypes
+od.FetchHTML:	h.History
+od.FetchHTML:	h.Save
+od.FetchHTML:	h.URLutils
+od.FetchHTML:	Libraries.URILib.h.URI
+od.FetchHTML:	C:h.kernel
+od.FetchHTML:	h.URLveneer
+od.FetchHTML:	h.FetchHTML
+od.FetchPage:	c.FetchPage
+od.FetchPage:	tbox:h.flex
+od.FetchPage:	C:h.swis
+od.FetchPage:	C:h.kernel
+od.FetchPage:	Libraries.URILib.h.URI
+od.FetchPage:	C:h.kernel
+od.FetchPage:	tbox:h.wimp
+od.FetchPage:	tbox:h.wimplib
+od.FetchPage:	tbox:h.event
+od.FetchPage:	tbox:h.toolbox
+od.FetchPage:	tbox:h.toolbox
+od.FetchPage:	tbox:h.window
+od.FetchPage:	tbox:h.gadgets
+od.FetchPage:	tbox:h.gadgets
+od.FetchPage:	h.svcprint
+od.FetchPage:	h.Global
+od.FetchPage:	HTMLLib:h.struct
+od.FetchPage:	HTMLLib:h.html2_ext
+od.FetchPage:	HTMLLib:h.tablestruc
+od.FetchPage:	HTMLLib:h.tablestruc
+od.FetchPage:	ImageLib:h.imagetrans
+od.FetchPage:	C:h.setjmp
+od.FetchPage:	tbox:h.window
+od.FetchPage:	h.Bitfields
+od.FetchPage:	h.Limits
+od.FetchPage:	h.Limits
+od.FetchPage:	h.FromROSLib
+od.FetchPage:	h.MiscDefs
+od.FetchPage:	h.Utils
+od.FetchPage:	h.Browser
+od.FetchPage:	h.ChoiceDefs
+od.FetchPage:	h.Fetch
+od.FetchPage:	h.URLstat
+od.FetchPage:	h.Frames
+od.FetchPage:	h.Handlers
+od.FetchPage:	h.History
+od.FetchPage:	h.Images
+od.FetchPage:	h.JavaScript
+od.FetchPage:	h.Memory
+od.FetchPage:	h.PlugIn
+od.FetchPage:	h.Protocols
+od.FetchPage:	h.Reformat
+od.FetchPage:	HTMLLib:h.HTMLLib
+od.FetchPage:	HTMLLib:h.html2_ext
+od.FetchPage:	HTMLLib:h.tags
+od.FetchPage:	HTMLLib:h.struct
+od.FetchPage:	h.SaveDraw
+od.FetchPage:	h.SaveText
+od.FetchPage:	h.Toolbars
+od.FetchPage:	h.URLutils
+od.FetchPage:	Libraries.URILib.h.URI
+od.FetchPage:	h.Windows
+od.FetchPage:	h.FetchPage
+od.Find:	c.Find
+od.Find:	C:h.swis
+od.Find:	C:h.kernel
+od.Find:	tbox:h.wimp
+od.Find:	tbox:h.wimplib
+od.Find:	tbox:h.event
+od.Find:	tbox:h.toolbox
+od.Find:	tbox:h.toolbox
+od.Find:	tbox:h.window
+od.Find:	tbox:h.gadgets
+od.Find:	h.svcprint
+od.Find:	h.Global
+od.Find:	HTMLLib:h.struct
+od.Find:	HTMLLib:h.html2_ext
+od.Find:	HTMLLib:h.tablestruc
+od.Find:	HTMLLib:h.tablestruc
+od.Find:	ImageLib:h.imagetrans
+od.Find:	tbox:h.flex
+od.Find:	C:h.setjmp
+od.Find:	tbox:h.window
+od.Find:	h.Bitfields
+od.Find:	h.Limits
+od.Find:	h.Limits
+od.Find:	h.Utils
+od.Find:	h.Browser
+od.Find:	h.Fetch
+od.Find:	h.URLstat
+od.Find:	h.Toolbars
+od.Find:	h.Windows
+od.Find:	h.Find
+od.FontManage:	c.FontManage
+od.FontManage:	C:h.swis
+od.FontManage:	C:h.kernel
+od.FontManage:	HTMLLib:h.HTMLLib
+od.FontManage:	HTMLLib:h.html2_ext
+od.FontManage:	HTMLLib:h.tablestruc
+od.FontManage:	HTMLLib:h.tags
+od.FontManage:	HTMLLib:h.struct
+od.FontManage:	HTMLLib:h.html2_ext
+od.FontManage:	tbox:h.wimp
+od.FontManage:	tbox:h.event
+od.FontManage:	tbox:h.toolbox
+od.FontManage:	h.svcprint
+od.FontManage:	h.Global
+od.FontManage:	HTMLLib:h.struct
+od.FontManage:	HTMLLib:h.tablestruc
+od.FontManage:	ImageLib:h.imagetrans
+od.FontManage:	tbox:h.flex
+od.FontManage:	C:h.setjmp
+od.FontManage:	tbox:h.window
+od.FontManage:	tbox:h.gadgets
+od.FontManage:	h.Bitfields
+od.FontManage:	h.Limits
+od.FontManage:	h.Limits
+od.FontManage:	h.FromROSLib
+od.FontManage:	h.MiscDefs
+od.FontManage:	h.Utils
+od.FontManage:	h.Redraw
+od.FontManage:	h.FontManage
+od.Forms:	c.Forms
+od.Forms:	C:h.swis
+od.Forms:	C:h.kernel
+od.Forms:	tbox:h.flex
+od.Forms:	HTMLLib:h.HTMLLib
+od.Forms:	HTMLLib:h.html2_ext
+od.Forms:	HTMLLib:h.tablestruc
+od.Forms:	HTMLLib:h.tags
+od.Forms:	HTMLLib:h.struct
+od.Forms:	HTMLLib:h.html2_ext
+od.Forms:	tbox:h.wimp
+od.Forms:	tbox:h.wimplib
+od.Forms:	tbox:h.event
+od.Forms:	tbox:h.toolbox
+od.Forms:	h.svcprint
+od.Forms:	h.Global
+od.Forms:	HTMLLib:h.struct
+od.Forms:	HTMLLib:h.tablestruc
+od.Forms:	ImageLib:h.imagetrans
+od.Forms:	C:h.setjmp
+od.Forms:	tbox:h.window
+od.Forms:	tbox:h.gadgets
+od.Forms:	h.Bitfields
+od.Forms:	h.Limits
+od.Forms:	h.Limits
+od.Forms:	h.FromROSLib
+od.Forms:	h.Utils
+od.Forms:	h.Browser
+od.Forms:	h.FetchPage
+od.Forms:	h.FontManage
+od.Forms:	h.Images
+od.Forms:	h.Redraw
+od.Forms:	h.TokenUtils
+od.Forms:	h.Toolbars
+od.Forms:	h.Forms
+od.Forms:	h.trace
+od.Global:	c.Global
+od.Global:	C:h.setjmp
+od.Global:	tbox:h.wimp
+od.Global:	tbox:h.event
+od.Global:	tbox:h.toolbox
+od.Global:	C:h.kernel
+od.Global:	h.svcprint
+od.Global:	h.Global
+od.Global:	HTMLLib:h.struct
+od.Global:	HTMLLib:h.html2_ext
+od.Global:	HTMLLib:h.tablestruc
+od.Global:	HTMLLib:h.tablestruc
+od.Global:	ImageLib:h.imagetrans
+od.Global:	tbox:h.flex
+od.Global:	C:h.setjmp
+od.Global:	tbox:h.window
+od.Global:	tbox:h.gadgets
+od.Global:	h.Bitfields
+od.Global:	h.Limits
+od.Global:	h.Limits
+od.Global:	h.Utils
+od.Handlers:	c.Handlers
+od.Handlers:	C:h.swis
+od.Handlers:	C:h.kernel
+od.Handlers:	C:h.kernel
+od.Handlers:	tbox:h.flex
+od.Handlers:	HTMLLib:h.HTMLLib
+od.Handlers:	HTMLLib:h.html2_ext
+od.Handlers:	HTMLLib:h.tablestruc
+od.Handlers:	HTMLLib:h.tags
+od.Handlers:	HTMLLib:h.struct
+od.Handlers:	HTMLLib:h.html2_ext
+od.Handlers:	tbox:h.wimp
+od.Handlers:	tbox:h.wimplib
+od.Handlers:	tbox:h.event
+od.Handlers:	tbox:h.toolbox
+od.Handlers:	tbox:h.toolbox
+od.Handlers:	tbox:h.quit
+od.Handlers:	tbox:h.window
+od.Handlers:	tbox:h.gadgets
+od.Handlers:	tbox:h.proginfo
+od.Handlers:	h.ToolAction
+od.Handlers:	h.Dialler
+od.Handlers:	C:h.kernel
+od.Handlers:	h.svcprint
+od.Handlers:	h.Global
+od.Handlers:	HTMLLib:h.struct
+od.Handlers:	HTMLLib:h.tablestruc
+od.Handlers:	ImageLib:h.imagetrans
+od.Handlers:	C:h.setjmp
+od.Handlers:	tbox:h.window
+od.Handlers:	h.Bitfields
+od.Handlers:	h.Limits
+od.Handlers:	h.Limits
+od.Handlers:	h.FromROSLib
+od.Handlers:	h.Utils
+od.Handlers:	h.Browser
+od.Handlers:	h.ChoiceDefs
+od.Handlers:	h.Choices
+od.Handlers:	h.CSIM
+od.Handlers:	h.Fetch
+od.Handlers:	h.URLstat
+od.Handlers:	h.FetchPage
+od.Handlers:	h.Filetypes
+od.Handlers:	h.FontManage
+od.Handlers:	h.Forms
+od.Handlers:	h.Frames
+od.Handlers:	h.History
+od.Handlers:	h.Hotlist
+od.Handlers:	h.Images
+od.Handlers:	h.JavaScript
+od.Handlers:	h.Markers
+od.Handlers:	h.Menus
+od.Handlers:	h.Meta
+od.Handlers:	h.MiscDefs
+od.Handlers:	h.MiscEvents
+od.Handlers:	h.Mouse
+od.Handlers:	h.PlugIn
+od.Handlers:	h.Printing
+od.Handlers:	h.Protocols
+od.Handlers:	h.Redraw
+od.Handlers:	h.Reformat
+od.Handlers:	HTMLLib:h.HTMLLib
+od.Handlers:	h.Save
+od.Handlers:	h.SaveFile
+od.Handlers:	h.SetPBoxes
+od.Handlers:	h.TokenUtils
+od.Handlers:	h.Toolbars
+od.Handlers:	h.URLutils
+od.Handlers:	Libraries.URILib.h.URI
+od.Handlers:	C:h.kernel
+od.Handlers:	h.Windows
+od.Handlers:	h.Handlers
+od.History:	c.History
+od.History:	C:h.kernel
+od.History:	C:h.swis
+od.History:	tbox:h.flex
+od.History:	tbox:h.wimp
+od.History:	tbox:h.wimplib
+od.History:	tbox:h.event
+od.History:	tbox:h.toolbox
+od.History:	tbox:h.toolbox
+od.History:	tbox:h.window
+od.History:	tbox:h.gadgets
+od.History:	tbox:h.gadgets
+od.History:	tbox:h.menu
+od.History:	h.svcprint
+od.History:	h.Global
+od.History:	HTMLLib:h.struct
+od.History:	HTMLLib:h.html2_ext
+od.History:	HTMLLib:h.tablestruc
+od.History:	HTMLLib:h.tablestruc
+od.History:	ImageLib:h.imagetrans
+od.History:	C:h.setjmp
+od.History:	tbox:h.window
+od.History:	h.Bitfields
+od.History:	h.Limits
+od.History:	h.Limits
+od.History:	h.FromROSLib
+od.History:	h.Utils
+od.History:	h.Browser
+od.History:	h.ChoiceDefs
+od.History:	h.FetchPage
+od.History:	h.Filetypes
+od.History:	h.Memory
+od.History:	h.OpenURL
+od.History:	h.Save
+od.History:	h.Toolbars
+od.History:	h.URLutils
+od.History:	Libraries.URILib.h.URI
+od.History:	C:h.kernel
+od.History:	h.Windows
+od.History:	h.History
+od.Hotlist:	c.Hotlist
+od.Hotlist:	C:h.swis
+od.Hotlist:	C:h.kernel
+od.Hotlist:	tbox:h.toolbox
+od.Hotlist:	tbox:h.wimp
+od.Hotlist:	tbox:h.wimp
+od.Hotlist:	tbox:h.wimplib
+od.Hotlist:	tbox:h.menu
+od.Hotlist:	tbox:h.event
+od.Hotlist:	tbox:h.gadgets
+od.Hotlist:	h.svcprint
+od.Hotlist:	h.Global
+od.Hotlist:	HTMLLib:h.struct
+od.Hotlist:	HTMLLib:h.html2_ext
+od.Hotlist:	HTMLLib:h.tablestruc
+od.Hotlist:	HTMLLib:h.tablestruc
+od.Hotlist:	ImageLib:h.imagetrans
+od.Hotlist:	tbox:h.flex
+od.Hotlist:	C:h.setjmp
+od.Hotlist:	tbox:h.window
+od.Hotlist:	h.Bitfields
+od.Hotlist:	h.Limits
+od.Hotlist:	h.Limits
+od.Hotlist:	h.FromROSLib
+od.Hotlist:	h.Utils
+od.Hotlist:	h.ChoiceDefs
+od.Hotlist:	h.FetchPage
+od.Hotlist:	h.Filetypes
+od.Hotlist:	h.Menus
+od.Hotlist:	h.Mouse
+od.Hotlist:	h.Multiuser
+od.Hotlist:	h.Protocols
+od.Hotlist:	h.Save
+od.Hotlist:	h.Toolbars
+od.Hotlist:	h.URLUtils
+od.Hotlist:	Libraries.URILib.h.URI
+od.Hotlist:	C:h.kernel
+od.Hotlist:	h.Windows
+od.Hotlist:	h.Hotlist
+od.Images:	c.Images
+od.Images:	C:h.swis
+od.Images:	C:h.kernel
+od.Images:	tbox:h.flex
+od.Images:	HTMLLib:h.HTMLLib
+od.Images:	HTMLLib:h.html2_ext
+od.Images:	HTMLLib:h.tablestruc
+od.Images:	HTMLLib:h.tags
+od.Images:	HTMLLib:h.struct
+od.Images:	HTMLLib:h.html2_ext
+od.Images:	tbox:h.wimp
+od.Images:	tbox:h.wimplib
+od.Images:	tbox:h.event
+od.Images:	tbox:h.toolbox
+od.Images:	tbox:h.toolbox
+od.Images:	h.svcprint
+od.Images:	h.Global
+od.Images:	HTMLLib:h.struct
+od.Images:	HTMLLib:h.tablestruc
+od.Images:	ImageLib:h.imagetrans
+od.Images:	C:h.setjmp
+od.Images:	tbox:h.window
+od.Images:	tbox:h.gadgets
+od.Images:	h.Bitfields
+od.Images:	h.Limits
+od.Images:	h.Limits
+od.Images:	h.FromROSLib
+od.Images:	h.MiscDefs
+od.Images:	h.Utils
+od.Images:	h.Browser
+od.Images:	h.Fetch
+od.Images:	h.URLstat
+od.Images:	h.FetchHTML
+od.Images:	h.FetchPage
+od.Images:	h.FontManage
+od.Images:	h.ImgHistory
+od.Images:	h.PrintStyle
+od.Images:	h.Protocols
+od.Images:	h.Redraw
+od.Images:	h.Reformat
+od.Images:	HTMLLib:h.HTMLLib
+od.Images:	h.Save
+od.Images:	h.SaveDraw
+od.Images:	h.TokenUtils
+od.Images:	h.Toolbars
+od.Images:	h.URLutils
+od.Images:	Libraries.URILib.h.URI
+od.Images:	C:h.kernel
+od.Images:	h.URLveneer
+od.Images:	h.Windows
+od.Images:	h.Images
+od.ImgHistory:	c.ImgHistory
+od.ImgHistory:	C:h.kernel
+od.ImgHistory:	C:h.swis
+od.ImgHistory:	tbox:h.flex
+od.ImgHistory:	tbox:h.wimp
+od.ImgHistory:	tbox:h.wimplib
+od.ImgHistory:	tbox:h.event
+od.ImgHistory:	tbox:h.toolbox
+od.ImgHistory:	tbox:h.toolbox
+od.ImgHistory:	h.svcprint
+od.ImgHistory:	h.Global
+od.ImgHistory:	HTMLLib:h.struct
+od.ImgHistory:	HTMLLib:h.html2_ext
+od.ImgHistory:	HTMLLib:h.tablestruc
+od.ImgHistory:	HTMLLib:h.tablestruc
+od.ImgHistory:	ImageLib:h.imagetrans
+od.ImgHistory:	C:h.setjmp
+od.ImgHistory:	tbox:h.window
+od.ImgHistory:	tbox:h.gadgets
+od.ImgHistory:	h.Bitfields
+od.ImgHistory:	h.Limits
+od.ImgHistory:	h.Limits
+od.ImgHistory:	h.Utils
+od.ImgHistory:	h.ChoiceDefs
+od.ImgHistory:	h.Images
+od.ImgHistory:	h.Save
+od.ImgHistory:	h.URLutils
+od.ImgHistory:	Libraries.URILib.h.URI
+od.ImgHistory:	C:h.kernel
+od.ImgHistory:	h.ImgHistory
+od.ItemInfo:	c.ItemInfo
+od.ItemInfo:	C:h.swis
+od.ItemInfo:	C:h.kernel
+od.ItemInfo:	C:h.kernel
+od.ItemInfo:	HTMLLib:h.HTMLLib
+od.ItemInfo:	HTMLLib:h.html2_ext
+od.ItemInfo:	HTMLLib:h.tablestruc
+od.ItemInfo:	HTMLLib:h.tags
+od.ItemInfo:	HTMLLib:h.struct
+od.ItemInfo:	HTMLLib:h.html2_ext
+od.ItemInfo:	tbox:h.wimp
+od.ItemInfo:	tbox:h.wimplib
+od.ItemInfo:	tbox:h.event
+od.ItemInfo:	tbox:h.toolbox
+od.ItemInfo:	tbox:h.toolbox
+od.ItemInfo:	tbox:h.window
+od.ItemInfo:	tbox:h.gadgets
+od.ItemInfo:	h.svcprint
+od.ItemInfo:	h.Global
+od.ItemInfo:	HTMLLib:h.struct
+od.ItemInfo:	HTMLLib:h.tablestruc
+od.ItemInfo:	ImageLib:h.imagetrans
+od.ItemInfo:	tbox:h.flex
+od.ItemInfo:	C:h.setjmp
+od.ItemInfo:	tbox:h.window
+od.ItemInfo:	h.Bitfields
+od.ItemInfo:	h.Limits
+od.ItemInfo:	h.Limits
+od.ItemInfo:	h.MiscDefs
+od.ItemInfo:	h.Utils
+od.ItemInfo:	h.Browser
+od.ItemInfo:	h.Fetch
+od.ItemInfo:	h.URLstat
+od.ItemInfo:	h.Forms
+od.ItemInfo:	h.Images
+od.ItemInfo:	h.Menus
+od.ItemInfo:	h.Object
+od.ItemInfo:	h.Reformat
+od.ItemInfo:	HTMLLib:h.HTMLLib
+od.ItemInfo:	h.Windows
+od.ItemInfo:	h.ItemInfo
+od.JavaScript:	c.JavaScript
+od.JavaScript:	C:h.swis
+od.JavaScript:	C:h.kernel
+od.JavaScript:	HTMLLib:h.HTMLLib
+od.JavaScript:	HTMLLib:h.html2_ext
+od.JavaScript:	HTMLLib:h.tablestruc
+od.JavaScript:	HTMLLib:h.tags
+od.JavaScript:	HTMLLib:h.struct
+od.JavaScript:	HTMLLib:h.html2_ext
+od.JavaScript:	tbox:h.wimp
+od.JavaScript:	tbox:h.wimplib
+od.JavaScript:	tbox:h.event
+od.JavaScript:	tbox:h.toolbox
+od.JavaScript:	h.svcprint
+od.JavaScript:	h.Global
+od.JavaScript:	HTMLLib:h.struct
+od.JavaScript:	HTMLLib:h.tablestruc
+od.JavaScript:	ImageLib:h.imagetrans
+od.JavaScript:	tbox:h.flex
+od.JavaScript:	C:h.setjmp
+od.JavaScript:	tbox:h.window
+od.JavaScript:	tbox:h.gadgets
+od.JavaScript:	h.Bitfields
+od.JavaScript:	h.Limits
+od.JavaScript:	h.Limits
+od.JavaScript:	h.Utils
+od.JavaScript:	h.Browser
+od.JavaScript:	h.FetchPage
+od.JavaScript:	h.Frames
+od.JavaScript:	h.LineOne
+od.JavaScript:	h.URLutils
+od.JavaScript:	Libraries.URILib.h.URI
+od.JavaScript:	C:h.kernel
+od.JavaScript:	h.JavaScript
+od.Main:	c.Main
+od.Main:	C:h.setjmp
+od.Main:	C:h.signal
+od.Main:	C:h.swis
+od.Main:	C:h.kernel
+od.Main:	C:h.kernel
+od.Main:	tbox:h.flex
+od.Main:	HTMLLib:h.HTMLLib
+od.Main:	HTMLLib:h.html2_ext
+od.Main:	HTMLLib:h.tablestruc
+od.Main:	HTMLLib:h.tags
+od.Main:	HTMLLib:h.struct
+od.Main:	HTMLLib:h.html2_ext
+od.Main:	Libraries.URILib.h.URI
+od.Main:	C:h.kernel
+od.Main:	tbox:h.wimp
+od.Main:	tbox:h.wimplib
+od.Main:	tbox:h.event
+od.Main:	tbox:h.toolbox
+od.Main:	tbox:h.toolbox
+od.Main:	tbox:h.quit
+od.Main:	tbox:h.window
+od.Main:	tbox:h.gadgets
+od.Main:	tbox:h.proginfo
+od.Main:	tbox:h.window
+od.Main:	tbox:h.menu
+od.Main:	tbox:h.saveas
+od.Main:	tbox:h.printdbox
+od.Main:	tbox:h.gadgets
+od.Main:	h.svcprint
+od.Main:	h.Global
+od.Main:	HTMLLib:h.struct
+od.Main:	HTMLLib:h.tablestruc
+od.Main:	ImageLib:h.imagetrans
+od.Main:	C:h.setjmp
+od.Main:	tbox:h.window
+od.Main:	h.Bitfields
+od.Main:	h.Limits
+od.Main:	h.Limits
+od.Main:	h.FromROSLib
+od.Main:	h.TBEvents
+od.Main:	C:h.kernel
+od.Main:	h.Toolbars
+od.Main:	h.Authorise
+od.Main:	h.SaveFile
+od.Main:	h.SaveObject
+od.Main:	h.Find
+od.Main:	h.OpenURL
+od.Main:	h.Printing
+od.Main:	h.PrintStyle
+od.Main:	h.Hotlist
+od.Main:	h.Choices
+od.Main:	h.ItemInfo
+od.Main:	h.Multiuser
+od.Main:	h.SetPBoxes
+od.Main:	h.Cookies
+od.Main:	h.Menus
+od.Main:	h.MiscEvents
+od.Main:	h.Trace
+od.Main:	h.Utils
+od.Main:	h.Browser
+od.Main:	h.ChoiceDefs
+od.Main:	h.CtrlDefs
+od.Main:	h.Encoding
+od.Main:	h.FontManage
+od.Main:	h.Handlers
+od.Main:	h.History
+od.Main:	h.ImgHistory
+od.Main:	h.Markers
+od.Main:	h.MiscDefs
+od.Main:	h.Mouse
+od.Main:	h.PlugIn
+od.Main:	h.Protocols
+od.Main:	h.RMA
+od.Main:	h.Save
+od.Main:	h.URLutils
+od.Main:	Libraries.URILib.h.URI
+od.Main:	h.Windows
+od.Main:	h.Main
+od.Markers:	c.Markers
+od.Markers:	C:h.swis
+od.Markers:	C:h.kernel
+od.Markers:	HTMLLib:h.HTMLLib
+od.Markers:	HTMLLib:h.html2_ext
+od.Markers:	HTMLLib:h.tablestruc
+od.Markers:	HTMLLib:h.tags
+od.Markers:	HTMLLib:h.struct
+od.Markers:	HTMLLib:h.html2_ext
+od.Markers:	tbox:h.wimp
+od.Markers:	tbox:h.wimplib
+od.Markers:	tbox:h.event
+od.Markers:	tbox:h.toolbox
+od.Markers:	tbox:h.gadgets
+od.Markers:	h.ToolAction
+od.Markers:	h.svcprint
+od.Markers:	h.Global
+od.Markers:	HTMLLib:h.struct
+od.Markers:	HTMLLib:h.tablestruc
+od.Markers:	ImageLib:h.imagetrans
+od.Markers:	tbox:h.flex
+od.Markers:	C:h.setjmp
+od.Markers:	tbox:h.window
+od.Markers:	h.Bitfields
+od.Markers:	h.Limits
+od.Markers:	h.Limits
+od.Markers:	h.Utils
+od.Markers:	h.Browser
+od.Markers:	h.MiscEvents
+od.Markers:	h.Toolbars
+od.Markers:	h.Windows
+od.Markers:	h.Markers
+od.Memory:	c.Memory
+od.Memory:	C:h.kernel
+od.Memory:	tbox:h.flex
+od.Memory:	tbox:h.wimp
+od.Memory:	tbox:h.event
+od.Memory:	tbox:h.toolbox
+od.Memory:	h.svcprint
+od.Memory:	h.Global
+od.Memory:	HTMLLib:h.struct
+od.Memory:	HTMLLib:h.html2_ext
+od.Memory:	HTMLLib:h.tablestruc
+od.Memory:	HTMLLib:h.tablestruc
+od.Memory:	ImageLib:h.imagetrans
+od.Memory:	C:h.setjmp
+od.Memory:	tbox:h.window
+od.Memory:	tbox:h.gadgets
+od.Memory:	h.Bitfields
+od.Memory:	h.Limits
+od.Memory:	h.Limits
+od.Memory:	h.Utils
+od.Memory:	h.Memory
+od.Menus:	c.Menus
+od.Menus:	C:h.swis
+od.Menus:	C:h.kernel
+od.Menus:	tbox:h.wimp
+od.Menus:	tbox:h.wimplib
+od.Menus:	tbox:h.event
+od.Menus:	tbox:h.toolbox
+od.Menus:	tbox:h.toolbox
+od.Menus:	tbox:h.window
+od.Menus:	tbox:h.gadgets
+od.Menus:	tbox:h.menu
+od.Menus:	h.svcprint
+od.Menus:	h.Global
+od.Menus:	HTMLLib:h.struct
+od.Menus:	HTMLLib:h.html2_ext
+od.Menus:	HTMLLib:h.tablestruc
+od.Menus:	HTMLLib:h.tablestruc
+od.Menus:	ImageLib:h.imagetrans
+od.Menus:	tbox:h.flex
+od.Menus:	C:h.setjmp
+od.Menus:	tbox:h.window
+od.Menus:	h.Bitfields
+od.Menus:	h.Limits
+od.Menus:	h.Limits
+od.Menus:	h.FromROSLib
+od.Menus:	h.MiscDefs
+od.Menus:	h.Utils
+od.Menus:	h.Browser
+od.Menus:	h.Choices
+od.Menus:	h.ChoiceDefs
+od.Menus:	h.Fetch
+od.Menus:	h.URLstat
+od.Menus:	h.FetchPage
+od.Menus:	h.Frames
+od.Menus:	h.Handlers
+od.Menus:	h.History
+od.Menus:	h.Hotlist
+od.Menus:	h.Images
+od.Menus:	h.ImgHistory
+od.Menus:	h.Markers
+od.Menus:	h.MiscEvents
+od.Menus:	h.Multiuser
+od.Menus:	h.Object
+od.Menus:	h.OpenURL
+od.Menus:	h.Reformat
+od.Menus:	HTMLLib:h.HTMLLib
+od.Menus:	HTMLLib:h.html2_ext
+od.Menus:	HTMLLib:h.tags
+od.Menus:	HTMLLib:h.struct
+od.Menus:	h.Save
+od.Menus:	h.Toolbars
+od.Menus:	h.URLutils
+od.Menus:	Libraries.URILib.h.URI
+od.Menus:	C:h.kernel
+od.Menus:	h.Windows
+od.Menus:	h.Menus
+od.Meta:	c.Meta
+od.Meta:	C:h.swis
+od.Meta:	C:h.kernel
+od.Meta:	tbox:h.flex
+od.Meta:	HTMLLib:h.HTMLLib
+od.Meta:	HTMLLib:h.html2_ext
+od.Meta:	HTMLLib:h.tablestruc
+od.Meta:	HTMLLib:h.tags
+od.Meta:	HTMLLib:h.struct
+od.Meta:	HTMLLib:h.html2_ext
+od.Meta:	tbox:h.wimp
+od.Meta:	tbox:h.wimplib
+od.Meta:	tbox:h.event
+od.Meta:	tbox:h.toolbox
+od.Meta:	h.svcprint
+od.Meta:	h.Global
+od.Meta:	HTMLLib:h.struct
+od.Meta:	HTMLLib:h.tablestruc
+od.Meta:	ImageLib:h.imagetrans
+od.Meta:	C:h.setjmp
+od.Meta:	tbox:h.window
+od.Meta:	tbox:h.gadgets
+od.Meta:	h.Bitfields
+od.Meta:	h.Limits
+od.Meta:	h.Limits
+od.Meta:	h.Utils
+od.Meta:	h.Browser
+od.Meta:	h.FetchPage
+od.Meta:	h.URLutils
+od.Meta:	Libraries.URILib.h.URI
+od.Meta:	C:h.kernel
+od.Meta:	h.Meta
+od.MimeMap:	c.MimeMap
+od.MimeMap:	C:h.swis
+od.MimeMap:	C:h.kernel
+od.MimeMap:	tbox:h.wimp
+od.MimeMap:	tbox:h.event
+od.MimeMap:	tbox:h.toolbox
+od.MimeMap:	h.svcprint
+od.MimeMap:	h.Global
+od.MimeMap:	HTMLLib:h.struct
+od.MimeMap:	HTMLLib:h.html2_ext
+od.MimeMap:	HTMLLib:h.tablestruc
+od.MimeMap:	HTMLLib:h.tablestruc
+od.MimeMap:	ImageLib:h.imagetrans
+od.MimeMap:	tbox:h.flex
+od.MimeMap:	C:h.setjmp
+od.MimeMap:	tbox:h.window
+od.MimeMap:	tbox:h.gadgets
+od.MimeMap:	h.Bitfields
+od.MimeMap:	h.Limits
+od.MimeMap:	h.Limits
+od.MimeMap:	h.Utils
+od.MimeMap:	h.MimeMap
+od.Mouse:	c.Mouse
+od.Mouse:	C:h.swis
+od.Mouse:	C:h.kernel
+od.Mouse:	C:h.kernel
+od.Mouse:	HTMLLib:h.HTMLLib
+od.Mouse:	HTMLLib:h.html2_ext
+od.Mouse:	HTMLLib:h.tablestruc
+od.Mouse:	HTMLLib:h.tags
+od.Mouse:	HTMLLib:h.struct
+od.Mouse:	HTMLLib:h.html2_ext
+od.Mouse:	tbox:h.wimp
+od.Mouse:	tbox:h.wimplib
+od.Mouse:	tbox:h.event
+od.Mouse:	tbox:h.toolbox
+od.Mouse:	tbox:h.toolbox
+od.Mouse:	h.svcprint
+od.Mouse:	h.Global
+od.Mouse:	HTMLLib:h.struct
+od.Mouse:	HTMLLib:h.tablestruc
+od.Mouse:	ImageLib:h.imagetrans
+od.Mouse:	tbox:h.flex
+od.Mouse:	C:h.setjmp
+od.Mouse:	tbox:h.window
+od.Mouse:	tbox:h.gadgets
+od.Mouse:	h.Bitfields
+od.Mouse:	h.Limits
+od.Mouse:	h.Limits
+od.Mouse:	h.Utils
+od.Mouse:	h.Handlers
+od.Mouse:	h.Mouse
+od.Multiuser:	c.Multiuser
+od.Multiuser:	C:h.swis
+od.Multiuser:	C:h.kernel
+od.Multiuser:	tbox:h.flex
+od.Multiuser:	tbox:h.wimp
+od.Multiuser:	tbox:h.wimplib
+od.Multiuser:	tbox:h.event
+od.Multiuser:	tbox:h.toolbox
+od.Multiuser:	tbox:h.toolbox
+od.Multiuser:	tbox:h.iconbar
+od.Multiuser:	tbox:h.window
+od.Multiuser:	tbox:h.gadgets
+od.Multiuser:	tbox:h.gadgets
+od.Multiuser:	h.svcprint
+od.Multiuser:	h.Global
+od.Multiuser:	HTMLLib:h.struct
+od.Multiuser:	HTMLLib:h.html2_ext
+od.Multiuser:	HTMLLib:h.tablestruc
+od.Multiuser:	HTMLLib:h.tablestruc
+od.Multiuser:	ImageLib:h.imagetrans
+od.Multiuser:	C:h.setjmp
+od.Multiuser:	tbox:h.window
+od.Multiuser:	h.Bitfields
+od.Multiuser:	h.Limits
+od.Multiuser:	h.Limits
+od.Multiuser:	h.Utils
+od.Multiuser:	h.Browser
+od.Multiuser:	h.ChoiceDefs
+od.Multiuser:	h.Fetch
+od.Multiuser:	h.URLstat
+od.Multiuser:	h.History
+od.Multiuser:	h.Hotlist
+od.Multiuser:	h.ImgHistory
+od.Multiuser:	h.Multiuser
+od.Multiuser:	h.URLutils
+od.Multiuser:	Libraries.URILib.h.URI
+od.Multiuser:	C:h.kernel
+od.Multiuser:	h.Multiuser
+od.Object:	c.Object
+od.Object:	C:h.swis
+od.Object:	C:h.kernel
+od.Object:	tbox:h.flex
+od.Object:	HTMLLib:h.HTMLLib
+od.Object:	HTMLLib:h.html2_ext
+od.Object:	HTMLLib:h.tablestruc
+od.Object:	HTMLLib:h.tags
+od.Object:	HTMLLib:h.struct
+od.Object:	HTMLLib:h.html2_ext
+od.Object:	tbox:h.wimp
+od.Object:	tbox:h.wimplib
+od.Object:	tbox:h.event
+od.Object:	tbox:h.toolbox
+od.Object:	tbox:h.toolbox
+od.Object:	h.svcprint
+od.Object:	h.Global
+od.Object:	HTMLLib:h.struct
+od.Object:	HTMLLib:h.tablestruc
+od.Object:	ImageLib:h.imagetrans
+od.Object:	C:h.setjmp
+od.Object:	tbox:h.window
+od.Object:	tbox:h.gadgets
+od.Object:	h.Bitfields
+od.Object:	h.Limits
+od.Object:	h.Limits
+od.Object:	h.FromROSLib
+od.Object:	h.Utils
+od.Object:	h.Browser
+od.Object:	h.ChoiceDefs
+od.Object:	h.Fetch
+od.Object:	h.URLstat
+od.Object:	h.FetchHTML
+od.Object:	h.Filetypes
+od.Object:	h.Images
+od.Object:	h.Memory
+od.Object:	h.MimeMap
+od.Object:	h.MiscDefs
+od.Object:	h.PlugIn
+od.Object:	h.Redraw
+od.Object:	h.Reformat
+od.Object:	HTMLLib:h.HTMLLib
+od.Object:	h.TokenUtils
+od.Object:	h.Toolbars
+od.Object:	h.URLveneer
+od.Object:	h.Object
+od.OpenURL:	c.OpenURL
+od.OpenURL:	C:h.swis
+od.OpenURL:	C:h.kernel
+od.OpenURL:	HTMLLib:h.HTMLLib
+od.OpenURL:	HTMLLib:h.html2_ext
+od.OpenURL:	HTMLLib:h.tablestruc
+od.OpenURL:	HTMLLib:h.tags
+od.OpenURL:	HTMLLib:h.struct
+od.OpenURL:	HTMLLib:h.html2_ext
+od.OpenURL:	tbox:h.wimp
+od.OpenURL:	tbox:h.wimplib
+od.OpenURL:	tbox:h.event
+od.OpenURL:	tbox:h.toolbox
+od.OpenURL:	tbox:h.toolbox
+od.OpenURL:	tbox:h.window
+od.OpenURL:	tbox:h.gadgets
+od.OpenURL:	h.svcprint
+od.OpenURL:	h.Global
+od.OpenURL:	HTMLLib:h.struct
+od.OpenURL:	HTMLLib:h.tablestruc
+od.OpenURL:	ImageLib:h.imagetrans
+od.OpenURL:	tbox:h.flex
+od.OpenURL:	C:h.setjmp
+od.OpenURL:	tbox:h.window
+od.OpenURL:	h.Bitfields
+od.OpenURL:	h.Limits
+od.OpenURL:	h.Limits
+od.OpenURL:	h.FromROSLib
+od.OpenURL:	h.MiscDefs
+od.OpenURL:	h.Utils
+od.OpenURL:	h.Browser
+od.OpenURL:	h.Fetch
+od.OpenURL:	h.URLstat
+od.OpenURL:	h.FetchPage
+od.OpenURL:	h.History
+od.OpenURL:	h.Hotlist
+od.OpenURL:	h.Menus
+od.OpenURL:	h.URLutils
+od.OpenURL:	Libraries.URILib.h.URI
+od.OpenURL:	C:h.kernel
+od.OpenURL:	h.Windows
+od.OpenURL:	h.OpenURL
+od.PlugIn:	c.PlugIn
+od.PlugIn:	C:h.swis
+od.PlugIn:	C:h.kernel
+od.PlugIn:	tbox:h.flex
+od.PlugIn:	HTMLLib:h.HTMLLib
+od.PlugIn:	HTMLLib:h.html2_ext
+od.PlugIn:	HTMLLib:h.tablestruc
+od.PlugIn:	HTMLLib:h.tags
+od.PlugIn:	HTMLLib:h.struct
+od.PlugIn:	HTMLLib:h.html2_ext
+od.PlugIn:	tbox:h.wimp
+od.PlugIn:	tbox:h.wimplib
+od.PlugIn:	tbox:h.event
+od.PlugIn:	tbox:h.toolbox
+od.PlugIn:	tbox:h.toolbox
+od.PlugIn:	h.svcprint
+od.PlugIn:	h.Global
+od.PlugIn:	HTMLLib:h.struct
+od.PlugIn:	HTMLLib:h.tablestruc
+od.PlugIn:	ImageLib:h.imagetrans
+od.PlugIn:	C:h.setjmp
+od.PlugIn:	tbox:h.window
+od.PlugIn:	tbox:h.gadgets
+od.PlugIn:	h.Bitfields
+od.PlugIn:	h.Limits
+od.PlugIn:	h.Limits
+od.PlugIn:	h.FromROSLib
+od.PlugIn:	h.Utils
+od.PlugIn:	h.Browser
+od.PlugIn:	h.Fetch
+od.PlugIn:	h.URLstat
+od.PlugIn:	h.FetchHTML
+od.PlugIn:	h.FetchPage
+od.PlugIn:	h.Filetypes
+od.PlugIn:	h.Frames
+od.PlugIn:	h.Handlers
+od.PlugIn:	h.Images
+od.PlugIn:	h.MimeMap
+od.PlugIn:	h.MiscDefs
+od.PlugIn:	h.Object
+od.PlugIn:	h.Protocols
+od.PlugIn:	h.Redraw
+od.PlugIn:	h.Reformat
+od.PlugIn:	HTMLLib:h.HTMLLib
+od.PlugIn:	h.RMA
+od.PlugIn:	h.TokenUtils
+od.PlugIn:	h.Toolbars
+od.PlugIn:	h.URLveneer
+od.PlugIn:	h.Windows
+od.PlugIn:	h.PlugIn
+od.Printing:	c.Printing
+od.Printing:	C:h.signal
+od.Printing:	C:h.swis
+od.Printing:	C:h.kernel
+od.Printing:	tbox:h.wimp
+od.Printing:	tbox:h.wimplib
+od.Printing:	tbox:h.event
+od.Printing:	tbox:h.toolbox
+od.Printing:	tbox:h.toolbox
+od.Printing:	tbox:h.printdbox
+od.Printing:	tbox:h.window
+od.Printing:	tbox:h.gadgets
+od.Printing:	h.svcprint
+od.Printing:	h.Global
+od.Printing:	HTMLLib:h.struct
+od.Printing:	HTMLLib:h.html2_ext
+od.Printing:	HTMLLib:h.tablestruc
+od.Printing:	HTMLLib:h.tablestruc
+od.Printing:	ImageLib:h.imagetrans
+od.Printing:	tbox:h.flex
+od.Printing:	C:h.setjmp
+od.Printing:	tbox:h.window
+od.Printing:	h.Bitfields
+od.Printing:	h.Limits
+od.Printing:	h.Limits
+od.Printing:	h.FromROSLib
+od.Printing:	h.Utils
+od.Printing:	h.Browser
+od.Printing:	h.FontManage
+od.Printing:	h.Images
+od.Printing:	h.Memory
+od.Printing:	h.Protocols
+od.Printing:	h.PrintStyle
+od.Printing:	h.Redraw
+od.Printing:	h.Reformat
+od.Printing:	HTMLLib:h.HTMLLib
+od.Printing:	HTMLLib:h.html2_ext
+od.Printing:	HTMLLib:h.tags
+od.Printing:	HTMLLib:h.struct
+od.Printing:	h.Toolaction
+od.Printing:	h.Toolbars
+od.Printing:	h.Windows
+od.Printing:	h.Printing
+od.PrintStyle:	c.PrintStyle
+od.PrintStyle:	C:h.swis
+od.PrintStyle:	C:h.kernel
+od.PrintStyle:	tbox:h.wimp
+od.PrintStyle:	tbox:h.wimplib
+od.PrintStyle:	tbox:h.event
+od.PrintStyle:	tbox:h.toolbox
+od.PrintStyle:	tbox:h.toolbox
+od.PrintStyle:	tbox:h.printdbox
+od.PrintStyle:	tbox:h.window
+od.PrintStyle:	tbox:h.gadgets
+od.PrintStyle:	tbox:h.window
+od.PrintStyle:	h.svcprint
+od.PrintStyle:	h.Global
+od.PrintStyle:	HTMLLib:h.struct
+od.PrintStyle:	HTMLLib:h.html2_ext
+od.PrintStyle:	HTMLLib:h.tablestruc
+od.PrintStyle:	HTMLLib:h.tablestruc
+od.PrintStyle:	ImageLib:h.imagetrans
+od.PrintStyle:	tbox:h.flex
+od.PrintStyle:	C:h.setjmp
+od.PrintStyle:	tbox:h.window
+od.PrintStyle:	h.Bitfields
+od.PrintStyle:	h.Limits
+od.PrintStyle:	h.Limits
+od.PrintStyle:	h.Utils
+od.PrintStyle:	h.Browser
+od.PrintStyle:	h.Menus
+od.PrintStyle:	h.Printing
+od.PrintStyle:	h.PrintStyle
+od.Protocols:	c.Protocols
+od.Protocols:	C:h.swis
+od.Protocols:	C:h.kernel
+od.Protocols:	C:h.kernel
+od.Protocols:	Libraries.URILib.h.URI
+od.Protocols:	C:h.kernel
+od.Protocols:	tbox:h.wimp
+od.Protocols:	tbox:h.wimplib
+od.Protocols:	tbox:h.event
+od.Protocols:	tbox:h.toolbox
+od.Protocols:	tbox:h.toolbox
+od.Protocols:	h.svcprint
+od.Protocols:	h.Global
+od.Protocols:	HTMLLib:h.struct
+od.Protocols:	HTMLLib:h.html2_ext
+od.Protocols:	HTMLLib:h.tablestruc
+od.Protocols:	HTMLLib:h.tablestruc
+od.Protocols:	ImageLib:h.imagetrans
+od.Protocols:	tbox:h.flex
+od.Protocols:	C:h.setjmp
+od.Protocols:	tbox:h.window
+od.Protocols:	tbox:h.gadgets
+od.Protocols:	h.Bitfields
+od.Protocols:	h.Limits
+od.Protocols:	h.Limits
+od.Protocols:	h.MiscDefs
+od.Protocols:	h.Utils
+od.Protocols:	h.Browser
+od.Protocols:	h.ChoiceDefs
+od.Protocols:	h.FetchPage
+od.Protocols:	h.Filetypes
+od.Protocols:	h.History
+od.Protocols:	h.Hotlist
+od.Protocols:	h.Images
+od.Protocols:	h.MimeMap
+od.Protocols:	h.Printing
+od.Protocols:	h.Save
+od.Protocols:	h.SaveDraw
+od.Protocols:	h.SaveFile
+od.Protocols:	h.SaveObject
+od.Protocols:	h.SaveText
+od.Protocols:	h.Toolbars
+od.Protocols:	h.URLutils
+od.Protocols:	Libraries.URILib.h.URI
+od.Protocols:	h.Windows
+od.Protocols:	h.Protocols
+od.Protocols:	h.Trace
+od.Redraw:	c.Redraw
+od.Redraw:	C:h.swis
+od.Redraw:	C:h.kernel
+od.Redraw:	tbox:h.flex
+od.Redraw:	HTMLLib:h.HTMLLib
+od.Redraw:	HTMLLib:h.html2_ext
+od.Redraw:	HTMLLib:h.tablestruc
+od.Redraw:	HTMLLib:h.tags
+od.Redraw:	HTMLLib:h.struct
+od.Redraw:	HTMLLib:h.html2_ext
+od.Redraw:	tbox:h.wimp
+od.Redraw:	tbox:h.wimplib
+od.Redraw:	tbox:h.event
+od.Redraw:	tbox:h.toolbox
+od.Redraw:	h.svcprint
+od.Redraw:	h.Global
+od.Redraw:	HTMLLib:h.struct
+od.Redraw:	HTMLLib:h.tablestruc
+od.Redraw:	ImageLib:h.imagetrans
+od.Redraw:	C:h.setjmp
+od.Redraw:	tbox:h.window
+od.Redraw:	tbox:h.gadgets
+od.Redraw:	h.Bitfields
+od.Redraw:	h.Limits
+od.Redraw:	h.Limits
+od.Redraw:	h.FromROSLib
+od.Redraw:	h.MiscDefs
+od.Redraw:	h.Utils
+od.Redraw:	h.Browser
+od.Redraw:	h.ChoiceDefs
+od.Redraw:	h.CSIM
+od.Redraw:	h.Fetch
+od.Redraw:	h.URLstat
+od.Redraw:	h.FontManage
+od.Redraw:	h.Forms
+od.Redraw:	h.Frames
+od.Redraw:	h.Images
+od.Redraw:	h.Object
+od.Redraw:	h.Printing
+od.Redraw:	h.PrintStyle
+od.Redraw:	h.Reformat
+od.Redraw:	HTMLLib:h.HTMLLib
+od.Redraw:	h.Tables
+od.Redraw:	h.TokenUtils
+od.Redraw:	h.Toolbars
+od.Redraw:	h.Redraw
+od.RMA:	c.RMA
+od.RMA:	C:h.swis
+od.RMA:	C:h.kernel
+od.RMA:	tbox:h.wimp
+od.RMA:	tbox:h.wimplib
+od.RMA:	tbox:h.event
+od.RMA:	tbox:h.toolbox
+od.RMA:	h.svcprint
+od.RMA:	h.Global
+od.RMA:	HTMLLib:h.struct
+od.RMA:	HTMLLib:h.html2_ext
+od.RMA:	HTMLLib:h.tablestruc
+od.RMA:	HTMLLib:h.tablestruc
+od.RMA:	ImageLib:h.imagetrans
+od.RMA:	tbox:h.flex
+od.RMA:	C:h.setjmp
+od.RMA:	tbox:h.window
+od.RMA:	tbox:h.gadgets
+od.RMA:	h.Bitfields
+od.RMA:	h.Limits
+od.RMA:	h.Limits
+od.RMA:	h.Utils
+od.RMA:	h.RMA
+od.Save:	c.Save
+od.Save:	C:h.swis
+od.Save:	C:h.kernel
+od.Save:	tbox:h.flex
+od.Save:	HTMLLib:h.HTMLLib
+od.Save:	HTMLLib:h.html2_ext
+od.Save:	HTMLLib:h.tablestruc
+od.Save:	HTMLLib:h.tags
+od.Save:	HTMLLib:h.struct
+od.Save:	HTMLLib:h.html2_ext
+od.Save:	tbox:h.wimp
+od.Save:	tbox:h.wimplib
+od.Save:	tbox:h.event
+od.Save:	tbox:h.toolbox
+od.Save:	tbox:h.toolbox
+od.Save:	tbox:h.window
+od.Save:	tbox:h.gadgets
+od.Save:	tbox:h.menu
+od.Save:	tbox:h.saveas
+od.Save:	h.svcprint
+od.Save:	h.Global
+od.Save:	HTMLLib:h.struct
+od.Save:	HTMLLib:h.tablestruc
+od.Save:	ImageLib:h.imagetrans
+od.Save:	C:h.setjmp
+od.Save:	tbox:h.window
+od.Save:	h.Bitfields
+od.Save:	h.Limits
+od.Save:	h.Limits
+od.Save:	h.Utils
+od.Save:	h.ChoiceDefs
+od.Save:	h.Fetch
+od.Save:	h.URLstat
+od.Save:	h.Filetypes
+od.Save:	h.Fontmanage
+od.Save:	h.Hotlist
+od.Save:	h.Protocols
+od.Save:	h.URLutils
+od.Save:	Libraries.URILib.h.URI
+od.Save:	C:h.kernel
+od.Save:	h.Save
+od.SaveDraw:	c.SaveDraw
+od.SaveDraw:	C:h.swis
+od.SaveDraw:	C:h.kernel
+od.SaveDraw:	tbox:h.flex
+od.SaveDraw:	HTMLLib:h.HTMLLib
+od.SaveDraw:	HTMLLib:h.html2_ext
+od.SaveDraw:	HTMLLib:h.tablestruc
+od.SaveDraw:	HTMLLib:h.tags
+od.SaveDraw:	HTMLLib:h.struct
+od.SaveDraw:	HTMLLib:h.html2_ext
+od.SaveDraw:	tbox:h.wimp
+od.SaveDraw:	tbox:h.wimplib
+od.SaveDraw:	tbox:h.event
+od.SaveDraw:	tbox:h.toolbox
+od.SaveDraw:	h.svcprint
+od.SaveDraw:	h.Global
+od.SaveDraw:	HTMLLib:h.struct
+od.SaveDraw:	HTMLLib:h.tablestruc
+od.SaveDraw:	ImageLib:h.imagetrans
+od.SaveDraw:	C:h.setjmp
+od.SaveDraw:	tbox:h.window
+od.SaveDraw:	tbox:h.gadgets
+od.SaveDraw:	h.Bitfields
+od.SaveDraw:	h.Limits
+od.SaveDraw:	h.Limits
+od.SaveDraw:	h.FromROSLib
+od.SaveDraw:	h.MiscDefs
+od.SaveDraw:	h.Utils
+od.SaveDraw:	h.Browser
+od.SaveDraw:	h.ChoiceDefs
+od.SaveDraw:	h.CSIM
+od.SaveDraw:	h.Fetch
+od.SaveDraw:	h.URLstat
+od.SaveDraw:	h.FileTypes
+od.SaveDraw:	h.FontManage
+od.SaveDraw:	h.Forms
+od.SaveDraw:	h.Frames
+od.SaveDraw:	h.Images
+od.SaveDraw:	h.Object
+od.SaveDraw:	h.Printing
+od.SaveDraw:	h.PrintStyle
+od.SaveDraw:	h.Redraw
+od.SaveDraw:	h.Reformat
+od.SaveDraw:	HTMLLib:h.HTMLLib
+od.SaveDraw:	h.Save
+od.SaveDraw:	h.Tables
+od.SaveDraw:	h.TokenUtils
+od.SaveDraw:	h.Toolbars
+od.SaveDraw:	h.SaveDraw
+od.SaveFile:	c.SaveFile
+od.SaveFile:	C:h.swis
+od.SaveFile:	C:h.kernel
+od.SaveFile:	HTMLLib:h.HTMLLib
+od.SaveFile:	HTMLLib:h.html2_ext
+od.SaveFile:	HTMLLib:h.tablestruc
+od.SaveFile:	HTMLLib:h.tags
+od.SaveFile:	HTMLLib:h.struct
+od.SaveFile:	HTMLLib:h.html2_ext
+od.SaveFile:	tbox:h.wimp
+od.SaveFile:	tbox:h.wimplib
+od.SaveFile:	tbox:h.event
+od.SaveFile:	tbox:h.toolbox
+od.SaveFile:	tbox:h.toolbox
+od.SaveFile:	tbox:h.window
+od.SaveFile:	tbox:h.gadgets
+od.SaveFile:	tbox:h.gadgets
+od.SaveFile:	h.svcprint
+od.SaveFile:	h.Global
+od.SaveFile:	HTMLLib:h.struct
+od.SaveFile:	HTMLLib:h.tablestruc
+od.SaveFile:	ImageLib:h.imagetrans
+od.SaveFile:	tbox:h.flex
+od.SaveFile:	C:h.setjmp
+od.SaveFile:	tbox:h.window
+od.SaveFile:	h.Bitfields
+od.SaveFile:	h.Limits
+od.SaveFile:	h.Limits
+od.SaveFile:	h.MiscDefs
+od.SaveFile:	h.Utils
+od.SaveFile:	h.Browser
+od.SaveFile:	h.Fetch
+od.SaveFile:	h.URLstat
+od.SaveFile:	h.Filetypes
+od.SaveFile:	h.History
+od.SaveFile:	h.Hotlist
+od.SaveFile:	h.Images
+od.SaveFile:	h.Menus
+od.SaveFile:	h.MimeMap
+od.SaveFile:	h.Object
+od.SaveFile:	h.Protocols
+od.SaveFile:	h.Save
+od.SaveFile:	h.SaveDraw
+od.SaveFile:	h.SaveText
+od.SaveFile:	h.Toolbars
+od.SaveFile:	h.URLutils
+od.SaveFile:	Libraries.URILib.h.URI
+od.SaveFile:	C:h.kernel
+od.SaveFile:	h.Windows
+od.SaveFile:	h.SaveFile
+od.SaveObject:	c.SaveObject
+od.SaveObject:	C:h.swis
+od.SaveObject:	C:h.kernel
+od.SaveObject:	HTMLLib:h.HTMLLib
+od.SaveObject:	HTMLLib:h.html2_ext
+od.SaveObject:	HTMLLib:h.tablestruc
+od.SaveObject:	HTMLLib:h.tags
+od.SaveObject:	HTMLLib:h.struct
+od.SaveObject:	HTMLLib:h.html2_ext
+od.SaveObject:	tbox:h.wimp
+od.SaveObject:	tbox:h.wimplib
+od.SaveObject:	tbox:h.event
+od.SaveObject:	tbox:h.toolbox
+od.SaveObject:	tbox:h.toolbox
+od.SaveObject:	tbox:h.window
+od.SaveObject:	tbox:h.gadgets
+od.SaveObject:	tbox:h.gadgets
+od.SaveObject:	h.svcprint
+od.SaveObject:	h.Global
+od.SaveObject:	HTMLLib:h.struct
+od.SaveObject:	HTMLLib:h.tablestruc
+od.SaveObject:	ImageLib:h.imagetrans
+od.SaveObject:	tbox:h.flex
+od.SaveObject:	C:h.setjmp
+od.SaveObject:	tbox:h.window
+od.SaveObject:	h.Bitfields
+od.SaveObject:	h.Limits
+od.SaveObject:	h.Limits
+od.SaveObject:	h.Utils
+od.SaveObject:	h.Browser
+od.SaveObject:	h.Fetch
+od.SaveObject:	h.URLstat
+od.SaveObject:	h.Protocols
+od.SaveObject:	h.Save
+od.SaveObject:	h.SaveFile
+od.SaveObject:	h.Windows
+od.SaveObject:	h.SaveObject
+od.SaveText:	c.SaveText
+od.SaveText:	C:h.swis
+od.SaveText:	C:h.kernel
+od.SaveText:	tbox:h.flex
+od.SaveText:	HTMLLib:h.HTMLLib
+od.SaveText:	HTMLLib:h.html2_ext
+od.SaveText:	HTMLLib:h.tablestruc
+od.SaveText:	HTMLLib:h.tags
+od.SaveText:	HTMLLib:h.struct
+od.SaveText:	HTMLLib:h.html2_ext
+od.SaveText:	tbox:h.wimp
+od.SaveText:	tbox:h.wimplib
+od.SaveText:	tbox:h.event
+od.SaveText:	tbox:h.toolbox
+od.SaveText:	h.svcprint
+od.SaveText:	h.Global
+od.SaveText:	HTMLLib:h.struct
+od.SaveText:	HTMLLib:h.tablestruc
+od.SaveText:	ImageLib:h.imagetrans
+od.SaveText:	C:h.setjmp
+od.SaveText:	tbox:h.window
+od.SaveText:	tbox:h.gadgets
+od.SaveText:	h.Bitfields
+od.SaveText:	h.Limits
+od.SaveText:	h.Limits
+od.SaveText:	h.FromROSLib
+od.SaveText:	h.Utils
+od.SaveText:	h.Fetch
+od.SaveText:	h.URLstat
+od.SaveText:	h.Filetypes
+od.SaveText:	h.Forms
+od.SaveText:	h.Protocols
+od.SaveText:	h.Reformat
+od.SaveText:	HTMLLib:h.HTMLLib
+od.SaveText:	h.Save
+od.SaveText:	h.SaveObject
+od.SaveText:	h.SaveText
+od.SetPBoxes:	c.SetPBoxes
+od.SetPBoxes:	C:h.swis
+od.SetPBoxes:	C:h.kernel
+od.SetPBoxes:	tbox:h.wimp
+od.SetPBoxes:	tbox:h.wimplib
+od.SetPBoxes:	tbox:h.event
+od.SetPBoxes:	tbox:h.toolbox
+od.SetPBoxes:	tbox:h.toolbox
+od.SetPBoxes:	tbox:h.window
+od.SetPBoxes:	tbox:h.gadgets
+od.SetPBoxes:	h.svcprint
+od.SetPBoxes:	h.Global
+od.SetPBoxes:	HTMLLib:h.struct
+od.SetPBoxes:	HTMLLib:h.html2_ext
+od.SetPBoxes:	HTMLLib:h.tablestruc
+od.SetPBoxes:	HTMLLib:h.tablestruc
+od.SetPBoxes:	ImageLib:h.imagetrans
+od.SetPBoxes:	tbox:h.flex
+od.SetPBoxes:	C:h.setjmp
+od.SetPBoxes:	tbox:h.window
+od.SetPBoxes:	h.Bitfields
+od.SetPBoxes:	h.Limits
+od.SetPBoxes:	h.Limits
+od.SetPBoxes:	h.Utils
+od.SetPBoxes:	h.Multiuser
+od.SetPBoxes:	h.Save
+od.SetPBoxes:	h.SetPBoxes
+od.Tables:	c.Tables
+od.Tables:	C:h.swis
+od.Tables:	C:h.kernel
+od.Tables:	HTMLLib:h.HTMLLib
+od.Tables:	HTMLLib:h.html2_ext
+od.Tables:	HTMLLib:h.tablestruc
+od.Tables:	HTMLLib:h.tags
+od.Tables:	HTMLLib:h.struct
+od.Tables:	HTMLLib:h.html2_ext
+od.Tables:	tbox:h.wimp
+od.Tables:	tbox:h.wimplib
+od.Tables:	tbox:h.event
+od.Tables:	tbox:h.toolbox
+od.Tables:	tbox:h.toolbox
+od.Tables:	h.svcprint
+od.Tables:	h.Global
+od.Tables:	HTMLLib:h.struct
+od.Tables:	HTMLLib:h.tablestruc
+od.Tables:	ImageLib:h.imagetrans
+od.Tables:	tbox:h.flex
+od.Tables:	C:h.setjmp
+od.Tables:	tbox:h.window
+od.Tables:	tbox:h.gadgets
+od.Tables:	h.Bitfields
+od.Tables:	h.Limits
+od.Tables:	h.Limits
+od.Tables:	h.FromROSLib
+od.Tables:	h.MiscDefs
+od.Tables:	h.Utils
+od.Tables:	h.Memory
+od.Tables:	h.Redraw
+od.Tables:	h.Reformat
+od.Tables:	HTMLLib:h.HTMLLib
+od.Tables:	h.TokenUtils
+od.Tables:	h.Toolbars
+od.Tables:	h.Tables
+od.TokenUtils:	c.TokenUtils
+od.TokenUtils:	HTMLLib:h.HTMLLib
+od.TokenUtils:	HTMLLib:h.html2_ext
+od.TokenUtils:	HTMLLib:h.tablestruc
+od.TokenUtils:	HTMLLib:h.tags
+od.TokenUtils:	HTMLLib:h.struct
+od.TokenUtils:	HTMLLib:h.html2_ext
+od.TokenUtils:	tbox:h.wimp
+od.TokenUtils:	tbox:h.wimplib
+od.TokenUtils:	C:h.kernel
+od.TokenUtils:	tbox:h.event
+od.TokenUtils:	tbox:h.toolbox
+od.TokenUtils:	C:h.swis
+od.TokenUtils:	C:h.kernel
+od.TokenUtils:	tbox:h.toolbox
+od.TokenUtils:	tbox:h.event
+od.TokenUtils:	h.svcprint
+od.TokenUtils:	h.Global
+od.TokenUtils:	HTMLLib:h.struct
+od.TokenUtils:	HTMLLib:h.tablestruc
+od.TokenUtils:	ImageLib:h.imagetrans
+od.TokenUtils:	tbox:h.flex
+od.TokenUtils:	C:h.setjmp
+od.TokenUtils:	tbox:h.window
+od.TokenUtils:	tbox:h.gadgets
+od.TokenUtils:	h.Bitfields
+od.TokenUtils:	h.Limits
+od.TokenUtils:	h.Limits
+od.TokenUtils:	h.MiscDefs
+od.TokenUtils:	h.Utils
+od.TokenUtils:	h.Redraw
+od.TokenUtils:	h.TokenUtils
+od.Toolbars:	c.Toolbars
+od.Toolbars:	C:h.swis
+od.Toolbars:	C:h.kernel
+od.Toolbars:	tbox:h.flex
+od.Toolbars:	tbox:h.wimp
+od.Toolbars:	tbox:h.wimplib
+od.Toolbars:	tbox:h.event
+od.Toolbars:	tbox:h.toolbox
+od.Toolbars:	tbox:h.toolbox
+od.Toolbars:	tbox:h.window
+od.Toolbars:	tbox:h.gadgets
+od.Toolbars:	tbox:h.gadgets
+od.Toolbars:	h.Dialler
+od.Toolbars:	C:h.kernel
+od.Toolbars:	h.svcprint
+od.Toolbars:	h.Global
+od.Toolbars:	HTMLLib:h.struct
+od.Toolbars:	HTMLLib:h.html2_ext
+od.Toolbars:	HTMLLib:h.tablestruc
+od.Toolbars:	HTMLLib:h.tablestruc
+od.Toolbars:	ImageLib:h.imagetrans
+od.Toolbars:	C:h.setjmp
+od.Toolbars:	tbox:h.window
+od.Toolbars:	h.Bitfields
+od.Toolbars:	h.Limits
+od.Toolbars:	h.Limits
+od.Toolbars:	h.Utils
+od.Toolbars:	h.Browser
+od.Toolbars:	h.ChoiceDefs
+od.Toolbars:	h.CSIM
+od.Toolbars:	h.CtrlDefs
+od.Toolbars:	h.Fetch
+od.Toolbars:	h.URLstat
+od.Toolbars:	h.Handlers
+od.Toolbars:	h.History
+od.Toolbars:	h.Images
+od.Toolbars:	h.Memory
+od.Toolbars:	h.Mouse
+od.Toolbars:	h.Reformat
+od.Toolbars:	HTMLLib:h.HTMLLib
+od.Toolbars:	HTMLLib:h.html2_ext
+od.Toolbars:	HTMLLib:h.tags
+od.Toolbars:	HTMLLib:h.struct
+od.Toolbars:	h.URLutils
+od.Toolbars:	Libraries.URILib.h.URI
+od.Toolbars:	C:h.kernel
+od.Toolbars:	h.URLveneer
+od.Toolbars:	h.Toolbars
+od.Trace:	c.Trace
+od.Trace:	C:h.swis
+od.Trace:	C:h.kernel
+od.Trace:	HTMLLib:h.HTMLLib
+od.Trace:	HTMLLib:h.html2_ext
+od.Trace:	HTMLLib:h.tablestruc
+od.Trace:	HTMLLib:h.tags
+od.Trace:	HTMLLib:h.struct
+od.Trace:	HTMLLib:h.html2_ext
+od.Trace:	tbox:h.wimp
+od.Trace:	tbox:h.wimplib
+od.Trace:	tbox:h.event
+od.Trace:	tbox:h.toolbox
+od.Trace:	h.svcprint
+od.Trace:	h.Global
+od.Trace:	HTMLLib:h.struct
+od.Trace:	HTMLLib:h.tablestruc
+od.Trace:	ImageLib:h.imagetrans
+od.Trace:	tbox:h.flex
+od.Trace:	C:h.setjmp
+od.Trace:	tbox:h.window
+od.Trace:	tbox:h.gadgets
+od.Trace:	h.Bitfields
+od.Trace:	h.Limits
+od.Trace:	h.Limits
+od.Trace:	h.MiscDefs
+od.Trace:	h.Utils
+od.Trace:	h.Trace
+od.Unifont:	c.Unifont
+od.Unifont:	C:h.swis
+od.Unifont:	C:h.kernel
+od.Unifont:	C:Unicode.h.iso10646
+od.Unifont:	C:Unicode.h.utf8
+od.Unifont:	C:Unicode.h.iso10646
+od.Unifont:	tbox:h.event
+od.Unifont:	tbox:h.wimp
+od.Unifont:	tbox:h.toolbox
+od.Unifont:	tbox:h.toolbox
+od.Unifont:	h.Global
+od.Unifont:	HTMLLib:h.struct
+od.Unifont:	HTMLLib:h.html2_ext
+od.Unifont:	HTMLLib:h.tablestruc
+od.Unifont:	HTMLLib:h.tablestruc
+od.Unifont:	ImageLib:h.imagetrans
+od.Unifont:	tbox:h.flex
+od.Unifont:	C:h.setjmp
+od.Unifont:	tbox:h.window
+od.Unifont:	tbox:h.gadgets
+od.Unifont:	h.Bitfields
+od.Unifont:	h.Limits
+od.Unifont:	h.Limits
+od.Unifont:	h.FromROSLib
+od.Unifont:	h.Utils
+od.Unifont:	h.Unifont
+od.URLstat:	c.URLstat
+od.URLstat:	HTMLLib:h.HTMLLib
+od.URLstat:	HTMLLib:h.html2_ext
+od.URLstat:	HTMLLib:h.tablestruc
+od.URLstat:	HTMLLib:h.tags
+od.URLstat:	HTMLLib:h.struct
+od.URLstat:	HTMLLib:h.html2_ext
+od.URLstat:	tbox:h.wimp
+od.URLstat:	tbox:h.event
+od.URLstat:	tbox:h.toolbox
+od.URLstat:	C:h.kernel
+od.URLstat:	h.svcprint
+od.URLstat:	h.Global
+od.URLstat:	HTMLLib:h.struct
+od.URLstat:	HTMLLib:h.tablestruc
+od.URLstat:	ImageLib:h.imagetrans
+od.URLstat:	tbox:h.flex
+od.URLstat:	C:h.setjmp
+od.URLstat:	tbox:h.window
+od.URLstat:	tbox:h.gadgets
+od.URLstat:	h.Bitfields
+od.URLstat:	h.Limits
+od.URLstat:	h.Limits
+od.URLstat:	h.Utils
+od.URLstat:	h.URLstat
+od.URLutils:	c.URLutils
+od.URLutils:	C:h.swis
+od.URLutils:	C:h.kernel
+od.URLutils:	Libraries.URILib.h.URI
+od.URLutils:	C:h.kernel
+od.URLutils:	tbox:h.wimp
+od.URLutils:	tbox:h.event
+od.URLutils:	tbox:h.toolbox
+od.URLutils:	h.svcprint
+od.URLutils:	h.Global
+od.URLutils:	HTMLLib:h.struct
+od.URLutils:	HTMLLib:h.html2_ext
+od.URLutils:	HTMLLib:h.tablestruc
+od.URLutils:	HTMLLib:h.tablestruc
+od.URLutils:	ImageLib:h.imagetrans
+od.URLutils:	tbox:h.flex
+od.URLutils:	C:h.setjmp
+od.URLutils:	tbox:h.window
+od.URLutils:	tbox:h.gadgets
+od.URLutils:	h.Bitfields
+od.URLutils:	h.Limits
+od.URLutils:	h.Limits
+od.URLutils:	h.Utils
+od.URLutils:	h.Fetch
+od.URLutils:	h.URLstat
+od.URLutils:	h.Filetypes
+od.URLutils:	h.MimeMap
+od.URLutils:	h.URLveneer
+od.URLutils:	h.URLutils
+od.URLutils:	Libraries.URILib.h.URI
+od.URLveneer:	c.URLveneer
+od.URLveneer:	C:h.swis
+od.URLveneer:	C:h.kernel
+od.URLveneer:	tbox:h.wimp
+od.URLveneer:	tbox:h.event
+od.URLveneer:	tbox:h.toolbox
+od.URLveneer:	h.svcprint
+od.URLveneer:	h.Global
+od.URLveneer:	HTMLLib:h.struct
+od.URLveneer:	HTMLLib:h.html2_ext
+od.URLveneer:	HTMLLib:h.tablestruc
+od.URLveneer:	HTMLLib:h.tablestruc
+od.URLveneer:	ImageLib:h.imagetrans
+od.URLveneer:	tbox:h.flex
+od.URLveneer:	C:h.setjmp
+od.URLveneer:	tbox:h.window
+od.URLveneer:	tbox:h.gadgets
+od.URLveneer:	h.Bitfields
+od.URLveneer:	h.Limits
+od.URLveneer:	h.Limits
+od.URLveneer:	h.Utils
+od.URLveneer:	h.URLutils
+od.URLveneer:	Libraries.URILib.h.URI
+od.URLveneer:	C:h.kernel
+od.URLveneer:	h.URLveneer
+od.Utils:	c.Utils
+od.Utils:	C:h.setjmp
+od.Utils:	HTMLLib:h.HTMLLib
+od.Utils:	HTMLLib:h.html2_ext
+od.Utils:	HTMLLib:h.tablestruc
+od.Utils:	HTMLLib:h.tags
+od.Utils:	HTMLLib:h.struct
+od.Utils:	HTMLLib:h.html2_ext
+od.Utils:	tbox:h.wimp
+od.Utils:	tbox:h.wimplib
+od.Utils:	C:h.kernel
+od.Utils:	tbox:h.event
+od.Utils:	tbox:h.toolbox
+od.Utils:	C:h.swis
+od.Utils:	C:h.kernel
+od.Utils:	tbox:h.toolbox
+od.Utils:	tbox:h.event
+od.Utils:	tbox:h.quit
+od.Utils:	tbox:h.window
+od.Utils:	tbox:h.gadgets
+od.Utils:	tbox:h.proginfo
+od.Utils:	tbox:h.window
+od.Utils:	tbox:h.gadgets
+od.Utils:	h.ToolAction
+od.Utils:	h.svcprint
+od.Utils:	h.Global
+od.Utils:	HTMLLib:h.struct
+od.Utils:	HTMLLib:h.tablestruc
+od.Utils:	ImageLib:h.imagetrans
+od.Utils:	tbox:h.flex
+od.Utils:	C:h.setjmp
+od.Utils:	tbox:h.window
+od.Utils:	h.Bitfields
+od.Utils:	h.Limits
+od.Utils:	h.Limits
+od.Utils:	h.MiscDefs
+od.Utils:	h.FromROSLib
+od.Utils:	h.Main
+od.Utils:	h.NestWimp
+od.Utils:	h.Save
+od.Utils:	h.Toolbars
+od.Utils:	h.Utils
+o.About:	c.About
+o.About:	C:h.kernel
+o.About:	C:h.swis
+o.About:	tbox:h.flex
+o.About:	tbox:h.wimp
+o.About:	tbox:h.wimplib
+o.About:	tbox:h.event
+o.About:	tbox:h.toolbox
+o.About:	tbox:h.toolbox
+o.About:	tbox:h.window
+o.About:	tbox:h.gadgets
+o.About:	tbox:h.gadgets
+o.About:	h.svcprint
+o.About:	h.Global
+o.About:	HTMLLib:h.struct
+o.About:	HTMLLib:h.html2_ext
+o.About:	HTMLLib:h.tablestruc
+o.About:	HTMLLib:h.tablestruc
+o.About:	ImageLib:h.imagetrans
+o.About:	C:h.setjmp
+o.About:	tbox:h.window
+o.About:	h.Bitfields
+o.About:	h.Limits
+o.About:	h.Limits
+o.About:	h.Utils
+o.Authorise:	c.Authorise
+o.Authorise:	tbox:h.flex
+o.Authorise:	tbox:h.wimp
+o.Authorise:	tbox:h.wimplib
+o.Authorise:	C:h.kernel
+o.Authorise:	tbox:h.event
+o.Authorise:	tbox:h.toolbox
+o.Authorise:	tbox:h.toolbox
+o.Authorise:	tbox:h.window
+o.Authorise:	tbox:h.gadgets
+o.Authorise:	tbox:h.gadgets
+o.Authorise:	h.svcprint
+o.Authorise:	h.Global
+o.Authorise:	HTMLLib:h.struct
+o.Authorise:	HTMLLib:h.html2_ext
+o.Authorise:	HTMLLib:h.tablestruc
+o.Authorise:	HTMLLib:h.tablestruc
+o.Authorise:	ImageLib:h.imagetrans
+o.Authorise:	C:h.setjmp
+o.Authorise:	tbox:h.window
+o.Authorise:	h.Bitfields
+o.Authorise:	h.Limits
+o.Authorise:	h.Limits
+o.Authorise:	h.Utils
+o.Authorise:	h.Browser
+o.Authorise:	h.Fetch
+o.Authorise:	h.URLstat
+o.Authorise:	h.Toolbars
+o.Authorise:	h.URLutils
+o.Authorise:	Libraries.URILib.h.URI
+o.Authorise:	C:h.kernel
+o.Authorise:	h.Windows
+o.Authorise:	h.Authorise
+o.Choices:	c.Choices
+o.Choices:	C:h.swis
+o.Choices:	C:h.kernel
+o.Choices:	HTMLLib:h.HTMLLib
+o.Choices:	HTMLLib:h.html2_ext
+o.Choices:	HTMLLib:h.tablestruc
+o.Choices:	HTMLLib:h.tags
+o.Choices:	HTMLLib:h.struct
+o.Choices:	HTMLLib:h.html2_ext
+o.Choices:	tbox:h.wimp
+o.Choices:	tbox:h.wimplib
+o.Choices:	tbox:h.event
+o.Choices:	tbox:h.toolbox
+o.Choices:	tbox:h.toolbox
+o.Choices:	tbox:h.window
+o.Choices:	tbox:h.gadgets
+o.Choices:	tbox:h.menu
+o.Choices:	tbox:h.ColourDbox
+o.Choices:	tbox:h.FontMenu
+o.Choices:	h.svcprint
+o.Choices:	h.Global
+o.Choices:	HTMLLib:h.struct
+o.Choices:	HTMLLib:h.tablestruc
+o.Choices:	ImageLib:h.imagetrans
+o.Choices:	tbox:h.flex
+o.Choices:	C:h.setjmp
+o.Choices:	tbox:h.window
+o.Choices:	h.Bitfields
+o.Choices:	h.Limits
+o.Choices:	h.Limits
+o.Choices:	h.FromROSLib
+o.Choices:	h.Utils
+o.Choices:	h.ChoiceDefs
+o.Choices:	h.Encoding
+o.Choices:	h.FetchPage
+o.Choices:	h.FontManage
+o.Choices:	h.History
+o.Choices:	h.Limits
+o.Choices:	h.Menus
+o.Choices:	h.NestWimp
+o.Choices:	h.Redraw
+o.Choices:	h.Reformat
+o.Choices:	HTMLLib:h.HTMLLib
+o.Choices:	h.Save
+o.Choices:	h.URLutils
+o.Choices:	Libraries.URILib.h.URI
+o.Choices:	C:h.kernel
+o.Choices:	h.Windows
+o.Choices:	h.Choices
+o.Cookies:	c.Cookies
+o.Cookies:	C:h.swis
+o.Cookies:	C:h.kernel
+o.Cookies:	tbox:h.wimp
+o.Cookies:	tbox:h.wimplib
+o.Cookies:	tbox:h.event
+o.Cookies:	tbox:h.toolbox
+o.Cookies:	h.svcprint
+o.Cookies:	h.Global
+o.Cookies:	HTMLLib:h.struct
+o.Cookies:	HTMLLib:h.html2_ext
+o.Cookies:	HTMLLib:h.tablestruc
+o.Cookies:	HTMLLib:h.tablestruc
+o.Cookies:	ImageLib:h.imagetrans
+o.Cookies:	tbox:h.flex
+o.Cookies:	C:h.setjmp
+o.Cookies:	tbox:h.window
+o.Cookies:	tbox:h.gadgets
+o.Cookies:	h.Bitfields
+o.Cookies:	h.Limits
+o.Cookies:	h.Limits
+o.Cookies:	h.Utils
+o.Cookies:	h.ChoiceDefs
+o.Cookies:	h.MiscDefs
+o.Cookies:	h.Cookies
+o.CSIM:	c.CSIM
+o.CSIM:	C:h.swis
+o.CSIM:	C:h.kernel
+o.CSIM:	HTMLLib:h.HTMLLib
+o.CSIM:	HTMLLib:h.html2_ext
+o.CSIM:	HTMLLib:h.tablestruc
+o.CSIM:	HTMLLib:h.tags
+o.CSIM:	HTMLLib:h.struct
+o.CSIM:	HTMLLib:h.html2_ext
+o.CSIM:	tbox:h.wimp
+o.CSIM:	tbox:h.wimplib
+o.CSIM:	tbox:h.event
+o.CSIM:	tbox:h.toolbox
+o.CSIM:	h.svcprint
+o.CSIM:	h.Global
+o.CSIM:	HTMLLib:h.struct
+o.CSIM:	HTMLLib:h.tablestruc
+o.CSIM:	ImageLib:h.imagetrans
+o.CSIM:	tbox:h.flex
+o.CSIM:	C:h.setjmp
+o.CSIM:	tbox:h.window
+o.CSIM:	tbox:h.gadgets
+o.CSIM:	h.Bitfields
+o.CSIM:	h.Limits
+o.CSIM:	h.Limits
+o.CSIM:	h.FromROSLib
+o.CSIM:	h.MiscDefs
+o.CSIM:	h.Utils
+o.CSIM:	h.Fetch
+o.CSIM:	h.URLstat
+o.CSIM:	h.Redraw
+o.CSIM:	h.CSIM
+o.DragBox:	c.DragBox
+o.DragBox:	C:h.swis
+o.DragBox:	C:h.kernel
+o.DragBox:	tbox:h.wimp
+o.DragBox:	tbox:h.wimplib
+o.DragBox:	tbox:h.event
+o.DragBox:	tbox:h.toolbox
+o.DragBox:	h.svcprint
+o.DragBox:	h.Global
+o.DragBox:	HTMLLib:h.struct
+o.DragBox:	HTMLLib:h.html2_ext
+o.DragBox:	HTMLLib:h.tablestruc
+o.DragBox:	HTMLLib:h.tablestruc
+o.DragBox:	ImageLib:h.imagetrans
+o.DragBox:	tbox:h.flex
+o.DragBox:	C:h.setjmp
+o.DragBox:	tbox:h.window
+o.DragBox:	tbox:h.gadgets
+o.DragBox:	h.Bitfields
+o.DragBox:	h.Limits
+o.DragBox:	h.Limits
+o.DragBox:	h.FromROSLib
+o.DragBox:	h.Utils
+o.DragBox:	h.DragBox
+o.Encoding:	c.Encoding
+o.Encoding:	C:h.swis
+o.Encoding:	C:h.kernel
+o.Encoding:	tbox:h.wimp
+o.Encoding:	tbox:h.toolbox
+o.Encoding:	tbox:h.menu
+o.Encoding:	tbox:h.event
+o.Encoding:	C:Unicode.h.iso10646
+o.Encoding:	h.Global
+o.Encoding:	HTMLLib:h.struct
+o.Encoding:	HTMLLib:h.html2_ext
+o.Encoding:	HTMLLib:h.tablestruc
+o.Encoding:	HTMLLib:h.tablestruc
+o.Encoding:	ImageLib:h.imagetrans
+o.Encoding:	tbox:h.flex
+o.Encoding:	C:h.setjmp
+o.Encoding:	tbox:h.window
+o.Encoding:	tbox:h.gadgets
+o.Encoding:	h.Bitfields
+o.Encoding:	h.Limits
+o.Encoding:	h.Limits
+o.Encoding:	h.Utils
+o.Encoding:	h.Choices
+o.Encoding:	h.Encoding
+o.FetchHTML:	c.FetchHTML
+o.FetchHTML:	C:h.swis
+o.FetchHTML:	C:h.kernel
+o.FetchHTML:	tbox:h.flex
+o.FetchHTML:	HTMLLib:h.HTMLLib
+o.FetchHTML:	HTMLLib:h.html2_ext
+o.FetchHTML:	HTMLLib:h.tablestruc
+o.FetchHTML:	HTMLLib:h.tags
+o.FetchHTML:	HTMLLib:h.struct
+o.FetchHTML:	HTMLLib:h.html2_ext
+o.FetchHTML:	tbox:h.wimp
+o.FetchHTML:	tbox:h.event
+o.FetchHTML:	tbox:h.toolbox
+o.FetchHTML:	h.svcprint
+o.FetchHTML:	h.Global
+o.FetchHTML:	HTMLLib:h.struct
+o.FetchHTML:	HTMLLib:h.tablestruc
+o.FetchHTML:	ImageLib:h.imagetrans
+o.FetchHTML:	C:h.setjmp
+o.FetchHTML:	tbox:h.window
+o.FetchHTML:	tbox:h.gadgets
+o.FetchHTML:	h.Bitfields
+o.FetchHTML:	h.Limits
+o.FetchHTML:	h.Limits
+o.FetchHTML:	h.MiscDefs
+o.FetchHTML:	h.Utils
+o.FetchHTML:	h.About
+o.FetchHTML:	h.Authorise
+o.FetchHTML:	h.Browser
+o.FetchHTML:	h.Cookies
+o.FetchHTML:	h.Encoding
+o.FetchHTML:	h.Fetch
+o.FetchHTML:	h.URLstat
+o.FetchHTML:	h.Filetypes
+o.FetchHTML:	h.History
+o.FetchHTML:	h.Save
+o.FetchHTML:	h.URLutils
+o.FetchHTML:	Libraries.URILib.h.URI
+o.FetchHTML:	C:h.kernel
+o.FetchHTML:	h.URLveneer
+o.FetchHTML:	h.FetchHTML
+o.FetchPage:	c.FetchPage
+o.FetchPage:	tbox:h.flex
+o.FetchPage:	C:h.swis
+o.FetchPage:	C:h.kernel
+o.FetchPage:	Libraries.URILib.h.URI
+o.FetchPage:	C:h.kernel
+o.FetchPage:	tbox:h.wimp
+o.FetchPage:	tbox:h.wimplib
+o.FetchPage:	tbox:h.event
+o.FetchPage:	tbox:h.toolbox
+o.FetchPage:	tbox:h.toolbox
+o.FetchPage:	tbox:h.window
+o.FetchPage:	tbox:h.gadgets
+o.FetchPage:	tbox:h.gadgets
+o.FetchPage:	h.svcprint
+o.FetchPage:	h.Global
+o.FetchPage:	HTMLLib:h.struct
+o.FetchPage:	HTMLLib:h.html2_ext
+o.FetchPage:	HTMLLib:h.tablestruc
+o.FetchPage:	HTMLLib:h.tablestruc
+o.FetchPage:	ImageLib:h.imagetrans
+o.FetchPage:	C:h.setjmp
+o.FetchPage:	tbox:h.window
+o.FetchPage:	h.Bitfields
+o.FetchPage:	h.Limits
+o.FetchPage:	h.Limits
+o.FetchPage:	h.FromROSLib
+o.FetchPage:	h.MiscDefs
+o.FetchPage:	h.Utils
+o.FetchPage:	h.Browser
+o.FetchPage:	h.ChoiceDefs
+o.FetchPage:	h.Fetch
+o.FetchPage:	h.URLstat
+o.FetchPage:	h.Frames
+o.FetchPage:	h.Handlers
+o.FetchPage:	h.History
+o.FetchPage:	h.Images
+o.FetchPage:	h.JavaScript
+o.FetchPage:	h.Memory
+o.FetchPage:	h.PlugIn
+o.FetchPage:	h.Protocols
+o.FetchPage:	h.Reformat
+o.FetchPage:	HTMLLib:h.HTMLLib
+o.FetchPage:	HTMLLib:h.html2_ext
+o.FetchPage:	HTMLLib:h.tags
+o.FetchPage:	HTMLLib:h.struct
+o.FetchPage:	h.SaveDraw
+o.FetchPage:	h.SaveText
+o.FetchPage:	h.Toolbars
+o.FetchPage:	h.URLutils
+o.FetchPage:	Libraries.URILib.h.URI
+o.FetchPage:	h.Windows
+o.FetchPage:	h.FetchPage
+o.Find:	c.Find
+o.Find:	C:h.swis
+o.Find:	C:h.kernel
+o.Find:	tbox:h.wimp
+o.Find:	tbox:h.wimplib
+o.Find:	tbox:h.event
+o.Find:	tbox:h.toolbox
+o.Find:	tbox:h.toolbox
+o.Find:	tbox:h.window
+o.Find:	tbox:h.gadgets
+o.Find:	h.svcprint
+o.Find:	h.Global
+o.Find:	HTMLLib:h.struct
+o.Find:	HTMLLib:h.html2_ext
+o.Find:	HTMLLib:h.tablestruc
+o.Find:	HTMLLib:h.tablestruc
+o.Find:	ImageLib:h.imagetrans
+o.Find:	tbox:h.flex
+o.Find:	C:h.setjmp
+o.Find:	tbox:h.window
+o.Find:	h.Bitfields
+o.Find:	h.Limits
+o.Find:	h.Limits
+o.Find:	h.Utils
+o.Find:	h.Browser
+o.Find:	h.Fetch
+o.Find:	h.URLstat
+o.Find:	h.Toolbars
+o.Find:	h.Windows
+o.Find:	h.Find
+o.FontManage:	c.FontManage
+o.FontManage:	C:h.swis
+o.FontManage:	C:h.kernel
+o.FontManage:	HTMLLib:h.HTMLLib
+o.FontManage:	HTMLLib:h.html2_ext
+o.FontManage:	HTMLLib:h.tablestruc
+o.FontManage:	HTMLLib:h.tags
+o.FontManage:	HTMLLib:h.struct
+o.FontManage:	HTMLLib:h.html2_ext
+o.FontManage:	tbox:h.wimp
+o.FontManage:	tbox:h.event
+o.FontManage:	tbox:h.toolbox
+o.FontManage:	h.svcprint
+o.FontManage:	h.Global
+o.FontManage:	HTMLLib:h.struct
+o.FontManage:	HTMLLib:h.tablestruc
+o.FontManage:	ImageLib:h.imagetrans
+o.FontManage:	tbox:h.flex
+o.FontManage:	C:h.setjmp
+o.FontManage:	tbox:h.window
+o.FontManage:	tbox:h.gadgets
+o.FontManage:	h.Bitfields
+o.FontManage:	h.Limits
+o.FontManage:	h.Limits
+o.FontManage:	h.FromROSLib
+o.FontManage:	h.MiscDefs
+o.FontManage:	h.Utils
+o.FontManage:	h.Redraw
+o.FontManage:	h.FontManage
+o.Forms:	c.Forms
+o.Forms:	C:h.swis
+o.Forms:	C:h.kernel
+o.Forms:	tbox:h.flex
+o.Forms:	HTMLLib:h.HTMLLib
+o.Forms:	HTMLLib:h.html2_ext
+o.Forms:	HTMLLib:h.tablestruc
+o.Forms:	HTMLLib:h.tags
+o.Forms:	HTMLLib:h.struct
+o.Forms:	HTMLLib:h.html2_ext
+o.Forms:	tbox:h.wimp
+o.Forms:	tbox:h.wimplib
+o.Forms:	tbox:h.event
+o.Forms:	tbox:h.toolbox
+o.Forms:	h.svcprint
+o.Forms:	h.Global
+o.Forms:	HTMLLib:h.struct
+o.Forms:	HTMLLib:h.tablestruc
+o.Forms:	ImageLib:h.imagetrans
+o.Forms:	C:h.setjmp
+o.Forms:	tbox:h.window
+o.Forms:	tbox:h.gadgets
+o.Forms:	h.Bitfields
+o.Forms:	h.Limits
+o.Forms:	h.Limits
+o.Forms:	h.FromROSLib
+o.Forms:	h.Utils
+o.Forms:	h.Browser
+o.Forms:	h.FetchPage
+o.Forms:	h.FontManage
+o.Forms:	h.Images
+o.Forms:	h.Redraw
+o.Forms:	h.TokenUtils
+o.Forms:	h.Toolbars
+o.Forms:	h.Forms
+o.Forms:	h.trace
+o.Global:	c.Global
+o.Global:	C:h.setjmp
+o.Global:	tbox:h.wimp
+o.Global:	tbox:h.event
+o.Global:	tbox:h.toolbox
+o.Global:	C:h.kernel
+o.Global:	h.svcprint
+o.Global:	h.Global
+o.Global:	HTMLLib:h.struct
+o.Global:	HTMLLib:h.html2_ext
+o.Global:	HTMLLib:h.tablestruc
+o.Global:	HTMLLib:h.tablestruc
+o.Global:	ImageLib:h.imagetrans
+o.Global:	tbox:h.flex
+o.Global:	C:h.setjmp
+o.Global:	tbox:h.window
+o.Global:	tbox:h.gadgets
+o.Global:	h.Bitfields
+o.Global:	h.Limits
+o.Global:	h.Limits
+o.Global:	h.Utils
+o.Handlers:	c.Handlers
+o.Handlers:	C:h.swis
+o.Handlers:	C:h.kernel
+o.Handlers:	C:h.kernel
+o.Handlers:	tbox:h.flex
+o.Handlers:	HTMLLib:h.HTMLLib
+o.Handlers:	HTMLLib:h.html2_ext
+o.Handlers:	HTMLLib:h.tablestruc
+o.Handlers:	HTMLLib:h.tags
+o.Handlers:	HTMLLib:h.struct
+o.Handlers:	HTMLLib:h.html2_ext
+o.Handlers:	tbox:h.wimp
+o.Handlers:	tbox:h.wimplib
+o.Handlers:	tbox:h.event
+o.Handlers:	tbox:h.toolbox
+o.Handlers:	tbox:h.toolbox
+o.Handlers:	tbox:h.quit
+o.Handlers:	tbox:h.window
+o.Handlers:	tbox:h.gadgets
+o.Handlers:	tbox:h.proginfo
+o.Handlers:	h.ToolAction
+o.Handlers:	h.Dialler
+o.Handlers:	C:h.kernel
+o.Handlers:	h.svcprint
+o.Handlers:	h.Global
+o.Handlers:	HTMLLib:h.struct
+o.Handlers:	HTMLLib:h.tablestruc
+o.Handlers:	ImageLib:h.imagetrans
+o.Handlers:	C:h.setjmp
+o.Handlers:	tbox:h.window
+o.Handlers:	h.Bitfields
+o.Handlers:	h.Limits
+o.Handlers:	h.Limits
+o.Handlers:	h.FromROSLib
+o.Handlers:	h.Utils
+o.Handlers:	h.Browser
+o.Handlers:	h.ChoiceDefs
+o.Handlers:	h.Choices
+o.Handlers:	h.CSIM
+o.Handlers:	h.Fetch
+o.Handlers:	h.URLstat
+o.Handlers:	h.FetchPage
+o.Handlers:	h.Filetypes
+o.Handlers:	h.FontManage
+o.Handlers:	h.Forms
+o.Handlers:	h.Frames
+o.Handlers:	h.History
+o.Handlers:	h.Hotlist
+o.Handlers:	h.Images
+o.Handlers:	h.JavaScript
+o.Handlers:	h.Markers
+o.Handlers:	h.Menus
+o.Handlers:	h.Meta
+o.Handlers:	h.MiscDefs
+o.Handlers:	h.MiscEvents
+o.Handlers:	h.Mouse
+o.Handlers:	h.PlugIn
+o.Handlers:	h.Printing
+o.Handlers:	h.Protocols
+o.Handlers:	h.Redraw
+o.Handlers:	h.Reformat
+o.Handlers:	HTMLLib:h.HTMLLib
+o.Handlers:	h.Save
+o.Handlers:	h.SaveFile
+o.Handlers:	h.SetPBoxes
+o.Handlers:	h.TokenUtils
+o.Handlers:	h.Toolbars
+o.Handlers:	h.URLutils
+o.Handlers:	Libraries.URILib.h.URI
+o.Handlers:	C:h.kernel
+o.Handlers:	h.Windows
+o.Handlers:	h.Handlers
+o.History:	c.History
+o.History:	C:h.kernel
+o.History:	C:h.swis
+o.History:	tbox:h.flex
+o.History:	tbox:h.wimp
+o.History:	tbox:h.wimplib
+o.History:	tbox:h.event
+o.History:	tbox:h.toolbox
+o.History:	tbox:h.toolbox
+o.History:	tbox:h.window
+o.History:	tbox:h.gadgets
+o.History:	tbox:h.gadgets
+o.History:	tbox:h.menu
+o.History:	h.svcprint
+o.History:	h.Global
+o.History:	HTMLLib:h.struct
+o.History:	HTMLLib:h.html2_ext
+o.History:	HTMLLib:h.tablestruc
+o.History:	HTMLLib:h.tablestruc
+o.History:	ImageLib:h.imagetrans
+o.History:	C:h.setjmp
+o.History:	tbox:h.window
+o.History:	h.Bitfields
+o.History:	h.Limits
+o.History:	h.Limits
+o.History:	h.FromROSLib
+o.History:	h.Utils
+o.History:	h.Browser
+o.History:	h.ChoiceDefs
+o.History:	h.FetchPage
+o.History:	h.Filetypes
+o.History:	h.Memory
+o.History:	h.OpenURL
+o.History:	h.Save
+o.History:	h.Toolbars
+o.History:	h.URLutils
+o.History:	Libraries.URILib.h.URI
+o.History:	C:h.kernel
+o.History:	h.Windows
+o.History:	h.History
+o.Hotlist:	c.Hotlist
+o.Hotlist:	C:h.swis
+o.Hotlist:	C:h.kernel
+o.Hotlist:	tbox:h.toolbox
+o.Hotlist:	tbox:h.wimp
+o.Hotlist:	tbox:h.wimp
+o.Hotlist:	tbox:h.wimplib
+o.Hotlist:	tbox:h.menu
+o.Hotlist:	tbox:h.event
+o.Hotlist:	tbox:h.gadgets
+o.Hotlist:	h.svcprint
+o.Hotlist:	h.Global
+o.Hotlist:	HTMLLib:h.struct
+o.Hotlist:	HTMLLib:h.html2_ext
+o.Hotlist:	HTMLLib:h.tablestruc
+o.Hotlist:	HTMLLib:h.tablestruc
+o.Hotlist:	ImageLib:h.imagetrans
+o.Hotlist:	tbox:h.flex
+o.Hotlist:	C:h.setjmp
+o.Hotlist:	tbox:h.window
+o.Hotlist:	h.Bitfields
+o.Hotlist:	h.Limits
+o.Hotlist:	h.Limits
+o.Hotlist:	h.FromROSLib
+o.Hotlist:	h.Utils
+o.Hotlist:	h.ChoiceDefs
+o.Hotlist:	h.FetchPage
+o.Hotlist:	h.Filetypes
+o.Hotlist:	h.Menus
+o.Hotlist:	h.Mouse
+o.Hotlist:	h.Multiuser
+o.Hotlist:	h.Protocols
+o.Hotlist:	h.Save
+o.Hotlist:	h.Toolbars
+o.Hotlist:	h.URLUtils
+o.Hotlist:	Libraries.URILib.h.URI
+o.Hotlist:	C:h.kernel
+o.Hotlist:	h.Windows
+o.Hotlist:	h.Hotlist
+o.Images:	c.Images
+o.Images:	C:h.swis
+o.Images:	C:h.kernel
+o.Images:	tbox:h.flex
+o.Images:	HTMLLib:h.HTMLLib
+o.Images:	HTMLLib:h.html2_ext
+o.Images:	HTMLLib:h.tablestruc
+o.Images:	HTMLLib:h.tags
+o.Images:	HTMLLib:h.struct
+o.Images:	HTMLLib:h.html2_ext
+o.Images:	tbox:h.wimp
+o.Images:	tbox:h.wimplib
+o.Images:	tbox:h.event
+o.Images:	tbox:h.toolbox
+o.Images:	tbox:h.toolbox
+o.Images:	h.svcprint
+o.Images:	h.Global
+o.Images:	HTMLLib:h.struct
+o.Images:	HTMLLib:h.tablestruc
+o.Images:	ImageLib:h.imagetrans
+o.Images:	C:h.setjmp
+o.Images:	tbox:h.window
+o.Images:	tbox:h.gadgets
+o.Images:	h.Bitfields
+o.Images:	h.Limits
+o.Images:	h.Limits
+o.Images:	h.FromROSLib
+o.Images:	h.MiscDefs
+o.Images:	h.Utils
+o.Images:	h.Browser
+o.Images:	h.Fetch
+o.Images:	h.URLstat
+o.Images:	h.FetchHTML
+o.Images:	h.FetchPage
+o.Images:	h.FontManage
+o.Images:	h.ImgHistory
+o.Images:	h.PrintStyle
+o.Images:	h.Protocols
+o.Images:	h.Redraw
+o.Images:	h.Reformat
+o.Images:	HTMLLib:h.HTMLLib
+o.Images:	h.Save
+o.Images:	h.SaveDraw
+o.Images:	h.TokenUtils
+o.Images:	h.Toolbars
+o.Images:	h.URLutils
+o.Images:	Libraries.URILib.h.URI
+o.Images:	C:h.kernel
+o.Images:	h.URLveneer
+o.Images:	h.Windows
+o.Images:	h.Images
+o.ImgHistory:	c.ImgHistory
+o.ImgHistory:	C:h.kernel
+o.ImgHistory:	C:h.swis
+o.ImgHistory:	tbox:h.flex
+o.ImgHistory:	tbox:h.wimp
+o.ImgHistory:	tbox:h.wimplib
+o.ImgHistory:	tbox:h.event
+o.ImgHistory:	tbox:h.toolbox
+o.ImgHistory:	tbox:h.toolbox
+o.ImgHistory:	h.svcprint
+o.ImgHistory:	h.Global
+o.ImgHistory:	HTMLLib:h.struct
+o.ImgHistory:	HTMLLib:h.html2_ext
+o.ImgHistory:	HTMLLib:h.tablestruc
+o.ImgHistory:	HTMLLib:h.tablestruc
+o.ImgHistory:	ImageLib:h.imagetrans
+o.ImgHistory:	C:h.setjmp
+o.ImgHistory:	tbox:h.window
+o.ImgHistory:	tbox:h.gadgets
+o.ImgHistory:	h.Bitfields
+o.ImgHistory:	h.Limits
+o.ImgHistory:	h.Limits
+o.ImgHistory:	h.Utils
+o.ImgHistory:	h.ChoiceDefs
+o.ImgHistory:	h.Images
+o.ImgHistory:	h.Save
+o.ImgHistory:	h.URLutils
+o.ImgHistory:	Libraries.URILib.h.URI
+o.ImgHistory:	C:h.kernel
+o.ImgHistory:	h.ImgHistory
+o.ItemInfo:	c.ItemInfo
+o.ItemInfo:	C:h.swis
+o.ItemInfo:	C:h.kernel
+o.ItemInfo:	C:h.kernel
+o.ItemInfo:	HTMLLib:h.HTMLLib
+o.ItemInfo:	HTMLLib:h.html2_ext
+o.ItemInfo:	HTMLLib:h.tablestruc
+o.ItemInfo:	HTMLLib:h.tags
+o.ItemInfo:	HTMLLib:h.struct
+o.ItemInfo:	HTMLLib:h.html2_ext
+o.ItemInfo:	tbox:h.wimp
+o.ItemInfo:	tbox:h.wimplib
+o.ItemInfo:	tbox:h.event
+o.ItemInfo:	tbox:h.toolbox
+o.ItemInfo:	tbox:h.toolbox
+o.ItemInfo:	tbox:h.window
+o.ItemInfo:	tbox:h.gadgets
+o.ItemInfo:	h.svcprint
+o.ItemInfo:	h.Global
+o.ItemInfo:	HTMLLib:h.struct
+o.ItemInfo:	HTMLLib:h.tablestruc
+o.ItemInfo:	ImageLib:h.imagetrans
+o.ItemInfo:	tbox:h.flex
+o.ItemInfo:	C:h.setjmp
+o.ItemInfo:	tbox:h.window
+o.ItemInfo:	h.Bitfields
+o.ItemInfo:	h.Limits
+o.ItemInfo:	h.Limits
+o.ItemInfo:	h.MiscDefs
+o.ItemInfo:	h.Utils
+o.ItemInfo:	h.Browser
+o.ItemInfo:	h.Fetch
+o.ItemInfo:	h.URLstat
+o.ItemInfo:	h.Forms
+o.ItemInfo:	h.Images
+o.ItemInfo:	h.Menus
+o.ItemInfo:	h.Object
+o.ItemInfo:	h.Reformat
+o.ItemInfo:	HTMLLib:h.HTMLLib
+o.ItemInfo:	h.Windows
+o.ItemInfo:	h.ItemInfo
+o.JavaScript:	c.JavaScript
+o.JavaScript:	C:h.swis
+o.JavaScript:	C:h.kernel
+o.JavaScript:	HTMLLib:h.HTMLLib
+o.JavaScript:	HTMLLib:h.html2_ext
+o.JavaScript:	HTMLLib:h.tablestruc
+o.JavaScript:	HTMLLib:h.tags
+o.JavaScript:	HTMLLib:h.struct
+o.JavaScript:	HTMLLib:h.html2_ext
+o.JavaScript:	tbox:h.wimp
+o.JavaScript:	tbox:h.wimplib
+o.JavaScript:	tbox:h.event
+o.JavaScript:	tbox:h.toolbox
+o.JavaScript:	h.svcprint
+o.JavaScript:	h.Global
+o.JavaScript:	HTMLLib:h.struct
+o.JavaScript:	HTMLLib:h.tablestruc
+o.JavaScript:	ImageLib:h.imagetrans
+o.JavaScript:	tbox:h.flex
+o.JavaScript:	C:h.setjmp
+o.JavaScript:	tbox:h.window
+o.JavaScript:	tbox:h.gadgets
+o.JavaScript:	h.Bitfields
+o.JavaScript:	h.Limits
+o.JavaScript:	h.Limits
+o.JavaScript:	h.Utils
+o.JavaScript:	h.Browser
+o.JavaScript:	h.FetchPage
+o.JavaScript:	h.Frames
+o.JavaScript:	h.LineOne
+o.JavaScript:	h.URLutils
+o.JavaScript:	Libraries.URILib.h.URI
+o.JavaScript:	C:h.kernel
+o.JavaScript:	h.JavaScript
+o.Main:	c.Main
+o.Main:	C:h.setjmp
+o.Main:	C:h.signal
+o.Main:	C:h.swis
+o.Main:	C:h.kernel
+o.Main:	C:h.kernel
+o.Main:	tbox:h.flex
+o.Main:	HTMLLib:h.HTMLLib
+o.Main:	HTMLLib:h.html2_ext
+o.Main:	HTMLLib:h.tablestruc
+o.Main:	HTMLLib:h.tags
+o.Main:	HTMLLib:h.struct
+o.Main:	HTMLLib:h.html2_ext
+o.Main:	Libraries.URILib.h.URI
+o.Main:	C:h.kernel
+o.Main:	tbox:h.wimp
+o.Main:	tbox:h.wimplib
+o.Main:	tbox:h.event
+o.Main:	tbox:h.toolbox
+o.Main:	tbox:h.toolbox
+o.Main:	tbox:h.quit
+o.Main:	tbox:h.window
+o.Main:	tbox:h.gadgets
+o.Main:	tbox:h.proginfo
+o.Main:	tbox:h.window
+o.Main:	tbox:h.menu
+o.Main:	tbox:h.saveas
+o.Main:	tbox:h.printdbox
+o.Main:	tbox:h.gadgets
+o.Main:	h.svcprint
+o.Main:	h.Global
+o.Main:	HTMLLib:h.struct
+o.Main:	HTMLLib:h.tablestruc
+o.Main:	ImageLib:h.imagetrans
+o.Main:	C:h.setjmp
+o.Main:	tbox:h.window
+o.Main:	h.Bitfields
+o.Main:	h.Limits
+o.Main:	h.Limits
+o.Main:	h.FromROSLib
+o.Main:	h.TBEvents
+o.Main:	C:h.kernel
+o.Main:	h.Toolbars
+o.Main:	h.Authorise
+o.Main:	h.SaveFile
+o.Main:	h.SaveObject
+o.Main:	h.Find
+o.Main:	h.OpenURL
+o.Main:	h.Printing
+o.Main:	h.PrintStyle
+o.Main:	h.Hotlist
+o.Main:	h.Choices
+o.Main:	h.ItemInfo
+o.Main:	h.Multiuser
+o.Main:	h.SetPBoxes
+o.Main:	h.Cookies
+o.Main:	h.Menus
+o.Main:	h.MiscEvents
+o.Main:	h.Utils
+o.Main:	h.Browser
+o.Main:	h.ChoiceDefs
+o.Main:	h.CtrlDefs
+o.Main:	h.Encoding
+o.Main:	h.FontManage
+o.Main:	h.Handlers
+o.Main:	h.History
+o.Main:	h.ImgHistory
+o.Main:	h.Markers
+o.Main:	h.MiscDefs
+o.Main:	h.Mouse
+o.Main:	h.PlugIn
+o.Main:	h.Protocols
+o.Main:	h.RMA
+o.Main:	h.Save
+o.Main:	h.URLutils
+o.Main:	Libraries.URILib.h.URI
+o.Main:	h.Windows
+o.Main:	h.Main
+o.Markers:	c.Markers
+o.Markers:	C:h.swis
+o.Markers:	C:h.kernel
+o.Markers:	HTMLLib:h.HTMLLib
+o.Markers:	HTMLLib:h.html2_ext
+o.Markers:	HTMLLib:h.tablestruc
+o.Markers:	HTMLLib:h.tags
+o.Markers:	HTMLLib:h.struct
+o.Markers:	HTMLLib:h.html2_ext
+o.Markers:	tbox:h.wimp
+o.Markers:	tbox:h.wimplib
+o.Markers:	tbox:h.event
+o.Markers:	tbox:h.toolbox
+o.Markers:	tbox:h.gadgets
+o.Markers:	h.ToolAction
+o.Markers:	h.svcprint
+o.Markers:	h.Global
+o.Markers:	HTMLLib:h.struct
+o.Markers:	HTMLLib:h.tablestruc
+o.Markers:	ImageLib:h.imagetrans
+o.Markers:	tbox:h.flex
+o.Markers:	C:h.setjmp
+o.Markers:	tbox:h.window
+o.Markers:	h.Bitfields
+o.Markers:	h.Limits
+o.Markers:	h.Limits
+o.Markers:	h.Utils
+o.Markers:	h.Browser
+o.Markers:	h.MiscEvents
+o.Markers:	h.Toolbars
+o.Markers:	h.Windows
+o.Markers:	h.Markers
+o.Memory:	c.Memory
+o.Memory:	C:h.kernel
+o.Memory:	tbox:h.flex
+o.Memory:	tbox:h.wimp
+o.Memory:	tbox:h.event
+o.Memory:	tbox:h.toolbox
+o.Memory:	h.svcprint
+o.Memory:	h.Global
+o.Memory:	HTMLLib:h.struct
+o.Memory:	HTMLLib:h.html2_ext
+o.Memory:	HTMLLib:h.tablestruc
+o.Memory:	HTMLLib:h.tablestruc
+o.Memory:	ImageLib:h.imagetrans
+o.Memory:	C:h.setjmp
+o.Memory:	tbox:h.window
+o.Memory:	tbox:h.gadgets
+o.Memory:	h.Bitfields
+o.Memory:	h.Limits
+o.Memory:	h.Limits
+o.Memory:	h.Utils
+o.Memory:	h.Memory
+o.Menus:	c.Menus
+o.Menus:	C:h.swis
+o.Menus:	C:h.kernel
+o.Menus:	tbox:h.wimp
+o.Menus:	tbox:h.wimplib
+o.Menus:	tbox:h.event
+o.Menus:	tbox:h.toolbox
+o.Menus:	tbox:h.toolbox
+o.Menus:	tbox:h.window
+o.Menus:	tbox:h.gadgets
+o.Menus:	tbox:h.menu
+o.Menus:	h.svcprint
+o.Menus:	h.Global
+o.Menus:	HTMLLib:h.struct
+o.Menus:	HTMLLib:h.html2_ext
+o.Menus:	HTMLLib:h.tablestruc
+o.Menus:	HTMLLib:h.tablestruc
+o.Menus:	ImageLib:h.imagetrans
+o.Menus:	tbox:h.flex
+o.Menus:	C:h.setjmp
+o.Menus:	tbox:h.window
+o.Menus:	h.Bitfields
+o.Menus:	h.Limits
+o.Menus:	h.Limits
+o.Menus:	h.FromROSLib
+o.Menus:	h.MiscDefs
+o.Menus:	h.Utils
+o.Menus:	h.Browser
+o.Menus:	h.Choices
+o.Menus:	h.ChoiceDefs
+o.Menus:	h.Fetch
+o.Menus:	h.URLstat
+o.Menus:	h.FetchPage
+o.Menus:	h.Frames
+o.Menus:	h.Handlers
+o.Menus:	h.History
+o.Menus:	h.Hotlist
+o.Menus:	h.Images
+o.Menus:	h.ImgHistory
+o.Menus:	h.Markers
+o.Menus:	h.MiscEvents
+o.Menus:	h.Multiuser
+o.Menus:	h.Object
+o.Menus:	h.OpenURL
+o.Menus:	h.Reformat
+o.Menus:	HTMLLib:h.HTMLLib
+o.Menus:	HTMLLib:h.html2_ext
+o.Menus:	HTMLLib:h.tags
+o.Menus:	HTMLLib:h.struct
+o.Menus:	h.Save
+o.Menus:	h.Toolbars
+o.Menus:	h.URLutils
+o.Menus:	Libraries.URILib.h.URI
+o.Menus:	C:h.kernel
+o.Menus:	h.Windows
+o.Menus:	h.Menus
+o.Meta:	c.Meta
+o.Meta:	C:h.swis
+o.Meta:	C:h.kernel
+o.Meta:	tbox:h.flex
+o.Meta:	HTMLLib:h.HTMLLib
+o.Meta:	HTMLLib:h.html2_ext
+o.Meta:	HTMLLib:h.tablestruc
+o.Meta:	HTMLLib:h.tags
+o.Meta:	HTMLLib:h.struct
+o.Meta:	HTMLLib:h.html2_ext
+o.Meta:	tbox:h.wimp
+o.Meta:	tbox:h.wimplib
+o.Meta:	tbox:h.event
+o.Meta:	tbox:h.toolbox
+o.Meta:	h.svcprint
+o.Meta:	h.Global
+o.Meta:	HTMLLib:h.struct
+o.Meta:	HTMLLib:h.tablestruc
+o.Meta:	ImageLib:h.imagetrans
+o.Meta:	C:h.setjmp
+o.Meta:	tbox:h.window
+o.Meta:	tbox:h.gadgets
+o.Meta:	h.Bitfields
+o.Meta:	h.Limits
+o.Meta:	h.Limits
+o.Meta:	h.Utils
+o.Meta:	h.Browser
+o.Meta:	h.FetchPage
+o.Meta:	h.URLutils
+o.Meta:	Libraries.URILib.h.URI
+o.Meta:	C:h.kernel
+o.Meta:	h.Meta
+o.MimeMap:	c.MimeMap
+o.MimeMap:	C:h.swis
+o.MimeMap:	C:h.kernel
+o.MimeMap:	tbox:h.wimp
+o.MimeMap:	tbox:h.event
+o.MimeMap:	tbox:h.toolbox
+o.MimeMap:	h.svcprint
+o.MimeMap:	h.Global
+o.MimeMap:	HTMLLib:h.struct
+o.MimeMap:	HTMLLib:h.html2_ext
+o.MimeMap:	HTMLLib:h.tablestruc
+o.MimeMap:	HTMLLib:h.tablestruc
+o.MimeMap:	ImageLib:h.imagetrans
+o.MimeMap:	tbox:h.flex
+o.MimeMap:	C:h.setjmp
+o.MimeMap:	tbox:h.window
+o.MimeMap:	tbox:h.gadgets
+o.MimeMap:	h.Bitfields
+o.MimeMap:	h.Limits
+o.MimeMap:	h.Limits
+o.MimeMap:	h.Utils
+o.MimeMap:	h.MimeMap
+o.Mouse:	c.Mouse
+o.Mouse:	C:h.swis
+o.Mouse:	C:h.kernel
+o.Mouse:	C:h.kernel
+o.Mouse:	HTMLLib:h.HTMLLib
+o.Mouse:	HTMLLib:h.html2_ext
+o.Mouse:	HTMLLib:h.tablestruc
+o.Mouse:	HTMLLib:h.tags
+o.Mouse:	HTMLLib:h.struct
+o.Mouse:	HTMLLib:h.html2_ext
+o.Mouse:	tbox:h.wimp
+o.Mouse:	tbox:h.wimplib
+o.Mouse:	tbox:h.event
+o.Mouse:	tbox:h.toolbox
+o.Mouse:	tbox:h.toolbox
+o.Mouse:	h.svcprint
+o.Mouse:	h.Global
+o.Mouse:	HTMLLib:h.struct
+o.Mouse:	HTMLLib:h.tablestruc
+o.Mouse:	ImageLib:h.imagetrans
+o.Mouse:	tbox:h.flex
+o.Mouse:	C:h.setjmp
+o.Mouse:	tbox:h.window
+o.Mouse:	tbox:h.gadgets
+o.Mouse:	h.Bitfields
+o.Mouse:	h.Limits
+o.Mouse:	h.Limits
+o.Mouse:	h.Utils
+o.Mouse:	h.Handlers
+o.Mouse:	h.Mouse
+o.Multiuser:	c.Multiuser
+o.Multiuser:	C:h.swis
+o.Multiuser:	C:h.kernel
+o.Multiuser:	tbox:h.flex
+o.Multiuser:	tbox:h.wimp
+o.Multiuser:	tbox:h.wimplib
+o.Multiuser:	tbox:h.event
+o.Multiuser:	tbox:h.toolbox
+o.Multiuser:	tbox:h.toolbox
+o.Multiuser:	tbox:h.iconbar
+o.Multiuser:	tbox:h.window
+o.Multiuser:	tbox:h.gadgets
+o.Multiuser:	tbox:h.gadgets
+o.Multiuser:	h.svcprint
+o.Multiuser:	h.Global
+o.Multiuser:	HTMLLib:h.struct
+o.Multiuser:	HTMLLib:h.html2_ext
+o.Multiuser:	HTMLLib:h.tablestruc
+o.Multiuser:	HTMLLib:h.tablestruc
+o.Multiuser:	ImageLib:h.imagetrans
+o.Multiuser:	C:h.setjmp
+o.Multiuser:	tbox:h.window
+o.Multiuser:	h.Bitfields
+o.Multiuser:	h.Limits
+o.Multiuser:	h.Limits
+o.Multiuser:	h.Utils
+o.Multiuser:	h.Browser
+o.Multiuser:	h.ChoiceDefs
+o.Multiuser:	h.Fetch
+o.Multiuser:	h.URLstat
+o.Multiuser:	h.History
+o.Multiuser:	h.Hotlist
+o.Multiuser:	h.ImgHistory
+o.Multiuser:	h.Multiuser
+o.Multiuser:	h.URLutils
+o.Multiuser:	Libraries.URILib.h.URI
+o.Multiuser:	C:h.kernel
+o.Multiuser:	h.Multiuser
+o.Object:	c.Object
+o.Object:	C:h.swis
+o.Object:	C:h.kernel
+o.Object:	tbox:h.flex
+o.Object:	HTMLLib:h.HTMLLib
+o.Object:	HTMLLib:h.html2_ext
+o.Object:	HTMLLib:h.tablestruc
+o.Object:	HTMLLib:h.tags
+o.Object:	HTMLLib:h.struct
+o.Object:	HTMLLib:h.html2_ext
+o.Object:	tbox:h.wimp
+o.Object:	tbox:h.wimplib
+o.Object:	tbox:h.event
+o.Object:	tbox:h.toolbox
+o.Object:	tbox:h.toolbox
+o.Object:	h.svcprint
+o.Object:	h.Global
+o.Object:	HTMLLib:h.struct
+o.Object:	HTMLLib:h.tablestruc
+o.Object:	ImageLib:h.imagetrans
+o.Object:	C:h.setjmp
+o.Object:	tbox:h.window
+o.Object:	tbox:h.gadgets
+o.Object:	h.Bitfields
+o.Object:	h.Limits
+o.Object:	h.Limits
+o.Object:	h.FromROSLib
+o.Object:	h.Utils
+o.Object:	h.Browser
+o.Object:	h.ChoiceDefs
+o.Object:	h.Fetch
+o.Object:	h.URLstat
+o.Object:	h.FetchHTML
+o.Object:	h.Filetypes
+o.Object:	h.Images
+o.Object:	h.Memory
+o.Object:	h.MimeMap
+o.Object:	h.MiscDefs
+o.Object:	h.PlugIn
+o.Object:	h.Redraw
+o.Object:	h.Reformat
+o.Object:	HTMLLib:h.HTMLLib
+o.Object:	h.TokenUtils
+o.Object:	h.Toolbars
+o.Object:	h.URLveneer
+o.Object:	h.Object
+o.OpenURL:	c.OpenURL
+o.OpenURL:	C:h.swis
+o.OpenURL:	C:h.kernel
+o.OpenURL:	HTMLLib:h.HTMLLib
+o.OpenURL:	HTMLLib:h.html2_ext
+o.OpenURL:	HTMLLib:h.tablestruc
+o.OpenURL:	HTMLLib:h.tags
+o.OpenURL:	HTMLLib:h.struct
+o.OpenURL:	HTMLLib:h.html2_ext
+o.OpenURL:	tbox:h.wimp
+o.OpenURL:	tbox:h.wimplib
+o.OpenURL:	tbox:h.event
+o.OpenURL:	tbox:h.toolbox
+o.OpenURL:	tbox:h.toolbox
+o.OpenURL:	tbox:h.window
+o.OpenURL:	tbox:h.gadgets
+o.OpenURL:	h.svcprint
+o.OpenURL:	h.Global
+o.OpenURL:	HTMLLib:h.struct
+o.OpenURL:	HTMLLib:h.tablestruc
+o.OpenURL:	ImageLib:h.imagetrans
+o.OpenURL:	tbox:h.flex
+o.OpenURL:	C:h.setjmp
+o.OpenURL:	tbox:h.window
+o.OpenURL:	h.Bitfields
+o.OpenURL:	h.Limits
+o.OpenURL:	h.Limits
+o.OpenURL:	h.FromROSLib
+o.OpenURL:	h.MiscDefs
+o.OpenURL:	h.Utils
+o.OpenURL:	h.Browser
+o.OpenURL:	h.Fetch
+o.OpenURL:	h.URLstat
+o.OpenURL:	h.FetchPage
+o.OpenURL:	h.History
+o.OpenURL:	h.Hotlist
+o.OpenURL:	h.Menus
+o.OpenURL:	h.URLutils
+o.OpenURL:	Libraries.URILib.h.URI
+o.OpenURL:	C:h.kernel
+o.OpenURL:	h.Windows
+o.OpenURL:	h.OpenURL
+o.PlugIn:	c.PlugIn
+o.PlugIn:	C:h.swis
+o.PlugIn:	C:h.kernel
+o.PlugIn:	tbox:h.flex
+o.PlugIn:	HTMLLib:h.HTMLLib
+o.PlugIn:	HTMLLib:h.html2_ext
+o.PlugIn:	HTMLLib:h.tablestruc
+o.PlugIn:	HTMLLib:h.tags
+o.PlugIn:	HTMLLib:h.struct
+o.PlugIn:	HTMLLib:h.html2_ext
+o.PlugIn:	tbox:h.wimp
+o.PlugIn:	tbox:h.wimplib
+o.PlugIn:	tbox:h.event
+o.PlugIn:	tbox:h.toolbox
+o.PlugIn:	tbox:h.toolbox
+o.PlugIn:	h.svcprint
+o.PlugIn:	h.Global
+o.PlugIn:	HTMLLib:h.struct
+o.PlugIn:	HTMLLib:h.tablestruc
+o.PlugIn:	ImageLib:h.imagetrans
+o.PlugIn:	C:h.setjmp
+o.PlugIn:	tbox:h.window
+o.PlugIn:	tbox:h.gadgets
+o.PlugIn:	h.Bitfields
+o.PlugIn:	h.Limits
+o.PlugIn:	h.Limits
+o.PlugIn:	h.FromROSLib
+o.PlugIn:	h.Utils
+o.PlugIn:	h.Browser
+o.PlugIn:	h.Fetch
+o.PlugIn:	h.URLstat
+o.PlugIn:	h.FetchHTML
+o.PlugIn:	h.FetchPage
+o.PlugIn:	h.Filetypes
+o.PlugIn:	h.Frames
+o.PlugIn:	h.Handlers
+o.PlugIn:	h.Images
+o.PlugIn:	h.MimeMap
+o.PlugIn:	h.MiscDefs
+o.PlugIn:	h.Object
+o.PlugIn:	h.Protocols
+o.PlugIn:	h.Redraw
+o.PlugIn:	h.Reformat
+o.PlugIn:	HTMLLib:h.HTMLLib
+o.PlugIn:	h.RMA
+o.PlugIn:	h.TokenUtils
+o.PlugIn:	h.Toolbars
+o.PlugIn:	h.URLveneer
+o.PlugIn:	h.Windows
+o.PlugIn:	h.PlugIn
+o.Printing:	c.Printing
+o.Printing:	C:h.signal
+o.Printing:	C:h.swis
+o.Printing:	C:h.kernel
+o.Printing:	tbox:h.wimp
+o.Printing:	tbox:h.wimplib
+o.Printing:	tbox:h.event
+o.Printing:	tbox:h.toolbox
+o.Printing:	tbox:h.toolbox
+o.Printing:	tbox:h.printdbox
+o.Printing:	tbox:h.window
+o.Printing:	tbox:h.gadgets
+o.Printing:	h.svcprint
+o.Printing:	h.Global
+o.Printing:	HTMLLib:h.struct
+o.Printing:	HTMLLib:h.html2_ext
+o.Printing:	HTMLLib:h.tablestruc
+o.Printing:	HTMLLib:h.tablestruc
+o.Printing:	ImageLib:h.imagetrans
+o.Printing:	tbox:h.flex
+o.Printing:	C:h.setjmp
+o.Printing:	tbox:h.window
+o.Printing:	h.Bitfields
+o.Printing:	h.Limits
+o.Printing:	h.Limits
+o.Printing:	h.FromROSLib
+o.Printing:	h.Utils
+o.Printing:	h.Browser
+o.Printing:	h.FontManage
+o.Printing:	h.Images
+o.Printing:	h.Memory
+o.Printing:	h.Protocols
+o.Printing:	h.PrintStyle
+o.Printing:	h.Redraw
+o.Printing:	h.Reformat
+o.Printing:	HTMLLib:h.HTMLLib
+o.Printing:	HTMLLib:h.html2_ext
+o.Printing:	HTMLLib:h.tags
+o.Printing:	HTMLLib:h.struct
+o.Printing:	h.Toolaction
+o.Printing:	h.Toolbars
+o.Printing:	h.Windows
+o.Printing:	h.Printing
+o.PrintStyle:	c.PrintStyle
+o.PrintStyle:	C:h.swis
+o.PrintStyle:	C:h.kernel
+o.PrintStyle:	tbox:h.wimp
+o.PrintStyle:	tbox:h.wimplib
+o.PrintStyle:	tbox:h.event
+o.PrintStyle:	tbox:h.toolbox
+o.PrintStyle:	tbox:h.toolbox
+o.PrintStyle:	tbox:h.printdbox
+o.PrintStyle:	tbox:h.window
+o.PrintStyle:	tbox:h.gadgets
+o.PrintStyle:	tbox:h.window
+o.PrintStyle:	h.svcprint
+o.PrintStyle:	h.Global
+o.PrintStyle:	HTMLLib:h.struct
+o.PrintStyle:	HTMLLib:h.html2_ext
+o.PrintStyle:	HTMLLib:h.tablestruc
+o.PrintStyle:	HTMLLib:h.tablestruc
+o.PrintStyle:	ImageLib:h.imagetrans
+o.PrintStyle:	tbox:h.flex
+o.PrintStyle:	C:h.setjmp
+o.PrintStyle:	tbox:h.window
+o.PrintStyle:	h.Bitfields
+o.PrintStyle:	h.Limits
+o.PrintStyle:	h.Limits
+o.PrintStyle:	h.Utils
+o.PrintStyle:	h.Browser
+o.PrintStyle:	h.Menus
+o.PrintStyle:	h.Printing
+o.PrintStyle:	h.PrintStyle
+o.Protocols:	c.Protocols
+o.Protocols:	C:h.swis
+o.Protocols:	C:h.kernel
+o.Protocols:	C:h.kernel
+o.Protocols:	Libraries.URILib.h.URI
+o.Protocols:	C:h.kernel
+o.Protocols:	tbox:h.wimp
+o.Protocols:	tbox:h.wimplib
+o.Protocols:	tbox:h.event
+o.Protocols:	tbox:h.toolbox
+o.Protocols:	tbox:h.toolbox
+o.Protocols:	h.svcprint
+o.Protocols:	h.Global
+o.Protocols:	HTMLLib:h.struct
+o.Protocols:	HTMLLib:h.html2_ext
+o.Protocols:	HTMLLib:h.tablestruc
+o.Protocols:	HTMLLib:h.tablestruc
+o.Protocols:	ImageLib:h.imagetrans
+o.Protocols:	tbox:h.flex
+o.Protocols:	C:h.setjmp
+o.Protocols:	tbox:h.window
+o.Protocols:	tbox:h.gadgets
+o.Protocols:	h.Bitfields
+o.Protocols:	h.Limits
+o.Protocols:	h.Limits
+o.Protocols:	h.MiscDefs
+o.Protocols:	h.Utils
+o.Protocols:	h.Browser
+o.Protocols:	h.ChoiceDefs
+o.Protocols:	h.FetchPage
+o.Protocols:	h.Filetypes
+o.Protocols:	h.History
+o.Protocols:	h.Hotlist
+o.Protocols:	h.Images
+o.Protocols:	h.MimeMap
+o.Protocols:	h.Printing
+o.Protocols:	h.Save
+o.Protocols:	h.SaveDraw
+o.Protocols:	h.SaveFile
+o.Protocols:	h.SaveObject
+o.Protocols:	h.SaveText
+o.Protocols:	h.Toolbars
+o.Protocols:	h.URLutils
+o.Protocols:	Libraries.URILib.h.URI
+o.Protocols:	h.Windows
+o.Protocols:	h.Protocols
+o.Redraw:	c.Redraw
+o.Redraw:	C:h.swis
+o.Redraw:	C:h.kernel
+o.Redraw:	tbox:h.flex
+o.Redraw:	HTMLLib:h.HTMLLib
+o.Redraw:	HTMLLib:h.html2_ext
+o.Redraw:	HTMLLib:h.tablestruc
+o.Redraw:	HTMLLib:h.tags
+o.Redraw:	HTMLLib:h.struct
+o.Redraw:	HTMLLib:h.html2_ext
+o.Redraw:	tbox:h.wimp
+o.Redraw:	tbox:h.wimplib
+o.Redraw:	tbox:h.event
+o.Redraw:	tbox:h.toolbox
+o.Redraw:	h.svcprint
+o.Redraw:	h.Global
+o.Redraw:	HTMLLib:h.struct
+o.Redraw:	HTMLLib:h.tablestruc
+o.Redraw:	ImageLib:h.imagetrans
+o.Redraw:	C:h.setjmp
+o.Redraw:	tbox:h.window
+o.Redraw:	tbox:h.gadgets
+o.Redraw:	h.Bitfields
+o.Redraw:	h.Limits
+o.Redraw:	h.Limits
+o.Redraw:	h.FromROSLib
+o.Redraw:	h.MiscDefs
+o.Redraw:	h.Utils
+o.Redraw:	h.Browser
+o.Redraw:	h.ChoiceDefs
+o.Redraw:	h.CSIM
+o.Redraw:	h.Fetch
+o.Redraw:	h.URLstat
+o.Redraw:	h.FontManage
+o.Redraw:	h.Forms
+o.Redraw:	h.Frames
+o.Redraw:	h.Images
+o.Redraw:	h.Object
+o.Redraw:	h.Printing
+o.Redraw:	h.PrintStyle
+o.Redraw:	h.Reformat
+o.Redraw:	HTMLLib:h.HTMLLib
+o.Redraw:	h.Tables
+o.Redraw:	h.TokenUtils
+o.Redraw:	h.Toolbars
+o.Redraw:	h.Redraw
+o.RMA:	c.RMA
+o.RMA:	C:h.swis
+o.RMA:	C:h.kernel
+o.RMA:	tbox:h.wimp
+o.RMA:	tbox:h.wimplib
+o.RMA:	tbox:h.event
+o.RMA:	tbox:h.toolbox
+o.RMA:	h.svcprint
+o.RMA:	h.Global
+o.RMA:	HTMLLib:h.struct
+o.RMA:	HTMLLib:h.html2_ext
+o.RMA:	HTMLLib:h.tablestruc
+o.RMA:	HTMLLib:h.tablestruc
+o.RMA:	ImageLib:h.imagetrans
+o.RMA:	tbox:h.flex
+o.RMA:	C:h.setjmp
+o.RMA:	tbox:h.window
+o.RMA:	tbox:h.gadgets
+o.RMA:	h.Bitfields
+o.RMA:	h.Limits
+o.RMA:	h.Limits
+o.RMA:	h.Utils
+o.RMA:	h.RMA
+o.Save:	c.Save
+o.Save:	C:h.swis
+o.Save:	C:h.kernel
+o.Save:	tbox:h.flex
+o.Save:	HTMLLib:h.HTMLLib
+o.Save:	HTMLLib:h.html2_ext
+o.Save:	HTMLLib:h.tablestruc
+o.Save:	HTMLLib:h.tags
+o.Save:	HTMLLib:h.struct
+o.Save:	HTMLLib:h.html2_ext
+o.Save:	tbox:h.wimp
+o.Save:	tbox:h.wimplib
+o.Save:	tbox:h.event
+o.Save:	tbox:h.toolbox
+o.Save:	tbox:h.toolbox
+o.Save:	tbox:h.window
+o.Save:	tbox:h.gadgets
+o.Save:	tbox:h.menu
+o.Save:	tbox:h.saveas
+o.Save:	h.svcprint
+o.Save:	h.Global
+o.Save:	HTMLLib:h.struct
+o.Save:	HTMLLib:h.tablestruc
+o.Save:	ImageLib:h.imagetrans
+o.Save:	C:h.setjmp
+o.Save:	tbox:h.window
+o.Save:	h.Bitfields
+o.Save:	h.Limits
+o.Save:	h.Limits
+o.Save:	h.Utils
+o.Save:	h.ChoiceDefs
+o.Save:	h.Fetch
+o.Save:	h.URLstat
+o.Save:	h.Filetypes
+o.Save:	h.Fontmanage
+o.Save:	h.Hotlist
+o.Save:	h.Protocols
+o.Save:	h.URLutils
+o.Save:	Libraries.URILib.h.URI
+o.Save:	C:h.kernel
+o.Save:	h.Save
+o.SaveDraw:	c.SaveDraw
+o.SaveDraw:	C:h.swis
+o.SaveDraw:	C:h.kernel
+o.SaveDraw:	tbox:h.flex
+o.SaveDraw:	HTMLLib:h.HTMLLib
+o.SaveDraw:	HTMLLib:h.html2_ext
+o.SaveDraw:	HTMLLib:h.tablestruc
+o.SaveDraw:	HTMLLib:h.tags
+o.SaveDraw:	HTMLLib:h.struct
+o.SaveDraw:	HTMLLib:h.html2_ext
+o.SaveDraw:	tbox:h.wimp
+o.SaveDraw:	tbox:h.wimplib
+o.SaveDraw:	tbox:h.event
+o.SaveDraw:	tbox:h.toolbox
+o.SaveDraw:	h.svcprint
+o.SaveDraw:	h.Global
+o.SaveDraw:	HTMLLib:h.struct
+o.SaveDraw:	HTMLLib:h.tablestruc
+o.SaveDraw:	ImageLib:h.imagetrans
+o.SaveDraw:	C:h.setjmp
+o.SaveDraw:	tbox:h.window
+o.SaveDraw:	tbox:h.gadgets
+o.SaveDraw:	h.Bitfields
+o.SaveDraw:	h.Limits
+o.SaveDraw:	h.Limits
+o.SaveDraw:	h.FromROSLib
+o.SaveDraw:	h.MiscDefs
+o.SaveDraw:	h.Utils
+o.SaveDraw:	h.Browser
+o.SaveDraw:	h.ChoiceDefs
+o.SaveDraw:	h.CSIM
+o.SaveDraw:	h.Fetch
+o.SaveDraw:	h.URLstat
+o.SaveDraw:	h.FileTypes
+o.SaveDraw:	h.FontManage
+o.SaveDraw:	h.Forms
+o.SaveDraw:	h.Frames
+o.SaveDraw:	h.Images
+o.SaveDraw:	h.Object
+o.SaveDraw:	h.Printing
+o.SaveDraw:	h.PrintStyle
+o.SaveDraw:	h.Redraw
+o.SaveDraw:	h.Reformat
+o.SaveDraw:	HTMLLib:h.HTMLLib
+o.SaveDraw:	h.Save
+o.SaveDraw:	h.Tables
+o.SaveDraw:	h.TokenUtils
+o.SaveDraw:	h.Toolbars
+o.SaveDraw:	h.SaveDraw
+o.SaveFile:	c.SaveFile
+o.SaveFile:	C:h.swis
+o.SaveFile:	C:h.kernel
+o.SaveFile:	HTMLLib:h.HTMLLib
+o.SaveFile:	HTMLLib:h.html2_ext
+o.SaveFile:	HTMLLib:h.tablestruc
+o.SaveFile:	HTMLLib:h.tags
+o.SaveFile:	HTMLLib:h.struct
+o.SaveFile:	HTMLLib:h.html2_ext
+o.SaveFile:	tbox:h.wimp
+o.SaveFile:	tbox:h.wimplib
+o.SaveFile:	tbox:h.event
+o.SaveFile:	tbox:h.toolbox
+o.SaveFile:	tbox:h.toolbox
+o.SaveFile:	tbox:h.window
+o.SaveFile:	tbox:h.gadgets
+o.SaveFile:	tbox:h.gadgets
+o.SaveFile:	h.svcprint
+o.SaveFile:	h.Global
+o.SaveFile:	HTMLLib:h.struct
+o.SaveFile:	HTMLLib:h.tablestruc
+o.SaveFile:	ImageLib:h.imagetrans
+o.SaveFile:	tbox:h.flex
+o.SaveFile:	C:h.setjmp
+o.SaveFile:	tbox:h.window
+o.SaveFile:	h.Bitfields
+o.SaveFile:	h.Limits
+o.SaveFile:	h.Limits
+o.SaveFile:	h.MiscDefs
+o.SaveFile:	h.Utils
+o.SaveFile:	h.Browser
+o.SaveFile:	h.Fetch
+o.SaveFile:	h.URLstat
+o.SaveFile:	h.Filetypes
+o.SaveFile:	h.History
+o.SaveFile:	h.Hotlist
+o.SaveFile:	h.Images
+o.SaveFile:	h.Menus
+o.SaveFile:	h.MimeMap
+o.SaveFile:	h.Object
+o.SaveFile:	h.Protocols
+o.SaveFile:	h.Save
+o.SaveFile:	h.SaveDraw
+o.SaveFile:	h.SaveText
+o.SaveFile:	h.Toolbars
+o.SaveFile:	h.URLutils
+o.SaveFile:	Libraries.URILib.h.URI
+o.SaveFile:	C:h.kernel
+o.SaveFile:	h.Windows
+o.SaveFile:	h.SaveFile
+o.SaveObject:	c.SaveObject
+o.SaveObject:	C:h.swis
+o.SaveObject:	C:h.kernel
+o.SaveObject:	HTMLLib:h.HTMLLib
+o.SaveObject:	HTMLLib:h.html2_ext
+o.SaveObject:	HTMLLib:h.tablestruc
+o.SaveObject:	HTMLLib:h.tags
+o.SaveObject:	HTMLLib:h.struct
+o.SaveObject:	HTMLLib:h.html2_ext
+o.SaveObject:	tbox:h.wimp
+o.SaveObject:	tbox:h.wimplib
+o.SaveObject:	tbox:h.event
+o.SaveObject:	tbox:h.toolbox
+o.SaveObject:	tbox:h.toolbox
+o.SaveObject:	tbox:h.window
+o.SaveObject:	tbox:h.gadgets
+o.SaveObject:	tbox:h.gadgets
+o.SaveObject:	h.svcprint
+o.SaveObject:	h.Global
+o.SaveObject:	HTMLLib:h.struct
+o.SaveObject:	HTMLLib:h.tablestruc
+o.SaveObject:	ImageLib:h.imagetrans
+o.SaveObject:	tbox:h.flex
+o.SaveObject:	C:h.setjmp
+o.SaveObject:	tbox:h.window
+o.SaveObject:	h.Bitfields
+o.SaveObject:	h.Limits
+o.SaveObject:	h.Limits
+o.SaveObject:	h.Utils
+o.SaveObject:	h.Browser
+o.SaveObject:	h.Fetch
+o.SaveObject:	h.URLstat
+o.SaveObject:	h.Protocols
+o.SaveObject:	h.Save
+o.SaveObject:	h.SaveFile
+o.SaveObject:	h.Windows
+o.SaveObject:	h.SaveObject
+o.SaveText:	c.SaveText
+o.SaveText:	C:h.swis
+o.SaveText:	C:h.kernel
+o.SaveText:	tbox:h.flex
+o.SaveText:	HTMLLib:h.HTMLLib
+o.SaveText:	HTMLLib:h.html2_ext
+o.SaveText:	HTMLLib:h.tablestruc
+o.SaveText:	HTMLLib:h.tags
+o.SaveText:	HTMLLib:h.struct
+o.SaveText:	HTMLLib:h.html2_ext
+o.SaveText:	tbox:h.wimp
+o.SaveText:	tbox:h.wimplib
+o.SaveText:	tbox:h.event
+o.SaveText:	tbox:h.toolbox
+o.SaveText:	h.svcprint
+o.SaveText:	h.Global
+o.SaveText:	HTMLLib:h.struct
+o.SaveText:	HTMLLib:h.tablestruc
+o.SaveText:	ImageLib:h.imagetrans
+o.SaveText:	C:h.setjmp
+o.SaveText:	tbox:h.window
+o.SaveText:	tbox:h.gadgets
+o.SaveText:	h.Bitfields
+o.SaveText:	h.Limits
+o.SaveText:	h.Limits
+o.SaveText:	h.FromROSLib
+o.SaveText:	h.Utils
+o.SaveText:	h.Fetch
+o.SaveText:	h.URLstat
+o.SaveText:	h.Filetypes
+o.SaveText:	h.Forms
+o.SaveText:	h.Protocols
+o.SaveText:	h.Reformat
+o.SaveText:	HTMLLib:h.HTMLLib
+o.SaveText:	h.Save
+o.SaveText:	h.SaveObject
+o.SaveText:	h.SaveText
+o.SetPBoxes:	c.SetPBoxes
+o.SetPBoxes:	C:h.swis
+o.SetPBoxes:	C:h.kernel
+o.SetPBoxes:	tbox:h.wimp
+o.SetPBoxes:	tbox:h.wimplib
+o.SetPBoxes:	tbox:h.event
+o.SetPBoxes:	tbox:h.toolbox
+o.SetPBoxes:	tbox:h.toolbox
+o.SetPBoxes:	tbox:h.window
+o.SetPBoxes:	tbox:h.gadgets
+o.SetPBoxes:	h.svcprint
+o.SetPBoxes:	h.Global
+o.SetPBoxes:	HTMLLib:h.struct
+o.SetPBoxes:	HTMLLib:h.html2_ext
+o.SetPBoxes:	HTMLLib:h.tablestruc
+o.SetPBoxes:	HTMLLib:h.tablestruc
+o.SetPBoxes:	ImageLib:h.imagetrans
+o.SetPBoxes:	tbox:h.flex
+o.SetPBoxes:	C:h.setjmp
+o.SetPBoxes:	tbox:h.window
+o.SetPBoxes:	h.Bitfields
+o.SetPBoxes:	h.Limits
+o.SetPBoxes:	h.Limits
+o.SetPBoxes:	h.Utils
+o.SetPBoxes:	h.Multiuser
+o.SetPBoxes:	h.Save
+o.SetPBoxes:	h.SetPBoxes
+o.Tables:	c.Tables
+o.Tables:	C:h.swis
+o.Tables:	C:h.kernel
+o.Tables:	HTMLLib:h.HTMLLib
+o.Tables:	HTMLLib:h.html2_ext
+o.Tables:	HTMLLib:h.tablestruc
+o.Tables:	HTMLLib:h.tags
+o.Tables:	HTMLLib:h.struct
+o.Tables:	HTMLLib:h.html2_ext
+o.Tables:	tbox:h.wimp
+o.Tables:	tbox:h.wimplib
+o.Tables:	tbox:h.event
+o.Tables:	tbox:h.toolbox
+o.Tables:	tbox:h.toolbox
+o.Tables:	h.svcprint
+o.Tables:	h.Global
+o.Tables:	HTMLLib:h.struct
+o.Tables:	HTMLLib:h.tablestruc
+o.Tables:	ImageLib:h.imagetrans
+o.Tables:	tbox:h.flex
+o.Tables:	C:h.setjmp
+o.Tables:	tbox:h.window
+o.Tables:	tbox:h.gadgets
+o.Tables:	h.Bitfields
+o.Tables:	h.Limits
+o.Tables:	h.Limits
+o.Tables:	h.FromROSLib
+o.Tables:	h.MiscDefs
+o.Tables:	h.Utils
+o.Tables:	h.Memory
+o.Tables:	h.Redraw
+o.Tables:	h.Reformat
+o.Tables:	HTMLLib:h.HTMLLib
+o.Tables:	h.TokenUtils
+o.Tables:	h.Toolbars
+o.Tables:	h.Tables
+o.TokenUtils:	c.TokenUtils
+o.TokenUtils:	HTMLLib:h.HTMLLib
+o.TokenUtils:	HTMLLib:h.html2_ext
+o.TokenUtils:	HTMLLib:h.tablestruc
+o.TokenUtils:	HTMLLib:h.tags
+o.TokenUtils:	HTMLLib:h.struct
+o.TokenUtils:	HTMLLib:h.html2_ext
+o.TokenUtils:	tbox:h.wimp
+o.TokenUtils:	tbox:h.wimplib
+o.TokenUtils:	C:h.kernel
+o.TokenUtils:	tbox:h.event
+o.TokenUtils:	tbox:h.toolbox
+o.TokenUtils:	C:h.swis
+o.TokenUtils:	C:h.kernel
+o.TokenUtils:	tbox:h.toolbox
+o.TokenUtils:	tbox:h.event
+o.TokenUtils:	h.svcprint
+o.TokenUtils:	h.Global
+o.TokenUtils:	HTMLLib:h.struct
+o.TokenUtils:	HTMLLib:h.tablestruc
+o.TokenUtils:	ImageLib:h.imagetrans
+o.TokenUtils:	tbox:h.flex
+o.TokenUtils:	C:h.setjmp
+o.TokenUtils:	tbox:h.window
+o.TokenUtils:	tbox:h.gadgets
+o.TokenUtils:	h.Bitfields
+o.TokenUtils:	h.Limits
+o.TokenUtils:	h.Limits
+o.TokenUtils:	h.MiscDefs
+o.TokenUtils:	h.Utils
+o.TokenUtils:	h.Redraw
+o.TokenUtils:	h.TokenUtils
+o.Toolbars:	c.Toolbars
+o.Toolbars:	C:h.swis
+o.Toolbars:	C:h.kernel
+o.Toolbars:	tbox:h.flex
+o.Toolbars:	tbox:h.wimp
+o.Toolbars:	tbox:h.wimplib
+o.Toolbars:	tbox:h.event
+o.Toolbars:	tbox:h.toolbox
+o.Toolbars:	tbox:h.toolbox
+o.Toolbars:	tbox:h.window
+o.Toolbars:	tbox:h.gadgets
+o.Toolbars:	tbox:h.gadgets
+o.Toolbars:	h.Dialler
+o.Toolbars:	C:h.kernel
+o.Toolbars:	h.svcprint
+o.Toolbars:	h.Global
+o.Toolbars:	HTMLLib:h.struct
+o.Toolbars:	HTMLLib:h.html2_ext
+o.Toolbars:	HTMLLib:h.tablestruc
+o.Toolbars:	HTMLLib:h.tablestruc
+o.Toolbars:	ImageLib:h.imagetrans
+o.Toolbars:	C:h.setjmp
+o.Toolbars:	tbox:h.window
+o.Toolbars:	h.Bitfields
+o.Toolbars:	h.Limits
+o.Toolbars:	h.Limits
+o.Toolbars:	h.Utils
+o.Toolbars:	h.Browser
+o.Toolbars:	h.ChoiceDefs
+o.Toolbars:	h.CSIM
+o.Toolbars:	h.CtrlDefs
+o.Toolbars:	h.Fetch
+o.Toolbars:	h.URLstat
+o.Toolbars:	h.Handlers
+o.Toolbars:	h.History
+o.Toolbars:	h.Images
+o.Toolbars:	h.Memory
+o.Toolbars:	h.Mouse
+o.Toolbars:	h.Reformat
+o.Toolbars:	HTMLLib:h.HTMLLib
+o.Toolbars:	HTMLLib:h.html2_ext
+o.Toolbars:	HTMLLib:h.tags
+o.Toolbars:	HTMLLib:h.struct
+o.Toolbars:	h.URLutils
+o.Toolbars:	Libraries.URILib.h.URI
+o.Toolbars:	C:h.kernel
+o.Toolbars:	h.URLveneer
+o.Toolbars:	h.Toolbars
+o.Unifont:	c.Unifont
+o.Unifont:	C:h.swis
+o.Unifont:	C:h.kernel
+o.Unifont:	C:Unicode.h.iso10646
+o.Unifont:	C:Unicode.h.utf8
+o.Unifont:	C:Unicode.h.iso10646
+o.Unifont:	tbox:h.event
+o.Unifont:	tbox:h.wimp
+o.Unifont:	tbox:h.toolbox
+o.Unifont:	tbox:h.toolbox
+o.Unifont:	h.Global
+o.Unifont:	HTMLLib:h.struct
+o.Unifont:	HTMLLib:h.html2_ext
+o.Unifont:	HTMLLib:h.tablestruc
+o.Unifont:	HTMLLib:h.tablestruc
+o.Unifont:	ImageLib:h.imagetrans
+o.Unifont:	tbox:h.flex
+o.Unifont:	C:h.setjmp
+o.Unifont:	tbox:h.window
+o.Unifont:	tbox:h.gadgets
+o.Unifont:	h.Bitfields
+o.Unifont:	h.Limits
+o.Unifont:	h.Limits
+o.Unifont:	h.FromROSLib
+o.Unifont:	h.Utils
+o.Unifont:	h.Unifont
+o.URLstat:	c.URLstat
+o.URLstat:	HTMLLib:h.HTMLLib
+o.URLstat:	HTMLLib:h.html2_ext
+o.URLstat:	HTMLLib:h.tablestruc
+o.URLstat:	HTMLLib:h.tags
+o.URLstat:	HTMLLib:h.struct
+o.URLstat:	HTMLLib:h.html2_ext
+o.URLstat:	tbox:h.wimp
+o.URLstat:	tbox:h.event
+o.URLstat:	tbox:h.toolbox
+o.URLstat:	C:h.kernel
+o.URLstat:	h.svcprint
+o.URLstat:	h.Global
+o.URLstat:	HTMLLib:h.struct
+o.URLstat:	HTMLLib:h.tablestruc
+o.URLstat:	ImageLib:h.imagetrans
+o.URLstat:	tbox:h.flex
+o.URLstat:	C:h.setjmp
+o.URLstat:	tbox:h.window
+o.URLstat:	tbox:h.gadgets
+o.URLstat:	h.Bitfields
+o.URLstat:	h.Limits
+o.URLstat:	h.Limits
+o.URLstat:	h.Utils
+o.URLstat:	h.URLstat
+o.URLutils:	c.URLutils
+o.URLutils:	C:h.swis
+o.URLutils:	C:h.kernel
+o.URLutils:	Libraries.URILib.h.URI
+o.URLutils:	C:h.kernel
+o.URLutils:	tbox:h.wimp
+o.URLutils:	tbox:h.event
+o.URLutils:	tbox:h.toolbox
+o.URLutils:	h.svcprint
+o.URLutils:	h.Global
+o.URLutils:	HTMLLib:h.struct
+o.URLutils:	HTMLLib:h.html2_ext
+o.URLutils:	HTMLLib:h.tablestruc
+o.URLutils:	HTMLLib:h.tablestruc
+o.URLutils:	ImageLib:h.imagetrans
+o.URLutils:	tbox:h.flex
+o.URLutils:	C:h.setjmp
+o.URLutils:	tbox:h.window
+o.URLutils:	tbox:h.gadgets
+o.URLutils:	h.Bitfields
+o.URLutils:	h.Limits
+o.URLutils:	h.Limits
+o.URLutils:	h.Utils
+o.URLutils:	h.Fetch
+o.URLutils:	h.URLstat
+o.URLutils:	h.Filetypes
+o.URLutils:	h.MimeMap
+o.URLutils:	h.URLveneer
+o.URLutils:	h.URLutils
+o.URLutils:	Libraries.URILib.h.URI
+o.URLveneer:	c.URLveneer
+o.URLveneer:	C:h.swis
+o.URLveneer:	C:h.kernel
+o.URLveneer:	tbox:h.wimp
+o.URLveneer:	tbox:h.event
+o.URLveneer:	tbox:h.toolbox
+o.URLveneer:	h.svcprint
+o.URLveneer:	h.Global
+o.URLveneer:	HTMLLib:h.struct
+o.URLveneer:	HTMLLib:h.html2_ext
+o.URLveneer:	HTMLLib:h.tablestruc
+o.URLveneer:	HTMLLib:h.tablestruc
+o.URLveneer:	ImageLib:h.imagetrans
+o.URLveneer:	tbox:h.flex
+o.URLveneer:	C:h.setjmp
+o.URLveneer:	tbox:h.window
+o.URLveneer:	tbox:h.gadgets
+o.URLveneer:	h.Bitfields
+o.URLveneer:	h.Limits
+o.URLveneer:	h.Limits
+o.URLveneer:	h.Utils
+o.URLveneer:	h.URLutils
+o.URLveneer:	Libraries.URILib.h.URI
+o.URLveneer:	C:h.kernel
+o.URLveneer:	h.URLveneer
+o.Utils:	c.Utils
+o.Utils:	C:h.setjmp
+o.Utils:	HTMLLib:h.HTMLLib
+o.Utils:	HTMLLib:h.html2_ext
+o.Utils:	HTMLLib:h.tablestruc
+o.Utils:	HTMLLib:h.tags
+o.Utils:	HTMLLib:h.struct
+o.Utils:	HTMLLib:h.html2_ext
+o.Utils:	tbox:h.wimp
+o.Utils:	tbox:h.wimplib
+o.Utils:	C:h.kernel
+o.Utils:	tbox:h.event
+o.Utils:	tbox:h.toolbox
+o.Utils:	C:h.swis
+o.Utils:	C:h.kernel
+o.Utils:	tbox:h.toolbox
+o.Utils:	tbox:h.event
+o.Utils:	tbox:h.quit
+o.Utils:	tbox:h.window
+o.Utils:	tbox:h.gadgets
+o.Utils:	tbox:h.proginfo
+o.Utils:	tbox:h.window
+o.Utils:	tbox:h.gadgets
+o.Utils:	h.ToolAction
+o.Utils:	h.svcprint
+o.Utils:	h.Global
+o.Utils:	HTMLLib:h.struct
+o.Utils:	HTMLLib:h.tablestruc
+o.Utils:	ImageLib:h.imagetrans
+o.Utils:	tbox:h.flex
+o.Utils:	C:h.setjmp
+o.Utils:	tbox:h.window
+o.Utils:	h.Bitfields
+o.Utils:	h.Limits
+o.Utils:	h.Limits
+o.Utils:	h.MiscDefs
+o.Utils:	h.FromROSLib
+o.Utils:	h.Main
+o.Utils:	h.NestWimp
+o.Utils:	h.Save
+o.Utils:	h.Toolbars
+o.Utils:	h.Utils
+od.Reformat:	c.Reformat
+od.Reformat:	C:h.swis
+od.Reformat:	C:h.kernel
+od.Reformat:	tbox:h.flex
+od.Reformat:	HTMLLib:h.HTMLLib
+od.Reformat:	HTMLLib:h.html2_ext
+od.Reformat:	HTMLLib:h.tablestruc
+od.Reformat:	HTMLLib:h.tags
+od.Reformat:	HTMLLib:h.struct
+od.Reformat:	HTMLLib:h.html2_ext
+od.Reformat:	tbox:h.wimp
+od.Reformat:	tbox:h.wimplib
+od.Reformat:	tbox:h.event
+od.Reformat:	tbox:h.toolbox
+od.Reformat:	h.svcprint
+od.Reformat:	h.Global
+od.Reformat:	HTMLLib:h.struct
+od.Reformat:	HTMLLib:h.tablestruc
+od.Reformat:	ImageLib:h.imagetrans
+od.Reformat:	C:h.setjmp
+od.Reformat:	tbox:h.window
+od.Reformat:	tbox:h.gadgets
+od.Reformat:	h.Bitfields
+od.Reformat:	h.Limits
+od.Reformat:	h.Limits
+od.Reformat:	h.FromROSLib
+od.Reformat:	h.MiscDefs
+od.Reformat:	h.Utils
+od.Reformat:	h.Browser
+od.Reformat:	h.Fetch
+od.Reformat:	h.URLstat
+od.Reformat:	h.FetchPage
+od.Reformat:	h.FontManage
+od.Reformat:	h.Forms
+od.Reformat:	h.History
+od.Reformat:	h.Images
+od.Reformat:	h.Memory
+od.Reformat:	h.Object
+od.Reformat:	h.Redraw
+od.Reformat:	h.Tables
+od.Reformat:	h.Toolbars
+od.Reformat:	h.Windows
+od.Reformat:	h.Reformat
+od.Reformat:	HTMLLib:h.HTMLLib
+od.Frames:	c.Frames
+od.Frames:	C:h.swis
+od.Frames:	C:h.kernel
+od.Frames:	tbox:h.flex
+od.Frames:	HTMLLib:h.HTMLLib
+od.Frames:	HTMLLib:h.html2_ext
+od.Frames:	HTMLLib:h.tablestruc
+od.Frames:	HTMLLib:h.tags
+od.Frames:	HTMLLib:h.struct
+od.Frames:	HTMLLib:h.html2_ext
+od.Frames:	tbox:h.wimp
+od.Frames:	tbox:h.wimplib
+od.Frames:	tbox:h.event
+od.Frames:	tbox:h.toolbox
+od.Frames:	tbox:h.toolbox
+od.Frames:	tbox:h.window
+od.Frames:	tbox:h.gadgets
+od.Frames:	h.NestWimp
+od.Frames:	h.svcprint
+od.Frames:	h.Global
+od.Frames:	HTMLLib:h.struct
+od.Frames:	HTMLLib:h.tablestruc
+od.Frames:	ImageLib:h.imagetrans
+od.Frames:	C:h.setjmp
+od.Frames:	tbox:h.window
+od.Frames:	h.Bitfields
+od.Frames:	h.Limits
+od.Frames:	h.Limits
+od.Frames:	h.FromROSLib
+od.Frames:	h.Utils
+od.Frames:	h.Browser
+od.Frames:	h.Fetch
+od.Frames:	h.URLstat
+od.Frames:	h.FetchPage
+od.Frames:	h.Images
+od.Frames:	h.Memory
+od.Frames:	h.Mouse
+od.Frames:	h.Redraw
+od.Frames:	h.Reformat
+od.Frames:	HTMLLib:h.HTMLLib
+od.Frames:	h.Toolbars
+od.Frames:	h.URLutils
+od.Frames:	Libraries.URILib.h.URI
+od.Frames:	C:h.kernel
+od.Frames:	h.Windows
+od.Frames:	h.Frames
+od.Windows:	c.Windows
+od.Windows:	C:h.swis
+od.Windows:	C:h.kernel
+od.Windows:	tbox:h.flex
+od.Windows:	tbox:h.wimp
+od.Windows:	tbox:h.wimplib
+od.Windows:	tbox:h.event
+od.Windows:	tbox:h.toolbox
+od.Windows:	tbox:h.toolbox
+od.Windows:	tbox:h.window
+od.Windows:	tbox:h.gadgets
+od.Windows:	h.Dialler
+od.Windows:	C:h.kernel
+od.Windows:	h.NestWimp
+od.Windows:	h.svcprint
+od.Windows:	h.Global
+od.Windows:	HTMLLib:h.struct
+od.Windows:	HTMLLib:h.html2_ext
+od.Windows:	HTMLLib:h.tablestruc
+od.Windows:	HTMLLib:h.tablestruc
+od.Windows:	ImageLib:h.imagetrans
+od.Windows:	C:h.setjmp
+od.Windows:	tbox:h.window
+od.Windows:	h.Bitfields
+od.Windows:	h.Limits
+od.Windows:	h.Limits
+od.Windows:	h.FromROSLib
+od.Windows:	h.MiscDefs
+od.Windows:	h.Utils
+od.Windows:	h.Browser
+od.Windows:	h.ChoiceDefs
+od.Windows:	h.Fetch
+od.Windows:	h.URLstat
+od.Windows:	h.FetchHTML
+od.Windows:	h.FetchPage
+od.Windows:	h.Find
+od.Windows:	h.FontManage
+od.Windows:	h.Forms
+od.Windows:	h.Frames
+od.Windows:	h.Handlers
+od.Windows:	h.History
+od.Windows:	h.Images
+od.Windows:	h.Main
+od.Windows:	h.Markers
+od.Windows:	h.Memory
+od.Windows:	h.Menus
+od.Windows:	h.Meta
+od.Windows:	h.Object
+od.Windows:	h.OpenURL
+od.Windows:	h.PlugIn
+od.Windows:	h.Printing
+od.Windows:	h.Redraw
+od.Windows:	h.Reformat
+od.Windows:	HTMLLib:h.HTMLLib
+od.Windows:	HTMLLib:h.html2_ext
+od.Windows:	HTMLLib:h.tags
+od.Windows:	HTMLLib:h.struct
+od.Windows:	h.Tables
+od.Windows:	h.Toolbars
+od.Windows:	h.URLutils
+od.Windows:	Libraries.URILib.h.URI
+od.Windows:	C:h.kernel
+od.Windows:	h.Windows
+o.Frames:	c.Frames
+o.Frames:	C:h.swis
+o.Frames:	C:h.kernel
+o.Frames:	tbox:h.flex
+o.Frames:	HTMLLib:h.HTMLLib
+o.Frames:	HTMLLib:h.html2_ext
+o.Frames:	HTMLLib:h.tablestruc
+o.Frames:	HTMLLib:h.tags
+o.Frames:	HTMLLib:h.struct
+o.Frames:	HTMLLib:h.html2_ext
+o.Frames:	tbox:h.wimp
+o.Frames:	tbox:h.wimplib
+o.Frames:	tbox:h.event
+o.Frames:	tbox:h.toolbox
+o.Frames:	tbox:h.toolbox
+o.Frames:	tbox:h.window
+o.Frames:	tbox:h.gadgets
+o.Frames:	h.NestWimp
+o.Frames:	h.svcprint
+o.Frames:	h.Global
+o.Frames:	HTMLLib:h.struct
+o.Frames:	HTMLLib:h.tablestruc
+o.Frames:	ImageLib:h.imagetrans
+o.Frames:	C:h.setjmp
+o.Frames:	tbox:h.window
+o.Frames:	h.Bitfields
+o.Frames:	h.Limits
+o.Frames:	h.Limits
+o.Frames:	h.FromROSLib
+o.Frames:	h.Utils
+o.Frames:	h.Browser
+o.Frames:	h.Fetch
+o.Frames:	h.URLstat
+o.Frames:	h.FetchPage
+o.Frames:	h.Images
+o.Frames:	h.Memory
+o.Frames:	h.Mouse
+o.Frames:	h.Redraw
+o.Frames:	h.Reformat
+o.Frames:	HTMLLib:h.HTMLLib
+o.Frames:	h.Toolbars
+o.Frames:	h.URLutils
+o.Frames:	Libraries.URILib.h.URI
+o.Frames:	C:h.kernel
+o.Frames:	h.Windows
+o.Frames:	h.Frames
+o.Reformat:	c.Reformat
+o.Reformat:	C:h.swis
+o.Reformat:	C:h.kernel
+o.Reformat:	tbox:h.flex
+o.Reformat:	HTMLLib:h.HTMLLib
+o.Reformat:	HTMLLib:h.html2_ext
+o.Reformat:	HTMLLib:h.tablestruc
+o.Reformat:	HTMLLib:h.tags
+o.Reformat:	HTMLLib:h.struct
+o.Reformat:	HTMLLib:h.html2_ext
+o.Reformat:	tbox:h.wimp
+o.Reformat:	tbox:h.wimplib
+o.Reformat:	tbox:h.event
+o.Reformat:	tbox:h.toolbox
+o.Reformat:	h.svcprint
+o.Reformat:	h.Global
+o.Reformat:	HTMLLib:h.struct
+o.Reformat:	HTMLLib:h.tablestruc
+o.Reformat:	ImageLib:h.imagetrans
+o.Reformat:	C:h.setjmp
+o.Reformat:	tbox:h.window
+o.Reformat:	tbox:h.gadgets
+o.Reformat:	h.Bitfields
+o.Reformat:	h.Limits
+o.Reformat:	h.Limits
+o.Reformat:	h.FromROSLib
+o.Reformat:	h.MiscDefs
+o.Reformat:	h.Utils
+o.Reformat:	h.Browser
+o.Reformat:	h.Fetch
+o.Reformat:	h.URLstat
+o.Reformat:	h.FetchPage
+o.Reformat:	h.FontManage
+o.Reformat:	h.Forms
+o.Reformat:	h.History
+o.Reformat:	h.Images
+o.Reformat:	h.Memory
+o.Reformat:	h.Object
+o.Reformat:	h.Redraw
+o.Reformat:	h.Tables
+o.Reformat:	h.Toolbars
+o.Reformat:	h.Windows
+o.Reformat:	h.Reformat
+o.Reformat:	HTMLLib:h.HTMLLib
+o.Windows:	c.Windows
+o.Windows:	C:h.swis
+o.Windows:	C:h.kernel
+o.Windows:	tbox:h.flex
+o.Windows:	tbox:h.wimp
+o.Windows:	tbox:h.wimplib
+o.Windows:	tbox:h.event
+o.Windows:	tbox:h.toolbox
+o.Windows:	tbox:h.toolbox
+o.Windows:	tbox:h.window
+o.Windows:	tbox:h.gadgets
+o.Windows:	h.Dialler
+o.Windows:	C:h.kernel
+o.Windows:	h.NestWimp
+o.Windows:	h.svcprint
+o.Windows:	h.Global
+o.Windows:	HTMLLib:h.struct
+o.Windows:	HTMLLib:h.html2_ext
+o.Windows:	HTMLLib:h.tablestruc
+o.Windows:	HTMLLib:h.tablestruc
+o.Windows:	ImageLib:h.imagetrans
+o.Windows:	C:h.setjmp
+o.Windows:	tbox:h.window
+o.Windows:	h.Bitfields
+o.Windows:	h.Limits
+o.Windows:	h.Limits
+o.Windows:	h.FromROSLib
+o.Windows:	h.MiscDefs
+o.Windows:	h.Utils
+o.Windows:	h.Browser
+o.Windows:	h.ChoiceDefs
+o.Windows:	h.Fetch
+o.Windows:	h.URLstat
+o.Windows:	h.FetchHTML
+o.Windows:	h.FetchPage
+o.Windows:	h.Find
+o.Windows:	h.FontManage
+o.Windows:	h.Forms
+o.Windows:	h.Frames
+o.Windows:	h.Handlers
+o.Windows:	h.History
+o.Windows:	h.Images
+o.Windows:	h.Main
+o.Windows:	h.Markers
+o.Windows:	h.Memory
+o.Windows:	h.Menus
+o.Windows:	h.Meta
+o.Windows:	h.Object
+o.Windows:	h.OpenURL
+o.Windows:	h.PlugIn
+o.Windows:	h.Printing
+o.Windows:	h.Redraw
+o.Windows:	h.Reformat
+o.Windows:	HTMLLib:h.HTMLLib
+o.Windows:	HTMLLib:h.html2_ext
+o.Windows:	HTMLLib:h.tags
+o.Windows:	HTMLLib:h.struct
+o.Windows:	h.Tables
+o.Windows:	h.Toolbars
+o.Windows:	h.URLutils
+o.Windows:	Libraries.URILib.h.URI
+o.Windows:	C:h.kernel
+o.Windows:	h.Windows
+od.Browser:	c.Browser
+od.Browser:	C:h.swis
+od.Browser:	C:h.kernel
+od.Browser:	tbox:h.flex
+od.Browser:	tbox:h.wimp
+od.Browser:	tbox:h.wimplib
+od.Browser:	tbox:h.event
+od.Browser:	tbox:h.toolbox
+od.Browser:	tbox:h.toolbox
+od.Browser:	tbox:h.window
+od.Browser:	tbox:h.gadgets
+od.Browser:	h.Dialler
+od.Browser:	C:h.kernel
+od.Browser:	h.NestWimp
+od.Browser:	h.svcprint
+od.Browser:	h.Global
+od.Browser:	HTMLLib:h.struct
+od.Browser:	HTMLLib:h.html2_ext
+od.Browser:	HTMLLib:h.tablestruc
+od.Browser:	HTMLLib:h.tablestruc
+od.Browser:	ImageLib:h.imagetrans
+od.Browser:	C:h.setjmp
+od.Browser:	tbox:h.window
+od.Browser:	h.Bitfields
+od.Browser:	h.Limits
+od.Browser:	h.Limits
+od.Browser:	h.FromROSLib
+od.Browser:	h.MiscDefs
+od.Browser:	h.Utils
+od.Browser:	h.CSIM
+od.Browser:	h.Fetch
+od.Browser:	h.URLstat
+od.Browser:	h.Frames
+od.Browser:	h.Forms
+od.Browser:	h.History
+od.Browser:	h.Images
+od.Browser:	h.Mouse
+od.Browser:	h.PrintStyle
+od.Browser:	h.Redraw
+od.Browser:	h.Reformat
+od.Browser:	HTMLLib:h.HTMLLib
+od.Browser:	HTMLLib:h.html2_ext
+od.Browser:	HTMLLib:h.tags
+od.Browser:	HTMLLib:h.struct
+od.Browser:	h.TokenUtils
+od.Browser:	h.Toolbars
+od.Browser:	h.Browser
+od.Fetch:	c.Fetch
+od.Fetch:	C:h.swis
+od.Fetch:	C:h.kernel
+od.Fetch:	tbox:h.flex
+od.Fetch:	HTMLLib:h.HTMLLib
+od.Fetch:	HTMLLib:h.html2_ext
+od.Fetch:	HTMLLib:h.tablestruc
+od.Fetch:	HTMLLib:h.tags
+od.Fetch:	HTMLLib:h.struct
+od.Fetch:	HTMLLib:h.html2_ext
+od.Fetch:	tbox:h.wimp
+od.Fetch:	tbox:h.wimplib
+od.Fetch:	tbox:h.event
+od.Fetch:	tbox:h.toolbox
+od.Fetch:	h.svcprint
+od.Fetch:	h.Global
+od.Fetch:	HTMLLib:h.struct
+od.Fetch:	HTMLLib:h.tablestruc
+od.Fetch:	ImageLib:h.imagetrans
+od.Fetch:	C:h.setjmp
+od.Fetch:	tbox:h.window
+od.Fetch:	tbox:h.gadgets
+od.Fetch:	h.Bitfields
+od.Fetch:	h.Limits
+od.Fetch:	h.Limits
+od.Fetch:	h.MiscDefs
+od.Fetch:	h.Utils
+od.Fetch:	h.Authorise
+od.Fetch:	h.Browser
+od.Fetch:	h.Filetypes
+od.Fetch:	h.FontManage
+od.Fetch:	h.Forms
+od.Fetch:	h.FetchHTML
+od.Fetch:	h.Frames
+od.Fetch:	h.History
+od.Fetch:	h.Images
+od.Fetch:	h.Markers
+od.Fetch:	h.Memory
+od.Fetch:	h.Meta
+od.Fetch:	h.PlugIn
+od.Fetch:	h.Protocols
+od.Fetch:	h.Object
+od.Fetch:	h.Redraw
+od.Fetch:	h.Reformat
+od.Fetch:	HTMLLib:h.HTMLLib
+od.Fetch:	h.RMA
+od.Fetch:	h.Save
+od.Fetch:	h.SaveFile
+od.Fetch:	h.SaveObject
+od.Fetch:	h.Toolbars
+od.Fetch:	h.URLutils
+od.Fetch:	Libraries.URILib.h.URI
+od.Fetch:	C:h.kernel
+od.Fetch:	h.URLveneer
+od.Fetch:	h.Windows
+od.Fetch:	h.Fetch
+od.Fetch:	h.URLstat
+o.Browser:	c.Browser
+o.Browser:	C:h.swis
+o.Browser:	C:h.kernel
+o.Browser:	tbox:h.flex
+o.Browser:	tbox:h.wimp
+o.Browser:	tbox:h.wimplib
+o.Browser:	tbox:h.event
+o.Browser:	tbox:h.toolbox
+o.Browser:	tbox:h.toolbox
+o.Browser:	tbox:h.window
+o.Browser:	tbox:h.gadgets
+o.Browser:	h.Dialler
+o.Browser:	C:h.kernel
+o.Browser:	h.NestWimp
+o.Browser:	h.svcprint
+o.Browser:	h.Global
+o.Browser:	HTMLLib:h.struct
+o.Browser:	HTMLLib:h.html2_ext
+o.Browser:	HTMLLib:h.tablestruc
+o.Browser:	HTMLLib:h.tablestruc
+o.Browser:	ImageLib:h.imagetrans
+o.Browser:	C:h.setjmp
+o.Browser:	tbox:h.window
+o.Browser:	h.Bitfields
+o.Browser:	h.Limits
+o.Browser:	h.Limits
+o.Browser:	h.FromROSLib
+o.Browser:	h.MiscDefs
+o.Browser:	h.Utils
+o.Browser:	h.CSIM
+o.Browser:	h.Fetch
+o.Browser:	h.URLstat
+o.Browser:	h.Frames
+o.Browser:	h.Forms
+o.Browser:	h.History
+o.Browser:	h.Images
+o.Browser:	h.Mouse
+o.Browser:	h.PrintStyle
+o.Browser:	h.Redraw
+o.Browser:	h.Reformat
+o.Browser:	HTMLLib:h.HTMLLib
+o.Browser:	HTMLLib:h.html2_ext
+o.Browser:	HTMLLib:h.tags
+o.Browser:	HTMLLib:h.struct
+o.Browser:	h.TokenUtils
+o.Browser:	h.Toolbars
+o.Browser:	h.Browser
+o.Fetch:	c.Fetch
+o.Fetch:	C:h.swis
+o.Fetch:	C:h.kernel
+o.Fetch:	tbox:h.flex
+o.Fetch:	HTMLLib:h.HTMLLib
+o.Fetch:	HTMLLib:h.html2_ext
+o.Fetch:	HTMLLib:h.tablestruc
+o.Fetch:	HTMLLib:h.tags
+o.Fetch:	HTMLLib:h.struct
+o.Fetch:	HTMLLib:h.html2_ext
+o.Fetch:	tbox:h.wimp
+o.Fetch:	tbox:h.wimplib
+o.Fetch:	tbox:h.event
+o.Fetch:	tbox:h.toolbox
+o.Fetch:	h.svcprint
+o.Fetch:	h.Global
+o.Fetch:	HTMLLib:h.struct
+o.Fetch:	HTMLLib:h.tablestruc
+o.Fetch:	ImageLib:h.imagetrans
+o.Fetch:	C:h.setjmp
+o.Fetch:	tbox:h.window
+o.Fetch:	tbox:h.gadgets
+o.Fetch:	h.Bitfields
+o.Fetch:	h.Limits
+o.Fetch:	h.Limits
+o.Fetch:	h.MiscDefs
+o.Fetch:	h.Utils
+o.Fetch:	h.Authorise
+o.Fetch:	h.Browser
+o.Fetch:	h.Filetypes
+o.Fetch:	h.FontManage
+o.Fetch:	h.Forms
+o.Fetch:	h.FetchHTML
+o.Fetch:	h.Frames
+o.Fetch:	h.History
+o.Fetch:	h.Images
+o.Fetch:	h.Markers
+o.Fetch:	h.Memory
+o.Fetch:	h.Meta
+o.Fetch:	h.PlugIn
+o.Fetch:	h.Protocols
+o.Fetch:	h.Object
+o.Fetch:	h.Redraw
+o.Fetch:	h.Reformat
+o.Fetch:	HTMLLib:h.HTMLLib
+o.Fetch:	h.RMA
+o.Fetch:	h.Save
+o.Fetch:	h.SaveFile
+o.Fetch:	h.SaveObject
+o.Fetch:	h.Toolbars
+o.Fetch:	h.URLutils
+o.Fetch:	Libraries.URILib.h.URI
+o.Fetch:	C:h.kernel
+o.Fetch:	h.URLveneer
+o.Fetch:	h.Windows
+o.Fetch:	h.Fetch
+o.Fetch:	h.URLstat
+o_italk.About:	c.About
+o_italk.About:	C:h.kernel
+o_italk.About:	C:h.swis
+o_italk.About:	tbox:h.flex
+o_italk.About:	tbox:h.wimp
+o_italk.About:	tbox:h.wimplib
+o_italk.About:	tbox:h.event
+o_italk.About:	tbox:h.toolbox
+o_italk.About:	tbox:h.toolbox
+o_italk.About:	tbox:h.window
+o_italk.About:	tbox:h.gadgets
+o_italk.About:	tbox:h.gadgets
+o_italk.About:	h.svcprint
+o_italk.About:	h.Global
+o_italk.About:	HTMLLib:h.struct
+o_italk.About:	HTMLLib:h.html2_ext
+o_italk.About:	HTMLLib:h.tablestruc
+o_italk.About:	HTMLLib:h.tablestruc
+o_italk.About:	ImageLib:h.imagetrans
+o_italk.About:	C:h.setjmp
+o_italk.About:	tbox:h.window
+o_italk.About:	h.Bitfields
+o_italk.About:	h.Limits
+o_italk.About:	h.Limits
+o_italk.About:	h.Utils
+o_italk.Authorise:	c.Authorise
+o_italk.Authorise:	tbox:h.flex
+o_italk.Authorise:	tbox:h.wimp
+o_italk.Authorise:	tbox:h.wimplib
+o_italk.Authorise:	C:h.kernel
+o_italk.Authorise:	tbox:h.event
+o_italk.Authorise:	tbox:h.toolbox
+o_italk.Authorise:	tbox:h.toolbox
+o_italk.Authorise:	tbox:h.window
+o_italk.Authorise:	tbox:h.gadgets
+o_italk.Authorise:	tbox:h.gadgets
+o_italk.Authorise:	h.svcprint
+o_italk.Authorise:	h.Global
+o_italk.Authorise:	HTMLLib:h.struct
+o_italk.Authorise:	HTMLLib:h.html2_ext
+o_italk.Authorise:	HTMLLib:h.tablestruc
+o_italk.Authorise:	HTMLLib:h.tablestruc
+o_italk.Authorise:	ImageLib:h.imagetrans
+o_italk.Authorise:	C:h.setjmp
+o_italk.Authorise:	tbox:h.window
+o_italk.Authorise:	h.Bitfields
+o_italk.Authorise:	h.Limits
+o_italk.Authorise:	h.Limits
+o_italk.Authorise:	h.Utils
+o_italk.Authorise:	h.Browser
+o_italk.Authorise:	h.Fetch
+o_italk.Authorise:	h.URLstat
+o_italk.Authorise:	h.Toolbars
+o_italk.Authorise:	h.URLutils
+o_italk.Authorise:	Libraries.URILib.h.URI
+o_italk.Authorise:	C:h.kernel
+o_italk.Authorise:	h.Windows
+o_italk.Authorise:	h.Authorise
+o_italk.Browser:	c.Browser
+o_italk.Browser:	C:h.swis
+o_italk.Browser:	C:h.kernel
+o_italk.Browser:	tbox:h.flex
+o_italk.Browser:	tbox:h.wimp
+o_italk.Browser:	tbox:h.wimplib
+o_italk.Browser:	tbox:h.event
+o_italk.Browser:	tbox:h.toolbox
+o_italk.Browser:	tbox:h.toolbox
+o_italk.Browser:	tbox:h.window
+o_italk.Browser:	tbox:h.gadgets
+o_italk.Browser:	h.Dialler
+o_italk.Browser:	C:h.kernel
+o_italk.Browser:	h.NestWimp
+o_italk.Browser:	h.svcprint
+o_italk.Browser:	h.Global
+o_italk.Browser:	HTMLLib:h.struct
+o_italk.Browser:	HTMLLib:h.html2_ext
+o_italk.Browser:	HTMLLib:h.tablestruc
+o_italk.Browser:	HTMLLib:h.tablestruc
+o_italk.Browser:	ImageLib:h.imagetrans
+o_italk.Browser:	C:h.setjmp
+o_italk.Browser:	tbox:h.window
+o_italk.Browser:	h.Bitfields
+o_italk.Browser:	h.Limits
+o_italk.Browser:	h.Limits
+o_italk.Browser:	h.FromROSLib
+o_italk.Browser:	h.MiscDefs
+o_italk.Browser:	h.Utils
+o_italk.Browser:	h.CSIM
+o_italk.Browser:	h.Fetch
+o_italk.Browser:	h.URLstat
+o_italk.Browser:	h.Frames
+o_italk.Browser:	h.Forms
+o_italk.Browser:	h.History
+o_italk.Browser:	h.Images
+o_italk.Browser:	h.Mouse
+o_italk.Browser:	h.PrintStyle
+o_italk.Browser:	h.Redraw
+o_italk.Browser:	h.Reformat
+o_italk.Browser:	HTMLLib:h.HTMLLib
+o_italk.Browser:	HTMLLib:h.html2_ext
+o_italk.Browser:	HTMLLib:h.tags
+o_italk.Browser:	HTMLLib:h.struct
+o_italk.Browser:	h.TokenUtils
+o_italk.Browser:	h.Toolbars
+o_italk.Browser:	h.Browser
+o_italk.Choices:	c.Choices
+o_italk.Choices:	C:h.swis
+o_italk.Choices:	C:h.kernel
+o_italk.Choices:	HTMLLib:h.HTMLLib
+o_italk.Choices:	HTMLLib:h.html2_ext
+o_italk.Choices:	HTMLLib:h.tablestruc
+o_italk.Choices:	HTMLLib:h.tags
+o_italk.Choices:	HTMLLib:h.struct
+o_italk.Choices:	HTMLLib:h.html2_ext
+o_italk.Choices:	tbox:h.wimp
+o_italk.Choices:	tbox:h.wimplib
+o_italk.Choices:	tbox:h.event
+o_italk.Choices:	tbox:h.toolbox
+o_italk.Choices:	tbox:h.toolbox
+o_italk.Choices:	tbox:h.window
+o_italk.Choices:	tbox:h.gadgets
+o_italk.Choices:	tbox:h.menu
+o_italk.Choices:	tbox:h.ColourDbox
+o_italk.Choices:	tbox:h.FontMenu
+o_italk.Choices:	h.svcprint
+o_italk.Choices:	h.Global
+o_italk.Choices:	HTMLLib:h.struct
+o_italk.Choices:	HTMLLib:h.tablestruc
+o_italk.Choices:	ImageLib:h.imagetrans
+o_italk.Choices:	tbox:h.flex
+o_italk.Choices:	C:h.setjmp
+o_italk.Choices:	tbox:h.window
+o_italk.Choices:	h.Bitfields
+o_italk.Choices:	h.Limits
+o_italk.Choices:	h.Limits
+o_italk.Choices:	h.FromROSLib
+o_italk.Choices:	h.Utils
+o_italk.Choices:	h.ChoiceDefs
+o_italk.Choices:	h.Encoding
+o_italk.Choices:	h.FetchPage
+o_italk.Choices:	h.FontManage
+o_italk.Choices:	h.History
+o_italk.Choices:	h.Limits
+o_italk.Choices:	h.Menus
+o_italk.Choices:	h.NestWimp
+o_italk.Choices:	h.Redraw
+o_italk.Choices:	h.Reformat
+o_italk.Choices:	HTMLLib:h.HTMLLib
+o_italk.Choices:	h.Save
+o_italk.Choices:	h.URLutils
+o_italk.Choices:	Libraries.URILib.h.URI
+o_italk.Choices:	C:h.kernel
+o_italk.Choices:	h.Windows
+o_italk.Choices:	h.Choices
+o_italk.Cookies:	c.Cookies
+o_italk.Cookies:	C:h.swis
+o_italk.Cookies:	C:h.kernel
+o_italk.Cookies:	tbox:h.wimp
+o_italk.Cookies:	tbox:h.wimplib
+o_italk.Cookies:	tbox:h.event
+o_italk.Cookies:	tbox:h.toolbox
+o_italk.Cookies:	h.svcprint
+o_italk.Cookies:	h.Global
+o_italk.Cookies:	HTMLLib:h.struct
+o_italk.Cookies:	HTMLLib:h.html2_ext
+o_italk.Cookies:	HTMLLib:h.tablestruc
+o_italk.Cookies:	HTMLLib:h.tablestruc
+o_italk.Cookies:	ImageLib:h.imagetrans
+o_italk.Cookies:	tbox:h.flex
+o_italk.Cookies:	C:h.setjmp
+o_italk.Cookies:	tbox:h.window
+o_italk.Cookies:	tbox:h.gadgets
+o_italk.Cookies:	h.Bitfields
+o_italk.Cookies:	h.Limits
+o_italk.Cookies:	h.Limits
+o_italk.Cookies:	h.Utils
+o_italk.Cookies:	h.ChoiceDefs
+o_italk.Cookies:	h.MiscDefs
+o_italk.Cookies:	h.Cookies
+o_italk.CSIM:	c.CSIM
+o_italk.CSIM:	C:h.swis
+o_italk.CSIM:	C:h.kernel
+o_italk.CSIM:	HTMLLib:h.HTMLLib
+o_italk.CSIM:	HTMLLib:h.html2_ext
+o_italk.CSIM:	HTMLLib:h.tablestruc
+o_italk.CSIM:	HTMLLib:h.tags
+o_italk.CSIM:	HTMLLib:h.struct
+o_italk.CSIM:	HTMLLib:h.html2_ext
+o_italk.CSIM:	tbox:h.wimp
+o_italk.CSIM:	tbox:h.wimplib
+o_italk.CSIM:	tbox:h.event
+o_italk.CSIM:	tbox:h.toolbox
+o_italk.CSIM:	h.svcprint
+o_italk.CSIM:	h.Global
+o_italk.CSIM:	HTMLLib:h.struct
+o_italk.CSIM:	HTMLLib:h.tablestruc
+o_italk.CSIM:	ImageLib:h.imagetrans
+o_italk.CSIM:	tbox:h.flex
+o_italk.CSIM:	C:h.setjmp
+o_italk.CSIM:	tbox:h.window
+o_italk.CSIM:	tbox:h.gadgets
+o_italk.CSIM:	h.Bitfields
+o_italk.CSIM:	h.Limits
+o_italk.CSIM:	h.Limits
+o_italk.CSIM:	h.FromROSLib
+o_italk.CSIM:	h.MiscDefs
+o_italk.CSIM:	h.Utils
+o_italk.CSIM:	h.Fetch
+o_italk.CSIM:	h.URLstat
+o_italk.CSIM:	h.Redraw
+o_italk.CSIM:	h.CSIM
+o_italk.DragBox:	c.DragBox
+o_italk.DragBox:	C:h.swis
+o_italk.DragBox:	C:h.kernel
+o_italk.DragBox:	tbox:h.wimp
+o_italk.DragBox:	tbox:h.wimplib
+o_italk.DragBox:	tbox:h.event
+o_italk.DragBox:	tbox:h.toolbox
+o_italk.DragBox:	h.svcprint
+o_italk.DragBox:	h.Global
+o_italk.DragBox:	HTMLLib:h.struct
+o_italk.DragBox:	HTMLLib:h.html2_ext
+o_italk.DragBox:	HTMLLib:h.tablestruc
+o_italk.DragBox:	HTMLLib:h.tablestruc
+o_italk.DragBox:	ImageLib:h.imagetrans
+o_italk.DragBox:	tbox:h.flex
+o_italk.DragBox:	C:h.setjmp
+o_italk.DragBox:	tbox:h.window
+o_italk.DragBox:	tbox:h.gadgets
+o_italk.DragBox:	h.Bitfields
+o_italk.DragBox:	h.Limits
+o_italk.DragBox:	h.Limits
+o_italk.DragBox:	h.FromROSLib
+o_italk.DragBox:	h.Utils
+o_italk.DragBox:	h.DragBox
+o_italk.Encoding:	c.Encoding
+o_italk.Encoding:	C:h.swis
+o_italk.Encoding:	C:h.kernel
+o_italk.Encoding:	tbox:h.wimp
+o_italk.Encoding:	tbox:h.toolbox
+o_italk.Encoding:	tbox:h.menu
+o_italk.Encoding:	tbox:h.event
+o_italk.Encoding:	C:Unicode.h.iso10646
+o_italk.Encoding:	h.Global
+o_italk.Encoding:	HTMLLib:h.struct
+o_italk.Encoding:	HTMLLib:h.html2_ext
+o_italk.Encoding:	HTMLLib:h.tablestruc
+o_italk.Encoding:	HTMLLib:h.tablestruc
+o_italk.Encoding:	ImageLib:h.imagetrans
+o_italk.Encoding:	tbox:h.flex
+o_italk.Encoding:	C:h.setjmp
+o_italk.Encoding:	tbox:h.window
+o_italk.Encoding:	tbox:h.gadgets
+o_italk.Encoding:	h.Bitfields
+o_italk.Encoding:	h.Limits
+o_italk.Encoding:	h.Limits
+o_italk.Encoding:	h.Utils
+o_italk.Encoding:	h.Choices
+o_italk.Encoding:	h.Encoding
+o_italk.Fetch:	c.Fetch
+o_italk.Fetch:	C:h.swis
+o_italk.Fetch:	C:h.kernel
+o_italk.Fetch:	tbox:h.flex
+o_italk.Fetch:	HTMLLib:h.HTMLLib
+o_italk.Fetch:	HTMLLib:h.html2_ext
+o_italk.Fetch:	HTMLLib:h.tablestruc
+o_italk.Fetch:	HTMLLib:h.tags
+o_italk.Fetch:	HTMLLib:h.struct
+o_italk.Fetch:	HTMLLib:h.html2_ext
+o_italk.Fetch:	tbox:h.wimp
+o_italk.Fetch:	tbox:h.wimplib
+o_italk.Fetch:	tbox:h.event
+o_italk.Fetch:	tbox:h.toolbox
+o_italk.Fetch:	h.svcprint
+o_italk.Fetch:	h.Global
+o_italk.Fetch:	HTMLLib:h.struct
+o_italk.Fetch:	HTMLLib:h.tablestruc
+o_italk.Fetch:	ImageLib:h.imagetrans
+o_italk.Fetch:	C:h.setjmp
+o_italk.Fetch:	tbox:h.window
+o_italk.Fetch:	tbox:h.gadgets
+o_italk.Fetch:	h.Bitfields
+o_italk.Fetch:	h.Limits
+o_italk.Fetch:	h.Limits
+o_italk.Fetch:	h.MiscDefs
+o_italk.Fetch:	h.Utils
+o_italk.Fetch:	h.Authorise
+o_italk.Fetch:	h.Browser
+o_italk.Fetch:	h.Filetypes
+o_italk.Fetch:	h.FontManage
+o_italk.Fetch:	h.Forms
+o_italk.Fetch:	h.FetchHTML
+o_italk.Fetch:	h.Frames
+o_italk.Fetch:	h.History
+o_italk.Fetch:	h.Images
+o_italk.Fetch:	h.Markers
+o_italk.Fetch:	h.Memory
+o_italk.Fetch:	h.Meta
+o_italk.Fetch:	h.PlugIn
+o_italk.Fetch:	h.Protocols
+o_italk.Fetch:	h.Object
+o_italk.Fetch:	h.Redraw
+o_italk.Fetch:	h.Reformat
+o_italk.Fetch:	HTMLLib:h.HTMLLib
+o_italk.Fetch:	h.RMA
+o_italk.Fetch:	h.Save
+o_italk.Fetch:	h.SaveFile
+o_italk.Fetch:	h.SaveObject
+o_italk.Fetch:	h.Toolbars
+o_italk.Fetch:	h.URLutils
+o_italk.Fetch:	Libraries.URILib.h.URI
+o_italk.Fetch:	C:h.kernel
+o_italk.Fetch:	h.URLveneer
+o_italk.Fetch:	h.Windows
+o_italk.Fetch:	h.Fetch
+o_italk.Fetch:	h.URLstat
+o_italk.FetchHTML:	c.FetchHTML
+o_italk.FetchHTML:	C:h.swis
+o_italk.FetchHTML:	C:h.kernel
+o_italk.FetchHTML:	tbox:h.flex
+o_italk.FetchHTML:	HTMLLib:h.HTMLLib
+o_italk.FetchHTML:	HTMLLib:h.html2_ext
+o_italk.FetchHTML:	HTMLLib:h.tablestruc
+o_italk.FetchHTML:	HTMLLib:h.tags
+o_italk.FetchHTML:	HTMLLib:h.struct
+o_italk.FetchHTML:	HTMLLib:h.html2_ext
+o_italk.FetchHTML:	tbox:h.wimp
+o_italk.FetchHTML:	tbox:h.event
+o_italk.FetchHTML:	tbox:h.toolbox
+o_italk.FetchHTML:	h.svcprint
+o_italk.FetchHTML:	h.Global
+o_italk.FetchHTML:	HTMLLib:h.struct
+o_italk.FetchHTML:	HTMLLib:h.tablestruc
+o_italk.FetchHTML:	ImageLib:h.imagetrans
+o_italk.FetchHTML:	C:h.setjmp
+o_italk.FetchHTML:	tbox:h.window
+o_italk.FetchHTML:	tbox:h.gadgets
+o_italk.FetchHTML:	h.Bitfields
+o_italk.FetchHTML:	h.Limits
+o_italk.FetchHTML:	h.Limits
+o_italk.FetchHTML:	h.MiscDefs
+o_italk.FetchHTML:	h.Utils
+o_italk.FetchHTML:	h.About
+o_italk.FetchHTML:	h.Authorise
+o_italk.FetchHTML:	h.Browser
+o_italk.FetchHTML:	h.Cookies
+o_italk.FetchHTML:	h.Encoding
+o_italk.FetchHTML:	h.Fetch
+o_italk.FetchHTML:	h.URLstat
+o_italk.FetchHTML:	h.Filetypes
+o_italk.FetchHTML:	h.History
+o_italk.FetchHTML:	h.Save
+o_italk.FetchHTML:	h.URLutils
+o_italk.FetchHTML:	Libraries.URILib.h.URI
+o_italk.FetchHTML:	C:h.kernel
+o_italk.FetchHTML:	h.URLveneer
+o_italk.FetchHTML:	h.FetchHTML
+o_italk.FetchPage:	c.FetchPage
+o_italk.FetchPage:	tbox:h.flex
+o_italk.FetchPage:	C:h.swis
+o_italk.FetchPage:	C:h.kernel
+o_italk.FetchPage:	Libraries.URILib.h.URI
+o_italk.FetchPage:	C:h.kernel
+o_italk.FetchPage:	tbox:h.wimp
+o_italk.FetchPage:	tbox:h.wimplib
+o_italk.FetchPage:	tbox:h.event
+o_italk.FetchPage:	tbox:h.toolbox
+o_italk.FetchPage:	tbox:h.toolbox
+o_italk.FetchPage:	tbox:h.window
+o_italk.FetchPage:	tbox:h.gadgets
+o_italk.FetchPage:	tbox:h.gadgets
+o_italk.FetchPage:	h.svcprint
+o_italk.FetchPage:	h.Global
+o_italk.FetchPage:	HTMLLib:h.struct
+o_italk.FetchPage:	HTMLLib:h.html2_ext
+o_italk.FetchPage:	HTMLLib:h.tablestruc
+o_italk.FetchPage:	HTMLLib:h.tablestruc
+o_italk.FetchPage:	ImageLib:h.imagetrans
+o_italk.FetchPage:	C:h.setjmp
+o_italk.FetchPage:	tbox:h.window
+o_italk.FetchPage:	h.Bitfields
+o_italk.FetchPage:	h.Limits
+o_italk.FetchPage:	h.Limits
+o_italk.FetchPage:	h.FromROSLib
+o_italk.FetchPage:	h.MiscDefs
+o_italk.FetchPage:	h.Utils
+o_italk.FetchPage:	h.Browser
+o_italk.FetchPage:	h.ChoiceDefs
+o_italk.FetchPage:	h.Fetch
+o_italk.FetchPage:	h.URLstat
+o_italk.FetchPage:	h.Frames
+o_italk.FetchPage:	h.Handlers
+o_italk.FetchPage:	h.History
+o_italk.FetchPage:	h.Images
+o_italk.FetchPage:	h.JavaScript
+o_italk.FetchPage:	h.Memory
+o_italk.FetchPage:	h.PlugIn
+o_italk.FetchPage:	h.Protocols
+o_italk.FetchPage:	h.Reformat
+o_italk.FetchPage:	HTMLLib:h.HTMLLib
+o_italk.FetchPage:	HTMLLib:h.html2_ext
+o_italk.FetchPage:	HTMLLib:h.tags
+o_italk.FetchPage:	HTMLLib:h.struct
+o_italk.FetchPage:	h.SaveDraw
+o_italk.FetchPage:	h.SaveText
+o_italk.FetchPage:	h.Toolbars
+o_italk.FetchPage:	h.URLutils
+o_italk.FetchPage:	Libraries.URILib.h.URI
+o_italk.FetchPage:	h.Windows
+o_italk.FetchPage:	h.FetchPage
+o_italk.Find:	c.Find
+o_italk.Find:	C:h.swis
+o_italk.Find:	C:h.kernel
+o_italk.Find:	tbox:h.wimp
+o_italk.Find:	tbox:h.wimplib
+o_italk.Find:	tbox:h.event
+o_italk.Find:	tbox:h.toolbox
+o_italk.Find:	tbox:h.toolbox
+o_italk.Find:	tbox:h.window
+o_italk.Find:	tbox:h.gadgets
+o_italk.Find:	h.svcprint
+o_italk.Find:	h.Global
+o_italk.Find:	HTMLLib:h.struct
+o_italk.Find:	HTMLLib:h.html2_ext
+o_italk.Find:	HTMLLib:h.tablestruc
+o_italk.Find:	HTMLLib:h.tablestruc
+o_italk.Find:	ImageLib:h.imagetrans
+o_italk.Find:	tbox:h.flex
+o_italk.Find:	C:h.setjmp
+o_italk.Find:	tbox:h.window
+o_italk.Find:	h.Bitfields
+o_italk.Find:	h.Limits
+o_italk.Find:	h.Limits
+o_italk.Find:	h.Utils
+o_italk.Find:	h.Browser
+o_italk.Find:	h.Fetch
+o_italk.Find:	h.URLstat
+o_italk.Find:	h.Toolbars
+o_italk.Find:	h.Windows
+o_italk.Find:	h.Find
+o_italk.FontManage:	c.FontManage
+o_italk.FontManage:	C:h.swis
+o_italk.FontManage:	C:h.kernel
+o_italk.FontManage:	HTMLLib:h.HTMLLib
+o_italk.FontManage:	HTMLLib:h.html2_ext
+o_italk.FontManage:	HTMLLib:h.tablestruc
+o_italk.FontManage:	HTMLLib:h.tags
+o_italk.FontManage:	HTMLLib:h.struct
+o_italk.FontManage:	HTMLLib:h.html2_ext
+o_italk.FontManage:	tbox:h.wimp
+o_italk.FontManage:	tbox:h.event
+o_italk.FontManage:	tbox:h.toolbox
+o_italk.FontManage:	h.svcprint
+o_italk.FontManage:	h.Global
+o_italk.FontManage:	HTMLLib:h.struct
+o_italk.FontManage:	HTMLLib:h.tablestruc
+o_italk.FontManage:	ImageLib:h.imagetrans
+o_italk.FontManage:	tbox:h.flex
+o_italk.FontManage:	C:h.setjmp
+o_italk.FontManage:	tbox:h.window
+o_italk.FontManage:	tbox:h.gadgets
+o_italk.FontManage:	h.Bitfields
+o_italk.FontManage:	h.Limits
+o_italk.FontManage:	h.Limits
+o_italk.FontManage:	h.FromROSLib
+o_italk.FontManage:	h.MiscDefs
+o_italk.FontManage:	h.Utils
+o_italk.FontManage:	h.Redraw
+o_italk.FontManage:	h.FontManage
+o_italk.Forms:	c.Forms
+o_italk.Forms:	C:h.swis
+o_italk.Forms:	C:h.kernel
+o_italk.Forms:	tbox:h.flex
+o_italk.Forms:	HTMLLib:h.HTMLLib
+o_italk.Forms:	HTMLLib:h.html2_ext
+o_italk.Forms:	HTMLLib:h.tablestruc
+o_italk.Forms:	HTMLLib:h.tags
+o_italk.Forms:	HTMLLib:h.struct
+o_italk.Forms:	HTMLLib:h.html2_ext
+o_italk.Forms:	tbox:h.wimp
+o_italk.Forms:	tbox:h.wimplib
+o_italk.Forms:	tbox:h.event
+o_italk.Forms:	tbox:h.toolbox
+o_italk.Forms:	h.svcprint
+o_italk.Forms:	h.Global
+o_italk.Forms:	HTMLLib:h.struct
+o_italk.Forms:	HTMLLib:h.tablestruc
+o_italk.Forms:	ImageLib:h.imagetrans
+o_italk.Forms:	C:h.setjmp
+o_italk.Forms:	tbox:h.window
+o_italk.Forms:	tbox:h.gadgets
+o_italk.Forms:	h.Bitfields
+o_italk.Forms:	h.Limits
+o_italk.Forms:	h.Limits
+o_italk.Forms:	h.FromROSLib
+o_italk.Forms:	h.Utils
+o_italk.Forms:	h.Browser
+o_italk.Forms:	h.FetchPage
+o_italk.Forms:	h.FontManage
+o_italk.Forms:	h.Images
+o_italk.Forms:	h.Redraw
+o_italk.Forms:	h.TokenUtils
+o_italk.Forms:	h.Toolbars
+o_italk.Forms:	h.Forms
+o_italk.Forms:	h.trace
+o_italk.Frames:	c.Frames
+o_italk.Frames:	C:h.swis
+o_italk.Frames:	C:h.kernel
+o_italk.Frames:	tbox:h.flex
+o_italk.Frames:	HTMLLib:h.HTMLLib
+o_italk.Frames:	HTMLLib:h.html2_ext
+o_italk.Frames:	HTMLLib:h.tablestruc
+o_italk.Frames:	HTMLLib:h.tags
+o_italk.Frames:	HTMLLib:h.struct
+o_italk.Frames:	HTMLLib:h.html2_ext
+o_italk.Frames:	tbox:h.wimp
+o_italk.Frames:	tbox:h.wimplib
+o_italk.Frames:	tbox:h.event
+o_italk.Frames:	tbox:h.toolbox
+o_italk.Frames:	tbox:h.toolbox
+o_italk.Frames:	tbox:h.window
+o_italk.Frames:	tbox:h.gadgets
+o_italk.Frames:	h.NestWimp
+o_italk.Frames:	h.svcprint
+o_italk.Frames:	h.Global
+o_italk.Frames:	HTMLLib:h.struct
+o_italk.Frames:	HTMLLib:h.tablestruc
+o_italk.Frames:	ImageLib:h.imagetrans
+o_italk.Frames:	C:h.setjmp
+o_italk.Frames:	tbox:h.window
+o_italk.Frames:	h.Bitfields
+o_italk.Frames:	h.Limits
+o_italk.Frames:	h.Limits
+o_italk.Frames:	h.FromROSLib
+o_italk.Frames:	h.Utils
+o_italk.Frames:	h.Browser
+o_italk.Frames:	h.Fetch
+o_italk.Frames:	h.URLstat
+o_italk.Frames:	h.FetchPage
+o_italk.Frames:	h.Images
+o_italk.Frames:	h.Memory
+o_italk.Frames:	h.Mouse
+o_italk.Frames:	h.Redraw
+o_italk.Frames:	h.Reformat
+o_italk.Frames:	HTMLLib:h.HTMLLib
+o_italk.Frames:	h.Toolbars
+o_italk.Frames:	h.URLutils
+o_italk.Frames:	Libraries.URILib.h.URI
+o_italk.Frames:	C:h.kernel
+o_italk.Frames:	h.Windows
+o_italk.Frames:	h.Frames
+o_italk.FromROSLib:	c.FromROSLib
+o_italk.FromROSLib:	C:h.swis
+o_italk.FromROSLib:	C:h.kernel
+o_italk.FromROSLib:	tbox:h.wimp
+o_italk.FromROSLib:	h.FromROSLib
+o_italk.Global:	c.Global
+o_italk.Global:	C:h.setjmp
+o_italk.Global:	tbox:h.wimp
+o_italk.Global:	tbox:h.event
+o_italk.Global:	tbox:h.toolbox
+o_italk.Global:	C:h.kernel
+o_italk.Global:	h.svcprint
+o_italk.Global:	h.Global
+o_italk.Global:	HTMLLib:h.struct
+o_italk.Global:	HTMLLib:h.html2_ext
+o_italk.Global:	HTMLLib:h.tablestruc
+o_italk.Global:	HTMLLib:h.tablestruc
+o_italk.Global:	ImageLib:h.imagetrans
+o_italk.Global:	tbox:h.flex
+o_italk.Global:	C:h.setjmp
+o_italk.Global:	tbox:h.window
+o_italk.Global:	tbox:h.gadgets
+o_italk.Global:	h.Bitfields
+o_italk.Global:	h.Limits
+o_italk.Global:	h.Limits
+o_italk.Global:	h.Utils
+o_italk.Handlers:	c.Handlers
+o_italk.Handlers:	C:h.swis
+o_italk.Handlers:	C:h.kernel
+o_italk.Handlers:	C:h.kernel
+o_italk.Handlers:	tbox:h.flex
+o_italk.Handlers:	HTMLLib:h.HTMLLib
+o_italk.Handlers:	HTMLLib:h.html2_ext
+o_italk.Handlers:	HTMLLib:h.tablestruc
+o_italk.Handlers:	HTMLLib:h.tags
+o_italk.Handlers:	HTMLLib:h.struct
+o_italk.Handlers:	HTMLLib:h.html2_ext
+o_italk.Handlers:	tbox:h.wimp
+o_italk.Handlers:	tbox:h.wimplib
+o_italk.Handlers:	tbox:h.event
+o_italk.Handlers:	tbox:h.toolbox
+o_italk.Handlers:	tbox:h.toolbox
+o_italk.Handlers:	tbox:h.quit
+o_italk.Handlers:	tbox:h.window
+o_italk.Handlers:	tbox:h.gadgets
+o_italk.Handlers:	tbox:h.proginfo
+o_italk.Handlers:	h.ToolAction
+o_italk.Handlers:	h.Dialler
+o_italk.Handlers:	C:h.kernel
+o_italk.Handlers:	h.svcprint
+o_italk.Handlers:	h.Global
+o_italk.Handlers:	HTMLLib:h.struct
+o_italk.Handlers:	HTMLLib:h.tablestruc
+o_italk.Handlers:	ImageLib:h.imagetrans
+o_italk.Handlers:	C:h.setjmp
+o_italk.Handlers:	tbox:h.window
+o_italk.Handlers:	h.Bitfields
+o_italk.Handlers:	h.Limits
+o_italk.Handlers:	h.Limits
+o_italk.Handlers:	h.FromROSLib
+o_italk.Handlers:	h.Utils
+o_italk.Handlers:	h.Browser
+o_italk.Handlers:	h.ChoiceDefs
+o_italk.Handlers:	h.Choices
+o_italk.Handlers:	h.CSIM
+o_italk.Handlers:	h.Fetch
+o_italk.Handlers:	h.URLstat
+o_italk.Handlers:	h.FetchPage
+o_italk.Handlers:	h.Filetypes
+o_italk.Handlers:	h.FontManage
+o_italk.Handlers:	h.Forms
+o_italk.Handlers:	h.Frames
+o_italk.Handlers:	h.History
+o_italk.Handlers:	h.Hotlist
+o_italk.Handlers:	h.Images
+o_italk.Handlers:	h.JavaScript
+o_italk.Handlers:	h.Markers
+o_italk.Handlers:	h.Menus
+o_italk.Handlers:	h.Meta
+o_italk.Handlers:	h.MiscDefs
+o_italk.Handlers:	h.MiscEvents
+o_italk.Handlers:	h.Mouse
+o_italk.Handlers:	h.PlugIn
+o_italk.Handlers:	h.Printing
+o_italk.Handlers:	h.Protocols
+o_italk.Handlers:	h.Redraw
+o_italk.Handlers:	h.Reformat
+o_italk.Handlers:	HTMLLib:h.HTMLLib
+o_italk.Handlers:	h.Save
+o_italk.Handlers:	h.SaveFile
+o_italk.Handlers:	h.SetPBoxes
+o_italk.Handlers:	h.TokenUtils
+o_italk.Handlers:	h.Toolbars
+o_italk.Handlers:	h.URLutils
+o_italk.Handlers:	Libraries.URILib.h.URI
+o_italk.Handlers:	C:h.kernel
+o_italk.Handlers:	h.Windows
+o_italk.Handlers:	h.Handlers
+o_italk.History:	c.History
+o_italk.History:	C:h.kernel
+o_italk.History:	C:h.swis
+o_italk.History:	tbox:h.flex
+o_italk.History:	tbox:h.wimp
+o_italk.History:	tbox:h.wimplib
+o_italk.History:	tbox:h.event
+o_italk.History:	tbox:h.toolbox
+o_italk.History:	tbox:h.toolbox
+o_italk.History:	tbox:h.window
+o_italk.History:	tbox:h.gadgets
+o_italk.History:	tbox:h.gadgets
+o_italk.History:	tbox:h.menu
+o_italk.History:	h.svcprint
+o_italk.History:	h.Global
+o_italk.History:	HTMLLib:h.struct
+o_italk.History:	HTMLLib:h.html2_ext
+o_italk.History:	HTMLLib:h.tablestruc
+o_italk.History:	HTMLLib:h.tablestruc
+o_italk.History:	ImageLib:h.imagetrans
+o_italk.History:	C:h.setjmp
+o_italk.History:	tbox:h.window
+o_italk.History:	h.Bitfields
+o_italk.History:	h.Limits
+o_italk.History:	h.Limits
+o_italk.History:	h.FromROSLib
+o_italk.History:	h.Utils
+o_italk.History:	h.Browser
+o_italk.History:	h.ChoiceDefs
+o_italk.History:	h.FetchPage
+o_italk.History:	h.Filetypes
+o_italk.History:	h.Memory
+o_italk.History:	h.OpenURL
+o_italk.History:	h.Save
+o_italk.History:	h.Toolbars
+o_italk.History:	h.URLutils
+o_italk.History:	Libraries.URILib.h.URI
+o_italk.History:	C:h.kernel
+o_italk.History:	h.Windows
+o_italk.History:	h.History
+o_italk.Hotlist:	c.Hotlist
+o_italk.Hotlist:	C:h.swis
+o_italk.Hotlist:	C:h.kernel
+o_italk.Hotlist:	tbox:h.toolbox
+o_italk.Hotlist:	tbox:h.wimp
+o_italk.Hotlist:	tbox:h.wimp
+o_italk.Hotlist:	tbox:h.wimplib
+o_italk.Hotlist:	tbox:h.menu
+o_italk.Hotlist:	tbox:h.event
+o_italk.Hotlist:	tbox:h.gadgets
+o_italk.Hotlist:	h.svcprint
+o_italk.Hotlist:	h.Global
+o_italk.Hotlist:	HTMLLib:h.struct
+o_italk.Hotlist:	HTMLLib:h.html2_ext
+o_italk.Hotlist:	HTMLLib:h.tablestruc
+o_italk.Hotlist:	HTMLLib:h.tablestruc
+o_italk.Hotlist:	ImageLib:h.imagetrans
+o_italk.Hotlist:	tbox:h.flex
+o_italk.Hotlist:	C:h.setjmp
+o_italk.Hotlist:	tbox:h.window
+o_italk.Hotlist:	h.Bitfields
+o_italk.Hotlist:	h.Limits
+o_italk.Hotlist:	h.Limits
+o_italk.Hotlist:	h.FromROSLib
+o_italk.Hotlist:	h.Utils
+o_italk.Hotlist:	h.ChoiceDefs
+o_italk.Hotlist:	h.FetchPage
+o_italk.Hotlist:	h.Filetypes
+o_italk.Hotlist:	h.Menus
+o_italk.Hotlist:	h.Mouse
+o_italk.Hotlist:	h.Multiuser
+o_italk.Hotlist:	h.Protocols
+o_italk.Hotlist:	h.Save
+o_italk.Hotlist:	h.Toolbars
+o_italk.Hotlist:	h.URLUtils
+o_italk.Hotlist:	Libraries.URILib.h.URI
+o_italk.Hotlist:	C:h.kernel
+o_italk.Hotlist:	h.Windows
+o_italk.Hotlist:	h.Hotlist
+o_italk.Images:	c.Images
+o_italk.Images:	C:h.swis
+o_italk.Images:	C:h.kernel
+o_italk.Images:	tbox:h.flex
+o_italk.Images:	HTMLLib:h.HTMLLib
+o_italk.Images:	HTMLLib:h.html2_ext
+o_italk.Images:	HTMLLib:h.tablestruc
+o_italk.Images:	HTMLLib:h.tags
+o_italk.Images:	HTMLLib:h.struct
+o_italk.Images:	HTMLLib:h.html2_ext
+o_italk.Images:	tbox:h.wimp
+o_italk.Images:	tbox:h.wimplib
+o_italk.Images:	tbox:h.event
+o_italk.Images:	tbox:h.toolbox
+o_italk.Images:	tbox:h.toolbox
+o_italk.Images:	h.svcprint
+o_italk.Images:	h.Global
+o_italk.Images:	HTMLLib:h.struct
+o_italk.Images:	HTMLLib:h.tablestruc
+o_italk.Images:	ImageLib:h.imagetrans
+o_italk.Images:	C:h.setjmp
+o_italk.Images:	tbox:h.window
+o_italk.Images:	tbox:h.gadgets
+o_italk.Images:	h.Bitfields
+o_italk.Images:	h.Limits
+o_italk.Images:	h.Limits
+o_italk.Images:	h.FromROSLib
+o_italk.Images:	h.MiscDefs
+o_italk.Images:	h.Utils
+o_italk.Images:	h.Browser
+o_italk.Images:	h.Fetch
+o_italk.Images:	h.URLstat
+o_italk.Images:	h.FetchHTML
+o_italk.Images:	h.FetchPage
+o_italk.Images:	h.FontManage
+o_italk.Images:	h.ImgHistory
+o_italk.Images:	h.PrintStyle
+o_italk.Images:	h.Protocols
+o_italk.Images:	h.Redraw
+o_italk.Images:	h.Reformat
+o_italk.Images:	HTMLLib:h.HTMLLib
+o_italk.Images:	h.Save
+o_italk.Images:	h.SaveDraw
+o_italk.Images:	h.TokenUtils
+o_italk.Images:	h.Toolbars
+o_italk.Images:	h.URLutils
+o_italk.Images:	Libraries.URILib.h.URI
+o_italk.Images:	C:h.kernel
+o_italk.Images:	h.URLveneer
+o_italk.Images:	h.Windows
+o_italk.Images:	h.Images
+o_italk.ImgHistory:	c.ImgHistory
+o_italk.ImgHistory:	C:h.kernel
+o_italk.ImgHistory:	C:h.swis
+o_italk.ImgHistory:	tbox:h.flex
+o_italk.ImgHistory:	tbox:h.wimp
+o_italk.ImgHistory:	tbox:h.wimplib
+o_italk.ImgHistory:	tbox:h.event
+o_italk.ImgHistory:	tbox:h.toolbox
+o_italk.ImgHistory:	tbox:h.toolbox
+o_italk.ImgHistory:	h.svcprint
+o_italk.ImgHistory:	h.Global
+o_italk.ImgHistory:	HTMLLib:h.struct
+o_italk.ImgHistory:	HTMLLib:h.html2_ext
+o_italk.ImgHistory:	HTMLLib:h.tablestruc
+o_italk.ImgHistory:	HTMLLib:h.tablestruc
+o_italk.ImgHistory:	ImageLib:h.imagetrans
+o_italk.ImgHistory:	C:h.setjmp
+o_italk.ImgHistory:	tbox:h.window
+o_italk.ImgHistory:	tbox:h.gadgets
+o_italk.ImgHistory:	h.Bitfields
+o_italk.ImgHistory:	h.Limits
+o_italk.ImgHistory:	h.Limits
+o_italk.ImgHistory:	h.Utils
+o_italk.ImgHistory:	h.ChoiceDefs
+o_italk.ImgHistory:	h.Images
+o_italk.ImgHistory:	h.Save
+o_italk.ImgHistory:	h.URLutils
+o_italk.ImgHistory:	Libraries.URILib.h.URI
+o_italk.ImgHistory:	C:h.kernel
+o_italk.ImgHistory:	h.ImgHistory
+o_italk.ItemInfo:	c.ItemInfo
+o_italk.ItemInfo:	C:h.swis
+o_italk.ItemInfo:	C:h.kernel
+o_italk.ItemInfo:	C:h.kernel
+o_italk.ItemInfo:	HTMLLib:h.HTMLLib
+o_italk.ItemInfo:	HTMLLib:h.html2_ext
+o_italk.ItemInfo:	HTMLLib:h.tablestruc
+o_italk.ItemInfo:	HTMLLib:h.tags
+o_italk.ItemInfo:	HTMLLib:h.struct
+o_italk.ItemInfo:	HTMLLib:h.html2_ext
+o_italk.ItemInfo:	tbox:h.wimp
+o_italk.ItemInfo:	tbox:h.wimplib
+o_italk.ItemInfo:	tbox:h.event
+o_italk.ItemInfo:	tbox:h.toolbox
+o_italk.ItemInfo:	tbox:h.toolbox
+o_italk.ItemInfo:	tbox:h.window
+o_italk.ItemInfo:	tbox:h.gadgets
+o_italk.ItemInfo:	h.svcprint
+o_italk.ItemInfo:	h.Global
+o_italk.ItemInfo:	HTMLLib:h.struct
+o_italk.ItemInfo:	HTMLLib:h.tablestruc
+o_italk.ItemInfo:	ImageLib:h.imagetrans
+o_italk.ItemInfo:	tbox:h.flex
+o_italk.ItemInfo:	C:h.setjmp
+o_italk.ItemInfo:	tbox:h.window
+o_italk.ItemInfo:	h.Bitfields
+o_italk.ItemInfo:	h.Limits
+o_italk.ItemInfo:	h.Limits
+o_italk.ItemInfo:	h.MiscDefs
+o_italk.ItemInfo:	h.Utils
+o_italk.ItemInfo:	h.Browser
+o_italk.ItemInfo:	h.Fetch
+o_italk.ItemInfo:	h.URLstat
+o_italk.ItemInfo:	h.Forms
+o_italk.ItemInfo:	h.Images
+o_italk.ItemInfo:	h.Menus
+o_italk.ItemInfo:	h.Object
+o_italk.ItemInfo:	h.Reformat
+o_italk.ItemInfo:	HTMLLib:h.HTMLLib
+o_italk.ItemInfo:	h.Windows
+o_italk.ItemInfo:	h.ItemInfo
+o_italk.JavaScript:	c.JavaScript
+o_italk.JavaScript:	C:h.swis
+o_italk.JavaScript:	C:h.kernel
+o_italk.JavaScript:	HTMLLib:h.HTMLLib
+o_italk.JavaScript:	HTMLLib:h.html2_ext
+o_italk.JavaScript:	HTMLLib:h.tablestruc
+o_italk.JavaScript:	HTMLLib:h.tags
+o_italk.JavaScript:	HTMLLib:h.struct
+o_italk.JavaScript:	HTMLLib:h.html2_ext
+o_italk.JavaScript:	tbox:h.wimp
+o_italk.JavaScript:	tbox:h.wimplib
+o_italk.JavaScript:	tbox:h.event
+o_italk.JavaScript:	tbox:h.toolbox
+o_italk.JavaScript:	h.svcprint
+o_italk.JavaScript:	h.Global
+o_italk.JavaScript:	HTMLLib:h.struct
+o_italk.JavaScript:	HTMLLib:h.tablestruc
+o_italk.JavaScript:	ImageLib:h.imagetrans
+o_italk.JavaScript:	tbox:h.flex
+o_italk.JavaScript:	C:h.setjmp
+o_italk.JavaScript:	tbox:h.window
+o_italk.JavaScript:	tbox:h.gadgets
+o_italk.JavaScript:	h.Bitfields
+o_italk.JavaScript:	h.Limits
+o_italk.JavaScript:	h.Limits
+o_italk.JavaScript:	h.Utils
+o_italk.JavaScript:	h.Browser
+o_italk.JavaScript:	h.FetchPage
+o_italk.JavaScript:	h.Frames
+o_italk.JavaScript:	h.LineOne
+o_italk.JavaScript:	h.URLutils
+o_italk.JavaScript:	Libraries.URILib.h.URI
+o_italk.JavaScript:	C:h.kernel
+o_italk.JavaScript:	h.JavaScript
+o_italk.LineOne:	c.LineOne
+o_italk.Main:	c.Main
+o_italk.Main:	C:h.setjmp
+o_italk.Main:	C:h.signal
+o_italk.Main:	C:h.swis
+o_italk.Main:	C:h.kernel
+o_italk.Main:	C:h.kernel
+o_italk.Main:	tbox:h.flex
+o_italk.Main:	HTMLLib:h.HTMLLib
+o_italk.Main:	HTMLLib:h.html2_ext
+o_italk.Main:	HTMLLib:h.tablestruc
+o_italk.Main:	HTMLLib:h.tags
+o_italk.Main:	HTMLLib:h.struct
+o_italk.Main:	HTMLLib:h.html2_ext
+o_italk.Main:	Libraries.URILib.h.URI
+o_italk.Main:	C:h.kernel
+o_italk.Main:	tbox:h.wimp
+o_italk.Main:	tbox:h.wimplib
+o_italk.Main:	tbox:h.event
+o_italk.Main:	tbox:h.toolbox
+o_italk.Main:	tbox:h.toolbox
+o_italk.Main:	tbox:h.quit
+o_italk.Main:	tbox:h.window
+o_italk.Main:	tbox:h.gadgets
+o_italk.Main:	tbox:h.proginfo
+o_italk.Main:	tbox:h.window
+o_italk.Main:	tbox:h.menu
+o_italk.Main:	tbox:h.saveas
+o_italk.Main:	tbox:h.printdbox
+o_italk.Main:	tbox:h.gadgets
+o_italk.Main:	h.svcprint
+o_italk.Main:	h.Global
+o_italk.Main:	HTMLLib:h.struct
+o_italk.Main:	HTMLLib:h.tablestruc
+o_italk.Main:	ImageLib:h.imagetrans
+o_italk.Main:	C:h.setjmp
+o_italk.Main:	tbox:h.window
+o_italk.Main:	h.Bitfields
+o_italk.Main:	h.Limits
+o_italk.Main:	h.Limits
+o_italk.Main:	h.FromROSLib
+o_italk.Main:	h.TBEvents
+o_italk.Main:	C:h.kernel
+o_italk.Main:	h.Toolbars
+o_italk.Main:	h.Authorise
+o_italk.Main:	h.SaveFile
+o_italk.Main:	h.SaveObject
+o_italk.Main:	h.Find
+o_italk.Main:	h.OpenURL
+o_italk.Main:	h.Printing
+o_italk.Main:	h.PrintStyle
+o_italk.Main:	h.Hotlist
+o_italk.Main:	h.Choices
+o_italk.Main:	h.ItemInfo
+o_italk.Main:	h.Multiuser
+o_italk.Main:	h.SetPBoxes
+o_italk.Main:	h.Cookies
+o_italk.Main:	h.Menus
+o_italk.Main:	h.MiscEvents
+o_italk.Main:	h.Utils
+o_italk.Main:	h.Browser
+o_italk.Main:	h.ChoiceDefs
+o_italk.Main:	h.CtrlDefs
+o_italk.Main:	h.Encoding
+o_italk.Main:	h.FontManage
+o_italk.Main:	h.Handlers
+o_italk.Main:	h.History
+o_italk.Main:	h.ImgHistory
+o_italk.Main:	h.Markers
+o_italk.Main:	h.MiscDefs
+o_italk.Main:	h.Mouse
+o_italk.Main:	h.PlugIn
+o_italk.Main:	h.Protocols
+o_italk.Main:	h.RMA
+o_italk.Main:	h.Save
+o_italk.Main:	h.URLutils
+o_italk.Main:	Libraries.URILib.h.URI
+o_italk.Main:	h.Windows
+o_italk.Main:	h.Main
+o_italk.Markers:	c.Markers
+o_italk.Markers:	C:h.swis
+o_italk.Markers:	C:h.kernel
+o_italk.Markers:	HTMLLib:h.HTMLLib
+o_italk.Markers:	HTMLLib:h.html2_ext
+o_italk.Markers:	HTMLLib:h.tablestruc
+o_italk.Markers:	HTMLLib:h.tags
+o_italk.Markers:	HTMLLib:h.struct
+o_italk.Markers:	HTMLLib:h.html2_ext
+o_italk.Markers:	tbox:h.wimp
+o_italk.Markers:	tbox:h.wimplib
+o_italk.Markers:	tbox:h.event
+o_italk.Markers:	tbox:h.toolbox
+o_italk.Markers:	tbox:h.gadgets
+o_italk.Markers:	h.ToolAction
+o_italk.Markers:	h.svcprint
+o_italk.Markers:	h.Global
+o_italk.Markers:	HTMLLib:h.struct
+o_italk.Markers:	HTMLLib:h.tablestruc
+o_italk.Markers:	ImageLib:h.imagetrans
+o_italk.Markers:	tbox:h.flex
+o_italk.Markers:	C:h.setjmp
+o_italk.Markers:	tbox:h.window
+o_italk.Markers:	h.Bitfields
+o_italk.Markers:	h.Limits
+o_italk.Markers:	h.Limits
+o_italk.Markers:	h.Utils
+o_italk.Markers:	h.Browser
+o_italk.Markers:	h.MiscEvents
+o_italk.Markers:	h.Toolbars
+o_italk.Markers:	h.Windows
+o_italk.Markers:	h.Markers
+o_italk.Memory:	c.Memory
+o_italk.Memory:	C:h.kernel
+o_italk.Memory:	tbox:h.flex
+o_italk.Memory:	tbox:h.wimp
+o_italk.Memory:	tbox:h.event
+o_italk.Memory:	tbox:h.toolbox
+o_italk.Memory:	h.svcprint
+o_italk.Memory:	h.Global
+o_italk.Memory:	HTMLLib:h.struct
+o_italk.Memory:	HTMLLib:h.html2_ext
+o_italk.Memory:	HTMLLib:h.tablestruc
+o_italk.Memory:	HTMLLib:h.tablestruc
+o_italk.Memory:	ImageLib:h.imagetrans
+o_italk.Memory:	C:h.setjmp
+o_italk.Memory:	tbox:h.window
+o_italk.Memory:	tbox:h.gadgets
+o_italk.Memory:	h.Bitfields
+o_italk.Memory:	h.Limits
+o_italk.Memory:	h.Limits
+o_italk.Memory:	h.Utils
+o_italk.Memory:	h.Memory
+o_italk.Menus:	c.Menus
+o_italk.Menus:	C:h.swis
+o_italk.Menus:	C:h.kernel
+o_italk.Menus:	tbox:h.wimp
+o_italk.Menus:	tbox:h.wimplib
+o_italk.Menus:	tbox:h.event
+o_italk.Menus:	tbox:h.toolbox
+o_italk.Menus:	tbox:h.toolbox
+o_italk.Menus:	tbox:h.window
+o_italk.Menus:	tbox:h.gadgets
+o_italk.Menus:	tbox:h.menu
+o_italk.Menus:	h.svcprint
+o_italk.Menus:	h.Global
+o_italk.Menus:	HTMLLib:h.struct
+o_italk.Menus:	HTMLLib:h.html2_ext
+o_italk.Menus:	HTMLLib:h.tablestruc
+o_italk.Menus:	HTMLLib:h.tablestruc
+o_italk.Menus:	ImageLib:h.imagetrans
+o_italk.Menus:	tbox:h.flex
+o_italk.Menus:	C:h.setjmp
+o_italk.Menus:	tbox:h.window
+o_italk.Menus:	h.Bitfields
+o_italk.Menus:	h.Limits
+o_italk.Menus:	h.Limits
+o_italk.Menus:	h.FromROSLib
+o_italk.Menus:	h.MiscDefs
+o_italk.Menus:	h.Utils
+o_italk.Menus:	h.Browser
+o_italk.Menus:	h.Choices
+o_italk.Menus:	h.ChoiceDefs
+o_italk.Menus:	h.Fetch
+o_italk.Menus:	h.URLstat
+o_italk.Menus:	h.FetchPage
+o_italk.Menus:	h.Frames
+o_italk.Menus:	h.Handlers
+o_italk.Menus:	h.History
+o_italk.Menus:	h.Hotlist
+o_italk.Menus:	h.Images
+o_italk.Menus:	h.ImgHistory
+o_italk.Menus:	h.Markers
+o_italk.Menus:	h.MiscEvents
+o_italk.Menus:	h.Multiuser
+o_italk.Menus:	h.Object
+o_italk.Menus:	h.OpenURL
+o_italk.Menus:	h.Reformat
+o_italk.Menus:	HTMLLib:h.HTMLLib
+o_italk.Menus:	HTMLLib:h.html2_ext
+o_italk.Menus:	HTMLLib:h.tags
+o_italk.Menus:	HTMLLib:h.struct
+o_italk.Menus:	h.Save
+o_italk.Menus:	h.Toolbars
+o_italk.Menus:	h.URLutils
+o_italk.Menus:	Libraries.URILib.h.URI
+o_italk.Menus:	C:h.kernel
+o_italk.Menus:	h.Windows
+o_italk.Menus:	h.Menus
+o_italk.Meta:	c.Meta
+o_italk.Meta:	C:h.swis
+o_italk.Meta:	C:h.kernel
+o_italk.Meta:	tbox:h.flex
+o_italk.Meta:	HTMLLib:h.HTMLLib
+o_italk.Meta:	HTMLLib:h.html2_ext
+o_italk.Meta:	HTMLLib:h.tablestruc
+o_italk.Meta:	HTMLLib:h.tags
+o_italk.Meta:	HTMLLib:h.struct
+o_italk.Meta:	HTMLLib:h.html2_ext
+o_italk.Meta:	tbox:h.wimp
+o_italk.Meta:	tbox:h.wimplib
+o_italk.Meta:	tbox:h.event
+o_italk.Meta:	tbox:h.toolbox
+o_italk.Meta:	h.svcprint
+o_italk.Meta:	h.Global
+o_italk.Meta:	HTMLLib:h.struct
+o_italk.Meta:	HTMLLib:h.tablestruc
+o_italk.Meta:	ImageLib:h.imagetrans
+o_italk.Meta:	C:h.setjmp
+o_italk.Meta:	tbox:h.window
+o_italk.Meta:	tbox:h.gadgets
+o_italk.Meta:	h.Bitfields
+o_italk.Meta:	h.Limits
+o_italk.Meta:	h.Limits
+o_italk.Meta:	h.Utils
+o_italk.Meta:	h.Browser
+o_italk.Meta:	h.FetchPage
+o_italk.Meta:	h.URLutils
+o_italk.Meta:	Libraries.URILib.h.URI
+o_italk.Meta:	C:h.kernel
+o_italk.Meta:	h.Meta
+o_italk.MimeMap:	c.MimeMap
+o_italk.MimeMap:	C:h.swis
+o_italk.MimeMap:	C:h.kernel
+o_italk.MimeMap:	tbox:h.wimp
+o_italk.MimeMap:	tbox:h.event
+o_italk.MimeMap:	tbox:h.toolbox
+o_italk.MimeMap:	h.svcprint
+o_italk.MimeMap:	h.Global
+o_italk.MimeMap:	HTMLLib:h.struct
+o_italk.MimeMap:	HTMLLib:h.html2_ext
+o_italk.MimeMap:	HTMLLib:h.tablestruc
+o_italk.MimeMap:	HTMLLib:h.tablestruc
+o_italk.MimeMap:	ImageLib:h.imagetrans
+o_italk.MimeMap:	tbox:h.flex
+o_italk.MimeMap:	C:h.setjmp
+o_italk.MimeMap:	tbox:h.window
+o_italk.MimeMap:	tbox:h.gadgets
+o_italk.MimeMap:	h.Bitfields
+o_italk.MimeMap:	h.Limits
+o_italk.MimeMap:	h.Limits
+o_italk.MimeMap:	h.Utils
+o_italk.MimeMap:	h.MimeMap
+o_italk.Mouse:	c.Mouse
+o_italk.Mouse:	C:h.swis
+o_italk.Mouse:	C:h.kernel
+o_italk.Mouse:	C:h.kernel
+o_italk.Mouse:	HTMLLib:h.HTMLLib
+o_italk.Mouse:	HTMLLib:h.html2_ext
+o_italk.Mouse:	HTMLLib:h.tablestruc
+o_italk.Mouse:	HTMLLib:h.tags
+o_italk.Mouse:	HTMLLib:h.struct
+o_italk.Mouse:	HTMLLib:h.html2_ext
+o_italk.Mouse:	tbox:h.wimp
+o_italk.Mouse:	tbox:h.wimplib
+o_italk.Mouse:	tbox:h.event
+o_italk.Mouse:	tbox:h.toolbox
+o_italk.Mouse:	tbox:h.toolbox
+o_italk.Mouse:	h.svcprint
+o_italk.Mouse:	h.Global
+o_italk.Mouse:	HTMLLib:h.struct
+o_italk.Mouse:	HTMLLib:h.tablestruc
+o_italk.Mouse:	ImageLib:h.imagetrans
+o_italk.Mouse:	tbox:h.flex
+o_italk.Mouse:	C:h.setjmp
+o_italk.Mouse:	tbox:h.window
+o_italk.Mouse:	tbox:h.gadgets
+o_italk.Mouse:	h.Bitfields
+o_italk.Mouse:	h.Limits
+o_italk.Mouse:	h.Limits
+o_italk.Mouse:	h.Utils
+o_italk.Mouse:	h.Handlers
+o_italk.Mouse:	h.Mouse
+o_italk.Multiuser:	c.Multiuser
+o_italk.Multiuser:	C:h.swis
+o_italk.Multiuser:	C:h.kernel
+o_italk.Multiuser:	tbox:h.flex
+o_italk.Multiuser:	tbox:h.wimp
+o_italk.Multiuser:	tbox:h.wimplib
+o_italk.Multiuser:	tbox:h.event
+o_italk.Multiuser:	tbox:h.toolbox
+o_italk.Multiuser:	tbox:h.toolbox
+o_italk.Multiuser:	tbox:h.iconbar
+o_italk.Multiuser:	tbox:h.window
+o_italk.Multiuser:	tbox:h.gadgets
+o_italk.Multiuser:	tbox:h.gadgets
+o_italk.Multiuser:	h.svcprint
+o_italk.Multiuser:	h.Global
+o_italk.Multiuser:	HTMLLib:h.struct
+o_italk.Multiuser:	HTMLLib:h.html2_ext
+o_italk.Multiuser:	HTMLLib:h.tablestruc
+o_italk.Multiuser:	HTMLLib:h.tablestruc
+o_italk.Multiuser:	ImageLib:h.imagetrans
+o_italk.Multiuser:	C:h.setjmp
+o_italk.Multiuser:	tbox:h.window
+o_italk.Multiuser:	h.Bitfields
+o_italk.Multiuser:	h.Limits
+o_italk.Multiuser:	h.Limits
+o_italk.Multiuser:	h.Utils
+o_italk.Multiuser:	h.Browser
+o_italk.Multiuser:	h.ChoiceDefs
+o_italk.Multiuser:	h.Fetch
+o_italk.Multiuser:	h.URLstat
+o_italk.Multiuser:	h.History
+o_italk.Multiuser:	h.Hotlist
+o_italk.Multiuser:	h.ImgHistory
+o_italk.Multiuser:	h.Multiuser
+o_italk.Multiuser:	h.URLutils
+o_italk.Multiuser:	Libraries.URILib.h.URI
+o_italk.Multiuser:	C:h.kernel
+o_italk.Multiuser:	h.Multiuser
+o_italk.Object:	c.Object
+o_italk.Object:	C:h.swis
+o_italk.Object:	C:h.kernel
+o_italk.Object:	tbox:h.flex
+o_italk.Object:	HTMLLib:h.HTMLLib
+o_italk.Object:	HTMLLib:h.html2_ext
+o_italk.Object:	HTMLLib:h.tablestruc
+o_italk.Object:	HTMLLib:h.tags
+o_italk.Object:	HTMLLib:h.struct
+o_italk.Object:	HTMLLib:h.html2_ext
+o_italk.Object:	tbox:h.wimp
+o_italk.Object:	tbox:h.wimplib
+o_italk.Object:	tbox:h.event
+o_italk.Object:	tbox:h.toolbox
+o_italk.Object:	tbox:h.toolbox
+o_italk.Object:	h.svcprint
+o_italk.Object:	h.Global
+o_italk.Object:	HTMLLib:h.struct
+o_italk.Object:	HTMLLib:h.tablestruc
+o_italk.Object:	ImageLib:h.imagetrans
+o_italk.Object:	C:h.setjmp
+o_italk.Object:	tbox:h.window
+o_italk.Object:	tbox:h.gadgets
+o_italk.Object:	h.Bitfields
+o_italk.Object:	h.Limits
+o_italk.Object:	h.Limits
+o_italk.Object:	h.FromROSLib
+o_italk.Object:	h.Utils
+o_italk.Object:	h.Browser
+o_italk.Object:	h.ChoiceDefs
+o_italk.Object:	h.Fetch
+o_italk.Object:	h.URLstat
+o_italk.Object:	h.FetchHTML
+o_italk.Object:	h.Filetypes
+o_italk.Object:	h.Images
+o_italk.Object:	h.Memory
+o_italk.Object:	h.MimeMap
+o_italk.Object:	h.MiscDefs
+o_italk.Object:	h.PlugIn
+o_italk.Object:	h.Redraw
+o_italk.Object:	h.Reformat
+o_italk.Object:	HTMLLib:h.HTMLLib
+o_italk.Object:	h.TokenUtils
+o_italk.Object:	h.Toolbars
+o_italk.Object:	h.URLveneer
+o_italk.Object:	h.Object
+o_italk.OpenURL:	c.OpenURL
+o_italk.OpenURL:	C:h.swis
+o_italk.OpenURL:	C:h.kernel
+o_italk.OpenURL:	HTMLLib:h.HTMLLib
+o_italk.OpenURL:	HTMLLib:h.html2_ext
+o_italk.OpenURL:	HTMLLib:h.tablestruc
+o_italk.OpenURL:	HTMLLib:h.tags
+o_italk.OpenURL:	HTMLLib:h.struct
+o_italk.OpenURL:	HTMLLib:h.html2_ext
+o_italk.OpenURL:	tbox:h.wimp
+o_italk.OpenURL:	tbox:h.wimplib
+o_italk.OpenURL:	tbox:h.event
+o_italk.OpenURL:	tbox:h.toolbox
+o_italk.OpenURL:	tbox:h.toolbox
+o_italk.OpenURL:	tbox:h.window
+o_italk.OpenURL:	tbox:h.gadgets
+o_italk.OpenURL:	h.svcprint
+o_italk.OpenURL:	h.Global
+o_italk.OpenURL:	HTMLLib:h.struct
+o_italk.OpenURL:	HTMLLib:h.tablestruc
+o_italk.OpenURL:	ImageLib:h.imagetrans
+o_italk.OpenURL:	tbox:h.flex
+o_italk.OpenURL:	C:h.setjmp
+o_italk.OpenURL:	tbox:h.window
+o_italk.OpenURL:	h.Bitfields
+o_italk.OpenURL:	h.Limits
+o_italk.OpenURL:	h.Limits
+o_italk.OpenURL:	h.FromROSLib
+o_italk.OpenURL:	h.MiscDefs
+o_italk.OpenURL:	h.Utils
+o_italk.OpenURL:	h.Browser
+o_italk.OpenURL:	h.Fetch
+o_italk.OpenURL:	h.URLstat
+o_italk.OpenURL:	h.FetchPage
+o_italk.OpenURL:	h.History
+o_italk.OpenURL:	h.Hotlist
+o_italk.OpenURL:	h.Menus
+o_italk.OpenURL:	h.URLutils
+o_italk.OpenURL:	Libraries.URILib.h.URI
+o_italk.OpenURL:	C:h.kernel
+o_italk.OpenURL:	h.Windows
+o_italk.OpenURL:	h.OpenURL
+o_italk.PlugIn:	c.PlugIn
+o_italk.PlugIn:	C:h.swis
+o_italk.PlugIn:	C:h.kernel
+o_italk.PlugIn:	tbox:h.flex
+o_italk.PlugIn:	HTMLLib:h.HTMLLib
+o_italk.PlugIn:	HTMLLib:h.html2_ext
+o_italk.PlugIn:	HTMLLib:h.tablestruc
+o_italk.PlugIn:	HTMLLib:h.tags
+o_italk.PlugIn:	HTMLLib:h.struct
+o_italk.PlugIn:	HTMLLib:h.html2_ext
+o_italk.PlugIn:	tbox:h.wimp
+o_italk.PlugIn:	tbox:h.wimplib
+o_italk.PlugIn:	tbox:h.event
+o_italk.PlugIn:	tbox:h.toolbox
+o_italk.PlugIn:	tbox:h.toolbox
+o_italk.PlugIn:	h.svcprint
+o_italk.PlugIn:	h.Global
+o_italk.PlugIn:	HTMLLib:h.struct
+o_italk.PlugIn:	HTMLLib:h.tablestruc
+o_italk.PlugIn:	ImageLib:h.imagetrans
+o_italk.PlugIn:	C:h.setjmp
+o_italk.PlugIn:	tbox:h.window
+o_italk.PlugIn:	tbox:h.gadgets
+o_italk.PlugIn:	h.Bitfields
+o_italk.PlugIn:	h.Limits
+o_italk.PlugIn:	h.Limits
+o_italk.PlugIn:	h.FromROSLib
+o_italk.PlugIn:	h.Utils
+o_italk.PlugIn:	h.Browser
+o_italk.PlugIn:	h.Fetch
+o_italk.PlugIn:	h.URLstat
+o_italk.PlugIn:	h.FetchHTML
+o_italk.PlugIn:	h.FetchPage
+o_italk.PlugIn:	h.Filetypes
+o_italk.PlugIn:	h.Frames
+o_italk.PlugIn:	h.Handlers
+o_italk.PlugIn:	h.Images
+o_italk.PlugIn:	h.MimeMap
+o_italk.PlugIn:	h.MiscDefs
+o_italk.PlugIn:	h.Object
+o_italk.PlugIn:	h.Protocols
+o_italk.PlugIn:	h.Redraw
+o_italk.PlugIn:	h.Reformat
+o_italk.PlugIn:	HTMLLib:h.HTMLLib
+o_italk.PlugIn:	h.RMA
+o_italk.PlugIn:	h.TokenUtils
+o_italk.PlugIn:	h.Toolbars
+o_italk.PlugIn:	h.URLveneer
+o_italk.PlugIn:	h.Windows
+o_italk.PlugIn:	h.PlugIn
+o_italk.Printing:	c.Printing
+o_italk.Printing:	C:h.signal
+o_italk.Printing:	C:h.swis
+o_italk.Printing:	C:h.kernel
+o_italk.Printing:	tbox:h.wimp
+o_italk.Printing:	tbox:h.wimplib
+o_italk.Printing:	tbox:h.event
+o_italk.Printing:	tbox:h.toolbox
+o_italk.Printing:	tbox:h.toolbox
+o_italk.Printing:	tbox:h.printdbox
+o_italk.Printing:	tbox:h.window
+o_italk.Printing:	tbox:h.gadgets
+o_italk.Printing:	h.svcprint
+o_italk.Printing:	h.Global
+o_italk.Printing:	HTMLLib:h.struct
+o_italk.Printing:	HTMLLib:h.html2_ext
+o_italk.Printing:	HTMLLib:h.tablestruc
+o_italk.Printing:	HTMLLib:h.tablestruc
+o_italk.Printing:	ImageLib:h.imagetrans
+o_italk.Printing:	tbox:h.flex
+o_italk.Printing:	C:h.setjmp
+o_italk.Printing:	tbox:h.window
+o_italk.Printing:	h.Bitfields
+o_italk.Printing:	h.Limits
+o_italk.Printing:	h.Limits
+o_italk.Printing:	h.FromROSLib
+o_italk.Printing:	h.Utils
+o_italk.Printing:	h.Browser
+o_italk.Printing:	h.FontManage
+o_italk.Printing:	h.Images
+o_italk.Printing:	h.Memory
+o_italk.Printing:	h.Protocols
+o_italk.Printing:	h.PrintStyle
+o_italk.Printing:	h.Redraw
+o_italk.Printing:	h.Reformat
+o_italk.Printing:	HTMLLib:h.HTMLLib
+o_italk.Printing:	HTMLLib:h.html2_ext
+o_italk.Printing:	HTMLLib:h.tags
+o_italk.Printing:	HTMLLib:h.struct
+o_italk.Printing:	h.Toolaction
+o_italk.Printing:	h.Toolbars
+o_italk.Printing:	h.Windows
+o_italk.Printing:	h.Printing
+o_italk.PrintStyle:	c.PrintStyle
+o_italk.PrintStyle:	C:h.swis
+o_italk.PrintStyle:	C:h.kernel
+o_italk.PrintStyle:	tbox:h.wimp
+o_italk.PrintStyle:	tbox:h.wimplib
+o_italk.PrintStyle:	tbox:h.event
+o_italk.PrintStyle:	tbox:h.toolbox
+o_italk.PrintStyle:	tbox:h.toolbox
+o_italk.PrintStyle:	tbox:h.printdbox
+o_italk.PrintStyle:	tbox:h.window
+o_italk.PrintStyle:	tbox:h.gadgets
+o_italk.PrintStyle:	tbox:h.window
+o_italk.PrintStyle:	h.svcprint
+o_italk.PrintStyle:	h.Global
+o_italk.PrintStyle:	HTMLLib:h.struct
+o_italk.PrintStyle:	HTMLLib:h.html2_ext
+o_italk.PrintStyle:	HTMLLib:h.tablestruc
+o_italk.PrintStyle:	HTMLLib:h.tablestruc
+o_italk.PrintStyle:	ImageLib:h.imagetrans
+o_italk.PrintStyle:	tbox:h.flex
+o_italk.PrintStyle:	C:h.setjmp
+o_italk.PrintStyle:	tbox:h.window
+o_italk.PrintStyle:	h.Bitfields
+o_italk.PrintStyle:	h.Limits
+o_italk.PrintStyle:	h.Limits
+o_italk.PrintStyle:	h.Utils
+o_italk.PrintStyle:	h.Browser
+o_italk.PrintStyle:	h.Menus
+o_italk.PrintStyle:	h.Printing
+o_italk.PrintStyle:	h.PrintStyle
+o_italk.Protocols:	c.Protocols
+o_italk.Protocols:	C:h.swis
+o_italk.Protocols:	C:h.kernel
+o_italk.Protocols:	C:h.kernel
+o_italk.Protocols:	Libraries.URILib.h.URI
+o_italk.Protocols:	C:h.kernel
+o_italk.Protocols:	tbox:h.wimp
+o_italk.Protocols:	tbox:h.wimplib
+o_italk.Protocols:	tbox:h.event
+o_italk.Protocols:	tbox:h.toolbox
+o_italk.Protocols:	tbox:h.toolbox
+o_italk.Protocols:	h.svcprint
+o_italk.Protocols:	h.Global
+o_italk.Protocols:	HTMLLib:h.struct
+o_italk.Protocols:	HTMLLib:h.html2_ext
+o_italk.Protocols:	HTMLLib:h.tablestruc
+o_italk.Protocols:	HTMLLib:h.tablestruc
+o_italk.Protocols:	ImageLib:h.imagetrans
+o_italk.Protocols:	tbox:h.flex
+o_italk.Protocols:	C:h.setjmp
+o_italk.Protocols:	tbox:h.window
+o_italk.Protocols:	tbox:h.gadgets
+o_italk.Protocols:	h.Bitfields
+o_italk.Protocols:	h.Limits
+o_italk.Protocols:	h.Limits
+o_italk.Protocols:	h.MiscDefs
+o_italk.Protocols:	h.Utils
+o_italk.Protocols:	h.Browser
+o_italk.Protocols:	h.ChoiceDefs
+o_italk.Protocols:	h.FetchPage
+o_italk.Protocols:	h.Filetypes
+o_italk.Protocols:	h.History
+o_italk.Protocols:	h.Hotlist
+o_italk.Protocols:	h.Images
+o_italk.Protocols:	h.MimeMap
+o_italk.Protocols:	h.Printing
+o_italk.Protocols:	h.Save
+o_italk.Protocols:	h.SaveDraw
+o_italk.Protocols:	h.SaveFile
+o_italk.Protocols:	h.SaveObject
+o_italk.Protocols:	h.SaveText
+o_italk.Protocols:	h.Toolbars
+o_italk.Protocols:	h.URLutils
+o_italk.Protocols:	Libraries.URILib.h.URI
+o_italk.Protocols:	h.Windows
+o_italk.Protocols:	h.Protocols
+o_italk.Redraw:	c.Redraw
+o_italk.Redraw:	C:h.swis
+o_italk.Redraw:	C:h.kernel
+o_italk.Redraw:	tbox:h.flex
+o_italk.Redraw:	HTMLLib:h.HTMLLib
+o_italk.Redraw:	HTMLLib:h.html2_ext
+o_italk.Redraw:	HTMLLib:h.tablestruc
+o_italk.Redraw:	HTMLLib:h.tags
+o_italk.Redraw:	HTMLLib:h.struct
+o_italk.Redraw:	HTMLLib:h.html2_ext
+o_italk.Redraw:	tbox:h.wimp
+o_italk.Redraw:	tbox:h.wimplib
+o_italk.Redraw:	tbox:h.event
+o_italk.Redraw:	tbox:h.toolbox
+o_italk.Redraw:	h.svcprint
+o_italk.Redraw:	h.Global
+o_italk.Redraw:	HTMLLib:h.struct
+o_italk.Redraw:	HTMLLib:h.tablestruc
+o_italk.Redraw:	ImageLib:h.imagetrans
+o_italk.Redraw:	C:h.setjmp
+o_italk.Redraw:	tbox:h.window
+o_italk.Redraw:	tbox:h.gadgets
+o_italk.Redraw:	h.Bitfields
+o_italk.Redraw:	h.Limits
+o_italk.Redraw:	h.Limits
+o_italk.Redraw:	h.FromROSLib
+o_italk.Redraw:	h.MiscDefs
+o_italk.Redraw:	h.Utils
+o_italk.Redraw:	h.Browser
+o_italk.Redraw:	h.ChoiceDefs
+o_italk.Redraw:	h.CSIM
+o_italk.Redraw:	h.Fetch
+o_italk.Redraw:	h.URLstat
+o_italk.Redraw:	h.FontManage
+o_italk.Redraw:	h.Forms
+o_italk.Redraw:	h.Frames
+o_italk.Redraw:	h.Images
+o_italk.Redraw:	h.Object
+o_italk.Redraw:	h.Printing
+o_italk.Redraw:	h.PrintStyle
+o_italk.Redraw:	h.Reformat
+o_italk.Redraw:	HTMLLib:h.HTMLLib
+o_italk.Redraw:	h.Tables
+o_italk.Redraw:	h.TokenUtils
+o_italk.Redraw:	h.Toolbars
+o_italk.Redraw:	h.Redraw
+o_italk.Reformat:	c.Reformat
+o_italk.Reformat:	C:h.swis
+o_italk.Reformat:	C:h.kernel
+o_italk.Reformat:	tbox:h.flex
+o_italk.Reformat:	HTMLLib:h.HTMLLib
+o_italk.Reformat:	HTMLLib:h.html2_ext
+o_italk.Reformat:	HTMLLib:h.tablestruc
+o_italk.Reformat:	HTMLLib:h.tags
+o_italk.Reformat:	HTMLLib:h.struct
+o_italk.Reformat:	HTMLLib:h.html2_ext
+o_italk.Reformat:	tbox:h.wimp
+o_italk.Reformat:	tbox:h.wimplib
+o_italk.Reformat:	tbox:h.event
+o_italk.Reformat:	tbox:h.toolbox
+o_italk.Reformat:	h.svcprint
+o_italk.Reformat:	h.Global
+o_italk.Reformat:	HTMLLib:h.struct
+o_italk.Reformat:	HTMLLib:h.tablestruc
+o_italk.Reformat:	ImageLib:h.imagetrans
+o_italk.Reformat:	C:h.setjmp
+o_italk.Reformat:	tbox:h.window
+o_italk.Reformat:	tbox:h.gadgets
+o_italk.Reformat:	h.Bitfields
+o_italk.Reformat:	h.Limits
+o_italk.Reformat:	h.Limits
+o_italk.Reformat:	h.FromROSLib
+o_italk.Reformat:	h.MiscDefs
+o_italk.Reformat:	h.Utils
+o_italk.Reformat:	h.Browser
+o_italk.Reformat:	h.Fetch
+o_italk.Reformat:	h.URLstat
+o_italk.Reformat:	h.FetchPage
+o_italk.Reformat:	h.FontManage
+o_italk.Reformat:	h.Forms
+o_italk.Reformat:	h.History
+o_italk.Reformat:	h.Images
+o_italk.Reformat:	h.Memory
+o_italk.Reformat:	h.Object
+o_italk.Reformat:	h.Redraw
+o_italk.Reformat:	h.Tables
+o_italk.Reformat:	h.Toolbars
+o_italk.Reformat:	h.Windows
+o_italk.Reformat:	h.Reformat
+o_italk.Reformat:	HTMLLib:h.HTMLLib
+o_italk.RMA:	c.RMA
+o_italk.RMA:	C:h.swis
+o_italk.RMA:	C:h.kernel
+o_italk.RMA:	tbox:h.wimp
+o_italk.RMA:	tbox:h.wimplib
+o_italk.RMA:	tbox:h.event
+o_italk.RMA:	tbox:h.toolbox
+o_italk.RMA:	h.svcprint
+o_italk.RMA:	h.Global
+o_italk.RMA:	HTMLLib:h.struct
+o_italk.RMA:	HTMLLib:h.html2_ext
+o_italk.RMA:	HTMLLib:h.tablestruc
+o_italk.RMA:	HTMLLib:h.tablestruc
+o_italk.RMA:	ImageLib:h.imagetrans
+o_italk.RMA:	tbox:h.flex
+o_italk.RMA:	C:h.setjmp
+o_italk.RMA:	tbox:h.window
+o_italk.RMA:	tbox:h.gadgets
+o_italk.RMA:	h.Bitfields
+o_italk.RMA:	h.Limits
+o_italk.RMA:	h.Limits
+o_italk.RMA:	h.Utils
+o_italk.RMA:	h.RMA
+o_italk.Save:	c.Save
+o_italk.Save:	C:h.swis
+o_italk.Save:	C:h.kernel
+o_italk.Save:	tbox:h.flex
+o_italk.Save:	HTMLLib:h.HTMLLib
+o_italk.Save:	HTMLLib:h.html2_ext
+o_italk.Save:	HTMLLib:h.tablestruc
+o_italk.Save:	HTMLLib:h.tags
+o_italk.Save:	HTMLLib:h.struct
+o_italk.Save:	HTMLLib:h.html2_ext
+o_italk.Save:	tbox:h.wimp
+o_italk.Save:	tbox:h.wimplib
+o_italk.Save:	tbox:h.event
+o_italk.Save:	tbox:h.toolbox
+o_italk.Save:	tbox:h.toolbox
+o_italk.Save:	tbox:h.window
+o_italk.Save:	tbox:h.gadgets
+o_italk.Save:	tbox:h.menu
+o_italk.Save:	tbox:h.saveas
+o_italk.Save:	h.svcprint
+o_italk.Save:	h.Global
+o_italk.Save:	HTMLLib:h.struct
+o_italk.Save:	HTMLLib:h.tablestruc
+o_italk.Save:	ImageLib:h.imagetrans
+o_italk.Save:	C:h.setjmp
+o_italk.Save:	tbox:h.window
+o_italk.Save:	h.Bitfields
+o_italk.Save:	h.Limits
+o_italk.Save:	h.Limits
+o_italk.Save:	h.Utils
+o_italk.Save:	h.ChoiceDefs
+o_italk.Save:	h.Fetch
+o_italk.Save:	h.URLstat
+o_italk.Save:	h.Filetypes
+o_italk.Save:	h.Fontmanage
+o_italk.Save:	h.Hotlist
+o_italk.Save:	h.Protocols
+o_italk.Save:	h.URLutils
+o_italk.Save:	Libraries.URILib.h.URI
+o_italk.Save:	C:h.kernel
+o_italk.Save:	h.Save
+o_italk.SaveDraw:	c.SaveDraw
+o_italk.SaveDraw:	C:h.swis
+o_italk.SaveDraw:	C:h.kernel
+o_italk.SaveDraw:	tbox:h.flex
+o_italk.SaveDraw:	HTMLLib:h.HTMLLib
+o_italk.SaveDraw:	HTMLLib:h.html2_ext
+o_italk.SaveDraw:	HTMLLib:h.tablestruc
+o_italk.SaveDraw:	HTMLLib:h.tags
+o_italk.SaveDraw:	HTMLLib:h.struct
+o_italk.SaveDraw:	HTMLLib:h.html2_ext
+o_italk.SaveDraw:	tbox:h.wimp
+o_italk.SaveDraw:	tbox:h.wimplib
+o_italk.SaveDraw:	tbox:h.event
+o_italk.SaveDraw:	tbox:h.toolbox
+o_italk.SaveDraw:	h.svcprint
+o_italk.SaveDraw:	h.Global
+o_italk.SaveDraw:	HTMLLib:h.struct
+o_italk.SaveDraw:	HTMLLib:h.tablestruc
+o_italk.SaveDraw:	ImageLib:h.imagetrans
+o_italk.SaveDraw:	C:h.setjmp
+o_italk.SaveDraw:	tbox:h.window
+o_italk.SaveDraw:	tbox:h.gadgets
+o_italk.SaveDraw:	h.Bitfields
+o_italk.SaveDraw:	h.Limits
+o_italk.SaveDraw:	h.Limits
+o_italk.SaveDraw:	h.FromROSLib
+o_italk.SaveDraw:	h.MiscDefs
+o_italk.SaveDraw:	h.Utils
+o_italk.SaveDraw:	h.Browser
+o_italk.SaveDraw:	h.ChoiceDefs
+o_italk.SaveDraw:	h.CSIM
+o_italk.SaveDraw:	h.Fetch
+o_italk.SaveDraw:	h.URLstat
+o_italk.SaveDraw:	h.FileTypes
+o_italk.SaveDraw:	h.FontManage
+o_italk.SaveDraw:	h.Forms
+o_italk.SaveDraw:	h.Frames
+o_italk.SaveDraw:	h.Images
+o_italk.SaveDraw:	h.Object
+o_italk.SaveDraw:	h.Printing
+o_italk.SaveDraw:	h.PrintStyle
+o_italk.SaveDraw:	h.Redraw
+o_italk.SaveDraw:	h.Reformat
+o_italk.SaveDraw:	HTMLLib:h.HTMLLib
+o_italk.SaveDraw:	h.Save
+o_italk.SaveDraw:	h.Tables
+o_italk.SaveDraw:	h.TokenUtils
+o_italk.SaveDraw:	h.Toolbars
+o_italk.SaveDraw:	h.SaveDraw
+o_italk.SaveFile:	c.SaveFile
+o_italk.SaveFile:	C:h.swis
+o_italk.SaveFile:	C:h.kernel
+o_italk.SaveFile:	HTMLLib:h.HTMLLib
+o_italk.SaveFile:	HTMLLib:h.html2_ext
+o_italk.SaveFile:	HTMLLib:h.tablestruc
+o_italk.SaveFile:	HTMLLib:h.tags
+o_italk.SaveFile:	HTMLLib:h.struct
+o_italk.SaveFile:	HTMLLib:h.html2_ext
+o_italk.SaveFile:	tbox:h.wimp
+o_italk.SaveFile:	tbox:h.wimplib
+o_italk.SaveFile:	tbox:h.event
+o_italk.SaveFile:	tbox:h.toolbox
+o_italk.SaveFile:	tbox:h.toolbox
+o_italk.SaveFile:	tbox:h.window
+o_italk.SaveFile:	tbox:h.gadgets
+o_italk.SaveFile:	tbox:h.gadgets
+o_italk.SaveFile:	h.svcprint
+o_italk.SaveFile:	h.Global
+o_italk.SaveFile:	HTMLLib:h.struct
+o_italk.SaveFile:	HTMLLib:h.tablestruc
+o_italk.SaveFile:	ImageLib:h.imagetrans
+o_italk.SaveFile:	tbox:h.flex
+o_italk.SaveFile:	C:h.setjmp
+o_italk.SaveFile:	tbox:h.window
+o_italk.SaveFile:	h.Bitfields
+o_italk.SaveFile:	h.Limits
+o_italk.SaveFile:	h.Limits
+o_italk.SaveFile:	h.MiscDefs
+o_italk.SaveFile:	h.Utils
+o_italk.SaveFile:	h.Browser
+o_italk.SaveFile:	h.Fetch
+o_italk.SaveFile:	h.URLstat
+o_italk.SaveFile:	h.Filetypes
+o_italk.SaveFile:	h.History
+o_italk.SaveFile:	h.Hotlist
+o_italk.SaveFile:	h.Images
+o_italk.SaveFile:	h.Menus
+o_italk.SaveFile:	h.MimeMap
+o_italk.SaveFile:	h.Object
+o_italk.SaveFile:	h.Protocols
+o_italk.SaveFile:	h.Save
+o_italk.SaveFile:	h.SaveDraw
+o_italk.SaveFile:	h.SaveText
+o_italk.SaveFile:	h.Toolbars
+o_italk.SaveFile:	h.URLutils
+o_italk.SaveFile:	Libraries.URILib.h.URI
+o_italk.SaveFile:	C:h.kernel
+o_italk.SaveFile:	h.Windows
+o_italk.SaveFile:	h.SaveFile
+o_italk.SaveObject:	c.SaveObject
+o_italk.SaveObject:	C:h.swis
+o_italk.SaveObject:	C:h.kernel
+o_italk.SaveObject:	HTMLLib:h.HTMLLib
+o_italk.SaveObject:	HTMLLib:h.html2_ext
+o_italk.SaveObject:	HTMLLib:h.tablestruc
+o_italk.SaveObject:	HTMLLib:h.tags
+o_italk.SaveObject:	HTMLLib:h.struct
+o_italk.SaveObject:	HTMLLib:h.html2_ext
+o_italk.SaveObject:	tbox:h.wimp
+o_italk.SaveObject:	tbox:h.wimplib
+o_italk.SaveObject:	tbox:h.event
+o_italk.SaveObject:	tbox:h.toolbox
+o_italk.SaveObject:	tbox:h.toolbox
+o_italk.SaveObject:	tbox:h.window
+o_italk.SaveObject:	tbox:h.gadgets
+o_italk.SaveObject:	tbox:h.gadgets
+o_italk.SaveObject:	h.svcprint
+o_italk.SaveObject:	h.Global
+o_italk.SaveObject:	HTMLLib:h.struct
+o_italk.SaveObject:	HTMLLib:h.tablestruc
+o_italk.SaveObject:	ImageLib:h.imagetrans
+o_italk.SaveObject:	tbox:h.flex
+o_italk.SaveObject:	C:h.setjmp
+o_italk.SaveObject:	tbox:h.window
+o_italk.SaveObject:	h.Bitfields
+o_italk.SaveObject:	h.Limits
+o_italk.SaveObject:	h.Limits
+o_italk.SaveObject:	h.Utils
+o_italk.SaveObject:	h.Browser
+o_italk.SaveObject:	h.Fetch
+o_italk.SaveObject:	h.URLstat
+o_italk.SaveObject:	h.Protocols
+o_italk.SaveObject:	h.Save
+o_italk.SaveObject:	h.SaveFile
+o_italk.SaveObject:	h.Windows
+o_italk.SaveObject:	h.SaveObject
+o_italk.SaveText:	c.SaveText
+o_italk.SaveText:	C:h.swis
+o_italk.SaveText:	C:h.kernel
+o_italk.SaveText:	tbox:h.flex
+o_italk.SaveText:	HTMLLib:h.HTMLLib
+o_italk.SaveText:	HTMLLib:h.html2_ext
+o_italk.SaveText:	HTMLLib:h.tablestruc
+o_italk.SaveText:	HTMLLib:h.tags
+o_italk.SaveText:	HTMLLib:h.struct
+o_italk.SaveText:	HTMLLib:h.html2_ext
+o_italk.SaveText:	tbox:h.wimp
+o_italk.SaveText:	tbox:h.wimplib
+o_italk.SaveText:	tbox:h.event
+o_italk.SaveText:	tbox:h.toolbox
+o_italk.SaveText:	h.svcprint
+o_italk.SaveText:	h.Global
+o_italk.SaveText:	HTMLLib:h.struct
+o_italk.SaveText:	HTMLLib:h.tablestruc
+o_italk.SaveText:	ImageLib:h.imagetrans
+o_italk.SaveText:	C:h.setjmp
+o_italk.SaveText:	tbox:h.window
+o_italk.SaveText:	tbox:h.gadgets
+o_italk.SaveText:	h.Bitfields
+o_italk.SaveText:	h.Limits
+o_italk.SaveText:	h.Limits
+o_italk.SaveText:	h.FromROSLib
+o_italk.SaveText:	h.Utils
+o_italk.SaveText:	h.Fetch
+o_italk.SaveText:	h.URLstat
+o_italk.SaveText:	h.Filetypes
+o_italk.SaveText:	h.Forms
+o_italk.SaveText:	h.Protocols
+o_italk.SaveText:	h.Reformat
+o_italk.SaveText:	HTMLLib:h.HTMLLib
+o_italk.SaveText:	h.Save
+o_italk.SaveText:	h.SaveObject
+o_italk.SaveText:	h.SaveText
+o_italk.SetPBoxes:	c.SetPBoxes
+o_italk.SetPBoxes:	C:h.swis
+o_italk.SetPBoxes:	C:h.kernel
+o_italk.SetPBoxes:	tbox:h.wimp
+o_italk.SetPBoxes:	tbox:h.wimplib
+o_italk.SetPBoxes:	tbox:h.event
+o_italk.SetPBoxes:	tbox:h.toolbox
+o_italk.SetPBoxes:	tbox:h.toolbox
+o_italk.SetPBoxes:	tbox:h.window
+o_italk.SetPBoxes:	tbox:h.gadgets
+o_italk.SetPBoxes:	h.svcprint
+o_italk.SetPBoxes:	h.Global
+o_italk.SetPBoxes:	HTMLLib:h.struct
+o_italk.SetPBoxes:	HTMLLib:h.html2_ext
+o_italk.SetPBoxes:	HTMLLib:h.tablestruc
+o_italk.SetPBoxes:	HTMLLib:h.tablestruc
+o_italk.SetPBoxes:	ImageLib:h.imagetrans
+o_italk.SetPBoxes:	tbox:h.flex
+o_italk.SetPBoxes:	C:h.setjmp
+o_italk.SetPBoxes:	tbox:h.window
+o_italk.SetPBoxes:	h.Bitfields
+o_italk.SetPBoxes:	h.Limits
+o_italk.SetPBoxes:	h.Limits
+o_italk.SetPBoxes:	h.Utils
+o_italk.SetPBoxes:	h.Multiuser
+o_italk.SetPBoxes:	h.Save
+o_italk.SetPBoxes:	h.SetPBoxes
+o_italk.Tables:	c.Tables
+o_italk.Tables:	C:h.swis
+o_italk.Tables:	C:h.kernel
+o_italk.Tables:	HTMLLib:h.HTMLLib
+o_italk.Tables:	HTMLLib:h.html2_ext
+o_italk.Tables:	HTMLLib:h.tablestruc
+o_italk.Tables:	HTMLLib:h.tags
+o_italk.Tables:	HTMLLib:h.struct
+o_italk.Tables:	HTMLLib:h.html2_ext
+o_italk.Tables:	tbox:h.wimp
+o_italk.Tables:	tbox:h.wimplib
+o_italk.Tables:	tbox:h.event
+o_italk.Tables:	tbox:h.toolbox
+o_italk.Tables:	tbox:h.toolbox
+o_italk.Tables:	h.svcprint
+o_italk.Tables:	h.Global
+o_italk.Tables:	HTMLLib:h.struct
+o_italk.Tables:	HTMLLib:h.tablestruc
+o_italk.Tables:	ImageLib:h.imagetrans
+o_italk.Tables:	tbox:h.flex
+o_italk.Tables:	C:h.setjmp
+o_italk.Tables:	tbox:h.window
+o_italk.Tables:	tbox:h.gadgets
+o_italk.Tables:	h.Bitfields
+o_italk.Tables:	h.Limits
+o_italk.Tables:	h.Limits
+o_italk.Tables:	h.FromROSLib
+o_italk.Tables:	h.MiscDefs
+o_italk.Tables:	h.Utils
+o_italk.Tables:	h.Memory
+o_italk.Tables:	h.Redraw
+o_italk.Tables:	h.Reformat
+o_italk.Tables:	HTMLLib:h.HTMLLib
+o_italk.Tables:	h.TokenUtils
+o_italk.Tables:	h.Toolbars
+o_italk.Tables:	h.Tables
+o_italk.TokenUtils:	c.TokenUtils
+o_italk.TokenUtils:	HTMLLib:h.HTMLLib
+o_italk.TokenUtils:	HTMLLib:h.html2_ext
+o_italk.TokenUtils:	HTMLLib:h.tablestruc
+o_italk.TokenUtils:	HTMLLib:h.tags
+o_italk.TokenUtils:	HTMLLib:h.struct
+o_italk.TokenUtils:	HTMLLib:h.html2_ext
+o_italk.TokenUtils:	tbox:h.wimp
+o_italk.TokenUtils:	tbox:h.wimplib
+o_italk.TokenUtils:	C:h.kernel
+o_italk.TokenUtils:	tbox:h.event
+o_italk.TokenUtils:	tbox:h.toolbox
+o_italk.TokenUtils:	C:h.swis
+o_italk.TokenUtils:	C:h.kernel
+o_italk.TokenUtils:	tbox:h.toolbox
+o_italk.TokenUtils:	tbox:h.event
+o_italk.TokenUtils:	h.svcprint
+o_italk.TokenUtils:	h.Global
+o_italk.TokenUtils:	HTMLLib:h.struct
+o_italk.TokenUtils:	HTMLLib:h.tablestruc
+o_italk.TokenUtils:	ImageLib:h.imagetrans
+o_italk.TokenUtils:	tbox:h.flex
+o_italk.TokenUtils:	C:h.setjmp
+o_italk.TokenUtils:	tbox:h.window
+o_italk.TokenUtils:	tbox:h.gadgets
+o_italk.TokenUtils:	h.Bitfields
+o_italk.TokenUtils:	h.Limits
+o_italk.TokenUtils:	h.Limits
+o_italk.TokenUtils:	h.MiscDefs
+o_italk.TokenUtils:	h.Utils
+o_italk.TokenUtils:	h.Redraw
+o_italk.TokenUtils:	h.TokenUtils
+o_italk.Toolbars:	c.Toolbars
+o_italk.Toolbars:	C:h.swis
+o_italk.Toolbars:	C:h.kernel
+o_italk.Toolbars:	tbox:h.flex
+o_italk.Toolbars:	tbox:h.wimp
+o_italk.Toolbars:	tbox:h.wimplib
+o_italk.Toolbars:	tbox:h.event
+o_italk.Toolbars:	tbox:h.toolbox
+o_italk.Toolbars:	tbox:h.toolbox
+o_italk.Toolbars:	tbox:h.window
+o_italk.Toolbars:	tbox:h.gadgets
+o_italk.Toolbars:	tbox:h.gadgets
+o_italk.Toolbars:	h.Dialler
+o_italk.Toolbars:	C:h.kernel
+o_italk.Toolbars:	h.svcprint
+o_italk.Toolbars:	h.Global
+o_italk.Toolbars:	HTMLLib:h.struct
+o_italk.Toolbars:	HTMLLib:h.html2_ext
+o_italk.Toolbars:	HTMLLib:h.tablestruc
+o_italk.Toolbars:	HTMLLib:h.tablestruc
+o_italk.Toolbars:	ImageLib:h.imagetrans
+o_italk.Toolbars:	C:h.setjmp
+o_italk.Toolbars:	tbox:h.window
+o_italk.Toolbars:	h.Bitfields
+o_italk.Toolbars:	h.Limits
+o_italk.Toolbars:	h.Limits
+o_italk.Toolbars:	h.Utils
+o_italk.Toolbars:	h.Browser
+o_italk.Toolbars:	h.ChoiceDefs
+o_italk.Toolbars:	h.CSIM
+o_italk.Toolbars:	h.CtrlDefs
+o_italk.Toolbars:	h.Fetch
+o_italk.Toolbars:	h.URLstat
+o_italk.Toolbars:	h.Handlers
+o_italk.Toolbars:	h.History
+o_italk.Toolbars:	h.Images
+o_italk.Toolbars:	h.Memory
+o_italk.Toolbars:	h.Mouse
+o_italk.Toolbars:	h.Reformat
+o_italk.Toolbars:	HTMLLib:h.HTMLLib
+o_italk.Toolbars:	HTMLLib:h.html2_ext
+o_italk.Toolbars:	HTMLLib:h.tags
+o_italk.Toolbars:	HTMLLib:h.struct
+o_italk.Toolbars:	h.URLutils
+o_italk.Toolbars:	Libraries.URILib.h.URI
+o_italk.Toolbars:	C:h.kernel
+o_italk.Toolbars:	h.URLveneer
+o_italk.Toolbars:	h.Toolbars
+o_italk.Unifont:	c.Unifont
+o_italk.Unifont:	C:h.swis
+o_italk.Unifont:	C:h.kernel
+o_italk.Unifont:	C:Unicode.h.iso10646
+o_italk.Unifont:	C:Unicode.h.utf8
+o_italk.Unifont:	C:Unicode.h.iso10646
+o_italk.Unifont:	tbox:h.event
+o_italk.Unifont:	tbox:h.wimp
+o_italk.Unifont:	tbox:h.toolbox
+o_italk.Unifont:	tbox:h.toolbox
+o_italk.Unifont:	h.Global
+o_italk.Unifont:	HTMLLib:h.struct
+o_italk.Unifont:	HTMLLib:h.html2_ext
+o_italk.Unifont:	HTMLLib:h.tablestruc
+o_italk.Unifont:	HTMLLib:h.tablestruc
+o_italk.Unifont:	ImageLib:h.imagetrans
+o_italk.Unifont:	tbox:h.flex
+o_italk.Unifont:	C:h.setjmp
+o_italk.Unifont:	tbox:h.window
+o_italk.Unifont:	tbox:h.gadgets
+o_italk.Unifont:	h.Bitfields
+o_italk.Unifont:	h.Limits
+o_italk.Unifont:	h.Limits
+o_italk.Unifont:	h.FromROSLib
+o_italk.Unifont:	h.Utils
+o_italk.Unifont:	h.Unifont
+o_italk.URLstat:	c.URLstat
+o_italk.URLstat:	HTMLLib:h.HTMLLib
+o_italk.URLstat:	HTMLLib:h.html2_ext
+o_italk.URLstat:	HTMLLib:h.tablestruc
+o_italk.URLstat:	HTMLLib:h.tags
+o_italk.URLstat:	HTMLLib:h.struct
+o_italk.URLstat:	HTMLLib:h.html2_ext
+o_italk.URLstat:	tbox:h.wimp
+o_italk.URLstat:	tbox:h.event
+o_italk.URLstat:	tbox:h.toolbox
+o_italk.URLstat:	C:h.kernel
+o_italk.URLstat:	h.svcprint
+o_italk.URLstat:	h.Global
+o_italk.URLstat:	HTMLLib:h.struct
+o_italk.URLstat:	HTMLLib:h.tablestruc
+o_italk.URLstat:	ImageLib:h.imagetrans
+o_italk.URLstat:	tbox:h.flex
+o_italk.URLstat:	C:h.setjmp
+o_italk.URLstat:	tbox:h.window
+o_italk.URLstat:	tbox:h.gadgets
+o_italk.URLstat:	h.Bitfields
+o_italk.URLstat:	h.Limits
+o_italk.URLstat:	h.Limits
+o_italk.URLstat:	h.Utils
+o_italk.URLstat:	h.URLstat
+o_italk.URLutils:	c.URLutils
+o_italk.URLutils:	C:h.swis
+o_italk.URLutils:	C:h.kernel
+o_italk.URLutils:	Libraries.URILib.h.URI
+o_italk.URLutils:	C:h.kernel
+o_italk.URLutils:	tbox:h.wimp
+o_italk.URLutils:	tbox:h.event
+o_italk.URLutils:	tbox:h.toolbox
+o_italk.URLutils:	h.svcprint
+o_italk.URLutils:	h.Global
+o_italk.URLutils:	HTMLLib:h.struct
+o_italk.URLutils:	HTMLLib:h.html2_ext
+o_italk.URLutils:	HTMLLib:h.tablestruc
+o_italk.URLutils:	HTMLLib:h.tablestruc
+o_italk.URLutils:	ImageLib:h.imagetrans
+o_italk.URLutils:	tbox:h.flex
+o_italk.URLutils:	C:h.setjmp
+o_italk.URLutils:	tbox:h.window
+o_italk.URLutils:	tbox:h.gadgets
+o_italk.URLutils:	h.Bitfields
+o_italk.URLutils:	h.Limits
+o_italk.URLutils:	h.Limits
+o_italk.URLutils:	h.Utils
+o_italk.URLutils:	h.Fetch
+o_italk.URLutils:	h.URLstat
+o_italk.URLutils:	h.Filetypes
+o_italk.URLutils:	h.MimeMap
+o_italk.URLutils:	h.URLveneer
+o_italk.URLutils:	h.URLutils
+o_italk.URLutils:	Libraries.URILib.h.URI
+o_italk.URLveneer:	c.URLveneer
+o_italk.URLveneer:	C:h.swis
+o_italk.URLveneer:	C:h.kernel
+o_italk.URLveneer:	tbox:h.wimp
+o_italk.URLveneer:	tbox:h.event
+o_italk.URLveneer:	tbox:h.toolbox
+o_italk.URLveneer:	h.svcprint
+o_italk.URLveneer:	h.Global
+o_italk.URLveneer:	HTMLLib:h.struct
+o_italk.URLveneer:	HTMLLib:h.html2_ext
+o_italk.URLveneer:	HTMLLib:h.tablestruc
+o_italk.URLveneer:	HTMLLib:h.tablestruc
+o_italk.URLveneer:	ImageLib:h.imagetrans
+o_italk.URLveneer:	tbox:h.flex
+o_italk.URLveneer:	C:h.setjmp
+o_italk.URLveneer:	tbox:h.window
+o_italk.URLveneer:	tbox:h.gadgets
+o_italk.URLveneer:	h.Bitfields
+o_italk.URLveneer:	h.Limits
+o_italk.URLveneer:	h.Limits
+o_italk.URLveneer:	h.Utils
+o_italk.URLveneer:	h.URLutils
+o_italk.URLveneer:	Libraries.URILib.h.URI
+o_italk.URLveneer:	C:h.kernel
+o_italk.URLveneer:	h.URLveneer
+o_italk.Utils:	c.Utils
+o_italk.Utils:	C:h.setjmp
+o_italk.Utils:	HTMLLib:h.HTMLLib
+o_italk.Utils:	HTMLLib:h.html2_ext
+o_italk.Utils:	HTMLLib:h.tablestruc
+o_italk.Utils:	HTMLLib:h.tags
+o_italk.Utils:	HTMLLib:h.struct
+o_italk.Utils:	HTMLLib:h.html2_ext
+o_italk.Utils:	tbox:h.wimp
+o_italk.Utils:	tbox:h.wimplib
+o_italk.Utils:	C:h.kernel
+o_italk.Utils:	tbox:h.event
+o_italk.Utils:	tbox:h.toolbox
+o_italk.Utils:	C:h.swis
+o_italk.Utils:	C:h.kernel
+o_italk.Utils:	tbox:h.toolbox
+o_italk.Utils:	tbox:h.event
+o_italk.Utils:	tbox:h.quit
+o_italk.Utils:	tbox:h.window
+o_italk.Utils:	tbox:h.gadgets
+o_italk.Utils:	tbox:h.proginfo
+o_italk.Utils:	tbox:h.window
+o_italk.Utils:	tbox:h.gadgets
+o_italk.Utils:	h.ToolAction
+o_italk.Utils:	h.svcprint
+o_italk.Utils:	h.Global
+o_italk.Utils:	HTMLLib:h.struct
+o_italk.Utils:	HTMLLib:h.tablestruc
+o_italk.Utils:	ImageLib:h.imagetrans
+o_italk.Utils:	tbox:h.flex
+o_italk.Utils:	C:h.setjmp
+o_italk.Utils:	tbox:h.window
+o_italk.Utils:	h.Bitfields
+o_italk.Utils:	h.Limits
+o_italk.Utils:	h.Limits
+o_italk.Utils:	h.MiscDefs
+o_italk.Utils:	h.FromROSLib
+o_italk.Utils:	h.Main
+o_italk.Utils:	h.NestWimp
+o_italk.Utils:	h.Save
+o_italk.Utils:	h.Toolbars
+o_italk.Utils:	h.Utils
+o_italk.Windows:	c.Windows
+o_italk.Windows:	C:h.swis
+o_italk.Windows:	C:h.kernel
+o_italk.Windows:	tbox:h.flex
+o_italk.Windows:	tbox:h.wimp
+o_italk.Windows:	tbox:h.wimplib
+o_italk.Windows:	tbox:h.event
+o_italk.Windows:	tbox:h.toolbox
+o_italk.Windows:	tbox:h.toolbox
+o_italk.Windows:	tbox:h.window
+o_italk.Windows:	tbox:h.gadgets
+o_italk.Windows:	h.Dialler
+o_italk.Windows:	C:h.kernel
+o_italk.Windows:	h.NestWimp
+o_italk.Windows:	h.svcprint
+o_italk.Windows:	h.Global
+o_italk.Windows:	HTMLLib:h.struct
+o_italk.Windows:	HTMLLib:h.html2_ext
+o_italk.Windows:	HTMLLib:h.tablestruc
+o_italk.Windows:	HTMLLib:h.tablestruc
+o_italk.Windows:	ImageLib:h.imagetrans
+o_italk.Windows:	C:h.setjmp
+o_italk.Windows:	tbox:h.window
+o_italk.Windows:	h.Bitfields
+o_italk.Windows:	h.Limits
+o_italk.Windows:	h.Limits
+o_italk.Windows:	h.FromROSLib
+o_italk.Windows:	h.MiscDefs
+o_italk.Windows:	h.Utils
+o_italk.Windows:	h.Browser
+o_italk.Windows:	h.ChoiceDefs
+o_italk.Windows:	h.Fetch
+o_italk.Windows:	h.URLstat
+o_italk.Windows:	h.FetchHTML
+o_italk.Windows:	h.FetchPage
+o_italk.Windows:	h.Find
+o_italk.Windows:	h.FontManage
+o_italk.Windows:	h.Forms
+o_italk.Windows:	h.Frames
+o_italk.Windows:	h.Handlers
+o_italk.Windows:	h.History
+o_italk.Windows:	h.Images
+o_italk.Windows:	h.Main
+o_italk.Windows:	h.Markers
+o_italk.Windows:	h.Memory
+o_italk.Windows:	h.Menus
+o_italk.Windows:	h.Meta
+o_italk.Windows:	h.Object
+o_italk.Windows:	h.OpenURL
+o_italk.Windows:	h.PlugIn
+o_italk.Windows:	h.Printing
+o_italk.Windows:	h.Redraw
+o_italk.Windows:	h.Reformat
+o_italk.Windows:	HTMLLib:h.HTMLLib
+o_italk.Windows:	HTMLLib:h.html2_ext
+o_italk.Windows:	HTMLLib:h.tags
+o_italk.Windows:	HTMLLib:h.struct
+o_italk.Windows:	h.Tables
+o_italk.Windows:	h.Toolbars
+o_italk.Windows:	h.URLutils
+o_italk.Windows:	Libraries.URILib.h.URI
+o_italk.Windows:	C:h.kernel
+o_italk.Windows:	h.Windows
