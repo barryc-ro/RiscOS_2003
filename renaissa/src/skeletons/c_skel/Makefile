@@ -1,11 +1,5 @@
 # Skeleton OBJASM/C Makefile
 #
-# *****************************************
-# ***       C h a n g e   L i s t       ***
-# *****************************************
-# Date       	Name         	Description
-# ----       	----         	-----------
-# 17 Sep 1997	RWB		Created
 
 #
 # Paths
@@ -45,11 +39,11 @@ RSTUBS     = RISCOSLIB:o.rstubs
 ROMSTUBS   = RISCOSLIB:o.romstubs
 ROMCSTUBS  = RISCOSLIB:o.romcstubs
 ABSSYM     = RISC_OSLib:o.AbsSym
-REMOTEDB   = <Lib$Dir>.debug.o.remotezm
+REMOTEDB   = C:debug.o.remotezm
 #
 # Include files
 #
-INCLUDES = -IC:,<Lib$Dir>.
+INCLUDES = -IC:
 
 # Program specific options:
 #
@@ -92,9 +86,14 @@ clean:
         ${WIPE} o.*      ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
         ${WIPE} map.*    ${WFLAGS}
+        ${RM} h.header
         ${RM} ${RMTARGET}
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
+        
+# dummy target
+h.header: cmhg.header
+	@echo
         
 #
 # ROM target (re-linked at ROM Image build time)
