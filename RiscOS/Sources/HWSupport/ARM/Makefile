@@ -75,4 +75,5 @@ rm.ARM: s.Front
 rm.ARM: s.Errors
 rm.ARM: s.Module
 rm.ARM: s.Cache
+rm.ARM: s.ARM810clk
 rm.ARM: s.MsgTrans
