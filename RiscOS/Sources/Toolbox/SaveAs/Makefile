@@ -13,6 +13,7 @@
 #
 COMPONENT  = SaveAs
 ROM_MODULE = aof.${COMPONENT}
+RAM_MODULE = rm.${COMPONENT}
 
 #
 # Export Paths for Messages module
@@ -71,6 +72,10 @@ OBJS =\
 # Main rules:
 #
 #
+all: ${RAM_MODULE}
+        @echo ${COMPONENT}: Module built (RAM)
+
+
 rom: ${ROM_MODULE}
         @echo ${COMPONENT}: Module built (ROM)
 
@@ -103,6 +108,11 @@ rom_link:
         truncate map.${COMPONENT} linked.${COMPONENT}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
+
+${RAM_MODULE}: ${OBJS} ${TBOXLIB} ${CLIB}
+	${mkdir} rm
+        ${LD} -o $@ -module ${OBJS} ${TBOXLIB} ${CLIB}
+        Access $@ RW/R
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
