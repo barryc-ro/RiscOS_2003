@@ -13,15 +13,16 @@
 #include "outaof.h"
 #include "fname.h"
 #ifdef __riscos
-#include "swis.h"
-#include "throwback.h"
-#ifdef OLD_AOF
-#define FNAME_ORDERTYPE FNAME_ACORN
-#endif
+# include "kernel.h"
+# include "swis.h"
+# include "throwback.h"
+# ifdef OLD_AOF
+#  define FNAME_ORDERTYPE FNAME_ACORN
+# endif
 #else
-#ifdef OLD_AOF
-#define FNAME_ORDERTYPE FNAME_DFLT
-#endif
+# ifdef OLD_AOF
+#  define FNAME_ORDERTYPE FNAME_DFLT
+# endif
 #endif
 #include "VersionNum"
 
@@ -38,6 +39,12 @@
 #define  WARN_TITLE_LEN     16
 #define  MAX_TEXT           1024
 #define  MAX_HEADER_SZ      (1024*4)
+
+#ifdef __riscos
+#define CC "cc -C++"
+#else
+#define CC "armcc"
+#endif
 
 #define  STRINGIFY(x)       #x
 
@@ -99,6 +106,9 @@ struct veneer
 /*
  * The following veneer sequences are defined by the veneer module...
  */
+#ifdef PROCESS_VENEERS
+# include "gen.h"
+#else
 extern struct veneer b_veneer;
 extern struct veneer bl_veneer;
 extern struct veneer initialise_lib_veneer;
@@ -120,6 +130,9 @@ extern struct veneer irq_common_tail_veneer;
 extern struct veneer generic_entry_veneer;
 extern struct veneer generic_common_head_veneer;
 extern struct veneer generic_common_tail_veneer;
+extern int swi_handler_veneer_modname_reloc_offset;
+extern int swi_handler_veneer_adrtoken_offset;
+#endif
 
 /*
  * The following structure is used to describe a module '*' command table
@@ -1507,8 +1520,9 @@ static void offset_branch_to_base(unsigned32 offset)
   *(unsigned32 *)(module_area + offset) = inst | (b_offset & 0x00fffffful);
 }
 
-static void save_veneer(const struct veneer *v, const char *name)
+static void save_veneer(void *vv, const char *name)
 { unsigned32 code = dot_offset(), j;
+  const struct veneer *v = (const struct veneer *)vv;
 
   for (j = 0;  j < v->code_len / sizeof(unsigned32);  ++j)
       save_word(v->code_start[j]);
@@ -1535,6 +1549,7 @@ static void cg_irq_handlers(int generic)
 {
   struct irq_handler *h;
   unsigned32 nh, n, *w;
+  struct veneer *v;
 
   h = generic ? generic_veneers : irq_handlers;  nh = 0;
   while (h != NULL) {h = h->prev;  ++nh;}
@@ -1574,7 +1589,8 @@ static void cg_irq_handlers(int generic)
    * A generic veneer is the same as a IRQ handler, but returns an optional
    * error condition, rather than vector claiming.
    */
-  w = (generic ? generic_entry_veneer : irq_entry_veneer).code_start;
+  v = (struct veneer *)(generic ? &generic_entry_veneer : &irq_entry_veneer);
+  w = v->code_start;
   for (h = (generic ? generic_veneers : irq_handlers), n = 0;  h != NULL;  h = h->prev)
   { if (outaof_defsymbol(h->entry_name, dot_offset()) == 0xffffffff)
       errf("duplicate definition of '%s' ignored\n", h->entry_name);
@@ -1594,8 +1610,9 @@ static void cg_irq_handlers(int generic)
    * enough to allow this to be done naively.
    */
   n = dot_offset();
-  save_veneer(generic ? &generic_common_head_veneer : &irq_common_head_veneer, NULL);
-  w = (unsigned32 *) (module_area + n + (generic ? generic_common_head_veneer : irq_common_head_veneer).call_offset);
+  v = (struct veneer *)(generic ? &generic_common_head_veneer : &irq_common_head_veneer);
+  save_veneer(v, NULL);
+  w = (unsigned32 *) (module_area + n + v->call_offset);
   *w += nh*4;
 
   /*
@@ -2254,7 +2271,7 @@ static void write_output(char *out_name)
 #endif
   if (not_re_entrant)
   { /* a filthy bit of collusion between CMHG and s.veneers... */
-    *(module_area + mh->init_code + initialise_lib_veneer.call_offset - 4) = 0;
+    *(module_area + mh->init_code + ((struct veneer *)&initialise_lib_veneer)->call_offset - 4) = 0;
   }
   if (init_code != NULL) {
       save_veneer(&initialise_user_veneer, init_code);
@@ -2285,9 +2302,6 @@ static void write_output(char *out_name)
   if (swi_handler != NULL)
   {
     unsigned32 *p, *t, o;
-    extern int swi_handler_veneer_modname_reloc_offset;
-    extern int swi_handler_veneer_adrtoken_offset;
-
     mh->swi_chunk_base = swi_base;
     mh->swi_handler_code = dot_offset();
     save_veneer(&swi_handler_veneer, swi_handler);
@@ -2547,19 +2561,21 @@ default:
        * The C++ flag stops cc trying to look inside any ".c" directories.
        * defines contains all "-D" defines, prefixed by a space.
        */
-      sprintf(cmd, "cc -C++ -E %s%s %s%s -I%s %s > %s",
+      sprintf(cmd, CC " -E %s%s %s%s -I%s %s > %s",
                    depend_file[0] ? "-depend " : "",
                    depend_file,
                    throwback_flag ? "-throwback": "",
                    defines, include_path, in_name, temp_file);
       rc = system(cmd);
 
+#ifdef __riscos
       if (rc == _kernel_ERROR)
       {
         fprintf(stderr, "*** %s ***\n", _kernel_last_oserror()->errmess);
         return BAD;
       }
-      else if (rc != 0)
+#endif
+      if (rc != 0)
       {
         remove(temp_file);
         return rc;
@@ -2582,6 +2598,10 @@ default:
     return BAD;
   }
   lineno = 1;
+#ifdef PROCESS_VENEERS
+  gen_area_relocate();
+#endif
+
   parse_input();
   fclose(in);
 
