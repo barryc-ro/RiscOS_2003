@@ -58,7 +58,6 @@ o.modulewrap \
 o.header   \
 o.RMInfo   \
 o.csfserr  \
-o.allerrs  \
 o.sfs      \
 o.sff      \
 o.sfi      \
@@ -177,10 +176,8 @@ o.RMInfo: s.RMInfo
 o.csfserr:	c.csfserr
 o.csfserr:	C:h.kernel
 o.csfserr:	C:h.swis
-o.csfserr:	h.xerrs
 o.csfserr:	h.etc
 o.csfserr:	h.csfserr
-o.allerrs: s.allerrs
 o.sfs:	c.sfs
 o.sfs:	C:h.kernel
 o.sfs:	C:h.swis
@@ -639,11 +636,3 @@ o.xstr:	C:h.swis
 o.xstr:	h.flex
 o.xstr:	h.xstr
 o.usermode: s.usermode
-o.usermode: Hdr:ListOpts
-o.usermode: Hdr:Macros
-o.usermode: Hdr:System
-o.usermode: Hdr:SWIs
-o.usermode: Hdr:CPU.Generic26
-o.usermode: Hdr:IO.GenericIO
-o.usermode: Hdr:RISCOS
-o.usermode: Hdr:EnvNumbers
