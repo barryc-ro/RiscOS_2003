@@ -17,6 +17,7 @@
 # Export path for Messages module
 RESDIR		= <resource$dir>.Resources2.$(COMPONENT)
 
+LIBDIR		= <Lib$Dir>
 
 
 # ------------------------------------------------------------------------------
@@ -51,8 +52,8 @@ MEMCHECK_TARGET	= OmniAccmc
 HIERPROF_TARGET	= OmniAcchp
 DEBUG_TARGET	= OmniAccd
 
-NORMAL_HDR =	h.cmhg-in
-DEBUG_HDR =	h.cmhg-in
+NORMAL_HDR =	h.modhdr
+DEBUG_HDR =	h.modhdr
 
 A_DEBUG_ON	= "-pd \"DEBUG SETL {TRUE}\""
 A_DEBUG_OFF	= "-pd \"DEBUG SETL {FALSE}\""
@@ -62,7 +63,11 @@ A_DEBUG_OFF	= "-pd \"DEBUG SETL {FALSE}\""
 C_DEBUG_ON	= -DDEBUG -DNDEBUG
 C_DEBUG_OFF	= -DNDEBUG
 
+DEBUGLIB	= $(LIBDIR).DebugLib.o.DebugLibzm
+SOCKLIB		= TCPIPLibs:o.socklibzm
+INETLIB		= TCPIPLibs:o.inetlibzm
 
+DEBUGLIBS	= $(DEBUGLIB) $(SOCKLIB) $(INETLIB)
 
 
 # ------------------------------------------------------------------------------
@@ -76,11 +81,11 @@ all:
 	@echo $(COMPONENT): build complete
 
 debug:
-	@amu -f MainMake $(MFLAGS) TARGET=$(DEBUG_TARGET) EXTRA_A_FLAGS=$(A_DEBUG_ON) EXTRA_C_FLAGS="$(C_DEBUG_ON) -DDEBUGLIB" HDR=$(DEBUG_HDR) EXT=od
+	@amu -f MainMake $(MFLAGS) TARGET=$(DEBUG_TARGET) EXTRA_A_FLAGS=$(A_DEBUG_ON) EXTRA_C_FLAGS="$(C_DEBUG_ON) -DDEBUGLIB" HDR=$(DEBUG_HDR) EXTRA_LIBS="$(DEBUGLIBS)" EXT=od
 	@echo $(COMPONENT): debug build complete
 
 memcheck:
-	@amu -f MainMake $(MFLAGS) TARGET=$(MEMCHECK_TARGET) EXTRA_A_FLAGS=$(A_DEBUG_OFF) EXTRA_C_FLAGS="$(C_DEBUG_OFF) -DDEBUGLIB" HDR=$(NORMAL_HDR) EXT=oMC
+	@amu -f MainMake $(MFLAGS) TARGET=$(MEMCHECK_TARGET) EXTRA_A_FLAGS=$(A_DEBUG_OFF) EXTRA_C_FLAGS="$(C_DEBUG_OFF) -DDEBUGLIB" HDR=$(NORMAL_HDR) EXTRA_LIBS="$(DEBUGLIBS)" EXT=oMC
 	@echo $(COMPONENT): memcheck build complete
 
 preprocess:
