@@ -81,6 +81,8 @@ resources: ${APP}
 	${CP} Resources.!Run 	    ${RESAPP}.!Run 	${CPFLAGS}
 	${CP} Resources.!Sprites    ${RESAPP}.!Sprites 	${CPFLAGS}
 	${CP} Resources.Defaults    ${RESAPP}.Defaults 	${CPFLAGS}
+	${CP} Resources.Japan       ${RESAPP}.Japan 	${CPFLAGS}
+	${CP} Resources.Sweden      ${RESAPP}.Sweden 	${CPFLAGS}	
 	${CP} ${APP}    	    ${RESAPP}.${APP}  	${CPFLAGS}	
 	@echo ${COMPONENT}: resource files copied
 	
