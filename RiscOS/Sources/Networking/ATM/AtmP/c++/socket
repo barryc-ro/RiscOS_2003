@@ -41,26 +41,6 @@
 
 enum
 {
-    AS_SOCKET      = 0x0,
-    AS_BIND        = 0x1,
-    AS_CONNECT     = 0x2,
-    AS_CONNECT_ACK = 0x3,
-    AS_LISTEN      = 0x4,
-    AS_CLOSE       = 0x5,
-    AS_CLOSE_ACK   = 0x6,
-    AS_DATA        = 0x7,
-    AS_DATA_END    = 0x8,
-    AS_DATA_ABORT  = 0x9,
-    AS_SET_QOS     = 0xa,
-    AS_DATA_LENGTH = 0xb,
-    AS_ADD_PARTY   = 0xc,
-    AS_DROP_PARTY  = 0xd,
-    /* 0xe reserved */
-    AS_ERROR       = 0xf
-};
-
-enum
-{
     SOCK_RAW,
     SOCK_SEQPACKET
 };
@@ -143,7 +123,8 @@ SocketService::SocketService (VC *          vc,
     : Service (SOCK_SERVICE, error),
       vc (vc),
       vc_receiver (vc_receiver),
-      state (Creating)
+      state (Creating),
+      close_op (0)
 {
 }
 
@@ -183,7 +164,7 @@ void  SocketService::TxSocket (const S32  af)
                     AS_SOCKET,
                     (unsigned char *) &socket_message,
                     sizeof (socket_message),
-                    BlockToARMAddr);
+                    Boson_BlockToARMAddr);
 }
 
 
@@ -212,7 +193,7 @@ void  SocketService::TxBind (const ATML_SOCKADDR_PVC *const  atm_addr)
                     AS_BIND,
                     (unsigned char *) &bind_message,
                     sizeof (bind_message),
-                    BlockToARMAddr);
+                    Boson_BlockToARMAddr);
 }
 
 
@@ -282,7 +263,7 @@ void  SocketService::TxConnect (const ATML_SOCKADDR_ATM *const  atm_addr,
                     (unsigned char *) connect_message,
                     (unsigned int) raw_message -
                         (unsigned int) connect_message,
-                    BlockToARMAddr);
+                    Boson_BlockToARMAddr);
 }
 
 
@@ -317,7 +298,7 @@ void  SocketService::TxConnectAck (const S32  status)
                     (unsigned char *) connectack_message,
                     (unsigned int) raw_message -
                         (unsigned int) connectack_message,
-                    BlockToARMAddr);
+                    Boson_BlockToARMAddr);
 }
 
 
@@ -350,7 +331,7 @@ void  SocketService::TxListen (const ATML_SOCKADDR_ATM *const  atm_addr)
                     (unsigned char *) listen_message,
                     (unsigned int) raw_message -
                         (unsigned int) listen_message,
-                    BlockToARMAddr);
+                    Boson_BlockToARMAddr);
 }
 
 
@@ -359,139 +340,27 @@ void  SocketService::TxListen (const ATML_SOCKADDR_ATM *const  atm_addr)
 int  SocketService::TxData (const unsigned int *  data,
                             int                   data_bytes)
 {
-    int         fifo_bytes = 0;
-    NICMessage  msg;
+    return boson_tx_data (handle, data, data_bytes);
+}
 
-    dprintf (("", "Write_Data_Msg: %d bytes\n", data_bytes));
 
-    msg.header      = 0;
-    msg.data.handle = handle;
-    msg.data.type   = Boson_DataMessage;
-    msg.data.first  = 1;
 
-    fifo_bytes = boson_fifo_space ();
-    if (fifo_bytes == 0)
+
+void  SocketService::Close ()
+{
+    // Blocking close
+    if (!close_op)
     {
-        return -1;
-    }
-    if (data_bytes > fifo_bytes - sizeof (NICMessage))
-    {
-        int           packet_bytes;
-        NICExtension  ext;
-
-        dprintf (("", "Fragmenting data\n"));
-
-        ext.extension = 0;
-        /* Have to send data in blocks (each block sent with AS_DATA must be
-         * a multiple of 48 bytes.
-         */
-
-        /* First block can do maximum of (fifo_space - 8) words (accounting for
-         * message header and extension word), and must be multiples of 48
-         * bytes.
-         */
-        packet_bytes =
-            ((fifo_bytes - (sizeof (NICMessage) +
-                            sizeof (NICExtension))) / 48) * 48;
-        msg.data.command = AS_DATA;
-        msg.data.ext     = 1;
-        msg.data.size    = packet_bytes;
-        ext.bits.size    = data_bytes;
-
-        dprintf (("", "%d\n", packet_bytes));
-
-        /* Number of bytes that will remain after this block */
-        data_bytes -= packet_bytes;
-
-        /* Write message */
-        w_Boson_CommitToARM (msg.header);
-
-        /* Write extenstion word */
-        w_Boson_CommitToARM (ext.extension);
-
-        /* Write all but last word of packet */
-        while (packet_bytes -= 4, packet_bytes > 0)
+        close_op = new AsyncOp (100, 0, 0);
+        TxClose ();
+        if (close_op)
         {
-            w_Boson_CommitToARM (*data++);
+            int  error = close_op->Wait ();
+            AsyncOp *  temp_op = close_op;
+            close_op = 0;
+            delete (temp_op);
         }
-
-        /* Write last word of packet and increment block counter */
-        w_Boson_BlockToARM (*data++);
-
-
-        msg.data.first   = 0;
-        msg.data.last    = 0;
-        msg.data.ext     = 0;
-
-        fifo_bytes = boson_fifo_space ();
-        if (fifo_bytes == 0)
-        {
-            return -1;
-        }
-
-        while (data_bytes > fifo_bytes - sizeof (NICMessage))
-        {
-            /* Middle blocks can do maximum of (fifo_space - 4) bytes
-             * (accounting for message header), and must be multiples of 48
-             * bytes.
-             */
-            packet_bytes  = ((fifo_bytes - sizeof (NICMessage)) / 48) * 48;
-            msg.data.size = packet_bytes;
-
-            dprintf (("", "%d\n", packet_bytes));
-
-            /* Number of bytes that will remain after this block */
-            data_bytes -= packet_bytes;
-
-            /* Write message */
-            w_Boson_CommitToARM (msg.header);
-
-            /* Write all but last word of packet */
-            while (packet_bytes -= 4, packet_bytes > 0)
-            {
-                w_Boson_CommitToARM (*data++);
-            }
-
-            /* Write last word of packet and increment block counter */
-            w_Boson_BlockToARM (*data++);
-
-            fifo_bytes = boson_fifo_space ();
-            if (fifo_bytes == 0)
-            {
-                return -1;
-            }
-        }
-
-        return 0;
     }
-
-    /* Either sending all data in one go, or last block of multi-block message.
-     */
-    msg.data.command = AS_DATA_END;
-    msg.data.last    = 1;
-    msg.data.size    = data_bytes;
-
-    dprintf (("", "%d\n", data_bytes));
-
-    /* Write message */
-    w_Boson_CommitToARM (msg.header);
-
-    /* Write all but last '<= 4 bytes' of packet */
-    while (data_bytes -= 4, data_bytes > 0)
-    {
-        w_Boson_CommitToARM (*data++);
-    }
-
-    /* Write last few bytes of packet and increment block counter. May not
-     * actually be a whole word though, but this shouldn't matter - the NIC
-     * should ignore any junk bytes at the end if we've got our byte count
-     * correct.
-     */
-    w_Boson_BlockToARM (*data);
-
-    dprintf (("", "done\n\n"));
-
-    return 0;
 }
 
 
@@ -510,7 +379,7 @@ void  SocketService::TxClose ()
                     AS_CLOSE,
                     (unsigned char *) &close_message,
                     sizeof (AS_CLOSE_PARAMS),
-                    BlockToARMAddr);
+                    Boson_BlockToARMAddr);
 }
 
 
@@ -522,7 +391,7 @@ MessageHandlerRC  SocketService::MessageHandler (NICMessage          msg,
 
     M_unused (total_size);
 
-    if (msg.common.type == Boson_CommandMessage)
+    if (msg.common.type == NIC_CommandMessage)
     {
         switch (msg.command.command)
         {
@@ -631,7 +500,7 @@ void  SocketService::ProcessConnect (NICMessage  msg)
     FLOWSPEC *             rx_qos      = 0;
 
 
-    ASM_GET_MSG (CommitFromARMAddr, irq_buffer, msg.data.size);
+    ASM_GET_MSG (Boson_CommitFromARMAddr, irq_buffer, msg.data.size);
 
     /* Read size of address structure from message */
     memcpy (&addr_size, raw_message, sizeof (S32));
@@ -723,7 +592,7 @@ void  SocketService::ProcessConnectAck (NICMessage  msg)
     const unsigned char *  tx_qos = NULL;
     const unsigned char *  rx_qos = NULL;
 
-    ASM_GET_MSG (CommitFromARMAddr, irq_buffer, msg.data.size);
+    ASM_GET_MSG (Boson_CommitFromARMAddr, irq_buffer, msg.data.size);
 
     /* Extract error code from message */
     memcpy (&status, raw_message, sizeof (int));
@@ -777,7 +646,7 @@ MessageHandlerRC  SocketService::RxClose (NICMessage  msg)
     int  status;
 
     dprintf (("", "RxClose %d\n", msg.common.handle));
-    ASM_GET_MSG (CommitFromARMAddr, irq_buffer, msg.data.size);
+    ASM_GET_MSG (Boson_CommitFromARMAddr, irq_buffer, msg.data.size);
     memcpy (&status, irq_buffer, sizeof (int));
 
     if (status != 0)
@@ -804,9 +673,14 @@ MessageHandlerRC  SocketService::RxCloseAck (NICMessage  msg)
     /* There is a parameter which indicates the reason for closure, but we're
      * not interested in it.
      */
-    ASM_GET_MSG (CommitFromARMAddr, irq_buffer, msg.data.size);
+    ASM_GET_MSG (Boson_CommitFromARMAddr, irq_buffer, msg.data.size);
     SetState (Closed);
     irq_closeds++;
+
+    if (close_op)
+    {
+        close_op->Completed ();
+    }
 
     return HandledMsg;
 }
@@ -876,7 +750,7 @@ MessageHandlerRC  SocketService::RxDataLength (NICMessage  msg)
     M_unused (msg);
     ++irq_data_lengths;
     /* Read true length of streamed data */
-    ASM_GET_MSG (CommitFromARMAddr, (unsigned char *) &length, sizeof (length));
+    ASM_GET_MSG (Boson_CommitFromARMAddr, (unsigned char *) &length, sizeof (length));
     vc_receiver->DataLength (length);
     vc_receiver->DataEnd ();
     return HandledMsg;
