@@ -100,7 +100,7 @@ translate: dirs
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.Setup.BSD -o $(RESAPP).HTML.Setup.BSD
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.Setup.CallWait -o $(RESAPP).HTML.Setup.CallWait
         ### Check for Beth1 build...
-        If "<LocaleList>" = "Australia,France,Ireland,Italy,UK" Then \
+        If "<LocaleList>" = "Australia,France,Ireland,Italy,SAfrica,UK" Then \
           $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.Setup.Country1 -o $(RESAPP).HTML.Setup.Country
         ### Check for Beth2 build...
         If "<LocaleList>" = "Germany,Spain,Turkey" Then \
