@@ -17,7 +17,7 @@ CP      = copy
 RM      = remove
 WIPE    = -wipe
 CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
+ASFLAGS = -depend !Depend -Stamp -quit -module -To ${TARGET} -From
 CPFLAGS = ~cfr~v
 WFLAGS  = ~cfr~v
 
@@ -27,18 +27,18 @@ WFLAGS  = ~cfr~v
 COMPONENT = ModeFiles
 SOURCE    = s.ModeFiles
 TDIR      = rm.${MACHINE}
-TARGET    = ${TDIR}.ModeFiles
+TARGET    = ${TDIR}.${TYPE}
 RDIR      = ${RESDIR}.Monitors
 #
 # Generic rules:
 #
-rom: ${TARGET}
+rom: rom_${TYPE}
         @echo ${COMPONENT}: rom module built
 
 export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
 
-install_rom: ${TARGET}
+install_rom: rom_${TYPE}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
@@ -51,42 +51,84 @@ resources:
         ${CP} Resources.${LOCALE}.${MACHINE} ${RDIR} ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
-${TARGET}: ${SOURCE}
+rom_PAL: ${SOURCE} s.PAL
         ${MKDIR} ${TDIR}
-        ${AS} ${ASFLAGS} ${SOURCE}
+        ${AS} ${ASFLAGS} s.PAL
+
+rom_NTSC: ${SOURCE} s.NTSC
+        ${MKDIR} ${TDIR}
+        ${AS} ${ASFLAGS} s.NTSC
 
 # Dynamic dependencies:
-rm.Omega.ModeFiles: Hdr:ListOpts
-rm.Omega.ModeFiles: Hdr:Macros
-rm.Omega.ModeFiles: Hdr:System
-rm.Omega.ModeFiles: Hdr:SWIs
-rm.Omega.ModeFiles: Hdr:CPU.Generic26
-rm.Omega.ModeFiles: Hdr:IO.GenericIO
-rm.Omega.ModeFiles: Hdr:RISCOS
-rm.Omega.ModeFiles: Hdr:ModHand
-rm.Omega.ModeFiles: Hdr:Machine.<Machine>
-rm.Omega.ModeFiles: Hdr:Machine.Machine
-rm.Omega.ModeFiles: Hdr:Proc
-rm.Omega.ModeFiles: Hdr:Services
-rm.Omega.ModeFiles: Hdr:FSNumbers
-rm.Omega.ModeFiles: Hdr:HighFSI
-rm.Omega.ModeFiles: Hdr:NewErrors
-rm.Omega.ModeFiles: Hdr:MsgTrans
-rm.Omega.ModeFiles: Version
-rm.Boca.ModeFiles: Hdr:ListOpts
-rm.Boca.ModeFiles: Hdr:Macros
-rm.Boca.ModeFiles: Hdr:System
-rm.Boca.ModeFiles: Hdr:SWIs
-rm.Boca.ModeFiles: Hdr:CPU.Generic26
-rm.Boca.ModeFiles: Hdr:IO.GenericIO
-rm.Boca.ModeFiles: Hdr:RISCOS
-rm.Boca.ModeFiles: Hdr:ModHand
-rm.Boca.ModeFiles: Hdr:Machine.<Machine>
-rm.Boca.ModeFiles: Hdr:Machine.Machine
-rm.Boca.ModeFiles: Hdr:Proc
-rm.Boca.ModeFiles: Hdr:Services
-rm.Boca.ModeFiles: Hdr:FSNumbers
-rm.Boca.ModeFiles: Hdr:HighFSI
-rm.Boca.ModeFiles: Hdr:NewErrors
-rm.Boca.ModeFiles: Hdr:MsgTrans
-rm.Boca.ModeFiles: Version
+rm.Omega.NTSC: s.ModeFiles
+rm.Omega.NTSC: Hdr:ListOpts
+rm.Omega.NTSC: Hdr:Macros
+rm.Omega.NTSC: Hdr:System
+rm.Omega.NTSC: Hdr:SWIs
+rm.Omega.NTSC: Hdr:CPU.Generic26
+rm.Omega.NTSC: Hdr:IO.GenericIO
+rm.Omega.NTSC: Hdr:RISCOS
+rm.Omega.NTSC: Hdr:ModHand
+rm.Omega.NTSC: Hdr:Machine.<Machine>
+rm.Omega.NTSC: Hdr:Machine.Machine
+rm.Omega.NTSC: Hdr:Proc
+rm.Omega.NTSC: Hdr:Services
+rm.Omega.NTSC: Hdr:FSNumbers
+rm.Omega.NTSC: Hdr:HighFSI
+rm.Omega.NTSC: Hdr:NewErrors
+rm.Omega.NTSC: Hdr:MsgTrans
+rm.Omega.NTSC: Version
+rm.Omega.PAL: s.ModeFiles
+rm.Omega.PAL: Hdr:ListOpts
+rm.Omega.PAL: Hdr:Macros
+rm.Omega.PAL: Hdr:System
+rm.Omega.PAL: Hdr:SWIs
+rm.Omega.PAL: Hdr:CPU.Generic26
+rm.Omega.PAL: Hdr:IO.GenericIO
+rm.Omega.PAL: Hdr:RISCOS
+rm.Omega.PAL: Hdr:ModHand
+rm.Omega.PAL: Hdr:Machine.<Machine>
+rm.Omega.PAL: Hdr:Machine.Machine
+rm.Omega.PAL: Hdr:Proc
+rm.Omega.PAL: Hdr:Services
+rm.Omega.PAL: Hdr:FSNumbers
+rm.Omega.PAL: Hdr:HighFSI
+rm.Omega.PAL: Hdr:NewErrors
+rm.Omega.PAL: Hdr:MsgTrans
+rm.Omega.PAL: Version
+rm.Boca.PAL: s.ModeFiles
+rm.Boca.PAL: Hdr:ListOpts
+rm.Boca.PAL: Hdr:Macros
+rm.Boca.PAL: Hdr:System
+rm.Boca.PAL: Hdr:SWIs
+rm.Boca.PAL: Hdr:CPU.Generic26
+rm.Boca.PAL: Hdr:IO.GenericIO
+rm.Boca.PAL: Hdr:RISCOS
+rm.Boca.PAL: Hdr:ModHand
+rm.Boca.PAL: Hdr:Machine.<Machine>
+rm.Boca.PAL: Hdr:Machine.Machine
+rm.Boca.PAL: Hdr:Proc
+rm.Boca.PAL: Hdr:Services
+rm.Boca.PAL: Hdr:FSNumbers
+rm.Boca.PAL: Hdr:HighFSI
+rm.Boca.PAL: Hdr:NewErrors
+rm.Boca.PAL: Hdr:MsgTrans
+rm.Boca.PAL: Version
+rm.Boca.NTSC: s.ModeFiles
+rm.Boca.NTSC: Hdr:ListOpts
+rm.Boca.NTSC: Hdr:Macros
+rm.Boca.NTSC: Hdr:System
+rm.Boca.NTSC: Hdr:SWIs
+rm.Boca.NTSC: Hdr:CPU.Generic26
+rm.Boca.NTSC: Hdr:IO.GenericIO
+rm.Boca.NTSC: Hdr:RISCOS
+rm.Boca.NTSC: Hdr:ModHand
+rm.Boca.NTSC: Hdr:Machine.<Machine>
+rm.Boca.NTSC: Hdr:Machine.Machine
+rm.Boca.NTSC: Hdr:Proc
+rm.Boca.NTSC: Hdr:Services
+rm.Boca.NTSC: Hdr:FSNumbers
+rm.Boca.NTSC: Hdr:HighFSI
+rm.Boca.NTSC: Hdr:NewErrors
+rm.Boca.NTSC: Hdr:MsgTrans
+rm.Boca.NTSC: Version
