@@ -51,6 +51,7 @@ TARGET    = aof.${COMPONENT}
 RAMTARGET = rm.${COMPONENT}
 OBJS      = o.dynamiclib o.main o.ModHead
 EXPORTS   = 
+RDIR      = ${RESDIR}.${COMPONENT}
 
 #
 # Rule patterns
@@ -84,8 +85,8 @@ clean:
         @echo ${COMPONENT}: cleaned
 
 resources:
-	${MKDIR} ${RESAPP}
-	${CP} LocalUserIFRes:Screen ${RESAPP}.Screen ${CPFLAGS}
+	${MKDIR} ${RDIR}
+	${CP} LocalUserIFRes:Screen ${RDIR}.Screen ${CPFLAGS}
 	@echo ${COMPONENT}: resource files copied
 	@echo
 
@@ -100,9 +101,7 @@ ${TARGET}: ${OBJS} ${ROMCSTUBS}
 #
 rom_link:
         ${MKDIR} linked
-        ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
@@ -113,19 +112,3 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 #       ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-
-o.module:	c.module
-o.module:	C:h.kernel
-o.module:	C:h.swis
-o.module:	h.cmhg
-o.dynamiclib:	c.dynamiclib
-o.dynamiclib:	C:h.kernel
-o.dynamiclib:	C:h.swis
-o.dynamiclib:	h.dynamiclib
-o.main:	c.main
-o.main:	C:h.kernel
-o.main:	C:h.swis
-o.main:	C:h.os
-o.main:	C:h.bbc
-o.main:	h.main
-o.main:	h.dynamiclib
