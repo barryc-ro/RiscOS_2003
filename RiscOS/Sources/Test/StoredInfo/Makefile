@@ -19,7 +19,7 @@ RM      = remove
 WIPE    = -wipe
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -zM -zps1 -ff ${INCLUDES} ${DFLAGS} -throwback
+CFLAGS  = -c -depend !Depend -zM -zps1 -ff ${INCLUDES} ${DFLAGS}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
@@ -112,12 +112,6 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 
 # Dynamic deo.module:	c.module
 # Dynamic dependencies:
-o.NVRAMTest:	c.NVRAMTest
-o.NVRAMTest:	C:h.kernel
-o.NVRAMTest:	C:h.swis
-o.NVRAMTest:	h.nvramtest
-o.NVRAMTest:	h.display
-o.NVRAMTest:	h.support
 o.ROMCheck:	c.ROMCheck
 o.ROMCheck:	C:h.kernel
 o.ROMCheck:	C:h.swis
@@ -265,6 +259,12 @@ o.System:	h.support
 o.System:	h.msgs
 o.System:	h.CPUType
 o.System:	h.IOControl
+o.NVRAMTest:	c.NVRAMTest
+o.NVRAMTest:	C:h.kernel
+o.NVRAMTest:	C:h.swis
+o.NVRAMTest:	h.nvramtest
+o.NVRAMTest:	h.display
+o.NVRAMTest:	h.support
 o.UserDiag:	c.UserDiag
 o.UserDiag:	C:h.kernel
 o.UserDiag:	C:h.swis
