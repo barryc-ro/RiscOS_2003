@@ -15,6 +15,7 @@
 #                   are in CVS. Added use of OPTIONS=ALL to force all 
 #                   Machine and ImageSize headers to be exported.
 # 24-Aug 99  SBF    Added export of C headers, and support for StripDepnd tool
+# 25-Aug 99  SBF    Created "Register.Keyboard"; added this to makefile
 
 #
 # Paths
@@ -69,6 +70,7 @@ EXPORTS   = \
  ${HDRDIR}.IO.IOEB \
  ${HDRDIR}.IO.IOMD \
  ${HDRDIR}.IO.IOMDL \
+ ${HDRDIR}.Keyboard \
  ${HDRDIR}.KEYV \
  ${HDRDIR}.ListOpts \
  ${HDRDIR}.MEMM.ARM600 \
@@ -108,6 +110,7 @@ EXPORTS   = \
  ${HDIR}.Global.h.FreeWay \
  ${HDIR}.Global.h.FSNumbers \
  ${HDIR}.Global.h.Heap \
+ ${HDIR}.Global.h.Keyboard \
  ${HDIR}.Global.h.KeyV \
  ${HDIR}.Global.h.OsWords \
  ${HDIR}.Global.h.PaletteV \
@@ -191,6 +194,7 @@ ${HDRDIR}.DevNos:     Register.DevNos;         ${CP} Register.DevNos     $@ ${CP
 ${HDRDIR}.DrawObj:    Register.DrawObj;        ${CP} Register.DrawObj    $@ ${CPFLAGS}
 ${HDRDIR}.DrawTags:   Register.DrawTags;       ${CP} Register.DrawTags   $@ ${CPFLAGS}
 ${HDRDIR}.FSNumbers:  Register.FSNumbers;      ${CP} Register.FSNumbers  $@ ${CPFLAGS}
+${HDRDIR}.Keyboard:   Register.Keyboard;       ${CP} Register.Keyboard   $@ ${CPFLAGS}
 ${HDRDIR}.KEYV:       Register.KEYV;           ${CP} Register.KEYV       $@ ${CPFLAGS}
 ${HDRDIR}.Messages:   Register.Messages;       ${CP} Register.Messages   $@ ${CPFLAGS}
 ${HDRDIR}.NewErrors:  Register.NewErrors;      ${CP} Register.NewErrors  $@ ${CPFLAGS}
@@ -218,6 +222,7 @@ ${HDIR}.Global.h.DrawTags:   Register.DrawTags ${HDR2H};       perl ${HDR2H} Reg
 ${HDIR}.Global.h.EnvNumbers: Register.EnvNumbers ${HDR2H};     perl ${HDR2H} Register.EnvNumbers $@
 ${HDIR}.Global.h.FreeWay:    Register.FreeWay ${HDR2H};        perl ${HDR2H} Register.FreeWay    $@
 ${HDIR}.Global.h.FSNumbers:  Register.FSNumbers ${HDR2H};      perl ${HDR2H} Register.FSNumbers  $@
+${HDIR}.Global.h.Keyboard:   Register.Keyboard  ${HDR2H};      perl ${HDR2H} Register.Keyboard   $@
 ${HDIR}.Global.h.KeyV:       Register.KeyV ${HDR2H};           perl ${HDR2H} Register.KeyV       $@
 ${HDIR}.Global.h.Messages:   Register.Messages ${HDR2H};       perl ${HDR2H} Register.Messages   $@
 # NewErrors still has a few problems.  Partial support is there.
