@@ -32,7 +32,8 @@ TRANSLATE	= translate
 #
 # Paths and filenames for files and directories within this component:
 #
-INRESDIR	= LocalUserIFRes:Applet
+INAPPDIR	= LocalUserIFRes:Applet
+INRESDIR	= LocalUserIFRes:Resources
 INVSNFILE	= LocalUserIFRes:Version
 INCHOICEDIR	= LocalUserIFRes:Choices
 INPREDIR	= LocalUserIFRes:PreDesktop
@@ -41,7 +42,8 @@ INPREDIR	= LocalUserIFRes:PreDesktop
 #
 # Destination paths and filenames for files and directories to be installed to:
 #
-OUTRESDIR	= $(INSTDIR).$(RES)
+OUTAPPDIR	= $(INSTDIR).$(RES)
+OUTRESDIR	= $(OUTAPPDIR).Resources
 OUTVSNDIR	= $(INSTDIR).$(VERSN)
 OUTVSNFILE	= $(OUTVSNDIR).$(COMPONENT)
 OUTCHOICEDIR	= $(INSTDIR).$(CHOICES)
@@ -99,6 +101,7 @@ rom_link:
 # RISC OS disc build rules:
 #
 install: translate dirs
+	$(CP) $(INAPPDIR).*      $(OUTAPPDIR).*       $(CPFLAGS)
 	$(CP) $(INRESDIR).*      $(OUTRESDIR).*       $(CPFLAGS)
 	$(CP) $(INPREDIR).*      $(OUTPREDIR).*       $(CPFLAGS)
 	$(CP) $(INCHOICEDIR).*   $(OUTCHOICEDIR).*    $(CPFLAGS)
@@ -111,6 +114,7 @@ translate: dirs
         @echo Translation Complete.
 
 dirs:
+	$(MKDIR) $(OUTAPPDIR)
 	$(MKDIR) $(OUTRESDIR)
 	$(MKDIR) $(OUTVSNDIR)
 	$(MKDIR) $(OUTCHOICEDIR)
