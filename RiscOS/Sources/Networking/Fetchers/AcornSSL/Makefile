@@ -47,7 +47,7 @@ DFLAGS   = -D${SYSTEM} -DCOMPAT_INET4 -DRISCOS -DNO_DES -DNO_IDEA
 AFLAGS   = -throwback -depend !Depend
 CMHGFLAGS= -p -depend !Depend
 ROMFLAGS = -DROM
-INCLUDES = -ITCPIPLibs:,C:SSLeay,C:
+INCLUDES = -IC:AsmUtils -ITCPIPLibs:,C:SSLeay,C:
 DEBFLAGS = -DTRACE -DUSE_SYSLOG
 
 #
@@ -57,16 +57,16 @@ ANSILIB   = CLib:o.ansilib
 CLIB      = CLIB:o.stubs
 RLIB      = RISCOSLIB:o.risc_oslib
 ROMCSTUBS = RISCOSLIB:o.romcstubs
-ABSSYM    = RISC_OSLib:o.abssym
+ABSSYM    = RISC_OSLib:o.c_abssym
 TCPIPLIBS = TCPIPLibs:o.inetlibzm TCPIPLibs:o.socklibzm
 CRYPTLIBS = <Lib$Dir>.SSLeay.o.ssl <Lib$Dir>.SSLeay.o.libcrypto
 DEBLIBS   = <syslog$dir>.c-veneer.o.syslog
+ASMUTILS  = C:AsmUtils.o.AsmUtilsZM
 
 
 OBJS =\
  o.acornssl\
  o.memory\
- o.memswis\
  o.module\
  o.protocol\
  o.ses_ctrl\
@@ -76,7 +76,6 @@ OBJS =\
 RAM_OBJS =\
  o.acornssl\
  o.memory\
- o.memswis\
  o.moduleRAM\
  o.protocol\
  o.ses_ctrl\
@@ -86,7 +85,6 @@ RAM_OBJS =\
 DBG_OBJS =\
  od.acornssl\
  od.memory\
- o.memswis\
  od.moduleRAM\
  od.protocol\
  od.ses_ctrl\
@@ -153,9 +151,9 @@ ${EXP_HDR}.h.${COMPONENT}: h.SSLHdr
 	awk -- "/.define AcornSSL\_00/,/endif/" h.SSLHdr { > $@ }
 	@SetType $@ Text
 
-${ROM_MODULE}: ${OBJS} ${INETLIB} ${ROMCSTUBS}
+${ROM_MODULE}: ${OBJS} ${INETLIB} ${ROMCSTUBS} ${ASMUTILS}
         ${MKDIR} aof
-        ${LD} -o $@ -aof ${OBJS} ${INETLIB} ${ROMCSTUBS}
+        ${LD} -o $@ -aof ${OBJS} ${INETLIB} ${ASMUTILS} ${ROMCSTUBS}
 
 # final link for ROM Image (using given base address)
 rom_link:
@@ -168,15 +166,15 @@ ${MSGSF}: LocalRes:Messages
 	TokenCheck LocalRes:Messages
 	resgen messages_file ${MSGSF} LocalRes:Messages ${RESFSDIR}.Messages
 
-${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB} ${CRYPTLIBS}
+${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB} ${CRYPTLIBS} ${ASMUTILS}
 	${mkdir} rm
-        ${LD} -o $@ -module ${RAM_OBJS} ${MSGSF} ${CRYPTLIBS} ${TCPIPLIBS} ${CLIB}
+        ${LD} -o $@ -module ${RAM_OBJS} ${MSGSF} ${CRYPTLIBS} ${TCPIPLIBS} ${ASMUTILS} ${CLIB}
         modsqz $@
         Access $@ RW/R
 
-${DBG_MODULE}: ${DBG_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB} ${CRYPTLIBS} ${DEBLIBS}
+${DBG_MODULE}: ${DBG_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB} ${CRYPTLIBS} ${DEBLIBS} ${ASMUTILS}
 	${mkdir} rm
-        ${LD} -o $@ -module ${DBG_OBJS} ${MSGSF} ${CRYPTLIBS} ${TCPIPLIBS} ${CLIB} ${DEBLIBS}
+        ${LD} -o $@ -module ${DBG_OBJS} ${MSGSF} ${CRYPTLIBS} ${TCPIPLIBS} ${ASMUTILS} ${CLIB} ${DEBLIBS}
         Access $@ RW/R
 
 o.moduleRAM: module.c
