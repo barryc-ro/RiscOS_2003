@@ -44,6 +44,9 @@ DebugPID        SETL    {FALSE}                         ; print PID debug to vdu
                 GBLL    DebugEOS
 DebugEOS        SETL    {FALSE}                         ; print EOS debug to vdu
 
+                GBLL    DebugFullBuffers
+DebugFullBuffers SETL   {FALSE}                         ; check parameters to FullBuffers for morons
+
                 GBLL    debug
 debug           SETL    {FALSE}	                        ; this enables NdrDebug real-time debugging
 
@@ -1403,11 +1406,27 @@ GetSprite Entry "r1"
 ;       r1 -> one or more linked bitstream buffers
 ;       it is assumed that the bitstream buffer struct contains the control stream handle
 
+        MACRO
+        CheckSanity $name, $r
+      [ DebugFullBuffers
+        Push    "lr"
+        CMP     $r, #&02bc0000
+        RSBLSS  lr, $r, #&02100000
+        BLS     %FT01
+        DREG    $r, "$name looks wrong: "
+01
+        Pull    "lr"
+      ]
+        MEND
+
 FullBuffers_DirectAccessWrapper
         Push    "lr"
         MOV     r2, r1
+        ; CheckSanity "Buffer pointer passed to APCS FullBuffers", r2
         LDR     r1, [r2, #BufferDescriptor_CSH]
+        CheckSanity "Control stream handle in buffer descriptor", r1
         LDR     r12, [r1, #CSH_ModuleWsPtr]             ; needed for things like accessing FreePacketList
+        CheckSanity "Module workspace pointer from CSH", r12
         BL      int_full_buffers
         TEQ     pc, pc
         Pull    "pc", EQ                                ; 32-bit mode exit
@@ -1421,6 +1440,8 @@ FullBuffers_DirectAccessWrapper
 FullBuffers
 ;        TST     r0, #FullBuffersFlags_UsingNewBSBufFormat
 ;        BEQ     Unsupported_FullBuffers_Call
+        CheckSanity "Control stream handle passed to SWI FullBuffers", r1
+        ; CheckSanity "Buffer pointer passed to SWI FullBuffers", r2
         ; drop through to...
 int_full_buffers Entry "r0-r5"
         Debug   entry, "MPEGControl_FullBuffers: ", r0, r1, r2
@@ -1527,6 +1548,10 @@ xdebug   SETL    {FALSE}
         LDR     r3, [r2, #BufferDescriptor_Start]
         LDR     r4, [r2, #BufferDescriptor_Length]
 
+        LDR     lr, [r1, #CSH_Autodetecting]
+        TEQ     lr, #0
+        BNE     %FT15                                   ; don't count data during autodetect
+
         LDR     lr, [r1, #CSH_DataReceived]             ; increment count of total bytes received
         ADD     lr, lr, r4
         STR     lr, [r1, #CSH_DataReceived]
@@ -1537,7 +1562,7 @@ xdebug   SETL    {FALSE}
         ADDNE   lr, lr, r4
         STRNE   lr, [r5]
  ]
-        ADD     r4, r3, r4
+15      ADD     r4, r3, r4
 
         LDR     lr, [r1, #CSH_StreamFlags]              ; if not in the process of closing the stream
         TST     lr, #StreamFlags_StreamClosing          ; then call the coroutines to parse the buffer
@@ -1551,6 +1576,22 @@ xdebug   SETL    {FALSE}
 
         LDR     r4, [r2, #BufferDescriptor_Link]        ; load link *before* restoring IRQ state
 
+ [ {TRUE} ; does this help?
+        BICS    lr, lr, #BufferDescriptorFlags_NewFormat ; is the count now zero (if so then no active packets in buffer)
+        BNE     %FT20                   ; [no, so don't free buffer]
+
+        LDR     lr, [r1, #CSH_Autodetecting]
+        TEQ     lr, #0
+        BNE     %FT20                   ; never free any buffer during autodetect
+
+        Push    "r1"
+        STR     lr, [r2, #BufferDescriptor_Link] ; only free one buffer
+        MOV     r1, r2
+        BL      FreeBuffer
+        Pull    "r1"
+20
+        RestPSR r3                      ; restore IRQ state
+ | ; old code
         RestPSR r3                      ; restore IRQ state
 
         LDR     r3, [r1, #CSH_Autodetecting]
@@ -1566,9 +1607,11 @@ xdebug   SETL    {FALSE}
         BL      FreeBuffer
         Pull    "r1"
 20
-        MOVS    r2, r4                  ; put link back into r2
+ ]
+
+        ADDS    r2, r4, #0              ; put link back into r2
         BNE     %BT10                   ; and if more buffers, loop
-        ; since MOVS has set Z, we know V is clear
+        ; since ADDS has set Z, we know V is clear
 ;       CLRV
         EXIT
 
@@ -1853,6 +1896,35 @@ FreePackets Entry "r0-r5, wp"
         BNE     %BT10                                   ; no, so loop
 
         EXIT
+
+; **************************************************************************
+;
+;	ChangePacketCount - APCS function called by other people who want
+;       to be included in our buffer usage counter
+;
+; in:   r0 = flags
+;       r1 -> buffer descriptor
+;       r2 = change in usage counter (signed int)
+;
+; out:  r0-r3, r12 corrupted
+;
+
+ChangePacketCount
+        Push    "lr"
+
+        SCPSR   I_bit, 0, lr,, r3
+        LDR     lr, [r1, #BufferDescriptor_Packets]
+        ADD     lr, lr, r2                              ; adjust count with IRQs off
+        STR     lr, [r1, #BufferDescriptor_Packets]
+        RestPSR r3
+
+        BICS    lr, lr, #BufferDescriptorFlags_NewFormat
+        STREQ   lr, [r1, #BufferDescriptor_Link]        ; only free one buffer
+        BLEQ    FreeBuffer                              ; if usage count is now zero, then free buffer
+
+        TEQ     pc, pc
+        Pull    "pc", EQ
+        Pull    "pc",, ^
 
 ; **************************************************************************
 ;
@@ -2917,6 +2989,15 @@ rewind
         STR     lr, [r1, #CSH_BufferCount]
         EXIT
 
+countfirstbufferreceived
+        ; First buffer wasn't counted as received because autodetect flag was still on!
+        Push    "r0,lr"
+        LDR     r0, [r1, #CSH_DataReceived]
+        SUB     lr, r4, r3
+        ADD     r0, r0, lr
+        STR     r0, [r1, #CSH_DataReceived]
+        Pull    "r0,pc" ; flags must be preserved
+
 getbytedec
         SUB     r8, r8, #1              ; decrement count of bytes remaining
 getbyte
@@ -2940,6 +3021,7 @@ getbyte
 DemuxAsUnrecognisedStream
         MOV     lr, #0
         STR     lr, [r1, #CSH_Autodetecting]
+        BL      countfirstbufferreceived
         MOVNE   lr, #ControlStreamType_Unrecognised
         STR     lr, [r1, #CSH_ControlStreamType]
 10      BL      cowait
@@ -2972,6 +3054,7 @@ DetermineElementaryStreamType
 DemuxAsElementaryStream
         MOV     lr, #0
         STR     lr, [r1, #CSH_Autodetecting]
+        BL      countfirstbufferreceived
         TEQ     r5, #StreamFlags_VideoPresent
         MOVEQ   lr, #ControlStreamType_ElementaryVideo
         MOVNE   lr, #ControlStreamType_ElementaryAudio
@@ -3022,6 +3105,7 @@ elementarystreamloop
 DemuxAsSystemStream
         MOV     lr, #0
         STR     lr, [r1, #CSH_Autodetecting]
+        BL      countfirstbufferreceived
         BL      getnextstartcode
 
 systemstreamloop
@@ -3401,6 +3485,7 @@ gottwozeros
 DemuxAsTransportStream
         MOV     lr, #0
         STR     lr, [r1, #CSH_Autodetecting]
+        BL      countfirstbufferreceived
         MOV     lr, #ControlStreamType_MPEG2Transport
         STR     lr, [r1, #CSH_ControlStreamType]
 
@@ -4786,6 +4871,10 @@ Stats_DirectFullBuffers ROUT
         ADRL    r6, FullBuffers_DirectAccessWrapper
         MOV     pc, lr
 
+Stats_ChangePacketCount ROUT
+        ADRL    r6, ChangePacketCount
+        MOV     pc, lr
+
         LTORG
 
 ; The table containing all the statistics
@@ -4803,6 +4892,7 @@ StatsTable
         StatsTableEntry &000A, Stats_CSH, Code
         StatsTableEntry &000B, Stats_Bitrate, Code
         StatsTableEntry &000C, Stats_DirectFullBuffers, Code
+        StatsTableEntry &000D, Stats_ChangePacketCount, Code
 	&	-1
 
 ; **************************************************************************
