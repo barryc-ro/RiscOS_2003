@@ -20,21 +20,6 @@ Date      Who     Description of change
 #include "kernel.h"
 #include "swis.h"
 
-#define ATM_EmptyBuffer                 0x047b39
-#define ATM_AssociateAddress            0x047b3a
-#define ATM_VCConnect                   0x047b3b
-#define ATM_VCListen                    0x047b3c
-#define ATM_VCClose                     0x047b3d
-#define ATM_VCStatus                    0x047b3e
-#define ATM_BootConfig                  0x047b3f
-	
-typedef enum{
-  multicap_none = 0,
-  multicap_LLC_SNAP = 33,
-  multicap_VCMultiplex = 56
-} multicap;
-// multiprotocol encapsulation type
-
 #ifdef DEBUGLIB
 void
 ATMServer::DebugATM(UBYTE *ATMaddress)
@@ -64,13 +49,17 @@ ATMServer::ATM_Associate(ATML_SOCKADDR_ATM *atm_addr)
 
 
 error_flag  
-ATMServer::ATM_Listen(int *handle, bool *valid, ATML_SOCKADDR_ATM *atm_addr)
+ATMServer::ATM_Listen(int *handle, bool *valid, ATML_SOCKADDR_ATM *atm_addr, void *pw)
 {
 #ifdef DEBUGLIB
 	if (Debug(debug_ATMserver)) Debug("ATM_Listen handle %i", (*handle));
-#endif   
-	if (MakeErrorOnError(_swix(ATM_VCListen, _INR(0,3)|_OUT(0), 0, atm_addr, multicap_LLC_SNAP, 0, handle)) == NoError)
-	  	(*valid) = true;
+#endif  
+	if (pw == NULL)
+		MakeErrorOnError(_swix(ATM_VCListen, _INR(0,3)|_OUT(0), 0, atm_addr, multicap_LLC_SNAP, 0, handle));
+	else
+		MakeErrorOnError(_swix(ATM_VCListen, _INR(0,4)|_OUT(0), 0, atm_addr, multicap_LLC_SNAP, VSP_ServerStatus, pw, handle));	
+	  	
+	if (!ErrorExists()) (*valid) = true;
 #ifdef DEBUGLIB
 	if (Debug(debug_ATMserver)) Debug("ATM_Listen handle %i-", (*handle));
 #endif   
@@ -79,14 +68,17 @@ ATMServer::ATM_Listen(int *handle, bool *valid, ATML_SOCKADDR_ATM *atm_addr)
 
 
 error_flag  
-ATMServer::ATM_Connect(int *handle, bool *valid, ATML_SOCKADDR_ATM *atm_addr)
+ATMServer::ATM_Connect(int *handle, bool *valid, ATML_SOCKADDR_ATM *atm_addr, void *pw)
 {
 #ifdef DEBUGLIB
 	if (Debug(debug_ATMserver)) Debug("ATMCOnnect %i", (*handle));
-#endif   
-  	if (MakeErrorOnError(_swix(ATM_VCConnect, _INR(0,8)|_OUT(0), 
-  		0, atm_addr, multicap_LLC_SNAP, 0, 0, 0, 0, 0, 0, handle)) == NoError)
-  		(*valid) = true;
+#endif  
+	if (pw == NULL)
+  		MakeErrorOnError(_swix(ATM_VCConnect, _INR(0,8)|_OUT(0), 0, atm_addr, multicap_LLC_SNAP, 0, 0, 0, 0, 0, 0, handle));
+  	else
+  		MakeErrorOnError(_swix(ATM_VCConnect, _INR(0,8)|_OUT(0), 0, atm_addr, multicap_LLC_SNAP, VSP_ServerStatus, pw, 0, 0, 0, 0, handle));
+  		
+  	if (!ErrorExists()) (*valid) = true;
 #ifdef DEBUGLIB
 	if (Debug(debug_ATMserver)) Debug("ATMCOnnect %i-", (*handle));
 #endif   
@@ -109,6 +101,21 @@ ATMServer::ATM_Close(int handle, bool *valid)
 	
   	return ErrorState();
 }
+
+error_flag
+ATMServer::ATM_Status(int handle, bool valid, ATM_status *status)
+{
+#ifdef DEBUGLIB
+	if (Debug(debug_ATMserver)) Debug("ATMStatus %i if %i", handle, valid);
+#endif   
+	if (valid)
+		MakeErrorOnError(_swix(ATM_VCStatus, _INR(0,5)|_OUT(0), 0, handle, 0, 0, 0, 0, status));
+#ifdef DEBUGLIB
+	if (Debug(debug_ATMserver)) Debug("ATMStatus %i", *status);
+#endif
+	return ErrorState();
+}  
+	 
 //-------------------------------------------------------------------end wrappers------------
 /*
 error_flag
@@ -139,8 +146,11 @@ ATMServer::get_assetpresentation_response(struct in_addr *ipaddr, ULINT *port, U
 }
 
   	
-ATMServer::ATMServer(struct in_addr *server, ULINT port, UBYTE *address, bool TCPListen, ULINT timeout):Server(server, port, TCPListen, timeout)
+ATMServer::ATMServer(struct in_addr *server, ULINT port, UBYTE *address, bool TCPListen, ULINT timeout, void *pw)
+:Server(server, port, TCPListen, timeout)
 {
+  	ATM_status status = ATM_status_invalid;
+  	
   	TCPhandleValid = UDPhandleValid = false;
 
     	memset (&atm_addr, 0, sizeof (ATML_SOCKADDR_ATM));
@@ -155,13 +165,18 @@ ATMServer::ATMServer(struct in_addr *server, ULINT port, UBYTE *address, bool TC
 #endif	
     	if (ATM_Associate(&atm_addr) != ErrorOccurred){
     		if (TCPListen)
-    			ATM_Listen(&TCPhandle, &TCPhandleValid, &atm_addr);
+    			ATM_Listen(&TCPhandle, &TCPhandleValid, &atm_addr, pw);
     		else
-    			ATM_Connect(&TCPhandle, &TCPhandleValid, &atm_addr);
+    			ATM_Connect(&TCPhandle, &TCPhandleValid, &atm_addr, pw);
     	}
-    
-    	if (!ErrorExists())
-    		createVSPLink();
+  	
+  	if (!ErrorExists()){
+  		ATM_Status(TCPhandle, TCPhandleValid, &status);
+  		if (status == ATM_status_connected)
+  			createVSPLink();
+  		else
+    			MakeError(IP_WaitConnection);
+    	}
 }
 
 ATMServer::~ATMServer()
@@ -174,7 +189,31 @@ ATMServer::InternetObjectType(void)
 {
   	return server_ATM;
 }
- 
+
+error_flag
+ATMServer::statusEvent(void)
+{
+  	if (ErrorExists() && (ErrorNum() == IP_WaitConnection)){
+  		ATM_status status = ATM_status_invalid;
+  		ATM_Status(TCPhandle, TCPhandleValid, &status);
+  		switch (status){
+  		  	case ATM_status_connected:
+  		  		{
+  		  		  RemoveErr();
+  		  		  createVSPLink();
+  		  		}
+  		  		break;
+  		  	case ATM_status_error:
+  		  		{
+  		  		  RemoveErr();
+  		  		  MakeError(IP_SocketError);
+  		  		}
+  		  		break;
+  		}
+  	}
+  	return NoError;
+}
+
 error_flag 
 ATMServer::AssetEnd(ULINT status, ULINT endflag)
 {
