@@ -14,6 +14,7 @@ TYPE      ?= Standard
 ROM_MODULE := rm.${MACHINE}.${TYPE}
 ROM_OBJECT := o.${MACHINE}.${TYPE}
 ASFLAGS    = -PD "Type SETS \"${TYPE}\""
+RESOURCES  = no
 
 include StdTools
 include AAsmModule
