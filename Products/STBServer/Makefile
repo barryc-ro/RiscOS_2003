@@ -32,6 +32,7 @@ modsqz: clx
 mtftpd:
 	(cd RiscOS/Sources/Networking/TFTPserver/ports/solaris; ./mklinks; make ARCH=${ARCH})
 	cp RiscOS/Sources/Networking/TFTPserver/ports/solaris/mtftpd ${TARDIR}/mtftpd
+	strip ${TARDIR}/mtftpd
  
 clx:
 	(cd RiscOS/Sources/Lib/CLX/ccsolaris; ./mklinks; make install;)
