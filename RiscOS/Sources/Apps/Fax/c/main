@@ -1824,10 +1824,34 @@ intern void fax_send_tcrc (const TIFFConvError rc
 
 intern void fax_disconnect_linetoolong (State *s)
 {
-   faxdebug_displayfield_set_value (DisplayField_Centred, s->port
-                                   , Cpt_Con_Status, "Scan line too long");
-   fax_close_tiff (s);
-   fax_send_rc (s->port, Error_Scan_Line_Too_Long, s->page);
+   // Close TIFF, checking for write error
+   if (fax_close_tiff (s)) {
+
+      // Write error: report that and remove damaged file
+      fax_send_rc_2int (s->port, Error_TIFF_Write_Error, s->page, 3, 0); // @@ Should de-magic-ify
+      faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                      , Cpt_Con_Status, "Scan line too long (and TIFF write error)");
+      remove (s->pathname);
+
+   } else {
+
+      if (s->t.ImageLength == 0) {
+
+         // No write error but zero length: report scan line too long and dump file
+         remove (s->pathname);
+
+      } else {
+
+         // No write error and not zero-length: report scan line too long and keep file
+         s->page = s->page ? s->page + 1 : s->startpage;
+
+      }
+
+      fax_send_rc (s->port, Error_Scan_Line_Too_Long, s->page);
+      faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                      , Cpt_Con_Status, "Scan line too long");
+
+   }
    s->state = 0;
 #ifdef WDEBUG
    s->oldtimeins = -1;
@@ -1914,9 +1938,6 @@ intern void fax_kick_gettingT30 (State *const s, ReturnCode rc)
          goto shutdown;
       }
 
-      // OK, we're in the game
-      s->page = s->page ? s->page + 1 : s->startpage;
-
       // Enable null polls.
       event_get_mask (&mask);
       mask &= ~Wimp_Poll_NullMask;
@@ -1963,7 +1984,7 @@ intern void fax_kick_gettingT30 (State *const s, ReturnCode rc)
       int ndcs;
       char *dcs;
       _swix (FaxSupport_GetInfo, _INR (0, 1) | _OUTR (3, 4), s->port, 2, &ndcs, &dcs);
-      sprintf (pagepath, "Mem:$.%iT", s->page);
+      sprintf (pagepath, "Mem:$.%iT", s->page ? s->page + 1 : s->startpage);
       s->t4fileout = mgr_openout (pagepath);
       for (i = 0; i < 10; ++i) {
          if (ndcs > i)
@@ -1975,9 +1996,10 @@ intern void fax_kick_gettingT30 (State *const s, ReturnCode rc)
 #endif
 
 #ifdef WDEBUG
-      sprintf (pagepath, "%i", s->page);
+      sprintf (pagepath, "%i", s->page ? s->page + 1 : s->startpage);
       faxdebug_displayfield_set_value (DisplayField_Centred, s->port
                                       , Cpt_Con_Page, pagepath);
+      fax_show_nlinesandpercent (0, 0, 1, s->port, TRUE);
 #endif
 
 }
@@ -2015,7 +2037,30 @@ intern void fax_kick_gettingT4 (State *const s, ReturnCode rc)
    // Abort?
    if (rc == Error_Aborted) {
 
-      fax_close_tiff (s);
+      // Close TIFF, checking for write error
+      if (fax_close_tiff (s)) {
+
+         // Write error: remove damaged file
+         faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                         , Cpt_Con_Status, "Abort (and TIFF write error)");
+         remove (s->pathname);
+
+      } else {
+
+         if (s->t.ImageLength == 0) {
+
+            // No write error but zero length: dump file
+            remove (s->pathname);
+
+         } else {
+
+            // No write error and not zero-length: keep file
+            s->page = s->page ? s->page + 1 : s->startpage;
+
+         }
+
+      }
+
       fax_send_rc (s->port, rc, s->page); // @@ Could make it clear not aborted T.30
       s->state = 0;
 #ifdef WDEBUG
@@ -2051,8 +2096,9 @@ intern void fax_kick_gettingT4 (State *const s, ReturnCode rc)
 
             // OK, end of page
 #ifdef WDEBUG
-            fax_show_nlinesandpercent (s->t.ImageLength, s->t.BadFaxLines
-                                      , s->t.ImageLength, s->port, TRUE);
+            if (s->t.ImageLength != 0)
+               fax_show_nlinesandpercent (s->t.ImageLength, s->t.BadFaxLines
+                                         , s->t.ImageLength, s->port, TRUE);
 #endif
             // Not necessary to reset s->bits.DLErecd since entry macro does this
             // @@ Could disable null polls if no-one else using them @@
@@ -2061,9 +2107,8 @@ intern void fax_kick_gettingT4 (State *const s, ReturnCode rc)
             // Close TIFF, checking for write error
             if (fax_close_tiff (s)) {
 
-               fax_send_rc_2int (s->port, Error_TIFF_Write_Error
-                                , s->page == s->startpage ? 0 : s->page - 1
-                                , 2, 0); // @@ Should de-magic-ify
+               // Write error: report that and remove damaged file, then terminate
+               fax_send_rc_2int (s->port, Error_TIFF_Write_Error, s->page, 2, 0); // @@ Should de-magic-ify
                faxdebug_displayfield_set_value (DisplayField_Centred, s->port
                                                , Cpt_Con_Status, "TIFF write error");
                remove (s->pathname);
@@ -2072,6 +2117,18 @@ intern void fax_kick_gettingT4 (State *const s, ReturnCode rc)
                s->oldtimeins = -1;
 #endif
                return;
+
+            }
+
+            // Quietly dump zero-length pages
+            if (s->t.ImageLength == 0) {
+
+               remove (s->pathname);
+
+            } else {
+
+               // OK, page received fine
+               s->page = s->page ? s->page + 1 : s->startpage;
 
             }
 
@@ -2571,6 +2628,7 @@ intern void fax_kick_sendingT30 (State *const s, ReturnCode rc)
       sprintf (pagepath, "%i", s->page ? s ->page + 1 : s->startpage);
       faxdebug_displayfield_set_value (DisplayField_Centred, s->port
                                       , Cpt_Con_Page, pagepath);
+      fax_show_nlinesandpercent (0, 0, 1, s->port, TRUE);
 }
 #endif
 
