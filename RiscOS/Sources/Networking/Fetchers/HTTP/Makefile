@@ -41,7 +41,7 @@ WFLAGS  = ~c~v
 MCFLAGS = -C -E
 
 CFLAGS	 = -c -depend !Depend ${INCLUDES} -zM -Wp -ffah -zps1 ${DFLAGS}
-DFLAGS	 = -D${SYSTEM} -DCOMPAT_INET4 -DCOOKIE -DCOMPRESSION -UTML
+DFLAGS	 = -D${SYSTEM} -DCOMPAT_INET4 -DCOOKIE -DCOMPRESSION -UTML ${OPTIONS}
 ROMFLAGS = -DROM
 INCLUDES = -ITCPIPLibs:,C:,C:zlib
 DEBFLAGS = -DTRACE -DUSE_SYSLOG
@@ -204,9 +204,9 @@ clean:
 	${WIPE} map ${WFLAGS}
 	@echo ${COMPONENT}: cleaned
 
-${ROM_MODULE}: ${OBJS} ${ROMCSTUBS}
+${ROM_MODULE}: ${OBJS} ${ROMCSTUBS} ${ZLIB}
 	${MKDIR} aof
-	${LD} -o $@ -aof ${OBJS} ${TCPIPLIBS} ${ROMCSTUBS}
+	${LD} -o $@ -aof ${OBJS} ${TCPIPLIBS} ${ZLIB} ${ROMCSTUBS}
 
 # final link for ROM Image (using given base address)
 rom_link:
