@@ -17,6 +17,7 @@
  * pdh 29-Jan-97 First internal release of keep-alive version (0.61)
  * pdh 12-Mar-97 Frob prefix-fetch stuff to work round bug in WebSitePro/1.1f
  * RWB 16 Apr 97 CSFS bits.
+ * AJS 22-Apr-97 Made some mods to http_verifymessagedigest
  */
 
 #include <errno.h>
@@ -3561,13 +3562,15 @@ VerifyMessageDigest
  IN
    int    : flags
           : type of key.certificate
+          : fetch DER encoded public certificate from memory or disc
    char * : message data
    int    : message data length
    int    : digest type
    char * : digest received
    int    : digest received length
    char * : ptr to DER encoded public key
-   char * : filename of X509 certificate in PEM
+   char * : filename of X509 certificate in PEM, or DER, or ptr to X509 DER certificate in RAM (depends on flags)
+   int    : RAM X509 DER certificate length or 0 (depends on flags)
 
  OUT
    Does it match or not? or error
@@ -3616,6 +3619,8 @@ static _kernel_oserror *http_verifymessagedigest(http_verifymessagedigest_args *
     _kernel_oserror *e = NULL;
     EVP_PKEY *pkey = NULL;
     int rc = http_vmd_rc_BAD_INPUT;
+    unsigned char *certificate_ptr;
+    unsigned char **certificate_ptr_ptr;
 
     fdebugf(log_file, "HTTP_VerifyMessageDigest:\n  flags %08x\n  key '%s'\n  cert '%s'\n  message @ 0x%p/%d\n  digest @ 0x%p/%d\n",
 	    r->in.flags,
@@ -3668,27 +3673,46 @@ static _kernel_oserror *http_verifymessagedigest(http_verifymessagedigest_args *
     /* if there's a certificate given then extract the public key from it to use instead */
     if (pkey && r->in.certificate)
     {
-	FILE *f;
-	if ((f = fopen(r->in.certificate, "rb")) != NULL)
-	{
-	    X509 *xcert;
+        X509 *xcert;
 
-	    /* extract X509 certificate from file */
-	    if (r->in.flags & http_vmd_flag_CERT_DER)
-	    {
+        if((r->in.flags & http_vmd_flag_CERT_INCORE) && (r->in.flags & http_vmd_flag_CERT_DER)) { /* it's DER, and it's in RAM */
+          certificate_ptr = (unsigned char *)r->in.certificate;
+          certificate_ptr_ptr = &certificate_ptr; /* yuk. d2i_X509() made me do it */
+
+          if((xcert = d2i_X509(NULL, certificate_ptr_ptr, (long)r->in.certificate_len))==NULL) {
+              fdebugf(log_file, "DER parsing of in-core cert. failed\n");
+              rc = http_vmd_rc_BAD_INPUT;
+              return NULL;
+          }
+        } else { /* it's not DER, or it's not in RAM */
+	  FILE *f;
+	  if ((f = fopen(r->in.certificate, "rb")) != NULL)
+	  {
+
+
+	     /* extract X509 certificate from file */
+	     if (r->in.flags & http_vmd_flag_CERT_DER)
+	     {
 		xcert = d2i_X509_fp(f, NULL);
-	    }
-	    else
-	    {
+	     }
+	     else
+	     {
 		xcert = PEM_read_X509(f, NULL, 0); /* specify default callback function - could be awkward if it was called */
-	    }
+	     }
 
-	    fclose(f);
+	     fclose(f);
 
-	    fdebugf(log_file, "new cert @ 0x%p\n", xcert);
 
-	    if (xcert)
-	    {
+	  } else {
+	      fdebugf(log_file, "couldn't open certificate file %s\n", r->in.certificate);
+	      rc = http_vmd_rc_BAD_INPUT;
+	      return NULL;
+	  }
+	}
+
+	     if (xcert)
+	     {
+		fdebugf(log_file, "new cert @ 0x%p\n", xcert);
 		if (X509_verify(xcert, pkey))
 		{
 		    /* free the initial key */
@@ -3709,8 +3733,8 @@ static _kernel_oserror *http_verifymessagedigest(http_verifymessagedigest_args *
 		}
 
 		X509_free(xcert);
-	    }
-	}
+	     }
+
     }
 
     /* if we have a public key by this point */
