@@ -218,8 +218,8 @@ static int string_lang_name_to_num(const STRING *lang)
 {
     char s[3];
 
-    s[0] = lang->bytes >= 1 ? (char) lang->ptr[0] : 0;
-    s[1] = lang->bytes >= 2 ? (char) lang->ptr[1] : 0;
+    s[0] = lang->nchars >= 1 ? (char) lang->ptr[0] : 0;
+    s[1] = lang->nchars >= 2 ? (char) lang->ptr[1] : 0;
     s[2] = 0;
 	
     return lang_name_to_num(s);
@@ -346,17 +346,17 @@ extern void text_item_push_word(HTMLCTX * me, rid_flag xf, BOOL space)
 /*    char *alignp = NULL;*/
 /*    int i;*/
     char *ptr = me->inhand_string.ptr;
-    int bytes = me->inhand_string.bytes;
+    int nchars = me->inhand_string.nchars;
     int rindent;
 
     ASSERT(me->magic == HTML_MAGIC);
 
     PRSDBGN(("text_item_push_word(%p,%x,%d:%s): '%.*s' (%d,%p)\n",
-	    me, xf, space, space ? "WITH SPACE" : "WITHOUT SPACE", bytes, ptr ? ptr : "**NULL**",
-	    bytes, ptr));
+	    me, xf, space, space ? "WITH SPACE" : "WITHOUT SPACE", nchars, ptr ? ptr : "**NULL**",
+	    nchars, ptr));
 
 #if UNICODE
-    if (webfont_need_wide_font(ptr, bytes))
+    if (webfont_need_wide_font(ptr, nchars))
 	xf |= rid_flag_WIDE_FONT;
 #endif
     
@@ -383,7 +383,7 @@ extern void text_item_push_word(HTMLCTX * me, rid_flag xf, BOOL space)
 
 #if DEBUG
     flexmem_noshift();
-    PRSDBG(("PUSH WORD '%.*s'\n", bytes, ptr));
+    PRSDBG(("PUSH WORD '%.*s'\n", nchars, ptr));
     flexmem_shift();
 #endif
 
@@ -399,10 +399,10 @@ extern void text_item_push_word(HTMLCTX * me, rid_flag xf, BOOL space)
     {
 	PRSDBG(("text_item_push_word(%p,%x): looking for '%c', 0x%02X alignment character\n", me, flags, ac, ac));
 
-	for (alignp = ptr, i = 0; i < bytes && alignp[i] != ac; i++)
+	for (alignp = ptr, i = 0; i < nchars && alignp[i] != ac; i++)
 	    ;
 
-	if (i == bytes)
+	if (i == nchars)
 	{
 	    alignp = NULL;
 	}
@@ -428,10 +428,10 @@ extern void text_item_push_word(HTMLCTX * me, rid_flag xf, BOOL space)
 	nb2 = &(new2->base);
 	/* 123.567 */
 	new->data_off = memzone_alloc(&me->rh->texts, alignp - ptr + 1);
-	new2->data_off = memzone_alloc(&me->rh->texts, bytes - (alignp - ptr) + 1 + space);
+	new2->data_off = memzone_alloc(&me->rh->texts, nchars - (alignp - ptr) + 1 + space);
 	if (new->data_off == -1 || new2->data_off == -1 )
 	{
-	    usrtrc( "Memzone alloc failed for sting length %d ('%s')\n", bytes+1, ptr);
+	    usrtrc( "Memzone alloc failed for sting length %d ('%s')\n", nchars+1, ptr);
 	}
 	else
 	{
@@ -443,9 +443,9 @@ extern void text_item_push_word(HTMLCTX * me, rid_flag xf, BOOL space)
 	    memcpy(me->rh->texts.data + new->data_off, ptr, alignp - ptr);
 	    (me->rh->texts.data + new->data_off)[alignp - ptr] = 0;
 
-	    memcpy(me->rh->texts.data + new->data_off, alignp, bytes - (alignp - ptr) );
-	    (me->rh->texts.data + new->data_off)[bytes] = " ";
-	    (me->rh->texts.data + new->data_off)[bytes_space] = 0;
+	    memcpy(me->rh->texts.data + new->data_off, alignp, nchars - (alignp - ptr) );
+	    (me->rh->texts.data + new->data_off)[nchars] = " ";
+	    (me->rh->texts.data + new->data_off)[nchars_space] = 0;
 
 	    *alignp = 0;
 	    strcpy(me->rh->texts.data + new->data_off, ptr);
@@ -463,19 +463,19 @@ extern void text_item_push_word(HTMLCTX * me, rid_flag xf, BOOL space)
     else
 #endif
     {
-	new->data_off = memzone_alloc(&me->rh->texts, bytes+1+space);
+	new->data_off = memzone_alloc(&me->rh->texts, nchars+1+space);
 
 	if (new->data_off == -1)
 	{
-	    usrtrc( "Memzone alloc failed for sting length %d ('%s')\n", bytes+1, ptr);
+	    usrtrc( "Memzone alloc failed for sting length %d ('%s')\n", nchars+1, ptr);
 	}
 	else
 	{
 	    flexmem_noshift();
 
-	    memcpy(me->rh->texts.data + new->data_off, ptr, bytes);
-	    (me->rh->texts.data + new->data_off)[bytes] = ' ';
-	    (me->rh->texts.data + new->data_off)[bytes + space] = 0;
+	    memcpy(me->rh->texts.data + new->data_off, ptr, nchars);
+	    (me->rh->texts.data + new->data_off)[nchars] = ' ';
+	    (me->rh->texts.data + new->data_off)[nchars + space] = 0;
 
 	    flexmem_shift();
 	}

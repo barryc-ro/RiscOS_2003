@@ -50,7 +50,7 @@ extern VALUE sgml_do_parse_void(SGMLCTX *context, ATTRIBUTE *attribute, USTRING 
 {
     VALUE v;
 
-    if (string.bytes > 0)
+    if (string.nchars > 0)
     {
 #if SGML_REPORTING
 	sgml_note_bad_attribute(context,
@@ -76,7 +76,7 @@ VALUE sgml_do_parse_enum_void(SGMLCTX *context, ATTRIBUTE *attribute, USTRING st
     STRING *list = attribute->templates;
     /*int w;*/
 
-    if (string.bytes == 0)
+    if (string.nchars == 0)
     {
 	v.type = value_void;
 	return v;
@@ -84,8 +84,8 @@ VALUE sgml_do_parse_enum_void(SGMLCTX *context, ATTRIBUTE *attribute, USTRING st
 
     for (v.u.i = 0; list->ptr != NULL; list++, v.u.i++)
     {
-	if ( list->bytes == string.bytes &&
-	        strnicmpu(string.ptr, list->ptr, string.bytes)
+	if ( list->nchars == string.nchars &&
+	        strnicmpu(string.ptr, list->ptr, string.nchars)
 	     == 0)
 	{
 	    v.type = value_enum;
@@ -97,7 +97,7 @@ VALUE sgml_do_parse_enum_void(SGMLCTX *context, ATTRIBUTE *attribute, USTRING st
     if (gbf_active(GBF_GUESS_ENUMERATIONS))
     {
 	int dist;
-	PRSDBGN(("Attempting to guess enumeration '%.*s'\n", string.bytes, usafe(string)));
+	PRSDBGN(("Attempting to guess enumeration '%.*s'\n", string.nchars, usafe(string)));
 
         /* pdh: less OOC guessing. Note that this is always case-insensitive.
          */
@@ -108,13 +108,13 @@ VALUE sgml_do_parse_enum_void(SGMLCTX *context, ATTRIBUTE *attribute, USTRING st
 
 	    for ( v.u.i = 0; list->ptr; list++, v.u.i++ )
 	    {
-		if ( ustrnearly( string.ptr, string.bytes, 
-				list->ptr, list->bytes, dist ) )
+		if ( ustrnearly( string.ptr, string.nchars, 
+				list->ptr, list->nchars, dist ) )
 		{
 		    v.type = value_enum;
 		    v.u.i++;		/* enumerations from one */
 		    PRSDBGN(("Guessed '%.*s' for '%.*s'\n",
-		          list->bytes, list->ptr, string.bytes, string.ptr));
+		          list->nchars, list->ptr, string.nchars, string.ptr));
 		    return v;
 		}
 	    }
@@ -147,7 +147,7 @@ extern VALUE sgml_do_parse_enum(SGMLCTX *context, ATTRIBUTE *attribute, USTRING 
 bad:
 #if SGML_REPORTING
     sgml_note_bad_attribute(context, "Bad enumeration value '%.*s' for attribute %s",
-			    min(string.bytes, MAXSTRING), usafe(string), attribute->name.ptr);
+			    min(string.nchars, MAXSTRING), usafe(string), attribute->name.ptr);
 #endif
 
     v.type = value_none;
@@ -161,7 +161,7 @@ extern VALUE sgml_do_parse_string_void(SGMLCTX *context, ATTRIBUTE *attribute, U
 {
     VALUE v;
 
-    if (string.bytes == 0)
+    if (string.nchars == 0)
     {
 	v.type = value_void;
 	return v;
@@ -173,9 +173,9 @@ extern VALUE sgml_do_parse_string_void(SGMLCTX *context, ATTRIBUTE *attribute, U
        */
 
     v.type = value_string;
-    v.u.s = mkstringu(context->encoding_write, string.ptr, string.bytes);
+    v.u.s = mkstringu(context->encoding_write, string.ptr, string.nchars);
     
-/*     v.u.s.bytes = sgml_translation(context, v.u.s.ptr, v.u.s.bytes, */
+/*     v.u.s.nchars = sgml_translation(context, v.u.s.ptr, v.u.s.nchars, */
 /* 				   SGMLTRANS_AMPERSAND | SGMLTRANS_HASH | SGMLTRANS_STRIP_NEWLINES); */
 
     return v;
@@ -195,7 +195,7 @@ extern VALUE sgml_do_parse_string(SGMLCTX *context, ATTRIBUTE *attribute, USTRIN
 	return v;
 
 #if SGML_REPORTING
-    sgml_note_bad_attribute(context, "Bad string value '%.*s'",  min(string.bytes, MAXSTRING), usafe(string));
+    sgml_note_bad_attribute(context, "Bad string value '%.*s'",  min(string.nchars, MAXSTRING), usafe(string));
 #endif
 
     v.type = value_none;
@@ -217,7 +217,7 @@ extern VALUE sgml_do_parse_integer_void(SGMLCTX *context, ATTRIBUTE *attribute, 
 
     string = ustring_strip_space(string_in);
 
-    if (string.bytes == 0)
+    if (string.nchars == 0)
     {
 	v.type = value_void;
 	return v;
@@ -241,7 +241,7 @@ extern VALUE sgml_do_parse_integer_void(SGMLCTX *context, ATTRIBUTE *attribute, 
 
 bad:
 #if SGML_REPORTING
-    sgml_note_bad_attribute(context, "Bad integer value '%.*s'",  min(string.bytes, MAXSTRING), string);
+    sgml_note_bad_attribute(context, "Bad integer value '%.*s'",  min(string.nchars, MAXSTRING), string);
 #endif
 
     v.type = value_integer;	/* used to be void */
@@ -256,7 +256,7 @@ extern VALUE sgml_do_parse_integer(SGMLCTX *context, ATTRIBUTE *attribute, USTRI
 	return v;
 
 #if SGML_REPORTING
-    sgml_note_bad_attribute(context, "Bad integer value '%.*s'",  min(string.bytes, MAXSTRING), usafe(string));
+    sgml_note_bad_attribute(context, "Bad integer value '%.*s'",  min(string.nchars, MAXSTRING), usafe(string));
 #endif
 
     v.type = value_none;
@@ -286,7 +286,7 @@ extern VALUE sgml_do_parse_stdunit(SGMLCTX *context, ATTRIBUTE *attribute, USTRI
     if (v.type != value_none)
 	return v;
 
-    sgml_note_bad_attribute(context, "Bad unit value '%.*s'",  min(string.bytes, MAXSTRING), string);
+    sgml_note_bad_attribute(context, "Bad unit value '%.*s'",  min(string.nchars, MAXSTRING), string);
     v.type = value_none;
     return v;
 }
@@ -298,9 +298,9 @@ extern VALUE sgml_do_parse_stdunit(SGMLCTX *context, ATTRIBUTE *attribute, USTRI
 FIXME: This needs writing.
 
 This is designed specifically for colour specification in HTML. We either
-get 3 bytes of colour numeric tuple or an enumerated name. IF we get an
+get 3 nchars of colour numeric tuple or an enumerated name. IF we get an
 enumerated name, we set only the 4th byte with the enumeration index
-and leave the remaining three bytes as zero.
+and leave the remaining three nchars as zero.
 
 */
 
@@ -315,18 +315,18 @@ extern VALUE sgml_do_parse_colour_tuple(SGMLCTX *context, ATTRIBUTE *attribute, 
 {
     VALUE v;
 
-    if (string.bytes > 0 && string.ptr[0] == '#')
+    if (string.nchars > 0 && string.ptr[0] == '#')
     {
 	string.ptr++;
-	string.bytes--;
+	string.nchars--;
     }
 
-    if (string.bytes > 0)
+    if (string.nchars > 0)
     {
 	BITS b = 0;
 	int ix;
 
-	for (ix = 0; ix < string.bytes; ix++)
+	for (ix = 0; ix < string.nchars; ix++)
 	{
 	    int c = string.ptr[ix];
 
@@ -369,7 +369,7 @@ extern VALUE sgml_do_parse_colour_tuple(SGMLCTX *context, ATTRIBUTE *attribute, 
 bad:
     /* Delay message */
 /*
-    sgml_note_bad_attribute(context, "Bad colour tuple '%.*s'", min(string.bytes, MAXSTRING), string.ptr);
+    sgml_note_bad_attribute(context, "Bad colour tuple '%.*s'", min(string.nchars, MAXSTRING), string.ptr);
 */
     v.type = value_none;
     return v;
@@ -388,7 +388,7 @@ extern VALUE sgml_do_parse_enum_tuple(SGMLCTX *context, ATTRIBUTE *attribute, US
 	return v;
 
 #if SGML_REPORTING
-    sgml_note_bad_attribute(context, "Bad colour tuple '%.*s'", min(string.bytes, MAXSTRING), usafe(string));
+    sgml_note_bad_attribute(context, "Bad colour tuple '%.*s'", min(string.nchars, MAXSTRING), usafe(string));
 #endif
 
     v.type = value_none;
@@ -406,14 +406,14 @@ static VALUE sgml__do_parse_stdunit_void(SGMLCTX *context, ATTRIBUTE *attribute,
 
     string = string_strip_space(string_in);
 
-    if (string.bytes == 0)
+    if (string.nchars == 0)
     {
 	v.type = value_void;
 	return v;
     }
 
     /* shortcut for '*' as with no numerals it would need special casing anyway */
-    if (string.bytes == 1 && string.ptr[0] == '*')
+    if (string.nchars == 1 && string.ptr[0] == '*')
     {
         v.type = value_relunit;
         v.u.f = 1;
@@ -422,54 +422,54 @@ static VALUE sgml__do_parse_stdunit_void(SGMLCTX *context, ATTRIBUTE *attribute,
 
     v.u.f = strtod(string.ptr, &ptr);
 
-    if (ptr == string.ptr || string.ptr + string.bytes < ptr)
+    if (ptr == string.ptr || string.ptr + string.nchars < ptr)
 	goto bad;
     else
     {
-	string.bytes -= ptr - string.ptr;
+	string.nchars -= ptr - string.ptr;
 	string.ptr = ptr;
     }
 
     string = string_strip_start(string);
 
-    if (string.bytes == 0
-         || ( string.bytes >= 3 && strnicmp("PIX", string.ptr, 3) == 0 ) )
+    if (string.nchars == 0
+         || ( string.nchars >= 3 && strnicmp("PIX", string.ptr, 3) == 0 ) )
     {
 	/* Implicitly a stdunit is in pixels but we convert to OS units */
 	v.type = value_absunit;
 	v.u.f *= 2.0;
     }
-    else if (string.bytes >= 2 && strnicmp("PT", string.ptr, 2) == 0)
+    else if (string.nchars >= 2 && strnicmp("PT", string.ptr, 2) == 0)
     {
 	v.type = value_absunit;
 	v.u.f *= 180.0 / 72.0;
     }
-    else if (string.bytes >= 2 && strnicmp("PI", string.ptr, 2) == 0)
+    else if (string.nchars >= 2 && strnicmp("PI", string.ptr, 2) == 0)
     {
 	v.type = value_absunit;
 	v.u.f *= 180.0 / 6.0;
     }
-    else if (string.bytes >= 2 && strnicmp("PX", string.ptr, 2) == 0)
+    else if (string.nchars >= 2 && strnicmp("PX", string.ptr, 2) == 0)
     {
 	v.type = value_absunit;
 	v.u.f *= 2.0;
     }
-    else if (string.bytes >= 2 && strnicmp("IN", string.ptr, 2) == 0)
+    else if (string.nchars >= 2 && strnicmp("IN", string.ptr, 2) == 0)
     {
 	v.type = value_absunit;
 	v.u.f *= 180.0;
     }
-    else if (string.bytes >= 2 && strnicmp("CM", string.ptr, 2) == 0)
+    else if (string.nchars >= 2 && strnicmp("CM", string.ptr, 2) == 0)
     {
 	v.type = value_absunit;
 	v.u.f *= 180.0 / 2.54;
     }
-    else if (string.bytes >= 2 && strnicmp("MM", string.ptr, 2) == 0)
+    else if (string.nchars >= 2 && strnicmp("MM", string.ptr, 2) == 0)
     {
 	v.type = value_absunit;
 	v.u.f *= 180.0 / 25.4;
     }
-    else if (string.bytes >= 1 && string.ptr[0] == '%')
+    else if (string.nchars >= 1 && string.ptr[0] == '%')
     {
 	v.type = value_pcunit;
 	/* DAF: 970519: Global behaviour - no individual percentage
@@ -480,7 +480,7 @@ static VALUE sgml__do_parse_stdunit_void(SGMLCTX *context, ATTRIBUTE *attribute,
 	v.type = value_none;	/* temp hack! */
 #endif
     }
-    else if (string.bytes >= 1 && string.ptr[0] == '*')
+    else if (string.nchars >= 1 && string.ptr[0] == '*')
     {
 	v.type = value_relunit;
     }
@@ -505,7 +505,7 @@ static VALUE sgml__do_parse_stdunit_void(SGMLCTX *context, ATTRIBUTE *attribute,
 bad:
 #if SGML_REPORTING
     sgml_note_bad_attribute(context, "Bad unit value '%.*s'",
-			    min(string_in.bytes, MAXSTRING), string_in.ptr);
+			    min(string_in.nchars, MAXSTRING), string_in.ptr);
 #endif
     
     v.type = value_none;
@@ -517,7 +517,7 @@ extern VALUE sgml_do_parse_stdunit_void(SGMLCTX *context, ATTRIBUTE *attribute, 
     VALUE val;
     STRING string_copy;
 
-    string_copy = mkstringu(context->encoding_write, string_in.ptr, string_in.bytes);
+    string_copy = mkstringu(context->encoding_write, string_in.ptr, string_in.nchars);
 
     val = sgml__do_parse_stdunit_void(context, attribute, string_copy);
 
@@ -539,7 +539,7 @@ extern VALUE sgml_do_parse_stdunit(SGMLCTX *context, ATTRIBUTE *attribute, USTRI
     }
 
 #if SGML_REPORTING
-    sgml_note_bad_attribute(context, "Bad unit value '%.*s'",  min(string.bytes, MAXSTRING), usafe(string));
+    sgml_note_bad_attribute(context, "Bad unit value '%.*s'",  min(string.nchars, MAXSTRING), usafe(string));
 #endif
 
     v.type = value_none;
@@ -566,9 +566,9 @@ extern VALUE sgml_do_parse_stdunit_list(SGMLCTX *context, ATTRIBUTE *attribute, 
     char *copy, *use;
     STRING string;
 
-    string = mkstringu(context->encoding_write, string_in.ptr, string_in.bytes);
+    string = mkstringu(context->encoding_write, string_in.ptr, string_in.nchars);
 
-    if (string.bytes == 0)
+    if (string.nchars == 0)
         goto bad;
 
     v.type = value_stdunit_list;
@@ -588,9 +588,9 @@ extern VALUE sgml_do_parse_stdunit_list(SGMLCTX *context, ATTRIBUTE *attribute, 
 
 	if (el.ptr)
 	{
-	    el.bytes = strlen(el.ptr);
+	    el.nchars = strlen(el.ptr);
 
-	    PRSDBG(("stdunitlist: element '%.*s'\n", el.bytes, el.ptr));
+	    PRSDBG(("stdunitlist: element '%.*s'\n", el.nchars, el.ptr));
 
 	    /* this will deal with excess whitespace */
 	    v.u.l.items[i] = sgml__do_parse_stdunit_void(context, attribute, el);
@@ -644,7 +644,7 @@ extern VALUE sgml_do_parse_bool(SGMLCTX *context, ATTRIBUTE *attribute, USTRING 
 {
     VALUE v;
 
-    if (string.bytes == 0)
+    if (string.nchars == 0)
     {
 	v.type = value_void;
 	return v;
@@ -668,7 +668,7 @@ extern VALUE sgml_do_parse_bool(SGMLCTX *context, ATTRIBUTE *attribute, USTRING 
 
     default:
 #if SGML_REPORTING
-	sgml_note_bad_attribute(context, "Bad bool value '%.*s'",  min(string.bytes, MAXSTRING), usafe(string));
+	sgml_note_bad_attribute(context, "Bad bool value '%.*s'",  min(string.nchars, MAXSTRING), usafe(string));
 #endif
 	v.type = value_none;
 	break;
@@ -687,7 +687,7 @@ extern VALUE sgml_do_parse_colour(SGMLCTX *context, ATTRIBUTE *attribute, USTRIN
     if (v.type == value_tuple)
 	return v;
 
-    string_copy = mkstringu(context->encoding_write, string.ptr, string.bytes);
+    string_copy = mkstringu(context->encoding_write, string.ptr, string.nchars);
 
     v = colour_lookup(string_copy);
 
@@ -697,7 +697,7 @@ extern VALUE sgml_do_parse_colour(SGMLCTX *context, ATTRIBUTE *attribute, USTRIN
 	return v;
 
 #if SGML_REPORTING
-    sgml_note_bad_attribute(context, "Bad colour tuple '%.*s'", min(string_copy.bytes, MAXSTRING), usafe(string));
+    sgml_note_bad_attribute(context, "Bad colour tuple '%.*s'", min(string_copy.nchars, MAXSTRING), usafe(string));
 #endif
 
     return v;

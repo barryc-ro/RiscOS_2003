@@ -739,7 +739,7 @@ static int pparse_text_data(void *h, char *buffer, int len, int more)
 	USTRING s;
 
 	s.ptr = buffer;
-	s.bytes = len;
+	s.nchars = len;
 
 	(*sgmlctx->chopper) (sgmlctx, s);
     }

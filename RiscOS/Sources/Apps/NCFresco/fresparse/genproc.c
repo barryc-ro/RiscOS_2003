@@ -68,11 +68,11 @@ static void sgml_print_value(FILE *output, ATTRIBUTE *attribute, VALUE *value)
 	break;
     case value_string:
 	/* forces "s when might have had '"' */
-	fprintf(output, " %s=\"%.*s\"", attribute->name.ptr, value->u.s.bytes, value->u.s.ptr);
+	fprintf(output, " %s=\"%.*s\"", attribute->name.ptr, value->u.s.nchars, value->u.s.ptr);
 	break;
     case value_enum:
 	sp = &attribute->templates[value->u.i-1];
-	fprintf(output, " %s=%.*s", attribute->name.ptr, sp->bytes, sp->ptr);
+	fprintf(output, " %s=%.*s", attribute->name.ptr, sp->nchars, sp->ptr);
 	break;
     case value_void:
 	fprintf(output, " %s", attribute->name.ptr);

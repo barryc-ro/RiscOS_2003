@@ -419,7 +419,7 @@ static void fmt_deliver_sgml(SGMLCTX *context, int reason, STRING item, ELEMENT 
 {
     static STRING s = { NULL, 0 };
 
-    PRSDBGN(("fmt_deliver_sgml(): pretending had <SGML> item '%.*s'\n", item.bytes, item.ptr));
+    PRSDBGN(("fmt_deliver_sgml(): pretending had <SGML> item '%.*s'\n", item.nchars, item.ptr));
 
     fmt_deliver_pre_open_markup( context, DELIVER_PRE_OPEN_MARKUP,  s, &context->elements[HTML_SGML] );
     nullfree((void**)&item.ptr);
@@ -460,20 +460,20 @@ static void deliver_unexpected(SGMLCTX *context, int reason, STRING orig_item, E
     HTMLCTX *me = htmlctxof(context);
     STRING item = orig_item;
 
-    PRSDBGN(("deliver_unexpected(): '%.*s'\n", item.bytes, item.ptr ));
+    PRSDBGN(("deliver_unexpected(): '%.*s'\n", item.nchars, item.ptr ));
 
-    while (item.bytes > 0)
+    while (item.nchars > 0)
     {
 	if ( *item.ptr <= 32 )
 	{
 	    item.ptr++;
-	    item.bytes--;
+	    item.nchars--;
 	}
 	else
 	    break;
     }
 
-    if (item.bytes != 0)
+    if (item.nchars != 0)
     {
 	STACK_ITEM *stacked = context->tos;
 	int i, tag = SGML_NO_ELEMENT;
@@ -498,7 +498,7 @@ static void deliver_unexpected(SGMLCTX *context, int reason, STRING orig_item, E
 		/* Fully unstacked - cater for phantom closure */
 		if (context->tos != NULL && context->tos->element >= 0)
 		{
-		    sgml_feed_characters_ascii(context, item.ptr, item.bytes);
+		    sgml_feed_characters_ascii(context, item.ptr, item.nchars);
 		}
 		else
 		{
@@ -576,7 +576,7 @@ static void pre_deliver_word(SGMLCTX *context, int reason, STRING item, ELEMENT 
 
     if (context->tos->element == HTML_TEXTAREA)
     {
-	PRSDBG(("Textarea line='%.*s'\n", item.bytes, item.ptr));
+	PRSDBG(("Textarea line='%.*s'\n", item.nchars, item.ptr));
 
 	if (htmlctx->form && htmlctx->form->last_text)
 	{
@@ -589,22 +589,22 @@ static void pre_deliver_word(SGMLCTX *context, int reason, STRING item, ELEMENT 
 
 	    PRSDBG(("pre_deliver_word: mz.used %d\n", tai->default_text.used));
 
-	    null.bytes = 0;
+	    null.nchars = 0;
 	    text = get_tab_expanded_string(item, null);
-	    if ((off = memzone_alloc(&tai->default_text, text.bytes + 1)) != -1)
+	    if ((off = memzone_alloc(&tai->default_text, text.nchars + 1)) != -1)
 	    {
 		char *s;
 
 		flexmem_noshift();
 
 		s = tai->default_text.data + off;
-		memcpy(s, text.ptr, text.bytes);
-		s[text.bytes] = '\n';
+		memcpy(s, text.ptr, text.nchars);
+		s[text.nchars] = '\n';
 
 		flexmem_shift();
 	    }
 
-	    PRSDBG(("pre_deliver_word: text.bytes %d mz.used %d off %d\n", text.bytes, tai->default_text.used, off));
+	    PRSDBG(("pre_deliver_word: text.nchars %d mz.used %d off %d\n", text.nchars, tai->default_text.used, off));
 
 	    string_free(&text);
 	}
@@ -635,7 +635,7 @@ static void pre_deliver_word(SGMLCTX *context, int reason, STRING item, ELEMENT 
 	STRING t;
 	STRING null;
 
-	null.bytes = 0;
+	null.nchars = 0;
 	t = get_tab_expanded_string(item, null);
 
 	string_free(&item);
@@ -865,7 +865,7 @@ extern void sgml_deliver(SGMLCTX *context, int reason, STRING item, ELEMENT *ele
     PRSDBGN(("sgml_deliver(%p, %s, '%.*s')\n",
 	    context,
 	    names[reason],
-	    reason == DELIVER_UNEXPECTED ? 0 : item.bytes, item.ptr
+	    reason == DELIVER_UNEXPECTED ? 0 : item.nchars, item.ptr
 	    ));
 
     /* Choose and invoke the appropriate handler */

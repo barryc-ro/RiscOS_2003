@@ -61,7 +61,7 @@ extern void state_end_find_element_body (SGMLCTX *context, UCHARACTER input)
         }
         else if ( strnicmpu(&context->inhand.data[2],
                   context->elements[context->tos->element].name.ptr,
-                  context->elements[context->tos->element].name.bytes ) == 0 )
+                  context->elements[context->tos->element].name.nchars ) == 0 )
         {
                 if ( is_whitespace (input) )
                 {
@@ -541,7 +541,7 @@ extern void state_really_badly_formed_tag (SGMLCTX *context, UCHARACTER input)
 	    {
 		USTRING s;
 		s.ptr = context->inhand.data;
-		s.bytes = context->inhand.ix;
+		s.nchars = context->inhand.ix;
 		sgml_note_message (context, "Badly formed markup '%.*s'",
 				   min(MAXSTRING, context->inhand.ix), usafe(s));
 	    }

@@ -40,22 +40,22 @@ extern void finishtitle (SGMLCTX * context, ELEMENT * element)
 
     ss = string_strip_space(htmlctx->inhand_string);
 
-    if (ss.bytes)
+    if (ss.nchars)
     {
         /* Expand the entities and strip newlines (we've already stripped spaces) */
 	/* removed as entities are already expanded and space and controls are already stripped */
-/*         ss.bytes = sgml_translation(context, ss.ptr, ss.bytes, SGMLTRANS_STRIP_NEWLINES | SGMLTRANS_HASH | SGMLTRANS_AMPERSAND | SGMLTRANS_STRIP_CTRL); */
+/*         ss.nchars = sgml_translation(context, ss.ptr, ss.nchars, SGMLTRANS_STRIP_NEWLINES | SGMLTRANS_HASH | SGMLTRANS_AMPERSAND | SGMLTRANS_STRIP_CTRL); */
 
 	if (htmlctx->rh->title != NULL)
 	{
 	    const int o = strlen(htmlctx->rh->title);
-	    char *new = mm_realloc(htmlctx->rh->title, o + ss.bytes + 1);
+	    char *new = mm_realloc(htmlctx->rh->title, o + ss.nchars + 1);
 
 	    if (new != NULL)
 	    {
 		htmlctx->rh->title = new;
-		memcpy(new + o, ss.ptr, ss.bytes);
-		new[o + ss.bytes] = 0;
+		memcpy(new + o, ss.ptr, ss.nchars);
+		new[o + ss.nchars] = 0;
 	    }
 	}
 	else

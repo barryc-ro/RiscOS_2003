@@ -215,14 +215,14 @@ typedef char				UCHARACTER;
 
 struct EBLOCK { void *ptr; int elts; }; /* Elements, eg int, struct */
 struct MBLOCK { char *ptr; int size; }; /* Memory, bytes */
-struct STRING { char *ptr; int bytes; }; /* eg strings */
+struct STRING { char *ptr; int nchars; }; /* eg strings */
 struct STRING_LIST { STRING string; STRING_LIST *prev, *next; };
 /*struct PARSER_CONFIG { BOOL print_unexpected_characters, print_sgml; };*/
 struct BUFFER { char *data; int max, ix; };     /* ix is next to use */
 struct ACT_ELEM { int action, element; };
 struct STDUNIT_LIST { int num; VALUE *items; };
 struct UBUFFER { UCHARACTER *data; int max, ix; };	/* This must be identical to BUFFER except for data type or else free_buffer won't work */
-struct USTRING { UCHARACTER *ptr; int bytes; };		/* bytes is actually the number of elements, *NOT* the number of bytes */
+struct USTRING { UCHARACTER *ptr; int nchars; };		/* nchars is actually the number of elements, *NOT* the number of bytes */
 
 /*****************************************************************************
 

@@ -1567,7 +1567,7 @@ static void table_deliver (SGMLCTX *context, int reason, STRING item, ELEMENT *e
     switch (reason)
     {
     case DELIVER_WORD:
-	PRSDBGN(("table_deliver(): got DELIVER_WORD !! '%.*s'\n", item.bytes, item.ptr));
+	PRSDBGN(("table_deliver(): got DELIVER_WORD !! '%.*s'\n", item.nchars, item.ptr));
 	string_free(&item);
 	break;
 
@@ -1581,20 +1581,20 @@ static void table_deliver (SGMLCTX *context, int reason, STRING item, ELEMENT *e
     {
 	BOOL empty = FALSE;
 	STRING i = item;
-	PRSDBG(("table_deliver(): unexpected characters '%.*s'\n", item.bytes, item.ptr));
+	PRSDBG(("table_deliver(): unexpected characters '%.*s'\n", item.nchars, item.ptr));
 
-	while (i.bytes > 0)
+	while (i.nchars > 0)
 	{
 	    if ( *i.ptr <= 32 )
 	    {
 		i.ptr++;
-		i.bytes--;
+		i.nchars--;
 	    }
 	    else
 		break;
 	}
 
-	empty = i.bytes == 0;
+	empty = i.nchars == 0;
 	if (! empty)
 	{
 	    sgml_remove_deliver(context, &table_deliver);
@@ -1611,7 +1611,7 @@ static void table_deliver (SGMLCTX *context, int reason, STRING item, ELEMENT *e
         break;
 
     case DELIVER_SGML:
-	PRSDBGN(("table_deliver(): passing on <%.*s>\n", item.bytes, item.ptr));
+	PRSDBGN(("table_deliver(): passing on <%.*s>\n", item.nchars, item.ptr));
 	(*context->dlist->this_fn) (context, reason, item, element);
 	break;
 

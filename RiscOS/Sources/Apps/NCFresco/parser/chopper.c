@@ -127,9 +127,9 @@ extern void sgml_fmt_word_chopper(SGMLCTX *context, USTRING input)
     sgml_chopper_state *st = &context->chopper_state;
     int ix;
 
-    /*PRSDBGN(("sgml_fmt_word_chopper(): %.*s\n", input.bytes, input.ptr));*/
+    /*PRSDBGN(("sgml_fmt_word_chopper(): %.*s\n", input.nchars, input.ptr));*/
 
-    if (input.bytes == 0)
+    if (input.nchars == 0)
     {
 	/*PRSDBGN(("sgml_fmt_word_chopper(): flushing\n"));*/
 
@@ -164,7 +164,7 @@ extern void sgml_fmt_word_chopper(SGMLCTX *context, USTRING input)
 	return;
     }
 
-    for (ix = 0; ix < input.bytes; ix++)
+    for (ix = 0; ix < input.nchars; ix++)
     {
 	UCHARACTER c = input.ptr[ix];
 	int ctype;		/* the type of this character */
@@ -339,9 +339,9 @@ extern void sgml_fmt_word_chopper(SGMLCTX *context, USTRING input)
     sgml_chopper_state *st = &context->chopper_state;
     int ix;
 
-    /*PRSDBGN(("sgml_fmt_word_chopper(): %.*s\n", input.bytes, input.ptr));*/
+    /*PRSDBGN(("sgml_fmt_word_chopper(): %.*s\n", input.nchars, input.ptr));*/
 
-    if (input.bytes == 0)
+    if (input.nchars == 0)
     {
 	/*PRSDBGN(("sgml_fmt_word_chopper(): flushing\n"));*/
 
@@ -372,7 +372,7 @@ extern void sgml_fmt_word_chopper(SGMLCTX *context, USTRING input)
 	return;
     }
 
-    for (ix = 0; ix < input.bytes; ix++)
+    for (ix = 0; ix < input.nchars; ix++)
     {
 	UCHARACTER c = input.ptr[ix];
 	const BOOL ws = c < 33 || c == 127;
@@ -443,9 +443,9 @@ extern void sgml_pre_word_chopper(SGMLCTX *context, USTRING input)
     int ix;
 
     PRSDBGN(("sgml_pre_word_chopper(): '%.*s' (%d,%d,%d,%d)\n",
-	     input.bytes, input.ptr, st->s1,st->s2,st->s3,st->s4 ));
+	     input.nchars, input.ptr, st->s1,st->s2,st->s3,st->s4 ));
 
-    if (input.bytes == 0)
+    if (input.nchars == 0)
     {
 	PRSDBGN(("sgml_pre_word_chopper(): flushing\n"));
 
@@ -470,7 +470,7 @@ extern void sgml_pre_word_chopper(SGMLCTX *context, USTRING input)
 	return;
     }
 
-    for (ix = 0; ix < input.bytes && !context->pending_close; ix++) /* SJM: added check for close pending */
+    for (ix = 0; ix < input.nchars && !context->pending_close; ix++) /* SJM: added check for close pending */
     {
 	UCHARACTER c = input.ptr[ix];
 	BOOL discard = FALSE;
@@ -578,7 +578,7 @@ extern void sgml_pre_word_chopper(SGMLCTX *context, USTRING input)
 #if DEBUG
     if (context->pending_close)
     {
-	PRSDBG(("sgml_pre_word_chopper(%p): aborted after %d of %d bytes\n", context, ix, input.bytes));
+	PRSDBG(("sgml_pre_word_chopper(%p): aborted after %d of %d nchars\n", context, ix, input.nchars));
     }
 #endif
 }
@@ -599,9 +599,9 @@ extern void sgml_str_word_chopper(SGMLCTX *context, USTRING input)
     sgml_chopper_state *st = &context->chopper_state;
     int ix;
 
-    /*PRSDBGN(("sgml_str_word_chopper(): %.*s\n", input.bytes, input.ptr));*/
+    /*PRSDBGN(("sgml_str_word_chopper(): %.*s\n", input.nchars, input.ptr));*/
 
-    if (input.bytes == 0)
+    if (input.nchars == 0)
     {
 	/* Flush actions */
 
@@ -612,7 +612,7 @@ extern void sgml_str_word_chopper(SGMLCTX *context, USTRING input)
 
     context->prechop.ix = 0;
 
-    for (ix = 0; ix < input.bytes; ix++)
+    for (ix = 0; ix < input.nchars; ix++)
     {
 	const UCHARACTER c = input.ptr[ix];
 

@@ -63,7 +63,7 @@ static void dump_elements_open(BITS *bits)
     {
 	if ( bits[i >> 5] & (1 << (i & 0x1f)) )
 	{
-	    PRSDBGN((" %.*s", elements[i].name.bytes, elements[i].name.ptr));
+	    PRSDBGN((" %.*s", elements[i].name.nchars, elements[i].name.ptr));
 	}
     }
 #endif
@@ -205,13 +205,13 @@ extern int strncmpu(const UCHARACTER *a, const char *b, int n)
 
 extern char *stringdup(STRING s)
 {
-    char *ptr = mm_calloc(1, s.bytes + 1);
+    char *ptr = mm_calloc(1, s.nchars + 1);
 
     ASSERT(ptr != NULL);
 
-    if (s.bytes)
-	memcpy(ptr, (const void *) s.ptr, (size_t) s.bytes);
-    ptr[s.bytes] = 0;
+    if (s.nchars)
+	memcpy(ptr, (const void *) s.ptr, (size_t) s.nchars);
+    ptr[s.nchars] = 0;
 
     return ptr;
 }
@@ -222,26 +222,26 @@ extern char *stringdup(STRING s)
 extern char *strip_stringdup(STRING s)
 {
     char *ptr = s.ptr, *x;
-    int bytes = s.bytes;
+    int nchars = s.nchars;
 
-    while (bytes > 0 && *ptr < 33)
+    while (nchars > 0 && *ptr < 33)
     {
-	bytes--;
+	nchars--;
 	ptr++;
     }
 
-    while (bytes > 0 && ptr[bytes - 1] < 33)
+    while (nchars > 0 && ptr[nchars - 1] < 33)
     {
-	bytes--;
+	nchars--;
     }
 
-    x = mm_calloc(1, bytes + 1);
+    x = mm_calloc(1, nchars + 1);
 
     if (x != NULL)
     {
-	if (bytes)
-	    memcpy(x, ptr, bytes);
-	x[bytes] = 0;
+	if (nchars)
+	    memcpy(x, ptr, nchars);
+	x[nchars] = 0;
     }
 
     return x;
@@ -271,7 +271,7 @@ extern STRING mkstring(char *ptr, int n)
 {
     STRING s;
 
-    if ( (s.bytes = n) == 0 )
+    if ( (s.nchars = n) == 0 )
     {
 	s.ptr = NULL;
     }
@@ -279,8 +279,8 @@ extern STRING mkstring(char *ptr, int n)
     {
 	if ( (s.ptr = mm_malloc(n)) == NULL )
 	{
-	    usrtrc( "Failed to allocate %d bytes of string storage\n", n);
-	    s.bytes = 0;
+	    usrtrc( "Failed to allocate %d nchars of string storage\n", n);
+	    s.nchars = 0;
 	}
 	else
 	{
@@ -296,7 +296,7 @@ extern STRING mkstringu(void *encoding, UCHARACTER *ptr, int n)
 {
     STRING s;
 
-    s.bytes = 0;
+    s.nchars = 0;
     
     if ( n == 0 )
     {
@@ -309,22 +309,22 @@ extern STRING mkstringu(void *encoding, UCHARACTER *ptr, int n)
 	/* PRSDBG(("mkstringu: %d chars from %p\n", n, ptr)); */
 	
 	for (i = 0; i < n; i++)
-	    encoding_write(encoding, ptr[i], NULL, &s.bytes);
+	    encoding_write(encoding, ptr[i], NULL, &s.nchars);
 
-	s.bytes = -s.bytes;
+	s.nchars = -s.nchars;
 	
-	/* PRSDBG(("mkstringu: %d bytes needed\n", s.bytes)); */
+	/* PRSDBG(("mkstringu: %d nchars needed\n", s.nchars)); */
 
 	/* allocate space */
-	if ( (s.ptr = mm_malloc(s.bytes+1)) == NULL )
+	if ( (s.ptr = mm_malloc(s.nchars+1)) == NULL )
 	{
-	    s.bytes = 0;
+	    s.nchars = 0;
 	}
 	else 
 	{
 	    /* write out string */
 	    char *ss = s.ptr;
-	    int bufsize = s.bytes;
+	    int bufsize = s.nchars;
 
 	    /* PRSDBG(("mkstringu: write to %p\n", s.ptr)); */
 
@@ -332,10 +332,10 @@ extern STRING mkstringu(void *encoding, UCHARACTER *ptr, int n)
 		encoding_write(encoding, ptr[i], &ss, &bufsize);
 
 	    /* ensure terminated for safety */
-	    s.ptr[s.bytes] = 0;
+	    s.ptr[s.nchars] = 0;
 	}
 
- 	/* PRSDBGN(("mkstringu: %d chars become %d bytes '%.*s'\n", n, s.bytes, s.bytes, s.ptr)); */
+ 	/* PRSDBGN(("mkstringu: %d chars become %d nchars '%.*s'\n", n, s.nchars, s.nchars, s.ptr)); */
     }
 
     return s;
@@ -347,10 +347,10 @@ extern int extract_numbers(char *buffer, int bufsize, USTRING string)
 {
     int i, out;
 
-    for (i = 0; i < string.bytes && string.ptr[i] == ' '; i++)
+    for (i = 0; i < string.nchars && string.ptr[i] == ' '; i++)
 	;
     
-    for (out = 0; i < string.bytes && out < bufsize-1; i++)
+    for (out = 0; i < string.nchars && out < bufsize-1; i++)
     {
 	int c = string.ptr[i];
 	if ((c >= '0' && c <= '9') || c == '.')
@@ -371,18 +371,18 @@ extern USTRING mkustring(UCHARACTER *ptr, int n)
 {
     USTRING s;
 
-    s.bytes = 0;
+    s.nchars = 0;
     
-    if ( (s.bytes = n) == 0 )
+    if ( (s.nchars = n) == 0 )
     {
 	s.ptr = NULL;
     }
     else
     {
-	if ( (s.ptr = mm_malloc(s.bytes * sizeof(ptr[0]))) == NULL )
+	if ( (s.ptr = mm_malloc(s.nchars * sizeof(ptr[0]))) == NULL )
 	{
-	    usrtrc( "Failed to allocate %d bytes of string storage\n", n * sizeof(ptr[0]) );
-	    s.bytes = 0;
+	    usrtrc( "Failed to allocate %d nchars of string storage\n", n * sizeof(ptr[0]) );
+	    s.nchars = 0;
 	}
 	else
 	{
@@ -402,18 +402,18 @@ extern STRING stringcat(STRING a, STRING b)
 {
     STRING r;
 
-    r.bytes = a.bytes + b.bytes;
-    r.ptr = mm_malloc(r.bytes);
+    r.nchars = a.nchars + b.nchars;
+    r.ptr = mm_malloc(r.nchars);
 
     if (r.ptr == NULL)
     {
 	usrtrc( "stringcat(): not enough memory\n");
-	r.bytes = 0;
+	r.nchars = 0;
     }
     else
     {
-	memcpy( (char*)r.ptr, a.ptr, a.bytes );
-	memcpy( (char*)r.ptr + a.bytes, b.ptr, b.bytes );
+	memcpy( (char*)r.ptr, a.ptr, a.nchars );
+	memcpy( (char*)r.ptr + a.nchars, b.ptr, b.nchars );
     }
 
     return r;
@@ -427,8 +427,8 @@ STRING string_skip_chars(STRING s, const char *p)
 {
     STRING out;
     out.ptr = s.ptr;
-    out.bytes = s.bytes;
-    for (; out.bytes; out.ptr++, out.bytes--)
+    out.nchars = s.nchars;
+    for (; out.nchars; out.ptr++, out.nchars--)
     {
 	const char *pp;
         for ( pp = p; ; )
@@ -450,8 +450,8 @@ STRING string_skip_to_chars(STRING s, const char *p)
 {
     STRING out;
     out.ptr = s.ptr;
-    out.bytes = s.bytes;
-    for (; out.bytes; out.ptr++, out.bytes--)
+    out.nchars = s.nchars;
+    for (; out.nchars; out.ptr++, out.nchars--)
     {
 	const char *pp;
 	char c1;
@@ -469,7 +469,7 @@ STRING stringtok(STRING *s1, const char *s2)
     STRING s, ss;
 
     s = string_skip_chars(*s1, s2);
-    if (s.bytes == 0)
+    if (s.nchars == 0)
     {
 	*s1 = s;
 	return s;
@@ -480,7 +480,7 @@ STRING stringtok(STRING *s1, const char *s2)
     *s1 = ss;
 
     /* set length of return */
-    s.bytes = ss.ptr - s.ptr;
+    s.nchars = ss.ptr - s.ptr;
 
     return s;
 }
@@ -498,10 +498,10 @@ static int strip_char(int c)
 
 extern STRING string_strip_start(STRING s)
 {
-    while (s.bytes > 0 && strip_char( (int)s.ptr[0] ) )
+    while (s.nchars > 0 && strip_char( (int)s.ptr[0] ) )
     {
         s.ptr++;
-	s.bytes--;
+	s.nchars--;
     }
     return s;
 }
@@ -510,8 +510,8 @@ extern STRING string_strip_start(STRING s)
 
 extern STRING string_strip_end(STRING s)
 {
-    while (s.bytes > 0 && strip_char( (int)s.ptr[s.bytes - 1] ) )
-	s.bytes--;
+    while (s.nchars > 0 && strip_char( (int)s.ptr[s.nchars - 1] ) )
+	s.nchars--;
     return s;
 }
 
@@ -523,10 +523,10 @@ extern STRING string_strip_space(STRING in)
 
 extern USTRING ustring_strip_start(USTRING s)
 {
-    while (s.bytes > 0 && strip_char( (int)s.ptr[0] ) )
+    while (s.nchars > 0 && strip_char( (int)s.ptr[0] ) )
     {
         s.ptr++;
-	s.bytes--;
+	s.nchars--;
     }
     return s;
 }
@@ -535,8 +535,8 @@ extern USTRING ustring_strip_start(USTRING s)
 
 extern USTRING ustring_strip_end(USTRING s)
 {
-    while (s.bytes > 0 && strip_char( (int)s.ptr[s.bytes - 1] ) )
-	s.bytes--;
+    while (s.nchars > 0 && strip_char( (int)s.ptr[s.nchars - 1] ) )
+	s.nchars--;
     return s;
 }
 
@@ -554,7 +554,7 @@ extern int string_count_elements(STRING s, int c)
     int n, i;
 
     n = 0;
-    for (ss = s.ptr, i = 0; i < s.bytes; ss++, i++)
+    for (ss = s.ptr, i = 0; i < s.nchars; ss++, i++)
         if (*ss == c)
             n++;
 
@@ -581,7 +581,7 @@ extern int string_count_tokens(STRING s, char *breaks)
 	if (i)
 	    n++;
 	ss += i;
-    } while (ss < s.ptr + s.bytes);
+    } while (ss < s.ptr + s.nchars);
 
     return n;
 }
@@ -591,7 +591,7 @@ extern int string_count_tokens(STRING s, char *breaks)
 extern void string_free(STRING *ptr)
 {
     nullfree((void**)&ptr->ptr);
-    ptr->bytes = 0;
+    ptr->nchars = 0;
 }
 
 extern void string_list_free(STRING_LIST *ptr)
@@ -615,7 +615,7 @@ static void count_positions(STRING item, int *ppos, int *pextra)
     int pos = *ppos;		/* display position */
     int extra = *pextra;	/* extra space chars needed */
 
-    while (i < item.bytes)
+    while (i < item.nchars)
     {
 	pos ++;		/* advance one display character position */
 	    
@@ -651,7 +651,7 @@ STRING get_tab_expanded_string(STRING item, STRING inhand)
     int extra = 0, inhand_pos = 0;
     int i, pos, out;
 
-    PRSDBG(("get_tab_expanded_string: inhand '%.*s' item '%.*s'\n", inhand.bytes, inhand.ptr, item.bytes, item.ptr));
+    PRSDBG(("get_tab_expanded_string: inhand '%.*s' item '%.*s'\n", inhand.nchars, inhand.ptr, item.nchars, item.ptr));
 
     count_positions(inhand, &inhand_pos, &extra);
 
@@ -662,15 +662,15 @@ STRING get_tab_expanded_string(STRING item, STRING inhand)
     
     PRSDBG(("get_tab_expanded_string: pos %d extra %d\n", pos, extra));
 
-    t.bytes = inhand.bytes + item.bytes + extra;
-    t.ptr = mm_malloc(t.bytes + 1);	/* +1 for the null. not recorded in t.bytes */
+    t.nchars = inhand.nchars + item.nchars + extra;
+    t.ptr = mm_malloc(t.nchars + 1);	/* +1 for the null. not recorded in t.nchars */
 
-    if (inhand.bytes)
-	memcpy(t.ptr, inhand.ptr, inhand.bytes);
+    if (inhand.nchars)
+	memcpy(t.ptr, inhand.ptr, inhand.nchars);
 
     pos = inhand_pos;
-    out = inhand.bytes;
-    for (i = 0; i < item.bytes; )
+    out = inhand.nchars;
+    for (i = 0; i < item.nchars; )
     {
 	if (item.ptr[i] == '\t')
 	{
@@ -904,7 +904,7 @@ extern int string_str_cmp(const void *a, const void *b)
     STRING *ap = (STRING *)a;
     char *bp = (char *)b;
 
-    return strnicmp(ap->ptr, bp, ap->bytes);
+    return strnicmp(ap->ptr, bp, ap->nchars);
 }
 #endif
 
@@ -912,8 +912,8 @@ static int element_search_fn(const void *a, const void *b)
 {
     USTRING *sp = (USTRING *)a;
     ELEMENT *ep = (ELEMENT *)b;
-    const int sl = sp->bytes;
-    const int el = ep->name.bytes;
+    const int sl = sp->nchars;
+    const int el = ep->name.nchars;
     const int n = strnicmpu(sp->ptr, ep->name.ptr, sl < el ? sl : el );
 
     if (n == 0 && sl != el)
@@ -947,7 +947,7 @@ extern int find_element(SGMLCTX *context, USTRING s)
 
 	    int best_ix, best_len, ix;
 
-	    PRSDBGN(("Attempting to guess-match '%.*s'\n", s.bytes, s.ptr));
+	    PRSDBGN(("Attempting to guess-match '%.*s'\n", s.nchars, s.ptr));
 
 	    for (ix = 0, element = context->elements, best_ix = best_len = -1;
 		 ix < NUMBER_SGML_ELEMENTS;
@@ -955,17 +955,17 @@ extern int find_element(SGMLCTX *context, USTRING s)
 	    {
 		int x;
 
-		for (x = 1; x <= s.bytes; x++)
+		for (x = 1; x <= s.nchars; x++)
 		{
-		    if (x > element->name.bytes)
+		    if (x > element->name.nchars)
 			break;
 
 		    if ( strnicmpu(s.ptr, element->name.ptr, x) != 0 )
 			continue;
 
 		    PRSDBG(("%.*s against %.*s, x %d, best_ix %d, best_len %d\n",
-			    s.bytes, s.ptr,
-			    element->name.bytes, element->name.ptr,
+			    s.nchars, s.ptr,
+			    element->name.nchars, element->name.ptr,
 			    x, best_ix, best_len));
 
 		    if (x > best_len)
@@ -980,11 +980,11 @@ extern int find_element(SGMLCTX *context, USTRING s)
 	    {
 		element = &context->elements[best_ix];
 		PRSDBGN(("Guessed '%.*s' best matches '%.*s'\n",
-			 element->name.bytes, element->name.ptr, s.bytes, s.ptr));
+			 element->name.nchars, element->name.ptr, s.nchars, s.ptr));
 	    }
 	    else
 	    {
-		PRSDBGN(("No guess what element '%.*s' is meant to be\n", s.bytes, s.ptr));
+		PRSDBGN(("No guess what element '%.*s' is meant to be\n", s.nchars, s.ptr));
 	    }
 	}
     }
@@ -1015,9 +1015,9 @@ extern int find_attribute(SGMLCTX *context, ELEMENT *element, USTRING s, BOOL *g
 
     while ( (attribute = *attributep)->name.ptr != NULL )
     {
-	if ( s.bytes == attribute->name.bytes && strnicmpu(s.ptr, attribute->name.ptr, s.bytes) == 0 )
+	if ( s.nchars == attribute->name.nchars && strnicmpu(s.ptr, attribute->name.ptr, s.nchars) == 0 )
 	{
-	    PRSDBGN(("Attribute '%.*s' is %d\n", s.bytes, s.ptr, ix));
+	    PRSDBGN(("Attribute '%.*s' is %d\n", s.nchars, s.ptr, ix));
 
 	    *guessed = FALSE;
 	    return ix;
@@ -1030,7 +1030,7 @@ extern int find_attribute(SGMLCTX *context, ELEMENT *element, USTRING s, BOOL *g
     if (gbf_active(GBF_GUESS_ATTRIBUTES))
     {
 	int dist;
-	PRSDBGN(("Attribute '%.*s' does not match - guessing\n", s.bytes, usafe(s)));
+	PRSDBGN(("Attribute '%.*s' does not match - guessing\n", s.nchars, usafe(s)));
 
         /* pdh: less keen on giving out-of-control matches */
 	/* sjm: even less keen, tries distance 1 before 2 */
@@ -1040,8 +1040,8 @@ extern int find_attribute(SGMLCTX *context, ELEMENT *element, USTRING s, BOOL *g
 	    ix = 0;
 	    while ( (attribute = *attributep)->name.ptr != NULL )
 	    {
-		if ( ustrnearly( s.ptr, s.bytes,
-				attribute->name.ptr, attribute->name.bytes,
+		if ( ustrnearly( s.ptr, s.nchars,
+				attribute->name.ptr, attribute->name.nchars,
 				dist ) )
 		{
 		    *guessed = TRUE;
@@ -1540,7 +1540,7 @@ extern void add_to_prechop_buffer(SGMLCTX *context, UCHARACTER input)
 }
 
 /* Optionally the inhand buffer can be a UCS2 buffer in which case
- * each element is 16 bits and max and ix refer to elements, not bytes
+ * each element is 16 bits and max and ix refer to elements, not nchars
  */
 
 extern void add_char_to_inhand(SGMLCTX *context, UCHARACTER input)
@@ -1561,13 +1561,13 @@ extern void push_inhand(SGMLCTX *context)
     ASSERT(context->magic == SGML_MAGIC);
 
     s.ptr = context->inhand.data;
-    s.bytes = context->inhand.ix;
+    s.nchars = context->inhand.ix;
 
 #if 0
-    PRSDBG(("push_inhand: bytes %d (%02x) strip initial nl %d cr %d\n", s.bytes, s.ptr[0], context->strip_initial_nl, context->strip_initial_cr));
+    PRSDBG(("push_inhand: nchars %d (%02x) strip initial nl %d cr %d\n", s.nchars, s.ptr[0], context->strip_initial_nl, context->strip_initial_cr));
     
     /* SJM: removed because of problems with elements within PRE zone stripping newlines */
-    while ((context->strip_initial_nl || context->strip_initial_cr) && s.bytes > 0)
+    while ((context->strip_initial_nl || context->strip_initial_cr) && s.nchars > 0)
     {
 	if (context->strip_initial_nl && s.ptr[0] == '\n')
 	{
@@ -1575,7 +1575,7 @@ extern void push_inhand(SGMLCTX *context)
 
 	    context->strip_initial_nl = 0;
 	    s.ptr++;
-	    s.bytes--;
+	    s.nchars--;
 	}
 	else if (context->strip_initial_cr && s.ptr[0] == '\r')
 	{
@@ -1583,7 +1583,7 @@ extern void push_inhand(SGMLCTX *context)
 
 	    context->strip_initial_cr = 0;
 	    s.ptr++;
-	    s.bytes--;
+	    s.nchars--;
 	}
 	else
 	{
@@ -1594,7 +1594,7 @@ extern void push_inhand(SGMLCTX *context)
 #endif
 
 #if 0    
-    while ((context->strip_final_nl || context->strip_final_cr) && s.bytes > 0)
+    while ((context->strip_final_nl || context->strip_final_cr) && s.nchars > 0)
     {
 	if (context->strip_final_nl && s.ptr[0] == '\n')
 	{
@@ -1602,7 +1602,7 @@ extern void push_inhand(SGMLCTX *context)
 
 	    context->strip_final_nl = 0;
 	    s.ptr++;
-	    s.bytes--;
+	    s.nchars--;
 	}
 	else if (context->strip_final_cr && s.ptr[0] == '\r')
 	{
@@ -1610,7 +1610,7 @@ extern void push_inhand(SGMLCTX *context)
 
 	    context->strip_final_cr = 0;
 	    s.ptr++;
-	    s.bytes--;
+	    s.nchars--;
 	}
 	else
 	{
@@ -1622,7 +1622,7 @@ extern void push_inhand(SGMLCTX *context)
     /* chopper doesn't free strings itself */
     /* Avoid empty strings when might not be appropriate */
     /* to flush chopper state */
-    if (s.bytes > 0)
+    if (s.nchars > 0)
 	(*context->chopper) (context, s);
 
     context->inhand.ix = 0;
@@ -1634,7 +1634,7 @@ extern void push_bar_last_inhand(SGMLCTX *context)
 {
     ASSERT(context->magic == SGML_MAGIC);
 
-    /* PRSDBG(("push_bar_last_inhand: bytes %d strip initial nl %d cr %d\n", context->inhand.ix, context->strip_initial_nl, context->strip_initial_cr)); */
+    /* PRSDBG(("push_bar_last_inhand: nchars %d strip initial nl %d cr %d\n", context->inhand.ix, context->strip_initial_nl, context->strip_initial_cr)); */
 
 #if 0
     context->strip_initial_nl = context->strip_initial_cr = 0;
@@ -1647,7 +1647,7 @@ extern void push_bar_last_inhand(SGMLCTX *context)
 	USTRING s;
 
 	s.ptr = context->inhand.data;
-	s.bytes = context->inhand.ix - 1;
+	s.nchars = context->inhand.ix - 1;
 
 	(*context->chopper) (context, s);
 
@@ -1743,7 +1743,7 @@ char *usafe(USTRING s)
     int i, n;
 
     ss = buf;
-    n = s.bytes < MAXSTRING-1 ? s.bytes : MAXSTRING-1;
+    n = s.nchars < MAXSTRING-1 ? s.nchars : MAXSTRING-1;
 
     for (i = 0; i < n; i++)
     {

@@ -31,7 +31,7 @@ static int mimetype_to_filetype(STRING s)
 
 static int extension_to_filetype(STRING s)
 {
-    char *ss = s.ptr + s.bytes;
+    char *ss = s.ptr + s.nchars;
     char *dot = NULL;
     char suffix[8];
     int len;
@@ -49,11 +49,11 @@ static int extension_to_filetype(STRING s)
 
     if (dot == NULL)
     {
-	PRSDBG(("objparse: extension no dot in '%.*s'\n", s.bytes, s.ptr));
+	PRSDBG(("objparse: extension no dot in '%.*s'\n", s.nchars, s.ptr));
 	return -1;
     }
 
-    len = s.ptr + s.bytes - dot;
+    len = s.ptr + s.nchars - dot;
     if (len == 0)
     {
 	PRSDBG(("objparse: null extension\n"));
@@ -359,7 +359,7 @@ extern void startapplet (SGMLCTX * context, ELEMENT * element, VALUES * attribut
     generic_start (context, element, attributes);
 
     java_type.type = value_string;
-    java_type.u.s.bytes = sizeof(MIME_TYPE_JAVA)-1;
+    java_type.u.s.nchars = sizeof(MIME_TYPE_JAVA)-1;
     java_type.u.s.ptr = MIME_TYPE_JAVA;
 
     none.type = value_none;
@@ -632,8 +632,8 @@ extern void startembed(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	fprintf(stderr, "element %p\n->attributes %p\nstring %p %d '%.*s'",
 		element, element->attributes, 
 		(element->attributes[HTML_EMBED_PALETTE])->name.ptr,
-		(element->attributes[HTML_EMBED_PALETTE])->name.bytes,
-		(element->attributes[HTML_EMBED_PALETTE])->name.bytes,
+		(element->attributes[HTML_EMBED_PALETTE])->name.nchars,
+		(element->attributes[HTML_EMBED_PALETTE])->name.nchars,
 		(element->attributes[HTML_EMBED_PALETTE])->name.ptr);
 	
 #endif

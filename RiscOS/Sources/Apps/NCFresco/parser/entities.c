@@ -607,14 +607,14 @@ static int entity_compare_function(const void *ain, const void *bin)
     return strnicmpu( ap, bp->name, strlen(bp->name));
 }
 
-extern int sgml_translation(SGMLCTX *context, UCHARACTER *in_ptr, int in_bytes, int rules)
+extern int sgml_translation(SGMLCTX *context, UCHARACTER *in_ptr, int in_nchars, int rules)
 {
 #if DEBUG
     UCHARACTER *orig_ptr = in_ptr;
     USTRING ds;
 #endif
     UCHARACTER *out_ptr;
-    int out_bytes;
+    int out_nchars;
 
     if (context == NULL)
     {
@@ -625,7 +625,7 @@ extern int sgml_translation(SGMLCTX *context, UCHARACTER *in_ptr, int in_bytes, 
 	ASSERT(context->magic == SGML_MAGIC);
     }
 #if 1
-    if (in_ptr == NULL || in_bytes == 0)
+    if (in_ptr == NULL || in_nchars == 0)
 	return 0;
 #endif
     /* Someone is triggering this. They shouldn't */
@@ -633,12 +633,12 @@ extern int sgml_translation(SGMLCTX *context, UCHARACTER *in_ptr, int in_bytes, 
 
 #if DEBUG
     ds.ptr = in_ptr;
-    ds.bytes = in_bytes;
+    ds.nchars = in_nchars;
 #endif
     PRSDBGN(("sgml_translation('%.*s', %d, 0x%x)\n",
-	    in_bytes, usafe(ds), in_bytes, rules));
+	    in_nchars, usafe(ds), in_nchars, rules));
 
-    for (out_ptr = in_ptr, out_bytes = 0; in_bytes > 0; in_bytes--)
+    for (out_ptr = in_ptr, out_nchars = 0; in_nchars > 0; in_nchars--)
     {
 	BOOL used = FALSE;
 
@@ -651,7 +651,7 @@ extern int sgml_translation(SGMLCTX *context, UCHARACTER *in_ptr, int in_bytes, 
 	}
 	if (c == '&' &&
 	    (rules & SGMLTRANS_HASH) != 0 &&
-	    in_bytes > 1 &&
+	    in_nchars > 1 &&
 	    (in_ptr[0] == '#'/*  || isdigit(in_ptr[0]) */))
 	    /* SJM: 30/09/97. Don't allow numbers without a hash. I
 	       don't know why I put this in in the first place but
@@ -664,18 +664,18 @@ extern int sgml_translation(SGMLCTX *context, UCHARACTER *in_ptr, int in_bytes, 
 	    PRSDBG(("Trying to do numeric entity\n"));
 
 	    /* strip hash char */
-	    in_bytes--;
+	    in_nchars--;
 	    in_ptr++;
 
 	    base = 10;
-	    if (in_bytes > 0 && in_ptr[0] == 'x')
+	    if (in_nchars > 0 && in_ptr[0] == 'x')
 	    {
-		in_bytes--;
+		in_nchars--;
 		in_ptr++;
 		base = 16;
 	    }
 
-	    x = in_bytes >= 1 ? ustrtol(in_ptr, &end, base) : (end = in_ptr, -1);
+	    x = in_nchars >= 1 ? ustrtol(in_ptr, &end, base) : (end = in_ptr, -1);
 
 	    PRSDBG(("got entity '0x%lx' in %p end %p\n", x, in_ptr, end));
 
@@ -695,18 +695,18 @@ extern int sgml_translation(SGMLCTX *context, UCHARACTER *in_ptr, int in_bytes, 
 		x = convert_undefined_key_code((int)x);
 #endif
 		*out_ptr++ = (UCHARACTER) x;
-		out_bytes++;
+		out_nchars++;
 
-		in_bytes -= end - in_ptr;
+		in_nchars -= end - in_ptr;
 		in_ptr = end;
 
                 /* pdh: added this 'if' because &#163; was leaving the ;
                  * in titles
                  */
-		if (in_bytes > 0 && *in_ptr == ';')
+		if (in_nchars > 0 && *in_ptr == ';')
 		{
 		    in_ptr++;
-		    in_bytes--;
+		    in_nchars--;
 		}
 
 		used = TRUE;
@@ -716,22 +716,22 @@ extern int sgml_translation(SGMLCTX *context, UCHARACTER *in_ptr, int in_bytes, 
 	    if ( !used && (rules & SGMLTRANS_WARNINGS) != 0 )
 	    {
 		ds.ptr = in_ptr - 1;
-		ds.bytes = in_bytes;
+		ds.nchars = in_nchars;
 		sgml_note_message(context,
 				  "Unrecognised character entity (&entity;) name '%.*s'",
-				  min(MAXSTRING, in_bytes),
+				  min(MAXSTRING, in_nchars),
 				  usafe(ds));
 	    }
 #endif
 	}
 	else if (c == '&' && (rules & SGMLTRANS_AMPERSAND) != 0)
 	{
-	    if (in_bytes >= 1)
+	    if (in_nchars >= 1)
 	    {
 		/* This could, theoretically, touch characters beyond */
 		/* allocated space. This would require something that */
 		/* appeared to be an entity for ALL it's characters (ie */
-		/* no trailling ; or NULL bytes) and the very next bytes */
+		/* no trailling ; or NULL nchars) and the very next nchars */
 		/* was not valid memory. I think this is unlikely. */
 		/* Also relies upon there being no entity name that is */
 		/* also a stem for another entity name. */
@@ -788,7 +788,7 @@ extern int sgml_translation(SGMLCTX *context, UCHARACTER *in_ptr, int in_bytes, 
 		if (matchp != NULL)
 		{
 		    int len = strlen( matchp->name );
-		    BOOL semicolon = in_bytes > len && in_ptr[len] == ';';
+		    BOOL semicolon = in_nchars > len && in_ptr[len] == ';';
 
 		    if (semicolon || (rules & SGMLTRANS_STRICT) == 0)
 		    {
@@ -796,10 +796,10 @@ extern int sgml_translation(SGMLCTX *context, UCHARACTER *in_ptr, int in_bytes, 
 			    len++;
 
 			in_ptr += len;
-			in_bytes -= len;
+			in_nchars -= len;
 
 			*out_ptr++ = upper_case ? matchp->upper : matchp->lower;
-			out_bytes++;
+			out_nchars++;
 
 			used = TRUE;
 		    }
@@ -810,10 +810,10 @@ extern int sgml_translation(SGMLCTX *context, UCHARACTER *in_ptr, int in_bytes, 
 	    if (! used && (rules & SGMLTRANS_WARNINGS) != 0 )
 	    {
 		ds.ptr = in_ptr - 1;
-		ds.bytes = in_bytes;
+		ds.nchars = in_nchars;
 		sgml_note_message(context,
 				  "Unrecognised character entity (&entity;) name '%.*s'",
-				  min(MAXSTRING, in_bytes), usafe(ds));
+				  min(MAXSTRING, in_nchars), usafe(ds));
 	    }
 #endif
        	}
@@ -824,7 +824,7 @@ extern int sgml_translation(SGMLCTX *context, UCHARACTER *in_ptr, int in_bytes, 
 	    if (c != 0)
 	    {
 		*out_ptr++ = ' ';
-		out_bytes++;
+		out_nchars++;
 		used = TRUE;
 	    }
 	}
@@ -833,17 +833,17 @@ extern int sgml_translation(SGMLCTX *context, UCHARACTER *in_ptr, int in_bytes, 
 	if (! used)
 	{
 	    *out_ptr++ = c;
-	    out_bytes++;
+	    out_nchars++;
 	}
     }
 
 #if DEBUG
     ds.ptr = orig_ptr;
-    ds.bytes = out_bytes;
-    PRSDBGN(("sgml_translation() returns '%.*s', %d bytes\n", out_bytes, usafe(ds), out_bytes));
+    ds.nchars = out_nchars;
+    PRSDBGN(("sgml_translation() returns '%.*s', %d nchars\n", out_nchars, usafe(ds), out_nchars));
 #endif
     
-    return out_bytes;
+    return out_nchars;
 }
 
 extern void entity_recognition(SGMLCTX *context)

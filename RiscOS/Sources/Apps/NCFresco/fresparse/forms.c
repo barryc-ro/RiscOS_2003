@@ -413,7 +413,7 @@ extern void finishoption (SGMLCTX * context, ELEMENT * element)
         s = me->inhand_string;
 
         /* Expand the entities and strip newlines */
-/*       s.bytes = sgml_translation(context, s.ptr, s.bytes, SGMLTRANS_STRIP_NEWLINES | SGMLTRANS_HASH | SGMLTRANS_AMPERSAND | SGMLTRANS_STRIP_CTRL); */
+/*       s.nchars = sgml_translation(context, s.ptr, s.nchars, SGMLTRANS_STRIP_NEWLINES | SGMLTRANS_HASH | SGMLTRANS_AMPERSAND | SGMLTRANS_STRIP_CTRL); */
 
 	/* SJM: FIXME: check this still works, entity translation should have been done in state machine */
 	opt->text = stringdup(string_strip_space(s));
@@ -425,7 +425,7 @@ extern void finishoption (SGMLCTX * context, ELEMENT * element)
 
 	if ((me->rh->curstream->text_last->flag & rid_flag_WIDE_FONT) == 0)
 	{
-	    if (webfont_need_wide_font(s.ptr, s.bytes))
+	    if (webfont_need_wide_font(s.ptr, s.nchars))
 	    {
 		PRSDBG(("finishoption: wide\n"));
 		me->rh->curstream->text_last->flag |= rid_flag_WIDE_FONT;

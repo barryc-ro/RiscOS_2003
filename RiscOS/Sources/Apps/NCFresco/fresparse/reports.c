@@ -25,13 +25,13 @@ static STRING print(const char *fmt, va_list arg)
 {
 	STRING result;
 
-	result.bytes = MAXSTRING + 128;
-	result.ptr = mm_calloc(1, result.bytes);
+	result.nchars = MAXSTRING + 128;
+	result.ptr = mm_calloc(1, result.nchars);
 
 	vsprintf(result.ptr, fmt, arg);
 
-	result.bytes = strlen( (const char *) result.ptr) + 1;
-	result.ptr = mm_realloc(result.ptr, result.bytes);
+	result.nchars = strlen( (const char *) result.ptr) + 1;
+	result.ptr = mm_realloc(result.ptr, result.nchars);
 
 	return result;
 }
@@ -357,10 +357,10 @@ extern void my_sgml_note_unknown_element (SGMLCTX * context, const char *fmt, va
 	sprintf(buffer, "Line %d: ", context->line);
 
        	new_s = mm_calloc(1, sizeof(STRING_LIST));
-	new_s->string.bytes = strlen(buffer) + msg.bytes + 1;
-	new_s->string.ptr = mm_calloc(1, new_s->string.bytes);
+	new_s->string.nchars = strlen(buffer) + msg.nchars + 1;
+	new_s->string.ptr = mm_calloc(1, new_s->string.nchars);
 	strcpy(new_s->string.ptr, buffer);
-	strncat(new_s->string.ptr, msg.ptr, msg.bytes);
+	strncat(new_s->string.ptr, msg.ptr, msg.nchars);
 
 	new_s->prev = context->report.unknown_elements;
 	new_s->next = NULL;
@@ -379,10 +379,10 @@ extern void my_sgml_note_unknown_attribute (SGMLCTX * context, const char *fmt, 
 	sprintf(buffer, "Line %d: ", context->line);
 
        	new_s = mm_calloc(1, sizeof(STRING_LIST));
-	new_s->string.bytes = strlen(buffer) + msg.bytes + 1;
-	new_s->string.ptr = mm_calloc(1, new_s->string.bytes);
+	new_s->string.nchars = strlen(buffer) + msg.nchars + 1;
+	new_s->string.ptr = mm_calloc(1, new_s->string.nchars);
 	strcpy(new_s->string.ptr, buffer);
-	strncat(new_s->string.ptr, msg.ptr, msg.bytes);
+	strncat(new_s->string.ptr, msg.ptr, msg.nchars);
 
 	new_s->prev = context->report.unknown_attributes;
 	new_s->next = NULL;
@@ -401,10 +401,10 @@ extern void my_sgml_note_bad_attribute (SGMLCTX * context, const char *fmt, va_l
 	sprintf(buffer, "Line %d: ", context->line);
 
        	new_s = mm_calloc(1, sizeof(STRING_LIST));
-	new_s->string.bytes = strlen(buffer) + msg.bytes + 1;
-	new_s->string.ptr = mm_calloc(1, new_s->string.bytes);
+	new_s->string.nchars = strlen(buffer) + msg.nchars + 1;
+	new_s->string.ptr = mm_calloc(1, new_s->string.nchars);
 	strcpy(new_s->string.ptr, buffer);
-	strncat(new_s->string.ptr, msg.ptr, msg.bytes);
+	strncat(new_s->string.ptr, msg.ptr, msg.nchars);
 
 	new_s->prev = context->report.bad_attributes;
 	new_s->next = NULL;
@@ -423,10 +423,10 @@ extern void my_sgml_note_message(SGMLCTX * context, const char *fmt, va_list arg
 	sprintf(buffer, "Line %d: ", context->line);
 
        	new_s = mm_calloc(1, sizeof(STRING_LIST));
-	new_s->string.bytes = strlen(buffer) + msg.bytes + 1;
-	new_s->string.ptr = mm_calloc(1, new_s->string.bytes);
+	new_s->string.nchars = strlen(buffer) + msg.nchars + 1;
+	new_s->string.ptr = mm_calloc(1, new_s->string.nchars);
 	strcpy(new_s->string.ptr, buffer);
-	strncat(new_s->string.ptr, msg.ptr, msg.bytes);
+	strncat(new_s->string.ptr, msg.ptr, msg.nchars);
 
 	string_free(&msg);
 

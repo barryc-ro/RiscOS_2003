@@ -429,9 +429,9 @@ extern void finishscript (SGMLCTX * context, ELEMENT * element)
     generic_finish (context, element);
 
     PRSDBG(("finishscript(): Grabbed '%.*s' %d %p\n",
-	    htmlctx->inhand_string.bytes,
+	    htmlctx->inhand_string.nchars,
 	    htmlctx->inhand_string.ptr,
-	    htmlctx->inhand_string.bytes,
+	    htmlctx->inhand_string.nchars,
 	    htmlctx->inhand_string.ptr));
 
     string_free(&htmlctx->inhand_string);
@@ -485,7 +485,7 @@ extern void finishstyle (SGMLCTX * context, ELEMENT * element)
     generic_finish (context, element);
 
     PRSDBG(("Collected <STYLE> string is:\n'%.*s'\n",
-	    htmlctx->inhand_string.bytes,
+	    htmlctx->inhand_string.nchars,
 	    htmlctx->inhand_string.ptr));
 
     string_free(&htmlctx->inhand_string);
