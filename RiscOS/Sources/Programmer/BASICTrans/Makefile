@@ -76,16 +76,3 @@ ${EXP_HDR}.BASICTrans: hdr.BASICTrans
         ${CP} hdr.BASICTrans $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-rm.BASICTrans: Hdr:ListOpts
-rm.BASICTrans: Hdr:Macros
-rm.BASICTrans: Hdr:System
-rm.BASICTrans: Hdr:SWIs
-rm.BASICTrans: Hdr:CPU.Generic26
-rm.BASICTrans: Hdr:IO.GenericIO
-rm.BASICTrans: Hdr:RISCOS
-rm.BASICTrans: Hdr:ModHand
-rm.BASICTrans: Hdr:Services
-rm.BASICTrans: Hdr:Proc
-rm.BASICTrans: Hdr:FSNumbers
-rm.BASICTrans: Hdr:NewErrors
-rm.BASICTrans: Hdr:MsgTrans
