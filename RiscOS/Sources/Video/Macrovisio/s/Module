@@ -47,6 +47,7 @@
 ;                                switch in or out of caption mode. The various operations are now carried out on the VSync
 ;                                event, to hide glitches within the VBI if possible.
 ; 22-Jul-99  BJGA 0.28          Stopped Macrovision_CaptionControl returning ofla errors when Macrovision$RCV2* variables are unset.
+; 13-Mar-00  BJGA 0.29          Implemented NewColourScheme code - completely new PaletteV code for both video paths.
 ;
 
 	LEADR	Module_LoadAddr
@@ -112,13 +113,17 @@ BigFIFOs        SETL    {FALSE}
 		^	0, wp
 
 IICDataBlockPtr #	4		; debugging to store address of last compacted data block used
+ [ :LNOT: NewColourScheme ; we stay permanently on PaletteV now
 PaletteVClaimed	#	4		; 0 => PaletteV not claimed, 1 => PaletteV claimed
+ ]
  [ Captions
 EventVState	#	4		; vsync event handler state (0 => EventV not claimed)
  |
 EventVClaimed	#	4		; 0 => EventV not claimed, 1 => EventV claimed
  ]
+ [ :LNOT: NewColourScheme ; with a standard default palette, the standard default colours are fine as they are
 PaletteVCallbackRequested #	4	; non-zero => we have an outstanding callback to set the default colours
+ ]
 EventVCallbackRequested #	4	; non-zero => we have an outstanding callback to vary the AGC level
 
 VSyncCount	#	4		; number of vsyncs till next modulation
@@ -177,6 +182,29 @@ $label
                 #       FIFO_Size - ((:INDEX:@) :AND: (FIFO_Size-1))
 CaptionFIFO     #       FIFO_Size
 ExtDataFIFO     #       FIFO_Size
+ ]
+
+ [ NewColourScheme
+; Copies of important VDU variables
+
+ModeFlags       #       4
+NColour         #       4
+
+FlashState      #       4       ; flash state (1 or 2)
+
+; Look-up tables for managing palette in Macrovision video path
+; The 8 colours programmed into the DENC are derived from the gamma-corrected first-flash-state settings of logical colours 0-7
+
+ApparentPalette1 #      4*20    ; palette entry words (flash state 1, bit 7 supremacy) for 16 logical colours, border, 3 pointer colours
+ApparentPalette2 #      4*20    ; palette entry words (flash state 2, bit 7 supremacy) for 16 logical colours, border, 3 pointer colours
+HardwarePalette1 #      1*20    ; settings of ED[0:3] (flash state 1) for 16 logical colours, border, 3 pointer colours
+HardwarePalette2 #      1*20    ; settings of ED[0:3] (flash state 2) for 16 logical colours, border, 3 pointer colours
+        AlignSpace 256
+GammaTables     #       256*3
+
+BulkWriteBlock  #       4*256*2 ; up to 256 colours, up to 2 flash states
+
+PointerPalette  #       4*4     ; soft-copy of pointer palette in non-Macrovision path (offset 0 not used)
  ]
 
 Module_WorkspaceSize * :INDEX: @
@@ -308,13 +336,19 @@ Mod_Init Entry
       ]
 
         MOV     r0, #0
+      [ NewColourScheme
+        BL      ClaimPaletteV           ; stay on PaletteV all the time now
+      |
         STR     r0, PaletteVClaimed
+      ]
       [ Captions
 	STR	r0, EventVState
       |
 	STR	r0, EventVClaimed
       ]
+      [ :LNOT: NewColourScheme
 	STR	r0, PaletteVCallbackRequested
+      ]
 	STR	r0, EventVCallbackRequested
 	STRB	r0, SAA7183IICData	; zero sub-address
 
@@ -350,6 +384,23 @@ Mod_Init Entry
         STR     r0, ExtDataFIFO + FIFO_ReadPtr
         STR     r0, ExtDataFIFO + FIFO_WritePtr
       ]
+ ]
+
+ [ NewColourScheme
+        ; Initialise gamma-correction tables to a 1:1 mapping
+        ADR     r2, GammaTables
+        MOV     r0, #0
+05
+        STRB    r0, [r2, #&200]                 ; store in blue table
+        STRB    r0, [r2, #&100]                 ; store in green table
+        STRB    r0, [r2], #1                    ; store in red table, and advance
+        ADD     r0, r0, #1
+        CMP     r0, #256
+        BCC     %BT05
+
+        ; Initialise FlashState (we have no way to read the current state, so we just have to guess!)
+        MOV     r0, #1
+        STR     r0, FlashState
  ]
 
  [ ReadVarsForRCV2Timing
@@ -659,9 +710,14 @@ Mod_Die Entry
 
 ; insert anything we need here!
 
+      [ NewColourScheme
+        BL      ReleaseEventV           ; doesn't matter if we're not actually on it at the moment
+        BL      ReleasePaletteV
+      |
 	LDR	r0, PaletteVClaimed
 	TEQ	r0, #0
 	BNE	%FT90			; [on vectors, so must be in Macrovision mode, so not safe to die]
+      ]
 
 ; safe to die
 
@@ -716,7 +772,9 @@ Mod_Service ROUT
 ; in:	r2 = mode number
 
 svc_ModeChanging Entry "r0,r1"
+      [ :LNOT: NewColourScheme
         BL      ReleasePaletteV
+      ]
       [ :LNOT: Captions
 	BL	ReleaseEventV
       ]
@@ -725,8 +783,10 @@ svc_ModeChanging Entry "r0,r1"
  [ ProvideSWI
 	LDR	r0, PendingMacroType
 	LDR	r1, PendingTVStandard
+      [ :LNOT: NewColourScheme
 	TEQ	r0, #0
 	BLNE	ClaimPaletteV		; is macrovision video path, so claim PaletteV
+      ]
 	BL	SelectVideoPath		; select appropriate video path
  |
 	BL	CheckMacroMode
@@ -780,32 +840,40 @@ svc_Standby
 
 
 ClaimPaletteV Entry "r0-r2"
+      [ :LNOT: NewColourScheme
         LDR     r0, PaletteVClaimed
         TEQ     r0, #0
         EXITS   NE
+      ]
 
 	MOV	r0, #PaletteV
 	ADR	r1, MyPaletteV
 	MOV	r2, wp
 	SWI	XOS_Claim
+      [ :LNOT: NewColourScheme
 	EXITS	VS
 
         MOV     r0, #1
         STR     r0, PaletteVClaimed
+      ]
         EXITS
 
 ReleasePaletteV Entry "r0-r2"
+      [ :LNOT: NewColourScheme
         LDR     r0, PaletteVClaimed
         TEQ     r0, #0
         EXITS   EQ
+      ]
 
 	MOV	r0, #PaletteV
 	ADR	r1, MyPaletteV
 	MOV	r2, wp
 	SWI	XOS_Release
 
+      [ :LNOT: NewColourScheme
         MOV     r0, #0
         STR     r0, PaletteVClaimed
+      ]
         EXITS
 
       [ Captions
@@ -1093,6 +1161,7 @@ printdebug
 ; Assumes that noone is trying to generate any more of them!
 
 RemoveCallbacks Entry "r0-r2"
+      [ :LNOT: NewColourScheme
 	LDR	r0, PaletteVCallbackRequested
 	TEQ	r0, #0
 	BEQ	%FT10
@@ -1103,6 +1172,7 @@ RemoveCallbacks Entry "r0-r2"
 	MOV	r1, wp
 	SWI	XOS_RemoveCallBack
 10
+      ]
 	LDR	r0, EventVCallbackRequested
 	TEQ	r0, #0
 	BEQ	%FT20
@@ -1227,28 +1297,1060 @@ MyPaletteV ENTRY "r0-r3"
 	DREG	r4, "PaletteV reason "
 10
  ]
-        CMP     r4, #1
-        EXITS   CC
-        BEQ     PV_ReadPalette
-        CMP     r4, #3
-        BCC     PV_SetPalette
-        BEQ     PV_1stFlashState
-        CMP     r4, #5
-        BCC     PV_2ndFlashState
-        BEQ     PV_SetDefaultPalette
-        CMP     r4, #7
-        BCC     PV_BlankUnblank
-	BEQ	PV_BulkRead
-	B	PassOnExit
+      [ NewColourScheme
+        STR     lr, [sp, #-8]!
+        LDR     lr, MacroType
+        TEQ     lr, #1
+        TEQNE   lr, #2
+        ADREQ   lr, Path1PVTable
+        ADRNE   lr, Path2PVTable
+        CMP     r4, #paletteV_GammaCorrection
+        ADDLS   lr, lr, r4, LSL#2
+        STR     lr, [sp, #4]
+        Pull    "lr, pc"        ; restore entry lr, and branch into jump table
+
+Path2PVTable
+        B       PassOnExit
+        B       PV_ReadPalette
+        B       PV_SetPalette
+        B       PassOnExit
+        B       PassOnExit
+        B       PV_SetDefaultPalette
+        B       PassOnExit
+        B       PV_BulkRead
+        B       PV_BulkWrite
+        B       PassOnExit
+
+Path1PVTable
+        B       ClaimExit_NotSupported
+        B       PV_ReadPalette_Macro
+        B       PV_SetPalette_Macro
+        B       PV_1stFlashState_Macro
+        B       PV_2ndFlashState_Macro
+        B       PV_SetDefaultPalette_Macro
+        B       PV_BlankUnblank_Macro
+        B       PV_BulkRead_Macro
+        B       PV_BulkWrite_Macro
+        B       PV_GammaCorrect_Macro
+
+      |
+        CMP     r4, #paletteV_Read
+        BCC     PassOnExit                      ; paletteV_Complete
+        BEQ     PV_ReadPalette                  ; paletteV_Read
+        CMP     r4, #paletteV_1stFlashState
+        BCC     PV_SetPalette                   ; paletteV_Set
+        BEQ     PV_1stFlashState                ; paletteV_1stFlashState
+        CMP     r4, #paletteV_SetDefaultPalette
+        BCC     PV_2ndFlashState                ; paletteV_2ndFlashState
+        BEQ     PV_SetDefaultPalette            ; paletteV_SetDefaultPalette
+        CMP     r4, #paletteV_BulkRead
+        BCC     PV_BlankUnblank                 ; paletteV_BlankScreen
+	BEQ	PV_BulkRead                     ; paletteV_BulkRead
+	B	ClaimExit_NotSupported
 
 PV_1stFlashState
 PV_2ndFlashState
 PV_BlankUnblank
-ClaimExit
-        MOV     r4, #0
-PassOnExit
+      ]
+ClaimExit_Supported
+        MOV     r4, #paletteV_Complete
+ClaimExit_NotSupported
         PullEnv
         Pull    pc
+PassOnExit
+        EXIT
+
+
+ [ NewColourScheme
+
+GetVduVariables
+; Fills in ModeFlags and NColour
+        Entry   "r0-r2"
+        MOV     r0, #0                  ; vdu variable ModeFlags
+        MOV     r1, #3                  ; vdu variable NColour
+        MOV     r2, #-1                 ; terminator
+        Push    "r0-r2"                 ; create 3-word input block
+        MOV     r0, sp
+        ADR     r1, ModeFlags
+        SWI     XOS_ReadVduVariables
+        ADD     sp, sp, #4*3
+        EXIT
+
+
+; ####################
+; NON-MACROVISION PATH
+; ####################
+
+; *****************************************************************************
+;
+;       PV_ReadPalette - PaletteV read palette handler
+;
+; in:   R0 = logical colour
+;       R1 = 16/17/18 (read normal colour, both flash states returned in each case)
+;            24 (read border colour)
+;            25 (read cursor colour)
+;       R4 = 1 (PaletteV reason code)
+;
+; out:  R0-R3 may be corrupted
+;       R2 (stacked) = first flash setting   (BBGGRRTT)
+;       R3 (stacked) = second flash setting  (BBGGRRTT)
+;
+
+PV_ReadPalette ROUT
+        Push    "r10-r12"
+
+        ; Special case pointer colours: read them from our cache
+        TEQ     r1, #25
+        BNE     %FT20
+        ADR     r2, PointerPalette
+        LDR     r2, [r2, r0, LSL#2]
+        MOV     r3, r2
+        B       %FT70
+
+20      ; The kernel PaletteV ReadPalette handler doesn't return most of the supremacy bits,
+        ; but its BulkRead handler returns all four - so we convert all ReadPalette calls
+        ; to BulkRead calls at this point. (The kernel bug is fixed in STB-400.)
+        STR     r0, [sp, #-12]!
+        MOV     r0, sp
+        MOV     r1, #(16 :SHL: 24) :OR: 1
+        ADD     r2, sp, #4
+        ADD     r3, sp, #8
+        MOV     r4, #paletteV_BulkRead
+
+        ; Push a return address (PC + 12) onto the stack for actual claimant to return to
+        STR     pc, [sp, #-4]!
+
+        ; Having altered the stack, jump to the return address for passing on the call
+        MOV     pc, lr
+
+        NOP
+
+        ; Get returned colours into r2 and r3, as though ReadPalette reason code had been used
+        ADD     sp, sp, #4
+        Pull    "r2,r3"
+
+        ; Palette should now have been read; if it hasn't, then don't tamper with exit r2 or r3
+        TEQ     r4, #paletteV_Complete
+        BNE     %FT99
+
+        ; Convert supremacy bits from hardware form to preferred form
+        TST     r2, #&10
+        BIC     r2, r2, #&FF            ; bits 0-7 clear for solid
+        ORRNE   r2, r2, #&FF            ; bits 0-7 set for transparent
+        TST     r3, #&10
+        BIC     r3, r3, #&FF            ; bits 0-7 clear for solid
+        ORRNE   r3, r3, #&FF            ; bits 0-7 set for transparent
+
+70      ; Set up stacked r2,r3
+        STR     r2, [sp, #4*3 + 8]
+        STR     r3, [sp, #4*3 + 12]
+
+        ; Restore r10-r12 to the values they had originally, and jump to the return
+        ; address supplied for claiming the call
+        Pull    "r10-r12"
+        B       ClaimExit_Supported
+
+99      ; Jumps here if there was any sort of error: claims vector, but doesn't mark
+        ; operation as having been completed
+        Pull    "r10-r12"
+        CLRV
+        MOV     r4, #paletteV_Read
+        B       ClaimExit_NotSupported
+
+; *****************************************************************************
+;
+;       PV_SetPalette - PaletteV set palette handler
+;
+; in:   R0 = logical colour
+;       R1 = colour type (16,17,18,24,25)
+;       R2 = BBGGRRTT
+;     ( R3 not used, PRM 1-104 is wrong)
+;       R4 = 2 (PaletteV reason code)
+;
+; out:  R0-R3 may be corrupted
+;
+
+PV_SetPalette ROUT
+        Push    "r10-r12"
+
+        ; Need to keep a soft copy of the pointer palette - the kernel can't be relied upon
+        ; because (a) single reads corrupt supremacy bits, and (b) bulk read can't be used for
+        ; pointer colour 2 in 1bpp screen modes. Both bugs are fixed for STB-400.
+        TEQ     r1, #25
+        BNE     %FT10
+        AND     r0, r0, #3              ; just in case
+        ADR     r3, PointerPalette
+        ADD     r3, r3, r0, LSL#2
+        TST     r2, #&FF                ; if any of bits 0-7 in r2 are set,
+        ORRNE   r2, r2, #&FF            ; set all of them (mirrors effect of writing then reading palette entry)
+        STR     r2, [r3]
+
+10      ; Convert supremacy bits as per hardware requirement
+        TST     r2, #&FF
+        BIC     r2, r2, #&FF            ; all ED lines low for solid
+        ORRNE   r2, r2, #&10            ; ED[0] (only) high for transparent
+
+        ; Push a return address (PC + 12) onto the stack for actual claimant to return to
+        STR     pc, [sp, #-4]!
+
+        ; Having altered the stack, jump to the return address for passing on the call
+        MOV     pc, lr
+
+        NOP
+
+        ; Palette should now have been set; restore r10-r12 to the values they had
+        ; originally, and jump to the return address supplied for claiming the call
+        Pull    "r10-r12"
+        B       ClaimExit_Supported
+
+; *****************************************************************************
+;
+;	PV_BulkRead - PaletteV call to read section of palette
+;
+; in:	R0 = pointer to word aligned list of logical colours (words), or 0
+;	R1 = type (bits 24..31) and number of colours (bits 0..23)
+;	R2 = pointer to block for 1st flash state
+;	R3 = pointer to block for 2nd flash state (or 0 for put both at R2)
+;	R4 = 7 (PaletteV reason code)
+;
+; out:  R0-R3 may be corrupted
+;
+
+PV_BulkRead ROUT
+        Push    "r7,r8,r10-r12"
+        MOV     r7, r1, LSR #24
+        BIC     r8, r1, #&FF000000
+
+        ; Special case pointer colours: read them from our cache
+        TEQ     r7, #25
+        BNE     %FT50
+; r0 -> list of colours, or 0
+; r1 = loop counter
+; r2 -> first block
+; r3 -> second block, or 0
+; r4 -> soft copy of pointer palette
+; r7 = colour number
+; r8 = number of entries
+; lr = palette entry
+        MOV     r1, #0
+        ADR     r4, PointerPalette
+01      TEQ     r1, r8
+        BEQ     %FT99
+        TEQ     r0, #0                  ; get next colour number
+        MOVEQ   r7, r1
+        LDRNE   r7, [r0], #4
+        AND     r7, r7, #3              ; just in case
+        LDR     lr, [r4, r7, LSL#2]     ; get palette entry
+        STR     lr, [r2], #4            ; store in first block
+        TEQ     r3, #0                  ; store second copy (stupid API!)
+        STRNE   lr, [r3], #4            ;   in second block
+        STREQ   lr, [r2], #4            ;   or in same block if no second block specified
+        ADD     r1, r1, #1
+        B       %BT01
+
+        ; Push a return address (PC + 12) onto the stack for actual claimant to return to
+50      STR     pc, [sp, #-4]!
+
+        ; Having altered the stack, jump to the return address for passing on the call
+        MOV     pc, lr
+
+        NOP
+
+        ; Palette should now have been read; if it hasn't, then don't tamper with buffers
+        TEQ     r4, #paletteV_Complete
+        BNE     %FT99
+
+        MOV     r10, #0
+60
+        TEQ     r7, #18                 ; do we need to fix the first flash colour?
+        BEQ     %FT70
+        LDR     r1, [r2]
+        TST     r1, #&10
+        BIC     r1, r1, #&FF            ; bits 0-7 clear for solid
+        ORRNE   r1, r1, #&FF            ; bits 0-7 set for transparent
+        STR     r1, [r2], #4
+70
+        TEQ     r7, #17                 ; do we need to fix the second flash colour?
+        BEQ     %FT80
+        TEQ     r7, #16
+        TEQNE   r7, #24
+        TEQNE   r7, #25
+        TEQEQ   r3, #0
+        LDRNE   r1, [r3]
+        LDREQ   r1, [r2]
+        TST     r1, #&10
+        BIC     r1, r1, #&FF            ; bits 0-7 clear for solid
+        ORRNE   r1, r1, #&FF            ; bits 0-7 set for transparent
+        TEQ     r7, #16
+        TEQNE   r7, #24
+        TEQNE   r7, #25
+        TEQEQ   r3, #0
+        STRNE   r1, [r3], #4
+        STREQ   r1, [r2], #4
+80
+        ADD     r10, r10, #1
+        CMP     r10, r8
+        BCC     %BT60
+
+99      ; Restore r7,r8,r10-r12 to the values they had originally, and jump to the
+        ; return address supplied for claiming the call
+        Pull    "r7,r8,r10-r12"
+        B       ClaimExit_Supported
+
+; *****************************************************************************
+
+;       PV_BulkWrite - PaletteV call to set palette in bulk
+; in:   R0 => list of colours, or 0
+;       R1 =  colour type (16,17,18,24,25) in b24-31 & number to do in b23-b00
+;       R2 => list of palette entries (both flash states if 16, one if 17/18/24/25)
+;       R4 = 8 (PaletteV reason code)
+;
+; out:  R0-R3 may be corrupted
+;
+
+PV_BulkWrite ROUT
+        Push    "r5-r6,r10-r12"
+
+        ; Create another palette block, but with supremacy bits as per hardware requirement
+        MOV     r3, r1, LSR #24
+        BIC     r5, r1, #&FF000000
+        CMP     r5, #256                ; refuse to do more than 256 palette entries
+        MOVGT   r5, #256                ;   (that's all we've got space for)
+        ORR     r1, r5, r3, LSL #24     ; recreate a suitable r1
+        TEQ     r3, #16                 ; are there are two entries for each colour?
+        MOVEQ   r5, r5, LSL #1          ; multiply by two if necessary
+        Push    "lr"
+        TEQ     r3, #25                 ; if it's a pointer colour bulk-write,
+        BLEQ    copy_pointer_palette    ;   cache the details
+        Pull    "lr"
+        MOV     r3, r2                  ; we need the original block to copy from
+        ADR     r2, BulkWriteBlock      ; point r2 at 2K of workspace
+        MOV     r6, r2                  ; initialise roving pointer into our block
+
+        ; Register usage:
+        ; r2 -> our block
+        ; r3 -> original block
+        ; r5  = palette entry counter
+        ; r6 -> our block
+        ; r12 = scratch register
+10      LDR     r12, [r3], #4
+        TST     r12, #&FF
+        BIC     r12, r12, #&FF          ; all ED lines low for solid
+        ORRNE   r12, r12, #&10          ; ED[0] (only) high for transparent
+        STR     r12, [r6], #4
+        SUBS    r5, r5, #1
+        BNE     %BT10
+
+        ; Push a return address (PC + 12) onto the stack for actual claimant to return to
+        STR     pc, [sp, #-4]!
+
+        ; Having altered the stack, jump to the return address for passing on the call
+        MOV     pc, lr
+
+        NOP
+
+        ; Palette should now have been set; restore r5-r6,r10-r12 to the values
+        ; they had originally and jump to the return address supplied for claiming the call
+        Pull    "r5-r6,r10-r12"
+        B       ClaimExit_Supported
+
+copy_pointer_palette
+; in:   r0 -> list of colours, or 0
+;       r2 -> list of palette entries
+;       r5 = number of entries
+; used: r1 = loop counter
+;       r3 = colour number
+;       r4 -> soft copy of pointer palette
+;       lr = palette entry
+; out:  all registers preserved
+        Entry   "r0-r4"
+        MOV     r1, #0
+        ADR     r4, PointerPalette
+01      TEQ     r1, r5
+        EXIT    EQ
+        TEQ     r0, #0          ; get next colour number
+        MOVEQ   r3, r1
+        LDRNE   r3, [r0], #4
+        LDR     lr, [r2], #4    ; get next palette entry
+        TST     lr, #&FF        ; if any of bits 0-7 are set,
+        ORRNE   lr, lr, #&FF    ; set all of them
+        AND     r3, r3, #3      ; just in case
+        STR     lr, [r4, r3, LSL#2]
+        ADD     r1, r1, #1
+        B       %BT01
+
+; *****************************************************************************
+;
+;       PV_SetDefaultPalette - PaletteV call to set default palette
+;
+; in:   R4 = 5 (PaletteV reason code)
+;
+; out:  R0-R3 may be corrupted
+;
+
+PV_SetDefaultPalette ROUT
+        Push    "r10-r12"
+
+        ; Push a return address (PC + 12) onto the stack for actual claimant to return to
+        STR     pc, [sp, #-4]!
+
+        ; Having altered the stack, jump to the return address for passing on the call
+        MOV     pc, lr
+
+        NOP
+
+        ; Palette should now have been set to default; if it hasn't, then don't dontinue with next stage
+        TEQ     r4, #paletteV_Complete
+        BNE     %FT99
+
+        LDMIA   sp, {r10-r12}           ; restore vector environment
+        BL      GetVduVariables         ; fill in ModeFlags
+
+        LDR     r0, ModeFlags
+        TST     r0, #2                  ; bit 1 is Teletext mode flag
+        BEQ     %FT98                   ; for all modes other than 7, we've already finished
+
+        ; We've redefined the default palette for MODE 7 from STB-400 onwards to be fully solid -
+        ; the next bit of code is sufficient to achieve the same effect on earlier STBs
+
+        MOV     r0, #0
+        MOV     r1, #16 :SHL: 24        ; set both flash states together
+        ORR     r1, r1, #16             ; set all 16 palette entries
+        ADRL    r2, defaultpal_special
+        MOV     r4, #paletteV_BulkWrite
+
+        STR     pc, [sp, #-4]!          ; push claimant return address onto stack
+        LDR     pc, [sp, #4*8]          ; goto pass-on (skip pc,r10-r12,r0-r3)
+        NOP
+
+        TEQ     r4, #paletteV_Complete  ; BulkWrite successful?
+        BNE     %FT99
+
+98      ; Restore r10-r12 to the values they had originally, and jump to the return
+        ; address supplied for claiming the call
+        Pull    "r10-r12"
+        B       ClaimExit_Supported
+
+99      ; Jumps here if there was any sort of error: claims vector, but doesn't mark
+        ; operation as having been completed
+        Pull    "r10-r12"
+        CLRV
+        MOV     r4, #paletteV_SetDefaultPalette
+        B       ClaimExit_NotSupported
+
+
+
+; ################
+; MACROVISION PATH
+; ################
+
+; *****************************************************************************
+;
+;       PV_ReadPalette - PaletteV read palette handler
+;
+; in:   R0 = logical colour
+;       R1 = 16/17/18 (read normal colour, both flash states returned in each case)
+;            24 (read border colour)
+;            25 (read cursor colour)
+;       R4 = 1 (PaletteV reason code)
+;
+; out:  R0-R3 may be corrupted
+;       R2 (stacked) = first flash setting   (BBGGRRTT)
+;       R3 (stacked) = second flash setting  (BBGGRRTT)
+;
+
+PV_ReadPalette_Macro ROUT
+        BL      GetVduVariables
+        LDR     lr, NColour
+
+        AND     r2, r0, lr              ; restrict logical colour to appropriate range
+        AND     r2, r2, #15             ; and in any case, to the range 0-15
+
+        TEQ     r1, #24                 ; or if requesting border colour
+        MOVEQ   r2, #16                 ; use index 16
+
+        TEQ     r1, #25                 ; or if requesting pointer colour
+        ANDEQ   r2, r0, #3
+        ADDEQ   r2, r2, #16             ; use index 17-19 as appropriate
+
+        ADR     lr, ApparentPalette2    ; load settings from our copy of the palette
+        LDR     r3, [lr, r2, LSL#2]
+        ADR     lr, ApparentPalette1
+        LDR     r2, [lr, r2, LSL#2]
+
+        STMIA   sp, {r0-r3}             ; write over stack
+
+        B       ClaimExit_Supported
+
+; *****************************************************************************
+;
+;       PV_SetPalette - PaletteV set palette handler
+;
+; in:   R0 = logical colour
+;       R1 = colour type (16,17,18,24,25)
+;       R2 = BBGGRRTT
+;     ( R3 not used, PRM 1-104 is wrong)
+;       R4 = 2 (PaletteV reason code)
+;
+; out:  R0-R3 may be corrupted
+;
+
+PV_SetPalette_Macro ROUT
+        ; Get the VDU variables we'll need later
+        BL      GetVduVariables
+
+        ; Now see which type of colour we're updating
+        TEQ     r1, #16                 ; if 16 then set both colours
+        MOVEQ   r1, #3
+        BEQ     Call_UpdateNormalColour
+
+        TEQ     r1, #17                 ; elif 17 then set 1st colour
+        MOVEQ   r1, #1
+        BEQ     Call_UpdateNormalColour
+
+        TEQ     r1, #18                 ; elif 18 then set 2nd colour
+        MOVEQ   r1, #2
+        BEQ     Call_UpdateNormalColour
+
+        TEQ     r1, #24                 ; elif 24 then border colour
+        BEQ     Call_UpdateBorderColour
+
+        TEQ     r1, #25                 ; elif 25 then pointer colour
+        BEQ     Call_UpdatePointerColour
+
+        B       ClaimExit_NotSupported
+
+Call_UpdateNormalColour
+        BL      UpdateNormalColour
+        BL      CalculateHardwarePalette
+        BL      ApplyHardwarePalette
+        BL      SetDENCPalette
+        B       ClaimExit_Supported
+
+Call_UpdateBorderColour
+        BL      UpdateBorderColour
+        BL      CalculateHardwarePalette
+        BL      ApplyHardwarePalette
+        B       ClaimExit_Supported
+
+Call_UpdatePointerColour
+        BL      UpdatePointerColour
+        BL      CalculateHardwarePalette
+        BL      ApplyHardwarePalette
+        B       ClaimExit_Supported
+
+UpdateNormalColour
+        Entry
+        LDR     lr, NColour
+        AND     r0, r0, lr              ; restrict logical colour to appropriate range
+        AND     r0, r0, #15             ; and in any case, to the range 0-15
+        BL      UpdateColour
+        EXIT
+
+UpdateBorderColour
+        Entry
+        MOV     r0, #16                 ; border is 16th position in our tables
+        MOV     r1, #3                  ; always set both flash states the same
+        BL      UpdateColour
+; In modes 3 and 6, colour 2 matches the border, and colour 3 is its inverse
+        LDR     lr, ModeFlags
+        TST     lr, #8                  ; bit 3 is BBC gap mode flag
+        EXIT    EQ
+        MOV     r0, #2
+        BL      UpdateColour
+        MOV     r0, #3
+        MVN     r2, r2                  ; invert bits 8-31 only
+        EOR     r2, r2, #&FF            ;
+        BL      UpdateColour
+        EXIT
+
+UpdatePointerColour
+        Entry
+        ANDS    r0, r0, #3
+        EXIT    EQ                      ; pointer colour 0 can't be changed
+        ADD     r0, r0, #16             ; pointer colours are indices 17-19 in our tables
+        MOV     r1, #3                  ; always set both flash states the same
+        BL      UpdateColour
+        EXIT
+
+UpdateColour
+; r1 bit 0 => set first flash colour, r1 bit 1 => set second flash colour
+        Entry
+        ; Convert to preferred supremacy form
+        TST     r2, #&FF
+        BIC     r2, r2, #&FF
+        ORRNE   r2, r2, #&FF
+        ; Store in one or both flash-state tables
+        TST     r1, #1
+        ADRNE   lr, ApparentPalette1
+        STRNE   r2, [lr, r0, LSL#2]
+        TST     r1, #2
+        ADRNE   lr, ApparentPalette2
+        STRNE   r2, [lr, r0, LSL#2]
+        EXIT
+
+CalculateHardwarePalette
+; Recalculates HardwarePalette1 and HardwarePalette2
+        Entry   "r4-r11"                        ; r5-r11 are corrupted by best_colour
+        ADR     r0, ApparentPalette1            ; r0,r1 are required by best_colour:
+        ADD     r1, r0, #4*8                    ;   everything has to be matched to to one of the first 8 first-flash logical colours
+        MOV     r3, #0                          ; colour index, ranges 0-39 (colours 0-19 in each list are adjacent in memory)
+        ADR     r4, HardwarePalette1
+01      LDR     r2, [r0, r3, LSL#2]             ; get ApparentPalette entry
+        TST     r2, #&FF                        ; if transparent
+        MOVNE   r2, #1:SHL:3                    ; then "set" ED[3] bit
+        BLEQ    best_colour                     ; else find index into 8-colour palette (which will have bit 3 clear)
+        EOR     r2, r2, #1:SHL:3                ; invert ED[3] setting in either case, to suit hardware requirement
+        STRB    r2, [r4, r3]                    ; write HardwarePalette entry
+        ADD     r3, r3, #1
+        CMP     r3, #40
+        BCC     %BT01
+        EXIT
+
+ApplyHardwarePalette
+; Applies the appropriate ED palette for the current flash state
+        Entry
+        LDR     lr, FlashState
+        TEQ     lr, #1
+        ADREQ   r3, HardwarePalette1
+        ADRNE   r3, HardwarePalette2
+        MOV     r0, #0
+        MOV     lr, #VIDC
+        MOV     r1, #&10000000
+        STR     r1, [lr]                        ; initialise VIDC palette index to 0
+02      LDRB    r1, [r3, r0]                    ; read HardwarePalette entry
+        CMP     r0, #16                         ; if border or pointer colour
+        ORRCS   r1, r1, #&40                    ;   then use VIDC address 4-7 instead of 0
+        ORRCS   r1, r1, r0, LSL#4
+        MOV     r1, r1, LSL#24                  ; shift up to top byte (leave RGB as all zero)
+        STR     r1, [lr]
+        ADD     r0, r0, #1
+        CMP     r0, #20
+        BCC     %BT02
+        EXIT
+
+SetDENCPalette
+; Sets the DENC overlay colours to the first flash states of the first 8 logical colours
+        Entry   "r4"
+        MOV     r0, #0                           ; index into palette
+        ADR     r1, ApparentPalette1
+01      LDR     r2, [r1, r0, LSL#2]              ; get BBGGRRTT
+        ADR     lr, GammaTables
+        AND     r4, r2, #&0000FF00               ; r4 = 0000RR00
+        LDRB    r4, [lr, r4, LSR#8]
+        MOV     r3, r4, LSL#8                    ; r3 = gamma (0000RR00)
+        ADD     lr, lr, #256
+        AND     r4, r2, #&00FF0000               ; r4 = 00GG0000
+        LDRB    r4, [lr, r4, LSR#16]
+        ORR     r3, r3, r4, LSL#16               ; r3 = gamma (00GGRR00)
+        ADD     lr, lr, #256
+        AND     r4, r2, #&FF000000               ; r4 = BB000000
+        LDRB    r4, [lr, r4, LSR#24]
+        ORR     r2, r3, r4, LSL#24               ; r2 = gamma (BBGGRR00)
+        BL      RGBToYUV                         ; in: r2 = BBGGRR00; out: r2 = 00VVUUYY
+        MOV     lr, #3                           ; 3 bytes per palette entry
+        MOV     r3, #SubAddress_OVL_LUT_Y0
+        MLA     r3, r0, lr, r3                   ; index for Y component = OVL_LUT_Y0 + (index * 3)
+        ADR     lr, SAA7183IICMap
+        STRB    r2, [lr, r3]!                    ; store new Y component
+        MOV     r2, r2, LSR #8
+        STRB    r2, [lr, #1]                     ; store new U component
+        MOV     r2, r2, LSR #8
+        STRB    r2, [lr, #2]                     ; store new V component
+        ADD     r0, r0, #1
+        CMP     r0, #8
+        BCC     %BT01
+        BL      TransmitSAA7183Data
+        EXIT
+
+; The following snippets of code are pinched from ColourTrans, where they are documented more fully.
+
+; -------- Start of ColourTrans code --------
+
+        MACRO
+$label  CompErr $error, $col, $red, $green, $blue, $rload, $gload, $bload, $temp1, $temp2
+
+$label  SUBS    $temp2, $blue, $col, LSR #24
+        RSBLT   $temp2, $temp2, #0
+        MUL     $temp1, $temp2, $temp2
+        MUL     $error, $temp1, $bload       ; loading will be small
+        ; $error contains blue term
+        AND     $temp1, $col, #&FF0000       ; green component, still shifted
+        SUBS    $temp2, $green, $temp1, LSR #16
+        RSBLT   $temp2, $temp2, #0           ; |green error|
+        MUL     $temp1, $temp2, $temp2
+        MLA     $error, $temp1, $gload, $error
+        ; $error contains blue+green
+        AND     $temp1, $col, #&FF00         ; red component, still shifted
+        SUBS    $temp2, $red, $temp1, LSR #8
+        RSBLT   $temp2, $temp2, #0           ; |red error|
+        MUL     $temp1, $temp2, $temp2
+        MLA     $error, $temp1, $rload, $error
+        MEND
+
+        MACRO
+$label  FindCol  $test, $list, $listend, $srccol, $load, $error, $red, $green, $blue, $rload, $gload, $bload, $col, $temp1, $temp2
+
+        ; First extract the packed colour and load
+$label  MOV      $blue, #255
+        AND      $green, $blue, $srccol, LSR #16
+        AND      $gload, $blue, $load, LSR #16
+        AND      $red, $blue, $srccol, LSR #8
+        AND      $rload, $blue, $load, LSR #8
+        MOV      $blue, $srccol, LSR #24
+        MOV      $bload, $load, LSR #24
+        ;
+        ; Loop round from the top of the table down
+00      LDR      $col, [$listend, #-4]!
+        CompErr  $load, $col, $red, $green, $blue, $rload, $gload, $bload, $temp1, $temp2
+        CMP      $load, $error
+        MOV$test $error, $load
+        SUB$test $srccol, $listend, $list             ; index * 4
+        CMP      $listend, $list
+        BHI      %BT00
+        MOV      $srccol, $srccol, LSR #2
+        MEND
+
+; -------- End of ColourTrans code --------
+
+best_colour
+;    R0  colour table start          PRESERVED
+;    R1  colour table end +4         PRESERVED
+;    R2  colour to check (BBGGRRxx)  IN
+;        index of colour in table    OUT
+;    R5-R11                          TRASHED
+;    LR  return address              IN
+;        used as a temporary         TRASHED
+        Entry   "r1,r3,r4,r12"
+        LDR     r3, =DefaultErrorLoading
+        MOV     r4, #&FFFFFFFF                  ; initial error
+        FindCol LS,r0,r1,r2,r3,r4,r5,r6,r7,r8,r9,r10,r11,r12,r14
+        EXIT
+
+DefaultErrorLoading     * &01040200
+        LTORG
+
+; *****************************************************************************
+;
+;       PV_1stFlashState - PaletteV routine to set first flash state
+;
+; in:   R4 = 3 (PaletteV reason code)
+;
+; out:  R0-R3 may be corrupted
+;
+
+PV_1stFlashState_Macro ROUT
+        MOV     r0, #1
+        STR     r0, FlashState
+        BL      ApplyHardwarePalette
+        B       ClaimExit_Supported
+
+; *****************************************************************************
+;
+;       PV_2ndFlashState - PaletteV routine to set second flash state
+;
+; in:   R4 = 4 (PaletteV reason code)
+;
+; out:  R0-R3 may be corrupted
+;
+
+PV_2ndFlashState_Macro ROUT
+        MOV     r0, #2
+        STR     r0, FlashState
+        BL      ApplyHardwarePalette
+        B       ClaimExit_Supported
+
+; *****************************************************************************
+;
+;       PV_SetDefaultPalette - PaletteV call to set default palette
+;
+; in:   R4 = 5 (PaletteV reason code)
+;
+; out:  R0-R3 may be corrupted
+;
+
+PV_SetDefaultPalette_Macro ROUT
+        BL      GetVduVariables
+
+        LDR     lr, NColour
+        CMP     lr, #15
+        TEQCC   lr, lr                  ; now NE => 256 or more colours
+        LDREQ   r0, ModeFlags
+        TSTEQ   r0, #2                  ; bit 1 is Teletext mode flag
+        ADRNE   r0, defaultpal_special  ; in teletext or >= 256-colour modes, we have 8 repeated non-flashing colours
+        MOVNE   lr, #15                 ; but only do 16 palette entries in >= 256-colour modes (there are only 16 entries in the VIDC ED LUT)
+        ADREQ   r0, defaultpal_4bpp     ; otherwise point at the 4bpp table, in case it was a normal 16-colour mode
+        CMP     lr, #3
+        ADRCC   r0, defaultpal_1bpp     ; 2-colour modes
+        ADREQ   r0, defaultpal_2bpp     ; 4-colour modes
+        MOVLS   lr, #7                  ; for either of these two, actually set up 8 entries so the remaining DENC colours are also determined
+
+        ; Copy entries into ApparentPalette
+        ADR     r1, ApparentPalette1
+        ADR     r2, ApparentPalette2
+01      LDR     r3, [r0], #4
+        STR     r3, [r1], #4
+        LDR     r3, [r0], #4
+        STR     r3, [r2], #4
+        SUBS    lr, lr, #1
+        BPL     %BT01
+
+        ; Border and pointer colours all default to solid black in every mode
+        MOV     r2, #0
+        BL      UpdateBorderColour
+        MOV     r0, #1
+        BL      UpdatePointerColour
+        MOV     r0, #2
+        BL      UpdatePointerColour
+        MOV     r0, #3
+        BL      UpdatePointerColour
+
+        BL      CalculateHardwarePalette
+        BL      ApplyHardwarePalette
+        BL      SetDENCPalette
+        B       ClaimExit_Supported
+
+defaultpal_1bpp
+        &       &00000000, &00000000    ; black
+        &       &FFFFFF00, &FFFFFF00    ; white
+        &       &0000FF00, &0000FF00    ; red     \
+        &       &00FF0000, &00FF0000    ; green   |
+        &       &00FFFF00, &00FFFF00    ; yellow  | other colours to program into the DENC
+        &       &FF000000, &FF000000    ; blue    | (may be useful for pointer or border)
+        &       &FF00FF00, &FF00FF00    ; magenta |
+        &       &FFFF0000, &FFFF0000    ; cyan    /
+
+defaultpal_2bpp
+        &       &00000000, &00000000    ; black
+        &       &0000FF00, &0000FF00    ; red
+        &       &00FFFF00, &00FFFF00    ; yellow
+        &       &FFFFFF00, &FFFFFF00    ; white
+        &       &00FF0000, &00FF0000    ; green   \
+        &       &FF000000, &FF000000    ; blue    | other colours to program into the DENC
+        &       &FF00FF00, &FF00FF00    ; magenta | (may be useful for pointer or border)
+        &       &FFFF0000, &FFFF0000    ; cyan    /
+
+defaultpal_special
+        &       &00000000, &00000000    ; black
+        &       &0000FF00, &0000FF00    ; red
+        &       &00FF0000, &00FF0000    ; green
+        &       &00FFFF00, &00FFFF00    ; yellow
+        &       &FF000000, &FF000000    ; blue
+        &       &FF00FF00, &FF00FF00    ; magenta
+        &       &FFFF0000, &FFFF0000    ; cyan
+        &       &FFFFFF00, &FFFFFF00    ; white
+        ; continues for the next 8 entries...
+defaultpal_4bpp
+        &       &00000000, &00000000    ; black
+        &       &0000FF00, &0000FF00    ; red
+        &       &00FF0000, &00FF0000    ; green
+        &       &00FFFF00, &00FFFF00    ; yellow
+        &       &FF000000, &FF000000    ; blue
+        &       &FF00FF00, &FF00FF00    ; magenta
+        &       &FFFF0000, &FFFF0000    ; cyan
+        &       &FFFFFF00, &FFFFFF00    ; white
+        &       &00000000, &FFFFFF00    ; black-white
+        &       &0000FF00, &FFFF0000    ; red-cyan
+        &       &00FF0000, &FF00FF00    ; green-magenta
+        &       &00FFFF00, &FF000000    ; yellow-blue
+        &       &FF000000, &00FFFF00    ; blue-yellow
+        &       &FF00FF00, &00FF0000    ; magenta-green
+        &       &FFFF0000, &0000FF00    ; cyan-red
+        &       &FFFFFF00, &00000000    ; white-black
+
+; *****************************************************************************
+;
+;       PV_BlankUnblank - PaletteV call to blank/unblank screen
+;
+; in:   R0 = -1 => read blank state
+;       R0 = 0 => unblank screen
+;       R0 = 1 => blank screen
+;       R4 = 6 (PaletteV reason code)
+;
+; out:  R0-R3 may be corrupted
+;       R0 (stacked) = old state (0=unblanked, 1=blanked)
+;
+
+PV_BlankUnblank_Macro ROUT
+        B       ClaimExit_NotSupported
+
+; *****************************************************************************
+;
+;	PV_BulkRead - PaletteV call to read section of palette
+;
+; in:	R0 = pointer to word aligned list of logical colours (words), or 0
+;	R1 = type (bits 24..31) and number of colours (bits 0..23)
+;	R2 = pointer to block for 1st flash state
+;	R3 = pointer to block for 2nd flash state (or 0 for put both at R2)
+;	R4 = 7 (PaletteV reason code)
+;
+; out:  R0-R3 may be corrupted
+;
+
+PV_BulkRead_Macro ROUT
+        BL      GetVduVariables
+
+        Push    "r7-r11"
+        ;register usage:
+        ;[r0] colour list, or 0
+        ;[r2] palette entry block 1
+        ;[r3] palette entry block 2, or 0
+        ;r7   colour type
+        ;r8   max number
+        ;r9   mask to apply to normal logical colours
+        ;r10  loop counter
+        ;r11  colour number
+        MOV     r7, r1, LSR #24
+        BIC     r8, r1, #&FF000000
+        LDR     r9, NColour
+        AND     r9, r9, #15             ; map the first 16 colours repeatedly for higher-colour modes
+        MOV     r10, #0
+10
+        TEQ     r0, #0
+        MOVEQ   r11, r10
+        LDRNE   r11, [r0], #4
+
+        TEQ     r7, #24
+        MOVEQ   r11, #0                 ; only one border colour exists
+        TEQNE   r7, #25
+        ANDEQ   r11, r11, #3            ; pointer logical colours are in range 1-3
+        ADDEQ   r11, r11, #16           ; border colour is at offset 16, pointer colours at 17-19
+        ANDNE   r11, r11, r9            ; other colours are masked according to NColour
+
+        TEQ     r7, #18                 ; in all cases other than this, we must fill in the first flash colour
+        ADRNE   lr, ApparentPalette1
+        LDRNE   r1, [lr, r11, LSL #2]
+        STRNE   r1, [r2], #4
+
+        TEQ     r7, #17                 ; in all cases other than this, we must fill in the second flash colour
+        BEQ     %FT20
+        ADR     lr, ApparentPalette2
+        LDR     r1, [lr, r11, LSL #2]
+        TEQ     r7, #16
+        TEQEQ   r3, #0
+        STRNE   r1, [r3], #4            ; when two palette blocks are specified, or colour type is NOT 16
+        STREQ   r1, [r2], #4            ; when one palette block is specified AND colour type is 16
+20
+        ADD     r10, r10, #1
+        CMP     r10, r8
+        BCC     %BT10
+
+        Pull    "r7-r11"
+        B       ClaimExit_Supported
+
+; *****************************************************************************
+
+;       PV_BulkWrite - PaletteV call to set palette in bulk
+; in:   R0 => list of colours, or 0
+;       R1 =  colour type (16,17,18,24,25) in b24-31 & number to do in b23-b00
+;       R2 => list of palette entries (both flash states if 16, one if 17/18/24/25)
+;       R4 = 8 (PaletteV reason code)
+;
+; out:  R0-R3 may be corrupted
+;
+
+PV_BulkWrite_Macro ROUT
+        ; Get the VDU variables we'll need later
+        BL      GetVduVariables
+
+        Push    "r6-r11"
+        ;register usage:
+        ;[r6] colour list
+        ;r7   colour type
+        ;r8   max number
+        ;[r9] palette entries
+        ;r10  loop counter
+        ;r11  colour number
+
+        MOV     r7,r1,LSR #24
+        BIC     r8,r1,#&FF000000
+        MOV     r6,r0
+        MOV     r9,r2
+
+        MOV     r10,#0
+10
+        TEQ     r6,#0
+        MOVEQ   r11,r10
+        LDRNE   r11,[r6],#4
+
+        TEQ     r7,#16
+        TEQNE   r7,#17
+
+        MOVEQ   r0,r11
+        MOVEQ   r1,#1
+        LDREQ   r2,[r9],#4
+        BLEQ    UpdateNormalColour
+
+        TEQ     r7,#16
+        TEQNE   r7,#18
+
+        MOVEQ   r0,r11
+        MOVEQ   r1,#2
+        LDREQ   r2,[r9],#4
+        BLEQ    UpdateNormalColour
+
+        TEQ     r7,#24
+
+        MOVEQ   r0,r11
+        LDREQ   r2,[r9],#4
+        BLEQ    UpdateBorderColour
+
+        TEQ     r7,#25
+
+        MOVEQ   r0,r11
+        LDREQ   r2,[r9],#4
+        BLEQ    UpdatePointerColour
+
+        ADD     r10,r10,#1
+        CMP     r10,r8
+        BCC     %BT10
+
+        BL      CalculateHardwarePalette
+        BL      ApplyHardwarePalette
+        CMP     r7, #18
+        BLLS    SetDENCPalette          ; don't bother if we're just updating the border or pointer
+        Pull    "r6-r11"
+        B       ClaimExit_Supported
+
+; *****************************************************************************
+;
+;       PV_GammaCorrect - PaletteV call to update gamma correction tables
+;
+; in:   R0 -> red table
+;       R1 -> green table
+;       R2 -> blue table
+;       R4 = 9 (PaletteV reason code)
+;
+; out:  R0-R3 may be corrupted
+;
+
+PV_GammaCorrect_Macro ROUT
+        ADR     r3, GammaTables
+        ADD     r4, r3, #256
+01      LDR     lr, [r0], #4
+        STR     lr, [r3], #4
+        TEQ     r3, r4
+        BNE     %BT01
+
+        ADD     r4, r4, #256
+02      LDR     lr, [r1], #4
+        STR     lr, [r3], #4
+        TEQ     r3, r4
+        BNE     %BT02
+
+        ADD     r4, r4, #256
+03      LDR     lr, [r2], #4
+        STR     lr, [r3], #4
+        TEQ     r3, r4
+        BNE     %BT03
+
+        BL      SetDENCPalette
+        B       ClaimExit_Supported
+
+
+
+ | ; ----------------- now the pre-NewColourScheme code -----------------------
+
 
 
 ; *****************************************************************************
@@ -1275,7 +2377,7 @@ PV_ReadPalette ROUT
 ReturnBlack
 	STR	r2, [sp, #2*4]		; store in saved r2
 	STR	r2, [sp, #3*4]		; and saved r3
-	B	ClaimExit		; claim call and exit
+	B	ClaimExit_Supported	; claim call and exit
 
 ; *****************************************************************************
 ;
@@ -1292,9 +2394,9 @@ ReturnBlack
 PV_BulkRead ROUT
 	MOV	lr, r1, LSR #24
 	TEQ	lr, #16
-	BNE	PassOnExit		; not reading normal colours, so skip
+	BNE	ClaimExit_NotSupported	; not reading normal colours, so skip
 	BICS	r1, r1, #&FF000000
-	BEQ	ClaimExit		; all done!
+	BEQ	ClaimExit_Supported	; all done!
 	MOV	r4, #0			; current palette index
 10
 	TEQ	r0, #0			; if list of colours
@@ -1310,7 +2412,7 @@ PV_BulkRead ROUT
 	ADD	r4, r4, #1		; increment palette index assuming no list of colours
 	SUBS	r1, r1, #1
 	BNE	%BT10
-	B	ClaimExit
+	B	ClaimExit_Supported
 
 ; *****************************************************************************
 
@@ -1326,13 +2428,13 @@ PV_BulkRead ROUT
 
 PV_SetPalette ROUT
         TEQ     r1, #16                 ; if 16 then set both colours
-	BNE	ClaimExit		; not set normal colour, so exit
+	BNE	ClaimExit_Supported	; not set normal colour, so exit
 
 	AND	r0, r0, #&FF		; force colour number in range 0..255
 	CMP	r0, #8			; only do anything with colours 0 to 7
         BLCC    UpdatePaletteSetting
 	BLCC	TransmitSAA7183Data
-        B       ClaimExit               ; indicate successful PaletteV op
+        B       ClaimExit_Supported     ; indicate successful PaletteV op
 
 UpdatePaletteSetting Entry
 	ADR	lr, LogicalPalette
@@ -1385,8 +2487,7 @@ PV_SetDefaultPalette ROUT
 
 	BL	SetDefaultColours
 
-
-        B       ClaimExit               ; claim vector
+        B       ClaimExit_Supported     ; claim vector
 
         LTORG
 
@@ -1473,6 +2574,8 @@ ReallySetDefaultColours Entry "r0,r1"
 	SWI	XOS_SetColour		; set text foregd to colour 7
 
 	EXIT
+
+ ] ; end NewColourScheme switch
 
 ; *****************************************************************************
 ;
