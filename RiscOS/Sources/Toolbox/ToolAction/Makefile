@@ -155,4 +155,6 @@ rm.${COMPONENT}: ${OBJS} ${OSLIB}
         ${MODSQZ} $@
         Access $@ WR/R
 
+o.msgs oz.msgs: h.ToolAction
+
 # Dynamic dependencies:
