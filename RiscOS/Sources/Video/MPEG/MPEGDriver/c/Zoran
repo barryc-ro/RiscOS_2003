@@ -72,6 +72,7 @@ static _kernel_oserror *static_LiveReset (void *handle);
 static _kernel_oserror *static_Stop (unsigned int flags, zoran_interface_t *zoran);
 
 static void static_SetSTC(zoran_interface_t *zoran, uint32_t stc);
+static void static_SetVolume(zoran_interface_t *zoran);
 static bool static_UpdateOperationsRegister(zoran_interface_t *zoran, uint8_t AND_mask, uint8_t EOR_mask);
 
 /********************/
@@ -214,7 +215,6 @@ _kernel_oserror *Zoran_Init (zoran_interface_t *zoran)
       1, 1, 1, 0, 1,
       1, 1, 0, 0,
       0, 0, 0, 0, 1,
-  //    1, 1, 2, 1, 1, 0,
       1, 1, 2, 1, 0, 0,
       2,
       2,
@@ -298,8 +298,6 @@ _kernel_oserror *Zoran_Init (zoran_interface_t *zoran)
       {
         sprintf (zoran->driver_info, zoran->driver_info_prototype, MicrocodeVersion);
       }
-      
-//      printf ("%s\n%s\n", zoran->hardware_info, zoran->driver_info);
     }
     
     zoran->command (ZCMD_SETIO, SETIO_Params, result); /* discard result */
@@ -411,7 +409,12 @@ _kernel_oserror *Zoran_ClockCorrection (uint32_t flags, stream_handle_t decoder_
 #if Debugging == 1 && DebugZoranEntries == 1
   DWrite_Write0("Zoran_ClockCorrection ");
 #endif
+  IGNORE(flags);
   IGNORE(decoder_handle);
+  /* Remember, this is usually called when someone else is the sync master, so we must obey unconditionally */
+  mpeg_time_t stc;
+  zoran->clock->StreamInfo(pfcclock_STREAM_INFO_STC, zoran->clockhandle, &stc);
+  static_SetSTC(zoran, stc.word.lo);
   return NULL;
 }
 
@@ -420,7 +423,9 @@ _kernel_oserror *Zoran_SpeedChange (uint32_t flags, stream_handle_t decoder_hand
 #if Debugging == 1 && DebugZoranEntries == 1
   DWrite_Write0("Zoran_SpeedChange ");
 #endif
+  IGNORE(flags);
   IGNORE(decoder_handle);
+  IGNORE(zoran);
   return NULL;
 }
 
@@ -492,14 +497,12 @@ _kernel_oserror *Zoran_AdjustRate (uint32_t flags, stream_handle_t decoder_handl
         VCXO_Params.LO_LSB = 500 & 0xFF;
         VCXO_Params.HI_MSB = 65535 >> 8;
         VCXO_Params.HI_LSB = 65535 & 0xFF;
-  //      printf("S");
         break;
       case 2: /* fast */
         VCXO_Params.LO_MSB = 65535 >> 8;
         VCXO_Params.LO_LSB = 65535 & 0xFF;
         VCXO_Params.HI_MSB = 500 >> 8;
         VCXO_Params.HI_LSB = 500 & 0xFF;
-  //      printf("F");
         break;
       default: /* normal */
         VCXO_Params.LO_MSB = 5000 >> 8;
@@ -545,6 +548,8 @@ _kernel_oserror *Zoran_EstablishMPA (unsigned int flags, stream_handle_t clock_h
     /* Flag as MPEG audio */
     zoran->flag_ac3notmpa = false;
     zoran->flag_started = false;
+    zoran->info.total_errors = 0;
+    zoran->info.total_underruns = 0;
     /* Register with PFCClock */
     zoran->clockhandle = clock_handle;
     static bool my_table_initialised = false;
@@ -591,6 +596,8 @@ _kernel_oserror *Zoran_EstablishAC3 (unsigned int flags, stream_handle_t clock_h
     /* Flag as AC-3 audio */
     zoran->flag_ac3notmpa = true;
     zoran->flag_started = false;
+    zoran->info.total_errors = 0;
+    zoran->info.total_underruns = 0;
     /* Register with PFCClock */
     zoran->clockhandle = clock_handle;
     static bool my_table_initialised = false;
@@ -669,9 +676,6 @@ _kernel_oserror *Zoran_Commence (unsigned int flags, void *session_id)
   zoran_interface_t *zoran = session_id;
   _kernel_oserror *e = NULL;
   e = zoran->characteriser->commence (flags, zoran->characteriserhandle);
-#if Debugging == 1 && DebugZoranEntries == 1
-DWrite_Write0("characteriser commenced ");
-#endif
   if (!e)
   {
     zoran->howmuchdata = static_HowMuchData;
@@ -688,11 +692,13 @@ DWrite_Write0("characteriser commenced ");
     zoran->stc_retest_holdoff = STC_RETEST_HOLDOFF;
     zoran->block_queue_head = NULL;
     zoran->block_queue_tail = NULL;
+    zoran->info.initialised = false;
+    zoran->info.underrunning = true;
+    zoran->info.session_errors = 0;
+    zoran->info.session_underruns = 0;
+    zoran->presentation->streaminfochanging (0, zoran->toplevelhandle);
   }
   return e;
-#if Debugging == 1 && DebugZoranEntries == 1
-DWrite_Write0("exiting Commence ");
-#endif
 }
 
 /******	Zoran_Discontinue() ************************************************
@@ -879,7 +885,6 @@ static void static_SetSPDIF (zoran_interface_t *zoran, unsigned int samplerate)
     1, 0, 0
   };
   
-  // init things as necessary, eg
   switch (samplerate)
   {
     case 44100: SPDIFCS_Params.SR = 0; break;
@@ -899,32 +904,7 @@ static void static_SendFunctionCommand (zoran_interface_t *zoran)
     zoran->presentation->streaminfo (zoran->toplevelhandle, ptlaudio_STREAM_INFO_LEFT_PEAK_ATTENUATION, &log_peak);
     zoran->presentation->streaminfo (zoran->toplevelhandle, ptlaudio_STREAM_INFO_LEFT_DIALOGUE_ATTENUATION, &log_dial);
     zoran->flag_linemode = (log_dial - log_peak == 0xB0000);
-  }
-  else
-  {
-    zoran->flag_linemode = false; /* not really true, but there's nothing we can do about it in MPEG mode, so why bother calculating it? */
-  }
-  uint32_t left_tag;
-  uint32_t right_tag;
-  if (zoran->flag_linemode && zoran->flag_ac3notmpa)
-  {
-    left_tag = ptlaudio_STREAM_INFO_LEFT_PEAK_ATTENUATION_LINEAR;
-    right_tag = ptlaudio_STREAM_INFO_RIGHT_PEAK_ATTENUATION_LINEAR;
-  }
-  else
-  {
-    left_tag = ptlaudio_STREAM_INFO_LEFT_DIALOGUE_ATTENUATION_LINEAR;
-    right_tag = ptlaudio_STREAM_INFO_RIGHT_DIALOGUE_ATTENUATION_LINEAR;
-  }
-  uint32_t left = 0xFFFF;
-  uint32_t right = 0xFFFF;
-  zoran->presentation->streaminfo (zoran->toplevelhandle, left_tag, &left);
-  zoran->presentation->streaminfo (zoran->toplevelhandle, right_tag, &right);
-  left >>= 1;
-  right >>= 1;
-  
-  if (zoran->flag_ac3notmpa)
-  {
+    
     static struct
     {
       unsigned DMM: 2;        unsigned COMP: 2;       unsigned : 1;           unsigned SIF: 1;        unsigned PRLG: 2;
@@ -944,19 +924,20 @@ static void static_SendFunctionCommand (zoran_interface_t *zoran)
       0x7F,
       0x7F,
       0, 0, 0,
-      0,
-      0
+      0x7F,
+      0xFF
     };
     AC3_Params.COMP = zoran->flag_linemode ? 2 : 3;
-    AC3_Params.PCMSFH = left >> 8;
-    AC3_Params.PCMSFL = left & 0xFF;
-//    zoran->characteriser->streaminfo (zoran->characteriserhandle, 
-// set dual mono/karaoke options appropriately
+    unsigned int dual_channel_mode = 0;
+    zoran->presentation->streaminfo (zoran->toplevelhandle, ptlaudio_STREAM_INFO_DUAL_CHANNEL_MODE, &dual_channel_mode);
+    AC3_Params.DMM = dual_channel_mode;
     zoran->command (ZCMD_AC3, (const char *) &AC3_Params, 0);
     MiscAsm_WaitMicroseconds (10000); /* yes, a whole centisecond! */
   }
   else
   {
+    zoran->flag_linemode = false; /* not really true, but there's nothing we can do about it in MPEG mode, so why bother calculating it? */
+    
     static struct
     {
       unsigned DMM: 2;        unsigned DE: 2;         unsigned : 1;           unsigned SIF: 1;        unsigned PRLG: 2;
@@ -974,21 +955,14 @@ static void static_SendFunctionCommand (zoran_interface_t *zoran)
       2, 0, 0, 1, 1,
       0, 0,
       0,
-      0,
-      0
+      0x7F,
+      0xFF
     };
-    MPEG_Params.PCMSFH = left >> 8;
-    MPEG_Params.PCMSFL = left & 0xFF;
-//    zoran->characteriser->streaminfo (zoran->characteriserhandle, 
-// set dual mono options appropriately
+    unsigned int dual_channel_mode = 0;
+    zoran->presentation->streaminfo (zoran->toplevelhandle, ptlaudio_STREAM_INFO_DUAL_CHANNEL_MODE, &dual_channel_mode);
+    MPEG_Params.DMM = dual_channel_mode;
     zoran->command (ZCMD_MPEG, (const char *) &MPEG_Params, 0);
     MiscAsm_WaitMicroseconds (10000); /* yes, a whole centisecond! */
-  }
-  
-  if (right != left)
-  {
-    /* This can't be indicated directly in the funtion command, so use the PARAM command */
-    Zoran_Volume (0, zoran);
   }
 }
 
@@ -1008,6 +982,7 @@ static _kernel_oserror *static_StreamRecognised (unsigned int flags, void *handl
   if (flags & 1)
   {
     zoran->flag_characterising = false;
+    zoran->presentation->streaminfochanging (0, zoran->toplevelhandle);
   }
   else
   {
@@ -1154,39 +1129,15 @@ static _kernel_oserror *static_CallEvery (void *handle)
 {
   zoran_interface_t *zoran = (zoran_interface_t *) handle;
   
-//  /* Test resetting the chip mid-stream */
-//  static int countdown = 100000;
-//  if(countdown--%6 == 0)
-//  {
-//    _swix(OS_AddCallBack, _INR(0,1), LiveReset_Veneer, zoran);
-//  }
-  
-  
-#if 1
   if (!zoran->flag_irqsincepoll && zoran->stc_retest_holdoff == 0)
-#else
-  char response[16];
-  if (zoran->flag_ac3notmpa)
-  {
-    zoran->command(ZCMD_STAT_AC3, 0, response);
-  }
-  else
-  {
-    zoran->command(ZCMD_STAT_MPEG, 0, response);
-  }
-  if((response[0] & 0xE0) == 0x40 && zoran->stc_retest_holdoff == 0)
-#endif
   {
     /* Zoran chip appears to have died - restart decoding process */
     _swix(OS_AddCallBack, _INR(0,1), LiveReset_Veneer, zoran);
-  }
-  else
-  {
-    /* Restart watchdog */
-    zoran->flag_irqsincepoll = false;
+    return NULL;
   }
   
-  
+  /* Restart watchdog */
+  zoran->flag_irqsincepoll = false;
   
   /* If we're the sync master, pretend that a PTS has just been presented */
   /* and tell PFCClock to correct its idea of the time */
@@ -1211,19 +1162,10 @@ static _kernel_oserror *static_CallEvery (void *handle)
     {
       /* PTC doesn't seem to have progressed - probably means an underrun */
       zoran->flag_oldptcerrvalid = false;
-//DWrite_Write0("PTC stalled  ");
     }
     else
     {
       signed int error = stc.word.lo - ptc.word.lo;
-//char string[256];
-//sprintf(string,"PTC error = %d, ", error);
-//DWrite_Write0(string);
-//if (zoran->flag_oldptcerrvalid) {
-//sprintf(string,"old error = %d  ", zoran->oldptcerr);
-//DWrite_Write0(string); }
-//else DWrite_Write0("no previous error  ");
-      
       if (zoran->stc_retest_holdoff == 0)
       {      
         if (abs(error) > 90000 ||
@@ -1243,7 +1185,6 @@ static _kernel_oserror *static_CallEvery (void *handle)
           int32_t extra_buffering_needed = 45 * (jitter_buffer + 2 * min_buffer) - buffer_length;
           static_SetSTC(zoran, ptc.word.lo - extra_buffering_needed);
           stc = ptc;
-//DWrite_Write0("Correcting STC ");
         }
       }
       zoran->oldptcerr = error;
@@ -1258,14 +1199,182 @@ static _kernel_oserror *static_CallEvery (void *handle)
     /* Tell PFCClock */
     zoran->clock->TSNotify(0, zoran->clockhandle, &stc);
   }
-  
-  /* Check to see if we've underrun since last time */
-  
-  
-  
   if (zoran->stc_retest_holdoff > 0)
   {
     zoran->stc_retest_holdoff--;
+  }
+  
+  /* Read Zoran status to determine changes in stream parameters, decode errors or underruns */
+  bool streaminfochange = false;
+  bool error = false;
+  bool underrun;
+  char response[16];
+  if (zoran->flag_ac3notmpa)
+  {
+    zoran->command(ZCMD_STAT_AC3, 0, response);
+    uint32_t ac3ist = response[1] & 7;
+    error = (ac3ist != 7 && (ac3ist != 0 || (response[1] & 0x38) != 0));
+    underrun = (ac3ist == 7);
+  }
+  else
+  {
+    zoran->command(ZCMD_STAT_MPEG, 0, response);
+    uint32_t mpgst = response[1] & 7;
+    error = (mpgst != 0 && mpgst < 5) || (response[6] & 6) == 0;
+    underrun = (mpgst >= 5);
+  }
+  if (error)
+  {
+    zoran->info.total_errors++;
+    zoran->info.session_errors++;
+    streaminfochange = true;
+  }
+  if (underrun && !zoran->info.underrunning) /* underrun start? */
+  {
+    zoran->info.total_underruns++;
+    zoran->info.session_underruns++;
+    streaminfochange = true;
+    zoran->scheduler->underrun (0, zoran->toplevelhandle);
+  }
+  zoran->info.underrunning = underrun;
+  if (!error && !underrun)
+  {
+    /* See if any stream parameters have changed */
+    if (!zoran->info.initialised)
+    {
+      /* First time, we need to use the recogniser's values to determine if there's been a change */
+      if (zoran->flag_ac3notmpa)
+      {
+        zoran->info.mpeg_algorithm = 0;
+        zoran->info.mpeg_layer = 0; /* fix defaults to avoid spurious info changed events */
+      }
+      else
+      {
+        const char *fullname = "";
+        zoran->characteriser->streaminfo (zoran->characteriserhandle, ptlaudio_STREAM_INFO_FULL_NAME, (unsigned int *) &fullname);
+        if (fullname[0] == '\0') zoran->info.mpeg_algorithm = 1; /* undefined bitpattern is used here for errors */
+        else if (fullname[5] == '1') zoran->info.mpeg_algorithm = 3; /* MPEG-1 */
+        else if (fullname[6] == ' ') zoran->info.mpeg_algorithm = 2; /* MPEG-2 */
+        else zoran->info.mpeg_algorithm = 0;                         /* MPEG-2.5 */
+        size_t len = strlen(fullname);
+        zoran->info.mpeg_layer = 0;
+        if (len > 0)
+        {
+          if (fullname[len-3] == 'I') zoran->info.mpeg_layer = 3;      /* layer III */
+          else if (fullname[len-2] == 'I') zoran->info.mpeg_layer = 2; /* layer II */
+          else if (fullname[len-1] == 'I') zoran->info.mpeg_layer = 1; /* layer I */
+        }
+      }
+      unsigned int temp = 0;
+      zoran->characteriser->streaminfo (zoran->characteriserhandle, ptlaudio_STREAM_INFO_DOWNMIX_AVAILABLE, &temp);
+      switch (temp)
+      {
+        case 1: zoran->info.dual_mono = true; zoran->info.karaoke = false; break;
+        case 2: zoran->info.dual_mono = false; zoran->info.karaoke = true; break;
+        default: zoran->info.dual_mono = false; zoran->info.karaoke = false; break;
+      }
+      temp = 0;
+      zoran->characteriser->streaminfo (zoran->characteriserhandle, ptlaudio_STREAM_INFO_COPYRIGHTED, &temp);
+      zoran->info.copyright = (temp != 0);
+      temp = 0;
+      zoran->characteriser->streaminfo (zoran->characteriserhandle, ptlaudio_STREAM_INFO_ORIGINAL_NOT_COPY, &temp);
+      zoran->info.original = (temp != 0);
+      zoran->info.sampling_rate = 0;
+      zoran->characteriser->streaminfo (zoran->characteriserhandle, ptlaudio_STREAM_INFO_SAMPLING_RATE, &zoran->info.sampling_rate);
+      zoran->info.bitrate = 0;
+      zoran->characteriser->streaminfo (zoran->characteriserhandle, ptlaudio_STREAM_INFO_BITRATE, &zoran->info.bitrate);
+      zoran->info.main_channels = 0;
+      zoran->characteriser->streaminfo (zoran->characteriserhandle, ptlaudio_STREAM_INFO_MAIN_CHANNELS, &zoran->info.main_channels);
+      zoran->info.surround_channels = 0;
+      zoran->characteriser->streaminfo (zoran->characteriserhandle, ptlaudio_STREAM_INFO_SURROUND_CHANNELS, &zoran->info.surround_channels);
+      zoran->info.lfe_channels = 0;
+      zoran->characteriser->streaminfo (zoran->characteriserhandle, ptlaudio_STREAM_INFO_LFE_CHANNELS, &zoran->info.lfe_channels);
+      
+      zoran->info.initialised = true;
+    }
+    
+    /* Every time, interpret the status reply block */
+    unsigned int mpeg_layer = 0;
+    unsigned int mpeg_algorithm = 0;
+    bool dual_mono;
+    bool karaoke = false;
+    bool copyright;
+    bool original;
+    unsigned int sampling_rate;
+    unsigned int bitrate;
+    unsigned int main_channels;
+    unsigned int surround_channels = 0;
+    bool lfe_channel = false;
+    if (zoran->flag_ac3notmpa)
+    {
+      unsigned int acmod = response[7] & 7;
+      dual_mono = (acmod == 0);
+      karaoke = ((response[8] & 7) == 7 && acmod >= 2);
+      copyright = response[9] & 2;
+      original = response[9] & 1;
+      static const unsigned short sampling_rate_lut[4] = { 48000, 44100, 32000 };
+      sampling_rate = sampling_rate_lut[response[6] >> 6];
+      static const unsigned short bitrate_lut[32] = { 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512, 576, 640 };
+      bitrate = bitrate_lut[(response[6] & 0x3E) >> 1] * 1000;
+      static const unsigned char main_channels_lut[8] = { 2, 1, 2, 3, 2, 3, 2, 3 };
+      main_channels = main_channels_lut[acmod];
+      static const unsigned char surround_channels_lut[8] = { 0, 0, 0, 0, 1, 1, 2, 2 };
+      surround_channels = surround_channels_lut[acmod];
+      lfe_channel = response[7] & 8;
+    }
+    else
+    {
+      mpeg_layer = 4 - ((response[6] & 6) >> 1);
+      mpeg_algorithm = (response[6] & 8) ? 3 : 2; /* can't detect MPEG-2.5 (doesn't say it supports MPEG-2 either) */
+      unsigned int mode = (response[8] & 0xC0) >> 6;
+      dual_mono = (mode == 2);
+      copyright = response[8] & 8;
+      original = response[8] & 4;
+      static const unsigned short sampling_rate_lut[2][4] = { { 22050, 24000, 16000 }, { 44100, 48000, 32000 } };
+      sampling_rate = sampling_rate_lut[mpeg_algorithm - 2][(response[7] & 0x0C) >> 2];
+      static const unsigned short bitrate_lut[2][3][16] = { {
+        { 0, 32, 48, 56,  64,  80,  96, 112, 128, 144, 160, 176, 192, 224, 256, 0 },
+        { 0,  8, 16, 24,  32,  40,  48,  56,  64,  80,  96, 112, 128, 144, 160, 0 },
+        { 0,  8, 16, 24,  32,  40,  48,  56,  64,  80,  96, 112, 128, 144, 160, 0 } }, {
+        { 0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448, 0 },
+        { 0, 32, 48, 56,  64,  80,  96, 112, 128, 160, 192, 224, 256, 320, 384, 0 },
+        { 0, 32, 40, 48,  56,  64,  80,  96, 112, 128, 160, 192, 224, 256, 320, 0 } } };
+      if (mpeg_layer == 0) bitrate = 0;
+      else bitrate = bitrate_lut[mpeg_algorithm - 2][mpeg_layer - 1][response[7] >> 4] * 1000;
+      main_channels = (mode == 3) ? 1 : 2;
+    }
+    
+    /* Has anything changed, then? */
+    if (mpeg_layer        != zoran->info.mpeg_layer        ||
+        mpeg_algorithm    != zoran->info.mpeg_algorithm    ||
+        dual_mono         != zoran->info.dual_mono         ||
+        karaoke           != zoran->info.karaoke           ||
+        copyright         != zoran->info.copyright         ||
+        original          != zoran->info.original          ||
+        sampling_rate     != zoran->info.sampling_rate     ||
+        bitrate           != zoran->info.bitrate           ||
+        main_channels     != zoran->info.main_channels     ||
+        surround_channels != zoran->info.surround_channels ||
+        lfe_channel       != zoran->info.lfe_channels         )
+    {
+      zoran->info.mpeg_layer        = mpeg_layer;
+      zoran->info.mpeg_algorithm    = mpeg_algorithm;
+      zoran->info.dual_mono         = dual_mono;
+      zoran->info.karaoke           = karaoke;
+      zoran->info.copyright         = copyright;
+      zoran->info.original          = original;
+      zoran->info.sampling_rate     = sampling_rate;
+      zoran->info.bitrate           = bitrate;
+      zoran->info.main_channels     = main_channels;
+      zoran->info.surround_channels = surround_channels;
+      zoran->info.lfe_channels      = lfe_channel;
+      streaminfochange = true;
+    }
+  }
+  
+  if (streaminfochange)
+  {
+    zoran->presentation->streaminfochanging (0, zoran->toplevelhandle);
   }
   return NULL;
 }
@@ -1279,9 +1388,11 @@ static _kernel_oserror *static_LiveReset (void *handle)
   DWrite_Write0("Resetting ");
 #endif
   static_Stop(0, zoran);
+#if 0 /* This causes problems playing from NFS - can we get away without it? */
   zoran->flag_resetting = true;
   zoran->givemedata(1, zoran->toplevelhandle);
   zoran->flag_resetting = false;
+#endif
   static_SendFunctionCommand(zoran);
   Zoran_Start(0, zoran);
   return NULL;
@@ -1310,6 +1421,7 @@ _kernel_oserror *Zoran_Start (unsigned int flags, zoran_interface_t *zoran)
   mpeg_time_t stc;
   zoran->clock->StreamInfo(pfcclock_STREAM_INFO_STC, zoran->clockhandle, &stc);
   static_SetSTC(zoran, stc.word.lo);
+  static_SetVolume(zoran);
   zoran->command (ZCMD_PLAY, 0, 0);
   zoran->command (ZCMD_UNMUTE, 0, 0);
   _swix (OS_CallEvery, _INR(0,2), 49, CallEvery_Veneer, zoran); /* used for polling audio PTS if sync master, and for polling underrun state in all cases */
@@ -1366,42 +1478,7 @@ _kernel_oserror *Zoran_Volume (unsigned int flags, void *session_id)
     }
     else
     {
-      uint32_t left_tag;
-      uint32_t right_tag;
-      if (zoran->flag_linemode && zoran->flag_ac3notmpa)
-      {
-        left_tag = ptlaudio_STREAM_INFO_LEFT_PEAK_ATTENUATION_LINEAR;
-        right_tag = ptlaudio_STREAM_INFO_RIGHT_PEAK_ATTENUATION_LINEAR;
-      }
-      else
-      {
-        left_tag = ptlaudio_STREAM_INFO_LEFT_DIALOGUE_ATTENUATION_LINEAR;
-        right_tag = ptlaudio_STREAM_INFO_RIGHT_DIALOGUE_ATTENUATION_LINEAR;
-      }
-      uint32_t left = 0xFFFF;
-      uint32_t right = 0xFFFF;
-      zoran->presentation->streaminfo (zoran->toplevelhandle, left_tag, &left);
-      zoran->presentation->streaminfo (zoran->toplevelhandle, right_tag, &right);
-      left >>= 1;
-      right >>= 1;
-      static struct
-      {
-        unsigned EXT: 8;
-        unsigned LSFACTOR1: 8;
-        unsigned LSFACTOR2: 8;
-        unsigned LSFACTOR3: 8;
-        unsigned RSFACTOR1: 8;
-        unsigned RSFACTOR2: 8;
-        unsigned RSFACTOR3: 8;
-      }
-      PVOL_Params = { 3 };
-      PVOL_Params.LSFACTOR1 = (left & 0xF000) >> 12;
-      PVOL_Params.LSFACTOR2 = (left & 0x0FF0) >> 4;
-      PVOL_Params.LSFACTOR3 = ((left & 0x000F) << 4) | 0x000F;
-      PVOL_Params.RSFACTOR1 = (right & 0xF000) >> 12;
-      PVOL_Params.RSFACTOR2 = (right & 0x0FF0) >> 4;
-      PVOL_Params.RSFACTOR3 = ((right & 0x000F) << 4) | 0x000F;
-      zoran->command (ZCMD_PARAM_2, (const char *) &PVOL_Params, 0);
+      static_SetVolume(zoran);
     }
   }
   return e;
@@ -1409,9 +1486,15 @@ _kernel_oserror *Zoran_Volume (unsigned int flags, void *session_id)
 
 _kernel_oserror *Zoran_Downmix (unsigned int flags, void *session_id)
 {
+  IGNORE(flags);
   zoran_interface_t *zoran = session_id;
-  _kernel_oserror *e = NULL;
-  return e;
+  if (!zoran->flag_characterising) /* original function command is sent at end of characterisation */
+  {
+    /* Downmix mode can only be changed by resending the function command */
+    /* (Actually this may be different for karaoke mode, but we don't support that (yet)) */
+    _swix(OS_AddCallBack, _INR(0,1), LiveReset_Veneer, zoran);
+  }
+  return NULL;
 }
 
 _kernel_oserror *Zoran_SPDIF (unsigned int flags, void *session_id)
@@ -1419,7 +1502,7 @@ _kernel_oserror *Zoran_SPDIF (unsigned int flags, void *session_id)
   IGNORE(flags);
   zoran_interface_t *zoran = session_id;
   _kernel_oserror *e = NULL;
-  if (zoran->flag_started)
+  if (!zoran->flag_characterising) /* operations register initialised at end of characterisation */
   {
     uint32_t spdif_mode = 0;
     zoran->presentation->streaminfo(zoran->toplevelhandle,
@@ -1443,27 +1526,93 @@ _kernel_oserror *Zoran_StreamInfo (void *session_id, unsigned int tag, unsigned 
 {
   zoran_interface_t *zoran = session_id;
   _kernel_oserror *e = NULL;
-  if (tag < ptlaudio_STREAM_INFO_DECODING_ACTIVE)
+  if (tag < ptlaudio_STREAM_INFO_DECODING_ACTIVE && !zoran->info.initialised)
   {
-    /* For now, always drop back to characteriser's values */
     return zoran->characteriser->streaminfo (zoran->characteriserhandle, tag, result);
   }
   switch (tag)
   {
+    case ptlaudio_STREAM_INFO_FULL_NAME:
+      if (zoran->flag_ac3notmpa)
+      {
+        *result = (unsigned int) "Dolby Digital";
+      }
+      else
+      {
+        if (zoran->info.mpeg_layer == 0)
+        {
+          *result = (unsigned int) "";
+        }
+        else
+        {
+         static const char full_encoding_name [4][3][20] =
+          {
+            { "MPEG-2.5 Layer I", "MPEG-2.5 Layer II", "MPEG-2.5 Layer III" },
+            { "",                 "",                  ""                   },
+            { "MPEG-2 Layer I",   "MPEG-2 Layer II",   "MPEG-2 Layer III"   },
+            { "MPEG-1 Layer I",   "MPEG-1 Layer II",   "MPEG-1 Layer III"   }
+          };
+          *result = (unsigned int) full_encoding_name [zoran->info.mpeg_algorithm] [zoran->info.mpeg_layer - 1];
+        }
+      }
+      break;
+    case ptlaudio_STREAM_INFO_NAME:
+      if (zoran->flag_ac3notmpa)
+      {
+        *result = (unsigned int) "AC-3";
+      }
+      else
+      {
+        static const char short_encoding_name [4][12] = { "MPEG-2.5", "", "MPEG-2", "MPEG-1" };
+        *result = (unsigned int) short_encoding_name [zoran->info.mpeg_algorithm];
+      }
+      break;
+    case ptlaudio_STREAM_INFO_SAMPLING_RATE:
+      *result = zoran->info.sampling_rate;
+      break;
+    case ptlaudio_STREAM_INFO_BITRATE:
+      *result = zoran->info.bitrate;
+      break;
+    case ptlaudio_STREAM_INFO_MAIN_CHANNELS:
+      *result = zoran->info.main_channels;
+      break;
+    case ptlaudio_STREAM_INFO_SURROUND_CHANNELS:
+      *result = zoran->info.surround_channels;
+      break;
+    case ptlaudio_STREAM_INFO_LFE_CHANNELS:
+      *result = zoran->info.lfe_channels;
+      break;
+    case ptlaudio_STREAM_INFO_DOWNMIX_AVAILABLE:
+      if (zoran->info.dual_mono) *result = 1;
+      else if (zoran->info.karaoke) *result = 2;
+      else *result = 0;
+      break;
+    case ptlaudio_STREAM_INFO_COPYRIGHTED:
+      *result = zoran->info.copyright;
+      break;
+    case ptlaudio_STREAM_INFO_ORIGINAL_NOT_COPY:
+      *result = zoran->info.original;
+      break;
+    case ptlaudio_STREAM_INFO_FIRST_PTS:
+      return zoran->characteriser->streaminfo (zoran->characteriserhandle, tag, result);
+    
     case ptlaudio_STREAM_INFO_DECODING_ACTIVE:
       *result = zoran->flag_started;
       break;
+    case ptlaudio_STREAM_INFO_UNDERRUNNING:
+      *result = zoran->info.underrunning;
+      break;
     case ptlaudio_STREAM_INFO_TOTAL_ERRORS:
-      *result = 0;
+      *result = zoran->info.total_errors;
       break;
     case ptlaudio_STREAM_INFO_ERRORS:
-      *result = 0;
+      *result = zoran->info.session_errors;
       break;
     case ptlaudio_STREAM_INFO_TOTAL_UNDERRUNS:
-      *result = 0;
+      *result = zoran->info.total_underruns;
       break;
     case ptlaudio_STREAM_INFO_UNDERRUNS:
-      *result = 0;
+      *result = zoran->info.session_underruns;
       break;
     default:
       e = Mess_GenerateError ("Err_UkTag", errno_UK_TAG, 0);
@@ -1566,6 +1715,46 @@ static void static_SetSTC(zoran_interface_t *zoran, uint32_t stc)
   SETSTC_Params.STC_15_8 = stc >> 8;
   SETSTC_Params.STC_7_0 = stc;
   zoran->command (ZCMD_SETSTC, (const char *) &SETSTC_Params, 0);
+}
+
+static void static_SetVolume(zoran_interface_t *zoran)
+{
+  uint32_t left_tag;
+  uint32_t right_tag;
+  if (zoran->flag_linemode && zoran->flag_ac3notmpa)
+  {
+    left_tag = ptlaudio_STREAM_INFO_LEFT_PEAK_ATTENUATION_LINEAR;
+    right_tag = ptlaudio_STREAM_INFO_RIGHT_PEAK_ATTENUATION_LINEAR;
+  }
+  else
+  {
+    left_tag = ptlaudio_STREAM_INFO_LEFT_DIALOGUE_ATTENUATION_LINEAR;
+    right_tag = ptlaudio_STREAM_INFO_RIGHT_DIALOGUE_ATTENUATION_LINEAR;
+  }
+  uint32_t left = 0xFFFF;
+  uint32_t right = 0xFFFF;
+  zoran->presentation->streaminfo (zoran->toplevelhandle, left_tag, &left);
+  zoran->presentation->streaminfo (zoran->toplevelhandle, right_tag, &right);
+  left >>= 1;
+  right >>= 1;
+  static struct
+  {
+    unsigned EXT: 8;
+    unsigned LSFACTOR1: 8;
+    unsigned LSFACTOR2: 8;
+    unsigned LSFACTOR3: 8;
+    unsigned RSFACTOR1: 8;
+    unsigned RSFACTOR2: 8;
+    unsigned RSFACTOR3: 8;
+  }
+  PVOL_Params = { 3 };
+  PVOL_Params.LSFACTOR1 = (left & 0xF000) >> 12;
+  PVOL_Params.LSFACTOR2 = (left & 0x0FF0) >> 4;
+  PVOL_Params.LSFACTOR3 = ((left & 0x000F) << 4) | 0x000F;
+  PVOL_Params.RSFACTOR1 = (right & 0xF000) >> 12;
+  PVOL_Params.RSFACTOR2 = (right & 0x0FF0) >> 4;
+  PVOL_Params.RSFACTOR3 = ((right & 0x000F) << 4) | 0x000F;
+  zoran->command (ZCMD_PARAM_2, (const char *) &PVOL_Params, 0);
 }
 
 static bool static_UpdateOperationsRegister(zoran_interface_t *zoran, uint8_t AND_mask, uint8_t EOR_mask)
