@@ -1,0 +1,261 @@
+/* File:    cdfiler.c
+ * Purpose: CDFSFiler main entry points
+ * Author:  Timothy Roddis
+ * History: 05-Mar-96: TGR: created
+ */
+
+
+/* ANSI headers */
+
+#include <stdlib.h>
+#include <string.h>
+
+/* RISC OS headers */
+
+#include "kernel.h"
+#include "swis.h"
+
+/* Commonlib headers */
+
+#include "defines.h"
+#include "debug.h"
+#include "dbmalloc.h"
+#include "msgs.h"
+
+/* */
+
+#include "shareswis.h"
+
+/* Local headers */
+
+#include "main.h"
+#include "aux.h"
+#include "cdfiler.h"
+#include "task.h"
+
+extern void *Image__RO_Base; /* Pointer to base of module */
+#ifndef ROM
+    extern int messages_file(void);
+#endif
+
+int main (void) {
+
+   DEBUG debug_output ("c", "CDFiler: main (runnable) entry point\n");
+
+   if (global_task_handle <= 0) {
+      if (task_start ())
+        return 1;
+   } else {
+      return 1;
+   }
+   return 0;
+}
+
+
+/* Module's initialisation entry point.
+ *
+ * on entry:
+ *    pw is the private word
+ *    podule_base is the base of podule space
+ *    cmd_tail is the tail of the command used to start this module
+ *
+ * on exit:
+ *    returns an error upon failure to initialise
+ */
+
+_kernel_oserror *cdfiler_initialise (char *cmd_tail, int podule_base, void *pw) {
+
+   _kernel_oserror *e;
+
+   IGNORE (pw);
+   IGNORE (podule_base);
+   IGNORE (cmd_tail);
+
+   DEBUG debug_set_var_names ("CDFiler$Debug", "CDFiler$HexDump");
+
+   DEBUG debug_output ("c", "CDFiler: Initialising module\n");
+
+
+#ifdef ROM
+   external messages file? SEE ALSO task_init
+#endif
+
+   /* Code section largely from Mike Challis´ ATProbe: */
+
+   /*
+    * Under certain conditions (*) no application space is available
+    *  when this module is initialised; if this is the case, there is no
+    *  point in continuing.
+    *
+    * (*) For example:
+    *       Double-click on the module's icon - it starts ok.
+    *       Repeat - and it fails.
+    *       Repeat - and it's ok again.
+    *        etc.
+    *
+    *     This bug is not present in RISC OS 3.11, but is present in 3.60
+    */
+
+   {
+      int blk[4];
+
+      blk[0] = 0;       /* don't know page number */
+      blk[1] = 0x8000;  /* this is the logical address I'm interested in */
+      blk[2] = -1;
+      blk[3] = -1;      /* end of request list */
+
+      ER (_swix (OS_FindMemMapEntries, I0, blk));
+
+      if (blk[0] == -1) {   /* no map for logical address */
+#if TRUE
+#ifndef ROM
+   if ((e = _swix (ResourceFS_RegisterFiles, I0, messages_file())) != NULL) return e;
+#endif
+         msgs_open_file (CDFiler_ResourcesDirectory ".Messages");
+         e = msgs_make_error (Error_Restart);
+         msgs_close_file();
+#ifndef ROM
+   _swix (ResourceFS_DeregisterFiles, I0, messages_file());
+#endif
+         return e;
+#else
+         static _kernel_oserror err;
+
+         err.errnum = 0;
+         strcpy (err.errmess, "Cannot restart yet");
+         return &err;
+#endif
+      }
+   }
+
+   DEBUG debug_output ("c", "CDFiler: end of initialisation\n");
+
+   return NULL;
+}
+
+/* Module's finalisation entry point */
+
+_kernel_oserror *cdfiler_finalise (int fatal, int podule_base, void *pw) {
+
+
+   IGNORE (fatal);
+   IGNORE (podule_base);
+   IGNORE (pw);
+
+   DEBUG debug_output ("c", "CDFiler: finalisation\n");
+
+   DEBUG dbmalloc_chkheap();
+
+   if (global_task_handle > 0) task_quit();
+
+   return NULL;
+}
+
+void cdfiler_service_handler (int service_number, _kernel_swi_regs *r, void *pw) {
+
+   IGNORE(pw);
+
+   DEBUG debug_output ("c", "CDFiler: service number 0x%x\n", service_number);
+
+   switch (service_number) {
+      case Service_Memory:
+         if ((void *)r->r[2] == Image__RO_Base) {
+
+            DEBUG debug_output ("c", "CDFiler: they're trying to remap _our_ space (soon stop that)\n");
+
+            r->r[1] = 0; /* Prevent our application space being remapped */
+         }
+         break;
+      case Service_StartFiler:
+
+         DEBUG debug_output ("c", "CDFiler: inputs R0: 0x%x R1: 0x%x\n",r->r[0],r->r[1]);
+
+         if (!global_task_handle) {
+
+            global_filer_task_handle = r->r[0];
+
+            if (global_task_handle != -1) {
+
+               r->r[0] = (int) CDFiler_StartTaskCommand;
+               r->r[1] = 0;
+
+               global_task_handle = -1;
+
+            }
+         }
+         DEBUG debug_output ("c", "CDFiler: outputs R0: 0x%x R1: 0x%x\n",r->r[0],r->r[1]);
+
+         break;
+      case Service_StartedFiler:
+         if (global_task_handle != -1) break; /* else drop through */
+      case Service_Reset:
+         global_task_handle = 0;
+         break;
+      case Service_FilerDying:
+         if (global_task_handle) {
+            global_task_handle = 0;
+
+            task_quit ();
+         }
+         break;
+      case Service_DiscDismounted: /* Works regardless of task status */
+      {
+         char *object_name, *buffer;
+         int size;
+
+         DEBUG debug_output ("c", "CDFiler: disc \"%s\" dismounted\n", (char *) (r->r[2]));
+
+         /* canonicalise it */
+
+         if (strncmp ((char *) (r->r[2]), CDFS_FileSystemName,
+                       strcspn ((char *)(r->r[2]), FS_NameAndDiscSpecSeparatorString))) break;
+
+         if (_swix (OS_FSControl, I0|I1|I3|I4|I5|O5, OS_FSControl_Canonicalise,
+                (char *)(r->r[2]), 0, 0, 0, /* Out = */ &size)) break;
+
+         size = 1 - size;
+
+         if ((buffer = malloc (size)) == NULL) break;
+
+         _swix (OS_FSControl, I0|I1|I2|I3|I4|I5, OS_FSControl_Canonicalise,
+                (char *)(r->r[2]), buffer, 0, 0, size);
+
+         DEBUG debug_output ("c", "CDFiler: canonicalised dismounted disc as \"%s\"\n", buffer);
+
+         object_name = aux_find_enumeration (buffer);
+
+         free (buffer);
+
+         if (object_name) {
+            _swix (ShareFS_StopShare, I0|I1, 0, object_name);
+         }
+         break;
+      }
+   }
+}
+
+_kernel_oserror *cdfiler_command_handler (char *arg_string, int argc, int cmd_no, void *pw) {
+
+   IGNORE(pw);
+   IGNORE(cmd_no);
+   IGNORE(argc);
+   IGNORE(arg_string);
+
+/*   DEBUG debug_output ("c", "CDFiler: command entered: task handle value 0x%x\n", global_task_handle); */
+
+   /* for the error below, register and deregister messages iff necessary */
+
+   if (global_task_handle == -1) {
+      return _swix (OS_Module, I0|I1|I2, OS_Module_Enter, CDFiler_ModuleName, "");
+   } else {
+#ifndef ROM
+      _swix (ResourceFS_RegisterFiles, I0, messages_file());
+#endif
+      msgs_open_file (CDFiler_ResourcesDirectory ".Messages");
+      return msgs_make_error (Error_UseDesktop);
+      msgs_close_file();
+#ifndef ROM
+      _swix (ResourceFS_DeregisterFiles, I0, messages_file());
+#endif
+   }
+}
