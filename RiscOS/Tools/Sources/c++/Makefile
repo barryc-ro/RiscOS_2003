@@ -30,7 +30,7 @@ WIPE    = -wipe
 SQUEEZE = squeeze
 
 CCFLAGS = -c -depend !Depend -ffaho ${INCLUDES} ${DFLAGS} ${THROWBACK}
-CPPFLAGS= -c -depend !Depend -zpz0 -ff -Wp ${INCLUDES} ${DFLAGS} ${THROWBACK}
+CPPFLAGS= -c -depend !Depend -ff -Wp ${INCLUDES} ${DFLAGS} ${THROWBACK}
 ASFLAGS = -depend !Depend -Stamp -quit
 CPFLAGS = ~cfr~v
 LBFLAGS = -c
