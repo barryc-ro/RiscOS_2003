@@ -35,6 +35,30 @@
 ; 10-Jun-96  TMD  1.45		Started on adding code to skip until we get correct trick mode data.
 ; 21-Jun-96  TMD  1.46		Add amount returned statistic
 ; 21-Jun-96  TMD  1.47		Only issue MPEGVideo/Audio_Play if that stream present after last ResetStream
+; 25-Jun-96  TMD  1.48		Started on new internal interfaces (program element handlers)
+; 24-Jul-96  TMD  1.49		Initialise all data rate count entries to 0, not -1
+; 12-Aug-96  TMD  1.50		Allow program element handlers to register for a particular PID, rather than a stream type.
+; 16-Aug-96  TMD  1.51		Move check for PEH handlers above check for video_PID etc
+;				Allow PMT entry to match PEHs as well as video
+; 11-Nov-96  TMD  1.52		Created variant that copies the coroutine stack away each time into an RMA block.
+;		  1.53		Source for this version has been lost - it was the same as 1.52 but kept track of continuity
+;				 counter errors, and a copy of the packet after the discontinuity.
+; 21-Mar-97  TMD  1.54		Added Stats_SkippingUntilCorrectMode
+; 15-Apr-97  TMD  1.55		Added Stats_DataDiscarded in order to detect EOF on N-Cube server (sends null packets at end).
+; 30-Oct-97  TMD  1.56		Added DataReturned to CtrlInfo
+; 07-Nov-97  TMD  1.57		(Conditionally) nobble video packet lengths to zero
+; 14-Nov-97  TMD  1.58		Allow bit 3 of ResetStream flags to pass through to video/audio
+; 11-Feb-98  TMD  1.59		Issue Service_MPEGControlStarting on init
+; 19-Feb-98  TMD  1.60		(Conditionally) parse OVS NPTReferenceDescriptor to spot transitions
+; 20-Feb-98  TMD  1.61		Invalidate stream-type PEH PIDs on SelectProgram call
+; 09-Mar-98  TMD  1.62		Invalidate PMT, video, audio and stream-type PEH PIDs on ResetStream
+; 08-May-98  TMD  1.63		(Conditionally) only accept first PAT and PMT after program change, for use with faint signal.
+; 29-May-98  TMD  1.64		Return NPT descriptor from MPEGControl_Stats.
+; 24-Jun-98  TMD  1.65		Only zero NPT descriptor length on OpenStream, not ResetStream, but allocate extra word before
+;				 descriptor to indicate if descriptor is current or not.
+; 13-Oct-98  TMD  1.66		Add MPEGControl_SetAudioParameters SWI.
+; 15-Oct-98  TMD  1.67		Removed SendFirstSCR flag (obsolete).
+; 10-Dec-98  BJGA 1.68		Changed module name to MPEGTransport, changed SWI chunk and added "Trans" prefix to * commands.
 ;
 
         LEADR   Module_LoadAddr
@@ -43,6 +67,9 @@ TAB     *       9
 LF      *       10
 FF      *       12
 CR      *       13
+
+                GBLL    BuildAsMPEGControl
+BuildAsMPEGControl SETL {FALSE}
 
                 GBLL    AutoABSDetect
 AutoABSDetect   SETL    {FALSE}                         ; automatically detect audio-only files
@@ -57,9 +84,23 @@ AllowMPEG2Video SETL	{TRUE}
 AllowMPEG2Audio	SETL	{TRUE}
 
 		GBLL	Save1stPacket
-Save1stPacket	SETL	{TRUE}				; keep a copy of 1st TS packet after OpenStream or ResetStream
+Save1stPacket	SETL	{FALSE}				; keep a copy of 1st TS packet after OpenStream or ResetStream
 
+		GBLL	CoroutineStackCopied		; coroutine stack lives on normal SVC stack and is copied away each time
+CoroutineStackCopied SETL {TRUE}			; into a static block
+
+		GBLL	NobbleVideoPacketLengths	; set video packet lengths to zero, cos they're wrong anyway on OVS
+NobbleVideoPacketLengths SETL {FALSE}			; easier to do it in MPEG2Video module instead
+
+		GBLL	ParseOVSNPT
+ParseOVSNPT	SETL	{TRUE}
+
+		GBLL	OnlyAcceptFirstPATandPMT
+OnlyAcceptFirstPATandPMT SETL {FALSE}			; for use with a faint signal, since we don't check CRCs.
+
+ [ :LNOT: CoroutineStackCopied
 TransportStack          *       &01C00800               ; 3/4 way down normal SVC stack
+ ]
 
 ; If playing elemental streams, we need to chop up large buffers longer than 64K into smaller
 ; chunks, because the maximum MPEG packet size is 64K
@@ -81,8 +122,6 @@ TS_CC_Bits              *       &0F                     ; continuity counter bit
 TS_table_id_PAT         *       &00                     ; program association table section
 TS_table_id_PMT         *       &02                     ; program map section
 
-TS_Program_Number       *       &01                     ; program number to play
-
 TS_Stream_Type_MPEG1Video *     &01
 TS_Stream_Type_MPEG2Video *	&02
 TS_Stream_Type_MPEG1Audio *     &03
@@ -99,25 +138,66 @@ PES_Optional_additional_copy_info_flag * &04		; additional copy info present
 PES_Optional_PES_CRC_flag	*	&02		; PES_CRC present
 PES_Optional_PES_extension_flag *	&01		; PES extensions present
 
+; The DVB card has a PID filter which allows up to 32 programmable PIDs to be captured
+; These are the PID slot indices used for the various streams
+
+				^	0
+PIDSlot_Video			#	1
+PIDSlot_Audio			#	1
+PIDSlot_PAT			#	1		; (PID 0, enabled by MPEG player !RunImage currently)
+PIDSlot_PMT			#	1
+PIDSlot_Extra			#	0		; base of PID slots used for additional handlers
+
+NumberOfPIDSlots		*	32
+		ASSERT	@ <= NumberOfPIDSlots-1		; make sure we have at least one PID slot for extras
+
+ [ DoPEH
+; Program Element Handler structure (global)
+
+				^	0
+PEH_Link			#	4		; link to next one
+PEH_Flags			#	4		; flags relevant to handler
+PEH_StreamType			#	4		; stream type
+PEH_HandlerWS			#	4		; workspace pointer
+PEH_HandlerCode			#	4		; entry point for handler
+PEHSize				*	:INDEX: @
+
+; Program Element PID structure (local to stream)
+
+				^	0
+PEHPID_Link			#	4		; link to next one
+PEHPID_Flags			#	4		; flags relevant to handler for this stream
+PEHPID_ProgramElementStreamHandle #	4		; stream handle to use when talking to PEH
+PEHPID_PID			#	4		; the PID that this stream type is currently using
+							; (this field may change during life of stream)
+PEHPID_PIDSlot			#	4		; PID slot used in DVB card, allocated at time of OpenStream
+PEHPID_PEH			#	4		; pointer to PEH node
+PEHPIDSize			*	:INDEX: @
+ ] ; DoPEH
+
 ; Control stream handle structure
 
                         ^       0
 CSH_StreamFlags         #       4
 CSH_VideoStreamHandle   #       4
 CSH_AudioStreamHandle   #       4
+ [ CoroutineStackCopied
+CSH_CoroutineStackCopy  #	4			; pointer to copy of coroutine stack claimed out of RMA
+CSH_CoroutineStackBlockSize #	4			; size of block allocated
+CSH_CoroutineStackSize	#	4			; number of words currently on stack
+ |
 CSH_TransportSP         #       4                       ; transport layer stack pointer for coroutines
+ ]
 CSH_ExternalSP          #       4                       ; external stack pointer for coroutines
 CSH_PMT_PID             #       4                       ; PID for packets containing Program Map Table (-1 if unknown)
 CSH_Video_PID           #       4                       ; PID for video packets
 CSH_Audio_PID           #       4                       ; PID for audio packets
 CSH_NotReadyBits        #       4                       ; bits indicating which elemental modules are not yet ready to play
- [ SendFirstSCR
-CSH_SendNextSCR         #       4                       ; flag indicating we should send next SCR to video module
- ]
 CSH_StartTime           #       4                       ; time stream was opened
 CSH_LastTime            #       4                       ; last time data was received
 CSH_DataReceived        #       4                       ; amount of data received
 CSH_DataReturned	#	4			; amount of data returned
+CSH_DataDiscarded	#	4			; amount of data discarded (not video, audio, PAT, PMT or selected private)
 CSH_CurrentProgram	#	4			; program number of current program, or -index (eg -1 = first program)
 CSH_CurrentVideoStream	#	4			; index of video stream to select within program (1 => 1st)
 CSH_TempVideoStream	#	4			; temporary decrementing copy of above
@@ -125,6 +205,9 @@ CSH_CurrentAudioStream	#	4			; index of video stream to select within program (1
 CSH_TempAudioStream	#	4			; temporary decrementing copy of above
 
 CSH_LastResetStreamFlags #	4			; bits indicating what streams are active after last resetstream
+ [ DoPEH
+CSH_ListOfPEHPIDs	#	4			; pointer to 1st PEHPID node for this stream
+ ]
 
  [ SkipToCorrectTrickMode
 CSH_TrickModeControl	#	4			; value required in trick_mode_control field, or -1 for normal
@@ -143,6 +226,21 @@ DataCountArraySize      *       100                     ; allow for 100 periods 
 CSH_DataCounts          #       DataCountArraySize * 4  ; one word per minute
  ]
 
+ [ ParseOVSNPT
+CSH_NPTCurrent		#	4			; 1 => NPT received since last ResetStream, 0 otherwise
+CSH_NPTDescLength	#	1
+CSH_NPTDescMaxLen	*	18			; we can store maximum of 18 bytes of descriptor (not including len)
+CSH_NPTContentID	#	1			; bit 7 if postDiscontinuityIndicator (unused)
+							; bits 6..0 are the content ID (incremented for each command)
+CSH_NPTSTCRef		#	5			; 1st 7 bits reserved, last 33 are STC_Reference
+CSH_NPTNPTRef		#	8			; 1st 31 bits reserved, last 33 are NPT_Reference
+CSH_NPTScaleNum		#	2
+CSH_NPTScaleDen		#	2
+			AlignSpace
+
+CSH_LastContentID	#	4			; last value in ContentID field, or -1 if none
+ ]
+
 CSHSize                 *       @
 
 
@@ -153,6 +251,10 @@ FreePacketListTailPtr   #       4       ; pointer to tail of list
 
 SWIInstruction          #       8       ; SWI + Pull pc
 DebugFlag               #       4       ; NZ => output debugging
+
+ [ DoPEH
+GlobalPEHList		#	4	; list of all PEH nodes, global to all streams
+ ]
 
  [ international
 MessageFile_Block #     16
@@ -212,20 +314,41 @@ Module_BaseAddr
         &       Mod_Title   -Module_BaseAddr
         &       Mod_HelpStr -Module_BaseAddr
         &       Mod_HC_Table-Module_BaseAddr
+ [ BuildAsMPEGControl
         &       MPEGControlSWI_Base ; SWI chunk
+ |
+        &       MPEGTransportSWI_Base ; SWI chunk
+ ]
         &       Mod_SWIHandler-Module_BaseAddr
         &       Mod_SWITable-Module_BaseAddr
         &       0                               ; no swi name decode entry
 
 Mod_Title
+ [ BuildAsMPEGControl
         =       "MPEGControl", 0
+ |
+        =       "MPEGTransport", 0
+ ]
 
 Mod_HelpStr
-        =       "MPEGControl", TAB, "1.47 (21 Jun 1996) (MPEG 2 Transport layer version)", 0
+ [ BuildAsMPEGControl
+        =       "MPEGControl", TAB
+ |
+        =       "MPEGTransport", TAB
+ ]
+        =       "1.68 (10 Dec 1998)"
+ [ BuildAsMPEGControl
+        =       " (MPEG 2 Transport layer version)"
+ ]
+        =       0
         ALIGN
 
 Mod_SWITable
+ [ BuildAsMPEGControl
         =       "MPEGControl", 0
+ |
+        =       "MPEGTransport", 0
+ ]
         =       "OpenStream", 0
         =       "FullBuffers", 0
         =       "CloseStream", 0
@@ -236,7 +359,12 @@ Mod_SWITable
 	=	"SoundVolume", 0
 	=	"SelectProgram", 0
 	=	"Stats", 0
+	=	"RegisterProgramElementHandler", 0
+	=	"DeregisterProgramElementHandler", 0
+	=	"SetAudioParameters", 0
         =       0
+
+ [ BuildAsMPEGControl
 
 Mod_HC_Table
         Command CtrlInfo, 0, 0
@@ -256,6 +384,29 @@ CtrlDebugOff_Help
         =       "*CtrlDebugOff disables continuous debugging output.", CR
 CtrlDebugOff_Syntax
         =       "Syntax: *CtrlDebugOff", 0
+
+ |
+
+Mod_HC_Table
+        Command TransCtrlInfo, 0, 0
+        Command TransCtrlDebugOn, 0, 0
+        Command TransCtrlDebugOff, 0, 0
+        =       0
+
+TransCtrlInfo_Help
+        =       "*TransCtrlInfo outputs debugging info.", CR
+TransCtrlInfo_Syntax
+        =       "Syntax: *TransCtrlInfo", 0
+TransCtrlDebugOn_Help
+        =       "*TransCtrlDebugOn enables continuous debugging output.", CR
+TransCtrlDebugOn_Syntax
+        =       "Syntax: *TransCtrlDebugOn", 0
+TransCtrlDebugOff_Help
+        =       "*TransCtrlDebugOff disables continuous debugging output.", CR
+TransCtrlDebugOff_Syntax
+        =       "Syntax: *TransCtrlDebugOff", 0
+
+ ]
 
         ALIGN
 
@@ -285,9 +436,24 @@ Mod_Init Entry
         STR     r0, FreePacketListHeadPtr
         STR     r0, FreePacketListTailPtr
         STR     r0, DebugFlag
-
+ [ DoPEH
+	STR	r0, GlobalPEHList	; no handlers on list to start with
+	STR	r0, ControlStreamHandle+CSH_ListOfPEHPIDs ; control stream handle not valid, so no PEHPIDs
+ ]
         LDR     r0, PullPCInstruction
         STR     r0, SWIInstruction +4
+
+      [ :LNOT: BuildAsMPEGControl
+        MOV     r0, #2
+        MOV     r1, #1
+        ADR     r2, Module_BaseAddr
+        MOV     r3, r12
+        SWI     XMPEGControl_ControlOp  ; Let MPEGControl know we've initialised
+      ]
+
+	ADR	r0, IssueServiceMPEGControlStarting
+	MOV	r1, wp
+	SWI	XOS_AddCallBack
 
         CLRV
         EXIT
@@ -303,6 +469,12 @@ PullPCInstruction
 Mod_Die Entry
         LDR     wp, [r12]
 
+; Ensure that the callback requested on init doesn't go off after we're dead
+
+	ADR	r0, IssueServiceMPEGControlStarting
+	MOV	r1, wp
+	SWI	XOS_RemoveCallBack
+
 ; Free all the packets on our free list
 
 	LDR	r1, FreePacketListHeadPtr
@@ -315,8 +487,23 @@ Mod_Die Entry
 	B	%BT10					; and try again
 
 90
+      [ :LNOT: BuildAsMPEGControl
+        MOV     r0, #3
+        MOV     r1, #1
+        SWI     XMPEGControl_ControlOp  ; Let MPEGControl know we've died
+      ]
+
         CLRV
         EXIT
+
+; **************************************************************************
+;
+;	IssueServiceMPEGControlStarting - Issue start-up service
+
+IssueServiceMPEGControlStarting Entry "r1"
+	MOV	r1, #Service_MPEGControlStarting
+	SWI	XOS_ServiceCall
+	EXIT
 
 ; **************************************************************************
 ;
@@ -338,7 +525,7 @@ Mod_Service * Module_BaseAddr   ; nothing to do yet!
 
 Mod_SWIHandler ROUT
         LDR     r12, [wp]
-        CMP     r11, #MPEGControlSWICheckValue - MPEGControlSWI_Base
+        CMP     r11, #MPEGControlSWICheckValue1 - MPEGControlSWI_Base
         ADDCC   pc, pc, r11, LSL #2
         B       NoSuchSWI
 SWIBTable
@@ -352,9 +539,16 @@ SWIBTable
 	B	SoundVolume	; set/read sound volume
 	B	SelectProgram	; select program to watch
 	B	Stats		; return statistics
+	B	RegisterProgramElementHandler ; register a new program element handler
+	B	DeregisterProgramElementHandler ; and deregister it
+	B	SetAudioParameters ; set audio parameters
 
-	ASSERT  (MPEGControlSWICheckValue - MPEGControlSWI_Base)*4 = {PC} - SWIBTable
+	ASSERT  (MPEGControlSWICheckValue1 - MPEGControlSWI_Base)*4 = {PC} - SWIBTable
 
+ [ :LNOT: DoPEH
+RegisterProgramElementHandler
+DeregisterProgramElementHandler
+ ]
 NoSuchSWI
         Push    "lr"
         SWI     XOS_WriteI+22
@@ -392,13 +586,7 @@ OpenStream Entry "r0-r2"
         STR     lr, [r1, #CSH_NotReadyBits]             ; which bits are not yet ready to play
 	STR	lr, [r1, #CSH_LastResetStreamFlags]
 
- [ SendFirstSCR
-        ASSERT  StreamFlags_VideoPresent = 1
-        ANDS    lr, r0, #StreamFlags_VideoPresent
-        STR     lr, [r1, #CSH_SendNextSCR]              ; only send 1st SCR if doing video
- |
         TST     r0, #StreamFlags_VideoPresent
- ]
         BEQ     %FT10
 
         SWI     XMPEGVideo_OpenStream                   ; in: r0 = stream flags
@@ -419,6 +607,78 @@ OpenStream Entry "r0-r2"
         ADR     r1, ControlStreamHandle
         STR     r0, [r1, #CSH_AudioStreamHandle]
 20
+ [ DoPEH
+	Push	"r3-r6"
+; Zero the pointer to the list of PEHPIDs
+
+	MOV	r6, #0
+	STR	r6, [r1, #CSH_ListOfPEHPIDs]
+	LDR	lr, [r1, #CSH_StreamFlags]
+	TST	lr, #StreamFlags_DVB			; are we doing DVB
+	MOVNE	r5, #PIDSlot_Extra			; yes, use base of PID slots to use for PEH requests
+	MOVEQ	r5, #-1					; no, then no slots to allocate
+
+; For each PEH on global list:
+	LDR	r6, GlobalPEHList
+25
+	TEQ	r6, #0
+	BEQ	%FT50					; [no more PEHs to consider]
+
+; Allocate a PEHPID
+
+	MOV	r0, #ModHandReason_Claim
+	MOV	r3, #PEHPIDSize
+	SWI	XOS_Module
+	Pull	"r3-r6", VS				; if failed to claim PEHPID, exit with error
+	EXIT	VS
+
+;   Issue OpenStream reason code to handler
+
+30
+	Push	"r1,r2"
+	MOV	r0, #PEHReason_OpenStream
+	MOV	r2, r1					; r2 = control stream handle
+	LDR	r1, [r2, #CSH_StreamFlags]		; r1 = stream flags
+	MOV	r3, #0					; no program element parameters struct yet
+	BL	CallPEH
+	Pull	"r1,r2"
+	BVS	%FT45					; error, so don't include this
+	TEQ	r0, #0
+	BEQ	%FT45					; returned zero handle, so don't include this
+
+	STR	r0, [r2, #PEHPID_ProgramElementStreamHandle] ; save PEH stream handle
+	STR	r6, [r2, #PEHPID_PEH]
+	MOV	lr, #0
+	STR	lr, [r2, #PEHPID_Flags]			; no meaning to this yet
+	LDR	lr, [r6, #PEH_Flags]
+	TST	lr, #PEHFlags_StreamIdentifiedByPID
+	MOVEQ	lr, #-1					; it's a stream_type, so no PID found for this yet
+	LDRNE	lr, [r6, #PEH_StreamType]		; stream type is really a raw PID, so allow it straight away
+	STR	lr, [r2, #PEHPID_PID]			; store PID
+	STR	r5, [r2, #PEHPID_PIDSlot]		; use this PID slot
+	CMP	r5, #NumberOfPIDSlots-1			; if we've just used the last slot (or already run out)
+	MOVCS	r5, #-1					; then no more PID slots free
+	ADDCC	r5, r5, #1				; else advance to next slot
+	LDR	lr, [r1, #CSH_ListOfPEHPIDs]		; add PEHPID onto list for this stream
+	STR	lr, [r2, #PEHPID_Link]
+	STR	r2, [r1, #CSH_ListOfPEHPIDs]
+	LDR	r6, [r6, #PEH_Link]
+	B	%BT25
+
+; handler didn't return a valid handle, so if we're the last PEH, we must free it
+; else process next PEH using the same PEHPID
+
+45
+	LDR	r6, [r6, #PEH_Link]
+	TEQ	r6, #0
+	BNE	%BT30					; [not at end, so reuse this PEHPID for the next PEH]
+
+	MOV	r0, #ModHandReason_Free
+	SWI	XOS_Module				; free PEHPID node
+
+50
+	Pull	"r3-r6"
+ ] ; DoPEH
         SWI     XOS_ReadMonotonicTime
         STR     r0, [r1, #CSH_StartTime]
         STR     r0, [r1, #CSH_LastTime]
@@ -426,8 +686,17 @@ OpenStream Entry "r0-r2"
         MOV     r0, #0
         STR     r0, [r1, #CSH_DataReceived]
 	STR	r0, [r1, #CSH_DataReturned]
+	STR	r0, [r1, #CSH_DataDiscarded]
  [ Save1stPacket
 	STR	r0, [r1, #CSH_SavedLength]		; not saved any data yet
+ ]
+ [ CoroutineStackCopied
+	STR	r0, [r1, #CSH_CoroutineStackCopy]	; no block allocated yet
+	STR	r0, [r1, #CSH_CoroutineStackBlockSize]	; no space in it
+ ]
+ [ ParseOVSNPT
+	STRB	r0, [r1, #CSH_NPTDescLength]		; no bytes in stored descriptor
+	STR	r0, [r1, #CSH_NPTCurrent]		; no current descriptor
  ]
         MOV     r0, #-1
 	STR	r0, [r1, #CSH_CurrentProgram]		; just choose 1st program for now
@@ -437,6 +706,9 @@ OpenStream Entry "r0-r2"
  [ SkipToCorrectTrickMode
 	STR	r0, [r1, #CSH_LastTrickModeControl]	; indicate normal play
  ]
+ [ ParseOVSNPT
+	STR	r0, [r1, #CSH_LastContentID]		; no content ID fields yet
+ ]
 
 	MOV	lr, #1
 	STR	lr, [r1, #CSH_CurrentVideoStream]
@@ -445,10 +717,11 @@ OpenStream Entry "r0-r2"
  [ DataRateStats
         MOV     lr, #DataCountArraySize-1               ; initialise all data counts to zero
         ADD     r2, r1, #CSH_DataCounts
-30
+	MOV	r0, #0
+80
         STR     r0, [r2, lr, LSL #2]
         SUBS    lr, lr, #1
-        BPL     %BT30
+        BPL     %BT80
  ]
 
         MOV     r0, r1
@@ -479,7 +752,7 @@ Play    Entry "r0-r3"
         EXIT    NE                              ; someone still isn't ready
 
         LDR     r3, [r1, #CSH_LastResetStreamFlags]
-        TST     r3, #StreamFlags_VideoPresent
+        TST     r3, #ResetStreamFlags_VideoPresent
         BEQ     %FT10
 
         Push    "r1,r2"
@@ -490,7 +763,7 @@ Play    Entry "r0-r3"
         STRVS   r0, [sp]
         EXIT    VS
 10
-        TST     r3, #StreamFlags_AudioPresent
+        TST     r3, #ResetStreamFlags_AudioPresent
         BEQ     %FT20
 
         Push    "r1,r2"
@@ -598,6 +871,26 @@ SoundVolume Entry "r0,r1"
 
 ; **************************************************************************
 ;
+;       SetAudioParameters - Set various audio parameters
+;
+; in:   r0 = reason code
+;       r1 = external stream handle
+;	Others depend on reason code
+;
+; out:  Depends on reason code
+;
+
+SetAudioParameters Entry "r0,r1"
+	CLRV
+        LDR     lr, [r1, #CSH_StreamFlags]
+        TST     lr, #StreamFlags_AudioPresent
+	LDRNE	r1, [r1, #CSH_AudioStreamHandle]
+        SWINE   XMPEGAudio_SetAudioParameters		; only execute it if audio present
+        STRVS   r0, [sp]
+        EXIT
+
+; **************************************************************************
+;
 ;       FullBuffers - Here's some more data
 ;
 ; in:   r0 = flags
@@ -687,8 +980,10 @@ debug   SETL    {FALSE}
         TST     lr, #StreamFlags_StreamClosing          ; then call the coroutines to parse the buffer
 	BNE	%FT15
 	DLine	"Calling coroutines"
+ [ :LNOT: CoroutineStackCopied
 	LDR	lr, [r1, #CSH_TransportSP]
 	DReg	lr, "Coroutine SP = "
+ ]
         BL      CallCoroutines                          ; otherwise effectively junk any data in the buffer
 	DLine	"Came back from coroutines"
 
@@ -767,6 +1062,43 @@ CloseStream Entry "r0"
         SWI     XMPEGAudio_CloseStream
         Pull    "r0, r1"
 30
+ [ DoPEH
+	Push	"r1-r3,r6"
+	LDR	r3, [r1, #CSH_ListOfPEHPIDs]
+35
+	TEQ	r3, #0					; any more PEHPIDs to consider
+	BEQ	%FT50					; [no, so exit]
+	MOV	r0, #PEHReason_CloseStream
+	MOV	r1, #0					; flags
+	LDR	r2, [r3, #PEHPID_ProgramElementStreamHandle]
+	LDR	r6, [r3, #PEHPID_PEH]			; point r6 at PEH for CallPEH
+	BL	CallPEH
+	MOV	r2, r3					; save copy of PEHPID to free
+	LDR	r3, [r3, #PEHPID_Link]			; advance to next before freeing
+	LDR	r1, [sp, #0*4]				; reload CSH pointer
+	STR	r3, [r1, #CSH_ListOfPEHPIDs]		; remove node from head of list
+	MOV	r0, #ModHandReason_Free
+	SWI	XOS_Module
+	B	%BT35
+
+50
+	Pull	"r1-r3,r6"
+ ] ; DoPEH
+
+ [ CoroutineStackCopied
+
+; Now free the coroutine stack block
+
+	Push	"r0-r2"
+	LDR	r2, [r1, #CSH_CoroutineStackCopy]
+	TEQ	r2, #0
+	MOVNE	r0, #ModHandReason_Free
+	SWINE	XOS_Module
+	MOV	r2, #0
+	STR	r2, [r1, #CSH_CoroutineStackCopy]
+	STR	r2, [r1, #CSH_CoroutineStackBlockSize]
+	Pull	"r0-r2"
+ ]
         CLRV
         EXIT
 
@@ -798,27 +1130,56 @@ SelectProgram Entry "r3,r4"
 	TEQEQ	lr, r4
 	EXIT	EQ		; program and video stream and audio stream all the same, do nowt
 
+	BL	InvalidatePIDs	; forget all about PMT, video, audio and PEH PIDs
+
+	Push	"r0-r3"
+	LDR	r0, [r1, #CSH_StreamFlags]
+	TST	r0, #StreamFlags_DVB
+	BEQ	%FT60
+	Push	"r0-r2"
+	SWI	XDVBControl_ResetStream
+	MOV	r0, #2
+	MOV	r1, #&00000047
+	LDR	r2, =&00FF1FFF		; re-enable PID 0
+	SWI	XDVBControl_MatchMask
+	Pull	"r0-r2"
+60
+	AND	r0, r0, #StreamFlags_VideoPresent :OR: StreamFlags_AudioPresent
+	BL	ResetStream
+	Pull	"r0-r3"
+	EXITS				; ignore errors
+
+; **************************************************************************
+;
+;       InvalidatePIDs - Called by SelectProgram/ResetStream to invalidate PMT/Video/Audio/PEH PIDs
+;
+; in:   r1 -> control stream handle
+;
+; out:  -
+;
+
+InvalidatePIDs Entry "r0,r2"
 	MOV	lr, #-1
 	STR	lr, [r1, #CSH_PMT_PID]
 	STR	lr, [r1, #CSH_Video_PID]
 	STR	lr, [r1, #CSH_Audio_PID]
 
-	Push	"r0-r3"
-	LDR	r0, [r1, #CSH_StreamFlags]
-	TST	r0, #StreamFlags_DVB
-	BEQ	%FT10
-	Push	"r0-r2"
-	SWI	XDVBControl_ResetStream
-	MOV	r0, #2
-	MOV	r1, #&47
-	LDR	r2, =&00FF1FFF		; re-enable PID 0
-	SWI	XDVBControl_MatchMask
-	Pull	"r0-r2"
+ [ DoPEH
+	LDR	r2, [r1, #CSH_ListOfPEHPIDs]
 10
-	AND	r0, r0, #StreamFlags_VideoPresent :OR: StreamFlags_AudioPresent
-	BL	ResetStream
-	Pull	"r0-r3"
-	EXITS				; ignore errors
+	TEQ	r2, #0				; no more PEHPIDs?
+	BEQ	%FT30				; then skip
+	LDR	lr, [r2, #PEHPID_PEH]		; get PEH for PEHPID
+	LDR	r0, [lr, #PEH_Flags]		; first check that this PEH uses stream_type
+	TST	r0, #PEHFlags_StreamIdentifiedByPID ; (bit must be clear)
+	MOVEQ	lr, #-1				; uses stream_type, so invalidate this PID
+	STREQ	lr, [r2, #PEHPID_PID]
+20
+	LDR	r2, [r2, #PEHPID_Link]		; move to next PEHPID
+	B	%BT10				; and loop
+30
+ ]
+	EXIT
 
 ; **************************************************************************
 ;
@@ -877,6 +1238,7 @@ FreePackets Entry "r0-r5, wp"
 ;		bit 0 set => new stream has video data
 ;		bit 1 set => new stream has audio data
 ;		bit 2 set => discard data until we get data of trick mode specified by r2
+;	        bit 3 set => OVS trick play mode
 ;	r1 = control stream handle
 ;	r2 = trick mode of required data (if bit 2 of r0 set):
 ; 		0 => fast forward
@@ -897,15 +1259,22 @@ ResetStream Entry "r0-r3"
 	MOV	r3, #0
 	STR	r3, [sp, #2*4]			; zero the returned r2
 	STR	r3, [sp, #3*4]			; zero the returned r3
+ [ ParseOVSNPT
+	STR	r3, [r1, #CSH_NPTCurrent]	; no bytes in stored descriptor
+ ]
 
         LDR     r3, [r1, #CSH_StreamFlags]
  [ SkipToCorrectTrickMode
-	TST	r0, #1 :SHL: 2					; if we need to skip to correct mode
+	TST	r0, #ResetStreamFlags_SkipUntilCorrectMode	; if we need to skip to correct mode
 	STRNE	r2, [r1, #CSH_TrickModeControl]			; then save new mode
 	ORRNE	r3, r3, #StreamFlags_SkipUntilCorrectMode	; and set bit in stream flags so we discard
 	BICEQ	r3, r3, #StreamFlags_SkipUntilCorrectMode	; else clear bit so we don't discard any more
 	STRNE	r3, [r1, #CSH_StreamFlags]
-	BICNE	r0, r0, #1 :SHL: 2				; knock out bit, so we don't confuse ready bits
+ ]
+ [ ParseOVSNPT
+	TST	r3, #StreamFlags_OVSNPTDescriptors		; if we're supporting OVS NPT descriptors
+	ORRNE	r3, r3, #StreamFlags_OVSNPTSkipping		; then discard data until we see contentID change
+	STRNE	r3, [r1, #CSH_StreamFlags]
  ]
 
         TST     r3, #StreamFlags_VideoPresent
@@ -930,7 +1299,10 @@ ResetStream Entry "r0-r3"
         STRVS   r0, [sp]
         EXIT    VS
 20
+	ASSERT	StreamFlags_VideoPresent = ResetStreamFlags_VideoPresent
+	ASSERT	StreamFlags_AudioPresent = ResetStreamFlags_AudioPresent
 	AND	r0, r0, r3			; and out impossible bits in new stream vid/aud flags
+	AND	r0, r0, #StreamFlags_VideoPresent :OR: StreamFlags_AudioPresent
 	STR	r0, [r1, #CSH_NotReadyBits]
 	STR	r0, [r1, #CSH_LastResetStreamFlags]
 
@@ -946,11 +1318,190 @@ ResetStream Entry "r0-r3"
 	STR	r0, [r1, #CSH_SavedLength]		; not saved any data yet
  ]
 
+	BL	InvalidatePIDs			; throw away any stale PIDs
+
 	MOV	r0, r1
 	BL	ts_coinit
 
         CLRV
         EXIT
+
+ [ DoPEH
+; **************************************************************************
+;
+;	RegisterProgramElementHandler - Entry point for SWI
+;
+; in:	r0 = flags:
+;	  bit 0 set => MPEGControl module should include adaptation fields in
+;		       payload, when they occur (indicated by a bit in packet
+;		       descriptor flags)
+;	  bit 1 set => MPEGControl module should include PES packet headers
+;	  bit 2 set => MPEGControl module should include the whole of the TS
+;		       packet in the payload (in this case the program element
+;		       handler is responsible for adaptation field parsing)
+;	  bit 3 set => r1 is absolute PID, not stream_type
+;	  Other bits reserved (should be zero)
+;
+;	r1 = stream identifier:
+;	      if bit 3 of flags set then absolute PID;
+;	      if bit 3 of flags clear then stream_type (as defined by the MPEG 2 Systems specification,
+;	     table 2-36, page 64)
+;
+;	r2 = entry address for handler
+;	r3 = workspace pointer for handler
+;
+; out:	All registers preserved
+
+RegisterProgramElementHandler Entry "r4"
+
+; check if stream type in r1 matches any PEH on global list - if so, error
+
+	LDR	r4, GlobalPEHList
+10
+	TEQ	r4, #0				; if at end of list
+	BEQ	%FT20				; then OK
+
+	LDR	lr, [r4, #PEH_StreamType]	; then load streamtype
+	TEQ	lr, r1				; if a match
+	LDREQ	lr, [r4, #PEH_Flags]		; then check flags also match
+	TEQEQ	lr, r0	 			; to avoid problems if one is a stream_type and one is a PID
+	LDRNE	r4, [r4, #PEH_Link]		; if no match then goto next
+	BNE	%BT10				; and loop
+
+	TEQ	r4, #0				; did we get to end of list?
+	BNE	%FT90				; if not, then already a handler for that
+						; stream type, so report an error
+; allocate a PEH node - if fail, then error
+
+20
+	Push	"r0-r3"
+	MOV	r0, #ModHandReason_Claim
+	MOV	r3, #PEHSize
+	SWI	XOS_Module
+	MOVVC	r4, r2				; if no error transfer ptr to r4
+	STRVS	r0, [sp]			; if error, save error ptr in stacked r0
+	Pull	"r0-r3"
+	EXIT	VS
+
+; store all info in node
+
+	STR	r0, [r4, #PEH_Flags]
+	STR	r1, [r4, #PEH_StreamType]
+	STR	r2, [r4, #PEH_HandlerCode]
+	STR	r3, [r4, #PEH_HandlerWS]
+
+; add PEH to global list (at head of list is easiest)
+; NB no atomicity problems - PEH list can only be updated from foreground
+
+	LDR	lr, GlobalPEHList
+	STR	lr, [r4, #PEH_Link]
+	STR	r4, GlobalPEHList
+
+; exit, indicating success
+
+	CLRV
+	EXIT
+
+; exit with error
+
+90
+	ADR	r0, DuplicateElementHandlerError
+	SETV
+	EXIT
+
+DuplicateElementHandlerError
+	&	0
+	=	"Program element handler already registered for this stream type", 0
+	ALIGN
+
+; **************************************************************************
+;
+;	DeregisterProgramElementHandler - Entry point for SWI
+;
+; in:	r0 = flags (should be same as for RegisterProgramElementHandler)
+;	r1 = stream type (ditto)
+;	r2 = entry address for handler
+;	r3 = workspace pointer for handler
+;
+; out:	All registers preserved
+
+DeregisterProgramElementHandler Entry "r4-r6"
+
+; check if (stream type,entry,ws) matches any PEH on global list - if not, error
+
+	ADR	r6, GlobalPEHList
+	LDR	r4, [r6]
+10
+	TEQ	r4, #0				; if at end of list
+	BEQ	%FT90				; didn't find a match, so error
+
+	LDR	lr, [r4, #PEH_StreamType]	; load streamtype
+	TEQ	lr, r1				; and check for match
+	LDREQ	lr, [r4, #PEH_Flags]		; load flags
+	TEQEQ	lr, r0	 			; and check for match
+	LDREQ	lr, [r4, #PEH_HandlerCode]	; if match then load handler code address
+	TEQEQ	lr, r2				; and check for match
+	LDREQ	lr, [r4, #PEH_HandlerWS]	; if match then load handler WS ptr
+	TEQEQ	lr, r3				; and check for match
+	MOVNE	r6, r4				; if no match then update prev ptr
+	LDRNE	r4, [r4, #PEH_Link]		; if no match then goto next
+	BNE	%BT10				; and loop
+
+; check if any stream contains a PEHPID node which points at this PEH
+; if so, error
+
+; In the current implementation, there can be only one stream open at a time
+; We assume that if no stream is open, then ControlStreamHandle+CSH_ListOfPEHPIDs holds zero.
+
+	ADR	r5, ControlStreamHandle
+	LDR	r5, [r5, #CSH_ListOfPEHPIDs]
+20
+	TEQ	r5, #0
+	BEQ	%FT30				; no more PEHPIDs, so OK
+	LDR	lr, [r5, #PEHPID_PEH]		; get corresponding PEH
+	TEQ	lr, r4				; does it match the PEH we're trying to delete
+	LDRNE	r5, [r5, #PEHPID_Link]		; no, then link to next one
+	BNE	%BT20				; and loop
+
+	ADR	r0, ProgramElementHandlerInUseError
+	B	%FT92				; can't remove PEH, cos there's an open stream using it
+
+; delink PEH node from global list
+30
+	LDR	lr, [r4, #PEH_Link]		; prev->link = this->link
+	STR	lr, [r6, #PEH_Link]
+
+; free PEH node
+
+	Push	"r0-r2"
+	MOV	r0, #ModHandReason_Free
+	MOV	r2, r4
+	SWI	XOS_Module			; ignore any error from free - we can't do much about it
+	Pull	"r0-r2"
+
+; exit, no error
+
+	CLRV
+	EXIT
+
+; exit with error
+
+90
+	ADR	r0, ProgramElementHandlerNotFoundError
+92
+	SETV
+	EXIT
+
+ProgramElementHandlerNotFoundError
+	&	0
+	=	"Program element handler not found", 0
+	ALIGN
+
+ProgramElementHandlerInUseError
+	&	0
+	=	"Program element handler in use", 0
+	ALIGN
+ ] ; DoPEH
 
 ; **************************************************************************
 ;
@@ -1025,16 +1576,59 @@ FreeBuffer Entry "r0-r3,r12"
 ;       r10 video/audio selector for packet
 ;       r11 packet descriptor in preparation
 
+ [ CoroutineStackCopied
+ts_extendstackblock Entry "r0-r3"
+	MOV	r3, r6				; number of excess bytes needed
+	LDR	r2, [r1, #CSH_CoroutineStackCopy]
+	TEQ	r2, #0
+	MOVEQ	r0, #ModHandReason_Claim	; if no block yet, then claim one
+	MOVEQ	r3, #16*4			; of 16 words (should be enough)
+	MOVNE	r0, #ModHandReason_ExtendBlock
+	SWI	XOS_Module			; let's hope this never fails!
+	STR	r2, [r1, #CSH_CoroutineStackCopy]
+	LDR	lr, [r1, #CSH_CoroutineStackBlockSize]
+	ADD	lr, lr, r3			; increased block size
+	STR	lr, [r1, #CSH_CoroutineStackBlockSize]
+	EXIT
+ ]
+
 CallCoroutines Entry "r5-r11"
         STR     sp, [r1, #CSH_ExternalSP]
+ [ CoroutineStackCopied
+	LDR	r5, [r1, #CSH_CoroutineStackSize]
+	TEQ	r5, #0
+	LDRNE	r6, [r1, #CSH_CoroutineStackCopy]
+	ADDNE	r6, r6, r5
+10
+	LDRNE	r7, [r6, #-4]!
+	Push	r7, NE
+	SUBNES	r5, r5, #4
+	BNE	%BT10
+ |
         LDR     sp, [r1, #CSH_TransportSP]
+ ]
         EXIT
 
 ; ts_cowait (Transport Stream layer)
 
 ts_cowait  ALTENTRY
+ [ CoroutineStackCopied
+	LDR	r5, [r1, #CSH_ExternalSP]
+	SUB	r5, r5, sp			; how many bytes on coroutine stack
+	STR	r5, [r1, #CSH_CoroutineStackSize]
+	LDR	r6, [r1, #CSH_CoroutineStackBlockSize]
+	SUBS	r6, r5, r6			; number of excess bytes
+	BLHI	ts_extendstackblock
+	LDR	r6, [r1, #CSH_CoroutineStackCopy]
+10
+	Pull	r7				; there's always at least one word (r5-r11 stacked)
+	STR	r7, [r6], #4			; copy data into RMA block
+	SUBS	r5, r5, #4
+	BNE	%BT10
+ |
         STR     sp, [r1, #CSH_TransportSP]       ; save transport layer stack pointer
         LDR     sp, [r1, #CSH_ExternalSP]
+ ]
         EXIT
 
 ; ts_coinit
@@ -1045,7 +1639,9 @@ ts_cowait  ALTENTRY
 
 ts_coinit ALTENTRY                              ; must push same stuff as CoWait pulls
         STR     sp, [r1, #CSH_ExternalSP]
+ [ :LNOT: CoroutineStackCopied
         LDR     sp, =TransportStack
+ ]
         BL      ts_cowait
 
 ; and when we come back, drop thru to...
@@ -1070,17 +1666,53 @@ ts_wait_for_sync_loop
         ORR     r5, r7, r5, LSL #8              ; r5 = PID
         BL      ts_getbytedec                   ; r7 = transport_scrambling_control (2 bits), adaptation_field_control (2 bits), continuity_counter (4 bits)
         ORR     r9, r7, r9, LSL #8              ; r9 now has byte 1 of packet in bits 8..15, and byte 3 of packet in bits 0..7
+
+ [ DoPEH
+
+; do PEH first, so get in before old-style (SWI based) video
+
+	LDR	lr, [r1, #CSH_ListOfPEHPIDs]
+10
+	TEQ	lr, #0
+	BEQ	%FT20
+	LDR	r6, [lr, #PEHPID_PID]
+	TEQ	r5, r6				; check if PID matches
+	LDRNE	lr, [lr, #PEHPID_Link]
+	BNE	%BT10
+
+; found a match, so point r5 at PEHPID and jump to common code
+
+	MOV	r5, lr
+	B	ts_process_common
+
+20
+ ] ; DoPEH
+
+; check for video first, it's the most likely thing
+
+        LDR     lr, [r1, #CSH_Video_PID]
+        TEQ     r5, lr
+        BEQ     ts_process_video_PID
+
+        LDR     lr, [r1, #CSH_Audio_PID]
+        TEQ     r5, lr
+        BEQ     ts_process_audio_PID
+
         TEQ     r5, #0
         BEQ     ts_process_PID0
         LDR     lr, [r1, #CSH_PMT_PID]
         TEQ     r5, lr
         BEQ     ts_process_PMT_PID
-        LDR     lr, [r1, #CSH_Video_PID]
-        TEQ     r5, lr
-        BEQ     ts_process_video_PID
-        LDR     lr, [r1, #CSH_Audio_PID]
-        TEQ     r5, lr
-        BEQ     ts_process_audio_PID
+
+; this packet was not used, so increment the count of discarded data
+
+	LDR	lr, [r1, #CSH_StreamFlags]
+	TST	lr, #StreamFlags_DVB			; check if DVB (extra 4 bytes if so)
+	LDR	lr, [r1, #CSH_DataDiscarded]
+	ADD	lr, lr, #TS_PacketLength		; add on 1 TS packet
+	ADDNE	lr, lr, #4				; add on extra 4 bytes if DVB
+	STR	lr, [r1, #CSH_DataDiscarded]
+
 ts_skip_to_next_packet
         MOV     r10, r8
         BL      ts_skipbytes
@@ -1134,6 +1766,10 @@ ts_process_PID0 ROUT
         BL      ts_getbytedec
         ORRS    r9, r7, r9, LSL #8
 	LDR	lr, [r1, #CSH_PMT_PID]
+ [ OnlyAcceptFirstPATandPMT
+	CMP	lr, #-1				; if already know PMT_PID
+	BNE	ts_skip_to_next_packet		; then skip to next packet
+ ]
         STR     r9, [r1, #CSH_PMT_PID]
 	CMP	lr, r9
 	LDRNE	r7, [r1, #CSH_StreamFlags]
@@ -1141,7 +1777,7 @@ ts_process_PID0 ROUT
         BEQ     ts_skip_to_next_packet		; same as last time, or not doing DVB, so continue
 
 	Push	"r0-r2"
-	MOV	r0, #2
+	MOV	r0, #PIDSlot_PMT
 	MOV	r1, r9
 	BL	ts_pid_enable			; enable new PMT_PID (overwrites old)
 	Pull	"r0-r2"
@@ -1165,17 +1801,8 @@ ts_process_PMT_PID ROUT
         BL      ts_getbytedec
         ORR     r5, r7, r5, LSL #8              ; r5 = section length
 
+        BL      ts_getbytedec			; skip program number
         BL      ts_getbytedec
- [ {FALSE}
-        TEQ     r7, #TS_Program_Number :SHR: 8
-        BNE     ts_skip_to_next_packet
- ]
-
-        BL      ts_getbytedec
- [ {FALSE}
-        TEQ     r7, #TS_Program_Number :AND: &FF
-        BNE     ts_skip_to_next_packet
- ]
 
         BL      ts_getbytedec                   ; get 2 reserved, 5 version number, 1 current_next_indicator
         BL      ts_getbytedec                   ; get section_number (must be zero)
@@ -1189,9 +1816,15 @@ ts_process_PMT_PID ROUT
         SUB     r5, r5, #9+4                    ; reduce count by all the bytes since section length, + 4 for CRC on end
 
         ORR     r10, r7, r9, LSL #8             ; program_info_length
-        SUB     r5, r5, r10                     ; reduce count for length of descriptors
+        SUBS    r5, r5, r10                     ; reduce count for length of descriptors
+	BCC	ts_skip_to_next_packet		; bogus descriptors length
+ [ ParseOVSNPT
+	LDR	lr, [r1, #CSH_StreamFlags]
+	TST	lr, #StreamFlags_OVSNPTDescriptors
+	BNE	ts_check_for_OVSNPT
+ ]
         BL      ts_skipbytes
-
+ts_process_rest_of_PMT
 	LDR	lr, [r1, #CSH_CurrentVideoStream] ; copy currents to temps
 	STR	lr, [r1, #CSH_TempVideoStream]
 	LDR	lr, [r1, #CSH_CurrentAudioStream]
@@ -1210,56 +1843,100 @@ ts_process_PMT_PID ROUT
  [ AllowMPEG2Video
 	TEQNE	r9, #TS_Stream_Type_MPEG2Video
  ]
-	BNE	%FT12
+	BNE	%FT40
 
 	LDR	lr, [r1, #CSH_TempVideoStream]
 	SUBS	lr, lr, #1
 	STR	lr, [r1, #CSH_TempVideoStream]
-	BNE	%FT12				; not our stream so ignore
+	BNE	%FT60				; not our stream so ignore
 
 	LDR	lr, [r1, #CSH_Video_PID]
+ [ OnlyAcceptFirstPATandPMT
+	CMP	lr, #-1				; if we already know this PID
+	BNE	%FT60				; then ignore it
+ ]
         STR     r10, [r1, #CSH_Video_PID]
 	TEQ	lr, r10				; check if same as old
 	LDRNE	r7, [r1, #CSH_StreamFlags]
 	TSTNE	r7, #StreamFlags_DVB		; if same, or not doing DVB
-	BEQ	%FT12				; then ignore
+	BEQ	%FT60				; then ignore
 
 	Push	"r0-r2"
 	MOV	r0, #&10000000			; large value, so will get limited to max packet size
 	SWI	XDVBControl_PacketCounter
-	MOV	r0, #0
+	MOV	r0, #PIDSlot_Video
 	MOV	r1, r10
 	BL	ts_pid_enable			; enable new video PID (overwrites old)
 	Pull	"r0-r2"
+	B	%FT60				; also check for PEH
 
-12
+40
         TEQ     r9, #TS_Stream_Type_MPEG1Audio
  [ AllowMPEG2Audio
 	TEQNE	r9, #TS_Stream_Type_MPEG2Audio
  ]
-	BNE	%FT14
+	BNE	%FT60
 
 	LDR	lr, [r1, #CSH_TempAudioStream]
 	SUBS	lr, lr, #1
 	STR	lr, [r1, #CSH_TempAudioStream]
-	BNE	%FT14				; not our stream so ignore
+	BNE	%FT60				; not our stream so ignore
 
 	LDR	lr, [r1, #CSH_Audio_PID]
+ [ OnlyAcceptFirstPATandPMT
+	CMP	lr, #-1				; if we already know this PID
+	BNE	%FT60				; then ignore it
+ ]
         STR     r10, [r1, #CSH_Audio_PID]
 	TEQ	lr, r10				; check if same as old
 	LDRNE	r7, [r1, #CSH_StreamFlags]
 	TSTNE	r7, #StreamFlags_DVB		; if same, or not doing DVB
-	BEQ	%FT14				; then ignore
+	BEQ	%FT60				; then ignore
 
 	Push	"r0-r2"
 	MOV	r0, #&10000000			; large value, so will get limited to max packet size
 	SWI	XDVBControl_PacketCounter
-	MOV	r0, #1
+	MOV	r0, #PIDSlot_Audio
 	MOV	r1, r10
 	BL	ts_pid_enable			; enable new audio PID (overwrites old)
 	Pull	"r0-r2"
 
-14
+; and drop thru to...
+; now check against the stream types of all PEHPIDs
+
+60
+ [ DoPEH
+	Push	"r0,r2"
+	LDR	r2, [r1, #CSH_ListOfPEHPIDs]
+65
+	TEQ	r2, #0				; no more PEHPIDs?
+	BEQ	%FT78				; then skip
+	LDR	lr, [r2, #PEHPID_PEH]		; get PEH for PEHPID
+	LDR	r0, [lr, #PEH_Flags]		; first check that this PEH uses stream_type
+	TST	r0, #PEHFlags_StreamIdentifiedByPID ; (bit must be clear)
+	LDREQ	lr, [lr, #PEH_StreamType]	; get stream type for PEH
+	TEQEQ	lr, r9				; check stream type against PEH's
+	BNE	%FT75				; no match, go to next one
+ [ OnlyAcceptFirstPATandPMT
+	LDR	lr, [r2, #PEHPID_PID]
+	CMP	lr, #-1				; if we already know this PID
+	BNE	%FT75				; then ignore it
+ ]
+	STR	r10, [r2, #PEHPID_PID]		; save PID value
+	LDR	r0, [r2, #PEHPID_PIDSlot]	; get PID slot
+	CMP	r0, #-1				; if not valid
+	BEQ	%FT75				; then goto next PEHPID
+	Push	"r1,r2"
+	MOV	r1, r10
+	BL	ts_pid_enable			; enable this PID
+	Pull	"r1,r2"
+75
+	LDR	r2, [r2, #PEHPID_Link]		; move to next PEHPID
+	B	%BT65				; and loop
+78
+	Pull	"r0,r2"
+ ] ; DoPEH
+80
         BL      ts_getbytedec
         AND     r10, r7, #&0F
         BL      ts_getbytedec
@@ -1276,14 +1953,16 @@ ts_process_audio_PID
 ts_process_video_PID
 ;        DREG    r8, "Entered ts_process_video_PID, remaining packet length = "
         MOV     r5, #StreamFlags_VideoPresent           ; indicate video data
-ts_process_vidoraud
+ts_process_vidoraud ROUT
         LDR     lr, [r1, #CSH_StreamFlags]
         TST     lr, r5                                  ; check we are interested in this stream
         TSTNE   r9, #TS_Payload_Present_Bit             ; and there is payload in this packet
         BEQ     ts_skip_to_next_packet
+ts_process_common
         TST     r9, #TS_AF_Present_Bit                  ; is an adaptation field present
 
  [ SkipToSeqOnResetStream
+	ASSERT	:LNOT: DoPEH				; the TEQNE r5 would be wrong
 	BEQ	%FT20
 	TST	lr, #StreamFlags_SkippingAfterReset	; if skipping,
 	TEQNE	r5, #StreamFlags_AudioPresent		; and not an audio packet (ie *is* a video packet)
@@ -1326,6 +2005,13 @@ ts_vidaudpacketcontinue
 	BNE	ts_free_packet_and_skip			; else free packet descriptor and skip packet
 30
  ]
+
+ [ ParseOVSNPT
+	LDR	lr, [r1, #CSH_StreamFlags]		; check if we're skipping
+	TST	lr, #StreamFlags_OVSNPTSkipping
+	BNE	ts_free_packet_and_skip			; if so, free packet descriptor and skip packet
+ ]
+
         CMP     r8, #0                                  ; negative length packet?
         BLT     ts_free_packet_and_skip			; then free packet descriptor and skip packet
         ADD     r7, r3, r8                              ; end of transport packet (if it was all in this buffer)
@@ -1406,10 +2092,26 @@ ts_process_adaptation_field Entry "r7"
  ]
 
 ts_process_PES_packet_header Entry
+ [ DoPEH
+; first check if PEH wants to get the PES packet headers himself
+; if so, then don't process them ourselves
+
+	CMP	r5, #3				; if 1 or 2 then must be vid or aud
+	BCC	%FT10
+
+	LDR	lr, [r5, #PEHPID_PEH]		; get PEH for this PEHPID
+	LDR	lr, [lr, #PEH_Flags]		; get flags for this PEH
+	TST	lr, #PEHFlags_IncludePESHeaders
+	EXIT	NE				; he wants to get PES headers, so exit
+
+10
+ ] ; DoPEH
         BL      ts_getnextstartcode
+ [ :LNOT: DoPEH					; may get other packet header codes than these in private data
         TEQ     r7, #&C0
         TEQNE   r7, #&E0
         BNE     ts_bad_packet_header
+ ]
 
         BL      ts_getbytedec                           ; get bits 8-15 of length
         MOV     r6, r7
@@ -1418,6 +2120,10 @@ ts_process_PES_packet_header Entry
 
 ;        DREG    r6, "Packet length = "
 
+ [ NobbleVideoPacketLengths ; get round OVS problem by nobbling packet length to zero
+	TEQ	r5, #StreamFlags_VideoPresent		; if a video packet
+	MOVEQ	r6, #0					; then pretend had zero (ie indeterminate) packet length
+ ]
         TEQ     r6, #0                                  ; if it's a wishy-washy indeterminate-length packet
         MOVEQ   r7, #PacketDescriptorFlags_MPEGStart :OR: PacketDescriptorFlags_FullLengthUnknown       ; then indicate that
         MOVEQ   r6, #&80000000                          ; indicate for later
@@ -1546,6 +2252,67 @@ ts_gottwozeros
         BL      ts_getbytedec                           ; get start code reason
         EXIT
 
+ [ ParseOVSNPT
+
+NPTDescriptorTag	*	&17
+
+ts_check_for_OVSNPT ROUT
+	CMP	r10, #1
+	BCC	ts_process_rest_of_PMT			; no descriptor bytes left, so do rest of PMT
+	BEQ	ts_skip_to_next_packet			; only 1 byte left, but need tag and length!
+	BL	ts_getbytedec				; get descriptor tag
+	MOV	r9, r7
+	BL	ts_getbytedec				; get descriptor length
+	SUB	r10, r10, #2				; adjust for tag + length bytes
+	CMP	r7, r10					; if descriptor length > descriptors length
+	CMPLS	r7, r8					; or descriptor length > rest of packet length
+	BHI	ts_skip_to_next_packet			; then bogus
+	SUB	r10, r10, r7				; remaining bytes of descriptors
+	TEQ	r9, #NPTDescriptorTag
+	BEQ	%FT10					; found NPT descriptor
+05
+	Push	"r10"
+	MOV	r10, r7
+	BL	ts_skipbytes				; skip the whole (or rest) of this descriptor
+	Pull	"r10"
+	B	ts_check_for_OVSNPT			; and try again
+
+10
+	Push	"r5"
+	MOV	r5, r7					; length of this descriptor
+	CMP	r7, #CSH_NPTDescMaxLen			; maximum amount we can store
+	MOVHI	r5, #CSH_NPTDescMaxLen			; amount we will store
+	SUB	r7, r7, r5				; amount we won't store
+	Push	"r7"
+	ADD	r9, r1, #CSH_NPTDescLength		; point at length field
+	STRB	r5, [r9], #1				; indicate amount stored
+20
+	SUBS	r5, r5, #1				; if no more bytes to store
+	BCC	%FT30					; then exit
+	BL	ts_getbytedec				; else get another
+	STRB	r7, [r9], #1				; and store in block
+	B	%BT20					; then loop
+
+30
+	MOV	r7, #1
+	STR	r7, [r1, #CSH_NPTCurrent]		; indicate NPT descriptor is current
+	LDRB	r7, [r1, #CSH_NPTContentID]		; get new contentID
+	AND	r7, r7, #&7F				; only bottom 7 bits are the contentID
+	LDR	lr, [r1, #CSH_StreamFlags]
+	TST	lr, #StreamFlags_OVSNPTSkipping		; are we looking for a change right now
+	BEQ	%FT40					; no then skip
+	LDR	r5, [r1, #CSH_LastContentID]		; see what it was last time
+	TEQ	r5, r7					; have we changed?
+	BICNE	lr, lr, #StreamFlags_OVSNPTSkipping	; if so then clear skipping bit from flags
+	STRNE	lr, [r1, #CSH_StreamFlags]		; and store back
+40
+	STR	r7, [r1, #CSH_LastContentID]		; always store new contentID as last
+	Pull	"r7"
+	Pull	"r5"					; wrong order to do in one go
+	B	%BT05					; skip any part of the descriptor we couldn't store
+
+ ]
+
 ; **************************************************************************
 ;
 ;       ts_sendvidaudblock - send block of video/audio data
@@ -1555,6 +2322,7 @@ ts_gottwozeros
 ;       (r2 -> buffer descriptor)
 ;       r3 -> start of block to send (not necessarily start of buffer))
 ;       (r4 -> end of buffer)
+;	r5 = StreamFlags_VideoPresent, StreamFlags_AudioPresent, or a pointer to the appropriate PEHPID
 ;       r7 -> end of block to send (+1))
 ;       r10 = start code for video or audio packet so we know which
 ;       r11 -> packet descriptor (filled in apart from Length field)
@@ -1565,11 +2333,10 @@ ts_sendvidaudblock Entry "r0-r2"
         MOV     r0, #0                  ; flags for MPEGVideo/Audio_FullPackets
         MOV     r2, r11
         TEQ     r5, #StreamFlags_VideoPresent
-        BNE     ts_sendaudioblock
+        BNE     %FT30
 
-; drop thru to...
+; send video block
 
-ts_sendvideoblock
         LDR     lr, DebugFlag
         TEQ     lr, #0
         BEQ     %FT20
@@ -1598,10 +2365,17 @@ ts_sendvideoblock
         CLRV
         EXIT
 
-ts_sendaudioblock
+30
+ [ DoPEH
+	TEQ	r5, #StreamFlags_AudioPresent
+	BNE	%FT60
+ ] ; DoPEH
+
+; send audio block
+
         LDR     lr, DebugFlag
         TEQ     lr, #0
-        BEQ     %FT30
+        BEQ     %FT50
         DLINE   "Audio packet", cc
         Push    "r0"
         LDR     lr, [r2, #PacketDescriptor_Length]
@@ -1615,17 +2389,31 @@ ts_sendaudioblock
         TST     r0, #PacketDescriptorFlags_FullLengthUnknown
         SWINE   XOS_WriteI+"U"
         TST     r0, #PacketDescriptorFlags_PTSValid
-        BEQ     %FT10
+        BEQ     %FT40
         LDR     lr, [r2, #PacketDescriptor_PTS]
         DREG    lr, " PTS = ", cc
-10
+40
         DLINE   ""
         Pull    "r0"
-30
+50
         LDR     r1, [r1, #CSH_AudioStreamHandle]
         SWI     XMPEGAudio_FullPackets
         CLRV
         EXIT
+
+ [ DoPEH
+60
+	Push	"r3,r6"
+	LDR	r6, [r5, #PEHPID_PEH]
+	MOV	r3, r2						; r3 -> packet
+	LDR	r2, [r5, #PEHPID_ProgramElementStreamHandle]
+	MOV	r1, #0						; flags
+	MOV	r0, #PEHReason_DataTransfer
+	BL	CallPEH
+	Pull	"r3,r6"
+	CLRV
+	EXIT
+ ] ; DoPEH
 
 debug SETL {FALSE}
 
@@ -1683,6 +2471,26 @@ GetPacketDescriptor Entry "r1"
         BVC     %BT05
         EXIT
 
+ [ DoPEH
+; **************************************************************************
+;
+;	CallPEH - Call a Program Element Handler
+;
+; in:	r0 = reason code
+;	r1-r? = parameters for call
+;	r6 -> PEH
+;
+; out:	Depends on call
+;
+
+CallPEH	Entry "r12"
+	ADD	r12, r6, #:INDEX: PEH_HandlerWS
+	ASSERT  PEH_HandlerCode = PEH_HandlerWS +4
+	MOV	lr, pc
+	LDMIA	r12, {r12, pc}
+	EXIT
+ ] ; DoPEH
+
 ; **************************************************************************
 ;
 ;	Stats - Entry point for MPEGControl_Stats - return statistics
@@ -1738,6 +2546,7 @@ Stats	Entry "r0-r2, r5-r6"
 
 ; loop over all tags in input list, advancing input list pointer r2
 
+StatsLoopReEntry
 10
 	LDR	r5, [r2], #4			; get next requested tag word
 	CMP	r5, #-1				; if end of list
@@ -1801,6 +2610,34 @@ Stats_SkippingAfterReset Entry
 	MOVNE	r6, #1
 	EXIT
 
+Stats_SkippingUntilCorrectMode Entry
+	LDR	r6, [r1, #CSH_StreamFlags]
+	ANDS	r6, r6, #StreamFlags_SkipUntilCorrectMode
+	MOVNE	r6, #1
+	EXIT
+
+ [ ParseOVSNPT
+Stats_NPTDescriptor ROUT
+	LDRB	r6, [r1, #CSH_NPTDescLength]
+	ADD	lr, r6, #15			; add on three words for tag + length + current flag + round up to a word
+	BIC	lr, lr, #3
+	SUBS	r4, r4, lr
+	BMI	StatsLoopReEntry		; not enough space to store entry
+
+	SUBS	lr, lr, #8			; length not including tag + length, but including flag + round-up
+	STMIA	r3!, {r5, lr}			; store tag and length
+	LDR	r5, [r1, #CSH_NPTCurrent]	; store current flag
+	STR	r5, [r3], #4
+	SUB	lr, lr, #4			; adjust for flag word
+	ADD	r5, r1, #CSH_NPTContentID	; point at first byte of descriptor
+10
+	SUBS	lr, lr, #1			; if a byte left
+	LDRCSB	r6, [r5], #1
+	STRCSB	r6, [r3], #1
+	BCS	%BT10
+	B	StatsLoopReEntry		; now parse next tag
+ ]
+
 ; The table containing all the statistics
 
 StatsTable
@@ -1813,16 +2650,25 @@ StatsTable
 	StatsTableEntry &0004, CSH_Video_PID
 	StatsTableEntry &0005, CSH_Audio_PID
 	StatsTableEntry &0006, CSH_DataReturned
+	StatsTableEntry &0007, Stats_SkippingUntilCorrectMode, Code
+	StatsTableEntry &0008, CSH_DataDiscarded
+ [ ParseOVSNPT
+	StatsTableEntry &0009, Stats_NPTDescriptor, Code
+ ]
 	&	-1
 
 ; **************************************************************************
 ;
-;       CtrlInfo_Code - Code to handle CtrlInfo command
+;       (Trans)CtrlInfo_Code - Code to handle (Trans)CtrlInfo command
 ;
 ; in:   -
 ; out:  -
 
+ [ BuildAsMPEGControl
 CtrlInfo_Code Entry
+ |
+TransCtrlInfo_Code Entry
+ ]
         LDR     wp, [r12]
         ADR     r1, ControlStreamHandle
 
@@ -1841,6 +2687,12 @@ CtrlInfo_Code Entry
         BL      DecimalOutput
         DLINE   ""
         MOV     r2, r0
+
+        DLINE   "Bytes returned = ", cc
+
+        LDR     r0, [r1, #CSH_DataReturned]
+        BL      DecimalOutput
+        DLINE   ""
 
         DLINE   "In time ", cc
         LDR     r0, [r1, #CSH_LastTime]
@@ -1919,12 +2771,72 @@ CtrlInfo_Code Entry
 	SWINE	XOS_NewLine
  ]
 
+ [ ParseOVSNPT
+	LDR	r0, [r1, #CSH_LastContentID]
+	DREG	r0, "Last contentID = "
+ ]
+ [ DoPEH
+	DLINE	"Program Element Handlers:", cc
+	LDR	r0, GlobalPEHList
+	TEQ	r0, #0
+	BNE	%FT40
+
+	DLINE	" None"
+	B	%FT50
+40
+	DLINE	""
+42
+	BL	OutputPEHInfo
+	LDR	r0, [r0, #PEH_Link]
+	TEQ	r0, #0
+	BNE	%BT42
+50
+	DLINE	"PEH PID nodes:", cc
+	ADR	r0, ControlStreamHandle
+	LDR	r1, [r0, #CSH_ListOfPEHPIDs]
+	TEQ	r1, #0
+	BNE	%FT60
+
+	DLINE	" None"
+	B	%FT70
+60
+	DLINE	""
+	LDR	r0, [r1, #PEHPID_Flags]
+	DREG	r0, "PEHPID flags="
+	LDR	r0, [r1, #PEHPID_ProgramElementStreamHandle]
+	DREG	r0, "Program element stream handle="
+	LDR	r0, [r1, #PEHPID_PID]
+	DREG	r0, "PID="
+	LDR	r0, [r1, #PEHPID_PIDSlot]
+	DREG	r0, "PID slot="
+	LDR	r0, [r1, #PEHPID_PEH]
+	BL	OutputPEHInfo
+	LDR	r1, [r1, #PEHPID_Link]
+	TEQ	r1, #0
+	BNE	%BT60
+70
+ ] ; DoPEH
         CLRV
         EXIT
+
+ [ DoPEH
+OutputPEHInfo Entry "r1"
+	LDR	r1, [r0, #PEH_StreamType]
+	DREG	r1, " StreamType=", cc
+	LDR	r1, [r0, #PEH_Flags]
+	DREG	r1, " Flags=", cc
+	LDR	r1, [r0, #PEH_HandlerCode]
+	DREG	r1, " Code=", cc
+	LDR	r1, [r0, #PEH_HandlerWS]
+	DREG	r1, " WS="
+	EXIT
+ ] ; DoPEH
 
         LTORG
 
 ; **************************************************************************
+
+ [ BuildAsMPEGControl
 
 CtrlDebugOn_Code Entry
         MOV     r0, #1
@@ -1936,6 +2848,21 @@ CtrlDebugCommon
         LDR     wp, [r12]
         STR     r0, DebugFlag
         EXIT
+
+ |
+
+TransCtrlDebugOn_Code Entry
+        MOV     r0, #1
+        B       TransCtrlDebugCommon
+
+TransCtrlDebugOff_Code ALTENTRY
+        MOV     r0, #0
+TransCtrlDebugCommon
+        LDR     wp, [r12]
+        STR     r0, DebugFlag
+        EXIT
+
+ ]
 
 ; **************************************************************************
 ;
