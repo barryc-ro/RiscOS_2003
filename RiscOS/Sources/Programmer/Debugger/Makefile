@@ -13,6 +13,8 @@ HELPSRC       = HelpSrc
 TOKENSOURCE   = TokHelpSrc
 TOKHELPSRC    = ${TOKENSOURCE}
 
+HEADER1       = Debugger
+
 include StdTools
 include AAsmModule
 
