@@ -19,11 +19,16 @@ C_EXP_HDR = <cexport$dir>.Global.h
 #
 MKDIR   = mkdir -p
 AS      = aasm
+ARMASM  = objasm
+LD      = link
 CP      = copy
 RM      = remove
+WIPE    = -wipe
 CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -To $@ -From
+ASFLAGS = -depend !Depend ${THROWBACK} -Stamp -quit -To $@ -From
+ARMASMFLAGS = -depend !Depend -g ${THROWBACK}
 CPFLAGS = ~cfr~v
+WFLAGS  = ~cfr~v
 
 TOKENISE = tokenise
 TOKENS   = Hdr:Tokens
@@ -33,28 +38,44 @@ TOKENS   = Hdr:Tokens
 #
 COMPONENT = Kernel
 SOURCE    = s.GetAll
-TARGET    = rm.${MACHINE}.Kernel
+TARGET    = rm.Kernel
+AIFDBG    = aif.Kernel
+GPADBG    = GPA
+OBJECTS   = o.GetAll #o.ARMops o.End
 EXPORTS   = ${EXP_HDR}.EnvNumbers \
             ${EXP_HDR}.ModHand \
             ${EXP_HDR}.PublicWS \
             ${EXP_HDR}.RISCOS \
             ${EXP_HDR}.Variables \
             ${EXP_HDR}.VduExt \
-            ${C_EXP_HDR}.RISCOS
+            ${EXP_HDR}.HALEntries \
+            ${EXP_HDR}.OSEntries \
+            ${C_EXP_HDR}.RISCOS \
+            ${C_EXP_HDR}.HALEntries
 
 #
 # Generic rules:
 #
+.SUFFIXES: .o .s
+.s.o:; ${ARMASM} ${ARMASMFLAGS} -o $@ $< #-list list.$*
+
 rom: ${TARGET}
         @echo ${COMPONENT}: rom module built
+
+debug: ${GPADBG}
+        @echo ${COMPONENT}: debug image built
 
 install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
 clean:
-        ${RM} ${TARGET}
         ${RM} s.TMOSHelp
+        ${WIPE} o.* ${WFLAGS}
+        ${RM} ${TARGET}
+        ${WIPE} aif ${WFLAGS}
+        ${RM} ${GPADBG}
+        ${WIPE} list.* ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 export: ${EXPORTS}
@@ -78,19 +99,20 @@ resources-: resources_common
         TokenCheck LocalRes:Messages
         print LocalRes:CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
 
-BBETYPE = kernel
-bbe-kernel: bbe-generic-resources-get-alias
-        BBE_Export_Dir Resources.${LOCALE}.${USERIF}
-        BBE_Export_File Resources.${LOCALE}.Messages
-        BBE_Export_File Resources.${LOCALE}.CmdHelp
+${TARGET}: ${OBJECTS}
+        ${LD} -bin -o ${TARGET} ${OBJECTS}
 
-${TARGET}: ${SOURCE} s.TMOSHelp
-        ${MKDIR} rm.${MACHINE}
-        ${AS} ${ASFLAGS} ${SOURCE}
-        stamp $@
+${AIFDBG}: ${OBJECTS}
+        ${MKDIR} aif
+        ${LD} -aif -bin -d -o ${AIFDBG} ${OBJECTS}
+
+${GPADBG}: ${AIFDBG}
+        ToGPA -s ${AIFDBG} ${GPADBG}
 
 s.TMOSHelp: ${TOKENS} HelpStrs
         ${TOKENISE} ${TOKENS} HelpStrs $@
+
+o.GetAll: s.TMOSHelp
 
 #
 # Exported interface headers
@@ -113,8 +135,18 @@ ${EXP_HDR}.VduExt: hdr.VduExt
 ${EXP_HDR}.Variables: hdr.Variables
         ${CP} hdr.Variables $@ ${CPFLAGS}
         
+${EXP_HDR}.HALEntries: hdr.HALEntries
+        ${CP} hdr.HALEntries $@ ${CPFLAGS}
+        
+${EXP_HDR}.OSEntries: hdr.OSEntries
+        ${CP} hdr.OSEntries $@ ${CPFLAGS}
+        
 ${C_EXP_HDR}.RISCOS: hdr.RISCOS
-	${MKDIR} ${C_EXP_HDR}
-	perl Build:Hdr2H hdr.RISCOS $@
+        ${MKDIR} ${C_EXP_HDR}
+        perl Build:Hdr2H hdr.RISCOS $@
+
+${C_EXP_HDR}.HALEntries: hdr.HALEntries
+        ${MKDIR} ${C_EXP_HDR}
+        perl Build:Hdr2H hdr.HALEntries $@
 
 # Dynamic dependencies:

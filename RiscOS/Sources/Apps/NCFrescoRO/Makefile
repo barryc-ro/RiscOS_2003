@@ -35,12 +35,6 @@ TARGET    = aof.ncfre-${TYPE}
 
 ABSSYM    = RISC_OSLib:o.c_abssym
 
-BBETYPE = fresco
-bbe-fresco: bbe-generic
-  BBE_Export_Dir bin
-  ${CP} VersionNum ${BBEDIR}.VersionNum ${CPFLAGS}
-  ${CP} VERSION ${BBEDIR}.VERSION ${CPFLAGS}
-
 #
 # Generic rules:
 #
@@ -151,7 +145,6 @@ export_libs:
 export_hdrs:
         ${CP} h.plugin ${EXP_HDR}.h.plugin ${CPFLAGS}
         ${CP} h.ANT_URL ${EXP_HDR}.h.ANT_URL ${CPFLAGS}
-        ${CP} h.ANT_Msg ${EXP_HDR}.h.ANT_Msg ${CPFLAGS}
         @echo ${COMPONENT}: export complete(hdrs)
 
 #
