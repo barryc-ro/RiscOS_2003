@@ -90,7 +90,7 @@ ABSSYM =	RISC_OSLib:o.c_AbsSym
 COMPAT=		-DCOMPAT_INET4
 
 CFLAGS=		-ffah -zM -I$(INCLUDES) -DINET -DCOMPAT_INET4 $(DEBUG)\
-		-zps1 -Wp -depend !Depend -c -throwback $(TINYSTUBS)\
+		-zps1 -Wp -depend !Depend -c $(THROWBACK) $(TINYSTUBS)\
 		-D$(SYSTEM) $(EXTRACCFLAGS)
 
 CMHGFLAGS =	-p -I$(INCLUDES) $(THROWBACK)
