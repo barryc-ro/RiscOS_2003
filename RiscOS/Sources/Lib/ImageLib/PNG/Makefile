@@ -46,7 +46,7 @@ ABSSYM    = RISC_OSLib:o.AbsSym
 #
 # Include files
 #
-INCLUDES  = -IC:,^.ZLib
+INCLUDES  = -IC:,C:zlib
 
 #
 # Symbols to predefine. Everything after the first
@@ -152,8 +152,8 @@ ${TARGET}: ${OBJS} local_dirs
 ${TARGETZ}: ${OBJSZ} local_dirs
 	${LB} ${LBFLAGS} -o ${COMPONENTZ} ${OBJSZ}
 
-pngtest: o.pngtest ${TARGET} ${CLIB} ^.ZLib.o.zlib_lib
-        ${LD} -o pngtest o.pngtest ${TARGET} ${CLIB} ^.ZLib.o.zlib_lib
+pngtest: o.pngtest ${TARGET} ${CLIB} C:zlib.o.zlib
+        ${LD} -o pngtest o.pngtest ${TARGET} ${CLIB} C:zlib.o.zlib
 
 
 # Dynamic dependencies:

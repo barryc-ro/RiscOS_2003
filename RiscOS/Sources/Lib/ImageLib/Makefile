@@ -44,15 +44,15 @@ ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.AbsSym
 PNGLIB    = PNG.o.libpng-lib
 PNGLIBZ   = PNG.o.libpng-lzm
-ZLIB      = ZLib.o.zlib_lib
-ZLIBZ     = ZLib.o.zlib_libzm
+ZLIB      = C:zlib.o.zlib
+ZLIBZ     = C:zlib.o.zlibzm
 JPEGLIB   = JPEG.o.libjpeg
 LIBS      = ${PNGLIB} ${PNGLIBZ} ${ZLIB} ${ZLIBZ} ${JPEGLIB}
 
 #
 # Include files
 #
-INCLUDES = -Itbox:,C:,PNG,ZLib,JPEG
+INCLUDES = -Itbox:,C:,PNG,C:zlib,JPEG
 DFLAGS    = -DRISCOS -DPNG_DEBUG=0
 
 #
@@ -122,16 +122,6 @@ ${PNGLIBZ}:
 	amu ${MFLAGS}
 	back
 
-${ZLIB}:
-	dir ZLib
-	amu ${MFLAGS}
-	back
-
-${ZLIBZ}:
-	dir ZLib
-	amu ${MFLAGS}
-	back
-
 ${JPEGLIB}:
 	dir JPEG
 	amu ${MFLAGS}
@@ -151,9 +141,6 @@ clean_all:
 	Dir		PNG
 	amu		clean
 	back
-	Dir		ZLIB
-	amu		clean
-	back
 	Dir		JPEG
 	amu		clean
 	back
@@ -170,8 +157,6 @@ export_libs: ${TARGET} ${TARGETZ} o.dirs
 	${CP}	${TARGETZ}	ImageLib:${TARGETZ}	~CFLNR~V
 	${CP}	${PNGLIB}	ImageLib:o.libpng-lib	~CFLNR~V
 	${CP}	${PNGLIBZ}	ImageLib:o.libpng-lzm	~CFLNR~V
-	${CP}	${ZLIB}		ImageLib:o.zlib_lib	~CFLNR~V
-	${CP}	${ZLIBZ}	ImageLib:o.zlib_libzm	~CFLNR~V
 	${CP}	${JPEGLIB}	ImageLib:o.libjpeg	~CFLNR~V
         @echo ${COMPONENT}: export complete (libs)
 
