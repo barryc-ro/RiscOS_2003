@@ -483,10 +483,10 @@ Stream::PostPresentationSetup()
     {
     	if (err_ptr == NULL) err_ptr = &mysource->ReturnCopyOfError();
     }
-    
+
     if (end == 0)
         end = length;
-    
+
     // start and end are set in the play element, we set them here so as to get notifications
     if ((from >= end) || (end > length))	// this in most cases is zero
     	MakeError(VSP_InvalidValue);
@@ -686,6 +686,8 @@ Stream::change_state(state_of_play new_state)
        tmp->state = new_state;
        tmp->next = requests;
        requests = tmp;
+       
+       return (ErrorExists() ? ErrorOccurred : NoError );
     }
     else
     {
@@ -1125,7 +1127,8 @@ Stream::GetMiscInfo(ULINT *reg_r0, misc_5_10 *ptr, int *size)
     			else {
     			  	if ( (*size) < sizeof(misc_5_10) )
     			  		MakeError(VSP_InvalidValue);
-    			  	else {
+    			  	else
+                                {
     			  	  	if ((mysource->getMiscInfo(type_misc_5_10, ptr) == ErrorOccurred)&&(err_ptr == NULL))
     			  	  		err_ptr = &(mysource->ReturnCopyOfError());
 			  	}
@@ -1176,7 +1179,7 @@ Stream::create_RTSP_playblock(server_response_type server_response)
         RTSP_code = response->status_value;
 
         sprintf(num_strings[0], "%u",   (NULL != myserver) ? myserver->getCertCode() : 0);
-        sprintf(num_strings[1], "%.2f", (double)start/2);
+        sprintf(num_strings[1], "%.2f", (double)from/2);
         sprintf(num_strings[2], "%.2f", (double)end/2);
 
         switch (state)
@@ -1197,7 +1200,7 @@ Stream::create_RTSP_playblock(server_response_type server_response)
                 sprintf(num_strings[3], "1.0000");
         }
 #ifdef DEBUGLIB
-        if (Debug(debug_RTSP)) Debug("times (%d) - {(%d)|(%d)}", getNECTime(), start, end);
+        if (Debug(debug_RTSP)) Debug("times (%d) - {(%d)|(%d)}", getNECTime(), from, end);
 #endif
         moreInfo = (char*)my_malloc(strlen(RTSP_play_response) +
                              strlen(response->number) +
@@ -1234,11 +1237,11 @@ Stream::RTSP_play(bool forward, ULINT numerator, ULINT denominator, position_typ
 {
     state_of_play n_state = state_play;
     LINT speed = 1;
-    ULINT play_start = start, play_end = end;
-    bool start_specified = false, end_specified = false;
+    ULINT play_start = 0;
+    ULINT play_end = 0;
     bool update_state = false;
     server_response_type server_response = NEC_OK;
-    
+
 #ifdef DEBUGLIB
     if (Debug(debug_RTSP))
       Debug("RTSP_play: RequestInProgress (%d) status (%d) moreinfo (%d)\n", RTSP_RequestInProgress, RTSP_StatusChanged, moreInfo);
@@ -1259,6 +1262,8 @@ Stream::RTSP_play(bool forward, ULINT numerator, ULINT denominator, position_typ
                &&(numerator/denominator < fast_playback_ratio * 2))
             {
                 n_state = state_fast_rewind;
+                if (state_fast_rewind != state)
+                    update_state = true;
             }
             else
             {
@@ -1277,6 +1282,8 @@ Stream::RTSP_play(bool forward, ULINT numerator, ULINT denominator, position_typ
                &&(numerator/denominator < fast_playback_ratio * 2))
         {
             n_state = state_fast_forward;
+            if (state_fast_forward != state)
+                update_state = true;
         }
         else
         {
@@ -1324,7 +1331,8 @@ Stream::RTSP_play(bool forward, ULINT numerator, ULINT denominator, position_typ
                 {
                     n_state = state_streamlive;
                     play_start = length;
-                    start_specified = true;
+                    if (state_streamlive != state)
+                        update_state = true;
                 }
                 else
                 {
@@ -1336,16 +1344,10 @@ Stream::RTSP_play(bool forward, ULINT numerator, ULINT denominator, position_typ
             {
                 play_start = length - 1;
                 update_state = true;
-                start_specified = true;
             }
             else
             {
-                if (pos_from->numer == TIME_now)
-                {
-                    start_specified = true;
-                }
-
-                /* or undefined */
+                /* if undefined */
                 play_start = getNECTime();
             }
         }
@@ -1353,7 +1355,6 @@ Stream::RTSP_play(bool forward, ULINT numerator, ULINT denominator, position_typ
         {
             play_start = (pos_from->numer *2)/pos_from->denom; /* != 0 */
             update_state = true;
-            start_specified = true;
         }
 
         if (!ErrorExists())
@@ -1365,7 +1366,6 @@ Stream::RTSP_play(bool forward, ULINT numerator, ULINT denominator, position_typ
                     if (trick_modes() & trick_jump_most_rec)
                     {
                         play_end = length;
-                        end_specified = true;
                     }
                     else
                     {
@@ -1376,21 +1376,34 @@ Stream::RTSP_play(bool forward, ULINT numerator, ULINT denominator, position_typ
                 if (pos_to->numer == TIME_end)
                 {
                     play_end = length;
-                    end_specified = true;
                 }
                 else
                 {
                     if (pos_from->numer == TIME_now)
                     {
-                        start_specified = true;
                         play_end = getNECTime();
+                    }
+                    else
+                    {
+                        /* if undefined */
+                        /* this is build as if the user has typed npt=start-now */
+                        /* however the user works in reverse range we want a forward range */
+                        /* i.e. we play from the end of the range to the start */
+                        if (state_fast_rewind == n_state)
+                        {
+                            play_end = start;
+                        }
+                        else
+                        {
+                            play_end = length;
+                        }
                     }
                 }
             }
             else
             {
                 play_end = (pos_to->numer *2)/pos_to->denom; /* != 0 */
-                end_specified = true;
+                update_state = true;
             }
         }
     }
@@ -1409,52 +1422,35 @@ Stream::RTSP_play(bool forward, ULINT numerator, ULINT denominator, position_typ
         /* to either side of the range */
         if (n_state == state_fast_rewind)
         {
-           ULINT tmp;
-
-           tmp = play_start;
-
-           if (true == end_specified)
-               play_start = play_end;
-           else
-               play_start = start;
-
-           if (true == start_specified)
-               play_end = tmp;
-           else
-               play_end = end;
-
-           from = play_end;
            min_blocks *= fast_playback_ratio;
+           ULINT tmp = play_end;
+           
+           play_end = play_start;
+           play_start = tmp;
         }
         else
         {
-           if (n_state == state_fast_forward)
-               min_blocks *= fast_playback_ratio;
-
-           from = play_start;
-        }
-
-        if (true == start_specified)
-        {
-            start = play_start;
-        }
-
-        if (true == end_specified)
-        {
-            end = play_end;
+            if (n_state == state_fast_forward)
+                min_blocks *= fast_playback_ratio;
         }
 
         /* if it an invalid range but not stream live */
-        if ( (0xFFFFFFFF != start) &&
-             ( (((LINT)end - (LINT)start) <= ((LINT)min_blocks+1)) ||
-               ((LINT)end > (LINT)length) )
+        if ( (0xFFFFFFFF != play_start) &&
+             ( (play_end < play_start) ||
+               (((LINT)play_end - (LINT)play_start) <= ((LINT)min_blocks+1)) ||
+               ((LINT)play_end > (LINT)length) ||
+               ((LINT)play_start < (LINT)start))
 
            )
         {
             server_response = NEC_NoGOPatJump;
+            update_state = false;
         }
         else
         {
+            end = play_end;
+            from = play_start;
+            
             if (NEC_OK == server_response)
             {
                 state_value = speed;
@@ -1721,10 +1717,14 @@ Stream::timeslice(Statistics *stats)
         {
             if (callback_pending & callback_trickplay)
             {
-                ULINT timetoplay = end - from;
+#ifdef DEBUGLIB
+                if (Debug(debug_time)) Debug("play request range:from(%d)-to(%d)\n", from, end);
+#endif
+                
                 ULINT NEC_from = from; /* specified stream relative */
-                LINT  NEC_to   = (LINT)end;  /* stream and direction relative */
-                ULONG RequestNum;
+                ULINT NEC_to   = end;  /* stream and direction relative */
+                ULONG RequestNum = end; /* note the start end time */
+                /* re-use the AckNum return value for the maximum amount of blocks to request */
                 size_t AckNum;
                 play_mode mode = mode_normalplay;
 
@@ -1734,30 +1734,37 @@ Stream::timeslice(Statistics *stats)
                 switch (state)
                 {
                     case state_fast_forward:
-                        NEC_to   /= (LINT)fast_playback_ratio;
+                        NEC_to   /= fast_playback_ratio;
                         NEC_from /= fast_playback_ratio;
+                        AckNum     = (size_t)(NEC_to - NEC_from);
+                        RequestNum = NEC_to;
                         mode = mode_fastforward;
                         break;
                     case state_fast_rewind:
-                        NEC_to   = -1 * (LINT)((start)/ fast_playback_ratio);
-                        NEC_from /= fast_playback_ratio;
+                        NEC_to   = from    /fast_playback_ratio;
+                        NEC_from = end     /fast_playback_ratio;
+                        AckNum     = (size_t)(NEC_from - NEC_to);
+                        RequestNum = NEC_to *-1; /* this indicates the approach from above */
                         mode = mode_fastrewind;
                         break;
                     case state_streamlive:
                         mode = mode_streamlive;
+                        AckNum     = (size_t)(NEC_databurstval);
+                        RequestNum = NEC_to;
                         break;
                     default:
                         mode = mode_normalplay;
+                        AckNum     = (size_t)(NEC_to - NEC_from);
+                        RequestNum = NEC_to;
                         break;
                 }
-                RequestNum = (ULINT)NEC_to;
 #ifdef DEBUGLIB
-                if (Debug(debug_time)) Debug("play request mode (%s) to (%d) from (%d) (%d->%d)",
-                 play_mode_strings[mode], NEC_to, NEC_from, start, end);
+                if (Debug(debug_time)) Debug("play request mode (%s) range:from(%d)-to(%d) NEC:from-to(%d->%d) startend (%d)",
+                                           play_mode_strings[mode], from, end, NEC_from, NEC_to, RequestNum);
 #endif
                 if (mysource->setNewPlayState(&RequestNum, &AckNum, mode, NEC_from, comms_timeout) == ErrorOccurred)
                 {
-                    if (err_ptr == NULL) err_ptr = &(mysource->ReturnCopyOfError());
+                   if (err_ptr == NULL) err_ptr = &(mysource->ReturnCopyOfError());
                 }
                 else
                 {
@@ -1770,7 +1777,7 @@ Stream::timeslice(Statistics *stats)
 #endif
                         _swix(OS_RemoveTickerEvent, _INR(0,1), VSP_CallAfterVeneer, pw);
                     }
-                    
+
                     GOP_time = 0xffffffff;
 
                     myserver->send_playback_request( mysource->get_current_play_id(), RequestNum, AckNum, NEC_from, mode);
@@ -1872,14 +1879,6 @@ Stream::timeslice(Statistics *stats)
         {
             if (0 == mysource->getFullBlocks())
             {
-                if (state == state_fast_rewind)
-                {
-                    from = end;
-                }
-                else
-                {
-                    from = start;
-                }
                 stream_flags = (flags_word)(stream_flags & ~flags_waitforflush);
 
                 callback_pending += callback_trickplay;
@@ -2112,13 +2111,13 @@ Stream::source_inetevent(int code, Statistics *stats)
       				_swix(OS_RemoveTickerEvent, _INR(0,1), VSP_CallAfterVeneer, pw);
 				callback_pending += callback_fullblocks;
       				callback_pending -= callback_timeout;
-#ifdef DEBUGLIB                 
+#ifdef DEBUGLIB
                                 if (Debug(debug_bufferdump))
                                 {
                                     Debug("full blocks flags (%3.3x)\n", callback_pending);
                                     for (int i = 0; i < num_tokens_to_pass; i++)
-                                    { 
-                                       Debug("MPEG token[%d] (%d)\n", i, buffers[i].in_use == claim_token);  
+                                    {
+                                       Debug("MPEG token[%d] (%d)\n", i, buffers[i].in_use == claim_token);
                                     }
                                 }
                                 if(Debug(debug_bufferdump)) mysource->getMiscInfo(type_debug, NULL);
@@ -2271,7 +2270,7 @@ Stream::MPEGInterrupt(int buffer_descriptor)
   		if (buffers[0].blocks_returned == buffers[0].block->num_buffers){	// if we have received all the blocks free it
   			if ((mysource->freeBlock(buffers[0].block) == ErrorOccurred )&&(err_ptr == NULL))
   				err_ptr = &mysource->ReturnCopyOfError();
-                        
+
                         if (!(callback_pending & callback_bufferswait))
                             mysink.getGOPtime(&GOP_time);
 
@@ -2319,7 +2318,7 @@ Stream::MPEGInterrupt(int buffer_descriptor)
   		if (buffers[2].blocks_returned == buffers[2].block->num_buffers){	// if we have received all the blocks free it
   			if (( mysource->freeBlock(buffers[2].block) == ErrorOccurred )&&(err_ptr == NULL))
   				err_ptr = &mysource->ReturnCopyOfError();
-                                                   
+
                         if (!(callback_pending & callback_bufferswait))
                             mysink.getGOPtime(&GOP_time);
 
@@ -2343,7 +2342,7 @@ Stream::MPEGInterrupt(int buffer_descriptor)
   		if (buffers[3].blocks_returned == buffers[3].block->num_buffers){	// if we have received all the blocks free it
   			if (( mysource->freeBlock(buffers[3].block) == ErrorOccurred )&&(err_ptr == NULL))
   				err_ptr = &mysource->ReturnCopyOfError();
-                        
+
                         if (!(callback_pending & callback_bufferswait))
                             mysink.getGOPtime(&GOP_time);
 
