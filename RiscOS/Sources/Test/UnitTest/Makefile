@@ -16,6 +16,7 @@
 #				creates directories at build time.
 # 1999-02-12	NCE		Added Printer BASIC prog
 # 1998-02-16    SBF             Added LDFLAGS to allow addition of link tool flags
+# 1998-02-23    SBF             Removed Printer and GenLib targets (BASIC files now removed)
 
 
 #
@@ -155,8 +156,6 @@ ${TARGET}: ${OBJS} dirs
         ${LD} ${LDFLAGS} -o $@ ${OBJS} ${CLIB}
         @echo ${COMPONENT}: link stage complete
         ${CRUNCH} ${BFLAGS} @.b.TestCard @.${CRUNCHED}.TestCard
-        ${CRUNCH} ${BFLAGS} @.b.Printer @.${CRUNCHED}.Printer
-        ${CRUNCH} ${BFLAGS} @.b.Gen_lib @.${CRUNCHED}.Gen_Lib
 
 
 # Dynamic dependencies:
