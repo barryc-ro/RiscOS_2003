@@ -80,6 +80,9 @@
  *		 direct mimemap access if module not there ACORN_BUILD only.
  * pdh 15-Jul-98 Renamed make_error to make_httperror, as now it's not static
  *		 it clashes in Win32 builds with the WebFTP one.
+ * SJM 14-Oct-98 Need to send all headers and body at once. Moved reading body
+ *		 size into http_open(). Removed http_send_request_body. Build a
+ *		 complete set of headers and body info to send.
  */
 
 #ifdef HTTPMOD
@@ -201,8 +204,8 @@ os_error *http_set_file_type(http_connection *c, int *ftptr);
 int http_file_size(char *fname);
 
 void http_send_request(http_connection *c);
-int http_send_request_headers(http_connection *c);
-int http_send_request_body(http_connection *c);
+/*int http_send_request_headers(http_connection *c);*/
+/*int http_send_request_body(http_connection *c);*/
 char *http_getline(http_connection *c, int read);
 
 void http_process_header_line(http_connection *c, char *l);
@@ -269,6 +272,7 @@ static http_connection proto_con = {
     0,                          /* Flags */
     0,                          /* Data pending */
     NULL,                       /* send headers */
+    0,				/* send headers length */
     0,				/* bytes of headers sent */
     NULL, NULL,                 /* Keep-alive queue 2LL */
     NULL,                       /* Queue head structure */
@@ -772,7 +776,7 @@ static void http_fail( http_connection *c, transfer_status status )
  *    + status_AUTHENTICATING       missed out if not HTTPS
  *    + status_REQUESTING           sending request
  * [[ + status_REQUEST_HEADERS      sending headers	-- obsolete in 0.96 et seq ]]
- *    + status_REQUEST_BODY         missed out if not POST
+ * [[ + status_REQUEST_BODY         missed out if not POST -- obselete in 1.02 et seq ]]
  *      status_WAITING              getting response line
  *      status_GETTING_HEADERS
  *      status_GETTING_BODY
@@ -938,7 +942,7 @@ os_error *http_prosecute( http_connection *c )
 
     case status_REQUESTING:
         http_send_request(c);
-        if ( c->status != status_REQUEST_BODY )
+        if ( c->status != status_WAITING )
                 return NULL;
         /* else we can drop through */
 
@@ -952,7 +956,6 @@ os_error *http_prosecute( http_connection *c )
         if ( c->status != status_REQUEST_BODY )
             return NULL;
         /* else we can drop through */
-#endif
 
     case status_REQUEST_BODY:
         rc = 0;
@@ -964,6 +967,7 @@ os_error *http_prosecute( http_connection *c )
         if ( c->status != status_WAITING )
             return NULL;
         /* else we can drop through */
+#endif
 
     case status_WAITING:
         /* If we're in a queue, then don't try and read */
@@ -1529,6 +1533,11 @@ os_error *http_open(http_open_args *args)
 
         fdebugf(log_file, "%p: http_open Opening body file '%s'\n", new, new->bname);
 
+	if ( !file_get_size_and_type( new->bname, &new->data_size, NULL ) )
+        {
+            return http_destroy(new,err_CANT_OPEN_BODY);
+        }
+	    
         new->bh = ro_fopen(new->bname, RO_OPEN_READ);
         if (new->bh == 0)
         {
@@ -2614,6 +2623,16 @@ os_error *http_completedpart( http_completedpart_args *args )
     return NULL;
 }
 
+#define HDR_CONTENT_LENGTH		"Content-length: %d\r\n"
+#define HDR_CONNECTION_KEEP_ALIVE	"Connection: Keep-Alive\r\n"
+
+#define HDR_IMAGE_STAGE_2		"Range: bytes=" IMAGE_HEADER1_T "-%d\r\n"
+#define HDR_IMAGE_STAGE_1		"Range: bytes=0-" IMAGE_HEADER_T "\r\n"
+
+#define image_NORMAL	0
+#define image_STAGE_1	1
+#define image_STAGE_2	2
+
 static char *http_build_request( http_connection *c, http_header_item *h )
 {
     int len = 0;
@@ -2622,19 +2641,9 @@ static char *http_build_request( http_connection *c, http_header_item *h )
     const char *meth = c->bh ? "POST" :
                  (c->flags & http_open_flags_HEAD ) ? "HEAD"
                                                     : "GET";
-
-    len = 5 + strlen(c->object) + 90;			    /* "HEAD " + " HTTP/1.0\r\n" */
-
-    for ( hptr = h; hptr; hptr = hptr->next )
-    {
-	len += strlen( hptr->key ) + strlen( hptr->value ) + 4;   /* ": " + "\r\n" */
-    }
-
-    result = mm_malloc( len+1 );			    /* '\0' */
-
-    if ( !result )
-	return NULL;
-
+    BOOL do_keep_alive;
+    int do_image;
+    
 #ifndef NO_SECURE
     /* SJM: if tunnelling then skip to path */
     if ( (c->flags & (http_open_flags_TUNNEL | http_open_flags_SECURE))
@@ -2650,18 +2659,140 @@ static char *http_build_request( http_connection *c, http_header_item *h )
 #endif
 	object = c->object;
 
-    sprintf( result, "%s %s %s\r\n", meth, object, http_version );
+    /* calculate size of buffer needed */
+    
+    /* base request and headers */
+    len = strlen(meth) + strlen(c->object) + strlen(http_version) + 4; /* 2*' ' + \r\n */
+    for ( hptr = h; hptr; hptr = hptr->next )
+    {
+	len += strlen( hptr->key ) + strlen( hptr->value ) + 4;   /* ": " + "\r\n" */
+    }
+
+    /* Don't send keep-alive to proxies unless they do HTTP/1.1
+     * (for rationale see RFC2068)
+     */
+    do_keep_alive = (allow & http_config_ALLOW_KEEPALIVE) &&
+	( (c->flags & http_flags_HTTP11) || !strchr( c->object, ':' ) ); /* This isn't a good test for a proxy!!!! */
+    
+    if (do_keep_alive)
+	len += sizeof(HDR_CONNECTION_KEEP_ALIVE)-1;
+
+
+    /* If this is an image, and isn't a priority (ie isn't the
+     * background image), and is a normal fetch, only ask for the first
+     * few bytes. If we've already had the first few bytes, ask for
+     * the remainder.
+     */
+    if ( c->flags & http_flags_GOTFIRST
+	 && !(c->flags & http_flags_RANGEBROKEN) )
+    {
+	/* Unbelievably, F**kWitScape Enterprise Server gets it wrong
+	 * if you ask it for "bytes=256-" ... it only gives you 1000
+	 * bytes even if there are more.
+	 */
+	do_image = image_STAGE_2;
+	len += sizeof(HDR_IMAGE_STAGE_2) + 8;
+    }
+    else if ( ( c->flags & http_open_flags_IMAGE )
+	      && !( c->flags & ( http_open_flags_HEAD
+				 | http_flags_RANGEBROKEN ) )
+	      && !c->bh )
+    {
+	do_image = image_STAGE_1;
+	len += sizeof(HDR_IMAGE_STAGE_1) - 1;
+    }
+    else
+    {
+	do_image = image_NORMAL;
+    }
+    
+    /* body file to post */
+    if (c->bh)
+    {
+	/* header */
+	len += sizeof(HDR_CONTENT_LENGTH) + 8;			/* upto 11 digits */
+
+	/* data */
+	len += c->data_size;
+    }
+
+    len += 2;							/* '\r\n' */
+    
+    /* allocate and fill buffer */
+
+    result = mm_malloc( len + 1 ); /* '\0' */
+
+    if ( !result )
+	return NULL;
 
     ptr = result;
+    ptr += sprintf( ptr, "%s %s %s\r\n", meth, object, http_version );
 
     for ( hptr = h; hptr; hptr = hptr->next )
     {
-	ptr += strlen(ptr);
-	sprintf( ptr, "%s: %s\r\n", hptr->key, hptr->value );
+	ptr += sprintf( ptr, "%s: %s\r\n", hptr->key, hptr->value );
     }
 
-    fdebugf( log_file, "%p: build_request: built %s\n", c, result );
+    if (c->bh)
+    {
+	ptr += sprintf( ptr, HDR_CONTENT_LENGTH, c->data_size);
 
+	fdebugf( log_file, "(7) %p: txheader Content-length: %d\n",
+		 c, c->data_size );
+    }
+
+    if ( do_keep_alive )
+    {
+	strcat( ptr, HDR_CONNECTION_KEEP_ALIVE );
+	ptr += strlen(ptr);
+
+	fdebugf( log_file, "(7) %p: txheader Connection: Keep-Alive\n", c );
+    }
+
+    switch ( do_image )
+    {
+    case image_STAGE_2:
+	ptr += sprintf( ptr, HDR_IMAGE_STAGE_2, c->total_size-1 );
+
+	fdebugf( log_file, "%p: (7) txheader: %s", ptr );
+
+	c->flags &= ~http_open_flags_IMAGE;
+	break;
+
+    case image_STAGE_1:
+	strcat( ptr, HDR_IMAGE_STAGE_1 );
+	ptr += sizeof(HDR_IMAGE_STAGE_1) - 1;
+
+	fdebugf( log_file, "%p: (7) txheader: " HDR_IMAGE_STAGE_1, c );
+	break;
+
+    case image_NORMAL:
+	c->flags &= ~http_open_flags_IMAGE;
+	break;
+    }
+    /* open_flags_IMAGE is now true ONLY if we've sent the range:
+     * header
+     */
+
+    strcat(ptr, "\r\n");
+    ptr += 2;
+
+    fdebugf( log_file, "%p: build_request: built ---\n%s\n---\nplus %d bytes of body file\n", c, result, c->data_size );
+
+    if (c->bh)
+    {
+	ro_fread(ptr, 1, c->data_size, c->bh);
+	ptr += c->data_size;
+
+	fdebugf( log_file, "%p: read %d bytes from body file\n", c, c->data_size );
+
+	c->data_size = c->data_so_far = -1;
+    }
+
+    /* set length to real length written to buffer (which will have
+     * had some slack in its allocations */
+    c->send_headers_length = ptr - result;
+    
     return result;
 }
 
@@ -2671,14 +2802,14 @@ void http_send_request(http_connection *c)
      * a la Mozilla
      */
 
-    int len = strlen( c->send_headers );
+    int len = c->send_headers_length;
     int rc;
 
     fdebugf( log_file, "%p: calling http_send(%d)\n", c, len - c->send_sent );
 
     rc = http_send( c, c->send_headers + c->send_sent, len - c->send_sent );
 
-    fdebugf( log_file, "%p: sent %s\n", c, c->send_headers + c->send_sent );
+    fdebugf( log_file, "%p: sent rc=%d\n", c, rc );
 
     if ( rc < 0 )
 	http_fail( c, status_FAIL_REQUEST );
@@ -2699,106 +2830,12 @@ void http_send_request(http_connection *c)
             /* Reset for potential next bit (if an image prefix) */
             c->send_sent = 0;
 
-            if (c->bh)
-            {
-                if (c->data_size == -1)
-                {
-                    if ( !file_get_size_and_type( c->bname, &c->data_size, NULL ) )
-                        c->data_size = -1; /* doesn't exist */
-                }
-                sprintf(tmp_buffer, "Content-length: %d\r\n", c->data_size);
-#if ADD_CRLF
-		c->data_size += 2;
-#endif
-                fdebugf( log_file, "(7) %p: txheader Content-length: %d\n",
-                                   c, c->data_size );
-            }
-
-            /* Don't send keep-alive to proxies unless they do HTTP/1.1
-             * (for rationale see RFC2068)
-             */
-            if ( (allow & http_config_ALLOW_KEEPALIVE) &&
-		 (c->flags & http_flags_HTTP11) || !strchr( c->object, ':' ) )
-            {
-                strcat( tmp_buffer, "Connection: Keep-Alive\r\n" );
-                fdebugf( log_file, "(7) %p: txheader Connection: Keep-Alive\n", c );
-            }
-
-            /* If this is an image, and isn't a priority (ie isn't the
-             * background image), and is a normal fetch, only ask for the first
-             * few bytes. If we've already had the first few bytes, ask for
-             * the remainder.
-             */
-            if ( c->flags & http_flags_GOTFIRST
-                 && !(c->flags & http_flags_RANGEBROKEN) )
-            {
-                /* Unbelievably, F**kWitScape Enterprise Server gets it wrong
-                 * if you ask it for "bytes=256-" ... it only gives you 1000
-                 * bytes even if there are more.
-                 */
-                char *ptr = tmp_buffer + strlen( tmp_buffer );
-
-                sprintf( ptr, "Range: bytes=" IMAGE_HEADER1_T "-%d\r\n",
-                              c->total_size-1 );
-                fdebugf( log_file, "%p: (7) txheader Range: bytes=" IMAGE_HEADER1_T
-                                   "-%d\n", c, c->total_size-1 );
-                c->flags &= ~http_open_flags_IMAGE;
-            }
-            else if ( ( c->flags & http_open_flags_IMAGE )
-                      && !( c->flags & ( http_open_flags_HEAD
-                                         | http_flags_RANGEBROKEN ) )
-                      && !c->bh )
-            {
-                strcat( tmp_buffer, "Range: bytes=0-" IMAGE_HEADER_T "\r\n" );
-                fdebugf( log_file, "%p: (7) txheader Range: bytes=0-"
-                                   IMAGE_HEADER_T "\n", c );
-            }
-            else
-                c->flags &= ~http_open_flags_IMAGE;
-
-            /* open_flags_IMAGE is now true ONLY if we've sent the range:
-             * header
-             */
-
-            strcat(tmp_buffer, "\r\n");
-
-	    rc = http_send( c, tmp_buffer, strlen(tmp_buffer) );
-
-	    if ( rc < 0 )
-	    {
-		http_fail( c, status_FAIL_REQUEST );
-		return;
-	    }
-
-            /* all done; set up request body if there is one */
-            if ( c->bh )
-            {
-                http_set_status( c, status_REQUEST_BODY );
-                ro_fread(c->buffer, 1,
-                         c->data_size > HEADER_MAX_INPUT ? HEADER_MAX_INPUT : c->data_size,
-                         c->bh);
-                c->data_so_far = 0;
-
-#if ADD_CRLF
-		/* this goes wrong if data_size = HEADER_MAX_INPUT+1 ! */
-		if (c->data_size <= HEADER_MAX_INPUT)
-		{
-		    char *s = c->buffer + c->data_size - 2;
-		    *s++ = '\r';
-		    *s++ = '\n';
-		}
-#endif
-                fdebugf( log_file, "%p: setting so_far=0 in sendrh\n", c );
-            }
-            else
-            {
-                http_set_status( c, status_WAITING );
-            }
+	    http_set_status( c, status_WAITING );
 	}
     }
 }
 
-
+#if 0
 /* Returns 0 if data was sent or the connection died, EWOULDBLOCK if it would block */
 int http_send_request_body(http_connection *c)
 {
@@ -2862,6 +2899,7 @@ int http_send_request_body(http_connection *c)
 
     return 0;
 }
+#endif
 
 /*
  * Read some more data from the line and return the next line of data
