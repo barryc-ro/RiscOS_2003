@@ -22,6 +22,11 @@
 #	17/03/98	0.09	RDW	instrument target added and OBJSCI for building instrumented
 #					version
 #					-ffah added back to CFLAGS.  Got lost at some point in the past
+#	25/03/98	0.10	RDW	Tidy up MemCheck build so it can be done cleaning from amu
+#					command line.  DEBUG def. removed so it's now defined on amu
+#					command line.  -C++ option added to .cp.o suffix rule to get
+#					round fault in CC.  CC takes cp.filename and trys to use
+#					cp.c.filename!
 
 #
 # Paths
@@ -35,16 +40,14 @@ EXP_HDR = <export$dir>
 #
 MKDIR   = cdir
 AS      = objasm -tb
-CC      = cc
+CC      = $(MemCheckCC) cc
 CMHG    = cmhg
 CP      = copy
-LD      = link
+LD      = $(MemCheckLD) link
 RM      = remove
 MODSQZ  = modsqz
 WIPE    = -wipe
 CD	= dir
-MemCheckCC	= #MemCheck.CC
-MemCheckLD	= #MemCheck.DDTModLink
 
 CPFLAGS = ~cfr~v
 WFLAGS = ~c~v
@@ -59,6 +62,7 @@ SOCKLIB   = TCPIPLibs:o.socklibzm
 UNIXLIB   = TCPIPLibs:o.unixlibzm
 CALLX     = <Lib$Dir>.callx.o.callx
 EMAILLIB  = <Lib$Dir>.Email.EmailLib.o.EmailLibzm
+LIBS      = ${SOCKLIB} ${INETLIB} ${UNIXLIB} ${CALLX} ${DOBJS} ${EMAILLIB} ${EXTRALIBS}
 
 #
 # Program specific options:
@@ -68,47 +72,36 @@ TARGET = rm.AcornPOP3
 ROMTARGET = aof.AcornPOP3
 
 
-OTHERCCDEFS=	#-g
-
-# You may want to link with TinyStubs. if you do, set LD to tlink and
-# uncomment this TINYSTUBS, and comment out the STUBS
-
-TINYSTUBS=	#-DTINYSTUBS
 STUBS=		C:o.Stubs
 
 ROMCSTUBS=      RISC_OSLib:o.romcstubs
 ABSSYM=         RISC_OSLib:o.AbsSym
 
-DEBUG=		#-DDEBUG -DTRACE#-DMEMCHECK
-
 COMPAT=		-DCOMPAT_INET4
 
-# CFLAGS=		-fnah -zM -I${INCLUDES} -DINET -DCOMPAT_INET4 ${DEBUG}
 CFLAGS=		-ffah -zM -I${INCLUDES} -DINET -DCOMPAT_INET4 ${DEBUG}\
-		-zps1 -Wp -depend !Depend -Fn -c -throwback ${TINYSTUBS}\
-		${OTHERCCDEFS}
+		-zps1 -Wp -depend !Depend -Fn -c ${THROWBACK} \
+		${EXTRACCFLAGS}
 
-CMHGFLAGS = -p -IC: -d h.header -throwback
+CMHGFLAGS = -p -IC: -d h.header ${THROWBACK}
 
 ASMFLAGS=       
-
-DOBJS=          #tml_podule.o debuglib.o trace_PL.o #MemCheck:o.MC_M
 
 OBJS=		swihndlers.o handlers.o logon.o logout.o pop_utils.o module.o header.o \
                 errortable.o get.o send.o cmdresp.o callbacks.o getnummsgs.o \
                 getlistmsg.o getmsgfile.o deletemsg.o getuniquei.o getlistuid.o \
-		${SOCKLIB} ${INETLIB} ${UNIXLIB} ${CALLX} ${DOBJS} ${EMAILLIB}
+		${LIBS}
 		
 OBJSCP=		cp.swihndlers cp.handlers cp.logon cp.logout cp.pop_utils cp.module o.header \
                 cp.errortable cp.get cp.send cp.cmdresp cp.callbacks cp.getnummsgs \
                 cp.getlistmsg cp.getmsgfile cp.deletemsg cp.getuniquei cp.getlistuid \
-		${SOCKLIB} ${INETLIB} ${UNIXLIB} ${CALLX} ${DOBJS} ${EMAILLIB}
+		${LIBS}
 
 OBJSCI=		o.swihndlers o.handlers o.logon o.logout o.pop_utils o.module o.header \
                 o.errortable o.get o.send o.cmdresp o.callbacks o.getnummsgs \
                 o.getlistmsg o.getmsgfile o.deletemsg o.getuniquei o.getlistuid \
                 o.instlib \
-		${SOCKLIB} ${INETLIB} ${UNIXLIB} ${CALLX} ${DOBJS} ${EMAILLIB}
+		${LIBS}
 
 EXTRAS=         acornpop3.o
 
@@ -116,9 +109,9 @@ EXTRAS=         acornpop3.o
 # Rule patterns
 #
 .SUFFIXES:	.o .s .c .cp .cmhg
-.c.o:;		$(MemCheckCC) $(CC) $(CFLAGS) -o $@ $<
+.c.o:;		$(CC) $(CFLAGS) -o $@ $<
 .c.cp:;		$(CC) $(CFLAGS) -c -C -E $< >> $@
-.cp.o:;		$(MemCheckCC) $(CC) $(CFLAGS) -o $@ $<
+.cp.o:;		$(CC) $(CFLAGS) -C++ -o $@ $<
 .s.o:;		$(AS) ${ASMFLAGS} -o $@ $<
 .cmhg.o:;	$(CMHG) $(CMHGFLAGS) -o $@ $<
 
@@ -135,8 +128,8 @@ analyse: ${OBJSCP} local_dirs
 	@echo ${COMPONENT}: analysis build complete
 
 instrument: ${OBJSCI} local_dirs
-	$(MemCheckLD) $(LD) -rmf -s link/sym -o rm.AcornPOP3u $(OBJSCI) $(STUBS)
-	ModSqz rm.AcornPOP3u $@
+	$(LD) -rmf -s link/sym -o rm.AcornPOP3u $(OBJSCI) $(STUBS)
+	ModSqz rm.AcornPOP3u rm.AcornPOP3
 
 export:	export_${PHASE}
 
@@ -162,18 +155,20 @@ clean:
 		$(RM) aof
 		$(RM) linked
 		$(RM) map
+		$(RM) cp
 		$(RM) o
 
 local_dirs:
 	${MKDIR} o
 	${MKDIR} aof
 	${MKDIR} rm
+	${MKDIR} cp
 
 #
 # Target 
 #
 ${TARGET}:	$(OBJS) $(EXTRAS) local_dirs
-		$(MemCheckLD) $(LD) -rmf -s link/sym -o rm.AcornPOP3u $(OBJS) $(STUBS)
+		$(LD) -rmf -s link/sym -o rm.AcornPOP3u $(OBJS) $(STUBS)
 		ModSqz rm.AcornPOP3u $@
 
 #
