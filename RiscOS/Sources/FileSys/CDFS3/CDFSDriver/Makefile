@@ -88,6 +88,7 @@ OBJS = o.Hdr\
 messages.o: Res.UK.Messages
         resgen messages_file @.o.messages @.Res.UK.Messages Resources.${COMPONENT}.Messages
 
+drive.o: module.h
 swi.o: module.h
 
 module.h: cmhg.Hdr
