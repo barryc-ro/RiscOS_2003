@@ -83,12 +83,19 @@ install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
+local_dirs:
+	${MKDIR} o
+	${MKDIR} rm
+	${MKDIR} linked
+	${MKDIR} aof
+	${MKDIR} map
+
 clean:
-        ${WIPE} o.* ${WFLAGS}
-        ${WIPE} rm.* ${WFLAGS}
-        ${WIPE} linked.* ${WFLAGS}
-        ${WIPE} map.* ${WFLAGS}
-        ${RM} ${TARGET}
+        ${WIPE} o ${WFLAGS}
+        ${WIPE} rm ${WFLAGS}
+        ${WIPE} linked ${WFLAGS}
+        ${WIPE} map ${WFLAGS}
+        ${WIPE} aof ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 resources:
@@ -98,13 +105,13 @@ resources:
 #
 # Stand-alone module
 #
-${TARGETSA}: ${OBJS} ${CLIB}
+${TARGETSA}: ${OBJS} ${CLIB} local_dirs
         ${LD} -o $@ -module ${OBJS} ${CLIB}
 
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS} ${ROMCSTUBS}
+${TARGET}: ${OBJS} ${ROMCSTUBS} local_dirs
         ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
 
 #
@@ -118,16 +125,3 @@ rom_link:
 
 
 # Dynamic dependencies:
-o.Module:	c.Module
-o.Module:	C:h.kernel
-o.Module:	C:h.swis
-o.Module:	h.module
-o.Module:	h.appflash
-o.Module:	h.error
-o.AppFlash:	c.AppFlash
-o.AppFlash:	C:h.kernel
-o.AppFlash:	C:h.swis
-o.AppFlash:	h.module
-o.AppFlash:	h.appflash
-o.AppFlash:	h.error
-o.Calls: s.Calls
