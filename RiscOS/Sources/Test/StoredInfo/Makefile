@@ -22,6 +22,7 @@ AFLAGS = -depend !Depend -Stamp -quit
 CFLAGS  = -c -depend !Depend -zM -zps1 -ff ${INCLUDES} ${DFLAGS}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
+CMHGFLAGS = -p ${DFLAGS} ${INCLUDES}
 
 #
 # Libraries
@@ -57,7 +58,7 @@ EXPORTS   =
 # Rule patterns
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} -o $@ $<
+.cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
 
 #
@@ -112,15 +113,6 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 
 # Dynamic deo.module:	c.module
 # Dynamic dependencies:
-o.veneer: s.veneer
-o.veneer: Hdr:ListOpts
-o.veneer: Hdr:Macros
-o.veneer: Hdr:System
-o.veneer: Hdr:SWIs
-o.veneer: Hdr:CPU.Generic26
-o.veneer: Hdr:IO.GenericIO
-o.veneer: Hdr:RISCOS
-o.veneer: Hdr:ModHand
 o.Display:	c.Display
 o.Display:	C:h.kernel
 o.Display:	C:h.swis
@@ -131,6 +123,7 @@ o.Display:	h.support
 o.DRAMTest:	c.DRAMTest
 o.DRAMTest:	C:h.kernel
 o.DRAMTest:	C:h.swis
+o.DRAMTest:	h.module
 o.DRAMTest:	h.dramtest
 o.DRAMTest:	h.display
 o.DRAMTest:	h.support
@@ -185,15 +178,6 @@ o.Support:	h.support
 o.Support:	C:h.led
 o.Support:	h.display
 o.Support:	h.Msgs
-o.System:	c.System
-o.System:	C:h.kernel
-o.System:	C:h.swis
-o.System:	h.system
-o.System:	h.display
-o.System:	h.support
-o.System:	h.msgs
-o.System:	h.CPUType
-o.System:	h.IOControl
 o.UserDiag:	c.UserDiag
 o.UserDiag:	C:h.kernel
 o.UserDiag:	C:h.swis
@@ -255,6 +239,24 @@ o.usermode: Hdr:CPU.Generic26
 o.usermode: Hdr:IO.GenericIO
 o.usermode: Hdr:RISCOS
 o.usermode: Hdr:EnvNumbers
+o.System:	c.System
+o.System:	C:h.kernel
+o.System:	C:h.swis
+o.System:	h.system
+o.System:	h.display
+o.System:	h.support
+o.System:	h.msgs
+o.System:	h.CPUType
+o.System:	h.IOControl
+o.veneer: s.veneer
+o.veneer: Hdr:ListOpts
+o.veneer: Hdr:Macros
+o.veneer: Hdr:System
+o.veneer: Hdr:SWIs
+o.veneer: Hdr:CPU.Generic26
+o.veneer: Hdr:IO.GenericIO
+o.veneer: Hdr:RISCOS
+o.veneer: Hdr:ModHand
 o.module:	c.module
 o.module:	C:h.kernel
 o.module:	C:h.swis
