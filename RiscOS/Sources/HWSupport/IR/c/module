@@ -66,6 +66,8 @@
 #include "kernel.h"
 #include "swis.h"
 
+#include "Global/Services.h"
+
 #include "iriface.h"
 
 #undef DEBUG
@@ -423,14 +425,11 @@ _kernel_oserror *IR_keyv_handler (_kernel_swi_regs *r, void *pw)
     /* Read the code from the micro */
     while ( (code = IR_READ) != IR_READ );
 
-    /* If the micro says go into standby and we're in standby or the micro says
-     * come out of standby and we are out of standby, set the current code to
-     * the code from the micro so it gets ignored by the callevery handler. 
+    /* The kernel has flushed it's keyboard tables.  We need to tell it about
+     * the key down event again.  We allow the ticker code to do this.  If
+     * it's the standby key then the ticker code will do nothing.
      */
-    if(keyv_ok == 0 || code == (IN_STANDBY?STANDBY_CODE:ONLINE_CODE))
-      last_code = code; /* Ignore this code */
-    else
-      last_code = NULL_CODE; /* Act on the code in the next tick. */
+    last_code = NULL_CODE; /* Act on the code in the next tick. */
 
     /* The kernel did the up code for us */
     done_key_up = TRUE;
@@ -442,41 +441,56 @@ _kernel_oserror *IR_keyv_handler (_kernel_swi_regs *r, void *pw)
 /*************************************************************************/
 void IR_service_handler (int service_number, _kernel_swi_regs *r, void *pw)
 {
-  /*
-   * We registered with CMHG for Service_Sleeping only, so we don't need to
-   * check the service number here 'cos it will always be Sleeping
-   *
-   * Don't do anything if state is On; we're just going off and it might have
-   * been us that turned us off
-   */
-  int code;
-
-  /* Read twice to ensure value has settled */
-  while ( (code = IR_READ) != IR_READ );
-
-  if ( (r->r[0] != STATE_ON) && (code == ONLINE_CODE) )
+  switch(r->r[1])
   {
-#ifdef DEBUG
-    fprintf(OUTFILE, "IR:Service_Sleep, state=%d\n", r->r[0]);
-#endif
+  case Service_Sleeping:
+    /*
+     * Don't do anything if state is On; we're just going off and it might have
+     * been us that turned us off
+     */
 
-/* 16/7/97:CP:added callback goof-proofing */
-    if(callback_activeG == FALSE)
+    if ( (r->r[0] != STATE_ON) && (last_code == ONLINE_CODE) )
     {
-      /* no callback pending, so set one up */
-       callback_activeG = TRUE;
-
-       regs.r[0] = (int) IR_callback_entry;
-       regs.r[1] = (int) pw;
-       _kernel_swi(OS_AddCallBack, &regs, &regs);
-    }
-
-    r->r[1] = 0;	/* Claim the service */
-  }
 #ifdef DEBUG
-  else
-    fprintf(OUTFILE, ".");
+      fprintf(OUTFILE, "IR:Service_Sleep, state=%d\n", r->r[0]);
 #endif
+  
+  /* 16/7/97:CP:added callback goof-proofing */
+      if(callback_activeG == FALSE)
+      {
+        /* no callback pending, so set one up */
+        callback_activeG = TRUE;
+  
+        regs.r[0] = (int) IR_callback_entry;
+        regs.r[1] = (int) pw;
+        _kernel_swi(OS_AddCallBack, &regs, &regs);
+      }
+  
+      r->r[1] = 0;	/* Claim the service */
+    }
+#ifdef DEBUG
+    else
+      fprintf(OUTFILE, ".");
+#endif
+    break;
+  case Service_Standby:
+    /* If going into standby and the IR macro is saying go on line, we must
+     * go back on line or the micro gets confused.
+     */
+    if( (r->r[0]&1)!=0 && last_code == ONLINE_CODE )
+    {
+      if(callback_activeG == FALSE)
+      {
+        /* no callback pending, so set one up */
+        callback_activeG = TRUE;
+  
+        regs.r[0] = (int) IR_callback_entry;
+        regs.r[1] = (int) pw;
+        _kernel_swi(OS_AddCallBack, &regs, &regs);
+      }
+    }
+    break;
+  }
 }
 
 
@@ -488,9 +502,28 @@ _kernel_oserror *IR_callback_handler (_kernel_swi_regs *r, void *pw)
 
   if(callback_activeG == TRUE) /* paranoia never hurt anyone ;-) */
   {
-     _kernel_swi(STBState_Standby, &regs, &regs);
+    /* Check to see what state we're in.  If this fails, there's little point
+     * calling STBState_Standby. */
+    if(_kernel_swi(STBState_State, &regs, &regs)==NULL)
+    {
+      switch(regs.r[0])
+      {
+      case STATE_INIT:
+      case STATE_ON:
+      case STATE_FATAL:
+        /* We're on. */
+        if(last_code == STANDBY_CODE) /* Should we be off? */
+          _kernel_swi(STBState_Standby, &regs, &regs);
+        break;
+      default:
+        /* We're off. */
+        if(last_code == ONLINE_CODE) /* Should we be on? */
+          _kernel_swi(STBState_Standby, &regs, &regs);
+        break;
+      }
+    }
 
-     callback_activeG = FALSE;
+    callback_activeG = FALSE;
   }
 
   return NULL;
@@ -535,6 +568,8 @@ void do_key_up(void)
 _kernel_oserror *IR_callevery_handler (_kernel_swi_regs *r, void *pw)
 {
   int code;
+  /* We need our own copy of this because we're in an interrupt handler. */
+  _kernel_swi_regs regs;
 #ifdef MOUSE
   unsigned char hor, ver, fire ;
 #endif
@@ -699,7 +734,7 @@ _kernel_oserror *IR_cmd (const char *arg_string, int argc, int cmd_no,
 
   switch (cmd_no)
   {
-  case MAPLIST:
+  case CMD_IRmaplist:
     /*
      * Dump mappings
      */
@@ -744,7 +779,7 @@ _kernel_oserror *IR_cmd (const char *arg_string, int argc, int cmd_no,
     }
     break;
 
-  case MAP:
+  case CMD_IRmap:
     {
       const char *first_arg = arg_string ;
       char *second_arg ;
@@ -913,15 +948,16 @@ _kernel_oserror *IR_cmd (const char *arg_string, int argc, int cmd_no,
     }
     break;
 
-  case RESET:
+  case CMD_IRreset:
 
     default_mappings () ;
     break;
 
-  case CLEAR:
+  case CMD_IRclear:
 
     clear_mappings();
     break;
+
   }
 
   return (NULL) ;
@@ -988,6 +1024,9 @@ void fake_mouse_move (MouseMove where)
 {
   int xp, yp ;
 
+  /* This is called from an interrupt handler so we need to use private regs. */
+  _kernel_swi_regs regs;
+
 
   regs.r[0] = 21 ;
   regs.r[1] = (int) &osword_block ;
@@ -1036,6 +1075,9 @@ void fake_mouse_move (MouseMove where)
 /*************************************************************************/
 void fake_key (int thing_pressed, KeyDir dir)
 {
+  /* This is called from an interrupt handler so we need to use private regs. */
+  _kernel_swi_regs regs;
+
   if (keyv_ok)
   {
     /* Tell KeyWatch Module to ignore next key press */
