@@ -66,6 +66,7 @@ o.ui		\
 o.kill		\
 o.messages   	\
 o.DBUG          \
+o.crc32		\
 
 
 #
