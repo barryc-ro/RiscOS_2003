@@ -110,6 +110,7 @@ static void if_askwhoiam(struct ifnet *ifp, int need,
                          void (*proc)(struct ifnet *, int), int flag);
 static void bootsleep(int cmd);
 static int bootp_myaddr(struct arpcom *ac, int retry);
+static int dhcp_myaddr(struct ifnet *);
 static void request_netmask(struct ifnet *ifp, int flag);
 static int backoff(int retry);
 static int getrand(void);
@@ -211,6 +212,10 @@ if_whoamiaddr(ifp, cmd)
 
     if (!whoiam_service_claimed && (cmd == SIOCGWHOIAMB || cmd == SIOCGWHOIAMRB))
 	if_askwhoiam(ifp, IFF_NEED_IPADDR, (void (*)())bootp_myaddr, 1);
+
+    if (!whoiam_service_claimed && (cmd == SIOCGWHOIAMD)) {
+        dhcp_myaddr(ifp);
+    }
 
     bootsleep(cmd);
 
@@ -415,6 +420,7 @@ vend_miaddr(BOOTP *pkt, u_char code, char *buf, u_char max)
 	return i;
 }
 
+static void bootp_interpret(BOOTP *, int, struct ifnet *);
 
 /*
  * A bootstrap packet reply has been received
@@ -425,18 +431,12 @@ bootp_udp_input(m)
 {
     BOOTP pkt;
     int len = sizeof pkt;
-    struct ifreq ifr;
-    struct sockaddr_in *sin;
     struct ifnet *ifp = m->m_pkthdr.rcvif;
     struct arpcom *ac = (struct arpcom *)ifp;
-    struct in_addr in;
-    struct in_addr netmask;
-    char devname[16];
 
     if (!(ifp->if_flags & IFF_NEED_IPADDR))
         return;
 
-    netmask.s_addr = 0L;
     memset(&pkt, 0, sizeof(pkt));
 
     (void)EXPORT(m, len, &pkt);
@@ -466,74 +466,89 @@ bootp_udp_input(m)
     if (DODEBUG(DBGADDRSRCH))
         Printf("Got BOOTP response: myaddr = %x\n", pkt.yiaddr);
 #endif
+    bootp_interpret(&pkt, len, ifp);
+}
+
+/* sbrodie 24/03/1999.  Split this function into two so that the DHCP module
+ * can pass this function a DHCPACK message for it to look at and parse.
+ */
+static void bootp_interpret(BOOTP *pkt, int len, struct ifnet *ifp)
+{
+    struct ifreq ifr;
+    struct sockaddr_in *sin;
+    char devname[16];
+    struct in_addr in;
+    struct in_addr netmask;
+
+    netmask.s_addr = 0L;
 
   do {
 
-    in.s_addr = pkt.yiaddr;
+    in.s_addr = pkt->yiaddr;
     _kernel_setenv(BOOTPIPADDRVAR, inet_ntoa(in));
 
-    in.s_addr = pkt.siaddr;
+    in.s_addr = pkt->siaddr;
     _kernel_setenv(BOOTPSERVERVAR, inet_ntoa(in));
-    _kernel_setenv(BOOTPSERVERFILE, (char *) pkt.file);
+    _kernel_setenv(BOOTPSERVERFILE, (char *) pkt->file);
 
     /* If this packet is RFC-1048 compliant then extract any pertinent
      * information from the vendor data (also rfc2132).
      */
-    if (vend_verify(&pkt))
+    if (vend_verify(pkt))
     {
         static char buf[OPTIONS_MAX]; /* This MUST be OPTIONS_MAX */
         u_long tmp;
 
-        tmp = vend_string(&pkt, OPTION_HOSTNAME, buf);
+        tmp = vend_string(pkt, OPTION_HOSTNAME, buf);
         if (tmp) _kernel_setenv(BOOTPHOSTVAR, buf);
 
-        tmp = vend_string(&pkt, OPTION_DOMAINNAME, buf);
+        tmp = vend_string(pkt, OPTION_DOMAINNAME, buf);
         if (tmp) _kernel_setenv(BOOTPDOMAINNAMEVAR, buf);
 
-        netmask.s_addr = vend_iaddr(&pkt, OPTION_NETMASK);
+        netmask.s_addr = vend_iaddr(pkt, OPTION_NETMASK);
         if (netmask.s_addr) _kernel_setenv(BOOTPNETMASKVAR, inet_ntoa(netmask));
 
-        in.s_addr = vend_iaddr(&pkt, OPTION_ROUTER);
+        in.s_addr = vend_iaddr(pkt, OPTION_ROUTER);
         if (in.s_addr) _kernel_setenv(BOOTPGATEWAYVAR, inet_ntoa(in));
 
-        if (vend_miaddr(&pkt, OPTION_NAMESERVER, buf, MAX_NAMESERVERS))
+        if (vend_miaddr(pkt, OPTION_NAMESERVER, buf, MAX_NAMESERVERS))
         	_kernel_setenv(BOOTPDNSVAR, buf);
 
-        if (vend_miaddr(&pkt, OPTION_TIMESERVER, buf, MAX_GENERICSERVERS))
+        if (vend_miaddr(pkt, OPTION_TIMESERVER, buf, MAX_GENERICSERVERS))
         	_kernel_setenv(BOOTPTIMESERVERVAR, buf);
 
-        tmp = vend_iaddr(&pkt, OPTION_TIMEOFFSET);
+        tmp = vend_iaddr(pkt, OPTION_TIMEOFFSET);
         if (tmp)
         {
           sprintf(buf,"%d",tmp);
           _kernel_setenv(BOOTPTIMEOFFSETVAR, buf);
         }
 
-        if (vend_miaddr(&pkt, OPTION_NBNSSERVERS, buf, MAX_GENERICSERVERS))
+        if (vend_miaddr(pkt, OPTION_NBNSSERVERS, buf, MAX_GENERICSERVERS))
 		_kernel_setenv(BOOTPNBNSVAR, buf);
 
-        if (vend_miaddr(&pkt, OPTION_SMTPSERVER, buf, MAX_SMTPSERVERS))
+        if (vend_miaddr(pkt, OPTION_SMTPSERVER, buf, MAX_SMTPSERVERS))
         	_kernel_setenv(BOOTPSMTPSERVERVAR, buf);
 
-        if (vend_miaddr(&pkt, OPTION_POP3SERVER, buf, MAX_POPSERVERS))
+        if (vend_miaddr(pkt, OPTION_POP3SERVER, buf, MAX_POPSERVERS))
         	_kernel_setenv(BOOTPPOP3SERVERVAR, buf);
 
-        if (vend_miaddr(&pkt, OPTION_NNTPSERVER, buf, MAX_GENERICSERVERS))
+        if (vend_miaddr(pkt, OPTION_NNTPSERVER, buf, MAX_GENERICSERVERS))
         	_kernel_setenv(BOOTPNNTPSERVERVAR, buf);
 
-        if (vend_miaddr(&pkt, OPTION_WWWSERVER, buf, MAX_GENERICSERVERS))
+        if (vend_miaddr(pkt, OPTION_WWWSERVER, buf, MAX_GENERICSERVERS))
         	_kernel_setenv(BOOTPWWWSERVERVAR, buf);
 
-        if (vend_miaddr(&pkt, OPTION_FINGERSERVER, buf, MAX_GENERICSERVERS))
+        if (vend_miaddr(pkt, OPTION_FINGERSERVER, buf, MAX_GENERICSERVERS))
         	_kernel_setenv(BOOTPFINGERSERVERVAR, buf);
 
-        if (vend_miaddr(&pkt, OPTION_IRCSERVER, buf, MAX_GENERICSERVERS))
+        if (vend_miaddr(pkt, OPTION_IRCSERVER, buf, MAX_GENERICSERVERS))
         	_kernel_setenv(BOOTPIRCSERVERVAR, buf);
 
-        tmp = vend_string(&pkt, OPTION_TFTPSERVER, buf);
+        tmp = vend_string(pkt, OPTION_TFTPSERVER, buf);
         if (tmp) _kernel_setenv(BOOTPSERVERNAMEVAR, buf);
 
-        tmp = vend_string(&pkt, OPTION_ACORNPRIVATE, buf);
+        tmp = vend_string(pkt, OPTION_ACORNPRIVATE, buf);
         if (tmp) _kernel_setenv(BOOTPACORNVAR, buf);
     }
 
@@ -554,13 +569,13 @@ bootp_udp_input(m)
        (void) in_control((struct socket *)0, SIOCSIFNETMASK, (caddr_t)&ifr, ifp);
     }
 
-    sin->sin_addr.s_addr = pkt.yiaddr;
+    sin->sin_addr.s_addr = pkt->yiaddr;
     (void) in_control((struct socket *)0, SIOCSIFADDR, (caddr_t)&ifr, ifp);
     ifp->if_flags &= ~IFF_NEED_IPADDR;
 
     if (netmask.s_addr)
     {
-       sin->sin_addr.s_addr = (netmask.s_addr & pkt.yiaddr) | ~netmask.s_addr;
+       sin->sin_addr.s_addr = (netmask.s_addr & pkt->yiaddr) | ~netmask.s_addr;
        (void) in_control((struct socket *)0, SIOCSIFBRDADDR, (caddr_t)&ifr, ifp);
     }
     sprintf(devname, "%s%d", ifp->if_name, ifp->if_unit);
@@ -1239,6 +1254,73 @@ static int
 right_alt_is_pressed()
 {
     return _kernel_osbyte(KEYSCAN, RIGHTALT | 0x80, 0) & 0xFF;
+}
+
+/* The following routines were added in version 5.20 to support the external DHCP
+ * client module.
+ */
+int
+if_sdhcpreq(struct ifnet *ifp, struct ifdhcpreq *ifd)
+{
+    struct arpcom *ac = (struct arpcom *) ifp;
+    struct mbuf *m0, *m;
+    int res = 0;
+
+    if ((ifd->ifr.ifr_flags & 4) == 4) {
+            /* DHCP module wanted this packet parsed */
+            bootp_interpret(&ifd->packet, sizeof(ifd->packet), ifp);
+    }
+    else if ((ifd->ifr.ifr_flags & 2) == 0) {
+            /* We did want to send a packet.  Setting bit 1 allows us to simply clear
+             * the frame claims after a DHCPNAK (as long as bit 0 is set too!)
+             */
+
+        boot_tries = 1; /* Force immediate transmission */
+
+        if (((ac->ac_if.if_flags & (IFF_UP | IFF_RUNNING)) != (IFF_UP | IFF_RUNNING)))
+        {
+          if ((ac->ac_if.if_flags & IFF_RUNNING) != IFF_RUNNING)
+          {
+            claim_frames(&ac->ac_if, 1);
+            ac->ac_if.if_flags |= IFF_RUNNING;
+            whoami_claimed_frames = TRUE;
+          }
+          ac->ac_if.if_flags |= IFF_UP;
+        }
+        else
+        {
+          whoami_claimed_frames = FALSE;
+        }
+
+        if ((m0 = m = ALLOC(sizeof(ifd->packet), &ifd->packet)) == NULL)
+    	return (ENOBUFS);
+
+        while (m)
+        {
+            m->m_type = MT_DATA;
+            m = m->m_next;
+        }
+
+        m0->m_pkthdr.len = sizeof(ifd->packet);
+        m0->m_pkthdr.rcvif = 0;
+        m0->m_flags = M_PKTHDR | M_BCAST;
+
+        res = bootp_udp_output(m0, &ac->ac_if, 0, BOOTPclient,
+    			    INADDR_BROADCAST, BOOTPserver);
+    }
+
+    if ((ifd->ifr.ifr_flags & 1) && whoami_claimed_frames) {
+        if_down(ifp);
+	claim_frames(ifp, 0);
+	ifp->if_flags &= ~IFF_RUNNING; /* Running flag implies that we have frames claimed */
+    }
+    return res;
+}
+
+static int dhcp_myaddr(struct ifnet *ifp)
+{
+    (void) ifp;
+    return (0);
 }
 
 /* EOF whoami.c */
