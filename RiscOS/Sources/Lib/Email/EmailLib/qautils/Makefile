@@ -121,3 +121,21 @@ ${TARGETZ}:	$(OBJSZ) local_dirs
 		$(LIBFILE) -c -o $(TARGETZ) $(OBJSZ)
 
 # Dynamic dependencies:
+o.list:	c++.list
+o.list:	h.list
+o.olist:	c++.olist
+o.olist:	h.olist
+o.olist:	h.indxlist
+o.olist:	h.list
+o.indxlist:	c++.indxlist
+o.indxlist:	h.indxlist
+o.indxlist:	h.list
+o.list:	c++.list
+o.list:	h.list
+o.olist:	c++.olist
+o.olist:	h.olist
+o.olist:	h.indxlist
+o.olist:	h.list
+o.indxlist:	c++.indxlist
+o.indxlist:	h.indxlist
+o.indxlist:	h.list

@@ -26,6 +26,7 @@
 #	20/02/98	0.09	RDW	added XNFrtnrcpt to OBJS, HDRS, OBJSZ, OBJSD
 #	25/02/98	0.10	RDW	Commented out DEBUG so it can be passed from
 #					amu commandline
+#	23/03/98	0.11D	RDW	analyse target added
 
 #
 # Paths
@@ -94,7 +95,7 @@ ASMFLAGS=
 
 HDRS=		h.822parser body.h bodymulti.h contentT.h contentTE.h date.h elibbase.h entity.h \
 		from.h header.h headers.h messageid.h MIMEentity.h MIMEimage.h MIMEmultip.h mimevers.h \
-		parameter.h replyto.h resentdate.h rfc822msg.h to.h XNFdevice.o XNFdevicec.o \
+		parameter.h replyto.h resentdate.h rfc822msg.h to.h XNFdevice.h XNFdevicec.h \
 		XNFfaxnum.h XNFfaxpage.h XNFmsgclas.h XNFphoneno.h XNFserial.h XNFsoftrev.h Xorganiz.h \
 		subject.h base64.h ELib.h ELib_priv.h MIMEtext.h ELib_OS.h XNFrtnrcpt.h \
 		@.qautils.h.list @.qautils.h.olist @.qautils.h.indxlist
@@ -118,6 +119,13 @@ OBJSD =		od.822parser od.body od.bodymulti od.contentT od.contentTE od.date od.e
 		od.XNFphoneno od.XNFserial od.XNFsoftrev od.Xorganiz od.subject od.base64 od.ELib \
 		od.ELib_priv od.MIMEtext od.ELib_OS od.XNFrtnrcpt
 
+OBJSCP=		cp.822parser cp.body cp.bodymulti cp.contentT cp.contentTE cp.date cp.elibbase \
+		cp.entity cp.from cp.header cp.headers cp.messageid cp.MIMEentity cp.MIMEimage \
+		cp.MIMEmultip cp.mimevers cp.parameter cp.replyto cp.resentdate cp.rfc822msg \
+		cp.to cp.XNFdevice cp.XNFdevicec cp.XNFfaxnum cp.XNFfaxpage cp.XNFmsgclas \
+		cp.XNFphoneno cp.XNFserial cp.XNFsoftrev cp.Xorganiz cp.subject cp.base64 cp.ELib \
+		cp.ELib_priv cp.MIMEtext cp.ELib_OS cp.XNFrtnrcpt
+
 QAOBJS=		@.qautils.o.list @.qautils.o.olist @.qautils.o.indxlist
 
 QAOBJSZ=	@.qautils.z.list @.qautils.z.olist @.qautils.z.indxlist
@@ -126,18 +134,23 @@ QAOBJSZ=	@.qautils.z.list @.qautils.z.olist @.qautils.z.indxlist
 #
 # Rule patterns
 #
-.SUFFIXES:	.o .od .z .s .c .c++
+.SUFFIXES:	.o .od .z .s .c .c++ .cp
 .c.o:;		$(MemCheckCC) $(CC) $(CFLAGS) -o $@ $<
 .c.od:;		$(MemCheckCC) $(CC) $(CFLAGS) -g -o $@ $<
 .c.z:;		$(MemCheckCC) $(CC) $(CFLAGS) -zm -zps1 -o $@ $<
+.c.cp:;		$(CC) $(CFLAGS) -c -C -E $< >> $@
 .c++.o:;	$(MemCheckCC) $(C++) $(C++FLAGS) -o $@ $<
 .c++.od:;	$(MemCheckCC) $(C++) $(C++FLAGS) +g -o $@ $<
 .c++.z:;	$(MemCheckCC) $(C++) $(C++FLAGS) -zm -zps1 -o $@ $<
+.c++.cp:;	$(C++) $(C++FLAGS) -c -C -E $< >> $@
 .s.o:;		$(AS) ${ASMFLAGS} -o $@ $<
 
 all: 		library
         	@echo ${COMPONENT}: all complete
         	
+analyse:	${OBJSCP} local_dirs
+		@echo ${COMPONENT}: analysis build complete
+
 library:	${TARGET} ${TARGETZ}
 		@echo ${COMPONENT}: library complete
 
@@ -152,6 +165,7 @@ clean:		cleanqautils
 		$(WIPE) o.*		$(WFLAGS)
 		$(WIPE) od.*		$(WFLAGS)
 		$(WIPE) z.*		$(WFLAGS)
+		$(WIPE) cp.*		$(WFLAGS)
 		@echo $(COMPONENT): cleaned out
 
 export: export_${PHASE}
@@ -170,6 +184,7 @@ local_dirs:
 	${MKDIR} o
 	${MKDIR} od
 	${MKDIR} z
+	${MKDIR} cp
 
 dirs:
 	${MKDIR} ${LIBDIR}
