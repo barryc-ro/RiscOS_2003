@@ -84,6 +84,7 @@ typedef enum {
     err_CANT_OPEN_BODY,
     err_SSL_NOT_AVAILABLE,
     err_SSL_CANT_CONNECT,
+    err_NOT_WAITING,
 
     err_LAST_ERROR
     } error_numbers;
@@ -103,6 +104,7 @@ static char *err_strings[] = {
     "Can't open posting body file",
     "HTTPS not available",
     "Can't negotiate HTTPS connection",
+    "Unexpected call to CompletedPart",
 
     "Unknown error"
     };
@@ -168,6 +170,7 @@ static _kernel_oserror *http_close(http_close_args *args);
 static _kernel_oserror *http_maptoriscos(http_maptoriscos_args *args);
 static _kernel_oserror *http_mapfromriscos(http_mapfromriscos_args *args);
 static _kernel_oserror *http_setfiletype(http_setfiletype_args *args);
+static _kernel_oserror *http_completedpart(http_completedpart_args *args);
 static http_header_item *http_add_header_line( http_connection *c,
                                         char *key, char *value );
 static _kernel_oserror *http_prosecute( http_connection *c );
@@ -240,6 +243,8 @@ static http_connection proto_con = {
     NULL, NULL,                 /* Keep-alive queue 2LL */
     NULL,                       /* Queue head structure */
     0,                          /* Total size */
+    NULL,                       /* Server push boundary */
+    0,                          /* #chars of boundary found at end of packet */
 #if DEBUG
     1,                          /* # connections on this socket */
 #endif
@@ -272,10 +277,10 @@ void bzero(void *p, int s)
  * Error generation function
  */
 
+static _kernel_oserror httperror;
+
 static _kernel_oserror *make_error(int err)
 {
-    static _kernel_oserror e;
-
     if ( err == err_NO_ERROR )
         return NULL;
 
@@ -284,12 +289,12 @@ static _kernel_oserror *make_error(int err)
 
     threaded = 0;
 
-    e.errnum = err;
-    strncpy(e.errmess, err_strings[err], 252);
+    httperror.errnum = err;
+    strncpy(httperror.errmess, err_strings[err], 252);
 
     fdebugf(log_file, "Making error number %d: %s\n", err, err_strings[err]);
 
-    return &e;
+    return &httperror;
 }
 
 char *strdup(char *s)
@@ -324,7 +329,61 @@ int strcasecmp(char *s1, char *s2)
     }
 }
 
-#ifndef _UIO_
+/* prefixcmp: like strcasecmp but returns 0 if s2 is a prefix of s1 */
+int prefixcmp(char *s1, char *s2)
+{
+    int c1, c2, t;
+
+    while (1)
+    {
+        c1 = *s1++;
+        c2 = *s2++;
+        if ( c2 == 0 )
+            return 0;
+        if ( c1 == 0 )
+            return c1-c2;
+        else
+        {
+            t = toupper(c1) - toupper(c2);
+            if (t)
+                return t;
+        }
+    }
+}
+
+/* memfind: like strstr but copes with search areas that contain 0's and don't
+ * necessarily end with one. If there's a partial match at the end of the
+ * search area, sets *nearly to the number of characters which matched.
+ */
+const char *memfind( const char *area, int len, char *search, int *nearly )
+{
+    int srchlen = strlen(search);
+
+    while ( len > srchlen )
+    {
+        if ( !strncmp( area, search, srchlen ) )
+            return area;
+        area++;
+        len--;
+    }
+
+    *nearly = 0;
+
+    /* Check for partial match at the end <sigh> */
+    while ( len )
+    {
+        if ( !strncmp( area, search, len ) )
+        {
+            *nearly = len;
+            return NULL;
+        }
+        area++;
+        len--;
+    }
+    return NULL;
+}
+
+#if 0
 /* Damn and blast all Acorn socket libraries. Or at least their headers. */
 struct iovec { void *iov_base; int iov_len; };
 extern int socketwritev( int d, struct iovec *iov, int iovcnt );
@@ -585,6 +644,10 @@ extern _kernel_oserror *module_swi_handler(int swinum, _kernel_swi_regs *regs, v
         /* SetFileType */
         return http_setfiletype((http_setfiletype_args *) regs);
         break;
+    case 6:
+        /* CompletedPart */
+        return http_completedpart((http_completedpart_args *) regs);
+        break;
     }
 
     return NULL;
@@ -814,6 +877,59 @@ _kernel_oserror *http_set_file_type(http_connection *c, int *ftptr)
     return NULL;
 }
 
+
+/*-----------------------------------------------------------------------*
+ * http_set_status                                                       *
+ * Set the status of a connection, keeping sockets_connecting up to date *
+ *-----------------------------------------------------------------------*/
+
+static void http_set_status( http_connection *c, transfer_status status )
+{
+#if DEBUG
+    if ( status != c->status )
+    {
+        char intst[8];
+        char *st = intst;
+
+        switch ( status )
+        {
+        case status_NEW: st = "new"; break;
+        case status_WAITING: st = "waiting"; break;
+        case status_GETTING_HEADERS: st = "getting-headers"; break;
+        case status_GETTING_BODY: st = "getting-body"; break;
+        case status_COMPLETED_PART: st = "completed-part"; break;
+        case status_COMPLETED_FILE: st = "completed-file"; break;
+        default:
+            sprintf( intst, "%d", status );
+        }
+        fdebugf( log_file, "%p: status now %s\n", c, st );
+    }
+#endif
+
+    if ( c->status > status_NEW && c->status < status_WAITING )
+        sockets_connecting--;
+    c->status = status;
+    if ( c->status > status_NEW && c->status < status_WAITING )
+        sockets_connecting++;
+}
+
+
+static void http_set_message( http_connection *c, char *text )
+{
+    if ( c->message )
+        free( c->message );
+    c->message = strdup( text );
+}
+
+static void http_oserror( http_connection *c, _kernel_oserror *e )
+{
+    if ( e )
+    {
+        http_set_message( c, e->errmess );
+        http_set_status( c, status_FAIL_LOCAL );
+    }
+}
+
 void http_copy_headers(http_header_item *h, http_header_item **new)
 {
     *new = NULL;
@@ -852,22 +968,6 @@ _kernel_oserror *http_free_headers(http_header_item *h)
     return NULL;
 }
 
-
-/*-----------------------------------------------------------------------*
- * http_set_status                                                       *
- * Set the status of a connection, keeping sockets_connecting up to date *
- *-----------------------------------------------------------------------*/
-
-static void http_set_status( http_connection *c, transfer_status status )
-{
-    if ( c->status > status_NEW && c->status < status_WAITING )
-        sockets_connecting--;
-    c->status = status;
-    if ( c->status > status_NEW && c->status < status_WAITING )
-        sockets_connecting++;
-}
-
-
 /*-----------------------------------------------------------------------*
  * http_fail                                                             *
  * Set the failure code for a connection, but don't destroy it (wait for *
@@ -898,7 +998,8 @@ static void http_fail( http_connection *c, transfer_status status )
 
 /* Connection passes through the following states, in order:
  *      status_NEW                  only in http_open
- *    + status_CONNECTING           waiting for connect
+ *      status_AWAITING_CONNECTION  if it's on a queue
+ *    + status_CONNECTING           waiting for connect to succeed
  *    + status_AUTHENTICATING       missed out if not HTTPS
  *    + status_REQUESTING           sending request
  *    + status_REQUEST_HEADERS      sending headers
@@ -973,20 +1074,21 @@ static _kernel_oserror *http_prosecute( http_connection *c )
                 X509 *peer = SSL_get_peer_certificate(c->SSL);
                 char *cipher = SSL_get_cipher( c->SSL );
 
-                    if ( peer )
+                if ( peer )
                 {
                     char *str;
 
                         str=X509_NAME_oneline(X509_get_subject_name(peer));
-                        /* str was allocated with malloc so we can pass it
-                         * to add_header_line directly */
+                        /* str was allocated with malloc so we must free it*/
                         http_add_header_line( c,"X-SSL-Certificate-Subject",
                                               str );
+			free(str);
 
                         str=X509_NAME_oneline(X509_get_issuer_name(peer));
                         http_add_header_line( c, "X-SSL-Certificate-Issuer",
                                               str );
 			free(str);
+
                     X509_free(peer);
                 }
 
@@ -1101,9 +1203,21 @@ static _kernel_oserror *http_prosecute( http_connection *c )
             if ( block > TMP_BUF_SIZE || c->data_size < 0 )
                 block = TMP_BUF_SIZE;
 
-            rc = http_recv( c, tmp_buffer, block );
+            if ( c->boundary && c->nearlyboundary )
+            {
+                char *buf = tmp_buffer + c->nearlyboundary;
+                block -= c->nearlyboundary;
 
-            fdebugf(log_file, "%p: recv (body) gave %d\n", c, rc);
+                memcpy( tmp_buffer, c->boundary, c->nearlyboundary );
+
+                fdebugf( log_file, "%p: nearlyboundary=%d\n", c, c->nearlyboundary );
+
+                rc = http_recv( c, buf, block );
+            }
+            else
+                rc = http_recv( c, tmp_buffer, block );
+
+            fdebugf(log_file, "%p: recv (body %d) gave %d\n", c, block, rc);
 
             if (rc <= 0)
             {
@@ -1119,8 +1233,81 @@ static _kernel_oserror *http_prosecute( http_connection *c )
                 break; /* This is a break for the WHILE loop, not the switch */
             }
 
+            if ( c->boundary )
+            {
+                int nearly;
+                const char *bound;
+
+                rc += c->nearlyboundary;
+                c->nearlyboundary = 0;
+
+                bound = memfind( tmp_buffer, rc, c->boundary, &nearly );
+
+                if ( bound )
+                {
+                    int wrote = ro_fwritepos( tmp_buffer, bound - tmp_buffer, 1,
+                                              c->fh, c->data_so_far );
+
+                    if ( wrote < (bound - tmp_buffer) )
+                    {
+                        http_oserror( c, _kernel_last_oserror() );
+                        return NULL;
+                    }
+
+                    c->data_so_far += wrote;
+
+                    bound += strlen( c->boundary );
+
+                    if ( *bound == '-' && bound[1] == '-' )
+                    {
+                        fdebugf(log_file, "%p: end of server push\n", c );
+
+                        http_set_status( c, status_COMPLETED_FILE );
+                        http_socket_close( c );
+                        http_orphan_queue( c );
+                        return NULL;
+                    }
+                    /* else there's more parts to come */
+
+                    fdebugf(log_file, "%p: server push continues %d %d\n", c,
+                                      *bound, bound[1] );
+
+                    if ( *bound == 13 )
+                        bound++;
+                    if ( *bound == 10 )
+                        bound++;            /* skip CR LF */
+
+                    wrote = bound - tmp_buffer;
+
+                    memcpy( c->buffer, bound, rc - wrote );
+                    c->buf_used = 0;
+                    c->buf_off = rc - wrote;
+
+                    fdebugf(log_file,"%p: server push stuffs %d bytes (%d %d %d)\n",
+                             c, c->buf_off,
+                             c->buffer[0], c->buffer[1], c->buffer[2] );
+
+                    http_set_status( c, status_COMPLETED_PART );
+                    return NULL;
+                }
+                else
+                {
+                    /* See whether there may be one straddling 2 packets */
+                    c->nearlyboundary = nearly;
+                    rc -= nearly;
+                }
+            }
+
             if (c->fh)
-                ro_fwritepos(tmp_buffer, rc, 1, c->fh, c->data_so_far);
+            {
+                int wrote = ro_fwritepos( tmp_buffer, rc, 1, c->fh,
+                                          c->data_so_far );
+                if ( wrote < rc )
+                {
+                    http_oserror( c, _kernel_last_oserror() );
+                    return NULL;
+                }
+            }
 
             c->data_so_far += rc;
         }
@@ -1794,6 +1981,9 @@ static void http_requeue( http_connection *c )
     http_queue *q = c->queue;
     http_connection *qptr;
 
+    http_free_headers( c->headers );
+    c->headers = NULL;
+
     if ( !q || (!q->queue && !c->queuenext) )
     {
         fdebugf( log_file, "%p: restarting\n", c );
@@ -1881,6 +2071,15 @@ _kernel_oserror *http_close_handle(http_connection *c, int flags)
         if ( c->queuenext )
             c->queuenext->queueprev = c->queueprev;
         c->queueprev->queuenext = c->queuenext;
+
+        if ( ( c->socket > -1 )
+            && c->status > status_CONNECTING )
+        {
+            /* If we've sent a request down this socket then its current
+             * owner will be unable to send a further request down it.
+             */
+            c->queueprev->flags |= http_flags_NOTALIVE;
+        }
 
         /* Don't close the socket! We don't own it! */
         c->socket = -1;
@@ -2040,6 +2239,13 @@ static _kernel_oserror *http_status(http_status_args *args)
     if (ep)
         return ep;
 
+    if ( c->status == status_FAIL_LOCAL )
+    {
+        httperror.errnum = 1;
+        strcpy( httperror.errmess, c->message );
+        return &httperror;
+    }
+
     /* Lie to people about the state of requeued connections */
     if ( (c->flags & http_flags_GOTFIRST)
          && c->status < status_GETTING_BODY )
@@ -2052,7 +2258,13 @@ static _kernel_oserror *http_status(http_status_args *args)
     args->out.data_size = c->total_size ? c->total_size : c->data_size ;
     args->out.data_so_far = c->data_so_far ;
     args->out.headers = c->headers ;
-    args->out.rc = c->rc ;
+
+    if ( (c->flags & http_flags_GOTFIRST)
+         && c->rc == 206 )
+        args->out.rc = 200;     /* "OK" */
+    else
+        args->out.rc = c->rc;
+
     args->out.message = c->message ;
 
     return NULL;
@@ -2083,6 +2295,80 @@ static _kernel_oserror *http_setfiletype(http_setfiletype_args *args)
 
     return http_set_file_type(c, &args->out.ftype);
 }
+
+
+/*--------------------------------------------------------------------------*
+ * SWI HTTP_CompletedPart                                                   *
+ * Client has finished dealing with the current part of a server-push       *
+ * document, so it's time to pile on and get the next part.                 *
+ *--------------------------------------------------------------------------*/
+
+static _kernel_oserror *http_completedpart( http_completedpart_args *args )
+{
+    http_connection *c;
+    _kernel_oserror *ep;
+    char *fname = args->in.newfname;
+    int flags = args->in.flags;
+
+    c = args->in.handle;
+
+    ep = http_check_handle(c);
+    if (ep)
+        return ep;
+
+    if ( c->status != status_COMPLETED_PART )
+        return make_error( err_NOT_WAITING );
+
+    /* Get rid of the existing file if required */
+
+    if ( fname )
+    {
+
+        if (c->fh != NULL)
+        {
+            fdebugf(log_file, "%p: closing output file in completedpart\n", c);
+            ro_fclose(c->fh);
+            c->fh = NULL;
+        }
+
+        if (flags & http_close_SET_TYPE)
+            http_set_file_type(c, NULL);
+
+        if ( flags & http_close_DELETE_FILE )
+        {
+            fdebugf(log_file, "%p: removing file '%s'\n", c, c->fname);
+            remove(c->fname);
+        }
+        free( c->fname );
+
+        /* Make a new file */
+
+        c->fname = strdup(fname);
+        if (c->fname == NULL)
+            return http_destroy(c,err_NO_MEMORY);
+
+        fdebugf(log_file, "%p: opening file '%s'\n", c, c->fname);
+        c->fh = ro_fopen(c->fname, RO_OPEN_WRITE);
+        if (c->fh == NULL)
+            return http_destroy(c,err_CANT_OPEN_FILE);
+    }
+    else
+    {
+        /* We reuse the existing file... actually this needs no code here! */
+    }
+
+    /* Send it on its way */
+
+    c->data_so_far = -1;
+    c->data_size = -1;
+
+    http_set_status( c, status_GETTING_HEADERS );
+
+    http_prosecute( c );
+
+    return NULL;
+}
+
 
 void http_send_request(http_connection *c)
 {
@@ -2302,28 +2588,40 @@ int http_send_request_body(http_connection *c)
     return 0;
 }
 
+#define MAX_LINE 256
+
 /*
  * Read some more data from the line and return the next line of data
  */
 char* http_getline(http_connection *c, int read)
 {
     char *end;
+    int rc = 1;     /* any non-zero value */
 
     if (c->buf_used)
     {
-
         memmove(c->buffer, c->buffer + c->buf_used, c->buf_off - c->buf_used + 1);
         c->buf_off -= c->buf_used;
         c->buf_used = 0;
     }
 
     /* pdh: might as well always read it */
-    if ( MAX_INPUT - c->buf_off - 1 > 0 )
+    if ( MAX_LINE - c->buf_off - 1 > 0 )
     {
-        int rc;
-        rc = http_recv( c, c->buffer + c->buf_off, MAX_INPUT - c->buf_off - 1);
+        rc = http_recv( c, c->buffer + c->buf_off, MAX_LINE - c->buf_off - 1);
 
-        if (rc < 0)
+        if ( rc==0 )
+        {
+            fdebugf(log_file, "%p: EOF in getline (%d chars)\n", c,c->buf_off );
+
+            if ( c->buf_off == 0 )
+            {
+                http_fail( c, status_FAIL_REQUEST );
+                return NULL;
+            }
+        }
+
+        if ( rc < 0 )
         {
             if (errno != EWOULDBLOCK)
             {
@@ -2377,14 +2675,14 @@ char* http_getline(http_connection *c, int read)
         end[0] = 0;
         return c->buffer;
     }
-    else if (MAX_INPUT - c->buf_off - 1 == 0) /* Phrased like this as this is the formula used in the recv() call */
+    else if ( (MAX_LINE - c->buf_off - 1 == 0) || !rc ) /* Phrased like this as this is the formula used in the recv() call */
     {
-        /* This is not a good situation, the buffer is full but we don't have a line feed */
+        /* This is not a good situation, the buffer is full but we don't have
+         * a line feed */
         c->buf_used = c->buf_off + 1;
-        fdebugf(log_file, "Getline buffer filled up; cleared.\n");
+        fdebugf(log_file, "%p: getline buffer filled up (%d chars %d %d %d); cleared\n", c, c->buf_off, c->buffer[0], c->buffer[1], c->buffer[2] );
         return c->buffer;
     }
-
     return NULL;
 }
 
@@ -2392,6 +2690,19 @@ static http_header_item *http_add_header_line( http_connection *c,
                                         char *key, char *value )
 {
     http_header_item *hi;
+
+    for ( hi = c->headers; hi; hi = hi->next )
+    {
+        /* Make sure duplicate headers only go in once (important in
+         * server-push case)
+         */
+        if ( strcasecmp( hi->key, key ) == 0 )
+        {
+            free( hi->value );
+            hi->value = strdup( value );
+            return hi;
+        }
+    }
 
     hi = malloc(sizeof(http_header_item));
     if (hi)
@@ -2405,6 +2716,8 @@ static http_header_item *http_add_header_line( http_connection *c,
                 free(hi->key);
             if (hi->value)
                 free(hi->value);
+            free( hi );
+            hi = NULL;
         }
     }
 
@@ -2422,9 +2735,21 @@ void http_process_header_line(http_connection *c, char *l)
     char *p;
 
     fdebugf(log_file, "%p: rxheader '%s'\n", c, l);
-    if (strlen(l) == 0)
+
+    if ( !*l )
     {
-        c->status = status_GETTING_BODY;
+        if ( c->nearlyboundary == -1 )
+        {
+            /* Nasty hack 'cos server-push starts off in the "wrong" state
+             */
+            c->nearlyboundary = 0;
+        }
+        else
+        {
+            c->status = status_GETTING_BODY;
+
+            fdebugf( log_file, "%p: entering getting_body state, sofar=%d size=%d total=%d\n", c, c->data_so_far, c->data_size, c->total_size );
+        }
     }
     else
     {
@@ -2433,7 +2758,6 @@ void http_process_header_line(http_connection *c, char *l)
         if (p != 0)
         {
             char *q;
-            http_header_item *hi;
 
             *p = 0;
             while (isspace(*(++p)))
@@ -2444,9 +2768,8 @@ void http_process_header_line(http_connection *c, char *l)
                 q--;
             *q = 0;
 
-            hi = http_add_header_line( c, l, p );
-
-            http_check_special_headers(c, hi);
+            if ( http_check_special_headers( c, l, p ) )
+                http_add_header_line( c, l, p );
         }
         else
         {
@@ -2490,10 +2813,11 @@ void http_process_response_line(http_connection *c, char *l)
         while (isspace(*(++p)))
             ;
         c->rc = atoi(p);
+
         p += 2;
         while (isspace(*(++p)))
             ;
-        c->message = strdup(p);
+        http_set_message( c, p );
         fdebugf(log_file, "%p: response %d '%s'\n", c, c->rc, c->message ? c->message
                                                             : "<no message>");
 
@@ -2511,7 +2835,7 @@ void http_process_response_line(http_connection *c, char *l)
         fdebugf(log_file, "Badly formed response line\n");
 
         c->rc = 200;
-        c->message = strdup("Badly formed response; continuing anyway.");
+        http_set_message( c, "Badly formed response; continuing anyway." );
         http_set_status( c, status_GETTING_BODY );
 
         /* Squeeze this line back in the buffer so it can get flushed out */
@@ -2534,9 +2858,16 @@ void http_flush_data_to_file(http_connection *c)
     if (c->fh && (c->buf_off != c->buf_used))
     {
         int n;
+        int wrote;
 
         n = c->buf_off - c->buf_used;
-        ro_fwritepos(c->buffer + c->buf_used, n, 1, c->fh, c->data_so_far);
+        wrote = ro_fwritepos( c->buffer + c->buf_used, n, 1, c->fh,
+                              c->data_so_far);
+        if ( wrote < n )
+        {
+            http_oserror( c, _kernel_last_oserror() );
+            return;
+        }
 
         c->buf_off = c->buf_used = 0;
         c->data_so_far += n;
@@ -2623,12 +2954,18 @@ void http_socket_close(http_connection *c)
     }
 }
 
-void http_check_special_headers(http_connection *c, http_header_item *hi)
+
+/*---------------------------------------------------------------------------*
+ * http_check_special_headers()                                              *
+ * Returns TRUE if it's okay to pass this header on to the client            *
+ *---------------------------------------------------------------------------*/
+
+BOOL http_check_special_headers( http_connection *c, char *key, char *value )
 {
-    if (strcasecmp(hi->key, "CONTENT-LENGTH") == 0)
+    if (strcasecmp(key, "CONTENT-LENGTH") == 0)
     {
         int s;
-        s = atoi(hi->value);
+        s = atoi(value);
         if (s > 0)
         {
             /* When getting a partial content, this size is the size of
@@ -2649,22 +2986,37 @@ void http_check_special_headers(http_connection *c, http_header_item *hi)
                     c->fh = ro_fopen(c->fname, RO_OPEN_WRITE);
                 }
             }
+            else
+            {
+                char realsize[20];
+
+                if ( s == c->total_size
+                     || c->total_size == 0 )
+                    return TRUE;    /* OK to pass it on */
+
+                /* Not OK, it's the length of this transaction, so fake up a
+                 * header that's the length of the whole lot.
+                 */
+                sprintf( realsize, "%d", c->total_size );
+                http_add_header_line( c, key, realsize );
+                return FALSE;
+            }
         }
     }
-    if ( strcasecmp( hi->key, "CONNECTION" ) == 0 )
+    else if ( strcasecmp( key, "CONNECTION" ) == 0 )
     {
-        char *p = hi->value;
+        char *p = value;
 
         while ( p )
         {
-            if ( strcasecmp( p, "CLOSE" ) == 0 )
+            if ( prefixcmp( p, "CLOSE" ) == 0 )
             {
                 c->flags &= ~http_flags_KEPTALIVE;
                 c->flags |= http_flags_NOTALIVE;
                 http_orphan_queue( c );
             }
 
-            if ( strcasecmp( p, "KEEP-ALIVE" ) == 0 )
+            if ( prefixcmp( p, "KEEP-ALIVE" ) == 0 )
             {
                 c->flags |= http_flags_KEPTALIVE;
 
@@ -2681,17 +3033,66 @@ void http_check_special_headers(http_connection *c, http_header_item *hi)
             }
         }
     }
-    if ( strcasecmp( hi->key, "TRANSFER-ENCODING" ) == 0
-         && strcasecmp( hi->value, "CHUNKED" ) == 0 )
+    else if ( strcasecmp( key, "TRANSFER-ENCODING" ) == 0
+         && strcasecmp( value, "CHUNKED" ) == 0 )
     {
         c->flags |= http_flags_CHUNKED;
     }
-    if ( strcasecmp( hi->key, "CONTENT-RANGE" ) == 0 )
+    else if ( strcasecmp( key, "CONTENT-TYPE" ) == 0
+              && prefixcmp( value, "MULTIPART/X-MIXED-REPLACE" ) == 0 )
+    {
+        /* Oooh, it's server push. Now the fun really starts. */
+        char *p = strchr( value, ';' );
+
+        if ( p )
+        {
+            p++;
+            while ( isspace(*p) )
+                p++;
+            if ( prefixcmp( p, "BOUNDARY" ) == 0 )
+            {
+                p = strchr( p, '=' );
+
+                if ( p )
+                {
+                    p++;
+                    while ( isspace(*p) )
+                        p++;
+
+                    c->boundary = malloc( strlen(p)+2 );
+
+                    if ( c->boundary )
+                    {
+                        strcpy( c->boundary, "--" );
+                        strcat( c->boundary, p );
+                        c->flags &= ~http_flags_KEPTALIVE;
+                        c->flags |= http_flags_NOTALIVE;
+
+                        c->nearlyboundary = -1; /* magic value */
+
+                        fdebugf(log_file, "%p: server push, boundary is '%s'\n",
+                                c, c->boundary+1 );
+
+                        /* client doesn't see this header (important for
+                         * set_file_type to work)
+                         */
+                        return FALSE;
+                    }
+                }
+            }
+        }
+    }
+    else if ( strcasecmp( key, "CONTENT-RANGE" ) == 0 )
     {
         int from,to,total;
 
-        /* +6 => skip "bytes " */
-        sscanf( hi->value + 6, "%d-%d/%d", &from, &to, &total );
+        /* Cope with both "bytes=aa-bb/cc" and "aa-bb/cc"
+         */
+
+        if ( !isdigit( *value ) )
+            value += 6;
+
+        sscanf( value, "%d-%d/%d", &from, &to, &total );
 
         fdebugf( log_file, "%p: Bytes %d to %d inclusive of a total of %d\n",
                             c, from, to, total );
@@ -2714,7 +3115,9 @@ void http_check_special_headers(http_connection *c, http_header_item *hi)
         /* If we've had one of these, we'd best have had Content-Length
          * as well, or else.
          */
+        return FALSE;   /* don't pass on to client */
     }
+    return TRUE;    /* pass on to client */
 }
 
 #ifndef NO_SECURE
