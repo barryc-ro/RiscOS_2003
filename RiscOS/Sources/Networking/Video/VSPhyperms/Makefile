@@ -13,7 +13,7 @@ EXP_HDR = <export$dir>
 #
 TCPIPLib   = TCPIPLibs:o.unixlibzm TCPIPLibs:o.inetlibzm TCPIPLibs:o.socklib5zm
 DebugLib   = <Lib$Dir>.DebugLib.o.DebugLibzm
-CLIB       = CLIB:o.stubs CLIB:o.c++libz
+CLIB       = CLIB:o.stubs CPP:o.c++libz
 RLIB       = RISCOSLIB:o.risc_oslib
 RSTUBS     = RISCOSLIB:o.rstubs
 ROMSTUBS   = RISCOSLIB:o.romstubs
