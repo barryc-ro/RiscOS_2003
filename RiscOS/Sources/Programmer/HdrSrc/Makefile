@@ -38,20 +38,23 @@ TOKENS   = Hdr:Tokens
 COMPONENT = HdrSrc
 
 EXPORTS   = \
+ ${HDRDIR}.AUN \
  ${HDRDIR}.CMOS \
+ ${HDRDIR}.Countries \
  ${HDRDIR}.CPU.ARM600 \
  ${HDRDIR}.CPU.Generic26 \
  ${HDRDIR}.DDVMacros \
  ${HDRDIR}.Debug \
+ ${HDRDIR}.Devices \
  ${HDRDIR}.DevNos \
+ ${HDRDIR}.DrawObj \
+ ${HDRDIR}.DrawTags \
  ${HDRDIR}.ExtraLong \
  ${HDRDIR}.FDC.FDC711 \
  ${HDRDIR}.FileTypes \
  ${HDRDIR}.FSNumbers \
  ${HDRDIR}.Heap \
- ${HDRDIR}.ImageSize.2048K \
- ${HDRDIR}.ImageSize.4096K \
- ${HDRDIR}.ImageSize.8192K \
+ ${HDRDIR}.ImageSize.<ImageSize> \
  ${HDRDIR}.IO.GenericIO \
  ${HDRDIR}.IO.IOC \
  ${HDRDIR}.IO.IOC-A1 \
@@ -63,15 +66,18 @@ EXPORTS   = \
  ${HDRDIR}.MEMM.ARM600 \
  ${HDRDIR}.MEMM.MEMC1 \
  ${HDRDIR}.Machine.<Machine> \
+ ${HDRDIR}.Machine.Machine \
  ${HDRDIR}.Macros \
  ${HDRDIR}.Messages \
  ${HDRDIR}.NdrDebug \
  ${HDRDIR}.NewErrors \
+ ${HDRDIR}.OsWords \
  ${HDRDIR}.PaletteV \
  ${HDRDIR}.PDriverReg \
  ${HDRDIR}.PDumperReg \
  ${HDRDIR}.PoduleReg \
  ${HDRDIR}.Pointer \
+ ${HDRDIR}.PrintTypes \
  ${HDRDIR}.Proc \
  ${HDRDIR}.Services \
  ${HDRDIR}.Sprite \
@@ -115,21 +121,27 @@ clean:
 #
 
 # Registration headers:
-${HDRDIR}.SWIs:       Import.Global.SWIs;           ${CP} Import.Global.SWIs       $@ ${CPFLAGS}
+${HDRDIR}.AUN:        Import.Global.AUN;            ${CP} Import.Global.AUN        $@ ${CPFLAGS}
+${HDRDIR}.Countries:  Import.Global.Countries;      ${CP} Import.Global.Countries  $@ ${CPFLAGS}
+${HDRDIR}.Devices:    Import.Global.Devices;        ${CP} Import.Global.Devices    $@ ${CPFLAGS}
+${HDRDIR}.DrawObj:    Import.Global.DrawObj;        ${CP} Import.Global.DrawObj    $@ ${CPFLAGS}
+${HDRDIR}.DrawTags:   Import.Global.DrawTags;       ${CP} Import.Global.DrawTags   $@ ${CPFLAGS}
 ${HDRDIR}.FileTypes:  Import.Global.FileTypes;      ${CP} Import.Global.FileTypes  $@ ${CPFLAGS}
 ${HDRDIR}.FSNumbers:  Import.Global.FSNumbers;      ${CP} Import.Global.FSNumbers  $@ ${CPFLAGS}
+${HDRDIR}.NewErrors:  Import.Global.NewErrors;      ${CP} Import.Global.NewErrors  $@ ${CPFLAGS}
+${HDRDIR}.OsWords:    Import.Global.OsWords;        ${CP} Import.Global.OsWords    $@ ${CPFLAGS}
 ${HDRDIR}.PDriverReg: Import.Global.PDriverReg;     ${CP} Import.Global.PDriverReg $@ ${CPFLAGS}
 ${HDRDIR}.PDumperReg: Import.Global.PDumperReg;     ${CP} Import.Global.PDumperReg $@ ${CPFLAGS}
 ${HDRDIR}.PoduleReg:  Import.Global.PoduleReg;      ${CP} Import.Global.PoduleReg  $@ ${CPFLAGS}
-${HDRDIR}.NewErrors:  Import.Global.NewErrors;      ${CP} Import.Global.NewErrors  $@ ${CPFLAGS}
+${HDRDIR}.PrintTypes: Import.Global.PrintTypes;     ${CP} Import.Global.PrintTypes $@ ${CPFLAGS}
 ${HDRDIR}.Services:   Import.Global.Services;       ${CP} Import.Global.Services   $@ ${CPFLAGS}
+${HDRDIR}.SWIs:       Import.Global.SWIs;           ${CP} Import.Global.SWIs       $@ ${CPFLAGS}
 ${HDRDIR}.UpCall:     Import.Global.UpCall;         ${CP} Import.Global.UpCall     $@ ${CPFLAGS}
 
 # Machine/hardware specific headers:
 ${HDRDIR}.Machine.<Machine>: hdr.Machine.<Machine>; ${CP} hdr.Machine.<Machine>    $@ ${CPFLAGS}
-${HDRDIR}.ImageSize.2048K:   hdr.ImageSize.2048K;   ${CP} hdr.ImageSize.2048K      $@ ${CPFLAGS}
-${HDRDIR}.ImageSize.4096K:   hdr.ImageSize.4096K;   ${CP} hdr.ImageSize.4096K      $@ ${CPFLAGS}
-${HDRDIR}.ImageSize.8192K:   hdr.ImageSize.8192K;   ${CP} hdr.ImageSize.8192K      $@ ${CPFLAGS}
+${HDRDIR}.Machine.Machine:   hdr.Machine.Machine;   ${CP} hdr.Machine.Machine      $@ ${CPFLAGS}
+${HDRDIR}.ImageSize.<ImageSize>: hdr.ImageSize.<ImageSize>; ${CP} hdr.ImageSize.<ImageSize> $@ ${CPFLAGS}
 ${HDRDIR}.CPU.ARM600:        hdr.CPU.ARM600;        ${CP} hdr.CPU.ARM600           $@ ${CPFLAGS}
 ${HDRDIR}.CPU.Generic26:     hdr.CPU.Generic26;     ${CP} hdr.CPU.Generic26        $@ ${CPFLAGS}
 ${HDRDIR}.FDC.FDC711:        hdr.FDC.FDC711;        ${CP} hdr.FDC.FDC711           $@ ${CPFLAGS}
