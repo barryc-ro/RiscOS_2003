@@ -1,6 +1,6 @@
 /* > standby.c
  *
- *	  Standby code.
+ *  Standby code.
  */
 
 #include <stdlib.h>
@@ -18,225 +18,373 @@ static int Flags = 0;
 static int PointerType;
 
 
-static void
-SetLED( int flag )
+static void  SetLED (int flag)
 {
-	_swix( LED_Control, _INR(0,2), STANDBY_LED_NUMBER, ~LED_ON_FLAG, flag );
+    _swix (LED_Control,
+           _INR (0, 2),
+
+           STANDBY_LED_NUMBER,
+           ~LED_ON_FLAG,
+           flag);
 }
+
+
+
+
+static void  EnterStandby3 (void *  pw)
+{
+    _kernel_oserror *  e;
+    int                temp;
+
+    /* Disable keyboard buffering. */
+    e = _swix (OS_Byte,
+               _INR (0, 2) | _OUT (1),
+
+               201,
+               0xFF,
+               0,
+
+               &temp);
+    if (e == NULL && temp == 0)
+    {
+        Flags |= STANDBY_ENABLE_KEYBOARD;
+    }
+
+    /* Disable the mouse. */
+    (void) _swix (OS_Pointer,
+                  _IN (0) | _OUT (0),
+
+                  0,
+
+                  &temp);
+    if (temp != 255)
+    {
+        PointerType = temp;
+        (void) _swix (OS_Pointer,
+                      _INR (0, 1),
+
+                      1,
+                      255);
+        Flags |= STANDBY_ENABLE_POINTER;
+    }
+
+    /* Tell the world we're going into standby. */
+    (void) _swix (OS_ServiceCall,
+                  _IN (1),
+
+                  Service_ShutDownComplete);
+
+    /* Blank the screen and turn off the LED. */
+    (void) _swix (ScreenBlanker_Control,
+                  _IN (0),
+
+                  ScreenBlankerReason_StrictBlank);
+    SetLED (0);
+
+    Flags |= STANDBY_SHUTDOWN_FLAG;
+
+    /* Tell the world we're now standby. */
+    (void) _swix (OS_ServiceCall,
+                  _INR (0, 1),
+
+                  Flags & STANDBY_SHUTDOWN_FLAG,
+                  Service_Standby);
+
+    /* Allow standby SWIs to work again after a suitable timeout. */
+    if (_swix (OS_CallAfter,
+               _INR (0, 2),
+
+               STANDBY_ENABLE_DELAY,
+               veneer_standby_enable,
+               pw) != NULL)
+    {
+        standby_enable (NULL, NULL);
+    }
+}
+
+
 
 
 /*
  * Called (indirectly from wimp-message-handler) by EnterStandby after no
  * Wimp task has objected to the standby.
  */
-static _kernel_oserror *
-EnterStandby2( int flags, void *pw )
+static _kernel_oserror *  EnterStandby2 (unsigned int  flags,
+                                         int           desktop_state,
+                                         void *        pw )
 {
-	_kernel_oserror *err = NULL;
-	int temp;
+    _kernel_oserror *  err = NULL;
+    int temp;
 
-	/* Disable handling of standby SWIs while we try to go into standby. */
-	temp = veneer_irqs_off();
-	Flags |= STANDBY_BUSY_FLAG;
-	veneer_irqs_on( temp );
+    /* Disable handling of standby SWIs while we try to go into standby. */
+    temp = veneer_irqs_off ();
+    Flags |= STANDBY_BUSY_FLAG;
+    veneer_irqs_on (temp);
 
-	if ( (Flags & STANDBY_SHUTDOWN_FLAG) == 0 )
-	{
-		temp = -1;
+    if ((Flags & STANDBY_SHUTDOWN_FLAG) == 0)
+    {
+        temp = -1;
 
-		/* If force is set then err == NULL and temp == -1 from above. */
-		if ( !(flags & STANDBY_STANDBY_FORCE_FLAG) )
-			err = _swix( OS_UpCall, _IN(0)|_OUT(0), UpCall_Standby, &temp );
+        /* If force is set then err == NULL and temp == -1 from above. */
+        if (!(flags & STANDBY_STANDBY_FORCE_FLAG))
+        {
+            err = _swix (OS_UpCall,
+                         _IN (0) | _OUT (0),
 
-		/* Only enter standby if no-one objects. */
-		if ( (err == NULL) && (temp != 0) )
-		{
-			/* If force is set then err == NULL and temp == -1 from above. */
-			if ( !(flags & STANDBY_STANDBY_FORCE_FLAG) )
-				err = _swix( OS_ServiceCall, _IN(1)|_OUT(1), Service_ShutDown, &temp );
+                         UpCall_Standby,
+                         &temp);
+        }
 
-			/* Only enter standby if no-one objects. */
-			if ( (err == NULL) && (temp != 0) )
-			{
-				/* Disable keyboard buffering. */
-				err = _swix( OS_Byte, _IN(0)|_IN(1)|_IN(2)|_OUT(1), 201, 0xFF, 0, &temp );
-				if ( (err == NULL) && (temp == 0) ) Flags |= STANDBY_ENABLE_KEYBOARD;
+        /* Only enter standby if no-one objects. */
+        if (err == NULL && temp != 0)
+        {
+            /* If force is set then err == NULL and temp == -1 from above. */
+            if (!(flags & STANDBY_STANDBY_FORCE_FLAG))
+            {
+                err = _swix (OS_ServiceCall,
+                             _IN (1) | _OUT (1),
 
-				/* Disable the mouse. */
-				(void)_swix( OS_Pointer, _IN(0)|_OUT(0), 0, &temp );
-				if ( temp != 255 )
-				{
-					PointerType = temp;
-					(void)_swix( OS_Pointer, _IN(0)|_IN(1), 1, 255 );
-					Flags |= STANDBY_ENABLE_POINTER;
-				}
+                             Service_ShutDown,
+                             &temp);
+            }
 
-				/* Tell the world we're going into standby. */
-				(void)_swix( OS_ServiceCall, _IN(1), Service_ShutDownComplete );
+            /* If no-one objects then broadcast a message to all Wimp tasks
+             * to inform them that we are definitely entering Standby mode.
+             */
+            if (err == NULL && temp != 0)
+            {
+                if (desktop_state == 0)
+                {
+                    EnterStandby3 (pw);
+                }
+                else
+                {
+                    poll_word = Pollword_SendStandby;
+                }
 
-				/* Blank the screen and turn off the LED. */
-				(void)_swix( ScreenBlanker_Control, _IN(0), ScreenBlankerReason_StrictBlank );
-				SetLED( 0 );
+                return NULL;
+            }
+        }
+    }
 
-				Flags |= STANDBY_SHUTDOWN_FLAG;
+    /* Didn't go into standby so enable SWIs now. */
+    standby_enable (NULL, NULL);
 
-				/* Tell the world we're now standby. */
-				(void)_swix( OS_ServiceCall, _INR(0,1), Flags & STANDBY_SHUTDOWN_FLAG, Service_Standby );
-
-				/* Allow standby SWIs to work again after a suitable timeout. */
-				if ( _swix(OS_CallAfter, _INR(0,2), STANDBY_ENABLE_DELAY, veneer_standby_enable, pw) != NULL )
-					standby_enable( NULL, NULL );
-
-				return NULL;
-			}
-		}
-	}
-
-	/* Didn't go into standby so enable SWIs now. */
-	standby_enable( NULL, NULL );
-	return err;
+    return err;
 }
 
 
 
-static void
-ExitStandby( void *pw )
+
+static void  ExitStandby (void *  pw)
 {
-	/* Disable handling of standby SWIs while we come out of standby. */
-	int temp = veneer_irqs_off();
-	Flags |= STANDBY_BUSY_FLAG;
-	veneer_irqs_on( temp );
+    /* Disable handling of standby SWIs while we come out of standby. */
+    int temp = veneer_irqs_off ();
+    Flags |= STANDBY_BUSY_FLAG;
+    veneer_irqs_on (temp);
 
-	/* If we managed to enter standby then come out now. */
-	if ( Flags & STANDBY_SHUTDOWN_FLAG )
-	{
-		int desktop_state;
-		_kernel_oserror *err;
+    /* If we managed to enter standby then come out now. */
+    if (Flags & STANDBY_SHUTDOWN_FLAG)
+    {
+        int desktop_state;
+        _kernel_oserror *err;
 
-		/* Tell the world we're coming out. */
-		_swix( OS_UpCall, _IN(0), UpCall_Online );
+        /* Tell the world we're coming out. */
+        _swix (OS_UpCall,
+               _IN (0),
 
-		/* Re-enable the mouse. */
-		if ( Flags & STANDBY_ENABLE_POINTER )
-		{
-			(void)_swix( OS_Pointer, _IN(0)|_IN(1), 1, PointerType );
-			Flags &= ~STANDBY_ENABLE_POINTER;
-		}
+               UpCall_Online);
 
-		/* Re-enable keyboard buffering if required. */
-		if ( Flags & STANDBY_ENABLE_KEYBOARD )
-		{
-			_swix( OS_Byte, _IN(0)|_IN(1)|_IN(2), 201, 0, 0 );
-			Flags &= ~STANDBY_ENABLE_KEYBOARD;
-		}
+        /* Re-enable the mouse. */
+        if (Flags & STANDBY_ENABLE_POINTER)
+        {
+            (void) _swix (OS_Pointer,
+                          _INR (0, 1),
 
-		/* Unblank the screen and turn on the LED. */
-		(void)_swix( ScreenBlanker_Control, _IN(0), ScreenBlankerReason_StrictUnblank );
-		SetLED( LED_ON_FLAG );
+                          1,
+                          PointerType);
+            Flags &= ~STANDBY_ENABLE_POINTER;
+        }
 
-		Flags &= ~STANDBY_SHUTDOWN_FLAG;
+        /* Re-enable keyboard buffering if required. */
+        if (Flags & STANDBY_ENABLE_KEYBOARD)
+        {
+            _swix (OS_Byte,
+                   _INR (0, 2),
 
-		/* Tell the world we're out. */
-		(void)_swix( OS_ServiceCall, _INR(0,1), Flags & STANDBY_SHUTDOWN_FLAG, Service_Standby );
+                   201,
+                   0,
+                   0);
+            Flags &= ~STANDBY_ENABLE_KEYBOARD;
+        }
 
-		/* Make a noise (but only if we are in the desktop). */
-		err = _swix( Wimp_ReadSysInfo, _IN(0)|_OUT(0), 3, &desktop_state );
-		if ( (err == NULL) && (desktop_state != 0) ) _swix( SoundFX_Play, _INR(0,1), 0, STANDBY_ONLINE_EVENT );
+        /* Unblank the screen and turn on the LED. */
+        (void) _swix (ScreenBlanker_Control,
+                      _IN (0),
 
-		/* Allow standby IRQ to work again after a suitable timeout. */
-		if ( _swix(OS_CallAfter, _INR(0,2), STANDBY_ENABLE_DELAY, veneer_standby_enable, pw) == NULL )
-			return;
-	}
+                      ScreenBlankerReason_StrictUnblank);
+        SetLED (LED_ON_FLAG);
 
-	standby_enable( NULL, NULL );
+        Flags &= ~STANDBY_SHUTDOWN_FLAG;
+
+        /* Tell the world we're out. */
+        (void) _swix (OS_ServiceCall,
+                      _INR (0, 1),
+
+                      Flags & STANDBY_SHUTDOWN_FLAG,
+                      Service_Standby);
+
+        /* Make a noise (but only if we are in the desktop). */
+        err = _swix (Wimp_ReadSysInfo,
+                     _IN (0) | _OUT (0),
+
+                     3,
+
+                     &desktop_state);
+        if (err == NULL && desktop_state != 0)
+        {
+            _swix (SoundFX_Play,
+                   _INR (0, 1),
+
+                   0,
+                   STANDBY_ONLINE_EVENT);
+        }
+
+        /* Allow standby IRQ to work again after a suitable timeout. */
+        if (_swix (OS_CallAfter,
+                   _INR (0, 2),
+
+                   STANDBY_ENABLE_DELAY,
+                   veneer_standby_enable,
+                   pw) == NULL)
+        {
+            return;
+        }
+    }
+
+    standby_enable (NULL, NULL);
 }
+
+
 
 
 /* Handler called to enable the standby SWIs after a timeout. */
-_kernel_oserror *
-standby_enable( _kernel_swi_regs *r, void *pw )
+_kernel_oserror *  standby_enable (_kernel_swi_regs *  r,
+                                   void *              pw)
 {
-	int temp = veneer_irqs_off();
+    int temp = veneer_irqs_off ();
 
-	NOT_USED( r );
-	NOT_USED( pw );
+    NOT_USED (r);
+    NOT_USED (pw);
 
-	Flags &= ~STANDBY_BUSY_FLAG;
-	veneer_irqs_on( temp );
+    Flags &= ~STANDBY_BUSY_FLAG;
+    veneer_irqs_on (temp);
 
-	return NULL;
+    return NULL;
 }
 
 
-static _kernel_oserror *
-EnterStandby( int flags, void* pw )
-{
-	int desktop_state;
-	_kernel_oserror *err = _swix( Wimp_ReadSysInfo, _IN(0)|_OUT(0), 3, &desktop_state );
 
-	if ( (flags & (STANDBY_STANDBY_FORCE_FLAG | STANDBY_STANDBY_SKIP_PREQUIT)) ||
-	     ((err == NULL) && (desktop_state == 0)) )
-	{
-		return EnterStandby2( flags, pw );
-	}
-	else
-	{
-		poll_word = 1;
-		return NULL;
-	}
+
+static _kernel_oserror *  EnterStandby (unsigned int  flags,
+                                        void *        pw)
+{
+    _kernel_oserror *  e = NULL;
+
+    if ((flags & STANDBY_STANDBY_DONE_MSG_STANDBY) &&
+        (Flags & STANDBY_BUSY_FLAG))
+    {
+        EnterStandby3 (pw);
+    }
+    else if ((Flags & STANDBY_BUSY_FLAG) == 0)
+    {
+        int desktop_state;
+        e = _swix (Wimp_ReadSysInfo,
+                   _IN (0) | _OUT (0),
+
+                   3,
+
+                   &desktop_state);
+        if (e)
+        {
+            /* Assume don't want to do Desktop bits. */
+            desktop_state = 0;
+        }
+
+        if ((flags & (STANDBY_STANDBY_DONE_MSG_PREQUIT |
+                      STANDBY_STANDBY_FORCE_FLAG)) ||
+             desktop_state == 0 || e)
+        {
+            e = EnterStandby2 (flags, desktop_state, pw);
+        }
+        else
+        {
+            poll_word = Pollword_SendPreQuit;
+        }
+    }
+
+    return e;
 }
 
 
-_kernel_oserror *
-standby_initialise( void *pw )
+
+
+_kernel_oserror *  standby_initialise (void *  pw)
 {
-  	/* If init state = 1 then go into standby on initialise else come out of standby and turn LED on */
-	if (STANDBY_INITIAL_STATE == 1)
-		return EnterStandby( STANDBY_STANDBY_FORCE_FLAG, pw );
-	else
-	{
-  		ExitStandby( pw );
-		SetLED( LED_ON_FLAG );
-		return NULL;
-	}
+    /* If init state = 1 then go into standby on initialise
+     * else come out of standby and turn LED on.
+     */
+    if (STANDBY_INITIAL_STATE == 1)
+    {
+        return EnterStandby (STANDBY_STANDBY_FORCE_FLAG, pw);
+    }
+    else
+    {
+        ExitStandby (pw);
+        SetLED (LED_ON_FLAG);
+        return NULL;
+    }
 }
 
 
-void
-standby_finalise( void *pw )
+
+
+void  standby_finalise (void *  pw)
 {
-	NOT_USED (pw);
+    NOT_USED (pw);
 }
 
 
-_kernel_oserror *
-standby_state( _kernel_swi_regs *r )
+
+
+_kernel_oserror *  standby_state (_kernel_swi_regs *  r)
 {
-	r->r[0] = Flags & STANDBY_SHUTDOWN_FLAG;
-	return NULL;
+    r->r[0] = Flags & STANDBY_SHUTDOWN_FLAG;
+    return NULL;
 }
 
 
-_kernel_oserror *
-standby_standby( _kernel_swi_regs *r, void* pw )
+
+
+_kernel_oserror *  standby_standby (_kernel_swi_regs *  r,
+                                    void *              pw)
 {
-	if ( (Flags & STANDBY_BUSY_FLAG) == 0 )
-	{
-		int old_r0 = r->r[0];
-		r->r[0] = Flags & STANDBY_SHUTDOWN_FLAG;
-		return EnterStandby( old_r0, pw );
-	}
-	return NULL;
+    unsigned int old_r0 = (unsigned int) r->r[0];
+
+    r->r[0] = Flags & STANDBY_SHUTDOWN_FLAG;
+    return EnterStandby (old_r0, pw);
 }
 
 
-_kernel_oserror *
-standby_online( _kernel_swi_regs *r, void *pw )
+
+
+_kernel_oserror *  standby_online (_kernel_swi_regs *  r,
+                                   void *              pw)
 {
-	if ( (Flags & STANDBY_BUSY_FLAG) == 0 )
-	{
-		r->r[0] = Flags & STANDBY_SHUTDOWN_FLAG;
-		ExitStandby( pw );
-	}
-	return NULL;
+    if ((Flags & STANDBY_BUSY_FLAG) == 0)
+    {
+        r->r[0] = Flags & STANDBY_SHUTDOWN_FLAG;
+        ExitStandby (pw);
+    }
+    return NULL;
 }
