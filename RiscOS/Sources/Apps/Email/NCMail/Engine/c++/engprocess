@@ -117,6 +117,17 @@ void RemoveObj(MBoxOpCB **obj)
 }
 
 
+void StartOffSMTP(void)
+{
+
+  ++smtpprocessstate.attempts;
+  smtpprocessstate.context = readytosend;
+  state |= PROCESSSMTP;
+  outbox = (SendQMailbox *) SMTPaccount->GetInbox();
+
+}
+
+
 /*
 ** StartProcess() initiates the processing of the mailbox via callback.
 ** The POP and SMTP mailboxes are processed in parallel.
@@ -143,23 +154,7 @@ void StartProcess(void)
     inbox = POPaccount->GetInbox();
   }
   if (smtpstatus != acctnonexistent)
-  {
-    smtpprocessstate.attempts = 0;
-    smtpprocessstate.context = readytosend;
-    state |= PROCESSSMTP;
-    outbox = (SendQMailbox *) SMTPaccount->GetInbox();
-  }
-
-}
-
-
-void RetrySMTP(void)
-{
-
-  ++smtpprocessstate.attempts;
-  smtpprocessstate.context = readytosend;
-  state |= PROCESSSMTP;
-  outbox = (SendQMailbox *) SMTPaccount->GetInbox();
+    StartOffSMTP();
 
 }
 
@@ -174,32 +169,12 @@ void DefunctPOP(bool b, void *h)
 }
 
 
-void DefunctSMTP(bool b, void *h)
-{
-
-  NB_UNUSED(b);
-  NB_UNUSED(h);
-  state &= ~PROCESSSMTP;
-
-}
-
-
 void DeadPOP(bool b, void *h)
 {
 
   NB_UNUSED(b);
   NB_UNUSED(h);
   POPAccountDisconnect();
-
-}
-
-
-void DeadSMTP(bool b, void *h)
-{
-
-  NB_UNUSED(b);
-  NB_UNUSED(h);
-  SMTPAccountDisconnect();
 
 }
 
@@ -218,6 +193,28 @@ void CleanupOutbox(void)
       DestroyDescriptor(msgptr, ourmboxout);
     msgptr = nextptr;
   }
+
+}
+
+
+void DealWithFailure(void)
+{
+
+  smtpprocessstate.context = idle;
+  if (state & SEND)
+  {
+    sendstate.ret.code = ENG_SENDFAILED;
+    (*callbacklist.sendfunc)(&sendstate.ret, callbacklist.sendhandle);
+    state &= ~SEND;
+  }
+
+  if (smtpprocessstate.attempts > 3)
+  {
+    statusret.code = ENG_CONFIRMRESEND;
+    (*callbacklist.statusfunc)(&statusret, callbacklist.statushandle, ConfirmResend);
+  }
+  else
+    StartRetryCount();
 
 }
 
@@ -276,43 +273,8 @@ void DoSMTPProcess(void)
       /* connection has failed */
       dprintf(("Eng", "SMTP context = connectfailure\n"));
       RemoveObj((MBoxOpCB**) &smtpprocessstate.connectobj);
-      smtpprocessstate.context = idle;
-      if (state & SEND)
-      {
-        /************************************
-        *** ATTENTION
-        ************************************/
-        /* do we report back here if connection has failed,
-           or just keep message in send queue and keep trying? */
-        sendstate.ret.code = ENG_SMTPCONNECTFAIL;
-        (*callbacklist.sendfunc)(&sendstate.ret, callbacklist.sendhandle);
-        state &= ~(SEND + PROCESSSMTP);
-      }
-      else
-      {
-        switch (smtpprocessstate.ret.rc)
-        {
-          case ELIB_EMALLOCFAILED :
-            smtpprocessstate.ret.code = ENG_NOMEMORY;
-            break;
-
-          case ELIB_ECONREFUSED :
-          case ELIB_ECONFAILED :
-
-            smtpprocessstate.ret.code = ENG_SMTPCONNECTFAIL;
-            break;
-
-          case ELIB_ECONTIMEDOUT :
-
-            smtpprocessstate.ret.code = ENG_SMTPTIMEOUT;
-            break;
-
-          default :
-            smtpprocessstate.ret.code = ENG_SMTPCONNECTFAIL;
-        }
-
-        (*callbacklist.statusfunc)(&smtpprocessstate.ret, callbacklist.statushandle, DefunctSMTP);
-      }
+      DealWithFailure();
+      state &= ~PROCESSSMTP;
 
       break;
 
@@ -321,23 +283,8 @@ void DoSMTPProcess(void)
       /* processing has failed */
       dprintf(("Eng", "SMTP context = processfailure\n",));
       RemoveObj((MBoxOpCB**) &smtpprocessstate.processobj);
-      smtpprocessstate.context = idle;
-      if (state & SEND)
-      {
-        /************************************
-        *** ATTENTION
-        ************************************/
-        /* do we report back here if connection has failed,
-           or just keep message in send queue and keep trying? */
-        smtpprocessstate.ret.code = ENG_SENDFAILED;
-        smtpprocessstate.context = readytodisconnect;
-      }
-      else
-      {
-        statusret.code = ENG_CANTPROCESSSMTP;
-        statusret.rc = smtpprocessstate.ret.rc;
-        (*callbacklist.statusfunc)(&statusret, callbacklist.statushandle, DeadSMTP);
-      }
+      DealWithFailure();
+      smtpprocessstate.context = readytodisconnect;
 
       break;
 
@@ -383,11 +330,10 @@ void DoSMTPProcess(void)
       n = smtpprocessstate.getnumobj->number_messages;
       dprintf(("Eng", "Number of messages still in send queue=%d\n",n));
       RemoveObj((MBoxOpCB**) &smtpprocessstate.getnumobj);
-      smtpprocessstate.context = readytodisconnect;
       if (n)
       {
         /* send has failed for some reason */
-        smtpprocessstate.ret.code = ENG_SENDFAILED;
+        DealWithFailure();
       }
 
       else
@@ -395,7 +341,10 @@ void DoSMTPProcess(void)
         /* all messages have been sent */
         sendpending = false;
         smtpprocessstate.ret.code = ENG_SENTMSG;
+        StopRetryCount();
       }
+
+      smtpprocessstate.context = readytodisconnect;
 
       break;
 
@@ -420,7 +369,7 @@ void DoSMTPProcess(void)
       RemoveObj((MBoxOpCB**) &smtpprocessstate.disconnectobj);
       CleanupOutbox();
       smtpstatus = acctcreated;
-      state &= ~(TIMEOUT + PROCESSSMTP);
+      state &= ~PROCESSSMTP;
 
       if (state & SEND)
       {
@@ -453,7 +402,7 @@ void DoPOPProcess(void)
     case readytodisconnect :
 
       /* need to ensure we are disconnected before processing */
-      if (popstatus == acctcreated)
+      if ((popstatus == acctcreated) && (!(state & (DISCONNECT | TIMEOUT))))
       {
         /* OK, we're not connected, go ahead */
         dprintf(("Eng", "POP not connected\n"));
@@ -596,28 +545,23 @@ void DoPOPProcess(void)
         popprocessstate.changed = popprocessstate.processobj->mailbox_changed;
       RemoveObj((MBoxOpCB**) &popprocessstate.processobj);
       popprocessstate.context = idle;
-      if (state & (DISCONNECT | TIMEOUT))
-        POPAccountDisconnect();
+
+      dprintf(("Eng", "Mailbox has %schanged\n",(popprocessstate.changed) ? "" : "not "));
+      if (popprocessstate.changed)
+      {
+        popprocessstate.getnumobj = new MBoxOpCB_getnummsgs((MBoxCBHandlerFn) MBoxCallback, (void *) pop);
+        rc = inbox->GetNumberMessages(popprocessstate.getnumobj);
+        if (rc < 0)
+        {
+          popprocessstate.context = getnumfailure;
+          statusret.rc = rc;
+        }
+      }
 
       else
       {
-        dprintf(("Eng", "Mailbox has %schanged\n",(popprocessstate.changed) ? "" : "not "));
-        if (popprocessstate.changed)
-        {
-          popprocessstate.getnumobj = new MBoxOpCB_getnummsgs((MBoxCBHandlerFn) MBoxCallback, (void *) pop);
-          rc = inbox->GetNumberMessages(popprocessstate.getnumobj);
-          if (rc < 0)
-          {
-            popprocessstate.context = getnumfailure;
-            statusret.rc = rc;
-          }
-        }
-
-        else
-        {
-          /* mailbox hasn't changed so no new mail */
-          ProcessDone(false);
-        }
+        /* mailbox hasn't changed so no new mail */
+        ProcessDone(false);
       }
 
       break;
@@ -625,7 +569,7 @@ void DoPOPProcess(void)
     case disconnected :
     case disconnectfailure :
 
-      dprintf(("Eng", "POP context = disconnected\n"));
+      dprintf(("Eng", "POP context = disconnected, state=0x%x\n",state));
       RemoveObj((MBoxOpCB**) &popprocessstate.disconnectobj);
       popstatus = acctcreated;
       if (state & TIMEOUT)
