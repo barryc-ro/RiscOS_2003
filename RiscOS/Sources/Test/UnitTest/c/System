@@ -21,15 +21,28 @@ Vers    Date            Name    Comment
 1.05    01 Mar 99       SBF     Added a new (updated) "find_cputype" call
                                 which correctly identifies the CPU from both
                                 the CPU and IOMD IDs.
+1.06    02 Mar 99       SBF     Added code to read the Ethernet interface type
+                                and MAC address.
 
 Perform the system check.
 */
 
+/* Library includes */
 #include <stdio.h>
 #include "kernel.h"
 #include "swis.h"
-#include "signal.h"
 
+/* Networking includes */
+#include <sys/param.h>
+#include <net/if.h>
+#include <net/if_dl.h>
+#include <netinet/in.h>
+#include <netinet/in_var.h>
+#include <kvm.h>
+#include <sys/fcntl.h>
+#include <unixlib.h>
+
+/* Project includes */
 #include "support.h"
 #include "system.h"
 #include "display.h"
@@ -46,10 +59,11 @@ void system_test()
         display_status(SYSTEM,RUNNING);
         get_cpu_type();
         get_io_controller();
-        overall=get_id_number();
+        overall = get_id_number();
         display_sub_test(OSVSN,get_os_version());
         get_memory_size();
-        if (overall==PASSED){
+        network_if_status();
+        if (overall == PASSED){
                 display_status(SYSTEM,COMPLETED);
                 log_status(SYSTEM,PASSED);
         }else{
@@ -59,8 +73,7 @@ void system_test()
 }
 
 char *get_os_version()
-/* Get the OS version
- */
+/* Get the OS version */
 {
         _kernel_swi_regs reg;
         _kernel_oserror *err;
@@ -72,20 +85,21 @@ char *get_os_version()
 }
 
 void get_cpu_type()
-/* Get the CPU type and display it
- */
+/* Get the CPU type and display it */
 {
         int cpu_type;
         char str[80];
 
-        cpu_type=find_cputype();
-        sprintf(str,"ARM%X",cpu_type);
-        display_sub_test(ARMCPU,str);
+        cpu_type = find_cputype();
+        if (cpu_type != 0xa10)                                                  /* if not SA110 */
+          sprintf(str, "ARM%X", cpu_type);                                      /* ...then simply print the hex number... */
+        else
+          sprintf(str, "SA110");                                                /* ...otherwise we must print the type explictly */
+        display_sub_test(ARMCPU, str);
 }
 
 void get_memory_size()
-/* Get the memory size and display it
- */
+/* Get the memory size and display it */
 {
         int size;
         char str[80];
@@ -96,8 +110,7 @@ void get_memory_size()
 }
 
 void get_io_controller()
-/* Get the IO Controller details and display
- */
+/* Get the IO Controller details and display */
 {
         int ioctrlid=0;
         int ioctrlvsn=0;
@@ -116,8 +129,7 @@ void get_io_controller()
 #ifndef MACHDaytona
 
 int get_id_number(void)
-/* Get the ID Number and then display it
- */
+/* Get the ID Number and then display it */
 {
         char str[80];
         int len, cnt, status=FAILED;
@@ -172,8 +184,7 @@ int get_id_number(void)
 #else
 
 int get_id_number(void)
-/* Get the ID Number and then display it
- */
+/* Get the ID Number and then display it (Daytona/T-Fax ONLY) */
 {
         char str[80];
         int ser_no=-1;
@@ -210,6 +221,7 @@ int get_id_number(void)
 
 
 int find_cputype(void)
+/* Obtain the CPU type */
 {
   static int cpu_id = 0;
 
@@ -218,7 +230,7 @@ int find_cputype(void)
 
   cpu_id = ARM_identification();
 
-  cpu_id = (cpu_id >> 4) & 0xfff; // extract part number field
+  cpu_id = (cpu_id >> 4) & 0xfff; /* extract part number field */
 
   if ((cpu_id & 0xf00) == 0)
   {
@@ -244,7 +256,91 @@ int find_cputype(void)
     else if (iomd_id == 0xaa00)
       cpu_id = 0x7500FE; /* It's the FE flavour of 7500 */
   }
+  /* N.B, for completeness, if (cpu_id == 0xa10) then It's a StrongARM 110 */
+
   return cpu_id;
+}
+
+
+
+/*
+ * The following code returns the Ethernet interface type and
+ * the MAC address.  It is based upon code taken from within
+ * the "ifconfig" sources.
+ */
+static kvm_t *kvmd;
+
+
+int kread(u_long addr, char *buf, int size)
+{
+
+        if (kvm_read(kvmd, addr, buf, size) != size)
+                return (-1);
+        return (0);
+}
+
+
+void network_if_status(void)
+{
+        char macaddress[80] = '\0';
+        struct nlist nl[] = { { "_ifnet" } , "" };
+        u_long addr, addr2;
+        struct ifnet ifnet;
+        union {
+                struct ifaddr ifa;
+                struct in_ifaddr in;
+        } ifaddr;
+        char *cp;
+        struct sockaddr *sa;
+        struct sockaddr_dl *sdl;
+        int n;
+        char ifacename[IFNAMSIZ];
+
+        if ((kvmd = kvm_open(NULL,NULL,NULL,O_RDONLY,NULL)) == NULL)
+                return;
+        if (kvm_nlist(kvmd, nl) < 0 || nl[0].n_type == 0) {
+                xperror("network_if_status: kvm_nlist()");
+                return;
+        }
+        if (kread(nl[0].n_value, (char *)&addr, sizeof(addr))) {
+                xperror("_ifnet");
+                return;
+        }
+        addr2 = 0;
+        while (addr || addr2) {
+                if (addr2 == 0) {
+                        if (kread(addr, (char *)&ifnet, sizeof ifnet) ||
+                           kread((u_long)ifnet.if_name, ifacename, IFNAMSIZ)){
+                                        xperror("network_if_status: kvm_read()");
+                                        return;
+                        }
+                        addr = (u_long)ifnet.if_next;
+                        addr2 = (u_long)ifnet.if_addrlist;
+                }
+                if (kread(addr2, (char *)&ifaddr, sizeof ifaddr)) {
+                        addr2 = 0;
+                        continue;
+                }
+                sprintf(ifacename,"%s%d",ifacename, ifnet.if_unit);
+#define CP(x) ((char *)(x))
+                cp = (CP(ifaddr.ifa.ifa_addr) - CP(addr2)) +
+                        CP(&ifaddr); sa = (struct sockaddr *)cp;
+                if (sa->sa_family == AF_LINK) {
+                        sdl = (struct sockaddr_dl *)sa;
+                        cp = (char *)LLADDR(sdl);
+                        if ((n = sdl->sdl_alen) > 0) {
+                                //printf ("%s", ifacename);
+                                //printf ("        ether ");
+                                while (--n >= 0)
+                                        sprintf(macaddress, "%s%02x%c", macaddress, *cp++ & 0xff, n > 0 ? ':' : ' ');
+                                //putchar('\n');
+                                display_sub_test(ETHERTYPE, ifacename);
+                                display_sub_test(MACADDRESS, macaddress);
+                        }
+                }
+                addr2 = (u_long)ifaddr.ifa.ifa_next;
+        }
+        kvm_close(kvmd);
 }
 
 /* End of c.System */
