@@ -14,6 +14,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include <kernel.h>
 #include <swis.h>
@@ -35,6 +36,11 @@
 /* 4 byte word */
 
 #define WORD 4
+
+/* Buffers for test extraction */
+
+#define BSInput_Extract  8192
+#define BSOutput_Extract 8192
 
 /* Locals */
 
@@ -59,18 +65,21 @@ static char * bank_names[] = {
 
 /* Local functions */
 
-static void write_record_header      (int record, int size, FILE * fp);
-static int  write_string_record      (int record, char * string, FILE * fp);
-static int  write_word_record        (int record, int data, FILE * fp);
+static void write_record_header       (int record, int size, FILE * fp);
+static int  write_string_record       (int record, char * string, FILE * fp);
+static int  write_word_record         (int record, int data, FILE * fp);
 
-static int  main_write_word          (unsigned int word, FILE * fp);
-static int  main_output_crc          (int comp_size, FILE * fp);
+static int  main_write_word           (unsigned int word, FILE * fp);
+static int  main_output_crc           (int comp_size, FILE * fp);
 
-static int  main_build_upgrade_file  (config * setup);
-static int  main_build_single_file   (config * setup);
-static int  main_build_archive_file  (config * setup);
+static int  main_build_upgrade_file   (config * setup);
+static int  main_build_single_file    (config * setup);
+static int  main_build_archive_file   (config * setup);
 
-static int main_add_files_to_archive (config * setup, unsigned int slen, FILE * fout, char * current);
+static int  main_add_files_to_archive (config * setup, unsigned int slen, FILE * fout, char * current);
+
+static int  main_extract_files        (config * setup);
+static int  main_decode_chunk         (config * setup, const char * buf, unsigned int amount);
 
 /**************************************************************/
 /* main()                                                     */
@@ -82,6 +91,7 @@ int main(int argc, char * argv[])
 {
   config setup; /* Contains data extracted from command line arguments */
 
+  srand((int) time(NULL));
   printf("UpgCreate %s\n\n", Module_HelpVersion);
 
   /* Ensure strings are empty to start with, and numerical quantites */
@@ -93,23 +103,46 @@ int main(int argc, char * argv[])
 
   if (config_read_args(&setup, argc, argv) != 0)
   {
-    printf("Syntax: UpgCreate [options] <-s source> <-o output>\n\n"
-           "-t (type)            OSImage | Transient | Resident | Permanent\n"
-           "                     | Font | Exec (\"Font\" and \"Exec\" are presently\n"
-           "                     not implemented)\n"
-           "-c (card/bank)       If present, program given ROM bank rather\n"
-           "                     than assuming FLASH ROM (bank 0). Presently\n"
-           "                     only banks 0 (on-board) or 6 (card ROM) are\n"
-           "                     understood (OS images only).\n"
-           "-d (display)         \"display string\"\n"
-           "-b (build)           \"build to match\" (OS images only)\n"
-           "-l (locale)          \"one or more locales\" (OS images only)\n\n"
-           "If -t is set to OSImage, then all of the above parameters MUST be\n"
-           "supplied on the command line, except -c, which if omitted leads to the\n"
-           "assumption that on-board FLASH ROM should be programmed, as opposed to\n"
-           "card ROM (i.e. bank 0 rather than bank 6).\n\n"
-           "If -t is set to any other value, then -d, -s and -o MUST be supplied\n"
-           "on the command line. Other parameters, if present, will be ignored.");
+    printf("Syntax: UpgCreate [options] <-s source> <-o output>\n"
+           "\n"
+           "   -t (type)            osimage | transient | resident | permanent |\n"
+           "                        font | exec (\"font\" and \"exec\" are presently\n"
+           "                        not implemented).\n"
+           "   -c (card/bank)       0 for on-board FLASH ROM, 6 for card ROM (may\n"
+           "                        be omitted; default is \"0\").\n"
+           "   -d (display)         \"display string\".\n"
+           "   -b (build)           \"build to match\" (OS images only).\n"
+           "   -l (locale)          \"one or more locales\" (for all types except\n"
+           "                        Font and Exec).\n"
+           "   -e (extract)         Full pathname to extract to; leads to a test of\n"
+           "                        output file's integrity after creation by\n"
+           "                        extracting to the given location (may be\n"
+           "                        omitted; if absent, no test is performed; see\n"
+           "                        below for more information).\n"
+           "   -u (hex string)      Include UID in image; the value should be an 8\n"
+           "                        digit hex number with no special prefix (may be\n"
+           "                        omitted; if absent, no UID is included).\n"
+           "   -r (boolean)         1 | 0 (if \"1\", randomise UID by EORing with\n"
+           "                        rand() and time; ignored if -u is absent; may\n"
+           "                        be omitted; default is \"0\").\n"
+           "\n"
+           "If -s and -o must always be present; -e is always optional. Other\n"
+           "parameters depend on the value of the \"-t\" item:\n"
+           "\n"
+           " * \"osimage\": -d, -b and -l must be present; -c is optional (default\n"
+           "    value is 0). If -e is present the image is extracted to the given\n"
+           "    filename, remaining in compressed form.\n"
+           " * \"font\" or \"exec\": A single file will be compressed. Use of -e is as\n"
+           "    for \"osimage\".\n"
+           "\n"
+           "For other values of -t, -l is always optional:\n"
+           "\n"
+           " * \"transient\": If -e is present it should be the directory in which\n"
+           "    extraction will take place. All extracted files are decompressed.\n"
+           " * \"resident\": -u (and therefore -r) are optional. Use of -e is as for\n"
+           "    \"transient\".\n"
+           " * \"permanent\": -u is mandatory, -r optional. Use of -e is as for\n"
+           "    \"transient\".");
 
     return 0;
   }
@@ -238,11 +271,11 @@ static int main_output_crc(int comp_size, FILE * fp)
 
   /* Now add the CRC */
 
-  write_word_record(7, crc, fp);
+  write_word_record(TLV_TAG_TYPE_FILE_CRC, crc, fp);
 
   /* Now write the random data record to disguise the CRC */
 
-  write_word_record(8, comp_size ^ crc, fp);
+  write_word_record(TLV_TAG_TYPE_RANDOM_DATA, comp_size ^ crc, fp);
 
   return EXIT_SUCCESS;
 }
@@ -399,7 +432,7 @@ static int main_build_single_file(config * setup)
 
   /* Go back and write the real file size, accounting for adding tags 7 and 8 afterwards */
 
-  size = ftell(fout) + 6 * sizeof(int);
+  size = ftell(fout) + (6 * sizeof(int));
   printf("Going back to record final output file size of %d bytes\n", (int) size);
   fseek(fout, pos0, SEEK_SET);
   main_write_word((int) size, fout);
@@ -447,10 +480,10 @@ return EXIT_SUCCESS;
 
 static int main_build_archive_file(config * setup)
 {
-  FILE         * fout;
-  long int       pos0;
-  long int       size;
-  unsigned int   slen;
+  FILE     * fout;
+  long int   pos0, pos6s, pos6e;
+  long int   size;
+  int        slen;
 
   printf("\n");
 
@@ -478,16 +511,39 @@ static int main_build_archive_file(config * setup)
     return EXIT_FAILURE;
   }
 
-  main_write_word(0, fout);
+  main_write_word(TLV_TAG_TYPE_FILE_SIZE, fout);
 
-  write_string_record (1, setup->display_string, fout);
-  write_string_record (2, setup->build,          fout);
-  write_string_record (3, setup->locale,         fout);
-  write_word_record   (4, setup->type,           fout);
+  /* UID if required */
+
+  if (setup->have_uid != 0)
+  {
+    int ti;
+
+    if (
+         _swix(OS_ReadMonotonicTime,
+               _OUT(0),
+
+               &ti)
+         != 0
+       )
+       ti = (int) time(NULL);
+
+    write_word_record(TLV_TAG_TYPE_UID,
+                     setup->randomise == 0 ? setup->uid : (setup->uid ^ ti) ^ rand(),
+                     fout);
+  }
+
+  /* Other misc stuff */
+
+  write_string_record (TLV_TAG_TYPE_DISPLAY_STRING, setup->display_string, fout);
+  write_string_record (TLV_TAG_TYPE_BUILD_LIST,     setup->build,          fout);
+  write_string_record (TLV_TAG_TYPE_LOCALE_LIST,    setup->locale,         fout);
+  write_word_record   (TLV_TAG_TYPE_IMAGE_TYPE,     setup->type,           fout);
 
   /* Put in the header for the archived files */
 
-  write_record_header(6, WORD, fout);
+  write_record_header(TLV_TAG_TYPE_IMAGE_DATA, WORD, fout);
+  pos6s = ftell(fout);
 
   /* Get the length of setup->image_path up to and including the last '.' */
 
@@ -519,9 +575,17 @@ static int main_build_archive_file(config * setup)
 
   printf("All files added\n\n");
 
-  /* Go back and write the file size */
+  pos6e = ftell(fout) - pos6s;
+  size  = ftell(fout) + (6 * sizeof(int));
 
-  size = ftell(fout);
+  /* Rewind to write the record 6 size */
+
+  printf("Going back to record tag 6 data size of %d bytes\n", (int) pos6e);
+  fseek(fout, pos6s - 4, SEEK_SET);
+  main_write_word((int) pos6e, fout);
+
+  /* Go back and write the real file size, accounting for adding tags 7 and 8 afterwards */
+
   printf("Going back to record final output file size of %d bytes\n", (int) size);
   fseek(fout, pos0, SEEK_SET);
   main_write_word((int) size, fout);
@@ -540,12 +604,15 @@ static int main_build_archive_file(config * setup)
   printf("\nSuccessful.");
   fclose(fout);
 
-  /* Optional expansion test to check it all worked:
-   *
-   * expand(setup->out_path,setup->image_path);
-   */
+  /* Optional expansion test to check it all worked */
 
-  return EXIT_SUCCESS;
+  if (*setup->extract_to != '\0')
+  {
+    printf("\n\nExpanding archive to check integrity...\n\n");
+
+    return main_extract_files(setup);
+  }
+  else return EXIT_SUCCESS;
 }
 
 /**************************************************************/
@@ -737,6 +804,733 @@ static int main_add_files_to_archive(config * setup, unsigned int slen, FILE * f
       fclose(fin);
     }
   }
+
+  return EXIT_SUCCESS;
+}
+
+/**************************************************************/
+/* main_extract_file()                                        */
+/*                                                            */
+/* Unpack the file to the specified location.                 */
+/*                                                            */
+/* Parameters: Pointer to a config structure describing the   */
+/*             file to unpack and location to send it.        */
+/*                                                            */
+/* Returns;    EXIT_SUCCESS or EXIT_FAILURE as appropriate.   */
+/**************************************************************/
+
+static int main_extract_files(config * setup)
+{
+  FILE         * fin;
+  char           buf[BSInput_Extract];
+  unsigned int   read;
+  char         * filename = setup->out_path;
+
+  fin = fopen(filename, "rb");
+
+  if (fin == 0)
+  {
+    perror(filename);
+    return EXIT_FAILURE;
+  }
+
+  do
+  {
+    read = fread(buf, sizeof(char), sizeof(buf), fin);
+
+    if (read < sizeof(buf) && !feof(fin))
+    {
+      perror(filename);
+      fclose(fin);
+      return EXIT_FAILURE;
+    }
+    else
+    {
+      if (main_decode_chunk(setup, buf, read) == EXIT_FAILURE)
+      {
+        fclose(fin);
+        return EXIT_FAILURE;
+      }
+    }
+  }
+  while (!feof(fin));
+
+  fclose(fin);
+  printf("\nExtraction successful.\n");
+
+  return EXIT_SUCCESS;
+}
+
+/**************************************************************/
+/* main_decode_chunk()                                        */
+/*                                                            */
+/* Decode a chunk of a compressed upgrade image. The function */
+/* is rather monolithic, but very straightforward.            */
+/*                                                            */
+/* Parameters: Pointer to a config structure describing where */
+/*             any output data should be sent to;             */
+/*                                                            */
+/*             Pointer to a buffer holding a chunk of data to */
+/*             process;                                       */
+/*                                                            */
+/*             Amount of data in the buffer.                  */
+/*                                                            */
+/* Returns;    EXIT_SUCCESS or EXIT_FAILURE as appropriate.   */
+/**************************************************************/
+
+static int main_decode_chunk(config * setup, const char * buf, unsigned int amount)
+{
+  static bool           expecting_tag  = true;
+  static unsigned int   reading_tag    = 0;
+  static unsigned int   tag            = 0;
+
+  static bool           expecting_size = true;
+  static unsigned int   reading_size   = 0;
+  static unsigned int   size           = 0;
+
+  static bool           expecting_data = false;
+  static unsigned int   reading_data   = 0;
+
+  static image_type     type_of_image  = image_type_unknown;
+
+  static FILE         * fout           = NULL;
+
+  int                   ptr            = 0;
+
+  if (amount == 0) return EXIT_SUCCESS;
+
+  do
+  {
+    /* Read the tag value */
+
+    while (expecting_tag == true && reading_tag < 32 && ptr < amount)
+    {
+      tag = tag | (buf[ptr++] << reading_tag);
+      reading_tag += 8;
+    }
+
+    /* Finished reading a tag? */
+
+    if (reading_tag == 32)
+    {
+      expecting_tag  = false;
+      reading_tag    = 0;
+      expecting_size = true;
+      reading_size   = 0;
+      size           = 0;
+
+      printf("Tag %d acquired\n", tag);
+    }
+
+    if (ptr == amount) return EXIT_SUCCESS;
+
+    /* Read data size */
+
+    while (expecting_size == true && reading_size < 32 && ptr < amount)
+    {
+      size = size | (buf[ptr++] << reading_size);
+      reading_size += 8;
+    }
+
+    /* Finished reading size? */
+
+    if (reading_size == 32)
+    {
+      expecting_size = false;
+      reading_size   = 0;
+      expecting_data = true;
+      reading_data   = 0;
+
+      printf("Data size %d\n", size);
+    }
+
+    if (ptr == amount) return EXIT_SUCCESS;
+
+    /* If expecting data, read it */
+
+    if (expecting_data)
+    {
+      if (size > 0)
+      {
+        switch (tag)
+        {
+          case TLV_TAG_TYPE_FILE_SIZE:
+          case TLV_TAG_TYPE_IMAGE_TYPE:
+          case TLV_TAG_TYPE_IMAGE_LENGTH:
+          case TLV_TAG_TYPE_FILE_CRC:
+          case TLV_TAG_TYPE_RANDOM_DATA:
+          case TLV_TAG_TYPE_UID:
+          {
+            static unsigned int reading_word = 0;
+            static unsigned int word         = 0;
+
+            if (size != 4)
+            {
+              printf("Error: Expecting to read one word of data for this tag, but data size is %d\n", size);
+              return EXIT_FAILURE;
+            }
+
+            /* Read data word */
+
+            while (reading_word < 32 && ptr < amount)
+            {
+              word = word | (buf[ptr++] << reading_word);
+              reading_data ++;
+              reading_word += 8;
+            }
+
+            /* Finished? */
+
+            if (reading_word == 32)
+            {
+              switch (tag)
+              {
+                case TLV_TAG_TYPE_FILE_SIZE:    printf("File size is %d\n",              word); break;
+                case TLV_TAG_TYPE_IMAGE_LENGTH: printf("Compressed data length is %d\n", word); break;
+                case TLV_TAG_TYPE_FILE_CRC:     printf("File CRC is &%08X\n",            word); break;
+                case TLV_TAG_TYPE_RANDOM_DATA:  printf("Random data is &%08X\n",         word); break;
+                case TLV_TAG_TYPE_UID:          printf("UID is &%08X\n",                 word); break;
+                case TLV_TAG_TYPE_IMAGE_TYPE:
+                {
+                  printf("Image type: %s\n",
+                         (word > 0 && word < (sizeof(type_names) / sizeof(*type_names))) ?
+                         type_names[word]                                                :
+                         "<Unknown!>");
+
+                  type_of_image = (image_type) word;
+                }
+                break;
+                default:
+                {
+                  printf("Fatal internal error (1)\n");
+                  exit(EXIT_FAILURE);
+                }
+              }
+
+              /* Don't forget to reset the values... */
+
+              reading_word = 0;
+              word         = 0;
+            }
+          }
+          break;
+
+          case TLV_TAG_TYPE_DISPLAY_STRING:
+          case TLV_TAG_TYPE_BUILD_LIST:
+          case TLV_TAG_TYPE_LOCALE_LIST:
+          {
+            while (reading_data < size && ptr < amount)
+            {
+              char c = buf[ptr++];
+
+              reading_data++;
+
+              if (reading_data == 1) printf("String value is \"");
+
+              if (c != '\0') printf("%c", c);
+              else
+              {
+                printf("\"\n");
+
+                if (reading_data != size)
+                {
+                  printf("Error: Reached NUL in string but haven't read all expected data yet (%d bytes left hanging)\n", size - reading_data);
+                  return EXIT_FAILURE;
+                }
+              }
+            }
+          }
+          break;
+
+          case TLV_TAG_TYPE_IMAGE_DATA:
+          {
+            switch (type_of_image)
+            {
+              default:
+              case image_type_unknown:
+              {
+                printf("Error: Reached image data before finding out the image type\n");
+                return EXIT_FAILURE;
+              }
+              break;
+
+              case image_type_transient:
+              case image_type_resident:
+              case image_type_permanent:
+              {
+                static bool           expecting_stubname = true;
+                static int            reading_stubname   = NULL;
+                static char         * stubname           = NULL;
+                static char         * fullname           = NULL;
+                static int            subtype            = 0;
+
+                static unsigned int   stage              = 0;
+
+                static unsigned int   itemsize;
+                static unsigned int   loadaddr;
+                static unsigned int   execaddr;
+                static unsigned int   itemattr;
+
+                static unsigned int   reading_word       = 0;
+                static unsigned int   word               = 0;
+
+                static bool           completed          = false;
+
+                /* For archives, we first expect the 'stub' name of the file */
+
+                while (expecting_stubname && ptr < amount && reading_data < size)
+                {
+                  if (reading_stubname == 0)
+                  {
+                    /* These are just-in-case items; the bit handling the */
+                    /* 'completed' flag way down below *should* ensure    */
+                    /* that they are always reset appropriately.          */
+
+                    free(fullname), fullname = NULL;
+                    free(stubname), stubname = NULL;
+
+                    /* OK, allocate space for the first byte of the stubname */
+
+                    stubname = malloc(1);
+
+                    if (stubname == NULL)
+                    {
+                      printf("Error: Out of memory reading file stub name\n");
+                      return EXIT_FAILURE;
+                    }
+                  }
+                  else
+                  {
+                    /* Reallocate for the next byte */
+
+                    char * temp = realloc(stubname, reading_stubname + 1);
+
+                    if (temp == NULL)
+                    {
+                      printf("Error: Out of memory reading file stub name\n");
+                      return EXIT_FAILURE;
+                    }
+                    else stubname = temp;
+                  }
+
+                  stubname[reading_stubname] = buf[ptr++];
+
+                  /* The name terminates on NUL; after that we expect the subtype byte */
+
+                  if (stubname[reading_stubname] == '\0') expecting_stubname = false;
+
+                  reading_stubname ++;
+                  reading_data     ++;
+                }
+
+                if (reading_data >= size)
+                {
+                  free(stubname);
+                  printf("Error: Ran out of data for this record during archive processing\n");
+                  return EXIT_FAILURE;
+                }
+
+                /* Once the stubname is done, need the subtype byte */
+
+                if (!expecting_stubname && subtype == 0 && ptr < amount && reading_data < size)
+                {
+                  printf("Item stub name is '%s'\n", stubname);
+
+                  subtype = buf[ptr++] + 1;
+                  reading_data++;
+
+                  if (subtype != 1 && subtype != 2)
+                  {
+                    printf("Error: Subtype byte value %d not recognised\n", subtype);
+                  }
+                  else
+                  {
+                    printf("This is a %s\n", subtype == 1 ? "file" : "directory");
+                  }
+                }
+
+                if (reading_data >= size)
+                {
+                  free(stubname);
+                  printf("Error: Ran out of data for this record during archive processing\n");
+                  return EXIT_FAILURE;
+                }
+
+                if (subtype != 0 && fullname == NULL)
+                {
+                  /* Construct the full name */
+
+                  fullname = malloc(strlen(setup->extract_to) + strlen(stubname) + 2); /* 1 for separating ".", 1 for NUL */
+
+                  if (fullname == NULL)
+                  {
+                    printf("Error: Out of memory creating full filename\n");
+                    return EXIT_FAILURE;
+                  }
+                  else sprintf(fullname, "%s.%s", setup->extract_to, stubname);
+
+                  printf("Full name is '%s'\n", fullname);
+                }
+
+                /* If subtype is 2 (i.e. byte in file was 2-1 = 1) -> directory; create it now */
+
+                if (subtype == 2)
+                {
+                  _kernel_oserror * e = _swix(OS_File,
+                                              _INR(0,1) | _IN(4),
+
+                                              8,        /* Create directory */
+                                              fullname,
+                                              0);       /* Initial number of entries; 0 = use default */
+
+                  if (e != NULL)
+                  {
+                    printf("Error: %s", e->errmess);
+                    return EXIT_FAILURE;
+                  }
+
+                  /* Report and flag completion for this item */
+
+                  printf("Directory created\n");
+                  completed = true;
+                }
+
+                /* If subtype is 1 (i.e. byte in file was 1-1 = 0) -> file */
+
+                else if (subtype == 1)
+                {
+                  while (ptr < amount && reading_data < size && !completed)
+                  {
+                    switch (stage)
+                    {
+                      /* Need to read words for item size, load address, exec address and attributes */
+
+                      case 0:
+                      case 1:
+                      case 2:
+                      case 3:
+                      {
+                        /* Read the word */
+
+                        while (reading_word < 32 && ptr < amount && reading_data < size)
+                        {
+                          word = word | (buf[ptr++] << reading_word);
+                          reading_data ++;
+                          reading_word += 8;
+                        }
+
+                        /* Finished? Record it in the relevant variable */
+
+                        if (reading_word == 32)
+                        {
+                          switch (stage)
+                          {
+                            case 0: itemsize = word; break;
+                            case 1: loadaddr = word; break;
+                            case 2: execaddr = word; break;
+                            case 3: itemattr = word; break;
+                            default:
+                            {
+                              printf("Fatal internal error (2)\n");
+                              exit(EXIT_FAILURE);
+                            }
+                          }
+
+                          reading_word = 0;
+                          word         = 0;
+
+                          stage++;
+                        }
+
+                        /* Out of data unexpectedly? */
+
+                        if (reading_data >= size)
+                        {
+                          free(stubname);
+                          free(fullname);
+                          printf("Error: Ran out of data for this record during archive processing\n");
+                          return EXIT_FAILURE;
+                        }
+                      }
+                      break;
+
+                      /* When we get to stage 4, all words have been read; this is file data now */
+
+                      case 4:
+                      {
+                        static unsigned int total = 0;
+                        Byte                outbuf[BSOutput_Extract];
+                        int                 error;
+                        size_t              write, written;
+                        z_stream            stream;
+
+                        /* If not presently open, open the output file and wake up zlib */
+
+                        if (fout == NULL)
+                        {
+                          fout = fopen(fullname, "wb");
+
+                          if (fout == NULL)
+                          {
+                            perror(fullname);
+                            return EXIT_FAILURE;
+                          }
+                          else
+                          {
+                            /* Set up basic stream info */
+
+                            memset(&stream, 0, sizeof(stream));
+
+                            stream.zalloc = Z_NULL;
+                            stream.zfree  = Z_NULL;
+                            stream.opaque = Z_NULL;
+
+                            /* Initialise the inflate engine */
+
+                            error = inflateInit(&stream);
+
+                            if (error)
+                            {
+                              free(stubname);
+                              free(fullname);
+                              fclose(fout);
+                              printf("Error: ZLib error %d at initialisation (%s)\n", error, stream.msg != NULL && *stream.msg != '\0' ? stream.msg : "no further details");
+                              return EXIT_FAILURE;
+                            }
+                          }
+                        }
+
+                        /* Work out how much data we can write this time around and write it */
+
+                        if (ptr < amount)
+                        {
+                          do
+                          {
+                            /* Read a chunk */
+
+                            stream.next_in  = (Byte *) (buf + ptr);
+                            stream.avail_in = ((amount - ptr) * sizeof(char)) / sizeof(Byte);
+
+                            /* Decompressor loop */
+
+                            do
+                            {
+                              stream.next_out  = outbuf;
+                              stream.avail_out = (uInt) sizeof(outbuf);
+
+                              error = inflate(&stream, Z_SYNC_FLUSH);
+
+                              if (error && error != Z_STREAM_END)
+                              {
+                                free(stubname);
+                                free(fullname);
+                                fclose(fout);
+                                printf("Error: ZLib error %d at decompression (%s)\n", error, stream.msg != NULL && *stream.msg != '\0' ? stream.msg : "no further details");
+                                return EXIT_FAILURE;
+                              }
+
+                              /* Write out the decompressed data */
+
+                              write   = (sizeof(outbuf) / sizeof(Byte)) - stream.avail_out;
+                              written = fwrite(outbuf,
+                                               sizeof(Byte),
+                                               write,
+                                               fout);
+
+                              if (written < write)
+                              {
+                                free(stubname);
+                                free(fullname);
+                                fclose(fout);
+                                perror(fullname);
+                                return EXIT_FAILURE;
+                              }
+
+                              /* Keep going until all input data is consumed */
+                            }
+                            while (stream.avail_in > 0 && !error);
+
+                            /* Increment our local data counters */
+
+                            reading_data += (amount - ptr - stream.avail_in);
+                            ptr          += (amount - ptr - stream.avail_in);
+
+                            /* Keep going until stream end, or we run out of data */
+                          }
+                          while (error != Z_STREAM_END && ptr < amount && reading_data < size);
+
+                          /* Finished? */
+
+                          if (error == Z_STREAM_END)
+                          {
+                            _kernel_oserror * e;
+
+                            fclose(fout), fout = NULL;
+
+                            error = inflateEnd(&stream);
+
+                            if (error && error != Z_STREAM_END)
+                            {
+                              free(stubname);
+                              free(fullname);
+                              printf("Error: ZLib error %d at inflate end (%s)\n", error, stream.msg != NULL && *stream.msg != '\0' ? stream.msg : "no further details");
+                              return EXIT_FAILURE;
+                            }
+
+                            /* Reset the byte counter for the state machine */
+
+                            total = 0;
+
+                            /* Set the item's attributes etc. */
+
+                            e = _swix(OS_File,
+                                      _INR(0,3) | _IN(5),
+
+                                      1,
+                                      fullname,
+                                      loadaddr,
+                                      execaddr,
+                                      itemattr);
+
+                            if (e != NULL)
+                            {
+                              printf("Error: %s", e->errmess);
+                              return EXIT_FAILURE;
+                            }
+
+                            /* Report and flag completion of this item */
+
+                            printf("File created\n");
+                            completed = true;
+                          }
+                          else
+                          {
+                            if (reading_data >= size)
+                            {
+                              free(stubname);
+                              free(fullname);
+                              fclose(fout);
+                              printf("Error: Ran out of input data before decompression completed\n");
+                              return EXIT_FAILURE;
+                            }
+                          }
+                        }
+                      }
+                      break;
+
+                      default:
+                      {
+                        printf("Fatal internal error (3)\n");
+                        exit(EXIT_FAILURE);
+                      }
+                      break;
+
+                    } /* 'switch (stage)' */
+
+                  } /* 'while (ptr < amount && reading_data < size) && !completed' */
+
+                } /* 'if (subtype == 1 && ptr < amount)' */
+
+                /* Did we finish that item? If so, reset this section of the state machine */
+                /* ready for the next thing in the archive.                                */
+
+                if (completed)
+                {
+                  free(stubname), stubname = NULL;
+                  free(fullname), fullname = NULL;
+
+                  expecting_stubname = true;
+                  reading_stubname   = 0;
+                  subtype            = 0;
+                  stage              = 0;
+                  completed          = false;
+                }
+
+              } /* 'case image_type_[permanent|resident|transient]:' */
+              break;
+
+              case image_type_os:
+              case image_type_font:
+              case image_type_exec:
+              {
+                unsigned int written, write;
+
+                /* If not presently open, open the output file */
+
+                if (fout == NULL)
+                {
+                  fout = fopen(setup->extract_to, "wb");
+                  if (fout == NULL)
+                  {
+                    perror(setup->extract_to);
+                    return EXIT_FAILURE;
+                  }
+                }
+
+                /* Work out how much data we can write this time around and write it */
+
+                write = size - reading_data;
+                if (amount - ptr < write) write = amount - ptr;
+
+                written = fwrite(buf + ptr, sizeof(char), write, fout);
+
+                if (written != write)
+                {
+                  perror(setup->extract_to);
+                  fclose(fout), fout = NULL;
+                  return EXIT_FAILURE;
+                }
+                else ptr += written, reading_data += written;
+
+                /* Finished? */
+
+                if (reading_data == size)
+                {
+                  fclose(fout), fout = NULL;
+
+                  /* Set filetype to &FE5, "EPROM" - assuming OS upgrade here since we */
+                  /* don't really suport font or exec upgrade images yet.              */
+                  /*                                                                   */
+                  /* Don't really care if this SWI returns an error.                   */
+
+                  _swix(OS_File,
+                        _INR(0,2),
+
+                        18,                /* 18 -> filetype is in R2 */
+                        setup->extract_to,
+                        Main_FileType_EPROM);
+                }
+              }
+              break;
+            }
+          }
+          break;
+
+          default:
+          {
+            /* Just discard the data */
+
+            while (reading_data < size && ptr < amount)
+            {
+              ptr++, reading_data++;
+            }
+          }
+          break;
+        }
+      }
+
+      if (reading_data == size)
+      {
+        printf("All data received\n");
+
+        tag = size = 0;
+        expecting_data = false;
+        reading_size   = 0;
+        expecting_tag  = true;
+      }
+    }
+  }
+  while (ptr < amount);
 
   return EXIT_SUCCESS;
 }

@@ -14,7 +14,7 @@ include Makefiles:StdTools
 INCLUDES  = -IC: -ITCPIPLibs:
 
 AFLAGS    = -depend !Depend -Stamp -quit
-CFLAGS    = -c -depend !Depend -Wp ${INCLUDES} -DSYS${SYSTEM}=1 -DMACH${MACHINE}=1 ${DFLAGS} -DCOMPAT_INET4 ${EXT_FLAGS}
+CFLAGS    = -c -depend !Depend -Wp ${INCLUDES} -D__BORLANDC__=0 -DSYS${SYSTEM}=1 -DMACH${MACHINE}=1 ${DFLAGS} -DCOMPAT_INET4 ${EXT_FLAGS}
 CPFLAGS   = ~cfr~v
 WFLAGS    = ~c~v
 
