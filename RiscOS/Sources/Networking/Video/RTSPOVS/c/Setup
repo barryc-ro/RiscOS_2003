@@ -43,6 +43,7 @@
 #include "Session.h"
 #include "Status.h"
 #include "URLutils.h"
+#include "URLveneer.h"
 #include "Utils.h"
 
 #include "Setup.h"
@@ -52,6 +53,7 @@
 static _kernel_oserror * setup_add_transport_header (session * s);
 static _kernel_oserror * setup_read_loop_option     (session * s, unsigned int vcid);
 static _kernel_oserror * setup_read_extension_block (session * s, vc_setup * setup);
+static _kernel_oserror * setup_convert_url          (session * s);
 
 /**************************************************************/
 /* setup_setup()                                              */
@@ -122,25 +124,46 @@ _kernel_oserror * setup_setup(_kernel_swi_regs * r)
     return e;
   }
 
+  if (s->url == NULL) fail = true;
+
   /* Is there a ticket to copy? */
 
-  if ((r->r[0] & VC_Setup_ExtensionBlockInR7) && r->r[7] != 0)
+  else if ((r->r[0] & VC_Setup_ExtensionBlockInR7) && r->r[7] != 0)
   {
     e = setup_read_extension_block(s, (vc_setup *) r->r[7]);
-    if (e != NULL) return e;
+
+    if (e != NULL)
+    {
+      dprintf(("", "setup_setup: Error '%s' from setup_read_extension_block\n", e->errmess));
+      session_free_item(s);
+      return e;
+    }
   }
 
-  if (s->url == NULL) fail = true;
+  /* We may have an authorization URL; the ticket in a parameter block will */
+  /* override it, but either way the authorization URL needs turning into   */
+  /* an RTSP URL.                                                           */
+
+  e = setup_convert_url(s);
+
+  if (e != NULL)
+  {
+    dprintf(("", "setup_setup: Error '%s' from setup_convert_url\n", e->errmess));
+    session_free_item(s);
+    return e;
+  }
 
   /* Add the SETUP command */
 
-  else if (
-            headers_add_header(&s->headers,
-                               Headers_CommandName_Setup,
-                               s->url->full)
-            == NULL
-          )
-          fail = true;
+  if (
+       fail == false &&
+
+       headers_add_header(&s->headers,
+                          Headers_CommandName_Setup,
+                          s->url->full)
+       == NULL
+     )
+     fail = true;
 
   /* Add sequence number and OVS "prepare assets" command to avoid DESCRIBE */
 
@@ -513,25 +536,127 @@ static _kernel_oserror * setup_read_extension_block(session * s, vc_setup * setu
 }
 
 /**************************************************************/
-/* setup_handle_first_challenge()                             */
+/* setup_convert_url()                                        */
 /*                                                            */
-/* Find a WWW-Authenticate header in a 403 response and set   */
-/* this up for future challenge / response sequences.         */
+/* If the URL in the given session structure is an            */
+/* authorization item, convert it to a normal fetch item for  */
+/* the video server. If there is a query string, use this as  */
+/* a ticket, provided that the session does not already hold  */
+/* its own ticket string already.                             */
 /*                                                            */
-/* Parameters: Pointer to the session holding the challenge.  */
+/* Parameters: Pointer to the session structure.              */
 /**************************************************************/
 
-_kernel_oserror * setup_respond_to_challenge(session * s)
+static _kernel_oserror * setup_convert_url(session * s)
 {
-//  rtsp_header * h =
-//
-//  if (h == NULL) return NULL;
-//
-//  free(s->challenge), s->challenge = Strdup(h->value);
-//  if (s->challenge == NULL) return make_error(rtspovs_ERROR_MEMORY_EXHAUSTED, 0);
+  _kernel_oserror * e;
+
+  if (!Strcmp_ci(s->url->protocol, RTSPOVS_AuthFetchSchemeS))
+  {
+    url_description ru;
+
+    if (s->ticket == NULL)
+    {
+      /* The query string forms the ticket */
+
+      if (s->url->query == NULL || *s->url->query == '\0')
+      {
+        return make_error(rtspovs_ERROR_INVALID_AUTH_URL, 0);
+      }
+      else
+      {
+        s->ticket = Strdup(s->url->query);
+        if (s->ticket == NULL) return make_error(rtspovs_ERROR_MEMORY_EXHAUSTED, 0);
+      }
+    }
+
+    /* Turn the authentication URL into an RTSP URL */
 
 
+    ru.full     = malloc((strlen(s->url->full) * 3) + sizeof(RTSPOVS_AuthFetchScheme));
+    ru.protocol = Strdup(RTSPOVS_FetchSchemeS);
+    ru.query    = NULL;
 
+    ru.host     = s->url->host     == NULL ? NULL : Strdup(s->url->host);
+    ru.port     = s->url->port     == NULL ? NULL : Strdup(s->url->port);
+    ru.user     = s->url->user     == NULL ? NULL : Strdup(s->url->user);
+    ru.password = s->url->password == NULL ? NULL : Strdup(s->url->password);
+    ru.account  = s->url->account  == NULL ? NULL : Strdup(s->url->account);
+    ru.path     = s->url->path     == NULL ? NULL : Strdup(s->url->path);
+    ru.fragment = s->url->fragment == NULL ? NULL : Strdup(s->url->fragment);
+
+    if (
+         ru.full                                  == NULL  ||
+         ru.protocol                              == NULL  ||
+         (s->url->host     != NULL && ru.host     == NULL) ||
+         (s->url->port     != NULL && ru.port     == NULL) ||
+         (s->url->user     != NULL && ru.user     == NULL) ||
+         (s->url->password != NULL && ru.password == NULL) ||
+         (s->url->account  != NULL && ru.account  == NULL) ||
+         (s->url->path     != NULL && ru.path     == NULL) ||
+         (s->url->fragment != NULL && ru.fragment == NULL)
+       )
+    {
+      free(ru.protocol); free(ru.host);     free(ru.port);
+      free(ru.user);     free(ru.password); free(ru.account);
+      free(ru.path);     free(ru.fragment);
+
+      return make_error(rtspovs_ERROR_MEMORY_EXHAUSTED, 0);
+    }
+    else
+    {
+      printf("convert: preparing to reconstruct VSI to RTSP\n");
+
+      *ru.full = '\0';
+
+      e = _swix(URL_ParseURL,
+                _INR(0,5),
+
+                URL_ParseURL_LengthInR5 | URL_ParseURL_HexEscape,
+                URL_ParseURL_Reason_ComposeFromComponents,
+                NULL,
+                NULL,
+                &ru,
+                10); /* Regardless of the actual structure's size, we've only filed in this many items */
+
+      free(ru.protocol); free(ru.host);     free(ru.port);
+      free(ru.user);     free(ru.password); free(ru.account);
+      free(ru.path);     free(ru.fragment);
+
+      if (e != NULL)
+      {
+        dprintf(("", "setup_convert_url: Error '%s' from URL_ParseURL\n", e->errmess));
+        free(ru.full);
+        return e;
+      }
+
+      printf("convert: OK, full = '%s'\n", ru.full);
+
+      if (*ru.full == '\0')
+      {
+        free(ru.full);
+        return make_error(rtspovs_ERROR_INVALID_AUTH_URL, 0);
+      }
+      else
+      {
+        urlutils_free_description(s->url);
+
+        s->url = NULL;
+        e      = urlutils_return_description(ru.full, &s->url);
+
+        free(ru.full);
+
+        if (e != NULL)
+        {
+          dprintf(("", "setup_convert_url: Error '%s' from urlutils_return_description\n", e->errmess));
+          return e;
+        }
+      }
+    }
+  }
+
+
+  printf("convert: normal exit\n");
 
   return NULL;
 }

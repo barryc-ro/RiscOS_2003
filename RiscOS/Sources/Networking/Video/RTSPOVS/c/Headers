@@ -31,7 +31,9 @@
 
 #include "Generic.h"
 #include "Headers.h"
+#include "MD5.h"
 #include "Module.h"
+#include "Parameters.h"
 
 /* Local variables */
 
@@ -809,67 +811,6 @@ static void headers_check_for_exceptions(session * s)
 }
 
 /**************************************************************/
-/* headers_add_challenge_response()                           */
-/*                                                            */
-/* Use a session's ticket, challenge and authinfo fields to   */
-/* construct an Authorization header answering a challenge.   */
-/*                                                            */
-/* Parameters: Pointer to the list of headers to add to;      */
-/*                                                            */
-/*             Pointer to a session structure containing the  */
-/*             challenge, ticket and optional authinfo        */
-/*             details.                                       */
-/*                                                            */
-/*                                                            */
-/* Returns:    Pointer to the new header item, or NULL for    */
-/*             a malloc failure or an entry parameter failure */
-/*             (no challenge or ticket in the given session,  */
-/*             unsupported challenge type, etc.).             */
-/**************************************************************/
-
-rtsp_header * headers_add_challenge_response(rtsp_header ** list, session * ses)
-{
-  char * auth_type;
-  char * realm;
-  char * nonce;
-  char * opaque;
-
-  char * md5_1;
-  char * md5_2;
-  char * md5_3;
-  char * auth_value;
-
-  if (ses->ticket == NULL || ses->challenge == NULL) return NULL;
-
-  /* Sketchy outline of what you're meant to do according to the OVS docs:
-   *
-   * If the type isn't Digest can't handle this
-   * Fn to extract string between quotes
-   * Extract
-   *   realm
-   *   nonce or nextnonce from authinfo (this is needed much later, so remember it)
-   *   opaque
-   *
-   * Compile string ticket_id ":" realm ":" ticket; "ticket_id" = opaque maybe?
-   * MD5 it
-   * Compile another one, method ":" URI (full RTSP URL?)
-   * MD5 it
-   *
-   * Compile first MD5d thing plus ":" nonce ":" plus second MD5d thing
-   * MD5 it
-   *
-   * Build Authorization value by:
-   *   "Digest <username>,<realm>,<uri>,<nonce/nextnonce>,<opaque>,<response>"
-   *
-   * It doesn't say where the username comes from... uses "1004" in the example,
-   * so may as well keep that...!
-   */
-
-  auth_type = strstr(ses->challenge, Headers_HeaderValue_AuthType);
-  if (auth_type == NULL) return NULL;
-}
-
-/**************************************************************/
 /* headers_extract_quoted_string()                            */
 /*                                                            */
 /* Return the subsection of a string from the start up to but */
@@ -901,6 +842,370 @@ char * headers_extract_quoted_string(const char * start)
 
   strncpy(ret, start, len);
   ret[len] = '\0';
+
+  return ret;
+}
+
+/**************************************************************/
+/* headers_parse_wwwa()                                       */
+/*                                                            */
+/* Parse a WWW-Authenticate header, extracting the realm,     */
+/* opaque and nonce values and storing them in the given      */
+/* session structure.                                         */
+/*                                                            */
+/* Parameters: Pointer to the session to update;              */
+/*                                                            */
+/*             Pointer to the RTSP header structure to        */
+/*             examine (may be NULL for no side effects).     */
+/*                                                            */
+/* Returns:    'true' in all conditions (e.g. parsing was a   */
+/*             success, header pointer was NULL, couldn't     */
+/*             parse correctly) except an out of memory       */
+/*             condition when trying to store the extracted   */
+/*             data from the header's value, in which case    */
+/*             'false' is given back.                         */
+/**************************************************************/
+
+bool headers_parse_wwwa(session * s, rtsp_header * h)
+{
+  /* The header parser here is deliberately crude - we are not tolerant of any value */
+  /* which is not of the exact formatting and case we expect, in an attempt to be    */
+  /* slightly more secure.                                                           */
+  /*                                                                                 */
+  /* Misparsing will lead eventually to an incorrect challenge response, which will  */
+  /* lead to 403 Forbidden being returned. This is the safest failure mode.          */
+
+  if (h != NULL)
+  {
+    /* Parse the value to obtain realm, nonce and opaque quantities; */
+    /* must be present in that order.                                */
+
+    const char * ptr    = h->value;
+    const char * quote  = strchr(h->value, '"');
+    const char * digest = NULL;
+    const char * realm  = NULL;
+    const char * opaque = NULL;
+    const char * nonce  = NULL;
+
+    /* "Digest " should appear before any double quote marks */
+
+    if (quote != NULL)
+    {
+      digest = strstr(ptr,
+                      Headers_HeaderValue_WWWAAuthType);
+    }
+    else return true;
+
+printf("Digest %p achieved\n", digest);
+
+    /* If it does, look for "realm=", which should also appear before */
+    /* any double quote marks                                         */
+
+    if (digest != NULL && digest < quote)
+    {
+      realm = strstr(digest + sizeof(Headers_HeaderValue_WWWAAuthType) - 1,
+                     Headers_HeaderValue_WWWARealm);
+    }
+    else return true;
+
+printf("Realm %p achieved\n", realm);
+
+    /* If that worked, extract the value and skip past it */
+
+    if (realm != NULL && realm < quote)
+    {
+      /* We add sizeof() and don't subtract one in order to skip past both the */
+      /* string itself, and the opening double quote on the value.             */
+
+printf("Extracting realm string\n");
+
+      s->realm = headers_extract_quoted_string(realm + sizeof(Headers_HeaderValue_WWWARealm));
+      if (s->realm == NULL) return false;
+    }
+    else return true;
+
+printf("Realm is '%s'\n", s->realm);
+
+    /* Next, find the first double quote mark after the realm value */
+
+    ptr   = realm + sizeof(Headers_HeaderValue_WWWARealm) + strlen(s->realm) + 1;
+    quote = strchr(ptr, '"');
+
+    /* Look for a nonce value before the double quote mark */
+
+    if (quote != NULL)
+    {
+      nonce = strstr(ptr,
+                     Headers_HeaderValue_WWWANonce);
+    }
+    else return true;
+
+printf("Nonce %p achieved\n", nonce);
+
+    /* If that worked, extract the value and skip past it */
+
+    if (nonce != NULL && nonce < quote)
+    {
+printf("Extracting nonce string\n");
+      s->nonce = headers_extract_quoted_string(nonce + sizeof(Headers_HeaderValue_WWWANonce));
+      if (s->nonce == NULL) return false;
+    }
+    else return true;
+
+printf("Nonce is '%s'\n", s->nonce);
+
+    /* Find the first double quote mark after the nonce value */
+
+    ptr   = nonce + sizeof(Headers_HeaderValue_WWWANonce) + strlen(s->nonce) + 1;
+    quote = strchr(ptr, '"');
+
+    /* Look for an opaque value before the double quote mark */
+
+    if (quote != NULL)
+    {
+      opaque = strstr(ptr,
+                      Headers_HeaderValue_WWWAOpaque);
+    }
+    else return true;
+
+printf("Opaque %p achieved\n", opaque);
+
+    /* If that worked, extract the value and skip past it */
+
+    if (opaque != NULL && opaque < quote)
+    {
+printf("Extracting opaque string\n");
+
+      s->opaque = headers_extract_quoted_string(opaque + sizeof(Headers_HeaderValue_WWWAOpaque));
+      if (s->opaque == NULL) return false;
+    }
+    else return true; /* Could fall through to the catch-all 'return' below, but subsequent additions below this point would then be at risk from forgetting to add this 'else' case... */
+  }
+
+    /* Finished */
+
+  return true;
+}
+
+/**************************************************************/
+/* headers_add_challenge_response()                           */
+/*                                                            */
+/* Use a session's ticket, challenge and authinfo fields to   */
+/* construct an Authorization header answering a challenge.   */
+/*                                                            */
+/* Parameters: Pointer to the list of headers to add to;      */
+/*                                                            */
+/*             Pointer to a session structure containing the  */
+/*             challenge, ticket and optional authinfo        */
+/*             details;                                       */
+/*                                                            */
+/*             Pointer to the RTSP command name being sent    */
+/*             (e.g. SETUP, PLAY, PAUSE).                     */
+/*                                                            */
+/* Returns:    Pointer to the new header item, or NULL for    */
+/*             a malloc failure or an entry parameter failure */
+/*             (no challenge or ticket in the given session,  */
+/*             unsupported challenge type, etc.). Callers are */
+/*             advised to treat any NULL response as an       */
+/*             authorization failure rather than out of       */
+/*             memory (since if that's really the case then   */
+/*             it won't be long before something else fails). */
+/**************************************************************/
+
+rtsp_header * headers_add_challenge_response(rtsp_header ** list, session * ses, const char * method)
+{
+  rtsp_header   * ret;
+
+  char          * query;
+  char          * authid;
+  char          * authpw;
+  char          * value;
+
+  char          * md5_1;       /* These hold the strings to be run through the MD5 algorithm */
+  char          * md5_2;
+  char          * md5_3;
+
+  size_t          md5_1_l;     /* These hold the lengths of the above strings */
+  size_t          md5_2_l;
+  size_t          md5_3_l;
+
+  md5_context     md5_1_c;     /* Contexts for the three MD5 sessions */
+  md5_context     md5_2_c;
+  md5_context     md5_3_c;
+
+  unsigned char   md5_1_s[16]; /* Buffers for the raw MD5 output for the three sessions */
+  unsigned char   md5_2_s[16];
+  unsigned char   md5_3_s[16];
+
+  if (
+       list           == NULL ||
+       method         == NULL ||
+       ses            == NULL ||
+       ses->ticket    == NULL ||
+       ses->nonce     == NULL ||
+       ses->opaque    == NULL ||
+       ses->realm     == NULL ||
+       ses->url       == NULL ||
+       ses->url->full == NULL
+     )
+     return NULL;
+
+  /* Extract the query string from the ticket and find the authorization */
+  /* ID (user name) and password (ticket secret).                        */
+
+  query = strchr(ses->ticket, '?');
+  if (query == NULL || *(++query) == '\0') return NULL;
+
+  authid = parameters_find_item(query, Parameters_AuthID);
+  authpw = parameters_find_item(query, Parameters_AuthPW);
+
+  if (authid == NULL || authpw == NULL) return NULL;
+
+  /* Initialise the MD5 contexts */
+
+  md5_init(&md5_1_c);
+  md5_init(&md5_2_c);
+  md5_init(&md5_3_c);
+
+  /* Assemble the substrings to run through the MD5 algorithm */
+
+  md5_1_l = strlen(authid) + strlen(ses->realm) + strlen(authpw) + 3; /* +3 for two colons and NUL */
+  md5_1   = malloc(md5_1_l);
+
+  if (md5_1 == NULL)
+  {
+    return NULL;
+  }
+
+  sprintf(md5_1, "%s:%s:%s", authid, ses->realm, authpw);
+
+  md5_2_l = strlen(method) + strlen(ses->url->full) + 2; /* +2 for colon and NUL */
+  md5_2   = malloc(md5_2_l);
+
+  if (md5_2 == NULL)
+  {
+    free(md5_1);
+    return NULL;
+  }
+
+  sprintf(md5_2, "%s:%s", method, ses->url->full);
+
+  /* md5_1 and md5_2 need to be run through MD5 to construct the third string */
+
+  md5_update(&md5_1_c, md5_1, (unsigned long) (md5_1_l - 1UL) * (unsigned long) sizeof(*md5_1));
+  md5_update(&md5_2_c, md5_2, (unsigned long) (md5_2_l - 1UL) * (unsigned long) sizeof(*md5_2));
+
+  md5_final(md5_1_s, &md5_1_c);
+  md5_final(md5_2_s, &md5_2_c);
+
+  /* We're finished with the first two strings now */
+
+  free(md5_1);
+  free(md5_2);
+
+  /* The third string contains the MD5 data expressed as a set of 2 digit hex numbers */
+
+  md5_3_l = (sizeof(md5_1_s) * 2) + (sizeof(md5_1_s) * 2) + strlen(ses->nonce) + 3; /* +3 for two colons and NUL */
+  md5_3   = malloc(md5_3_l);
+
+  if (md5_3 == NULL)
+  {
+    return NULL;
+  }
+  else
+  {
+    int    i;
+    char * md5_3_ptr = md5_3;
+
+    for (i = 0; i < sizeof(md5_1_s); i++)
+    {
+      sprintf(md5_3_ptr, "%02x", md5_1_s[i]);
+      md5_3_ptr += 2;
+    }
+
+    *(md5_3_ptr++) = ':';
+
+    sprintf(md5_3_ptr, "%s", ses->nonce);
+    md5_3_ptr += strlen(ses->nonce);
+
+    *(md5_3_ptr++) = ':';
+
+    for (i = 0; i < sizeof(md5_2_s); i++)
+    {
+      sprintf(md5_3_ptr, "%02x", md5_2_s[i]);
+      md5_3_ptr += 2;
+    }
+  }
+
+  /* Now run MD5 on this string to get the final answer */
+
+  md5_update(&md5_3_c, md5_3, (unsigned long) (md5_3_l - 1UL) * (unsigned long) sizeof(*md5_3));
+  md5_final(md5_3_s, &md5_3_c);
+
+  /* Compile the response header's value */
+
+  value = malloc(sizeof(Headers_HeaderValue_AuthAuthType) - 1 + /* Exclude NUL */
+                 sizeof(Headers_HeaderValue_AuthUsername) + 1 + /* +1 to account for opening and closing quotes around username */
+                 strlen(authid)                           + 1 + /* +1 to account for comma */
+                 sizeof(Headers_HeaderValue_AuthRealm)    + 1 + /* +1 to account for opening and closing quotes around username */
+                 strlen(ses->realm)                       + 1 + /* +1 to account for comma */
+                 sizeof(Headers_HeaderValue_AuthURI)      + 1 + /* (etc.) */
+                 strlen(ses->url->full)                   + 1 +
+                 sizeof(Headers_HeaderValue_AuthNonce)    + 1 +
+                 strlen(ses->nonce)                       + 1 +
+                 sizeof(Headers_HeaderValue_AuthOpaque)   + 1 +
+                 strlen(ses->opaque)                      + 1 +
+                 sizeof(Headers_HeaderValue_AuthResponse) + 1 +
+                 sizeof(md5_3_s) * 2                      + 1); /* +1 to account for terminating NUL */
+
+  if (value == NULL)
+  {
+    free(md5_3);
+    return NULL;
+  }
+  else
+  {
+    int    pos, i;
+    char * value_ptr;
+
+    /* Write everything up to the response */
+
+    sprintf(value,
+            "%s%s\"%s\",%s\"%s\",%s\"%s\",%s\"%s\",%s\"%s\",%s\"%n",
+            Headers_HeaderValue_AuthAuthType,
+            Headers_HeaderValue_AuthUsername,
+            authid,
+            Headers_HeaderValue_AuthRealm,
+            ses->realm,
+            Headers_HeaderValue_AuthURI,
+            ses->url->full,
+            Headers_HeaderValue_AuthNonce,
+            ses->nonce,
+            Headers_HeaderValue_AuthOpaque,
+            ses->opaque,
+            Headers_HeaderValue_AuthResponse,
+            &pos);
+
+    value_ptr = value + pos;
+
+    /* Write the response in the two-digit hex number form */
+
+    for (i = 0; i < sizeof(md5_3_s); i++)
+    {
+      sprintf(value_ptr, "%02x", md5_3_s[i]);
+      value_ptr += 2;
+    }
+
+    /* Don't forget terminating double quote and NUL */
+
+    *(value_ptr++) = '"';
+    *value_ptr     = '\0';
+  }
+
+  ret = headers_add_header(list,
+                           Headers_HeaderName_Auth,
+                           value);
+  free(value);
 
   return ret;
 }

@@ -737,8 +737,7 @@ static bool status_proceed_receiving(session * s, bool * repeat)
         }
         else
         {
-          rtsp_header * h;
-          session     * parent;
+          session * parent;
 
           s->state = protostate_COMPLETED;
 
@@ -746,21 +745,33 @@ static bool status_proceed_receiving(session * s, bool * repeat)
 
           close_socket(&s->sd);
 
-          /* Store an Authorization-info header, if present, in the parent; it will be */
-          /* needed for the next foreground or background command. Whether or not      */
-          /* this response contains a challenge, we must clear any old record of the   */
-          /* header - otherwise we could send a response to a non-existent challenge!  */
+          /* There are two possibilities:                                      */
+          /*                                                                   */
+          /* 1) This is a 401 response. We should not report it to the user;   */
+          /*    we should parse the WWW-Authenticate header, and prepare to    */
+          /*    resend the stored SETUP command iff (sic) there is one.        */
+          /*                                                                   */
+          /* 2) This is a 200 response, but there is a Authentication-info     */
+          /*    header which we should parse and store details of for the      */
+          /*    next command.                                                  */
+          /*                                                                   */
+          /* Either way, if there are sufficient authorization details present */
+          /* in the session, an Authorization header will be constructed for   */
+          /* use in the next command that goes out. We must ensure that any    */
+          /* existing header is cleared before any other things are checked    */
+          /* for to ensure no accidental challenge responses are sent.         */
 
           parent = s->parent == NULL ? s : s->parent;
-          free(parent->authinfo), parent->authinfo = NULL;
+          free(parent->authorization), parent->authorization = NULL;
 
-          h = headers_find_header(s->headers, Headers_HeaderName_AuthInfo);
-
-          if (h != NULL)
+          if (s->response_code == Header_Authenticate)
           {
-            parent->authinfo = Strdup(h->value);
+            /* This is a 401 Unauthorized response - it should have a WWW-Authenticate header */
 
-            if (parent->authinfo == NULL)
+            bool ok = headers_parse_wwwa(parent,
+                                         headers_find_header(s->headers, Headers_HeaderName_WWWA));
+
+            if (ok == false)
             {
               s->state = protostate_ERROR_MEM;
               *repeat  = true;
@@ -768,50 +779,80 @@ static bool status_proceed_receiving(session * s, bool * repeat)
               return false;
             }
           }
-
-          /* If this was a SETUP command and we get 401 back, we need to authenticate. So */
-          /* send another SETUP, relying on having a challenge stored from above.         */
-
-          if (
-               s->response_code  == Header_Authenticate &&
-               s->server_session == NULL                &&
-               s->parent         == NULL                &&
-               s->ticket         != NULL                &&
-               s->setup_copy     != NULL
-             )
+          else
           {
-            /* Store a WWW-Authenticate header, if present - can't handle the challenge if not... */
+            rtsp_header * h = headers_find_header(s->headers, Headers_HeaderName_AI);
 
-            h = headers_find_header(s->headers, Headers_HeaderName_Auth);
+            /* This is a 200 OK response - does it have an Authentication-info header? */
 
             if (h != NULL)
             {
-              free(s->challenge), s->challenge = Strdup(h->value);
+              /* Yes. Use the "nextnonce" value as our current nonce. */
 
-              if (s->challenge == NULL)
+              free(parent->nonce);
+              parent->nonce = Strdup(h->value);
+
+              if (parent->nonce == NULL)
               {
                 s->state = protostate_ERROR_MEM;
                 *repeat  = true;
 
                 return false;
               }
-
-              /* Now handle the challenge */
-
-//////////////status_handle_initial_challenge(s);
-
-              if (s->state != protostate_ERROR_MEM)
-              {
-                *repeat = false;
-                return true;
-              }
-              else
-              {
-                *repeat = true;
-                return false;
-              }
             }
           }
+
+
+
+///////////////// And so if we've a nonce, realm and opaque value, attempt to construct
+///////////////// a challenge string to put in the authorization field of - well, the parent
+///////////////// I suppose...
+
+
+
+//          /* If this was a SETUP command and we get 401 back, we need to authenticate. So */
+//          /* send another SETUP, relying on having a challenge stored from above.         */
+//
+//          if (
+//               s->response_code  == Header_Authenticate &&
+//               s->server_session == NULL                &&
+//               s->parent         == NULL                &&
+//               s->ticket         != NULL                &&
+//               s->setup_copy     != NULL
+//             )
+//          {
+//            /* Store a WWW-Authenticate header, if present - can't handle the challenge if not... */
+//
+//            h = headers_find_header(s->headers, Headers_HeaderName_Auth);
+//
+//            if (h != NULL)
+//            {
+//              free(s->challenge), s->challenge = Strdup(h->value);
+//
+//              if (s->challenge == NULL)
+//              {
+//                s->state = protostate_ERROR_MEM;
+//                *repeat  = true;
+//
+//                return false;
+//              }
+//
+//              /* Now handle the challenge */
+//
+////////////////status_handle_initial_challenge(s);
+//
+//              if (s->state != protostate_ERROR_MEM)
+//              {
+//                *repeat = false;
+//                return true;
+//              }
+//              else
+//              {
+//                *repeat = true;
+//                return false;
+//              }
+//            }
+//          }
 
           /* We've received the response that we wish to return to the client. This may */
           /* be a dropped-through 401 if we couldn't deal with it above.                */

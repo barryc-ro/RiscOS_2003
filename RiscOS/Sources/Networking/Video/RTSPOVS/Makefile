@@ -72,74 +72,80 @@ CLIB		= CLIB:o.stubs
 RLIB		= RISCOSLIB:o.risc_oslib
 ROMCSTUBS	= RISCOSLIB:o.romcstubs
 ABSSYM		= RISC_OSLib:o.abssym
-TCPIPLIBS	= TCPIPLibs:o.inetlibzm TCPIPLIBS:o.socklibzm
+TCPIPLIBS	= TCPIPLibs:o.inetlibzm TCPIPLIBS:o.socklibzm TCPIPLIBS:o.unixlibzm
 DEBUGLIB	= <Lib$Dir>.Debuglib.o.debuglibzm
 
 LIBS = ${DEBUGLIB} \
        ${TCPIPLIBS}
 
-ROM_OBJS =	\
- o.CallOut	\
- o.Connect	\
- o.DNS		\
- o.Generic	\
- o.GetParam	\
- o.Global	\
- o.Headers	\
- o.Module	\
- o.MoreInfo	\
- o.Options	\
- o.Play		\
- o.Setup	\
- o.Session	\
- o.Status	\
- o.TearDown	\
- o.URLutils	\
- o.Utils	\
+ROM_OBJS =		\
+ o.CallOut		\
+ o.Connect		\
+ o.DNS			\
+ o.Generic		\
+ o.GetParam		\
+ o.Global		\
+ o.Headers		\
+ o.Module		\
+ o.MoreInfo		\
+ o.Options		\
+ o.Parameters		\
+ o.Play			\
+ o.Setup		\
+ o.Session		\
+ o.Status		\
+ o.TearDown		\
+ o.URLutils		\
+ o.Utils		\
+ o.MD5			\
  o.RTSPOHdr
 
 # oSL -> Soft Load
 
-RAM_OBJS =	\
- oSL.CallOut	\
- oSL.Connect	\
- oSL.DNS	\
- oSL.Generic	\
- oSL.GetParam	\
- oSL.Global	\
- oSL.Headers	\
- oSL.Module	\
- oSL.MoreInfo	\
- oSL.Options	\
- oSL.Play	\
- oSL.Setup	\
- oSL.Session	\
- oSL.Status	\
- oSL.TearDown	\
- oSL.URLutils	\
- oSL.Utils	\
+RAM_OBJS =		\
+ oSL.CallOut		\
+ oSL.Connect		\
+ oSL.DNS		\
+ oSL.Generic		\
+ oSL.GetParam		\
+ oSL.Global		\
+ oSL.Headers		\
+ oSL.Module		\
+ oSL.MoreInfo		\
+ oSL.Options		\
+ oSL.Parameters		\
+ oSL.Play		\
+ oSL.Setup		\
+ oSL.Session		\
+ oSL.Status		\
+ oSL.TearDown		\
+ oSL.URLutils		\
+ oSL.Utils		\
+ o.MD5			\
  o.RTSPOHdr
 
 # oSLd -> Soft Load deug
 
-DBG_OBJS =	\
- oSLd.CallOut	\
- oSLd.Connect	\
- oSLd.DNS	\
- oSLd.Generic	\
- oSLd.GetParam	\
- oSLd.Global	\
- oSLd.Headers	\
- oSLd.Module	\
- oSLd.MoreInfo	\
- oSLd.Options	\
- oSLd.Play	\
- oSLd.Setup	\
- oSLd.Session	\
- oSLd.Status	\
- oSLd.TearDown	\
- oSLd.URLutils	\
- oSLd.Utils	\
+DBG_OBJS =		\
+ oSLd.CallOut		\
+ oSLd.Connect		\
+ oSLd.DNS		\
+ oSLd.Generic		\
+ oSLd.GetParam		\
+ oSLd.Global		\
+ oSLd.Headers		\
+ oSLd.Module		\
+ oSLd.MoreInfo		\
+ oSLd.Options		\
+ oSLd.Parameters	\
+ oSLd.Play		\
+ oSLd.Setup		\
+ oSLd.Session		\
+ oSLd.Status		\
+ oSLd.TearDown		\
+ oSLd.URLutils		\
+ oSLd.Utils		\
+ o.MD5			\
  o.RTSPOHdr
 
 # Defining TRACE just does debuglib based message outputting. Defining
@@ -203,8 +209,9 @@ all: ${RAM_MODULE} ${DIRS}
 	@echo ${COMPONENT}: Module built (RAM)
 
 install: ${RAM_MODULE}
-	${MKDIR} ${INSTDIR}
-	${CP} ${RAM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+	${MKDIR} ${INSTDIR}.310.Modules.Networking
+	${MKDIR} ${INSTDIR}.310.Modules.Networking.RTSPOVS
+	${CP} ${RAM_MODULE} ${INSTDIR}.310.Modules.Networking.RTSPOVS.${COMPONENT}
 	@echo
 	@echo ${COMPONENT}: Module installed (Disc)
 
@@ -270,7 +277,7 @@ ${MSGSF}: LocalRes:Messages
 	TokenCheck LocalRes:Messages
 	resgen messages_file ${MSGSF} LocalRes:Messages Resources.VideoCtrl.${COMPONENT}.Messages
 
-${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${LIBS} ${CLIB} ${DIRS}
+${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${LIBS} ${CLIB}
 	@echo
 	${MKDIR} rm
 	${LD} -o $@ -module ${RAM_OBJS} ${MSGSF} ${LIBS} ${CLIB}
