@@ -29,7 +29,7 @@ CPFLAGS = ~cfr~v
 COMPONENT = CLIProt
 SOURCE    = s.GetAll
 TARGET    = rm.${COMPONENT}
-EXPORTS   = ${EXP_HDR}.${COMPONENT}
+EXPORTS   =
 
 #
 # Generic rules:
