@@ -79,6 +79,7 @@ rm.ZipFS: Hdr:Parallel
 rm.ZipFS: Hdr:FileCore
 rm.ZipFS: Hdr:Free
 rm.ZipFS: Hdr:ZipFS
+rm.IZipFS: s.AcornHdr
 rm.IZipFS: Hdr:ListOpts
 rm.IZipFS: Hdr:Macros
 rm.IZipFS: Hdr:System
@@ -88,6 +89,7 @@ rm.IZipFS: Hdr:IO.GenericIO
 rm.IZipFS: Hdr:RISCOS
 rm.IZipFS: Hdr:ModHand
 rm.IZipFS: Hdr:Parallel
+rm.IZipFS: Hdr:Buffer
 rm.IZipFS: Hdr:FileCore
 rm.IZipFS: Hdr:Free
 rm.IZipFS: Hdr:IZipFS
