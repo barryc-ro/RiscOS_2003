@@ -64,7 +64,7 @@ DFLAGS = -DVERBOSEDEBUG=0 -DRISCOS -DPROG_IDENT="\"NCBrowser\"" -DCOMPAT_INET4 -
 COMPONENT = webftp
 COMPONENTD = webftpD
 TARGET    = aof.${COMPONENT}
-OBJS      = webftp.o q.o files.o header.o support.o misc.o db.o dirparse.o 
+OBJS      = webftp.o q.o files.o header.o support.o misc.o db.o dirparse.o
 OBJSD     = od.webftp od.q od.files header.o support.o od.misc od.db od.dirparse
 LIBS      = ${CLIB} ${INETLIB} ${SOCKLIB}
 LIBSD     = ${CLIB} ${DEBUGLIB} ${INETLIB} ${SOCKLIB}
@@ -110,7 +110,6 @@ clean:
         ${WIPE} od ${WFLAGS}
         ${WIPE} rm ${WFLAGS}
         ${WIPE} linked ${WFLAGS}
-        ${WIPE} map ${WFLAGS}
         ${RM} h.header
         ${STRIP}
         @echo ${COMPONENT}: cleaned
@@ -118,7 +117,6 @@ clean:
 ${DIRS}:
         @${MKDIR} aof
         @${MKDIR} linked
-        @${MKDIR} map
         @${MKDIR} o
         @${MKDIR} od
         @${MKDIR} rm
@@ -140,8 +138,7 @@ ${TARGET}: ${OBJS} ${ROMCSTUBS} ${INETLIB} ${SOCKLIB} ${REMOTEDB} ${DIRS}
 # Final link for the ROM Image (using given base address)
 #
 rom_link:
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
