@@ -44,7 +44,7 @@ LIBS     = ${CLIB}
 LIBSZ    = ${ROMCSTUBS}
 LIBSZRAM = ${RLIB} ${CLIB}
 
-DFLAGS   =
+DFLAGS   = -DREAL_SYSTEM
 
 #
 # Program specific options:
