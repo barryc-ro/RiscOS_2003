@@ -2707,6 +2707,15 @@ notvidaudpacket
         BLEQ    AnticipateEndOfStream                   ; this waits for decoding to stop, then issues an UpCall
       ]
 
+        TEQ     r3, r4                  ; if there is no data remaining in current buffer
+        BLEQ    cowait                  ; then wait for more data (if any ever arrives)
+        ; If subsequent data is present, assume some unsignalled stream transition has
+        ; taken place (eg looping) and do an internal reset before proceeding any further
+        Push    "r0, r2, r3"
+        LDR     r0, [r1, #CSH_NextResetStreamFlags]
+        ORR     r0, r0, #ResetStreamFlags_InternalReset ; don't worry about waiting for GDF, we can't have one in a system stream
+        BL      int_reset_stream
+        Pull    "r0, r2, r3"
         BL      getnextstartcode
         B       systemstreamloop
 
@@ -2783,6 +2792,7 @@ getnextstartcodecheckloss Entry
 	EXIT
 
 ; skipbytes skips r6 bytes
+; will not return until there is at least one byte in current buffer
 
 skipbytes Entry
         SUB     r8, r8, r6              ; reduce outstanding number of bytes in packet (only useful during parsing of PES header)
@@ -3278,6 +3288,7 @@ ts_free_packet_and_skip
 ; Transport Stream utility routines
 
 ; ts_skipbytes skips r10 bytes
+; may return with no bytes in current buffer
 
 ts_skipbytes ROUT
         SUB     r8, r8, r10                     ; reduce outstanding number of bytes in packet
@@ -3663,7 +3674,25 @@ ts_check_for_OVSNPT ROUT
         DLINE   "Parsed EOS descriptor"
        ]
         BL      AnticipateEndOfStream                   ; this waits for decoding to stop before issuing the UpCall
+        MOV     r10, r8
+        BL      ts_skipbytes            ; skip the rest of this TS packet
+        TEQ     r3, r4                  ; if there is no data remaining in current buffer
+        BLEQ    cowait                  ; then wait for more data (if any ever arrives)
+        ; Although we may subsequently get a Good Data Follows and do an internal reset then,
+        ; it is an OVS-specific concept, so for greater generality, do a reset now (as well)
+        Push    "r0, r2, r3"
+        LDR     r0, [r1, #CSH_NextResetStreamFlags]
+        BIC     r0, r0, #ResetStreamFlags_DeferReset    ; flag that the deferred reset has now happened
+        STR     r0, [r1, #CSH_NextResetStreamFlags]
+        ORR     r0, r0, #ResetStreamFlags_InternalReset ; don't worry about waiting for a(nother) GDF
+        BL      int_reset_stream
+        MOV     r0, #0                                  ; use SetSpeed flags of 0
+        LDR     r2, [r1, #CSH_NextSpeedIndicator]       ; get stored speed indicator
+        BL      SetSpeed                                ; and execute the deferred SetSpeed call
+        Pull    "r0, r2, r3"
+        B       ts_wait_for_sync        ; start work on a new TS packet
       |
+        ; the old way of doing things
         Push    "r0-r3"
         MOV     r0, #UpCall_MPEG
         MOV     r1, #0
@@ -3671,6 +3700,7 @@ ts_check_for_OVSNPT ROUT
         MOV     r3, #UpCallMPEG_EndOfStream
         SWI     XOS_UpCall
         Pull    "r0-r3"
+        ; drop through...
       ]
 55      MOV     r7, r5                                  ; r7 = original r7 - 1
         Pull    "r5"
