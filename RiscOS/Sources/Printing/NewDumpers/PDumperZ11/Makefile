@@ -12,7 +12,7 @@ EXP_C_H = <CExport$dir>.h
 # Generic options:
 #
 
-MKDIR		= cdir
+MKDIR		= mkdir -p
 AS		= objasm
 CC		= ${MemCheckCC} cc
 CMHG		= cmhg
@@ -144,6 +144,7 @@ export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
 
 install: ${TARGETSA}
+        ${MKDIR} ${INSTDIR}
         ${CP} ${TARGETSA} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: module installed
 
