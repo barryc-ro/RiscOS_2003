@@ -155,7 +155,7 @@ clean:
         ${WIPE} o.* ${WFLAGS}
         ${RM} ${TARGET}
         ${RM} ${ROMTARGET}
-        ${RM} map.NFSSTB
+        ${RM} linked.${COMPONENT}
         @echo ${COMPONENT}: cleaned
 
 #
@@ -176,7 +176,6 @@ ${ROMTARGET}: ${OBJS} ${RPCLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB}
 #
 rom_link:
         ${MKDIR} linked
-        ${MKDIR} map
         ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROMTARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
