@@ -457,7 +457,7 @@ $(MODULE): ozsl.ModuleWrap $(LIBSM) $(CLIB) $(UI) $(APPENGINE) o.dirs
 
 $(ROM_MODULE): oz.ModuleWrap $(ROMCSTUBS) $(LIBSM) $(UI) $(APPENGINE) o.dirs
         @echo
-        @$(LD) -s syms.ROMMod -o $@ -aof oz.ModuleWrap $(OBJSZ) $(LIBSM) $(ROMCSTUBS)
+        @$(LD) -c++ -s syms.ROMMod -o $@ -aof oz.ModuleWrap $(OBJSZ) $(LIBSM) $(ROMCSTUBS)
 
 rm.$(APP)D: odz.ModuleWrap  $(LIBSM) $(UI) $(APPENGINE) o.dirs
         @echo
