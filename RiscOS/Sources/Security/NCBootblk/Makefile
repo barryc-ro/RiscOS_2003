@@ -117,17 +117,9 @@ ${TARGETSA}: ${OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
 #
 # Exported interface headers
 #
-${EXP_C_H}.reg_scbb:	h.reg_scbb
-	${CP} h.reg_scbb $@ ${CPFLAGS}
+${EXP_C_H}.smcard:	h.smcard
+	${CP} h.smcard $@ ${CPFLAGS}
 
-${EXP_C_H}.sc_const:	h.sc_const
-	${CP} h.sc_const $@ ${CPFLAGS}
-
-${EXP_C_H}.s_card:	h.s_card
-	${CP} h.s_card $@ ${CPFLAGS}
-
-${EXP_C_H}.reg_object:  h.reg_object
-	${CP} h.reg_object $@ ${CPFLAGS}
 #
 # ROM target (re-linked at ROM Image build time)
 #
