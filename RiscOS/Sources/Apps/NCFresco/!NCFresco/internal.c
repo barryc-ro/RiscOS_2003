@@ -222,6 +222,32 @@ static os_error *fe_version_write_file(FILE *f, be_doc doc, const char *query)
 
 	if ((s = backend_check_meta(doc, "copyright")) != NULL)
 	    fprintf(f, msgs_lookup("version8"), lang, s);
+
+#if UNICODE
+	{
+	    char buf[32];
+	    int enc = backend_doc_encoding(doc, NULL, NULL);
+	    sprintf(buf, "encoding%d:", enc);
+	    s = msgs_lookup(buf);
+	    if (!s || !s[0])
+	    {
+		const char *ctype = backend_check_meta(doc, "content-type");
+		if (ctype)
+		{
+		    char *enc = parse_content_type_header_charset(s);
+		    if (enc)
+		    {
+			sprintf(buf, msgs_lookup("encodingX"), enc);
+			mm_free(enc);
+			s = buf;
+		    }
+		}
+	    }
+
+	    if (s && s[0])
+		fprintf(f, msgs_lookup("version9"), s);
+	}
+#endif
     }
 
     if (qlink)
@@ -315,21 +341,6 @@ static int internal_decode_print_options(const char *query, char **url)
 
     if (!cancel)
     {
-#if 0
-	s = extract_value(query, "copies=");
-	print__copies = atoi(s);
-	mm_free(s);
-
-	if (print__copies < 1)
-	    print__copies = 1;
-
-	s = extract_value(query, "scaling=");
-	config_print_scale = atoi(s);
-
-	mm_free(s);
-	if (config_print_scale < 5)
-	    config_print_scale = 5;
-#endif
 	int old_bw = config_print_nocol;
 	int old_orient = config_print_sideways;
 
@@ -348,6 +359,22 @@ static int internal_decode_print_options(const char *query, char **url)
 
 	    nvram_write(NVRAM_PRINT_COLOUR_TAG, !config_print_nocol);
 	}
+	
+	if ((s = extract_value(query, "bg=")) != NULL)
+	{
+	    config_print_nobg = strcmp(s, "yes") != 0;
+	    mm_free(s);
+
+	    nvram_write(NVRAM_PRINT_BG_TAG, !config_print_nobg);
+	}
+
+	if ((s = extract_value(query, "images=")) != NULL)
+	{
+	    config_print_nopics = strcmp(s, "yes") != 0;
+	    mm_free(s);
+
+	    nvram_write(NVRAM_PRINT_IMAGES_TAG, !config_print_nopics);
+	}
 
 	if ((old_bw != config_print_nocol || old_orient != config_print_sideways) && 
 	    frontend_complain(_swix(PPrimer_ChangePrinter, 0)) != NULL)
@@ -356,31 +383,13 @@ static int internal_decode_print_options(const char *query, char **url)
 	    config_print_nocol = old_bw;
 	    nvram_write(NVRAM_PRINT_COLOUR_TAG, !config_print_nocol);
 	}
-	
-#if 0
- 	config_print_nocol = strstr(query, "f=col") == 0;
-	config_print_nopics = strstr(query, "f=pic") == 0;
-	config_print_nobg = strstr(query, "f=bg") == 0;
-	config_print_collated = strstr(query, "f=collate") != 0;
-	config_print_reversed = strstr(query, "f=rev") != 0;
-
-	print__ul = strstr(query, "f=ul") != 0;
-#endif
     }
 
     /* return the print head - ignore errors */
     awp_command(printer_command_RETURN_HEAD);
 
-
     if (print)
-#if 1
 	fe_pending_event = fevent_PRINT;
-#else
-    {
-	*url = strdup("ncint:printpage");
-	return fe_internal_url_REDIRECT;
-    }
-#endif
     
     return fe_internal_url_NO_ACTION;
 }
@@ -389,18 +398,11 @@ static os_error *fe_print_options_write_file(FILE *f)
 {
     fputs(msgs_lookup("print.T"), f);
 
-#if 1
     fprintf(f, msgs_lookup("print.1"), checked(!config_print_sideways), checked(config_print_sideways));
     fprintf(f, msgs_lookup("print.2"), checked(!config_print_nocol), checked(config_print_nocol));
-#else
-    fprintf(f, msgs_lookup("print.1"), print__copies, checked(config_print_collated), checked(config_print_reversed));
-    fprintf(f, msgs_lookup("print.2"), checked(!config_print_sideways), checked(config_print_sideways));
-    fprintf(f, msgs_lookup("print.3"), config_print_scale);
-    fprintf(f, msgs_lookup("print.4"), checked(!config_print_nopics));
-    fprintf(f, msgs_lookup("print.5"), checked(!config_print_nocol));
-    fprintf(f, msgs_lookup("print.6"), checked(!config_print_nobg));
-    fprintf(f, msgs_lookup("print.7"), checked(print__ul));
-#endif
+    fprintf(f, msgs_lookup("print.3"), checked(!config_print_nobg), checked(config_print_nobg));
+    fprintf(f, msgs_lookup("print.4"), checked(!config_print_nopics), checked(config_print_nopics));
+
     fputs(msgs_lookup("print.F"), f);
 
     /* center the print head - ignore errors */
@@ -1456,7 +1458,6 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	if (strcasecomp(panel_name, "displayoptions") == 0)
 	{
 	    sound_event(snd_DISPLAY_OPTIONS_SHOW);
-/* 	    tb_status_button(fevent_OPEN_DISPLAY_OPTIONS, TRUE); */
 	    e = fe_display_options_write_file(f);
 	}
 	else if (strcasecomp(panel_name, "favs") == 0)
@@ -1464,7 +1465,6 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	    if (frame <= 0)
 	    {
 		sound_event(snd_HOTLIST_SHOW);
-/* 		tb_status_button(fevent_HOTLIST_SHOW, TRUE); */
 	    }
 
 	    e = fe_hotlist_write_file(f, FALSE, frame);
@@ -1474,16 +1474,12 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	    if (frame <= 0)
 	    {
 		sound_event(snd_HOTLIST_DELETE_SHOW);
-/* 		tb_status_button(fevent_HOTLIST_SHOW_DELETE, TRUE); */
 	    }
 	    
 	    e = fe_hotlist_delete_write_file(f, FALSE, frame);
 	}
 	else if (strcasecomp(panel_name, "favswitch") == 0)
 	{
-/* 	    if (frame <= 0) */
-/* 		tb_status_button(fevent_HOTLIST_SHOW_SWITCHABLE, TRUE); */
-
 	    if (mode && strcasecomp(mode, "delete") == 0)
 	    {
 		if (frame <= 0)
@@ -1501,7 +1497,6 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	}
 	else if (strcasecomp(panel_name, "find") == 0)
 	{
-/* 	    tb_status_button(fevent_OPEN_FIND, TRUE); */
 	    sound_event(snd_FIND_SHOW);
 	    e = fe_find_write_file(f, query);
 	}
@@ -1510,7 +1505,6 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	    if (frame <= 0)
 	    {
 		sound_event(snd_HISTORY_SHOW);
-/* 		tb_status_button(fevent_HISTORY_SHOW_SWITCHABLE, TRUE); */
 	    }
 
 	    if (mode && strcasecomp(mode, "alpha") == 0)
@@ -1529,7 +1523,6 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	    if (frame <= 0)
 	    {
 		sound_event(snd_HISTORY_SHOW);
-/* 		tb_status_button(fevent_HISTORY_SHOW_ALPHA, TRUE); */
 	    }
 	    e = fe_global_write_list(f, FALSE, frame);
 	}
@@ -1541,7 +1534,6 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 		if (frame <= 0)
 		{
 		    sound_event(snd_HISTORY_SHOW);
-/* 		    tb_status_button(fevent_HISTORY_SHOW_RECENT, TRUE); */
 		}
 		e = fe_history_write_list(f, v->last, v->hist_at, FALSE, frame);
 	    }
@@ -1552,7 +1544,6 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	    if (v)
 	    {
 		sound_event(snd_HISTORY_SHOW);
-/* 		tb_status_button(fevent_HISTORY_SHOW, TRUE); */
 		e = fe_history_write_combined_list(f, v->first, v->hist_at);
 	    }
 	}
@@ -1560,7 +1551,6 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	{
 	    v = get_source_view(query, FALSE);
 	    sound_event(snd_INFO_SHOW);
-/* 	    tb_status_button(fevent_INFO_PAGE, TRUE); */
 	    e = fe_version_write_file(f, v ? v->displaying : NULL, query);
 	}
 	else if (strcasecomp(panel_name, "memdump") == 0)
@@ -1570,7 +1560,6 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	else if (strcasecomp(panel_name, "printoptions") == 0)
 	{
 	    sound_event(snd_PRINT_OPTIONS_SHOW);
-/* 	    tb_status_button(fevent_OPEN_PRINT_OPTIONS, TRUE); */
 
 	    e = fe_print_options_write_file(f);
 	}
@@ -1611,7 +1600,6 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	    }
 	    
 	    sound_event(snd_OPEN_URL_SHOW);
-/* 	    tb_status_button(fevent_OPEN_URL, TRUE); */
 
 	    e = fe_openurl_write_file(f, def ? def : msgs_lookup("opendef"), url);
 
@@ -1620,31 +1608,26 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	else if (strcasecomp(panel_name, "urlfavs") == 0)
 	{
 	    sound_event(snd_HOTLIST_SHOW);
-/* 	    tb_status_button(fevent_HOTLIST_SHOW_WITH_URL, TRUE); */
 	    e = fe_hotlist_and_openurl_write_file(f);
 	}
 	else if (strcasecomp(panel_name, "customfonts") == 0)
 	{
 	    sound_event(snd_MENU_SHOW);
-/* 	    tb_status_button(fevent_OPEN_FONT_SIZE, TRUE); */
 	    e = fe_custom_write_file(f, "fonts", NVRAM_FONTS_TAG, 3, 0);
 	}
 	else if (strcasecomp(panel_name, "customsound") == 0)
 	{
 	    sound_event(snd_MENU_SHOW);
-/* 	    tb_status_button(fevent_OPEN_SOUND, TRUE); */
 	    e = fe_custom_write_file(f, "sound", NVRAM_SOUND_TAG, 2, config_sound_background);
 	}
 	else if (strcasecomp(panel_name, "custombeeps") == 0)
 	{
 	    sound_event(snd_MENU_SHOW);
-/* 	    tb_status_button(fevent_OPEN_BEEPS, TRUE); */
 	    e = fe_custom_write_file(f, "beeps", NVRAM_BEEPS_TAG, 2, config_sound_fx);
 	}
 	else if (strcasecomp(panel_name, "customscaling") == 0)
 	{
 	    sound_event(snd_MENU_SHOW);
-/* 	    tb_status_button(fevent_OPEN_SCALING, TRUE); */
 	    e = fe_custom_write_file(f, "scaling", NVRAM_SCALING_TAG, 2, config_display_scale_fit);
 	}
 	else if (strcasecomp(panel_name, "error") == 0)
@@ -1709,8 +1692,6 @@ static int internal_url_loadurl(const char *query, const char *bfile, const char
 	    mm_free(loadurl_last);
 	    loadurl_last = strdup(*new_url);
 	}
-
-/* 	tb_status_button(fevent_OPEN_URL, FALSE); */
 
 	mm_free(nocache);
 	mm_free(remember);
@@ -2084,7 +2065,7 @@ static int internal_action_opentoolbar(const char *query, const char *bfile, con
     int generated = fe_internal_url_ERROR;
     int event;
 
-    if (bar == NULL)
+    if (bar == NULL || !use_toolbox)
 	return generated;
 
     event = tb_bar_get_num_from_name(bar);
@@ -2403,8 +2384,8 @@ void fe_internal_deleting_view(fe_view v)
 	v->submitonunload = NULL;
     }
 
-    /* generuic button unhighlighter */
-    if (v->select_button)
+    /* generic button unhighlighter */
+    if (v->select_button && use_toolbox)
     {
 	tb_status_button(v->select_button, tb_status_button_INACTIVE);
 
@@ -2413,113 +2394,13 @@ void fe_internal_deleting_view(fe_view v)
     }
     
     /* check for special stuff */
-#if 0
-    if (strcasecomp(v->name, "__favs") == 0)
-    {
-	tb_status_button(fevent_HOTLIST_SHOW, tb_status_button_INACTIVE);
-    }
-    else if (strcasecomp(v->name, "__urlfavs") == 0)
-    {
-	tb_status_button(fevent_HOTLIST_SHOW_WITH_URL, tb_status_button_INACTIVE);
-    }
-    else if (strcasecomp(v->name, "__favsdelete") == 0)
-    {
-/* 	backend_submit_form(v->displaying, "favsd", FALSE); */
-
-	tb_status_button(fevent_HOTLIST_SHOW_DELETE, tb_status_button_INACTIVE);
-    }
-    else if (strcasecomp(v->name, "__historyswitch") == 0)
-    {
-	tb_status_button(fevent_HISTORY_SHOW_SWITCHABLE, tb_status_button_INACTIVE);
-	tb_status_button(fevent_HISTORY_SHOW_SWITCHABLE_FRAMES, tb_status_button_INACTIVE);
-    }
-    else if (strcasecomp(v->name, "__historyalpha") == 0)
-    {
-	tb_status_button(fevent_HISTORY_SHOW_ALPHA, tb_status_button_INACTIVE);
-	tb_status_button(fevent_HISTORY_SHOW_ALPHA_FRAMES, tb_status_button_INACTIVE);
-    }
-    else if (strcasecomp(v->name, "__historycombined") == 0)
-    {
-	tb_status_button(fevent_HISTORY_SHOW, tb_status_button_INACTIVE);
-    }
-    else if (strcasecomp(v->name, "__historyrecent") == 0)
-    {
-	tb_status_button(fevent_HISTORY_SHOW_RECENT, tb_status_button_INACTIVE);
-	tb_status_button(fevent_HISTORY_SHOW_RECENT_FRAMES, tb_status_button_INACTIVE);
-    }
-    else if (strcasecomp(v->name, TARGET_INFO) == 0)
-    {
-	tb_status_button(fevent_INFO_PAGE, tb_status_button_INACTIVE);
-    }
-    else if (strcasecomp(v->name, "__url") == 0)
-    {
-	tb_status_button(fevent_OPEN_URL, tb_status_button_INACTIVE);
-    }
-    else if (strcasecomp(v->name, "__customfonts") == 0)
-    {
-	tb_status_button(fevent_OPEN_FONT_SIZE, tb_status_button_INACTIVE);
-    }
-    else if (strcasecomp(v->name, "__customsound") == 0)
-    {
-	tb_status_button(fevent_OPEN_SOUND, tb_status_button_INACTIVE);
-    }
-    else if (strcasecomp(v->name, "__custombeeps") == 0)
-    {
-	tb_status_button(fevent_OPEN_BEEPS, tb_status_button_INACTIVE);
-    }
-    else if (strcasecomp(v->name, "__customscaling") == 0)
-    {
-	tb_status_button(fevent_OPEN_SCALING, tb_status_button_INACTIVE);
-    }
-    else if (strcasecomp(v->name, "__print") == 0)
-    {
-	tb_status_button(fevent_PRINT, tb_status_button_INACTIVE);
-
-	/* move highlight back to PRINT SETUP button */
-	if (pointer_mode == pointermode_OFF && tb_is_status_showing())
-	    tb_status_button(fevent_PRINT, tb_status_button_PRESSED);
-    }
-    else if (strcasecomp(v->name, "__printframes") == 0)
-    {
-	tb_status_button(fevent_OPEN_PRINT_OPTIONS, tb_status_button_INACTIVE);
-
-	/* move highlight back to PRINT SETUP button */
-	if (pointer_mode == pointermode_OFF && tb_is_status_showing())
-	    tb_status_button(fevent_OPEN_PRINT_OPTIONS, tb_status_button_PRESSED);
-    }
-    else if (strcasecomp(v->name, "__printoptions") == 0)
-    {
-	tb_status_button(fevent_OPEN_PRINT_OPTIONS, tb_status_button_INACTIVE);
-
-	/* move highlight back to PRINT SETUP button */
-	if (pointer_mode == pointermode_OFF && tb_is_status_showing())
-	    tb_status_button(fevent_OPEN_PRINT_OPTIONS, tb_status_button_PRESSED);
-    }
-    else if (strcasecomp(v->name, "__printletter") == 0)
-    {
-	tb_status_button(fevent_PRINT_LETTER, tb_status_button_INACTIVE);
-
-	/* move highlight back to PRINT SETUP button */
-	if (pointer_mode == pointermode_OFF && tb_is_status_showing())
-	    tb_status_button(fevent_PRINT_LETTER, tb_status_button_PRESSED);
-    }
-    else if (strcasecomp(v->name, "__printlegal") == 0)
-    {
-	tb_status_button(fevent_PRINT_LEGAL, tb_status_button_INACTIVE);
-
-	/* move highlight back to PRINT SETUP button */
-	if (pointer_mode == pointermode_OFF && tb_is_status_showing())
-	    tb_status_button(fevent_PRINT_LEGAL, tb_status_button_PRESSED);
-    }
-    else
-#endif
-	if (strcasecomp(v->name, TARGET_ERROR) == 0 ||
-	     strncmp(v->name, TARGET_DBOX, sizeof(TARGET_DBOX)-1) == 0)
+    if (strcasecomp(v->name, TARGET_ERROR) == 0 ||
+	strncmp(v->name, TARGET_DBOX, sizeof(TARGET_DBOX)-1) == 0)
     {
 	/* move highlight to default spot on toolbar (down arrow) */
  	if (pointer_mode == pointermode_OFF)
 	{
-	    if (tb_is_status_showing())
+	    if (use_toolbox && tb_is_status_showing())
 		tb_status_highlight(TRUE);
 	    else
 		fe_ensure_highlight(v->prev, 0);
@@ -2572,7 +2453,7 @@ os_error *fe_internal_toggle_panel_args(const char *panel_name, const char *args
     if (fe_internal_check_popups(clear))
     {
 	/* force open the toolbar */
-	if (!tb_is_status_showing())
+	if (use_toolbox && !tb_is_status_showing())
 	    fe_status_state(main_view, TRUE);
 	    
 	e = frontend_open_url(url, NULL, target, NULL, fe_open_url_NO_CACHE | fe_open_url_NO_ENCODING_OVERRIDE);

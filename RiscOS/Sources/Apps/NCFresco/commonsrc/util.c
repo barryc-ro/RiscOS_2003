@@ -857,6 +857,7 @@ static char count = 0;
 
 char *rs_tmpnam(char *s)
 {
+    FILE *f;
     _kernel_osfile_block fb;
     
     if (!s)
@@ -985,18 +986,30 @@ int get_free_memory_size(void)
 
 #if UNICODE
 
-extern int parse_content_type_header(const char *value)
+extern char *parse_content_type_header_charset(const char *value)
 {
     static const char *tags[] = { "CHARSET", 0 };
     name_value_pair output[1];
     char *s = strdup(value);
-    int encoding = 0;
+    char *encoding;
 		    
     parse_http_header(s, tags, output, sizeof(output)/sizeof(output[0]));
 
-    if (output[0].value)
+    encoding = strdup(output[0].value);
+    
+    mm_free(s);
+
+    return encoding;
+}
+
+extern int parse_content_type_header(const char *value)
+{
+    char *s = parse_content_type_header_charset(value);
+    int encoding = 0;
+
+    if (s)
     {
-	encoding = encoding_number_from_name(output[0].value);
+	encoding = encoding_number_from_name(s);
 
 #ifdef STBWEB
 	/* PC people are dumb and say ASCII or ISO-8859-1 and then use
@@ -1021,7 +1034,7 @@ os_error *process_utf8_as_latin1(const char *text, int in_n, process_utf8_callba
     static Encoding *latin1_encoding = NULL;
 
     if (latin1_encoding == NULL)
-	latin1_encoding = encoding_new(csAcornFuzzy, TRUE);
+	latin1_encoding = encoding_new(csAcornFuzzy, encoding_WRITE);
 
     return process_utf8(text, in_n, latin1_encoding, fn, handle);
 }
@@ -1050,7 +1063,7 @@ os_error *process_utf8(const char *text, int n, Encoding *enc, process_utf8_call
 	    read = UTF8_to_UCS4(text + in_n, &u);
 
 	    /* try to reencode it to buffer[] */
-	    if (encoding_write(enc, u, &bufptr, &bufsize))
+	    if (encoding_write(enc, u, &bufptr, &bufsize) > 0)
 	    {
 		/* if we could then consume the input value */
 		in_n += read;

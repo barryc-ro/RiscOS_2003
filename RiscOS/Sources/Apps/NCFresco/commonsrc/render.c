@@ -624,7 +624,8 @@ int render_text_full(be_doc doc, int font_index, const char *text, int x, int y,
 	return FALSE;
 
 #if 1
-    flags = 1<<11;
+    if (config_display_blending)
+	flags = 1<<11;
 #else
     flags = 0;
     /* do we need font blending? */

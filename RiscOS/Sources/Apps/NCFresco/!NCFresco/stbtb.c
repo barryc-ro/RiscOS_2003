@@ -62,6 +62,11 @@ typedef enum
 #define I_SECURE        0x103
 #define I_DIRECTION	0x104
 
+#define I_NUM_LOCK	0x110
+#define I_CAPS_LOCK	0x111
+#define I_SCROLL_LOCK	0x112
+#define I_MODEM		0x113
+
 /* --------------------------------------------------------------------------*/
 
 #define bar_type_STANDARD	0
@@ -172,10 +177,17 @@ static tb_bar_descriptor *find_bar_from_name(const char *name)
  */
 
 static tb_bar_info *bar_list = NULL;
-
 static void *tile_sprite = NULL;
 
-static int secure_light = FALSE;
+/* --------------------------------------------------------------------------*/
+
+static int state_lights = 0;
+
+#define state_SECURE		(1<<0)
+#define state_NUM_LOCK		(1<<1)
+#define state_CAPS_LOCK		(1<<2)
+#define state_SCROLL_LOCK	(1<<3)
+#define state_MODEM		(1<<4)
 
 /* --------------------------------------------------------------------------*/
 
@@ -993,15 +1005,29 @@ void tb_status_new(fe_view v, int bar_num)
     tb_bar_info *tbi;
     int old_bar = bar_list ? bar_list->num : -1;
 
-    STBDBG(("tb_status_new(): in\n"));
+    STBDBG(("tb_status_new(): in bar_num %d old_bar %d old_state %d\n", bar_num, old_bar, old_state));
     
     /* is this one already open */
     if (old_bar == bar_num)
 	return;
 
-    /* dipose of what's there currently */
+    /* dispose of what's there currently */
     tb_bar_dispose(TRUE);
-    
+
+    /* if we are cycling to the next one then work out which it is */
+    if (bar_num == -1)
+    {
+	tb_bar_descriptor *tbd;
+
+	bar_num = old_bar + 1;
+
+	if ((tbd = find_bar_from_number(bar_num)) == NULL ||
+	    tbd->type == bar_type_CODEC)
+	{
+	    bar_num = 0;
+	}
+    }
+
     /* create a new one */
     if ((tbi = tb_bar_init(bar_num)) != NULL)
     {
@@ -1023,7 +1049,7 @@ void tb_status_new(fe_view v, int bar_num)
 	    setfocus(tbi->object_handle);
 	}
 
-	if (secure_light)
+	if (state_lights & state_SECURE)
 	    setstate(tbi->object_handle, I_SECURE, TRUE);
     }
 
@@ -1453,10 +1479,10 @@ static void mshow_tools(fe_view v, int obj)
 
 static void mshow_encoding(fe_view v, int obj)
 {
-    int encoding = fe_encoding(v, be_encoding_READ);
+    int encoding = fe_encoding(v, fe_encoding_READ);
     int i;
 
-/*     STBDBG(("mshow_encoding: v %p encoding %d\n", v, encoding)); */
+/*  STBDBG(("mshow_encoding: v %p encoding %d\n", v, encoding)); */
 
     for (i = 0; i < 4; i++)
     {
@@ -2048,13 +2074,6 @@ int tb_status_redraw(wimp_redrawstr *r)
     return FALSE;
 }
 
-void tb_status_set_secure(int on)
-{
-    if (bar_list)
-	setstate(bar_list->object_handle, I_SECURE, on);
-    secure_light = on;
-}
-
 static int light_state = light_state_OFF;
 
 static void set_lights_off(int called_at, void *handle)
@@ -2096,6 +2115,61 @@ void tb_status_init(void)
     STBDBG(("tb_init():tile sprite %p\n", tile_sprite));
 
     tb_bar_init(config_display_control_initial);
+}
+
+/* --------------------------------------------------------------------------*/
+
+void tb_status_set_key_leds(void)
+{
+    int r, state;
+
+    r = _kernel_osbyte(202, 0, 255);
+    state = state_lights &~ (state_NUM_LOCK | state_CAPS_LOCK | state_SCROLL_LOCK);
+    
+    if ((r & (1<<(2 + 8))) == 0)
+	state |= state_NUM_LOCK;
+    
+    if ((r & (1<<(4 + 8))) == 0)
+	state |= state_CAPS_LOCK;
+    
+    if (r & (1<<(1 + 8)))
+	state |= state_SCROLL_LOCK;
+
+    if (bar_list)
+    {
+	int diff = state ^ state_lights;
+
+	state_lights = state;
+	
+	if (diff & state_NUM_LOCK)
+	    setstate(bar_list->object_handle, I_NUM_LOCK, state & state_NUM_LOCK);
+	if (diff & state_CAPS_LOCK)
+	    setstate(bar_list->object_handle, I_CAPS_LOCK, state & state_CAPS_LOCK);
+	if (diff & state_SCROLL_LOCK)
+	    setstate(bar_list->object_handle, I_SCROLL_LOCK, state & state_SCROLL_LOCK);
+    }
+}
+
+void tb_status_set_secure(int on)
+{
+    if (bar_list)
+	setstate(bar_list->object_handle, I_SECURE, on);
+
+    if (on)
+	state_lights |= state_SECURE;
+    else
+	state_lights &= ~state_SECURE;
+}
+
+void tb_status_set_modem(int on)
+{
+    if (bar_list)
+	setstate(bar_list->object_handle, I_MODEM, on);
+
+    if (on)
+	state_lights |= state_MODEM;
+    else
+	state_lights &= ~state_MODEM;
 }
 
 /* --------------------------------------------------------------------------*/

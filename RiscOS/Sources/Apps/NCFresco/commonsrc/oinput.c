@@ -347,9 +347,7 @@ void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
 
     case rid_it_TEXT:
     case rid_it_PASSWD:
-	whichfont = WEBFONT_TTY;
-
-        antweb_doc_ensure_font( doc, whichfont );
+	whichfont = antweb_getwebfont(doc, ti, WEBFONT_TTY);
 
 	if (ii->ww.type == value_absunit)
 	    ti->width = (int)ii->ww.u.f;
@@ -552,7 +550,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
     case rid_it_PASSWD:
     {
 	int has_caret;
-	whichfont = WEBFONT_TTY;
+	whichfont = antweb_getwebfont(doc, ti, WEBFONT_TTY);
 	plotx = hpos + 10;
 
 	slen = strlen(ii->data.str);
@@ -917,13 +915,14 @@ char *oinput_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
 	    int len = strlen(ii->data.str);
 	    int coords[8];
 	    int text_input_offset;
+	    int whichfont = antweb_getwebfont(doc, ti, WEBFONT_TTY);
 
 	    x-=INPUT_TEXT_BORDER_X;
 
 	    /* take into account scrolled strings */
 	    if (be_item_has_caret(doc, ti))
 	    {
-		x = get_string_start(WEBFONT_TTY, ii->data.str, doc->selection.data.text.input_offset,
+		x = get_string_start(whichfont, ii->data.str, doc->selection.data.text.input_offset,
 				     x, ii->base.display->width - 2*INPUT_TEXT_BORDER_X,
 				     ii->flags & rid_if_NUMBERS);
 	    }
@@ -933,7 +932,7 @@ char *oinput_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
 	    coords[3] = 0;
 	    coords[4] = -1;
 
-	    text_input_offset = webfont_get_offset(WEBFONT_TTY, ii->data.str, x,
+	    text_input_offset = webfont_get_offset(whichfont, ii->data.str, x,
 						   ii->flags & rid_if_NUMBERS ? coords : NULL, len);
 
 	    LNKDBG(( "Caret set to item %p, offset %d\n", ti, text_input_offset));
@@ -1154,6 +1153,7 @@ BOOL oinput_caret(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int repos)
     int cx, cy;
     int h;
     int slen;
+    int whichfont;
 
     LNKDBG(( "oinput_caret: repos=%d\n", repos));
 
@@ -1174,6 +1174,7 @@ BOOL oinput_caret(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int repos)
 	    return FALSE;
 	}
 
+	whichfont = antweb_getwebfont(doc, ti, WEBFONT_TTY);
 	slen = strlen(ii->data.str);
 
 	if (doc->selection.data.text.input_offset < 0)
@@ -1193,8 +1194,8 @@ BOOL oinput_caret(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int repos)
 	    antweb_update_item(doc, ti);
 
 	stream_find_item_location(ti, &cx, &cy);
-	x1 = webfont_font_width_n(WEBFONT_TTY, ii->data.str, doc->selection.data.text.input_offset);
-	x2 = webfont_font_width_n(WEBFONT_TTY, ii->data.str, slen);
+	x1 = webfont_font_width_n(whichfont, ii->data.str, doc->selection.data.text.input_offset);
+	x2 = webfont_font_width_n(whichfont, ii->data.str, slen);
 
 	if (ii->flags & rid_if_NUMBERS)
 	{
@@ -1226,13 +1227,13 @@ BOOL oinput_caret(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int repos)
 	    }
 	}
 
-	cy -= webfonts[WEBFONT_TTY].max_down;
+	cy -= webfonts[whichfont].max_down;
 
 #if USE_MARGINS
 	cx += doc->margin.x0;
 	cy += doc->margin.y1;
 #endif
-	h = webfonts[WEBFONT_TTY].max_up + webfonts[WEBFONT_TTY].max_down;
+	h = webfonts[whichfont].max_up + webfonts[whichfont].max_down;
 	h |= render_caret_colour(doc, ii->base.colours.select != -1 ? ii->base.colours.select : ii->base.colours.back, ii->base.colours.cursor);
 
 	frontend_view_caret(doc->parent, cx, cy, h, repos == object_caret_REPOSITION || repos == object_caret_FOCUS);

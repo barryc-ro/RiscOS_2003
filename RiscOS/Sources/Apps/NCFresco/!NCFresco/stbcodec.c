@@ -35,7 +35,7 @@ static void recording_start(void)
     if (e) STBDBG(("recording: start %x %s\n", e->errnum, e->errmess));
 #endif
 
-    if (!e)
+    if (!e && use_toolbox)
 	tb_status_button(fevent_CODEC_RECORD, tb_status_button_ACTIVE);
 }
 
@@ -55,7 +55,8 @@ static void recording_stop(void)
 #if DEBUG
     if (e) STBDBG(("recording: stop %x %s\n", e->errnum, e->errmess));
 #endif
-    tb_status_button(fevent_CODEC_RECORD, tb_status_button_INACTIVE);
+    if (use_toolbox)
+	tb_status_button(fevent_CODEC_RECORD, tb_status_button_INACTIVE);
 }
 
 /* ------------------------------------------------------------------------------------------- */

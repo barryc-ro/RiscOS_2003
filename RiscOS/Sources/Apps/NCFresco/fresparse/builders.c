@@ -1044,7 +1044,9 @@ extern void text_item_push_textarea(HTMLCTX * me, VALUE *name, VALUE *rows, VALU
 	me->aref->first = nb;
     GET_ROSTYLE(nb->st);
     nb->language = UNPACK(me->sgmlctx->tos->effects_active, LANG_NUM);
-
+    if (me->rh->language_num > 1)
+	nb->flag |= rid_flag_WIDE_FONT;
+    
 #if NEW_TEXTAREA
     memzone_init(&ta->default_text, MEMZONE_CHUNKS);
     memzone_init(&ta->text, MEMZONE_CHUNKS);

@@ -1065,7 +1065,7 @@ void fe_cursor_movement(fe_view v, int x, int y)
 {
     int flags;
 
-    if (y)
+    if (y && use_toolbox)
 	tb_status_set_direction(y > 0);
 
     flags = be_link_TEXT | be_link_CARETISE; /* always caretise as its coming from the on screen keyboard */

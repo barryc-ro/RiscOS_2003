@@ -587,6 +587,8 @@ static void pre_deliver_word(SGMLCTX *context, int reason, STRING item, ELEMENT 
 	    int off;
 	    tai = htmlctx->form->last_text;
 
+	    PRSDBG(("pre_deliver_word: mz.used %d\n", tai->default_text.used));
+
 	    null.bytes = 0;
 	    text = get_tab_expanded_string(item, null);
 	    if ((off = memzone_alloc(&tai->default_text, text.bytes + 1)) != -1)
@@ -601,6 +603,9 @@ static void pre_deliver_word(SGMLCTX *context, int reason, STRING item, ELEMENT 
 
 		flexmem_shift();
 	    }
+
+	    PRSDBG(("pre_deliver_word: text.bytes %d mz.used %d off %d\n", text.bytes, tai->default_text.used, off));
+
 	    string_free(&text);
 	}
 	else

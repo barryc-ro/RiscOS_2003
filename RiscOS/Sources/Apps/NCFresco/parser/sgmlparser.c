@@ -84,7 +84,7 @@ extern void sgml_set_encoding(SGMLCTX *context, int enc_num)
 	PRSDBG(("sgml_set_encoding: sgmlctx %p new encoding %d\n", context, enc_num));
 
 	/* for safety check that ew can get the new encoding */
-	if ((new_enc = encoding_new(enc_num, FALSE)) != NULL)
+	if ((new_enc = encoding_new(enc_num, encoding_READ)) != NULL)
 	{
 	    if (context->encoding)
 		encoding_delete(context->encoding);
@@ -231,7 +231,7 @@ extern void sgml_stream_finished (SGMLCTX *context)
 	 */
 	if (context->encoding)
 	    encoding_delete(context->encoding);
-	context->encoding = encoding_new(csUnicode11, FALSE);
+	context->encoding = encoding_new(csUnicode11, encoding_READ);
 
 	/* prime the stream to be recognised as little-endian */
 	{

@@ -4382,24 +4382,15 @@ extern be_item backend_locate_id(be_doc doc, const char *id)
 }
 
 #ifdef STBWEB
-extern int backend_doc_encoding(be_doc doc, int encoding)
+extern int backend_doc_encoding(be_doc doc, int *encoding_user, int *encoding_user_override)
 {
-    int old_encoding;
+    if (encoding_user)
+	*encoding_user = doc ? doc->encoding_user : config_encoding_user;
 
-    if (doc == NULL)
-    {
-	old_encoding = config_encoding_user;
-	if (encoding != be_encoding_READ)
-	    config_encoding_user = encoding;
-    }
-    else
-    {
-	old_encoding = doc->encoding_user;
-	if (encoding != be_encoding_READ)
-	    config_encoding_user = doc->encoding_user = encoding;
-    }
+    if (encoding_user_override)
+	*encoding_user_override = doc ? doc->encoding_user_override : config_encoding_user_override;
 
-    return old_encoding;
+    return doc ? doc->rh->encoding : 0;
 }
 #endif
 

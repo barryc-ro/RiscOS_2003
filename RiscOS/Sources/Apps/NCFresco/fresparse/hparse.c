@@ -371,14 +371,14 @@ static SGMLCTX * SGML_new(HTMLCTX *me, int encoding)
 #if UNICODE
     /* initialiase encoding to what's decided in HTML init, this value will come from user or HTTP header */
     PRSDBG(("set_encoding: encoding set to %d language %s (%d)\n", me->rh->encoding, me->rh->language, me->rh->language_num));
-    context->encoding = encoding_new(me->rh->encoding, FALSE);
+    context->encoding = encoding_new(me->rh->encoding, encoding_READ);
 
     /* be safe - if can't load encoding then use ASCII - guaranteed to work */
     if (context->encoding == NULL)
     {
 	PRSDBG(("set_encoding: default to ASCII\n"));
 	me->rh->encoding = csASCII;
-	context->encoding = encoding_new(me->rh->encoding, FALSE);
+	context->encoding = encoding_new(me->rh->encoding, encoding_READ);
     }
 	
     context->enc_num = encoding;
@@ -415,7 +415,7 @@ static SGMLCTX * SGML_new(HTMLCTX *me, int encoding)
 	
 	if (enc)
 	{
-	    context->encoding_write = encoding_new(enc, TRUE);
+	    context->encoding_write = encoding_new(enc, encoding_WRITE);
 	    context->enc_num_write = enc;
 	}
     }
@@ -424,7 +424,7 @@ static SGMLCTX * SGML_new(HTMLCTX *me, int encoding)
     {
 	PRSDBG(("set_encoding: write encoding default to ASCII\n"));
 
-	context->encoding_write = encoding_new(csASCII, TRUE);
+	context->encoding_write = encoding_new(csASCII, encoding_WRITE);
 	context->enc_num_write = csASCII;
     }
 #endif

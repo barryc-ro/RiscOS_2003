@@ -144,6 +144,7 @@ extern os_error *iterate_frames(fe_view top, os_error *(*fn)(fe_view v, void *ha
 
 extern void fe_cursor_movement(fe_view v, int x, int y);
 
+#define fe_encoding_READ (-1)
 extern int fe_encoding(fe_view v, int encoding);
 
 extern int caretise(void);

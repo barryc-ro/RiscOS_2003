@@ -319,7 +319,7 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 	    while (s && *s);
 	}
 
-	enc = encoding_new(enc_num, TRUE);
+	enc = encoding_new(enc_num, encoding_WRITE);
     }
 #endif
     

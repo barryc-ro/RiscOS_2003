@@ -82,7 +82,12 @@ config_item citems[] = {
       "image.deep",
       (void *)offsetof(struct config_str, deep_images),
       "Do we want deep colour for images?",
-      (void *) 0  },
+#ifdef STBWEB
+      (void *) 1
+#else
+      (void *) 0
+#endif
+      },
 { config_BOOL,
       "image.defer",
       (void *)offsetof(struct config_str, defer_images),
@@ -152,17 +157,17 @@ config_item citems[] = {
       "display.scale.1",
       (void *)offsetof(struct config_str, display_scales[0]),
       "Scale level 1",
-      (void *)  80 },
+      (void *) 100 },
 { config_INT,
       "display.scale.2",
       (void *)offsetof(struct config_str, display_scales[1]),
       "Scale level 2",
-      (void *) 100 },
+      (void *) 125 },
 { config_INT,
       "display.scale.3",
       (void *)offsetof(struct config_str, display_scales[2]),
       "Scale level 3",
-      (void *) 125 },
+      (void *) 150 },
 { config_BOOL,
       "display.scale.fit",
       (void *)offsetof(struct config_str, display_scale_fit),
@@ -182,7 +187,12 @@ config_item citems[] = {
       "display.blending",
       (void *)offsetof(struct config_str, display_blending),
       "Blend fonts to background",
-      (void *) 0  },
+#ifdef STBWEB
+      (void *) 1
+#else
+      (void *) 0
+#endif
+      },
 #ifdef STBWEB
 { config_INT,
       "display.margin.left",
@@ -214,7 +224,7 @@ config_item citems[] = {
       "display.frames",
       (void *)offsetof(struct config_str, display_frames),
       "Display frames",
-      (void *)0  },
+      (void *)1  },
 #ifdef STBWEB
 { config_BOOL,
       "display.frames.scrollbars",
@@ -247,7 +257,7 @@ config_item citems[] = {
       "display.time.fade",
       (void *)offsetof(struct config_str, display_time_fade),
       "Time to fade page out",
-      (void *)0 },
+      (void *)50 },
 #endif
 { config_BOOL,
       "display.map_coords",
@@ -263,17 +273,32 @@ config_item citems[] = {
       "display.leading",
       (void *)offsetof(struct config_str, display_leading),
       "half leading",
-      (void *) 25 },
+#ifdef STBWEB
+      (void *) 4
+#else
+      (void *) 25
+#endif
+      },
 { config_BOOL,
       "display.leading.percent",
       (void *)offsetof(struct config_str, display_leading_percent),
       "% or OS units",
-      (void *) 1 },
+#ifdef STBWEB
+      (void *) 0
+#else
+      (void *) 1
+#endif
+      },
 { config_INT,
       "display.char.password",
       (void *)offsetof(struct config_str, display_char_password),
       "password char",
-      (void *) '-' },
+#ifdef STBWEB
+      (void *) '*'
+#else
+      (void *) '-'
+#endif
+      },
 #ifdef STBWEB
 { config_INT,
       "display.highlight.style",
@@ -298,34 +323,39 @@ config_item citems[] = {
       "document.default",
       (void *)offsetof(struct config_str, doc_default),
       "Default document",
-      "Welcome"  },
 #ifdef STBWEB
-{ config_URL,
-      "document.handler.user",
-      (void *)offsetof(struct config_str, document_handler_user),
-      "Handler URL",
-      NULL  },
+      "<"PROGRAM_NAME"$Home>"
+#else
+      "Welcome"
+#endif
+      },
+#ifdef STBWEB
 { config_URL,
       "document.handler.related",
       (void *)offsetof(struct config_str, document_handler_related),
       "URL to fetch related stuff",
-      NULL  },
+      "<"PROGRAM_NAME"$Related>" },
 { config_URL,
       "document.search",
       (void *)offsetof(struct config_str, document_search),
       "URL to search from",
-      NULL  },
+      "<"PROGRAM_NAME"$Search>" },
 { config_URL,
       "document.offline",
       (void *)offsetof(struct config_str, document_offline),
       "URL of offline menu",
-      NULL  },
+      "<"PROGRAM_NAME"$Offline>" },
 #endif
 { config_INT,
       "encoding.user",
       (void *)offsetof(struct config_str, encoding_user),
       "default encoding MIB number",
-      (void *)0 },
+#ifdef STBWEB
+      (void *)2252
+#else
+      (void *)0
+#endif
+      },
 { config_BOOL,
       "encoding.user.override",
       (void *)offsetof(struct config_str, encoding_user_override),
@@ -347,12 +377,22 @@ config_item citems[] = {
       "files.hots",
       (void *)offsetof(struct config_str, hotlist_file),
       "Hotlist file",
-      "InetDBase:Hotlist"  },
+#ifdef STBWEB
+      "<"PROGRAM_NAME"$Hotlist>"
+#else
+      "InetDBase:Hotlist"
+#endif
+      },
 { config_FILE,
       "files.passwords",
       (void *)offsetof(struct config_str, auth_file),
       "File to store passwords in",
-      "<Fresco$Dir>.Users"  },
+#ifdef STBWEB
+      "<"PROGRAM_NAME"$Users>"
+#else
+      "<Fresco$Dir>.Users"
+#endif
+      },
 { config_BOOL,
       "files.passwords.encrypted",
       (void *)offsetof(struct config_str, auth_file_crypt),
@@ -362,27 +402,52 @@ config_item citems[] = {
       "files.runable",
       (void *)offsetof(struct config_str, runable_file),
       "This file lists the file types of files that will be run when fetched.",
-      "<"PROGRAM_NAME"$Dir>.Runables" },
+#ifdef STBWEB
+      "<"PROGRAM_NAME"$Runable>"
+#else
+      "<"PROGRAM_NAME"$Dir>.Runables"
+#endif
+      },
 { config_FILE,
       "files.allow",
       (void *)offsetof(struct config_str, allow_file),
       "If given, only allow access to sites listed in this file.",
-      NULL },
+#ifdef STBWEB
+      "<"PROGRAM_NAME"$Allow>"
+#else
+      NULL
+#endif
+      },
 { config_FILE,
       "files.deny",
       (void *)offsetof(struct config_str, deny_file),
       "If given, don't allow access to sites listed in this file.",
-      NULL },
+#ifdef STBWEB
+      "<"PROGRAM_NAME"$Deny>"
+#else
+      NULL
+#endif
+      },
 { config_FILE,
       "files.Help",
       (void *)offsetof(struct config_str, help_file),
       "URL of help pages",
-      NULL  }, /* SJM */
+#ifdef STBWEB
+      "<"PROGRAM_NAME"$Help>"
+#else
+      NULL
+#endif
+      },
 { config_FILE,
       "files.cookie",
       (void *)offsetof(struct config_str, cookie_file),
       "Where to store cookies",
-      "<"PROGRAM_NAME"$Dir>.Cookies" },
+#ifdef STBWEB
+      "<"PROGRAM_NAME"$Cookies>"
+#else
+      "<"PROGRAM_NAME"$Dir>.Cookies"
+#endif
+      },
 { config_FILE,
       "files.history",
       (void *)offsetof(struct config_str, history_file),
@@ -729,51 +794,6 @@ config_item citems[] = {
       (void *) NULL  },
 #endif
     
-#if 0 /* def STBWEB */
-
-{ config_COLOUR,
-      "colour.button.text",
-      (void *)offsetof(struct config_str, button_col[0]),
-      "Colour for button foreground",
-      (void *) 0 },
-{ config_COLOUR,
-      "colour.button.back",
-      (void *)offsetof(struct config_str, button_col[1]),
-      "Colour for button background",
-      (void *) 0xffffff00  },
-{ config_COLOUR,
-      "colour.button.text.highlight",
-      (void *)offsetof(struct config_str, button_col[2]),
-      "Colour for button foreground highlighted",
-      (void *) 0  },
-{ config_COLOUR,
-      "colour.button.back.highlight",
-      (void *)offsetof(struct config_str, button_col[3]),
-      "Colour for button background highlighted",
-      (void *) 0xffffff00  },
-
-{ config_COLOUR,
-      "colour.write.text",
-      (void *)offsetof(struct config_str, write_col[0]),
-      "Colour for write foreground",
-      (void *) 0 },
-{ config_COLOUR,
-      "colour.write.back",
-      (void *)offsetof(struct config_str, write_col[1]),
-      "Colour for write background",
-      (void *) 0xffffff00  },
-{ config_COLOUR,
-      "colour.write.text.highlight",
-      (void *)offsetof(struct config_str, write_col[2]),
-      "Colour for write foreground highlighted",
-      (void *) 0  },
-{ config_COLOUR,
-      "colour.write.back.highlight",
-      (void *)offsetof(struct config_str, write_col[3]),
-      "Colour for write background highlighted",
-      (void *) 0xffffff00  },
-#endif
-    
 { config_COMMENT, NULL, NULL, "", NULL },
 
 { config_BOOL,
@@ -858,17 +878,32 @@ config_item citems[] = {
       "cache.items",
       (void *)offsetof(struct config_str, cache_items),
       "Max number of items in the cache",
-      (void *) 48  },
+#ifdef STBWEB
+      (void *) 5625
+#else
+      (void *) 48
+#endif
+      },
 { config_BOOL,
       "cache.keep",
       (void *)offsetof(struct config_str, cache_keep),
       "Should the cache be kept across closedowns?",
-      (void *) 0  },
+#ifdef STBWEB
+      (void *) 1
+#else
+      (void *) 0
+#endif
+      },
 { config_BOOL,
       "cache.keep.uptodate",
       (void *)offsetof(struct config_str, cache_keep_uptodate),
       "Save the cachedump on every update",
-      (void *) 0 },
+#ifdef STBWEB
+      (void *) 1
+#else
+      (void *) 0
+#endif
+      },
 
 { config_COMMENT, NULL, NULL, "", NULL },
 
@@ -891,7 +926,7 @@ config_item citems[] = {
       "print.noback",
       (void *)offsetof(struct config_str, print_nobg),
       "Suppress backgrouds in printout",
-      (void *) 0  },
+      (void *) 1  },
 { config_BOOL,
       "print.nocols",
       (void *)offsetof(struct config_str, print_nocol),
@@ -948,12 +983,12 @@ config_item citems[] = {
       "mode.mouse.adjust",
       (void *)offsetof(struct config_str, mode_mouse_adjust),
       "Adjust click action",
-      (void *)0  },
+      (void *)0x203E  },
 { config_INT,
       "mode.mouse.menu",
       (void *)offsetof(struct config_str, mode_mouse_menu),
       "Menu click action",
-      (void *)0  },
+      (void *)0x2001  },
 { config_INT,
       "mode.errors",
       (void *)offsetof(struct config_str, mode_errors),
@@ -999,7 +1034,12 @@ config_item citems[] = {
       "broken.formpost",
       (void *)offsetof(struct config_str, broken_formpost),
       "Set this to use Netscape POST redirections",
-      (void *)0  },
+#ifdef STBWEB
+      (void *)1
+#else
+      (void *)0
+#endif
+      },
 { config_BOOL,
       "cookie.enable",
       (void *)offsetof(struct config_str, cookie_enable),
@@ -1009,27 +1049,47 @@ config_item citems[] = {
       "cookie.uptodate",
       (void *)offsetof(struct config_str, cookie_uptodate),
       "Save cookies on every update",
-      (void *)0 },
+#ifdef STBWEB
+      (void *)1
+#else
+      (void *)0
+#endif
+      },
 { config_BOOL,
       "passwords.uptodate",
       (void *)offsetof(struct config_str, passwords_uptodate),
       "Save passwords on every update",
-      (void *)0 },
+#ifdef STBWEB
+      (void *)1
+#else
+      (void *)0
+#endif
+      },
 { config_FILE,
       "plugin.file",
       (void *)offsetof(struct config_str, plugin_file),
       "Configure file for plugins",
-      "<"PROGRAM_NAME"$Dir>.PlugIns" },
+#ifdef STBWEB
+      "<"PROGRAM_NAME"$PlugIns>"
+#else
+      "<"PROGRAM_NAME"$Dir>.PlugIns"
+#endif
+      },
 { config_BOOL,
       "plugin.uptodate",
       (void *)offsetof(struct config_str, plugin_uptodate),
       "Keep plugin file up to date",
-      (void *)0 },
+      (void *)1 },
 { config_BOOL,
       "netscape.fake",
       (void *)offsetof(struct config_str, netscape_fake),
       "Alter UserAgent header",
-      (void *)0 },
+#ifdef STBWEB
+      (void *)1
+#else
+      (void *)0
+#endif
+      },
 { config_INT,
       "hots.length",
       (void *)offsetof(struct config_str, hots_length),
@@ -1573,35 +1633,36 @@ static void config_default_first(void)
 
     for(i=0; citems[i].type != config_LAST; i++)
     {
+	config_item *cp = &citems[i];
 
-	switch(citems[i].type)
+	switch(cp->type)
 	{
 	case config_INT:
 	case config_BOOL:
 	case config_COLOUR:
-            citems[i].ptr = (char *)&config_array + (int)(long)citems[i].ptr;
-	    *((int*) (long)citems[i].ptr) = (int)(long)(citems[i].def);
+            cp->ptr = (char *)&config_array + (int)(long)cp->ptr;
+	    *((int*) (long)cp->ptr) = (int)(long)(cp->def);
 	    break;
 
 	case config_FONT:
 	case config_STRING:
 	case config_FILE:
 	case config_URL:
-            citems[i].ptr = (char *)&config_array + (int) (long) citems[i].ptr;
-	    if ((char*) citems[i].def == 0)
-		*((char**) citems[i].ptr) = 0;
+            cp->ptr = (char *)&config_array + (int) (long) cp->ptr;
+	    if ((char*) cp->def == 0)
+		*((char**) cp->ptr) = 0;
 	    else
-		*((char**) citems[i].ptr) = strdup((char*) citems[i].def);
+		*((char**) cp->ptr) = strdup((char*) cp->def);
 	    break;
 
 	case config_INT_LIST:
 	case config_COLOUR_LIST:
 	case config_STRING_LIST:
-            citems[i].ptr = (char *)&config_array + (int) (long) citems[i].ptr;
-	    if ((int*) citems[i].def == 0)
-		*((int**) citems[i].ptr) = 0;
+            cp->ptr = (char *)&config_array + (int) (long) cp->ptr;
+	    if ((int*) cp->def == 0)
+		*((int**) cp->ptr) = 0;
 	    else
-		*((int**) citems[i].ptr) = config_read_list((char *)citems[i].def, citems[i].type);
+		*((int**) cp->ptr) = config_read_list((char *)cp->def, cp->type);
 	    break;
 	}
     }
@@ -1622,57 +1683,77 @@ extern void config_write_file_by_name(const char *file_name)
 	return;
     }
 
+    if (filter_fn)
+	filter_fn(config_filter_phase_START_WRITE, NULL, fh);
+
     for(i=0; citems[i].type != config_LAST; i++)
     {
-	if (citems[i].comment)
-	    fprintf(fh, "# %s\n", citems[i].comment);
+	config_item *cp = &citems[i];
+	
+	if (cp->comment)
+	    fprintf(fh, "# %s\n", cp->comment);
 
-	switch(citems[i].type)
+	if (filter_fn && filter_fn(config_filter_phase_WRITE, cp->name, *(const void **)cp->ptr))
+	{
+	}
+	else switch(cp->type)
 	{
 	case config_INT:
-	    fprintf(fh, "%s: %d\n", citems[i].name, *((int*) citems[i].ptr));
+	    fprintf(fh, "%s: %d\n", cp->name, *((int*) cp->ptr));
 	    break;
 	case config_BOOL:
-	    fprintf(fh, "%s: %s\n", citems[i].name, *((int*) citems[i].ptr) ? "Yes" : "No");
+	    fprintf(fh, "%s: %s\n", cp->name, *((int*) cp->ptr) ? "Yes" : "No");
 	    break;
 	case config_COLOUR:
-	    x = *((int*) citems[i].ptr);
-	    fprintf(fh, "%s: 0x%02x, 0x%02x, 0x%02x\n", citems[i].name, (x >> 8) & 0xff, (x >> 16) & 0xff, (x >> 24) & 0xff);
+	    x = *((int*) cp->ptr);
+	    fprintf(fh, "%s: 0x%02x, 0x%02x, 0x%02x\n", cp->name, (x >> 8) & 0xff, (x >> 16) & 0xff, (x >> 24) & 0xff);
 	    break;
 	case config_FONT:
 	case config_STRING:
 	case config_FILE:
 	case config_URL:
-	    p = *((char**) citems[i].ptr);
-	    fprintf(fh, "%s: %s\n", citems[i].name,  p ? (*p == 0 ? "\"\"" : p) : "" );
+	    p = *((char**) cp->ptr);
+	    fprintf(fh, "%s: %s\n", cp->name,  p ? (*p == 0 ? "\"\"" : p) : "" );
 	    break;
 
 	case config_INT_LIST:
 	case config_COLOUR_LIST:
 	{
-	    int count;
-	    int *xp = *((int**) citems[i].ptr);
-	    fprintf(fh, "%s:", citems[i].name);
-	    for (count = *xp++; count; count--)
+	    int count, *xp;
+	    
+	    fprintf(fh, "%s:", cp->name);
+
+	    xp = *((int**) cp->ptr);
+	    if (xp)
 	    {
-		if (citems[i].type == config_COLOUR_LIST)
-		    fprintf(fh, " 0x%08x", *xp++);
-		else
-		    fprintf(fh, " %d", *xp++);
+		for (count = *xp++; count; count--)
+		{
+		    if (cp->type == config_COLOUR_LIST)
+			fprintf(fh, " 0x%08x", *xp++);
+		    else
+			fprintf(fh, " %d", *xp++);
+		}
 	    }
+
 	    fputc('\n', fh);
 	    break;
 	}
 
 	case config_STRING_LIST:
 	{
-	    int count;
-	    int *xp = *((int**) citems[i].ptr);
-	    fprintf(fh, "%s:", citems[i].name);
-	    for (count = *xp++; count; count--)
+	    int count, *xp;
+	    
+	    fprintf(fh, "%s:", cp->name);
+		
+	    xp = *((int**) cp->ptr);
+	    if (xp)
 	    {
-		fprintf(fh, " %s", (char *)*xp++);
+		for (count = *xp++; count; count--)
+		{
+		    fprintf(fh, " %s", (char *)*xp++);
+		}
 	    }
+
 	    fputc('\n', fh);
 	    break;
 	}
@@ -1680,6 +1761,9 @@ extern void config_write_file_by_name(const char *file_name)
     }
 
     mmfclose(fh);
+
+    if (filter_fn)
+	filter_fn(config_filter_phase_STOP_WRITE, NULL, NULL);
 
     config_has_been_changed = 0;
 }

@@ -334,54 +334,27 @@ typedef struct
 #endif
 } plugin_FILE;
 
+#if UNICODE
+static os_error *put_string_fn(const char *text, BOOL last, void *handle)
+{
+    plugin_FILE *f = handle;
+    fputs(text, f->f);
+    return NULL;
+}
+#endif
+
 static void put_string(plugin_FILE *f, const char *val)
 {
 #if UNICODE
     if (f->e)
     {
-	int in_n = 0;
-
-	/* while we have more input */
-	while (val[in_n])
-	{
-	    char buffer[256], *bufptr = buffer;
-	    int bufsize = sizeof(buffer);
-
-	    /* while we have more input */
-	    while (val[in_n])
-	    {
-		UCS4 u;
-		int read;
-
-		/* read the next UCS4 char */
-		read = UTF8_to_UCS4(val + in_n, &u);
-
-		/* try to reencode it to buffer[] */
-		if (encoding_write(f->e, u, &bufptr, &bufsize))
-		{
-		    /* if we could then consume the input value */
-		    in_n += read;
-		}
-		else
-		{
-		    /* if we couldn't then break out this loop to
-		       write out what we've got */
-		    break;
-		}
-	    }
-
-	    /* write out what is currently in the buffer */
-	    *bufptr = 0;
-	    fputs(buffer, f->f);
-	}
+	process_utf8(val, -1, f->e, put_string_fn, f);
     }
     else
+#endif
     {
 	fputs(val, f->f);
     }
-#else
-    fputs(val, f->f);
-#endif
 }
 
 static void plugin_write_parameter_record(plugin_FILE *f, plugin_parameter_type paramtype, const char *name, const char *value, const char *type)
@@ -467,7 +440,7 @@ static void plugin_write_parameter_file(FILE *f, rid_object_item *obj, const cha
 
     file.f = f;
 #if UNICODE
-    file.e = (config_encoding_internal == 1 || config_encoding_internal == 2) && enc_internal == csUTF8 ? encoding_new(enc_source, TRUE) : NULL;
+    file.e = config_encoding_internal == 1 && enc_internal == csUTF8 ? encoding_new(enc_source, encoding_WRITE) : NULL;
 #endif
     plugin_write_parameter_record(&file, plugin_parameter_SPECIAL, plugin_parameter_BASE_HREF, base_href, NULL);
     plugin_write_parameter_record(&file, plugin_parameter_SPECIAL, plugin_parameter_USER_AGENT, program_name, NULL);
@@ -1732,7 +1705,8 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 
 	    OBJDBG(("plugin: msg reshape request %p state %d\n", pp, pp->state));
 
- 	    objects_resize(pp->doc, pp->parent_item, reshape_request->width, reshape_request->height);
+	    /* note this is sent in OS units */
+ 	    objects_resize(pp->doc, pp->parent_item, reshape_request->width*2, reshape_request->height*2);
 	    break;
 	}
 

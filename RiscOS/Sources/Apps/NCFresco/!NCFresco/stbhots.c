@@ -30,6 +30,7 @@
 #if UNICODE
 # include "Unicode/utf8.h"
 # include "Unicode/charsets.h"
+# include "Unicode/encoding.h"
 #endif
 
 typedef struct hotlist_item hotlist_item;
@@ -412,7 +413,7 @@ static void hotlist__read(FILE *in)
 
 #if UNICODE
     if (info.format == 1 && config_encoding_internal == 1)
-	encoding = encoding_new(csWindows1252, FALSE);
+	encoding = encoding_new(csWindows1252, encoding_READ);
     else
 	encoding = NULL;
 #endif
@@ -608,7 +609,7 @@ static BOOL hotlist__read_nvram(void)
 
 #if UNICODE
 	if (info.format == 1 && config_encoding_internal == 1)
-	    encoding = encoding_new(csWindows1252, FALSE);
+	    encoding = encoding_new(csWindows1252, encoding_READ);
 	else
 	    encoding = NULL;
 #endif

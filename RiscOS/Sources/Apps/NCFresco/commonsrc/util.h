@@ -98,6 +98,7 @@ typedef struct
 } name_value_pair;
 
 extern int parse_http_header(char *header_data, const char *tags[], name_value_pair *output, int output_size);
+extern char *parse_content_type_header_charset(const char *value);
 extern int parse_content_type_header(const char *value);
 
 extern char *skip_space(const char *s);

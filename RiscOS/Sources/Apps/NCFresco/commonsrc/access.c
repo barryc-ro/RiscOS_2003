@@ -833,6 +833,8 @@ static access_complete_flags access_redirect_complete(void *h, int status, char 
 
     access_handle d = (access_handle) h;
 
+    ACCDBG(("access_redirect_complete: ah%p\n", d));
+    
     cache_it = d->complete(d->h, status, cfile, url); /* Pass up the real URL, not the one they requested */
     d->redirect = NULL;
 
@@ -1130,6 +1132,7 @@ static void access_reschedule(alarm_handler fn, access_handle d, int dt)
 {
     if (d->flags & access_PENDING_FREE)
     {
+	ACCDBG(("access_reschedule: ah%p pending free\n", d));
 	access_free_item(d);
     }
     else
@@ -2840,11 +2843,11 @@ static os_error *access_new_ftp(char *url, access_url_flags flags, char *ofile, 
 		d->next_fn(0, d);
 	    /* *result = 0; */
 	}
-    }
 
-    /* If dns fails immediately then 'd' will have been freed already */
-    if (access_done_flag)
-	*result = 0;
+	/* If dns fails immediately then 'd' will have been freed already */
+	if (access_done_flag)
+	    *result = 0;
+    }
 
     return ep;
 }
@@ -3085,45 +3088,51 @@ static os_error *access_new_internal(char *url, const char *path, const char *qu
 }
 #endif
 
-static char *uri_xfgets(FILE *in)
+static char *uri_next_line(FILE *in)
 {
     char *s = NULL;
-    BOOL finished = FALSE;
+    BOOL skip, terminate;
+    int c;
+    char buffer[128];
+    int blen;
 
     do
     {
-	int blen;
-	char buffer[128], *bp;
+	/* skip control chars */
+	do
+	    c = fgetc(in);
+	while (c != EOF && c < ' ');
 
-	if (fgets(buffer, sizeof(buffer), in) == NULL)
-	    return s;
+	skip = c == '#';
+	blen = 0;
 
-	blen = strlen(buffer);
-	if (buffer[blen-1] < ' ')
+	do
 	{
-	    buffer[blen-1] = '\0';
-	    finished = TRUE;
+	    terminate = c == EOF || c < ' ';
+
+	    if (!skip)
+	    {
+		if (!terminate)
+		    buffer[blen++] = c;
+
+		if (terminate || blen == sizeof(buffer) - 1)
+		{
+		    /* add to buffer */
+		    buffer[blen] = 0;
+		    s = strcatx(s, buffer);
+
+		    /* reset byte count */
+		    blen = 0;
+		}
+	    }
+
+	    if (!terminate)
+		c = fgetc(in);
 	}
-
-	/* skip control characters at the start of the line */
-	bp = buffer;
-	while (*bp && *bp < ' ')
-	    bp++;
-	
-	s = strcatx(s, bp);
-
-/* 	DBG(("xfgets: read '%s' finished %d gives %s\n", buffer, finished, s)); */
+	while (!terminate);
     }
-    while (!finished && !feof(in) && !ferror(in));
-
-    return s;
-}
-
-static char *uri_next_line(FILE *fh)
-{
-    char *s;
-    while ((s = uri_xfgets(fh)) != NULL && s[0] == '#')
-	mm_free(s);
+    while (skip);
+    
     return s;
 }
 
@@ -3365,7 +3374,7 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 		    }
 		    else
 		    {
-			char *s = uri_xfgets(fh);
+			char *s = uri_next_line(fh);
 			if (s && strcmp(s, "URI") == 0)
 			{
 			    /* free line 1 (id) */
@@ -3410,7 +3419,7 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 		}
 		else
 		{
-		    ep = makeerrorf(ERR_CANT_READ_FILE, url);
+		    ep = makeerrorf(ERR_CANT_READ_URL_FILE, url);
 		}
 	    }
 	    else if (ft != FILETYPE_HTML && ft != FILETYPE_GOPHER && ft != FILETYPE_TEXT && !image_type_test(ft))

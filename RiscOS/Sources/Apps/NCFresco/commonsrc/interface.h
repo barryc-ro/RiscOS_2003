@@ -599,8 +599,7 @@ extern void backend_mark_page_visited( const char *url );
 
 extern be_item backend_locate_id(be_doc doc, const char *id);
 
-#define be_encoding_READ	(-1)
-extern int backend_doc_encoding(be_doc doc, int encoding);
+extern int backend_doc_encoding(be_doc doc, int *encoding_user, int *encoding_user_override);
 
 /* Return the language code for this item or the document if item is
  * NULL or has no language of its own.

@@ -768,7 +768,7 @@ RISCOS_BUILD_OBJECTS=../NCFrescoRO/aof
 RISCOS_BUILD_HEADERS=../NCFrescoRO/h
 
 NCFRESCO_COUNTRY=		UK
-NCFRESCO_WHICH=			NC2
+NCFRESCO_WHICH=			NS2
 
 CP=				cp
 CPOPTIONS=			-p
@@ -921,6 +921,7 @@ NCFRESCO_BUILD_ROM_EXPORT:
 		find Resources/Common/UK $(FINDOPTIONS) -exec $(CP) $(CPOPTIONS) {} $(RISCOS_BUILD_RESOURCES)/Common/UK/ \;
 		find Resources/RCA/UK $(FINDOPTIONS) -exec $(CP) $(CPOPTIONS) {} $(RISCOS_BUILD_RESOURCES)/RCA/UK/ \;
 		find Resources/NC2/UK $(FINDOPTIONS) -exec $(CP) $(CPOPTIONS) {} $(RISCOS_BUILD_RESOURCES)/NC2/UK/ \;
+		find Resources/NS2/UK $(FINDOPTIONS) -exec $(CP) $(CPOPTIONS) {} $(RISCOS_BUILD_RESOURCES)/NS2/UK/ \;
 		find Resources/CM/UK $(FINDOPTIONS) -exec $(CP) $(CPOPTIONS) {} $(RISCOS_BUILD_RESOURCES)/Peregrine2/UK/ \;
 		-$(CP) $(CPOPTIONS) aof/ncfresco			$(RISCOS_BUILD_OBJECTS)
 		-$(CP) $(CPOPTIONS) aof/ncf_flash			$(RISCOS_BUILD_OBJECTS)
@@ -1034,15 +1035,17 @@ NCFRESCO_DIST:  NCFRESCO_BUILD
 		-@mkdir $(REL)
 		@mkdir $(RELS)
 		$(CP) $(CPOPTIONS) Resources/Common/$(NCFRESCO_COUNTRY)/\!Boot,feb			$(RELS)
+		$(CP) $(CPOPTIONS) Resources/Common/$(NCFRESCO_COUNTRY)/\!Run,feb			$(RELS)
+		$(CP) $(CPOPTIONS) Resources/Common/$(NCFRESCO_COUNTRY)/\!Sprites,ff9			$(RELS)
 		$(CP) $(CPOPTIONS) Resources/Common/$(NCFRESCO_COUNTRY)/SetScrap,ffb			$(RELS)
 		$(CP) $(CPOPTIONS) Resources/Common/$(NCFRESCO_COUNTRY)/MimeMap				$(RELS)
 		$(CP) $(CPOPTIONS) Resources/Common/$(NCFRESCO_COUNTRY)/Welcome,faf			$(RELS)
-		$(CP) $(CPOPTIONS) Resources/$(NCFRESCO_WHICH)/$(NCFRESCO_COUNTRY)/\!Run,feb		$(RELS)
-		$(CP) $(CPOPTIONS) Resources/$(NCFRESCO_WHICH)/$(NCFRESCO_COUNTRY)/\!Sprites,ff9	$(RELS)
-		$(CP) $(CPOPTIONS) Resources/$(NCFRESCO_WHICH)/$(NCFRESCO_COUNTRY)/Res,fae		$(RELS)
-		$(CP) $(CPOPTIONS) Resources/$(NCFRESCO_WHICH)/$(NCFRESCO_COUNTRY)/Sprites,ff9		$(RELS)
-		$(CP) $(CPOPTIONS) Resources/$(NCFRESCO_WHICH)/$(NCFRESCO_COUNTRY)/Config		$(RELS)
-		$(CP) $(CPOPTIONS) Resources/$(NCFRESCO_WHICH)/$(NCFRESCO_COUNTRY)/Messages		$(RELS)
+		-$(CP) $(CPOPTIONS) Resources/$(NCFRESCO_WHICH)/$(NCFRESCO_COUNTRY)/\!Run,feb		$(RELS)
+		-$(CP) $(CPOPTIONS) Resources/$(NCFRESCO_WHICH)/$(NCFRESCO_COUNTRY)/\!Sprites,ff9	$(RELS)
+		-$(CP) $(CPOPTIONS) Resources/$(NCFRESCO_WHICH)/$(NCFRESCO_COUNTRY)/Res,fae		$(RELS)
+		-$(CP) $(CPOPTIONS) Resources/$(NCFRESCO_WHICH)/$(NCFRESCO_COUNTRY)/Sprites,ff9		$(RELS)
+		-$(CP) $(CPOPTIONS) Resources/$(NCFRESCO_WHICH)/$(NCFRESCO_COUNTRY)/Config		$(RELS)
+		-$(CP) $(CPOPTIONS) Resources/$(NCFRESCO_WHICH)/$(NCFRESCO_COUNTRY)/Messages		$(RELS)
 
 		$(CP) $(CPOPTIONS) ./abs/ncfresco							$(RELS)/\!RunImage,ff8
 

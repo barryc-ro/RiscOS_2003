@@ -51,7 +51,8 @@ static void global_event_handler(int event)
 	break;
 
     case fevent_GLOBAL_OPEN_URL:
-	tb_open_url();
+	if (use_toolbox)
+	    tb_open_url();
 	break;
 
     case fevent_GLOBAL_RESIZE_ABORT:
@@ -304,7 +305,8 @@ static void misc_event_handler(int event, fe_view v)
 	break;
 
     case fevent_MENU:
-	tb_menu_show(v, 0);
+	if (use_toolbox)
+	    tb_menu_show(v, 0);
 	break;
 
     case fevent_FIND_AGAIN:
@@ -312,7 +314,8 @@ static void misc_event_handler(int event, fe_view v)
 	break;
 
     case fevent_MENU_DEBUG:
-	tb_menu_show(v, 1);
+	if (use_toolbox)
+	    tb_menu_show(v, 1);
 	break;
 
     case fevent_DBOX_CANCEL:
@@ -350,7 +353,8 @@ static void misc_event_handler(int event, fe_view v)
 	break;
 
     case fevent_OPEN_WRITEABLE:
-	tb_open_url_and_close();
+	if (use_toolbox)
+	    tb_open_url_and_close();
 	break;
 
     case fevent_STOP_OR_RELOAD:
@@ -596,15 +600,24 @@ static void toolbar_event_handler(int event, fe_view v)
 {
     if (event == fevent_TOOLBAR_EXIT)
     {
-	sound_event(snd_GENERIC_BACK);
 	frontend_complain(fe_status_unstack(v));
+	sound_event(snd_GENERIC_BACK);
 	return;
     }
 
     /* open toolbar and make noise */
     if (fe_internal_check_popups(event & fevent_CLEAR_POPUPS))
     {
-	frontend_complain(fe_status_open_toolbar(v, (event &~ fevent_CLEAR_POPUPS) - fevent_TOOLBAR_MAIN));
+	int bar;
+
+	event &= ~fevent_CLEAR_POPUPS;
+	
+	if (event == fevent_TOOLBAR_CYCLE)
+	    bar = -1;
+	else
+	    bar = event - fevent_TOOLBAR_MAIN;
+
+	frontend_complain(fe_status_open_toolbar(v, bar));
 	sound_event(soundfx_ACTION_OK);
     }
 }
@@ -726,7 +739,8 @@ void fevent_handler(int event, fe_view v)
 		codec_event_handler(event, v);
 		break;
 	    case fevent_SUB_CLASS_TOOLBAR2:
-		tb_event_handler(event, v);
+		if (use_toolbox)
+		    tb_event_handler(event, v);
 		break;
 	    case fevent_SUB_CLASS_FRAME_LINK:
 		frame_link_event_handler(event, v);

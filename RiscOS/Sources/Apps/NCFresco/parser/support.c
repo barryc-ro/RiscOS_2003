@@ -291,23 +291,14 @@ extern STRING mkstringu(void *encoding, UCHARACTER *ptr, int n)
     {
 	int i;
 
-#if 0
-	{
-	    USTRING u;
-	    u.ptr = ptr;
-	    u.bytes = n;
-	    PRSDBG(("mkstringu: src '%s'\n", usafe(u)));
-	}
-#endif
-
-	PRSDBG(("mkstringu: %d chars from %p\n", n, ptr));
+	/* PRSDBG(("mkstringu: %d chars from %p\n", n, ptr)); */
 	
 	for (i = 0; i < n; i++)
 	    encoding_write(encoding, ptr[i], NULL, &s.bytes);
 
 	s.bytes = -s.bytes;
 	
-	PRSDBG(("mkstringu: %d bytes needed\n", s.bytes));
+	/* PRSDBG(("mkstringu: %d bytes needed\n", s.bytes)); */
 
 	/* allocate space */
 	if ( (s.ptr = mm_malloc(s.bytes+1)) == NULL )
@@ -320,7 +311,7 @@ extern STRING mkstringu(void *encoding, UCHARACTER *ptr, int n)
 	    char *ss = s.ptr;
 	    int bufsize = s.bytes;
 
-	    PRSDBG(("mkstringu: write to %p\n", s.ptr));
+	    /* PRSDBG(("mkstringu: write to %p\n", s.ptr)); */
 
 	    for (i = 0; i < n; i++)
 		encoding_write(encoding, ptr[i], &ss, &bufsize);
@@ -329,7 +320,7 @@ extern STRING mkstringu(void *encoding, UCHARACTER *ptr, int n)
 	    s.ptr[s.bytes] = 0;
 	}
 
- 	PRSDBGN(("mkstringu: %d chars become %d bytes '%.*s'\n", n, s.bytes, s.bytes, s.ptr));
+ 	/* PRSDBGN(("mkstringu: %d chars become %d bytes '%.*s'\n", n, s.bytes, s.bytes, s.ptr)); */
     }
 
     return s;
@@ -656,8 +647,8 @@ STRING get_tab_expanded_string(STRING item, STRING inhand)
     
     PRSDBG(("get_tab_expanded_string: pos %d extra %d\n", pos, extra));
 
-    t.bytes = inhand.bytes + item.bytes + extra + 1;
-    t.ptr = mm_malloc(t.bytes);
+    t.bytes = inhand.bytes + item.bytes + extra;
+    t.ptr = mm_malloc(t.bytes + 1);	/* +1 for the null. not recorded in t.bytes */
 
     if (inhand.bytes)
 	memcpy(t.ptr, inhand.ptr, inhand.bytes);
