@@ -84,6 +84,13 @@ ${TARGET}: ${OBJS}
 # Dynamic dependencies:
 o.srcbuild:	c.srcbuild
 o.srcbuild:	h.srcbuild
+o.srcbuild:	VersionNum
+o.srcbuild:	h.build
+o.srcbuild:	h.parse
+o.srcbuild:	h.riscos
+o.srcbuild:	c.srcbuild
+o.srcbuild:	h.srcbuild
+o.srcbuild:	VersionNum
 o.srcbuild:	h.build
 o.srcbuild:	h.parse
 o.srcbuild:	h.riscos
@@ -91,9 +98,12 @@ o.riscos:	c.riscos
 o.riscos:	C:h.kernel
 o.riscos:	C:h.swis
 o.riscos:	h.srcbuild
-o.parse:	c.parse
-o.parse:	h.srcbuild
+o.riscos:	VersionNum
 o.build:	c.build
 o.build:	h.srcbuild
+o.build:	VersionNum
 o.build:	h.parse
 o.build:	h.riscos
+o.parse:	c.parse
+o.parse:	h.srcbuild
+o.parse:	VersionNum
