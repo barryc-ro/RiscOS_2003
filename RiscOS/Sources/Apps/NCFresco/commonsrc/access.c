@@ -3157,6 +3157,10 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 	url_parse(url, &scheme, &netloc, &path, &params, &query, &fragment);
 	ACCDBGN(( "Cache miss... trying to fetch file\n"));
 
+	/* forcibly block all file: URLs from being referers */
+	if (referer && strncasecomp(referer, "file:", sizeof("file:")-1) == 0)
+	    referer = NULL;
+	
 	if (netloc && netloc[0] && !auth_check_allow_deny(netloc))
 	{
 	    ep = makeerror(ERR_ACCESS_DENIED);

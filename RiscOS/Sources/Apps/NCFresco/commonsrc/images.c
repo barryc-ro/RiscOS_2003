@@ -1100,12 +1100,14 @@ static void image_progress(void *h, int status, int size, int so_far, int fh, in
 	    }
 	}
 
-        IMGDBG(("im%p: completed a part\n",i));
+        IMGDBG(("im%p: completed a part size %d\n",i,size));
 
         rd = 0;
 
-        i->data_so_far = 0;
+	/* set the size correctly before issuing callbacks */
         i->data_size = size;
+
+        i->data_so_far = 0;
         i->put_offset = 16;     /* make sure image restarts */
         i->flags &= ~image_flag_NO_BLOCKS;
         image_thread_start(i);
@@ -3400,7 +3402,7 @@ static void image_drawfile_render(image i, int x, int y, int w, int h, int scale
     trfm[1] = trfm[2] = 0;
     trfm[4] = (x - i->offset_x*w/i->width) * 256;
     trfm[5] = (y - i->offset_y*h/i->height) * 256;
-    _swix(DrawFile_Render, _INR(0,4), 0, i->data_area, i->data_size, &trfm, NULL);
+    _swix(DrawFile_Render, _INR(0,4), 0, i->data_area, flex_size(&i->data_area), &trfm, NULL);
 }
 
 static void image_jpeg_render(image i, int x, int y, int w, int h, int scale_image, image_rectangle_fn plot_bg, void *handle, int ox, int oy)
@@ -3434,7 +3436,15 @@ static void image_jpeg_render(image i, int x, int y, int w, int h, int scale_ima
     if (flags == 3 && (w == 1 || h == 1))
 	flags = 0;
 
-    _swix(JPEG_PlotScaled, _INR(0,5), i->data_area, x, y, &facs, i->data_size, flags);
+#if 0
+    if (debug_get("IMGDBGN"))
+    {
+	IMGDBGN(("saving jpeg image %p-%p (%d)\n", i->data_area, (char *)i->data_area + i->data_size, i->data_size));
+	frontend_fatal_error(_swix(OS_File, _INR(0,5), 10, "<NCFresco$Dir>.^.jpeg", 0xC85, 0, i->data_area, (char *)i->data_area + i->data_size));
+    }
+#endif
+    
+    _swix(JPEG_PlotScaled, _INR(0,5), i->data_area, x, y, &facs, flex_size(&i->data_area), flags);
 }
 
 static void image_sprite_render(image i, int x, int y, int w, int h, int scale_image, image_rectangle_fn plot_bg, void *handle, int ox, int oy)

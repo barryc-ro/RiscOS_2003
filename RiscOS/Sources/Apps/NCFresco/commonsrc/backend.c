@@ -1733,19 +1733,21 @@ static void antweb_append_query(char **buffer, char *name, char *value, int *len
 
     if (name)
     {
-	int i;
-	char *s;
-	char c;
+	url_escape_cat(*buffer, name, *len);
+	
+/* 	int i; */
+/* 	char *s; */
+/* 	char c; */
 
-	s = *buffer + strlen(*buffer);
-	for(i=0; (c = name[i]) != 0; i++)
-	{
-	    if (isspace(c))
-		c = '+';
-	    *s++ = c;
-	}
+/* 	s = *buffer + strlen(*buffer); */
+/* 	for(i=0; (c = name[i]) != 0; i++) */
+/* 	{ */
+/* 	    if (isspace(c)) */
+/* 		c = '+'; */
+/* 	    *s++ = c; */
+/* 	} */
 
-	strcpy(s, "=");		/* Put termination on too */
+	strcat(*buffer, "=");		/* Put termination on too */
     }
     url_escape_cat(*buffer, value, *len);
 }
@@ -1766,15 +1768,16 @@ static void antweb_append_textarea(char **buffer, rid_textarea_item *tai, int *l
 
     strcat(*buffer, "&");
 
-    s = *buffer + strlen(*buffer);
-    for(n = tai->name; (c = *n) != 0; n++)
-    {
-	if (isspace(c))
-	    c = '+';
-	*s++ = c;
-    }
+    url_escape_cat(*buffer, tai->name, *len);
+/*     s = *buffer + strlen(*buffer); */
+/*     for(n = tai->name; (c = *n) != 0; n++) */
+/*     { */
+/* 	if (isspace(c)) */
+/* 	    c = '+'; */
+/* 	*s++ = c; */
+/*     } */
 
-    strcpy(s, "=");		/* Put termination on too */
+    strcat(*buffer, "=");		/* Put termination on too */
 
 #if NEW_TEXTAREA
     otextarea_append_to_buffer(tai, buffer, len);
@@ -1808,14 +1811,15 @@ static void antweb_write_query(FILE *f, char *name, char *value, int *first)
     }
     if (name)
     {
-	char c;
+	url_escape_to_file(name, f);
+/* 	char c; */
 
-	while ((c = *name++) != 0)
-	{
-	    if (isspace(c))
-		c = '+';
-	    fputc(c, f);
-	}
+/* 	while ((c = *name++) != 0) */
+/* 	{ */
+/* 	    if (isspace(c)) */
+/* 		c = '+'; */
+/* 	    fputc(c, f); */
+/* 	} */
 	fputc('=', f);
     }
     url_escape_to_file(value, f);
@@ -1840,12 +1844,13 @@ static void antweb_write_textarea(FILE *f, rid_textarea_item *tai, int *first)
 	fprintf(f, "&");
     }
 
-    for(n = tai->name; (c = *n) != 0; n++)
-    {
-	if (isspace(c))
-	    c = '+';
-	fputc(c, f);
-    }
+    url_escape_to_file(tai->name, f);
+/*     for(n = tai->name; (c = *n) != 0; n++) */
+/*     { */
+/* 	if (isspace(c)) */
+/* 	    c = '+'; */
+/* 	fputc(c, f); */
+/*     } */
     fputc('=', f);
 
 #if NEW_TEXTAREA
