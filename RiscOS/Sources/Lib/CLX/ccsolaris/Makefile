@@ -11,6 +11,7 @@ ovrflfmt.h set_host.h aout.h chunkfls.h fname.h prgname.h asdfmt.h \
 chunkfmt.h host_scr.h re.h ieeeflt.h filestamp.h
 
 CFLhost= -I/usr/local/riscos/include
+CFLfilestamp= -I/usr/local/riscos/include
 
 noarg: clx.a
 	@echo "Made clx.a (the default target)"
