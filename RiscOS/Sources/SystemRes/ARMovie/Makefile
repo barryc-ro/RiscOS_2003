@@ -291,6 +291,11 @@ clean:
         @stripdepnd
         @Up 2
         |
+        @Dir Sound16.Alaw
+        @amu_machine clean
+        @stripdepnd
+        @Up 2
+        |
         @Dir Sound16.g721
         @amu_machine clean
         @stripdepnd
@@ -316,6 +321,11 @@ clean:
         @stripdepnd
         @Up 2
         |
+        @Dir Sound16.Lin16be
+        @amu_machine clean
+        @stripdepnd
+        @Up 2
+        |
         @Dir Sound16.mpadec
         @amu_machine clean
         @stripdepnd
@@ -332,6 +342,21 @@ clean:
         @Up 2
         |
         @Dir Sound16.mpeg-II
+        @amu_machine clean
+        @stripdepnd
+        @Up 2
+        |
+        @Dir Sound16.msadpcm
+        @amu_machine clean
+        @stripdepnd
+        @Up 2
+        |
+        @Dir Sound16.MuLaw
+        @amu_machine clean
+        @stripdepnd
+        @Up 2
+        |
+        @Dir Sound16.qtima4
         @amu_machine clean
         @stripdepnd
         @Up 2
@@ -517,7 +542,7 @@ Core_Decode:          Resources.!Boot \
         CMF LocalRes:Messages                      $(MSGSDIR).Messages
         MMD $(SETSNDDIR)
         CMF bas.SetSndDir                          $(SETSNDDIR).SetSndDir
-Player: crunched.Player
+Player: crunched.Player crunch.Keep
         squish -nolist -warn 0 -keep crunch.Keep -from crunched.Player -to $@
 crunched.Player: bas.Player
         $(MKDIR) crunched
@@ -1861,12 +1886,15 @@ adpcm_Encode_16:      Sound16.adpcm.Decode \
         CMF Sound16.adpcm.Resources.CInfo          $(AUD16DIR).adpcm.CInfo
 
 Alaw_Decode_16:       Sound16.Alaw.Play \
-                      Sound16.Alaw.Playx2 \
                       Sound16.Alaw.Resources.Info
         MMD $(AUD16DIR).Alaw
         CMF Sound16.Alaw.Play                      $(AUD16DIR).Alaw.Play
         CMF Sound16.Alaw.Playx2                    $(AUD16DIR).Alaw.Playx2
         CMF Sound16.Alaw.Resources.Info            $(AUD16DIR).Alaw.Info
+Sound16.Alaw.Play:
+        @Dir Sound16.Alaw
+        @amu_machine
+        @Up 2
 
 Alaw_Decode_8:        Sound.Alaw.Play \
                       Sound.Alaw.Playx2 \
@@ -2008,12 +2036,15 @@ gsm_Encode_16:        Sound16.gsm.Decode \
         CMF Sound16.gsm.Resources.CInfo            $(AUD16DIR).gsm.CInfo
 
 Lin16be_Decode_16:    Sound16.Lin16be.Play \
-                      Sound16.Lin16be.Playx2 \
                       Sound16.Lin16be.Resources.Info
         MMD $(AUD16DIR).Lin16be
         CMF Sound16.Lin16be.Play                   $(AUD16DIR).Lin16be.Play
         CMF Sound16.Lin16be.Playx2                 $(AUD16DIR).Lin16be.Playx2
         CMF Sound16.Lin16be.Resources.Info         $(AUD16DIR).Lin16be.Info
+Sound16.Lin16be.Play:
+        @Dir Sound16.Lin16be
+        @amu_machine
+        @Up 2
 
 Lin16be_Decode_8:     Sound.Lin16be.Play \
                       Sound.Lin16be.Playx2 \
@@ -2076,12 +2107,15 @@ mpeg-II_Encode_16:    Sound16.mpeg-II.Decode \
         CMF Sound16.mpeg-II.Resources.CInfo        $(AUD16DIR).mpeg-II.CInfo
 
 msadpcm_Decode_16:    Sound16.msadpcm.Play \
-                      Sound16.msadpcm.Playx2 \
                       Sound16.msadpcm.Resources.Info
         MMD $(AUD16DIR).msadpcm
         CMF Sound16.msadpcm.Play                   $(AUD16DIR).msadpcm.Play
         CMF Sound16.msadpcm.Playx2                 $(AUD16DIR).msadpcm.Playx2
         CMF Sound16.msadpcm.Resources.Info         $(AUD16DIR).msadpcm.Info
+Sound16.msadpcm.Play:
+        @Dir Sound16.msadpcm
+        @amu_machine
+        @Up 2
 
 msadpcm_Decode_8:     Sound.msadpcm.Play \
                       Sound.msadpcm.Playx2 \
@@ -2092,12 +2126,15 @@ msadpcm_Decode_8:     Sound.msadpcm.Play \
         CMF Sound.msadpcm.Resources.Info           $(AUD8DIR).msadpcm.Info
 
 MuLaw_Decode_16:      Sound16.MuLaw.Play \
-                      Sound16.MuLaw.Playx2 \
                       Sound16.MuLaw.Resources.Info
         MMD $(AUD16DIR).MuLaw
         CMF Sound16.MuLaw.Play                     $(AUD16DIR).MuLaw.Play
         CMF Sound16.MuLaw.Playx2                   $(AUD16DIR).MuLaw.Playx2
         CMF Sound16.MuLaw.Resources.Info           $(AUD16DIR).MuLaw.Info
+Sound16.MuLaw.Play:
+        @Dir Sound16.MuLaw
+        @amu_machine
+        @Up 2
 
 MuLaw_Decode_8:       Sound.MuLaw.Play \
                       Sound.MuLaw.Playx2 \
@@ -2108,12 +2145,15 @@ MuLaw_Decode_8:       Sound.MuLaw.Play \
         CMF Sound.MuLaw.Resources.Info             $(AUD8DIR).MuLaw.Info
 
 qtima4_Decode_16:     Sound16.qtima4.Play \
-                      Sound16.qtima4.Playx2 \
                       Sound16.qtima4.Resources.Info
         MMD $(AUD16DIR).qtima4
         CMF Sound16.qtima4.Play                    $(AUD16DIR).qtima4.Play
         CMF Sound16.qtima4.Playx2                  $(AUD16DIR).qtima4.Playx2
         CMF Sound16.qtima4.Resources.Info          $(AUD16DIR).qtima4.Info
+Sound16.qtima4.Play:
+        @Dir Sound16.qtima4
+        @amu_machine
+        @Up 2
 
 qtima4_Decode_8:      Sound.qtima4.Play \
                       Sound.qtima4.Playx2 \
