@@ -88,7 +88,8 @@ OBJS      = 	${OM}.Main 		\
 	 	${OM}.SCART		\
 	 	${OM}.MPEG		\
 	 	${OM}.ROMChksum		\
-	 	${OM}.ID
+	 	${OM}.ID		\
+	 	${OM}.gen_ir
 	 						
 	 			
 .SUFFIXES: .${OM}
