@@ -47,6 +47,8 @@ TOKENS   = Hdr:Tokens
 COMPONENT = HdrSrc
 
 EXPORTS   = \
+ ${HDRDIR}.APCS.<APCS> \
+ ${HDRDIR}.APCS.Common \
  ${HDRDIR}.AUN \
  ${HDRDIR}.CMOS \
  ${HDRDIR}.Countries \
@@ -144,6 +146,7 @@ Dirs:
         ${MKDIR} <build$dir>.Export.Hdr.Global
         ${MKDIR} <build$dir>.Export.Hdr.Interface
         ${MKDIR} <build$dir>.Export.Hdr.Interface2
+        ${MKDIR} ${HDRDIR}.APCS
         ${MKDIR} ${HDRDIR}.CPU
         ${MKDIR} ${HDRDIR}.FDC
         ${MKDIR} ${HDRDIR}.IO
@@ -166,9 +169,10 @@ clean:
 # Special rule for exporting all ImageSize and Machine files.
 # Trigger by invoking the export with OPTIONS=ALL.
 #
-ALL: ${HDRDIR}.Machine.Machine ${HDRDIR}.ImageSize.<ImageSize>
+ALL: ${HDRDIR}.Machine.Machine ${HDRDIR}.ImageSize.<ImageSize> ${HDRDIR}.APCS.<APCS>
 	${CP} hdr.Machine ${HDRDIR}.Machine ${CPFLAGS}
 	${CP} hdr.ImageSize ${HDRDIR}.ImageSize ${CPFLAGS}
+	${CP} hdr.APCS ${HDRDIR}.APCS ${CPFLAGS}
 
 #
 # Rules for deriving headers:
@@ -263,6 +267,8 @@ ${HDIR}.Global.h.IOCtl:      h.IOCtl;               ${CP} h.IOCtl               
 ${HDRDIR}.Machine.<Machine>: hdr.Machine.<Machine>; ${CP} hdr.Machine.<Machine>    $@ ${CPFLAGS}
 ${HDRDIR}.Machine.Machine:   hdr.Machine.Machine;   ${CP} hdr.Machine.Machine      $@ ${CPFLAGS}
 ${HDRDIR}.ImageSize.<ImageSize>: hdr.ImageSize.<ImageSize>; ${CP} hdr.ImageSize.<ImageSize> $@ ${CPFLAGS}
+${HDRDIR}.APCS.<APCS>:       hdr.APCS.<APCS>;       ${CP} hdr.APCS.<APCS>          $@ ${CPFLAGS}
+${HDRDIR}.APCS.Common:       hdr.APCS.Common;       ${CP} hdr.APCS.Common          $@ ${CPFLAGS}
 ${HDRDIR}.CPU.ARM600:        hdr.CPU.ARM600;        ${CP} hdr.CPU.ARM600           $@ ${CPFLAGS}
 ${HDRDIR}.CPU.Generic26:     hdr.CPU.Generic26;     ${CP} hdr.CPU.Generic26        $@ ${CPFLAGS}
 ${HDRDIR}.CPU.Generic32:     hdr.CPU.Generic32;     ${CP} hdr.CPU.Generic32        $@ ${CPFLAGS}
