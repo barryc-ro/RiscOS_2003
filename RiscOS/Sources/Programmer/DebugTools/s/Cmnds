@@ -387,4 +387,186 @@ UnknownIRQs_Code Entry "R10"
 UnkExit	EXIT
 
 
+
+; ****************************************************
+; *
+; * *RMDie <module title>
+; *
+; * Write zero into the specified module's header for the finalisation
+; * code offset. Then, we can kill the module no matter what it was
+; * going to do on finalisation.
+; *
+; * This is fairly risky as various resources (i.e. callbacks, RMA,
+; * event handlers, etc) could still be claimed by the module, but the
+; * space it occupies in RMA has now been freed.
+; *
+; * In...
+; *   R0	= pointer to parameter string
+; *   R1	= number of parameters
+; *   R12	= private word pointer
+; *   R13	= full-descending stack pointer
+; *   R14	= return address
+; * Out...
+; *   R0	= corrupted (or pointer to error block)
+; *   R1-R6	= corrupted
+; *   R7-R11	= preserved
+; *   R12	= corrupted
+; *   R13	= preserved
+; *   V flag	= set if R0 is a pointer to an error block
+; *
+RMDie_Code Entry
+	LDR	R12, [R12]
+	SWI	XOS_WriteS
+	DCB	"Forcing death of '", 0
+	ALIGN
+	; Check that the module isn't in ROM...
+	BL	RM_Common
+	BVS	%FT00
+	; Blat the finalisation offset header word...
+	MOV	R6, #0
+	STR	R6, [R3, #8]
+	; Kill the module...
+	MOV	R1, R0
+	MOV	R0, #ModHandReason_Delete
+	SWI	XOS_Module
+	SWI	XOS_WriteS
+	DCB	"Module killed", 10, 13, 0
+	ALIGN
+00	; Exit...
+	EXIT
+
+
+; ****************************************************
+; *
+; * *RMRemove <module title>
+; *
+; * Replace all the module header words in the specified module with
+; * zero, except the module title and help strings. These are made to
+; * reference a small RMA block with a temporary module name in it
+; * (so that you can RMKill the module later).
+; *
+; * Killing the module will cause an RMA leak of at least 16 bytes
+; * (the small module title block), plus any system resources that
+; * the module claimed and would have released on module finalisation.
+; *
+; * This is slightly less dangerous than using *RMDie.
+; *
+; * In...
+; *   R0	= pointer to parameter string
+; *   R1	= number of parameters
+; *   R12	= private word pointer
+; *   R13	= full-descending stack pointer
+; *   R14	= return address
+; * Out...
+; *   R0	= corrupted (or pointer to error block)
+; *   R1-R6	= corrupted
+; *   R7-R11	= preserved
+; *   R12	= corrupted
+; *   R13	= preserved
+; *   V flag	= set if R0 is a pointer to an error block
+; *
+RMRemove_Code Entry
+	LDR	R12, [R12]
+	SWI	XOS_WriteS
+	DCB	"Removing '", 0
+	ALIGN
+	; Check that the module isn't in ROM...
+	BL	RM_Common
+	BVS	%FT01
+	; Blat the module header words...
+	MOV	R6, #0
+	ADD	R4, R3, #0x30
+00	STR	R6, [R3], #4
+	CMP	R3, R4
+	BLO	%BT00
+	; Claim a block of RMA...
+	SUB	R1, R3, #0x30
+	MOV	R0, #ModHandReason_Claim
+	MOV	R3, #16
+	SWI	XOS_Module
+	BVS	%FT01
+	; Store offsets into block in module header words...
+	SUB	R0, R2, R1
+	STR	R0, [R1, #0x10]
+	STR	R0, [R1, #0x14]
+	; Store 'Dead' at the start of the new title and help strings...
+	LDR	R0, =0x64616544
+	STR	R0, [R2]
+	; Load and increment our dead module counter...
+	LDR	R0, [R12, #WSP_DeadMods]
+	ADD	R0, R0, #1
+	STR	R0, [R12, #WSP_DeadMods]
+	; Module title = 'Dead<number>'...
+	ADD	R1, R2, #4
+	MOV	R2, R12
+	SWI	XOS_ConvertHex8
+	; Output a success message...
+	SWI	XOS_WriteS
+	DCB	"Module removed", 10, 13, 0
+	ALIGN
+01	; Exit...
+	EXIT
+
+; ****************************************************
+; *
+; * Get some information about the specified module and generate an
+; * error if that module is in the ROM.
+; *
+; * In...
+; *   R0	= pointer to module title string
+; *   R12	= private word pointer
+; *   R13	= full-descending stack pointer
+; *   R14	= return address
+; * Out...
+; *   R0	= preserved
+; *   R1	= module number
+; *   R2	= instantiation number
+; *   R3	= module code base address
+; *   R4	= private word *value*
+; *   R5	= postfix string
+; *   R6-R12	= preserved
+; *   R13	= preserved (or modified on error)
+; *
+RM_Common Entry "R0"
+	SUB	R1, R0, #1
+	; Output the module title...
+00	LDRB	R14, [R1, #1]!
+	CMP	R14, #" "
+	BHI	%BT00
+	SUB	R1, R1, R0
+	SWI	XOS_WriteN
+	SWI	XOS_WriteI+"'"
+	; Look-up module info for this module title string...
+	MOV	R1, R0
+	MOV	R0, #ModHandReason_LookupName
+	SWI	XOS_Module
+	BVS	%FT01
+	; Is it in the ROM...
+	LDR	R0, [R12, #WSP_ROMBase]
+	LDR	R5, [R12, #WSP_ROMTop]
+	CMP	R3, R0
+	SUBHSS	R0, R5, R3
+	ADDHS	SP, SP, #8
+	BHS	rommod_err
+	; Output the module number...
+	SWI	XOS_WriteS
+	DCB	" (module ", 0
+	ALIGN
+	Push	"R1-R2"
+	SUB	SP, SP, #12
+	MOV	R0, R1
+	MOV	R1, SP
+	MOV	R2, #12
+	SWI	XOS_ConvertCardinal4
+	SWI	XOS_Write0
+	ADD	SP, SP, #12
+	Pull	"R1-R2"
+	SWI	XOS_WriteS
+	DCB	")", 10, 13, 0
+	ALIGN
+	EXIT
+01	ADD	SP, SP, #4
+	Pull	"PC"
+
+
 	END
