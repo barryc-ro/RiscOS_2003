@@ -45,10 +45,14 @@
 ; 20-Nov-98  TMD  0.46		Make SelectProgram do a ResetStream, and stop sending data through if program
 ;				 zero is selected.
 ; 10-Dec-98  BJGA 0.47		Changed module name to MPEGSystem, changed SWI chunk and added "Sys" prefix to * commands.
-; 20-May-99  BJGA 0.48          Made same NotReadyBits bugfix as in MPEGTransport 1.70
-; 17-Feb-00  BJGA 0.49          Passes SetSpeed flags through to MPEGVideo_SetSpeed and MPEGAudio_SetSpeed
-; 02-Mar-00  BJGA 0.50          Implemented MPEGSystem_SetVideoParameters
-; 06-Mar-00  BJGA 0.51          Executes SetVideoParameters 1 and 2 even if no video stream is open
+; 20-May-99  BJGA 0.48          Made same NotReadyBits bugfix as in MPEGTransport 1.70.
+; 17-Feb-00  BJGA 0.49          Passes SetSpeed flags through to MPEGVideo_SetSpeed and MPEGAudio_SetSpeed.
+; 02-Mar-00  BJGA 0.50          Implemented MPEGSystem_SetVideoParameters.
+; 06-Mar-00  BJGA 0.51          Executes SetVideoParameters 1 and 2 even if no video stream is open.
+; 03-May-00  BJGA 0.52          Passes CloseStream flags through to elementary stream handlers.
+; 06-Jun-00  BJGA 0.53          32-bit compatible. Fixes same interrupt hole as MPEGTransport 1.78. SWI dispatch error handler
+;                               no longer waits for keyboard input (!). Issues UpCall_MPEG &0001 after each ResetStream.
+;                               Added SWI MPEGSystem_GetSprite.
 ;
 
         LEADR   Module_LoadAddr
@@ -225,6 +229,8 @@ Module_BaseAddr
         &       Mod_SWIHandler-Module_BaseAddr
         &       Mod_SWITable-Module_BaseAddr
         &       0                               ; no swi name decode entry
+        &       0                               ; no messages file
+        &       Mod_Flags   -Module_BaseAddr
 
 Mod_Title
  [ BuildAsMPEGControl
@@ -252,6 +258,13 @@ Mod_HelpStr
 	=	0
         ALIGN
 
+Mod_Flags
+      [ No32bitCode
+        &       0
+      |
+        &       ModuleFlag_32bit
+      ]
+
 Mod_SWITable
  [ BuildAsMPEGControl
         =       "MPEGControl", 0
@@ -273,6 +286,7 @@ Mod_SWITable
 	=	"SetAudioParameters", 0
 	=       "ControlOp", 0
 	=       "SetVideoParameters", 0
+	=       "GetSprite", 0
         =       0
 
  [ BuildAsMPEGControl
@@ -418,9 +432,11 @@ SWIBTable
 	B	SetAudioParameters ; set audio parameters
 	B       NoSuchSWI       ; ControlOp should never get this far
 	B       SetVideoParameters ; set video parameters
+	B       GetSprite       ; capture video as a sprite
 SWIBTableEnd
 
 NoSuchSWI
+      [ {FALSE}
         Push    "lr"
         SWI     XOS_WriteI+22
         SWI     XOS_WriteI+12
@@ -428,6 +444,7 @@ NoSuchSWI
         DLINE   "Press any key"
         SWI     XOS_ReadC
 	Pull	"lr"
+      ]
 RegisterProgramElementHandler	; not supported in MPEGCtrl - just return a 'soft' error
 DeregisterProgramElementHandler ; not supported in MPEGCtrl - just return a 'soft' error
         ADR     r0, NoSuchSWIError
@@ -708,6 +725,38 @@ SetVideoParameters Entry "r0,r1"
 
 ; **************************************************************************
 ;
+;       GetSprite - Capture MPEG video as a sprite
+;
+; in:   r0 = flags
+;       r1 = external stream handle, or 0 to use most recently opened stream
+;       r2 -> sprite area control block, or 0 to use system sprite area
+;       r3 -> sprite name
+;
+; out:  Depends on reason code
+;
+
+GetSprite Entry "r1"
+        CLRV
+        TEQ     r1, #0                                  ; pass a value of 0 straight through
+        BEQ     %FT01
+        LDR     lr, [r1, #CSH_StreamFlags]
+        TST     lr, #StreamFlags_VideoPresent
+        BEQ     %FT90
+        LDR     r1, [r1, #CSH_VideoStreamHandle]
+01      SWI     XMPEGVideo_GetSprite
+        EXIT
+
+        ; If no video stream for this control stream handle, return the same error as MPEGVideo_GetSprite would have done
+90      ADR     r0, %FT99
+        SETV
+        EXIT
+99
+        &       &81850B
+        =       "No displayed picture", 0
+        ALIGN
+
+; **************************************************************************
+;
 ;       FullBuffers - Here's some more data
 ;
 ; in:   r0 = flags
@@ -782,9 +831,7 @@ xdebug   SETL    {FALSE}
 						        ; then call the coroutines to parse the buffer
         BLEQ    CallCoroutines                          ; otherwise effectively junk any data in the buffer
 
-        MOV     r3, pc
-        ORR     lr, r3, #I_bit          ; disable IRQs
-        TEQP    lr, #0
+        SCPSR   I_bit, 0, lr,, r3       ; disable IRQs
 
         LDR     lr, [r2, #BufferDescriptor_Packets]
         SUB     lr, lr, #1
@@ -792,7 +839,7 @@ xdebug   SETL    {FALSE}
 
         LDR     r4, [r2, #BufferDescriptor_Link]        ; load link *before* restoring IRQ state
 
-        TEQP    r3, #0                  ; restore IRQ state
+        RestPSR r3,, c                  ; restore IRQ state
 
         TEQ     lr, #0                  ; is the count now zero (if so then no active packets in buffer)
         BNE     %FT20                   ; [no, so don't free buffer]
@@ -907,9 +954,7 @@ FreePackets Entry "r0-r5, wp"
 10
         LDR     r2, [r1, #PacketDescriptor_BufferDescriptor]    ; get parent buffer pointer
 
-        MOV     r3, pc
-        ORR     lr, r3, #I_bit                          ; disable IRQs round this bit
-        TEQP    lr, #0
+        SCPSR   I_bit, 0, lr,, r3                       ; disable IRQs round this bit
 
 ; decrement outstanding packet count for buffer (atomically)
 
@@ -929,7 +974,7 @@ FreePackets Entry "r0-r5, wp"
         MOV     r5, #0
         STR     r5, [r1, #PacketDescriptor_Link]        ; detach packet
 
-        TEQP    r3, #0                                  ; restore IRQ state
+        RestPSR r3,, c                                  ; restore IRQ state
 
         TEQ     lr, #0                                  ; if all buffer data has been used, then free buffer
         STREQ   lr, [r2, #BufferDescriptor_Link]        ; only free one buffer
@@ -984,6 +1029,17 @@ ResetStream Entry "r0-r3"
         STRVS   r0, [sp]
         EXIT    VS
 20
+
+        Push    "r4"
+        MOV     r4, r0  ; ResetStream flags
+        MOV     r3, #UpCallMPEG_ResetStream
+        MOV     r2, r1
+        MOV     r1, #0
+        MOV     r0, #UpCall_MPEG
+        SWI     XOS_UpCall
+        CMP     r0, r0  ; clear V
+        Pull    "r4"
+
 	MOV	r0, r1
 	BL	coinit
 
@@ -1001,17 +1057,15 @@ ResetStream Entry "r0-r3"
 
 FreeBuffer Entry "r0-r2,r12"
 	LDR	r2, [r1, #BufferDescriptor_Length]
-	MOV	r3, pc
+        SCPSR   I_bit, 0, lr,, r3       ; IRQs off
 	Push	r3
-	ORR	lr, r3, #I_bit
-	TEQP	lr, #0			; IRQs off
 
 	ADR	lr, ControlStreamHandle
 	LDR	r0, [lr, #CSH_DataReturned]
 	ADD	r0, r0, r2
 	STR	r0, [lr, #CSH_DataReturned]
 	Pull	r3
-	TEQP	r3, #0			; restore IRQ state
+	RestPSR r3,, c                  ; restore IRQ state
 
         LDR     r2, [r1, #BufferDescriptor_FreeRoutine]
         TEQ     r2, #0          ; check for SWI interface
@@ -1418,15 +1472,13 @@ getclockreference ROUT
         Pull    "r9, pc"
 
 incrementpacketcount Entry "r0"
-        MOV     r0, pc
-        ORR     lr, r0, #I_bit                          ; disable IRQs
-        TEQP    lr, #0
+        SCPSR   I_bit, 0, lr,, r0                       ; disable IRQs
 
         LDR     lr, [r2, #BufferDescriptor_Packets]
         ADD     lr, lr, #1
         STR     lr, [r2, #BufferDescriptor_Packets]
 
-        TEQP    r0, #0                                  ; restore IRQ state
+        RestPSR r0,, c                                  ; restore IRQ state
         EXIT
 
 notvidaudpacket
@@ -1604,8 +1656,7 @@ xdebug SETL {FALSE}
 ;
 
 GetPacketDescriptor Entry "r1"
-        MOV     r1, pc
-        ORR     lr, r1, #I_bit                  ; disable IRQs
+        SCPSR   I_bit, 0, lr,, r1               ; disable IRQs
 
         LDR     r0, FreePacketListHeadPtr
         TEQ     r0, #0
@@ -1616,7 +1667,7 @@ GetPacketDescriptor Entry "r1"
         TEQ     lr, #0                          ; and if no more,
         STREQ   lr, FreePacketListTailPtr       ; then zero FreePacketListTailPtr
 
-        TEQP    r1, #0                          ; restore IRQs
+        RestPSR r1,, c                          ; restore IRQs
 05
         MOV     lr, #0
         STR     lr, [r0, #PacketDescriptor_Link] ; terminate this packet descriptor
@@ -1629,7 +1680,7 @@ GetPacketDescriptor Entry "r1"
         EXIT
 
 10
-        TEQP    r1, #0                          ; restore IRQ state
+        RestPSR r1,, c                          ; restore IRQ state
         Push    "r2, r3"
         MOV     r3, #PacketDescriptorSize
         MOV     r0, #ModHandReason_Claim
