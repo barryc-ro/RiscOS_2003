@@ -26,8 +26,8 @@
 
 # Set default component and target.
 # Alternative possible target is RISC_OSLib
-COMPONENT .= SharedCLibrary
-TARGET    .= CLib
+COMPONENT ?= SharedCLibrary
+TARGET    ?= CLib
 
 #
 # Paths
@@ -106,6 +106,12 @@ VSFLAGS =\
 
 ASFLAGS =\
  ${SCL_APCS}
+
+# Setting UROM on the command-line for rlib
+UROM_DEFS =\
+ -PD "UROM SETL {FALSE}"
+UROM_ROM_DEFS =\
+ -PD "UROM SETL {TRUE}"
 
 VPATH = @ kernel clib rlib
 
@@ -426,7 +432,6 @@ clean_all:
         ${RM} s.abssym
         ${RM} s.c_abssym
         ${RM} s.a_abssym
-        ${RM} rlib.s.asmdefs
         ${WIPE} lib.* ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
@@ -683,8 +688,7 @@ rm_o.clib:  clib.s.cl_obj_r
         ${OBJASM} ${AFLAGS} ${ASFLAGS} ${OPTIONS} -from clib.s.cl_obj_r -to $@
 
 rm_o.cl_modbody: clib.s.cl_mod_r
-        ${CP} rlib.s.rom_defs rlib.s.asmdefs ${CPFLAGS}
-        ${OBJASM} ${AFLAGS} ${ASFLAGS} ${OPTIONS} -from clib.s.cl_mod_r -to $@
+        ${OBJASM} ${AFLAGS} ${ASFLAGS} ${OPTIONS} ${UROM_ROM_DEFS} -from clib.s.cl_mod_r -to $@
 
 rm_o_rl.rl_modbody: rlib.s.rl_mod_r
         ${OBJASM} ${AFLAGS} ${ASFLAGS} ${OPTIONS} -from rlib.s.rl_mod_r -to $@
@@ -725,42 +729,24 @@ rm_o.string: c.string
 #
 # Special case: use "rom_defs" for ROM library (o_rm), "defs" for the others
 # Note: New Assembler - could use -PreDefine "UROM SETL {FALSE}"
-#
+
 o_rl.swi: rlib.s.swi
-        ${CP} rlib.s.defs rlib.s.asmdefs ${CPFLAGS}
-        ${OBJASM} rlib.s.swi o_rl.swi ${AFLAGS}
+        ${OBJASM} ${UROM_DEFS} rlib.s.swi o_rl.swi ${AFLAGS}
 
 o_rl.poll: rlib.s.poll
-        ${CP} rlib.s.defs rlib.s.asmdefs ${CPFLAGS}
-        ${OBJASM} rlib.s.poll o_rl.poll ${AFLAGS}
-
-o_rl.bastxt: rlib.s.bastxt
-        ${CP} rlib.s.defs rlib.s.asmdefs ${CPFLAGS}
-        ${OBJASM} rlib.s.bastxt o_rl.bastxt ${AFLAGS}
+        ${OBJASM} ${UROM_DEFS} rlib.s.poll o_rl.poll ${AFLAGS}
 
 m_o_rl.swi: rlib.s.swi
-        ${CP} rlib.s.defs rlib.s.asmdefs ${CPFLAGS}
-        ${OBJASM} rlib.s.swi m_o_rl.swi ${AFLAGS}
+        ${OBJASM} ${UROM_DEFS} rlib.s.swi m_o_rl.swi ${AFLAGS}
 
 m_o_rl.poll: rlib.s.poll
-        ${CP} rlib.s.defs rlib.s.asmdefs ${CPFLAGS}
-        ${OBJASM} rlib.s.poll m_o_rl.poll ${AFLAGS}
-
-m_o_rl.bastxt: rlib.s.bastxt
-        ${CP} rlib.s.defs rlib.s.asmdefs ${CPFLAGS}
-        ${OBJASM} rlib.s.bastxt m_o_rl.bastxt ${AFLAGS}
+        ${OBJASM} ${UROM_DEFS} rlib.s.poll m_o_rl.poll ${AFLAGS}
 
 rm_o_rl.swi: rlib.s.swi
-        ${CP} rlib.s.rom_defs rlib.s.asmdefs ${CPFLAGS}
-        ${OBJASM} rlib.s.swi rm_o_rl.swi ${AFLAGS} ${OPTIONS}
+        ${OBJASM} ${UROM_ROM_DEFS} rlib.s.swi rm_o_rl.swi ${AFLAGS} ${OPTIONS}
 
 rm_o_rl.poll: rlib.s.poll
-        ${CP} rlib.s.rom_defs rlib.s.asmdefs ${CPFLAGS}
-        ${OBJASM} rlib.s.poll rm_o_rl.poll ${AFLAGS} ${OPTIONS}
-
-rm_o_rl.bastxt: rlib.s.bastxt
-        ${CP} rlib.s.rom_defs rlib.s.asmdefs ${CPFLAGS}
-        ${OBJASM} rlib.s.bastxt rm_o_rl.bastxt ${AFLAGS} ${OPTIONS}
+        ${OBJASM} ${UROM_ROM_DEFS} rlib.s.poll rm_o_rl.poll ${AFLAGS} ${OPTIONS}
 
 #
 # trace separated out to allow defining of TRACE
