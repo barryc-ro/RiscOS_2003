@@ -26,7 +26,7 @@ RM      = remove
 WIPE    = -wipe
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -zM -zps1 -ff ${INCLUDES} ${DFLAGS} -DCOMPAT_INET4
+CFLAGS  = -c -depend !Depend -zM -zps1 -ff -wp ${INCLUDES} ${DFLAGS} -DCOMPAT_INET4
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
@@ -42,13 +42,14 @@ ABSSYM    = RISC_OSLib:o.AbsSym
 INETLIB   = TCPIPLibs:o.inetlibzm
 SOCKLIB   = TCPIPLibs:o.socklibzm
 UNIXLIB   = TCPIPLibs:o.unixlibzm
+SSLDIR    = <Lib$Dir>.SSL
 
 INSECURELIBS= ${INETLIB} ${SOCKLIB} 
-SECURELIBS= ssleay.o.sslzm ssleay.o.cryptozm ${UNIXLIB} ${INSECURELIBS}
+SECURELIBS= $(SSLDIR).o.ssllib $(SSLDIR).o.cryptolib ${UNIXLIB} ${INSECURELIBS}
 #
 # Include files
 #
-INCLUDES  = -ITCPIPLibs:,C:,ssleay
+INCLUDES  = -IC:,TCPIPLibs:,$(SSLDIR)
 
 #
 # Program specific options:
@@ -73,6 +74,7 @@ EXPORTS   = h.httppub
 # build a relocatable module:
 #
 all: rm.${COMPONENT}mod rm.${COMPONENT}smod 
+#all: rm.${COMPONENT}mod
 
 #
 # RISC OS ROM build rules:
@@ -95,6 +97,7 @@ install: rm.${COMPONENT}mod rm.${COMPONENT}smod
 
 clean:
         ${WIPE} o.* ${WFLAGS}
+        ${WIPE} os.* ${WFLAGS}
         ${WIPE} rm.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
         ${WIPE} map.* ${WFLAGS}
@@ -148,7 +151,6 @@ o.http:	TCPIPLibs:machine.h.ansi
 o.http:	TCPIPLibs:machine.h.types
 o.http:	TCPIPLibs:sys.h.socket
 o.http:	TCPIPLibs:sys.h.cdefs
-o.http:	TCPIPLibs:h.errno
 o.http:	TCPIPLibs:sys.h.errno
 o.http:	C:h.kernel
 o.http:	TCPIPLibs:net.h.if
@@ -188,3 +190,78 @@ o.http:	h.pads
 o.http:	h.http
 o.http:	h.files
 o.http:	h.mimemap
+os.mimemap:	c.mimemap
+os.mimemap:	C:h.kernel
+os.mimemap:	h.mimemap
+os.files:	c.files
+os.files:	C:h.kernel
+os.files:	h.files
+os.http:	c.http
+os.http:	C:h.kernel
+os.http:	C:h.swis
+os.http:	h.tcplibs
+os.http:	TCPIPLibs:sys.h.types
+os.http:	TCPIPLibs:sys.h.cdefs
+os.http:	TCPIPLibs:machine.h.endian
+os.http:	TCPIPLibs:machine.h.ansi
+os.http:	TCPIPLibs:machine.h.types
+os.http:	TCPIPLibs:sys.h.socket
+os.http:	TCPIPLibs:sys.h.cdefs
+os.http:	TCPIPLibs:sys.h.errno
+os.http:	C:h.kernel
+os.http:	TCPIPLibs:net.h.if
+os.http:	TCPIPLibs:sys.h.socket
+os.http:	TCPIPLibs:sys.h.time
+os.http:	TCPIPLibs:sys.h.cdefs
+os.http:	TCPIPLibs:net.h.if_arp
+os.http:	TCPIPLibs:sys.h.socket
+os.http:	TCPIPLibs:netinet.h.in
+os.http:	TCPIPLibs:sys.h.ioctl
+os.http:	TCPIPLibs:sys.h.ttycom
+os.http:	TCPIPLibs:sys.h.ioccom
+os.http:	TCPIPLibs:sys.h.ioccom
+os.http:	TCPIPLibs:sys.h.filio
+os.http:	TCPIPLibs:sys.h.ioccom
+os.http:	TCPIPLibs:sys.h.sockio
+os.http:	TCPIPLibs:sys.h.ioccom
+os.http:	TCPIPLibs:sys.h.cdefs
+os.http:	TCPIPLibs:h.netdb
+os.http:	TCPIPLibs:sys.h.cdefs
+os.http:	TCPIPLibs:netns.h.ns
+os.http:	TCPIPLibs:sys.h.cdefs
+os.http:	TCPIPLibs:sys.h.time
+os.http:	TCPIPLibs:h.socklib
+os.http:	TCPIPLibs:sys.h.types
+os.http:	TCPIPLibs:sys.h.socket
+os.http:	TCPIPLibs:sys.h.stat
+os.http:	TCPIPLibs:sys.h.time
+os.http:	TCPIPLibs:sys.h.cdefs
+os.http:	TCPIPLibs:sys.h.time
+os.http:	TCPIPLibs:sys.h.uio
+os.http:	TCPIPLibs:sys.h.cdefs
+os.http:	C:h.kernel
+os.http:	h.status
+os.http:	<Lib$Dir>.SSL.h.ssl
+os.http:	<Lib$Dir>.SSL.h.x509
+os.http:	<Lib$Dir>.SSL.h.stack
+os.http:	<Lib$Dir>.SSL.h.asn1
+os.http:	<Lib$Dir>.SSL.h.bn
+os.http:	<Lib$Dir>.SSL.h.stack
+os.http:	<Lib$Dir>.SSL.h.envelope
+os.http:	<Lib$Dir>.SSL.h.md2
+os.http:	<Lib$Dir>.SSL.h.md5
+os.http:	<Lib$Dir>.SSL.h.sha
+os.http:	<Lib$Dir>.SSL.h.des
+os.http:	<Lib$Dir>.SSL.h.rc4
+os.http:	<Lib$Dir>.SSL.h.rc2
+os.http:	<Lib$Dir>.SSL.h.idea
+os.http:	<Lib$Dir>.SSL.h.rsa
+os.http:	<Lib$Dir>.SSL.h.bn
+os.http:	<Lib$Dir>.SSL.h.dsa
+os.http:	<Lib$Dir>.SSL.h.bn
+os.http:	<Lib$Dir>.SSL.h.dh
+os.http:	h.httppub
+os.http:	h.pads
+os.http:	h.http
+os.http:	h.files
+os.http:	h.mimemap

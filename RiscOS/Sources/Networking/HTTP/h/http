@@ -4,6 +4,16 @@
 
 /* Headders for the http support module */
 
+#ifndef DEBUG
+#define DEBUG 0
+#endif
+
+#ifndef BOOL
+#define BOOL int
+#define TRUE 1
+#define FALSE 0
+#endif
+
 /* The version string sent in requests and expected in replies */
 #define HTTP_VERSION "HTTP/1.0"
 #define HTTP_VERSION_CHECK "HTTP/1."
@@ -63,6 +73,72 @@ typedef enum {
 #define http_status_code transfer_status
 #endif
 
+/* Keep-Alive and transaction queues
+ *
+ * The handle returned by HTTP_Open is a pointer to a http_connection
+ * structure. All http_connections are linked together in a 2LL by the next
+ * and prev fields.
+ *     A connection optionally has a pointer to an http_queue where there's
+ * a queue of transactions *not yet started*. This queue is linked in a 2LL
+ * by the queuenext/queueprev fields.
+ *     Once a transaction is started (allow_read) it's removed from q->queue
+ * and placed in the queuenext field of the transaction it's queued behind.
+ * This commits it as to what socket it's using. Its own queuenext field is
+ * set to NULL.
+ *     The current transaction on each socket is also kept in the http_conn
+ * array, indexed by socket number.
+ *     On a successful completion a transaction goes allow_write on its
+ * queuenext member if there is one, otherwise it gets one from the q->queue.
+ *     On a connection close (orphan_queue) open_socket is called on the
+ * queuenext member if there is one, otherwise the next one from q->queue.
+ *     open_socket and close_socket adjust q->sockets, freeing the q if it
+ * becomes zero.
+ *     If only one connection has ever been opened to a given server, it won't
+ * have a http_queue pointer. Only the second connection causes a queue to be
+ * set up (into which any third connection will be placed).
+ *
+ * Thus we have, for example
+ *
+ *      +---+          +---+        +----+
+ *      | A |---\  /---| A |        | A2 |       ...
+ *      +---+   |  |   +---+        +----+
+ *       |     ######
+ *      +---+  # Q  #
+ *      | S |  ######
+ *      +---+      |
+ *                +---+
+ *                | W |
+ *                +---+
+ *                 |
+ *                +---+
+ *                | W |
+ *                +---+
+ *                 ...
+ *
+ * where the A's are active transactions to the same server (with a socket
+ * each), S is a transaction to the same server that's been started (request
+ * sent but reply not started), Q is the http_queue for that server, and the
+ * W's are transactions to that server waiting to start. A2 is an active
+ * transaction to a different server.
+ *     The other links not shown on that diagram are the http_conn array, which
+ * points to the A's and to A2, and the doubly-linked list which connects all
+ * the transactions (A, A2, S, W).
+ *
+ */
+
+#define hostflags_SECURE        0x1
+#define hostflags_RANGES        0x2     /* Server supports byte ranges */
+#define hostflags_KEEPALIVE     0x4     /* Server supports keep-alive */
+
+typedef struct http_queue {
+    int                nsockets;
+    struct httpconn    *queue;
+    struct http_queue  *prev;
+    struct http_queue  *next;
+    struct sockaddr_in sa;
+    int                flags;
+} http_queue;
+
 typedef struct httpconn {
     int magic;			/* Magic number to check bogus handles */
     struct httpconn *next;	/* Pointer to the next one */
@@ -70,8 +146,8 @@ typedef struct httpconn {
     int poll_word;		/* Goes non-zero on completion or error */
     http_status_code status;	/* Conneciton status */
     char *object;		/* Object to be fetched */
-    http_header_item *sendhead;	/* pointer into currently left headers to be sent with the request */
-    int socket;			/* Socket number, or -1 after the socket is closed */
+    http_header_item *sendhead;	/* Remaining headers to be sent */
+    int socket;			/* Socket number, or -1 */
     struct sockaddr_in sa;	/* Address we want to connect to */
     char *fname;		/* Name of file for the data */
     int fh;			/* RISC OS handle to the above file when open */
@@ -92,7 +168,21 @@ typedef struct httpconn {
 #endif
     int flags;
     int data_pending;
-    http_header_item *sendhead_base;	/* All Headers to be sent with the request */
+    http_header_item *sendhead_base; /* All headers */
+
+    struct httpconn *queuenext, *queueprev;
+                                /* Linked list starting from an http_queue */
+
+    struct http_queue *queue;   /* Queue of further requests to this host */
+
+    int total_size;             /* For partial requests */
+
+    char *boundary;             /* Server-push boundary (NULL for none) */
+    int nearlyboundary;         /* #chars of boundary found at end of packet */
+
+#if DEBUG
+    int onthissocket;
+#endif
 } http_connection;
 
 #define HTTP_MAGIC	0x4582FB29
@@ -120,4 +210,4 @@ void http_process_header_line(http_connection *c, char *l);
 void http_process_response_line(http_connection *c, char *l);
 void http_flush_data_to_file(http_connection *c);
 void http_socket_close(http_connection *c);
-void http_check_special_headers(http_connection *c, http_header_item *hi);
+BOOL http_check_special_headers(http_connection *c, char *key, char *value);
