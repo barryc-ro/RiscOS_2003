@@ -63,13 +63,16 @@ EXPORTS    =
 
 
 OBJS=o.aifcode o.hostdep o.link
+OBJSI=i.aifcode i.hostdep i.link
 
 LIBS= ${CLXLIB} ${CLIB}
 
 #
 # Rule patterns
 #
+.SUFFIXES: .i
 .c.o:;     ${CC} ${CCFLAGS} -o $@ $<
+.c.i:;     ${CC} ${CCFLAGS} > $@ $< -E -C
 .s.o:;     ${AS} ${ASFLAGS} -o $@ $<
 .cmhg.o:;  ${CM} ${CMFLAGS} -o $@ $<
 .cmhg.h:;  ${CM} ${CMFLAGS} -d $@ $<
@@ -84,6 +87,9 @@ all:	${TARGET}
 #
 rom: ${TARGET}
         @echo ${COMPONENT}: rom module built
+
+preprocess: ${OBJSI}
+        @echo ${COMPONENT}: preprocesed source built
 
 export: export_${PHASE}
 
@@ -113,6 +119,7 @@ install_dirs:
 
 clean:
         ${WIPE} o.* ${WFLAGS}
+        ${WIPE} i ${WFLAGS}
         ${RM} o
         ${RM} ${COMPONENT}
         @echo ${COMPONENT}: cleaned
@@ -125,6 +132,7 @@ export_libs:
 
 o.dirs:
 	${MKDIR} o
+	${MKDIR} i
 	create o.dirs
 
 #
