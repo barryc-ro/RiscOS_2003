@@ -30,6 +30,7 @@
 #include "Global.h"
 #include "Utils.h"
 
+#include "ChoiceDefs.h"
 #include "Fetch.h" /* (Which itself includes URLstat.h) */
 #include "Filetypes.h"
 #include "Hotlist.h"
@@ -37,6 +38,10 @@
 #include "URLutils.h"
 
 #include "Save.h"
+
+/* Static function prototypes */
+
+static int save_save_general(FILE * file, int how_many, const int numbers[], const char * strings[], int match, int def);
 
 /*************************************************/
 /* save_save_source()                            */
@@ -838,6 +843,177 @@ char * save_build_messages_path(int which)
 }
 
 /*************************************************/
+/* save_save_colour()                            */
+/*                                               */
+/* Output a colour number in the format seen in  */
+/* the Choices file, to a given file.            */
+/*                                               */
+/* Parameters: Pointer to a FILE struct holding  */
+/*             info on the file to write to;     */
+/*                                               */
+/*             Colour number to write.           */
+/*                                               */
+/* Returns:    Number of characters written, or  */
+/*             EOF if there was an error.        */
+/*************************************************/
+
+int save_save_colour(FILE * file, int colour)
+{
+  if (fprintf(file, "0x%08x", colour) < 10) return EOF;
+
+  return 10;
+}
+
+/*************************************************/
+/* save_save_number()                            */
+/*                                               */
+/* Output a number as ASCII, to a given file.    */
+/*                                               */
+/* Parameters: Pointer to a FILE struct holding  */
+/*             info on the file to write to;     */
+/*                                               */
+/*             Number to write.                  */
+/*                                               */
+/* Returns:    Number of characters written, or  */
+/*             EOF if there was an error.        */
+/*************************************************/
+
+int save_save_number(FILE * file, int number)
+{
+  char buffer[64];
+  int  len;
+
+  len = sprintf(buffer, "%d", number);
+
+  if (fprintf(file, "%s", buffer) < len) return EOF;
+
+  return len;
+}
+
+/*************************************************/
+/* save_save_yes_no()                            */
+/*                                               */
+/* Output either 'yes' or 'no' to a given file.  */
+/*                                               */
+/* Parameters: Pointer to a FILE struct holding  */
+/*             info on the file to write to;     */
+/*                                               */
+/*             0 to write 'no', else 'yes'.      */
+/*                                               */
+/* Returns:    Number of characters written, or  */
+/*             EOF if there was an error.        */
+/*************************************************/
+
+int save_save_yes_no(FILE * file, int yes)
+{
+  if (!yes)
+  {
+    if (fprintf(file, "no") < 2) return EOF;
+  }
+  else
+  {
+    if (fprintf(file, "yes") < 3) return EOF;
+  }
+
+  return !yes ? 2 : 3;
+}
+
+/*************************************************/
+/* save_save_general()                           */
+/*                                               */
+/* Save a general item to the given file. This   */
+/* is for items with a discrete set of values    */
+/* that map to a discrete set of strings.        */
+/*                                               */
+/* Parameters: Pointer to a FILE struct holding  */
+/*             info on the file to write to;     */
+/*                                               */
+/*             The number of discrete values     */
+/*             that the item may take;           */
+/*                                               */
+/*             Pointer to an array of the above  */
+/*             size holding the values;          */
+/*                                               */
+/*             Pointer to an array of (char *)'s */
+/*             pointing to the strings that map  */
+/*             to the values in the int array;   */
+/*                                               */
+/*             Value to match out of those given */
+/*             in the int array;                 */
+/*                                               */
+/*             Default item (from 1 to the value */
+/*             given in the second parameter) to */
+/*             use if the match value is not     */
+/*             found in the int array.           */
+/*                                               */
+/* Returns:    Number of characters written, or  */
+/*             EOF if there was an error.        */
+/*                                               */
+/* Assumes:    No sanity checking is given on    */
+/*             any of the supplied parameters... */
+/*************************************************/
+
+static int save_save_general(FILE * file, int how_many, const int numbers[], const char * strings[], int match, int def)
+{
+  int          i, found = 0;
+  const char * string   = NULL;
+  int          sl;
+
+  /* Try to find the match value in the array of ints */
+
+  for (i = 0; i < how_many && !found; i++)
+  {
+    if (numbers[i] == match) string = strings[i], found = 1;
+  }
+
+  /* If not found, raise an error in TRACE builds, and pick */
+  /* the given default string                               */
+
+  if (!found)
+  {
+    #ifdef TRACE
+
+      erb.errnum = Utils_Error_Custom_Normal;
+
+      sprintf(erb.errmess,
+              "Match value '%d' not found in save_save_general (",
+              match);
+
+      for (
+            i = 0;
+            i < how_many && strlen(erb.errmess) + strlen(strings[i]) + 9 < sizeof(erb.errmess);
+            i++
+          )
+      {
+        strcat(erb.errmess, strings[i]);
+        if (i != how_many - 1) strcat(erb.errmess, ", ");
+
+        if (i == how_many - 2) strcat(erb.errmess, "or ");
+      }
+
+      strcat(erb.errmess, ").");
+
+      show_error_ret(&erb);
+
+    #endif
+
+    if (def > how_many) def = how_many;
+
+    string = strings[def - 1];
+  }
+
+  /* Output the item to the file */
+
+  if (!string) return EOF;
+
+  sl = strlen(string);
+
+  if (fprintf(file, "%s", string) < sl) return EOF;
+
+  return sl;
+}
+
+/*************************************************/
 /* save_save_choices()                           */
 /*                                               */
 /* Saves out the Choices file to either the      */
@@ -852,13 +1028,445 @@ char * save_build_messages_path(int which)
 
 _kernel_oserror * save_save_choices(char * path)
 {
-  FILE * file;
-  char * out;
+  _kernel_oserror * e;
+  FILE            * file;
+  char            * out;
+
+  char            * p  = NULL; /* Moves through the file loaded into a malloc block. */
+  char            * op = NULL; /* Remembers the start address of the block.          */
+  char            * en;        /* Remembers the end address of the block.            */
+
+  int               size;
+  int               type;
+
+  #ifdef TRACE
+    if (tl & (1u<<26)) Printf("save_save_choices: Called\n");
+  #endif
+
+  /* Find out where to get the file from */
 
   if (path && *path) out = path;
   else               out = save_build_messages_path(0);
 
-  if (path && *path && out) free(out);
+  if (!out) return make_no_memory_error(14);
+
+  #ifdef TRACE
+    if (tl & (1u<<26)) Printf("save_save_choices: Working with file '%s'\n", out);
+  #endif
+
+  /* Load it into a temporary buffer */
+
+  RetError(_swix(OS_File,
+                 _INR(0,1) | _OUT(0) | _OUT(4),
+
+                 17,
+                 out,
+
+                 &type,
+                 &size));
+
+  if (type != 1) goto save_save_choices_read_error;
+
+  /* Allocate memory for the file */
+
+  p = malloc(size + 1);
+
+  if (!p)
+  {
+    if (!path || !*path) free(out);
+
+    return make_no_memory_error(14);
+  }
+
+  en = p + size;
+  op = p;
+
+  /* Read the file into memory */
+
+  RetError(_swix(OS_File,
+                 _INR(0,3),
+
+                 16,
+                 out,
+                 p,
+                 0));
+
+  /* Force a null terminator at the end, so strchr() calls */
+  /* (or equivalent code fragments) don't run off the end  */
+  /* of the block.                                         */
+
+  p[size] = 0;
+
+  /* Open it for writing */
+
+  file = fopen(out, "wb");
+
+  if (!file) goto save_save_choices_read_error;
+
+  /* Use the original file in memory as a reference for */
+  /* writing the new one.                               */
+
+  do
+  {
+    /* Comments or white space */
+
+    if (*p == '#' || *p < ' ')
+    {
+      /* Output until an end of line marker */
+
+      while (*p >= ' ')
+      {
+        if (fputc(*p++, file) == EOF) goto save_save_choices_write_error;
+      }
+
+      /* Output any control characters - we thus preserve   */
+      /* CR, LF, CR+LF or whatever was in the original file */
+
+      while (*p < ' ' && p < en)
+      {
+        if (fputc(*p++, file) == EOF) goto save_save_choices_write_error;
+      }
+    }
+
+    /* If not comments or white space, must have a token */
+
+    else
+    {
+      char * token_end;
+      int    len;
+
+      token_end = p;
+
+      /* Search for a ':', but don't go off the end of a line */
+
+      while (*token_end > 31 && *token_end != ':') token_end++;
+
+      len = token_end - p; /* Doesn't include ':' in the count */
+
+      if (*token_end == ':' && len)
+      {
+        int i, result = 0;
+
+        for (i = 0; i <= len; i++) /* '<=' to include the ':' */
+        {
+          if (fputc(p[i], file) == EOF) goto save_save_choices_write_error;
+        }
+
+        /* Now it just gets tedious...! */
+
+        if      (!strncmp(p, "BackColour",       len)) result = save_save_colour(file, choices.background_colour);
+        else if (!strncmp(p, "TextColour",       len)) result = save_save_colour(file, choices.text_colour);
+        else if (!strncmp(p, "LinkColour",       len)) result = save_save_colour(file, choices.link_colour);
+        else if (!strncmp(p, "UsedColour",       len)) result = save_save_colour(file, choices.used_colour);
+        else if (!strncmp(p, "FollColour",       len)) result = save_save_colour(file, choices.followed_colour);
+        else if (!strncmp(p, "SeleColour",       len)) result = save_save_colour(file, choices.selected_colour);
+
+        else if (!strncmp(p, "FontSize",         len)) result = save_save_number(file, choices.font_size);
+        else if (!strncmp(p, "SystemFont",       len)) result = save_save_yes_no(file, choices.system_font);
+        else if (!strncmp(p, "Encoding",         len)) result = save_save_number(file, choices.encoding);
+
+        else if (!strncmp(p, "UnderlineLinks",   len)) result = save_save_yes_no(file, choices.underline_links);
+        else if (!strncmp(p, "UseSourceCols",    len)) result = save_save_yes_no(file, choices.use_source_cols);
+        else if (!strncmp(p, "ShowForeground",   len)) result = save_save_yes_no(file, choices.show_foreground);
+        else if (!strncmp(p, "ShowBackground",   len)) result = save_save_yes_no(file, choices.show_background);
+
+        else if (!strncmp(p, "LeftMargin",       len)) result = save_save_number(file, choices.left_margin);
+        else if (!strncmp(p, "RightMargin",      len)) result = save_save_number(file, choices.right_margin);
+        else if (!strncmp(p, "QuoteMargin",      len)) result = save_save_number(file, choices.quote_margin);
+        else if (!strncmp(p, "Leading",          len)) result = save_save_number(file, choices.leading);
+        else if (!strncmp(p, "LeftIndent",       len)) result = save_save_number(file, choices.left_indent);
+
+        else if (!strncmp(p, "MaxImages",        len)) result = save_save_number(file, choices.maximages);
+        else if (!strncmp(p, "ClientPull",       len)) result = save_save_yes_no(file, choices.client_pull);
+
+        else if (!strncmp(p, "SaveHotlist",      len))
+        {
+          static const char * s[] = {
+                                      "never",
+                                      "once",
+                                      "always"
+                                    };
+
+          static const int    v[] = {
+                                      Choices_SaveHotlist_Never,
+                                      Choices_SaveHotlist_Once,
+                                      Choices_SaveHotlist_Always
+                                    };
+
+          result = save_save_general(file, 3, v, s, choices.save_hotlist, 3);
+        }
+        else if (!strncmp(p, "AddHotlist", len))
+        {
+          static const char * s[] = {
+                                      "top",
+                                      "bottom"
+                                    };
+
+          static const int    v[] = {
+                                      Choices_AddHotlist_Top,
+                                      Choices_AddHotlist_Bottom
+                                    };
+
+          result = save_save_general(file, 2, v, s, choices.add_hotlist, 2);
+        }
+        else if (!strncmp(p, "HotlistType", len))
+        {
+          static const char * s[] = {
+                                      "urls",
+                                      "descriptions"
+                                    };
+
+          static const int    v[] = {
+                                      Choices_HotlistType_URLs,
+                                      Choices_HotlistType_Descriptions
+                                    };
+
+          result = save_save_general(file, 2, v, s, choices.hotlist_show, 2);
+        }
+        else if (!strncmp(p, "AutoOpenDelay",    len)) result = save_save_number(file, choices.auto_open_delay);
+        else if (!strncmp(p, "AutoScrollDelay",  len)) result = save_save_number(file, choices.auto_scroll_delay);
+        else if (!strncmp(p, "AutoScrollMargin", len)) result = save_save_number(file, choices.auto_scroll_margin);
+
+        else if (!strncmp(p, "GHistSize",        len)) result = save_save_number(file, choices.g_hist_size);
+        else if (!strncmp(p, "VHistSize",        len)) result = save_save_number(file, choices.v_hist_size);
+        else if (!strncmp(p, "ShowURLs",         len)) result = save_save_yes_no(file, choices.show_urls);
+        else if (!strncmp(p, "SaveHistory",      len))
+        {
+          static const char * s[] = {
+                                      "never",
+                                      "once",
+                                      "always"
+                                    };
+
+          static const int    v[] = {
+                                      Choices_SaveHistory_Never,
+                                      Choices_SaveHistory_Once,
+                                      Choices_SaveHistory_Always
+                                    };
+
+          result = save_save_general(file, 3, v, s, choices.save_history, 3);
+        }
+
+        else if (!strncmp(p, "URLbar",           len)) result = save_save_yes_no(file, choices.url_bar);
+        else if (!strncmp(p, "ButtonBar",        len)) result = save_save_yes_no(file, choices.button_bar);
+        else if (!strncmp(p, "StatusBar",        len)) result = save_save_yes_no(file, choices.status_bar);
+        else if (!strncmp(p, "MoveGadgets",      len))
+        {
+          static const char * s[] = {
+                                      "never",
+                                      "atend",
+                                      "during"
+                                    };
+
+          static const int    v[] = {
+                                      Choices_MoveGadgets_Never,
+                                      Choices_MoveGadgets_AtEnd,
+                                      Choices_MoveGadgets_During
+                                    };
+
+          result = save_save_general(file, 3, v, s, choices.move_gadgets, 3);
+        }
+
+        else if (!strncmp(p, "Width",            len)) result = save_save_number(file, choices.width);
+        else if (!strncmp(p, "Height",           len)) result = save_save_number(file, choices.height);
+        else if (!strncmp(p, "OverrideX",        len)) result = save_save_number(file, choices.override_x);
+        else if (!strncmp(p, "OverrideY",        len)) result = save_save_number(file, choices.override_y);
+        else if (!strncmp(p, "SolidResize",      len))
+        {
+          static const char * s[] = {
+                                      "no",
+                                      "yes",
+                                      "always"
+                                    };
+
+          static const int    v[] = {
+                                      Choices_SolidResize_No,
+                                      Choices_SolidResize_Yes,
+                                      Choices_SolidResize_Always
+                                    };
+
+          result = save_save_general(file, 3, v, s, choices.solid_resize, 3);
+        }
+        else if (!strncmp(p, "FullScreen",       len)) result = save_save_yes_no(file, choices.full_screen);
+        else if (!strncmp(p, "HScroll",          len))
+        {
+          static const char * s[] = {
+                                      "no",
+                                      "yes",
+                                      "auto"
+                                    };
+
+          static const int    v[] = {
+                                      Choices_HScroll_No,
+                                      Choices_HScroll_Yes,
+                                      Choices_HScroll_Auto
+                                    };
+
+          result = save_save_general(file, 3, v, s, choices.h_scroll, 3);
+        }
+        else if (!strncmp(p, "VScroll",          len))
+        {
+          static const char * s[] = {
+                                      "no",
+                                      "yes",
+                                      "auto"
+                                    };
+
+          static const int    v[] = {
+                                      Choices_VScroll_No,
+                                      Choices_VScroll_Yes,
+                                      Choices_VScroll_Auto
+                                    };
+
+          result = save_save_general(file, 3, v, s, choices.v_scroll, 3);
+        }
+
+        else if (!strncmp(p, "RefoWait",         len)) result = save_save_yes_no(file, choices.refo_wait);
+        else if (!strncmp(p, "RefoHang",         len)) result = save_save_yes_no(file, choices.refo_hang);
+        else if (!strncmp(p, "RefoTime",         len)) result = save_save_number(file, choices.refo_time);
+
+        else if (!strncmp(p, "FixedPtr",         len)) result = save_save_yes_no(file, choices.fixed_pointer);
+        else if (!strncmp(p, "HighlightLks",     len)) result = save_save_yes_no(file, choices.highlight_links);
+        else if (!strncmp(p, "KeyboardCtl",      len)) result = save_save_yes_no(file, choices.keyboard_ctrl);
+
+        else if (!strncmp(p, "Clone",            len)) result = save_save_yes_no(file, choices.clone);
+        else if (!strncmp(p, "UseProxy",         len)) result = save_save_yes_no(file, choices.use_proxy);
+
+        else
+        {
+          /* Token we don't understand - output the rest of the line */
+
+          #ifdef TRACE
+
+            if (tl & (1u<<26))
+            {
+              Printf("save_save_choices: Unrecognised token '");
+
+              for (i = 0; i <= len; i++)
+              {
+                Printf("%c", p[i]);
+              }
+
+              Printf("'\n");
+            }
+
+          #endif
+
+          p += len + 1;
+          while (*p >= ' ' && result != EOF) result = fputc(*p++, file);
+        }
+
+        if (result == EOF) goto save_save_choices_write_error;
+
+        /* Skip to the end of the line */
+
+        while (*p >= ' ') p++;
+
+        /* Output any control characters - we thus preserve   */
+        /* CR, LF, CR+LF or whatever was in the original file */
+
+        while (*p < ' ' && p < en)
+        {
+          if (fputc(*p++, file) == EOF) goto save_save_choices_write_error;
+        }
+      }
+      else
+      {
+        /* Unrecognised line contents; spit out the whole line */
+
+        #ifdef TRACE
+
+          if (tl & (1u<<26))
+          {
+            int i = 0;
+
+            Printf("save_save_choices: Unknown line fragment '");
+
+            while (p[i] >= ' ')
+            {
+              Printf("%c", p[i++]);
+            }
+
+            Printf("'\n");
+          }
+
+        #endif
+
+        while (*p >= ' ')
+        {
+          if (fputc(*p++, file) == EOF) goto save_save_choices_write_error;
+        }
+      }
+    }
+  }
+  while (p < en);
+
+  /* Close the output file */
+
+  fclose(file);
+
+  /* If the path was allocated locally, free it now */
+
+  if (!path || !*path) free(out);
+
+  /* Free the old Choices file */
+
+  free(op);
+
+  /* Finished */
+
+  #ifdef TRACE
+    if (tl & (1u<<26)) Printf("save_save_choices: Successful\n");
+  #endif
 
   return NULL;
+
+  /* Error condition exits */
+
+save_save_choices_read_error:
+
+  if (!path || !*path) free(out);
+  if (op)              free(op);
+
+  erb.errnum = Utils_Error_Custom_Message;
+
+  StrNCpy0(erb.errmess,
+           lookup_token("COChoices:Can't open the Choices file - the preferences cannot be saved.",
+                        0,
+                        0));
+
+  #ifdef TRACE
+    if (tl & (1u<<26)) Printf("save_save_choices: Can't open Choices file, exitting\n");
+  #endif
+
+  return &erb;
+
+save_save_choices_write_error:
+
+  erb = *_kernel_last_oserror();
+
+  if (file) fclose(file);
+
+  /* We really want to avoid leaving a broken Choices file, so */
+  /* have a last ditch go at dumping the original file down.   */
+
+  _swix(OS_File,
+        _INR(0,2) | _INR(4,5),
+
+        10,
+        out,
+        FileType_TEXT,
+        op,
+        en);
+
+  /* Free any temporary blocks */
+
+  if (!path || !*path) free(out);
+  if (op)              free(op);
+
+  #ifdef TRACE
+    if (tl & (1u<<26)) Printf("save_save_choices: Exitting with error\n");
+  #endif
+
+  return &erb;
 }
