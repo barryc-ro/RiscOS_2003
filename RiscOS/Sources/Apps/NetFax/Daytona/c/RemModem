@@ -46,6 +46,25 @@
  * costing you money.  Also noticed and fixed a bug in the handling of a data
  * answer script failure: was starting the main answer script again before going
  * into state Incoming_RxFinished instead of starting hangup script.
+ *
+ * 1998-06-03: BAL
+ * ISP and ZModem calls were using the same hangup script, so when I changed
+ * the script on 1998-05-06 to fix a ZModem related problem I introduced some
+ * ISP ones.  They now use different scripts.
+ *
+ * All calls to start scripts now tell the Dialler not to reset the modem.
+ * Sometimes both Daytona and the Dialler were resetting the modem, causing
+ * unnecessary delays.  Daytona now takes care of all the resets, which should
+ * give us maximum flexibility for the future if eg. we need different reset
+ * strategies for different situations.
+ *
+ * Updated all dialler_monitor_<x>_script calls.  The new version is more
+ * readable, more compact and allows you to easily distinguish between completed
+ * and failed scripts, even if you're going to end up in the same state for
+ * both.
+ *
+ * Fixed a bug I noticed in Incoming_Data - if received an RX_RM_DIAL_<x> call
+ * it would hangup and do the dial instead of sending RM_RM_DIAL_REJECTED.
  */
 
 
@@ -310,21 +329,11 @@ static const char fax_hangup_script[] =
     "\"\" ATH0\n"
     "\\r\\nOK\\r\\n \\c\n";
 
-#if 0
-static const char data_hangup_script[] =
-    "ABORT ERROR\n"
-    "TIMEOUT 5\n"
-    "\"\" \\d+++\\d\\c\n"
-    "\\r\\n \\c\n"
-    "\\r\\n ATH0\n"
-    "\\r\\nOK\\r\\n \\c\n";
-#else
 static const char data_hangup_script[] =
     "ABORT ERROR\n"
     "TIMEOUT 5\n"
     "'NO CARRIER-\\c' ATH0\n"
     "\\r\\nOK\\r\\n \\c\n";
-#endif
 
 static const char data_dial_script[] =
     "TIMEOUT 60\n"
@@ -396,6 +405,13 @@ static const char isp_dial_script[] =
     "<Dialler$Dial$Prompt4> <Dialler$Dial$Response4>\n"
     "<Dialler$Dial$Prompt5> <Dialler$Dial$Response5>\n"
     "CONNECTION_TIMEOUT 0\n";
+
+static const char isp_hangup_script[] =
+    "ABORT ERROR\n"
+    "TIMEOUT 5\n"
+    "\"\" +++\\d\\c\n"
+    "\\r\\nOK\\r\\n-\\c ATH0\n"
+    "\\r\\nOK\\r\\n \\c\n";
 
 
 
@@ -489,11 +505,7 @@ extern void RemModem_StateMachine (const int messageNumber, messageDataBlock *me
             break;
 
         case Outgoing_Dial:
-#if 1
             e = outgoing_dial (messageNumber, messageData, remote_modem_data, &state, stash_number, stash_connection_type);
-#else
-            e = outgoing_dial (messageNumber, messageData, remote_modem_data, &state, messageData->data.dial.number);
-#endif
             break;
 
         case Outgoing_Dialling:
@@ -565,56 +577,72 @@ static _kernel_oserror *idle (const int input,
        case DI_RM_STATUS_CHANGED:
             dprintf((NULL, "Dialler status: 0x%X\n", messageData->data.dialler.status));
 
-            dialler_monitor_answer_script ((int *) state,
-                                           messageData->data.dialler.status,
-                                           Idle,
-                                           Idle,
-                                           Incoming_RxConnected);
             /* probably want to turn dialler failed state into an error state */
             /* setup for new state */
-            if (*state == Incoming_RxConnected)
+            switch (dialler_monitor_answer_script (messageData->data.dialler.status))
             {
+                case DiallerIF_ScriptCompleted:
+                    *state = Incoming_RxConnected;
 /* @@@@ No blocking is implemented for the time being
-                if (g_reserved)
-                    *state = Blocking; /@ Refuse to accept call: short of memory
-                                          and line needed to send fax being scanned @/
-                else
-*/
-                {                      /* Accept call: enough memory */
-                    char conntype[256];
-
-                    StateKicker_SendMessage(Screen_StateMachine, RM_SC_INCOMING, NULL); /* show incoming call animation */
-
-                    /* @@ Find out type of connection -- use REPORT FAX and REPORT DATA in script?*/
-                    _swix (Dialler_Status, _INR (0, 2),
-
-                           2,
-                           conntype,
-                           250); /* @@ Does this call put in a terminating NUL? */
-                                             /* @@ Even if buffer too small? */
-                                             /* @@ Does R2 on input include the terminator? */
-                    dprintf((NULL, "Connection established: Type = '%s'\n", conntype));
-                    ActiveLight_On();
-
-                    if (strcmp (conntype, "FAX") == 0)
-                    {
-                        StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_INCOMING_FAX, NULL);
-                    }
-                    else if (strcmp (conntype, "DATA") == 0)
-                    {
-                        e = dialler_start_answer_script (0,    /* don't force modem reset before starting script */
-                                                         data_answer_script,
-                                                         data_hangup_script,
-                                                         remote_modem_data->serial_input_stream,
-                                                         remote_modem_data->serial_output_stream);
-                        if (e == NULL)
-                            *state = Incoming_Data;
-                    }
+                    if (g_reserved)
+                        *state = Blocking; /@ Refuse to accept call: short of memory
+                                              and line needed to send fax being scanned @/
                     else
-                    {
-                        StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_INCOMING_VOICE, NULL);
+*/
+                    {                      /* Accept call: enough memory */
+                        char conntype[256];
+
+                        StateKicker_SendMessage(Screen_StateMachine, RM_SC_INCOMING, NULL); /* show incoming call animation */
+
+                        /* @@ Find out type of connection -- use REPORT FAX and REPORT DATA in script?*/
+                        _swix (Dialler_Status, _INR (0, 2),
+
+                               2,
+                               conntype,
+                               250); /* @@ Does this call put in a terminating NUL? */
+                                                 /* @@ Even if buffer too small? */
+                                                 /* @@ Does R2 on input include the terminator? */
+                        dprintf((NULL, "Connection established: Type = '%s'\n", conntype));
+                        ActiveLight_On();
+
+                        if (strcmp (conntype, "FAX") == 0)
+                        {
+                            StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_INCOMING_FAX, NULL);
+                        }
+                        else if (strcmp (conntype, "DATA") == 0)
+                        {
+                            e = dialler_start_answer_script (0,    /* don't force modem reset before starting script */
+                                                             data_answer_script,
+                                                             data_hangup_script,
+                                                             remote_modem_data->serial_input_stream,
+                                                             remote_modem_data->serial_output_stream);
+                            if (e == NULL)
+                            {
+                                *state = Incoming_Data;
+                            }
+                        }
+                        else
+                        {
+                            StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_INCOMING_VOICE, NULL);
+                        }
                     }
-                }
+                    break;
+
+                case DiallerIF_ScriptFailed:
+                    /* Reset modem and attempt to restart script */
+                    (void) RemoteModem_ResetModem ();
+                    e = dialler_start_answer_script (
+                            0,    /* don't reset modem before executing script */
+                            answer_script,
+                            fax_hangup_script,
+                            remote_modem_data->serial_input_stream,
+                            remote_modem_data->serial_output_stream);
+                    *state = Idle;
+                    break;
+
+                default:    /* script still executing */
+                    *state = Idle;
+                    break;
             }
             break;
 
@@ -651,59 +679,35 @@ static _kernel_oserror *incoming_data (const int input,
     switch (input)
     {
        case DI_RM_STATUS_CHANGED:
-           dialler_monitor_answer_script ((int *) state,
-                                           messageData->data.dialler.status,
-                                           Incoming_Data,
-                                           Idle,
-                                           Incoming_RxConnected);
-           switch (*state)
+           switch (dialler_monitor_answer_script (messageData->data.dialler.status))
            {
-               case Incoming_RxConnected:
+               case DiallerIF_ScriptCompleted:
+                   *state = Incoming_RxConnected;
                    StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_INCOMING_DAYTONA, NULL);
                    break;
 
-               case Idle:
-#if 0
-                   e = dialler_start_answer_script (1,    /* force modem reset before executing script */
-                                                    answer_script,
-                                                    fax_hangup_script,
-                                                    remote_modem_data->serial_input_stream,
-                                                    remote_modem_data->serial_output_stream);
-#endif
+               case DiallerIF_ScriptFailed:
                    e = dialler_start_hangup_script ();
 
                    StateKicker_SendMessage(Screen_StateMachine, RM_SC_INCOMING_COMPLETE, NULL); /* terminate incoming call animation */
-                   /*StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_GOING_IDLE, NULL); RCM says: let Incoming_RxFinished issue this*/
-#if 0
-                   ActiveLight_Off();
-#endif
                    *state = Incoming_RxFinished;
                    break;
 
-               default:
-                  break;
+               default:    /* script still executing */
+                   *state = Incoming_Data;
+                   break;
            }
            break;
 
         case RX_RM_HANGUP:
-            e = dialler_start_answer_script (1,    /* force modem reset before executing script */
-                                             answer_script,
-                                             fax_hangup_script,
-                                             remote_modem_data->serial_input_stream,
-                                             remote_modem_data->serial_output_stream);
-
+            e = dialler_start_hangup_script ();
             StateKicker_SendMessage(Screen_StateMachine, RM_SC_INCOMING_COMPLETE, NULL);    /* terminate incoming call animation */
-            /*StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_GOING_IDLE, NULL); RCM says: let Incoming_RxFinished issue this*/
-
-#if 0
-            ActiveLight_Off();
-#endif
             *state = Incoming_RxFinished;
             break;
 
         case RX_RM_DIAL_FAX: case RX_RM_DIAL_DAYTONA: case RX_RM_DIAL_ISP:
-            e = dialler_start_hangup_script ();
-            *state = Outgoing_Dial; /*@@ Must be careful not to leave script running if error */
+            StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_DIAL_REJECTED, NULL);
+            *state = Incoming_Data;
             break;
 
         default:
@@ -740,9 +744,6 @@ static _kernel_oserror *incoming_rx_connected (const int input,
         case RX_RM_HANGUP:
             e = dialler_start_hangup_script ();
             StateKicker_SendMessage(Screen_StateMachine, RM_SC_INCOMING_COMPLETE, NULL);    /* terminate incoming call animation */
-#if 0
-            ActiveLight_Off();
-#endif
             *state = Incoming_RxFinished; /*@@ Must be careful not to leave script running if error */
             /*RCM says: RM_RX_GOING_IDLE will be issued by Incoming_RxFinished*/
             break;
@@ -773,48 +774,21 @@ static _kernel_oserror *incoming_switching_over (const int input,
     {
         case DI_RM_STATUS_CHANGED:
         {
-            enum
+            switch (dialler_monitor_answer_script (messageData->data.dialler.status))
             {
-                Dialler_ExecutingScript,
-                Dialler_ScriptFailed,
-                Dialler_ScriptCompleted
-            };
-            int local_dialler_state;
-
-            dialler_monitor_answer_script (&local_dialler_state,
-                                           messageData->data.dialler.status,
-                                           Dialler_ExecutingScript,
-                                           Dialler_ScriptFailed,
-                                           Dialler_ScriptCompleted);
-            switch (local_dialler_state)
-            {
-                case Dialler_ExecutingScript:
-                    *state = Incoming_SwitchingOver;
-                    break;
-
-                case Dialler_ScriptFailed:
-                    {
-#if 1
-                        RemModem_SendRCError(RemXfer_StateMachine, RM_RX_ERROR, "Remote modem: Script failed (1)", (messageData->data.dialler.status & 0xFF));
-#else
-                        messageDataBlock *sendMessage;
-
-                        StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_ERROR, &sendMessage);
-                        sendMessage->data.rm_error.rc = 0;  /*>>>should rc be zero???*/
-                        sendMessage->data.rm_error.err.errnum = 0;  /*>>>should this be 'internal error + rc? */
-                        sprintf(sendMessage->data.rm_error.err.errmess, "Remote modem: Script failed (1)");
-#endif
-                        *state = Incoming_RxConnected;
-                        /*>>>Will be sent back RX_RM_HANGUP in response???*/
-                    }
-                    break;
-
-                case Dialler_ScriptCompleted:
+                case DiallerIF_ScriptCompleted:
                     StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_SWITCHOVER_DONE, NULL);
                     *state = Incoming_RxConnected;
                     break;
 
-                default:
+                case DiallerIF_ScriptFailed:
+                    RemModem_SendRCError(RemXfer_StateMachine, RM_RX_ERROR, "Remote modem: Script failed (1)", (messageData->data.dialler.status & 0xFF));
+                    *state = Incoming_RxConnected;
+                    /*>>>Will be sent back RX_RM_HANGUP in response???*/
+                    break;
+
+                default:     /* script still executing */
+                    *state = Incoming_SwitchingOver;
                     break;
             }
             break;
@@ -842,26 +816,27 @@ static _kernel_oserror *incoming_rx_finished (const int input,
         case DI_RM_STATUS_CHANGED:
             dprintf((NULL, "Dialler status: 0x%X\n", messageData->data.dialler.status));
 
-            dialler_monitor_hangup_script ((int *) state,
-                                           messageData->data.dialler.status,
-                                           Incoming_RxFinished,
-                                           Idle,
-                                           Idle);
             /* @@ probably want to turn dialler failed state into an error state */
             /* setup for new state */
-            if (*state == Idle) /* @@ Do this for failed+completed, yes? */
+            switch (dialler_monitor_hangup_script (messageData->data.dialler.status))
             {
-                e = RemoteModem_ResetModem ();
+                case DiallerIF_ScriptCompleted:
+                case DiallerIF_ScriptFailed:
+                    ActiveLight_Off ();
+                    e = RemoteModem_ResetModem ();
+                    e = dialler_start_answer_script (0,    /* don't reset modem before executing script */
+                                                     answer_script,
+                                                     fax_hangup_script,
+                                                     remote_modem_data->serial_input_stream,
+                                                     remote_modem_data->serial_output_stream);
 
-                ActiveLight_Off ();
+                    StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_GOING_IDLE, NULL);
+                    *state = Idle;
+                    break;
 
-                e = dialler_start_answer_script (1,    /* force modem reset before executing script */
-                                                 answer_script,
-                                                 fax_hangup_script,
-                                                 remote_modem_data->serial_input_stream,
-                                                 remote_modem_data->serial_output_stream);
-
-                StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_GOING_IDLE, NULL); /*RCM says: hasn't this already been issued by previous state???*/
+                default:    /* script still executing */
+                    *state = Incoming_RxFinished;
+                    break;
             }
             break;
 
@@ -900,87 +875,111 @@ static _kernel_oserror *outgoing_dial (const int input,
         case DI_RM_STATUS_CHANGED:
             dprintf((NULL, "Dialler status: 0x%X\n", messageData->data.dialler.status));
 
-            dialler_monitor_hangup_script ((int *) state,
-                                           messageData->data.dialler.status,
-                                           Outgoing_Dial,
-                                           Idle,
-                                           Outgoing_Dialling);
-
             /* probably want to turn dialler failed state into an error state */
             /* setup for new state */
-            if (*state == Outgoing_Dialling)
+            switch (dialler_monitor_hangup_script (messageData->data.dialler.status))
             {
-                e = RemoteModem_ResetModem ();
+                case DiallerIF_ScriptCompleted:
+                    *state = Outgoing_Dialling;
+                    e = RemoteModem_ResetModem ();
 
-                _swix (OS_SetVarVal, _INR (0, 4), /* Set up number to dial for script */
-
-                       "Fax$Number",
-                       number,
-                       strlen (number),
-                       0,
-                       4); /* VarType_LiteralString */
-
-               _swix (OS_SetVarVal, _INR (0, 4), /* Set up modem class */
-
-                       "Fax$Class",
-                       connection_type,
-                       strlen (connection_type),
-                       0,
-                       4); /* VarType_LiteralString */
-
-                /* Ascertain which dial script to use (depending upon connection type) */
-                if (strcmp(connection_type, Modem_DataMode) == 0)
-                {
-                   (void)Serial_Set_Baudrate(REMMODEM, 115200);
-                   dial_script = data_dial_script;
-                   hangup_script = data_hangup_script;
-                }
-                else if (strcmp(connection_type, Modem_FaxMode) == 0)
-                {
-                   (void)Serial_Set_Baudrate(REMMODEM, 19200);
-                   dial_script = fax_dial_script;
-                   hangup_script = fax_hangup_script;
-                }
-                else if (strcmp(connection_type, Modem_ISPMode) == 0)
-                {
                     _swix (OS_SetVarVal, _INR (0, 4), /* Set up number to dial for script */
-                           "Dialler$Dial$Number",
-                            number,
-                            strlen (number),
-                            0,
-                            4); /* VarType_LiteralString */
 
-                   (void)Serial_Set_Baudrate(REMMODEM, 115200);
-                   dial_script = isp_dial_script;
-                   hangup_script = data_hangup_script;
-                }
-                else
-                       dprintf((NULL, "Error: Outgoing dial failed: cannot select appropriate dial script\n"));
+                           "Fax$Number",
+                           number,
+                           strlen (number),
+                           0,
+                           4); /* VarType_LiteralString */
 
-                if (dial_script)
-                {
-                       e = dialler_start_dial_script (1,    /* force modem reset before executing script */
-                                                      dial_script,
-                                                      hangup_script,
-                                                      remote_modem_data->serial_input_stream,
-                                                      remote_modem_data->serial_output_stream);
-                }
-                StateKicker_SendMessage (Screen_StateMachine, RM_SC_DIALLING, NULL);
-#if 0
-                ActiveLight_On();
-#endif
-            }
-            else if (*state == Idle)
-            {
-                e = RemoteModem_ResetModem ();
+                    _swix (OS_SetVarVal, _INR (0, 4), /* Set up modem class */
 
-                e = dialler_start_answer_script (1,    /* force modem reset before executing script */
-                                                 answer_script,
-                                                 fax_hangup_script,
-                                                 remote_modem_data->serial_input_stream,
-                                                 remote_modem_data->serial_output_stream);
+                           "Fax$Class",
+                           connection_type,
+                           strlen (connection_type),
+                           0,
+                           4); /* VarType_LiteralString */
 
-                StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_GOING_IDLE, NULL);
+                    /* Ascertain which dial script to use (depending upon connection type) */
+                    if (strcmp(connection_type, Modem_DataMode) == 0)
+                    {
+                        (void)Serial_Set_Baudrate(REMMODEM, 115200);
+                        dial_script = data_dial_script;
+                        hangup_script = data_hangup_script;
+                    }
+                    else if (strcmp(connection_type, Modem_FaxMode) == 0)
+                    {
+                        (void)Serial_Set_Baudrate(REMMODEM, 19200);
+                        dial_script = fax_dial_script;
+                        hangup_script = fax_hangup_script;
+                    }
+                    else if (strcmp(connection_type, Modem_ISPMode) == 0)
+                    {
+                        /* This tasteful hack is to get round a problem where
+                         * PPP would only send one LCP ConfReq and then not
+                         * receive or transmit anything else.  It issues a
+                         * command called 'PPPKick' to the CLI.  While PPP is
+                         * broken this command can be aliased to *RMReInit PPP
+                         * in the build; if PPP is ever fixed properly then
+                         * this alias can be removed.
+                         *
+                         * This is not done immediately before the PPPConnect
+                         * command because you need to allow callbacks to
+                         * happen before PPP is ready for use.
+                         */
+
+                        /* NB. I haven't used the 'system' call because
+                         * it's possible that Daytona will be in some sort of
+                         * ROM some day, and calling system from ROM code
+                         * makes things crash.
+                         */
+                        _swix (OS_CLI,
+                               _IN (0),
+
+                               "PPPKick");
+
+                        _swix (OS_SetVarVal, _INR (0, 4), /* Set up number to dial for script */
+                               "Dialler$Dial$Number",
+                                number,
+                                strlen (number),
+                                0,
+                                4); /* VarType_LiteralString */
+
+                        (void)Serial_Set_Baudrate(REMMODEM, 115200);
+                        dial_script = isp_dial_script;
+                        hangup_script = isp_hangup_script;
+                    }
+                    else
+                    {
+                        dprintf((NULL, "Error: Outgoing dial failed: cannot select appropriate dial script\n"));
+                    }
+
+                    if (dial_script)
+                    {
+                           (void) RemoteModem_ResetModem ();
+                           e = dialler_start_dial_script (0,    /* don't reset modem before executing script */
+                                                          dial_script,
+                                                          hangup_script,
+                                                          remote_modem_data->serial_input_stream,
+                                                          remote_modem_data->serial_output_stream);
+                    }
+                    StateKicker_SendMessage (Screen_StateMachine, RM_SC_DIALLING, NULL);
+                    break;
+
+                case DiallerIF_ScriptFailed:
+                    e = RemoteModem_ResetModem ();
+                    e = dialler_start_answer_script (0,    /* don't reset modem before executing script */
+                                                     answer_script,
+                                                     fax_hangup_script,
+                                                     remote_modem_data->serial_input_stream,
+                                                     remote_modem_data->serial_output_stream);
+
+                    StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_GOING_IDLE, NULL);
+                    *state = Idle;
+                    break;
+
+               default:    /* script still executing */
+                   *state = Outgoing_Dial;
+                   break;
             }
             break;
 
@@ -1007,73 +1006,55 @@ static _kernel_oserror *outgoing_dialling (const int input,
         case DI_RM_STATUS_CHANGED:
             dprintf((NULL, "Dialler status: 0x%X\n", messageData->data.dialler.status));
 
-            dialler_monitor_dial_script ((int *) state,
-                                         messageData->data.dialler.status,
-                                         Outgoing_Dialling,
-                                         Idle,
-                                         Outgoing_TxConnected);
-
             /* probably want to turn dialler failed state into an error state */
             /* setup for new state */
-            if (*state == Outgoing_TxConnected)
+            switch (dialler_monitor_dial_script (messageData->data.dialler.status))
             {
-                ActiveLight_On();
+                case DiallerIF_ScriptCompleted:
+                    *state = Outgoing_TxConnected;
+                    ActiveLight_On();
 
-                if (strcmp (connection_type, Modem_ISPMode) == 0)
-                {
-                    /* Issue PPP connect command.  PPP gets serial stream handles from Dialler, so
-                     * no device name needs to be given to PPP.  Options are taken from InetDBase:PPP.options
-                     */
+                    if (strcmp (connection_type, Modem_ISPMode) == 0)
                     {
-                        char buffer[256];
-                        char command[256];
-
-                        /* This tasteful hack is to get round a problem where
-                         * PPP would only send one LCP ConfReq and then not
-                         * receive or transmit anything else.  It issues a
-                         * command called 'PPPKick' to the CLI.  While PPP is
-                         * broken this command can be aliased to *RMReInit PPP
-                         * in the build; if PPP is ever fixed properly then
-                         * this alias can be removed.
+                        /* Issue PPP connect command.  PPP gets serial stream handles from Dialler, so
+                         * no device name needs to be given to PPP.  Options are taken from InetDBase:PPP.options
                          */
+                        {
+                            char buffer[256];
+                            char command[256];
 
-                         /* NB. I haven't used the 'system' call because
-                          * it's possible that Daytona will be in some sort of
-                          * ROM some day, and calling system from ROM code
-                          * makes things crash.
-                          */
-                         _swix (OS_CLI,
-                                _IN (0),
-
-                                "PPPKick");
-
-                        readvarval("Inet$PPPOptions", buffer, sizeof(buffer));
-                        sprintf(command, "PPPconnect Serial1: %s", buffer);
-                        _swix (OS_CLI, _IN (0), command);
+                            readvarval("Inet$PPPOptions", buffer, sizeof(buffer));
+                            sprintf(command, "PPPconnect Serial1: %s", buffer);
+                            _swix (OS_CLI, _IN (0), command);
+                        }
+                        ppp_poll_status = 1;
+                        *state = Outgoing_PPPConnecting;
                     }
-                    ppp_poll_status = 1;
-                    *state = Outgoing_PPPConnecting;
-                }
-                else
-                {
-                    StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_TXCONNECTED, NULL);
-                }
-            }
-            else if (*state == Idle)
-            {
-                /* Report dialler status (contains failure type in byte 0) */
-                RemModem_SendRCError(RemXfer_StateMachine, RM_RX_ERROR, "Remote modem: Dial failed", (messageData->data.dialler.status & 0xFF));
+                    else
+                    {
+                        StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_TXCONNECTED, NULL);
+                    }
+                    break;
 
-                e = RemoteModem_ResetModem ();
+                case DiallerIF_ScriptFailed:
+                    /* Report dialler status (contains failure type in byte 0) */
+                    RemModem_SendRCError(RemXfer_StateMachine, RM_RX_ERROR, "Remote modem: Dial failed", (messageData->data.dialler.status & 0xFF));
 
-                e = dialler_start_answer_script (1,    /* force modem reset before executing script */
-                                                 answer_script,
-                                                 fax_hangup_script,
-                                                 remote_modem_data->serial_input_stream,
-                                                 remote_modem_data->serial_output_stream);
+                    e = RemoteModem_ResetModem ();
+                    e = dialler_start_answer_script (0,    /* don't reset modem before executing script */
+                                                     answer_script,
+                                                     fax_hangup_script,
+                                                     remote_modem_data->serial_input_stream,
+                                                     remote_modem_data->serial_output_stream);
 
-                StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_GOING_IDLE, NULL);
-                StateKicker_SendMessage (Screen_StateMachine, RM_SC_DIAL_COMPLETE, NULL);
+                    StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_GOING_IDLE, NULL);
+                    StateKicker_SendMessage (Screen_StateMachine, RM_SC_DIAL_COMPLETE, NULL);
+                    *state = Idle;
+                    break;
+
+                default:    /* script still executing */
+                    *state = Outgoing_Dialling;
+                    break;
             }
             break;
 
@@ -1117,9 +1098,6 @@ static _kernel_oserror *outgoing_ppp_connecting (const int input,
 
                 timeout_set = 0; /* reset timeout flag for next time */
                 ppp_poll_status = 0;
-#if 0
-                ActiveLight_On();
-#endif
                 StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_TXCONNECTED, NULL);
 
                 *state = Outgoing_TxConnected;
@@ -1137,14 +1115,6 @@ static _kernel_oserror *outgoing_ppp_connecting (const int input,
 
                 /* Report error */
                 RemModem_SendRCError(RemXfer_StateMachine, RM_RX_ERROR, "PPP connection timed out", PPP_Connection_Error);
-
-#if 0
-                /* Tell RemXfer & Screen about the failure */
-                StateKicker_SendMessage(RemXfer_StateMachine, RM_RX_GOING_IDLE, NULL);
-                StateKicker_SendMessage(Screen_StateMachine, RM_SC_DIAL_COMPLETE, NULL);
-
-                ActiveLight_Off();
-#endif
 
                 *state = Outgoing_TxFinished;
             }
@@ -1198,9 +1168,6 @@ static _kernel_oserror *outgoing_tx_connected (const int input,
             else
             {
                 e = dialler_start_hangup_script ();
-#if 0
-                ActiveLight_Off();
-#endif
                 *state = Outgoing_TxFinished; /*@@ Must be careful not to leave script running if error */
             }
             break;
@@ -1231,48 +1198,21 @@ static _kernel_oserror *outgoing_switching_over (const int input,
     {
         case DI_RM_STATUS_CHANGED:
         {
-            enum
+            switch (dialler_monitor_dial_script (messageData->data.dialler.status))
             {
-                Dialler_ExecutingScript,
-                Dialler_ScriptFailed,
-                Dialler_ScriptCompleted
-            };
-            int local_dialler_state;
-
-            dialler_monitor_dial_script (&local_dialler_state,
-                                         messageData->data.dialler.status,
-                                         Dialler_ExecutingScript,
-                                         Dialler_ScriptFailed,
-                                         Dialler_ScriptCompleted);
-            switch (local_dialler_state)
-            {
-                case Dialler_ExecutingScript:
-                    *state = Outgoing_SwitchingOver;
-                    break;
-
-                case Dialler_ScriptFailed:
-                    {
-#if 1
-                        RemModem_SendRCError(RemXfer_StateMachine, RM_RX_ERROR, "Remote modem: Script failed (2)", (messageData->data.dialler.status & 0xFF));
-#else
-                        messageDataBlock *sendMessage;
-
-                        StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_ERROR, &sendMessage);
-                        sendMessage->data.rm_error.rc = 0;  /*>>>should rc be zero???*/
-                        sendMessage->data.rm_error.err.errnum = 0;  /*>>>should this be 'internal error + rc? */
-                        sprintf(sendMessage->data.rm_error.err.errmess, "Remote modem: Script failed (2)");
-#endif
-                        *state = Outgoing_TxConnected;
-                        /*>>>Will be sent back RX_RM_HANGUP in response???*/
-                    }
-                    break;
-
-                case Dialler_ScriptCompleted:
+                case DiallerIF_ScriptCompleted:
                     StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_SWITCHOVER_DONE, NULL);
                     *state = Outgoing_TxConnected;
                     break;
 
-                default:
+                case DiallerIF_ScriptFailed:
+                    RemModem_SendRCError(RemXfer_StateMachine, RM_RX_ERROR, "Remote modem: Script failed (2)", (messageData->data.dialler.status & 0xFF));
+                    *state = Outgoing_TxConnected;
+                    /*>>>Will be sent back RX_RM_HANGUP in response???*/
+                    break;
+
+                default:    /* script still executing */
+                    *state = Outgoing_SwitchingOver;
                     break;
             }
             break;
@@ -1307,9 +1247,6 @@ static _kernel_oserror *outgoing_ppp_disconnecting (const int input,
             {
                 /* PPP is inactive */
                 ppp_poll_status = 0;
-#if 0
-                ActiveLight_Off();
-#endif
                 e = dialler_start_hangup_script ();
                 *state = Outgoing_TxFinished; /*@@ Must be careful not to leave script running if error */
             }
@@ -1339,26 +1276,28 @@ static _kernel_oserror *outgoing_tx_finished (const int input,
         case DI_RM_STATUS_CHANGED:
             dprintf((NULL, "Dialler status: 0x%X\n", messageData->data.dialler.status));
 
-            dialler_monitor_hangup_script ((int *) state,
-                                         messageData->data.dialler.status,
-                                         Outgoing_TxFinished,
-                                         Idle,
-                                         Idle);
             /* @@ probably want to turn dialler failed state into an error state */
             /* setup for new state */
-            if (*state == Idle) /* @@ Do this for failed+completed, yes? */
+            switch (dialler_monitor_hangup_script (messageData->data.dialler.status))
             {
-                e = RemoteModem_ResetModem ();
+                case DiallerIF_ScriptCompleted:
+                case DiallerIF_ScriptFailed:
+                    *state = Idle;
+                    e = RemoteModem_ResetModem ();
+                    e = dialler_start_answer_script (0,    /* don't reset modem before executing script */
+                                                     answer_script,
+                                                     fax_hangup_script,
+                                                     remote_modem_data->serial_input_stream,
+                                                     remote_modem_data->serial_output_stream);
 
-                e = dialler_start_answer_script (1,    /* force modem reset before executing script */
-                                                 answer_script,
-                                                 fax_hangup_script,
-                                                 remote_modem_data->serial_input_stream,
-                                                 remote_modem_data->serial_output_stream);
+                    ActiveLight_Off();
+                    StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_GOING_IDLE, NULL);
+                    StateKicker_SendMessage (Screen_StateMachine, RM_SC_DIAL_COMPLETE, NULL);
+                    break;
 
-                ActiveLight_Off();
-                StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_GOING_IDLE, NULL);
-                StateKicker_SendMessage (Screen_StateMachine, RM_SC_DIAL_COMPLETE, NULL);
+                default:    /* script still executing */
+                    *state = Outgoing_TxFinished;
+                    break;
             }
             break;
 
@@ -1427,8 +1366,9 @@ extern _kernel_oserror *RemModem_Initialise (void)
     g_remote_modem_data.serial_input_stream = Modem[REMMODEM].FileIn;
     g_remote_modem_data.serial_output_stream = Modem[REMMODEM].FileOut;
 
+    (void) RemoteModem_ResetModem ();
     e = dialler_start_answer_script (
-            1,    /* force modem reset before executing script */
+            0,    /* don't reset modem before executing script */
             answer_script,
             fax_hangup_script,
             remote_modem_data->serial_input_stream,
