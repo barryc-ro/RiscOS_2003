@@ -1770,10 +1770,6 @@ int main(int argc, char *argv[])
 
 	s = getenv( HANGUP_VAR );
 	_swix(OS_CLI, _IN(0), s ? s : HANGUP_DEFAULT);
-
-	s = utils_msgs_lookup( "hangup:" );
-	if (s && s[0])
-	    msg_report( s );
     }
 
     return EXIT_SUCCESS;
