@@ -54,9 +54,9 @@ install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
-install: install_${TYPE}
+install: install_${STANDALONE}
 
-install_ram: ${TARGET}
+install_TRUE: ${TARGET}
         ${MKDIR} ${INSTDIR}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: ram module installed
