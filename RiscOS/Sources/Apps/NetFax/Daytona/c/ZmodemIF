@@ -14,6 +14,7 @@
 #include <string.h>
 #include "kernel.h"
 
+#include "LogFileIF.h"
 #include "PageList.h"
 #include "StateKicker.h"
 #include "LocXfer.h"
@@ -25,6 +26,10 @@
 #include "ZModemIF.h"
 
 #include "DebugLib.h"
+
+#if 0
+static void ZModemIF_SendRCError(void (*StateMachine)(int messageNumber, messageDataBlock *messagedata), const int messageNumber, const int rc);
+#endif
 
 /* Send a TX or RX request to !ZMS */
 /* (note that the "Abort" message could also utilise this function since it ignores the data block completely) */
@@ -66,7 +71,87 @@ extern void ZModemIF_SendMessage(ChannelId channelId, const char *pathname, int 
 /*
  * Process wimp messages from !Zmodem
  */
+#if 0
+/* new untested code */
+extern int ZModemIF_WimpMessageHandler(WimpMessage *message, void *handle)
+{
+    static BOOL flag_timeout    = FALSE;
+    static BOOL flag_terminated = FALSE;
 
+    ZModemMessage *zmodemmessage = (ZModemMessage*)message;
+    int return_code = zmodemmessage->data.zmodem_result.result_code;
+
+    /* Print debugging information */
+    dprintf((NULL, "ZModemIF_WimpMessageHandler: Return code => 0x%X\n", return_code));
+    LogFileIF_show_decimal_int(LOG_NORMAL, "ZModem RC", return_code);
+
+    /* We test for specific reason codes and classify them as similar messages */
+    switch (return_code)
+    {
+        case ZM_ZMODEMBUSY:
+        case ZM_FILENOTFOUND:   /* transmitting - streaming under-run */
+        case ZM_DIRNOTFOUND:
+            ZModemIF_SendRCError(RemXfer_StateMachine, ZM_RX_ERROR, return_code);
+            /* no file transfer initiated, ie don't wait for ZM_COMPLETE */ 
+            break;
+
+        case ZM_ZMODEMTIMEOUT:
+            flag_timeout = TRUE;
+            /* we may get one or more timeouts but transfer the file successfully (automatic retry) */
+            /*  - indicated by ZM_COMPLETE with flag_terminated clear                               */
+            /* OR the transfer may fail - indicated by ZM_COMPLETE with flag_terminated set         */
+            break;
+
+        case ZM_ZMODEMTERMINATED:
+            flag_terminated = TRUE;
+            /* the transfer has failed, we allow !ZMS to tidy up by waiting for ZM_COMPLETE before reporting an error */
+            break;
+
+        case ZM_COMPLETE:
+            if (flag_terminated)
+            {
+                /* delayed error - transfer failed */
+
+                if (flag_timeout)
+                    ZModemIF_SendRCError(RemXfer_StateMachine, ZM_RX_ERROR, ZM_ZMODEMTIMEOUT);     /* delayed error - timeout/line failure */
+                else
+                    ZModemIF_SendRCError(RemXfer_StateMachine, ZM_RX_ERROR, ZM_ZMODEMTERMINATED);  /* delayed error - nothing received */
+            }
+            else
+        	    StateKicker_SendMessage(RemXfer_StateMachine, ZM_RX_NORMAL_TERMINATION, NULL);  /* file received/transmitted OK */
+
+            flag_timeout = FALSE;
+            flag_terminated = FALSE;
+            break;
+
+        case ZM_ZMODEMABORT:
+            /* !ZMS is acknowledging an abort command that we sent */
+            break;
+
+        default:
+            ZModemIF_SendRCError(RemXfer_StateMachine, ZM_RX_ERROR, return_code);   /* undefined/reserved return code, assume an error to be reported */
+                                                                                    /* assume we don't/shouldn't wait for ZM_COMPLETE */
+            break;
+    } /* switch (return_code) */
+
+    /* deliver the queued messages */
+    while (StateKicker_Deliver() > 1)
+      /* null statement */;
+
+    return(1);      /* processed */
+}
+
+
+static void ZModemIF_SendRCError(void (*StateMachine)(int messageNumber, messageDataBlock *messagedata), const int messageNumber, const int rc)
+{
+    char buff[256];
+
+    /* append the reason code to the textual message */
+    sprintf(buff, "ZModem error (0x%.2x)", rc);
+    StateKicker_SendRCError(StateMachine, messageNumber, code_ZModem_RCError, ctx_ZModem_RCError, rc, buff);
+}
+#else
+/* original code - suspected of causing hangup problems */
 extern int ZModemIF_WimpMessageHandler(WimpMessage *message, void *handle)
 {
     void (*StateMachine)(int messageNumber, messageDataBlock *messageData);
@@ -76,6 +161,7 @@ extern int ZModemIF_WimpMessageHandler(WimpMessage *message, void *handle)
 
     /* Print debugging information */
     dprintf((NULL, "ZModemIF_WimpMessageHandler: Return code => 0x%X\n", return_code));
+    LogFileIF_show_decimal_int(LOG_DEBUG, "ZModem RC", return_code);
 
     StateMachine = RemXfer_StateMachine;
 
@@ -116,13 +202,10 @@ extern int ZModemIF_WimpMessageHandler(WimpMessage *message, void *handle)
 
     /* deliver the queued messages */
     while (StateKicker_Deliver() > 1)
-      /* null statement */;
+        /* null statement */;
 
-      return(1);       /* processed */
+    return(1);  /* processed */
 }
-
+#endif
 
 /* end of ZModemIF.c */
-
-
-
