@@ -1677,8 +1677,18 @@ _kernel_oserror *DeleteIcons(GadgetInternal *id,ObjectID window)
                         del[1]=buf[i];
 
                         DEBUG debug_output ("FreeFonts", "About to free fonts for icon%d\n", buf[i]);
-                        if ((fh = get_font(WIMP_WINDOW, buf[i])) != 0)
+                        if ((fh = get_font(WIMP_WINDOW, buf[i])) != -1)
+                        {
+                            TaskDescriptor *t;
+                            DEBUG debug_output("DeleteIcons", "LoseFont handle %i\n",fh);
                             _swix(Font_LoseFont, _IN(0), fh);
+                            t = task_find_from_window(win);
+                            if (t && t->font_bindings) /* should NEVER be false */
+                            {
+                              int *fb=t->font_bindings;
+                              fb[fh]--;
+                            }
+                        }
 
                         DEBUG debug_output ("DeleteIcons", "About to delete icon%d\n",buf[i]);
 
@@ -1827,8 +1837,10 @@ static _kernel_oserror *find_font(char *font,int xs,int ys,int *fh)
     _kernel_oserror *er;
 
     DEBUG debug_output ("fonts", "Looking for %s at (%d by %d)\n",font,xs,ys);
-
+    
     if((er = _swix(Font_FindFont,_INR(1,5)|_OUT(0), font, xs, ys, 0, 0, fh)) != NULL) return er;
+
+    DEBUG debug_output("find_font", "Found font, handle %i\n", *fh);
 
     return NULL;
 
@@ -1901,24 +1913,36 @@ extern void gadgets_refind_fonts(TaskDescriptor *t)
         xs = regs.r[2];
         ys = regs.r[3];
 
-        for (j=0; j<fb[i]; j++) _swix(Font_LoseFont,_IN(0),i);
+        for (j=0; j<fb[i]; j++) 
+        {
+          _swix(Font_LoseFont,_IN(0),i);
+          DEBUG debug_output ("gadgets_refind_fonts", "LoseFont handle %i\n",i);
+        }
 
       }
       while (fb[i] && w) {
          int buf[256];                  /* hope this is enough ! */
          regs.r[0] = w->wimp_window_handle;
          regs.r[1] = (int) buf;
-         regs.r[2] = wimp_ICONFLAGS_ANTI_ALIASED | 255U * wimp_ICONFLAGS_FORECOL;
-         regs.r[3] = wimp_ICONFLAGS_ANTI_ALIASED | i * wimp_ICONFLAGS_FORECOL;
+         regs.r[2] = wimp_ICONFLAGS_DELETED | wimp_ICONFLAGS_ANTI_ALIASED | 255U * wimp_ICONFLAGS_FORECOL;
+         regs.r[3] =                          wimp_ICONFLAGS_ANTI_ALIASED | i * wimp_ICONFLAGS_FORECOL;
 
          _kernel_swi(Wimp_WhichIcon,&regs,&regs);
 
          for (j=0; buf[j] != -1;j++) {
             fb[i]--;
             /* find it again !*/
-            find_font(cbuf,xs,ys,&fh);
-            set_font(w->wimp_window_handle,buf[j],fh,0);
-            fb[fh]++;                                           /* note, fh may be i! */
+            if (find_font(cbuf,xs,ys,&fh) == NULL)
+            { /* Only remember font if find succeeds */
+              DEBUG debug_output ("gadgets_refind_fonts", "Re-find font %s, OK handle %i\n",cbuf,i);
+              set_font(w->wimp_window_handle,buf[j],fh,0);
+              fb[fh]++;                          /* note, fh may be i! */
+            }
+            else
+            {
+              DEBUG debug_output ("gadgets_refind_fonts", "Re-find font %s, FAILED\n",cbuf);
+              set_font(w->wimp_window_handle,buf[j],0,0); /* Unset font */
+            }
          }
        w =w->next;
        }
@@ -1934,7 +1958,7 @@ _kernel_oserror *gadgets_set_font(WindowInternal *w,int i, char * font, int xs, 
 
     DEBUG debug_output ("fonts", "About to set font %s on icon %d, window %d\n",font,i,w);
 
-    if (((int) font) < 256) fh =(int) font;
+    if (((unsigned int) font) < 256) fh =(int) font;
     else {
       if ((er = find_font(font,xs,ys,&fh)) != NULL)
           {
@@ -1947,6 +1971,8 @@ _kernel_oserror *gadgets_set_font(WindowInternal *w,int i, char * font, int xs, 
     t = task_find_from_window(w);
 
     if (!t) {
+       if ((((unsigned int) font) >= 256) && (fh!=0))
+         _swix(Font_LoseFont,_IN(0),fh); /* remember to free the font too */
        DEBUG debug_output ("fonts", "(Fonts) Didn't find task, window %d!\n",w);
 
        return NULL;        /* what can we do ? */
@@ -1954,7 +1980,22 @@ _kernel_oserror *gadgets_set_font(WindowInternal *w,int i, char * font, int xs, 
 
     if (fh && (t->font_bindings == NULL)) {
        t->font_bindings = mem_allocate(256 * sizeof(int),"allocation font bindings");
-       if (t->font_bindings == NULL) return out_of_memory();
+       if (t->font_bindings == NULL)
+       {  
+         /* JRF: There is a question here as to who owns the font handle
+                 passed to the module in the font name, iff it is < 256.
+                 I believe that once the SWI is called, unless it returns
+                 with an error, the Window module is in control of this
+                 handle.
+                 
+                 Consequently, we need to check that we're not trying to
+                 release a handle that we don't own on this failure.
+                 See also the above case for freeing the font. */
+         if ((((unsigned int) font) >= 256) && (fh!=0))
+           _swix(Font_LoseFont,_IN(0),fh); /* On alloc failure, free font */
+         DEBUG debug_output ("fonts", "Out of memory, aborting set_font\n",c);
+         return out_of_memory();
+       }
        for (c=0; c<256; c++) (t->font_bindings)[c]=0;
     }
 
@@ -1965,6 +2006,7 @@ _kernel_oserror *gadgets_set_font(WindowInternal *w,int i, char * font, int xs, 
     if (c>0) {
       fb[c]--;
       _swix(Font_LoseFont,_IN(0),c);
+      DEBUG debug_output ("fonts", "Losing icon's font handle %i\n",c);
     }
 
     if (fh >= 0) set_font(w->wimp_window_handle,i,fh,flags);
