@@ -21,6 +21,7 @@
 ; 17-Sep-98  KJB   Add support for 16K 24C128 EEPROM.
 ; 21-Sep-98  KJB   Add OS_NVMemory SWI.
 ; 30-Jul-99  KJB   Add support for 8K 24C64 EEPROM.
+; 23-Sep-99  KJB   Remove support for 24C64, add support for 4K and 8K protectable ATMEL parts.
 
 PhysChecksum	*	(((CheckSumCMOS + &30) :MOD: &F0) + &10)
 
@@ -33,7 +34,8 @@ RTCAddress		*	&a0     ; traditional RTC / 240 byte CMOS
 E2ROMAddress		*	&a8     ; 24C08 device - 512 byte or 1K
 E2ROMAddress2K		*	&e0     ; 24C174 device - 2K
 E2ROMAddress2K_OTP	*	&60     ; 24C174 device - OTP section
-E2ROMAddress8K          *       &a2     ; 24C64 device - 8K
+E2ROMAddress4K          *       &a4     ; 24C32 device - 4K (top 1K protectable)
+E2ROMAddress8K          *       &a2     ; 24C64 device - 8K (top 2K protectable)
 E2ROMAddress16K         *       &a8     ; 24C128 device - 16K
   ]
 
@@ -445,6 +447,11 @@ Write
         Pull    "R0-R4, PC", CC         ; don't write to OTP section
   ]
 
+        MOV     R14, #0                 ; don't write to protected section
+        LDRB    R14, [R14, #NVRamWriteSize]
+        CMP     R0, R14                 ; (note assumption that NVRamWriteSize is
+        Pull    "R0-R4, PC", HS         ; outside mangled region).
+
 	MOV	R2, R0
 	MOV	R3, R1
  [ ChecksumCMOS
@@ -519,13 +526,16 @@ WriteBlock ROUT
   [     E2ROMSupport
         [ :LNOT: :DEF: TestHarness
         MOV	R14, #0
+        LDRB    R4, [R14, #NVRamWriteSize]
         LDRB	R14, [R14, #NVRamSize]
         |
         LDRB	R14, NVSize
+        MOV     R4, R14
         ]
         MOV     R14, R14, LSL #8
   |
         MOV     R14, #240
+        MOV     R4, R14
   ]
 
         CMP     R0, R14
@@ -535,6 +545,12 @@ WriteBlock ROUT
         BCS     %FT90
         CMP     R3, R14
         BHI     %FT90
+
+        CMP     R0, R4                  ; ignore writes totally outside writable area
+        BHS     %FT80
+
+        SUBS    R14, R3, R4
+        SUBGT   R2, R2, R14             ; truncate writes partially outside writable area
 
         TEQ     R2, #0
         BEQ     %FT80
@@ -1292,6 +1308,38 @@ MakeChecksum	ROUT
 
 ; *****************************************************************************
 ;
+;       OS_SetTime - Set the real-time clock
+;
+; in:   R0 = pointer to 5 byte UTC time
+;
+; out:  R0 preserved
+;
+
+SetTimeSWI ROUT
+        Push    "R0-R8"
+        SUB     SP, SP, #36
+        MOV     R1, R0
+        MOV     R2, SP
+        SWI     XTerritory_ConvertTimeToUTCOrdinals
+        ADDVS   SP, SP, #36+4
+        Pull    "R1-R8", VS
+        ExitSWIHandler VS
+        LDR     R8, [SP], #4    ; centiseconds
+        LDR     R7, [SP], #4    ; seconds
+        LDR     R1, [SP], #4    ; minutes
+        Pull    "R0,R2,R3,R5"   ; hours, day, month, year
+        ADD     SP, SP, #8      ; junk day of week and year
+        MOV     R4, #100
+        DivRem  R6, R5, R4, R14 ; R5 = year (lo), R6 = year (hi)
+
+        BL      SetTime
+
+        STRVS   R0,[SP]
+        Pull    "R0-R8"
+        ExitSWIHandler
+
+; *****************************************************************************
+;
 ;	SetTime - Write the CMOS clock time and update 5-byte RealTime
 ;
 ; in:	UTC time:
@@ -1478,7 +1526,7 @@ ReadTime ROUT
 
   [	CacheCMOSRAM
 
-InitCMOSCache	ENTRY "r0-r5"
+InitCMOSCache	ENTRY "r0-r6"
     [	E2ROMSupport
 
 ; Need to set the slowest speed so we can probe
@@ -1507,6 +1555,7 @@ InitCMOSCache	ENTRY "r0-r5"
 	STRB	R4, RTCFlag
 	]
         MOV     R5, #4          ; assume 16 byte page size to start with
+        MOV     R6, #0          ; assume not protected
 
 ; Have we got a 2K E² ?
         MOV     r1, #E2ROMAddress2K
@@ -1545,12 +1594,30 @@ InitCMOSCache	ENTRY "r0-r5"
       ]
         BVC     %FT5
 
+; Have we got a 4K device?
+
+        MOV     r1, #E2ROMAddress4K
+	MOV	r0, #E2ROMAddress4K
+	BL	DummyAccess
+	MOVVC	R4, #16
+      [ IOMD_C_EEPROMProtect <> 0
+        MOVVC   R6, #12         ; Only bottom 3K writable
+      ]
+        MOVVC   R5, #5          ; 32 byte page size
+      [ ClockNVMemoryFast
+        MOVVC   R3, #3          ; Fast speed setting (1.5µs delays)
+      ]
+        BVC     %FT5
+
 ; Have we got an 8K device?
 
         MOV     r1, #E2ROMAddress8K
 	MOV	r0, #E2ROMAddress8K
 	BL	DummyAccess
 	MOVVC	R4, #32
+      [ IOMD_C_EEPROMProtect <> 0
+        MOVVC   R6, #24         ; Only bottom 6K writable
+      ]
         MOVVC   R5, #5          ; 32 byte page size
       [ ClockNVMemoryFast
         MOVVC   R3, #3          ; Fast speed setting (1.5µs delays)
@@ -1565,6 +1632,9 @@ InitCMOSCache	ENTRY "r0-r5"
 	STRB    R1, [R2, #NVRamBase]
 	STRB	R4, [R2, #NVRamSize]
         STRB    R5, [R2, #NVRamPageSize]
+        TEQ     R6, #0
+        MOVEQ   R6, R4
+        STRB    R6, [R2, #NVRamWriteSize]
       [ ClockNVMemoryFast
         STRB    R3, [R2, #NVRamSpeed]
       ]
