@@ -2,7 +2,6 @@
 
 var st, en;
 var i;
-var s = "";
 
 ///////////////////////////////////////////////////////////////////////////
 print("\n** Entering long loop...\n");
@@ -66,11 +65,14 @@ print("\n** Building big string...\n");
 ///////////////////////////////////////////////////////////////////////////
 
 st = new Date();
-s  = "";
 
-for(i = 0; i < 2000; i++)
 {
-  s += i + " ";
+  var s = "";
+
+  for(i = 0; i < 2000; i++)
+  {
+    s += i + " ";
+  }
 }
 
 en = new Date();
@@ -81,13 +83,15 @@ print("That took " + (en.getTime() - st.getTime()) / 1000 + " seconds");
 print("\n** Building huge string...\n");
 ///////////////////////////////////////////////////////////////////////////
 
-s  = "";
 st = new Date();
 
-
-for(i = 0; i < 4000; i++)
 {
-  s += i + " ";
+  var s = "";
+
+  for(i = 0; i < 4000; i++)
+  {
+    s += i + " ";
+  }
 }
 
 en = new Date();
