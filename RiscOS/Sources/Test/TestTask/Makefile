@@ -94,6 +94,7 @@ OBJS      = 	${OM}.Main 		\
 	 	${OM}.gen_ir		\
 	 	${OM}.Flash		\
 	 	${OM}.get_t0		
+	 			
 	 						
 OBJSI      = 	i.Main 		\
 	 	i.serial  	\
@@ -124,7 +125,7 @@ OBJSI      = 	i.Main 		\
 	 	i.MPEG		\
 	 	i.ID		\
 	 	i.gen_ir	\
-	 	i.Flash				
+	 	i.Flash			
 	 	
 OBJSIO      = 	io.Main 	\
 	 	io.serial  	\
@@ -156,7 +157,14 @@ OBJSIO      = 	io.Main 	\
 	 	io.ID		\
 	 	io.gen_ir	\
 	 	io.Flash	\
-	 	io.instlib		
+	 	io.instlib 	\
+	 	${OM}.ROMChksum	        \
+	 	${OM}.CPUType		\
+	 	${OM}.get_t0		\
+	 	${OM}.IOControl         \
+	 	${OM}.PeeknPoke		\
+	 	${OM}.ReadIR		\
+	 	${OM}.ROMChksum		\
 	 	
 
 	 			
@@ -196,11 +204,11 @@ clean_all: clean
 	@echo ${COMPONENT}: cleaned all
 
 resources: ${TARGET}
+        ${MKDIR} ${RESDIR}
+	${CP} ${APP} ${RESDIR}.${APP} ${CPFLAGS}
         @echo ${COMPONENT}: all complete
 
 install: ${TARGET}
-	 ${MKDIR} ${RESDIR}
-	 ${CP} ${APP} ${RESDIR}.${APP} ${CPFLAGS}
          @echo ${COMPONENT}: installed
 
 dirs:
@@ -213,7 +221,7 @@ preprocess: ${OBJSI} dirs
 	@echo ${COMPONENT}: preprocess build complete
 	
 instrument: ${OBJSIO} dirs
-	${LD} ${LDFLAGS} -o $@ ${OBJSIO} ${STUBS}
+	${LD} ${LDFLAGS} -o $@ ${OBJSIO} ${CLIB} ${SOCK} ${INET} ${UNIX}
 	@echo ${COMPONENT}: instrument build complete			
 	
 	
