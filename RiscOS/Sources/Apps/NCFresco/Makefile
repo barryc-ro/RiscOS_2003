@@ -758,7 +758,7 @@ RECONS_UNIX:	$(PREDEPS)
 # ===========================================================================
 
 #uncomment this to build dependencies...
-#RISCOS_BUILD_EXPORT=../../../../Export
+RISCOS_BUILD_EXPORT=../../../../Export
 
 #Two possibilities for exporting to
 #RISCOS_BUILD_RESOURCES=../../../../Install
@@ -880,7 +880,7 @@ sr:		NCFRESCO_RISCOS
 NCFRESCO:	NCFRESCO_RISCOS
 
 NCFRESCO_DEPENDS:
-		cd ncfresco ; armdepend -M Makefile $(NCFRESCO_BUILD_CFLAGS) ../parser/*.c ../fresparse/*.c ../parser/*.c ../commonsrc/*.c ../!NCFresco/*.s ../!NCFresco/*.c
+		cd ncfresco ; armdepend -M Makefile $(NCFRESCO_BUILD_CFLAGS) ../parser/*.c ../fresparse/*.c ../parser/*.c ../commonsrc/*.c ../!NCFresco/*.c
 		cd ncfresco ; chmod a+w Makefile
 		@echo NCFresco dependencies generated
 
