@@ -27,7 +27,7 @@ LD      = link
 LB      = libfile
 WIPE    = wipe
 
-CCFLAGS = -c -depend !Depend -fah -throwback ${INCLUDES} ${DFLAGS}
+CCFLAGS = -c -g -depend !Depend -fah -throwback ${INCLUDES} ${DFLAGS}
 ASFLAGS = -depend !Depend -Stamp -quit
 CPFLAGS = ~cfr~v
 LBFLAGS = -c -o
@@ -47,7 +47,7 @@ ABSSYM    = RISC_OSLib:o.AbsSym
 # Include files
 #
 INCLUDES = -IC:
-DFLAGS    = -DLIBRARY -DNDEBUG -DNEWSPACING
+DFLAGS    = -DLIBRARY -DNDEBUG -DNEWSPACING -DTonyTables
 
 #
 # Program specific options:
@@ -65,7 +65,8 @@ OBJS =\
  o.new_stream\
  o.anchor_inf\
  o.HTTPSuport\
- o.font
+ o.font\
+ o.HTMLTables
  
 #
 # Rule patterns
@@ -110,6 +111,7 @@ export_hdrs: h.html2_ext h.api h.struct h.tags dirs
 	Copy h.api          HTMLLib:h.HTMLLib        ~CFLNR~V
 	Copy h.struct       HTMLLib:h.struct         ~CFLNR~V
 	Copy h.tags         HTMLLib:h.tags           ~CFLNR~V
+	Copy h.tablestruc   HTMLLib:h.tablestruc     ~CFLNR~V
         @echo ${COMPONENT}: export complete (hdrs)
 
 export_libs: ${TARGET} dirs
@@ -141,14 +143,82 @@ o.irqs: Hdr:SWIs
 o.irqs: Hdr:CPU.Generic26
 o.irqs: Hdr:IO.GenericIO
 o.irqs: Hdr:RISCOS
+o.anchor_inf:	c.anchor_inf
+o.anchor_inf:	C:h.stdio
+o.anchor_inf:	C:h.stdlib
+o.anchor_inf:	C:h.limits
+o.anchor_inf:	h.html2_ext
+o.anchor_inf:	h.tablestruc
+o.anchor_inf:	h.tags
+o.anchor_inf:	h.struct
+o.anchor_inf:	C:h.string
+o.anchor_inf:	h.internal
+o.anchor_inf:	h.tags
+o.anchor_inf:	h.struct
+o.anchor_inf:	h.tablestruc
+o.anchor_inf:	C:h.ctype
+o.anchor_inf:	h.HTMLTables
+o.anchor_inf:	h.html2_ext
+o.anchor_inf:	h.tags
+o.anchor_inf:	h.internal
+o.anchor_inf:	h.tablestruc
+o.HTTPSuport:	c.HTTPSuport
+o.HTTPSuport:	h.html2_ext
+o.HTTPSuport:	h.tablestruc
+o.HTTPSuport:	h.tags
+o.HTTPSuport:	h.struct
+o.HTTPSuport:	C:h.string
+o.HTTPSuport:	h.internal
+o.HTTPSuport:	h.tags
+o.HTTPSuport:	h.struct
+o.HTTPSuport:	h.tablestruc
+o.HTTPSuport:	C:h.ctype
+o.HTTPSuport:	C:h.stdio
+o.HTTPSuport:	h.HTTPSuport
+o.font:	c.font
+o.font:	h.html2_ext
+o.font:	h.tablestruc
+o.font:	h.struct
+o.font:	h.tags
+o.font:	h.internal
+o.font:	h.tags
+o.font:	h.struct
+o.font:	h.tablestruc
+o.font:	C:h.ctype
+o.HTMLTables:	c.HTMLTables
+o.HTMLTables:	h.HTMLTables
+o.HTMLTables:	h.html2_ext
+o.HTMLTables:	h.tablestruc
+o.HTMLTables:	h.tags
+o.HTMLTables:	h.internal
+o.HTMLTables:	h.tags
+o.HTMLTables:	h.struct
+o.HTMLTables:	h.tablestruc
+o.HTMLTables:	C:h.ctype
+o.HTMLTables:	h.tablestruc
+o.HTMLTables:	h.tablestruc
 o.display:	c.display
 o.display:	h.html2_ext
+o.display:	h.tablestruc
 o.display:	h.tags
 o.display:	h.struct
 o.display:	C:h.string
 o.display:	h.internal
 o.display:	h.tags
 o.display:	h.struct
+o.display:	h.tablestruc
+o.display:	C:h.ctype
+o.display:	C:h.stdio
+o.display:	c.display
+o.display:	h.html2_ext
+o.display:	h.tablestruc
+o.display:	h.tags
+o.display:	h.struct
+o.display:	C:h.string
+o.display:	h.internal
+o.display:	h.tags
+o.display:	h.struct
+o.display:	h.tablestruc
 o.display:	C:h.ctype
 o.display:	C:h.stdio
 o.malloc:	c.malloc
@@ -156,15 +226,19 @@ o.malloc:	C:h.swis
 o.malloc:	C:h.kernel
 o.malloc:	h.struct
 o.malloc:	h.html2_ext
+o.malloc:	h.tablestruc
 o.malloc:	h.internal
 o.malloc:	h.tags
 o.malloc:	h.struct
+o.malloc:	h.tablestruc
 o.malloc:	C:h.ctype
 o.rules:	c.rules
 o.rules:	h.html2_ext
+o.rules:	h.tablestruc
 o.rules:	h.internal
 o.rules:	h.tags
 o.rules:	h.struct
+o.rules:	h.tablestruc
 o.rules:	C:h.ctype
 o.rules:	h.html2
 o.rules:	h.tags
@@ -177,56 +251,39 @@ o.rules:	C:h.ctype
 o.veneers:	c.veneers
 o.veneers:	h.api
 o.veneers:	h.html2_ext
+o.veneers:	h.tablestruc
 o.veneers:	h.tags
 o.veneers:	h.struct
 o.veneers:	h.internal
 o.veneers:	h.tags
 o.veneers:	h.struct
+o.veneers:	h.tablestruc
 o.veneers:	C:h.ctype
 o.veneers:	C:h.flex
 o.veneers:	C:h.stdio
 o.veneers:	C:h.kernel
+o.veneers:	h.HTMLTables
+o.veneers:	h.html2_ext
+o.veneers:	h.tags
+o.veneers:	h.internal
+o.veneers:	h.tablestruc
 o.new_stream:	c.new_stream
 o.new_stream:	h.html2_ext
+o.new_stream:	h.tablestruc
 o.new_stream:	h.tags
 o.new_stream:	h.struct
 o.new_stream:	C:h.string
 o.new_stream:	h.internal
 o.new_stream:	h.tags
 o.new_stream:	h.struct
+o.new_stream:	h.tablestruc
 o.new_stream:	C:h.ctype
+o.new_stream:	h.HTMLTables
+o.new_stream:	h.html2_ext
+o.new_stream:	h.tags
+o.new_stream:	h.internal
+o.new_stream:	h.tablestruc
 o.new_stream:	h.api
 o.new_stream:	h.html2_ext
 o.new_stream:	h.tags
 o.new_stream:	h.struct
-o.anchor_inf:	c.anchor_inf
-o.anchor_inf:	C:h.stdio
-o.anchor_inf:	C:h.stdlib
-o.anchor_inf:	C:h.limits
-o.anchor_inf:	h.html2_ext
-o.anchor_inf:	h.tags
-o.anchor_inf:	h.struct
-o.anchor_inf:	C:h.string
-o.anchor_inf:	h.internal
-o.anchor_inf:	h.tags
-o.anchor_inf:	h.struct
-o.anchor_inf:	C:h.ctype
-o.HTTPSuport:	c.HTTPSuport
-o.HTTPSuport:	h.html2_ext
-o.HTTPSuport:	h.tags
-o.HTTPSuport:	h.struct
-o.HTTPSuport:	C:h.string
-o.HTTPSuport:	h.internal
-o.HTTPSuport:	h.tags
-o.HTTPSuport:	h.struct
-o.HTTPSuport:	C:h.ctype
-o.HTTPSuport:	C:h.stdio
-o.HTTPSuport:	h.HTTPSuport
-o.font:	c.font
-o.font:	h.html2_ext
-o.font:	h.struct
-o.font:	h.tags
-o.font:	h.internal
-o.font:	h.tags
-o.font:	h.struct
-o.font:	C:h.ctype
