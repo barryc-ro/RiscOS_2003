@@ -1,5 +1,11 @@
 ;>Commands
 
+; change log (added by SBP 14 May 1997)
+;
+; 14 May 1997: SBP: Incorporated old fix for *verify to work when verifying >2G discs (DoVerify)
+;
+; 19 Aug 1997: SBP: Changes for big free space maps.
+
  TTL    "Command handling"
 
 
@@ -788,10 +794,23 @@ DoCheckMap
         BHS     %FT15
                         ;IF we have a map in RAM invalidate it
         DrvRecPtr  R7, LR
+ [ DynamicMaps
+ 	LDR	R10,[R7,#DrvsFsMapAddr]
+ |
         LDR     R10,[R7, #DrvsFsMap]
         BIC     R10,R10,#HiFsBits
+ ]
+
+ [ BigMaps
+        LDRB	LR, [R6, #Zones2]
+        LDRB	R8, [R6, #Zones]
+        ADD	R8, R8, LR, LSL #8
+        LDRB	LR, [R6, #SectorSize]
+ |
         LDRB    LR, [R6, #SectorSize]
         LDRB    R8, [R6, #Zones]
+ ]
+
         ADD     R9, R10,R8, LSL LR
         MOV     LR, #0
 10                      ;loop to clear zone flags
@@ -801,7 +820,12 @@ DoCheckMap
         LDRB    LR, [R6, #DiscFlags]
         BIC     LR, LR, #AltMapFlag
         STRB    LR, [R6, #DiscFlags]
+ [ DynamicMaps
+ 	MOV	LR, #0		; clear map flags
+ 	STR	R0, [R7, #DrvsFsMapFlags]
+ |
         STR     R10,[R7, #DrvsFsMap]
+ ]
 15
         BL      BeforeReadFsMap ;(R3->R0,V)
         BVS     %FT80           ;can't recover new map if both copies broken
@@ -813,14 +837,22 @@ DoCheckMap
 20                      ;RECURSE DOWN ENTRY POINT
         BL      FindDir         ;(R3->R0,R5,R6,V)
         BVS     %FT70
+ [ BigDir
+	BL	GetDirFirstEntry		; (R3,R5 -> R4)
+	BL	TestBigDir			; (R3 -> LR, Z)
+	SUBNE	R4, R4, #NewDirEntrySz		; small dir
+	SUBEQ	R4, R4, #BigDirEntrySize	; big dir
+ |
         SUB     R4, R5, #NewDirEntrySz-DirFirstEntry
+ ]
         B       %FT35
 
 25
         MOV     R0, #"."
         BL      DoXOS_WriteC
         BVS     %FT70
-        BL      TermCommon      ;(R3,R4->R10)
+
+        BL      TermCommon      ;(R3,R4,R5->R10)
 
         BL      ReadIndDiscAdd  ;(R3,R4->LR)
         MOV     R2, LR
@@ -830,29 +862,76 @@ DoCheckMap
         BNE     %BT20           ;recurse down if dir
 30
  [ fix_5
+ ; need to treat big dirs as a special case
+  [ {FALSE}
+	BL	TestBigDir
+	BEQ	%FT01
+  ]
         BL      ReadIndDiscAdd  ;(R3,R4->LR)
         MOV     R1, LR
+ 	BL	ReadIntAtts	;check if it's a dir
+ 	TSTS	LR, #DirBit	;is it a dir?
+ 	BICNE	R1, R1, #&ff	;yes then need to pretend isn't for reading size
         BL      MeasureFileAllocSize_GotMap ;(R1,R3,R4->R0)
         MOVS    R1, R0
+  [ {FALSE}
+01
+  ]
  |
         BL      ReadLen         ;(R4->LR)
         MOVS    R1, LR
  ]
+ [ BigDir
+ 	BL	TestBigDir
+ 	BNE	%FT01
+
+ 	Push	"R6"
+ 	MOV	R6, R4
+ 	BL	ReturnWholeSpaceNotFudged ;(R1-R6->R0)
+ 	Pull	"R6"
+	B	%FT02
+01
         Push    "R5"
         SUB     R5, R4, #DirFirstEntry
         BL      ReturnWholeSpace        ;(R1-R5->R0)
         Pull    "R5"
 
+02
+ |
+        Push    "R5"
+        SUB     R5, R4, #DirFirstEntry
+        BL      ReturnWholeSpace        ;(R1-R5->R0)
+        Pull    "R5"
+ ]
+
         MOV     R10,#DeleteChar
-        BL      UnTermCommon    ;(R3,R4,R10)
+        BL      UnTermCommon    ;(R3,R4,R5,R10)
         MOV     R0, #DeleteChar
         BL      DoXOS_WriteC
         BVS     %FT70
 
 35
+ [ BigDir
+ 	BL	TestBigDir	; check if big dir or not
+ 	BNE	%FT37		; not big dir
+
+; here if big dir
+	ADD	R4, R4, #BigDirEntrySize	; go to next entry
+	BL	BigDirFinished	; (R4,R5->Z)
+	BNE	%BT25		; more to do
+	B	%FT38		; finished
+37
+
         LDRB    LR, [R4, #NewDirEntrySz] !
         CMPS    LR, #" "
         BHI     %BT25
+
+38
+ |
+        LDRB    LR, [R4, #NewDirEntrySz] !
+        CMPS    LR, #" "
+        BHI     %BT25
+ ]
 
         MOV     R7, R3
         BL      ToParent        ;(R3,R6->R3)
@@ -863,9 +942,22 @@ DoCheckMap
         BVS     %FT70
 
         BL      AgeDir          ;(R7)
+ [ BigDir
+ 	BL	GetDirFirstEntry
+ 	BL	TestBigDir	;(R3->LR,Z)
+ 	SUBNE	R4, R4, #NewDirEntrySz
+ 	SUBEQ	R4, R4, #BigDirEntrySize
+ |
         SUB     R4, R5, #NewDirEntrySz-DirFirstEntry
+ ]
 40
+ [ BigDir
+ 	BL	TestBigDir
+ 	ADDEQ	R4, R4, #BigDirEntrySize
+ 	ADDNE	R4, R4, #NewDirEntrySz
+ |
         LDRB    LR, [R4, #NewDirEntrySz] !
+ ]
         BL      ReadIndDiscAdd  ;(R3,R4->LR)
         TEQS    LR, R7
         BNE     %BT40
@@ -878,8 +970,16 @@ DoCheckMap
         BVS     %FT70
         BL      CritInitReadNewFs       ;(->R10,R11)
         BL      DiscAddToRec            ;(R3->LR)
+
+ [ BigMaps
+	MOV	R5, LR
+	LDRB	R0, [R5, #Zones]
+	LDRB	LR, [R5, #Zones2]
+	ADD	R0, R0, LR, LSL #8
+ |
         MOV     R5, LR
         LDRB    R0, [R5, #Zones]
+ ]
         B       %FT65
 
 50
@@ -891,6 +991,61 @@ DoCheckMap
         BL      InitZoneObj     ;(R0,R10->R8,R9,R11,LR)
         MOV     R1, LR
 60
+ [ BigMaps
+        CMPS	R9,R11		;gap?
+        BNE	%FT62		; not gap
+
+; gap
+	BL	FreeRdLenLinkBits ;(R10,R11->R7,R8)
+	ADD	R9, R11, R8
+	ADD	R11, R11,R7
+        CMPS    R11,R1
+        BLO     %BT60
+	B	%FT65
+
+62
+; not gap
+        BL	FragRdLenLinkBits ;(R10,R11->R7,R8)
+ [ BigMaps
+        BIC	lr, r3, #DiscBits
+        CMP     R8, lr, LSR #8  ; is this the root dir?
+        BEQ     %FT63           ; it's root dir
+
+        CMP     R8, #2		; is it the map/boot block fragment?
+        BLS	%FT63		; it is so ok
+
+        ; here if broken map
+
+ [ DebugO
+ DREG   r8, "Fragment ID hanging around:"
+ DREG   r7, "BitLength:"
+ DREG   r0, "In zone:"
+ DREG   r11, "At bit offset:"
+ DREG   r9, "Next free fragment at bit offset:"
+ ]
+        B       %BT50
+
+63
+ |
+	CMP     R8, #2
+ [ DebugO
+ BLS    %FT01
+ DREG   r8, "Fragment ID hanging around:"
+ DREG   r7, "BitLength:"
+ DREG   r0, "In zone:"
+ DREG   r11, "At bit offset:"
+ DREG   r9, "Next free fragment at bit offset:"
+01
+ ]
+        BHI     %BT50
+ ]
+        ADD     R11,R11,R7
+        CMPS    R11,R1
+        BLO     %BT60
+        B       %FT65
+
+ |
+
         BL      RdLenLinkBits   ;(R10,R11->R7,R8)
         CMPS    R9, R11
         ADDEQ   R9, R11,R8
@@ -908,6 +1063,8 @@ DoCheckMap
         ADD     R11,R11,R7
         CMPS    R11,R1
         BLO     %BT60
+ ]
+
 65
         SUBS    R0, R0, #1
         BPL     %BT55
@@ -926,8 +1083,15 @@ DoCheckMap
         BVS     %FT70
         BNE     %FT70
         MOV     R1, #WriteSecsOp :OR: NoEscape
+ [ BigMaps
+	LDRB	R7, [R5, #Zones2]
+	LDRB	R9, [R5, #Zones]
+	ADD	R9, R9, R7, LSL #8
+	LDRB	r7, [R5, #SectorSize]
+ |
         LDRB    R7, [R5, #SectorSize]
         LDRB    R9, [R5, #Zones]
+ ]
         BL      MapDiscAdd              ;(R5,R7,R9->R2)
         MOV     R3, R10
         MOV     R4, R9, LSL R7
@@ -989,7 +1153,13 @@ DoCompact
         BL      DiscAddToRec    ;(R3->LR)
         BNE     %FT03
 
+ [ BigMaps
+ 	LDRB	R0, [LR, #Zones]
+ 	LDRB	LR, [LR, #Zones2]
+ 	ADD	R0, R0, LR, LSL #8
+ |
         LDRB    R0, [LR,#Zones]
+ ]
         BL      CritInitReadNewFs        ;(->R10,R11)
         SUB     R0, R0, #1
 01
@@ -1644,6 +1814,10 @@ TermCommon
 UnTermCommon
 45
         Push    "R0,R2,R11,LR"  ;Print out a name from a dir (R3,R4,R10)
+ [ BigDir
+ 	BL	TestBigDir	;(R3->LR,Z)
+ 	BEQ	BigTermCommon	;
+ ]
         ADD     R2, R4, #DirObName
         MOV     R11,#NameLen
 48
@@ -1658,6 +1832,25 @@ UnTermCommon
         SUBHIS  R11,R11,#1
         BHI     %BT48
         Pull    "R0,R2,R11,PC",,^
+
+ [ BigDir
+BigTermCommon
+	LDR	R11, [R4, #BigDirObNameLen]
+	BL	GetBigDirName	; (R4, R5 -> LR) get the name ptr
+	MOV	R2, LR
+
+49
+        LDRB    LR, [R2], #1
+        MOVS    R0, R10
+        MOVEQ   R0, LR
+        BL      DoXOS_WriteC
+        ADDVS   SP, SP, #4*4
+        BVS     %FT78
+        SUBS    R11,R11,#1
+        BHI     %BT49
+        Pull    "R0,R2,R11,PC",,^
+
+ ]
 
 51
  [ Module_Version >= 212
@@ -1687,7 +1880,14 @@ UnTermCommon
 54                      ;RECURSE DOWN ENTRY POINT
         BL      FindDir         ;(R3->R0,R5,R6,V)
         BVS     %FT78
+ [ BigDir
+ 	BL	GetDirFirstEntry
+ 	BL	TestBigDir
+ 	SUBEQ	R4, R4, #BigDirEntrySize
+ 	SUBNE	R4, R4, #NewDirEntrySz
+ |
         SUB     R4, R5, #NewDirEntrySz-DirFirstEntry
+ ]
         B       %FT72
 
 57
@@ -1768,9 +1968,25 @@ UnTermCommon
         BEQ     %BT54           ;THEN RECURSE DOWN
 
 72
+ [ BigDir
+ 	BL	TestBigDir	; (R3->LR,Z)
+ 	BNE	%FT01
+
+; big dir
+	BL	BigDirFinished	; (R3,R4,R5->Z)
+	BNE	%BT57
+	B	%FT02
+01
+; not big dir
         LDRB    LR, [R4, #NewDirEntrySz] !
         CMPS    LR, #" "
         BHI     %BT57
+02
+ |
+        LDRB    LR, [R4, #NewDirEntrySz] !
+        CMPS    LR, #" "
+        BHI     %BT57
+ ]
 
         TEQS    R9, #0
         BNE     %FT78           ;V=0 don't return to parent once match found
@@ -1784,9 +2000,22 @@ UnTermCommon
         BVS     %FT78
 
         BL      AgeDir          ;(R7)
+ [ BigDir
+ 	BL	GetDirFirstEntry	; (r3, r5 -> r4)
+ 	BL	TestBigDir		; (r3 -> LR, Z)
+ 	SUBEQ	R4, R4, #BigDirEntrySize
+ 	SUBNE	R4, R4, #NewDirEntrySz
+ |
         SUB     R4, R5, #NewDirEntrySz-DirFirstEntry
+ ]
 75
+ [ BigDir
+ 	BL	TestBigDir	; (R3->LR, Z)
+ 	ADDEQ	R4, R4, #BigDirEntrySize
+ 	ADDNE	R4, R4, #NewDirEntrySz
+ |
         LDRB    LR, [R4, #NewDirEntrySz] !
+ ]
         BL      ReadIndDiscAdd  ;(R3,R4->LR)
         TEQS    LR, R7
         BNE     %BT75
@@ -1857,7 +2086,11 @@ DoDefectMapOut ROUT
 06
         TEQS    R11,R9
         BNE     %FT09
+ [ BigMaps
+        BL      FreeRdLinkBits  ;(R10,R11->R8,Z)
+ |
         BL      RdLinkBits      ;(R10,R11->R8,Z)
+ ]
         MOVEQ   R9, #0
         ADDNE   R9, R11,R8
         MOV     R8, R11
@@ -1865,7 +2098,13 @@ DoDefectMapOut ROUT
         MOV     R0, R11
         MOV     R11,R4
 12
+ [ BigMaps
+ 	TEQS	R11,R9		;is it a gap?
+ 	BLEQ	FreeRdLenBits	; yes (R10,R11->R7)
+ 	BLNE	FragRdLenBits	; no  (R10,R11->R7)
+ |
         BL      RdLenBits       ;(R10,R11->R7)
+ ]
         ADD     R4, R11,R7
         CMPS    R4, R1
         BLS     %BT06           ;loop if not reached defect fragment
@@ -1874,7 +2113,11 @@ DoDefectMapOut ROUT
         BNE     %FT51           ;defect not in a free space
 
         Push    "R8,R9"
+ [ BigMaps
+        BL      FreeRdLinkBits  ;(R10,R11->R8,Z)
+ |
         BL      RdLinkBits      ;(R10,R11->R8,Z)
+ ]
         MOVEQ   R9, #0
         ADDNE   R9, R11,R8
         STR     R9, [SP, #4]
@@ -1908,7 +2151,11 @@ DoDefectMapOut ROUT
         ; Not enough room before defect to fit an object
         MOV     R1, R3
         MOVS    R11,R0
+ [ BigMaps
+        BLPL    FragRdLenLinkBits ;(R10,R11->R7,R8)
+ |
         BLPL    RdLenLinkBits   ;(R10,R11->R7,R8)
+ ]
         TEQPLS  R8, #1
         MOVEQ   R1, R0          ; EQ if previous object is a bad block object, ie
                                 ; if there's no room for free space before the defect
@@ -1930,7 +2177,11 @@ DoDefectMapOut ROUT
         BHS     %FT21
 
         ; If there is another fragment, is it a bad block fragment?
+ [ BigMaps
+        BL      FragRdLenLinkBits ;(R10,R11->R7,R8)
+ |
         BL      RdLenLinkBits   ;(R10,R11->R7,R8)
+ ]
         TEQS    R8, #1
         ADDEQ   R6, R4, R7      ; Object after defect is a bad block - stretch it down over the defect
 
@@ -1952,12 +2203,20 @@ DoDefectMapOut ROUT
 
         ; Write the defect fragment
         MOV     R0, #1
+ [ BigMaps
+        BL      FragWrLinkBits  ;(R0,R1,R10)
+ |
         BL      WrLinkBits      ;(R0,R1,R10)
+ ]
         SUB     R0, R6, R1
  [ DebugQ
         DREG    R0, "Writing defect block length of "
  ]
+ [ BigMaps
+        BL      FragWrLenBits   ;(R0,R1,R10)
+ |
         BL      WrLenBits       ;(R0,R1,R10)
+ ]
 
         ; next free fragment
         SUBS    R7, R1, R3
@@ -1978,7 +2237,11 @@ DoDefectMapOut ROUT
         DREG    R1, " at "
 01
  ]
+ [ BigMaps
+        BLHI    FreeWrLenBits   ;(R0,R1,R10)
+ |
         BLHI    WrLenBits       ;(R0,R1,R10)
+ ]
 
         ; previous free fragment
         CMPS    R4, R6
@@ -1998,7 +2261,11 @@ DoDefectMapOut ROUT
         DREG    R1, " at "
 01
  ]
+ [ BigMaps
+        BLHI    FreeWrLenBits   ;(R0,R1,R10)
+ |
         BLHI    WrLenBits       ;(R0,R1,R10)
+ ]
 
         ; previous previous free fragment
         MOV     R0, R9
@@ -2039,7 +2306,11 @@ DoDefectMapOut ROUT
 	B	%FT78
 51
         ; Defect found in non-free block - has it already been mapped out?
+ [ BigMaps
+        BL      FragRdLinkBits  ;(R10,R11->R8,Z)
+ |
         BL      RdLinkBits      ;(R10,R11->R8,Z)
+ ]
         TEQS    R8, #1
         BEQ     %BT27           ; Yes, already mapped out
 
@@ -2224,7 +2495,7 @@ UpdateBadBlockList ROUT
  [ UseBigFlag
         ; use BigFlag field for test
         LDRB    LR, [R5,#BigFlag]
-        TSTS    LR, #1
+        TSTS    LR, #BigFlagBit
         BNE     %FT40
  |
         ; use size of disc for test
@@ -2326,8 +2597,8 @@ UpdateBadBlockList ROUT
         ; for safety, check if second defect list actually present
         ; if not there then do nothing.  (Could be unix disc)
         LDRB    LR, [R5, #BigFlag]
-        TSTS	LR, #1
 	CLRV	; this is not an error condition
+        TSTS	LR, #BigFlagBit
 	BEQ	%FT81
  ]
 
@@ -2631,6 +2902,26 @@ DismountDisc
         BEQ     %FT50
 
         DrvRecPtr  R2, R7
+
+  [ DynamicMaps
+
+  	; get rid of any free space map area
+
+  	Push	"R0-R8"
+	MOV	R0, #2
+	LDR	R1, [R2, #DrvsFsMapArea]
+	BL	OnlyXOS_DynamicArea
+	BVS	%FT01				; if error, then do nothing
+
+	MOV	R0, R1
+	RSB	R1, R2, #0			; amount to change size by
+	BL	OnlyXOS_ChangeDynamicArea	; do the change
+01
+  	Pull	"R0-R8"
+
+  	MOV	LR, #0
+  	STR	LR, [R2, #DrvsFsMapSize]	; mark the size as zero
+  ]
 
         ; Clear the LastDiscOpWasFormat flag
         LDRB    LR, [R2, #DrvFlags]
@@ -3150,6 +3441,9 @@ MC0     DCB     "MC0",0
 MC1     DCB     "MC1",0
 MC2     DCB     "MC2",0
 MC3     DCB     "MC3",0
+MC4     DCB     "MC4",0
+MC5     DCB     "MC5",0
+MC6     DCB     "MC6",0
         ALIGN
 
 DoMap ROUT
@@ -3174,6 +3468,28 @@ DoMap ROUT
         BVS     %FT95
  ]
         BL      DiscAddToRec            ;(R3->LR)
+ [ BigDir
+	LDR	r2, [LR, #DiscVersion]
+	TEQS	r2, #0
+	MOVEQ	r0, #0
+	MOVNE	r0, #1		; bit 0 is big dirs flag
+	LDRB	r2, [LR, #LinkBits]
+	CMPS	r2, #15
+	ORRHI	r0, r0, #2
+; r0 = 0 - not a new filecore disc
+; r0 = 1 - big dirs, small map
+; r0 = 2 - big map, small dirs, this case is only valid for IdLen=16
+; r0 = 3 - bit map, big dirs
+	TEQS	r0, #1
+	baddr	r0, MC4, EQ	;(   start,  length) new map, big directories
+	BEQ	%FT07
+	TEQS	r0, #2
+	baddr	r0, MC5, EQ	;(   start,  length) big map, new directories
+	BEQ	%FT07
+	TEQS	r0, #3
+	baddr	r0, MC6, EQ	;(   start,  length) big map, big directories
+	BEQ	%FT07
+ ]
         LDRB    r2, [LR, #DiscFlags]
         TSTS    r2, #OldMapFlag
         BNE     %FT06
@@ -3536,6 +3852,7 @@ VerBad
 DoVerify ROUT
         Entry  Flag,Dormant     ;leaves SB,LR stacked
         Push    "R7-R11"
+
         TEQS    R1, #0
         BLEQ    IdentifyCurrentDisc     ;(->R0,R3,V)
         MOVNE   R2, #MustBeDisc
@@ -3577,12 +3894,37 @@ DoVerify ROUT
  ]
         BLHS    InitZoneObj     ;(R0,R10->R8,R9,R11,LR)
         MOVHS   R5, LR
+ [ BigMaps
+ 	LDRHSB	LR, [R10,#ZoneHead+Zones]
+ 	LDRHSB	R9, [R10,#ZoneHead+Zones2]
+ 	ADDHS	LR, LR, R9, LSL #8
+ |
         LDRHSB  LR, [R10,#ZoneHead+Zones]
+ ]
         CMPHSS  R0, LR
         MOVHS   R7, #0
         BHS     %FT40
 
+; SBP: 06 Feb 1997: ***** Fix to prevent silly long transfers on large discs during *verify (-ve numbers problem!)
+ [ T
+        MOV     r9,r0
+        BL      MapPtrToDiscAdd
+        SUB     r4,r0,r2
+        LDR	lr,[r10,#ZoneHead+SectorSize]
+        MOV	r4,r4,LSL lr
+        MOV     r0,r9
+        CMP     r4,#1024*1024*1024
+        MOV	r7,#0
+        MOV	r8,#1
+        BHS	%ft40
+ ]
+; SBP: 06 Feb 1997: ***** End of fix
+
+ [ BigMaps
+        BL	FragRdLenLinkBits ;(R10,R11->R7,R8)     ***************** nasty - fix it properly later
+ |
         BL      RdLenLinkBits   ;(R10,R11->R7,R8)
+ ]
         TEQS    R8, #1
         BNE     %BT10           ; Not a bad block
 
