@@ -88,8 +88,10 @@ all: ${TARGET}
 
 resources: ${TARGET}
 	${MKDIR} ${RESDIR}.^.Apps.${APP}
+	SetMacro UpgFetchRes$path Resources.$(USERIF).$(LOCALE).,Resources.$(USERIF).UK.
         ${CP} ${TARGET} ${RESDIR}.^.Apps.${APP}.${COMPONENT} ${CPFLAGS}
-        ${CP} Resources.* ${RESDIR}.^.Apps.${APP}.* ${CPFLAGS}
+        ${CP} UpgFetchRes:* ${RESDIR}.^.Apps.${APP}.* ${CPFLAGS}
+        UnSet UpgFetchRes$path
         @echo ${COMPONENT}: all complete
         
 
