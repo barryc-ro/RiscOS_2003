@@ -166,18 +166,6 @@ void dhcp_deliver_incoming_packet(DHCP *d, void *private_word)
         }
 }
 
-/* Inform the Internet module that we received a BOOTP response to our
- * DHCP request.  Destroy our record of this interface immediately
- * afterwards to avoid interfering in the future.  The lease will be
- * infinite by virtue of the response being BOOTP and not DHCP.
- */
-static void bootp_offer(dhcp_interface *di, dhcp_reply_params *drp)
-{
-	di->di_dhcp = *drp->reply;
-        sockets_transmit(di, st_ACK_RETAIN_NO_XMIT);
-        interfaces_forget(di);
-}
-
 /* Second stage dispatch - we've matched up the interfaces and remembered
  * the details of the incoming packet in a convenient structure.  Now we
  * need to find the DHCP message type option so we can dispatch it to the
@@ -196,17 +184,19 @@ void dhcp_interpret_reply(dhcp_interface *di, dhcp_reply_params *drp, void *priv
 	}
 
         msgtype = dhcp_find_option(drp->reply, OPTION_DHCPMESSAGETYPE);
-	if (msgtype == NULL || msgtype[1] < 1) {
+	if (msgtype == NULL) {
         	/* Reply does not contain a valid DHCP message type option,
 	         * hence we must pass it to the Internet module for interpretation.
 	         * Internet will not get to see it through its internal hooks into
 	         * the UDP code because of our socket "claiming" it.
 	         */
-	        bootp_offer(di, drp);
+	        bootp_ack(di, drp);
+	}
+	else if (msgtype[1] < 1) {
+	        /* Corrupted message?  Length field should not be zero! */
 	        return;
 	}
-
-	switch (msgtype[2]) {
+	else switch (msgtype[2]) {
                 case DHCPOFFER:
                         /* May get several of these.  We never claim
                          * these messages as that would put the Internet
@@ -404,6 +394,53 @@ static dhcp_time dhcp_add_dhcp_time(dhcp_time t, dhcp_time base)
                         return result;
                 }
 	}
+}
+
+void bootp_ack(dhcp_interface *di, dhcp_reply_params *drp)
+{
+        /* A BOOTP server has answered us.  We need to pretend that it was
+         * a DHCPACK message and handle it appropriately.
+         */
+	trace(("BOOTP ACK message received in state %s\n", dhcp_state_name(di)));
+
+	if (di->state == dhcpstate_BOUND) {
+	        /* Already bound.  Discard this message completely. */
+	        return;
+	}
+
+	if (di->state != dhcpstate_SELECTING &&
+	    di->state != dhcpstate_REBINDING &&
+	    di->state != dhcpstate_RENEWING) {
+		/* Not prepared to receive BOOTP ACKs in this state. Ignore it. */
+        	return;
+	}
+
+	/* No need to calculate the re-acquisition timer real event times now */
+	di->t1 = dhcp_infinite_lease;
+	di->t2 = dhcp_infinite_lease;
+	di->kill_if = dhcp_infinite_lease;
+
+	/* Perform ARP search verification for proposed IP address */
+	if (arp_for_ip(di, drp->reply) < 0) {
+	        /* ARP cache has detected a duplicate IP address in its cache
+	         * and so believes that initialising this interface with this
+	         * address would cause havoc - the Internet module usually
+	         * panics in this circumstance.  Therefore, we ignore this
+	         * message.
+	         */
+	        return;
+	}
+
+	/* Everything was OK - record the rest of the data */
+	di->state = dhcpstate_BOUND;
+	di->di_dhcp = *drp->reply;
+	di->binding = di->di_dhcp;
+
+	/* Inform Internet module and ask it to parse the standard options
+	 * and then send around the service call announcing the interface
+	 * dynamic boot has succeeded.
+	 */
+	sockets_transmit(di, st_ACK_RECEIVED);
 }
 
 void dhcp_ack(dhcp_interface *di, dhcp_reply_params *drp)
