@@ -47,19 +47,3 @@ ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}
 
 # Dynamic dependencies:
-rm.ROMFonts: Hdr:ListOpts
-rm.ROMFonts: Hdr:Macros
-rm.ROMFonts: Hdr:System
-rm.ROMFonts: Hdr:SWIs
-rm.ROMFonts: Hdr:CPU.Generic26
-rm.ROMFonts: Hdr:IO.GenericIO
-rm.ROMFonts: Hdr:RISCOS
-rm.ROMFonts: Hdr:ModHand
-rm.ROMFonts: Hdr:Services
-rm.ROMFonts: Hdr:Proc
-rm.ROMFonts: Hdr:FSNumbers
-rm.ROMFonts: Hdr:NewErrors
-rm.ROMFonts: Hdr:Variables
-rm.ROMFonts: Hdr:ResourceFS
-rm.ROMFonts: Version
-rm.ROMFonts: Hdr:NDRDebug
