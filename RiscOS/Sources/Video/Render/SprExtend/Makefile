@@ -140,7 +140,7 @@ ${EXP_HDR}.SprExtend: hdr.SprExtend
 # Generate the SFILES
 #
 .c.s:;  ${CC} -S ${CFLAGS} ${TFLAGS} -ff -zps1 -DEMBED -DSOURCE_IS_$* $*.c
-        ${SED} /IMPORT/d;/dataseg/d;/codeseg/d;/AREA/d < s.$* > s.temp
+        ${SED} -e /IMPORT/d -e /dataseg/d -e /codeseg/d -e /AREA/d < s.$* > s.temp
         ${CP} s.temp s.$* ${CPFLAGS}d
         
 s.yuvtabs: ${GENYUVTABS}
