@@ -7,6 +7,7 @@
 # ----       ----         -----------
 # 25-May-94  AMcC         Created.
 #
+.SUFFIXES: .c .o .s .od
 
 #
 # Paths
@@ -26,10 +27,10 @@ RM      = remove
 WIPE    = -wipe
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -zM -zps1 -throwback -pcc -fn ${INCLUDES} ${DFLAGS} -DCOMPAT_INET4
+CFLAGS  = -W -c -depend !Depend -zM -zps1 -throwback -pcc -fn ${INCLUDES} ${DFLAGS} -DCOMPAT_INET4
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
-LDFLAGS = -map -v
+#LDFLAGS = -map -v
 
 #
 # Libraries
@@ -60,6 +61,10 @@ OBJS      = res_query.o Events.o \
 	    Cache.o ExtLib.o Hosts.o Resolver.o \
 	    res_comp.o res_init.o res_mkquer.o  \
 	    StrCaseCmp.o Stubs.o SWI.o
+DEBOBJS   = od.res_query od.Events \
+	    od.Cache o.ExtLib od.Hosts o.Resolver \
+	    od.res_comp od.res_init od.res_mkquer  \
+	    od.StrCaseCmp Stubs.o od.SWI
 LIBS      = ${DESKLIB} ${INETLIB} ${SOCKLIB} ${UNIXLIB}
 EXPORTS   =
 
@@ -67,6 +72,7 @@ EXPORTS   =
 # Rule patterns
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
+.c.od:;      ${CC} ${CFLAGS} -DDEBUG -o $@ $<
 .cmhg.o:;   ${CMHG} -o $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
 
@@ -74,6 +80,8 @@ EXPORTS   =
 # build a relocatable module:
 #
 all: rm.${COMPONENT}
+
+ramtrace: rm.${COMPONENT}D
 
 #
 # RISC OS ROM build rules:
@@ -121,5 +129,8 @@ rom_link:
 
 rm.${COMPONENT}: ${OBJS} ${CLIB} ${LIBS}
         ${LD} ${LDFLAGS} -o $@ -module ${OBJS} ${CLIB} ${LIBS}
+
+rm.${COMPONENT}D: ${DEBOBJS} ${CLIB} ${LIBS}
+        ${LD} ${LDFLAGS} -o $@ -module ${DEBOBJS} ${CLIB} ${LIBS}
 
 # Dynamic dependencies:
