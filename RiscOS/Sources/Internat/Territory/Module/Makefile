@@ -31,6 +31,16 @@ SOURCE    = s.Territory
 OBJECT    = o.${COMPONENT}
 TARGET    = rm.${COMPONENT}
 
+# BBE Rules
+BBETYPE   = local
+bbe-local: bbe-generic-resources-get-alias
+  BBE_Export_Dir s
+  BBE_Export_Dir Resources.${COMPONENT}
+  BBE_Export_File VersionNum
+  BBE_Export_File VersionASM
+  BBE_Export_File Makefile
+  ${STRIP} -v ${BBEDIR}.Makefile
+
 #
 # Generic rules:
 #
