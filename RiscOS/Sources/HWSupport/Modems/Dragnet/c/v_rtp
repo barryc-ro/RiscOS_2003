@@ -1,0 +1,1019 @@
+/*name and version number:@(#)v_rtp.c	1.16*/
+/*date of get: 		  09/06/00 16:59:29*/
+/*date of delta:	  03/23/00 23:14:51*/
+/*****************************************************************************
+** File        : v_rtp.c                                                       *
+** Version     : 3.0                                                         *
+**---------------------------------------------------------------------------*
+** Description :                                                             *
+**  Implements a full-blown RTP stack as defined in RFC's 1889 and 1890 plus *
+** draft 1890 revision ietf-avt-porfile-new-04 which is due to expire May 18 *
+** 1999. This latter document introduces new payload types for G729 and CNG  *
+** (Comfort Noise Generation) which are both used in this source code.       *
+**                                                                           *
+**  In addition to handling RTP, this library also deals with voice prompts  *
+** which are indicated using special payload types (video) which the GW1000  *
+** would never negotiate. These cause state transitions in the library that  *
+** result in timestamp and sequence numbers being ignored and a direct queue *
+** to the DSP. The payload types are 25 (voice prompt START) and 26 (END).   *
+**                                                                           *
+**     Function Name    | Access  | Summary                                  *
+**  --------------------+---------+----------------------------------------- *
+**  rtp_rx_config       | GLOBAL  | configs rx side (frms per packet etc)    *
+**  rtp_rx              | GLOBAL  | takes data from DSP, creates pnet packet *
+**  assemble_header     | STATIC  | assembles RTP header for a packet        *
+**                      |         |                                          *
+**  rtp_tx_config       | GLOBAL  | configs tx side (jitter etc)             *
+**  rtp_tx              | GLOBAL  | takes data from PNET, extracts frames    *
+**  rtp_process_packet  | STATIC  | processes RTP header, extracts seq, TS   *
+**                                                                           *
+**---------------------------------------------------------------------------*
+**                               HISTORY                                     *
+**[Release 2]----------------------------------------------------------------*
+** Date            Ver   Dev  Comments                                       *
+** 25th Jan  1999  2.0   RGT  Re-writes of media_read and write functions    *
+**                            for DSP control word. Introduction of frame    *
+**                            alignment in stable form. Full implementation  *
+**                            of frame erasure.                              *
+**                                                                           *
+**  5th Feb  1999  2.1   RGT  Bug fix in transmit engine for negative time,  *
+**                            reverse wrap. Didn't compute reverse timestamp *
+**                            wrap correctly - used WORD rather than LWORD   *
+**                            reference. Also introduced checking on the     *
+**                            config parameters passed down during setup.    *
+**                                                                           *
+** 16th Feb  1999  2.2   RGT  Small mod in tx config routine: jitter is now  *
+**                            passed to us in frames so divisor is removed.  *
+**                                                                           *
+** 17th Feb  1999  2.3   RGT  Bug fix in assemble_header: assignment inside  *
+**                            IF statement on compander type. This caused    *
+**                            G711 to always be sent with payload type PCMA. *
+** SIGNIFICANT MODS:                                                         *
+** 20th Apr  1999  2.4   RGT  Modifications made to rx and tx functions for  *
+**                            new stats engine. RTP issues warnings now and  *
+**                            passes seqNums to a packet loss calc function. *
+**                            Rx/Tx return values are more descriptive now.  *
+**                            Also, config functions do not get passed any   *
+**                            data - they use the exchanger's global config  *
+**                            structure. All functions now reside in banked  *
+**                            memory because there were problems with the    *
+**                            function pointers. The transmit side has been  *
+**                            modified significantly, timestamps are always  *
+**                            processed now for queuing and jitter calcs and *
+**                            the 'hack' to maintain voice has been changed  *
+**                            to only fire if we entirely loose voice for 1  *
+**                            second or greater.                             *
+**                                                                           *
+** 5th  May  1999  2.5   RGT  Modifications to the transmit section for the  *
+**                            addition of dynamic buildout capability in non *
+**                            silence suppression mode.                      *
+**                                                                           *
+**[Release 3]----------------------------------------------------------------*
+** Date            Ver   Dev  Comments                                       *
+**  2nd Sep  1999  3.0    JA  CS-4 multi-instance integration                *
+**                                                                           *
+******************************************************************************/
+#include <v_glob.h>
+#include <memory.h>
+
+/****************************************************************************
+              ####  #####   ###   #####  ###   ####   ####
+             #        #    #   #    #     #   #      #
+              ####    #    #####    #     #   #       ####
+                  #   #    #   #    #     #   #           #
+              ####    #    #   #    #    ###   ####   ####
+*****************************************************************************/
+		static Boolean assemble_header   (VGLOB *, frame_t  *);
+		       Boolean rtp_process_packet(VGLOB *, packet_t *);
+
+/*****************************************************************************
+      ##### #   #  #   #   ####  #####  ###   ###   #    #  ####
+      #     #   #  ##  #  #        #     #   #   #  ##   # #
+      ####  #   #  # # #  #        #     #   #   #  # #  #  ####
+      #     #   #  #  ##  #        #     #   #   #  #   ##      #
+      #      ####  #   #   ####    #    ###   ###   #    #  ####
+******************************************************************************/
+
+
+					/*****************************
+					       RECEIVER ROUTINES
+					       RECEIVER ROUTINES
+					       RECEIVER ROUTINES
+					       RECEIVER ROUTINES
+					*****************************/
+
+/******************************************************************************
+** Function : rtp_rx_config                                                   *
+*******************************************************************************
+** Modification History :                                                     *
+**                                                                            *
+**[Release 2]-----------------------------------------------------------------*
+** Date            Ver   Dev  Comments                                        *
+** 25th Jan  1999  2.0   RGT  Initial Revision                                *
+**                                                                            *
+**  5th Feb  1999  2.1   RGT  Added in checks on passed Frms/pkt parameter    *
+**                                                                            *
+** 20th Apr  1999  2.2   RGT  No passed config argument: using core exchanger *
+**                            global call config structure for data. Also,    *
+**                            fixed sync-src value assignment - all 32 bits   *
+**                            are now populated.                              *
+**                                                                            *
+*******************************************************************************
+** Description :                                                              *
+**   This function configures the RTP receiver with information necessary for *
+** its operation during a call. Currently only two configuration parameters   *
+** are needed as follows:                                                     *
+**   1. framesPerPkt  = Max number of frames that may be put in any packet    *
+**   2. pnetCompander = The compander being used over the NET (for G711 PT)   *
+*******************************************************************************
+** Arguments :                                                                *
+**                NONE                                                        *
+**                                                                            *
+*******************************************************************************/
+void rtp_rx_config(VGLOB *vglob_ptr)
+{
+	rtpRxStruct_t	*rxInf = &V(rtpRxInf);	// RTP receive information
+
+	/***********************************************************************
+	** Generate a pseudo random synchronising source based on current time *
+	************************************************************************/
+	if (!rxInf->syncSrc)
+		rxInf->syncSrc = (lword)(MACRO_GET_TIME())<<16 | ~MACRO_GET_TIME();
+
+	rxInf->offset     = 0;
+	rxInf->timestamp  = 0;
+	rxInf->sequence   = 0;
+	rxInf->lastFrmID  = 0;
+
+	rxInf->frmsPerPkt = V(config).framesPerPkt;
+	if (rxInf->frmsPerPkt < 1 || rxInf->frmsPerPkt > RTP_MAX_FRAMES_PER_PACKET) {
+		WARNING(vglob_ptr, WARN_RTP_BAD_FRMS_PER_PKT);
+		WARNING(vglob_ptr, rxInf->frmsPerPkt);
+		rxInf->frmsPerPkt = RTP_DEFAULT_FRAMES_PER_PKT;
+		WARNING(vglob_ptr, rxInf->frmsPerPkt);
+	}
+
+	rxInf->frmsIns    = 0;
+	rxInf->compander  = V(config).pnetCompander;
+	rxInf->codec      = UNINITIALISED;
+
+	rxInf->sentCNG    = False;
+	rxInf->pkt = NULL;
+
+	#if 0
+	printf("rtp_rx_config, modem %d, rxInf codec: 0x%x, framesPerPkt: %d\n",
+		  V(modem_num), rxInf->codec, rxInf->frmsPerPkt);
+	#endif
+
+}
+
+
+/******************************************************************************
+** Function : rtp_rx                                                          *
+*******************************************************************************
+** Modification History :                                                     *
+**                                                                            *
+**[Release 2]-----------------------------------------------------------------*
+** Date            Ver   Dev  Comments                                        *
+** 25th Jan  1999  2.0   RGT  Initial Revision                                *
+**                                                                            *
+** 20th Apr  1999  2.1   RGT  New Stats modifications - function now issues   *
+**                            warnings if it gets bad codec types. Also, the  *
+**                            return values have been changed to enum type    *
+**                            (rather than Boolean) to indicate different     *
+**                            conditions to the core exchanger.               *
+**                                                                            *
+** 21th Feb  2000  2.2   JA   Reworked silence suppression and CNG logic.     *
+**                                                                            *
+*******************************************************************************
+** Description :                                                              *
+**   This function implements the receive side of RTP. It takes frames from   *
+** the DSP pool (it's called by the core any time a new frame becomes ready)  *
+** and assembles them into packets with an RTP header.                        *
+**   rtp_rx supports extra features such as silence suppression, and variable *
+** number of frames per packet.                                               *
+**                                                                            *
+*******************************************************************************
+** Arguments :                                                                *
+**   ______________________________________________________________________   *
+**  | Type       | arg name | Description                                  |  *
+**  |------------+----------+----------------------------------------------|  *
+**  | frame_t *  | frame    | Pntr to frame to be assembled into a packet  |  *
+**   ----------------------------------------------------------------------   *
+**                                                                            *
+*******************************************************************************/
+void rtp_rx(VGLOB *vglob_ptr, frame_t *frame)
+{
+	byte	L1;					 // Loop control variable. Byte is safe
+	rtpRxStruct_t	*rxInf = &V(rtpRxInf);	// RTP receive information
+
+
+	V(RX_RETVAL) = OKAY;
+
+	/*******************************************************************
+	** Firstly, let's update our timestamp information :               *
+	** Exchanger will always give us frames - even if they are silence *
+	** so update the timestamp using changes in sequence number.       *
+	********************************************************************/
+	//rxInf->timestamp += (frame->ID - rxInf->lastFrmID) * 80;
+	#if defined (V_5MS_G711)
+		// 40 samples (5ms) for G711, 80 (10ms) for everyone else
+		#define DECODED_SAMPLES_PER_FRAME	(rxInf->codec == G711 ? G711_FRAME_SZ : 80 )
+	#else
+		// everyone codes 80 samples (10ms) per frame
+		#define DECODED_SAMPLES_PER_FRAME	G711_FRAME_SZ
+	#endif
+	rxInf->timestamp += (frame->ID - rxInf->lastFrmID) * DECODED_SAMPLES_PER_FRAME;
+	rxInf->lastFrmID  = frame->ID;
+
+	/******************************************************************
+	** SILENCE SUPPRESSION: Only allow one CNG frame upto the network *
+	** between any talk spurt.                                        *
+	*******************************************************************/
+	rxInf->talkSpurt = False;
+	if (V(config).silenceSupp) {
+		// Feature enabled, dump silence and extra CNG frames
+		if (frame->length == 2) {	// CNG are only frames that are 2 bytes long
+			if (!rxInf->sentCNG) {		// allow first CNG frame through
+				rxInf->sentCNG = True;
+			}
+			else {
+				// Not first, dump it
+				return;
+			}
+		}
+		else if (frame->length == 0) {
+			// Silence, dump this, far end plays erasure
+			// Always preceded by CNG frame, so we know frmsIns==0,
+			// nothing sitting around to send.
+			return;
+		}
+		else {
+			// Not silence or CNG
+			// Check for first non-silence frame after sending CNG
+			if (rxInf->sentCNG) {
+				rxInf->talkSpurt = True;
+				rxInf->sentCNG = False;
+			}
+		}
+	}
+	else {
+		// Feature disabled, send everything through
+		if (frame->length == 2) {	// CNG are only frames that are 2 bytes long
+			// Send it through
+			rxInf->sentCNG = True;
+		}
+		else if (frame->length == 0) {
+			// Send silence frame as regular frame
+			frame->length = G729_FRAME_SZ;
+			for (int j = 0; j < G729_FRAME_SZ; j++) {
+				frame->media[j] = 0;
+			}
+			rxInf->sentCNG = False;
+		}
+		else {
+			// May be first non-silence frame after sending CNG
+			rxInf->sentCNG = False;
+		}
+	}
+
+
+	if (rxInf->pkt == NULL) {
+		// Previous pkt allocation failed, try again now
+		rxInf->pkt = next_rx_media_packet( vglob_ptr );
+		if (rxInf->pkt == NULL) {
+			// No frames, we are seriously overloaded
+			printf("rtp_rx: no pkts available, dumping frame\n");
+			goto emergency_exit;
+		}
+		rxInf->offset    = 0;
+		rxInf->frmsIns   = 0;
+	}
+
+	/******************************************************************
+	** We must ensure that packets may not contain more than one type *
+	** of frame. Also we must ensure we don't write beyond our buffer *
+	*******************************************************************/
+	if (rxInf->codec != frame->codec ||
+		(rxInf->offset + frame->length) > CFG_MAX_PKT_SZ) {
+		if (rxInf->frmsIns) {
+			send_packet_to_network(vglob_ptr, rxInf->pkt, PNET_MEDIA);
+			rxInf->pkt = next_rx_media_packet(vglob_ptr);
+			rxInf->offset    = 0;
+			rxInf->frmsIns   = 0;
+		} 
+		if ((rxInf->codec = frame->codec) == DEMOD) {
+			WARNING(vglob_ptr, WARN_RTP_GOT_DEMOD_FRAME);
+			V(RX_RETVAL) = PSTN_FAX_TRANS;
+			goto emergency_exit;
+		}
+	}
+
+	/*************************************************************
+	** To reach this point, we must have flushed out any dubious *
+	** packet, be at the start of a new packet, OR be mid-way    *
+	** through assembly of a previously stated packet. Check to  *
+	** see if we need to generate an RTP header.                 *
+	**************************************************************/
+	if (rxInf->frmsIns == 0) {
+		if (!assemble_header(vglob_ptr, frame)) {
+			WARNING(vglob_ptr, WARN_RTP_BAD_CODEC);
+			V(RX_RETVAL) = RTP_BAD_CODEC;
+			goto emergency_exit;
+		}
+		rxInf->pkt->length = sizeof(rtpHeader_t);
+	}
+
+	/*************************************************************
+	** Transfer the media from the frame to the packet structure *
+	**************************************************************/
+	memcpy(&rxInf->pkt->media[rxInf->offset], &frame->media[0], frame->length);
+	rxInf->offset += frame->length;
+	rxInf->pkt->length += frame->length;
+
+	/****************************************************************
+	** Finally, check if the packet is ready to be transmitted upto *
+	** the network. If it is, queue the packet and reset our state. *
+	** Also queue a pkt that includes the first CNG frame at end.   *
+	*****************************************************************/
+	if (++rxInf->frmsIns >= rxInf->frmsPerPkt || rxInf->sentCNG ) {
+		// Ship this packet, get a new one for next time
+		send_packet_to_network(vglob_ptr, rxInf->pkt, PNET_MEDIA);
+		rxInf->pkt = next_rx_media_packet(vglob_ptr);
+		rxInf->offset    = 0;
+		rxInf->frmsIns   = 0;
+	}
+emergency_exit:
+	L1 = 0;
+}
+
+static _Inline void
+print_header( char *who, rtpHeader_t *header )
+{
+	#if 0
+	printf("%s: header at 0x%08x: vpxcc=0x%02x, pt=0x%02x, sequ=0x%04x, ts=0x%08x, ssrc=0x%08x\n",
+		   who, (uint_32) header, header->vpxcc, header->pt, header->sequence,
+		   header->timestamp, header->ssrc );
+	#endif
+}
+
+/******************************************************************************
+** Function : assemble_header                                                 *
+*******************************************************************************
+** Modification History :                                                     *
+**                                                                            *
+**[Release 2]-----------------------------------------------------------------*
+** Date            Ver   Dev  Comments                                        *
+** 25th Jan  1999  2.0   RGT  Initial Revision                                *
+**                                                                            *
+** 17th Feb  1999  2.1   RGT  Bug fix: had assignment on compander type inside*
+**                            'if' statement. This caused G711 payload type   *
+**                            to always be sent as PCM A-LAW.                 *
+**                                                                            *
+** 20th Apr  1999  2.2   RGT  Function now static to RTP library.             *
+**                                                                            *
+*******************************************************************************
+** Description :                                                              *
+**  This function generates a header for the start of an RTP packet. All the  *
+** dynamic information required (sequence number, timestamp, payload type,    *
+** talk spurt indicator, etc) is passed either in the receiver structure or   *
+** the DSP frame passed as an argument.                                       *
+**  assemble_header may fail to produce output if it is given a frame of a    *
+** codec type for which it does not know the payload type ID, in which case   *
+** it returns False to the calling context (rtp_rx).                          *
+*******************************************************************************
+** Arguments :                                                                *
+**   ______________________________________________________________________   *
+**  | Type       | arg name | Description                                  |  *
+**  |------------+----------+----------------------------------------------|  *
+**  | frame_t *  | frame    | Pointer to frame structure that hdr is for   |  *
+**   ----------------------------------------------------------------------   *
+**                                                                            *
+*******************************************************************************/
+static Boolean assemble_header(VGLOB *vglob_ptr, frame_t *frame)
+{
+	rtpRxStruct_t	*rxInf = &V(rtpRxInf);	// RTP receive information
+	rtpHeader_t	* header = (rtpHeader_t *)rxInf->pkt->media;	// RTP header
+
+	/************************************************************************
+	** Sets Version number 2, no padding, no extension bit, no contributing *
+	** sources.                                                             *
+	*************************************************************************/
+	header->vpxcc = RTP_OCTET1;
+
+	/**********************************************************
+	** Convert internal codec representation to IETF RFC 1889 *
+	** "payload type" for assembly into the packet header.    *
+	***********************************************************/
+	switch (frame->codec) {
+	case G711:
+		if (rxInf->compander == V_A_LAW)
+			header->pt = PT_PCMA;
+		else
+			header->pt = PT_PCMU;
+		break;
+
+	case G729:
+		header->pt = PT_G729;
+		break;
+
+	case G723:
+		header->pt = PT_G723;
+		break;
+
+	default:			// unrecognised voice coder (FAX mode ?)
+		printf("assemble_header: unrecognized coder 0x%x, rx compander = 0x%x\n", frame->codec, rxInf->compander);
+		return False;
+	}
+
+	/********************************************************************
+	** If this is the start of a talk spurt, set the marker bit so that *
+	** the receiving gateway will know it's safe to alter the buildout  *
+	*********************************************************************/
+	if (rxInf->talkSpurt)
+		header->pt |= RTP_MASK_MARKER;
+
+	/*******************************************************
+	** Insert sequence numbering and timestamp information *
+	********************************************************/
+	header->sequence  = htons(rxInf->sequence++);
+	header->timestamp = htonl(rxInf->timestamp);
+
+	/********************************************************************
+	** We're not bothering with contributing sources, stick in the sync *
+	** source to complete the header assembly.                          *
+	*********************************************************************/
+	header->ssrc      = rxInf->syncSrc;
+
+	/*********************************************************************
+	** Our header covers the first 12 bytes of the Rx scratch space. Set *
+	** the offset so that we append media immediately after the header.  *
+	**********************************************************************/
+	rxInf->offset      = sizeof(rtpHeader_t);
+
+	print_header ("rx assemble", header);
+	return True;
+}
+
+
+
+					/*****************************
+					       TRANSMIT ROUTINES
+					       TRANSMIT ROUTINES
+					       TRANSMIT ROUTINES
+					       TRANSMIT ROUTINES
+					*****************************/
+
+/******************************************************************************
+** Function : rtp_tx_config                                                   *
+*******************************************************************************
+** Modification History :                                                     *
+**                                                                            *
+**[Release 2]-----------------------------------------------------------------*
+** Date            Ver   Dev  Comments                                        *
+** 25th Jan  1999  2.0   RGT  Initial Revision                                *
+**                                                                            *
+**  5th Feb  1999  2.1   RGT  Added in checks on passed parameters.           *
+**                                                                            *
+** 16th Jan  1999  2.2   RGT  Removed divisor on jitter settings - app now    *
+**                            passes us a delay in frames instead of msecs.   *
+**                                                                            *
+** 20th Apr  1999  2.3   RGT  No passed config argument: using core exchanger *
+**                            global call config structure for data.          *
+**                                                                            *
+** 5th  May  1999  2.4   RGT  Modifications made in support of the removal    *
+**                            of the jitter params in the txInfo structure.   *
+**                            Also introduced a buildout element which is     *
+**                            set to the max jitter config value.             *
+**                                                                            *
+*******************************************************************************
+** Description :                                                              *
+**   This function configures the RTP transmitter with information necessary  *
+** for its operation during a call. Currently only two configuration params   *
+** are needed as follows:                                                     *
+**   1. jitterMin  = Minimum amount of jitter delay (for dynamic bldout only) *
+**   2. jitterMax  = Max amout of delay or the static buildout                *
+*******************************************************************************
+** Arguments :                                                                *
+**                NONE                                                        *
+**                                                                            *
+*******************************************************************************/
+void rtp_tx_config(VGLOB *vglob_ptr)
+{
+
+	if (V(config).jitterMin < 1)
+		V(config).jitterMin = 1;
+
+	if (V(config).jitterMax < MIN_JITTER_DELAY || 
+	    V(config).jitterMax > MAX_JITTER_DELAY) {
+		WARNING(vglob_ptr, WARN_RTP_BAD_MAX_JITTER);
+		V(config).jitterMax = DEFAULT_JITTER_DELAY;
+	}
+
+	if (V(config).jitterInitial < MIN_JITTER_DELAY || 
+	    V(config).jitterInitial > MAX_JITTER_DELAY) {
+		WARNING(vglob_ptr, WARN_RTP_BAD_INIT_JITTER);
+		V(config).jitterInitial = DEFAULT_JITTER_DELAY;
+	}
+
+	if (V(config).jitterMin < MIN_JITTER_DELAY ||
+	    V(config).jitterMin > V(config).jitterMax) {
+		WARNING(vglob_ptr, WARN_RTP_BAD_MIN_JITTER);
+		V(config).jitterMin = MIN_JITTER_DELAY;
+	}
+
+	/** Start off with the initial buildout value **/
+	V(rtpTxInf).buildout = V(config).jitterInitial;
+	V(rtpTxInf).jTimer = MACRO_GET_TIME();
+
+	V(rtpTxInf).initialPkt = True;				// to bypass queue calcs (1st pkt)
+}
+
+
+/******************************************************************************
+** Function : rtp_tx                                                          *
+*******************************************************************************
+** Modification History :                                                     *
+**                                                                            *
+**[Release 2]-----------------------------------------------------------------*
+** Date            Ver   Dev  Comments                                        *
+** 25th Jan  1999  2.0   RGT  Initial Revision                                *
+**                                                                            *
+** 31st Jan  1999  2.1   RGT  Bug fix in transmit engine for negative time,   *
+**                            reverse wrap. Didn't compute reverse timestamp  *
+**                            wrap correctly - used WORD rather than LWORD    *
+**                            reference.                                      *
+** SIGNIFICANT MODS:                                                          *
+** 20th Apr  1999  2.2   RGT  Added in extra logic for packet loss stats. Also*
+**                            use more descriptive return value instead of the*
+**                            Boolean used previously. Function now issues    *
+**                            warnings if bad packets are received. More      *
+**                            importantly, the function requires more CPU to  *
+**                            execute than previously because jitter calcs    *
+**                            require we examine and process timestamps. This *
+**                            has required mods to the function: all timestamp*
+**                            processing is done in function process_packet.  *
+**                            Also, the 'hack' to maintain voice has been     *
+**                            changed.                                        *
+**                                                                            *
+** 5th  May  1999  2.3   RGT  Made some minor logic changes and moved certain *
+**                            functions into the process_header routine.      *
+**                            These changes were made for dynamic buildout in *
+**                            non-silence suppression mode. The analysis of   *
+**                            the queue_frame return value has been removed   *
+**                            as a result of the new functionality.           *
+**                                                                            *
+*******************************************************************************
+** Description :                                                              *
+**   This function implements the transmit side of RTP. It is called by the   *
+** core whenever a new packet is received from the network. rtp_tx parses out *
+** the RTP header, extracting information such as payload type, timestamp and *
+** sequence number, and queues each frame contained in the packet to the DSP. *
+**   Queueing calculations are done on an "as required" basis to improve cpu  *
+** usage. Under certain conditions, the queueing calculations are bypassed    *
+** without observing timestamp or sequence number values. These conditions    *
+** for bypass are as follows:                                                 *
+**   .1. First ever packet                                                    *
+**   .2. Voice announcement data                                              *
+**   .3. First real network packet after an announcement                      *
+**   .4. RTP marker (talk-spurt) bit is set in the header.                    *
+**                                                                            *
+**   In the above for conditions, the set_buildout function will be called    *
+** unless we are in mode 2, in which case, set_buildout is called only if     *
+** a special field (initalPkt) is also set.                                   *
+**   As already implied, rtp_tx handles locally generated voice announcement  *
+** packets as a special case where queueing calculations are bypassed.        *
+*******************************************************************************
+** Arguments :                                                                *
+**   ______________________________________________________________________   *
+**  | Type       | arg name | Description                                  |  *
+**  |------------+----------+----------------------------------------------|  *
+**  | packet_t * | pkt      | Pointer to packet structure for processing   |  *
+**   ----------------------------------------------------------------------   *
+**                                                                            *
+*******************************************************************************/
+void rtp_tx(VGLOB *vglob_ptr, packet_t *pkt)
+{
+	byte	L1;				// Loop control cycles from 0 to NumFrames in pkt
+	rtpTxStruct_t	*txInf = &V(rtpTxInf); // RTP transmit section info
+
+	/************************************************************************
+	** Process the RTP header and extract the sequence number and timestamp *
+	** This function also determines the number of frames and their type (as*
+	** they're common across a whole packet). If the function returns False *
+	** get out quick because we have a bad RTP packet (possibly FAX?)       *
+	*************************************************************************/
+	if (rtp_process_packet(vglob_ptr, pkt))	// returns True if valid RTP packet
+		V(TX_RETVAL) = OKAY;
+	else {
+		WARNING(vglob_ptr, WARN_RTP_BAD_HEADER);
+		V(TX_RETVAL) = RTP_BAD_PKT;
+		goto emergency_exit;
+	}
+
+
+	/***********************************************************************
+	** Ordinarily we must calculate where each frame must be queued. There *
+	** are, however, several exceptions. If it's the first packet (ever),  *
+	** If it's the first packet AFTER a voice announcement, or if the RTP  *
+	** marker bit (talk spurt indicator) is set. If any of these conditions*
+	** are True, we bypass the calculations and set the buildout as desired*
+	************************************************************************/
+	if (txInf->marker || txInf->initialPkt) {
+		/*******************************************************************
+		** If we're dealing with announcement, we always bypass the queue  *
+		** calculations. We do, however, need to set the buildout on the   *
+		** first received packet, and change the codec to G711 for the DSP *
+		********************************************************************/
+		if (txInf->frame.codec == ANNOUNCEMENT) {
+			if (txInf->initialPkt)
+				/*** 1st pkt of prompt, set buildout for local traffic ***/
+				txInf->frame.ID = set_buildout(vglob_ptr, VOICE_PROMPT_DELAY);
+			txInf->frame.codec = G711;
+		} else {
+			/*** Non announcement, set buildout for PNET traffic ***/
+			txInf->frame.ID = set_buildout(vglob_ptr, txInf->buildout);
+		}
+		txInf->initialPkt  = False;
+	} else {
+
+		#if defined(V_5MS_G711)
+			#define MS_PER_FRAME ( txInf->frame.codec == G711 ? 5 : 10 )
+		#else
+			#define MS_PER_FRAME	10
+		#endif
+		
+
+		if (txInf->positiveQueue)
+			txInf->frame.ID = txInf->lastFrmID + (txInf->txTime / MS_PER_FRAME);
+		else
+			txInf->frame.ID = txInf->lastFrmID - (txInf->txTime / MS_PER_FRAME);
+	}
+
+	/******************************************************
+	** Update state information ready for the next packet *
+	*******************************************************/
+	txInf->lastFrmID = txInf->frame.ID;
+	txInf->lastTS    = txInf->timestamp;
+		
+	/***********************************************
+	** Now queue each of the frames, including CNG *
+	************************************************/
+	for (L1 = 0; L1 < txInf->numFrames; L1 ++) {
+		byte *frameMediaPtr = &pkt->media[txInf->offset];
+		txInf->offset += txInf->frame.length;
+
+		/*************************************************************
+		** Make sure we report the correct length for any CNG frames *
+		**************************************************************/
+		if (txInf->gotCNG && L1 == txInf->numFrames - 1) 
+			txInf->frame.length = 2;
+
+		queue_frame(vglob_ptr, &txInf->frame, frameMediaPtr);
+		audit_frame_pools(vglob_ptr);
+
+		/****************************************************************
+		** Increment the frame ID to queue into the next immediate slot *
+		*****************************************************************/
+		txInf->frame.ID ++;
+	}
+emergency_exit:	// used to get out quick in the event of a bad packet
+	L1 = 0;		// need this dummy instruction to stop compiler complaining
+}
+
+
+/******************************************************************************
+** Function : rtp_process_packet                                              *
+*******************************************************************************
+** Modification History :                                                     *
+**                                                                            *
+**[Release 2]-----------------------------------------------------------------*
+** Date            Ver   Dev  Comments                                        *
+** 25th Jan  1999  2.0   RGT  Initial Revision                                *
+**                                                                            *
+** SIGNIFICANT MODS:                                                          *
+** 20th Apr  1999  2.1   RGT  The strict timestamp based queue calculations   *
+**                            from rtp_tx have been moved into this function. *
+**                            Timestamp processing is now done on every pkt   *
+**                            for jitter calculations. Also, we now perform   *
+**                            checks on the sync-src and throw warnings if    *
+**                            the ssrc changes during a call (we still accept *
+**                            all packets however). The queue calcs that were *
+**                            moved into this function were re-worked and made*
+**                            much more efficient however.                    *
+**                                                                            *
+** 5th  May   1999  2.2  RGT  Basically added a dynamic buildout algorithm for*
+**                            non-silence suppression mode and reorganised the*
+**                            the module for this.                            *
+**                                                                            *
+*******************************************************************************
+** Description :                                                              *
+**   This function takes a pointer to a packet structure and parses any RTP   *
+** header conforming to RFCs 1889 & 1890. It extracts timestamp and sequence  *
+** number information which is then stored in the tx structure fo rtp_tx.     *
+**   In addition to performing regular header parsing for RTP, process_packet *
+** detects voice announcement packet transitions and sets the tx structure in *
+** accord with the data it sees. This allows the rtp_tx function to know if   *
+** and when it must reset the jitter buffer (voice ann need v.little buffer)  *
+*******************************************************************************
+** Arguments :                                                                *
+**   ______________________________________________________________________   *
+**  | Type       | arg name | Description                                  |  *
+**  |------------+----------+----------------------------------------------|  *
+**  | packet_t * | pkt      | Pointer to packet structure for processing   |  *
+**   ----------------------------------------------------------------------   *
+**                                                                            *
+*******************************************************************************
+** Return Values: type Boolean                                                *
+**                                                                            *
+**    False   If a Bad RTP header is encountered, or an unsupported payload   *
+**    True    otherwise                                                       *
+*******************************************************************************/
+Boolean rtp_process_packet(VGLOB *vglob_ptr, packet_t *pkt)
+{
+	rtpHeader_t		* header;
+	word			  mediaLength;
+	word			  headerLength = BASIC_RTP_HEADER_LENGTH;
+	byte			  pt;
+	rtpTxStruct_t	*txInf = &V(rtpTxInf); // RTP transmit section info
+
+	header = (rtpHeader_t *)pkt->media;
+
+	print_header("tx process", header);
+
+
+	/***********************************************************************
+	** Firstly make sure we that the RTP version is 2. If not return False *
+	** to indicate a likely non-rtp packet (we only support RTP V2)        *
+	************************************************************************/
+	if ( (header->vpxcc & RTP_MASK_VERSION) != 0x80 ) {
+		return False;
+	}
+
+	/******************************************************************
+	** Ensure we skip over any CSRC fields - we don't need these even *
+	** if they're present.                                            *
+	*******************************************************************/
+	headerLength += (header->vpxcc & RTP_MASK_CSRCS) * 4;
+
+	/***********************************************************
+	** Also, make sure we jump over any extended headers too ! *
+	************************************************************/
+	if (header->vpxcc & RTP_MASK_EXTENSION)
+		headerLength += (ntohs(*(word *)&pkt->media[headerLength + 2])) + 4;
+
+	/******************************************************************
+	** Check if the marker bit is set - this usually indicates a talk *
+	** spurt where we are safe to make buildout modifications.        *
+	** NOTE: we also set this during voice announcements to bypass    *
+	** the queueing calculations made by rtp_tx. This is safe since   *
+	** any time this bit is set we bypass these calculations anyway.  *
+	*******************************************************************/
+	if (header->pt & RTP_MASK_MARKER) 
+		txInf->marker = True;	// talk spurt bypass queue calcs, set bldout
+	 else
+		txInf->marker = False;	// do queue calcs unless initial packet.
+
+	/**********************************************************
+	** Now get the payload type by masking out the marker bit *
+	***********************************************************/
+	pt = (header->pt & ~RTP_MASK_MARKER);
+		
+	/********************************************************************
+	** If there's a change in header type involving voice announcements *
+	** set the initialPkt field to have the buildout reset.             *
+	*********************************************************************/
+	if (txInf->lastPT != pt) {
+		if (pt == PT_PROMPT_START || txInf->lastPT == PT_PROMPT_STOP)
+			txInf->initialPkt = True;
+		txInf->lastPT = pt;
+	} 
+
+	/******************************************************************
+	** Convert IETF "payload type" into internal codec representation *
+	** understood by the rest of the controller software and the DSP. *
+	*******************************************************************/
+	switch (pt) {
+	case PT_PCMU:
+	case PT_PCMA:
+		txInf->frame.codec  = G711;
+		txInf->frame.length = G711_FRAME_SZ;
+		break;
+	case PT_G723:
+		txInf->frame.codec  = G723;
+		txInf->frame.length = G723_FRAME_SZ;
+		break;
+	case PT_G729:
+		txInf->frame.codec  = G729;
+		txInf->frame.length = G729_FRAME_SZ;
+		break;
+
+	case PT_PROMPT_START:
+	case PT_PROMPT_STOP:
+		txInf->frame.codec  = ANNOUNCEMENT;
+		txInf->frame.length = ANNOUNCEMENT_FRAME_SZ;
+		txInf->marker       = True;  // marker here is used to indicate VP
+		break;
+	
+	default:
+		return False;
+	}
+
+	/******************************************
+	** Grab the sequence number and timestamp *
+	*******************************************/
+	txInf->sequence  = ntohs(header->sequence);
+	txInf->timestamp = ntohl(header->timestamp);
+
+	/*******************************************************************
+	** Check that the synchronising source is not changing from packet *
+	** to packet. If it does change, throw a warning but track the new *
+	** synchronising source so we don't lose the call.                 *
+	********************************************************************/
+	if (txInf->syncSrc) {
+		if (txInf->syncSrc != header->ssrc) {
+			WARNING(vglob_ptr, WARN_RTP_SSRC_CHANGED);
+			txInf->syncSrc = header->ssrc;
+		}
+	} else 
+		txInf->syncSrc = header->ssrc;
+
+/***********************************************************************
+** Determining the number of media frames in the packet                *
+****** Firstly figure out the amount of media in the packet and then   *
+	** convert this to a number of frames using the frame length as a  *
+	** divisor. Then determine if there are any CNG/SID frames present *
+	** in the packet,  basically ensure the RTP payload has valid size *
+	********************************************************************/
+	mediaLength = pkt->length - headerLength;
+	txInf->numFrames = mediaLength / txInf->frame.length;
+
+	/***************************************************************
+	** Packets may contain multiple frames plus a CNG frame. Thus, *
+	** because packets may only contain whole frames, the media    *
+	** length must be wholly divisible by the frame length or have *
+	** a remainder of 2. Any other values are illegal.             *
+	****************************************************************/
+	switch (mediaLength % txInf->frame.length) {
+	case 0:
+		txInf->gotCNG = False;
+		break;
+	case 2:
+		txInf->gotCNG = True;
+		txInf->numFrames ++;
+		break;
+	default: 		// Got a bad packet here !
+		return False;
+	}
+
+	/******************************************************
+	** Set the offset to point to the first byte of media *
+	*******************************************************/
+	txInf->offset = headerLength;
+
+/*********************************************************************
+** Queuing Calculation Section:                                      *
+****** Let us begin by assuming normal positive queue (i.e. that the *
+	** current sequence is "newer" than the last). We must now check *
+	** to ensure we know exactly where to store this new packet's    *
+	** data relative to where the last packet's data was stored.     *
+	******************************************************************/
+
+	/*** Initial Conditions - no valid relative time diff, f/w queue ***/
+	txInf->positiveQueue = True;
+	txInf->txTime        = MAX_WORD;
+
+	/*** Relative time difference calculation with 32-bit wraparound ***/
+	if (txInf->timestamp - txInf->lastTS < (lword)MAX_WORD)
+		txInf->txTime = txInf->timestamp - txInf->lastTS;
+	else {
+		/*** Probable 32-bit wrap - check to make certain ***/
+		if (txInf->lastTS - txInf->timestamp < (lword)MAX_WORD) {
+			txInf->positiveQueue = False;
+			txInf->txTime = txInf->lastTS - txInf->timestamp;
+		} else 
+			/******************************************************
+			** We're hopelessly lost, send initialPkt to have the *
+			** buildout reset and the buffer recalibrated.        *
+			** NOTE: this action may be insufficient - the buffer *
+			** itself should be entirely reset for safety.        *
+			*******************************************************/
+			txInf->initialPkt = True;
+	}
+
+	if (txInf->txTime < MAX_WORD)
+		txInf->txTime = txInf->txTime >> 3;		// converts to msec units
+
+/**********************************************************************
+** Packet Loss and Jitter Calculations                                *
+****** These are only done for non-announcement traffic               *
+	*******************************************************************/
+	if (txInf->frame.codec != ANNOUNCEMENT) {
+		if (txInf->initialPkt) {
+			init_pkt_loss_stats(vglob_ptr, txInf->sequence);
+			init_jitter_clock(vglob_ptr);
+		} else {
+			update_pkt_loss_stats(vglob_ptr, txInf->sequence);
+			update_jitter_calc(vglob_ptr, txInf->txTime);
+		}
+	}
+
+	#if defined (FRAME_POOL_AUDIT)
+	txInf->frame.audit1 = 0x11111111;
+	txInf->frame.audit2 = 0x22222222;
+	txInf->frame.audit3 = 0x33333333;
+	txInf->frame.audit4 = 0x44444444;
+	txInf->frame.audit5 = 0x55555555;
+	#endif // defined (FRAME_POOL_AUDIT)
+
+/******************************************************************
+** DYNAMIC BUILDOUT IN NON-SILENCE SUPPRESSION MODE :             *
+*******************************************************************/
+	if (!V(config).silenceSupp && V(config).dynamicBuildout) {
+		word tmp;
+
+		/******************************************************************
+		** Increases in Jitter that exceed the current buildout result in *
+		** an immediate buildout modification.                            *
+		*******************************************************************/
+		tmp = V(exchangerSM).tx.jitter / MS_PER_FRAME + 1;
+		if (tmp > txInf->buildout) {
+			txInf->jTimer = MACRO_GET_TIME();
+			/*************************************************************
+			** Never allow the buildout to be increased beyond the range *
+			** specified in the configuration parameters.                *
+			**************************************************************/
+			if (tmp > V(config).jitterMax) {
+				// WARNING(vglob_ptr, WARN_RTP_MAX_J_EXCEEDED);
+				printf("MAX BUILDOUT, bldout=%d, exchSM.tx.jitter=%d\n",
+					   txInf->buildout, V(exchangerSM).tx.jitter);
+				/*************************************************************
+				** Only recalibrate if we are really increasing the buildout *
+				**************************************************************/
+				if (txInf->buildout < V(config).jitterMax) {
+					V(exchangerSM).tx.peakJitter = 0;
+					txInf->buildout = V(config).jitterMax;
+					txInf->marker = True;
+					return True;
+				}
+			} else {
+				/*************************************************************
+				** Buildout requirements are within allowed range - go ahead *
+				**************************************************************/
+				V(exchangerSM).tx.peakJitter = 0;
+				txInf->buildout = tmp;
+				txInf->marker = True;
+				// printf("Buildout increase, tmp=%d, jMax=%d, bldout=%d, exchSM.tx.jitter=%d\n",
+				// 	   tmp, V(config).jitterMax, txInf->buildout, V(exchangerSM).tx.jitter);
+				return True;
+			}
+		}
+
+		/****************************************************************
+		** Okay, let's see if we can decrease the buildout. We'll use a *
+		** window of 10 seconds to look for the peak jitter. If this is *
+		** less than 75% of the current buildout then let's decrese our *
+		** buildout delay!                                              *
+		*****************************************************************/
+		if (MACRO_ELAPSED_TIME(txInf->jTimer) >= CFG_RTP_J_TIME) {
+			txInf->jTimer = MACRO_GET_TIME();
+
+			tmp = V(exchangerSM).tx.peakJitter / MS_PER_FRAME + 1;
+			V(exchangerSM).tx.peakJitter = 0;
+			if (tmp < (txInf->buildout * 3) >> 2) {
+				if (tmp < V(config).jitterMax) {
+					txInf->buildout = tmp;
+					txInf->marker = True;
+					// printf("Buildout decrease, tmp=%d, jMax=%d, bldout=%d, exchSM.tx.jitter=%d\n",
+					// 	   tmp, V(config).jitterMax, txInf->buildout, V(exchangerSM).tx.jitter);
+					// printf("\txchgrSM: fIndex=%d, lastFrameID=%d; camilSM: fIndex=%d, frameID=%d\n", V(exchangerSM).tx.frameIndex, V(exchangerSM).tx.lastFrameID, V(camilSM).tx.frameIndex, V(camilSM).tx.frameID);
+					return True;
+				}
+			}
+		}
+	}
+		
+
+	return True;	// good RTP packet !
+}
+
+/*********************[ FUNCTION VERSION VERSION TRACKING ]********************
+
+ _____________________________________________________________________________
+|                            |            exchange.obj  Version               |
+|   Function Name            |  2.0 |  2.1 |  2.2 |  2.3 |  2.4 |  2.5 |  2.6 | 
+|----------------------------+------+------+------+------+------+------+------|
+| rtp_rx_config              |  2.0 |  2.1 |      |      |  2.2 |      |      |
+|----------------------------+------+------+------+------+------+------+------|
+| rtp_rx                     |  2.0 |      |      |      |  2.1 |      |      |
+|----------------------------+------+------+------+------+------+------+------|
+| assemble_header            |  2.0 |      |      |  2.1 |  2.2 |      |      |
+|----------------------------+------+------+------+------+------+------+------|
+| rtp_tx_config              |  2.0 |  2.1 |  2.2 |      |  2.3 |  2.4 |      |
+|----------------------------+------+------+------+------+------+------+------|
+| rtp_tx                     |  2.0 |  2.1 |      |      |  2.2 |  2.3 |      |
+|----------------------------+------+------+------+------+------+------+------|
+| rtp_process_packet         |  2.0 |      |      |      |  2.1 |  2.2 |      |
+ ----------------------------------------------------------------------------- 
+
+**********************[ FUNCTION VERSION VERSION TRACKING ]********************/

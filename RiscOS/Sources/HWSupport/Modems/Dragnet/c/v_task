@@ -1,0 +1,669 @@
+/*name and version number:@(#)v_task.c	1.37*/
+/*date of get: 		  09/06/00 16:59:11*/
+/*date of delta:	  05/10/00 14:58:05*/
+/*****************************************************************************
+** File        : v_task.c                                                 *
+** Version     : 3.0                                                         *
+**---------------------------------------------------------------------------*
+** Description :                                                             *
+**   Contains task level drivers for the voice interface                     *
+**                                                                           *
+**     Function Name    | Access  | Summary                                  *
+**  --------------------+---------+----------------------------------------- *
+**  v_task_main           | Z80_ASM | 'C' main entry point                     *
+**  v_system_init    | STATIC  | System Initialisation code -VoIP specific*
+**  wait_for_active_call| STATIC  | Waits in a tight loop until call setup   *
+**                                                                           *
+**---------------------------------------------------------------------------*
+**                               HISTORY                                     *
+** Date            Ver   Dev     Comments                                    *
+** 17th Oct  1998  1.0   ELS/RGT Initial Revision                            *
+**                                                                           *
+** 31st Oct  1998  1.1   RGT     Mods for new command interfaces to dsp and  *
+**                               2181 (initialiser calls). Also replaced     *
+**                               <header.h> with <v_hcmd.h>                *
+**                                                                           *
+**  2nd Nov  1998  1.2   RGT     Placed dsp_is_alive call into main loop &   *
+**                               removed SANITY command issues. 2181 was     *
+**                               complaining about dead DSPs.                *
+**                                                                           *
+**  9th Nov  1998  1.3   RGT     Increased the frequency of the SANITY_SCAN  *
+**                               command to the DSP to stop the 2181 from    *
+**                               complaining about dead DSPs. Also added in  *
+**                               debug DTMF_GENERATE command (ifdef'd out)   *
+**                               to test JXOs new DTMF code. Finally, if cmd *
+**                               SM (dsp) throws error, reset it.            *
+**                                                                           *
+**[Release 2]----------------------------------------------------------------*
+** Date            Ver   Dev  Comments                                       *
+** 25th Jan  1999  2.0   RGT     Major overhaul for 2.0 architecture. Added  *
+**                               in new functions to improve main task.      *
+**                                                                           *
+**  5th Feb  1999  2.1   RGT     Minor mods to tidy code, plus improved      *
+**                               Debug capabilities with mod to store_val    *
+**                               and introduction of stop_debug().           *
+**                                                                           *
+** 20th Apr  1999  2.2   RGT     Minor mods for new stats engine.            *
+**                                                                           *
+**[Release 3]----------------------------------------------------------------*
+** Date            Ver   Dev  Comments                                       *
+** 31   Aug  1999  3.0   JA    CS4 multi-instance integration on SA          *
+**                                                                           *
+**[Release 4]----------------------------------------------------------------*
+** Date            Ver   Dev  Comments                                       *
+** 16   Dec  1999  4.0   JA    Reimplemented for Ascend MADD/Voip Interface  *
+******************************************************************************/
+
+#include "mqx.h"
+#include "bsp.h"
+#include "message.h"
+#include "memory.h"
+#include "timer.h"
+#include "v_glob.h"
+#include "v_camil.h"
+#include "sa_admin.h"
+#include "sa_usec.h"
+#include "v_task.h"
+#include "sa_mqx.h"
+#include "sa_host.h"
+#include "sa_dte_s.h"
+#include "sa_dte.h"
+
+#define DEBUG_SIZE			1024
+#define	V_POLL_TIME			10
+
+/*****************************************************************************
+             ###   #      ###   ####    ###   #     ####
+            #      #     #   #  #   #  #   #  #    #
+            #  ##  #     #   #  ####   #####  #     ####  
+            #   #  #     #   #  #   #  #   #  #         #  
+             ###   #####  ###   ####   #   #  ##### ####
+******************************************************************************/
+
+		VGLOB vglob_array[MAX_DP];	// everybody's data
+
+/****************************************************************************
+              ####  #####   ###   #####  ###   ####   ####
+             #        #    #   #    #     #   #      #
+              ####    #    #####    #     #   #       ####
+                  #   #    #   #    #     #   #           #
+              ####    #    #   #    #    ###   ####   ####
+*****************************************************************************/
+		static non_banked void wait_for_active_call(VGLOB *);
+		static void v_task_init(VGLOB *);
+		static void v_system_init(VGLOB *, byte *);
+		static void v_task_poll_all(_timer_id id, void * data_ptr, uint_32 seconds, uint_32 milliseconds);
+
+/*****************************************************************************
+      ##### #   #  #   #   ####  #####  ###   ###   #    #  ####
+      #     #   #  ##  #  #        #     #   #   #  ##   # #
+      ####  #   #  # # #  #        #     #   #   #  # #  #  ####
+      #     #   #  #  ##  #        #     #   #   #  #   ##      #
+      #      ####  #   #   ####    #    ###   ###   #    #  ####
+******************************************************************************/
+
+
+void
+v_task_global_init()
+{
+	_int_disable();
+
+	uint_32 modem = ModemNum;
+
+	// Init pointer to global data that will be passed around
+	VGLOB *vglob_ptr = &vglob_array[modem];
+
+	// (Re)init our variables,
+	// being careful not to clear stats of previous call
+	// stats will be clear at OPEN of next call
+	memset( vglob_ptr, 0, sizeof(VGLOB) - sizeof(stats_t) );
+	V(modem_num) = modem;
+
+	// DEBUG
+	#if defined(V_FRAME_ID)
+	extern byte tx_frame_id[MAX_DP];
+	extern byte rx_frame_id[MAX_DP];
+	extern byte prev_rx_frame_id[MAX_DP];
+	tx_frame_id[modem] = 0;
+	rx_frame_id[modem] = 0;
+	prev_rx_frame_id[modem] = 0;
+	#endif	// V_FRAME_ID
+
+	v_task_init(vglob_ptr);		// initialize RTOS stuff for v_task_main
+	dsp_isr_init(vglob_ptr);
+	init_frame_pools(vglob_ptr);
+	host_command_interface_init(vglob_ptr);
+
+	// Ensure we can get an OPEN cmd on the msg queue
+	channelContext[modem].channelState = CLOSED;
+
+	printf("v_task_global_init %d COMPLETE, task id = 0x%x\n",
+		   modem, _task_get_id() );
+
+	_int_enable();
+}
+
+/******************************************************************************
+** Function : v_task_main                                                            *
+*******************************************************************************
+** Modification History :                                                     *
+**                                                                            *
+** Date            Ver   Dev     Comments                                     *
+** 17th Oct  1998  1.0   ELS/RGT Initial Revision                             *
+**                                                                            *
+** 31st Oct  1998  1.1   RGT     Initialiser calls for new command interfaces *
+**                                                                            *
+**  2nd Nov  1998  1.2   RGT     Added dsp_is_alive into main loop to stop    *
+**                               2181 complaining about dead DSPs             *
+**                                                                            *
+**  9th Nov  1998  1.3   RGT     Implementing SANITY_SCAN more frequently to  *
+**                               keep 2181 happy but to do job properly!      *
+**                                                                            *
+**[Release 2]-----------------------------------------------------------------*
+** Date            Ver   Dev  Comments                                        *
+** 25th Jan  1999  2.0   RGT  Re-organisation and tidy for V2.0. Some of the  *
+**                            original functionality has been moved into      *
+**                            static functions.                               *
+**                                                                            *
+*******************************************************************************
+** Description :                                                              *
+**   The entry point of the 'C' code. Called from the RTOS scheduler          *
+** Initialises system for internet telephony applications and sits in a tight *
+** loop, waiting for a call to come up (see wait_for_active_call). Once a call*
+** becomes active, the DSP is stimulated to begin data transfer, and the main *
+** call processing loop is entered. This loop checks the command interfaces,  *
+** calls the exchanger core, and updates statistics information every second. *
+*******************************************************************************
+** Arguments :                                                                *
+**                NONE                                                        *
+**                                                                            *
+*******************************************************************************/
+void
+v_task_main(uint_32 modem)
+{
+	// Init pointer to global data that will be passed around
+	VGLOB *vglob_ptr = &vglob_array[modem];
+
+	/********************************************************************
+	** WAITING FOR HOST TO TELL US TO BECOME ACTIVE                     *
+	*********************************************************************/
+	wait_for_active_call(vglob_ptr);
+
+	word stats_timer = MACRO_GET_TIME();
+
+	printf("v_task_main %d waiting for media\n", V(modem_num));
+
+	/*********************************************************************
+	** MAIN LOOP WHEN CALL IS ACTIVE                                     *
+	**********************************************************************/
+	while(1) {
+		// Block on message queue
+		V(msg) = _msgq_receive(MSGQ_ANY_QUEUE, 0);
+		INTERNAL_MSG *msg = V(msg);
+
+		if (msg != NULL) {
+			// Figure out what happened
+			switch ( MSG_NUM ( msg->host_msg.mh ) ) {
+
+			case VOICE_DATA_MSG:
+				packet_t *pkt = (packet_t *) msg->host_msg.ms0;
+				// Transmit media message
+				// Run Transmit side media exchanger
+				media_tx(vglob_ptr, pkt);
+				break;
+
+			case VOICE_INTERNAL_FRAMEQ_MSG:
+				// Receive frame queue event message
+				// printf("FRAMEQ\n");
+
+				// Receive side exchanger
+				while( media_rx(vglob_ptr) == True );
+				break;
+
+			case HMSG_VOIP_MSG:
+				host_print_msg("v_task_main", &msg->host_msg);
+
+				// Hopefully an incoming voip command
+				process_sarm_voip_msg(vglob_ptr, &msg->host_msg);
+				break;
+
+			case INTERNAL_POLL_MSG:
+				// Polling activities, call active
+
+				// Make sure receive side exchanger is up to date
+				while( media_rx(vglob_ptr) == True );
+
+				/************************************************
+				** Tasks which get executed once every 1 second *
+				*************************************************/
+				if (MACRO_ELAPSED_TIME(stats_timer) >= 1000) {
+					stats_timer = MACRO_GET_TIME();
+					update_driver_stats(vglob_ptr);
+				}
+
+				/********************************
+				** Command State Machines       *
+				*********************************/
+				v_gen_tones( vglob_ptr);
+				#if 0
+				host_command_state_machine(vglob_ptr);
+				if (dsp_command_state_machine(vglob_ptr) == DSP_CMD_SM_FATAL) 
+					dsp_command_interface_init(vglob_ptr);
+				#endif
+
+				V(cycles)++;
+
+				break;
+
+			case HMSG_CLOSE_CHANNEL:
+				host_print_msg("v_task_main", &msg->host_msg);
+
+				// Send reply and bail....
+				msg->host_msg.ms0 = SMSG_SUCCESS;
+				host_send_sarm_msg ( &msg->host_msg );
+				mqx_task_destroy( 0 );
+				break;
+
+			case HMSG_READ_DSP_MEM:
+				host_print_msg("v_task_main", &msg->host_msg);
+				sa_hmsg_dsp_read( &msg->host_msg );
+				break;
+
+			case HMSG_WRITE_DSP_MEM:
+				host_print_msg("v_task_main", &msg->host_msg);
+				sa_hmsg_dsp_write( &msg->host_msg );
+				break;
+
+			default:
+				// Command to voip task
+				host_print_msg("v_task_main (NOT HANDLED)", &msg->host_msg );
+				break;
+
+			}
+			// Release the message back to the pool
+			_msg_free(msg);
+			V(msg) = NULL;
+		}
+	}
+}
+
+/******************************************************************************
+** Function : v_system_init                                                     *
+*******************************************************************************
+** Modification History :                                                     *
+**                                                                            *
+**[Release 2]-----------------------------------------------------------------*
+** Date            Ver   Dev  Comments                                        *
+** 25th Jan  1999  2.0   RGT  Initial Revision                                *
+**                                                                            *
+*******************************************************************************
+** Description :                                                              *
+**                                                                            *
+**                                                                            *
+*******************************************************************************
+** Arguments :                                                                *
+**   ______________________________________________________________________   *
+**  | Type         |  arg name  | Description                              |  *
+**  |--------------+------------+------------------------------------------|  *
+**  | byte       * | dispSpace  | Pointer to realtime display memory       |  *
+**   ----------------------------------------------------------------------   *
+**                                                                            *
+*******************************************************************************/
+void
+v_system_init(VGLOB *vglob_ptr, byte *displaySpace)
+{
+	uint_32 old_pri;
+
+	// Lower priority during init to avoid blocking others
+	_task_set_priority(_task_get_id(), SA_VOIP_INIT_PRI, &old_pri);  
+
+	// must be voice call prior to dp_download in dpv_init
+	become_voice_call ( ModemNum );
+
+/************************************************************************
+** CS-4 DSP Core Init                                                   *
+*************************************************************************/
+	dpv_init(vglob_ptr);
+
+	// Restore normal task priority
+	_task_set_priority(_task_get_id(), SA_VOIP_NORMAL_PRI, &old_pri);  
+}
+
+
+/******************************************************************************
+** Function : wait_for_active_call                                            *
+*******************************************************************************
+** Modification History :                                                     *
+**                                                                            *
+**[Release 2]-----------------------------------------------------------------*
+** Date            Ver   Dev  Comments                                        *
+** 25th Jan  1999  2.0   RGT  Initial Revision                                *
+**                                                                            *
+** 27th Apr  1999  2.1   RGT  Changed prototype and added call to realtime    *
+**                            clock function.                                 *
+**                                                                            *
+*******************************************************************************
+** Description :                                                              *
+**                                                                            *
+**                                                                            *
+*******************************************************************************
+** Arguments :                                                                *
+**                NONE                                                        *
+**                                                                            *
+*******************************************************************************/
+static non_banked void wait_for_active_call(VGLOB *vglob_ptr)
+{
+
+	/*********************************************************************
+	** MAIN LOOP BEFORE CALL IS ACTIVE                                   *
+	**********************************************************************/
+	while (!V(callIsNowActive)) {
+		// Sleep until something happens
+		V(msg) = _msgq_receive(MSGQ_ANY_QUEUE, 0);
+		INTERNAL_MSG *msg = V(msg);
+		if (msg != NULL) {
+			host_print_msg("wait_for_active_call", &msg->host_msg);
+
+			// Process new message
+			switch ( MSG_NUM ( msg->host_msg.mh ) ) {
+
+			case HMSG_OPEN_CHANNEL:
+
+				// Clear stats of previous call
+				init_driver_stats(vglob_ptr);	
+
+				// Init packet pools
+				if (pnet_init(vglob_ptr) != TRUE) {	
+					struct SarmMessage msgOut;
+					msgOut.mh  = msg->host_msg.mh;
+					msgOut.ms0 = SMSG_MODULE_STORAGE_SPACE_FULL; 
+					host_send_sarm_msg ( &msgOut );
+					break;
+				}
+
+				// Init data exchanger state machine
+				exchanger_init(vglob_ptr);
+
+				/****************************************************************
+				** Initialise system hardware.                                  *
+				*****************************************************************/
+				v_system_init(vglob_ptr, (byte *)NULL);
+				printf("VOIP task ready, task id = 0x%x\n", _task_get_id() );
+
+				// Send reply to host
+				struct SarmMessage msgOut;
+				msgOut.mh  = msg->host_msg.mh;
+				msgOut.ms0 = SMSG_SUCCESS;  /* default return code */
+				host_send_sarm_msg ( &msgOut );
+				break;
+
+			case HMSG_VOIP_MSG:
+				// Hopefully an incoming voip command
+				process_sarm_voip_msg(vglob_ptr, &msg->host_msg);
+				break;
+
+			case INTERNAL_POLL_MSG:
+				// Play DTMF tones
+				v_gen_tones( vglob_ptr);
+				break;
+
+			case HMSG_CLOSE_CHANNEL:
+				// Send reply and bail....
+				msg->host_msg.ms0 = SMSG_SUCCESS;
+				host_send_sarm_msg ( &msg->host_msg );
+				mqx_task_destroy( 0 );
+				break;
+
+			case VOICE_DATA_MSG:
+				// Ignore data, but be sure to free the packet
+				packet_t *pkt = (packet_t *) msg->host_msg.ms0;
+				if (pkt != NULL) {
+					printf("wait_for_active_call: BADNESS!! received VOICE_DATA_MSG before VOIP_DATA_ENABLE!!!\n");
+					pkt->status = V_EMPTY;
+				}
+				break;
+
+			case HMSG_READ_DSP_MEM:
+				host_print_msg("v_task_main", &msg->host_msg);
+				sa_hmsg_dsp_read( &msg->host_msg );
+				break;
+
+			case HMSG_WRITE_DSP_MEM:
+				host_print_msg("v_task_main", &msg->host_msg);
+				sa_hmsg_dsp_write( &msg->host_msg );
+				break;
+
+			default:
+				// Call is not active, ignore msg
+				printf("wait_for_active_call: received msg num %d, ignoring\n",
+					   MSG_NUM(msg->host_msg.mh) );
+				break;
+			}
+			_msg_free(msg);
+			V(msg) = NULL;
+		}
+	}
+
+	V(polling_enabled) = True;
+}
+
+
+/*********************[ FUNCTION VERSION VERSION TRACKING ]********************
+
+ _____________________________________________________________________________
+|                            |              main.obj    Version               |
+|   Function Name            |  2.0 |  2.1 |  2.2 |  2.3 |  2.4 |  2.5 |  2.6 | 
+|----------------------------+------+------+------+------+------+------+------|
+| CHANGE TO NON-FUNCTION     |      |      | XXXX |      |      |      |      |
+|----------------------------+------+------+------+------+------+------+------|
+| main                       |  2.0 |  2.1 |      |      |      |      |      |
+|----------------------------+------+------+------+------+------+------+------|
+| v_system_init           |  2.0 |  2.1 |      |      |      |      |      |
+|----------------------------+------+------+------+------+------+------+------|
+| wait_for_active_call       |  2.0 |      |  2.1 |      |      |      |      |
+|----------------------------+------+------+------+------+------+------+------|
+
+**********************[ FUNCTION VERSION VERSION TRACKING ]********************/
+
+
+static void
+v_task_init(VGLOB *vglob_ptr)
+{
+	// Use resources create by sa_modem
+	V(voip_msg_pool) = G(modem_msg_pool);
+	V(voip_queue) = G(modem_queue);
+	V(msg) = NULL;
+}
+
+// Message queue functions
+void
+v_send_media( VGLOB *vglob_ptr, packet_t *pkt )
+{
+	// Bail if call not in state to receive data
+	// or we were given a bogus pointer
+	if ( !V(callIsNowActive) || pkt == NULL ) {
+		return;
+	}
+
+	// Tell voip task about the data
+	INTERNAL_MSG *msg = _msg_alloc(V(voip_msg_pool));
+	if (msg == NULL) {
+		printf("v_send_media: voip_msg_pool is empty!!!\n");
+		return;
+	}
+
+	// Init MQX header
+	msg->mqx_hdr.TARGET_QID = V(voip_queue);
+	msg->mqx_hdr.SIZE = sizeof(INTERNAL_MSG);
+
+	// Load user section
+	msg->host_msg.mh = MSG_HEADER(VOICE_DATA_MSG, 2, ModemNum, 0);
+	msg->host_msg.ms0 = (uint_32) pkt;
+
+	// And away it goes to the voip task
+    // Give media traffic normal priority (i.e. pri = 0)
+	if (_msgq_send(msg) != TRUE) {
+		printf("voip_send_packet: _msgq_send failed, errno=0x%x, dp=%d\n", _task_get_error(), V(modem_num));
+
+		// msg automatically freed, except....
+		if (_task_get_error() == MSGQ_INVALID_MESSAGE) {
+			_msg_free(msg);
+		}
+	}
+}
+
+void
+v_send_frameq_msg( VGLOB *vglob_ptr )
+{
+	if ( !V(callIsNowActive) ) {
+		return;
+	}
+	// Tell voip task about the data
+	INTERNAL_MSG *msg = _msg_alloc(V(voip_msg_pool));
+	if (msg == NULL) {
+		printf("v_send_frameq_msg: voip_msg_pool is empty!!!\n");
+		return;
+	}
+
+	// Init MQX header
+	msg->mqx_hdr.TARGET_QID = V(voip_queue);
+	msg->mqx_hdr.SIZE = sizeof(INTERNAL_MSG);
+
+	// Load user section
+	msg->host_msg.mh = MSG_HEADER(VOICE_INTERNAL_FRAMEQ_MSG, 2, ModemNum, 0);
+	msg->host_msg.ms0 = 0;
+
+	// And away it goes to the voip task
+    // Give media traffic normal priority (i.e. pri = 0)
+	if (_msgq_send(msg) != TRUE) {
+		printf("v_send_frameq_msg: _msgq_send failed, errno=0x%x, dp=%d\n", _task_get_error(), V(modem_num));
+
+		// msg automatically freed, except....
+		if (_task_get_error() == MSGQ_INVALID_MESSAGE) {
+			_msg_free(msg);
+		}
+	}
+}
+
+
+
+// Cleanup utility
+
+void
+v_task_cleanup()
+{
+	uint_32 modem = _task_get_parameter();
+	VGLOB *vglob_ptr = &vglob_array[ modem ];
+
+	// Call is over
+	V(callIsNowActive) = False;
+	V(dsp_ready) = 0;
+	V(polling_enabled) = False;
+
+	// Disconnect
+	dpv_disable_call(vglob_ptr);
+
+	// Release memory allocated
+	if ( V(rxPacketPool) )
+	{
+		_mem_free( V(rxPacketPool) );
+		V(rxPacketPool) = NULL;
+	}
+	if ( V(txPacketPool) )
+	{
+		_mem_free( V(txPacketPool) );
+		V(txPacketPool) = NULL;
+	}
+
+	// Free receive msg being processed, if any
+	if ( V(msg) != NULL ) {
+		_msg_free( V(msg) );
+		V(msg) = NULL;
+	}
+
+	// No more reference to msgq resources
+	V(voip_msg_pool) = NULL;
+	V(voip_queue) = 0;
+}
+
+// Start-up utility
+
+void
+v_task_start_poll_timer() {
+	_timer_start_periodic_every(v_task_poll_all, 0, TIMER_ELAPSED_TIME_MODE, V_POLL_TIME);
+}
+
+void
+v_task_poll_all(_timer_id id, void * data_ptr, uint_32 seconds, uint_32 milliseconds)
+{
+		VGLOB *vglob_ptr;
+		_int_disable();
+		uint_32 oldModem = ModemNum;
+
+		// POLL all voice tasks
+		for(vglob_ptr = &vglob_array[0];
+			vglob_ptr < &vglob_array[MAX_DP];
+			vglob_ptr++) {
+
+			// Send POLL message to task
+			if (V(polling_enabled) == True) {
+				// Establish context
+				SA_SWITCHMODEM(V(modem_num));
+
+				// Tell v_task_main() it's time to run polling activities
+				SARM_MSG poll_msg;
+				poll_msg.mh = MSG_HEADER(INTERNAL_POLL_MSG, 2, ModemNum, 0);
+				poll_msg.ms0 = 0;
+				v_send_msg(&poll_msg);
+			}
+		}        
+
+		// Restore original context
+		SA_SWITCHMODEM(oldModem);
+		_int_enable();
+}
+
+static const uint_8
+dtmf_to_digit_map[4][4] = {
+	{ 1, 2, 3, 0xc, },
+	{ 4, 5, 6, 0xd, },
+	{ 7, 8, 9, 0xe, },
+	{ 0xa, 0, 0xb, 0xf, },
+};
+
+void
+v_send_dtmf_event( uint_8 val)
+{
+	// Convert value to digit
+	uint_8 row_bits = (val >> 4) & 0x0f;
+	uint_8 col_bits = val & 0x0f;
+	if ( row_bits && col_bits ) {
+		// DTMF active, figure out which button
+		uint_8 row = 0, col = 0;
+		while ( ! (col_bits & 0x01) ) {
+			col++;
+			col_bits >>= 1;
+		}
+
+		while ( ! (row_bits & 0x01) ) {
+			row++;
+			row_bits >>= 1;
+		}
+
+		// Not DTMF if more than one freq active, dump it
+		if ( col_bits > 1 || row_bits > 1 ) {
+			printf("v_send_dtmf_event: val=0x%02x Noise\n", val );
+			return;
+		}
+
+		// Map the two frequencies to a digit
+		uint_8 digit = dtmf_to_digit_map[row][col];
+		printf("v_send_dtmf_event: val=0x%02x, digit=0x%x\n", val, digit );
+
+		// Send digit to host
+		struct SarmMessage smsg;
+		smsg.mh = MSG_HEADER(VOIP_DTMF_DIGIT, 2, ModemNum, UNSOLICITED_SEQ_NUM);
+		smsg.ms0 = ((uint_32) digit) << 24;
+		host_send_sarm_msg( &smsg );
+	}
+}

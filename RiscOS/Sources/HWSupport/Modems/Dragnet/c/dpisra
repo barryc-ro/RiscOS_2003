@@ -1,0 +1,2942 @@
+/*name and version number:@(#)dpisra.c	1.101*/
+/*date of get: 		  12/15/00 10:10:32*/
+/*date of delta:	  11/30/00 16:57:01*/
+/****************************************************************
+File :  dpisra.c
+Description :
+	Contains all low level functions related to the
+	StrongArm data pump interface.  This replaces dpisrv.c.
+
+Procedures Contained :
+	Camilz:
+		dp_regread,			dp_regread16
+		dp_regwrite,		dp_regwrite16
+	QMP:
+		qmp_start_read,		qmp_finish_read
+		qmp_read,			qmp_fixed_read
+		qmp_TXwait,			qmp_write
+		qmp_fifo_read,		qmp_fifo_write
+	Modem DATA:
+		sa_modemData_tx		dp_start_transmit
+		sa_modemData_rx
+	AUX Command Processor:
+		dp_enab_fst_dsp,	dp_disa_fst_dsp
+		dp_blkwrt_dsp		dp_AUX_zeroFill
+		dp_print_state_pointers
+	Misc:
+		dp_download_dsp
+		dp_download_dspk56_long
+	ISR:
+		dp_isr_init
+		sa_dsp_poll
+		sa_dsp_isr
+		sa_xcs0_isr
+
+Revision History :
+    Initials    Date        Change
+*****************************************************************/
+
+#include "llglob_d.h"
+
+#if defined(CS_4)
+# include <mqx.h>
+# include <log.h>
+# include <klog.h>
+# include "ioglob_d.h"
+# include "dpglob.h"
+# include "sa_glob.h"
+# include "sa_addr.h"
+# include "sa_mqx.h"
+# include "sa_ctype.h"
+# include "sa_t1.h"
+# include "v_task.h"
+# include "sa_usec.h"
+# include "v_defs.h"
+# include "allglobs.h"
+
+# if defined(SA_QMP_RX_PATCH)
+#  include "sa_v34.h"
+#  include "sa_v90.h"
+#  define V34_PATCH_NAME	v34hdlc
+#  define V90_PATCH_NAME	v90hdlc
+#  define K56_PATCH_NAME	k56hdlc	// ??
+
+#  define V90_CNTR			0x840f
+#  define V34_CNTR			0x1845
+#  define K56_CNTR			0xb410	// dummy for now
+# endif
+
+#define TX_START_OF_FRAME		0x40
+#define TX_END_OF_FRAME  		0x80
+#define TX_ANY_CHAR		  		0x20
+
+#define RX_START_OF_FRAME		0x20
+#define RX_END_OF_FRAME  		0x80
+#define RX_CRC_ERROR	  		0x40
+#define RX_ABORT_ERROR	  		0x01
+
+// voice DSP I/F optional frame numbering
+#if defined(V_FRAME_ID)
+byte tx_frame_id[MAX_DP];
+byte prev_rx_frame_id [MAX_DP];
+byte rx_frame_id [MAX_DP];
+#endif	// V_FRAME_ID
+
+#if defined(DUMP_IMAGE)
+#define _MAX_SIZE (4096 * 4)
+static U16 _Image[_MAX_SIZE];
+static S16 dp_cmp_ram_image(const U16 *addr, U32 count);
+static void dp_dump_ram(const U16 addr, U16 size);
+#endif	// DUMP_IMAGE
+
+//----------------------------------------------
+// No. of QMP Memory Wait states (set in QMPACS)
+// e.g.	XBUS_WRITE( QMPACS, BIT5|QMP_WS ) ;
+//----------------------------------------------
+#define HALF_WS				(0)
+#define ONE_WS				(BIT3)
+#define ONE_POINT_FIVE_WS	(BIT4)
+#define TWO_WS				(BIT4|BIT3)
+// select from above
+#define QMP_WS				HALF_WS
+
+/****************************************************************
+Routine : dp_regread
+	Read a CAMILZ register thru DIA interface (DIA interface
+	is the default mode).
+
+		if register <= 0x7f
+		or register >= 0xa0 && <= 0xcf
+			Index Address = BaseAddress + 0
+			Data  Address = BaseAddress + 1
+
+		if register >= 0x80 && <= 0x9f
+		or register >= 0xd0
+			Index Address = BaseAddress + 2
+			Data  Address = BaseAddress + 1
+*****************************************************************/
+byte
+dp_regread ( byte reg )
+{
+	byte val;
+
+	_INT_DISABLE();
+		#if defined(CS_4)
+		XBUS_WRITE( DIAAL, reg ) ;
+		#else
+		if ( (reg <= 0x7f) || ((reg >= 0xa0) && (reg <= 0xcf)) )
+		{
+			XBUS_WRITE( DIAAL, reg ) ;
+		}
+		else 
+		{
+			XBUS_WRITE( DIAAH, reg ) ;
+		}
+		#endif
+		val = XBUS_READ8( DIAD ) ;
+	_INT_ENABLE();
+
+	return val ;
+}
+
+/****************************************************************
+Routine : dp_regwrite
+	Write a CAMILZ register thru DIA interface (DIA interface
+	is the default mode).
+*****************************************************************/
+void
+dp_regwrite ( byte reg, byte value )
+{
+	_INT_DISABLE();
+		XBUS_WRITE( DIAAL, reg ) ;
+		XBUS_WRITE( DIAD, value ) ;
+	_INT_ENABLE();
+}
+
+/****************************************************************
+Routine : dp_regread16
+	Read a 16 bit CS-4 CAMILZ register thru DIA interface
+	Assertion: NO 16 bit registers exist below 0xe0
+*****************************************************************/
+word
+dp_regread16 ( byte reg )
+{
+	word val ;
+
+	_INT_DISABLE();
+		XBUS_WRITE( DIAAL, reg ) ;
+		val = XBUS_READ16( DIAD ) ;
+	_INT_ENABLE();
+	return val ;
+}
+
+/****************************************************************
+Routine : dp_regwrite16
+	Write a CAMILZ register thru DIA interface (DIA interface
+	is the default mode).
+*****************************************************************/
+void
+dp_regwrite16 ( byte reg, word value )
+{
+	_INT_DISABLE();
+		XBUS_WRITE( DIAAL, reg ) ;
+		XBUS_WRITE( DIAD, value ) ;
+	_INT_ENABLE();
+}
+
+_Inline static void
+qmp_fifo_read( word *dstp, byte bytecnt )
+{
+	// START_TIMERA() ;
+	#if defined(QMP_READ_TRACE)
+		U32 saveFlag;
+		if ( G(sa_qmpread_trace) ) {
+			saveFlag = G(InstanceFlag);
+			G(InstanceFlag) = 1;
+			printf("QMP Read (%2d) : ", bytecnt);
+			G(InstanceFlag) = 0;
+		}
+	#endif	// QMP_READ_TRACE
+
+	byte wdcnt = bytecnt>>1 ;
+
+	//------------------------------------
+	// Read the RX fifo
+	// Take constant calculations out of loop
+	//------------------------------------
+	word *endp = dstp + wdcnt;
+	volatile word *qmpd_addr = (volatile word *) (ModemOffset|((QMPD)<<2));
+	while ( dstp < endp )
+	{
+		*dstp++ = (word) *qmpd_addr;
+		#if defined(QMP_READ_TRACE)
+			if ( G(sa_qmpread_trace) ) {
+				printf("%04x ", *(dstp - 1));
+			}
+		#endif	// QMP_READ_TRACE
+	}
+
+	//------------------------------------
+	// IF byte count is odd
+	//------------------------------------
+	if ( bytecnt & 1 )
+	{
+		//------------------------------------
+		// THEN get last byte from last word
+		//------------------------------------
+		*((byte *)dstp) = (byte) *qmpd_addr;
+		#if defined(QMP_READ_TRACE)
+			if ( G(sa_qmpread_trace) ) {
+				printf("%02x", *((byte *)dstp));
+			}
+		#endif	// QMP_READ_TRACE
+	}
+	#if defined(QMP_READ_TRACE)
+		if ( G(sa_qmpread_trace) ) {
+			sendCrLf();
+			G(InstanceFlag) = saveFlag;
+		}
+	#endif	// QMP_READ_TRACE
+	// SNAP_TIMERA( FALSE ) ; CALC_TIMERA();
+}
+
+_Inline static void
+qmp_fifo_write( word *srcp, word wdcnt )
+{
+	// START_TIMERB() ;
+	#if defined(QMP_WRITE_TRACE)
+	U32 saveFlag;
+	if ( G(sa_qmpwrite_trace) )
+	{
+		saveFlag = G(InstanceFlag);
+		G(InstanceFlag) = 1;
+		printf("QMP Write (%2d) : ", wdcnt);
+		G(InstanceFlag) = 0;
+	}
+	#endif	// QMP_WRITE_TRACE
+
+	//------------------------------------
+	// load the TX fifo
+	//------------------------------------
+	word *endp = srcp + wdcnt;
+	volatile word *qmpd_addr = (volatile word *) (ModemOffset|((QMPD)<<2));
+	while ( srcp < endp ) 
+	{
+		*qmpd_addr = (word)(*srcp++);
+		#if defined(QMP_WRITE_TRACE)
+		if ( G(sa_qmpwrite_trace) ) {
+			printf("%04x ", *(srcp-1));
+		}
+		#endif	// QMP_WRITE_TRACE
+	}
+
+	#if defined(QMP_WRITE_TRACE)
+	if ( G(sa_qmpwrite_trace) ) {
+		sendCrLf();
+		G(InstanceFlag) = saveFlag;
+	}
+	#endif	// QMP_WRITE_TRACE
+
+	// SNAP_TIMERB( FALSE ) ; CALC_TIMERB();
+}
+/****************************************************************
+Routine : qmp_fixed_read
+	Read 'n' words of data from external memory using QMP mode,
+	where 'n' is passed in as the 3rd parameter.
+
+		CALLED WITH INTERRUPTS DISABLED!
+*****************************************************************/
+void
+qmp_fixed_read ( U32 srcLoc, word *dstp, word wdcnt )
+{
+	word bytecnt ;
+	U32 i=0 ; // test code
+
+	// Wait for previous write to finish
+	while ( !(XBUS_READ8( QMPHI ) & BIT1) ) {
+		printf("WOW1!\n");
+		if ( i++ > 0x1000 ) {
+			sendCrLf(); sendCrLf(); sendCrLf();
+			printf( "START READ TIMEOUT (HI=0x%x), modem %d, modem offset 0x%x\n",
+					XBUS_READ8( QMPHI ), ModemNum, ModemOffset ) ;
+			sendCrLf(); sendCrLf(); sendCrLf();
+
+			XBUS_WRITE( QMPACS, BIT6|QMP_WS|BIT2 ) ;
+			DP_DELETE_TASK() ;
+			return;
+		}
+	}
+
+	//------------------------------------
+	// Select Receive register bank
+	// one wait state, 
+	// and clear Rcv FIFO
+	//------------------------------------
+	XBUS_WRITE( QMPACS, BIT5|QMP_WS ) ;
+
+	//------------------------------------
+	// set DSP (source) RX address register
+	//------------------------------------
+	XBUS_WRITE( QMPAL, (word)(srcLoc) );
+
+	//------------------------------------
+	// Enable Rcv DMA
+	//------------------------------------
+	XBUS_WRITE( QMPACS, QMP_WS|BIT0 ) ;
+
+	//------------------------------------
+	// wait until QMP has transferred
+	// full 64 words of data before
+	// getting 1st word (aprox 2usec).
+	//------------------------------------
+	while ( !(XBUS_READ8( QMPHI ) & BIT3) )
+	{
+		// test code
+		if ( i++ > 0x1000 )
+		{
+			printf( "RX TIMEOUT (HI=0x%x)\n", XBUS_READ8( QMPHI ) ) ;
+			DP_DELETE_TASK() ;
+		}
+		// test code
+		;
+	}
+
+	//------------------------------------
+	// Disable Rcv DMA 
+	//------------------------------------
+	XBUS_WRITE( QMPACS, QMP_WS ) ;
+
+	bytecnt = 2*wdcnt ;
+
+	qmp_fifo_read( dstp, bytecnt );
+}
+
+/****************************************************************
+Routine : qmp_start_read
+	Start filling up the QMP receive fifo with up to 64 words of
+	data from OCRAM using QMP mode.  This routine is part of a
+	two step "asynchronous read" [see qmp_finish_read()] below.
+	Called by DSP MQX driver when BIT12 of register E5 indicates
+	that the DSP has filled the QMP read buffer (DSP_RX_BUFFER).
+
+		CALLED WITH INTERRUPTS DISABLED!
+*****************************************************************/
+_Inline static void
+qmp_start_read ( void )
+{
+	// Wait for previous write to finish
+	uint_32 i = 0;
+	while ( !(XBUS_READ8( QMPHI ) & BIT1) ) {
+		printf("WOW!\n");
+		if ( i++ > 0x1000 ) {
+			sendCrLf(); sendCrLf(); sendCrLf();
+			printf( "START READ TIMEOUT (HI=0x%x), modem %d, modem offset 0x%x\n",
+					XBUS_READ8( QMPHI ), ModemNum, ModemOffset ) ;
+			sendCrLf(); sendCrLf(); sendCrLf();
+
+			XBUS_WRITE( QMPACS, BIT6|QMP_WS|BIT2 ) ;
+			DP_DELETE_TASK() ;
+			return;
+		}
+	}
+
+	//------------------------------------
+	// Select Receive register bank
+	// and clear Rcv FIFO
+	//------------------------------------
+	XBUS_WRITE( QMPACS, BIT5|QMP_WS ) ;
+
+	//------------------------------------
+	// Set DSP RX address register...
+	//------------------------------------
+	XBUS_WRITE( QMPAL,(word)(DSP_RX_BUFFER) );
+
+	//X_WRITE8(0x3EF, 1 );
+
+	//------------------------------------
+	// ....and start the Rcv DMA.
+	//------------------------------------
+	XBUS_WRITE( QMPACS, QMP_WS|BIT0 ) ;
+}
+
+/****************************************************************
+Routine : qmp_finish_read
+	Read up to 64 words of data from QMP receive fifo.
+	This routine is part of a two stage "asynchronous read"
+	transfer [see qmp_start_read() above].
+
+		CALLED WITH INTERRUPTS DISABLED!
+*****************************************************************/
+
+_Inline static byte
+qmp_finish_read ( word *dstp )
+{
+	byte bytecnt;
+	U32 i=0 ; // test code
+
+	//------------------------------------
+	// Select Receive register bank and...
+	//------------------------------------
+//	XBUS_WRITE( QMPACS, QMP_WS|BIT0 ) ;
+
+	//------------------------------------
+	// ...wait until QMP has transferred
+	// full 64 words of data before
+	// getting 1st word (aprox 2usec).
+	//------------------------------------
+	while ( !( XBUS_READ8( QMPHI ) & BIT3) )
+	{
+		// test code
+		if ( i++ > 0x1000 )
+		{
+			printf( "RX1 TIMEOUT (HI=0x%x)\n", XBUS_READ8( QMPHI ) ) ;
+			return 0;
+		}
+		// test code
+		;
+	}
+	#if defined(QMP_HIGH_WATER_TEST)
+	if ( i > G(qmpReadHighWaterMark) )
+	{
+		G(qmpReadHighWaterMark) = i ;
+		printf( "\t\t\t\t(HIrx =%d)\n", G(qmpReadHighWaterMark) ) ;
+	}
+	#endif // QMP_HIGH_WATER_TEST
+
+	//------------------------------------
+	// Disable Rcv DMA 
+	//------------------------------------
+	XBUS_WRITE( QMPACS, QMP_WS ) ;
+
+	//------------------------------------
+	// Now get the data (1st word has
+	// byte count in lower byte).
+	//------------------------------------
+	#if defined(V_FRAME_ID)
+		if (is_voice_call(ModemNum)) {
+			word cntrlWd = XBUS_READ16( QMPD ) ;
+			bytecnt = (byte)(cntrlWd & 0xff) ;
+			byte rx_frame_id = (byte)(cntrlWd >> 8) ;
+			if (rx_frame_id != prev_rx_frame_id[ModemNum]++) {
+				printf("qmp_finish_read: voice call rx_frame_id = 0x%02x, expected 0x%02x\n", rx_frame_id, (byte) (prev_rx_frame_id[ModemNum] - 1));
+			}
+		}
+		else
+	#else
+		{
+			bytecnt = (byte) XBUS_READ16( QMPD ) ;
+		}
+	#endif	// V_FRAME_ID
+
+	if ( bytecnt > MAX_QMP_DATA_BYTES )
+	{
+		printf( "QMP Read: Bad Byte Cnt %d   ", bytecnt ) ;
+		// clear rx fifo
+		XBUS_WRITE( QMPACS, BIT5|QMP_WS ) ;
+		#if defined(QMP_READ_TRACE)
+		bytecnt = MAX_QMP_DATA_BYTES ;
+		#else
+		bytecnt = 0 ;
+		#endif
+	}
+
+	qmp_fifo_read( dstp, bytecnt);
+
+	return bytecnt ;
+}
+
+/****************************************************************
+Routine : qmp_read
+	Read up to 64 words of data from external memory using
+	QMP mode and return the byte count read. This routine is
+	called when the DSP has sent a trigger byte signifying
+	that a transfer is to take place. The count will no longer
+	be part of the trigger byte (since sizes bigger than 16 bytes
+	are now supported).  Instead, the count will be in the first
+	word transfered.
+
+		CALLED WITH INTERRUPTS DISABLED!
+*****************************************************************/
+byte
+qmp_read ( U32 srcLoc, word *dstp )
+{
+	byte bytecnt;
+	U32 i=0 ; // test code
+
+	//------------------------------------
+	// Select Receive register bank
+	// and clear Rcv FIFO
+	//------------------------------------
+	XBUS_WRITE( QMPACS, BIT5|QMP_WS ) ;
+
+	//------------------------------------
+	// set DSP (source) RX address register
+	//------------------------------------
+	XBUS_WRITE( QMPAL, (word)(srcLoc) );
+
+	//------------------------------------
+	// Enable Rcv DMA and wait states
+	//------------------------------------
+	XBUS_WRITE( QMPACS, QMP_WS|BIT0 ) ;
+
+	//------------------------------------
+	// wait until QMP has transferred
+	// full 64 words of data before
+	// getting 1st word (aprox 2usec).
+	//------------------------------------
+	while ( !( XBUS_READ8( QMPHI ) & BIT3) )
+	{
+		// test code
+		if ( i++ > 0x10000 )
+		{
+			printf( "RX1 TIMEOUT (HI=0x%x)\n", XBUS_READ8( QMPHI ) ) ;
+			DP_DELETE_TASK() ;
+		}
+		// test code
+		;
+	}
+
+	//X_WRITE8(0x3EF, 0 );
+
+	//------------------------------------
+	// Disable Rcv DMA 
+	//------------------------------------
+	XBUS_WRITE( QMPACS, QMP_WS ) ;
+
+	//------------------------------------
+	// Now get the data (1st word has
+	// byte count in lower byte).
+	//------------------------------------
+	bytecnt = (byte)XBUS_READ16( QMPD ) ;
+
+	if ( bytecnt > MAX_QMP_DATA_BYTES )
+	{
+		printf( "QMP Read: Bad Byte Cnt %d   ", bytecnt ) ;
+		// clear rx fifo
+		XBUS_WRITE( QMPACS, BIT5|QMP_WS ) ;
+		bytecnt = 0 ;
+	}
+	qmp_fifo_read ( dstp, bytecnt );
+
+	return bytecnt ;
+}
+
+/****************************************************************
+Routine : qmp_TXwait
+	Since the qmp_write() fcn does not wait for the transfer to
+	complete, anyplace that assumes the last write was completed
+	must now call this fcn. See dp_enab_fst_dsp() below.
+
+		CALLED WITH INTERRUPTS DISABLED!
+*****************************************************************/
+
+void
+qmp_TXwait ( void )
+{
+	U32 i=0 , j=0;
+
+	start_usec_timer(QMP_TXWAIT_TIMER);
+
+	//------------------------------------
+	// wait for last completion.
+	//------------------------------------
+	while ( !(XBUS_READ8( QMPHI ) & BIT1) )
+	{
+		if ( i++ > 0x1000 )
+		{
+			printf( "TX TIMEOUT (HI=0x%x)\n", XBUS_READ8( QMPHI ) ) ;
+
+			//---------------------------------------------------------
+			//					for debug
+			//---------------------------------------------------------
+			/*
+			printf( "QMP Registers\n");
+			printf( "Addr Reg(0)	= 0x%x\n", XBUS_READ16( QMPAL ) );
+			printf( "Host Cntrl (5) = 0x%x\n", XBUS_READ8( QMPHCS ) );
+			printf( "Host Int (6)	= 0x%x\n", XBUS_READ8( QMPHI ) );
+			printf( "Acc Cntrl (7)	= 0x%x\n", XBUS_READ8( QMPACS ) );
+			DP_DELETE_TASK() ;
+			*/
+
+			XBUS_WRITE( QMPACS, BIT6|QMP_WS|BIT2 ) ;
+			i = 0 ;
+			if ( j++ > 2 )
+			{
+				printf( "FINAL TX TIMEOUT\n" ) ;
+				DP_DELETE_TASK() ;
+			}
+		}
+
+		#if defined(QMP_HIGH_WATER_TEST)
+		if ( i > G(qmpWriteHighWaterMark) )
+		{
+			G(qmpWriteHighWaterMark) = i ;
+			printf( "\t\t\t\t(HIw=%d)\n", G(qmpWriteHighWaterMark) ) ;
+		}
+		#endif // QMP_HIGH_WATER_TEST
+	}
+
+	stop_usec_timer(QMP_TXWAIT_TIMER);
+}
+
+/****************************************************************
+Routine : qmp_write
+	Write words of data to external memory using QMP mode.  Since
+	interrupts can occur at any time, this routine must protect
+	from DSP interrupts .
+
+		CALLED WITH INTERRUPTS DISABLED!
+*****************************************************************/
+void
+qmp_write ( word *srcp, U32 dstLoc, byte wdcnt )
+{
+	U32 i=0, j=0 ;
+	BOOL filled;
+
+	if ( wdcnt > (MAX_QMP_DATA_WORDS+1) )
+	{
+		printf( "QMP Write: Bad WordCnt %d\n", wdcnt ) ;
+		DP_DELETE_TASK() ;
+		return ;
+	}
+	filled = (wdcnt == (MAX_QMP_DATA_WORDS+1)) ? TRUE : FALSE ;
+
+	//------------------------------------
+	// wait for completion of last write.
+	//------------------------------------
+	while ( !(XBUS_READ8( QMPHI ) & BIT1) )
+	{
+		if ( i++ > 0x1000 )
+		{
+			sendCrLf(); sendCrLf(); sendCrLf();
+			printf( "TX2 TIMEOUT (HI=0x%x), modem %d, modem offset 0x%x\n",
+						XBUS_READ8( QMPHI ), ModemNum, ModemOffset ) ;
+			sendCrLf(); sendCrLf(); sendCrLf();
+
+			XBUS_WRITE( QMPACS, BIT6|QMP_WS|BIT2 ) ;
+			i = 0 ;
+			if ( j++ > 2 )
+			{
+				printf( "FINAL TX TIMEOUT\n" ) ;
+				DP_DELETE_TASK() ;
+			}
+		}
+
+	}
+
+	#if defined(QMP_HIGH_WATER_TEST)
+	if ( i > G(qmpWriteHighWaterMark) )
+	{
+		G(qmpWriteHighWaterMark) = i ;
+		printf( "\t\t\t\t(HItx =%d)\n", G(qmpWriteHighWaterMark) ) ;
+	}
+	#endif // QMP_HIGH_WATER_TEST
+
+	//------------------------------------
+	// Clear TX fifo and select transmit
+	// register bank (and 1 ws)
+	//------------------------------------
+	XBUS_WRITE( QMPACS, BIT6|QMP_WS|BIT2 ) ;
+
+	//------------------------------------
+	// set TX address register
+	//------------------------------------
+	XBUS_WRITE( QMPAL, (word)(dstLoc) );
+
+	qmp_fifo_write(srcp, wdcnt);
+
+	//X_WRITE8(0x3EF, 1 );
+
+	// Enable Xmit DMA with one wait state
+	XBUS_WRITE( QMPACS, QMP_WS|BIT2|BIT1 ) ;	//new
+
+	//------------------------------------
+	//  start the transfer
+	//------------------------------------
+	if ( !filled )								////
+		XBUS_WRITE( QMPHCS, BIT3|BIT1|BIT0 ) ;
+}
+
+#if defined(SA_LAPM_DEBUG)
+_Inline static byte
+lapm_seqnum_in_window ( byte lastS, byte curS )
+{
+	byte outstanding;
+
+	outstanding = (curS < lastS ? 128 : 0) + curS - lastS;
+
+	return  outstanding <= G(lapm_k) ? outstanding : 128;
+}
+
+_Inline static void
+lapm_audit_tx ( byte *byteBuffp, byte regB0, byte cnt )
+{
+	byte cmd, nr, ns;
+
+	if ( (regB0 & TX_START_OF_FRAME) && (regB0 & TX_END_OF_FRAME) )
+	{
+		nr = *(byteBuffp+4)>>1;
+		sendCrLf();
+		if ( cnt == 3 )
+		{
+			cmd = *(byteBuffp+3);
+
+			printf("Tx C: Adr=%x; Cmd=%x; Nr=%d; P=%d\n",
+					*(byteBuffp+2), cmd,nr,*(byteBuffp+4)&1);
+			if ( (cmd == RR) || (cmd == RNR) )
+			{
+				if ( lapm_seqnum_in_window( G(sa_lastTX_nr), nr) == 128 )
+				{
+					// not in window
+					printf("Tx N(r) SEQUENCE ERROR; last=%d; cur=%d\n",
+							G(sa_lastTX_nr), nr);
+
+					lapm_LTF_LRQ_audit();
+				}
+				G(sa_lastTX_nr) = nr;
+			}
+		}
+		else
+		{
+			ns = *(byteBuffp+3)>>1;
+	
+			printf("Tx I:  Cnt=%d; Ns=%d; Nr=%d\n", cnt,ns,nr);
+			// audit Tx N(r) with last sent N(r)
+			if ( lapm_seqnum_in_window( G(sa_lastTX_nr), nr) == 128 )
+			{
+				// not in window
+				printf("TX N(r) SEQUENCE ERROR; last=%d; cur=%d\n",
+							G(sa_lastTX_nr), nr);
+			}
+			G(sa_lastTX_nr) = nr;
+		}
+	}
+	else
+	{
+		printf("cnt = %d; regB0=0x%x\n", cnt, regB0); // debug
+		printf("Tx ?:  Cnt=%d; d0=0x%x; d1=0x%x; d2=0x%x\n",
+			cnt, *(byteBuffp+2), *(byteBuffp+3), *(byteBuffp+4));
+	}
+}
+
+_Inline static void
+lapm_audit_rx ( byte *byteBuffPtr, byte regB0, byte cnt )
+{
+	byte cmd, nr, ns;
+
+	nr = *(byteBuffPtr+2)>>1;
+
+	if ( (cnt == 3) &&
+			(regB0 & RX_START_OF_FRAME) && (regB0 & RX_END_OF_FRAME) )
+	{
+		cmd = *(byteBuffPtr+1);
+		sendCrLf();
+		printf("Rx C: Adr=%x; Cmd=%x; Nr=%d; P=%d\n",
+					*(byteBuffPtr), cmd, nr, *(byteBuffPtr+2)&1);
+		if ( (cmd == RR) || (cmd == RNR) )
+		{
+			if ( lapm_seqnum_in_window( G(sa_lastRX_nr), nr) == 128 )
+			{
+				// not in window
+				printf("Rx N(r) SEQUENCE ERROR; last=%d; cur=%d\n",
+							G(sa_lastRX_nr), nr);
+			}
+			G(sa_lastRX_nr) = nr;
+		}
+	}
+	else if ( regB0 & RX_START_OF_FRAME )
+	{
+		ns = *(byteBuffPtr+1)>>1;
+		sendCrLf();
+		printf("Rx I: Cnt=%d; Ns=%d; Nr=%d\n",cnt,ns,nr);
+		// audit received N(r) with last received N(r)
+		if ( lapm_seqnum_in_window( G(sa_lastRX_nr), nr) == 128 )
+		{
+			// not in window
+			printf("Rx N(r) SEQUENCE ERROR; last=%d; cur=%d\n",
+					G(sa_lastRX_nr), nr);
+		}
+		G(sa_lastRX_nr) = nr;
+	}
+	else if ( regB0 & RX_END_OF_FRAME )
+	{
+		printf("Rx I(eof): Cnt=%d\n", cnt);
+	}
+	else
+	{
+		printf("Rx I(mid): cnt=%d\n", cnt);
+	}
+}
+#endif // SA_LAPM_DEBUG
+
+/****************************************************************
+Routine : sa_qmp_write_handler
+Description :
+    Common QMP write routine for data and voice.
+	Used by :
+		1) QMP ISR - sa_dsp_isr() for data and voice, and
+		2) dp_start_transmit() for data only.
+*****************************************************************/
+_Inline static void
+sa_qmp_write_handler( VGLOB *vglob_ptr )
+{
+	byte byteBuff[ 128 ] ;
+	#if defined(QMP_BY_REFERENCE)
+	byte *buffp ;
+	#endif
+	byte cnt = 0;
+	U8 dsp = ModemNum ;
+	byte tbRegB0;
+
+	//----------------------------------------
+	// No read current; perform a QMP
+	// (or Camilz) write on this channel
+	//----------------------------------------
+	if ( is_data_call( dsp ) ) {
+
+		#if defined(QMP_BY_REFERENCE)
+		buffp = byteBuff ; // for Supervisor frames
+		cnt = sa_modemData_tx( &buffp, &tbRegB0 );
+		#else
+		cnt = sa_modemData_tx( byteBuff, &tbRegB0 );
+		#endif
+
+		if ( cnt ) {
+			#if defined(SA_LAPM_DEBUG)
+			byte byteCnt = cnt;
+			#endif // SA_LAPM_DEBUG
+			//-----------------------------------------
+			// convert byte count to word count and
+			// add first word (containing cnt)
+			//-----------------------------------------
+			cnt = 1 + (cnt+1) / 2;
+
+			#if defined(QMP_BY_REFERENCE)
+			qmp_write( (word *)(buffp), DSP_TX_BUFFER, cnt ) ;
+			#else
+			qmp_write( (word *)byteBuff, DSP_TX_BUFFER, cnt ) ;
+			#endif
+
+			#if defined(SA_LAPM_DEBUG)
+			if ( G(sa_lapm_debug) == SA_LAPM_DEBUG_QMP_ON )
+			{
+				#if defined(QMP_BY_REFERENCE)
+				lapm_audit_tx( buffp, tbRegB0, byteCnt );
+				#else
+				lapm_audit_tx( byteBuff, tbRegB0, byteCnt );
+				#endif
+			}
+			#endif // SA_LAPM_DEBUG
+
+			#if defined(HDLC_FRAMES_BY_REFERENCE)
+			// Is it an "HDLC by reference" buffer?
+			if ( BIT0 & tbRegB0 )
+			{
+				// yes; remove the extra bit
+				tbRegB0 &= 0xFE;
+
+				//---------------------------------------
+				// Zero out the cnt field; used as flag
+				// by LAPM environment signifying when
+				// buffer has been written to QMP.
+				//---------------------------------------
+				#if defined(QMP_BY_REFERENCE)
+				*(buffp) = 0;
+				#else
+				*(byteBuff) = 0;
+				#endif // QMP_BY_REFERENCE
+			}
+			#endif // HDLC_FRAMES_BY_REFERENCE
+
+			DP_INT_REGWRITE( 0xb0, tbRegB0 ) ;
+		}
+	}
+	else if ( is_voice_call( dsp ) ) {
+
+		// copy media to byteBuff, skip 1st word (TB & CNT)
+		cnt = dsp_media_write( vglob_ptr, &byteBuff[2] );
+
+		// for voice, TB is just the byte count 
+		byteBuff[0] = cnt;
+		#if defined(V_FRAME_ID)
+		byteBuff[1] = tx_frame_id[dsp]++;
+		#else
+		byteBuff[1] = 0;
+		#endif
+
+		if ( cnt ) {
+			//-----------------------------------------
+			// convert byte count to word count and
+			// add first word (containing cnt)
+			//-----------------------------------------
+			cnt = 1 + (cnt+1) / 2;
+
+			#if defined(G729_VIA_CAMIL)
+			if ( V(config).pnetCodec == G729 ) {
+				dual_port_write ( byteBuff, cnt );
+			}
+			else
+			#endif	// G729_VIA_CAMIL
+			{
+				qmp_write( (word *)byteBuff, DSP_TX_BUFFER, cnt ) ;
+			}
+
+			DP_INT_REGWRITE( 0xb0, tbRegB0 ) ;
+		}
+	}  // else if (voice call)
+}
+
+/****************************************************************
+Routine : dp_start_transmit
+Description :
+    start the data transmission if idle. enable transmit interrupt.
+*****************************************************************/
+void
+dp_start_transmit ( void )
+{
+	VGLOB *vglob_ptr = &vglob_array[0]; // dummy
+
+	_int_disable() ;
+	if ( G(dp_dsp_data_in_progress) == FALSE )
+	{
+		G(dp_dsp_data_in_progress) = TRUE ;
+
+		#if defined(SA_LAPM_DEBUG)
+		if ( G(sa_lapm_debug) == SA_LAPM_DEBUG_QMP_ON )
+			printf("Tx B:\n");
+		#endif // SA_LAPM_DEBUG
+
+		sa_qmp_write_handler(vglob_ptr);
+	}
+	_int_enable() ;
+}
+
+/****************************************************************
+	Function : sa_modemData_tx
+	Build next QMP data packet to send to DSP
+****************************************************************/
+_Inline static byte
+#if defined(QMP_BY_REFERENCE)
+sa_modemData_tx ( byte **buffPtrp, byte *regB0p )
+#else
+sa_modemData_tx ( byte *buffPtr, byte *regB0p )
+#endif
+{
+	byte cnt, maxCnt, *topPtr ;
+	word firstWord ;
+	#if defined(QMP_BY_REFERENCE)
+	byte *buffPtr = *buffPtrp;
+	#endif
+
+	//-------------------------------------------
+	// If no more to do, or in re-train - get out.
+	// (remote busy must not stop control frames)
+	//-------------------------------------------
+	if ( (G(io_dce_tx_rptr) == G(io_dce_tx_wptr))
+		|| (G(dp_line_state) == DP_LINE_RETRAINING) )
+	{
+		G(dp_dsp_data_in_progress) = FALSE ;
+
+		// clear tx interrupt
+		DP_INT_REGWRITE( 0xe5, BIT8 ) ;
+
+		#if defined(SA_LAPM_DEBUG)
+			if ( G(sa_lapm_debug) == SA_LAPM_DEBUG_QMP_ON )
+				printf("Tx E:\n");
+		#endif // SA_LAPM_DEBUG
+		return 0;
+	}
+
+	//===================================================
+	//
+	//	Process next frame in the DCE TX Ring Buffer;
+	//
+	//===================================================
+	firstWord = *G(io_dce_tx_rptr) ;
+
+	#if defined(HDLC_FRAMES_BY_REFERENCE)
+	//------------------------------------------------------------
+	// Is it an I Frame; or a Supervisor, or an Unnumbered frame?
+	//------------------------------------------------------------
+	if ( firstWord & HDLC_IFRAME_PLACEHLDR )
+	{
+		byte *datap ;
+		word *hiWordDatapp, *loWordDatapp ;
+
+		//-----------------------------------------------------
+		// It's an I Frame with a three word structure
+		// in the TX ring buffer representing the frame.
+		//
+		//	Format of the I Frame "by reference" structure:
+		//		1st wd:		(FLAG  |  count)
+		//		2nd wd:		(upper data ptr)
+		//		3rd wd:		(lower data ptr)
+		//-----------------------------------------------------
+
+		//-----------------------------------------------------
+		// IF start of a new HDLC frame
+		// THEN set SOF Flag in trigger byte
+		//-----------------------------------------------------
+		#if defined(QMP_BY_REFERENCE)
+		// Must be full I frame / QMP xfer
+		*regB0p = BIT7|BIT6|BIT0 ;
+		#else
+		*regB0p = firstWord & HDLC_START_OF_FRAME ? BIT6|BIT0 : 0 ;
+		#endif
+
+		//--------------------------------------
+		// get count from ring buffer structure
+		//--------------------------------------
+		cnt = (byte) firstWord;
+
+		//--------------------------------------
+		// get data pointer from DCE ring buffer
+		//--------------------------------------
+		hiWordDatapp = G(io_dce_tx_rptr) + 1;
+		if ( hiWordDatapp >= G(io_dce_tx_eptr) )
+			hiWordDatapp = G(io_dce_tx_sptr);
+		loWordDatapp = hiWordDatapp + 1;
+		if ( loWordDatapp >= G(io_dce_tx_eptr) )
+			loWordDatapp = G(io_dce_tx_sptr) ;
+		datap = (byte *)((*hiWordDatapp)<<16 | *loWordDatapp);
+
+		#if defined(QMP_BY_REFERENCE)
+		//---------------------------------------------------
+		// We are going to return a pointer to the i frame
+		// buffer to the calling function.
+		// Leave a space above data for insertion of count.
+		// Note: LAPM_FRAME structure was modified to allow
+		// writing of a count above data[] array.
+		//---------------------------------------------------
+		topPtr = datap-2 ;
+		*buffPtrp = topPtr ;
+		#else
+		//---------------------------------------------------
+		// Use passed in buffer and copy frame to it.
+		//---------------------------------------------------
+		topPtr = buffPtr ;
+		buffPtr += 2 ;
+		#endif
+
+		if ( cnt > MAX_QMP_DATA_BYTES )
+		{
+			#if defined(QMP_BY_REFERENCE)
+			//-------------------------------------------------
+			// the second transfer of a multi QMP session will
+			// place the count right in the middle of the data.
+			//-------------------------------------------------
+			printf("Multiple QMP xfers / I Frame cannot be supported!!!\n");
+			DP_DELETE_TASK();
+			#else
+			byte i ;
+			//--------------------------------------
+			// Copy data into QMP buffer
+			//--------------------------------------
+			for ( i=0; i<MAX_QMP_DATA_BYTES; i++ )
+			{
+				*buffPtr++ = *datap++;
+			}
+
+			//---------------------------------------
+			// NOT Done with this frame yet;
+			// Adjust the count and datap in
+			// the three word DCE ring Buffer
+			// structure (removing the SOF flag).
+			//---------------------------------------
+			*G(io_dce_tx_rptr) =
+				(word)(HDLC_IFRAME_PLACEHLDR | (cnt-MAX_QMP_DATA_BYTES));
+			datap += MAX_QMP_DATA_BYTES;
+			*hiWordDatapp = (word) ((U32)datap>>16);
+			*loWordDatapp = (word) (datap);
+
+			//--------------------------------------
+			// set byte count for exit
+			//--------------------------------------
+			cnt = MAX_QMP_DATA_BYTES;
+			#endif
+		}
+		else
+		{
+			#if !defined(QMP_BY_REFERENCE)
+			byte i ;
+			//--------------------------------------
+			// Copy data into QMP buffer
+			//--------------------------------------
+			for ( i=0; i<cnt; i++ )
+			{
+				*buffPtr++ = *datap++;
+			}
+
+			//--------------------------------------
+			// Set EOF Flag in trigger byte
+			//--------------------------------------
+			*regB0p |= BIT7 ;
+			#endif
+
+			//--------------------------------------
+			// Move to next frame in DCE Ring Buffer
+			//--------------------------------------
+			if ( ++loWordDatapp >= G(io_dce_tx_eptr) )
+				G(io_dce_tx_rptr) = G(io_dce_tx_sptr);
+			else
+				G(io_dce_tx_rptr) = loWordDatapp;
+
+			//---------------------------------------
+			// Signal lapm task to place another
+			// iframep in DCE Ring Buffer.
+			// Chk for zero is sanity test - should
+			// never happen.
+			//---------------------------------------
+			if ( G(lapm_max_iframes) )
+			{
+				G(lapm_max_iframes) -- ;
+			}
+			else
+			{
+				printf("LAPM: Illegal val of lapm_max_iframes\n");
+			}
+		}
+	}
+	#if defined(MNP_OFRAMES_BY_REFERENCE)
+	else if ( firstWord & MNP_OFRAME_PLACEHLDR )
+	{
+		byte *datap, curCnt, ch ;
+		word *hiWordDatapp, *loWordDatapp, *crcp, crc ;
+
+		//-----------------------------------------------------
+		// It's an MNP Octet Data Frame with a four word structure
+		// in the TX DCE Ring Buffer representing the frame.
+		//
+		//	Format of the MNP Data Frame "by reference" structure:
+		//		1st wd:		(FLAG  |  count)
+		//		2nd wd:		(upper data ptr)
+		//		3rd wd:		(lower data ptr)
+		//		4th wd:		(calculated CRC)
+		//
+		// Note: 
+		// Must use passed in buffer (128 byte stack frame)
+		// since MNP frames can grow (by DLE byte stuffing)
+		// to span multiple QMP frames.
+		//-----------------------------------------------------
+		topPtr = buffPtr ;
+		buffPtr += 2 ;
+		//cnt = 0 ;
+
+		*regB0p = 0 ;
+
+		//--------------------------------------
+		// get count from ring buffer structure
+		//--------------------------------------
+		curCnt = (byte) firstWord;
+
+		//--------------------------------------
+		// get data pointer from DCE ring buffer
+		//--------------------------------------
+		hiWordDatapp = G(io_dce_tx_rptr) + 1;
+		if ( hiWordDatapp >= G(io_dce_tx_eptr) )
+			hiWordDatapp = G(io_dce_tx_sptr);
+		loWordDatapp = hiWordDatapp + 1;
+		if ( loWordDatapp >= G(io_dce_tx_eptr) )
+			loWordDatapp = G(io_dce_tx_sptr) ;
+		datap = (byte *)((*hiWordDatapp)<<16 | *loWordDatapp);
+
+		//-------------------------------------------
+		// If start of new MNP frame
+		// send start of frame sequence.
+		// and signal task that ok to resend.
+		//-------------------------------------------
+		if ( firstWord & HDLC_START_OF_FRAME )
+		{
+			*(buffPtr)   = SYNC;
+			*(buffPtr+1) = DLE;
+			*(buffPtr+2) = STX;
+			buffPtr      += 3;
+			maxCnt       = MAX_QMP_DATA_BYTES-4 ;
+			*(datap-2)   = 0;
+			cnt          = 3;
+		}
+		else
+		{
+			maxCnt       = MAX_QMP_DATA_BYTES-1 ;
+			cnt          = 0;
+		}
+
+		while ( (cnt < maxCnt) && (curCnt > 0) )
+		{
+			ch = *datap++;
+			curCnt -- ;
+
+			//------------------------------------------
+			// place char in QMP buffer and
+			// perform byte stuffing (DLEs),
+			// as required
+			//------------------------------------------
+			*buffPtr++ = ch;
+			if ( ch == DLE )
+			{
+				*buffPtr++ = DLE;
+				cnt += 2 ;
+			}
+			else
+			{
+				cnt++;
+			}
+		}
+
+		//-------------------------------------------------------
+		//		Are we done with this frame ??
+		// (implies room for 4 byte EOF sequence in QMP buffer)
+		//-------------------------------------------------------
+		if ( curCnt == 0 )
+		{
+			if ( cnt < (maxCnt-4) )
+			{
+				//-----------------------------------------------
+				// Yes ... send 4 byte End of Frame Flag Sequence:
+				//		DLE,
+				//		ETX,
+				//		CRC Lo, and
+				//		CRC Hi,
+				// and skip over four word DCE structure
+				//-----------------------------------------------
+				*(buffPtr)   = DLE;
+				*(buffPtr+1) = ETX;
+	
+				//------------------------------------------
+				// point to the MNP data Frame's CRC value
+				//------------------------------------------
+				crcp = loWordDatapp + 1;
+				if ( crcp >= G(io_dce_tx_eptr) )
+					crcp = G(io_dce_tx_sptr) ;
+	
+				// Get CRC
+				crc = *crcp;
+	
+				// write CRC LO byte
+				*(buffPtr+2) = (byte)crc ;
+
+				// write CRC HI byte
+				*(buffPtr+3) = (byte)(crc>>8) ;
+
+				cnt += 4;
+	
+				//------------------------------------------
+				// skip over this MNP framep
+				//------------------------------------------
+				if ( ++crcp >= G(io_dce_tx_eptr) )
+					G(io_dce_tx_rptr) = G(io_dce_tx_sptr) ;
+				else
+					G(io_dce_tx_rptr) = crcp ;
+	
+				//---------------------------------------------
+				// Signal lapm task to place another
+				// iframep in DCE Ring Buffer.
+				// (Chk for zero is sanity test - should
+				// never happen).
+				// Also signal MNP task is OK to reQueue
+				// this MNP frame (BIT0 in TriggerByte).
+				//---------------------------------------------
+				if ( G(lapm_max_iframes) ) G(lapm_max_iframes) -- ;
+				else printf("MNP: Illegal val of lapm_max_iframes\n");
+			}
+			else
+			{
+				//-----------------------------------------------
+				//		Not quite ...
+				//-----------------------------------------------
+				//---------------------------------------------
+				// Must send EOF sequence next time.
+				// Count (lower byte) will be zero for next
+				// time so only the EOF sequence will be sent
+				// (no need to update datap in MNP struct).
+				//---------------------------------------------
+				*G(io_dce_tx_rptr) = (word)(MNP_OFRAME_PLACEHLDR);
+			}
+		}
+		else
+		{
+			//-----------------------------------------------
+			// NOT Done with this frame yet;
+			// Adjust the count and datap in the four word
+			// MNP data structure (removing the SOF flag).
+			//-----------------------------------------------
+			*G(io_dce_tx_rptr) = (word)(MNP_OFRAME_PLACEHLDR | curCnt);
+			*hiWordDatapp = (word) ((U32)datap>>16);
+			*loWordDatapp = (word) (datap);
+		}
+	}
+	#endif	// MNP_FRAMES_BY_REFERENCE
+	else
+	#endif	//HDLC_FRAMES_BY_REFERENCE
+	{
+		topPtr = buffPtr ;
+		buffPtr += 2 ;
+		cnt = 0 ;
+
+		if ( firstWord & HDLC_TX_ANY_CHAR )
+		{
+			maxCnt = 6 ;
+			*regB0p = 0x20 ;
+		}
+		else
+		{
+			maxCnt = MAX_QMP_DATA_BYTES ;
+			*regB0p = firstWord & HDLC_START_OF_FRAME ? BIT6 : 0 ;
+		}
+
+		while ( (cnt<maxCnt) && (G(io_dce_tx_rptr)!=G(io_dce_tx_wptr)) )
+		{
+			*buffPtr++ = (byte)*G(io_dce_tx_rptr) ;
+			cnt++ ;
+
+			if ( *G(io_dce_tx_rptr) & HDLC_END_OF_FRAME )
+			{
+				if ( ++G(io_dce_tx_rptr) >= G(io_dce_tx_eptr) )
+				{
+					G(io_dce_tx_rptr) = G(io_dce_tx_sptr) ;
+				}
+
+				*regB0p |= 0x80 ;
+				break ;
+			}
+
+			if ( ++G(io_dce_tx_rptr) >= G(io_dce_tx_eptr) )
+			{
+				G(io_dce_tx_rptr) = G(io_dce_tx_sptr) ;
+			}
+
+			//------------------------------------------
+			// check SOF for V.80 support -
+			// needed for framed mode without CRC
+			//------------------------------------------
+			if ( *G(io_dce_tx_rptr) & HDLC_START_OF_FRAME )
+			{
+				break ;
+			}
+		}
+	}
+
+	G(TXframeSize)[ (0x0f & (cnt>>3)) ] += 1 ;	// debug rwf
+	G(TXframeSize)[ 16 ] += cnt;
+
+	//-----------------------------------------
+	// Place byte count in first word of buffer
+	//-----------------------------------------
+	*topPtr++ = cnt ;
+	*topPtr = 0 ;
+
+	//if ( *regB0p & BIT6 ) sendDumbChar('@');
+
+	G(dp_dsp_data_in_progress) = TRUE ;
+	return cnt ;
+}
+
+/****************************************************************
+Routine : sa_modemData_rx 
+	MQX Only: Place received packet from QMP into DCE Ring Buffer
+****************************************************************/
+_Inline static void
+sa_modemData_rx ( byte cnt, byte regB0, byte *byteBuffPtr )
+{
+	word *first_ptr, *last_ptr ;
+	word *eptr = G(io_dce_rx_eptr);
+
+	if ( cnt == 0 )
+	{
+		printf( "sa_modemData_rx: - cnt = 0\n" ) ;
+	}
+	else
+	{
+		G(RXframeSize)[ (0x0f & (cnt>>3)) ] += 1 ;	// debug rwf
+		G(RXframeSize)[ 16 ] += cnt;
+
+		first_ptr = G(io_dce_rx_wptr) ;
+
+		#if defined(SA_LAPM_DEBUG)
+			if ( G(sa_lapm_debug) == SA_LAPM_DEBUG_QMP_ON )
+				lapm_audit_rx( byteBuffPtr, regB0, cnt );
+		#endif // SA_LAPM_DEBUG
+
+		//-------------------------------------------------
+		// Copy data into ring buffer 
+		//-------------------------------------------------
+		while ( cnt-- )
+		{
+			*G(io_dce_rx_wptr) = *byteBuffPtr++ ;
+
+			last_ptr = G(io_dce_rx_wptr)++ ;
+			if ( G(io_dce_rx_wptr) >= eptr )
+				G(io_dce_rx_wptr) = G(io_dce_rx_sptr) ;
+
+			//-------------------------------------------------
+			// For LAPM - perform overrun check.
+			//-------------------------------------------------
+			if ( G(io_dce_rx_wptr) == G(io_dce_rx_rptr) )
+			{
+				if ( LAPM_MODE )
+				{
+					//-------------------------------------------------
+					// The DCE RX Ring Buffer has just wrapped!
+					// Undo the damage.
+					//-------------------------------------------------
+					G(io_dce_rx_wptr) = last_ptr;
+					*last_ptr |= (HDLC_END_OF_FRAME | HDLC_CRC_ERROR) ;
+	
+					sendCrLf(); sendCrLf();
+					printf("\tsa_modemData_rx(): - DCE RX read overflow!!") ;
+					sendCrLf(); sendCrLf();
+					return ;
+				}
+			}
+		}
+
+		//----------------------------------------------
+		// Handle any Control bit(s) set in trigger byte
+		//----------------------------------------------
+		if ( regB0 & 0xe1 )
+		{
+			//-----------------------------
+			// if start-of-frame
+			//-----------------------------
+			if ( regB0 & 0x20 )
+			{
+				*first_ptr |= HDLC_START_OF_FRAME ;
+				G(RXframeFlags)[ 0 ] += 1 ;	// SOF rwf
+			}
+
+			//-----------------------------
+			// EOF (or) crc error
+			//-----------------------------
+			if ( regB0 & 0xc1 )
+			{
+				*last_ptr |= HDLC_END_OF_FRAME ;
+
+				//-----------------------------
+				// crc error (or) abort
+				//-----------------------------
+				if ( regB0 & 0x41 )
+				{
+					*last_ptr |= HDLC_CRC_ERROR ;
+
+					G(dp_bad_crc_count) ++ ;
+
+					// debug code
+					#if defined(SA_LAPM_DEBUG)
+					if ( G(sa_lapm_debug) != SA_LAPM_DEBUG_OFF )
+					{
+						if ( regB0 & 0x40 ) // crc error
+						{
+							G(RXframeFlags)[ 2 ] ++ ;	// CRC rwf
+							sendDumbChar('X');
+						}
+						else // abort
+						{
+							G(RXframeFlags)[ 3 ] ++ ;	// ABRT rwf
+							sendDumbChar('Y');
+						}
+					}
+					#endif // SA_LAPM_DEBUG
+				}
+				else
+				{
+					G(RXframeFlags)[ 1 ] ++ ;	// EOF rwf
+				}
+			}
+		}
+	}
+}
+
+#if defined(NEW_QMP_AUX_INTFC) // {
+# define TRIGGER_BYTE_2() (dp_regread16(0xe5) & BIT9)
+/****************************************************************
+Routine : dp_sendAuxCmd
+Description : send the Aux cmd in trigger byte two and
+wait for DSP to ack completion.
+*****************************************************************/
+void
+dp_sendAuxCmd ( byte cmd )
+{
+	word aux_timer ;
+
+	//-----------------------------------------------------
+	//	If NOT ready - hit it with a back door read cmd!!!
+	//-----------------------------------------------------
+	if ( !TRIGGER_BYTE_2() )
+	{
+		dp_dsp_regread( 0xb1 ) ;
+
+		// debug
+		sendDumbChar('-'); sendDumbChar('A');
+
+		aux_timer = x_current_time() ;
+		while ( (x_elapsed_time( aux_timer ) <= MS20) && !TRIGGER_BYTE_2() )
+		{
+			DP_MQX_CHKTIME( aux_timer );
+		}
+		if ( x_elapsed_time( aux_timer ) > MS20 )
+		{
+			//--------------------------------------------
+			// if this ever happens we may need to take
+			// this modem out of service!!!
+			//--------------------------------------------
+			printf( "\n\t AUXILIARY CMD TIMEOUT 0 !!!!!\n" ) ;
+			return ;
+		}
+	}
+
+	//---------------------------------------------
+	// send Cmd
+	//---------------------------------------------
+	dp_regwrite( 0xb1, cmd ) ;
+
+	//---------------------------------------------
+	// wait for DSP to process Command
+	//---------------------------------------------
+	aux_timer = x_current_time() ;
+	while ( (x_elapsed_time( aux_timer ) <= MS20) && !TRIGGER_BYTE_2() )
+	{
+		DP_MQX_CHKTIME( aux_timer );
+	}
+
+	if ( x_elapsed_time( aux_timer ) > MS20 )
+	{
+		//--------------------------------------------
+		// if this ever happens we may need to take
+		// this modem out of service!!!
+		//--------------------------------------------
+		printf( "\n\t AUXILIARY CMD TIMEOUT 1 !!!!!\n" ) ;
+	}
+}
+
+/****************************************************************
+Routine : dp_enab_fst_dsp
+Description : Enable Fast status Reporting
+*****************************************************************/
+void
+dp_enab_fst_dsp ( word *blkTbl, word cnt )
+{
+	_INT_DISABLE();
+		//---------------------------------------------
+		// Download address followed by count ...
+		//---------------------------------------------
+		qmp_write( blkTbl, FAST_STATUS_ADDR, cnt ) ;
+		qmp_write( &cnt, FAST_STATUS_COUNT, 1 ) ;
+		qmp_TXwait() ;
+	_INT_ENABLE();
+
+	//---------------------------------------------
+	// ... and send command
+	//---------------------------------------------
+	dp_sendAuxCmd( AUX_FAST_STATUS_ON );
+}
+
+/****************************************************************
+Routine : dp_disa_fst_dsp
+Description : Disable Fast status Reporting
+*****************************************************************/
+void
+dp_disa_fst_dsp ( void )
+{
+	printf("dp_disa_fst_dsp: Disabling fast status reporting\n");
+	dp_write_dsp_ram( 0xc66c, 0x0000 ) ;
+	//dp_sendAuxCmd( AUX_FAST_STATUS_OFF );
+}
+
+/****************************************************************
+Routine : dp_blkwrt_dsp
+Description : write a block of DSP RAM variables using QMP
+*****************************************************************/
+void
+dp_blkwrt_dsp ( word *blkTbl )
+{
+	U32 dstLoc ;
+	word *srcp, pairCnt, wordCnt ;
+
+	//---------------------------------------------
+	// Download the table
+	// First get the number of word pairs from the
+	// first word in buffer (can be up to 63 pairs)
+	//---------------------------------------------
+	pairCnt = *blkTbl ;
+	wordCnt = pairCnt * 2 + 1 ;
+	dstLoc = DSP_BLOCK_WRITE ;
+	srcp = blkTbl ;
+
+	while ( wordCnt >= 64 )
+	{
+		_INT_DISABLE();
+			qmp_write( srcp, dstLoc, 64 ) ;
+		_INT_ENABLE();
+		srcp += 64 ;
+		dstLoc += 64 ;
+		wordCnt -= 64 ;
+	}
+
+	_INT_DISABLE();
+	if ( wordCnt )
+	{
+		qmp_write( srcp, dstLoc, wordCnt ) ;
+	}
+	qmp_TXwait() ;
+	_INT_ENABLE();
+
+	//---------------------------------------------
+	// Send Blk Write Cmd to DSP
+	//---------------------------------------------
+	dp_sendAuxCmd( AUX_BLK_WRITE_CMD );
+}
+
+const word zeroFill [ 64 ] = { 0 } ;
+
+/****************************************************************
+Routine : dp_AUX_zeroFill
+Description : clear a block of DSP RAM.
+*****************************************************************/
+void
+dp_AUX_zeroFill ( word start, word end )
+{
+	word size = end - start;
+
+	#if defined(QMP_WRITE_TRACE)
+	U32 writeTrace = G(sa_qmpwrite_trace);
+	G(sa_qmpwrite_trace) = FALSE;
+	#endif	// QMP_WRITE_TRACE
+
+	#if defined(QMP_READ_TRACE)
+	U32 readTrace = G(sa_qmpread_trace);
+	G(sa_qmpread_trace) = FALSE;
+	#endif	// QMP_READ_TRACE
+
+	//printf("AUXz: Addr=0x%x; Size=%d\n", start, size);
+
+	//---------------------------------------------
+	// Send starting address of this Segment to DSP
+	//---------------------------------------------
+	_INT_DISABLE();
+		qmp_write( &start, DSP_BLOCK_WRITE, 1 );
+		qmp_TXwait();
+	_INT_ENABLE();
+
+	//---------------------------------------------
+	// Send SetUp Program DwnLd Cmd to DSP
+	//---------------------------------------------
+	dp_sendAuxCmd( AUX_SETUP_DNLD_CMD );
+
+	//---------------------------------------------
+	// zero the data for fill
+	//---------------------------------------------
+	_INT_DISABLE();
+		qmp_write( (word *)zeroFill, DSP_BLOCK_WRITE, 64 );
+		qmp_TXwait();
+	_INT_ENABLE();
+
+	while ( size >= 64 )
+	{
+		//---------------------------------
+		// write the cmd for dwnld
+		//---------------------------------
+		dp_sendAuxCmd( AUX_DNLD_CMD | 64 );
+
+		size -= 64 ;
+	}
+
+	if ( size )
+	{
+		//---------------------------------
+		// write the cmd for dwnld
+		//---------------------------------
+		dp_sendAuxCmd( AUX_DNLD_CMD | size );
+	}
+
+	//---------------------------------------------
+	// verify the zeroed data at end
+	// This can be removed after awhile!!
+	//---------------------------------------------
+	{
+		word dst[ 64 ];
+		U32 i;
+		for ( i=0; i<64; i++ ) dst[i] = 0xffff;
+
+		_INT_DISABLE();
+			qmp_TXwait();
+			qmp_fixed_read( DSP_BLOCK_WRITE, dst, 64 ) ;
+		_INT_ENABLE();
+
+		for ( i=0; i<64; i++ )
+		{
+			if ( dst[i] )
+			{
+				printf("dp_AUX_zeroFill FAILED at loc %d(0x%x)\n", i, dst[i]);
+				DP_DELETE_TASK() ;
+			}
+		}
+	}
+
+	#if defined(QMP_WRITE_TRACE)
+	G(sa_qmpwrite_trace) = writeTrace;
+	#endif	// QMP_WRITE_TRACE
+	#if defined(QMP_READ_TRACE)
+	G(sa_qmpread_trace) = readTrace;
+	#endif	// QMP_READ_TRACE
+}
+
+
+#define K56V_VERSION_RAM		0x2017
+#define VENUS_BASE_MAP	(!(dp_dsp_int_regread(8) & 0x0800))
+
+typedef const byte *CBP;
+
+struct FS_STRUCT
+{
+	const word dspAddr;		// Monitored RamLoc
+	const byte *str;		// Desc. of RamLoc (e.g. "S_PTR")
+	const U32 gOffset;		// Offset of monitored Ram Var in G Structure
+};
+
+const struct FS_STRUCT fsStructTbl [] =
+{
+#if defined(SA_QMP_RX_PATCH)
+	{ V90_CNTR,	(CBP)"V90QmpCnt",		Goffset(qmp_v90cntr)}, // v90 qmpcnt
+	{ V34_CNTR,	(CBP)"V34QmpCnt",		Goffset(qmp_v34cntr)}, // v34 qmpcnt
+	{ K56_CNTR,	(CBP)"K56QmpCnt",		Goffset(qmp_k56cntr)}, // k56 qmpcnt
+#endif // SA_QMP_RX_PATCH
+	{ 0x1ff1,	(CBP)"KfEnable",		Goffset(dp_KfEnable)}, // 1->v90
+	{ 0x0829,	(CBP)"STARTUP_PHASE",	Goffset(dp_cur_phase)	},
+	{ S_PTR,	(CBP)"S_PTR",			Goffset(dp_s_ptr)	},
+	{ R_PTR,	(CBP)"R_PTR",			Goffset(dp_r_ptr)	},
+	{ BR_PTR,	(CBP)"BR_PTR",			Goffset(dp_br_ptr)	},
+	{ 0x0833,	(CBP)"CurTX",			Goffset(dp_833)		}, // cur tx rate
+	{ 0x1ff6,	(CBP)"MaxTX",			Goffset(dp_1ff6)	}, // max tx rate
+	// Only print these for v90 phase 3 or 4
+	{ 0x0a53,	(CBP)"MP",				Goffset(dp_mp)		}, // v90,p4
+	{ 0x0a54,	(CBP)"MP'",				Goffset(dp_mpp)		}, // v90,p4
+	{ 0x0a55,	(CBP)"E",				Goffset(dp_e_stat)	}, // v90,p4
+//	{ 0x065f,	(CBP)"CP_f",			Goffset(p_ram65F)	}, // v90,p3
+	{ 0x2011,	(CBP)"t_ptr",			Goffset(dp_tmp2011)	}, // v90,p34
+	{ 0x003a,	(CBP)"0x003a",			Goffset(dp_3a)		},
+};
+#define NUM_FS_VARS (sizeof(fsStructTbl)/sizeof(struct FS_STRUCT))
+#if defined(SA_QMP_RX_PATCH)
+# define V90_ONLY_VARS 10
+#else
+# define V90_ONLY_VARS 7
+#endif
+
+/****************************************************************
+Routine : dp_print_state_pointers
+		  print data pump states for debug using AUX fast status
+*****************************************************************/
+void dp_print_state_pointers(void)
+{
+	U32 curIflag;
+	word i, lst_phase, fsData[ 64 ] ;
+	#if defined(SA_QMP_RX_PATCH)
+	word lst_v90_cntr, lst_v34_cntr, lst_k56_cntr;
+	#endif // SA_QMP_RX_PATCH
+
+	if ( x_elapsed_time( G(dp_sp_timer) ) < 15 ) return;
+
+	//--------------------------------------------------
+	// Wait until AUX Proc is on
+	//--------------------------------------------------
+	if ( !G(sa_aux_processorON) ) return;
+
+	// Save prefix print stamp state
+	curIflag = G(InstanceFlag) ;
+
+	//--------------------------------------------------
+	// Turn on Fast status reporting
+	//--------------------------------------------------
+	if ( !G(sa_aux_fsON) )
+	{
+		//----------------------------------
+		// Load Fast Status Table
+		//----------------------------------
+		printf("Load FS Table; Number of DSP RamLocs=%d\n", NUM_FS_VARS);
+		G(InstanceFlag) = FALSE ;
+		for ( i=0; i < NUM_FS_VARS; i++ )
+		{
+			fsData[i] = fsStructTbl[i].dspAddr;
+			printf("%2d:0x%4x%s", i, fsData[i], ((i&3)==3)?"\n":" ");
+		}
+		sendCrLf();
+
+		//----------------------------------
+		// Turn on Fast Status Monitoring
+		//----------------------------------
+		dp_enab_fst_dsp(fsData, (word)NUM_FS_VARS);
+
+		G(sa_aux_fsON) = TRUE;
+		G(InstanceFlag) = curIflag  ;
+		return;
+	}
+
+	//==================================================
+	//		We're running now!!
+	//==================================================
+
+	#if defined(QMP_WRITE_TRACE)
+	U32 writeTrace = G(sa_qmpwrite_trace);
+	G(sa_qmpwrite_trace) = FALSE;
+	#endif	// QMP_WRITE_TRACE
+
+	#if defined(QMP_READ_TRACE)
+	U32 readTrace = G(sa_qmpread_trace);
+	G(sa_qmpread_trace) = FALSE;
+	#endif	// QMP_READ_TRACE
+
+	//--------------------------------------------------
+	// Get Fast Status Reporting Data update from QMP
+	//--------------------------------------------------
+	_int_disable();
+		qmp_TXwait();
+		qmp_fixed_read(FAST_STATUS_DATA, fsData, (word)NUM_FS_VARS);
+	_int_enable();
+
+	#if defined(QMP_WRITE_TRACE)
+	G(sa_qmpwrite_trace) = writeTrace;
+	#endif	// QMP_WRITE_TRACE
+	#if defined(QMP_READ_TRACE)
+	G(sa_qmpread_trace) = readTrace;
+	#endif	// QMP_READ_TRACE
+
+	//--------------------------------------------------
+	// Save last "STARTUP_PHASE" value before update
+	//--------------------------------------------------
+	lst_phase = G(dp_cur_phase);
+
+	//--------------------------------------------------
+	// Save last QMP RX error counters
+	//--------------------------------------------------
+#if defined(SA_QMP_RX_PATCH)
+	lst_v90_cntr = G(qmp_v90cntr);
+	lst_v34_cntr = G(qmp_v34cntr);
+	lst_k56_cntr = G(qmp_k56cntr);
+#endif // SA_QMP_RX_PATCH
+
+	//--------------------------------------------------
+	// Finally; Store new values and display the changes
+	//--------------------------------------------------
+	BOOL prntCrLf = FALSE;
+	for ( i=0; i < NUM_FS_VARS; i++ )
+	{
+		if ( fsData[i] != Gval(fsStructTbl[i].gOffset) )
+		{
+			Gval(fsStructTbl[i].gOffset) = fsData[i];
+
+			//---------------------------------------------------
+			// Only print changes for the v90 state vars
+			// if in phase 3 or phase 4.
+			//---------------------------------------------------
+			if (
+				#if defined(SA_QMP_RX_PATCH)
+				// Don't print QMP RX error counter (only one in use)
+				(i > 3) &&
+				#endif //SA_QMP_RX_PATCH
+				((i < V90_ONLY_VARS)
+					|| ((G(dp_KfEnable) == 1)
+						&& (G(dp_cur_phase) == 3) || (G(dp_cur_phase) == 4))) )
+			{
+				if ( !prntCrLf )
+				{
+					prntCrLf = TRUE;;
+					printf(" ");
+					G(InstanceFlag) = FALSE ;
+				}
+				printf(" %s=0x%x;", fsStructTbl[i].str, fsData[i]);
+			}
+		}
+	}
+
+#if defined(SA_QMP_RX_PATCH)
+	//------------------------------------------
+	// Looking for DSP reported RX errors
+	//------------------------------------------
+	if ( G(dp_line_state) == DP_LINE_CONNECTED )
+	{
+		if ( (G(vpcm_mode) == 1)
+				&& (G(qmp_v90cntr) != lst_v90_cntr) )
+		{
+			PM_PRINTING_ON(1);
+			printf("New v90 QMP RX Error Cnt = 0x%x\n", G(qmp_v90cntr));
+			PM_PRINTING_OFF();
+		}
+		else if ( (G(dp_state) == DP_ON_DIAL)
+					&& (G(qmp_v34cntr) != lst_v34_cntr) )
+		{
+			PM_PRINTING_ON(1);
+			printf("New v34 QMP RX Error Cnt = 0x%x\n", G(qmp_v34cntr));
+			PM_PRINTING_OFF();
+		}
+		else if ( (G(dp_56k_state) == DP_56K_DATA_MODE)
+					&& (G(qmp_k56cntr) != lst_k56_cntr) )
+		{
+			// Kflex goes here
+			PM_PRINTING_ON(1);
+			printf("New K56 QMP RX Error Cnt = 0x%x\n", G(qmp_k56cntr));
+			PM_PRINTING_OFF();
+		}
+	}
+#endif // SA_QMP_RX_PATCH
+
+	//-------------------------------
+	// How about startup phase?
+	//-------------------------------
+	if ( lst_phase != G(dp_cur_phase) )
+	{
+		G(dp_lastSent) = 0;
+
+		// if we're in phase 4 then
+		// we may be able to show the DSP version
+		if ( 4 == G(dp_cur_phase) )
+		{
+			word ver = dp_read_dsp_ram(K56V_VERSION_RAM);
+
+			if (ver && !VENUS_BASE_MAP)
+			{
+				printf(" K56_VERSION_RAM=0x%x", ver);
+			}
+		}
+	}
+
+	if ( prntCrLf )
+	{
+		sendCrLf();
+		G(InstanceFlag) = curIflag  ;
+	}
+
+	//--------------------------------------------------
+	// Update last PCM S PTR for ATI11 purposes.
+	// This will show the last S pointer while we still
+	// thought that we could be going to PCM mode.
+	//--------------------------------------------------
+	if ( DP_56K == G(dp_state) )
+	{
+		G(x_status).lastPCMSptr = G(dp_s_ptr);
+	}
+
+	//----------------------------------------
+	// See if we've downloaded the KFlex EROM.
+	// if not, then do it.
+	//----------------------------------------
+	if ( !G(dp_downloadedEROM) )
+	{
+		x_debug_msg("finished downloading k56flex ERAM");
+		dp_download_K56EROM();
+		G(dp_downloadedEROM) = 1;
+		return;
+	}
+
+	//----------------------------------------
+	// Update timer for next time
+	//----------------------------------------
+	G(dp_sp_timer) = x_current_time() ;
+}
+#endif 	// } NEW_QMP_AUX_INTFC
+
+#if defined(SA_QMP_RX_PATCH)
+/****************************************************************
+	Function : dp_dspTestPatch
+	Test "Skip 1st Word" QMP patch
+*****************************************************************/
+void
+dp_dspTestPatch ( word *wPntr )
+{
+	word wAddr, wCntr, wd ;
+
+	wAddr = *wPntr ;
+	wCntr = *(wPntr+1);
+	wPntr += 3 ;
+
+	printf( "Addr=0x%x; Size=0x%x\n", wAddr, wCntr ) ;
+
+	while ( wCntr-- )
+	{
+		wd = dp_read_dsp_ram( wAddr ) ;
+		if ( *wPntr != wd )
+		{
+			PM_PRINTING_ON(1);
+			printf("Clobbered Patch at Location 0x%x\n", wAddr );
+			PM_PRINTING_OFF();
+		}
+		wPntr++; wAddr++;
+	}
+}
+
+void
+dp_dspTestPatches ( void )
+{
+	if ( G(sa_whichPatch) == V34_MODE )
+	{
+		printf("Test of V34 patch\n");
+		dp_dspTestPatch( (word *)V34_PATCH_NAME );
+	}
+	else if ( G(sa_whichPatch) == V90_MODE )
+	{
+		printf("Test of V90 patch\n");
+		dp_dspTestPatch( (word *)V90_PATCH_NAME );
+	}
+	else
+	{
+		printf("No patch active!\n");
+	}
+}
+
+/****************************************************************
+	Function : sa_downLoadV34Patch
+	QMP workaround
+*****************************************************************/
+void
+sa_downLoadV34Patch ( void )
+{
+
+	if ( G(sa_whichPatch) != V34_MODE )
+	{
+		printf("Download V34 Patch:\n");
+		#if defined(NEW_QMP_AUX_INTFC)
+		if ( G(sa_aux_processorON) )
+		{
+			DOWNLOAD_DSP(V34_PATCH_NAME);
+		}
+		else
+		#else
+		{
+			word wAddr, wCntr, *wPntr ;
+
+			wPntr = (word *)V34_PATCH_NAME;
+			wAddr = *((word *)V34_PATCH_NAME) ;
+			wCntr = *((word *)V34_PATCH_NAME+1);
+			wPntr += 3 ;
+
+			//------------------------------------------
+			// Can't use pre AUX proc download command
+			// when falling back from v90.
+			//------------------------------------------
+			printf( "Addr=0x%x; Size=0x%x\n", wAddr, wCntr ) ;
+			while ( wCntr-- )
+			{
+				dp_write_dsp_ram( wAddr, *wPntr ) ;
+				wPntr++; wAddr++;
+			}
+		}
+		#endif
+
+		dp_dspTestPatch( (word *)V34_PATCH_NAME );
+
+		printf( "Set the Vectors to V34 Mode\n" );
+		dp_write_dsp_ram( 0xc66f, 0xd800 ) ;	// rx only
+		dp_write_dsp_ram( 0x1845, 0x0000 ) ;	// Init cntr
+
+		G(sa_whichPatch) = V34_MODE ;
+	}
+}
+
+/****************************************************************
+	Function : sa_downLoadV90Patch
+	QMP workaround for first spin
+*****************************************************************/
+void
+sa_downLoadV90Patch ( void )
+{
+	if ( G(sa_whichPatch) != V90_MODE )
+	{
+		printf( "Download V90 Patch\n" );
+		DOWNLOAD_DSP( V90_PATCH_NAME );
+	
+		dp_dspTestPatch( (word *)V90_PATCH_NAME );
+	
+		printf( "Set the Vectors to V90 Mode\n" );
+		dp_write_dsp_ram( 0xc66f, 0x83ca ) ;	// rx only
+		dp_write_dsp_ram( 0x840f, 0x0000 ) ;	// Init cntr
+
+		G(sa_whichPatch) = V90_MODE ;
+	}
+}
+
+/****************************************************************
+	Function : sa_downLoadK56Patch
+	QMP workaround for first spin
+*****************************************************************/
+void
+sa_downLoadK56Patch ( void )
+{
+	printf( "Pseudo Download K56 Patch\n" );
+	G(sa_whichPatch) = K56_MODE;
+}
+#endif	// SA_QMP_RX_PATCH
+
+/****************************************************************
+Routine : dp_download_dsp
+Description : download dsp code by one of two methods:
+	1) using new AUX dsp download command through QMP
+		- up to 128 bytes at a time, or
+	2) by using dsp download command through mailbox
+		- 6 bytes at a time.
+USES:
+	typedef __packed struct {
+		word    wPhAddr;        // physical address 
+		word    wFileSize;      // section size 
+		word    wChksum;        // file checksum 
+	} DspFileHdr ;
+*****************************************************************/
+void
+dp_download_dsp ( const byte *DspFilePtr, word wSize )
+{
+	word wCntr ;
+	byte i, k  ;
+
+	//dp_regwrite16( 0xe5, 0x00ff ) ;  why was this here????
+
+	if (is_voice_call(ModemNum)) {
+		/* disable the something?? this is a must */
+		dp_regwrite16(0x30, 0x01); 
+	}
+	else {
+		// disable parallel data mode
+		dp_modem_command_long( PDM, 0, 0, 0, 0 ) ;
+		dp_write_dsp_ram( 0x39, 0x0 ) ;		// clear fax options word
+	}
+
+	#if defined(NEW_QMP_AUX_INTFC)
+	if ( G(sa_aux_processorON) )
+	{
+		word wAddr ;
+		word *wPntr = (word *)DspFilePtr ;
+
+		#if defined(QMP_WRITE_TRACE)
+		U32 writeTrace = G(sa_qmpwrite_trace);
+		G(sa_qmpwrite_trace) = FALSE;
+		#endif	// QMP_WRITE_TRACE
+
+		#if defined(QMP_READ_TRACE)
+		U32 readTrace = G(sa_qmpread_trace);
+		G(sa_qmpread_trace) = FALSE;
+		#endif	// QMP_READ_TRACE
+
+		//-------------------------------------------
+		//	Download ALL Segments using AUX Processor
+		//-------------------------------------------
+		while ( wSize )
+		{
+			// wAddr = ((DspFileHdr *)wPntr) -> wPhAddr ;
+			// wCntr = ((DspFileHdr *)wPntr) -> wFileSize ;
+			wAddr = *wPntr ;
+			wCntr = *(wPntr+1);
+			wPntr += 3 ;
+	
+			printf("AUX: Addr=0x%x; Size=%d\n", wAddr, wCntr ) ;
+	
+			//---------------------------------------------
+			// Set wSize to next segment
+			//---------------------------------------------
+			wSize -= (wCntr+3) ;
+	
+			//---------------------------------------------
+			// Send starting address of this Segment to DSP
+			//---------------------------------------------
+			_INT_DISABLE();
+				qmp_write( &wAddr, DSP_BLOCK_WRITE, 1 ) ;
+				qmp_TXwait() ;
+			_INT_ENABLE();
+	
+			//---------------------------------------------
+			// Send SetUp Program DwnLd Cmd to DSP
+			//---------------------------------------------
+			dp_sendAuxCmd( AUX_SETUP_DNLD_CMD );
+	
+			while ( wCntr >= 64 )
+			{
+				//-------------------------
+				// write the data for dwnld
+				//-------------------------
+				_INT_DISABLE();
+					qmp_write( wPntr, DSP_BLOCK_WRITE, 64 ) ;
+					qmp_TXwait() ;
+				_INT_ENABLE();
+	
+				//-------------------------
+				// write the cmd for dwnld
+				//-------------------------
+				dp_sendAuxCmd( AUX_DNLD_CMD | 64 );
+	
+				wPntr += 64 ;
+				wCntr -= 64 ;
+
+				_sched_yield();
+			}
+	
+			if ( wCntr )
+			{
+				//-------------------------
+				// write the data for dwnld
+				//-------------------------
+				_INT_DISABLE();
+					qmp_write( wPntr, DSP_BLOCK_WRITE, wCntr ) ;
+					qmp_TXwait() ;
+				_INT_ENABLE();
+	
+				//-------------------------
+				// write the cmd for dwnld
+				//-------------------------
+				dp_sendAuxCmd( AUX_DNLD_CMD | wCntr );
+	
+				wPntr += wCntr ;
+			}
+		}
+
+		#if defined(QMP_WRITE_TRACE)
+		G(sa_qmpwrite_trace) = writeTrace;
+		#endif	// QMP_WRITE_TRACE
+		#if defined(QMP_READ_TRACE)
+		G(sa_qmpread_trace) = readTrace;
+		#endif	// QMP_READ_TRACE
+	}
+	else
+	#endif 	// NEW_QMP_AUX_INTFC
+	{
+		byte *bPtr = (byte *) DspFilePtr ;
+
+		while ( wSize )
+		{
+			wCntr = ((DspFileHdr *)bPtr)->wFileSize ;
+			wSize -= (wCntr+3) ;
+	
+			printf("MBOX: Addr=0x%x; Size=0x%x\n", *((word *)bPtr), wCntr ) ;
+	
+			// copy address, length and checksum.
+			dp_regwrite ( 0x30, 0x01 ) ; // for external ram download set to 1
+			for ( i = 0; i < 6 ; i++ )
+			{	
+				dp_regwrite( (byte)(i+0x31), *bPtr++ ) ;
+			}
+			// clear core read/write bank bit - CRBNKI
+			DP_CLR_CORE_INTS( CWBANK|CRBANK ) ;
+	
+			dp_regwrite( 0x37, 0x1a ); // initial program download.
+			wait_for_core_read() ;
+	
+			while ( wCntr )
+			{
+				if ( wCntr >= 3 )
+				{
+					k = 6 ;
+					wCntr -= 3 ;
+				}
+				else
+				{
+					k = (byte)(2*wCntr) ;
+					wCntr = 0 ;
+				}
+			
+				// copy 6 bytes of data
+				for ( i = 0; i < k ; i++ )
+				{
+					dp_regwrite( (byte)(0x30+i), *bPtr++ ) ;
+				}
+	
+				// clear core read/write bank bit - CRBNKI
+				DP_CLR_CORE_INTS( CWBANK|CRBANK ) ;
+				if ( wCntr )
+				{
+					dp_regwrite( 0x37, (byte)(0xc0|k) ) ;
+				}
+				else
+				{
+					dp_regwrite ( 0x37, (byte)(0xc8|k) ) ;//end of section
+				}
+				//_sched_yield(); now done in wait_for_core_read()
+				wait_for_core_read () ;
+			}
+		}
+	}
+}
+
+/****************************************************************
+Routine : dp_download_dspk56_long
+Description : download dsp code into external RAM by using QMP.
+*****************************************************************/
+void
+dp_download_dspk56_long ( const word *sourcep, word dstLoc, word count )
+{
+	U32 srcLoc ;
+	word *srcp, cnt, errorCnt = 0;
+	#if 0
+	U32 dstLoc, curInstance;
+	#else
+	U32 curInstance;
+	#endif
+
+	#if defined(QMP_WRITE_TRACE)
+	U32 writeTrace = G(sa_qmpwrite_trace);
+	G(sa_qmpwrite_trace) = FALSE;
+	#endif	// QMP_WRITE_TRACE
+
+	#if defined(QMP_READ_TRACE)
+	U32 readTrace = G(sa_qmpread_trace);
+	G(sa_qmpread_trace) = FALSE;
+	#endif	// QMP_READ_TRACE
+
+	//--------------------------------------------------
+	//		For verification below
+	//--------------------------------------------------
+	srcLoc = dstLoc ;
+
+	srcp = (word *)sourcep;
+	cnt = count ;
+
+	printf( "QMP: Addr=0x%x, size=0x%x\n", dstLoc, cnt ) ;
+
+	curInstance = G(InstanceFlag) ;
+	G(InstanceFlag) = FALSE;
+
+	while ( cnt >= 64 )
+	{
+		_INT_DISABLE() ;
+		qmp_write( srcp, dstLoc, 64 ) ;
+		_INT_ENABLE() ;
+		srcp += 64 ;
+		dstLoc += 64 ;
+		cnt -= 64 ;
+
+		_sched_yield();
+	}
+
+	if ( cnt )
+	{
+		_INT_DISABLE() ;
+		qmp_write( srcp, dstLoc, cnt ) ;
+		_INT_ENABLE() ;
+	}
+
+	_INT_DISABLE() ;
+		qmp_TXwait() ;
+	_INT_ENABLE() ;
+
+	//------------------------------------------------------
+	// Verify load
+	//------------------------------------------------------
+	{
+		word dst[ 64 ];
+		cnt = count ;
+
+		while ( cnt >= 64 )
+		{
+			U32 i ;
+	
+			_INT_DISABLE() ;
+				qmp_fixed_read( srcLoc, dst, 64 ) ;
+			_INT_ENABLE() ;
+	
+			for ( i=0; i<64; i++ )
+			{
+				if ( dst[ i ] != *(sourcep+i) )
+				{
+					printf( "BAD Cmppare; srcp(0x%x); dstp(0x%x)  ",
+								srcp, srcLoc+i );
+					printf( "dst = 0x%x  src = 0x%x \n",
+								dst[ i ], *(sourcep+i) );
+					if (errorCnt++ > 10)
+					{
+						printf( "Exceeded Max errors\n");
+						goto getoutaHere;
+					}
+				}
+			}
+			srcLoc += 64 ;
+			sourcep += 64 ;
+			cnt -= 64 ;
+
+			_sched_yield();
+		}
+	}
+
+	// don't sweat the residue (if any)
+
+getoutaHere:
+	G(InstanceFlag) = curInstance;
+
+	#if defined(QMP_WRITE_TRACE)
+	G(sa_qmpwrite_trace) = writeTrace;
+	#endif	// QMP_WRITE_TRACE
+	#if defined(QMP_READ_TRACE)
+	G(sa_qmpread_trace) = readTrace;
+	#endif	// QMP_READ_TRACE
+}
+
+
+/*
+*****************************************************************************
+* Function : v_download_dsp
+******************************************************************************
+******************************************************************************
+* Description :
+*   download one or more sections of a DSP code to DSP RAM
+*
+******************************************************************************
+* Arguments :
+*  
+*****************************************************************************
+*/
+U32 v_download_dsp(const dsp_image_t images[], U32 num)
+{
+  U32 i;
+  U32 total_bytes = 0;
+#if defined(DUMP_IMAGE)
+  S16 rc[20];
+#endif	// DUMP_IMAGE
+
+  //--------------------------------------------
+  // Initialize the AUX processor, if available
+  //--------------------------------------------
+  sa_dspInitAUX();
+
+  for (i = 0; i < num; i++)
+  {
+	word wAddr, *wPntr = (word *)(images[i].addr);
+	wAddr = *wPntr ;
+
+	if ( wAddr < 0x8000 )
+	{
+		dp_download_dsp( (byte *)(images[i].addr), images[i].size );
+	}
+	else
+	{
+		#if defined(NEW_QMP_AUX_INTFC)
+		if ( (wAddr + images[i].size) >= 0xc000 &&
+					G(sa_aux_processorON) == TRUE )
+		{
+			//--------------------------------------------
+			// Shut off AUX processor for good, we will trash it
+			//--------------------------------------------
+			sa_dspDisableAUX();
+		}
+		#endif // NEW_QMP_AUX_INTFC
+		dp_download_dspk56_long(
+						(const word *)(wPntr+3),
+						wAddr-0x8000,
+						*(wPntr+1) );
+	}
+
+    total_bytes += 2*images[i].size;
+
+#if defined(DUMP_IMAGE)
+    dp_dump_ram(images[i].addr[0], images[i].size - 3);
+    rc[i] = dp_cmp_ram_image(images[i].addr, images[i].size - 3);
+#endif	// DUMP_IMAGE
+  }
+
+#if defined(DUMP_IMAGE)
+  for (i = 0; i < num; i++)
+  {
+    dp_dump_ram(images[i].addr[0], images[i].size - 3);
+    rc[i] = dp_cmp_ram_image(images[i].addr, images[i].size - 3);
+  }
+#endif	// DUMP_IMAGE
+
+  return(total_bytes);
+}
+
+#if defined(DUMP_IMAGE)
+void dp_dump_image(const dsp_image_t images[], U32 num)
+{
+  U32 i;
+  S16 rc[20];
+
+  for (i = 0; i < num; i++)
+  {
+    dp_dump_ram(images[i].addr[0], images[i].size - 3);
+    rc[i] = dp_cmp_ram_image(images[i].addr, images[i].size - 3);
+  }
+  i = num + 1;   // so I can set a break point here. to check rc
+}
+
+S16 dp_cmp_ram_image(const U16 addr[], U32 count)
+{
+  U16 i;
+  S16 error = -1;
+  U16 a, b;
+
+  for (i = 0; i < count; i++)
+  {
+    a = _Image[i];
+    b = addr[i+3];
+    if (a != b)
+    {
+      error = i;
+      break;
+    }
+  }
+  
+  return(error);
+}
+
+void dp_dump_ram(const U16 addr, U16 size)
+{
+  U16 i, data;
+
+  if (size > _MAX_SIZE)
+  {
+    return;
+  }
+  for (i = 0; i < size; i++)
+  {
+    _Image[i] = data = dp_read_dsp_ram(addr+i);
+#if 0
+    printf("0x%04X, ", data);
+    i++;
+    if ((i % 3) == 0)
+    {
+      printf("\n");
+    }
+  printf("\n");
+#endif
+  }  // for
+}
+
+#endif	// DUMP_IMAGE
+
+/*
+*****************************************************************************
+* Function : dpv_init_qmp
+******************************************************************************
+******************************************************************************
+* Description :                                                              *
+*
+*
+******************************************************************************
+* Arguments :                                                                *
+*                NONE                                                        *
+*                                                                            *
+*****************************************************************************
+*/
+void dpv_init_qmp()
+{
+	_int_disable();
+  // Host Control/Status
+  XBUS_WRITE(QMPHCS, 0x03);
+  // Host Interrupt
+  XBUS_WRITE(QMPHI, 0x00);
+  // Host Access Control/Status
+  XBUS_WRITE(QMPACS, 0x64);  // clear TxFIFO, RxFIFO, and waitstate=0
+	_int_enable();
+}
+
+#if defined(SA_QMP_POLLED_MODE)
+static void sa_dsp_poll(_timer_id, void *, uint_32, uint_32 );
+_timer_id poll_timer_id;
+#endif // defined(SA_QMP_POLLED_MODE)
+static void sa_dsp_isr(void);
+static void sa_xcs0_isr (void * data_ptr);
+#if defined(CHECK_STUCK_DSP)
+static U32 loop[MAX_DP];
+#endif
+static U8 first_modem = 0;
+
+#if defined(QMP_RX_ERR_BYREF)
+
+void
+dp_isr_init()
+{
+	// Install XBUS interrupt service routine
+	sa_int_install_xcs0_isr(sa_xcs0_isr);
+
+	#if defined(SA_QMP_POLLED_MODE)
+	//---------------------------------------
+	// Set up QMP periodic call-out function
+	//---------------------------------------
+	_timer_create_component(SA_TIMER_TASK_PRI, 2*1024L);	// priority, stack for timer task
+	poll_timer_id = _timer_start_periodic_every(sa_dsp_poll, 0, TIMER_ELAPSED_TIME_MODE, 5);
+	#else
+	//---------------------------------------
+	// Enable XBUS interrupt
+	//---------------------------------------
+	_dec21285_xcs0_init_int ();
+	#endif // defined(SA_QMP_POLLED_MODE)
+}
+
+/****************************************************************
+	Function : sa_qmpReadError
+	QMP Read channel error processing
+*****************************************************************/
+void
+sa_qmpReadError ( byte regB0 )
+{
+	word *last_ptr ;
+
+	last_ptr = G(io_dce_rx_wptr) ;
+	*last_ptr = HDLC_END_OF_FRAME | HDLC_CRC_ERROR;
+	if ( ++G(io_dce_rx_wptr) >= G(io_dce_rx_eptr) )
+		G(io_dce_rx_wptr) = G(io_dce_rx_sptr) ;
+
+	if ( G(io_dce_rx_wptr) == G(io_dce_rx_rptr) )
+	{
+		//-------------------------------------------------
+		// The DCE RX Ring Buffer has just wrapped!
+		// Undo the damage.
+		//-------------------------------------------------
+		G(io_dce_rx_wptr) = last_ptr;
+
+		printf("\n\tsa_qmpReadError: DCE RX read overflow!!\n");
+	}
+
+	//----------------------------------------------
+	// to be used in upstream (v34) rate adjustment
+	//----------------------------------------------
+	G(dp_bad_crc_count) ++ ;
+	G(lapm_poll) = TRUE;	// force an ack
+
+	if ( (G(lapm_state) == LAPM_RX_SABME_CMD)
+			|| (G(lapm_state) == LAPM_RX_XID_CMD) )
+	{
+		G(lapm_counter) += 2;
+	}
+
+	#if defined(SA_LAPM_DEBUG)
+	if ( G(sa_lapm_debug) != SA_LAPM_DEBUG_OFF )
+	{
+		//-----------------------------
+		// crc error (or) abort
+		//-----------------------------
+		if ( regB0 & 0x40 ) // crc error
+		{
+			G(RXframeFlags)[ 2 ] ++ ;	// CRC rwf
+			PM_PRINTING_ON(0);
+				sendDumbChar('X');
+			PM_PRINTING_OFF();
+		}
+		else // abort
+		{
+			G(RXframeFlags)[ 3 ] ++ ;	// ABRT rwf
+			PM_PRINTING_ON(0);
+				sendDumbChar('Y');
+			PM_PRINTING_OFF();
+		}
+	}
+#endif // SA_LAPM_DEBUG
+}
+#endif	// QMP_RX_ERR_BYREF
+
+#if defined(SA_QMP_POLLED_MODE)
+/****************************************************************
+	Function : sa_dsp_poll
+*****************************************************************/
+void
+sa_dsp_poll(_timer_id id, void * data_ptr, uint_32 seconds, uint_32 milliseconds)
+{
+	sa_dsp_isr();
+}
+#endif // defined(SA_QMP_POLLED_MODE)
+
+/****************************************************************
+	Function : sa_dsp_isr
+*****************************************************************/
+_Inline static void
+sa_dsp_isr()
+{
+	byte byteBuff[ 128 ] ;
+	word statusArray[ MAX_DP ];
+	U8 dsp ;
+	byte cnt = 0;
+	byte tbRegB0;
+	int i;
+	uint_32 dsp_comp_irq;
+	#if defined(SA_ISR_LOGGING)
+	uint_32 core_count = 0;
+	#endif	// SA_ISR_LOGGING
+
+	//SNAP_TIMERA( FALSE ) ; CALC_TIMERA();
+	//START_TIMERA() ;
+
+#if defined(SA_QMP_POLLED_MODE)
+	_int_disable();
+	uint_32 oldModem = ModemNum;
+#endif
+
+	while (1) {
+		// Form 32-channel composite interrupt request
+		dsp_comp_irq = (uint_32)(RD_COMPOSITE_INT1())<<16 |
+					   (uint_32)(RD_COMPOSITE_INT0());
+
+		if (dsp_comp_irq == 0) {
+			// nothing left to do
+			break;
+		}
+
+		//---------------------------------------------------
+		//	Get all interrupting modems & start any QMP reads
+		//---------------------------------------------------
+		for (   i = 0, dsp = first_modem;
+			i < MAX_DP;
+			i++, dsp = (dsp >= MAX_DP - 1) ? 0 : dsp + 1 ) {
+			// Check individual IRQ's for each core
+			// No need to switch context unless it is needed
+			if ((dsp_comp_irq & (1 << dsp)) == 0) {
+				// No IRQ from this one
+				statusArray[ dsp ] = 0;
+				continue;
+			}
+		#if defined(SA_ISR_LOGGING)
+			core_count++;
+		#endif	// SA_ISR_LOGGING
+
+			// Establish context
+			SA_SWITCHMODEM( dsp ) ;
+			VGLOB *vglob_ptr = &vglob_array[dsp];
+
+			// Find out what the core wants us to do....
+			if ( is_data_call( dsp ) ) {
+				statusArray[dsp] = DP_INT_REGREAD16(ISR_REG) ;
+			}
+			else if ( is_voice_call( dsp ) && V(dsp_ready) ) {
+				// check for work during voice call
+				statusArray[dsp] = DP_INT_REGREAD16(ISR_REG) ;
+
+			#if defined(CHECK_STUCK_DSP)
+				if (statusArray[dsp] & (BIT8 | BIT12 | BIT15)) {
+
+					// reset debug timers
+					if (statusArray[dsp] & BIT8) {
+						V(dsp_tx_alarm) = x_current_time();
+					}
+					if (statusArray[dsp] & BIT12) {
+						V(dsp_rx_alarm) = x_current_time();
+
+						// Display media stats after n reads
+						if (++loop[dsp] >= 1000) {
+							loop[dsp] = 0;
+							dsp_display_media_stats(statusArray[dsp]);
+						}
+					}
+				}
+				else {
+					// No intr, why are we here??
+					printf("sa_dsp_isr: IRQ but no BIT8/BIT12/BIT15 in e6!!!, dsp_comp_irq=0x%08x, statusArray=0x%04x, E6=0x%04x\n",
+						   dsp_comp_irq,
+						   statusArray[dsp],
+						   DP_INT_REGREAD16(ISR_REG) );
+				}
+			#endif // defined(CHECK_STUCK_DSP)
+
+				if ( statusArray[dsp] & BIT15 ) {
+					// DTMF detected
+					uint_8 trig = DP_INT_REGREAD( 0xb3 ) ;
+
+					// Read new value
+					uint_8 val = DP_INT_REGREAD2( 0x9f ) ;
+
+					// Read trigger byte again to complete handshake
+					trig = DP_INT_REGREAD( 0xb3 ) ;
+
+					// Convert value to digit
+					if (val) {
+						v_send_dtmf_event(val);
+					}
+
+					statusArray[dsp] &= ~BIT15;
+				}
+			}
+			else {
+				statusArray[ dsp ] = 0;
+				continue;
+			}
+
+			//--------------------------------
+			//	For both Voice and Data
+			//--------------------------------
+			if ( statusArray[ dsp ] & BIT12 ) {
+				//------------------------------------
+				// Start a QMP read on this channel
+				// (fills up the QMP read FIFO)
+				//------------------------------------
+			#if defined(QMP_RX_ERR_BYREF)
+				if ( is_data_call( dsp ) ) {
+					//------------------------------------------
+					// For Data call only, Check the status
+					// before starting the QMP read -
+					// Don't waste the bandwidth on errors
+					//------------------------------------------
+					G(tbRegB0) = DP_INT_REGREAD( 0xb0 ) ;
+					if ( (G(tbRegB0) & 0x41) && LAPM_MODE ) {
+						sa_qmpReadError( G(tbRegB0) );
+
+						(void)DP_INT_REGREAD( 0xb0 ) ;
+						statusArray[ dsp ] &= (word)(~BIT12);
+					}
+					else {
+						//------------------------------------------
+						// Good QMP Frame - start a QMP read on
+						// this channel (fills up the QMP read FIFO)
+						//------------------------------------------
+						qmp_start_read();
+					}
+				}
+				else
+			#endif	// (QMP_RX_ERR_BYREF)
+
+			#if defined(G729_VIA_CAMIL)
+				if ( V(config).pnetCodec != G729 )
+			#endif	// G729_VIA_CAMIL
+				{
+					qmp_start_read();
+				}
+			}
+			else if ( statusArray[ dsp ] & BIT8 ) {
+				sa_qmp_write_handler(vglob_ptr);
+				statusArray[ dsp ] = 0 ;
+			}  // BIT8
+		}
+
+		//---------------------------------------------------
+		//	Finish the reads and any remaining writes.
+		//---------------------------------------------------
+		for (   i = 0, dsp = first_modem;
+			i < MAX_DP;
+			i++, dsp = (dsp >= MAX_DP - 1) ? 0 : dsp + 1 ) {
+			// No need to switch context unless it is needed
+			if (statusArray[dsp] == 0) {
+				continue;
+			}
+
+			// Establish context
+			SA_SWITCHMODEM( dsp ) ;
+			VGLOB *vglob_ptr = &vglob_array[dsp];
+
+			// Rx: data
+			if ( statusArray[ dsp ] & BIT12 ) {
+				if ( is_data_call( dsp ) ) {
+					//----------------------------------------
+					// finish the QMP block read started above
+					//----------------------------------------
+					cnt = qmp_finish_read( (word *)byteBuff ) ;
+
+					//-------------------------------------------
+					// 2nd dummy read to signal DSP we're done.
+					//-------------------------------------------
+					(void)DP_INT_REGREAD( 0xb0 ) ;
+
+					sa_modemData_rx( cnt, G(tbRegB0), byteBuff );
+					if ( /*(cnt > 3) &&*/ (G(tbRegB0) & RX_END_OF_FRAME) )
+					{ // don't ignore control msgs
+						if ( _msgq_get_count(G(modem_queue)) == 0 ) {
+							SARM_MSG msg;
+							msg.mh = MSG_HEADER(MODEM_DATA_MSG, 2, dsp, 0 );
+							msg.ms0 = 0;
+							sa_modem_send_msg( &msg );
+						}
+						else {
+							// Don't bother, task will wake up anyway
+						}
+					}
+				}
+				// Rx: voice uses TB 0xB0, BIT12
+				else if ( is_voice_call( dsp ) ) {
+					tbRegB0 = DP_INT_REGREAD(0xB0) ;
+
+					// get media from QMP
+				#if defined(G729_VIA_CAMIL)
+					if ( V(config).pnetCodec == G729 ) {
+						cnt = dual_port_read( byteBuff );
+					}
+					else
+				#endif	// G729_VIA_CAMIL
+					{
+						cnt = qmp_finish_read((word *)byteBuff);
+					}
+
+					//-------------------------------------------
+					// 2nd dummy read to signal DSP we're done.
+					//-------------------------------------------
+					tbRegB0 = DP_INT_REGREAD(0xB0) ;
+
+					if (cnt > 0) {
+						dsp_media_read( vglob_ptr, byteBuff, cnt );
+					}
+				}  // if (voice call)
+			}  // BIT12 (Rx)
+
+			// Tx: both voice and data b'cause same TB reg
+			if ( statusArray[ dsp ] & BIT8 ) {
+				sa_qmp_write_handler(vglob_ptr);
+			}  // if (statusArray, BIT8
+		}  // for 
+
+		// Ensure everyone gets equal treatment
+		if (++first_modem >= MAX_DP) {
+			first_modem = 0;
+		}
+	}
+#if SA_QMP_POLLED_MODE
+	SA_SWITCHMODEM(oldModem);
+	_int_enable();
+#endif	// SA_QMP_POLLED_MODE
+
+#if defined(SA_ISR_LOGGING)
+	_log_write(0, 4, KLOG_INTERRUPT, core_count, 2, 3);
+#endif	// SA_ISR_LOGGING
+
+	//SNAP_TIMERA( FALSE ) ; CALC_TIMERA();
+	//START_TIMERA() ;
+}
+
+/****************************************************************
+	Function : sa_xcs0_isr
+*****************************************************************/
+void
+sa_xcs0_isr (void *data_ptr)
+{
+	uint_32 oldModem = ModemNum;
+
+#if defined(ROME) || defined(CLAUDIA)
+	if ( X_READ8(0x3c0) & 0x08 ) {
+		sa_framer_isr();
+	}
+	else
+#endif	// ROME || CLAUDIA
+	{
+		// CS-4
+		sa_dsp_isr();
+	}
+
+	SA_SWITCHMODEM(oldModem);
+}
+#endif	// (CS_4)

@@ -1,0 +1,399 @@
+/*name and version number:@(#)v_stats.c	1.5*/
+/*date of get: 		  09/06/00 16:59:36*/
+/*date of delta:	  03/15/00 22:05:20*/
+/*****************************************************************************
+** File        : stats.c                                                     *
+** Version     : 3.0                                                         *
+**---------------------------------------------------------------------------*
+** Description :                                                             *
+**   Contains statistics gathering code for the generation or tracing of     *
+** quality of service (QoS) data.                                            *
+**                                                                           *
+**     Function Name    | Access  | Summary                                  *
+**  --------------------+---------+----------------------------------------- *
+**  init_driver_stats   | GLOBAL  | Resets All the global stats in the system*
+**  update_driver_stats | GLOBAL  | Updates the systems main statistics      *
+**  WARNING             | GLOBAL  | Allows modules to issue system WARNINGS  *
+**  init_pkt_loss_stats | GLOBAL  | Initialises the packet loss calculation  *
+**  update_pkt_loss_st..| GLOBAL  | Updates the system packet loss stats     *
+**                                                                           *
+**---------------------------------------------------------------------------*
+**                               HISTORY                                     *
+** Date            Ver   Dev     Comments                                    *
+** 17th Oct  1998  1.0   ELS/RGT Initial Revision                            *
+**                                                                           *
+** 31st Oct  1998  1.1   RGT     New stats element in dspTxBuf. Removed old  *
+**                               cs_msi_buf & replaced with dspInfoBuf. Also *
+**                               replaced <header.h> with <v_hcmd.h>       *
+**                                                                           *
+**[Release 2]----------------------------------------------------------------*
+** Date            Ver   Dev  Comments                                       *
+** 19th Jan  1999  2.0   RGT  Removed all prior stats and replaced with one  *
+**                            set of 'driver' stats that monitor the whole   *
+**                            system.                                        *
+**                                                                           *
+** 20th Apr  1999  2.1   RGT  Re-write: new stats included into engine such  *
+**                            as packet loss, jitter, warnings etc.          *
+**                                                                           *
+**[Release 3]----------------------------------------------------------------*
+** Date            Ver   Dev  Comments                                       *
+** 31   Aug  1999  3.0   JA    CS4 multi-instance integration on SA          *
+******************************************************************************/
+
+#include <memory.h>	
+#include "v_glob.h"	
+
+/*****************************************************************************
+      ##### #   #  #   #   ####  #####  ###   ###   #    #  ####
+      #     #   #  ##  #  #        #     #   #   #  ##   # #
+      ####  #   #  # # #  #        #     #   #   #  # #  #  ####
+      #     #   #  #  ##  #        #     #   #   #  #  # #      #
+      #      ####  #   #   ####    #    ###   ###   #    #  ####
+******************************************************************************/
+
+/******************************************************************************
+** Function : init_driver_stats                                               *
+*******************************************************************************
+** Modification History :                                                     *
+**                                                                            *
+**[Release 2]-----------------------------------------------------------------*
+** Date            Ver   Dev  Comments                                        *
+** 19th Jan  1999  2.0   RGT  Initial Revision                                *
+**                                                                            *
+** 20th Apr  1999  2.1   RGT  Re-write: new engine                            *
+**                                                                            *
+*******************************************************************************
+** Description :                                                              *
+**   This function initialises the system stats and also samples cpu for 125  *
+** msecs to imply total processor performance when system is 'idle'.          *
+**                                                                            *
+*******************************************************************************
+** Arguments :                                                                *
+**                NONE                                                        *
+**                                                                            *
+*******************************************************************************/
+non_banked void init_driver_stats(VGLOB *vglob_ptr)
+{
+	V(disp).perf.minCycles = MAX_WORD;
+
+    memset(&V(stats), 0, sizeof(stats_t));
+	V(stats).tx.pktQueueSize = CFG_MIMC_TX_LUT_SZ;
+	V(stats).rx.pktQueueSize = CFG_MIMC_RX_LUT_SZ;
+	V(stats).rx.frameQueueSize  = CFG_CAML_RX_LUT_SZ;
+	V(stats).rx.old_queuedFrames = 0xffffffff;
+	V(stats).tx.old_outputFrames = 0xffffffff;
+}
+
+
+/******************************************************************************
+** Function : update_driver_stats                                             *
+*******************************************************************************
+** Modification History :                                                     *
+**                                                                            *
+**[Release 2]-----------------------------------------------------------------*
+** Date            Ver   Dev  Comments                                        *
+** 19th Jan  1999  2.0   RGT  Initial Revision                                *
+**                                                                            *
+** 20th Apr  1999  2.1   RGT  Re-write: new engine                            *
+**                                                                            *
+*******************************************************************************
+** Description :                                                              *
+**  Updates the system driver stats. Called every second, it indicates total  *
+** media throughput in each subsystem (NET driver, exchanger, DSP driver etc).*
+** Other info is displayed to indicate cpu load and interrupt frequency etc.  *
+**                                                                            *
+*******************************************************************************
+** Arguments :                                                                *
+**                NONE                                                        *
+**                                                                            *
+*******************************************************************************/
+non_banked void update_driver_stats(VGLOB *vglob_ptr)
+{
+	disp_t *disp = &V(disp);
+	stats_t *stats = &V(stats);
+
+	disp->perf.cycles	= V(cycles);
+
+	if (disp->perf.minCycles > V(cycles))
+		disp->perf.minCycles = V(cycles);
+
+	if (disp->perf.maxCycles < V(cycles))
+		disp->perf.maxCycles = V(cycles);
+	
+	if (disp->perf.rxPkts + stats->rx.outputPkts < disp->perf.rxPkts)
+		disp->perf.rxPkts_3 ++;
+	disp->perf.rxPkts += stats->rx.outputPkts;
+
+	if (disp->perf.txPkts + stats->tx.queuedPkts < disp->perf.txPkts)
+		disp->perf.txPkts_3 ++;
+	disp->perf.txPkts += stats->tx.queuedPkts;
+
+	disp->perf.badPkts += stats->tx.badPkts;
+
+
+	V(cycles) = 0;
+
+#if defined(MODEM_Z80)	// non-portable
+	byte *ptr = (byte *)&stats->tx;
+	byte *dest = (byte *)&disp->tx;
+	byte L1;
+	for (L1 = 0; L1 < 32; L1 ++) {
+		*(dest+L1) = *(ptr+L1);
+		switch (L1) {
+		case 0:
+case 7:			// DEBUG 
+		case 13:
+		case 14:
+		case 15:
+		case 19:
+		case 20:
+		case 26:
+		case 27:
+		case 28:
+			break;
+		default:
+			*(ptr+L1) = 0x00;
+		}
+	}
+#endif
+
+	disp->tx.buildout = stats->tx.buildout;
+	disp->rx.jitter = V(exchangerSM).tx.jitter;
+
+}
+
+/******************************************************************************
+** Function : WARNING                                                         *
+*******************************************************************************
+** Modification History :                                                     *
+**                                                                            *
+**[Release 2]-----------------------------------------------------------------*
+** Date            Ver   Dev  Comments                                        *
+** 20th Apr  1999  2.0   RGT  Initial Revision                                *
+**                                                                            *
+*******************************************************************************
+** Description :                                                              *
+**   This function provides a means for any module in the system to issue a   *
+** warning e.g., that something is wrong or that an unusual event has occured *
+**                                                                            *
+*******************************************************************************
+** Arguments :                                                                *
+**   ______________________________________________________________________   *
+**  | Type     |  arg name  | Description                                  |  *
+**  |----------+------------+----------------------------------------------|  *
+**  | byte     | Warn ID    | The ID of the WARNING being issued           |  *
+**   ----------------------------------------------------------------------   *
+**                                                                            *
+*******************************************************************************/
+non_banked void WARNING(VGLOB *vglob_ptr, byte ID)
+{
+	// V(disp).warnings.queue[V(disp).warnings.numWarns % WARNING_QUEUE_SIZE] = ID;
+	printf("WARNING: modem %d, id 0x%x\n", V(modem_num), ID);
+	V(disp).warnings.numWarns++;
+}
+
+
+/******************************************************************************
+** Function : init_pkt_loss_stats                                             *
+*******************************************************************************
+** Modification History :                                                     *
+**                                                                            *
+**[Release 2]-----------------------------------------------------------------*
+** Date            Ver   Dev  Comments                                        *
+** 20th Apr  1999  2.0   RGT  Initial Revision                                *
+**                                                                            *
+*******************************************************************************
+** Description :                                                              *
+**                                                                            *
+*******************************************************************************
+** Arguments :                                                                *
+**   ______________________________________________________________________   *
+**  | Type     |  arg name  | Description                                  |  *
+**  |----------+------------+----------------------------------------------|  *
+**  | word     | seqNum     | The Reference Sequence Number for the calcs  |  *
+**   ----------------------------------------------------------------------   *
+**                                                                            *
+*******************************************************************************/
+non_banked void init_pkt_loss_stats(VGLOB *vglob_ptr, word seqNum)
+{
+	V(pktLoss).hiSeq = seqNum;
+}
+
+
+/******************************************************************************
+** Function : update_pkt_loss_stats                                                         *
+*******************************************************************************
+** Modification History :                                                     *
+**                                                                            *
+**[Release 2]-----------------------------------------------------------------*
+** Date            Ver   Dev  Comments                                        *
+** 20th Apr  1999  2.0   RGT  Initial Revision                                *
+**                                                                            *
+*******************************************************************************
+** Description :                                                              *
+**                                                                            *
+*******************************************************************************
+** Arguments :                                                                *
+**   ______________________________________________________________________   *
+**  | Type     |  arg name  | Description                                  |  *
+**  |----------+------------+----------------------------------------------|  *
+**  | word     | seqNum     | The Received sequence number of the packet   |  *
+**   ----------------------------------------------------------------------   *
+**                                                                            *
+*******************************************************************************/
+non_banked void update_pkt_loss_stats(VGLOB *vglob_ptr, word seqNum)
+{
+	byte	forward = 0;
+	word	diff;
+
+
+	/******************************************************************
+	** Okay, firstly determine if we've jumped over a set of sequence *
+	** numbers or if we've effectively gone back in time!             *
+	*******************************************************************/
+	if (seqNum >= V(pktLoss).hiSeq || V(pktLoss).hiSeq - seqNum > 1500) 
+		forward = 1;
+
+	switch (forward) {
+	case 1:
+		if ((diff = seqNum - V(pktLoss).hiSeq) > 1500)
+			diff = V(pktLoss).hiSeq - seqNum;
+
+		V(pktLoss).totalPkts += diff;	
+
+		diff--;
+		V(pktLoss).crntLoss   += diff;
+		V(disp).perf.lostPkts += diff;
+		V(pktLoss).hiSeq       = seqNum;
+
+		break;
+
+	default:
+		if (V(disp).perf.lostPkts > 0)
+			V(disp).perf.lostPkts --;
+		if (V(pktLoss).crntLoss > 0)
+			V(pktLoss).crntLoss --;
+		break;
+	}
+
+	if (V(pktLoss).totalPkts >= 200) {
+		if (V(pktLoss).crntLoss > V(stats).tx.lostPkts) 
+			V(stats).tx.lostPkts = V(pktLoss).crntLoss;
+		else
+			V(stats).tx.lostPkts = V(pktLoss).crntLoss + 
+			              ((3*(V(stats).tx.lostPkts-V(pktLoss).crntLoss)) >> 2);
+
+		V(pktLoss).crntLoss  = 0;
+		V(pktLoss).totalPkts = 0;
+	}
+}
+
+
+/*********************[ FUNCTION VERSION VERSION TRACKING ]********************
+
+ _____________________________________________________________________________
+|                            |               V(stats).obj  Version               |
+|   Function Name            |  2.0 |  2.1 |  2.2 |  2.3 |  2.4 |  2.5 |  2.6 | 
+|----------------------------+------+------+------+------+------+------+------|
+| init_driver_stats          |  2.0 |  2.1 |      |      |      |      |      |
+|----------------------------+------+------+------+------+------+------+------|
+| update_driver_stats        |  2.0 |  2.1 |      |      |      |      |      |
+|----------------------------+------+------+------+------+------+------+------|
+| WARNING                    |>>>>>>|  2.0 |      |      |      |      |      |
+|----------------------------+------+------+------+------+------+------+------|
+| init_pkt_loss_stats        |>>>>>>|  2.0 |      |      |      |      |      |
+|----------------------------+------+------+------+------+------+------+------|
+| update_pkt_loss_stats      |>>>>>>|  2.0 |      |      |      |      |      |
+ -----------------------------------------------------------------------------
+
+**********************[ FUNCTION VERSION VERSION TRACKING ]********************/
+
+void
+print_stats(VGLOB *vglob_ptr)
+{
+	disp_t *disp = &V(disp);
+	//printf("\nVOIP STATS for modem %d:\n", V(modem_num));
+	printf("VOIP STATS SUMMARY:\n");
+	// printf("\tcycles=%d, minCycles=%d, maxCycles=%d\n", disp->perf.cycles, disp->perf.minCycles, disp->perf.maxCycles);
+	printf("[%02d] rxPkts_3\t%d, rxPkts\t%d\n", ModemNum, disp->perf.rxPkts_3, disp->perf.rxPkts);
+	printf("[%02d] txPkts_3\t%d, txPkts\t%d\n", ModemNum, disp->perf.txPkts_3, disp->perf.txPkts);
+	printf("[%02d] tx badPkts\t%d, tx buildout\t%d, tx jitter\t%d\n", ModemNum, disp->perf.badPkts, disp->tx.buildout, disp->rx.jitter);
+	printf("[%02d] num WARNINGS\t%d\n", ModemNum, disp->warnings.numWarns);
+
+	printf("\nVOIP STATS TRANSMIT:\n");
+	printf("[%02d] outframe\t%d\n", ModemNum, V(stats).tx.outputFrames);
+	printf("[%02d] dropframe\t%d\n", ModemNum, V(stats).tx.droppedFrames);
+	printf("[%02d] oldframe\t%d\n", ModemNum, V(stats).tx.oldFrames);
+	printf("[%02d] dupframe\t%d\n", ModemNum, V(stats).tx.duplicateFrames);
+	printf("[%02d] queueframe\t%d\n", ModemNum, V(stats).tx.queuedFrames);
+	printf("[%02d] erasedFrames\t%d\n", ModemNum, V(stats).tx.erasedFrames);
+	printf("[%02d] lostPkts\t%d\n", ModemNum, V(stats).tx.lostPkts);
+	printf("[%02d] badPkts\t%d\n", ModemNum, V(stats).tx.badPkts);
+	printf("[%02d] droppedPkts\t%d\n", ModemNum, V(stats).tx.droppedPkts);
+	printf("[%02d] queuedPkts\t%d\n", ModemNum, V(stats).tx.queuedPkts);
+	printf("[%02d] rcvdFrames\t%d\n", ModemNum, V(stats).tx.rcvdFrames);
+	printf("[%02d] mediaBytes\t%d\n", ModemNum, V(stats).tx.mediaBytes);
+	printf("[%02d] bufferedPkts\t%d\n", ModemNum, V(stats).tx.bufferedPkts);
+	printf("[%02d] pktQueueSize\t%d\n", ModemNum, V(stats).tx.pktQueueSize);
+
+	printf("\nVOIP STATS RECEIVE:\n");
+	printf("[%02d] droppedFrames\t%d\n", ModemNum, V(stats).rx.droppedFrames);
+	printf("[%02d] rejectedFrames\t%d\n", ModemNum, V(stats).rx.rejectedFrames);
+	printf("[%02d] queuedFrames\t%d\n", ModemNum, V(stats).rx.queuedFrames);
+	printf("[%02d] bufferedFrames\t%d\n", ModemNum, V(stats).rx.bufferedFrames);
+	printf("[%02d] frameQueueSize\t%d\n", ModemNum, V(stats).rx.frameQueueSize);
+	printf("[%02d] mediaBytes\t%d\n", ModemNum, V(stats).rx.mediaBytes);
+	printf("[%02d] droppedPkts\t%d\n", ModemNum, V(stats).rx.droppedPkts);
+	printf("[%02d] silencePkts\t%d\n", ModemNum, V(stats).rx.silencePkts);
+	printf("[%02d] queuedPkts\t%d\n", ModemNum, V(stats).rx.queuedPkts);
+	printf("[%02d] pktQueueSize\t%d\n", ModemNum, V(stats).rx.pktQueueSize);
+	printf("[%02d] bufferedPkts\t%d\n", ModemNum, V(stats).rx.bufferedPkts);
+	printf("[%02d] maxBufferedPkts\t%d\n", ModemNum, V(stats).rx.maxBufferedPkts);
+	printf("[%02d] outputPkts\t%d\n", ModemNum, V(stats).rx.outputPkts);
+}
+
+void dsp_display_media_stats(U16 int_mask)
+{
+	VGLOB *vglob_ptr = &(vglob_array[ModemNum]);
+	if (V(dsp_media_stats_printing)) {
+		U8 peer = v_get_peer(ModemNum);
+
+		transmit_t *my_tx = &vglob_array[ModemNum].stats.tx;
+		receive_t *my_rx = &vglob_array[ModemNum].stats.rx;
+		transmit_t *peer_tx = &vglob_array[peer].stats.tx;
+		receive_t *peer_rx = &vglob_array[peer].stats.rx;
+
+		printf("media_stats: int_mask=0x%04x, dur=%d\n", 
+				  int_mask, 
+				  MACRO_ELAPSED_TIME(V(media_timer)));
+
+		V(media_timer) = MACRO_GET_TIME();
+
+		printf(" *My Tx frame stats: rcv %d, erase %d, drop %d, old %d, dup %d\n",
+				my_tx->rcvdFrames, my_tx->erasedFrames, 
+				my_tx->droppedFrames, my_tx->oldFrames, my_tx->duplicateFrames);
+		printf(" *My Rx frame stats: queued %d, drop %d, reject %d\n",
+				my_rx->queuedFrames, my_rx->droppedFrames, 
+				my_rx->rejectedFrames); 
+		printf(" *Peer Tx frame stats: rcv %d, erase %d, drop %d, old %d, dup %d\n",
+				peer_tx->rcvdFrames, peer_tx->erasedFrames, 
+				peer_tx->droppedFrames,my_tx->oldFrames, peer_tx->duplicateFrames);
+		printf(" *Peer Rx frame stats: queued %d, drop %d, reject %d\n\n",
+				peer_rx->queuedFrames, peer_rx->droppedFrames, 
+				peer_rx->rejectedFrames); 
+	}
+}
+
+void
+dsp_media_stats_enable(VGLOB *vglob_ptr)
+{
+	V(dsp_media_stats_printing) = True;
+	printf("DSP media stats printing enabled on modem %d\n", V(modem_num));
+}
+
+void
+dsp_media_stats_disable(VGLOB *vglob_ptr)
+{
+	V(dsp_media_stats_printing) = False;
+	printf("DSP media stats printing disabled on modem %d\n", V(modem_num));
+}

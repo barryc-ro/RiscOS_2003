@@ -1,0 +1,1073 @@
+/*name and version number:@(#)dpisrv.c	1.72*/
+/*date of get: 		  01/12/01 11:49:15*/
+/*date of delta:	  01/11/01 13:14:05*/
+/****************************************************************
+File :  dpisrv.c
+Description :
+	Contains all isr functions related to the
+	venus data pump interface.  For VENUS,
+	this replaces dpisr.c.
+
+Procedures Contained :
+	dp_start_transmit
+	dp_sync_idle_char
+	dp_dsp_isr
+	z80_checksum
+
+Revision History :
+    Initials    Date        Change
+*****************************************************************/
+#define Z80_DEBUG_THIS_FILE
+
+#include "llglob_d.h"
+#include "ioglob_d.h"
+#include "dpglob.h"
+#include "z80glob.h"
+#include "z80flash.h"
+#include "z80usb.h"
+#include "lapm.h"
+
+#ifdef CS_DEBUG
+ #include "dpisrv.h"
+#endif
+
+#ifdef IPGATEWAY
+	#include "ipgw.h"
+#endif
+#include "allglobs.h"
+
+extern void cell_isr(void);
+extern byte pita_regread(byte reg);
+extern void pita_regwrite(byte reg, byte value);
+
+/*****************************************************************************
+    Global Variables
+*****************************************************************************/
+extern byte dp_bamil_rd7 ;
+extern byte dp_ring_int_count ;
+
+#if !defined(MODEM_Z80)
+//=================================================================
+//=================================================================
+//
+// The following two fcns have been moved to assembly code for
+// Venus.  The original C language versions are left here for
+// posterity.  Note: unlike the C version, the assembly language
+// routines mask and unmask interrupts only as needed.  The status
+// of the interrupt state can not (easily??) be determined from C,
+// and a call to an assembly language routine to verify int state
+// would just add latency.
+//
+//=================================================================
+//=================================================================
+
+/****************************************************************
+Routine : dp_regread
+	read a CAMILZ register - it's ok if interrupts are
+		enabled or disabled.  Can't be called from
+		the dp interrupt handler.
+
+	For bamil register read,
+		if register <= 0x7f
+		or register >= 0xa0 && <= 0xcf
+			Index Address = BaseAddress + 0
+			Data  Address = BaseAddress + 1
+
+		if register >= 0x80 && <= 0x9f
+		or register >= 0xd0
+			Index Address = BaseAddress + 2
+			Data  Address = BaseAddress + 1
+*****************************************************************/
+non_banked
+byte dp_regread ( byte reg )
+{
+	byte value;
+
+	if ( ( reg <= 0x7f ) || ( ( reg >= 0xa0 ) && ( reg <= 0xcf ) ) )
+	{
+		_INT_DISABLE();
+			output8( BaseAddress, reg ) ;
+			value = input8( BaseAddressData ) ;
+		_INT_ENABLE();
+	}
+	else 
+	{
+		_INT_DISABLE();
+			output8( BaseAddress2, reg ) ;
+			value = input8( BaseAddressData ) ;
+		_INT_ENABLE();
+	}
+	return value;
+}
+
+/****************************************************************
+Routine : dp_regwrite
+	Write a CAMILZ register - it's ok if interrupts are
+		enabled or disabled.  Can't be called from the dp
+		interrupt handler.
+*****************************************************************/
+non_banked
+void dp_regwrite ( byte reg, byte value )
+{
+	_INT_DISABLE();
+		output8( BaseAddress, reg ) ;
+		output8( BaseAddressData, value ) ;
+	_INT_ENABLE();
+}
+#endif // !MODEM_Z80
+
+/****************************************************************
+Routine : dp_start_transmit
+Description :
+    start the data transmission if idle. enable transmit interrupt.
+*****************************************************************/
+non_banked
+void dp_start_transmit ( void )
+{
+	if ( dp_dsp_data_in_progress == FALSE )
+	{
+		dp_dsp_data_in_progress = TRUE ;
+		dp_regwrite ( 0xb0, 0 ) ;	// kick off transmit
+	}
+}
+
+/****************************************************************
+Routine : dual_port_tx ( void )
+****************************************************************/
+byte dp_isr_regb0, *datap, dp_isr_count ;
+word firstWord, *datapp ;
+
+non_banked
+void dual_port_tx ( void )
+{
+	byte dp_dsp_tx_ptr ;
+
+	//---------------------------------------------------
+	// Look in DCE Ring Buffer for next frame to send.
+	//---------------------------------------------------
+	if ( io_dce_tx_rptr != io_dce_tx_wptr )
+	{
+		firstWord = *io_dce_tx_rptr;
+
+		#if defined(HDLC_FRAMES_BY_REFERENCE)
+		//------------------------------------------------
+		// There is a frame present; is it an I Frame,
+		// Supervisor Frame, or Unnumbered frame?
+		//------------------------------------------------
+		if ( firstWord & HDLC_IFRAME_PLACEHLDR )
+		{
+			/*********************************************
+			**			It's an I Frame.
+			**********************************************
+			** A two word structure in the DCE ring
+			** buffer actually represents the frame.
+			** The format of an I Frame placeholder is:
+			**	1st wd:		( FLAG(s) | count )
+			**	2nd wd:		( Iframe data ptr )
+			*********************************************/
+
+			//------------------------------------------
+			// Get the count from the DCE ring buffer.
+			//------------------------------------------
+			dp_isr_count = (byte) firstWord;
+
+			//------------------------------------------
+			// Get the I Frame data ptr from DCE ring
+			// buffer (must handle end of buffer wrap).
+			//------------------------------------------
+			datapp = io_dce_tx_rptr+1 ;
+			if ( datapp >= io_dce_tx_eptr )
+				datapp = io_dce_tx_sptr ;
+			datap = (byte *) (*datapp);
+
+			//-------------------------------------------
+			// If new frame signal DSP to start a new
+			// HDLC frame, and clear flag for LAPM layer.
+			//-------------------------------------------
+			if ( firstWord & HDLC_START_OF_FRAME )
+			{
+				dp_isr_regb0 = 0x40 ;
+				*(datap-1) = 0;
+			}
+			else
+			{
+				dp_isr_regb0 = 0 ;
+			}
+
+			//------------------------------------------
+			// Copy data into TX Mailbox area (80-8f)
+			//------------------------------------------
+			if ( dp_isr_count >= 16 )
+			{
+				//Z80_Ch0_DMA() ;
+
+				//-----------------------------------------------
+				// Send full 16 bytes and .....
+				//-----------------------------------------------
+				DP_INT_REGWRITE( 0x80, *datap        ) ;
+				DP_INT_REGWRITE( 0x81, *(datap+0x01) ) ;
+				DP_INT_REGWRITE( 0x82, *(datap+0x02) ) ;
+				DP_INT_REGWRITE( 0x83, *(datap+0x03) ) ;
+
+				DP_INT_REGWRITE( 0x84, *(datap+0x04) ) ;
+				DP_INT_REGWRITE( 0x85, *(datap+0x05) ) ;
+				DP_INT_REGWRITE( 0x86, *(datap+0x06) ) ;
+				DP_INT_REGWRITE( 0x87, *(datap+0x07) ) ;
+
+				//Z80_Ch0_DMA() ;
+
+				DP_INT_REGWRITE( 0x88, *(datap+0x08) ) ;
+				DP_INT_REGWRITE( 0x89, *(datap+0x09) ) ;
+				DP_INT_REGWRITE( 0x8a, *(datap+0x0a) ) ;
+				DP_INT_REGWRITE( 0x8b, *(datap+0x0b) ) ;
+
+				DP_INT_REGWRITE( 0x8c, *(datap+0x0c) ) ;
+				DP_INT_REGWRITE( 0x8d, *(datap+0x0d) ) ;
+				DP_INT_REGWRITE( 0x8e, *(datap+0x0e) ) ;
+				DP_INT_REGWRITE( 0x8f, *(datap+0x0f) ) ;
+				dp_dsp_tx_ptr = 0x90 ;
+				//Z80_Ch0_DMA() ;
+
+				//-----------------------------------------------
+				// ...check for End of Frame....
+				//-----------------------------------------------
+				if ( dp_isr_count > 16 )
+				{
+					//-----------------------------------------------
+					// .... NOT Done with this frame yet;
+					//-----------------------------------------------
+					// adjust the count and datap in the
+					// two word DCE ring Buffer structure
+					// (removing the SOF flag).
+					//-----------------------------------------------
+					*io_dce_tx_rptr = (word)(HDLC_IFRAME_PLACEHLDR
+												| (dp_isr_count-16));
+					*(datapp) = (word)(datap+16);
+				}
+				else
+				{
+					//-----------------------------------------------
+					// .... Done with this frame
+					//-----------------------------------------------
+					// ..... skip over two word structure
+					//  and set EOF in the trigger byte
+					//  (done below)
+					//-----------------------------------------------
+					dp_isr_count = 0;
+				}
+			}
+			else
+			{
+				//-----------------------------------------------
+				// Done with this frame;
+				// Send remaining (up to 15) bytes and .....
+				//-----------------------------------------------
+				dp_dsp_tx_ptr = 0x80;
+				while ( dp_isr_count )
+				{
+					DP_INT_REGWRITE( dp_dsp_tx_ptr++, *datap++ ) ;
+					//Z80_Ch0_DMA() ;
+					dp_isr_count-- ;
+				}
+			}
+
+			//-----------------------------------------------
+			// Done with this frame ??
+			//-----------------------------------------------
+			if ( dp_isr_count == 0 )
+			{
+				//-----------------------------------------------
+				//		Yes ...
+				//-----------------------------------------------
+				// ..... skip over two word structure
+				//  and set EOF in the trigger byte
+				//-----------------------------------------------
+				if ( ++datapp >= io_dce_tx_eptr )
+					io_dce_tx_rptr = io_dce_tx_sptr ;
+				else
+					io_dce_tx_rptr = datapp ;
+
+				//---------------------------------------
+				// Signal to DSP end of the HDLC frame
+				//---------------------------------------
+				dp_isr_regb0 |= 0x80 ;
+
+				//---------------------------------------
+				// Signal lapm task to place another
+				// iframep in DCE Ring Buffer.
+				// Chk for zero is sanity test - should
+				// never happen.
+				//---------------------------------------
+				if ( lapm_max_iframes ) lapm_max_iframes -- ;
+			}
+		}
+		#if defined(MNP_OFRAMES_BY_REFERENCE)
+		else if ( firstWord & MNP_OFRAME_PLACEHLDR )
+		{
+			extern byte mnp_dual_port_tx ( void ) ; // located in mmp_lib.c
+			/*********************************************
+			**		It's an MNP Octet Data Frame.
+			**********************************************
+			** A three word structure in the DCE ring
+			** buffer actually represents the frame.
+			** The format of an MNP data Frame placeholder is:
+			**	1st wd:		( FLAG(s) | count )
+			**	2nd wd:		( Iframe data ptr )
+			**	3rd wd:		( Calculated CRC  )
+			*********************************************/
+			dp_dsp_tx_ptr = mnp_dual_port_tx();
+			dp_isr_regb0 = 0 ;
+		}
+		#endif // MNP_OFRAMES_BY_REFERENCE
+		else
+		#endif	// HDLC_FRAMES_BY_REFERENCE
+		{
+			dp_dsp_tx_ptr = 0x80;
+
+			#if defined(CS_V110) && defined(CS_MODEM)
+			{
+				dp_isr_count = 0x8f;	// send max 16 bytes
+				dp_isr_regb0 = 0;
+			}
+			#else
+			if ( firstWord & HDLC_TX_ANY_CHAR )
+			{
+				dp_isr_count = 0x85 ; // send max. 6 bytes
+				dp_isr_regb0 = 0x20 ;
+			}
+			else
+			{
+				dp_isr_count = 0x8f ; // send max. 16 bytes
+				dp_isr_regb0 = firstWord & HDLC_START_OF_FRAME ? 0x40 : 0 ;
+			}
+			#endif	// CS_V110 && CS_MODEM
+
+			while ( (dp_dsp_tx_ptr <= dp_isr_count)
+					&& (io_dce_tx_rptr != io_dce_tx_wptr) )
+			{
+				//Z80_Ch0_DMA() ;
+
+				DP_INT_REGWRITE( dp_dsp_tx_ptr++, (byte)*io_dce_tx_rptr ) ;
+				if ( *io_dce_tx_rptr & HDLC_END_OF_FRAME )
+				{
+					if ( ++io_dce_tx_rptr >= io_dce_tx_eptr )
+						io_dce_tx_rptr = io_dce_tx_sptr ;
+					dp_isr_regb0 |= 0x80 ;
+					break ;
+				}
+				if ( ++io_dce_tx_rptr >= io_dce_tx_eptr )
+					io_dce_tx_rptr = io_dce_tx_sptr ;
+
+				// check SOF for V.80 support - needed
+				// for framed mode without CRC
+				if ( *io_dce_tx_rptr & HDLC_START_OF_FRAME )
+				{
+					break ;
+				}
+			}
+		}
+
+		dp_dsp_data_in_progress = TRUE ;
+		DP_INT_REGWRITE( 0xb0, (byte)(dp_isr_regb0|(dp_dsp_tx_ptr-0x80)) );
+	}
+	else
+	{
+		dp_dsp_data_in_progress = FALSE ;
+		DP_INT_REGWRITE( 0xb7, 0x01 ) ; // clear tx interrupt
+	}
+}
+
+/****************************************************************
+Routine : dual_port_rx ( void )
+****************************************************************/
+non_banked
+void dual_port_rx ( void )
+{
+	byte /* dp_isr_regb0, dp_isr_count, */ dp_rx_ptr ;
+	unsigned short *first_ptr, *last_ptr ;
+
+	dp_isr_regb0 = DP_INT_REGREAD( 0xb0 ) ;
+
+	dp_isr_count = dp_isr_regb0 & 0x1f ; // count
+	if ( dp_isr_count == 0 )
+	{
+		x_debug_msg ( "DP - illegal rx status 0xb0" ) ;
+	}
+	else
+	{
+		dp_rx_ptr = 0x90 ;
+		first_ptr = io_dce_rx_wptr ;
+		// copy data into fifo
+		while ( dp_isr_count-- )
+		{
+			//Z80_Ch0_DMA();
+
+			*io_dce_rx_wptr = DP_INT_REGREAD2( (byte)(dp_rx_ptr++) ) ;
+
+			last_ptr = io_dce_rx_wptr++ ;
+			if ( io_dce_rx_wptr >= io_dce_rx_eptr )
+				io_dce_rx_wptr = io_dce_rx_sptr ;
+
+			if ( (io_dce_rx_wptr == io_dce_rx_rptr) && LAPM_MODE )
+			{
+				//-----------------------------------------
+				// The RX ring buffer has just wrapped!!!
+				// Undo the damage.
+				//-----------------------------------------
+				io_dce_rx_wptr = last_ptr;
+				*last_ptr |= (HDLC_END_OF_FRAME | HDLC_CRC_ERROR) ;
+    			x_debug_msg("DP - read overflow!!") ;
+				break ;
+			}
+		}
+
+		if ( dp_isr_regb0 & 0xe0 ) // crc error or start/end of frame
+		{
+			if ( dp_isr_regb0 & 0x20 ) // if start-of-frame
+				*first_ptr |= HDLC_START_OF_FRAME ;
+			if ( dp_isr_regb0 & 0xc0 )	// EOF (or) crc error
+			{
+				*last_ptr |= HDLC_END_OF_FRAME ;
+				if ( dp_isr_regb0 & 0x40 ) // crc error (or) abort
+				{
+					*last_ptr |= HDLC_CRC_ERROR ;
+					//x_debug_msg ("DP - crc error!!") ;
+					dp_bad_crc_count++;
+				}
+			}
+		}
+	}
+
+	// 2nd dummy read to trigger dsp to write more data
+	DP_INT_REGREAD( 0xb0 ) ;
+}
+
+/****************************************************************
+Routine : dp_dsp_isr
+Description :
+    interrupt service routine for the dsp16a data pump
+*****************************************************************/
+non_banked
+#if defined(USB_MODEM)
+interrupt
+#endif
+void dp_dsp_isr ( void )
+{
+	byte dp_isr_regd7, dp_isr_status, dp_isr_regbc ;
+#if defined(PCMCIA_MODEM)
+	extern BOOL z80_ring_int;
+#endif
+
+#if !defined(EXT_MODEM) && !defined(USB_MODEM) && !defined(THUNDER)
+	if (dp_sleep == TRUE)
+	{
+		// restore codec & bamil clocks and crystal oscillator
+		DP_INT_REGWRITE(0xcb, 0);
+		Oscr_delay(); // allow time to stabilize
+	}
+#endif //if !EXT_MODEM && !USB_MODEM && !THUNDER
+
+	// find source of camil interrupt
+	dp_isr_regd7 = DP_INT_REGREAD2( 0xd7 ) ;
+
+	// disable all interrupts on camil
+	DP_INT_REGWRITE(0xd7, 0xff);
+
+	#if defined(EXT_MODEM) || defined(THUNDER)
+	#if defined(THUNDER)
+	if ( z80_modem_type == EXT_INTERFACE )
+	#endif
+		enable_interrupt();
+	#endif
+
+
+	if (dp_isr_regd7 & BIT1)      // ring edge interrupt
+	{
+		// clear all interrupts on camil
+		DP_INT_REGWRITE( 0xd8, 0xff ) ;
+		if ( dp_ring_int_count > 1 )	// ignore first 2 ring interrupts 
+		{
+#if defined(HOMOL) && defined(VOICE)
+			if ( dp_ring_int_count > 2 )
+				dp_polarity_int = FALSE;
+#endif
+
+			x_debug_msg ( "dp - int : ring" ) ;
+			dp_ring_int = TRUE ;
+#if defined(PCI_MODEM)
+			{
+				// Power management for pita/PCI
+				byte pitaData = pita_regread(0x12) & 0x03;//read power state
+				if (pitaData & 0x02) // only assert PME when in D2 or D3 modes
+				{
+					pitaData = pita_regread(0x13) | 0x80;
+					pita_regwrite(0x13, pitaData);
+
+					//  Interrupts are currently disabled, so just
+					//  loop here. Read the Power State in power
+					//  status configuration register.  If under
+					//  normal power it should be in D0 state (0x00).
+					//  Wait for this state to occur
+					while (pita_regread(0x12) & 0x03)
+					{
+						;	// do nothing
+					}
+				}
+			}
+#endif // PCI_MODEM
+
+#if defined(PCMCIA_MODEM)
+			z80_ring_int = TRUE ;
+#endif
+			// disable ring interrupt after first edge
+			dp_bamil_rd7 |= BIT1 ;
+#if !defined(CS_MODEM) || defined(CLASS2_FAX) //ky+ 0413fix
+			dp_init_local_phone_timer () ;	// init when wake up from sleep
+#endif
+            if( G( dp_daa_is_perseus ))
+            {
+			    dp_modem_command(GOTO_CMD,PERSEUS_BASE,PERSEUS_RING_EN);// dsp ram 0x3A bit 5 set on ring
+            }
+		}
+		else
+		{
+			dp_ring_int_count++  ;	// increment ring interrupt count
+#if defined (VOICE) && defined (HOMOL)
+# ifdef CALLER_ID
+			if ( (dp_ring_int_count == 1) 	// first interrupt
+				 && ( S.ModemOptions.CallerId )      // CID enabled
+			 && ( ((0x0f & S.ModemOptions.CallerIdType) == 1 ) // Japna cid
+			 	|| ((0x0f & S.ModemOptions.CallerIdType) == 2 )) // UK cid (SIN 242)
+				 && ( x_elapsed_time ( dp_timer ) >= MS50 ) ) // True pol rev
+			{
+				dp_polarity_int = TRUE ;
+				dp_timer1 = x_current_time () ;
+				x_debug_msg ( "dp - int : pol rev set TRUE" ) ;
+			}
+# endif	//CALLER_ID
+
+			if ( ( dp_sleep == TRUE ) && ( dp_ring_int_count == 1 ) ) 	// first interrupt
+			{
+				// we need to turn on clocks - to get next ring int.
+				// enable all dsp clocks - except audio rrm
+				dp_regwrite ( 0xcb, 0x08 ) ;
+			}
+# ifdef CALLER_ID
+			if ( ( S.ModemOptions.CallerId )      // CID enabled
+			 && ( ((0x0f & S.ModemOptions.CallerIdType) == 1 ) // Japna cid
+			 	|| ((0x0f & S.ModemOptions.CallerIdType) == 2 )) // UK cid (SIN 242)
+				 && ( x_elapsed_time ( dp_timer ) >= MS50 ) ) // True pol rev
+				dp_venus_wakeup();
+# endif	//CALLER_ID
+#endif //#if defined (VOICE) && defined (HOMOL)
+		}
+	}
+
+#if !defined(DC0) && !defined(USB_MODEM)
+	#if defined(THUNDER)
+	if ( z80_modem_type == EXT_INTERFACE )
+	#endif
+	if (dp_isr_regd7 & BIT6)	// local handset offhook (BIOB)
+	{
+		x_debug_msg("dp-int BIOB(local phone)");
+		// clear all interrupts on camil
+		DP_INT_REGWRITE( 0xd8, 0xff ) ;
+		// disable local phone interrupt after first edge
+		dp_bamil_rd7 |= BIT6;
+		#if !defined(CS_MODEM) || defined(CLASS2_FAX)
+		dp_init_local_phone_timer();	// init when wake up from sleep
+		#endif
+
+		#if defined(PCI_MODEM)
+		// clear any PITA interrupt that caused this
+		pita_regwrite(0x04, 0xFF);		//Clear all INTSRC bits
+
+		// Don't interrupt on PCI events while awake
+		pita_regwrite(0x05, 0x00);
+		#endif
+
+		#if defined (VOICE) && defined (HOMOL) && defined(CALLER_ID)
+		// With some hardware we get false handset interrupt first
+		// and never get the polarity reversal interrupt.
+		// To overcome this problem if CID is enabled and pol rev
+		// detect is enabled treat handset interrupt as pol rev
+		// interrupt also. Under these conditions when there is
+		// handset iterrupt we will wait to detect the CAR ring
+		// for about 1-2 sec and then go back to idle state.
+		if ((S.ModemOptions.CallerId )      // CID enabled
+			&& (((0x0f & S.ModemOptions.CallerIdType) == 1)		// Japna cid
+			 	|| ((0x0f & S.ModemOptions.CallerIdType) == 2))	// UK cid
+			&& (x_elapsed_time(dp_timer) >= MS50)) // True pol rev
+		{
+			dp_polarity_int = TRUE;
+			dp_timer1 = x_current_time();
+			x_debug_msg("dp - int : pol rev set TRUE");
+			dp_venus_wakeup();
+		}
+		#endif // VOICE && HOMOL && CALLER_ID
+	}
+#endif
+
+#if defined(DC0) || ( !defined(USB_POLLED_MODE) && \
+						(defined(USB_MODEM) || defined(THUNDER)) )
+# if defined(THUNDER)
+	if ( z80_modem_type == USB_INTERFACE )
+# endif
+	//-----------------------------------
+	// is it a BIOB interrupt ?
+	//-----------------------------------
+	if ( dp_isr_regd7 & BIT6 )
+	{
+		dp_isr_regbc = DP_INT_REGREAD( 0xbc ) ;
+
+# if defined(DC0)
+		if ( dp_isr_regbc & BIT4 )
+		{
+			// process cellular interrupt
+			cell_isr () ;
+		}
+# else
+	//-----------------------------------------
+	// Since DC0 is PCMCIA only, it must be USB
+	//-----------------------------------------
+#  if !defined(TQFP128)	// 144 pin has int on Bit3
+		if ( dp_isr_regbc & BIT3 )
+#  else					// 128 pin has int on Bit5
+		if ( dp_isr_regbc & BIT5 )
+#  endif
+		{
+			//------------------------------------
+			// process USB interrupt. Since the USB
+			// interrupt must be level triggered,
+			// clear the interrupt only after the
+			// call to the ISR.
+			//------------------------------------
+			z80_usbir();
+		}
+# endif
+
+		// clear & reset bio interrupt
+		DP_INT_REGWRITE( 0xbd, dp_isr_regbc ) ;
+		// note that we're writing 1's to reserved bits here.
+		DP_INT_REGWRITE( 0xbd, ~dp_isr_regbc ) ;
+	}
+#endif	// DC0 || "USB in int mode"
+
+	if ( dp_isr_regd7 & BIT3 )	// write bank interrupt
+	{
+		// this is a response to a command
+		DP_INT_REGWRITE( 0xd8, 0x08 ) ; //clear CWBANK
+		dp_byte_c = DP_INT_REGREAD( 0x32 ) ;
+		dp_byte_d = DP_INT_REGREAD( 0x33 ) ;
+		dp_byte_e = DP_INT_REGREAD( 0x34 ) ;
+		dp_byte_f = DP_INT_REGREAD( 0x35 ) ;
+	}
+
+	if ( dp_isr_regd7 & BIT2 ) // dual-port data interrupt
+	{
+		dp_isr_status = DP_INT_REGREAD( 0xb6 ) ;
+
+		if ( dp_isr_status & 0x10 ) //if receive data transfer
+		{
+			dual_port_rx () ;
+		}
+		if ( dp_isr_status & 0x01 ) // Tx request.
+		{
+			dual_port_tx () ;
+		}
+	} // dual-port interrupt
+
+
+	#if defined(EXT_MODEM) || defined(THUNDER)
+	#if defined(THUNDER)
+	if ( z80_modem_type == EXT_INTERFACE )
+	#endif
+		disable_interrupt() ;
+	#endif
+
+	// enable camil interrupts
+	DP_INT_REGWRITE( 0xd7, dp_bamil_rd7 ) ;
+}
+
+#ifdef CS_MODEM
+/****************************************************************
+Routine : dp_board_disable
+Description : 	Disables hardware if necessary.
+*****************************************************************/
+non_banked
+void dp_board_disable ( void )
+{
+	dp_regwrite ( 0xd6, 0x0f ) ; // disable Irq.
+}
+#endif //CS_MODEM
+
+extern non_banked word z80_bankcheck(byte bank, word len, word adr);
+#if defined( ROM_FLASH )
+//#define CHKSUM_DEBUG
+//#define SLOW_WAY
+/****************************************************************
+	Function : z80_checksum
+	Perform checksum of Flash EEPROM - location 0 of sector 1
+	thru the last paragraph.
+*****************************************************************/
+non_banked word z80_checksum ( BOOL returnChksum )
+{
+	word checksum, strdchecksum ;
+	word len;
+	byte *ptr;
+	word para, lstpara ;
+	byte current_bbr, bbr, lstbbr;
+	extern word getCheckSum ( void ) ;
+	extern word getLastPara ( void ) ;
+	extern byte getFirstBank ( void ) ;
+
+	//------------------------------------------------
+	// get starting BBR, stored checksum and code
+	// length. length is in (16 byte) paragraphs.
+	//------------------------------------------------
+	bbr = getFirstBank() ;
+	strdchecksum = getCheckSum() ;
+	lstpara = getLastPara() ;
+
+	//------------------------------------------------
+	// save current BBR and initialize to starting BBR
+	//------------------------------------------------
+	current_bbr = input8( BBR ) ;
+	output8( BBR, bbr ) ;
+
+	//-------------------------------------------------
+	// Initialize the current paragrapth var.
+	//	para = ((sector1 BBR * 4096) + 4096)/16 or
+	//	para = sector1 BBR * 256 + 256
+	//-------------------------------------------------
+	para = (bbr * 0x100) + 0x100 ;
+
+#if defined( CHKSUM_DEBUG )
+	ddputs_nnl( ">Starting BBR=" ) ; sendHexByte( bbr ) ;
+	ddputs_nnl( "; Starting para=" ) ; sendHexWord( para ) ;
+	ddputs_nnl( "; last para=" ) ; sendHexWord( lstpara ) ;
+	sendDumbChar( 0x0A ) ; sendDumbChar( 0x0D ) ;
+#endif
+
+	//-------------------------------------------------
+	// Initialize loop vars.
+	//-------------------------------------------------
+	checksum = 0 ;
+	if ( !returnChksum )
+	{
+		len = 0x2ffe ;
+		ptr = (byte *)0x1002 ;
+	}
+	else
+	{
+		len = 0x3000 ;
+		ptr = (byte *)0x1000 ;
+	}
+
+#if defined( CHKSUM_DEBUG )
+	ddputs_nnl( "> *ptr=" ) ; sendHexWord( (word)(*ptr) ) ;
+	ddputs_nnl( "; *(ptr+1)=" ) ; sendHexWord( (word)(*(ptr+1)) ) ;
+	sendDumbChar( 0x0A ) ; sendDumbChar( 0x0D ) ;
+#endif
+
+	//------------------------------------------------
+	// calculate checksum of Flash EEPROM.
+	// (sector 1 thru end of load)
+	//------------------------------------------------
+	do
+	{
+		if ( (para + 0x300) > lstpara )
+		{
+			//--------------------------------------------
+			// calculate len of last bank
+			//--------------------------------------------
+			len = (lstpara - para) * 16 ;
+			if ( !len ) break ;
+		}
+
+#if defined( CHKSUM_DEBUG )
+		ddputs_nnl( ">Bank=" ) ; sendHexWord( (word)bbr ) ;
+		ddputs_nnl( "; ptr=" ) ; sendHexWord( (word)ptr ) ;
+		ddputs_nnl( "; len=" ) ; sendHexWord( len ) ;
+		ddputs_nnl( "; para=" ) ; sendHexWord( para ) ;
+		sendDumbChar( 0x0A ) ; sendDumbChar( 0x0D ) ;
+#endif
+
+#if defined( SLOW_WAY )
+		output8( BBR, bbr ) ;
+		while ( len-- )
+		{
+			checksum += *ptr++ ;
+		}
+#else
+{
+		checksum += z80_bankcheck( bbr, len, (word)ptr ) ;
+}
+#endif
+
+		ptr = (byte *)0x1000 ;
+		len = 0x3000 ;
+		para += 0x300 ;
+		bbr += 3 ;
+
+	} while ( para <= lstpara ) ;
+
+	ddputs_nnl( "> Calc chksum =" ) ; sendHexWord( checksum ) ;
+	ddputs_nnl( "; stored chksum =" ) ; sendHexWord( strdchecksum ) ;
+	sendDumbChar( 0x0A ) ; sendDumbChar( 0x0D ) ;
+
+	if ( !returnChksum )
+	{
+		if ( checksum == strdchecksum )
+		{
+			ddputs_nnl( "PASSED\n\r" ) ;
+			checksum = TRUE ;
+		}
+		else
+		{
+			ddputs_nnl( "FAILED\n\r" ) ;
+			checksum = FALSE ;
+		}
+	}
+
+	output8( BBR, current_bbr ) ;	// restore saved bank
+	return ( checksum ) ;
+}
+#else
+#if defined( ROM_2MEG )
+	#if defined( CS_MODEM )
+		#define Z80_TOP_BANK	13
+	#else
+		#define Z80_TOP_BANK	15
+	#endif
+#else
+#define Z80_TOP_BANK	7
+#endif
+
+/****************************************************************
+	Function : z80_checksum
+	Perform checksum of rom - location 0 thru 128K.
+*****************************************************************/
+non_banked word z80_checksum ( BOOL full_checksum )
+{
+	word checksum = 0 ;
+	word eprom_checksum , len;
+	byte bank, bbr_value, *ptr;
+	byte current_bbr ;
+    
+	current_bbr = z80_current_bank () ;	// save current bank bbr
+	ptr = 0x00 ;
+	while ( ptr < (byte *)0x4000 )
+		checksum += ( *ptr++ ) ;        // Bank 0 checksum 
+
+	bbr_value = 0 ;
+
+	for ( bank = 1; bank <= Z80_TOP_BANK; bank++ ) // checksum on bank 2-
+	{
+		len = 0x4000;
+		if ( ( bank == Z80_TOP_BANK ) && ( full_checksum == FALSE ) )
+			len -= 0x02;
+
+		checksum += z80_bankcheck(bbr_value, len, 0x4000);
+		bbr_value += 4 ;	// set bbr for next bank
+	}
+
+#ifdef IPGATEWAY
+	ip.rx_size = checksum;   // Save calculated checksum in PPP register
+#endif
+
+	if ( full_checksum == FALSE )
+	{
+		ptr = (byte *) 0x7ffe;
+		eprom_checksum = *ptr++ ;
+		eprom_checksum = eprom_checksum | ((word)(*ptr << 8) ) ;
+		if ( checksum == eprom_checksum )
+		{
+#ifdef IPGATEWAY
+			ip.modem_status = 0x08; // Indicate checksum is good to host
+#endif
+#ifdef CS_STARTUP_DELAY
+			x_sleep(STARTUP_DELAY); 			
+#endif
+			ddputs_nnl( "Good ROM chksum" ) ;
+			checksum = TRUE ;
+		}
+		else
+		{
+#ifdef IPGATEWAY
+			ip.modem_status = 0;  // Indicate checksum is bad to host
+#endif
+			ddputs_nnl( "Bad ROM chksum" ) ;
+			ddputs_nnl( "; calc chksum=" ) ;
+			sendHexWord( checksum ) ;
+			checksum = FALSE ;
+		}
+#ifdef CS_STARTUP_DELAY
+			x_sleep(STARTUP_DELAY); 		
+#endif
+		ddputs_nnl( "; strd chksum=" ) ;
+		sendHexWord( eprom_checksum ) ;
+		sendDumbChar( 0x0A ) ; sendDumbChar( 0x0D ) ;
+	}
+    
+	z80_switch_bank ( current_bbr ) ;	// restore saved bank
+	return ( checksum ) ;
+}
+#endif
+
+sfr bank_port=0x39;
+sfr ramlbr_port=0xe7;
+
+#if !defined(COMPRESS_TABLES)
+/****************************************************************
+Routine : dp_download_dsp_long
+Description : set up the bank that the data pump
+	code is stored in so that dp_dsp_download
+	can do its work.
+
+	This allows the data pump code to be in any bank.
+*****************************************************************/
+non_banked void dp_download_dsp_long(long addr24, word count)
+{
+	byte bankvar = bank_port;	// save old bank pointer
+
+	bank_port = addr24 >> 16;	// switch to data bank
+
+	dp_download_dsp((char *) addr24, count);
+
+	bank_port = bankvar;		// restore bank pointer
+}
+#endif  // !COMPRESS_TABLES
+
+#if !defined(CS_MODEM)
+#if !defined(COMPRESS_TABLES)
+/****************************************************************
+Routine : dp_download_dspk56_long - no compression
+Description : 
+*****************************************************************/
+void dp_download_dspk56_long ( long srcadr, word count, byte dstBank )
+{
+	byte curbbr, currlb ;
+	byte srcBank ;
+	word data, data2, cnt ;
+	byte *srcPtr, *dstPtr ;
+
+	extern non_banked word dp_getROMwd( byte, byte * ) ;
+	extern non_banked void dp_putRAMwd( byte, byte *, word ) ;
+	extern non_banked word dp_getRAMwd( byte, byte * ) ;
+
+	x_debug_msg( "Entering dp_download_dspk56_long" ) ;
+
+	//---------------------------------------------
+	// save bank base & ram lower boundary register
+	//---------------------------------------------
+	curbbr = bank_port ;
+	currlb = ramlbr_port ;
+
+#if defined(PCMCIA_MODEM) && !defined(ROM_FLASH)
+	//------------------------------------------
+	// write the data to DSP External RAM
+	// performed in assembly language routine
+	// to gain access to "hidden ROM and RAM"
+	//------------------------------------------
+	ramlbr_port = 0xf0 ;
+#endif
+
+	//------------------------------------------
+	// set source bank and starting offset
+	//------------------------------------------
+	srcBank = srcadr >> 16;
+	srcPtr = (byte *)srcadr;
+
+	//------------------------------------------
+	// set dest starting offset
+	//------------------------------------------
+    dstPtr = (byte *)BANKOFFSET ;
+
+	cnt = count ;
+	while ( cnt-- )
+	{
+		//----------------------------------
+		// get word from shadowed ROM
+		//----------------------------------
+		data = dp_getROMwd( srcBank, srcPtr ) ;
+
+		//----------------------------------
+		// place decompresion stuff here
+		//----------------------------------
+
+		//----------------------------------
+		// place word in shadowed RAM
+		//----------------------------------
+		dp_putRAMwd( dstBank, dstPtr, data ) ;
+
+		srcPtr +=2 ;
+		dstPtr +=2 ;
+	}
+
+	ramlbr_port = currlb ;
+
+#if defined( Z80_DEBUG_PRINT )
+	//------------------------------------------
+	// compare the data 
+	// performed in assembly language routine
+	// to gain access to "hidden ROM"
+	//------------------------------------------
+#if defined(PCMCIA_MODEM) && !defined(ROM_FLASH)
+	ramlbr_port = 0xf0 ;
+#endif
+
+	//------------------------------------------
+	// set source bank and starting offset
+	//------------------------------------------
+	srcBank = srcadr >> 16;
+	srcPtr = (byte *)srcadr;
+
+	//------------------------------------------
+	// set RAM starting offset
+	//------------------------------------------
+    dstPtr = (byte *)BANKOFFSET ;
+
+	cnt = count ;
+	while ( cnt-- )
+	{
+		//----------------------------------
+		// get word from shadowed ROM
+		//----------------------------------
+		data = dp_getROMwd( srcBank, srcPtr ) ;
+
+		//----------------------------------
+		// place decompresion stuff here
+		//----------------------------------
+
+		//----------------------------------
+		// get word from shadowed RAM
+		//----------------------------------
+		data2 = dp_getRAMwd( dstBank, dstPtr ) ;
+
+		if ( data != data2 )
+		{
+			x_debug_msg( "DSP EXT RAM download FAILED at adr=" ) ;
+			sendHexWord( (word)dstPtr );
+			x_debug_msg( "\r\nROM =" ) ; sendHexWord( (word)data );
+			x_debug_msg( "\r\nRAM =" ) ; sendHexWord( (word)data2 );
+			x_debug_msg( "\r\n" ) ;
+			break ;
+		}
+
+		srcPtr +=2 ;
+		dstPtr +=2 ;
+	}
+
+	ramlbr_port = currlb ;
+#endif
+
+	//-----------------------------------------
+	// restore bank base register
+	//-----------------------------------------
+	bank_port = curbbr;
+
+	x_debug_msg( "Leaving dp_download_dspk56_long" ) ;
+}
+#endif // !COMPRESS_TABLES
+#endif	// end !(CS_MODEM)

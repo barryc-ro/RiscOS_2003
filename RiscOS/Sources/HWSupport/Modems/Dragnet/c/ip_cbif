@@ -1,0 +1,207 @@
+/*name and version number:%W%*/
+/*date of get: 		  %H% %T%*/
+/*date of delta:	  %G% %U%*/
+/****************************************************************
+File :	ip_cbif.c
+Description :
+	Contains the functions for implementing the code-byte, host
+	interface used for IP Gateway.
+
+	ATTENTION:
+	These functions were placed in non-banked code because the uC
+	kept resetting whenever a banked function (these functions) were
+	called from a non-banked function which was in turn called by
+	an interrupt service routine.  This is because banked returns
+	enable interrupts which must not happen because interrupts can't
+	be nested.
+
+Procedures Contained :
+	check_eof ()
+	load_cbq  ()
+	load_scr  ()
+	cbq_init  ()
+
+Revision History :
+	Initials	  Date  	Change
+	SJ Busak  3/6/98  Initial version
+	SJ Busak 10/5/98  Wait for EOF codebyte ACK before sending next PPP/SLIP frame
+
+*****************************************************************/
+
+#include "llglob_d.h"
+
+#if defined (CS_MODEM) && defined (IPGATEWAY)
+	#include "z80glob.h"
+	#include "ipgw.h"
+	#include "allglobs.h"
+
+#define CBQ_SIZE   10          // Size of codebyte circular queue
+#define MSR_DCD    0x80        // Codebyte-ready-toggle flag
+
+struct CBQ
+{
+	byte cnt;                   // Number of codebytes in queue
+	byte rp;                    // Read index
+	byte wp;                    // Write index
+	byte buf[CBQ_SIZE];         // Codebyte circular queue
+};
+
+static struct CBQ cbq;		    // Code Byte Queue
+extern byte uart_tx_count;     // Defined in csz80man.c
+
+/* --------------------------------------- */
+/* Check if Host needs End of Frame Signal */
+/* --------------------------------------- */
+
+non_banked void check_eof ()
+{
+	word num;
+	byte eof;
+
+	ip.status = ip.status & ~MCR_EN_RBR;   // Clear flag after MCR ISR executed
+
+	if (ip_mode)                           // PPP/SLIP mode?
+		eof = dpq.eof & (1 << dpq.isr_idx); // Get EOF status for current frame
+
+	else                                   // Character mode
+		eof = ip.status & RX_EOF;           // Get EOF status
+
+	if ( (*isr_dte_tx_wptr == *isr_dte_tx_rptr) && // Tx buffer empty?
+			eof)                                     // End of current Frame?
+	{
+		if (ip_mode)                                // PPP/SLIP mode?
+			dpq.eof = dpq.eof & ~(1 << dpq.isr_idx); // Clear EOF flag for current frame
+
+		else                                        // Character mode
+			ip.status = ip.status & ~RX_EOF;         // Clear EOF flag
+
+		load_cbq (END_OF_FRM | 										 // End of frame code byte
+				 ((dpq.fcs << (6-dpq.isr_idx)) & FCS_BAD) |   // FCS status for current frame
+				 (uart_tx_count - ip_eof_cnt) );              // Number of bytes in RxFIFO
+
+		if (ip_mode)                                // Using PPP or SLIP?
+		{
+			if (++dpq.isr_idx >= 5)                  // Index beyond upper limit?
+				dpq.isr_idx = 0;                      // Set index to beginning of ptr queue
+
+			isr_dte_tx_wptr = (byte**) &dpq.ptr [dpq.isr_idx];  // Get next frame pointer
+
+			if (dpq.cnt >= 5)                          // Need to update pointer for PPP task?
+			{
+				if (!dpq.ip_idx)                        // At beginning of queue?
+					dpq.ptr [dpq.ip_idx] = dpq.ptr [4];  // Initialize next free pointer to previous pointer, end of queue
+
+				else
+					dpq.ptr [dpq.ip_idx] = dpq.ptr [dpq.ip_idx-1];  // Initialize next free pointer to previous pointer
+			}
+
+			dpq.cnt--;                                            // One less pointer in DTE Pointer Queue now
+
+//	????	if (ip_mode)                                          // PPP/SLIP mode?
+				eof = dpq.eof & (1 << dpq.isr_idx);                // Update EOF variable with status of next frame
+
+//	????	else
+//	????		eof = ip.status & RX_EOF;                          // Update (clear) character mode EOF status
+
+			ip.status = ip.status | (MCR_EN_RBR + EOF_ACK_WAIT);  // Have MCR ISR enable RBR interrupts; Make MIMIC background wait
+		}
+
+//	??	else
+// ????	eof = ip.status & RX_EOF;                          // Update (clear) character mode EOF status
+	}
+
+	if (*isr_dte_tx_wptr >= *isr_dte_tx_rptr)          // Write pointer ahead of read pointer?
+		num = *isr_dte_tx_wptr - *isr_dte_tx_rptr;      // Calculate bytes left in current frame
+
+	else                                               // Read pointer ahead of write pointer
+		num = (isr_dte_tx_eptr - isr_dte_tx_sptr) -     // Calculate bytes left in current frame
+				(*isr_dte_tx_rptr - *isr_dte_tx_wptr);
+
+	if (ip.status & MCR_EN_RBR)                        // Was PPP/SLIP EOF codebyte sent?
+	{
+		output8 (MIMIC_IE, input8 (MIMIC_IE) & ~0x10);  // Mask RBR Interrupts
+
+		if ( (num < 30) && !eof)                        // Prevent MCR ISR from enabling RBR interrupts?
+		{
+			ip.status = ip.status & ~MCR_EN_RBR;         // Clear flag
+		}
+	}
+
+	else if ( (num < 30) && !eof)                      // Disable RBR interrupts because not enough data or no EOF?
+	{
+		output8 (MIMIC_IE, input8 (MIMIC_IE) & ~0x10);  // Mask RBR Int
+	}
+}
+
+// --------------------------------------- //
+// Load code byte into the code-byte queue //
+// --------------------------------------- //
+
+non_banked void load_cbq (codebyte)
+byte codebyte;
+{
+  byte ie_save;
+
+  ie_save = input8(MIMIC_IE);
+  disable_interrupt ();             // BUG workaround
+  output8(MIMIC_IE, 0);
+
+  if (codebyte < 0x80)              // For EOLs, leave interupts disabled
+	 enable_interrupt ();
+
+	if (cbq.cnt == CBQ_SIZE)		   // Is the queue full?
+	{
+		cbq.buf[cbq.rp] = CB_OVRRUN;  // Indicate overrun now (overwrites existing codebyte)
+		load_scr ();						// Load into SCR, if empty
+	}
+
+	else										// Queue in not full
+	{
+		cbq.cnt++;							// Adjust count
+		cbq.buf[cbq.wp++] = codebyte;	// Save code byte in queue
+
+		if (cbq.wp >= CBQ_SIZE)		   // Beyond end of queue?
+			cbq.wp = 0;						// Wrap around to beginning
+
+		load_scr ();						// Load into SCR, if empty
+	}
+
+  disable_interrupt ();
+  output8(MIMIC_IE, ie_save);
+
+  if (codebyte < 0x80)
+	 enable_interrupt ();
+}
+
+// ---------------------------------- //
+// Load next code byte into MIMIC SCR //
+// ---------------------------------- //
+
+non_banked void load_scr ()
+{
+	if (cbq.cnt && (ip.status & SCR_ACK))		             // Code byte available & SCR empty?
+	{
+		ip.status = ip.status & ~SCR_ACK;	                // Clear code-byte-ACK flag
+		output8 (MIMIC_SCR, cbq.buf[cbq.rp++]);             // Write code byte to SCR register
+		cbq.cnt--;														 // Decrement code byte count
+
+		if (cbq.rp >= CBQ_SIZE)										 // Beyond end of queue?
+			cbq.rp = 0;													 // Wrap around to beginning
+
+		output8 (MIMIC_MSR, input8 (MIMIC_MSR) ^ MSR_DCD);  // Toggle DCD in MIMIC MSR
+	}
+}
+
+// ----------------------------------------- //
+// Initialize the Code Byte Queue at Startup //
+// ----------------------------------------- //
+
+non_banked void cbq_init ()
+{
+	cbq.cnt = 0;		// Queue is empty
+	cbq.rp  = 0;		// Initialize read index
+	cbq.wp  = 0;		// Initialize write index
+	ip.status = ip.status | SCR_ACK;
+}
+#endif  // IPGATEWAY && CS_MODEM
+

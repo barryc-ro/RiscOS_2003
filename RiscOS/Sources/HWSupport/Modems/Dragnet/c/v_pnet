@@ -1,0 +1,329 @@
+/*name and version number:@(#)v_pnet.c	1.12*/
+/*date of get: 		  09/06/00 16:59:30*/
+/*date of delta:	  03/09/00 13:40:40*/
+/****************************************************************
+File :	v_pnet.c
+Description :
+	Functions that interface the packet media stream
+	to the packet network
+	Derived from mimic. in ITS Z80 code.
+
+Revision History :
+	Initials	Date		Change
+	JA          9/1/99      Initial version
+*****************************************************************/
+#include "v_glob.h"
+#include "v_task.h"
+#include "sa_dte_s.h"
+#include "sa_dte.h"
+#include "samdmtsk.h"
+#include "memory.h"
+
+//#define MEDIA_READ_TRACE
+//#define MEDIA_WRITE_TRACE
+
+static uint_32 init_packet_pools(VGLOB *vglob_ptr);
+
+uint_32
+pnet_init(VGLOB *vglob_ptr) {
+	// Get the packet pool ready
+	return init_packet_pools(vglob_ptr);
+}
+
+
+/******************************************************************************
+** Function : v_media_write_to_host                                               *
+*******************************************************************************
+** Modification History :                                                     *
+**                                                                            *
+**[Release 2]-----------------------------------------------------------------*
+** Date            Ver   Dev  Comments                                        *
+** 25th Jan  1999  2.0   RGT  Initial STABLE revision                         *
+*******************************************************************************
+** Description :                                                              *
+**   Implements a state machine that controls the writing of an entire media  *
+** packet comprising multiple voice/fax/data frames. It takes a packet from   *
+** the receive packet pool and transfers it to the host via appropriate queue.*
+**   Packets contain media.                                                   *
+*******************************************************************************
+** Arguments :                                                                *
+**                NONE                                                        *
+**                                                                            *
+ *******************************************************************************/
+void 
+v_media_write_to_host( packet_t *pkt )
+{
+	VGLOB *vglob_ptr = &vglob_array[ModemNum];
+	mimicInfo_t	*SM;
+	byte		busy;
+
+	/*********************************************************
+	** Grab a handle on the mimic receiver state machine and *
+	** the packet it is currently indexing                   *
+ 	**********************************************************/
+	SM = &V(mimicSM).rx;
+
+	/*********************************************************************
+	** Set ourselves to "busy" state and execute the encapsulated state  *
+	** machine until we have either filled the MIMIC to capacity or have *
+	** transferred an entire packet to the network.                      *
+	**********************************************************************/ 
+	busy = 1;
+	while (busy) {
+		switch (SM->state) {
+
+	/**************************************************************************
+	** PACKET_INIT: This state is set upon system initialisation, and also by *
+	********** the PACKET_END state once an entire packet has been shifted    *
+			** through the MIMIC. It ensures the selected packet is ready for *
+			** transfer (breaking out if not) and then transfers it.          *
+	 		*****************************************************************/ 
+		case PACKET_INIT:
+			if (pkt->status != V_FULL) {
+				busy = 0;
+				break;
+			}
+			SM->state = TRANSFER_PACKET;
+			SM->byteOffset = 0;
+			/**** Fall Through to state TRANSFER_PACKET ****/
+
+	/************************************************************************
+	** TRANSFER_PACKET: This sends the packet out to the network as fast as *
+	********** possible, breaking out to non-interrupt space whenever the   *
+			** MIMIC overflows. As soon as the last byte of the packet gets *
+			** sent, it moves immediately to state PACKET_END.              *
+	 		*****************************************************************/ 
+		case TRANSFER_PACKET:
+			struct ChannelContext *vars = &channelContext[ V(modem_num) ];
+			
+			#if defined(MEDIA_WRITE_TRACE)
+			if (ModemNum == 2) {
+				U32 saveFlag = G(InstanceFlag);
+				G(InstanceFlag) = 1;
+				printf("MEDIA Write: ");
+				G(InstanceFlag) = 0;
+				for(uint_16 foo = 0; foo < pkt->length; foo++) {
+					if (foo == 12) {
+						printf("\n");
+						G(InstanceFlag) = 1;
+						printf("             ");
+						G(InstanceFlag) = 0;
+					}
+					printf("%02x ", pkt->media[foo]);
+				}
+				printf("\n");
+				G(InstanceFlag) = saveFlag;
+			}
+			#endif	// MEDIA_WRITE_TRACE
+
+			while ( SM->byteOffset < pkt->length ) {
+				// Attempt to push out another byte to host
+				if ( putRawDteByte( vars, pkt->media[SM->byteOffset])
+						!= SUCCESS ) {
+					// Bail if it won't go
+					SM->state = PACKET_END;
+					printf("v_media_write_to_host: putRawDteByte failed!!!\n");
+					break;
+				}
+				SM->byteOffset ++;
+			}
+
+			#if defined(MEDIA_WRITE_TRACE)
+			if (ModemNum == 2) {
+				printf("v_media_write_to_host: just put %d bytes\n", SM->byteOffset);
+			}
+			#endif	// HOST_DATA_TRACE
+
+			/************************************************************
+			** We could have quit the main while loop because of either *
+			** overflow or end-of-packet. If it's end of packet, move   *
+			** to state PACKET_END. Otherwise, return to non-int space. *
+			*************************************************************/
+			if (SM->byteOffset >= pkt->length) {
+				flushDteReceiveBuffer(vars);
+				SM->state = PACKET_END;
+			} else if ( SM->state != PACKET_END ) {
+				busy = 0;
+			}
+			break;
+
+	/***************************************************************************
+	** PACKET_END: This frees up the packet that's been sent through the MIMIC *
+	********** then selects the next packet and moves to state PACKET_INIT.    *
+	********************************************************************/
+		case PACKET_END:
+			V(stats).rx.outputPkts++;
+			V(stats).rx.bufferedPkts--;
+
+			/**************************************************************
+			** Release the packet we've just sent upto the network, move  *
+			** to state PACKET_INIT and index the next packet in the pool *
+			***************************************************************/
+			pkt->status = V_EMPTY;
+			if (++SM->pktIndex >= SM->numPkts)
+				SM->pktIndex = 0;
+			V(mimicSM).rx.state = PACKET_INIT;
+			break;
+		}
+	}
+}
+
+/******************************************************************************
+** Function : v_media_read_from_host                                                *
+*******************************************************************************
+** Modification History :                                                     *
+**                                                                            *
+**[Release 2]-----------------------------------------------------------------*
+** Date            Ver   Dev  Comments                                        *
+** 25th Jan  1999  2.0   RGT  Initial STABLE revision                         *
+**                                                                            *
+**  5th Feb  1999  2.1   RGT  Added extra check to detect bad packets.        *
+**                                                                            *
+*******************************************************************************
+** Description :                                                              *
+**   This uses a state machine to handle the assembly of a complete packet    *
+** from the message sent in by the host.                                      *
+**   Whole packets are stored in the transmit packet pool for access by the   *
+** exchanger module.                                                          *
+**                                                                            *
+*******************************************************************************
+** Arguments :                                                                *
+**   ______________________________________________________________________   *
+**  | Type     |  arg name  | Description                                  |  *
+**  |----------+------------+----------------------------------------------|  *
+**   ----------------------------------------------------------------------   *
+**                                                                            *
+ *******************************************************************************/ 
+void
+v_media_read_from_host(struct ChannelContext *vars)
+{
+	VGLOB *vglob_ptr = &vglob_array[ModemNum];
+
+	/***************************************************************
+	** Grab a handle on the transmit state machine plus the packet *
+	** it currently indexes.                                       *
+	****************************************************************/ 
+	mimicInfo_t *SM = &V(mimicSM).tx;
+	packet_t *pkt = &V(txPacketPool[SM->pktIndex]);
+
+	/************************************************************
+	** Due to network jitter or host burstiness,                *
+	** it is possible that we not have room to buffer the new   *
+	** packet for the media exchanger. If this is the case then *
+	** discard the entire incoming packet.                      *
+	*************************************************************/
+	if (pkt->status != V_EMPTY) {
+		WARNING(vglob_ptr, WARN_PNET_INBUF);
+		V(stats).tx.droppedPkts++;
+
+		// Discard incoming data
+		while ( getRawDteByte(vars) >= 0 );
+	}
+
+	/************************************************************
+	** Digest the new packet                                    *
+	*************************************************************/
+	else {
+		int taggedByte;
+		pkt->length = 0;
+
+		// Put incoming bytes into the packet
+		while ( ( taggedByte = getRawDteByte(vars) ) >= 0
+				&& pkt->length < CFG_MAX_PKT_SZ ) {
+			pkt->media[ pkt->length++ ] = taggedByte;
+		}
+		if (pkt->length >= CFG_MAX_PKT_SZ) {
+			// Too much data to fit in pkt
+			WARNING(vglob_ptr, WARN_RCVD_BAD_PKT);
+			V(stats).tx.badPkts++;
+		}
+		// May have valid byte along with negative ret code
+		else if ( (taggedByte&GET_DTE_BYTE_RET_CODE_MASK) != TRANSMIT_DATA_EXHAUSTED) {
+			pkt->media[ pkt->length++ ] = taggedByte;
+		}
+
+		/**************************************************************
+		** Set the status of the packet to full and ship it to v_task *
+		** Move to the next packet in the pool for next time.         *
+		***************************************************************/ 
+		pkt->status = V_FULL;
+		v_send_media( vglob_ptr, pkt);
+
+		if (++SM->pktIndex >= SM->numPkts)
+			SM->pktIndex = 0;
+		V(stats).tx.queuedPkts++;
+		V(stats).tx.bufferedPkts++;
+
+	}
+}
+
+/******************************************************************************
+** Function : init_packet_pools                                               *
+*******************************************************************************
+** Modification History :                                                     *
+**                                                                            *
+**[Release 2]-----------------------------------------------------------------*
+** Date            Ver   Dev  Comments                                        *
+** 25th Jan  1999  2.0   RGT  Initial STABLE revision                         *
+**                                                                            *
+** 20th Apr  1999  2.1   RGT  Mods for new configuration parameter format     *
+**                                                                            *
+*******************************************************************************
+** Description :                                                              *
+**   Initialises the packet pools that hold packets received from the network *
+** and packets ready for transmission to the network.                         *
+*******************************************************************************
+** Arguments :                                                                *
+**                NONE                                                        *
+**                                                                            *
+*******************************************************************************/
+static uint_32 init_packet_pools(VGLOB *vglob_ptr)
+{
+	mimicInfo_t	* SM;
+
+	// Allocate space for the packet pools
+	V(txPacketPool) = (packet_t *) _mem_alloc_zero( CFG_MIMC_TX_LUT_SZ*sizeof(packet_t) );
+	if( V(txPacketPool) == NULL ) {
+		printf("init_packet_pools: could not alloc txPacketPool, errno=0x%x\n",
+			   _task_get_error() );
+		return FALSE;
+	}
+	V(rxPacketPool) = (packet_t *) _mem_alloc_zero( CFG_MIMC_RX_LUT_SZ*sizeof(packet_t) );
+	if( V(rxPacketPool) == NULL ) {
+		printf("init_packet_pools: could not alloc rxPacketPool, errno=0x%x\n",
+			   _task_get_error() );
+		return FALSE;
+	}
+	
+	#if 0
+	printf("txPacketPool=0x%08x, rxPacketPool=0x%08x, sizeof(packet_t) = %d\n",
+		   V(txPacketPool), V(rxPacketPool), sizeof(packet_t) );
+	#endif
+
+	// Initialize transmit state vars
+	SM = &V(mimicSM).tx;
+	SM->state			= PACKET_INIT;
+	SM->pktIndex  		= 0;
+	SM->numPkts   		= CFG_MIMC_TX_LUT_SZ;
+
+	word		  L1;
+	// Init transmit packet pool
+	for (L1 = 0; L1 < SM->numPkts; L1++) {
+		V(txPacketPool[L1]).status = V_EMPTY;
+		V(txPacketPool[L1]).length = 0;
+	}
+
+	// Init receive state vars
+	SM = &V(mimicSM).rx;
+	SM->state			= PACKET_INIT;
+	SM->pktIndex		= 0;
+	SM->numPkts			= CFG_MIMC_RX_LUT_SZ;
+
+	// Init receive packet pool
+	for (L1 = 0; L1 < SM->numPkts; L1++) {
+		V(rxPacketPool[L1]).status = V_EMPTY;
+		V(rxPacketPool[L1]).length = 0;
+	}
+
+	return TRUE;
+}

@@ -1,0 +1,1909 @@
+/*name and version number:@(#)atfax_c2.c	1.23*/
+/*date of get: 		  09/06/00 16:58:47*/
+/*date of delta:	  08/31/00 13:36:17*/
+/****************************************************************
+File : atfax_c2.c
+Description :
+
+	Contains parser for Class 2 and Class 2.0 AT commands
+                                                                                               
+Revision History :
+	Initials        Date            Change
+	S.J. Busak		  08/19/96	   Initial version
+	S.J. Busak      11/18/98     Use ANSI form for functions
+	S.J. Busak      01/20/99     Added Class 2.0 commands
+	S.J. Busak			09/13/99		 Add Class 2.0/2.1 ECM and V.34 FAX	   
+	S.J. Busak      03/21/00     Add support for all VR, WD and DF values
+  S.J. Busak      05/26/00     Add debugging command +FBUG (+FBU), +FHT & +FHR
+
+*****************************************************************/
+
+#include "llglob_d.h"
+#include "atglob.h"
+#include "ioglob_d.h"
+
+#if (defined CLASS2_FAX || defined CLASS20_FAX)
+	#include "stdarg.h"
+	#include "fax_c2.h"
+
+	#ifdef MODEM_Z80
+		#include "z80glob.h"
+	#endif
+
+	#include "allglobs.h"
+
+	#define FPTR (int*)
+	#define NOT_USED (const struct LTR*)0
+
+	#define STORE_PARM 1
+	#define DISPLAY_PARM 2
+	#define DISPLAY_RANGE 3
+
+	#ifdef SA_MULTI_INSTANCE
+		#define ADDR(x) (&((struct CLASS2_PARM*)0)->x)
+		#define VPTR(x) ((unsigned long)&G(c2p) + (unsigned long)x)
+	#else
+		#define ADDR(x) &c2p.x
+		#define VPTR(x) x
+	#endif
+
+//	---------------------------------------------------------- //
+// Definition of valid, Class 2 AND Class 2.0 command strings //
+// ---------------------------------------------------------- //
+
+static const char c2_20a [] = {"A"};	  // 2:+faa  2.0:+faa, +fea, +fpa, +fsa
+static const char c2_20q [] = {"Q"};	  // 2:+fcq  2.0:+fcq, +frq
+static const char c2_20r [] = {"R"};	  // 2:+fcr, +fdr  2.0:+fcr, +fdr, +fnr, +ipr
+static const char c2_20t [] = {"T"};	  // 2:+fdt, +fet  2.0:+fct, +fit, +fdt
+static const char null_str[]= {""};		  // 2:+fk
+
+#ifdef CLASS2_FAX
+// ------------------------------------------------ //
+// Definition of valid, Class 2, AT command strings //
+// ------------------------------------------------ //
+// NOTE: "AT+F" will be verified before checking these strings.
+
+static const char faxerr[]  = {"XERR"};
+static const char fbadmul[] = {"ADMUL"};
+static const char fbadlin[] = {"ADLIN"};
+static const char fbor[]    = {"OR"};
+static const char fbuf[]    = {"UF"};
+static const char fbug[]    = {"UG"};
+static const char fcig[]    = {"IG"};
+static const char fctcrty[] = {"TCRTY"};
+static const char fdcc[]    = {"CC"};
+static const char fdcs[]    = {"CS"};
+static const char fdffc[]   = {"FFC"};
+static const char fdis[]    = {"IS"};
+static const char fecm[]    = {"CM"};
+static const char flid[]    = {"ID"};
+static const char flnfc[]   = {"NFC"};
+static const char flpl[]    = {"PL"};
+static const char fmdl[]    = {"DL"};
+static const char fmfr[]    = {"FR"};
+static const char fminsp[]  = {"INSP"};
+static const char fphcto[]  = {"HCTO"};
+static const char fpts[]    = {"TS"};
+static const char frbc[]    = {"BC"};
+static const char frel[]    = {"EL"};
+static const char frev[]    = {"EV"};
+static const char fspl[]    = {"PL"};
+static const char ftbc[]    = {"BC"};
+static const char fvrfc[]   = {"RFC"};
+static const char fwdfc[]   = {"DFC"};
+#endif	  // CLASS2_FAX
+
+#ifdef CLASS20_FAX
+// --------------------------------------------------- //
+// Definition for valid, Class 2.0, AT command strings //
+// --------------------------------------------------- //
+// NOTE: "AT+F" will be verified before checking these strings.
+//       The second letter is used as an index into a table.
+//       These are pointers to the third character of 2.0 commands.
+
+static const char c20c [] = {"C"};	  // +fcc, +ffc, +ifc
+static const char c20d [] = {"D"};	  // +ffd, +fnd
+static const char c20e [] = {"E"};	  // +fie
+static const char c20i [] = {"I"};	  // +fli, +fpi, +fip, +gmi
+static const char c20k [] = {"K"};    // +fks
+static const char c20m [] = {"M"};    // +gmm
+static const char c20o [] = {"O"};	  // +fbo
+static const char c20p [] = {"P"};	  // +fap, +flp, +fpp, +fsp
+static const char c20s [] = {"S"};	  // +fbs, +fcs, +fhs, +fis, +fms, +fns, +fps
+static const char c20u [] = {"U"};	  // +fbu
+static const char c20w [] = {"W"};	  // +fpw
+static const char c20y [] = {"Y"};	  // +fry
+#endif
+
+// --------------------------------------- //
+// Declarations for ID and Version strings //
+// --------------------------------------- //
+// Note: Doing this here puts the strings in CONST segment
+
+static const char idstring []    = IDSTRING;
+static const char version_str [] = VERSION_STR;
+
+// --------------------------------------- //
+// Functions associated with AT+F commands //
+// --------------------------------------- //
+
+static void fdcc_fnc (void);  // Used by +FCC
+static void fdcs_fnc (void);  // Used by +FCS
+static void fdis_fnc (void);  // Used by +FIS
+static void fdr_fnc  (void);
+static void fdt_fnc  (void);
+static void fet_fnc  (void);
+static void fk_fnc   (void);
+static void fbuf_fnc (void);
+static void fpts_fnc (void);
+
+static void fap_fnc  (void);	  // For class 2.0 parameters
+static void fcq_fnc  (void);
+static void ffc_fnc  (void);
+static void fit_fnc  (void);
+static void fnr_fnc  (void);
+static void frq_fnc  (void);
+static void fbs_fnc  (void);
+static void fip_fnc  (void);
+
+// -------------------------------------------- //
+// General purpose function used in this module //
+// -------------------------------------------- //
+
+struct LTR;
+static void check_case         (const struct LTR*);
+static void output_val         (const struct LTR*);
+static byte chk_term           (byte);
+static void output_range       (const struct LTR*);
+static void store_par          (const struct LTR*);
+static void display_fdxx_range (void);
+static void display_fdxx       (struct ST30_PARM *);
+static void display_compound   (byte, ...);
+static byte save_compound      (byte, byte*, const byte*);
+
+static byte valid_char         (byte);
+static byte store_fdxx         (byte*);
+static void at_output_str      (const byte*);
+static byte r_strlen           (const byte*);
+static void r_strcpy           (byte*, const byte*);
+
+// -------------------------------------------------------------------------- //
+// Definition of structure arrays based on second letter of valid AT commands //
+// -------------------------------------------------------------------------- //
+
+struct LTR
+{
+	const char *p;         // Pointer to string for valid AT command
+	const unsigned int s;  // Parameters associated with a particular AT command
+	const void *f;         // Pointer to function, variable or response text
+};
+
+/* Definition of bits in component 's' of LTR structure
+
+	 b15:     1: Last element of array
+	 b14:     AT+Fcmd=n format allowed (Case 3:Assignment of value)
+	 b13:     AT+Fcmd?  format allowed (Case 2:Read parameter value)
+	 b12:     AT+Fcmd   format allowed (Case 1:Execute action command)
+						AT+Fcmd=? Always allowed (Case 0:Test if command/parameter implemented)
+
+	 b11:     Pointer type #1 -- 00:string, 01:variable, 10:function, 11:none
+	 b10:     Pointer type #0
+
+	 b09:     Variable type #1 -- 00:word, 01:byte, 10:2-bits, 11:1-bit
+	 b08:     Variable type #0
+
+	 b09:		  String type #0 -- 00: +FLI, +FPI type (length: 20; data range: 20-7E; left justified)                
+	 b08: 	  String type #1 -- 01: +FNS & +FFD	type (length: 00-FF, data range: 00-FF, append to)
+						String type #2 -- 10: +FMFR, +FMDL, +FREV, +GMI, +GMM, +GMR (const, NULL terminated, unknown length)  
+						String type #3 -- 11: +FPA, +FPW & +FSA type (length: 20; data range: 20-7E; right justified)         
+
+	 b07-b04: Maximum value for bit variables
+	 b03-b00: Number of positions to shift left for bit variables
+
+	 b07-b00: Maximum value allowed for bytes or string length  
+*/
+
+#define LAST 0x8000
+#define C3   0x4000
+#define C2   0x2000
+#define C1   0x1000
+#define PSTR 0x0000
+#define PVAR 0x0400
+#define PFNC 0x0800
+#define PNON 0x0C00
+#define VWRD 0x0000
+#define VBYT 0x0100
+#define V2BT 0x0200
+#define V1BT 0x0300
+#define STR0 0x0000   
+#define STR1 0x0100
+#define STR2 0x0200   
+#define STR3 0x0300   
+
+#ifdef CLASS2_FAX     
+// -------------------------------- //   
+// Arrays of structures for Class 2 //   
+// -------------------------------- //  
+
+static const struct LTR ltr_a[2] =
+{
+	faxerr, LAST+C2+PVAR+VBYT+255,  ADDR(faxerr)
+};
+
+static const struct LTR ltr_b[5] =
+{
+	fbadmul, C3+C2+PVAR+VBYT+255,      ADDR(fbadmul),
+	fbadlin, C3+C2+PVAR+VBYT+255,      ADDR(fbadlin),
+	fbor,    C3+C2+PVAR+V2BT+0x30+12,  ADDR(dbf),
+	fbuf,    C2+PFNC,                  FPTR fbuf_fnc,
+	fbug,    LAST+C3+C2+PVAR+V1BT+0x10+3, ADDR(sbf)
+};
+
+static const struct LTR ltr_c[4] =
+{
+	fcig,    C3+C2+PSTR+STR0+20,       ADDR(fcig),    // +FCIG
+	c2_20q,  C3+C2+PVAR+V2BT+0x10+8,   ADDR(dbf),		 // +FCQ
+	c2_20r,  C3+C2+PVAR+V1BT+0x10+4,   ADDR(sbf),		 // +FCR
+#ifndef FAX_ECM
+	fctcrty, LAST+C3+C2+PVAR+V1BT+0+7, ADDR(sbf)      // Uses +FIE which is always 0
+#else
+	fctcrty, LAST+C3+C2+PVAR+VBYT+255, ADDR(fctcrty)
+#endif
+};
+
+static const struct LTR ltr_d[6] =
+{
+	fdcc,    C3+C2+PFNC,          FPTR fdcc_fnc,
+	fdcs,    C2+PFNC,             FPTR fdcs_fnc,
+	fdffc,   C3+C2+PVAR+V2BT+0+4, ADDR(dbf),
+	fdis,    C3+C2+PFNC,          FPTR fdis_fnc,
+	c2_20r,  C1+PFNC,             FPTR fdr_fnc,		 // +FDR
+	c2_20t,  LAST+C1+PFNC,        FPTR fdt_fnc		 // +FDT
+};
+
+static const struct LTR ltr_e[2] =
+{
+#ifndef FAX_ECM
+	fecm, C3+C2+PVAR+V2BT+0+10,    ADDR(dbf),
+#else
+	fecm, C3+C2+PVAR+V2BT+0x20+10, ADDR(dbf),      // +FECM=0,2 only; 1 not supported
+#endif
+	c2_20t,  C3+C2+PFNC,           FPTR fet_fnc   // +FET: Executable, but requires a value (no C1)
+};
+
+static const struct LTR ltr_k[1] =
+{
+	null_str, LAST+C1+PFNC, FPTR fk_fnc				 // +FK  
+};
+
+static const struct LTR ltr_l[3] =
+{
+	flid,  C3+C2+PSTR+STR0+20,          ADDR(flid), // +FLID
+	flnfc, C3+C2+PVAR+V2BT+0+2,         ADDR(dbf),  // +FLNFC
+	flpl,  LAST+C3+C2+PVAR+V1BT+0x10+6, ADDR(sbf)   // +FLPL
+};
+
+static const struct LTR ltr_m[3] =
+{
+	fmdl,   C2+PSTR+STR2,                 idstring, // IDSTRING,		  
+	fmfr,   C2+PSTR+STR2,                 idstring, // IDSTRING,
+	fminsp, LAST+C3+C2+PVAR+V2BT+0x30+14, ADDR(dbf)
+};
+
+static const struct LTR ltr_p[2] =
+{
+	fphcto, C3+C2+PVAR+VBYT+255,      ADDR(fphcto),
+	fpts,   LAST+C3+C2+PFNC,          FPTR fpts_fnc
+};
+
+static const struct LTR ltr_r[3] =
+{
+	frbc, C3+C2+PVAR+V1BT+0+7,   ADDR(sbf),          // uses +FIE which is always 0
+	frel, C3+C2+PVAR+V1BT+0+1,   ADDR(sbf),
+	frev,   LAST+C2+PSTR+STR2,   version_str        // VERSION_STR
+};
+
+static const struct LTR ltr_s[1] =
+{
+	fspl, LAST+C3+C2+PVAR+V1BT+0x10+5, ADDR(sbf)
+};
+
+static const struct LTR ltr_t[1] =
+{
+	ftbc, LAST+C3+C2+PVAR+V1BT+0+7, ADDR(sbf)    // Uses +FIE which is always 0
+};
+
+static const struct LTR ltr_v[1] =
+{
+	fvrfc, LAST+C3+C2+PVAR+V2BT+0+6, ADDR(dbf)
+};
+
+static const struct LTR ltr_w[1] =
+{
+	fwdfc, LAST+C3+C2+PVAR+V2BT+0+0, ADDR(dbf)
+};
+
+// ---------------------------------------------------------- //
+// Array of structure pointers to structure arrays -- Class 2 //
+// ---------------------------------------------------------- //
+
+static const struct LTR* const cmd_tbl[] =		// Note: Declaration locates table in Z80 bank with code.
+{
+	ltr_a, ltr_b, ltr_c, ltr_d, ltr_e, NOT_USED, NOT_USED, NOT_USED,  // a-h
+	NOT_USED, NOT_USED, ltr_k, ltr_l, ltr_m, NOT_USED, NOT_USED,      // i-o
+	ltr_p, NOT_USED, ltr_r, ltr_s, ltr_t, NOT_USED, ltr_v, ltr_w      // p-w
+};
+#endif   //CLASS2_FAX
+
+#ifdef CLASS20_FAX
+// --------------------------------- //
+// Array of structures for Class 2.0 //
+// --------------------------------- //
+
+static const struct LTR ltr_a20[] =
+{
+	c20p,   LAST+C3+C2+PFNC,       FPTR fap_fnc   // +fap  (none)
+};
+
+static const struct LTR ltr_b20[] =
+{
+	c20o, C3+C2+PVAR+V2BT+0x30+12,  ADDR(dbf),	  // +fbo	 (+fbor)
+	c20s, C2+PFNC,                  FPTR fbs_fnc, // +fbs	 (+fbuf)
+	c20u, LAST+C3+C2+PVAR+V1BT+0x10+3, ADDR(sbf)	// +fbu	 (+fbug)
+};
+
+static const struct LTR ltr_c20[] =
+{
+	c20c,   C3+C2+PFNC,               FPTR fdcc_fnc, // +fcc	 (+fdcc)
+	c2_20q, C3+C2+PFNC,               FPTR fcq_fnc,  // +fcq	 (+fcq)
+	c2_20r, C3+C2+PVAR+V1BT+0x10+4,   ADDR(sbf),		   // +fcr	 (+fcr)
+	c20s,   C2+PFNC,                  FPTR fdcs_fnc, // +fcs	 (+fdcs)
+	c2_20t, LAST+C3+C2+PVAR+VBYT+255, ADDR(fphcto)	   // +fct	 (+fphcto)
+};
+
+static const struct LTR ltr_d20[] =
+{
+	c2_20r, C1+PFNC,          FPTR fdr_fnc, // +fdr  (+fdr)
+	c2_20t, LAST+C1+PFNC,     FPTR fdt_fnc  // +fdt  (+fdt)
+};
+
+static const struct LTR ltr_e20[] =
+{
+	c2_20a, LAST+C3+C2+PVAR+V1BT+0+1, ADDR(sbf)   // +fea	 (+frel)
+};
+
+static const struct LTR ltr_f20[] =
+{
+	c20c, C3+C2+PFNC,                   FPTR ffc_fnc, // +ffc	 (+fvrfc, +fwdfc, +fdffc, +flnfc)
+#if FFD_BUF != 0
+	c20d, LAST+C3+C2+PSTR+STR1+FFD_BUF, ADDR(ffd)      // +ffd	 (none)
+#else
+	c20d, LAST+C2+PSTR+STR1+0,          &null_str     // +ffd	-- not implemented
+#endif
+};
+
+static const struct LTR ltr_h20[] =
+{
+	c20s, LAST+C2+PVAR+VBYT+255, ADDR(faxerr)	 // +fhs	 (+faxerr)
+};
+
+static const struct LTR ltr_i20[] =
+{
+	c20e,   C3+C2+PVAR+V1BT+0+2,      ADDR(sbf2),	      // +fie	 (none)
+	c20p,   C3+C1+PFNC,               FPTR fip_fnc,     // +fip	 (none)
+	c20s,   C3+C2+PFNC,               FPTR fdis_fnc,    // +fis	 (+fdis)
+	c2_20t, LAST+C3+C2+PFNC,          FPTR fit_fnc      // +fit	 (none)
+};
+
+static const struct LTR ltr_k20[] =
+{
+	c20s, LAST+C1+PFNC, FPTR fk_fnc				 // +fks	 (+fk)
+};
+
+static const struct LTR ltr_l20[] =
+{
+	c20i,  C3+C2+PSTR+STR0+20,          ADDR(flid),  // +fli  (+flid)
+	c20p,  LAST+C3+C2+PVAR+V1BT+0x10+6, ADDR(sbf)	  // +flp  (+flpl)
+};
+
+static const struct LTR ltr_m20[] =
+{
+	c20s, LAST+C3+C2+PVAR+VBYT+5, ADDR(fminsp)	 // +fms	(+fminsp)
+};
+
+static const struct LTR ltr_n20[] =
+{
+	c20d,   C3+C2+PVAR+V1BT+0x10+1,       ADDR(sbf2),    // +fnd  (none)
+	c2_20r, C3+C2+PFNC,                   FPTR fnr_fnc, // +fnr  (none)
+	c20s,   LAST+C3+C2+PSTR+STR1+FNS_BUF, ADDR(fnss)	    // +fns  (+fnss)
+};
+
+static const struct LTR ltr_p20[] =
+{
+	c2_20a, C3+C2+PSTR+STR3+20,       ADDR(fpa),	   // +fpa	(none)
+	c20i,   C3+C2+PSTR+STR0+20,       ADDR(fcig),	   // +fpi	(+fcig)
+	c20p,   C3+C2+PVAR+V1BT+0+0,      ADDR(sbf2),	   // +fpp	(none)
+	c20s,   C3+C2+PFNC,               FPTR fpts_fnc, // +fps  (+fpts)
+	c20w,   LAST+C3+C2+PSTR+STR3+20,  ADDR(fpw)		   // +fpw	(none)
+};
+
+static const struct LTR ltr_r20[] =
+{
+	c2_20q, C3+C2+PFNC,                FPTR frq_fnc,  // +frq	(+fbadlin, +fbadmul)
+#ifndef FAX_ECM
+	c20y,   LAST+C3+C2+PVAR+V1BT+0+7,  ADDR(sbf)      // +fry	(+fctcrty)  Uses +FIE which is always 0
+#else
+	c20y,   LAST+C3+C2+PVAR+VBYT+255,  ADDR(fctcrty)  // +fry	(+fctcrty)
+#endif
+};
+
+static const struct LTR ltr_s20[] =
+{
+	c2_20a, C3+C2+PSTR+STR3+20,           ADDR(fsa),   // +fsa	(none)
+	c20p,   LAST+C3+C2+PVAR+V1BT+0x10+5,  ADDR(sbf)		// +fsp	(+fspl)
+};
+
+//	------------------------------------------------- //
+// Array of structures for V.25, +Gxx & +Ixx commands //
+// -------------------------------------------------- //
+
+static const struct LTR v25g[3] =
+{
+	c20m,     C2+PSTR+STR2,             idstring,   // IDSTRING,	   // +gmm
+	c20i,     C2+PSTR+STR2,             idstring,   // IDSTRING,	   // +gmi
+	c2_20r,   LAST+C2+PSTR+STR2,        version_str // VERSION_STR	 // +gmr
+};
+
+static const struct LTR v25i[2] =
+{
+	c20c,		 C3+C2+PVAR+V1BT+0+7,      ADDR(sbf),		  // +ifc Uses +FIE which is always 0
+	c2_20r,	 LAST+C3+C2+PVAR+V1BT+0+7, ADDR(sbf2)		  // +ipr Uses +FIE which is always 0
+};
+
+// ------------------------------------------------------------ //
+// Array of structure pointers to structure arrays -- Class 2.0 //
+// ------------------------------------------------------------ //
+
+static const struct LTR* const cmd_tbl20[] =		// Note: Declaration locates table in Z80 bank with code.
+{
+	ltr_a20, ltr_b20, ltr_c20, ltr_d20, ltr_e20, ltr_f20, NOT_USED, ltr_h20,     // a-h
+	ltr_i20, NOT_USED, ltr_k20, ltr_l20, ltr_m20, ltr_n20, NOT_USED,             // i-o
+	ltr_p20, NOT_USED, ltr_r20, ltr_s20, NOT_USED, NOT_USED, NOT_USED, NOT_USED  // p-w
+};
+#endif   // CLASS20_FAX
+
+// ------------------------------------------ //
+// Main tasks for parsing class 2 AT commands //
+// ------------------------------------------ //
+/* Return (0):  No class 2 (2.0) command found, so parse class 1 commands
+
+	 Return (1):  Error in a class 2 (2.0) command line, or
+								No more commands on command line, or
+								A class 2 (2.0) action command is active, so ignore
+								rest of command line.
+*/
+
+byte atfax_c2 (void)
+{
+	const struct LTR* ptr;
+	byte i;
+
+	G(c2_action_cmd) = 0;      // Clear action command indicator
+
+	if ((*G(at_cmd_ptr) >= 'A') && (*G(at_cmd_ptr) <= 'W'))  // 2nd letter in range?
+	{
+		i = *G(at_cmd_ptr) - 'A';			      // Calculate index value
+
+		switch (G(c2p.fclass))
+		{
+#ifdef CLASS20_FAX
+	#ifndef CLASS2_FAX
+			case 0:          
+	#endif                
+			case 0x20:
+				if ( (*(G(at_cmd_ptr)-1) == 'G') && (*G(at_cmd_ptr) == 'M') )
+					ptr = v25g;				  // Use +Gxx table
+
+				else if ( (*(G(at_cmd_ptr)-1) == 'I')	&&
+							 ( (*G(at_cmd_ptr) == 'F') || (*G(at_cmd_ptr) == 'P') ) )
+					ptr = v25i;				  // Use +Ixx table
+
+				else
+					ptr = cmd_tbl20[i];	  // Class 2.0 command table (+Fxx)
+
+				break;
+#endif
+#ifdef CLASS2_FAX
+			case 0:                       // Process Class 2 commands in data mode
+			case 2:
+				ptr = cmd_tbl[i];					  // Get pointer based on 2nd letter
+				break;
+#endif
+			default:
+				ptr = NOT_USED;		  // Cause function to terminate
+		}
+
+		if (ptr != NOT_USED)    // Valid 2nd letter?            
+		{
+			G(at_cmd_ptr)++;	  // Point to 3rd letter
+			   
+			while (1)   
+			{
+				i=0;
+
+				while (ptr->p[i] != 0)
+				{                                     
+					if (ptr->p[i] != *(G(at_cmd_ptr)+i))   // Compare entered command with array
+					{
+						i=255;  // Indicate mismatch (no string is 255 in length)
+						break;
+					}
+
+					else
+						i++;     // Character-by-character compare
+				}                                     
+
+				if (i != 255)    // Valid command found?
+				{
+					G(at_cmd_ptr) = G(at_cmd_ptr)+i;  // Point to next character in buffer
+					check_case (ptr);           // Check if valid case & perform action
+
+					if (*G(at_cmd_ptr) == ';')     // More AT commands follow?
+						G(at_cmd_ptr)++;             // Point to next command
+
+					if ( (G(at_result_code) != ERROR) &&   // Free from errors?  AND
+							(!G(c2_action_cmd)) )				// Not an action command?
+						atparse_cmd ();           // Parse remainder of command line
+
+					return (1);						// Exit and skip class 1 parsing
+				}
+
+				else if (ptr++->s & LAST)          // Last entry and no match?
+				{
+					G(at_cmd_ptr)--;				 // Restore pointer for class 1 function
+					break;               
+				}
+			}                                
+		}
+	}
+
+	return (0);				// Parse class 1, AT-commands
+}
+
+// ----------------------------------------------------------------------- //
+// Check if case (AT+Fcmd?, AT+Fcmd=?, AT+Fcmd=n) is valid, perform action //
+// ----------------------------------------------------------------------- //
+
+void check_case (const struct LTR* ptr) 
+{
+	switch (*G(at_cmd_ptr))
+	{
+		case '?':    // AT+Fcmd? -- Read current value
+			G(at_cmd_ptr)++;
+
+			if ( (ptr->s & C2) && chk_term (*G(at_cmd_ptr)) )  // Case 2 (read) allowed & proper termination?
+			{
+				output_val (ptr);   // Display the current value
+				return;
+			}
+
+			break;
+
+		case '=':    // AT+Fcmd=? or AT+Fcmd=n -- Test command or Set value
+			G(at_cmd_ptr)++;
+
+			if ((*G(at_cmd_ptr) == '?') &&         // Is character after '=' a '?'? 
+					chk_term (*(G(at_cmd_ptr)+1))) // AND Proper termination? 
+			{
+				output_range (ptr);         // Display range for parameter 
+				return;
+			}
+
+			else if ( (valid_char (*G(at_cmd_ptr)) ||                       // Numeric character OR
+								 (*G(at_cmd_ptr) == '"') || *G(at_cmd_ptr) == ',') &&   // Sting OR compound parameter?
+							 (ptr->s & C3))                                     // AND Case 3 allowed?
+			{
+				store_par (ptr);                // Update parameter with new value
+				return;
+			}
+
+			break;
+
+		default:     // Check if AT+Fcmd -- Execute command
+			if ( (*G(at_cmd_ptr) == 0) &&  // Line terminated? AND
+				 (ptr->s & C1) )                           // Action command allowed?
+			{
+				G(c2_gpv1) = 256;     // Indicate not range check
+				CALL(ptr->f);   // Execute function associated with this command
+				return;
+			}
+	}
+
+	at_cmd_err_ret ();
+}
+
+// --------------------------------------------------------- //
+// Output the current value of a Class 2 parameter: AT+Fcmd? //
+// --------------------------------------------------------- //
+
+void output_val (const struct LTR* ptr)
+{
+	static const byte nstr[] = {"\"\""};  
+	byte msg_buf[25];     // Used for sending messages to DTE
+	word len;            
+	word i;
+
+#ifdef MODEM_ARM
+	len = 0;              // Make the compiler happy:-)
+#endif
+
+	switch (ptr->s & 0x0C00)  // What pointer type?
+	{
+		case PVAR:
+			switch (ptr->s & 0x0300)  // What variable type?
+			{
+				case VWRD:
+					len = *(word*)VPTR(ptr->f);	  // Use len to store word value
+					break;
+
+				case VBYT:
+					len = (word)*(byte*)VPTR(ptr->f);	// Use len to store byte value
+					break;
+
+				case V2BT:
+					len = (word)((*(word*)VPTR(ptr->f) >> (ptr->s & 0x000F)) & 3);  // Use len to store 2-bit value
+					break;
+
+				case V1BT:
+					len = (word)((*(word*)VPTR(ptr->f) >> (ptr->s & 0x000F)) & 1);  // Use len to store 1-bit value
+					break;
+			}
+
+			len = at_itoa (len, msg_buf, G(c2p.fclass) != 0x20 ? DECIMAL : HEX);  // Convert value to ASCII & load buffer
+			at_output_msg (msg_buf, len);
+			break;
+
+		case PFNC:
+			G(c2_gpv1) = DISPLAY_PARM;
+			CALL(ptr->f);           // Execute function
+			break;
+
+		case PSTR:
+			if (((ptr->s & 0x0300) == STR0)                      // +FLID(+FLI) & +FCIG(+FPI)
+	#ifdef CLASS20_FAX
+			 || ((ptr->s & 0x0300) == STR3)                      // +FPA, +FSA & +FPW
+	#endif
+				 )
+			{
+				len = 0;
+				msg_buf[len++] = '"';                              // Leading quote
+
+				for (i = 0; i < (ptr->s & 0x00FF); i++)            // For each character of string...
+					msg_buf[len++] = *((byte*)VPTR(ptr->f) + i);     // Copy character to output buffer
+
+				msg_buf[len++] = '"';                              // Ending quote
+				at_output_msg (msg_buf, len);                      // Send string to DTE
+			}
+
+			else if ((ptr->s & 0x300) == STR2)                   // +FMDL(+GMM), +FMFR(+GMI) & +FREV(+GMR)
+				at_output_str ((byte*)ptr->f);                     
+
+#ifdef CLASS20_FAX
+			else	                                               // Must by STR1 type: +FFD, +FNS(+FNSS)
+			{
+				if ( !(ptr->s & 0x00FF) )                          // Zero buffer size(+FFD)?
+					at_output_str (nstr);
+
+				else                                               // + FNS(+FNSS)
+				{
+					byte fnss_buf [65];     // Need a large buffer for this one
+
+					fnss_buf[0] = '"';
+					len = 1;
+
+					for (i=0; i < G(c2p.fnss_idx); i++)
+					{
+						len = len + at_itoa (G(c2p.fnss[i]), fnss_buf+len, HEX);
+						fnss_buf[len++] = ' ';
+					}
+
+					len = len - (i != 0);                     // Remove trailing space for non-null strings
+					fnss_buf[len++] = '"';                    // Ending quote
+					at_output_msg (fnss_buf, len);
+				}
+			}
+#endif
+			break;
+	}
+}
+
+// ------------------------------------------ //
+// Check for proper termination of an AT+Fcmd //
+// ------------------------------------------ //
+
+/* Proper termination of an AT+Fcmd is with a ';' or
+	 NULL character.
+	 The termination character is passed to this function
+*/
+
+byte chk_term (byte ch)
+{
+	return ( (ch == ';') || (ch == 0) );
+}
+
+// ----------------------------------------------------------- //
+// Check if a valid character has been entered for a parameter //
+// ----------------------------------------------------------- //
+
+byte valid_char (byte num) 
+{
+	return ( ((num >= '0') && (num <= '9')) // Decimal numeric character?
+#ifdef CLASS20_FAX
+			 || ((num >= 'A') && (num <= 'F') && (G(c2p.fclass) == 0x20))  // Hex character?
+#endif
+			 );
+}
+
+// --------------------------------------------- //
+// Output a test string stored in ROM to the DTE //
+// --------------------------------------------- //
+/* In order not to overflow the CSTR segment, strings used
+	 in this module are stored in ROM.  This creates a problem
+	 with the function at_output_msg() which is in a different
+	 bank and therefore can't access the strings stored in this
+	 bank.  To get around this problem, a constant string
+	 is copied to a temporary buffer created on the stack;
+	 the address of that temporary buffer, which is in common RAM
+	 area, is then passed to at_output_msg().
+*/
+
+void at_output_str (const byte* src)
+{
+	byte msg_buf[80];
+	byte len;
+
+	len = r_strlen (src);          // Put length in temp variable
+
+	if (len > 80)                  // Message too big for buffer?
+		r_strcpy (msg_buf, (const byte *)"Too Big!");  // Debug message to DTE
+
+	else
+		r_strcpy (msg_buf, src);       // Copy string to temp buffer
+
+	at_output_msg (msg_buf, len);
+}
+
+// ------------------------------------------------------------------------ //
+// Determine the length of a NULL-terminated string stored in this ROM bank //
+// ------------------------------------------------------------------------ //
+
+byte r_strlen (const byte *str)
+{
+	byte l = 0;
+
+	while (*str++)  // Until a NULL is found?
+		l++;          // Count characters
+
+	return (l);
+}
+
+// --------------------------------------------------------------------- //
+// Copy a NULL-terminated string stored in this ROM bank to a RAM buffer //
+// --------------------------------------------------------------------- //
+
+void r_strcpy (byte *dest, const byte *src)
+{
+	while (*src)          // Until a NULL is encountered...
+		*dest++ = *src++;   // Copy characters to RAM buffer
+}
+
+// ------------------------------------------------- //
+// Output the valid range for a parameter: AT+Fcmd=? //
+// ------------------------------------------------- //
+
+void output_range (const struct LTR* ptr)
+{
+	static const byte flid_rng[] = {"(32-127)"};
+#ifdef CLASS20_FAX
+	static const byte fli_rng[] = {"(20-7E)"};
+#endif               
+	byte msg_buf[25];           // Used for sending messages to DTE
+	word len;                  
+
+	switch (ptr->s & 0x0C00)    // What pointer type?
+	{
+		case PVAR:
+			msg_buf[0] = '0';       // First character is always a '0'
+			len = 1;                // Length of message so far is 1
+
+#ifdef CLASS20_FAX             
+			if (G(c2p.fclass) == 0x20)       // Class 2.0 FAX?
+				msg_buf[len++] = '0';	 // Lower part of range is "00"
+#endif                        
+
+			switch (ptr->s & 0x0300)  // What variable type?
+			{
+//				case VWRD:    // *** Currently, no word parameters are used. ***
+				case VBYT:
+					if (!(ptr->s & C3))      // Read only? (i.e. can't write to it. e.g. +FAXERR or +FHS)
+					{                       
+						G(at_cmd_ptr)++;          // Point to next character in string
+						return;				         // Just display "Ok"
+					}                       
+
+					if (ptr->s & 0x00FF)
+					{
+						msg_buf[len++] = '-';  // Separate with a dash
+						len = len + at_itoa ((word)(ptr->s & 0x00FF), msg_buf+len, G(c2p.fclass) != 0x20 ? DECIMAL : HEX); 
+					}
+					break;
+
+				case V2BT:
+					if (ptr->s & 0x00F0)        // Maximum value greater than 0?
+					{
+	#ifdef FAX_ECM
+						msg_buf[len++] = ptr->p == fecm ? ',' : '-';  // +FECM=? response is: "0,2" or "00,02"
+	#else
+						msg_buf[len++] = '-';
+	#endif   // 
+						len = len + at_itoa ((word)((ptr->s >> 4) & 0x000F), msg_buf+len, G(c2p.fclass) != 0x20 ? DECIMAL : HEX);  // Load "0-n"
+					}
+					break;
+
+				case V1BT:
+					if (ptr->s & 0x00F0)           // Maximum value of 1 allowed?
+					{
+						msg_buf[len++] = ',';        // Separate by comma
+						len = len + at_itoa (1, msg_buf+len, G(c2p.fclass) != 0x20 ? DECIMAL : HEX);  
+					}
+					break;
+			}
+
+			at_output_msg (msg_buf, len);      // Display variable range
+			break;
+
+		case PSTR:
+			if ( ((ptr->s & 0x0300) == STR0) 	  // String type 0?   (+FLI{+FLID}, +FPI{+FCIG})
+	#ifdef CLASS20_FAX
+				|| ((ptr->s & 0x0300) == STR3)    // String type 3?   (+FPA, +FSA, +FPW)
+	#endif
+				 )
+			{
+#ifdef CLASS20_FAX
+				if (G(c2p.fclass) == 0x20)
+					at_output_str (fli_rng);
+				else
+#endif
+					at_output_str (flid_rng);           
+			}
+#ifdef CLASS20_FAX
+			else if ((ptr->s & 0x0300) == STR1)	 // String type 1?  (+FFD, +FNS{+FNSS})
+			{
+				len = at_itoa (ptr->s & 0x00FF, msg_buf, G(c2p.fclass) != 0x20 ? DECIMAL : HEX);  // Output buffer size
+				at_output_msg (msg_buf, len);
+			}
+#endif
+			break;	 // Output only "Ok" for type STR2  (+GMI{+FMFR}, +GMM{+FMDL}, +GMR{+FREV})
+
+		case PFNC:
+			G(c2_gpv1) = DISPLAY_RANGE;            // Indicate to function that range is to be displayed
+			CALL(ptr->f);                    // Call associated function
+			break;
+	}
+
+	G(at_cmd_ptr)++;  // Point to next character
+} 
+
+// -------------------------------------- //
+// Store a new parameter value: AT+Fcmd=n //
+// -------------------------------------- //
+
+void store_par (const struct LTR* ptr)
+{
+	byte msg_buf[25];     // Used for sending messages to DTE
+	word len;
+	word var, i;                 
+
+	switch (ptr->s & 0x0C00)      // What pointer type?
+	{
+	//**********//
+		case PVAR:
+	//**********//
+			len = at_atoi (G(at_cmd_ptr), &var, G(c2p.fclass) != 0x20 ? DECIMAL : HEX);  // Convert to binary
+
+			if (len)					// Numeric value?
+			{                
+				G(at_cmd_ptr) = G(at_cmd_ptr) + len;				 // Point to character after number
+
+				switch (ptr->s & 0x0300)      // What variable type?
+				{
+				//**********//
+					case VWRD:
+				//**********//
+						if (var == 0)            // Valid number? (Only zero is implemented currently)
+						{
+							*(word*)VPTR(ptr->f) = var;  // Store new new value
+							return;
+						}
+						break;
+
+				//**********//
+					case VBYT:
+				//**********//
+						if ( (len <= 3) && (var <= (ptr->s & 0x00FF)) )  // Within allowable range?
+						{
+							*(byte*)VPTR(ptr->f) = (byte)var;
+							return;
+						}
+						break;
+
+				//**********//
+					case V2BT:
+				//**********//
+						if (var <= ((ptr->s & 0x00F0) >> 4))   // Within allowable range?
+						{
+			#ifdef FAX_ECM
+							if ( (ptr->p == fecm) &&  // Setting +FECM?
+									 (var == 1) )         // Unsupported value?
+								break;                  // Cause ERROR to be displayed
+			#endif
+							*(word*)VPTR(ptr->f) = *(word*)VPTR(ptr->f) & ~(3 << (ptr->s & 0x000F));  // Clear bits
+							*(word*)VPTR(ptr->f) = *(word*)VPTR(ptr->f) + (var << (ptr->s & 0x000F));   // Update bits
+							return;
+						}
+						break;
+
+				//**********//
+					case V1BT:
+				//**********//
+						if (var <= ((ptr->s & 0x00F0) >> 4))   // Within allowable range?
+						{
+							*(word*)VPTR(ptr->f) = *(word*)VPTR(ptr->f) & ~(1 << (ptr->s & 0x000F));  // Clear bit
+							*(word*)VPTR(ptr->f) = *(word*)VPTR(ptr->f) + (var << (ptr->s & 0x000F));   // Update bit
+							return;
+						}
+						break;
+				}
+			}         
+
+			break;   // Indicate ERROR  
+
+	//**********//
+		case PSTR:
+	//**********//
+			if (*G(at_cmd_ptr)++ != '"') // Missing beginning quote?
+				break;                     // ERROR
+
+			var=0;            // Used to count string characters & as offset from G(at_cmd_ptr)
+
+		// ******************* //
+		// String Type #0 & #3 //
+		// ******************* //
+			if (((ptr->s & 0x0300) == STR0)	      // Type 0 string? (+FLID{+FLI}, +FCIG{+FPI})
+	#ifdef CLASS20_FAX
+			 || ((ptr->s & 0x0300) == STR3)       // Type 3 string? (+FPA, +FSA, +FPW)
+	 #endif
+				 )
+			{
+				while (*(G(at_cmd_ptr)+var) != 0)   // Don't search beyond end of command line
+				{                                  
+					if (*(G(at_cmd_ptr)+var) == '"')     // Found ending quote?
+						break;                             // Stop search
+
+					else if ((*(G(at_cmd_ptr)+var) < 0x20) || // Invalid character?
+								(*(G(at_cmd_ptr)+var) > 0x7E) )
+					{
+						var = 21;							          // Make length test fail
+						break;								          // Stop now
+					}
+
+					else
+						var++;                          // Increment count/offset
+				}                                  
+
+				if ( (var <= 20) && (*(G(at_cmd_ptr)+var) == '"') &&  // Length OK & ending quote?
+						 chk_term (*(G(at_cmd_ptr)+var+1)) )              // Proper termination?
+				{
+					byte k = 0;                       // Assume left justified
+
+					if ( (ptr->s & 0x0300) == STR3)   // Should string be right justified?
+						k = 20 - var;                   // Last character of string is last character of parameter
+
+					for (i=0; i<20; i++)                       // For all 20 locations in parameter...
+					{
+						if (var && (i >= k))                     // Store input character now?
+						{
+							*((byte*)VPTR(ptr->f) + i) = *G(at_cmd_ptr)++;  // Store input character
+							var--;
+						}
+
+						else
+							*((byte*)VPTR(ptr->f) + i) = ' ';            // Fill with space characters
+					}
+
+					G(at_cmd_ptr)++;                     // Point to character after ending quote
+					return;
+				}
+			}
+#ifdef CLASS20_FAX
+		// ************** //
+		// String Type #1 //          // NOTE: Only +FNS(+FNSS) is implemented at this time
+		// ************** //
+			else	                      // Store type 1 string (+FFD, +FNS{+FNSS})
+			{
+				byte s;
+
+				if (*G(at_cmd_ptr) == '"')                     // Check for NULL string
+				{
+					for (i = 1; i <= (ptr->s & 0x00FF); i++)  // For each character of the parameter...
+						*((byte*)VPTR(ptr->f) + i) = 0;         // Store all NULLs
+
+					G(c2p.fnss_idx) = 0;                         // Set count to 0
+					G(at_cmd_ptr)++;                             // Point to character after ending quote
+					return;
+				}
+
+				i = 0;                      // Index into msg_buf & byte counter
+				var = 0;                    // Used to convert ASCII to hex
+				s = 0;                      // Need to find a non-space character first
+
+				do
+				{
+					byte c;
+
+					c = *G(at_cmd_ptr);          // Get character
+
+					if ( (c >= 'a') && (c <= 'f') )  // Entered in lower case?
+						c = c & 0xDF;                  // Convert to upper case
+
+					if (valid_char (c))       // Valid character for hex number?
+					{
+						s++;                                                 // Non-space character found
+						var = (var << 4) + (c & 0x0F) + (c >= 'A' ? 9 : 0);  // Build hex character
+					}
+
+					else if ( ((c == ' ') || (c == '"')) &&  // Separator or terminator?
+										(var < 0x100) )                // Is conversion between 0x00 & 0xFF?
+					{
+						if (s)                  // Anything converted?
+							msg_buf[i++] = var;   // Save in temp. storage
+
+						var = 0;                // Initialize for another conversion
+						s = 0;                  // Need to find another non-space character first
+					}
+
+					else                      // Invalid character or number too large
+					{
+						i = FNS_BUF+1;          // Cause ERROR
+						break;                  // Stop now
+					}
+				} while (*G(at_cmd_ptr)++ != '"');             // Until ending quote is found
+
+				if ((i + G(c2p.fnss_idx)) <= FNS_BUF)          // Will this not cause the parameter to overflow?; ERROR occured?
+				{
+					byte c;
+
+					for (c = 0; c < i; c++)                   // For each number entered...
+						G(c2p.fnss[G(c2p.fnss_idx)++]) = msg_buf[c];  // Append new data to parameter string
+
+					return;
+				}
+			}
+#endif
+			break;              // Indicate ERROR
+
+	//**********//
+		case PFNC:
+	//**********//
+				G(c2_gpv1) = STORE_PARM;     // Instruct function to store parameters
+				CALL(ptr->f);          // Execute function associated with this command
+				return;
+	}
+
+	at_cmd_err_ret ();           // Indicate error to DTE
+}
+
+// ----------------------------------- //
+// Execution function for +FDCC (+FCC) //
+// ----------------------------------- //
+/*
+	Format: +FDCC=<vr>,<br>,<wd>,<ln>,<df>,<ec>,<bf>,<st>
+	Format: +FCC =<vr>,<br>,<wd>,<ln>,<df>,<ec>,<bf>,<st>,<jp>
+	 vr = {00-7F}  // Vertical resolution
+	 br = {00-0D}  // Bit rate
+	 wd = {00-04}  // Page width
+	 ln = {00-02}  // Page length
+	 df = {00-03}  // Data compression format
+	 ec = {00-03}  // Error correction
+	 bf = {00-7F}  // File transfer
+	 st = {00-07}  // Minimum scan line time
+	 jp = {00-7F}  // JPEG for color and gray scale
+*/
+
+void fdcc_fnc (void)
+{
+#ifdef CLASS20_FAX
+	byte cnt = 9;
+#else
+	byte cnt = 8;
+#endif
+
+	switch (G(c2_gpv1))
+	{
+		case STORE_PARM:
+			if (store_fdxx ( (byte*) &G(c2p.fdcc)))
+				for (G(c2_gpv1) = 0; G(c2_gpv1) < cnt; G(c2_gpv1)++)
+					G(c2p.fdis.pa[G(c2_gpv1)]) = G(c2p.fdcc.pa[G(c2_gpv1)]);  // Copy FDCC to FDIS
+
+			break;
+
+		case DISPLAY_PARM:
+			display_fdxx ((struct ST30_PARM*) &G(c2p.fdcc));
+			break;
+
+		case DISPLAY_RANGE:
+			display_fdxx_range ();
+			break;
+	}
+}
+
+// ----------------------------------- //
+// Execution function for +FDCS (+FCS) //
+// ----------------------------------- //
+/*
+	Format: +FDCS?	  (Read only)
+				<vr>,<br>,<wd>,<ln>,<df>,<ec>,<bf>,<st>
+	Format: +FCS?	  (Read only)
+				<vr>,<br>,<wd>,<ln>,<df>,<ec>,<bf>,<st>,<jp>
+*/
+
+void fdcs_fnc (void)
+{
+	switch (G(c2_gpv1))
+	{
+		case STORE_PARM:
+			at_cmd_err_ret ();	 // ERROR -- Read only!
+			break;
+
+		case DISPLAY_PARM:
+			display_fdxx ((struct ST30_PARM*) &G(c2p.fdcs));
+			break;
+
+ // case: DISPLAY_RANGE displays "Ok" message
+	}
+}
+
+// ----------------------------------- //
+// Execution function for +FDIS (+FIS) //
+// ----------------------------------- //
+/*
+	Format: +FDIS=<vr>,<br>,<wd>,<ln>,<df>,<ec>,<bf>,<st>
+	Format: +FIS =<vr>,<br>,<wd>,<ln>,<df>,<ec>,<bf>,<st>,<jp>
+*/
+
+void fdis_fnc (void)
+{
+	switch (G(c2_gpv1))
+	{
+		case STORE_PARM:
+			store_fdxx ( (byte*) &G(c2p.fdis));
+			break;
+
+		case DISPLAY_PARM:
+			display_fdxx ((struct ST30_PARM*) &G(c2p.fdis));
+			break;
+
+		case DISPLAY_RANGE:
+			display_fdxx_range ();
+			break;
+	}
+}
+
+//	--------------------------------------------------------------------- //
+// Display the range for +FDIS (+FIS) & +FDCC (+FCC) compound parameters //
+// --------------------------------------------------------------------- //
+
+#ifdef FAX_ECM
+	#define CL20_ECM_RANGE "(00-01),"
+	#define CL2_ECM_RANGE  "(0-2),"
+	#define CL20_DF_RANGE  "(00-03),"
+	#define CL2_DF_RANGE   "(0-3),"
+#else
+	#define CL20_ECM_RANGE "(00),"
+	#define CL2_ECM_RANGE  "(0),"
+	#define CL20_DF_RANGE  "(00-02),"
+	#define CL2_DF_RANGE   "(0-2),"
+#endif
+
+#ifdef V34_FAX
+	#define CL20_BR_RANGE "(00-0D),"
+#else
+	#define CL20_BR_RANGE "(00-05),"
+#endif
+
+void display_fdxx_range (void)
+{
+#ifdef CLASS20_FAX
+		static const byte cl20_range[] = {"(00-7F)," CL20_BR_RANGE "(00-02),(00-02)," CL20_DF_RANGE CL20_ECM_RANGE "(00),(00-07),(00-7F)"};
+#endif
+		static const byte cl2_range [] = {"(0-1),(0-5),(0-2),(0-2)," CL2_DF_RANGE CL2_ECM_RANGE "(0),(0-7)"};
+#ifdef CLASS20_FAX
+	if (G(c2p.fclass) == 0x20)
+		at_output_str (cl20_range);  
+
+	else
+#endif
+		at_output_str (cl2_range);  
+}
+
+// ------------------------------------------------------------------------ //
+// Display the current values for +FDIS (+FIS), +FDCC (+FCC) & +FDCS (+FCS) //
+// ------------------------------------------------------------------------ //
+
+void display_fdxx (struct ST30_PARM *ptr)  
+{
+#ifdef CLASS20_FAX
+	if (G(c2p.fclass) == 0x20)  // Class 2.0/2.1 interface used?
+		display_compound (9,
+											ptr->vr, ptr->br, ptr->wd, ptr->ln,
+											ptr->df, ptr->ec, ptr->bf, ptr->st,
+											ptr->jp
+										 );
+
+	else  // Class 2 interface
+#endif
+	display_compound (8,
+										ptr->vr, ptr->br, ptr->wd, ptr->ln,
+										ptr->df, ptr->ec, ptr->bf, ptr->st
+									 );
+}
+
+//	------------------------------------------------------------ //
+// Validate and store +FDIS (+FIS), +FDCC (+FCC) & +FDCS (+FCS) //
+// ------------------------------------------------------------ //
+
+#ifdef FAX_ECM
+	#define CL20_ECM_MAX 1
+	#define CL2_ECM_MAX  2
+	#define CL2X_DF_MAX 3
+#else
+	#define CL20_ECM_MAX 0
+	#define CL2_ECM_MAX  0
+	#define CL2X_DF_MAX 2   
+#endif
+
+#ifdef V34_FAX
+	#define CL20_BR_MAX 13
+#else
+	#define CL20_BR_MAX 5
+#endif
+
+byte store_fdxx (byte *ptr)
+{
+	byte i;
+	byte tmp_buf[9];
+	static const byte max2[] = {1,5,2,2,CL2X_DF_MAX,CL2_ECM_MAX,0,7};
+#ifdef CLASS20_FAX
+	static const byte max20[] = {127,CL20_BR_MAX,2,2,CL2X_DF_MAX,CL20_ECM_MAX,0,7,127};
+#endif
+	const byte *max = max2;
+
+	i = G(c2p.fclass) == 2 ? 7 : 8;
+
+	do
+	{
+		tmp_buf[i] = ptr[i];     // Copy current values to temp location
+	}while (i--);
+
+#ifdef CLASS20_FAX
+	if (G(c2p.fclass) == 0x20)
+	{
+		max = max20;
+		i = save_compound (9, tmp_buf, max);	  // Validate 9 elements
+	}
+
+	else
+#endif
+		i = save_compound (8, tmp_buf, max);	  // Validate 8 elements
+
+	if (i)	// Successful?
+	{
+		i = G(c2p.fclass) == 2 ? 7 : 8;
+
+		do
+		{
+			ptr[i] = tmp_buf[i];     // Save updated values
+		} while (i--);
+
+		return (1);	  // Indicate success to +FDCC (+FCC) function
+	}
+
+	else
+		return (0);   // Indicate ERROR to +FDCC (+FCC) function
+}
+
+#ifdef CLASS20_FAX
+//	--------------------------- //
+// Execution function for +FAP //
+// --------------------------- //
+/*
+	Format: +FAP=<sub>,<sep>,<pwd>
+	 <sub> = {0,1}	  // Sub-address enable/disable
+	 <sep> = {0,1}	  // Selective polling enable/disable
+	 <pwd> = {0,1}	  // Password enable/disable
+*/
+
+void fap_fnc (void) 
+{
+	byte tmp_buf[3];    
+	static const byte range[] = {"(00,01),(00,01),(00,01)"};  // +FAP=? response   
+	static const byte max[] = {1,1,1};
+
+	switch (G(c2_gpv1))
+	{
+		case STORE_PARM:
+			tmp_buf[0] = (G(c2p.fap) & FAP_SUB) != 0;	 // Current value for sub-address
+			tmp_buf[1] = (G(c2p.fap) & FAP_SEP) != 0;	 // Selective polling
+			tmp_buf[2] = (G(c2p.fap) & FAP_PWD) != 0;	 // Password
+
+			if (save_compound (3, tmp_buf, max))  
+			{
+				G(c2p.fap) = G(c2p.fap) & ~(FAP_SUB+FAP_SEP+FAP_PWD);  // Clear flags
+				G(c2p.fap) = G(c2p.fap) | (FAP_SUB * tmp_buf[0]);		// Update sub-address flag
+				G(c2p.fap) = G(c2p.fap) | (FAP_SEP * tmp_buf[1]);		// Update selective address flag
+				G(c2p.fap) = G(c2p.fap) | (FAP_PWD * tmp_buf[2]);		// Update password flag
+			}
+
+			break;
+
+		case DISPLAY_PARM:
+			display_compound ( 3,
+									 (G(c2p.fap) & FAP_SUB) != 0,
+									 (G(c2p.fap) & FAP_SEP) != 0,
+									 (G(c2p.fap) & FAP_PWD) != 0
+									);
+			break;
+
+		case DISPLAY_RANGE:
+			at_output_str (range);             
+			break;
+	}
+}
+
+//	--------------------------- //
+// Execution function for +FCQ //
+// --------------------------- //
+/*
+	Format: +FCQ=<rq>,<tq>
+	 <rq> = {0-2}    // Receive quality checking	level
+	 <tq> = {0-2}    // Transmit quality checking level
+*/
+
+void fcq_fnc (void) 
+{
+	byte tmp_buf[2];   
+	static const byte range[] = {"(00-01),(00)"};  // +FCQ=? response
+	static const byte max[] = {1,0};
+
+	switch (G(c2_gpv1))
+	{
+		case STORE_PARM:
+			tmp_buf[0] = (G(c2p.dbf) & FCQ) != 0;	             // Current value for receive quality checking
+			tmp_buf[1] = 0;                                  // Tx quality checking is 0
+
+			if (save_compound (2, tmp_buf, max))  
+			{
+				G(c2p.dbf) = G(c2p.dbf) & ~FCQ;                      // Clear Rx flag
+				G(c2p.dbf) = G(c2p.dbf) | (0x0100 * tmp_buf[0]);     // Update receive quality checking
+			}
+
+			break;
+
+		case DISPLAY_PARM:
+			display_compound ( 2,
+									 (G(c2p.dbf) & FCQ) != 0,
+										0
+									);
+			break;
+
+		case DISPLAY_RANGE:
+			at_output_str (range);     
+			break;
+	}
+}
+
+// --------------------------- //
+// Execution function for +FFC //
+// --------------------------- //
+/*
+	Format: +FFC=<vrc>,<dfc>,<lnc>,<wdc>
+	 <vrc> = {0-3}   // Vertical resolution conversion
+	 <dfc> = {0-2}   // Data format conversion
+	 <lnc> = {0-3}   // Page length conversion
+	 <wdc> = {0-2}   // Page width conversion
+*/
+
+void ffc_fnc (void) 
+{
+	byte tmp_buf[4];     
+	static const byte range[] = {"(00),(00),(00),(00)"};  // +FFC=? response
+	static const byte val[] = {"00,00,00,00"};     // Not implemented
+	static const byte max[] = {0,0,0,0};
+	byte i;
+
+	switch (G(c2_gpv1))
+	{
+		case STORE_PARM:
+			for (i = 0; i < 4; i++)
+				tmp_buf[i] = 0;		 // Load current values (only 0 allowd)
+
+			save_compound (4, tmp_buf, max);  // Go through the motions of checking input
+			break;
+
+		case DISPLAY_PARM:
+				at_output_str (val);            
+			break;
+
+		case DISPLAY_RANGE:
+			at_output_str (range);
+			break;
+	}
+}
+
+// --------------------------- //              
+// Execution function for +FIT //
+// --------------------------- //
+/*
+	Format: +FIT=<time>,<action>
+	 <time>   = {00-FF}  // Inactivity time in seconds
+	 <action> = {0,1}    // Action after time-out
+*/
+
+void fit_fnc (void) 
+{
+	byte tmp_buf[2];
+	static const byte range[] = {"(00),(00)"};  // +FIT=? response
+	static const byte max[] = {0,0};
+
+	switch (G(c2_gpv1))
+	{
+		case STORE_PARM:
+			tmp_buf[0] = G(c2p.fit);	               // Inactivity timer
+			tmp_buf[1] = (G(c2p.sbf2) & FIT) != 0;	 // Action on time-out
+
+			if (save_compound (2, tmp_buf, max))
+			{
+				G(c2p.fit) = tmp_buf[0];							         // Update inactivity timer
+				G(c2p.sbf2) = G(c2p.sbf2) & ~FIT;                // Clear flag
+				G(c2p.sbf2) = G(c2p.sbf2) | (FIT * tmp_buf[1]);	 // Update action flag
+			}
+
+			break;
+
+		case DISPLAY_PARM:
+			display_compound ( 2, G(c2p.fit), (G(c2p.sbf2) & FIT) != 0 );
+			break;
+
+		case DISPLAY_RANGE:
+			at_output_str (range);
+			break;
+	}
+}
+
+// --------------------------- //
+// Execution function for +FNR //
+// --------------------------- //
+/*
+	Format: +FNR=<rpr>,<tpr>,<idr>,<nsr>
+	 rpr = {0,1}	// Receive parameters enable/disable
+	 tpr = {0,1}	// Transmit parameters enable/disable
+	 idr = {0,1}	// ID strings enable/disable
+	 nsr = {0,1}  // Non-standard frame enable/disable
+*/
+
+void fnr_fnc (void)  
+{
+	byte tmp_buf[4];   
+	static const byte range[] = {"(00,01),(00,01),(00,01),(00,01)"};  // +FNR=? response
+	static const byte max[] = {1,1,1,1};
+
+	switch (G(c2_gpv1))
+	{
+		case STORE_PARM:
+			tmp_buf[0] = (G(c2p.fnr) & FNR_RPR) != 0;	 // Rx parameter en/dis
+			tmp_buf[1] = (G(c2p.fnr) & FNR_TPR) != 0;	 // Tx parameter en/dis
+			tmp_buf[2] = (G(c2p.fnr) & FNR_IDR) != 0;	 // ID parameter en/dis
+			tmp_buf[3] = (G(c2p.fnr) & FNR_NSR) != 0;	 // Non Std. parameter en/dis
+
+			if (save_compound (4, tmp_buf, max))  
+			{
+				G(c2p.fnr) = G(c2p.fnr) & ~(FNR_RPR+FNR_TPR+FNR_IDR+FNR_NSR);  // Clear flags
+				G(c2p.fnr) = G(c2p.fnr) | (FNR_RPR * tmp_buf[0]);  // Update rx en/di flag
+				G(c2p.fnr) = G(c2p.fnr) | (FNR_TPR * tmp_buf[1]);  // Update tx en/di flag
+				G(c2p.fnr) = G(c2p.fnr) | (FNR_IDR * tmp_buf[2]);  // Update id en/di flag
+				G(c2p.fnr) = G(c2p.fnr) | (FNR_NSR * tmp_buf[3]);  // Update ns en/di flag
+			}
+
+			break;
+
+		case DISPLAY_PARM:
+			display_compound ( 4,
+									 (G(c2p.fnr) & FNR_RPR) != 0,
+									 (G(c2p.fnr) & FNR_TPR) != 0,
+									 (G(c2p.fnr) & FNR_IDR) != 0,
+									 (G(c2p.fnr) & FNR_NSR) != 0
+									);
+			break;
+
+		case DISPLAY_RANGE:
+			at_output_str (range);
+			break;
+	}
+}
+
+// --------------------------- //
+// Execution function for +FRQ //
+// --------------------------- //
+/*
+	Format: +FRQ=<pgl>,<cbl>
+	 pgl = {00-64}	  // Percentage of "good" lines required
+	 cbl = {00-FF}	  // Number of consecutive "bad" lines allowed
+*/
+
+void frq_fnc (void) 
+{
+	byte tmp_buf[2];  
+	static const byte range[] = {"(00-64),(00-FF)"};  // +FRQ=? response
+	static const byte max[] = {0x64,0xFF};
+
+	switch (G(c2_gpv1))
+	{
+		case STORE_PARM:
+			tmp_buf[0] = G(c2p.fbadmul);					 // Load curent values
+			tmp_buf[1] = G(c2p.fbadlin);
+
+			if (save_compound (2, tmp_buf, max))        // Valid numbers?
+			{
+				G(c2p.fbadmul) = tmp_buf[0];        // Update percent "good" lines
+				G(c2p.fbadlin) = tmp_buf[1];        // Update number of consecutive "bad" lines allowed
+			}
+
+			break;
+
+		case DISPLAY_PARM:
+			display_compound (2, G(c2p.fbadmul), G(c2p.fbadlin));
+			break;
+
+		case DISPLAY_RANGE:
+			at_output_str (range);
+			break;
+	}
+}
+
+//	--------------------------- //
+// Execution function for +FBS //
+// --------------------------- //
+/*
+	Format: +FBS?  (Read Only)
+				<tbs>,<rbs>
+	 <tbs> = {0000-FFFF}  // Transmit buffer size
+	 <rbs> = {0000-FFFF}  // Receive buffer size
+*/
+
+void fbs_fnc (void) 
+{
+	byte msg_buf[25];     // Used for sending messages to DTE
+	word len;            
+
+	switch (G(c2_gpv1))
+	{
+		case STORE_PARM:
+			at_cmd_err_ret ();  // ERROR -- Read only
+			break;
+
+		case DISPLAY_PARM:
+			len = at_itoa (IO_DTE_TX_BUFF_SIZE, msg_buf, HEX);
+			msg_buf[len++] = ',';
+			len = len + at_itoa (IO_DTE_RX_BUFF_SIZE, msg_buf+len, HEX);
+			at_output_msg (msg_buf, len);	 // Display  buffer size
+			break;
+
+		// DISPLAY_RANGE displays "Ok" message
+	}
+}
+#endif  // CLASS20_FAX
+
+// ------------------------------------------- //
+// Display the values for a compound parameter //
+// ------------------------------------------- //
+
+void display_compound (byte num, ...)
+{
+	byte msg_buf[25];     // Used for sending messages to DTE
+	word len;            
+
+	va_list ptr;
+
+	va_start(ptr, num);
+	len = 0;
+
+	while (num--)
+	{
+		len = len + at_itoa ((word)va_arg(ptr, byte), msg_buf+len, G(c2p.fclass) != 0x20 ? DECIMAL : HEX);
+		msg_buf[len++] = ',';
+	}
+
+	at_output_msg (msg_buf, len-1);  // Don't display last comma
+	va_end(ptr);
+}
+
+// --------------------------------------- //
+// Validate and store a compound parameter //
+// --------------------------------------- //
+/*
+	num:       number of elements in compound parameter
+	tmp_buf[]: current values of compound parameter     
+	*range:    maximum value allowed for each element
+
+	The validated results are saved in msg_buf[] and
+	must be stored by the calling function.
+*/
+
+byte save_compound (byte num, byte* tmp_buf, const byte *range)  
+{
+	word var0;
+
+	G(c2_gpv1) = 0;  // Points to current element of compound parameter
+
+	while ( (*G(at_cmd_ptr) != ';') &&
+					(*G(at_cmd_ptr) != 0) ) // Until command terminated
+	{
+		if ( valid_char (*G(at_cmd_ptr)) )
+		{
+			G(at_cmd_ptr) = G(at_cmd_ptr) +
+											at_atoi (G(at_cmd_ptr), &var0, G(c2p.fclass) != 0x20 ? DECIMAL : HEX);  // Convert to integer & save in var0
+
+			if ( var0 <= *(range + G(c2_gpv1)) )          // Within range?
+				tmp_buf[G(c2_gpv1)] = (byte)var0;         // New parameter to temp storage
+
+			else	  // Out of range
+			{
+				G(c2_gpv1) = 0xFF; // Force (G(c2_gpv1) <= num) to fail
+				break;       // Exit while loop
+			}
+		}
+
+		else if (*G(at_cmd_ptr) == ',')   // Comma separating parameters?
+		{
+			G(c2_gpv1)++;					     // Point to next element
+			G(at_cmd_ptr)++;        // Point to next character in command buffer
+
+			if (G(c2_gpv1) >= num)     // Too many parameters?
+      	break;             // Prevent stack corruption
+		}
+
+		else           // Invalid character
+		{
+			G(c2_gpv1) = 0xFF; // Force (G(c2_gpv1) <= num) test to fail
+			break;       // Exit while loop
+		}
+	}
+
+	if (G(c2_gpv1) <= (num-1))  // Valid, compound-parameter string?
+		return (1);
+
+	else
+	{
+		at_cmd_err_ret ();	// Indicate ERROR
+		return (0);
+	}
+}
+
+// --------------------------- //
+// Execution function for +FDR //
+// --------------------------- //
+// Note: Command termination is check before this is called.
+
+void fdr_fnc (void)
+{
+	if (G(c2_gpv1) == DISPLAY_RANGE)
+		return;                     // Displays "OK" to indicate command implemented
+
+	if (G(x_modem_state) == MS_ON_DIAL)  // Modem on-line?
+	{
+		G(c2_action_cmd)++;						// Surpress "OK" when atparse_cmd() encounters a NULL
+		send_cl2_cmd (DTE_FDR);             // Alert class 2 background task
+	}
+
+	else
+		at_cmd_err_ret ();
+}
+
+// --------------------------- //
+// Execution function for +FDT //
+// --------------------------- //
+/* NOTE: This implementation DOES NOT support the optional Class 2
+	 parameters DF, VR, WD and LN (e.g.: AT+FDT=0,1,1,0).
+	 Entering them at the command line will cause an error message.
+	 Command termination is check before this is called.
+*/
+
+void fdt_fnc (void)
+{
+	if (G(c2_gpv1) == DISPLAY_RANGE)
+		return;                        // Displays "OK" to indicate command is implemented
+
+	if (G(x_modem_state) == MS_ON_DIAL) // Modem on-line?
+	{
+		G(c2_action_cmd)++;			             // Surpress "OK" when atparse_cmd() encounters a NULL
+		send_cl2_cmd (DTE_FDT);        // Alert class 2 background task
+	}
+
+	else
+		at_cmd_err_ret ();             // Indicate ERROR, not MS_ON_DIAL   
+}
+
+#ifdef CLASS2_FAX  
+
+// ------------------------------------------- //
+// Execution function for +FET -- Class 2 Only //
+// ------------------------------------------- //   
+
+void fet_fnc (void)
+{
+	static const byte fet_rng[] = {"0-2"}; 
+	byte msg_buf[25];     // Used for sending messages to DTE
+	word len;            
+
+	switch (G(c2_gpv1))
+	{
+		case STORE_PARM:
+			if (G(x_modem_state) == MS_ON_DIAL)
+			{
+				at_atoi (G(at_cmd_ptr)++, &G(c2_gpv1), DECIMAL); // Convert to integer
+
+				if ( (G(c2_gpv1) <= 2) &&                     // Within range?
+						 (*G(at_cmd_ptr) == 0) )            // Proper termination?
+				{
+					G(c2_action_cmd)++;			                    // Surpress "OK" when atparse_cmd() encounters a NULL
+					G(c2p.fet) = (byte)G(c2_gpv1);                 // Update variable
+					send_cl2_cmd (DTE_FET);               // Notify class 2 background task
+					return;
+				}
+			}
+
+			at_cmd_err_ret ();
+			break;
+
+		case DISPLAY_PARM:
+			len = at_itoa (G(c2p.fet), msg_buf, DECIMAL);  // Convert to ASCII & display
+			at_output_msg (msg_buf, len);
+			break;
+
+		case DISPLAY_RANGE:
+			at_output_str (fet_rng);    
+			break;
+	}
+}
+#endif
+
+// --------------------------------- //
+// Execution function for +FK (+FKS) //  
+// --------------------------------- //
+// Note: Command termination is check before this is called.
+
+void fk_fnc (void)
+{
+	if (G(c2_gpv1) == DISPLAY_RANGE)
+		return;                       // Displays "OK" to indicate command inplemented
+
+	if (G(x_modem_state) == MS_ON_DIAL)    // Modem on-line?
+	{                       
+		send_cl2_cmd (DTE_FK); // Send command to class 2 background task
+		G(c2_action_cmd)++;          // Ignore rest of command line, supress "Ok"
+	}                       
+
+	else
+	{
+		G(c2p.faxerr) = 2;		   // Call terminated by +FK
+		send_fhng ();          // Display +FHNG:n on the DTE
+	}
+}
+
+#ifdef CLASS20_FAX
+// --------------------------------------------- //
+// Execution function for +FIP -- Class 2.0 Only //
+// --------------------------------------------- //
+// NOTE: Reading this parameter will give an ERROR.   
+
+void fip_fnc (void)
+{
+	static const byte fip_rng[] = {"00"};
+
+	if ( (G(c2_gpv1) == 256) ||                                  // Execute command?
+			 ((G(c2_gpv1) == STORE_PARM) && (*G(at_cmd_ptr) == '0') ) ) // Store value of zero?
+	{
+		io_fax_c2_init ();                                   // Initialize parameters to manuf. default
+
+		if (G(c2_gpv1) == STORE_PARM)                              // Entered at AT+FIP=0?
+			G(at_cmd_ptr)++;                                      // Point to next character in command line
+	}
+
+	else if (G(c2_gpv1) == DISPLAY_RANGE)                        // Display range?
+		at_output_str (fip_rng);
+
+	else
+			at_cmd_err_ret ();                                 // Indicate error (Store parm != 0)
+}
+#endif
+
+// --------------------------------- //
+// Display the DTE buffer parameters //
+// --------------------------------- //
+
+void fbuf_fnc (void)
+{
+	byte msg_buf[25];     // Used for sending messages to DTE
+	byte len;            
+
+	switch (G(c2_gpv1))
+	{
+		case DISPLAY_PARM:
+			len = at_itoa (IO_DTE_RX_BUFF_SIZE, msg_buf, DECIMAL);
+			msg_buf[len++] = ',';
+
+			len = len + at_itoa (IO_DTE_RX_BUFF_FULL, msg_buf+len, DECIMAL);
+			msg_buf[len++] = ',';
+
+			len = len + at_itoa (IO_DTE_RX_BUFF_EMPTY, msg_buf+len, DECIMAL);
+			msg_buf[len++] = ',';
+
+			len = len + at_itoa (io_get_dte_rx_bytes (), msg_buf+len, DECIMAL);
+			at_output_msg (msg_buf, len);
+			break;
+
+		case DISPLAY_RANGE:
+			break;					// Display "OK" to indicate implemented
+
+		case STORE_PARM:
+			at_cmd_err_ret ();
+			break;
+	}
+}
+
+// ----------------------------------- //
+// Execution function for +FPS (+FPTS) //
+// ----------------------------------- //
+
+void fpts_fnc (void)
+{
+	static const byte fpts_rng [] = {"1-3"};   
+	byte msg_buf[25];     // Used for sending messages to DTE
+	word len;            
+	word var;
+
+	switch (G(c2_gpv1))
+	{
+		case STORE_PARM:
+			len = at_atoi (G(at_cmd_ptr), &var, G(c2p.fclass) != 0x20 ? DECIMAL : HEX);  // Convert to binary
+			G(at_cmd_ptr) = G(at_cmd_ptr) + len;				 // Point to character after number
+
+			if (len	&& (var >= 1) && (var <= 3) )  // Numeric value within range?
+				G(c2p.fpts) = (byte)var;                // Save new value
+
+			else
+				at_cmd_err_ret ();                   // Indicate ERROR
+
+			break;
+
+		case DISPLAY_PARM:
+			len = at_itoa (G(c2p.fpts), msg_buf, G(c2p.fclass) != 0x20 ? DECIMAL : HEX);  // Convert to ASCII & display
+			at_output_msg (msg_buf, len);
+			break;
+
+		case DISPLAY_RANGE:
+			at_output_str (fpts_rng);
+			break;
+		}
+}
+#endif    // CLASS2_FAX || CLASS20_FAX

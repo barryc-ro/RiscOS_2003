@@ -1,0 +1,208 @@
+/*name and version number:@(#)arm_main.c	1.1*/
+/*date of get: 		  12/15/00 10:10:56*/
+/*date of delta:	  11/30/00 21:20:21*/
+/****************************************************************
+File :	arm_main.c
+Description :
+
+Revision History :
+*****************************************************************/
+
+#include "llglob_d.h"	// modify this loc as needed
+#include "iouart_d.h"
+#include "ioglob_d.h"
+#include "dpglob.h"
+#include "z80glob.h"
+#include "allglobs.h"
+
+static firstTime = 1;
+static byte dpFailure;
+
+extern void dp_task(MODEM_COMMAND cmd, byte *text_ptr, word text_len);
+extern void io_task(MODEM_COMMAND cmd, byte *text_ptr, word text_len);
+static byte armOffHook = 0;
+static byte armFailure = 0;
+dword ll_dumpchar_timer = 0;
+int ll_dumpchar_count;
+
+/****************************************************************
+Routine : arm_hangup
+Description :
+    hang up the modem
+*****************************************************************/
+void
+arm_hangup(void)
+{
+	x_debug_msg("arm_hangup");
+
+	if (x_modem_state != MS_IDLE)
+	{
+		x_send_mail(MC_DISCONNECT, DP_TASK, 0, 0);
+	}
+}
+
+extern BOOL genpat(void);
+extern void points_clear();
+
+/****************************************************************
+Routine : ll_periodic
+Description :
+    periodic operations needed for maintenance of the modem
+*****************************************************************/
+void
+ll_periodic(void)
+{
+	if (firstTime)
+	{
+		// if the modem hasn't been initialized...
+		firstTime = 0;
+
+#if defined(DRAGNET)
+		dp_regwrite(0xde, 0x01);
+		dp_regwrite(0xde, 0x00);
+#endif
+
+		if (FAILED == UART_init())
+		{
+			x_debug_msg("Data Pump Failure");
+			dpFailure = 1;
+		}
+
+		// Start with constellation display and MSE monitor running
+		S.ModemOptions.EchoConstel = 1;
+		S.ModemOptions.EchoRam = 5;
+	}
+	else
+	{
+		// The modem is up and running.
+		int bStillTaking = TRUE;
+
+		if (armFailure)
+		{
+			x_debug_msg("armFailure");
+
+			// something failed under windows.
+			// Try to hang up if we're off hook.
+			if (x_modem_state != MS_IDLE)
+			{
+				arm_hangup();
+				S.ModemOptions.EchoConstel = 0;
+				S.ModemOptions.EchoRam = 0;
+			}
+			else
+			{
+				armFailure = 0;
+			}
+		}
+
+		// When we start a new call we clear
+		// the constellation displays so they'll be fresh.
+		if (!armOffHook && x_modem_state != MS_IDLE)
+		{
+			points_clear();
+		}
+		armOffHook = (x_modem_state != MS_IDLE);
+
+		if (!dpFailure)
+			dp_task(MC_PERIODIC, 0, 0);
+
+		io_task(MC_PERIODIC, 0, 0);
+
+		// Check to see if input buffer is full enough that
+		// we should backpressure incoming characters.
+		if ( io_dte_rx_wptr >= io_dte_rx_rptr )
+		{
+			uart_rx_count = (word) (io_dte_rx_wptr - io_dte_rx_rptr);
+		}
+		else
+		{
+			uart_rx_count = (word) ((io_dte_rx_eptr - io_dte_rx_rptr)
+				+ (io_dte_rx_wptr - io_dte_rx_sptr));
+		}
+
+		if ( uart_rx_count >= IO_DTE_RX_BUFF_FULL )
+		{
+			UART_cts_off();
+		}
+		else
+		{
+			UART_cts_on();
+		}
+		
+		if ((MS_ON_DIAL == x_modem_state) && genpat())
+		{
+			// in genpat mode, throw incoming chars on the floor
+			while (I(io_dte_tx_rptr) != I(io_dte_tx_wptr) )
+			{
+				ll_dumpchar_count++;
+				*I(io_dte_tx_rptr)++;
+	
+				if ( I(io_dte_tx_rptr) >= I(io_dte_tx_eptr) )
+				{
+					I(io_dte_tx_rptr) = I(io_dte_tx_sptr) ;
+				}
+			}
+			if (x_elapsed_time((word) ll_dumpchar_timer) > SECOND1)
+			{
+				x_debug_msg("chars received=");
+				// send # received chars to window
+				if (ll_dumpchar_count > 10000)
+				{
+					dp_puts_dec((word) (ll_dumpchar_count / 10000));
+					ll_dumpchar_count = ll_dumpchar_count % 10000;
+				}
+				dp_puts_dec((word) ll_dumpchar_count);
+				sendCrLf();
+				ll_dumpchar_timer = x_current_time();
+				ll_dumpchar_count = 0;
+			}
+			return;
+		}
+		ll_dumpchar_timer = x_current_time();
+		ll_dumpchar_count = 0;
+
+		// send output characters to the debug port
+		while ( I(io_dte_tx_rptr) != I(io_dte_tx_wptr) )
+		{
+			sendDumbChar( *I(io_dte_tx_rptr) );
+
+			if ( ++I(io_dte_tx_rptr) >= I(io_dte_tx_eptr) )
+			{
+				I(io_dte_tx_rptr) = I(io_dte_tx_sptr) ;
+			}
+		}
+	}
+}
+
+/****************************************************************
+Routine : ll_shutdown
+Description :
+    shutting down the modem.
+*****************************************************************/
+void
+ll_shutdown(void)
+{
+	if (firstTime)
+		return;
+
+	x_debug_msg("ll_shutdown");
+
+	firstTime = 1;
+}
+
+void
+main()
+{
+	int i,j;
+	printf("hello world\n");
+
+	for(i=0; i<10; i++)
+		j = i;
+	do {
+		ll_periodic();
+	} while ( TRUE  );
+}
+
+#if 0 //defined(SEECODE)
+int __HOSTLINK__ = 1;	// Tell boot.s to use swi for printing??
+#endif

@@ -1,0 +1,4785 @@
+/*name and version number:@(#)dpvmax2.c	1.8*/
+/*date of get: 		  07 Mar 1997 11:27:32*/
+/*date of delta:	  06 Mar 1997 14:32:29*/
+
+/****************************************************************
+File : dpvmax2.c
+Description :
+	This file contains all the VMAX related functions.
+
+Procedures Contained :
+	
+
+Revision History :
+	Initials        Date            Change
+	WZ				10/22/96        Initial
+	WZ001			01/14/97		Added rob bit detection ver 2
+	WZ002			01/17/97		implemented enhanced step1 for 
+									upstream training
+	WZ003			01/27/97		added training diagnostic mechanism.
+	WZ004			01/29/97		added dp_vmax_optim_convolve(void)
+	WZ005			02/05/97		changed dp_vmax_scram for dspcode ver 265-267,
+									and changed array invXX and invXX.
+	WZ006			02/06/97		changed up_flag to calch_flag in routine dp_vmax_step1
+	WZ007			02/06/97		changed WZ005 back to original ones.
+	WZ008			02/11/97		since only have 6/7, hardcode TOTSAMP to 7. 
+	WZ009			02/11/97		updated the new robbed bit detection scheme 
+									dp_vmax_step1rb_2 () corresponding
+									choc.exe ver 110.
+	WZ010			02/11/97		added detecting robbed bit patterns and types
+
+	WZ011			02/21/97		changed upstream step2 training failure SNR threshold
+									to 35.
+	WZ012			03/01/97		made changes on dp_vmax_step1rb_ to fix pbx-att-pbx
+									training low performance problem. This fix is updated
+									as choc.exe ver113.
+	WZ013			03/01/97		added flag wf_opt1, function dp_vmax_w_filt_inv and 10 supporting
+									riutines to improve 2-3 DB in channel modeling.
+	WZ014			03/04/97		change: modchint=eqgain*16384/4.0: divided by 4.0 for ap43_316
+	WZ015			03/04/97		added calculations for upstream channel modeling SNR estimate.
+	WZ016			03/11/97		changed mufactor[].	
+	WZ017			03/14/97		added funtion of dumping diagnostic data to a file.
+	WZ018			03/31/97		fixed a bug in robbed bit detection.
+*****************************************************************/
+
+#include "llglob_d.h"
+
+#ifdef K56FLEX
+
+#include "dpglob.h"
+#define _MX_I86
+#include <dos.h>
+#include <conio.h>
+#include <stdlib.h>
+#include <math.h>
+
+#include <string.h>
+#include "vxdfile.h"
+
+#include "v42bis.h"
+#include "dpvmax.h"
+#include "allglobs.h"
+
+//library functions
+#pragma intrinsic (log10)
+#pragma intrinsic(strlen)
+#pragma pack(4)
+#pragma optimize("gty",on)
+
+//typedef double FTYPE;
+typedef float FTYPE;
+
+
+//for debug
+#define STEP1_UP_COUNT2_LOOPS  (step1_upstream_itercount/step1_upstream_itercount) //WZ002
+#define STEP1_ROB_COUNT2_LOOPS  (step1_itercount/step1_itercount) //as 1400
+#define WF_K1_NUM_LOOPS		(500/500)
+#define STEP2_K2_NUM_LOOPS  (K/K)
+
+//for release
+/*
+#define STEP1_UP_COUNT2_LOOPS  (step1_upstream_itercount)	//WZ002
+#define STEP1_ROB_COUNT2_LOOPS  (step1_itercount)
+#define WF_K1_NUM_LOOPS		(500/50)
+#define STEP2_K2_NUM_LOOPS  (K/K)
+*/
+#define MODCHANLEN 	200
+#define EQUALEN 	260
+#define TOTSAMPMAX 	8			/* MAX periodicity of the staggering samples for array dimensioning*/
+
+/* STEP1 training parameters */
+#define TWOMU 		1.1e-9		/* optimum initial stepsize for step1 training */
+#define NUMSTEPS 	50			/* maximum number of gearshifts in equalizer training */
+
+/* for step3, maximum delay */
+#define TDLDLYMAX 	1000
+
+/* define index into maptable - depends upon use */
+
+#define NUMAPS 		3			/* for dimensioning purposes, total # of maps */
+#define RXFULL 		0			/* use this for full data carrying samples */
+#define RXPART 		1			/* use this for widely spaced err samples */
+#define TXFULL 		2			/* use this for transmit samples */
+#define WF_LEN_MAX	20
+
+#define FGF (FTYPE)	0.5
+#define SLC_THD 	10000
+#define PN1_MIN_LEN 10000
+#define PN1_MAX_LEN 16300
+
+//WZ013 more defs for dp_vmax_w_filt_inv
+#define	TINY 1.0e-20
+#define FGF (FTYPE)0.2
+//#define SLC_THD 10000
+//#define PN1_MIN_LEN 10000
+//#define PN1_MAX_LEN 16300
+
+//WZ001 Nominal linear levels for mu-law codec
+#define AM	10876
+#define AM_1 10364
+
+#define CM_LVL_DOWN 101
+#define CM_LVL_UP   84
+
+//WZ010
+#define ADDR_RB_PATTERN		0x000c
+#define ADDR_RB_TYPE		0x002e		//1 = type A, 0 = type B
+
+//WZ003 defs for training quanlity parms
+#define STEP1_SNR_THRSHD_DOWN_STREAM_MULTIPLE_DIGITAL_LINK		38
+#define STEP1_SNR_THRSHD_DOWN_STREAM_POOR_CHAN_MOD				45
+#define STEP1_SNR_THRSHD_UP_STREAM_POOR_CHAN_MOD				30
+#define STEP2_SNR_THRSHD_DOWN_STREAM_POOR_EQ_TRAIN				36
+#define STEP2_SNR_THRSHD_UP_STREAM_POOR_EQ_TRAIN				35	//40 WZ011
+#define WAIT_DSP_RAM	0x0092
+#define WAIT_DSP_VAL	0x7fff
+#define STEP1_RAM		0x4000
+#define VMAX_X			0x0001
+//#define VMAX_Y			0x0048
+#define VMAX_Y			0x0009
+
+typedef enum {
+	DP_VMAX_WAIT_DSP,
+	DP_VMAX_START ,
+	DP_VMAX_STEP1 ,
+	DP_VMAX_WT_MODELCHAN ,
+
+	DP_VMAX_WF_SCRAMINIT,
+	DP_VMAX_W_FILT_INV	,
+	DP_VMAX_W_FILT_1	,
+	DP_VMAX_W_FILT_2	,
+	DP_VMAX_WF_INIT_STEP1,
+	DP_VMAX_WF_STEP1	,
+	DP_VMAX_WF_WT_WF_COEF,
+
+	DP_VMAX_STEP2_1 ,
+	DP_VMAX_STEP2_2 ,
+	DP_VMAX_STEP2_3 ,
+	DP_VMAX_STEP2_4 ,
+	DP_VMAX_STEP2_5 ,
+	DP_VMAX_WT_EQTAPS , 
+	DP_VMAX_REST
+} DP_VMAX_STATE ;
+
+DP_VMAX_STATE dp_vmax_state;
+DP_VMAX_STATE dp_vmax_save;
+extern VMAX_STATUS dp_vmax_status ;
+
+byte dp_vmax_flip;				// need init as  TRUE;
+	
+int stepcnt;
+int chandlyest;
+int txmode;
+
+long int dly;		/* global state reg for scrambler	*/
+long int dly2;		/* global state reg for descrambler */
+
+int scramcnt;		/* counts number of bits valid in scram1() */
+
+int TOTSAMP;		/* periodicity of the sampling scheme   */
+int USEDSAMP;		/* # of samples out of TOTSAMP used to carry data   */
+int UNUSEDSAMP;     /* TOTSAMP - USEDSAMP  */
+
+int cm_lvl;
+int N;
+int wf_len;
+
+/***Following vars are for w_filt()*****/
+FTYPE wf_rxsample;
+FTYPE wf_rxsample_prv;
+FTYPE wf_lmserr;
+FTYPE wf_lmserrmax;
+FTYPE wf_stepsize;
+	
+int wf_k;
+FTYPE wf_rxsumsq;
+FTYPE wf_errsumsq;
+FTYPE wf_erle;
+int wf_scount;
+int wf_from;
+int wf_toid;
+word wf_add;
+
+FTYPE eqgain;
+FTYPE eq_perf_max;
+int K;
+int Kw;
+char wf_opt;		// w: whitening filter, n: no filter
+int  wf_opt1;		// TRUE - use w_filt_inv function
+
+// new global variable added by jxu
+FTYPE rxsample_prv;
+FTYPE stepsize;
+FTYPE rxsumsq;
+FTYPE errsumsq;
+FTYPE erle;
+FTYPE lmserr;
+FTYPE lmserrmax;
+int step1_from;
+int step1_toid;
+int step1_count;
+int step1_current_block;
+int step1_scount;
+word step1_ram_add ;
+
+int step2M;
+int step2L;
+int step2D;
+int step2i;
+int step2k;
+FTYPE norm_factor;
+FTYPE eqtapmax;
+FTYPE prj;
+FTYPE mu;
+int jmod;
+
+FTYPE modchanstate[MODCHANLEN];
+FTYPE modelchan[MODCHANLEN];
+ 
+int blocknum[NUMSTEPS];
+float stepsz[NUMSTEPS];
+FTYPE mufactor[6];
+FTYPE wf_coef[WF_LEN_MAX];
+FTYPE wf_st[WF_LEN_MAX];
+
+FTYPE eqerr[8] ;
+FTYPE grd[EQUALEN];
+
+//additional vars for step1rb
+FTYPE step1_rl_txsample;
+int step1_training;	
+int step1_isig;
+
+int step1_w_ptr;
+FTYPE step1_cm_lvls[6];
+FTYPE step1_un;
+FTYPE step1_stpbeta;
+FTYPE step1_avg_info;
+FTYPE step1_info_num;
+int step1_itercount;
+int step1_k;
+int rb_st[6];
+
+//other additional vars
+int rob_opt;	// TRUE: use rob bit detection, default is ver. 1
+int rob_opt_v2; // WZ001: TRUE: use rob bit detection ver. 2 
+word dsp_wt_ptr;
+word host_rd_ptr;
+	
+//additional vars for upstream training 
+int calch_opt;
+	
+//WZ001: variables for version 2 of robbed-bit detection
+int maxindex,nextmax;
+FTYPE dist[6],cm_h_avg, max_dist, nextmax_dist,nu;
+FTYPE cm_l0_avg,cm_l1_avg;
+
+//WZ009: more vars for robbed bit detection ver 110
+FTYPE cm_lvls_org[6], lvl_spc;
+int step1_w_ptr;
+int level_index[6];
+int rob_v110_opt;	//flag for robbed bit detection ver 1.10
+	
+//wz002: more vars for step1 for new upstream training
+FTYPE modelstate[250];
+FTYPE crosscor[250], scalexx;
+int up_flag;
+int step1_upstream_itercount;
+
+int calch_flag;	//WZ006
+
+//heap alloc pointer
+dword heap_ptr;
+	
+FTYPE equaltaps[TOTSAMPMAX][EQUALEN];
+
+//WZ003: added for vmax diagnostic
+FTYPE erle_min;	
+FTYPE eq_SNR[8];
+FTYPE eq_SNR_min;	
+int rb_type;	
+
+	
+//WZ004: global vars for FTYPE dp_vmax_optim_convolve(void)
+int   input_avail_flag;
+FTYPE input;
+FTYPE output;
+//FTYPE modelchan[MODCHANLEN];		//channel response already decleared above
+FTYPE delay_buff[2*MODCHANLEN - 1];
+int delay_buff_index;				//need init as MODCHANLEN - 1
+
+//WZ013 more vars for dp_vmax_inv_filt()
+int	n_min=1;
+int	w_filt_inv_done = FALSE;
+
+//WZ014 option for eq_gain for ap43_316
+int eq_gain_opt = FALSE;
+
+//WZ017
+int diag_log_opt = FALSE;	//if TRUE log diagnostic info to a file
+int log_file_offset = 0;    //offset of bytes from begining of the log file
+char *log_file_name = "c:\\ltvxd.log";
+//dword hfile;
+//int code;
+
+//extern DP_VMAX_STATUS dp_vmax_status ;
+
+extern void save_fpu_state(long *);
+extern void restore_fpu_state(long *);
+extern void * VMODEM_HeapAllocate ( dword, dword ) ;
+extern void * VMODEM_HeapReAllocate ( void *, dword, dword ) ;
+extern void VMODEM_HeapFree ( void *, dword ) ;
+
+unsigned int dp_vmax_scram1();
+void dp_vmax_scraminit();
+unsigned int dp_vmax_descram1();
+void dp_vmax_descraminit();
+void dp_vmax_init();
+void dp_vmax_w_filt();
+byte dp_vmax_step1();
+byte dp_vmax_step2();
+void dp_vmax_step3();
+void dp_vmax_runrx();
+void dp_vmax_runtx();
+void dp_vmax_step2tx();
+void dp_vmax_exprx();
+void dp_vmax_exp2rx();
+void dp_vmax_wait_dsp();
+void dp_vmax_wt_modelchan();
+void dp_vmax_wt_eqtaps();
+void dp_vmax_wt_wf_coef();
+FTYPE dp_vmax_trnxmtsamp();
+FTYPE dp_vmax_convolve();
+FTYPE dp_vmax_iconvolve();
+void dp_vmax_shift();
+void dp_vmax_lshift();
+void dp_vmax_transmit();
+int dp_vmax_quantidx();
+FTYPE dp_vmax_quant();
+int dp_vmax_quantdspidx();	/* same as quantidx except use DSP-like threshold tbl */
+FTYPE dp_vmax_quantdsp();	/* same as quant except use DSP-like threshold table  */
+void dp_vmax_logerrors();
+FTYPE dp_vmax_lms();
+FTYPE dp_vmax_lms1();
+FTYPE dp_vmax_ilms();
+FTYPE dp_vmax_iilms();
+void dp_vmax_lmsupdate();
+int dp_vmax_scramN();
+FTYPE dp_vmax_dotp();
+FTYPE dp_vmax_makedata();
+int dp_vmax_makebits();
+int dp_vmax_rand();
+FTYPE dp_vmax_mulin();
+
+void dp_vmax_croproduct(FTYPE *crosscor, FTYPE txsample,
+						FTYPE *modelstate, int len);
+void dp_vmax_calch(FTYPE *modelchan, FTYPE *crosscor, int len,
+				   int nsample, FTYPE txsample);
+
+FTYPE dp_vmax_get_min_SNR(FTYPE *eqerr, int size);
+FTYPE dp_vmax_optim_convolve(void);
+
+
+float dp_vmax_fdiv(float upper, float lower);	
+double dp_vmax_ddiv(double upper, double lower);
+
+//WZ013 more functions to support dp_vmax_w_filt_inv() 
+int		dp_vmax_free_ivector (int *v, int nl, int nh);
+int		dp_vmax_free_dvector (double *v, int nl, int nh);
+int		dp_vmax_free_dmatrix (double **m, int nrl, int nrh, int ncl, int nch);
+int		dp_vmax_ludcmp (double  **a, int n, int *indx, double *d);
+void	dp_vmax_lubksb (double **a, int n, int *indx, double *col);
+void	dp_vmax_nrerror ();
+float	*dp_vmax_vector (int nl, int nh);
+double	*dp_vmax_dvector (int nl, int nh);
+int		*dp_vmax_ivector (int nl, int nh);
+double	**dp_vmax_dmatrix (int nrl, int nrh, int ncl, int nch);
+int		dp_vmax_w_filt_inv (void); 
+
+int dp_vmax_log_DSP_data(unsigned char* fname);
+
+#ifdef DEBUGGING
+/****************************************************************
+Routine : fitoa()
+Description :
+	This routine converts the double word integer "num" into its 
+	string.
+*****************************************************************/
+word fitoa( dword num, byte *str )
+{
+   byte i;
+   byte strLength;
+   word val;
+
+   // get the string length
+         if ( num < 10 )
+              strLength = 1;
+         else if (num < 100)
+              strLength = 2;
+         else if (num < 1000)
+              strLength = 3;
+         else if (num < 10000)
+              strLength = 4;
+         else if (num < 100000)
+              strLength = 5;
+         else if (num < 1000000)
+              strLength = 6;
+         else if (num < 10000000)
+              strLength = 7;
+         else if (num < 100000000)
+              strLength = 8;
+         else if (num < 1000000000)
+              strLength = 9;
+         else if (num < 0xffffffff)
+              strLength = 10;
+         else
+              return 0;   // can't handle a number > 65535
+   i = strLength;
+
+   do
+   {
+      val = num % 10;
+      str[--i] = (byte)(val+'0');
+
+      num /= 10;
+
+   } while (i != 0);
+
+   str[strLength] = NULL;
+   return ( strLength );
+}
+void fprintf ( byte *dest, byte *src, dword val1 )
+{
+    word i ;
+    dword value;
+    
+    while ( *src != NULL )
+    {
+        if ( *src == '%' )
+        {
+            src++ ;
+            value = val1;
+            switch(*src++)
+            {
+            case 'd':
+                i =  fitoa( value, dest ) ;
+                break;
+            }
+            dest = dest + i ;
+            *dest++ = ' ' ;
+        }
+        else
+        {
+            *dest++ = *src++ ;
+        }
+    }
+    *dest = NULL ;
+}
+
+/**************************************************************************
+Routine : short_i_toa
+Description :
+	This routine converts short integer "num" into its string
+	equivalent and places the result in the string pointed to by
+	"str". It also returns the length of the string.
+	The number will be converted to DECIMAL inegter string.
+        
+Parameters in :
+	num,
+Parameters out :
+	str
+WZ017
+***************************************************************************/
+word short_i_toa( short snum, byte *str)
+{
+   byte i;
+   byte strLength;
+   word val;
+   byte format = 10;
+
+   word num;
+
+   num = snum >= 0 ? snum : (- snum);
+
+   // get the string length
+   if ( num < 10 )
+		strLength = 1;
+   else if (num < 100)
+		strLength = 2;
+   else if (num < 1000)
+		strLength = 3;
+   else if (num < 10000)
+		strLength = 4;
+   else if (num < 32768)
+		strLength = 5;
+   else
+		return 0;   // can't handle a number > 65535
+   
+   if(snum < 0) strLength++;	//negative number needs a "-"
+   
+   i = strLength;
+
+   do
+   {
+      val = num % format;
+      
+      str[--i] = (byte)(val+'0');
+
+      num /= format;
+
+   } while (i != 0);
+
+   if(snum < 0)str[0] = '-';	//over write with "-" to str[0]
+
+   str[strLength] = NULL;
+   return ( strLength );
+}
+
+/****************************************************************
+Routine : debug()
+Description :
+	print out the debugging message for floating point numbers.
+*****************************************************************/
+
+void debug ( byte *dest, FTYPE num )
+{
+//long pfpuState[32];
+	byte szString[100] ;
+	FTYPE num_abs;
+	FTYPE scaled_num;
+	byte szScale[20];
+
+	
+//save_fpu_state(pfpuState);
+	num_abs = (num>0)?num:(-num);
+	if(num_abs >= 1E-42 && num_abs < 1E-36){
+		scaled_num = 1E+45*num_abs;
+		x_strcpy(szScale, " (*1E+45) ") ;
+	}else if(num_abs >= 1E-36 && num_abs < 1E-30){
+		scaled_num = 1E+39*num_abs;
+		x_strcpy(szScale, " (*1E+39) ") ;
+	}else if(num_abs >= 1E-30 && num_abs < 1E-24){
+		scaled_num = 1E+33*num_abs;
+		x_strcpy(szScale, " (*1E+33) ") ;
+	}else if(num_abs >= 1E-24 && num_abs < 1E-18){
+		scaled_num = 1E+27*num_abs;
+		x_strcpy(szScale, " (*1E+27) ") ;
+	}else if(num_abs >= 1E-18 && num_abs < 1E-12){
+		scaled_num = 1E+21*num_abs;
+		x_strcpy(szScale, " (*1E+21) ") ;
+	}else if(num_abs >= 1E-12 && num_abs < 1E-6){
+		scaled_num = 1E+15*num_abs;
+		x_strcpy(szScale, " (*1E+15) ") ;
+	}else if(num_abs >= 1E-6 && num_abs < 1.0){
+		scaled_num = 1E+9*num_abs;
+		x_strcpy(szScale, " (*1E+9) ") ;
+	}else if(num_abs >= 1.0 && num_abs < 1E+6){
+		scaled_num = 1E+3*num_abs;
+		x_strcpy(szScale, " (*1E+3) ") ;
+	}else if(num_abs >= 1E+6 &&  num_abs < 1E+12){
+		scaled_num = num_abs/1E+3;
+		x_strcpy(szScale, " (/1E+3) ") ;
+	}else{
+		scaled_num = num_abs;
+		x_strcpy(szScale, " ") ;
+	}
+
+	if ( num < 0 )
+	{
+		x_strcpy(szBuffer, "vmax - N ") ;
+		fprintf(szString,dest,(dword)(scaled_num));
+	}
+	else
+	{
+		x_strcpy(szBuffer, "vmax - P ") ;
+		fprintf(szString,dest,(dword)scaled_num);
+	}
+	x_strcat ( szBuffer, szScale ) ;
+	x_strcat ( szBuffer, szString ) ;
+	x_debug_msg ( szBuffer );
+//restore_fpu_state(pfpuState);
+}
+
+/****************************************************************
+Routine : debug_snr()
+Description :
+	
+*****************************************************************/
+
+void debug_snr ( void )
+{
+	long pfpuState[32];
+
+	save_fpu_state(pfpuState);
+	sprintf(szBuffer,"vmax - i=%d k=%d",step2i,step2k);
+	x_debug_msg ( szBuffer );
+	debug ("SNR: eqerr=%d", (FTYPE)-10*log10((double)eqerr[step2i]) );
+	restore_fpu_state(pfpuState);
+}
+#else
+void debug ( void )
+{}
+void debug_snr ( void )
+{}
+#endif
+/****************************************************************
+Routine : dp_vmax_init()
+Description :
+	This function inits the vmax related parms..
+*****************************************************************/
+void dp_vmax_init(void){
+
+	long pfpuState[32];
+
+	int i, flag;
+	char str[20];
+
+	save_fpu_state(pfpuState);
+
+	//share buff with V42bis
+	//dp_vmax_ptr1 = (VMAX_GLOBAL_VARS1 *)symbol;
+
+	for (i=0;i<MODCHANLEN;i++) {
+		modelchan[i]= 0.0;
+		modchanstate[i]= 0.0;
+	}
+
+	for(i = 0; i <  8; i++){	//WZ003
+		eqerr[i] = 0.0; 
+		eq_SNR[i] = 0.0;
+	}
+
+	for(i = 0; i < 2*MODCHANLEN - 1; i++){	//WZ004
+		delay_buff[i] = 0.0;
+	}
+
+	txmode=0;
+	USEDSAMP=6;
+	TOTSAMP = 7;
+	
+	//rob detection
+	rob_opt_v2 = TRUE;	//is FALSE, will use ver 1(ver 1)
+	rob_v110_opt = TRUE;
+
+//	if ( dp_vmax_downstream () == FALSE )
+	if ( x_modem_originate == FALSE )
+	{
+		/* up stream */
+		rob_opt = FALSE;
+		up_flag = TRUE;//wz002
+		calch_flag = TRUE;
+
+		N = 200 ;	// S register
+		cm_lvl = CM_LVL_UP ;
+
+		wf_opt = 'n';
+		wf_opt1 = FALSE;	//WZ013
+		stepsz[0]=5.1e-9;	// diff for US
+		stepsz[1]=10.0e-10; // diff for US
+		K=100;				// diff for us
+
+		for (i=0;i<USEDSAMP;i++){
+			mufactor[i]=0.7;	//WZ015
+		}
+	
+	}
+	else
+	{
+		/* down stream */
+		rob_opt = TRUE;		//TRUE;
+		up_flag = FALSE;	//wz002
+		calch_flag = FALSE; //TRUE;
+
+		N = 240 ;	// S register
+		cm_lvl = CM_LVL_DOWN ;
+		wf_opt = 'w'; 
+		wf_opt1 = TRUE;		//WZ013
+		K=160;
+		stepsz[0]=1.1e-9;
+		stepsz[1]=5.0e-10;
+
+		for (i=0;i<USEDSAMP;i++){
+			mufactor[i]=0.68;	//WZ015
+		}
+	
+	}
+
+	stepcnt=2;
+	blocknum[0]=0; 
+	blocknum[1]=1000;
+
+	if (TOTSAMP == 8)
+		chandlyest = 145 ;
+	else
+		chandlyest = 141 ;
+
+
+	//eq_perf_max = 0.000000002;	//change for both
+	eq_perf_max=0.000000002;
+
+	wf_len=10;
+	wf_stepsize=1.0e-5;
+
+	Kw = 500;
+
+	UNUSEDSAMP=TOTSAMP - USEDSAMP;
+
+	for (i=0;i<wf_len;i++) {
+		wf_coef[i]=0.0;
+		wf_st[i]=0.0;
+	}
+	
+	dly=0x1d2;		//WZ007
+	dly2=0x1d2;		//WZ007
+	//dly=0;		//WZ005
+	//dly2=0;		//WZ005
+	
+	scramcnt=0;
+
+	//WZ003 update the dp_vmax_status
+	//dp_vmax_status.DownstreamLevels = CM_LVL_DOWN;
+	//dp_vmax_status.UpstreamLevels = CM_LVL_UP;
+
+	erle_min = 0.0;
+	eq_SNR_min = 0.0;
+
+	eq_gain_opt = TRUE;		//WZ014
+
+	diag_log_opt = TRUE;	//WZ017
+
+#ifdef DEBUGGING
+	
+	
+	//for(i =0; i< 20; i++){
+	//debug("vmax - 1.0*i/2.0 = %d", dp_vmax_fdiv(1.0*i, 2.0));
+	//}
+
+	//heap_ptr = VMODEM_HeapAllocate(1024*1024, 0);
+	//debug("vmax - heap allocated: heap_ptr =%d", heap_ptr);
+	//VMODEM_HeapFree ( heap_ptr, 1024*1024 ) ;
+	//_asm mov flag, eax
+	//debug("vmax - heap freed: free flag(Nonzero - OK) =%d", flag);
+	
+	
+
+	sprintf(szBuffer,"vmax - TOTSAMP=%d,chandlyest=%d",TOTSAMP,chandlyest);
+	x_debug_msg ( szBuffer );
+	sprintf(szBuffer,"vmax - N=%d,cm_lvl=%d",N,cm_lvl);
+	x_debug_msg ( szBuffer );
+	dp_vmax_state = DP_VMAX_WAIT_DSP ;
+#endif
+
+	restore_fpu_state(pfpuState);
+	return;
+}
+
+/****************************************************************
+Routine : dp_vmax_init_step1 () ;
+Description :
+	init the step1 variables.	
+*****************************************************************/
+void dp_vmax_init_step1(void)
+{
+	int i ;
+	FTYPE rxsample;
+
+	long pfpuState[32];
+
+	save_fpu_state(pfpuState);
+
+	stepsize=TWOMU;
+	for (i=0;i<MODCHANLEN;i++) {
+		modelchan[i]=0.0;
+		modchanstate[i]=0.0;
+		if(calch_flag == TRUE){
+			crosscor[i] = 0.0;
+			modelstate[i] = 0.0;
+		}
+	}
+	rxsample_prv=0.0;
+	
+	
+	for (i=0;i<wf_len;i++) {
+		wf_st[i]=0.0;
+	}
+
+
+	rb_type = 0;			//WZ003: default type A
+
+	if(calch_flag ==  TRUE){
+		step1_upstream_itercount = 1950;
+	}else{
+		step1_upstream_itercount = 1200;
+	}
+
+	step1_from=0;
+	step1_toid=MODCHANLEN;
+	step1_count=0;
+	step1_ram_add = STEP1_RAM ;
+	step1_current_block=0;
+	step1_scount = 0 ;
+
+	lmserrmax=0.0;
+	rxsumsq=0.0;
+	errsumsq=0.0;
+
+	if(calch_flag == TRUE){			//WZ002
+		for(i = 0; i < MODCHANLEN -1; i++){
+			rxsample = 0.0001*(FTYPE)(short)dp_read_dsp_ram(step1_ram_add++);
+			modelstate[MODCHANLEN - i -2] = rxsample;
+			//if( i < 10){
+			//	debug("i = %d", i);
+			//	debug("rxsample = %d", rxsample);
+			//}
+		}
+	}
+
+	restore_fpu_state(pfpuState);
+}
+/****************************************************************
+Routine : dp_vmax_step1()
+Description :
+		
+*****************************************************************/
+byte dp_vmax_step1() {
+
+	long pfpuState[32];
+
+	FTYPE txsample, rxsample, rxsample_wf;
+	int i,j;
+	int step1_count2;
+
+	int k;
+	FTYPE rxsig;
+
+	save_fpu_state(pfpuState);
+
+//while (k<1200){
+
+	if ( step1_count < step1_upstream_itercount )
+	{
+		for(step1_count2 = 0; step1_count2 < STEP1_UP_COUNT2_LOOPS; step1_count2++){
+		
+
+		step1_scount++;
+
+	if(calch_flag == FALSE){ //WZ002
+
+        if ((blocknum[step1_current_block]==step1_count)&&
+		    (step1_current_block<stepcnt))
+		{
+         	stepsize=stepsz[step1_current_block]/64;
+			step1_current_block++;
+        }
+	
+	}//end if(calch_flag == FALSE)
+
+		step1_count++;
+
+		for (i=0;i<8;i++) {
+	if(calch_flag == TRUE){	//WZ002
+			txsample = 0.0001*dp_vmax_trnxmtsamp(cm_lvl);
+	}else{
+			txsample=dp_vmax_trnxmtsamp(cm_lvl);
+	}
+	
+	if(calch_flag == TRUE){	//WZ002
+			rxsample=0.0001*(FTYPE)(short)dp_read_dsp_ram(step1_ram_add++);
+			//if(step1_count < 2){ //debug
+			//	debug("step1_count = %d", step1_count);
+			//	debug("rxsample = %d", rxsample);
+
+			//}
+	}else{
+			rxsample=(FTYPE)(short)dp_read_dsp_ram(step1_ram_add++);
+	
+			rxsample_wf=rxsample - dp_vmax_convolve(rxsample_prv,wf_coef,wf_st,wf_len);
+			rxsample_prv=rxsample;
+	}
+
+	if(calch_flag == TRUE){	//WZ002
+			dp_vmax_shift(rxsample, modelstate, MODCHANLEN);
+	 // debug("MODCHANLEN = %d", MODCHANLEN);	
+			dp_vmax_croproduct(crosscor, txsample, modelstate, MODCHANLEN);
+	 // x_debug_msg("dp_vmax_croproduct called");
+	}else{
+			lmserr=dp_vmax_lms(stepsize,txsample,rxsample_wf,modelchan,modchanstate,
+			step1_from,step1_toid,MODCHANLEN);
+			rxsumsq += rxsample * rxsample;
+			errsumsq += lmserr * lmserr;
+			if (lmserr<0) lmserr=-lmserr;
+			if (lmserr>lmserrmax) lmserrmax=lmserr;
+	}//end if(calch_flag == TRUE)
+		}
+
+		if (step1_scount==100) {
+//			if (step1_count>200) {
+	if(calch_flag == TRUE){ //WZ002
+		debug("8 x %d samples", step1_count);
+		debug("1st cross correl is %d", crosscor[0]);
+	}else{
+
+				/* dont print anything until error is reasonable */
+				erle=10 * (FTYPE)log10((double)(errsumsq/rxsumsq));
+				
+				//WZ003: get the best one (since erle < 0, so max(abs(erle)) is the best.)
+				//if(calch_flag == TRUE ){	//up stream does here
+					if(erle < erle_min  ) erle_min = erle;
+				//}
+
+
+//	printf("8 x %d samples, max error: %f, erle= %lf\n",k,lmserrmax,erle);
+//debug ( "errsumsq=%d", (errsumsq) ) ;
+//debug ( "rxsumsq=%d", (rxsumsq) ) ;
+//debug ( "max error=%d", lmserrmax ) ;
+debug ( "erle=%d", erle ) ;
+	}//end if(calch_flag == TRUE) else
+//			}
+			lmserrmax=0.0;
+			rxsumsq=0.0;
+			errsumsq=0.0;
+			step1_scount=0;
+		}
+		
+		
+	}//end for(step1_count...
+		
+	//	if(step1_count == STEP1_COUNT2_SIZE){
+	//		x_debug_msg("dp - step1 1st run END");
+	//	}
+		
+		restore_fpu_state(pfpuState);
+		return FALSE;
+	}
+	else// paired with if ( step1_count < step1_upstream_itercount...
+	{	
+		if(calch_flag == TRUE){	
+		
+		//WZ002
+		scalexx = 0.0001*dp_vmax_trnxmtsamp(cm_lvl);
+		x_debug_msg("Start calch");
+		dp_vmax_calch(modelchan, crosscor, MODCHANLEN, step1_upstream_itercount*8, scalexx);
+		x_debug_msg("End calch");
+
+
+		//WZ004:now calculate: SNR = - 10 * log10((double)errsumsq/(double)rxsumsq);
+		/*
+		x_debug_msg("START calc upstream SNR");
+
+		errsumsq = 0;
+		rxsumsq = 0;
+		step1_ram_add = STEP1_RAM ;
+
+		dp_vmax_scraminit();	//init scram vars
+		
+		input_avail_flag = TRUE;			//set as TRUE
+		delay_buff_index = MODCHANLEN - 1;
+	
+		//do calculation
+		for(i = 0; i < 3000; i++){
+			input = 0.0001*dp_vmax_trnxmtsamp(cm_lvl);		//transmit sample
+			output = dp_vmax_optim_convolve();
+			rxsample = 0.0001*(FTYPE)(short)dp_read_dsp_ram(step1_ram_add++);
+			
+			errsumsq = errsumsq*0.995+0.005*(rxsample -output)*(rxsample-output);
+			rxsumsq = rxsumsq*0.995 + 0.005*rxsample*rxsample;
+			//rxsumsq = rxsumsq*0.995 + 0.005*rxsample*rxsample;
+			//errsumsq= errsumsq*0.995+0.005*(rxsample -rxsig)*(rxsample-rxsig);
+
+		}
+		
+		erle = - 10 * log10((double)errsumsq/(double)rxsumsq);
+		
+		debug("Upstream SNR = %d", erle);
+		x_debug_msg("END calc upstream SNR");
+		*/
+
+		//WZ015: added calculation for upstream channel modeling SNR estimate
+		k=0;
+		rxsumsq=0.0;
+		errsumsq=0.0;
+		step1_ram_add = STEP1_RAM ;
+		dp_vmax_scraminit();         // init scrambler
+
+		for(i=0;i<(MODCHANLEN-1);i++) {
+			modelstate[MODCHANLEN-i-2]=0.0;
+		}
+
+		while (k<3000) {
+			
+			k++;
+
+			txsample=0.0001*dp_vmax_trnxmtsamp(cm_lvl);
+			//rxsample=0.0001*rram(hiadd,loadd);
+			rxsample = 0.0001*(FTYPE)(short)dp_read_dsp_ram(step1_ram_add++);
+
+			dp_vmax_shift(txsample, modelstate, MODCHANLEN);
+			rxsig = dp_vmax_dotp(modelchan, modelstate, MODCHANLEN);
+			rxsumsq = rxsumsq*0.995 + 0.005*rxsample*rxsample;
+			errsumsq= errsumsq*0.995+0.005*(rxsample -rxsig)*(rxsample-rxsig);
+
+			//printf("Channel modeling SNR estimation: %f  %lx %i \n", (log10((rxsumsq/errsumsq))), dly, k );
+		}
+
+		debug("Channel modeling SNR: %d", (10.0*log10((rxsumsq/errsumsq))));
+
+
+		}//end if(calch_flag == TRUE){
+
+		restore_fpu_state(pfpuState);
+		return TRUE ;
+	}
+}
+
+/****************************************************************
+Routine : dp_vmax_init_step1rb()
+Description :
+*****************************************************************/
+void dp_vmax_init_step1rb() {
+
+	int i;
+	long pfpuState[32];
+
+	save_fpu_state(pfpuState);
+
+	stepsize=TWOMU;
+
+	for (i=0;i<MODCHANLEN;i++) {
+		modelchan[i]=0.0;
+		modchanstate[i]=0.0;
+	}
+
+	for (i=0;i<6;i++)
+		step1_cm_lvls[i] = dp_vmax_mulin(255-cm_lvl);
+	
+	rxsample_prv=(FTYPE)0.0;
+
+	step1_from=0;
+	step1_toid=MODCHANLEN;
+	//step1_count = 0;
+	step1_training = 1;
+	step1_current_block = 0;
+	step1_itercount=1400;
+	step1_k=0;
+
+	step1_ram_add = STEP1_RAM;
+
+	step1_isig=0;
+	step1_stpbeta=0.0;
+
+	restore_fpu_state(pfpuState);
+
+	return;
+
+}
+	
+/****************************************************************
+Routine : dp_vmax_step1rb_1()
+Description :
+	
+*****************************************************************/
+int dp_vmax_step1rb_1(void) {
+
+	FTYPE txsample, rxsample, rxsample_wf;
+	int i,j;
+	long pfpuState[32];
+	int step1_count2;
+	FTYPE f32tmp;
+
+	save_fpu_state(pfpuState);
+
+	//while (step1_k<step1_itercount) {
+
+	if(step1_k < step1_itercount){
+
+		for(step1_count2 = 0; step1_count2 < STEP1_ROB_COUNT2_LOOPS; step1_count2++){
+
+		step1_scount++;
+		if ((blocknum[step1_current_block]==step1_k)&&(step1_current_block<stepcnt)) {
+					stepsize=stepsz[step1_current_block]/64;
+					step1_current_block++;
+					//printf("stepsize now: %e\n",stepsize);
+	debug("stepsize now: %d",stepsize);
+		}
+		step1_k++;
+
+		if(step1_k==400) step1_stpbeta= 0.16; //0.2;WZ005
+
+		for (i=0;i<8;i++) {
+			txsample=dp_vmax_trnxmtsamp(cm_lvl);
+			step1_rl_txsample=txsample;
+
+			if(txsample>0) txsample = step1_cm_lvls[step1_isig];
+			else txsample = -step1_cm_lvls[step1_isig];
+
+			//rxsample=rram(hiadd,loadd);
+			rxsample=(FTYPE)(short)dp_read_dsp_ram(step1_ram_add++);
+
+//if(step1_k < 3){
+//	debug("i = %d", i);
+//	debug("rxsample=%d", rxsample);
+//}
+
+
+			rxsample_wf=rxsample-dp_vmax_convolve(rxsample_prv,wf_coef,wf_st,wf_len);
+			rxsample_prv=rxsample;
+			lmserr=dp_vmax_lms(stepsize,txsample,rxsample_wf,modelchan,modchanstate,
+				step1_from,step1_toid,MODCHANLEN);
+	//-------------------------------------------------------------------------
+		for(step1_w_ptr=0;step1_w_ptr<6;step1_w_ptr++){
+			step1_un=0.0;
+			for(j=0;j<33;j++){
+			if (modchanstate[j*6+step1_w_ptr]>0)
+			step1_un=step1_un+modelchan[j*6+step1_w_ptr];
+			else
+			step1_un=step1_un-modelchan[j*6+step1_w_ptr];
+			}
+	//	   if((step1_isig-step1_w_ptr)!=0){		//WZ012
+			if(step1_isig-step1_w_ptr <0)
+			step1_cm_lvls[step1_isig-step1_w_ptr+6]=step1_cm_lvls[step1_isig-step1_w_ptr+6]+step1_stpbeta*lmserr*step1_un;
+			else
+			step1_cm_lvls[step1_isig-step1_w_ptr]=step1_cm_lvls[step1_isig-step1_w_ptr]+step1_stpbeta*lmserr*step1_un;
+	//	   }									//WZ012
+		}
+
+			step1_isig++;
+			if(step1_isig==6) step1_isig=0;
+	//-------------------------------------------------------------------------
+	//performance evaluation
+
+			rxsumsq += rxsample * rxsample;
+			errsumsq += lmserr * lmserr;
+			if (lmserr<0) lmserr=-lmserr;
+			if (lmserr>lmserrmax) lmserrmax=lmserr;
+		}
+
+		if (step1_scount==100) {
+			if (step1_k>200) {
+				/* dont print anything until error is reasonable */
+				erle=10 * log10((double)errsumsq/(double)rxsumsq);
+				
+				//WZ003: get the best one (since erle < 0, so max(abs(erle)) is the best.)
+				if(up_flag == FALSE && dp_vmax_state == DP_VMAX_WF_STEP1){	//down stream
+					if(erle < erle_min  ) erle_min = erle;
+				}
+
+				//printf("8 x %d samples, max error: %f, erle= %lf\n",k,lmserrmax,erle);
+	//debug ( "errsumsq=%d", (errsumsq) ) ;
+	//debug ( "rxsumsq=%d", (rxsumsq) ) ;
+	//debug ( "max error=%d", lmserrmax ) ;
+	debug ( "erle=%d", erle ) ;
+			
+			}
+			lmserrmax=0.0;
+			rxsumsq=0.0;
+			errsumsq=0.0;
+			step1_scount=0;
+		}
+
+	}//end for(step1_count2 ...
+
+	restore_fpu_state(pfpuState);
+
+	return FALSE;
+	
+}else{
+
+	restore_fpu_state(pfpuState);
+
+	return TRUE;
+}
+//}//end while(k<...
+
+}
+
+/****************************************************************
+Routine : dp_vmax_step1rb_2()
+Description :
+WZ012: this function is obsolete, use dp_vmax_step1rb_2_v...
+*****************************************************************/
+void dp_vmax_step1rb_2(void){
+
+	int i,j;
+	FTYPE f32tmp,f_tmp, f_tmp1;
+
+	long pfpuState[32];
+
+	save_fpu_state(pfpuState);
+
+	x_debug_msg("vmax - start ste1rb_2");
+
+	//robbed bit detection, WZ001
+	
+	if((rob_opt == TRUE) && (rob_opt_v2 != TRUE)){	// initial detection algorithm
+	//means rob bit detecion, but use ver1, exec following code
+	//note: default is version 1
+
+	rb_st[0]=0;
+	for(i=1;i<6;i++){
+		rb_st[i]=0;
+		if(step1_cm_lvls[i]>(step1_cm_lvls[0]+256.0/2.0))
+		rb_st[i] = -1;
+		if(step1_cm_lvls[i]<(step1_cm_lvls[0]-256.0/2.0))
+		rb_st[i] = 1;
+		
+		//debug("i=%d",i);
+		//debug("step1_cm_lvls[i] = %d",step1_cm_lvls[i]);
+		//debug("rb_st[i] = %d", rb_st[i] );
+	}
+
+	for(i=0;i<6;i++){
+		if(rb_st[i]<0){
+			for(j=0;j<6;j++) rb_st[j]=rb_st[j]+1;
+			break;
+		}
+	}
+
+	//for(i=0;i<6;i++){
+	//	printf("rb_st=%d W=%f\n",rb_st[i],step1_cm_lvls[i]);
+	//debug("rb_st = %d",(FTYPE)rb_st[i]);
+	//debug("step1_cm_lvls[i] = %d",(FTYPE)step1_cm_lvls[i]);
+	//}
+
+	}else if(rob_opt == TRUE && rob_opt_v2 == TRUE){
+	//WZ001: Version 2 of robbed-bit decision --------------------------------------------
+
+	// sort step1_cm_lvls into descending order
+	for(i=0;i<6;i++){
+		for(j=i+1;j<6;j++){
+			if(step1_cm_lvls[j]>step1_cm_lvls[i]){
+			f32tmp = step1_cm_lvls[i];
+			step1_cm_lvls[i]=step1_cm_lvls[j];
+			step1_cm_lvls[j]=f32tmp;
+			}
+		}
+	}
+
+	// find the distances between the adjacent levels
+	max_dist = nextmax_dist =(FTYPE)0.0;
+	maxindex = nextmax = 0;
+	for(i=1;i<6;i++){
+
+		f32tmp = (FTYPE) (step1_cm_lvls[i-1] -step1_cm_lvls[i]);
+		dist[i] = f32tmp >= 0? f32tmp : (- f32tmp);	//WZ002 change > to >=
+		if(dist[i]>max_dist){
+			nextmax_dist = max_dist;
+			nextmax = maxindex;
+			max_dist=dist[i];
+			maxindex=i;
+		}
+		
+		if(dist[i]>nextmax_dist && dist[i] < max_dist){
+			nextmax_dist=dist[i];
+			nextmax = i;
+		}
+	}
+
+	debug("maxindex = %d",maxindex);
+	debug("max_dist = %d",max_dist);
+	debug("nextmax = %d",nextmax );
+	debug("nextmax_dist = %d",nextmax_dist);
+	
+	// According to the spec. the robbed-bit frames use a special quatization table.
+	// However, in practice it is found that many of the signaling frames use the same 
+	// tables as the information frames. Since signaling occurs in the middle of trunks
+	// So to avoid false detection 2 maxs are determined, max and next best max. These
+	// new maxs are used to calculate 3 different averages.
+	cm_h_avg=(FTYPE)0.0;
+	cm_l0_avg=(FTYPE)0.0;
+	cm_l1_avg=(FTYPE)0.0;
+
+	if(maxindex < nextmax){	
+
+		for(i= 0;i<maxindex;i++) cm_h_avg +=step1_cm_lvls[i];
+		for(i=maxindex;i<nextmax;i++) cm_l0_avg +=step1_cm_lvls[i];
+		for(i=nextmax;i<6;i++) cm_l1_avg +=step1_cm_lvls[i];
+	
+		cm_h_avg = (FTYPE)cm_h_avg/(FTYPE)maxindex;
+		cm_l0_avg = (FTYPE)cm_l0_avg/(FTYPE)(nextmax - maxindex);
+		cm_l1_avg = (FTYPE)cm_l1_avg/(FTYPE)(6 - nextmax);
+
+	}else{
+		for(i=nextmax;i<maxindex;i++) cm_l0_avg +=step1_cm_lvls[i];
+		for(i= 0;i<nextmax;i++) cm_h_avg +=step1_cm_lvls[i];
+		for(i=maxindex;i<6;i++) cm_l1_avg +=step1_cm_lvls[i];
+	
+		cm_h_avg = (FTYPE)cm_h_avg/(FTYPE)nextmax;
+		cm_l0_avg = (FTYPE)cm_l0_avg/(FTYPE)(maxindex - nextmax);
+		cm_l1_avg = (FTYPE)cm_l1_avg/(FTYPE)(6 - maxindex);
+
+	}
+
+	
+	//assume that there are no signaling frames
+	for(i=0;i<6;i++) rb_st[i]=0;
+
+	//debug
+	debug("cm_h_avg = %d", cm_h_avg);
+	debug("cm_l0_avg = %d", cm_l0_avg);
+	debug("cm_l1_avg = %d", cm_l1_avg);
+
+
+	//Check if there are any. If so detemine which ones are signaling frames
+	if((cm_h_avg-cm_l0_avg)>(((FTYPE)(AM-AM_1)*cm_h_avg)/(FTYPE)(4*AM)))
+	{
+		//WZ003: type A?
+		//rb_type = 0;
+		nu = (cm_h_avg+cm_l0_avg)/(FTYPE)2.0;
+		x_debug_msg("get into(Cond. 1) ch_h_avg - cm_l0_avg > ...");
+	}
+	else if((cm_l0_avg - cm_l1_avg) > (((FTYPE)(AM-AM_1)*cm_h_avg)/(FTYPE)(4*AM)))
+	{
+		//WZ003: type B?
+		//rb_type = 1;
+		nu = (cm_l0_avg + cm_l1_avg)/(FTYPE)2.0;
+		x_debug_msg("get into(Cond. 2) ch_l0_avg - cm_l1_avg > ...");
+	}
+	// else no claim can be made about frame. Therefore, Am-1 is transmitted and the
+	// procedure is repated. (Am-1 is even-numbered level)
+	else{ 
+	//re-transmit
+	x_debug_msg("WARNING: ALL FRAMES ARE EITHER SIGNALING FRAMES ");
+	x_debug_msg("		  OR INFORMATION FRAMES");
+	}
+
+	debug("Ver2, threshhold: nu = %d", nu);
+
+	//determine which frames are signaling frames  
+	for(i=0;i<6;i++){
+		if(step1_cm_lvls[i]<nu) rb_st[i]=1;
+	}
+ 
+	for(i=0;i<6;i++){
+		//printf("Version 2: rb_st=%d W=%f\n",rb_st[i],step1_cm_lvls[i]);
+		debug("vmax - i = %d", i);
+		debug("vmax - Ver2 rb_st[i]=%d",  rb_st[i]);
+		debug("vmax - Ver2 cm_lvls[i]=%d",  step1_cm_lvls[i]);
+	}
+
+	} // end ELSE  version 2 of signal frame detection
+	//End robbed-bit detection -------------------------------------------------------- 
+
+
+	//level caliberation
+	step1_avg_info=0.0;
+	step1_info_num=0.0;
+	for(j=0;j<6;j++){
+		if(rb_st[j]==0){
+			step1_avg_info=step1_avg_info+step1_cm_lvls[j];
+			step1_info_num=step1_info_num+1.0;
+		}
+		//debug("step1_avg_info = %d",step1_avg_info);
+		//debug("rb_st = %d",(FTYPE)rb_st[j]);
+		//debug("step1_cm_lvls[j] = %d",(FTYPE)step1_cm_lvls[j]);
+	}
+
+	step1_avg_info= step1_avg_info/step1_info_num;
+	
+	//pull out redundance calc for dp_vmax_mulin(255-cm_lvl)/step1_avg_info
+	f32tmp = dp_vmax_mulin(255-cm_lvl)/step1_avg_info;
+	for(j=0;j<6;j++){
+		
+		//debug("j = %d",(FTYPE)j);
+
+		step1_cm_lvls[j] = step1_cm_lvls[j]*f32tmp;
+		
+		//debug("cm_lvl = %d",(FTYPE)cm_lvl);
+		//debug("dp_vmax_mulin(255-cm_lvl) = %d",(FTYPE)f_tmp);
+		//debug("step1_cm_lvls[j]*dp_vmax_mulin =%d", f_tmp1);
+		//debug("step1_avg_info = %d",(FTYPE)step1_avg_info);
+		//debug("step1_cm_lvls[j] = %d",(FTYPE)step1_cm_lvls[j]);
+	}
+	
+	f32tmp = step1_avg_info/dp_vmax_mulin(255-cm_lvl);
+	for(j=0;j<MODCHANLEN;j++){
+
+		//if(j < 10){
+		//debug("j = %d", (FTYPE)j);
+		//debug("Before calc:modelchan[j] = %d",(FTYPE)modelchan[j]);
+		//}
+
+		//f_tmp = dp_vmax_mulin(255-cm_lvl);
+		//f_tmp1 = modelchan[j]*step1_avg_info;
+		modelchan[j]= modelchan[j]*f32tmp;
+		
+		//if(j < 10){
+		
+		//debug("modelchan[j]*step1_avg_info = %d", f_tmp1);	
+		//debug("dp_vmax_mulin(255-cm_lvl) = %d",f_tmp);
+		//debug("step1_avg_info = %d",step1_avg_info);
+		//debug("modelchan[j] = %d",modelchan[j]);
+
+		//}
+	}
+
+
+	//x_debug_msg("vmax - after level adjustment\n");
+	
+	for(i=0;i<6;i++){
+	//	printf("rb_st=%d W=%f\n",rb_st[i],step1_cm_lvls[i]);
+	debug("i = %d", (FTYPE)i);
+	debug("rb_st = %d",(FTYPE)rb_st[i]);
+	debug("step1_cm_lvls[i] = %d",(FTYPE)step1_cm_lvls[i]);
+	}
+
+	//printf("done step 1\n");
+
+	restore_fpu_state(pfpuState);
+
+	return;
+
+}
+
+/****************************************************************
+Routine : dp_vmax_step1rb_2_v113()
+Description :WZ009: updated robbed bit detection scheme corresponding
+					to choc.exe version 110.
+			 WZ012: updated to choc.exe ver 113
+*****************************************************************/
+void dp_vmax_step1rb_2_v113(void){
+
+	int i,j;
+	FTYPE f32tmp;
+	int i_tmp;
+
+	long pfpuState[32];
+
+	save_fpu_state(pfpuState);
+
+	x_debug_msg("vmax - start step1rb_2_v13");
+
+	//--------------------------------------------------
+	//start robbed bit detection,
+	
+	for (i=0;i<6;i++) cm_lvls_org[i]= step1_cm_lvls[i];
+
+	// sort step1_cm_lvls into descending order
+	for (i=0;i<6;i++) {level_index[i]=i;}
+		for(i=0;i<6;i++){
+			for(j=i+1;j<6;j++){
+				if(step1_cm_lvls[j]>step1_cm_lvls[i]){
+				f32tmp = step1_cm_lvls[i];
+				step1_cm_lvls[i]=step1_cm_lvls[j];
+				step1_cm_lvls[j]=f32tmp;
+				i_tmp=level_index[i];
+				level_index[i]=level_index[j];
+				level_index[j]=i_tmp;
+			}
+		}
+	}
+
+	//for (i=0;i<6;i++)
+	//printf("%f %d\n",step1_cm_lvls[i],level_index[i]);
+
+	// find the distances between the adjacent levels
+	max_dist = nextmax_dist =(FTYPE)0.0;
+	maxindex = nextmax = 0;
+	for(i=1;i<6;i++){
+		dist[i] = (FTYPE)(step1_cm_lvls[i-1] -step1_cm_lvls[i]);
+		dist[i] = dist[i] >= 0 ? dist[i] : (-dist[i]);
+		if(dist[i]>=max_dist){
+			nextmax=maxindex;
+			nextmax_dist= max_dist;
+			max_dist=dist[i];
+			maxindex=i;
+		}
+		else if(dist[i]>=nextmax_dist){
+			nextmax_dist=dist[i];
+			nextmax = i;
+		}
+	}
+
+	//make sure that maxindex is less than nextmax
+	if(maxindex>nextmax){
+		i_tmp=maxindex;
+		maxindex=nextmax;
+		nextmax=i_tmp;
+	}
+
+	//printf("%d %d",maxindex, nextmax);
+	//average the levels in each group
+	cm_h_avg=(FTYPE)0.0;
+	cm_l0_avg=(FTYPE)0.0;
+	cm_l1_avg=(FTYPE)0.0;
+	for(i=0;i<maxindex;i++) cm_h_avg +=step1_cm_lvls[i];
+	for(i=maxindex;i<nextmax;i++) cm_l0_avg +=step1_cm_lvls[i];
+	for(i=nextmax;i<6;i++) cm_l1_avg +=step1_cm_lvls[i];
+	cm_h_avg = cm_h_avg/(FTYPE)maxindex;
+	cm_l0_avg = cm_l0_avg/(FTYPE)(nextmax-maxindex);
+	cm_l1_avg = cm_l1_avg/(FTYPE)(6-nextmax);
+
+	//making decision
+
+	//lvl_spc=(FTYPE)(AM - AM_1)*cm_h_avg/(FTYPE)AM;
+	//WZ012: commented out above line and replace the following line
+	lvl_spc=(dp_vmax_mulin(255-cm_lvl)-dp_vmax_mulin(255-(cm_lvl-1)))*cm_h_avg/dp_vmax_mulin(255-cm_lvl);
+
+	for(i=0;i<maxindex;i++)
+	rb_st[level_index[i]]=0;
+	
+	if((cm_h_avg-cm_l0_avg)<lvl_spc/4.0){
+		for(i=maxindex;i<nextmax;i++)
+			rb_st[level_index[i]]=0;
+
+		if((cm_l0_avg-cm_l1_avg)<lvl_spc/4.0){
+			for(i=nextmax;i<6;i++)
+			rb_st[level_index[i]]=0;
+		}
+		else{
+			if(((cm_h_avg+cm_l0_avg)/2-cm_l1_avg)<(lvl_spc*3.0/4.0 - 74.0)) //WZ018
+			{
+				for(i=nextmax;i<6;i++)
+				rb_st[level_index[i]]=1;
+			}
+			else
+			{
+				for(i=nextmax;i<6;i++)
+					rb_st[level_index[i]]=2;
+			}
+
+		}
+	}
+	else
+	{
+		if((cm_l0_avg-cm_l1_avg)<lvl_spc/4.0){
+			if((cm_h_avg-(cm_l0_avg+cm_l1_avg)/2)<(lvl_spc*3.0/4.0 - 74.0)){  //WZ018
+			for(i=maxindex;i<nextmax;i++)
+			rb_st[level_index[i]]=1;
+			for(i=nextmax;i<6;i++)
+			rb_st[level_index[i]]=1;
+		}
+		else{
+			for(i=maxindex;i<nextmax;i++)
+			rb_st[level_index[i]]=2;
+			for(i=nextmax;i<6;i++)
+			rb_st[level_index[i]]=2;
+		}
+	}
+	else{
+		for(i=maxindex;i<nextmax;i++)
+		rb_st[level_index[i]]=1;
+		for(i=nextmax;i<6;i++)
+		rb_st[level_index[i]]=2;
+	}
+	}
+
+	//level caliberation
+
+	for(j=0;j<MODCHANLEN;j++){
+		modelchan[j]=modelchan[j]*cm_h_avg/dp_vmax_mulin(255-cm_lvl);
+	}
+
+	//WZ012
+	for(i = 0; i < 6; i++){
+		step1_cm_lvls[i] = cm_lvls_org[i]*dp_vmax_mulin(255 - cm_lvl)/cm_h_avg;
+	}
+
+	//-------------------------------------------------------------------------
+	//if (input_opt=='f')
+	//fclose(inp);
+
+	x_debug_msg("after level adjustment");
+	for(i=0;i<6;i++){
+		//printf("rb_st=%d W=%f\n",rb_st[i],cm_lvls_org[i]*(FTYPE)AM/cm_h_avg);
+		debug("i = %d", (FTYPE)i);
+		debug("rb_st = %d",(FTYPE)rb_st[i]);
+		//debug("cm_lvls_org*AM/cm_h_avg = %d", cm_lvls_org[i]*(FTYPE)AM/cm_h_avg);
+		//WZ012
+		debug("cm_lvls = %d", (FTYPE)step1_cm_lvls[i]);
+		debug("cm_lvls_org = %d", (FTYPE)cm_lvls_org[i]);
+	}
+
+	x_debug_msg("done step 1");
+
+	//chanmodel=fopen("chanmodel.dat","wb");
+	//for (i=0;i<MODCHANLEN;i++)
+	//fprintf(chanmodel,"%f\n\r",modelchan[i]);
+	//	fwrite(modelchan,sizeof(FTYPE),MODCHANLEN,chanmodel);
+	//fclose(chanmodel);
+
+	//printf("done step 1\n");
+
+	restore_fpu_state(pfpuState);
+
+	return;
+
+}
+
+/****************************************************************
+Routine : dp_vmax_convolve()
+Description :
+		
+*****************************************************************/
+FTYPE dp_vmax_convolve(inp_sample,coef_ptr,state_ptr,len)
+FTYPE inp_sample;
+FTYPE *coef_ptr;
+FTYPE *state_ptr;
+int len;
+{
+	FTYPE conv_output;
+	int i;
+
+	dp_vmax_shift(inp_sample,state_ptr,len);
+	conv_output=dp_vmax_dotp(coef_ptr,state_ptr,len);
+
+	return conv_output;
+}
+
+/****************************************************************
+Routine : dp_vmax_dotp()
+Description :
+		
+*****************************************************************/
+FTYPE dp_vmax_dotp(coef_ptr,state_ptr,len)
+FTYPE *coef_ptr;
+FTYPE *state_ptr;
+int len;
+{
+	FTYPE dotp_output;
+	int i;
+
+	dotp_output=0.0;
+	for (i=0;i<len;i++) {
+    	dotp_output += *coef_ptr * *state_ptr;
+    	coef_ptr++;
+    	state_ptr++;
+	}
+
+	return dotp_output;
+}
+
+/****************************************************************
+Routine : dp_vmax_lms()
+Description :
+		
+*****************************************************************/
+
+FTYPE dp_vmax_lms(twomu,txsample,rxsample,modelchan,modelstate,from,to,len)
+FTYPE twomu;
+FTYPE txsample;
+FTYPE rxsample;
+FTYPE *modelchan;
+FTYPE *modelstate;
+int from;
+int to;
+int len;
+{
+	FTYPE yhat;
+	FTYPE err;
+	FTYPE upd_factor;
+	int i;
+
+	dp_vmax_shift(txsample,modelstate,len);
+	yhat=dp_vmax_dotp(modelchan,modelstate,len);
+	err=rxsample-yhat;
+	upd_factor=err*twomu;
+	for (i=from;i<to;i++) {
+		*(modelchan+i) += upd_factor * *(modelstate+i);
+	}
+	return err;
+}
+
+
+/****************************************************************
+Routine : dp_vmax_lms()
+Description : optimalized version of dp_vmax_lms
+		
+*****************************************************************/
+
+FTYPE dp_vmax_lms1(twomu,txsample,rxsample,modelchan,modelstate,from,to,len)
+FTYPE twomu;
+FTYPE txsample;
+FTYPE rxsample;
+FTYPE *modelchan;
+FTYPE *modelstate;
+int from;
+int to;
+int len;
+{
+FTYPE yhat;
+FTYPE err;
+FTYPE upd_factor;
+int i;
+FTYPE result0,result1,result2,result3,result4;
+
+	//shift(txsample,modelstate,len);
+	yhat=dp_vmax_dotp(modelchan,modelstate,len);
+	   
+
+	err=rxsample-yhat;
+	upd_factor=err*twomu;
+	//for (i=from;i<to;i++) {
+	for (i=0;i<40;i++) {
+	//	*(modelchan+i) += upd_factor * *(modelstate+i);
+	//	modelchan[i] += upd_factor * modelstate[i];
+		result0 = upd_factor * modelstate[0];		
+		result1 = upd_factor * modelstate[1];		
+		result2 = upd_factor * modelstate[2];		
+		result0 = modelchan[0] +  result0;		
+		result1 = modelchan[1] +  result1;		
+		result3 = upd_factor * modelstate[3];		
+		result2 = modelchan[2] +  result2;		
+		result4 = upd_factor * modelstate[4];		
+		modelchan[0] = result0;		
+		result3 = modelchan[3] +  result3;
+		modelchan[1] = result1;		
+		result4 = modelchan[4] +  result4;		
+		modelchan[2] = result2;		
+		modelchan[3] = result3;		
+		modelchan[4] = result4;		
+		modelchan+=5;
+		modelstate+=5;
+
+	}	
+	return err;
+}
+
+
+
+/****************************************************************
+Routine : dp_vmax_lmsupdate()
+Description :
+		
+*****************************************************************/
+void dp_vmax_lmsupdate(twomu,err,modelchan,modelstate,from,to)
+FTYPE twomu;
+FTYPE err;
+FTYPE *modelchan;
+FTYPE *modelstate;
+int from;
+int to;
+{
+	FTYPE upd_factor;
+	int i;
+
+	upd_factor=err*twomu;
+	for (i=from;i<to;i++) {
+		*(modelchan+i) += upd_factor * *(modelstate+i);
+	}
+}
+
+/****************************************************************
+Routine : dp_vmax_scraminit()
+Description :
+		
+*****************************************************************/
+void dp_vmax_scraminit() {
+	dly=0x1d2;
+	//dly = 0;			//WZ005
+	scramcnt=0;
+}
+
+/****************************************************************
+Routine : dp_vmax_descraminit()
+Description :
+		
+*****************************************************************/
+void dp_vmax_descraminit() {
+	dly2=0x1d2;
+	//dly2 = 0;		//WZ005
+}
+
+/****************************************************************
+Routine : dp_vmax_scram()
+Description :
+		
+*****************************************************************/
+unsigned int dp_vmax_scram(data)
+unsigned int data;
+{
+	long int ia0;
+	unsigned int scramout;
+
+#ifdef FIVE11SEQ
+	ia0=dly >> 4;
+	ia0=ia0 ^ dly;
+	ia0=ia0 & 0xf;
+	ia0=ia0 ^ data;		/* scramble input (4-bits) */
+	scramout=ia0;
+	dly=dly>>4;
+	ia0=ia0<<5;
+	dly=dly | ia0;
+#else FIVE11SEQ
+/* performs V.29 scrambler 1+X(-18)+X(-23)		  */
+/* for efficiency, this routine computes 6 bits at a time */
+/* therefore, data must be 6-bits wide and the output	  */
+/* will be 6-bits wide					  */
+
+	ia0=dly >> 5;
+	ia0=ia0 ^ dly;
+	ia0=ia0 & 0xffff;
+	ia0=ia0 ^ data;		/* scramble input (16-bits) */
+	scramout=ia0;
+	dly=dly>>16;
+	ia0=ia0<<7;			/* 23 total minus 16 performed */
+	dly=dly | ia0;
+#endif FIVE11SEQ
+
+	return scramout;
+}
+
+/****************************************************************
+Routine : dp_vmax_descram1()
+Description :
+		
+*****************************************************************/
+unsigned int dp_vmax_descram1(data)
+unsigned int data;
+{
+	long int ia0;
+	unsigned int descramout;
+
+/* performs V.29 descrambler 1+X(-18)+X(-23)		  */
+/* for efficiency, this routine computes 6 bits at a time */
+/* therefore, data must be 6-bits wide and the output	  */
+/* will be 6-bits wide					  */
+
+	ia0=dly2 >> 5;
+	ia0=ia0 ^ dly2;
+	ia0=ia0 & 0x1;
+	ia0=ia0 ^ data;
+	descramout=ia0;
+	dly2=dly2>>1;
+	ia0=data;
+	ia0=ia0<<22;
+	dly2=dly2 | ia0;
+
+	return descramout;
+}
+
+unsigned int dp_vmax_descram7(data)
+unsigned int data;
+{
+	long int ia0;
+	unsigned int descramout;
+ 
+/* performs V.29 descrambler 1+X(-18)+X(-23)              */
+/* for efficiency, this routine computes 6 bits at a time */
+/* therefore, data must be 6-bits wide and the output     */
+/* will be 6-bits wide                                    */
+ 
+	ia0=dly2 >> 5;
+	ia0=ia0 ^ dly2;
+	ia0=ia0 & 0x7f;
+	ia0=ia0 ^ data;
+	descramout=ia0;
+	dly2=dly2>>7;
+	ia0=data;
+	ia0=ia0<<16;
+	dly2=dly2 | ia0;
+ 
+	return descramout;
+}
+
+unsigned int dp_vmax_scram1()
+{
+	static unsigned int scramdata;
+	unsigned int scr1;
+
+	if (scramcnt==0) {
+#ifdef FIVE11SEQ
+		scramdata=dp_vmax_scram(0xf);
+		scramcnt=4;
+#else FIVE11SEQ
+		scramdata=dp_vmax_scram(0xffff);
+		scramcnt=16;
+#endif FIVE11SEQ
+	}
+	scramcnt--;
+	scr1=scramdata & 0x1;
+	scramdata=scramdata>>1;
+	return scr1;
+}
+
+/****************************************************************
+Routine : dp_vmax_trnxmtsamp()
+Description :
+		
+*****************************************************************/
+FTYPE dp_vmax_trnxmtsamp(trnmulev)
+int trnmulev;
+{
+	unsigned int scr1;
+	unsigned int mutxval;
+	scr1=dp_vmax_scram1();
+	if (scr1==1)
+		mutxval=255-trnmulev;
+	else
+		mutxval=127-trnmulev;
+	return (dp_vmax_mulin(mutxval));
+}
+
+int dp_vmax_scramN(n)
+int n;
+{
+	int scrval=0;
+	int i;
+	unsigned int signn;
+
+	signn=dp_vmax_scram1();
+	for (i=0;i<n-1;i++) {
+		scrval=scrval | dp_vmax_scram1();
+		scrval=scrval<<1;
+	}
+	if (signn==1) scrval=-scrval;
+	return scrval;
+}
+
+FTYPE dp_vmax_makedata()
+{
+	int scrval=0;
+	int i;
+	unsigned int signn;
+	unsigned int mutxval;
+
+/* pick a sign, any sign */
+	signn=dp_vmax_scram1();
+
+/* generate a number between 0 and 63 */
+	for (i=0;i<5;i++) {
+        scrval=scrval | dp_vmax_scram1();
+        scrval=scrval<<1;
+	}
+
+/* determine the mu code value */
+
+	if (signn==1) 
+        mutxval=255-scrval;
+	else
+        mutxval=127-scrval;
+
+/* return the linear equivalent of that mu code */
+
+	return (dp_vmax_mulin(mutxval));
+
+}
+
+/* generate an unsigned random number numbits wide */
+
+int dp_vmax_makebits(numbits)
+int numbits;
+{
+	int scrval=0;
+	int i;
+ 
+/* generate a number between 0 and 63 */
+	for (i=0;i<numbits;i++) {
+		scrval=scrval>>1;
+        scrval=scrval | ( dp_vmax_scram1() << (numbits-1) ) ;
+	}
+
+	return scrval;
+}
+ 
+
+//-------------------------------------------------------------------------
+
+
+void dp_vmax_shift(inp_sample,state_ptr,len)
+FTYPE inp_sample;
+FTYPE *state_ptr;
+int len;
+{
+	int i;
+
+	state_ptr += len-1;
+	for (i=0;i<len-1;i++) {
+    *(state_ptr) = *(state_ptr-1);
+    state_ptr--;
+	}
+	*(state_ptr)=inp_sample;
+
+}
+
+void dp_vmax_lshift(inp_sample,state_ptr,len)
+FTYPE inp_sample;
+FTYPE *state_ptr;
+int len;
+{
+	int i;
+
+	for (i=0;i<len-1;i++) {
+    	*(state_ptr) = *(state_ptr+1);
+    	state_ptr++;
+	}
+	*(state_ptr)=inp_sample;
+
+}
+
+//-------------------------------------------------------------------------
+
+
+FTYPE dp_vmax_mulin(muval)
+unsigned int muval;
+{
+	static short int mulintab[256] = {
+	 0xe0a1, 0xe1a1, 0xe2a1, 0xe3a1, 0xe4a1, 0xe5a1, 0xe6a1,
+	 0xe7a1, 0xe8a1, 0xe9a1, 0xeaa1, 0xeba1, 0xeca1, 0xeda1,
+	 0xeea1, 0xefa1, 0xf061, 0xf0e1, 0xf161, 0xf1e1, 0xf261,
+	 0xf2e1, 0xf361, 0xf3e1, 0xf461, 0xf4e1, 0xf561, 0xf5e1,
+	 0xf661, 0xf6e1, 0xf761, 0xf7e1, 0xf841, 0xf881, 0xf8c1,
+	 0xf901, 0xf941, 0xf981, 0xf9c1, 0xfa01, 0xfa41, 0xfa81,
+	 0xfac1, 0xfb01, 0xfb41, 0xfb81, 0xfbc1, 0xfc01, 0xfc31,
+	 0xfc51, 0xfc71, 0xfc91, 0xfcb1, 0xfcd1, 0xfcf1, 0xfd11,
+	 0xfd31, 0xfd51, 0xfd71, 0xfd91, 0xfdb1, 0xfdd1, 0xfdf1,
+	 0xfe11, 0xfe29, 0xfe39, 0xfe49, 0xfe59, 0xfe69, 0xfe79,
+	 0xfe89, 0xfe99, 0xfea9, 0xfeb9, 0xfec9, 0xfed9, 0xfee9,
+	 0xfef9, 0xff09, 0xff19, 0xff25, 0xff2d, 0xff35, 0xff3d,
+	 0xff45, 0xff4d, 0xff55, 0xff5d, 0xff65, 0xff6d, 0xff75,
+	 0xff7d, 0xff85, 0xff8d, 0xff95, 0xff9d, 0xffa3, 0xffa7,
+	 0xffab, 0xffaf, 0xffb3, 0xffb7, 0xffbb, 0xffbf, 0xffc3,
+	 0xffc7, 0xffcb, 0xffcf, 0xffd3, 0xffd7, 0xffdb, 0xffdf,
+	 0xffe2, 0xffe4, 0xffe6, 0xffe8, 0xffea, 0xffec, 0xffee,
+	 0xfff0, 0xfff2, 0xfff4, 0xfff6, 0xfff8, 0xfffa, 0xfffc,
+	 0xfffe, 0x0000, 0x1f5f, 0x1e5f, 0x1d5f, 0x1c5f, 0x1b5f,
+	 0x1a5f, 0x195f, 0x185f, 0x175f, 0x165f, 0x155f, 0x145f,
+	 0x135f, 0x125f, 0x115f, 0x105f, 0x0f9f, 0x0f1f, 0x0e9f,
+	 0x0e1f, 0x0d9f, 0x0d1f, 0x0c9f, 0x0c1f, 0x0b9f, 0x0b1f,
+	 0x0a9f, 0x0a1f, 0x099f, 0x091f, 0x089f, 0x081f, 0x07bf,
+	 0x077f, 0x073f, 0x06ff, 0x06bf, 0x067f, 0x063f, 0x05ff,
+	 0x05bf, 0x057f, 0x053f, 0x04ff, 0x04bf, 0x047f, 0x043f,
+	 0x03ff, 0x03cf, 0x03af, 0x038f, 0x036f, 0x034f, 0x032f,
+	 0x030f, 0x02ef, 0x02cf, 0x02af, 0x028f, 0x026f, 0x024f,
+	 0x022f, 0x020f, 0x01ef, 0x01d7, 0x01c7, 0x01b7, 0x01a7,
+	 0x0197, 0x0187, 0x0177, 0x0167, 0x0157, 0x0147, 0x0137,
+	 0x0127, 0x0117, 0x0107, 0x00f7, 0x00e7, 0x00db, 0x00d3,
+	 0x00cb, 0x00c3, 0x00bb, 0x00b3, 0x00ab, 0x00a3, 0x009b,
+	 0x0093, 0x008b, 0x0083, 0x007b, 0x0073, 0x006b, 0x0063,
+	 0x005d, 0x0059, 0x0055, 0x0051, 0x004d, 0x0049, 0x0045,
+	 0x0041, 0x003d, 0x0039, 0x0035, 0x0031, 0x002d, 0x0029,
+	 0x0025, 0x0021, 0x001e, 0x001c, 0x001a, 0x0018, 0x0016,
+	 0x0014, 0x0012, 0x0010, 0x000e, 0x000c, 0x000a, 0x0008,
+	 0x0006, 0x0004, 0x0002, 0x0000
+	 };
+
+//	 return (mulintab[muval]/2.0);
+	 return (mulintab[muval])*4.0;	//corresponse to Q3 form in dsp
+}
+//-------------------------------------------------------------------------
+void dp_vmax_wt_modelchan()
+{
+
+	long pfpuState[32];
+
+	int  i;
+	short modchint;
+	word ramadd ;
+
+	save_fpu_state(pfpuState);
+
+	ramadd = 0x1000 ;
+
+	for(i=0;i<MODCHANLEN;i++)
+	{
+		modchint=modelchan[i]*16384;
+		dp_write_dsp_ram ( (ramadd+i), modchint ) ;
+	}
+
+	//WZ010: determine robbed bit patterns and types
+	modchint=0;
+	for (i=0;i<6;i++){
+		if (rb_st[i]>0)
+		modchint=modchint|0x40;
+		modchint=modchint>>1;
+	}
+
+	//debug("rb_pattern=%",modchint);
+	sprintf(szBuffer,"vmax - rb_pattern = 0x%x",modchint);
+	x_debug_msg ( szBuffer );
+	
+	dp_vmax_status.RobbedBitPattern = modchint;
+	
+	//write rb pattern to DSP
+	modchint = modchint&0xff;
+	dp_write_dsp_ram (ADDR_RB_PATTERN, modchint ) ;
+
+	modchint=0;
+	for (i=0;i<6;i++){
+		if (rb_st[i]==2)
+		modchint=modchint|0x40;
+		modchint=modchint>>1;
+	}
+
+	//debug("rb_type=%d", (FTYPE)modchint);
+	sprintf(szBuffer,"vmax - rb_type = 0x%x",modchint);
+	x_debug_msg ( szBuffer );
+	
+	dp_vmax_status.RobbedBitType = modchint;
+
+	//write rb type to DSP
+	modchint = modchint&0xff;
+	dp_write_dsp_ram (ADDR_RB_TYPE, modchint ) ;
+	
+	restore_fpu_state(pfpuState);
+}
+
+//-------------------------------------------------------------------------
+void dp_vmax_wt_eqtaps()
+{
+	int  i, j;
+	short  modchint;
+	word ramadd ;
+
+	long pfpuState[32];
+
+
+	save_fpu_state(pfpuState);
+
+	//write EQ taps to DSP
+	ramadd = 0x10c8 ;
+
+	for(j=UNUSEDSAMP;j<TOTSAMP;j++)
+	{
+		for(i=0;i<N;i++)
+		{
+			modchint= equaltaps[j][i]*16384;
+
+			dp_write_dsp_ram (ramadd, modchint) ;
+			ramadd++ ;
+		}
+	}
+
+	//write eqgain to DSP
+	ramadd = 0x0007 ;
+	modchint=eqgain*16384;
+	if(eq_gain_opt == TRUE)//WZ014 divided by 4.0 for ap43_316
+		modchint=eqgain*16384/4.0;
+
+	dp_write_dsp_ram (ramadd, modchint) ;
+
+	restore_fpu_state(pfpuState);
+}
+//-------------------------------------------------------------------------
+
+void dp_vmax_wt_wf_coef()
+{
+
+	long pfpuState[32];
+
+
+	int i;
+	short wfint, addr;
+
+	save_fpu_state(pfpuState);
+
+	addr = 0x17e6;
+
+	for(i=0;i<wf_len;i++){
+		wfint=wf_coef[i]*16384;
+		dp_write_dsp_ram (addr + i, wfint) ;
+	}
+
+	restore_fpu_state(pfpuState);
+}
+
+/****************************************************************
+Routine : dp_vmax_step2_1()
+Description :
+	
+*****************************************************************/
+
+void dp_vmax_step2_1(void)
+{
+	long pfpuState[32];
+
+	int i, j ;
+
+	save_fpu_state(pfpuState);
+
+	step2L=MODCHANLEN ;
+	step2M=step2L + N - 1;
+	step2D=chandlyest-1;
+
+	norm_factor=(FTYPE)0.0;
+	for (i=0;i<step2L;i++){
+		norm_factor=norm_factor+modelchan[i]*modelchan[i];
+	}
+
+	for (i=0;i<N;i++) {
+		for (j=0;j<TOTSAMP;j++) {
+		 equaltaps[j][i]=(FTYPE)0.0;
+		}
+	}
+	step2i = UNUSEDSAMP;
+	step2k = 0 ;
+	dp_vmax_flip = TRUE ;
+	restore_fpu_state(pfpuState);
+}
+/****************************************************************
+Routine : dp_vmax_step2_3()
+Description :
+	
+*****************************************************************/
+
+byte dp_vmax_step2_3(void)
+{
+	long pfpuState[32];
+
+	//FTYPE grd[EQUALEN];
+	//FTYPE prj, mu;
+	//int j, n, jmod;
+	int j, n;
+	int step2k_2;
+
+	save_fpu_state(pfpuState);
+
+	for(step2k_2 = 0; step2k_2 < STEP2_K2_NUM_LOOPS; step2k_2++){
+
+	//-------------------------------------------------------------------------
+	//determine mu values
+	if(step2k==0) mu=(FTYPE)2.78*mufactor[step2i-UNUSEDSAMP]/norm_factor;
+	if(step2k==5) mu=(FTYPE)mufactor[step2i-UNUSEDSAMP]/norm_factor;
+	//-------------------------------------------------------------------------
+	// calculate Q'*W;
+
+	for(n=0;n<N;n++){
+		grd[n]=(FTYPE)0.0;
+	}
+	jmod=TOTSAMP-((step2M-step2D-2-step2i)-((step2M-step2D-2-step2i)/TOTSAMP)*TOTSAMP+1);
+	for(j=0;j<step2L;j++){
+		if(jmod>UNUSEDSAMP-1){
+			prj=(FTYPE)0.;
+			for(n=0;n<(j+1);n++){
+			prj=prj+ equaltaps[step2i][N-n-1]*modelchan[step2L+n-1-j];
+			}
+
+			for(n=0;n<(j+1);n++){
+				grd[n]=grd[n]+modelchan[step2L+n-1-j]*prj;
+			}
+
+		}
+
+	jmod++;
+	if(jmod==TOTSAMP) jmod=0;
+	}
+
+	for(j=step2L;j<N;j++){
+		if(jmod>UNUSEDSAMP-1){
+			prj=(FTYPE)0.;
+			for(n=j+1-step2L;n<(j+1);n++){
+			prj=prj+ equaltaps[step2i][N-n-1]*modelchan[step2L+n-1-j];
+			}
+
+			for(n=j+1-step2L;n<(j+1);n++){
+				grd[n]=grd[n]+modelchan[step2L+n-1-j]*prj;
+			}
+		}
+
+	jmod++;if(jmod==TOTSAMP) jmod=0;
+	}
+
+	for(j=N;j<step2M;j++){
+		if(jmod>UNUSEDSAMP-1){
+			prj=(FTYPE)0.0;
+			for(n=j+1-step2L;n<N;n++){
+			prj=prj+ equaltaps[step2i][N-n-1]*modelchan[step2L+n-1-j];
+			}
+
+			for(n=j+1-step2L;n<N;n++){
+				grd[n]=grd[n]+modelchan[step2L+n-1-j]*prj;
+			}
+		}
+
+	jmod++;if(jmod==TOTSAMP) jmod=0;
+	}
+//-------------------------------------------------------------------------
+//doing gradient=Q*W-H*P;
+	j=step2M-step2D-1;
+	for(n=j+1-step2L;n<N;n++){
+	grd[n]=grd[n]-modelchan[step2L+n-1-j];
+	}
+//-------------------------------------------------------------------------
+//evaluate performance
+	if(step2k>10){
+	j=step2M-step2D-1;
+	eqerr[step2i]=(FTYPE)1.0;
+	for(n=j+1-step2L;n<N;n++){
+	eqerr[step2i]=eqerr[step2i]-modelchan[step2L+n-1-j]* equaltaps[step2i][N-n-1];
+	}
+
+	for(n=0;n<N;n++){
+	eqerr[step2i]=eqerr[step2i]+grd[n]* equaltaps[step2i][N-n-1];
+	}
+
+        if(eqerr[step2i]<0) eqerr[step2i]= -eqerr[step2i];
+        if((eqerr[step2i]<eq_perf_max))
+		{
+			restore_fpu_state(pfpuState);
+			return ( TRUE ) ;
+		}
+	}
+//-------------------------------------------------------------------------
+//doing W=W-mu*gradient
+	for(n=0;n<N;n++){
+	 equaltaps[step2i][N-n-1]= equaltaps[step2i][N-n-1]-mu*grd[n];
+	}
+
+	step2k++;
+
+}//end of for(step2k_2
+
+//-------------------------------------------------------------------------
+	restore_fpu_state(pfpuState);
+	return ( FALSE ) ;
+}
+/****************************************************************
+Routine : dp_vmax_step2_4()
+Description :
+	
+*****************************************************************/
+void dp_vmax_step2_4(void )
+{
+	FTYPE  eqtapabs;
+	int i,j ;
+	long pfpuState[32];
+
+	save_fpu_state(pfpuState);
+
+	//check if results exceed maximum DSP range
+	eqtapmax=(FTYPE)0.0;
+	for(j=UNUSEDSAMP;j<TOTSAMP;j++)
+	{
+		for(i=0;i<N;i++)
+		{
+			eqtapabs= equaltaps[j][i];
+
+			if (eqtapabs<0) eqtapabs= -eqtapabs;
+			if (eqtapabs>eqtapmax) eqtapmax=eqtapabs;
+		}
+	}
+	restore_fpu_state(pfpuState);
+}
+
+/****************************************************************
+Routine : dp_vmax_step2_5()
+Description :
+	
+*****************************************************************/
+void dp_vmax_step2_5(void )
+{
+	int i,j ;
+	long pfpuState[32];
+
+	save_fpu_state(pfpuState);
+
+	eqgain=(FTYPE)1.0;
+	if (eqtapmax > (FTYPE)1.5){
+	eqgain=eqtapmax/(FTYPE)1.5;
+	for(j=UNUSEDSAMP;j<TOTSAMP;j++)
+	{
+		for(i=0;i<N;i++)
+			 equaltaps[j][i]= equaltaps[j][i]/eqgain;
+		}
+	}
+	restore_fpu_state(pfpuState);
+}
+
+/****************************************************************
+Routine : dp_vmax_w_filt_1()
+Description :
+	
+*****************************************************************/
+void dp_vmax_w_filt_1() {
+
+	long pfpuState[32];
+
+	int i;
+	word word_tmp;
+	short short_tmp;
+
+
+	save_fpu_state(pfpuState);
+
+	wf_scount=0;
+
+	for (i=0;i<wf_len;i++) {
+		wf_coef[i]=(FTYPE)0.0;
+		wf_st[i]=(FTYPE)0.0;
+	}
+
+	wf_add=0x4000;			// dsp buffer addr
+	wf_from=0;
+	wf_toid=wf_len;
+
+	wf_rxsample_prv=(FTYPE)0.0;
+
+	for (i=0;i<PN1_MAX_LEN;i++){
+	
+	short_tmp=(short)dp_read_dsp_ram(wf_add);
+	wf_add++;
+
+	wf_rxsample = (FTYPE)short_tmp;
+
+
+	wf_rxsample_prv=(1-FGF)*wf_rxsample_prv + FGF*wf_rxsample*wf_rxsample;
+
+	if ((wf_rxsample_prv<SLC_THD)&&(i>PN1_MIN_LEN))
+	break;
+	};
+
+
+	wf_k=0;
+	wf_rxsample_prv=(FTYPE)0.0;
+
+	restore_fpu_state(pfpuState);
+	return;
+
+}
+
+/****************************************************************
+Routine : dp_vmax_w_filt_2()
+Description :
+	
+*****************************************************************/
+
+byte dp_vmax_w_filt_2(){
+
+	long pfpuState[32];
+
+	int i;
+	int wf_k2;
+
+	save_fpu_state(pfpuState);
+
+	//while (wf_k < Kw) {
+
+	for(wf_k2 = 0; wf_k2 < WF_K1_NUM_LOOPS; wf_k2++){
+
+		wf_scount++;
+		wf_k++;
+		wf_rxsample=(FTYPE)(short)dp_read_dsp_ram(wf_add++);
+		
+		wf_lmserr=dp_vmax_lms(wf_stepsize,wf_rxsample_prv,wf_rxsample,wf_coef,wf_st,wf_from,wf_toid,wf_len);
+
+		wf_rxsample_prv=wf_rxsample;
+
+		wf_rxsumsq += wf_rxsample * wf_rxsample;
+		wf_errsumsq += wf_lmserr * wf_lmserr;
+		if (wf_lmserr<0) wf_lmserr = -wf_lmserr;
+		if (wf_lmserr>wf_lmserrmax) wf_lmserrmax=wf_lmserr;
+
+		if (wf_scount==100) {
+		if (wf_k>200) {
+			/* dont print anything until error is reasonable */
+			//wf_erle=10 * log10(wf_errsumsq/wf_rxsumsq);
+		
+		}
+		wf_lmserrmax=(FTYPE)0.0;
+		wf_rxsumsq=0.0;
+		wf_errsumsq=0.0;
+		wf_scount=0;
+		}
+  	}
+//}//end while loop
+
+	restore_fpu_state(pfpuState);
+
+	if(wf_k < Kw){
+		return FALSE;
+	}else{
+		return TRUE;
+	}
+
+}
+
+
+/******************************************************************/
+/*****Followings are required for floating point calculation*******/
+/******************************************************************/
+/****************************************************************
+Routine : dp_vmax_fdiv()
+Description :
+	This routine does float pointing division.
+*****************************************************************/
+
+float dp_vmax_fdiv(float upper, float lower){
+//	float return_vl;
+	_asm{
+		fld		upper
+		fdiv	lower
+//		fst		return_vl
+	}
+
+//	return return_vl;
+}
+
+double dp_vmax_ddiv(double upper, double lower){
+//	double return_vl;
+	_asm{
+		fld		upper
+		fdiv	lower
+//		fst		return_vl
+	}
+
+//	return return_vl;
+}
+
+unsigned int _adj_fdiv_r = 0;
+
+unsigned int _adjust_fdiv = 0;
+
+void _adj_fdiv_m64 ( void )
+{
+	//x_debug_msg("adj_fdiv_m64") ;
+}
+
+void _adj_fdiv_m32 ( void )
+{
+	//x_debug_msg("adj_fdiv_m64") ;
+}
+
+void _adj_fdiv_m32i ( void )
+{
+	//x_debug_msg("adj_fdiv_m64") ;
+}
+
+
+void _adj_fdivr_m32 ( void )
+{
+	//x_debug_msg("adj_fdiv_m64") ;
+}
+void _adj_fdivr_m64 ( void )
+{
+	//x_debug_msg("adj_fdiv_m64") ;
+}
+/****************************************************/
+/****************************************************/
+/****************************************************/
+
+
+/****************************************************************
+Routine : dp_vmax_training
+return : TRUE - training finished
+*****************************************************************/
+byte dp_vmax_training ( void )
+{
+	
+	long pfpuState[32];
+	FTYPE f32tmp;
+	int i;
+
+	save_fpu_state(pfpuState);
+
+	switch (dp_vmax_state )
+	{
+		case DP_VMAX_WAIT_DSP :
+
+			if ( (dsp_wt_ptr = dp_read_dsp_ram ( WAIT_DSP_RAM )) == WAIT_DSP_VAL )
+			{
+				x_debug_msg("vmax - dsp data is ready, now perform channel modeling") ;
+				dp_vmax_state = DP_VMAX_START ;
+			}else if((dsp_wt_ptr - STEP1_RAM) > 1400){
+				
+				//sprintf(szBuffer,"dpvmax - dsp_wt_ptr offset = %d", (dsp_wt_ptr - STEP1_RAM));
+				//x_debug_msg ( szBuffer );
+			}
+			break ;
+		case DP_VMAX_START :
+			
+			//VMODEM_Start_Timer (1);
+			
+			if(rob_opt == TRUE){
+				
+				//dp_vmax_scraminit();	//WZ005
+
+				dp_vmax_init_step1rb () ;
+				dp_vmax_state = DP_VMAX_STEP1;
+				x_debug_msg("vmax - goto step1rb_1");
+			}else{
+
+				dp_vmax_init_step1 () ;
+				dp_vmax_state = DP_VMAX_STEP1 ;
+				x_debug_msg("vmax - goto step1");
+			}
+			break;
+		case DP_VMAX_STEP1 :
+
+			if(rob_opt == TRUE){
+				if ( dp_vmax_step1rb_1 () == TRUE ){
+					
+					if(rob_v110_opt == TRUE){	//WZ009
+						dp_vmax_step1rb_2_v113 ();
+					}else{
+						dp_vmax_step1rb_2 ();
+					}
+					
+					x_debug_msg("vmax - goto wt_modelchan");
+					
+					dp_vmax_save = DP_VMAX_WT_MODELCHAN ;
+					dp_vmax_state = DP_VMAX_REST;
+				}
+			}else{
+				if ( dp_vmax_step1 () == TRUE )
+				{
+					x_debug_msg("vmax - goto wt_modelchan");
+					dp_vmax_save = DP_VMAX_WT_MODELCHAN ;
+					dp_vmax_state = DP_VMAX_REST;
+				}
+			}
+
+			break ;
+
+		case DP_VMAX_WT_MODELCHAN :
+			dp_vmax_wt_modelchan () ;
+
+			if(wf_opt == 'w' || wf_opt1 == TRUE){
+				dp_vmax_state = DP_VMAX_WF_SCRAMINIT;
+				x_debug_msg("vmax - goto WF scraminit");
+			}else{
+				dp_vmax_state = DP_VMAX_STEP2_1 ;
+				x_debug_msg("vmax - goto step2_1");
+			}
+			break;
+
+//***Start -- W filter**********************************
+		case DP_VMAX_WF_SCRAMINIT:
+			dp_vmax_scraminit();
+			if(wf_opt1 == TRUE){
+				dp_vmax_state = DP_VMAX_W_FILT_INV;
+				x_debug_msg("vmax - go to w_filt_inv");
+			}else{
+				dp_vmax_state = DP_VMAX_W_FILT_1;
+				x_debug_msg("vmax - goto WF w_filt_1");
+			}
+			break;
+		case DP_VMAX_W_FILT_INV:		//WZ013
+			if((w_filt_inv_done = dp_vmax_w_filt_inv()) == TRUE){
+				x_debug_msg("vmax - dp_vmax_w_filt_inv done.");
+				dp_vmax_save = DP_VMAX_WF_INIT_STEP1;
+				dp_vmax_state = DP_VMAX_REST;
+			}else{
+				x_debug_msg("vmax - w_filt_inv FAILED, do regular w_filt... ");
+				x_debug_msg("vmax - go to DP_VMAX_W_FILT_1");
+				dp_vmax_save = DP_VMAX_W_FILT_1;
+				dp_vmax_state = DP_VMAX_REST;
+			}
+			break;
+		case DP_VMAX_W_FILT_1:
+			dp_vmax_w_filt_1();
+			dp_vmax_state = DP_VMAX_W_FILT_2;
+			x_debug_msg("vmax - goto w_filt_2");
+			break;
+		case DP_VMAX_W_FILT_2:
+			if(dp_vmax_w_filt_2() == TRUE){
+
+			
+				dp_vmax_state = DP_VMAX_WF_INIT_STEP1;
+			
+				x_debug_msg("vmax - goto WF init step1");
+			
+			}else{
+				
+				if(dp_vmax_flip == TRUE){
+					dp_vmax_flip = FALSE;
+				}else{
+					dp_vmax_save = dp_vmax_state;
+					dp_vmax_state = DP_VMAX_REST;
+
+					dp_vmax_flip = TRUE;
+				}
+				
+			}//end else{
+			break;
+		case DP_VMAX_WF_INIT_STEP1:
+			
+			if(rob_opt == TRUE){
+				
+				dp_vmax_init_step1rb () ;
+				x_debug_msg("vmax - goto WF step1rb_1");
+
+			}else{
+				
+				dp_vmax_init_step1 () ;
+				x_debug_msg("vmax - goto WF step1");
+
+			}
+			
+			dp_vmax_state = DP_VMAX_WF_STEP1 ;
+			break;
+		case DP_VMAX_WF_STEP1:
+
+			if(rob_opt == TRUE){
+				if ( dp_vmax_step1rb_1 () == TRUE )
+				{
+					if(rob_v110_opt == TRUE){	//WZ009
+						dp_vmax_step1rb_2_v113 ();
+					}else{
+						dp_vmax_step1rb_2 ();
+					}
+
+					dp_vmax_state = DP_VMAX_WF_WT_WF_COEF;
+					x_debug_msg("vmax - goto WF wt_wf_coef");
+				}
+			}else{
+				if ( dp_vmax_step1 () == TRUE )
+				{
+					dp_vmax_state = DP_VMAX_WF_WT_WF_COEF;
+					x_debug_msg("vmax - goto WF wt_wf_coef");
+				}
+			}
+			break;
+		case DP_VMAX_WF_WT_WF_COEF:
+			dp_vmax_wt_wf_coef();
+			dp_vmax_state = DP_VMAX_STEP2_1;
+			x_debug_msg("vmax - goto step2_1");
+			break;
+
+//***End - W filter**************************************
+
+		case DP_VMAX_STEP2_1 :
+			
+			//WZ017: dump the modelchan[200] to a file
+			if(diag_log_opt == TRUE){
+				dp_vmax_log_modelchan("c:\\vmaxchan.log");
+				dp_vmax_log_DSP_data("c:\\vmaxdsp1.log");
+			}
+
+			//WZ003: before get into step2,update dp_vmax_status 
+			//and check step1 training quanlity
+			
+			debug("RobbedBitPattern = %d", dp_vmax_status.RobbedBitPattern);
+			debug("RobbedBitType = %d", dp_vmax_status.RobbedBitType);
+
+
+			dp_vmax_status.ChannelModeling = (byte)(erle_min>=0 ? erle_min:(-erle_min));
+			debug("ChannelModeling = %d", dp_vmax_status.ChannelModeling);
+
+			if(up_flag == TRUE){
+				//up stream
+				if(dp_vmax_status.ChannelModeling < STEP1_SNR_THRSHD_UP_STREAM_POOR_CHAN_MOD){
+					/*
+					x_debug_msg("Quit training - poor channel modeling");
+					dp_vmax_status.FailureCode = TRUE;
+					restore_fpu_state(pfpuState);
+					return TRUE;
+					*/
+				}
+			}else{
+				//down stream
+				if(dp_vmax_status.ChannelModeling < STEP1_SNR_THRSHD_DOWN_STREAM_MULTIPLE_DIGITAL_LINK){
+					x_debug_msg("Quit training - multi digital link");
+					dp_vmax_status.FailureCode = TRUE;
+					restore_fpu_state(pfpuState);
+					return TRUE;
+				} else if(dp_vmax_status.ChannelModeling < STEP1_SNR_THRSHD_DOWN_STREAM_POOR_CHAN_MOD){
+					x_debug_msg("Quit training - poor channel modeling");
+					dp_vmax_status.FailureCode = TRUE;
+					restore_fpu_state(pfpuState);
+					return TRUE;
+				}
+			}
+			
+
+			dp_vmax_step2_1 () ;
+			dp_vmax_state = DP_VMAX_STEP2_2 ;
+			x_debug_msg("vmax - goto step2_2");
+			break ;
+		case DP_VMAX_STEP2_2 :
+			if ( step2i < TOTSAMP )
+			{	
+				dp_vmax_flip = TRUE; //after debug no need flip
+
+				if(dp_vmax_flip == TRUE){
+					dp_vmax_state = DP_VMAX_STEP2_3 ;
+					step2k = 0;
+					dp_vmax_flip = FALSE;
+				}else{
+					dp_vmax_save = dp_vmax_state;
+					dp_vmax_state = DP_VMAX_REST;
+
+					dp_vmax_flip = TRUE;
+				}
+			}
+			else
+			{
+				dp_vmax_state = DP_VMAX_STEP2_4 ;
+				x_debug_msg("vmax - goto step2_4") ;
+			}
+			break ;
+		case DP_VMAX_STEP2_3 :
+
+			//VMODEM_Start_Timer (15);
+			
+			if ( step2k < K )
+			{	
+				dp_vmax_flip = TRUE; //after debug no need flip
+
+				if(dp_vmax_flip == TRUE){
+					if ( dp_vmax_step2_3() == TRUE )
+					{
+						debug_snr () ;
+						
+						// break outof the K loop
+						step2i++;
+						dp_vmax_state = DP_VMAX_STEP2_2 ;
+
+					}
+					
+					dp_vmax_flip = FALSE;
+				}else{
+					dp_vmax_save = dp_vmax_state;
+					dp_vmax_state = DP_VMAX_REST;
+
+					dp_vmax_flip = TRUE;
+				}
+			}
+			else
+			{
+				debug_snr () ;
+				
+				step2i++;
+				dp_vmax_state = DP_VMAX_STEP2_2 ;
+			
+			}
+			break ;
+		case DP_VMAX_STEP2_4 :
+			dp_vmax_step2_4() ;
+			dp_vmax_state = DP_VMAX_STEP2_5 ;
+			x_debug_msg("vmax - go to step2_5");
+			break ;
+		case DP_VMAX_STEP2_5 :
+			
+			dp_vmax_step2_5() ;
+			dp_vmax_state = DP_VMAX_WT_EQTAPS ;
+			x_debug_msg("vmax - go to write eqtaps to dsp");
+			dp_vmax_flip = FALSE;
+			break ;
+		case DP_VMAX_WT_EQTAPS :
+			
+			//WZ003: before write eqtap to DSP, check step2 quanlity
+			
+			dp_vmax_status.Equalizer1 = -10.0*log10((double)eqerr[1]);
+			dp_vmax_status.Equalizer2 = -10.0*log10((double)eqerr[2]);
+			dp_vmax_status.Equalizer3 = -10.0*log10((double)eqerr[3]);
+			dp_vmax_status.Equalizer4 = -10.0*log10((double)eqerr[4]);
+			dp_vmax_status.Equalizer5 = -10.0*log10((double)eqerr[5]);
+			dp_vmax_status.Equalizer6 = -10.0*log10((double)eqerr[6]);
+
+			/*
+			for(i = 0; i < 8; i++){
+				debug("i = %d", (FTYPE)i);
+				if(eqerr[i] != 0){
+					debug("SNR = %d", (FTYPE)-10.0*log10((double)eqerr[i]));
+				}
+			}
+			*/
+			
+
+			eq_SNR_min = dp_vmax_get_min_SNR(eqerr, 8);
+			debug("eq_SNR_min = %d",eq_SNR_min);
+
+			if(eq_SNR_min < ((up_flag == TRUE)? STEP2_SNR_THRSHD_UP_STREAM_POOR_EQ_TRAIN : STEP2_SNR_THRSHD_DOWN_STREAM_POOR_EQ_TRAIN  )
+				|| eq_SNR_min > 200){
+		
+				x_debug_msg("Quit training - step2 training");
+				dp_vmax_status.FailureCode = TRUE;
+				restore_fpu_state(pfpuState);
+				return TRUE;
+			}else{
+				//dp_vmax_status.Connection = TRUE;	//OK
+				//dp_vmax_status.FailureCode = FALSE;	//0 = normal
+			}
+			
+			dp_vmax_save = dp_vmax_state;
+			
+			dp_vmax_flip = TRUE; //after debug no need flip
+
+			if(dp_vmax_flip == TRUE){
+			dp_vmax_wt_eqtaps () ;
+
+			dp_write_dsp_ram ( 0x003c, VMAX_X ) ; //constellation I value
+			dp_write_dsp_ram ( 0x0047, VMAX_Y ) ; //constellation Q value
+
+			//VMODEM_Start_Timer (5);
+			
+			//WZ003: normal termination
+			dp_vmax_status.FailureCode = FALSE;
+			
+			//about run status of dp_vamx_w_filt_inv
+			if(wf_opt1 == TRUE && w_filt_inv_done == TRUE){
+				x_debug_msg("vmax - dp_vmax_w_filt_inv called, OK!");
+			}else if(wf_opt1 == TRUE && w_filt_inv_done == FALSE){
+				x_debug_msg("vmax - dp_vmax_w_filt_inv called, run-time FAILURE!!");
+			}
+
+			x_debug_msg("vmax - training finished - normal");
+
+			restore_fpu_state(pfpuState);
+			
+			return TRUE ;
+
+			}else{
+				dp_vmax_flip = TRUE;
+			}
+			break ;
+		case DP_VMAX_REST:
+			dp_vmax_state = dp_vmax_save;
+			break;
+	}
+
+	restore_fpu_state(pfpuState);
+	return FALSE ;
+}
+
+//////////////////////////////////////////////////////////
+//WZ002 for enhanced version of upstream training
+/****************************************************************
+Routine : dp_vmax_croproduct
+
+*****************************************************************/
+void dp_vmax_croproduct(FTYPE *crosscor,FTYPE txsample, FTYPE *modelstate, int len)
+
+{
+	int i;
+	long pfpuState[32];
+
+	save_fpu_state(pfpuState);
+
+
+    for (i=0;i<len;i++) {
+        *(crosscor+i) += txsample * *(modelstate+len-1-i);
+		//if(i < 2 && step1_count < 2){
+		//	debug("CROSS: i = %d", i);
+		//	debug("txsample = %d", txsample);
+		//	debug("*(modelstate+len-1-i) = %d", *(modelstate+len-1-i));
+		//	debug("*(crosscor+i) = %d",*(crosscor+i));
+		//}
+	}
+
+	restore_fpu_state(pfpuState);
+    return ;
+}
+
+/****************************************************************
+Routine : dp_vmax_calch
+return : 
+*****************************************************************/
+
+void dp_vmax_calch(FTYPE *modelchan, FTYPE *crosscor,int len,int nsample,FTYPE txsample)
+{
+	
+long pfpuState[32];
+
+//WZ005
+static FTYPE invXX[200] = {
+  3.8732809e+000, -2.4869939e-002,  2.3200106e-002,  2.9631701e-002,
+ -4.2432137e-003, -6.1673183e-003, -3.8212362e-002,  3.0708293e-002,
+ -5.1882983e-003, -4.8298706e-002, -1.0952124e-004, -5.8122002e-002,
+ -2.5264373e-002, -1.9172809e-002,  2.8591405e-002, -1.5988936e-002,
+ -5.6670942e-003,  8.4409271e-003, -8.3564911e-003,  2.3187169e-002,
+ -4.9912358e-003, -1.6694415e-002, -4.5457269e-002, -1.0515395e-002,
+  1.9412582e-002, -1.5088196e-002, -1.8702985e-002,  7.1002664e-003,
+ -1.8752049e-002,  3.7327423e-002, -1.7311966e-002, -3.9620077e-002,
+  5.8973423e-002, -4.4941331e-002,  2.9781797e-002,  1.4984354e-002,
+ -6.6397242e-003, -6.9467583e-003, -5.0000080e-002,  3.5339583e-002,
+ -6.3366264e-003, -2.5453449e-002,  1.4816743e-002, -3.9342739e-002,
+ -3.7494300e-002, -1.6235485e-002, -4.4524527e-003,  7.3433714e-002,
+ -5.0051810e-003, -5.4750933e-003,  2.0695145e-002, -8.9769216e-003,
+ -7.6662639e-002, -3.5223838e-002, -1.6249980e-002, -3.5196113e-002,
+ -1.1739711e-002,  4.3760009e-002,  2.7342308e-002, -1.0222934e-002,
+ -6.9521216e-002, -5.0096301e-002,  9.9066831e-004,  7.4314594e-002,
+ -3.8786981e-002,  4.5101792e-002,  1.4281350e-002, -4.3963434e-002,
+ -3.7634234e-002, -1.7318661e-002,  5.0720417e-002,  3.0258707e-002,
+ -5.3531208e-003, -5.1986686e-003, -5.1934743e-003, -3.4173723e-002,
+  1.8704866e-002, -4.2418748e-002,  8.5934688e-003,  2.1169390e-004,
+ -2.1491036e-002,  1.4732876e-002, -1.4926825e-002,  2.5979877e-002,
+ -2.4416482e-002,  4.8985517e-002, -9.6509720e-003,  2.5888562e-002,
+ -1.1691250e-002, -1.0637777e-003,  3.5710746e-002,  1.8493605e-002,
+ -5.5161112e-003,  4.9094463e-002, -3.1477639e-002,  2.6139040e-002,
+ -4.8936093e-002,  2.6336903e-002,  1.9458914e-002, -3.2563438e-002,
+ -5.3049310e-002, -3.9877999e-002, -6.1717930e-003, -4.5924562e-002,
+ -2.6134607e-002,  1.8975277e-002,  8.8299314e-003, -2.1918664e-002,
+ -2.1174487e-002,  2.3072784e-003, -3.8238079e-002, -1.6247837e-002,
+ -6.3425087e-002,  7.3749067e-005, -3.3935611e-002, -4.7470137e-002,
+  6.3164272e-002,  1.5300254e-003, -9.9813001e-003,  4.2434995e-002,
+ -1.4669930e-002,  1.9385251e-003,  3.4243785e-002,  5.0310113e-002,
+ -5.8788551e-002,  5.4559362e-003,  1.2816431e-002, -3.2337243e-002,
+  9.4108358e-003, -1.5606506e-002,  5.4326536e-002,  2.9136482e-004,
+ -5.7640414e-002,  1.4953013e-002, -1.3996732e-002, -6.7444367e-003,
+ -1.1773402e-002,  1.7103565e-002, -1.9209862e-002,  6.6495048e-002,
+  7.5494141e-002,  5.8888345e-002,  2.2787734e-002,  3.1124221e-002,
+ -1.2703370e-003, -7.4422130e-002, -3.3544236e-002,  1.7952183e-002,
+  1.8698673e-002,  2.1273074e-002, -3.1231888e-002,  1.1553499e-002,
+  5.3381754e-002,  7.1554660e-002,  1.8752337e-002, -1.7071864e-002,
+ -8.8312037e-003,  6.7797534e-003, -8.3613360e-003,  2.7183788e-002,
+ -1.4024225e-003,  1.2706397e-002,  5.9775206e-003,  2.5299454e-002,
+ -7.8904134e-002, -3.7322406e-002, -6.7410832e-003, -4.4706291e-002,
+  1.5710481e-002,  3.9482680e-002, -4.2172029e-002, -3.5457186e-002,
+ -1.9383683e-002, -2.9392671e-002, -4.4238666e-002,  2.2237711e-003,
+ -9.7863216e-003, -1.1965205e-002,  4.0993552e-003,  1.0272620e-002,
+ -3.0966918e-002, -3.3288752e-002,  2.4418935e-003,  4.6049133e-002,
+ -9.0836884e-003, -3.2893726e-002,  6.5812060e-003, -8.3902965e-004,
+ -1.0112161e-002, -4.8095879e-002, -3.4285280e-003,  3.3820530e-002,
+ -3.5378449e-002,  4.2106266e-002, -7.7016225e-003, -8.1237440e-003,
+ -4.9199171e-002,  1.4919516e-002,  9.8922608e-003, -6.5078407e-003
+                                 };
+
+static char err[9901] = {
+  0,
+  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+  0,   1,   0,   0,   0,   0,   0,   0,   0,   1,
+  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+  0,   0,   0,   0,   0,   0,   0,   0,  -1,  -1,
+  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+  0,   0,   0,   0,   0,   0,   0,   0,   1,  -1,
+  0,   0,   0,   0,   0,   1,   0,   0,   0,   0,
+  0,   0,   0,   0,  -1,   0,   0,   0,   0,   0,
+  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+ -1,   1,   0,   0,   0,   0,   0,   0,   0,   0,
+  0,   0,   0,  -1,   0,   0,   0,   0,   0,   0,
+  0,   1,   0,   0,   0,   0,   0,   0,   0,   0,
+ -1,   0,   0,   1,   0,   0,   0,   0,   0,   0,
+  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+  0,   0,   1,  -1,   0,   0,   0,   0,   0,   0,
+ -1,   1,   0,   0,   0,   0,   0,   0,   0,   1,
+  0,   0,   0,   0,   0,   1,   0,   0,   0,   0,
+  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+ -1,   0,   0,   0,   0,   0,  -1,   0,   0,   0,
+  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+ -1,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+  0,   0,   0,  -1,   0,   0,   0,   0,   0,   0,
+  0,   0,  -1,   0,   0,   0,   1,   0,   0,  -1,
+  0,   0,  -1,   0,   0,  -1,   0,   0,   0,   0,
+ -1,   0,   0,  -1,  -1,   0,   0,   0,   0,   0,
+  0,  -1,  -1,   0,   1,   0,   0,   1,  -1,   0,
+  0,   0,   1,   0,   0,   0,   0,   0,   0,  -1,
+  0,   0,   0,   0,   0,   0,   0,   1,   0,   0,
+  0,   0,   0,   0,   0,   0,   0,   0,   0,   1,
+  0,   0,   0,   0,   0,   0,   0,   0,   0,  -1,
+  0,   0,   0,   0,   0,   0,  -1,   0,   1,  -1,
+  0,   0,   0,   0,   1,   0,  -1,   1,   0,   0,
+  0,   0,   0,  -1,   0,   0,  -1,   0,   0,   0,
+  1,   1,   1,   0,   0,   0,  -1,  -1,   1,   1,
+  0,   0,   0,   1,   1,   0,   0,   0,   0,   0,
+  0,   0,   0,   0,   0,  -1,  -1,   0,   0,   0,
+  1,   0,  -1,   0,   0,   0,   0,   0,   0,   0,
+  0,   0,  -1,   0,   1,   0,  -1,   0,   0,   0,
+  0,   0,   1,   0,   0,   0,   0,   0,   0,   0,
+  0,   0,  -1,   1,  -1,  -1,   0,   0,   0,   0,
+  0,   0,   0,  -1,   0,   1,   0,  -1,   0,   0,
+  0,  -1,   0,   0,   0,   1,  -1,   0,   0,  -1,
+  0,   1,   0,   0,   0,   1,  -1,   0,   0,  -1,
+  0,   1,   1,   0,  -1,   1,   0,  -1,  -1,  -1,
+  0,   0,   1,   1,   1,   0,  -1,   0,   1,   0,
+  0,   1,  -1,   0,   1,   0,   1,   0,   0,   0,
+ -1,   1,   0,  -1,   0,   0,   0,   0,   1,  -1,
+  0,   1,  -1,   0,  -1,   0,   0,   0,   1,   0,
+ -1,  -1,   0,   0,  -1,  -1,   0,   0,  -1,   0,
+  0,   1,   0,   0,   1,   0,  -1,   0,   0,   1,
+ -1,   1,   1,   0,   0,   0,   0,   0,   1,  -1,
+ -1,   1,   0,   0,   1,   0,   0,  -1,   0,   1,
+ -1,   1,   0,  -1,   0,   1,   1,   0,   0,   0,
+ -1,  -1,   0,   1,   1,   0,   0,   2,   0,   0,
+ -1,  -1,   1,   0,   0,   1,  -1,   0,   0,   0,
+ -1,   0,   1,  -1,   0,   1,  -1,   0,   0,  -1,
+  0,   0,  -1,   0,   0,   0,  -1,   0,   1,   0,
+  0,   0,   0,  -1,   0,  -1,   1,   0,  -1,   0,
+  0,   0,   0,   0,   0,   1,  -1,  -1,   0,   0,
+  0,   0,   0,   0,   0,  -1,   0,   1,   0,  -1,
+  0,   0,  -1,  -1,   0,   0,   0,   1,  -1,   0,
+  0,  -1,   0,   1,   0,   0,   0,   1,  -1,   0,
+  0,  -1,   0,   1,   1,   0,  -1,   1,   1,  -1,
+ -1,  -1,   0,   0,   1,   1,   1,   0,  -1,   0,
+  1,   0,   0,   1,  -1,   0,   1,   0,   1,   0,
+  0,   0,  -1,   1,   0,  -1,   0,   0,   0,   0,
+  1,  -1,   0,   1,  -1,   0,  -1,   0,   0,   0,
+  1,   0,  -1,  -1,   0,   0,  -1,  -1,   0,   0,
+ -1,   0,   0,   1,   0,   0,   1,   0,   0,   0,
+  0,   1,  -1,   1,   1,   0,   0,   0,   0,   0,
+  1,  -1,  -1,   1,   0,   0,   1,   0,   0,  -1,
+  0,   1,  -1,   1,   0,  -1,   0,   1,   1,   0,
+  0,   0,  -1,  -1,  -1,   1,   1,  -1,   0,   2,
+  0,   0,  -1,  -1,   0,   0,   0,   1,  -1,   0,
+  0,   0,  -1,   0,   1,  -1,   1,   1,  -1,   0,
+  0,  -1,   0,   0,  -1,   0,   0,   0,  -1,   0,
+  1,   0,   0,   0,   0,  -1,   0,  -1,   1,   0,
+  0,   0,   0,   1,   0,   1,   0,  -1,   0,   0,
+  0,   0,   0,   0,   0,   0,   0,   1,   0,  -1,
+  0,   0,   0,  -1,   0,   0,  -1,   1,  -1,  -1,
+  0,  -1,   0,   0,   0,   0,   0,   1,   0,   0,
+  0,  -1,   0,   1,   1,   0,   0,   1,   1,  -1,
+ -1,  -1,   0,   1,   1,   2,   1,  -1,  -1,   0,
+  1,   0,   0,   1,  -2,  -1,   1,   0,   1,   0,
+  0,   0,  -1,   1,   1,  -1,   0,   0,   0,   0,
+  1,  -1,   0,   1,  -1,   0,  -1,   0,   0,  -1,
+  1,   0,  -1,   0,   0,   1,  -1,   0,   0,   0,
+ -1,   0,   0,   1,   0,   0,   1,   0,   0,   1,
+ -1,   1,  -1,   0,   1,   0,   0,   0,   0,   0,
+  1,   0,  -1,   1,  -1,   0,   1,   0,   0,  -1,
+  0,   1,  -1,   0,  -1,  -2,  -1,   1,   1,   1,
+  0,  -1,  -1,  -1,   0,   1,   0,  -1,  -1,   2,
+  0,   0,  -1,  -1,   0,   0,   0,   0,   0,   1,
+  1,   0,  -1,  -1,   1,   0,   1,   1,  -1,   0,
+  0,   0,   0,   0,  -1,   0,   0,   0,  -1,   0,
+  1,   0,   0,   0,   0,  -1,   0,  -1,   0,   0,
+ -1,   1,   0,   1,  -1,  -1,   0,   0,   0,   0,
+  1,   0,   0,  -1,   0,   1,  -1,   0,   0,   0,
+  0,  -1,  -1,   0,  -1,   2,   0,   0,   0,  -1,
+  0,   0,   0,   0,   0,   1,   0,   0,   0,  -2,
+  0,   2,   0,  -1,  -1,   1,   1,  -1,  -1,  -1,
+ -1,  -1,   0,   2,   1,  -1,  -1,   0,   0,   1,
+  0,   1,  -1,  -1,   1,   0,   0,   1,  -1,   0,
+ -1,   1,   0,  -1,   1,  -1,   1,   0,   1,  -1,
+  0,   1,  -1,   0,   0,   0,   0,  -1,   2,   0,
+ -1,   0,   0,   0,  -1,   0,   0,   1,  -2,   0,
+  0,   0,   0,   0,   1,   0,  -1,   1,  -1,   1,
+ -1,   0,   1,   0,   1,  -1,   1,   0,   1,   0,
+ -1,   1,   0,   0,   2,  -1,   0,  -1,   0,   1,
+  0,   2,   0,  -2,  -1,   1,   1,   1,   0,   0,
+ -1,  -2,   0,   1,   0,  -1,  -1,   2,   1,  -1,
+  0,  -1,   0,   0,   0,   0,  -1,   0,   1,   0,
+  0,  -1,   0,   0,   0,   1,  -1,   0,   0,   0,
+  0,   0,  -1,   1,   1,   0,  -1,   0,   1,   0,
+  0,   0,   1,  -1,   0,   1,  -1,   0,   0,   1,
+ -1,  -1,   0,   0,   0,  -1,   1,   1,   0,  -1,
+  0,   1,  -1,   0,   0,   0,   0,   0,  -1,   0,
+ -1,   1,  -1,   0,   0,  -1,   0,   1,  -1,   0,
+  0,   1,   0,   1,   0,  -2,   0,   2,   1,   0,
+ -1,   1,   1,   0,  -1,   0,   0,   0,   0,   2,
+  1,  -1,  -1,   0,   0,   1,   0,   1,  -1,  -1,
+  1,   0,   0,   1,  -1,   0,  -1,   1,   0,  -1,
+  1,  -1,   1,   0,   0,  -1,  -1,   1,  -1,   0,
+  0,   0,   0,  -1,   2,   0,  -1,   0,   1,   1,
+ -2,   0,   0,   1,  -2,   0,   0,   0,   0,   0,
+  1,   0,  -1,   2,  -1,   1,  -1,   0,   1,  -1,
+  1,  -1,   1,   0,   1,   0,  -1,   1,  -1,   0,
+  2,   0,  -1,   0,   0,   0,   0,   1,   0,  -2,
+ -1,   1,   1,   1,   0,   0,  -1,  -2,   0,   2,
+  0,  -1,  -1,   2,   1,  -1,   0,  -1,   0,   0,
+  0,   0,   0,   0,   1,  -1,   0,  -1,   0,   0,
+  0,   1,   0,   0,  -1,   0,   0,   0,  -1,   1,
+  1,   0,  -1,   0,   1,   0,   0,  -1,   0,   1,
+  0,   1,   0,   1,   0,  -1,  -1,   0,   0,   0,
+  1,   1,   0,  -1,   0,   2,  -1,   0,   0,   1,
+  0,  -1,   0,   0,   0,   2,  -1,   1,  -1,  -1,
+  0,   0,   0,   1,   0,   1,  -2,   0,   0,  -2,
+  0,   3,   1,   0,   0,   1,   0,  -1,  -1,   0,
+  0,   0,  -1,   3,   1,  -1,   0,   1,   0,   0,
+  0,   1,  -1,  -1,   2,   0,   0,   1,  -1,   1,
+ -2,   2,   0,  -1,   1,  -1,   0,   1,   1,  -1,
+ -1,   2,  -2,   0,   0,   1,   0,  -1,   2,   1,
+ -1,  -1,   1,   1,  -2,   0,   0,   1,  -2,   0,
+  1,   1,   0,   0,   1,   0,  -2,   2,  -2,   1,
+ -1,   0,   0,   0,   1,  -1,   1,   0,   0,  -1,
+ -1,   2,  -1,   0,   2,   0,  -2,   0,  -1,   0,
+ -1,   1,  -1,  -1,   0,   2,   1,   1,   0,   0,
+ -1,  -3,  -2,   2,   0,  -1,  -1,   2,   1,  -1,
+ -1,   0,  -1,   1,   1,   0,   1,  -1,   1,   0,
+  0,   0,   0,   1,   0,   1,   0,   0,  -1,   0,
+  1,   0,  -2,   1,   1,  -1,   0,   0,   2,   0,
+  0,   1,   0,   1,   0,   1,   0,  -1,  -1,   0,
+  0,   0,   1,   1,   0,  -1,   0,   2,  -1,   0,
+  0,   1,   0,  -1,   0,   0,  -1,   2,  -1,   1,
+ -1,  -1,   0,   0,   0,   1,   0,   1,  -1,   0,
+  0,  -2,   0,   3,   1,   0,   0,   1,   0,  -1,
+ -1,   0,   0,   0,  -1,   3,   1,  -1,   0,   1,
+  0,   0,   0,   1,  -1,  -1,   1,   0,   0,   1,
+ -1,   1,  -2,   2,   0,  -1,   1,  -1,   0,   1,
+  1,  -1,  -1,   1,  -2,   0,   0,   0,   0,  -1,
+  2,   1,   0,  -1,   1,   1,  -2,   1,   0,   1,
+ -2,   0,   1,   1,   0,   0,   1,   0,  -2,   2,
+ -2,   1,  -1,   0,   0,   0,   1,  -1,   1,   0,
+  1,  -1,  -1,   2,  -1,   0,   1,   0,  -2,   0,
+ -1,   0,  -1,   1,  -1,  -1,   0,   2,   1,   1,
+  0,   0,  -1,  -3,  -2,   1,   0,  -1,  -1,   2,
+  1,  -1,  -1,   0,  -1,   1,   1,   0,   1,  -1,
+  1,   0,   0,   0,   0,   1,   0,   1,   0,   0,
+ -1,   0,   1,   0,  -2,   1,   1,  -1,   0,   0,
+  0,   1,   1,   0,   0,   1,   0,  -1,  -1,   0,
+  0,   0,   1,   1,   0,  -1,   0,   2,  -2,   0,
+  1,   0,   0,  -2,   0,  -1,   0,   3,  -2,   1,
+  0,  -1,   1,   1,   0,   1,   0,   2,  -1,  -1,
+  1,   0,   1,   2,   1,   0,   0,   1,   1,   1,
+  0,   0,  -1,   0,  -2,   2,   1,  -2,   0,   1,
+ -1,   0,   0,   1,   0,  -2,   3,   1,   0,   1,
+ -1,   1,  -2,   3,  -1,  -1,   1,  -1,   0,   0,
+  0,  -1,  -2,   2,  -2,   0,  -1,   0,   0,  -1,
+  2,   1,   1,  -1,   1,   1,  -1,   1,   0,   2,
+ -2,   1,   1,   2,   1,  -1,   1,   0,  -2,   2,
+ -2,   1,  -2,   1,   0,   0,   1,  -2,   2,   0,
+  0,  -1,  -1,   2,   0,   0,   2,   1,  -3,  -2,
+ -2,   0,  -1,   1,   0,  -1,   0,   0,   0,   2,
+ -1,   0,  -1,  -3,  -2,   1,  -1,   0,  -1,   2,
+  1,  -1,  -1,   1,   0,   2,   1,   0,   0,   0,
+  2,   0,   1,   0,   0,   1,   0,   0,   0,   0,
+  0,   0,   0,   0,  -1,   1,   1,  -1,   0,   1,
+  0,   0,   0,   1,   0,  -1,  -1,   0,   0,   1,
+  1,   1,   0,  -1,   0,   1,  -2,   0,   1,   0,
+  0,  -2,  -1,  -1,   0,   3,  -2,   1,   0,  -1,
+  1,   1,   0,   1,   0,   2,  -1,   0,   1,   0,
+  1,   2,   1,   0,   0,   1,   2,   2,   0,  -1,
+ -1,   0,  -2,   3,   2,  -1,   0,   1,  -1,   0,
+  0,   1,   0,  -2,   3,   1,   0,   1,   0,   1,
+ -2,   2,  -1,  -1,   0,  -1,   0,  -1,   0,  -1,
+ -2,   2,  -2,   0,  -1,   0,   0,  -1,   3,   2,
+  1,  -1,   1,   1,  -1,   1,   0,   3,  -1,   1,
+  1,   2,   1,  -1,   1,  -1,  -2,   2,  -2,   0,
+ -2,   1,   0,   0,   1,  -2,   1,   0,   1,  -1,
+ -1,   2,   0,   0,   2,   0,  -4,  -2,  -2,   0,
+ -1,   1,   0,  -1,  -1,   0,   0,   2,  -1,  -1,
+ -1,  -3,  -2,   1,   0,  -1,  -1,   2,   1,  -2,
+ -1,   1,   0,   2,   1,   0,   0,   0,   2,   0,
+  1,   0,   0,   1,   0,   0,   0,   1,   0,   0,
+  0,   0,  -1,   1,   0,   1,   0,   0,   0,   1,
+  0,  -1,  -1,   0,   0,   0,   1,   1,   0,  -1,
+  0,   1,  -2,   0,   1,   0,   0,  -2,  -1,  -1,
+  0,   3,  -1,   1,   0,  -1,   1,   1,   0,   1,
+  0,   2,  -1,   0,   1,   0,   1,   3,   0,   0,
+  0,   1,   2,   2,   0,  -1,  -1,   0,  -2,   3,
+  2,  -2,   0,   1,  -1,   0,   0,   1,   0,  -2,
+  3,   1,   0,   1,  -1,   1,  -2,   2,  -2,  -1,
+  0,  -2,   0,  -1,   0,  -1,  -2,   2,  -2,   0,
+ -1,   0,   1,  -1,   3,   2,   0,  -1,   1,   1,
+ -1,   1,   0,   3,  -1,   2,   1,   2,   1,  -1,
+  1,  -1,  -2,   2,  -2,   1,  -2,   1,   0,   0,
+  1,  -2,   1,   0,   0,  -1,  -1,   2,   0,   0,
+  2,   0,  -4,  -2,  -2,   0,  -1,   1,   0,  -1,
+ -1,   0,   0,   1,  -1,  -1,  -1,  -3,  -2,   1,
+ -1,  -1,  -1,   2,   1,  -1,  -1,   1,   1,   2,
+  1,   0,   0,   0,   2,   0,   1,   0,   0,   1,
+  0,   0,   0,   1,   0,   0,   0,   0,   1,   1,
+  0,   0,   0,   1,   0,  -1,  -2,   0,   1,   0,
+  1,   1,   0,  -1,   0,   1,  -1,  -1,   1,   0,
+  0,  -2,  -1,  -1,   0,   2,  -1,   1,   0,  -1,
+  1,   1,  -1,   1,   0,   1,  -2,   0,   1,   0,
+  1,   3,   1,   0,  -1,   1,   2,   2,   0,   0,
+ -1,   0,  -2,   3,   2,  -1,  -1,   1,  -1,   0,
+  0,   1,   0,  -2,   3,   1,   0,   1,  -1,   1,
+ -2,   3,  -2,  -1,   1,  -2,   0,   0,   0,  -1,
+ -2,   2,  -2,   0,  -2,   0,   1,  -1,   3,   2,
+  1,  -1,   1,   1,  -2,   1,   0,   3,  -2,   1,
+  2,   2,   1,   0,   1,  -1,  -2,   2,  -3,   1,
+ -2,   1,   0,   0,   2,  -2,   1,   0,   0,  -1,
+ -1,   2,   0,   0,   3,   0,  -4,  -2,  -2,  -1,
+ -1,   2,   0,  -1,  -1,   0,   1,   2,  -1,  -1,
+ -1,  -3,  -2,   1,  -1,  -1,  -1,   2,   0,  -2,
+ -1,   1,   1,   2,   0,   0,   0,   0,   2,   0,
+  1,   0,   0,   1,   0,   0,   0,   1,   0,   0,
+  0,   1,   1,   0,  -1,   1,   1,  -1,  -2,   0,
+  1,   0,   0,   1,   0,  -1,   0,   1,  -1,  -1,
+  1,  -1,   0,  -2,  -1,  -1,   0,   2,  -1,   1,
+  0,  -1,   2,   2,   0,   0,   0,   2,  -2,  -1,
+  1,   0,   1,   3,   1,   1,   0,   1,   2,   2,
+ -1,  -1,   0,  -1,  -2,   3,   2,  -1,  -1,   1,
+ -1,  -1,   1,   1,   0,  -2,   3,   1,   0,   2,
+ -2,   1,  -2,   2,  -2,  -2,   1,  -2,  -1,   0,
+  0,  -1,  -3,   2,  -2,   0,  -2,   0,   1,  -2,
+  3,   2,   1,  -1,   1,   2,  -2,   1,   0,   3,
+ -1,   1,   2,   2,   1,  -1,   1,  -1,  -2,   3,
+ -3,   1,  -2,   0,   0,   0,   2,  -2,   1,   0,
+  1,  -1,  -1,   2,  -1,  -1,   2,   0,  -4,  -2,
+ -2,  -1,  -1,   1,   0,  -1,  -1,   0,   1,   2,
+ -1,  -1,  -1,  -2,  -2,   1,   0,  -1,  -1,   2,
+  1,  -1,  -1,   1,   0,   2,   1,   0,   0,   0,
+  2,   1,   1,   0,   0,   1,   0,   0,   0,   1,
+  0,   1,   1,   0,  -1,   1,   1,  -1,  -2,   0,
+  1,   0,   0,   1,   0,  -1,   0,   1,  -1,  -1,
+  0,   0,   0,  -2,  -1,  -1,   0,   2,  -1,   1,
+  0,  -1,   2,   2,  -1,   0,   0,   2,  -2,  -1,
+  1,   0,   1,   3,   1,   1,   0,   1,   2,   2,
+ -1,   0,   0,  -1,  -2,   3,   2,  -1,  -1,   1,
+ -1,  -1,   1,   1,   0,  -2,   3,   1,   0,   2,
+ -2,   1,  -2,   2,  -2,  -2,   1,  -2,  -1,   0,
+  0,  -1,  -3,   2,  -2,   0,  -2,   1,   1,  -2,
+  3,   2,   1,  -1,   1,   2,  -1,   1,   0,   3,
+ -1,   1,   2,   2,   0,  -1,   1,  -1,  -2,   2,
+ -3,   1,  -2,   1,   0,   0,   2,  -2,   1,   0,
+  1,  -1,  -1,   2,  -1,  -1,   2,   0,  -4,  -2,
+ -2,  -1,  -1,   1,   0,  -1,  -1,   0,   1,   2,
+ -1,  -1,  -1,  -3,  -2,   1,   0,  -1,  -1,   2,
+  1,  -1,  -1,   1,   0,   2,   1,   0,   0,   0,
+  2,   1,   1,   0,   0,   1,   0,   0,   0,   1,
+  1,   1,  -1,   1,   1,  -1,  -2,   1,   1,   0,
+  1,   1,  -1,  -1,   1,   1,  -1,   0,   0,  -1,
+  0,  -2,  -1,   0,   0,   2,  -1,   1,  -1,  -1,
+  2,   2,  -1,   0,   0,   2,  -1,  -1,   1,   0,
+  0,   2,   1,   1,   0,   1,   2,   2,  -1,   0,
+  0,  -1,  -1,   3,   2,  -2,  -1,   2,  -1,  -1,
+  1,   1,  -1,  -2,   3,   0,   1,   2,  -2,   2,
+ -2,   3,  -2,  -2,   1,  -2,  -1,   0,   0,  -1,
+ -2,   3,  -2,  -1,  -2,   1,   1,  -1,   2,   2,
+  1,  -2,   1,   2,  -2,   1,  -1,   3,  -1,   1,
+  2,   2,   0,  -1,   2,  -1,  -2,   3,  -3,   1,
+ -2,   0,   1,   0,   2,  -2,   0,   1,   0,  -1,
+  0,   3,  -1,  -1,   2,   0,  -4,  -2,  -1,   0,
+ -1,   0,   0,  -1,  -2,   0,   1,   2,  -1,  -1,
+ -1,  -3,  -3,   2,   0,  -1,  -2,   2,   1,  -2,
+  0,   1,   0,   2,   1,   0,   0,  -1,   2,   1,
+  1,   0,   0,   1,   0,   1,   1,   1,  -1,   1,
+  1,   0,  -2,   1,   1,   0,   1,   1,  -1,  -1,
+  1,   1,  -1,   0,   0,  -1,   0,  -2,  -1,   0,
+  0,   2,  -1,   0,  -1,  -1,   2,   2,  -1,   0,
+  0,   2,  -1,  -1,   0,   0,   0,   2,   1,   1,
+  0,   1,   2,   2,  -1,   0,  -1,  -1,  -1,   3,
+  2,  -1,  -1,   2,  -1,  -1,   1,   1,  -1,  -2,
+  3,   0,   1,   2,  -1,   2,  -2,   2,  -2,  -2,
+  1,  -2,  -1,   0,   0,  -1,  -2,   3,  -2,  -1,
+ -2,   1,   1,  -1,   2,   2,   1,  -1,   1,   2,
+ -2,   1,  -1,   3,  -1,   1,   2,   2,   0,  -1,
+  2,  -1,  -2,   3,  -3,   1,  -2,   0,   1,   0,
+  2,  -2,   0,   1,   0,  -1,   0,   3,  -1,  -1,
+  2,   1,  -4,  -2,  -1,   0,  -1,   0,   0,  -1,
+ -2,   0,   1,   2,  -1,  -1,  -1,  -3,  -2,   2,
+  0,  -1,  -2,   2,   1,  -2,   0,   1,   0,   2,
+  1,   0,   0,   0,   2,   1,   1,   0,   0,   0,
+  1,   0,  -1,   1,   1,  -1,  -2,   0,   1,   0,
+  1,   2,  -2,  -1,   0,   0,  -1,   0,   1,  -1,
+  0,  -2,  -2,  -1,   0,   3,   0,   1,  -1,  -2,
+  2,   2,  -1,   0,  -1,   2,   0,   0,   1,   0,
+  0,   2,   1,   1,   0,   1,   2,   2,  -1,   1,
+ -1,  -1,  -2,   3,   2,  -2,  -1,   2,  -1,  -2,
+  1,   1,   0,  -1,   3,  -1,   1,   1,  -2,   1,
+ -2,   2,  -2,  -2,   1,  -3,  -1,   0,   0,  -2,
+ -3,   3,  -2,  -1,  -2,   1,   1,  -1,   2,   2,
+  1,  -2,   1,   1,  -2,   1,   0,   3,  -1,   0,
+  2,   2,   0,  -1,   1,  -1,  -2,   3,  -3,   2,
+ -2,  -1,   0,   0,   3,  -3,   1,   1,   0,  -1,
+  0,   3,   0,  -1,   1,   0,  -4,  -3,  -1,   0,
+ -1,   1,   1,  -1,  -2,   0,   1,   2,  -1,  -2,
+ -1,  -3,  -2,   1,   0,  -1,  -2,   2,   1,  -2,
+  0,   1,  -1,   2,   1,   0,   0,  -1,   2,   1,
+  0,   1,   1,   0,  -1,   1,   0,  -1,  -2,   0,
+  1,   0,   1,   1,  -2,  -1,   0,   0,  -1,   0,
+  1,  -1,   0,  -2,  -2,  -1,   0,   3,   1,   1,
+ -1,  -1,   2,   2,  -1,  -1,  -1,   3,   0,   0,
+  2,   0,   0,   2,   1,   1,   0,   1,   2,   2,
+ -1,   1,   0,  -1,  -2,   3,   1,  -1,   0,   2,
+ -2,  -1,   1,   1,   0,  -2,   3,  -1,   0,   1,
+ -2,   1,  -2,   2,  -2,  -2,   1,  -3,  -1,   0,
+  0,  -2,  -2,   3,  -2,  -1,  -2,   1,   1,  -1,
+  3,   2,   1,  -2,   1,   2,  -2,   2,  -1,   3,
+ -1,   0,   2,   2,   1,  -1,   1,  -1,  -2,   3,
+ -3,   1,  -3,  -1,   1,   0,   2,  -2,   1,   0,
+ -1,  -2,   0,   4,   0,  -1,   1,   0,  -4,  -3,
+ -1,   0,  -1,   1,   1,  -1,  -3,   0,   1,   2,
+ -1,  -1,  -1,  -3,  -2,   2,   0,  -1,  -2,   2,
+  1,  -2,   0,   1,  -1,   2,   1,   0,   0,  -1,
+  0,   1,   1,   0,  -1,   1,   0,  -1,  -2,   0,
+  1,   0,   1,   1,  -2,  -1,   0,   1,  -1,   0,
+  1,  -1,   0,  -1,  -1,  -1,   0,   3,   1,   1,
+ -1,  -1,   2,   2,  -1,  -1,  -1,   2,   0,   0,
+  2,   0,   0,   2,   1,   0,   0,   1,   2,   1,
+ -1,   1,   0,  -1,  -1,   3,   1,  -2,   0,   3,
+ -2,  -1,   1,   1,   0,  -2,   3,   0,   0,   1,
+ -2,   2,  -2,   2,  -2,  -1,   1,  -3,  -1,   0,
+  0,  -2,  -2,   4,  -2,  -1,  -2,   1,   1,  -1,
+  3,   2,   1,  -2,   1,   2,  -2,   2,  -1,   3,
+ -1,   0,   2,   2,   1,  -1,   2,  -1,  -2,   3,
+ -3,   2,  -3,  -1,   1,   1,   2,  -2,   1,   0,
+ -1,  -2,   0,   4,   0,  -1,   1,   0,  -5,  -3,
+ -1,   0,  -2,   1,   1,  -1,  -3,   0,   1,   2,
+ -1,  -1,  -1,  -3,  -2,   1,   0,  -1,  -2,   2,
+  1,  -2,   0,   2,  -1,   2,   1,   0,   0,   1,
+  1,   1,  -1,   1,   1,  -1,  -2,   1,   0,   0,
+  1,   1,  -2,  -1,   0,   0,  -1,   0,   0,   0,
+  1,  -1,  -1,  -2,   0,   3,   0,   1,   0,  -1,
+  2,   3,   0,  -1,  -1,   2,   0,   1,   2,   0,
+  0,   2,   1,   1,   1,   1,   1,   1,  -1,   1,
+  0,  -1,  -2,   4,   1,  -2,   0,   2,  -1,  -1,
+  1,   0,   0,  -2,   3,   0,   0,   1,  -2,   1,
+ -2,   2,  -1,  -2,   1,  -3,   0,   1,   0,  -2,
+ -2,   3,  -2,  -1,  -2,   1,   1,  -1,   3,   2,
+  1,  -1,   1,   2,  -2,   1,  -1,   3,  -2,   0,
+  3,   2,   0,  -1,   1,  -1,  -3,   3,  -2,   2,
+ -2,  -1,   1,   0,   2,  -3,   0,  -1,  -1,  -2,
+  0,   5,   0,  -1,   1,   0,  -4,  -3,  -2,  -1,
+ -2,   1,   1,  -1,  -2,  -1,   1,   2,  -1,  -1,
+  0,  -2,  -2,   2,   0,  -2,  -1,   3,   1,  -2,
+  1,   1,  -1,   2,   0,   1,   1,   0,  -1,   1,
+  0,  -2,  -2,   0,   0,   0,   1,   1,  -2,  -1,
+  0,   0,  -1,   0,   1,   0,   1,  -1,  -1,  -2,
+  0,   3,   0,   1,   0,  -1,   2,   3,   0,  -1,
+ -1,   3,   1,   1,   2,   0,   0,   2,   1,   1,
+  1,   1,   1,   1,  -1,   1,   0,  -1,  -1,   4,
+  1,  -1,   0,   2,  -2,  -1,   1,   0,   0,  -2,
+  3,  -1,   0,   1,  -2,   1,  -2,   2,  -1,  -2,
+  1,  -3,   0,   1,   0,  -2,  -2,   3,  -2,  -1,
+ -2,   1,   1,  -1,   4,   2,   1,  -1,   1,   2,
+ -2,   1,  -1,   3,  -2,   0,   3,   2,   1,  -1,
+  2,  -1,  -3,   3,  -2,   2,  -2,  -1,   1,   0,
+  2,  -3,   0,  -1,  -1,  -2,   0,   5,   0,  -2,
+  1,   0,  -4,  -3,  -2,  -1,  -2,   1,   1,  -1,
+ -3,  -1,   1,   2,  -1,  -1,   0,  -2,  -2,   2,
+  0,  -2,  -1,   3,   1,  -2,   0,   2,   0,   1,
+  1,   0,  -1,   1,   0,  -2,  -1,   0,   0,   0,
+  1,   1,  -2,  -1,   0,   0,  -1,   0,   0,   0,
+  1,  -1,  -1,  -2,   0,   3,   0,   1,   0,  -1,
+  2,   3,   0,  -1,  -1,   3,   1,   1,   1,   0,
+  0,   1,   1,   1,   1,   1,   1,   1,  -1,   1,
+  0,  -1,  -1,   4,   1,  -1,   0,   2,  -2,  -1,
+  1,   0,   0,  -2,   3,  -1,   0,   1,  -2,   1,
+ -2,   2,  -1,  -2,   1,  -3,   0,   1,   0,  -1,
+ -2,   3,  -2,  -1,  -2,   1,   1,  -1,   3,   2,
+  2,  -1,   1,   2,  -2,   1,   0,   3,  -2,   0,
+  3,   2,   1,  -1,   2,  -1,  -3,   3,  -2,   2,
+ -2,  -1,   1,   1,   2,  -3,   0,   0,  -1,  -3,
+  0,   5,   0,  -2,   1,   0,  -4,  -2,  -2,  -1,
+ -2,   1,   1,  -1,  -3,  -1,   1,   2,  -2,  -1,
+  0,  -3,  -2,   2,   0,  -2,  -1,   3,   1,  -2,
+  0,   1,   1,   0,  -1,   1,   0,  -2,  -1,   0,
+  0,   0,   1,   1,  -2,  -1,   0,   0,   0,   0,
+  0,   0,   1,  -1,  -1,  -2,   0,   3,   0,   1,
+  0,  -1,   2,   3,   0,  -1,  -1,   3,   0,   1,
+  1,   0,   0,   2,   1,   1,   1,   1,   1,   1,
+ -1,   1,   0,  -1,  -1,   4,   1,  -1,   0,   3,
+ -2,  -1,   1,   0,   0,  -2,   3,   0,   0,   1,
+ -2,   2,  -2,   2,  -1,  -2,   1,  -3,   0,   1,
+  0,  -1,  -2,   3,  -2,   0,  -2,   2,   1,  -1,
+  4,   2,   2,  -1,   0,   2,  -2,   1,  -1,   4,
+ -2,   0,   3,   2,   1,  -1,   2,  -1,  -3,   3,
+ -2,   2,  -3,  -1,   1,   0,   2,  -3,   0,   0,
+ -1,  -3,   0,   5,   0,  -1,   1,   0,  -4,  -2,
+ -2,  -1,  -2,   1,   1,  -1,  -3,  -1,   1,   2,
+ -2,  -1,   0,  -3,  -2,   2,   0,  -2,  -1,   3,
+  0,   0,   1,   0,  -2,   2,   0,  -2,  -1,  -1,
+ -1,   1,   1,   1,  -2,   0,   0,   0,   0,   0,
+  1,   0,   1,   0,  -2,  -1,   0,   4,   0,   1,
+  0,  -1,   2,   4,   1,   0,  -1,   3,   0,   1,
+  1,   0,   0,   2,   1,   0,   1,   1,   1,   1,
+ -1,   2,   0,  -1,  -1,   4,   1,  -1,   1,   2,
+ -2,  -1,   0,   0,  -1,  -2,   2,  -1,   0,   1,
+ -2,   1,  -2,   2,  -1,  -2,   1,  -2,   0,   1,
+ -1,  -1,  -2,   3,  -2,   0,  -1,   2,   1,   0,
+  3,   2,   2,  -1,   0,   2,  -2,   0,   0,   3,
+ -2,   0,   3,   2,   1,  -1,   2,  -1,  -3,   3,
+ -3,   3,  -2,  -2,  -1,   0,   2,  -3,   0,   0,
+ -1,  -3,  -1,   4,   0,  -2,   0,   0,  -4,  -3,
+ -2,  -2,  -2,   1,   1,  -1,  -3,  -1,   1,   2,
+ -1,  -2,   1,  -3,  -2,   3,   0,  -2,   0,   0,
+  1,   0,  -1,   2,   0,  -2,  -2,  -1,  -1,   0,
+  1,   1,  -2,   0,   0,   0,   0,   0,   1,   1,
+  1,  -1,  -2,  -1,   0,   3,  -1,   1,   0,  -1,
+  3,   4,   1,   0,  -1,   2,   0,   1,   1,   0,
+  0,   2,   1,   0,   1,   1,   1,   1,  -1,   2,
+  0,  -2,  -1,   4,   1,  -1,   0,   1,  -2,  -2,
+  0,   0,  -1,  -3,   2,  -1,   0,   1,  -3,   1,
+ -3,   1,  -2,  -2,   1,  -3,   0,   1,   0,  -1,
+ -2,   4,  -2,  -1,  -1,   2,   1,   0,   3,   2,
+  2,  -1,   0,   2,  -2,   0,   0,   3,  -2,   0,
+  3,   3,   1,  -2,   2,  -1,  -3,   3,  -2,   3,
+ -3,  -2,  -1,   0,   2,  -3,  -1,  -1,  -1,  -4,
+ -1,   4,   0,  -2,   1,   0,  -5,  -3,  -2,  -2,
+ -2,   1,   1,  -1,  -3,  -1,   1,   3,  -2,  -1,
+  1,  -3,  -2,   3,   0,   0,   1,   0,  -2,   2,
+  0,  -2,  -2,  -1,   0,   0,   1,   1,  -2,   0,
+  0,   0,   0,   0,   2,   1,   1,  -1,  -1,  -1,
+  0,   3,  -1,   1,   0,   0,   3,   5,   1,   0,
+ -1,   2,   0,   1,   1,   0,   0,   2,   1,   0,
+  1,   1,   1,   1,  -1,   2,   0,  -1,  -1,   4,
+  2,  -1,   0,   1,  -2,  -2,   0,   0,  -1,  -3,
+  3,  -1,   0,   1,  -3,   1,  -3,   1,  -2,  -2,
+  1,  -3,   0,   1,   0,  -1,  -1,   4,  -1,   0,
+ -1,   2,   1,   0,   3,   2,   2,  -1,   0,   2,
+ -2,   0,   0,   3,  -2,   0,   3,   2,   1,  -2,
+  2,  -1,  -3,   3,  -2,   2,  -3,  -2,  -1,   0,
+  2,  -2,  -1,  -1,  -2,  -4,  -1,   4,   0,  -2,
+  1,   0,  -5,  -3,  -2,  -2,  -2,   1,   1,  -1,
+ -3,  -1,   2,   3,  -1,  -2,   1,  -3,   0,  -1,
+  1,   1,  -2,   2,  -1,  -3,  -2,  -1,   0,   0,
+  1,   1,  -2,   0,   0,   0,   1,   1,   2,   1,
+  1,  -1,  -1,  -2,  -1,   3,   0,   1,   1,   0,
+  3,   5,   2,  -1,  -1,   2,   0,   0,   1,   1,
+  0,   2,   1,   0,   1,   1,   1,   2,  -1,   1,
+  1,  -2,  -1,   4,   2,  -2,   0,   1,  -2,  -2,
+  0,   0,  -1,  -3,   3,  -2,   0,   1,  -4,   0,
+ -4,   1,  -2,  -2,   1,  -3,   0,   1,   0,  -1,
+ -2,   3,  -1,  -1,  -1,   3,   1,   0,   4,   1,
+  2,  -1,   0,   1,  -2,   0,  -1,   3,  -2,   1,
+  3,   2,   1,  -2,   2,  -2,  -2,   3,  -2,   2,
+ -3,  -2,   0,   0,   1,  -3,  -1,  -1,  -2,  -4,
+ -1,   5,   2,  -1,   1,   0,  -5,  -3,  -2,  -2,
+ -2,   0,   1,  -2,  -3,   0,   1,   3,  -1,  -2,
+ -1,   0,   0,   0,  -3,   2,  -1,  -3,  -2,  -1,
+  0,   1,   1,   2,  -2,  -1,   0,   1,   2,   1,
+  1,   1,   2,  -1,  -2,  -2,  -1,   3,   0,   2,
+  2,   1,   3,   5,   2,  -1,  -1,   3,   0,   0,
+  1,   0,   0,   2,   1,   0,   0,   2,   1,   2,
+ -1,   2,   1,  -2,   0,   4,   1,  -2,   0,   0,
+ -3,  -2,   0,  -1,   0,  -3,   3,  -2,   0,   1,
+ -4,   0,  -3,   2,  -2,  -2,   1,  -2,   0,   1,
+  0,  -1,  -1,   3,  -1,   0,  -2,   3,   1,   0,
+  4,   1,   2,  -2,   1,   1,  -2,   0,  -1,   4,
+ -2,   1,   3,   1,   1,  -1,   2,  -1,  -2,   2,
+ -3,   2,  -3,  -1,   0,   0,   1,  -3,  -2,  -2,
+ -1,  -4,  -1,   5,   1,  -1,   0,  -1,  -5,  -3,
+ -2,  -2,  -2,   0,   1,  -2,  -3,  -1,   1,   3,
+ -1,  -1,   1,   0,  -2,   3,  -2,  -2,  -2,  -1,
+  0,   1,   1,   2,  -2,  -1,  -1,   0,   2,   1,
+  1,   2,   2,   0,   0,  -2,  -1,   3,   0,   2,
+  2,   1,   2,   5,   2,  -1,   0,   4,   0,  -1,
+  1,   0,   1,   2,   1,   1,   0,   1,   1,   2,
+ -2,   2,   0,  -2,   0,   4,   1,  -1,   0,   1,
+ -3,  -1,  -1,  -1,  -1,  -2,   3,  -2,   1,   2,
+ -3,  -1,  -3,   2,  -3,  -2,   1,  -2,   0,   1,
+  1,   0,  -2,   4,  -1,  -1,  -2,   3,   0,   0,
+  3,   1,   2,  -1,   1,   1,  -2,   0,  -1,   3,
+ -2,   2,   3,   1,   0,  -1,   1,  -1,  -2,   2,
+ -3,   1,  -3,  -1,   1,   1,   2,  -3,  -2,  -2,
+ -1,  -4,  -3,   5,   2,  -1,   1,  -1,  -5,  -3,
+ -3,  -1,  -2,   1,   2,  -2,  -2,  -2,   0,  -1,
+  2,   1,  -2,   3,  -2,  -2,  -2,  -2,   0,   0,
+  1,   2,  -2,   0,  -2,   0,   2,   1,   0,   1,
+  2,   0,  -1,  -2,  -1,   2,  -2,   1,   2,   2,
+  2,   6,   2,  -2,  -1,   3,   0,   0,   1,   0,
+  1,   1,   2,   0,   0,   1,   1,   2,  -2,   3,
+  0,  -1,   0,   4,   1,  -1,   1,   1,  -3,  -1,
+ -1,   0,  -1,  -2,   3,  -3,   0,   1,  -3,  -1,
+ -3,   3,  -2,  -2,   1,  -2,  -1,   1,   0,   0,
+ -2,   3,   0,  -1,  -2,   4,   0,   0,   4,   2,
+  1,  -1,   1,   0,  -2,   0,   0,   3,  -2,   2,
+  3,   1,   0,  -1,   0,   1,  -1,   3,  -3,   2,
+ -3,  -2,   1,   1,   2,  -2,  -2,  -1,   0,  -4,
+ -2,   5,   2,  -1,   0,   0,  -5,  -3,  -2,  -1,
+ -4,   1,   1,  -2,   0,  -2,   1,   0,  -2,   3,
+ -3,  -2,  -1,  -2,   1,   0,   1,   2,  -2,   1,
+ -1,   0,   2,   2,   0,   1,   1,   0,  -1,  -2,
+  0,   4,   0,   0,   1,   2,   1,   5,   3,  -2,
+ -1,   3,   0,   0,   0,   1,   1,   0,   3,   0,
+  0,   1,   1,   2,  -2,   4,  -1,  -1,   0,   4,
+  1,  -2,   0,   1,  -4,   0,  -1,   0,  -2,  -2,
+  3,  -3,   0,   1,  -3,  -2,  -3,   2,  -2,  -2,
+  1,  -1,  -1,   2,   0,   0,  -1,   2,   0,  -1,
+ -2,   4,   0,   0,   3,   3,   0,  -1,   2,   0,
+ -1,   0,  -1,   3,  -3,   3,   3,   0,   1,  -1,
+ -1,  -1,  -1,   3,  -3,   1,  -3,  -2,   0,   0,
+  2,  -2,  -3,  -2,   0,  -4,  -2,   5,   1,   0,
+  0,   0,  -5,  -4,  -3,   0,  -3,   1,   0,  -2,
+  1,   0,  -2,   3,  -3,  -2,  -1,  -2,   1,   0,
+  1,   3,  -2,   1,  -1,   0,   2,   1,   0,   0,
+  1,   0,  -1,  -2,  -1,   4,   0,   1,   1,   2,
+  1,   5,   2,  -2,   0,   4,   0,   0,   0,   0,
+  1,   0,   3,   0,   0,   2,   1,   2,  -2,   4,
+ -1,  -1,   0,   4,   1,  -2,   0,   1,  -4,   0,
+ -2,   0,  -2,  -2,   3,  -3,   0,   1,  -3,  -1,
+ -3,   2,  -2,  -2,   0,  -1,  -1,   2,   0,   0,
+ -1,   2,   0,   0,  -3,   4,   1,   0,   2,   3,
+  0,  -2,   2,   0,  -1,   0,  -1,   3,  -3,   3,
+  3,   1,   1,   0,   0,  -1,  -1,   3,  -3,   1,
+ -3,  -2,   0,   0,   2,  -2,  -2,  -1,   0,  -4,
+ -2,   5,   1,   0,   0,   0,  -5,  -4,  -3,   0,
+  0,  -2,   1,   0,  -2,   3,  -3,  -2,  -1,  -3,
+  0,   0,   2,   3,  -2,   1,  -1,  -1,   2,   1,
+ -1,   0,   2,   0,   0,  -1,   0,   3,   0,   1,
+  1,   2,   1,   4,   2,  -2,   0,   4,  -1,   0,
+  0,   0,   1,   0,   3,   0,   0,   1,   1,   3,
+ -2,   3,  -1,  -2,  -1,   4,   1,  -2,   0,   1,
+ -4,   0,  -2,   0,  -3,  -3,   2,  -3,   0,   1,
+ -2,  -2,  -3,   2,  -2,  -2,   0,  -2,  -1,   1,
+  0,   0,   0,   2,   0,  -1,  -3,   4,   0,   0,
+  2,   3,   0,  -2,   2,   1,  -1,  -1,  -1,   3,
+ -3,   2,   4,   1,   1,  -1,   0,   0,  -1,   3,
+ -4,   0,  -4,  -3,   0,   0,   2,  -2,  -1,  -1,
+ -1,  -5,  -3,   5,   1,   0,   0,  -1,  -5,  -4,
+ -2,  -2,   1,   0,  -2,   4,  -3,  -2,  -2,  -3,
+  1,   2,   3,   4,  -3,   1,  -1,   0,   1,   0,
+ -1,   1,   2,   2,   2,   0,  -1,   4,   0,   0,
+  1,   3,   0,   4,   3,  -2,   0,   3,   0,   0,
+ -1,   1,   2,   0,   3,   1,   0,   1,   2,   2,
+ -3,   3,  -3,  -2,  -1,   4,   1,  -3,   1,   1,
+ -4,  -1,  -2,  -1,  -4,  -4,   3,  -2,  -1,   1,
+ -3,  -1,  -3,   2,  -1,  -2,   0,  -1,  -1,   2,
+ -1,   0,  -1,   2,   0,  -1,  -2,   3,   1,  -1,
+  2,   3,   0,  -1,   3,   0,  -2,  -2,  -1,   4,
+ -4,   4,   4,  -1,  -1,  -1,   0,   1,  -1,   3,
+ -4,   0,  -5,  -3,   1,   0,   1,   0,  -1,  -2,
+ -1,  -5,  -2,   4,   1,   0,  -1,  -1,  -2,  -2,
+  1,   0,  -2,   4,  -3,  -2,  -1,  -3,   0,   1,
+  3,   4,  -3,   1,  -1,   0,   2,   0,  -1,   1,
+  2,   1,   1,   0,  -1,   4,   0,   1,   1,   3,
+  0,   4,   3,  -2,   0,   3,   0,   0,  -1,   1,
+  2,   0,   2,   1,   0,   1,   3,   2,  -3,   4,
+ -2,  -2,  -1,   4,   1,  -3,   0,   1,  -4,  -1,
+ -2,   0,  -3,  -4,   3,  -2,  -1,   1,  -3,  -1,
+ -3,   2,  -1,  -2,   0,  -1,  -1,   3,  -1,   1,
+ -1,   2,   0,  -1,  -2,   3,   1,   0,   2,   3,
+  0,  -1,   3,   1,  -1,  -2,  -1,   4,  -4,   4,
+  4,   0,  -1,  -1,   0,   1,  -1,   3,  -4,   0,
+ -5,  -3,   1,   0,   1,   0,  -1,  -1,  -1,  -5,
+ -2,   4,   1,   1,  -1,  -2,   1,   0,  -2,   5,
+ -2,  -2,  -1,  -4,   0,   1,   3,   4,  -2,   1,
+  0,   1,   2,  -1,  -1,   1,   2,   2,   1,   0,
+  0,   3,   0,   1,   1,   3,  -1,   4,   3,  -2,
+  0,   3,   0,   1,  -1,   1,   2,   0,   3,   1,
+  0,   1,   3,   2,  -3,   4,  -3,  -2,  -1,   3,
+  1,  -3,   1,   1,  -4,  -1,  -1,   0,  -3,  -3,
+  3,  -2,  -1,   1,  -3,  -1,  -3,   2,   0,  -2,
+  1,  -1,  -2,   2,  -1,   0,  -1,   2,  -1,  -1,
+ -2,   3,   1,   0,   2,   3,  -1,  -1,   4,   1,
+ -1,  -2,  -1,   4,  -4,   3,   3,  -1,  -1,  -2,
+  0,   2,   0,   3,  -4,   0,  -5,  -3,   0,  -1,
+  0,   0,  -1,  -1,  -1,  -6,  -2,   4,  -1,  -2,
+  1,   0,  -3,   4,  -2,  -2,  -1,  -4,   0,   2,
+  2,   3,  -2,   1,   0,   1,   2,  -1,  -2,   0,
+  2,   2,   2,  -1,   0,   3,  -1,   1,   1,   4,
+  0,   4,   3,  -2,   0,   4,  -1,   1,  -1,   1,
+  2,   0,   3,   0,   1,   1,   3,   2,  -3,   4,
+ -3,  -2,  -1,   3,   1,  -3,   1,   1,  -5,  -1,
+ -1,   0,  -4,  -3,   3,  -2,  -1,   1,  -3,  -1,
+ -3,   2,   0,  -2,   0,   0,  -2,   2,   0,   0,
+ -1,   2,   0,  -2,  -1,   3,   1,   0,   2,   3,
+ -1,  -2,   4,   0,  -1,  -2,  -1,   4,  -3,   4,
+  4,  -1,  -1,  -2,  -1,   1,   0,   3,  -4,   0,
+ -5,  -3,   0,  -1,   0,   0,  -1,  -1,  -1,  -6,
+ -1,  -2,   1,   0,  -3,   4,  -2,  -2,  -1,  -4,
+  0,   2,   3,   3,  -2,   1,   0,   1,   2,  -1,
+ -1,   0,   2,   2,   2,  -1,   0,   3,  -1,   1,
+  1,   4,   0,   4,   3,  -2,   0,   4,  -1,   1,
+ -1,   1,   2,   0,   3,   0,   1,   0,   3,   2,
+ -3,   4,  -3,  -2,  -1,   3,   1,  -3,   1,   1,
+ -4,  -1,  -1,   0,  -4,  -3,   3,  -2,  -1,   1,
+ -3,  -1,  -3,   2,   0,  -2,   0,   0,  -2,   2,
+  0,   0,  -1,   2,   0,  -2,  -1,   3,   1,   0,
+  2,   3,  -1,  -2,   4,   0,  -1,  -2,  -1,   4,
+ -3,   4,   4,  -1,  -1,  -2,  -1,   1,   0,   3,
+ -4,   0,  -5,  -3,   0,  -1,   0,   0,  -1,  -2,
+ -1,  -2,   1,   1,  -2,   4,  -3,  -2,  -1,  -4,
+  0,   2,   3,   4,  -1,   2,  -1,   0,   2,  -1,
+ -2,   0,   1,   2,   2,  -1,   0,   4,  -1,   0,
+  1,   4,   0,   4,   4,  -2,   0,   3,  -1,   1,
+ -2,   1,   2,   0,   3,   0,   1,   1,   3,   2,
+ -3,   5,  -3,  -2,  -1,   3,   2,  -3,   2,   2,
+ -4,  -1,  -1,   1,  -4,  -3,   3,  -2,  -1,   1,
+ -3,  -1,  -3,   2,   0,  -2,   0,   0,  -3,   3,
+  0,   0,  -1,   3,   0,  -2,  -1,   3,   0,  -1,
+  2,   4,  -1,  -2,   4,   1,  -2,  -2,  -1,   4,
+ -4,   3,   3,  -1,   0,  -1,   0,   2,   0,   3,
+ -4,  -1,  -6,  -3,   1,  -1,   1,   0,  -1,  -3,
+  1,   0,  -2,   5,  -3,  -2,  -1,  -4,   0,   2,
+  2,   3,  -1,   2,  -1,   0,   2,  -1,  -2,   0,
+  1,   2,   2,  -1,   0,   4,   0,   0,   1,   4,
+  0,   3,   4,  -2,   0,   3,  -1,   1,  -2,   1,
+  2,   0,   3,   1,   0,   1,   3,   2,  -3,   5,
+ -3,  -2,  -1,   3,   2,  -4,   2,   2,  -4,  -1,
+ -1,   1,  -4,  -3,   3,  -2,  -2,   1,  -3,   0,
+ -3,   2,   0,  -2,   0,   1,  -3,   3,   0,   0,
+ -1,   2,   0,  -2,  -1,   3,   1,  -1,   2,   4,
+ -1,  -2,   4,   1,  -2,  -1,  -1,   4,  -3,   4,
+  3,  -1,   0,  -1,  -1,   2,   0,   3,  -3,   0,
+ -6,  -3,   0,  -1,   0,  -2,   1,   0,  -3,   5,
+ -3,  -2,  -1,  -3,   0,   2,   3,   3,  -2,   1,
+ -1,   1,   2,  -1,  -2,   1,   1,   2,   2,  -1,
+  0,   3,  -1,   0,   1,   4,   0,   3,   4,  -2,
+  0,   4,  -1,   1,  -2,   1,   2,   0,   2,   1,
+  0,   1,   3,   2,  -4,   5,  -3,  -2,  -1,   3,
+  2,  -3,   2,   2,  -4,  -1,  -2,   1,  -4,  -3,
+  3,  -1,  -1,   2,  -3,   0,  -3,   1,   0,  -2,
+ -1,   1,  -3,   2,  -1,   0,  -1,   2,   1,  -2,
+ -1,   2,   1,   0,   1,   4,  -1,  -2,   3,   1,
+ -3,  -2,  -2,   4,  -4,   4,   4,  -1,  -1,  -1,
+ -1,   2,   0,   3,  -4,  -1,  -5,  -3,   0,  -2,
+  1,   0,  -3,   5,  -3,  -2,   0,  -3,   0,   2,
+  3,   3,  -2,   2,   0,   2,   2,  -2,  -2,   0,
+  0,   3,   2,   0,   0,   3,   0,   0,   1,   4,
+  0,   4,   4,  -2,   0,   4,  -1,   1,  -2,   0,
+  2,   0,   2,   1,   0,   1,   3,   1,  -3,   5,
+ -3,  -2,  -2,   3,   2,  -3,   2,   2,  -3,  -1,
+ -2,   1,  -4,  -3,   3,  -1,  -1,   2,  -3,   0,
+ -3,   1,   0,  -2,  -1,   1,  -3,   2,   0,   0,
+ -1,   3,   1,  -2,  -1,   2,   1,   0,   2,   4,
+ -1,  -2,   4,   0,  -3,  -3,  -2,   3,  -4,   4,
+  4,  -1,  -1,  -2,   0,   2,  -1,   2,  -4,   0,
+  0,  -2,   1,   0,  -3,   4,  -3,  -2,   0,  -3,
+  0,   2,   3,   3,  -2,   2,   1,   1,   2,  -1,
+ -2,   0,   1,   2,   3,   0,   0,   3,  -1,   0,
+  1,   4,   0,   4,   4,  -2,   0,   4,  -1,   2,
+ -2,   0,   2,  -1,   2,   0,   0,   0,   3,   2,
+ -3,   5,  -3,  -2,  -2,   3,   3,  -3,   2,   2,
+ -3,  -1,  -2,   1,  -4,  -3,   3,  -1,  -1,   2,
+ -3,   0,  -3,   1,   0,  -2,  -1,   1,  -3,   2,
+  0,   0,  -1,   3,   1,  -2,  -1,   3,   1,   0,
+  2,   4,   0,  -1,   3,   0,  -4,  -3,  -2,   3,
+ -4,   4,   4,  -1,  -1,  -1,  -1,   2,  -1,   2,
+  0,  -2,   1,   0,  -3,   4,  -3,  -2,   0,  -3,
+  0,   2,   3,   3,  -2,   2,   1,   1,   2,  -1,
+ -2,   0,   1,   2,   2,   0,  -1,   3,  -1,   0,
+  2,   3,   0,   4,   4,  -2,   0,   4,  -2,   2,
+ -2,   0,   2,   0,   2,   0,   0,   0,   3,   1,
+ -3,   5,  -3,  -2,  -1,   4,   2,  -3,   3,   2,
+ -3,  -1,  -1,   1,  -4,  -3,   3,  -1,  -1,   2,
+ -3,   0,  -3,   1,   0,  -2,  -1,   1,  -3,   2,
+  0,   0,  -1,   2,   1,  -2,  -1,   3,   1,   0,
+  2,   4,   0,  -1,   3,   0,  -4,  -3,  -2,   4,
+ -4,   5,   4,  -1,  -1,  -1,  -1,   1,   0,  -3,
+  1,   1,  -3,   3,  -4,  -1,   1,  -3,   0,   2,
+  2,   0,  -4,   2,   2,   1,   3,  -1,  -3,   1,
+  1,   2,   3,  -1,   0,   3,  -1,   2,   0,   3,
+  0,   4,   4,  -2,   1,   2,   0,   2,  -1,   1,
+  2,   1,   3,   1,   1,   0,   3,   1,  -2,   6,
+ -3,  -2,  -2,   3,   1,  -2,   3,   3,  -5,  -2,
+ -2,   0,  -4,  -4,   3,  -2,  -2,   3,  -3,   0,
+ -2,   1,   0,  -2,   1,  -1,  -3,   3,  -1,   0,
+ -2,   3,   1,  -2,   0,   2,   0,   0,   1,   3,
+  2,   1,   5,   0,  -4,  -3,  -3,   3,  -3,   6,
+  5,  -2,  -1,   0,  -1,  -4,   1,   1,  -4,   2,
+ -4,   0,   1,  -3,   0,   2,   1,  -1,  -4,   2,
+  2,   1,   3,  -1,  -2,   1,   0,   3,   3,   0,
+  0,   3,  -1,   1,  -1,   3,   0,   3,   4,  -2,
+  0,   3,   1,   2,  -1,   1,   3,   1,   3,   1,
+  1,  -1,   3,   2,  -2,   6,  -2,  -1,  -2,   3,
+  2,  -3,   3,   2,  -4,  -2,  -2,   0,  -4,  -4,
+  3,  -2,  -2,   3,  -3,   0,  -2,   1,   0,  -1,
+  1,   0,  -3,   3,  -1,   0,  -2,   3,   1,  -2,
+  0,   2,   1,  -1,   1,   4,   3,   2,   4,  -1,
+ -4,  -2,  -2,   4,  -2,   6,   5,  -2,  -1,  -4,
+  1,   1,  -4,   2,  -4,   0,   1,  -4,   0,   1,
+  1,  -1,  -4,   2,   2,   1,   3,  -1,  -2,   0,
+  0,   3,   3,   0,   0,   3,  -1,   1,  -1,   3,
+  0,   3,   4,  -2,   0,   3,   1,   2,   0,   2,
+  3,   1,   3,   1,   1,   0,   3,   2,  -1,   6,
+ -2,  -1,  -2,   3,   2,  -3,   3,   2,  -5,  -2,
+ -2,   0,  -4,  -4,   3,  -2,  -2,   3,  -3,   0,
+ -2,   1,   0,  -1,   1,   0,  -3,   3,  -1,   0,
+ -2,   3,   2,  -2,   0,   2,   0,  -1,   1,   4,
+  3,   1,   4,  -1,  -4,  -2,  -2,   4,  -2,   6,
+ -1,  -3,   1,   1,  -4,   2,  -4,   0,   1,  -3,
+  0,   2,   0,   0,  -4,   2,   2,   1,   2,  -1,
+ -2,   0,   0,   2,   3,   0,  -1,   3,   0,   1,
+ -1,   3,   0,   3,   4,  -2,   0,   3,   0,   2,
+ -1,   2,   3,   1,   3,   1,   1,  -1,   4,   1,
+ -2,   6,  -2,  -1,  -2,   3,   1,  -2,   3,   3,
+ -4,  -2,  -3,   0,  -4,  -4,   3,  -2,  -2,   4,
+ -3,   0,  -2,   1,   0,  -2,   1,   0,  -3,   3,
+  0,   0,  -3,   3,   2,  -1,  -1,   2,   0,  -1,
+  1,   4,   3,   2,   4,  -2,  -4,  -2,  -3,   4,
+ -1,  -3,   1,   1,  -3,   2,  -4,   0,   1,  -3,
+  0,   2,   0,   0,  -5,   2,   2,   1,   2,  -1,
+ -2,   0,   0,   2,   3,   0,  -1,   3,   0,   1,
+ -1,   3,   0,   3,   4,  -2,   0,   3,   0,   2,
+ -1,   2,   3,   1,   3,   2,   1,  -1,   4,   2,
+ -2,   6,  -2,  -1,  -3,   3,   1,  -2,   3,   2,
+ -4,  -2,  -3,   0,  -4,  -4,   3,  -2,  -3,   4,
+ -3,   0,  -2,   1,   0,  -2,   1,   0,  -3,   2,
+  0,   0,  -3,   3,   1,  -1,  -1,   2,   0,  -1,
+  1,   4,   3,   2,   4,  -1,  -4,  -2,   0,  -3,
+  1,   2,  -3,   1,  -5,   0,   2,  -3,   0,   0,
+  1,  -1,  -5,   3,   3,   1,   1,  -2,  -2,   1,
+  0,   3,   3,   1,  -1,   3,   0,   1,  -1,   3,
+  0,   2,   5,  -3,   0,   3,   0,   2,   0,   1,
+  3,   0,   4,   1,   1,   0,   5,   3,  -2,   7,
+ -1,  -2,  -3,   4,   2,  -2,   3,   3,  -3,  -2,
+ -2,   1,  -5,  -4,   3,  -3,  -2,   4,  -4,  -1,
+ -1,   1,   0,  -1,   1,   0,  -4,   2,   1,   0,
+ -3,   3,   2,  -2,  -1,   1,  -1,  -2,   0,   3,
+  3,   4,   5,  -2,   1,  -2,   2,   2,  -4,   0,
+ -5,   0,   2,  -3,  -1,   1,   1,  -1,  -4,   4,
+  3,   1,   1,  -2,  -1,   1,   0,   3,   3,   0,
+ -1,   3,   0,   1,  -1,   3,   0,   3,   4,  -2,
+  0,   3,  -1,   2,  -1,   1,   3,   1,   4,   1,
+  1,   1,   6,   2,  -2,   7,  -2,  -2,  -3,   4,
+  2,  -2,   3,   3,  -3,  -2,  -2,   1,  -6,  -4,
+  3,  -3,  -2,   3,  -4,  -1,  -1,   1,   0,  -1,
+  1,  -1,  -4,   3,   2,   0,  -3,   3,   1,  -2,
+ -1,   1,  -1,  -2,   0,   3,   4,   4,   0,  -3,
+  2,   2,  -4,   1,  -4,   1,   2,  -3,  -1,   0,
+  0,  -1,  -5,   4,   3,   0,   1,  -2,  -1,   1,
+  0,   4,   3,   0,  -1,   4,   0,   1,   0,   2,
+  0,   3,   4,  -3,   0,   3,  -1,   2,  -1,   1,
+  3,   0,   4,   1,   1,   1,   6,   3,  -2,   7,
+ -2,  -1,  -3,   4,   2,  -2,   4,   4,  -3,  -1,
+ -2,   1,  -6,  -4,   3,  -3,  -2,   3,  -4,  -1,
+ -1,   1,   0,  -1,   1,  -1,  -4,   3,   2,   0,
+ -3,   3,   1,  -2,  -2,   1,  -1,  -2,   0,   3,
+ -1,  -3,   2,   3,  -2,   3,  -2,   1,   2,  -3,
+ -2,   0,   1,  -1,  -5,   4,   3,   1,   1,  -2,
+ -1,  -1,   1,   4,   4,   0,   0,   4,   0,   2,
+ -2,   2,  -1,   1,   3,  -4,   0,   3,  -2,   2,
+  0,   1,   2,   0,   3,   0,   1,   1,   7,   2,
+ -2,   6,  -1,  -1,  -2,   5,   2,  -2,   4,   4,
+ -2,  -2,  -2,   1,  -6,  -4,   3,  -3,  -3,   4,
+ -4,  -1,  -1,   1,   1,   0,   1,  -1,  -5,   3,
+  3,   0,  -2,   4,   0,  -4,  -3,   1,  -1,  -2,
+ -1,  -3,   2,   3,  -2,   3,  -2,   0,   2,  -3,
+ -2,   0,   1,  -1,  -5,   4,   3,   1,   1,  -2,
+ -1,   0,   1,   4,   4,   0,   0,   3,   0,   2,
+ -2,   2,  -1,   1,   3,  -4,   0,   3,  -2,   2,
+  0,   1,   2,   0,   3,   0,   1,   1,   7,   2,
+ -2,   7,  -1,  -1,  -2,   5,   2,  -2,   4,   4,
+ -2,  -2,  -2,   0,  -6,  -4,   3,  -3,  -3,   4,
+ -4,  -1,  -1,   1,   1,   0,   1,  -1,  -5,   3,
+  3,   0,  -2,   3,   0,  -5,  -3,   1,   0,  -3,
+  2,   1,  -3,   3,  -1,   0,   2,  -3,  -2,   0,
+  1,  -1,  -4,   4,   3,   1,   0,  -1,  -2,  -1,
+  1,   4,   3,   0,   0,   3,   1,   2,  -1,   2,
+  0,   2,   4,  -4,   0,   2,  -1,   2,   0,   1,
+  2,   0,   3,   0,   0,   1,   7,   2,  -2,   6,
+ -1,  -2,  -2,   4,   2,  -2,   3,   5,  -2,  -2,
+ -1,   0,  -6,  -4,   4,  -4,  -3,   4,  -5,  -1,
+ -1,   1,   1,  -1,   1,  -2,  -5,   3,   2,   0,
+ -1,   5,   0,  -5,   0,  -3,   1,   0,  -3,   4,
+ -2,   0,   2,  -3,  -2,   0,   1,  -1,  -4,   4,
+  3,   0,   1,  -2,  -2,  -1,   1,   4,   3,   0,
+ -1,   3,   1,   2,  -1,   2,   0,   2,   4,  -3,
+  0,   2,  -2,   2,   1,   1,   1,   0,   3,   0,
+  0,   1,   7,   2,  -2,   6,  -1,  -2,  -3,   4,
+  2,  -3,   4,   5,  -2,  -2,  -1,   0,  -6,  -3,
+  3,  -4,  -3,   4,  -5,  -1,  -1,   2,   1,   0,
+  1,  -2,  -5,   3,   2,   0,   0,   5,  -1,  -4,
+  0,   1,  -4,   4,  -2,   1,   2,  -2,  -2,  -1,
+  1,  -1,  -4,   4,   3,   1,   0,  -2,  -2,   0,
+  0,   4,   3,  -1,   0,   4,   1,   3,  -1,   3,
+  0,   3,   4,  -3,   0,   3,  -1,   2,   1,   2,
+  2,   0,   3,   1,   0,   2,   6,   2,  -3,   6,
+ -1,  -1,  -3,   5,   1,  -2,   3,   5,  -2,  -2,
+ -1,   0,  -5,  -3,   4,  -4,  -3,   4,  -5,  -2,
+ -1,   2,   1,   0,   0,  -1,  -6,   3,   3,   1,
+ -2,  -5,   0,  -1,  -3,   3,  -2,   1,   4,  -2,
+ -4,  -1,   1,   0,  -4,   5,   4,   1,  -1,  -2,
+ -1,  -1,   1,   4,   2,  -1,   1,   3,   2,   4,
+ -1,   2,   0,   2,   4,  -4,   1,   3,  -1,   4,
+  3,   4,   2,   0,   4,   0,   0,   1,   7,   2,
+ -3,   6,   0,  -2,  -2,   4,   1,  -3,   4,   4,
+ -2,  -2,  -2,   0,  -4,  -3,   3,  -3,  -3,   3,
+ -7,  -2,   1,   3,   1,  -1,   1,  -3,  -6,   3,
+ -2,  -4,  -1,   0,  -3,   3,  -1,   3,   4,  -3,
+ -4,  -1,   2,  -1,  -4,   5,   3,   0,  -1,  -2,
+ -2,  -1,   0,   3,   3,   0,   0,   5,   2,   4,
+ -1,   3,   0,   2,   4,  -3,   2,   3,   0,   5,
+  4,   3,   2,   1,   4,   0,  -1,   2,   7,   2,
+ -2,   7,   0,  -1,  -2,   4,   0,  -3,   3,   4,
+ -2,  -2,  -2,   1,  -4,  -3,   4,  -3,  -3,   2,
+ -7,   0,   2,   3,   1,   0,   0,  -3,  -2,  -4,
+ -1,   0,  -3,   3,  -2,   3,   5,  -3,  -4,  -1,
+  2,   0,  -4,   6,   4,   0,  -1,  -1,  -2,  -1,
+  1,   3,   2,   0,   0,   5,   2,   4,  -1,   3,
+  0,   2,   3,  -3,   2,   3,   0,   5,   4,   4,
+  2,   1,   3,   0,  -1,   2,   7,   2,  -2,   7,
+  0,  -1,  -3,   4,   0,  -3,   3,   4,  -2,  -2,
+ -2,   0,  -4,  -3,   4,  -3,  -3,   2,  -7,  -1,
+  2,   3,   0,   0,  -1,  -5,   0,   0,  -4,   3,
+ -2,   3,   5,  -3,  -4,  -2,   1,   0,  -5,   6,
+  4,   0,  -1,  -2,  -2,  -2,   2,   3,   3,   0,
+  0,   5,   3,   4,   0,   2,   1,   2,   4,  -3,
+  1,   2,  -1,   5,   3,   3,   2,   2,   3,   0,
+ -1,   1,   6,   0,  -3,   7,  -1,   0,  -3,   4,
+  1,  -3,   3,   5,  -1,  -4,  -2,   1,  -4,  -3,
+  3,  -2,  -3,   1,  -6,  -1,   1,   3,   0,  -5,
+  0,   1,  -4,   3,  -2,   3,   5,  -4,  -4,  -1,
+  1,   1,  -5,   6,   4,   0,  -1,  -2,  -1,  -2,
+  2,   2,   3,   0,   0,   5,   3,   3,   0,   2,
+  1,   1,   4,  -2,   2,   2,  -1,   5,   4,   3,
+  2,   2,   3,   0,   0,   1,   7,   1,  -2,   7,
+ -2,   0,  -3,   4,   1,  -3,   3,   4,   0,  -4,
+ -2,   1,  -5,  -2,   3,  -2,  -2,   0,  -6,  -1,
+  0,  -5,  -1,   0,  -4,   4,  -2,   3,   5,  -4,
+ -4,  -1,   0,   1,  -5,   5,   4,   0,   0,  -2,
+ -1,  -3,   2,   2,   3,   1,   0,   5,   3,   3,
+  0,   1,   1,   1,   3,  -3,   1,   2,  -1,   5,
+  4,   3,   2,   2,   3,   0,   0,   0,   7,   0,
+ -3,   8,  -2,   0,  -2,   3,   1,  -2,   3,   4,
+  0,  -4,  -2,   1,  -5,  -2,   3,  -3,  -2,   0,
+  0,  -5,  -1,   0,  -4,   4,  -2,   3,   5,  -4,
+ -5,  -1,   0,   1,  -5,   6,   4,   0,   0,  -2,
+ -1,  -2,   2,   2,   3,   1,   0,   5,   3,   3,
+  0,   1,   1,   1,   3,  -3,   1,   2,  -2,   5,
+  4,   3,   2,   2,   3,   0,  -1,   0,   7,   0,
+ -3,   8,  -2,   0,  -2,   3,   1,  -2,   3,   4,
+  0,  -4,  -2,   1,  -4,  -2,   3,  -3,   1,  -5,
+ -1,  -1,  -4,   4,  -2,   3,   6,  -4,  -4,  -1,
+  0,   1,  -5,   6,   4,   0,  -1,  -2,  -1,  -2,
+  2,   2,   3,   1,  -1,   6,   3,   4,   0,   1,
+  2,   2,   4,  -3,   1,   3,  -2,   5,   4,   4,
+  1,   2,   3,   0,  -1,   1,   7,   0,  -3,   8,
+ -3,   1,  -2,   3,   1,  -2,   3,   4,   0,  -4,
+ -2,   0,  -4,  -1,   0,  -4,  -1,  -1,  -4,   3,
+ -1,   3,   5,  -2,  -4,  -1,   0,   2,  -5,   6,
+  5,  -1,  -1,  -2,  -2,  -2,   1,   2,   2,   0,
+  0,   6,   3,   3,   0,   1,   2,   2,   4,  -3,
+  1,   3,  -2,   6,   4,   4,   2,   2,   4,   1,
+ -1,   2,   6,   0,  -3,   8,  -3,   1,  -2,   2,
+  2,  -2,   3,   4,   0,  -3,  -2,   0,   0,  -5,
+ -1,  -1,  -4,   3,  -1,   3,   5,  -3,  -4,  -1,
+  0,   2,  -6,   6,   4,  -1,  -1,  -2,  -2,  -2,
+  1,   2,   2,   0,   0,   6,   3,   3,   0,   1,
+  2,   2,   4,  -2,   1,   3,  -2,   6,   4,   4,
+  2,   3,   4,   1,   0,   2,   6,   0,  -3,   8,
+ -3,   0,  -3,   2,   2,  -2,   3,   4,   0,  -4,
+  0,  -4,  -1,  -1,  -4,   3,   0,   2,   4,  -3,
+ -4,  -2,   0,   2,  -7,   7,   5,  -1,  -1,  -2,
+ -1,  -2,   1,   3,   2,   0,  -1,   7,   3,   3,
+  0,   1,   1,   1,   5,  -3,   1,   2,  -3,   6,
+  3,   4,   2,   2,   3,   0,   1,   1,   6,   0,
+ -3,   8,  -3,   2,  -4,   3,   2,  -3,   3,   3,
+  0,  -4,  -1,  -1,  -4,   3,   0,   2,   4,  -3,
+ -4,  -2,   1,   2,  -7,   7,   5,  -1,  -1,  -2,
+ -1,  -2,   2,   2,   2,   0,  -1,   7,   3,   2,
+  0,   1,   1,   1,   5,  -3,   2,   2,  -2,   6,
+  3,   3,   2,   2,   3,   0,   1,   1,   7,   0,
+ -3,   8,  -2,   1,  -4,   3,   2,  -3,   0,  -4,
+ -1,  -1,  -4,   3,   0,   2,   4,  -3,  -4,  -2,
+  0,   2,  -6,   7,   5,  -1,  -1,  -2,  -1,  -2,
+  2,   2,   2,   0,  -1,   7,   3,   3,   0,   1,
+  1,   0,   5,  -3,   2,   2,  -3,   6,   3,   3,
+  2,   2,   3,   0,   1,   1,   7,   0,  -3,   8,
+ -2,   1,  -4,   3,   0,  -4,  -1,  -1,  -4,   3,
+  0,   2,   5,  -3,  -4,  -1,   0,   2,  -6,   6,
+  5,  -2,  -1,  -2,  -1,  -2,   2,   2,   2,   0,
+ -1,   7,   2,   3,   0,   0,   2,   0,   5,  -3,
+  2,   2,  -2,   6,   3,   3,   2,   2,   3,   0,
+  1,   1,   7,   0,  -3,   9,  -3,   1,   0,  -4,
+ -1,  -2,  -4,   3,   0,   2,   5,  -3,  -4,  -1,
+  0,   2,  -6,   6,   5,  -2,   0,  -2,  -1,  -2,
+  2,   2,   2,   0,  -1,   7,   2,   3,   0,   0,
+  2,   0,   5,  -3,   2,   2,  -2,   6,   3,   3,
+  2,   1,   3,   0,   1,   1,   7,   0,  -3,   9,
+  0,  -4,  -1,  -2,  -4,   3,  -1,   2,   5,  -3,
+ -4,  -1,   0,   2,  -6,   6,   5,  -2,  -1,  -2,
+ -1,  -2,   2,   2,   2,   0,   0,   7,   3,   3,
+  0,   0,   2,   0,   5,  -3,   2,   3,  -2,   6,
+  3,   2,   2,   2,   3,   0,   1,   1,   6,   1,
+ -1,  -3,   0,  -2,  -4,   4,  -1,   2,   5,  -3,
+ -5,  -1,  -1,   2,  -7,   6,   5,  -2,  -1,  -1,
+ -2,  -2,   2,   1,   1,   0,   0,   7,   2,   3,
+ -1,   1,   2,   1,   6,  -3,   1,   3,  -3,   7,
+  3,   3,   2,   2,   3,   0,   1,   0,  -1,  -4,
+  0,  -1,  -5,   4,  -1,   1,   5,  -3,  -5,   0,
+ -1,   2,  -7,   7,   4,  -2,  -1,   0,  -2,  -3,
+  3,   3,   2,   0,   0,   8,   1,   4,  -1,   1,
+  1,   0,   6,  -2,   1,   4,  -3,   6,   3,   3,
+  1,   2,   3,  -1,  -1,  -4,   0,  -2,  -5,   4,
+ -2,   2,   6,  -3,  -4,   0,  -1,   2,  -7,   7,
+  4,  -2,  -1,   0,  -2,  -2,   3,   3,   2,  -1,
+  1,   8,   2,   3,  -1,   1,   1,   0,   6,  -2,
+  1,   3,  -2,   6,   3,   3,   2,   2,  -1,  -4,
+  0,  -2,  -5,   4,  -2,   2,   6,  -3,  -4,   0,
+ -1,   2,  -7,   7,   4,  -2,  -1,   0,  -2,  -2,
+  3,   3,   2,  -1,   1,   8,   2,   3,  -1,   1,
+  1,   0,   6,  -2,   1,   3,  -2,   6,   3,   3,
+ -1,  -4,   0,  -2,  -4,   4,  -2,   2,   6,  -3,
+ -5,   0,  -1,   2,  -6,   7,   4,  -2,  -1,   0,
+ -2,  -2,   3,   3,   2,  -1,   0,   8,   2,   3,
+ -1,   1,   1,   1,   6,  -2,   1,   3,  -2,   6,
+ -1,  -4,   0,  -2,  -4,   4,  -2,   3,   6,  -2,
+ -5,   0,   0,   1,  -7,   7,   5,  -2,  -1,   0,
+ -1,  -2,   3,   4,   1,   0,   0,   8,   2,   3,
+ -1,   1,   1,   1,   5,  -1,   0,   3,  -1,  -4,
+  0,  -3,  -4,   4,  -2,   3,   6,  -2,  -5,   0,
+  0,   1,  -6,   7,   5,  -2,  -1,   1,  -1,  -2,
+  3,   4,   1,   0,   0,   8,   2,   3,  -1,   1,
+  1,   1,   5,  -1,  -1,  -4,   1,  -3,  -4,   4,
+ -2,   3,   6,  -2,  -4,   0,   0,   1,  -6,   7,
+  5,  -2,  -1,   0,  -2,  -2,   3,   4,   1,   0,
+  0,   8,   2,   2,  -1,   1,   1,   1,  -2,  -4,
+  1,  -3,  -3,   4,  -1,   3,   6,  -2,  -4,  -1,
+  1,   2,  -6,   8,   6,  -1,  -2,   0,  -1,  -3,
+  3,   3,   1,  -1,  -1,   8,   2,   2,   0,   0,
+ -2,  -4,   2,  -4,  -3,   4,  -1,   2,   6,  -3,
+ -4,  -2,   1,   2,  -7,   6,   5,  -1,  -2,  -1,
+  0,  -3,   3,   3,   1,  -1,  -1,   7,   3,   2,
+ -2,  -4,   1,  -4,  -3,   4,  -1,   2,   7,  -2,
+ -4,  -2,   1,   1,  -8,   6,   5,  -1,  -2,   0,
+  0,  -3,   3,   3,   2,  -1,  -1,   7,  -2,  -4,
+  1,  -4,  -3,   4,  -1,   2,   7,  -3,  -4,  -2,
+  0,   1,  -8,   6,   5,  -1,  -2,   0,  -1,  -3,
+  3,   3,   2,  -1,  -3,  -5,   0,  -4,  -3,   4,
+ -1,   2,   6,  -4,  -4,  -2,   0,   1,  -7,   7,
+  4,  -1,  -3,   1,  -1,  -3,   4,   3,  -3,  -5,
+  0,  -4,  -3,   4,  -1,   2,   6,  -4,  -4,  -3,
+  0,   1,  -7,   6,   4,  -1,  -2,   1,   0,  -2,
+ -3,  -5,   0,  -4,  -4,   4,  -1,   2,   6,  -4,
+ -5,  -3,   0,   1,  -8,   7,   4,   0,  -3,   1,
+ -3,  -5,   0,  -4,  -4,   4,  -1,   2,   6,  -5,
+ -5,  -3,  -1,   1,  -8,   7,   4,  -1,  -3,  -5,
+  0,  -4,  -4,   4,  -1,   2,   6,  -5,  -5,  -3,
+ -1,   1,  -8,   7,  -3,  -5,   1,  -5,  -4,   4,
+ -2,   1,   5,  -5,  -6,  -4,   0,   1,  -3,  -5,
+  1,  -5,  -4,   4,  -1,   1,   5,  -4,  -5,  -4,
+ -2,  -6,   2,  -4,  -4,   4,  -1,   1,   5,  -4,
+ -2,  -6,   1,  -4,  -3,   4,  -1,   2,  -2,  -6,
+  1,  -5,  -4,   5,  -2,  -6,   0,  -6,  -2,  -6,
+                        };
+FTYPE scalexx;
+int i,j, k;
+int ej, ei;
+int itemp, i2;
+div_t div_result;
+
+save_fpu_state(pfpuState);
+
+    scalexx = (.5116/txsample) * (.5116/txsample) ;
+// inp1=fopen("invxx.dat","rt");
+
+    for (i=0;i<len;i++) {
+        *(crosscor+i) *= (FTYPE) scalexx/(nsample);
+    }
+
+    for (i=0;i<len;i++) {
+
+        for (j=0;j<len;j++) {
+//            fscanf(inp1,"%f",&invXX[j]);
+            ei=i;
+            ej=j;
+
+            k = (j-i);
+			k = k >= 0 ? k:(-k);
+
+            if (ei>ej)        // if i>j then swap i and j
+            {
+                     itemp=ei;
+                     ei=ej;
+                     ej=itemp;
+            }
+            if (ej>(199-ei))
+            {
+                     itemp=ei;
+                     ei=199-ej;
+                     ej=199-ei;
+            }
+
+//            div_result = div(ei, 2);
+//            i2=div_result.quot;
+//            itemp=i2*200 - i2*(i2-1)*2 + ej - ei - div_result.rem;
+            itemp = 200*ei - ei*(ei-1) +  ej - ei;
+            if (itemp <= 199 )
+            {
+                   itemp=199;
+            }
+            itemp = itemp - 199;
+
+
+            *(modelchan+i) += crosscor[j] * ( err[itemp]/1000.0 + invXX[k]);
+//            *(modelchan+i) += crosscor[j] * invXX[j];
+        }
+    }
+
+//     fclose(inp1);
+
+	restore_fpu_state(pfpuState);
+    return;
+}
+
+/****************************************************************
+Routine : dp_vmax_get_min_SNR
+return :  calculate minimum SNR after step2
+*****************************************************************/
+
+FTYPE dp_vmax_get_min_SNR(FTYPE *eqerr, int size){
+
+	long pfpuState[32];
+	FTYPE max_eqerr, min_SNR;
+	int i;
+
+	save_fpu_state(pfpuState);
+    
+	max_eqerr = 0.0;
+	for(i = 0; i < size; i++){
+		if( *(eqerr + i) != 0 && *(eqerr + i) > max_eqerr)max_eqerr = *(eqerr + i);
+	}
+
+	min_SNR = -10.0*log10((double)max_eqerr);
+	restore_fpu_state(pfpuState);
+    return min_SNR;
+
+}
+
+/****************************************************************
+Routine : dp_vmax_optim_convolve()	
+WZ004
+*****************************************************************/
+FTYPE dp_vmax_optim_convolve(void){
+	
+	//This routine uses folowing global vars
+	//int   input_avail_flag,
+	//FTYPE input,						//input to the filter
+	//FTYPE modelchan[MODCHANLEN],		//channel response
+	//FTYPE delay_buff[2*MODCHANLEN - 1],
+	//int delay_buff_index				//need init as MODCHANLEN - 1
+
+	long pfpuState[32];
+	FTYPE accum;
+	int i;
+
+	save_fpu_state(pfpuState);	
+
+	if(input_avail_flag == TRUE)
+		delay_buff[delay_buff_index] = input;	//index init as MODCHANLEN - 1
+	
+	accum = 0;
+	for(i = 0; i < MODCHANLEN; i++){
+		accum += modelchan[MODCHANLEN - 1 - i]*delay_buff[delay_buff_index -(MODCHANLEN - 1) + i];
+	}
+	
+	delay_buff_index++;
+
+	if(delay_buff_index == (2*MODCHANLEN - 1)){
+		delay_buff_index = MODCHANLEN - 1;
+
+		for(i = 0; i < MODCHANLEN; i++){
+			delay_buff[i] = delay_buff[i + MODCHANLEN]; 	
+		}
+	}
+
+
+	restore_fpu_state(pfpuState);	
+	return accum;
+}
+
+
+///////////////////////////////////////////////////////////
+
+/****************************************************************
+Routine : dp_vmax_w_filt_inv()	
+Return:	  TRUE -- OK, FALSE - failed in allocation memory
+*****************************************************************/
+
+int dp_vmax_w_filt_inv ()  // sample code for anything that needs matrix inversion
+{
+	long pfpuState[32];
+
+	int		*indx;
+	double	**y;	
+	double	**a, d, *col; 
+	double	r_tr[20], ttmp;
+	int		N1=10, N2=400;
+
+	FTYPE	sample[600];
+	FTYPE	rxsample, rxsample_prv;
+	FTYPE	lmserr,lmserrmax;
+	int		i,k,j;
+	char	charbuf[80];
+	double	rxsumsq, errsumsq, erle;
+	int		scount=0;
+	
+
+	//int hiadd, loadd;
+
+	save_fpu_state(pfpuState);	
+
+ 	indx = dp_vmax_ivector (n_min,N1);
+	col = dp_vmax_dvector (n_min,N1);
+	a = dp_vmax_dmatrix (n_min, N1, n_min, N1);
+	y = dp_vmax_dmatrix (n_min, N1, n_min, N1); 
+
+	if(indx == 0 || col == 0 || a == 0 || y == 0){
+		x_debug_msg("vmax - dp_vmax_w_filt_inv FAILED!!!");
+		if(indx != 0){
+			dp_vmax_free_ivector(indx,n_min,N1);
+		}
+		if(col != 0){
+			dp_vmax_free_dvector(col,n_min,N1);
+		}
+		if(a != 0){
+			dp_vmax_free_dmatrix(a,n_min, N1, n_min, N1 );	
+		}
+		if(y !=0){
+			dp_vmax_free_dmatrix(y,n_min, N1, n_min, N1 );
+		}
+
+		return FALSE;
+	}
+
+
+	for (i=0;i<wf_len;i++) 
+	{
+		wf_coef[i]=(FTYPE)0.0;
+		wf_st[i]=(FTYPE)0.0;
+	}
+
+
+	wf_add = 0x4000;	//dsp buffer address
+	wf_from = 0;
+	wf_toid = wf_len;
+
+
+	rxsample_prv=(FTYPE)0.0;
+	
+	for (i=0;i<PN1_MAX_LEN;i++){
+	
+		rxsample= (short)dp_read_dsp_ram(wf_add);
+		wf_add++;
+
+		rxsample_prv=(1-FGF)*rxsample_prv+FGF*rxsample*rxsample;
+
+		//printf("%f %f %d\n", rxsample, rxsample_prv, i);
+		if ((rxsample_prv<SLC_THD)&&(i>PN1_MIN_LEN))
+		break;
+	}
+
+	debug("whitening filter training starts at %dth sample\n", i);
+
+	k=0;
+	while (k<Kw) // get the samples 
+	{
+		k++;
+		rxsample = (FTYPE)(short)dp_read_dsp_ram(wf_add++);	
+		sample[k] = rxsample;
+	}
+		
+	//wf_coef_file=fopen("wfcoef.dat","wt");
+
+	for	(i=0;i<N1;i++)
+	{
+		for (j=0;j<N1;j++)
+		{
+			ttmp = 0;
+			for (k=1;k<=N2;k++)
+				ttmp += sample[k+j]*sample[k+i];
+			a[i+1][j+1] = ttmp;
+	//		fprintf (wf_coef_file,"i %d j %d a %f  ",i,j,a[i+1][j+1]);
+		}
+	//	fprintf (wf_coef_file,"\n");
+	}
+//	printf ("computed a\n");
+
+
+	for (i=0;i<N1;i++)
+	{
+		ttmp = 0;
+		for (j=1;j<=N2;j++)
+			ttmp += (sample[j+i] * sample[j+10]);
+		r_tr[i] = ttmp;
+	}
+
+	
+	//put stuff to compute matrix a 
+ 
+	/* matrix inversion */
+	if(dp_vmax_ludcmp (a, N1, indx, &d) == FALSE){	/* decompose matrix once,
+								find inverse by columns*/
+		x_debug_msg("vmax - dp_vmax_ludcmp FAILED!!!");
+		return FALSE;
+	}
+
+	for	(j=1; j<=N1; j++)
+	{
+		for (i=1; i<=N1; i++)
+			col[i] = 0.0;
+		col[j] =  1.0;
+		dp_vmax_lubksb (a,N1,indx, col);	
+		for (i=1; i<=N1; i++)
+			y[i][j] = col[i];
+	}  
+
+
+	for (i=0;i<N1;i++)
+	{
+		ttmp = 0;
+		for (j=0;j<N1;j++)
+			ttmp += y[i+1][j+1] * r_tr[j];
+		wf_coef[N1-1-i] = (float) ttmp;
+	}
+
+	//free all allocated memory
+	dp_vmax_free_ivector(indx,n_min,N1);
+	dp_vmax_free_dvector(col,n_min,N1);
+	dp_vmax_free_dmatrix(a,n_min, N1, n_min, N1 );	
+	dp_vmax_free_dmatrix(y,n_min, N1, n_min, N1 );
+		
+	//if (input_opt=='f')
+	//fclose(inp);
+	x_debug_msg("whitening filter training is completed");
+
+	//for (i=0;i<wf_len;i++)
+	//	fprintf(wf_coef_file,"%f\n",wf_coef[i]);
+	//fclose(wf_coef_file);
+
+	//}
+	restore_fpu_state(pfpuState);	
+
+	return TRUE;
+
+}
+
+/****************************************************************
+Routine :		dp_vmax_ludcmp()
+Description :	
+Return:			TRUE -- OK, FALSE -- Failed 
+*****************************************************************/
+
+int dp_vmax_ludcmp (double  **a, int n, int *indx, double *d)
+{
+
+	long pfpuState[32];
+	
+	int		i, imax, j, k, np1;
+	double	big, dum, sum, tmp11;
+	double	*vv;
+	//void	nrerror ()/*, free_vector ()*/; 
+	double	*tmpptr, *tmpptr2;
+	
+	save_fpu_state(pfpuState);	
+	
+	vv = dp_vmax_dvector (n_min,n);
+
+	if(vv == 0){
+		x_debug_msg("vmax - dp_vmax_w_filt_inv FAILED!!!");
+		return FALSE;
+	}
+
+	*d = 1.0;
+	np1 = n + 1;  
+
+	for (i=1; i<=n; i++)
+	{
+		big = 0.0;
+		for (j=1, tmpptr=&a[i][1]; j<=n; j++,tmpptr++)
+			if ((tmp11 = (*tmpptr)>=0 ? (*tmpptr):(- *tmpptr) ) > big)
+				big = tmp11;
+		if (big == 0.)
+			dp_vmax_nrerror ("Singular matrix in rutine LUDCMP");
+		/* non zero largest element */
+		vv[i] = 1.0 /big;	/* save the scaling */
+	}
+	for (j=1; j<=n; j++)
+	{
+		for (i=1; i<j; i++)
+		{
+			sum = a[i][j];
+			for (k=1,tmpptr=&a[i][1],tmpptr2=&a[1][j]; k<i; k++,tmpptr++,tmpptr2+=np1)
+				sum -= (*tmpptr) * a[k][j];
+			a[i][j] = sum;
+		}
+
+    	big = (float) 0.0;
+		for (i=j; i<=n; i++)
+		{
+			sum = a[i][j];
+			for (k=1,tmpptr=&a[i][1]; k<j; k++,tmpptr++)
+				sum -= (*tmpptr) * a[k][j];
+			a[i][j] = sum;
+			if ((dum = (sum>=0 ? sum : (-sum)) * vv[i]) >= big)
+			{
+				big = dum;
+				imax = i;
+			}
+		}
+ 				  
+  		if (j != imax)
+		{
+			for (k=1; k<=n; k++)
+			{
+				dum = a[imax][k];
+				a[imax][k] = a[j][k];
+				a[j][k] = dum;
+			}
+ 
+ 			*d = -(*d);
+			vv[imax] = vv[j];
+		}   
+
+		indx[j] = imax;
+ 
+ 		if (a[j][j] == 0.0) 
+			a[j][j] = TINY;   
+
+		/* if the pivot element is zero the matrix is singular
+		(at least to the precision of the algorithm). For some
+		applications on singular matrices, it is desirable to 
+		substitute TINY for zero */
+		if (j != n)
+		{
+			dum = 1. / a[j][j];
+			for (i=j+1; i<=n; i++)
+				a[i][j] = a[i][j] * dum;
+		}
+	}
+
+	dp_vmax_free_dvector (vv, n_min, n);
+
+	restore_fpu_state(pfpuState);	
+
+	return TRUE;
+}
+
+/****************************************************************
+Routine :		dp_vmax_lubksb()
+Description :	
+*****************************************************************/
+
+void	dp_vmax_lubksb (double **a, int n, int *indx, double *col)
+{
+	long pfpuState[32];
+	
+	int	i, ii=0, j;
+	int 	ip;
+	double	sum; 
+	double	*tmpptr;
+
+	save_fpu_state(pfpuState);	
+
+	for (i=1; i<=n; i++)
+	{
+		ip = indx[i];
+		sum = col[ip];
+		col[ip] = col[i];
+		if (ii)
+			for (j=ii,tmpptr=&a[i][ii]; j<=i-1; j++,tmpptr++)
+				sum -= (*tmpptr) * col[j];
+		
+		else if (sum) ii = i;
+		col[i] = (double) sum;
+	}
+	for (i=n; i>=1; i--)
+	{
+		sum = col[i];
+		for (j=i+1,tmpptr=&a[i][j]; j<=n; j++,tmpptr++)
+			sum -= (*tmpptr) * col[j];
+		col[i] = sum / a[i][i];
+	}  
+
+	restore_fpu_state(pfpuState);	
+}
+
+/*****************************************************************************/
+/****WZ013: utilities routines used to allocate and free memory from system heap****/
+/*****************************************************************************/
+/****************************************************************
+Routine :		dp_vmax_vector()
+Description :	allocate a float vector
+*****************************************************************/
+float	*dp_vmax_vector (int nl, int nh)
+{
+	float	*v;
+	int flag;
+	
+	//v = (float *) malloc ((unsigned) (nh-nl+1)*sizeof (float));
+	v = VMODEM_HeapAllocate((nh-nl+1)*sizeof(float), 0);
+	_asm mov flag, eax
+	if(flag != 0){
+		x_debug_msg("vmax - flaot heap allocated: heap_ptr =%d", (dword)v);
+		return (v-nl);
+	}else{
+		x_debug_msg("vmax - flaot heap allocation failed!!!");
+		return 0;
+	}
+
+}
+
+/****************************************************************
+Routine :		dp_vmax_dvector()
+Description :	allocate double vector
+*****************************************************************/
+
+double	*dp_vmax_dvector (int nl, int nh)
+{
+	double	*v;
+	int flag;
+	
+	//v = (double *) malloc ((unsigned) (nh-nl+1)*sizeof (double));
+	v = VMODEM_HeapAllocate((nh-nl+1)*sizeof(double), 0);
+	_asm mov flag, eax
+	if(flag != 0){
+		x_debug_msg("vmax - double heap allocated: heap_ptr =%d", (dword)v);
+		return (v-nl);
+	}else{
+		x_debug_msg("vmax - double heap allocation failed!!!");
+		return 0;
+	}
+	
+	//if (!v) nrerror ("allocation failure in F vector()");
+	
+	
+}
+
+/****************************************************************
+Routine :		dp_vmax_ivector()
+Description :	allocate integer vector
+*****************************************************************/
+
+int	*dp_vmax_ivector (int nl, int nh)
+{
+	int	*v;
+	int flag;
+	
+	//v = (int *) malloc ((unsigned)(nh-nl+1)*sizeof (int));
+	v = VMODEM_HeapAllocate((nh-nl+1)*sizeof(int), 0);
+	_asm mov flag, eax
+	if(flag != 0){
+		x_debug_msg("vmax - heap allocated: heap_ptr =%d", (dword)v);
+		return (v-nl);
+	}else{
+		x_debug_msg("vmax - heap allocation failed!!!");
+		return 0;
+	}	
+	
+	//if (!v) nrerror ("allocation failure in I vector()");
+	
+}
+
+/****************************************************************
+Routine :		dp_vmax_dmatrix()
+Description :	allocate double matrix
+*****************************************************************/
+
+double	**dp_vmax_dmatrix (int nrl, int nrh, int ncl, int nch)
+{
+	int	i, flag;
+	double 	**m;
+
+	//m = (double **) /*_f*/malloc ((unsigned) (nrh-nrl+1)*sizeof(double *));
+	m = (double **)VMODEM_HeapAllocate ((unsigned) (nrh-nrl+1)*sizeof(double *), 0);
+	_asm mov flag, eax
+	if(flag == 0){
+		x_debug_msg("vmax - double matrix 1 heap allocation failed!!!");
+		return 0;
+	}else{
+		x_debug_msg("vmax - doublematrix 1 heap allocation OK");
+	
+		//if (!m) nrerror ("allocation failure 1 in matrix ()");
+	
+		m -= nrl;
+
+		for (i=nrl; i<=nrh; i++)
+		{
+			//m[i] = (double *) /*_f*/malloc ((unsigned) (nch-ncl+1)*sizeof(double));
+			m[i] = (double *)VMODEM_HeapAllocate ((unsigned)(nch-ncl+1)*sizeof(double), 0);
+			_asm mov flag, eax
+			if(flag == 0){
+				x_debug_msg("vmax - double matrix 2 heap allocation failed!!!");
+				return 0;
+			}else{
+				x_debug_msg("vmax - double matrix 2 heap allocation OK");
+				//if (!m[i]) nrerror ("allocation failure 2 in matrix ()");
+				m[i] -= ncl;
+			}
+		}
+
+		return m;
+	}
+}
+
+	
+/****************************************************************
+Routine :		dp_vmax_free_dmatrix()
+Description :	return 0 -- failed, 1 -- OK
+*****************************************************************/
+
+int	dp_vmax_free_dmatrix (double **m, int nrl, int nrh, int ncl, int nch)
+{
+	int	i, flag1, flag2 ;
+
+	for (i=nrh; i>nrl-1;/* > WZ013 */ i--){
+		//free ((char*) (m[i]+ncl));
+		VMODEM_HeapFree ( (m[i]+ncl), sizeof(double)*(nch - ncl+1) ) ;
+		_asm mov flag1, eax
+		if(flag1 != 0){
+			x_debug_msg("vmax - dmatrix 2 heap free OK");
+		}else{
+			x_debug_msg("vmax - dmatrix 2 heap free failed!!!");
+			break;
+		}
+
+	}
+
+	//free ((char*) (m+nrl));
+	VMODEM_HeapFree ( (m+nrl), sizeof(double *)*(nrh - nrl+1) ) ;
+	_asm mov flag2, eax
+	if(flag2 != 0){
+		x_debug_msg("vmax - dmatrix 1 heap free OK");
+	}else{
+		x_debug_msg("vmax - dmatrix 1 heap free failed!!!");
+	}
+	
+	if(flag1 != 0 && flag2 != 0){
+		return 1;
+	}else{
+		return 0;
+	}
+}
+
+/****************************************************************
+Routine :		dp_vmax_free_ivector()
+Description :	
+				return 0 -- failed, 1 -- OK
+*****************************************************************/
+
+int	dp_vmax_free_ivector (int *v, int nl, int nh)
+{
+	int flag;
+
+	//free ((char*) (v+nl));
+	VMODEM_HeapFree ( (v+nl), sizeof(int)*(nh - nl) ) ;
+	_asm mov flag, eax
+	if(flag != 0){
+		x_debug_msg("vmax - ivector heap free OK");
+		return 1;
+	}else{
+		x_debug_msg("vmax - ivector heap free failed!!!");
+		return 0;
+	}
+}
+/****************************************************************
+Routine :		dp_vmax_free_dvector()
+Description :	
+				return 0 -- failed, 1 -- OK
+*****************************************************************/
+
+int	dp_vmax_free_dvector (double *v, int nl, int nh)
+{
+	int flag;
+
+	//free ((char*) (v+nl));
+	VMODEM_HeapFree ( (v+nl), sizeof(double)*(nh - nl) ) ;
+	_asm mov flag, eax
+	if(flag != 0){
+		x_debug_msg("vmax - dvector heap free OK");
+		return 1;
+	}else{
+		x_debug_msg("vmax - dvector heap free failed!!!");
+		return 0;
+	}
+}
+
+/****************************************************************
+Routine :		dp_vmax_nrerror()
+Description :	allocate a float vector
+*****************************************************************/
+
+void	dp_vmax_nrerror (char error_text[])
+{
+
+	x_debug_msg ("vmax - run time error...");
+	x_strcat ( szBuffer, error_text ) ;
+	x_debug_msg ( szBuffer );
+	
+	return;
+}
+
+///////////////////////////////////////////////////////////
+
+/****************************************************************
+Routine :		dp_vmax_log_modelchan()
+Description :	log the channel modeling coefs to a file
+WZ017
+*****************************************************************/
+int dp_vmax_log_modelchan(unsigned char* fname)
+{
+
+	extern int log_file_offset;    //offset of bytes from begining of the log file
+	extern char *log_file_name;
+
+	dword hfile;
+	int code;
+	
+	dword action;
+	dword nwritten;
+	word  byte_count;
+	static unsigned char buff_written[100];
+	static unsigned char *str_modelchan = "modelchan\n";
+
+
+	short modchint;
+	int i;
+	
+	//open file for writting
+	code = VMODEM_R0_OpenCreateFile(FALSE, ACCESS_READWRITE | SHARE_DENYREADWRITE, 0, 
+		   ACTION_CREATEALWAYS, 0, fname, &hfile, &action);
+	
+	if(code == 0){
+		//file opened OK
+		x_debug_msg("vmax - open file for dumping modelchan");
+		
+		log_file_offset = 0;
+		//VMODEM_R0_WriteFile(FALSE, hfile, strlen(str_modelchan), log_file_offset, str_modelchan, &nwritten);
+		//log_file_offset = strlen(str_modelchan);
+
+		for(i=0;i<MODCHANLEN;i++)
+		{
+			modchint=modelchan[i]*16384;
+			
+			//convert to string
+			byte_count = short_i_toa( modchint, buff_written);
+			x_strcat(buff_written, "\n");
+			byte_count++;			//counting "\n"
+
+			VMODEM_R0_WriteFile(FALSE, hfile, strlen(buff_written), log_file_offset, buff_written, &nwritten);
+			
+			log_file_offset += strlen(buff_written);
+		}
+		
+		x_debug_msg("vmax - dumping modelchan finished");
+
+		
+		VMODEM_R0_CloseFile(hfile);
+
+	}else{
+		x_debug_msg("vmax - open file FAILURE for dumping modelchan[...]!");
+	}
+
+	return;
+}
+
+/****************************************************************
+Routine :		dp_vmax_log_DSP_data()
+Description :	log the DSP data to a file
+WZ017
+*****************************************************************/
+int dp_vmax_log_DSP_data(unsigned char* fname)
+{
+
+	extern int log_file_offset;    //offset of bytes from begining of the log file
+	extern char *log_file_name;
+
+	dword hfile;
+	int code;
+
+	dword action;
+	dword nwritten;
+	word  byte_count;
+	static unsigned char buff_written[100];
+	static unsigned char *str_DSPdata = "\nDSPdata\n";
+
+	short dsp_sample;
+	int i;
+	word step1_ram_add; 
+
+	step1_ram_add = STEP1_RAM ;
+
+	//open file for writting
+	code = VMODEM_R0_OpenCreateFile(FALSE, ACCESS_READWRITE | SHARE_DENYREADWRITE, 0, 
+		   ACTION_CREATEALWAYS, 0, fname, &hfile, &action);
+	
+
+	if(code == 0){
+		//file opened OK
+		x_debug_msg("vmax - open file for dumping DSPdata");
+		
+		log_file_offset = 0;
+		//VMODEM_R0_WriteFile(FALSE, hfile, strlen(str_DSPdata), log_file_offset, str_DSPdata, &nwritten);
+		//log_file_offset += strlen(str_DSPdata);
+
+		for(i=0;i<16*1024;i++)
+		{
+			dsp_sample = (short)dp_read_dsp_ram(step1_ram_add++);
+
+			//convert to string
+			byte_count = short_i_toa( dsp_sample, buff_written);
+			x_strcat(buff_written, "\n");
+			byte_count++;			//counting "\n"
+
+			VMODEM_R0_WriteFile(FALSE, hfile, strlen(buff_written), log_file_offset, buff_written, &nwritten);
+			
+			log_file_offset += strlen(buff_written);
+		}
+		
+		x_debug_msg("vmax - dumping DSPdata finished");
+
+		VMODEM_R0_CloseFile(hfile);
+
+	}else{
+		x_debug_msg("vmax - open file FAILURE for dumping DSPdata!");
+	}
+
+	return;
+}
+
+#endif //#ifdef VMAX

@@ -1,0 +1,3161 @@
+/*name and version number:@(#)z80flash.c	1.30*/
+/*date of get: 		  11/03/00 10:34:48*/
+/*date of delta:	  11/01/00 14:59:27*/
+/************************************************************************
+File :	z80flash.c
+
+Description :
+	Contains the C routines in support of the ROM resident Flash Loader.
+
+Procedures Contained :
+	fl_prog_flash
+	fl_cmd_dispatch
+	fl_start_modem
+	fl_ramFailure
+	fl_raw_prog
+
+	&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+	WARNING : MODS TO THIS FILE SHOULD BE DONE WITH UPMOST CARE.  ALTHOUGH
+	THIS MODULE IS LINKED WITH THE C LIBRARY, IT MUST AVOID ANY AND ALL
+	CALLS TO THE LIBRARY SINCE IT IS A STANDALONE SUBSYSTEM. IF YOU DO
+	NOT KNOW HOW TO DETERMINE THE ABOVE THEN YOU PROBABLY SHOULD NOT MAKE
+	ANY CHANGES IN THIS FILE!!!!
+	&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+
+	Apologies for the above time bomb but the schedule was much too tight
+	to write this module in assembly langauge (56k rules).
+					- rwf
+
+Revision History :
+	Initials	Date		Change
+	rwf			04/03/97	initial
+	rwf			06/25/97	add wd timer
+	JMG			06/17/98	add ATMEL non-sector-erase support
+	JMG			02/19/99	add AMD/Atmel 4Meg LV support
+*************************************************************************/
+
+#include	"llglob_d.h"
+#include	"z80glob.h"
+#include	"z80flash.h"
+#include	"z80usb.h"
+#include	"allglobs.h"
+
+#if defined( ROM_FLASH )
+ #if defined (RAW_FLASHER)
+ non_banked void fl_raw_prog(void);
+ #endif
+
+//--------------------------------------------------------------------------
+// Called with Ints disabled -- this function doesn't successfully
+//  preserve 0xc0 and should not be used.  It is retained because
+//  it is used in the boot block flash loader.
+//--------------------------------------------------------------------------
+#define	DP_REGWRITE( reg, val )		\
+do {								\
+	byte lreg = input8( 0xc0 ) ;	\
+	output8( 0xc0, (reg) ) ;		\
+	output8( 0xc1, (val) ) ;		\
+	output8( 0xc0, lreg ) ;			\
+} while (0)
+
+//-----------------------------------------------------
+// fl_sector_bbr_tbl[] contains the starting addresses
+// of each sector (actually the BBR value to provide
+// the starting address) for each chip type supported
+// by the ROM resident flash loader.
+// A value of 0xff in the table denotes No sector.
+//-----------------------------------------------------
+//-----------------------------------------------
+//		macros for accessing BBR table
+//-----------------------------------------------
+#define NS(x)		(x-4)
+
+#if defined(ATMEL) // {
+//-----------------------------------------------
+// Atmel parts will be available in two flavors: one with and
+// one without sector erase.  The AT49F020 does not support sector
+// erase, therefore, this device must be erased completely (no boot block).
+// The AT49F002 has two sectors, one 16K and the rest.  The AT49F002
+// will require the ATMEL flash table to find the start of sector 1.
+//-----------------------------------------------
+
+#define NUM_COLUMNS		(1)
+const byte fl_sector_bbr_tbl[] = {
+
+//	AT49F002
+//	--------
+	0x04,	// sector 1
+	0xFF	// the null sector
+} ;
+
+#elif !defined(ATMEL) && !defined(ATMEL_NOBOOT)  // } not an ATMEL 49F020 {
+
+#define NUM_COLUMNS		(4)
+const byte fl_sector_bbr_tbl[] = {
+
+//	AMD29F002B	AMD29F002T	AMD29F400B	29x040
+//	----------	----------	----------	---------
+	0x04,		0x10,		0x04,		0x10,		// sector 1
+	0x06,		0x20,		0x06,		0x20,		// sector 2
+	0x08,		0x30,		0x08,		0x30,		// sector 3
+	0x10,		0x38,		0x10,		0x40,		// sector 4
+	0x20,		0x3a,		0x20,		0x50,		// sector 5
+	0x30,		0x3c,		0x30,		0x60,		// sector 6
+	0xFF,		0xFF,		0x40,		0x70,		// sector 7
+	0xFF,		0xFF,		0x50,		0xFF,		// sector 8
+	0xFF,		0xFF,		0x60,		0xFF,		// sector 9
+	0xFF,		0xFF,		0x70,		0xFF,		// sector a
+	0xFF,		0xFF,		0xFF,		0xFF		// the null sector
+} ;
+
+#else
+	Error: Check Atmel #defines in llgolob_d.h!
+#endif
+
+/****************************************************************
+	Function : fl_set_bank
+	
+	sets mmu to new bank and returns previous one.
+*****************************************************************/
+non_banked
+byte fl_set_bank( byte bbr_value )
+{
+	byte reg ;
+
+	reg = input8( BBR );
+	output8( BBR, bbr_value ) ;
+	return reg ;
+}
+
+/****************************************************************
+	Function : fl_strobe_sanity
+	Set for a very large value
+*****************************************************************/
+non_banked
+void fl_strobe_sanity ( void )
+{
+	if ( input8( 0xDA ) != 0xFF )
+	{
+		output8( 0xDA, 0xFC ) ;
+		output8( 0xDB, 0xE5 ) ;
+	}
+}
+
+#if defined( EXT_MODEM )
+/****************************************************************
+	Function : fl_start_autobaud
+*****************************************************************/
+non_banked
+void fl_start_autobaud ( void )
+{
+	//----------------------------------------------------
+	// wait for last character to be sent
+	//----------------------------------------------------
+	while ( !(input8( ASCI_CTLB0_REG ) & ASCI_ALL_SENT) )
+	{
+		fl_strobe_sanity() ;
+	}
+
+	// clear the BRG...
+	output8 ( ASCI_TCLO_REG, 0 ) ;
+	output8 ( ASCI_TCHI_REG, 0 ) ;
+
+	// ...start hardware autobaud...
+	output8 ( A0NEWCTL, AUTOBAUD_EN ) ;
+
+	GotBRGcnt = FALSE ;
+
+	// ...and enable NMI
+	DP_REGWRITE( 0x61, 0x01 ) ;
+}
+#elif !defined( USB_MODEM )
+/****************************************************************
+	Function : fl_mimic_regs() ;
+*****************************************************************/
+non_banked
+void fl_mimic_regs ( void )
+{
+	byte uart_reg ;
+
+	uart_reg = input8( MIMIC_FCR ) ;
+	if ( (uart_reg & (BIT7|BIT6)) &&
+		!(uart_reg & BIT3) )
+	{
+		output8( MIMIC_RTTC, 0x04 ) ;
+	}
+	else
+	{
+		output8( MIMIC_RTTC, 0x20 ) ;
+	}
+}
+#endif
+
+#if defined( Z80_DEBUG_PRINT )	// {
+#if defined( DEBUG_PEGASIS )	// {
+/****************************************************************
+	Function : fl_debug_stop 
+	Useful for stepping thru code. Insert a call to this routine
+	anywhere in the rest of the code to stop at that point and
+	wait for a char to be typed.
+*****************************************************************/
+non_banked
+void fl_debug_stop ( void )
+{
+	if ( !fl_dumbPortPresent )
+	{
+		return ;
+	}
+
+	while ( 1 )
+	{
+		word cnt;
+		byte j ;
+
+		for ( j=0; j<4; j++ )
+			for ( cnt=0; cnt<0xfffe; cnt++ )
+				;
+
+		debug_put_char( '+' ) ;
+
+		output8 ( DUMB_MCR, input8 ( DUMB_MCR ) & BIT2 ?
+					input8 ( DUMB_MCR ) & ~BIT2 :
+					input8 ( DUMB_MCR ) | BIT2 ) ;
+
+		if ( input8( DUMB_LSR ) & 1 )
+		{
+			input8( DUMB_DATA ) ;
+			break ;
+		}
+	}
+}
+#else
+  #define fl_debug_stop()
+#endif	// } DEBUG_PEGASIS
+
+/****************************************************************
+	Function : fl_enableDumbPort(void)
+	Sets up the Dumb Serial port
+*****************************************************************/
+non_banked
+void fl_enableDumbPort( void )
+{
+	output8(DUMB_LCR, 0x83);
+	output8(DUMB_BRDH, 0);
+#if defined( PEGASIS )
+	output8(DUMB_BRDL, 12); // baud rate 115.2
+//	output8(DUMB_BRDL, 24); // baud rate  57.6
+//	output8(DUMB_BRDL, 36); // baud rate  38.4
+
+	output8(DUMB_IIR, BIT0);
+	output8(DUMB_IIR, BIT3|BIT0); // 16550 fifo mode
+#else
+	output8(DUMB_BRDL, 1);  // baud rate 115.2
+//	output8(DUMB_BRDL, 2);  // baud rate  57.6
+//	output8(DUMB_BRDL, 3);  // baud rate  38.4
+#endif
+	output8(DUMB_LCR, 0x03);
+	output8(DUMB_IER, 0x00);
+	output8(DUMB_MCR, 0x0f);
+	output8(DUMB_SCR, 0x55);
+	fl_dumbPortPresent = (input8(DUMB_SCR) == 0x55) ? 1 : 0;
+}
+
+/****************************************************************
+	Function : fl_sendDumbChar(byte ch)
+	Sends a char on the Dumb Serial port
+*****************************************************************/
+non_banked
+void fl_sendDumbChar( byte ch )
+{
+	//-----------------------------
+	// if first time in, try to
+	// init debug port.
+	//-----------------------------
+	if ( fl_portInit != 0xab )
+	{
+		fl_enableDumbPort() ;
+		fl_portInit = 0xab ;
+	}
+
+	//-----------------------------
+	// if no debug port - adios
+	//-----------------------------
+	if ( !fl_dumbPortPresent )
+	{
+		return;
+	}
+
+	while ( !(input8( DUMB_LSR ) & 0x20) )
+	{
+		fl_strobe_sanity() ;
+	}
+	output8( DUMB_DATA, ch ) ;
+}
+
+#if defined( DOWNLOAD_DEBUG_UART_FLASH )	// {
+/****************************************************************
+	Function : fl_getDumbChar(byte ch)
+	Get a char from the Dumb Serial port
+*****************************************************************/
+non_banked
+byte fl_getDumbChar( void )
+{
+	while ( !(input8( DUMB_LSR ) & 1) )
+	{
+		fl_strobe_sanity() ;
+	}
+
+	return input8( DUMB_DATA ) ;
+}
+#endif	// } DOWNLOAD_DEBUG_UART_FLASH
+#endif	// } Z80_DEBUG_PRINT
+
+/****************************************************************
+	Function : fl_get_char
+	Get a character from the dte port - data from PC to Mimic/SCC
+*****************************************************************/
+non_banked
+byte fl_get_char ( void )
+{
+	byte ch ;
+#if defined( PCMCIA_MODEM )
+	non_banked void fl_attribmem_write( void ) ;
+#endif
+
+#if defined( EXT_MODEM )	// {
+	while ( 1 )
+	{
+#if defined( RAW_FLASHER )
+		output8(ASCI_CTLA0_REG,input(ASCI_CTLA0_REG)&~ASCI_RTS);// CTS on
+#endif
+		fl_strobe_sanity() ;
+
+		//---------------------------------------------------
+		// look for received character status.
+		//---------------------------------------------------
+		if ( input8( ASCI_STAT0_REG ) & 0xF0 )
+		{
+			if ( input8( ASCI_STAT0_REG ) & 0x70 )
+			{
+				// error detected
+				debug_put_str( ">Rx Err!" ) ;
+				ch = input8( ASCI_RX0_REG ) ;
+
+				// reset error flag in ctl A reg
+				output8( ASCI_CTLA0_REG, input8( ASCI_CTLA0_REG ) & 0xf7 ) ;
+
+				if ( fl_InCmdMode )
+				{
+					//---------------------------
+					// we are in command mode
+					//---------------------------
+					fl_start_autobaud() ;
+				}
+				continue ;
+			}
+
+			//---------------------------------------------
+			// got a good char. read EASCI rx register
+			//---------------------------------------------
+			ch = input8( ASCI_RX0_REG ) ;
+#if defined( RAW_FLASHER )
+			output8(ASCI_CTLA0_REG,input8(ASCI_CTLA0_REG)|ASCI_RTS);// CTS off
+#endif
+			break ;
+		}
+	}
+
+#elif defined( USB_MODEM )	// } {
+
+#if defined( DOWNLOAD_DEBUG_UART_FLASH )
+	//---------------------------------------------
+	// get char from debug port
+	//---------------------------------------------
+	ch = fl_getDumbChar() ;
+#else
+	//---------------------------------------------
+	// Wait for Char :
+	//---------------------------------------------
+	while ( fl_dte_rx_wptr == fl_dte_rx_rptr )
+	{
+		word i ;
+		non_banked void fl_USB_ir ( void ) ;
+
+		fl_USB_ir() ;
+		fl_strobe_sanity() ;
+		fl_usb_periodic() ;
+	}
+
+	//---------------------------------------------
+	// Got one, get it and update rd ptr
+	//---------------------------------------------
+	ch = *fl_dte_rx_rptr++ ;
+	if ( fl_dte_rx_rptr >= fl_dte_rx_eptr )
+	{
+		fl_dte_rx_rptr = fl_dte_rx_sptr ;
+	}
+#endif
+
+#else	// } ISA or PCMCIA {
+
+	//---------------------------------------------
+	// Wait for Char :
+	// read IUS Register - interrupt source
+	// DTE THR (or TTO) interrupt
+	//---------------------------------------------
+	while ( !(input8 ( MIMIC_IUS ) & 0x60 ) )
+	{
+		fl_strobe_sanity() ;
+#if defined( PCMCIA_MODEM )
+		//---------------------------
+		// look for FCR changes
+		//---------------------------
+		if ( fl_InCmdMode )
+		{
+			fl_attribmem_write() ;
+		}
+#endif
+	}
+
+	ch = input8( MIMIC_THR ) ;
+
+	output8( MIMIC_IUS, BIT7 ) ;	// clear interrupt source
+
+#endif	// }
+
+	return ch ;
+}
+
+/****************************************************************
+	Function : fl_put_char
+	Put a character to the dte port - data from Mimic/EASCI to PC
+*****************************************************************/
+non_banked
+void fl_put_char( byte output_byte )
+{
+#if defined( Z80_DEBUG_PRINT )
+	// if this is for the debug terminal
+	// send it there.
+	if ( fl_debug_flg )
+	{
+		fl_sendDumbChar( output_byte ) ;
+		return ;
+	}
+#endif
+
+#if defined( EXT_MODEM )	// {
+
+	//-----------------------------
+	// write to EASCI tx register
+	//-----------------------------
+	while ( 1 )
+	{
+		fl_strobe_sanity() ;
+
+		if ( input8 ( ASCI_STAT0_REG ) & TX_REG_EMPTY )
+		{
+			output8 ( ASCI_TX0_REG, output_byte ) ;
+			break ;
+		}
+	}
+
+#elif defined( USB_MODEM )	// } {
+
+#if defined( DOWNLOAD_DEBUG_UART_FLASH )
+	//-----------------------------
+	// write to dumb debug port
+	//-----------------------------
+	fl_sendDumbChar( output_byte ) ;
+#else
+	//------------------------------
+	// write to ring buffer for USB
+	//------------------------------
+	*fl_dte_tx_wptr++ = output_byte ;
+
+	if ( fl_dte_tx_wptr >= fl_dte_tx_eptr )
+	{
+		fl_dte_tx_wptr = fl_dte_tx_sptr;
+	}
+#endif
+
+#else	// } ISA or PCMCIA {
+
+	//------------------------------
+	// write to MIMIC Data reg
+	//------------------------------
+	// wait to ensure that we do not
+	// overrun the buffer
+	//------------------------------
+	while ( input8( MIMIC_LSR ) & BIT0 )
+	{
+		fl_strobe_sanity() ;
+	}
+	output8( MIMIC_RBR, output_byte ) ;
+	output8( MIMIC_IUS, BIT7 ) ;	// clear interrupt source
+
+#endif	// }
+}
+
+/****************************************************************
+	Function : fl_put_str
+	Put a string of characters to the dte port
+*****************************************************************/
+non_banked
+void fl_put_str ( char *out_str )
+{
+	char	x;
+
+	while ( (x = *out_str++) != (char) 0 )
+		fl_put_char( x ) ;
+	if ( *(out_str-2) != '=' )
+	{
+		fl_put_char( CR );
+		fl_put_char( LF );
+	}
+
+}
+
+/****************************************************************
+	Function : fl_put_digit
+	Put a Hex digit to the dte port
+*****************************************************************/
+non_banked
+void fl_put_digit ( byte digit )
+{
+	if (digit < 10)
+	{
+		fl_put_char( digit + '0' );
+	}
+	else
+	{
+		fl_put_char( digit - 10 + 'A' );
+	}
+}
+
+#if defined( USB_MODEM )
+/****************************************************************
+	Function : fl_put_hex_byte
+	Put a Hex byte to the dte port
+
+	DON'T CHANGE EXISTING BOOT BLOCKS FOR THIS FUNCTION
+	---------------------------------------------------
+*****************************************************************/
+non_banked
+void fl_put_hex_byte ( byte number )
+{
+	//------------------------------------------------------
+	// this module cannot use any C Library fcns so avoid
+	// some usage of the >> construct as follows:
+	//------------------------------------------------------
+	fl_put_digit ( (byte)(((number & 0xf0) >> 2) >> 2) ) ;
+	fl_put_digit ( (byte)(number & 0x0F) );
+}
+#endif
+
+/****************************************************************
+	Function : fl_put_hex
+	Put a Hex word to the dte port
+*****************************************************************/
+non_banked
+void fl_put_hex ( word number )
+{
+	byte i;	// NOT USED BUT NOT REMOVED
+
+	//------------------------------------------------------
+	// this module cannot use any C Library fcns so avoid
+	// some usage of the >> construct as follows:
+	//------------------------------------------------------
+	fl_put_digit ( (byte)(((number >> 8) >> 2) >> 2) ) ;
+	fl_put_digit ( (byte)((number & 0xF00)>>8) );
+	fl_put_digit ( (byte)(((number & 0xf0) >> 2) >> 2) ) ;
+	fl_put_digit ( (byte)(number & 0x0F) );
+}
+
+/****************************************************************
+	Function : fl_atohex
+	convert ascii hex strings to decimal integer values
+*****************************************************************/
+non_banked
+byte fl_atohex ( byte string[] )
+{
+	byte i, j, hex_digit ;
+
+	j = 0 ;
+	for (i=0; i<2; i++)
+	{
+		hex_digit=string[i];
+		if ((hex_digit <= '9') && (hex_digit >= '0'))
+			hex_digit -= '0' ;
+		else if ((hex_digit <= 'F') && (hex_digit >= 'A'))
+			hex_digit = hex_digit + 10 -'A';
+		else  debug_put_str ( ">Digit Error" );
+
+		j *= 16;
+		j += hex_digit;
+	}
+	return (j) ;
+}
+
+/****************************************************************
+	Function : fl_init_hw
+	Warm start, called from fl_prog_flash()
+*****************************************************************/
+non_banked
+void fl_init_hw ( void )
+{
+	fl_strobe_sanity() ;
+
+	// stop all dma
+	output8( DSTAT, 0 ) ;
+
+#if defined( EXT_MODEM )	// {
+
+	// disable tx & rx on EASCI
+	output8 ( ASCI_STAT0_REG ,
+			input8 ( ASCI_STAT0_REG ) & ~(TX_INT_ENABLE | RX_INT_ENABLE) ) ;
+
+#elif defined( USB_MODEM )	// } {
+
+#if defined( DOWNLOAD_DEBUG_UART_FLASH )
+	fl_enableDumbPort() ;
+	fl_portInit = 0xab ;
+#else
+	//-----------------------------------
+	//	Initialize Atlas
+	//-----------------------------------
+	debug_put_str( ">usb hw init" ) ;
+	if( DEV_CONFIG() == MCCI_CONFIG )
+		output8( SCRATCH_USB,
+					(input8( SCRATCH_USB ) & 0x80) | STATE_BOOT_CNF1 ) ;
+	else if( DEV_CONFIG() == CDC_CONFIG )
+		output8( SCRATCH_USB,
+					(input8( SCRATCH_USB ) & 0x80) | STATE_BOOT_CNF2 ) ;
+	else	// this should never happen as we should be enumerated
+	{
+		debug_put_str( ">bad cnfg" ) ;
+		output8( SCRATCH_USB, (input8(SCRATCH_USB) & 0x80) | STATE_WAKELOW ) ;
+	}
+
+	fl_usb_init( TRUE ) ;
+
+	//-----------------------------------
+	//	Send first int response
+	//-----------------------------------
+	if( DEV_CONFIG() == MCCI_CONFIG )
+	{
+		output8( EPINDEX_USB, 4 ) ;
+		output8( TXDAT_USB, BIT6 ) ;
+		output8( TXCNTL_USB, 1 ) ;
+	}
+#endif
+
+#else	// } { ISA or PCMCIA
+
+	// clear interrupt source
+	output8 ( MIMIC_IUS, BIT7 ) ;
+
+#endif	// }
+
+	//-----------------------------------------
+	// assume we came from modem environment
+	// set up mmu for flash load
+	//-----------------------------------------
+	output8 ( CBAR,   0x84 ) ;
+	output8 ( BBR,    0x00 ) ;
+	output8 ( CBR,    0xF0 ) ;
+	output8 ( ROMBR,  0x8F ) ;
+	output8 ( RAMLBR, 0xF8 ) ;
+	output8 ( RAMUBR, 0xFF ) ;
+}
+
+/****************************************************************
+	Function : amd29f_get_id
+	This routine reads the manufacturer and device id from the
+	Flash EEPROM.  In order for this routine to succeed, it
+	must be uploaded, and executed from RAM (it cannot fetch
+	opcodes from the flash while it is trying to perform the
+	command sequence).
+*****************************************************************/
+non_banked
+word amd29f_get_id ( void )
+{
+	word Chip_ID;
+
+	debug_put_str( ">in amd29f_get_id" ) ;
+
+	//	Read the Chip Type
+	write_byte( ADR_5555, DATA_AA ) ;
+	write_byte( ADR_AAAA, DATA_55 ) ;
+	write_byte( ADR_5555, DATA_90 ) ;
+	Chip_ID =  read_word( 0 ) ;
+
+	//	Reset Chip for reading
+	write_byte( ADR_5555, DATA_AA ) ;
+	write_byte( ADR_AAAA, DATA_55 ) ;
+	write_byte( ADR_5555, DATA_F0 ) ;
+
+#if defined(EON_FLASH)
+	// EN29F040
+	if( Chip_ID == 0x7F7F )
+	{
+		//	Read the Chip Type
+		write_byte( ADR_5555, DATA_AA ) ;
+		write_byte( ADR_AAAA, DATA_55 ) ;
+		write_byte( ADR_5555, DATA_90 ) ;
+		Chip_ID =  read_word( 0x100 ) ;
+
+		//	Reset Chip for reading
+		write_byte( ADR_5555, DATA_AA ) ;
+		write_byte( ADR_AAAA, DATA_55 ) ;
+		write_byte( ADR_5555, DATA_F0 ) ;
+	}
+#endif // EON_FLASH
+
+	debug_put_str( ">out amd29f_get_id" ) ;
+
+	return Chip_ID ;
+}
+
+/****************************************************************
+	Function : amd29f_erase_sectors
+	This routine erases all but the first sector of the
+	Flash EEPROM.  In order for this routine to succeed, it
+	must be uploaded, and executed from RAM (it cannot fetch
+	opcodes from the flash while it is trying to perform the
+	command sequences).
+*****************************************************************/
+non_banked
+byte amd29f_erase_sectors ( void )
+{
+	byte data ;
+	byte erase_cnt ;
+	byte curbbr, nxtbbr ;
+	byte sectorIndex ;
+
+	debug_put_str( ">in amd29f_erase_sectors" ) ;
+
+	//-------------------------------------------
+	// save the current bank base register
+	//-------------------------------------------
+	curbbr = input8( BBR  ) ;
+
+#if defined( FL_ERASE )
+	//-------------------------------------------
+	// initialize pointer to first sector
+	//-------------------------------------------
+	sectorIndex = fl_bbr_tbl_ndx ;
+	nxtbbr = fl_sector_bbr_tbl[ sectorIndex ] ;
+
+	do
+	{
+		//------------------------------------------------------
+		//	point to next sector
+		//------------------------------------------------------
+		// we must also normalize the bbr (since the banked
+		// region starts at 0x4000, [or 16K], we must back an
+		// equivalent offset out of the new BBR value).
+		//------------------------------------------------------
+		output8( BBR, NS( nxtbbr ) ) ;
+
+		erase_cnt = 0 ;
+		while ( erase_cnt++ < 3 )
+		{
+			//-------------------------------------------
+			// input the two unlock cmds followed by
+			// the setup command
+			//-------------------------------------------
+			write_byte( ADR_5555, DATA_AA ) ;
+			write_byte( ADR_AAAA, DATA_55 ) ;
+			write_byte( ADR_5555, DATA_80 ) ;
+
+			//-------------------------------------------
+			// input the two unlock cmds followed by
+			// the sector erase command
+			//-------------------------------------------
+			write_byte( ADR_5555, DATA_AA ) ;
+			write_byte( ADR_AAAA, DATA_55 ) ;
+			write_byte( ADR_4000, DATA_30 ) ;
+
+			//-------------------------------------------
+			// wait for erase command to begin
+			//-------------------------------------------
+			// an arbitrailly large value for spin
+			// wait is chosen here to allow the
+			// embedded algorithm to start.  It's going
+			// to take a second or so for the erase to
+			// complete so no time is lost.
+			//-------------------------------------------
+			wait_usec( 1000 ) ;
+
+			//-------------------------------------------
+			// wait for erase command to complete
+			// by performing data polling.
+			//-------------------------------------------
+			while ( TRUE )
+			{
+				//-------------------------------------------
+				// data polling is done by reading
+				// data from any sector being erased.
+				// The erase cycle is over when the MSB
+				// (data bit 7) is set.
+				//-------------------------------------------
+				data = read_byte( ADR_4000 ) ;
+				if ( data & BIT7 )
+				{
+					//-----------------------------
+					// o.k. - goto next sector.
+					//-----------------------------
+					goto doNextSector ;
+				}
+
+				//-------------------------------------------
+				// data polling is also over (timed out)
+				// when bit 5 is set.
+				//-------------------------------------------
+				if ( data & BIT5 )
+				{
+					//-----------------------------------
+					// indications are that we timed out.
+					// check one last time (chip race
+					// condition)
+					//-----------------------------------
+					data = read_byte( ADR_4000 ) ;
+					if ( data & BIT7 )
+					{
+						//-----------------------------
+						// o.k. - goto next sector.
+						//-----------------------------
+						goto doNextSector ;
+					}
+
+					//--------------------------------
+					// we timed out waiting for this
+					// sector to erase - try again
+					//--------------------------------
+					break ;
+				}
+			}
+		}
+
+		//-----------------------------------------
+		// failed to erase a sector - we're toast
+		//-----------------------------------------
+		debug_put_str( ">FAILED to Erase a sector" ) ;
+		output8( BBR, curbbr ) ;
+		return FALSE ;
+
+doNextSector:
+		sectorIndex += NUM_COLUMNS ;
+		nxtbbr = fl_sector_bbr_tbl[ sectorIndex ] ;
+
+	} while ( nxtbbr != 0xff ) ;
+#else
+	//------------------------------------------
+	// Verify only!
+	//------------------------------------------
+	debug_put_str (">NOT Erasing - only verifying!");
+	{
+		int i;
+		for ( i=0; i<1000; i++ )
+		{
+			fl_strobe_sanity() ;
+			wait_usec ( 4000 ) ;
+		}
+	}
+
+#endif
+
+	debug_put_str( ">out amd29f_erase_sectors" ) ;
+	fl_set_bank( curbbr ) ;
+	return TRUE ;
+}
+
+/****************************************************************
+	Function : amd29f_program_byte
+
+	global args: ( word fl_logical_addr, byte fl_num )
+
+	In order for this routine to succeed, it must be uploaded, and
+	executed from RAM (it cannot fetch opcodes from the flash while
+	it is trying to perform the command sequences).
+*****************************************************************/
+non_banked
+byte amd29f_program_byte ( void )
+{
+	byte ret_char;
+	byte data;
+	byte cntr;
+
+#if !defined( FL_ERASE )
+	static byte first_char ;
+
+	// debug only - simply compare
+	if ( fl_num != read_byte( fl_logical_addr ) )
+	{
+		debug_put_str( ">29: Mismatch in Bytes - Address=" ) ;
+		debug_put_hex( fl_logical_addr ) ;
+		debug_put_char( CR ); debug_put_char( LF );
+		debug_put_str( "; >Char in =" ) ;
+		debug_put_hex( (word)fl_num ) ;
+		debug_put_str( "; Char read =" ) ;
+		debug_put_hex( (word)read_byte( fl_logical_addr ) ) ;
+		debug_put_char( CR ); debug_put_char( LF );
+		return FALSE;
+	}
+
+	if ( first_char != 2 )
+	{
+		debug_put_str( ">Char in =" ) ;
+		debug_put_hex( (word)fl_num ) ;
+		debug_put_char( CR ); debug_put_char( LF );
+		first_char++ ;
+	}
+
+	return TRUE ;
+
+#else
+
+	for ( cntr=0; cntr<=3; cntr++ )
+	{
+		//	program to write a byte
+		write_byte( ADR_5555, DATA_AA );
+		write_byte( ADR_AAAA, DATA_55 );
+		write_byte( ADR_5555, DATA_A0 );
+
+		write_byte( fl_logical_addr, fl_num );
+
+		while ( TRUE )
+		{
+			data = read_byte( fl_logical_addr );
+			if ( (data & BIT7) == (fl_num & BIT7) )
+			{
+				 return TRUE;
+			}
+
+			if ( data & BIT5 )
+			{
+				if ( (data & BIT7) != (fl_num & BIT7) )
+				{
+					break;
+				}
+			}
+		}
+	}
+	debug_put_str ( ">29: Device Failed to Program" ) ;
+	return FALSE ;
+#endif
+}
+
+/****************************************************************
+	Function : fl_reset_modem
+*****************************************************************/
+non_banked
+void fl_reset_modem ( void )
+{
+
+#if defined( USB_MODEM )	// {
+
+	{
+		word i ;
+		non_banked void fl_USB_ir ( void ) ;
+
+		for ( i=1; i; i++ )
+		{
+
+			fl_USB_ir() ;
+			fl_strobe_sanity() ;
+			fl_usb_periodic() ;
+			wait_usec( 1 ) ;
+		}
+	}
+
+	//---------------------------------------------------
+	// Set Enumerated Configuration state in ATLAS.
+	//---------------------------------------------------
+	if( DEV_CONFIG() == MCCI_CONFIG )
+		output8( SCRATCH_USB, (input8( SCRATCH_USB ) & 0x80) | STATE_C1_WAKEHIGH ) ;
+	else if( DEV_CONFIG() == CDC_CONFIG )
+		output8( SCRATCH_USB, (input8( SCRATCH_USB ) & 0x80) | STATE_C2_WAKEHIGH ) ;
+	else
+		output8( SCRATCH_USB, (input8( SCRATCH_USB ) & 0x80) | STATE_LOWPOWER ) ;
+
+
+	//----------------------------------
+	// All done. enable sanity timer
+	// and wait for the hammer to fall.
+	//----------------------------------
+	output8( 0xda, 0x02 ) ;
+	output8( 0xdb, 0xe5 ) ;
+
+
+#else	// } {
+
+	wait_usec( 20000 ) ;
+
+	//----------------------------------
+	// All done. enable sanity timer
+	// and wait for the hammer to fall.
+	//----------------------------------
+	output8( 0xda, 0x1f ) ;
+	output8( 0xdb, 0xe5 ) ;
+
+#endif	// }
+
+	while ( TRUE )
+		;
+}
+
+/****************************************************************
+	Function : fl_identify_chip
+*****************************************************************/
+non_banked
+void fl_identify_chip ( void )
+{
+	debug_put_str( ">in fl_identify_chip" ) ;
+
+	//-------------------------------------
+	// get chip type via the RAM resident
+	// amd29f_get_id() C fcn
+	//-------------------------------------
+	fl_device_type = fl_getDeviceID() ;
+
+	// initialize the sector addresses (fl_sector_address[])
+	switch ( fl_device_type )
+	{
+		case AMD29F002B :
+			debug_put_str( ">AMD29F002B" ) ;
+			fl_bbr_tbl_ndx = 0 ;
+			break ;
+
+		case AMD29F002T :
+			debug_put_str( ">AMD29F002T" ) ;
+			fl_bbr_tbl_ndx = 1 ;
+			break ;
+
+		case AMD29F400B :
+			debug_put_str( ">AMD29400B" ) ;
+			fl_bbr_tbl_ndx = 2 ;
+			break ;
+
+		case AMD29F040 :
+			debug_put_str( ">AMD29040" ) ;
+			fl_bbr_tbl_ndx = 3 ;
+			break ;
+
+		default :
+
+#if defined(EON_FLASH)
+		if( fl_device_type == EN29F040 )	// check for Eon device
+		{
+			debug_put_str( ">EN29F040" ) ;
+			fl_bbr_tbl_ndx = 3 ;
+			break ;
+		}
+#endif
+#ifdef USB_MODEM
+			// jmg 021799 - add support for 3V 4Meg parts.
+			// This is #define'd to avoid changing the boot block for
+			// products which do not use LV parts.
+		if( AMD29LV040 == fl_device_type || AT49LV040 == fl_device_type 
+		  || SST39VF040 == fl_device_type )
+		{
+			debug_put_str( ">29LV040" ) ;
+			fl_bbr_tbl_ndx = 3 ;		// use 29x040 sector map
+		}
+		else
+#endif
+#if defined(ATMEL)
+			// currently, Atmel is only supported in 2M versions, so
+			// all Atmel devices use the same index table.
+		if( (fl_device_type & 0x00FF) == 0x001F )	// check for Atmel device
+		{
+			debug_put_str( ">ATMEL49xxxx" ) ;
+			fl_bbr_tbl_ndx = 0 ;
+		}
+		else
+#endif
+		{
+			debug_put_str( ">Unknown Chip Type=" ) ;
+			debug_put_hex( fl_device_type ) ;
+			debug_put_char( CR ); debug_put_char( LF );
+
+			fl_reset_modem() ;
+		}
+	} // switch
+
+	debug_put_str( ">out fl_identify_chip" ) ;
+} // fl_identify_chip()
+
+/****************************************************************
+	Function : fl_calc_chksum
+	Calculate the checksum over the "entire load".  This does
+	not include sector 0 (boot block) or the first two bytes
+	of sector 1 (the stored checksum).  It also does not
+	necessarily include the entire Flash EEPROM. The length of
+	the load (rounded up to the next mod 16 value) divided by
+	16, or the "last paragraph" of the load is also stored in
+	sector 1 at offset 0x4002.
+
+	Both the checksum and the length of the load are placed
+	in sector one by the z80s2int utility.
+
+	One other subtle point that is repeated over and over
+	in this file:  to use the MMU to read the EEPROM you must
+	be in the banked area.  In the Flash ROM code, this is
+	located between 0x4000 to 0x7FFF (CBAR=84).
+	So to read an actual physical address the BBR value is
+	adjusted down by 0x4000 (or 4) and the offset is increased
+	by 0x4000.  When you understand the above completely, then
+	you are an MMU expert on Zinger (and you can explain it to me).
+*****************************************************************/
+non_banked
+BOOL fl_calc_chksum( void )
+{
+	word checksum, strdchecksum ;
+	word len, para, lstpara ;
+	byte curbbr, bbr, lstbbr ;
+	byte *ptr;
+
+	debug_put_str( ">in fl_calc_chksum" ) ;
+
+	fl_strobe_sanity() ;
+
+	//------------------------------------------------
+	// save current BBR
+	//------------------------------------------------
+	curbbr = input8( BBR ) ;
+
+	//------------------------------------------------
+	// get starting BBR, stored checksum and code
+	// length. length is in (16 byte) paragraphs.
+	// The checksum value and the size of the load
+	// (the last paragraph) are in the shared area in
+	// sector 1. The BBR is from fl_sector_bbr_tbl[].
+	// Note: we "normalize" (subtract 4 from) the BBR
+	// since we must add an offset of 0x4000 to access
+	// the banked region of ROM.
+	//------------------------------------------------
+	bbr = NS(fl_sector_bbr_tbl[ fl_bbr_tbl_ndx ]);
+	output8( BBR, bbr ) ;
+	strdchecksum = *((word *)0x4000) ;
+	lstpara   = *((word *)0x4002) ;
+	para   = *((word *)0x4006) ;
+
+	debug_put_str( "; lstpara =" ) ; debug_put_hex( lstpara ) ;
+	debug_put_str( "; flag =" ) ; debug_put_hex( para ) ;
+	debug_put_char( CR ); debug_put_char( LF );
+
+	//---------------------------------------------------------
+	// sanity check stored parameters
+	//---------------------------------------------------------
+	if ( para != 0x1234 )
+	{
+		debug_put_str( ">out fl_calc_chksum - Bad Sector1 table" ) ;
+		return FALSE ;
+	}
+
+	//-------------------------------------------------
+	// Initialize the current paragrapth var.
+	//	para = ((sector1 BBR * 4096) + 16384)/16 or
+	//	para = sector1 BBR * 256 + 1024
+	//-------------------------------------------------
+	para = (bbr * 0x100) + 0x400 ;
+
+	//-------------------------------------------------
+	// Initialize loop vars.
+	//-------------------------------------------------
+	checksum = 0 ;
+	len = 0x3ffe ;
+	ptr = (byte *)0x4002 ;
+
+	//------------------------------------------------
+	// calculate checksum of Flash EEPROM.
+	// (sector 1 thru end of load)
+	//------------------------------------------------
+	do
+	{
+		if ( (para + 0x400) > lstpara )
+		{
+			//--------------------------------------------
+			// calculate len of last bank
+			//--------------------------------------------
+			len = (lstpara - para) * 16 ;
+			if ( !len ) break ;
+		}
+
+		fl_strobe_sanity() ;
+
+		checksum += z80_bankcheck( bbr, len, (word)ptr ) ;
+
+		ptr = (byte *)0x4000 ;
+		len = 0x4000 ;
+		para += 0x400 ;
+		bbr += 4 ;
+
+	} while ( para <= lstpara ) ;
+
+	debug_put_str( "> Calc chksum =" ) ; debug_put_hex( checksum ) ;
+	debug_put_str( "; stored chksum =" ) ; debug_put_hex( strdchecksum ) ;
+	debug_put_char( CR ); debug_put_char( LF );
+
+	// restore original BBR
+	output8( BBR, curbbr ) ;
+
+#if defined( EMULATION ) || defined( ROM_DEBUG )
+	debug_put_str( ">fl_calc_chksum - Simulate passed" ) ;
+#else
+	if ( checksum != strdchecksum )
+	{
+		debug_put_str( ">out1 fl_calc_chksum - failed" ) ;
+		return FALSE ;
+	}
+	debug_put_str( ">out fl_calc_chksum - passed" ) ;
+#endif
+	return TRUE ;
+}
+
+/****************************************************************
+	Function : fl_get_nxtCh();
+	get char and convert to upper case if it is alphabetic
+*****************************************************************/
+non_banked
+void fl_get_nxtCh( void )
+{
+	fl_dte_char = fl_get_char() ;
+	fl_put_char( fl_dte_char ) ;
+	if ( fl_dte_char & 0x40 )
+	{
+		fl_dte_char &= 0x5f ;
+	}
+}
+
+/****************************************************************
+	Function : fl_get_cmd
+	Primitive command parser for Flash Loader
+	Allows autobauding for serial modem.
+	current commands supported are AT, ATI, at&&f
+	and AT&&Fgo.
+*****************************************************************/
+non_banked
+AT_COMMANDS fl_get_cmd( void )
+{
+	byte i ;
+	AT_COMMANDS returnCode ;
+
+#if defined( EXT_MODEM )
+	fl_start_autobaud() ;
+#elif !defined( USB_MODEM )
+	fl_mimic_regs() ;
+#endif
+
+	debug_put_char( '+' ); 
+
+	// get char and convert to upper case
+	fl_get_nxtCh();
+
+	// test for an 'A'
+	if ( fl_dte_char != 'A' )
+	{
+		return NO_CMD ;
+	}
+
+	//---------------------------------------
+	// GOT A...
+	//---------------------------------------
+get_a_T:
+	fl_get_nxtCh();
+	if ( fl_dte_char != 'T' )
+	{
+		// test for an 'A'
+		if ( fl_dte_char == 'A' )
+		{
+			goto get_a_T ;
+		}
+		return NO_CMD ;
+	}
+
+	//---------------------------------------
+	// GOT AT..
+	//---------------------------------------
+	fl_get_nxtCh();
+	if ( fl_dte_char == CR )
+	{
+		return AT_CMD ;
+	}
+	else if ( fl_dte_char == 'G' )
+	{
+		//---------------------------------------
+		// GOT ATG...
+		//---------------------------------------
+		fl_get_nxtCh();
+		if ( fl_dte_char != 'O' )
+		{
+			returnCode = BAD_CMD ;
+			goto returnBADcmd ;
+		}
+
+		//---------------------------------------
+		// GOT ATGO...
+		//---------------------------------------
+		fl_get_nxtCh();
+		if ( fl_dte_char == CR )
+		{
+			return ATGO_CMD ;
+		}
+		returnCode = BAD_CMD ;
+		goto returnBADcmd ;
+	}
+	else if ( fl_dte_char == 'F' )
+	{
+		//---------------------------------------
+		// GOT ATF...
+		//---------------------------------------
+		fl_get_nxtCh();
+		if ( fl_dte_char != 'L' )
+		{
+			returnCode = BAD_CMD ;
+			goto returnBADcmd ;
+		}
+
+		//---------------------------------------
+		// GOT ATFL...
+		//---------------------------------------
+		fl_get_nxtCh();
+		if ( fl_dte_char == CR )
+		{
+			return ATFL_CMD ;
+		}
+		returnCode = BAD_CMD ;
+		goto returnBADcmd ;
+	}
+	else if ( fl_dte_char == 'I' )
+	{
+		//---------------------------------------
+		// GOT ATI...
+		//---------------------------------------
+		fl_get_nxtCh();
+		if ( fl_dte_char == CR )
+		{
+			return ATI_CMD ;
+		}
+		if ( fl_dte_char == '5' )
+		{
+			//---------------------------------------
+			// GOT ATI5...
+			//---------------------------------------
+			fl_get_nxtCh();
+			if ( fl_dte_char == CR )
+			{
+				return ATI5_CMD ;
+			}
+			returnCode = BAD_CMD ;
+			goto returnBADcmd ;
+		}
+	}
+	else if ( fl_dte_char == 'R' )
+	{
+		//---------------------------------------
+		// GOT ATR...
+		//---------------------------------------
+		fl_get_nxtCh();
+		if ( fl_dte_char == CR )
+		{
+			return AT_RAMFAIL ;
+		}
+		returnCode = BAD_CMD ;
+		goto returnBADcmd ;
+	}
+	else if ( fl_dte_char == '&' )
+	{
+		//---------------------------------------
+		// GOT AT&...
+		//---------------------------------------
+		fl_get_nxtCh();
+		if ( fl_dte_char != '&' )
+		{
+			returnCode = BAD_CMD ;
+			goto returnBADcmd ;
+		}
+
+		//---------------------------------------
+		// GOT AT&&...
+		//---------------------------------------
+		fl_get_nxtCh();
+		if ( fl_dte_char != 'F' )
+		{
+			returnCode = BAD_CMD ;
+			goto returnBADcmd ;
+		}
+
+		//---------------------------------------
+		// GOT AT&&F...
+		//---------------------------------------
+		fl_get_nxtCh();
+#if defined(RAW_FLASHER)
+		if ( fl_dte_char=='R' ) // AT&&FR
+		{
+			fl_get_nxtCh();
+			if ( fl_dte_char=='A' ) // AT&&FRA
+			{
+				fl_get_nxtCh();
+				if ( fl_dte_char=='W' ) fl_raw_prog();// AT&&FRAW
+			}
+			returnCode = BAD_CMD ;
+			goto returnBADcmd ;
+		}
+#endif
+		if ( fl_dte_char == CR )
+		{
+			return AT_and_and_F_CMD ;
+		}
+		else if ( fl_dte_char == ':' )
+		{
+			//---------------------------------------
+			// GOT AT&&F:...
+			//---------------------------------------
+			// USING OLD LOADER - look for last
+			// record (looking for :00000001FF).
+			//---------------------------------------
+			for ( i=0; i<7; i++ )
+			{
+				fl_get_nxtCh();
+				if ( fl_dte_char != '0' )
+				{
+					//----------------------------------------------
+					// using old loader - NOT end of file record
+					// throw away the rest of line
+					//----------------------------------------------
+					returnCode = AT_and_and_F_CMD ;
+					goto returnATFcmd ;
+				}
+			}
+
+			//---------------------------------------
+			// GOT AT&&F:0000000...
+			//---------------------------------------
+			fl_get_nxtCh();
+			if ( fl_dte_char != '1' )
+			{
+				// using old loader - throw away the rest of line
+				returnCode = AT_and_and_F_CMD ;
+				goto returnATFcmd ;
+			}
+
+			//---------------------------------------
+			// GOT AT&&F:00000001...
+			//---------------------------------------
+			fl_get_nxtCh();
+			if ( fl_dte_char != 'F' )
+			{
+				// using old loader - throw away the rest of line
+				returnCode = AT_and_and_F_CMD ;
+				goto returnATFcmd ;
+			}
+
+			//---------------------------------------
+			// GOT AT&&F:00000001F...
+			//---------------------------------------
+			fl_get_nxtCh();
+			if ( fl_dte_char != 'F' )
+			{
+				// using old loader - throw away the rest of line
+				returnCode = AT_and_and_F_CMD ;
+				goto returnATFcmd ;
+			}
+
+			//---------------------------------------
+			// GOT AT&&F:00000001FF...
+			//---------------------------------------
+			fl_get_nxtCh();
+			if ( fl_dte_char == CR )
+			{
+				//---------------------------------------
+				// GOT END OF FILE RECORD
+				//---------------------------------------
+				return AT_and_and_Fgo_CMD ;
+			}
+		}
+		else if ( fl_dte_char != 'G' )
+		{
+			returnCode = BAD_CMD ;
+			goto returnBADcmd ;
+		}
+
+		//---------------------------------------
+		// GOT AT&&FG...
+		//---------------------------------------
+		fl_get_nxtCh();
+		if ( fl_dte_char != 'O' )
+		{
+			returnCode = BAD_CMD ;
+			goto returnBADcmd ;
+		}
+
+		//---------------------------------------
+		// GOT AT&&FGO...
+		//---------------------------------------
+		fl_get_nxtCh();
+		if ( fl_dte_char != CR )
+		{
+			returnCode = BAD_CMD ;
+			goto returnBADcmd ;
+		}
+
+		// GOT AT&&FGO command
+		return AT_and_and_Fgo_CMD ;
+	}
+
+returnATFcmd:
+returnBADcmd:
+	do {
+		fl_get_nxtCh();
+	} while ( fl_dte_char != CR ) ;
+
+	return returnCode ;
+}
+
+/****************************************************************
+	Function : fl_init_hardware
+	Cold start, initialize modem DTE interface
+*****************************************************************/
+non_banked
+void fl_init_hardware ( void )
+{
+	fl_strobe_sanity() ;
+
+#if defined( EXT_MODEM )	// {
+
+	//-----------------------------------
+	//	Initialize EASCI
+	//-----------------------------------
+
+			// reset Rx channel
+	output8( ASCI_CTLA0_REG, 0 ) ;
+
+			// clear the BRG...
+	output8( ASCI_TCLO_REG, 0 ) ;
+	output8( ASCI_TCHI_REG, 0 ) ;
+
+			// select clock source and speed select
+			// (not necessary for VENUS)
+	output8( ASCI_CTLB0_REG, 0 ) ;
+
+			// enable break detection & internal clock;
+			// disable auto tx/rx enable
+			// select divide by 1 mode for VENUS
+	output8( ASCI_XCR0_REG, BRK_ENABLE | BRG0_MODE
+				 | CTS0_DISABLE | DCD0_DISABLE | X1_BIT_CLK ) ;
+
+			// enable tx & rx & CTS (active low) to DTE
+			//  (as in the ESCC, our RTS is wired to the DTE CTS)
+			// clear any errors in rx (frame or overrun)
+			// setup mode = 8 data + 1 stop (no parity)
+	output8( ASCI_CTLA0_REG, TX_ENABLE | RX_ENABLE | MOD_2 ) ;
+
+			// clear autobaud enable.
+	output8( A0NEWCTL , 0 ) ;
+
+			// Enable DSP - allow time for DSP to initialize the
+			// CAMILZ register set then we will set them the way
+			// we want them below.
+	DP_REGWRITE(0xde, 0x50);	// Enable DSP
+
+			// disable all interrupts on camil
+	DP_REGWRITE( 0xd7, 0xff ) ;
+	DP_REGWRITE( 0xd8, 0xff ) ;
+
+			// Now set up CAMILZ registers.
+	DP_REGWRITE( 0xca, 0x00 ) ;		// disable host pc access to MIMIC (MCAD)
+									// and DIA (for DSP access)
+	DP_REGWRITE( 0xda, 0x16 ) ;		// call progress through SIO and
+									// IOCS2 for Serial Dumb Terminal
+	DP_REGWRITE( 0xc0, 02 ) ;		// enable SERIAL Scenario
+	DP_REGWRITE( 0xdf, 1 ) ;		// enable pin master
+
+#elif defined( USB_MODEM )	// } {
+
+#if defined( DOWNLOAD_DEBUG_UART_FLASH )
+	//-----------------------------------
+	//	Initialize Dumb Terminnal
+	//-----------------------------------
+	fl_enableDumbPort() ;
+	fl_portInit = 0xab ;
+#else
+	//-----------------------------------
+	//	Initialize Atlas
+	//-----------------------------------
+	debug_put_str( ">USB cold start" ) ;
+
+	if( DEV_CONFIG() == MCCI_CONFIG )
+		output8( SCRATCH_USB,
+			(input8( SCRATCH_USB ) & 0x80) | STATE_BOOT_CNF1 ) ;
+	else if( DEV_CONFIG() == CDC_CONFIG )
+		output8( SCRATCH_USB,
+			(input8( SCRATCH_USB ) & 0x80) | STATE_BOOT_CNF2 ) ;
+	else
+		output8( SCRATCH_USB,
+			(input8( SCRATCH_USB ) & 0x80) | STATE_POWERUP ) ;
+
+	fl_usb_init( TRUE ) ;
+
+	//-----------------------------------
+	//	Send first int response
+	//-----------------------------------
+	if( DEV_CONFIG() == MCCI_CONFIG )
+	{
+		output8( EPINDEX_USB, 4 ) ;
+		output8( TXDAT_USB, BIT6 ) ;
+		output8( TXCNTL_USB, 1 ) ;
+	}
+
+	//------------------------------------
+	// Turn on Green LED after Enumeration
+	//------------------------------------
+	DP_REGWRITE( 0xB8, BIT7 ) ;
+	DP_REGWRITE( 0xB9, 0 ) ;
+#endif
+
+#else	// } {
+
+	//-----------------------------------
+	//	Initialize MIMIC
+	//-----------------------------------
+
+	// Set Baud Rate Generator for VENUS
+	output8( BRGL, 0x08 ) ;		// 	time constant low
+	output8( BRGH, 0x00 ) ;		// 	time constant high
+
+	// enable baud rate generator
+	output8( IOBRG, 0x01 ) ;
+
+	// initialize UART MIMIC registers
+	output8( MIMIC_MMC,  BIT0 ) ;
+	output8( MIMIC_IVEC, 0x00 ) ;	// interrupt vector register
+	output8( MIMIC_TTCR, 0x05 ) ;	// this works better than
+	output8( MIMIC_RTCR, 0x05 ) ;	// dolphin value for VENUS
+	output8( MIMIC_TTTC, 0x20 ) ;	// tx timeout timer
+	output8( MIMIC_RTTC, 0x20 ) ;	// rx timeout timer
+	output8( MIMIC_FSCR, 0x20 ) ;	// fifo status and control register
+	output8( MIMIC_IUS,  0x80 ) ;	// clear interrupt source
+	output8( MIMIC_MSR,  0x30 ) ;	// modem status reg - set DSR & CTS
+	output8( MIMIC_MMC,
+			(BIT0|BIT7|BIT6) ) ;	// MMC register - enable timers
+	output8( MIMIC_IE,  0x00 ) ;	// interrupt enable register
+	output8( MIMIC_IUS, 0x80 ) ;	// clear interrupt source
+	output8( MIMIC_IE, MIMIC_THR_ENABLE | MIMIC_RBR_ENABLE ) ;
+
+#if defined( PCMCIA_MODEM )
+		//	Set the scenario bits in the MMI Cntrl Register
+	DP_REGWRITE( 0xc0, 0x01 ) ;
+		// Set READY to host
+	DP_REGWRITE( 0x57, 0x01 ) ;
+#else	// ISA
+	DP_REGWRITE( 0xCA, 0x41 );		// enable host pc access to MIMIC (MCAD)
+									// and DIA (for DSP access)
+	DP_REGWRITE( 0xC3, 0xE8 );		// MCAD COM3 port decode (lower byte)
+	DP_REGWRITE( 0xC4, 0x03 );		// MCAD COM3 port decode (upper byte)
+	DP_REGWRITE( 0xCC, 0x0C );		// Assign MIMIC Irq A=4
+	DP_REGWRITE( 0xD6, 0x0E );		// IRQ A Driven always
+
+	DP_REGWRITE( 0xc0, 0x00 );		// ISA scenario & no eye pattern junk
+#endif	// ISA/PCMCIA
+
+	DP_REGWRITE( 0xD7, 0xFF );
+	DP_REGWRITE( 0xD8, 0xFF );
+
+#if defined(TQFP128) 
+	{
+		// Mod from Shawn Antol 2/17/2000.
+		// Enable weak pulldowns on A12-A15 which are not bonded out
+		// on 128pin package.
+		byte regDA = DP_REGREAD(0xDA);
+		DP_REGWRITE(0xDA, regDA | 0x08);
+	}
+#endif
+
+#endif	// }
+}
+
+#if defined( PCMCIA_MODEM )
+/****************************************************************
+	Function : fl_cis_load
+	Copies Card Information Structure from ROM to Attribute
+	Memory (RAM).
+*****************************************************************/
+non_banked
+void fl_cis_load ( void )
+{
+	byte *CisFrmp ;
+	byte *CisTop ;
+	word CisCnt ;
+	extern word FL_CIS_LEN ;
+	extern byte FL_CIS_BEGIN[];
+	extern byte CIS_DATA[] ;
+
+	CisCnt = FL_CIS_LEN ;
+	CisFrmp = FL_CIS_BEGIN ;
+	CisTop  = CIS_DATA ;
+
+	debug_put_str( ">CisCnt=" ) ;
+	debug_put_hex( CisCnt ) ;
+	debug_put_char( CR ); debug_put_char( LF );
+
+	fl_strobe_sanity() ;
+
+	//-------------------------------------------------
+	// Copy the entire CIS from ROM to Attribute Memory
+	//-------------------------------------------------
+	while ( CisCnt-- )
+	{
+		*CisTop = *CisFrmp++ ;
+		CisTop += 2 ;
+	}
+	fl_last_mimic_cor = 0 ;
+}
+
+/****************************************************************
+	Function : fl_COR_update
+	Device Configuration Option Register has been updated
+*****************************************************************/
+non_banked
+void fl_COR_update ( byte device, byte cor )
+{
+	byte index ;
+	byte prr ;
+	word baddr ;
+	extern word	MIMIC_B1F ;
+	extern word	MIMIC_B2F ;
+	extern word	MIMIC_B3F ;
+	extern word	MIMIC_B4F ;
+
+	debug_put_str( ">COR=" ) ;
+	debug_put_hex( (word)cor ) ;
+	debug_put_char( CR ); debug_put_char( LF );
+
+	// was it a device reset?
+	if ( cor & COR_SRESET_BIT )
+	{
+		// Yes - device has been reset!!
+		// wait for host to clear this bit..
+		debug_put_str( ">COR RESET\n\r" ) ;
+
+		wait_usec( 50000 ) ;
+
+		cor = CAMILZ_REGREAD( device ) ;
+		// ..and pull the plug
+		// reset VENUS - NOT device!!!
+		DP_REGWRITE( 0x57, 2 ) ;
+		// should not get here
+	}
+
+	// get the index to the CIS config table entry and
+	// program the I/O Base address.
+	index = (cor & COR_INDEX_BITS) >> 3 ;
+
+	debug_put_str( ">index=" ) ;
+	debug_put_hex( (word)index ) ;
+	debug_put_char( CR ); debug_put_char( LF );
+
+	if ( index == 1 )
+	{
+		baddr = MIMIC_B1F ;
+		debug_put_str( ">MIMICB1F=" ) ;
+		debug_put_hex( MIMIC_B1F ) ;
+		debug_put_char( CR ); debug_put_char( LF );
+	}
+	if ( index == 2 )
+	{
+		baddr = MIMIC_B2F ;
+		debug_put_str( ">MIMICB2F=" ) ;
+		debug_put_hex( MIMIC_B2F ) ;
+		debug_put_char( CR ); debug_put_char( LF );
+	}
+	if ( index == 3 )
+	{
+		baddr = MIMIC_B3F ;
+		debug_put_str( ">MIMICB3F=" ) ;
+		debug_put_hex( MIMIC_B3F ) ;
+		debug_put_char( CR ); debug_put_char( LF );
+	}
+	if ( index == 4 )
+	{
+		baddr = MIMIC_B4F ;
+		debug_put_str( ">MIMICB4F=" ) ;
+		debug_put_hex( MIMIC_B4F ) ;
+		debug_put_char( CR ); debug_put_char( LF );
+	}
+
+	DP_REGWRITE( 0xC3, (byte)baddr ) ;
+	DP_REGWRITE( 0xC4, (byte)(baddr >> 8) ) ;
+}
+
+/****************************************************************
+	Function : fl_attribmem_write
+		Process the host Attribute Memory (FCRs and CIS) writes.
+*****************************************************************/
+non_banked
+void fl_attribmem_write( void )
+{
+	byte camilreg, device ;
+
+	// check the MIMIC COR
+	camilreg = DP_REGREAD( 0x40 ) ;
+	if ( fl_last_mimic_cor != camilreg )
+	{
+		fl_COR_update( 0x40, camilreg ) ;
+		fl_last_mimic_cor = camilreg ;
+	}
+}
+#endif
+
+/****************************************************************
+	Function : fl_cmd_dispatch
+	Called by ROM resident Flash Loader if modem application
+	has bad checksum or called by modem application (through a
+	jump table) for debug.  If called by task, a flag is also
+	passed to indicate that the DTE interface is stable.
+	Fl_cmd_dispatch() is responsible for initializing the interface
+	to the DTE and accepting a mimimum number of AT commands
+	(enough to go load a new version of the EEPROM code).
+	Typical commands are AT, ATI, AT&&F and a new one, AT&&FGO.
+*****************************************************************/
+non_banked
+void fl_cmd_dispatch( word appFlag )
+{
+	AT_COMMANDS cmd ;
+	extern non_banked void fl_prog_flash( void ) ;
+	extern non_banked void fl_ramFailure ( void ) ;
+
+	debug_put_str( ">in fl_cmd_dispatch" ) ;
+
+	if ( appFlag != 0x1234 )
+	{
+		debug_put_str( ">init hw" ) ;
+		//-------------------------------------------
+		// Cold start, initialize modem DTE interface
+		//-------------------------------------------
+		fl_init_hardware() ;
+
+#if defined( PCMCIA_MODEM )
+		//-------------------------------------------
+		// download Card information Structure
+		//-------------------------------------------
+		debug_put_str( ">CIS init" ) ;
+		fl_cis_load() ;
+		debug_put_str( ">DONE CIS init" ) ;
+#endif
+	}
+	else
+	{
+		debug_put_str( ">CD: warm start" ) ;
+
+#if defined( USB_MODEM )	// {
+
+#if defined( DOWNLOAD_DEBUG_UART_FLASH )
+		//-----------------------------------
+		//	Initialize Dumb Terminnal
+		//-----------------------------------
+		disable_interrupt() ;
+		fl_enableDumbPort() ;
+		fl_portInit = 0xab ;
+#else
+		//-----------------------------------
+		//	Initialize Atlas
+		//-----------------------------------
+		debug_put_str( ">usb init" ) ;
+
+		if( DEV_CONFIG() == MCCI_CONFIG )
+			output8( SCRATCH_USB,
+					(input8( SCRATCH_USB ) & 0x80) | STATE_BOOT_CNF1 ) ;
+		else if( DEV_CONFIG() == CDC_CONFIG )
+			output8( SCRATCH_USB,
+					(input8( SCRATCH_USB ) & 0x80) | STATE_BOOT_CNF2 ) ;
+		else
+			output8( SCRATCH_USB,
+					(input8( SCRATCH_USB ) & 0x80) | STATE_LOWPOWER ) ;
+
+		fl_usb_init( TRUE ) ;
+
+		//-----------------------------------
+		//	Send first int response
+		//-----------------------------------
+		if( DEV_CONFIG() == MCCI_CONFIG )
+		{
+			output8( EPINDEX_USB, 4 ) ;
+			output8( TXDAT_USB, BIT6 ) ;
+			output8( TXCNTL_USB, 1 ) ;
+		}
+#endif
+
+#elif defined( PCMCIA_MODEM )	// } {
+
+		//-------------------------------------------
+		// take a snapshot of the MIMIC FCR register
+		//-------------------------------------------
+		fl_last_mimic_cor = DP_REGREAD( 0x40 ) ;
+
+#endif	// }
+
+		fl_put_str ( "\r\nOK" );
+	}
+
+	fl_InCmdMode = TRUE ;
+
+	//-----------------------------------------
+	// Primitive command dispatcher
+	//-----------------------------------------
+	while ( TRUE )
+	{
+#if defined( PCMCIA_MODEM )
+		// process any host attribute memory writes
+		fl_attribmem_write() ;
+#endif
+
+		// get next command
+		cmd = fl_get_cmd() ;
+
+		//---------------------------------------
+		// DO NOT USE A SWITCH STATEMENT HERE
+		// WE MUST AVOID USING THE C lIBRARY.
+		//---------------------------------------
+		if ( cmd != NO_CMD )
+		{
+			if ( cmd == AT_and_and_Fgo_CMD )
+			{
+				debug_put_str( ">CD: go program flash" ) ;
+				fl_prog_flash() ;
+			}
+			if ( cmd == AT_RAMFAIL )
+			{
+				debug_put_str( ">CD: ram failure test " ) ;
+				fl_ramFailure() ;
+				debug_put_str( ">CD: END RAM FAILURE TEST " ) ;
+			}
+			else if ( cmd == ATGO_CMD )
+			{
+				fl_put_str ( "\r\nStart modem program\r\nOK" );
+
+				//------------------------------------------
+				// set flag in common area for cstrtser.asm
+				// and perform a hard reset.
+				//------------------------------------------
+				*((word *)0xCC00) = 0x1234 ;
+				fl_reset_modem() ;
+			}
+			else if ( cmd == ATFL_CMD )
+			{
+				fl_put_str ( "\r\nReStart RRFL\r\nOK" );
+
+				//------------------------------------------
+				// set flag in common area for cstartup
+				// and perform a hard reset.
+				//------------------------------------------
+				*((word *)0xCC00) = 0x4321 ;
+				fl_reset_modem() ;
+			}
+			else if ( cmd == ATI_CMD )
+			{
+				fl_put_str ( "\r\n" );
+				fl_put_str ( FLASH_VERSION ) ;
+				fl_put_str ( "\r\nOK" );
+			}
+			else if ( cmd == ATI5_CMD )
+			{
+				byte i, val, buff[40], *ptr ;
+				word chksum ;
+				extern word fl_chksum ;
+
+				buff[0] = CR ; buff[1] = LF;
+				ptr = FL_VERSION_STR ;
+				for ( i=2; *ptr; i++ )
+				{
+					buff[i] = *ptr++;
+				}
+				buff[i] = ',' ;
+#if ROM_FLASH == 16
+				buff[i+1] = '1' ;
+#endif
+#if ROM_FLASH == 64
+				buff[i+1] = '4' ;
+#endif
+				buff[i+2] = '0' ;
+				buff[i+3] = ',' ;
+
+				// add 1st sector checksum
+				val = (byte)(fl_chksum & 0xf) ;
+				val += (val >= 0x0a) ? '7' : '0' ;
+				buff[i+7] = val ;
+
+				val = (byte)(((fl_chksum & 0xf0) >> 2) >> 2) ;
+				val += (val >= 0x0a) ? '7' : '0' ;
+				buff[i+6] = val ;
+
+				val = (byte)((fl_chksum & 0xf00) >> 8) ;
+				val += (val >= 0x0a) ? '7' : '0' ;
+				buff[i+5] = val ;
+
+				val = (byte)((((fl_chksum & 0xf000) >> 8) >> 2) >> 2) ;
+				val += (val >= 0x0a) ? '7' : '0' ;
+				buff[i+4] = val ;
+
+				ptr = ",RRFL\r\n\nOK" ;
+				for ( i=i+8; *ptr; i++ )
+				{
+					buff[i] = *ptr++;
+				}
+				buff[i] = 0;
+				fl_put_str ( buff ) ;
+			}
+			else if ( cmd == AT_CMD || cmd == AT_and_and_F_CMD )
+			{
+				//debug_put_str( ">CD: AT or AT&&F" ) ;
+				fl_put_str ( "\r\nOK" );
+			}
+			else // BAD_CMD or default:
+			{
+				fl_put_str ( "\r\nERROR" );
+			}
+		}
+	}
+}
+
+/****************************************************************
+	Function : fl_start_modem
+	Get the starting address of the application code from
+	the shared area (located at offset 3) and jump to it.
+*****************************************************************/
+non_banked
+void fl_start_modem( void )
+{
+	word strtadr ;
+
+	debug_put_str( ">in fl_start_modem" ) ;
+
+	//---------------------------------------------------------
+	// get the chip type
+	//---------------------------------------------------------
+	fl_identify_chip() ;
+	debug_put_str( ">Chip Type=" ) ;
+	debug_put_hex( fl_device_type ) ;
+	debug_put_char( CR ); debug_put_char( LF );
+
+	//---------------------------------------------------------
+	// Get the starting location of the load from the shared
+	// area. This shared area is located in the first sector
+	// of the EEPROM.
+	//---------------------------------------------------------
+	output8( BBR, NS( fl_sector_bbr_tbl[ fl_bbr_tbl_ndx ] ) ) ;
+	strtadr = *(word *)0x4004 ;
+	debug_put_str( ">Starting Addr=" ) ;
+	debug_put_hex( strtadr ) ;
+	debug_put_char( CR ); debug_put_char( LF );
+
+	fl_strobe_sanity() ;
+
+	//---------------------------------------------------------
+	// start the modem code
+	//---------------------------------------------------------
+	fl_jump_abs( strtadr ) ;
+}
+
+// if RAW_FLASHER is undefined then use old routines so boot block
+// remains unchanged
+#if !defined( RAW_FLASHER )
+/****************************************************************
+	Function : fl_ReadLines
+*****************************************************************/
+non_banked
+byte fl_ReadLines ( void )
+{
+	while ( 1 )
+	{
+		//	Reset the pointers
+		fl_in_ptr = 0 ;
+		fl_out_ptr = 0 ;
+		fl_dte_char = 0 ;
+
+		while ( fl_dte_char != CR )
+		{
+			fl_dte_char = fl_get_char() ;
+			fl_in_buffer[ fl_in_ptr++ ] = fl_dte_char ;
+
+			if ( fl_dte_char == 'X' )
+			{
+				// Retry current line
+				debug_put_str( ">Got an X" ) ;
+				fl_put_str( "OK " ) ;
+				return RETRY ;
+			}
+			else if ( fl_dte_char == 'Y' )
+			{
+				// Abort - exit
+				fl_set_bank( 0 ) ;
+
+				debug_put_str( ">Got a Y: Resetting." ) ;
+				fl_put_str( "OK " ) ;
+				// Give the Application time to see the OK
+				wait_usec( 200 ) ;
+
+				return DONE ;
+			}
+			else if ( fl_dte_char == 'Z' )
+			{
+				//-----------------------------------------
+				// Retry entire load
+				//-----------------------------------------
+				// Give the Application time
+				// to flush the stream
+				wait_usec ( 50000 ) ;
+				debug_put_str( ">Got a Z: start all over" ) ;
+
+				return REBURN ;
+			}
+		}
+
+		fl_dte_char = 0 ;
+
+		//--------------------------------------
+		//		search for beginning ":"
+		//--------------------------------------
+		// should be the very first char of line
+		//--------------------------------------
+		while ( fl_in_buffer[ fl_out_ptr ] != ':' )
+		{
+			fl_out_ptr++;
+			if ( fl_out_ptr == fl_in_ptr )
+			{
+				//------------------------------------
+				// searched whole line, no colon!
+				//------------------------------------
+				debug_put_str ( ">NOK2: No starting colon" ) ;
+				fl_put_str ( "NOK2 " ) ;
+				return RETRY ;
+			}
+		}
+
+		//----------------------------------------------
+		// Verify the Checksum First
+		//----------------------------------------------
+
+		//----------------------------------------------
+		//	Get the number of bytes
+		//----------------------------------------------
+		fl_string[ 0 ] = fl_in_buffer[ fl_out_ptr+1 ] ;
+		fl_string[ 1 ] = fl_in_buffer[ fl_out_ptr+2 ] ;
+		fl_num_bytes = fl_atohex( fl_string ) ;
+		fl_chk_sum = fl_num_bytes ;
+
+		//----------------------------------------------
+		//	Get the upper byte of Address Field
+		//----------------------------------------------
+		fl_string[ 0 ] = fl_in_buffer[ fl_out_ptr+3 ] ;
+		fl_string[ 1 ] = fl_in_buffer[ fl_out_ptr+4 ] ;
+		fl_num = fl_atohex( fl_string ) ;
+		fl_chk_sum += fl_num;
+		fl_addr_in = fl_num << 8;
+
+		//----------------------------------------------
+		//	Get the lower byte of Address Field
+		//----------------------------------------------
+		fl_string[ 0 ] = fl_in_buffer[ fl_out_ptr+5 ] ;
+		fl_string[ 1 ] = fl_in_buffer[ fl_out_ptr+6 ] ;
+		fl_num = fl_atohex( fl_string ) ;
+		fl_chk_sum += fl_num ;
+		fl_addr_in |= fl_num ;
+
+		//----------------------------------------------
+		//	Get the record type
+		//----------------------------------------------
+		fl_string[ 0 ] = fl_in_buffer[ fl_out_ptr+7 ] ;
+		fl_string[ 1 ] = fl_in_buffer[ fl_out_ptr+8 ] ;
+		fl_record_type = fl_atohex( fl_string ) ;
+		fl_chk_sum += fl_record_type ;
+
+		//----------------------------------------------
+		//	Calculate the Checksum
+		//----------------------------------------------
+		fl_tmp_ptr = fl_out_ptr + 9 ;
+		fl_byte_cnt = fl_num_bytes ;
+		while ( fl_byte_cnt > 0 )
+		{
+			//	Get a data byte
+			fl_string[ 0 ] = fl_in_buffer[ fl_tmp_ptr ] ;
+			fl_string[ 1 ] = fl_in_buffer[ fl_tmp_ptr+1 ] ;
+			fl_tmp_ptr += 2 ;
+			fl_byte_cnt-- ;
+
+			fl_num = fl_atohex( fl_string ) ;
+			fl_chk_sum += fl_num ;
+
+			fl_strobe_sanity() ;
+		}
+
+		//	Get the Checksum Byte Now
+		fl_string[ 0 ] = fl_in_buffer[ fl_tmp_ptr ] ;
+		fl_string[ 1 ] = fl_in_buffer[ fl_tmp_ptr+1 ] ;
+		fl_num = fl_atohex( fl_string ) ;
+		fl_chk_sum += fl_num;
+
+		if ( fl_chk_sum != (byte)0 )
+		{
+			//------------------------------------------
+			// Checksum Error do not procees the record
+			//------------------------------------------
+			debug_put_str (">NOK3: Checksum Error!=") ;
+			debug_put_hex( fl_chk_sum ) ;
+			debug_put_char( CR ); debug_put_char( LF );
+			fl_put_str ( "NOK3 " ) ;
+			return RETRY ;
+		}
+
+		//-----------------------------------------------
+		//	on the first line received we erase the flash
+		//-----------------------------------------------
+		if ( fl_logical_addr == 0 )
+		{
+			debug_put_str (">got 1st : ");
+
+			//------------------------------------------
+			// call the flash erase routine
+			// Actually we call an assembly language
+			// routine that uploads the actual routine
+			// [ amd29f_erase_sectors() ] into RAM and
+			// then jumps to it.
+			//------------------------------------------
+			if ( ! fl_EraseFlash () )
+			{
+				// Failed to erase
+				debug_put_str (">NOK1: Failed to Erase!");
+				fl_put_str ( "NOK1 " ) ;
+				fl_logical_addr = 0;
+				return RETRY ;
+			}
+
+			//------------------------------------------
+			// Upload amd29f_program_byte() into RAM
+			//------------------------------------------
+			fl_UploadWriteByte() ;
+		}
+
+		//-------------------------------------------------
+		// Got a good record, skip over record header
+		//
+		//   :NNaaaaRRb1b2b3b4....bnCC
+		//            ^
+		//            +-- to here
+		//-------------------------------------------------
+		fl_out_ptr += 9;
+
+		//-------------------------------------------------
+		//	if the last record, then restart the modem
+		//-------------------------------------------------
+		if ( fl_record_type == 1 )
+		{
+			fl_set_bank(0);
+
+			debug_put_str ( ">Programming Completed - Rebooting !" ) ;
+			fl_put_str ( "OK " ) ;
+
+			// Give the Application time to see the OK
+			wait_usec ( 30 ) ;
+			return DONE ;
+		}
+
+		//-------------------------------------------------
+		//	is it an Extended Address record ?
+		//-------------------------------------------------
+		if ( fl_record_type == 2 )
+		{
+			//----------------------------------------------
+			//	Get the upper byte of Xtnd Addr Field
+			//----------------------------------------------
+			fl_string[ 0 ] = fl_in_buffer[ fl_out_ptr ] ;
+			fl_string[ 1 ] = fl_in_buffer[ fl_out_ptr+1 ] ;
+			fl_num = fl_atohex( fl_string ) ;
+			fl_curpara = fl_num << 8;
+	
+			//----------------------------------------------
+			//	Get the lower byte of Xtnd Addr Field
+			//----------------------------------------------
+			fl_string[ 0 ] = fl_in_buffer[ fl_out_ptr+2 ] ;
+			fl_string[ 1 ] = fl_in_buffer[ fl_out_ptr+3 ] ;
+			fl_num = fl_atohex( fl_string ) ;
+			fl_curpara |= fl_num ;
+
+			debug_put_str ( ">Xtnd Rec=" ) ;
+			debug_put_hex ( fl_curpara ) ;
+			debug_put_char( CR ); debug_put_char( LF );
+
+			fl_put_str( "OK" ) ;
+			continue ;
+		}
+
+		//-------------------------------------------------
+		//	ignore if not a data record
+		//-------------------------------------------------
+		if ( fl_record_type != 0 )
+		{
+			debug_put_str ( ">Not a Data Rec=" ) ;
+			debug_put_hex ( fl_record_type ) ;
+			debug_put_char( CR ); debug_put_char( LF );
+			fl_put_str( "OK" ) ;
+			continue ;
+		}
+
+		//-------------------------------------------------
+		// got a data record
+		// calculate the new paragraph
+		//-------------------------------------------------
+		fl_curpara = (fl_curpara & 0xf000) |
+						(((fl_addr_in >> 2) >> 2) & 0xfff) ;
+
+		//-------------------------------------------------
+		// calculate the new logical addr and bbr based
+		// on the paragraph
+		//-------------------------------------------------
+		fl_bbr = (byte)(fl_curpara >> 8) ;
+//		fl_logical_addr = ((fl_curpara & 0xff) << 2) << 2 ;
+		fl_logical_addr = fl_addr_in & 0xfff ;
+
+		//-------------------------------------------------
+		// now adjust the logical address-bbr pair to
+		// lie within the memory banking region
+		// (0x4000 - 0x7fff)
+		//-------------------------------------------------
+		fl_bbr -= 4 ;
+		fl_logical_addr += 0x4000 ;
+		output8( BBR, fl_bbr ) ;
+
+		//---------------------------------------------------
+		// check if we've crossed the boundary into sector 1
+		//---------------------------------------------------
+		if ( !fl_sector1_flag )
+		{
+			if ( fl_curpara < fl_strt_para )
+			{
+				fl_put_str( "OK" ) ;
+				continue ;
+			}
+			else
+			{
+				debug_put_str ( ">Crossed into Sector 1" ) ;
+				debug_put_str ( ">current para =" ) ;
+				debug_put_hex ( fl_curpara ) ;
+				debug_put_char( CR ); debug_put_char( LF );
+				debug_put_str ( ">BBR =" ) ;
+				debug_put_hex ( fl_bbr ) ;
+				debug_put_str ( "; addr =" ) ;
+				debug_put_hex ( fl_logical_addr ) ;
+				debug_put_char( CR ); debug_put_char( LF );
+				fl_sector1_flag = TRUE ;
+			}
+		}
+
+		//-------------------------------------------------
+		//	program the data now
+		//-------------------------------------------------
+		while ( fl_num_bytes > 0 )
+		{
+			//	Get a data byte
+			fl_string[ 0 ] = fl_in_buffer[ fl_out_ptr++ ] ;
+			fl_string[ 1 ] = fl_in_buffer[ fl_out_ptr++ ] ;
+			fl_num = fl_atohex( fl_string ) ;
+
+			if ( fl_num != 0x0FF )	// Skip If 0xFF
+			{
+				//---------------------------------------
+				// call amd29f_program_byte() in RAM
+				//---------------------------------------
+				if ( !fl_WriteByte( /* fl_logical_addr, fl_num */ ) )
+				{
+					//-------------------------------------------
+					//		Failed to program a byte!!!
+					//-------------------------------------------
+					// Most likely path to success here is for the
+					// PC to send a 'Z' command and reprogram the
+					// entire flash!!!
+					//-------------------------------------------
+					debug_put_str ( ">BBR =" ) ;
+					debug_put_hex ( fl_bbr ) ;
+					debug_put_str( "; curpara=" ) ;
+					debug_put_hex( fl_curpara ) ;
+					debug_put_str ( "; addr in =" ) ;
+					debug_put_hex ( fl_addr_in ) ;
+					debug_put_str ( "; log addr =" ) ;
+					debug_put_hex ( fl_logical_addr ) ;
+					debug_put_char( CR ); debug_put_char( LF );
+
+					debug_put_str ( ">BBR =" ) ;
+					debug_put_hex ( (word)input8( BBR ) ) ;
+					debug_put_str ( "; CBAR =" ) ;
+					debug_put_hex ( (word)input8( CBAR ) ) ;
+					debug_put_str ( "; CBR =" ) ;
+					debug_put_hex ( (word)input8( CBR ) ) ;
+					debug_put_str ( "; ROMBR =" ) ;
+					debug_put_hex ( (word)input8( ROMBR ) ) ;
+					debug_put_str( "; RAMLBR=" ) ;
+					debug_put_hex ( (word)input8( RAMLBR ) ) ;
+					debug_put_str( "; RAMUBR=" ) ;
+					debug_put_hex ( (word)input8( RAMUBR ) ) ;
+					debug_put_char( CR ); debug_put_char( LF );
+
+					debug_put_str( ">NOK4: Failed to Program a byte!" ) ;
+					fl_put_str( "NOK4 " ) ;
+					return RETRY ;
+				}
+			}
+			fl_num_bytes-- ;
+			fl_logical_addr++ ;
+		}
+
+		//---------------------------------------------
+		//	Put out OK message
+		//---------------------------------------------
+		fl_put_str( "OK" ) ;
+	}
+}
+
+/****************************************************************
+	Function : Main
+*****************************************************************/
+non_banked
+void fl_prog_flash( void )
+{
+	// should be redundant
+	disable_interrupt() ;
+
+REBURNFLASH:
+
+	// init variables
+	fl_dte_char = 0 ;
+	fl_logical_addr = 0 ;
+	fl_sector1_flag = FALSE ;
+	fl_InCmdMode = FALSE ;
+	fl_curpara = 0 ;
+
+	// init Z80 peripheral's
+	fl_init_hw () ;
+
+	fl_put_char ( CR );
+	fl_put_char ( LF );
+
+	//---------------------------------------------------------
+	// Put out the version number
+	//---------------------------------------------------------
+	fl_put_str ( FLASH_VERSION ) ;
+
+	//---------------------------------------------------------
+	// get the chip type
+	//---------------------------------------------------------
+	fl_identify_chip() ;
+	debug_put_str( ">Chip Type=" ) ;
+	debug_put_hex( fl_device_type ) ;
+	debug_put_char( CR ); debug_put_char( LF );
+
+	//----------------------------------------------------------
+	//	set the starting address for sector 1
+	//	(either 16K or 64K).  since the address can be
+	//	too large to be stored in a single word, and
+	//	dword arithmetic call library routines (not
+	//	permitted) we normalize the starting address
+	//	to paragraph size (divide by 16).
+	//----------------------------------------------------------
+	fl_strt_para = fl_sector_bbr_tbl[ fl_bbr_tbl_ndx ] * (4096/16) ;
+	debug_put_str( ">PARA =" ) ;
+	debug_put_hex( fl_strt_para ) ;
+	debug_put_char( CR ); debug_put_char( LF );
+
+	//---------------------------------------------------------
+	//	put out the OK message
+	//---------------------------------------------------------
+	fl_put_str( "OK" ) ;
+
+	//---------------------------------------------------------
+	// done once
+	//---------------------------------------------------------
+	fl_string[ 2 ] = '\0' ;
+
+	fl_strobe_sanity() ;
+
+	//---------------------------------------------------------
+	//	read the modem.hex file
+	//---------------------------------------------------------
+	do {
+		 fl_status = fl_ReadLines() ;
+		 if ( fl_status == REBURN )
+		 {
+			 goto REBURNFLASH ;
+		 }
+	} while ( fl_status != DONE ) ;
+
+	fl_reset_modem() ;
+}
+#else
+/****************************************************************
+	Function : fl_ReadLine
+*****************************************************************/
+non_banked
+byte fl_ReadLine ( void )
+{
+	//	Reset the pointers
+	fl_in_ptr = 0 ;
+	fl_out_ptr = 0 ;
+	//fl_dte_char = 0 ;
+
+	do {
+		fl_dte_char = fl_get_char() ;
+		fl_in_buffer[ fl_in_ptr++ ] = fl_dte_char ;
+
+		if ( fl_dte_char == 'X' )
+		{
+			// Retry current line
+			debug_put_str( ">Got an X" ) ;
+			fl_put_str( "OK " ) ;
+			return RETRY ;
+		}
+		else if ( fl_dte_char == 'Y' )
+		{
+			// Abort - exit
+			fl_set_bank( 0 ) ;
+
+			debug_put_str( ">Got a Y: Resetting." ) ;
+			fl_put_str( "OK " ) ;
+			// Give the Application time to see the OK
+			wait_usec( 200 ) ;
+
+			return DONE ;
+		}
+		else if ( fl_dte_char == 'Z' )
+		{
+			//-----------------------------------------
+			// Retry entire load
+			//-----------------------------------------
+			// Give the Application time
+			// to flush the stream
+			wait_usec ( 50000 ) ;
+			debug_put_str( ">Got a Z: start all over" ) ;
+
+			return REBURN ;
+		}
+	} while ( (fl_dte_char!=CR)&&(fl_in_ptr<FL_BUFFER_SIZE) ); // prevent buffer overflow
+
+	//fl_dte_char = 0 ;
+
+	//--------------------------------------
+	//		search for beginning ":"
+	//--------------------------------------
+	// should be the very first char of line
+	//--------------------------------------
+	while ( fl_in_buffer[ fl_out_ptr ] != ':' )
+	{
+		fl_out_ptr++;
+		if ( fl_out_ptr == fl_in_ptr )
+		{
+			//------------------------------------
+			// searched whole line, no colon!
+			//------------------------------------
+			debug_put_str ( ">NOK2: No starting colon" ) ;
+			fl_put_str ( "NOK2 " ) ;
+			return RETRY ;
+		}
+	}
+
+	//----------------------------------------------
+	// Verify the Checksum First
+	//----------------------------------------------
+
+	//----------------------------------------------
+	//	Get the number of bytes
+	//----------------------------------------------
+	fl_string[ 0 ] = fl_in_buffer[ fl_out_ptr+1 ] ;
+	fl_string[ 1 ] = fl_in_buffer[ fl_out_ptr+2 ] ;
+	fl_num_bytes = fl_atohex( fl_string ) ;
+	fl_chk_sum = fl_num_bytes ;
+
+	//----------------------------------------------
+	//	Get the upper byte of Address Field
+	//----------------------------------------------
+	fl_string[ 0 ] = fl_in_buffer[ fl_out_ptr+3 ] ;
+	fl_string[ 1 ] = fl_in_buffer[ fl_out_ptr+4 ] ;
+	fl_num = fl_atohex( fl_string ) ;
+	fl_chk_sum += fl_num;
+	fl_addr_in = fl_num << 8;
+
+	//----------------------------------------------
+	//	Get the lower byte of Address Field
+	//----------------------------------------------
+	fl_string[ 0 ] = fl_in_buffer[ fl_out_ptr+5 ] ;
+	fl_string[ 1 ] = fl_in_buffer[ fl_out_ptr+6 ] ;
+	fl_num = fl_atohex( fl_string ) ;
+	fl_chk_sum += fl_num ;
+	fl_addr_in |= fl_num ;
+
+	//----------------------------------------------
+	//	Get the record type
+	//----------------------------------------------
+	fl_string[ 0 ] = fl_in_buffer[ fl_out_ptr+7 ] ;
+	fl_string[ 1 ] = fl_in_buffer[ fl_out_ptr+8 ] ;
+	fl_record_type = fl_atohex( fl_string ) ;
+	fl_chk_sum += fl_record_type ;
+
+	//----------------------------------------------
+	//	Calculate the Checksum
+	//----------------------------------------------
+	fl_tmp_ptr = fl_out_ptr + 9 ;
+	fl_byte_cnt = fl_num_bytes ;
+	while ( fl_byte_cnt > 0 )
+	{
+		//	Get a data byte
+		fl_string[ 0 ] = fl_in_buffer[ fl_tmp_ptr ] ;
+		fl_string[ 1 ] = fl_in_buffer[ fl_tmp_ptr+1 ] ;
+		fl_tmp_ptr += 2 ;
+		fl_byte_cnt-- ;
+
+		fl_num = fl_atohex( fl_string ) ;
+		fl_chk_sum += fl_num ;
+
+		fl_strobe_sanity() ;
+	}
+
+	//	Get the Checksum Byte Now
+	fl_string[ 0 ] = fl_in_buffer[ fl_tmp_ptr ] ;
+	fl_string[ 1 ] = fl_in_buffer[ fl_tmp_ptr+1 ] ;
+	fl_num = fl_atohex( fl_string ) ;
+	fl_chk_sum += fl_num;
+
+	if ( fl_chk_sum != (byte)0 )
+	{
+		//------------------------------------------
+		// Checksum Error do not procees the record
+		//------------------------------------------
+		debug_put_str (">NOK3: Checksum Error!=") ;
+		debug_put_hex( fl_chk_sum ) ;
+		debug_put_char( CR ); debug_put_char( LF );
+		fl_put_str ( "NOK3 " ) ;
+		return RETRY ;
+	}
+	return SOFARSOGOOD;
+}
+
+/****************************************************************
+	Function : fl_flash_data
+	Perform the actual flashing. Take data from buffer
+*****************************************************************/
+non_banked
+byte fl_flash_data ( void )
+{
+
+	//-------------------------------------------------
+	// Got a good record, skip over record header
+	//
+	//   :NNaaaaRRb1b2b3b4....bnCC
+	//            ^
+	//            +-- to here
+	//-------------------------------------------------
+	fl_out_ptr += 9;
+
+	//-------------------------------------------------
+	//	if the last record, then restart the modem
+	//-------------------------------------------------
+	if ( fl_record_type == 1 )
+	{
+		fl_set_bank(0);
+
+		debug_put_str ( ">Programming Completed - Rebooting !" ) ;
+		fl_put_str ( "OK " ) ;
+
+		// Give the Application time to see the OK
+		wait_usec ( 30 ) ;
+		return DONE ;
+	}
+
+	//-------------------------------------------------
+	//	is it an Extended Address record ?
+	//-------------------------------------------------
+	if ( fl_record_type == 2 )
+	{
+		//----------------------------------------------
+		//	Get the upper byte of Xtnd Addr Field
+		//----------------------------------------------
+		fl_string[ 0 ] = fl_in_buffer[ fl_out_ptr ] ;
+		fl_string[ 1 ] = fl_in_buffer[ fl_out_ptr+1 ] ;
+		fl_num = fl_atohex( fl_string ) ;
+		fl_curpara = fl_num << 8;
+	
+		//----------------------------------------------
+		//	Get the lower byte of Xtnd Addr Field
+		//----------------------------------------------
+		fl_string[ 0 ] = fl_in_buffer[ fl_out_ptr+2 ] ;
+		fl_string[ 1 ] = fl_in_buffer[ fl_out_ptr+3 ] ;
+		fl_num = fl_atohex( fl_string ) ;
+		fl_curpara |= fl_num ;
+
+		debug_put_str ( ">Xtnd Rec=" ) ;
+		debug_put_hex ( fl_curpara ) ;
+		debug_put_char( CR ); debug_put_char( LF );
+
+		//fl_put_str( "OK" ) ;
+		return SOFARSOGOOD ;
+	}
+
+	//-------------------------------------------------
+	//	ignore if not a data record
+	//-------------------------------------------------
+	if ( fl_record_type != 0 )
+	{
+		debug_put_str ( ">Not a Data Rec=" ) ;
+		debug_put_hex ( fl_record_type ) ;
+		debug_put_char( CR ); debug_put_char( LF );
+		//fl_put_str( "OK" ) ;
+		return SOFARSOGOOD ;
+	}
+
+	//-------------------------------------------------
+	// got a data record
+	// calculate the new paragraph
+	//-------------------------------------------------
+	fl_curpara = (fl_curpara & 0xf000) | (((fl_addr_in >> 2) >> 2) & 0xfff) ;
+
+	//-------------------------------------------------
+	// calculate the new logical addr and bbr based
+	// on the paragraph
+	//-------------------------------------------------
+	fl_bbr = (byte)(fl_curpara >> 8) ;
+//		fl_logical_addr = ((fl_curpara & 0xff) << 2) << 2 ;
+	fl_logical_addr = fl_addr_in & 0xfff ;
+
+	//-------------------------------------------------
+	// now adjust the logical address-bbr pair to
+	// lie within the memory banking region
+	// (0x4000 - 0x7fff)
+	//-------------------------------------------------
+	fl_bbr -= 4 ;
+	fl_logical_addr += 0x4000 ;
+	output8( BBR, fl_bbr ) ;
+
+	//---------------------------------------------------
+	// check if we've crossed the boundary into sector 1
+	//---------------------------------------------------
+	if ( !fl_sector1_flag )
+	{
+		if ( fl_curpara < fl_strt_para ) return SOFARSOGOOD ;
+		else
+		{
+			debug_put_str ( ">Crossed into Sector 1" ) ;
+			debug_put_str ( ">current para =" ) ;
+			debug_put_hex ( fl_curpara ) ;
+			debug_put_char( CR ); debug_put_char( LF );
+			debug_put_str ( ">BBR =" ) ;
+			debug_put_hex ( fl_bbr ) ;
+			debug_put_str ( "; addr =" ) ;
+			debug_put_hex ( fl_logical_addr ) ;
+			debug_put_char( CR ); debug_put_char( LF );
+			fl_sector1_flag = TRUE ;
+		}
+	}
+
+	//-------------------------------------------------
+	//	program the data now
+	//-------------------------------------------------
+	while ( fl_num_bytes > 0 )
+	{
+		//	Get a data byte
+		fl_string[ 0 ] = fl_in_buffer[ fl_out_ptr++ ] ;
+		fl_string[ 1 ] = fl_in_buffer[ fl_out_ptr++ ] ;
+		fl_num = fl_atohex( fl_string ) ;
+
+		if ( fl_num != 0x0FF )	// Skip If 0xFF
+		{
+			//---------------------------------------
+			// call amd29f_program_byte() in RAM
+			//---------------------------------------
+			if ( !fl_WriteByte( /* fl_logical_addr, fl_num */ ) )
+			{
+				//-------------------------------------------
+				//		Failed to program a byte!!!
+				//-------------------------------------------
+				// Most likely path to success here is for the
+				// PC to send a 'Z' command and reprogram the
+				// entire flash!!!
+				//-------------------------------------------
+				debug_put_str ( ">BBR =" ) ;
+				debug_put_hex ( fl_bbr ) ;
+				debug_put_str( "; curpara=" ) ;
+				debug_put_hex( fl_curpara ) ;
+				debug_put_str ( "; addr in =" ) ;
+				debug_put_hex ( fl_addr_in ) ;
+				debug_put_str ( "; log addr =" ) ;
+				debug_put_hex ( fl_logical_addr ) ;
+				debug_put_char( CR ); debug_put_char( LF );
+
+				debug_put_str ( ">BBR =" ) ;
+				debug_put_hex ( (word)input8( BBR ) ) ;
+				debug_put_str ( "; CBAR =" ) ;
+				debug_put_hex ( (word)input8( CBAR ) ) ;
+				debug_put_str ( "; CBR =" ) ;
+				debug_put_hex ( (word)input8( CBR ) ) ;
+				debug_put_str ( "; ROMBR =" ) ;
+				debug_put_hex ( (word)input8( ROMBR ) ) ;
+				debug_put_str( "; RAMLBR=" ) ;
+				debug_put_hex ( (word)input8( RAMLBR ) ) ;
+				debug_put_str( "; RAMUBR=" ) ;
+				debug_put_hex ( (word)input8( RAMUBR ) ) ;
+				debug_put_char( CR ); debug_put_char( LF );
+
+				debug_put_str( ">NOK4: Failed to Program a byte!" ) ;
+				fl_put_str( "NOK4 " ) ;
+				return RETRY ;
+			}
+		}
+		fl_num_bytes-- ;
+		fl_logical_addr++ ;
+	}
+	return SOFARSOGOOD ;
+}
+
+non_banked
+void fl_do_erase ( void )
+{
+	//------------------------------------------
+	// call the flash erase routine
+	// Actually we call an assembly language
+	// routine that uploads the actual routine
+	// [ amd29f_erase_sectors() ] into RAM and
+	// then jumps to it.
+	//------------------------------------------
+	if ( ! fl_EraseFlash () )
+	{
+		// Failed to erase
+		debug_put_str (">NOK1: Failed to Erase!");
+		fl_put_str ( "NOK1 " ) ;
+		fl_logical_addr = 0;
+		return;
+	}
+
+	//------------------------------------------
+	// Upload amd29f_program_byte() into RAM
+	//------------------------------------------
+	fl_UploadWriteByte() ;
+}
+
+/****************************************************************
+	Function : fl_do_flash
+*****************************************************************/
+non_banked
+void fl_do_flash( void )
+{
+	byte i;
+
+	// should be redundant
+	disable_interrupt() ;
+
+REBURNFLASH:
+
+	// init variables
+	//fl_dte_char = 0 ;
+	fl_sector1_flag = FALSE ;
+	fl_InCmdMode = FALSE ;
+	fl_curpara = 0 ;
+
+	// init Z80 peripheral's
+	fl_init_hw () ;
+
+	fl_put_char ( CR );
+	fl_put_char ( LF );
+
+	//---------------------------------------------------------
+	// Put out the version number
+	//---------------------------------------------------------
+	fl_put_str ( FLASH_VERSION ) ;
+
+	//---------------------------------------------------------
+	// get the chip type
+	//---------------------------------------------------------
+	fl_identify_chip() ;
+	debug_put_str( ">Chip Type=" ) ;
+	debug_put_hex( fl_device_type ) ;
+	debug_put_char( CR ); debug_put_char( LF );
+
+	//----------------------------------------------------------
+	//	set the starting address for sector 1
+	//	(either 16K or 64K).  since the address can be
+	//	too large to be stored in a single word, and
+	//	dword arithmetic call library routines (not
+	//	permitted) we normalize the starting address
+	//	to paragraph size (divide by 16).
+	//----------------------------------------------------------
+	fl_strt_para = fl_sector_bbr_tbl[ fl_bbr_tbl_ndx ] * (4096/16) ;
+	debug_put_str( ">PARA =" ) ;
+	debug_put_hex( fl_strt_para ) ;
+	debug_put_char( CR ); debug_put_char( LF );
+
+	if (fl_logical_addr)
+	{
+		fl_do_erase();// erase before receiving data
+		fl_put_str( "START DOWNLOAD" ) ;
+	}
+
+	//---------------------------------------------------------
+	//	put out the OK message
+	//---------------------------------------------------------
+	fl_put_str( "OK" ) ;
+
+	//---------------------------------------------------------
+	// done once
+	//---------------------------------------------------------
+	fl_string[ 2 ] = '\0' ;
+
+	fl_strobe_sanity() ;
+
+	//---------------------------------------------------------
+	//	read the modem.hex file
+	//---------------------------------------------------------
+	do {
+		if ((fl_status=fl_ReadLine())==DONE) continue;
+		//-----------------------------------------------
+		//	on the first line received we erase the flash
+		//-----------------------------------------------
+		if ( fl_logical_addr == 0 )
+		{
+			debug_put_str (">got 1st : ");
+			fl_do_erase();
+		}
+		for (i=0;i<3&&(fl_status=fl_flash_data())==RETRY;i++); // retry up to 3 times
+
+		//---------------------------------------------
+		//	Put out OK message
+		//---------------------------------------------
+		fl_put_str( "OK" ) ;
+		if ( fl_status == REBURN )
+		{
+			fl_logical_addr = 0 ;
+			goto REBURNFLASH ;
+		}
+	} while ( fl_status != DONE ) ;
+}
+
+/****************************************************************
+	Function : Main
+*****************************************************************/
+non_banked
+void fl_prog_flash( void )
+{
+	fl_logical_addr = 0 ;
+	fl_do_flash() ;
+	fl_reset_modem() ;
+}
+
+/****************************************************************
+	Function : fl_raw_prog
+	Executes at&&fraw raw programming
+	(no special PC appl. required other than terminal emulator)
+*****************************************************************/
+non_banked
+void fl_raw_prog( void )
+{
+	fl_logical_addr = 1 ;// signal erasure prior to recvd data
+	fl_put_str( "\n\rERASING..." ) ;
+	fl_do_flash() ;
+	fl_put_str( "PROGRAMMING DONE!!!" ) ;
+	fl_reset_modem() ;
+}
+#endif //!RAW_FLASHER
+#else
+
+byte	fl_dumbPortPresent ;
+
+#endif
+
+const byte RamMsg[] = "Ram Failure               \r" ;
+
+/****************************************************************
+	Function : fl_ramFailure
+	Ram test has failed, initialize dte interface and print an
+	error message on the dte for a long period, then try to come
+	up.
+*****************************************************************/
+#pragma function=__C_task
+non_banked
+void fl_ramFailure ( void )
+{
+#if defined( ROM_FLASH )
+	word cnt ;
+#if defined( EXT_MODEM )
+	//-----------------------------------
+	//	Initialize EASCI
+	//-----------------------------------
+
+			// reset Rx channel
+	output8( ASCI_CTLA0_REG, 0 ) ;
+
+			// clear the BRG...
+	output8( ASCI_TCLO_REG, 0 ) ;
+	output8( ASCI_TCHI_REG, 0 ) ;
+
+			// select clock source and speed select
+			// (not necessary for VENUS)
+	output8( ASCI_CTLB0_REG, 0 ) ;
+
+			// enable break detection & internal clock;
+			// disable auto tx/rx enable
+			// select divide by 1 mode for VENUS
+	output8( ASCI_XCR0_REG, BRK_ENABLE | BRG0_MODE
+				 | CTS0_DISABLE | DCD0_DISABLE | X1_BIT_CLK ) ;
+
+			// enable tx & rx & CTS (active low) to DTE
+			//  (as in the ESCC, our RTS is wired to the DTE CTS)
+			// clear any errors in rx (frame or overrun)
+			// setup mode = 8 data + 1 stop (no parity)
+	output8( ASCI_CTLA0_REG, TX_ENABLE | RX_ENABLE | MOD_2 ) ;
+
+			// clear autobaud enable.
+	output8( A0NEWCTL , 0 ) ;
+
+			// Enable DSP - allow time for DSP to initialize the
+			// CAMILZ register set then we will set them the way
+			// we want them below.
+	DP_REGWRITE(0xde, 0x50);	// Enable DSP
+
+			// disable all interrupts on camil
+	DP_REGWRITE( 0xd7, 0xff ) ;
+	DP_REGWRITE( 0xd8, 0xff ) ;
+
+			// Now set up CAMILZ registers.
+	DP_REGWRITE( 0xca, 0x00 ) ;		// disable host pc access to MIMIC (MCAD)
+									// and DIA (for DSP access)
+	DP_REGWRITE( 0xda, 0x16 ) ;		// call progress through SIO and
+									// IOCS2 for Serial Dumb Terminal
+	DP_REGWRITE( 0xc0, 02 ) ;		// enable SERIAL Scenario
+	DP_REGWRITE( 0xdf, 1 ) ;		// enable pin master
+#elif defined( USB_MODEM )
+	//-----------------------------------
+	// Atlas is already initialized and
+	// we are already enumerated.
+	//-----------------------------------
+#else
+	//-----------------------------------
+	//	Initialize MIMIC
+	//-----------------------------------
+
+	// Set Baud Rate Generator for VENUS
+	output8( BRGL, 0x08 ) ;		// 	time constant low - in theory 57.6k
+	output8( BRGH, 0x00 ) ;		// 	time constant high
+
+	// enable baud rate generator
+	output8( IOBRG, 0x01 ) ;
+
+	// initialize UART MIMIC registers
+	output8( MIMIC_MMC,  BIT0 ) ;
+	output8( MIMIC_IVEC, 0x00 ) ;	// interrupt vector register
+	output8( MIMIC_TTCR, 0x05 ) ;	// this works better than
+	output8( MIMIC_RTCR, 0x05 ) ;	// dolphin value for VENUS
+	output8( MIMIC_TTTC, 0x20 ) ;	// tx timeout timer
+	output8( MIMIC_RTTC, 0x20 ) ;	// rx timeout timer
+	output8( MIMIC_FSCR, 0x20 ) ;	// fifo status and control register
+	output8( MIMIC_IUS,  0x80 ) ;	// clear interrupt source
+	output8( MIMIC_MSR,  0x30 ) ;	// modem status reg - set DSR & CTS
+	output8( MIMIC_MMC,
+			(BIT0|BIT7|BIT6) ) ;	// MMC register - enable timers
+	output8( MIMIC_IE,  0x00 ) ;	// interrupt enable register
+	output8( MIMIC_IUS, 0x80 ) ;	// clear interrupt source
+	output8( MIMIC_IE, MIMIC_THR_ENABLE | MIMIC_RBR_ENABLE ) ;
+
+#if defined( PCMCIA_MODEM )
+		//	Set the scenario bits in the MMI Cntrl Register
+	DP_REGWRITE( 0xc0, 0x01 ) ;
+		// Set READY to host
+	DP_REGWRITE( 0x57, 0x01 ) ;
+#else	// ISA
+	DP_REGWRITE( 0xCA, 0x41 );		// enable host pc access to MIMIC (MCAD)
+									// and DIA (for DSP access)
+	DP_REGWRITE( 0xC3, 0xE8 );		// MCAD COM3 port decode (lower byte)
+	DP_REGWRITE( 0xC4, 0x03 );		// MCAD COM3 port decode (upper byte)
+	DP_REGWRITE( 0xCC, 0x0C );		// Assign MIMIC Irq A=4
+	DP_REGWRITE( 0xD6, 0x0E );		// IRQ A Driven always
+
+	DP_REGWRITE( 0xc0, 0x00 );		// ISA scenario & no eye pattern junk
+#endif	// ISA/PCMCIA
+
+	DP_REGWRITE( 0xD7, 0xFF );
+	DP_REGWRITE( 0xD8, 0xFF );
+#endif
+
+#if defined( Z80_DEBUG_PRINT )
+	// initialize debug terminal
+	output8(DUMB_LCR, 0x83);
+	output8(DUMB_BRDH, 0);
+#if defined( PEGASIS )
+	output8(DUMB_BRDL, 12); // baud rate 115.2
+//	output8(DUMB_BRDL, 24); // baud rate  57.6
+//	output8(DUMB_BRDL, 36); // baud rate  38.4
+#else
+	output8(DUMB_BRDL, 1);  // baud rate 115.2
+//	output8(DUMB_BRDL, 2);  // baud rate  57.6
+//	output8(DUMB_BRDL, 3);  // baud rate  38.4
+#endif
+	output8(DUMB_LCR, 0x03);
+	output8(DUMB_IER, 0x00);
+	output8(DUMB_MCR, 0x0f);
+	output8(DUMB_SCR, 0x55);
+	fl_dumbPortPresent = (input8(DUMB_SCR) == 0x55) ? 1 : 0;
+
+	if ( fl_dumbPortPresent )
+	{
+		while ( TRUE )
+		{
+			byte i ;
+			for ( i=0; i<0xff; i++ )
+				;
+			i = 0 ;
+			while ( RamMsg[ i ] )
+			{
+				while ( !(input8( DUMB_LSR ) & 0x20) )
+					;
+				output8( DUMB_DATA, RamMsg[ i ] ) ;
+				i++ ;
+			}
+		}
+	}
+	return ;
+#endif
+
+	while ( TRUE )
+	{
+		byte i ;
+
+		i = 0 ;
+		while ( RamMsg[ i ] )
+		{
+#if defined( EXT_MODEM )
+			// write to EASCI tx register
+			while ( !(input8 ( ASCI_STAT0_REG ) & TX_REG_EMPTY) )
+				;
+			output8 ( ASCI_TX0_REG, RamMsg[ i ] ) ;
+#elif defined( USB_MODEM )
+			//---------------------------------------------
+			// output a char and update wrt ptr :
+			//---------------------------------------------
+			*fl_dte_tx_wptr++ = RamMsg[ i ] ;
+
+			if ( fl_dte_tx_wptr >= fl_dte_tx_eptr )
+			{
+				fl_dte_tx_wptr = fl_dte_tx_sptr;
+			}
+
+			if ( !RamMsg[ i+1 ] )
+			{
+				wait_usec( 1000 ) ;
+			}
+#else
+			//	wait to ensure that we do not overrun the buffer
+			while ( input8( MIMIC_LSR ) & BIT0 )
+				;
+			output8( MIMIC_RBR, RamMsg[ i ] ) ;
+			output8( MIMIC_IUS, BIT7 ) ;	// clear interrupt source
+#endif
+			i++ ;
+		}
+	}
+	return ;
+#endif
+}

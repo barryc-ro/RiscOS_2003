@@ -1,0 +1,676 @@
+/*name and version number:@(#)dsp_cmd.c	1.7*/
+/*date of get: 		  09/06/00 16:59:34*/
+/*date of delta:	  03/14/00 16:15:24*/
+/*****************************************************************************
+** File        : dsp_cmd.c                                                   *
+** Version     : 1.5                                                         *
+**---------------------------------------------------------------------------*
+** Description :                                                             *
+**   Contains a command interface driver between the Z80 and the DSP core.   *
+**                                                                           *
+**     Function Name    | Access  | Summary                                  *
+**  --------------------+---------+----------------------------------------- *
+**  dsp_command_i/f_init| GLOBAL  | Initialises & enables the command i/f    *
+**  submit_dsp_command  | GLOBAL  | Allows other modules to issue dsp command*
+**  send_dsp_command    | STATIC  | Driver use only - writes cmd to h/w      *
+**  get_dsp_command     | PRIVATE | CAMIL  use only - reads cmd from h/w     *
+**  process_dsp_ack     | PRIVATE | CAMIL  use only - accepts ACK from DSP   *
+**  dsp_command_state_ma| GLOBAL  | Run from main task - handles all cmds    *
+**  process_dsp_command | STATIC  | Driver use only - processes dsp commands *
+**  select_echo_cancel. | GLOBAL  | Sends DSP command to config echo ON|OFF  *
+**  select_compander    | GLOBAL  | Sends DSP command to config compander    *
+**                                                                           *
+**---------------------------------------------------------------------------*
+**                               HISTORY                                     *
+** Date            Ver   Dev  Comments                                       *
+** 31st Oct  1998  1.0   RGT  Initial Revision                               *
+**                                                                           *
+**  9th Nov  1998  1.1   RGT  Added in DTMF detection command from DSP and   *
+**                            code to generate appropriate 2181 DTMF cmd.    *
+**                            Also increased the number of retries the Z80   *
+**                            issues to the DSP when it fails to ACK a cmd   *
+**                            before giving up. Also, minor bug fix: cmd     *
+**                            interface was freezing because retries were    *
+**                            gradually building up, they weren't being      *
+**                            reset when an ACK came in. This has been fixed *
+**                                                                           *
+** 17th Nov  1998  1.2   RGT  Added in global dsp command structure for use  *
+**                            in non-interrupt space routines only.          *
+**                                                                           *
+**[Release 2]----------------------------------------------------------------*
+** Date            Ver   Dev  Comments                                       *
+** 19th Jan  1999  1.3   RGT  Small change to process_cmd: DTMF detection is *
+**                            now passed through the MIMIC. This modification*
+**                            is not completely cleanly implemented.         *
+**                                                                           *
+** 16th Feb  1999  1.4   RGT  Added in new globally accessible functions to  *
+**                            enable other code to set the compander types   *
+**                            and echo cancellation on the DSP.              *
+**                                                                           *
+** 20th Apr  1999  1.5   RGT  Modifications for new configuration parameter  *
+**                            format and WARNING capability. General tidy of *
+**                            code, removal of old debug etc.                *
+**                                                                           *
+******************************************************************************/
+
+#include <mqx.h>
+
+#include <v_glob.h>
+#include <llglob_d.h>
+#include <dpglob.h>
+#include <sa_glob.h>
+#include <dsp_cmd.h>
+#include <v_config.h>
+
+
+/*****************************************************************************
+             ###   #      ###   ####    ###   #     ####
+            #      #     #   #  #   #  #   #  #    #
+            #  ##  #     #   #  ####   #####  #     ####  
+            #   #  #     #   #  #   #  #   #  #         #  
+             ###   #####  ###   ####   #   #  ##### ####
+******************************************************************************/
+#if defined(_1_INSTANCE)
+		dspCmdTxStruct	txCmd;	// Transmit subsystem structure
+		dspCmdRxStruct	rxCmd;	// Receive subsystem structure
+		dspCmdStruct	dspCmd;	// generic command structure
+#endif
+
+/****************************************************************************
+              ####  #####   ###   #####  ###   ####   ####
+             #        #    #   #    #     #   #      #
+              ####    #    #####    #     #   #       ####
+                  #   #    #   #    #     #   #           #
+              ####    #    #   #    #    ###   ####   ####
+*****************************************************************************/
+//		static void send_dsp_command   (void);
+//		static byte process_dsp_command(void);
+
+
+/*****************************************************************************
+      ##### #   #  #    #   ####  #####  ###   ###   #    #  ####
+      #     #   #  ##   #  #        #     #   #   #  ##   # #
+      ####  #   #  # #  #  #        #     #   #   #  # #  #  ####
+      #     #   #  #  # #  #        #     #   #   #  #  # #      #
+      #      ####  #   ##   ####    #    ###   ###   #    #  ####
+******************************************************************************/
+
+
+/******************************************************************************
+** Function : dsp_command_interface_init                                      *
+*******************************************************************************
+** Modification History :                                                     *
+**                                                                            *
+** Date            Ver   Dev  Comments                                        *
+** 31st Oct  1998  1.0   RGT  Initial Revision                                *
+*******************************************************************************
+** Description :                                                              *
+**   This function allows the main task to initialise and enable the command  *
+** interface between the Z80 and the DSP.                                     *
+*******************************************************************************
+** Arguments :                                                                *
+**                NONE                                                        *
+**                                                                            *
+*******************************************************************************/
+void dsp_command_interface_init(VGLOB *vglob_ptr) 
+{
+	V(rxCmd).cmdsRcvd = 0;
+	V(rxCmd).content  = 0;
+	V(rxCmd).inPtr    = V(rxCmd).outPtr = 0;
+	
+	V(txCmd).cmdsTxd = 0;
+	V(txCmd).content = 0;
+	V(txCmd).inPtr   = V(txCmd).outPtr = 0;
+	V(txCmd).retries = 0;
+	V(txCmd).ifState = V_READY;
+}
+
+
+/******************************************************************************
+** Function : submit_dsp_command                                              *
+*******************************************************************************
+** Modification History :                                                     *
+**                                                                            *
+** Date            Ver   Dev  Comments                                        *
+** 31st Oct  1998  1.0   RGT  Initial Revision                                *
+**                                                                            *
+**[Release 2]-----------------------------------------------------------------*
+** Date            Ver   Dev  Comments                                        *
+** 20th Apr  1999  2.0   RGT  Modifications for new configuration parameter   *
+**                            format and WARNING capability.                  *
+**                                                                            *
+*******************************************************************************
+** Description :                                                              *
+**   This function allows the main task or another module to submit a command *
+** to the DSP via the interface.                                              *
+*******************************************************************************
+** Arguments :                                                                *
+**   ______________________________________________________________________   *
+**  | Type          |  arg name  | Description                             |  *
+**  |---------------+------------+-----------------------------------------|  *
+**  | dspCmdStruct  | inputCmd * | POINTER to cmdStruct containing DSP cmd |  *
+**   ----------------------------------------------------------------------   *
+**                                                                            *
+*******************************************************************************/
+byte submit_dsp_command(VGLOB *vglob_ptr, dspCmdStruct * inputCmd)
+{
+	byte			  L1;
+	dspCmdStruct	* cmd;
+	dspCmdTxStruct	*txCmd = &V(txCmd);
+	
+
+
+	/********************************************************
+	** Make sure there's memory to hold the command. If not,*
+	** return FALSE to indicate failure to submit command.  *
+	*********************************************************/
+	if (txCmd->content < CFG_DCMD_BUF_SZ) {
+
+		/*************************************************************
+		** Grab hold of the next free command buffer, move the input *
+		** pointer to the next slot whether it's free for use or not.*
+		**************************************************************/
+		cmd = &(txCmd->cmdBuf[txCmd->inPtr++]);
+
+		/********************************************************
+		** Ensure we won't overrun the command buffer, wrap the *
+		** input pointer if necessary.                          *
+		*********************************************************/
+		if (txCmd->inPtr >= CFG_DCMD_BUF_SZ)
+			txCmd->inPtr = 0;
+
+		/***********************************************
+		** Program the command into the aquired buffer *
+		************************************************/
+		cmd->id = inputCmd->id;
+		for (L1 = 0; L1 < CFG_DCMD_MAX_ARGS; L1 ++)
+			cmd->args[L1] = inputCmd->args[L1];
+
+		/**************************************************************
+		** Update the buffer content tracer so that the command state *
+		** machine knows whether it has any work to do.               *
+		***************************************************************/
+		txCmd->content++;
+		return TRUE;
+	}
+
+	/*******************************************************************
+	** We didn't have any resources left to submit the command, return *
+	** FALSE to let the calling context know.                          *
+	********************************************************************/
+	WARNING(vglob_ptr, WARN_DCMD_OUTBUF);
+	return FALSE;
+}
+
+
+/******************************************************************************
+** Function : send_dsp_command                                                *
+*******************************************************************************
+** Modification History :                                                     *
+**                                                                            *
+** Date            Ver   Dev  Comments                                        *
+** 31st Oct  1998  1.0   RGT  Initial Revision                                *
+**                                                                            *
+**[Release 2]-----------------------------------------------------------------*
+** Date            Ver   Dev  Comments                                        *
+** 20th Apr  1999  2.0   RGT  Modifications for new configuration parameter   *
+**                            format and WARNING capability.                  *
+**                                                                            *
+*******************************************************************************
+** Description :                                                              *
+**   Private driver function that accesses the hardware to write a submitted  *
+** command to the CAMIL DSP interface block.                                  *
+*******************************************************************************
+** Arguments :                                                                *
+**                NONE                                                        *
+**                                                                            *
+*******************************************************************************/
+static void send_dsp_command(VGLOB *vglob_ptr)
+{
+#if 0
+	U8 modem = V(modem_num);
+
+	byte		   L1;
+	dspCmdStruct * cmd;
+	dspCmdTxStruct	*txCmd = &V(txCmd);
+
+	/********************************************************************
+	** The state machine should never call us unless there is something *
+	** to send but check for sanity's sake anyway!                      *
+	*********************************************************************/
+	if (txCmd->content) {
+
+		/****************************************************************
+		** Grab a handle on the command that is queued for transmission *
+		** to the DSP. NOTE we don't increment the outPtr in here, this *
+		** is done only when we receive an ACK from the DSP. This lets  *
+		** us have retries (if DSP fails to read) without extra logic.  *
+		*****************************************************************/
+		cmd = &(txCmd->cmdBuf[txCmd->outPtr]);
+	
+		/*************************************
+		** Write the command arguments first *
+		**************************************/
+		for (L1 = 0 ; L1 < CFG_DCMD_MAX_ARGS; L1++)
+			dp_regwrite16(TX_CMD_ARG_REG - L1, cmd->args[L1]);
+	
+		/***********************************************************
+		** Now write the command identifier - this will generate a *
+		** HWBANK interrupt to the DSP.                            *
+		************************************************************/
+		dp_regwrite16(TX_CMD_ID_REG, cmd->id);
+	
+		/***************************************************************
+		** Disable the command transmit interface so that we can't try *
+		** to write another command to the DSP until this one has been *
+		** read (this is handled in the acknowledgement section). Also *
+		** store the current time so we can detect timeout conditions. *
+		****************************************************************/
+		txCmd->ifState = V_BUSY;
+		txCmd->issueTime = MACRO_GET_TIME();
+	} else
+		WARNING(vglob_ptr, WARN_DCMD_PROG_LOGIC_FAIL);
+#endif
+}
+
+
+/******************************************************************************
+** Function : get_dsp_command                                                 *
+*******************************************************************************
+** Modification History :                                                     *
+**                                                                            *
+** Date            Ver   Dev  Comments                                        *
+** 31st Oct  1998  1.0   RGT  Initial Revision                                *
+**                                                                            *
+**[Release 2]-----------------------------------------------------------------*
+** Date            Ver   Dev  Comments                                        *
+** 20th Apr  1999  2.0   RGT  Modifications for new configuration parameter   *
+**                            format and WARNING capability.                  *
+**                                                                            *
+*******************************************************************************
+** Description :                                                              *
+**   This is a private function callable only from the CAMIL driver. It is    *
+** called from the dsp interrupt handler when the dsp writes a command to the *
+** z80. This function simply reads the command from the hardware and places   *
+** it in the receive command queue.                                           *
+*******************************************************************************
+** Arguments :                                                                *
+**                NONE                                                        *
+**                                                                            *
+*******************************************************************************/
+void get_dsp_command(VGLOB *vglob_ptr)
+{
+	U8 modem = V(modem_num);
+	byte			  L1;
+	dspCmdStruct	* cmd;
+	dspCmdRxStruct	*rxCmd = &V(rxCmd);
+
+	/*********************************************************************
+	** Firstly make sure we've got space for this command - if not, just *
+	** drop the new command and throw an error to the state machine      *
+	**********************************************************************/
+	if (rxCmd->content < CFG_DCMD_BUF_SZ) {
+
+		/**************************************************************
+		** Grab a handle on the first available command buffer in the *
+		** receiver queue. Increment inPtr ready for the next command *
+		***************************************************************/
+		cmd = &(rxCmd->cmdBuf[rxCmd->inPtr++]);
+
+		/*****************************
+		** Wrap pointer if necessary *
+		******************************/
+		if (rxCmd->inPtr >= CFG_DCMD_BUF_SZ)
+			rxCmd->inPtr = 0;
+
+		/************************************************************
+		** Read in the command arguments from the hardware into the *
+		** reserved command buffer.                                 *
+		*************************************************************/
+		for (L1 = 0; L1 < CFG_DCMD_MAX_ARGS; L1++)
+			cmd->args[L1] = dp_regread(RX_CMD_ARG_REG - L1);
+
+		/***************************************************************
+		** Finally read in the command identifier - this will generate *
+		** a HRBANK interrupt back to the DSP letting it know that     *
+		** we've accepted the command.                                 *
+		****************************************************************/
+		cmd->id = dp_regread(RX_CMD_ID_REG);
+
+		/******************************************************************
+		** We've just accepted another command into the queue - increment *
+		** the content tracers.                                           *
+		*******************************************************************/
+		rxCmd->cmdsRcvd++;
+		rxCmd->content++;
+
+	} else {
+		/*****************************************************
+		** ERROR - NOT PROCESSING DSP COMMANDS FAST ENOUGH ! *
+		******************************************************/
+		WARNING(vglob_ptr, WARN_DCMD_INBUF);
+	}
+
+#if defined(POLLING_DSP)
+#else
+	/**************************************************************
+	** Clear the interrupt that caused us to invoke this function *
+	***************************************************************/
+	camil_interrupt(modem, CLEAR, CWBANK);
+#endif
+}
+
+
+/******************************************************************************
+** Function : process_dsp_ack                                                 *
+*******************************************************************************
+** Modification History :                                                     *
+**                                                                            *
+** Date            Ver   Dev  Comments                                        *
+** 31st Oct  1998  1.0   RGT  Initial Revision                                *
+**                                                                            *
+**  9th Nov  1998  1.1   RGT  Reset retries element when receive an ACK.      *
+**                                                                            *
+**[Release 2]-----------------------------------------------------------------*
+** Date            Ver   Dev  Comments                                        *
+** 20th Apr  1999  2.0   RGT  Mods for new config parameter format.           *
+**                                                                            *
+*******************************************************************************
+** Description :                                                              *
+**   This function allows the main task to initialise and enable the command  *
+** interface between the Z80 and the DSP.                                     *
+*******************************************************************************
+** Arguments :                                                                *
+**                NONE                                                        *
+**                                                                            *
+*******************************************************************************/
+void process_dsp_ack(VGLOB *vglob_ptr)
+{
+	dspCmdTxStruct	*txCmd = &V(txCmd);
+
+	/******************************************************
+	** OK, make sure we actually sent a commmand prior to *
+	** getting the acknowlegement interrupt.              *
+	*******************************************************/
+	if (txCmd->ifState == V_BUSY) {
+		txCmd->content--;
+		txCmd->cmdsTxd++;
+		txCmd->ifState = V_READY;
+		txCmd->retries = 0;
+		if (++txCmd->outPtr >= CFG_DCMD_BUF_SZ)
+			txCmd->outPtr = 0;
+	}
+
+#if defined(POLLING_DSP)
+#else
+	camil_interrupt(V(modem_num), CLEAR, CRBANK);
+#endif
+}
+
+
+/******************************************************************************
+** Function : dsp_command_state_machine                                       *
+*******************************************************************************
+** Modification History :                                                     *
+**                                                                            *
+** Date            Ver   Dev  Comments                                        *
+** 31st Oct  1998  1.0   RGT  Initial Revision                                *
+**                                                                            *
+**  9th Nov  1998  1.1   RGT  Increased number of retries to send DSP command *
+**                            before giving up and returing error to main()   *
+**                                                                            *
+**[Release 2]-----------------------------------------------------------------*
+** Date            Ver   Dev  Comments                                        *
+** 20th Apr  1999  2.0   RGT  Modifications for new configuration parameter   *
+**                            format and WARNING capability.                  *
+**                                                                            *
+*******************************************************************************
+** Description :                                                              *
+**   This function should be called periodically within the main loop. It     *
+** handles the transfer and processing of all commands across the Z80 / DSP.  *
+*******************************************************************************
+** Arguments :                                                                *
+**                NONE                                                        *
+**                                                                            *
+*******************************************************************************/
+byte dsp_command_state_machine(VGLOB *vglob_ptr)
+{
+	dspCmdTxStruct	*txCmd = &V(txCmd);
+	dspCmdRxStruct	*rxCmd = &V(rxCmd);
+
+	/*******************************************************************
+	** Look to see if we have anything to do in the transmit direction *
+	********************************************************************/
+	if (txCmd->content) {
+	
+		/****************************************************************
+		** Check to see if the transmit command interface is 'busy' (ie *
+		** that we're waiting for a command ACK from the DSP). If this  *
+		** is the case, we must check watch for a timeout error on the  *
+		** command.                                                     *
+		*****************************************************************/
+		if (txCmd->ifState == V_BUSY) {
+
+			/********************************************************
+			** OK, interface is 'busy' only wait so long for an ACK *
+			** before deciding that the command transfer failed.    *
+			*********************************************************/
+			if (MACRO_ELAPSED_TIME(txCmd->issueTime) > CFG_DCMD_ACK_TIMEOUT) {
+
+				WARNING(vglob_ptr, WARN_DCMD_NO_ACK);
+
+				/*********************************************************
+				** We'll try three times to send a command before giving *
+				** up completely.                                        *
+				**********************************************************/
+				if (txCmd->retries < CFG_DCMD_RETRY_LIMIT) {
+					txCmd->retries ++;
+					txCmd->issueTime = MACRO_GET_TIME();
+					send_dsp_command(vglob_ptr);
+				} else {
+					WARNING(vglob_ptr, WARN_DCMD_RETRY_EXCEED);
+
+					/**********************************************
+					** DSP SOFTWARE OR INTERFACE HARDWARE FAILURE *
+					***********************************************/
+					return DSP_CMD_SM_FATAL;
+				}
+			}
+		} else {
+
+			/*******************************************************
+			** Transmit command interface is free. Send the first  *
+			** command in the queue.                               *
+			********************************************************/
+			send_dsp_command(vglob_ptr);
+		}
+	}
+
+	/************************************************************
+	** Check if we have anything to do in the receive direction *
+	*************************************************************/
+	if (rxCmd->content) {
+		if (!process_dsp_command(vglob_ptr)) {
+			WARNING(vglob_ptr, WARN_DCMD_BAD_COMMAND);
+			return DSP_CMD_SM_FATAL;
+		}
+	}
+
+	return DSP_CMD_SM_OK;
+}
+
+
+/******************************************************************************
+** Function : process_dsp_command                                             *
+*******************************************************************************
+** Modification History :                                                     *
+**                                                                            *
+** Date            Ver   Dev  Comments                                        *
+** 31st Oct  1998  1.0   RGT  Initial Revision                                *
+**                                                                            *
+**  9th Nov  1998  1.1   RGT  Added DTMF detection command from 2181->Z80     *
+**                                                                            *
+**[Release 2]-----------------------------------------------------------------*
+** Date            Ver   Dev  Comments                                        *
+** 19th Jan  1999  2.0   RGT  Quick mod to send DTMF through the MIMIC.       *
+**                                                                            *
+** 20th Apr  1999  2.1   RGT  Modifications for new configuration parameter   *
+**                            format and WARNING capability. Removal of old   *
+**                            core ROM debug test.                            *
+**                                                                            *
+*******************************************************************************
+** Description :                                                              *
+**   This static function is called by the state machine when a command is    *
+** received from the DSP. It decodes and executes the command.                *
+*******************************************************************************
+** Arguments :                                                                *
+**                NONE                                                        *
+**                                                                            *
+*******************************************************************************/
+//extern non_banked byte send_packet_to_network(packet_t *, byte);
+
+static byte process_dsp_command(VGLOB *vglob_ptr)
+{
+	dspCmdStruct	* cmd;
+	dspCmdRxStruct	*rxCmd = &V(rxCmd);
+
+	if (!rxCmd->content) {
+		WARNING(vglob_ptr, WARN_DCMD_PROG_LOGIC_FAIL);
+		return FALSE;
+	}
+
+	cmd = &rxCmd->cmdBuf[rxCmd->outPtr++];
+	if (rxCmd->outPtr >= CFG_DCMD_BUF_SZ)
+		rxCmd->outPtr = 0;
+	rxCmd->content --;
+
+	switch(cmd->id) {
+	case DSP_SANITY_RESP:
+		break;
+
+	case DTMF_DETECTED:
+		packet_t	  *pkt = next_rx_media_packet( vglob_ptr );
+		word *mediaPtr = (word *) pkt->media;
+		*mediaPtr++ = DTMF_DETECTED;
+		*mediaPtr++ = cmd->args[0];
+		pkt->length = 8;
+		send_packet_to_network(vglob_ptr, pkt, 0x20);
+/*
+		hCmd.cmdID     = DTMF_DETECTED;
+		hCmd.numParams = 1;
+
+		hCmd.buf[0]    = PARAM_DTMF_DIGITS;
+		hCmd.buf[1]    = 1;
+		hCmd.buf[2]    = cmd->args[0];
+		submit_host_command(&hCmd);
+*/
+
+		break;
+
+	default:
+		printf("dsp_process_command: unknown id 0x%x rec'd from modem %d\n", cmd->id, V(modem_num));
+		return FALSE;
+	}
+	return TRUE;
+}
+
+
+	
+/******************************************************************************
+** Function : select_echo_cancellation                                        *
+*******************************************************************************
+** Modification History :                                                     *
+**                                                                            *
+**[Release 2]-----------------------------------------------------------------*
+** Date            Ver   Dev  Comments                                        *
+** 16th Feb  1999  2.0   RGT  Initial Revision                                *
+**                                                                            *
+*******************************************************************************
+** Description :                                                              *
+**   This function may be called by any other process in the system. It queues*
+** a command to the DSP instructing it to turn echo cancellation on or off.   *
+*******************************************************************************
+** Arguments :                                                                *
+**   ______________________________________________________________________   *
+**  | Type       |  arg name  | Description                                |  *
+**  |------------+------------+--------------------------------------------|  *
+**  | byte       |    echo    | echo cancellor: TRUE = "ON", FALSE = "OFF" |  *
+**   ----------------------------------------------------------------------   *
+**                                                                            *
+*******************************************************************************/
+void select_echo_cancellation(VGLOB *vglob_ptr, byte echo)
+{
+#if defined(ITS)
+	dspCmdStruct	*dspCmd = &V(dspCmd);
+
+	dspCmd->id      = ECHO_CANCELLATION;
+	dspCmd->args[0] = echo;
+	submit_dsp_command(vglob_ptr, dspCmd);
+#endif
+}
+
+
+/******************************************************************************
+** Function : select_compander                                                *
+*******************************************************************************
+** Modification History :                                                     *
+**                                                                            *
+**[Release 2]-----------------------------------------------------------------*
+** Date            Ver   Dev  Comments                                        *
+** 31st Oct  1998  2.0   RGT  Initial Revision                                *
+**                                                                            *
+*******************************************************************************
+** Description :                                                              *
+**   This function may be called by any other process in the system. It queues*
+** a command to the DSP that specifies the compander types on PSTN and PNET.  *
+*******************************************************************************
+** Arguments :                                                                *
+**   ______________________________________________________________________   *
+**  | Type       |  arg name  | Description                                |  *
+**  |------------+------------+--------------------------------------------|  *
+**  | byte       |    pnet    | PNET compander: A_LAW or U_LAW             |  *
+**  |------------+------------+--------------------------------------------|  *
+**  | byte       |    pstn    | PSTN compander: A_LAW or U_LAW             |  *
+**   ----------------------------------------------------------------------   *
+**                                                                            *
+*******************************************************************************/
+void select_compander(VGLOB *vglob_ptr, byte pnet, byte pstn)
+{
+#if defined(ITS)
+	dspCmdStruct	*dspCmd = &V(dspCmd);
+
+	dspCmd->id      = SELECT_COMPANDER;
+	dspCmd->args[0] = pnet;
+	dspCmd->args[1] = pstn;
+	submit_dsp_command(vglob_ptr, dspCmd);
+#endif
+}
+
+/*********************[ FUNCTION VERSION VERSION TRACKING ]********************
+
+ _____________________________________________________________________________
+|                            |              dsp_cmd.obj Version               |
+|   Function Name            |  1.0 |  1.1 |  1.2 |  1.3 |  1.4 |  1.5 |  1.6 | 
+|----------------------------+------+------+------+------+------+------+------|
+| CHANGE TO NON-FUNCTION     |      |      |  *** |      |      |      |      |
+|----------------------------+------+------+------+------+------+------+------|
+| dsp_command_interface_init |  1.0 |      |      |      |      |      |      |
+|----------------------------+------+------+------+------+------+------+------|
+| submit_dsp_command         |  1.0 |      |      |      |      |  2.0 |      |
+|----------------------------+------+------+------+------+------+------+------|
+| send_dsp_command           |  1.0 |      |      |      |      |  2.0 |      |
+|----------------------------+------+------+------+------+------+------+------|
+| get_dsp_command            |  1.0 |      |      |      |      |  2.0 |      |
+|----------------------------+------+------+------+------+------+------+------|
+| process_dsp_ack            |  1.0 |  1.1 |      |      |      |  2.0 |      |
+|----------------------------+------+------+------+------+------+------+------|
+| dsp_command_state_machine  |  1.0 |  1.1 |      |      |      |  2.0 |      |
+|----------------------------+------+------+------+------+------+------+------|
+| process_dsp_command        |  1.0 |  1.1 |      |  2.0 |      |  2.1 |      |
+|----------------------------+------+------+------+------+------+------+------|
+| select_echo_cancellation   |******|******|******|******|  2.0 |      |      |
+|----------------------------+------+------+------+------+------+------+------|
+| select_compander           |******|******|******|******|  2.0 |      |      |
+ -----------------------------------------------------------------------------
+
+**********************[ FUNCTION VERSION VERSION TRACKING ]********************/

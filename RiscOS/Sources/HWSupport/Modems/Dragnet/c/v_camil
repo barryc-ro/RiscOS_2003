@@ -1,0 +1,825 @@
+/*name and version number:@(#)v_camil.c	1.21*/
+/*date of get: 		  09/06/00 16:59:30*/
+/*date of delta:	  03/27/00 21:45:10*/
+/*****************************************************************************
+** File        : v_camil.c                                                     *
+** Version     : 1.7                                                         *
+**---------------------------------------------------------------------------*
+** Description :                                                             *
+**   Contains low-level drivers for the camil interface block which enables  *
+** the Z80 and DSP to communicate.                                           *
+**                                                                           *
+**     Function Name    | Access  | Summary                                  *
+**  --------------------+---------+----------------------------------------- *
+**
+**  dsp_media_read      | GLOBAL  | Reads data from DSP via dual port regs   *
+**  dsp_media_write     | GLOBAL  | Writes data to DSP via dual port regs    *
+**  init_frame_pools    | STATIC  | Used internally by camil_init            *
+**  dual_port_read      | GLOBAL  | Used by ISR to read 729 data from CAMIL  *
+**  dual_port_write     | GLOBAL  | Used by ISR to write 729 data to CAMIL   *
+**
+**                                                                           *
+**---------------------------------------------------------------------------*
+**                               HISTORY                                     *
+** Date            Ver   Dev  Comments                                       *
+** 08/25/1999      1.0   jyu  modified so media_read/_write is indenpendent
+				of type of DSP interface
+******************************************************************************/
+
+#include <memory.h>  // memcpy
+
+#include <mqx.h>
+#include <v_glob.h>
+#include <v_task.h>
+#include <v_defs.h>
+#include <v_stats.h>
+#include <v_camil.h>
+
+#if defined(PLAY_TONE) || defined(PLAY_TONE_IN_READ) // to play a constant tone
+#include <v_tone.h>
+static uint_32 t_count[MAX_DP];
+#endif
+
+/*****************************************************************************
+             ###   #      ###   ####    ###   #     ####
+            #      #     #   #  #   #  #   #  #    #
+            #  ##  #     #   #  ####   #####  #     ####  
+            #   #  #     #   #  #   #  #   #  #         #  
+             ###   #####  ###   ####   #   #  ##### ####
+******************************************************************************/
+
+/****************************************************************************
+              ####  #####   ###   #####  ###   ####   ####
+             #        #    #   #    #     #   #      #
+              ####    #    #####    #     #   #       ####
+                  #   #    #   #    #     #   #           #
+              ####    #    #   #    #    ###   ####   ####
+*****************************************************************************/
+	static frame_t		G711_FRAME_ERASURE;
+	static frame_t		G729_FRAME_ERASURE;
+	static frame_t		FAX_FRAME_ERASURE;
+
+/*****************************************************************************
+      ##### #   #  #   #   ####  #####  ###   ###   #    #  ####
+      #     #   #  ##  #  #        #     #   #   #  ##   # #
+      ####  #   #  # # #  #        #     #   #   #  # #  #  ####
+      #     #   #  #  ##  #        #     #   #   #  #   ##      #
+      #      ####  #   #   ####    #    ###   ###   #    #  ####
+******************************************************************************/
+
+/******************************************************************************
+** Function : dsp_media_read                                                  *
+*******************************************************************************
+** Modification History :                                                     *
+**                                                                            *
+** Date            Ver   Dev  Comments                                        *
+** 08/25/1999      1.0   jyu  remove dsp dependency to support qmp 
+**                                                                            *
+*******************************************************************************
+** Description :                                                              *
+**  transfer/convert media from inbuf to rxBuf/frame
+*******************************************************************************
+** Arguments :                                                                *
+**   len: length of the buf which contains the media/voice sample, only
+**        used for sanity check again the frame len per coder type.
+**   buf: buf contains 10 ms of media/voice sample regardless of coder type.
+*******************************************************************************/
+void dsp_media_read(VGLOB *vglob_ptr, U8 *inbuf, U8 len)
+{
+	if (!V(callIsNowActive)) {
+		// Happens during DTMF detection prior to call
+		return;
+	}
+	U8 numBytes = len - 2;
+	Boolean  busy       = FALSE;
+	Boolean  gotControl = FALSE;
+
+#if 0
+	printf("dsp_media_read entrance audit\n");
+	audit_frame_pools(vglob_ptr);
+#endif
+
+#if 0
+	if (ModemNum == 0) {
+		U32 saveFlag = G(InstanceFlag);
+		G(InstanceFlag) = 0;
+		printf("dsp_media_read: inbuf=0x%x, len=%d\n", inbuf, len);
+		for (int i = 0; i < len; i++) {
+			printf(" %02x", *(inbuf + i));
+		}
+		printf("\n");
+		G(InstanceFlag) = saveFlag;
+	}
+#endif
+
+	/****************************************************************
+	** Grab a handle on the receiver state machine and the frame it *
+	** currently indexes in the receiver frame pool.                *
+	*****************************************************************/
+	stateInfo_t *SM = &V(camilSM).rx;
+	frame_t *frame = &V(rxFramePool[SM->frameIndex]);
+
+	/**********************************************************************
+	** Firstly read B0. This will clear the pending interrupt. B0 carries *
+	** sequencing and control information indicating both start of frame  *
+	** and length of the block to read in address range 0x80 - 0x8F.      *
+	**                                                                    *
+	** The format of this indicator byte is as follows :                  *
+	**   _______________________________                                  *
+	**  | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 | X = 1 for 1st block in frame    *
+	**  |---+-------+-------------------|   = 0 for other blocks.         *
+	**  | X | TimeS |  Bytes in block   |                                 *
+	**   -------------------------------                                  *
+	**        0   0   = 10 msec frame    These values are only set if     *
+	**        0   1   = 15 msec frame    control word bit X is set        *
+	**        1   0   = 30 msec frame                                     *
+	**        1   1   = reserved                                          *
+	**                                                                    *
+	***********************************************************************/
+
+	// Indicator concept not used for the moment
+	// All frames assumed to represent 10ms
+	// Probably we will need this again with G.723
+
+
+	if (SM->state == GET_FRAME_ELEMENT) {
+		gotControl = TRUE;
+	}
+
+	busy = TRUE;
+
+/**************************************************************************
+** STATE MACHINE OVERVIEW                                                 *
+******                                                                    *
+  **               --------------------------------------------------   *
+  **              |                                                  |  *
+  **      ________V__________                                        |  *
+  **     |                   |   OUT_OF_MEMORY                       |  *
+  **     | GET_FRAME_ELEMENT |--------------------                   |  *
+  **     |                   |                    |                  |  *
+  **      -------------------                     |   NOT_CTL_WORD   |  *
+  **              | OK <---------                 |<--------------   |  *
+  **      ________V__________    | NOT_CTL_WORD   |               |  |  *
+  **     |                   |   |      __________V___________    |  |  *
+  **     | TRANSFER_CTL_WRD  |---      |                      |   |  |  *
+  **     |                   |         | DISCARD_CONTROL_WORD |---   |  *
+  **      -------------------          |                      |      |  *
+  **              | FRAME_SYNC'D        ----------------------       |  *
+  **      ________V__________                     |<--------------   |  *
+  **     |                   |          __________V___________    |  |  *
+  **     |    GET_MEMORY     |         |                      |   |  |  *
+  **     |                   |         |     DISCARD_MEDIA    |---   |  *
+  **      -------------------          |                      |      |  *
+  **              |<-------------       ----------------------       |  *
+  **      ________V__________    |                |                  |  *
+  **     |                   |   |                |                  |  *
+  **     |  TRANSFER_MEDIA   |---                 |END_OF_FRAME      |  *
+  **     |                   |                    |                  |  *
+  **      -------------------                     |                  |  *
+  **              | END_OF_FRAME                  V                  |  *
+  **               --------------------------------------------------   *
+  **                                                                    *
+  ***********************************************************************/
+	while (busy) {
+		switch (SM->state) {
+/***********************************************************************
+** GET_FRAME_ELEMENT                                                   *
+**********  This state checks the frame pool (rx) for a free element   *
+  ** to store the incoming frame in. If no free elements exist   *
+  ** the machine moves to state DISCARD_CONTROL_WORD, otherwise  *
+  ** it falls through to GET_CONTROL_WORD where frame rx starts. *
+  ****************************************************************/
+		case GET_FRAME_ELEMENT:
+			if (frame->status != V_EMPTY) {
+				WARNING(vglob_ptr, WARN_PSTN_INBUF);
+				V(stats).rx.droppedFrames++;
+				SM->state = DISCARD_CONTROL_WORD;
+				break; // get out to state DISCARD quick!
+			}
+			SM->state = TRANSFER_CONTROL_WORD;
+			/** Fall through to state CONTROL_WORD **/
+
+/***********************************************************************
+** GET_CONTROL_WORD                                                    *
+**********   The control word is a two byte block that is transferred  *
+  ** in isolation from the media. Because the control word is    *
+  ** the first block transferred in any given frame, the B0 byte *
+  ** indicator X-bit will be set enabling the machine to re-sync *
+  ** in the event of earlier loss.                               *
+  **                                                             *
+  ** The ctl word is 2-bytes long and has the following format : *
+  **                                                             *
+  **            <-- 1 byte --> <-- 1 byte -->                    *
+  **            [ CODEC_TYPE ] [   LENGTH   ]                    *
+  **              Reg = 0x80     Reg = 0x81                      *
+  **                                                             *
+  ** Once the above data has been extracted, the machine moves   *
+  ** to state CHECK_MEMORY                                       *
+  ****************************************************************/
+		case TRANSFER_CONTROL_WORD:
+			if (gotControl) {
+				// Set up frame descriptor
+				frame->ID = SM->frameID++;
+				frame->codec = inbuf[0];
+				frame->length = numBytes;
+
+				// Debug tests
+				if (frame->codec == G711 && frame->length != G711_FRAME_SZ
+					|| frame->codec == G729 &&
+					(frame->length != G729_FRAME_SZ &&
+					 frame->length != 2 && frame->length != 0) ) {
+					printf("dsp_media_read: UNEXPECTED frame length = %d, codec = %x\n", frame->length, frame->codec);
+					V(stats).rx.rejectedFrames++;
+					SM->frameBytes = frame->length;
+					SM->byteOffset = 0;
+					SM->state = DISCARD_MEDIA;
+				}
+
+				/*******************************************************
+				** If the frame emitted by the DSP is not of the type  *
+				** we want to send to the network then discard the     *
+				** remaining blocks. Note this works for VOICE PROMPTS *
+				** as this has a special codec type that the DSP isn't *
+				** aware exists.                                       *
+				********************************************************/
+				else if (frame->codec != SM->codec && frame->codec != DEMOD) {
+					V(stats).rx.rejectedFrames++;
+					SM->frameBytes = frame->length;
+					SM->byteOffset = 0;
+					SM->state = DISCARD_MEDIA;
+				}
+				else {	 // if (frame
+					SM->state = TRANSFER_MEDIA;
+				}
+			}
+			else { // if (control
+				WARNING(vglob_ptr, WARN_PSTN_SYNC);
+			}	// if (control
+
+			if (SM->state != TRANSFER_MEDIA) {
+				busy = FALSE;
+				break;
+			}
+			// else, fall to TRANSFER_MEDIA
+
+			/** Fall through to state TRANSFER_MEDIA **/
+
+/***********************************************************************
+** TRANSFER_MEDIA                                                      *
+**********  This state keeps track of the number of bytes read in from *
+  ** the DSP buf until the entire frame has been received.*
+  ** It then updates the frame pool and returns to machine state *
+  ** GET_FRAME_ELEMENT on the next interrupt from the DSP.       *
+  ****************************************************************/
+		case TRANSFER_MEDIA:
+#if defined(PLAY_TONE_IN_READ)
+			int i;
+			for (i = 0; i < numBytes; i++) {
+				frame->media[i] = Dial_Tone_Sample[t_count[ModemNum]];
+				if (++t_count[ModemNum] >= Dial_Tone_Sample_Size) {
+					t_count[ModemNum] = 0;
+				}
+			}
+#else
+			memcpy(&frame->media[0], &inbuf[2], (size_t) numBytes);
+#endif
+			V(stats).rx.mediaBytes += numBytes;
+
+			/*****************************************************
+			** Transfer from DSP has stopped for this interrupt, *
+			** assume we have an entire frame.                   *
+			******************************************************/
+			frame->status = V_FULL;
+			v_send_frameq_msg( vglob_ptr );
+			if (++SM->frameIndex >= SM->numFrames) {
+				SM->frameIndex = 0;
+			}
+			V(stats).rx.queuedFrames++;
+			V(stats).rx.bufferedFrames++;
+			SM->state = GET_FRAME_ELEMENT;
+			busy = FALSE;
+			break;
+
+
+/***********************************************************************
+** DISCARD_CONTROL_WORD                                                *
+**********  Basically the same as GET_CONTROL_WORD only no information *
+  ** is stored in the frame structure - Only the length info. is *
+  ** stored in a state machine internal variable for controlling *
+  ** discard of the media data.                                  *
+  ****************************************************************/
+		case DISCARD_CONTROL_WORD:
+			if (gotControl) {
+				/*****************************************************
+				** Set the frame holder up ready to accept data from *
+				** the DSP.                                          *
+				******************************************************/
+				SM->state      = DISCARD_MEDIA;
+			}
+			// fall through to state DISCARD_MEDIA
+
+/***********************************************************************
+** DISCARD_MEDIA                                                       *
+**********  Simply checks the number of bytes the DSP is trying to send*
+  ** . If the check proves true, the machine resets*
+  ** to state GET_FRAME_ELEMENT ready for a new frame.           *
+  ****************************************************************/
+		case DISCARD_MEDIA:
+			if (numBytes >= SM->frameBytes) {
+				SM->state = GET_FRAME_ELEMENT;
+			}
+			busy = FALSE;
+			printf("dsp_media_read: discarding media\n");
+			break;
+
+		default:
+			break;
+		} // switch
+	}	// while
+
+#if 0
+	printf("dsp_media_read exit audit\n");
+	audit_frame_pools(vglob_ptr);
+#endif
+}
+
+
+/******************************************************************************
+** Function : dsp_media_write                                                 *
+*******************************************************************************
+** Modification History :                                                     *
+**                                                                            *
+** Date            Ver   Dev  Comments                                        *
+** 08/25/1999      1.0   jyu  remove dsp dependency to support qmp 
+**                                                                            *
+*******************************************************************************
+** Description :                                                              *
+**   This function is the complement of dsp_media_read. 
+**                                                                            *
+**   To transfer media to the dsp buf, the controlling module must assemble 
+** data into the TxBuf structure. Each time data is buffered.
+*******************************************************************************
+** Arguments :                                                                *
+**   outbuf: output buf to DSP containing the voice/media sample
+*******************************************************************************/
+U8 dsp_media_write(VGLOB *vglob_ptr, U8 *outbuf)
+{
+	U8 numBytes  = 0;
+
+#if 0
+	printf("dsp_media_write entrance audit\n");
+	audit_frame_pools(vglob_ptr);
+#endif
+	/***********************************************
+	** Grab a handle on the transmit state machine *
+	************************************************/
+	stateInfo_t  *SM = &V(camilSM).tx;
+
+/***********************************************************************
+** GET_FRAME_ELEMENT                                                   *
+******  This state attempts to grab a frame from the tx pool for the   *
+  ** DSP. If no frame is available, it selects an appropriate form   *
+  ** of frame erasure (given a codec type). It then proceeds to new  *
+  ** state TRANSFER_CONTROL_WORD.                                    *
+  ********************************************************************/
+	SM->frame = &V(txFramePool[SM->frameIndex]);
+
+	SM->frameID++;
+
+	#if defined(V_FORCE_ERASURE)
+	if (SM->frame->status != V_FULL || SM->force_erasure > 0 ) {
+		if (SM->force_erasure > 0 ) {
+			SM->force_erasure--;
+		}
+	#else
+	if (SM->frame->status != V_FULL) {
+	#endif 	// V_FORCE_ERASURE
+		/**************************************************************
+		** FRAME ERASURE: The idea here is to select the appropriate  *
+		** type of erasure frame, given a codec type. If no coder has *
+		** been selected, or an unrecognised coder, we use G711.      *
+		***************************************************************/
+		switch (SM->codec) {
+		case G711:
+			SM->frame = &G711_FRAME_ERASURE;
+			break;
+
+		case G729:
+			SM->frame = &G729_FRAME_ERASURE;
+			break;
+
+		case DEMOD:
+			SM->frame = &FAX_FRAME_ERASURE;
+			break;
+
+		case UNINITIALISED:	// This is okay, might not have call_proc
+		default:			// This is really an error condition 
+			SM->frame = &G711_FRAME_ERASURE;
+			break;
+		}  // switch
+
+		V(stats).tx.erasedFrames++;
+
+	} // if (SM->frame 
+	else {	  // full, we have somthing to send
+		/**************************************************
+		** Prepare to transfer the frame from the tx pool *
+		***************************************************/
+		SM->frameID = SM->frame->ID;
+		SM->codec = SM->frame->codec;
+/* DEBUG */
+//          V(stats).tx.droppedFrames--;
+	}  // else
+
+/***********************************************************************
+** TRANSFER_CONTROL_WORD                                               *
+******  Create & transfer a control word to the DSP as frame preamble. *
+  ** Format is as in rx direction: [CODEC][LENGTH]                   *
+  ********************************************************************/
+	outbuf[0] = SM->codec;
+	outbuf[1] = 0;
+
+/***********************************************************************
+** TRANSFER_MEDIA                                                      *
+******  Now transfer the frame media to the outbuf.
+  ********************************************************************/
+	// Assume entire frame will fit
+	numBytes = SM->frame->length;
+	memcpy(&outbuf[2], SM->frame->media, (size_t) numBytes);
+
+/***********************************************************************
+** FRAME_END                                                           *
+******  Move to the next frame in the tx pool, ready for the next      *
+  ** interrupt from the DSP.                                         *
+  ********************************************************************/
+	SM->frame->status = V_EMPTY;
+	V(stats).tx.outputFrames++;
+	if (++SM->frameIndex >= SM->numFrames) {
+		SM->frameIndex=0;
+	}
+#if 0
+	// printf("dsp_media_write exit audit\n");
+	audit_frame_pools(vglob_ptr);
+#endif
+	return(numBytes + 2);
+}
+
+/******************************************************************************
+** Function : init_frame_pools                                                *
+*******************************************************************************
+** Modification History :                                                     *
+**                                                                            *
+** Date            Ver   Dev  Comments                                        *
+** November  1998  1.0   RGT  Experimental Module in unreleased camil V1.4    *
+**                                                                            *
+**[Release 2]-----------------------------------------------------------------*
+** Date            Ver   Dev  Comments                                        *
+** 19th Jan  1999  2.0   RGT  New Revision                                    *
+**                                                                            *
+** 20th Apr  1999  2.1   RGT  Added FAX frame Erasure element plus mods to the*
+**                            configuration parameter names.                  *
+**                                                                            *
+*******************************************************************************
+** Description :                                                              *
+**   Initialises the frame pools and the driver state machine.                *
+*******************************************************************************
+** Arguments :                                                                *
+**                NONE                                                        *
+**                                                                            *
+*******************************************************************************/
+non_banked void init_frame_pools(VGLOB *vglob_ptr)
+{
+	word		  L1;
+	stateInfo_t	* SM;
+
+	SM = &V(camilSM).tx;
+	SM->codec			= UNINITIALISED;
+	SM->state			= GET_FRAME_ELEMENT;
+	SM->frameIndex		= 0;
+	SM->numFrames		= CFG_CAML_TX_LUT_SZ;
+	#if defined(V_FORCE_ERASURE)
+	SM->force_erasure = 0;
+	#endif // V_FORCE_ERASURE
+
+	for (L1=0; L1 < SM->numFrames; L1 ++) {
+		V(txFramePool[L1]).codec  = UNINITIALISED;
+		V(txFramePool[L1]).status = V_EMPTY;	
+		V(txFramePool[L1]).length = 0;
+		#if defined(FRAME_POOL_AUDIT)
+		V(txFramePool[L1]).audit1 = 0x11111111;
+		V(txFramePool[L1]).audit2 = 0x22222222;
+		V(txFramePool[L1]).audit3 = 0x33333333;
+		V(txFramePool[L1]).audit4 = 0x44444444;
+		V(txFramePool[L1]).audit5 = 0x55555555;
+		#endif
+	}
+
+
+	SM = &V(camilSM).rx;
+	SM->codec			= UNINITIALISED;
+	SM->state			= GET_FRAME_ELEMENT;
+	SM->frameIndex		= 0;
+	SM->numFrames		= CFG_CAML_RX_LUT_SZ;
+
+	for (L1 = 0; L1 < SM->numFrames; L1 ++) {
+		V(rxFramePool[L1]).codec  = UNINITIALISED;
+		V(rxFramePool[L1]).status = V_EMPTY;
+		V(rxFramePool[L1]).length = 0;
+		#if defined(FRAME_POOL_AUDIT)
+		V(rxFramePool[L1]).audit1 = 0x11111111;
+		V(rxFramePool[L1]).audit2 = 0x22222222;
+		V(rxFramePool[L1]).audit3 = 0x33333333;
+		V(rxFramePool[L1]).audit4 = 0x44444444;
+		V(rxFramePool[L1]).audit5 = 0x55555555;
+		#endif
+	}
+
+	/*****************************
+	** Create G711 Frame Erasure *
+	******************************/
+	G711_FRAME_ERASURE.codec  = G711;
+	G711_FRAME_ERASURE.status = V_FULL;	// don't care about value in here.
+	G711_FRAME_ERASURE.length = G711_FRAME_SZ;
+
+	for (L1 = 0; L1 < G711_FRAME_SZ; L1 ++)
+		G711_FRAME_ERASURE.media[L1] = 0xFF;
+
+	G729_FRAME_ERASURE.codec  = G729;
+	G729_FRAME_ERASURE.status = V_FULL;
+	G729_FRAME_ERASURE.length = G729_FRAME_SZ;
+
+	for (L1 = 0; L1 < G729_FRAME_SZ; L1 ++)
+		G729_FRAME_ERASURE.media[L1] = 0x00;
+
+	FAX_FRAME_ERASURE.codec  = DEMOD;
+	FAX_FRAME_ERASURE.status = V_FULL;
+	FAX_FRAME_ERASURE.length = FAX_FRAME_SZ;
+	FAX_FRAME_ERASURE.media[0]      = 0x00;
+	FAX_FRAME_ERASURE.media[1]      = 0x02;
+	FAX_FRAME_ERASURE.media[2]      = 0x00;
+	FAX_FRAME_ERASURE.media[3]      = 0x00;
+	for (L1 = 4; L1 < FAX_FRAME_SZ; L1++)
+		FAX_FRAME_ERASURE.media[L1] = 0x00;
+
+#if defined(PLAY_TONE) || defined(PLAY_TONE_IN_READ) // to play a constant tone
+	memset(&t_count[0], 0, sizeof(t_count));
+#endif
+}
+
+byte
+txframe_pool_full_count(VGLOB *vglob_ptr)
+{
+	frame_t *frame;
+	byte full_count = 0;
+	for(frame = &V(txFramePool[0]); frame < &V(txFramePool[CFG_CAML_TX_LUT_SZ]); frame++) {
+		// Count number of V_FULL frames
+		if (frame->status == V_FULL) {
+			full_count++;
+		}
+	}
+	return full_count;
+}
+
+#if defined (FRAME_POOL_AUDIT)
+
+static char *
+get_status_str(byte val)
+{
+	switch(val){
+	case V_EMPTY:
+		return "V_EMPTY";
+	case V_FULL:
+		return "V_FULL";
+	default:
+		return "ILLEGAL";
+	}
+}
+
+static char *
+get_codec_str(codecType val)
+{
+	switch(val) {
+	case UNINITIALISED:
+		return "UNINIT";
+	case G711:
+		return "G711";
+	case G729:
+		return "G729";
+	default:
+		return "ILLEGAL";
+	}
+}
+
+void
+dump_txframe_pool(VGLOB *vglob_ptr)
+{
+	int i;
+	frame_t *frame;
+	char *status, *codec;
+
+	printf("\nTX FRAME POOL:\n");
+	for(i = 0, frame = &V(txFramePool[0]); i < CFG_CAML_TX_LUT_SZ; i++, frame++) {
+		status = get_status_str(frame->status);
+		codec = get_codec_str(frame->codec);
+		printf("TX frame %d: media=0x%x, ID=0x%x, status=0x%x(%s), codec=0x%x(%s), length=0x%x\n", i, frame->media, frame->ID, frame->status, status, frame->codec, codec, frame->length);
+		printf("TX frame %d: audit[1-5] %04x %04x %04x %04x %04x\n", i, frame->audit1, frame->audit2, frame->audit3, frame->audit4, frame->audit5);
+	}
+	printf("\n");
+}
+
+void
+dump_rxframe_pool(VGLOB *vglob_ptr)
+{
+	int i;
+	frame_t *frame;
+	char *status, *codec;
+
+	printf("\nRX FRAME POOL:\n");
+	for(i = 0, frame = &V(rxFramePool[0]); i < CFG_CAML_RX_LUT_SZ; i++, frame++) {
+		status = get_status_str(frame->status);
+		codec = get_codec_str(frame->codec);
+		printf("RX frame %d: media=0x%x, ID=0x%x, status=0x%x(%s), codec=0x%x(%s), length=0x%x\n", i, frame->media, frame->ID, frame->status, status, frame->codec, codec, frame->length);
+		printf("RX frame %d: audit[1-5] %04x %04x %04x %04x %04x\n", i, frame->audit1, frame->audit2, frame->audit3, frame->audit4, frame->audit5);
+	}
+	printf("\n");
+}
+
+static tx_full_timer[MAX_DP];
+
+static void
+audit_txframe_pool(VGLOB *vglob_ptr)
+{
+	int i;
+	frame_t *frame;
+	char *status, *codec;
+	byte result = FALSE;
+	word full_count = txframe_pool_full_count(vglob_ptr);
+
+	for(i = 0, frame = &V(txFramePool[0]); i < CFG_CAML_TX_LUT_SZ; i++, frame++) {
+		if (frame->audit1 != 0x11111111 ||
+			frame->audit2 != 0x22222222 ||
+			frame->audit3 != 0x33333333 ||
+			frame->audit4 != 0x44444444 ||
+			frame->audit5 != 0x55555555) {
+			status = get_status_str(frame->status);
+			codec = get_codec_str(frame->codec);
+			printf("TX pool audit, modem %d\n", V(modem_num));
+			printf("TX frame %d: media=0x%x, ID=0x%x, status=0x%x(%s), codec=0x%x(%s), length=0x%x\n", i, frame->media, frame->ID, frame->status, status, frame->codec, codec, frame->length);
+			printf("TX frame %d: CORRUPT audit[1-5] %04x %04x %04x %04x %04x\n", i, frame->audit1, frame->audit2, frame->audit3, frame->audit4, frame->audit5);
+			result = TRUE;
+		}
+	}
+
+	if (full_count >= 20 || result || x_elapsed_time(tx_full_timer[V(modem_num)]) >= 1000) {
+		tx_full_timer[V(modem_num)] = x_current_time();
+
+		// word percent_full = (full_count*100)/CFG_CAML_TX_LUT_SZ;
+		printf("audit_txframe_pool: modem %d, %d of %d full\n", V(modem_num), full_count, CFG_CAML_TX_LUT_SZ);
+	}
+	if (result) {
+		_mqx_exit(0);
+	}
+}
+
+static void
+audit_rxframe_pool(VGLOB *vglob_ptr)
+{
+	int i;
+	frame_t *frame;
+	char *status, *codec;
+	byte result = FALSE;
+
+	for(i = 0, frame = &V(rxFramePool[0]); i < CFG_CAML_RX_LUT_SZ; i++, frame++) {
+		if (frame->audit1 != 0x11111111 ||
+			frame->audit2 != 0x22222222 ||
+			frame->audit3 != 0x33333333 ||
+			frame->audit4 != 0x44444444 ||
+			frame->audit5 != 0x55555555) {
+			status = get_status_str(frame->status);
+			codec = get_codec_str(frame->codec);
+			printf("RX pool audit, modem %d\n", V(modem_num));
+			printf("RX frame %d: media=0x%x, ID=0x%x, status=0x%x(%s), codec=0x%x(%s), length=0x%x\n", i, frame->media, frame->ID, frame->status, status, frame->codec, codec, frame->length);
+			printf("RX frame %d: corrupt audit[1-5] %04x %04x %04x %04x %04x\n", i, frame->audit1, frame->audit2, frame->audit3, frame->audit4, frame->audit5);
+			result = TRUE;
+		}
+	}
+	if (result) {
+		_mqx_exit(0);
+	}
+}
+
+void
+audit_frame_pools(VGLOB *vglob_ptr)
+{
+	// Audit my pools
+	audit_txframe_pool(vglob_ptr);
+	audit_rxframe_pool(vglob_ptr);
+
+	// Audit peer's pools
+	byte peer = v_get_peer(V(modem_num));
+	audit_txframe_pool(&vglob_array[peer]);
+	audit_rxframe_pool(&vglob_array[peer]);
+
+}
+
+#endif // defined (FRAME_POOL_AUDIT)
+
+//*** rename from dsp_task_init to dsp_isr_init
+//
+void dsp_isr_init(VGLOB *vglob_ptr)
+{
+  V(media_timer) = MACRO_GET_TIME();
+}
+
+#if defined(G729_VIA_CAMIL)
+
+//#define CAMIL_WRITE_TRACE
+
+byte
+dual_port_read( byte *dst )
+{
+	// Read G.729 frame out of CAMIL registers
+	// Returns number of bytes read
+
+	byte bytecnt = G729_FRAME_SZ;			// G729 frame size
+	byte dsp_read_reg = 0x91;	// throw away first byte at 0x90
+	*dst++ = G729;
+	*dst++ = G729_FRAME_SZ;
+
+	// init tmp to beginning of data
+	byte *tmp = dst;
+	// copy data into fifo
+	while ( bytecnt-- > 0)    {
+		*dst++ = DP_INT_REGREAD2( dsp_read_reg ) ;
+		dsp_read_reg++;
+	}
+
+	// For 729AB, report proper length of SID, silence frames
+	if ( vglob_array[ModemNum].config.silenceSupp ) {
+		// SID frames have last 4 words == 0
+		if (tmp[2] == 0 && tmp[3] == 0
+			&& tmp[4] == 0 && tmp[5] == 0
+			&& tmp[6] == 0 && tmp[7] == 0
+			&& tmp[8] == 0 && tmp[9] == 0
+			) {
+			if ( tmp[0] == 0 && tmp[1] == 0) {
+				// All words 0, silence frame
+				return 2;	// pass as zero length frame
+			}
+			return 2 + 2;
+		}
+	}
+	return G729_FRAME_SZ + 2;
+}
+
+void
+dual_port_write ( byte *src, byte wdcnt )
+{
+	// Write G.729 frame to CAMIL registers
+	// Wdcnt is number of words to write (7)
+	// dump QMP header bytes in first two words
+	byte bytecnt = 2*(wdcnt - 2);
+
+	if (bytecnt != G729_FRAME_SZ && bytecnt != 2) {
+		printf("dual_port_write: unexpected wdcnt=%d\n", wdcnt);
+		return;
+	}
+
+	byte dsp_write_reg = 0x81;
+	src += 4;
+
+	if ( bytecnt > 16 ) {
+		printf("dual_port_write: too large wdcnt=%d\n", wdcnt);
+		return;
+	}
+
+	#if defined(CAMIL_WRITE_TRACE)
+	U32 saveFlag;
+	if (ModemNum == 3) {
+		saveFlag = G(InstanceFlag);
+		G(InstanceFlag) = 1;
+		printf("CAMIL Write 0x%02x: ", dsp_write_reg);
+		G(InstanceFlag) = 0;
+	}
+	#endif	// CAMIL_WRITE_TRACE
+
+	while ( bytecnt-- > 0 )   {
+		DP_INT_REGWRITE( dsp_write_reg, *src ) ;
+		#if defined(CAMIL_WRITE_TRACE)
+		if (ModemNum == 3) {
+			printf("%02x ", *src);
+		}
+		#endif	// CAMIL_WRITE_TRACE
+		dsp_write_reg++;
+		src++;
+	}
+
+	#if defined(CAMIL_WRITE_TRACE)
+	if (ModemNum == 3) {
+		printf("\n");
+		G(InstanceFlag) = saveFlag;
+	}
+	#endif	// CAMIL_WRITE_TRACE
+}
+#endif	// G729_VIA_CAMIL
+

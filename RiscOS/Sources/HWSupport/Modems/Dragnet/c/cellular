@@ -1,0 +1,1279 @@
+/*name and version number:@(#)cellular.c	1.49*/
+/*date of get: 		  09/06/00 16:58:48*/
+/*date of delta:	  03/17/00 13:21:50*/
+/*****************************************************************
+File : cellular.c
+Description :
+	Contains the routines for cellular phone direct connect.
+
+Procedures Contained :
+
+Revision History :
+	Initials        Date            Change
+	EYL             05/01/96        Initial
+*****************************************************************/
+
+#include "llglob_d.h"
+#include "dpglob.h"
+
+#ifdef DC0
+#include "cellular.h"
+#include "allglobs.h"
+
+byte TxLevel_buf ;
+word cell_wTimeOut ;
+word cell_wTxTmr;
+word cell_wRxTmr;
+word cell_wSecTmr;
+byte cell_bState ;
+byte cell_bRxState ;
+byte cell_bTxState ;
+byte cell_bETC ;
+word cell_wV34Option ;
+word cell_wRxSymbol ;
+word cell_wMSEScale ;
+byte cell_bNoAnsTimeOut ;
+byte cell_bDataCallingTone ;
+byte cell_bNoCarrierDisc ;
+byte cell_bBusyPassCount ;
+byte cell_bV42 ;
+byte cell_bStatus ; // 
+
+#ifdef DEBUGGING
+//byte baDataBuf[32] ;
+//byte bBufTail ;
+//byte bBufHead ;
+#endif
+
+extern void dp_spkpn_onhook ( void ) ;
+
+/************************************************************************
+*                                                                       *
+*       Routine:        set_cell_state_online                           *
+*       Author:         EL                                              *
+*                                                                       *
+*       Creation Date:  05/01/96                                        *
+*                                                                       *
+*       Description:                                                    *
+*                                                                       *
+*       Input: None                                                     *
+*       Output: None                                                    *
+*                                                                       *
+*       Global Variables Changed:                                       *
+*       Users:                                                          *
+*                                                                       *
+*************************************************************************/
+void set_cell_state_online(void)
+{
+	if ( prnC == CELL_NEC )
+		cell_disable_dc_i_int () ;
+    else
+		cell_disable_dc_io1_int () ;
+
+    // enable only data mail box & read ram interrupts - disable all
+    // other interrupts
+#if defined( USB_MODEM ) && !defined( USB_POLLED_MODE )
+    dp_bamil_rd7 = 0xb3 ;	// leave Atlas Int enabled
+#else
+    dp_bamil_rd7 = 0xf3 ;
+#endif
+    dp_regwrite ( 0xd7, dp_bamil_rd7 ) ;
+
+	cell_wSecTmr = x_current_time () ;
+	cell_bState =  CELL_STATE_ONLINE;
+	x_debug_msg ( "cell - CELL_STATE_ONLINE" );
+}
+
+/************************************************************************
+*                                                                       *
+*       Routine:        cell_motorola_rx ()				*
+*       Author:         AT&T                                            *
+*                                                                       *
+*       Creation Date:  05/01/96                                        *
+*                                                                       *
+*       Description:                                                    *
+*                                                                       *
+*       Input: None							*
+*       Output: None                                                    *
+*                                                                       *
+*       Global Variables Changed:					*
+*       Users:                                                          *
+*                                                                       *
+*************************************************************************/
+void cell_motorola_rx ( void )
+{
+	byte bDC_I, bDC_IO1, bState ;
+	word wRxMask = MTRL_SEND_MASK >> 1 ;
+	word wRxData = 0 ;
+
+#ifdef APOLLO_NT
+    cell_disable_dc_io1_int () ;
+#endif
+	bState = 0 ; // NULL state 
+	cell_wRxTmr = x_current_time () ; 
+
+	do
+	{
+		bDC_I = cell_dc_i_read () ;
+		bDC_IO1 = cell_dc_io1_read () ;
+		if ( bState == 0 ) 
+		{
+			// searching for line NULL state
+			if ( bDC_I && bDC_IO1 )
+				bState = 1 ; // switch to data state
+		}
+		else
+		{
+			if ( bDC_I == 0 ) // receive 0
+			{
+				//x_debug_msg ("Cell - Rx 0") ;
+				wRxData = wRxData << 1 ;
+				bState = 0 ; // switch to NULL state
+			}
+			else if ( bDC_IO1 == 0 )  // receive 1
+			{
+				//x_debug_msg ("Cell - Rx 1") ;
+				wRxData = ( wRxData << 1 ) | 0x0001 ; 
+				bState = 0 ; // switch to NULL state
+
+			}
+			if ( !bState )
+			{
+				wRxMask = wRxMask >> 1;
+				if (  !wRxMask )
+				{
+					if ( ( wRxData == MOTOROLA_RING ) || \
+					   ( wRxData == MOTOROLA_WAIT_ANSWER))
+					{
+						cell_ring_int = TRUE ;
+						send_cell_cmd (MOTOROLA_HKS);
+					}
+					else if (wRxData == MOTOROLA_RELEASE)
+					{
+						x_debug_msg("cell - mot release");
+						cell_ring_int = FALSE ;
+						cell_bStatus |= CELL_RX_RELEASE;
+					}
+					else if ( (wRxData&0xff91) == MOTOROLA_REQ )
+					{
+						cell_bStatus |= MOTORALA_RX_REQ ;
+						x_debug_msg("cell - rx M req");
+					}
+		//sprintf(szBuffer, "= %x",  wRxData ) ;
+		//x_debug_msg ( szBuffer ) ;
+#ifdef APOLLO_NT
+                    cell_bStatus |= CELL_RX_INT ;
+#endif
+				}
+			}
+		}
+
+	} while ( ( bDC_I | bDC_IO1 ) && ( x_elapsed_time ( cell_wRxTmr ) < MS50 ) ) ;
+
+#ifdef APOLLO_NT
+    cell_enable_dc_io1_int () ;
+#endif
+
+}
+
+/************************************************************************
+*                                                                       *
+*       Routine:        cell_nec_rx
+*       Author:         EL                                              *
+*                                                                       *
+*       Creation Date:  07/11/96                                        *
+*                                                                       *
+*       Description:                                                    *
+*                                                                       *
+*       Input: None                                                     *
+*       Output: None                                                    *
+*                                                                       *
+*       Global Variables Changed:                                       *
+*       Users:                                                          *
+*                                                                       *
+*************************************************************************/
+void cell_nec_rx ( void )
+{
+#ifdef NEC_P100_ENABLE
+	byte baDataBuf[32] ;
+	byte bRxBuf = 0, bRxBits = 7, bCnt = 0 ;
+
+#ifdef APOLLO_NT
+    cell_disable_dc_i_int () ;
+#endif
+	while ( cell_dc_i_read () == 0 )
+	{
+		if ( cell_dc_io1_read () == 0 )
+		{
+			cell_wRxTmr = x_current_time () ; 
+                        bRxBuf = bRxBuf << 1 ;
+			while ( cell_dc_io1_read () == 0 ) 
+			{
+				if ( x_elapsed_time ( cell_wRxTmr ) > MS50 )
+                {
+                    x_debug_msg ("nec - Rx timeout") ;
+#ifdef APOLLO_NT
+                    cell_enable_dc_i_int () ;
+#endif
+					return ;
+                                }
+			}
+
+                        if ( cell_dc_io2_read () )
+			{
+				bRxBuf |= 0x01;
+			}
+                        if ( !bRxBits-- )
+			{
+				baDataBuf[bCnt++] = bRxBuf;
+				bCnt &= 0x1f;
+                                bRxBuf = 0 ;
+                                bRxBits = 7 ;
+                        }
+                }
+	}
+	baDataBuf[bCnt] = 0 ;
+	bCnt = 0 ;
+	while ( baDataBuf[bCnt] != 0 )
+	{
+		if (	( baDataBuf[bCnt] == 'C' ) &&
+			( baDataBuf[bCnt+1] == 'A' ) &&
+			( baDataBuf[bCnt+2] == 'L' ) &&
+			( baDataBuf[bCnt+3] == 'L' ) )
+		{
+			if ( ( baDataBuf[bCnt+4] == 'E' ) &&
+				( baDataBuf[bCnt+5] == 'd' ) )
+			{
+				cell_ring_int = FALSE ; // end of ring
+			}
+			else if ( ( baDataBuf[bCnt-2] != 'r' ) &&
+				  ( baDataBuf[bCnt-1] != 'E' ) )
+				cell_ring_int = TRUE ;
+			break ;
+		}
+		bCnt += 1 ;
+	}
+#ifdef DEBUGGING
+	//x_debug_msg ( baDataBuf ) ;
+#endif
+#ifdef APOLLO_NT
+                    cell_bStatus |= CELL_RX_INT ;
+#endif
+#endif // NEC_P100_ENABLE
+}
+
+/************************************************************************
+*
+*       Routine:        cellular_bg(void)
+*       Author:         EYL
+*
+*       Creation Date:  01/18/93
+*       Description:    This routine is called to check the status of the
+*                       data frame from cellular phone.
+*
+*       Input: None
+*       Output: None
+*
+*       Global Variables Changed: bRcvDataFlag
+*       Users: master_bg()
+*
+*************************************************************************/
+void cellular_bg ( void )
+{
+    switch ( cell_bState )
+    {
+	case CELL_STATE_OFFLINE:
+		switch (prnC)
+		{
+			case CELL_MOTOROLA: 
+				if ( cell_bStatus & CELL_RX_INT )
+				{
+					cell_disable_dc_io1_int () ;
+#ifndef APOLLO_NT
+					cell_motorola_rx () ;
+#endif
+					if ( cell_active == FALSE )
+					{
+						cell_active = TRUE ;
+						cell_bStatus |= MOTORALA_RX_REQ;
+						cell_wTimeOut = x_current_time () ; 
+					}
+					cell_bStatus &= ~CELL_RX_INT ;
+					cell_wSecTmr = x_current_time () ; 
+					cell_enable_dc_io1_int () ;
+				}
+				else if( x_elapsed_time(cell_wSecTmr) >= SECOND2 )
+				{
+					cell_ring_int = FALSE ;
+					cell_active = FALSE ;
+				}
+				else if ( ( cell_bStatus & MOTORALA_RX_REQ ) && ( x_elapsed_time( cell_wTimeOut ) >= SECOND2 ) )
+				{
+					if ( cell_send_motorola_cmd ( MOTOROLA_HKS ) == TRUE )
+						cell_bStatus &= ~MOTORALA_RX_REQ ;
+				}
+				break;
+
+#ifdef NEC_P100_ENABLE
+			case CELL_NEC:
+				if ( cell_bStatus & CELL_RX_INT )
+				{
+					cell_disable_dc_i_int () ;
+#ifndef APOLLO_NT
+					cell_nec_rx () ;
+#endif
+					cell_bStatus &= ~CELL_RX_INT ;
+					cell_wSecTmr = x_current_time (); 
+					cell_active = TRUE ;
+					cell_enable_dc_i_int () ;
+				}
+				else if( x_elapsed_time( cell_wSecTmr )>= SECOND2 )
+				{
+					if ( ( cell_dc_io1_read () == 0 ) || ( cell_dc_i_read () == 0 ) )
+					{
+						// cell phone disconnected
+						cell_ring_int = FALSE ;
+						cell_active = FALSE ;
+					}
+					else
+						cell_active = TRUE ;
+					cell_wSecTmr = x_current_time (); 
+				}
+				break;
+#endif // NEC_P100_ENABLE
+		}
+		break ;
+
+	case CELL_STATE_DIAL_SEND:
+
+		if ( x_elapsed_time ( cell_wSecTmr ) >= cell_wTimeOut )
+		{
+			if (
+#if (DATA_FAX_TAM!=1)		// speakerphone for data/fax/TAM
+				( x_modem_mode != MODEM_SPEAKER_PHONE ) &&
+#endif //(DATA_FAX_TAM!=1)		// speakerphone for data/fax/TAM
+				( S.ModemOptions.SpeakerControl ) )
+			{
+				x_debug_msg ( "cell - set volume");
+				x_output ( IO_SPEAKER_CELL_HIGH ) ;
+				x_output ( IO_SPEAKER_ON ) ;
+			}
+			switch ( prnC )
+			{
+				case CELL_MOTOROLA: 
+					x_debug_msg ("cell - sent SEND key");
+					if ( cell_send_motorola_cmd ( MOTOROLA_SEND ) == TRUE )
+					{
+						x_debug_msg ( "cell - mot disable mute" ) ;
+						send_cell_cmd ( MOTOROLA_START_MSG ) ; 
+						send_cell_cmd ( MOTOROLA_MUTE_ENABLE ) ; 
+						send_cell_cmd ( MOTOROLA_STOP_MSG ) ; 
+						set_cell_state_online() ;
+					}
+					break;
+
+				case CELL_NEC:
+					x_debug_msg ( "cell - NEC mute" ) ;
+					cell_set_busy_line_low () ;
+					cell_send_nec_cmd ( 0x0000 ) ;
+					cell_set_busy_line_high () ;
+					set_cell_state_online() ;
+					break;
+			}
+		}
+		break;
+
+	case CELL_STATE_ONLINE:
+
+		if ( cell_active == TRUE )
+		{
+		  switch (prnC)
+		  {
+			case CELL_MOTOROLA: 
+				if ( x_modem_mode == MODEM_VOICE )
+				{
+					if ( cell_bStatus & CELL_RX_INT )
+					{
+						cell_disable_dc_io1_int () ;
+#ifndef APOLLO_NT
+						cell_motorola_rx () ;
+#endif
+						cell_bStatus &= ~CELL_RX_INT ;
+						cell_enable_dc_io1_int () ;
+					}
+
+					if ( cell_bStatus & MOTORALA_RX_REQ )
+					{
+						if ( cell_send_motorola_cmd ( MOTOROLA_HKS ) == TRUE )
+							cell_bStatus &= ~MOTORALA_RX_REQ ;
+					}
+
+					if ( cell_bStatus & CELL_RX_RELEASE )
+					{
+						//report silence to tad app.
+						dp_report_voice_event('s') ;
+						cell_bStatus &= ~CELL_RX_RELEASE ;
+					}
+				}
+				else if( x_elapsed_time ( cell_wSecTmr ) >= SECOND30)
+				{
+					if ( cell_send_motorola_cmd ( MOTOROLA_HKS ) == TRUE )
+					{
+						set_cell_state_online () ;
+					}
+					else
+						x_debug_msg ( "cell - Tx mot. HK failed " );
+				}
+				break ;
+
+			case CELL_NEC:
+				break ;
+		  }
+		}
+		break ;
+	}
+}
+
+/************************************************************************
+*                                                                       *
+*       Routine:        void cell_send_motorola_cmd_end ( void )	*
+*       Author:         EL                                              *
+*                                                                       *
+*       Creation Date:  05/01/96                                        *
+*                                                                       *
+*       Description:                                                    *
+*************************************************************************/
+void cell_send_motorola_cmd_end ( void )
+{
+	cell_dc_cntrl2_high () ;
+	cell_enable_system_int () ; // enable pc interrupt.
+	cell_enable_dc_io1_int () ;
+}
+
+/************************************************************************
+*                                                                       *
+*       Routine:        byte cell_motorola_tx ( word )			*
+*       Author:         EL                                              *
+*                                                                       *
+*       Creation Date:  05/01/96                                        *
+*                                                                       *
+*       Description:                                                    *
+*                                                                       *
+*       Input: None                                                     *
+*       Output: None                                                    *
+*                                                                       *
+*       Global Variables Changed:                                       *
+*       Users:                                                          *
+*                                                                       *
+*************************************************************************/
+byte cell_motorola_tx ( word cmd )
+{
+	word wSendData, wSendMask ;
+
+	wSendData = cmd | 0xD000 ;
+	wSendMask = MTRL_SEND_MASK >> 1 ;
+
+	while ( wSendMask )
+	{
+		// looking for clock rising edge
+		while ( cell_dc_io1_read () == 0 )
+		{
+			if ( cell_dc_i_read () == 0 )
+			{
+				cell_send_motorola_cmd_end () ;
+				return ( MOT_TX_COLLISION ) ;
+			}
+		}
+
+		cell_disable_system_int () ;	// disable pc interrupts
+		// looking for clock falling edge
+		while ( cell_dc_io1_read () != 0 ) ;
+
+		if(wSendData & wSendMask)
+			cell_dc_cntrl2_high () ; // send 1
+		else
+			cell_dc_cntrl2_low () ; // send 0
+		cell_enable_system_int () ; // enaable pc interrupt.
+		wSendMask = wSendMask >> 1;
+	}
+	while ( cell_dc_i_read () ) ;
+	cell_dc_cntrl2_high () ;
+	cell_enable_dc_io1_int () ;
+	x_debug_msg ("cell - mot. cmd sent") ;
+	return ( TRUE ) ;
+}
+
+/************************************************************************
+*                                                                       *
+*       Routine:        byte cell_send_motorola_cmd ( word )            *
+*       Author:         EL                                              *
+*                                                                       *
+*       Creation Date:  05/01/96                                        *
+*                                                                       *
+*       Description:                                                    *
+*                                                                       *
+*       Input: None                                                     *
+*       Output: None                                                    *
+*                                                                       *
+*       Global Variables Changed:                                       *
+*       Users:                                                          *
+*                                                                       *
+*************************************************************************/
+byte cell_send_motorola_cmd(word cmd)
+{
+	byte bDC_I, bDC_IO1, bDC_IO2 ;
+
+	cell_disable_dc_io1_int () ;
+	cell_wTxTmr = x_current_time (); 
+
+	do // waiting for line idle state.
+	{
+		if ( x_elapsed_time ( cell_wTxTmr ) >= MS50 ) 
+		{
+			cell_enable_dc_io1_int () ;
+			x_debug_msg ("cell - cmd Timeout") ;
+			return ( FALSE ) ;
+		}
+		cell_disable_system_int () ;	// disable pc interrupts to 
+						// read io pins
+		bDC_I = cell_dc_i_read () ;
+		bDC_IO1 = cell_dc_io1_read () ;
+		bDC_IO2 = cell_dc_io2_read () ;
+		cell_enable_system_int () ; // enaable pc interrupt.
+
+	}while ( bDC_I || bDC_IO1 ) ;
+
+	if ( bDC_IO2 == 0 )
+	{
+		x_debug_msg ("cell - no cell phone connected") ;
+		return ( FALSE ) ;
+	}
+
+	cell_dc_cntrl2_low () ; // bus request
+	cell_wTxTmr = x_current_time (); 
+	while ( x_elapsed_time ( cell_wTxTmr ) < MS50 )
+	{
+		cell_disable_system_int () ;	// disable all pc interrupt to
+						// read io pins
+		bDC_I = cell_dc_i_read () ;
+		bDC_IO1 = cell_dc_io1_read () ;
+		if ( bDC_I != 0 )
+		{
+			if ( bDC_IO1 == 0 )  // start sending data
+			{
+				cell_dc_cntrl2_high () ; // send 1
+				cell_enable_system_int () ;
+				return ( cell_motorola_tx ( cmd ) ) ;
+			}
+			cell_send_motorola_cmd_end () ;
+			x_debug_msg ("cell - invalid line state") ;
+			return ( MOT_TX_COLLISION ) ;
+		}
+		else if ( bDC_IO1 != 0 )
+		{
+			cell_send_motorola_cmd_end () ;
+			x_debug_msg ("cell - Collision") ;
+			return ( MOT_TX_COLLISION ) ;
+		}
+		cell_enable_system_int () ; // enaable pc interrupt.
+	}
+	cell_send_motorola_cmd_end () ;
+	x_debug_msg ("cell - cmd Timeout1") ;
+	return ( FALSE ) ;
+}
+
+/************************************************************************
+*                                                                       *
+*       Routine:        byte cell_send_nec_cmd ( byte )			*
+*       Author:         EL                                              *
+*                                                                       *
+*       Creation Date:  07/11/96                                        *
+*                                                                       *
+*       Description:                                                    *
+*                                                                       *
+*       Input: None                                                     *
+*       Output: None                                                    *
+*                                                                       *
+*       Global Variables Changed:                                       *
+*       Users:                                                          *
+*                                                                       *
+*************************************************************************/
+byte cell_send_nec_cmd ( byte cmd )
+{
+	byte bSendMask = 0x80 ;
+
+	while ( bSendMask )
+	{
+		cell_wTxTmr = x_current_time () ; 
+		while ( cell_dc_io1_read () != 0 )
+		{
+			if ( x_elapsed_time ( cell_wTxTmr ) > MS50 )
+			{
+				x_debug_msg ("cell - NEC send data failed ");
+				return ( FALSE ) ;
+			}
+		}
+
+		if ( cmd & bSendMask )
+			cell_dc_cntrl2_high () ; // send 1
+		else
+			cell_dc_cntrl2_low () ; // send 0
+		bSendMask = bSendMask >> 1;
+
+		cell_wTxTmr = x_current_time () ; 
+		while ( cell_dc_io1_read () == 0 ) 
+		{
+			if ( x_elapsed_time ( cell_wTxTmr ) > MS50 )
+			{
+				x_debug_msg ("cell - NEC send data failed ");
+				return ( FALSE ) ;
+			}
+		}
+	}
+	return ( TRUE ) ;
+}
+
+/************************************************************************
+
+       Routine:        send_cell_cmd(void)
+       Author:         EYL
+
+       Creation Date:  05/01/96
+       Description:    This routine will disable interrupts then send
+                       out the data and then enable interrupts.
+
+       Input: A word to send to cellular phone
+       Output: None
+
+       Global Variables Changed:
+       Users: foreground routines
+*************************************************************************/
+byte send_cell_cmd ( word cmd )
+{
+	byte b, c ;
+
+	x_debug_msg ( "cell - send_cell_cmd()" ) ;
+	switch (prnC)
+	{
+		case CELL_MOTOROLA:
+			for ( c = 20 ; c-- ; )
+			{
+				// dummy read dsp rams for delay between 
+				// each cmd send to the phone.
+				dp_read_dsp_ram ( 0x01 ) ;
+				dp_read_dsp_ram ( 0x01 ) ;
+				b = cell_send_motorola_cmd ( cmd ) ;
+				if ( b != MOT_TX_COLLISION )
+					return ( b ) ;
+			}
+			break ;
+	}
+	return ( FALSE ) ;
+}
+
+/************************************************************************
+*                                                                       *
+*       Routine:        cell_isr ()					*
+*       Author:         AT&T                                            *
+*                                                                       *
+*       Creation Date:  05/01/96                                        *
+*                                                                       *
+*       Description:                                                    *
+*                                                                       *
+*       Input: None							*
+*       Output: None                                                    *
+*                                                                       *
+*       Global Variables Changed: 
+*       Users:                                                          *
+*                                                                       *
+*************************************************************************/
+void cell_isr ( void )
+{
+        //x_debug_msg ("Cell - ISR") ;
+#ifdef APOLLO_NT
+    cellRead();
+#else
+    cell_bStatus |= CELL_RX_INT ;
+#endif
+}
+
+/************************************************************************
+*                                                                       *
+*       Routine:        cell_init ()                                    *
+*       Author:         AT&T                                            *
+*                                                                       *
+*       Creation Date:  01/18/94                                        *
+*                                                                       *
+*       Description:                                                    *
+*                                                                       *
+*       Input: None                                                     *
+*       Output: None                                                    *
+*                                                                       *
+*       Global Variables Changed: bRcvDataFlag, cell_wRcvData            *
+*       Users:                                                          *
+*                                                                       *
+*************************************************************************/
+void cell_init ( void )
+{
+#ifdef DEBUGGING
+//	bBufTail = 0 ;
+//	bBufHead = 0;
+#endif
+
+	x_debug_msg ( "cell - initialization" ) ;
+	cell_disable_dc_io1_int () ;
+	cell_disable_dc_i_int () ;
+	cell_init_io () ;
+
+	if ( S.ModemOptions.CountryId != NA )
+		prnC = CELL_DISABLE ;
+	cell_active = FALSE ;
+	cell_bState =  CELL_STATE_OFFLINE;
+	cell_wSecTmr = x_current_time ();
+	cell_bStatus = 0 ;
+	if ( prnC == CELL_NEC )
+	{
+		DC_CALLBACK_TIME_CELL ;
+		cell_enable_dc_i_int () ;
+	}
+	else if ( prnC != CELL_DISABLE )
+	{
+		DC_CALLBACK_TIME_CELL ;
+		cell_enable_dc_io1_int () ;
+	}
+}
+
+/************************************************************************
+*                                                                       *
+*       Routine:        cell_send                                       *
+*       Author:         EL                                              *
+*                                                                       *
+*       Creation Date:  05/01/96                                        *
+*                                                                       *
+*       Description:    send send cmd to cellular phone			*
+*                                                                       *
+*       Input: None                                                     *
+*       Output: None                                                    *
+*                                                                       *
+*       Global Variables Changed:                                       *
+*       Users:          dp_dial                                         *       *
+*                                                                       *
+*************************************************************************/
+void cell_send ( void )
+{
+	switch (prnC)
+	{
+		case CELL_NEC:
+			cell_send_nec_cmd(0x000d);//send key
+			cell_send_nec_cmd(0x0000);//release
+			cell_send_nec_cmd(0x001b);
+			cell_send_nec_cmd(0x0000);
+			cell_send_nec_cmd(0x0033);
+			cell_set_busy_line_high () ;
+			cell_wTimeOut = SECOND1 ;
+			break ;
+		default:
+			cell_wTimeOut = SECOND2 ;
+	}
+	x_debug_msg ( "cell - CELL_STATE_DIALING");
+	cell_wSecTmr = x_current_time ();
+	cell_bState = CELL_STATE_DIAL_SEND ;
+}
+
+/************************************************************************
+*                                                                       *
+*       Routine:        cell_dial                                       *
+*       Author:         EL                                              *
+*                                                                       *
+*       Creation Date:  05/01/96                                        *
+*                                                                       *
+*       Description:    dial to cellular phone                          *
+*                                                                       *
+*       Input: None                                                     *
+*       Output: None                                                    *
+*                                                                       *
+*       Global Variables Changed:                                       *
+*       Users:          cell_dial_cmd                                   *
+*                                                                       *
+*************************************************************************/
+const byte key_tab[] = {0x0e,0x01,0x02,0x03,0x05,0x06,0x07,0x09,0x0a,0x0b};
+void cell_dial ( byte ch )
+{
+	byte key;
+
+	switch ( prnC )
+	{
+		case CELL_MOTOROLA:
+			/* entry for motorola cellular */
+			if ( ch == '*' )
+				key = 0x0D;     
+			else if ( ch == '#' )
+				key = 0x0F ;
+			else
+				key = key_tab[ch & 0x0F] ;
+			/* send the digit */
+			send_cell_cmd( (word)key );
+			break;
+
+		case CELL_NEC:
+			if ( !cell_bTxState )
+			{
+				cell_set_busy_line_low () ;
+				cell_send_nec_cmd ( 0x00af ) ;
+				cell_bTxState = 1 ;
+			}
+			cell_send_nec_cmd ( ch ) ;
+			cell_send_nec_cmd ( 0x0000 ) ;
+			break;
+	}
+}
+
+/************************************************************************
+*                                                                       *
+*       Routine:        cell_recall_land_setting                        *
+*       Author:         EL                                              *
+*                                                                       *
+*       Creation Date:  12/16/96                                        *
+*                                                                       *
+*       Description:							*
+*                                                                       *
+*       Input: None                                                     *
+*       Output: None                                                    *
+*                                                                       *
+*       Global Variables Changed:					*
+*       Users:                                                          * 
+*									*
+*************************************************************************/
+void cell_recall_land_setting ( void )
+{
+	ETC_mode = 0 ;
+	S.ModemOptions.TxLevel = TxLevel_buf ;
+	S.ModemOptions.NoAnsTimeOut = cell_bNoAnsTimeOut ;
+	S.ModemOptions.DataCallingTone = cell_bDataCallingTone ;
+	S.ModemOptions.ETC = cell_bETC ;
+	S.ModemOptions.wV34Option = cell_wV34Option ;
+	S.ModemOptions.wV34RxSymbol = cell_wRxSymbol ;
+	S.ModemOptions.wV34MSEScale = cell_wMSEScale ;
+	S.ModemOptions.NoCarrierDisc = cell_bNoCarrierDisc ;
+	S.ModemOptions.BusyPassCount = cell_bBusyPassCount ;
+	S.ModemOptions.V42 = cell_bV42 ;
+	dp_set_mercury_gain();
+	dp_write_dsp_ram (0x0004, 0x0004) ; // land line pre-emphasis set 4 db
+}
+
+/************************************************************************
+*                                                                       *
+*       Routine:        cell_save_land_setting                          *
+*       Author:         EL                                              *
+*                                                                       *
+*       Creation Date:  12/16/96                                        *
+*                                                                       *
+*       Description:							*
+*                                                                       *
+*       Input: None                                                     *
+*       Output: None                                                    *
+*                                                                       *
+*       Global Variables Changed:					*
+*       Users:                                                          * 
+*									*
+*************************************************************************/
+void cell_save_land_setting ( void )
+{
+	TxLevel_buf = S.ModemOptions.TxLevel ;
+	cell_bNoAnsTimeOut = S.ModemOptions.NoAnsTimeOut ;
+	cell_bDataCallingTone = S.ModemOptions.DataCallingTone ;
+	cell_bETC = S.ModemOptions.ETC ;
+	cell_wV34Option = S.ModemOptions.wV34Option ;
+	cell_wRxSymbol = S.ModemOptions.wV34RxSymbol ;
+	cell_wMSEScale = S.ModemOptions.wV34MSEScale ;
+	cell_bNoCarrierDisc = S.ModemOptions.NoCarrierDisc ;
+	cell_bBusyPassCount = S.ModemOptions.BusyPassCount ;
+	cell_bV42 = S.ModemOptions.V42 ;
+}
+
+/************************************************************************
+*                                                                       *
+*       Routine:        cell_set_cell_parameter				*
+*       Author:         EL                                              *
+*                                                                       *
+*       Creation Date:  12/16/96                                        *
+*                                                                       *
+*       Description:							*
+*                                                                       *
+*       Input: None                                                     *
+*       Output: None                                                    *
+*                                                                       *
+*       Global Variables Changed:					*
+*       Users:                                                          * 
+*									*
+*************************************************************************/
+void cell_set_cell_parameter ( void )
+{
+	if ( S.ModemOptions.CellTransmitLevel == 0 )
+	{
+		if ( prnC == 3 ) // if nec phone, set tx level to -30 db
+			S.ModemOptions.CellTransmitLevel = 30 ;
+		else
+			S.ModemOptions.CellTransmitLevel = 25 ;
+	}
+	S.ModemOptions.TxLevel = S.ModemOptions.CellTransmitLevel ;
+	dp_change_mercury_gain(0x00, // CIOCA MSB
+						   0x02, // CIOCA LSB
+						   S.ModemOptions.LineGainBMSB,			// CIOCB MSB
+						   S.ModemOptions.LineGainBLSB|0x01);	// CIOCB LSB
+	dp_write_dsp_ram (0x0004, 0x0003) ; // pre-emphasis set to 3 db
+}
+
+/************************************************************************
+*                                                                       *
+*       Routine:        cell_originate                                  *
+*       Author:         EL                                              *
+*                                                                       *
+*       Creation Date:  05/01/96                                        *
+*                                                                       *
+*       Description:    Check cellular phone connectivity before dial.  *
+*                                                                       *
+*       Input: None                                                     *
+*       Output: None                                                    *
+*                                                                       *
+*       Global Variables Changed:       prnC                            *
+*       Users:          dp_dial                                         *
+*                                                                       *
+*************************************************************************/
+byte cell_originate ( void )
+{
+	x_debug_msg ( "cell - cell_orig" ) ;
+	if ( cell_bState == CELL_STATE_ONLINE ) 
+	{
+		return cell_active ;
+	}
+
+	if ( S.ModemOptions.CountryId != NA )
+	{
+		cell_active = FALSE ;
+		prnC = CELL_DISABLE ;
+	}
+	switch ( prnC )
+	{
+		case CELL_MOTOROLA:
+			if ( send_cell_cmd ( MOTOROLA_HKS ) == FALSE )
+			{
+				cell_active = FALSE ;
+			}
+			else
+			{
+				send_cell_cmd ( MOTOROLA_CLR ) ;
+				send_cell_cmd ( MOTOROLA_VSET ) ;
+				cell_active = TRUE ;
+			}
+			break ;
+
+		case CELL_NEC:
+			if ( ( cell_set_busy_line_low () == FALSE ) || \
+				( cell_send_nec_cmd ( 0x00af ) == FALSE ) )
+			{
+				cell_active = FALSE ;
+			}
+			else
+			{
+				cell_send_nec_cmd ( 0x0018 ) ; /*CLR key*/
+				cell_send_nec_cmd ( 0x0000 ) ; /* release*/
+				cell_active = TRUE ;
+			}
+			cell_set_busy_line_high () ;
+			break ;
+
+		default:
+			x_debug_msg ( "cell - cell_orig failed" ) ;
+			cell_active = FALSE ;
+			prnC = CELL_DISABLE;
+			break ;
+	}
+		
+	if ( cell_active == TRUE )
+	{
+		cell_save_land_setting () ;
+		cell_bTxState = 0 ;
+		if ( S.ModemOptions.ETC != 4 ) // 4 is no ETC in cell mode
+		{
+			init_ETC_defaults () ;
+			if ( cell_bETC != 0 )
+				S.ModemOptions.ETC = cell_bETC ;
+		}
+		cell_set_cell_parameter () ;
+		at_init_diagnostics () ; //initialize ati11 diagnostic data
+		return ( TRUE ) ;
+	}
+	else
+	{
+		set_cell_state_online () ;
+		return ( FALSE ) ;
+	}
+}
+
+/************************************************************************
+*                                                                       *
+*       Routine:        cell_answer                                     *
+*       Author:         EL                                              *
+*                                                                       *
+*       Creation Date:  05/01/96                                         *
+*                                                                       *
+*       Description:    Check cellular phone connectivity before anwser *
+*                                                                       *
+*       Input: None                                                     *
+*       Output: None                                                    *
+*                                                                       *
+*       Global Variables Changed:       prnC				*
+*       Users:          dp_dial                                         *
+*                                                                       *
+*************************************************************************/
+void cell_answer ( void )
+{
+	x_debug_msg ("cell - Answer") ;
+	
+	if ( S.ModemOptions.RingCount && ( cell_bState != CELL_STATE_ONLINE )  && ( cell_bState != CELL_STATE_DIAL_SEND ) )
+	{
+		// if cellular phone ring, do direct connect answer
+		if ( S.ModemOptions.CountryId != NA )
+		{
+			cell_active = FALSE ;
+			prnC = CELL_DISABLE ;
+			return ;
+		}
+		if ( cell_ring_int )
+		{
+			cell_active = TRUE ;
+			cell_save_land_setting () ;
+			if ( S.ModemOptions.ETC != 4 ) // 4 is no ETC in cell mode
+			{
+				init_ETC_defaults () ;
+				if ( cell_bETC != 0 )
+					S.ModemOptions.ETC = cell_bETC ;
+			}
+			cell_set_cell_parameter () ;
+			switch ( prnC )
+			{
+				case CELL_MOTOROLA: /* entry for motorola cellular */
+					x_debug_msg ("cell - Mot Answer") ;
+					send_cell_cmd ( MOTOROLA_HKS ) ;
+					send_cell_cmd ( MOTOROLA_VSET ) ; // Volume control
+					break;
+				
+				case CELL_NEC:
+					cell_set_busy_line_low () ;
+					cell_send_nec_cmd ( 0x00af ) ;
+					cell_send () ;
+					break;
+			
+			}
+
+			cell_wSecTmr = x_current_time () ; 
+/*          if ( x_modem_mode == MODEM_VOICE ) // 1 second delay for TAD.
+			{
+				while ( x_elapsed_time ( cell_wSecTmr ) <= MS500 ) ;
+				switch ( prnC )
+				{
+					case CELL_MOTOROLA:
+						x_debug_msg ( "cell - mot enable mute" ) ;
+						send_cell_cmd ( MOTOROLA_SEND ) ;
+						send_cell_cmd ( MOTOROLA_START_MSG ) ; 
+						send_cell_cmd ( MOTOROLA_MUTE_ENABLE ) ; 
+						send_cell_cmd ( MOTOROLA_STOP_MSG ) ; 
+						break;
+						
+					case CELL_NEC:
+						// send release key
+						cell_set_busy_line_low () ;
+						cell_send_nec_cmd ( 0x0000 ) ;
+						cell_set_busy_line_high () ;
+						break;
+				}
+				set_cell_state_online () ;
+				while ( x_elapsed_time ( cell_wSecTmr ) <= SECOND1 ) ;
+			}
+			else
+*/          {
+				x_debug_msg ( "cell - CELL_STATE_DIAL_SEND");
+				cell_bState = CELL_STATE_DIAL_SEND ;
+				cell_wTimeOut = SECOND1 ;
+			}
+		}
+		else
+		{
+			cell_active = FALSE ;
+			set_cell_state_online () ;
+		}
+	}
+}
+
+/************************************************************************
+*                                                                       *
+*       Routine:        cell_onhook                                     *
+*       Author:         EL                                              *
+*                                                                       *
+*       Creation Date:  05/01/96                                        *
+*                                                                       *
+*       Description:    send end cmd to cellular phone			*
+*                                                                       *
+*       Input: None                                                     *
+*       Output: None                                                    *
+*                                                                       *
+*       Global Variables Changed:					*
+*       Users:                                                          * 
+*									*
+*************************************************************************/
+void cell_onhook ( void )
+{
+	x_debug_msg ( "cell - onhook" ) ;
+	if ( cell_active == FALSE )
+	{
+		cell_init();
+	}
+	else if ( ( cell_bState == CELL_STATE_ONLINE ) || \
+			( cell_bState == CELL_STATE_DIAL_SEND ) )
+	{
+		x_debug_msg ( "cell - cell onhook" ) ;
+
+		switch (prnC)
+		{
+			case CELL_MOTOROLA:
+				// send END key
+				x_debug_msg ( "cell - mot disable mute" ) ;
+				send_cell_cmd ( MOTOROLA_END ) ;
+				send_cell_cmd ( MOTOROLA_START_MSG ) ; 
+				send_cell_cmd ( MOTOROLA_MUTE_DISABLE ) ; 
+				send_cell_cmd ( MOTOROLA_STOP_MSG ) ; 
+				break;
+
+			case CELL_NEC: 
+				if ( cell_bState == CELL_STATE_DIAL_SEND )
+				{
+					cell_set_busy_line_low () ;
+					cell_send_nec_cmd ( 0x0000 ) ;
+					cell_set_busy_line_high () ;
+					cell_wSecTmr = x_current_time () ; 
+					while ( x_elapsed_time \
+						( cell_wSecTmr ) <= MS500 ) ;
+				}				
+				cell_set_busy_line_low () ;
+				cell_send_nec_cmd(0x00af);
+				cell_send_nec_cmd(0x0004); /* END key */
+				cell_send_nec_cmd(0x0000); /* release */
+				cell_set_busy_line_high () ;
+				break;
+		}
+		cell_ring_int = FALSE ;
+		cell_recall_land_setting () ;
+		cell_init () ;
+		cell_active = TRUE ;
+	}
+}
+
+/************************************************************************
+*                                                                       *
+*                       enable_cell_filter                              *
+*                                                                       *
+*       Author:         E. Li						*
+*                                                                       *
+*       Creation Date:  03/03/94                                        *
+*                                                                       *
+*       Description:    Changing the slope of the compromise equalizer  *
+*                       to negative for cellular operation.             *
+*                                                                       *
+*       Input Parameters:       None                                    *
+*                                                                       *
+*       Output Parameter:       None                                    *
+*                                                                       *
+*       Global Variables Changed: working_threshold_bad                 *
+*       Users: (routines that used this)                                *
+*                                                                       *
+*       *****************************************************************
+*       *                         Modifications                         *
+*       *****************************************************************
+*                                                                       *
+*       Author & Date:                                                  *
+*       Description:                                                    *
+*       Reason:                                                         *
+*************************************************************************/
+void enable_cell_filter(void)
+{
+	if ( cell_active == TRUE )
+	{
+		//x_debug_msg("DP - Enable Cell Filter") ;
+		dp_write_dsp_ram(DEEMPH_COEFF_0, 0xFDBF);
+		dp_write_dsp_ram(DEEMPH_COEFF_1, 0x0F69);
+		dp_write_dsp_ram(DEEMPH_COEFF_2, 0x3E68);
+		dp_write_dsp_ram(DEEMPH_COEFF_3, 0x0F69);
+		dp_write_dsp_ram(DEEMPH_COEFF_4, 0xFDBF);
+	}
+}
+
+/****************************************************************
+cell_at_prnC () - processes the AT)Cn command - for direct connect phones
+*****************************************************************/
+byte cell_at_prnC ( byte *p )
+{
+	if ( S.ModemOptions.CountryId != NA )
+	{
+		prnC = CELL_DISABLE ;
+		cell_active = FALSE ;
+		write_eeprom ( CELL_PHONE_TYPE, prnC ) ; // save into eeprom.
+		return ( FALSE ) ;
+	}
+
+	switch ( *p )
+	{
+	   	case   0:  // at)C
+	   	case '0': // at)C0
+#ifdef ATNT_3730_ENABLE
+	   	case '1': // at)C1
+#endif //att_enable
+#ifdef MOTOROLA_ENABLE
+		case '2': // at)C2
+#endif // MOTOROLA_ENABLE
+#ifdef NEC_P100_ENABLE
+	   	case '3':
+#endif //NEC_ENABLE
+			break;
+	   	default:
+			return ( FALSE ) ;
+	}
+	if ( *p == 0 )
+		prnC = CELL_DISABLE ;
+	else
+		prnC = *p - 48;
+	write_eeprom ( CELL_PHONE_TYPE, prnC ) ; // save into eeprom.
+	cell_init();
+	if ( prnC == CELL_DISABLE )
+	{
+		DC_CALLBACK_TIME_DEFAULT ;
+	}
+	return ( TRUE ) ;
+}
+
+/****************************************************************
+cell_state_online: get cell state. if cell state == CELL_STATE_ONLINE
+		   return TRUE
+*****************************************************************/
+byte cell_state_online ( void )
+{
+	if ( cell_bState == CELL_STATE_ONLINE )
+		return TRUE ;
+	else
+		return FALSE ;
+}
+
+void cellDataRx( void )     //NTCHANGE
+{
+        switch (prnC)
+		{
+			case CELL_MOTOROLA:
+                cell_motorola_rx () ;
+                break;
+			case CELL_NEC:
+                cell_nec_rx () ;
+                break;
+        }
+}
+
+#endif //DC0

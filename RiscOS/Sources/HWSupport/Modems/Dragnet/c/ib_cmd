@@ -1,0 +1,303 @@
+/* name and version number:@(#)ib_cmd.c	1.4*/
+/* date of get:            09/06/00 16:59:12*/
+/* date of delta:          02/26/00 15:05:54*/
+/****************************************************************
+File :	ib_cmd.c
+Description :
+	Contains all of the in band AT command and response 
+	processing routines.
+
+Procedures Contained :
+	process_in_band_command()
+	reset_in_band_flags()
+	dce_to_dte_in_band_msg()
+
+Revision History :
+	Initials	Date		Change
+	MW     		07/09/96	Initial
+*****************************************************************/
+
+#include "llglob_d.h"
+
+#ifdef	IN_BAND_CMD
+
+#include "ioglob_d.h"
+#include "atglob.h"
+#include "iouart_d.h"
+#include "allglobs.h"
+
+# define  EM_7_BIT		0x19
+# define  EM_8_BIT		0x99
+ 
+enum state_of_ib_cmd{GET_COMMAND = 0x10,
+					 GET_LENGTH_CODE,
+					 GET_EXT_CMD,
+					 GET_AT_COMMAND
+					} ;
+
+/*-----------------------------------------------------------------
+	Function declearation here.
+------------------------------------------------------------------*/
+void process_in_band_command( void ) ;
+void dce_to_dte_in_band_msg( byte *txmsg, byte msg_len ) ;
+void reset_in_band_flags( void );
+
+/*-----------------------------------------------------------------
+	Gloable variable declearation here.
+------------------------------------------------------------------*/
+enum	state_of_ib_cmd in_band_cmd_state = GET_COMMAND ;
+byte	in_band_cmd_detected ;
+byte	EM_detected ;
+
+/*-----------------------------------------------------------------
+	Gloable variable initialization here.
+------------------------------------------------------------------*/
+
+
+/******************************************************************
+Routine : process_in_band_command
+
+Description :
+	Intersert the in band command. Process the in band command.
+
+Parameters in : 
+	None
+
+Parameters out :
+	None
+
+*******************************************************************/
+void process_in_band_command(void)
+{
+	word in_band_cmd_len = 0 ;
+	word at_cmd_len =0 ;
+	byte i = 0 ;
+	
+	// Check if the DTE queue has data to be transferred.
+	while ( (io_dte_rx_rptr - 1) != io_dte_rx_wptr )		// io_dte_rx_rptr != io_dte_rx_wptr
+	{
+#ifdef	DEBUGGING
+		sprintf ( szBuffer, " dte receive char = %x ", *io_dte_rx_rptr ) ;
+		x_debug_msg ( szBuffer );
+#endif	
+
+		DTE_RX_UPDATE();				// Wrape the rptr, if eptr is reached
+
+		if ( in_band_cmd_detected )
+		{
+#ifdef	DEBUGGING
+			x_debug_msg ( "<EM><40h><length code><42h><at cmd> string detected" );
+#endif	
+			io_uart_status |= UART_AT_CMD_RESPONSE;
+			at_result_code = NO_MSG;
+
+			// Filter out space and convert the command char to upper case
+			at_cmd_filter();        
+
+			// Send in band AT command
+			atparse_cmd();
+
+			// Reset the in band command flags
+			reset_in_band_flags();
+		}
+
+		else
+		{
+			// EM has been detected
+			if ( EM_detected  )
+			{
+				switch ( in_band_cmd_state )
+				{
+					case GET_COMMAND:
+						switch ( *io_dte_rx_rptr )
+						{
+		
+							// case 0x20:
+								// Place holder for command 20h
+								// break;
+
+							case 0x40:
+								// Rx DTE to DCE extend0 in band command
+								io_dte_rx_rptr++ ;
+								in_band_cmd_state = GET_LENGTH_CODE ;
+								break;
+
+							// case 0x41:
+								// Place holder for 
+								// rxed DTE to DCE extend1 in band command
+								// break;
+
+								// Not an in band AT command
+							default:
+								io_dte_rx_rptr-- ;
+								reset_in_band_flags() ;
+								return ;
+						}
+						break;
+
+					case GET_LENGTH_CODE :
+						in_band_cmd_len = (word)(*io_dte_rx_rptr - 0x20) ;
+						if( ( in_band_cmd_len > 0 ) && ( in_band_cmd_len < 8 ) )
+						{
+							io_dte_rx_rptr++ ;
+							in_band_cmd_state = GET_EXT_CMD ;
+							break;
+						}
+						else
+						{
+							io_dte_rx_rptr-- ;
+							io_dte_rx_rptr-- ;
+							reset_in_band_flags() ;
+							return;
+						}
+
+					case GET_EXT_CMD:
+						switch ( *io_dte_rx_rptr)
+						{
+							// case 0x40 :
+								// Place holder for BREAK signal 
+								// break;
+
+							// case 0x41 :
+								// Place holder for MARK idle
+								// Other extended command can be added
+								// break;
+
+							case 0x42 :
+								// CONTROL command line
+								in_band_cmd_state = GET_AT_COMMAND ;
+								io_dte_rx_rptr++ ;
+								at_cmd_ptr = at_cmd_buf;
+								at_cmd_len = 0;
+								break;
+
+							default:
+								for( i=0; i<3; ++i)
+								{
+									--io_dte_rx_rptr ;
+								}
+								reset_in_band_flags() ;
+								return ;
+						}
+						break;
+
+					case GET_AT_COMMAND :
+						if ( at_cmd_len < in_band_cmd_len )
+						{
+							*io_dte_rx_rptr &= 0x7F ;             // Strip out the parity bit
+							*at_cmd_ptr++ = *io_dte_rx_rptr++ ;
+							at_cmd_len++ ;
+#ifdef	DEBUGGING
+							sprintf ( szBuffer, " RxedInBandCmdChar = %x ", *(at_cmd_ptr - 1) ) ;
+							x_debug_msg ( szBuffer );
+#endif	
+
+						}
+
+						if ( at_cmd_len == in_band_cmd_len )
+						{
+							in_band_cmd_detected = TRUE ;
+							EM_detected = FALSE ;
+							*at_cmd_ptr = 0 ;
+							at_cmd_ptr = at_cmd_buf;
+
+						}
+						break;
+				}
+			}
+
+			// Set the em detection flag
+			else if( (*io_dte_rx_rptr == 0x19 ) || (*io_dte_rx_rptr == 0x99) )
+			{
+				EM_detected = TRUE ;
+				in_band_cmd_state = GET_COMMAND ;
+				io_dte_rx_rptr++ ;
+			}
+
+			// No in band command detected
+			else
+				return;
+		}
+	}
+}
+
+
+
+/******************************************************************
+Routine : reset_in_band_flags
+
+Description :
+	Reset all of the in band command flags
+Parameters in : 
+	None
+Parameters out :
+	None
+
+*******************************************************************/
+void reset_in_band_flags ( void )
+{
+	EM_detected = FALSE ;
+	in_band_cmd_detected = FALSE ;
+	in_band_cmd_state = GET_COMMAND ;
+}
+
+
+
+
+/******************************************************************
+Routine : dce_to_dte_in_band_msg
+
+Description :
+	Process and transmit in band command messages from dce to dte.
+
+Parameters in : 
+	txmsg   -- AT command response message
+	meg_len -- AT command response message length
+
+Parameters out :
+	None
+
+*******************************************************************/
+void dce_to_dte_in_band_msg( byte *txmsg, byte msg_len )
+{
+	byte *in_band_msg_ptr ;
+	byte *txmsg_ptr = txmsg ;
+	byte len = msg_len ;
+
+	if ( S.ModemOptions.ResultCodeFormat == 1 )
+	{
+		// Point to the last char of the message
+		txmsg_ptr = txmsg_ptr + msg_len + 1 ;
+
+		// Gight shift two more bit
+		in_band_msg_ptr = txmsg_ptr + 3 ;
+	}
+	else
+	{
+		// Shift txmsg right 4 byte
+		txmsg_ptr = txmsg_ptr + msg_len -1 ;
+		in_band_msg_ptr = txmsg_ptr + 5 ;
+	}
+
+	// Insert NULL at the end of the in band message
+	*in_band_msg_ptr-- = 0 ;
+
+	while ( len )
+	{
+		*in_band_msg_ptr-- = *txmsg_ptr-- ;
+		--len ;
+	}
+
+	// Build in band message shield
+	*in_band_msg_ptr-- = 0x62 ;
+	*in_band_msg_ptr-- = msg_len + 0x20 ;
+	*in_band_msg_ptr-- = 0x60 ;
+	*in_band_msg_ptr = 0x19 ;		// Now in_band_msg_ptr = txmsg
+
+	// Send in band message
+	// msg_len += 4 ;
+	// x_send_mail ( AT_IO_DATA, IO_TASK, in_band_msg_ptr, msg_len ) ;
+	
+}
+
+#endif	// IN_BAND_CMD
