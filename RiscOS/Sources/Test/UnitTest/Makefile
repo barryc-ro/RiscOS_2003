@@ -44,10 +44,10 @@ CD	= dir
 #AFLAGS  = -depend !Depend -Stamp -quit -To $@ -From
 AFLAGS  = -depend !Depend -Stamp -quit
 CFLAGS  = -c -depend !Depend -Wp ${INCLUDES} -DSYS${SYSTEM}=1 -DMACH${MACHINE}=1 ${DFLAGS} ${EXT_FLAGS}
-LDFLAGS =
+#LDFLAGS =
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
-DFLAGS  = ${DEBUG}
+#DFLAGS  = ${DEBUG}
 BFLAGS  = 31
 
 #
