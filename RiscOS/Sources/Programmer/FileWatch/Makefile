@@ -52,7 +52,7 @@ INCLUDES = -IOS:,C:
 #
 # Export Paths for Messages module
 #
-RESDIR = <resource$dir>.Resources.${COMPONENT}
+RESDIR = <resource$dir>.Resources2.${COMPONENT}
 
 #
 # Program specific options:
@@ -198,6 +198,7 @@ o.handlers:	c.handlers
 o.handlers:	OS:h.osfind
 o.handlers:	OS:h.types
 o.handlers:	OS:h.os
+o.handlers:	OS:h.fileswitch
 o.handlers:	OS:h.osfscontrol
 o.handlers:	h.fw
 o.handlers:	h.filewatch
@@ -209,6 +210,7 @@ o.interest:	C:h.kernel
 o.interest:	OS:h.osfscontrol
 o.interest:	OS:h.types
 o.interest:	OS:h.os
+o.interest:	OS:h.fileswitch
 o.interest:	h.fw
 o.interest:	h.filewatch
 o.interest:	h.msgs
@@ -233,6 +235,7 @@ oz.main:	C:h.kernel
 oz.main:	OS:h.os
 oz.main:	OS:h.types
 oz.main:	OS:h.resourcefs
+oz.main:	OS:h.fileswitch
 oz.main:	h.modhdr
 oz.main:	h.main
 oz.main:	h.msgs
