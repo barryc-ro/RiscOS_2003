@@ -43,16 +43,16 @@ INCLUDES= -IC:
 #
 
 # Tiny stubs, no debugging
-CCFLAGS  = -c -depend !Depend ${INCLUDES} -zM -DUSE_TINY -UENABLE_DEBUGGING -DRISCOS
+#CCFLAGS  = -c -depend !Depend ${INCLUDES} -zM -DUSE_TINY -UENABLE_DEBUGGING -DRISCOS
 
 # Tiny stubs, debugging (may be a bit dodgy)
 #CCFLAGS  = -c -depend !Depend ${INCLUDES} -zM -DUSE_TINY -DENABLE_DEBUGGING -DRISCOS
 
 # Shared C stubs, no debugging
-#CFLAGS  = -c -depend !Depend ${INCLUDES} -zM -Throwback -UUSE_TINY -UENABLE_DEBUGGING -DRISCOS
+CCFLAGS  = -c -depend !Depend ${INCLUDES} -zM -Throwback -UUSE_TINY -UENABLE_DEBUGGING -DRISCOS
 
 # Shared C stubs, debugging
-#CCFLAGS  = -c -depend !Depend ${INCLUDES} -zM -Throwback -UUSE_TINY -DENABLE_DEBUGGING -DRISCOS
+#CCFLAGS  = -c -depend !Depend ${INCLUDES} -zM -Throwback -UUSE_TINY -DENABLE_DEBUGGING -DRISCOS -UEXPAND_RMALLOCS
 
 #
 # Libraries

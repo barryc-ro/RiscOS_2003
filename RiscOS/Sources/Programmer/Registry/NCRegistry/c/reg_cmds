@@ -11,6 +11,7 @@
 #define PROTOTYPES_INTERNAL   /* declare our header file as local */
 #include "reg_cmds.h"
 #include "reg_tags.h"
+#include "reg_object.h"
 #include "reg_scbb.h"
 #include "enum_ddi.h"
 #include "reg_status.h"
@@ -21,6 +22,7 @@
 #include "reg_events.h"
 #include "scinter.h"
 #endif
+#include "DBUG.h"
 
 #if 1
 #define PRINT_F kprintf
@@ -41,39 +43,21 @@ int registry_enum_info(char *s, int n)
 
 int registry_load(char *s, int n)
 {
-  _kernel_swi_regs r;
 
-  load_scbb(SELECT_NET_BB, s);
-  set_status_bits(SELECT_NET_STATUS, BB_STATUS_SC_VALID);
-  r.r[0] = (int)&net_bb;
-  r.r[1] = SELECT_NET_BB;
-  r.r[2] = NULL;
-  r.r[3] = 0;
-  _kernel_swi(XOS_Bit | 0x4d3c0, &r, &r); /* Registry support init */
-  if(r.r[0] > 0) set_status_bits(SELECT_NET_STATUS, BB_STATUS_BB_VALID);
-  else clr_status_bits(SELECT_NET_STATUS, BB_STATUS_BB_VALID);
-  status_service_call();
+  if(load_scbb(SELECT_NET_BB, s) < 0) return(REGERR_BADFILE);
   return(0);
 }
 
 /* load a bootblock from a file and write it to the smartcard */
 int registry_scload(char *s, int n)
 {
-  _kernel_swi_regs r;
+  int flags[4];
+  unsigned char registered_tag[] = "SC_REGISTERED";
 
-  if(sc_bb.SYSTEM_FLAGS[2] & SC_REGISTERED) return(REGERR_SERVER_LOCKED); /* server write is locked */
+  (sc_bb.tags.hard.t_read((void *)&sc_bb, registered_tag, (unsigned char *)flags, 16));
+  if(flags[0]) return(REGERR_SERVER_LOCKED); /* server write is locked */
 
   if(load_scbb(SELECT_SC_BB, s) < 0) return(REGERR_BADFILE);
-
-  set_status_bits(SELECT_SC_STATUS, BB_STATUS_SC_VALID);
-  r.r[0] = (int)&sc_bb;
-  r.r[1] = SELECT_SC_BB;
-  r.r[2] = NULL;
-  r.r[3] = 0;
-  _kernel_swi(XOS_Bit | 0x4d3c0, &r, &r); /* Registry support init */
-  if(r.r[0] > 0) set_status_bits(SELECT_SC_STATUS, BB_STATUS_BB_VALID);
-  else clr_status_bits(SELECT_SC_STATUS, BB_STATUS_BB_VALID);
-  status_service_call();
 
   if(registry_state != State_CardInserted) {
     return(REGERR_SC_BUSY);
@@ -86,7 +70,9 @@ int registry_scload(char *s, int n)
 
 int registry_unlock_server(char *s, int x)
 {
-  sc_bb.SYSTEM_FLAGS[2] &= ~SC_REGISTERED;
+  unsigned char registered_tag[] = "SC_REGISTERED";
+  int flags = 0;
+  (sc_bb.tags.hard.t_write((void *)&sc_bb, registered_tag, (unsigned char *)&flags, 4));
   return(0);
 }
 
@@ -168,6 +154,16 @@ int registry_show_status(char *s, int x)
   			      	     	     	   	  (sc_delta & BB_STATUS_AUTHFAIL)?"Y":"-",
   			      	     	     	   	  (net_status & BB_STATUS_AUTHFAIL)?"Y":"-",
   			      	     	     	   	  (net_delta & BB_STATUS_AUTHFAIL)?"Y":"-");
+
+  PRINT_F ("BB_STATUS_TOO_OLD   %s      %s       %s     %s\n", (sc_status & BB_STATUS_TOO_OLD)?"Y":"-",
+  			      	     	     	   	  (sc_delta & BB_STATUS_TOO_OLD)?"Y":"-",
+  			      	     	     	   	  (net_status & BB_STATUS_TOO_OLD)?"Y":"-",
+  			      	     	     	   	  (net_delta & BB_STATUS_TOO_OLD)?"Y":"-");
+
+  PRINT_F ("BB_STATUS_TOO_NEW   %s      %s       %s     %s\n", (sc_status & BB_STATUS_TOO_NEW)?"Y":"-",
+  			      	     	     	   	  (sc_delta & BB_STATUS_TOO_NEW)?"Y":"-",
+  			      	     	     	   	  (net_status & BB_STATUS_TOO_NEW)?"Y":"-",
+  			      	     	     	   	  (net_delta & BB_STATUS_TOO_NEW)?"Y":"-");
 
   PRINT_F ("(delta values shown are SWI and SVC values OR'd together)\n\n");
   PRINT_F ("service calls issued: %d     SWI requests serviced: %d\n\n", status_svc_count, status_swi_count);
@@ -304,3 +300,105 @@ int registry_log(char *s, int x)
 #endif
   return(0);
 }
+
+
+
+int registry_enum_tags(char *s, int x)
+{
+    int target = SELECT_SC_BB; /* 1=net (-n), 2=s/card (-c) */
+    int whichtags = 0; /* 0=all (-a), 0x1=hard (-h), 0x2=soft (-s), 0x4=special (-x) */
+
+    for(;*s > 0x1f;s++) {
+        switch(*s) {
+            case 0x20: continue;
+            case 0x09: continue;
+
+            case '-': continue;
+	    case 'n': target = SELECT_NET_BB;
+	    	      continue;
+	    case 'c': target = SELECT_SC_BB;
+	              continue;
+	    case 'h': whichtags |= 0x1;
+	    	      continue;
+	    case 's': whichtags |= 0x2;
+	    	      continue;
+	    case 'x': whichtags |= 0x4;
+	    	      continue;
+	}
+    }
+
+    if(whichtags == 0) whichtags = 0x7; /* default to all tags */
+
+    DBUG_PRINTF(DBUG_LVL_DIAG, "registry_enum_tags: target = %s tags: %s %s %s\n",
+      target==SELECT_NET_BB?"NET":"S/CARD", whichtags&0x1?"HARD":"", whichtags&0x2?"SOFT":"", whichtags&0x4?"SPECIAL":"");
+
+    switch(target) {
+
+        case SELECT_NET_BB:
+
+             if((net_status & BB_STATUS_BB_VALID)==0) {
+                 PRINT_F ("Network bootblock not loaded.\n");
+                 return(0);
+             }
+
+             PRINT_F ("Network bootblock major version: %d minor version: %d\n", net_bb.version.major, net_bb.version.minor);
+             PRINT_F ("                  size: %d max_size: %d checksum: %d\n", net_bb.container.size, net_bb.container.max_size,
+             	     			       	  	       		 	net_bb.container.cksum);
+
+             if(whichtags & 0x1) {
+                 if(net_bb.tags.hard.t_enum((void *)&net_bb)<0) {
+                     PRINT_F ("Hard tag info not available.\n");
+                 }
+             }
+
+             if(whichtags & 0x2) {
+                 if(net_bb.tags.soft.t_enum((void *)&net_bb)<0) {
+                     PRINT_F ("Soft tag info not available.\n");
+                 }
+             }
+
+             if(whichtags & 0x4) {
+                 if(net_bb.tags.special.t_enum((void *)&net_bb)<0) {
+                     PRINT_F ("Special tag info not available.\n");
+                 }
+             }
+             break;
+
+        case SELECT_SC_BB:
+
+             if((sc_status & (BB_STATUS_INSERTED | BB_STATUS_SC_VALID | BB_STATUS_BB_VALID)) !=
+                (BB_STATUS_INSERTED | BB_STATUS_SC_VALID | BB_STATUS_BB_VALID)) {
+                    PRINT_F ("Smartcard bootblock not loaded or invalid.\n");
+                    return(0);
+                }
+
+             PRINT_F ("Smartcard bootblock major version: %d minor version: %d\n", sc_bb.version.major, sc_bb.version.minor);
+             PRINT_F ("                  size: %d max_size: %d checksum: %d\n", sc_bb.container.size, sc_bb.container.max_size,
+             	     			       	  	       		 	sc_bb.container.cksum);
+
+             if(whichtags & 0x1) {
+                 if(sc_bb.tags.hard.t_enum((void *)&sc_bb)<0) {
+                     PRINT_F ("\nHard tag info not available.\n");
+                 }
+             }
+
+             if(whichtags & 0x2) {
+                 if(sc_bb.tags.soft.t_enum((void *)&sc_bb)<0) {
+                     PRINT_F ("\nSoft tag info not available.\n");
+                 }
+             }
+
+             if(whichtags & 0x4) {
+                 if(sc_bb.tags.special.t_enum((void *)&sc_bb)<0) {
+                     PRINT_F ("\nSpecial tag info not available.\n");
+                 }
+             }
+             break;
+    }
+
+
+
+    return(0);
+}
+
+
