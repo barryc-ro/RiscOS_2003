@@ -31,6 +31,7 @@
 #endif
 #include <debuglib/debuglib.h>
 
+#include "CallOut.h"
 #include "Enumerate.h"
 #include "MoreInfo.h"
 #include "MPEGCtrl.h"
@@ -229,10 +230,13 @@ _kernel_oserror * module_init(CMHG_CONST char * cmd_fail, int podule_base, void 
      )
      callback_pending_flag = true;
 
-  /* Claim UpCallV to see MPEG UpCalls */
+  /* Claim UpCallV to see MPEG UpCalls and initialise the */
+  /* callout library for dealing with those UpCalls.      */
 
-  e = module_claim_upcall_vector();
-  return e;
+  e = callout_init(pw); /* Must do it before claiming UpCallV, of course */
+
+  if (e == NULL) return module_claim_upcall_vector();
+  else           return e;
 }
 
 /**************************************************************/
@@ -263,6 +267,11 @@ _kernel_oserror * module_kill(int fatal, int podule, void * pw)
   /* Get rid of the UpCallV handler */
 
   module_release_upcall_vector();
+
+  /* Shut down the callout library, after ensuring we're not going */
+  /* to get any more UpCalls.                                      */
+
+  callout_final(module_wsp);
 
   /* Shut down everything else */
 
@@ -354,7 +363,9 @@ _kernel_oserror * module_release_upcall_vector(void)
 /**************************************************************/
 /* callback_handler()                                         */
 /*                                                            */
-/* Standard callback handler.                                 */
+/* Standard callback handler. When invoked, assumes the       */
+/* module has just started, and issues Service_VideoControl   */
+/* / VideoControlModuleStarted.                               */
 /*                                                            */
 /* Parameters: As normal for a CMHG callback handler.         */
 /**************************************************************/
@@ -379,6 +390,30 @@ int callback_handler(_kernel_swi_regs * r, void * pw)
         Module_VersionNumber);
 
   return 1;
+}
+
+/**************************************************************/
+/* callout_handler()                                          */
+/*                                                            */
+/* Callout handler invoked when UpCall_MPEG has gone off.     */
+/*                                                            */
+/* Parameters: The handle should point to a client structure. */
+/**************************************************************/
+
+void callout_handler(void * handle)
+{
+  client * c = (client *) handle;
+
+  /* Were we expecting a call for this client? */
+
+  if (c->semaphore == 1)
+  {
+    /* Clear the semaphore and internally call VideoControl_ProtocolNotify 2 */
+    /* to handle a change of state to the one held in new_state.             */
+
+    c->semaphore = 0;
+    protocol_notify_2(c, c->new_state);
+  }
 }
 
 /**************************************************************/
@@ -411,22 +446,17 @@ _kernel_oserror * upcall_handler(_kernel_swi_regs * r, void * pw)
       {
         if (c->havectrl && c->ctrlhand == r->r[2])
         {
-          vc_play_state new_state;
+          if      (r->r[3] == UpCall_MPEG_SubReason_EOS)     c->new_state = vc_play_state_normal_eos;
+          else if (r->r[3] == UpCall_MPEG_SubReason_Timeout) c->new_state = vc_play_state_timeout_eos;
+          else                                               c->new_state = vc_play_state_streaming;
 
-          if      (r->r[3] == UpCall_MPEG_SubReason_EOS)     new_state = vc_play_state_normal_eos;
-          else if (r->r[3] == UpCall_MPEG_SubReason_Timeout) new_state = vc_play_state_timeout_eos;
-          else                                               new_state = vc_play_state_streaming;
-
-          /* It's extremely unlikely, but protocol_notify_2 sends a service call */
-          /* and if this were to cause a module to generate UpCall_MPEG we could */
-          /* get stuck in a loop. So, don't call protocol_notify_2 if the        */
-          /* semaphore flag in the client structure is set.                      */
+          /* Don't bother setting a new status callout for this item if there's one */
+          /* present already...                                                     */
 
           if (c->semaphore == 0)
           {
             c->semaphore = 1;
-            protocol_notify_2(c, new_state);
-            c->semaphore = 0;
+            timeout(callout_handler, (void *) c, 1 /* i.e. ASAP, give or take */);
           }
 
           break;

@@ -78,6 +78,7 @@ LIBS = ${DEBUGLIB} \
        ${ASMUTILS}
 
 ROM_OBJS =	\
+ o.CallOut	\
  o.Enumerate	\
  o.Generic	\
  o.Module	\
@@ -98,6 +99,7 @@ ROM_OBJS =	\
 # oSL -> Soft Load
 
 RAM_OBJS =	\
+ oSL.CallOut	\
  oSL.Enumerate	\
  oSL.Generic	\
  oSL.Module	\
@@ -118,6 +120,7 @@ RAM_OBJS =	\
 # oSLd -> Soft Load deug
 
 DBG_OBJS =	\
+ oSLd.CallOut	\
  oSLd.Enumerate	\
  oSLd.Generic	\
  oSLd.Module	\
