@@ -172,7 +172,6 @@ clean:	pppd
 	${WIPE} rm.* ${WFLAGS}
 	${WIPE} aof.* ${WFLAGS}
 	${WIPE} linked ${WFLAGS}
-	${WIPE} map ${WFLAGS}
 	${RM} ${RAMTARGET}
 	${RM} ${ROMTARGET}
 	${RM} ${DEBUGTARGET}
@@ -213,9 +212,7 @@ ${DEBUGTARGET}: pppd ${OBJSD} ${HDRS} ${CLIB}
 #
 rom_link:
         ${MKDIR} linked
-        ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${ROMTARGET} ${ABSSYM} > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROMTARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
