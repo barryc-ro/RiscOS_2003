@@ -139,7 +139,7 @@ debug.trace: h.hostfs
 .asm.o:;     ${OBJASM} -stamp -quit $< $@
 .asm.debug:; ${OBJASM} -pd "TRACE SETL {TRUE}" -pd "STANDALONE SETL {TRUE}" -stamp -quit $< $@
 .c.debug:;   ${CC} ${THROWBACK} -depend !Depend -c ${ZM} -ff -DTRACE=1 -DSTANDALONE -o $@ $<
-.cmhg.o:;    ${CMHG} $< $@
+.cmhg.o:;    ${CMHG} -p -depend !Depend $< $@
 .c.s:;       ${CC} ${THROWBACK} -depend !Depend -s ${ZM} -ff $<
 .def.o:;     DefMod -l -o l.$* < $<
              LibFile -c -o $@ -via ViaFile
