@@ -128,6 +128,11 @@ all: ${APP}
 	@echo ${COMPONENT}: built
 	@echo
 
+# Binary Build Environment augmenting rules
+BBETYPE   = local
+bbe-local: bbe-generic
+  BBE_Export_Dir Resources.${UI_VARIANT}
+
 # -----------------------------------------------------------------------------
 # RISC OS ROM build rules
 #
