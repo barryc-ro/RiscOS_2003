@@ -149,7 +149,7 @@ static int default_lock_to(unsigned char x)
     /*
      * 256 bits, giving the default state for the lock_to flag for each possible
      * window position. This is set to 1 for the following windows:
-     * 0080-0200, 0380-1100, 1200-1D80, 3080-3180, E000-F880,
+     * 0080-0200, 0380-1100, 1200-1D80, 2800-2880, 3080-3180, E000-F880,
      * 00C0, 0250, 0370, 0530, 3040, 30A0, FF60, plus the
      * "reserved for future use" windows.
      */
@@ -157,7 +157,7 @@ static int default_lock_to(unsigned char x)
     {
         0xFFFFFF9E, /* 01111001111111111111111111111111   0080-0200, 0380-0F80        */
         0x0FFFFFF7, /* 11101111111111111111111111110000   1000-1100, 1200-1D80        */
-        0x00000000, /* 00000000000000000000000000000000                               */
+        0x00030000, /* 00000000000000001100000000000000   2800-2880                   */
         0xFFFFFF0E, /* 01110000111111111111111111111111   3080-3180, E000-EB80        */
         0x03FFFFFF, /* 11111111111111111111111111000000   EC00-F880                   */
         0xFFFFFF00, /* 00000000111111111111111111111111   reserved (A8-BF)            */
@@ -680,7 +680,7 @@ static int scsu_write(EncodingPriv *e, UCS4 u, char **buf, int *bufsize)
              * is in the current window, but not the new one.
              * In the remaining cases (ie next character not in either new
              * or current window, including ASCII), we have a learning
-             * function
+             * function.
              */
 
             if (next - se->dynamic_window[w] < 0x80)
@@ -801,13 +801,6 @@ static int scsu_write(EncodingPriv *e, UCS4 u, char **buf, int *bufsize)
         }
         else
         {
-            /*
-             * Set up the learning variables. This will allow a
-             * free learn to see if we should lock in future
-             */
-            se->learning_from = se->window_no;
-            se->learning_to = window_no;
-
             OUTPUT(SD0 + window_no);
             #ifdef DEBUG_SCSU_COMPRESSION
             fprintf(stderr, "SD%d ", window_no);
@@ -826,6 +819,17 @@ static int scsu_write(EncodingPriv *e, UCS4 u, char **buf, int *bufsize)
         ok = OUTPUT(0x80u + u - base);
         if (ok)
         {
+            /*
+             * If next character is neither in this window, nor the
+             * previous one, set up the learning variables.
+             */
+            if (se->state == SingleByte &&
+                !(next - base < 0x80) &&
+                !(next - se->dynamic_window[se->window_no] < 0x80))
+            {
+                se->learning_from = se->window_no;
+                se->learning_to = window_no;
+            }
             se->lock_to[window_no] = default_lock_to(w);
             se->dynamic_window[window_no] = base;
             se->window_last_used[window_no] = se->count++;
@@ -916,21 +920,38 @@ static int scsu_write(EncodingPriv *e, UCS4 u, char **buf, int *bufsize)
     {
         /* It's in the Supplementary Plane for CJK Unified Ideographs. We'll
          * assume it's a bad thing to create a window, as these will tend to
-         * be sparse. We'll get it by shifting into Unicode mode. Might
-         * as well do it with SCU hh hh ll ll, as that gives us the option
-         * to stay in Unicode for free, or to drop out to the window of our
-         * choice for the same price as SQU hh hh SQU ll ll.
+         * be sparse. However, if we're in single-byte mode, getting in and
+         * out of Unicode mode is so expensive that we might as well define
+         * a window - even if it ends up never being reused, redefining it
+         * again ends up at less cost as not defining it in the first
+         * place. ("SDX nn nn cc SDn cc" vs "SCU hh hh ll ll UCn cc")
          *
-         * Exception - if the next character is in the same window, someone's
-         * probably compressing a code table, so we'll define a window.
+         * So, we'll define a window unless either we are in Unicode mode,
+         * or we have to switch into Unicode for the next character anyway.
+         *
+         * If we do come across one of these isolated in single-byte mode,
+         * it's probably as part of some sort of code chart, in which case
+         * window defining might be the right thing to do anyway.
+         *
+         * Exception: if the next character is in the same window as this
+         * one, we will define the window, even if in Unicode mode.
          */
         UCS4 h, l;
 
-        if ((u &~ 0x7F) == (next &~ 0x7F))
+        /* Is the next character in the same window? Or alternatively, are
+         * we in single-byte mode, and we don't have to switch to Unicode
+         * for the next character?
+         */
+        if ((u &~ 0x7F) == (next &~ 0x7F) ||
+            (state == SingleByte && (next < 0x80 || window_offset_for_character(next))))
             goto define_extended_window;
 
         if (state == SingleByte)
         {
+            /* Always do it as "SCU hh hh ll ll" rather than "SQU hh hh SQU ll ll" -
+             * we can stay in Unicode, or get a choice of any window for the same
+             * price as the pair of SQUs.
+             */
             state = Unicode;
             #ifdef DEBUG_SCSU_COMPRESSION
             fprintf(stderr, "SCU ");
@@ -998,8 +1019,14 @@ static int scsu_write(EncodingPriv *e, UCS4 u, char **buf, int *bufsize)
         ok = OUTPUT(0x80u + u - base);
         if (ok)
         {
-            se->learning_from = se->window_no;
-            se->learning_to = window_no;
+            if (se->state == SingleByte &&
+                !(next - base < 0x80) &&
+                !(next - se->dynamic_window[se->window_no]) &&
+                )
+            {
+                se->learning_from = se->window_no;
+                se->learning_to = window_no;
+            }
             se->lock_to[window_no] = 0; /* Assume we don't lock to extended windows */
             se->dynamic_window[window_no] = base;
             se->window_last_used[window_no] = se->count++;
