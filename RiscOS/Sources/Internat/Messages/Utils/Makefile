@@ -27,7 +27,7 @@ CLIB    = CLIB:o.stubs
 #
 # Program specific options:
 #
-TARGETS = TagExtract MsgExt TokGen MsgTok MsgExt2 TokGen2 MsgTok2 ScanRes
+TARGETS = TagExtract MsgExt TokGen MsgTok MsgExt2 TokGen2 MsgTok2 ScanRes ResCommon
 
 #
 # Rule patterns
@@ -48,10 +48,14 @@ clean:
         ${RM} TokGen2
         ${RM} MsgTok2
         ${RM} ScanRes
+        ${RM} ResCommon
         ${WIPE} o.* ${WFLAGS}
 
 TagExtract: o.TagExtract
         ${LD} -o $@ o.TagExtract ${CLIB}
+
+ResCommon: o.ResCommon
+        ${LD} -o $@ o.ResCommon ${CLIB}
 
 MsgExt: o.MsgExt o.MsgCommon
         ${LD} -o $@ o.MsgExt o.MsgCommon ${CLIB}
@@ -75,28 +79,3 @@ ScanRes: o.ScanRes
         ${LD} -o $@ o.ScanRes ${CLIB}
 
 # Dynamic dependencies:
-o.TagExtract:	c.TagExtract
-o.TagExtract:	C:h.swis
-o.TagExtract:	C:h.kernel
-o.MsgExt:	c.MsgExt
-o.MsgExt:	h.msgcommon
-o.MsgCommon:	c.MsgCommon
-o.MsgCommon:	h.msgcommon
-o.TokGen:	c.TokGen
-o.TokGen:	C:h.swis
-o.TokGen:	C:h.kernel
-o.MsgTok:	c.MsgTok
-o.MsgTok:	C:h.swis
-o.MsgTok:	C:h.kernel
-o.MsgExt2:	c.MsgExt2
-o.MsgExt2:	C:h.swis
-o.MsgExt2:	C:h.kernel
-o.TokGen2:	c.TokGen2
-o.TokGen2:	C:h.swis
-o.TokGen2:	C:h.kernel
-o.MsgTok2:	c.MsgTok2
-o.MsgTok2:	C:h.swis
-o.MsgTok2:	C:h.kernel
-o.ScanRes:	c.ScanRes
-o.ScanRes:	C:h.swis
-o.ScanRes:	C:h.kernel

@@ -1,0 +1,845 @@
+/*****************************************************************************
+* $Id$
+* $Name$
+*
+* Author:  David Cotton
+* Project: Bethany (333)
+*
+* ----------------------------------------------------------------------------
+* Copyright [2000] Pace Micro Technology PLC.  All rights reserved.
+*
+* The copyright in this material is owned by Pace Micro Technology PLC
+* ("Pace").  This material is regarded as a highly confidential trade secret
+* of Pace.  It may not be reproduced, used, sold or in any other way exploited
+* or transferred to any third party without the prior written permission of
+* Pace.
+*
+* ----------------------------------------------------------------------------
+* Purpose: This file contains source code required for the MsgCommon utility.
+*           This utility implements some of the functionality required for
+*           the Multiple Resource sets in RISC OS ROMS (see spec ****,***).
+*          This utlity scans through a set of resource directories and strips
+*           out all the common files into a Common directory.
+*
+* ----------------------------------------------------------------------------
+* History: See source control system log
+*
+*****************************************************************************/
+
+
+/*****************************************************************************
+* Include header files
+*****************************************************************************/
+/* Include Standard headers */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+#include <assert.h>
+#include <ctype.h>
+/* Include RISC OS headers */
+#include "kernel.h"
+#include "swis.h"
+#include "os.h"
+/* Include other headers */
+#include "msgcommon.h"
+#include "debuglib/debuglib.h"
+
+/*****************************************************************************
+* MACROS
+*****************************************************************************/
+#define MAX_OPEN_TERRITORY_FILES 10   /* This value matches the available number of territories defined in the spec */
+#define ENV_LOCALE_LIST "LocaleList"  /* name of env var holding the comma-seperated list of lcoales */
+#define MAX_TERRITORIES 10            /* As defind in the spec. */
+#define BUFSZ   512                   /* Old value needed by cut & paste code. */
+#define filetype( object )      (((object)->loadaddr>>8)&0xFFF)
+
+/*****************************************************************************
+* New enumerated types
+*****************************************************************************/
+typedef unsigned int word;
+
+typedef struct
+{
+  word loadaddr;
+  word execaddr;
+  word length;
+  word attr;
+  word type;
+  char name[1];
+} object;
+
+
+/*****************************************************************************
+* Constants
+*****************************************************************************/
+
+
+/*****************************************************************************
+* File scope Global variables
+*****************************************************************************/
+char* supported_territories[MAX_TERRITORIES] = NULL; /* An array in which territories defined in the Env file can be stored. */
+unsigned int num_of_territories = 0;                 /* The number of territories defined. */
+
+char* root_directory = NULL;
+char* directory_to_copy = NULL;
+char* compared_files[MAX_TERRITORIES] = NULL; /* An array in which to store the filenames of the files t be compared. */
+bool verbose = false; /* Do you wish to see what it is doing */
+bool simulate = false; /* Do not actually delete any files. */
+
+/*****************************************************************************
+* Function prototypes - Private to this file
+*****************************************************************************/
+bool perform_comparisons(void);
+bool remove_file(const char* file_to_remove);
+bool compare_files(const char* filename);
+void exit_handler(void);
+
+/*****************************************************************************
+* Functions
+*****************************************************************************/
+
+/*****************************************************************************
+* FunctionName
+*
+* Description of the function
+*
+* Assumptions
+*  State any assumptions and side effects (eg. globals changed)
+*
+* Inputs
+*  variablename: describe variable, range of inputs, etc. List variables in
+*                the same order that they appear in the function definition.
+*
+* Outputs
+*  variablename: describe variable, range of outputs, etc. List variables in
+*                the same order that they appear in the function definition.
+*
+* Returns
+*  describe possible return values, etc.
+*****************************************************************************/
+
+
+
+
+/*********************************************************************************/
+/* file_exists                                                                   */
+/*                                                                               */
+/* This routine checks whether the passed file exists.                           */
+/*                                                                               */
+/* Parameters: filename  This is the filename of the file to be checked.         */
+/*                                                                               */
+/* Returns:    It returns true if the file exists, false otherwise (or if there  */
+/*              was an error during the SWI call).                               */
+/*                                                                               */
+/*********************************************************************************/
+bool file_exists(char* filename)
+{
+  _kernel_oserror *err;
+  unsigned long int exists;
+
+  dprintf(("", "file_exists()\n"));
+
+  err = _swix( OS_File, _IN(0)|_IN(1)|_OUT(0), 5, filename, &exists);
+  if (!exists || err) /* File does not exist. */
+  {
+    return (false);
+  }
+  return (true);
+}
+
+
+
+
+/*********************************************************************************/
+/* filer_object_type                                                             */
+/*                                                                               */
+/* This routine returns the type of the filer object corresponding to the        */
+/*  filename passed in.                                                          */
+/*                                                                               */
+/* Parameters: filename  This is the filename of the file to be checked.         */
+/*                                                                               */
+/* Returns:    It returns : 0 for no such object                                 */
+/*                          1 for a file object                                  */
+/*                          2 for a directory object                             */
+/*                          3 for an image object                                */
+/*                                                                               */
+/*********************************************************************************/
+unsigned long int filer_object_type(const char* filename)
+{
+  _kernel_oserror *err;
+  unsigned long int object_type = 0;
+
+  dprintf(("", "filer_object_type()\n"));
+
+  assert (filename!=NULL);
+  err = _swix( OS_File, _IN(0)|_IN(1)|_OUT(0), 5, filename, &object_type);
+  if (err)
+  {
+    dprintf(("", "filer_object_type(): Error trying to find object type of file '%s'\n", filename));
+  }
+
+  return (object_type);
+}
+
+
+
+
+
+/*
+ * malloc an area for a string and copy the string in
+ */
+char *strdup(char *str)
+{
+  char *newstr = malloc(str == NULL ? 1 : (strlen(str) + 1));
+
+  if (newstr != NULL) {
+    if (str == NULL)
+      *newstr = 0;
+    else
+      strcpy(newstr, str);
+  }
+  return (newstr);
+}
+
+
+
+/* This routine parses any territory line passed in and strips out all the
+territories into an array.
+   If the line is invalid, it retunrs false, otherwise it returns true. A
+line is considered invalid if it is empty or contains whitespace.
+ */
+
+bool parse_territories(char* territory_line)
+{
+  char *territory = NULL;
+
+  printf("Parsing territory line %s\n", territory_line);
+
+  if (strlen(territory_line) < 1)
+  {
+    /* Line must contain something */
+    return (false);
+  }
+
+  territory = strtok(territory_line, ",");
+  while (territory)
+  {
+    printf ("territory is %s\n", territory);
+    supported_territories[num_of_territories++] = strdup(territory);
+    territory = strtok (NULL, ",");
+  }
+
+  printf ("%d territories detected in the territories list.\n", num_of_territories);
+
+  return (true);
+}
+
+
+
+/*
+ * make directory
+ */
+bool mkdir(char *dir, int mode)
+{
+  _kernel_swi_regs reg;
+
+  reg.r[0] = 8;
+  reg.r[1] = (int) dir;
+  reg.r[4] = 0;
+  if (_kernel_swi(OS_File, &reg, &reg))
+  {
+    return (true);
+  }
+  return (false);
+}
+
+
+
+
+/*
+ * return the size of a file in bytes
+ */
+int file_size(char *file)
+{
+  _kernel_swi_regs reg;
+
+  reg.r[0] = 23;		/* no paths */
+  reg.r[1] = (int) file;
+  _kernel_swi(OS_File, &reg, &reg);
+
+  return (reg.r[0] == 1 ? reg.r[4] : -1);
+}
+
+
+
+
+/*
+ * read an environment variable in to a malloced string
+ */
+char *read_env(char *variable)
+{
+  char *var = NULL;
+  char *cp = NULL;
+
+  if ((var = getenv(variable)) != NULL)
+    cp = strdup(var);
+
+  return (cp);
+}
+
+
+/* This routine scans through the list of territories and ensures that they
+all exist. It does this by cheking that <root_directory>.<territory_name> is
+a valid directory.
+ */
+bool ensure_resource_directories_exist(void)
+{
+  unsigned int loop;
+  char buffer[255]; /* Nasty hardcoded value */
+  for (loop=0; loop < num_of_territories; loop++)
+  {
+    sprintf(buffer, "%s.%s", root_directory, supported_territories[loop]);
+    printf ("Checking for %s.\n", buffer);
+    if (filer_object_type(buffer) != 2)
+    {
+      printf("Warning: %s is not a directory.\n", buffer);
+      return (false);
+    }
+  }
+
+  return (true);
+}
+
+
+
+
+/* This routine creates the 'common' directory, and copies the sources in. */
+void create_common(char* res_to_copy)
+{
+  char buffer[255]; /* another nasty hardcoded limit */
+  char source[255];
+  char dest[255];
+
+  /* Create the common directory */
+  sprintf(dest, "%s.Common", root_directory);
+  mkdir (dest, 0);
+  printf ("Creating directory %s\n", dest);
+
+  sprintf(source, "%s.%s", root_directory, res_to_copy);
+  printf ("Copying from %s to %s\n", source, dest);
+
+  /* Copy the resources over into the common directory. */
+  sprintf(buffer, "copy %s %s r~v~cf", source, dest);
+  system(buffer);
+}
+
+
+
+/* This routine returns the filetype of the object. */
+int get_filetype( char *obj )
+{
+  int type;
+  _swi( OS_File, _IN(0)|_IN(1)|_OUT(0), 17, obj, &type );
+  return type;
+}
+
+
+
+
+
+
+
+/* Append leaf to path.
+ */
+void appendleaf( char *path, char *leaf )
+{
+  strcat( path, "." );
+  strcat( path, leaf );
+}
+
+
+
+/* Strip leaf from path.
+ */
+void stripleaf( char *path )
+{
+  char *sep = strrchr( path, '.' );
+
+  if ( sep != 0 )
+  {
+    *sep = '\0';
+  }
+}
+
+
+
+
+/* This routine takes the path passed in and compares it with the other resource sets.
+   It returns true if they match, false otherwise */
+bool compare_files(const char* filename)
+{
+  char buffer[255];
+  char* path_segment;
+  unsigned int length;
+  unsigned int loop;
+  bool matches = false;
+
+  if (verbose)
+  {
+    printf("Comparing with %s\n", filename);
+  }
+
+  /* Get the segment of the path after the territory. */
+  length = strlen(root_directory);
+  path_segment = (char*)filename+length;
+  length = strlen("Common");
+  path_segment+=length+2;
+
+  /* Now create the other filenames using the known path.*/
+  for (loop=0; loop < num_of_territories; loop++)
+  {
+    if (strcmp(supported_territories[loop], directory_to_copy) != 0) /* Ignore the one we copied, as files must be the same. */
+    {
+      sprintf(buffer, "%s.%s.%s", root_directory, supported_territories[loop], path_segment);
+      //printf("Comparing with %s\n", buffer);
+      compared_files[loop] = strdup(buffer);
+    }
+    else
+    {
+      /* Store the reference file */
+      compared_files[loop] = strdup((char*)filename);
+    }
+  }
+
+  if (verbose)
+  {
+    printf("Comparing...\n");
+    for (loop=0; loop < num_of_territories; loop++)
+    {
+       printf ("%s\n", compared_files[loop]);
+    }
+  }
+
+  /* Perform the comparisons...*/
+  if (!perform_comparisons())
+  {
+    /* Delete the files from the 'Common' directory */
+    matches = false;
+    remove_file(filename);
+  }
+  else
+  {
+    /* Delete the files from the other directories apart from the 'Common' one. */
+    matches = true;
+    /* Recurse through all the territories... We should just be left with the 'common' one in this case. */
+    for (loop=0; loop < num_of_territories; loop++)
+    {
+      sprintf(buffer, "%s.%s.%s", root_directory, supported_territories[loop], path_segment);
+      remove_file(buffer);
+    }
+  }
+
+  /* Now free the memory... */
+  for (loop=0; loop < num_of_territories; loop++)
+  {
+    if (compared_files[loop])
+    {
+      free (compared_files[loop]);
+      compared_files[loop] = NULL;
+    }
+  }
+
+  return (matches);
+}
+
+
+
+
+
+/* Ths routine does exactly what it says on the tin - it removes the
+specified file. It returns true if successful, false otherwise. */
+
+bool remove_file(const char* file_to_remove)
+{
+  bool success = false;
+  _kernel_swi_regs reg;
+
+  if (verbose)
+    printf("Removing file %s\n", file_to_remove);
+
+  if (simulate)
+  {
+    reg.r[0] = 6;		/* remove object */
+    reg.r[1] = (int) file_to_remove;
+    _kernel_swi(OS_File, &reg, &reg);
+  }
+
+  return (success);
+}
+
+
+
+
+
+
+/* This routine opens all the files held in the compared_files array and
+    returns true if they are the same, false otherwise. */
+bool perform_comparisons(void)
+{
+  FILE* file_handles[MAX_OPEN_TERRITORY_FILES]; /* An array to hold all the file handles */
+  unsigned int loop;
+  bool file_matches = true;
+  unsigned int filesize[MAX_OPEN_TERRITORY_FILES] = 0;
+
+  /* Ensure that all the files exist and grab their filesizes.*/
+  for (loop=0; loop < num_of_territories; loop++)
+  {
+    assert (compared_files[loop] != NULL); /* Check we are not going to try to open a NULL string... */
+    if (!file_exists(compared_files[loop]))
+    {
+      if (verbose)
+        printf("%s does not exist.\n", compared_files[loop]);
+      return (false);
+    }
+
+    filesize[loop] = file_size(compared_files[loop]);
+    if (loop > 0 && (filesize[loop] != filesize[loop-1]))
+    {
+      if (verbose)
+        printf("No match: differing file sizes!\n");
+      return (false);
+    }
+  }
+
+  /* Open all the files. */
+  for (loop=0; loop < num_of_territories; loop++)
+  {
+    assert (compared_files[loop] != NULL); /* Check we are not going to try to open a NULL string... */
+//    printf ("%s\n", compared_files[loop]);
+    /* Open the file.. */
+    if ((file_handles[loop]=fopen(compared_files[loop],"r")) == NULL)
+    {
+      if (verbose)
+        printf("Error opening file %s for reading.\n", compared_files[loop]);
+      return (false); /* If we can't open it, we are no bothered... (atm neway)*/
+    }
+  }
+
+  /* Now go through the file and do a byte-by-byte comparison... */
+  while (!feof(file_handles[0]) && file_matches)
+  {
+    char bytes[10]; /* To hold the bytes from all the files... */
+    bytes[9]='\0';
+    for (loop=0; loop < num_of_territories; loop++)
+    {
+      bytes[loop] = getc(file_handles[loop]);
+      if (loop > 0 && (bytes[loop] != bytes[loop-1]))
+      {
+        // printf ("File %s do not match!\n", compared_files[loop]);
+        file_matches = false;
+        break;
+      }
+    }
+//    printf("%s\n", bytes[9]);
+  }
+
+  /* Close all the files */
+  for (loop=0; loop < num_of_territories; loop++)
+  {
+    if (file_handles[loop])
+    {
+      fclose(file_handles[loop]);
+    }
+  }
+
+  if (verbose)
+  {
+    // printf ("Files match.\n");
+  }
+
+  return (file_matches);
+}
+
+
+
+
+/* Descend into the given directory. Called recursively to scan a whole
+ * directory structure.
+ */
+void descend(char *path)
+{
+  char *buf = malloc( BUFSZ );
+  int offset = 0;
+
+  if ( buf != NULL )
+  {
+    do
+    {
+      object *op = (object *)buf;
+      int nread;
+
+      _swi( OS_GBPB, _IN(0)|_IN(1)|_IN(2)|_IN(3)|_IN(4)|_IN(5)|_IN(6)|_OUT(3)|_OUT(4),
+              10, path, buf, 80, offset, BUFSZ, 0, &nread, &offset );
+
+      while ( nread > 0 )
+      {
+        switch ( op->type )
+        {
+          case 1:
+            /* Text file found so scan it for tags. */
+            appendleaf( path, op->name );
+            //printf("File is %s (type %d)\n", path, filetype(op));
+            if (compare_files(path))
+            {
+            }
+            else
+            {
+              printf ("Not matched: %s\n", path);
+            }
+            stripleaf( path );
+            break;
+
+          case 2:
+            /* Directory found so descend into it.
+             */
+            appendleaf( path, op->name );
+            descend( path );
+            stripleaf( path );
+            break;
+
+          default:
+            printf("Don't know how to process object type %d\n", op->type );
+      }
+
+        op = (object *)(((int)(op->name)+strlen(op->name)+4)&~3);
+        nread -= 1;
+      }
+    } while ( offset != -1 );
+
+    free( buf );
+  }
+  else
+  {
+          printf("Couldn't allocate enough memory\n" );
+          exit (EXIT_FAILURE);
+  }
+}
+
+
+
+
+/* This is the main routine to compare all the relevant directories. */
+bool compare_resources(void)
+{
+  char buffer[255];
+  /* Recurse down the directory structure... */
+  sprintf(buffer, "%s.Common", root_directory);
+
+  descend(buffer);
+
+  return (true);
+}
+
+
+/*
+ * compare two strings caselessly
+ */
+int cstrcmp(const char *a, const char *b)
+{
+  int d;
+
+  if (a == NULL && b == NULL)
+    return 0;
+
+  if (a == NULL || b == NULL)
+    return (-1);
+
+  while (*a || *b) {
+    d = tolower(*(a++)) - tolower(*(b++));
+    if (d)
+      return d;
+  }
+  return 0;
+}
+
+
+
+
+/* Display a suitable help text. */
+void help_text(void)
+{
+  printf ("ResCommon\n");
+  printf ("\n");
+  printf ("Usage: ResCommon <root dir> [-t <territory_list>] [-v -h -s]\n");
+  printf ("Commands: <root dir> n");
+  printf ("Options:  -t <territory_list> A comma-seperated list of territories to use.\n");
+  printf ("          -v                  Verbose. Display verbose output on what the utility is doing.\n");
+  printf ("          -h                  Help. Display help text.\n");
+  printf ("          -s                  Simulate. Do not delete any files.\n");
+  printf ("\n");
+  printf ("This utility looks for common resources held in different territories and palces them in a 'Common' directory. \n");
+  printf ("This allows as may different resource sets as possible to be squeezed into one ROM image.\n");
+  printf ("\n");
+}
+
+
+
+
+/* The main routine. Gosh. Wow. Absolutely amazing comment, eh? */
+int main(int argc, char **argv)
+{
+  char* locale_list = NULL;
+  unsigned int i;
+  directory_to_copy = strdup("UK");
+
+  if (argc < 2)
+  {
+    fprintf(stderr, "Usage: ResCommon <root dir> [-t <territory_list>] [-v -h -s]\n");
+    exit (EXIT_FAILURE);
+  }
+
+  /* Define an atexit handler */
+  atexit(exit_handler);
+
+  for (i = 1; i < argc; i++)
+  {
+    // printf("arg %d: %s\n", i, argv[i]);
+    if ((cstrcmp(argv[i], "-h") == 0) || (cstrcmp(argv[i], "-help") == 0))
+    {
+      help_text();
+      exit(EXIT_FAILURE);
+    }
+    if ((cstrcmp(argv[i], "-v") == 0) || (cstrcmp(argv[i], "-verbose") == 0))
+    {
+      verbose = TRUE;
+    }
+    if ((cstrcmp(argv[i], "-t") == 0) || (cstrcmp(argv[i], "-territories") == 0))
+    {
+      /* The next arg should be a comma-separated territory list. */
+      char* list = NULL;
+      list = strdup(argv[++i]);
+      parse_territories(list);
+      if (list)
+      {
+        free (list);
+        list = NULL;
+      }
+    }
+    else
+    {
+      if ((cstrcmp(argv[i], "-s") == 0) || (cstrcmp(argv[i], "-simulate") == 0))
+      {
+        simulate = TRUE;
+      }
+    }
+  }
+
+  /* Read the required starting directory from the command line. */
+  root_directory = strdup(argv[1]);
+  if (verbose)
+    printf("root directory is %s\n", root_directory);
+
+  /* Ensure that root directory is a directory. */
+  if (filer_object_type(root_directory) != 2)
+  {
+    fprintf(stderr, "Error: %s should be a directory.\n", argv[1]);
+    exit (EXIT_FAILURE);
+  }
+
+  /* We need to see if a locale_list has been defined. If it has, we need to split it into a list of locales.
+      Only do this if a valid list was not passed in on the command line. */
+  if (num_of_territories == 0 && ((locale_list = read_env(ENV_LOCALE_LIST)) != NULL))
+  {
+    if (!parse_territories(locale_list))
+    {
+      /* An error occured whilst parsing the loale list. */
+      printf("Malformed Locale list detected.");
+      exit (EXIT_FAILURE);
+    }
+    free (locale_list);
+    locale_list = NULL; /* locale_list is no longer needed */
+  }
+
+  if (num_of_territories == 0)
+  {
+    /* If there was not a locale list in env or on command line, report it and quit. */
+    fprintf(stderr, "No locale list present.\n");
+    exit (EXIT_SUCCESS); /* Success as the program should do nothing if there is no localelist. */
+  }
+
+  /* Ensure that the resource directories exist. */
+  if (!ensure_resource_directories_exist())
+  {
+    printf("Not all resource directories exist.\n");
+    exit (EXIT_FAILURE);
+  }
+
+  /* Copy the UK directory into the Common one. */
+  create_common(directory_to_copy);
+
+  /* And now do the compariasons... */
+  compare_resources();
+}
+
+
+
+
+/*****************************************************************************
+* exit_handler
+*
+* This function can be used to clear up any outstanding memory left
+*  afer the program has finished. It should only be used to delete
+*  memory that is needed throughout the lifetime of the program, for
+*  example the locale_list.
+*
+* Assumptions
+*  There are no assumptions.
+*
+* Inputs
+*  None.
+*
+* Outputs
+*  None.
+*
+* Returns
+*  None.
+*****************************************************************************/
+void exit_handler(void)
+{
+  unsigned int loop;
+
+  /* Free the locale array if it has not already been free'd. */
+  if (num_of_territories != 0)
+  {
+    for (loop=0; loop < num_of_territories; loop++)
+    {
+      if (compared_files[loop]) /* Memory has not been free'd. */
+      {
+        free (compared_files[loop]);
+        compared_files[loop] = NULL;
+      }
+    }
+    num_of_territories = 0;
+  }
+
+  /* Free the directory_to_copy memory */
+  if (directory_to_copy)
+  {
+    free (directory_to_copy);
+    directory_to_copy = NULL;
+  }
+
+  /* Free the root directory */
+  if (root_directory)
+  {
+    free (root_directory);
+    root_directory = NULL;
+  }
+}
+
+
+/*****************************************************************************
+* END OF FILE
+*****************************************************************************/
+
