@@ -1,6 +1,17 @@
-/* fcprint.c */
 
+//#pragma warning (disable: 4103)  /* used #pragma pack to change alignment */
+
+#if defined(DOS_BUILD) || defined(FC_DOS_32)
+//#include <stdio.h>
+#endif
+#ifndef FC_WIN_32
+//#include <memory.h>
+#endif
+//#include "fclocal.h"
 #include "common.h"
+//#include <string.h>
+
+static char fc_version[] = "fcprint.obj: "FC_VERSION;  /* set object module level ID */
 
 /***************************************************************************
  *  FC_PRINT.C                                          Lexmark Confidential
@@ -36,46 +47,110 @@
  *    Date        Name           Reason for Change
  *
  *************************************************************************/
-void ProcessRaster(LPDVDATAREC lpDataRec, int nScanStart, int nScanEnd)
+void ProcessRaster(LPDVDATAREC lpDataRec, FC_LONG lStripStart, int nScanStart,
+                     int nScanEnd)
 {
-	struct pf_data *pfData;
-	int nOffset = 0, n, nScanCount;
-	int nIndx, nSeg;
-	char *lpchInPtr;
+   struct pf_data FAR *pfData;
+   int      nOffset = 0, m, n, nColorCount;
+   int      nIndx, nSeg;
+   int      nScanIndex;
+   FC_INT   nColorStart, nColorEnd, nINIndx;
+   LPWORD   lpwColorPlane;
+   LPBYTE   lpbInPtr;
 
-//	kelvin_trace3("ProcessRaster(%p, %d, %d)\n", lpDataRec, nScanStart, nScanEnd);
+#ifdef CPROF
+PrfEnter(2);
+#endif
 
-	pfData = (struct pf_data *) lpDataRec->lpLXDevice;
+   pfData = (struct pf_data FAR *)lpDataRec->lpLXDevice;
 
-	nScanCount = nScanEnd - nScanStart;
+   nScanIndex = (FC_INT)(lStripStart%(FC_LONG)pfData->nMaxDelayBuf);
 
-	for (n = pfData->nDelayBufStart; n < pfData->nDelayBufEnd; n++)
-	{
-		nSeg = n + ((pfData->anDBIndx[FC_IN][n] / pfData->nRastersPerSeg) * MAXNUMPLANES);
-		nIndx = (pfData->anDBIndx[FC_IN][n] % pfData->nRastersPerSeg);
-		lpchInPtr = (char *) (pfData->alpwPlane[nSeg] + (nIndx * pfData->nWordsPerRow));
+   for (n=pfData->nDelayBufStart;n<pfData->nDelayBufEnd;n++)
+   {  /* Once for each color plane in this raster line */
 
-		if (nScanCount <= 0)
-		{
-			MEMSET(lpchInPtr, 0x00, pfData->nBytesPerRow);
-		}
-		else
-		{
-			MEMSET(lpchInPtr, 0x00, nScanStart);
-			MEMCPY(lpchInPtr + nScanStart, pfData->in_ptr + nOffset + nScanStart, nScanCount);
-			MEMSET(lpchInPtr + nScanEnd, 0x00, (pfData->nBytesPerRow - nScanEnd));
-		}
-		
-		pfData->anDBIndx[FC_IN][n] = ((pfData->anDBIndx[FC_IN][n] + 1) %
-				pfData->anDBIndx[BUFSIZE][n]);
-		nOffset += pfData->nBytesPerRow;
-	}
+      /* Determine left and right margin for each color plane, and store it */
+      lpwColorPlane = (LPWORD)(pfData->in_ptr)+(nOffset/2);
+      for (m=(nScanStart/2); m<((nScanEnd+1)/2); m++)
+         if (lpwColorPlane[m] != 0x0000)
+            break; 
+      if (m<((nScanEnd+1)/2))
+         nColorStart = (FC_INT)(m * 2);
+      else
+         nColorStart = (FC_INT)(pfData->nBytesPerRow);
+      pfData->alpnScanStart[n][nScanIndex] = nColorStart;
+   
+      for (m=((nScanEnd-1)/2); m>=(nColorStart/2); m--)
+         if (lpwColorPlane[m] != 0x0000)
+            break;
+      if (m>=(nColorStart/2))
+         nColorEnd = (FC_INT)((m + 1) * 2);
+      else
+         nColorEnd = 0;
+      pfData->alpnScanEnd[n][nScanIndex] = nColorEnd;
 
-	pfData->lRasterLinesProcessed++;
+      if (pfData->bResolution == HIRES)
+      {
+         nINIndx = (FC_INT)pfData->alDBIndx[FC_IN][n];
+      }
+      else
+      {
+         pfData->alDBIndx[FC_IN][n] = lStripStart;
+         nINIndx = (FC_INT) (lStripStart % pfData->alDBIndx[BUFSIZE][n]);
+      }
 
-	if ((pfData->lRasterLinesProcessed % pfData->lRowsToProcess) == 0)
-		PrintSwath(lpDataRec, pfData->lRowPos);
-}
+      /* Add color plane to its delay buffer */
+      nSeg = n + ((nINIndx / pfData->nRastersPerSeg) *
+             MAXNUMPLANES);
+      nIndx = (nINIndx % pfData->nRastersPerSeg);
+      lpbInPtr = (LPBYTE) (pfData->alpwPlane[nSeg] +
+                 (nIndx*pfData->nWordsPerRow));
+
+      nColorCount = nColorEnd - nColorStart;
+
+      if (nColorCount <= 0)
+      {
+         MEMSET(lpbInPtr,0x00,pfData->nBytesPerRow);
+      }
+      else
+      {
+         MEMSET( lpbInPtr, 0x00, nColorStart);
+         MEMCPY(lpbInPtr+nColorStart, pfData->in_ptr+nOffset+nColorStart,
+                  nColorCount);
+         MEMSET( lpbInPtr+nColorEnd, 0x00, (pfData->nBytesPerRow-nColorEnd));
+      }
+
+      if (pfData->bResolution != HIRES)
+      {
+         pfData->alDBIndx[FC_IN][n]++;
+      }
+      else
+      {
+         pfData->alDBIndx[FC_IN][n] = ((pfData->alDBIndx[FC_IN][n] + 1) %
+                                      pfData->alDBIndx[BUFSIZE][n]);
+      }
+
+      nOffset+=pfData->nBytesPerRow;
+   }
+
+   /* Set initial shingle value for each color plane in the raster line.*/
+   SetShingle(lpDataRec, nScanIndex);
+
+   pfData->lRasterLinesProcessed++;
+
+   if ((pfData->lRasterLinesProcessed % pfData->lRowsToProcess) == 0)
+      PrintSwath(lpDataRec, pfData->lRowPos, 0);
+
+#ifdef CPROF
+PrfExit(2);
+#endif
+   return;
+
+
+}  /* end of ProcessRaster() */
+
+
+
 
 /***************************************************************************
  *  FC_PRINT.C                                          Lexmark Confidential
@@ -86,7 +161,7 @@ void ProcessRaster(LPDVDATAREC lpDataRec, int nScanStart, int nScanEnd)
  *    This function processes all raster lines in the delay buffers, by
  *    calling the PrintSwath() function as many times as necessary to
  *    process and remove all raster lines currently in the delay buffers.
- *    It accomplishes this by stepping through each delay buffer and 
+ *    It accomplishes this by stepping through each delay buffer and
  *    continually calling PrintSwath() until the delay buffer is empty.  It
  *    then goes to the next delay buffer and does the same thing.
  *
@@ -101,59 +176,52 @@ void ProcessRaster(LPDVDATAREC lpDataRec, int nScanStart, int nScanEnd)
  *    Date        Name           Reason for Change
  *
  *************************************************************************/
-int FlushBuffers(LPDVDATAREC lpDataRec)
+int FlushBuffers(LPDVDATAREC lpDataRec, FC_INT  nPagePosition)
 {
-	int n = 0, nOut;
-	struct pf_data *pfData;
-	long lRowPos, lRowsToMove = 0, lBlankRowsMoved = 0, lRowsMoved = 0;
-	int nShingleSize;
+   int n=0,nOut;
+   struct pf_data FAR *pfData;
+   FC_LONG lRowPos,lRowsToMove=0, lBlankRowsMoved = 0, lRowsMoved = 0;
 
-	pfData = (struct pf_data *) lpDataRec->lpLXDevice;
-	lRowPos = pfData->lRowPos;
-
-	switch (lpDataRec->bColorPlanes)
-	{
-	case 1:
-		nShingleSize = pfData->nMonoShingleSize;
-		break;
-	default:
-		nShingleSize = pfData->nColorShingleSize;
-		break;
-	}
-
-	n = pfData->nDelayBufStart;
-	while (n < pfData->nDelayBufEnd)
-	{
-		nOut = pfData->nOut;
-		if (pfData->anDBIndx[FC_IN][n] == pfData->anDBIndx[nOut][n])
-		{
-			n++;
-		}
-		else
-		{
-			lRowsToMove = pfData->lRowsToProcess -
-					pfData->lRasterLinesProcessed;
-			lRowPos += lRowsToMove;
-			lBlankRowsMoved += lRowsToMove;
-			pfData->lRasterLinesProcessed += lRowsToMove;
-			lRowsMoved += (long) PrintSwath(lpDataRec, lRowPos);
-		}
-	}
-
-#if 0
-	if (bCalledLocation == FLUSH_EOP)
-	{
-		/* add one more PrintSwath call to flush swath buffer */
-// lRowsMoved += (long)PrintSwath(lpDataRec, lRowPos);
-		lBlankRowsMoved += (long) PrintSwath(lpDataRec, lRowPos);
-	}
+#ifdef CPROF
+PrfEnter(2);
 #endif
 
-	lBlankRowsMoved += (long) PrintSwath(lpDataRec, lRowPos);
+   pfData = (struct pf_data FAR *)lpDataRec->lpLXDevice;
+   lRowPos = pfData->lRowPos;
 
-// return(lRowsMoved);
-	return ((int) lBlankRowsMoved);
-}
+   n = pfData->nDelayBufStart;
+   while (n < pfData->nDelayBufEnd)
+   {
+      nOut = pfData->nOut;
+      if (pfData->alDBIndx[FC_IN][n] == pfData->alDBIndx[nOut][n])
+      {
+         n++;
+      }
+      else
+      {
+         lRowsToMove = pfData->lRowsToProcess -
+                        pfData->lRasterLinesProcessed;
+         lRowPos += lRowsToMove;
+         lBlankRowsMoved += lRowsToMove;
+         pfData->lRasterLinesProcessed += lRowsToMove;
+         lRowsMoved += (FC_LONG)PrintSwath(lpDataRec, lRowPos, 0);
+      }
+   }
+
+   if (nPagePosition == END_OF_PAGE)
+   {
+      lBlankRowsMoved += (FC_LONG)PrintSwath(lpDataRec, lRowPos, 1);
+   }
+
+#ifdef CPROF
+PrfExit(2);
+#endif
+   return((int)lBlankRowsMoved);
+
+}  /* end of FlushBuffers() */
+
+
+
 
 /***************************************************************************
  *  FC_PRINT.C                                          Lexmark Confidential
@@ -180,86 +248,144 @@ int FlushBuffers(LPDVDATAREC lpDataRec)
  *    Date        Name           Reason for Change
  *
  *************************************************************************/
-
-int PrintSwath(LPDVDATAREC lpDataRec, long lRowPos)
+int PrintSwath(LPDVDATAREC lpDataRec, FC_LONG lRowPos, BYTE bMustPrint)
 {
-	int nRetCode = 0, nShingleSize = 0, nRowsMoved = 0, nPlanes;
-	struct pf_data *pfData;
+   int   nPlanes;
+   BOOL  fRetCode, fGetMoreRows=FALSE;
+   int   nRowsToMove;
+   WORD  wRowsFreed=0;
+   struct pf_data FAR *pfData;
 
-	pfData = (struct pf_data *) lpDataRec->lpLXDevice;
+#ifdef CPROF
+PrfEnter(4);
+#endif
+   pfData = (struct pf_data FAR *)lpDataRec->lpLXDevice;
 
-	switch (lpDataRec->bColorPlanes)
-	{
-	case 1:
-		nPlanes = KPLANE;
-		nShingleSize = pfData->nMonoShingleSize;
-		break;
-	case 3:
-	case 4:
-	case 6:
-		nPlanes = CMYPLANES;
-		nShingleSize = pfData->nColorShingleSize;
-		break;
-	default:
-		return (0);
-	}
+   if ( (pfData->fSwathPresent == TRUE) && (bMustPrint == 1) )
+   {
+      OutputSwath(lpDataRec);
+      pfData->fSwathPresent = FALSE;
+   }
 
-	SwathMargins(lpDataRec, nPlanes, lRowPos);
-	if (pfData->fSwathPresent == TRUE)
-		OutputSwath(lpDataRec);
-	nRetCode = Rotate(lpDataRec, nPlanes);
+   while (wRowsFreed == 0)
+   {
+      switch (lpDataRec->bColorPlanes)
+      {
+         case 1 :
+               nPlanes = KPLANE;
+               break;
+         case 3 :
+         case 4 :
+         case 6 :
+         default :
+               nPlanes = CMYPLANES;
+               break;
+      }
+   
+      if (pfData->nVertResMult == HIRES_VERTICAL_MULTIPLIER)
+      {
+         nRowsToMove = HiResPreSwathAdjust(lpDataRec,lRowPos);
+      }
+      else
+      {
+         nRowsToMove = PreSwathAdjust(lpDataRec,lRowPos);
+      }
 
-	if (nRetCode > 0)
-	{
-		nRowsMoved = nRetCode;
-		pfData->fSwathPresent = TRUE;
-	}
-	else
-	{
-		nRowsMoved = (-nRetCode);
-		pfData->fSwathPresent = FALSE;
-	}
-	pfData->nFormsMovePending += nRowsMoved;
+      if (nRowsToMove < 0)
+      {
+#ifdef CPROF
+PrfExit(4);
+#endif
+         return(0);
+      }
+      pfData->nFutureFormsMovePending += nRowsToMove;
 
-	switch (lpDataRec->bColorPlanes)
-	{
-	case 4:
-	case 6:
-		if (lpDataRec->bColorPlanes == 4)
-			nPlanes = KPLANE;
-		else
-			nPlanes = KCMPLANES;
-		SwathMargins(lpDataRec, nPlanes, lRowPos);
-		if (pfData->fSwathPresent == TRUE)
-			OutputSwath(lpDataRec);
-		nRetCode = Rotate(lpDataRec, nPlanes);
-		if (nRetCode > 0)
-			pfData->fSwathPresent = TRUE;
-		else
-			pfData->fSwathPresent = FALSE;
-		break;
-	default:
-		break;
-	}
+      SwathMargins(lpDataRec,nPlanes,lRowPos);
 
-	/* now prepare for next call to PrintSwath() */
+      if (pfData->nPreRotateStart < pfData->nPreRotateEnd)
+      {
+         /* We are about to build another swath, so if we already have     */
+         /* a swath built, then we need to print it.                       */
+         if (pfData->fSwathPresent == TRUE)
+         {
+            OutputSwath(lpDataRec);
+         }
+         fRetCode = Rotate(lpDataRec,nPlanes,lRowPos);
+         pfData->fSwathPresent = fRetCode;
+         if (pfData->fSwathPresent == TRUE)
+         {
+            pfData->nFormsMovePending       += pfData->nFutureFormsMovePending;
+            pfData->nFutureFormsMovePending  = 0;
+         }
 
-	switch (pfData->nOut)
-	{
-	case FC_OUT_EVEN:
-		pfData->nOut = FC_OUT_ODD;
-		pfData->lRowsToProcess = pfData->lRasterLinesProcessed +
-				(long) (nShingleSize + 3l);
-		break;
-	case FC_OUT_ODD:
-		pfData->nOut = FC_OUT_EVEN;
-		pfData->lRowsToProcess = pfData->lRasterLinesProcessed +
-				(long) (nShingleSize - 3l);
-		break;
-	case FC_OUT:
-		pfData->lRowsToProcess = pfData->lRasterLinesProcessed +
-				(long) nShingleSize;
-	}
+      }
 
-	return (nRowsMoved);
-}
+      switch (lpDataRec->bColorPlanes)
+      {
+         case 4 :
+         case 6 :
+               if (lpDataRec->bColorPlanes == 4)
+                  nPlanes = KPLANE;
+               else
+                  nPlanes = KCMPLANES;
+               SwathMargins(lpDataRec,nPlanes,lRowPos);
+
+               if ( (pfData->nPreRotateStart < pfData->nPreRotateEnd) &&
+                    (pfData->anDelayKSwath[pfData->nOut] == FALSE) )
+               {
+                  /* We are about to build another swath, so if we already */
+                  /* have a swath built, then we need to print it.         */
+                  if (pfData->fSwathPresent == TRUE)
+                  {
+                     OutputSwath(lpDataRec);
+                  }
+                  fRetCode = Rotate(lpDataRec,nPlanes,lRowPos);
+                  pfData->fSwathPresent = fRetCode;
+                  if (pfData->fSwathPresent == TRUE)
+                  {
+                     pfData->nFormsMovePending += 
+                                             pfData->nFutureFormsMovePending;
+                     pfData->nFutureFormsMovePending  = 0;
+                  }
+               }
+               break;
+         default :
+               break;
+      } 
+      if (pfData->nVertResMult == HIRES_VERTICAL_MULTIPLIER)
+      {
+         wRowsFreed = (WORD) HiResPostSwathAdjust(lpDataRec,lRowPos);
+      }
+      else
+      {
+         wRowsFreed = (WORD) PostSwathAdjust(lpDataRec,lRowPos);
+      }
+   }
+
+
+   /* now prepare for next call to PrintSwath() */
+   pfData->lRowsToProcess = pfData->lRasterLinesProcessed +
+                             (FC_LONG)wRowsFreed;
+   switch (pfData->nOut)
+   {
+      case FC_OUT_EVEN :
+            pfData->nOut = FC_OUT_ODD;
+            pfData->lRowsToProcess = pfData->lRasterLinesProcessed +
+                                      (FC_LONG)(wRowsFreed + 3);
+            break;
+      case FC_OUT_ODD :
+            pfData->nOut = FC_OUT_EVEN;
+            pfData->lRowsToProcess = pfData->lRasterLinesProcessed +
+                                      (FC_LONG)(wRowsFreed - 3);
+            break;
+      case FC_OUT :
+            pfData->lRowsToProcess = pfData->lRasterLinesProcessed +
+                                      (FC_LONG)wRowsFreed;
+   }
+
+#ifdef CPROF
+PrfExit(4);
+#endif
+   return(nRowsToMove);
+
+}  /* end of PrintSwath() */
