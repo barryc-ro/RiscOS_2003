@@ -37,6 +37,7 @@ COMMONFILES=\
  ${SDIR}.arp.ARP\
  ${SDIR}.ifconfig.IfConfig\
  ${SDIR}.inetstat.InetStat\
+ ${SDIR}.ipvars.IPVars\
  ${SDIR}.ping.Ping\
  ${SDIR}.route.Route\
  ${SDIR}.showstat.ShowStat\
@@ -75,6 +76,7 @@ NETUTILS = \
         ${SDIR}.arp.ARP              \
         ${SDIR}.ifconfig.IfConfig    \
         ${SDIR}.inetstat.InetStat    \
+        ${SDIR}.ipvars.IPVars        \
         ${SDIR}.map-mbone.Map-MBone  \
         ${SDIR}.mrinfo.MRInfo        \
         ${SDIR}.mtrace.MTrace        \
@@ -106,6 +108,7 @@ install_common: ${COMMONFILES}
         ${CP} ${SDIR}.arp.ARP               ${INSTDIR}.bin.ARP          ${CPFLAGS}
         ${CP} ${SDIR}.ifconfig.IfConfig     ${INSTDIR}.bin.IfConfig     ${CPFLAGS}
         ${CP} ${SDIR}.inetstat.InetStat     ${INSTDIR}.bin.InetStat     ${CPFLAGS}
+        ${CP} ${SDIR}.ipvars.IPVars         ${INSTDIR}.bin.IPVars       ${CPFLAGS}
         ${CP} ${SDIR}.ping.Ping             ${INSTDIR}.bin.Ping         ${CPFLAGS}
         ${CP} ${SDIR}.route.Route           ${INSTDIR}.bin.Route        ${CPFLAGS}
         ${CP} ${SDIR}.showstat.ShowStat     ${INSTDIR}.bin.ShowStat     ${CPFLAGS}
@@ -162,6 +165,7 @@ resources-NetUtils: ${NETUTILS}
 	${MKDIR} ${RESD}.files
         ${CP} ${SDIR}.arp.ARP               ${RESD}.bin.ARP          ${CPFLAGS}
         ${CP} ${SDIR}.ifconfig.IfConfig     ${RESD}.bin.IfConfig     ${CPFLAGS}
+        ${CP} ${SDIR}.ipvars.IPVars         ${RESD}.bin.IPVars       ${CPFLAGS}
         ${CP} ${SDIR}.inetstat.InetStat     ${RESD}.bin.InetStat     ${CPFLAGS}
         ${CP} ${SDIR}.map-mbone.Map-MBone   ${RESD}.bin.Map-MBone    ${CPFLAGS}
         ${CP} ${SDIR}.mrinfo.MRInfo         ${RESD}.bin.MRInfo       ${CPFLAGS}
@@ -192,6 +196,12 @@ ${SDIR}.arp.ARP: ${SDIR}.arp.c.ARP
 
 ${SDIR}.ifconfig.IfConfig: ${SDIR}.ifconfig.c.IfConfig
 	dir ${SDIR}.ifconfig
+	@amu_machine
+	@up
+	@up
+
+${SDIR}.ipvars.IPVars: ${SDIR}.ipvars.c.ipvars
+	dir ${SDIR}.ipvars
 	@amu_machine
 	@up
 	@up
