@@ -75,9 +75,12 @@ db_printf(char *format, ...)
 #endif
 
 
-#define NV_BYTE		0xE8		/* Our byte in non-volatile memory */
-#define NV_BITS		0x0F		/* Bitmask of our bits in that byte */
+#define NVRAM_Read 0x4ee00
+#define NVRAM_Write 0x4ee01
 
+#define NV_FAMILY   "IRDeviceID"
+#define NV_FIRST_EDGE_OFFSET   "IRPulseOffsetFirst"
+#define NV_ALL_EDGES_OFFSET    "IRPulseOffsetAll"
 
 
 static unsigned int halt_flags = HALT_FLAG_HALT | HALT_FLAG_CANCEL_BLASTING | HALT_FLAG_CANCEL_DOWNLOAD;
@@ -138,7 +141,6 @@ void Disable( void )
 */
 static _kernel_oserror *Enable( void )
 {
-    int i;
     ioctl_t ioctlblock = { IOCTL_FIFO_TRIG, 0, 0, 0, 1, 4 };
     in_handle = out_handle = -1;		/* Reset handles */
 
@@ -161,7 +163,8 @@ static _kernel_oserror *Enable( void )
     {
         Flags |= ENABLED;
         next = buffer;
-        send_setup_and_run(ir_getfamily());
+        send_setup_and_run(get_irfamily());
+        set_edge_offsets(get_first_edge_offset(),get_all_edges_offset());
     }
     else
     {
@@ -311,15 +314,18 @@ int ir_DeviceRxDataPresent(void)
 }
 
 
+
+
 /*------------------------------------------------------------------------------
 *
 *	Read configured family
 */
-int ir_getfamily(void)
+int get_irfamily(void)
 {
     int byte;
-    _swix(OS_Byte, _INR(0,1)|_OUT(2), 0xA1, NV_BYTE, &byte);
-    return(byte &= NV_BITS);
+
+    _swix(NVRAM_Read, _INR(0,2), NV_FAMILY, &byte, 0);
+    return(byte &= 0x0f);
 }
 
 
@@ -327,18 +333,42 @@ int ir_getfamily(void)
 *
 *	Set configured family
 */
-void ir_setfamily(int family)
+void set_irfamily(int family)
 {
-    int byte;
 
-    /* Read, modify, write */
-    _swix(OS_Byte, _INR(0,1)|_OUT(2), 0xA1, NV_BYTE, &byte);
-    byte = (byte & ~NV_BITS) | (family & NV_BITS);
-    _swix(OS_Byte, _INR(0,2), 0xA2, NV_BYTE, byte);
+    _swix(NVRAM_Write, _INR(0,2), NV_FAMILY, &family, 0);
 
     /* Inform the micro of the change */
     if (Flags & ENABLED)
         send_setup_and_run(family);
+}
+
+int get_first_edge_offset(void)
+{
+    int byte;
+    _swix(NVRAM_Read, _INR(0,2), NV_FIRST_EDGE_OFFSET, &byte, 0);
+    return byte;
+}
+
+int get_all_edges_offset(void)
+{
+    int byte;
+    _swix(NVRAM_Read, _INR(0,2), NV_ALL_EDGES_OFFSET, &byte, 0);
+    return byte;
+}
+
+
+void set_edge_offsets(int first, int all)
+{
+    ir_detector_tuning_t dt;
+    _swix(NVRAM_Write, _INR(0,2), NV_FIRST_EDGE_OFFSET, &first, 0);
+    _swix(NVRAM_Write, _INR(0,2), NV_ALL_EDGES_OFFSET, &all, 0);
+
+
+    * (unsigned int *)dt.byte_array = 0;
+    dt.bits.fp = first;
+    dt.bits.ap = all;
+    send_ir_detector_tuning(dt);
 }
 
 
@@ -377,7 +407,7 @@ static void put_command(command_packet_t command, size_t size)
 *
 *	munge an outgoing command packet
 */
-command_packet_t munge(outbound_command_number_t command, unsigned char data[3])
+static command_packet_t munge(outbound_command_number_t command, unsigned char data[3])
 {
     command_packet_t packet;
 
@@ -391,6 +421,21 @@ command_packet_t munge(outbound_command_number_t command, unsigned char data[3])
     packet.byte_array[2] = data[1]&0x7f;
     packet.byte_array[3] = data[2]&0x7f;
 
+    return packet;
+}
+
+/*------------------------------------------------------------------------------
+*
+*	de-munge an incoming raw data packet (which is assumed to be valid)
+*/
+static packet_t demunge(unsigned int raw)
+{
+    packet_t packet;
+
+    packet.word = (raw >> 8) |
+        ((raw & 0x40) << 1) |
+        ((raw & 0x20) << 10) |
+        ((raw & 0x10) << 19);
     return packet;
 }
 
@@ -476,23 +521,12 @@ void send_ir_blasting_data(unsigned char data[3])
 }
 
 
-
-
-
-/*------------------------------------------------------------------------------
-*
-*	de-munge an incoming raw data packet (which is assumed to be valid)
-*/
-static packet_t demunge(unsigned int raw)
+void send_ir_detector_tuning(ir_detector_tuning_t dt)
 {
-    packet_t packet;
-
-    packet.word = (raw >> 8) |
-        ((raw & 0x40) << 1) |
-        ((raw & 0x20) << 10) |
-        ((raw & 0x10) << 19);
-    return packet;
+    put_command(munge(CMD_OUT_IR_DETECTOR_TUNING,dt.byte_array),3);
 }
+
+
 
 
 
@@ -518,7 +552,7 @@ static void process(packet_t packet)
 {
     driver_list_node_t *drv=NULL;
     tag_info_t *tag;
-    int i, next_ext=0;
+    int next_ext=0;
     unsigned int registry_number;
 
     static struct
@@ -697,7 +731,7 @@ static void process(packet_t packet)
 static void process_tag_status_report(unsigned int raw)
 {
     driver_list_node_t *node;
-    int i, b;
+    int i,b;
     packet_t packet = demunge(raw);
     unsigned int tag_usage = (packet.tag_status_report.a7_a0) |
         (packet.tag_status_report.a13_a8 << 8);
@@ -730,7 +764,7 @@ static void process_tag_status_report(unsigned int raw)
 }
 
 
-void process_controller_status_report(unsigned int raw)
+static void process_controller_status_report(unsigned int raw)
 {
     driver_list_node_t *node;
     packet_t packet = demunge(raw);
@@ -752,7 +786,7 @@ void process_controller_status_report(unsigned int raw)
     }
 }
 
-void process_comms_status_report(unsigned int raw)
+static void process_comms_status_report(unsigned int raw)
 {
     driver_list_node_t *node;
     packet_t packet = demunge(raw);
@@ -774,7 +808,7 @@ void process_comms_status_report(unsigned int raw)
     }
 }
 
-void process_completion_status_report(unsigned int raw)
+static void process_completion_status_report(unsigned int raw)
 {
     driver_list_node_t *drv;
     packet_t packet = demunge(raw);
@@ -792,8 +826,7 @@ void process_completion_status_report(unsigned int raw)
         if (blast_complete())
         {
             unsigned int driver_number = blast_get_driver_number();
-            driver_list_node_t *drv = drv_find_driver_by_driver_number(drv_driver_list,
-                                                                       driver_number);
+            drv = drv_find_driver_by_driver_number(drv_driver_list,driver_number);
 DEBUGFN(3,db_printf("blast_complete\n"));
             if (drv != NULL)
             {

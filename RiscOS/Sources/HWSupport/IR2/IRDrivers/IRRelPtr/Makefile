@@ -113,6 +113,12 @@ o.module:	h.utils
 o.module:	h.ir_api
 o.module:	h.module
 o.module:	h.relptr
+o.ir_api:	c.ir_api
+o.ir_api:	C:h.kernel
+o.ir_api:	C:h.swis
+o.ir_api:	h.utils
+o.ir_api:	h.ir_api
+o.ir_api:	h.veneers
 o.relptr:	c.relptr
 o.relptr:	C:h.kernel
 o.relptr:	C:h.swis
@@ -122,9 +128,3 @@ o.relptr:	h.veneers
 o.relptr:	h.irqs
 o.relptr:	h.relptr
 o.relptr:	h.module
-o.ir_api:	c.ir_api
-o.ir_api:	C:h.kernel
-o.ir_api:	C:h.swis
-o.ir_api:	h.utils
-o.ir_api:	h.ir_api
-o.ir_api:	h.veneers
