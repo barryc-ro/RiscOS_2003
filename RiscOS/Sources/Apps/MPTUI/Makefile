@@ -94,7 +94,6 @@ translate: dirs
         ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.MA.badurl -o ${RESAPP}.HTML.MA.badurl
         ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.MA.badurldbox -o ${RESAPP}.HTML.MA.badurldbox
         ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.MA.connect -o ${RESAPP}.HTML.MA.connect
-	${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.MAD.connect -o ${RESAPP}.HTML.MAD.connect
         ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.MA.correct -o ${RESAPP}.HTML.MA.correct
         ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.MA.damaged -o ${RESAPP}.HTML.MA.damaged
         ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.MA.invalid -o ${RESAPP}.HTML.MA.invalid
