@@ -48,7 +48,7 @@ clean:
 	Remove		linked.$(COMPONENT)
 	Remove		map.$(COMPONENT)
 	Remove		$(ROM_AOF_FILE)
-	Every.Every2	-c "@.!*.h @.!*.Sources @.!*.Output* @.!*.Makefile"	Wipe %0 ~cr~v
+	Every.Every2	-c "@.!*.h @.!*.Sources @.!*.linkout @.!*.Output* @.!*.Makefile"	Wipe %0 ~cr~v
 	Echo		Component $(COMPONENT): 'clean' finished.
 
 
