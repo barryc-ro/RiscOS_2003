@@ -23,7 +23,6 @@ RM		= remove
 MODSQZ		= modsqz
 RESGEN		= resgen
 WIPE    	= -wipe
-STRIP		= stripdepnd
 
 AFLAGS		= -depend !Depend -Stamp -quit ${THROWBACK}
 CFLAGS		= -c -depend !Depend -zM -zps1 -ffah ${INCLUDES} ${THROWBACK} ${DEBUG} ${OPTS}
@@ -175,7 +174,6 @@ clean:
         ${WIPE} Docs.PassFilter ${WFLAGS}
         ${WIPE} SHelpDocs ${WFLAGS}
         ${RM} h.Header
-        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 resources:
