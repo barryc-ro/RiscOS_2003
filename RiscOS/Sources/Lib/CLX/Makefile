@@ -62,17 +62,20 @@ SOURCE     =
 EXPORTS    = 
 
 OBJS=	o.bytesex o.chunkfls o.disass o.dtos o.err o.fname \
-	o.host o.hash o.ieeeflt o.prgname o.re o.wholefls 
+	o.host o.hash o.ieeeflt o.prgname o.re o.wholefls \
+	o.filestamp
 
 OBJSD=	od.bytesex od.chunkfls od.disass od.dtos od.err od.fname \
-	od.host od.hash od.ieeeflt od.prgname od.re od.wholefls 
+	od.host od.hash od.ieeeflt od.prgname od.re od.wholefls \
+	od.filestamp
 
 OBJSZ=	oz.bytesex oz.chunkfls oz.disass oz.dtos oz.err oz.fname \
-	oz.host oz.hash oz.ieeeflt oz.prgname oz.re oz.wholefls 
+	oz.host oz.hash oz.ieeeflt oz.prgname oz.re oz.wholefls \
+	oz.filestamp
 
 HDRS=	h.aif h.aof h.aout h.asdfmt h.asdllfmt h.bytesex h.chunkfls h.chunkfmt \
 	h.disass h.err h.fname h.hash h.host h.ieeeflt h.libflfmt h.ovrflfmt \
-	h.prgname h.re h.wholefls
+	h.prgname h.re h.wholefls h.filestamp
 
 LIBS = ${TARGET} ${TARGETD} ${TARGETZ}
 
@@ -123,6 +126,7 @@ export_hdrs: ${HDRS} dirs
 	${CP} h.chunkfmt ${CLXLIBDIR}.h.chunkfmt ${CPFLAGS}
 	${CP} h.disass ${CLXLIBDIR}.h.disass ${CPFLAGS}
 	${CP} h.err ${CLXLIBDIR}.h.err ${CPFLAGS}
+	${CP} h.filestamp ${CLXLIBDIR}.h.filestamp ${CPFLAGS}
 	${CP} h.fname ${CLXLIBDIR}.h.fname ${CPFLAGS}
 	${CP} h.hash ${CLXLIBDIR}.h.hash ${CPFLAGS}
 	${CP} h.host ${CLXLIBDIR}.h.host ${CPFLAGS}
