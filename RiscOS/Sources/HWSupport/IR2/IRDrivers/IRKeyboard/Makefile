@@ -24,7 +24,7 @@ LD      = link
 RM      = remove
 WIPE    = -wipe
 
-CFLAGS  = -depend !Depend ${INCLUDES} -c -zM -ffah ${DFLAGS} -DIR_CLIENT
+CFLAGS  = -depend !Depend ${INCLUDES} -c -zM -ffah ${DFLAGS} -DIR_CLIENT -DUS_LAYOUT
 #DFLAGS  = -DDEBUG=3
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
@@ -114,30 +114,6 @@ o.module:	h.utils
 o.module:	h.ir_api
 o.module:	h.module
 o.module:	h.keyboard
-o.handset:	c.handset
-o.handset:	C:h.kernel
-o.handset:	C:h.swis
-o.handset:	h.utils
-o.handset:	h.ir_api
-o.handset:	h.veneers
-o.handset:	h.irqs
-o.handset:	h.keyboard
-o.handset:	h.module
-o.ir_api:	c.ir_api
-o.ir_api:	C:h.kernel
-o.ir_api:	C:h.swis
-o.ir_api:	h.utils
-o.ir_api:	h.ir_api
-o.ir_api:	h.veneers
-o.keyboard:	c.keyboard
-o.keyboard:	C:h.kernel
-o.keyboard:	C:h.swis
-o.keyboard:	h.utils
-o.keyboard:	h.ir_api
-o.keyboard:	h.veneers
-o.keyboard:	h.irqs
-o.keyboard:	h.keyboard
-o.keyboard:	h.module
 o.driver:	c.driver
 o.driver:	C:h.kernel
 o.driver:	C:h.swis
@@ -147,3 +123,27 @@ o.driver:	h.veneers
 o.driver:	h.irqs
 o.driver:	h.keyboard
 o.driver:	h.module
+o.handset:	c.handset
+o.handset:	C:h.kernel
+o.handset:	C:h.swis
+o.handset:	h.utils
+o.handset:	h.ir_api
+o.handset:	h.veneers
+o.handset:	h.irqs
+o.handset:	h.keyboard
+o.handset:	h.module
+o.keyboard:	c.keyboard
+o.keyboard:	C:h.kernel
+o.keyboard:	C:h.swis
+o.keyboard:	h.utils
+o.keyboard:	h.ir_api
+o.keyboard:	h.veneers
+o.keyboard:	h.irqs
+o.keyboard:	h.keyboard
+o.keyboard:	h.module
+o.ir_api:	c.ir_api
+o.ir_api:	C:h.kernel
+o.ir_api:	C:h.swis
+o.ir_api:	h.utils
+o.ir_api:	h.ir_api
+o.ir_api:	h.veneers
