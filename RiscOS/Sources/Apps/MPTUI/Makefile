@@ -10,6 +10,8 @@
 # 31-Mar-99  JBeranek     Modified to allow translations to be exported locally for
 #                         development.  Will also now fall back to UK resources if
 #                         resources for current LOCALE do not exist.
+# 14-Jun-99  NBingham     Added support for dynamic choosing of Ethernet or Modem
+#                         UI Resources.
 #
 
 #
@@ -68,6 +70,10 @@ dirs:
         @echo ** Creating directory structure
         ${MKDIR} ${EXPORTDIR}
         ${MKDIR} ${RESAPP}
+        ${MKDIR} ${RESAPP}.HTML-Ether
+        ${MKDIR} ${RESAPP}.HTML-Ether.Setup
+        ${MKDIR} ${RESAPP}.HTML-Modem
+        ${MKDIR} ${RESAPP}.HTML-Modem.Setup
         ${MKDIR} ${RESRES}
         ${MKDIR} ${RESRES}.NVRAM
         ${MKDIR} ${RESRES}.NCDialCtrl
@@ -122,7 +128,8 @@ translate: dirs
         ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.Setup.StartUp -o ${RESAPP}.HTML.Setup.StartUp
         ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.Setup.Telephone -o ${RESAPP}.HTML.Setup.Telephone
         ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.Setup.Text -o ${RESAPP}.HTML.Setup.Text
-        ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.Setup.Timeout -o ${RESAPP}.HTML.Setup.Timeout
+        ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML-Ether.Setup.Timeout -o ${RESAPP}.HTML-Ether.Setup.Timeout
+        ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML-Modem.Setup.Timeout -o ${RESAPP}.HTML-Modem.Setup.Timeout
         
 resources: translate
 	@echo ** Exporting non-translatable resource files
