@@ -31,6 +31,7 @@ DEFMOD  = DefMod
 AR	= LibFile
 THROWBACK = -Throwback
 TOUCH   = create
+STRIP   = stripdepnd
 
 ASFLAGS = -depend !Depend -Stamp -quit -module
 
@@ -124,7 +125,13 @@ RSTUBS     = RISCOSLIB:o.rstubs
 ROMSTUBS   = RISCOSLIB:o.romstubs
 ROMCSTUBS  = RISCOSLIB:o.romcstubs
 ABSSYM     = RISC_OSLib:o.AbsSym
-DBUGLIB	   =
+SOCKLIB    = TCPIPLibs:o.socklibzm
+INETLIB    = TCPIPLibs:o.inetlibzm
+UNIXLIB    = TCPIPLibs:o.unixlibzm
+LIBS       = <Lib$Dir>.tboxlibs.o.wimplib
+C++LIB     = <Lib$Dir>.c++lib.o.c++libz
+LIBSD      = <Lib$Dir>.DebugLib.o.debuglibzm
+DBUGLIB    =
 
 #
 # Rule patterns
@@ -194,6 +201,7 @@ clean:
         ${WIPE} rm.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
         ${RM} h.header
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 resources:
@@ -209,8 +217,8 @@ localdirs.o:
 #
 # Executable target (static link)
 #
-${TARGETSA}: ${NOTROMOBJS} ${CLIB} ${DBUGLIB} localdirs.o header.h
-        ${LD} -o $@ -module ${NOTROMOBJS} ${CLIB} ${DBUGLIB}
+${TARGETSA}: ${NOTROMOBJS} ${CLIB} ${DBUGLIB} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB} ${C++LIB} localdirs.o header.h
+        ${LD} -o $@ -module ${NOTROMOBJS} ${CLIB} ${DBUGLIB} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB} ${C++LIB}
 
 #
 # Exported interface headers
@@ -221,8 +229,8 @@ ${EXP_C_H}.smtagsCCIJ:	h.smtagsCCIJ
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${ROMOBJS} ${ROMCSTUBS} localdirs.o header.h
-        ${LD} -o $@ -aof ${ROMOBJS} ${ROMCSTUBS}
+${TARGET}: ${ROMOBJS} ${ROMCSTUBS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB} ${C++LIB} localdirs.o header.h
+        ${LD} -o $@ -aof ${ROMOBJS} ${ROMCSTUBS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB} ${C++LIB}
 
 
 #
