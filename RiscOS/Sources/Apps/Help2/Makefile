@@ -12,8 +12,16 @@
 #
 COMPONENT  = Help2
 APP        = !Help
+MODULE     = rm.${COMPONENT}
+ROM_MODULE = aof.${COMPONENT}
 RDIR       = Resources
 LDIR       = ${RDIR}.${LOCALE}
+
+#
+# Export Paths for Messages module
+#
+RESDIR = <resource$dir>.Resources.${COMPONENT}
+RESAPP = <resource$dir>.Apps.${APP}
 
 #
 # Generic options:
@@ -39,6 +47,7 @@ CLIB       = CLib:o.stubs
 EVENTLIB   = tbox:o.eventlib
 TOOLBOXLIB = tbox:o.toolboxlib
 WIMPLIB    = tbox:o.wimplib
+WRAPPER    = RISC_OSLib:s.ModuleWrap
 
 #
 # Include files
@@ -60,6 +69,10 @@ OBJS =\
   o.help \
   o.common
 
+# Resources to be included in the ROM module (not in Messages module}
+#RESFILES =\
+# ${RDIR}.!RunImage
+
 #
 # Rule patterns
 #
@@ -73,8 +86,12 @@ OBJS =\
 # Main rules:
 #
 
+
 all:     ${FILES}
          @echo ${COMPONENT}: Application made.
+
+rom:     ${ROM_MODULE}
+         @echo ${COMPONENT}: Module built (ROM)
 
 install: ${FILES}
          @echo
@@ -90,6 +107,20 @@ install: ${FILES}
          Access ${INSTDIR}.${APP}.* wr/r
          @echo
          @echo ${COMPONENT}: Application installed {Disc}
+
+install_rom: ${ROM_MODULE}
+        ${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: Module installed (ROM)
+
+resources:
+        ${MKDIR} ${RESDIR}
+        ${MKDIR} ${RESAPP}
+        ${CP} ${RDIR}.!Boot     ${RESAPP}.!Boot    ${CPFLAGS}
+        ${CP} ${LDIR}.!Help     ${RESAPP}.!Help    ${CPFLAGS}
+        ${CP} ${LDIR}.!Run      ${RESAPP}.!Run     ${CPFLAGS}
+        ${CP} ${LDIR}.Messages  ${RESDIR}.Messages ${CPFLAGS}
+        ${CP} ${LDIR}.Res       ${RESDIR}.Res      ${CPFLAGS}
+        @echo ${COMPONENT}: resource files copied to Messages module
 
 clean:
         ${WIPE} o.*      ${WFLAGS}
@@ -107,3 +138,37 @@ Resources.!RunImage: ${OBJS} ${EVENTLIB} ${TOOLBOXLIB} ${WIMPLIB} ${CLIB}
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
+o.main:	c.main
+o.main:	tbox:h.wimp
+o.main:	tbox:h.wimplib
+o.main:	C:h.kernel
+o.main:	C:h.swis
+o.main:	tbox:h.wimplib
+o.main:	tbox:h.toolbox
+o.main:	tbox:h.event
+o.main:	tbox:h.window
+o.main:	tbox:h.gadgets
+o.main:	tbox:h.iconbar
+o.main:	tbox:h.proginfo
+o.main:	tbox:h.fontmenu
+o.main:	tbox:h.menu
+o.main:	h.help
+o.main:	h.common
+o.main:	h.defines
+o.help:	c.help
+o.help:	C:h.swis
+o.help:	C:h.kernel
+o.help:	tbox:h.gadgets
+o.help:	tbox:h.toolbox
+o.help:	tbox:h.wimp
+o.help:	h.common
+o.help:	h.help
+o.common:	c.common
+o.common:	C:h.kernel
+o.common:	tbox:h.wimp
+o.common:	tbox:h.wimplib
+o.common:	tbox:h.toolbox
+o.common:	tbox:h.gadgets
+o.common:	C:h.swis
+o.common:	h.common
+o.common:	h.defines
