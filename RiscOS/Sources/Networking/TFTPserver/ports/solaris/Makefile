@@ -75,7 +75,7 @@ ${ARCH}.o ${SUPPORT}
 # build a TFTP server
 #
 all: ${TARGET}
-        @echo ${COMPONENT}: all complete
+	@echo ${COMPONENT}: all complete
 
 clean:
 	${WIPE} ${WFLAGS} *.o
