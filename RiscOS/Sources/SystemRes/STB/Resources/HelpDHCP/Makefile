@@ -37,9 +37,9 @@ WFLAGS	 = ~cfr~v
 #
 COMPONENT  = HelpDHCP
 SOURCE	   = Hdr.GetAll
-TARGET	   = rm.${COMPONENT}
+TARGET	   = rm.${Machine}.${COMPONENT}
 OBJECT	   = o.${COMPONENT}
-VIAFILE    = Resources.ViaFile
+VIAFILE    = Resources.${UserIF}.${Locale}.ViaFile
 VERSIONVAR = HelpDHCP$Version
 VERSION    = <HelpDHCP$Version>
 PLSCRIPT   = Build:GetVersion
@@ -75,7 +75,7 @@ clean:
 	@echo ${COMPONENT}: cleaned
 
 dirs:
-	${MKDIR} rm
+	${MKDIR} rm.${Machine}
 
 ${TARGET}: versionvar dirs
 	${MOD} ${TARGET} ${COMPONENT} ${COMPONENT} ${VERSION} -via ${VIAFILE}
