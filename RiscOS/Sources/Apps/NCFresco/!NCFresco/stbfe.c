@@ -871,6 +871,8 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 	}
     }
     
+    /* fade down previous displayed frame as long as it's not the same one (server-push) */
+    is_server_push = v->displaying == doc;
     if (v->displaying && !is_server_push)
     {
 	char *durl;
