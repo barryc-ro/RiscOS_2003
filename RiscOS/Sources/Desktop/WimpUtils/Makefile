@@ -9,42 +9,12 @@
 #
 
 #
-# Generic options:
-#
-MKDIR   = cdir
-AS      = aasm
-CP      = copy
-RM      = remove
-CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
-CPFLAGS = ~cfr~v
-
-#
 # Program specific options:
 #
-COMPONENT = WimpUtils2
-SOURCE    = s.WimpUtils2
-TARGET    = rm.WimpUtils2
+COMPONENT = WindowUtils
+TARGET    = WimpUtils2
 
-#
-# Generic rules:
-#
-rom: ${TARGET}
-        @echo ${COMPONENT}: rom module built
-
-export:
-        @echo ${COMPONENT}: export complete
-
-install_rom: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom module installed
-
-clean:
-        ${RM} ${TARGET}
-        @echo ${COMPONENT}: cleaned
-
-${TARGET}: ${SOURCE}
-        ${AS} ${ASFLAGS} ${SOURCE}
+include Makefiles:StdTools
+include Makefiles:AAsmModule
 
 # Dynamic dependencies:
-rm.WimpUtils2: Version2
