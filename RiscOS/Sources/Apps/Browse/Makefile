@@ -75,6 +75,8 @@
 #			anymore so now use LIBDIR etc. Now exports mono
 #			sprites ([!]Sprites23). Tweaked CC args (-Wpc).
 # 2000-11-10	ADH	DebugLib support added.
+# 2001-06-13	ADH,SNB	Grotty hack to sort out command line length limits
+#			with CC alias.
 
 # -----------------------------------------------------------------------------
 # Program specific options
@@ -98,16 +100,23 @@ RESAPP		= <resource$dir>.Apps.${APP}
 # Generic options
 #
 
-LIBDIR		= <Lib$Dir>
+LIBDIR		= C:
 MKDIR		= cdir
 AS		= objasm
-CC		= cc
 CMHG		= cmhg
 CP		= copy
 LD		= link
 RM		= remove
 SQUEEZE		= squeeze
 WIPE		= -wipe
+
+# Ensure AMU truncates the command line suitably
+
+CC = $(subst %*0,,${Alias$CC})
+
+ifndef CC
+CC = cc
+endif
 
 AFLAGS		= ${THROWBACK} -depend !Depend -nocache -stamp -quit
 CFLAGS		= ${THROWBACK} -depend !Depend -ffa ${INCLUDES} -Wpc
@@ -153,12 +162,12 @@ CLIB		= CLib:o.stubs
 ROMCSTUBS	= RISC_OSLib:o.romcstubs
 ABSSYM		= RISC_OSLib:o.c_abssym
 WRAPPER		= RISC_OSLib:s.ModuleWrap
-HTMLLIB		= ${LIBDIR}.HTMLLib.o.HTMLLib
-IMAGELIB	= ${LIBDIR}.ImageLib.o.ImageLib
-PNGLIB		= ${LIBDIR}.ImageLib.o.libpng-lib
-PNGLIBZ		= ${LIBDIR}.ImageLib.o.libpng-lzm
-JPEGLIB		= ${LIBDIR}.ImageLib.o.libjpeg
-JPEGLIBZ	= ${LIBDIR}.ImageLib.o.libjpeg-zm
+HTMLLIB		= ${LIBDIR}HTMLLib.o.HTMLLib
+IMAGELIB	= ${LIBDIR}ImageLib.o.ImageLib
+PNGLIB		= ${LIBDIR}ImageLib.o.libpng-lib
+PNGLIBZ		= ${LIBDIR}ImageLib.o.libpng-lzm
+JPEGLIB		= ${LIBDIR}ImageLib.o.libjpeg
+JPEGLIBZ	= ${LIBDIR}ImageLib.o.libjpeg-zm
 ZLIB		= C:zlib.o.zlib
 URILIB		= Libraries.URILib.o.URILib
 FLEXLIB		= tbox:o.flexlib
@@ -237,7 +246,7 @@ LIBSD = \
 # Include files (libraries and resources)
 #
 
-INCLUDES	= -Itbox:,C:,${LIBDIR}.HTMLLib.,${LIBDIR}.ImageLib.,Libraries.URILib.,TCPIPLibs:,C:NSPRLib.,C:JSLib.
+INCLUDES	= -Itbox:,C:,${LIBDIR}HTMLLib,${LIBDIR}ImageLib,Libraries.URILib,TCPIPLibs:,C:NSPRLib,C:JSLib
 
 FILES = \
  ${LDIR}.!Boot \
