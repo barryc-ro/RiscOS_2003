@@ -13,6 +13,7 @@ DebugAborts SETL {FALSE}
 ;07-10-96 MJS  proper support for ARM810 added
 ;15-05-97 MJS  support for ChocolateScreen (section mapped, cached) and ChocolateAMB
 ;              (lazy task swapping) added
+;25-05-98 MJS  a bit of a clean up for RISC OS 4 (Ursula/Phoebe), ARM810 support removed as part of this
 
 ; Workspace needed for ARM600 work is as follows:
 ;
@@ -100,10 +101,15 @@ UNDSTK                  *       CamEntriesForVicky ; points to end of stack (no 
 ; after kernel boot, this mapping covers IOMD physical space 0..256M, but is set to fault
 ; for 32M..48M - hence VRAM and DRAM are not accessible through this physical copy
 ;
-; during kernel boot, the ClearPhysRAM routine uses a temporary mapping of RAM here (hence
-; mapping is temporarily extended to 0..512M)
+; during kernel boot, the ClearPhysRAM routine uses a temporary mapping of RAM here
 ;
 PhysSpace               *       &80000000
+
+
+; PCI space is 256M, PCI config space is 1M
+;
+PCISpace                *       &90000000
+PCIConfig               *       &a0000000
 
 
 ; - address for virtual area for StrongARM data cache cleaning (32k, for two 16k areas)
@@ -125,6 +131,7 @@ ARMA_ScreenCleaners_address * 31*1024*1024 + 96*1024
 ;note that we use the R bit if supported (not 610), so that we can write protect ROM space
 ;fully (user and supervisor)
 ;
+  [ :LNOT: KeepCachesOff
 ARM_default_MMU_CR_table
 ;
 ;ARM 6              SBLDPWCAM
@@ -142,8 +149,9 @@ ARM_default_MMU_CR_table
 ;StrongARM      I00RSB111WCAM
          DCD  2_1001001111101
 ;
-
-
+  |
+ARM_default_MMU_CR_table   ;same as cacheoff then
+  ]
 ARM_cacheoff_MMU_CR_table
 ;
 ;ARM 6              SBLDPWCAM
@@ -166,7 +174,6 @@ ARM_cacheoff_MMU_CR_table
 OneMByte                EQU     (1024*1024)
 SixteenMByte            EQU     (1024*1024 * 16)
 
- [ MEMC_Type = "IOMD"
 ; *****************************************************************************
 ;
 ;       SetDAG - Program DMA address generator R1 with physical address R0
@@ -195,12 +202,10 @@ SetDAG  ENTRY   "r0-r1,r12"
         ORRCS   r0, r0, #IOMD_DMA_L_Bit
         STR     r0, [r12, #IOMD_VIDINIT]
 
-        [ :LNOT: STB
         MOV     r1, #0
         LDRB    r1, [r1, #LCD_Active]
         TST     r1, #&80
         EXIT    EQ                              ;Exit if not a dual-panel LC display
-        ]
 
         ;Otherwise, we are going to have to update VIDINITB too...
         MOV     r1, #VduDriverWorkSpace
@@ -242,12 +247,10 @@ SetDAG  ENTRY   "r0-r1,r12"
         STR     r14, [r12, #IOMD_VIDINIT]       ; store VInit
         STR     r0, [r12, #IOMD_VIDEND]         ; and VEnd
 
-        [ :LNOT: STB
         MOV     r14, #0
         LDRB    r14, [r14, #LCD_Active]
         TST     r14, #&80
         EXIT    EQ                              ; Not a dual-panel LCD so no need to hang around....
-        ]
 
         ;Check whether we need to update VIDINITB or not...
 
@@ -256,12 +259,11 @@ SetDAG  ENTRY   "r0-r1,r12"
 ; Program CInit
 
 30
+  [ :LNOT: PhoebeBodge_Bernard
         ASSERT  MEMCDAG_CInit = 3
         STR     r0, [r12, #IOMD_CURSINIT]
+  ]
         EXIT
-
- |
- ]
 
 
 ; **************** CAM manipulation utility routines ***********************************
@@ -417,69 +419,46 @@ BangL2PT                                        ; internal entry point used only
         TST     r11, #DynAreaFlags_DoublyMapped
         BNE     BangL2PT_sledgehammer           ;if doubly mapped, don't try to be clever
   ]
-  [ ARM810support
-    ;if we are mapping out a cacheable page on an ARM810, must clean+flush cache _before_
-    ;remapping, since ARM810 relies on virtual addresses for writebacks
-        ARM_read_ID r4
-        AND     r4,r4,#&F000                    ;ARM ID nibble now in r4
-        CMP     r0,#0                           ;EQ if map out
-        TSTEQ   r11,#DynAreaFlags_NotCacheable  ;EQ if also cacheable
-        CMPEQ   r4,#&8000                       ;EQ if also ARM 8
-        BNE     BangL2PT_noARM810flush
-    [ ARM810cleanflushbroken
-        ARM8_cleanflush_IDC r6,r4
-        MOV     r4,#&8000
-    |
-        ARM8_cleanflush_IDC r6
-    ]
-BangL2PT_noARM810flush
-  ]
         STR     r0, [r1, r3, LSR #10]           ;update L2PT
-  [ :LNOT: ARM810support
+  [ :LNOT: ARMSASupport_Only
         ARM_read_ID r4
         AND     r4,r4,#&F000                    ;ARM ID nibble in r4
   ]
         CMP     r0,#0
         BEQ     BangL2PT_mapout                 ;the update is a map out => cache(s) may need clean/flush
 ;else update is a map in (and nothing should be there at the moment) => no cache worries
+  [ :LNOT: ARMSASupport_Only
         CMP     r4,#&A000
         BEQ     BangL2PT_mapin_StrongARM
-  [ ARM810support
-        CMP     r4,#&8000
-        ARM8_flush_TLBentry r3,EQ               ;flush TLB entry for this page, ARM 8
-        ARM67_flush_TLBentry r3,NE              ;flush TLB entry for this page, ARM 6,7
-        MOV     pc,lr
-  |
 ;else assume ARM 6,7
         ARM67_flush_TLBentry r3                 ;flush TLB entry for this page
         MOV     pc,lr
   ]
 
 BangL2PT_mapin_StrongARM
+  [ ARMSASupport
         ARMA_drain_WB                           ;in case L2PT entry itself is in a bufferable area
         ARMA_flush_DTLBentry r3                 ;flush data TLB entry for this page
-  [ AssumeNoCodeAbove64Mb
+    [ AssumeNoCodeAbove64Mb
         CMP     r3,#64*1024*1024                ;if logical address above 64Mb, assume no code (26 bit)
         MOVHS   pc,lr
-  ]
+    ]
         ARMA_flush_ITLB                         ;but if there is code, we must flush instruction TLB
+  ]
         MOV     pc,lr
 
 BangL2PT_mapout
+  [ :LNOT: ARMSASupport_Only
         CMP     r4,#&A000
         BEQ     BangL2PT_mapout_StrongARM
-  [ ARM810support
-        CMP     r4,#&8000
-        ARM8_flush_TLBentry r3,EQ                 ;flush TLB entry for this page, ARM 8
-        MOVEQ   pc,lr                             ;ARM8 cache already flushed, if necessary
-  ]
 ;else assume ARM 6,7
         TST     r11,#DynAreaFlags_NotCacheable
         ARM67_flush_cache EQ                    ;flush instruction/data cache if necessary
         ARM67_flush_TLBentry r3                 ;flush TLB entry for this page
         MOV     pc,lr
-
+  ]
 BangL2PT_mapout_StrongARM
+  [ ARMSASupport
         TST     r11,#DynAreaFlags_NotCacheable
         BNE     BangL2PT_mapin_StrongARM        ;if NotCacheable, no flush needed (ie. same as mapin)
 ;note that we are cleaning *after* remapping, so relying on StrongARM writebacks using physical address
@@ -499,31 +478,18 @@ BangL2PT_mapout_StrongARM
 
         ARMA_drain_WB
         ARMA_flush_DTLBentry r3                 ;flush data TLB entry for this page
-  [ AssumeNoCodeAbove64Mb
+    [ AssumeNoCodeAbove64Mb
         CMP     r3,#64*1024*1024                ;if logical address above 64Mb, assume no code (26 bit)
         MOVHS   pc,lr
-  ]
+    ]
         ARMA_flush_IC WithoutNOPs
         MOV     r0,r0                           ;NOPs to ensure 4 instructions before return, after IC flush
         MOV     r0,r0
         ARMA_flush_ITLB
+  ] ;ARMSASupport
         MOV     pc,lr
 
 BangL2PT_sledgehammer
-  [ ARM810support
-        ;if necessary, clean+flush _before_ reamapping, since ARM810 writebacks use virtual addresses
-        ARM_read_ID r4
-        AND     r4,r4,#&F000
-        CMP     r4,#&8000
-        TSTEQ   r11,#DynAreaFlags_NotCacheable
-        BNE     BangL2PT_sledge_noARM810flush
-    [ ARM810cleanflushbroken
-        ARM8_cleanflush_IDC r4,r6
-    |
-        ARM8_cleanflush_IDC r4
-    ]
-BangL2PT_sledge_noARM810flush
-  ]
         BICS    r4, r3, #(3 :SHL: 10)   ; ensure going to be on word boundary
  [ :LNOT: UsePPLCBBits
         LDR     r6, [r1, r4, LSR #10]   ; read current contents
@@ -535,21 +501,19 @@ BangL2PT_sledge_noARM810flush
         STRNE   r0, [r1, r9, LSR #10]   ; then store entry for 2nd copy as well
         ADDNE   r3, r3, r9              ; and point logical address back at 2nd copy
 
+  [ :LNOT: ARMSASupport_Only
         ARM_read_ID r4
         AND     r4,r4,#&F000
         CMP     r4,#&A000
         BEQ     BangL2PT_sledgehammer_StrongARM
-  [ ARM810support
-        CMP     r4,#&8000
-        ARM8_flush_TLB EQ
-        MOVEQ   pc, lr      ;ARM8 cache already flushed if necessary
-  ]
 ;else assume ARM 6,7
         TST     r11,#DynAreaFlags_NotCacheable
         ARM67_flush_cache EQ
         ARM67_flush_TLB
         MOV     pc, lr
+  ]
 BangL2PT_sledgehammer_StrongARM
+  [ ARMSASupport
         TST     r11,#DynAreaFlags_NotCacheable
         BNE     BangL2PT_sledgehammer_StrongARM_NotC
 
@@ -568,11 +532,14 @@ BangL2PT_sledgehammer_StrongARM
         MOV     r0,r0                     ;NOPs to ensure 4 instructions before return, after IC flush
         MOV     r0,r0
         ARMA_flush_TLBs
+  ] ;ARMSASupport
         MOV     pc,lr
 
 BangL2PT_sledgehammer_StrongARM_NotC    ;no flush necessary if NotCacheable
+  [ ARMSASupport
         ARMA_drain_WB
         ARMA_flush_TLBs
+  ]
         MOV     pc,lr
 
 
@@ -619,26 +586,119 @@ SSETMEMC ROUT
 ; bit 11   => Sound DMA enable
 ; bit 12   => OS mode
 
- [ MEMC_Type = "IOMD"
         Push    "r10"
         MOV     r12, #IOMD_Base
         TST     r11, #1 :SHL: 10   ; see if video DMA wants to be enabled
         LDRB    r11, [r12, #IOMD_VIDCR]
         AND     r11, r11, #(&7F :AND: :NOT: IOMD_VIDCR_Enable)  ; knock out bit 7 and video DMA enable bit
         ORRNE   r11, r11, #IOMD_VIDCR_Enable
-  [ :LNOT: STB
+
+70
+        LDRB    r10,[r12,#IOMD_ID0]
+        TEQ     r10,#IOMD_IOMD2    :AND: &FF
+        ORREQ   r11,r11,#&80                                    ;bit 7 means use async SAM clock on Phoebe
+        BEQ     %FT90
+        TEQ     r10,#IOMD_Original :AND: &FF
+        TEQNE   r10,#IOMD_7500     :AND: &FF
+        TEQNE   r10,#IOMD_7500FE   :AND: &FF
+        BNE     %BT70                                           ;deliberate panic hang up
+
         MOV     r10, #0
         LDRB    r10, [r10, #LCD_Active]
         TST     r10, #&80
         ORRNE   r11, r11, #IOMD_VIDCR_Dup                       ;Set bit 7 if we're on an LCD dual-panel display
-  ]
+90
         Pull    "r10"
         STRB    r11, [r12, #IOMD_VIDCR]
- |
- ]
 
         TEQP    pc, #SVC_mode+I_bit
         ExitSWIHandler
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+;
+;       SoftCopyROM
+;
+; automagically softload ROM into reserved space, if required
+;
+; in:  -
+; out: corrupts r0-r4, r10-r12
+;
+
+SCRTempMappingBase * PhysSpace + DRAM0PhysRam   ;handy base address for temporary logical mapping
+
+SoftCopyROM ROUT
+
+        MOV     r0, #0
+        LDR     r10, [r0, #SoftROMaddr]         ;physical address of reserved space
+        TEQ     r10, #0
+        MOVEQ   PC, LR                          ;no soft copy required if 0
+
+;map in the RAM temporarily for copy
+;
+        MOV     r11, #OSROM_ImageSize*1024
+        LDR     r0,  =L1PT
+        MOV     r4, #SCRTempMappingBase         ; logical address for temporary mapping
+        ADD     r1, r0, r4, LSR #(20-2)         ; L1PT address for same
+        ORR     r4, r10, #&410
+        ORR     r4, r4, #&00E                   ; L1PT value - section mapped, svc access, C=1, B=1
+                                                ; no cache coherency worries - we just write to this space
+10
+        STR     r4, [r1], #4                    ; update L1PT
+        ADD     r4, r4, #&100000
+        SUBS    r11, r11, #&100000              ; another 1 Mb done
+        BNE     %BT10
+        ARM_flush_TLB r11                       ; mapping change
+
+;copy the ROM into RAM
+;
+        MOV     r4, #ROM                        ; source
+        MOV     r11, #SCRTempMappingBase        ; dest
+        ADD     r12, r11, #OSROM_ImageSize*1024 ; size
+20
+        LDMIA   r4!, {r0-r3}
+        STMIA   r11!, {r0-r3}
+        LDMIA   r4!, {r0-r3}
+        STMIA   r11!, {r0-r3}
+        LDMIA   r4!, {r0-r3}
+        STMIA   r11!, {r0-r3}
+        LDMIA   r4!, {r0-r3}
+        STMIA   r11!, {r0-r3}
+        TEQ     r11, r12
+        BNE     %BT20
+
+;remove temporary mapping of physical RAM
+;
+        MOV     r11, #OSROM_ImageSize*1024
+        LDR     r0,  =L1PT
+        MOV     r4, #SCRTempMappingBase         ; logical address for temporary mapping
+        ADD     r1, r0, r4, LSR #(20-2)         ; L1PT address for same
+        MOV     r4, #0                          ; L1PT value - fault
+30
+        STR     r4, [r1], #4                    ; update L1PT
+        SUBS    r11, r11, #&100000              ; another 1 Mb done
+        BNE     %BT30
+
+;remap ROM logical space to soft loaded ROM (we can do this live, because it is identical)
+;
+
+        MOV     r11, #OSROM_ImageSize*1024
+        LDR     r0,  =L1PT
+        MOV     r4, #ROM                        ; logical address of ROM
+        ADD     r1, r0, r4, LSR #(20-2)         ; L1PT address for same
+
+40
+        LDR     r4, [r1]                        ; read L1PT entry
+        MOV     r4, r4, LSL #20
+        MOV     r4, r4, LSR #20                 ; zap old physical address
+        ORR     r4, r4, r10                     ; munge in new physical address
+        STR     r4, [r1], #4                    ; update L1PT entry
+        ADD     r10, r10, #&100000
+        SUBS    r11, r11, #&100000              ; another 1 Mb done
+        BNE     %BT40
+
+        ARM_flush_TLB r11                       ; mapping change
+
+        MOV     PC, LR
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
@@ -677,15 +737,14 @@ ClearMaxSizeLo * &200000   ;max of 2 Mb cleared at bottom of DRAM
 ClearMaxSizeHi * &200000   ;max of 2 Mb cleared at top of DRAM
   ]
 
-    ASSERT MEMC_Type = "IOMD"
 ;
 CPRTempMappingBase * PhysSpace   ;base address for temporary logical mapping of physical RAM
 ;
 CPRTable
-        DCD     &02000000        ;VRAM physical start
+        DCD     VideoPhysRam     ;VRAM physical start
         DCD     &01000000        ;VRAM physical size (16M)
-        DCD     &10000000        ;DRAM physical start
-        DCD     &10000000        ;DRAM physical size (256M)
+        DCD     DRAM0PhysRam     ;DRAM physical start
+        DCD     &20000000        ;DRAM physical size (512M is size for IOMD2, also takes care of 256M IOMD1)
         DCD     0                ;terminator
         DCD     0                ;terminator
 
@@ -908,172 +967,118 @@ InitMEMC ROUT
 
         MOV     r12, #IOMD_Base
 
-  [ MorrisSupport
 ; Perform a dummy write to IOMD (some harmless register) to get it out of ROM force mode.
 ; Reads from IOMD will return garbage before this has happened. If we're actually running out
 ; of 32-bit wide ROMs on MORRIS, a write will already have happened, to get ROMCR0 from
 ; 16 to 32-bit wide mode, but we can't yet determine for sure (by reading it back), so do it
 ; anyway.
-
+;
         STRB    r12, [r12, #IOMD_DMAREQ]              ; writes to DMAREQ are ignored
 
-        LDRB    r2,[r12,#IOMD_ID1]      ; load r2 with IOMD ID high byte
-        LDRB    r0,[r12,#IOMD_ID0]      ; load r0 with IOMD ID low byte
-        ORR     r0,r0,r2, LSL #8        ; Or r0 and r2 - shifted left 8, put in r0
-        LDR     r2,=IOMD_7500           ; get Ref IOMD ID code for IOMD in a 7500
-        CMPS    r0,r2                   ; check for IOMD ID Code for IOMD in a 7500
-        BEQ     init7500cpu             ; If equal, got to init7500cpu
+;decision point based on IOMD variant
+;checks variants exhaustively, and deliberately hangs up for unknown/unsupported
+;
+10
+        LDRB    r0, [r12,#IOMD_ID0]
+  [ IOMD2Support
+        TEQ     r0, #IOMD_IOMD2    :AND: &FF
+        BEQ     PhoebeInit                            ; IOMD2 (Phoebe)
+  ]
+  [ IOMD1Support
+        TEQ     r0, #IOMD_Original :AND: &FF
+        BEQ     MedusaInit                            ; IOMD1 (Risc PC)
+        TEQ     r0, #IOMD_7500     :AND: &FF
+        BEQ     init7500cpu                           ; 7500 (A7000)
+        TEQ     r0, #IOMD_7500FE   :AND: &FF
+        BEQ     init7500FEcpu                         ; 7500FE (A7000+)
+  ]
+        B       %BT10                                 ; deliberate panic hang-up (unrecognised IOMD)
 
-        LDRNE   r2,=IOMD_7500FE         ; If not, get ID code for IOMD in a 7500FE
-        CMPNES  r0,r2                   ; If not, check for IOMD ID Code for IOMD in a 7500FE
-        BNE     MedusaInit              ; NOT MORRIS assume Medusa hardware
+  [ IOMD2Support
 
+PhoebeInit
+;
+ [ PhoebeBodge
+   ;still some values to sort out for 64 MHz ASIC
+ ]
+        MOV     r0,#12
+        STR     r0,[r12,#IOMD_ROMCR0]                 ;ROM timings, bank 0
+        STR     r0,[r12,#IOMD_ROMCR1]                 ;ROM timings, bank 1
+        MOV     r0,#&5c
+        STR     r0,[r12,#IOMD_VREFCR]                 ;vram control, refresh
+        STR     r0,[r12,#IOMD2_PRECHG]                ;trigger SDRAM precharge
+        MOV     r0,#&0a
+        STR     r0,[r12,#IOMD2_SDTMG]                 ;SDRAM timing control
+        MOV     r0,#&20
+        STR     r0,[r12,#IOMD2_SDMODE]                ;SDRAM mode
+        MOV     r0,#2
+        STR     r0,[r12,#IOMD2_SCDIV]                 ;SC clock division to MCLK/2
+        MOV     r0,#&04
+        STR     r0,[r12,#IOMD2_VRAMTMG]               ;vram timing
+        MOV     r0,#&85
+        STR     r0,[r12,#IOMD2_BMSPD]                 ;bus master speed
+
+        MOV     r0,#&5000
+        STR     r0,[r12,#IOMD2_INTRTEB]               ;make sure floppy request is routed to (cpu 0) FIQ
+
+        MOV     r0,#&2000000                          ;just in case, init video DMA
+        ORR     r0,r0,#&60
+        STR     r0,[r12,#IOMD_CURSINIT]
+        MOV     r0,#&2000000
+        STR     r0,[r12,#IOMD_CURSCUR]
+
+        MOV     r0, #&0002
+        ORR     r0, r0, #&2a00
+        STR     r0, [r12, #IOMD_IOTCR]
+        MOV     r0, #0                          ; Podule manager wants TypeA setting by default for all podules
+        STRB    r0, [r12, #IOMD_ECTCR]
+        B       CommonInit
+
+  ] ;IOMD2Support
+
+  [ IOMD1Support
 
 init7500FEcpu
-; Here bceause its an ARM7500 'FE' variant
-; Program the CPU, Memory and IO clock prescalers
-; Set the prescalers to :-
-
-  [ RO371Timings
-;       CPUCLK divide by 1
-;       MEMCLK divide by 2
-;       IOCLK  divide by 2
+;
+;       CPUCLK divide by 1, MEMCLK divide by 2, IOCLK  divide by 2
 ;
         MOV     r0, #IOMD_CLKCTL_CpuclkNormal + IOMD_CLKCTL_MemclkHalf + IOMD_CLKCTL_IOclkHalf
-  |
-;       CPUCLK divide by 2
-;       MEMCLK divide by 1
-;       IOCLK  divide by 1
-;
-        MOV     r0, #IOMD_CLKCTL_CpuclkHalf + IOMD_CLKCTL_MemclkNormal + IOMD_CLKCTL_IOclkNormal
-  ]
-        STRB    r0, [r12, #IOMD_CLKCTL] ; initialise all the prescalers.
+        STRB    r0, [r12, #IOMD_CLKCTL]
 ;
 ; Set ROM speed, take care to preserve 16-bit mode bit, or all hell breaks loose...
 ;
-; According to BSiddle on the 15-May-96, Omega will use burst mode roms: use 93nS burst, 156nS initial.
-; According to TDobson on the 09-Jul-96, Omega will handle ROMS up to 120nS and 70nS.
-; Thus the ROM speed should be initilised to :-
-; Half Speed or H bit, clear, which is ON ! : Half the delays, thus DOUBLE all clock ticks.
-; Non-Sequental delay : 10 Ticks : Half speed on, so select 5 ticks (5*2)
-; Burst delay         :  8 Ticks : Half speed on, so select 4 ticks (4*2)
-; Remember the Memory clock on Omega is faster than on previous products.
-; The fast flash devices used for Omega testing should be able to cope even
-; though they aren't burst devices.
         LDRB    r0, [r12, #IOMD_ROMCR0]         ; Get contents of ROMCR0 in to r0
         AND     r0, r0, #&40                    ; clear all but the 16-bit mode flag
-  [ RO371Timings
         ORR     r0, r0, #IOMD_ROMCR_HalfSpeed + IOMD_ROMCR_NSTicks_5 + IOMD_ROMCR_BTicks_3
-  |
-        ORR     r0, r0, #IOMD_ROMCR_HalfSpeed + IOMD_ROMCR_NSTicks_5 + IOMD_ROMCR_BTicks_4
-  ]
-        STRB    r0, [r12, #IOMD_ROMCR0]         ; Prog. the reg.s
-
-; Program the 2nd ROM bank
-  [ ExtROMSupport
-;   Unless we're actually running from the 2nd ROM bank (CanLiveOnROMCard), we don't know how fast
-;   the extension ROM in the 2nd bank goes, so program it for a slow default speed
-    [ CanLiveOnROMCard
-        TST     pc, #PhysExtROM                 ; are we running out of the 2nd ROM bank?
-        STRNEB  r0, [r12, #IOMD_ROMCR1]         ; Program the 2nd bank the same as the 1st
-      [ ExtROMis16bit
-        MOVEQ   r0, #IOMD_ROMCR_HalfSpeed + IOMD_ROMCR_16bit + IOMD_ROMCR_NSTicks_7 + IOMD_ROMCR_BurstOff
-      |
-        MOVEQ   r0, #IOMD_ROMCR_HalfSpeed + IOMD_ROMCR_32bit + IOMD_ROMCR_NSTicks_7 + IOMD_ROMCR_BurstOff
-      ]
-        STREQB  r0, [r12, #IOMD_ROMCR1]
-    |;CanLiveOnROMCard
-      [ ExtROMis16bit
-        MOV     r0, #IOMD_ROMCR_HalfSpeed + IOMD_ROMCR_16bit + IOMD_ROMCR_NSTicks_7 + IOMD_ROMCR_BurstOff
-      |
-        MOV     r0, #IOMD_ROMCR_HalfSpeed + IOMD_ROMCR_32bit + IOMD_ROMCR_NSTicks_7 + IOMD_ROMCR_BurstOff
-      ]
-        STRB    r0, [r12, #IOMD_ROMCR1]
-    ];CanLiveOnROMCard
-
-  |;ExtROMSupport
-    [ CanLiveOnROMCard
+        STRB    r0, [r12, #IOMD_ROMCR0]
         STRB    r0, [r12, #IOMD_ROMCR1]         ; Program the 2nd bank the same as the 1st
-    |
-        STRB    r0, [r12, #IOMD_ROMCR1]         ; 2nd bank unused: program it the same anyway
-    ]
-  ];ExtROMSupport
-
+;
 ; Now program ASTCR to add wait states, since MEMCLK is fast relative to IOCLK
-
+;
         MOV     r0, #IOMD_ASTCR_WaitStates
         STRB    r0, [r12, #IOMD_ASTCR]
-
         B       init7500cpu_common              ; branch to common init code.
 ;
 
 init7500cpu
-; Here because its an ARM7500 variant - NON 'FE' device.
-; Program the CPU, Memory and IO clock prescalers
-; Set the prescalers to :-
-;       CPUCLK divide by 1
-;       MEMCLK divide by 1
-;       IOCLK  divide by 1
+;
+;       CPUCLK divide by 1, MEMCLK divide by 1, IOCLK  divide by 1
 ;
         MOV     r0, #IOMD_CLKCTL_CpuclkNormal + IOMD_CLKCTL_MemclkNormal + IOMD_CLKCTL_IOclkNormal
-        STRB    r0, [r12, #IOMD_CLKCTL] ; initialise all prescalers to div1
+        STRB    r0, [r12, #IOMD_CLKCTL]
 ;
 ; Set ROM speed, take care to preserve 16-bit mode bit, or all hell breaks loose...
 ;
-; According to RJKing on 6/5/94, Kryten will use burst mode roms: use 93nS burst, 156nS initial.
-; According to BSiddle on 09-Jul-96 - Omenga will need to set the burst speed to 4 ticks from 3 ticks.
-; Thus the ROM speed should be initilised to :-
-; Half Speed or H bit, Set, which is OFF ! : Don't half the delays.
-; Non-Sequental delay :  5 Ticks : Half speed off, so select 5 ticks
-; Burst delay         :  4 Ticks : Half speed off, so select 4 ticks
-; The fast EPROMS used for Kryten testing should be able to cope even though
-; they aren't burst devices
-
         LDRB    r0, [r12, #IOMD_ROMCR0]          ; Get contents of ROMCR0 in to r0
-        AND     r0, r0, #&40                    ; clear all but the 16-bit mode flag
-  [ RO371Timings
+        AND     r0, r0, #&40                     ; clear all but the 16-bit mode flag
         ORR     r0, r0, #IOMD_ROMCR_Normal + IOMD_ROMCR_NSTicks_5 + IOMD_ROMCR_BTicks_3
-  |
-        ORR     r0, r0, #IOMD_ROMCR_Normal + IOMD_ROMCR_NSTicks_5 + IOMD_ROMCR_BTicks_4
-  ]
-        STRB    r0, [r12, #IOMD_ROMCR0]          ; Prog. the reg.s
-
-; Program the 2nd ROM bank
-  [ ExtROMSupport
-;   Unless we're actually running from the 2nd ROM bank (CanLiveOnROMCard), we don't know how fast
-;   the extension ROM in the 2nd bank goes, so program it for a slow default speed
-    [ CanLiveOnROMCard
-        TST     pc, #PhysExtROM                 ; are we running out of the 2nd ROM bank?
-        STRNEB  r0, [r12, #IOMD_ROMCR1]         ; Program the 2nd bank the same as the 1st
-      [ ExtROMis16bit
-        MOVEQ   r0, #IOMD_ROMCR_Normal + IOMD_ROMCR_16bit + IOMD_ROMCR_NSTicks_7 + IOMD_ROMCR_BurstOff
-      |
-        MOVEQ   r0, #IOMD_ROMCR_Normal + IOMD_ROMCR_32bit + IOMD_ROMCR_NSTicks_7 + IOMD_ROMCR_BurstOff
-      ]
-        STREQB  r0, [r12, #IOMD_ROMCR1]
-    |;CanLiveOnROMCard
-      [ ExtROMis16bit
-        MOV     r0, #IOMD_ROMCR_Normal + IOMD_ROMCR_16bit + IOMD_ROMCR_NSTicks_7 + IOMD_ROMCR_BurstOff
-      |
-        MOV     r0, #IOMD_ROMCR_Normal + IOMD_ROMCR_32bit + IOMD_ROMCR_NSTicks_7 + IOMD_ROMCR_BurstOff
-      ]
-        STRB    r0, [r12, #IOMD_ROMCR1]
-    ];CanLiveOnROMCard
-
-  |;ExtROMSupport
-    [ CanLiveOnROMCard
+        STRB    r0, [r12, #IOMD_ROMCR0]
         STRB    r0, [r12, #IOMD_ROMCR1]         ; Program the 2nd bank the same as the 1st
-    |
-        STRB    r0, [r12, #IOMD_ROMCR1]         ; 2nd bank unused: program it the same anyway
-    ]
-  ];ExtROMSupport
-
+;
 ; Now program ASTCR to *NOT* add wait states, since MEMCLK is slow relative to IOCLK
-
+;
         MOV     r0, #IOMD_ASTCR_Minimal
         STRB    r0, [r12, #IOMD_ASTCR]
-
-;
 ;
 init7500cpu_common
 ; Common setup requirments for BOTH 7500 and 7500FE.
@@ -1096,25 +1101,11 @@ init7500cpu_common
         B       CommonInit
 
 MedusaInit
-  ] ; MorrisSupport
-
-  [ RO371Timings
+;
         MOV     r0, #&12                                        ; 5-3 cycle ROM access
-  |
-        MOV     r0, #IOMD_ROMCR_156 + IOMD_ROMCR_BurstOff       ; initialise ROM speed to 156.25ns (changed from 187ns 21-Jan-94)
-  ]
         STRB    r0, [r12, #IOMD_ROMCR0]
+        STRB    r0, [r12, #IOMD_ROMCR1]         ; and do the same for extension ROMs (just in case)
 
- [ STB
-  [ :LNOT: ExtROMis16bit
-        STRB    r0, [r12, #IOMD_ROMCR1]         ; and do the same for extension ROMs (just in case)
-  |
-        MOV     r0, #IOMD_ROMCR_16bit + IOMD_ROMCR_Normal + IOMD_ROMCR_156 + IOMD_ROMCR_BurstOff
-        STRB    r0, [r12, #IOMD_ROMCR1]         ; 16bit 156.25nS noburst (Lowest common denominator)
-  ]
- |
-        STRB    r0, [r12, #IOMD_ROMCR1]         ; and do the same for extension ROMs (just in case)
- ]
         MOV     r0, #IOMD_VREFCR_VRAM_256Kx64 :OR: IOMD_VREFCR_REF_16   ; select 16µs refresh, assume 2 banks of VRAM
         STRB    r0, [r12, #IOMD_VREFCR]
 
@@ -1123,6 +1114,8 @@ MedusaInit
 
         MOV     r0, #0                          ; Podule manager wants TypeA setting by default for all podules
         STRB    r0, [r12, #IOMD_ECTCR]
+
+  ] ;IOMD1Support
 
 CommonInit
 ; On breaks (ie software resets) we have to turn the MMU off.
@@ -1252,42 +1245,282 @@ Z_Flag     * &40000000
 ; Also we are entered in 32-bit config, 32-bit mode,
 ; but we exit in 32-bit config, 26-bit mode
 
- [ MorrisSupport
 funnypatterns
         &       &66CC9933   ; 0110 1100 1001 0011
         &       &CC993366   ; 1100 1001 0011 0110
- ]
 
 MemSize ROUT
         MOV     r13, lr                                 ;save in a register, cos we've got no stack
 
- [ MEMC_Type = "IOMD"
+;signal cyan on screen (if kernel panics with bad DRAM, screen should remain cyan)
+;
+        LDR     R0, =&40000000+&FFFF00 ;border colour to cyan
+        LDR     R2, =VIDCPhys
+        STR     R0, [R2]
+
+; StrongARM - turn on I cache (allowed with MMU off), and fast core clock now - this avoids dreadful
+;             performance, and is ok until MMU etc comes on (near CritStart)
+;
+  [ :LNOT: ARMSASupport_Only
+        ARM_read_ID r2
+        AND     r2,r2,#&F000
+        CMP     r2,#&A000
+        BNE     MemSize_notSA
+  ]
+  [ ARMSASupport
+    [ :LNOT: KeepCachesOff
+        ARM_read_control r2
+        ORR     r2,r2,#&1000     ;I cache bit is bit 12
+        ARM_write_control r2
+    ]
+    [ PhoebeBodge
+        ;current SA120 sample(s) fall over with fast core clock
+        ARM_read_ID r2
+        AND     r2,r2,#&F
+        CMP     r2,#SA120minimumrev
+        ARMA_fastcoreclock LO
+    |
+        ARMA_fastcoreclock
+    ]
+  ] ;ARMSASupport
+MemSize_notSA
 
         MOV     r12, #IOMD_Base
-
- [ MorrisSupport
 ;
-        LDRB    r0, [r12, #IOMD_ID0]    ; load r1 with IOMD ID high byte
-        LDRB    r1, [r12, #IOMD_ID1]    ; load r0 with IOMD ID low byte
-        ORR     r0,r0,r1,LSL#8          ; Or r0 and r1, shifted left 8, put in r0
-        LDR     r1,=IOMD_Original       ; get Ref IOMD ID code - original
-        CMP     r0,r1                   ; check for IOMD ID Code - original
-        BEQ     MemSizeIOMD             ; Not ID Code - original,
-                                        ;    therefore jump to Medusa hardware code
-                                        ;    else fall through to Morris code.
-;
-; MemSize for Morris
-;
-  [ RO371Timings
-        MOV     r11, #&70     ;all 4 banks assumed 32 bit - EDO and timing bits set in case 7500FE (don't care bits otherwise)
-  |
-        MOV     r11, #IOMD_DRAMWID_DRAM_32bit * &0F     ;set all 4 banks to be 32bit initially
-        LDR     r1, =IOMD_7500FE
-        TEQ     r0, r1                                  ; are we on FE part?
-        ORREQ   r11, r11, #IOMD_DRAMWID_EDO_Enable :OR: IOMD_DRAMWID_RASCAS_3 :OR: IOMD_DRAMWID_RASPre_3
-                                                        ; if so, then enable EDO and slower RASCAS and RASPre times
-        ! 0,"7500FE support expects EDO memory in s.ARM600"
+10
+        LDRB    r0, [r12, #IOMD_ID0]
+  [ IOMD2Support
+        TEQ     r0, #IOMD_IOMD2    :AND: &FF
+        BEQ     MemSizePhoebe                         ; IOMD2 (Phoebe)
   ]
+  [ IOMD1Support
+        TEQ     r0, #IOMD_Original :AND: &FF
+        BEQ     MemSizeIOMD                           ; IOMD1 (Risc PC)
+        TEQ     r0, #IOMD_7500     :AND: &FF
+        BEQ     MemSizeMorris                         ; 7500 (A7000)
+        TEQ     r0, #IOMD_7500FE   :AND: &FF
+        BEQ     MemSizeMorris                         ; 7500FE (A7000+)
+  ]
+        B       %BT10                                 ; deliberate panic hang-up (unrecognised IOMD)
+
+  [ IOMD2Support
+;
+MemSizePhoebe
+;
+; for VRAM, we currently assume 4M is always there
+;
+; for SDRAM, we can cope with organisation of 11..14 rows, 8..11 columns, capacity of 4 to 128M
+; in one DIMM, 1 or 2 banks in DIMM (if 2 banks, must be symmetric) (max total of 256M currently
+; supported - 512M may be possible but will need looking at when/if suitable DIMMs exist)
+
+; symbols for serial presence detect (SPD) 
+; (we assume that Timer0 is already set up and running - needed by SPD routines)
+;
+  [ PhoebeBodge
+SDRAMI2C_addr0       * &a4        ;address for slot 0  (old FPGA PCB)
+SDRAMI2C_addr1       * &a2        ;address for slot 1  (old FPGA PCB)
+  |
+SDRAMI2C_addr0       * &a8        ;address for slot 0
+SDRAMI2C_addr1       * &a4        ;address for slot 1
+  ]
+SDRAMI2C_Nrows       * 3          ;byte 3 holds number of rows in SDRAM organisation
+SDRAMI2C_Ncolumns    * 4
+SDRAMI2C_Nbanks      * 5
+SDRAMI2C_bankdensity * 31
+
+;first, determine organisation (rows,columns) of SDRAM in each slot, and program SDRAMCR
+;
+        MOV     r7,#0                 ;accumulate bits for programming SDRAMCR
+        MOV     r0,#SDRAMI2C_addr0
+        BL      SPD_PreRead
+        BVS     %FT10                 ;nothing in slot0
+        MOV     r0,#SDRAMI2C_Nrows
+        MOV     r1,#SDRAMI2C_addr0
+        BL      SPD_ReadValue         ;read number of rows for slot0 SDRAM
+        SUBS    r0,r0,#11
+        BMI     BadSDRAMPanic
+        CMP     r0,#3
+        BHI     BadSDRAMPanic
+        ORR     r7,r7,r0,LSL #2       ;(11..14 rows means 0..3 in RAS0 bits of SDRAMCR)
+        MOV     r0,#SDRAMI2C_addr0
+        BL      SPD_PreRead
+        MOV     r0,#SDRAMI2C_Ncolumns
+        MOV     r1,#SDRAMI2C_addr0
+        BL      SPD_ReadValue         ;read number of columns for slot0 SDRAM
+        SUBS    r0,r0,#8
+        BMI     BadSDRAMPanic
+        CMP     r0,#3
+        BHI     BadSDRAMPanic
+        ORR     r7,r7,r0              ;(8..11 columns means 0..3 in CAS0 bits of SDRAMCR)
+10
+        MOV     r0,#SDRAMI2C_addr1
+        BL      SPD_PreRead
+        BVS     %FT20                 ;nothing in slot1
+        MOV     r0,#SDRAMI2C_Nrows
+        MOV     r1,#SDRAMI2C_addr1
+        BL      SPD_ReadValue         ;read number of rows for slot1 SDRAM
+        SUBS    r0,r0,#11
+        BMI     BadSDRAMPanic
+        CMP     r0,#3
+        BHI     BadSDRAMPanic
+        ORR     r7,r7,r0,LSL #6       ;(11..14 rows means 0..3 in RAS1 bits of SDRAMCR)
+        MOV     r0,#SDRAMI2C_addr1
+        BL      SPD_PreRead
+        MOV     r0,#SDRAMI2C_Ncolumns
+        MOV     r1,#SDRAMI2C_addr1
+        BL      SPD_ReadValue         ;read number of columns for slot1 SDRAM
+        SUBS    r0,r0,#8
+        BMI     BadSDRAMPanic
+        CMP     r0,#3
+        BHI     BadSDRAMPanic
+        ORR     r7,r7,r0,LSL #4       ;(8..11 columns means 0..3 in CAS1 bits of SDRAMCR)
+20
+        MOV     r12,#IOMD_Base
+        STR     r7,[r12,#IOMD2_SDRAMCR]
+
+;next determine sizes of SDRAM in each slot, and fill in PhysRamTable
+;
+        MOV     r7,#0                 ;accumulate 4 bytes of info in r7
+        MOV     r0,#SDRAMI2C_addr0
+        BL      SPD_PreRead
+        BVS     %FT30                 ;nothing in slot0
+        MOV     r0,#SDRAMI2C_Nbanks
+        MOV     r1,#SDRAMI2C_addr0
+        BL      SPD_ReadValue         ;read number of banks for slot0 SDRAM
+        ORR     r7,r7,r0
+        MOV     r0,#SDRAMI2C_addr0
+        BL      SPD_PreRead
+        MOV     r0,#SDRAMI2C_bankdensity
+        MOV     r1,#SDRAMI2C_addr0
+        BL      SPD_ReadValue         ;read bank density for slot0 SDRAM
+        ORR     r7,r7,r0,LSL #8
+30
+        MOV     r0,#SDRAMI2C_addr1
+        BL      SPD_PreRead
+        BVS     %FT40                 ;nothing in slot1
+        MOV     r0,#SDRAMI2C_Nbanks
+        MOV     r1,#SDRAMI2C_addr1
+        BL      SPD_ReadValue         ;read number of banks for slot1 SDRAM
+        ORR     r7,r7,r0,LSL #16
+        MOV     r0,#SDRAMI2C_addr1
+        BL      SPD_PreRead
+        MOV     r0,#SDRAMI2C_bankdensity
+        MOV     r1,#SDRAMI2C_addr1
+        BL      SPD_ReadValue         ;read bank density for slot1 SDRAM
+        ORR     r7,r7,r0,LSL #24
+40
+        TEQ     r7,#0
+        BEQ     BadSDRAMPanic         ;no SDRAM!
+
+;note that we can safely use SDRAM now (wait for Precharge has happened, and we have programmed correct rows,columns)
+
+        LDR     r3, =DRAMOffset_PageZero + PhysRamTable
+        TST     r7, #&FF
+        ADDNE   r3, r3, #DRAM0PhysRam                       ;address of first fragment pair in PhysRamTable (slot 0 present)
+        ADDEQ   r3, r3, #DRAM4PhysRam                       ;address of first fragment pair in PhysRamTable (slot 0 absent)
+        MOV     r2, r3
+        MOV     r1, #&400000       ;always assume 4M VRAM
+        MOV     r0, #VideoPhysRam
+        STMIA   r3!, {r0,r1}       ;video fragment is 4M VRAM
+;
+        MOV     r0, #DRAM0PhysRam  ;first fragment address for slot 0
+42
+        ANDS    r8, r7, #&FF
+        BEQ     %FT50              ;nothing in slot
+        CMP     r8, #2
+        BHI     BadSDRAMPanic
+        ADD     r8, r8, r8         ;no. of fragments for slot 0 (2 or 4, for 1 or 2 banks)   
+        MOV     r1, r7, LSR #8
+        AND     r1, r1, #&FF
+        TEQ     r1, #1             ;4M in one or both banks
+        TEQNE   r1, #2             ;8M
+        TEQNE   r1, #4             ;16M
+        TEQNE   r1, #8             ;32M
+        TEQNE   r1, #16            ;64M
+        TEQNE   r1, #32            ;128M
+        BNE     BadSDRAMPanic
+        MOV     r1, r1, LSL #21    ;size of each fragment (bank splits into two half-size fragments)
+        TEQ     r8, #2
+        MOVEQ   r9, #DRAM2PhysRam - DRAM0PhysRam  ;step between fragments if 2 fragments
+        MOVNE   r9, #DRAM1PhysRam - DRAM0PhysRam  ;step between fragments if 4 fragments
+44
+        STMIA   r3!, {r0,r1}       ;next fragment
+        ADD     r0, r0, r9
+        SUBS    r8, r8, #1
+        BNE     %BT44
+50
+        MOVS    r7, r7, LSR #16    ;move to slot 1, if not already done
+        MOV     r0, #DRAM4PhysRam  ;first fragment address for slot 1
+        BNE     %BT42
+
+        ASSERT  Phoebe_VRAMsize = &400000
+        MOV     r6, #4                                   ; 4M of VRAM
+        STR     r6, [r2, #VRAMWidth-PhysRamTable]        ; store width of VRAM (4M)
+        MOV     r7, #SAMLength/2/256*2                   ; use VRAM mode, and set increment for 2*1/2 SAM
+        LDR     r10, =320000000                          ; 320E6 bytes/sec bandwidth (about right for 50MHz SAM clk ???)
+        MOV     r14, #IOMD_Base
+        STRB    r7, [r14, #IOMD_VIDCR]
+        MOV     r12, #VideoPhysRam
+        STR     r12, [r14, #IOMD_VIDCUR]                 ; set up VIDCUR to start of video RAM
+        STR     r12, [r14, #IOMD_VIDSTART]               ; do same for VIDSTART
+        STR     r12, [r14, #IOMD_VIDINIT]                ; and for VIDINIT
+                                                         ; so we don't get crap when we turn video DMA on later
+        STR     r10, [r2, #VideoBandwidth-PhysRamTable]  ; store video bandwidth
+
+        ADD     r10, r12, #1024*1024-4096                ; add on a bit to form VIDEND (will be on mult. of SAM)
+        STR     r10, [r14, #IOMD_VIDEND]                 ; yes I know it's a bit of a bodge
+
+        MOV     r14, r6, LSL #20                         ; convert amount of VRAM to bytes
+        STR     r14, [r2, #VRAMSize-PhysRamTable]        ; and store
+
+  [ Phoebe_SoftROM
+    ;
+    ; we want to automagically soft load ROM into RAM if not already done (warm reset), because of the enormous speed
+    ; advantage of SDRAM versus ROM
+
+        ADRL    r14, ROM                                 ; use PC-relative addressing to get to start of image
+        TEQ     r14, #PhysROM                            ; see if we are currently running from ROM
+        BNE     %FT70                                    ; if not, then it's a warm reset and we're already running from RAM
+
+        ADD     r7, r2, #2*4                             ; -> first of SDRAM chunks in PhysRamTable
+        MOV     r14, #0                                  ; suitable chunk not found yet
+        MOV     r10, #0                                  ; used to sum total SDRAM size
+
+60
+        LDMIA   r7!, {r4, r5}                            ; address, size
+        ADD     r10, r10, r5                             ; total size so far
+        CMP     r5, #OSROM_ImageSize*1024
+        MOVHS   r14, r4                                  ; big enough chunk (we know it's 1M aligned), so remember it
+        CMP     r7, r3
+        BLO     %BT60
+
+        CMP     r10, #OSROM_ImageSize*1024 + &1000000
+        MOVLT   r14, #0                                  ; don't soft load if it will leave less than 16M of SDRAM
+        TEQ     r14, #0
+        BEQ     %FT70
+        STR     r14, [r2, #SoftROMaddr-PhysRamTable]     ; if we found a suitable chunk, reserve start of chunk for soft ROM
+        MOV     r7, r2                                   ; -> start of PhysRamTable
+        MOV     r10, r3                                  ; -> 1st byte after end of table
+        B       MemSizeSoftROMreserved
+
+70
+  ] ; Phoebe_SoftROM
+
+        MOV     r7, r2                                   ; -> start of PhysRamTable
+        MOV     r10, r3                                  ; -> 1st byte after end of table
+        B       MemSizeTotalRAM
+
+;
+BadSDRAMPanic
+        B       BadSDRAMPanic
+
+  ] ;IOMD2Support
+
+  [ IOMD1Support
+;
+MemSizeMorris
+;
+        MOV     r11, #&70     ;all 4 banks assumed 32 bit - EDO and timing bits set in case 7500FE (don't care bits otherwise)
         MOV     r14, #IOMD_Base
         STRB    r11, [r14, #IOMD_DRAMWID]
 
@@ -1475,24 +1708,17 @@ AllocateTheRAM
         STR     r0, [r14, #IOMD_VIDINIT]                ; and for VIDINIT
                                                         ; so we don't get crap when we turn video DMA on later
 
-
+;we only need to distinguish Morris variants here
+MemSize_whichmorris
         LDRB    r4, [r14, #IOMD_ID0]
-        LDRB    r7, [r14, #IOMD_ID1]
-        ORR     r4, r4, r7, LSL #8
-        LDR     r7, =IOMD_7500FE                        ; if FE part, then assume EDO DRAM
-        TEQ     r4, r7
-        LDREQ   r4, =80000000                           ; so allow 80E6 bytes/s
- [ STB
-        LDRNE   r4, =44000000                           ; else only allow 44E6 bytes/s
- |
-        LDRNE   r4, =46500000                           ; if no VRAM, then 46.5E6 bytes/sec bandwidth
- ]
+        TEQ     r4, #IOMD_7500FE :AND: &FF
+        TEQNE   r4, #IOMD_7500   :AND: &FF
+        BNE     MemSize_whichmorris                     ; deliberate panic hang up
+        TEQ     r4, #IOMD_7500FE :AND: &FF
+        LDREQ   r4, =80000000                           ; FE implies EDO, so allow 80E6 bytes/s
+        TEQ     r4, #IOMD_7500   :AND: &FF
+        LDREQ   r4, =46500000                           ; if no VRAM, then 46.5E6 bytes/sec bandwidth
         STR     r4, [r2, #VideoBandwidth-PhysRamTable]  ; store video bandwidth
-
-        LDR     r4, =46500000                           ; if no VRAM, then 46.5E6 bytes/sec bandwidth
-        STR     r4, [r2, #VideoBandwidth-PhysRamTable]  ; store video bandwidth
-
-
 
         ADD     r4, r0, r1                              ;form VIDEND (will be on mult. of SAM)
         SUB     r4, r4, #4096
@@ -1506,7 +1732,6 @@ AllocateTheRAM
         B       MemSizeTotalRAM
 
 MemSizeIOMD
- ]
 
 ; Right, let's find out where our memory is
 
@@ -1515,35 +1740,6 @@ MemSizeIOMD
 
 ; Don't bother checking for more than 2M of VRAM, because we don't know what the 1/2 SAM length is for larger sizes
 
-; StrongARM - aha! but we still have no nice MMU, nor even fast core clock, and this memory sizing type
-; stuff is going to be very slow for large memory. So turn on I cache (allowed with MMU off), and fast
-; core clock now - this is then ok until MMU etc comes on (near CritStart)
-
-        ARM_read_ID r2
-        AND     r2,r2,#&F000
-        CMP     r2,#&A000
-        BNE     MemSizeIOMD_notSA
-        ARM_read_control r2
-        ORR     r2,r2,#&1000     ;I cache bit is bit 12
-        ARM_write_control r2
-        ARMA_fastcoreclock
-  [ ARM810fastclock
-        B       MemSizeIOMD_not810
-  ]
-MemSizeIOMD_notSA
-  [ ARM810fastclock
-    ;fast clock for ARM 810 now
-        ARM_read_ID r2
-        AND     r2,r2,#&F000
-        CMP     r2,#&8000
-        BNE     MemSizeIOMD_not810
-    [ ARM810usePLL
-        ARM8_pll_fclk r2
-    |
-        ARM8_refclk_fclk r2
-    ]
-MemSizeIOMD_not810
-  ]
         MOV     r2, #IOMD_VREFCR_VRAM_256Kx64 :OR: IOMD_VREFCR_REF_16 ; assume 2 banks of VRAM by default
         STRB    r2, [r12, #IOMD_VREFCR]
 
@@ -1571,7 +1767,6 @@ MemSizeIOMD_not810
         MOV     r11, #IOMD_DRAMCR_DRAM_Large * &55      ; set all banks to be large initially
         MOV     r14, #IOMD_Base
         STRB    r11, [r14, #IOMD_DRAMCR]
-
         MOV     r10, #0                                 ; indicate no RAM found yet
         MOV     r9, #IOMD_DRAMCR_DRAM_Small             ; bit to OR into DRAMCR
         MOV     r0, #DRAM0PhysRam
@@ -1653,9 +1848,18 @@ NoDRAMPanic
 
         MOV     r2, r7                                  ; r2 -> start of PhysRamTable
         MOV     r3, r10                                 ; r3 -> byte after last used entry in PhysRamTable
-MemSizeTotalRAM
-; Now we have to work out the total RAM size
 
+  ] ;IOMD1Support
+
+;
+MemSizeTotalRAM
+        MOV     r1, #0
+        STR     r1, [r2, #SoftROMaddr-PhysRamTable]     ; no soft ROM chunk reserved for later copy
+;
+MemSizeSoftROMreserved
+;
+; Now we have to work out the total RAM size, allowing for any reserved or active soft loaded ROM chunk
+;
         MOV     r1, #0
 26
         LDMIA   r7!, {r4, r5}                           ; get address, size
@@ -1666,18 +1870,15 @@ MemSizeTotalRAM
 
         MOV     r0, #Page4K                             ; something to put in MEMC CR soft copy
                                                         ; (it's probably irrelevant)
- |
- ]
 
-        ADRL    r4, ROM                         ; use PC-relative addressing to get to start of image
-        TEQ     r4, #PhysROM                    ; then see if it's the normal ROM address
-  [ STB
-        TEQNE   r4, #PhysExtROM                 ; or if it's the 2nd ROM bank
-  ]
-        BEQ     %FT55                           ; if so, then we're OK
+        LDR     r4, [r2, #SoftROMaddr-PhysRamTable]     ; reserved soft ROM physical address, if any
+        TEQ     r4, #0
+        ADREQL  r4, ROM                                 ; if none reserved, use PC-relative addressing to get to address of active ROM
+        TEQ     r4, #PhysROM                            ; then see if required ROM address is the physical ROM address
+        BEQ     %FT55                                   ; if so, then we're OK
 
-        SUB     r1, r1, #OSROM_ImageSize*1024   ; if we've been soft-loaded, then we have ?M less than we thought
-        ADD     r5, r4, #OSROM_ImageSize*1024   ; point r5 at end of ROM
+        SUB     r1, r1, #OSROM_ImageSize*1024           ; if we've been (or will be) soft-loaded, then we have ?M less than we thought
+        ADD     r5, r4, #OSROM_ImageSize*1024           ; point r5 at end of ROM
 
 ; now go through the declared RAM areas looking for our image (we assume it's not split across two banks)
 
@@ -1732,6 +1933,7 @@ MemSizeTotalRAM
 ; now store zeros to fill out table
 
 55
+        ADRL    r4, ROM                                 ; r4 := physical address of active ROM (may be in RAM)
         ADD     r5, r2, #PhysRamTableEnd-PhysRamTable
         MOV     r6, #0
         MOV     r7, #0
@@ -1896,10 +2098,16 @@ MemSizeTotalRAM
         ARM_MMU_transbase r3                    ; set up MMU pointer to L1
         LDR     r3, =L1PT                       ; when we put L1 entry back later, we will want to use logical address
 
-        MOV     r7, #1
-        ARM_MMU_domain r7                       ; only use domain 0
+        MOV     r7, #5                          ; allow domain 0 and 1, with client permission checks
+        ARM_MMU_domain r7                       ; OS mainly uses domain 0, but ChocolateScreen may use domain 1
 
         ARM_flush_cacheandTLB r7                ; flush cache + TLB just in case
+
+;signal green on screen - this is at point where we turn on MMU
+;
+        LDR     R7, =&40000000+&00FF00 ;border colour to green
+        LDR     R2, =VIDCPhys
+        STR     R7, [R2]
 
         ARM_number r2                           ;should be 6,7,8 or &A
         SUB     r2,r2,#6                        ; r2 := 0..4 for ARM 6,7,8,(9),&A
@@ -1956,9 +2164,9 @@ CritEnd                                         ; 2 words after we go up into RO
 ;       Note in case d), the L1 is not actually touched (it should have already been set up to point to the right L2)
 ;
 
-ROMbit  *       1 :SHL: 12
-Vidbit  *       1 :SHL: 13
-PSS     *       PhysSpaceSize_Full  :SHR: 20  ; Number of megabytes in full IOMD physical space
+ROMbit      *       1 :SHL: 12
+Vidbit      *       1 :SHL: 13
+PSS_NoDRAM  *       PhysSpaceSize_NoDRAM  :SHR: 20  ; Number of megabytes in IOMD physical space (excluding DRAM)
 
         MACRO
         MemInitSection  $size, $U, $C, $B, $logaddr, $ap, $physaddr
@@ -1998,19 +2206,15 @@ PSS     *       PhysSpaceSize_Full  :SHR: 20  ; Number of megabytes in full IOMD
 MemInitTable    ;       sz, U, C, B, logaddr,   (ap,     (physaddr))
         MemInitSection   4, 1, 0, 0, &03000000, AP_None, &03000000      ; I/O
 
-        MemInitAbort     1,          &03400000                          ; VIDC1 emulation zone
+        ;mjs change for Ursula:
+        ; - on IOMD1 this will remain as abort (was reserved as VIDC1 emulation zone)
+        ; - on IOMD2 this will be set to access devsel 6 (IDE discs)
+        ;   (see L1L2PTenhancements)
+        MemInitAbort     1,          &03400000                          ; 
+
         MemInitSection   1, 1, 0, 0, &03500000, AP_None, &03400000      ; VIDC20 space
         MemInitSection   2, 1, 0, 0, &03600000, AP_None, &03600000      ; LAGs
 
- [ STB
-  [ ExtROMSupport                                                       ; System build option
-        ASSERT (OSROM_ImageSize <= 4096)        ; No room for extension ROMs with an 8MB OS image
-        MemInitROMs      4, 1, 1, 1, &03800000, AP_Read                 ; ROM
-        MemInitSection   4, 1, 1, 1, &03C00000, AP_Read, &01000000      ; Extension ROM
-  |
-        MemInitROMs      8, 1, 1, 1, &03800000, AP_Read                 ; ROM (1st or 2nd bank)
-  ]
- |
         [ OSROM_ImageSize = 4096
         MemInitROMs      4, 1, 1, 1, &03800000, AP_Read                 ; ROM
         MemInitROMs      4, 1, 1, 1, &03C00000, AP_Read                 ; ROM
@@ -2020,14 +2224,14 @@ MemInitTable    ;       sz, U, C, B, logaddr,   (ap,     (physaddr))
         MemInitROMs      2, 1, 1, 1, &03C00000, AP_Read                 ; ROM
         MemInitROMs      2, 1, 1, 1, &03E00000, AP_Read                 ; ROM
         ]
-  ]
 
-        ; mjs behaviour change for Ursula:
-        ; map of IOMD physical space, including RAM as before (need for POST), but RAM part will be now be reset
-        ; to inaccessible after ClearPhysRAM (and hence this mapping will be reduced to cover only
-        ; PhysSpaceSize_NoDRAM by end of boot)
+        ; mjs change for Ursula:
+        ; map of IOMD physical space now excludes DRAM (would be even more profligate on IOMD2)
+        ; note that old POST code stuff won't like this - I'm not losing sleep over it
         ;
-        MemInitSection PSS, 1, 0, 0, PhysSpace, AP_None, &00000000
+        ASSERT :LNOT: IncludeTestSrc
+        ;
+        MemInitSection PSS_NoDRAM, 1, 0, 0, PhysSpace, AP_None, &00000000
 
         ; mjs change for Ursula:
         ; used to be mapping here for shadow ROM in top 8M of address space - this is vestigial, and can
@@ -2056,7 +2260,6 @@ MemInitTable    ;       sz, U, C, B, logaddr,   (ap,     (physaddr))
         MemInitPagesL2  &8000, 1, 1, SysHeapChunkAddress, AP_Read, DRAMOffset_SystemHeap              ;SVC stack (32k)
         MemInitPagesL2  &8000, 1, 1, SysHeapChunkAddress+&8000, AP_Full, DRAMOffset_SystemHeap+&8000  ;SysHeap (initially 32k from remainder of 64k fixed area)
 
-  [ StrongARM
 ;StrongARM requires 2*16k of private logical space (used for absolutely nothing else), which is
 ;readable and cacheable, for data cache cleaning purposes. We want to map the space to
 ;start of ROM bank 1 (physical target), so that IOMD timings can be poked for maximum read speed
@@ -2067,7 +2270,6 @@ MemInitTable    ;       sz, U, C, B, logaddr,   (ap,     (physaddr))
         MemInitPagesL2  &8000, 1, 1, ARMA_Cleaners_address, AP_Read, DRAMOffset_PageZero
 ;and similarly for the 32k screen cleaner area
         MemInitPagesL2  &8000, 1, 1, ARMA_ScreenCleaners_address, AP_Read, DRAMOffset_PageZero
-  ]
 
         MemInitPagesL2     -1, 1, 1, UndStackSoftCamChunk, AP_Full, 0   ; variable offset and size
 
@@ -2172,22 +2374,26 @@ Page4K  * &0
 ; This routine must work in 32-bit mode, and should not use any memory!!!!
 
 
-  [ RO371Timings
 ;
-;assumes timings (and EDO for 7500FE) according to IOMD id, sets up ROM timings etc. as side effect
+;assumes timings (and EDO for 7500FE) according to IOMD id, may set up ROM timings etc. as side effect
 ;
 TimeCPU ROUT 
 
         MOV     r2, #IOC                ; Address of the IO controller  (IOMD)
 
-        LDRB    r7, [r2, #IOMD_ID0]     ; Is
-        CMP     r7, #&E7                ; It
-        LDRB    r7, [r2, #IOMD_ID1]     ; A
-        CMPEQ   r7, #&D4                ; Risc PC ?
-        BEQ     timecpuriscpc
-        CMP     r7, #&AA                ; assume 7500 or 7500FE
-        BEQ     timecpu7500FE
-;7500 then
+10
+        LDRB    r7, [r2,#IOMD_ID0]
+        TEQ     r7, #IOMD_IOMD2    :AND: &FF
+        BEQ     timecpuphoebe                         ; IOMD2 (Phoebe)
+        TEQ     r7, #IOMD_Original :AND: &FF
+        BEQ     timecpuriscpc                         ; IOMD1 (Risc PC)
+        TEQ     r7, #IOMD_7500     :AND: &FF
+        BEQ     timecpu7500                           ; 7500 (A7000)
+        TEQ     r7, #IOMD_7500FE   :AND: &FF
+        BEQ     timecpu7500FE                         ; 7500FE (A7000+)
+        B       %BT10                                 ; deliberate panic hang-up (unrecognised IOMD)
+;
+timecpu7500
         MOV     r7, #&32                      ; 5-3 cycle ROM access
         STRB    r7, [r2, #IOMD_ROMCR0]
         STRB    r7, [r2, #IOMD_ROMCR1]
@@ -2215,18 +2421,11 @@ timecpuriscpc
         LDR     r7, =(1 :SHL: 16) :OR: 16000  ; assumed 16MHz RAM (32 MHz bus)
         MOV     pc, lr
 
-  | ; else if not RO371Timings
-;
-;simple 16 MHz nominal value (as on original Risc PC) returned
-;
-TimeCPU
-        LDR     r7, =(1 :SHL: 16) :OR: 16000    ; indicate 16MHz RAM
+timecpuphoebe
+        LDR     r7, =(1 :SHL: 16) :OR: 64000  ; indicate 64MHz RAM
         MOV     pc, lr
 
-  ] ;RO371Timings conditional
 
-
-  [ RO371Timings
 ;
 ;
 ; finalmemoryspeed 
@@ -2236,21 +2435,21 @@ TimeCPU
 finalmemoryspeed ROUT
         Push    "r0,lr"
         MOV     lr, #IOC
-        LDRB    r0, [lr, #IOMD_ID0]     ; Is
-        CMP     r0, #&E7                ; It
-        LDRB    r0, [lr, #IOMD_ID1]     ; A
-        CMPEQ   r0, #&D4                ; Risc PC ?
+10
+        LDRB    r0, [lr, #IOMD_ID0]
+        TEQ     r0, #IOMD_Original :AND: &FF
+        TEQNE   r0, #IOMD_7500     :AND: &FF
+        TEQNE   r0, #IOMD_IOMD2    :AND: &FF
         BEQ     fmspeed_done
-        CMP     r0, #&AA                ; EQ if 7500FE
-        MOVEQ   r0, #&80
-        STREQB  r0, [lr, #&CC]          ; ASTCR register: set i/o asynchronous timing for fast memory clock
-        MOVEQ   r0, #&06                ; clock dividers: /1 for CPU, /1 for memory, /2 for I/O
-        STREQB  r0, [lr, #IOMD_CLKCTL]
+        TEQ     r0, #IOMD_7500FE   :AND: &FF
+        BNE     %BT10                        ;deliberate panic hang up
+
+        MOV     r0, #&80
+        STRB    r0, [lr, #&CC]          ; ASTCR register: set i/o asynchronous timing for fast memory clock
+        MOV     r0, #&06                ; clock dividers: /1 for CPU, /1 for memory, /2 for I/O
+        STRB    r0, [lr, #IOMD_CLKCTL]
 fmspeed_done
         Pull    "r0,pc",,^
-
-  ] ;RO371Timings conditional
-
 
         LTORG
 
@@ -2341,23 +2540,12 @@ MMUControl_ModifyControl ROUT
         MOV     r3, #0
         LDR     lr, [r3, #MMUControlSoftCopy]
         CMP     r5,#&A
-  [ ARM810support
-        CMPNE   r5,#8                   ; can read control reg on ARM 810 too
-  ]
         ARM_read_control lr,EQ
         MOVEQ   lr,lr,LSL #19
         MOVEQ   lr,lr,LSR #19           ; if StrongARM then we can read control reg. - trust this more than soft copy
         AND     r2, r2, lr
         EOR     r2, r2, r1
         MOV     r1, lr
-  [ ARM810support
-        CMP     r5,#8
-        BNE     %FT03
-        TST     r2,#4
-        ORRNE   r2,r2,#&800            ; if ARM810 then Z bit (branch prediction) mirrors C bit
-        BICEQ   r2,r2,#&800
-03
-  ]
         CMP     r5,#&A
         BNE     %FT05
         TST     r2,#&4                  ; if StrongARM, then I bit mirrors C bit
@@ -2370,30 +2558,12 @@ MMUControl_ModifyControl ROUT
         BEQ     %FT10
         ARM_flush_cache r3
 10
-  [ ARM810support
-        CMP     r5,#8
-        BNE     %FT12
-        BIC     lr, r1, r2              ; lr = bits going from 1->0
-        TST     lr, #MMUC_C             ; if cache turning off then clean/flush cache first
-        BEQ     %FT12
-    [ ARM810cleanflushbroken
-        Push    "r0,r1"
-        ARM8_cleanflush_IDC r0,r1
-        ARM8_branchpredict_off r0       ; and turn off branch predict cleanly (must go off with cache)
-        Pull    "r0,r1"
-    |
-        Push    "r0"
-        ARM8_cleanflush_IDC r0
-        ARM8_branchpredict_off r0       ; and turn off branch predict cleanly (must go off with cache)
-        Pull    "r0"
-    ]
-12
-  ]
         CMP     r5,#&A
         BNE     %FT15
         BIC     lr, r1, r2              ; lr = bits going from 1->0
         TST     lr, #MMUC_C             ; if cache turning off then clean StrongARM data cache first
         BEQ     %FT15
+  [ ARMSASupport
         Push    "r0-r2"
         ;'uncommon' case, regarded as not needing to update ARMA_Cleaner_status
         MOV     r1,#ARMA_Cleaner_flipflop
@@ -2401,7 +2571,20 @@ MMUControl_ModifyControl ROUT
         EOR     r0,r0,#16*1024
         STR     r0,[r1]
         ARMA_clean_DC r0,r1,r2
+        ARM_read_ID r0
+        AND     r0,r0,#&F
+        CMP     r0,#SA120minimumrev
+        BLO     %FT14
+        ;clean mini data cache too (only used for screen, but we should still avoid losing dirty screen data)
+        LDR     r1,=ARMA_ScreenCleaners_address+8*1024  ;use part of area that is not used for screen cleaning
+        ADD     r2,r1,#2*1024                           ;2k for 1k mini cache size (we're not doing flipflop)
+12
+        LDR     r0,[r1],#32
+        CMP     r1,r2
+        BLO     %BT12
+14
         Pull    "r0-r2"
+  ] ;ARMSASupport
 15
         ARM_write_control r2
         BIC     lr, r1, r2              ; lr = bits going from 1->0
@@ -2417,9 +2600,6 @@ MMUC_modcon_readonly
         MOV     r3, #0
         LDR     lr, [r3, #MMUControlSoftCopy]
         CMP     r5,#&A
-  [ ARM810support
-        CMPNE   r5,#8                   ; can read control reg on ARM 810 too
-  ]
         ARM_read_control lr,EQ
         MOVEQ   lr,lr,LSL #19
         MOVEQ   lr,lr,LSR #19           ; if StrongARM then we can read control reg. - trust this more than soft copy
@@ -2430,30 +2610,19 @@ MMUC_modcon_readonly
 
 MMUControl_Flush
        Push     "r0-r4"
+  [ :LNOT: ARMSASupport_Only
        ARM_read_ID r4
        AND      r4,r4,#&F000
+  ]
        TST      r0,#&80000000
        BEQ      MMUC_flush_flushT
 ;flush cache
+  [ :LNOT: ARMSASupport_Only
        CMP      r4,#&A000
-  [ ARM810support
-       CMPNE    r4,#&8000
-  ]
        ARM67_flush_cache NE       ;if not StrongARM or ARM810, assume 6,7
        BNE      MMUC_flush_flushT
-  [ ARM810support
-       CMP      r4,#&A000
-       BEQ      MMUC_flush_SA
-;ARM810 then
-    [ ARM810cleanflushbroken
-       ARM8_cleanflush_IDC r1,r4
-       MOV      r4,#&8000
-    |
-       ARM8_cleanflush_IDC r1
-    ]
-       B        MMUC_flush_flushT
-MMUC_flush_SA
   ]
+  [ ARMSASupport
 ;StrongARM then
 ;'uncommon' case, regarded as not needing to update ARMA_Cleaner_status
        MOV     r2,#ARMA_Cleaner_flipflop
@@ -2461,18 +2630,33 @@ MMUC_flush_SA
        EOR     r1,r1,#16*1024
        STR     r1,[r2]
        ARMA_clean_DC r1,r2,r3     ;effectively, fully clean/flush wrt non-interrupt stuff
+       ARM_read_ID r2
+       AND     r2,r2,#&F
+       CMP     r2,#SA120minimumrev
+       BLO     MMUC_no_minicache
+       ;flush mini data cache too, for completeness
+       LDR     r1,=ARMA_ScreenCleaners_address+8*1024  ;use part of area that is not used for screen cleaning
+       ADD     r2,r1,#2*1024                           ;2k for 1k mini cache size (we're not doing flipflop)
+MMUC_minicache_loop
+       LDR     r3,[r1],#32
+       LDR     r3,[r1],#32
+       LDR     r3,[r1],#32
+       LDR     r3,[r1],#32
+       CMP     r1,r2
+       BLO     MMUC_minicache_loop
+MMUC_no_minicache
        ARMA_drain_WB
        ARMA_flush_IC              ;do *not* flush DC - may be interrupt stuff in it
+  ] ;ARMSASupport
 MMUC_flush_flushT
        TST     r0,#&40000000
        BEQ     MMUC_flush_done
-  [ ARM810support
-    ;there is a general macro, should have used this before anyway
-       ARM_flush_TLB r1
-  |
+  [ :LNOT: ARMSASupport_Only
        CMP     r4,#&A000
        ARMA_flush_TLBs EQ
        ARM67_flush_TLB NE         ;if not StrongARM, assume 6,7
+  |
+       ARMA_flush_TLBs
   ]
 MMUC_flush_done
        Pull     "r0-r4,pc"
@@ -2587,9 +2771,14 @@ DAbPreVeneer    ROUT
         SUBNES  pc,lr_abort,#8               ;restart aborting instruction if fixed up
   ]
 
-  [ ChocolateScreen
-    ;check for domain fault, which will be a screen access - if so, set screen (domain 1) access to
-    ;normal, restart VSC countdown (if enabled), and restart instruction
+  [ ChocolateScreen :LAND: ARMSASupport
+    ;
+    ; - emulation of h/w VIDMRD (slightly more pessimistic than real VIDMRD, since triggered by writes
+    ;   as well as reads)
+    ; - check for domain fault, which will be a screen access - if so, set screen (domain 1) access to
+    ;   normal, set emulated VIDMRD flag (if screen cleaning enabled), and restart instruction
+    ; - note that domain aborts are *only* expected for screen (and only when h/w VIDMRD absent)
+    ;
         ARM_read_FSR r0
         AND     r0,r0,#&F
         CMP     r0,#&9                       ;section domain fault (screen section mapped)
@@ -2597,17 +2786,30 @@ DAbPreVeneer    ROUT
         ARMA_read_MMUdomain r0
         ORR     r0,r0,#&4                    ;set domain 1 access to normal (was 00, set to 01)
         ARMA_write_MMUdomain r0
-        MOV     r1,#0                        ;only start VSC countdown if screen clean neither disabled nor suspended
+        MOV     r1,#0                        ;only set emulated VIDMRD flag if screen clean neither disabled nor suspended
         LDR     r0,[r1,#ARMA_Cleaner_status]
         TST     r0,#ACS_SCdisable:OR:ACS_SCsuspend
-        BICEQ   r0,r0,#ACS_VSCcountdown_MASK
-        ANDEQ   r2,r0,#ACS_VSClazy_MASK
-        ORREQ   r0,r0,r2,LSR #(ACS_VSClazy_SHIFT-ACS_VSCcountdown_SHIFT)  ;VSC countdown := VSC lazy
+        ORREQ   r0,r0,#ACS_SoftVIDMRD
         STREQ   r0,[r1,#ARMA_Cleaner_status]
-        LDMIA   r13_abort, {r0-r2}           ;restore regs
+        LDMIA   r13_abort, {r0-r1}           ;restore regs
         SUBS    pc,lr_abort,#8               ;restart aborting instruction
 DABP_notchocolate
   ]
+
+        ; RestartExternalAborts
+        ; - part of PCI support on Phoebe (PCI master aborts CPU access to PCI space, which must be uncached, unbuffered)
+        ; - should never happen on older h/w (so this code should do no harm)
+        ; - simply restart instruction on external abort (assumes core that doesn't need fix-ups; eg. StrongARM)
+        ;
+        ARM_read_FSR r0
+        AND     r0,r0,#&D
+        CMP     r0,#8                           ;PCI abort will be external abort on non-linefetch (page or section)
+  [ PhoebeBodge_Bernard2
+        MOVEQ   r0, #IOMD_Base
+        LDREQ   r0, [r0,#&80]                   ;harmless IOMD access to catch on analyzer
+  ]
+        LDREQ   r0,[r13_abort]                  ;restore r0 and...
+        SUBEQS  pc,lr_abort,#8                  ;...restart instruction if so
 
         mrs     AL, r0, SPSR_all                ; r0 = PSR when we aborted
         mrs     AL, r1, CPSR_all                ; r1 = CPSR
@@ -3320,7 +3522,9 @@ Fault
         EXIT                                    ; no, then exit (V=0 from SUBS)
 
 
-;some tricks to improve performance, looking at MMU level 1 and level 2 page tables
+; - some tricks to improve performance, looking at MMU level 1 and level 2 page tables
+; - also now maps in devsel 6 space (IDE discs) and PCI config space, if running on IOMD2
+;
 L1L2PTenhancements ROUT
         Push    "r0-r5,lr"
 
@@ -3359,24 +3563,58 @@ L1L2PTe_WPROMloop
         BNE     L1L2PTe_WPROMloop
 L1L2PTe_WPROMdone
 
-;go for best available memory speed for data cache cleaner areas (StrongARM)
-;there is 32k for 2 main cleaner areas, followed directly by 32k for 2 screen cleaner areas 
+;go for best available memory speed for data cache cleaner areas for StrongARM
+;there is 32k for 2 main cleaner areas, followed directly by 32k for 2 screen cleaner areas
+;
+;since we discriminate IOMD variants here, sort out PCI mapping here too
+;
+SA_cleanerzoom_eh
+        MOV     r0,#IOMD_Base
+        LDRB    r0,[r0,#IOMD_ID0]
+        TEQ     r0,#IOMD_7500     :AND: &FF
+        TEQNE   r0,#IOMD_7500FE   :AND: &FF
+        BEQ     SA_cleanerzoom_done
+        TEQ     r0,#IOMD_Original :AND: &FF
+        BEQ     SA_cleanerzoom_IOMD1
+        TEQ     r0,#IOMD_IOMD2    :AND: &FF
+        BEQ     SA_cleanerzoom_IOMD2
+        B       SA_cleanerzoom_eh            ;deliberate panic hang up
+
+SA_cleanerzoom_IOMD1
+        MOV     r2,#&01000000                ;physical address of ROM bank 1 (which we'll use for fast clean)
+        MOV     r1,#5
+        MOV     r0,#IOMD_Base
+        STRB    r1,[r0, #IOMD_ROMCR1]        ;program ROM bank 1 speed to fastest (62.5 ns)
+        B       SA_cleanerzoom
+
+SA_cleanerzoom_IOMD2
+        BL      L1PT_forIOMD2                ;we know we're on IOMD2, so map IOMD2 specific stuff while we're about it
+        MOV     r2,#&3c000000                ;physical address of IOMD2 fast cache flush area
+SA_cleanerzoom
         LDR     r0,=L2PT :OR: (ARMA_Cleaners_address :SHR: 10)  ;address of 1st L2PT word for cleaner area
         LDR     r1,[r0]
         MOV     r1,r1,LSL #20
-        MOV     r1,r1,LSR #20                   ;zap physical address field
-        ORR     r1,r1,#&01000000                ; = physical address of start of ROM bank 1
-        MOV     r2,#16                          ;16 L2PT entries to fiddle in total
+        MOV     r1,r1,LSR #20                ;zap physical address field
+        ORR     r1,r1,r2                     ;and munge in the appropriate physical address from above
+        MOV     r2,#8                        ;8 L2PT entries to fiddle for main cleaner area (32k)
 00
         STR     r1,[r0],#4
         SUBS    r2,r2,#1
         BNE     %BT00
-        MOV     r0,#IOC
-        MOV     r1,#5
-        STRB    r1,[r0, #IOMD_ROMCR1]           ;ROM bank 1 speed = fastest (62.5 ns)
+        ARM_read_ID r2
+        AND     r2,r2,#&F
+        CMP     r2,#SA120minimumrev          ;check for SA-120 (has mini data cache)
+        BICHS   r1,r1,#4                     ;clear B bit on SA-120 (C=1,B=0 space, means mini cacheable)
+        MOV     r2,#8                        ;8 L2PT entries to fiddle for screen cleaner area (32k)
+01
+        STR     r1,[r0],#4
+        SUBS    r2,r2,#1
+        BNE     %BT01
+SA_cleanerzoom_done
 
 ;if we are on StrongARM, make the pages of the L2PT itself (for AppSpace only), bufferable (improves task swap speed)
 ;AppSpace is 0-28M
+;
         ARM_read_ID r0
         AND     r0,r0,#&F000
         CMP     r0,#&A000
@@ -3453,7 +3691,31 @@ L1L2PTe_WPROMdone
 09
         Pull    "r0-r5,pc"
 
-  [ StrongARM
+
+PCIConfig_PhAddr * &40000000     ;physical start of PCI config space
+Devsel6_PhAddr   * &03800000     ;physical start of devsel 6 space (IDE discs)
+Devsel6          * &03400000     ;logical start of devsel 6 space
+IO_L1PTbits      * &412          ;svc r/w, usr -/-, ~B, ~C, Section
+;
+L1PT_forIOMD2  ROUT
+        Push    "r0-r2,lr"
+        LDR     r0,=PCI_status
+        MOV     r1,#1
+        STR     r1,[r0]                                ;initialise as PCI present
+;
+        LDR     r0,=L1PT
+;
+;1M of PCI config space
+        ADD     r1,r0,#PCIConfig :SHR: (20-2)          ;L1PT address for PCI config space
+        LDR     r2,=PCIConfig_PhAddr :OR: IO_L1PTbits  ;L1PT entry
+        STR     r2,[r1]
+;
+;1M of devsel 6 space
+        ADD     r1,r0,#Devsel6 :SHR: (20-2)            ;L1PT address for devsel 6 space
+        LDR     r2,=Devsel6_PhAddr :OR: IO_L1PTbits    ;L1PT entry
+        STR     r2,[r1]
+        Pull    "r0-r2,pc"
+
 ;
 ; ---------------- XOS_SynchroniseCodeAreas implementation ---------------
 ;
@@ -3485,10 +3747,13 @@ ARMA_IMBrange_threshold * 128*1024
 ;
 SyncCodeAreasSWI ROUT
         BIC     LR,LR,#V_bit                     ;clear return V
+  [ :LNOT: ARMSASupport_Only
         ARM_read_ID R10
         AND     R10,R10,#&F000
         CMP     R10,#&A000
         BNE     SLVK                             ;not StrongARM
+  ]
+  [ ARMSASupport
         TST     R0,#1                            ;range variant of SWI?
         BEQ     %FT01
         MOV     R11,R1                           ;R11 := low address (inclusive)
@@ -3516,6 +3781,8 @@ SyncCodeAreasSWI ROUT
         B       SLVK                             ;semaphore set, avoid reentrancy, let first call do it
 02
         ORR     R11,R11,#ACS_NSCsemaphore:OR:ACS_SynchCAsemaphore
+        TST     R11,#ACS_MiniDataCache
+        BICEQ   R11,R11,#ACS_VSCpending_MASK     ;unless screen uses mini cache, force this clear since we are about to clean cache
         STR     R11,[R12,#ARMA_Cleaner_status]
         TEQP    R10,#0                           ;restore IRQ state
         LDR     R11,[R12,#ARMA_Cleaner_flipflop]
@@ -3529,39 +3796,41 @@ SyncCodeAreasSWI ROUT
         TEQP    R12,#0                           ;disable IRQs to mess with ARMA_Cleaner_status and MMUdomain
         MOV     R12,#0                           ;now clear NSC and SynchCA semaphores, and VSC countdown
         LDR     R11,[R12,#ARMA_Cleaner_status]
-        BIC     R11,R11,#ACS_NSCsemaphore:OR:ACS_SynchCAsemaphore:OR:ACS_VSCcountdown_MASK
+        BIC     R11,R11,#ACS_NSCsemaphore:OR:ACS_SynchCAsemaphore
         STR     R11,[R12,#ARMA_Cleaner_status]
-  [ ChocolateScreen
+    [ ChocolateScreen
         TST     R11,#ACS_SCdisable:OR:ACS_SCsuspend
+        BNE     %FT04                            ;do nothing if disabled or suspended
+        TST     R11,#ACS_HardVIDMRD              ;check for presence of h/w VIDMRD
         ARMA_read_MMUdomain R11,EQ
         BICEQ   R11,R11,#&C
-        ARMA_write_MMUdomain R11,EQ              ;if SC not disabled or suspended, reset screen (domain 1) to fault
-  ]
+        ARMA_write_MMUdomain R11,EQ              ;if h/w VIDMRD absent, reset screen (domain 1) to fault for VIDMRD emulation
+04
+    ]
         TEQP    R10,#0                           ;restore IRQ state
+  ] ;ARMSASupport
         B       SLVK
 
         LTORG
 
         ALIGN
 
- ]
 
 ;
 ;some service routines here for easy patchability
 
 meminfo_flushplease         ; used by MemInfo
+  [ :LNOT: ARMSASupport_Only
         ARM_read_ID r0
         AND     r0,r0,#&F000
         CMP     r0,#&A000
         BEQ     mifp_SA
-  [ ARM810support
-        CMP     r0,#&8000
-        BEQ     mifp_810
-  ]
 ;assume ARM 6 or 7 - simple!
         ARM67_flush_cache
         MOV     pc,lr
+  ]
 mifp_SA
+  [ ARMSASupport
 ;StrongARM - bugger, this could take a while...
 ;'uncommon' case, regarded as not needing to update ARMA_Cleaner_status
         MOV     r1,#ARMA_Cleaner_flipflop
@@ -3570,16 +3839,8 @@ mifp_SA
         STR     r0,[r1]
         ARMA_clean_DC r0,r1,r2          ;clean/flush data cache wrt non-interrupt stuff (trashes r0,r1,r2)
         ARMA_flush_IC                   ;do *not* flush DC - may be interrupt stuff
-        MOV     pc,lr
-  [ ARM810support
-mifp_810
-    [ ARM810cleanflushbroken
-        ARM8_cleanflush_IDC r0,r1
-    |
-        ARM8_cleanflush_IDC r0
-    ]
-        MOV     pc,lr
   ]
+        MOV     pc,lr
 ;
 
 ;;;        DCB     "GROT"                  ;spare words marker
