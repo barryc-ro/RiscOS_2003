@@ -71,8 +71,12 @@
 ;                               is called, then the MPEGVideo and MPEGAudio SWIs are not issued until after the reset is issued
 ;                               (when a Good Data Follows is encountered). Currently, the SetSpeed flags are forcibly set to zero
 ;                               when the SWIs are deferred in this manner.
-; 02-Mar-00  BJGA 1.73          Implemented MPEGTransport_SetVideoParameters
-; 06-Mar-00  BJGA 1.74          Executes SetVideoParameters 1 and 2 even if no video stream is open
+; 02-Mar-00  BJGA 1.73          Implemented MPEGTransport_SetVideoParameters.
+; 06-Mar-00  BJGA 1.74          Executes SetVideoParameters 1 and 2 even if no video stream is open.
+; 20-Apr-00  BJGA 1.75          Speed indicator now preserved across internal resets.
+; 03-May-00  BJGA 1.76          Passes CloseStream flags through to elementary stream handlers.
+; 10-May-00  BJGA 1.77          Added *TransCapture and *TransSave.
+; 18-May-00  BJGA 1.78          32-bit compatible. Issues UpCall_MPEG &0001 after each reset, internal or external.
 ;
 
         LEADR   Module_LoadAddr
@@ -394,6 +398,8 @@ Module_BaseAddr
         &       Mod_SWIHandler-Module_BaseAddr
         &       Mod_SWITable-Module_BaseAddr
         &       0                               ; no swi name decode entry
+        &       0                               ; no messages file
+        &       Mod_Flags   -Module_BaseAddr
 
 Mod_Title
  [ BuildAsMPEGControl
@@ -417,6 +423,13 @@ Mod_HelpStr
  ]
         =       0
         ALIGN
+
+Mod_Flags
+      [ No32bitCode
+        &       0
+      |
+        &       ModuleFlag_32bit
+      ]
 
 Mod_SWITable
  [ BuildAsMPEGControl
@@ -655,11 +668,13 @@ DeregisterProgramElementHandler
  ]
 NoSuchSWI
         Push    "lr"
+      [ {FALSE}
         SWI     XOS_WriteI+22
         SWI     XOS_WriteI+12
         DREG    r11, "Unknown MPEGControl SWI - offset from base = "
         DLINE   "Press any key"
         SWI     XOS_ReadC
+      ]
         ADR     r0, NoSuchSWIError
         SETV
         Pull    "pc"
@@ -1179,9 +1194,7 @@ xdebug   SETL    {FALSE}
 	DLine	"Came back from coroutines"
 
 15
-        MOV     r3, pc
-        ORR     lr, r3, #I_bit          ; disable IRQs
-        TEQP    lr, #0
+        SCPSR   I_bit, 0, lr,, r3         ; disable IRQs, leave old psr in r3
 
         LDR     lr, [r2, #BufferDescriptor_Packets]
         SUB     lr, lr, #1
@@ -1189,7 +1202,7 @@ xdebug   SETL    {FALSE}
 
         LDR     r4, [r2, #BufferDescriptor_Link]        ; load link *before* restoring IRQ state
 
-        TEQP    r3, #0                  ; restore IRQ state
+        RestPSR r3,, c                  ; restore IRQ state
 
         TEQ     lr, #0                  ; is the count now zero (if so then no active packets in buffer)
         BNE     %FT20                   ; [no, so don't free buffer]
@@ -1204,7 +1217,8 @@ xdebug   SETL    {FALSE}
 20
         MOVS    r2, r4                  ; put link back into r2
         BNE     %BT10                   ; and if more buffers, loop
-        CLRV
+        ; since MOVS has set Z, we know V is clear
+;       CLRV
         EXIT
 
 xdebug   SETL    {FALSE}
@@ -1339,7 +1353,12 @@ SelectProgram Entry "r3,r4"
 	AND	r0, r0, #StreamFlags_VideoPresent :OR: StreamFlags_AudioPresent
 	BL	ResetStream
 	Pull	"r0-r3"
-	EXITS				; ignore errors
+	PullEnv
+	mrs    ,r10, CPSR
+	TST     r10, #2_11100
+	MOVEQS  pc, lr          ; if running in 26-bit mode, preserve all flags, as before
+	CMP     r0, r0          ; else just ensure V is clear
+	MOV     pc, lr
 
 ; **************************************************************************
 ;
@@ -1388,9 +1407,7 @@ FreePackets Entry "r0-r5, wp"
 10
         LDR     r2, [r1, #PacketDescriptor_BufferDescriptor]    ; get parent buffer pointer
 
-        MOV     r3, pc
-        ORR     lr, r3, #I_bit                          ; disable IRQs round this bit
-        TEQP    lr, #0
+        SCPSR   I_bit, 0, lr,, r3                       ; disable IRQs round this bit
 
 ; decrement outstanding packet count for buffer (atomically)
 
@@ -1410,7 +1427,7 @@ FreePackets Entry "r0-r5, wp"
         MOV     r5, #0
         STR     r5, [r1, #PacketDescriptor_Link]        ; detach packet
 
-        TEQP    r3, #0                                  ; restore IRQ state
+        RestPSR r3,, c                                  ; restore IRQ state
 
         TEQ     lr, #0                                  ; if all buffer data has been used, then free buffer
         STREQ   lr, [r2, #BufferDescriptor_Link]        ; only free one buffer
@@ -1559,9 +1576,19 @@ int_reset_stream                                ; may also be called from within
  ]
 
  [ Save1stPacket
-	MOV	r0, #0
-	STR	r0, [r1, #CSH_SavedLength]		; not saved any data yet
+	MOV	lr, #0
+	STR	lr, [r1, #CSH_SavedLength]		; not saved any data yet
  ]
+
+        Push    "r4"
+        BIC     r4, r0, #ResetStreamFlags_InternalReset ; externally meaningful ResetStream flags
+        MOV     r3, #UpCallMPEG_ResetStream
+        MOV     r2, r1
+        MOV     r1, #0
+        MOV     r0, #UpCall_MPEG
+        SWI     XOS_UpCall
+        CMP     r0, r0  ; clear V
+        Pull    "r4"
 
         EXIT
 
@@ -1753,17 +1780,13 @@ ProgramElementHandlerInUseError
 
 FreeBuffer Entry "r0-r3,r12"
 	LDR	r2, [r1, #BufferDescriptor_Length]
-	MOV	r3, pc
-	Push	r3
-	ORR	lr, r3, #I_bit
-	TEQP	lr, #0			; IRQs off
+	SCPSR   I_bit, 0, lr,, r3       ; IRQs off
 
 	ADR	lr, ControlStreamHandle
 	LDR	r0, [lr, #CSH_DataReturned]
 	ADD	r0, r0, r2
 	STR	r0, [lr, #CSH_DataReturned]
-	Pull	r3
-	TEQP	r3, #0			; restore IRQ state
+	RestPSR r3,, c                  ; restore IRQ state
 
         LDR     r2, [r1, #BufferDescriptor_FreeRoutine]
         TEQ     r2, #0          ; check for SWI interface
@@ -2217,8 +2240,10 @@ ts_process_common
 	BEQ	%FT20
 	TST	lr, #StreamFlags_SkippingAfterReset	; if skipping,
 	TEQNE	r5, #StreamFlags_AudioPresent		; and not an audio packet (ie *is* a video packet)
-        BLNE    ts_process_adaptation_field             ; then possibly check it for random_access_indicator
-	BLEQ	ts_skip_adaptation_field		; else just skip it
+	BEQ     %FT19
+        BL      ts_process_adaptation_field             ; then possibly check it for random_access_indicator
+        B       %FT20
+	BL	ts_skip_adaptation_field		; else just skip it
 20
 	LDR	lr, [r1, #CSH_StreamFlags]		; if still skipping data
 	TST	lr, #StreamFlags_SkippingAfterReset
@@ -2331,7 +2356,7 @@ ts_skip_adaptation_field Entry "r7"
 ts_process_adaptation_field Entry "r7"
 	BL	ts_getbytedec			; get adaptation_field_length
 	SUBS	r10, r7, #1			; if < 1 byte, then no real adaptation field there
-	EXITS	CC				; so exit
+	EXIT	CC				; so exit
 
 	BL	ts_getbytedec			; get byte with flags in
 	TST	r7, #&40			; check random_access_indicator bit
@@ -2339,7 +2364,7 @@ ts_process_adaptation_field Entry "r7"
 	BICNE	lr, lr, #StreamFlags_SkippingAfterReset ; so stop skipping now
 	STRNE	lr, [r1, #CSH_StreamFlags]
 	BL	ts_skipbytes			; then skip the rest of the adaptation field
-	EXITS					; must preserve flags on exit
+	EXIT					; must preserve flags on exit
  ]
 
 ts_process_PES_packet_header Entry
@@ -2474,15 +2499,13 @@ ts_getclockreference ROUT
         Pull    "r9, pc"
 
 ts_incrementpacketcount Entry "r0"
-        MOV     r0, pc
-        ORR     lr, r0, #I_bit                          ; disable IRQs
-        TEQP    lr, #0
+        SCPSR   I_bit, 0, lr,, r0                       ; disable IRQs
 
         LDR     lr, [r2, #BufferDescriptor_Packets]
         ADD     lr, lr, #1
         STR     lr, [r2, #BufferDescriptor_Packets]
 
-        TEQP    r0, #0                                  ; restore IRQ state
+        RestPSR r0,, c                                  ; restore IRQ state
         EXIT
 
         LTORG
@@ -2508,7 +2531,6 @@ ts_gottwozeros
 NPTDescriptorTag	*	&17
 StreamModeDescriptorTag *       &19
 streamMode_EndOfStream  *       &07
-UpCallMPEG_EndOfStream  *       0
 
 ts_check_for_OVSNPT ROUT
 	CMP	r10, #1
@@ -2804,8 +2826,7 @@ ts_pid_enable Entry "r1"
 ;
 
 GetPacketDescriptor Entry "r1"
-        MOV     r1, pc
-        ORR     lr, r1, #I_bit                  ; disable IRQs
+        SCPSR   I_bit, 0, lr,, r1               ; disable IRQs (this time, really do it!)
 
         LDR     r0, FreePacketListHeadPtr
         TEQ     r0, #0
@@ -2816,7 +2837,7 @@ GetPacketDescriptor Entry "r1"
         TEQ     lr, #0                          ; and if no more,
         STREQ   lr, FreePacketListTailPtr       ; then zero FreePacketListTailPtr
 
-        TEQP    r1, #0                          ; restore IRQs
+        RestPSR r1,, c                          ; restore IRQs
 05
         MOV     lr, #0
         STR     lr, [r0, #PacketDescriptor_Link] ; terminate this packet descriptor
@@ -2829,7 +2850,7 @@ GetPacketDescriptor Entry "r1"
         EXIT
 
 10
-        TEQP    r1, #0                          ; restore IRQ state
+        RestPSR r1,, c                          ; restore IRQ state
         Push    "r2, r3"
         MOV     r3, #PacketDescriptorSize
         MOV     r0, #ModHandReason_Claim
