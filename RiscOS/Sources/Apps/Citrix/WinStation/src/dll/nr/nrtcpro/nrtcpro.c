@@ -56,7 +56,7 @@ unsigned long Inet_Addr( char * );
  */
 LPBYTE pNrProtocolName = "TCP";
 
-#define ERROR_HOST_NOT_FOUND 0xffff
+#define ERROR_HOST_NOT_FOUND 0xFFFF
 
 /*******************************************************************************
  *
@@ -98,7 +98,7 @@ DeviceNameToAddress( PNR pNr, PNAMEADDRESS pNameAddress )
       phe = gethostbyname( pNameAddress->Name );
       if ( phe == NULL ) {
 
-         rc = errno;
+         rc = ERROR_HOST_NOT_FOUND; // inetlib doesn't set errno here
 
          TRACE((TC_PD,TT_API1, "NRTCPMS: Could not lookup host :%s:",pNameAddress->Name));
 	    goto error;

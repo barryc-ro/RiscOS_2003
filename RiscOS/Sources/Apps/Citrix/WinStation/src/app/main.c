@@ -32,7 +32,7 @@
 #include "version.h"
 #include "session.h"
 
-#include "winframe.h"
+#include "icaclient.h"
 
 #include "../inc/clib.h"
 #include "../inc/client.h"
@@ -106,16 +106,18 @@ static int ToolBox_EventList[] =
     tbres_event_QUIT,
     tbres_event_SHOWING_ICON_MENU,
     tbres_event_CONFIRM,
+    tbres_event_CANCEL,
     ProgInfo_AboutToBeShown,
     0
 };
 
 static int Wimp_MessageList[] =
 {
-    message_WINFRAME_CONTROL,
+    message_ICACLIENT_CONTROL,
     wimp_MOPENURL,
     MESSAGE_URI_MPROCESS,
     MESSAGE_URI_MPROCESSACK,
+    Wimp_MSaveDesktop,
     Wimp_MDataLoad,
     Wimp_MDataSave,
     Wimp_MDataOpen,
@@ -133,7 +135,7 @@ static void *splash_coltrans = NULL;
 static ObjectId splash_id = NULL_ObjectId;
 static int splash_timer = 0;
 
-static winframe_session current_session = NULL;
+static icaclient_session current_session = NULL;
 
 static int scrap_ref = -1;
 
@@ -147,6 +149,7 @@ static ObjectId disconnect_id = NULL_ObjectId;
 /* cli set values */
 
 static char *cli_filename = NULL;
+static char *cli_postfile = NULL;
 static char *cli_logfile = NULL;
 static int cli_iconbar = FALSE;
 static int cli_dopostmortem = FALSE;
@@ -215,9 +218,17 @@ static void signal_setup(void)
 
 /* --------------------------------------------------------------------------------------------- */
 
+void main_close_session(icaclient_session sess)
+{
+    if (current_session == sess)
+	current_session = NULL;
+    
+    session_close(sess);
+}
+
 static void kill_current_session(void)
 {
-    winframe_session s = current_session;
+    icaclient_session s = current_session;
     if (s)
     {
 	current_session = NULL;
@@ -225,14 +236,14 @@ static void kill_current_session(void)
     }
 }
 
-static void control_ack(WimpMessage *message, winframe_session session_handle, int error)
+static void control_ack(WimpMessage *message, icaclient_session session_handle, int error)
 {
     WimpMessage reply;
-    winframe_message_control_ack *ack = (winframe_message_control_ack *) &reply.data;
+    icaclient_message_control_ack *ack = (icaclient_message_control_ack *) &reply.data;
 
-    reply.hdr.size = sizeof(reply.hdr) + sizeof(winframe_message_control_ack);
+    reply.hdr.size = sizeof(reply.hdr) + sizeof(icaclient_message_control_ack);
     reply.hdr.your_ref = message->hdr.my_ref;
-    reply.hdr.action_code = message_WINFRAME_CONTROL_ACK;
+    reply.hdr.action_code = message_ICACLIENT_CONTROL_ACK;
     ack->reason = message->data.words[0];
     ack->flags = error != 0 ? 1 : 0;
     ack->session_handle = session_handle;
@@ -242,14 +253,14 @@ static void control_ack(WimpMessage *message, winframe_session session_handle, i
     LOGERR(wimp_send_message(Wimp_EUserMessage, &reply, message->hdr.sender, 0, NULL));
 }
 
-static void status_message(int status, winframe_session session_handle)
+static void status_message(int status, icaclient_session session_handle)
 {
     WimpMessage message;
-    winframe_message_status *s = (winframe_message_status *) &s;
+    icaclient_message_status *s = (icaclient_message_status *) &s;
 
-    message.hdr.size = sizeof(message.hdr) + sizeof(winframe_message_status);
+    message.hdr.size = sizeof(message.hdr) + sizeof(icaclient_message_status);
     message.hdr.your_ref = 0;
-    message.hdr.action_code = message_WINFRAME_STATUS;
+    message.hdr.action_code = message_ICACLIENT_STATUS;
     s->reason = status;
     s->flags = 0;
     s->session_handle = session_handle;
@@ -510,7 +521,7 @@ static int dataload_handler(WimpMessage *message, void *handle)
 	while (!splash_check_close())
 	    ;
 
-	current_session = session_open(msg->leaf_name);
+	current_session = session_open(msg->leaf_name, FALSE);
 
 	/* delete file if reference matches */
 	if (scrap_ref == message->hdr.your_ref)
@@ -551,7 +562,7 @@ static int dataopen_handler(WimpMessage *message, void *handle)
 	while (!splash_check_close())
 	    ;
 
-	current_session = session_open(msg->path_name);
+	current_session = session_open(msg->path_name, FALSE);
 
 	return 1;
     }
@@ -568,12 +579,19 @@ static char *get_ptr(urlopen_data *u, string_value sv)
 static int openurl_handler(WimpMessage *message, void *handle)
 {
     urlopen_data *msg = (urlopen_data *)&message->data;
-    char *url;
+    char *url, *bfile = NULL;
 
     if (msg->indirect.tag == 0)
+    {
 	url = get_ptr(msg, msg->indirect.url);
+
+	if (message->hdr.size > 28)
+	    bfile = get_ptr(msg, msg->indirect.body_file);
+    }
     else
+    {
 	url = msg->url;
+    }
 
     TRACE((TC_UI, TT_API1, "openurl_handler: url '%s' tag %d\n", url, msg->indirect.tag));
 
@@ -599,7 +617,7 @@ static int openurl_handler(WimpMessage *message, void *handle)
 	while (!splash_check_close())
 	    ;
 
-	current_session = session_open_url(url);
+	current_session = session_open_url(url, bfile);
 
 	return 1;
     }
@@ -644,7 +662,7 @@ static int openuri_handler(WimpMessage *message, void *handle)
 		while (!splash_check_close())
 		    ;
 
-		current_session = session_open_url(url);
+		current_session = session_open_url(url, NULL);
 	    }
 	    
 	    free(url);
@@ -665,20 +683,20 @@ static int openuri_handler(WimpMessage *message, void *handle)
 
 static int control_handler(WimpMessage *message, void *handle)
 {
-    winframe_message_control *control = (winframe_message_control *)&message->data;
+    icaclient_message_control *control = (icaclient_message_control *)&message->data;
 
     TRACE((TC_UI, TT_API1, "control_handler: reason %d flags 0x%x\n", control->reason, control->flags));
 
     switch (control->reason)
     {
-    case winframe_CONTROL_CONNECT:
+    case icaclient_CONTROL_CONNECT:
     {
-	winframe_message_control_connect *control = (winframe_message_control_connect *)&message->data;
+	icaclient_message_control_connect *control = (icaclient_message_control_connect *)&message->data;
 	
 	/* report error if we are already connected */
 	if (current_session)
 	{
-	    control_ack(message, NULL, winframe_ERROR_CONNECTION_OPEN);
+	    control_ack(message, NULL, icaclient_ERROR_CONNECTION_OPEN);
 	    return 1;
 	}
 
@@ -687,24 +705,31 @@ static int control_handler(WimpMessage *message, void *handle)
 	    ;
 
 	/* start the open */
-	current_session = control->flags & winframe_connect_ICA_FILE ?
-		session_open(control->data.ica_file) :
-		session_open_server(control->data.server_name);
+	switch (control->flags & icaclient_connect_DATA_MASK)
+	{
+	case icaclient_connect_SERVER_DESCRIPTION:
+	    current_session = session_open_appsrv(control->data.server_description);
+	    break;
+	case icaclient_connect_SERVER_NAME:
+	    current_session = session_open_server(control->data.server_name);
+	    break;
+	case icaclient_connect_ICA_FILE:
+	    current_session = session_open(control->data.ica_file, (control->flags & icaclient_connect_DELETE_ICA) != 0);
+	    break;
+	}
 
 	/* report the status */
-	control_ack(message, current_session, current_session == NULL ? winframe_ERROR_CONNECTION_FAILED : 0);
-
-	/* set up the delete flag ??*/
+	control_ack(message, current_session, current_session == NULL ? icaclient_ERROR_CONNECTION_FAILED : 0);
 	break;
     }
     
-    case winframe_CONTROL_RECONNECT:
+    case icaclient_CONTROL_RECONNECT:
     {
-	winframe_message_control_reconnect *control = (winframe_message_control_reconnect *)&message->data;
+	icaclient_message_control_reconnect *control = (icaclient_message_control_reconnect *)&message->data;
 	
 	if (control->session_handle != current_session)
 	{
-	    control_ack(message, control->session_handle, winframe_ERROR_HANDLE_UNKNOWN);
+	    control_ack(message, control->session_handle, icaclient_ERROR_HANDLE_UNKNOWN);
 	    return 1;
 	}
 
@@ -714,13 +739,13 @@ static int control_handler(WimpMessage *message, void *handle)
 	break;
     }
     
-    case winframe_CONTROL_DISCONNECT:
+    case icaclient_CONTROL_DISCONNECT:
     {
-	winframe_message_control_disconnect *control = (winframe_message_control_disconnect *)&message->data;
+	icaclient_message_control_disconnect *control = (icaclient_message_control_disconnect *)&message->data;
 	
 	if (control->session_handle != current_session)
 	{
-	    control_ack(message, control->session_handle, winframe_ERROR_HANDLE_UNKNOWN);
+	    control_ack(message, control->session_handle, icaclient_ERROR_HANDLE_UNKNOWN);
 	    return 1;
 	}
 
@@ -731,13 +756,13 @@ static int control_handler(WimpMessage *message, void *handle)
 	break;
     }
     
-    case winframe_CONTROL_QUIT:
+    case icaclient_CONTROL_QUIT:
     {
-	winframe_message_control_quit *control = (winframe_message_control_quit *)&message->data;
+	icaclient_message_control_quit *control = (icaclient_message_control_quit *)&message->data;
 	
 	if (current_session != NULL)
 	{
-	    control_ack(message, NULL, winframe_ERROR_CONNECTION_OPEN);
+	    control_ack(message, NULL, icaclient_ERROR_CONNECTION_OPEN);
 	    return 1;
 	}
 
@@ -747,6 +772,25 @@ static int control_handler(WimpMessage *message, void *handle)
     }
     }
 
+    return 1;
+    NOT_USED(handle);
+}
+
+/* --------------------------------------------------------------------------------------------- */
+
+static void write_string(int file_handle, const char *s)
+{
+    LOGERR(_swix(OS_GBPB, _INR(0,3), 2, file_handle, s, strlen(s)));
+}
+
+static int save_desktop_handler(WimpMessage *message, void *handle)
+{
+    WimpSaveDesktopMessage *save = &message->data.save_desktop;
+
+    write_string(save->file_handle, "/");
+    write_string(save->file_handle, getenv(APP_DIR_VAR));
+    write_string(save->file_handle, "\n");
+    
     return 1;
     NOT_USED(handle);
 }
@@ -950,10 +994,10 @@ static int log_init(void)
    if (cli_file_debug)
        EMLogInfo.LogFlags |= LOG_FILE;
 
-#if 1
-   EMLogInfo.LogClass   = TC_MOU;
+#if 0
+   EMLogInfo.LogClass   = LOG_CLASS | TC_CPM | TC_TW | TC_CLIB;
    EMLogInfo.LogEnable  = TT_ERROR;
-   EMLogInfo.LogTWEnable = TT_TW_res1;
+   EMLogInfo.LogTWEnable = TT_TW_DIM | TT_TW_CACHE;
 #else
    EMLogInfo.LogClass   = TC_ALL;
    EMLogInfo.LogEnable  = TT_ERROR;
@@ -973,7 +1017,7 @@ static void process_args(int argc, char *argv[])
 {
     int i;
 
-    for (i = 1; i < argc; i++)
+    for (i = 0; i < argc; i++)
     {
         char *s = argv[i];
 
@@ -988,7 +1032,7 @@ static void process_args(int argc, char *argv[])
 		break;
 
 	    case 'f':      /* file to play initially */
-		if (i+1 < argc)
+		if (i+1 < argc && argv[i+1][0] != '-')
 	            cli_filename = strdup(argv[++i]);
 		break;
 
@@ -1002,7 +1046,8 @@ static void process_args(int argc, char *argv[])
 		break;
 
 	    case 'l':	    /* log file */
-		cli_logfile = strdup(argv[++i]);
+		if (i+1 < argc && argv[i+1][0] != '-')
+		    cli_logfile = strdup(argv[++i]);
 		break;
 
 	    case 'o':	    /* loop */
@@ -1019,10 +1064,40 @@ static void process_args(int argc, char *argv[])
 
 	    case 'u':      /* filename is a URL */
 		cli_file_is_url = TRUE;
+
+		if (i+1 < argc && argv[i+1][0] != '-')
+		{
+	            cli_filename = strdup(argv[++i]);
+
+		    if (i+1 < argc && argv[i+1][0] != '-')
+			cli_postfile = strdup(argv[++i]);
+		}
 		break;
 	    } /* switch */
-	} /* if */
+	}
     } /* for */
+}
+
+#define MAX_OPTION_ARGS	10
+
+static void process_options(const char *val)
+{
+    char *s = strdup(val);
+
+    if ((s = strtok(s, " ")) != NULL)
+    {
+	int argc = 0;
+	char *argv[MAX_OPTION_ARGS];
+	do
+	{
+	    argv[argc++] = s;
+	}
+	while ((s = strtok(NULL, " ")) != NULL && argc < MAX_OPTION_ARGS);
+
+	process_args(argc, argv);
+    }
+    
+    free(s);
 }
 
 /* --------------------------------------------------------------------------------------------- */
@@ -1038,8 +1113,13 @@ static void initialise(int argc, char *argv[])
     atexit(cleanup);
 
     /* decode args */
-    process_args(argc, argv);
+    process_args(argc-1, argv+1);
+    process_options(getenv(OPTIONS_VAR));
+    process_options(getenv(cli_filename ? FILE_OPTIONS_VAR : NOFILE_OPTIONS_VAR));
 
+    if (cli_iconbar)
+	_swix(OS_CLI, _IN(0), ENSURE_TOOLBOX_CMD);
+    
 #ifdef DEBUG
     log_init();
 #endif
@@ -1078,7 +1158,8 @@ static void initialise(int argc, char *argv[])
     err_fatal(event_register_message_handler(Wimp_MDataSave, datasave_handler, NULL));
     err_fatal(event_register_message_handler(wimp_MOPENURL, openurl_handler, NULL));
     err_fatal(event_register_message_handler(MESSAGE_URI_MPROCESS, openuri_handler, NULL));
-    err_fatal(event_register_message_handler(message_WINFRAME_CONTROL, control_handler, NULL));
+    err_fatal(event_register_message_handler(message_ICACLIENT_CONTROL, control_handler, NULL));
+    err_fatal(event_register_message_handler(Wimp_MSaveDesktop, save_desktop_handler, NULL));
 
     err_fatal(event_register_toolbox_handler(-1, tbres_event_CONNECT, connect_handler, NULL));
     err_fatal(event_register_toolbox_handler(-1, tbres_event_DISCONNECT, try_disconnect_handler, NULL));
@@ -1117,7 +1198,7 @@ int main(int argc, char *argv[])
 	    ;
 	
 	do
-	    session_run(cli_filename, cli_file_is_url);
+	    session_run(cli_filename, cli_file_is_url, cli_postfile);
 	while (cli_loop);
 
 	if (!cli_suspendable)

@@ -273,7 +273,9 @@ int ModuleUnload( PDLLLINK pLink )
         pPrevLink = pDllLink;
         pDllLink = pDllLink->pNext;
     }
-    ASSERT( pDllLink, 0 );
+
+    /* pDllLink is null if this is the wengine */
+    /* ASSERT( pDllLink, 0 ); */
 
     if ( pDllLink ) {
         if ( pPrevLink )
@@ -377,7 +379,7 @@ ModuleCall( PDLLLINK pLink, USHORT ProcIndex, PVOID pParam )
 #endif
     pProcedure = ((PDLLPROCEDURE *) pLink->pProcedures)[ ProcIndex ];
 
-    ASSERT( pProcedure, 0 );
+    /* procedure is null if this is the wengine */
     if (pProcedure == 0)
 	return CLIENT_STATUS_SUCCESS;
 	

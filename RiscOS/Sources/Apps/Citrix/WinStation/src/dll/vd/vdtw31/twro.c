@@ -624,8 +624,9 @@ static void dump_code(unsigned *code)
 {
     extern int ghLogHandle;
     extern int guLogFlags;
+    extern int guLogClass;
 
-    if (ghLogHandle != -1 && guLogFlags & LOG_FILE)
+    if (ghLogHandle != -1 && (guLogFlags & LOG_FILE) != 0 && (guLogClass & TC_TW) != 0)
     {
 	unsigned c, *cp = code;
 	do

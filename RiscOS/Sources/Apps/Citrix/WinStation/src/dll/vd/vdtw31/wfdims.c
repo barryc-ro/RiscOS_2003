@@ -72,6 +72,9 @@
 #include "../../../inc/wdapi.h"
 #include "../../../inc/clib.h"
 
+#define WS	"#"
+#define WS8	WS WS WS WS  WS WS WS WS
+
 #define WIN32
 
 /*=============================================================================
@@ -268,7 +271,7 @@ OpenCacheFileHandle( ULONG sigH, ULONG sigL, int oflag )
     /*
      *  Generate FAT style DIM filename, look for collisions too
      */
-    wsprintf( vszFileName, "%s%08lX_?", vpszDimCachePath, sigH ); 
+    wsprintf( vszFileName, "%s%08lX_" WS, vpszDimCachePath, sigH ); 
 
     TRACE((TC_TW, TT_TW_DIM, "OpenCacheFileHandle: filename %s\n",vszFileName));
 
@@ -374,7 +377,7 @@ OpenCacheFileHandle( ULONG sigH, ULONG sigL, int oflag )
     /*
      *  Generate FAT style DIM filename, look for collisions too
      */
-    wsprintf( vszFileName, "%s%04X%04X_?", vpszDimCachePath, 
+    wsprintf( vszFileName, "%s%04X%04X_" WS, vpszDimCachePath, 
               (USHORT)(sigH>>16), (USHORT)(sigH&0xffff) ); 
 
     TRACE((TC_TW, TT_TW_DIM, "OpenCacheFileHandle: filename %s\n",vszFileName));
@@ -483,7 +486,7 @@ FindCacheFileName( ULONG sigH, ULONG sigL, PULONG pcbFileSize )
     /*
      *  Generate FAT filename
      */
-    wsprintf( vszFileName, "%s%08lX_?", vpszDimCachePath, sigH ); 
+    wsprintf( vszFileName, "%s%08lX_" WS, vpszDimCachePath, sigH ); 
     TRACE((TC_TW, TT_TW_DIM, "FindCacheFileName: filename %s\n",vszFileName));
     
     /*
@@ -575,7 +578,7 @@ FindCacheFileName( ULONG sigH, ULONG sigL, PULONG pcbFileSize )
     /*
      *  Generate FAT filename
      */
-    wsprintf( vszFileName, "%s%04X%04X_?", vpszDimCachePath, 
+    wsprintf( vszFileName, "%s%04X%04X_" WS, vpszDimCachePath, 
               (USHORT)(sigH>>16), (USHORT)(sigH&0xffff) ); 
     TRACE((TC_TW, TT_TW_DIM, "FindCacheFileName: filename %s\n",vszFileName));
     
@@ -687,7 +690,7 @@ CreateCacheFileHandle( ULONG sigH, ULONG sigL )
     /*
      *  Find first match
      */
-    wsprintf( vszFileName, "%s%08lX_?", vpszDimCachePath, sigH); 
+    wsprintf( vszFileName, "%s%08lX_" WS, vpszDimCachePath, sigH); 
     if( (hFind = _findfirst(vszFileName, &FileInfo)) != -1L ){        
 
         /*
@@ -764,7 +767,7 @@ CreateCacheFileHandle( ULONG sigH, ULONG sigL )
     /*
      *  Find first match
      */
-    wsprintf( vszFileName, "%s%04X%04X_?", vpszDimCachePath,
+    wsprintf( vszFileName, "%s%04X%04X_" WS, vpszDimCachePath,
               (USHORT)(sigH>>16), (USHORT)(sigH&0xffff) ); 
     if( _dos_findfirst(vszFileName,_A_NORMAL, &FileInfo) == 0 ) {
 
@@ -1076,10 +1079,10 @@ static BOOL fPriorityDims = TRUE;
          *  Stream the DIM handles to host
          */
         if ( (iPriorityDims == DIMS_PRIORITY_0) ) {
-            wsprintf( vszFileName, "%s????????_0", vpszDimCachePath ); 
+            wsprintf( vszFileName, "%s" WS8 "_0", vpszDimCachePath ); 
         }
         else {
-            wsprintf( vszFileName, "%s????????_?", vpszDimCachePath ); 
+            wsprintf( vszFileName, "%s" WS8 "_" WS, vpszDimCachePath ); 
         }
         TRACE((TC_TW, TT_TW_DIM, "TWDIMCacheInit: filename %s\n",vszFileName));
     
@@ -1250,10 +1253,10 @@ static BOOL fPriorityDims = TRUE;
          *  Stream the DIM handles to host
          */
         if ( (iPriorityDims == DIMS_PRIORITY_0) ) {
-            wsprintf( vszFileName, "%s????????_0", vpszDimCachePath ); 
+            wsprintf( vszFileName, "%s" WS8 "_0", vpszDimCachePath ); 
         }
         else {
-            wsprintf( vszFileName, "%s????????_?", vpszDimCachePath ); 
+            wsprintf( vszFileName, "%s" WS8 "_" WS, vpszDimCachePath ); 
         }
         TRACE((TC_TW, TT_TW_DIM, "TWDIMCacheInit: filename %s\n",vszFileName));
 

@@ -428,7 +428,7 @@ NrErrorLookup( PNR pNr, PPDLASTERROR pErrorLookup )
     strcpy( pErrorLookup->ProtocolName, pNrProtocolName );
 
     if ( !LoadString( "NET",
-                      pErrorLookup->Error,
+                      pErrorLookup->Error == 0xFFFF ? 0 : pErrorLookup->Error,
                       pErrorLookup->Message,
                       sizeof(pErrorLookup->Message) ) ) {
        /*

@@ -16,9 +16,10 @@
 
 int main(int argc, char *argv[])
 {
-    char *input;
+    char *input, *work;
     char output[64];
     BOOL decode;
+    int input_len;
 
     if (argc == 1 || argc > 3)
     {
@@ -36,11 +37,17 @@ int main(int argc, char *argv[])
 	decode = strcmp(argv[1], "-d") == 0;
 	input = argv[2];
     }
+
+    input_len = strlen(input);
+
+    /* copy input as the buffer is written back to */
+    work = malloc(input_len + 1);
+    strcpy(work, input);
     
     if (decode)
-	DecryptFromAscii(input, strlen(input), output, sizeof(output));
+	DecryptFromAscii(work, input_len, output, sizeof(output));
     else
-	EncryptToAscii(input, strlen(input), output, sizeof(output));
+	EncryptToAscii(work, input_len, output, sizeof(output));
 
     printf("%s\n", output);
     

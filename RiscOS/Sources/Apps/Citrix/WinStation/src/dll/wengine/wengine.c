@@ -1391,6 +1391,7 @@ INT WFCAPI WFEngConnect( HANDLE hWFE )
    return(srvWFEngConnect( hWFE ));
 }
 
+#if 0
 /*******************************************************************************
  *
  *  Function: srvWFEngMessageLoop
@@ -1493,6 +1494,7 @@ INT WFCAPI WFEngMessageLoop( HANDLE hWFE )
 {
    return(srvWFEngMessageLoop( hWFE ));
 }
+#endif
 
 /*******************************************************************************
  *
@@ -1797,6 +1799,7 @@ INT WFCAPI srvWFEngPoll( HANDLE hWFE )
     return( rc );
 }
 
+#if 0
 /*******************************************************************************
  *
  *  Function: WFEngPoll
@@ -1815,6 +1818,7 @@ INT WFCAPI WFEngPoll( HANDLE hWFE )
 {
    return(srvWFEngPoll( hWFE ));
 }
+#endif
 
 /*******************************************************************************
  *

@@ -64,12 +64,12 @@ typedef struct _OVERRIDELIST
 
 /* --------------------------------------------------------------------------------------------- */
 
-#define ENV_CLIENTNAME    APP_NAME "$ClientName"           // CLIENTNAME environment name
-#define INET_HOSTNAME	  "Inet$HostName"
+#define ENV_CLIENTNAME  APP_NAME "$ClientName"           // CLIENTNAME environment name
+#define INET_HOSTNAME	"Inet$HostName"
 
-#define MAX_ERRORMSG      500                    // maximum error msg length
+#define MAX_ERRORMSG    500                    // maximum error msg length
 
-#define OVERRIDE_COUNT 1
+#define OVERRIDE_COUNT	1
 
 static OVERRIDELIST g_pOverrides[OVERRIDE_COUNT] = {
 #if 0
@@ -88,21 +88,25 @@ static OVERRIDELIST g_pOverrides[OVERRIDE_COUNT] = {
                     { NULL,               NULL,            }
                   };
 
-static winframe_session		global_session = NULL;
-       CLIENTNAME	gszClientName = { 0 };			// this must be global as cfgini.c uses it
-static BOOL		bPDError=FALSE;
+static icaclient_session	global_session = NULL;
+       CLIENTNAME gszClientName = { 0 };			// this must be global as cfgini.c uses it
+static BOOL bPDError=FALSE;
 
 /* --------------------------------------------------------------------------------------------- */
 
 extern LPBYTE gScriptFile;
 extern LPBYTE gScriptDriver;
-extern BOOL   sdLoad( LPBYTE pScriptFile, LPBYTE pScriptDriver );
-extern BOOL   sdPoll( VOID);
-extern VOID   sdUnload( VOID);
+extern BOOL sdLoad( LPBYTE pScriptFile, LPBYTE pScriptDriver );
+extern BOOL sdPoll( VOID);
+extern VOID sdUnload( VOID);
 
 extern int gbContinuePolling;
 
-extern FILEPATH       gszLoadDllFileName;        // name of last DLL loaded
+extern FILEPATH gszLoadDllFileName;        // name of last DLL loaded
+
+/* --------------------------------------------------------------------------------------------- */
+
+static void session__close(icaclient_session sess);
 
 /* --------------------------------------------------------------------------------------------- */
 
@@ -114,6 +118,23 @@ static void MessageBox(const char *message, const char *server)
     LOGERR(_swix(Wimp_ReportError, _INR(0,2), &e, 0, server));
 }
 
+static int client_to_ids(int iErrorCode)
+{
+    int nResourceId;
+
+    if ( iErrorCode >= CLIENT_ERROR ) {
+	nResourceId = IDS_CLIENT_ERROR_DLL_NOT_FOUND +
+	    (iErrorCode - CLIENT_ERROR);
+    } else if ( iErrorCode >= CLIENT_STATUS_HOTKEY1 ) {
+	nResourceId = IDS_CLIENT_STATUS_HOTKEY1 +
+	    (iErrorCode - CLIENT_STATUS_HOTKEY1);
+    } else {
+	nResourceId = IDS_CLIENT_STATUS_CONNECTED +
+	    (iErrorCode - CLIENT_STATUS_CONNECTED);
+    }
+
+    return nResourceId;
+}
 
 /*******************************************************************************
  *
@@ -145,7 +166,7 @@ static void MessageBox(const char *message, const char *server)
  *
  ******************************************************************************/
 
-static BOOL EMGetErrorMessage( winframe_session sess, int iErrorCode, LPSTR chBuffer, int cbBuffSize )
+static BOOL EMGetErrorMessage( icaclient_session sess, int iErrorCode, LPSTR chBuffer, int cbBuffSize )
 {
     INT rc, nResourceId;
     WFELASTERROR LastError;
@@ -201,26 +222,9 @@ static BOOL EMGetErrorMessage( winframe_session sess, int iErrorCode, LPSTR chBu
      *  If we did not get a specific error message; return the generic one
      *  associated with the error code.
      */
-    if ( !(*szBuffer) ) {
-#if 0
-	char buf[16], *s;
-	sprintf(buf, "msg%d:", iErrorCode);
-	s = utils_msgs_lookup(buf);
-	if (s && s[0])
-	    strcpy(szBuffer, s);
-	else
-	    sprintf(szBuffer, "Error code %d", iErrorCode);
-#endif
-	if ( iErrorCode >= CLIENT_ERROR ) {
-            nResourceId = IDS_CLIENT_ERROR_DLL_NOT_FOUND +
-		(iErrorCode - CLIENT_ERROR);
-        } else if ( iErrorCode >= CLIENT_STATUS_HOTKEY1 ) {
-            nResourceId = IDS_CLIENT_STATUS_HOTKEY1 +
-		(iErrorCode - CLIENT_STATUS_HOTKEY1);
-        } else {
-            nResourceId = IDS_CLIENT_STATUS_CONNECTED +
-		(iErrorCode - CLIENT_STATUS_CONNECTED);
-        }
+    if ( !(*szBuffer) )
+    {
+	nResourceId = client_to_ids(iErrorCode);
 
         if ( LoadString("IDS",
                         nResourceId,
@@ -262,7 +266,7 @@ static BOOL EMGetErrorMessage( winframe_session sess, int iErrorCode, LPSTR chBu
     return (bErrorCodeInMessage);
 }
 
-static int EMErrorPopup(winframe_session sess, int iError)
+static int EMErrorPopup(icaclient_session sess, int iError)
 {
    char szErrorMsg[MAX_ERRORMSG];
 
@@ -303,10 +307,9 @@ static void restore_desktop(void)
  *
  ******************************************************************************/
 
-static void WFEngineStatusCallback( winframe_session sess, int message )
+static void WFEngineStatusCallback( icaclient_session sess, int message )
 {
     int rc;
-    LRESULT lResult = 0;
 
 #ifdef DEBUG
     if (message != CLIENT_STATUS_SUCCESS && message != CLIENT_STATUS_NO_DATA)
@@ -358,13 +361,14 @@ static void WFEngineStatusCallback( winframe_session sess, int message )
 	break;
 
     case CLIENT_STATUS_DELETE_CONNECT_DIALOG:
-	connect_close(sess);
 	break;
 
     case CLIENT_STATUS_CONNECTED:
 	TRACE(( LOG_CLASS, LOG_CONNECT, "CONNECTED to %s", sess->gszServerLabel));
 	sess->HaveFocus = FALSE;
 	sess->Connected = TRUE;
+
+	connect_close(sess);
 	break;
 
     case CLIENT_STATUS_KILL_FOCUS:  // ignore these messages
@@ -418,7 +422,7 @@ static void WFEngineStatusCallback( winframe_session sess, int message )
  *  Start the engine window
  *
  */
-static int EMEngOpen(winframe_session sess)
+static int EMEngOpen(icaclient_session sess)
 {
     WFEOPEN  WFEOpen;
     INT rc = CLIENT_STATUS_SUCCESS;
@@ -461,7 +465,7 @@ static int EMEngOpen(winframe_session sess)
  *  Start the session
  *
  */
-static int EMEngLoadwinframe_session(winframe_session sess)
+static int EMEngLoadwinframe_session(icaclient_session sess)
 {
     INT rc = CLIENT_STATUS_SUCCESS;
     CFGINIOVERRIDE pOverrides[OVERRIDE_COUNT];
@@ -500,7 +504,7 @@ static int EMEngLoadwinframe_session(winframe_session sess)
 
 /* --------------------------------------------------------------------------------------------- */
 
-static void session_free(winframe_session sess)
+static void session_free(icaclient_session sess)
 {
     TRACE((TC_UI, TT_API1, "session_free: %p", sess));
 
@@ -516,19 +520,21 @@ static void session_free(winframe_session sess)
     free(sess);
 }
 
-static int session_abort(winframe_session sess, int rc)
+static int session_abort(icaclient_session sess, int rc)
 {
     TRACE((TC_UI, TT_API1, "session_abort: %p state %d", sess, rc));
 
-    connect_close(sess);
     EMErrorPopup(sess, rc);
 
+    session__close(sess);
+//  connect_close(sess);
+    
     session_free(sess);
 
     return rc;
 }
 
-static int session__open(winframe_session sess)
+static int session__open(icaclient_session sess)
 {
     int rc;
     char *pEnvVar;
@@ -550,7 +556,7 @@ static int session__open(winframe_session sess)
 
     // start the connect status dialog 
     connect_open(sess);
-    connect_status(sess, CLIENT_STATUS_LOADING_STACK);
+    connect_status(sess, client_to_ids(CLIENT_STATUS_LOADING_STACK));
 
     rc = srvWFEngLoad( NULL, NULL );  // Call the WFEngLoad API
     if (rc != CLIENT_STATUS_SUCCESS)
@@ -574,11 +580,14 @@ static int session__open(winframe_session sess)
     }
 
     // update the status to connecting
-    connect_status(sess, CLIENT_STATUS_CONNECTING);
+    connect_status(sess, client_to_ids(CLIENT_STATUS_CONNECTING));
 
     rc = srvWFEngConnect(sess->hWFE);
     if (rc != CLIENT_STATUS_SUCCESS)
 	return rc;
+
+    // update the status to connected
+    connect_status(sess, client_to_ids(CLIENT_STATUS_CONNECTED));
 
     /*
      *  Load script driver
@@ -591,15 +600,13 @@ static int session__open(winframe_session sess)
 	gScriptDriver = NULL;
     }
 
-    connect_close(sess);
-    
     // initialise this here as it is statically inited in wengine
     gbContinuePolling = TRUE;
 
     return rc;
 }
 
-static void session__close(winframe_session sess)
+static void session__close(icaclient_session sess)
 {
     TRACE((TC_UI, TT_API1, "session_close: %p", sess));
 
@@ -629,52 +636,145 @@ static void session__close(winframe_session sess)
     connect_close(sess);
 }
 
-winframe_session session_open_url(const char *url)
+static char *extract_and_expand(const char *in, int len)
 {
+    char *out, *o;
+    const char *s;
+    int i;
+    
+    if (len == -1)
+	len = strlen(in);
+
+    if ((out = malloc(len + 1)) == NULL)
+	return NULL;
+
+    o = out;
+    s = in;
+    for (i = 0; i < len; i++)
+    {
+	int c = *s++;
+	if (c == '%' && i < len - 2)
+	{
+	    char bytes[3];
+	    bytes[0] = *s++;
+	    bytes[1] = *s++;
+	    bytes[2] = 0;
+	    *o++ = (char)strtoul(bytes, 0, 16);
+	    i += 2;
+	}
+	else
+	{
+	    *o++ = c;
+	}
+    }
+    *o = 0;
+    
+    return out;
+}
+
+icaclient_session session_open_url(const char *url, const char *bfile)
+{
+    icaclient_session sess;
     char *host = NULL;
     char *path = NULL;
-    char *args = NULL;
+    char *args1 = NULL, *args2 = NULL;
     const char *s;
     int rc;
 
     TRACE((TC_UI, TT_API1, "session_open_url: '%s'", url));
 
+    /* get host name */
     s = url + 4;
     if (s[0] == '/' && s[1] == '/')
     {
 	const char *start = s+2;
 	const char *end = strchr(start, '/');
-	host = strndup(start, end ? end - start : INT_MAX);
+	host = extract_and_expand(start, end ? end - start : -1);
 	s = end;
     }
 
+    /* get path */
     if (s && s[0] == '/' && s[1] > ' ')
     {
 	const char *start = s+1;
 	const char *end = strchr(start, '?');
-	path = strndup(start, end ? end - start : INT_MAX);
+	path = extract_and_expand(start, end ? end - start : -1);
 	s = end;
     }
     
+    /* get args from query section of URL */
     if (s && s[0] == '?' && s[1] > ' ')
-	args = strdup(s+1);
+	args1 = extract_and_expand(s+1, -1);
 
-    TRACE((TC_UI, TT_API1, "session_open_url: host '%s' path '%s' args '%s'",
-	   strsafe(host), strsafe(path), strsafe(args)));
+    /* get args from POST file */
+    if (bfile)
+    {
+	FILE *f;
+	if ((f = fopen(bfile, "rb")) != NULL)
+	{
+	    int len;
+	    char *s;
 
-    return session_open_server(host);
+	    fseek(f, 0, SEEK_END);
+	    len = (int)ftell(f);
+	    if ((s = malloc(len+1)) != NULL)
+	    {
+		args2 = extract_and_expand(s, len);
+		free(s);
+	    }
+	    
+	    fclose(f);
+	}
+    }
+
+    TRACE((TC_UI, TT_API1, "session_open_url: host '%s' path '%s' args1 '%s' args2 '%s'",
+	   strsafe(host), strsafe(path), strsafe(args1), strsafe(args2)));
+
+    sess = NULL;
+    if (host)
+    {
+	char name[L_tmpnam];
+	FILE *f;
+
+	global_session = sess = calloc(sizeof(struct icaclient_session_), 1);
+	sess->HaveFocus = TRUE;
+
+	strncpy(sess->gszServerLabel, host, sizeof(sess->gszServerLabel));
+
+	if ((f = fopen(tmpnam(name), "wb")) != NULL)
+	{
+	    fprintf(f, "[%s]\n", host);
+	    fprintf(f, "Address=%s\n", host);
+
+	    fprintf(f, "[ApplicationServers]\n");
+	    fprintf(f, "%s=\n", host);
+
+	    fclose(f);
+
+	    sess->gszICAFile = strdup(name);
+	    sess->tempICAFile = TRUE;
+	}
+	
+	if ((rc = session__open(sess)) != CLIENT_STATUS_SUCCESS)
+	{
+	    session_abort(sess, rc);
+	    sess = NULL;
+	}
+    }    
+
+    return sess;
 }
 
-winframe_session session_open_server(const char *host)
+icaclient_session session_open_server(const char *host)
 {
-    winframe_session sess = NULL;
+    icaclient_session sess = NULL;
     int rc;
     if (host)
     {
 	char name[L_tmpnam];
 	FILE *f;
 
-	global_session = sess = calloc(sizeof(struct winframe_session_), 1);
+	global_session = sess = calloc(sizeof(struct icaclient_session_), 1);
 	sess->HaveFocus = TRUE;
 
 	strncpy(sess->gszServerLabel, host, sizeof(sess->gszServerLabel));
@@ -694,24 +794,25 @@ winframe_session session_open_server(const char *host)
 	if ((rc = session__open(sess)) != CLIENT_STATUS_SUCCESS)
 	{
 	    session_abort(sess, rc);
-	    global_session = sess = NULL;
+	    sess = NULL;
 	}
     }
     
     return sess;
 }
 
-winframe_session session_open(const char *ica_file)
+icaclient_session session_open(const char *ica_file, int delete_after)
 {
-    winframe_session sess;
+    icaclient_session sess;
     int rc;
 
     TRACE((TC_UI, TT_API1, "session_open: '%s'", ica_file));
 
-    global_session = sess = calloc(sizeof(struct winframe_session_), 1);
+    global_session = sess = calloc(sizeof(struct icaclient_session_), 1);
 
     sess->gszICAFile = strdup(ica_file);
     sess->HaveFocus = TRUE;
+    sess->tempICAFile = delete_after;
     
     // get the first server listing in the ICA file
     sess->gszServerLabel[0] = '\0';
@@ -757,13 +858,36 @@ winframe_session session_open(const char *ica_file)
     if ((rc = session__open(sess)) != CLIENT_STATUS_SUCCESS)
     {
 	session_abort(sess, rc);
-	global_session = sess = NULL;
+	sess = NULL;
     }
 
     return sess;
 }
 
-int session_poll(winframe_session sess)
+icaclient_session session_open_appsrv(const char *description)
+{
+    icaclient_session sess;
+    int rc;
+
+    TRACE((TC_UI, TT_API1, "session_open_appsrv: '%s'", description));
+
+    global_session = sess = calloc(sizeof(struct icaclient_session_), 1);
+
+    sess->gszICAFile = strdup(APPSRV_FILE);
+    sess->HaveFocus = TRUE;
+    
+    strncpy(sess->gszServerLabel, description, sizeof(sess->gszServerLabel));
+
+    if ((rc = session__open(sess)) != CLIENT_STATUS_SUCCESS)
+    {
+	session_abort(sess, rc);
+	sess = NULL;
+    }
+
+    return sess;
+}
+
+int session_poll(icaclient_session sess)
 {
     int rc;
     
@@ -794,7 +918,7 @@ int session_poll(winframe_session sess)
     return gbContinuePolling;
 }
 
-void session_close(winframe_session sess)
+void session_close(icaclient_session sess)
 {
     session__close(sess);
 
@@ -806,7 +930,7 @@ void session_close(winframe_session sess)
 
 /* --------------------------------------------------------------------------------------------- */
 
-void session_resume(winframe_session sess)
+void session_resume(icaclient_session sess)
 {
     TRACE((TC_UI, TT_API1, "session_resume: %p", sess));
 
@@ -815,16 +939,16 @@ void session_resume(winframe_session sess)
 	sess->HaveFocus = FALSE;
 }
 
-void session_run(const char *file, int file_is_url)
+void session_run(const char *file, int file_is_url, const char *bfile)
 {
-    winframe_session sess;
+    icaclient_session sess;
 
-    TRACE((TC_UI, TT_API1, "session_run: %s url %d", file, file_is_url));
+    TRACE((TC_UI, TT_API1, "session_run: '%s' url %d bfile '%s'", strsafe(file), file_is_url, strsafe(bfile)));
 
     if (file_is_url)
-	sess = session_open_url(file);
+	sess = session_open_url(file, bfile);
     else
-	sess = session_open(file);
+	sess = session_open(file, FALSE);
 
     TRACE((TC_UI, TT_API1, "session_run: entering poll"));
 
@@ -875,7 +999,7 @@ int ModuleLookup( PCHAR pName, PLIBPROCEDURE *pfnLoad, PPLIBPROCEDURE *pfnTable 
 #endif
 	{ "vdtw30",	(PLIBPROCEDURE)VdLoad/*, VdTW31DriverProcedures */ },
 	{ "vdcpm30",	(PLIBPROCEDURE)VdLoad/*, VdCpmDriverProcedures */ },
-	{ "vdspl",	(PLIBPROCEDURE)VdLoad/*, VdSplDriverProcedures */ },
+	{ "vdspl30",	(PLIBPROCEDURE)VdLoad/*, VdSplDriverProcedures */ },
 #ifdef INCL_SCRIPT
 	{ "script",	(PLIBPROCEDURE)SdLoad, NULL },
 #endif

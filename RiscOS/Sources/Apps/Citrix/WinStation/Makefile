@@ -1,5 +1,5 @@
-# Makefile for Winframe project
-# RISC OS client for Citrix WinStation protocol
+# Makefile for ICAClient project
+# RISC OS client for Citrix ICA protocol
 # SJM 17 Dec 1997
 
 # ----------------------------------------------------------------------------------------------------
@@ -44,7 +44,7 @@ ASINCLUDES=	-I${RISCOS_BUILD_EXPORT}/Hdr/Global -I${RISCOS_BUILD_EXPORT}/Hdr/Int
 COUNTRY=	UK
 INSTALLDIR=	.
 RISCOS_BUILD_EXPORT=../../../../Export
-COMPONENT=	WinFrame
+COMPONENT=	ICAClient
 APPNAME=	!${COMPONENT}
 ROMDIR=		../WinFrameRO
 
@@ -80,10 +80,10 @@ SDLIB=		src/dll/sdlib.o
 SDLIBD=		src/dll/sdlib.od
 SDLIBZ=		src/dll/sdlib.oz
 
-APP=		abs/winframe
-APPD=		abs/winframed
-APPZ=		aof/winframe
-APPRM=		rm/winframe
+APP=		abs/icaclient
+APPD=		abs/icaclientd
+APPZ=		aof/icaclient
+APPRM=		rm/icaclient
 
 # ----------------------------------------------------------------------------------------------------
 
@@ -186,18 +186,20 @@ local_dirs:
 
 install_base:
 	-${MKDIR} ${INSTALLDIR}/${APPNAME}
+	-${MKDIR} ${INSTALLDIR}/${APPNAME}/ini
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!Boot,feb	${INSTALLDIR}/${APPNAME}/
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!Help		${INSTALLDIR}/${APPNAME}/
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!Run,feb	${INSTALLDIR}/${APPNAME}/
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!Sprites,ff9	${INSTALLDIR}/${APPNAME}/
+	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/EnsureTB,feb	${INSTALLDIR}/${APPNAME}/
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Messages	${INSTALLDIR}/${APPNAME}/
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Res,fae	${INSTALLDIR}/${APPNAME}/
-	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Sprites,ff9	${INSTALLDIR}/${APPNAME}/
-	-${MKDIR} ${INSTALLDIR}/${APPNAME}/ini
-	${CP} ${CPFLAGS} Resources/ini/appsrv			${INSTALLDIR}/${APPNAME}/ini/
-	${CP} ${CPFLAGS} Resources/ini/module			${INSTALLDIR}/${APPNAME}/ini/
-	${CP} ${CPFLAGS} Resources/ini/wfclient			${INSTALLDIR}/${APPNAME}/ini/
-	-${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Splash,ff9	${INSTALLDIR}/${APPNAME}/
+	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Splash,ff9	${INSTALLDIR}/${APPNAME}/
+	${CP} ${CPFLAGS} Resources/ini/appsrv			${INSTALLDIR}/${APPNAME}/ini/AppSrv
+	${CP} ${CPFLAGS} Resources/ini/module			${INSTALLDIR}/${APPNAME}/ini/Module
+	${CP} ${CPFLAGS} Resources/ini/wfclient			${INSTALLDIR}/${APPNAME}/ini/WFClient
+
+#	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Sprites,ff9	${INSTALLDIR}/${APPNAME}/
 
 install: ${APP} install_base
 	${CP} ${CPFLAGS} ${APP}					${INSTALLDIR}/${APPNAME}/!RunImage,ff8
@@ -222,22 +224,24 @@ installrom: ${APPZ}
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!Help		${ROMDIR}/Resources/${COUNTRY}
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!RunROM,feb	${ROMDIR}/Resources/${COUNTRY}/!Run,feb
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!Sprites,ff9	${ROMDIR}/Resources/${COUNTRY}
+	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/EnsureTB,feb	${ROMDIR}/Resources/${COUNTRY}
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Messages	${ROMDIR}/Resources/${COUNTRY}
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Res,fae	${ROMDIR}/Resources/${COUNTRY}
-	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Sprites,ff9	${ROMDIR}/Resources/${COUNTRY}
-	-${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Splash,ff9	${ROMDIR}/Resources/${COUNTRY}
+	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Splash,ff9	${ROMDIR}/Resources/${COUNTRY}
 	${CP} ${CPFLAGS} Resources/ini/appsrv			${ROMDIR}/Resources/${COUNTRY}/ini
 	${CP} ${CPFLAGS} Resources/ini/module			${ROMDIR}/Resources/${COUNTRY}/ini
 	${CP} ${CPFLAGS} Resources/ini/wfclient			${ROMDIR}/Resources/${COUNTRY}/ini
 	${CP} ${CPFLAGS} ${APPZ}				${ROMDIR}/aof/${COMPONENT}
 	echo Installed ${COMPONENT} aof in ${ROMDIR}
-	${CP} ${CPFLAGS} src/app/winframe.h			${ROMDIR}/h/WinFrame
+	${CP} ${CPFLAGS} src/app/icaclient.h			${ROMDIR}/h/icaclient
+
+#	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Sprites,ff9	${ROMDIR}/Resources/${COUNTRY}
 
 cleaninstall:
-	${RM}	 ${APPNAME}/ini/*
-	${RMDIR} ${APPNAME}/ini
-	${RM}	 ${APPNAME}/*
-	${RMDIR} ${APPNAME}
+	-${RM}	  ${APPNAME}/ini/*
+	-${RMDIR} ${APPNAME}/ini
+	-${RM}	  ${APPNAME}/*
+	-${RMDIR} ${APPNAME}
 	echo Cleaned install
 
 # ----------------------------------------------------------------------------------------------------

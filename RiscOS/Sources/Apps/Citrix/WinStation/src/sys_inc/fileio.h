@@ -92,7 +92,7 @@ extern int _filelength(int fh);
 #define _rmdir(a) remove(a)
 
 extern int mkdir(const char *name);
-#define _mkdir(a) mkdir(a)
+extern int _mkdir(const char *name);
 
 #endif
 
