@@ -86,7 +86,7 @@ TOOLACTIONLIB   = <CExport$Dir>.o.Toolaction
 
 ZLIB		= ${LIBDIR}.zlib
 MSGLIB		= ${LIBDIR}.MsgLib.o.MsgLib
-DEBUGLIB	= ${LIBDIR}.DebugLib.o.debuglib
+#DEBUGLIB	= ${LIBDIR}.DebugLib.o.debuglib
 #MEMCHECKLIB	= MemCheck:o.MC
 
 INETLIB		= TCPIPLibs:o.inetlibzm
