@@ -64,6 +64,8 @@ RESFILES =			\
  ${RDIR}.Printers.PS_Col	\
  ${RDIR}.Printers.Lex_BW	\
  ${RDIR}.Printers.Lex_Col	\
+ ${RDIR}.Printers.L6Z11_BW	\
+ ${RDIR}.Printers.L6Z11_Col	\ 
  ${RDIR}.Printers.BJC80V_BW	\
  ${RDIR}.Printers.BJC80V_Col	\
  ${RDIR}.Printers.BJF100_BW	\
@@ -211,6 +213,12 @@ ${RDIR}.Printers.Lex_BW:	${RSRC}.Printers.Lex_BW
 
 ${RDIR}.Printers.Lex_Col:	${RSRC}.Printers.Lex_Col
 	${COMPRESS}	${RSRC}.Printers.Lex_Col	${RDIR}.Printers.Lex_Col
+
+${RDIR}.Printers.L6Z11_BW:	${RSRC}.Printers.L6Z11_BW
+	${COMPRESS}	${RSRC}.Printers.L6Z11_BW	${RDIR}.Printers.L6Z11_BW
+
+${RDIR}.Printers.L6Z11_Col:	${RSRC}.Printers.L6Z11_Col
+	${COMPRESS}	${RSRC}.Printers.L6Z11_Col	${RDIR}.Printers.L6Z11_Col
 
 ${RDIR}.Printers.BJC80V_BW:	${RSRC}.Printers.BJC80V_BW
 	${COMPRESS}	${RSRC}.Printers.BJC80V_BW	${RDIR}.Printers.BJC80V_BW
