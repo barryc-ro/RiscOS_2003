@@ -88,7 +88,7 @@ CMHGFLAGS = -p -IC: -d h.header -throwback
 
 ASMFLAGS=       
 
-DOBJS=          #MemCheck:o.MC_Mtml_podule.o debuglib.o trace_PL.o 
+DOBJS=          #MemCheck:o.MC_M#tml_podule.o debuglib.o trace_PL.o 
 
 OBJS=		swihndlers.o handlers.o smtp_utils.o module.o sendmail.o header.o \
                 errortable.o get.o sendline.o send.o cmdresp.o elib_priv.o \
