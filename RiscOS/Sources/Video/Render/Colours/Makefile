@@ -44,6 +44,7 @@ BBETYPE   = local
 bbe-local: bbe-generic
   BBE_Export_Dir Tables
   BBE_Export_Dir MkTables
+  BBE_Export_Dir Palettes
 
 #
 # Generic rules:
