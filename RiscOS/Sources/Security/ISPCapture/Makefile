@@ -30,6 +30,7 @@ WIPE    = -wipe
 CD	= dir
 DEFMOD  = DefMod
 AR	= LibFile
+STRIP   = stripdepnd
 # THROWBACK = -throwback
 
 
@@ -39,6 +40,8 @@ CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 CMHGFLAGS = -p -depend !Depend ${THROWBACK} ${OPTS}
 INCLUDES= -IC: -ITCPIPLibs:
+
+DIRS    = o._dirs
 
 #
 # Different compile options - choose one
@@ -168,35 +171,43 @@ install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
 clean:
-        ${WIPE} o.* ${WFLAGS}
-        ${WIPE} oz.* ${WFLAGS}        
-        ${WIPE} aof.* ${WFLAGS}
-        ${WIPE} rm.* ${WFLAGS}
-        ${WIPE} linked.* ${WFLAGS}
+        ${WIPE} o ${WFLAGS}
+        ${WIPE} oz ${WFLAGS}
+        ${WIPE} aof ${WFLAGS}
+        ${WIPE} rm ${WFLAGS}
+        ${WIPE} linked ${WFLAGS}
         ${WIPE} i ${WFLAGS}
         ${WIPE} io ${WFLAGS}
         ${WIPE} inst ${WFLAGS}
-        remove h.cmhg
+        ${STRIP}
+        remove h.header
         @echo ${COMPONENT}: cleaned
 
 #
-# local_dirs - Create local directories
+# Create local directories
 #
-local_dirs:
+${DIRS}:
+          ${MKDIR} o
+          ${MKDIR} oz
+          ${MKDIR} aof
+          ${MKDIR} rm
+          ${MKDIR} linked
           ${MKDIR} i
           ${MKDIR} io
           ${MKDIR} inst
+          create ${DIRS}
+          stamp  ${DIRS}
 
 #
 # Preprocess target - create preprocess C code.
 #
-preprocess: ${OBJSI} local_dirs
+preprocess: ${OBJSI} ${DIRS}
           @echo ${COMPONENT}: Preprocess build complete
 
 #
 # Instrumentation target - create a McCabe-enabled instrumented executable
 #
-instrument: ${OBJSIO} local_dirs
+instrument: ${OBJSIO} ${DIRS}
           ${LD} -o rm.${COMPONENT} -module ${NOTROMOBJSIO} ${CLIB} ${LIBS} ${LIBSD} ${UNIXLIB} ${SOCKLIB} ${INETLIB} ${RLIB}
           @echo ${COMPONENT}: instrument build complete
 
@@ -216,14 +227,14 @@ resources:
 #
 # Executable target (static link)
 #
-${TARGETSA}: ${NOTROMOBJS} ${CLIB} ${LIBS} ${LIBSD} ${UNIXLIB} ${SOCKLIB} ${INETLIB} ${RLIB} header.h
+${TARGETSA}: ${NOTROMOBJS} ${CLIB} ${LIBS} ${LIBSD} ${UNIXLIB} ${SOCKLIB} ${INETLIB} ${RLIB} ${DIRS} header.h 
         ${LD} -o $@ -module ${NOTROMOBJS} ${CLIB} ${LIBS} ${LIBSD} ${UNIXLIB} ${SOCKLIB} ${INETLIB} ${RLIB}
 
 
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${ROMOBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB} ${UNIXLIB} header.h
+${TARGET}: ${ROMOBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB} ${UNIXLIB} ${DIRS} header.h
         ${LD} -o $@ -aof ${ROMOBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB} ${UNIXLIB}
 
 
