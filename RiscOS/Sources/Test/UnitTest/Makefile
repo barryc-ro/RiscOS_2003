@@ -138,8 +138,6 @@ install:
 	${CP} ${TARGET} ${APP}.${TARGET} ${CPFLAGS}
 	${CP} Resources.* ${APP}.* ${CPFLAGS}
 	${CP} ${CRUNCHED}.TestCard ${APP}.TestCard ${CPFLAGS}
-	${CP} ${CRUNCHED}.Printer ${APP}.Printer ${CPFLAGS}
-	${CP} ${CRUNCHED}.Gen_lib ${APP}.Gen_lib ${CPFLAGS}
 	@echo ${COMPONENT}: installed
 
 dirs:
