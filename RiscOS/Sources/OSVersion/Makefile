@@ -6,6 +6,7 @@
 # Date       Name         Description
 # ----       ----         -----------
 # 30-May-96  SMC          Created.
+# 10 Sep 1997 RWB	  Switch Version number on System and UserIF
 #
 
 #
@@ -28,7 +29,7 @@ CPFLAGS = ~cfr~v
 #
 COMPONENT = OSVersion
 SOURCE    = s.ModHead
-TARGET    = rm.OSVersion
+TARGET    = rm.${SYSTEM}.${UserIF}.OSVersion
 EXPORTS   =
 
 #
@@ -52,17 +53,20 @@ resources:
         @echo ${COMPONENT}: resource files copied
 
 ${TARGET}: ${SOURCE}
+	${MKDIR} rm.${SYSTEM}
+	${MKDIR} rm.${SYSTEM}.${UserIF}
         ${AS} ${ASFLAGS} ${SOURCE}
 
 # Dynamic dependencies:
-rm.OSVersion: Hdr:ListOpts
-rm.OSVersion: Hdr:Macros
-rm.OSVersion: Hdr:System
-rm.OSVersion: Hdr:SWIs
-rm.OSVersion: Hdr:CPU.Generic26
-rm.OSVersion: Hdr:IO.GenericIO
-rm.OSVersion: Hdr:RISCOS
-rm.OSVersion: Hdr:ModHand
-rm.OSVersion: Hdr:Machine.<Machine>
-rm.OSVersion: Hdr:Proc
-rm.OSVersion: Version
+rm.RCA.RCA.OSVersion: Hdr:ListOpts
+rm.RCA.RCA.OSVersion: Hdr:Macros
+rm.RCA.RCA.OSVersion: Hdr:System
+rm.RCA.RCA.OSVersion: Hdr:SWIs
+rm.RCA.RCA.OSVersion: Hdr:CPU.Generic26
+rm.RCA.RCA.OSVersion: Hdr:IO.GenericIO
+rm.RCA.RCA.OSVersion: Hdr:RISCOS
+rm.RCA.RCA.OSVersion: Hdr:ModHand
+rm.RCA.RCA.OSVersion: Hdr:Machine.<Machine>
+rm.RCA.RCA.OSVersion: Hdr:Machine.Machine
+rm.RCA.RCA.OSVersion: Hdr:Proc
+rm.RCA.RCA.OSVersion: s.<System>.<UserIF>
