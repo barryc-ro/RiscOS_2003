@@ -19,12 +19,18 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <ctype.h>
 
 #include <swis.h>
 
 #include <inetlib.h>
 #include <socklib.h>
+#include <unixlib.h>
 #include <sys/errno.h>
+
+#ifndef ENOERROR
+  #define ENOERROR 0
+#endif
 
 #ifdef TRACE2
   #define TRACE
@@ -49,6 +55,14 @@
 
 #include "Status.h"
 
+/* Local options */
+
+#undef  DUMP_HEADERS_TO_CACHEFS
+
+/*
+ * #define DUMP_HEADERS_TO_CACHEFS "Cache:$.Test"
+ */
+
 /* Local variables */
 
 static char            recbuf[2048];
@@ -56,15 +70,17 @@ static _kernel_oserror final;
 
 /* Local functions */
 
-static bool status_proceed_completed (session * s, bool * repeat);
-static bool status_proceed_connected (session * s, bool * repeat);
-static bool status_proceed_default   (session * s, bool * repeat);
-static bool status_proceed_dns       (session * s, bool * repeat);
-static bool status_proceed_error     (session * s, bool * repeat);
-static bool status_proceed_initial   (session * s, bool * repeat);
-static bool status_proceed_pumping   (session * s, bool * repeat);
-static bool status_proceed_receiving (session * s, bool * repeat);
-static bool status_proceed_sending   (session * s, bool * repeat);
+static bool status_proceed_completed        (session * s, bool * repeat);
+static bool status_proceed_connected        (session * s, bool * repeat);
+static bool status_proceed_default          (session * s, bool * repeat);
+static bool status_proceed_dns              (session * s, bool * repeat);
+static bool status_proceed_error            (session * s, bool * repeat);
+static bool status_proceed_initial          (session * s, bool * repeat);
+static bool status_proceed_pumping          (session * s, bool * repeat);
+static bool status_proceed_receiving        (session * s, bool * repeat);
+static bool status_proceed_sending          (session * s, bool * repeat);
+
+//static void status_handle_initial_challenge (session * s);
 
 /**************************************************************/
 /* status_status()                                            */
@@ -116,6 +132,8 @@ void status_proceed_on_callout(void * handle)
   session * s = (session *) handle;
 
   dprintf(("", "status_proceed_on_callout: Called for %p, forwarding to status_proceed\n", s));
+
+  if (s->dying != 0) return;
 
   if (s->callout_set != 0)
   {
@@ -385,6 +403,8 @@ static bool status_proceed_dns(session * s, bool * repeat)
   {
     unsigned now = utils_read_time();
 
+    if (s->state == protostate_ERROR) s->err_no = -s->sd;
+
     dprintf(("", "status_proceed_dns: Still in DNS state / sd < 0\n"));
 
     /* Check timeout */
@@ -533,8 +553,9 @@ static bool status_proceed_sending(session * s, bool * repeat)
     {
       dprintf(("", "status_proceed_sending: Error %d\n", errno));
 
-      s->state = protostate_ERROR_WRITE;
-      *repeat  = true;
+      s->state  = protostate_ERROR_WRITE;
+      s->err_no = errno;
+      *repeat   = true;
     }
     else
     {
@@ -561,6 +582,19 @@ static bool status_proceed_sending(session * s, bool * repeat)
 
     if (sent != 0)
     {
+      #ifdef DUMP_HEADERS_TO_CACHEFS
+      {
+        FILE * f = fopen(DUMP_HEADERS_TO_CACHEFS, "ab");
+
+        if (f != NULL)
+        {
+          fprintf(f, "SEND (%p):\r\n", s);
+          fwrite(s->full_request, 1, s->reqlen, f);
+          fclose(f);
+        }
+      }
+      #endif
+
       s->last = now;
     }
     else
@@ -680,12 +714,18 @@ static bool status_proceed_receiving(session * s, bool * repeat)
         s->data[s->data_len] = '\0'; /* Correct as data_len is always 1 byte behind actual allocation */
         dprintf(("", "status_proceed_receving: Receive complete with %d bytes -\n'%s'\n", s->data_len, s->data));
 
-        /* printf("\nReceive:\n===\n%s\n=== for %p\n",s->data,s); */
+        #ifdef DUMP_HEADERS_TO_CACHEFS
+        {
+          FILE * f = fopen(DUMP_HEADERS_TO_CACHEFS, "ab");
 
-        /* We've received the response now */
-
-        s->reported_state |= VC_Status_NewStatus;
-        s->state = protostate_COMPLETED;
+          if (f != NULL)
+          {
+            fprintf(f, "RECEIVE (%p):\r\n", s);
+            fwrite(s->data, 1, s->data_len, f);
+            fclose(f);
+          }
+        }
+        #endif
 
         /* Parse the response and move to the appropriate state */
 
@@ -697,11 +737,87 @@ static bool status_proceed_receiving(session * s, bool * repeat)
         }
         else
         {
-          s->reported_state |= VC_Status_MoreInformationAvailable;
+          rtsp_header * h;
+          session     * parent;
+
+          s->state = protostate_COMPLETED;
 
           /* We always close the socket */
 
           close_socket(&s->sd);
+
+          /* Store an Authorization-info header, if present, in the parent; it will be */
+          /* needed for the next foreground or background command. Whether or not      */
+          /* this response contains a challenge, we must clear any old record of the   */
+          /* header - otherwise we could send a response to a non-existent challenge!  */
+
+          parent = s->parent == NULL ? s : s->parent;
+          free(parent->authinfo), parent->authinfo = NULL;
+
+          h = headers_find_header(s->headers, Headers_HeaderName_AuthInfo);
+
+          if (h != NULL)
+          {
+            parent->authinfo = Strdup(h->value);
+
+            if (parent->authinfo == NULL)
+            {
+              s->state = protostate_ERROR_MEM;
+              *repeat  = true;
+
+              return false;
+            }
+          }
+
+          /* If this was a SETUP command and we get 401 back, we need to authenticate. So */
+          /* send another SETUP, relying on having a challenge stored from above.         */
+
+          if (
+               s->response_code  == Header_Authenticate &&
+               s->server_session == NULL                &&
+               s->parent         == NULL                &&
+               s->ticket         != NULL                &&
+               s->setup_copy     != NULL
+             )
+          {
+            /* Store a WWW-Authenticate header, if present - can't handle the challenge if not... */
+
+            h = headers_find_header(s->headers, Headers_HeaderName_Auth);
+
+            if (h != NULL)
+            {
+              free(s->challenge), s->challenge = Strdup(h->value);
+
+              if (s->challenge == NULL)
+              {
+                s->state = protostate_ERROR_MEM;
+                *repeat  = true;
+
+                return false;
+              }
+
+              /* Now handle the challenge */
+
+//////////////status_handle_initial_challenge(s);
+
+              if (s->state != protostate_ERROR_MEM)
+              {
+                *repeat = false;
+                return true;
+              }
+              else
+              {
+                *repeat = true;
+                return false;
+              }
+            }
+          }
+
+          /* We've received the response that we wish to return to the client. This may */
+          /* be a dropped-through 401 if we couldn't deal with it above.                */
+
+          s->reported_state |= VC_Status_NewStatus |
+                               VC_Status_MoreInformationAvailable;
 
           /* If we've not got a server session, try to find one from this response. */
           /* Don't bother with this if we're a child though because if we need a    */
@@ -760,7 +876,8 @@ static bool status_proceed_receiving(session * s, bool * repeat)
       {
         /* We've received an empty respose */
 
-        s->state          =  protostate_ERROR_READ;
+        s->state           = protostate_ERROR_READ;
+        s->err_no          = ENOERROR;
         s->reported_state |= VC_Status_NewStatus;
 
         close_socket(&s->sd);
@@ -776,8 +893,9 @@ static bool status_proceed_receiving(session * s, bool * repeat)
     {
       if (errno != EWOULDBLOCK)
       {
-        s->state = protostate_ERROR_READ;
-        *repeat  = true;
+        s->state  = protostate_ERROR_READ;
+        s->err_no = errno;
+        *repeat   = true;
 
         dprintf(("", "status_proceed_receving: Error = %d\n", errno));
       }
@@ -915,11 +1033,34 @@ static bool status_proceed_completed(session * s, bool * repeat)
 
 _kernel_oserror * status_check_error(session * s)
 {
-  _kernel_oserror * e = NULL;
+  _kernel_oserror * e   = NULL;
+  int               use = rtspovs_ERROR_CONNECT_GENERAL;
 
   switch (s->state)
   {
     /* Error states: Various things went wrong... */
+
+    case protostate_ERROR_READ:
+    case protostate_ERROR_WRITE:
+    {
+      /* For a socket with a railed read or write we should do a   */
+      /* getsockopt call to extract something more meaningful than */
+      /* will be present in the session's copy of errno...         */
+
+      if (s->sd >= 0)
+      {
+        int err, so, size = sizeof(int);
+
+        err = getsockopt(s->sd, SOL_SOCKET, SO_ERROR, &so, &size);
+        if (err == 0) s->err_no = so;
+      }
+
+      /* Read or write error? */
+
+      if (s->state == protostate_ERROR_READ) use = rtspovs_ERROR_CONNECT_READ;
+      else                                   use = rtspovs_ERROR_CONNECT_WRITE;
+
+    } /* (...and drop through to next set of conditions) */
 
     case protostate_ERROR:
     case protostate_ERROR_DEAD:
@@ -927,23 +1068,30 @@ _kernel_oserror * status_check_error(session * s)
     case protostate_ERROR_NO_TOKEN:
     case protostate_ERROR_NOT_IMPLEMENTED:
     {
-      char en[16];
+      char         en[16];
+      const char * message;
+      char       * dup;
 
-      sprintf(en, "%d", errno);
+      /* If there's nothing recorded in the session's copy of errno */
+      /* or it's out of range, report the number; else report a     */
+      /* message from the errno table in Unixlib.                   */
 
-      e = make_error(rtspovs_ERROR_CONNECT_GENERAL, 1, en);
-    }
-    break;
+      if (s->err_no == ENOERROR || s->err_no >= sys_nerr)
+      {
+        sprintf(en, "%d", s->err_no);
+        message = en;
+      }
+      else message = sys_errlist[s->err_no];
 
-    case protostate_ERROR_WRITE:
-    {
-      e = make_error(rtspovs_ERROR_CONNECT_WRITE, 0);
-    }
-    break;
+      /* Aesthetics - ensure first letter of sub-message is lower case */
 
-    case protostate_ERROR_READ:
-    {
-      e = make_error(rtspovs_ERROR_CONNECT_READ, 0);
+      dup = Strdup(message);
+      if (dup != NULL && isupper(dup[0])) dup[0] = tolower(dup[0]);
+
+      /* Generate the full report */
+
+      e = make_error(use, 1, dup == NULL ? message : dup);
+      free(dup);
     }
     break;
 

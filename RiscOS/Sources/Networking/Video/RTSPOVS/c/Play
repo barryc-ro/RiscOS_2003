@@ -141,13 +141,14 @@ _kernel_oserror * play_play(_kernel_swi_regs * r)
 
   session_reset_session(s);
 
-  /* Copy R3 away */
+  /* Copy R2 and R3 away */
 
-  s->play_record = Strdup(scale == NULL ? "" : scale);
+  s->play_record  = Strdup(scale   == NULL ? "" : scale);
+  s->range_record = Strdup(r->r[2] == NULL ? "" : (char *) r->r[2]);
 
   /* Start adding headers */
 
-  if (s->play_record == NULL) fail = true;
+  if (s->play_record == NULL || s->range_record == NULL) fail = true;
 
   else if (
             headers_add_header(&s->headers,
@@ -222,7 +223,7 @@ _kernel_oserror * play_play(_kernel_swi_regs * r)
           )
           fail = true;
 
-  /* Lastly, the session header */
+  /* The session header */
 
   else if (
             headers_add_header(&s->headers,
@@ -231,6 +232,60 @@ _kernel_oserror * play_play(_kernel_swi_regs * r)
             == NULL
           )
           fail = true;
+
+  /* Get extra data from the client and store it */
+
+  else if ((r->r[0] & VC_Play_R4ThroughR7AreValid) != 0)
+  {
+    if (r->r[4] != 0)
+    {
+      headers_parse_user_header((char *) r->r[4], strlen((char *) r->r[4]), s);
+    }
+
+    /* Support R5 and R6 body data extensions. OVS will object to anything */
+    /* in the SETUP body right now, but in future it might not.            */
+
+    if (r->r[5] != 0 && r->r[6] > 0)
+    {
+      s->data = malloc(r->r[6]);
+
+      if (s->data == NULL)
+      {
+        fail = true;
+      }
+      else
+      {
+        rtsp_header * cl = headers_find_header(s->headers, Headers_HeaderName_ContentLength);
+
+        s->data_len = r->r[6];
+        memcpy(s->data, (void *) r->r[5], r->r[6]);
+
+        /* If we have a Content-length header which is wrong, delete it.   */
+        /* If we never have, or now have no Content-length header, add it. */
+
+        if (cl != NULL && atoi(cl->value) != r->r[6])
+        {
+          headers_delete_header(&s->headers, cl);
+          cl = NULL;
+        }
+
+        if (cl == NULL)
+        {
+          char number[16];
+
+          sprintf(number, "%u", r->r[6]);
+
+          if (
+               headers_add_header(&s->headers,
+                                  Headers_HeaderName_ContentLength,
+                                  number)
+               == NULL
+             )
+             fail = true;
+        }
+      }
+    }
+  }
 
   /* Did anything fail? */
 
@@ -250,6 +305,8 @@ _kernel_oserror * play_play(_kernel_swi_regs * r)
                    NULL,
                    &s->state,
                    -1);
+
+  if (s->state == protostate_ERROR) s->err_no = -s->sd;
 
   s->last = utils_read_time();
 
@@ -287,6 +344,8 @@ _kernel_oserror * play_play(_kernel_swi_regs * r)
 void play_replay_on_callout(void * handle)
 {
   session * s = (session *) handle;
+
+  if (s->dying != 0) return;
 
   if (s->loop_ready != 0)
   {
@@ -361,15 +420,18 @@ _kernel_oserror * play_replay(session * s)
   scale = s->play_record == NULL ? Headers_HeaderValue_Scale : s->play_record;
   if (*scale == '\0') scale = Headers_HeaderValue_Scale;
 
-  /* Range will depend on direction of play */
-
-  if (*scale == '-')
+  if (s->range_record != NULL)
   {
-    range = Headers_HeaderValue_Range_Rwd;
+    /* Reuse client's original range specifier */
+
+    range = s->range_record;
   }
   else
   {
-    range = Headers_HeaderValue_Range_Fwd;
+    /* Range will depend on direction of play */
+
+    if (*scale == '-') range = Headers_HeaderValue_Range_Rwd;
+    else               range = Headers_HeaderValue_Range_Fwd;
   }
 
   /* Slow motion forwards play? */
@@ -465,6 +527,8 @@ _kernel_oserror * play_replay(session * s)
                        port,
                        &new_s->state,
                        -1);
+
+  if (new_s->state == protostate_ERROR) new_s->err_no = -new_s->sd;
 
   new_s->last = utils_read_time();
 
