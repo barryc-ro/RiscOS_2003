@@ -226,6 +226,9 @@ all: ${FILES}
 rom: ${ROM_MODULE}
 	@echo ${COMPONENT}: Module built (ROM)
 
+ram: ${MODULE}
+	@echo ${COMPONENT}: Module built (RAM)
+
 install_common: ${FILES}
 	@echo
 	${CP} LocalRes:!Boot			${INSTDIR}.!Boot		${CPFLAGS}
@@ -375,6 +378,9 @@ rom_link:
 oz.ModuleWrap: s.ModuleWrap s.AppName ${RESFILES}
 	${AS} ${AFLAGS} s.ModuleWrap $@
 
+oz.ModuleWra1: s.ModuleWrap s.AppName ${RESFILES}
+	${AS} ${AFLAGS} -predefine "REMOVE_RAMLOAD_CHECK SETA 1" s.ModuleWrap $@
+
 s.ModuleWrap: ${WRAPPER}
 	${CP} ${WRAPPER} $@ ${CPFLAGS}
 
@@ -392,9 +398,9 @@ abs.!RI_D: ${OBJSD} ${EXTRALIBS} ${LIBSD} ${DIRS}
 	@echo
 	${LD} -s syms.!RI_D -o $@ ${OBJSD} ${LIBSD} ${EXTRALIBS}
 
-${MODULE}: oz.ModuleWrap ${OBJSZ} ${LIBSM} ${EXTRALIBS} ${CLIB} ${DIRS}
+${MODULE}: oz.ModuleWra1 ${OBJSZ} ${LIBSM} ${EXTRALIBS} ${CLIB} ${DIRS}
 	@echo
-	${LD} -s syms.RAMMod -o $@ -module oz.ModuleWrap ${OBJSZ} ${LIBSM} ${EXTRALIBS} ${CLIB}
+	${LD} -s syms.RAMMod -o $@ -module oz.ModuleWra1 ${OBJSZ} ${LIBSM} ${EXTRALIBS} ${CLIB}
 
 ${ROM_MODULE}: oz.ModuleWrap ${OBJSZ} ${ROMCSTUBS} ${LIBSM} ${EXTRALIBS} ${DIRS}
 	@echo
