@@ -77,9 +77,6 @@ static void global_event_handler(int event)
 	    fe_reload(main_view);
 	break;
 
-    case fevent_GLOBAL_TOGGLE_FORCE_FIT:
-	break;
-
     case fevent_GLOBAL_ICONISE:
 	fe_iconise(TRUE);
 	break;
@@ -156,11 +153,11 @@ static void history_event_handler(int event, fe_view v)
             break;
 
     case fevent_HISTORY_SHOW_ALPHA:
-	frontend_complain(frontend_open_url("ncfrescointernal:openpanel?name=historyalpha", NULL, TARGET_HISTORY, NULL, fe_open_url_NO_CACHE));
+	frontend_complain(frontend_open_url("ncint:openpanel?name=historyalpha", NULL, TARGET_HISTORY, NULL, fe_open_url_NO_CACHE));
 	break;
 
     case fevent_HISTORY_SHOW_RECENT:
-	frontend_complain(frontend_open_url("ncfrescointernal:openpanel?name=historyrecent", NULL, TARGET_HISTORY, NULL, fe_open_url_NO_CACHE));
+	frontend_complain(frontend_open_url("ncint:openpanel?name=historyrecent", NULL, TARGET_HISTORY, NULL, fe_open_url_NO_CACHE));
 	break;
     }
 }
@@ -189,7 +186,7 @@ static void hotlist_event_handler(int event, fe_view v)
 	break;
 
     case fevent_HOTLIST_SHOW_DELETE:
-	frontend_complain(frontend_open_url("ncfrescointernal:openpanel?name=favsdelete", NULL, TARGET_FAVS, NULL, fe_open_url_NO_CACHE));
+	frontend_complain(frontend_open_url("ncint:openpanel?name=favsdelete", NULL, TARGET_FAVS, NULL, fe_open_url_NO_CACHE));
 	break;
     }
 }
@@ -250,10 +247,6 @@ static void misc_event_handler(int event, fe_view v)
             frontend_complain(fe_url_open(v));
             break;
 
-    case fevent_FORCE_FIT:
-	fe_force_fit(v, TRUE);
-	break;
-
     case fevent_SEARCH_PAGE:
 	frontend_complain(fe_search_page(v));
 	break;
@@ -264,11 +257,12 @@ static void misc_event_handler(int event, fe_view v)
 	break;
 
     case fevent_INFO_PAGE:
+	frontend_complain(fe_status_open_toolbar(v, fevent_TOOLBAR_DETAILS - fevent_TOOLBAR_MAIN));
 	frontend_complain(fe_open_version(v));
 	break;
 
     case fevent_SEND_URL:
-	frontend_complain(frontend_open_url("ncfrescointernal:sendurl", v, NULL, NULL, fe_open_url_NO_CACHE));
+	frontend_complain(frontend_open_url("ncint:sendurl", v, NULL, NULL, fe_open_url_NO_CACHE));
 	break;
 
     case fevent_PRINT_LETTER:
@@ -312,6 +306,18 @@ static void misc_event_handler(int event, fe_view v)
 
     case fevent_BEEPS_ON:
 	fe_beeps_set(1);
+	break;
+
+    case fevent_SCALING_TOGGLE:
+	fe_scaling_set(-1);
+	break;
+
+    case fevent_SCALING_OFF:
+	fe_scaling_set(0);
+	break;
+
+    case fevent_SCALING_ON:
+	fe_scaling_set(1);
 	break;
     }
 }
@@ -470,19 +476,23 @@ static void open_event_handler(int event, fe_view v)
 
     case fevent_OPEN_RELATED_STUFF:
 	fe_dispose_view(fe_locate_view(TARGET_INFO));
-	frontend_open_url("ncfrescointernal:openpanel?name=related", v, TARGET_TOP, NULL, fe_open_url_NO_CACHE);
+	frontend_open_url("ncint:openpanel?name=related", v, TARGET_TOP, NULL, fe_open_url_NO_CACHE);
 	break;
 
     case fevent_OPEN_FONT_SIZE:
-	frontend_open_url("ncfrescointernal:openpanel?name=customfonts", NULL, TARGET_CUSTOM, NULL, fe_open_url_NO_CACHE);
+	frontend_open_url("ncint:openpanel?name=customfonts", NULL, TARGET_CUSTOM, NULL, fe_open_url_NO_CACHE);
 	break;
 
     case fevent_OPEN_SOUND:
-	frontend_open_url("ncfrescointernal:openpanel?name=customsound", NULL, TARGET_CUSTOM, NULL, fe_open_url_NO_CACHE);
+	frontend_open_url("ncint:openpanel?name=customsound", NULL, TARGET_CUSTOM, NULL, fe_open_url_NO_CACHE);
 	break;
 
     case fevent_OPEN_BEEPS:
-	frontend_open_url("ncfrescointernal:openpanel?name=custombeeps", NULL, TARGET_CUSTOM, NULL, fe_open_url_NO_CACHE);
+	frontend_open_url("ncint:openpanel?name=custombeeps", NULL, TARGET_CUSTOM, NULL, fe_open_url_NO_CACHE);
+	break;
+
+    case fevent_OPEN_SCALING:
+	frontend_open_url("ncint:openpanel?name=customscaling", NULL, TARGET_CUSTOM, NULL, fe_open_url_NO_CACHE);
 	break;
     }
 }

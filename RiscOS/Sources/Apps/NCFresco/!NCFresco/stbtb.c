@@ -37,15 +37,6 @@
 
 #define LIGHT_OFF_DELAY     (2*100)
 
-#define WORLD_SPRITE	"pgbtnuhl"
-#define WORLD_SPRITE_HL	"pgbtnhl"
-
-#if 0
-#define UP_SPRITE	"upbtnuhl"
-#define UP_SPRITE_HL	"upbtnhl"
-#define DOWN_SPRITE	"dabtnuhl"
-#define DOWN_SPRITE_HL	"dabtnhl"
-#endif
 /* --------------------------------------------------------------------------*/
 
 #define Toolbox_CreateObject                    0x44EC0
@@ -222,6 +213,7 @@ typedef enum
 /*#define I_URL_LABEL     0x14*/
 #define I_STATUS        0x12
 #define I_WORLD       	0x13
+#define I_WORLD_BORDER	0x14
 #define I_LIGHTS_GREEN  0x100
 #define I_LIGHTS_YELLOW 0x101
 #define I_LIGHTS_RED    0x102
@@ -245,7 +237,7 @@ struct tb_bar_info
 
     fe_view view;
 
-    int highlight;		/* currently highlighted button index */
+/*     int highlight;		 *//* currently highlighted button index */
 
     tb_button_info *buttons;	/* the buttons visible in the window, sorted */
     int n_buttons;
@@ -328,12 +320,22 @@ static os_error *gfade(int obj, int cmp, int fade)
     return e;
 }
 
+#if 0
 static int faded(int obj, int cmp)
 {
     unsigned flags;
     os_error *e;
     e = (os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,3)|_OUT(0), 0, obj, 0x40, cmp, &flags);
     return e == NULL && (flags & 0x80000000) != 0;
+}
+#endif
+
+static int selectable(int obj, int cmp)
+{
+    unsigned flags;
+    os_error *e;
+    e = (os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,3)|_OUT(0), 0, obj, 0x40, cmp, &flags);
+    return e == NULL && (flags & 0x80000001) == 0x01; /* !faded and generates events */
 }
 
 #if 0
@@ -604,18 +606,16 @@ static os_error *toolactionpress(int obj, int cmp, int pressed)
 
 /* --------------------------------------------------------------------------*/
 
-static void tb_bar_set_highlight(tb_bar_info *tbi, int index)
+static void tb_bar_set_highlight(tb_bar_info *tbi, int val, BOOL is_index)
 {
-    tbi->highlight = index;
-
-    if (index != -1)
+    if (val != -1)
     {
 	wimp_box box;
 	wimp_wstate state;
 
-	STBDBG(("tb_bar_set_highlight(): bar %d index %d obj %x, cmp %x\n", tbi ? tbi->num : -1, index, tbi->object_handle, tbi->buttons[index].cmp));
+	STBDBG(("tb_bar_set_highlight(): bar %d index %d obj %x, cmp %x\n", tbi ? tbi->num : -1, val, tbi->object_handle, is_index ? tbi->buttons[val].cmp : val));
 	    
-	_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, tbi->object_handle, 72, tbi->buttons[index].cmp, &box);
+	_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, tbi->object_handle, 72, is_index ? tbi->buttons[val].cmp : val, &box);
 	wimp_get_wind_state(tbi->window_handle, &state);
 	coords_box_toscreen(&box, (coords_cvtstr *)&state.o.box);
 
@@ -624,6 +624,7 @@ static void tb_bar_set_highlight(tb_bar_info *tbi, int index)
     }
 }
 
+#if 0
 static int tb_bar_cmp_to_index(tb_bar_info *tbi, int cmp)
 {
     int i;
@@ -633,6 +634,7 @@ static int tb_bar_cmp_to_index(tb_bar_info *tbi, int cmp)
 	    return i;
     return -1;
 }
+#endif
 
 static BOOL havefocus(tb_bar_info *tbi)
 {
@@ -641,19 +643,33 @@ static BOOL havefocus(tb_bar_info *tbi)
     return cs.w == tbi->window_handle;
 }
 
-static void return_highlight(fe_view v, tb_bar_info *tbi, int flags)
+static int get_highlighted(tb_bar_info *tbi)
 {
-    int cmp = tbi->buttons[tbi->highlight].cmp;
+    int i, pressed;
+    for (i = 0; i < tbi->n_buttons; i++)
+	if (_swix(Toolbox_ObjectMiscOp, _INR(0,3) | _OUT(0), 0, tbi->object_handle, 0x140149, tbi->buttons[i].cmp, &pressed) == NULL &&
+	    pressed)
+	    return i;
+    return -1;    
+}
+
+static BOOL return_highlight(fe_view v, tb_bar_info *tbi, int flags)
+{
+    int cmp = tbi->buttons[get_highlighted(tbi)].cmp;
     wimp_box box;
     wimp_wstate state;
 
+    /* get the position of the item we are moving off */
     _swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, tbi->object_handle, 72, cmp, &box);
     wimp_get_wind_state(tbi->window_handle, &state);
     coords_box_toscreen(&box, (coords_cvtstr *)&state.o.box);
 
-    setstate(tbi->object_handle, cmp, 0);
+    /* dehighlight current item */
+/*     setstate(tbi->object_handle, cmp, 0); */
 
     fe_move_highlight_xy(v, &box, flags | be_link_XY);
+
+    return TRUE;
 }
 
 /* --------------------------------------------------------------------------*/
@@ -739,8 +755,6 @@ static int tb_bar_create(const char *template_name, void *new_sprite_area, tb_bu
 
     STBDBG(("tb_bar_create(): %d buttons sprite_area %p\n", wobj->gadget_count, wobj->window.sprite_area));
 
-    frontend_fatal_error((os_error *)_swix(Toolbox_CreateObject, _INR(0,1) | _OUT(0), 0, template_name, &object));
-
     /* create a list of the gadgets in the window */
     gadget = (struct gadget_object *)wobj->gadgets;
     info = info_list = mm_calloc(sizeof(*info_list), wobj->gadget_count);
@@ -748,6 +762,9 @@ static int tb_bar_create(const char *template_name, void *new_sprite_area, tb_bu
     {
 	info->x_pos = gadget->bbox.x0;
 	info->cmp = gadget->cmp;
+
+	if (gadget->cmp == I_WORLD)
+	    gadget->flags |= 0x40000000;
 	
 	gadget = (struct gadget_object *)((char *)gadget + (gadget->class_no >> 16));
 
@@ -757,6 +774,9 @@ static int tb_bar_create(const char *template_name, void *new_sprite_area, tb_bu
     /* now sort the list into horizontal order */
     qsort(info_list, wobj->gadget_count, sizeof(*info_list), compare_info);
     
+    /* create object after fixing up flags */
+    frontend_fatal_error((os_error *)_swix(Toolbox_CreateObject, _INR(0,1) | _OUT(0), 0, template_name, &object));
+
     /* return pointer */
     *list = info_list;
     *n_buttons = wobj->gadget_count;
@@ -813,23 +833,25 @@ typedef struct
     char *monitor_name;
     tb_bar_entry_fn entry_fn;
     tb_bar_exit_fn exit_fn;
-    int initial_component;
+    int initial_component;	/* when moving onto it */
+    int open_component;		/* when opening it */
+    int return_component;
     int can_grey;
 } tb_bar_descriptor;
 
 static tb_bar_descriptor bar_names[] =
 {
-    { "mainT", NULL, 0, 0, I_DIRECTION, FALSE },
-    { "favsT", NULL, 0, tb_bar_favs_exit_fn, I_DIRECTION, FALSE },
-    { "extrasT", NULL, 0, 0, I_DIRECTION, FALSE },
-    { "historyT", NULL, 0, tb_bar_history_exit_fn, I_DIRECTION, FALSE },
-    { "printT", NULL, 0, 0, I_DIRECTION, FALSE },
-    { "detailsT", NULL, tb_bar_details_entry_fn, tb_bar_details_exit_fn, I_DIRECTION, FALSE },
+    { "mainT", NULL, 0, 0, I_DIRECTION, fevent_HOME, -1, FALSE },
+    { "favsT", NULL, 0, tb_bar_favs_exit_fn, I_DIRECTION, fevent_HOTLIST_ADD, fevent_TOOLBAR_FAVS, FALSE },
+    { "extrasT", NULL, 0, 0, I_DIRECTION, fevent_TOOLBAR_HISTORY, fevent_TOOLBAR_EXTRAS, FALSE },
+    { "historyT", NULL, 0, tb_bar_history_exit_fn, I_DIRECTION, fevent_HISTORY_SHOW_ALPHA, fevent_TOOLBAR_HISTORY, FALSE },
+    { "printT", NULL, 0, 0, I_DIRECTION, fevent_PRINT_LETTER, fevent_TOOLBAR_PRINT, FALSE },
+    { "detailsT", NULL, tb_bar_details_entry_fn, tb_bar_details_exit_fn, I_DIRECTION, fevent_HOTLIST_ADD, fevent_TOOLBAR_DETAILS, FALSE },
     {  0 },
     {  0 },
-    { "statusWn", "statusW", 0, 0, fevent_MENU, TRUE },
-    { "codecT", NULL, 0, tb_bar_codec_exit_fn, I_DIRECTION, FALSE },
-    { "customT", NULL, 0, tb_bar_custom_exit_fn, I_DIRECTION, FALSE}
+    { "statusWn", "statusW", 0, 0, fevent_MENU, 0, 0, TRUE },
+    { "codecT", NULL, 0, tb_bar_codec_exit_fn, I_DIRECTION, -1, -1, FALSE },
+    { "customT", NULL, 0, tb_bar_custom_exit_fn, I_DIRECTION, fevent_OPEN_FONT_SIZE, fevent_TOOLBAR_CUSTOM, FALSE}
 };
 
 #define TOOLBAR_CODEC	9
@@ -838,7 +860,7 @@ static tb_bar_info *tb_bar_init(int bar_num)
 {
     tb_bar_info *tbi;
     char *name;
-    wimp_box box;
+    wimp_box box, wbox;
     int object_handle;
     tb_button_info *button_list;
     int n_buttons;
@@ -883,7 +905,6 @@ static tb_bar_info *tb_bar_init(int bar_num)
 	    STBDBG(("tb_bar_init(): sprite_area %p\n", info.info.spritearea));
 	}
 #endif
-
     
 	tbi->buttons = button_list;
 	tbi->n_buttons = n_buttons;
@@ -896,9 +917,14 @@ static tb_bar_info *tb_bar_init(int bar_num)
 	}
 	bar_list = tbi;
 
+	/* get window extent */
 	_swix(Toolbox_ObjectMiscOp, _INR(0,5), 0, tbi->object_handle, 16, &box);
 	tbi->height = box.y1 - box.y0;
 
+	/* move gadgets if necessary */
+	if (_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, bar_list->object_handle, 72, I_WORLD, &wbox) == NULL)
+	    tb_status_resize((text_safe_box.x1 - text_safe_box.x0) - wbox.x1 - 16, 0);
+    
 	/* extend one extent up or down to cover safe area */
 	if (config_display_control_top)
 	    box.y1 = 0x4000;
@@ -908,10 +934,6 @@ static tb_bar_info *tb_bar_init(int bar_num)
 	box.x0 = -0x4000;
 	box.x1 = 0x4000;
 	_swix(Toolbox_ObjectMiscOp, _INR(0,5), 0, tbi->object_handle, 15, &box);
-
-	/* move gadgets if necessary */
-	if (_swix(Toolbox_ObjectMiscOp, _INR(0,4), 0, bar_list->object_handle, 72, I_WORLD, &box) == NULL)
-	    tb_status_resize((text_safe_box.x1 - text_safe_box.x0) - box.x1, 0);
     }
     
     return tbi;
@@ -957,6 +979,8 @@ BOOL tb_status_unstack(void)
 
     if (bar_list && bar_list->next)
     {
+	int return_cmp = bar_names[bar_list->num].return_component;
+
 	sound_event(snd_TOOLBAR_HIDE_SUB);
 
 	tb_bar_dispose();
@@ -965,7 +989,7 @@ BOOL tb_status_unstack(void)
 	{
 	    tb_status_show(old_state == status_OPEN_SMALL);
 
-	    tb_bar_set_highlight(bar_list, bar_list->highlight);
+	    tb_bar_set_highlight(bar_list, return_cmp, FALSE);
 	    setfocus(bar_list->object_handle);
 	}
 
@@ -1019,7 +1043,7 @@ void tb_status_new(fe_view v, int bar_num)
     {
 	tb_status_show(old_state == status_OPEN_SMALL);
 
-	tb_bar_set_highlight(bar_list, tb_bar_cmp_to_index(bar_list, fevent_TOOLBAR_EXIT));
+	tb_bar_set_highlight(bar_list, bar_names[bar_list->num].open_component, FALSE);
 	setfocus(bar_list->object_handle);
     }
 
@@ -1035,12 +1059,8 @@ BOOL tb_status_highlight(BOOL gain)
     {
 	if (gain)
 	{
-	    tb_bar_set_highlight(tbi, tb_bar_cmp_to_index(tbi, bar_names[tbi->num].initial_component));
+	    tb_bar_set_highlight(tbi, bar_names[tbi->num].initial_component, FALSE);
 	    setfocus(tbi->object_handle);
-	}
-	else
-	{
-	    tb_bar_set_highlight(tbi, -1);
 	}
 	return TRUE;
     }
@@ -1775,12 +1795,15 @@ void tb_status_rotate(void)
 	char sprite_name1[40];
 
 	if (turn_ctr == -1)
+	{
 	    turn_start = alarm_timenow();
+	    sprintf(sprite_name1, "%st,%sts", config_animation_name, config_animation_name);
+	    setfield(bar_list->object_handle, I_WORLD_BORDER, sprite_name1, FALSE);
+	}
 	
 	turn_ctr = ((alarm_timenow() - turn_start) * TURN_SPEED / 100) % config_animation_frames;
 	
-	sprintf(sprite_name1, "%s%02d,%ss%02d", config_animation_name, turn_ctr, config_animation_name, turn_ctr);
-
+	sprintf(sprite_name1, "%s%02d", config_animation_name, turn_ctr);
 	setfield(bar_list->object_handle, I_WORLD, sprite_name1, FALSE);
     }
 }
@@ -1792,8 +1815,11 @@ void tb_status_rotate_reset(void)
     if (bar_list)
     {
 	char sprite_name1[40];
-	sprintf(sprite_name1, "%s,%ss", config_animation_name, config_animation_name);
+	sprintf(sprite_name1, "%s00", config_animation_name);
 	setfield(bar_list->object_handle, I_WORLD, sprite_name1, FALSE);
+
+	sprintf(sprite_name1, "%s,%ss", config_animation_name, config_animation_name);
+	setfield(bar_list->object_handle, I_WORLD_BORDER, sprite_name1, FALSE);
     }
 }
 
@@ -1810,11 +1836,12 @@ void tb_status_resize(int xdiff, int ydiff)
     if (bar_list && (xdiff || ydiff))
     {
         movegadget(bar_list->object_handle, I_WORLD, xdiff, xdiff);
+        movegadget(bar_list->object_handle, I_WORLD_BORDER, xdiff, xdiff);
         movegadget(bar_list->object_handle, I_STATUS, 0, xdiff);
         movegadget(bar_list->object_handle, I_LIGHTS_GREEN, xdiff, xdiff);
         movegadget(bar_list->object_handle, I_LIGHTS_YELLOW, xdiff, xdiff);
         movegadget(bar_list->object_handle, I_LIGHTS_RED, xdiff, xdiff);
-        movegadget(bar_list->object_handle, I_SECURE, xdiff, xdiff);
+/*         movegadget(bar_list->object_handle, I_SECURE, xdiff, xdiff); */
     }
 }
 
@@ -2139,52 +2166,34 @@ int tb_print_redraw(wimp_redrawstr *r)
 
 /* --------------------------------------------------------------------------*/
 
-static int movehighlightto(tb_bar_info *tbi, int index)
-{
-    if (tbi->highlight != index)
-    {
-	tb_bar_set_highlight(tbi, index);
-
-	return TRUE;
-    }
-
-    return FALSE;
-}
-
-static int get_highlighted(tb_bar_info *tbi)
-{
-    int i, pressed;
-    for (i = 0; i < tbi->n_buttons; i++)
-	if (_swix(Toolbox_ObjectMiscOp, _INR(0,3) | _OUT(0), 0, tbi->object_handle, 0x140149, tbi->buttons[i].cmp, &pressed) == NULL &&
-	    pressed)
-	    return i;
-    return -1;    
-}
 
 static int movehighlight(tb_bar_info *tbi, int direction)
 {
-    int next;
+    int initial, next;
 
     if (tbi == NULL)
 	return FALSE;
 
-    tbi->highlight = get_highlighted(tbi);
-    
-    next = tbi->highlight;
+    initial = next = get_highlighted(tbi);
+
     do
     {
 	next += direction;
     }
-    while (next >= 0 && next < tbi->n_buttons && faded(tbi->object_handle, tbi->buttons[next].cmp));
+    while (next >= 0 && next < tbi->n_buttons && !selectable(tbi->object_handle, tbi->buttons[next].cmp));
     
     if (next < 0)
 	next = 0;
     if (next > tbi->n_buttons-1)
 	next = tbi->n_buttons-1;
     
-    STBDBG(("movehighlight(): dir %d from %d to %d\n", direction, tbi->highlight, next));
+    STBDBG(("movehighlight(): dir %d from %d to %d\n", direction, initial, next));
 
-    return movehighlightto(tbi, next);
+    if (initial == next)
+	return FALSE;
+    
+    tb_bar_set_highlight(tbi, next, TRUE);
+    return TRUE;
 }
 
 void tb_events(int *event, fe_view v)
@@ -2254,24 +2263,17 @@ void tb_event_handler(int event, fe_view v)
 
 	case fevent_TOOLBAR_MOVE_UP:
 	    /* transfer focus back to main window */
-	    if (config_display_control_top)
+	    if (config_display_control_top || !return_highlight(v, tbi, be_link_VERT | be_link_BACK))
 	    {
 		pointer_mode = pointermode_ON;
-		fevent_handler(fevent_SCROLL_UP, v);
+		fevent_handler(fevent_SCROLL_DOWN, v);
 		pointer_mode = pointermode_OFF;
-	    }
-	    else
-	    {
-		return_highlight(v, tbi, be_link_VERT | be_link_BACK);
 	    }
 	    break;
 
 	case fevent_TOOLBAR_MOVE_DOWN:
-	    if (config_display_control_top)
-	    {
-		return_highlight(v, tbi, be_link_VERT);
-	    }
-	    else
+	    /* transfer focus back to main window */
+	    if (!config_display_control_top || !return_highlight(v, tbi, be_link_VERT))
 	    {
 		pointer_mode = pointermode_ON;
 		fevent_handler(fevent_SCROLL_DOWN, v);
@@ -2281,7 +2283,7 @@ void tb_event_handler(int event, fe_view v)
 
 	case fevent_TOOLBAR_ACTIVATE:
 	{
-	    int cmp = tbi->buttons[tbi->highlight].cmp;
+	    int cmp = tbi->buttons[get_highlighted(tbi)].cmp;
 	    int action;
 	    os_error *e = (os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,3) | _OUT(0), 0, tbi->object_handle, 0x140143, cmp, &action);
 
@@ -2321,14 +2323,10 @@ BOOL tb_status_check_pointer(wimp_mousestr *mp)
 
 void tb_status_set_direction(int up)
 {
-#if 0
     if (bar_list)
     {
-	toolactionsetpair(bar_list->object_handle, I_DIRECTION,
-		 up ? UP_SPRITE : DOWN_SPRITE,
-		 up ? UP_SPRITE_HL : DOWN_SPRITE_HL);
+	setstate(bar_list->object_handle, I_DIRECTION, up ? 1 : 0);
     }
-#endif
 }
 
 /* --------------------------------------------------------------------------*/

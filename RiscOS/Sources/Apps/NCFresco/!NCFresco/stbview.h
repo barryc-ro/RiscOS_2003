@@ -173,6 +173,8 @@ struct _frontend_view
     int dividers_max;
 
     frame_link *frame_links;
+
+    int fast_load;
 };
 
 /* ----------------------------------------------------------------------------- */

@@ -132,6 +132,16 @@ static void centre_pointer(fe_view v)
     frontend_pointer_set_position(v, x, y);
 }
 
+static void redraw_link(fe_view v, frame_link *link)
+{
+    wimp_box box = link->box;
+    fe_view v_top = fe_find_top(v);
+    coords_cvtstr cvt = fe_get_cvt(v_top);
+
+    coords_box_toworkarea(&box, &cvt);
+    frontend_view_redraw(v_top, &box);
+}
+
 /* ------------------------------------------------------------------------------------------- */
 
 /*
@@ -348,7 +358,7 @@ void fe_move_highlight_frame(fe_view v, BOOL next)
 
         if (vv->displaying)
         {
-            vv->current_link = backend_highlight_link(vv->displaying, NULL, (next ? 0 : be_link_BACK) | be_link_VISIBLE | caretise() | be_link_MOVE_POINTER);
+            vv->current_link = backend_highlight_link(vv->displaying, NULL, (next ? 0 : be_link_BACK) | be_link_VISIBLE | caretise() | movepointer());
         }
     }
 }
@@ -396,7 +406,7 @@ void fe_move_highlight_frame(fe_view v, BOOL next)
 /* check for moving to the status bar */
 static BOOL move_to_toolbar(int flags)
 {
-    if (use_toolbox &&
+    if (use_toolbox && (flags & be_link_VERT) && 
 	config_mode_cursor_toolbar && tb_is_status_showing() &&
 	((config_display_control_top && (flags & be_link_BACK)) || (!config_display_control_top && (flags & be_link_BACK) == 0)))
     {
@@ -428,7 +438,7 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 	tb_status_set_direction(flags & be_link_BACK ? 1 : 0);
 
     /* set these flags whatever we do */
-    flags |= caretise() | be_link_MOVE_POINTER | be_link_DONT_WRAP;
+    flags |= caretise() | movepointer() | be_link_DONT_WRAP;
     
     /* move from given position - ignore any current link */
     if ((flags & be_link_XY) && box)
@@ -505,9 +515,9 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 	    frame_link *link;
 
 	    /* get coords relative to top level window */
-	    cvt = fe_get_cvt(fe_find_top(v));
+/* 	    cvt = fe_get_cvt(fe_find_top(v)); */
 	    box = link_box;
-	    coords_box_toworkarea(&box, &cvt);
+/* 	    coords_box_toworkarea(&box, &cvt); */
 
 	    /* find centre of box */
 	    x = (box.x0 + box.x1) / 2;
@@ -526,9 +536,19 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 		backend_remove_highlight(v->displaying);
 
 		link->flags |= frame_link_flag_SELECTED;
-		fe_refresh_window(fe_find_top(v)->w, NULL);
+		redraw_link(v, link);
 		return;
 	    }
+	}
+
+	/* look for new frame */
+	new_v = fe_locate_view_by_position(&v->box, flags);
+
+	/* if no new frame then try moving to toolbar */
+	if (!new_v)
+	{
+	    if ((flags & be_link_VERT) && move_to_toolbar(flags))
+		return;
 	}
 
 	STBDBG(("fe_move_highlight_xy: frames v %p try scrolling\n", v));
@@ -553,9 +573,6 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 		return;
 	    }
 	}
-
-	/* look for new frame */
-	new_v = fe_locate_view_by_position(&v->box, flags);
 
 	/* if another frame then move to it and look for link */
 	if (new_v)
@@ -588,9 +605,6 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 	    return;
 	}
 
-	if (move_to_toolbar(flags))
-	    return;
-	
 	/* if can't move on then beep */
 	STBDBG(("fe_move_highlight_xy: frames v %p can't find new frame\n", v));
 	sound_event(snd_WARN_NO_FIELD);
@@ -689,7 +703,7 @@ static os_error *fe_frame_link_array__build(fe_view v, void *handle)
     int icon_small = vals[2];
     int icon_large = vals[3];
     
-    STBDBGN(("fe_frame_link: consider v %p\n", v));
+    STBDBGN(("fe_frame_link: consider v %p sizes %dx%d\n", v, icon_small, icon_large));
 
     /* if this is not a child window then ignore immediately */
     if (v->children)
@@ -712,7 +726,7 @@ static os_error *fe_frame_link_array__build(fe_view v, void *handle)
 	if (side != -1)
 	{
 	    box.x0 = get_link_pos(v->box.x0, v->box.x1, target->box.x0, target->box.x1) - icon_large/2;
-	    box.x1 = box.x0 + icon_large/2;
+	    box.x1 = box.x0 + icon_large;
 	    box.y1 = box.y0 + icon_small;
 	}
     }
@@ -733,7 +747,7 @@ static os_error *fe_frame_link_array__build(fe_view v, void *handle)
 	if (side != -1)
 	{
 	    box.y0 = get_link_pos(v->box.y0, v->box.y1, target->box.y0, target->box.y1) - icon_large/2;
-	    box.y1 = box.y0 + icon_large/2;
+	    box.y1 = box.y0 + icon_large;
 	    box.x1 = box.x0 + icon_small;
 	}
     }
@@ -750,7 +764,7 @@ static os_error *fe_frame_link_array__build(fe_view v, void *handle)
 	fl->v = v;
 	fl->box = box;
 
-	STBDBGN(("fe_frame_link: add v %p side %d box x:%d-%d y:%d-%d\n", v, side, box.x0, box.x0, box.y0, box.y1));
+	STBDBGN(("fe_frame_link: add v %p side %d box x:%d-%d y:%d-%d\n", v, side, box.x0, box.x1, box.y0, box.y1));
     }
     
     return NULL;
@@ -778,7 +792,7 @@ void fe_frame_link_array_build(fe_view v)
     vals[2] = info.width << bbc_modevar(info.mode, bbc_XEigFactor);	/* icon's small side size (OS) */
     vals[3] = info.height << bbc_modevar(info.mode, bbc_YEigFactor);	/* icon's large side size (OS) */
 
-    STBDBG(("fe_frame_link_array_build: v %p\n", v));
+    STBDBG(("fe_frame_link_array_build: v %p size %dx%d OS units\n", v, vals[2], vals[3]));
 
     iterate_frames(fe_find_top(v), fe_frame_link_array__build, vals);
 
@@ -850,7 +864,7 @@ void fe_frame_link_move(fe_view v, int flags)
 	    STBDBG(("fe_frame_link_move: back onto page\n"));
 
 	    link->flags &= ~frame_link_flag_SELECTED;
-	    fe_refresh_window(fe_find_top(v)->w, NULL);
+	    redraw_link(v, link);
 	    fe_move_highlight_xy(v, &box, flags | be_link_XY | be_link_VISIBLE);
 	    return;
 	}
@@ -862,7 +876,8 @@ void fe_frame_link_move(fe_view v, int flags)
 
 	    link->flags &= ~frame_link_flag_SELECTED;
 	    new_link->flags |= frame_link_flag_SELECTED;
-	    fe_refresh_window(fe_find_top(v)->w, NULL);
+	    redraw_link(v, link);
+	    redraw_link(v, new_link);
 	    return;
 	}
 
@@ -891,11 +906,11 @@ int fe_frame_link_selected(fe_view v)
 
 static os_error *fe_frame_link_clear(fe_view v, void *handle)
 {
-    frame_link *link = link_selected(v);
-    if (link)
+    frame_link *fl = link_selected(v);
+    if (fl && (fl->flags & frame_link_flag_SELECTED))
     {
-	link->flags &= ~frame_link_flag_SELECTED;
-	fe_refresh_window(fe_find_top(v)->w, NULL);
+	fl->flags &= ~frame_link_flag_SELECTED;
+	redraw_link(v, fl);
     }
     return NULL;
     NOT_USED(handle);
@@ -904,6 +919,21 @@ static os_error *fe_frame_link_clear(fe_view v, void *handle)
 void fe_frame_link_clear_all(fe_view v)
 {
     iterate_frames(fe_find_top(v), fe_frame_link_clear, NULL);
+}
+
+
+static os_error *fe_frame_link_redraw(fe_view v, void *handle)
+{
+    frame_link *fl;
+    for (fl = v->frame_links; fl; fl = fl->next)
+	redraw_link(v, fl);
+    return NULL;
+    NOT_USED(handle);
+}
+
+void fe_frame_link_redraw_all(fe_view v)
+{
+    iterate_frames(fe_find_top(v), fe_frame_link_redraw, NULL);
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -929,7 +959,7 @@ void fe_cursor_movement(fe_view v, int x, int y)
 	flags |= be_link_BACK;
 
     if (on_screen_kbd == 0)
-	flags |= be_link_MOVE_POINTER;
+	flags |= movepointer();
     
     v->current_link = backend_highlight_link(v->displaying, v->current_link, flags);					     
 }
@@ -972,7 +1002,7 @@ os_error *fe_handle_enter(fe_view v)
 
 /*             e = backend_activate_link(v->displaying, v->current_link, 0); */
 
-	    v->current_link = backend_highlight_link(v->displaying, v->current_link, be_link_MOVE_POINTER | be_link_TEXT | be_link_VERT | be_link_CARETISE | be_link_INCLUDE_CURRENT);
+	    v->current_link = backend_highlight_link(v->displaying, v->current_link, movepointer() | be_link_TEXT | be_link_VERT | be_link_CARETISE | be_link_INCLUDE_CURRENT);
 
 	    fe_keyboard_open(v);
 	}

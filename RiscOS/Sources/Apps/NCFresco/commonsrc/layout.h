@@ -6,5 +6,6 @@ extern void layout_layout(antweb_doc *doc, int totalw, int totalh, int refresh_o
 extern int layout_frame_resize_bounds(antweb_doc *doc, int x, int y, wimp_box *box, int *handle);
 extern void layout_free_spacing_list(antweb_doc *doc);
 extern void layout_frame_resize(antweb_doc *doc, int x, int y, int handle);
+extern void layout_render_bevels(wimp_redrawstr *r, antweb_doc *doc);
 
 /* eof layout.h */

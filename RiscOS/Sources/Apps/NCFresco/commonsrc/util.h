@@ -48,9 +48,10 @@ char *optimise_string( char *s );
 int suffix_to_file_type(const char *suffix);
 int mime_to_file_type(const char *mime);
 
+extern int file_and_object_type_real(const char *fname, int *obj_type);
 extern int file_and_object_type(const char *fname, int *obj_type);
 extern int file_type_real(const char *fname);
-int file_type(const char *fname);
+extern int file_type(const char *fname);
 extern int file_last_modified(const char *fname);
 int set_file_type(const char *fname, int ft);
 extern int path_is_directory(const char *path);

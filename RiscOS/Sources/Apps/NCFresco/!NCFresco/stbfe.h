@@ -138,8 +138,7 @@ extern void fe_font_size_set(int value, BOOL absolute);
 extern BOOL fe_font_size_set_possible(int value, BOOL absolute);
 extern void fe_beeps_set(int state);
 extern void fe_bgsound_set(int state);
-
-extern void fe_force_fit(fe_view v, BOOL force);
+extern void fe_scaling_set(int state);
 
 extern void fe_iconise(BOOL iconise);
 extern fe_view fe_locate_view(const char *name);
@@ -155,6 +154,7 @@ extern void fe_cursor_movement(fe_view v, int x, int y);
 extern int fe_encoding(fe_view v, int encoding);
 
 extern int caretise(void);
+extern int movepointer(void);
 
 /* From internal.h */
 
@@ -215,6 +215,7 @@ extern void fe_frame_link_move(fe_view v, int flags);
 extern void fe_frame_link_activate(fe_view v);
 extern int fe_frame_link_selected(fe_view v);
 extern void fe_frame_link_clear_all(fe_view v);
+extern void fe_frame_link_redraw_all(fe_view v);
 
 /* stbfe.h*/
 

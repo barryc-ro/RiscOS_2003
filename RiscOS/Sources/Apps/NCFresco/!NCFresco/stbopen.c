@@ -337,7 +337,6 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
         
     if (strncmp(url, PROGRAM_NAME"internal:", sizeof(PROGRAM_NAME"internal:")-1) == 0)
         oflags |= be_openurl_flag_BODY_COLOURS;
-
 #if 0
     if (bfile)
     {

@@ -708,11 +708,7 @@ void fe_key_handler(fe_view v, wimp_eventstr *e, BOOL use_toolbox, int browser_m
     }
 
     if (event == -1 && on_screen_kbd)
-    {
 	event = fe_key_lookup(chcode, get_key_map(key_map_OSK));
-	if (event == -1)
-	    event = 0;
-    }
     
     if (event == -1 && fe_writeable_handle_keys(v, chcode))
     {

@@ -15,7 +15,7 @@ extern char *program_title;
 
 #define PROGRAM_NAME		"NCFresco"
 #define PROGRAM_TITLE		"NCBrowser"
-#define VERSION_NUMBER		"1.10"
+#define VERSION_NUMBER		"1.11"
 #define BASE_VERSION_NUMBER	"1.43" /* Fresco version */
 
 #ifdef PRODUCTION

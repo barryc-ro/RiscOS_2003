@@ -1361,6 +1361,10 @@ int backend_render_rectangle(wimp_redrawstr *rr, void *h, int update)
 		      ox, oy,
 		      left, top, right, bot,
 		      &fs, &rr->g, update);
+
+
+	/* render frame borders */
+	layout_render_bevels(rr, doc);
     }
 
     if (doc->encoding != be_encoding_LATIN1)
@@ -4518,6 +4522,7 @@ extern os_error *backend_open_url(fe_view v, be_doc *docp,
     ep = access_url(use_url,
 		    (flags & be_openurl_flag_NOCACHE ? access_NOCACHE : 0) |
 		    (flags & be_openurl_flag_HISTORY ? 0 : access_CHECK_EXPIRE) |
+		    (flags & be_openurl_flag_FAST_LOAD ? 0 : access_MAX_PRIORITY) |
 		    access_CHECK_FILE_TYPE | access_PRIORITY,
 		    NULL, bfile, referer,
 		    &antweb_doc_progress, &antweb_doc_complete, new, &new->ah);
@@ -4557,7 +4562,12 @@ extern os_error *backend_open_url(fe_view v, be_doc *docp,
 	    break;
 
 	case ANTWEB_ERROR_BASE + ERR_NO_ACTION:
+	    frontend_view_status(v, sb_status_FINISHED);
 	    ep = NULL;
+	    break;
+
+	default:
+	    frontend_view_status(v, sb_status_FINISHED);
 	    break;
 	}
 

@@ -114,8 +114,8 @@ extern void startframe (SGMLCTX * context, ELEMENT * element, VALUES * attribute
 	frame->src = stringdup(attr->u.s);
 
     /* Netscape 3 features */
-    if ((attr = &attributes->value[HTML_FRAME_FRAMEBORDER])->type == value_integer)
-        container->border = attr->u.i != 0;
+    if ((attr = &attributes->value[HTML_FRAME_FRAMEBORDER])->type == value_bool)
+        container->border = attr->u.i;
     else
 	container->border = me->frameset->border;
     
@@ -197,8 +197,8 @@ extern void startframeset (SGMLCTX * context, ELEMENT * element, VALUES * attrib
     else if ((attr = &attributes->value[HTML_FRAMESET_FRAMESPACING])->type == value_integer)
         frameset->bwidth = attr->u.i*2;
 
-    if ((attr = &attributes->value[HTML_FRAMESET_FRAMEBORDER])->type == value_integer)
-        container->border = attr->u.i != 0;
+    if ((attr = &attributes->value[HTML_FRAMESET_FRAMEBORDER])->type == value_bool)
+        container->border = attr->u.i;
 
     if ((attr = &attributes->value[HTML_FRAMESET_BORDERCOLOR])->type == value_none)
 	attr = &attributes->value[HTML_FRAMESET_BORDERCOLOUR];

@@ -250,10 +250,13 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
 	return;
 
-    if (draw_selection_box && sel->base.colours.select != -1)
+    if (draw_selection_box)
     {
+	if (sel->base.colours.select != -1)
+	    bg = sel->base.colours.select | render_colour_RGB;
+	else
+	    bg = render_colour_INPUT_S;
 	draw_selection_box = FALSE;
-	bg = sel->base.colours.select | render_colour_RGB;
     }
     else
     {
@@ -262,10 +265,22 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 
     fg = sel->base.colours.back == -1 ? render_colour_INPUT_F : render_text_link_colour(ti, doc);
 
+    
+#ifdef STBWEB
+    render_plinth_full(bg,
+		       ti->flag & rid_flag_SELECTED ? plinth_col_HL_M : plinth_col_M, 
+		       ti->flag & rid_flag_SELECTED ? plinth_col_HL_L : plinth_col_L, 
+		       ti->flag & rid_flag_SELECTED ? plinth_col_HL_D : plinth_col_D,
+		       render_plinth_RIM | render_plinth_DOUBLE_RIM,
+		       hpos, bline - ti->max_down,
+		       ti->width - (sel->flags & rid_if_NOPOPUP ? 4 : 52),
+		       (ti->max_up + ti->max_down), doc );
+#else
     render_plinth(bg, render_plinth_IN,
 		  hpos, bline - ti->max_down,
 		  ti->width - (sel->flags & rid_if_NOPOPUP ? 4 : 52),
 		  (ti->max_up + ti->max_down), doc );
+#endif
 
     for(oi = sel->options; oi; oi = oi->next)
     {

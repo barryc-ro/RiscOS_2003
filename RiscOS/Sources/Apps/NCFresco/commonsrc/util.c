@@ -162,7 +162,7 @@ int set_file_type(const char *fname, int ft)
     return (os_file(&osf) == NULL);
 }
 
-int file_and_object_type(const char *fname, int *obj_type)
+int file_and_object_type_real(const char *fname, int *obj_type)
 {
     os_filestr ofs;
     os_error *ep;
@@ -203,7 +203,7 @@ int file_and_object_type(const char *fname, int *obj_type)
 
 int file_type_real(const char *fname)
 {
-    return file_and_object_type(fname, NULL);
+    return file_and_object_type_real(fname, NULL);
 }
 
 /* return last modified time in unix style */
@@ -242,10 +242,15 @@ int file_last_modified(const char *fname)
 
 int file_type(const char *fname)
 {
+    return file_and_object_type(fname, NULL);
+}
+
+int file_and_object_type(const char *fname, int *obj_type)
+{
     int ft, ft2;
     char *dot, *suffix;
 
-    ft = file_type_real(fname);
+    ft = file_and_object_type_real(fname, obj_type);
 
     if (ft != FILETYPE_TEXT && ft != FILETYPE_DATA && ft != FILETYPE_DOS && ft != FILETYPE_UNIXEX)
 	return ft;

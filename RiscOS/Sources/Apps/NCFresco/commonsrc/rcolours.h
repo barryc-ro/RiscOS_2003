@@ -15,14 +15,29 @@
 #define render_colour_LINE_D	7
 #define render_colour_INPUT_F	8
 #define render_colour_INPUT_B	9
-#define render_colour_HIGHLIGHT 10
-#define render_colour_ACTIVATED 11
-#define render_colour_RGB       12
+#define render_colour_INPUT_S	10
+#define render_colour_HIGHLIGHT 11
+#define render_colour_ACTIVATED 12
+#define render_colour_RGB       13
 
 /* pdh: render_colour_RGB in the bottom byte means that the top three bytes
  * are an RGB colour
  */
 
-#define render_colour_COUNT	13
+#define render_colour_COUNT	14
+
+/* ---------------------------------------------------------------------- */
+
+#ifdef STBWEB
+#define plinth_col_L	(0x55555500 | render_colour_RGB)
+#define plinth_col_M	(0x42424200 | render_colour_RGB)
+#define plinth_col_D	(0x21212100 | render_colour_RGB)
+
+#define plinth_col_HL_L	(0x87878700 | render_colour_RGB)
+#define plinth_col_HL_M	(0x75757500 | render_colour_RGB)
+#define plinth_col_HL_D	(0x66666600 | render_colour_RGB)
+#endif
+
+/* ---------------------------------------------------------------------- */
 
 #endif

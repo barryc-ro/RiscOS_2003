@@ -90,6 +90,7 @@ config_item citems[] = {
 { config_INT,	"display.scale.1",	(void *)offsetof(struct config_str, display_scales[0]),	"Scale level 1", (void *)  80 },
 { config_INT,	"display.scale.2",	(void *)offsetof(struct config_str, display_scales[1]),	"Scale level 2", (void *) 100 },
 { config_INT,	"display.scale.3",	(void *)offsetof(struct config_str, display_scales[2]),	"Scale level 3", (void *) 125 },
+{ config_BOOL,	"display.scale.fit",	(void *)offsetof(struct config_str, display_scale_fit),		"Force page to fit", (void *) 0  },
 { config_INT,	"display.width",	(void *)offsetof(struct config_str, display_width),		"Default page width in characters", (void *) 71  },
 { config_BOOL,	"display.blending",	(void *)offsetof(struct config_str, display_blending),	"Blend fonts to background", (void *) 0  },
 { config_INT,	"display.margin.left",	(void *)offsetof(struct config_str, display_margin.x0),		"Margin left (%)", (void *) 0 },
@@ -150,18 +151,19 @@ config_item citems[] = {
 { config_FONT, "font.fixed.i",	(void *)offsetof(struct config_str, font_names[6]),	"... the italic form",	"Corpus.Medium.Oblique"  },
 { config_FONT, "font.fixed.bi",	(void *)offsetof(struct config_str, font_names[7]),	"... bold and italic",	"Corpus.Bold.Oblique"  },
 { config_COMMENT, NULL, NULL, "", NULL },
-{ config_COLOUR, "colour.plain",	(void *)offsetof(struct config_str, colours[0]), "Colour for normal text", 				(void *) 0x00000000  },
+{ config_COLOUR, "colour.plain",	(void *)offsetof(struct config_str, colours[0]), "Colour for normal text", 			(void *) 0x00000000  },
 { config_COLOUR, "colour.anchor",	(void *)offsetof(struct config_str, colours[1]), "Colour for text in hypertext links",		(void *) 0xdd220000  },
 { config_COLOUR, "colour.visited",	(void *)offsetof(struct config_str, colours[2]), "Colour for text in links that have been visited",	(void *) 0x88220000  },
 { config_COLOUR, "colour.back",		(void *)offsetof(struct config_str, colours[3]), "Background colour",				(void *) 0xdddddd00  },
-{ config_COLOUR, "colour.action",	(void *)offsetof(struct config_str, colours[4]), "Colour for for action buttons",			(void *) 0x00bbff00  },
+{ config_COLOUR, "colour.action",	(void *)offsetof(struct config_str, colours[4]), "Colour for activating buttons",		(void *) 0x00bbff00  },
 { config_COLOUR, "colour.write",	(void *)offsetof(struct config_str, colours[5]), "Colour for writable areas",			(void *) 0xffffff00  },
 { config_COLOUR, "colour.line.light",	(void *)offsetof(struct config_str, colours[6]), "Colour for the light side of rules",		(void *) 0xffffff00  },
 { config_COLOUR, "colour.line.dark",	(void *)offsetof(struct config_str, colours[7]), "Colour for the dark side of rules",		(void *) 0x55555500  },
 { config_COLOUR, "colour.button.text",	(void *)offsetof(struct config_str, colours[8]), "Colour for text on buttons",			(void *) 0x00000000  },
-{ config_COLOUR, "colour.button.back",	(void *)offsetof(struct config_str, colours[9]), "Background colour for buttons",			(void *) 0xdddddd00  },
-{ config_COLOUR, "colour.highlight",	(void *)offsetof(struct config_str, colours[10]), "Colour for highlighted link",			(void *) 0xff000000  },
-{ config_COLOUR, "colour.activated",	(void *)offsetof(struct config_str, colours[10]), "Colour for activating link",			(void *) 0x0000ff00  },
+{ config_COLOUR, "colour.button.back",	(void *)offsetof(struct config_str, colours[9]), "Background colour for buttons",		(void *) 0xdddddd00  },
+{ config_COLOUR, "colour.button.select",(void *)offsetof(struct config_str, colours[10]), "Colour for selected button",			(void *) 0xdddddd00  },
+{ config_COLOUR, "colour.highlight",	(void *)offsetof(struct config_str, colours[11]), "Colour for highlighted link",		(void *) 0xff000000  },
+{ config_COLOUR, "colour.activated",	(void *)offsetof(struct config_str, colours[12]), "Colour for activating link",			(void *) 0x0000ff00  },
 { config_COMMENT, NULL, NULL, "", NULL },
 { config_BOOL,	"proxy.http.enable",	(void *)offsetof(struct config_str, proxy_http_on),	"Enable proxies",	(void *) 0  },
 { config_BOOL,	"proxy.https.enable",	(void *)offsetof(struct config_str, proxy_https_on),	NULL,	                (void *) 0  },
@@ -216,6 +218,8 @@ config_item citems[] = {
 /* This gets called to set up all the config */
 extern void config_init(void)
 {
+    int font_version;
+
     config_default_first();
     config_read_file();
 #ifdef STBWEB
@@ -236,11 +240,14 @@ extern void config_init(void)
     }
 #endif
 
-    /* SJM */
-    os_cli("Unset "PROGRAM_NAME"$Temp");
-    os_cli("RMEnsure FontManager 3.36 Set "PROGRAM_NAME"$Temp 1");
-    if (getenv(PROGRAM_NAME"$Temp") != NULL)
+    /* get font version number the nicer way */
+    _swix(Font_CacheAddr, _OUT(0), &font_version);
+    if (font_version < 336)
         config_display_blending = FALSE;
+    if (font_version < 340)
+    {
+	/* 16bit fonts not available */
+    }
 }
 
 extern void config_tidyup(void)

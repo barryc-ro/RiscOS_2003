@@ -49,9 +49,8 @@
 #define fevent_GLOBAL_SHOW_VERSION          0x1006
 #define fevent_GLOBAL_OPEN_MEM_DUMP	    0x1007
 #define fevent_GLOBAL_CYCLE_JPEG	    0x1008
-#define fevent_GLOBAL_TOGGLE_FORCE_FIT	    0x1009
-#define fevent_GLOBAL_ICONISE		    0x100A
-#define fevent_GLOBAL_DEICONISE		    0x100B
+#define fevent_GLOBAL_ICONISE		    0x1009
+#define fevent_GLOBAL_DEICONISE		    0x100A
 
 #define fevent_GLOBAL_FONT_MASK		    0x000f
 #define fevent_GLOBAL_FONT_SET		    0x1100 /* up to 14 different font settings */
@@ -91,8 +90,7 @@
 #define fevent_MENU_DEBUG                   0x2037
 #define fevent_DBOX_CANCEL                  0x2038
 #define fevent_OPEN_URL                     0x2039
-#define fevent_FORCE_FIT		    0x203A
-#define fevent_UNFORCE_FIT		    0x203B
+
 #define fevent_SEARCH_PAGE		    0x203C
 #define fevent_OFFLINE_PAGE		    0x203D
 #define fevent_INFO_PAGE		    0x203E
@@ -143,6 +141,7 @@
 #define fevent_OPEN_FONT_SIZE		    0x2085
 #define fevent_OPEN_SOUND		    0x2086
 #define fevent_OPEN_BEEPS		    0x2087
+#define fevent_OPEN_SCALING		    0x2088
 
 #define fevent_STATUS_INFO_LEVEL            0x2090  /* +F */
 
@@ -169,6 +168,9 @@
 #define fevent_BEEPS_TOGGLE		    0x20B7
 #define fevent_BEEPS_ON			    0x20B8
 #define fevent_BEEPS_OFF		    0x20B9
+#define fevent_SCALING_TOGGLE		    0x20BA
+#define fevent_SCALING_ON		    0x20BB
+#define fevent_SCALING_OFF		    0x20BC
 
 /* The order here must match the table in stbevent.c */
 #define fevent_CODEC_STOP		    0x20C0

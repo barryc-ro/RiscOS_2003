@@ -624,5 +624,45 @@ extern VALUE sgml_do_parse_enum_string(SGMLCTX *context, ATTRIBUTE *attribute, S
     return sgml_do_parse_string(context, attribute, string);
 }
 
+/*****************************************************************************/
+
+extern VALUE sgml_do_parse_bool(SGMLCTX *context, ATTRIBUTE *attribute, STRING string)
+{
+    VALUE v;
+
+    if (string.bytes == 0)
+    {
+	v.type = value_void;
+	return v;
+    }
+
+    switch (string.ptr[0])
+    {
+    case 'n':
+    case 'N':
+    case '0':
+	v.type = value_bool;
+	v.u.i = 0;
+	break;
+	
+    case 'y':
+    case 'Y':
+    case '1':
+	v.type = value_bool;
+	v.u.i = 1;
+	break;
+
+    default:
+#if SGML_REPORTING
+	sgml_note_bad_attribute(context, "Bad bool value '%.*s'",  min(string.bytes, MAXSTRING), string.ptr);
+#endif
+	v.type = value_none;
+	break;
+    }	
+
+    return v;
+}
+
+/*****************************************************************************/
 
 /* eof attrparse.c */

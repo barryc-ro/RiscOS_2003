@@ -105,10 +105,13 @@ static void oinput_update_box(rid_text_item *ti, wimp_box *box)
     {
         case rid_it_TEXT:
         case rid_it_PASSWD:
-            box->x0 =   2*5;
-            box->x1 = - 2*5;
-            box->y1 = - 2*5;
-            box->y0 =   2*5;
+	    if ((ii->flags & rid_if_NUMBERS) == 0)
+	    {
+		box->x0 =   2*5;
+		box->x1 = - 2*5;
+		box->y1 = - 2*5;
+		box->y0 =   2*5;
+	    }
             break;
 
         case rid_it_SUBMIT:
@@ -188,6 +191,25 @@ static int text_displayable_width(int xsize, antweb_doc *doc)
     if (n == 0)
 	n = 1;
     return n;
+}
+
+static int oinput_image_renderable(rid_input_item *ii, antweb_doc *doc)
+{
+    int fl;
+    if (ii->data.image.im == NULL)
+	return FALSE;
+
+    if (doc->flags & doc_flag_NO_PICS)
+	return FALSE;
+    
+    image_info((image) ii->data.image.im, 0, 0, 0, &fl, 0, 0);
+    if (fl & image_flag_REALTHING)
+	return TRUE;
+
+    if (/* tii->alt == NULL && */((doc->flags & doc_flag_DEFER_IMAGES) != 0 || (ii->hh == -1 && ii->ww == -1)))
+	return TRUE;
+    
+    return FALSE;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -333,36 +355,52 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
     switch (ii->tag)
     {
     case rid_it_IMAGE:
-	if (ii->data.image.im && ((doc->flags & doc_flag_NO_PICS) == 0))
+    {
+	wimp_box bbox;
+	int bw = 1;
+
+	bbox.x0 = hpos + 0 + bw*2;
+	bbox.y0 = bline - ti->max_down + 0 + bw*2;
+	bbox.x1 = bbox.x0 + ti->width - 0 - bw*2*2;
+	bbox.y1 = bbox.y0 + ti->max_up + ti->max_down - 0 - bw*2*2;
+
+	if (oinput_image_renderable(ii, doc))
 	{
 	    int oox = ox, ooy = oy;
 #if USE_MARGINS
 	    oox -= doc->margin.x0;
 	    ooy -= doc->margin.y1;
-#endif
-	    image_render((image) ii->data.image.im, hpos+2, bline + 2 - ti->max_down,
-			 ti->width/2, (ti->max_up + ti->max_down)/2, doc->scale_value, antweb_render_background, doc, oox, ooy);
+#endif /* USE_MARGINS */
+	    image_render((image) ii->data.image.im, bbox.x0, bbox.y0,
+			 (bbox.x1 - bbox.x0)/2,
+			 (bbox.y1 - bbox.y0)/2,
+			 doc->scale_value, antweb_render_background, doc,
+			 oox, ooy);
 	}
 	else
 	{
-	    render_set_colour(render_colour_PLAIN, doc);
-	    bbc_move(hpos, bline - ti->max_down);
-	    bbc_drawby(ti->width - frontend_dx, 0);
-	    bbc_drawby(0, ti->max_down + ti->max_up - frontend_dy);
-	    bbc_drawby(- (ti->width - frontend_dx), 0);
-	    bbc_drawby(0, -(ti->max_down + ti->max_up - frontend_dy) );
+	    render_plinth(render_colour_BACK, render_plinth_NOFILL | render_plinth_DOUBLE,
+			  bbox.x0, bbox.y0, bbox.x1 - bbox.x0, bbox.y1 - bbox.y0, doc);
+
+	    oimage_render_text(ti, doc, fs, &bbox, "");
 	}
 	break;
+    }
     case rid_it_TEXT:
     case rid_it_PASSWD:
+    {
+	int has_caret;
 	plotx = hpos + 10;
 
 	slen = strlen(ii->data.str);
+	has_caret = be_item_has_caret(doc, ti);
 
-	fg = ii->base.colours.back == -1 ? render_colour_INPUT_F : render_text_link_colour(ti, doc);
-	bg = ii->base.colours.back == -1 ? render_colour_WRITE :
-	    be_item_has_caret(doc, ti) && ii->base.colours.select != -1 ?
-	    ii->base.colours.select | render_colour_RGB : ii->base.colours.back | render_colour_RGB;
+	fg = ii->base.colours.back == -1 && ii->base.colours.select == -1 ? render_colour_PLAIN :
+	    render_text_link_colour(ti, doc);
+
+	bg = has_caret && ii->base.colours.select != -1 ? ii->base.colours.select | render_colour_RGB :
+	    ii->base.colours.back != -1 ? ii->base.colours.back | render_colour_RGB :
+	    render_colour_WRITE;
     
 	if (fs->lf != webfonts[WEBFONT_TTY].handle)
 	{
@@ -376,34 +414,49 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	    render_set_font_colours(fs->lfc, bg, doc);
 	}
 
-	if (be_item_has_caret(doc, ti))
+	if (has_caret)
 	{
-/* 	    if (doc->selection.data.text.input_offset < 0) */
-/* 		doc->selection.data.text.input_offset = strlen(ii->data.str); */
-
 	    plotx = get_string_start(ii->data.str, doc->selection.data.text.input_offset,
 				     plotx, ii->base.display->width - 2*INPUT_TEXT_BORDER_X,
 				     ii->flags & rid_if_NUMBERS);
 	}
 
+#ifdef STBWEB
 	if (ii->flags & rid_if_NUMBERS)
 	{
 	    int i, char_width = webfont_tty_width(1, TRUE); /* webfonts[WEBFONT_TTY].space_width; */
 	    int n = text_displayable_width(ii->xsize, doc);
+	    int bg1 = ii->base.colours.back == -1 ? render_colour_WRITE : ii->base.colours.back | render_colour_RGB;
 
 	    for (i = 0; i < n; i++)
-		render_plinth(bg, render_plinth_RIM | render_plinth_IN,
-			      hpos + i * (NUMBERS_SPACING_X + char_width),
-			      bline - ti->max_down,
-			      char_width + 2*INPUT_TEXT_BORDER_X, (ti->max_up + ti->max_down),
-			      doc );
+	    {
+		BOOL select = has_caret && i == doc->selection.data.text.input_offset;
+		render_plinth_full(select ? bg : bg1,
+				   select ? plinth_col_HL_M : plinth_col_M, 
+				   select ? plinth_col_HL_L : plinth_col_L, 
+				   select ? plinth_col_HL_D : plinth_col_D, 
+				   render_plinth_RIM | render_plinth_DOUBLE_RIM,
+				   hpos + i * (NUMBERS_SPACING_X + char_width),
+				   bline - ti->max_down,
+				   char_width + 2*INPUT_TEXT_BORDER_X, (ti->max_up + ti->max_down),
+				   doc );
+	    }
 	}
 	else
 	{
-	    render_plinth(bg, render_plinth_RIM | render_plinth_IN,
+	    render_plinth_full(bg,
+			       has_caret ? plinth_col_HL_M : plinth_col_M, 
+			       has_caret ? plinth_col_HL_L : plinth_col_L, 
+			       has_caret ? plinth_col_HL_D : plinth_col_D, 
+			       render_plinth_RIM | render_plinth_DOUBLE_RIM,
+			       hpos, bline - ti->max_down,
+			       ti->width, (ti->max_up + ti->max_down), doc );
+	}
+#else
+	render_plinth(bg, render_plinth_RIM | render_plinth_IN,
 		      hpos, bline - ti->max_down,
 		      ti->width, (ti->max_up + ti->max_down), doc );
-	}
+#endif
 
 	/* Check for whether the text needs redrawing if it does 
 	 * use the intersection of graphics window and text box
@@ -440,7 +493,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 		    str = ii->data.str;
 		
 		_swix(Font_Paint, _INR(1,5), str,
-		      (ii->flags & rid_if_NUMBERS ? (1<<5) : 0),
+		      (ii->flags & rid_if_NUMBERS ? (1<<5) | 0x800 : 0), /* add blending for numbers as the bg changes colour */
 		      plotx * MILIPOINTS_PER_OSUNIT,
 		      bline * MILIPOINTS_PER_OSUNIT,
 		      coords);
@@ -449,12 +502,15 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	    }
 	}
 	break;
-
+    }
+    
     case rid_it_SUBMIT:
     case rid_it_RESET:
     case rid_it_BUTTON:
-	fg = ii->base.colours.back == -1 && ii->data.button.im == NULL ? render_colour_INPUT_F : render_text_link_colour(ti, doc);
-	bg = ii->data.button.tick ? render_colour_ACTION : ii->base.colours.back == -1 ? render_colour_INPUT_B : ii->base.colours.back | render_colour_RGB;
+	fg = ii->base.colours.back == -1 && ii->base.colours.select == -1 && ii->data.button.im == NULL ? render_colour_INPUT_F :
+	    render_text_link_colour(ti, doc);
+	bg = 0;
+
 	t = ii->value ? ii->value : ii->tag == rid_it_SUBMIT ? "Submit" : "Reset";
 
 	if (ii->data.button.im)
@@ -483,10 +539,36 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	}
 	else
 	{
+	    if (ii->data.button.tick)
+	    {
+		bg = render_colour_ACTION;
+		draw_selection_box = FALSE;
+	    }
+	    else if (draw_selection_box)
+	    {
+		if (ii->base.colours.select == -1)
+		    bg = render_colour_INPUT_S;
+		else
+		    bg = ii->base.colours.select | render_colour_RGB;
+		draw_selection_box = FALSE;
+	    }
+	    else
+		bg = (ii->base.colours.back == -1 ? render_colour_INPUT_B : ii->base.colours.back | render_colour_RGB);
+
+#ifdef STBWEB
+	    render_plinth_full(bg,
+			       ti->flag & rid_flag_SELECTED ? plinth_col_HL_M : plinth_col_M, 
+			       ti->flag & rid_flag_SELECTED ? plinth_col_HL_L : plinth_col_L, 
+			       ti->flag & rid_flag_SELECTED ? plinth_col_HL_D : plinth_col_D, 
+			       render_plinth_RIM | render_plinth_DOUBLE_RIM,
+			       hpos, bline - ti->max_down,
+			       ti->width, (ti->max_up + ti->max_down), doc );
+#else
 	    render_plinth(bg,
-		      ii->data.button.tick ? render_plinth_IN : 0,
-		      hpos, bline - ti->max_down,
-		      ti->width, (ti->max_up + ti->max_down), doc );
+			  ii->data.button.tick ? render_plinth_IN : 0,
+			  hpos, bline - ti->max_down,
+			  ti->width, (ti->max_up + ti->max_down), doc );
+#endif
 	    plotx = 10;
 	}
 	
@@ -504,6 +586,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 
 	font_paint(t, font_OSCOORDS + (config_display_blending && ii->data.button.im ? 0x800 : 0), hpos + plotx, bline);
 	break;
+
     case rid_it_RADIO:
     case rid_it_CHECK:
     {
@@ -908,29 +991,34 @@ BOOL oinput_caret(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int repos)
     case rid_it_PASSWD:
 	if (repos == object_caret_BLUR)
 	{
+#ifdef STBWEB
+	    antweb_update_item(doc, ti);
+#else
 	    if (ii->base.colours.select != -1)
 		antweb_update_item(doc, ti);
+#endif
 	    return FALSE;
 	}
-    
-	if (repos == object_caret_FOCUS && ii->base.colours.select != -1)
-	    antweb_update_item(doc, ti);
-    
-	stream_find_item_location(ti, &cx, &cy);
-
+	
 	slen = strlen(ii->data.str);
 	
 	if (doc->selection.data.text.input_offset < 0)
 	{
-	    doc->selection.data.text.input_offset = slen;
-	    repos = object_caret_REPOSITION;
+	    doc->selection.data.text.input_offset = (ii->flags & rid_if_NUMBERS) ? 0 : slen;
+	    if (repos == object_caret_REDISPLAY)
+		repos = object_caret_REPOSITION;
 	}
 	if (doc->selection.data.text.input_offset >= ii->max_len && (ii->flags & rid_if_NUMBERS))
 	{
 	    doc->selection.data.text.input_offset = ii->max_len-1;
-	    repos = object_caret_REPOSITION;
+	    if (repos == object_caret_REDISPLAY)
+		repos = object_caret_REPOSITION;
 	}
 
+	if (repos == object_caret_FOCUS)
+	    antweb_update_item(doc, ti);
+
+	stream_find_item_location(ti, &cx, &cy);
 	ep = font_setfont(webfonts[WEBFONT_TTY].handle);
 	if (ep)
 	    break;
@@ -1028,14 +1116,18 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 		    if (i == len)
 			ii->data.str[i+1] = 0;
 
+		    /* if fall off the end then counts as not used */
 		    if (doc->selection.data.text.input_offset < ii->max_len-1)
+		    {
 			doc->selection.data.text.input_offset++;
+			used = TRUE;
+		    }
 		    
 		    redraw = TRUE;
-		    used = TRUE;
 		}
 		else
 		{
+		    used = TRUE;
 		    sound_event(snd_WARN_BAD_KEY);
 		}
 	    }
@@ -1118,7 +1210,7 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 			antweb_submit_form(doc, ii->base.parent, 0);	/* No such thing as a right click here */
 			if (first)
 			    first->data.button.tick = 0;
-			redraw = TRUE;
+			used = redraw = TRUE;
 		    }
 		}
 		break;
@@ -1127,61 +1219,61 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 		{
 		    memmove(ii->data.str + i - 1, ii->data.str + i, (len + 1 - i));
 		    doc->selection.data.text.input_offset--;
-		    redraw = TRUE;
+		    used = redraw = TRUE;
 		}
 		break;
 	    case key_action_DELETE_ALL:
 	    case key_action_DELETE_ALL_AREA:
 		ii->data.str[0] = 0;
 		doc->selection.data.text.input_offset = 0;
-		redraw = TRUE;
+		used = redraw = TRUE;
 		break;
 
 	    case key_action_DELETE_TO_END:
 		ii->data.str[i] = 0;
-		redraw = TRUE;
+		used = redraw = TRUE;
 		break;
 
 	    case key_action_DELETE_RIGHT:
 		if (i < len)
 		{
 		    memmove(ii->data.str + i, ii->data.str + i + 1, (len - i));
-		    redraw = TRUE;
+		    used = redraw = TRUE;
 		}
 		break;
 
 	    case key_action_LEFT:
+		used = TRUE;
+		/* deliberate fuall-through */
 	    case key_action_LEFT_OR_OFF:
 		if (i > 0)
 		{
 		    doc->selection.data.text.input_offset--;
-		    redraw = TRUE;
+		    used = redraw = TRUE;
 		}
-		else
-		    redraw = action == key_action_LEFT;
 		break;
 
 	    case key_action_RIGHT:
+		used = TRUE;
+		/* deliberate fuall-through */
 	    case key_action_RIGHT_OR_OFF:
 		if (i < (ii->flags & rid_if_NUMBERS ? len-1 : len))
 		{
 		    doc->selection.data.text.input_offset++;
-		    redraw = TRUE;
+		    used = redraw = TRUE;
 		}
-		else
-		    redraw = action == key_action_RIGHT;
 		break;
 
 	    case key_action_START_OF_LINE:
 	    case key_action_START_OF_AREA:
 		doc->selection.data.text.input_offset = 0;
-		redraw = TRUE;
+		used = redraw = TRUE;
 		break;
 
 	    case key_action_END_OF_LINE:
 	    case key_action_END_OF_AREA:
 		doc->selection.data.text.input_offset = ii->flags & rid_if_NUMBERS ? len-1 : len;
-		redraw = TRUE;
+		used = redraw = TRUE;
 		break;
 
 	    default:
@@ -1203,7 +1295,7 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
         oinput_update_box(ti, &box);
 	antweb_update_item_trim(doc, ti, &box, FALSE);
 
-	used = TRUE;
+/* 	used = TRUE; */
     }
 
     return used;
@@ -1379,22 +1471,34 @@ void oinput_update_highlight(rid_text_item *ti, antweb_doc *doc)
     {
     case rid_tag_INPUT:
     {
+#ifdef STBWEB
+	update_full = TRUE;
+#else
 	rid_input_item *ii = ((rid_text_item_input *) ti)->input;
 	update_full = ((ii->tag == rid_it_SUBMIT || ii->tag ==  rid_it_RESET || ii->tag == rid_it_BUTTON) &&
 	    ii->data.button.im_sel) ||
 	    ii->tag == rid_it_CHECK || ii->tag == rid_it_RADIO;
+#endif
 	break;
     }
     case rid_tag_SELECT:
     {
 	rid_select_item *sel = ((rid_text_item_select *)ti)->select;
+#ifdef STBWEB
+	update_full = TRUE;
+#else
 	update_full = sel->base.colours.select != -1;
+#endif
 	break;
     }
     case rid_tag_TEXTAREA:
     {
+#ifdef STBWEB
+	update_full = 1;
+#else
 	rid_textarea_item *ta = ((rid_text_item_textarea *)ti)->area;
 	update_full = ta->base.colours.select != -1;
+#endif
 	break;
     }
     }

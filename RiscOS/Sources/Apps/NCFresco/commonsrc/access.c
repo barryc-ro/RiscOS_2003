@@ -865,7 +865,7 @@ static os_error *access_http_fetch_start(access_handle d)
 	if ( d->flags & access_PROXY )
 	    httpo.in.flags |= http_open_flags_TUNNEL;
     }
-    if ( d->flags & access_PRIORITY )
+    if ( d->flags & (access_PRIORITY | access_MAX_PRIORITY))
         httpo.in.flags |= http_open_flags_PRIORITY;
     if ( d->flags & access_IMAGE )
         httpo.in.flags |= http_open_flags_IMAGE;
@@ -2138,7 +2138,7 @@ static os_error *access_new_file(const char *file, int ft, char *url, access_url
 	d->data.file.last_modified = file_last_modified(file);
 
 	/* if it is a priority item then fetch the whole thing right now (eg background image) */
-	if (flags & access_PRIORITY)
+	if (flags & access_MAX_PRIORITY)
 	{
 	    d->data.file.chunk = d->data.file.size;
 	    if (!access_file_fetch(d))
@@ -2153,7 +2153,7 @@ static os_error *access_new_file(const char *file, int ft, char *url, access_url
 	    else
 		d = NULL;
 	}
-	/* otherwise schedule a read for sometime later */
+	/* otherwise schedule a read for sometime later (this includes PRIORITY items) */
 	else
 	{
 	    d->data.file.chunk = FILE_INITIAL_CHUNK;
@@ -2777,12 +2777,9 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 	url_parse(url, &scheme, &netloc, &path, &params, &query, &fragment);
 	ACCDBGN(( "Cache miss... trying to fetch file\n"));
 
-	if (netloc && netloc[0] && (config_allow_file || config_deny_file))
+	if (netloc && netloc[0] && !auth_check_allow_deny(netloc))
 	{
-	    if (!auth_check_allow_deny(netloc))
-	    {
-		ep = makeerror(ERR_ACCESS_DENIED);
-	    }
+	    ep = makeerror(ERR_ACCESS_DENIED);
 	}
 
 	if (ep)

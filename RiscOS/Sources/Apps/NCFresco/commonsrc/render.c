@@ -66,9 +66,15 @@ static void draw_cornerLT(int x, int y, int w, int h, int thickness)
 
 void render_plinth(int bcol, int flags, int x, int y, int w, int h, antweb_doc *doc)
 {
-#if !ANTI_TWITTER
-    const int dx = frontend_dx, dy = frontend_dy;
-#endif
+    render_plinth_full(bcol, render_colour_PLAIN,
+		       flags & render_plinth_IN ? render_colour_LINE_D : render_colour_LINE_L,
+		       flags & render_plinth_IN ? render_colour_LINE_L : render_colour_LINE_D,
+		       flags, x, y, w, h, doc);
+    
+}
+
+void render_plinth_full(int bcol, int rim_col, int top_col, int bottom_col, int flags, int x, int y, int w, int h, antweb_doc *doc)
+{
     int off;
 
     /* If it is too small we have to make it thin */
@@ -87,22 +93,23 @@ void render_plinth(int bcol, int flags, int x, int y, int w, int h, antweb_doc *
     if ((h < off*2) || (w < off*2))
 	flags &= ~render_plinth_DOUBLE;
 
-#if !ANTI_TWITTER
     if ((flags & render_plinth_RIM) && w > 13 && h > 13)
     {
-	render_set_colour(render_colour_PLAIN, doc);
-	bbc_rectangle(x + 6, y + 6, w - (dx + 12), h - (dy + 12));
-    }
-#endif
+	render_set_colour(rim_col, doc);
+	bbc_rectangle(x + 6, y + 6, w - (frontend_dx + 12), h - (frontend_dy + 12));
 
-    render_set_colour((flags & render_plinth_IN) ? render_colour_LINE_L : render_colour_LINE_D, doc);
+	if (flags & render_plinth_DOUBLE_RIM)
+	    bbc_rectangle(x+off, y+off, w-2*off - frontend_dx, h-2*off - frontend_dy);
+    }
+
+    render_set_colour(bottom_col, doc);
 
     draw_cornerBR(x, y, w, h, off);
     if (flags & render_plinth_DOUBLE)
 	draw_cornerLT(x+off, y+off, w-off*2, h-off*2, off);
 
 
-    render_set_colour((flags & render_plinth_IN) ? render_colour_LINE_D : render_colour_LINE_L, doc);
+    render_set_colour(top_col, doc);
 
     draw_cornerLT(x, y, w, h, off);
     if (flags & render_plinth_DOUBLE)

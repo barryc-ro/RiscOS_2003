@@ -1269,7 +1269,7 @@ static void image_fetch_next(void)
 	    if (i->find_flags & image_find_flag_NEED_SIZE)
 		aflags |= access_IMAGE;
 	    if (i->find_flags & image_find_flag_URGENT)
-		aflags |= access_PRIORITY;
+		aflags |= access_MAX_PRIORITY;
 
 	    i->flags &= ~(image_flag_WAITING | image_flag_TO_RELOAD);
 
@@ -1544,7 +1544,7 @@ os_error *image_find(char *url, char *ref, int flags, image_callback cb, void *h
 
 	    ep = access_url( url,
 			     (flags & image_find_flag_NEED_SIZE ? access_IMAGE : 0) |
-			     (flags & image_find_flag_URGENT ? access_PRIORITY : 0),
+			     (flags & image_find_flag_URGENT ? access_MAX_PRIORITY : 0),
 			     0, 0, i->ref, &image_progress,
 	                     &image_completed, i, &(i->ah));
 	    if (ep)
@@ -3150,6 +3150,9 @@ void image_render(image i, int x, int y, int w, int h, int scale_image, image_re
     if ( (i->flags & image_flag_REALTHING) == 0 )
 	plotter = plotter_SPRITE;
 
+    if (i->plotter == plotter_UNKNOWN)
+	plotter = plotter_SPRITE;
+    
     flexmem_noshift();
 
     if (plotters[plotter].render)

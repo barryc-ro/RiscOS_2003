@@ -118,8 +118,8 @@ static void fe_menu_redo_window(wimp_redrawstr *rr, fe_menu mh, int update)
 	for( ; i < mh->n && h >= bot; h -= line_space, i++)
 	{
 	    int junk;
-	    int nfc = (mh->items[i].flags & fe_menu_flag_CHECKED) ? render_colour_WRITE : render_colour_INPUT_F;
-	    int opcol = (nfc == render_colour_WRITE) ? render_colour_INPUT_F : render_colour_WRITE;
+	    int nfc = (mh->items[i].flags & fe_menu_flag_CHECKED) ? render_colour_PLAIN : render_colour_INPUT_F;
+	    int opcol = (nfc == render_colour_PLAIN) ? render_colour_INPUT_F : render_colour_PLAIN;
 
 	    if (lfc != nfc)
 	    {
@@ -136,7 +136,7 @@ static void fe_menu_redo_window(wimp_redrawstr *rr, fe_menu mh, int update)
 		colourtran_setfontcolours(&fh, &bb, &ff, &maxcols);
 	    }
 
-	    colourtran_setGCOL(config_colours[render_colour_WRITE], 0, 0, &junk);
+	    colourtran_setGCOL(config_colours[render_colour_PLAIN], 0, 0, &junk);
 	    bbc_rectanglefill(ox - X_BORDER, h + oy - line_space, X_BORDER, line_space-1);
 	    bbc_rectanglefill(ox - width, h + oy - line_space, X_BORDER, line_space-1);
 
@@ -220,7 +220,7 @@ static os_error *fe_menu_window(fe_menu mh)
 
         win.behind = -1;
         win.flags = wimp_WNEW;
-        win.colours[wimp_WCWKAREABACK] = 0;
+        win.colours[wimp_WCWKAREABACK] = 7;
         win.colours[wimp_WCWKAREAFORE] = 7;
         win.colours[wimp_WCTITLEFORE] = 7;
 

@@ -106,7 +106,8 @@ static parse_table_fn parse_table [] =
     sgml_do_parse_stdunit_void,
     sgml_do_parse_stdunit_list,
     sgml_do_parse_enum_string,
-    sgml_do_parse_enum_case
+    sgml_do_parse_enum_case,
+    sgml_do_parse_bool
 };
 
 

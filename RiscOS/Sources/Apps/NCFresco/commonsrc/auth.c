@@ -49,7 +49,7 @@
 extern void translate_escaped_text(char *src, char *dest, int len);
 
 typedef struct auth_realm {
-    struct auth_realm *next, *prev;
+    struct auth_realm *next/* , *prev */;
     char *name;
     auth_type type;
     union {
@@ -61,7 +61,7 @@ typedef struct auth_realm {
 } auth_realm;
 
 typedef struct auth_item {
-    struct auth_item *next, *prev;
+    struct auth_item *next/* , *prev */;
     char *url;
     auth_realm *realm;
 } auth_item;
@@ -74,10 +74,10 @@ typedef struct allow_item {
     struct allow_item *next;
 } allow_item;
 
-static auth_realm *realm_first, *realm_last;
-static auth_item *auth_first, *auth_last;
+static auth_realm *realm_first = NULL, *realm_last = NULL;
+static auth_item *auth_first = NULL, *auth_last = NULL;
 
-static allow_item *allow_list, *deny_list;
+static allow_item *allow_list = NULL, *deny_list = NULL;
 
 /* This needs to line up with the auth_type enum */
 static char *auth_type_names[] = {
@@ -177,20 +177,36 @@ void auth_dispose(void)
 /* ------------------------------------------------------------------------- */
 
 /* This function should read in a realm/method/data file */
-void auth_init(void)
+void auth_init_passwords(void)
 {
-    realm_first = realm_last = NULL;
-    auth_first = auth_last = NULL;
+#ifdef STBWEB
+    auth_realms_dispose();
+    auth_items_dispose();
+#endif
+    if (gstrans_not_null(config_auth_file))
+	auth_load_file(config_auth_file);
+}
 
-    auth_load_file(config_auth_file);
+void auth_init_allow(void)
+{
+#ifdef STBWEB
+    auth_allows_dispose(allow_list);
+    allow_list = NULL;
 
-    allow_list = deny_list = NULL;
-
-    if (config_allow_file)
+    auth_allows_dispose(deny_list);
+    deny_list = NULL;
+#endif
+    if (gstrans_not_null(config_allow_file))
 	auth_read_allow_file(config_allow_file, &allow_list);
 
-    if (config_deny_file)
+    if (gstrans_not_null(config_deny_file))
 	auth_read_allow_file(config_deny_file, &deny_list);
+}
+
+void auth_init(void)
+{
+    auth_init_passwords();
+    auth_init_allow();
 }
 
 static int auth_get_type(char *type)
@@ -240,7 +256,7 @@ realm auth_add_realm(char *realm, char *type, char *user, char *passwd)
 
 	if (realm_first)
 	{
-	    a->prev = realm_last;
+/* 	    a->prev = realm_last; */
 	    realm_last->next = a;
 	    realm_last = a;
 	}
@@ -290,7 +306,7 @@ void auth_add(char *url, realm r)
 
 	if (auth_first)
 	{
-	    a->prev = auth_last;
+/* 	    a->prev = auth_last; */
 	    auth_last->next = a;
 	    auth_last = a;
 	}
@@ -618,15 +634,20 @@ static int auth_test_allow(char *site, allow_item *list)
     return 0;
 }
 
+/* return 1 to ban the site, 0 to allow it */
+
 int auth_check_allow_deny(char *site)
 {
-    if (config_allow_file)
+    /* if we have an allow list return 1 if it is in it */
+    if (allow_list)
 	return auth_test_allow(site, allow_list);
 
-    if (config_deny_file)
+    /* if we have a deny list return 1 if it is not in it */
+    if (deny_list)
 	return !auth_test_allow(site, deny_list);
 
-    return 0;
+    /* if we don't have either list then allow it */
+    return 1;
 }
 
 /* eof auth.c */

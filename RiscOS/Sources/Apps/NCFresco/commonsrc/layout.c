@@ -3,11 +3,16 @@
 
 #include <stdio.h>
 
+#include "coords.h"
+
 #include "antweb.h"
 #include "interface.h"
 #include "memwatch.h"
 #include "rid.h"
 #include "url.h"
+
+#include "render.h"
+#include "rcolours.h"
 
 #include "layout.h"
 
@@ -22,6 +27,10 @@
 
 typedef struct layout_spacing_info layout_spacing_info;
 
+#define layout_spacing_HORIZONTAL	0x01 /* horizontal or vertical space */
+#define layout_spacing_RESIZE		0x02 /* can this space be dragged */
+#define layout_spacing_BEVEL		0x04 /* should we draw the 3D bevel thing */
+
 struct layout_spacing_info
 {
     layout_spacing_info *next;      /* next in list */
@@ -30,7 +39,7 @@ struct layout_spacing_info
     wimp_box container_box;         /* bounding box of parent frameset */
     rid_frameset_item *container;   /* the containing frameset */
     int index;                      /* row or column number */
-    BOOL resize_heights;
+    int flags;
     int divider_index;			/* reference for the frame divider array[] */
 };
 
@@ -216,7 +225,7 @@ static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe
 
 
 	/* set up spacing array */
-	if (row > 0 && this_can_resize)
+	if (row > 0)
         {
             layout_spacing_info *spacing = mm_calloc(sizeof(struct layout_spacing_info), 1);
 
@@ -237,7 +246,10 @@ static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe
             spacing->container = (rid_frameset_item *)&frameset->data.frameset;
             spacing->index = row;
 
-            spacing->resize_heights = TRUE;
+            spacing->flags |= layout_spacing_HORIZONTAL;
+	    if (this_can_resize)
+		spacing->flags |= layout_spacing_RESIZE;
+	    spacing->flags |= layout_spacing_BEVEL;
 
             spacing->next = doc->spacing_list;
             doc->spacing_list = spacing;
@@ -245,7 +257,7 @@ static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe
 	    PRSDBG(( "layout: spacing %d,%d %d,%d i %d\n", spacing->box.x0, spacing->box.y0, spacing->box.x1, spacing->box.y1, spacing->index));
         }
 
-        if (col > 0 && this_can_resize)
+        if (col > 0)
         {
             layout_spacing_info *spacing = mm_calloc(sizeof(struct layout_spacing_info), 1);
 
@@ -266,7 +278,9 @@ static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe
             spacing->container = (rid_frameset_item *)&frameset->data.frameset;
             spacing->index = col;
 
-            spacing->resize_heights = FALSE;
+	    if (this_can_resize)
+		spacing->flags |= layout_spacing_RESIZE;
+	    spacing->flags |= layout_spacing_BEVEL;
 
             spacing->next = doc->spacing_list;
             doc->spacing_list = spacing;
@@ -404,7 +418,8 @@ int layout_frame_resize_bounds(antweb_doc *doc, int x, int y, wimp_box *box, int
     for (spc = doc->spacing_list; spc; spc = spc->next)
     {
         PRSDBGN(("layout: check %d,%d against %d,%d %d,%d\n", x, y, spc->box.x0, spc->box.y0, spc->box.x1, spc->box.y1));
-        if (x >= spc->box.x0 && x <= spc->box.x1 && y >= spc->box.y0 && y <= spc->box.y1)
+        if ((spc->flags & layout_spacing_RESIZE) &&
+	    x >= spc->box.x0 && x <= spc->box.x1 && y >= spc->box.y0 && y <= spc->box.y1)
         {
             /* use this pointer as a handle */
             if (handle)
@@ -414,7 +429,7 @@ int layout_frame_resize_bounds(antweb_doc *doc, int x, int y, wimp_box *box, int
             if (box)
                 *box = spc->bbox;
 
-            return spc->resize_heights ? be_resize_HEIGHT : be_resize_WIDTH;
+            return spc->flags & layout_spacing_HORIZONTAL ? be_resize_HEIGHT : be_resize_WIDTH;
         }
     }
     return be_resize_NONE;
@@ -457,7 +472,7 @@ void layout_frame_resize(antweb_doc *doc, int x, int y, int handle)
 
     PRSDBG(( "layout: resize doc %p handle %x to %d,%d\n", doc, handle, x, y));
 
-    if (spc->resize_heights)
+    if (spc->flags & layout_spacing_HORIZONTAL)
     {
         if (y < spc->bbox.y0 + MIN_Y_SIZE)
             y = spc->bbox.y0 + MIN_Y_SIZE;
@@ -491,6 +506,33 @@ void layout_frame_resize(antweb_doc *doc, int x, int y, int handle)
     backend_reset_width(doc, 0);
 }
 #endif
+
+/* ---------------------------------------------------------------------------------------------------------- */
+
+void layout_render_bevels(wimp_redrawstr *r, antweb_doc *doc)
+{
+    layout_spacing_info *spc;
+    for (spc = doc->spacing_list; spc; spc = spc->next)
+    {
+	wimp_box box;
+
+	box = spc->box;
+	coords_box_toscreen(&box, (coords_cvtstr *)&r->box);
+
+	if (coords_boxesoverlap(&box, &r->g))
+	{
+	    render_plinth_full(0, 0, plinth_col_HL_L, plinth_col_D,
+			       render_plinth_NOFILL,
+			       box.x0, box.y0, box.x1-box.x0, box.y1-box.y0,
+			       doc);
+
+	    render_plinth_full(plinth_col_HL_M, 0, plinth_col_L, plinth_col_HL_D,
+			       0,
+			       box.x0 + 4, box.y0 + 4, box.x1-box.x0 - 8, box.y1-box.y0 - 8,
+			       doc);
+	}
+    }
+}
 
 /* ---------------------------------------------------------------------------------------------------------- */
 

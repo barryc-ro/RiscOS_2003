@@ -648,7 +648,12 @@ fresh:		HTML TAGS
 
 #uncomment this to build dependencies...
 #RISCOS_BUILD_EXPORT=../../../../Export
+
+#Two possibilities for exporting to
 #RISCOS_BUILD_RESOURCES=../../../../Install
+#RISCOS_BUILD_OBJECTS=../../../../Objects
+RISCOS_BUILD_RESOURCES=../NCFrescoRO
+RISCOS_BUILD_OBJECTS=../NCFrescoRO/aof
 
 CP=				cp
 CPOPTIONS=			-p
@@ -743,8 +748,7 @@ NCFRESCO_DEPENDS:
 		@echo NCFresco dependencies generated
 
 # Export the NCFresco resources for ROM building
-
-NCFRESCO_BUILD_ROM_RESOURCES:
+NCFRESCO_BUILD_ROM_EXPORT:
 		@-mkdir $(RISCOS_BUILD_RESOURCES)
 		@-mkdir $(RISCOS_BUILD_RESOURCES)/Resources
 		@-mkdir $(RISCOS_BUILD_RESOURCES)/Resources/NCFresco
@@ -759,9 +763,11 @@ NCFRESCO_BUILD_ROM_RESOURCES:
 		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/Config	$(NCFRESCO_BUILD_RESOURCES)
 		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/Messages	$(NCFRESCO_BUILD_RESOURCES)
 		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/MimeMap	$(NCFRESCO_BUILD_RESOURCES)
+		@-mkdir $(RISCOS_BUILD_OBJECTS)
+		$(CP) $(CPOPTIONS) aof/ncfresco $(RISCOS_BUILD_OBJECTS)
 
 
-# This one is for NCFresco in the new style CVS controlled RISC OS build tree
+# NCFresco application in the new style CVS controlled RISC OS build tree
 NCFRESCO_BUILD:		$(PREDEPS)
 		@echo "Making NCFRESCO for RISCOS in the build tree"
 		@-mkdir abs
@@ -774,6 +780,7 @@ NCFRESCO_BUILD:		$(PREDEPS)
 		LDFLAGS="$(NCFRESCO_BUILD_LDFLAGS)"
 		$(POSTACTS)
 
+# NCFresco ROM aof file in the new style CVS controlled RISC OS build tree
 NCFRESCO_ROM:	$(PREDEPS)
 		@echo "Making NCFRESCO ROM version for RISCOS in the build tree"
 		@-mkdir aof
@@ -785,8 +792,8 @@ NCFRESCO_ROM:	$(PREDEPS)
 		ASFLAGS="$(NCFRESCO_ROM_ASFLAGS)" \
 		LDFLAGS="$(NCFRESCO_ROM_LDFLAGS)"
 		$(POSTACTS) \
-		$(CP) $(CPOPTIONS) aof/ncfresco $(RISCOS_BUILD_OBJECTS)
 
+# NCFresco application in ANT build tree
 NCFRESCO_RISCOS:	$(PREDEPS)
 		@echo "Making NCFRESCO for RISCOS"
 		@cd ./ncfresco; $(MAKE) NCFRESCO_RISCOS \
@@ -798,6 +805,7 @@ NCFRESCO_RISCOS:	$(PREDEPS)
 		$(POSTACTS)
 
 
+# NCFresco application cross build on NT
 NCFRESCO_NT:
 		@echo Making NCFRESCO on NT
 		@cd ncfresco_pc
@@ -809,6 +817,7 @@ NCFRESCO_NT:
 		LDFLAGS="$(NCFRESCO_ANT_LDFLAGS)" \
 		$(POSTACTS)
 
+# NCFresco softload module in the new style CVS controlled RISC OS build tree
 NCFRESCO_RAM:	$(PREDEPS)
 		@echo "Making NCFRESCO module for RISCOS"
 		@cd ./ncfresco; $(MAKE) NCFRESCO_MODULE \

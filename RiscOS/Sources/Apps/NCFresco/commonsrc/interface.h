@@ -290,6 +290,7 @@ os_error *backend_open_url(fe_view v, be_doc *docp,
 #define be_openurl_flag_BODY_COLOURS	(1 << 3)
 #define be_openurl_flag_HISTORY		(1 << 4) /* url was pulled from history list */
 #define be_openurl_flag_SOLID_HIGHLIGHT	(1 << 5)
+#define be_openurl_flag_FAST_LOAD	(1 << 6)
 
 /* Jump the document to the fragment given */
 extern os_error *backend_goto_fragment(be_doc doc, char *frag);

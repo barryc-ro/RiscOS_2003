@@ -9,8 +9,10 @@
 #define render_plinth_NOFILL	0x04
 #define render_plinth_DOUBLE	0x08
 #define render_plinth_THIN	0x10
+#define render_plinth_DOUBLE_RIM 0x20
 
 void render_plinth(int bcol, int flags, int x, int y, int w, int h, be_doc doc);
+extern void render_plinth_full(int bcol, int rim_col, int top_col, int bottom_col, int flags, int x, int y, int w, int h, be_doc doc);
 
 int render_set_colour(int colour, be_doc doc);
 int render_set_bg_colour(int colour, be_doc doc);

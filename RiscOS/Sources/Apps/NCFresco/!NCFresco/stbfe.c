@@ -162,6 +162,11 @@
 #define IconHigh_GetDirection		0x4E701
 #define IconHigh_Stop			0x4E703
 
+#define PPP_AlterSettings		0x4B620
+#define PPP_Status			0x4B621
+
+#define MESSAGE_OFFER_FOCUS		0x99 /* FIXME: this is wrong and won't get used */
+
 /* -------------------------------------------------------------------------- */
 
 
@@ -221,7 +226,6 @@ static fe_message_handler_item *message_handlers = NULL;
 
 static int user_status_open = TRUE;
 
-static int linedrop_time = 0;
 static int keyboard_state = fe_keyboard_ONLINE;
 
 
@@ -250,16 +254,16 @@ void fe_pointer_mode_update(pointermode_t mode)
     switch (mode)
     {
         case pointermode_OFF:
-/*            case pointermode_INPUT:   */
-/*                if (config_mode_keyboard) */
             os_cli("pointer 0");
+	    if (pointer_mode == pointermode_ON)
+		fe_frame_link_redraw_all(main_view);
             break;
 
         case pointermode_ON:
             if (pointer_mode != pointermode_ON)
 	    {
                 pointer_reset_shape();
-		fe_frame_link_clear_all(main_view);
+		fe_frame_link_redraw_all(main_view);
 	    }
             break;
     }
@@ -410,24 +414,14 @@ int fe_bg_colour(fe_view v)
 
 /* ----------------------------------------------------------------------------------------------------- */
 
-void fe_linedrop(int called_at, void *handle)
-{
-    os_error *e = os_cli(msgs_lookup("hangup"));
-    if (e && e->errnum != 214)	/* file not found */
-	frontend_complain(e);
-    
-    linedrop_time = 0;
-
-    NOT_USED(called_at);
-    NOT_USED(handle);
-}
-
-
-/* ----------------------------------------------------------------------------------------------------- */
-
 int caretise(void)
 {
     return !keywatch_from_handset || on_screen_kbd ? be_link_CARETISE : 0;
+}
+
+int movepointer(void)
+{
+    return on_screen_kbd ? 0 : be_link_MOVE_POINTER;
 }
 
 /* ----------------------------------------------------------------------------------------------------- */
@@ -696,14 +690,14 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 
     fe_dispose_view_children(v);
 
-    v->displaying = doc;
-    v->current_link = NULL;
-    v->find_last_item = NULL;
-
     /* really not sure about this one */
     if (frontend_view_has_caret(v))
  	backend_remove_highlight(v->displaying);
     
+    v->displaying = doc;
+    v->current_link = NULL;
+    v->find_last_item = NULL;
+
     /* check for special page instructions - but only on top page   */
     if (v->parent == NULL)
     {
@@ -714,7 +708,7 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 
 	if ((ncmode = strdup(backend_check_meta(doc, "NCBROWSERMODE"))) != NULL)
 	{
-	    static const char *content_tag_list[] = { "SELECTED", "TOOLBAR", "KEYBOARD", "LINEDROP", "POSITION", "NOHISTORY", "SOLIDHIGHLIGHT", "NOSCROLL" };
+	    static const char *content_tag_list[] = { "SELECTED", "TOOLBAR", "MODE", "LINEDROP", "POSITION", "NOHISTORY", "SOLIDHIGHLIGHT", "NOSCROLL", "FASTLOAD" };
 	    static const char *on_off_list[] = { "OFF", "ON" };
 	    static const char *keyboard_list[] = { "ONLINE", "OFFLINE" }; /* order must agree with #defines in stbview.h */
 	    name_value_pair vals[sizeof(content_tag_list)/sizeof(content_tag_list[0])];
@@ -733,16 +727,16 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 		keyboard_state = fe_keyboard_ONLINE;
 	    
 	    /* set up a pending line drop */
-	    if (vals[1].value && linedrop_time == 0)
+	    if (vals[1].value)
 	    {
-		linedrop_time = atoi(vals[1].value)*100;
-/* 		set line drop linedrop_time */
-/* 		linedrop_time += alarm_timenow() */
-/* 		alarm_set(linedrop_time, fe_linedrop, &linedrop_time); */
+		_swix(PPP_AlterSettings, _INR(0,2), 0, 0, atoi(vals[1].value));
 	    }
-	    else
+	    /* if you go to an online page then reset the time to the default */
+	    else if (keyboard_state == fe_keyboard_ONLINE) 
 	    {
-/* 		set line drop default */
+		int def_linedrop;
+		_swix(PPP_Status, _INR(0,1) | _OUT(2), 0, 0, &def_linedrop);
+		_swix(PPP_AlterSettings, _INR(0,2), 0, 0, def_linedrop);
 	    }
 
 	    /* read position for window, safe area relative */
@@ -769,6 +763,9 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 
 	    /* check no scroll flag */
 	    v->scrolling = vals[7].value ? fe_scrolling_NO : fe_scrolling_AUTO;
+	    
+	    /* check fast load flag */
+	    v->fast_load = vals[8].value != 0;
 	    
 	    mm_free(ncmode);
 	}
@@ -1302,7 +1299,7 @@ int fe_check_download_finished(fe_view v)
 		    flags |= be_link_TEXT;
 	    }
 	    
-	    vcaret->current_link = backend_highlight_link(vcaret->displaying, vcaret->current_link, flags | be_link_MOVE_POINTER);
+	    vcaret->current_link = backend_highlight_link(vcaret->displaying, vcaret->current_link, flags | movepointer());
 	    STBDBG(( "stbfe: current link %p/%p\n", vcaret, vcaret->current_link));
 	}
     }
@@ -1889,7 +1886,7 @@ void fe_beeps_set(int state)
  * Force this window to have no horizontal scrolling
  */
 
-void fe_force_fit(fe_view v, BOOL force)
+static void fe_force_fit(fe_view v, BOOL force)
 {
     int scale_value = 100;
 
@@ -1934,6 +1931,16 @@ void fe_force_fit(fe_view v, BOOL force)
 
     visdelay_end();
 
+}
+
+void fe_scaling_set(int state)
+{
+    if (state == -1)
+	config_display_scale_fit = !config_display_scale_fit;
+    else
+	config_display_scale_fit = state;
+
+    fe_force_fit(main_view, config_display_scale_fit);
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -2338,15 +2345,21 @@ os_error *fe_status_toggle(fe_view v)
 {
     os_error *e = NULL;
 
-    v = fe_find_top(v);
-
-    user_status_open = !user_status_open;
-
-    if (use_toolbox)
-        e = fe_status_state(v, user_status_open);
+    if (keyboard_state != fe_keyboard_ONLINE)
+    {
+	fevent_handler(fevent_OFFLINE_PAGE, v);
+    }
     else
-        statuswin_toggle(v);
+    {
+	v = fe_find_top(v);
 
+	user_status_open = !user_status_open;
+
+	if (use_toolbox)
+	    e = fe_status_state(v, user_status_open);
+	else
+	    statuswin_toggle(v);
+    }
     return e;
 }
 
@@ -2456,13 +2469,18 @@ os_error *fe_status_unstack(fe_view source_v)
     {
 	fe_keyboard_close();
     }    
-    else if (!fe_passwd_abort() &&
-	!tb_status_unstack())
+    else if (fe_passwd_abort())
+    {
+    }
+    else
     {
 	fe_view v = fe_find_top_popup(source_v ? source_v : main_view);
 
 	if (v && v->open_transient)
 	    fe_dispose_view(v);
+	else if (tb_status_unstack())
+	{
+	}
 	else
             fe_history_move(source_v, history_PREV);
     }	
@@ -2476,14 +2494,14 @@ BOOL fe_status_unstack_possible(fe_view source_v)
 {
     fe_view v;
     
-    if (tb_status_unstack_possible())
-	return TRUE;
-    
     v = fe_find_top_popup(source_v ? source_v : main_view);
 
     if (v && v->open_transient)
 	return TRUE;
 
+    if (tb_status_unstack_possible())
+	return TRUE;
+    
     return fe_history_possible(source_v, history_PREV);
 }
 
@@ -2522,7 +2540,7 @@ void fe_scroll_changed(fe_view v, int x, int y)
             frontend_view_bounds(v, &bb);
 
             dir = box.y1 < bb.y0 ? be_link_BACK : 0;
-            v->current_link = backend_highlight_link(v->displaying, v->current_link, dir | be_link_VISIBLE | be_link_INCLUDE_CURRENT | caretise() | be_link_MOVE_POINTER);
+            v->current_link = backend_highlight_link(v->displaying, v->current_link, dir | be_link_VISIBLE | be_link_INCLUDE_CURRENT | caretise() | movepointer());
         }
     }
 }
@@ -3176,6 +3194,7 @@ static BOOL fe_resize(const wimp_mousestr *m)
             coords_y_toworkarea(m->y, &cvt),
             v->resize_handle);
 
+	fe_refresh_window(fe_find_top(v)->w, NULL);
         fe_set_pointer(0);
         return TRUE;
     }
@@ -3538,10 +3557,17 @@ static void fe_keyboard__open(void)
 
     if (getenv("Alias$NCKeyBoard"))
     {
+	fe_view v;
+	
 	n = sprintf(buffer, "NCKeyboard %s",
 		    keyboard_state == fe_keyboard_ONLINE ? " -extension browser" : "");
     
 	tb_status_box(&box);
+
+	/* add in open url box if present */
+	if ((v = fe_locate_view(TARGET_OPEN)) != NULL)
+	    coords_union(&v->box, &box, &box);
+
 	if (config_display_control_top)
 	    sprintf(buffer + n, " -scrolldown %d", box.y0/2);
 	else
@@ -3961,20 +3987,79 @@ static void fe_handle_openurl(wimp_msgstr *msg)
 }
 
 /* ------------------------------------------------------------------------------------------- */
+/*
+ * w is the window handle that currently contains the focus.
+ * flags are all reserved.
+ *
+ * This is offered around by the Watchdog if the task owning the
+ * topmost window is not the same task that has the input focus.
+ *
+ * IF we think we should have the caret then we should take it
+ * with wimp_set_caret_pos() and return TRUE to claim the message.
+ */
+
+static BOOL window_is_visible(wimp_w w)
+{
+    wimp_redrawstr r;
+    int more;
+    BOOL visible = FALSE;
+    r.w = w;
+    r.box.x0 = r.box.y0 = -0x4000;
+    r.box.x1 = r.box.y1 =  0x4000;
+    wimp_update_wind(&r, &more);
+    while (more)
+    {
+	visible = TRUE;
+	wimp_get_rectangle(&r, &more);
+    }
+    return visible;
+}
+
+static os_error *window__is_ours(fe_view v, void *handle)
+{
+    int *vals = handle;
+    if (v->w == vals[0])
+	vals[1] = 1;
+    return NULL;
+}
+
+static BOOL window_is_ours(wimp_w w)
+{
+    int vals[2];
+
+    if (w == tb_status_w())
+	return TRUE;
+
+    vals[0] = w;
+    vals[1] = 0;
+    iterate_frames(main_view, window__is_ours, vals);
+    return vals[1];
+}
+
+static int offer_window_focus_handler(wimp_w w, int flags)
+{
+    /* if the current window is ours and is still visible then don't
+       let the caret move */
+
+    if (window_is_ours(w) && window_is_visible(w))
+	return TRUE;
+
+    return 1;
+    NOT_USED(flags);
+}
+
+/* ------------------------------------------------------------------------------------------- */
 
 static void re_read_config(int flags)
 {
-    STBDBG(("stbfe: reading auth and cookie\n"));
+    STBDBG(("stbfe: reading config flags %x\n", flags));
 
-    auth_init();
+    if ((flags & ncfresco_loaddata_NOT_ALL) == 0)
+	flags |= ncfresco_loaddata_CONFIG | ncfresco_loaddata_COOKIES | ncfresco_loaddata_PASSWORDS |
+	    ncfresco_loaddata_HOTLIST | ncfresco_loaddata_PLUGINS | ncfresco_loaddata_ALLOW;
 
-    if (config_cookie_enable)
-	cookie_read_file(config_cookie_file);
-
-    plugin_list_read_file();
-    hotlist_init();
-
-    if (file_type("<"PROGRAM_NAME"$Config>") != -1)
+    if ((flags & ncfresco_loaddata_CONFIG) && 
+	file_type("<"PROGRAM_NAME"$Config>") != -1)
     {
 	config_read_file_by_name("<"PROGRAM_NAME"$Config>");
 
@@ -3983,11 +4068,26 @@ static void re_read_config(int flags)
 	fe_mode_changed();	
     }
     
-    flags = flags;
+    if (flags & ncfresco_loaddata_PASSWORDS)
+	auth_init_passwords();
+
+    if (flags & ncfresco_loaddata_ALLOW)
+	auth_init_allow();
+
+    if ((flags & ncfresco_loaddata_COOKIES) && config_cookie_enable)
+	cookie_read_file(config_cookie_file);
+
+    if (flags & ncfresco_loaddata_PLUGINS)
+	plugin_list_read_file();
+
+    if (flags & ncfresco_loaddata_HOTLIST)
+	hotlist_init();
 }
 
-static void re_read_config_data(int flags, const char *data)
+static void re_read_config_data(int flags, const char *filename)
 {
+    config_read_file_by_name(filename);
+    NOT_USED(flags);
 }
 
 static void fe_handle_service_message(wimp_msgstr *msg)
@@ -4195,7 +4295,7 @@ void fe_event_process(void)
         {
             fe_view v = find_view(e.data.c.w);
 
-	    STBDBGN(("losecaret: w %x v %p\n", e.data.c.w, v));
+	    STBDBGN(("losecaret: w %x v %p kw %p\n", e.data.c.w, v, keywatch_pollword));
 
 	    if (v)
             {
@@ -4205,17 +4305,15 @@ void fe_event_process(void)
                 if (v->is_selected)
                 {
                     fe_view v_top = fe_find_top(v);
-                    if (v_top && v_top != v)
-                        fe_refresh_window(v_top->w, NULL);
+                    if (v_top && v_top != v && pointer_mode == pointermode_OFF)
+			fe_frame_link_clear_all(v);
                 }
             }
 	    else
 	    {
 		tb_status_highlight(FALSE);
 	    }
-
-	    _swix(KeyWatch_Unregister, _IN(0), keywatch_pollword);
-
+	    
 	    break;
         }
 
@@ -4224,17 +4322,10 @@ void fe_event_process(void)
             fe_view v_old, v_new;
 	    fe_view v_top;
 
-	    /* enable keywatch and initialise last_key_val */
-	    if (_swix(KeyWatch_Register, _IN(0) | _OUT(0), 0, &keywatch_pollword) == NULL && 
-		keywatch_pollword)
-	    {
-		keywatch_last_key_val = *keywatch_pollword;
-	    }
-
 	    v_old = fe_selected_view();
 	    v_new = find_view(e.data.c.w);
 
-	    STBDBGN(("gaincaret: w %x v %p old %p\n", e.data.c.w, v_new, v_old));
+	    STBDBGN(("gaincaret: w %x v %p old %p kw %p\n", e.data.c.w, v_new, v_old, keywatch_pollword));
 
 	    if (v_old)
 	    {
@@ -4250,8 +4341,8 @@ void fe_event_process(void)
 		if (v_new != v_top)
 		{
 		    fe_frame_link_array_build(v_new);
-
-		    fe_refresh_window(v_top->w, NULL);
+		    if (pointer_mode == pointermode_OFF)
+			fe_frame_link_redraw_all(v_new);		/* redraw them all */
 		}
 	    }
             break;
@@ -4330,6 +4421,7 @@ void fe_event_process(void)
 		    break;
 
 		case ncfresco_reason_READ_CONFIG:
+		    usrtrc("readconfig:\n");
 		    re_read_config_data(msg->data.words[1], (const char *)&msg->data.words[2]);
 		    break;
 		}
@@ -4343,6 +4435,13 @@ void fe_event_process(void)
 		fe_keyboard_closed();
 		break;
 		
+	    case MESSAGE_OFFER_FOCUS:
+		if (offer_window_focus_handler((wimp_w)msg->data.words[0], msg->data.words[1]))
+		{
+		    wimp_sendmessage(wimp_EACK, msg, msg->hdr.task);
+		}
+		break;
+
 	    case wimp_MCLOSEDOWN:
 		usrtrc("closedown:\n");
 		exit(0);
@@ -4448,6 +4547,14 @@ static void fe_tidyup(void)
 #endif
     _swix(TaskModule_DeRegisterService, _INR(0,2), 0, Service_SmartCard, task_handle);
 
+
+    /* disable keywatch stuff */
+    if (keywatch_pollword)
+    {
+	frontend_complain(_swix(KeyWatch_Unregister, _IN(0), keywatch_pollword));
+	keywatch_pollword = NULL;
+    }
+
     if (main_view)
     {
 	fe_dispose_view(main_view);
@@ -4531,6 +4638,7 @@ static int message_codes[] =
     wimp_MMODECHANGE,
     wimp_PALETTECHANGE,
     wimp_MSERVICE,
+    MESSAGE_OFFER_FOCUS,
     wimp_MCLOSEDOWN
 };
 
@@ -4654,6 +4762,12 @@ static BOOL fe_initialise(void)
 	
         frontend_fatal_error(fe_new_view(NULL, &screen_box, &info, TRUE, &main_view));
         main_view->status_open = TRUE;
+    }
+
+    /* enable keywatch and initialise last_key_val */
+    if (_swix(KeyWatch_Register, _IN(0) | _OUT(0), 0, &keywatch_pollword) == NULL && keywatch_pollword)
+    {
+	keywatch_last_key_val = *keywatch_pollword;
     }
 
     fe_get_wimp_caret(main_view->w);

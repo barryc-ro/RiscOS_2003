@@ -164,15 +164,17 @@ void otextarea_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hp
     int dx = frontend_dx, dy = frontend_dy;
     wimp_box ta_box, gwind_box;
     int fg, bg;
+    int has_caret;
 
     if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
 	return;
 
     tai = ((rid_text_item_textarea *)ti)->area;
+    has_caret = be_item_has_caret(doc, ti);
 
     fg = tai->base.colours.back == -1 ? render_colour_INPUT_F : render_text_link_colour(ti, doc);
     bg = tai->base.colours.back == -1 ? render_colour_WRITE :
-	    be_item_has_caret(doc, ti) && tai->base.colours.select != -1 ?
+	    has_caret && tai->base.colours.select != -1 ?
 	    tai->base.colours.select | render_colour_RGB : tai->base.colours.back | render_colour_RGB;
 
     if (fs->lf != webfonts[WEBFONT_TTY].handle)
@@ -187,10 +189,20 @@ void otextarea_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hp
 	render_set_font_colours(fs->lfc, bg, doc);
     }
 
+#ifdef STBWEB
+    render_plinth_full(bg,
+		       has_caret ? plinth_col_HL_M : plinth_col_M, 
+		       has_caret ? plinth_col_HL_L : plinth_col_L, 
+		       has_caret ? plinth_col_HL_D : plinth_col_D,
+		       render_plinth_RIM | render_plinth_DOUBLE_RIM,
+		       hpos, bline - ti->max_down,
+		       ti->width, (ti->max_up + ti->max_down), doc );
+#else
     render_plinth(bg, render_plinth_RIM | render_plinth_IN,
 		  hpos, bline - ti->max_down,
 		  ti->width, (ti->max_up + ti->max_down), doc );
-
+#endif
+    
     for(i=tai->sy, tal = tai->lines; tal && i; i--, tal = tal->next)
 	;
 
@@ -393,6 +405,16 @@ BOOL otextarea_caret(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int rep
 
     tai = ((rid_text_item_textarea *)ti)->area;
 
+#ifdef STBWEB
+    if (repos == object_caret_BLUR)
+    {
+	antweb_update_item(doc, ti);
+	return FALSE;
+    }
+    
+    if (repos == object_caret_FOCUS)
+	antweb_update_item(doc, ti);
+#else
     if (repos == object_caret_BLUR && tai->base.colours.select != -1)
     {
 	antweb_update_item(doc, ti);
@@ -401,6 +423,7 @@ BOOL otextarea_caret(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int rep
     
     if (repos == object_caret_FOCUS && tai->base.colours.select != -1)
 	antweb_update_item(doc, ti);
+#endif
     
     if (doc->selection.data.text.input_offset < 0)
     {

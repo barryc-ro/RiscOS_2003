@@ -259,6 +259,16 @@ static void draw_frame_links(wimp_redrawstr *r, fe_view v, const frame_link *fl)
 
 /* ----------------------------------------------------------------------------*/
 
+static void draw_border(wimp_redrawstr *r, fe_view v)
+{
+    render_plinth_full(0, plinth_col_M, plinth_col_L, plinth_col_D,
+		       render_plinth_RIM | render_plinth_NOFILL,
+		       v->box.x0, v->box.y0, v->box.x1 - v->box.x0, v->box.y1 - v->box.y0,
+		       v->displaying);
+}
+
+/* ----------------------------------------------------------------------------*/
+
 int frontend_view_redraw(fe_view v, wimp_box *bb)
 {
     wimp_redrawstr r;
@@ -322,13 +332,15 @@ int frontend_view_update(fe_view v, wimp_box *bb, fe_rectangle_fn fn, void *h, i
 	 */
 	fn(&r, h, (flags & fe_update_WONT_PLOT_ALL) == 0 || (flags & fe_update_IMAGE_RENDERING) != 0);
 
-	/* if we are top view above a selected view and are in web mode */
-        if (selected)
-	{
-/* 	    STBDBG(("frontend_view_update: selected %p\n", v)); */
+	/* if we are top view above a selected view and are in web mode and the pointer is off */
+        if (selected && pointer_mode == pointermode_OFF)
 	    draw_frame_links(&r, v, selected->frame_links);
-	}
 
+	/* if we are transient then draw a border */
+	if (v->open_transient)
+	    draw_border(&r, v);
+
+	/* antitwitter if not in the middle of image rendering */
         if ((flags & fe_update_IMAGE_RENDERING) == 0)
             fe_anti_twitter(&r.g);
 
