@@ -6,7 +6,7 @@
 # Date       Name   Description
 # ----       ----   -----------
 # 20-Mar-98  SNB    Created
-#
+# 31-Mar-98  SNB    Header export added - plus no longer relies on SSL$Path being set
 #
 # Export Paths for Messages module
 #
@@ -45,6 +45,7 @@ WFLAGS  = ~c~v
 CFLAGS   = -c -depend !Depend ${INCLUDES} -wp -zM -ffah -zps1 ${DFLAGS} -Wd
 DFLAGS   = -D${SYSTEM} -DCOMPAT_INET4 -DRISCOS -DNO_DES -DNO_IDEA
 AFLAGS   = -throwback -depend !Depend
+CMHGFLAGS= -p -depend !Depend
 ROMFLAGS = -DROM
 INCLUDES = -ITCPIPLibs:,C:SSLeay,C:
 DEBFLAGS = -DTRACE -DUSE_SYSLOG
@@ -85,7 +86,7 @@ RAM_OBJS =\
 DBG_OBJS =\
  od.acornssl\
  od.memory\
- od.memswis\
+ o.memswis\
  od.moduleRAM\
  od.protocol\
  od.ses_ctrl\
@@ -102,10 +103,10 @@ MSGSF=o.msgs
 .c.o:;    ${CC} ${CFLAGS} ${ROMFLAGS} -o $@ $<
 .c.od:;	  ${CC} ${CFLAGS} ${ROMFLAGS} ${DEBFLAGS} -o $@ $<
 .s.o:;	  ${AS} ${AFLAGS} -o $@ $<
-.cmhg.o:; ${CMHG} -o $@ $< -d $*.h
+.cmhg.o:; ${CMHG} ${CMHGFLAGS} -o $@ $< -d $*.h
 
-SSLHdr.h: SSLHdr.o
-	   @|
+SSLHdr.h:: VersionNum SSLHdr.o
+
 #
 # Main rules:
 #
@@ -165,6 +166,7 @@ ${MSGSF}: @.Resources.${LOCALE}.Messages
 ${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB} ${CRYPTLIBS}
 	${mkdir} rm
         ${LD} -o $@ -module ${RAM_OBJS} ${MSGSF} ${CRYPTLIBS} ${TCPIPLIBS} ${CLIB}
+        modsqz $@
         Access $@ RW/R
 
 ${DBG_MODULE}: ${DBG_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB} ${CRYPTLIBS} ${DEBLIBS}
