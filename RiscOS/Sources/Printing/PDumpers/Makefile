@@ -11,7 +11,6 @@
 #
 
 #
-# Paths
 #
 EXP_HDR = <export$dir>
 
@@ -29,18 +28,14 @@ DUMPERS   = DotMatrix \
 #
 # Generic options:
 #
-AS      = aasm
 CP      = copy
-MAKE    = @amu ${MFLAGS}
-MKDIR   = cdir
 DIR     = @dir
-RM      = remove
 WIPE    = -wipe
+MAKE   ?= amu
+SUBMAKE = @${MAKE} ${MFLAGS} ${MAKECMDGOALS}
 
 STRIPDEPEND = stripdepnd
 
-CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -stamp -quit -module
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
@@ -98,37 +93,37 @@ ${EXP_HDR}.PDumper: hdr.PDumper
 
 DotMatrix:
         ${DIR} PDumperDM
-        ${MAKE} ^.rm.PDumperDM
+        ${SUBMAKE} ^.rm.PDumperDM
         @back
 
 ImageWriter:
         ${DIR} PDumperIW
-        ${MAKE} ^.rm.PDumperIW
+        ${SUBMAKE} ^.rm.PDumperIW
         @back
 
 LaserJet:
         ${DIR} PDumperLJ
-        ${MAKE} ^.rm.PDumperLJ
+        ${SUBMAKE} ^.rm.PDumperLJ
         @back
 
 EscapeP2:
         ${DIR} PDumperE2
-        ${MAKE} ^.rm.PDumperE2
+        ${SUBMAKE} ^.rm.PDumperE2
         @back
 
 CanonX:
         ${DIR} PDumperCX
-        ${MAKE} ^.rm.PDumperCX
+        ${SUBMAKE} ^.rm.PDumperCX
         @back
 
 24Pin:
         ${DIR} PDumper24
-        ${MAKE} ^.rm.PDumper24
+        ${SUBMAKE} ^.rm.PDumper24
         @back
 
 Sprite:
         ${DIR} PDumperSP
-        ${MAKE} ^.rm.PDumperSP
+        ${SUBMAKE} ^.rm.PDumperSP
         @back
 
 # Dynamic dependencies:
