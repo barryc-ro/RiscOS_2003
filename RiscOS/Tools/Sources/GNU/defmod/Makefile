@@ -14,7 +14,7 @@
 LIBDIR  = ${INSTDIR}.Library.Build
 INSTAPP = ${INSTDIR}.Apps.!DefMod
 
-VPATH = @ sources bs support
+VPATH = @ sources oslib support
 
 #
 # Generic options:
@@ -28,11 +28,12 @@ RM      = remove
 LD      = link
 LB      = libfile
 TOUCH   = create
-SQZ	= squeeze
+SQZ     = squeeze
 WIPE    = -wipe
 YACC    = GNU.bison
 
-CCFLAGS = -c -depend !Depend -ffa ${INCLUDES} ${THROWBACK} -DTRACE=0 -Wp
+DEFINES = -DRISCOS -DEXECUTE_ON_RISCOS -DPACE_BUILD
+CCFLAGS = -c -depend !Depend -ffa ${INCLUDES} ${DEFINES} ${THROWBACK} -DTRACE=0 -Wp
 YACCDEFS= -DYYDEBUG=0 -DYYMAXDEPTH=0
 ASFLAGS = -depend !Depend -Stamp -quit ${THROWBACK} ${ASMINC}
 CPFLAGS = ~cfr~v
@@ -46,20 +47,14 @@ YACCFLAGS = -y
 # Libraries
 #
 CLIB      = CLIB:o.stubs
-RLIB      = RISCOSLIB:o.risc_oslib
-RSTUBS    = RISCOSLIB:o.rstubs
-ROMSTUBS  = RISCOSLIB:o.romstubs
-ROMCSTUBS = RISCOSLIB:o.romcstubs
-ABSSYM    = RISC_OSLib:o.AbsSym
-UNIXLIB	  = TCPIPLibs:o.unixlib
 
 DIRS=o._dirs
 
 #
 # Include files
 #
-INCLUDES  = -Jbs.,support.,C: -Ibs -Isources -Isupport -IC:
-ASMINC    = -Ibs -Isources -Isupport
+INCLUDES  = -J@.,oslib.,support.,C: -Ioslib -Isources -Isupport -IC:
+ASMINC    = -Ioslib -Isources -Isupport
 
 #
 # Program specific options:
@@ -70,8 +65,7 @@ TARGET     = ${COMPONENT}
 SOURCE     = 
 EXPORTS    = 
 
-
-OBJS=o.asmhelp o.callback o.chelp o.def o.defmod o.cheader o.hdr \
+OBJS=o.asmhelp o.callback o.chelp o.def o.defmod o.cheader o.hdr o.x \
       o.lookup o.objasm o.realloc o.resource o.riscos o.riscosa o.cstrong
 
 LIBS=${CLIB}
@@ -79,13 +73,16 @@ LIBS=${CLIB}
 #
 # Rule patterns
 #
+.SUFFIXES:
 .SUFFIXES: .o .c .y .s
-.c.o:;     ${CC} ${CCFLAGS} -o $@ $<
-.s.o:;     ${AS} ${ASFLAGS} -o $@ $<
+.c.o:
+	${CC} ${CCFLAGS} -o $@ $<
+.s.o:
+	${AS} ${ASFLAGS} -o $@ $<
 
 
 c.defmod: sources.y.defmod
-        ${YACC} ${YACCFLAGS} -o c.defmod sources.y.defmod
+	${YACC} ${YACCFLAGS} -o c.defmod sources.y.defmod
 
 o.defmod: c.defmod
 	${CC} ${CCFLAGS} ${YACCDEFS} -o $@ c.defmod
@@ -105,18 +102,18 @@ install: all
 # RISC OS ROM build rules:
 #
 rom: ${TARGET}
-        @echo ${COMPONENT}: rom module built
+	@echo ${COMPONENT}: rom module built
 
 export: export_${PHASE}
 
 install_rom: ${TARGET}
-        @echo ${COMPONENT}: rom module installed
+	@echo ${COMPONENT}: rom module installed
 
 clean:
-        ${WIPE} c ${WFLAGS}
-        ${WIPE} o ${WFLAGS}
-        ${RM} ${COMPONENT}
-        @echo ${COMPONENT}: cleaned
+	${WIPE} c ${WFLAGS}
+	${WIPE} o ${WFLAGS}
+	${RM} ${COMPONENT}
+	@echo ${COMPONENT}: cleaned
 
 export_hdrs: 
 	@echo ${COMPONENT}: export complete (hdrs)
@@ -127,15 +124,13 @@ export_libs:
 ${DIRS}:
 	${MKDIR} c
 	${MKDIR} o
-	create $@
-
+	${TOUCH} $@
 
 #
 # Final link
 #
 ${TARGET}: ${OBJS} ${LIBS} ${DIRS}
-        ${LD} ${LDFLAGS} -o ${COMPONENT} ${OBJS} ${LIBS}
-        ${SQZ} ${SQZFLAGS} $@
-
+	${LD} ${LDFLAGS} -o ${COMPONENT} ${OBJS} ${LIBS}
+	${SQZ} ${SQZFLAGS} $@
 
 # Dynamic dependencies:
