@@ -11,10 +11,11 @@
 #
 # Paths
 #
+LIBDIR	= ${INSTDIR}.Library.Build
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = mkdir -p
 AS      = objasm
 CP      = copy
 CC      = cc
@@ -84,6 +85,12 @@ export: export_${PHASE}
 
 install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
+
+install: ${TARGET} install_dirs
+	@echo ${COMPONENT}: install complete.
+
+install_dirs:
+	${MKDIR} ${LIBDIR}.Docs
 
 clean:
         ${WIPE} o ${WFLAGS}
