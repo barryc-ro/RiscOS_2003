@@ -19,7 +19,7 @@ EXP_HDR = <export$dir>
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = mkdir -p
 AS      = aasm
 CP      = copy
 RM      = remove
@@ -52,9 +52,12 @@ install_rom: ${TARGET}
 all: ${TARGET}
 	@echo ${COMPONENT}: disc modules built
 
-install: ${TARGET}
+install: ${TARGET} install_dirs
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
 	@echo ${COMPONENT}: disc modules installed
+
+install_dirs:
+    ${MKDIR} ${INSTDIR}
 
 clean:
         ${RM} ${TARGET}
