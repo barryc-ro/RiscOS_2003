@@ -20,7 +20,7 @@ EXP_HDR = <export$dir>
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = mkdir -p
 AS      = objasm
 CC      = cc
 CMHG    = cmhg
@@ -31,6 +31,7 @@ MODSQZ  = modsqz
 WIPE    = -wipe
 CD	= dir
 RPCGEN  = rpcgen
+TOUCH   = create
 
 COMPONENT = NFS
 CMHGNAME  = nfscmhg
@@ -38,7 +39,7 @@ CMHGNAME  = nfscmhg
 XCOMPONENT = NFSSTB
 
 DEPENDS = -depend !Depend ${THROWBACK}
-DEFINES = -DPACKETSIZE_COMMAND -DDEBUGON=$(DBUG) ${COMPAT} ${OPTIONS} -Darm -DRPC_SVC=0 -DRPC_HDR=1
+DEFINES = -DPACKETSIZE_COMMAND ${COMPAT} ${OPTIONS} -Darm -DRPC_SVC=0 -DRPC_HDR=1
 
 AFLAGS = ${DEPENDS} -Stamp -quit
 CFLAGS  = -ffcah -c -zM -zps1 -wp ${INCLUDES} ${DEPENDS} ${DEFINES}
@@ -48,6 +49,8 @@ RPCGENFLAGS = -i 0 -DWANT_NFS3
 
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
+
+DIRS=od._dirs
 
 #
 # Libraries
@@ -84,6 +87,7 @@ DBUG = 0
 # Program specific options:
 #
 TARGET    = rm.${COMPONENT}
+DTARGET   = rm.D${COMPONENT}
 XTARGET   = rm.${XCOMPONENT}
 CMHGOBJ   = o.$(CMHGNAME)
 ROMTARGET = aof.${COMPONENT}
@@ -110,7 +114,6 @@ OBJS      =	  \
   o.extensions    \
   o.access        \
   o.nfsrw         \
-  o.db 		  \
   o.rquota_xdr    \
   o.nfs_prot_clnt \
   o.nfs_prot_xdr  \
@@ -132,6 +135,49 @@ OBJS      =	  \
   o.memswis       \
   o.fh3
 
+DEBOBJS      =	  \
+  $(CMHGOBJ)   	  \
+  od.printfuncs    \
+  od.chains        \
+  od.enumdir       \
+  od.enumdir2      \
+  od._Args         \
+  od._Close        \
+  od._File         \
+  od._Func         \
+  od._GBPB         \
+  od._GetBytes     \
+  od._Open         \
+  od._PutBytes     \
+  o.Interface     \
+  o.RMInfo        \
+  od.Static        \
+  o.allerrs       \
+  od.Hourglass     \
+  od.extensions    \
+  od.access        \
+  od.nfsrw         \
+  o.rquota_xdr    \
+  od.nfs_prot_clnt \
+  o.nfs_prot_xdr  \
+  od.pcnfsd_clnt   \
+  o.pcnfsd_xdr    \
+  od.mount_clnt    \
+  o.mount_xdr     \
+  o.SixtyFour     \
+  od.ModuleWrap    \
+  od.Commands      \
+  od.Utils         \
+  od.Clients       \
+  od.ChangeInfo    \
+  od.PutBytesX     \
+  od.pathmunge     \
+  od.Cache         \
+  od.V2support     \
+  od.memory        \
+  o.memswis       \
+  od.fh3
+
 HDRS = \
   mount.h         \
   nfs_prot.h      \
@@ -141,10 +187,11 @@ HDRS = \
 #
 # Rule patterns
 #
-.SUFFIXES:  .o .s .c .h .x .cmhg
+.SUFFIXES:  .o .od .s .c .h .x .cmhg
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
 .cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $< h.$*
 .s.o:;      ${AS} ${AFLAGS} $< $@
+.c.od:;     ${CC} -DDEBUGLIB ${CFLAGS} -o $@ $<
 
 
 #
@@ -152,6 +199,9 @@ HDRS = \
 #
 all: ${TARGET}
         @echo ${COMPONENT}: all complete
+
+trace: ${DTARGET} ${DIRS}
+        @echo ${COMPONENT}: (TRACE) all complete
 
 #
 # RISC OS ROM build rules:
@@ -168,8 +218,10 @@ install_rom: ${ROMTARGET}
 
 clean: autogen-clean
         ${WIPE} o.* ${WFLAGS}
+        ${WIPE} od ${WFLAGS}
         ${RM} ${TARGET}
         ${RM} ${XTARGET}
+        ${RM} ${DTARGET}
         ${RM} ${ROMTARGET}
         ${RM} linked.${COMPONENT}
         ${RM} h.${CMHGNAME}
@@ -182,6 +234,17 @@ ${TARGET}: ${XTARGET} ${OBJS} ${HDRS} ${RPCLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB}
         ${LD} -o $@ -rmf ${OBJS} ${RPCLIB} ${DEBUGLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB} ${CLIB}
         $(MODSQZ) $(TARGET)
         Access $@ RW/R
+
+
+${DTARGET}: ${DEBOBJS} ${HDRS} ${RPCLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB}
+        ${LD} -o $@ -rmf ${DEBOBJS} ${RPCLIB} ${DEBUGLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB} ${CLIB}
+        $(MODSQZ) $(DTARGET)
+        Access $@ RW/R
+
+
+${DIRS}:
+	${MKDIR} od
+	${TOUCH} $@
 
 #
 # ROM Target 
@@ -250,6 +313,15 @@ o.nfs_prot_xdr: c.nfs_prot_xdr
 o.nfs_prot_clnt: c.nfs_prot_clnt
 	${CC} ${RPCCCFLAGS} -o $@ $*.c
 
+od.rquota_clnt: c.rquota_clnt
+	${CC} -DDEBUGLIB ${RPCCCFLAGS} -o $@ $*.c
+od.pcnfsd_clnt: c.pcnfsd_clnt
+	${CC} -DDEBUGLIB ${RPCCCFLAGS} -o $@ $*.c
+od.mount_clnt: c.mount_clnt
+	${CC} -DDEBUGLIB ${RPCCCFLAGS} -o $@ $*.c
+od.nfs_prot_clnt: c.nfs_prot_clnt
+	${CC} -DDEBUGLIB ${RPCCCFLAGS} -o $@ $*.c
+
 autogen-clean:
 	${RM} h.rquota
 	${RM} h.pcnfsd
@@ -272,6 +344,8 @@ h.nfscmhg:	$(CMHGOBJ)
 
 o.Commands:     h.nfscmhg
 o.ModuleWrap:   h.nfscmhg
+od.Commands:    h.nfscmhg
+od.ModuleWrap:  h.nfscmhg
 
 # Note, cannot replace -bin -base 0 with -rmf here otherwise you get all sorts
 # of extra relocation code inserted into the final image.
