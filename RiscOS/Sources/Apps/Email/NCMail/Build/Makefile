@@ -13,6 +13,8 @@
 # 1998-10-08	RDW	NETLINKLIB added
 # 1998-10-14	RDW	amu changed to amu_machine and o.dirs dependancy added
 #			to rom target rule
+# 1998-10-20	RDW	amu_machine changed back to amu.
+#			RAM module target added
 
 # ------------------------------------------------------------------------------
 # Paths
@@ -29,7 +31,7 @@ LIBDIR	= <Lib$Dir>
 
 COMPONENT       = NCMail
 APP             = !$(COMPONENT)
-MODULE          = rm.$(APP)
+MODULE          = rm.$(COMPONENT)
 ROM_MODULE      = aof.$(COMPONENT)
 LPATH           = LocalUserIFRes:
 APPENGINE       = Engine
@@ -115,11 +117,11 @@ LIBS = \
  $(WIMPLIB)\
  $(TOOLBOXLIB)\
  $(EVENTLIB)\
- $(MBOXLIB)\
+ $(MBOXLIB)$(MC)\
  $(NETLINKLIB)\
  $(ACORNPOP3)\
  $(ACORNSMTP)\
- $(ELIB)\
+ $(ELIB)$(MC)\
  $(EXTRALIBS)\
  $(C++LIB)\
  $(CLIB)\
@@ -150,7 +152,7 @@ LIBSD = \
  $(WIMPLIB)\
  $(TOOLBOXLIB)\
  $(EVENTLIB)\
- $(MBOXLIB)d\
+ $(MBOXLIB)\
  $(NETLINKLIB)\
  $(ACORNPOP3)\
  $(ACORNSMTP)\
@@ -181,12 +183,15 @@ OBJSD = od.NCMailUI od.Engine
 
 OBJSZ=  oz.NCMailUI oz.Engine
 
+OBJSZSL=  ozsl.NCMailUI ozsl.Engine
+
+
 
 # -----------------------------------------------------------------------------
 # Rule patterns
 #
 
-.SUFFIXES: .o .oz .od .odz .s .c .c++
+.SUFFIXES: .o .oz .ozsl .od .odz .s .c .c++
 
 .c.o:;          @echo
                 @echo Compiling $<
@@ -197,6 +202,11 @@ OBJSZ=  oz.NCMailUI oz.Engine
                 @echo Compiling $<
                 @echo $(DZFLAGS)
                 @$(CC) $(CFLAGS) $(DZFLAGS)       -c -zM -DROM -o $@ $<
+
+.c.ozsl:;	@echo
+		@echo Compiling $<
+		@echo $(DZFLAGS)
+		@${CC} ${CFLAGS} ${DZFLAGS} -c -zM -o $@ $<
 
 .c.od:;         @echo
                 @echo Compiling $<
@@ -217,6 +227,11 @@ OBJSZ=  oz.NCMailUI oz.Engine
                 @echo Compiling $<
                 @echo $(DZFLAGS)
                 @$(C++) $(C++FLAGS) $(DZFLAGS)    -c -zM -DROM -o $@ $<
+
+.c++.ozsl:;     @echo
+                @echo Compiling $<
+                @echo $(DZFLAGS)
+                @$(C++) $(C++FLAGS) $(DZFLAGS)    -c -zM -o $@ $<
 
 .c++.od:;       @echo
                 @echo Compiling $<
@@ -264,6 +279,9 @@ export_libs:
 all:	$(UI) $(APPENGINE)
         @echo $(COMPONENT): Application built (Disc)
 
+ram: $(MODULE) $(UI) $(APPENGINE) o.dirs
+	@echo $(COMPONENT): Module built (RAM)
+
 rom: $(ROM_MODULE) $(UI) $(APPENGINE) o.dirs
         @echo $(COMPONENT): Module built (ROM)
 
@@ -302,6 +320,7 @@ clean:  $(APPENGINE) cleanWebMail cleanTestUI
         $(WIPE) o               $(WFLAGS)
         $(WIPE) od              $(WFLAGS)
         $(WIPE) oz              $(WFLAGS)
+        $(WIPE) ozsl            $(WFLAGS)
         $(WIPE) odz             $(WFLAGS)
         $(WIPE) rm              $(WFLAGS)
         $(WIPE) syms            $(WFLAGS)
@@ -319,6 +338,7 @@ o.dirs:
         @$(MKDIR) o
         @$(MKDIR) od
         @$(MKDIR) oz
+	@$(MKDIR) ozsl
         @$(MKDIR) odz
         @$(MKDIR) rm
         @$(MKDIR) syms
@@ -355,6 +375,9 @@ rom_link:
         $(CP) linked.$(COMPONENT) $(LINKDIR).$(COMPONENT) $(CPFLAGS)
         @echo $(COMPONENT): rom_link complete
 
+ozsl.ModuleWrap: s.ModuleWrap s.AppName ${RESFILES}
+	${AS} ${AFLAGS} -predefine "REMOVE_RAMLOAD_CHECK SETL {TRUE}" s.ModuleWrap $@
+
 oz.ModuleWrap: s.ModuleWrap s.AppName $(RESFILES)
         $(AS) $(AFLAGS) s.ModuleWrap $@
 
@@ -375,9 +398,9 @@ abs.!RI_D:
         @echo
         $(LD) $(LDFLAGS) -debug -s syms.!RI_D -o $@ $(OBJSD) $(LIBSD)
 
-$(MODULE): oz.ModuleWrap $(LIBSM) $(CLIB) o.dirs
+$(MODULE): ozsl.ModuleWrap $(LIBSM) $(CLIB) o.dirs
         @echo
-        $(LD) -s syms.RAMMod -o $@ -module oz.ModuleWrap $(OBJSZ) $(LIBSM) $(CLIB)
+        $(LD) -s syms.RAMMod -o $@ -module ozsl.ModuleWrap $(OBJSZSL) $(LIBSM) $(CLIB)
 
 $(ROM_MODULE): oz.ModuleWrap $(ROMCSTUBS) $(LIBSM) o.dirs
         @echo
@@ -391,28 +414,28 @@ rm.$(APP)D: odz.ModuleWrap  $(LIBSM) o.dirs
 Engine:
 	@echo Calling Engine Makefile
 	dir ^.Engine
-	@amu_machine -f Makefile $(MFLAGS)
+	@amu -f Makefile $(MFLAGS)
 	@echo Returned from Engine Makefile
 	dir ^.Build
 
 $(UI):
 	@echo Calling $(UI) Makefile
 	dir ^.$(UI)
-	@amu_machine -f Makefile $(MFLAGS)
+	@amu -f Makefile $(MFLAGS)
 	@echo Returned from $(UI) Makefile
 	dir ^.Build
 
 cleanWebMail:
 	@echo Calling WebMail Makefile
 	dir ^.WebMail
-	@amu_machine -f Makefile $(MFLAGS)
+	@amu -f Makefile $(MFLAGS)
 	@echo Returned from WebMail Makefile
 	dir ^.Build
 
 cleanTestUI:
 	@echo Calling TestUI Makefile
 	dir ^.TestUI
-	@amu_machine -f Makefile $(MFLAGS)
+	@amu -f Makefile $(MFLAGS)
 	@echo Returned from TestUI Makefile
 	dir ^.Build
 
