@@ -13,80 +13,107 @@ COMPONENT = STBSystem
 #
 # Generic options:
 #
-AWK     = awk
-MKDIR   = mkdir -p
-AS      = objasm
-CC      = cc
-CMHG    = cmhg
-CP      = copy
-LD      = link
-RM      = remove
-MODSQZ  = modsqz
-WIPE    = -wipe
-CD	= dir
-TOUCH   = create
-CHMOD   = attr $(CHMODFLAGS)
-
-# Flags
-CPFLAGS = ~cfr~v
-WFLAGS  = ~c~v
-CHMODFLAGS = +ow +or +wr -ww
+AWK		= awk
+MKDIR		= mkdir -p
+AS		= objasm
+CC		= cc
+CMHG		= cmhg
+CP		= copy
+LD		= link
+RM		= remove
+MODSQZ		= modsqz
+WIPE		= -wipe
+CD		= dir
+TOUCH		= create
+CHMOD		= attr $(CHMODFLAGS)
+TRANSLATE	= translate
 
 #
-# Rule patterns
+# Paths and filenames for files and directories within this component:
 #
-.SUFFIXES:  .o .s .c .h .cmhg
-.c.o:;      $(CC) $(CFLAGS) -o $@ $<
-.cmhg.o:;   $(CMHG) $(CMHGFLAGS) -o $@ $<
-.cmhg.h:;   $(CMHG) $(CMHGFLAGS) -d $@ $<
-.s.o:;      $(AS) $(AFLAGS) $< $@
+INRESDIR	= LocalUserIFRes:Applet
+INVSNFILE	= LocalUserIFRes:Version
+#INCHOICEDIR	= LocalUserIFRes:Choices
+#INPREDIR	= LocalUserIFRes:PreDesktop
+#INDESKDIR	= LocalUserIFRes:Desktop
 
+#
+# Destination paths and filenames for files and directories to be installed to:
+#
+OUTRESDIR	= $(INSTDIR).$(RES)
+OUTVSNDIR	= $(INSTDIR).$(VERSN)
+OUTVSNFILE	= $(OUTVSNDIR).$(COMPONENT)
+#OUTCHOICEDIR	= $(INSTDIR).$(CHOICES)
+#OUTPREDIR	= $(INSTDIR).$(PRE)
+#OUTDESKDIR	= $(INSTDIR).$(DESK)
+
+#
+# Flags and translation macros:
+#
+CPFLAGS		= ~cfr~v
+WFLAGS		= ~c~v
+CHMODFLAGS	= +ow +or +wr -ww
+TRANSFLAGS	= $(THROWBACK) -marko "««" -markc "»»" -htmlo "" -htmlc "‘‘"
+#TRANSMAPPINGS	= TranslateRes:Mappings
+#TRANSCHOICEDIR	= TranslateRes:Choices
+
+#
+# Rule patterns:
+#
+.SUFFIXES:	.o .s .c .h .cmhg
+.c.o:;		$(CC) $(CFLAGS) -o $@ $<
+.cmhg.o:;	$(CMHG) $(CMHGFLAGS) -o $@ $<
+.cmhg.h:;	$(CMHG) $(CMHGFLAGS) -d $@ $<
+.s.o:;		$(AS) $(AFLAGS) $< $@
 
 #
 all: install
-        @echo $(COMPONENT): all complete
+	@echo $(COMPONENT): all complete
 
 #
 # RISC OS ROM build rules:
 #
-clean:  
+clean:
 	@echo $(COMPONENT): nothing to do.
 
-export_hdrs: 
+export_hdrs:
 	@echo $(COMPONENT): nothing to do.
 
-export_libs: 
+export_libs:
 	@echo $(COMPONENT): nothing to do.
 
 resources:
 	@echo $(COMPONENT): nothing to do.
 
-rom:    
+rom:
 	@echo $(COMPONENT): nothing to do.
 
-install_rom: 
+install_rom:
 	@echo $(COMPONENT): nothing to do.
 
-rom_link:  
+rom_link:
 	@echo $(COMPONENT): nothing to do.
 
 #
 # RISC OS disc build rules:
 #
 install: dirs
-	$(CP)    LocalUserIFRes:!Run  $(INSTDIR).!Run  $(CPFLAGS)
-        $(CHMOD) $(INSTDIR)
+	$(CP) $(INRESDIR).*    $(OUTRESDIR).*    $(CPFLAGS)
+	$(CP) $(INVSNFILE)     $(OUTVSNFILE)     $(CPFLAGS)
+	Do $(AWK) -- "/.define.*CMHG.*/" VersionNum >>$(OUTVSNFILE)
+	$(CHMOD) $(INSTDIR)
 	@echo $(COMPONENT): installed to $(INSTDIR)
 
 dirs:
-	$(MKDIR) $(INSTDIR)
-        $(MKDIR) $(INSTDIR).220.Modules.Network
-        $(MKDIR) $(INSTDIR).220.Modules.Toolbox
-        $(MKDIR) $(INSTDIR).300.Modules.Network
-        $(MKDIR) $(INSTDIR).300.Modules.Toolbox
-        $(MKDIR) $(INSTDIR).400.Modules.Network
-        $(MKDIR) $(INSTDIR).400.Modules.Toolbox
-        $(MKDIR) $(INSTDIR).Modules.Network
-        $(MKDIR) $(INSTDIR).Modules.Toolbox
+	$(MKDIR) $(OUTRESDIR)
+	$(MKDIR) $(OUTRESDIR).220.Modules.Network
+	$(MKDIR) $(OUTRESDIR).220.Modules.Toolbox
+	$(MKDIR) $(OUTRESDIR).300.Modules.Network
+	$(MKDIR) $(OUTRESDIR).300.Modules.Toolbox
+	$(MKDIR) $(OUTRESDIR).400.Modules.Network
+	$(MKDIR) $(OUTRESDIR).400.Modules.Toolbox
+	$(MKDIR) $(OUTRESDIR).Modules.Network
+	$(MKDIR) $(OUTRESDIR).Modules.Toolbox
+	$(MKDIR) $(OUTVSNDIR)
 
 # Dynamic dependencies:
