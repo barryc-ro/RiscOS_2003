@@ -712,7 +712,7 @@ be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box,
 #endif
 	    }
 
-            if (item_changed || (flags & be_link_ONLY_CURRENT))
+            if (item_changed || (flags & (be_link_ONLY_CURRENT|be_link_CARETISE)))
 	    {
 		if ((flags & be_link_CARETISE) && match_item(ti, be_link_TEXT, NULL))
 		{

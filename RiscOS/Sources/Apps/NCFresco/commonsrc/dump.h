@@ -28,5 +28,11 @@ extern void dump_htmlctx(HTMLCTX *ptr);
 extern void dump_float_item(rid_float_item *ptr);
 extern void dump_floats_link(rid_floats_link *ptr);
 extern void dump_cell_map(rid_table_item *ptr, char *msg);
+extern void dump_form_element(rid_form_element *ptr);
+extern void dump_textarea_item(rid_textarea_item *ptr);
+extern void dump_select_item(rid_select_item *ptr);
+extern void dump_form_item(rid_form_item *ptr);
+
+
 
 extern char *item_names[];

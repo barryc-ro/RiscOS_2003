@@ -37,4 +37,6 @@ extern os_error *fe_new_view(fe_view parent, const wimp_box *extent, const fe_fr
 extern void fe_dispose_view_children(fe_view v);
 extern void fe_dispose_view(fe_view v);
 
+extern os_error *fe_internal_url_with_source(fe_view v, const char *internal, const char *target);
+
 /* stbopen.h */

@@ -2052,9 +2052,12 @@ extern void finishcaption(SGMLCTX *context, ELEMENT *element)
 	htmlctx->rh->curstream = NULL;
     }
 
-    PRSDBG(("finishcaption(): patching back to table_deliver\n"));
+    if (!gbf_active(GBF_TABLES_UNEXPECTED))
+    {
+	PRSDBG(("finishcaption(): patching back to table_deliver\n"));
 
-    sgml_install_deliver(context, &table_deliver);
+	sgml_install_deliver(context, &table_deliver);
+    }
 }
 
 /*****************************************************************************
@@ -2103,7 +2106,10 @@ extern void startcolgroupsection (SGMLCTX * context, ELEMENT * element, VALUES *
 
     me->table->flags |= rid_tf_COLGROUPSECTION;
 
-    sgml_install_deliver(context, &table_deliver);
+    if (!gbf_active(GBF_TABLES_UNEXPECTED))
+    {
+	sgml_install_deliver(context, &table_deliver);
+    }
 }
 
 extern void finishcolgroupsection (SGMLCTX * context, ELEMENT * element)
@@ -2141,7 +2147,10 @@ extern void finishcolgroupsection (SGMLCTX * context, ELEMENT * element)
     dump_table(table, NULL);
 #endif
 
-    sgml_install_deliver(context, &table_deliver);
+    if (!gbf_active(GBF_TABLES_UNEXPECTED))
+    {
+	sgml_install_deliver(context, &table_deliver);
+    }
 }
 
 /*****************************************************************************
@@ -2223,7 +2232,10 @@ extern void startcolgroup(SGMLCTX *context, ELEMENT *element, VALUES *attributes
 
     table->flags |= rid_tf_IN_COLGROUP;
 
-    sgml_install_deliver(context, &table_deliver);
+    if (!gbf_active(GBF_TABLES_UNEXPECTED))
+    {
+	sgml_install_deliver(context, &table_deliver);
+    }
 }
 
 /*****************************************************************************
@@ -2286,7 +2298,10 @@ extern void finishcolgroup(SGMLCTX *context, ELEMENT *element)
 	table->scaff.x = table->cells.x;
     }
 
-    sgml_install_deliver(context, &table_deliver);
+    if (!gbf_active(GBF_TABLES_UNEXPECTED))
+    {
+	sgml_install_deliver(context, &table_deliver);
+    }
 }
 
 /*****************************************************************************
@@ -2385,7 +2400,10 @@ extern void startcol(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	    hdr->class = stringdup(attr->u.s);
     }
 
-    sgml_install_deliver(context, &table_deliver);
+    if (!gbf_active(GBF_TABLES_UNEXPECTED))
+    {
+	sgml_install_deliver(context, &table_deliver);
+    }
 
     return;
 }
@@ -2432,7 +2450,10 @@ static void start_headfootbody(SGMLCTX *context, ELEMENT *element, VALUES *attri
 
     table->cur_rowgroup = rowgroup;
 
-    sgml_install_deliver(context, &table_deliver);
+    if (!gbf_active(GBF_TABLES_UNEXPECTED))
+    {
+	sgml_install_deliver(context, &table_deliver);
+    }
 }
 
 extern void startthead(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
@@ -2467,7 +2488,10 @@ extern void finishthead(SGMLCTX *context, ELEMENT *element)
 {
     generic_finish(context, element);
 
-    sgml_install_deliver(context, &table_deliver);
+    if (!gbf_active(GBF_TABLES_UNEXPECTED))
+    {
+	sgml_install_deliver(context, &table_deliver);
+    }
 }
 
 extern void finishtfoot(SGMLCTX *context, ELEMENT *element)
@@ -2491,16 +2515,21 @@ extern void finishtfoot(SGMLCTX *context, ELEMENT *element)
 	table->flags &= ~(rid_tf_TFOOT_INVISIBLE | rid_tf_HAVE_TFOOT);
     }
 
-    sgml_install_deliver(context, &table_deliver);
+    if (!gbf_active(GBF_TABLES_UNEXPECTED))
+    {
+	sgml_install_deliver(context, &table_deliver);
+    }
 }
 
 extern void finishtbody(SGMLCTX *context, ELEMENT *element)
 {
     generic_finish(context, element);
 
-    sgml_install_deliver(context, &table_deliver);
+    if (!gbf_active(GBF_TABLES_UNEXPECTED))
+    {
+	sgml_install_deliver(context, &table_deliver);
+    }
 }
-
 
 /*****************************************************************************
 
@@ -2572,7 +2601,10 @@ extern void starttr(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     table->scaff.x = 0;
     table->scaff.y = table->cells.y - 1;
 
-    sgml_install_deliver(context, &table_deliver);
+    if (!gbf_active(GBF_TABLES_UNEXPECTED))
+    {
+	sgml_install_deliver(context, &table_deliver);
+    }
 }
 
 extern void finishtr(SGMLCTX *context, ELEMENT *element)
@@ -2888,6 +2920,10 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 		}
 		*cellp = cell;
 	    }
+	    /* DAF: 970321 */
+	    cell->span.x = table->cells.x - cell->cell.x;
+	    TABDBG(("colspan=0 case with cols=%d, set spanx to %d for %d,%d\n",
+		    table->cells.x, cell->span.x, cell->cell.x, cell->cell.y));
 	}
 	else
 	{       /* Try to fit */

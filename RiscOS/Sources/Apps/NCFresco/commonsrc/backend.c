@@ -465,7 +465,7 @@ os_error *antweb_handle_url(be_doc doc, rid_aref_item *aref, const char *query, 
     BOOL new_win = target && strcasecomp(target, "_blank") == 0;
     const char *href = aref->href;
 
-    BEDBG((stderr, "antweb_handle_url for '%s' target '%s'\n", strsafe(href), strsafe(target)));
+    BEDBG((stderr, "antweb_handle_url: doc %p aref %p for '%s' target '%s'\n", doc, aref, strsafe(href), strsafe(target)));
 
     if (aref->flags & rid_aref_LABEL)
     {
@@ -4339,7 +4339,10 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
 
 #ifndef BUILDERS
 	if (frontend_plugin_handle_file_type(ft))
+	{
+	    frontend_pass_doc(doc->parent, NULL, NULL, -1);
 	    plugin_helper(doc->url, ft, NULL, doc->parent, cfile);
+	}
 	else
 	    frontend_pass_doc(doc->parent, doc->url, cfile, ft);
 #endif
@@ -5354,6 +5357,8 @@ extern be_item backend_locate_id(be_doc doc, const char *id)
 	be_item ti = rh->stream.text_list;
 	rid_aref_item *last_aref = NULL;
 
+	BEDBG((stderr, "locate_id: id='%s'\n", id));
+
 	while (ti)
 	{
 	    rid_aref_item *aref = ti->aref;
@@ -5405,6 +5410,8 @@ extern be_item backend_locate_id(be_doc doc, const char *id)
 		break;
 	    }
 
+	    BEDBG((stderr, "locate_id: ti=%p tag %d this_id='%s'\n", ti, ti->tag, strsafe(this_id)));
+	    
 	    /* and compare what is going in */
 	    if (this_id && strcmp(this_id, id) == 0)
 		return ti;

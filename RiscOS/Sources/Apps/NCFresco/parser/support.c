@@ -43,9 +43,25 @@ static char char_decode[256];
 
 /*****************************************************************************/
 
+#if DEBUG
 #define DEBUG_STACK 1
+#endif
 
 #if DEBUG
+
+static void dump_elements_open(BITS *bits)
+{
+    int i;
+
+    for (i = 0; i < NUMBER_SGML_ELEMENTS; i++)
+    {
+	if ( bits[i >> 5] & (1 << (i & 0x1f)) )
+	{
+	    PRSDBG((" %.*s", elements[i].name.bytes, elements[i].name.ptr));
+	}
+    }
+}
+
 static void dump_stack(SGMLCTX *ctx)
 {
     STACK_ITEM *item = ctx->tos;
@@ -78,6 +94,12 @@ static void dump_stack(SGMLCTX *ctx)
 	PRSDBG(("%s %p, fx %08x, outer %p, inner %p: %s\n", 
 		dir, item, item->effects_active[0], item->outer, item->inner, ctx->elements[abs (item->element)].name.ptr));
 #endif
+
+	PRSDBG(("%s OPEN:", dir));
+	dump_elements_open(item->elements_open);
+	PRSDBG(("\n%s SEEN:", dir));
+	dump_elements_open(item->elements_seen);
+	PRSDBG(("\n"));
 
 	if (ctx->tos == item)
 	    dir = "^^^^";
@@ -984,7 +1006,7 @@ extern void pull_stack_item_to_top (SGMLCTX *context, STACK_ITEM *item)
          */
 
         memcpy (item->elements_seen, tos->elements_seen, sizeof (item->elements_seen));
-#if DEBUG
+#if DEBUG_STACK
         PRSDBG(("Stack before pull of %p:\n", item));
         dump_stack (context);
 #endif
@@ -999,7 +1021,7 @@ extern void pull_stack_item_to_top (SGMLCTX *context, STACK_ITEM *item)
         if (inner != NULL) inner->outer = item;
 
         context->tos = item;
-#if DEBUG
+#if DEBUG_STACK
         PRSDBG(("Stack after pull:\n"));
         dump_stack (context);
 #endif

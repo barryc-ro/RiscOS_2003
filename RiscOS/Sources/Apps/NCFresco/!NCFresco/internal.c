@@ -477,7 +477,6 @@ os_error *fe_find_open(fe_view v)
     if (fe_find_possible(v))
     {
         wimp_box bb;
-	char buffer[1024];
 
         frontend_view_bounds(v, &bb);
 
@@ -486,10 +485,7 @@ os_error *fe_find_open(fe_view v)
         bb.x0 = -1000;		/* Get the first on the line ignoring margins */
         backend_doc_locate_item(v->displaying, &bb.x0, &bb.y1, &v->find_last_item);
 
-	strcpy(buffer, "ncfrescointernal:openpanel?name=find&source=");
-	fe_frame_specifier_create(v, buffer, sizeof(buffer));
-
-	e = frontend_open_url(buffer, NULL, TARGET_DBOX, NULL, fe_open_url_NO_CACHE);
+	e = fe_internal_url_with_source(v, "openpanel?name=find", TARGET_DBOX);
     }
     return e;
 }
@@ -1257,17 +1253,24 @@ static int internal_action_keyboard(const char *query, const char *bfile, const 
 
 static int internal_action_select(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
 {
-    fe_view v = get_source_view(query, FALSE);
     char *id = extract_value(query, "id=");
-
+    char *source = extract_value(query, "source=");
+    fe_view v = fe_find_target(main_view, source);
+    if (!v) v = fe_selected_view();
+    if (!v) v = main_view;
+    
     if (v && v->displaying && id)
     {
 	be_item ti = backend_locate_id(v->displaying, id);
+
+	STBDBG(("internal_action_select: v %p id '%s' ti %p\n", v, id, ti));
+
 	if (ti)
 	    backend_activate_link(v->displaying, ti, 0);
     }
 
     mm_free(id);
+    mm_free(source);
     
     return fe_internal_url_NO_ACTION;
     NOT_USED(bfile);

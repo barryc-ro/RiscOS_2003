@@ -108,7 +108,7 @@ extern void sgml_stream_finished (SGMLCTX *context)
         {
     	   ELEMENT *closing = &context->elements[context->tos->element];
     
-    	   PRSDBG(("End of document implies </%s>", closing->name.ptr));
+    	   PRSDBG(("End of document implies </%s>\n", closing->name.ptr));
     	   sgml_note_missing_close(context, closing);
     
     	   perform_element_close(context, closing);

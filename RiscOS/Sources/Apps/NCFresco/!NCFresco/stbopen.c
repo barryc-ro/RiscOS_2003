@@ -77,8 +77,8 @@ fe_view fe_frame_specifier_decode(fe_view top, const char *spec)
 
 fe_view fe_find_target(fe_view start, const char *target)
 {
-    fe_view v;
-    for (v = start; v; v = v->next)
+    fe_view v = NULL;
+    if (target) for (v = start; v; v = v->next)
     {
         if (v->name && strcasecomp(v->name, target) == 0)
             break;
@@ -251,7 +251,7 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
 	return NULL;
     }
 
-    STBDBG(("found view '%p'\n", parent));
+    STBDBG(("found view '%p' fetching %p\n", parent, parent ? parent->fetching : NULL));
 
     if (parent == NULL)
         parent = main_view;
@@ -265,12 +265,21 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
          * never have the fragment in it and 'url' will.
          */
 
+	STBDBG(("requesting info\n"));
+
 	ep = backend_doc_info(parent->fetching, NULL, NULL, &fetching, NULL);
+
+	STBDBG(("requested info e %p title '%s'\n", ep, strsafe(fetching)));
+
         if (!ep && fetching && strcmp(fetching, url) == 0)
 	{
 /*             werr(0, "Already fetching this URL"); */
+
+	    STBDBG(("already fetching returning\n"));
 	    return NULL;
 	}
+
+	STBDBG(("disposing of fetching\n"));
 
 	backend_dispose_doc(parent->fetching);
 	parent->fetching = NULL;
@@ -278,6 +287,8 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
 
     parent->dont_add_to_history = (flags & fe_open_url_NO_HISTORY) != 0;
     parent->pending_download_finished = FALSE;
+
+    STBDBG(("checking currently displaying %p\n", parent->displaying));
 
     if (parent->displaying)
     {
@@ -294,6 +305,8 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
 	    parent->hist_at->scroll_pos = state.o.y + parent->margin.y1;
 	}
     }
+
+    STBDBG(("check referer '%s'\n", referer));
 
     /* If it's the same page then just move the right point */
     if (referer) /*  && (flags & fe_open_url_NO_CACHE) == 0) */
@@ -391,6 +404,18 @@ os_error *fe_show_file_in_frame(fe_view v, char *file, char *frame)
     mm_free(url);
 
     return ep;
+}
+
+os_error *fe_internal_url_with_source(fe_view v, const char *internal, const char *target)
+{
+    char buffer[256];
+
+    strcpy(buffer, "ncfrescointernal:");
+    strlencat(buffer, internal, sizeof(buffer));
+    strlencat(buffer, "&source=", sizeof(buffer));
+    fe_frame_specifier_create(v, buffer, sizeof(buffer));
+
+    return frontend_open_url(buffer, NULL, (char *)target, NULL, fe_open_url_NO_CACHE);
 }
 
 /* ------------------------------------------------------------------------------------------- */

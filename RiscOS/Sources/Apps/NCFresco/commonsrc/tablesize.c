@@ -829,7 +829,7 @@ static void rid_table_set_stream_widths(rid_table_item *table)
     for (x = -1, y = 0; (cell = rid_next_root_cell(table, &x, &y)) != NULL; )
     {       /* Cells can have borders */
 	cell->stream.fwidth = table->cumminabs[x + cell->span.x] - table->cumminabs[x];
-#if DEBUG
+#if DEBUG && 1
 	fprintf(stderr, "%2d %2d = %3d, table->cumminabs[x=%2d + cell->span.x=%2d]=%3d - table->cumminabs[%2d]=%3d;\n",
 	       x, y, cell->stream.fwidth, 
 	       x, cell->span.x, 
@@ -839,9 +839,19 @@ static void rid_table_set_stream_widths(rid_table_item *table)
 #endif
 	/* DAF: 970315: hunting -ve fwidth */
 	cell->stream.fwidth -= cb;
-	ASSERT(cell->stream.fwidth >= 0);
+	if (cell->span.x == 0)
+	{
+#ifdef PLOTCHECK
+	    plotcheck_boom();
+#endif
+	}
+	else
+	{
+	    /* @@@@ */
+	    /*ASSERT(cell->stream.fwidth >= 0);*/
+	    /*cell->stream.fwidth = 0;*/
+	}
     }
-
 }
 
 /* Table formatting */
@@ -1841,7 +1851,12 @@ extern void rid_table_share_width(rid_header *rh, rid_text_stream *stream, rid_t
     TABDBG(("rid_table_share_width(): final given_width of %d chosen\n", given_width));
 
     stream->fwidth = given_width;
-    ASSERT(stream->fwidth >= 0);
+    if (stream->fwidth == 0)
+    {
+	/* @@@@ */
+	/*ASSERT(stream->fwidth >= 0);*/
+	/*stream->fwidth = 0;*/
+    }
 
     rid_table_place_cols(stream, table, parfmt, given_width);
     rid_table_set_stream_widths(table);

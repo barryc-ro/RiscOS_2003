@@ -519,16 +519,20 @@ int frontend_view_bounds(fe_view v, wimp_box *box)
 	wimp_box sbox;
 	tb_status_box(&sbox);
 
+/* 	STBDBGN(("viewbounds: tb box %d,%d %d,%d\n", sbox.x0, sbox.y0, sbox.x1, sbox.y1)); */
+/* 	STBDBGN(("viewbounds: ws box %d,%d %d,%d\n", ws.o.box.x0, ws.o.box.y0, ws.o.box.x1, ws.o.box.y1)); */
+	
 	if (config_display_control_top)
 	{
-	    if (ws.o.box.y1 > sbox.y1)
-		ws.o.box.y1 = sbox.y1;
+	    if (ws.o.box.y1 > sbox.y0)
+		ws.o.box.y1 = sbox.y0;
 	}
 	else
 	{
-	    if (ws.o.box.y0 < sbox.y0)
-		ws.o.box.y0 = sbox.y0;
+	    if (ws.o.box.y0 < sbox.y1)
+		ws.o.box.y0 = sbox.y1;
 	}
+/* 	STBDBGN(("viewbounds: ws box %d,%d %d,%d\n", ws.o.box.x0, ws.o.box.y0, ws.o.box.x1, ws.o.box.y1)); */
     }
     
     /* calculate box in work area coordinates */
@@ -538,7 +542,7 @@ int frontend_view_bounds(fe_view v, wimp_box *box)
     box->x0 = ws.o.x;
     box->x1 = ws.o.x + (ws.o.box.x1 - ws.o.box.x0);
 
-    STBDBGN(("stbredraw: view bounds  %d,%d %d,%d (status %d)\n", box->x0, box->y0, box->x1, box->y1, fe_status_height_top(v)));
+    STBDBGN(("view bounds: %d,%d %d,%d (status %d)\n", box->x0, box->y0, box->x1, box->y1, fe_status_height_top(v)));
 
     return 1;
 }
@@ -550,6 +554,15 @@ int frontend_view_margins(fe_view v, wimp_box *box)
 
 #if USE_MARGINS
     *box = v->backend_margin;
+
+    /* zero margin where the toolbar is touching */
+    if (use_toolbox && tb_is_status_showing())
+    {
+	if (config_display_control_top)
+	    box->y1 = 0;
+	else
+	    box->y0 = 0;
+    }
 #else
     *box = v->margin;
 

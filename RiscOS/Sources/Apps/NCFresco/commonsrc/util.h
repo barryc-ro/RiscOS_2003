@@ -177,62 +177,62 @@ extern int nvram_op(const char *tag, int bit_start, int n_bits, int new_val, BOO
 
 #define snd_NONE		0
     
-#define snd_TOOLBAR_SHOW	1
-#define snd_TOOLBAR_HIDE	1
-#define snd_TOOLBAR_SHOW_SUB	1
-#define snd_TOOLBAR_HIDE_SUB	1
+#define snd_TOOLBAR_SHOW	0x03
+#define snd_TOOLBAR_HIDE	0x04
+#define snd_TOOLBAR_SHOW_SUB	0x03
+#define snd_TOOLBAR_HIDE_SUB	0x04
 
-#define snd_HISTORY_SHOW	1
-#define snd_HISTORY_BACK	1
-#define snd_HISTORY_FORWARD	1
+#define snd_HISTORY_SHOW	0x01
+#define snd_HISTORY_BACK	0x08
+#define snd_HISTORY_FORWARD	0x08
 
-#define snd_HOTLIST_SHOW	2
-#define snd_HOTLIST_DELETE_SHOW	2
-#define snd_HOTLIST_ADD		2
-#define snd_HOTLIST_REMOVE	2
+#define snd_HOTLIST_SHOW	0x01
+#define snd_HOTLIST_DELETE_SHOW	0x01
+#define snd_HOTLIST_ADD		0x08
+#define snd_HOTLIST_REMOVE	0x08
 
-#define snd_HOME		3
-#define snd_SEARCH		3
-#define snd_OFFLINE		3
-#define snd_ABORT		3
-#define snd_RELOAD		3
+#define snd_HOME		0x01
+#define snd_SEARCH		0x01
+#define snd_OFFLINE		0x01
+#define snd_ABORT		0x0A
+#define snd_RELOAD		0x08
 
-#define snd_OPEN_URL_SHOW	4
-#define snd_HELP_SHOW		4
-#define snd_PASSWORD_SHOW	4	
-#define snd_INFO_SHOW		4
-#define snd_FIND_SHOW		4
+#define snd_OPEN_URL_SHOW	0x01
+#define snd_HELP_SHOW		0x01
+#define snd_PASSWORD_SHOW	0x01
+#define snd_INFO_SHOW		0x01
+#define snd_FIND_SHOW		0x01
     
-#define snd_SCROLL_LINE		5
-#define snd_SCROLL_PAGE		5
-#define snd_SCROLL_LIMIT	5
-#define snd_SCROLL_FAILED	5
+#define snd_SCROLL_LINE		0x07
+#define snd_SCROLL_PAGE		0x07
+#define snd_SCROLL_LIMIT	0x07
+#define snd_SCROLL_FAILED	0x0c
 
-#define snd_CHANGE_FRAME	6
-#define snd_CHANGE_HIGHLIGHT	6
+#define snd_CHANGE_FRAME	0x10001
+#define snd_CHANGE_HIGHLIGHT	0x10001
 
-#define snd_WARN_NO_SCROLL	7
-#define snd_WARN_NO_FIELD	7
-#define snd_WARN_BAD_KEY	7
+#define snd_WARN_NO_SCROLL	0x0c
+#define snd_WARN_NO_FIELD	0x0c
+#define snd_WARN_BAD_KEY	0x0c
 
-#define snd_MENU_SHOW		8
-#define snd_MENU_HIDE		8
-#define snd_MENU_SELECT		8
+#define snd_MENU_SHOW		0x05
+#define snd_MENU_HIDE		0x06
+#define snd_MENU_SELECT		0x08
 
-#define snd_CHECKBOX_TOGGLE	9
-#define snd_RADIO_TOGGLE	9
-#define snd_FORM_SUBMIT		9
-#define snd_FORM_RESET		9
+#define snd_CHECKBOX_TOGGLE	0x0d
+#define snd_RADIO_TOGGLE	0x0d
+#define snd_FORM_SUBMIT		0x08
+#define snd_FORM_RESET		0x0A
 
-#define snd_LINK_FOLLOW		10
+#define snd_LINK_FOLLOW		0x10002
     
-#define snd_MODE_MAP_START	11
-#define snd_MODE_MAP_END	11
+#define snd_MODE_MAP_START	0x10003
+#define snd_MODE_MAP_END	0x10004
 
-#define snd_BEEPS_ON		12
-#define snd_BEEPS_OFF		12
+#define snd_BEEPS_ON		0x08
+#define snd_BEEPS_OFF		0x08
     
-#define snd_ERROR		13
+#define snd_ERROR		0x0B
 
 typedef int sound_event_t;
 

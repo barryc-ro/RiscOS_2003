@@ -189,7 +189,7 @@ static void hotlist_event_handler(int event, fe_view v)
 	break;
 
     case fevent_HOTLIST_SHOW_DELETE:
-	frontend_complain(frontend_open_url("ncfrescointernal:openpanel?name=favsdelete", v, TARGET_FAVS, NULL, fe_open_url_NO_CACHE));
+	frontend_complain(frontend_open_url("ncfrescointernal:openpanel?name=favsdelete", NULL, TARGET_FAVS, NULL, fe_open_url_NO_CACHE));
 	break;
     }
 }

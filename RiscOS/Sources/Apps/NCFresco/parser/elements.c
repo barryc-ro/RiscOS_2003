@@ -156,6 +156,60 @@ static BOOL open_within_container(SGMLCTX *context, const tag)
 
 /*****************************************************************************/
 
+static void force_close_to_matching (SGMLCTX *context, ELEMENT *element)
+{
+    while (TRUE)
+    {
+        STACK_ITEM *nos;
+
+        for (nos = context->tos; nos != NULL; nos = nos->outer) 
+        {
+            if (nos->element == element->id)
+                 break;
+
+            if ((context->elements[nos->element].flags & FLAG_DONT_FORCE_CLOSE) == 0)
+                 break;
+        }
+        /* nos now points to the first stack element that we can force close or it points to
+           our element.
+         */
+
+        if (!element_bit_set (nos->elements_open, element->id)) break;
+        
+        pull_stack_item_to_top_correcting_effects (context, nos);
+
+        if (nos->element == element->id) 
+        {
+            /* We've reached the element we wanted to close */
+
+            perform_element_close (context, element); break;
+        }
+        else
+        {
+            int *phantom = &context->tos->element;
+            ELEMENT *elem = &context->elements[*phantom];
+            BOOL b = (elem->flags & FLAG_CONTAINER) != 0 &&
+                     (element->flags & FLAG_FULL_UNWIND) == 0;
+         
+	    if (element->group != HTML_GROUP_NONE) b &= elem->group == element->group;
+            /* Note that this means an element may be closed */
+            /* when it's *NOT* the context->tos element. */
+         
+            PRSDBG(("perform_element_close(%s): force closing element </%s>\n",
+             element->name.ptr, elem->name.ptr));
+            perform_element_close(context, elem);
+            *phantom = - *phantom;
+            sgml_note_missing_close(context, elem);
+            PRSDBG(("perform_element_close(%s): done force close </%s>\n",
+                    element->name.ptr, elem->name.ptr));
+    	    /* Leave this in: Borris: 10/9/96 */
+            if (b) break;
+        }
+    }
+}
+
+/*****************************************************************************/
+
 #if DEBUG
 static char *action_names [8] =
 {
@@ -246,14 +300,15 @@ extern ELEMENT *ensure_pre_requisites (SGMLCTX *context, ELEMENT *element)
 	    break;
 	case CLOSE_ANY_OPEN:
 	    if ( open_within_container(context, tag) )
-	    while ( is_element_open(context, tag) )
+		/* while ( is_element_open(context, tag) ) */
 	    {
 		ELEMENT *oe = &context->elements[context->tos->element];
 		PRSDBGN(("ensure_pre_requisite(%s): implied closure </%s>\n",
 			element->name.ptr, oe->name.ptr));
 		if ( (element->flags & FLAG_CLOSE_OPTIONAL) == 0 )
 		    sgml_note_missing_close (context, oe);
-		perform_element_close (context, oe);
+		/* perform_element_close (context, oe); */
+		force_close_to_matching (context, other_elem);
 	    }
 	    break;
 	case QUIETLY_CLOSE_ANY_OPEN:
@@ -264,7 +319,8 @@ extern ELEMENT *ensure_pre_requisites (SGMLCTX *context, ELEMENT *element)
 			element->name.ptr, other_elem->name.ptr));
 		if ( (element->flags & FLAG_CLOSE_OPTIONAL) == 0 )
 		    sgml_note_missing_close (context, other_elem);
-		perform_element_close (context, &context->elements [context->tos->element] );
+		/* perform_element_close (context, &context->elements [context->tos->element] ); */
+		force_close_to_matching (context, other_elem);
 	    }
 	    break;
 	case CONTAINER_ENCLOSED_WITHIN:
@@ -630,58 +686,6 @@ extern void perform_element_open(SGMLCTX *context, ELEMENT *element, VALUES *val
 }
 
 /*****************************************************************************/
-
-static void force_close_to_matching (SGMLCTX *context, ELEMENT *element)
-{
-    while (TRUE)
-    {
-        STACK_ITEM *nos;
-
-        for (nos = context->tos; nos != NULL; nos = nos->outer) 
-        {
-            if (nos->element == element->id)
-                 break;
-
-            if ((context->elements[nos->element].flags & FLAG_DONT_FORCE_CLOSE) == 0)
-                 break;
-        }
-        /* nos now points to the first stack element that we can force close or it points to
-           our element.
-         */
-
-        if (!element_bit_set (nos->elements_open, element->id)) break;
-        
-        pull_stack_item_to_top (context, nos);
-
-        if (nos->element == element->id) 
-        {
-            /* We've reached the element we wanted to close */
-
-            perform_element_close (context, element); break;
-        }
-        else
-        {
-            int *phantom = &context->tos->element;
-            ELEMENT *elem = &context->elements[*phantom];
-            BOOL b = (elem->flags & FLAG_CONTAINER) != 0 &&
-                     (element->flags & FLAG_FULL_UNWIND) == 0;
-         
-	    if (element->group != HTML_GROUP_NONE) b &= elem->group == element->group;
-            /* Note that this means an element may be closed */
-            /* when it's *NOT* the context->tos element. */
-         
-            PRSDBG(("perform_element_close(%s): force closing element </%s>\n",
-             element->name.ptr, elem->name.ptr));
-            perform_element_close(context, elem);
-            *phantom = - *phantom;
-            sgml_note_missing_close(context, elem);
-            PRSDBG(("perform_element_close(%s): done force close </%s>\n",
-                    element->name.ptr, elem->name.ptr));
-    	    /* Leave this in: Borris: 10/9/96 */
-            if (b) break;
-        }
-    }
-}
 
 extern void perform_element_close(SGMLCTX *context, ELEMENT *element)
 {

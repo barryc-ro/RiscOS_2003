@@ -1028,8 +1028,106 @@ static void dump_textual_formatting(rid_header *ptr)
     my_print(">>>>");
 }
 
+extern void dump_form_element(rid_form_element *ptr)
+{
+    my_print("rid_form_element %p", ptr);
+    if (ptr == NULL)
+	return;
+
+    enter();
+        my_print("prev %p, next %p, parent %p, display %p",
+		 ptr->prev, ptr->next, ptr->parent, ptr->display);
+	switch (ptr->tag)
+	{
+	case rid_form_element_INPUT:
+	    my_print("Tag: INPUT");
+	    break;
+	case rid_form_element_SELECT:
+	    my_print("Tag: SELECT");
+	    break;
+	case rid_form_element_TEXTAREA:
+	    my_print("Tag: TEXTAREA");
+	    break;
+	default:
+	    my_print("Tag: **** UNKNOWN: %d ****", ptr->tag);
+	    break;
+	}
+	my_print("Colours back %d, select %d, cursor %d",
+		 ptr->colours.back, ptr->colours.select, ptr->colours.cursor);
+	my_print("Tabindex %d", ptr->tabindex);
+    leave();
+}
+
+extern void dump_textarea_item(rid_textarea_item *ptr)
+{
+    my_print("rid_textarea_item %p", ptr);
+    if (ptr == NULL)
+	return;
+    enter();
+        dump_form_element(&ptr->base);
+	my_print("name %s", ptr->name);
+	my_print("size %d,%d, caret %d,%d, scroll %d,%d",
+		 ptr->rows, ptr->cols, ptr->cx, ptr->cy, ptr->sx, ptr->sy);
+	my_print("default lines %p, %p", ptr->default_lines, ptr->def_last_line);
+	my_print("lines %p, %p", ptr->lines, ptr->last_line);
+	my_print("caret line %p", ptr->caret_line);
+    leave();
+}
+
+extern void dump_select_item(rid_select_item *ptr)
+{
+    my_print("rid_select_item %p", ptr);
+    if (ptr == NULL)
+	return;
+    enter();
+        dump_form_element(&ptr->base);
+        my_print("name %s", ptr->name);
+	my_print("count %d, size %d", ptr->count, ptr->size);
+	my_print("items %p, menuh %p, doc %p", ptr->items, ptr->menuh, ptr->doc);
+	my_print("options %p, %p", ptr->options, ptr->last_option);
+	my_print("flags 0x%x", ptr->flags);
+    leave();
+}
+
+extern void dump_form_item(rid_form_item *ptr)
+{
+    rid_form_element *elem;
+
+    my_print("rid_form_item %p", ptr);
+    if (ptr == NULL)
+	return;
+    enter();
+        my_print("next %p, prev %p", ptr->next, ptr->prev);
+	my_print("kids %p, last_kid %p", ptr->kids, ptr->last_kid);
+	for (elem = ptr->kids; elem != NULL; elem = elem->next)
+	    dump_form_element(elem);
+	my_print("last text %p", ptr->last_text);
+	dump_textarea_item(ptr->last_text);
+	my_print("last_select %p", ptr->last_select);
+	dump_select_item(ptr->last_select);
+	switch (ptr->method)
+	{
+	case rid_fm_GET:
+	    my_print("Method: GET");
+	    break;
+	case rid_fm_POST:
+	    my_print("Method: POST");
+	    break;
+	default:
+	    my_print("Method: ***** UNKNOWN: %d ****", ptr->method);
+	    break;
+	}
+	my_print("Action: %s", ptr->action);
+	my_print("Target: %s", ptr->target);
+	my_print("Id: %s", ptr->id);
+    leave();
+}
+
 extern void dump_header(rid_header *ptr)
 {
+    int x;
+    rid_form_item *fi;
+
 #if 0
 #ifndef NO_PTRS
   	my_print("rid_header %p (%s, %s, %s)", ptr, caller(1), caller(2), caller(3));
@@ -1054,6 +1152,11 @@ extern void dump_header(rid_header *ptr)
   		my_print("title %s", X_OR_NULL(ptr->title));
   		my_print("base %s", X_OR_NULL(ptr->base));
   		dump_stream(&ptr->stream, ptr->texts.data);
+		for (x = 0, fi = ptr->form_list; fi != NULL; x++, fi = fi->next)
+		{
+		    my_print("FORM %d", x);
+		    dump_form_item(fi);
+		}
   	leave();
 
 	/*dump_textual_formatting(ptr);*/
