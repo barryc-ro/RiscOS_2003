@@ -1278,9 +1278,9 @@ config_item citems[] = {
       (void *)offsetof(struct config_str, header_useragent[1]),
       "Faking User-Agent header",
 #ifdef STBWEB
-      (void *)"'Mozilla/2.0NC-1 (compatible; %s; ANTFresco/%s; %.*s)'"
+      (void *)"Mozilla/2.0NC-1 (compatible; %s; ANTFresco/%s; %.*s)"
 #else
-      (void *)"'Mozilla/2.02 (compatible; ANTFresco/%s; %.*s)'"
+      (void *)"Mozilla/2.02 (compatible; ANTFresco/%s; %.*s)"
 #endif
        },
 { config_LAST, NULL, NULL, NULL, 0 }

@@ -39,6 +39,7 @@
 #include "frameutils.h"
 #include "memflex.h"
 #include "printing.h"
+#include "gbf.h"
 
 #if UNICODE
 #include "Unicode/charsets.h"
@@ -424,6 +425,10 @@ static int internal_decode_options(const char *query, char **new_url)
 
 	config_display_scale = config_display_scales[limit(atoi(scale), 0, 2)];
 	config_display_scale_fit = atoi(fit);
+	if (config_display_scale_fit)
+	    gbf_flags |= GBF_AUTOFIT;
+	else
+	    gbf_flags &= ~GBF_AUTOFIT;
 
 	mm_free(scale);
 	mm_free(fit);
