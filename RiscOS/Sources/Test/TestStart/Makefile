@@ -50,7 +50,6 @@ INCLUDES = -IC:
 COMPONENT = TestStart
 TARGET    = aof.${COMPONENT}
 RMTARGET  = rm.${COMPONENT}
-EXPORTS   = ${EXP_C_H}.${COMPONENT}
 
 OBJS      =	\
 o.module	\
@@ -84,17 +83,14 @@ dirs:
 rom: ${TARGET} dirs
         @echo ${COMPONENT}: rom complete
 
-export: ${EXPORTS}
-        @echo ${COMPONENT}: export complete
-
 install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
 clean:
         ${WIPE} o      ${WFLAGS}
-        ${WIPE} aof      ${WFLAGS}
-        ${WIPE} rm      ${WFLAGS}
+        ${WIPE} aof    ${WFLAGS}
+        ${WIPE} rm     ${WFLAGS}
         ${WIPE} linked ${WFLAGS}
         ${RM} h.header
         ${RM} ${RMTARGET}
