@@ -99,9 +99,10 @@ install_rom: ${ROM_MODULE}
         ${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: Module installed (ROM)
 
-resources: Resources.${LOCALE}.Messages
+resources: LocalRes:Messages
         ${MKDIR} ${RESDIR}
-        ${CP} Resources.${LOCALE}.Messages ${RESDIR}.Messages ${CPFLAGS}
+	TokenCheck LocalRes:Messages
+        ${CP} LocalRes:Messages ${RESDIR}.Messages ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied to Messages module
 
 clean:
@@ -109,7 +110,6 @@ clean:
         ${WIPE} aof ${WFLAGS}
         ${WIPE} rm ${WFLAGS}
         ${WIPE} linked ${WFLAGS}
-        ${WIPE} map ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 ${ROM_MODULE}: ${OBJS} ${TBOXLIB} ${ROMCSTUBS}
@@ -119,15 +119,12 @@ ${ROM_MODULE}: ${OBJS} ${TBOXLIB} ${ROMCSTUBS}
 # final link for ROM Image (using given base address)
 rom_link:
         ${MKDIR} linked
-        ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -bin -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM} \
-              -map > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-${RESF}: @.Resources.${LOCALE}.Messages
-	resgen messages_file ${RESF} Resources.${LOCALE}.Messages Resources.${COMPONENT}.Messages
+${RESF}: LocalRes:Messages
+	resgen messages_file ${RESF} LocalRes:Messages Resources.${COMPONENT}.Messages
 
 ${RAM_MODULE}: ${RAM_OBJS} ${TBOXLIB} ${RESF} ${CLIB}
 	${mkdir} rm
