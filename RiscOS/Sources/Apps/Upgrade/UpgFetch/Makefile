@@ -130,7 +130,7 @@ resources: ${TARGET}
 	Set UpgFetchRes$Path LocalUserIfRes:,LocalRes:
 	${CP} UpgFetchRes:*       ${RESDIR}.^.Apps.${APP}.*            ${CPFLAGS}
 	${CP} ${TARGET}           ${RESDIR}.^.Apps.${APP}.${COMPONENT} ${CPFLAGS}
-	${CP} ${UPGLAUNCH}        ${RESDIR}.^.Apps.${APP}.${UPGNAME}   ${CPFLAGS}
+	${CP} ${UPGLAUNCH}        ${RESDIR}.^.Apps.${APP}.${UPGLEAF}   ${CPFLAGS}
 	UnSet UpgFetchRes$Path
 	@echo ${COMPONENT}: all complete
 
