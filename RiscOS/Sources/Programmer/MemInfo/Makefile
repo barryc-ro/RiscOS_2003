@@ -32,7 +32,7 @@ AFLAGS     = -depend !Depend ${THROWBACK} -Stamp -quit
 CFLAGS     = -c -depend !Depend ${THROWBACK} -zM -ff ${INCLUDES} ${DFLAGS}
 CMHGFLAGS  = -p ${DFLAGS} ${THROWBACK} ${INCLUDES}
 CPFLAGS    = ~cfr~v
-WFLAGS     = ~c~vr
+WFLAGS     = ~c~v
 CHMODFLAGS = RW/R
 
 DFLAGS  = -DUSE_TINY ${DEBUG}
@@ -66,7 +66,8 @@ o.header
 # Rule patterns
 #
 .c.o:;      ${CC}   ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $< h.$*
+.cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $<
+.cmhg.h:;   ${CMHG} ${CMHGFLAGS} -d h.$* $< 
 .s.o:;      ${AS}   ${AFLAGS} $< $@
 
 
@@ -93,12 +94,13 @@ clean:
         ${WIPE} linked.* ${WFLAGS}
         ${RM} ${RMTARGET}
         ${RM} ${TARGET}
+        ${RM} h.header
         @echo ${COMPONENT}: cleaned
 
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS} ${ROMCSTUBS} 
+${TARGET}: ${OBJS} ${ROMCSTUBS} header.h
         ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
 
 #
@@ -112,7 +114,7 @@ rom_link:
 #
 # Relocatable module target
 #
-${RMTARGET}: ${OBJS}
+${RMTARGET}: ${OBJS} header.h
         ${LD} -rmf -o $@ ${OBJS} ${CLIB}
         ${CHMOD} rm.${COMPONENT} ${CHMODFLAGS}
 
