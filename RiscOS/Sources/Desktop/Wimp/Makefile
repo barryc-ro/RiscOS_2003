@@ -62,6 +62,7 @@ resources_common:
         ${CP} Resources.${LOCALE}.Messages ${RESDIR}.${COMPONENT}.Messages ${CPFLAGS}
         ${CP} Resources.${LOCALE}.<System>.Templates ${RESDIR}.${COMPONENT}.Templates ${CPFLAGS}
         ${CP} Resources.${LOCALE}.<System>.Sprites ${RESDIR}.${COMPONENT}.Sprites ${CPFLAGS}
+       -${CP} Resources.${LOCALE}.<System>.Sprites22 ${RESDIR}.${COMPONENT}.Sprites22 ${CPFLAGS}
        -${CP} Resources.${LOCALE}.<System>.TileN ${RESDIR}.${COMPONENT}.TileN ${CPFLAGS}
        -${CP} Resources.${LOCALE}.<System>.TileV ${RESDIR}.${COMPONENT}.TileV ${CPFLAGS}
         ${CP} Resources.${LOCALE}.<System>.Tools ${RESDIR}.${COMPONENT}.Tools ${CPFLAGS}
