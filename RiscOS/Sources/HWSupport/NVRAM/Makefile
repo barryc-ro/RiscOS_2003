@@ -4,7 +4,8 @@
 #
 # Paths
 #
-EXP_HDR = <export$dir>
+EXP_H   = <CExport$Dir>.h
+EXP_HDR = <export$dir>.^.Interface2
 
 #
 # Generic options:
@@ -45,21 +46,23 @@ DFLAGS   =
 # Program specific options:
 #
 COMPONENT = NVRAM
-TARGET    = aof.NVRAM
-OBJS      = header.o module.o NVRAM.o msgfile.o parse.o trace.o
-EXPORTS   = 
+TARGET    = aof.${COMPONENT}
+RAMTARGET = rm.${COMPONENT}
+OBJS      = header.o module.o nvram.o msgfile.o parse.o trace.o
+EXPORTS   = ${EXP_H}.${COMPONENT} ${EXP_HDR}.${COMPONENT}
 RDIR      = ${RESDIR}.NVRAM
+
 #
 # Rule patterns
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} -o $@ $<
+.cmhg.o:;   ${CMHG} -p -o $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
 
 #
 # build a relocatable module:
 #
-all: rm.NVRAM
+all: ${RAMTARGET}
 
 #
 # RISC OS ROM build rules:
@@ -76,15 +79,14 @@ install_rom: ${TARGET}
 
 clean:
         ${WIPE} o.* ${WFLAGS}
-        ${WIPE} rm.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
-        ${WIPE} map.* ${WFLAGS}
         ${RM} ${TARGET}
+        ${RM} ${RAMTARGET}
         @echo ${COMPONENT}: cleaned
 
 resources:
         ${MKDIR} ${RDIR}
-        ${CP} resources.<Machine>.Tags ${RDIR}.Tags ${CPFLAGS}
+        ${CP} resources.<System>.Tags ${RDIR}.Tags ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 #
@@ -97,44 +99,17 @@ ${TARGET}: ${OBJS} ${ROMCSTUBS}
 # Final link for the ROM Image (using given base address)
 #
 rom_link:
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-rm.NVRAM: ${OBJS} ${CLIB}
+${RAMTARGET}: ${OBJS} ${CLIB}
         ${LD} -o $@ -module ${OBJS} ${CLIB}
 
-${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
-#        ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
+${EXP_H}.${COMPONENT}: export.h.${COMPONENT}
+        ${CP} export.h.${COMPONENT} $@ ${CPFLAGS}
+
+${EXP_HDR}.${COMPONENT}: export.hdr.${COMPONENT}
+        ${CP} export.hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-o.module:	c.module
-o.module:	C:h.kernel
-o.module:	C:h.swis
-o.module:	h.module
-o.module:	h.nvram
-o.module:	h.msgfile
-o.module:	h.error
-o.NVRAM:	c.NVRAM
-o.NVRAM:	C:h.kernel
-o.NVRAM:	C:h.swis
-o.NVRAM:	h.module
-o.NVRAM:	h.nvram
-o.NVRAM:	h.msgfile
-o.NVRAM:	h.parse
-o.NVRAM:	h.error
-o.NVRAM:	h.trace
-o.msgfile:	c.msgfile
-o.msgfile:	C:h.kernel
-o.msgfile:	C:h.swis
-o.msgfile:	h.msgfile
-o.msgfile:	h.error
-o.msgfile:	h.trace
-o.parse:	c.parse
-o.parse:	h.nvram
-o.parse:	C:h.kernel
-o.parse:	h.trace
-o.trace:	c.trace
-o.trace:	C:h.swis
-o.trace:	C:h.kernel
