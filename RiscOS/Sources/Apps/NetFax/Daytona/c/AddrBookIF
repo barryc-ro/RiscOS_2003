@@ -1,0 +1,344 @@
+/*
+ * AddrBookIF.c - Interface to !Address
+ *
+ * R C Manby
+ *
+ * Started 2 September 1997
+ */
+
+
+#include "BuildFlags.h"
+#include "StdTypes.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "kernel.h"
+
+#include "StateKicker.h"
+#include "SendQ.h"
+
+#include "wimp.h"
+#include "wimplib.h"
+
+#include "AddrBookIF.h"
+
+/*#include "UILib.h"*/
+#include "DebugLib.h"
+
+/*>>>we really shouldn't reuse Neil's wimp message & structure like this, but it'll do for now */
+
+
+typedef struct hdr {
+   int size;
+   int sender;
+   int my_ref;
+   int your_ref;
+   int action_code;
+} Hdr;
+
+
+typedef struct dayt_winmessage {
+   Hdr hdr;
+   struct dayt_winmessagedata {
+      int code;
+      int flags;
+  } data;
+} Dayt_WinMessage;
+
+#define Other_Program_Window_Message	0x4F7FF
+#define Open_DayAdd_NANSearch     4
+#define Open_DayAdd_NANSearch_Ack 5
+
+ /*<<<*/
+
+
+static int InteractiveSearch_SearchRef = 0;	/* zero means search inactive, non-zero is my_ref field of message that started the search */
+
+
+#if ADDRESSBOOK_USES_DYNAMICAREA
+static void SearchDataRelease(Dayt_SearchDataReturn_Message *search_result);
+#endif
+
+
+/*
+ * We only allow one NAN fax search at once.
+ *
+ * Returns TRUE if search in progress
+ *         FALSE if safe to call AddrBookIF_InteractiveSearch()
+ */
+extern BOOL AddrBookIF_InteractiveBusy(void)
+{
+	return(InteractiveSearch_SearchRef != 0);
+}
+
+
+/*
+ * Common code to check whether a message implying 'search terminated'
+ * is a reply to the 'open NAN window' message sent by
+ * AddrBookIF_InteractiveSearch(). If it is, mark as inactive.
+ */
+static void InteractiveSearch_MayHaveTerminated(int SearchRef)	/* may zero InteractiveSearch_SearchRef */
+{
+	if (InteractiveSearch_SearchRef == SearchRef)
+		InteractiveSearch_SearchRef = 0;
+}
+
+
+/*
+ * Start an address book interactive search.
+ *
+ * Returns the message my_ref field filled in by the Wimp, so that
+ * our caller can identify the search results that arrive later on.
+ */
+extern void AddrBookIF_InteractiveSearch(int *p_SearchRef, AddressRec *AddressRecord, int search_flags)
+{
+    Dayt_WinMessage message;
+
+    message.hdr.size        = sizeof(Dayt_WinMessage);
+    message.hdr.your_ref    = 0;	 /* original message */
+    message.hdr.action_code = Other_Program_Window_Message;
+    message.data.code       = Open_DayAdd_NANSearch;
+    message.data.flags      = search_flags;
+
+    /* Send Message */
+    (void)wimp_send_message(Wimp_EUserMessage, (WimpMessage*)&message, 0, 0, 0);
+    /* if we get an error calling the address book, we should probably cancel the fax */
+
+	if (p_SearchRef)
+    	*p_SearchRef = message.hdr.my_ref;
+
+	InteractiveSearch_SearchRef = message.hdr.my_ref;	/* indicates search in progress */
+}
+
+
+/*
+ * Start a non-interactive address book search
+ *
+ * Returns the message my_ref field filled in by the Wimp, so that
+ * our caller can identify the search results that arrive later on.
+ */
+extern void AddrBookIF_SearchFaxNumber(int *p_SearchRef, AddressRec *AddressRecord, int search_flags, char *phonenumber)
+{
+    Dayt_NonInteractiveSearch_Message message;
+
+    message.hdr.size        = sizeof(Dayt_NonInteractiveSearch_Message);
+    message.hdr.your_ref    = 0;	 /* original message */
+    message.hdr.action_code = Dayt_NonInteractiveSearch_MessageNum;
+#if ADDRESSBOOK_USES_MESSAGES
+    message.data.fields_to_return = search_flags;
+#endif
+	message.data.fields_to_search = Field_FaxNumber | Field_VoiceNumber;
+	strcpy(message.data.search_string, phonenumber);
+
+    /* Send Message */
+    (void)wimp_send_message(Wimp_EUserMessage, (WimpMessage*)&message, 0, 0, 0);
+    /* if we get an error calling the address book, we should probably cancel the fax */
+
+	if (p_SearchRef)
+    	*p_SearchRef = message.hdr.my_ref;
+}  
+
+/*
+ * Process wimp messages from !Address
+ */
+
+extern int AddrBookIF_WimpMessageHandler(WimpMessage *message, void *handle)
+{
+#if ADDRESSBOOK_USES_DYNAMICAREA
+	Dayt_SearchDataReturn_Message *search_result = (Dayt_SearchDataReturn_Message *)message;
+    messageDataBlock *sendMessage;
+    AddressRec *pAddressRecord;
+
+	switch (message->hdr.action_code)
+    {
+        case Dayt_SearchDataReturn_MessageNum:
+        	pAddressRecord = SendQ_AddressRecord_from_SearchRef(message->hdr.your_ref);
+	        if (pAddressRecord)	
+	        {
+	        	switch (search_result->data.code)
+	        	{
+	        		/* An interactive search (NAN search) was started by AddrBookIF_InteractiveSearch() */
+	        		/* OR a non-interactive search was started by AddrBookIF_SearchFaxNumber()          */
+	        		case DataReturn_Code_AddressData:	/* Full record returned */
+						pAddressRecord->SearchFlags = 0;
+
+		    			strcpy(pAddressRecord->ContactName, search_result->data.data_area->contact_name);
+						strcpy(pAddressRecord->EmailAddress, search_result->data.data_area->email_address);
+	    				strcpy(pAddressRecord->DirectPhoneNumber, search_result->data.data_area->fax_number);
+	                    pAddressRecord->DeviceClass = search_result->data.data_area->device_class;
+
+						switch (search_result->data.data_area->routing_override)
+						{
+							case 1:
+								pAddressRecord->LocalRouting = RouteDIRECT;
+								break;
+	
+							case 2:
+								pAddressRecord->LocalRouting = RouteISP;
+								break;
+	
+							default:
+								pAddressRecord->LocalRouting = RouteUNKNOWN;
+								break;
+						}
+
+						StateKicker_SendMessage(SendQ_MessageHandler, AD_SQ_FINISH, &sendMessage);
+						sendMessage->data.finish.searchref = message->hdr.your_ref;
+
+						SearchDataRelease(search_result);
+	        			break;
+
+					/* An interactive search was started by AddrBookIF_InteractiveSearch() and the 'one shot' button was used */
+					case DataReturn_Code_OneShotData:	/* 'one shot' record returned */
+						pAddressRecord->OneShotFlags = 0;
+						
+	    				strcpy(pAddressRecord->DirectPhoneNumber, search_result->data.data_area->oneshot_fax_number);
+						strcpy(pAddressRecord->EmailAddress, search_result->data.data_area->oneshot_email_address);
+
+						StateKicker_SendMessage(SendQ_MessageHandler, AD_SQ_FINISH, &sendMessage);
+						sendMessage->data.finish.searchref = message->hdr.your_ref;
+
+						SearchDataRelease(search_result);
+						break;
+
+                    /* An interactive search was started by AddrBookIF_InteractiveSearch() and cancel pressed */
+					case DataReturn_Code_Cancelled:
+	                	StateKicker_SendMessage(SendQ_MessageHandler, AD_SQ_CANCEL, &sendMessage);
+	                    sendMessage->data.cancel.searchref = message->hdr.your_ref;
+						break;
+
+                    /* non-interactive search, started by AddrBookIF_SearchFaxNumber(), failed to find a matching record */
+					case DataReturn_Code_NotFound:
+	                	StateKicker_SendMessage(SendQ_MessageHandler, AD_SQ_NOTFOUND, &sendMessage);
+	                    sendMessage->data.notfound.searchref = message->hdr.your_ref;
+						break;
+	        	} /*switch (search_result->data.code)*/
+	        }
+	        break;
+    } /*switch (message->hdr.action_code)*/
+
+	InteractiveSearch_MayHaveTerminated(message->hdr.your_ref);	/* may zero InteractiveSearch_SearchRef */
+#endif
+#if ADDRESSBOOK_USES_MESSAGES
+    Dayt_InteractiveSearchReturn_Message *search_result = (Dayt_InteractiveSearchReturn_Message *)message;
+    messageDataBlock *sendMessage;
+    AddressRec *pAddressRecord;
+
+	switch (message->hdr.action_code)
+    {
+    	case Dayt_InteractiveSearchReturn_MessageNum:
+        case Dayt_NonInteractiveSearchReturn_MessageNum:
+        	pAddressRecord = SendQ_AddressRecord_from_SearchRef(message->hdr.your_ref);
+	        if (pAddressRecord)	
+	        {
+	    	    switch (search_result->data.field_number)
+	            {
+	            	case FieldNumber_ContactName:
+		    			pAddressRecord->SearchFlags = pAddressRecord->SearchFlags & ~Field_ContactName;
+		    			strcpy(pAddressRecord->ContactName, search_result->data.content.contactname_content);
+	            		break;
+	
+					case FieldNumber_EmailAddress:
+		    			pAddressRecord->SearchFlags = pAddressRecord->SearchFlags & ~Field_EmailAddress;
+						strcpy(pAddressRecord->EmailAddress, search_result->data.content.emailaddress_content);
+	                    break;
+	
+	                case FieldNumber_FaxNumber:
+	    				pAddressRecord->SearchFlags = pAddressRecord->SearchFlags & ~Field_FaxNumber;
+	    				strcpy(pAddressRecord->DirectPhoneNumber, search_result->data.content.faxnumber_content);
+	                    break;
+	
+					case FieldNumber_DeviceClass:
+		    			pAddressRecord->SearchFlags = pAddressRecord->SearchFlags & ~Field_DeviceClass;
+	                    pAddressRecord->DeviceClass = search_result->data.content.deviceclass_content;
+						break;					
+	
+					case FieldNumber_RoutingOverride:
+						pAddressRecord->SearchFlags = pAddressRecord->SearchFlags & ~Field_RoutingOverride;
+	
+						switch (search_result->data.content.routingoverride_content)
+						{
+							case 1:
+								pAddressRecord->LocalRouting = RouteDIRECT;
+								break;
+	
+							case 2:
+								pAddressRecord->LocalRouting = RouteISP;
+								break;
+	
+							default:
+								pAddressRecord->LocalRouting = RouteUNKNOWN;
+								break;
+						}
+						break;
+	
+	            /* user pressed Cancel in interactive search window */
+	                case FieldNumber_Cancelled:
+	                	StateKicker_SendMessage(SendQ_MessageHandler, AD_SQ_CANCEL, &sendMessage);
+	                    sendMessage->data.cancel.searchref = message->hdr.your_ref;
+	                    InteractiveSearch_MayHaveTerminated(message->hdr.your_ref);	/* SHOULD zero InteractiveSearch_SearchRef */
+	                	break;
+	
+	            /* user choose the 'one-shot' fax number and email box from interactive search window */
+					case FieldNumber_OneShot_FaxNumber:
+	    				pAddressRecord->OneShotFlags = pAddressRecord->OneShotFlags & ~Field_FaxNumber;
+	    				strcpy(pAddressRecord->DirectPhoneNumber, search_result->data.content.oneshotfaxnumber_content);
+	                    break;
+	
+					case FieldNumber_OneShot_EmailAddress:
+	    				pAddressRecord->OneShotFlags = pAddressRecord->OneShotFlags & ~Field_EmailAddress;
+						strcpy(pAddressRecord->EmailAddress, search_result->data.content.oneshotemailaddress_content);
+	                    break;
+	
+				/* non-interective search failed to find our phone number */
+	                case FieldNumber_NotFound:
+	                	StateKicker_SendMessage(SendQ_MessageHandler, AD_SQ_NOTFOUND, &sendMessage);
+	                    sendMessage->data.notfound.searchref = message->hdr.your_ref;
+	                    /* no need to consider InteractiveSearch_SearchRef, cos its a non-interactive search */
+	                	break;
+	            } /*switch (search_result->data.field_number)*/
+	
+				if ((search_result->data.field_number != FieldNumber_Cancelled) && (search_result->data.field_number != FieldNumber_NotFound))
+				{
+					if ((pAddressRecord->SearchFlags == 0) || (pAddressRecord->OneShotFlags == 0))
+					{
+						StateKicker_SendMessage(SendQ_MessageHandler, AD_SQ_FINISH, &sendMessage);
+						sendMessage->data.finish.searchref = message->hdr.your_ref;
+						InteractiveSearch_MayHaveTerminated(message->hdr.your_ref);	/* may zero InteractiveSearch_SearchRef */
+					}
+				}
+			}
+    		break;
+    } /*switch (message->hdr.action_code)*/
+#endif
+
+	/* deliver the queued messages */
+    while (StateKicker_Deliver() > 1)
+    	/* null statement */;
+
+	return(1);	/* processed */
+}
+
+
+#if ADDRESSBOOK_USES_DYNAMICAREA
+static void SearchDataRelease(Dayt_SearchDataReturn_Message *search_result)
+{
+	Dayt_SearchDataRelease_Message reply;
+
+	reply.hdr.size = sizeof(Dayt_SearchDataRelease_Message);
+	reply.hdr.your_ref    = search_result->hdr.my_ref;
+	reply.hdr.action_code = Dayt_SearchDataRelease_MessageNum;
+
+	reply.data_area_id = search_result->data.data_area_id;
+
+	/* reply directly to task that sent the message */
+	(void)wimp_send_message(Wimp_EUserMessage, (WimpMessage*)&reply, search_result->hdr.sender, 0, 0);
+    /* we don't care about errors */
+}
+#endif
+
+
+/* end of AddrBookIF.c */
+
+

@@ -1,0 +1,319 @@
+/*
+ * zzRemModem.c - Remote modem (remote fax machine, Daytona or ISP) state machine
+ *
+ * Author: Ben Laughton
+ * History: 1997-07-20: BAL: created
+ *          1997-08-01: MGR: revised
+ */
+
+
+
+/* =============================================================================
+ * Include header files
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <stddef.h>
+#include <string.h>
+#include "kernel.h"
+#include "swis.h"
+
+#include "toolbox.h"
+
+#include "StateKicker.h"
+#include "RemModem.h"
+#include "RemXfer.h"
+#include "Screen.h"
+
+#include "Dialler.h"
+#define Dialler_Status                  0x04c6c2 /* @@ not in dialler.h */
+#include "DaytonaHW.h"
+
+#include "DebugLib.h"
+
+
+
+/* =============================================================================
+ * Define constants
+ */
+
+enum state_RM
+{
+    Idle,
+/*    Answered,
+    Incoming_RxConnected,
+    Incoming_RxFinished,
+    Incoming_StartAnswer,
+    Outgoing_Dial,
+    Outgoing_DialFinished,
+*/    
+    Outgoing_TxConnected,
+/*
+    Outgoing_TxFinished,
+    Outgoing_StartAnswer,
+*/
+    Blocking
+};
+typedef enum state_RM state_RM;
+
+
+
+
+/* =============================================================================
+ * Define macros
+ */
+
+
+
+
+/* =============================================================================
+ * Define types
+ */
+
+
+
+
+/* =============================================================================
+ * Declare function prototypes
+ */
+
+static _kernel_oserror *idle (const int input,
+                              remoteModemDataBlock *const remote_modem_data,
+                              state_RM *const state);
+
+
+
+
+
+
+
+static _kernel_oserror *outgoing_tx_connected (const int input,
+                                               remoteModemDataBlock *const remote_modem_data,
+                                               state_RM *const state);
+
+
+
+
+
+
+
+/* =============================================================================
+ * Declare global variables
+ */
+
+/*extern*/ static int g_reserved;
+/*extern*/ remoteModemDataBlock g_remote_modem_data;
+
+static _kernel_oserror g_error[] =
+{
+    {-1, "Remote modem state machine in unknown state"}
+};
+
+enum error_RM
+{
+    E_BadModemRemState
+};
+typedef enum error_RM error_RM;
+
+static const char answer_script[] =
+    "TIMEOUT 5\n" /* @@@@ Need to specify that we want no timeout */
+    "REPORT FAX\n"
+    "REPORT DATA\n"
+    "\"\" AT+FCLASS=0\n"
+    "\\r\\nOK\\r\\n AT+FAE=1\n"
+    "\\r\\nOK\\r\\n \\c\n"
+    "\\r\\nRING\\r\\n ATA\n" /* @@ Need to send ATO following a DATA response */
+    "\\r\\nCONNECT\\r\\n \\c\n";
+
+static const char dial_script[] =
+    "TIMEOUT 35\n"
+    "\"\" AT+FCLASS=<Fax$Class>\n" /* @@@@ Need to select Class 0 or 1 prior to script execution */
+    "\\r\\nOK\\r\\n ATD<Fax$Number>\n" /* Need to select number prior to script execution */
+    "\\r\\nCONNECT\\r\\n \\c\n";
+
+static const char hangup_script[] =
+    "\"\" \\c\n";
+
+#define DI_RM_STATUS_CHANGED 0x666
+
+
+/* =============================================================================
+ * Define functions
+ */
+
+
+/* -----------------------------------------------------------------------------
++
+-
+ */
+
+extern void RemModem_StateMachine (const int messageNumber, messageDataBlock *messageData)
+{
+    static state_RM state = Idle;
+    _kernel_oserror *e = NULL;
+    remoteModemDataBlock *remote_modem_data = &g_remote_modem_data; /* @@ If it's global, why pass it? */
+
+    /* Print state machine status */
+    dprintf((NULL, "RemModem_StateMachine (entry): State => %d; Message => 0x%X\n", state, messageNumber));
+
+    switch (state)
+    {
+        case Idle:
+            e = idle (messageNumber, remote_modem_data, &state);
+            break;
+#if 0
+        case Answered:
+            e = answered (messageNumber, remote_modem_data, &state);
+            break;
+
+        case Incoming_RxConnected:
+            e = incoming_rx_connected (messageNumber, remote_modem_data, &state);
+            break;
+
+        case Incoming_RxFinished:
+            e = incoming_rx_finished (messageNumber, remote_modem_data, &state);
+            break;
+
+        case Incoming_StartAnswer:
+            e = incoming_start_answer (messageNumber, remote_modem_data, &state);
+            break;
+
+        case Outgoing_Dial:
+            e = outgoing_dial (messageNumber, remote_modem_data, &state, messageData->data.dial.number);
+            break;
+
+        case Outgoing_DialFinished:
+            e = outgoing_dial_finished (messageNumber, remote_modem_data, &state);
+            break;
+#endif
+        case Outgoing_TxConnected:
+            e = outgoing_tx_connected (messageNumber, remote_modem_data, &state);
+            break;
+#if 0
+        case Outgoing_TxFinished:
+            e = outgoing_tx_finished (messageNumber, remote_modem_data, &state);
+            break;
+
+        case Outgoing_StartAnswer:
+            e = outgoing_start_answer (messageNumber, remote_modem_data, &state);
+            break;
+
+        case Blocking:
+            e = blocking (messageNumber, remote_modem_data, &state);
+            break;
+#endif
+        default:
+            e = &g_error[E_BadModemRemState];
+            break;
+    }
+
+    /* Print state machine status on exit */
+    dprintf((NULL, "RemModem_StateMachine (exit): Next state => %d\n", state));
+
+    if (e != NULL) /* Oops, _kernel_oserror error; report, reset modem, and go idle */
+    {
+        messageDataBlock *message_data;
+
+        StateKicker_SendMessage (RemXfer_StateMachine,
+                                 OS_ERROR,
+                                 &message_data);
+        message_data->data.os_error.rc = 0;	/*>>>should rc be zero???*/                         
+        message_data->data.os_error.err = *e; /* MUST copy message block rather than pointer (which will be stale when the message arrives) */
+
+        _swix (DaytonaHW_ResetModem, _INR (0, 1), /* Assume this can never error */
+
+               0,
+               DaytonaHW_ResetModem_External);
+
+        state = Idle;
+    }
+}
+
+
+
+
+static _kernel_oserror *idle (const int input,
+                              remoteModemDataBlock *const remote_modem_data,
+                              state_RM *const state)
+{
+    _kernel_oserror *e = NULL;
+
+    switch (input)
+    {
+       case RX_RM_QUERY_IDLE:
+       		StateKicker_SendMessage(RemXfer_StateMachine, RM_RX_AM_IDLE, NULL);
+       		*state = Idle;         /* Already idle */
+            break;
+
+        case RX_RM_HANGUP:
+            *state = Idle;         /* Already idle */
+            break;
+
+        case RX_RM_DIAL_FAX: case RX_RM_DIAL_DAYTONA: case RX_RM_DIAL_ISP:
+            StateKicker_SendMessage (Screen_StateMachine, RM_SC_DIALLING, NULL);
+            StateKicker_SendMessage (Screen_StateMachine, RM_SC_RINGING, NULL);
+            StateKicker_SendMessage (Screen_StateMachine, RM_SC_CONNECTED, NULL);
+            
+        	StateKicker_SendMessage(RemXfer_StateMachine, RM_RX_TXCONNECTED, NULL);
+            *state = Outgoing_TxConnected;
+            break;
+
+        default:
+            /* Ignore other inputs */
+            break;
+    }
+
+    return e;
+}
+
+
+
+
+
+
+
+
+static _kernel_oserror *outgoing_tx_connected (const int input,
+                                               remoteModemDataBlock *const remote_modem_data,
+                                               state_RM *const state)
+{
+    _kernel_oserror *e = NULL;
+
+    switch (input)
+    {
+        case RX_RM_HANGUP:
+            StateKicker_SendMessage(RemXfer_StateMachine, RX_SQ_GOING_IDLE, NULL);
+            *state = Idle;
+            break;
+
+        case RX_RM_DIAL_FAX: case RX_RM_DIAL_DAYTONA: case RX_RM_DIAL_ISP:
+            *state = Outgoing_TxConnected;
+            StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_DIAL_REJECTED, NULL);
+            break;
+
+        default:
+            break;
+    }
+
+    return e;
+}
+
+
+
+extern _kernel_oserror *RemModem_Initialise(void)
+{
+	return(NULL);
+
+}
+
+extern void RemModem_Finalise(void)
+{
+	/* none currently - may need to drop the line */
+}
+
+extern void RemModem_PollStatus(void)
+{
+}
+
+/* end of zzRemModem.c */

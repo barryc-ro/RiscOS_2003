@@ -1,0 +1,657 @@
+/*
+ * Pop3IF.c - Interface to POP3 module
+ *
+ * Author: Ben Laughton
+ *
+ * History
+ * 1997-09-21: BAL
+ * Created
+ */
+
+
+
+
+/* =============================================================================
+ * Include header files
+ */
+
+#include "StdTypes.h"
+
+/* CLib */
+#include <stdio.h>
+#include <stdlib.h>
+#include <stddef.h>
+#include "kernel.h"
+
+/* Generic modules */
+#include "acornpop3.h"
+
+/* Daytona specific */
+/*#include "NFELib.h" */
+#include "Pop3IF.h"
+#include "StateKicker.h"
+#include "RemXfer.h"
+
+
+
+
+
+/* =============================================================================
+ * Define types
+ */
+
+typedef enum
+{
+    POP3_Idle,
+    POP3_Logon,
+    POP3_Disconnect,
+    POP3_CountMessages,
+    POP3_ListUniqueIDs,
+    POP3_ListMessages,
+    POP3_GetHeader,
+    POP3_GetMessage,
+    POP3_GetXLinesOfMessage,
+    POP3_DeleteMessage
+} pop3_state_t;
+
+
+
+
+/* =============================================================================
+ * Declare global variables
+ */
+
+static void *pop3_pollword = NULL;
+static pop3_state_t pop3_state;
+static void *pop3_unique_id;
+
+
+
+
+/* =============================================================================
+ * Declare function prototypes
+ */
+
+static void pop3_call_complete (const int success_message_number,
+                                const int error_message_number);
+
+static void pop3_call_error (const int message_number,
+                             const _kernel_oserror *const error);
+
+static void Pop3IF_SendOSError2 (
+                void (*StateMachine) (int messageNumber,
+                                      messageDataBlock *messagedata),
+                int messageNumber,
+                _kernel_oserror *error,
+                int errno);
+
+
+
+
+/* =============================================================================
+ * Define functions
+ */
+
+extern void Pop3IF_Register (void)
+{
+    unsigned int flags = 0;
+    _kernel_oserror *e = NULL;
+
+
+    /* Only register if not already registered */
+    if (pop3_pollword == NULL)
+    {
+        e = _AcornPOP3_Register (&flags, &pop3_pollword);
+        if (e != NULL)
+        {
+            pop3_call_error (P3_RX_REGISTER_CALL_ERROR, e);
+            return;
+        }
+    }
+
+    StateKicker_SendMessage (RemXfer_StateMachine, P3_RX_REGISTER_DONE, NULL);
+}
+
+
+
+
+extern void Pop3IF_DeRegister (void)
+{
+    unsigned int flags = 0;
+    _kernel_oserror *e = NULL;
+
+    if (pop3_pollword != NULL)
+    {
+        e = _AcornPOP3_DeRegister (&flags, &pop3_pollword);
+
+        pop3_pollword = NULL;
+
+        if (e != NULL)
+        {
+            pop3_call_error (P3_RX_DEREGISTER_CALL_ERROR, e);
+            return;
+        }
+    }
+
+    StateKicker_SendMessage (RemXfer_StateMachine, P3_RX_DEREGISTER_DONE, NULL);
+}
+
+
+
+
+extern void Pop3IF_Logon (char *const username,
+                          char *const password,
+                          char *const hostname)
+{
+    unsigned int flags = 0;
+    _kernel_oserror *e;
+
+
+    e = _AcornPOP3_Logon (&flags,
+                          pop3_pollword,
+                          username,
+                          password,
+                          hostname,
+                          -1,
+                          -1,
+                          -1,
+                          &pop3_unique_id);
+    if (e != NULL)
+    {
+        pop3_call_error (P3_RX_LOGON_CALL_ERROR, e);
+        return;
+    }
+
+    pop3_state = POP3_Logon;
+}
+
+
+
+
+extern void Pop3IF_CountMessages (void)
+{
+    unsigned int flags = 0;
+    _kernel_oserror *e;
+
+
+    e = _AcornPOP3_GetNumOfMessages (&flags,
+                                     pop3_pollword,
+                                     -1,
+                                     &pop3_unique_id);
+    if (e != NULL)
+    {
+        pop3_call_error (P3_RX_COUNT_MESSAGES_CALL_ERROR, e);
+        return;
+    }
+
+    pop3_state = POP3_CountMessages;
+}
+
+
+
+
+extern void Pop3IF_ListUniqueIDs (UID_MSG_LIST *list,
+                                  unsigned int number_entries)
+{
+    unsigned int flags = 0;
+    _kernel_oserror *e;
+
+
+    e = _AcornPOP3_GetListOfUniqueIDs (&flags,
+                                       pop3_pollword,
+                                       list,
+                                       number_entries,
+                                       -1,
+                                       &pop3_unique_id);
+
+    if (e != NULL)
+    {
+        pop3_call_error (P3_RX_LIST_UNIQUEIDS_CALL_ERROR, e);
+        return;
+    }
+
+    pop3_state = POP3_ListUniqueIDs;
+}
+
+
+
+
+extern void Pop3IF_ListMessages (MSG_LIST *list,
+                                 unsigned int number_entries)
+{
+    unsigned int flags = 0;
+    _kernel_oserror *e;
+
+
+    e = _AcornPOP3_GetListOfMessages (&flags,
+                                      pop3_pollword,
+                                      list,
+                                      number_entries,
+                                      -1,
+                                      &pop3_unique_id);
+
+    if (e != NULL)
+    {
+        pop3_call_error (P3_RX_LIST_MESSAGES_CALL_ERROR, e);
+        return;
+    }
+
+    pop3_state = POP3_ListMessages;
+}
+
+
+
+
+extern void Pop3IF_GetHeader (char *header_data,
+                              unsigned int header_size,
+                              unsigned int message_id)
+{
+    unsigned int flags = 0;
+    _kernel_oserror *e;
+
+
+    e = _AcornPOP3_GetXLinesOfMessage (&flags,
+                                       pop3_pollword,
+                                       header_data,
+                                       header_size,
+                                       message_id,
+                                       0,
+                                       -1,
+                                       &pop3_unique_id);
+    if (e != NULL)
+    {
+        pop3_call_error (P3_RX_GET_HEADER_CALL_ERROR, e);
+        return;
+    }
+
+    pop3_state = POP3_GetHeader;
+}
+
+
+
+
+extern void Pop3IF_GetMessage (char *message_filename,
+                               unsigned int message_size,
+                               unsigned int message_id)
+{
+    unsigned int flags = 1;    /* put message in file */
+    _kernel_oserror *e;
+
+
+    e = _AcornPOP3_GetMessage (&flags,
+                               pop3_pollword,
+                               message_filename,
+                               message_size,
+                               message_id,
+                               FALSE,    /* don't delete message */
+                               -1,
+                               &pop3_unique_id);
+
+    if (e != NULL)
+    {
+        pop3_call_error (P3_RX_GET_MESSAGE_CALL_ERROR, e);
+        return;
+    }
+
+    pop3_state = POP3_GetMessage;
+}
+
+
+
+
+extern void Pop3IF_GetXLinesOfMessage (char *message_filename,
+                                       unsigned int message_size,
+                                       unsigned int message_id,
+                                       unsigned int lines)
+{
+    unsigned int flags = 1;    /* put message in file */
+    _kernel_oserror *e;
+
+
+    e = _AcornPOP3_GetXLinesOfMessage (&flags,
+                                       pop3_pollword,
+                                       message_filename,
+                                       message_size,
+                                       message_id,
+                                       lines,
+                                       -1,
+                                       &pop3_unique_id);
+
+    if (e != NULL)
+    {
+        pop3_call_error (P3_RX_GET_X_LINES_OF_MESSAGE_CALL_ERROR, e);
+        return;
+    }
+
+    pop3_state = POP3_GetXLinesOfMessage;
+}
+
+
+
+
+extern void Pop3IF_DeleteMessage (unsigned int message_id)
+{
+    unsigned int flags = 0;
+    _kernel_oserror *e;
+
+
+    e = _AcornPOP3_DeleteMessage (&flags,
+                                  pop3_pollword,
+                                  message_id,
+                                  -1,
+                                  &pop3_unique_id);
+    if (e != NULL)
+    {
+        pop3_call_error (P3_RX_DELETE_MESSAGE_CALL_ERROR, e);
+        return;
+    }
+
+    pop3_state = POP3_DeleteMessage;
+}
+
+
+
+
+extern void Pop3IF_Disconnect (void)
+{
+    unsigned int flags = 0;
+    _kernel_oserror *e;
+
+
+    e = _AcornPOP3_Disconnect (&flags,
+                               pop3_pollword,
+                               -1,
+                               &pop3_unique_id);
+
+    if (e != NULL)
+    {
+        pop3_call_error (P3_RX_DISCONNECT_CALL_ERROR, e);
+        return;
+    }
+
+    pop3_state = POP3_Disconnect;
+}
+
+
+
+
+extern void Pop3IF_ReleaseData (void)
+{
+    if (pop3_unique_id != 0)
+    {
+        unsigned int flags = 0;
+        int swi_num;
+
+        switch (pop3_state)
+        {
+            case POP3_Logon:
+                swi_num = AcornPOP3_Logon;
+                break;
+
+            case POP3_Disconnect:
+                swi_num = AcornPOP3_Disconnect;
+                break;
+
+            case POP3_CountMessages:
+                swi_num = AcornPOP3_GetNumOfMessages;
+                break;
+
+            case POP3_ListMessages:
+                swi_num = AcornPOP3_GetListOfMessages;
+                break;
+
+            case POP3_GetHeader:
+                swi_num = AcornPOP3_GetXLinesOfMessage;
+                break;
+
+            case POP3_GetMessage:
+                swi_num = AcornPOP3_GetMessage;
+                break;
+
+            case POP3_GetXLinesOfMessage:
+                swi_num = AcornPOP3_GetXLinesOfMessage;
+                break;
+
+            case POP3_DeleteMessage:
+                swi_num = AcornPOP3_DeleteMessage;
+                break;
+
+            default:
+                /* Undefined state - gulp! */
+                return;
+        }
+
+        _AcornPOP3_ReleaseData (&flags,
+                                pop3_pollword,
+                                swi_num,
+                                pop3_unique_id);
+
+        pop3_state = POP3_Idle;
+    }
+}
+
+
+extern void Pop3IF_PollStatus (void)
+{
+    AcornPOP3_returned_data *returned_data =
+        _AcornPOP3_GetReturnedData ((void *volatile) pop3_pollword);
+
+    if (returned_data != 0 &&
+        returned_data == (AcornPOP3_returned_data *) pop3_unique_id)
+    {
+        switch (pop3_state)
+        {
+            case POP3_Logon:
+                pop3_call_complete (P3_RX_LOGON_DONE,
+                                    P3_RX_LOGON_PROCESS_ERROR);
+                break;
+
+            case POP3_Disconnect:
+                pop3_call_complete (P3_RX_DISCONNECT_DONE,
+                                    P3_RX_DISCONNECT_PROCESS_ERROR);
+                break;
+
+            case POP3_CountMessages:
+            {
+                AcornPOP3_GetNumOfMessages_data *cm_data =
+                    _AcornPOP3_GetNumOfMessagesData (pop3_pollword);
+                if (cm_data)
+                {
+                    if (cm_data->error == NULL)
+                    {
+                        messageDataBlock *sendMessage;
+
+                        StateKicker_SendMessage (RemXfer_StateMachine,
+                                                 P3_RX_COUNT_MESSAGES_DONE,
+                                                 &sendMessage);
+
+                        sendMessage->data.pop3_CountMessages_data.mailbox_size =
+                            cm_data->mailbox_size;
+
+                        sendMessage->data.pop3_CountMessages_data.num_messages =
+                            cm_data->num_messages;
+                    }
+                    else
+                    {
+                        Pop3IF_SendOSError2 (RemXfer_StateMachine,
+                                             P3_RX_COUNT_MESSAGES_PROCESS_ERROR,
+                                             cm_data->error,
+                                             cm_data->errno);
+                    }
+                }
+                /*>>>else what???*/
+                break;
+            }
+
+            case POP3_ListUniqueIDs:
+                pop3_call_complete (P3_RX_LIST_UNIQUEIDS_DONE,
+                                    P3_RX_LIST_UNIQUEIDS_PROCESS_ERROR);
+                break;
+
+            case POP3_ListMessages:
+                pop3_call_complete (P3_RX_LIST_MESSAGES_DONE,
+                                    P3_RX_LIST_MESSAGES_PROCESS_ERROR);
+                break;
+
+            case POP3_GetHeader:
+            {
+                AcornPOP3_GetXLinesOfMessage_data *gh_data =
+                    _AcornPOP3_GetXLinesOfMessageData (pop3_pollword);
+                if (gh_data)
+                {
+                    if (gh_data->error == NULL)
+                    {
+                        messageDataBlock *sendMessage;
+
+                        StateKicker_SendMessage (RemXfer_StateMachine,
+                                                 P3_RX_GET_HEADER_DONE,
+                                                 &sendMessage);
+
+                        sendMessage->data.pop3_GetHeader_data.message_size =
+                           gh_data->message_size;
+
+                        sendMessage->data.pop3_GetHeader_data.num_lines =
+                           gh_data->num_lines;
+                    }
+                    else
+                    {
+                        Pop3IF_SendOSError2 (RemXfer_StateMachine,
+                                             P3_RX_GET_HEADER_PROCESS_ERROR,
+                                             gh_data->error,
+                                             gh_data->errno);
+                    }
+                }
+                /*>>>else what???*/
+                break;
+            }
+
+            case POP3_GetMessage:
+                pop3_call_complete (P3_RX_GET_MESSAGE_DONE,
+                                    P3_RX_GET_MESSAGE_PROCESS_ERROR);
+                break;
+
+            case POP3_GetXLinesOfMessage:
+            {
+                AcornPOP3_GetXLinesOfMessage_data *gh_data =
+                    _AcornPOP3_GetXLinesOfMessageData (pop3_pollword);
+
+                if (gh_data)
+                {
+                    if (gh_data->error == NULL)
+                    {
+                        messageDataBlock *sendMessage;
+
+                        StateKicker_SendMessage (
+                            RemXfer_StateMachine,
+                            P3_RX_GET_X_LINES_OF_MESSAGE_DONE,
+                            &sendMessage);
+
+                        sendMessage->data.pop3_GetHeader_data.message_size =
+                           gh_data->message_size;
+
+                        sendMessage->data.pop3_GetHeader_data.num_lines =
+                           gh_data->num_lines;
+                    }
+                    else
+                    {
+                        Pop3IF_SendOSError2 (
+                            RemXfer_StateMachine,
+                            P3_RX_GET_X_LINES_OF_MESSAGE_PROCESS_ERROR,
+                            gh_data->error,
+                            gh_data->errno);
+                    }
+                }
+                /*>>>else what???*/
+                break;
+            }
+
+            case POP3_DeleteMessage:
+                 pop3_call_complete (P3_RX_DELETE_MESSAGE_DONE,
+                                     P3_RX_DELETE_MESSAGE_PROCESS_ERROR);
+                 break;
+        }
+    }
+}
+
+
+
+
+/* The functions below are called when a non-blocking POP3 operation completes
+ * (whether successful or not).
+ */
+
+static void pop3_call_complete (const int success_message_number,
+                                const int error_message_number)
+{
+    AcornPOP3_returned_data *pop3_returned_data =
+        (AcornPOP3_returned_data *) pop3_unique_id;
+
+    if (pop3_returned_data->error == NULL)
+        StateKicker_SendMessage (RemXfer_StateMachine,
+                                 success_message_number,
+                                 NULL);
+    else
+    {
+        Pop3IF_SendOSError2 (RemXfer_StateMachine,
+                             error_message_number,
+                             pop3_returned_data->error,
+                             pop3_returned_data->errno);
+    }
+}
+
+
+
+
+/* Send an error from a call to the POP3 module to the RemXfer state machine */
+static void pop3_call_error (const int message_number,
+                             const _kernel_oserror *const error)
+{
+    messageDataBlock *message_data;
+
+    StateKicker_SendMessage (RemXfer_StateMachine,
+                             message_number,
+                             &message_data);
+
+    message_data->data.pop3_error.rc = 0;   /*>>>should this be zero???*/
+
+    /* MUST copy message block rather than pointer (which will be stale when
+     * the message arrives)
+     */
+    message_data->data.pop3_error.err = *error;
+}
+
+
+
+
+static void Pop3IF_SendOSError2 (
+                void (*StateMachine) (int messageNumber,
+                                      messageDataBlock *messagedata),
+                int messageNumber,
+                _kernel_oserror *error,
+                int errno)
+{
+    messageDataBlock *sendMessage;
+
+    StateKicker_SendMessage (StateMachine, messageNumber, &sendMessage);
+
+    /* if error is 'Network error', add the network error number */
+    if (error->errnum == (ErrorBase_AcornPOP3 + 4))
+    {
+        sendMessage->data.pop3_error.rc = errno;
+        sendMessage->data.pop3_error.err.errnum = error->errnum;
+        sprintf (sendMessage->data.pop3_error.err.errmess, "%s (%d)",
+                 error->errmess, errno);
+    }
+    else
+    {
+        sendMessage->data.pop3_error.rc = 0;    /*>>>should this be zero*/
+
+        /* MUST copy message block rather than pointer (which will be stale
+         * when the message arrives)
+         */
+        sendMessage->data.pop3_error.err = *error;
+    }
+}
+
+
+/* end of Pop3IF.c */
