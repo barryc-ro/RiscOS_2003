@@ -138,112 +138,85 @@ static void close_streams(void)
 }
 #endif
 
+static char *fourdigit(char *tag, int len, char *phone, BOOL pulse)
+{
+  char *chars = "0123456789*#,";
+  int failed, nibble, packed, shift = 0;
+  
+  _swix(NVRAM_Read, _INR(0, 2) | _OUT(0), tag, &packed, 0, &failed);
+  if (failed >= 0 && packed)
+  {
+    while (shift < (4 * (len - 1)))
+    {
+      nibble = (packed >> (shift ^ 4)) & 0xF;
+  
+      if (nibble == 0)
+        break;
+      if (pulse && chars[nibble -1] == '*')
+      {
+        *(phone++) = '1';
+        *(phone++) = '1';
+      }
+      else
+      {
+        *(phone++) = chars[nibble -1];
+      }
+      shift += 4;
+    }
+  }
+  return(phone);
+}
+
 static char *cmos_number(void)
 {
   static char phone[80];
-  int byte, digit, ptr, pulse, toggles;
+  char *ptr = NULL;
+  int pulse, callwaiting, failed, ignore, outside, wait;
 
   strcpy(phone, "AT");
-  ptr = strlen(phone);
-  _swix(OS_Byte, _INR(0, 1) | _OUT(2), 161, 0x9E, &byte);
-  _swix(OS_Byte, _INR(0, 1) | _OUT(2), 161, 0xA2, &toggles);
+  ptr = phone + strlen(phone);
   /* Blind dialling switch */
-  if (byte & (1 << 6))
+  _swix(NVRAM_Read, _INR(0, 2) | _OUT(0), "ModemDialIgnore",
+        &ignore, 0, &failed);
+  if (failed >= 0 && ignore)
   {
-    phone[ptr++] = 'X';
-    phone[ptr++] = '3';
+    *(ptr++) = 'X';
+    *(ptr++) = '3';
   }
   /* Dialling type */
-  phone[ptr++] = 'D';
-  pulse = byte & (1 << 5);
-  if (pulse)
-    phone[ptr++] = 'P';
+  *(ptr++) = 'D';
+  _swix(NVRAM_Read, _INR(0, 2) | _OUT(0), "ModemDialType",
+        &pulse, 0, &failed);
+  if (failed >= 0 && pulse)
+    *(ptr++) = 'P';
   else
-    phone[ptr++] = 'T';
+    *(ptr++) = 'T';
+
   /* Outside line */
-  if ((toggles & (1 << 6)) && (byte & 0x0F))
+  _swix(NVRAM_Read, _INR(0, 2) | _OUT(0), "ModemPrefixStatus",
+        &outside, 0, &failed);
+  if (failed >= 0 && outside)
   {
-    if ((byte & 0x0F) < 11)
-      phone[ptr++] = (byte & 0x0F) - 1 + 0x30;
-    else if ((byte & 0x0F) == 11)
-      phone[ptr++] = '*';
-    else if ((byte & 0x0F) == 12)
-      phone[ptr++] = '#';
-
-    if (byte & (1 << 4))
-      phone[ptr++] = 'W';
+    ptr = fourdigit("ModemPrefix", 4, ptr, pulse);
+    
+    _swix(NVRAM_Read, _INR(0, 2) | _OUT(0), "ModemDialTone",
+          &wait, 0, &failed);
+    if (failed >= 0 && wait)
+      *(ptr++) = 'W';
     else
-      phone[ptr++] = ',';
+      *(ptr++) = ',';
   }
+
   /* Call waiting defeat stuff */
-  if (toggles & (1 << 7))
+  _swix(NVRAM_Read, _INR(0, 2) | _OUT(0), "ModemCallWaitingStatus",
+        &callwaiting, 0, &failed);
+  if (failed >= 0 && callwaiting)
   {
-    if (_swix(OS_Byte, _INR(0, 1) | _OUT(2), 161, 0x9B, &byte) == NULL)
-    {
-      digit = ((byte & 0xF0) >> 4);
-      if (digit)
-      {
-        if (digit < 11)
-        {
-          phone[ptr++] = digit - 1 + 0x30;
-        }
-        else if (digit == 11)
-        {
-          if (pulse)
-          {
-            phone[ptr++] = '1';
-            phone[ptr++] = '1';
-          }
-          else
-          {
-            phone[ptr++] = '*';
-          }
-        }
-        else if (digit == 12)
-        {
-          phone[ptr++] = '#';
-        }
-
-        digit = (byte & 0x0F);
-        if (digit)
-        {
-          if (digit < 11)
-            phone[ptr++] = digit - 1 + 0x30;
-          else if (digit == 11)
-            phone[ptr++] = '*';
-          else if (digit == 12)
-            phone[ptr++] = '#';
-
-          if (_swix(OS_Byte, _INR(0, 1) | _OUT(2), 161, 0x9C, &byte) == NULL)
-          {
-            digit = ((byte & 0xF0) >> 4);
-            if (digit)
-            {
-              if (digit < 11)
-                phone[ptr++] = digit - 1 + 0x30;
-              else if (digit == 11)
-                phone[ptr++] = '*';
-              else if (digit == 12)
-                phone[ptr++] = '#';
-
-              digit = (byte & 0x0F);
-              if (digit)
-              {
-                if (digit < 11)
-                  phone[ptr++] = digit - 1 + 0x30;
-                else if (digit == 11)
-                  phone[ptr++] = '*';
-                else if (digit == 12)
-                  phone[ptr++] = '#';
-              }
-            }
-          }
-        }
-      }
-    }
-    phone[ptr++] = ',';
+    ptr = fourdigit("ModemCallWaiting", 4, ptr, pulse);
+    
+    *(ptr++) = ',';
   }
-  phone[ptr++] = '\0';
+  *(ptr++) = '\0';
 
   return(phone);
 }
@@ -863,7 +836,7 @@ _kernel_oserror *NCDial_swis(int swi_no, _kernel_swi_regs *r, void *pw)
   return(NULL);
 }
 
-_kernel_oserror *NCDialler_cmd (char *arg_string, int argc, int cmd_no, void *pw)
+_kernel_oserror *NCDialler_cmd (const char *arg_string, int argc, int cmd_no, void *pw)
 {
   switch (cmd_no)
   {
@@ -968,7 +941,7 @@ void NCDial_service(int service, _kernel_swi_regs *r, void *pw)
 #define INETDBASE_VAR "InetDBase$Path"
 #define INETDBASE_TXT "Inet:Files.,FileDyn:Files."
 
-_kernel_oserror *NCDialler_modinit (char *cmd_tail, int podule_base, void *pw)
+_kernel_oserror *NCDialler_modinit (const char *cmd_tail, int podule_base, void *pw)
 {
   pwp = pw;
 
