@@ -205,9 +205,6 @@ PerformFieldInversion SETL {FALSE}	; allow field inversion (DEBUG ONLY)
 	GBLL	ProgrammableBlanking
 ProgrammableBlanking SETL {TRUE}	; wait for programmable number of sequence headers + fields before unblanking
 
-	GBLL	CountUnderruns
-CountUnderruns SETL {TRUE}		; count video channel underruns
-
 	GBLL	Save1stFullPacket
 Save1stFullPacket SETL {FALSE}		; save 1st packet after open/reset, including PTS
 
@@ -259,7 +256,7 @@ DiscardPartialPackets	SETL {TRUE}	; discard initial partial PES packet for both 
 CheckAspectRatio SETL {TRUE}		; adjust picture size to cope with 16:9 and 2.21:1 aspect ratios
 
 	GBLL	InitL64002OnModuleInit
-InitL64002OnModuleInit SETL {FALSE}	; call InitL64002 to set screen to black on module initialisation
+InitL64002OnModuleInit SETL {TRUE}	; call InitL64002 to set screen to black on module initialisation
 
 	GBLL	AudioStats
 AudioStats SETL {TRUE}			; gather statistics on arrival of audio data
@@ -289,6 +286,9 @@ StartVideoAtSeqHdr SETL {TRUE}          ; this helps initial synchronisation
 
         GBLL    HShiftVariable
 HShiftVariable  SETL    {TRUE}          ; allow horizontal shifting of MPEG video under system variable control
+
+        GBLL    EOSDetect
+EOSDetect       SETL    {TRUE}          ; end-of-stream detection and new underrun code
 
 DefaultHShift   *       -11
 
@@ -460,12 +460,12 @@ FreezeUpdate		#	4	; 1 => freeze state has been updated
 TrickStopFreeze		#	4	; additional freeze flag for trick play, OR'd with PendingFreezeState
  ]
 FirstItemReceived	#	4	; 0 => not received anything since last reset, 1 => sequence, 2 => picture
- [ CountUnderruns
-VideoChannelUnderruns	#	4	; number of video channel underruns
-AudioChannelUnderruns	#	4	; number of audio channel underruns
-UnderrunIRQState	#	4	; 0 => still waiting to start
-					; 1 => on next active field enable the underrun IRQ
-					; 2 => already enabled it once
+ [ EOSDetect
+VideoChannelUnderruns   #       4       ; number of video channel underruns
+VideoUnderrunIRQState   #       4       ; 0 => still in prefill, underrun IRQ disabled
+                                        ; 1 => underrun IRQ is disabled, enable it on next start code IRQ
+                                        ; 2 => underrun IRQ is enabled (video decode is in progress)
+VideoEOSPending         #       4       ; non-zero if we need to call the control unit at the next underrun
  ]
  [ SlowMotionSupport
 VideoSpeedCount		#	4	; counter incremented during slow motion to control speed
@@ -509,6 +509,13 @@ AudioBufferLowWaterMark	#	4	; if we have less than this, play audio slowly
 AudioBufferHighWaterMark #	4	; if we have more than this, play audio fast
 AudioPacketSendTimeouts	#	4	; number of times the code to send an audio packet header timed out
 
+ [ EOSDetect
+AudioChannelUnderruns   #       4       ; number of audio channel underruns
+AudioUnderrunIRQState   #       4       ; 0 => still in prefill, underrun IRQ disabled
+                                        ; 1 => underrun IRQ is disabled, enable it on next sync code IRQ
+                                        ; 2 => underrun IRQ is enabled (audio decode is in progress)
+AudioEOSPending         #       4       ; non-zero if we need to call the control unit at the next underrun
+ ]
  [ AudioStats
 AudioStartTime		#	4	; time when first data was received
 AudioLastTime		#	4	; time when last data was received
@@ -1086,12 +1093,12 @@ Mod_Die Entry
 	BNE	%FT90					; [there's a stream open so refuse to die]
 
  [ DoPEH
-	MOV	r0, #0			; flags
+        MOV     r0, #1<<PEHFlags_RequiredFlag_Shift
 	MOV	r1, #1			; MPEG 2 video stream type
 	ADR	r2, VideoStreamHandler
 	MOV	r3, wp
 	SWI	XMPEGControl_DeregisterProgramElementHandler
-	MOV	r0, #0			; flags
+        MOV     r0, #1<<PEHFlags_RequiredFlag_Shift
 	MOV	r1, #2			; MPEG 1 video stream type
 	ADR	r2, VideoStreamHandler
 	MOV	r3, wp
@@ -1156,12 +1163,12 @@ Mod_Service ROUT
 ; it's Service_MPEGControlStarting
 
 RegisterPEHHandlers Entry "r0-r3"
-	MOV	r0, #0			; flags
+        MOV     r0, #1<<PEHFlags_RequiredFlag_Shift
 	MOV	r1, #1			; MPEG 2 video stream type
 	ADR	r2, VideoStreamHandler
 	MOV	r3, wp
 	SWI	XMPEGControl_RegisterProgramElementHandler
-	MOV	r0, #0			; flags
+        MOV     r0, #1<<PEHFlags_RequiredFlag_Shift
 	MOV	r1, #2			; MPEG 1 video stream type
 	ADR	r2, VideoStreamHandler
 	MOV	r3, wp
@@ -1366,10 +1373,10 @@ VideoOpenStream Entry "r1,r2, r11"
  [ FullLengthStats
 	STR	r1, LengthStatsPosition
  ]
- [ CountUnderruns
-	STR	r1, VideoChannelUnderruns
-	STR	r1, AudioChannelUnderruns
-	STR	r1, UnderrunIRQState
+ [ EOSDetect
+        STR     r1, VideoChannelUnderruns
+        STR     r1, VideoUnderrunIRQState
+        STR     r1, VideoEOSPending
  ]
  [ StartVideoAtSeqHdr
         AND     lr, r0, #StreamFlags_VideoPresent :OR: StreamFlags_AudioPresent
@@ -1647,6 +1654,10 @@ VideoSetSpeed Entry "r0-r2, r11"
 ;
 
 VideoPlay Entry "r0,r2, r11"
+      [ EOSDetect
+        TST     r0, #VideoPlayFlags_Stop
+        BNE     %FT10
+      ]
       [ StartVideoAtSeqHdr
         LDRB    lr, DeferVideoStart
         TEQ     lr, #1
@@ -1657,6 +1668,19 @@ VideoPlay Entry "r0,r2, r11"
 	STR	r2, VideoSpeedSetting
 	BL	VideoSetSpeed
 	EXIT
+
+      [ EOSDetect
+10      LDR     r0, VideoUnderrunIRQState
+        CMP     r0, #2
+        MOVCS   r0, #1                  ; if currently decoding,
+        STRCS   r0, VideoEOSPending     ; then mark EOS as pending
+        EXIT    CS                      ; and exit
+        MOV     r0, #PlayFlags_VideoIdle
+        LDR     r1, VideoControlStreamHandle
+        SWI     XMPEGControl_Play       ; else call back immediately
+        CLRV
+        EXIT
+      ]
 
 xdebug  SETL    {FALSE}
 
@@ -2128,6 +2152,14 @@ VideoCloseStream Entry "r0-r2,r11"
       [ Captions
         BL      EraseCaptions                           ; so they don't stay on screen when we're back to the browser
       ]
+        LDR     r0, [sp, #0*4]                          ; retrieve CloseStream flags from stack
+        TST     r0, #CloseStreamFlags_BlankVideo
+        BEQ     %FT90
+        ReadRegI r0, OSDControl
+        ORR     r0, r0, #OSDControl_VideoBlack          ; blank MPEG video plane
+        WriteRegI r0, OSDControl, lr
+90
+        CLRV
 	EXIT
 
 ; **************************************************************************
@@ -2540,8 +2572,9 @@ VideoResetStream Entry "r0-r2, r11"
  [ SkippingCode
 	STR	r0, StartSkipCode
  ]
- [ CountUnderruns
-	STR	r0, UnderrunIRQState			; wait again until prefill over, then reenable underrun IRQ
+ [ EOSDetect
+        STR     r0, VideoUnderrunIRQState               ; wait again until prefill over, then reenable underrun IRQ
+        STR     r0, VideoEOSPending
  ]
 	CLRV
 	EXIT
@@ -2871,11 +2904,11 @@ VideoSendPlay Entry "r0,r1"
 	STR	r0, PendingFreezeState	; should be unfrozen
 	MOV	r0, #1
 	STR	r0, FreezeUpdate	; need an update
- [ CountUnderruns
-	LDR	r0, UnderrunIRQState
-	TEQ	r0, #0			; if not enabled the IRQ already
-	MOVEQ	r0, #1			; then enable it next active field
-	STR	r0, UnderrunIRQState
+ [ EOSDetect
+        LDR     r0, VideoUnderrunIRQState
+        TEQ     r0, #0                  ; if not enabled the IRQ already
+        MOVEQ   r0, #1                  ; then enable it next picture start code
+        STREQ   r0, VideoUnderrunIRQState
  ]
 	EXIT
 
@@ -3221,12 +3254,17 @@ VideoEnabledIRQs * IR_UserDataFIFOReady :OR: IR_PictureStartCodeDetect :OR: IR_B
  |
 VideoEnabledIRQs * IR_PictureStartCodeDetect :OR: IR_BeginVerticalBlank :OR: IR_BeginActiveVideo
  ]
- [ CountUnderruns
-VideoIRQsToDisable * VideoEnabledIRQs :OR: IR_VideoChannelBufferUnderflow :OR: IR_AudioChannelBufferUnderflow
+ [ EOSDetect
+VideoIRQsToDisable * VideoEnabledIRQs :OR: IR_VideoChannelBufferUnderflow
  |
 VideoIRQsToDisable * VideoEnabledIRQs
  ]
 AudioEnabledIRQs * IR_AudioSyncCodeDetect
+ [ EOSDetect
+AudioIRQsToDisable * AudioEnabledIRQs :OR: IR_AudioChannelBufferUnderflow
+ |
+AudioIRQsToDisable * AudioEnabledIRQs
+ ]
 CommonEnabledIRQs * IR_SCRStatus
 
 VideoClaimInterruptVectors Entry "r0-r2,r11"
@@ -3341,7 +3379,7 @@ AudioReleaseInterruptVectors Entry "r0-r2,r11"
 	EXIT	EQ				; non-zero => already claimed
 
 	LDR	r11, L64002_Registers
-	LDR	r0, =AudioEnabledIRQs		; NB bits that are *set* are disabled
+        LDR     r0, =AudioIRQsToDisable         ; NB bits that are *set* are disabled
 	MVN	r1, r0
 	BL	UpdateIR
 
@@ -3571,15 +3609,12 @@ IRQDespatchTable
 	&	IgnoreIRQ - IRQDespatchTable		; DRAM Transfer Done
 	&	IgnoreIRQ - IRQDespatchTable		; Audio Channel Buffer Overflow
 	&	IgnoreIRQ - IRQDespatchTable		; Video Channel Buffer Overflow
- [ true
-	&	AudioChannelUnderrunIRQ - IRQDespatchTable ; Audio Channel Buffer Underflow
+ [ EOSDetect
+        &       AudioChannelUnderrunIRQ - IRQDespatchTable ; Audio Channel Buffer Underflow
+        &       VideoChannelUnderrunIRQ - IRQDespatchTable ; Video Channel Buffer Underflow
  |
-	&	IgnoreIRQ - IRQDespatchTable		; Audio Channel Buffer Underflow
- ]
- [ CountUnderruns
-	&	VideoChannelUnderrunIRQ - IRQDespatchTable ; Video Channel Buffer Underflow
- |
-	&	IgnoreIRQ - IRQDespatchTable		; Video Channel Buffer Underflow
+        &       IgnoreIRQ - IRQDespatchTable            ; Audio Channel Buffer Underflow
+        &       IgnoreIRQ - IRQDespatchTable            ; Video Channel Buffer Underflow
  ]
 	&	BeginActiveVideo - IRQDespatchTable	; Begin Active Video
 	&	BeginVerticalBlank - IRQDespatchTable	; Begin Vertical Blank
@@ -3658,6 +3693,15 @@ AudioSyncCodeIRQ Entry "r8"
 	WriteRegI r1, AudioFrequencyNOSC0, lr
 	MOV	r1, r1, LSR #8
 	WriteRegI r1, AudioFrequencyNMOSCNOSC1, lr
+ [ EOSDetect
+        LDR     r1, AudioUnderrunIRQState
+        TEQ     r1, #1
+        MOVEQ   r1, #2                          ; flag that underrun IRQ is enabled
+        STREQ   r1, AudioUnderrunIRQState
+        MOVEQ   r0, #0
+        MVNEQ   r1, #IR_AudioChannelBufferUnderflow
+        BLEQ    UpdateIR
+ ]
 	EXIT
 
 	MACRO
@@ -3771,6 +3815,15 @@ PictureStartCodeIRQ Entry "r8"
       ]
 
 	BL	ProcessVideoReadPtr
+ [ EOSDetect
+        LDR     r1, VideoUnderrunIRQState
+        TEQ     r1, #1
+        MOVEQ   r1, #2                          ; flag that underrun IRQ is enabled
+        STREQ   r1, VideoUnderrunIRQState
+        MOVEQ   r0, #0                          ; enable underrun IRQ
+        MVNEQ   r1, #IR_VideoChannelBufferUnderflow
+        BLEQ    UpdateIR
+ ]
 	LDR	lr, FirstItemReceived
 	TEQ	lr, #0				; if not received picture or sequence yet
 	MOVEQ	lr, #2
@@ -4372,16 +4425,6 @@ BeginActiveVideo Entry "r4,r5,r8"
 07
 
 
- [ CountUnderruns
-	LDR	r1, UnderrunIRQState
-	TEQ	r1, #1
-	MOVEQ	r1, #2				; indicate complete
-	STREQ	r1, UnderrunIRQState
-	MOVEQ	r0, #0				; enable underrun IRQ
-	MVNEQ	r1, #IR_VideoChannelBufferUnderflow :OR: IR_AudioChannelBufferUnderflow
-	BLEQ	UpdateIR
- ]
-
  [ Pulldown
 20
         LDR     r0, PU_Countdown
@@ -4636,69 +4679,72 @@ SCRStatusIRQ Entry "r0"
 	BVS	$underrun
 	MEND
 
- [ CountUnderruns
-AudioChannelUnderrunIRQ Entry "r8"
-	LDR	lr, AudioChannelUnderruns
-	ADD	lr, lr, #1
-	STR	lr, AudioChannelUnderruns
-;        ReadRegI r0, AudioTrickModes
-;        BIC     r0, r0, #1:SHL:2
-;        WriteRegI r0, AudioTrickModes, lr
-;        ORR     r0, r0, #1:SHL:2
-;        WriteRegI r0, AudioTrickModes, lr
-	MOV	r0, #IR_AudioChannelBufferUnderflow ; set the bit to disable the IRQ
-	MVN	r1, #IR_AudioChannelBufferUnderflow
-	BL	UpdateIR
-	Push    "r5"
-	MOV     r5, pc
-	ORR     lr, r5, #SVC_mode
-	TEQP    lr, #0
-	NOP
-	Push    "lr"
+ [ EOSDetect
+; Audio Channel underrun IRQ
 
-;	ADR     r0, AudioUnderrunCallBack
-;	MOV     r1, wp
-;	SWI     XOS_AddCallBack
+AudioChannelUnderrunIRQ Entry
+        LDR     lr, AudioChannelUnderruns
+        ADD     lr, lr, #1
+        STR     lr, AudioChannelUnderruns
 
-	Pull    "lr"
-	TEQP    r5, #0
-	NOP
-	Pull    "r5"
+; now disable buffer underflow interrupt, so it doesn't happen again
+        MOV     r0, #IR_AudioChannelBufferUnderflow ; set the bit to disable the IRQ
+        MVN     r1, #IR_AudioChannelBufferUnderflow
+        BL      UpdateIR
+
+        MOV     r1, #1
+        STR     r1, AudioUnderrunIRQState       ; flag that IRQ is disabled
+
+        LDR     r0, AudioEOSPending
+        TEQ     r0, #0                          ; if EOS not pending
+        EXIT    EQ                              ; then exit
+
+        MOV     r0, #0
+        STR     r0, AudioEOSPending             ; else unflag pending EOS and call control unit
+
+        MOV     r3, pc
+        ORR     lr, r3, #SVC_mode
+        TEQP    lr, #0
+        Push    "lr_svc"
+        MOV     r0, #PlayFlags_AudioIdle
+        LDR     r1, AudioControlStreamHandle
+        SWI     XMPEGControl_Play
+        Pull    "lr_svc"
+        TEQP    r3, #0
         EXIT
-
-;AudioUnderrunCallBack Entry "r0-r4"
-;        SUB     sp, sp, #5*4
-;        MOV     r0, #&000A  ; tag for control stream handle
-;        MOV     r1, #-1     ; list terminator
-;        STMIA   sp, {r0, r1}
-;        MOV     r0, #0
-;        MOV     r1, #0
-;        MOV     r2, sp
-;        ADD     r3, sp, #2*4
-;        MOV     r4, #3*4
-;        SWI     XMPEGControl_Stats
-;        LDR     r1, [sp, #4*4] ; load CSH from filled-in block
-;        ADD     sp, sp, #5*4
-;        LDR     r0, TrickPlayMode
-;        TEQ     r0, #0
-;        MOVEQ   r0, #ResetStreamFlags_VideoPresent :OR: ResetStreamFlags_AudioPresent ; will be ANDed with StreamFlags
-;        MOVEQ   r0, #ResetStreamFlags_VideoPresent :OR: ResetStreamFlags_AudioPresent :OR: ResetStreamFlags_TrickPlayMode
-;        SWI     XMPEGControl_ResetStream
-;        EXIT
-
 
 ; Video Channel underrun IRQ
 
 VideoChannelUnderrunIRQ Entry
-	LDR	lr, VideoChannelUnderruns
-	ADD	lr, lr, #1
-	STR	lr, VideoChannelUnderruns
+        LDR     lr, VideoChannelUnderruns
+        ADD     lr, lr, #1
+        STR     lr, VideoChannelUnderruns
 
 ; now disable buffer underflow interrupt, so it doesn't happen again
-	MOV	r0, #IR_VideoChannelBufferUnderflow ; set the bit to disable the IRQ
-	MVN	r1, #IR_VideoChannelBufferUnderflow
-	BL	UpdateIR
-	EXIT
+        MOV     r0, #IR_VideoChannelBufferUnderflow ; set the bit to disable the IRQ
+        MVN     r1, #IR_VideoChannelBufferUnderflow
+        BL      UpdateIR
+
+        MOV     r1, #1
+        STR     r1, VideoUnderrunIRQState
+
+        LDR     r0, VideoEOSPending
+        TEQ     r0, #0                          ; if EOS not pending
+        EXIT    EQ                              ; then exit
+
+        MOV     r0, #0
+        STR     r0, VideoEOSPending             ; else unflag pending EOS and call control unit
+
+        MOV     r3, pc
+        ORR     lr, r3, #SVC_mode
+        TEQP    lr, #0
+        Push    "lr_svc"
+        MOV     r0, #PlayFlags_VideoIdle
+        LDR     r1, VideoControlStreamHandle
+        SWI     XMPEGControl_Play
+        Pull    "lr_svc"
+        TEQP    r3, #0
+        EXIT
  ]
 
 ; **************************************************************************
@@ -6555,12 +6601,21 @@ VideoInfo_Code Entry "r8"
 	SWI	XOS_Write0
 	SWI	XOS_NewLine
 
- [ CountUnderruns
-	LDR	r0, VideoChannelUnderruns
-	DREG	r0, "Video channel underruns = "
-	LDR	r0, AudioChannelUnderruns
-	DREG	r0, "Audio channel underruns = "
+ [ EOSDetect
+        LDR     r0, VideoChannelUnderruns
+        DREG    r0, "Video channel underruns = "
+        LDR     r0, AudioChannelUnderruns
+        DREG    r0, "Audio channel underruns = "
  ]
+        LDR     r0, VideoStreamFlags
+        DREG    r0, "Video stream flags = "
+        LDR     r0, AudioStreamFlags
+        DREG    r0, "Audio stream flags = "
+        LDR     r0, VideoSpeedSetting
+        DREG    r0, "Video speed setting = "
+        LDR     r0, AudioSpeedSetting
+        DREG    r0, "Audio speed setting = "
+
 	DLINE	"** Audio info **"
 	ADR	r8, AudioInfoStructure
 	BL	OutputInfo
@@ -7013,7 +7068,7 @@ Stats_LengthOfPendingVideoPackets Entry "r0,r1"
 	EXITS					; exit restoring IRQ state
 
 VideoStatsTable
- [ CountUnderruns
+ [ EOSDetect
 	StatsTableEntry &1000, VideoChannelUnderruns
  ]
 	StatsTableEntry &1001, VideoAmountReceived
@@ -7194,6 +7249,11 @@ AudioOpenStream Entry "r1,r2, r11"
 	STR	r0, DualMonoChannelSpecifier	; default (stereo)
 	STR	r0, AudioFlags			; default
 	STR	r0, AudioPacketSendTimeouts
+ [ EOSDetect
+        STR     r0, AudioChannelUnderruns
+        STR     r0, AudioUnderrunIRQState
+        STR     r0, AudioEOSPending
+ ]
 
 	MOV	r0, #-1
 	STR	r0, AudioDiscardedDataCount
@@ -7268,7 +7328,10 @@ AudioFullPackets Entry "r0,r11"
 20
  ]
  [ StartVideoAtSeqHdr
-        LDRB    lr, SkippingToSeqHdr
+        LDR     lr, AudioStreamFlags
+        TST     lr, #StreamFlags_VideoPresent
+        MOVEQ   lr, #0
+        LDRNEB  lr, SkippingToSeqHdr
         TEQ     lr, #1
         BEQ     %FT21
         BL      int_audio_full_packets                  ; if we're not skipping video, process packets normally
@@ -7521,11 +7584,28 @@ AudioCloseStream Entry "r0-r2,r11"
 
 AudioPlay Entry "r0,r2, r11"
         Debug   audio, "Audio_Play, r0 =", r0
+      [ EOSDetect
+        TST     r0, #AudioPlayFlags_Stop
+        BNE     %FT10
+      ]
 	LDR	r2, AudioSpeedSetting
 	BIC	r2, r2, #&80000000	; clear pre-buffering bit
 	STR	r2, AudioSpeedSetting
 	BL	AudioSetSpeed
 	EXIT
+
+      [ EOSDetect
+10      LDR     r0, AudioUnderrunIRQState
+        CMP     r0, #2
+        MOVCS   r0, #1                  ; if currently decoding,
+        STRCS   r0, AudioEOSPending     ; then mark EOS as pending
+        EXIT    CS                      ; and exit
+        MOV     r0, #PlayFlags_AudioIdle
+        LDR     r1, AudioControlStreamHandle
+        SWI     XMPEGControl_Play       ; else call back immediately
+        CLRV
+        EXIT
+      ]
 
 ; **************************************************************************
 ;
@@ -7639,6 +7719,10 @@ AudioResetStream Entry "r0-r2"
 
 	MOV	r0, #0
 	STR	r0, AudioStreamClosing
+ [ EOSDetect
+        STR     r0, AudioUnderrunIRQState
+        STR     r0, AudioEOSPending
+ ]
 
 	CLRV
 	EXIT
@@ -7860,6 +7944,12 @@ AudioSetAudioParameters_DualChannelModeSpecifier Entry "r0"
 ;	AudioSendPlay - Start decoder playing
 
 AudioSendPlay Entry "r0"
+ [ EOSDetect
+        LDR     r0, AudioUnderrunIRQState
+        TEQ     r0, #0                  ; if not enabled the IRQ already
+        MOVEQ   r0, #1                  ; then enable it next sync code
+        STREQ   r0, AudioUnderrunIRQState
+ ]
 	MOV	lr, pc
 	ORR	lr, lr, #I_bit				; disable IRQs around Read/WriteRegI called from fgd
 	TEQP	lr, #0
