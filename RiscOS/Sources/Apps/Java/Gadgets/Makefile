@@ -5,14 +5,21 @@
 # ***********************************
 # Date       Name   Description
 # ----       ----   -----------
-# 12/5/97  RLougher  Created
+# 12/05/97  RLougher  Created
+# 04/06/98  SBrodie   Added RAM build into same Makefile
 #
 
 #
 # Component specific options:
 #
-COMPONENT  = JavaGadget
+COMPONENT  = TextGadget
 ROM_MODULE = aof.${COMPONENT}
+RAM_MODULE = rm.${COMPONENT}
+
+#
+# Export Paths for Messages module
+#
+RESDIR = <resource$dir>.Resources2.${COMPONENT}
 
 #
 # Generic options:
@@ -29,8 +36,8 @@ ASM	= objasm
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
-CFLAGS   = -c ${INCLUDES} -zM -ffah -zps1
-INCLUDES = -Itbox:,C:
+CFLAGS   = -c -depend !Depend ${INCLUDES} -zM -ffah -zps1 ${DFLAGS}
+INCLUDES = -IC:tboxlibint,C:tboxlibs,C:
 
 #
 # Libraries
@@ -40,8 +47,8 @@ CLIB      = CLIB:o.stubs
 RLIB      = RISCOSLIB:o.risc_oslib
 ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.c_abssym
-TBOXLIB   = tbox:o.toolboxlib
-WIMPLIB   = tbox:o.wimplib
+TBOXLIB   = c:tboxlibs.o.toolboxlib
+WIMPLIB   = c:tboxlibs.o.wimplib
 
 OBJS =\
 	o.Modhdr \
@@ -63,17 +70,42 @@ OBJS =\
 	o.glib3 \
 	o.rmensure \
 	o.string32
+
+RAM_OBJS =\
+	o.Modhdr \
+	o.TextGadget \
+	o.TextArea \
+	o.ScrollList \
+	o.Scrollbar \
+	o.riscos_uti \
+	o.riscos_gra \
+	o.Font \
+	o.debug \
+	o.TextMan \
+	o.MemMan \
+	o.Text \
+	o.ScrollLisS \
+	o.Utils \
+	o.TAsel_ven \
+	o.glib \
+	o.glib3 \
+	o.rmensure \
+	o.string32
+
 #
 # Rule patterns
 #
 .c.o:;    ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:; ${CMHG} -o $@ $<
+.cmhg.o:; ${CMHG} -p -o $@ $<
 .s.o:;    $(ASM) $< $@
 
 #
 # Main rules:
 #
 #
+all: ${RAM_MODULE}
+        @echo ${COMPONENT}: Module built (RAM)
+
 rom: ${ROM_MODULE}
         @echo ${COMPONENT}: Module built (ROM)
 
@@ -91,6 +123,12 @@ clean:
 ${ROM_MODULE}: ${OBJS} ${TBOXLIB} $(WIMPLIB) ${ROMCSTUBS}
         ${MKDIR} aof
         ${LD} -o $@ -aof ${OBJS} ${TBOXLIB} $(WIMPLIB) ${ROMCSTUBS}
+
+${RAM_MODULE}: ${RAM_OBJS} ${TBOXLIB} ${WIMPLIB} ${CLIB}
+	${mkdir} rm
+        ${LD} -o $@ -module ${RAM_OBJS} ${TBOXLIB} ${WIMPLIB} ${CLIB}
+        Access $@ RW/R
+
 
 # final link for ROM Image (using given base address)
 rom_link:
