@@ -28,7 +28,7 @@ CFLAGS  = -depend !Depend ${INCLUDES} -c -zM -ffah ${DFLAGS} -DIR_CLIENT
 #DFLAGS  = -DDEBUG=3
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
-INCLUDES= -IC: -IINetInc: -IINetInc:^.^.libs
+INCLUDES= -IC:
 
 #
 # Libraries
@@ -79,18 +79,20 @@ clean:
 	${RM} ${TARGET}
 	@echo ${COMPONENT}: cleaned
 
+dirs:
+	${MKDIR} o
+	${MKDIR} aof
 
 #
 # Stand-alone module
 #
-rm.${COMPONENT}: ${OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
+rm.${COMPONENT}: ${OBJS} ${CLIB} ${SOCKLIB} ${INETLIB} dirs
 	${LD} -o $@ -module ${OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
 
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS} ${ROMCSTUBS}
-	${MKDIR} aof
+${TARGET}: ${OBJS} ${ROMCSTUBS} dirs
 	${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
 
 #
