@@ -99,11 +99,10 @@ rm.PDumperCX: s.Workspace
 rm.PDumperCX: s.BranchCode
 rm.PDumperCX: ^.Generic.s.BranchCode
 rm.PDumperCX: s.24Bit
-rm.PDumperCX: ^.Generic.s.24Bit
 rm.PDumperCX: s.SetDriver
 rm.PDumperCX: ^.Generic.s.SetDriver
 rm.PDumperCX: s.OutputDump
-rm.PDumperCX: ^.Generic.s.OutputDump
+rm.PDumperCX: s.Prepstrips
 rm.PDumperCX: s.ColourSet
 rm.PDumperCX: ^.Generic.s.ColourSet
 rm.PDumperCX: s.StartPage
@@ -111,7 +110,7 @@ rm.PDumperCX: ^.Generic.s.SendExtra
 rm.PDumperCX: s.EndPage
 rm.PDumperCX: ^.Generic.s.EndPage
 rm.PDumperCX: s.AbortJob
-rm.PDumperCX: ^.Generic.s.AbortJob
 rm.PDumperCX: s.StartJob
+rm.PDumperCX: s.OutputPal
 rm.PDumperCX: s.MiscOp
 rm.PDumperCX: ^.Generic.s.MiscOp
