@@ -37,6 +37,8 @@ DIR     = @dir
 RM      = remove
 WIPE    = -wipe
 
+STRIPDEPEND = stripdepnd
+
 CCFLAGS = -c -depend !Depend -IC:
 ASFLAGS = -depend !Depend -stamp -quit -module
 CPFLAGS = ~cfr~v
@@ -78,6 +80,13 @@ install_rom: ${DUMPERS}
 
 clean:
         ${WIPE} rm.* ${WFLAGS}
+        ${STRIPDEPEND} PDumper24.Makefile
+        ${STRIPDEPEND} PDumperCX.Makefile
+        ${STRIPDEPEND} PDumperDM.Makefile
+        ${STRIPDEPEND} PDumperE2.Makefile
+        ${STRIPDEPEND} PDumperIW.Makefile
+        ${STRIPDEPEND} PDumperLJ.Makefile
+        ${STRIPDEPEND} PDumperSP.Makefile
         @echo ${COMPONENT}: cleaned
 
 ${EXP_HDR}.PDumper: hdr.PDumper
