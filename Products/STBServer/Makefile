@@ -15,7 +15,7 @@ OSDIR=solaris
 endif
 
 all: scripts modgen modsqz mtftpd unmodsqz
-	(cd ${TARDIR}; tar cf dist-server.tar blconf blbuild blswinst modgen modsqz mtftpd unmodsqz)
+	(cd ${TARDIR}; tar cf dist-server.tar blconf blbuild blswinst modgen modsqz mtftpd unmodsqz mtftpd.conf mtftpd.sh)
 	compress ${TARDIR}/dist-server.tar
 	cp ${TARDIR}/dist-server.tar.Z dist-server-tar.Z
 	@echo All done
