@@ -11,29 +11,16 @@
 #include "kernel.h"
 #include "swis.h"
 
+#include "module.h"
+#include "nvram.h"
 #include "msgfile.h"
 #include "error.h"
 
 #include "trace.h"
 
 
-/****************************************************************************
- * Message file definitions and structures.
- */
-
-
-/* Location of our Tags file. */
-#define MSGFILE_NAME	"Resources:$.Resources.NVRAM.Tags"
-
 /* [ might be useful whilst debugging ] */
 /* #define MSGFILE_NAME	"Tags" */
-
-
-/* Pointer to message block and message block itself (pointer starts as 0 so
- * we still get Global messages even when our file has not been opened).
- */
-static int *MBPtr = 0;
-static int MsgBlock[4];
 
 
 /****************************************************************************
@@ -69,21 +56,21 @@ GetParameters( char *lastparm, int lastsize, char *p[] )
  *	Opens the given message file. Any currently open file will be closed.
  */
 _kernel_oserror *
-msgfile_open( char *fname, char *buffer )
+msgfile_open( msgtransblock *mb, char *buffer)
 {
-	_kernel_oserror *err;
+        _kernel_oserror *e;
 
-	if ( MBPtr ) msgfile_close();
+        if ( mb->open ) msgfile_close( mb );
 
-	TRACE( "msgfile_open: opening '%s'\n" _ fname );
+        TRACE( "msgfile_open: opening '%s'\n" _ mb->filename );
 
-	err = _swix( MessageTrans_OpenFile, _INR(0,2), MsgBlock, fname, buffer );
-	if ( !err )
+        e = _swix( MessageTrans_OpenFile, _INR(0,2), mb->msgblock, mb->filename, buffer );
+        if ( !e )
 	{
 		TRACE( "Messagefile opened\n" );
-		MBPtr = MsgBlock;
+        	mb->open = 1;
 	}
-	return err;
+        return e;
 }
 
 
@@ -100,30 +87,30 @@ msgfile_open( char *fname, char *buffer )
  *	Looks up the given token in the currently open message file.
  */
 char *
-msgfile_lookup( char *token, char *buffer, int bufsz, ... )
+msgfile_lookup( msgtransblock *mb, char *token, char *buffer, int bufsz, ... )
 {
 	char *p[4];
 	char *result;
 	int length;
-	_kernel_oserror *err;
+        _kernel_oserror *e;
 
-	if ( !MBPtr ) msgfile_open( MSGFILE_NAME, NULL );
+        if ( !mb->open ) msgfile_open( mb, NULL );
 
 	GetParameters( (char *)&bufsz, sizeof(bufsz), p );
 
 	TRACE( "msgfile_lookup: looking up '%s'\n" _ token );
 
-	err = _swix( MessageTrans_Lookup, _INR(0,7)|_OUTR(2,3), MBPtr, token, buffer, bufsz,
-			p[0], p[1], p[2], p[3], &result, &length );
+        e = _swix( MessageTrans_Lookup, _INR(0,7)|_OUTR(2,3), mb->msgblock, token, buffer, bufsz,
+                        p[0], p[1], p[2], p[3], &result, &length );
 
-	TRACEIF( err != NULL, "msgfile_lookup: MessageTrans_Lookup returned '%s'\n" _ err->errmess );
+        TRACEIF( e != NULL, "msgfile_lookup: MessageTrans_Lookup returned '%s'\n" _ e->errmess );
 
-	if ( (err == NULL) && (buffer != NULL) )
+        if ( (e == NULL) && (buffer != NULL) )
 	{
 		result[length] = '\0';
-		
+
 		TRACE( "msgfile_lookup: lookup returned '%s'\n" _ result );
-		
+
 		return result;
 	}
 
@@ -141,25 +128,29 @@ msgfile_lookup( char *token, char *buffer, int bufsz, ... )
  *	Looks up the given error token block and returns the resulting error.
  */
 _kernel_oserror *
-msgfile_error_lookup( _kernel_oserror *err, ... )
+msgfile_error_lookup( msgtransblock *mb, _kernel_oserror *err, ... )
 {
+        TRACE("msgfile_error_lookup have we got an error? ");
 	if ( err != NULL )
 	{
+                TRACE( " - is it one of ours? - " );
 		if ( err->errnum & ERROR_LOOKUP_BIT )
 		{
 			char *p[4];
 
+                        /* A copy of the error (in RAM) that we can modify */
+                        _kernel_oserror *e;
+
 			TRACE( "msgfile_error_lookup: looking up error '%s'\n" _ err->errmess );
 
-			/* Don't explicitly open message file for errors as in our case	*/
-			/* it isn't a real Messages file, it's our Tags file.		*/
-			/* if ( !MBPtr ) msgfile_open( MSGFILE_NAME, NULL );		*/
-		
 			GetParameters( (char *)&err, sizeof(err), p );
 
+                        if( !mb->open ) msgfile_open( mb, NULL );
+
 			/* Remove lookup flag and return the error. */
-			err->errnum &= ~ERROR_LOOKUP_BIT;
-			return _swix( MessageTrans_ErrorLookup, _INR(0,7), err, MBPtr, 0, 0, p[0], p[1], p[2], p[3] );
+                        e = _swix( MessageTrans_ErrorLookup, _INR(0,7), err, mb->msgblock, 0, 0, p[0], p[1], p[2], p[3] );
+                        e->errnum &= ~ERROR_LOOKUP_BIT;
+                        return e;
 		}
 	}
 	return err;
@@ -179,22 +170,22 @@ msgfile_error_lookup( _kernel_oserror *err, ... )
  *	Enumerates massage file tokens.
  */
 _kernel_oserror *
-msgfile_enumerate( char *token, char *buffer, int bufsz, int *index )
+msgfile_enumerate( msgtransblock *mb, char *token, char *buffer, int bufsz, int *index )
 {
-	_kernel_oserror *err = NULL;
+        _kernel_oserror *e = NULL;
 
-	if ( !MBPtr ) err = msgfile_open( MSGFILE_NAME, NULL );
+        if ( !mb->open ) e = msgfile_open( mb, NULL );
 
-	if ( MBPtr )
-	{
-		err = _swix( MessageTrans_EnumerateTokens, _INR(0,4)|_OUT(2)|_OUT(4),
-				MBPtr, token, buffer, bufsz, *index, &bufsz, index );
+        if ( mb->open )
+        {
+                e = _swix( MessageTrans_EnumerateTokens, _INR(0,4)|_OUT(2)|_OUT(4),
+                                mb->msgblock, token, buffer, bufsz, *index, &bufsz, index );
 
-		TRACEIF( err != NULL, "msgfile_enumerate: returned error '%s'\n" _ err->errmess );
+                TRACEIF( e != NULL, "msgfile_enumerate: returned error '%s'\n" _ e->errmess );
 
 		if ( bufsz == 0 ) *index = 0;
 	}
-	return err;
+        return e;
 }
 
 
@@ -204,13 +195,13 @@ msgfile_enumerate( char *token, char *buffer, int bufsz, int *index )
  *	  Closes the currently open message file.
  */
 void
-msgfile_close( void )
+msgfile_close( msgtransblock *mb )
 {
-	if ( MBPtr )
+        if ( mb->open )
 	{
-		TRACE( "msgfile_close: closing message file\n" );
+		TRACE( "msgfile_close: closing file\n" );
 
-		(void)_swix( MessageTrans_CloseFile, _IN(0), MBPtr );
-		MBPtr = 0;
-	}
+                (void)_swix( MessageTrans_CloseFile, _IN(0), mb->msgblock );
+                mb->open = 0;
+        }
 }

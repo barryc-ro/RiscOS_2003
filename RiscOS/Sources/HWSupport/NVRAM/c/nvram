@@ -25,8 +25,19 @@
    rebooting when it's done as this would be slightly annoying */
 /* #define ALWAYS_FULL_RESET */
 
+/* rjc/RCathera (for indeed I have many names)
+   The caching code in this module is completely redundant -
+   all of the read and write routines re-read the NVRAM into the cache in case
+   the NVRAM has been altered 'under our feet' (this could be improved with
+   the write routine by only reading the first and last byte - needed for tags
+   with non-byte aligned start or end).
+   KBracey suggested moving the caching into the kernel */
 
 ERROR_STRUCT( NOMEM, "NoMem" );
+ERROR_STRUCT( NOTAG, "NoTag" );
+ERROR_STRUCT( LOCKED, "Locked");
+ERROR_STRUCT( READBUF, "ReadBuf");
+ERROR_STRUCT( NOTBYTE, "NotByte");
 
 static char *pCache = NULL;
 static int nvram_size;
@@ -197,6 +208,9 @@ CopyBuffer( char *psource, char *pdest, unsigned int location, unsigned int star
 	int byte_length;
 
 	/* Ensure that 'start_bit' is a reasonable value. */
+	/* rjc: byte_length is actually the number of bytes that the tag spans          */
+	/* i.e a tag of length 15 bits thats starts at bit 4 will have byte_length = 3  */
+	/* an not 2 as one might reasonably expect from the variable name               */
 	start_bit &= 7;
 	byte_length = (start_bit + length + 7) / 8;
 
@@ -280,13 +294,15 @@ LockedReset( char *pold, char *pnew, location *ploc )
 }
 
 
+
+
 static int
 GetLocation( char *ptag, char *pdesc, location *ploc )
 {
 	TRACE( "GetLocation: looking up tag '%s'\n" _ ptag );
 
 	/* Lookup tag and parse description into location 'ploc'. */
-	return ( msgfile_lookup(ptag, pdesc, TMPBUF_SIZE, NULL) != NULL ) ? parse_description( pdesc, ploc, nvram_size ) : 0;
+        return ( msgfile_lookup( &tags, ptag, pdesc, TMPBUF_SIZE, NULL) != NULL ) ? parse_description( pdesc, ploc, nvram_size ) : 0;
 }
 
 
@@ -308,7 +324,7 @@ IterateTags( char *pold, char *pnew, void (*function)(char *, char *, location *
 		{
 			location loc;
 
-			err = msgfile_enumerate( "*", tagbuf, TMPBUF_SIZE, &index );
+                        err = msgfile_enumerate( &tags, "*", tagbuf, TMPBUF_SIZE, &index );
 			if ( (err != NULL) || (index == 0) ) break;
 			if ( GetLocation(tagbuf, descbuf, &loc) )
 				(*function)( pold, pnew, &loc );
@@ -413,16 +429,18 @@ nvram_finalise( void )
 		free( pCache );
 		pCache = NULL;
 	}
-	msgfile_close();
+        msgfile_close( &tags );
+        msgfile_close( &msgs );
 }
 
 
 _kernel_oserror *
-nvram_read( char *tag, void *buffer, int bufferlen, int *retvalue )
+nvram_get( char *tag, void *buffer, int bufferlen, int *size )
 {
+        _kernel_oserror *e = NULL;
 	location loc;
-	char *descbuf = (char *)malloc( TMPBUF_SIZE );
 
+	char *descbuf = (char *)malloc( TMPBUF_SIZE );
 	if ( descbuf == NULL ) return ERROR( NOMEM );
 
 	if ( GetLocation(tag, descbuf, &loc) )
@@ -432,7 +450,7 @@ nvram_read( char *tag, void *buffer, int bufferlen, int *retvalue )
 		if ( buffer == 0 )
 		{
 			/* Buffer pointer is 0 so just return required buffer size. */
-			*retvalue = req_bufsz;
+                        *size = req_bufsz;
 		}
 		else
 		{
@@ -447,10 +465,12 @@ nvram_read( char *tag, void *buffer, int bufferlen, int *retvalue )
 					RawRead( pCache, loc.location, req_bufsz );
 
 					*(int *)(buffer) = ReadValue( pCache, loc.location, loc.start_bit, loc.length );
-					*retvalue = 4;
+                                        *size = 4;
 				}
 				else
-					*retvalue = NVRAM_READ_BUFERR;
+                                {
+                                        e = ERROR (READBUF);
+                                }
 			}
 			else
 			{
@@ -468,25 +488,30 @@ nvram_read( char *tag, void *buffer, int bufferlen, int *retvalue )
 					/* before calling and we definitely don't want to update the	*/
 					/* cache!							*/
 					CopyBuffer( pCache, ((char *)buffer) - loc.location, loc.location, loc.start_bit, loc.length, NVRAM_FLAGS_WRITECACHE );
-					*retvalue = req_bufsz;
+                                        *size = req_bufsz;
 				}
 				else
-					*retvalue = NVRAM_READ_BUFERR;
+                                {
+                                        e = ERROR (READBUF);
+                                }
 			}
 		}
 	}
 	else
-		*retvalue = NVRAM_READ_TAGERR;
+        {
+                e = ERROR (NOTAG);
+        }
 
 	free( descbuf );
 
-	return NULL;
+        return e;
 }
 
 
 _kernel_oserror *
-nvram_write( char *tag, void *buffer, int bufferlen, int *retvalue )
+nvram_set( char *tag, void *buffer, int bufferlen)
 {
+        _kernel_oserror *e = NULL;
 	location loc;
 	char *descbuf = (char *)malloc( TMPBUF_SIZE );
 
@@ -497,7 +522,7 @@ nvram_write( char *tag, void *buffer, int bufferlen, int *retvalue )
 		if ( loc.flags & LOCATION_FLAGS_LOCKED )
 		{
 			/* Location is locked so can't be updated. */
-			*retvalue = NVRAM_WRITE_LOCKERR;
+                        e = ERROR( LOCKED );
 		}
 		else
 		{
@@ -526,12 +551,189 @@ nvram_write( char *tag, void *buffer, int bufferlen, int *retvalue )
 	                        CopyBuffer( ((char *)buffer) - loc.location, pCache, loc.location, loc.start_bit,
 	                        		length, NVRAM_FLAGS_WRITETHROUGH );
 	                }
-	                *retvalue = 0;	/* Return no error. */
                 }
-	} else
-		*retvalue = NVRAM_WRITE_TAGERR;
+	}
+        else
+        {
+                e = ERROR( NOTAG );
+        }
 
 	free( descbuf );
 
-	return NULL;
+        return e;
+}
+
+_kernel_oserror *
+nvram_lookup( char *ptag, unsigned int *startbyte, unsigned int *startbit, unsigned int *length, unsigned int *flagword )
+{
+        _kernel_oserror *e = NULL;
+        location loc;
+
+        char *descbuf = (char *)malloc( TMPBUF_SIZE );
+        if ( descbuf == NULL ) return ERROR (NOMEM);
+
+        if ( GetLocation( ptag, descbuf, &loc) )
+        {
+                *startbyte = loc.location;
+                *startbit  = loc.start_bit;
+                *length    = loc.length;
+                *flagword  = loc.flags;
+        }
+        else
+        {
+                e = ERROR (NOTAG);
+        }
+
+        free( descbuf );
+
+        return e;
+}
+
+_kernel_oserror *
+nvram_getbytes( char *tag, void *buffer, int bufferlen, int offset, int *size )
+{
+        /* bufferlen - bytes - how much data we want                            */
+        /* offset    - bytes - where to start within tag (0 is the beginning)   */
+        /* size      - bytes - return the length                                */
+
+        /* if the tag specified is not byte aligned i.e loc.start_bit!=0 then   */
+        /* we complain                                                          */
+
+        _kernel_oserror *e = NULL;
+        location loc;
+
+        char *descbuf = (char *)malloc( TMPBUF_SIZE );
+        if ( descbuf == NULL ) return ERROR( NOMEM );
+
+        if ( GetLocation(tag, descbuf, &loc) )
+        {
+                if (loc.start_bit == 0)
+                {
+                        /* make sure we don't run off the end of the tag        */
+                        /* need value in bits for CopyBuffer                    */
+                        int bit_length = loc.length - (offset * 8);
+                        int byte_length;
+                        bufferlen = (bufferlen * 8);
+                        bit_length = (bufferlen > bit_length) ? bit_length : bufferlen;
+                        /* the whole number of bytes needed to store 'bit_length' bits   */
+                        byte_length = (bit_length + 7) / 8;
+
+                        if (bit_length > 0)
+                        {
+                                int where = loc.location + offset;
+                                /* Read current NVRAM contents into cache in case it's changed  */
+                                /* under our feet.                                              */
+                                /* RawRead(buffer, byte start value, byte length                */
+                                RawRead( pCache, where, byte_length );
+
+                                /* Destination pointer gets loc.location added so subtract      */
+                                /* before calling and we definitely don't want to update the    */
+                                /* cache!                                                       */
+                                /* CopyBuffer(source buffer, dest buffer, byte start location, start bit, length in bits, flags) */
+                                CopyBuffer( pCache, ((char *)buffer) - where, where, 0, bit_length, NVRAM_FLAGS_WRITECACHE );
+                        }
+                        *size = byte_length;
+                }
+                else
+                {
+                        e = ERROR (NOTBYTE);
+                }
+        }
+        else
+        {
+                e = ERROR (NOTAG);
+        }
+
+        free( descbuf );
+
+        return e;
+}
+
+_kernel_oserror *
+nvram_setbytes( char *tag, void *buffer, int bufferlen, int offset )
+{
+        _kernel_oserror *e = NULL;
+        location loc;
+        char *descbuf = (char *)malloc( TMPBUF_SIZE );
+        if ( descbuf == NULL ) return ERROR( NOMEM );
+
+        if ( GetLocation( tag, descbuf, &loc) )
+        {
+                if ( loc.flags & LOCATION_FLAGS_LOCKED )
+                {
+                        /* Location is locked so can't be updated. */
+                        e = ERROR( LOCKED );
+                }
+                else if (loc.start_bit !=0 )
+                {
+                        /* not byte aligned */
+                        e = ERROR( NOTBYTE );
+                }
+                else
+                {
+                        /* make sure we don't run off the end of the tag        */
+                        /* need value in bits for CopyBuffer                    */
+                        int bit_length = loc.length - (offset * 8);
+                        int byte_length;
+                        bufferlen = bufferlen * 8;
+                        bit_length = (bufferlen > bit_length) ? bit_length : bufferlen;
+
+                        /* the whole number of bytes needed to store 'bit_length' bits   */
+                        byte_length = (bit_length + 7) / 8;
+                        if (byte_length > 0)
+                        {
+                                int where = loc.location + offset;
+                                /* Read current NVRAM contents into cache in case it's changed  */
+                                /* under our feet.                                              */
+                                /* rjc: this is not required - all we need to do is read first  */
+                                /* and last byte (assuming start_bit != 0  also applies to Get  */
+                                RawRead( pCache, where, byte_length);
+
+                                CopyBuffer( ((char *)buffer) - where, pCache, where, 0, bit_length, NVRAM_FLAGS_WRITETHROUGH );
+                        }
+                }
+        }
+        else
+        {
+                e = ERROR( NOTAG );
+        }
+
+        free( descbuf );
+
+        return e;
+}
+
+/* These three wrapper routines are exclusivly to support the very nasty NVRAM_Read and NVRAM_Write
+   SWIs which do not return errors in a RISC OS compliant manner.
+   They have been replaced by NVRAM_Get and NVRAM_Set respectivly. */
+
+/* Convert an error from a _kernel_oserror to a -ve value in r0 */
+
+static _kernel_oserror *
+convert_error(_kernel_oserror *e, int *retvalue)
+{
+        int errnum = e->errnum &~ ERROR_LOOKUP_BIT;
+
+        if (e && errnum >= ERROR_BASE && errnum <= ERROR_BASE + 0xFF)
+        {
+                *retvalue = -(errnum - ERROR_BASE);
+                e = NULL;
+        }
+
+        return e;
+}
+
+/* Fake read and write using get and set, for backwards compatibility */
+
+_kernel_oserror *
+nvram_read( char *tag, void *buffer, int bufferlen, int *retvalue )
+{
+        return convert_error(nvram_get(tag, buffer, bufferlen, retvalue), retvalue);
+}
+
+_kernel_oserror *
+nvram_write( char *tag, void *buffer, int bufferlen, int *retvalue )
+{
+        *retvalue = 0;
+        return convert_error(nvram_set(tag, buffer, bufferlen), retvalue);
 }
