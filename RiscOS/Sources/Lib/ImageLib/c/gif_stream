@@ -32,9 +32,10 @@
 /*                          rather than != -1).                                                            */
 /*          09-Sep-97: RML: Made use of flex_set_budge to avoid stack problems on pre-RPC                  */
 /*                          machines.                                                                      */
-/*          18-Sep-97: RML: Added flex_deferred_compaction in gifstream_plot.                              */ 
+/*          18-Sep-97: RML: Added flex_deferred_compaction in gifstream_plot.                              */
 /*          22-Sep-97: RML: Fixed problem with npixels not being updated sometimes in lzw decoder, so      */
 /*                          imagelib thinks image is corrupted.                                            */
+/*          22-Sep-97: KJB: Copes with there being no clear code at the start of the LZW stream.           */
 /*---------------------------------------------------------------------------------------------------------*/
 /* To do :                                                                                                 */
 /*                                                                                                         */
@@ -129,6 +130,7 @@ typedef struct gif_loaddata
                 ClearCode,		    /* GIF clear code                             */
                 EOFCode,		    /* GIF end-of-information code                */
                 CurCode, OldCode, InCode,   /* Decompressor variables                     */
+                JustHadClearCode,           /* Last code was a clear code                 */
                 FirstFree,		    /* First free code, generated per GIF spec    */
                 FreeCode,		    /* Decompressor,next free slot in hash table  */
                 FinChar,		    /* Decompressor variable                      */
@@ -352,7 +354,7 @@ _kernel_oserror* gifstream_end(int handle)
 
     /* If not a valid handle, return */
     if (!gifstream_valid_handle(handle)) return NULL;
-   
+
     if (load->flags.render_type == Type_AnimatedSprites)
     {
         if (!load->flags.client_stream_ended) gifstream_end_image_data(load);
@@ -585,7 +587,7 @@ static _kernel_oserror* gifstream_animated_load(int handle, char *buffer, int si
     GIFloaddata     *load = store[handle];
     int              more_frames=1;
     int              oldstate;
-    
+
     report_string("gifstream_animated_load");
 
     load->dataptr = (byte*)buffer;
@@ -1235,6 +1237,7 @@ static _kernel_oserror* gifstream_pre_image_data(GIFloaddata *load, int frame)
     load->InitCodeSize              = load->CodeSize;
     load->MaxCode                   = (1 << load->CodeSize);
     load->ReadMask                  = load->MaxCode - 1;
+    load->JustHadClearCode          = 1;
     load->npixels                   = 0;
     load->maxpixels                 = load->width * load->height;
     load->readimagestate            = 0;
@@ -1425,8 +1428,6 @@ restart:
     {
         case 2:
             goto stage2;
-        case 1:
-            goto stage1;
         case 3:
             goto stage3;
     }
@@ -1460,49 +1461,7 @@ stage3:
             MaxCode = (1 << CodeSize);
             ReadMask = MaxCode - 1;
             FreeCode = load->FirstFree;
-stage1:
-            Code = gifstream_ReadCode(load, CodeSize, ReadMask);
-
-            if (Code==-1)
-            {
-                load->readimagestate=1;
-                if (load->dataptr < load->dataend)
-                    goto restart;
-                else
-                    goto exit;
-            }
-
-            CurCode = OldCode = Code;
-            FinChar = CurCode & BitMask;
-
-            // *picptr++ = FinChar;
-            spr_buff[load->pn++] = FinChar;
-
-            //putpixel(load,FinChar);
-            //if (FinChar==transparent) spr_mask[(load->pn)-1]=0;
-            //else spr_mask[(load->pn)-1]=255;
-
-            if (++load->XC == load->width) {
-              load->spr_buff = render_animate_row(load->render_handle);
-              spr_buff = load->spr_buff;
-              load->pn = 0;
-              load->XC=0;
-              load->YC++;
-            }
-
-            //if (transparent >= 0 && FinChar != transparent)
-            //     spr_mask[load->pn-1]=255;
-            //else spr_buff[load->pn-1]=5; //spr_mask[load->pn-1]=0;
-            //   *(picptr-1+load->maskoffset)=255;
-
-            //if (++load->XC == this->width)
-            //{
-            //    load->XC=0;
-            //    load->YC++;
-            //    picptr+=load->spritewidth-this->width;
-            //}
-
-            npixels++;
+            load->JustHadClearCode = 1;
         }
         else
         {
@@ -1514,31 +1473,36 @@ stage1:
 
             CurCode = InCode = Code;
 
-            /* If greater or equal to FreeCode, not in the hash table yet;
-             * repeat the last character decoded
-             */
-
-            if (CurCode >= FreeCode)
+            if (!load->JustHadClearCode)
             {
-	        CurCode = OldCode;
-	        if (OutCount > 4096)
-	            return gifError("outcount1 blew up");
-	        load->OutCode[OutCount++] = FinChar;
+
+                /* If greater or equal to FreeCode, not in the hash table yet;
+                 * repeat the last character decoded
+                 */
+
+                if (CurCode >= FreeCode)
+                {
+    	            CurCode = OldCode;
+    	            if (OutCount > 4096)
+    	                return gifError("outcount1 blew up");
+    	            load->OutCode[OutCount++] = FinChar;
+                }
+
+                /* Unless this code is raw data, pursue the chain pointed to by CurCode
+                 * through the hash table to its end; each code in the chain puts its
+                 * associated output code on the output queue.
+                 */
+
+                while (CurCode > BitMask)
+                {
+    	            if (OutCount > 4096) break;   /* corrupt file */
+    	            load->OutCode[OutCount++] = load->Suffix[CurCode];
+    	            CurCode = load->Prefix[CurCode];
+                }
+
+                if (OutCount > 4096) { return gifError("outcount blew up"); }
+
             }
-
-            /* Unless this code is raw data, pursue the chain pointed to by CurCode
-             * through the hash table to its end; each code in the chain puts its
-             * associated output code on the output queue.
-             */
-
-            while (CurCode > BitMask)
-            {
-	        if (OutCount > 4096) break;   /* corrupt file */
-	        load->OutCode[OutCount++] = load->Suffix[CurCode];
-	        CurCode = load->Prefix[CurCode];
-            }
-
-            if (OutCount > 4096) { return gifError("outcount blew up"); }
 
             /* The last code in the chain is treated as raw data. */
 
@@ -1590,24 +1554,29 @@ stage1:
 
             /* Build the hash table on-the-fly. No table is stored in the file. */
 
-            load->Prefix[FreeCode] = OldCode;
-            OldCode = InCode;
-            load->Suffix[FreeCode] = FinChar;
-
-            /* Point to the next slot in the table.  If we exceed the current
-             * MaxCode value, increment the code size unless it's already 12.  If it
-             * is, do nothing: the next code decompressed better be CLEAR
-             */
-
-            if (++FreeCode >= MaxCode)
+            if (load->JustHadClearCode)
+                load->JustHadClearCode = 0;
+            else
             {
-	        if (CodeSize < 12)
-	        {
-	            CodeSize++;
-	            MaxCode *= 2;
-	            ReadMask = (1 << CodeSize) - 1;
-	        }
+                load->Prefix[FreeCode] = OldCode;
+                load->Suffix[FreeCode] = FinChar;
+
+                /* Point to the next slot in the table.  If we exceed the current
+                 * MaxCode value, increment the code size unless it's already 12.  If it
+                 * is, do nothing: the next code decompressed better be CLEAR
+                 */
+
+                if (++FreeCode >= MaxCode)
+                {
+    	            if (CodeSize < 12)
+    	            {
+    	                CodeSize++;
+    	                MaxCode *= 2;
+    	                ReadMask = (1 << CodeSize) - 1;
+    	            }
+                }
             }
+            OldCode = InCode;
         }
 stage2:
         Code = gifstream_ReadCode(load, CodeSize, ReadMask);
@@ -1713,8 +1682,6 @@ restart:
     {
         case 2:
             goto stage2;
-        case 1:
-            goto stage1;
         case 3:
             goto stage3;
     }
@@ -1748,45 +1715,7 @@ stage3:
             MaxCode = (1 << CodeSize);
             ReadMask = MaxCode - 1;
             FreeCode = load->FirstFree;
-stage1:
-            Code = gifstream_ReadCode(load, CodeSize, ReadMask);
-            if (Code==-1)
-            {
-                load->readimagestate=1;
-                if (load->dataptr < load->dataend)
-                    goto restart;
-                else
-                    goto exit;
-            }
-
-            CurCode = OldCode = Code;
-            FinChar = CurCode & BitMask;
-            //if (!Interlace)
-            //{
-                // *picptr++ = FinChar;
-                spr_buff[load->pn++] = FinChar;
-
-                if (load->pn==load->width) {
-                  e=render_row(load->render_handle, &spr_buff);
-                  if (e) return e;
-                  load->pn=0;
-                  load->last_row++;
-                  //if (load->last_row > load->height) printf("extra one %d    \n",load->last_row);
-                }
-
-                //if (transparent >= 0 && FinChar != transparent)
-                //    *(picptr-1+load->maskoffset)=255;
-
-                //if (++load->XC == this->width)
-                //{
-                //    load->XC=0;
-                //    load->YC++;
-                //    picptr+=load->spritewidth-this->width;
-                //}
-            //}
-            //else
-            //    DoInterlace(this, FinChar, transparent);
-            npixels++;
+            load->JustHadClearCode = 1;
         }
         else
         {
@@ -1798,31 +1727,35 @@ stage1:
 
             CurCode = InCode = Code;
 
-            /* If greater or equal to FreeCode, not in the hash table yet;
-             * repeat the last character decoded
-             */
-
-            if (CurCode >= FreeCode)
+            if (!load->JustHadClearCode)
             {
-	        CurCode = OldCode;
-	        if (OutCount > 4096)
-	            return gifError("outcount1 blew up");
-	        load->OutCode[OutCount++] = FinChar;
+
+                /* If greater or equal to FreeCode, not in the hash table yet;
+                 * repeat the last character decoded
+                 */
+
+                if (CurCode >= FreeCode)
+                {
+    	            CurCode = OldCode;
+    	            if (OutCount > 4096)
+    	                return gifError("outcount1 blew up");
+    	            load->OutCode[OutCount++] = FinChar;
+                }
+
+                /* Unless this code is raw data, pursue the chain pointed to by CurCode
+                 * through the hash table to its end; each code in the chain puts its
+                 * associated output code on the output queue.
+                 */
+
+                while (CurCode > BitMask)
+                {
+    	            if (OutCount > 4096) break;   /* corrupt file */
+    	            load->OutCode[OutCount++] = load->Suffix[CurCode];
+    	            CurCode = load->Prefix[CurCode];
+                }
+
+                if (OutCount > 4096) return gifError("outcount blew up");
             }
-
-            /* Unless this code is raw data, pursue the chain pointed to by CurCode
-             * through the hash table to its end; each code in the chain puts its
-             * associated output code on the output queue.
-             */
-
-            while (CurCode > BitMask)
-            {
-	        if (OutCount > 4096) break;   /* corrupt file */
-	        load->OutCode[OutCount++] = load->Suffix[CurCode];
-	        CurCode = load->Prefix[CurCode];
-            }
-
-            if (OutCount > 4096) return gifError("outcount blew up");
 
             /* The last code in the chain is treated as raw data. */
 
@@ -1872,26 +1805,31 @@ stage1:
 
             OutCount = 0;
 
-            /* Build the hash table on-the-fly. No table is stored in the file. */
-
-            load->Prefix[FreeCode] = OldCode;
-            OldCode = InCode;
-            load->Suffix[FreeCode] = FinChar;
-
-            /* Point to the next slot in the table.  If we exceed the current
-             * MaxCode value, increment the code size unless it's already 12.  If it
-             * is, do nothing: the next code decompressed better be CLEAR
-             */
-
-            if (++FreeCode >= MaxCode)
+            if (load->JustHadClearCode)
+                load->JustHadClearCode = 0;
+            else
             {
-	        if (CodeSize < 12)
-	        {
-	            CodeSize++;
-	            MaxCode *= 2;
-	            ReadMask = (1 << CodeSize) - 1;
-	        }
+                /* Build the hash table on-the-fly. No table is stored in the file. */
+
+                load->Prefix[FreeCode] = OldCode;
+                load->Suffix[FreeCode] = FinChar;
+
+                /* Point to the next slot in the table.  If we exceed the current
+                 * MaxCode value, increment the code size unless it's already 12.  If it
+                 * is, do nothing: the next code decompressed better be CLEAR
+                 */
+
+                if (++FreeCode >= MaxCode)
+                {
+    	            if (CodeSize < 12)
+    	            {
+    	                CodeSize++;
+    	                MaxCode *= 2;
+    	                ReadMask = (1 << CodeSize) - 1;
+    	            }
+                }
             }
+            OldCode = InCode;
         }
 stage2:
         Code = gifstream_ReadCode(load, CodeSize, ReadMask);
@@ -2136,6 +2074,6 @@ _kernel_oserror* gifstream_export_sprite(int handle, char* filename)
     if (store[handle]->flags.render_type==Type_InternalLZW)
         e=render_export_sprite(store[handle]->render_handle, filename);
     else e=render_export_animated_sprites(store[handle]->render_handle, filename);
-    
+
     return e;
 }
