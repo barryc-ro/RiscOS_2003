@@ -14,6 +14,7 @@
 # 1999-02-08    SBF		Modified to place crunched BASIC into "crunched" directory
 # 				instead of leaving the object files in the root.  Also
 #				creates directories at build time.
+# 1999-02-12	NCE		Added Printer BASIC prog
 
 
 #
@@ -93,7 +94,7 @@ Daytona   = ${BASEOBJS} ${Applic} ${OM}.FlashCheck ${OM}.Serial ${OM}.bufman ${O
             ${OM}.CheckIC ${OM}.serflash ${OM}.ledtest
 
 STB3      = ${BASEOBJS} ${Applic} ${OM}.serial_lib ${OM}.IRRemote ${OM}.MouseTest \
-            ${OM}.Graphics ${OM}.TestCard ${OM}.CMOS
+            ${OM}.Graphics ${OM}.TestCard ${OM}.CMOS ${OM}.Printer 
             
 OBJS      = ${STB3}
 
@@ -135,6 +136,8 @@ install:
 	${CP} ${TARGET} ${APP}.${TARGET} ${CPFLAGS}
 	${CP} Resources.* ${APP}.* ${CPFLAGS}
 	${CP} ${CRUNCHED}.TestCard ${APP}.TestCard ${CPFLAGS}
+	${CP} ${CRUNCHED}.Printer ${APP}.Printer ${CPFLAGS}
+	${CP} ${CRUNCHED}.Gen_lib ${APP}.Gen_lib ${CPFLAGS}
 	@echo ${COMPONENT}: installed
 
 dirs:
@@ -150,6 +153,8 @@ dirs:
 ${TARGET}: ${OBJS} dirs
         ${LD} -o $@ ${OBJS} ${CLIB}
         ${CRUNCH} ${BFLAGS} @.b.TestCard @.${CRUNCHED}.TestCard
+        ${CRUNCH} ${BFLAGS} @.b.Printer @.${CRUNCHED}.Printer
+        ${CRUNCH} ${BFLAGS} @.b.Gen_lib @.${CRUNCHED}.Gen_Lib
         
            
         
