@@ -153,6 +153,7 @@ clean:
 		$(RM) aof
 		$(RM) linked
 		$(RM) map
+		$(RM) cp
 		$(RM) o
 
 local_dirs:
