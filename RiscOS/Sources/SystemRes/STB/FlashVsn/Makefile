@@ -16,4 +16,7 @@ ASFLAGS  = -pd "FlashVar SETS \"${VAR}\"" -pd "FlashVer SETS \"${VER}\""
 include StdTools
 include AAsmModule
 
+clean::
+	${WIPE} rm
+
 # Dynamic dependencies:
