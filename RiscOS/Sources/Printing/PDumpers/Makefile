@@ -55,6 +55,7 @@ install: ${DUMPERS}
         Set Alias$CPFD $(CP) rm.%0 $(INSTDIR).%0 $(CPFLAGS)
         Set Alias$CPFDL CPFD %0|MAccess $(INSTDIR).%0 LR/r
         |
+        $(MKDIR) $(INSTDIR)
         CPFDL PDumperDM
         CPFDL PDumperIW
         CPFDL PDumperLJ

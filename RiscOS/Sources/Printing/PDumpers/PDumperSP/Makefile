@@ -17,7 +17,7 @@ EXP_HDR = <export$dir>
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = do mkdir -p
 AS      = aasm
 CP      = copy
 RM      = remove
@@ -50,6 +50,7 @@ export: ${EXPORT}
         @echo ${COMPONENT}: export complete
 
 install: ${TARGET}
+        ${MKDIR} ${INSTDIR}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
 	Access ${INSTDIR}.${COMPONENT} LR/r
         @echo ${COMPONENT}: installed (disc)

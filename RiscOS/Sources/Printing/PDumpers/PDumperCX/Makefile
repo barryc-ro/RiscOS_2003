@@ -17,7 +17,7 @@ EXP_HDR = <export$dir>
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = do mkdir -p
 AS      = aasm
 CP      = copy
 RM      = remove
@@ -50,6 +50,7 @@ export: ${EXPORT}
         @echo ${COMPONENT}: export complete
 
 install: ${TARGET}
+        ${MKDIR} ${INSTDIR}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
 	Access ${INSTDIR}.${COMPONENT} LR/r
         @echo ${COMPONENT}: installed (disc)
@@ -66,4 +67,3 @@ ${EXP_HDR}.PDumper: ^.hdr.PDumper
         ${CP} ^.hdr.PDumper $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-rm.PDumperCX: hdr:ListOpts hdr:Macros hdr:System Hdr:SWIs Hdr:CPU.Generic26 Hdr:Machine.<Machine> Hdr:Machine.Machine Hdr:CPU.Generic32 Hdr:IO.GenericIO Hdr:RISCOS hdr:FSNumbers hdr:HighFSI hdr:Modhand hdr:NewErrors hdr:PDriver hdr:PDriverReg hdr:PDumper hdr:PDumperReg hdr:Services hdr:Sprite hdr:ColourTran hdr:Proc hdr:MsgTrans hdr:HostFS hdr:NDRDebug hdr:DDVMacros hdr:HostDebug s.Version ^.VersionASM s.Macros ^.Generic.s.Macros s.Workspace s.BranchCode ^.Generic.s.BranchCode s.24Bit ^.Generic.s.24Bit s.SetDriver ^.Generic.s.SetDriver s.OutputDump ^.Generic.s.OutputDump s.ColourSet ^.Generic.s.ColourSet s.StartPage ^.Generic.s.SendExtra s.EndPage ^.Generic.s.EndPage s.AbortJob ^.Generic.s.AbortJob s.StartJob s.MiscOp ^.Generic.s.MiscOp
