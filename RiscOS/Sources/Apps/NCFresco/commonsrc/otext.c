@@ -47,6 +47,16 @@
 /* An empty text object does not have any padding either. */
 /* This is so the object inserted by <BR> has no effective width */
 
+static struct webfont *getwebfont(antweb_doc *doc, rid_text_item *ti)
+{
+    struct webfont *wf;
+    if (doc->encoding == be_encoding_LATIN1)
+	wf = &webfonts[ti->st.wf_index];
+    else
+	wf = &webfonts[(ti->st.wf_index & WEBFONT_SIZE_MASK) | WEBFONT_JAPANESE];
+    return wf;
+}
+
 void otext_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 {
     rid_text_item_text *tit = (rid_text_item_text *) ti;
@@ -64,7 +74,7 @@ void otext_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 
     str_len = strlen(rh->texts.data + tit->data_off);
 
-    wf = &webfonts[ti->st.wf_index];
+    wf = getwebfont(doc, ti);
 
     font_setfont(wf->handle);
 
@@ -229,8 +239,7 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
 	draw_highlight_box = FALSE;
     }
 #endif
-
-    wf = &webfonts[ti->st.wf_index];
+    wf = getwebfont(doc, ti);
 
     if (fs->lf != wf->handle)
     {
@@ -268,17 +277,9 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
 
     flexmem_noshift();
 
-    {
-	char *s = rh->texts.data + tit->data_off;
-
-	if ( s && *s )
-	    font_paint(s,
-	               font_OSCOORDS + (config_display_blending ? 0x800 : 0),
-	               hpos, b/*,
-	               ti->width + ti->pad*/ );
-
-	no_text = *s == '\0' && ti->pad == 0;
-    }
+    no_text = !render_text(doc, rh->texts.data + tit->data_off, hpos, b);
+    if (ti->pad)
+	no_text = FALSE;
 
     flexmem_shift();
 

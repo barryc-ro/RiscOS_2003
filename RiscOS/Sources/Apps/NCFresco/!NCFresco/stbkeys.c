@@ -35,6 +35,24 @@
 #define kbd_handset_HOME    0x1C7
 #define kbd_handset_PRINT   0x1C8
 
+#define kbd_rca_POWER		0x1C9
+#define kbd_rca_FUNC		0x1CE
+#define kbd_rca_SOUND		0x1CF
+#define kbd_rca_WHO		0x1D0
+#define kbd_rca_RELOAD		0x1D1
+#define kbd_rca_FAV		0x1D2
+#define kbd_rca_SAVE		0x1D3
+#define kbd_rca_GOTO		0x1D4
+#define kbd_rca_SEARCH		0x1D5
+#define kbd_rca_SEND		0x1D6
+#define kbd_rca_MAIL		0x1D7
+#define kbd_rca_INFO		0x1D8
+#define kbd_rca_PAUSE		0x1D9
+#define kbd_rca_REV		0x1DE
+#define kbd_rca_PLAY		0x1DF
+#define kbd_rca_FWD		0x1E0
+#define kbd_rca_REC		0x1E1
+#define kbd_rca_GUIDE		0x1E2
 
 #define key_mode_STB		0
 #define key_mode_MODEL_1	1
@@ -155,6 +173,7 @@ static key_list stb_function_keys[] =
 #define stb_codec_keys		0
 #define stb_resizing_keys	0
 #define stb_toolbar_keys	0
+#define stb_osk_keys		0
 
 /* ------------------------------------------------------------------------------------- */
 
@@ -341,6 +360,7 @@ static key_list nc_movement1_keys[] =
 
 #define nc_toolbar_keys 0
 #define nc_codec_keys	0
+#define nc_osk_keys	0
 
 /* ------------------------------------------------------------------------------------- */
 
@@ -366,7 +386,6 @@ static key_list rca_map_keys[] =
     { 13,               fevent_MAP_SELECT },
 
     { kbd_handset_BACK, fevent_MAP_CANCEL },
-    { kbd_handset_STOP, fevent_MAP_CANCEL },
 
     { 30,		fevent_HOME + fevent_WINDOW },
     { kbd_handset_HOME, fevent_HOME + fevent_WINDOW },
@@ -385,7 +404,6 @@ static key_list rca_menu_keys[] =
     { akbd_RightK,      fevent_MENU_TOGGLE, key_list_CLICK },
 
     { kbd_handset_BACK, fevent_MENU_CANCEL },
-    { kbd_handset_STOP, fevent_MAP_CANCEL },
 
     { 30,		fevent_HOME + fevent_WINDOW },
     { kbd_handset_HOME, fevent_HOME + fevent_WINDOW },
@@ -407,9 +425,18 @@ static key_list rca_web_keys[] =
 
     { kbd_handset_TOOLBAR,          fevent_TOGGLE_STATUS },
     { kbd_handset_OPEN,             fevent_OPEN_URL+fevent_WINDOW },
-    { kbd_handset_STOP,             fevent_CODEC_STOP },
     { kbd_handset_BACK,             fevent_TOOLBAR_EXIT },
     { kbd_handset_FORWARD,          fevent_HISTORY_FORWARD+fevent_WINDOW },
+
+    { kbd_rca_SOUND,		fevent_SOUND_TOGGLE },
+    { kbd_rca_RELOAD,		fevent_RELOAD },
+
+    { kbd_rca_FAV,		fevent_TOOLBAR_FAVS },
+    { kbd_rca_SAVE,		fevent_HOTLIST_ADD },
+    { kbd_rca_GOTO,		fevent_OPEN_URL },
+    { kbd_rca_SEARCH,		fevent_SEARCH_PAGE },
+    { kbd_rca_SEND,		fevent_SEND_URL },
+    { kbd_rca_INFO,		fevent_INFO_PAGE },
 
     { 0 }
 };
@@ -467,6 +494,13 @@ static key_list rca_codec_keys[] =
     { akbd_Sh + akbd_Ctl + akbd_Fn+6, fevent_CODEC_RECORD },
     { akbd_Sh + akbd_Ctl + akbd_Fn+7, fevent_CODEC_MUTE },
 
+    { kbd_handset_STOP, fevent_CODEC_STOP },
+    { kbd_rca_PLAY, fevent_CODEC_PLAY },
+    { kbd_rca_PAUSE, fevent_CODEC_PAUSE },
+    { kbd_rca_REV, fevent_CODEC_REWIND },
+    { kbd_rca_FWD, fevent_CODEC_FAST_FORWARD },
+    { kbd_rca_REC, fevent_CODEC_RECORD },
+
     { 0 }
 };
 
@@ -491,6 +525,11 @@ static key_list rca_toolbar_keys[] =
     { 0 }
 };
 
+static key_list rca_osk_keys[] =
+{
+    { 0 }
+};
+
 /* ------------------------------------------------------------------------------------- */
 
 /* Mode dependant special keys */
@@ -500,7 +539,8 @@ static key_list platform_riscos_keys[] =
     { akbd_Ctl + akbd_Fn+2,		    fevent_CLOSE+fevent_WINDOW },
     { akbd_Sh + akbd_Ctl + akbd_Fn + 1,	    fevent_GLOBAL_TOGGLE_ANTI_TWITTER },
     { akbd_Sh + akbd_Ctl + akbd_Fn11,	    fevent_GLOBAL_OPEN_MEM_DUMP },
-
+    { 27, fevent_TOGGLE_STATUS },
+    
     { 0 }
 };
 
@@ -524,6 +564,7 @@ static key_list platform_trial_keys[] =
 #define key_map_RESIZING	5
 #define key_map_TOOLBAR		6
 #define key_map_WEB		7
+#define key_map_OSK		8
 
 static key_list *get_key_map(int map)
 {
@@ -548,6 +589,8 @@ static key_list *get_key_map(int map)
 	    return stb_toolbar_keys;
 	case key_map_WEB:
 	    return stb_web_keys;
+	case key_map_OSK:
+	    return stb_osk_keys;
 	}
 	break;
 
@@ -570,6 +613,8 @@ static key_list *get_key_map(int map)
 	    return nc_toolbar_keys;
 	case key_map_WEB:
 	    return nc_web_keys;
+	case key_map_OSK:
+	    return nc_osk_keys;
 	}
 	break;
 
@@ -592,6 +637,8 @@ static key_list *get_key_map(int map)
 	    return rca_toolbar_keys;
 	case key_map_WEB:
 	    return rca_web_keys;
+	case key_map_OSK:
+	    return rca_osk_keys;
 	}
 	break;
     }
@@ -639,24 +686,18 @@ void fe_key_handler(fe_view v, wimp_eventstr *e, BOOL use_toolbox, int browser_m
             event = 0;
     }
 
+    if (event == -1 && on_screen_kbd)
+    {
+	event = fe_key_lookup(chcode, get_key_map(key_map_OSK));
+	if (event == -1)
+	    event = 0;
+    }
+    
     if (event == -1 && fe_writeable_handle_keys(v, chcode))
     {
         event = 0;  /* key handled, no event */
     }
 
-#if 0
-    if (event == -1 && (use_toolbox && cs->w == tb_status_w()))
-    {
-        switch (chcode)
-        {
-            case akbd_LeftK:
-            case akbd_RightK:
-                event = 0;
-                break;
-        }
-    }
-#endif
-    
     if (event == -1)
 	event = fe_key_lookup(chcode, get_key_map(key_map_MOVEMENT));
 

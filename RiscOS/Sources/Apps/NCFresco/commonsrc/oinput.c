@@ -424,7 +424,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 		    str = ii->data.str;
 		
 		_swix(Font_Paint, _INR(1,5), str,
-		      (config_display_blending ? 0x800 : 0) + (ii->flags & rid_if_NUMBERS ? (1<<5) : 0),
+		      (ii->flags & rid_if_NUMBERS ? (1<<5) : 0),
 		      plotx * MILIPOINTS_PER_OSUNIT,
 		      bline * MILIPOINTS_PER_OSUNIT,
 		      coords);
@@ -486,8 +486,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	    render_set_font_colours(fs->lfc, bg, doc);
 	}
 
-	font_paint(t, font_OSCOORDS + (config_display_blending ? 0x800 : 0),
-		   hpos + plotx, bline);
+	font_paint(t, font_OSCOORDS + (config_display_blending && ii->data.button.im ? 0x800 : 0), hpos + plotx, bline);
 	break;
     case rid_it_RADIO:
     case rid_it_CHECK:

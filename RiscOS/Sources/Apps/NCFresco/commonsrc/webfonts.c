@@ -36,6 +36,9 @@ static char *webfont_font_name(int n, char *buffer)
 	case WEBFONT_SPECIAL_TYPE_MENU:
 	    strcpy(buffer, "Lucida.Sans");
 	    break;
+	case WEBFONT_SPECIAL_TYPE_JAPANESE:
+	    strcpy(buffer, "HeiBold");
+	    break;
 #endif
 	default:
 	    return NULL;

@@ -234,6 +234,8 @@ extern int nvram_op(const char *tag, int bit_start, int n_bits, int new_val, BOO
     
 #define snd_ERROR		0x0B
 
+#define snd_FIND_FAILED		0x0c
+
 typedef int sound_event_t;
 
 #ifdef STBWEB

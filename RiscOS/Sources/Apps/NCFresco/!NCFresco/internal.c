@@ -509,7 +509,7 @@ void fe_find(fe_view v, const char *text, int backwards, int casesense)
 
     if (v->find_last_item == NULL)
     {
-        bbc_vdu(7);
+        sound_event(snd_FIND_FAILED);
         frontend_complain(makeerror(ERR_FIND_FAILED));
     }
 }

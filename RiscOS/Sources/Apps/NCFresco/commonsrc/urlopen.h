@@ -54,5 +54,6 @@ typedef struct
 
 #define ncfresco_reason_LOAD_DATA	0
 #define ncfresco_reason_DIE		1
+#define ncfresco_reason_READ_CONFIG	2
 
 #endif /* __urlopen_h */

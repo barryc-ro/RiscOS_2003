@@ -583,7 +583,7 @@ NCFRESCO_BUILD_LIBS=	$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1.o \
 			$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/risc_oslib.o \
 			$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/inetlib.o \
 			$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/socklib.o \
-			$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlibzm.o
+			$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlib.o
 
 NCFRESCO_ROM_LIBS=	$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1.o \
 			$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/romcstubs.o \
@@ -603,6 +603,8 @@ NCFRESCO_ROM_CFLAGS=	$(NCFRESCO_PRODUCTION_CFLAGS) -DRISCOS -fa -zM -zps1 -DSTBW
 			-I$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib \
 			-I$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs \
 			-I$(RISCOS_BUILD_EXPORT)/Lib/MemLib \
+			-I$(RISCOS_BUILD_EXPORT)/Lib/WebImage \
+			-I$(RISCOS_BUILD_EXPORT)/C \
 			$(BASE_INCS) -J$(RISCOS_BUILD_EXPORT)/Lib/CLib
 
 NCFRESCO_ROM_LDFLAGS=	
@@ -780,7 +782,7 @@ NCFRESCO_RELEASE: NCFRESCO_BUILD
 
 NCFRESCO_TEST_RUNIMAGE: NCFRESCO_BUILD
 		@echo "Updating NCFresco installation on bungle"
-		@rcp -r abs/ncfresco 'bungle:/export/home/ncd/default/boot/WWW/Dev/\!NCFresco'
+		@rcp -r abs/ncfresco 'bungle:/export/home/ncd/rcadev/Apps/\!NCFresco'
 		@echo "Done"
 		@echo ""
 
@@ -792,7 +794,7 @@ NCFRESCO_TEST_RUNIMAGE_STAMP: NCFRESCO_BUILD
 
 NCFRESCO_TEST:	NCFRESCO_DIST
 		@echo "Installing NCFresco release on bungle"
-		@rcp -r RELEASE/\!NCFresco 'bungle:/export/home/ncd/default/boot/WWW/Dev'
+		@rcp -r RELEASE/\!NCFresco 'bungle:/export/home/ncd/rcadev/Apps/'
 		@echo "Done"
 		@echo ""
 

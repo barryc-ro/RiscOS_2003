@@ -546,8 +546,13 @@ static void codec_event_handler(int event, fe_view v)
 	if (v && v->displaying)
 	    item = v->current_link;
 
-	backend_plugin_action(v->displaying, item, be_plugin_action_ABORT);
+	backend_plugin_action(v->displaying, item, be_plugin_action_CLOSE);
     }
+}
+
+static void encoding_event_handler(int event, fe_view v)
+{
+    fe_encoding(v, event & fevent_ENCODING_MASK);
 }
 
 void fevent_handler(int event, fe_view v)
@@ -616,6 +621,10 @@ void fevent_handler(int event, fe_view v)
 
 	case fevent_FRAME_CLASS_URLS:
 	    url_event_handler(event, v);
+	    break;
+
+	case fevent_FRAME_CLASS_ENCODING:
+	    encoding_event_handler(event, v);
 	    break;
 	}
 	if (event & fevent_UNSTACK_TOOLBAR)

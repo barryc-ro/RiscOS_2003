@@ -488,4 +488,34 @@ int render_caret_colour(be_doc doc, int back, int cursor)
     return h;
 }
 
+int render_text(be_doc doc, const char *text, int x, int y)
+{
+    int flags = font_OSCOORDS;
+    rid_header *rh = doc->rh;
+
+    if (text == NULL || *text == 0)
+	return FALSE;
+    
+    /* do we need font blending? */
+    if (config_display_blending &&
+	(doc->flags & doc_flag_DOC_COLOURS) &&
+	(rh->bgt & rid_bgt_IMAGE) &&
+	rh->tile.im &&
+	(rh->tile.width != 0))
+    {
+	flags |= 1<<11;
+    }
+
+    /* do we need different character set? */
+    if (doc->encoding != be_encoding_LATIN1)
+    {
+	RENDBG(("render_text: set bit 12\n"));
+	flags |= 1<<12;
+    }
+
+    font_paint((char *)text, flags, x, y);
+
+    return TRUE;
+}
+
 /* eof render.c */

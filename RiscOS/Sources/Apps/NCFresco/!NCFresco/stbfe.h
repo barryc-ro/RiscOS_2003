@@ -16,6 +16,9 @@ extern pointermode_t pointer_mode;
 extern BOOL use_toolbox;
 extern int wimp_version;
 
+extern wimp_t on_screen_kbd;
+extern wimp_box on_screen_kbd_pos;
+
 #define TASK_MAGIC	0x4B534154
 
 extern void fe_pointer_mode_update(pointermode_t mode);
@@ -148,6 +151,8 @@ extern void fe_keyboard_open(fe_view v);
 extern os_error *iterate_frames(fe_view top, os_error *(*fn)(fe_view v, void *handle), void *handle);
 
 extern void fe_cursor_movement(fe_view v, int x, int y);
+
+extern int fe_encoding(fe_view v, int encoding);
 
 /* From internal.h */
 

@@ -171,7 +171,14 @@ void be_document_reformat_tail(antweb_doc *doc, rid_text_item *oti, int user_wid
 
 /**********************************************************************/
 
+#ifndef Font_WideFormat
+#define Font_WideFormat	0x400A9
+#endif
+
+/**********************************************************************/
+
 static be_doc document_list = NULL;
+static int encoding_default = be_encoding_LATIN1;
 
 /**********************************************************************/
 
@@ -1360,7 +1367,10 @@ int backend_render_rectangle(wimp_redrawstr *rr, void *h, int update)
     oy += doc->margin.y1;
 #endif
 
-    RENDBG(("Rendering rectangle.  ox=%d, oy=%d.\n", ox, oy));
+    RENDBG(("Rendering rectangle.  ox=%d, oy=%d, encoding=%d.\n", ox, oy, doc->encoding));
+
+    if (doc->encoding != be_encoding_LATIN1)
+	_swix(Font_WideFormat, _IN(0), doc->encoding);
 
     if (rh)
     {
@@ -1383,6 +1393,9 @@ int backend_render_rectangle(wimp_redrawstr *rr, void *h, int update)
 		      left, top, right, bot,
 		      &fs, &rr->g, update);
     }
+
+    if (doc->encoding != be_encoding_LATIN1)
+	_swix(Font_WideFormat, _IN(0), be_encoding_LATIN1);
 
     RENDBG(("Render done\n"));
 
@@ -4303,6 +4316,8 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
 
     if (doc->ph)
     {
+	const char *refresh;
+	
         PPDBG(("Closing parser down\n"));
         doc->rh = ((pparse_details*)doc->pd)->close(doc->ph, doc->cfile);
         doc->ph = NULL;
@@ -4353,9 +4368,30 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
 	/* Override the visability of the caret */
 	frontend_complain(backend_goto_fragment(doc, doc->frag));
 
-	if (doc->rh->refreshtime >= 0)
-	    alarm_set(alarm_timenow()+(doc->rh->refreshtime * 100), be_refresh_document, doc);
+	/* check for a refresh tag */
+	refresh = backend_check_meta(doc, "REFRESH");
+	if (refresh)
+	{
+	    /* New way for new parse_http_header */
+	    static const char *content_tag_list[] = { "URL", 0 };
+	    name_value_pair vals[2];
+	    char *s = strdup(refresh);
 
+    	    parse_http_header(s, content_tag_list, vals, sizeof(vals)/sizeof(vals[0]));
+
+    	    doc->rh->refreshurl = strdup(vals[0].value);
+	    doc->rh->refreshtime = vals[1].name == NULL ? -1 :
+#ifdef STBWEB
+		!strcasecomp(vals[1].name, "ondispose") ? -2 :
+#endif
+		atoi(vals[1].name);
+
+	    mm_free(s);
+	    
+	    if (doc->rh->refreshtime >= 0)
+		alarm_set(alarm_timenow()+(doc->rh->refreshtime * 100), be_refresh_document, doc);
+	}
+	
 	frontend_view_status(doc->parent, sb_status_FINISHED);
     }
     else
@@ -4550,7 +4586,8 @@ extern os_error *backend_open_url(fe_view v, be_doc *docp,
     new->magic = ANTWEB_DOC_MAGIC;
     new->parent = v;
     new->scale_value = config_display_scale_image;
-
+    new->encoding = encoding_default;
+    
     /* new: add the url here */
 /*     new->url = strdup(url); */
 
@@ -5356,7 +5393,9 @@ static void be__plugin_abort_or_action(be_item item, int action)
 	    pp = obj->state.plugin.pp;
     }
     
-    if (action == be_plugin_action_ABORT)
+    if (action == be_plugin_action_CLOSE)
+	plugin_send_close(pp);
+    else if (action == be_plugin_action_ABORT)
 	plugin_send_abort(pp);
     else
 	plugin_send_action(pp, action);
@@ -5468,5 +5507,24 @@ extern be_item backend_locate_id(be_doc doc, const char *id)
     return NULL;
 }
 
+extern int backend_doc_encoding(be_doc doc, int encoding)
+{
+    int old_encoding;
+
+    if (doc == NULL)
+    {
+	old_encoding = encoding_default;
+	if (encoding != be_encoding_READ)
+	    encoding_default = encoding;
+    }
+    else
+    {
+	old_encoding = doc->encoding;
+	if (encoding != be_encoding_READ)
+	    encoding_default = doc->encoding = encoding;
+    }
+
+    return old_encoding;
+}
 
 /* eof backend.c */

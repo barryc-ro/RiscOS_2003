@@ -68,6 +68,8 @@
 #define Window_WimpToToolbox                    0x82884
 #define Gadget_GetHelpMessage                   0x43
 
+#define Menu_GetClickEvent			15
+
 /* --------------------------------------------------------------------------*/
 
 /* Some toolbox headers from OSLib for convenience*/
@@ -690,12 +692,18 @@ static void *sprite_load_tile(const char *suffix)
     strcpy(buffer, "WindowManager:Tile");
     strcat(buffer, suffix);
 
+    STBDBG(("sprite_load_tile: '%s'\n", buffer));
+    
     if ((sprite_area = sprite_load(buffer)) == NULL)
     {
 	strcpy(buffer, PROGRAM_NAME":Tile");
 	strcat(buffer, suffix);
 	sprite_area = sprite_load(buffer);
+
+	STBDBG(("sprite_load_tile: '%s'\n", buffer));
     }
+
+    STBDBG(("sprite_load_tile: returns %p\n", sprite_area));
 
     return sprite_area;
 }
@@ -1105,11 +1113,6 @@ int tb_init(int *m_list, int *wimp_version)
     frontend_fatal_error((os_error *)_swix(Toolbox_CreateObject, _INR(0,1) | _OUT(0), 0, "debugM", &menu_object[1]));
 #endif
 
-    if (config_display_control_initial == 8)
-	tile_sprite = sprite_load_tile(is_a_tv() ? "N" : "V");
-
-    STBDBG(("tb_init():tile sprite %p\n", tile_sprite));
-
     MemCheck_RestoreChecking(checking);
 
     return t;
@@ -1355,6 +1358,21 @@ static void mshow_tools(fe_view v, int obj)
 #endif
 }
 
+static void mshow_encoding(fe_view v, int obj)
+{
+    int encoding = fe_encoding(v, be_encoding_READ);
+    int i;
+
+/*     STBDBG(("mshow_encoding: v %p encoding %d\n", v, encoding)); */
+
+    for (i = 0; i < 4; i++)
+    {
+	int event;
+	_swix(Toolbox_ObjectMiscOp, _INR(0,3) | _OUT(0), 0, obj, Menu_GetClickEvent, i, &event);
+	 mtick(obj, i, (event & fevent_ENCODING_MASK) == encoding);
+    }
+}
+
 #if 0
 static void mshow_mouse(fe_view v, int obj)
 {
@@ -1375,6 +1393,7 @@ static void mshow_ir(fe_view v, int obj)
     mfade(obj, fevent_FIND_AGAIN, !fe_find_again_possible(v));
     mfade(obj, fevent_RELOAD, !fe_reload_possible(v));
 }
+
 #endif
 
 static void mshow__handler(int event, fe_view v, int obj)
@@ -1400,6 +1419,9 @@ static void mshow__handler(int event, fe_view v, int obj)
             break;
         case 0xf06:     /* Tools menu about to be shown*/
             mshow_tools(v, obj);
+            break;
+        case 0xf07:     /* Encoding menu about to be shown*/
+            mshow_encoding(v, obj);
             break;
 #if 0
         case 0xf07:     /* irM about to be shown*/
@@ -1916,6 +1938,11 @@ void tb_status_set_lights(int state)
 
 void tb_status_init(void)
 {
+    if (config_display_control_initial == 8)
+	tile_sprite = sprite_load_tile(is_a_tv() ? "N" : "V");
+
+    STBDBG(("tb_init():tile sprite %p\n", tile_sprite));
+
     tb_bar_init(config_display_control_initial);
 
 /*     if (bar_list) */
@@ -2304,7 +2331,7 @@ static int codec_component[] =
     fevent_CODEC_RECORD
 };
 
-void tb_codec_state_change(int state, BOOL opening)
+void tb_codec_state_change(int state, BOOL opening, BOOL closing)
 {
     if (opening && (bar_list == NULL || bar_list->num != TOOLBAR_CODEC))
 	tb_status_new(NULL, TOOLBAR_CODEC);
@@ -2315,6 +2342,9 @@ void tb_codec_state_change(int state, BOOL opening)
 	
 	for (i = 0; i < sizeof(codec_component)/sizeof(codec_component[0]); i++)
 	    setstate(bar_list->object_handle, codec_component[i], state == i);
+
+	if (closing)
+	    tb_status_unstack();
     }
 }
 

@@ -26,3 +26,5 @@ int render_cell_background_colour(int c);
 
 int render_background( rid_header *rh, be_item ti, be_doc doc );
 int render_caret_colour(be_doc doc, int back, int cursor);
+extern int render_text(be_doc doc, const char *text, int x, int y);
+

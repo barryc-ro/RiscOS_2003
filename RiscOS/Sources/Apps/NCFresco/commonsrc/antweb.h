@@ -147,6 +147,8 @@ typedef struct _antweb_doc {
 
     int threaded;
     int pending_delete;
+
+    int encoding;		/* charset encoding - defined in interface.h */
 } antweb_doc;
 
 #define BASE(doc) ((doc->rh && doc->rh->base) ? doc->rh->base : doc->url)

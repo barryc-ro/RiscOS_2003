@@ -488,6 +488,7 @@ extern void backend_doc_set_scaling(be_doc doc, int scale_value);
 extern BOOL backend_submit_form(be_doc doc, const char *id, int right);
 
 #define be_plugin_action_ABORT		(-1)
+#define be_plugin_action_CLOSE		(-2)
 #define be_plugin_action_item_HELPERS	((be_item)-1)
 #define be_plugin_action_item_ALL	((be_item)0)
 extern void backend_plugin_action(be_doc doc, be_item item, int action);
@@ -501,6 +502,15 @@ extern void backend_plugin_action(be_doc doc, be_item item, int action);
 extern void backend_plugin_info(be_doc doc, void *pp, int *flags, int *state);
 
 extern be_item backend_locate_id(be_doc doc, const char *id);
+
+#define be_encoding_READ	(-1)
+#define be_encoding_LATIN1	0
+#define be_encoding_SJIS	1
+#define be_encoding_JIS		2
+#define be_encoding_UNICODE	8
+#define be_encoding_EUC		9
+
+extern int backend_doc_encoding(be_doc doc, int encoding);
 
 #endif /* __interface_h */
 

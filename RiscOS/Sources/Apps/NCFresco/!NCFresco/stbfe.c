@@ -299,13 +299,15 @@ static pointer_info pointers[] =
     { "ptr_resizew", 16, 0 },
     { "ptr_resizeh", 0, 16 },
     { "ptr_push", 4, 0 },	/* This is meant to be the secure submit cursor */
-    { "ptr_map", 16, 16 }
+    { "ptr_map", 16, 16 },
+    { "ptr_mapp", 16, 16 }	/* pressed map - used when loading new page */
 };
 
 #define fe_pointer_MAP              (1U<<31)
 #define fe_pointer_DRAG             (1U<<30)
 #define fe_pointer_RESIZE_WIDTH     (1U<<29)
 #define fe_pointer_RESIZE_HEIGHT    (1U<<28)
+#define fe_pointer_MAP_PRESS        (1U<<27)
 
 static int fe_get_pointer_number(int item_flags)
 {
@@ -332,6 +334,8 @@ static int fe_get_pointer_number(int item_flags)
         ptr_num = 6;
     else if ((unsigned)item_flags & fe_pointer_RESIZE_HEIGHT)   /* resize h */
         ptr_num = 7;
+    else if ((unsigned)item_flags & fe_pointer_MAP_PRESS)   /* force map for the map mode */
+        ptr_num = 10;
     return ptr_num;
 }
 
@@ -1558,7 +1562,7 @@ int frontend_view_status(fe_view v_orig, int status_type, ...)
 	STBDBG(("stbfe_view_status: pp %p busy %d state %d opening %d closing %d\n", pp, busy, state, opening, closing));
 	
 	if (use_toolbox)
-	    tb_codec_state_change(state, opening);
+	    tb_codec_state_change(state, opening, closing);
 	break;
     }
     }
@@ -2061,6 +2065,8 @@ os_error *fe_handle_enter(fe_view v)
 /*             e = backend_activate_link(v->displaying, v->current_link, 0); */
 
 	    v->current_link = backend_highlight_link(v->displaying, v->current_link, be_link_MOVE_POINTER | be_link_TEXT | be_link_VERT | be_link_CARETISE | be_link_INCLUDE_CURRENT);
+
+	    fe_keyboard_open(v);
 	}
         else
         {
@@ -2093,6 +2099,11 @@ BOOL fe_writeable_handle_keys(fe_view v, int key)
     if (v && v->displaying)
         backend_doc_key(v->displaying, key, &used);
 
+    if (!used && on_screen_kbd)
+    {
+	
+    }
+    
     return used;
 }
 
@@ -4025,23 +4036,25 @@ static void fe_keyboard_set_position(wimp_box *box, wimp_t t)
     tb_status_button(fevent_OPEN_KEYBOARD, TRUE);
 }
 
-static void fe_keyboard__open(fe_view v)
+static void fe_keyboard__open(void)
 {
     char buffer[256];
     int n;
     wimp_box box;
 
-    n = sprintf(buffer, "NCKeyboard %s",
-	    keyboard_state == fe_keyboard_ONLINE ? " -extension browser" : "");
+    if (getenv("Alias$NCKeyBoard"))
+    {
+	n = sprintf(buffer, "NCKeyboard %s",
+		    keyboard_state == fe_keyboard_ONLINE ? " -extension browser" : "");
     
-    tb_status_box(&box);
-    if (config_display_control_top)
-	sprintf(buffer + n, " -scrolldown %d", box.y0/2);
-    else
-	sprintf(buffer + n, " -scrollup %d", box.y1/2);
+	tb_status_box(&box);
+	if (config_display_control_top)
+	    sprintf(buffer + n, " -scrolldown %d", box.y0/2);
+	else
+	    sprintf(buffer + n, " -scrollup %d", box.y1/2);
 
-    fe_start_task(buffer, NULL);
-    NOT_USED(v);
+	fe_start_task(buffer, NULL);
+    }
 }
 
 void fe_keyboard_close(void)
@@ -4063,7 +4076,29 @@ void fe_keyboard_open(fe_view v)
     if (on_screen_kbd)
 	fe_keyboard_close();
     else
-	fe_keyboard__open(v);
+	fe_keyboard__open();
+}
+
+/* ------------------------------------------------------------------------------------------- */
+
+int fe_encoding(fe_view v, int encoding)
+{
+    STBDBG(("fe_encoding: v %p encoding %d\n", v, encoding));
+
+    if (encoding == be_encoding_READ)
+	return backend_doc_encoding(v ? v->displaying : NULL, encoding);
+
+    /* should do this for all frames really */
+    backend_doc_encoding(v ? v->displaying : NULL, encoding);
+
+/*     frontend_view_redraw(v, NULL); */
+    if (v && v->displaying)
+    {
+	backend_reset_width(v->displaying, 0);
+	fe_refresh_window(v->w, NULL);
+    }
+    
+    return 0;
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -4458,6 +4493,10 @@ static void re_read_config(int flags)
     flags = flags;
 }
 
+static void re_read_config_data(int flags, const char *data)
+{
+}
+
 static void fe_handle_service_message(wimp_msgstr *msg)
 {
     os_regset *r = (os_regset *)&msg->data.words[0];
@@ -4766,6 +4805,10 @@ void fe_event_process(void)
 		    usrtrc("die:\n");
                     exit(0);
 		    break;
+
+		case ncfresco_reason_READ_CONFIG:
+		    re_read_config_data(msg->data.words[1], (const char *)&msg->data.words[2]);
+		    break;
 		}
 		break;
 
@@ -4946,6 +4989,9 @@ static int message_codes[] =
     MESSAGE_PLUGIN_URL_NOTIFY,
     MESSAGE_PLUGIN_STATUS,
     MESSAGE_PLUGIN_BUSY,
+    
+    MESSAGE_NCKEYBOARD_WINDOW_SIZE,
+    MESSAGE_NCKEYBOARD_CLOSED,
     
     wimp_MDATAOPEN,
     wimp_MDATALOAD,

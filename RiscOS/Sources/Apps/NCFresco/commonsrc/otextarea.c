@@ -213,9 +213,7 @@ void otextarea_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hp
 	{
 	    if (h - webfonts[WEBFONT_TTY].max_down < g->y1 && h + webfonts[WEBFONT_TTY].max_up > g->y0 )
 		if (tal->text && strlen(tal->text) > tai->sx)
-		    font_paint(tal->text + tai->sx,
-			       font_OSCOORDS + (config_display_blending ? 0x800 : 0),
-			       hpos + 10, h);
+		    font_paint(tal->text + tai->sx, font_OSCOORDS, hpos + 10, h);
 	}
 
 	bbc_gwindow(g->x0, g->y0, g->x1-dx, g->y1-dy);

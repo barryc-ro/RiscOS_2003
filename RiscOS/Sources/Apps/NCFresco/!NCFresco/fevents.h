@@ -19,6 +19,7 @@
 #define fevent_FRAME_CLASS_MASK		    0x0700
 #define fevent_FRAME_CLASS_ACTIONS	    0x0000 /* fevent_SUB_CLASS_MASK */
 #define fevent_FRAME_CLASS_URLS		    0x0100 /* 256 URLs */
+#define fevent_FRAME_CLASS_ENCODING	    0x0200 /* 256 encodings */
 
 #define fevent_SUB_CLASS_MASK               0x00f0
 #define fevent_SUB_CLASS_TOGGLE             0x0000
@@ -185,6 +186,7 @@
 #define fevent_TOOLBAR_ACTIVATE		    0x20D4
 
 #define fevent_URLS_MASK	            0x00ff
+#define fevent_ENCODING_MASK	            0x00ff
 
 /* menu events */
 #define fevent_MENU_UP                      (fevent_CLASS_MENU + 0x001)

@@ -43,9 +43,7 @@ static char char_decode[256];
 
 /*****************************************************************************/
 
-#if DEBUG
-#define DEBUG_STACK 1
-#endif
+#define DEBUG_STACK DEBUG
 
 #if DEBUG
 

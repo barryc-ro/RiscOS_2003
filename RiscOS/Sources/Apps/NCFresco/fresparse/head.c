@@ -125,36 +125,10 @@ extern void startscript (SGMLCTX * context, ELEMENT * element, VALUES * attribut
 extern void startmeta (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 {
     HTMLCTX *me = htmlctxof(context);
-    rid_header *rh;
 
     generic_start (context, element, attributes);
 
-    rh = me->rh;
-
-    /* If a known HTTP-EQUIV type then handle specially else add to list */
-    if ( attributes->value[HTML_META_HTTP_EQUIV].type == value_enum )
-    {
-        if ( attributes->value[HTML_META_CONTENT].type == value_string &&
-    	    attributes->value[HTML_META_HTTP_EQUIV].u.i == HTML_META_HTTP_EQUIV_REFRESH )
-        {
-	    /* New way for new parse_http_header */
-	    static const char *content_tag_list[] = { "URL", 0 };
-    	    char *s;
-	    name_value_pair vals[2];
-
-	    s = stringdup(attributes->value[HTML_META_CONTENT].u.s);
-
-    	    parse_http_header(s, content_tag_list, vals, sizeof(vals)/sizeof(vals[0]));
-
-    	    rh->refreshurl = strdup(vals[0].value);
-	    rh->refreshtime = vals[1].name == NULL ? -1 :
-		!strcasecomp(vals[1].name, "ondispose") ? -2 :
-		atoi(vals[1].name);
-
-    	    mm_free(s);
-    	}
-    }
-    else if ( attributes->value[HTML_META_NAME].type == value_string ||
+    if ( attributes->value[HTML_META_NAME].type == value_string ||
         attributes->value[HTML_META_HTTP_EQUIV].type == value_string )
     {
 	rid_meta_item *m = mm_calloc(sizeof(rid_meta_item), 1);
@@ -162,7 +136,7 @@ extern void startmeta (SGMLCTX * context, ELEMENT * element, VALUES * attributes
 	m->name = valuestringdup(&attributes->value[HTML_META_NAME]);
 	m->httpequiv = valuestringdup(&attributes->value[HTML_META_HTTP_EQUIV]);
 	m->content = valuestringdup(&attributes->value[HTML_META_CONTENT]);
-	rid_meta_connect(rh, m);
+	rid_meta_connect(me->rh, m);
     }
 }
 

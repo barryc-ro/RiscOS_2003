@@ -10,6 +10,7 @@ typedef struct plugin_private *plugin;
 extern plugin plugin_new(struct rid_object_item *obj, be_doc doc, be_item ti);
 extern void plugin_destroy(plugin pp);
 extern int plugin_send_open(plugin pp, wimp_box *box, int open_flags);
+extern int plugin_send_close(plugin pp);
 extern int plugin_send_reshape(plugin pp, wimp_box *box);
 extern int plugin_send_focus(plugin pp);
 extern int plugin_send_action(plugin pp, int action);
