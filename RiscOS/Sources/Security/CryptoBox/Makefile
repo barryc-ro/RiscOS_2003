@@ -53,16 +53,14 @@ DFLAGS    = -DRISCOS -DPKCS11 -D_ACORN
 #
 # Program specific options:
 #
-COMPONENT  = cryptolib
-TARGET     = ${COMPONENT}
+COMPONENT  = CryptoBox
+TARGET     = aof.${COMPONENT}
 SOURCE     = 
 EXPORTS    = 
+LIB        = CryptoLib
 
 OBJS = pkcs11.o rsa_id2.o
-
 HDRS = pkcs11.h pkcs11f.h pkcs11t.h rsa_id2.h
-
-LIBS = ${TARGET}
 
 #
 # Rule patterns
@@ -74,7 +72,7 @@ LIBS = ${TARGET}
 #
 # build a the library:
 #
-all:	${LIBS}
+all:	${LIB} ${TARGET}
 
 #
 # RISC OS ROM build rules:
@@ -88,35 +86,45 @@ install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
 clean:
-        ${WIPE} o.* ${WFLAGS}
-        ${RM} ${COMPONENT}
+        ${WIPE} o ${WFLAGS}
+        ${RM} ${LIB}
         @echo ${COMPONENT}: cleaned
 
-export_hdrs: ${HDRS} dirs
+export_hdrs: ${HDRS} export_dirs
 	${CP} h.pkcs11 ${CRYPTOLIBDIR}.h.* ${CPFLAGS}
 	${CP} h.pkcs11t ${CRYPTOLIBDIR}.h.* ${CPFLAGS}
 	${CP} h.pkcs11f ${CRYPTOLIBDIR}.h.* ${CPFLAGS}
 	${CP} h.rsa_id2 ${CRYPTOLIBDIR}.h.* ${CPFLAGS}
 	@echo ${COMPONENT}: export complete (hdrs)
 
-export_libs: ${LIBS} dirs
-	${CP} ${TARGET}  ${CRYPTOLIBDIR}.o.* ${CPFLAGS}
+export_libs: ${LIB} export_dirs
+	${CP} ${LIB}  ${CRYPTOLIBDIR}.o.* ${CPFLAGS}
         @echo ${COMPONENT}: export complete (libs)
 
 local_dirs:
 	${MKDIR} o
 
-dirs:
+export_dirs:
         ${MKDIR} ${LIBDIR}
         ${MKDIR} ${CRYPTOLIBDIR}
         ${MKDIR} ${CRYPTOLIBDIR}.h
         ${MKDIR} ${CRYPTOLIBDIR}.o
 
+dirs:
+	${MKDIR} linked
+	${MKDIR} map
+
 #
-# Final link
+# Final link for the ROM Image (using given base address)
 #
-${TARGET}: ${OBJS} local_dirs
-        ${LB} ${LBFLAGS} -o ${COMPONENT} ${OBJS}
+rom_link: dirs
+        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
+        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: rom_link complete
+
+${LIB}: ${OBJS} local_dirs
+        ${LB} ${LBFLAGS} -o ${LIB} ${OBJS}
 
 # Dynamic dependencies:
 o.pkcs11:	c.pkcs11
