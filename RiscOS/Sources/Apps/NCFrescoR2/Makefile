@@ -32,7 +32,7 @@ WFLAGS  = ~CFR~V
 #
 # Program specific options:
 #
-COMPONENT ?= NCFresco
+COMPONENT ?= NCFresco2
 TARGET    ?= NCFresco
 
 ABSSYM    = RISC_OSLib:o.c_abssym
@@ -190,18 +190,18 @@ export_WebFTP:
 rom_link: rom_link_${TARGET}
 
 rom_link_NCFresco: dirs
-        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} aof.ncfre-${TYPE} ${ABSSYM}
-        ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
+        ${LD} -o linked.${TARGET} -rmf -base ${ADDRESS} aof.ncfre-${TYPE} ${ABSSYM}
+        ${CP} linked.${TARGET} ${LINKDIR}.${TARGET} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link for ${TYPE} build complete
 
 rom_link_HTTP: dirs
-        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} aof.HTTP${TYPE} ${ABSSYM}
-        ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
+        ${LD} -o linked.${TARGET} -rmf -base ${ADDRESS} aof.HTTP${TYPE} ${ABSSYM}
+        ${CP} linked.${TARGET} ${LINKDIR}.${TARGET} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link for ${TYPE} build complete
 
 rom_link_WebFTP: dirs
-        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} aof.WebFTP ${ABSSYM}
-        ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
+        ${LD} -o linked.${TARGET} -rmf -base ${ADDRESS} aof.WebFTP ${ABSSYM}
+        ${CP} linked.${TARGET} ${LINKDIR}.${TARGET} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
 dirs:
