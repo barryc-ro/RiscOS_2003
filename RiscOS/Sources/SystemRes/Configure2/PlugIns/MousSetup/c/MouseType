@@ -1,0 +1,150 @@
+/******	MouseType.c *******************************************************\
+
+Project:	Ursula (RISC OS for Risc PC II)
+Component:	Mouse configuration plug-in
+This file:	Mouse driver routines
+
+History:
+Date		Who	Change
+----------------------------------------------------------------------------
+09/12/1997	BJGA	Added these headers
+
+\**************************************************************************/
+
+/* Clib */
+#include <stdio.h>
+#include <string.h>
+#include "swis.h"
+/* Toolbox */
+#include "wimplib.h"
+/* Common */
+#include "cmos.h"
+#include "message.h"
+/* Local headers */
+#include "Main.h"
+#include "MouseType.h"  /* includes prototypes for this file */
+#include "Settings.h"
+
+/* Statics */
+
+typedef struct pvr    {	struct pvr *next;
+			unsigned int flags;
+			unsigned char pointer_type;
+			char name [30]; } pointerv_record;
+
+static pointerv_record *pointer_list = NULL;
+
+static pointerv_record *get_pointer_list (void);
+static void free_pointer_list (void);
+
+/******	get_pointer_list() ************************************************\
+
+Purpose:	Tells each mouse driver to add a record to the PointerV
+		linked list; records are allocated from RMA
+Out:		Pointer to most recently-added record
+
+\**************************************************************************/
+
+static pointerv_record *get_pointer_list (void)
+{
+  if (pointer_list != NULL) free_pointer_list ();
+  return pointer_list = (pointerv_record *) _swi (OS_CallAVector, _INR(0,1)|_IN(9)|_RETURN(1), 1, 0, 0x26);
+}
+
+/******	free_pointer_list() ***********************************************\
+
+Purpose:	Frees each record in the PointerV linked list from RMA
+
+\**************************************************************************/
+
+static void free_pointer_list (void)
+{
+  while (pointer_list != NULL) {
+    pointerv_record *next = pointer_list->next;
+    _swi (OS_Module, _IN(0)|_IN(2), 7, (int) pointer_list);
+    pointer_list = next;
+  }
+}
+
+/* Externs */
+
+/******	mousetype_getavailable() ******************************************\
+
+Purpose:	Builds a comma-separated list of available mouse drivers
+In:		Buffer to place result in (assumed large enough)
+Out:		CRC of result
+
+\**************************************************************************/
+
+int mousetype_getavailable (char *buffer)
+{
+  pointerv_record *p = get_pointer_list ();
+  if (p == NULL) strcpy (buffer, message_lookup_direct(messages,"NoneAvail"));
+  while (p) {
+    strcat (buffer, p->name);
+    p = p->next;
+    if (p) strcat (buffer, ",");
+  }
+  free_pointer_list ();
+  return _swi (OS_CRC, _INR(0,3)|_RETURN(0), 0, (int) buffer, (int) buffer + strlen (buffer), 1);
+}
+
+/******	mousetype_get() ***************************************************\
+
+Purpose:	Reads the current / default mouse driver
+In:		Function to use to determine CMOS value
+		  (cmos_get or cmos_default)
+Out:		Pointer to string from RMA
+		  (has just been deallocated, so this is potentially dodgy)
+		  or "Mystery" message token, if none match
+
+\**************************************************************************/
+
+char *mousetype_get (int(get)(cmos item, void *messages))
+{
+  char *result = message_lookup_direct(messages,"Mystery");
+  pointerv_record *p = get_pointer_list ();
+  unsigned char cmosvalue = (unsigned char) get (MouseType, &messages);
+  while (p) {
+    if (p->pointer_type == cmosvalue) result = p->name;
+    p = p->next;
+  }
+  free_pointer_list ();
+  return result;
+}
+
+/******	mousetype_set() ***************************************************\
+
+Purpose:	Sets the current and configured mouse driver,
+		  generating an warning if necessary
+In:		Pointer to string
+Out:		Pointer to string from RMA
+		  (has just been deallocated, so this is potentially dodgy)
+		  or "Mystery" message token, if none match
+
+\**************************************************************************/
+
+int mousetype_set (char *value)
+{
+  pointerv_record *p = get_pointer_list ();
+  unsigned char newcmosvalue = 0xFF, oldcmosvalue = (unsigned char) cmos_read (MouseType, NULL);
+  while (p) {
+    if (strcmp (p->name, value) == 0) newcmosvalue = p->pointer_type;
+    p = p->next;
+  }
+  free_pointer_list ();
+  if ((newcmosvalue != oldcmosvalue) && (newcmosvalue != 0xFF)) {
+    _kernel_oserror e = { 0, "" };
+    int button;
+    sprintf (e.errmess, message_lookup_direct(messages,"NewType"), value);
+    button = wimp_report_error (&e,
+      Wimp_ReportError_OK | Wimp_ReportError_Cancel | 1u << 8 | 4u << 9,
+      message_lookup_direct(messages,"_TaskName"),
+      message_lookup_direct(messages,"_ConfigSprite"), (void *) 1, NULL);
+    if (button != 1) return 2; /* "Cancel" was clicked on error box */
+    cmos_write (MouseType, newcmosvalue);
+  }
+  _swi (OS_Pointer, _INR(0,1), 1, (int) newcmosvalue);
+    /* Performed unconditionally to compensate for OS_Pointer possibly having been called independently */
+  return 1; /* As though "Continue" were clicked on error box */
+}
