@@ -61,6 +61,7 @@ OBJS =\
  InetHdr.o\
  poduleirq.o\
  kern_subr.o\
+ kern_mib.o\
  sysctl.o\
  sys_socket.o\
  uipc_mbuf.o\
@@ -125,8 +126,8 @@ all: ${TARGET}
 	@echo ${COMPONENT}: Module built (Relocatable)
 
 ${TARGET}: ${OBJS} ${CLIB}
-        ${LD} -rmf -o $@ ${OBJS} ${CLIB}
-        ${MODSQZ} $@
+        ${LD} -c++ -rmf -o $@ ${OBJS} ${CLIB}
+        |${MODSQZ} $@
         Access $@ WR/r
 
 rom: ${ROM_MODULE}
@@ -149,7 +150,7 @@ clean:
         @echo ${COMPONENT}: cleaned
 
 ${ROM_MODULE}: ${OBJS} ${ROMCSTUBS}
-        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
+        ${LD} -c++ -o $@ -aof ${OBJS} ${ROMCSTUBS}
 
 o.socket_swi: InetHdr.h
 
