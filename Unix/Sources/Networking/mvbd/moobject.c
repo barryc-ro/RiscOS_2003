@@ -357,11 +357,11 @@ void multicaster_run(multicaster_object *mo)
                                 new_delay = (old_delay + old_delay * adjust);
                                 current_delay = (unsigned long) (new_delay + 0.5);
 
-                                platform_log(LOG_INFO,
+                                platform_debug((LOG_INFO,
                                         "tick(%d/%.0f); usecs %lu; bit ratio: %f; "
                                         "old_delay: %f; new_delay: %f (%f); ppl:%2d ",
                                         packet_count * (mo->size_of_buffer) * 8, bits_expected, usec_lap,
-                                        ratio, old_delay, new_delay, adjust, packets_per_loop);
+                                        ratio, old_delay, new_delay, adjust, packets_per_loop));
 
                                 platform_debug((LOG_DEBUG,
                                         "tick(%3d/%3d); usec is %lu; ratio is %f; "
