@@ -1,102 +1,154 @@
-CC =		cc
-LD = 		Link
-ASM =	 	ObjAsm
-CMHG =	 	CMHG
-LB =		LibFile
-RM =		Remove
-WIPE =		-Wipe
+# Makefile for debuglib
+#
+# *****************************************
+# ***       C h a n g e   L i s t       ***
+# *****************************************
+# Date		Name		Description
+# ----		----		-----------
+# 1997-10-07	BAL		Created
 
-#CFLAGS =	-c -depend !Depend -Itbox:,C: -zo -zps1 -ffah -throwback
-CFLAGS =	-c -depend !Depend -Itbox:,C: -UNOSOCKETS -zo -zps1 -ffah -throwback
-CPPFLAGS = 	-c -depend !Depend -IC: -throwback
-LDFLAGS	= 	-aif -c++
-LBFLAGS =	-c
-ASMFLAGS =	-throwback -NoCache -depend !Depend
-CMHGFLAGS = 	-depend !Depend -throwback -IC:
-WIPEFLAGS =	~C~V
 
-TARGET = 	Targets.DebugLib
+# ------------------------------------------------------------------------------
+# Paths
+#
 
-OBJECTS	= 	o.debug o.inits o.quits o.output
+EXP_HDR		= <export$dir>
+LIBDIR		= <Lib$Dir>
+EXPORT_DIR	= <Lib$Dir>.DebugLib
 
-#LIBS =		libs.pd_pl libs.svcprint libs.t_m_pl libs.t_pl
-LIBS =		libs.pd_pl libs.svcprint libs.t_m_pl libs.t_pl libs.remote
 
-.SUFFIXES:	.o .c
-.c.o:;		$(CC) $(CFLAGS) -o $@ $<
+# ------------------------------------------------------------------------------
+# Generic options
+#
 
-all: $(TARGET)
+MKDIR		= cdir
+AS		= objasm
+CP		= copy
+CC		= cc
+CM		= cmhg
+RM		= remove
+LD		= link
+LB		= libfile
+WIPE		= -wipe
+
+CCFLAGS		= -c -depend !Depend -ffah ${INCLUDES} ${DFLAGS}
+ASFLAGS		= -depend !Depend -Stamp -quit
+CPFLAGS		= ~clfnr~v
+LBFLAGS		= -c
+WFLAGS		= ~CFR~V
+
+
+# ------------------------------------------------------------------------------
+# Libraries
+#
+
+CLIB		= CLIB:o.stubs
+RLIB		= RISCOSLIB:o.risc_oslib
+RSTUBS		= RISCOSLIB:o.rstubs
+ROMSTUBS	= RISCOSLIB:o.romstubs
+ROMCSTUBS	= RISCOSLIB:o.romcstubs
+ABSSYM		= RISC_OSLib:o.AbsSym
+
+
+# ------------------------------------------------------------------------------
+# Include files
+#
+
+INCLUDES	= -Itbox:,C:
+DFLAGS		= 
+
+
+# ------------------------------------------------------------------------------
+# Program specific options:
+#
+
+COMPONENT	= debuglib
+TARGET		= debuglib
+TARGETZ		= debuglibzm
+EXPORTS		= ${EXP_HDR}.${COMPONENT}
+
+OBJS		= o.debug o.inits o.quits o.output
+
+OBJSZ		= z.debug z.inits z.quits z.output
+
+LIBS		= libs.pd_pl libs.svcprint libs.t_pl libs.lremote
+
+LIBSZ		= libs.pd_m_pl libs.svcprint libs.t_m_pl libs.lremotezm
+
+# ------------------------------------------------------------------------------
+# Rule patterns
+#
+
+.SUFFIXES: .o .z .s .h .c
+.c.o:;     ${CC} ${CCFLAGS} -o $@ $<
+.c.z:;     ${CC} ${CCFLAGS} -zm -zps1 -o $@ $<
+.s.o:;     ${AS} ${ASFLAGS} -o $@ $<
+
+
+# ------------------------------------------------------------------------------
+# Build all the library
+#
+
+all:	${TARGET}
+
+
+# ------------------------------------------------------------------------------
+# RISC OS ROM build rules
+#
+
+export: export_${PHASE}
+
+install_rom: ${TARGET}
+	${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+	@echo ${COMPONENT}: rom module installed
 
 clean:
-	$(RM)	$(TARGET)
-	$(WIPE)	o.*		$(WIPEFLAGS)
+	${WIPE} o ${WFLAGS}
+	${WIPE} z ${WFLAGS}
+	${RM} ${TARGET}
+	${RM} ${TARGETZ}
+	@echo ${COMPONENT}: cleaned
 
-$(TARGET): $(OBJECTS)
-	$(LB) $(LBFLAGS) -o $@ $(OBJECTS) $(LIBS)
+export_hdrs: h.debuglib dirs
+	${CP}	h.debuglib	${EXPORT_DIR}.h.debuglib ${CPFLAGS}
+	@echo ${COMPONENT}: export complete (hdrs)
 
+export_libs: ${TARGET} ${TARGETZ} dirs
+	${CP}	${TARGET}	${EXPORT_DIR}.o.${TARGET}	${CPFLAGS}
+	${CP}	${TARGETZ}	${EXPORT_DIR}.o.${TARGETZ}	${CPFLAGS}
+	@echo ${COMPONENT}: export complete (libs)
+
+local_dirs:
+	${MKDIR} o
+	${MKDIR} z
+
+dirs:
+	${MKDIR} ${LIBDIR}
+	${MKDIR} ${EXPORT_DIR}
+	${MKDIR} ${EXPORT_DIR}.h
+	${MKDIR} ${EXPORT_DIR}.o
+	${MKDIR} ${EXPORT_DIR}.z
+        
+
+# ------------------------------------------------------------------------------
+# Final link
+#
+
+${TARGET}: ${OBJS} local_dirs
+	${LD} ${LNFLAGS} -o ${TARGET} -aof ${OBJS} ${LIBS}
+
+${TARGETZ}: ${OBJSZ} local_dirs
+	${LD} ${LNFLAGS} -o ${TARGETZ} -aof ${OBJSZ} ${LIBSZ}
+
+#${TARGET}: ${OBJS} local_dirs
+#	${LB} ${LBFLAGS} -l -o ${TARGET} ${OBJS} ${LIBS}
+        
+#${TARGETZ}: ${OBJSZ} local_dirs
+#	${LB} ${LBFLAGS} -l -o ${TARGETZ} ${OBJSZ} ${LIBSZ}
+
+${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
+	${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
+
+
+# ------------------------------------------------------------------------------
 # Dynamic dependencies:
-o.debug:	c.debug
-o.debug:	h.include
-o.debug:	tbox:h.toolbox
-o.debug:	C:h.kernel
-o.debug:	tbox:h.wimp
-o.debug:	tbox:h.wimp
-o.debug:	tbox:h.wimplib
-o.debug:	C:h.kernel
-o.debug:	C:h.swis
-o.debug:	h.svcprint
-o.debug:	h.PDebug
-o.debug:	h.Trace
-o.debug:	h.remote
-o.debug:	h.debug
-o.debug:	h.inits
-o.debug:	h.output
-o.debug:	h.quits
-o.debug:	h.globals
-o.inits:	c.inits
-o.inits:	h.include
-o.inits:	tbox:h.toolbox
-o.inits:	C:h.kernel
-o.inits:	tbox:h.wimp
-o.inits:	tbox:h.wimp
-o.inits:	tbox:h.wimplib
-o.inits:	C:h.kernel
-o.inits:	C:h.swis
-o.inits:	h.svcprint
-o.inits:	h.PDebug
-o.inits:	h.Trace
-o.inits:	h.remote
-o.inits:	h.output
-o.inits:	h.inits
-o.inits:	h.globals
-o.quits:	c.quits
-o.quits:	h.include
-o.quits:	tbox:h.toolbox
-o.quits:	C:h.kernel
-o.quits:	tbox:h.wimp
-o.quits:	tbox:h.wimp
-o.quits:	tbox:h.wimplib
-o.quits:	C:h.kernel
-o.quits:	C:h.swis
-o.quits:	h.svcprint
-o.quits:	h.PDebug
-o.quits:	h.Trace
-o.quits:	h.remote
-o.quits:	h.quits
-o.quits:	h.globals
-o.output:	c.output
-o.output:	h.include
-o.output:	tbox:h.toolbox
-o.output:	C:h.kernel
-o.output:	tbox:h.wimp
-o.output:	tbox:h.wimp
-o.output:	tbox:h.wimplib
-o.output:	C:h.kernel
-o.output:	C:h.swis
-o.output:	h.svcprint
-o.output:	h.PDebug
-o.output:	h.Trace
-o.output:	h.remote
-o.output:	h.output
-o.output:	h.debug
-o.output:	h.globals
