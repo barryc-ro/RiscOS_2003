@@ -169,6 +169,46 @@ Source::calculatePosAckSequence(Server *server)
         } // if free blocks
     return result;        
 }
+
+int          
+Source::calculatePosNAKSequence(Server *server)
+{
+  // this method could possibly be called in interrupt mode so don't change anything just read
+        MemBlock *mb;
+        //unsigned int t;
+        int naks_sent = 0; 
+        int dgm, min_val, max_val;	// nak calcs
+        
+        int result = !ErrorExists();
+        
+        //(void) _swix(OS_ReadMonotonicTime, _OUT(0), &t);
+        
+         for (int i = 0; ( (i < max_blocks)&&(result != ErrorOccurred) ); i++) {
+                mb = getBlock(i);
+                
+	       if ((mb->inuse)&&(!mb->completed)&&(mb->pending_nak)) {
+	         	if ( (mb->block_id != 0)&&(mb->block_id <= max_block_received) ){
+                	  		dgm = 0;                 	  	                 	  	
+                 			while ((dgm < mb->dgrams_in_block)&&(result != ErrorOccurred)){
+                 		  		while ((mb->nec_block.iov[dgm].iov_base != NULL)&&(dgm < mb->dgrams_in_block)) dgm++;
+                 		  		
+                 		  		min_val = dgm;
+                 		  	
+                 		  		while ((mb->nec_block.iov[dgm].iov_base == NULL)&&(dgm < mb->dgrams_in_block)) dgm++;
+                 		  			
+                 		  		max_val = dgm - 1;
+
+                 		  		if (min_val <= max_val){
+                 		  		  naks_sent++;
+                 		  		  result = server->SendNak(mb->block_id, min_val, mb->block_id, max_val);
+                 		  		}
+                 		  		
+                 		  	}// while datagrams
+       		        }
+               }
+         }// for loop
+	return result;
+}
 //
 // Determine the size of a MemBlock structure given the maximum size of the s/g array
 //
@@ -610,88 +650,36 @@ int Source::backgroundExecute(int *callback_flags, Server *server, int *full_blo
 //
 int Source::foregroundExecute(int *callback_flags, Server *server, int *full_blocks)
 {
-        // Firstly, process incoming data
-
-        // Read datagrams until no data left
-
-        // Secondly, check blocks requiring NAKs to be generation
-        // Thirdly, check blocks which can be ACKed.
-        int i, size;
-        unsigned int t;
-        int dgrams_read = max_datagram_read;
-        int dgm, min_val, max_val;	// nak calcs
-        int naks_sent = 0; 
-        MemBlock *mb;
+        int size;
+        int dgrams_read = max_datagram_read;	// greedy calculation
         
         int result = !ErrorExists();
                
-        (void) _swix(OS_ReadMonotonicTime, _OUT(0), &t);
-        
-         //	Added by AR as it seems that no data is ever read
-         size = 1;
-         while (( size > 0)&&(result != ErrorOccurred)){
+        size = 1;
+         
+        while (( size > 0)&&(result != ErrorOccurred)){
            
-           result = memReadDatagram(&size, server, t);
+        	result = memReadDatagram(&size, server);
            
-#ifdef DEBUG
-           if ( (result == ErrorOccurred)&&(ErrorNum() == TCP_ReadFail) ){
-             	Debug("UDP: read fail\n");
-          }
-#endif
-           if (--dgrams_read < 0) { // time greedy timer
-          	(*callback_flags) = 1; 	// set callback;
-           	break;
-           }
-         }// end while
-          
-         for (i = 0; ( (i < max_blocks)&&(result != ErrorOccurred) ); i++) {
-                mb = getBlock(i);
-                
+           	if (--dgrams_read < 0) { 	// have we read out quota
+          		(*callback_flags) = 1; 	// set callback;
+           		break;
+           	}
+         }
+         
+         // free blocks
+         for (int i = 0; ( (i < max_blocks)&&(result != ErrorOccurred)); i++) {
+                MemBlock *mb = getBlock(i);
                 if (mb->to_be_freed != 0)
                 	freeBlock_background(mb);
-#ifdef DEBUG               
-               //Debug("block (%i)(%i)[%i])",// naks = %i, dg rec = %i, max blk = %i",
-              //	 mb->completed!=0, mb->inuse!=0, mb->block_id);//, mb->pending_nak!=0,  mb->dgrams_received, max_block_received);
-#endif               	
-	       if ((mb->inuse)&&(!mb->completed)&&(mb->pending_nak)) {
-	         if ( (mb->block_id != 0)&&(mb->block_id <= max_block_received) ){
-                	  		dgm = 0;                 	  	                 	  	
-                 			while ((dgm < mb->dgrams_in_block)&&(result != ErrorOccurred)){
-                 		  		while ((mb->nec_block.iov[dgm].iov_base != NULL)&&(dgm < mb->dgrams_in_block)) dgm++;
-                 		  		
-                 		  		min_val = dgm;
-                 		  	
-                 		  		while ((mb->nec_block.iov[dgm].iov_base == NULL)&&(dgm < mb->dgrams_in_block)) dgm++;
-                 		  			
-                 		  		max_val = dgm - 1;
-                 		  		if (min_val <= max_val){
-#ifdef DEBUG                 		  		  
-                 		  		  //Debug("sending NAK [%i][%i] to [%i][%i] max blk = %i", mb->block_id, min_val,
-                 		  		  //	 mb->block_id, max_val,  max_block_received);
-#endif
-                 		  		  naks_sent++;
-                 		  		  result = server->SendNak(mb->block_id, min_val, mb->block_id, max_val);
-                 		  		}
-                 		  	}// while datagrams
-                 		  	//Debug("--\n");
-                 			mb->last_nak = t;
-       		        }
-               }
-         }// for loop
+         }
+         
          // ack calc
          result = calculatePosAckSequence(server);
          
          (*full_blocks) = (int)(max_completed_block - last_block_sent);
-         /*
-         if ((naks_sent)||(server->getMaxRequestedBlock() != max_completed_block))
-         	(*callback_flags = 1);
-         else {
-           	(*callback_flags = 0);
-         	Debug("full and waiting");	// no need to set callback
-         }
-         */
-         (*callback_flags) = 0;
-	return result;
+
+	 return result;
 }
 
 //
@@ -913,7 +901,7 @@ int Source::memFreeDatagram(const NECDatagram *dgram)
 // Errors: TCP_ReadFail, VSP_Alloc
 //
 //
-int Source::memReadDatagram(int *size, Server *tcp_link, unsigned int time)
+int Source::memReadDatagram(int *size, Server *tcp_link)
 {
         int r;
         NECDatagram *dgram;
@@ -985,7 +973,7 @@ int Source::memReadDatagram(int *size, Server *tcp_link, unsigned int time)
                   //Debug("dgram [%i][%i] size = %i", dgram->block_number, dgram->dgram_seq, dgram->dgram_size);
 #endif                  
                         // OK - try and associate it with a block
-                        r = linkDatagramToBlock(dgram, tcp_link, time);
+                        r = linkDatagramToBlock(dgram, tcp_link);
                 }
         }
         return r;
@@ -999,7 +987,7 @@ int Source::memReadDatagram(int *size, Server *tcp_link, unsigned int time)
 //
 // Errors: VSP_Alloc: no free block buffers, or packet was duplicate.
 //
-int Source::linkDatagramToBlock(NECDatagram *dgram, Server *tcp_link, unsigned int time)
+int Source::linkDatagramToBlock(NECDatagram *dgram, Server *tcp_link)
 {
          int i;
          size_t free_buffers;
@@ -1042,6 +1030,7 @@ int Source::linkDatagramToBlock(NECDatagram *dgram, Server *tcp_link, unsigned i
       			  		mb->completed = 1;
 			  		mb->pending_nak = 0;	// denote deleted block
 			  		calculateMaxCompleteBlock();
+			  		calculatePosNAKSequence(tcp_link);
                	                } 
                	                else {
                				if (linkDatagramToBlock(dgram, mb, tcp_link) == ErrorOccurred)
@@ -1052,6 +1041,7 @@ int Source::linkDatagramToBlock(NECDatagram *dgram, Server *tcp_link, unsigned i
 			  				mb->pending_nak = 0;
 			  				mb->dgrams_nakd = 0;
 			  				calculateMaxCompleteBlock();
+			  				calculatePosNAKSequence(tcp_link);
 			  			}
 			  		}
 			  	}
@@ -1069,7 +1059,6 @@ int Source::linkDatagramToBlock(NECDatagram *dgram, Server *tcp_link, unsigned i
 			mb = findExistingBlock(max_block_received, &index);	// calculate outstanding datagrams
 			if (mb != NULL) {	// if not first block, send nak from max datagram seq - new block-dgram->seq
 				if (mb->dgrams_received+mb->dgrams_nakd < mb->dgrams_in_block) {
-					mb->last_nak = time; // + max_datagram_resent_latency; // set pending nak latency zero
 					mb->pending_nak = 1;
 				  	if (dgram->dgram_seq == 0){	// if this datagram is the first of the new block
 						if (tcp_link->SendNak(max_block_received,(mb->dgrams_received+mb->dgrams_nakd),
@@ -1097,6 +1086,7 @@ int Source::linkDatagramToBlock(NECDatagram *dgram, Server *tcp_link, unsigned i
 			  			mb->pending_nak = 0;
 			  			mb->dgrams_nakd = 0;
 			  			calculateMaxCompleteBlock();
+			  			calculatePosNAKSequence(tcp_link);
 			        	}
                 		} else{
 #ifdef DEBUG                		  
