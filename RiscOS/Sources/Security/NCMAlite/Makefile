@@ -29,6 +29,7 @@ WIPE    = -wipe
 CD	= dir
 DEFMOD  = DefMod
 AR	= LibFile
+THROWBACK = -Throwback
 
 
 ASFLAGS = -depend !Depend -Stamp -quit -module
@@ -57,6 +58,7 @@ INCLUDES= -IC:
 # use SEND_SERIALID_LENGTH to include length data as first 2 bytes of the serial ID string
 # use ENABLE_HTTP_PROXY / ENABLE_HTTPS_PROXY to enable ROM based proxies for http and/or SSL http
 # use DEBUG_DISCONNECTS to set all PPP line drop timeouts to a minute
+# use ISP_CAPTURE to run ISPcapture on invalid smartcards
 
 # debugging
 
@@ -65,29 +67,32 @@ ETHERNETDB  =   -DREMOTE_DEBUG -DENABLE_DEBUGGING -DCHIMPANZEE_INTERFACE \
 		-DSHOW_BOOTBLOCK_TRANSITIONS \
 		-DLIMIT_RUNAWAY_UIDS -UHIDEOUS_PROXY_HACK -UNVRAM_DEBUG \
 		-DETHERNET -DSEND_SERIALID_LENGTH \
-		-DENABLE_HTTP_PROXY -DENABLE_HTTPS_PROXY 
+		-DENABLE_HTTP_PROXY -DENABLE_HTTPS_PROXY \
+		-DISP_CAPTURE
 
 ZIPDB  =        -UREMOTE_DEBUG -DENABLE_DEBUGGING -DCHIMPANZEE_INTERFACE \
 		-DPOINTLESS_BUTTONS -UDEFEAT_BROWSER_LIMIT \
 		-DSHOW_BOOTBLOCK_TRANSITIONS  \
 		-DLIMIT_RUNAWAY_UIDS -UHIDEOUS_PROXY_HACK -UNVRAM_DEBUG \
 		-UETHERNET -DSEND_SERIALID_LENGTH \
-		-DENABLE_HTTP_PROXY -DENABLE_HTTPS_PROXY 
+		-DENABLE_HTTP_PROXY -DENABLE_HTTPS_PROXY \
+		-DISP_CAPTURE
 
 NODB  =         -UREMOTE_DEBUG -UENABLE_DEBUGGING -DCHIMPANZEE_INTERFACE \
 		-DPOINTLESS_BUTTONS -DAUTHENTICATE_SIGNATURES -UDEFEAT_BROWSER_LIMIT \
 		-USHOW_BOOTBLOCK_TRANSITIONS  \
 		-DLIMIT_RUNAWAY_UIDS -UHIDEOUS_PROXY_HACK -UNVRAM_DEBUG \
 		-UETHERNET -DSEND_SERIALID_LENGTH \
-		-DENABLE_HTTP_PROXY -DENABLE_HTTPS_PROXY
+		-DENABLE_HTTP_PROXY -DENABLE_HTTPS_PROXY \
+		-DISP_CAPTURE
 
 #
 # select one of these
 #
 
 #NCTARGETARCH = ${ETHERNETDB}
-#NCTARGETARCH = ${ZIPDB}
-NCTARGETARCH = ${NODB}
+NCTARGETARCH = ${ZIPDB}
+#NCTARGETARCH = ${NODB}
 
 CCFLAGS = -c ${THROWBACK} -depend !Depend ${INCLUDES} -zM ${NCTARGETARCH} 
 
@@ -135,25 +140,36 @@ BASEOBJS  = module.o header.o vectors.o ncma_cmds.o ncma_swis.o \
 ROMOBJS = oz.resources ${BASEOBJS}
 NOTROMOBJS = o.resources ${DBUGLIB} ${BASEOBJS}
 
+RESDIR = <resource$dir>.Resources.${COMPONENT}
+
+NOTROMRESDEP = html.badpin html.change html.damaged html.disconnect html.download \
+	html.mismatch html.moved html.newpin html.notMA html.notNC html.pin \
+	html.poweroff html.SCprobs html.splash html.transfer html.unblock \
+	html.toplevel html.welcome
+
+ROMRESDEP = 
 
 #
 # Component build rules
 #
 
+o.resources: s.resources ${NOTROMRESDEP}
+
+oz.resources: s.resources ${ROMRESDEP}
 
 #
 # Generic rules:
 #
-all: ${TARGETSA} dirs
+all: ${TARGETSA}
         @echo ${COMPONENT}: all complete
 
-rom: ${TARGET} dirs
+rom: ${TARGET}
         @echo ${COMPONENT}: rom complete
 
 export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
 
-install_rom: ${TARGET} dirs
+install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
@@ -166,14 +182,20 @@ clean:
         ${WIPE} map.* ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
-dirs:
-	${MKDIR} o
-	${MKDIR} oz
+resources:
+        ${MKDIR} <resource$dir>.Resources
+        ${MKDIR} <resource$dir>.Resources.NCMA
+        ${CP} <NCMA$SourceKey> <resource$dir>.Resources.NCMA.MFRKEY ${CPFLAGS}
+        ${CP} Resources.Boot <resource$dir>.Resources.NCMA.Boot ${CPFLAGS}
+        ${CP} Resources.BootFast <resource$dir>.Resources.NCMA.BootFast ${CPFLAGS}
+        ${CP} Resources.BootUpdate <resource$dir>.Resources.NCMA.BootUpdate ${CPFLAGS}
+        
+        @echo ${COMPONENT}: resource files copied
+
 #
 # Executable target (static link)
 #
 ${TARGETSA}: ${NOTROMOBJS} ${CLIB} ${DBUGLIB}
-	${MKDIR} rm
         ${LD} -o $@ -module ${NOTROMOBJS} ${CLIB}
 
 #
@@ -184,7 +206,6 @@ ${TARGETSA}: ${NOTROMOBJS} ${CLIB} ${DBUGLIB}
 # ROM target (re-linked at ROM Image build time)
 #
 ${TARGET}: ${ROMOBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB}
-	${MKDIR} aof
         ${LD} -o $@ -aof ${ROMOBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB}
 
 
@@ -229,21 +250,6 @@ o.vectors:	h.vectors
 o.vectors:	h.module
 o.vectors:	C:h.DBUG
 o.vectors:	C:h.scinter
-o.ncma_cmds:	c.ncma_cmds
-o.ncma_cmds:	C:h.kernel
-o.ncma_cmds:	C:h.swis
-o.ncma_cmds:	h.ncma_cmds
-o.ncma_cmds:	h.ncma_ncma
-o.ncma_cmds:	h.ncma_utils
-o.ncma_cmds:	h.ncma_url
-o.ncma_cmds:	h.ncma_scard
-o.ncma_cmds:	h.ncma_cache
-o.ncma_cmds:	h.ncma_dial
-o.ncma_cmds:	h.machine
-o.ncma_cmds:	h.vectors
-o.ncma_cmds:	h.kprintf
-o.ncma_cmds:	h.dynalloc
-o.ncma_cmds:	C:h.DBUG
 o.ncma_swis:	c.ncma_swis
 o.ncma_swis:	C:h.kernel
 o.ncma_swis:	C:h.swis
@@ -272,6 +278,56 @@ o.ncma_ncma:	C:h.kernel
 o.ncma_ncma:	C:h.swis
 o.ncma_ncma:	h.machine
 o.ncma_ncma:	h.vectors
+o.ncma_url:	c.ncma_url
+o.ncma_url:	C:h.kernel
+o.ncma_url:	C:h.swis
+o.ncma_url:	h.ncma_ncma
+o.ncma_url:	h.ncma_url
+o.ncma_url:	h.ncma_scard
+o.ncma_url:	h.ncma_cache
+o.ncma_url:	h.ncma_tags
+o.ncma_url:	h.ncma_bootb
+o.ncma_url:	h.ncma_uid
+o.ncma_url:	h.ncma_net
+o.ncma_url:	h.smcard
+o.ncma_url:	h.dynalloc
+o.ncma_url:	C:h.DBUG
+o.ncma_dial:	c.ncma_dial
+o.ncma_dial:	C:h.kernel
+o.ncma_dial:	C:h.swis
+o.ncma_dial:	h.machine
+o.ncma_dial:	h.vectors
+o.ncma_dial:	h.ncma_dial
+o.ncma_dial:	C:h.DBUG
+o.kprintf:	c.kprintf
+o.kprintf:	C:h.kernel
+o.kprintf:	C:h.swis
+o.kprintf:	h.kprintf
+o.ncma_uid:	c.ncma_uid
+o.ncma_uid:	C:h.kernel
+o.ncma_uid:	C:h.swis
+o.ncma_uid:	h.smcard
+o.ncma_uid:	h.ncma_uid
+o.ncma_uid:	C:h.DBUG
+o.ncma_fx:	c.ncma_fx
+o.ncma_fx:	C:h.kernel
+o.ncma_fx:	C:h.swis
+o.ncma_fx:	h.ncma_fx
+o.ncma_cmds:	c.ncma_cmds
+o.ncma_cmds:	C:h.kernel
+o.ncma_cmds:	C:h.swis
+o.ncma_cmds:	h.ncma_cmds
+o.ncma_cmds:	h.ncma_ncma
+o.ncma_cmds:	h.ncma_utils
+o.ncma_cmds:	h.ncma_url
+o.ncma_cmds:	h.ncma_scard
+o.ncma_cmds:	h.ncma_cache
+o.ncma_cmds:	h.ncma_dial
+o.ncma_cmds:	h.machine
+o.ncma_cmds:	h.vectors
+o.ncma_cmds:	h.kprintf
+o.ncma_cmds:	h.dynalloc
+o.ncma_cmds:	C:h.DBUG
 o.machine:	c.machine
 o.machine:	C:h.kernel
 o.machine:	C:h.swis
@@ -288,20 +344,6 @@ o.machine:	h.ncma_net
 o.machine:	h.ncma_fx
 o.machine:	h.vectors
 o.machine:	C:h.DBUG
-o.ncma_url:	c.ncma_url
-o.ncma_url:	C:h.kernel
-o.ncma_url:	C:h.swis
-o.ncma_url:	h.ncma_ncma
-o.ncma_url:	h.ncma_url
-o.ncma_url:	h.ncma_scard
-o.ncma_url:	h.ncma_cache
-o.ncma_url:	h.ncma_tags
-o.ncma_url:	h.ncma_bootb
-o.ncma_url:	h.ncma_uid
-o.ncma_url:	h.ncma_net
-o.ncma_url:	h.smcard
-o.ncma_url:	h.dynalloc
-o.ncma_url:	C:h.DBUG
 o.ncma_scard:	c.ncma_scard
 o.ncma_scard:	C:h.kernel
 o.ncma_scard:	C:h.swis
@@ -327,17 +369,6 @@ o.ncma_utils:	h.ncma_bootb
 o.ncma_utils:	h.ncma_url
 o.ncma_utils:	h.smcard
 o.ncma_utils:	C:h.DBUG
-o.ncma_dial:	c.ncma_dial
-o.ncma_dial:	C:h.kernel
-o.ncma_dial:	C:h.swis
-o.ncma_dial:	h.machine
-o.ncma_dial:	h.vectors
-o.ncma_dial:	h.ncma_dial
-o.ncma_dial:	C:h.DBUG
-o.kprintf:	c.kprintf
-o.kprintf:	C:h.kernel
-o.kprintf:	C:h.swis
-o.kprintf:	h.kprintf
 o.ncma_bootb:	c.ncma_bootb
 o.ncma_bootb:	C:h.kernel
 o.ncma_bootb:	C:h.swis
@@ -365,12 +396,6 @@ o.ncma_cache:	h.ncma_tags
 o.ncma_cache:	h.ncma_bootb
 o.ncma_cache:	h.kprintf
 o.ncma_cache:	C:h.DBUG
-o.ncma_uid:	c.ncma_uid
-o.ncma_uid:	C:h.kernel
-o.ncma_uid:	C:h.swis
-o.ncma_uid:	h.smcard
-o.ncma_uid:	h.ncma_uid
-o.ncma_uid:	C:h.DBUG
 o.ncma_net:	c.ncma_net
 o.ncma_net:	C:h.kernel
 o.ncma_net:	C:h.swis
@@ -384,7 +409,3 @@ o.ncma_net:	h.ncma_bootb
 o.ncma_net:	h.ncma_url
 o.ncma_net:	h.smcard
 o.ncma_net:	C:h.DBUG
-o.ncma_fx:	c.ncma_fx
-o.ncma_fx:	C:h.kernel
-o.ncma_fx:	C:h.swis
-o.ncma_fx:	h.ncma_fx
