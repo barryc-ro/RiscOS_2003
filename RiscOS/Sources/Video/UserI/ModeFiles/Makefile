@@ -48,10 +48,7 @@ clean:
 
 resources:
         ${MKDIR} ${RDIR}
-        ${CP} Resources.${LOCALE}.PALTV   ${RDIR}.PALTV   ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.NTSCTV  ${RDIR}.NTSCTV  ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.VGA     ${RDIR}.VGA     ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.VGAPlus ${RDIR}.VGAPlus ${CPFLAGS}
+        ${CP} Resources.${LOCALE}.${MACHINE} ${RDIR} ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 ${TARGET}: ${SOURCE}
