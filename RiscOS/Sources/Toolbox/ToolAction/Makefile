@@ -73,7 +73,7 @@ EXPORTS   = h.ToolAction hdr.ToolAction o.ToolAction
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $< -DROM=0
 .c.oz:;     ${CC} ${CFLAGS} -o $@ $< -DROM=1
-.cmhg.o:;   ${CMHG} -o $@ $< h.$*
+.cmhg.o:;   ${CMHG} -p -o $@ $< h.$*
 .cmhg.h:;   ${CMHG} -o o.$* $< $@
 .s.o:;      ${AS} ${AFLAGS} $< $@  -Predefine "ROM SETL {FALSE}"
 .s.oz:;     ${AS} ${AFLAGS} $< $@  -Predefine "ROM SETL {TRUE}"
