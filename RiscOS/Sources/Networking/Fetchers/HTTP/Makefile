@@ -14,6 +14,7 @@
 COMPONENT  = HTTP
 ROM_MODULE = aof.${COMPONENT}
 RAM_MODULE = rm.${COMPONENT}
+DBG_MODULE = rm.${COMPONENT}-tr
 
 
 RESFSDIR   = Resources.URL.${COMPONENT}
@@ -39,15 +40,17 @@ CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
 CFLAGS	 = -c -depend !Depend ${INCLUDES} -zM -Wp -ffah -zps1 ${DFLAGS}
-DFLAGS	 = -D${SYSTEM} -DCOMPAT_INET4 -DCOOKIE -UTML -UTRACE -DUSE_SYSLOG
+DFLAGS	 = -D${SYSTEM} -DCOMPAT_INET4 -DCOOKIE -UTML
 ROMFLAGS = -DROM
 INCLUDES = -ITCPIPLibs:,C:
+DEBFLAGS = -DTRACE -DUSE_SYSLOG
 
 #
 # Libraries
 #
 ANSILIB	  = CLib:o.ansilib
 CLIB	  = CLIB:o.stubs
+DEBLIBS   = <syslog$dir>.c-veneer.o.syslog
 RLIB	  = RISCOSLIB:o.risc_oslib
 ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM	  = RISC_OSLib:o.abssym
@@ -66,6 +69,7 @@ OBJS =\
  o.module\
  o.protocol\
  o.readdata\
+ o.security\
  o.ses_ctrl\
  o.start\
  o.status\
@@ -88,6 +92,7 @@ RAM_OBJS =\
  o.moduleRAM\
  o.protocol\
  o.readdata\
+ o.security\
  o.ses_ctrl\
  o.start\
  o.status\
@@ -97,12 +102,39 @@ RAM_OBJS =\
  o.writedata\
  o.HTTPHdr
 
+
+DBG_OBJS =\
+ od.config\
+ od.connect\
+ od.connpool\
+ od.cookie\
+ od.dates\
+ od.dns\
+ od.generic\
+ od.header\
+ od.hosttrack\
+ od.moduleRAM\
+ od.protocol\
+ od.readdata\
+ od.security\
+ od.ses_ctrl\
+ od.start\
+ od.status\
+ od.stop\
+ od.URLclient\
+ od.utils\
+ od.writedata\
+ o.HTTPHdr
+
 MSGSF=o.msgs
 
 #
 # Rule patterns
 #
+.SUFFIXES: .o .od .c
+
 .c.o:;	  ${CC} ${CFLAGS} ${ROMFLAGS} -o $@ $<
+.c.od:;	  ${CC} ${CFLAGS} ${ROMFLAGS} ${DEBFLAGS} -o $@ $<
 .cmhg.o:; ${CMHG} -o $@ $< -d $*.h
 
 HTTPHdr.h: HTTPHdr.o
@@ -114,6 +146,9 @@ HTTPHdr.h: HTTPHdr.o
 #
 all: ${RAM_MODULE}
 	@echo ${COMPONENT}: Module built (RAM)
+
+ramtrace: ${DBG_MODULE}
+	@echo ${COMPONENT}: Module built (TRACE)
 
 rom: ${ROM_MODULE}
 	@echo ${COMPONENT}: Module built (ROM)
@@ -159,8 +194,16 @@ ${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB}
 	${LD} -o $@ -module ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB}
 	Access $@ RW/R
 
+${DBG_MODULE}: ${DBG_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB} ${DEBLIBS}
+	${mkdir} rm
+	${LD} -o $@ -module ${DBG_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB} ${DEBLIBS}
+	Access $@ RW/R
+
 o.moduleRAM: module.c
 	$(CC) ${CFLAGS} -o $@ module.c
+
+od.moduleRAM: module.c
+	$(CC) ${CFLAGS} ${DEBFLAGS} -o $@ module.c
 
 
 #---------------------------------------------------------------------------
