@@ -47,16 +47,18 @@ static char *flash_buf = NULL;
 static flashdeviceinfo flash;
 static int timer_on = FALSE;
 static int bytes_programmed = 0;
-static int sizeof_flash_buffer = 0;
 static int decomp_stream_end = FALSE;
-static int decomp_initialised = TRUE;
+static int decomp_initialised = FALSE;
 
 static int idle_handler(int reason);
 static void progress_tracker(void);
 static int timer(enum reason_code,int units);
 static int e_check(int rc,int line);
+static int decomp_init(void);
 static int decomp(void);
-static int program_flash(void);
+static int decomp_close(void);
+static int program_flash(int action);
+static void reset(void);
 
 #ifndef FTP_SIMULATION
 int read_amt = FTP_BUFFER_SIZE;
@@ -88,6 +90,7 @@ extern int programming_stateMachine(enum reason_code reason)
                               case START:  rc = idle_handler(START);
                                            if ((e_check(rc,__LINE__)) == ERROR)
                                            {
+                                                reset();
                                                 programming_state = IDLE;
                                                 return ERROR;
                                            }
@@ -101,6 +104,7 @@ extern int programming_stateMachine(enum reason_code reason)
                                                 rc = decomp();
                                                 if ((e_check(rc,__LINE__)) == ERROR)
                                                 {
+                                                     reset();
                                                      programming_state = IDLE;
                                                      return ERROR;
                                                 }
@@ -135,16 +139,21 @@ extern int programming_stateMachine(enum reason_code reason)
                               case ABORT: /* drop through to close */
                               case CLOSE: if ((rc = ftp_stateMachine(CLOSE)) == ERROR)
                                           {
+                                               reset();
+                                               programming_state = IDLE;
                                                return ERROR;
                                           }
                                           else if ((rc == IN_PROGRESS) || (rc == DONE))
                                           {
+                                               reset();
                                                programming_state = IDLE;
                                                return DONE;
                                           }
                                           break;
                               case POLL:  if ((rc = ftp_stateMachine(POLL)) == ERROR)
                                           {
+                                               reset();
+                                               programming_state = IDLE;
                                                return ERROR;
                                           }
                                           else if (rc == IN_PROGRESS)
@@ -157,6 +166,7 @@ extern int programming_stateMachine(enum reason_code reason)
                                                rc = decomp();
                                                if ((e_check(rc,__LINE__)) == ERROR)
                                                {
+                                                    reset();
                                                     programming_state = IDLE;
                                                     return ERROR;
                                                }
@@ -185,10 +195,13 @@ extern int programming_stateMachine(enum reason_code reason)
                               case ABORT: /* Drop through */
                               case CLOSE: if ((rc = ftp_stateMachine(CLOSE)) == ERROR)
                                           {
+                                               reset();
+                                               programming_state = IDLE;
                                                return ERROR;
                                           }
                                           else if ((rc == IN_PROGRESS) || (rc == DONE))
                                           {
+                                               reset();
                                                programming_state = IDLE;
                                                return DONE;
                                           }
@@ -196,6 +209,7 @@ extern int programming_stateMachine(enum reason_code reason)
                               case POLL:  rc = decomp();
                                           if ((e_check(rc,__LINE__)) == ERROR)
                                           {
+                                               reset();
                                                programming_state = IDLE;
                                                return DONE;
                                           }
@@ -206,9 +220,10 @@ extern int programming_stateMachine(enum reason_code reason)
                                           }
                                           else if (rc == DONE)
                                           {
-                                               rc = program_flash();
+                                               rc = program_flash(NO_RESET);
                                                if ((e_check(rc,__LINE__)) == ERROR)
                                                {
+                                                    reset();
                                                     programming_state = IDLE;
                                                     return ERROR;
                                                }
@@ -235,14 +250,16 @@ extern int programming_stateMachine(enum reason_code reason)
                                              "Start not valid whilst in programming state.",WARNING);
                                           break;
                               case ABORT: /* Drop through */
-                              case CLOSE: ftp_stateMachine(CLOSE);
+                              case CLOSE: /* No need to check return value on this one. */
+                                          ftp_stateMachine(CLOSE);
+                                          reset();
                                           programming_state = IDLE;
-                                          /* No need to check return value on this one. */
                                           return DONE;
                                           break;
-                              case POLL:  rc = program_flash();
+                              case POLL:  rc = program_flash(NO_RESET);
                                           if ((e_check(rc,__LINE__)) == ERROR)
                                           {
+                                               reset();
                                                programming_state = IDLE;
                                                return ERROR;
                                           }
@@ -256,6 +273,7 @@ extern int programming_stateMachine(enum reason_code reason)
                                                progress_tracker();
                                                if ((rc = ftp_stateMachine(START)) == ERROR)
                                                {
+                                                    reset();
                                                     programming_state = IDLE;
                                                     return ERROR;
                                                }
@@ -268,6 +286,7 @@ extern int programming_stateMachine(enum reason_code reason)
                                                {
                                                     if (bytes_programmed == IMAGESIZE)
                                                     {
+                                                        reset();
                                                         programming_state = IDLE;
                                                         return DONE;
                                                     }
@@ -310,7 +329,11 @@ static int idle_handler(int reason)
 
     switch (reason)
     {
-      case START: if ((rc = flash_initialise(&flash)) != FLASH_SUCCESS)
+      case START: if ((rc = decomp_init()) != DONE)
+                  {
+                       return rc;
+                  }
+                  if ((rc = flash_initialise(&flash)) != FLASH_SUCCESS)
                   {
                        switch (rc)
                        {
@@ -393,7 +416,11 @@ static int idle_handler(int reason)
 
     switch (reason)
     {
-      case START: if ((er = _kernel_swi(FlashWrite_DeviceInfo,&regs,&regs)) != NULL)
+      case START: if ((rc = decomp_init()) != DONE)
+                  {
+                       return rc;
+                  }
+                  if ((er = _kernel_swi(FlashWrite_DeviceInfo,&regs,&regs)) != NULL)
                   {
                        error_handler(__FILE__,__LINE__,"idle_handler()",er->errnum,er->errmess,WARNING);
                        return FLASH_DEVICE_INFO_ERR;
@@ -490,7 +517,8 @@ static void progress_tracker(void)
             secs_used = timer(POLL,0);
             bytes_remaining = IMAGESIZE - bytes_fetched;
 
-            /* XXX: huh? check.  This looks wrong.  Look instead at bytes decompressed perhaps. */
+            /* XXX: The initial estimate bytes_remaining = IMAGESIZE - bytes_fetched is wrong. */
+            /*      Look instead at bytes decompressed perhaps.  Wants revisiting.             */
 
             secs_remaining = (secs_used * bytes_remaining) / bytes_fetched;
 
@@ -610,7 +638,7 @@ static int e_check(int rc,int line)
 /************************************************************************************/
 /* Function:  decomp_init()                                                         */
 /************************************************************************************/
-extern int decomp_init(void)
+static int decomp_init(void)
 {
   #ifndef SIMULATE_FLASH
   _kernel_oserror *er = NULL;
@@ -624,7 +652,7 @@ extern int decomp_init(void)
     #ifdef SIMULATE_FLASH
     if ((rc = flash_initialise(&flash)) != FLASH_SUCCESS)
     {
-         error_handler(__FILE__,__LINE__,"decomp()",rc,"Flash initialisation failure",WARNING);
+         error_handler(__FILE__,__LINE__,"decomp_init()",rc,"Flash initialisation failure",WARNING);
          return ERROR;
     }
     #else
@@ -660,15 +688,13 @@ extern int decomp_init(void)
 
     #endif
 
-    sizeof_flash_buffer = flash.blocksize;
-
     #ifdef CHECK_DECOMP_INIT_ERR
     if (1)
     #else
-    if ((flash_buf = malloc(sizeof_flash_buffer)) == NULL)
+    if ((flash_buf = malloc(flash.blocksize)) == NULL)
     #endif
     {
-         error_handler(__FILE__,__LINE__,"program_flash()",sizeof_flash_buffer,
+         error_handler(__FILE__,__LINE__,"program_flash()",flash.blocksize,
            "Unable to malloc Flash buffer",WARNING);
          if ((er = ui_show_error(1,translate(FLASH_PROGRAMMING_ERR))) != NULL)
          {
@@ -685,7 +711,7 @@ extern int decomp_init(void)
     stream.next_in = (Bytef *)ftp_buf; stream.next_out = (Bytef *)flash_buf;
 
     /* We start with an empty output buffer */
-    stream.avail_out = sizeof_flash_buffer;
+    stream.avail_out = flash.blocksize;
 
     /* inflateInit() does not perform any decompression apart from reading the zlib header if present,
        so next_in and avail_in may be modified, but next_out and avail_out remain unchanged.  (The
@@ -724,6 +750,12 @@ extern int decomp_init(void)
 static int decomp(void)
 {
   int rc;
+
+    if (decomp_initialised == FALSE)
+    {
+        error_handler(__FILE__,__LINE__,"decomp()",0,"decomp() has not been initialised",WARNING);
+        return FLASH_PROGRAMMING_ERR;
+    }
 
     if (decomp_stream_end == TRUE)
     {
@@ -836,7 +868,7 @@ extern int decomp_close(void)
 /* Returns: */
 /* Outputs: */
 /************************************************************************************/
-static int program_flash(void)
+static int program_flash(int action)
 {
 
   static int initialised = FALSE;
@@ -844,15 +876,17 @@ static int program_flash(void)
   static int stream_end = FALSE;
   size_t n = 0;
 
-  if (program_flash_reset_flag == TRUE)
+  if (action == RESET)
   {
-   /* We're restarting as a result of user abort or some previous error. */
-      stream_end = FALSE;
-      fclose(flashfile);
-      n = 0;
-      bytes_programmed = 0;
       initialised = FALSE;
-      program_flash_reset_flag = FALSE;
+      fclose(flashfile);
+      flashfile = NULL;
+      stream_end = FALSE;
+      return DONE;
+  }
+  else if (action != NO_RESET)
+  {
+      error_handler(__FILE__,__LINE__,"program_flash()",0,"Unrecognised action request",WARNING);
   }
 
   if (stream_end == TRUE)
@@ -875,7 +909,7 @@ static int program_flash(void)
   if (stream.avail_out == 0)
   {
    /* The Flash buffer is full and ready to be programmed into Flash as a single block of data. */
-      if ((n = fwrite(flash_buf,sizeof(char),sizeof_flash_buffer,flashfile)) != sizeof_flash_buffer)
+      if ((n = fwrite(flash_buf,sizeof(char),flash.blocksize,flashfile)) != flash.blocksize)
       {
            error_handler(__FILE__,__LINE__,"program_flash()",n,"Flash block write failure",WARNING);
            fclose(flashfile);
@@ -892,7 +926,7 @@ static int program_flash(void)
       }
 
    /* Tell zlib we've freed up space in its output buffer, so it's free to decompress another block of data. */
-      stream.avail_out = sizeof_flash_buffer;
+      stream.avail_out = flash.blocksize;
   }
 
   return DONE;
@@ -907,21 +941,24 @@ static int program_flash(void)
 /* Returns: */
 /* Outputs: */
 /************************************************************************************/
-static int program_flash(void)
+static int program_flash(int action)
 {
   static int stream_end = FALSE;
   static unsigned int byte_offset = 0;
   _kernel_swi_regs regs;
   _kernel_oserror *er = NULL;
 
-    if (program_flash_reset_flag == TRUE)
+    if (action == RESET)
     {
-     /* We're restarting as a result of usr abort or some previous error. */
         stream_end = FALSE;
-        bytes_programmed = 0;
         byte_offset = 0;
-        program_flash_reset_flag = FALSE;
+        return DONE;
     }
+    else if (action != NO_RESET)
+    {
+        error_handler(__FILE__,__LINE__,"program_flash()",0,"Unrecognised action request",WARNING);
+    }
+
     if (stream_end == TRUE)
     {
         return DONE;  /* Nothing left to program.  We've finished. */
@@ -960,9 +997,9 @@ static int program_flash(void)
              return FLASH_PROGRAMMING_ERR;
         }
 
-        bytes_programmed += sizeof_flash_buffer;
+        bytes_programmed += flash.blocksize;
 
-        byte_offset += (unsigned int)sizeof_flash_buffer;
+        byte_offset += (unsigned int)flash.blocksize;
 
         if (bytes_programmed == IMAGESIZE)
         {
@@ -970,7 +1007,7 @@ static int program_flash(void)
         }
 
      /* Tell zlib we've freed up space in its output buffer, so it's free to decompress another block of data. */
-        stream.avail_out = sizeof_flash_buffer;
+        stream.avail_out = flash.blocksize;
     }
 
     return DONE;
@@ -1085,11 +1122,15 @@ static void vandalize_main_os(void)
 #endif
 
 /************************************************************************************/
-/* Function:  program_flash_reset()                                                 */
+/* Function:  reset()                                                               */
+/* Behaviour: Resets local state variables.                                         */
 /************************************************************************************/
-extern void program_flash_reset(void)
+static void reset(void)
 {
-    program_flash_reset_flag = TRUE;
-    return;
+  decomp_close();
+  timer_on = FALSE;
+  bytes_programmed = 0;
+  decomp_stream_end = FALSE;
+  decomp_initialised = FALSE;
+  program_flash(RESET);
 }
-
