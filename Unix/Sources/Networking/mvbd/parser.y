@@ -124,8 +124,8 @@ toplevelstatement       : TOK_DEFAULT multicastdestinations
                                 { config_parse_default_address($2); }
                         | TOK_DEFAULT multicastttl
                                 { config_parse_set_ttl($2); }
-                        | TOK_DEFAULT TOK_RATE integer
-                                { config_parse_set_transfer_rate($3); }
+                        | TOK_DEFAULT multicastrate
+                                { config_parse_set_transfer_rate($2); }
                         | TOK_ROOT TOK_STRING
                                 { config_parse_set_home_directory($2); }
                         | TOK_DEFAULT interfacespec
@@ -189,7 +189,7 @@ multicastdestinations   : TOK_MULTICAST TOK_ADDRESS cidrlist
                         ;
 
 multicastrate           : TOK_RATE integer
-                                { $$ = $2; }
+                                { $$ = $2 << 3; }
                         ;
 
 integer                 : TOK_INT

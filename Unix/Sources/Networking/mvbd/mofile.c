@@ -237,7 +237,7 @@ bmc_status multicast_file_launch(void)
                 }
         }
 
-        while (pidcount > 0) {
+        while (pidcount-- > 0) {
                 wait((void *) &s);
         }
 

@@ -75,7 +75,7 @@ void configure_establish_defaults(void)
         conf.default_port = 55555;
         conf.default_ttl = 5;
         conf.mtu_ceiling = 9212;
-        conf.minimum_master_rate = 60 * 1024;
+        conf.minimum_master_rate = 60 * 1024 * 8;
         conf.root_directory = Strdup(default_root);
         conf.enabled = 1;
         conf.files = NULL;
@@ -495,8 +495,9 @@ static void print_cidr_list(cidr_list *cl, int indent)
 
 static void config_dump_rate(unsigned long rate)
 {
-        printf("%lu bytes/sec (%.2f Kbit/sec; %.2f Mbit/sec)\n",
-                rate, ((double) rate) / (1L<<7), ((double) rate) / (1L<<17));
+        double drate_K = ((double) rate) / (1L << 10);
+        double drate_M = ((double) rate) / (1L << 20);
+        printf("%lu bits/sec (%.2f Kbit/sec; %.2f Mbit/sec)\n", rate, drate_K, drate_M);
 }
 
 static void print_file_list(file_list *fl)
