@@ -79,7 +79,7 @@ DynamicArea_Realloc
             ;MOV    R0,R0
             SWI     &2002A                  ; XOS_ChangeDynamicArea
             LDMFD   R13!,{R2}               ; saved R1
-            STRVC   R1,[R2]
+            STR     R1,[R2]                 ; *not* STRVC
             MOVVC   R0,#0
             LDMFD   R13!,{PC}^
 
