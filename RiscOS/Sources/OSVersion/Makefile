@@ -6,6 +6,7 @@
 # Date       Name         Description
 # ----       ----         -----------
 # 30-May-96  SMC          Created.
+# 10 Sep 1997 RWB	  Switch Version number on System and UserIF
 #
 
 #
@@ -16,26 +17,38 @@ EXP_HDR = <export$dir>
 # Generic options:
 #
 MKDIR   = cdir
-AS      = aasm
+AS      = do objasm
+LN	= link
 CP      = copy
 RM      = remove
+WIPE    = -wipe
+
 CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
+AFLAGS = -depend !Depend -Stamp -quit
+LFLAGS = -o $@ -rmf
 CPFLAGS = ~cfr~v
+WFLAGS  = ~c~v
 
 #
 # Program specific options:
 #
 COMPONENT = OSVersion
 SOURCE    = s.ModHead
-TARGET    = rm.OSVersion
+TARGET    = rm.${SYSTEM}.${UserIF}.OSVersion
 EXPORTS   =
+
+OBJS = o.ModHead
+
+#
+# Rule patterns
+#
+.s.o:;      ${AS} ${AFLAGS} $< $@ -Predefine "Date SETS \"${DATE}\"" -Predefine "Version SETS \"${VERSION}\"" -Predefine "Name SETS \"${NAME}\"" -Predefine "Build SETS \"${BUILDNAME}\"" 
 
 #
 # Generic rules:
 #
-rom: ${TARGET}
-        @echo ${COMPONENT}: rom module built
+rom:
+        @echo ${COMPONENT}: rom module built later
 
 export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
@@ -46,23 +59,32 @@ install_rom: ${TARGET}
 
 clean:
         ${RM} ${TARGET}
+        ${WIPE} o.* ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 resources:
         @echo ${COMPONENT}: resource files copied
 
-${TARGET}: ${SOURCE}
-        ${AS} ${ASFLAGS} ${SOURCE}
+${TARGET}: ${OBJS}
+	${MKDIR} rm.${SYSTEM}
+	${MKDIR} rm.${SYSTEM}.${UserIF}
+	${LN} ${LFLAGS} ${OBJS}
+
+${OBJS}: dummy
+
+dummy:
+	@
 
 # Dynamic dependencies:
-rm.OSVersion: Hdr:ListOpts
-rm.OSVersion: Hdr:Macros
-rm.OSVersion: Hdr:System
-rm.OSVersion: Hdr:SWIs
-rm.OSVersion: Hdr:CPU.Generic26
-rm.OSVersion: Hdr:IO.GenericIO
-rm.OSVersion: Hdr:RISCOS
-rm.OSVersion: Hdr:ModHand
-rm.OSVersion: Hdr:Machine.<Machine>
-rm.OSVersion: Hdr:Proc
-rm.OSVersion: Version
+o.ModHead: s.ModHead
+o.ModHead: Hdr:ListOpts
+o.ModHead: Hdr:Macros
+o.ModHead: Hdr:System
+o.ModHead: Hdr:SWIs
+o.ModHead: Hdr:CPU.Generic26
+o.ModHead: Hdr:IO.GenericIO
+o.ModHead: Hdr:RISCOS
+o.ModHead: Hdr:ModHand
+o.ModHead: Hdr:Machine.<Machine>
+o.ModHead: Hdr:Machine.Machine
+o.ModHead: Hdr:Proc
