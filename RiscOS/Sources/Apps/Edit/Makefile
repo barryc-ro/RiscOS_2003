@@ -30,7 +30,7 @@ RESAPP = <resource$dir>.Apps.${APP}
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = do mkdir -p
 AS      = objasm
 CC      = cc
 CMHG    = cmhg
@@ -97,6 +97,7 @@ rom: ${ROM_MODULE}
         @echo ${COMPONENT}: Module built (ROM)
 
 install: ${FILES}
+        ${MKDIR} ${INSTDIR}
         ${CP} ${RDIR}.!Boot        ${INSTDIR}.!Boot     ${CPFLAGS}
         ${CP} ${LDIR}!Help         ${INSTDIR}.!Help     ${CPFLAGS}
         ${CP} ${RDIR}.!Run         ${INSTDIR}.!Run      ${CPFLAGS}
