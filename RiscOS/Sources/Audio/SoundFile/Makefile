@@ -76,7 +76,8 @@ EXPORTS   = h.soundfile hdr.soundfile o.soundfile
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $< -DROM=0
 .c.oz:;     ${CC} ${CFLAGS} -o $@ $< -DROM=1
-.cmhg.o:;   ${CMHG} -o $@ $< h.$*
+.cmhg.o:;   ${CMHG} -o $@ $<
+.cmhg.h:;   ${CMHG} -d h.$* $<
 .s.o:;      ${AS} ${AFLAGS} $< $@  -Predefine "ROM SETL {FALSE}"
 .s.oz:;     ${AS} ${AFLAGS} $< $@  -Predefine "ROM SETL {TRUE}"
 
@@ -109,11 +110,16 @@ o.soundfile: Documents.def.soundfile
 rom: ${TARGET}
         @echo ${COMPONENT}: rom module built
 
-export: ${EXPORTS}
+export: export_${PHASE}
+
+export_hdrs: h.soundfile hdr.soundfile
         ${CP} h.soundfile ${EXP_HDR}.h.soundfile ${CPFLAGS}
         ${CP} hdr.soundfile ${EXP_HDR1}.soundfile ${CPFLAGS}
+        @echo ${COMPONENT}: export complete (hdrs)
+
+export_libs: o.soundfile
         ${CP} o.soundfile ${EXP_HDR}.o.soundfile ${CPFLAGS}
-        @echo ${COMPONENT}: export complete
+        @echo ${COMPONENT}: export complete (libs)
 
 install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
@@ -129,6 +135,10 @@ clean:
         ${WIPE} linked.* ${WFLAGS}
         ${WIPE} map.* ${WFLAGS}
         ${RM} ${TARGET}
+	${RM} h.modhdr
+	${RM} h.soundfile
+	${RM} hdr.soundfile
+	${RM} o.soundfile
         @echo ${COMPONENT}: cleaned
 
 resources:
@@ -186,7 +196,6 @@ o.main:	OS:h.types
 o.main:	OS:h.osmodule
 o.main:	OS:h.resourcefs
 o.main:	h.modhdr
-o.main:	h.main
 o.main:	h.resources
 o.main:	h.msgs
 o.main:	h.sf
@@ -466,7 +475,6 @@ oz.main:	OS:h.types
 oz.main:	OS:h.osmodule
 oz.main:	OS:h.resourcefs
 oz.main:	h.modhdr
-oz.main:	h.main
 oz.main:	h.resources
 oz.main:	h.msgs
 oz.main:	h.sf
