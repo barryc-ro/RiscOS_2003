@@ -9,6 +9,8 @@
 # 23-Dec-97  RLT          Modified makefile to extract correct default and !Run file for the
 #                         selected country.
 # 23-Aug-99  NCE          Exports app to resourcesFS for ROM builds
+# 23-Aug-99  SNB          Fixed makefile dependency for resources: phase.  Now uses mkdir -p 
+#                         rather than CDIR to create dirs.
 
 #
 # Paths
@@ -18,7 +20,7 @@ RESDIR  = <Resource$Dir>.Resources2.Test
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = mkdir -p
 AS      = objasm
 CC      = cc
 CMHG    = cmhg
@@ -94,8 +96,7 @@ install: ${APPLICATION}
 	${CP} Defaults.${LOCALE}.${LOCALE} ${APP}.Defaults.${LOCALE} ${CPFLAGS}
 	@echo ${COMPONENT}: installed
 
-resources:
-        ${APPLICATION}
+resources: ${APPLICATION}
 	${MKDIR} ${APP}
 	${CP} ${APPLICATION} ${APP}.${APPLICATION} ${CPFLAGS}
 	${CP} Resources.* ${APP}.* ${CPFLAGS}
