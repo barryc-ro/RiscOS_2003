@@ -149,6 +149,8 @@ struct client_replay_str
 
     BBox			bbox;
     client_replay_control	*replay;
+
+    int				stream_index;		/* stream number when using RealAudio */
 };
 
 typedef struct client_replay_str *client_replay_ptr;
@@ -177,6 +179,12 @@ static WimpMessageHandler client_replay_closedown_handler;
  * UTILITY FUNCTIONS
  * ----------------------------------------------------------------------
  */
+
+static int has_pick_streams(int file_type)
+{
+    /* return TRUE; */
+    return file_type == osfile_TYPE_REALAUDIO;
+}
 
 /* read an int off the start of line, and ignore rest of line from file */
 static _kernel_oserror *read_file_line_int (FILE *handle, int *value)
@@ -574,6 +582,16 @@ static _kernel_oserror *replay_multi_start(client_replay_ptr crp)
    /* if type isn't ARMOVIE, assume MovieFS is involved */
    if (crp->file_type != osfile_TYPE_ARMOVIE)
    {
+       if (has_pick_streams(crp->file_type))
+       {
+	   /* ensure it has been closed, so we can select a new stream */
+	   force_to_plain (crp->file_name);
+	   
+	   sprintf(extra_args, "RAPickStream %d", ++crp->stream_index);
+	   TRACE2 ("stream %d oscli '%s'\n" _ crp->stream_index _ extra_args);
+	   _kernel_oscli(extra_args);
+       }
+
       /* Check for MovieFS Error file */
       sprintf (extra_args, "%s.Error", crp->file_name);
       temp_file = fopen (extra_args, "r");
@@ -586,7 +604,8 @@ static _kernel_oserror *replay_multi_start(client_replay_ptr crp)
          fgets (buffer, sizeof buffer - 1, temp_file);
          fclose (temp_file);
 
-         error = utils_msgs_error_lookup (1, "Play", buffer);
+	 error = utils_msgs_error_lookup (1, "Play", buffer);
+
          TRACE3 ("finish\n");
          goto finish;
       } /* if */
@@ -764,8 +783,14 @@ static _kernel_oserror *replay_multi_start(client_replay_ptr crp)
 finish:
    if (error != NULL)
    {
-      TRACE2 ("error finish \"%s\"\n" _ error->errmess);
-      pluginclient_send_closed(crp->plugin, 0, error, 0);
+      TRACE2 ("error finish 0x%x \"%s\"\n" _ error->errnum _ error->errmess);
+
+      /* don't report an error on realaudio follow on streams, we
+	 should really report the error if it is not the no more
+	 streams error, however we can only tell that by string
+	 comparisons which is so yucky I'm not going to do that */
+      if (!has_pick_streams(crp->file_type) || crp->stream_index == 1)
+	  pluginclient_send_closed(crp->plugin, 0, error, 0);
 
       /* deregister handler */
       if (done_register_message_handler)
@@ -837,7 +862,7 @@ static _kernel_oserror *replay_multi_end (client_replay_ptr crp, BOOL tell_brows
    plugin = crp->plugin;
 
    err_report(event_deregister_message_handler (Wimp_MTaskCloseDown,
-         &client_replay_closedown_handler, crp));
+	 &client_replay_closedown_handler, crp));
 
    m_RMA_FREE (crp->replay->rma, sizeof *crp->replay->rma);
 
@@ -868,8 +893,16 @@ static int client_replay_closedown_handler(WimpMessage *message, void *handle)
       if (crp->replay->replay_task == message->hdr.sender)
       {
          replay_multi_end (crp, /*tell_browser?*/ TRUE);
-   
-         TRACE2 ("-client_replay_closedown_handler\n");
+
+	 if (has_pick_streams(crp->file_type))
+	 {
+	     TRACE2 ("restarting for next stream\n");
+	     /* if this gave an error it has already been reported to
+                the user by the error handler or multi_start */
+	     replay_multi_start (crp);
+	 }
+	 
+	 TRACE2 ("-client_replay_closedown_handler\n");
          return 1;
       } /* if */
 
@@ -984,8 +1017,9 @@ static _kernel_oserror *client_replay_close(client_ptr *cp)
          /*Queue a message to make sure the file gets closed. If we don't
             have the memory to close it, it just stays open. This is bad,
             but as far as I can see, unavoidable. JRC 17 Jul 1997*/
+	 /* SJM 980520 this used to be != NULL */
          if (event_register_wimp_handler (-1, Wimp_ENull,
-               &force_to_plain_handler, crp->file_name) != NULL)
+               &force_to_plain_handler, crp->file_name) == NULL)
             /*Memory used for file_name is now owned by
                force_to_plain_handler().*/
             crp->file_name = NULL;
@@ -1102,6 +1136,7 @@ static _kernel_oserror *client_replay_action (client_ptr cp, int reason)
             if (crp->replay != NULL)
                (void) replay_multi_end (crp, /*tell browser?*/ FALSE);
 
+	    crp->stream_index = 0;
             if ((error = replay_multi_start (crp)) != NULL)
                goto finish;
          }
@@ -1284,6 +1319,7 @@ static _kernel_oserror *client_replay_stream_as_file(client_ptr cp, plugin_strea
    }
 
    crp->file_type = get_file_type (cache_file);
+   crp->stream_index = 0;
 
    /* start playback */
    if (crp->autostart)
@@ -1291,7 +1327,7 @@ static _kernel_oserror *client_replay_stream_as_file(client_ptr cp, plugin_strea
          goto finish;
 
 finish:
-   TRACE2("-client_replay_stream_as_file()\n");
+   TRACE2("-client_replay_stream_as_file(): file type %x\n" _ crp->file_type);
    return error;
 }
 
@@ -1339,7 +1375,8 @@ static _kernel_oserror *client_replay_play_file(const char *file_name, int filet
    crp->href [0]        = '\0';
    crp->volume          = -1;
    crp->plugin          = plugin;
-
+   crp->stream_index	= 0;
+   
    if ((error = replay_multi_start (crp)) != NULL)
       goto finish;
    /*IF THERE was anything that could go wrong after this, we would have to

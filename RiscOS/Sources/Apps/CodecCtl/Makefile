@@ -26,8 +26,9 @@ WFLAGS  = ~c~v
 # m.c is only needed when making a TRACE or CHECK version.
 # NB!! This software currently *FAILS* for unexplained reasons if compiled without memory
 # checking.
-DFLAGS   = -DTRACE=2 -DCHECK=1 -throwback -fah -strict
-DFLAGS   = -DCHECK=1 -ff
+#DFLAGS   = -DTRACE=5 -DCHECK=1 -throwback -fah -strict
+#DFLAGS   = -DCHECK=1 -ff
+DFLAGS   = -ffah -strict
 
 #
 # Libraries
@@ -55,9 +56,12 @@ APPNAME   = !CodecCtl
 TARGET    = aof.${COMPONENT}
 RAMTARGET = rm.${COMPONENT}
 APP       = abs.!RunImage
-OBJS      = o.plugclient o.utils o.client_rep o.clientmidi o.event o.tbevent o.wimpevent o.wimpmsg o.m
-OBJSZ     = oz.plugclient oz.utils oz.client_rep oz.clientmidi oz.ModuleWrap oz.event oz.tbevent oz.wimpevent oz.wimpmsg oz.m
-OBJSZRAM  = oz.plugclient oz.utils oz.client_rep oz.clientmidi oz.ModuleWra1 oz.event oz.tbevent oz.wimpevent oz.wimpmsg oz.m
+#OBJS      = o.plugclient o.utils o.client_rep o.clientmidi o.event o.tbevent o.wimpevent o.wimpmsg o.m
+#OBJSZ     = oz.plugclient oz.utils oz.client_rep oz.clientmidi oz.ModuleWrap oz.event oz.tbevent oz.wimpevent oz.wimpmsg oz.#m
+#OBJSZRAM  = oz.plugclient oz.utils oz.client_rep oz.clientmidi oz.ModuleWra1 oz.event oz.tbevent oz.wimpevent oz.wimpmsg oz.m
+OBJS      = o.plugclient o.utils o.client_rep o.clientmidi 
+OBJSZ     = oz.plugclient oz.utils oz.client_rep oz.clientmidi oz.ModuleWrap
+OBJSZRAM  = oz.plugclient oz.utils oz.client_rep oz.clientmidi oz.ModuleWra1
 ASMS      = s.plugclient s.utils s.client_rep s.clientmidi s.event s.tbevent s.wimpevent s.wimpmsg s.m
 
 # CodecCtl was System specific but not any more.
