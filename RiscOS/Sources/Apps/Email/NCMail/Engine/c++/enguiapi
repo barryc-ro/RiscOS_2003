@@ -56,6 +56,9 @@ extern "C" eng_rcode eng_connect(void)
 
 /*
 ** eng_disconnect() is called by the UI when the user clicks Disconnect.
+** If something is happening (e.g. a download or retrieve) it sets
+** the disconnectpending flag so that the disconnect can take place
+** as soon as it's possible to do so.
 */
 
 extern "C" eng_rcode eng_disconnect(void)
@@ -127,6 +130,15 @@ extern "C" eng_rcode eng_get_number_of_messages(uint32 *total, uint32 *read, uin
 ** the contents of the current mailbox list.
 ** It returns a pointer to the first Message Descriptor
 ** in a linked list.
+**
+** In most cases displaying the Inbox indicates that any Read
+** Message operation is finished and so any objects associated
+** with the message can be destroyed. However, there is one
+** case where this is not true: if the user has to confirm that
+** a re-connection should be made to fetch a message, the Inbox
+** will be redrawn on connection before the message is retrieved.
+** Therefore if RETRIEVEMSG state is active, the message objects
+** are not deleted.
 */
 
 extern "C" eng_rcode eng_get_mailbox_list(MessageDescriptor **msg)
@@ -158,7 +170,8 @@ extern "C" eng_rcode eng_get_mailbox_list(MessageDescriptor **msg)
 
 /*
 ** eng_get_message() is called by the UI when the user requests
-** to read a message.
+** to read a message, and also by the Engine itself when fetching
+** a message for forwarding.
 ** It activates the RETRIEVEMSG state.
 ** When finished it calls func with a Message Descriptor.
 ** The body and any attachments are listed the entity_list field.
@@ -199,8 +212,10 @@ extern "C" eng_rcode eng_get_message(uint32 msg_id, void *handle, eng_cbf_getmsg
 
   /*
   ** If message is already downloaded, it will be parsed.
-  ** If not, and connection is up, it will be fetched.
-  ** Otherwise user will be asked to confirm connection.
+  ** If it is downloading, the downloadpending context
+  ** will just wait until it's downloaded.
+  ** Otherwise, if the connection is up it will be fetched,
+  ** if not, the user will be asked to confirm connection.
   */
 
   SetFilename(msg_id, false);
@@ -242,6 +257,8 @@ extern "C" eng_rcode eng_get_message(uint32 msg_id, void *handle, eng_cbf_getmsg
 ** eng_create_message() is called by the UI
 ** when the user wishes to compose an email.
 ** If msg_id > 0, the new message is a reply to msg_id.
+** If number > 0, then there are <number> messages to be forwarded,
+** listed in forward_list.
 ** It activates the CREATE or REPLY state and calls cbfunc with a
 ** Message Descriptor when finished.
 */
@@ -258,6 +275,9 @@ extern "C" eng_rcode eng_create_message(uint32 msg_id, uint32 number, uint32 *fo
     return ENG_NOMEMORY;
   }
 
+  /*
+  ** Put name and address of sender in From field.
+  */
   if (realname)
   {
     if ((createstate.msg->fromreal = malloc(strlen(realname) + 1)) == 0)
@@ -282,7 +302,10 @@ extern "C" eng_rcode eng_create_message(uint32 msg_id, uint32 number, uint32 *fo
   callbacklist.createfunc = func;
   callbacklist.createhandle = handle;
   if (msg_id)
+  {
+    /* it's a reply, so get the descriptor for the original */
     createstate.orig = FindDescriptor(msg_id, popmbox);
+  }
 
   if (number)
   {
@@ -295,6 +318,11 @@ extern "C" eng_rcode eng_create_message(uint32 msg_id, uint32 number, uint32 *fo
 
 }
 
+
+/*
+** eng_get_reply_id() returns the message ID of the original
+** message to which a reply has been made.
+*/
 
 eng_rcode eng_get_reply_id(uint32 msg_id, uint32 *orig_id)
 {
@@ -363,7 +391,11 @@ extern "C" eng_rcode eng_cancel_message(uint32 msg_id)
 
   DestroyDescriptor(FindDescriptor(msg_id, creatembox), creatembox);
 
-  /* Do we need to do anything else here? */
+  /*
+  ** Do we need to do anything else here?
+  ** Probably not - all the objects etc are destroyed
+  ** with the descriptor.
+  */
 
   return ENG_COMPLETED;
 
@@ -380,6 +412,7 @@ extern "C" eng_rcode eng_mark_as_read(uint32 msg_id)
   if (state & (MARKREAD | MARKDELETE))
     return ENG_ALREADYMARKING;
 
+  /* get the descriptor */
   markstate.msg = FindDescriptor(msg_id, popmbox);
   if (!markstate.msg)
     return ENG_UNKNOWNID;
@@ -444,7 +477,10 @@ extern "C" eng_rcode eng_register_prompt(void *handle, eng_cbf_prompt func)
 
 /*
 ** eng_email_active() is called by the UI to notify the Engine
-** that user has entered or left the Email client.
+** that the user has entered or left the Email client.
+** If active, we lock all the files, set the DOWNLOADED flag
+** for any that are still in memory, and kick off a mailbox process.
+** If inactive, we unlock all the files.
 */
 
 extern "C" eng_rcode eng_email_active(bool status)
@@ -523,6 +559,9 @@ extern "C" eng_rcode eng_email_active(bool status)
 ** The callback function allows for the Engine to return a callback
 ** function of its own to receive an indication of feedback from
 ** the user, e.g. if a confirmation is required.
+**
+** If the returned code is positive, it indicates to the UI that
+** a 2-button popup is required.
 */
 
 extern "C" eng_rcode eng_register_status(void *handle, eng_cbf_status func)
@@ -536,6 +575,11 @@ extern "C" eng_rcode eng_register_status(void *handle, eng_cbf_status func)
   return ENG_COMPLETED;
 }
 
+
+/*
+** eng_get_send_message()returns a message descriptor for the
+** message being sent.
+*/
 
 extern "C" eng_rcode eng_get_send_message(uint32 msg_id, MessageDescriptor **msg)
 {
@@ -551,6 +595,10 @@ extern "C" eng_rcode eng_get_send_message(uint32 msg_id, MessageDescriptor **msg
 }
 
 
+/*
+** eng_change_user() is called whenever the user details are changed.
+*/
+
 extern "C" eng_rcode eng_change_user(void)
 {
 
@@ -559,6 +607,11 @@ extern "C" eng_rcode eng_change_user(void)
 
 }
 
+
+/*
+** eng_null_events() allows the UI to tell the Engine that it
+** wishes to receive null events currently.
+*/
 
 extern "C" void eng_null_events(bool yes)
 {
@@ -573,6 +626,13 @@ extern "C" void eng_null_events(bool yes)
 }
 
 
+/*
+** eng_mem_available() calls FreeMem() to return the amount
+** of free memory available, which will always be c. 2MB less
+** than the real free memory value to allow for the browser
+** grabbing huge chunks of memory when rendering NCMail's pages.
+*/
+
 extern "C" eng_rcode eng_mem_available(int32 *free)
 {
 
@@ -582,6 +642,11 @@ extern "C" eng_rcode eng_mem_available(int32 *free)
 }
 
 
+/*
+** eng_clear_memory() calls ClearMemory to try to release
+** a specified amount of memory from the CacheFS store.
+*/
+
 extern "C" eng_rcode eng_clear_memory(uint32 bestguess)
 {
 
@@ -590,13 +655,20 @@ extern "C" eng_rcode eng_clear_memory(uint32 bestguess)
 }
 
 
+/*
+** eng_fatal_error() is called by the UI when it gets into a
+** situation where there is no way out other than to die.
+** NCMail obligingly commits suicide at this point.
+*/
+
 void eng_fatal_error(void)
 {
 
   /*
   ** UI is reporting a fatal error.
   ** Stop any downloads, disconnect from servers,
-  ** then blow up in a puff of smoke and await reincarnation.
+  ** then blow up in a puff of smoke and await
+  ** reincarnation as a gerbil.
   */
 
   state = BROWNTROUSERS;
@@ -608,7 +680,11 @@ void eng_fatal_error(void)
 }
 
 
-/* returns true if address is valid, false if not */
+/*
+** eng_validate_email_address() validates an email address.
+** It returns true if address is valid, false if not.
+*/
+
 bool eng_validate_email_address(char *addr)
 {
   bool result = true;
