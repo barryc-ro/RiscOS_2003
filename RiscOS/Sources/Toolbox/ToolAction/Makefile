@@ -121,7 +121,7 @@ install_rom: ${TARGET}
 
 install: rm.${COMPONENT} 
         ${MKDIR} ${INSTDIR}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        ${CP} rm.${COMPONENT} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: installed
 
 clean:
