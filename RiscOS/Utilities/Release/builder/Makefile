@@ -94,13 +94,11 @@ ${TARGET}: ${OBJS}
 #
 # Dynamic dependencies:o.main:	c.main
 o.db:	c.db
-o.file:	c.file
-o.file:	C:h.kernel
-o.file:	C:h.swis
 o.msg:	c.msg
 o.msg:	C:h.kernel
 o.msg:	C:h.swis
 o.msg:	h.constants
+o.msg:	VersionNum
 o.msg:	h.db
 o.msg:	h.constants
 o.env:	c.env
@@ -110,10 +108,15 @@ o.env:	Tbox:h.gadgets
 o.env:	Tbox:h.toolbox
 o.env:	Tbox:h.wimp
 o.env:	h.constants
+o.env:	VersionNum
 o.env:	h.db
 o.env:	h.constants
+o.file:	c.file
+o.file:	C:h.kernel
+o.file:	C:h.swis
 o.parse:	c.parse
 o.parse:	h.constants
+o.parse:	VersionNum
 o.parse:	h.db
 o.parse:	h.constants
 o.build:	c.build
@@ -122,6 +125,7 @@ o.build:	Tbox:h.gadgets
 o.build:	Tbox:h.toolbox
 o.build:	Tbox:h.wimp
 o.build:	h.constants
+o.build:	VersionNum
 o.build:	h.db
 o.build:	h.constants
 o.build:	h.parse
@@ -142,6 +146,7 @@ o.main:	Tbox:h.proginfo
 o.main:	Tbox:h.iconbar
 o.main:	h.resources
 o.main:	h.constants
+o.main:	VersionNum
 o.main:	h.db
 o.main:	h.constants
 o.main:	h.msg
