@@ -1,0 +1,2043 @@
+/***************************************************/
+/* File   : Frames.c                               */
+/* Purpose: Frame handling functions for the       */
+/*          browser.                               */
+/* Author : A.D.Hodgkinson                         */
+/* History: 19-Mar-97: Created                     */
+/***************************************************/
+
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+
+#include "swis.h"
+#include "flex.h"
+
+#include "unixlib.h" /* For case insensitive strcmps only */
+
+#include "HTMLLib.h" /* HTML library API, Which will include html2_ext.h, tags.h and struct.h */
+
+#include "wimp.h"
+#include "wimplib.h"
+#include "event.h"
+
+#include "toolbox.h"
+#include "window.h"
+
+#include "NestWimp.h"
+
+#include "svcprint.h"
+#include "Global.h"
+#include "FromROSLib.h"
+#include "TBEvents.h"
+#include "Utils.h"
+
+#include "Browser.h"
+#include "Fetch.h"
+#include "FetchPage.h"
+#include "Images.h"
+#include "Memory.h"
+#include "Reformat.h"
+#include "Toolbars.h"
+#include "URLutils.h"
+#include "Windows.h"
+
+#include "Frames.h"
+
+/* Locals */
+
+static ObjectId highlight_top    = 0;
+static ObjectId highlight_bottom = 0;
+static ObjectId highlight_left   = 0;
+static ObjectId highlight_right  = 0;
+
+static int      highlight_timer  = 0;
+static int      highlight_for    = 0;
+
+/* Static function prototypes */
+
+static _kernel_oserror * frames_find_widths         (browser_data * b, int available);
+static _kernel_oserror * frames_find_heights        (browser_data * b, int available);
+static int               frames_check_recursion     (browser_data * parent, browser_data * child, HStream * token);
+static void              frames_collapse_child_tree (browser_data * base, browser_data * real_parent, browser_data * close);
+
+static browser_data    * frames_find_next_frame     (browser_data * check, browser_data * current, int * found);
+static browser_data    * frames_find_previous_frame (browser_data * check, browser_data * current, int * found);
+
+static int               frames_remove_highlight    (int eventcode, WimpPollBlock * b, IdBlock * idb, browser_data * handle);
+
+/*************************************************/
+/* frames_find_widths()                          */
+/*                                               */
+/* Constructs an array pointed to by the         */
+/* frame_widths field of a browser_data struct,  */
+/* containing the widths of frames described by  */
+/* the token pointed to in the frameset field of */
+/* the browser_data structure.                   */
+/*                                               */
+/* These frame widths are set to occupy the      */
+/* entire space given to the function; any       */
+/* border and scroll bar size considerations     */
+/* must therefore be done externally.            */
+/*                                               */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the frameset;         */
+/*             The available width the frameset  */
+/*             must fit inside, in OS units.     */
+/*************************************************/
+
+static _kernel_oserror * frames_find_widths(browser_data * b, int available)
+{
+  _kernel_oserror * e;
+  int               tw, units;
+  int               col, cols, left, stars;
+
+  cols = b->frameset->cols;
+  if (!cols) cols = 1;
+
+  /* Allocate memory for the array */
+
+  e = memory_set_chunk_size(b, NULL, CK_FWID, cols * sizeof(int));
+  if (e) return e;
+
+  /* Ensure 'available' is a whole number of pixels */
+
+  available &= ~(wimpt_dx() - 1);
+
+  /* Fast simple case - only one column */
+
+  if (cols == 1)
+  {
+    b->frame_widths[0] = available;
+    return NULL;
+  }
+
+  /* Initial conditions */
+
+  left  = available;
+  stars = 0;
+
+  /* First pass; subtract from the overall width, */
+  /* the width of percentage specified frames     */
+  /* and absolute pixel size specified frames.    */
+
+  for (col = 0; col < cols; col ++)
+  {
+    tw     = ((int *) (b->frameset->value))[col];
+    units  = tw & ~ROWCOL_VALUE;
+    tw    &= ROWCOL_VALUE;
+
+    if (units & ROWCOL_PERCENT)
+    {
+      tw    = ((available * tw) / 100) & ~(wimpt_dx() - 1);
+      left -= tw;
+
+      b->frame_widths[col] = tw;
+    }
+    else if (units & ROWCOL_STAR)
+    {
+      stars ++;
+    }
+    else
+    {
+      tw    = (tw * 2) & ~(wimpt_dx() - 1);
+      left -= tw;
+
+      b->frame_widths[col] = tw;
+    }
+  }
+
+  /* Second pass; allocate a fraction of the   */
+  /* remaining space to star specified frames. */
+
+  if (stars)
+  {
+    int remaining;
+
+    remaining = left;
+
+    for (col = 0; col < cols; col ++)
+    {
+      tw     = ((int *) (b->frameset->value))[col];
+      units  = tw & ~ROWCOL_VALUE;
+      tw    &= ROWCOL_VALUE;
+
+      if (units & ROWCOL_STAR)
+      {
+        tw = (remaining * tw / stars) & ~(wimpt_dx() - 1);
+        if (tw < choices.minfrmwidth) tw = choices.minfrmwidth;
+
+        left -= tw;
+
+        b->frame_widths[col] = tw;
+      }
+    }
+  }
+
+  /* Third pass; simple scale to fit all the frames in the */
+  /* available space (scaling up or down). 'left' holds,   */
+  /* in OS units, the amount left / overshot in the        */
+  /* available width.                                      */
+
+  if (left != 0)
+  {
+    int basic, remainder, left2 = available;
+
+    if (available == left) left = available + 1;
+
+    for (col = 0; col < cols; col ++)
+    {
+      left2                 -=
+      b->frame_widths[col]  =
+
+      (b->frame_widths[col] * available / (available - left)) & ~(wimpt_dx() - 1);
+    }
+
+    /* 'left2' is in OS units, but represents a whole number of */
+    /* pixels due to careful use of wimpt_dx() above. To cope   */
+    /* with rounding correctly during rescaling the widths      */
+    /* (see below), want this now in pixel values.              */
+
+    left = left2 / wimpt_dx();
+
+    basic     = left / cols;
+    remainder = left - (basic * cols);
+
+    basic *= wimpt_dx();
+
+    for (col = 0; col < cols; col ++)
+    {
+      if (remainder < 0)
+      {
+        b->frame_widths[col] += basic - wimpt_dx();
+        remainder ++;
+      }
+      else if (remainder > 0)
+      {
+        b->frame_widths[col] += basic + wimpt_dx();
+        remainder --;
+      }
+      else b->frame_widths[col] += basic;
+    }
+  }
+
+  return NULL;
+}
+
+/*************************************************/
+/* frames_find_heights()                         */
+/*                                               */
+/* Constructs an array pointed to by the         */
+/* frame_heights field of a browser_data struct, */
+/* containing the heights of frames described by */
+/* the token pointed to in the frameset field of */
+/* the browser_data structure.                   */
+/*                                               */
+/* These frame heights are set to occupy the     */
+/* entire space given to the function; any       */
+/* border and scroll bar size considerations     */
+/* must therefore be done externally.            */
+/*                                               */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the frameset;         */
+/*             The available height the frameset */
+/*             must fit inside, in OS units.     */
+/*************************************************/
+
+static _kernel_oserror * frames_find_heights(browser_data * b, int available)
+{
+  _kernel_oserror * e;
+  int               th, units;
+  int               row, rows, left, stars;
+
+  rows = b->frameset->rows;
+  if (!rows) rows = 1;
+
+  /* Allocate memory for the array */
+
+  e = memory_set_chunk_size(b, NULL, CK_FHEI, rows * sizeof(int));
+  if (e) return e;
+
+  /* Ensure 'available' is a whole number of pixels */
+
+  available &= ~(wimpt_dy() - 1);
+
+  /* Fast simple case - only one row */
+
+  if (rows == 1)
+  {
+    b->frame_heights[0] = available;
+    return NULL;
+  }
+
+  /* Initial conditions */
+
+  left  = available;
+  stars = 0;
+
+  /* First pass; subtract from the overall height, */
+  /* the height of percentage specified frames     */
+  /* and absolute pixel size specified frames.     */
+
+  for (row = 0; row < rows; row ++)
+  {
+    th     = ((int *) (b->frameset->name))[row];
+    units  = th & ~ROWCOL_VALUE;
+    th    &= ROWCOL_VALUE;
+
+    if (units & ROWCOL_PERCENT)
+    {
+      th    = ((available * th) / 100) & ~(wimpt_dy() - 1);
+      left -= th;
+
+      b->frame_heights[row] = th;
+    }
+    else if (units & ROWCOL_STAR)
+    {
+      stars ++;
+    }
+    else
+    {
+      th    = (th * 2) & ~(wimpt_dy() - 1);
+      left -= th;
+
+      b->frame_heights[row] = th;
+    }
+  }
+
+  /* Second pass; allocate a fraction of the   */
+  /* remaining space to star specified frames. */
+
+  if (stars)
+  {
+    int remaining;
+
+    remaining = left;
+
+    for (row = 0; row < rows; row ++)
+    {
+      th     = ((int *) (b->frameset->name))[row];
+      units  = th & ~ROWCOL_VALUE;
+      th    &= ROWCOL_VALUE;
+
+      if (units & ROWCOL_STAR)
+      {
+        th = (remaining * th / stars) & ~(wimpt_dy() - 1);
+        if (th < choices.minfrmheight) th = choices.minfrmheight;
+
+        left -= th;
+
+        b->frame_heights[row] = th;
+      }
+    }
+  }
+
+  /* Third pass; simple scale to fit all the frames in the */
+  /* available space (scaling up or down). 'left' holds,   */
+  /* in OS units, the amount left / overshot in the        */
+  /* available height.                                     */
+
+  if (left != 0)
+  {
+    int basic, remainder, left2 = available;
+
+    if (available == left) left = available + 1;
+
+    for (row = 0; row < rows; row ++)
+    {
+      left2                 -=
+      b->frame_heights[row]  =
+
+      (b->frame_heights[row] * available / (available - left)) & ~(wimpt_dy() - 1);
+    }
+
+    /* 'left2' is in OS units, but represents a whole number of */
+    /* pixels due to careful use of wimpt_dy() above. To cope   */
+    /* with rounding correctly during rescaling the heights     */
+    /* (see below), want this now in pixel values.              */
+
+    left = left2 / wimpt_dy();
+
+    basic     = left / rows;
+    remainder = left - (basic * rows);
+
+    basic *= wimpt_dy();
+
+    for (row = 0; row < rows; row ++)
+    {
+      if (remainder < 0)
+      {
+        b->frame_heights[row] += basic - wimpt_dy();
+        remainder ++;
+      }
+      else if (remainder > 0)
+      {
+        b->frame_heights[row] += basic + wimpt_dy();
+        remainder --;
+      }
+      else b->frame_heights[row] += basic;
+    }
+  }
+
+  return NULL;
+}
+
+/*************************************************/
+/* frames_get_rc_info()                          */
+/*                                               */
+/* Returns the number of rows and columns in a   */
+/* frameset, and the row and column that a       */
+/* specific child lies in.                       */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             which is the parent of the set of */
+/*             frames in question;               */
+/*                                               */
+/*             The child number, or -1 if not    */
+/*             interested in this info;          */
+/*                                               */
+/*             Pointer to an int, into which the */
+/*             number of rows is placed;         */
+/*                                               */
+/*             Pointer to an int, into which the */
+/*             number of columns is placed;      */
+/*                                               */
+/*             Pointer to an int, into which the */
+/*             row the child lies in is placed;  */
+/*                                               */
+/*             Pointer to an int, into which the */
+/*             column the child lies in is       */
+/*             placed.                           */
+/*                                               */
+/* Returns:    See parameters list.              */
+/*                                               */
+/* Assumes:    Any of the four int pointers may  */
+/*             be NULL.                          */
+/*************************************************/
+
+void frames_get_rc_info(browser_data * parent, int child,
+                        int * retrows, int * retcols, int * retrow, int * retcol)
+{
+  int rows = 0, row = 0, cols = 0, col = 0;
+
+  if (parent->nchildren)
+  {
+    rows = parent->frameset->rows;
+    cols = parent->frameset->cols;
+
+    if (!rows) rows = 1;
+    if (!cols) cols = 1;
+
+    if (child >= 0)
+    {
+      row = child / rows;
+      col = child % cols;
+
+      if (row <  0)    row = 0;
+      if (row >= rows) row = rows - 1;
+      if (col <  0)    col = 0;
+      if (col >= cols) col = cols - 1;
+    }
+  }
+
+  if (retrows) *retrows = rows;
+  if (retcols) *retcols = cols;
+  if (retrow)  *retrow  = row;
+  if (retcol)  *retcol  = col;
+}
+
+/*************************************************/
+/* frames_can_resize_top()                       */
+/*                                               */
+/* Returns 1 if the top edge of a given frame    */
+/* may be dragged to resize the frame.           */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             which is the parent of the set of */
+/*             frames in question;               */
+/*                                               */
+/*             Number of the child to check.     */
+/*                                               */
+/* Returns:    1 if the frame's top edge can be  */
+/*             dragged to resize it, else 0 (due */
+/*             to NORESIZE specified on that     */
+/*             frame or frames surrounding it).  */
+/*************************************************/
+
+int frames_can_resize_top(browser_data * parent, int child)
+{
+  int            row, rows, col, cols;
+  int            checkcol, checkchild;
+  browser_data * checkc;
+  int            canresize = 1;
+  HStream      * frametoken;
+
+  if (!parent->nchildren) return 0;
+
+  frametoken = parent->children[child]->frame;
+
+  if (frametoken && (frametoken->type & TYPE_NORESIZE)) return 0;
+
+  /* Find out the number of rows and columns, and the */
+  /* row and column number the given child falls in.  */
+
+  frames_get_rc_info(parent, child, &rows, &cols, &row, &col);
+
+  for (checkcol = 0; checkcol < cols; checkcol ++)
+  {
+    /* Check all columns in the row the child is in for NORESIZE frames */
+
+    checkchild = row * cols + checkcol;
+    checkc     = parent->children[checkchild];
+    frametoken = checkc->frame;
+
+    if (frametoken && (frametoken->type & TYPE_NORESIZE))
+    {
+      canresize = 0;
+      break;
+    }
+
+    /* If not already on row 0, check the row above for NORESIZE frames */
+
+    if (row)
+    {
+      checkchild = (row - 1) * cols + checkcol;
+      checkc     = parent->children[checkchild];
+      frametoken = checkc->frame;
+
+      if (frametoken && (frametoken->type & TYPE_NORESIZE))
+      {
+        canresize = 0;
+        break;
+      }
+    }
+  }
+
+  return canresize;
+}
+
+/*************************************************/
+/* frames_can_resize_bottom()                    */
+/*                                               */
+/* Returns 1 if the bottom edge of a given frame */
+/* may be dragged to resize the frame.           */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             which is the parent of the set of */
+/*             frames in question;               */
+/*             Number of the child to check.     */
+/*                                               */
+/* Returns:    1 if the frame's bottom edge can  */
+/*             be dragged to resize it, else 0   */
+/*             (due to NORESIZE specified on     */
+/*             that frame or frames surrounding  */
+/*             it).                              */
+/*************************************************/
+
+int frames_can_resize_bottom(browser_data * parent, int child)
+{
+  int            row, rows, col, cols;
+  int            checkcol, checkchild;
+  browser_data * checkc;
+  int            canresize = 1;
+  HStream      * frametoken;
+
+  if (!parent->nchildren) return 0;
+
+  frametoken = parent->children[child]->frame;
+
+  if (frametoken && (frametoken->type & TYPE_NORESIZE)) return 0;
+
+  /* Find out the number of rows and columns, and the */
+  /* row and column number the given child falls in.  */
+
+  frames_get_rc_info(parent, child, &rows, &cols, &row, &col);
+
+  for (checkcol = 0; checkcol < cols; checkcol ++)
+  {
+    /* Check all columns in the row the child is in for NORESIZE frames */
+
+    checkchild = row * cols + checkcol;
+    checkc     = parent->children[checkchild];
+    frametoken = checkc->frame;
+
+    if (frametoken && (frametoken->type & TYPE_NORESIZE))
+    {
+      canresize = 0;
+      break;
+    }
+
+    /* If not already on the last row, check the row below for NORESIZE frames */
+
+    if (row < rows - 1)
+    {
+      checkchild = (row + 1) * cols + checkcol;
+      checkc     = parent->children[checkchild];
+      frametoken = checkc->frame;
+
+      if (frametoken && (frametoken->type & TYPE_NORESIZE))
+      {
+        canresize = 0;
+        break;
+      }
+    }
+  }
+
+  return canresize;
+}
+
+/*************************************************/
+/* frames_can_resize_left()                      */
+/*                                               */
+/* Returns 1 if the left edge of a given frame   */
+/* may be dragged to resize the frame.           */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             which is the parent of the set of */
+/*             frames in question;               */
+/*             Number of the child to check.     */
+/*                                               */
+/* Returns:    1 if the frame's left edge can be */
+/*             dragged to resize it, else 0 (due */
+/*             to NORESIZE specified on that     */
+/*             frame or frames surrounding it).  */
+/*************************************************/
+
+int frames_can_resize_left(browser_data * parent, int child)
+{
+  int            row, rows, col, cols;
+  int            checkrow, checkchild;
+  browser_data * checkc;
+  int            canresize = 1;
+  HStream      * frametoken;
+
+  if (!parent->nchildren) return 0;
+
+  frametoken = parent->children[child]->frame;
+
+  if (frametoken && (frametoken->type & TYPE_NORESIZE)) return 0;
+
+  /* Find out the number of rows and columns, and the */
+  /* row and column number the given child falls in.  */
+
+  frames_get_rc_info(parent, child, &rows, &cols, &row, &col);
+
+  for (checkrow = 0; checkrow < rows; checkrow ++)
+  {
+    /* Check all rows in the column the child is in for NORESIZE frames */
+
+    checkchild = col + checkrow * cols;
+    checkc     = parent->children[checkchild];
+    frametoken = checkc->frame;
+
+    if (frametoken && (frametoken->type & TYPE_NORESIZE))
+    {
+      canresize = 0;
+      break;
+    }
+
+    /* If not already on column 0, check the column to the left for NORESIZE frames */
+
+    if (col)
+    {
+      checkchild = col - 1 + checkrow * cols;
+      checkc     = parent->children[checkchild];
+      frametoken = checkc->frame;
+
+      if (frametoken && (frametoken->type & TYPE_NORESIZE))
+      {
+        canresize = 0;
+        break;
+      }
+    }
+  }
+
+  return canresize;
+}
+
+/*************************************************/
+/* frames_can_resize_right()                     */
+/*                                               */
+/* Returns 1 if the right edge of a given frame  */
+/* may be dragged to resize the frame.           */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             which is the parent of the set of */
+/*             frames in question;               */
+/*             Number of the child to check.     */
+/*                                               */
+/*                                               */
+/* Returns:    1 if the frame's right edge can   */
+/*             be dragged to resize it, else 0   */
+/*             (due to NORESIZE specified on     */
+/*             that frame or frames surrounding  */
+/*             it).                              */
+/*************************************************/
+
+int frames_can_resize_right(browser_data * parent, int child)
+{
+  int            row, rows, col, cols;
+  int            checkrow, checkchild;
+  browser_data * checkc;
+  int            canresize = 1;
+  HStream      * frametoken;
+
+  if (!parent->nchildren) return 0;
+
+  frametoken = parent->children[child]->frame;
+
+  if (frametoken && (frametoken->type & TYPE_NORESIZE)) return 0;
+
+  /* Find out the number of rows and columns, and the */
+  /* row and column number the given child falls in.  */
+
+  frames_get_rc_info(parent, child, &rows, &cols, &row, &col);
+
+  for (checkrow = 0; checkrow < rows; checkrow ++)
+  {
+    /* Check all rows in the column the child is in for NORESIZE frames */
+
+    checkchild = col + checkrow * cols;
+    checkc     = parent->children[checkchild];
+    frametoken = checkc->frame;
+
+    if (frametoken && (frametoken->type & TYPE_NORESIZE))
+    {
+      canresize = 0;
+      break;
+    }
+
+    /* If not already on the last column, check the column to the right for NORESIZE frames */
+
+    if (col < cols - 1)
+    {
+      checkchild = col + 1 + checkrow * cols;
+      checkc     = parent->children[checkchild];
+      frametoken = checkc->frame;
+
+      if (frametoken && (frametoken->type & TYPE_NORESIZE))
+      {
+        canresize = 0;
+        break;
+      }
+    }
+  }
+
+  return canresize;
+}
+
+/*************************************************/
+/* frames_define_frameset()                      */
+/*                                               */
+/* For a given parent browser_data structure,    */
+/* sets up a frameset within it. Frame details   */
+/* for each of the children thus generated are   */
+/* filled in later, when getting each frame      */
+/* token from the HTML library.                  */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             representing the parent;          */
+/*             Pointer to a token defining the   */
+/*             frameset.                         */
+/*                                               */
+/* Assumes:    If the window already has a       */
+/*             frameset defined, this set and    */
+/*             all nested sets above it will be  */
+/*             destroyed before the new one is   */
+/*             created.                          */
+/*************************************************/
+
+_kernel_oserror * frames_define_frameset(browser_data * b, HStream * token)
+{
+  _kernel_oserror         * e;
+  WimpGetWindowStateBlock   s;
+  BBox                      frame_box;
+  int                       rows, cols;
+  int                       num_rows, num_cols;
+  int                       width, height;
+  int                       topbar_height, bottombar_height;
+  int                       available_w, available_h;
+  int                       start_x, start_y, accum_x, accum_y;
+  int                       th, hh, vw;
+
+  #ifdef TRACE
+    if (tl & (1u<<17)) Printf("frames_define_frameset: Called with browser_data %p\n",b);
+  #endif
+
+  /* For ancestor windows, need to get the whole window */
+  /* state and use the visible area, thus taking        */
+  /* account of scrollbar presence etc.                 */
+
+  if (!b->ancestor || !nested_wimp)
+  {
+    s.window_handle = b->window_handle;
+    e = wimp_get_window_state(&s);
+    if (e) return e;
+  }
+
+  /* However, for frames with frames about to be defined */
+  /* inside them, we know that the scrollbars in this    */
+  /* frame will disappear (if the nested wimp is in use) */
+  /* and so need to use the window outline, not the      */
+  /* visible area, as the latter may not be up to date.  */
+
+  else
+  {
+    WimpGetWindowOutlineBlock o;
+
+    o.window_handle = b->window_handle;
+    e = wimp_get_window_outline(&o);
+    if (e) return e;
+
+    s.window_handle = o.window_handle;
+    s.visible_area  = o.outline;
+  }
+
+  windows_return_tool_sizes(&th, &hh, &vw);
+
+  /* Destroy any existing frameset */
+
+  frames_collapse_set(b);
+
+  /* Set up the basic starting parameters */
+
+  b->nchildren     = 0;
+  b->filling_frame = 0;
+  b->frameset      = token;
+
+  /* Work out the amount of visible area that toolbars are consuming */
+
+  topbar_height    = toolbars_url_height(b) + toolbars_button_height(b); /* Physically, the button bar and URL bar are just one real toolbar */
+  bottombar_height = toolbars_status_height(b);
+
+  if (topbar_height)    topbar_height    += wimpt_dy(); /* Account for lower border of upper toolbar, if present */
+  if (bottombar_height) bottombar_height += wimpt_dy(); /* Account for upper border of lower toolbar, if present */
+
+  /* Work out the available frame space width and height */
+
+  available_w = s.visible_area.xmax - s.visible_area.xmin;
+
+  available_h = s.visible_area.ymax - s.visible_area.ymin
+                - topbar_height
+                - bottombar_height;
+
+  /* Start defining frames from the top left hand side of the visible area */
+
+  start_x = s.visible_area.xmin;
+  start_y = s.visible_area.ymax - topbar_height;
+
+  /* Work out the number of rows / columns */
+
+  num_rows = token->rows;
+  if (!num_rows) num_rows = 1;
+
+  num_cols = token->cols;
+  if (!num_cols) num_cols = 1;
+
+  /* Account for frame spacing */
+
+  available_w -= token->indent * wimpt_dx() * (num_cols - 1);
+  available_h -= token->indent * wimpt_dy() * (num_rows - 1);
+
+  #ifdef TRACE
+    if (tl & (1u<<17))
+    {
+      Printf("frames_define_frameset: avail_w %d\n"
+             "                        avail_h %d\n"
+             "                        start_x %d\n"
+             "                        start_y %d\n"
+             "                        rows    %d\n"
+             "                        cols    %d\n\n",
+             available_w,
+             available_h,
+             start_x,
+             start_y,
+             num_rows,
+             num_cols);
+      {
+        int i;
+
+        Printf("frames_define_frameset: Size enumeration:\n\n");
+
+        for (i = 0; i < num_rows; i++)
+        {
+          if (token->name) Printf("Row %d = %p\n",i,((int *) token->name)[i]);
+          else             Printf("Row %d = undefined\n",i);
+        }
+
+        Printf("\n");
+
+        for (i = 0; i < num_cols; i++)
+        {
+          if (token->value) Printf("Col %d = %p\n",i,((int *) token->value)[i]);
+          else              Printf("Col %d = undefined\n",i);
+        }
+
+        Printf("\nframes_define_frameset: Proceeding\n");
+      }
+    }
+  #endif
+
+  /* Get all the sizes */
+
+  frames_find_widths (b, available_w);
+  frames_find_heights(b, available_h);
+
+  /* Loop round defining each child */
+
+  frame_box.ymax = start_y;
+  accum_y        = 0;
+
+  for (rows = 0; rows < num_rows; rows ++)
+  {
+    frame_box.xmin = start_x;
+    accum_x        = 0;
+    height         = b->frame_heights[rows];
+
+    accum_y += height;
+
+    if (rows == num_rows - 1)
+    {
+      /* For the last row, ensure it fills up the height - rounding errors in scaling */
+      /* for the find_height calls often make this necessary.                         */
+
+      if (accum_y != available_h) height -= accum_y - available_h, accum_y = available_h;
+    }
+
+    for (cols = 0; cols < num_cols; cols ++)
+    {
+      width = b->frame_widths[cols];
+
+      accum_x += width;
+
+      if (cols == num_cols - 1)
+      {
+        /* For the last column, ensure it fills up the width - rounding errors in scaling */
+        /* for the find_width calls often make this necessary.                            */
+
+        if (accum_x != available_w) width -= accum_x - available_w, accum_x = available_w;
+      }
+
+      /* Adjust the open coordinates to account for the scroll bars */
+      /* present in the Res file. If these are not present, the     */
+      /* reformatter will try to use the horizontal space a         */
+      /* vertical bar normally occupies and things will get worse   */
+      /* from there...                                              */
+
+      frame_box.xmax = frame_box.xmin + width  - vw;
+      frame_box.ymin = frame_box.ymax - height + hh;
+
+      windows_create_browser("", b, &frame_box, NULL);
+      windows_set_tools(last_browser, &frame_box, 0, 0, 0, 0);
+
+      /* Make the child inherit the parent's display characteristics */
+
+      last_browser->underlinelks  = b->underlinelks;
+      last_browser->displayimages = b->displayimages;
+      last_browser->plainback     = b->plainback;
+      last_browser->sourcecolours = b->sourcecolours;
+
+      /* If this is the first frame for the ancestor, make it selected */
+
+      if (last_browser->ancestor->nchildren == 1) last_browser->frame_selected = 1;
+
+      /* Increment the position counters and loop round again */
+
+      frame_box.xmin += width + token->indent * wimpt_dx();
+    }
+
+    frame_box.ymax -= height + token->indent * wimpt_dy();
+  }
+
+  /* Finally, do a redraw of the parent to ensure borders are */
+  /* up to date.                                              */
+
+  coords_box_toworkarea(&s.visible_area, (WimpRedrawWindowBlock *) &s);
+
+  e = wimp_force_redraw(b->window_handle,
+                        s.visible_area.xmin,
+                        s.visible_area.ymin,
+                        s.visible_area.xmax,
+                        s.visible_area.ymax);
+  if (e) return e;
+
+  #ifdef TRACE
+    if (tl & (1u<<17)) Printf("frames_define_frameset: Successful\n");
+  #endif
+
+  return NULL;
+}
+
+/*************************************************/
+/* frames_check_recursion()                      */
+/*                                               */
+/* Checks to see if a frameset is defining       */
+/* itself recursively.                           */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             which is the parent of the frame  */
+/*             being checked.                    */
+/*                                               */
+/*             Pointer to a browser_data struct  */
+/*             which represents the frame being  */
+/*             checked;                          */
+/*                                               */
+/*             Pointer to an HStream struct that */
+/*             represents the <FRAME...> tag     */
+/*             which is filling in the frame     */
+/*             being checked.                    */
+/*                                               */
+/* Returns:    1 if the definition is recursive, */
+/*             else 0.                           */
+/*************************************************/
+
+static int frames_check_recursion(browser_data * parent, browser_data * child, HStream * token)
+{
+  while (parent)
+  {
+    if (browser_fetch_url(parent)   && !strcmp(browser_fetch_url(parent),   token->src)) return 1;
+    if (browser_current_url(parent) && !strcmp(browser_current_url(parent), token->src)) return 1;
+
+    parent = parent->real_parent;
+  }
+
+  return 0;
+}
+
+/*************************************************/
+/* frames_define_frame()                         */
+/*                                               */
+/* For a given parent browser_data structure,    */
+/* fills in the next unfilled frame.             */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             representing the parent;          */
+/*             Pointer to the token that is to   */
+/*             define the child characteristics. */
+/*                                               */
+/* Assumes:    If the parent has no children,    */
+/*             the routine silently fails;       */
+/*             If the parent's children are all  */
+/*             defined (i.e. there appear to be  */
+/*             more <frame> tags than defined by */
+/*             the initial <frameset> the        */
+/*             routine, again, silently fails.   */
+/*************************************************/
+
+_kernel_oserror * frames_define_frame(browser_data * b, HStream * token)
+{
+  browser_data    * child;
+  _kernel_oserror * e;
+
+  #ifdef TRACE
+    if (tl & (1u<<17)) Printf("frames_define_frame: Called with browser_data %p\n",b);
+  #endif
+
+  if (!b->nchildren) return NULL;
+
+  #ifdef TRACE
+    if (tl & (1u<<17)) Printf("frames_define_frame: Do have children, so proceeding\n",b);
+  #endif
+
+  if (b->nchildren <= b->filling_frame) return NULL;
+
+  #ifdef TRACE
+    if (tl & (1u<<17)) Printf("frames_define_frame: Have not defined all characteristics, so proceeding\n",b);
+  #endif
+
+  child = (browser_data *) b->children[b->filling_frame++];
+
+  child->frame = token;
+
+  if (token->name && *token->name)
+  {
+    e = memory_set_chunk_size(child, NULL, CK_NAME, strlen(token->name) + 1);
+    if (e) return e;
+
+    strcpy(child->window_name, token->name);
+  }
+
+  /* Set scrolling details */
+  {
+    int scroll;
+
+    scroll = token->type & TYPE_SCROLLING_MASK;
+
+    if      (scroll == TYPE_SCROLLING_NO)   child->frame_hscroll = 0;
+    else if (scroll == TYPE_SCROLLING_AUTO) child->frame_hscroll = 1;
+    else if (scroll == TYPE_SCROLLING_YES)  child->frame_hscroll = 2;
+
+    child->frame_vscroll = child->frame_hscroll;
+  }
+
+  /* About to try and fetch the URL defined for the frame, */
+  /* but need to first check it's not recursive.           */
+
+  if (frames_check_recursion(b, child, token))
+  {
+    #ifdef TRACE
+      if (tl & (1u<<17)) Printf("frames_define_frame: Exitting with no fetch (recursive frameset)\n");
+    #endif
+
+    #ifdef STRICT_PARSER
+
+      erb.errnum = Utils_Error_Custom_Message;
+
+      StrNCpy0(erb.errmess,
+               lookup_token("FramRcrs:Frames definition references itself recursively; could not proceed with the frames layout.",
+                            0,0));
+
+      show_error_ret(&erb);
+
+    #endif
+
+    return NULL;
+  }
+
+  #ifdef TRACE
+    if (tl & (1u<<17)) Printf("frames_define_frame: Exitting through fetchpage_new()\n",b);
+  #endif
+
+  return fetchpage_new(child, token->src, 1);
+}
+
+/*************************************************/
+/* frames_resize_frameset()                      */
+/*                                               */
+/* For a given parent browser_data structure,    */
+/* resize a frameset within its window.          */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             representing the parent;          */
+/*                                               */
+/*             A WimpOpenWindowBlock pointer,    */
+/*             with the block holding the new    */
+/*             BBox of the parent.               */
+/*************************************************/
+
+_kernel_oserror * frames_resize_frameset(browser_data * b, WimpOpenWindowBlock * o)
+{
+  _kernel_oserror         * e;
+  WimpGetWindowStateBlock   s;
+  BBox                      frame_box;
+  HStream                 * token;
+  int                       rows, cols;
+  int                       num_rows, num_cols;
+  int                       width, height;
+  int                       topbar_height, bottombar_height;
+  int                       available_w, available_h;
+  int                       start_x, start_y, accum_x, accum_y;
+  int                       th, hh, vw;
+  int                       child;
+
+  /* Nothing to resize if there are no children */
+
+  if (!b->nchildren) return NULL;
+
+  #ifdef TRACE
+    if (tl & (1u<<17)) Printf("frames_resize_frameset: Called with browser_data %p\n",b);
+  #endif
+
+  s.window_handle = o->window_handle;
+  e = wimp_get_window_state(&s);
+  if (e) return e;
+
+  s.visible_area = o->visible_area;
+
+  windows_return_tool_sizes(&th, &hh, &vw);
+
+  /* Work out the amount of visible area that toolbars are consuming */
+
+  topbar_height    = toolbars_url_height(b) + toolbars_button_height(b); /* Physically, the button bar and URL bar are just one real toolbar */
+  bottombar_height = toolbars_status_height(b);
+
+  if (topbar_height)    topbar_height    += wimpt_dy(); /* Account for lower border of upper toolbar, if present */
+  if (bottombar_height) bottombar_height += wimpt_dy(); /* Account for upper border of lower toolbar, if present */
+
+  /* Work out the available frame space width and height */
+
+  available_w = s.visible_area.xmax - s.visible_area.xmin;
+
+  available_h = s.visible_area.ymax - s.visible_area.ymin
+                - topbar_height
+                - bottombar_height;
+
+  /* Start resizing frames from the top left hand side of the visible area */
+
+  start_x = s.visible_area.xmin;
+  start_y = s.visible_area.ymax - topbar_height;
+
+  /* Work out the number of rows / columns */
+
+  token = b->frameset;
+
+  num_rows = token->rows;
+  if (!num_rows) num_rows = 1;
+
+  num_cols = token->cols;
+  if (!num_cols) num_cols = 1;
+
+  /* Account for frame spacing */
+
+  available_w -= token->indent * wimpt_dx() * (num_cols - 1);
+  available_h -= token->indent * wimpt_dy() * (num_rows - 1);
+
+  #ifdef TRACE
+    if (tl & (1u<<17))
+    {
+      Printf("frames_resize_frameset: avail_w %d\n"
+             "                        avail_h %d\n"
+             "                        start_x %d\n"
+             "                        start_y %d\n"
+             "                        rows    %d\n"
+             "                        cols    %d\n\n",
+             available_w,
+             available_h,
+             start_x,
+             start_y,
+             num_rows,
+             num_cols);
+      {
+        int i;
+
+        Printf("frames_resize_frameset: Size enumeration:\n\n");
+
+        for (i = 0; i < num_rows; i++)
+        {
+          if (token->name) Printf("Row %d = %p\n",i,((int *) token->name)[i]);
+          else             Printf("Row %d = undefined\n",i);
+        }
+
+        Printf("\n");
+
+        for (i = 0; i < num_cols; i++)
+        {
+          if (token->value) Printf("Col %d = %p\n",i,((int *) token->value)[i]);
+          else              Printf("Col %d = undefined\n",i);
+        }
+
+        Printf("\nframes_resize_frameset: Proceeding\n");
+      }
+    }
+  #endif
+
+  /* Get all the sizes */
+
+  frames_find_widths (b, available_w);
+  frames_find_heights(b, available_h);
+
+  /* Loop round resizing each child */
+
+  frame_box.ymax = start_y;
+  accum_y        = 0;
+  child          = 0;
+
+  for (rows = 0; rows < num_rows; rows ++)
+  {
+    frame_box.xmin = start_x;
+    accum_x        = 0;
+    height         = b->frame_heights[rows];
+
+    accum_y += height;
+
+    if (rows == num_rows - 1)
+    {
+      /* For the last row, ensure it fills up the height - rounding errors in scaling */
+      /* for the find_height calls often make this necessary.                         */
+
+      if (accum_y != available_h) height -= accum_y - available_h, accum_y = available_h;
+    }
+
+    for (cols = 0; cols < num_cols; cols ++)
+    {
+      width = b->frame_widths[cols];
+
+      accum_x += width;
+
+      if (cols == num_cols - 1)
+      {
+        /* For the last column, ensure it fills up the width - rounding errors in scaling */
+        /* for the find_width calls often make this necessary.                            */
+
+        if (accum_x != available_w) width -= accum_x - available_w, accum_x = available_w;
+      }
+
+      frame_box.xmax = frame_box.xmin + width;
+      frame_box.ymin = frame_box.ymax - height;
+
+      /* Handle reopening the frame */
+
+      {
+        browser_data            * cb;
+        WimpGetWindowStateBlock   frame_state;
+        IdBlock                   idb;
+        WimpPollBlock             block;
+
+        cb = b->children[child];
+
+        frame_state.window_handle = cb->window_handle;
+
+        e = wimp_get_window_state(&frame_state);
+        if (e) return e;
+
+        /* Fill in the open window request block with the new size */
+        /* details, etc.                                           */
+
+        block.open_window_request.window_handle = frame_state.window_handle;
+
+        if (frame_state.flags & WimpWindow_VScroll) frame_box.xmax -= vw;
+        if (frame_state.flags & WimpWindow_HScroll) frame_box.ymin += hh;
+
+        block.open_window_request.visible_area = frame_box;
+        block.open_window_request.xscroll      = frame_state.xscroll;
+        block.open_window_request.yscroll      = frame_state.yscroll;
+
+        /* Sort out the window to open behind. */
+
+        block.open_window_request.behind = find_behind(block.open_window_request.window_handle);
+
+        /* Fill in the ID block and call the open window function */
+
+        idb.self_id   = cb->self_id;
+        idb.parent_id = b->self_id;
+
+        windows_open_browser(0, &block, &idb, cb);
+      }
+
+      /* Prepare for the next frame */
+
+      frame_box.xmin += width + token->indent * wimpt_dx();
+      child++;
+    }
+
+    frame_box.ymax -= height + token->indent * wimpt_dy();
+  }
+
+  /* Now do a redraw of the parent, to ensure that borders are up to date */
+
+  coords_box_toworkarea(&s.visible_area, (WimpRedrawWindowBlock *) &s);
+
+  e = wimp_force_redraw(b->window_handle,
+                        s.visible_area.xmin,
+                        s.visible_area.ymin,
+                        s.visible_area.xmax,
+                        s.visible_area.ymax);
+  if (e) return e;
+
+  #ifdef TRACE
+    if (tl & (1u<<17)) Printf("frames_resize_frameset: Successful\n");
+  #endif
+
+  return NULL;
+}
+
+/*************************************************/
+/* frames_abort_fetching()                       */
+/*                                               */
+/* Stops any page or image fetching, and stops   */
+/* any current reformatting, in the given frame  */
+/* and all of its children (if it has any). For  */
+/* ancestor browser_data structures, if the      */
+/* relevant Choices and Messages file options    */
+/* have been set, WebServ will be instructed to  */
+/* stop all fetching and ditch any objects that  */
+/* are half fetched.                             */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the fetches to abort. */
+/*************************************************/
+
+void frames_abort_fetching(browser_data * b)
+{
+  int i;
+
+  /* Recurse for child frames */
+
+  if (b->nchildren)
+  {
+    for (i = 0; i < b->nchildren; i++)
+    {
+      frames_abort_fetching(b->children[i]);
+    }
+  }
+
+  /* Stop the main fetch, stop any reformatting, and */
+  /* stop image fetching.                            */
+
+  fetch_cancel(b);
+  reformat_stop(b);
+  image_abort_fetches(b);
+
+  /* If this is the ancestor, tell WebServ to stop all activity */
+  /* as well (if we're running full screen). Can't do this if   */
+  /* targetting a frame as we may still want the other frames   */
+  /* to keep fetching (e.g. the images in a navigation panel    */
+  /* may still be coming in whilst that panel is used to open a */
+  /* link in some other frame).                                 */
+
+  if (fixed.stopwebserv && choices.full_screen && !b->ancestor) utils_stop_webserv();
+}
+
+/*************************************************/
+/* frames_collapse_child_tree()                  */
+/*                                               */
+/* Used during traversal of the child tree to    */
+/* close down unwanted frames.                   */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             for the base browser - that is,   */
+/*             the one that won't be closed;     */
+/*             Pointer to a browser_data struct  */
+/*             that has the entry in its array   */
+/*             of children for the browser given */
+/*             in the next parameter;            */
+/*             Pointer to a browser_data struct  */
+/*             that may have children, which     */
+/*             is one of those that will be      */
+/*             closed (unless it's the same as   */
+/*             the base structure, which will    */
+/*             tend to be the case on first      */
+/*             call of the function).            */
+/*                                               */
+/* If the second browser has children the        */
+/* function will call itself with the given base */
+/* browser until the browser to close has no     */
+/* children. It then closes it (unless it's the  */
+/* same as the base browser, in which case the   */
+/* final exit condition is reached) and          */
+/* decrements the parent's child counter.        */
+/* Recursion then collapses a level.             */
+/*************************************************/
+
+static void frames_collapse_child_tree(browser_data * base, browser_data * real_parent, browser_data * close)
+{
+  if (!base || !close) return;
+
+  while (close->nchildren) frames_collapse_child_tree(base, close, (browser_data *) close->children[close->nchildren - 1]);
+
+  /* At this stage, might have called ourselves many times or */
+  /* not at all. In any event, we've reached a browser with   */
+  /* no children - it's at the end of the tree. So if this    */
+  /* isn't the base browser - at which point the tree must be */
+  /* closed down - close this browser.                        */
+
+  if (close != base)
+  {
+    windows_close_browser(close);
+
+    if (real_parent)
+    {
+      real_parent->nchildren --;
+
+      if (!real_parent->nchildren) memory_set_chunk_size(real_parent, NULL, CK_CHIL, 0);
+    }
+  }
+
+  close->frameset = NULL;
+
+  return;
+}
+
+/*************************************************/
+/* frames_collapse_set()                         */
+/*                                               */
+/* Given a parent browser, close all children.   */
+/*                                               */
+/* Parameters: Pointer to parent browser_data    */
+/*             struct.                           */
+/*************************************************/
+
+void frames_collapse_set(browser_data * b)
+{
+  _swix(Hourglass_Start, _IN(0), 10);
+
+  frames_collapse_child_tree(b, NULL, b);
+
+  _swix(Hourglass_Off, 0);
+}
+
+/*************************************************/
+/* frames_find_named()                           */
+/*                                               */
+/* If a given name is found attached to the      */
+/* given window or one of its children, return   */
+/* the browser_data struct for that window (else */
+/* NULL). The check is case insensitive.         */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             representing the parent (it and   */
+/*             all its children are searched for */
+/*             the name);                        */
+/*             Pointer to the name.              */
+/*                                               */
+/* Returns:    Pointer to the browser_data       */
+/*             struct of that name, or NULL if   */
+/*             not found.                        */
+/*************************************************/
+
+browser_data * frames_find_named(browser_data * parent, char * name)
+{
+  int child = 0;
+
+  /* Can't proceed with this browser window if it hasn't got a name */
+
+  if (!parent || !name || (name && !*name)) return NULL;
+
+  /* If the parent matches the given name, return it */
+
+  if (parent->window_name && *parent->window_name && !strcasecmp(parent->window_name, name)) return parent;
+
+  /* Otherwise, go through the list of children */
+
+  if (parent->nchildren)
+  {
+    for (child = 0; child < parent->nchildren; child ++)
+    {
+      browser_data * found;
+
+      found = frames_find_named((browser_data *) parent->children[child], name);
+
+      if (found) return found;
+    }
+  }
+
+  return NULL;
+}
+
+/*************************************************/
+/* frames_find_target()                          */
+/*                                               */
+/* Examines the 'target' field of a tag (token)  */
+/* and returns, given the browser that the tag   */
+/* lies in, the browser to which the target      */
+/* refers.                                       */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             that the tag lies in;             */
+/*                                               */
+/*             Address of the token.             */
+/*                                               */
+/* Returns:    Pointer to the targetted browser, */
+/*             or NULL to create a new window.   */
+/*             Note that if a new window is not  */
+/*             to be opened, NULL will *never*   */
+/*             be passed, even if the target     */
+/*             field of the given token is (say) */
+/*             NULL itself. I.e., the caller     */
+/*             doesn't need to worry about such  */
+/*             cases.                            */
+/*                                               */
+/* Assumes:    None of the parameter pointers    */
+/*             are NULL. In the case of named    */
+/*             target windows where the name     */
+/*             can't be found, NULL is returned; */
+/*             the caller should then open a new */
+/*             window with the given name.       */
+/*************************************************/
+
+browser_data * frames_find_target(browser_data * b, HStream * t)
+{
+  browser_data * ancestor;
+
+  #ifdef TRACE
+    if (tl & (1u<<17)) Printf("frames_find_target: Called for %p, token %p\n",b,t);
+  #endif
+
+  /* Only proceed if there's a browser, a token, and that */
+  /* token has a target which isn't a null string.        */
+
+  if (b && t && t->target && *t->target)
+  {
+    #ifdef TRACE
+      if (tl & (1u<<17)) Printf("frames_find_target: Target='%s'\n",t->target);
+    #endif
+
+    if (!strcasecmp(t->target, "_top")) /* Open in the top level window */
+    {
+      ancestor = b->ancestor;
+      if (!ancestor) ancestor = b->real_parent;
+      if (!ancestor) ancestor = b;
+
+      return ancestor;
+    }
+    else if (!strcasecmp(t->target, "_self")) /* Open within the frame */
+    {
+      return b;
+    }
+    else if (!strcasecmp(t->target, "_blank")) /* Open in a new, blank window */
+    {
+      return NULL;
+    }
+    else if (!strcasecmp(t->target, "_parent")) /* Open in the frame's parent */
+    {
+      browser_data * parent = b->real_parent;
+
+      /* _parent is taken by most page authors to mean the complete parent document, */
+      /* not the parent frame. That is, if one document defines within itself a      */
+      /* nested frameset, then _parent does not refer to any of those nested frames; */
+      /* it refers to the frame holding the orignal document.                        */
+      /*                                                                             */
+      /* Consequently, we need to follow real_parent pointers until we reach a child */
+      /* frame which has a non-NULL display URL field, i.e. a frame which has frames */
+      /* but has got them by fetching a document.                                    */
+
+      while (parent->real_parent && !parent->urlddata) parent = parent->real_parent;
+
+      if (!parent) parent = b->parent;
+      if (!parent) parent = b->ancestor;
+      if (!parent) parent = b;
+
+      return parent;
+    }
+    else
+    {
+      /* According to the frame spec at the time of writing, */
+      /* names must start with an alphanumeric character.    */
+
+      if (isalnum(*t->target)) /* Named window */
+      {
+        browser_data * named;
+
+        ancestor = b->ancestor;
+        if (!ancestor) ancestor = b;
+
+        named = frames_find_named(ancestor, t->target);
+
+        /* If the name isn't found, try all windows, rather */
+        /* than just children of the specified one.         */
+
+        if (!named)
+        {
+          browser_data * found = NULL;
+
+          named = last_browser;
+
+          while (named && !found)
+          {
+            if (
+                 named->window_name                         &&
+                 *named->window_name                        &&
+                 !strcasecmp(named->window_name, t->target)
+               )
+               found = named;
+
+            else named = named->previous;
+          }
+
+          /* If the name still isn't there, supposed to open a */
+          /* new window with this name. Flag this by returning */
+          /* NULL.                                             */
+
+          if (!found) return NULL;
+          else        return found;
+        }
+
+        return named;
+      }
+    }
+  }
+
+  /* For null/unspecified targets, use the same frame */
+
+  if (
+       t &&
+       (
+         !t->target ||
+         (
+           t->target   &&
+           !*t->target
+         )
+       )
+     )
+     return b;
+
+  /* If all else fails, want to try getting to the highest possible */
+  /* level - after all, accidentally opening what was meant to be a */
+  /* full size page inside some tiny frame would be pretty bad...!  */
+
+  ancestor = b->ancestor;
+  if (!ancestor) ancestor = b->real_parent;
+  if (!ancestor) ancestor = b;
+
+  return ancestor;
+}
+
+/*************************************************/
+/* frames_find_another_frame()                   */
+/*                                               */
+/* Given a browser_data structure which is a     */
+/* child frame, finds the next structure in the  */
+/* frame layout - intended for keyboard          */
+/* navigation through frames.                    */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             which is the current child frame; */
+/*                                               */
+/*             Direction - 0 to find the logical */
+/*             next frame in the set, 1 to find  */
+/*             the logical previous.             */
+/*                                               */
+/* Returns:    Pointer to a browser_data struct  */
+/*             which is the next child frame.    */
+/*************************************************/
+
+browser_data * frames_find_another_frame(browser_data * current, int dir)
+{
+  browser_data * ancestor;
+  int            found = 0;
+
+  if (!current) return NULL;
+
+  ancestor = current->ancestor;
+  if (!ancestor) ancestor = current;
+
+  /* Finding the logical next frame */
+
+  if (!dir)
+  {
+    browser_data * next;
+
+    next = frames_find_next_frame(ancestor, current, &found);
+
+    /* If 'next' is NULL, it could be because the current frame is  */
+    /* the last one in the group. So try searching again from the   */
+    /* ancestor (the routine will have updated 'found' so that it   */
+    /* knows not to wait until it's got the current frame anymore). */
+
+    if (!next) return frames_find_next_frame(ancestor, current, &found);
+
+    return next;
+  }
+  else
+  {
+    browser_data * previous;
+
+    previous = frames_find_previous_frame(ancestor, current, &found);
+
+    if (!previous) return frames_find_previous_frame(ancestor, current, &found);
+
+    return previous;
+  }
+
+  return NULL;
+}
+
+/*************************************************/
+/* frames_find_next_frame()                      */
+/*                                               */
+/* Recursive back-end to                         */
+/* frames_find_another_frame, for finding the    */
+/* logical next frame.                           */
+/*                                               */
+/* Parameters: Pointer to the browser_data       */
+/*             struct to compare with the        */
+/*             current one;                      */
+/*                                               */
+/*             Pointer to the browser_data       */
+/*             struct which is the current one;  */
+/*                                               */
+/*             Pointer to an int which should    */
+/*             contain 0 on entry and will be    */
+/*             written to by the function.       */
+/*                                               */
+/* Returns:    As frames_find_next_frame.        */
+/*************************************************/
+
+static browser_data * frames_find_next_frame(browser_data * check, browser_data * current, int * found)
+{
+  browser_data * b = NULL;
+  int            c = 0;
+
+  while (!b && c < check->nchildren)
+  {
+    if (check->children[c]->nchildren)
+    {
+      /* Recursive call, if the child has children */
+
+      b = frames_find_next_frame(check->children[c], current, found);
+    }
+    else
+    {
+      /* 'found' is set to 1 if the 'current' browser_data struct */
+      /* has been found. If so, we can use the next struct that   */
+      /* has no children. If not, and the struct being examined   */
+      /* is the same as 'current', set 'found'.                   */
+
+      if (*found)
+      {
+        if (check->children[c] != current) return check->children[c];
+      }
+      else
+      {
+        if (check->children[c] == current) *found = 1;
+      }
+    }
+
+    c++;
+  }
+
+  return b;
+}
+
+/*************************************************/
+/* frames_find_previous_frame()                  */
+/*                                               */
+/* Recursive back-end to                         */
+/* frames_find_another_frame, for finding the    */
+/* logical previous frame.                       */
+/*                                               */
+/* Parameters: Pointer to the browser_data       */
+/*             struct to compare with the        */
+/*             current one;                      */
+/*                                               */
+/*             Pointer to the browser_data       */
+/*             struct which is the current one;  */
+/*                                               */
+/*             Pointer to an int which should    */
+/*             contain 0 on entry and will be    */
+/*             written to by the function.       */
+/*                                               */
+/* Returns:    As frames_find_next_frame.        */
+/*************************************************/
+
+static browser_data * frames_find_previous_frame(browser_data * check, browser_data * current, int * found)
+{
+  browser_data * b = NULL;
+  int            c = check->nchildren - 1;
+
+  while (!b && c >= 0)
+  {
+    if (check->children[c]->nchildren)
+    {
+      /* Recursive call, if the child has children */
+
+      b = frames_find_previous_frame(check->children[c], current, found);
+    }
+    else
+    {
+      /* 'found' is set to 1 if the 'current' browser_data struct */
+      /* has been found. If so, we can use the next struct that   */
+      /* has no children. If not, and the struct being examined   */
+      /* is the same as 'current', set 'found'.                   */
+
+      if (*found)
+      {
+        if (check->children[c] != current) return check->children[c];
+      }
+      else
+      {
+        if (check->children[c] == current) *found = 1;
+      }
+    }
+
+    c--;
+  }
+
+  return b;
+}
+
+/*************************************************/
+/* frames_highlight_frame()                      */
+/*                                               */
+/* Highlights a frame by showing a border around */
+/* it, made of 'Highlight' borderless window     */
+/* objects in the Res file. The highlight is     */
+/* removed by a NULL poll timer.                 */
+/*                                               */
+/* Currently, the highlight will not move with   */
+/* the parent browser window.                    */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the frame to be       */
+/*             highlighted.                      */
+/*************************************************/
+
+_kernel_oserror * frames_highlight_frame(browser_data * b)
+{
+  browser_data            * ancestor = b->ancestor;
+  WimpGetWindowStateBlock   s;
+  WindowShowObjectBlock     show;
+  _kernel_oserror         * e;
+  BBox                      top, bottom, left, right;
+
+  if (!ancestor) ancestor = b;
+
+  s.window_handle = b->window_handle;
+
+  e = wimp_get_window_state(&s);
+  if (e) return e;
+
+  /* If not already present, create the highlight window objects */
+
+  if (!highlight_top)
+  {
+    e = toolbox_create_object(0, "Highlight", &highlight_top);
+    if (e) return e;
+
+    e = toolbox_create_object(0, "Highlight", &highlight_bottom);
+    if (e) return e;
+
+    e = toolbox_create_object(0, "Highlight", &highlight_left);
+    if (e) return e;
+
+    e = toolbox_create_object(0, "Highlight", &highlight_right);
+    if (e) return e;
+
+    /* Work out how long to leave the highlight visible */
+
+    highlight_for = atoi(lookup_choice("ShowFHighFor:30",0,0));
+
+    if (highlight_for < 5)    highlight_for = 5;
+    if (highlight_for > 1000) highlight_for = 3000;
+
+    /* Register a null claimant to get rid of the objects shortly */
+
+    register_null_claimant(Wimp_ENull, (WimpEventHandler *) frames_remove_highlight, b);
+
+  }
+
+  /* Reset the highlight removal timer */
+
+  e = _swix(OS_ReadMonotonicTime,
+            _OUT(0),
+
+            &highlight_timer);
+
+  if (e) return e;
+
+  /* Adjust the visible area coordinates for toolbars */
+
+  {
+    int toph, both;
+
+    toph = toolbars_button_height(b) + toolbars_url_height(b);
+    both = toolbars_status_height(b);
+
+    if (toph) toph += wimpt_dy();
+    if (both) both += wimpt_dy();
+
+    s.visible_area.ymax -= toph;
+    s.visible_area.ymin += both;
+  }
+
+  /* Work out the visible areas that the highlight windows should take */
+
+  top.xmin    = s.visible_area.xmin + 2;  /**************************************/
+  top.ymin    = s.visible_area.ymax - 6;  /* If a lower case letter shows where */
+  top.xmax    = s.visible_area.xmax - 2;  /* the appropriate box covers pixels, */
+  top.ymax    = s.visible_area.ymax - 2;  /* and the upper case letters show    */
+                                          /* the actual pixels referenced by    */
+  bottom.xmin = s.visible_area.xmin + 6;  /* (xmin, ymin) and (xmax, ymax),     */
+  bottom.ymin = s.visible_area.ymin + 2;  /* then we are calculating:           */
+  bottom.xmax = s.visible_area.xmax - 2;  /*                         S          */
+  bottom.ymax = s.visible_area.ymin + 6;  /*           ssssssssssssss           */
+                                          /*           s         T Rs           */
+  left.xmin   = s.visible_area.xmin + 2;  /*           s ttttttttrr s           */
+  left.ymin   = s.visible_area.ymin + 2;  /*           s TtLtttttrr s           */
+  left.xmax   = s.visible_area.xmin + 6;  /*           s ll      RrBs           */
+  left.ymax   = s.visible_area.ymax - 6;  /*           s llbbbbbbbb s           */
+                                          /*           s LlBbbbbbbb s           */
+  right.xmin  = s.visible_area.xmax - 6;  /*           s            s           */
+  right.ymin  = s.visible_area.ymin + 6;  /*           Ssssssssssssss           */
+  right.xmax  = s.visible_area.xmax - 2;  /*                                    */
+  right.ymax  = s.visible_area.ymax - 2;  /**************************************/
+
+  /* Now show the objects */
+
+  show.xscroll              = 0;
+  show.yscroll              = 0;
+  show.behind               = -1;
+  show.visible_area         = top;
+  show.parent_window_handle = ancestor->window_handle;
+  show.alignment_flags      = 0;
+
+  e = toolbox_show_object(Toolbox_ShowObject_AsSubWindow, highlight_top,    Toolbox_ShowObject_FullSpec, &show, ancestor->self_id, -1);
+  if (e) return e;
+
+  /* The show call above can modify the contents of the 'show' */
+  /* block passed to it, so need to fill in the values again   */
+  /* for each call.                                            */
+
+  show.xscroll              = 0;
+  show.yscroll              = 0;
+  show.behind               = -1;
+  show.visible_area         = bottom;
+  show.parent_window_handle = ancestor->window_handle;
+  show.alignment_flags      = 0;
+
+  e = toolbox_show_object(Toolbox_ShowObject_AsSubWindow, highlight_bottom, Toolbox_ShowObject_FullSpec, &show, ancestor->self_id, -1);
+  if (e) return e;
+
+  show.xscroll              = 0;
+  show.yscroll              = 0;
+  show.behind               = -1;
+  show.visible_area         = left;
+  show.parent_window_handle = ancestor->window_handle;
+  show.alignment_flags      = 0;
+
+  e = toolbox_show_object(Toolbox_ShowObject_AsSubWindow, highlight_left,   Toolbox_ShowObject_FullSpec, &show, ancestor->self_id, -1);
+  if (e) return e;
+
+  show.xscroll              = 0;
+  show.yscroll              = 0;
+  show.behind               = -1;
+  show.visible_area         = right;
+  show.parent_window_handle = ancestor->window_handle;
+  show.alignment_flags      = 0;
+
+  e = toolbox_show_object(Toolbox_ShowObject_AsSubWindow, highlight_right,  Toolbox_ShowObject_FullSpec, &show, ancestor->self_id, -1);
+  if (e) return e;
+
+  /* Finished */
+
+  return NULL;
+}
+
+/*************************************************/
+/* frames_remove_highlight()                     */
+/*                                               */
+/* A NULL event handler which times how long the */
+/* frame highlight objects have been visible     */
+/* and removes them after a time defined by the  */
+/* Choices file 'ShowFHighFor' entry.            */
+/*                                               */
+/* Registered by frames_highlight_frame.         */
+/*                                               */
+/* Parameters as standard for a Wimp event       */
+/* handler.                                      */
+/*************************************************/
+
+static int frames_remove_highlight(int eventcode, WimpPollBlock * b, IdBlock * idb, browser_data * handle)
+{
+  int time;
+
+  if (_swix(OS_ReadMonotonicTime,
+            _OUT(0),
+
+            &time)) return 0;
+
+  if (time - highlight_timer > highlight_for)
+  {
+    /* Delete the objects (so removing the highlight) */
+
+    if (highlight_top)    toolbox_delete_object(0, highlight_top);
+    if (highlight_bottom) toolbox_delete_object(0, highlight_bottom);
+    if (highlight_left)   toolbox_delete_object(0, highlight_left);
+    if (highlight_right)  toolbox_delete_object(0, highlight_right);
+
+    /* Reset the Object IDs, so that the highlight routine knows it needs */
+    /* to recreate the objects and reinstall this handler                 */
+
+    highlight_top = highlight_bottom = highlight_left = highlight_right = 0;
+
+    /* Remove the handler */
+
+    deregister_null_claimant(Wimp_ENull, (WimpEventHandler *) frames_remove_highlight, handle);
+  }
+
+  return 0;
+}
+
+/*************************************************/

@@ -1,0 +1,813 @@
+/***************************************************/
+/* File   : FetchPage.c                            */
+/* Purpose: High-level page fetch related          */
+/*          functions (as opposed to Fetch.c where */
+/*          all the lower level stuff goes on).    */
+/* Author : A.D.Hodgkinson                         */
+/* History: 25-Nov-96: Created                     */
+/***************************************************/
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "flex.h"
+
+#include "swis.h"
+
+#include "URI.h"     /* URI handler API, in URILib:h */
+
+#include "wimp.h"
+#include "wimplib.h"
+#include "event.h"
+
+#include "toolbox.h"
+#include "window.h"
+#include "gadgets.h"
+
+#include "svcprint.h"
+#include "Global.h"
+#include "FromROSLib.h"
+#include "TBEvents.h"
+#include "Utils.h"
+
+#include "Browser.h"
+#include "Fetch.h"
+#include "Frames.h"
+#include "History.h"
+#include "Images.h"
+#include "Memory.h"
+#include "Reformat.h"
+#include "Toolbars.h"
+#include "URLutils.h"
+#include "Windows.h"
+
+#include "FetchPage.h"
+
+/* Locals */
+
+char * url_buffer = NULL;
+
+/* Static function prototypes */
+
+static _kernel_oserror * fetchpage_process_internal (browser_data * b);
+static _kernel_oserror * fetchpage_preprocessed     (browser_data * b, int record);
+static _kernel_oserror * fetchpage_postprocessed    (browser_data * b, int record);
+
+/*************************************************/
+/* fetchpage_fetch()                             */
+/*                                               */
+/* Handles the initiation of a fetch and the     */
+/* display of the result in a browser window.    */
+/*                                               */
+/* Parameters are as standard for a Wimp event   */
+/* handler (this is called on null events).      */
+/*************************************************/
+
+int fetchpage_fetch(int eventcode, WimpPollBlock * b, IdBlock * idb, browser_data * handle)
+{
+  int tf_start, tf_now, priority;
+
+  #ifdef TRACE
+    static oldstatus;
+
+    if ((tl & (1u<<6)) && (handle->fetch_status != oldstatus))
+    {
+      Printf("\nfetchpage_fetch: Called with new status %d\n",handle->fetch_status);
+      oldstatus = handle->fetch_status;
+    }
+  #endif
+
+  if (handle->fetch_status == BS_START) ChkError(fetch_start(handle));
+
+  /* Call the fetcher / reformatter, allowing a certain */
+  /* amount of time inside each only. Whilst still      */
+  /* fetching data, relax the timing as there's no      */
+  /* point hanging here waiting for stuff; otherwise,   */
+  /* be somewhat more aggressive as the reformat can    */
+  /* progress a lot faster.                             */
+
+  _swix(OS_ReadMonotonicTime, _OUT(0), &tf_start);
+  tf_now = tf_start;
+
+  /* Some fairly crude load balancing */
+
+  if (!fetch_fetching(handle)) priority = 20;
+  else if (handle->fetch_status != BS_PROCESS) priority = 4;
+  else priority = 10;
+
+  while ((tf_now - tf_start < priority) && (fetch_fetching(handle) || reformat_formatting(handle)))
+  {
+    /* If fetching, call the reformatter. */
+
+    if (fetch_fetching(handle)) fetch_fetcher(handle);
+
+    /* If reformatting, call the reformatter. */
+
+    if (reformat_formatting(handle)) reformat_reformatter(handle);
+    ChkError(windows_check_tools(handle, NULL));
+
+    _swix(OS_ReadMonotonicTime, _OUT(0), &tf_now);
+  }
+
+  /* Process images on a lower priority */
+
+  if (image_count_specific_pending(handle)) ChkError(image_process_null(handle));
+
+  /* Handle jumping to any specified named anchors */
+
+  if (handle->display_request == DISPLAY_NAMED)
+  {
+    char    * p;
+    HStream * t;
+
+    t = 0;
+
+    p = fetch_find_name_tag(browser_current_url(handle)) + 1;
+    t = fetch_find_anchor_token(handle, p);
+
+    if (t)
+    {
+      handle->display_request = t;
+      handle->display_offset  = 0;
+    }
+  }
+  else
+  {
+    if (
+         handle->display_request &&
+         browser_show_token(handle,
+                            handle->display_request,
+                            handle->display_offset)
+       )
+    {
+      WimpGetWindowStateBlock s;
+
+      s.window_handle = handle->window_handle;
+      wimp_get_window_state(&s);
+
+      if (s.yscroll != handle->display_vscroll) handle->display_vscroll = s.yscroll;
+      else handle->display_request = 0, handle->display_vscroll = 0;
+    }
+  }
+
+  /* Various actions as things become inactive... */
+
+  if (!fetch_fetching(handle))
+  {
+    /* Garbage collect images if the main page fetch has finished */
+
+    if (handle->clear_images)
+    {
+//      image_discard_unused(handle);
+      handle->clear_images = 0;
+    }
+
+    if (!reformat_formatting(handle))
+    {
+      if (!image_count_specific_pending(handle))
+      {
+        /* There are no pending images, so we seem to have finished - */
+        /* but is there a reformat pending?                           */
+
+        if (handle->refotime)
+        {
+          /* Yes, so flush the queue */
+
+          reformat_format_from(handle, handle->refoline, 1, -1);
+        }
+        else
+        {
+          /* Nope - so get rid of null claimants */
+
+          if (handle->fetch_handler) fetchpage_release_nulls(handle);
+
+          /* Check the page's vertical extent is correct */
+
+          ChkError(reformat_check_extent(handle));
+
+          /* Ensure the status bar is up to date */
+
+          toolbars_update_status(handle, Toolbars_Status_Viewing);
+        }
+      }
+
+      /* Sort out window tool presence */
+
+      ChkError(windows_check_tools(handle, NULL));
+    }
+  }
+
+  /* Keep the buttons as up to date as possible throughout the fetch */
+
+  toolbars_set_button_states(handle);
+
+  return 0;
+}
+
+/*************************************************/
+/* fetchpage_process_internal()                  */
+/*                                               */
+/* Some internal URLs involve just substituting  */
+/* the internal URL for some known or easily     */
+/* discoverable alternative early in the fetch   */
+/* stage. This function handles such changes.    */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the fetch.            */
+/*************************************************/
+
+static _kernel_oserror * fetchpage_process_internal(browser_data * b)
+{
+  if (
+       b->displayed == Display_Recovered_Page ||
+       b->displayed == Display_Home_Page
+     )
+  {
+    char alt_url[4096];
+
+    memset(alt_url, 0, sizeof(alt_url));
+
+    if (b->displayed == Display_Recovered_Page)
+    {
+      /* For a recovered page, try to get back to the page detailed  */
+      /* in Browse$PreviousPage.                                     */
+      /*                                                             */
+      /* If the variable is unset / can't be read, can't load a page */
+      /* so set the buffer to hold a null string.                    */
+
+      if (
+           _swix(OS_ReadVarVal,
+                 _INR(0,4),
+
+                 "Browse$PreviousPage",
+                 alt_url,
+                 sizeof(alt_url),
+                 0,
+                 4)
+
+         )
+         *alt_url = 0;
+    }
+    else
+    {
+      /* Alternatively, get the Home Page URL */
+
+      urlutils_create_home_url(alt_url, sizeof(alt_url));
+    }
+
+    /* Ensure the URL is terminated */
+
+    alt_url[sizeof(alt_url) - 1] = 0;
+
+    /* Reallocate URL buffer space */
+
+    if (url_buffer)
+    {
+      #ifdef TRACE
+        malloccount -= (strlen(url_buffer) + 128);
+        if (tl & (1u<<13)) Printf("** malloccount: %d\n",malloccount);
+      #endif
+
+      free(url_buffer);
+    }
+
+    url_buffer = malloc(strlen(alt_url) + 128);
+
+    if (!url_buffer)
+    {
+      make_no_fetch_memory_error(10);
+      return &erb;
+    }
+
+    #ifdef TRACE
+      malloccount += (strlen(alt_url) + 128);
+      if (tl & (1u<<13)) Printf("** malloccount: %d\n",malloccount);
+    #endif
+
+    /* Copy the new URL into the buffer */
+
+    strcpy(url_buffer, alt_url);
+  }
+
+  return NULL;
+}
+
+/*************************************************/
+/* fetchpage_preprocessed()                      */
+/*                                               */
+/* Fetches a URL, which must be in the           */
+/* 'url_buffer' malloced block of memory.        */
+/* Intended to be called from functions such     */
+/* as fetchpage_new or fetchpage_new_add.        */
+/*                                               */
+/* If using the URI handler, the URL will be     */
+/* sent through that and won't actually fetch    */
+/* at this stage, therefore.                     */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             to which the new URL refers;      */
+/*                                               */
+/*             1 to record the previous URL in   */
+/*             the history list, else 0.         */
+/*************************************************/
+
+static _kernel_oserror * fetchpage_preprocessed(browser_data * b, int record)
+{
+  _kernel_oserror * e;
+
+  if (
+       !b->savelink &&
+       browser_display_local_reference(b,
+                                       url_buffer,
+                                       browser_current_url(b))
+     )
+  {
+    if (choices.keyboardctl) browser_move_selection(b, akbd_RightK);
+
+    return NULL;
+  }
+
+  e = fetch_cancel(b);
+  if (e) return e;
+
+  /* If required, stop fetching in all child frames of this browser */
+
+  if (choices.brickwall) frames_abort_fetching(b);
+
+  /* Set the displayed type for internal / normal URLs, and */
+  /* carry out any required special actions for the former. */
+
+  urlutils_set_displayed(b, url_buffer);
+
+  if (b->displayed == Display_Previous_Page) return history_fetch_backwards(b, 0);
+
+  e = fetchpage_process_internal(b);
+  if (e) return e;
+
+  /* If merging the URL writable and status display, put */
+  /* it back to status.                                  */
+
+  if (b->merged_url)
+  {
+    toolbars_merged_to_status(b, toolbars_get_upper(b));
+    browser_give_general_focus(b);
+  }
+
+  if (uri_module_present && strncmp(url_buffer, Internal_URL, Int_URL_Len))
+  {
+    /* Send the URL through the URI handler if the module is present */
+    /* and the URL isn't an internal one.                            */
+
+    return urlutils_dispatch(b,
+                             url_buffer,
+                             record ? URIQueue_RecordInHistory : 0);
+  }
+  else
+  {
+    /* Without the URI handler, deal with the URL immediately */
+
+    return fetchpage_postprocessed(b, record);
+  }
+}
+
+/*************************************************/
+/* fetchpage_postprocessed()                     */
+/*                                               */
+/* Working end to fetchpage_preprocessed, which  */
+/* will fetch the url in the url_buffer block.   */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             to which the new URL refers;      */
+/*                                               */
+/*             1 to record the previous URL in   */
+/*             the history list, else 0.         */
+/*************************************************/
+
+static _kernel_oserror * fetchpage_postprocessed(browser_data * b, int record)
+{
+  _kernel_oserror * e;
+
+  #ifdef TRACE
+    if (tl & (1u<<12)) Printf("fetchpage_postprocessed: Chunk CK_FURL set to %d\n",strlen(url_buffer) + 1);
+  #endif
+
+  e = memory_set_chunk_size(b, NULL, CK_FURL, strlen(url_buffer) + 1);
+  if (e) return e;
+
+  strcpy(b->urlfdata, url_buffer);
+
+  if (
+       record &&
+       browser_current_url(b) &&
+       strcmp(url_buffer, browser_current_url(b))
+     )
+
+     /* NULL means add browser_current_url. We're also ignoring any */
+     /* errors from this call.                                      */
+
+     history_record_local(b, NULL);
+
+  /* Make sure the URL bar is updated with the current URL. */
+
+  toolbars_update_url(b);
+
+  /* Set the fetch status */
+
+  b->fetch_status = BS_START;
+
+//  /* Record the start of the fetch, for a parent browser window. */
+//
+//  if (!b->ancestor)
+//  {
+//    _swix(OS_SetVarVal,
+//          _INR(0,4),
+//
+//          "Browse$CurrentFetch",
+//          url_buffer,
+//          strlen(url_buffer),
+//          0,
+//          4);
+//  }
+
+  /* Register event handlers to start off the new fetch */
+
+  if (!b->fetch_handler) fetchpage_claim_nulls(b);
+
+// (Re. the comments at the head of this code)... - No, we don't!
+//
+//  /* The extent settings may change or not; either way, want to */
+//  /* start off scrolled to the top of the page.                 */
+//
+//  {
+//    WimpGetWindowStateBlock s;
+//
+//    e = window_get_wimp_handle(0, b->self_id, &s.window_handle);
+//    if (e) return e;
+//
+//    e = wimp_get_window_state(&s);
+//    if (e) return e;
+//
+//    s.yscroll = s.xscroll = 0;
+//    e = wimp_open_window((WimpOpenWindowBlock *) &s);
+//  }
+
+  return NULL;
+}
+
+/*************************************************/
+/* fetchpage_postprocess_uri()                   */
+/*                                               */
+/* If the URI handler comes back with a          */
+/* URI_MProcess message and we can handle the    */
+/* URI it details, then that URI may be fetched  */
+/* through this function - it is first copied    */
+/* locally and then passed over to               */
+/* fetchpage_postprocessed.                      */
+/*                                               */
+/* Parameters: Pointer to a browser_data         */
+/*             struct relevant to the URI;       */
+/*                                               */
+/*             Pointer to the URI string;        */
+/*                                               */
+/*             1 to record the previous URL in   */
+/*             the history list, else 0.         */
+/*************************************************/
+
+_kernel_oserror * fetchpage_postprocess_uri(browser_data * b, char * uri, int record)
+{
+  /* Reallocate URL buffer space */
+
+  if (url_buffer)
+  {
+    #ifdef TRACE
+      malloccount -= (strlen(url_buffer) + 128);
+      if (tl & (1u<<13)) Printf("** malloccount: %d\n",malloccount);
+    #endif
+
+    free(url_buffer);
+  }
+
+  url_buffer = malloc(strlen(uri) + 1);
+
+  if (!url_buffer)
+  {
+    make_no_fetch_memory_error(14);
+    return &erb;
+  }
+
+  /* Copy the URI over and fetch it */
+
+  strcpy(url_buffer, uri);
+
+  return fetchpage_postprocessed(b, record);
+}
+
+/*************************************************/
+/* fetchpage_new()                               */
+/*                                               */
+/* Cancels any old fetch and starts a new one    */
+/* the given URL.                                */
+/*                                               */
+/* The URL is copied to a malloc buffer before   */
+/* being used, so the pointer to it can be from  */
+/* pretty much anything (though beware of flex   */
+/* blocks shifting over the actual function call */
+/* boundary...).                                 */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             to which the new URL refers;      */
+/*                                               */
+/*             Pointer to the new URL string;    */
+/*                                               */
+/*             1 to record the previous URL in   */
+/*             the history list, else 0.         */
+/*************************************************/
+
+_kernel_oserror * fetchpage_new(browser_data * b, char * url, int record)
+{
+  /* Don't proceed unless there's something to fetch */
+
+  if (!url || !(*url)) return fetch_cancel(b);
+
+  /* The URL may have been passed in from the 'tokens' buffer, */
+  /* and fetch cancels etc. might corrupt it. So take a copy   */
+  /* of it before proceeding further, if the URL didn't come   */
+  /* from this buffer already...!                              */
+
+  if (url != url_buffer)
+  {
+    if (url_buffer)
+    {
+      #ifdef TRACE
+        malloccount -= (strlen(url_buffer) + 128);
+        if (tl & (1u<<13)) Printf("** malloccount: %d\n",malloccount);
+      #endif
+
+      free(url_buffer);
+    }
+
+    url_buffer = malloc(strlen(url) + 128);
+
+    if (!url_buffer)
+    {
+      make_no_fetch_memory_error(7);
+      return &erb;
+    }
+
+    #ifdef TRACE
+      malloccount += (strlen(url) + 128);
+      if (tl & (1u<<13)) Printf("** malloccount: %d\n",malloccount);
+    #endif
+
+    strcpy(url_buffer, url);
+  }
+  #ifdef TRACE
+    else Printf("WARNING, used same buffer in fetchpage_new\n");
+  #endif
+
+  urlutils_fix_url(url_buffer, strlen(url_buffer) + 128);
+
+  return fetchpage_preprocessed(b, record);
+}
+
+/*************************************************/
+/* fetchpage_new_add()                           */
+/*                                               */
+/* As fetchpage_new(), but takes a second        */
+/* string, which is data to be concatenated onto */
+/* the end of the given URL. This may be useful  */
+/* for imagemaps or forms data. You may also     */
+/* specify whether this URL is to be fetched in  */
+/* a new browser window or not.                  */
+/*                                               */
+/* Restrictions as for fetchpage_new().          */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             to which the new URL refers;      */
+/*                                               */
+/*             Pointer to the new URL string;    */
+/*                                               */
+/*             1 to record the previous URL in   */
+/*             the history list, else 0;         */
+/*                                               */
+/*             Pointer to the data to add onto   */
+/*             the end of the URL string;        */
+/*                                               */
+/*             1 to fetch the URL in a new       */
+/*             window, else 0.                   */
+/*************************************************/
+
+_kernel_oserror * fetchpage_new_add(browser_data * b, char * url, int record, char * add, int new_window)
+{
+  /* Don't proceed unless there's something to fetch */
+
+  if (!url) return fetch_cancel(b);
+
+  /* The URL may have been passed in from the 'tokens' buffer, */
+  /* and fetch cancels etc. might corrupt it. So take a copy   */
+  /* of it before proceeding further, if the URL didn't come   */
+  /* from this buffer already.                                 */
+
+  if (url != url_buffer)
+  {
+    if (url_buffer)
+    {
+      #ifdef TRACE
+        malloccount -= (strlen(url_buffer) + 128);
+        if (tl & (1u<<13)) Printf("** malloccount: %d\n",malloccount);
+      #endif
+
+      free(url_buffer);
+    }
+
+    url_buffer = malloc(strlen(url) + strlen(add) + 128);
+
+    if (!url_buffer)
+    {
+      make_no_fetch_memory_error(7);
+      return &erb;
+    }
+
+    #ifdef TRACE
+      malloccount += (strlen(url) + strlen(add) + 128);
+      if (tl & (1u<<13)) Printf("** malloccount: %d\n",malloccount);
+    #endif
+
+    strcpy(url_buffer, url);
+    strcat(url_buffer, add);
+  }
+  #ifdef TRACE
+    else Printf("WARNING, used same buffer in fetchpage_new_add\n");
+  #endif
+
+  urlutils_fix_url(url_buffer, strlen(url_buffer) + 128);
+
+  if (!new_window || b->full_screen) return fetchpage_preprocessed(b, record);
+  else                               return windows_create_browser(url_buffer, NULL, NULL, NULL);
+}
+
+/*************************************************/
+/* fetchpage_new_raw()                           */
+/*                                               */
+/* Starts a fetch of a given URL, without doing  */
+/* anything to that URL at all except copying it */
+/* over to a malloc buffer (to ensure it doesn't */
+/* move around, as it would in a flex block).    */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             to which the new URL refers;      */
+/*                                               */
+/*             Pointer to the new URL string;    */
+/*                                               */
+/*             1 to record the previous URL in   */
+/*             the history list, else 0.         */
+/*************************************************/
+
+_kernel_oserror * fetchpage_new_raw(browser_data * b, char * url, int record)
+{
+  /* Don't proceed unless there's something to fetch */
+
+  if (!url || !(*url)) return fetch_cancel(b);
+
+  /* The URL may have been passed in from the 'tokens' buffer, */
+  /* and fetch cancels etc. might corrupt it. So take a copy   */
+  /* of it before proceeding further, if the URL didn't come   */
+  /* from this buffer already...!                              */
+
+  if (url != url_buffer)
+  {
+    if (url_buffer)
+    {
+      #ifdef TRACE
+        malloccount -= (strlen(url_buffer) + 128);
+        if (tl & (1u<<13)) Printf("** malloccount: %d\n",malloccount);
+      #endif
+
+      free(url_buffer);
+    }
+
+    url_buffer = malloc(strlen(url) + 128);
+
+    if (!url_buffer)
+    {
+      make_no_fetch_memory_error(7);
+      return &erb;
+    }
+
+    #ifdef TRACE
+      malloccount += (strlen(url) + 128);
+      if (tl & (1u<<13)) Printf("** malloccount: %d\n",malloccount);
+    #endif
+
+    strcpy(url_buffer, url);
+  }
+  #ifdef TRACE
+    else Printf("WARNING, used same buffer in fetchpage_new_raw\n");
+  #endif
+
+  return fetchpage_preprocessed(b, record);
+}
+
+/*************************************************/
+/* fetchpage_claim_nulls()                       */
+/*                                               */
+/* Installs the relevant null event handlers so  */
+/* that a fetch may proceed in the Desktop.      */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the fetch.            */
+/*************************************************/
+
+void fetchpage_claim_nulls(browser_data * b)
+{
+  /* Don't register the same handler twice... */
+
+  if (!b->fetch_handler)
+  {
+    register_null_claimant(Wimp_ENull,(WimpEventHandler *) fetchpage_fetch,b);
+    b->fetch_handler = 1;
+  }
+
+  /* Animations only apply to an ancestor window, not frames */
+
+  if (b->ancestor) b = b->ancestor;
+
+  /* If the 'drift' handler, to advance the animation to the */
+  /* first frame and then stop, is active, remove it as the  */
+  /* full-time animation handler is about to take over.      */
+
+  if (b->anim_drift)
+  {
+    deregister_null_claimant(Wimp_ENull,(WimpEventHandler *) toolbars_animation_drift,b);
+    b->anim_drift = 0;
+  }
+
+  /* Register the full time animation handler */
+
+  if (!b->anim_handler)
+  {
+    register_null_claimant(Wimp_ENull,(WimpEventHandler *) toolbars_animation,b);
+    b->anim_handler = 1;
+  }
+
+  /* Record the usage of the animation handler. This will increment */
+  /* once in the ancestor object for every child fetch, so that     */
+  /* the animation handler can finally be released when all the     */
+  /* child fetches have stopped.                                    */
+
+  b->current_fetches++;
+}
+
+/*************************************************/
+/* fetchpage_release_nulls()                     */
+/*                                               */
+/* Releases all relevant null event handlers     */
+/* used for a fetch in the Desktop.              */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the fetch.            */
+/*************************************************/
+
+void fetchpage_release_nulls(browser_data * b)
+{
+  /* Don't register the same handler twice... */
+
+  if (b->fetch_handler)
+  {
+    deregister_null_claimant(Wimp_ENull,(WimpEventHandler *) fetchpage_fetch,b);
+    b->fetch_handler = 0;
+  }
+
+  /* Animations only apply to an ancestor window, not frames */
+
+  if (b->ancestor) b = b->ancestor;
+
+  /* Only remove the handlers if there are no fetches in any */
+  /* children, etc. (see fetchpage_claim_nulls comments).    */
+
+  b->current_fetches--;
+
+  if (!b->current_fetches && choices.anim_drift != 2)
+  {
+    /* Deregister the full time animation handler */
+
+    if (b->anim_handler)
+    {
+      deregister_null_claimant(Wimp_ENull,(WimpEventHandler *) toolbars_animation,b);
+      b->anim_handler = 0;
+    }
+
+    /* If the choices say to do install the 'drift' handler to ensure */
+    /* the animation finishes on the first frame, and that handler is */
+    /* not already installed, install it.                             */
+
+    if (choices.anim_drift && !b->anim_drift)
+    {
+      register_null_claimant(Wimp_ENull,(WimpEventHandler *) toolbars_animation_drift,b);
+      b->anim_drift = 1;
+    }
+  }
+}
+
+/*************************************************/
