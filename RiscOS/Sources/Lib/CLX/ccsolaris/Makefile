@@ -5,10 +5,12 @@ CFLAGS=-c -O2 -I. $(CFL)
 CC=gcc
 DERIVED= datenow.h
 OBJALL=bytesex.o chunkfls.o disass.o err.o fname.o prgname.o re.o ieeeflt.o \
-dtos.o host_scr.o scr_drv.o 
+dtos.o hash.o host.o host_scr.o scr_drv.o wholefls.o
 HSOURCE=aif.h disass.h libflfmt.h scr_drv.h aof.h bytesex.h err.h \
 ovrflfmt.h set_host.h aout.h chunkfls.h fname.h prgname.h asdfmt.h \
 chunkfmt.h host_scr.h re.h ieeeflt.h 
+
+CFLhost= -I/usr/local/riscos/include
 
 noarg: clx.a
 	@echo "Made clx.a (the default target)"
@@ -39,6 +41,12 @@ chunkfls.o:	chunkfmt.h
 err.o:	err.c
 err.o:	err.h
 	$(CC) $(CFLAGS) $(CFLerr) err.c -o err.o
+hash.o:	hash.c
+hash.o:	hash.h
+	$(CC) $(CFLAGS) $(CFLhash) hash.c -o hash.o
+host.o:	host.c
+host.o:	host.h
+	$(CC) $(CFLAGS) $(CFLhost) host.c -o host.o
 host_scr.o:	host_scr.c
 host_scr.o:	host_scr.h
 host_scr.o:	set_host.h
@@ -52,6 +60,9 @@ ieeeflt.o:	ieeeflt.h
 dtos.o:	dtos.c
 dtos.o:	ieeeflt.h
 	$(CC) $(CFLAGS) $(CFLdtos) dtos.c -o dtos.o
+wholefls.o:	wholefls.c
+wholefls.o:	wholefls.h
+	$(CC) $(CFLAGS) $(CFLwholefls) wholefls.c -o wholefls.o
 
 # Dependencies to /nfs/sun1/bb/xdevt/release/bin/topcc -l from local to build directories
 
@@ -59,11 +70,13 @@ clx.a: $(OBJALL)
 clx.a: $(HSOURCE)
 clx.a: $(DERIVED)
 	ar rc clx.a $(OBJALL)
-#	ranlib clx.a
 	@echo "Library file clx.a made"
 
-release:
-	@echo "No make release for clx"
+install: clx.a
+	cp -p clx.a ${CLXPATH}
+	cp -p *.h ${CLXPATH}
+	rm ${CLXPATH}/datenow.h
+	@echo "Installed clx.a"
 
 clean:
 	-rm ${OBJALL}

@@ -104,9 +104,9 @@ install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
 clean:
-        ${WIPE} o.* ${WFLAGS}
-        ${WIPE} oz.* ${WFLAGS}
-        ${WIPE} od.* ${WFLAGS}
+        ${WIPE} o ${WFLAGS}
+        ${WIPE} oz ${WFLAGS}
+        ${WIPE} od ${WFLAGS}
         ${RM} ${COMPONENT}
         ${RM} ${COMPONENTZ}
         ${RM} ${COMPONENTD}
