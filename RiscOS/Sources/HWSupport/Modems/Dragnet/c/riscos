@@ -7,7 +7,6 @@
 #include <stddef.h>
 #include <string.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include "kernel.h"
 #include "swis.h"
 #include "debuglib/debuglib.h"
@@ -53,28 +52,9 @@
 #define PODULE_MODEM_BASE        0x400000
 
 
-#define ALBA2_HARDWARE_BASE      0x2c000000      // cs3
+#define ALBA2_HARDWARE_BASE      0x2c000000
 #define ALBA2_IRQ_NUMBER         33
-#define ALBA2_LED_BASE           0x34000000      // cs5
-#define ALBA2_SWITCH_BASE        0x30000000      // cs4
-#define ALBA2_LED_CALLEVERY      (1<<6)
-#define ALBA2_LED_INTERRUPT      (1<<0)
-#define ALBA2_SMC_BASE        0x80080000
-#define ALBA2_SMC_LOCK        (ALBA2_SMC_BASE+0x0144)
-#define ALBA2_SMC_KEY         0xAA
-#define ALBA2_SMCCR0          (ALBA2_SMC_BASE+0)
-#define ALBA2_SMCCR1          (ALBA2_SMC_BASE+4)
-#define ALBA2_SMCCR2          (ALBA2_SMC_BASE+8)
-#define ALBA2_SMCCR3          (ALBA2_SMC_BASE+12)
-#define ALBA2_SMCCR4          (ALBA2_SMC_BASE+16)
-#define ALBA2_SMCCR5          (ALBA2_SMC_BASE+20)
-#define ALBA2_SMCCR6          (ALBA2_SMC_BASE+24)
-#define ALBA2_SMCCR7          (ALBA2_SMC_BASE+28)
 
-#define SMC_WORD(AT,MW,BM,WP,WPERR,BUSER,WST2,RBLE,WST1,IDCY) ((unsigned int)( ((AT&3)<<30)| ((MW&3)<<28)| ((BM&1)<<27)| ((WP&1)<<26)| ((WPERR&1)<<25)| ((BUSER&1)<<24)| ((WST2&31)<<11)| ((RBLE&1)<<10)| ((WST1&31)<<5)| ((IDCY&15)<<0) ))
-
-#define ALBA2_SMC_WORD_MODEM    SMC_WORD(0,2,0,0,0,0,1,1,1,0)
-#define ALBA2_SMC_WORD_LED      SMC_WORD(0,2,0,0,0,0,0,1,0,0)
 
 
 //
@@ -92,12 +72,12 @@ static void                 *private_word               = NULL;
 static volatile int          poll_loop_threaded         = 0;
 static volatile int          interrupt_handler_threaded = 0;
 static int                   active_streams             = 0;
-static volatile int          polling_semaphore          = 0;    //msm needed?
+static int                   polling_semaphore          = 0;    
 static int                   polling_period             = PollPeriod;
 
-static unsigned char        *hardware_base_address      = NULL;
-static unsigned char        *podule_base_address        = NULL;
-static unsigned char         podule_gpio_state          = \
+static char                 *hardware_base_address      = NULL;
+static char                 *podule_base_address        = NULL;
+static char                  podule_gpio_state          = \
                                   ( PODULE_GPIO_TRIGGER | !PODULE_GPIO_DON | PODULE_GPIO_LED );
 
 int RO_dcd;
@@ -106,11 +86,11 @@ int RO_ring;
 int RO_dsr;
 int RO_dtr;
 
-static volatile unsigned int callbacks       = 0;
+static unsigned int          callbacks       = 0;
 static volatile unsigned int total_irq_count = 0;
-static volatile unsigned int reentrancy_count = 0;
-static volatile unsigned int bytes_rx_count  = 0;
-static volatile unsigned int bytes_tx_count  = 0;
+static unsigned int          PIT_int_cnt     = 0;
+static unsigned int          bytes_rx_count  = 0;
+static unsigned int          bytes_tx_count  = 0;
 
 
 //
@@ -151,155 +131,21 @@ static void riscos_stop_polling(void *pw);
 // Code definitions...
 //
 
-#ifdef PODULEBASED
-  //placeholder
-#else
-
-
-_kernel_oserror *hardware_physical_write_word(void *address, unsigned int value)
-{
-  volatile void *logicaladdr = NULL;
-  void *originaladdr = NULL;
-  _kernel_oserror *e;
-  
-
-  e=_swix( OS_Memory, _INR(0,1)|_OUTR(2,3), 14|(0<<8) , address , &logicaladdr , &originaladdr);
-
-  if (!e)
-    *(unsigned int*)logicaladdr = value;  
-//while ( *(unsigned int*)logicaladdr != value ) {} ;
-      
-  if (!e)
-    e=_swix( OS_Memory, _INR(0,1), 15 , originaladdr );
-
-  return e;
-}
-
-_kernel_oserror *alba2_delay(int delay)
-{
-  _kernel_oserror *e;
-  int now,then;
-  
-  e = _swix(OS_ReadMonotonicTime,_OUT(0),&now);
-  if (!e)
-  {
-    then = now+delay;
-    do
-    {
-      e = _swix(OS_ReadMonotonicTime,_OUT(0),&now);
-    }
-    while ( !e && now<then );
-  }
-  return e;
-}
-
-_kernel_oserror *alba2_set_speed(void)
-{
-  _kernel_oserror *e = NULL;
-
-_kernel_irqs_off();
-
-  if (!e) e=hardware_physical_write_word( (void*)ALBA2_SMC_LOCK, ALBA2_SMC_KEY ); //unlock regs
-  if (!e) e=hardware_physical_write_word( (void*)ALBA2_SMCCR5, ALBA2_SMC_WORD_LED); // set led speed
-
-  if (!e) e=hardware_physical_write_word( (void*)ALBA2_SMC_LOCK, ALBA2_SMC_KEY ); //unlock regs
-  if (!e) e=hardware_physical_write_word( (void*)ALBA2_SMCCR3, ALBA2_SMC_WORD_MODEM ); // set modem speed
-
-_kernel_irqs_on();
-
-  return e;  
-}
-
-_kernel_oserror *alba2_test(void)
-{
-  _kernel_oserror *e;
-  int i;
-
-  for( i=1; !e && i<129 ; i=i<<1 )
-  {
-    if (!e) e=hardware_physical_write_word( (void*)ALBA2_LED_BASE, i);
-    if (!e) e=alba2_delay(8);
-  }
-  if (!e) e=hardware_physical_write_word( (void*)ALBA2_LED_BASE, 0xff);
-  if (!e) e=alba2_delay(8);
-  if (!e) e=hardware_physical_write_word( (void*)ALBA2_LED_BASE, 0);
-
-  return e;
-}
-  
-#endif
-
-
-
-
-
-#ifdef PODULEBASED
-  //placeholder
-  void led_set( unsigned char bitmask )
-  {
-    bitmask = bitmask;
-  }
-  
-  void led_clear( unsigned char bitmask )
-  {
-    bitmask = bitmask;
-  }
-
-  
-#else //ALBA2
-
-  static unsigned char alba2_led_state = 0;
-
-  void alba2_led_set(unsigned char value)
-  {
-    static void *ledaddress = NULL;
-    _kernel_oserror *e;
-
-    if (!ledaddress)
-    {
-    // OS_Memory 13 to map our modem into permanent logical space
-      e=_swix( OS_Memory, _INR(0,2)|_OUT(3), 13|(0<<8) , ALBA2_LED_BASE , 4, &ledaddress );
-      if (e)
-        ledaddress = NULL;
-    }
-    if( ledaddress )
-      *(unsigned char *)ledaddress = value;
-  }
-
-  void led_set( unsigned char bitmask )
-  {
-    alba2_led_state |= bitmask;
-    alba2_led_set(alba2_led_state);
-  }
-  
-  void led_clear( unsigned char bitmask )
-  {
-    alba2_led_state &= ~bitmask;
-    alba2_led_set(alba2_led_state);
-  }
-#endif
-
-
-
 void podule_led_off(void)
 {
-//led_clear(1<<2);
   if (podule_base_address)
   {
   podule_gpio_state|=PODULE_GPIO_LED;
-//  output8( (int)podule_base_address+PODULE_GPIO_W_BASE, podule_gpio_state );
-*(unsigned char *)(podule_base_address+PODULE_GPIO_W_BASE) = podule_gpio_state;
+  output8( (int)podule_base_address+PODULE_GPIO_W_BASE, podule_gpio_state );
   }
 }
 
 void podule_led_on(void)
 {
-//led_set(1<<2);
   if (podule_base_address)
   {
     podule_gpio_state&=(~PODULE_GPIO_LED);
-//    output8( (int)podule_base_address+PODULE_GPIO_W_BASE, podule_gpio_state );
-*(unsigned char *)(podule_base_address+PODULE_GPIO_W_BASE) = podule_gpio_state;
+    output8( (int)podule_base_address+PODULE_GPIO_W_BASE, podule_gpio_state );
   }
 }
 
@@ -314,39 +160,37 @@ int modem_send_string( char *string )
 
 #ifdef PODULEBASED
 
-static void *find_podule_base( unsigned char **podulebase, int card_id )
+static void *find_podule_base( int card_id )
 {
-  _kernel_oserror *e = NULL;
+  void *podulebase = NULL;
   int slot,id;
-
+  _kernel_oserror *e;
   
-  *podulebase = NULL;
   for ( slot=0 ; slot<=7 ; slot++ )
   {
     e=_swix( Podule_ReadID, _IN(3)|_OUT(0), slot, &id );
     if ( !e && (( id & 0x78 ) == ( card_id<<3 )) )
     {
-      e=_swix( Podule_ReadInfo, _INR(0,3), (1<<9), podulebase, sizeof(*podulebase),slot );
+      e=_swix( Podule_ReadInfo, _INR(0,3), (1<<9), &podulebase, sizeof(podulebase),slot );
       break;
     }
   }
-  return e;
+  return podulebase;
 }
 
 #else // ALBA2
 
-static void *find_alba2_base( unsigned char **hardwarebase )
+static void * find_alba2_base( void )
 {
-  _kernel_oserror *e = NULL;
-
-
-  *hardwarebase = NULL;
+  void *hardwarebase = NULL;
+  _kernel_oserror *e;
 
   // OS_Memory 13 to map our modem into permanent logical space
-  e=_swix( OS_Memory, _INR(0,2)|_OUT(3), 13|(0<<8) , ALBA2_HARDWARE_BASE , 4*4, hardwarebase );
-  if (e) *hardwarebase = NULL;
+  e=_swix( OS_Memory, _INR(0,2)|_OUT(3), 13|(0<<8) , ALBA2_HARDWARE_BASE , 4*4, &hardwarebase );
+  if (e)
+    hardwarebase = NULL;
 
-  return e;
+  return hardwarebase;
 }
 
 #endif
@@ -571,50 +415,45 @@ void init_ports(void)
 }
 
 
-
 _kernel_oserror *module_initialise(const char *cmd_tail, int podule_base, void *pw)
 {
     _kernel_oserror *e;
     _kernel_swi_regs r;
 
 
-    private_word = pw;
-
     /* set up debugging */
     debug_initialise (Module_Title, "", "");
-#ifdef PODULEBASED
     debug_set_device(DEBUGIT_OUTPUT);
-#else
-    debug_set_device(PRINTF_OUTPUT);
-#endif
     debug_set_unbuffered_files (TRUE);
     dprintf (("Module", "Starting Module\n"));
+
+//G(S).ModemOptions.DialToneDetect = 0;
+//G(S).ModemOptions.BlindDialPermited = 1;
+
+    private_word = pw;
 
 #ifdef PODULEBASED
 
     // discover hardware address and init pointers with it
-
-    e=find_podule_base( &hardware_base_address, 0xf );
-    if (e) return e;
-
+    hardware_base_address = podule_base_address = find_podule_base ( 0xf );
     BaseAddress     = (int)hardware_base_address + PODULE_MODEM_BASE + 0;
     BaseAddressData = (int)hardware_base_address + PODULE_MODEM_BASE + 4;
     BaseAddress2    = (int)hardware_base_address + PODULE_MODEM_BASE + 8;
-
-    podule_base_address = hardware_base_address;
     podule_led_off(); // proves we found the right address
 
 #else // ALBA2
 
     // discover hardware address and init pointers with it
-    e=find_alba2_base(&hardware_base_address);
-    if (e) return e;
-
-    BaseAddress     = (int)hardware_base_address + 0;
-    BaseAddressData = (int)hardware_base_address + 4;
-    BaseAddress2    = (int)hardware_base_address + 8;
-
-    led_clear(0xff);
+    if ( (hardware_base_address=find_alba2_base())!=NULL)
+    {
+        BaseAddress     = (int)hardware_base_address + 0;
+        BaseAddressData = (int)hardware_base_address + 4;
+        BaseAddress2    = (int)hardware_base_address + 8;
+    }
+    else
+    {
+        BaseAddress = BaseAddressData = BaseAddress2 = (int)NULL;
+    }
 
 #endif
 
@@ -637,43 +476,36 @@ _kernel_oserror *module_initialise(const char *cmd_tail, int podule_base, void *
     e = register_with_devicefs();
     if (e) return e;
 
-//printf("after devicefs stuff\n");
-
 //    dsp_disable_interrupts();
-
 
 #ifdef PODULEBASED
 
-  #ifndef DSP_POLLED_MODE
-  
     e = _swix(OS_ClaimDeviceVector, _INR(0,4), PODULE_IRQ_NUMBER, interrupt_veneer, pw, \
                podule_base_address+PODULE_INTERRUPT_BASE, PODULE_INTERRUPT_MASK);
+    if (e)
+        deregister_from_devicefs();
 
-    *IOC_IRQMSKB |= podule_IRQ_bit;    //enable podule bus irq
-  #endif
+    //enable podule bus irq
+    *IOC_IRQMSKB |= podule_IRQ_bit;
     
+//      MOV	r0, #IOC
+//	LDR	r1, [r0, #IOCIRQMSKB]
+//	ORR	r1, r1, #podule_IRQ_bit
+//	STR	r1, [r0, #IOCIRQMSKB]
+
 #else // ALBA2
 
-    e = alba2_set_speed();
-    if (!e) e=alba2_test();
+    e = _swix(OS_ClaimDeviceVector, _INR(0,4), ALBA2_IRQ_NUMBER, interrupt_veneer, pw, 0, 0 );
+    if (e)
+        deregister_from_devicefs();
 
-  #ifndef DSP_POLLED_MODE
-
-    if (!e) e=_swix(OS_ClaimDeviceVector, _INR(0,4), ALBA2_IRQ_NUMBER, interrupt_veneer, pw, 0, 0 );
-    if (!e) e=_swix(OS_Hardware, _IN(0)|_INR(8,9) , ALBA2_IRQ_NUMBER, 0, EntryNo_HAL_IRQEnable );   
-
-  #endif
+    //enable irq
+    e = _swix(OS_Hardware, _IN(0)|_INR(8,9) , ALBA2_IRQ_NUMBER, 0, EntryNo_HAL_IRQEnable );   
 
 #endif
 
-if (e)
-  deregister_from_devicefs();
-
-
 //msm//
 //    enable_iomd_interrupts();
-
-//    riscos_enable_interrupt();
 
     return e;
 }
@@ -738,15 +570,14 @@ _kernel_oserror *module_command(const char *arg_string, int argc, int cmd_no, vo
 #else // ALBA2
       printf("** ALBA2 IAC based build **\n");
 #endif
-      printf("Hardware base    = %p\n",hardware_base_address);
+      printf("Hardware base = %p\n",hardware_base_address);
 
       printf("\nModemStats\n----------\n");
-      printf("callbacks        = %i\n",callbacks);
-      printf("total_irq_count  = %i\n",total_irq_count);
-      printf("reentrancy_count = %i\n",reentrancy_count);
-      printf("bytes_tx_count   = %i\n",bytes_tx_count);
-      printf("bytes_rx_count   = %i\n",bytes_rx_count);
-      printf("polling period   = %i centiseconds\n",polling_period);
+      printf("callbacks = %i\n",callbacks);
+      printf("PIT_int_cnt = %i\n",(int)PIT_int_cnt);
+      printf("total_irq_count = %i\n",total_irq_count);
+      printf("bytes_tx_count = %i\n",bytes_tx_count);
+      printf("bytes_rx_count = %i\n",bytes_rx_count);
       printf("\n");
 
 //      timing_stats();
@@ -764,6 +595,7 @@ _kernel_oserror *module_command(const char *arg_string, int argc, int cmd_no, vo
 #endif
        printf("\n");
 
+
        printf("Control line status: ");
        printf("%s ",RO_dcd?"DCD":"dcd");
        printf("%s ",RO_cts?"CTS":"cts");
@@ -771,11 +603,20 @@ _kernel_oserror *module_command(const char *arg_string, int argc, int cmd_no, vo
        printf("%s ",RO_ring?"RING":"ring");
        printf("\n\n");
 
+       printf("Polling period = %i centiseconds\n\n",polling_period);
 
 //printf("IO_DTE_RX_BUFF_SIZE = %i\n",IO_DTE_RX_BUFF_SIZE);
 //printf("IO_DTE_TX_BUFF_SIZE = %i\n",IO_DTE_TX_BUFF_SIZE);
+{ 
+  // just to confirm that this is a little-endian machine
+  int i=1+(0x100*2);     char *cpi = (char*) &i;
+  word w=1+(0x100*2);    char *cpw = (char*) &w;
 
-       break;
+  printf("Endian test: int  %i = [%i][%i][%i][%i]\n",i,(int)cpi[0],(int)cpi[1],(int)cpi[2],(int)cpi[3]);
+  printf("             word %i = [%i][%i]\n",(int)w,(int)cpw[0],(int)cpw[1]);
+}
+        
+      break;
 
     case CMD_ModemInit:
       {      
@@ -1368,94 +1209,136 @@ void send_riscos_serial_event()
     _swix(OS_GenerateEvent, _INR(0,2), Event_RS423Error, flags, InputStream.fileswitch_handle);
 }
 
-
-
 /*
- * This section deals with the main background polling needed.
+ * This section deals with the main background polling needed. There are
+ * two basic jobs:
+ *
+ * 1) Calling acu_timer every centisecond. This hooked directly onto
+ *    TickerV.
+ * 2) Calling ACU_Main periodically. This is called as a transient
+ *    callback triggered every "PollPeriod" centiseconds using
+ *    OS_CallEvery.
  */
 
 static _kernel_oserror *riscos_start_polling(void *pw)
 {
-  _kernel_oserror *e=NULL;
+    _kernel_oserror *e=NULL;
 
-  polling_semaphore++;
+polling_semaphore++;
 
-  if(polling_semaphore == 1)
-  {
-    e=_swix(OS_CallEvery, _INR(0,2), polling_period-1, callevery_veneer, pw);
-  }
-  return e;
+    if(polling_semaphore == 1)
+    {
+     #if PollPeriod == 1
+      e=_swix(OS_Claim, _INR(0,2), TickerV, tickerv_veneer2, pw);
+     #else
+      e=_swix(OS_CallEvery, _INR(0,2), polling_period-1, callevery_veneer, pw);
+     #endif
+    }
+    return e;
 }
-
 
 static void riscos_stop_polling(void *pw)
 {
-  polling_semaphore--;
+polling_semaphore--;
 
   if ( polling_semaphore == 0 )
   {
+/*
+    #if RISCOS_Country == 7
+    _swix(OS_ReleaseDeviceVector, _INR(0,2), 6, timer1_veneer, private_word);
+    #else
+    _swix(OS_Release, _INR(0,2), TickerV, tickerv_veneer, pw);
+    #endif
+*/
+    #if PollPeriod == 1
+    _swix(OS_Release, _INR(0,2), TickerV, tickerv_veneer2, pw);
+    #else
     _swix(OS_RemoveTickerEvent, _INR(0,1), callevery_veneer, pw);
+    #endif
   }
 }
 
-extern void call_in_user(void *);
-
+#if PollPeriod == 1
+//int callevery_handler(_kernel_swi_regs *r, void *pw)
 _kernel_oserror *callevery_handler(_kernel_swi_regs *r, void *pw)
+#else
+_kernel_oserror *callevery_handler(_kernel_swi_regs *r, void *pw)
+#endif
 {
     if (!poll_loop_threaded && !interrupt_handler_threaded && !devicefs_handler_threaded)
     {
         poll_loop_threaded = 1;
         callbacks++;
-        led_set(ALBA2_LED_CALLEVERY);
-podule_led_on();
+
+//        if (pw != NULL)
+            _kernel_irqs_on();
 
         modem_transmit_buffer_write();    // move input stream contents to modem
         fp_context_begin();               // begin our own fp context
-
-        _kernel_irqs_on();
-
-//          ll_periodic();                  // poll modem state machine
-            call_in_user ( (void*)ll_periodic );
-//alba2_delay(1);
-
-        _kernel_irqs_off();
-
+        ll_periodic();                    // poll modem state machine
         fp_context_end();                 // end our own fp context
         modem_receive_buffer_read();      // move modem output to output stream
 
-podule_led_off();
-        led_clear(ALBA2_LED_CALLEVERY);
+
+        _kernel_irqs_off();
         poll_loop_threaded = 0;
     }
 
+#if PollPeriod == 1
+//    return 1;
     return NULL;
+#else
+    return NULL;
+#endif
 }
 
-#ifndef DSP_POLLED_MODE
+
+
+
+int tickerv_handler(_kernel_swi_regs *r, void *pw)
+{
+    PIT_int_cnt++;
+
+//msm//
+//    acu_timer();
+
+    return 1;
+}
+
+//_kernel_oserror *timer1_handler(_kernel_swi_regs *r, void *pw)
+//{
+//    static int cnt = 10;
+//
+////msm//
+////    IOC[IRQRQA] = 0x40; /* clear Timer 1 interrupt */
+//
+//    //#define VIDC ((volatile unsigned int *) 0x03500000)
+//    //*VIDC = 0x10000000;
+//    //*VIDC = rand() & 0x00FFFFFF;
+//
+////msm//
+////    process_one_msec();
+//
+//    if (--cnt == 0)
+//    {
+//        cnt = 10;
+//        PIT_int_cnt++;
+////msm//
+////        acu_timer();
+//    }
+//
+//    return NULL;
+//}
+
+
 _kernel_oserror *interrupt_handler(_kernel_swi_regs *r, void *pw)
 {
-  if (interrupt_handler_threaded)
-  {
-    reentrancy_count++;
-    return NULL;
-  }
-      
-  if ( !devicefs_handler_threaded )
-  {
+    if (interrupt_handler_threaded) return NULL;
     interrupt_handler_threaded=1;
+    dp_dsp_isr();
     total_irq_count++;
 
-    led_set(ALBA2_LED_INTERRUPT);
-    dp_dsp_isr();
-    led_clear(ALBA2_LED_INTERRUPT);
-
     interrupt_handler_threaded=0;
-  }
-  return NULL;
+    return NULL;
 }
-#else
-_kernel_oserror *interrupt_handler(_kernel_swi_regs *r, void *pw)
-{
-  return NULL;  // dummy function to keep cmhg linking happy
-}
-#endif
+
