@@ -1,0 +1,356 @@
+/*---------------------------------------------------------------------------*/
+/* File:    c.sound                                                          */
+/* Purpose: Sound specific code                                              */
+/* Author:  Richard Leggett                                                  */
+/* History: 29-Jan-98: RML: Begun.                                           */
+/*                                                                           */
+/* Copyright © 1998 Acorn Computers Ltd., Cambridge, UK.                     */
+/*---------------------------------------------------------------------------*/
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include "swis.h"
+#include "toolbox.h"
+#include "gadgets.h"
+#include "common.h"
+#include "defines.h"
+#include "sound.h"
+
+#define SoundCtrl_SetVolume   0x50002
+#define SoundCtrl_ChannelInfo 0x50004
+#define Flag_LeftMuted     1u<<0
+#define Flag_RightMuted    2u<<1
+
+/* SndSetup numbers channels from 0 to NumberOfChannels. The toolbox ID of the slider
+   gadget equals this channel number. However, SoundCtrl adopts different numbering, so
+   the array channel_no maps between SndSetup and SoundCtrl's numbering. The array
+   channel_name contains the name of each channel as specified in the Sound configuration
+   file in <Choices$Write>.Sound. */
+
+static char *channel_name[NumberOfChannels] = { "Master",  "System",   "CD",       "Line",
+                                                "Mic",     "Capture",  "Playback", "Wavetable" };
+static int   channel_no[NumberOfChannels] =   {  0,         11,         2,          1,
+                                                 5,         12,         8,         10 };
+static int   min_volume[NumberOfChannels];                                                 
+static int   menu_to_voice_map[16];
+static int   cmos_voice, cmos_volume;
+
+/*---------------------------------------------------------------------------*
+ * sound_read_channel_info                                                   *
+ *                                                                           *
+ * Read the min volume, max volume and step for each channel and set the     *
+ * sliders accordingly.                                                      *
+ *                                                                           *
+ * In: window_id = ID of the Sound configure window.                         *
+ *---------------------------------------------------------------------------*/
+
+void sound_read_channel_info(int window_id)
+{    
+    int n;
+    int min_i, max_i, step_i;
+    float min_f, max_f, step_f;
+
+    /* Read in min, max & volume settings for the channels */
+    for (n=0; n<NumberOfChannels; n++)
+    {
+        /* Read the min, max and step of the volume for this channel */
+        error_trap(_swix(SoundCtrl_ChannelInfo, _INR(0,1)|_OUTR(4,6),
+                                                0, channel_no[n], &min_i, &max_i, &step_i), 1);
+
+        /* Convert the values we read back (32bit, 16bit for fraction) into floats */
+        min_f  = 10 * ((float)min_i) / (1<<16);
+        max_f  = 10 * ((float)max_i) / (1<<16);
+        step_f = 10 * ((float)step_i) / (1<<16);
+        min_volume[n] = (int)min_f;
+        error_trap(numberrange_set_bounds(15, window_id, n, (int)min_f, (int)max_f, (int)step_f, 1), 0);
+    }
+    
+    /* Set up the sliders -                             min   max  step */
+    //error_trap(numberrange_set_bounds(15, window_id, 0, -465, 0,   15, 1), 0);   /* Master */
+    //error_trap(numberrange_set_bounds(15, window_id, 1, -945, 0,   15, 1), 0);   /* I²S 1 = VIDC */
+    //error_trap(numberrange_set_bounds(15, window_id, 2, -345, 120, 15, 1), 0);   /* CD */
+    //error_trap(numberrange_set_bounds(15, window_id, 3, -345, 120, 15, 1), 0);   /* Line */
+    //error_trap(numberrange_set_bounds(15, window_id, 4, -450, 0,   30, 1), 0);   /* Mic */
+    //error_trap(numberrange_set_bounds(15, window_id, 5,    0, 225, 15, 1), 0);   /* Playback */
+    //error_trap(numberrange_set_bounds(15, window_id, 6, -945, 0,   15, 1), 0);   /* Capture */
+    //error_trap(numberrange_set_bounds(15, window_id, 7, -945, 0,   15, 1), 0);   /* I²S 0 = Wavetable */
+}
+
+
+/*---------------------------------------------------------------------------*
+ * sound_set_volume                                                          *
+ *                                                                           *
+ * Set the volume for a given channel.                                       *
+ *                                                                           *
+ * In: channel = channel whose volume we wish to change. This number is our  *
+ *               internal number (between 0 and 7), rather than the channel  *
+ *               number held by SoundCtrl. The channel_no array maps between *
+ *               the two.                                                    *
+ *     volume = volume, in db, times 10.                                     *
+ *---------------------------------------------------------------------------*/
+
+void sound_set_volume(int channel, int volume)
+{
+    float db;
+    int   flags;
+
+    /* If volume is minimum value, then mute instead */
+    if (volume == min_volume[channel]) flags = Flag_LeftMuted + Flag_RightMuted;
+    else flags = 0;
+
+    /* Convert a volume integer (db*10 eg. -125 means -12.5db) into 32bit with 16bit fraction */
+    db = (1<<16) * ((float)volume) / 10;
+
+    /* Set the volume */
+    error_trap(_swix(SoundCtrl_SetVolume, _INR(0,4), flags, channel_no[channel], 0, (int)db, (int)db), 0);
+}
+
+
+/*---------------------------------------------------------------------------*
+ * sound_read_write_cmos_settings                                            *
+ *                                                                           *
+ * Read or write the CMOS settings for volume and voice, then update the     *
+ * appropriate window gadgets.                                               *
+ *                                                                           *
+ * In: condition_code = ReadCMOSSettings or WriteCMOSSettings                *
+ *     window_id = toolbox ID of the configuration window                    *
+ *---------------------------------------------------------------------------*/
+
+void sound_read_write_cmos_settings(int condition_code, int window_id)
+{
+    int voice, n;
+    
+    /* Are we reading or writing CMOS? */
+    if (condition_code == ReadCMOSSettings)
+    {
+        cmos_voice = read_cmos_value(CMOS_Voice);
+        cmos_volume = read_cmos_value(CMOS_BellVolume);
+    }
+    else if (condition_code == WriteCMOSSettings)
+    {
+        write_cmos_value(CMOS_Voice, cmos_voice);
+        write_cmos_value(CMOS_BellVolume, cmos_volume);
+    }        
+
+    voice = 1 + (cmos_voice & 0x0f);
+        
+    /* Try and find the name in the stringset to match the CMOS-set channel */
+    error_trap(stringset_set_selected(0, window_id, VoicesStringset, "*** None ***"), 0);
+    for (n=0; n<15; n++)
+    {
+        if (menu_to_voice_map[n] == voice)
+        {
+            error_trap(stringset_set_selected(1, window_id, VoicesStringset, (char*)n), 0);
+            _swix(Sound_AttachVoice, _INR(0,1), 1, voice);
+        }
+    }
+
+    /* Is beep quiet or loud? */
+    error_trap(radiobutton_set_state(0, window_id, cmos_volume & 2 ? LoudRadio : QuietRadio, 1), 0);
+    _kernel_osbyte(OSBYTE_ReadWriteBellVolume, cmos_volume & 2 ? 0x80 : 0xd0, 0);
+}
+
+
+/*---------------------------------------------------------------------------*
+ * sound_set_unused                                                          *
+ *                                                                           *
+ * Set 16bit sound and volume settings stored in CMOS. These are no longer   *
+ * configurable.                                                             *
+ *---------------------------------------------------------------------------*/
+
+void sound_set_cmos_defaults(void)
+{
+    int byte;
+
+    /* Set 16bit sound (bits 5-6 of CMOS_PrintSound byte) */
+    byte = read_cmos_value(CMOS_PrintSound);
+    byte = (byte & 0x9f) | (1<<5);
+    write_cmos_value(CMOS_PrintSound, byte);
+        
+    /* Sound default CMOS byte, composed of:
+       bits 0-3: channel 0 default voice (0)
+       bits 4-6: loudness, 0 - 7 (7)
+       bit 7:    loudspeaker enable (1) */
+    byte = 0 + (7<<4) + (1<<7);
+    write_cmos_value(CMOS_SoundDefault, byte);
+    
+    /* Set bell volume to loud (bit 1) of Miscellaneous flags byte */
+    byte = read_cmos_value(CMOS_BellVolume);
+    byte = (byte & 0xFD) | 1;
+    write_cmos_value(CMOS_BellVolume, byte);
+
+    /* Set voice and loud bell volume */
+    _swix(Sound_AttachVoice, _INR(0,1), 1, 1);
+    _kernel_osbyte(OSBYTE_ReadWriteBellVolume, 0x80, 0);
+}
+
+
+/*---------------------------------------------------------------------------*
+ * sound_read_choices                                                        *
+ *                                                                           *
+ * Read the sound choices from the Choices file.                             *
+ *                                                                           *
+ * In: window_id = toolbox ID of sound configuration window.                 *
+ *---------------------------------------------------------------------------*/
+
+void sound_read_choices(int window_id)
+{
+    FILE *fp;
+    char *item;
+    char *value;
+    char  buffer[256];
+    int   n, colon, more=1;
+    
+    fp = fopen(ChoicesFile, "r");
+    if (fp)
+    {
+        while (more)
+        {
+            /* Get next string */
+            more = (int)fgets(buffer, 256, fp);
+            if (more)
+            {
+                /* Check for a colon in this line */                
+                colon = strstr(buffer, ":") - buffer;
+                if (colon>0)
+                {
+                    /* Break the string into item eg. ("Master") and value (eg. "-45") */
+                    buffer[colon] = 0;
+                    item = buffer;
+                    value = item + colon + 1;
+                    value[strlen(value)-1] = 0;
+                    
+                    /* Is this item one of the names of channels? */
+                    for (n=0; n<NumberOfChannels; n++)
+                    {
+                        if (strcmp(channel_name[n], item)==0)
+                        {
+                            /* The item corresponds to channel n in our array */
+                            int v = (int) (atof(value)*10);
+                            /* Update slider and set volume */
+                            error_trap(numberrange_set_value(0, window_id, n, v), 0);
+                            sound_set_volume(n, v);
+                        }
+                    }
+                }
+            }
+            
+        }
+        
+        fclose(fp);
+    }
+}
+
+
+/*---------------------------------------------------------------------------*
+ * sound_save_choices                                                        *
+ *                                                                           *
+ * Write the volume levels choices file.                                     *
+ *                                                                           *
+ * In: window_id = Toolbox ID of the sound configure window.                 *
+ *---------------------------------------------------------------------------*/
+
+void sound_save_choices(int window_id)
+{
+    FILE *fp;
+    int   type, n, v;
+    char  dbstring[16];
+    char  string[32];
+
+    /* Ensure choices directory exists */
+    _swix(OS_File, _INR(0,1)|_OUT(0), 17, ChoicesDir, &type);
+    if (type==0) error_trap(_swix(OS_CLI, _IN(0), "CDir "ChoicesDir), 0);
+
+    /* Write the file */
+    fp = fopen(ChoicesFile, "w");
+    if (fp)
+    {
+        /* Write the comment lines */
+        fputs(SoundConfigurationString, fp);
+        fputc(NewLine, fp);
+        fputc(NewLine, fp);
+        fputs(VolumeLevelsString, fp);
+        fputc(NewLine, fp);
+        
+        /* Loop through all the channels and make a string for their volumes */
+        for (n=0; n<NumberOfChannels; n++)
+        {
+            error_trap(numberrange_get_value(0, window_id, n, &v), 0);
+            sprintf(dbstring, "%f", (float)((float)v / 10));
+            *(strstr(dbstring, ".")+2) = 0;
+            sprintf(string, "%s:%s", channel_name[n], dbstring);
+            fputs(string, fp);
+            fputc(NewLine, fp);
+        }
+      
+        fclose(fp);
+    }
+}
+
+
+/*---------------------------------------------------------------------------*
+ * sound_make_voices_menu                                                    *
+ *                                                                           *
+ * Make a menu of voice modules available.                                   *
+ *                                                                           *
+ * In: window_id - Toolbox ID of the configuration window                    *
+ *---------------------------------------------------------------------------*/
+
+void sound_make_voices_menu(int window_id)
+{
+    char  strings[1024];
+    char* name;
+    char* first = 0;
+    char* name_local;
+    int   i, m;
+    
+    memset(strings, 0, 1024);
+
+    /* menu_to_voice_map maps from menu item number to internal voice number */
+    for (m=15; m>=0; m--) menu_to_voice_map[m] = -1;
+
+    /* Only read first 16 voices, as 16 is maximum value which can be stored in 4 CMOS bits */
+    m=0;
+    for (i=1; i<=16; i++)
+    {
+        _swix(Sound_InstallVoice, _INR(0,1)|_OUTR(2,3), 2, i, &name, &name_local);
+        if (name!=0)
+        {
+            if (strlen(strings) > 0) strcat(strings, ",");
+            if (strlen(strings) == 0) first = name_local;
+            strcat(strings, name_local);
+            menu_to_voice_map[m++] = i;
+        }
+    }
+    
+    error_trap(stringset_set_available(0, window_id, VoicesStringset, strings), 0);
+    error_trap(stringset_set_selected(0, window_id, VoicesStringset, first), 0);
+}
+
+
+/*---------------------------------------------------------------------------*
+ * sound_change_voice                                                        *
+ *                                                                           *
+ * Change the system beep (channel 1) voice                                  *
+ *                                                                           *
+ * In: n = selection number from voices menu                                 *
+ *---------------------------------------------------------------------------*/
+
+void sound_change_voice(int n)
+{
+    int byte;
+    int voice = menu_to_voice_map[n];
+    
+    if ((voice>=1) && (voice<=16))
+    {
+        byte = read_cmos_value(CMOS_Voice);
+        write_cmos_value(CMOS_Voice, (byte & 0xf0) | (voice-1));
+        _swix(Sound_AttachVoice, _INR(0,1), 1, voice);
+    }
+    
+    /* Beep */
+    printf("\07");
+}
+    
+
