@@ -45,233 +45,239 @@
 
 
 
-/* this routine is called twice, once with dest set and a bad fs    */
-/* and once with dest NULL and a good fs                            */
-/* potential bug, is to assume you have a good fs, when dest is set */
-
-
-/* if there already is a scrap n then see if it exists */
-/* else create a scrap n                               */
-/* else transport the file                             */
-/* if there is a dest load the file to RAM             */
-/* else open a handle on the scrap file                */
-
-
-
-_kernel_oserror * loadarcfile(int acn,int fn,int fs,char * dest)
+/*
+ * this routine is called twice, once with dest set and a bad fs and once
+ * with dest NULL and a good fs potential bug, is to assume you have a
+ * good fs, when dest is set
+ */
+_kernel_oserror *
+loadarcfile(int acn, int fn, int fs, char *dest)
 {
- _kernel_oserror * err;
- char            * p;
- int               sh;
- heads             hdr;
- int               changed;
- int               changedlength;
- int               sn;
+  _kernel_oserror * err=NULL;
+  char            * scrap_filename;
+  int               sh;
+  heads             hdr;
+  int               changed;
+  int               changedlength;
+  int               sn;
 
- err=NULL;
+  debug_printf(db,"(7) loadarcfile (%d)",fs);
 
- changed=changedlength=0;
+  changed=changedlength=0;
 
- if(!arc[acn].hdr[fn].sn)
- {
-  err=sc_create(&sn);
-  arc[acn].hdr[fn].sn=sn;
-  if(!dest) fsmap[fs].cat.sn=sn;
- }
-
- p=sc_name(arc[acn].hdr[fn].sn);
- if(!fexists(p))
- {
-  /* get file */
-  hdr=arc[acn].hdr[fn];
-  err=servicegetfile(acn,fn,0,NULL);
-  if(!err)
+  /*
+   * if we don't have a scrap file, create it
+   */
+  if(!arc[acn].hdr[fn].sn)
   {
-   changedlength=(arc[acn].hdr[fn].length!=hdr.length);
-   changed=arc[acn].hdr[fn].load!=hdr.load ||
-           arc[acn].hdr[fn].exec!=hdr.exec ||
-           arc[acn].hdr[fn].acc!=hdr.acc   || changedlength;
+    err=sc_create(&sn);
+    arc[acn].hdr[fn].sn=sn;
+    if(!dest)
+      fsmap[fs].cat.sn=sn;
   }
- }
 
-
- if(err)
- {
-  removesn(acn,fn);
- }
- else
- {
-  if(changed) updatefileupcall(acn,fn);
-
-  p=sc_name(arc[acn].hdr[fn].sn);
-
-  if(dest)
+  /*
+   * see if scrap file exists
+   */
+  scrap_filename=sc_name(arc[acn].hdr[fn].sn);
+  if(!fexists(scrap_filename))
   {
-   err=loadblock(p,dest);
+    /*
+     * fetch file
+     */
+    hdr=arc[acn].hdr[fn];
+    err=servicegetfile(acn,fn,0,NULL);
+    if(!err)
+    {
+      changedlength=(arc[acn].hdr[fn].length!=hdr.length);
+      changed=arc[acn].hdr[fn].load!=hdr.load ||
+              arc[acn].hdr[fn].exec!=hdr.exec ||
+              arc[acn].hdr[fn].acc!=hdr.acc   || changedlength;
+    }
   }
+
+  /*
+   * remove scrap file in case of error
+   */
+  if(err)
+    removesn(acn,fn);
   else
   {
-   err=open(p,'u',&sh);
-   if(!err)
-   {
-    fsmap[fs].cat.state=OPENDISC;
-    fsmap[fs].cat.sh=sh;
-   }
-  }
- }
+    /*
+     * signal world that things have changed
+     */
+    if(changed)
+      updatefileupcall(acn,fn);
 
- return(err);
+    scrap_filename=sc_name(arc[acn].hdr[fn].sn);
+
+    if(dest)
+    {
+      err=loadblock(scrap_filename,dest);
+    }
+    else
+    {
+      err=open(scrap_filename,'u',&sh);
+
+      if(!err)
+      {
+        fsmap[fs].cat.state=OPENDISC; /* change state */
+        fsmap[fs].cat.sh=sh;	      /* note scrap handle */
+      }
+    }
+  }
+
+  return(err);
+}
+
+/*
+ * copy contents of stat structure to header array
+ */
+static _kernel_oserror *
+stattohdr(int acn, int fn, fstat *stat, char * name)
+{
+  _kernel_oserror * err=NULL;
+  int               s;
+  heads           * hdr;
+
+  hdr=&arc[acn].hdr[fn];
+
+  hdr->load=stat->load;
+  hdr->exec=stat->exec;
+  hdr->acc =stat->acc;
+  hdr->length=stat->length;
+  hdr->dirn=DNFILE;
+  hdr->fshandle=0;
+
+  if(name)
+  {
+    s=hdr->name;
+    if(s<=0)
+    {
+       err=createstring(name,&s);
+       if(!err)
+         arc[acn].hdr[fn].name=s; /* NB hdr-> probably moved now */
+    }
+    else
+      err=assignstring(s,name);
+  }
+
+  return(err);
 }
 
 
 
 
-static _kernel_oserror * stattohdr(int acn,int fn,fstat * stat,char * name)
+_kernel_oserror *
+savearcfile(int acn, fstat *stat, char * name, int ins,
+           int ind,int ow,int fs,char * ostart)
 {
- _kernel_oserror * err;
- int               s;
- heads           * hdr;
+  _kernel_oserror * err=NULL;
+  int               sn;
 
- err=NULL;
+  debug_printf(db,"(7) savearcfile");
 
- hdr=&arc[acn].hdr[fn];
-
- hdr->load=stat->load;
- hdr->exec=stat->exec;
- hdr->acc =stat->acc;
- hdr->length=stat->length;
- hdr->dirn=DNFILE;
- hdr->fshandle=0;
-
- if(name)
- {
-  s=hdr->name;
-  if(s<=0)
-  {
-   err=createstring(name,&s);
-   if(!err) arc[acn].hdr[fn].name=s; /* NB hdr-> probably moved now */
-  }
-  else
-  {
-   err=assignstring(s,name);
-  }
- }
-
- return(err);
-}
-
-
-
-
-_kernel_oserror * savearcfile(int acn,fstat * stat,char * name,
-                              int ins,int ind,int ow,int fs,char * ostart)
-{
- _kernel_oserror * err;
- int               sn;
-
- err=NULL;
-
- if(ostart)
- {
-  if(ow) sn=arc[acn].hdr[ins].sn;
-  else
-  {
-   err=sc_create(&sn);
-  }
- }
- else
- {
-  if(ow)
-  {           /* don't think this can ever happen */
-   if(arc[acn].hdr[ins].sn!=fsmap[fs].cat.sn)
-   {
-    sc_remove(arc[acn].hdr[ins].sn,NULL);
-   }
-  }
-  sn=fsmap[fs].cat.sn;
- }
-
-
- if(!err)
- {
   if(ostart)
   {
-   fs_lock(sc_name(sn),DEFATT);
-   saveblock(sc_name(sn),DATA,ostart,stat->length);
+    if(ow)
+      sn=arc[acn].hdr[ins].sn;
+    else
+      err=sc_create(&sn);
+  }
+  else
+  {
+    if(ow)           /* don't think this can ever happen */
+      if(arc[acn].hdr[ins].sn!=fsmap[fs].cat.sn)
+        sc_remove(arc[acn].hdr[ins].sn,NULL);
+    sn=fsmap[fs].cat.sn;
   }
 
-  /* else the file already exists */
- }
-
- if(!err)
- {
-  if(!ow) err=insentry(acn,ins,ind,1);
-
-  err=stattohdr(acn,ins,stat,name);
-  arc[acn].hdr[ins].fshandle=fs;
-  arc[acn].hdr[ins].sn=sn;
 
   if(!err)
   {
-   if(!arc[acn].writecache)
-     err=serviceputfile(acn,ins,0,NULL);
-   else
-   {
-    arc[acn].hdr[ins].writecache=1;
-    fs_lock(sc_name(arc[acn].hdr[ins].sn),DEFATT|LOCK);
-   }
-  }
- }
+    if(ostart)
+    {
+      fs_lock(sc_name(sn),DEFATT);
+      saveblock(sc_name(sn),DATA,ostart,stat->length);
+    }
 
- return(err);
+    /* else the file already exists */
+  }
+
+  if(!err)
+  {
+    if(!ow)
+      err=insentry(acn,ins,ind,1);
+
+    err=stattohdr(acn,ins,stat,name);
+    arc[acn].hdr[ins].fshandle=fs;
+    arc[acn].hdr[ins].sn=sn;
+
+    if(!err)
+    {
+      if(!arc[acn].writecache)
+      {
+        debug_printf(db,"(7) putting file on server");
+        err=serviceputfile(acn,ins,0,NULL);
+      }
+      else
+      {
+        debug_printf(db,"(7)  not putting file on server, writecached");
+        arc[acn].hdr[ins].writecache=1;
+        fs_lock(sc_name(arc[acn].hdr[ins].sn),DEFATT|LOCK);
+      }
+    }
+  }
+
+  return(err);
 }
 
-
-
-_kernel_oserror * createfilex(int acn,fstat * stat,char * name,
-                                                     int ins,int ind,int ow)
+/*
+ */
+_kernel_oserror *
+createfilex(int acn,fstat * stat, char * name,int ins,int ind,int ow)
 {
- _kernel_oserror * err;
- int               sn;
+  _kernel_oserror * err=NULL;
+  int               sn;
 
- err=NULL;
+  debug_printf(db,"(7) createfilex %s",name);
 
- if(!ow || !arc[acn].hdr[ins].sn)
- {
-  err=sc_create(&sn);
- }
- else
- {
-  sn=arc[acn].hdr[ins].sn;
-  fs_lock(sc_name(sn),DEFATT);
- }
+  if(!ow || !arc[acn].hdr[ins].sn)
+    err=sc_create(&sn);
+  else
+  {
+    sn=arc[acn].hdr[ins].sn;
+    fs_lock(sc_name(sn),DEFATT);
+  }
 
- err=fs_create(sc_name(sn),stat->length,DATA);
+  err=fs_create(sc_name(sn),stat->length,DATA);
 
- if(!err)
- {
-  if(!ow) err=insentry(acn,ins,ind,1);
-  err=stattohdr(acn,ins,stat,name);
-  arc[acn].hdr[ins].sn=sn;
   if(!err)
   {
-   if(!arc[acn].writecache)
-   {
-    if(arc[acn].hdr[ins].load!=0xdeaddead&&arc[acn].hdr[ins].exec!=0xdeaddead)
+    if(!ow)
+      err=insentry(acn,ins,ind,1);
+    err=stattohdr(acn,ins,stat,name);
+    arc[acn].hdr[ins].sn=sn;
+    if(!err)
     {
-      int type = (arc[acn].hdr[ins].load>>8)&0xfff;
-      debug_printf(db,"about to put file from createfilex");
-      debug_printf(db," filetype 0x%3x %s",type,type==0xffd?"DATA":"");
-
-      err=serviceputfile(acn,ins,0,NULL);
+      if(!arc[acn].writecache)
+      {
+        if(arc[acn].hdr[ins].load!=0xdeaddead&&
+           arc[acn].hdr[ins].exec!=0xdeaddead)
+        {
+          debug_printf(db,"(7) create file on server");
+          err=serviceputfile(acn,ins,0,NULL);
+        }
+      }
+      else
+      {
+        debug_printf(db,"(7) not creating on server mount writecached");
+        arc[acn].hdr[ins].writecache=1;
+      }
     }
-   }
-   else
-     arc[acn].hdr[ins].writecache=1;
   }
- }
 
- return(err);
+  return(err);
 }
 
 
