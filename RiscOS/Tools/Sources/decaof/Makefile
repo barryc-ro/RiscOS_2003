@@ -12,12 +12,13 @@
 # Paths
 #
 VPATH=  @ riscos
-EXP_DIR		= <Build$Dir>.Library
+EXP_DIR		= <Tools$Dir>.Acorn
+INSTDIR         = ${INSTDIR}.!${CAP_COMP}
 
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = mkdir -p
 AS      = objasm
 CP      = copy
 CC      = cc
@@ -28,6 +29,7 @@ LB      = libfile
 SQZ	= squeeze
 TOUCH   = create
 WIPE    = -wipe
+MKDIR   = mkdir -p
 
 CCFLAGS = -c -depend !Depend -ffaho ${INCLUDES} ${DFLAGS} ${THROWBACK}
 ASFLAGS = -depend !Depend -Stamp -quit
@@ -47,6 +49,8 @@ ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.AbsSym
 CLXLIB    = C:CLX.o.clxlib
 
+DIRS      = o._dirs
+
 #
 # Include files
 #
@@ -57,6 +61,7 @@ DFLAGS    =
 # Program specific options:
 #
 COMPONENT  = decaof
+CAP_COMP   = DecAOF
 TARGET     = ${COMPONENT}
 SOURCE     = 
 EXPORTS    = 
@@ -110,19 +115,32 @@ export_hdrs:
 export_libs: 
         @echo ${COMPONENT}: export complete (libs)
 
-install: ${TARGET}
+install_tool: ${TARGET}
 	${SQZ} ${SQZFLAGS} ${TARGET} ${EXP_DIR}.${COMPONENT}
+        @echo ${COMPONENT}: installing in library
 
-local_dirs:
+install: ${TARGET}
+	${MKDIR} ${INSTDIR}
+	${CP} LocalRes:!Boot ${INSTDIR}.!Boot ${CPFLAGS}
+	${CP} LocalRes:!Run ${INSTDIR}.!Run ${CPFLAGS}
+	${CP} LocalRes:!Help ${INSTDIR}.!Help ${CPFLAGS}
+	${CP} LocalRes:!Sprites ${INSTDIR}.!Sprites ${CPFLAGS}
+	${CP} LocalRes:!Sprites22 ${INSTDIR}.!Sprites22 ${CPFLAGS}
+	${CP} LocalRes:Messages ${INSTDIR}.Messages ${CPFLAGS}
+	${CP} LocalRes:Templates ${INSTDIR}.Templates ${CPFLAGS}
+	${CC} -C++ -E >${INSTDIR}.Desc LocalRes:Desc
+
+${DIRS}:
 	${MKDIR} o
 	${MKDIR} oi
 	${MKDIR} i
 	${MKDIR} inst
+	${TOUCH} $@
 
-preprocess: ${OBJSI} local_dirs
+preprocess: ${OBJSI} ${DIRS}
 	@echo ${COMPONENT}: preprocess build complete
 
-instrument: ${OBJSINST} inst.instlib local_dirs 
+instrument: ${OBJSINST} inst.instlib ${DIRS}
 	${LD} ${LDFLAGS} -o ${COMPONENT}i ${OBJSINST} inst.instlib ${STUBS}
 	@echo ${COMPONENT}: instrument build complete
 
@@ -130,7 +148,7 @@ instrument: ${OBJSINST} inst.instlib local_dirs
 #
 # Final link
 #
-${TARGET}: ${OBJS} ${LIBS} ${HDRS} local_dirs
+${TARGET}: ${OBJS} ${LIBS} ${HDRS} ${DIRS}
         ${LD} ${LDFLAGS} -o ${COMPONENT} ${OBJS} ${LIBS}
 
 
