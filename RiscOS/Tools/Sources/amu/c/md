@@ -1,3 +1,54 @@
+/*
+ * AMU (md.c)
+ *
+ * Copyright (C) Pace Micro Technology plc. 2001
+ */
+
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <signal.h>
+#include <ctype.h>
+#include <stddef.h>
+#include <stdbool.h>
+
+#include "amu.h"
+#include "md.h"
+
+#ifndef DDE
+
+/* All these functions do NOTHING unless the DDE macro is defined */
+
+void md_delete(void) { }
+void md_start_cmd(void) { }
+void md_end_cmd(void) { }
+void md_merge(Makefile *mf) { (void) mf; }
+int  md_check_magic_string(const char *data) { (void) data; return 1; }
+int  dde_extended_cmdline(void) { return 0; }
+void dde_prefix_used(void) { }
+void dde_prefix_init(char *fname) { (void) fname; }
+
+#else
+
+#include "kernel.h"
+#include "swis.h"
+
+/* From CLX */
+#include "hash.h"
+#include "filestamp.h"
+#include "fname.h"
+#include "host.h"
+#include "err.h"
+#include "wholefls.h"
+
+/* Local headers */
+#include "VersionNum"
+
+#define  VERSION          Module_FullVersion
+#define  DATE             Module_Date
+#define  SELFNAME         "AMU"
+
+
 #define DEPENDENCY_FILE "!Depend"
 #define COMMENT_DYNAMIC_DEPENDENCIES "# Dynamic dependencies:"
 
@@ -12,6 +63,7 @@ typedef struct Target_List {
 } Target_List;
 
 static Dependency_File_List *depend_list = 0;
+static int prefix_used;
 
 static TimeStamp md_time;
 
@@ -23,71 +75,7 @@ static int md_cistrcmp(char *s, char *t)
     return 1;
 }
 
-static int md_find_comment(char *s, char *text, char **ac)
-{
-    int l;
-    char c;
-    char *lp, *line;
-
-    l = strlen(s);
-    *ac = 0;
-    while (*text) {
-        if (*text == '#') {
-            c = *(text + l);
-            *(text + l) = 0;
-            if (!md_cistrcmp(s, text)) {
-                *(text + l) = c;
-                while (*text && *text++ != '\n');
-                *ac = text;
-                return 1;
-            }
-            *(text + l) = c;
-            while (*text && *text++ != '\n');
-            while (*text == '\n') text++;
-            lp = text;
-            while (1) {
-                line = lp;
-                if (!*lp) {
-                    *ac = text;
-                    return 0;
-                }
-                if (*lp == '#') {
-                    text = line;
-                    break;
-                }
-                while ((c = *lp) != 0 && c != ':' && !isspace(c)) lp++;
-                if (c != ':' || lp == line) {
-                    while (*lp && *lp++ != '\n');
-                    text = lp;
-                    break;
-                }
-                lp++;
-                while (isspace(*lp) && *lp != '\n') lp++;
-                line = lp;
-                while (*lp && !isspace(*lp)) lp++;
-                if (line == lp || *lp++ != '\n') {
-                    while (*lp && *lp++ != '\n');
-                    text = lp;
-                    break;
-                }
-            }
-        } else
-            while (*text && *text++ != '\n');
-    }
-    return 0;
-}
-
-static void md_start_cmd(void)
-{
-    md_time = filestamp_now();
-}
-
-static void md_delete(void)
-{
-    remove(DEPENDENCY_FILE);
-}
-
-static void md_end_cmd(void)
+void md_end_cmd(void)
 {
   Dependency_File_List *depend_file, *old_depend_file;
   char *s, *cs, *target, *ds;
@@ -222,15 +210,16 @@ static void md_flatten(char *p)
   while ((tgt = strchr(tgt, '\t')) != NULL) *tgt++ = ' ';
 }
 
-static void md_merge(void)
+static void merge_dependencies(Makefile *mf)
 {
     Dependency_File_List *dl;
     Target_List *tl, *nt;
     char *target, *fcp, *s, *ac;
     char c;
     FILE *f;
-    int acflag;
     long size;
+    long seek_target;
+    bool write_initial_newline = false;
 
     if (depend_list) {
         dl = depend_list;
@@ -263,64 +252,164 @@ static void md_merge(void)
             }
             dl = dl->next;
         } while (dl);
-        acflag = md_find_comment(COMMENT_DYNAMIC_DEPENDENCIES, makefile, &ac);
-        if (ac) {
-            fcp = ac;
-            while (1) {
-                while (isspace(*fcp)) fcp++;
-                if (!*fcp) break;
-                target = fcp;
-                while ((c = *fcp) != 0 && c != ':' && !isspace(c)) fcp++;
-                if (fcp == target) err_fail("null target in Makefile");
-                if (c != ':')
-                    err_fail("':' expected after target in Makefile");
-                *fcp = 0;
-                nt = tl;
-                while (nt) {
-                    if (!md_cistrcmp(target, nt->name))
-                        break;
-                    nt = nt->next;
-                }
-                *fcp = c;
-                while (*fcp && *fcp++ != '\n');
-                if (nt) {
-                    s = target;
-                    while ((*s++ = *fcp++) != 0);
-                    fcp = target;
-                }
-            }
-        }
-        if (wf_filesize(input_file) != (in->file[0].eof - in->file[0].data))
-        {
+
+        if (wf_filesize(mf->name) != mf->file_size) {
           err_report("%s has been edited since %s was invoked!  "
-                     "Ignoring dynamic dependency file.", input_file,
-            amu);
+                     "Ignoring dynamic dependency file.", mf->name, amu);
           return;
         }
-        f = fopen(input_file, "r+");
-        if (!f) err_fail("Error opening %s for update", input_file);
-        if (!ac) {
-            if (fseek(f, 0, SEEK_END))
-                err_fail("Error writing %s", input_file);
-            fputs("\n" COMMENT_DYNAMIC_DEPENDENCIES "\n", f);
-        } else {
-            if (fseek(f, ac - makefile, SEEK_SET))
-                err_fail("Error writing %s", input_file);
-            if (!acflag) {
-                fputs(COMMENT_DYNAMIC_DEPENDENCIES, f);
-                fputc('\n', f);
+
+        if (mf->dynamic_dependencies_magic_comment) {
+          /* Shit - need to reload the makefile now and re-parse it simply from
+           * mf->dynamic_dependencies_magic_comment->file_position onwards.
+           */
+          char *const contents = safe_malloc((size_t) mf->file_size + 1);
+
+          if (wf_load(mf->name, contents, mf->file_size)) {
+            err_report("Unable to re-read makefile '%s'", mf->name);
+            return;
+          }
+
+          contents[mf->file_size] = '\0';
+          seek_target = mf->dynamic_dependencies_magic_comment->file_position;
+          ac = contents + seek_target;
+
+          fcp = ac;
+          while (*fcp && *fcp++ != '\n'); /* Skip the magic comment itself */
+          for (;;) {
+            while (isspace(*fcp)) fcp++;
+            if (!*fcp) break;
+            target = fcp;
+            while ((c = *fcp) != 0 && c != ':' && !isspace(c)) fcp++;
+            if (fcp == target) err_fail("null target in Makefile");
+            if (c != ':') err_fail("':' expected after target in Makefile");
+            *fcp = 0;
+            nt = tl;
+            while (nt) {
+              if (!md_cistrcmp(target, nt->name)) break;
+              nt = nt->next;
             }
-            fputs(ac, f);
+            *fcp = c;
+            while (*fcp && *fcp++ != '\n');
+            if (nt) {
+              s = target;
+              while ((*s++ = *fcp++) != 0) ;;
+              fcp = target;
+            }
+          }
+          free(contents);
         }
-        dl = depend_list;
-        do {
+        else {
+          seek_target = mf->file_size;
+          write_initial_newline = true;
+        }
+
+        if ((f = fopen(mf->name, "r+")) == NULL) {
+          err_report("Error opening %s for update", mf->name);
+          return;
+        }
+
+        if (fseek(f, seek_target, SEEK_SET)) {
+          (void) fclose(f);
+          err_report("Error writing dynamic dependencies to %s", mf->name);
+          return;
+        }
+
+        if (write_initial_newline) fputc('\n', f);
+        fputs(COMMENT_DYNAMIC_DEPENDENCIES "\n", f);
+
+        for (dl = depend_list; dl; dl = dl->next) {
             md_flatten(dl->depend_file_contents);
             fputs(dl->depend_file_contents, f);
-            dl = dl->next;
-        } while (dl);
+       };
+
         size = ftell(f);
-        if (fclose(f) || size < 0)
-            err_fail("Error writing %s", input_file);
-        wf_truncate(input_file, size);
+        if (fclose(f) || size < 0) {
+          err_fail("Error writing dynamic dependencies to %s", mf->name);
+        }
+        wf_truncate(mf->name, size);
     }
 }
+
+void md_start_cmd(void)
+{
+    md_time = filestamp_now();
+}
+
+void md_delete(void)
+{
+    remove(DEPENDENCY_FILE);
+}
+
+void md_merge(Makefile *mf)
+{
+  if (depend_list) {
+    merge_dependencies(mf);
+  }
+}
+
+int md_check_magic_string(const char *data)
+{
+  return (strcmp(data, COMMENT_DYNAMIC_DEPENDENCIES) == 0);
+}
+
+#define DDEUtils_Prefix    0x42580
+#define DDEUtils_GetCLSize 0x42583
+
+static int desktop_prefix = 0;
+static int exit_handler = 0;
+
+int dde_extended_cmdline(void)
+{
+  return _swix(DDEUtils_GetCLSize, 0) == NULL;
+}
+
+static void dde_exit(void)
+{
+    _kernel_swi_regs r;
+
+    md_delete();
+
+    if (desktop_prefix) {
+        r.r[0] = 0;
+        _kernel_swi(DDEUtils_Prefix, &r, &r);
+    }
+}
+
+void dde_prefix_init(char *fname)
+{
+    char *s, *p, *t;
+    char c;
+    char prefix[1024];
+
+    if (!_swix(OS_FSControl, _INR(0,5), 37, fname, prefix, 0, 0, sizeof(prefix)))
+    {  char *ldot = strrchr(prefix, dir_sep);
+       if (ldot)
+       {  *ldot=0;
+          define_macro("MAKEFILEDIR", prefix, false, true, false);
+       }
+    }
+
+    if (desktop_prefix) {
+        if (!exit_handler && atexit(dde_exit)) {
+            err_report("Can't install atexit handler");
+            exit(1);
+        }
+        exit_handler = 1;
+        s = fname;
+        p = t = prefix;
+        while ((c = *t++ = *s++) > ' ')
+            if (c == ':' || c == '.')
+                p = t - 1;
+        *p = 0;
+        _swix(DDEUtils_Prefix, _IN(0), prefix);
+    }
+
+}
+
+void dde_prefix_used(void)
+{
+  prefix_used = 1;
+}
+
+#endif /* DDE */

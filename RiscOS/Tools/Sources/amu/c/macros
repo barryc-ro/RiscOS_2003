@@ -1,0 +1,468 @@
+/*
+ * AMU (macros.c)
+ *
+ * Copyright (C) Pace Micro Technology plc. 2001
+ *
+ */
+
+/*
+ * This source file contains the code for processing macro expansions.
+ * It provides a single API macroise which is responsible for expanding
+ * macros and returning the resulting expansion.
+ *
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+#include <ctype.h>
+
+/* CLX */
+#include "err.h"
+#include "filestamp.h"
+#include "wholefls.h"
+#include "hash.h"
+#include "fname.h"
+
+/* Local */
+#include "amu.h"
+#include "parse.h"
+#include "macros.h"
+#include "functions.h"
+
+
+/* This forward declaration is required for a mutually-recursive pair of functions */
+static char *macroise_aux(char *, int recurse_count);
+
+
+/* This function takes a left substring, a newly malloced middle substring, and a right substring.  It
+ * allocates a single block containing all three concatenated.  It frees the new middle substring.  It
+ * frees the left_substring IF the boolean free_left_substring was true.  It returns the new data block.
+ */
+static char *macroise_insert_string(char *left_substring, char *new_string, char *right_substring, bool free_left_substring)
+{
+  char *data = Strdup_spare(left_substring, strlen(new_string) + strlen(right_substring));
+
+  strcat(data, new_string);
+  strcat(data, right_substring);
+  free(new_string);
+  if (free_left_substring) free(left_substring);
+  return data;
+}
+
+/* Skip through a function parameter list */
+static char *skip_chars_to(char *arg, char terminator1, char terminator2)
+{
+  while (*arg != terminator1 && *arg != terminator2) {
+    if (*arg == '$' && (arg[1] == '{' || arg[1] == '(')) {
+      /* Nested macro - need to search ONLY for more macros or closing bracket */
+      const char closer = arg[1] == '{' ? '}' : ')';
+      arg = skip_chars_to(arg + 2, closer, '\0');
+    }
+    if (*arg) ++arg; else break;
+  }
+
+  return arg;
+}
+
+/* This routine is responsible for creating the list of arguments to a function.
+ * It recognises the end of the arguments by the matching bracket character.  The
+ * address of the character after the matching bracket character is stored in
+ * after_bracket.  Note that we are permitted to destroy 'arg' in the process.
+ */
+static LinePart *make_function_args(char *arg, char matching_bracket, char **after_bracket)
+{
+  Line *l = alloc_line();
+  LinePart *lp;
+  char *thisarg;
+
+  while (*arg && *arg != matching_bracket) {
+    char term, *ws;
+    lp = append_new_line_part(l);
+    thisarg = arg;
+    arg = skip_chars_to(arg, matching_bracket, ',');
+    term = *arg;
+    *arg = '\0';
+    for (ws = arg; ws > thisarg && isspace(ws[-1]); --ws) ;;
+    *ws = '\0';
+    lp->data = Strdup(thisarg);
+    *arg = term;
+    if (*arg == ',') ++arg;
+  }
+
+  if (*arg == matching_bracket) ++arg;
+  *after_bracket = arg;
+
+  lp = l->firstpart;
+  free(l);
+  return lp;
+}
+
+/* This function calls the named 'func' processing function and passes it the specified
+ * args, having issued a fatal error if there are less than the minimum required parameters,
+ * and issuing a warning if there are more than the maximum.
+ */
+static char *replace_function(LinePart *args, const function_table *func)
+{
+  static const function_table *active_functions[FUNCDEPTH];
+  static int active_function_count;
+  LinePart *lp;
+  int argc;
+
+  active_functions[active_function_count++] = func;
+  if (active_function_count == FUNCDEPTH) {
+    amu_err_fail("functions nested too deeply while processing '%s' (maximum depth is %i)", func->name, FUNCDEPTH);
+  }
+
+  for (argc = 0, lp = args; lp; lp = lp->next) {
+    ++argc;
+    amu_debug(DEBUGGING7, "Counting parameters (%i) '%s'", argc, lp->data);
+    if (func->macroise_each_parameter) {
+      char *old_data = lp->data;
+      if (macroise(lp, NULL)) {
+        free(old_data);
+      }
+    }
+  }
+
+  /* Once we get here, we dont care - it's the macroise call that can cause the recursion */
+  --active_function_count;
+
+  if (argc < func->min_args) {
+    amu_err_fail("not enough parameters to function '%s' (needs at least %i) ", func->name, func->min_args);
+  }
+
+  /* This maybe ought to be an error, but at least it is harmless */
+  if (argc > func->max_args) {
+    amu_err_report("ignoring superfluous parameters to function '%s' (needs at most %i) ", func->name, func->max_args);
+  }
+
+  amu_debug(DEBUGGING7, "Executing: %s", func->name);
+  return func->execute(argc, args);
+}
+
+/* Insist that there is one percent character in the passed string - this is used to detect
+ * the substitution types - if both the search and replace strings have a single percent
+ * character then it is a string rewrite, otherwise it is a tail-match substitution
+ */
+static int one_percent(const char *s)
+{
+  char *next_percent = strchr(s, '%');
+  return next_percent && !strchr(next_percent + 1, '%');
+}
+
+/* Initialise a pattern substitution description that can be passed to do_substitutions();
+ */
+static void create_substitution(pattern_substitution *p, char *pre, char *post)
+{
+  amu_debug(DEBUGGING2, "create_substitution(%s,%s)", pre, post);
+
+  p->has_percents = one_percent(pre) && one_percent(post);
+  p->pre_len = strlen(pre);
+  p->post_len = strlen(post);
+  p->pre = Strdup(pre);
+  p->post = Strdup(post);
+}
+
+/* Destroy a pattern substitution description */
+static void delete_substitution(pattern_substitution *p)
+{
+  amu_debug(DEBUGGING2, "delete_substitution");
+  free(p->pre);
+  free(p->post);
+}
+
+/* Perform the supplied substitutions over the supplied buffer.
+ *
+ * Pre-condition  : 'buffer' was allocated with malloc (and will be free()'d)
+ * Post-conditions: return value is allocated with malloc.
+ *
+ * Strategy:
+ *
+ *  Split the input buffer into words but retaining the whitespace.
+ *  Count the number of LineParts, multiply it by the difference in the length of
+ *    the pre and post replacements, add the original length of 'buffer' to find out
+ *    how large we need the buffer to be.
+ *  Allocate the result buffer.
+ *  Process each LinePart in turn, using the final destination buffer as the working
+ *    buffer (because we know it is long enough).  Delete each LinePart as it is
+ *    processed.
+ *  Free the input buffer.
+ *  Return the new buffer.
+ */
+static char *do_substitutions(char *buffer, pattern_substitution *const p)
+{
+  Line *l;
+  LinePart *lp, *next_lp;
+  size_t new_buffer_length;
+  int len_diff = p->post_len - p->pre_len;
+  char *result;
+  const int pre_prefix_len = strcspn(p->pre, "%");
+  const int pre_suffix_len = p->pre_len - pre_prefix_len - 1;
+  int post_prefix_len = strcspn(p->post, "%");
+  const int post_suffix_len = p->post_len - post_prefix_len - 1;
+
+  new_buffer_length = strlen(buffer) + 1;
+
+  amu_debug(DEBUGGING2, "Substituting in '%s'", buffer);
+
+  /* First split the buffer into words */
+  l = alloc_line();
+  make_new_line_part(&l->firstpart, -1);
+  l->nextpart = &l->firstpart->next;
+  l->firstpart->data = buffer;
+  resplit_line(l, rlr_keep_whitespace);
+  free(buffer);
+
+  /* We've already accounted for the text, now account for all the substitutions - one per LinePart */
+  for (lp = l->firstpart; lp; lp = lp->next) {
+    new_buffer_length += len_diff;
+  }
+
+  result = buffer = safe_malloc(new_buffer_length);
+  buffer[0] = '\0';
+
+  for (lp = l->firstpart; lp;) {
+
+    /* Transform lp->data into buffer, then move buffer on */
+    int curr_len = strlen(lp->data);
+
+    if (p->has_percents) {
+      bool just_copy = false;
+
+      if (pre_prefix_len && memcmp(lp->data, p->pre, pre_prefix_len)) {
+        just_copy = true;
+      }
+      else if (pre_suffix_len >= curr_len) {
+        just_copy = true;
+      }
+      else if (pre_suffix_len && memcmp(lp->data + curr_len - pre_suffix_len, p->pre + p->pre_len - pre_suffix_len, pre_suffix_len)) {
+        just_copy = true;
+      }
+
+      if (just_copy) {
+        strcpy(buffer, lp->data);
+      }
+      else {
+        int sub_len;
+        char *data = buffer;
+
+        amu_debug(DEBUGGING2, "Applying xform: %s ==> %s to '%s'", p->pre, p->post, lp->data);
+
+        /* First copy the replacement's prefix string as far as the % character */
+        if (post_prefix_len) memcpy(data, p->post, post_prefix_len);
+        data += post_prefix_len;
+
+        /* Now we need to append the matched part of the source string, ie. the substring
+         * starting at pre_prefix_len, omitting the last pre_suffix_len characters
+         */
+        sub_len = curr_len - pre_suffix_len - pre_prefix_len;
+        if (sub_len) {
+          memcpy(data, lp->data + pre_prefix_len, sub_len);
+          data += sub_len;
+        }
+
+        /* Now copy the replacement's suffix string from just after the % character until string end */
+        if (post_suffix_len) {
+          strcpy(data, p->post + post_prefix_len + 1);
+          data += post_suffix_len;
+        }
+
+        *data = '\0';
+        amu_debug(DEBUGGING2, "Converted: >>%s<< to >>%s<<", lp->data, buffer);
+      }
+    }
+    else {
+      const int prefix = curr_len - p->pre_len;
+      if (prefix <= 0 || hash_cistrcmp(p->pre, &lp->data[prefix]) != 0) {
+        /* The Word Is Not Enough */
+        strcpy(buffer, lp->data);
+      }
+      else {
+        /* Apply the substitution */
+        memcpy(buffer, lp->data, prefix);
+        strcpy(buffer + prefix, p->post);
+      }
+    }
+
+    buffer = strchr(buffer, '\0');
+    free(lp->data);
+    next_lp = lp->next;
+    free(lp);
+    lp = next_lp;
+  }
+
+  free(l);
+
+  return result;
+}
+
+/* Evaluate the given macro.  This routine will abort the program if it detects an attempt to
+ * expand a recursive macro.  It will also detect a cycle of macro expansions and should report
+ * the primary definition that has caused the cycle.
+ */
+static char *replace_macro(char *macro, int recurse_count)
+{
+  /* static variable used to record the active macros for the cycle detection code */
+  static MacroVar *active_macros[MACRODEPTH];
+
+  /* autmatic variables */
+  MacroVar *mv;
+  char *colon, *equals = NULL, *result;
+  pattern_substitution sub;
+
+  amu_debug(DEBUGGING2, "replace_macro(%s)", macro);
+
+  /* Was this a straight textual replacement or a complicated substitution? */
+  colon = strchr(macro, ':');
+  if (colon) {
+    *colon = '\0';
+    mv = lookup_macro(macro);
+    *colon = ':';
+    equals = strchr(colon + 1, '=');
+    if (!equals) {
+      amu_err_fail("invalid macro substitution (%s)", colon + 1);
+    }
+  }
+  else {
+    mv = lookup_macro(macro);
+  }
+
+  /* Recursion check - every time we look up a value, we push it onto a stack of values and
+   * check for duplicates.  This allows us to detect *which* macro is causing the cycle and
+   * help the user.  Previously, amu just used to throw its hands up in horror and exit.
+   */
+  if (mv) {
+    int i;
+    for (i = 0; i < recurse_count; ++i) {
+      if (active_macros[i] == mv) {
+        amu_err_fail("macros nested too deeply (possibly a recursive definition involving '%s')", macro);
+      }
+    }
+    active_macros[i] = mv;
+    if (++recurse_count >= MACRODEPTH) {
+      amu_err_fail("macros nested too deeply (maximum depth is %i)", recurse_count);
+    }
+  }
+  else {
+    /* No macro value - so the expansion is the empty string */
+    return Strdup("");
+  }
+
+  /* If we are going to need to call the substitution functions, create the substitution data
+   * structure *first* so we can repair any changes we made to it before expanding the macros.
+   * [ NOTE: Actually, this shouldn't matter since we forbid self-referential macros. ]
+   */
+  if (colon) {
+    *colon = '\0';
+    *equals = '\0';
+    create_substitution(&sub, colon+1, equals+1);
+    *colon = ':';
+    *equals = '=';
+  }
+
+  equals = Strdup(mv->value);
+  amu_debug(DEBUGGING2, "Before substitutions: '%s'", equals);
+  result = macroise_aux(equals, recurse_count);
+  if (equals != result) free(equals);
+
+  if (colon) {
+    result = do_substitutions(result, &sub);
+    delete_substitution(&sub);
+  }
+
+  amu_debug(DEBUGGING2, "After substitutions: '%s'", result);
+
+  return result;
+}
+
+static char *macroise_aux(char *data, int recurse_count)
+{
+  bool changed_flag = false; /* = true if we malloced 'data' in this function */
+  char *cp;
+  char *first_macro, matching_bracket = '\0';
+
+  while ((cp = strchr(data, '$')) != NULL) {
+    first_macro = NULL;
+
+    while (*cp) {
+      if (*cp == '$') {
+        if (cp[1] == '(') {
+          matching_bracket = ')';
+          first_macro = cp;
+        }
+        else if (cp[1] == '{') {
+          matching_bracket = '}';
+          first_macro = cp;
+        }
+      }
+      else if (*cp == matching_bracket) {
+        /* Found a macro to substitute */
+        *first_macro = '\0'; /* terminate left substring */
+        first_macro += 2; /* point at macro name */
+        *cp++ = '\0'; /* terminate macro name, point at right substring */
+        data = macroise_insert_string(data, replace_macro(first_macro, recurse_count), cp, changed_flag);
+        changed_flag = true;
+        break;
+      }
+      else if (first_macro && isspace(*cp)) {
+        /* Found a function call to substitute?  We must interrupt the parse here because we
+         * may not want to be substituting the rest of the macro function arguments, depending
+         * on what the function actually is.  Split the macro arguments up and invoke the
+         * functions.
+         */
+        const function_table *func;
+        char *func_name = first_macro + 2;
+
+        *cp = '\0';
+        for (func = func_tab; func->name; ++func) {
+          if (hash_cistrcmp(func_name, func->name) == 0) break;
+        }
+        *cp = ' ';
+
+        if (func->code != func_not_recognised) {
+          /* Process the arguments and invoke the function */
+          LinePart *lp;
+          char *right_substring;
+
+          *first_macro = '\0';
+          while (isspace(*cp)) ++cp;
+          lp = make_function_args(cp, matching_bracket, &right_substring);
+          data = macroise_insert_string(data, replace_function(lp, func), right_substring, changed_flag);
+          changed_flag = true;
+          /* Free the temporary line list we created */
+          while (lp) {
+            LinePart *next = lp->next;
+            free(lp->data);
+            free(lp);
+            lp = next;
+          }
+          break;
+        }
+      }
+      ++cp;
+    }
+
+    if (!*cp) break;
+  }
+
+  return data;
+}
+
+/* This routine performs any macro substitution on the current word, returning true if it
+ * changed the data in any way, false if it did not.  In ALL cases, it writes *headptr with
+ * the new (or old) LinePart pointer (unless headptr was NULL)
+ */
+bool macroise(LinePart *lp, LinePart **headptr)
+{
+  char *new_data = macroise_aux(lp->data, 0);
+  bool changed_flag = (lp->data != new_data);
+
+  lp->data = new_data;
+  if (headptr) {
+    *headptr = lp;
+  }
+
+  return changed_flag;
+}

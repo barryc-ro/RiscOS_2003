@@ -1,0 +1,230 @@
+/*
+ * AMU (functions.c)
+ *
+ * Copyright (C) Pace Micro Technology plc. 2001
+ *
+ */
+
+/*
+ * This source contains the basic functions callable from makefile macros.
+ * The table of available functions is at the end of this file.
+ *
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+#include <ctype.h>
+#include <limits.h>
+
+/* CLX */
+#include "err.h"
+#include "filestamp.h"
+#include "wholefls.h"
+#include "hash.h"
+#include "fname.h"
+
+/* Local */
+#include "amu.h"
+#include "parse.h"
+#include "macros.h"
+#include "md.h"
+#include "functions.h"
+
+/* This function is the internal helper that actually implements various
+ * functions: word, words, wordlist and firstword - as these all do very
+ * similar things.
+ */
+static char *internal_function_word_s_to_word_e(int s, int e, LinePart *lp)
+{
+  Line *l = alloc_line();
+  LinePart *slp, *elp;
+  int part;
+  char *result;
+
+  l->firstpart = lp;
+
+  sanitise_line(l, slr_flatten);
+  resplit_line(l,  rlr_words);
+
+  slp = NULL;
+  elp = NULL;
+
+  /* Perverse: GNU says you may have s > e and make is supposed to swap them! */
+  if (s > e) {
+    const int tmp = e;
+    e = s;
+    s = tmp;
+  }
+
+  for (part = 1, lp = l->firstpart; part <= e && lp; ++part, lp = lp->next) {
+    if (part == s) {
+      /* Found the first word we are interested in */
+      slp = lp;
+    }
+    if (part <= e) {
+      /* Keep counting - we don't want to walk off the end of the list */
+      elp = lp;
+    }
+  }
+
+  if (slp) {
+    /* Temporarily truncate the word list so we canrejoin things, then restore it */
+    lp = elp->next;
+    elp->next = NULL;
+    result = rejoin_words(slp);
+    elp->next = lp;
+  }
+  else {
+    result = Strdup("");
+  }
+
+  deallocate_line(l);
+
+  return result;
+}
+
+static char *functions_sth_to_eth_word(int argc, LinePart *lp)
+{
+  int s = (signed int) strtoul(lp->data, NULL, 10);
+  int e = (signed int) strtoul(lp->next->data, NULL, 10);
+  (void) argc;
+  return internal_function_word_s_to_word_e(s, e, lp->next->next);
+}
+
+static char *functions_nth_word(int argc, LinePart *lp)
+{
+  int n = (signed int) strtoul(lp->data, NULL, 10);
+  (void) argc;
+  return internal_function_word_s_to_word_e(n, n, lp->next);
+}
+
+static char *functions_firstword(int argc, LinePart *lp)
+{
+  (void) argc;
+  return internal_function_word_s_to_word_e(1, 1, lp);
+}
+
+/* Returns a count of the number of words in lp */
+static char *functions_words(int argc, LinePart *lp)
+{
+  Line *l = alloc_line();
+  int count;
+  char temporary_string[16]; /* Must be long enough for the %i expansion */
+
+  l->firstpart = lp;
+  sanitise_line(l, slr_flatten);
+  resplit_line(l, rlr_words);
+
+  for (count = 0, lp = l->firstpart; lp; lp = lp->next) {
+    if (lp->data[0] != '\0') ++count;
+  }
+
+  deallocate_line(l);
+  sprintf(temporary_string, "%i", count);
+  return Strdup(temporary_string);
+  (void) argc;
+}
+
+/* strip: removes leading and trailing whitespace from its argument */
+static char *functions_strip(int argc, LinePart *lp)
+{
+  (void) argc;
+  return Strdup(strip_trailing_whitespace(strip_leading_whitespace(lp->data)));
+}
+
+
+/* Auxiliary sorter function for functions_sort */
+static int functions_sort_aux(const void *o1, const void *o2)
+{
+  LinePart *const* lp1 = o1;
+  LinePart *const* lp2 = o2;
+
+  return strcmp((*lp1)->data, (*lp2)->data);
+}
+
+/* Filters out (and frees memory for) duplicates and empties in the supplied list */
+static LinePart *remove_and_free_duplicates_for_sort(LinePart *lp)
+{
+  LinePart *match = NULL, *next_lp;
+  LinePart *result = NULL, **next_result = &result;
+
+  for (;lp;lp=next_lp) {
+    next_lp = lp->next;
+    if (lp->data[0] == '\0' || (match && strcmp(match->data, lp->data) == 0)) {
+      /* Empty strings - delete these */
+      free(lp->data);
+      free(lp);
+    }
+    else {
+      match = lp;
+      *next_result = lp;
+      next_result = &lp->next;
+    }
+  }
+
+  *next_result = NULL;
+
+  return result;
+}
+
+/* Sort the words in 'lp', *removing duplicates* as we go */
+static char *functions_sort(int argc, LinePart *lp)
+{
+  Line *l = alloc_line();
+  LinePart **array;
+  int count, n;
+  char *result;
+
+  l->firstpart = lp;
+  sanitise_line(l, slr_flatten);
+  resplit_line(l, rlr_words);
+
+  for (count = 0, lp = l->firstpart; lp; lp = lp->next) {
+    ++count;
+  }
+
+  if (count == 0) {
+    result = Strdup("");
+  }
+  else {
+    array = safe_malloc((count+1) * sizeof(*array));
+    for (count = 0, lp = l->firstpart; lp; lp = lp->next) {
+      array[count++] = lp;
+    }
+    array[count] = NULL;
+    qsort(array, count, sizeof(*array), functions_sort_aux);
+    /* Re-link the sorted array back into a linked list */
+    for (n = 0; n < count; ++n) {
+      array[n]->next = array[n+1];
+    }
+
+    l->firstpart = remove_and_free_duplicates_for_sort(array[0]);
+    free(array);
+    result = rejoin_words(l->firstpart);
+  }
+
+  deallocate_line(l);
+  return result;
+  (void) argc;
+}
+
+/* This is the table of supported functions.
+ *
+ * When invoked, each function will be passed the count of entries
+ * in the linepart list.  The list is guaranteed to have at least
+ * min_args (first numueric parameter of the two) entries.
+ */
+const function_table func_tab[] =
+{
+  { func_firstword, "firstword", functions_firstword, 1, 1, true },
+  { func_wordlist, "wordlist", functions_sth_to_eth_word, 3, 3, true },
+  { func_word, "word", functions_nth_word, 2, 2, true },
+  { func_words, "words", functions_words, 1, 1, true },
+  { func_strip, "strip", functions_strip, 1, 1, true },
+  { func_sort, "sort", functions_sort, 1, 1, true },
+
+  /* The following line is the terminating record */
+  { func_not_recognised, NULL, NULL, 0, INT_MAX, false }
+};

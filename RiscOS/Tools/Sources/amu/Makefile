@@ -19,14 +19,14 @@ INSTAPP = ${INSTDIR}.Apps.!AMU
 
 CINCLUDES  = -IC: -I${CLXDIR}
 CDEFINES   = -DDDE
-CFLAGS     = -Wc -ffah
+CFLAGS     = -Wc -ffahn
 
 #
 # Generic options:
 #
-include Makefiles:StdTools
-include Makefiles:AppLibs
-include Makefiles:AppStdRule
+include StdTools
+include AppLibs
+include AppStdRule
 
 DIRS=o._dirs
 
@@ -36,7 +36,7 @@ DIRS=o._dirs
 COMPONENT  = amu
 TARGET     = amu
 
-OBJS       = amu.o
+OBJS       = amu.o md.o macros.o parse.o readmk.o functions.o
 LIBS       = ${CLXLIB} ${CLIB}
 
 #
@@ -102,5 +102,13 @@ ${TARGET}: ${OBJS} ${LIBS} ${DIRS}
 # Static dependencies:
 
 amu.o: md.c
+
+tests: ${TARGET}
+        @echo Assignment tests ...
+        @run @.${TARGET} -f test.assigntest
+        @echo Substitution tests ...
+        @run @.${TARGET} -f test.substest
+        @echo Function tests ...
+        @run @.${TARGET} -f test.functest
 
 # Dynamic dependencies:
