@@ -4,6 +4,8 @@
 
  */
 
+#include "windows.h"
+
 #include <ctype.h>
 #include <locale.h>
 #include <signal.h>
@@ -394,7 +396,7 @@ int main(int argc, char *argv[])
 
     if (cli_filename && cli_filename[0] != '\0')
     {
-	current_session = session_open(cli_filename);
+	session_run(cli_filename);
 
 	if (!cli_iconbar)
 	    return EXIT_SUCCESS;

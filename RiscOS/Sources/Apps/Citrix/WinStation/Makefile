@@ -26,7 +26,7 @@ CPFLAGS=	-p
 
 # ----------------------------------------------------------------------------------------------------
 
-DFLAGS=		-DRISCOS -DBETA=1 -DREMOTE_DEBUG -Dsetdibits_ssb=0
+DFLAGS=		-DRISCOS -DBETA=1 -DREMOTE_DEBUG
 INCLUDES=	-Isrc/sys_inc \
 		-Isrc/sdk \
 		-I${RISCOS_BUILD_EXPORT}/Lib/TCPIPLibs \
@@ -139,7 +139,7 @@ local_dirs:
 	@-${MKDIR} abs
 	@-${MKDIR} aof
 
-install:
+install_base:
 	-${MKDIR} ${INSTALLDIR}/${APPNAME}
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!Boot,feb	${INSTALLDIR}/${APPNAME}/
 	${CP} ${CPFLAGS} Resources/app/${COUNTRY}/!Run,feb	${INSTALLDIR}/${APPNAME}/
@@ -154,6 +154,14 @@ install:
 	-${CP} ${CPFLAGS} Resources/app/${COUNTRY}/Splash,ff9	${INSTALLDIR}/${APPNAME}/
 	-${CP} ${CPFLAGS} ${APPD}				${INSTALLDIR}/${APPNAME}/!RunImage,ff8
 	echo Installed ${APPNAME}
+
+install: install_base
+	-${CP} ${CPFLAGS} ${APP}				${INSTALLDIR}/${APPNAME}/!RunImage,ff8
+	echo Installed ${APPNAME}
+
+installd: install_base
+	-${CP} ${CPFLAGS} ${APPD}				${INSTALLDIR}/${APPNAME}/!RunImage,ff8
+	echo Installed ${APPNAME} debug
 
 cleaninstall:
 	${RM}	 ${APPNAME}/ini/*
@@ -188,7 +196,6 @@ CITRIXLIBOBJS=	src/lib/cfgini/cfgini.o \
 		src/lib/clib/delay.o src/lib/clib/fileio.o src/lib/clib/loadstr.o src/lib/clib/misc.o src/lib/clib/string.o \
 		src/lib/encrypt/encrypt.o \
 		src/lib/ini/iniapi.o \
-		src/lib/io/icabrows/icabrows.o src/lib/io/tcpro/tcpro.o \
 		src/lib/log/logapi.o \
 		src/lib/riscos/dll/dll.o \
 		src/lib/riscos/kbd/kbdapi.o \
@@ -196,6 +203,8 @@ CITRIXLIBOBJS=	src/lib/cfgini/cfgini.o \
 		src/lib/riscos/vio/viocfg.o src/lib/riscos/vio/viocur.o src/lib/riscos/vio/viomisc.o \
 		src/lib/riscos/vio/vioread.o src/lib/riscos/vio/vioscrll.o src/lib/riscos/vio/viowrt.o \
 		src/lib/riscos/vio/vioro.o 
+
+#		src/lib/io/icabrows/icabrows.o src/lib/io/tcpro/tcpro.o \
 
 CITRIXLIBOBJSD=	src/lib/cfgini/cfgini.od \
 		src/lib/cfgload/cfgload.od \

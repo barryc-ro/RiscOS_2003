@@ -563,6 +563,7 @@ Session session_open(const char *ica_file)
     DBG(("LogInit: returns %d\n", rc));
     
     sess->gszICAFile = strdup(ica_file);
+    sess->HaveFocus = TRUE;
     
     // get the first server listing in the ICA file
     sess->gszServerLabel[0] = '\0';
@@ -749,14 +750,19 @@ void session_resume(Session sess)
 	sess->HaveFocus = FALSE;
 }
 
-#if 0
 void session_run(const char *ica_file)
 {
     Session sess = session_open(ica_file);
-    session_poll(sess);
+
+    while (sess->HaveFocus)
+	session_poll(sess);
+
     session_close(sess);
+
+    // allow cleanup
+    while (session_poll(sess))
+	;
 }
-#endif
 
 /* --------------------------------------------------------------------------------------------- */
 
@@ -772,8 +778,8 @@ int ModuleLookup( PCHAR pName, PLIBPROCEDURE *pfnLoad, PPLIBPROCEDURE *pfnTable 
     } modules[] =
     {
 	{ "tdtcpro",	(PLIBPROCEDURE)TdLoad, TdTcpRODeviceProcedures },
-//	{ "pdrfram",	(PLIBPROCEDURE)PdLoad, PdRFrameDeviceProcedures },
-//	{ "pdcrypt",	(PLIBPROCEDURE)PdLoad, PdCryptDeviceProcedures },
+	{ "pdrfram",	(PLIBPROCEDURE)PdLoad, PdRFrameDeviceProcedures },
+	{ "pdcrypt",	(PLIBPROCEDURE)PdLoad, PdCryptDeviceProcedures },
 //	{ "pdmodem",	(PLIBPROCEDURE)PdLoad, PdModemDeviceProcedures },
 	{ "wdtty",	(PLIBPROCEDURE)WdLoad, WdTTYEmulProcedures },
 	{ "wdica30",	(PLIBPROCEDURE)WdLoad, WdICA30EmulProcedures },

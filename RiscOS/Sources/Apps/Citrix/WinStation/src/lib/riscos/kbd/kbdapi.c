@@ -71,29 +71,59 @@
 =============================================================================*/
 
 int  KbdCheckHotkey( unsigned char, int );
-//static void KbdGetFifoKey( int *, int *, int * );
 
 /*=============================================================================
 ==   External Functions Used
 =============================================================================*/
 
-extern int KeyBdOpen( void );
-extern int KeyBdClose( void );
-extern int KeyBdFlushInput( void );
-extern int KeyBdGetStatus( void );
-extern int KeyBdRead( unsigned char *, int, int *, int *, int );
-
 /*=============================================================================
 ==   External Data
 =============================================================================*/
 
-char RebootFlag = FALSE;
-char CtrlCFlag = FALSE;
-char CtrlBreakFlag = FALSE;
-
 /*=============================================================================
 ==   Local Data
 =============================================================================*/
+
+#ifndef KeyWatch_Register
+#define KeyWatch_Register               0x04e940
+#define KeyWatch_Deregister             0x04e941
+#define KeyWatch_Version                0x04e942
+#define KeyWatch_RegisterScan           0x04e943
+#define KeyWatch_DeregisterScan         0x04e944
+#define KeyWatch_Poll                   0x04e945
+#endif
+
+#define KeyWatch_Event_SCAN_CODE_VALID	(1<<0)
+#define KeyWatch_Event_KEY_CODE_VALID	(1<<1)
+#define KeyWatch_Event_KEY_GOING_UP	(1<<2)
+#define KeyWatch_Event_LAST_WAS_NUL	(1<<3)
+#define KeyWatch_Event_PS2_MULTI	(1<<4)
+
+#define KeyWatch_State_LEFT_SHIFT_DOWN	(1<<16)
+#define KeyWatch_State_RIGHT_SHIFT_DOWN	(1<<17)
+#define KeyWatch_State_LEFT_CTRL_DOWN	(1<<18)
+#define KeyWatch_State_RIGHT_CTRL_DOWN	(1<<19)
+#define KeyWatch_State_LEFT_ALT_DOWN	(1<<20)
+#define KeyWatch_State_RIGHT_ALT_DOWN	(1<<21)
+
+#define KeyWatch_RegisterScan_PS2	(1<<0)
+#define KeyWatch_RegisterScan_MESSAGE	(1<<1)
+#define KeyWatch_RegisterScan_MOUSE	(1<<2)
+#define KeyWatch_RegisterScan_BUFFER_CODES	(1<<3)
+#define KeyWatch_RegisterScan_SCAN_CODES	(1<<4)
+
+#define KeyWatch_Poll_HAD_OVERFLOW	(1<<0)
+
+#define KeyWatch_PS2KEY_UNUSED		0x00
+#define KeyWatch_PS2KEY_PRINT_SCREEN	0x81
+#define KeyWatch_PS2KEY_BREAK		0x82
+
+typedef struct
+{
+    int flags;
+    int scan_code;
+    int key_code;
+} key_event;
 
 // keyboard hotkey structure
 typedef struct _HOTKEY {
@@ -102,30 +132,24 @@ typedef struct _HOTKEY {
    int HotkeyId;
 } HOTKEY, * PHOTKEY;
 
-// keyboard hook procedure structure
-typedef struct _KBDHOOK {
-   PLIBPROCEDURE pProcedure;
-   struct _KBDHOOK * pNext;
-} KBDHOOK, * PKBDHOOK;
-
-static PKBDHOOK pKbdRootHook = NULL;
-
-#ifdef DOS
-
-#define KEYBOARD_FUNCTION 0x16
-KBDPREFERENCES gKbdPreferences;
-
-#endif
 static KBDCLASS CurrentKbdMode = Kbd_Closed;
 static HOTKEY   achHotkey[WFENG_NUM_HOTKEYS];
 
-/*
- * KbdPushChar junk
- */
-#define  FIFO_INIT_SIZE    150      // *must* be divisible by 3!!!!
-static int * pFifo = NULL;
-static int iFifo = 0;
-static int cFifo = 0;
+static void set_mode(void)
+{
+    if ( CurrentKbdMode == Kbd_Closed )
+    {
+	LOGERR(_swix(KeyWatch_DeregisterScan, _INR(0,1), 0, 0));
+    }
+    else
+    {
+      // use task handle of 0 since it doesn't really matter
+	LOGERR(_swix(KeyWatch_RegisterScan, _INR(0,1),
+		    KeyWatch_RegisterScan_PS2 |
+		    (CurrentKbdMode == Kbd_Ascii ? KeyWatch_RegisterScan_BUFFER_CODES : KeyWatch_RegisterScan_SCAN_CODES),
+		    0));
+    }
+}
 
 /*******************************************************************************
  *
@@ -139,32 +163,28 @@ static int cFifo = 0;
  ******************************************************************************/
 
 int WFCAPI
-KbdOpen()
+KbdOpen(void)
 {
    int i;
 
+   TRACE((TC_KEY, TT_API1, "KbdOpen: mode %d", CurrentKbdMode));
+   
    // kbd open?
    if ( CurrentKbdMode == Kbd_Closed ) {
 
       // set current keyboard mode
       CurrentKbdMode = Kbd_Ascii;
-
-#ifdef DOS
-      // open kbd
-      KeyBdOpen();
-
-      // make sure hook chain is empty
-      pKbdRootHook = NULL;
-#endif
+      set_mode();
    }
 
    //  Initialize hotkeys to no-op
-   for ( i=0; i < WFENG_NUM_HOTKEYS; i++ ) {
+   for ( i=0; i < WFENG_NUM_HOTKEYS; i++ )
+   {
       achHotkey[i].ScanCode   = 0;
       achHotkey[i].ShiftState = 0;
       achHotkey[i].HotkeyId   = CLIENT_STATUS_SUCCESS;
    }
-   //
+
    return( CLIENT_STATUS_SUCCESS );
 }
 
@@ -180,12 +200,9 @@ KbdOpen()
  ******************************************************************************/
 
 int WFCAPI
-KbdClose()
+KbdClose(void)
 {
-#ifdef DOS
-   PKBDHOOK pKbdHook;
-   PKBDHOOK pTempHook;
-#endif
+   TRACE((TC_KEY, TT_API1, "KbdClose: mode %d", CurrentKbdMode));
 
    // kbd open?
    if ( CurrentKbdMode == Kbd_Closed ) {
@@ -194,34 +211,8 @@ KbdClose()
 
    // set current mode
    CurrentKbdMode = Kbd_Closed;
+   set_mode();
 
-#ifdef DOS
-   // close kbd
-   KeyBdClose();
-
-   // remove all hooks
-   for ( pKbdHook=pKbdRootHook; pKbdHook != NULL; ) {
-
-      // move to next before freeing
-      pTempHook = pKbdHook;
-      pKbdHook=pKbdHook->pNext;
-
-      // free memory
-      free( pTempHook );
-   }
-
-   // make sure hook chain is empty
-   pKbdRootHook = NULL;
-
-   // free fifo and clear counters
-   if ( pFifo ) {
-      free( pFifo );
-      pFifo = NULL;
-   }
-   cFifo = 0;
-   iFifo = 0;
-#endif
-   // ok
    return( CLIENT_STATUS_SUCCESS );
 }
 
@@ -241,26 +232,11 @@ int WFCAPI
 KbdLoadPreferences( PKBDPREFERENCES pPref )
 {
    int rc = CLIENT_STATUS_SUCCESS;
-#ifdef DOS
-   union REGS regs;
 
-   gKbdPreferences = *pPref;  // Note: Structure assignment/copy
-   if ( (pPref->KeyboardDelay != -1) && (pPref->KeyboardSpeed != -1 ) ) {
-      
-      regs.h.ah = 0x03;
-      regs.h.al = 0x05;
-      regs.h.bh = (UCHAR) pPref->KeyboardDelay;
-      regs.h.bl = (UCHAR) pPref->KeyboardSpeed;
-      TRACE( (TC_KEY, TT_API1,
-              "KbdLoadPreferences: Setting Typematic Rate = %d, and Delay = %d",
-              regs.h.bl, regs.h.bh) );
-      int86( KEYBOARD_FUNCTION, &regs, &regs );
-   } else {
-      TRACE( (TC_KEY, TT_API1, "KbdLoadPreferences: No typematic changes") );
-   }
+   TRACE((TC_KEY, TT_API1, "KbdOLoadPreferences: "));
 
+   //gKbdPreferences = *pPref;  // Note: Structure assignment/copy
 
-#endif
    return( rc );
 }
 
@@ -278,7 +254,6 @@ KbdLoadPreferences( PKBDPREFERENCES pPref )
 int WFCAPI
 KbdGetMode( KBDCLASS * pKbdClass )
 {
-
    // kbd open?
    if ( CurrentKbdMode == Kbd_Closed ) {
       return( CLIENT_ERROR_NOT_OPEN );
@@ -309,18 +284,15 @@ KbdSetMode( KBDCLASS KbdClass )
       return( CLIENT_ERROR_NOT_OPEN );
    }
 
-#ifdef DOS
-   // flush kbd buf
-   KeyBdFlushInput();
-
-    // set special key flags
-    RebootFlag    = FALSE;
-    CtrlCFlag     = FALSE;
-    CtrlBreakFlag = FALSE;
-#endif
-
    // set current mode
-   CurrentKbdMode = KbdClass;
+   if (CurrentKbdMode != KbdClass)
+   {
+       CurrentKbdMode = Kbd_Closed;
+       set_mode();
+
+       CurrentKbdMode = KbdClass;
+       set_mode();
+   }
    // ok
    return( CLIENT_STATUS_SUCCESS );
 }
@@ -339,85 +311,25 @@ KbdSetMode( KBDCLASS KbdClass )
 int WFCAPI
 KbdReadAvail( int * pCountAvail )
 {
+    int entry_size, size_left;
+    
     // init return vaule
     * pCountAvail = 0;
 
     // kbd open?
     if ( CurrentKbdMode == Kbd_Closed ) {
+	TRACE((TC_KEY, TT_API1, "KbdReadAvail: kbd closed"));
         return( CLIENT_ERROR_NOT_OPEN );
     }
 
-#if 0
-    // is there a key in the fifo buffer?
-    if ( iFifo ) {
-        // ignore the counts in the real keyboard
-        // this is to make the keystroke stuff work for UIs that
-        // just do KbdPush
-        *pCountAvail = iFifo/3;
-        return( CLIENT_STATUS_SUCCESS );
-    }
-#endif
+    LOGERR(_swix(KeyWatch_Poll, _INR(0,3) | _OUTR(3,4),
+	  0, 0, NULL, 0,
+	  &size_left, &entry_size));
+
+    *pCountAvail = (-size_left)/entry_size;
     
-    // currently Ascii?
-    if ( CurrentKbdMode == Kbd_Ascii ) {
-
-        // check for special flags
-        if ( RebootFlag || CtrlCFlag || CtrlBreakFlag ) {
-
-            // return key count
-            *pCountAvail = 1;
-        }
-        else {
-	    int flags;
-
-	    _swix(OS_Byte, _INR(0,1) | _FLAGS, 152, 0, &flags);
-//	    _swix(OS_Byte, _INR(0,1) | _OUT(1), 128, 255, &count);
-
-	    if (flags & _C)
-               return( CLIENT_STATUS_NO_DATA );
-
-            // return key count
-            *pCountAvail = 1;
-#if 0
-            // check input status
-            regs.h.ah = 0x0b;
-            intdos( &regs, &regs );
-
-            // key ready?
-            if ( regs.h.al == 0 ) {
-               return( CLIENT_STATUS_NO_DATA );
-            }
-            // return key count
-            *pCountAvail = 1;
-#endif
-        }
-    }
-
-    // currently Scan??
-    else if ( CurrentKbdMode == Kbd_Scan ) {
-
-	int flags;
-	
-        // check for special flag
-        if ( RebootFlag ) {
-            RebootFlag = FALSE;
-            return( CLIENT_STATUS_REBOOT );
-        }
-
-	_swix(OS_Byte, _INR(0,1) | _FLAGS, 152, 0, &flags);
-
-	if (flags & _C)
-	    return( CLIENT_STATUS_NO_DATA );
-
-	// return key count
-	*pCountAvail = 1;
-#if 0
-        // check for key, and return count
-        else if ( (*pCountAvail = KeyBdGetStatus()) == 0 ) {
-            return( CLIENT_STATUS_NO_DATA );
-#endif
-    }
-
+    DTRACE((TC_KEY, TT_API1, "KbdReadAvail: size %d entry %d n %d", size_left, entry_size, *pCountAvail));
+    
     return( CLIENT_STATUS_SUCCESS );
 }
 
@@ -435,167 +347,62 @@ KbdReadAvail( int * pCountAvail )
  *
  ******************************************************************************/
 
+static int convert_shift_state(int flags)
+{
+    int state = 0;
+    if (flags & KeyWatch_State_LEFT_SHIFT_DOWN)
+	state |= KSS_LEFTSHIFT;
+    if (flags & KeyWatch_State_RIGHT_SHIFT_DOWN)
+	state |= KSS_RIGHTSHIFT;
+    if (flags & KeyWatch_State_LEFT_CTRL_DOWN)
+	state |= KSS_LEFTCTRL | KSS_EITHERCTRL;
+    if (flags & KeyWatch_State_RIGHT_CTRL_DOWN)
+	state |= KSS_RIGHTCTRL | KSS_EITHERCTRL;
+    if (flags & KeyWatch_State_LEFT_ALT_DOWN)
+	state |= KSS_LEFTALT | KSS_EITHERALT;
+    if (flags & KeyWatch_State_RIGHT_ALT_DOWN)
+	state |= KSS_RIGHTALT | KSS_EITHERALT;
+    return state;
+}
+
 int WFCAPI
 KbdReadChar( int * pChar, int *pShiftState )
 {
-#ifdef DOS
-    int count;
+    char buf[1 * sizeof(key_event)];
+    int flags, entry_size, size_left;
     int Hotkey;
-    unsigned char ScanCode = 0;
-    union REGS regs;
-    LPBYTE pSHFLGS  = (LPBYTE) 0x00400017;
-    LPBYTE pSHFLGS2 = (LPBYTE) 0x00400018;
-    LPBYTE pK101FL  = (LPBYTE) 0x00400096;
-    static LastScanCode = 0;
-#endif
-    PKBDHOOK pKbdHook;
     
     // make sure we are in Ascii mode
     if ( CurrentKbdMode != Kbd_Ascii ) {
+	TRACE((TC_KEY, TT_API1, "KbdReadChar: wrong mode"));
         return( CLIENT_ERROR_INVALID_MODE );
     }
 
-    //  init shift state
-    *pShiftState = 0;
-
-    // is there a special key waiting?
-    if ( RebootFlag ) {
-        RebootFlag = FALSE;
-        LogPrintf( LOG_CLASS, LOG_KEYBOARD, "KEYBOARD: reboot" );
-        return( CLIENT_STATUS_REBOOT );
-    }
-    else if ( CtrlBreakFlag ) {
-        CtrlBreakFlag = FALSE;
-        LogPrintf( LOG_CLASS, LOG_KEYBOARD, "KEYBOARD: Ctrl+Break" );
-        return( CLIENT_STATUS_CTRLBREAK );
-    }
-    else if ( CtrlCFlag ) {
-        *pChar = 3;
-        CtrlCFlag = FALSE;
-        goto done;
-    }
-
-#if 0
-    // is there a key in the fifo buffer?
-    if ( iFifo ) {
-        int iScanCode = (int) ScanCode;
-
-        // retrieve key from fifo
-        KbdGetFifoKey( &iScanCode, pShiftState, pChar );
-
-        // done
-        goto done;
-    }
-#endif
+    // get next event
+    LOGERR(_swix(KeyWatch_Poll, _INR(0,3) | _OUT(0) | _OUT(2) | _OUT(4),
+	  0, 0, buf, sizeof(buf),
+	  &flags, &size_left, &entry_size));
 
     {
-	int key, flag, Hotkey;
+	const key_event *k = (const key_event *)buf;
+	int shift_state = convert_shift_state(k->flags);
 
-	_swix(OS_Byte,
-	      _INR(0,2) | _OUTR(1,2),
-	      129, 0, 0,
-	      &key, &flag);
-
-	if (flag == 0xff)
-	    return CLIENT_STATUS_NO_DATA;
-	
-	if (flag == 0)
-	    *pChar = key;
-
-	if (key == 0x1B)
-	    return HOTKEY_UI;
-
-        if ( (Hotkey = KbdCheckHotkey( key, 0 )) )
+	// check for hotkeys
+	if ((k->flags & KeyWatch_Event_SCAN_CODE_VALID) &&
+	    (Hotkey = KbdCheckHotkey( k->scan_code, shift_state )) != 0)
 	{
-            // return no char
-            *pChar = 0;
+	    LogPrintf( LOG_CLASS, LOG_KEYBOARD, "KEYBOARD: Hotkey (%02X)", Hotkey );
 
-            // return code
-            LogPrintf( LOG_CLASS, LOG_KEYBOARD, "KEYBOARD: Hotkey (%02X)", Hotkey );
-            return( Hotkey );
+	    return Hotkey;
 	}
+
+	if ((k->flags & KeyWatch_Event_KEY_CODE_VALID) == 0)
+	    return CLIENT_STATUS_NO_DATA;
+
+	*pChar = k->key_code;
+	*pShiftState = shift_state;
     }
 
-#if 0
-// get scan code for non-destructive read
-    do {
-
-        // get key if avail
-        (void) KeyBdRead( &ScanCode, 1, &count, pShiftState, FALSE );
-
-        // return shift state, cannot trust BIOS on Unisys Junk Boxes
-        *pShiftState = (unsigned short) *pSHFLGS;
-        *pShiftState |= ((unsigned short) (*pSHFLGS2 & 0xf3) << 8);
-        *pShiftState |= ((unsigned short) (*pK101FL & 0x06) << 10);
-    
-        // is it a hotkey? if it is there steal key from DOS
-        if ( count && (Hotkey = KbdCheckHotkey( ScanCode, *pShiftState )) ) {
-
-            // return no char
-            *pChar = 0;
-
-            // steal char from DOS
-steal:
-            regs.h.ah = 0x0b;
-            intdos( &regs, &regs );
-
-            // key ready?
-            if ( regs.h.al != 0 ) {
-                regs.h.ah = 0x08;
-                intdos( &regs, &regs );
-
-                // if it is an extended key, steal rest of key sequence
-                if ( regs.h.al == 0 ) {
-                    goto steal;
-                }
-            }
-
-            // return code
-            LogPrintf( LOG_CLASS, LOG_KEYBOARD, "KEYBOARD: Hotkey (%02X)", Hotkey );
-            return( Hotkey );
-        }
-
-        //  detect atomic alt key make/break (MENU KEY)
-        else if ( count && ScanCode == 0xb8 && LastScanCode == 0x38 ) {
-
-            LogPrintf( LOG_CLASS, LOG_KEYBOARD, "KEYBOARD: Menu key" );
-            return( CLIENT_STATUS_MENUKEY );
-        }
-
-        //  save last scan code for alt reporting
-        if ( count && ScanCode != 0xE0 && ScanCode != 0x00 )
-            LastScanCode = ScanCode;
-
-    } while ( count );      // until no keys
-
-    // check DOS input status
-    regs.h.ah = 0x0b;
-    intdos( &regs, &regs );
-
-    // key ready?
-    if ( regs.h.al == 0 ) {
-        return( CLIENT_STATUS_NO_DATA );
-    }
-
-    // return shift state
-    *pShiftState = (unsigned short) *pSHFLGS;
-    *pShiftState |= ((unsigned short) (*pSHFLGS2 & 0xf3) << 8);
-    *pShiftState |= ((unsigned short) (*pK101FL & 0x06) << 10);
-
-    // read key
-    regs.h.ah = 0x08;
-    intdos( &regs, &regs );
-
-    // return key
-    *pChar = (unsigned int) regs.h.al;
-#endif
-
-    
-    // call hook routines
-    for ( pKbdHook=pKbdRootHook; pKbdHook != NULL; pKbdHook=pKbdHook->pNext ) {
-        (pKbdHook->pProcedure)( 0, 0, *pChar );
-    }
-done:
     LogPrintf( LOG_CLASS, LOG_KEYBOARD,
                "KEYBOARD: char (%02X)(%c) shift (%04X)",
                *pChar, *pChar, *pShiftState );
@@ -618,101 +425,44 @@ done:
 int WFCAPI
 KbdReadScan( int * pScanCode, int * pShiftState )
 {
-    int Char;
-    int count;
+    char buf[1 * sizeof(key_event)];
+    int flags, entry_size, size_left;
     int Hotkey;
-    int ShiftState;
-    unsigned char ScanCode;
-    PKBDHOOK pKbdHook;
-#ifdef DOS
-    LPBYTE pSHFLGS  = (LPBYTE) 0x00400017;
-    LPBYTE pSHFLGS2 = (LPBYTE) 0x00400018;
-    LPBYTE pK101FL  = (LPBYTE) 0x00400096;
-#endif
-    // make sure we are in Scan mode
+    
+    // make sure we are in Ascii mode
     if ( CurrentKbdMode != Kbd_Scan ) {
+	TRACE((TC_KEY, TT_API1, "KbdReadScan: wrong mode"));
         return( CLIENT_ERROR_INVALID_MODE );
     }
 
-    RebootFlag = FALSE;
+    // get next event
+    LOGERR(_swix(KeyWatch_Poll, _INR(0,3) | _OUT(0) | _OUT(2) | _OUT(4),
+	  0, 0, buf, sizeof(buf),
+	  &flags, &size_left, &entry_size));
 
-#if 0
-    // is there a key in the fifo buffer?
-    if ( iFifo ) {
-
-        // retrieve key from fifo
-        KbdGetFifoKey( pScanCode, pShiftState, &Char );
-
-        // done
-        goto done;
-    }
-#endif
-    
-    ScanCode = 0;
-    ShiftState = 0;
-	
     {
-	int key, flag;
+	const key_event *k = (const key_event *)buf;
+	int shift_state = convert_shift_state(k->flags);
 
-	_swix(OS_Byte,
-	      _INR(0,2) | _OUTR(1,2),
-	      129, 0, 0,
-	      &key, &flag);
-
-	if (flag == 0xff)
+	if ((k->flags & KeyWatch_Event_SCAN_CODE_VALID) == 0)
 	    return CLIENT_STATUS_NO_DATA;
-	
-	if (flag == 0)
-	    ScanCode = key;
 
-	if (key == 0x1B)
-	    return HOTKEY_UI;
-
-        if ( (Hotkey = KbdCheckHotkey( ScanCode, *pShiftState )) )
+	// check for hotkeys
+	if ((k->flags & KeyWatch_Event_KEY_GOING_UP) == 0 &&
+	    (Hotkey = KbdCheckHotkey( k->scan_code, shift_state )) != 0)
 	{
-            // return no char
-            *pScanCode = 0;
+	    LogPrintf( LOG_CLASS, LOG_KEYBOARD, "KEYBOARD: Hotkey (%02X)", Hotkey );
 
-            // return code
-            LogPrintf( LOG_CLASS, LOG_KEYBOARD, "KEYBOARD: Hotkey (%02X)", Hotkey );
-            return( Hotkey );
+	    return Hotkey;
 	}
+
+	*pScanCode = k->scan_code;
+	*pShiftState = shift_state;
     }
 
-#if 0
-    // check for key
-    if ( !KeyBdGetStatus() ) {
-        return( CLIENT_STATUS_NO_DATA );
-    }
-
-    // get key
-    (void) KeyBdRead( &ScanCode, 1, &count, &ShiftState, TRUE );
-
-    // return shift state, cannot trust BIOS on Unisys Junk Boxes
-    ShiftState = (unsigned short) *pSHFLGS;
-    ShiftState |= ((unsigned short) (*pSHFLGS2 & 0xf3) << 8);
-    ShiftState |= ((unsigned short) (*pK101FL & 0x06) << 10);
-#endif
-
-    // check hotkey
-    if ( (Hotkey = KbdCheckHotkey( ScanCode, ShiftState )) ) {
-        LogPrintf( LOG_CLASS, LOG_KEYBOARD, "KEYBOARD: Hotkey (%02X)", Hotkey );
-        return( Hotkey );
-    }
-
-    // return key and shift
-    *pScanCode   = (unsigned int) ScanCode;
-    *pShiftState = ShiftState;
-
-    // call hook routines
-    for ( pKbdHook=pKbdRootHook; pKbdHook != NULL; pKbdHook=pKbdHook->pNext ) {
-        (pKbdHook->pProcedure)( *pScanCode, *pShiftState, 0 );
-    }
-
-done:
     LogPrintf( LOG_CLASS, LOG_KEYBOARD,
-               "KEYBOARD: scan code (%02X) shift (%04X)",
-               *pScanCode, *pShiftState );
+               "KEYBOARD: scan (%02X) shift (%04X)",
+               *pScanCode, *pScanCode, *pShiftState );
 
     return( CLIENT_STATUS_SUCCESS );
 }
@@ -742,8 +492,8 @@ KbdSetLeds( int ShiftState )
     if ((ShiftState & KSS_CAPSLOCKON) == 0)
 	state |= 1<<4;
 
-    _swix(OS_Byte, _INR(0,2), 202, state, ~((1<<1) | (1<<2) | (1<<4)));
-    _swix(OS_Byte, _IN(0), 118);
+    LOGERR(_swix(OS_Byte, _INR(0,2), 202, state, ~((1<<1) | (1<<2) | (1<<4))));
+    LOGERR(_swix(OS_Byte, _IN(0), 118));
 
     return( CLIENT_STATUS_SUCCESS );
 }
@@ -768,12 +518,10 @@ KbdSetLeds( int ShiftState )
 int WFCAPI
 KbdRegisterHotkey( int HotkeyId, int ScanCode, int ShiftState )
 {
-#ifdef DOS
    // kbd open?
    if ( CurrentKbdMode == Kbd_Closed ) {
       return( CLIENT_ERROR_NOT_OPEN );
    }
-#endif
 
    // validate hotkey id
    if ( HotkeyId < CLIENT_STATUS_HOTKEY1 ||
@@ -791,111 +539,6 @@ KbdRegisterHotkey( int HotkeyId, int ScanCode, int ShiftState )
 
 /*******************************************************************************
  *
- * KbdAddHook
- *
- * ENTRY:
- *
- * EXIT:
- *    CLIENT_STATUS_SUCCESS - no error
- *
- ******************************************************************************/
-
-int WFCAPI
-KbdAddHook( PVOID pProcedure )
-{
-   PKBDHOOK pKbdHook;
-
-   // kbd open?
-   if ( CurrentKbdMode == Kbd_Closed ) {
-      return( CLIENT_ERROR_NOT_OPEN );
-   }
-
-   // check to see if this proc is already hooked
-   for ( pKbdHook=pKbdRootHook; pKbdHook != NULL; pKbdHook=pKbdHook->pNext ) {
-
-      // found?
-      if ( (PKBDHOOK)pKbdHook->pProcedure == pProcedure ) {
-         goto done;
-      }
-   }
-
-   // allocate a hook structure
-   if ( (pKbdHook = (PKBDHOOK) malloc( sizeof(KBDHOOK) )) != NULL ) {
-
-       // initialize and link in at head
-       pKbdHook->pProcedure = (PLIBPROCEDURE)pProcedure;
-       pKbdHook->pNext = pKbdRootHook;
-       pKbdRootHook = pKbdHook;
-   }
-   else {
-
-       return( CLIENT_ERROR_NO_MEMORY );
-   }
-
-   // ok
-done:
-   return( CLIENT_STATUS_SUCCESS );
-}
-
-/*******************************************************************************
- *
- * KbdRemoveHook
- *
- * ENTRY:
- *
- * EXIT:
- *    CLIENT_STATUS_SUCCESS - no error
- *
- ******************************************************************************/
-
-int WFCAPI
-KbdRemoveHook( PVOID pProcedure )
-{
-   PKBDHOOK pKbdHook;
-   PKBDHOOK pPrevKbdHook;
-
-   // kbd open?
-   if ( CurrentKbdMode == Kbd_Closed ) {
-      return( CLIENT_ERROR_NOT_OPEN );
-   }
-
-   // find old hook
-   for ( pKbdHook=pKbdRootHook, pPrevKbdHook = NULL;
-         pKbdHook != NULL;
-         pKbdHook=pKbdHook->pNext ) {
-
-      // found hooked proc?
-      if ( pKbdHook->pProcedure == (PLIBPROCEDURE)pProcedure ) {
-
-         // remove from list
-         if ( pPrevKbdHook == NULL ) {    // first
-            pKbdRootHook = pKbdHook->pNext;
-         }
-         else {                           // other
-            pPrevKbdHook->pNext = pKbdHook->pNext;
-         }
-
-         // free memory
-         free( pKbdHook );
-
-         // out of here
-         goto done;
-      }
-
-      // maintain prev ptr
-      pPrevKbdHook = pKbdHook;
-   }
-
-   // not found
-   return( CLIENT_STATUS_NO_DATA );
-
-   // ok
-done:
-   return( CLIENT_STATUS_SUCCESS );
-}
-
-/*******************************************************************************
- *
  * KbdPush
  *
  * ENTRY:
@@ -908,37 +551,6 @@ done:
 int WFCAPI
 KbdPush( int ScanCode, int ShiftState, int Char )
 {
-#ifdef DOS
-   // kbd open?
-   if ( CurrentKbdMode == Kbd_Closed ) {
-      return( CLIENT_ERROR_NOT_OPEN );
-   }
-
-   // need to alloc fifo buffer?
-   if ( cFifo == 0 ) {
-      iFifo = 0;
-      cFifo = FIFO_INIT_SIZE;
-      pFifo = (int *) malloc( sizeof(int) * cFifo );
-   }
-
-   // need to re-alloc fifo buffer?
-   else if ( iFifo >= cFifo ) {
-      cFifo += FIFO_INIT_SIZE;
-      pFifo = (int *) realloc( (void *) pFifo, (sizeof(int) * cFifo) );
-   }
-
-   // alloc/realloc work?
-   if ( pFifo == NULL ) {
-      iFifo = 0;
-      cFifo = 0;
-      return( CLIENT_ERROR_NO_MEMORY );
-   }
-
-   // add character to fifo buffer
-   *(pFifo + iFifo++) = ScanCode;
-   *(pFifo + iFifo++) = ShiftState;
-   *(pFifo + iFifo++) = Char;
-#endif
    return( CLIENT_STATUS_SUCCESS );
 }
 
@@ -994,45 +606,3 @@ KbdCheckHotkey( unsigned char ScanCode, int ShiftState )
    return( CLIENT_STATUS_SUCCESS );
 }
 
-#ifdef DOS
-/*******************************************************************************
- *
- * KbdGetFifoKey
- *
- * ENTRY:
- *
- * EXIT:
- *    CLIENT_STATUS_SUCCESS - no error
- *
- ******************************************************************************/
-
-static void
-KbdGetFifoKey( int * pScanCode, int * pShiftState, int * pChar )
-{
-
-   // remove character from fifo buffer
-   *pScanCode   = *(pFifo + 0);
-   *pShiftState = *(pFifo + 1);
-   *pChar       = *(pFifo + 2);
-
-   // adjust len
-   iFifo -= 3;
-
-   // empty? then free fifo buffer
-   if ( iFifo == 0 ) {
-
-      // free fifo and clear counters
-      if ( pFifo ) {
-         free( pFifo );
-         pFifo = NULL;
-      }
-      cFifo = 0;
-      iFifo = 0;
-   }
-
-   // otherwise shift down
-   else {
-      memcpy( (pFifo + 0), (pFifo + 3), (iFifo * sizeof(int)) );
-   }
-}
-#endif

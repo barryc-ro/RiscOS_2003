@@ -2,6 +2,8 @@
 
  */
 
+#include "windows.h"
+
 #include "swis.h"
 
 #include <stddef.h>
