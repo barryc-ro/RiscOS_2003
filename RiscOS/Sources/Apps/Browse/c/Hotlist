@@ -44,9 +44,6 @@
 
 /* Local statics */
 
-static int            autoopen_delay = 100;               /* Time in centiseconds before directory is autoopened */
-
-
 static int            autoopen_oldtime;                   /* Base time for autoopen directory */
 static hotlist_item * hotlist_root = NULL;                /* Pointer to the hotlist root directory item */
 static int            hotlist_windowid;                   /* Object ID of the hotlist window */
@@ -75,6 +72,10 @@ static int            hotlist_ram_transfer_sent;          /* Number of bytes whi
 static int            hotlist_save_type = HL_SAVE_NONE;   /* Variety of save currently in progress */
 
 /* Event handler prototypes */
+
+// Write these out in full, to clearly state exactly what parameters are needed?
+// Or is this in fact more robust, as the compiler will fault mismatched functions
+// in this source as opposed to wherever a registration of the handler occurs?
 
 static _kernel_oserror     * hotlist_selection_box_start(void);
 
@@ -114,24 +115,45 @@ static WimpMessageHandler    hotlist_ram_fetch_handler;
 
 #endif
 
-/* Miscellaneous function prototypes */
+/* List enquiry and manupulation */
+
+static _kernel_oserror * hotlist_link                    (hotlist_item * item, hotlist_item * target, unsigned int position);
+static void              hotlist_unlink                  (hotlist_item * item);
+static _kernel_oserror * hotlist_new_directory           (hotlist_item * parent, char * directory_name, unsigned int position, hotlist_item ** new);
+static _kernel_oserror * hotlist_new_url                 (hotlist_item * parent, unsigned int position, char * url_description, char * url);
+static void              hotlist_delete_item             (hotlist_item * item);
+static _kernel_oserror * hotlist_move_item               (hotlist_item * source, hotlist_item * target, unsigned int position);
+static _kernel_oserror * hotlist_copy_item               (hotlist_item * source, hotlist_item * target, unsigned int position, hotlist_item ** new_item);
+
+/* Item enquiry and manipulation */
 
 static _kernel_oserror * hotlist_get_entry_sizes         (unsigned int * item_height, unsigned int * item_dir_width, unsigned int * item_url_width);
+static int               hotlist_set_flags               (hotlist_item * list, hotlist_type type, unsigned int flags);
+static int               hotlist_clear_flags             (hotlist_item * list, hotlist_type type, unsigned int flags);
 
-static hotlist_item    * hotlist_find_item_r             (hotlist_item * list, unsigned int item_no);
+/* Finding items */
+
 static hotlist_item    * hotlist_find_item               (hotlist_item * list, unsigned int item_no);
-static int               _hotlist_find_no_from_item      (hotlist_item * list, hotlist_item * item);
+static hotlist_item    * hotlist_find_item_r             (hotlist_item * list, unsigned int item_no, int * curr_item);
 static int               hotlist_find_no_from_item       (hotlist_item * item);
-static hotlist_item    * _hotlist_find_selected_item     (hotlist_item * list);
+static int               hotlist_find_no_from_item_r     (hotlist_item * list, hotlist_item * item, int * curr_item);
 static hotlist_item    * hotlist_find_selected_item      (void);
-static void              _hotlist_count_displayed_items  (hotlist_item * list);
-static unsigned int      hotlist_count_displayed_items   (hotlist_item * list);
-static void              hotlist_count_selected_items_r  (hotlist_item * list);
+static hotlist_item    * hotlist_find_selected_item_r    (hotlist_item * list);
+
+/* Counting items */
+
 static unsigned int      hotlist_count_selected_items    (void);
+static void              hotlist_count_selected_items_r  (hotlist_item * list, int * count);
+static unsigned int      hotlist_count_displayed_items   (hotlist_item * list);
+static void              hotlist_count_displayed_items_r (hotlist_item * list, int * count);
+
+// Categorisation work in progress...
+
+static _kernel_oserror * hotlist_draw                    (hotlist_item * list, unsigned int first_item, unsigned int last_item);
+static _kernel_oserror * hotlist_draw_r                  (hotlist_item *list, unsigned int first_item, unsigned int last_item, int * curr_item, unsigned int indent, unsigned int item_height, unsigned int item_dir_width, unsigned int item_url_width);
 static unsigned int      hotlist_contents_selected       (hotlist_item * item);
 static unsigned int      hotlist_no_contents_selected    (hotlist_item * item);
-static void              _hotlist_draw                   (hotlist_item * list, unsigned int first_item, unsigned int last_item, unsigned int indent);
-static void              hotlist_draw                    (hotlist_item * list, unsigned int first_item, unsigned int last_item);
+// Need renaming to hotlist_get_max_width_r and hotlist_redraw_now_r
 static void              _hotlist_get_max_width          (hotlist_item * list, unsigned int indent);
 static void              _hotlist_redraw_now             (hotlist_item * list);
 static void              hotlist_redraw_now              (void);
@@ -156,18 +178,6 @@ static _kernel_oserror * hotlist_modified                (unsigned int type);
 
 _kernel_oserror        * hotlist_initiate_uri_save       (hotlist_item *sourceitem);
 _kernel_oserror        * hotlist_initiate_html_save      (char *filename);
-
-/* List manupulation */
-
-static void              hotlist_unlink                  (hotlist_item * item);
-static _kernel_oserror * hotlist_link                    (hotlist_item * item, hotlist_item * target, unsigned int position);
-static _kernel_oserror * hotlist_new_directory           (hotlist_item * parent, char * directory_name, unsigned int position, hotlist_item ** new);
-static _kernel_oserror * hotlist_new_url                 (hotlist_item * parent, unsigned int position, char * url_description, char * url);
-static void              hotlist_delete_item             (hotlist_item * item);
-static _kernel_oserror * hotlist_move_item               (hotlist_item * source, hotlist_item * target, unsigned int position);
-static _kernel_oserror * hotlist_copy_item               (hotlist_item * source, hotlist_item * target, unsigned int position, hotlist_item ** new_item);
-static int               hotlist_set_flags               (hotlist_item * list, hotlist_type type, unsigned int flags);
-static int               hotlist_clear_flags             (hotlist_item * list, hotlist_type type, unsigned int flags);
 
 #ifdef TRACE
 
@@ -272,99 +282,6 @@ static int               hotlist_clear_flags             (hotlist_item * list, h
   }
 
 #endif
-
-/*************************************************/
-/* hotlist_get_entry_sizes()                     */
-/*                                               */
-/* This function reads the size of the sprites   */
-/* to be used by the hotlist and from them       */
-/* determines the size of the hotlist entries.   */
-/*                                               */
-/* Parameters: Pointer to an int, in which the   */
-/*             height of an item is placed in    */
-/*             OS units;                         */
-/*                                               */
-/*             Pointer to an int, in which the   */
-/*             minimum width of a directory item */
-/*             is returned, in OS units;         */
-/*                                               */
-/*             Pointer to an int, in which the   */
-/*             minimum width of a URL item is    */
-/*             returned, in OS units.            */
-/*                                               */
-/* Assumes:    Any of the pointers may be NULL.  */
-/*************************************************/
-
-static _kernel_oserror * hotlist_get_entry_sizes(unsigned int * item_height, unsigned int * item_dir_width, unsigned int * item_url_width)
-{
-  _kernel_oserror * e;
-  int               width, height;
-
-  /* Get the open directory sprite size */
-
-  RetError(read_sprite_size(OPEN_DIRECTORY_SPRITE, &width, &height));
-
-  /* Use this for the minimum width of a directory entry */
-  /* and the height of an item.                          */
-
-  if (item_dir_width) *item_dir_width = width;
-  if (item_height)    *item_height    = height;
-
-  /* Now read the closed sprite; if the size is greater */
-  /* than the width or height found above, use the new  */
-  /* sizes instead.                                     */
-
-  RetError(read_sprite_size(CLOSED_DIRECTORY_SPRITE, &width, &height));
-
-  if (item_height    && height > *item_height)    *item_height    = height;
-  if (item_dir_width && width  > *item_dir_width) *item_dir_width = width;
-
-  /* Similarly for the insert item sprite. */
-
-  RetError(read_sprite_size(INSERT_DIRECTORY_SPRITE, &width, &height));
-
-  if (item_height    && height > *item_height)    *item_height    = height;
-  if (item_dir_width && width  > *item_dir_width) *item_dir_width = width;
-
-  /* Find the URL sprite size, and if required increase the */
-  /* minimum entry height again based on this.              */
-
-  RetError(read_sprite_size(URL_SPRITE, &width, &height));
-
-  if (item_height && height > *item_height) *item_height= height;
-
-  /* Set the URL width to the value found above and add 8 to */
-  /* all of them for aesthetics.                             */
-
-  if (item_url_width) *item_url_width = width + 8; /* +8 for aesthetics */
-  if (item_dir_width) *item_dir_width += 8;
-  if (item_height)    *item_height    += 8;
-
-  return NULL;
-}
-
-/*************************************************/
-/* hotlist_unlink()                              */
-/*                                               */
-/* This function unlinks the passed item from    */
-/* the items linked in before and after it.      */
-/*                                               */
-/* Parameters: Pointer to the hotlist_item       */
-/*             struct to remove.                 */
-/*************************************************/
-
-static void hotlist_unlink(hotlist_item *item)
-{
-  if (item->parent && item->parent->data.directory_content == item) item->parent->data.directory_content = item->next;
-  if (item->previous) item->previous->next = item->next;
-  if (item->next) item->next->previous = item->previous;
-
-  /* Not strictly needed, but added to ensure robustness */
-
-  item->next     = NULL;
-  item->previous = NULL;
-  item->parent   = NULL;
-}
 
 /*************************************************/
 /* hotlist_link()                                */
@@ -542,6 +459,29 @@ static _kernel_oserror * hotlist_link(hotlist_item * item, hotlist_item * target
 }
 
 /*************************************************/
+/* hotlist_unlink()                              */
+/*                                               */
+/* This function unlinks the passed item from    */
+/* the items linked in before and after it.      */
+/*                                               */
+/* Parameters: Pointer to the hotlist_item       */
+/*             struct to remove.                 */
+/*************************************************/
+
+static void hotlist_unlink(hotlist_item *item)
+{
+  if (item->parent && item->parent->data.directory_content == item) item->parent->data.directory_content = item->next;
+  if (item->previous) item->previous->next = item->next;
+  if (item->next) item->next->previous = item->previous;
+
+  /* Not strictly needed, but added to ensure robustness */
+
+  item->next     = NULL;
+  item->previous = NULL;
+  item->parent   = NULL;
+}
+
+/*************************************************/
 /* hotlist_new_directory()                       */
 /*                                               */
 /* This function creates a new directory         */
@@ -582,12 +522,7 @@ static _kernel_oserror * hotlist_new_directory(hotlist_item * parent, char * dir
 
   item = malloc(sizeof(hotlist_item));
 
-  if (!item)
-  {
-    make_no_memory_error(4);
-
-    return &erb;
-  }
+  if (!item) return make_no_memory_error(4);
 
   perm_dirname = malloc(strlen(directory_name) + 1);
 
@@ -595,9 +530,7 @@ static _kernel_oserror * hotlist_new_directory(hotlist_item * parent, char * dir
   {
     free(item);
 
-    make_no_memory_error(5);
-
-    return NULL;
+    return make_no_memory_error(5);
   }
 
   /* Copy the name into the new buffer */
@@ -974,6 +907,183 @@ static _kernel_oserror * hotlist_copy_item(hotlist_item * source, hotlist_item *
 }
 
 /*************************************************/
+/* hotlist_get_entry_sizes()                     */
+/*                                               */
+/* This function reads the size of the sprites   */
+/* to be used by the hotlist and from them       */
+/* determines the size of the hotlist entries.   */
+/*                                               */
+/* Parameters: Pointer to an int, in which the   */
+/*             height of an item is placed in    */
+/*             OS units;                         */
+/*                                               */
+/*             Pointer to an int, in which the   */
+/*             minimum width of a directory item */
+/*             is returned, in OS units;         */
+/*                                               */
+/*             Pointer to an int, in which the   */
+/*             minimum width of a URL item is    */
+/*             returned, in OS units.            */
+/*                                               */
+/* Assumes:    Any of the pointers may be NULL.  */
+/*************************************************/
+
+static _kernel_oserror * hotlist_get_entry_sizes(unsigned int * item_height, unsigned int * item_dir_width, unsigned int * item_url_width)
+{
+  _kernel_oserror * e;
+  int               width, height;
+
+  /* Get the open directory sprite size */
+
+  RetError(read_sprite_size(OPEN_DIRECTORY_SPRITE, &width, &height));
+
+  /* Use this for the minimum width of a directory entry */
+  /* and the height of an item.                          */
+
+  if (item_dir_width) *item_dir_width = width;
+  if (item_height)    *item_height    = height;
+
+  /* Now read the closed sprite; if the size is greater */
+  /* than the width or height found above, use the new  */
+  /* sizes instead.                                     */
+
+  RetError(read_sprite_size(CLOSED_DIRECTORY_SPRITE, &width, &height));
+
+  if (item_height    && height > *item_height)    *item_height    = height;
+  if (item_dir_width && width  > *item_dir_width) *item_dir_width = width;
+
+  /* Similarly for the insert item sprite. */
+
+  RetError(read_sprite_size(INSERT_DIRECTORY_SPRITE, &width, &height));
+
+  if (item_height    && height > *item_height)    *item_height    = height;
+  if (item_dir_width && width  > *item_dir_width) *item_dir_width = width;
+
+  /* Find the URL sprite size, and if required increase the */
+  /* minimum entry height again based on this.              */
+
+  RetError(read_sprite_size(URL_SPRITE, &width, &height));
+
+  if (item_height && height > *item_height) *item_height= height;
+
+  /* Set the URL width to the value found above and add 8 to */
+  /* all of them for aesthetics.                             */
+
+  if (item_url_width) *item_url_width = width + 8; /* +8 for aesthetics */
+  if (item_dir_width) *item_dir_width += 8;
+  if (item_height)    *item_height    += 8;
+
+  return NULL;
+}
+
+/*************************************************/
+/* hotlist_set_flags()                           */
+/*                                               */
+/* This function will recursively set flags for  */
+/* either a specified type of hotlist_item or    */
+/* all hotlist_items, to the given value. All    */
+/* items which are changed will have their       */
+/* HOTLIST_G_REDRAW_NOW bit set.                 */
+/*                                               */
+/* Parameters: Pointer to a hotlist_item struct  */
+/*             to start on;                      */
+/*                                               */
+/*             Type of hotlist_item to set flags */
+/*             for, or hl_ALL for all types;     */
+/*                                               */
+/*             Flags to set.                     */
+/*                                               */
+/* Returns:    1 if any flags were set, else 0.  */
+/*************************************************/
+
+static int hotlist_set_flags(hotlist_item * list, hotlist_type type, unsigned int flags)
+{
+  int changed = 0;
+
+  while (list)
+  {
+    /* Alter all items, or those of the correct type */
+
+    if (type == hl_ALL || type == list->type)
+    {
+      if (list->flags | flags != list->flags)
+      {
+        list->flags |= HOTLIST_G_REDRAW_NOW;
+        changed = 1;
+      }
+
+      list->flags |= flags;
+    }
+
+    /* Recursive call for directories */
+
+    if (list->type == hl_directory)
+    {
+      if (hotlist_set_flags(list->data.directory_content, type, flags)) changed = 1;
+    }
+
+    list = list->next;
+  }
+
+  return changed;
+}
+
+/*************************************************/
+/* hotlist_clear_flags()                         */
+/*                                               */
+/* This function will recursively clear flags    */
+/* for either a specified type of hotlist_item   */
+/* or all hotlist_items. All items changed will  */
+/* have their HOTLIST_G_REDRAW_NOW bit set,      */
+/* unless, of course, the routine is called to   */
+/* clear that bit.                               */
+/*                                               */
+/* Parameters: Pointer to a hotlist_item struct  */
+/*             to start on;                      */
+/*                                               */
+/*             Type of hotlist_item to set flags */
+/*             for, or hl_ALL for all types;     */
+/*                                               */
+/*             Flags clear word (any bits set in */
+/*             this word are cleared in the item */
+/*             flags).                           */
+/*                                               */
+/* Returns:    1 if flags were cleared, else 0.  */
+/*************************************************/
+
+static int hotlist_clear_flags(hotlist_item * list, hotlist_type type, unsigned int flags)
+{
+  int changed = 0;
+
+  while (list)
+  {
+    /* Only alter the requested item types */
+
+    if (type == hl_ALL || type == list->type)
+    {
+      if (list->flags & ~flags != list->flags)
+      {
+        list->flags |= HOTLIST_G_REDRAW_NOW;
+        changed = 1;
+      }
+
+      list->flags &= ~flags;
+    }
+
+    /* Recursive call for directories */
+
+    if (list->type == hl_directory)
+    {
+      if (hotlist_clear_flags(list->data.directory_content, type, flags)) changed = 1;
+    }
+
+    list = list->next;
+  }
+
+  return changed;
+}
+
+/*************************************************/
 /* hotlist_find_item()                           */
 /*                                               */
 /* This function will recursivly scan through    */
@@ -992,9 +1102,9 @@ static _kernel_oserror * hotlist_copy_item(hotlist_item * source, hotlist_item *
 
 static hotlist_item * hotlist_find_item(hotlist_item * list, unsigned int item_no)
 {
-  item_number = 0;
+  int curr_item = 0;
 
-  return hotlist_find_item_r(list, item_no);
+  return hotlist_find_item_r(list, item_no, &curr_item);
 }
 
 /*************************************************/
@@ -1002,29 +1112,39 @@ static hotlist_item * hotlist_find_item(hotlist_item * list, unsigned int item_n
 /*                                               */
 /* Recursive back-end to hotlist_find_item.      */
 /*                                               */
-/* Parameters: As hotlist_find_item.             */
+/* Parameters: Pointer to a hotlist_item at the  */
+/*             top of the directory to scan;     */
+/*                                               */
+/*             The nth item to return within it; */
+/*                                               */
+/*             Pointer to an int, in which the   */
+/*             number of the current item is     */
+/*             accumulated (initialised to an    */
+/*             appropriate value, usually 0).    */
 /*                                               */
 /* Returns:    As hotlist_find_item.             */
+/*                                               */
+/* Assumes:    The pointer to the int may *not*  */
+/*             be NULL.                          */
 /*************************************************/
 
-static hotlist_item * hotlist_find_item_r(hotlist_item * list, unsigned int item_no)
+static hotlist_item * hotlist_find_item_r(hotlist_item * list, unsigned int item_no, int * curr_item)
 {
   hotlist_item * temp;
 
   while (list)
   {
-    if (item_number == item_no) return list; /* Found the list item */
+    if (*curr_item == item_no) return list; /* Found the list item */
 
     /* Increment the item counter */
 
-    item_number++;
+    *curr_item += 1;
 
     /* Recursively scan open directories */
 
     if (list->type == hl_directory && list->flags & HOTLIST_D_IS_OPEN)
     {
-      temp = hotlist_find_item_r(list->data.directory_content, item_no);
-
+      temp = hotlist_find_item_r(list->data.directory_content, item_no, curr_item);
       if (temp) return temp;
     }
 
@@ -1037,368 +1157,482 @@ static hotlist_item * hotlist_find_item_r(hotlist_item * list, unsigned int item
 }
 
 /*************************************************/
-/* _hotlist_find_no_from_item()                  */
-/*                                               */
-/* This function does all the work for           */
-/* hotlist_find_no_from_item()                   */
-/*                                               */
-/* Parameters: Pointer to a hotlist_item         */
-/*             the item whose position should be */
-/*             returned.                         */
-/*                                               */
-/* Returns:    The item position or              */
-/*             -1 if it does not exist           */
-/*************************************************/
-
-static int _hotlist_find_no_from_item(hotlist_item *list, hotlist_item *item)
-{
-  int temp;
-  while(list)
-  {
-    if (item == list) return item_number;                             /* Found the list item */
-    item_number++;
-    if (list->type == hl_directory && list->flags & HOTLIST_D_IS_OPEN)
-    {
-      temp = _hotlist_find_no_from_item(list->data.directory_content, item);
-      if (temp >= 0) return temp;
-    }
-    list = list->next;
-
-  }
-  return -1;
-}
-
-/*************************************************/
 /* hotlist_find_no_from_item()                   */
 /*                                               */
 /* This function will recursivly scan through    */
 /* a hotlist structure and return the position   */
-/* of the specified item.  It will only recurse  */
+/* of the specified item. It will only recurse   */
 /* through open directories.                     */
 /*                                               */
-/* Parameters: Pointer to a hotlist_item         */
-/*             Pointer to the item to find       */
+/* Parameters: Pointer to a hotlist_item to      */
+/*             start at;                         */
 /*                                               */
-/* Returns:    Position of the requested item or */
-/*             -1 if it does not exist           */
+/*             Pointer to the item whos position */
+/*             is to be returned.                */
 /*                                               */
-/* Note:       This function doesn't actually    */
-/*             do any of the real work but       */
-/*             merely sets up a global variable  */
-/*             and calls                         */
-/*             _hotlist_find_no_from_item()      */
+/* Returns:    The item position or -1 if it is  */
+/*             not found.                        */
 /*************************************************/
 
-static int hotlist_find_no_from_item(hotlist_item *item)
+static int hotlist_find_no_from_item(hotlist_item * item)
 {
-  item_number = 0;
-  return _hotlist_find_no_from_item(hotlist_root->data.directory_content, item);
+  int curr_item = 0;
+
+  return hotlist_find_no_from_item_r(hotlist_root->data.directory_content, item, &curr_item);
 }
 
-/************************************************/
-/* _hotlist_find_selected_item()                */
-/*                                              */
-/* This function does the work for              */
-/* hotlist_find_selected_item()                 */
-/************************************************/
-hotlist_item * _hotlist_find_selected_item(hotlist_item *list)
+/*************************************************/
+/* hotlist_find_no_from_item_r()                 */
+/*                                               */
+/* Recursive back-end to                         */
+/* hotlist_find_no_from_item.                    */
+/*                                               */
+/* Parameters: Pointer to a hotlist_item to      */
+/*             start at;                         */
+/*                                               */
+/*             Pointer to the item whos position */
+/*             is to be returned;                */
+/*                                               */
+/*             Pointer to an int, in which the   */
+/*             number of the current item is     */
+/*             accumulated (initialised to an    */
+/*             appropriate value, usually 0).    */
+/*                                               */
+/* Returns:    As hotlist_find_no_from_item.     */
+/*                                               */
+/* Assumes:    The pointer to the int may *not*  */
+/*             be NULL.                          */
+/*************************************************/
+
+static int hotlist_find_no_from_item_r(hotlist_item * list, hotlist_item * item, int * curr_item)
 {
-  hotlist_item *temp;
-  while(list)
+  /* Start the search at the given item */
+
+  while (list)
   {
-    if (list->flags & HOTLIST_G_IS_SELECTED) return list;
-    if (list->type == hl_directory)
+    if (item == list) return *curr_item; /* Found the list item */
+
+    *curr_item += 1;
+
+    /* Recursively scan open directories */
+
+    if (list->type == hl_directory && list->flags & HOTLIST_D_IS_OPEN)
     {
-      temp = _hotlist_find_selected_item(list->data.directory_content);
-      if (temp) return temp;
+      int found;
+
+      found = hotlist_find_no_from_item_r(list->data.directory_content, item, curr_item);
+      if (found >= 0) return found;
     }
+
+    /* Move to the next item */
+
     list = list->next;
   }
-  return NULL;
+
+  /* Didn't find it */
+
+  return -1;
 }
 
 /*************************************************/
 /* hotlist_find_selected_item()                  */
 /*                                               */
 /* This function returns a pointer to the first  */
-/* selected item found                           */
+/* selected item found.                          */
+/*                                               */
+/* Returns:    Pointer to a hotlist_item struct  */
+/*             which was the first selected item */
+/*             found in a search starting        */
+/*             from the root, or NULL if there   */
+/*             is nothing selected.              */
 /*************************************************/
 
 static hotlist_item * hotlist_find_selected_item(void)
 {
-  return _hotlist_find_selected_item(hotlist_root);
+  return hotlist_find_selected_item_r(hotlist_root);
 }
 
 /*************************************************/
-/* _hotlist_count_displayed_items()              */
+/* hotlist_find_selected_item_r()                */
 /*                                               */
-/* This routine does all the work for            */
-/* hotlist_count_displayed_items()               */
+/* Recursive back-end to                         */
+/* hotlist_find_selected_item.                   */
+/*                                               */
+/* Parameters: Pointer to a hotlist_item         */
+/*             struct to start at.               */
+/*                                               */
+/* Returns:    As hotlist_find_selected_item.    */
 /*************************************************/
 
-static void _hotlist_count_displayed_items(hotlist_item *list)
+hotlist_item * hotlist_find_selected_item_r(hotlist_item * list)
 {
-  while(list)
+  while (list)
   {
+    if (list->flags & HOTLIST_G_IS_SELECTED) return list; /* Found it */
+
+    /* Recursively scan all directories */
+
+    if (list->type == hl_directory)
+    {
+      hotlist_item * found;
+
+      found = hotlist_find_selected_item_r(list->data.directory_content);
+      if (found) return found;
+    }
+
+    /* Move to the next item */
+
+    list = list->next;
+  }
+
+  /* Didn't find it */
+
+  return NULL;
+}
+
+/*************************************************/
+/* hotlist_count_selected_items()                */
+/*                                               */
+/* Count the number of items that are currently  */
+/* selected in the hotlist window.               */
+/*                                               */
+/* Returns:    The number of selected items.     */
+/*************************************************/
+
+static unsigned int hotlist_count_selected_items(void)
+{
+  int count = 0;
+
+  hotlist_count_selected_items_r(hotlist_root->data.directory_content, &count);
+
+  return count;
+}
+
+/*************************************************/
+/* hotlist_count_selected_items_r()              */
+/*                                               */
+/* Recursive back-end to                         */
+/* hotlist_count_selected_items.                 */
+/*                                               */
+/* Parameters: Pointer to a hotlist_item struct  */
+/*             representing the first item in a  */
+/*             directory to count;               */
+/*                                               */
+/*             Pointer to an int, in which the   */
+/*             total is accumulated.             */
+/*                                               */
+/* Assumes:    The pointer to the int may *not*  */
+/*             be NULL.                          */
+/*************************************************/
+
+static void hotlist_count_selected_items_r(hotlist_item * list, int * count)
+{
+  while (list)
+  {
+    if (list->flags & HOTLIST_G_IS_SELECTED)
+    {
+      *count += 1;
+    }
+    else
+    {
+      /* Only recurse through directories which are not selected */
+
+      if (list->type == hl_directory)
+      {
+        hotlist_count_selected_items_r(list->data.directory_content, count);
+      }
+    }
+
+    list = list->next;
+  }
+}
+
+/*************************************************/
+/* hotlist_count_displayed_items()               */
+/*                                               */
+/* This routine counts the number of items       */
+/* displayed in the hotlist window.              */
+/*                                               */
+/* Parameters: Pointer to a hotlist_item struct  */
+/*             to start at.                      */
+/*                                               */
+/* Returns:    The number of displayed items.    */
+/*************************************************/
+
+static unsigned int hotlist_count_displayed_items(hotlist_item * list)
+{
+  int count = 0;
+
+  hotlist_count_displayed_items_r(list, &count);
+
+  return count;
+}
+
+/*************************************************/
+/* hotlist_count_displayed_items_r()             */
+/*                                               */
+/* Recursive back-end to                         */
+/* hotlist_count_displayed_items.                */
+/*                                               */
+/* Parameters: Pointer to a hotlist_item struct  */
+/*             to start at;                      */
+/*                                               */
+/*             Pointer to an int, in which the   */
+/*             total is accumulated.             */
+/*                                               */
+/* Assumes:    The pointer to the int may *not*  */
+/*             be NULL.                          */
+/*************************************************/
+
+static void hotlist_count_displayed_items_r(hotlist_item *list, int * count)
+{
+  while (list)
+  {
+    /* Recursive scan for open directories */
+
     if (list->type == hl_directory && list->flags & HOTLIST_D_IS_OPEN)
-
     {
-      _hotlist_count_displayed_items(list->data.directory_content);
+      hotlist_count_displayed_items_r(list->data.directory_content, count);
     }
+
     list = list->next;
-    item_number++;
+
+    *count += 1;
   }
 }
 
 /*************************************************/
-/* hotlist_count_displayed_items()               */
-/*                                               */
-/* This routine counts the number of items to be */
-/* displayed in the hotlist window               */
-/*                                               */
-/* Parameters: Pointer to a hotlist_item         */
-/*                                               */
-/* Returns:    the number of items visible in    */
-/*             the list                          */
-/*************************************************/
-
-static unsigned int hotlist_count_displayed_items(hotlist_item *list)
-{
-  item_number = 0;
-  _hotlist_count_displayed_items(list);
-  return item_number;
-}
-
-/*************************************************/
-/* hotlist_set_flags()                           */
-/*                                               */
-/* This function will recursivly set flags for   */
-/* either a specified type of hotlist_item or    */
-/* all hotlist_items if hl_ALL is specified      */
-/* all items which are changed will also have    */
-/* their HOTLIST_G_REDRAW_NOW bit set            */
-/*                                               */
-/* Parameters: Pointer to a hotlist_item         */
-/*             type of hotlist_item to set flags */
-/*             for                               */
-/*             flags to set                      */
-/*                                               */
-/* Returns:    1 if any flags were set           */
-/*             0 if no flags were set            */
-/*************************************************/
-
-static int hotlist_set_flags(hotlist_item *list, hotlist_type type, unsigned int flags)
-{
-  int changed;
-  changed = 0;
-  while(list)
-  {
-    if (type == hl_ALL || type == list->type)
-    {
-      if (list->flags | flags != list->flags)
-      {
-        list->flags |= HOTLIST_G_REDRAW_NOW;
-        changed = 1;
-      }
-      list->flags |= flags;
-    }
-    if (list->type == hl_directory)
-    {
-      if (hotlist_set_flags(list->data.directory_content, type, flags)) changed = 1;
-    }
-    list = list->next;
-  }
-  return changed;
-}
-
-/*************************************************/
-/* hotlist_clear_flags()                         */
-/*                                               */
-/* This function will recursivly clear flags for */
-/* either a specified type of hotlist_item or    */
-/* all hotlist_items if hl_ALL is specified      */
-/* all items which are changed will also have    */
-/* their HOTLIST_G_REDRAW_NOW bit set except if  */
-/* the routine is set to clear the               */
-/* HOTLIST_G_REDRAW_NOW bit                      */
-/*                                               */
-/* Parameters: Pointer to a hotlist_item         */
-/*             type of hotlist_item to clear     */
-/*             flags for                         */
-/*             flags to clear                    */
-/*                                               */
-/* Returns:    1 if any flags were cleared       */
-/*             0 if no flags were cleared        */
-/*************************************************/
-
-static int hotlist_clear_flags(hotlist_item *list, hotlist_type type, unsigned int flags)
-{
-  int changed;
-  changed = 0;
-  while(list)
-  {
-    if (type == hl_ALL || type == list->type)
-    {
-      if (list->flags & ~flags != list->flags)
-      {
-        list->flags |= HOTLIST_G_REDRAW_NOW;
-        changed = 1;
-      }
-      list->flags &= ~flags;
-    }
-    if (list->type == hl_directory)
-    {
-      if (hotlist_clear_flags(list->data.directory_content, type, flags)) changed = 1;
-    }
-    list = list->next;
-  }
-  return changed;
-}
-
-/*************************************************/
-/* _hotlist_draw()                               */
-/*                                               */
-/* This function does all the hard work for      */
 /* hotlist_draw()                                */
 /*                                               */
-/* Parameters: Pointer to a hotlist_item         */
-/*             First item number to draw         */
-/*             Last item number to draw          */
-/*             Level of indentation              */
+/* Redraws a specified region of the hotlist.    */
+/* Assumes graphics rectangles are set up        */
+/* appropriately (e.g. the function is called    */
+/* during a Wimp redraw session).                */
+/*                                               */
+/* Parameters: Pointer to a hotlist_item giving  */
+/*             the list that we're to draw;      */
+/*                                               */
+/*             First item number to draw;        */
+/*                                               */
+/*             Last item number to draw.         */
 /*************************************************/
 
-static void _hotlist_draw(hotlist_item *list,
-                   unsigned int first_item,
-                   unsigned int last_item,
-                   unsigned int indent)
+static _kernel_oserror * hotlist_draw(hotlist_item * list, unsigned int first_item, unsigned int last_item)
 {
-  WimpIconBlock hotlist_iconblock;
-  unsigned int item_height, item_dir_width, item_url_width;
-  unsigned int temp_width;
-  _kernel_swi_regs regs;
+  _kernel_oserror * e;
+  int               curr_item = 0;
+  unsigned int      item_height, item_dir_width, item_url_width;
 
-  hotlist_get_entry_sizes(&item_height, &item_dir_width, &item_url_width);
+  RetError(hotlist_get_entry_sizes(&item_height, &item_dir_width, &item_url_width));
 
-  while(list)
+  return hotlist_draw_r(list,
+                        first_item,
+                        last_item,
+                        &curr_item,
+                        0,
+                        item_height,
+                        item_dir_width,
+                        item_url_width);
+}
+
+/*************************************************/
+/* hotlist_draw_r()                              */
+/*                                               */
+/* Recursive back-end to hotlist_draw.           */
+/*                                               */
+/* Parameters: Pointer to a hotlist_item giving  */
+/*             the list that we're to draw;      */
+/*                                               */
+/*             First item number to draw;        */
+/*                                               */
+/*             Last item number to draw;         */
+/*                                               */
+/*             Pointer to an int, which is used  */
+/*             to accumulate the current item    */
+/*             number - the contents should be   */
+/*             initialised to an appropriate     */
+/*             value for the first three         */
+/*             parameters (usually, zero);       */
+/*                                               */
+/*             Level of indentation (OS units);  */
+/*                                               */
+/*             Height of an item (OS units);     */
+/*                                               */
+/*             Width of a directory item (OS     */
+/*             units);                           */
+/*                                               */
+/*             Width of a URL item (OS units).   */
+/*                                               */
+/* Assumes:    The pointer to the int may *not*  */
+/*             be NULL.                          */
+/*************************************************/
+
+static _kernel_oserror * hotlist_draw_r(hotlist_item *list, unsigned int first_item, unsigned int last_item,
+                                        int * curr_item, unsigned int indent, unsigned int item_height,
+                                        unsigned int item_dir_width, unsigned int item_url_width)
+{
+  _kernel_oserror * e;
+  WimpIconBlock     icon;
+  unsigned int      temp_width;
+  int               text_width;
+
+  while (list)
   {
-    if (item_number > last_item) return; /* Break out if done all items to be displayed */
-    if (item_number >= first_item)
+    /* Break out if done all items to be displayed */
+
+    if (*curr_item > last_item) return NULL;
+
+    /* Don't draw until we reach the required first item */
+
+    if (*curr_item >= first_item)
     {
-      /*  draw it */
+      /* Construct an icon block for Wimp_PlotIcon. First, icon flags. */
 
-      hotlist_iconblock.flags = HOTLIST_SPRITE_ICON_FLAGS;
-      if (list->flags & HOTLIST_G_IS_SELECTED) hotlist_iconblock.flags |= WimpIcon_Selected;
+      icon.flags = HOTLIST_SPRITE_ICON_FLAGS;
+      if (list->flags & HOTLIST_G_IS_SELECTED) icon.flags |= WimpIcon_Selected;
 
-      hotlist_iconblock.data.is.sprite_area = (void*)sprite_block;
+      /* Point to the main sprite pool */
 
-      switch(list->type)                                                /* Set appropriate sprite and width of sprite */
+      icon.data.is.sprite_area = (void*) sprite_block;
+
+      /* Set type-dependent characteristics */
+
+      switch(list->type)
       {
         case hl_url:
-        hotlist_iconblock.data.is.sprite = URL_SPRITE;
-        hotlist_iconblock.data.is.sprite_name_length = strlen(URL_SPRITE);
-        temp_width = item_url_width;
+        {
+          /* A URL item; set the sprite name and item width accordingly */
+
+          icon.data.is.sprite             = URL_SPRITE;
+          icon.data.is.sprite_name_length = strlen(URL_SPRITE);
+          temp_width = item_url_width;
+        }
         break;
 
         case hl_directory:
-        temp_width = item_dir_width;
-        if (list->flags & HOTLIST_D_IS_HIGHLIGHTED)
         {
-          hotlist_iconblock.data.is.sprite = INSERT_DIRECTORY_SPRITE;
-          hotlist_iconblock.data.is.sprite_name_length = strlen(INSERT_DIRECTORY_SPRITE);
-        }
-        else
-        {
-          if (list->flags & HOTLIST_D_IS_OPEN)
+          /* Directories are a bit more complex, as they can be open, */
+          /* closed, or showing a '+' if a dragged item is hovering   */
+          /* over it and would drop 'into' the directory if released. */
+
+          temp_width = item_dir_width; /* Width is based on the widest sprite of the three */
+
+          if (list->flags & HOTLIST_D_IS_HIGHLIGHTED)
           {
-            hotlist_iconblock.data.is.sprite = OPEN_DIRECTORY_SPRITE;
-            hotlist_iconblock.data.is.sprite_name_length = strlen(OPEN_DIRECTORY_SPRITE);
+            /* The item is either selected (something is 'hovering' over it)... */
+
+            icon.data.is.sprite             = INSERT_DIRECTORY_SPRITE;
+            icon.data.is.sprite_name_length = strlen(INSERT_DIRECTORY_SPRITE);
           }
           else
           {
-            hotlist_iconblock.data.is.sprite = CLOSED_DIRECTORY_SPRITE;
-            hotlist_iconblock.data.is.sprite_name_length = strlen(CLOSED_DIRECTORY_SPRITE);
+            /* ...or unselected. In that case it is either open or closed. */
+
+            if (list->flags & HOTLIST_D_IS_OPEN)
+            {
+              icon.data.is.sprite             = OPEN_DIRECTORY_SPRITE;
+              icon.data.is.sprite_name_length = strlen(OPEN_DIRECTORY_SPRITE);
+            }
+            else
+            {
+              icon.data.is.sprite             = CLOSED_DIRECTORY_SPRITE;
+              icon.data.is.sprite_name_length = strlen(CLOSED_DIRECTORY_SPRITE);
+            }
           }
         }
         break;
 
         default:
-        temp_width = 0;                                       /* Only here to stop warnings */
+        {
+          temp_width = 0; /* Should never happen... */
+        }
+        break;
       }
 
-      hotlist_iconblock.bbox.xmin = indent;
-      hotlist_iconblock.bbox.xmax = indent + temp_width;
-      hotlist_iconblock.bbox.ymax = (-item_height*item_number);
-      hotlist_iconblock.bbox.ymin = ((-item_height*item_number) - item_height);
+      /* Set the item bounding box appropriately */
 
-      wimp_plot_icon(&hotlist_iconblock);                               /* Plot sprite icon */
+      icon.bbox.xmin = indent;
+      icon.bbox.xmax = indent + temp_width;
 
-      regs.r[0] = 1;
-      
-      if (list->type == hl_url && hl_show_urls) regs.r[1] = (int)list->data.url;
-      else                                      regs.r[1] = (int)list->name;
-      
-      regs.r[2] = 0;
-      wimp_text_op(&regs);                                              /* Get width of text for text icon */
+      icon.bbox.ymin = -item_height * (*curr_item) - item_height;
+      icon.bbox.ymax = -item_height * (*curr_item);
 
+      /* Plot the item */
 
-      if (list->flags & HOTLIST_G_IS_SELECTED)
-        hotlist_iconblock.flags = HOTLIST_TEXT_ICON_FLAGS_SELECTED;
-      else
-        hotlist_iconblock.flags = HOTLIST_TEXT_ICON_FLAGS_UNSELECTED;
+      RetError(wimp_plot_icon(&icon));
 
-      hotlist_iconblock.bbox.xmin = indent+temp_width+2;
-      hotlist_iconblock.bbox.xmax = indent+temp_width+2+regs.r[0] + 12;
-      hotlist_iconblock.bbox.ymax = (-item_height*item_number) - 2;
-      hotlist_iconblock.bbox.ymin = (-item_height*item_number) - item_height + 2;
-      
+      /* We now need to plot the item text. First, get the width, */
+      /* taking the opportunity to point the icon that we'll plot */
+      /* to the appropriate text, too.                            */
+
       if (list->type == hl_url && hl_show_urls)
       {
-        hotlist_iconblock.data.it.buffer      = list->data.url;
-        hotlist_iconblock.data.it.buffer_size = strlen(list->data.url);
+        /* If this is a URL item and we are to show URLs, then find */
+        /* the width of the URL rather than the description.        */
+
+        RetError(utils_text_width(list->data.url, &text_width, 0));
+
+        /* Point to the URL text */
+
+        icon.data.it.buffer      = list->data.url;
+        icon.data.it.buffer_size = strlen(list->data.url);
       }
       else
       {
-        hotlist_iconblock.data.it.buffer      = list->name;
-        hotlist_iconblock.data.it.buffer_size = strlen(list->name);
+        /* Otherwise (any other item, or a URL item when we're showing */
+        /* descriptions) just find the name's width.                   */
+
+        RetError(utils_text_width(list->name, &text_width, 0));
+
+        /* Point to the description */
+
+        icon.data.it.buffer      = list->name;
+        icon.data.it.buffer_size = strlen(list->name);
       }
 
-      wimp_plot_icon(&hotlist_iconblock);
+      /* Set the bounding box for the text. The hard coded */
+      /* constants are nothing critical - just aesthetics. */
 
-      /*! drawit  */
+      icon.bbox.xmin = indent + temp_width + 2;
+      icon.bbox.xmax = indent + temp_width + 2 + text_width + 12;
+
+      icon.bbox.ymin = -item_height * (*curr_item) - item_height + 2;
+      icon.bbox.ymax = -item_height * (*curr_item) - 2;
+
+      /* Set the flags accordingly if the text is selected or unselected */
+
+      if (list->flags & HOTLIST_G_IS_SELECTED) icon.flags = HOTLIST_TEXT_ICON_FLAGS_SELECTED;
+      else                                     icon.flags = HOTLIST_TEXT_ICON_FLAGS_UNSELECTED;
+
+      /* Finally, plot the item. */
+
+      RetError(wimp_plot_icon(&icon));
     }
 
-    item_number++;
+    /* Increment the item number */
+
+    *curr_item += 1;
+
+    /* Recursive redraw for directories */
 
     if (list->type == hl_directory && list->flags & HOTLIST_D_IS_OPEN)
     {
-      _hotlist_draw(list->data.directory_content, first_item, last_item, indent + item_dir_width);
+      RetError(hotlist_draw_r(list->data.directory_content,
+                              first_item,
+                              last_item,
+                              curr_item,
+                              indent + item_dir_width,
+                              item_height,
+                              item_dir_width,
+                              item_url_width));
     }
+
+    /* Move on down the list */
+
     list = list->next;
   }
-}
 
-/*************************************************/
-/* hotlist_draw()                                */
-/*                                               */
-/* This function will recursivly draw the        */
-/* hotlist                                       */
-/*                                               */
-/* Parameters: Pointer to a hotlist_item         */
-/*             First item number to draw         */
-/*             Last item number to draw          */
-/*                                               */
-/* Note:       This function doesn't actually    */
-/*             do any of the real work but       */
-/*             merely sets up global variables   */
-/*             and calls _hotlist_draw()         */
-/*************************************************/
-
-static void hotlist_draw(hotlist_item *list,
-                  unsigned int first_item,
-                  unsigned int last_item)
-{
-  item_number = 0;
-  _hotlist_draw(list, first_item, last_item, 0);
+  return NULL;
 }
 
 /*************************************************/
@@ -1412,7 +1646,7 @@ static void _hotlist_get_max_width(hotlist_item *list, unsigned int indent)
 {
   unsigned int item_height, item_dir_width, item_url_width;
   unsigned int temp_width;
-  _kernel_swi_regs regs;
+  int          text_width;
 
   hotlist_get_entry_sizes(&item_height, &item_dir_width, &item_url_width);
   while(list)
@@ -1432,15 +1666,10 @@ static void _hotlist_get_max_width(hotlist_item *list, unsigned int indent)
       break;
     }
 
-    regs.r[0] = 1;
-    
-    if (list->type == hl_url && hl_show_urls) regs.r[1] = (int)list->data.url;
-    else                                      regs.r[1] = (int)list->name;
-    
-    regs.r[2] = 0;
-    wimp_text_op(&regs);
+    if (list->type == hl_url && hl_show_urls) utils_text_width(list->data.url, &text_width, 0);
+    else                                      utils_text_width(list->name,     &text_width, 0);
 
-    temp_width += indent+2+regs.r[0] + 12;
+    temp_width += indent + 2 + text_width + 12;
 
     if (temp_width > item_number) item_number = temp_width;
 
@@ -1578,8 +1807,7 @@ static void hotlist_get_shape(unsigned int *xmin,
                        hotlist_item *item)
 {
   unsigned int item_height, item_dir_width, item_url_width;
-  int count = 0, temp_width;
-  _kernel_swi_regs regs;
+  int count = 0, temp_width, text_width;
   hotlist_item *tempitem;
 
   hotlist_get_entry_sizes(&item_height, &item_dir_width, &item_url_width);
@@ -1593,13 +1821,8 @@ static void hotlist_get_shape(unsigned int *xmin,
 
   count -= 2;
 
-  regs.r[0] = 1;
-  
-  if (item->type == hl_url && hl_show_urls) regs.r[1] = (int)item->data.url;
-  else                                      regs.r[1] = (int)item->name;
-  
-  regs.r[2] = 0;
-  wimp_text_op(&regs);
+  if (item->type == hl_url && hl_show_urls) utils_text_width(item->data.url, &text_width, 0);
+  else                                      utils_text_width(item->name,     &text_width, 0);
 
   switch(item->type)
   {
@@ -1617,7 +1840,7 @@ static void hotlist_get_shape(unsigned int *xmin,
   }
 
   *xmin = count * item_dir_width;
-  *xmax = count * item_dir_width + temp_width + regs.r[0] + 2 + 12;
+  *xmax = count * item_dir_width + temp_width + 2 + text_width + 12;
 }
 
 /*************************************************/
@@ -1962,8 +2185,8 @@ static void hotlist_window_preopen(hl_opentype type)
     show_error(window_get_wimp_handle(0, hotlist_windowid, &state.window_handle));
     wimp_get_window_state(&state);
     toolbox_get_parent(0, hotlist_windowid, &parent_id, &parent_component);
-    toolbox_show_object(0, 
-                        hotlist_windowid, 
+    toolbox_show_object(0,
+                        hotlist_windowid,
                         Toolbox_ShowObject_FullSpec,
                         &(state.visible_area),
                         parent_id, parent_component);
@@ -2097,7 +2320,7 @@ void hotlist_set_menu_details(ObjectId menuid)
     break;
 
   }
-  
+
   menu_get_sub_menu_show(0, menuid, HOTLIST_DISPLAY_MENUITEM, &submenu_id);
 
   if (hl_show_urls)
@@ -2464,9 +2687,8 @@ static _kernel_oserror * hotlist_load_directory(FILE * fileptr, hotlist_item * t
 
     if (!string_buffer)
     {
-      make_no_memory_error(2);
+      e = make_no_memory_error(2);
 
-      e = &erb;
       goto hotlist_load_directory_exit; /* (See near end of function) */
     }
 
@@ -2510,9 +2732,8 @@ static _kernel_oserror * hotlist_load_directory(FILE * fileptr, hotlist_item * t
 
       if (!next_directory_name)
       {
-        make_no_memory_error(3);
+        e = make_no_memory_error(3);
 
-        e = &erb;
         goto hotlist_load_directory_exit; /* (See near end of function) */
       }
 
@@ -2689,9 +2910,9 @@ _kernel_oserror * hotlist_load(char * filename)
   #endif
 
   /* Finished; redraw issues are left to the caller */
-  
+
   if (!e) return hotlist_modified(HL_MODIFIED_LOAD);
-  
+
   return e;
 }
 
@@ -2844,7 +3065,7 @@ _kernel_oserror * hotlist_initialise(void)
                                           HotlistShowDesc,
                                           hotlist_show_descriptions_handler,
                                           NULL));
-  
+
   RetError(event_register_toolbox_handler(-1,
                                           HotlistShowURLs,
                                           hotlist_show_urls_handler,
@@ -2947,7 +3168,7 @@ static int hotlist_menu_selectall_handler(int event_code, ToolboxEvent * event, 
 
     hotlist_set_menu_details(id_block->self_id);
   }
-  
+
   menu_select = 0;
 
   return 1;
@@ -3038,9 +3259,9 @@ static int hotlist_menu_delete_handler(int event_code, ToolboxEvent *event, IdBl
   hotlist_redraw_items(0, noitems);
   hotlist_window_preopen(already_open);
   toolbox_hide_object(0, id_block->ancestor_id);
-  
+
   hotlist_modified(HL_MODIFIED_DELETE);
-  
+
   return 0;
 }
 
@@ -3365,9 +3586,9 @@ static int hotlist_reset_directory_handler(int event_code, ToolboxEvent *event, 
 static void hotlist_drag_renderer(hotlist_item *item, unsigned int item_height, unsigned int item_dir_width, unsigned int item_url_width)
 {
   /* DONT PUT Printf's in here, doesn't work (on pipefs anyway) */
+
   WimpIconBlock hotlist_iconblock;
-  int temp_width;
-  _kernel_swi_regs regs;
+  int           temp_width, text_width;
 
   hotlist_iconblock.flags = HOTLIST_SPRITE_ICON_FLAGS;
 
@@ -3402,19 +3623,12 @@ static void hotlist_drag_renderer(hotlist_item *item, unsigned int item_height, 
     /* Error has happened, don't know what to do about it */
   }
 
-  regs.r[0] = 1;
-  
-  if (item->type == hl_url && hl_show_urls) regs.r[1] = (int)item->data.url;
-  else                                      regs.r[1] = (int)item->name;
-  regs.r[2] = 0;
-  if (wimp_text_op(&regs))                                              /* Get width of text for text icon */
-  {
-    /* Error has happened, don't know what to do about it */
-  }
+  if (item->type == hl_url && hl_show_urls) utils_text_width(item->data.url, &text_width, 0);
+  else                                      utils_text_width(item->name,     &text_width, 0);
 
   hotlist_iconblock.flags               = HOTLIST_TEXT_ICON_FLAGS_DRAG;
   hotlist_iconblock.bbox.xmin           = temp_width + 4;
-  hotlist_iconblock.bbox.xmax           = temp_width + regs.r[0] + 16;
+  hotlist_iconblock.bbox.xmax           = temp_width + text_width + 16;
   hotlist_iconblock.bbox.ymax           = item_height;
   hotlist_iconblock.bbox.ymin           = 4;
   if (item->type == hl_url && hl_show_urls)
@@ -3771,7 +3985,7 @@ static int hotlist_drag_completed_handler(int event_code, WimpPollBlock *event, 
   }
   else
   {
-    if (hotlist_count_selected_items() == 1 && (sourceitem = hotlist_find_selected_item())->type == hl_url) 
+    if (hotlist_count_selected_items() == 1 && (sourceitem = hotlist_find_selected_item())->type == hl_url)
     {
       /* Dropped in non hotlist window - save as a URI file */
 
@@ -3781,7 +3995,7 @@ static int hotlist_drag_completed_handler(int event_code, WimpPollBlock *event, 
     {
       /* Can't save URI file when saving more than one URL so save HTML file instead*/
       hotlist_initiate_html_save("Hotlist");
-      
+
     }
     /* Drag was dropped in non-hotlist window */
   }
@@ -3812,7 +4026,7 @@ void hotlist_autoscroll(int x, int y, int window_handle)
   }
 
   wimp_get_window_state(&state);
-  
+
   window_get_extent(0, object, &extent);
 
   /* Auto scrolling of hotlist window when dragging */
@@ -3862,7 +4076,7 @@ void hotlist_autoscroll(int x, int y, int window_handle)
     toolbox_get_parent(0, object, &parent, &component);
     toolbox_show_object(0, object, Toolbox_ShowObject_FullSpec, &(state.visible_area), parent, component);
   }
-  
+
   if (scroll_changed & 1)
   {
     vscroll_speed += HOTLIST_SCROLL_SPEED_INC;
@@ -3943,9 +4157,9 @@ static int hotlist_null_handler(int event_code, WimpPollBlock *event, IdBlock *i
         {
           _swix(OS_ReadMonotonicTime, _OUTR(0, 0), &new_time);
           /* Auto open directories */
-          if (autoopen_delay &&
+          if (choices.autoopen_delay &&
               !(item->flags & HOTLIST_D_IS_OPEN) &&
-              (new_time - autoopen_oldtime) > autoopen_delay)
+              (new_time - autoopen_oldtime) > choices.autoopen_delay)
           {
             item->flags |= HOTLIST_D_IS_OPEN;
             hotlist_window_preopen(already_open);
@@ -3989,7 +4203,7 @@ static int hotlist_null_handler(int event_code, WimpPollBlock *event, IdBlock *i
 /* Simple non-scrolling selection box, to be improved later */
 
 /* Workarea relative corner of selection box may not be needed later */
-static int selection_x, selection_y; 
+static int selection_x, selection_y;
 
 /*************************************************/
 /* hotlist_start_drag()                          */
@@ -4135,62 +4349,6 @@ int hotlist_null_drag_select_handler(int event_code, WimpPollBlock * event, IdBl
   return 0;
 }
 
-
-/*************************************************/
-/* hotlist_count_selected_items_r()              */
-/*                                               */
-/* Recursive back-end to                         */
-/* hotlist_count_selected_items.                 */
-/*                                               */
-/* Parameters: Pointer to a hotlist_item struct  */
-/*             representing the first item in a  */
-/*             directory to count.               */
-/*                                               */
-/* Returns:    The number of items selected in   */
-/*             that directory (selected          */
-/*             directory items only count as 1;  */
-/*             their contents are not counted).  */
-/*************************************************/
-
-static void hotlist_count_selected_items_r(hotlist_item * list)
-{
-  while(list)
-  {
-    if (list->flags & HOTLIST_G_IS_SELECTED)
-    {
-      item_number++;
-    }
-    else
-    {
-      /* Only recurse through directories which are not selected */
-
-      if (list->type == hl_directory)
-      {
-        hotlist_count_selected_items_r(list->data.directory_content);
-      }
-    }
-
-    list = list->next;
-  }
-}
-
-/*************************************************/
-/* hotlist_count_selected_items()                */
-/*                                               */
-/* Count the number of items in a selection.     */
-/*                                               */
-/* Returns:    The number of selected items.     */
-/*************************************************/
-
-static unsigned int hotlist_count_selected_items(void)
-{
-  item_number = 0;
-
-  hotlist_count_selected_items_r(hotlist_root->data.directory_content);
-
-  return item_number;
-}
-
 /*************************************************/
 /* hotlist_contents_selected()                   */
 /*                                               */
@@ -4308,13 +4466,13 @@ _kernel_oserror *hotlist_initiate_uri_save(hotlist_item *item)
   WimpGetPointerInfoBlock block;
   WimpMessage message;
   int new_task_handle;
-  
+
   wimp_get_pointer_info(&block);
-  
+
   message.hdr.size        = sizeof(WimpMessage);
   message.hdr.your_ref    = 0;
   message.hdr.action_code = Wimp_MDataSave;
-  
+
   message.data.data_save.destination_window = block.window_handle;
   message.data.data_save.destination_icon   = block.icon_handle;
   message.data.data_save.destination_x      = block.x;
@@ -4322,7 +4480,7 @@ _kernel_oserror *hotlist_initiate_uri_save(hotlist_item *item)
   message.data.data_save.estimated_size     = strlen(item->data.url)+1;
   message.data.data_save.file_type          = 0xf91; /* URI file - to be replaced with a defined value */
   urlutils_leafname_from_url(item->data.url, message.data.data_save.leaf_name, 212);
-  
+
   wimp_send_message(Wimp_EUserMessageRecorded,
                     &message,
                     block.window_handle,
@@ -4332,7 +4490,7 @@ _kernel_oserror *hotlist_initiate_uri_save(hotlist_item *item)
   hotlist_save_item = item;
   hotlist_ram_transfer_sent = 0;
   hotlist_save_type = HL_SAVE_URI;
-  
+
   return NULL;
 }
 
@@ -4341,22 +4499,22 @@ _kernel_oserror *hotlist_initiate_html_save(char *filename)
   WimpGetPointerInfoBlock block;
   WimpMessage message;
   int new_task_handle;
-  
+
   wimp_get_pointer_info(&block);
-  
+
   message.hdr.size        = sizeof(WimpMessage);
   message.hdr.your_ref    = 0;
   message.hdr.action_code = Wimp_MDataSave;
-  
+
   message.data.data_save.destination_window = block.window_handle;
   message.data.data_save.destination_icon   = block.icon_handle;
   message.data.data_save.destination_x      = block.x;
   message.data.data_save.destination_y      = block.y;
   message.data.data_save.estimated_size     = -1; /* Dunno how big it's going to be */
   message.data.data_save.file_type          = FileType_HTML;
-  
+
   strncpy(message.data.data_save.leaf_name, filename, 212);
-  
+
   wimp_send_message(Wimp_EUserMessageRecorded,
                     &message,
                     block.window_handle,
@@ -4365,7 +4523,7 @@ _kernel_oserror *hotlist_initiate_html_save(char *filename)
 
   hotlist_ram_transfer_sent = 0;
   hotlist_save_type = HL_SAVE_HTML;
-  
+
   return NULL;
 }
 
@@ -4374,7 +4532,7 @@ int hotlist_data_save_ack_handler(WimpMessage *message, void *handle)
   FILE *fileptr;
   int new_task_handle;
   _kernel_oserror *e;
-  
+
   switch(hotlist_save_type)
   {
     case HL_SAVE_URI:
@@ -4384,7 +4542,7 @@ int hotlist_data_save_ack_handler(WimpMessage *message, void *handle)
       if (fileptr)
       {
         fprintf(fileptr, hotlist_save_item->data.url);
-        
+
         if (fclose(fileptr))
         {
           show_error_ret(_kernel_last_oserror());
@@ -4392,13 +4550,13 @@ int hotlist_data_save_ack_handler(WimpMessage *message, void *handle)
           hotlist_save_type = HL_SAVE_NONE;
           return 1;
         }
-      
+
         e = _swix(OS_File,
                   _INR(0,2),
                   18,
                   message->data.data_save_ack.leaf_name,
                   0xf91);
-        
+
         if (e)
         {
           show_error_ret(e);
@@ -4406,16 +4564,16 @@ int hotlist_data_save_ack_handler(WimpMessage *message, void *handle)
           hotlist_save_type = HL_SAVE_NONE;
           return 1;
         }
-        
+
         message->hdr.action_code = Wimp_MDataLoad;
         message->hdr.your_ref    = message->hdr.my_ref;
-        
+
         e = wimp_send_message(Wimp_EUserMessageRecorded,
                               message,
                               message->hdr.sender,
                               0,
                               &new_task_handle);
-        
+
         if (e)
         {
           show_error_ret(e);
@@ -4432,34 +4590,34 @@ int hotlist_data_save_ack_handler(WimpMessage *message, void *handle)
       {
         show_error_ret(_kernel_last_oserror());
       }
-      
+
       hotlist_save_item = NULL;
       hotlist_save_type = HL_SAVE_NONE;
       return 1;
     }
     break;
-    
+
     case HL_SAVE_HTML:
-    
+
     e = hotlist_save_hotlist(message->data.data_save_ack.leaf_name, 1);
-    
+
     hotlist_clear_selection();
-    
+
     if (e)
     {
       show_error_ret(e);
       hotlist_save_type = HL_SAVE_NONE;
     }
-    
+
     message->hdr.action_code = Wimp_MDataLoad;
     message->hdr.your_ref    = message->hdr.my_ref;
-    
+
     e = wimp_send_message(Wimp_EUserMessageRecorded,
                           message,
                           message->hdr.sender,
                           0,
                           &new_task_handle);
-    
+
     if (e)
     {
       show_error_ret(e);
@@ -4469,15 +4627,15 @@ int hotlist_data_save_ack_handler(WimpMessage *message, void *handle)
       }
       hotlist_save_type = HL_SAVE_NONE;
     }
-    
+
     return 1;
-    
+
     break;
-    
+
     default:
     break;
   }
-  
+
   return 0;
 }
 
@@ -4486,7 +4644,7 @@ int hotlist_ram_fetch_handler(WimpMessage *message, void *handle)
 {
   int left, towrite, new_task_handle;
   _kernel_oserror *e;
-  
+
   if (hotlist_save_item)
   {
     /* Calculate the number of bytes left to send */
@@ -4511,20 +4669,20 @@ int hotlist_ram_fetch_handler(WimpMessage *message, void *handle)
     message->hdr.your_ref             = message->hdr.my_ref;
     message->hdr.action_code          = Wimp_MRAMTransmit;
     message->data.ram_transmit.nbytes = towrite;
-    
+
     e = wimp_send_message(Wimp_EUserMessage,
                           message,
                           message->hdr.sender,
                           0,
                           &new_task_handle);
-    
+
     if (e)
     {
       hotlist_save_item = NULL;
       show_error_ret(e);
       return 1;
     }
-    
+
     /* If no bytes were transmitted this is the last part of the ram transfer */
     if (!left)
     {
@@ -4532,10 +4690,10 @@ int hotlist_ram_fetch_handler(WimpMessage *message, void *handle)
       hotlist_ram_transfer_sent = 0;
       return 1;
     }
-    
+
     /* Increase the total number of bytes send by the number just send */
     hotlist_ram_transfer_sent += towrite;
-    
+
     return 1;
   }
   return 0;

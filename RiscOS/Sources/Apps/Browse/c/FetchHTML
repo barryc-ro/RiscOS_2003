@@ -32,6 +32,7 @@
 #include "Browser.h"
 #include "Cookies.h"
 #include "Fetch.h" /* (Which itself includes URLstat.h) */
+#include "Save.h"  /* (For Save_ScrapFile only)         */
 #include "URLutils.h"
 #include "URLveneer.h"
 
@@ -167,8 +168,8 @@ _kernel_oserror * html_get(char * url, char * extradata, int * handle, int metho
       if (!flex_alloc((flex_ptr) &up->extradata, len + 3))
       {
         url_deregister(0,h);
-        make_no_fetch_memory_error(2);
-        return &erb;
+
+        return make_no_fetch_memory_error(2);
       }
       else
       {
@@ -203,8 +204,8 @@ _kernel_oserror * html_get(char * url, char * extradata, int * handle, int metho
         if (!ok)
         {
           url_deregister(0, h);
-          make_no_fetch_memory_error(3);
-          return &erb;
+
+          return make_no_fetch_memory_error(3);
         }
 
         StrNCpy0(head, "Content-Type: application/x-www-form-urlencoded");
@@ -213,8 +214,8 @@ _kernel_oserror * html_get(char * url, char * extradata, int * handle, int metho
         if (!ok)
         {
           url_deregister(0, h);
-          make_no_fetch_memory_error(4);
-          return &erb;
+
+          return make_no_fetch_memory_error(4);
         }
       }
     }
@@ -231,8 +232,8 @@ _kernel_oserror * html_get(char * url, char * extradata, int * handle, int metho
       if (!ok)
       {
         url_deregister(0, h);
-        make_no_fetch_memory_error(5);
-        return &erb;
+
+        return make_no_fetch_memory_error(5);
       }
     }
 
@@ -245,8 +246,8 @@ _kernel_oserror * html_get(char * url, char * extradata, int * handle, int metho
       if (!ok)
       {
         url_deregister(0, h);
-        make_no_fetch_memory_error(6);
-        return &erb;
+
+        return make_no_fetch_memory_error(6);
       }
     }
 
@@ -606,13 +607,11 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
 
     if (!fetch_buffer)
     {
-      make_no_cont_memory_error(8);
-
       #ifdef TRACE
         if (tl & (1u<<6)) Printf("html_get_next_token: Exiting with error\n");
       #endif
 
-      return &erb;
+      return make_no_cont_memory_error(8);
     }
   }
 
@@ -676,7 +675,7 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
       if (!e && (status & (1u<<16))) e = cookies_process_cookie(b);
     }
   }
-  else
+  else if (up->fetching) /* Don't repeat this over and over... */
   {
     /* This is an internal URL, so treat specially */
 
@@ -687,29 +686,114 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
 
     if (*source) flex_free(source);
 
-    /* Look up the token embedded in the URL */
-
-    lookup_token(url + Int_URL_Len, 1, 0);
-
-    /* Find a ':' separating extra information and point just past it */
-
-    exoff = urlutils_internal_extra(url);
-    if (exoff) extra = url + exoff;
-
-    /* Work out the length that the HTML file we're about to generate will be; */
-    /* this will be at least as long as the looked up token, plus a display    */
-    /* type dependent extra amount.                                            */
-
-    len = strlen(tokens) + 1;
+    /* Work out the length that the HTML file we're about to generate will be */
 
     switch (b->displayed)
     {
       case Display_External_Image:
       {
+        int protolen;
+
+        /* Look up the token embedded in the URL */
+
+        lookup_token(url + Int_URL_Len, 1, 0);
+
+        /* Find a ':' separating extra information and point just past it */
+
+        exoff = urlutils_internal_extra(url);
+        if (exoff) extra = url + exoff;
+
+        len = strlen(tokens) + 1;
+
         if (*extra)
         {
           toff = urlutils_internal_tail(url);
           if (toff) tail = url + toff;
+        }
+
+        /* Is this a system variable name for fetching, e.g. Wimp$Scrap? */
+
+        protolen = strlen(FileMethod ProtocolSeparator "<"); /* (URLutils.h) */
+
+        if (
+             !strncmp(extra,
+                      FileMethod ProtocolSeparator "<",
+                      protolen)
+             &&
+             extra[strlen(extra) - 1] == '>'
+           )
+        {
+          int              required;
+          _kernel_swi_regs r;
+
+          /* We'll have to trash the ref_url block. We know ref_url is at     */
+          /* least as long as URL, so extract the system variable name to it. */
+
+          strncpy(ref_url, extra + protolen, strlen(extra) - protolen - 1); /* -1 to skip the closing '>' */
+          ref_url[strlen(extra) - protolen - 1] = 0;
+
+          /* Now find out how long the expanded form would be */
+
+          r.r[0] = (int) ref_url;
+          r.r[1] = (int) NULL;
+          r.r[2] = -1;
+          r.r[3] = 0;
+          r.r[4] = 0;
+
+          /* _swix will not work correctly for this particular SWI if */
+          /* requiring the returned R2 value. Something to do with    */
+          /* the call relying on generating an error, but _swix spots */
+          /* it and pulls out earlier than the call expects. Or some  */
+          /* such thing...                                            */
+
+          _kernel_swi(OS_ReadVarVal, &r, &r);
+
+          required = -r.r[2];
+
+          /* Woah - system variable wasn't defined... */
+
+          if (!required)
+          {
+            erb.errnum = Utils_Error_Custom_Normal;
+
+            strcpy(erb.errmess, "<");
+            strcat(erb.errmess, ref_url);
+            strcat(erb.errmess, ">");
+            strcat(erb.errmess, lookup_token("NotDefined: not defined.",0,0));
+
+            return &erb;
+          }
+
+          if (required < 0 || required >= sizeof(ref_url) - 1) /* -1 = allow for terminator */
+          {
+            /* Well, we sort of haven't got enough memory. Ahem. */
+
+            return make_no_memory_error(8);
+          }
+
+          /* Otherwise, expand the variable (_swix is OK here as we don't */
+          /* want any returned register value).                           */
+
+          _swix(OS_ReadVarVal,
+                _INR(0,4),
+
+                ref_url,
+                ref_url,
+                sizeof(ref_url),
+                0,
+                4);
+
+          /* Ensure it is terminated correctly */
+
+          ref_url[required - 1] = 0;
+
+          /* Turn it into a fetchable URL */
+
+          urlutils_pathname_to_url(ref_url, sizeof(ref_url));
+
+          /* Point to this URL */
+
+          extra = url = ref_url;
         }
 
         /* Note that this is a very slow function call... */
@@ -732,6 +816,35 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
         }
       }
       break;
+
+      case Display_Scrap_File:
+      {
+        int type;
+
+        if (*source) flex_free(source);
+
+        /* Find the file length */
+
+        _swix(OS_File,
+              _INR(0,1) | _OUT(0) | _OUT(4),
+
+              17, /* Read catalogue info */
+              Save_ScrapFile,
+
+              &type,
+              &len);
+
+        if (type != 1)
+        {
+          erb.errnum = Utils_Error_Custom_Normal;
+
+          StrNCpy0(erb.errmess,
+                   lookup_token("WhatScrap:Cannot find the page to load; the sending application may have died.",0,0));
+
+          return &erb;
+        }
+      }
+      break;
     }
 
     /* Claim memory for the page; complain if this fails */
@@ -740,13 +853,11 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
 
     if (!ok)
     {
-      make_no_cont_memory_error(1);
-
       #ifdef TRACE
         if (tl & (1u<<6)) Printf("html_get_next_token: Exiting with error\n");
       #endif
 
-      return &erb;
+      return make_no_cont_memory_error(1);
     }
 
     /* Construct the page in the claimed block */
@@ -757,6 +868,27 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
       {
         memset(*source, 0, len);
         sprintf(*source, tokens, extra, extra, tail);
+      }
+      break;
+
+      case Display_Scrap_File:
+      {
+        FILE * file;
+
+        /* Load and delete the scrap file */
+
+        file = fopen(Save_ScrapFile, "rb");
+
+        if (!file) return _kernel_last_oserror();
+
+        if (fread(*source, 1, len, file) < len)
+        {
+          fclose(file);
+          return _kernel_last_oserror();
+        }
+
+        fclose(file);
+        remove(Save_ScrapFile);
       }
       break;
     }
@@ -836,13 +968,11 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
 
     if (!ok)
     {
-      make_no_cont_memory_error(1);
-
       #ifdef TRACE
         if (tl & (1u<<6)) Printf("html_get_next_token: Exiting with error\n");
       #endif
 
-      return &erb;
+      return make_no_cont_memory_error(1);
     }
 
     /* The data block has been created/extended successfully, so copy the */
@@ -1401,8 +1531,8 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
 
               up->fetched = 0;
 
-              if (b->hnum && b->hpos != 1) redirect = Internal_URL "PExtImage"; /* Have a 'Go back' link */
-              else                         redirect = Internal_URL "PExtImNoH"; /* No 'Go back' link     */
+              if (b->hnum && b->hpos != 1) redirect = Internal_URL ForExternalHImage; /* Have a 'Go back' link */
+              else                         redirect = Internal_URL ForExternalNImage; /* No 'Go back' link     */
 
               /* Start a fetch on the new URL */
 

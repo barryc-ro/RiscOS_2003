@@ -1,0 +1,1330 @@
+/***************************************************/
+/* File   : Protocols.c                            */
+/*                                                 */
+/* Purpose: Handle some common protocol stuff,     */
+/*          such as inter-application data         */
+/*          transfer.                              */
+/*                                                 */
+/*          Function naming convention is as usual */
+/*          a source leafname derived prefix, then */
+/*          a code based on the protocol being     */
+/*          dealt with:                            */
+/*                                                 */
+/*          _atat_  App To App Transfer            */
+/*          _pp_    Printer Protocol               */
+/*          _auh_   Acorn URI Handler              */
+/*          _ih_    Interactive Help               */
+/*                                                 */
+/*          This is followed by the direction, so  */
+/*          to speak - i.e. '_got_' for got a      */
+/*          message, '_send_' for sending a        */
+/*          message. Alternatively, a prefix       */
+/*          '_bounced' is used for messages which  */
+/*          return as a UserMessage_Acknowledge    */
+/*          event. Functions for a given set of    */
+/*          messages in a protocol appear in the   */
+/*          the order _send_, _got_, _bounced.     */
+/*                                                 */
+/* Author : A.D.Hodgkinson                         */
+/*                                                 */
+/* History: 29-Aug-97: Created.                    */
+/***************************************************/
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "swis.h"
+#include "kernel.h"
+
+#include "URI.h"     /* URI handler API, in URILib:h */
+
+#include "wimp.h"
+#include "wimplib.h"
+#include "event.h"
+
+#include "toolbox.h"
+
+#include "svcprint.h"
+#include "Global.h"
+#include "Utils.h"
+
+#include "FetchPage.h"
+#include "Printing.h"
+#include "Save.h"
+#include "Toolbars.h"
+#include "URLutils.h"
+#include "Windows.h"
+
+#include "Protocols.h"
+
+/* Conditional includes */
+
+#ifdef TRACE
+  #include "Trace.h"
+#endif
+
+/* Local statics */
+
+static WimpMessage   pending;
+static int           pending_type    = -1; /* If this is -1, there is no pending message */
+
+static int           recorded_my_ref = 0;
+static int           recorded_sender = 0;
+static int           recorded_type   = 0;
+static int           recorded_window = 0;
+
+static void        * rtb             = NULL; /* RAM transfer buffer */
+
+static char          leafname[Limits_Leafname];
+
+/* Local definitions */
+
+#define RTB_Size 2048 /* RAM transfer buffer size */
+
+/*************************************************/
+/* protocols_atat_got_data_save()                */
+/*                                               */
+/* Handle reception of a Message_DataSave - load */
+/* data from another application. Handles RAM    */
+/* transfer for some filetypes.                  */
+/*                                               */
+/* See PRM 3-252, 253, 255 and 256.              */
+/*                                               */
+/* Parameters: Pointer to the WimpMessage struct */
+/*             for the received message. The     */
+/*             contents will be modified and     */
+/*             used in a reply.                  */
+/*************************************************/
+
+_kernel_oserror * protocols_atat_got_data_save(WimpMessage * m)
+{
+  _kernel_oserror * e = NULL;
+
+  #ifdef TRACE
+    if (tl & (1u<<28)) Printf("protocols_atat_got_data_save: Called\n");
+  #endif
+
+  /* First, we may need to use file transfer so fill in */
+  /* a pending DataSaveAck block for later use.         */
+
+  pending_type = Wimp_MDataSaveAck;
+
+  pending = *m;
+
+  pending.hdr.your_ref    = m->hdr.my_ref;
+  pending.hdr.action_code = Wimp_MDataSaveAck;
+
+  /* We're not the filer, so the data is unsafe */
+
+  pending.data.data_save_ack.estimated_size = -1;
+
+  /* Record the leafname, then ask the sender to save the data */
+  /* to a scrap file                                           */
+
+  if (*pending.data.data_save_ack.leaf_name)
+  {
+    char * leaf = pending.data.data_save_ack.leaf_name;
+    int    copy = 0;
+
+    while (leaf && *leaf > 31 && copy < sizeof(leafname)) leafname[copy++] = *leaf++;
+
+    if (copy == sizeof(leafname)) leafname[copy - 1] = 0;
+    else                          leafname[copy]     = 0;
+  }
+
+  strcpy(pending.data.data_save_ack.leaf_name, Save_ScrapFile);
+
+  /* Update the size information */
+
+  pending.hdr.size = (int) WordAlign(strlen(Save_ScrapFile) + 45);
+
+  /* For URI / URL files, can use RAM transfer */
+
+  if (
+       m->data.data_save.file_type == FileType_URL ||
+       m->data.data_save.file_type == FileType_URI
+     )
+  {
+    WimpMessage * rat = m;
+
+    /* Remember the filetype for future reference */
+
+    recorded_type   = m->data.data_save.file_type;
+    recorded_window = m->data.data_save.destination_window;
+
+    /* Free any existing RAM transfer buffer and allocate a new one */
+
+    if (rtb) free(rtb);
+    rtb = malloc(RTB_Size);
+
+    /* If the allocation fails, drop through to a scrap file method */
+
+    if (rtb)
+    {
+      #ifdef TRACE
+        malloccount += RTB_Size;
+        if (tl & (1u<<13)) Printf("** malloccount (protocols_atat_got_ram_transmit): \0211%d\0217\n",malloccount);
+      #endif
+
+      rat->hdr.size         = 28;
+      rat->hdr.your_ref     = m->hdr.my_ref;
+      rat->hdr.action_code  = Wimp_MRAMFetch;
+
+      rat->data.ram_fetch.buffer      = rtb;
+      rat->data.ram_fetch.buffer_size = RTB_Size;
+
+      /* Remember who send the Message_DataSave */
+
+      recorded_sender = m->hdr.sender;
+
+      /* Send it */
+
+      #ifdef TRACE
+        if (tl & (1u<<28)) Printf("protocols_atat_got_data_save: Sending Message_RAMFetch in response\n");
+      #endif
+
+      e = wimp_send_message(Wimp_EUserMessageRecorded, rat, m->hdr.sender, 0, NULL);
+
+      /* Remember my_ref in case it bounces */
+
+      recorded_my_ref = rat->hdr.my_ref;
+    }
+  }
+
+  /* Otherwise send the message */
+
+  else
+  {
+    #ifdef TRACE
+      if (tl & (1u<<28)) Printf("protocols_atat_got_data_save: Sending Message_DataSaveAck in response\n");
+    #endif
+
+    pending_type = -1;
+
+    /* Before doing this, make sure Scrap is present */
+
+    if (utils_check_scrap()) return NULL;
+
+    e = wimp_send_message(Wimp_EUserMessage, &pending, m->hdr.sender, 0, NULL);
+  }
+
+  return e;
+}
+
+/*************************************************/
+/* protocols_atat_got_data_load()                */
+/*                                               */
+/* Deals with a Message_DataLoad - if we can     */
+/* handle the file, load it.                     */
+/*                                               */
+/* See PRM 3-253.                                */
+/*                                               */
+/* Parameters: Pointer to the WimpMessage struct */
+/*             for the received message. The     */
+/*             contents will be modified and     */
+/*             used in a reply.                  */
+/*************************************************/
+
+_kernel_oserror * protocols_atat_got_data_load(WimpMessage * m)
+{
+  #ifdef TRACE
+    if (tl & (1u<<28)) Printf("protocols_atat_got_data_load: Called\n");
+  #endif
+
+  /* Proceed only if it's a filetype we can handle */
+
+  if (
+       m->data.data_load.file_type == FileType_HTML ||
+       m->data.data_load.file_type == FileType_TEXT ||
+       m->data.data_load.file_type == FileType_GIF  ||
+       m->data.data_load.file_type == FileType_JPEG ||
+       m->data.data_load.file_type == FileType_PNG  ||
+       m->data.data_load.file_type == FileType_TIFF ||
+       m->data.data_load.file_type == FileType_URL  ||
+       m->data.data_load.file_type == FileType_URI
+     )
+  {
+    WimpMessage * dla = m;
+
+    #ifdef TRACE
+      if (tl & (1u<<28)) Printf("protocols_atat_got_data_load: Can handle this filetype (0x%03x)\n", m->data.data_load.file_type);
+    #endif
+
+    if (m->data.data_load.destination_window <= 0)
+    {
+      /* Load file to icon bar - i.e. open a new window. */
+
+      char url[Limits_URL];
+
+      if (
+           m->data.data_load.file_type != FileType_URI &&
+           m->data.data_load.file_type != FileType_URL
+         )
+      {
+        /* Not a URI or URL file, so text, HTML, image... */
+
+        StrNCpy0(url, m->data.data_load.leaf_name);
+        urlutils_pathname_to_url(url, sizeof(url));
+
+        /* For text and HTML, we can use an internal URL scheme */
+        /* to allow the fetcher to load the scrap file and then */
+        /* remove it, as it should. For other types, the main   */
+        /* fetcher modules must be used; so we can't get rid    */
+        /* of the scrap file. If something else trashes it,     */
+        /* tough.                                               */
+
+        if (
+             m->data.data_load.file_type == FileType_TEXT ||
+             m->data.data_load.file_type == FileType_HTML
+           )
+        {
+          StrNCpy0(url, Internal_URL ForScrapFile ":");
+
+          /* Append the application suggested leafname */
+
+          if (!*leafname)
+          {
+            if (strlen(url) + 9 <= sizeof(url)) strcat(url, "HTMLfile");
+          }
+          else
+          {
+            if (strlen(url) + strlen(leafname) + 1 <= sizeof(url)) strcat(url, leafname);
+          }
+        }
+      }
+      else
+      {
+        urlutils_load_uri_file(url, sizeof(url), m->data.data_load.leaf_name);
+
+        /* Delete scrap if used - we've finished with the */
+        /* file now, certainly.                           */
+
+        if (!strcmp(m->data.data_load.leaf_name, Save_ScrapFile)) remove(Save_ScrapFile);
+      }
+
+      ChkError(windows_create_browser(url, NULL, NULL, NULL, 0));
+    }
+    else
+    {
+      /* Load file to a browser window. Need to find it's */
+      /* browser_data structure.                          */
+
+      char           url[Limits_URL];
+      browser_data * b = NULL;
+
+      utils_browser_from_window(m->data.data_load.destination_window, &b);
+
+      if (b)
+      {
+        if (
+             m->data.data_load.file_type != FileType_URI &&
+             m->data.data_load.file_type != FileType_URL
+           )
+        {
+          StrNCpy0(url, m->data.data_load.leaf_name);
+          urlutils_pathname_to_url(url, sizeof(url));
+
+          /* As for the case when opening a new window, we can use */
+          /* an internal URL scheme for HTML and text files.       */
+
+          if (
+               m->data.data_load.file_type == FileType_TEXT ||
+               m->data.data_load.file_type == FileType_HTML
+             )
+          {
+            StrNCpy0(url, Internal_URL ForScrapFile ":");
+
+            /* Append the application suggested leafname */
+
+            if (!*leafname)
+            {
+              if (strlen(url) + 9 <= sizeof(url)) strcat(url, "HTMLfile");
+            }
+            else
+            {
+              if (strlen(url) + strlen(leafname) + 1 <= sizeof(url)) strcat(url, leafname);
+            }
+          }
+        }
+        else urlutils_load_uri_file(url, sizeof(url), m->data.data_load.leaf_name);
+
+        ChkError(fetchpage_new(b, url, 1, 0));
+      }
+    }
+
+    dla->hdr.your_ref    = m->hdr.my_ref;
+    dla->hdr.action_code = Wimp_MDataLoadAck;
+
+    #ifdef TRACE
+      if (tl & (1u<<28)) Printf("protocols_atat_got_data_load: Sending Message_DataLoadAck in response\n");
+    #endif
+
+    ChkError(wimp_send_message(Wimp_EUserMessage, dla, m->hdr.sender, 0, NULL));
+  }
+
+  return NULL;
+}
+
+/*************************************************/
+/* protocols_atat_got_data_open()                */
+/*                                               */
+/* Handle reception of a Message_DataOpen - we   */
+/* may want to load a given file. It is an       */
+/* application to application related the        */
+/* consideration as we are transfering data      */
+/* from the Filer, in a sense.                   */
+/*                                               */
+/* See PRM 3-265.                                */
+/*                                               */
+/* Parameters: Pointer to the WimpMessage struct */
+/*             for the received message. The     */
+/*             contents will be modified and     */
+/*             used in a reply.                  */
+/*************************************************/
+
+_kernel_oserror * protocols_atat_got_data_open(WimpMessage * m)
+{
+  #ifdef TRACE
+    if (tl & (1u<<28)) Printf("protocols_atat_got_data_open: Called\n");
+  #endif
+
+  /* Don't want to load a text file from double-clicking, */
+  /* only by dragging to a window or the icon bar icon.   */
+  /* Similarly, ANT's URL files should only be loaded if  */
+  /* dragged on, and the same is true of URI files if we  */
+  /* are using the URI handler.                           */
+
+  if (
+       m->data.data_open.file_type == FileType_TEXT ||
+       m->data.data_open.file_type == FileType_URL  ||
+       (
+         m->data.data_open.file_type == FileType_URI &&
+         uri_module_present
+       )
+     )
+     return NULL;
+
+  /* Now treat as a DataLoad message to avoid duplicating load code. */
+
+  m->data.data_load.destination_window = 0; /* Force a new window to open */
+  m->data.data_load.destination_icon   = -1;
+  m->data.data_load.estimated_size     = 0;
+
+  #ifdef TRACE
+    if (tl & (1u<<28)) Printf("protocols_atat_got_data_open: Exitting through protocols_atat_got_data_load\n");
+  #endif
+
+  return protocols_atat_got_data_load(m);
+}
+
+/*************************************************/
+/* protocols_atat_got_ram_transmit()             */
+/*                                               */
+/* Deals with a Message_RAMTransmit - we have    */
+/* some data in the 'rtb' buffer.                */
+/*                                               */
+/* See PRM 3-255, 256.                           */
+/*                                               */
+/* Parameters: Pointer to the WimpMessage struct */
+/*             for the received message. The     */
+/*             contents will be modified and     */
+/*             used in a reply.                  */
+/*************************************************/
+
+_kernel_oserror * protocols_atat_got_ram_transmit(WimpMessage * m)
+{
+  _kernel_oserror * e        = NULL;
+  int               ok       = 1;
+  int               finished = 0;
+
+  #ifdef TRACE
+    if (tl & (1u<<28)) Printf("protocols_atat_got_ram_transmit: Called with %d bytes to receive\n", m->data.ram_transmit.nbytes);
+  #endif
+
+  /* Flag if we've finished */
+
+  if (m->data.ram_transmit.nbytes < RTB_Size) finished = 1;
+  else if (m->data.ram_transmit.nbytes > RTB_Size) m->data.ram_transmit.nbytes = RTB_Size; /* You *never* know...! */
+
+  /* If we're here, then any pending Message_DataSaveAck should */
+  /* be cleared as from here on in, any error results in the    */
+  /* transfer being abandoned (PRM 3-256).                      */
+
+  if (
+       pending_type == Wimp_MDataSaveAck &&
+       recorded_sender == m->hdr.sender
+     )
+     pending_type = -1;
+
+  /* We should know where the buffer is */
+
+  #ifdef TRACE
+
+    if (m->data.ram_transmit.buffer != rtb)
+    {
+      erb.errnum = Utils_Error_Custom_Normal;
+
+      sprintf(erb.errmess,
+              "Expected to get buffer %p but got %p instead, in protocols_atat_got_ram_transmit",
+              rtb,
+              m->data.ram_transmit.buffer);
+
+      e  = &erb;
+      ok = 0;
+    }
+
+  #else
+
+    if (m->data.ram_transmit.buffer != rtb) ok = 0;
+
+  #endif
+
+  /* The action here depends on the type of file being transferred; */
+  /* we know from here on in that the 'rtb' buffer is the buffer    */
+  /* that has been filled in (see above), so we can use this rather */
+  /* than the more cumbersome 'm->data.ram_transmit.buffer'.        */
+
+  if (ok)
+  {
+    switch (recorded_type)
+    {
+      /* For URI / URL files, copy data from the file transfer */
+      /* buffer (which may deliver the file in several small   */
+      /* chunks) to a cumulative file buffer, and then process */
+      /* that whole thing when finished.                       */
+
+      case FileType_URL: /* Same as for URI files, so no 'break' */
+      case FileType_URI:
+      {
+        static char * uri_buffer  = NULL;
+        static int    buffer_size = 0;
+        int           first       = 0;
+
+        /* Only proceed if any bytes were transferred */
+
+        if (m->data.ram_transmit.nbytes)
+        {
+          /* Allocate or extend the local buffer to take in the URI file */
+
+          if (!uri_buffer)
+          {
+            /* Note we allocate 1 byte more than needed to allow a terminator to */
+            /* be inserted after the URL string when the transfer has ended;     */
+            /* this is because a URI file may end simply by EOF, it does not     */
+            /* need a terminator (and in any case, that terminator may be a      */
+            /* control char such as ASCII 10 or 13, which C would not treat as a */
+            /* string terminator).                                               */
+
+            uri_buffer = malloc(m->data.ram_transmit.nbytes + 1);
+            first      = 1;
+
+            /* Complain if the allocation fails */
+
+            if (!uri_buffer)
+            {
+              e = make_no_memory_error(7);
+
+              ok = 0;
+            }
+
+            #ifdef TRACE
+
+              else
+              {
+                malloccount += m->data.ram_transmit.nbytes + 1;
+                if (tl & (1u<<13)) Printf("** malloccount (protocols_atat_got_ram_transmit): \0211%d\0217\n",malloccount);
+              }
+
+            #endif
+          }
+          else
+          {
+            void * local;
+
+            /* realloc to a new size */
+
+            local = realloc(uri_buffer, buffer_size + m->data.ram_transmit.nbytes);
+
+            if (!local)
+            {
+              /* If the allocation fails, free the whole thing */
+
+              free(uri_buffer);
+              uri_buffer  = NULL;
+
+              #ifdef TRACE
+                malloccount -= buffer_size;
+                if (tl & (1u<<13)) Printf("** malloccount (protocols_atat_got_ram_transmit): \0212%d\0217\n",malloccount);
+              #endif
+
+              buffer_size = 0;
+
+              e = make_no_memory_error(7);
+
+              ok = 0;
+            }
+
+            /* Otherwise record a possibly new buffer address */
+
+            else
+            {
+              uri_buffer = local;
+
+              #ifdef TRACE
+                malloccount += m->data.ram_transmit.nbytes;
+                if (tl & (1u<<13)) Printf("** malloccount (protocols_atat_got_ram_transmit): \0211%d\0217\n",malloccount);
+              #endif
+            }
+          }
+
+          if (ok)
+          {
+            /* Copy the data from the file transfer buffer into */
+            /* the cumulative URI file buffer                   */
+
+            memcpy(uri_buffer + buffer_size - !first,
+                   rtb,
+                   m->data.ram_transmit.nbytes);
+
+            /* Increment the buffer size counter, remembering to add 1 if this */
+            /* is the first time we've allocated data, to allow room for a     */
+            /* string terminator when the transfer finishes.                   */
+
+            buffer_size += m->data.ram_transmit.nbytes + !!first;
+
+            /* If tracing the process of the transfer, show the buffer contents */
+            /* (but don't bother showing the uninitialised last byte).          */
+
+            #ifdef TRACE
+              if (tl & (1u<<28)) trace_dump_buffer(uri_buffer, buffer_size - 1);
+            #endif
+
+            /* If the transfer has finished, fetch the URL */
+
+            if (finished)
+            {
+              /* Remember we allocated 1 byte more than needed at the start, */
+              /* so that this terminator could be inserted.                  */
+
+              uri_buffer[buffer_size - 1] = 0;
+
+              if (recorded_window <= 0)
+              {
+                /* The original Message_DataSave was for no specific window */
+
+                e = windows_create_browser(uri_buffer, NULL, NULL, NULL, 0);
+              }
+              else
+              {
+                browser_data * b;
+
+                /* The message was for a specific window, so find out which one */
+
+                utils_browser_from_window(recorded_window, &b);
+
+                if (b) e = fetchpage_new(b, uri_buffer, 1, 0);
+              }
+
+              free(uri_buffer);
+              uri_buffer  = NULL;
+
+              #ifdef TRACE
+                malloccount -= buffer_size;
+                if (tl & (1u<<13)) Printf("** malloccount (protocols_atat_got_ram_transmit): \0212%d\0217\n",malloccount);
+              #endif
+
+              buffer_size = 0;
+
+              if (!e) ok = 0;
+            }
+          }
+        }
+      }
+      break;
+
+      default:
+      {
+        /* If we don't recognise the filetype, something is very wrong... */
+
+        #ifdef TRACE
+
+          erb.errnum = Utils_Error_Custom_Normal;
+          sprintf(erb.errmess,
+                  "Unrecognised filetype 0x%03x (%x) in protocols_atat_got_ram_transmit",
+                  recorded_type,
+                  recorded_type);
+
+          e  = &erb;
+          ok = 0;
+
+        #else
+
+          ok = 0;
+
+        #endif
+      }
+      break;
+    }
+  }
+
+  if (ok)
+  {
+    /* If things are OK still, send a RAMFetch to get the  */
+    /* next chunk, provided that there is more to get.     */
+    /*                                                     */
+    /* If things are not OK, no reply is given, thereby    */
+    /* abandoning the transfer (PRM 3-256).                */
+
+    if (!finished)
+    {
+      WimpMessage * rat = m;
+
+      rat->hdr.size        = 28;
+      rat->hdr.your_ref    = m->hdr.my_ref;
+      rat->hdr.action_code = Wimp_MRAMFetch;
+
+      #ifdef TRACE
+        if (tl & (1u<<28)) Printf("protocols_atat_got_ram_transmit: Sending RAMFetch in reply\n");
+      #endif
+
+      e = wimp_send_message(Wimp_EUserMessage, rat, m->hdr.sender, 0, NULL);
+    }
+  }
+
+  /* Free the RAM transfer buffer, if required */
+
+  if (finished || !ok)
+  {
+    if (rtb) free(rtb);
+    rtb = NULL;
+
+    #ifdef TRACE
+      malloccount -= RTB_Size;
+      if (tl & (1u<<13)) Printf("** malloccount (protocols_atat_got_ram_transmit): \0212%d\0217\n",malloccount);
+    #endif
+  }
+
+  return e;
+}
+
+/*************************************************/
+/* protocols_atat_ram_fetch_bounced()            */
+/*                                               */
+/* Following getting a Message_DataSave,         */
+/* protocols_atat_got_data_save may send out a   */
+/* Message_RAMFetch. If this bounces, this       */
+/* function is called. If the bounce is indeed   */
+/* due to the RAMFetch we sent, then send out    */
+/* a Message_DataSaveAck instead, to try and use */
+/* scrap file transfer. This is stored in the    */
+/* 'pending' block by the same function that     */
+/* sends the Message_RAMFetch.                   */
+/*                                               */
+/* See PRM 3-255.                                */
+/*                                               */
+/* Parameters: Pointer to the WimpMessage struct */
+/*             for the received message.         */
+/*************************************************/
+
+_kernel_oserror * protocols_atat_ram_fetch_bounced(WimpMessage * m)
+{
+  #ifdef TRACE
+    if (tl & (1u<<28)) Printf("protocols_atat_ram_fetch_bounced: Called\n");
+  #endif
+
+  if (
+       recorded_sender                   &&
+       recorded_my_ref                   &&
+       m->hdr.my_ref == recorded_my_ref  &&
+       pending_type == Wimp_MDataSaveAck
+     )
+  {
+    int sender = recorded_sender;
+
+    #ifdef TRACE
+      if (tl & (1u<<28)) Printf("protocols_atat_ram_fetch_bounced: This is a recognised message bounce\n");
+    #endif
+
+    /* Send the Message_DataSaveAck instead */
+
+    pending_type    = -1;
+    recorded_my_ref = 0;
+    recorded_sender = 0;
+
+    #ifdef TRACE
+      if (tl & (1u<<28)) Printf("protocols_atat_ram_fetch_bounced: Replying with a pending Message_DataSaveAck\n");
+    #endif
+
+    /* Before doing this, make sure Scrap is present */
+
+    if (utils_check_scrap()) return NULL;
+
+    return wimp_send_message(Wimp_EUserMessage, &pending, sender, 0, NULL);
+  }
+
+  return NULL;
+}
+
+/*************************************************/
+/* protocols_pp_got_print_error()                */
+/*                                               */
+/* Handle reception of a Message_PrintError -    */
+/* report an error from the printer driver.      */
+/*                                               */
+/* See PRM 3-262.                                */
+/*                                               */
+/* Parameters: Pointer to the WimpMessage struct */
+/*             for the received message.         */
+/*************************************************/
+
+_kernel_oserror * protocols_pp_got_print_error(WimpMessage * m)
+{
+  if (m->hdr.size == 20)
+  {
+    /* RISC OS 2 printer manager's PrintBusy response */
+
+    erb.errnum = Utils_Error_Custom_Message;
+
+    StrNCpy0(erb.errmess,
+             lookup_token("PrintBusy:The printer is currently busy.",
+                          0,
+                          0));
+
+    show_error_ret(&erb);
+  }
+
+  /* RISC OS 3 !Printers-generated specific error response */
+
+  else show_error_ret((_kernel_oserror *) &m->data);
+
+  return NULL;
+}
+
+/*************************************************/
+/* protocols_pp_got_print_type_odd()             */
+/*                                               */
+/* Handle reception of a Message_PrintTypeOdd.   */
+/*                                               */
+/* If this is sent directly to the task, we can  */
+/* print immediately to 'printer:'.              */
+/*                                               */
+/* The use of an Alias$PrintType_FF4 system      */
+/* variable makes it unnecessary to deal with    */
+/* the case of a broadcast PrintTypeOdd. This    */
+/* happens when a queued PrintOut file that the  */
+/* browser has been asked to print rises to the  */
+/* top of !Printers' queue. Bizarrely, !Printers */
+/* doesn't recognise the filetype and raises the */
+/* message. We allow this to fall back to the    */
+/* system variable, which copies the PrintOut    */
+/* file to the 'printer:' device.                */
+/*                                               */
+/* This is a hole in an otherwise workable, if   */
+/* cumbersome, protocol.                         */
+/*                                               */
+/* See PRM 3-263.                                */
+/*                                               */
+/* Parameters: Pointer to the WimpMessage struct */
+/*             for the received message. The     */
+/*             contents will be modified and     */
+/*             used in a reply.                  */
+/*************************************************/
+
+_kernel_oserror * protocols_pp_got_print_type_odd(WimpMessage * m)
+{
+  _kernel_oserror * e;
+  WimpMessage     * ptk = m;
+
+  if (m->hdr.your_ref && m->hdr.your_ref == printer_message_ref)
+  {
+    /* The printer manager sent PrintTypeOdd as a reply to this */
+    /* task (not a broadcast), so go ahead and print.           */
+
+    printer_message_ref = 0;
+
+    /* Send PrintTypeKnown */
+
+    ptk->hdr.size        = 20;
+    ptk->hdr.your_ref    = m->hdr.my_ref;
+    ptk->hdr.action_code = Browser_Message_PrintTypeKnown;
+
+    RetError(wimp_send_message(Wimp_EUserMessage, ptk, m->hdr.sender, 0, NULL));
+
+    print_print(NULL);
+  }
+
+// Commented out as the Alias$@PrintType_FF4 system variable does this job
+// anyway, and if we don't claim this message then anything else which may
+// have a better idea of what to do at least gets a chance to try.
+//
+// This currently doesn't work, incidentally; the conditions on the 'if'
+// are wrong (printer_message_ref has probably been set to 0, but I never
+// got the chance to properly debug this before removing it due to time
+// constraints...).
+//
+//   else if (printer_message_ref && m->data.data_save.file_type == FileType_POUT)
+//   {
+//     /* If the printer doesn't understand PrintOut files, then */
+//     /* it may be broken (!) / PostScript. So reply, and copy  */
+//     /* the file to the printer device directly.               */
+//
+//     printer_message_ref = 0;
+//
+//     ptk->hdr.size        = 20;
+//     ptk->hdr.your_ref    = m->hdr.my_ref;
+//     ptk->hdr.action_code = Browser_Message_PrintTypeKnown;
+//
+//     ChkError(wimp_send_message(Wimp_EUserMessage, ptk, m->hdr.sender, 0, NULL));
+//
+//     _swix(OS_FSControl,
+//           _INR(0,3),
+//
+//           26,
+//           m->data.data_save.leaf_name,
+//           "printer:",
+//           2); /* Flags - 'Force' set, but no others. */
+//   }
+
+  return NULL;
+}
+
+/*************************************************/
+/* protocols_pp_got_data_save_ack()              */
+/*                                               */
+/* Handle reception of a Message_DataSaveAck     */
+/* where the your_ref field shows that it has    */
+/* been sent in relation to a print job. Only    */
+/* call in those circumstances...                */
+/*                                               */
+/* See PRM 3-259 / 3-260 for details of where    */
+/* this fits into the protocol, or PRM 3-253     */
+/* for details on the message structure.         */
+/*                                               */
+/* Parameters: Pointer to the WimpMessage struct */
+/*             for the received message. The     */
+/*             contents will be modified and     */
+/*             used in a reply.                  */
+/*************************************************/
+
+_kernel_oserror * protocols_pp_got_data_save_ack(WimpMessage * m)
+{
+  _kernel_oserror * e;
+  WimpMessage     * dl = m;
+  int               file_size;
+
+  #ifdef TRACE
+    if (tl & (1u<<28)) Printf("protocols_pp_got_data_save_ack: Called\n");
+  #endif
+
+  /* Print to a file in the !Printers-given file, then send */
+  /* a DataLoad to the printer manager to tell it to put    */
+  /* the file into the print queue.                         */
+
+  printer_message_ref = 0;
+
+  print_print(m->data.data_save.leaf_name);
+
+  e = _swix(OS_File,
+        _INR(0,1) | _OUT(4),
+
+        23, /* Read catalogue info */
+        m->data.data_save.leaf_name,
+
+        &file_size);
+
+  if (e) return e;
+
+  dl->hdr.size        = 64;
+  dl->hdr.your_ref    = m->hdr.my_ref;
+  dl->hdr.action_code = Wimp_MDataLoad;
+
+  dl->data.data_load.estimated_size = file_size;
+  dl->data.data_load.file_type      = FileType_POUT;
+
+  e = _swix(OS_File,
+            _INR(0,2),
+
+            18, /* Set filetype of named object */
+            m->data.data_save_ack.leaf_name,
+            FileType_POUT);
+
+  strcpy(dl->data.data_load.leaf_name, m->data.data_save_ack.leaf_name);
+
+  /* Send the DataLoad */
+
+  #ifdef TRACE
+    if (tl & (1u<<28)) Printf("protocols_pp_got_data_save_ack: Sending Message_DataLoad in response\n");
+  #endif
+
+  return wimp_send_message(Wimp_EUserMessage, dl, m->hdr.sender, 0, NULL);
+}
+
+/*************************************************/
+/* protocols_pp_print_save_bounced()             */
+/*                                               */
+/* If a Message_PrintSave bounces, the browser   */
+/* tried to use the printer protocol to do a     */
+/* print job but the printer wasn't loaded. In   */
+/* that case, print directly to the 'printer:'   */
+/* device.                                       */
+/*                                               */
+/* See PRM 3-259 for details of where this fits  */
+/* into the protocol, or 3-262 for the message   */
+/* structure.                                    */
+/*                                               */
+/* Parameters: Pointer to the WimpMessage struct */
+/*             for the received message.         */
+/*************************************************/
+
+_kernel_oserror * protocols_pp_print_save_bounced(WimpMessage * m)
+{
+  if (printer_message_ref && m->hdr.my_ref == printer_message_ref)
+  {
+    printer_message_ref = 0;
+
+    /* Go for it. */
+
+    print_print(NULL);
+  }
+
+  return NULL;
+}
+
+/*************************************************/
+/* protocols_auh_got_process()                   */
+/*                                               */
+/* Handle reception of a URI_MProcess - process  */
+/* a URI from the URI handler, replying if we    */
+/* can handle the URI.                           */
+/*                                               */
+/* See 1307,260/FS.                              */
+/*                                               */
+/* Parameters: Pointer to the WimpMessage struct */
+/*             for the received message. The     */
+/*             contents will be modified and     */
+/*             used in a reply.                  */
+/*************************************************/
+
+_kernel_oserror * protocols_auh_got_process(WimpMessage * m)
+{
+  _kernel_oserror   * e;
+  URIProcessMessage * uri    = (URIProcessMessage *) &m->data;
+  int                 ok;
+  unsigned int        sender = m->hdr.sender;
+
+  /* Can we handle this URI? */
+
+  ok = urlutils_check_protocols(uri->uri);
+
+  #ifdef TRACE
+    if (tl & (1u<<21)) Printf("protocols_auh_got_process: URI_MProcess '%s', ok = %d\n",uri->uri,ok);
+  #endif
+
+  /* If so, reply to the message and possibly start a fetch */
+
+  if (ok)
+  {
+    /* Only fetch if the flags bits don't say we're to just */
+    /* check the URI could be handled.                      */
+
+    if (!uri->flags.bits.check)
+    {
+      uri_queue * entry = urlutils_find_queue_entry(uri->uri_handle);
+
+      if (entry)
+      {
+        RetError(fetchpage_postprocess_uri(entry->b,
+                                           uri  ->uri,
+                                           entry->flags & URIQueue_RecordInHistory ? 1 : 0));
+
+        /* Don't remove it from the queue of uri_queue structures yet - */
+        /* wait for the ReturnResult message for that.                  */
+      }
+
+      else RetError(windows_create_browser(uri->uri, NULL, NULL, NULL, 0));
+    }
+
+    /* Now reply, saying that we've handled the message */
+
+    m->hdr.sender      = task_handle;
+    m->hdr.your_ref    = m->hdr.my_ref;
+    m->hdr.action_code = URI_MProcessAck;
+
+    RetError(wimp_send_message(Wimp_EUserMessage, m, sender, 0, NULL));
+  }
+
+  return NULL;
+}
+
+/*************************************************/
+/* protocols_auh_got_return_result()             */
+/*                                               */
+/* Handle reception of a URI_MReturnResult -     */
+/* the URI handler is reporting what happened to */
+/* a URI we dispatched through it.               */
+/*                                               */
+/* See 1307,260/FS.                              */
+/*                                               */
+/* Parameters: Pointer to the WimpMessage struct */
+/*             for the received message. The     */
+/*             contents will be modified and     */
+/*             used in a reply.                  */
+/*************************************************/
+
+_kernel_oserror * protocols_auh_got_return_result(WimpMessage * m)
+{
+  _kernel_oserror        * e;
+  URIReturnResultMessage * uri = (URIReturnResultMessage *) &m->data;
+
+  #ifdef TRACE
+    if (tl & (1u<<21)) Printf("protocols_auh_got_return_result: URI_MReturnResult, not_claimed = %d\n",uri->flags.bits.not_claimed);
+  #endif
+
+  /* Remove the entry from the queue */
+
+  RetError(urlutils_remove_from_queue(uri->uri_handle));
+
+  /* If the URI was not claimed by anyone, give an appropriate error */
+
+  if (uri->flags.bits.not_claimed)
+  {
+    erb.errnum = Utils_Error_Custom_Message;
+
+    StrNCpy0(erb.errmess,
+             lookup_token("CannotFetch:The browser does not have a method of fetching the requested site.",
+                          0,0));
+
+    show_error_ret(&erb);
+  }
+
+  return NULL;
+}
+
+/*************************************************/
+/* protocols_auh_got_dying()                     */
+/*                                               */
+/* Handle reception of a URI_MDying - the URI    */
+/* handler is closing down.                      */
+/*                                               */
+/* See 1307,260/FS.                              */
+/*                                               */
+/* Parameters: Pointer to the WimpMessage struct */
+/*             for the received message.         */
+/*************************************************/
+
+_kernel_oserror * protocols_auh_got_dying(WimpMessage * m)
+{
+  /* If the URI handler is dying, don't try and use it anymore... */
+
+  uri_module_present = 0;
+
+  return NULL;
+}
+
+/*************************************************/
+/* protocols_ih_send_help_request()              */
+/*                                               */
+/* Sends out HelpRequest messages for the item   */
+/* the mouse pointer is currently over, every    */
+/* 20 centiseconds or so.                        */
+/*                                               */
+/* Parameters are as standard for a Wimp NULL    */
+/* event handler.                                */
+/*************************************************/
+
+int protocols_ih_send_help_request(int eventcode, WimpPollBlock * block, IdBlock * idb, void * handle)
+{
+  int        time_now;
+  static int last_time   = 0;
+  static int last_window = 0;
+  static int last_icon   = 0;
+
+  /* Only proceed if the fixed choices say to do so */
+
+  if (fixed.claimhelp)
+  {
+    /* Don't sent out requests too often */
+
+    _swix(OS_ReadMonotonicTime, _OUT(0), &time_now);
+
+    if (time_now - last_time > 20)
+    {
+      WimpGetPointerInfoBlock i;
+      WimpMessage             m;
+
+      last_time = time_now;
+
+      ChkError(wimp_get_pointer_info(&i));
+
+      /* Don't send a request if the pointer isn't over a */
+      /* browser-owned window.                            */
+
+      if (task_handle == task_from_window(i.window_handle))
+      {
+        /* Don't send out multiple requests for the same window/icon. */
+
+        if (i.icon_handle != last_icon || i.window_handle != last_window)
+        {
+          last_icon   = i.icon_handle;
+          last_window = i.window_handle;
+        }
+        else return 0;
+
+        /* Build the message block and send the request */
+
+        m.hdr.size        = 40;
+        m.hdr.sender      = task_handle;
+        m.hdr.my_ref      = 0;
+        m.hdr.your_ref    = 0;
+        m.hdr.action_code = Wimp_MHelpRequest;
+
+        m.data.help_request.mouse_x       = i.x;
+        m.data.help_request.mouse_y       = i.y;
+        m.data.help_request.buttons       = i.button_state;
+        m.data.help_request.window_handle = i.window_handle;
+        m.data.help_request.icon_handle   = i.icon_handle;
+
+        ChkError(wimp_send_message(Wimp_EUserMessageRecorded, &m, i.window_handle, i.icon_handle, NULL));
+      }
+    }
+  }
+
+  return 0;
+}
+
+/*************************************************/
+/* protocols_ih_got_help_reply()                 */
+/*                                               */
+/* On receiving a Message_HelpReply, we may want */
+/* to display the Help text in the status bar.   */
+/*                                               */
+/* See PRM 3-245.                                */
+/*                                               */
+/* Parameters: Pointer to the WimpMessage struct */
+/*             for the received message.         */
+/*************************************************/
+
+_kernel_oserror * protocols_ih_got_help_reply(WimpMessage * m)
+{
+  static char last_help[Limits_DisplayStats];
+
+  /* Don't do anything if the Controls say not to. */
+
+  if (fixed.claimhelp)
+  {
+    _kernel_oserror         * e;
+    ObjectId                  o, a = 0;
+    browser_data            * b = NULL;
+    WimpGetPointerInfoBlock   i;
+
+    RetError(wimp_get_pointer_info(&i));
+    RetError(window_wimp_to_toolbox(0, i.window_handle, i.icon_handle, &o, NULL));
+
+    /* If we can get an ancestor, the pointer is over e.g. a toolbar */
+    /* - otherwise, assume it is over a browser window.              */
+
+    toolbox_get_ancestor(0, o, &a, NULL);
+
+    if (a)
+    {
+      toolbox_get_client_handle(0, a, (void *) &b);
+    }
+    else toolbox_get_client_handle(0, o, (void *) &b);
+
+    /* If we haven't got a valid client handle, exit. */
+
+    if (!is_known_browser(b)) return NULL;
+
+    /* If the text is empty, there was no help for that item, */
+    /* so restore the old status display, if there was a      */
+    /* help display already there.                            */
+
+    if (!*m->data.help_reply.text)
+    {
+      if (b->status_help != NULL)
+      {
+        b->status_help = NULL;
+        RetError(toolbars_cancel_status(b, Toolbars_Status_Help));
+      }
+    }
+    else
+    {
+      /* Otherwise update the status bar with the help text, */
+      /* if the text has changed.                            */
+
+      if (
+           !b->status_help ||
+           (
+             b->status_help                                  &&
+             strcmp(b->status_help, m->data.help_reply.text)
+           )
+         )
+      {
+        StrNCpy0(last_help, m->data.help_reply.text);
+        b->status_help = last_help;
+        RetError(toolbars_update_status(b, Toolbars_Status_Help));
+      }
+    }
+  }
+
+  return NULL;
+}
+
+/*************************************************/
+/* protocols_ih_help_request_bounced()           */
+/*                                               */
+/* If a Message_HelpRequest comes in as a        */
+/* UserMessage_Acknowledge, then the browser     */
+/* tried to send out such a message and it       */
+/* bounced - there is no help on that item.      */
+/* In this case, if we're displaing help items   */
+/* in the status bar, return to a non-help       */
+/* status string.                                */
+/*                                               */
+/* See PRM 3-244 for details of the message or   */
+/* protocols_ih_send_help_request for the        */
+/* message origin.                               */
+/*                                               */
+/* Parameters: Pointer to the WimpMessage struct */
+/*             for the received message.         */
+/*************************************************/
+
+_kernel_oserror * protocols_ih_help_request_bounced(WimpMessage * m)
+{
+  if (fixed.claimhelp)
+  {
+    _kernel_oserror         * e;
+    ObjectId                  o, a = -1;
+    browser_data            * b = NULL;
+    WimpGetPointerInfoBlock   i;
+
+    RetError(wimp_get_pointer_info(&i));
+    RetError(window_wimp_to_toolbox(0, i.window_handle, i.icon_handle, &o, NULL));
+
+    /* If we can get an ancestor, the pointer is over e.g. a toolbar */
+    /* - otherwise, assume it is over a browser window.              */
+
+    toolbox_get_ancestor(0, o, &a, NULL);
+
+    if (a)
+    {
+      toolbox_get_client_handle(0, a, (void *) &b);
+    }
+    else toolbox_get_client_handle(0, o, (void *) &b);
+
+    /* If we haven't got a valid client handle, exit */
+
+    if (!is_known_browser(b)) return NULL;
+
+    /* Update the status line */
+
+    if (b->status_help != NULL)
+    {
+      b->status_help = NULL;
+      RetError(toolbars_cancel_status(b, Toolbars_Status_Help));
+    }
+  }
+
+  return NULL;
+}

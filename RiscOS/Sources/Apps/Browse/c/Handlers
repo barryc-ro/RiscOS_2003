@@ -19,7 +19,6 @@
 #include "flex.h"
 
 #include "HTMLLib.h" /* HTML library API, Which will include html2_ext.h, tags.h and struct.h */
-#include "URI.h"     /* URI handler API, in URILib:h */
 
 #include "wimp.h"
 #include "wimplib.h"
@@ -36,7 +35,6 @@
 #include "FromROSLib.h"
 #include "Utils.h"
 
-#include "Authorise.h"
 #include "Browser.h"
 #include "FetchPage.h"
 #include "FontManage.h"
@@ -49,6 +47,7 @@
 #include "MiscDefs.h"
 #include "Mouse.h"
 #include "Printing.h"
+#include "Protocols.h"
 #include "Redraw.h"
 #include "Reformat.h"
 #include "Save.h"
@@ -61,7 +60,6 @@
 
 /* Local statics */
 
-static char last_help[Limits_DisplayStats];
 static int  last_click_x;
 static int  last_click_y;
 
@@ -185,6 +183,9 @@ static void handlers_get_call_info(browser_data ** bp, ObjectId * op, IdBlock * 
 /* and 18 (type 19, acknowledges, are handled in */
 /* handle_ack below). Parameters are as standard */
 /* for a Wimp message handler.                   */
+/*                                               */
+/* This function farms off a lot of its          */
+/* responsibilities to functions in Protocols.c. */
 /*************************************************/
 
 int handle_messages(WimpMessage * m, void * handle)
@@ -199,61 +200,7 @@ int handle_messages(WimpMessage * m, void * handle)
 
     case Wimp_MHelpReply:
     {
-      if (fixed.claimhelp)
-      {
-        ObjectId                  o, a = 0;
-        browser_data            * b = NULL;
-        WimpGetPointerInfoBlock   i;
-
-        wimp_get_pointer_info(&i);
-        if (window_wimp_to_toolbox(0, i.window_handle, i.icon_handle, &o, NULL)) break;
-
-        /* If we can get an ancestor, the pointer is over e.g. a toolbar */
-        /* - otherwise, assume it is over a browser window.              */
-
-        toolbox_get_ancestor(0, o, &a, NULL);
-
-        if (a)
-        {
-          toolbox_get_client_handle(0, a, (void *) &b);
-        }
-        else toolbox_get_client_handle(0, o, (void *) &b);
-
-        /* If we haven't got a valid client handle, exit. */
-
-        if (!is_known_browser(b)) break;
-
-        /* If the text is empty, there was no help for that item, */
-        /* so restore the old status display, if there was a      */
-        /* help display already there.                            */
-
-        if (!*m->data.help_reply.text)
-        {
-          if (b->status_help != NULL)
-          {
-            b->status_help = NULL;
-            toolbars_cancel_status(b, Toolbars_Status_Help);
-          }
-        }
-        else
-        {
-          /* Otherwise update the status bar with the help text, */
-          /* if the text has changed.                            */
-
-          if (
-               !b->status_help ||
-               (
-                 b->status_help                                  &&
-                 strcmp(b->status_help, m->data.help_reply.text)
-               )
-             )
-          {
-            StrNCpy0(last_help, m->data.help_reply.text);
-            b->status_help = last_help;
-            toolbars_update_status(b, Toolbars_Status_Help);
-          }
-        }
-      }
+      ChkError(protocols_ih_got_help_reply(m));
     }
     break;
 
@@ -308,330 +255,33 @@ int handle_messages(WimpMessage * m, void * handle)
     }
     break;
 
-    case Browser_Message_PrintError:
-    {
-      if (m->hdr.size == 20)
-      {
-        /* RISC OS 2 printer manager's PrintBusy response */
+    /* App to app transfer */
 
-        erb.errnum = Utils_Error_Custom_Message;
+    case Wimp_MDataSave:    ChkError(protocols_atat_got_data_save(m));    break;
+    case Wimp_MDataLoad:    ChkError(protocols_atat_got_data_load(m));    break;
+    case Wimp_MDataOpen:    ChkError(protocols_atat_got_data_open(m));    break;
+    case Wimp_MRAMTransmit: ChkError(protocols_atat_got_ram_transmit(m)); break;
 
-        StrNCpy0(erb.errmess,
-                 lookup_token("PrintBusy:The printer is currently busy.",
-                              0,
-                              0));
+    /* Printing protocol */
 
-        show_error_ret(&erb);
-      }
-
-      /* RISC OS 3 !Printers general error response */
-
-      else show_error_ret((_kernel_oserror *) &m->data);
-    }
-    break;
-
-    case Browser_Message_PrintTypeOdd:
-    {
-      WimpMessage ptk;
-
-      if (m->hdr.your_ref && m->hdr.your_ref == printer_message_ref)
-      {
-        /* The printer manager sent PrintTypeOdd as a reply to this */
-        /* task (not a broadcast), so go ahead and print.           */
-
-        printer_message_ref = 0;
-
-        /* Send PrintTypeKnown */
-
-        ptk.hdr.size        = 20;
-        ptk.hdr.your_ref    = m->hdr.my_ref;
-        ptk.hdr.action_code = Browser_Message_PrintTypeKnown;
-
-        ChkError(wimp_send_message(Wimp_EUserMessage, &ptk, m->hdr.sender, 0, NULL));
-
-        print_print(NULL);
-      }
-
-// Commented out as the Alias$@PrintType_FF4 system variable does this job
-// anyway, and if we don't claim this message then anything else which may
-// have a better idea of what to do at least gets a chance to try.
-//
-// This currently doesn't work, incidentally; the conditions on the 'if'
-// are wrong (printer_message_ref has probably been set to 0, but I never
-// got the chance to properly debug this before removing it due to time
-// constraints...).
-//
-//      else if (printer_message_ref && m->data.data_save.file_type == FileType_POUT)
-//      {
-//        /* If the printer doesn't understand PrintOut files, then */
-//        /* it may be broken (!) / PostScript. So reply, and copy  */
-//        /* the file to the printer device directly.               */
-//
-//        printer_message_ref = 0;
-//
-//        ptk.hdr.size        = 20;
-//        ptk.hdr.your_ref    = m->hdr.my_ref;
-//        ptk.hdr.action_code = Browser_Message_PrintTypeKnown;
-//
-//        ChkError(wimp_send_message(Wimp_EUserMessage, &ptk, m->hdr.sender, 0, NULL));
-//
-//        _swix(OS_FSControl,
-//              _INR(0,3),
-//
-//              26,
-//              m->data.data_save.leaf_name,
-//              "printer:",
-//              2); /* Flags - 'Force' set, but no others. */
-//      }
-    }
-    break;
+    case Browser_Message_PrintError:   ChkError(protocols_pp_got_print_error(m));    break;
+    case Browser_Message_PrintTypeOdd: ChkError(protocols_pp_got_print_type_odd(m)); break;
 
     case Wimp_MDataSaveAck:
     {
-      if (m->hdr.your_ref == printer_message_ref)
-      {
-        WimpMessage dl;
-        int         file_size;
+      /* If this is for a print job, use the print protocol routine */
 
-        /* Print to a file in Printer$Temp, then send a */
-        /* DataLoad to the printer manager.             */
-
-        printer_message_ref = 0;
-
-        print_print(m->data.data_save.leaf_name);
-
-        _swix(OS_File,
-              _INR(0,1) | _OUT(4),
-
-              23,
-              m->data.data_save.leaf_name,
-
-              &file_size);
-
-        dl.hdr.size        = 64;
-        dl.hdr.your_ref    = m->hdr.my_ref;
-        dl.hdr.action_code = Wimp_MDataLoad;
-
-        dl.data.data_load.destination_window = m->data.data_save.destination_window;
-        dl.data.data_load.destination_icon   = m->data.data_save.destination_icon;
-        dl.data.data_load.estimated_size     = file_size;
-        dl.data.data_load.file_type          = FileType_POUT;
-
-        _swix(OS_File,
-              _INR(0,2),
-
-              18,
-              m->data.data_save.leaf_name,
-              FileType_POUT);
-
-        strcpy(dl.data.data_load.leaf_name, m->data.data_save.leaf_name);
-
-        ChkError(wimp_send_message(Wimp_EUserMessage, &dl, m->hdr.sender, 0, NULL));
-      }
+      if (m->hdr.your_ref == printer_message_ref) ChkError(protocols_pp_got_data_save_ack(m));
     }
     break;
 
-    case Wimp_MDataOpen:
-    {
-      /* Don't want to load a text file from double-clicking, */
-      /* only by dragging to a window or the icon bar icon.   */
-      /* Similarly, ANT's URL files should only be loaded if  */
-      /* dragged on, and the same is true of URI files if we  */
-      /* are using the URI handler.                           */
+    /* URI handler */
 
-      if (
-           m->data.data_open.file_type == FileType_TEXT ||
-           m->data.data_open.file_type == FileType_URL  ||
-           (
-             m->data.data_open.file_type == FileType_URI &&
-             uri_module_present
-           )
-         )
-         break;
+    case URI_MProcess:      ChkError(protocols_auh_got_process(m));       break;
+    case URI_MReturnResult: ChkError(protocols_auh_got_return_result(m)); break;
+    case URI_MDying:        ChkError(protocols_auh_got_dying(m));         break;
 
-      /* Now treat as a DataLoad message ready to drop */
-      /* through to the Wimp_MDataLoad case statement. */
-      /* This avoids duplicating the loader code.      */
-
-      m->data.data_load.destination_window = 0; /* Force a new window to open */
-      m->data.data_load.destination_icon   = -1;
-      m->data.data_load.estimated_size     = 0;
-    }
-
-    /* So let the above fall through to Wimp_MDataLoad... */
-
-    case Wimp_MDataLoad:
-    {
-      /* Proceed only if it's a filetype we can handle */
-
-      if (
-           m->data.data_load.file_type == FileType_HTML ||
-           m->data.data_load.file_type == FileType_TEXT ||
-           m->data.data_load.file_type == FileType_GIF  ||
-           m->data.data_load.file_type == FileType_JPEG ||
-           m->data.data_load.file_type == FileType_PNG  ||
-           m->data.data_load.file_type == FileType_TIFF ||
-           m->data.data_load.file_type == FileType_URL  ||
-           m->data.data_load.file_type == FileType_URI
-         )
-      {
-        if (m->hdr.action_code == Wimp_MDataOpen)
-        {
-          /* If we've fallen into the DataLoad code from the DataOpen */
-          /* code above, need to send a DataLoadAck message now.      */
-
-          WimpMessage dla = *m;
-
-          dla.hdr.sender      = task_handle;
-          dla.hdr.your_ref    = m->hdr.my_ref;
-          dla.hdr.action_code = Wimp_MDataLoadAck;
-
-          ChkError(wimp_send_message(Wimp_EUserMessage, &dla, m->hdr.sender, 0, NULL));
-        }
-
-        if (m->data.data_load.destination_window <= 0)
-        {
-          /* Load file to icon bar - i.e. open a new window. */
-
-          char url[Limits_URL];
-
-          if (
-               m->data.data_load.file_type != FileType_URI &&
-               m->data.data_load.file_type != FileType_URL
-             )
-          {
-            StrNCpy0(url, m->data.data_load.leaf_name);
-            urlutils_pathname_to_url(url, sizeof(url));
-          }
-          else urlutils_load_uri_file(url, sizeof(url), m->data.data_load.leaf_name);
-
-          ChkError(windows_create_browser(url, NULL, NULL, NULL, 0));
-        }
-        else
-        {
-          /* Load file to a browser window. Need to find it's */
-          /* browser_data structure.                          */
-
-          char           url[Limits_URL];
-          ObjectId       o;
-          browser_data * b;
-
-          ChkError(window_wimp_to_toolbox(0,
-                                          m->data.data_load.destination_window,
-                                          m->data.data_load.destination_icon,
-                                          &o,
-                                          NULL));
-
-          ChkError(toolbox_get_client_handle(0, o, (void *) &b));
-
-          /* Is the client handle a known browser_data structure? */
-
-          if (is_known_browser(b))
-          {
-            /* It is, so deal with the file */
-
-            if (
-                 m->data.data_load.file_type != FileType_URI &&
-                 m->data.data_load.file_type != FileType_URL
-               )
-            {
-              StrNCpy0(url, m->data.data_load.leaf_name);
-              urlutils_pathname_to_url(url, sizeof(url));
-            }
-            else urlutils_load_uri_file(url, sizeof(url), m->data.data_load.leaf_name);
-
-            ChkError(fetchpage_new(b, url, 1, 0));
-          }
-        }
-      }
-    }
-    break;
-
-    case URI_MProcess:
-    {
-      URIProcessMessage * uri    = (URIProcessMessage *) &m->data;
-      int                 ok;
-      unsigned int        sender = m->hdr.sender;
-
-      /* Can we handle this URI? */
-
-      ok = urlutils_check_protocols(uri->uri);
-
-      #ifdef TRACE
-        if (tl & (1u<<21)) Printf("handle_messages: URI_MProcess '%s', ok = %d\n",uri->uri,ok);
-      #endif
-
-      /* If so, reply to the message and possibly start a fetch */
-
-      if (ok)
-      {
-        /* Only fetch if the flags bits don't say we're to just */
-        /* check the URI could be handled.                      */
-
-        if (!uri->flags.bits.check)
-        {
-          uri_queue * entry = urlutils_find_queue_entry(uri->uri_handle);
-
-          if (entry)
-          {
-            ChkError(fetchpage_postprocess_uri(entry->b,
-                                               uri  ->uri,
-                                               entry->flags & URIQueue_RecordInHistory ? 1 : 0));
-
-            /* Don't remove it from the queue of uri_queue structures yet - */
-            /* wait for the ReturnResult message for that.                  */
-          }
-
-          else ChkError(windows_create_browser(uri->uri, NULL, NULL, NULL, 0));
-        }
-
-        /* Now reply, saying that we've handled the message */
-
-        m->hdr.sender      = task_handle;
-        m->hdr.your_ref    = m->hdr.my_ref;
-        m->hdr.action_code = URI_MProcessAck;
-
-        ChkError(wimp_send_message(Wimp_EUserMessage, m, sender, 0, NULL));
-      }
-    }
-    break;
-
-    case URI_MReturnResult:
-    {
-      URIReturnResultMessage * uri = (URIReturnResultMessage *) &m->data;
-
-      #ifdef TRACE
-        if (tl & (1u<<21)) Printf("handle_messages: URI_MReturnResult, not_claimed = %d\n",uri->flags.bits.not_claimed);
-      #endif
-
-      /* Remove the entry from the queue */
-
-      ChkError(urlutils_remove_from_queue(uri->uri_handle));
-
-      /* If the URI was not claimed by anyone, give an appropriate error */
-
-      if (uri->flags.bits.not_claimed)
-      {
-        erb.errnum = Utils_Error_Custom_Message;
-
-        StrNCpy0(erb.errmess,
-                 lookup_token("CannotFetch:The browser does not have a method of fetching the requested site.",
-                              0,0));
-
-        show_error_ret(&erb);
-      }
-    }
-    break;
-
-    case URI_MDying:
-    {
-      /* If the URI handler is dying, don't try and use it anymore... */
-
-      uri_module_present = 0;
-    }
-    break;
-
-    default: return 0;
+    default: return 0; break;
   }
 
   return 1;
@@ -649,131 +299,32 @@ int handle_messages(WimpMessage * m, void * handle)
 
 int handle_ack(int eventcode, WimpPollBlock * block, IdBlock * idb, void * handle)
 {
+  WimpMessage * m = &block->user_message_acknowledge;
+
   switch (block->user_message_acknowledge.hdr.action_code)
   {
     case Browser_Message_PrintSave:
     {
-      /* The PrintSave bounced, so the printer driver must not be loaded. */
-      /* Since we're not printing text, the PRMs say 'go for it'...       */
-
-      print_print(NULL);
+      ChkError(protocols_pp_print_save_bounced(m));
     }
     break;
 
     case Wimp_MHelpRequest:
     {
-      /* If a HelpRequest bounces, there's no help on the item the pointer */
-      /* is over so allow the status display to go back to status again.   */
-
-      if (fixed.claimhelp)
-      {
-        ObjectId                  o, a = -1;
-        browser_data            * b = NULL;
-        WimpGetPointerInfoBlock   i;
-
-        wimp_get_pointer_info(&i);
-        if (window_wimp_to_toolbox(0, i.window_handle, i.icon_handle, &o, NULL)) break;
-
-        /* If we can get an ancestor, the pointer is over e.g. a toolbar */
-        /* - otherwise, assume it is over a browser window.              */
-
-        toolbox_get_ancestor(0, o, &a, NULL);
-
-        if (a)
-        {
-          toolbox_get_client_handle(0, a, (void *) &b);
-        }
-        else toolbox_get_client_handle(0, o, (void *) &b);
-
-        /* If we haven't got a valid client handle, exit */
-
-        if (!is_known_browser(b)) break;
-
-        /* Update the status line */
-
-        if (b->status_help != NULL)
-        {
-          b->status_help = NULL;
-          toolbars_cancel_status(b, Toolbars_Status_Help);
-        }
-      }
+      ChkError(protocols_ih_help_request_bounced(m));
     }
+    break;
 
-    default: return 0;
+    case Wimp_MRAMFetch:
+    {
+      ChkError(protocols_atat_ram_fetch_bounced(m));
+    }
+    break;
+
+    default: return 0; break;
   }
 
   return 1;
-}
-
-/*************************************************/
-/* handle_send_helpreq()                         */
-/*                                               */
-/* Sends out HelpRequest messages for the item   */
-/* the mouse pointer is currently over, every    */
-/* 20 centiseconds or so.                        */
-/*                                               */
-/* Parameters are as standard for a Wimp event   */
-/* handler.                                      */
-/*************************************************/
-
-int handle_send_helpreq(int eventcode, WimpPollBlock * block, IdBlock * idb, void * handle)
-{
-  int        time_now;
-  static int last_time   = 0;
-  static int last_window = 0;
-  static int last_icon   = 0;
-
-  /* Only proceed if the fixed choices say to do so */
-
-  if (fixed.claimhelp)
-  {
-    /* Don't sent out requests too often */
-
-    _swix(OS_ReadMonotonicTime, _OUT(0), &time_now);
-
-    if (time_now - last_time > 20)
-    {
-      WimpGetPointerInfoBlock i;
-      WimpMessage             m;
-
-      last_time = time_now;
-
-      wimp_get_pointer_info(&i);
-
-      /* Don't send a request if the pointer isn't over a */
-      /* browser-owned window.                            */
-
-      if (task_handle == task_from_window(i.window_handle))
-      {
-        /* Don't send out multiple requests for the same window/icon. */
-
-        if (i.icon_handle != last_icon || i.window_handle != last_window)
-        {
-          last_icon   = i.icon_handle;
-          last_window = i.window_handle;
-        }
-        else return 0;
-
-        /* Build the message block and send the request */
-
-        m.hdr.size        = 40;
-        m.hdr.sender      = task_handle;
-        m.hdr.my_ref      = 0;
-        m.hdr.your_ref    = 0;
-        m.hdr.action_code = Wimp_MHelpRequest;
-
-        m.data.help_request.mouse_x       = i.x;
-        m.data.help_request.mouse_y       = i.y;
-        m.data.help_request.buttons       = i.button_state;
-        m.data.help_request.window_handle = i.window_handle;
-        m.data.help_request.icon_handle   = i.icon_handle;
-
-        ChkError(wimp_send_message(Wimp_EUserMessageRecorded, &m, i.window_handle, i.icon_handle, NULL));
-      }
-    }
-  }
-
-  return 0;
 }
 
 /*************************************************/
@@ -981,32 +532,52 @@ int handle_keys(int eventcode, WimpPollBlock * block, IdBlock * idb, void * hand
             // Not implemented yet...
             #endif
 
-            #ifdef HIDE_CGI
+            /* If we're displaying a temporary file and the URL hasn't changed, */
+            /* treat this as an attempt to reload the page.                     */
 
-              /* If HIDE_CGI is defined, the URL bar may have only part of    */
-              /* the URL in it - the CGI information could be stripped off.   */
-              /* In that case, check if the URL matches the browser's current */
-              /* one with the exception of the CGI stuff, and only do the     */
-              /* fetch if not.                                                */
+            if (
+                 b->displayed == Display_Scrap_File   &&
+                 !strcmp(browser_current_url(b), url)
+               )
+            {
+              erb.errnum = Utils_Error_Custom_Message;
 
-              if (
-                   browser_current_url(b) &&                             /* If there *is* a current URL, and            */
-                   !strncmp(browser_current_url(b), url, strlen(url)) && /* the URL bar matches the start of it...      */
-                   strlen(browser_current_url(b)) > strlen(url) &&       /* ...but there's more of the current URL left */
-                   browser_current_url(b)[strlen(url)] == '?'            /* ...and the first extra character is a '?',  */
+              StrNCpy0(erb.errmess,
+                       lookup_token("CantReload:This page cannot be reloaded, as it was sent directly from another application.",
+                                    0,
+                                    0));
 
-                 )
-                 ChkError(fetchpage_new(b, browser_current_url(b), 1, 1));  /* ...then fetch the current URL instead.      */
+              show_error_ret(&erb);
+            }
+            else
+            {
+              #ifdef HIDE_CGI
 
-              else ChkError(fetchpage_new(b, url, 1, 1)); /* Otherwise do what the user asked! */
+                /* If HIDE_CGI is defined, the URL bar may have only part of    */
+                /* the URL in it - the CGI information could be stripped off.   */
+                /* In that case, check if the URL matches the browser's current */
+                /* one with the exception of the CGI stuff, and only do the     */
+                /* fetch if not.                                                */
 
-            #else
+                if (
+                     browser_current_url(b) &&                               /* If there *is* a current URL, and            */
+                     !strncmp(browser_current_url(b), url, strlen(url)) &&   /* the URL bar matches the start of it...      */
+                     strlen(browser_current_url(b)) > strlen(url) &&         /* ...but there's more of the current URL left */
+                     browser_current_url(b)[strlen(url)] == '?'              /* ...and the first extra character is a '?',  */
 
-              /* Start the new fetch */
+                   )
+                   ChkError(fetchpage_new(b, browser_current_url(b), 1, 1)); /* ...then fetch the current URL instead.      */
 
-              ChkError(fetchpage_new(b, url, 1, 1));
+                else ChkError(fetchpage_new(b, url, 1, 1)); /* Otherwise do what the user asked! */
 
-            #endif
+              #else
+
+                /* Start the new fetch */
+
+                ChkError(fetchpage_new(b, url, 1, 1));
+
+              #endif
+            }
 
             return 1;
           }
@@ -2266,6 +1837,23 @@ int handle_reload(int eventcode, ToolboxEvent * event, IdBlock * idb, void * han
   int               from_menu = 0;
 
   handlers_get_call_info(&b, &t, idb, ButtonReload);
+
+  /* If the browser is displaying a temporary file, can't reload it */
+
+  if (b->displayed == Display_Scrap_File)
+  {
+    erb.errnum = Utils_Error_Custom_Message;
+
+    StrNCpy0(erb.errmess,
+             lookup_token("CantReload:This page cannot be reloaded, as it was sent directly from another application.",
+                          0,
+                          0));
+
+    show_error_ret(&erb);
+
+    return 0;
+  }
+
   from_menu = handlers_menu_or_toolbar(idb);
   new_view  = (from_menu || fixed.ignoreadjust) ? 0 : adjust();
 
