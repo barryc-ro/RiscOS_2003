@@ -54,13 +54,15 @@ resources: resources-${CMDHELP}
 
 resources_common:
         ${MKDIR} ${RESDIR}.${COMPONENT}
-        ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
+        TokenCheck LocalRes:Messages
+        ${CP} LocalRes:Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
 
 resources-None: resources_common
 	@
 
 resources-: resources_common
-	print Resources.${LOCALE}.CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
+        TokenCheck LocalRes:CmdHelp
+	print LocalRes:CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
 
 ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}
@@ -69,41 +71,3 @@ ${EXP_HDR}.Filter: hdr.Filter
         ${CP} hdr.Filter $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-rm.FilterMgr: Hdr:ListOpts
-rm.FilterMgr: Hdr:Macros
-rm.FilterMgr: Hdr:System
-rm.FilterMgr: Hdr:SWIs
-rm.FilterMgr: Hdr:CPU.Generic26
-rm.FilterMgr: Hdr:IO.GenericIO
-rm.FilterMgr: Hdr:RISCOS
-rm.FilterMgr: Hdr:ModHand
-rm.FilterMgr: Hdr:Services
-rm.FilterMgr: Hdr:VduExt
-rm.FilterMgr: Hdr:FSNumbers
-rm.FilterMgr: Hdr:NewErrors
-rm.FilterMgr: Hdr:Variables
-rm.FilterMgr: Hdr:Proc
-rm.FilterMgr: Hdr:Sprite
-rm.FilterMgr: Hdr:Wimp
-rm.FilterMgr: Hdr:WimpSpace
-rm.FilterMgr: Hdr:Messages
-rm.FilterMgr: Hdr:FilerAct
-rm.FilterMgr: Hdr:CMOS
-rm.FilterMgr: Hdr:MsgTrans
-rm.FilterMgr: Hdr:MsgMenus
-rm.FilterMgr: Hdr:ResourceFS
-rm.FilterMgr: Hdr:ColourTran
-rm.FilterMgr: Hdr:Hourglass
-rm.FilterMgr: Hdr:NdrDebug
-rm.FilterMgr: Hdr:Switcher
-rm.FilterMgr: Version
-rm.FilterMgr: s.ModHead
-rm.FilterMgr: s.SWIs
-rm.FilterMgr: s.MsgTrans
-rm.FilterMgr: s.PreFilter
-rm.FilterMgr: s.RectFilter
-rm.FilterMgr: s.PoRtFilter
-rm.FilterMgr: s.PoIcFilter
-rm.FilterMgr: s.CopyFilter
-rm.FilterMgr: s.PostFilter
-rm.FilterMgr: s.Tail
