@@ -3209,25 +3209,71 @@ the failure to verify occurred. This will be one of
 
 static _kernel_oserror *http_verifymessagedigest(http_verifymessagedigest_args *r)
 {
-#if defined(NO_SECURE) || !defined(VERIFY_MD)
+#if defined(NO_SECURE)
     return make_error(err_SSL_NOT_AVAILABLE);
+    r = r;
+#elif !defined(VERIFY_MD)
+    r->out.rc = http_vmd_rc_NOT_SUPPORTED;
+    return NULL;
     r = r;
 #else
     _kernel_oserror *e = NULL;
-    EVP_PKEY *pkey;
+    EVP_PKEY *pkey = NULL;
     int rc = http_vmd_rc_BAD_INPUT;
 
-    /* get the initial public key - assume RSA type for now */
-    /* pp, length fields appear to be unused in RSA key stuff*/
-    pkey = d2i_PublicKey(EVP_PKEY_RSA, NULL, NULL, 0);
-    if (pkey == NULL)
-	rc = http_vmd_rc_BAD_INPUT;
-
-    /* if there's a certificate given then extract the public key from it to use instead */
-    if (pkey && r->in.certificate_filename)
+    fdebugf(log_file, "HTTP_VerifyMessageDigest:\n  flags %08x\n  key '%s'\n  cert '%s'\n  message @ 0x%p/%d\n  digest @ 0x%p/%d\n",
+	    r->in.flags,
+	    r->in.public_key ? r->in.public_key : "",
+	    r->in.certificate ? r->in.certificate : "",
+	    r->in.message_data, r->in.message_data_len, 
+	    r->in.digest_data, r->in.digest_data_len);
+   
+    /* check some initial values */
+    if (r->in.message_data == NULL || r->in.message_data_len == 0 ||
+	r->in.digest_data == NULL || r->in.digest_data_len == 0)
+    {
+	r->out.rc = rc;
+	return NULL;
+    }
+    
+    /* get the initial public key from the file */
+    if (r->in.public_key)
     {
 	FILE *f;
-	if ((f = fopen(r->in.certificate_filename, "rb")) != NULL)
+	if ((f = fopen(r->in.public_key, "rb")) != NULL)
+	{
+	    X509 *xcert;
+
+	    /* extract X509 certificate from file */
+	    if (r->in.flags & http_vmd_flag_KEY_DER)
+	    {
+		xcert = d2i_X509_fp(f, NULL);
+	    }
+	    else
+	    {
+		xcert = PEM_read_X509(f, NULL, 0); /* specify default callback function - could be awkward if it was called */
+	    }
+	    
+	    fclose(f);
+	    
+	    fdebugf(log_file, "key cert @ 0x%p\n", xcert);
+
+	    if (xcert)
+	    {
+		pkey = X509_extract_key(xcert);
+
+		fdebugf(log_file, "key @ 0x%p\n", pkey);
+
+		X509_free(xcert);
+	    }
+	}	
+    }
+
+    /* if there's a certificate given then extract the public key from it to use instead */
+    if (pkey && r->in.certificate)
+    {
+	FILE *f;
+	if ((f = fopen(r->in.certificate, "rb")) != NULL)
 	{
 	    X509 *xcert;
 
@@ -3243,6 +3289,8 @@ static _kernel_oserror *http_verifymessagedigest(http_verifymessagedigest_args *
 	    
 	    fclose(f);
 	    
+	    fdebugf(log_file, "new cert @ 0x%p\n", xcert);
+
 	    if (xcert)
 	    {
 		if (X509_verify(xcert, pkey))
@@ -3252,16 +3300,20 @@ static _kernel_oserror *http_verifymessagedigest(http_verifymessagedigest_args *
 
 		    /* replace with the new key */
 		    pkey = X509_extract_key(xcert);
+
+		    fdebugf(log_file, "new key @ 0x%p\n", pkey);
+
 		    if (!pkey)
 			rc = http_vmd_rc_BAD_CERT;
 		}
 		else
+		{
+		    fdebugf(log_file, "new cert failed to verify\n");
 		    rc = http_vmd_rc_BAD_CERT;
-
+		}
+		
 		X509_free(xcert);
 	    }
-	    else
-		rc = http_vmd_rc_BAD_INPUT;
 	}
     }
 
@@ -3273,15 +3325,20 @@ static _kernel_oserror *http_verifymessagedigest(http_verifymessagedigest_args *
 	/* set up and verify the message digest
 	 * assume MD5 only for now unless we need others
 	 */
+	fdebugf(log_file, "VerifyInit\n");
 	EVP_VerifyInit(&md_ctx, EVP_md5());
 
+	fdebugf(log_file, "VerifyUpdate\n");
 	EVP_VerifyUpdate(&md_ctx, (unsigned char *)r->in.message_data, r->in.message_data_len);
 
+	fdebugf(log_file, "VerifyFinal\n");
 	if (EVP_VerifyFinal(&md_ctx, (unsigned char *)r->in.digest_data, r->in.digest_data_len, pkey))
 	    rc = http_vmd_rc_VERIFIED;
 	else
 	    rc = http_vmd_rc_FAILED;
 	
+	fdebugf(log_file, "rc=%d\n", rc);
+
 	/* free any key we have open */
 	EVP_PKEY_free(pkey);
     }
