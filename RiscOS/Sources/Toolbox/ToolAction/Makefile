@@ -125,16 +125,16 @@ clean:
         ${WIPE} oz.* ${WFLAGS}
         ${WIPE} rm.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
-        ${WIPE} map.* ${WFLAGS}
         ${RM} ${TARGET}
         ${RM} h.toolaction
         ${RM} h.modhdr
         @echo ${COMPONENT}: cleaned
 
-resources:
+resources: LocalRes:Messages
         ${MKDIR} ${RESDIR}
-        ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.Messages ${CPFLAGS}
-        @echo ${COMPONENT}: resource files copied
+	TokenCheck LocalRes:Messages
+        ${CP} LocalRes:Messages ${RESDIR}.Messages ${CPFLAGS}
+        @echo ${COMPONENT}: resource files copied to Messages module
 
 #
 # ROM target (re-linked at ROM Image build time)
@@ -145,8 +145,7 @@ ${TARGET}: ${ROMOBJS} ${ROMCSTUBS} ${OSLIB}
 # Final link for the ROM Image (using given base address)
 #
 rom_link:
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
