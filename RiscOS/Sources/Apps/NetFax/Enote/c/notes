@@ -1,0 +1,432 @@
+/* notes.c */
+
+#include "include.h"
+#include "tbox.h"
+#include "error.h"
+#include "misc.h"
+#include "miscwimp.h"
+#include "addrbookIF.h"
+#include "daytonaIF.h"
+#include "strings.h"
+#include "notes.h"
+#include "runes.h"
+#include "globals.h"
+
+static ComponentId notes_gadget_store = -1;
+
+static int forms_cancel_action;
+static char notes_display_str[256];
+
+static void notes_cancel_ok (void);
+
+void notes_write_file (const char *path, const char *leafname)
+{
+  char *file, *buffer, *last_whitespace = NULL, *start_of_line, *ptr;
+  char c;
+  FILE *fp;
+  int size, index=0, count = 0, num_chars;
+
+  _kernel_swi_regs r;
+  int char_width, text_area_width;
+
+  BBox b_box;
+
+  r.r[1] = (int) "Corpus.Medium";
+#if 0
+  r.r[2] = 192;  /* 12 pt */
+  r.r[3] = 192;  /* 12 pt */
+#else
+  r.r[2] = 160;  /* 10 pt */
+  r.r[3] = 160;  /* 10 pt */
+#endif
+  r.r[4] = -1;
+  r.r[5] = -1;
+
+  /* Get the font handle for the font used in the textarea */
+  _kernel_swi (Font_FindFont, &r, &r);
+
+  r.r[1] = (int) "AA";
+  r.r[2] = 0;
+  r.r[3] = 1000000;
+  r.r[4] = 1000000;
+
+  /* Calculate the width of a character of the font */
+  _kernel_swi (Font_ScanString, &r, &r);
+
+  r.r[1] = r.r[3];
+  r.r[2] = r.r[4];
+
+  _kernel_swi (Font_ConverttoOS, &r, &r);
+
+  char_width = r.r[1] / 2;
+
+  /* Get the width of the textarea */
+  gadget_get_bbox (0, Enote_WindowHandle, enote_text, &b_box);
+  text_area_width = b_box.xmax - b_box.xmin;
+
+  /* Calculate how many characters fit across the textarea */
+  num_chars = text_area_width / char_width;
+
+  /******************/
+
+  /* Make up the filename */
+  file = malloc (strlen (path) + strlen (leafname) + 2);
+
+  sprintf (file, "%s.", path);
+  strcat (file, leafname);
+
+  /* and open it */
+  fp = fopen (file, "w");
+  /* what should I really do here ????? */
+  if (!fp)
+    exit (1);
+
+  /* Get the text from the textarea */
+  textarea_get_text (0, Enote_WindowHandle, enote_text, 0, 0, &size);
+  size++;
+  buffer = malloc (size);
+  textarea_get_text (0, Enote_WindowHandle, enote_text, buffer, size, NULL);
+
+  start_of_line = buffer;
+
+  /* And write it out to the file, word wrapping as necessary */
+  while ((c = buffer[index++]) != NULL)
+  {
+    if (c == '\n')
+    {
+      /* write out the line */
+      for (ptr = start_of_line; ptr < &buffer[index]; ptr++)
+        fputc (*ptr, fp);
+
+      /* And set the pointers correctly to continue */
+      count = 0;
+      last_whitespace = NULL;
+      start_of_line = &buffer[index];
+    }
+    else
+    {
+      if (c == ' ')
+        last_whitespace = &buffer[index-1];
+      count++;
+    }
+
+    if (count >= num_chars)
+    {
+      /* write out the wrapped line*/
+      if (last_whitespace)
+      {
+        for (ptr = start_of_line; ptr < last_whitespace; ptr++)
+          fputc (*ptr, fp);
+        index = last_whitespace - buffer + 1;
+      }
+      else
+      {
+        for (ptr = start_of_line; ptr < &buffer[index]; ptr++)
+        fputc (*ptr, fp);
+      }
+      /* then a carriage return */
+      fputc ('\n', fp);
+
+      /* And set the pointers correctly to continue */
+      start_of_line = &buffer[index];
+      count = 0;
+      last_whitespace = NULL;
+    }
+  };
+
+  /* write out the last line*/
+  for (ptr = start_of_line; ptr < &buffer[index-1]; ptr++)
+    fputc (*ptr, fp);
+
+  /* Close the file */
+  fclose (fp);
+
+  /* And free some memory */
+  if (buffer)
+    free (buffer);
+  if (file)
+    free (file);
+}
+
+/***********/
+void notes_cancel_decision_handler (int action, int decision)
+{
+  _kernel_oserror *er;
+  WimpGetPointerInfoBlock	 pointer_info;
+  ObjectId			 obj_name;
+
+  static ComponentId return_gadget = -1;
+
+  switch (action)
+  {
+    case DecideAction_Start:
+      /* Discover the location of the pointer (and hence the location of the
+         highlight), and store it locally so we can return to it if
+         necessary */
+      wimp_get_pointer_info (&pointer_info);
+      window_wimp_to_toolbox (0, pointer_info.window_handle,
+                              pointer_info.icon_handle,
+                              &obj_name, &return_gadget);
+
+      if (obj_name != Enote_WindowHandle)
+      {
+        /* We're in the text area, so we want to return
+           to the button wrapper around it */
+        return_gadget = enote_text_wrapper;
+      }
+
+      ui_decide_window ("EnoteCancel_Title", "Yes", "No", "EnoteCancel_Text", NULL, NULL,
+                        "decide_0", notes_cancel_decision_handler, 2);
+      break;
+
+  case DecideAction_Finished:
+    if (decision == 1)
+      notes_cancel_ok ();
+    else
+    {
+      er = ui_open_window (Open_SK_Required | Open_SK_Narrow, Enote_WindowHandle,
+                           "Enote_Title", "Enote_SK1", "Enote_SK2", "Enote_SK3",
+                           "Enote_SK4", return_gadget);
+      error_check_error (er);
+    }
+    break;
+  }
+}
+
+void notes_names_search (void)
+{
+  WimpGetPointerInfoBlock	 pointer_info;
+  ComponentId			 comp;
+  ObjectId			 obj_name;
+
+  /* Discover the location of the pointer (and hence the location of the
+     highlight) */
+  wimp_get_pointer_info (&pointer_info);
+  window_wimp_to_toolbox (0, pointer_info.window_handle,
+                          pointer_info.icon_handle,
+                          &obj_name, &comp);
+
+  dprintf (("", "obj = %x comp = %x\n", obj_name, comp));
+  dprintf (("", "Enote_WindowHandle = %x\n", Enote_WindowHandle));
+
+  /* Store the location of the caret */
+  if (obj_name == Enote_WindowHandle)
+    notes_gadget_store = comp;
+  else
+  {
+    /* We're in the text area, so we want to return
+       to the button wrapper around it */
+    notes_gadget_store = enote_text_wrapper;
+  }
+
+  /* call DayAdd to do a search */
+  ui_open_other_program_window (Open_DayAdd_NamesSearch, 0);
+}
+
+void notes_search_finished (void)
+{
+  /* Open the enote window, returning the caret to where it was before
+     the search was initiated */
+  notes_open_enotewindow (1, notes_gadget_store);
+
+  /* And acknowledge */
+  ui_open_other_program_window (Open_DayNote_Enote_Ack, 0);
+}
+
+/***********/
+void notes_open_enotewindow (int message_flags, ComponentId gadget_to_select)
+{
+  _kernel_oserror *er;
+
+  unsigned int flags = Open_SK_Required | Open_SK_Narrow;
+
+  if (message_flags == 0)
+  {
+    writablefield_set_value (0, Enote_WindowHandle, enote_to, "");
+    writablefield_set_value (0, Enote_WindowHandle, enote_subject, "");
+    textarea_set_text (0, Enote_WindowHandle, enote_text, "");
+  }
+
+  er = ui_open_window (flags, Enote_WindowHandle, "Enote_Title", "Enote_SK1",
+                       "Enote_SK2", "Enote_SK3", "Enote_SK4", gadget_to_select);
+  error_check_error (er);
+}
+
+
+/***********/
+void notes_process_returnmessage (Dayt_SearchDataReturn_Message *message)
+{
+  char buffer[256];
+  char *addon;
+  AddressArea *area;
+
+  if (message->data.code == DataReturn_Code_Cancelled)
+    return;
+
+  area = message->data.data_area;
+
+  /* Copy everything out of the DayAdd dynamic area */
+  strcpy (address_data.machine_id, area->machine_id);
+  memcpy (address_data.creation_date, area->creation_date,
+          sizeof (address_data.creation_date));
+  strcpy (address_data.fax_number, area->fax_number);
+  strcpy (address_data.voice_number, area->voice_number);
+  strcpy (address_data.software_revision, area->software_revision);
+  address_data.device_class = area->device_class;
+  address_data.encryption_method = area->encryption_method;
+  address_data.encryption_revision = area->encryption_revision;
+  address_data.pgp_key_length = area->pgp_key_length;
+  address_data.routing_override = area->routing_override;
+
+  if (address_data.company_name)
+    free (address_data.company_name);
+  address_data.company_name = strdup (area->company_name);
+
+  if (address_data.contact_name)
+    free (address_data.contact_name);
+  address_data.contact_name = strdup (area->contact_name);
+
+  if (address_data.email_address)
+    free (address_data.email_address);
+  address_data.email_address = strdup (area->email_address);
+
+  if (address_data.pgp_key)
+    free (address_data.pgp_key);
+  address_data.pgp_key = strdup (area->pgp_key);
+
+  /* Then free the DayAdd dunamic area */
+  miscwimp_free_data_area (message->data.data_area_id, message->hdr.sender,
+                           DataRelease_AppCode_DayAdd);
+
+
+  /* Then copy address data into the window */
+
+  if (strlen (address_data.email_address))
+    addon = address_data.email_address;
+  else
+    addon = address_data.fax_number;
+
+  if ((strlen (address_data.contact_name) + strlen (addon)) <= 252)
+  {
+    sprintf (buffer, "%s <", address_data.contact_name);
+    strcat (buffer, addon);
+    strcat (buffer, ">");
+  }
+  else
+  {
+    strcpy (buffer, addon);
+  }
+  writablefield_set_value (0, Enote_WindowHandle, enote_to, buffer);
+
+  strcpy (notes_display_str, buffer);
+}
+
+void notes_send_enote (void)
+{
+  int to_size, subject_size, text_size;
+  char *to, *subject;
+
+  /* validate data, then send enote */
+  /**********************************/
+
+  writablefield_get_value (0, Enote_WindowHandle, enote_to, NULL, 0, &to_size);
+  writablefield_get_value (0, Enote_WindowHandle, enote_subject, NULL, 0, &subject_size);
+  textarea_get_text (0, Enote_WindowHandle, enote_text, NULL, 0, &text_size);
+
+  if ((to_size > 1) && (subject_size > 1) && (text_size > 1))
+  {
+    to      = miscwimp_get_writable_value (Enote_WindowHandle, enote_to);
+    subject = miscwimp_get_writable_value (Enote_WindowHandle, enote_subject);
+
+    if ((to != NULL) && (subject != NULL))
+    {
+      if (!strcmp (notes_display_str, to))
+      {
+        dprintf (("", "Sending enote using address book record.\n"));
+        DaytonaIF_SendEnote (0, subject, NULL);
+      }
+      else
+      {
+        dprintf (("", "Sending enote using one shot email.\n"));
+        DaytonaIF_SendEnote (1, subject, to);
+      }
+      ui_open_other_program_window (Open_Daytona_Home, 0);
+    }
+    if (to)
+      free (to);
+
+    if (subject)
+      free (subject);
+  }
+  else
+  {
+    if (to_size < 2)
+    {
+      action_after_confirm = ConfirmAction_OpenEnote;
+      action_after_confirm_gadget = enote_to;
+      ui_confirm_window ("Enote_Title", "EnoteSend_NoRecipient", "", "",
+                         "confirm_1", runes_confirm_finished);
+    }
+    else if (subject_size < 2)
+    {
+      action_after_confirm = ConfirmAction_OpenEnote;
+      action_after_confirm_gadget = enote_subject;
+      ui_confirm_window ("Enote_Title", "EnoteSend_NoSubject", "", "",
+                         "confirm_1", runes_confirm_finished);
+    }
+    else
+    {
+      action_after_confirm = ConfirmAction_OpenEnote;
+      action_after_confirm_gadget = enote_text_wrapper;
+      ui_confirm_window ("Enote_Title", "EnoteSend_NoText", "", "",
+                         "confirm_1", runes_confirm_finished);
+    }
+  }
+}
+
+/**********/
+void notes_cancel_enote (int action)
+{
+  int to_size, subject_size, text_size;
+
+  forms_cancel_action = action;
+
+  writablefield_get_value (0, Enote_WindowHandle, enote_to, NULL, 0, &to_size);
+  writablefield_get_value (0, Enote_WindowHandle, enote_subject, NULL, 0, &subject_size);
+  textarea_get_text (0, Enote_WindowHandle, enote_text, NULL, 0, &text_size);
+
+  if ((to_size > 1) || (subject_size > 1) || (text_size > 1))
+    notes_cancel_decision_handler (DecideAction_Start, 0);
+  else
+    notes_cancel_ok ();
+}
+
+#if 0
+void notes_free_area (void)
+{
+  if (notes_area)
+  {
+    miscwimp_free_data_area (notes_area_id, 0);
+    notes_area = NULL;
+    notes_area_id = -1;
+  }
+}
+#endif
+
+static void notes_cancel_ok (void)
+{
+ /* notes_free_area (); */
+
+  switch (forms_cancel_action)
+  {
+    case CancelAction_Choice:
+      ui_open_window (Open_SK_Required | Open_SK_Narrow, Choice_WindowHandle,
+                      "Choice_Title", "Choice_SK1", "Choice_SK2", "Choice_SK3",
+                      "Choice_SK4", -1);
+      break;
+
+    case CancelAction_Home:
+      ui_open_other_program_window (Open_Daytona_Home, 0);
+      break;
+  }
+}

@@ -1,0 +1,218 @@
+; File:    s.EEPROM
+; Purpose: SWI code for EEPROM access in DaytonaHW module
+; Author:  Mark RISON
+; History:
+; 1997-10-21  MGR   Created
+; 1997-10-22  MGR   Bug fixes following testing!
+; 1997-11-11  MGR   Adapted for use from DaytonaHW
+;                   Add reading of territory number
+
+
+; The bit mask for b6-b4 in the IIC control byte for normal pages (A2 notA1 A0)
+bits_b6b4	EQU	2_101 :SHL: 4
+; The bit mask for doing an OTP page write
+bits_writeOTP	EQU	2_0110 :SHL: 4
+; The bit mask for doing an OTP page read
+bits_readOTP	EQU	bits_writeOTP :OR: 2_1
+; The bit mask for doing a write to page 0
+bits_write0	EQU	2_1 :SHL: 7 :OR: bits_b6b4
+; The bit mask for doing a read to page 0
+bits_read0	EQU	bits_write0 :OR: 2_1
+; Error codes
+Error_Checksum	EQU	&813c00
+Error_BadItem	EQU	&813c01
+; IIC_Control SWI number
+XIIC_Control	EQU	&240 + (1 :SHL: 17)
+
+
+	AREA	|C$$code|, CODE, READONLY
+
+; _kernel_oserror *EEPROM_ReadOTP (int item, int *itemaddr)
+;
+; Reads an item from the OTP.  The item to read is in a1 (r0):
+;
+; 0 = model code
+; 1 = PCB issue level
+; 2 = internal serial number
+; 3 = territory number
+; 4 = Ethernet address, low part
+; 5 = Ethernet address, high part
+;
+; The item is returned at the address pointed to by a2 (r1), unless
+; an error occurs.
+
+	EXPORT	EEPROM_ReadOTP
+
+EEPROM_ReadOTP
+
+ro_r0_addr	RN	r0
+ro_r0_sum	RN	r0
+ro_r0_item	RN	r0
+ro_r1_blk	RN	r1
+ro_r1_itemaddr	RN	r1
+ro_r2_len	RN	r2
+ro_r3_item	RN	r3
+
+	STMFD	sp!, {ro_r1_itemaddr, lr}
+
+	MOV	ro_r3_item, ro_r0_item		; Save requested item
+
+	SUB	sp, sp, #16			; Get 16 bytes from stack
+
+	MOV	ro_r0_addr, #bits_writeOTP	; Write address
+	MOV	lr, #0				; Address fixed at 0 for OTP
+	STRB	lr, [sp]
+	MOV	ro_r1_blk, sp			; Point at block
+	MOV	ro_r2_len, #1			; Just the address
+	SWI	XIIC_Control			; Corrupts r0 (see 5a-662)
+	BVS	readOTP_failed_iic
+
+	MOV	ro_r0_addr, #bits_readOTP	; Read data
+	MOV	ro_r2_len, #16			; The whole page
+	SWI	XIIC_Control
+	BVS	readOTP_failed_iic
+
+	MOV	ro_r0_sum, #0			; Add up the OTP bytes
+readOTP_check_sum
+	SUBS	ro_r2_len, ro_r2_len, #1
+	LDRB	lr, [sp, ro_r2_len]
+	ADD	ro_r0_sum, ro_r0_sum, lr
+	BNE	readOTP_check_sum
+
+	TST	ro_r0_sum, #&ff			; Should sum to 0 (modulo &100)
+	BNE	readOTP_failed_checksum
+
+	CMP	ro_r3_item, #6			; Should be < 6
+	BHS	readOTP_failed_baditem
+
+	CMP	ro_r3_item, #0			; Model code
+	LDREQB	ro_r0_item, [sp, #1]
+	BEQ	readOTP_success
+	CMP	ro_r3_item, #1			; PCB issue level
+	LDREQB	ro_r0_item, [sp, #2]
+	BEQ	readOTP_success
+	CMP	ro_r3_item, #2			; Serial number
+	LDREQ	ro_r0_item, [sp, #4]
+	BEQ	readOTP_success
+	CMP	ro_r3_item, #3			; Territory number
+	LDREQB	ro_r0_item, [sp, #3]
+	BEQ	readOTP_success
+	CMP	ro_r3_item, #4			; Ethernet address
+	LDREQ	ro_r0_item, [sp, #8]		; (low part)
+	LDRNE	ro_r0_item, [sp, #12]		; (high part)
+	MOVNE	ro_r0_item, ro_r0_item, LSL#16	; Only bottom 16 bits for high
+	MOVNE	ro_r0_item, ro_r0_item, LSR#16
+
+readOTP_success					; Z set here unless Ethernet
+	ADD	sp, sp, #16			; Wind back up
+	LDMFD	sp!, {ro_r1_itemaddr}		; Store item
+	STR	ro_r0_item, [ro_r1_itemaddr]
+	MOV	r0, #0				; Success!
+
+	LDMFD	sp!, {pc}^
+
+
+readOTP_failed_baditem
+	ADR	r0, readOTP_error_baditem
+	B	readOTP_failed
+
+readOTP_failed_checksum
+	ADR	r0, readOTP_error_checksum
+
+readOTP_failed_iic
+readOTP_failed
+
+	ADD	sp, sp, #20			; Wind back up, skipping r1
+
+	LDMFD	sp!, {pc}^
+
+readOTP_error_checksum
+	DCD	Error_Checksum
+	DCB	"Invalid checksum", 0
+	ALIGN
+
+readOTP_error_baditem
+	DCD	Error_BadItem
+	DCB	"Bad item", 0
+	ALIGN
+
+
+; int EEPROM_ReadCMOS (int offset)
+;
+; Reads a byte from the 'CMOS'.  The offset to read is in R0.
+;
+; Only bottom 8 bits of offset are used; this should not be relied upon.
+;
+; If an error occurs (presumably "no IIC ack"), -1 is returned.
+
+	EXPORT	EEPROM_ReadCMOS
+EEPROM_ReadCMOS
+
+rc_r0_offset	RN	r0
+rc_r0_addr	RN	r0
+rc_r1_byte	RN	r1
+rc_r1_blk	RN	r1
+rc_r2_len	RN	r2
+
+	STMFD	sp!, {lr}
+
+	SUB	sp, sp, #4			; Get 4 bytes from stack
+
+	STRB	rc_r0_offset, [sp]		; Address to read (base is 0)
+	MOV	rc_r0_addr, #bits_write0	; Write address
+	MOV	rc_r1_blk, sp			; Point at block
+	MOV	rc_r2_len, #1			; Just the address
+	SWI	XIIC_Control			; Corrupts r0 (see 5a-662)
+	MVNVS	r0, #0				; Failure!
+	BVS	readCMOS_failed_iic
+
+	MOV	rc_r0_addr, #bits_read0		; Read data
+	MOV	rc_r2_len, #1			; One byte
+	SWI	XIIC_Control
+	MVNVS	r0, #0				; Failure!
+	LDRVCB	r0, [sp]			; Success!
+
+readCMOS_failed_iic
+
+	ADD	sp, sp, #4			; Wind back up
+
+	LDMFD	sp!, {pc}^
+
+
+; int EEPROM_WriteCMOS (int offset, int byte)
+;
+; Writes a byte to the 'CMOS'.  The offset to read is in R0, the byte in R1.
+;
+; Only bottom 8 bits of offset are used; this should not be relied upon.
+;
+; If an error occurs (presumably "no IIC ack"), -1 is returned, else 0
+; is returned.
+
+	EXPORT	EEPROM_WriteCMOS
+EEPROM_WriteCMOS
+
+wc_r0_offset	RN	r0
+wc_r0_addr	RN	r0
+wc_r1_byte	RN	r1
+wc_r1_blk	RN	r1
+wc_r2_len	RN	r2
+
+	STMFD	sp!, {lr}
+
+	SUB	sp, sp, #4			; Get 4 bytes from stack
+
+	STRB	wc_r0_offset, [sp]		; Address to write (base is 0)
+	STRB	wc_r1_byte, [sp, #1]		; Byte to write
+	MOV	wc_r0_addr, #bits_write0	; Write address and byte
+	MOV	wc_r1_blk, sp			; Point at block
+	MOV	wc_r2_len, #2			; Address and byte
+	SWI	XIIC_Control			; Corrupts r0 (see 5a-662)
+	MVNVS	r0, #0				; Failure!
+	MOVVC	r0, #0				; Success!
+
+	ADD	sp, sp, #4			; Wind back up
+
+	LDMFD	sp!, {pc}^
+
+
+	END

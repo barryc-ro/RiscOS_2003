@@ -1,0 +1,787 @@
+/*	Project Post (769) - AcornPOP3
+	Acorn Risc Technologies
+	Copyright © 1997. All Rights Reserved.
+
+	FILE:		module.c
+	AUTHOR:		Richard D. Warren
+	VERSION:	0.09 for RISC OS
+
+	OVERVIEW
+	========
+	Source file for implementation of relocatable module support code for
+	the AcornPOP3 client module.
+
+	HISTORY
+	=======
+	19/02/97	0.01	RDW	Initial version
+	11/03/97	0.02	RDW	Fixed but in swi_decode_number_to_text, some strings were wrong
+	11/07/97	0.03	RDW	Tidy up when moving to correct build environment
+	11/07/97	0.04	RDW	Added support for the GetUniqueID and GetListOfUniqueIDs SWIS
+	15/07/97	0.05	RDW	Tidy up
+	25/09/97	0.06	RDW	commented out enable of event handler and disable as this
+					seems to cause traps on rmreinit sometimes and rmkill
+	10/10/97	0.07	RDW	Reversed changes 0.06 above
+					and in init_module initialised process1.stat to PROCESSING
+	13/11/97	0.08	RDW	MemCheck compile time option support added
+	17/12/97	0.09	RDW	#include for callx changed to get it from library
+*/
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Include header files - System                                              */
+/*                                                                            */
+/* ************************************************************************** */
+#include <string.h>
+#include "kernel.h"
+#include "swis.h"
+#include "socklib.h"
+#ifdef TRACE
+  #include "TML_Podule.h"
+  #include "trace.h"
+#endif
+#ifdef MEMCHECK
+  #include "MemCheck:MemCheck.h"
+#endif
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Include header files - Project defined                                     */
+/*                                                                            */
+/* ************************************************************************** */
+#include "common.h"
+#include "module.h"
+#include "swihndlers.h"
+#include "errortable.h"
+#include "callx/callx.h"
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Preprocessor Stuff                                                         */
+/*                                                                            */
+/* ************************************************************************** */
+#if CMHG_VERSION < 500
+  #error "Deliberate Error: Need CMHG version 5.xx"
+#endif
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Constants                                                                  */
+/*                                                                            */
+/* ************************************************************************** */
+static const char str_Register[]           = "AcornPOP3_Register";
+static const char str_DeRegister[]         = "AcornPOP3_DeRegister";
+static const char str_ReleaseData[]        = "AcornPOP3_ReleaseData";
+static const char str_Logon[]              = "AcornPOP3_Logon";
+static const char str_Disconnect[]         = "AcornPOP3_Disconnect";
+static const char str_AbortConnection[]    = "AcornPOP3_AbortConnection";
+static const char str_Reset[]              = "AcornPOP3_Reset";
+static const char str_Echo[]               = "AcornPOP3_Echo";
+static const char str_GetNumOfMessages[]   = "AcornPOP3_GetNumOfMessages";
+static const char str_GetListOfMessages[]  = "AcornPOP3_GetListOfMessages";
+static const char str_GetMessage[]         = "AcornPOP3_GetMessage";
+static const char str_GetXLinesOfMessage[] = "AcornPOP3_GetXLinesOfMessage";
+static const char str_DeleteMessage[]      = "AcornPOP3_DeleteMessage";
+static const char str_GetUniqueID[]        = "AcornPOP3_GetUniqueID";
+static const char str_GetListOfUniqueIDs[] = "AcornPOP3_GetListOfUniqueIDs";
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Global variables                                                           */
+/*                                                                            */
+/* ************************************************************************** */
+void *module_wsp;								// module workspace pointer
+BOOL  timeout_set;								// timeout set?
+BOOL  timeout_flag;								// timeout occured?
+int   timeouts[TIMEOUT_UIDL+1];							// value in [] must be last defined in timeout_name enum +1
+process_details process1;							// only one process in this version
+BOOL  inuse = FALSE;								// process1 in use by a client?
+static BOOL  EventV_claimed = FALSE;						// Event claimed?
+static BOOL  Internet_Event_enabled = FALSE;					// Registered for Internet event?
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* Function Prototypes - Functions internal to source file                    */
+/*                                                                            */
+/* ************************************************************************** */
+static void set_timeouts(void);							// Function to set up default timeouts
+static _kernel_oserror *enable_eventhandler(void);				// Enable events and handler
+static _kernel_oserror *disable_eventhandler(void);				// Disablve events and handler
+
+
+/* ************************************************************************** */
+/*                                                                            */
+/* DEBUG Trace functions                                                      */
+/*                                                                            */
+/* ************************************************************************** */
+#ifdef TRACE
+  static in = 0;
+
+  void DebugStart(const char* fname)
+  {
+    int i = 0;
+    
+    for (i=0;i<in;i++)
+      Printf(" ");
+      
+    Printf("%s\n", fname);
+    in++;
+  }
+
+
+  void DebugStop(const char* fname)
+  {
+    int i = 0;
+    
+    for (i=0;i<in;i++)
+      Printf(" ");
+      
+    Printf("~%s\n", fname);
+    in--;
+  }
+#endif
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       swi_handler
+   DESCRIPTION:    Function to handle SWIs of this module.  Calls appropriate
+                   function for the given SWI number or returns error_BAD_SWI.
+                   Returns error_BAD_SWI if SWI number not recognised or returns
+                   value returned by SWI implementation function.
+   DEPENDENCIES:   function             handle_swi_AcornPOP3_Register		swihndlers.h
+                   function             handle_swi_AcornPOP3_DeRegister		swihndlers.h
+                   function             handle_swi_AcornPOP3_Logon		swihndlers.h
+                   function             handle_swi_AcornPOP3_Disconnect		swihndlers.h
+                   function             handle_swi_AcornPOP3_AbortConnection	swihndlers.h
+                   function             handle_swi_AcornPOP3_Reset		swihndlers.h
+                   function             handle_swi_AcornPOP3_Echo		swihndlers.h
+                   function             handle_swi_AcornPOP3_GetNumOfMessages	swihndlers.h
+                   function             handle_swi_AcornPOP3_GetListOfMessages	swihndlers.h
+                   function             handle_swi_AcornPOP3_GetMessage		swihndlers.h
+                   function             handle_swi_AcornPOP3_GetXLinesOfMessage	swihndlers.h
+                   function             handle_swi_AcornPOP3_DeleteMessage	swihndlers.h
+		   function		handle_swi_AcornPOP3_ReleaseData	swihndlers.h
+		   function		handle_swi_AcornPOP3_GetUniqueID	swihndlers.h
+		   function		handle_swi_AcornPOP3_GetListOfUniqueIDs	swihndlers.h
+                   constant             error_BAD_SWI                   	header.h
+                   enum                 SWI_Nums                        	module.h
+   DEPENDED ON BY: 
+   INPUT PARAMS:   int                  swi_no          The SWI number
+                   _kernel_swi_regs*    r               registers
+                   void*                pw              pointer to workspace for this module
+   OUTPUT PARAMS:  none
+   RETURN VALUE:   			NULL		if SWI handled successfully,
+   							else ptr to error block
+   CONSTANTS:      
+   VARIABLES:      _kernel_oserror*     result          result to return
+                   SWI_Nums             swi_number      SWI number to use in case statement
+ */
+/* ************************************************************************** */
+_kernel_oserror* swi_handler(int swi_no, _kernel_swi_regs *r, void *pw)
+{
+  _kernel_oserror *result     = error_BAD_SWI;
+  SWI_Nums         swi_number = (SWI_Nums)swi_no;
+
+#ifdef MEMCHECK  
+  MemCheck_RegisterMiscBlock(r, sizeof(_kernel_swi_regs));
+#endif
+
+  switch (swi_number)
+  {
+    case Register:								// AcornPOP3_Register
+      result = handle_swi_AcornPOP3_Register(r, pw);
+      break;
+    case DeRegister:								// AcornPOP3_DeRegister
+      result = handle_swi_AcornPOP3_DeRegister(r, pw);
+      break;
+    case Logon:									// AcornPOP3_Logon
+      result = handle_swi_AcornPOP3_Logon(r, pw);
+      break;
+    case Disconnect:								// AcornPOP3_Disconnect
+      result = handle_swi_AcornPOP3_Disconnect(r, pw);
+      break;
+/*    case AbortConnection:							// AcornPOP3_AbortConnection
+      result = handle_swi_AcornPOP3_AbortConnection(r, pw);
+      break;
+    case Reset:									// AcornPOP3_Reset
+      result = handle_swi_AcornPOP3_Reset(r, pw);
+      break;
+    case Echo:									// AcornPOP3_Echo
+      result = handle_swi_AcornPOP3_Echo(r, pw);
+      break;*/
+    case GetNumOfMessages:							// AcornPOP3_GetNumOfMessages
+      result = handle_swi_AcornPOP3_GetNumOfMessages(r, pw);
+      break;
+    case GetListOfMessages:							// AcornPOP3_GetListOfMessages
+      result = handle_swi_AcornPOP3_GetListOfMessages(r, pw);
+      break;
+    case GetMessage:								// AcornPOP3_GetMessage
+      result = handle_swi_AcornPOP3_GetMessage(r, pw);
+      break;
+    case GetXLinesOfMessage:							// AcornPOP3_GetXLinesOfMessage
+      result = handle_swi_AcornPOP3_GetXLinesOfMessage(r, pw);
+      break;
+    case DeleteMessage:								// AcornPOP3_DeleteMessage
+      result = handle_swi_AcornPOP3_DeleteMessage(r, pw);
+      break;
+    case ReleaseData:								// AcornPOP3_ReleaseData
+      result = handle_swi_AcornPOP3_ReleaseData(r, pw);
+      break;
+    case GetUniqueID:								// AcornPOP3_GetUniqueID
+      result = handle_swi_AcornPOP3_GetUniqueID(r, pw);
+      break;
+    case GetListOfUniqueIDs:							// AcornPOP3_GetListOfUniqueIDs
+      result = handle_swi_AcornPOP3_GetListOfUniqueIDs(r, pw);
+      break;
+    default:									// Catch unknown SWI
+      result = error_BAD_SWI;
+      break;
+  }
+
+#ifdef MEMCHECK  
+  MemCheck_UnRegisterMiscBlock(r);
+#endif
+
+  return result;
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       swi_decode_text_to_number
+   DESCRIPTION:    Function to return the SWI number offset from the SWI base 
+   		   number of the given SWI name.
+   DEPENDENCIES:   function		strncmp			<string.h>
+   		   function		strlen			<string.h>
+   		   const char[]		str_Register		module.c
+   		   const char[]		str_DeRegister		module.c
+   		   const char[]		str_Logon		module.c
+   		   const char[]		str_Disconnect		module.c
+   		   const char[]		str_AbortConnection	module.c
+   		   const char[]		str_Reset		module.c
+   		   const char[]		str_Echo		module.c
+   		   const char[]		str_GetNumOfMessages	module.c
+   		   const char[]		str_GetListOfMessages	module.c
+   		   const char[]		str_GetMessage		module.c
+   		   const char[]		str_GetXLinesOfMessage	module.c
+   		   const char[]		str_DeleteMessage	module.c
+   		   const char[]		str_ReleaseData		module.c
+   		   const char[]		str_GetUniqueID		module.c
+   		   const char[]		str_GetListOfUniqueIDs	module.c
+   DEPENDED ON BY: 
+   INPUT PARAMS:   const char*		string		name to convert, terminated
+   							by a control char.
+   		   void*		pw		Pointer to workspace
+   OUTPUT PARAMS:  
+   RETURN VALUE:   			-1		if SWI name not recognised
+   							else offset (0..63) of SWI
+   CONSTANTS:      
+   VARIABLES:      int			result		result to return
+ */
+/* ************************************************************************** */
+int swi_decode_text_to_number(const char *string, void *pw)
+{
+  int      result = -1;
+  SWI_Nums swi_number;
+  
+  UNUSED(pw);
+  
+  if (strncmp(str_Register, string, strlen(str_Register)) == 0)
+    swi_number = Register;
+  else if (strncmp(str_DeRegister, string, strlen(str_DeRegister)) == 0)
+    swi_number = DeRegister;
+  else if (strncmp(str_Logon, string, strlen(str_Logon)) == 0)
+    swi_number = Logon;
+  else if (strncmp(str_Disconnect, string, strlen(str_Disconnect)) == 0)
+    swi_number = Disconnect;
+  else if (strncmp(str_AbortConnection, string, strlen(str_AbortConnection)) == 0)
+    swi_number = AbortConnection;
+  else if (strncmp(str_Reset, string, strlen(str_Reset)) == 0)
+    swi_number = Reset;
+  else if (strncmp(str_Echo, string, strlen(str_Echo)) == 0)
+    swi_number = Echo;
+  else if (strncmp(str_GetNumOfMessages, string, strlen(str_GetNumOfMessages)) == 0)
+    swi_number = GetNumOfMessages;
+  else if (strncmp(str_GetListOfMessages, string, strlen(str_GetListOfMessages)) == 0)
+    swi_number = GetListOfMessages;
+  else if (strncmp(str_GetMessage, string, strlen(str_GetMessage)) == 0)
+    swi_number = GetMessage;
+  else if (strncmp(str_GetXLinesOfMessage, string, strlen(str_GetXLinesOfMessage)) == 0)
+    swi_number = GetXLinesOfMessage;
+  else if (strncmp(str_DeleteMessage, string, strlen(str_DeleteMessage)) == 0)
+    swi_number = DeleteMessage;
+  else if (strncmp(str_ReleaseData, string, strlen(str_ReleaseData)) == 0)
+    swi_number = ReleaseData;
+  else if (strncmp(str_GetUniqueID, string, strlen(str_GetUniqueID)) == 0)
+    swi_number = GetUniqueID;
+  else if (strncmp(str_GetListOfUniqueIDs, string, strlen(str_GetListOfUniqueIDs)) == 0)
+    swi_number = GetListOfUniqueIDs;
+  else
+    result = -1;
+  
+  if (result != -1)
+    result = (int)swi_number;
+    
+  return result;
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       swi_decode_number_to_text
+   DESCRIPTION:    Function to, given a SWI number, return the SWI name
+   DEPENDENCIES:   function             strlen		<string.h>
+   		   function		strncpy		<string.h>
+   		   const char[]		str_Register		module.c
+   		   const char[]		str_DeRegister		module.c
+   		   const char[]		str_Logon		module.c
+   		   const char[]		str_Disconnect		module.c
+   		   const char[]		str_AbortConnection	module.c
+   		   const char[]		str_Reset		module.c
+   		   const char[]		str_Echo		module.c
+   		   const char[]		str_GetNumOfMessages	module.c
+   		   const char[]		str_GetListOfMessages	module.c
+   		   const char[]		str_GetMessage		module.c
+   		   const char[]		str_GetXLinesOfMessage	module.c
+   		   const char[]		str_DeleteMessage	module.c
+   		   const char[]		str_ReleaseData		module.c
+   		   const char[]		str_GetUniqueID		module.c
+   		   const char[]		str_GetListOfUniqueIDs	module.c
+                   enum                 SWI_Nums                        module.h
+   DEPENDED ON BY: 
+   INPUT PARAMS:   int			swi_no		SWI number offset from SWI base for this module
+                   char*		buffer		buffer to copy string into
+                   int                  offset          offset position in buffer to copy string to
+                   int			end		end of buffer position
+                   void*                pw		Pointer to workspace
+   OUTPUT PARAMS:  char*                buffer          buffer holding string
+   RETURN VALUE:   int					new offset value
+   CONSTANTS:      none
+   VARIABLES:      SWI_Nums		swi_number	SWI number to use in case statement
+ */
+/* ************************************************************************** */
+int swi_decode_number_to_text(int swi_no, char *buffer, int offset, int size, void *pw)
+{
+  SWI_Nums swi_number = (SWI_Nums)swi_no;
+  int      length     = 0;
+  char*    string     = 0;
+  
+  UNUSED(pw);
+  
+  switch (swi_number)
+  {
+    case Register:								// AcornPOP3_Register
+      length = strlen(str_Register);
+      string = (char*)str_Register;
+      break;
+    case DeRegister:								// AcornPOP3_DeRegister
+      length = strlen(str_DeRegister);
+      string = (char*)str_DeRegister;
+      break;
+    case Logon:									// AcornPOP3_Logon
+      length = strlen(str_Logon);
+      string = (char*)str_Logon;
+      break;
+    case Disconnect:								// AcornPOP3_Disconnect
+      length = strlen(str_Disconnect);
+      string = (char*)str_Disconnect;
+      break;
+    case AbortConnection:							// AcornPOP3_AbortConnection
+      length = strlen(str_AbortConnection);
+      string = (char*)str_AbortConnection;
+      break;
+    case Reset:									// AcornPOP3_Reset
+      length = strlen(str_Reset);
+      string = (char*)str_Reset;
+      break;
+    case Echo:									// AcornPOP3_Echo
+      length = strlen(str_Echo);
+      string = (char*)str_Echo;
+      break;
+    case GetNumOfMessages:							// AcornPOP3_GetNumOfMessages
+      length = strlen(str_GetNumOfMessages);
+      string = (char*)str_GetNumOfMessages;
+      break;
+    case GetListOfMessages:							// AcornPOP3_GetListOfMessages
+      length = strlen(str_GetListOfMessages);
+      string = (char*)str_GetListOfMessages;
+      break;
+    case GetMessage:								// AcornPOP3_GetMessage
+      length = strlen(str_GetMessage);
+      string = (char*)str_GetMessage;
+      break;
+    case GetXLinesOfMessage:							// AcornPOP3_GetXLinesOfMessage
+      length = strlen(str_GetXLinesOfMessage);
+      string = (char*)str_GetXLinesOfMessage;
+      break;
+    case DeleteMessage:								// AcornPOP3_DeleteMessage
+      length = strlen(str_DeleteMessage);
+      string = (char*)str_DeleteMessage;
+      break;    
+    case ReleaseData:								// AcornPOP3_ReleaseData
+      length = strlen(str_ReleaseData);
+      string = (char*)str_ReleaseData;
+      break;    
+    case GetUniqueID:								// AcornPOP3_GetUniqueID
+      length = strlen(str_GetUniqueID);
+      string = (char*)str_GetUniqueID;
+      break;    
+    case GetListOfUniqueIDs:							// AcornPOP3_GetListOfUniqueIDs
+      length = strlen(str_GetListOfUniqueIDs);
+      string = (char*)str_GetListOfUniqueIDs;
+      break;    
+    default:									// Catch all
+      length = 0;
+      string = 0;
+      break;
+  }
+  
+  if (string == 0)								// SWI number not recognised
+    offset = offset;
+  else
+  {
+    int space = size - offset;							// Calculate end of space in buffer for our string
+    strncpy(buffer+offset, string, space);					// Copy our string into buffer
+    if (space < length)								// If space available was smaller than the length of our string, then
+      offset += space;								//   offset is increased by space as we'll have used it all
+    else									// else
+      offset += length;								//   offset is increased by the length of our string
+  }
+  
+  return offset;
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       set_timeout
+   DESCRIPTION:    UNUSED and not finished yet
+   DEPENDENCIES:   BOOL		timeout_flag		
+   		   BOOL		timeout_set
+   		   void*	module_wsp
+   		   (func)*	timeout_entry
+   DEPENDED ON BY: 
+   INPUT PARAMS:   
+   OUTPUT PARAMS:  
+   RETURN VALUE:   
+   CONSTANTS:      
+   VARIABLES:      
+ */
+/* ************************************************************************** */
+/*extern BOOL set_timeout(int timeout)
+{
+  _kernel_swi_regs r;
+  _kernel_oserror *result = 0;
+  BOOL             rc     = FALSE;
+  
+  if (!timeout_set)
+  {
+    timeout_flag = FALSE;
+    r.r[0] = (int) timeout*60*100;
+    r.r[1] = (int) timeout_entry;
+    r.r[2] = (int) module_wsp;
+    
+    result = _kernel_swi(OS_CallAfter, &r, &r);
+  }
+  
+  if (result)
+    rc = FALSE;
+  else
+    rc = TRUE;
+    
+  return rc;
+}
+*/
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       cancel_timeout
+   DESCRIPTION:    UNUSED and not finished yet
+   DEPENDENCIES:   BOOL		timeout_flag		
+   		   BOOL		timeout_set
+   		   void*	module_wsp
+   		   (func)*	timeout_entry
+   DEPENDED ON BY: 
+   INPUT PARAMS:   
+   OUTPUT PARAMS:  
+   RETURN VALUE:   
+   CONSTANTS:      
+   VARIABLES:      
+ */
+/* ************************************************************************** */
+/*extern BOOL cancel_timeout(void)
+{
+  _kernel_swi_regs r;
+  _kernel_oserror *result = 0;
+  BOOL             rc     = FALSE;
+  
+  if (timeout_set)
+  {
+    timeout_flag = FALSE;
+    timeout_set  = FALSE;
+    
+    r.r[0] = (int) timeout_entry;
+    r.r[1] = (int) module_wsp;
+    
+    result = _kernel_swi(OS_RemoveTickerEvent, &r, &r);
+  }
+  
+  if (result)
+    rc = FALSE;
+  else
+    rc = TRUE;
+    
+  return rc;
+}
+*/
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       init_module
+   DESCRIPTION:    Function to initialise module global vars, etc. on startup
+		   Return NULL if your initialisation succeeds; otherwise return a pointer
+		   to an error block. cmd_tail points to the string of arguments with which
+		   the module is invoked (may be "").
+		   podule_base is 0 unless the code has been invoked from a podule.
+		   pw is the 'R12' value established by module initialisation. You may
+		   assume nothing about its value (in fact it points to some RMA space
+		   claimed and used by the module veneers). All you may do is pass it back
+		   for your module veneers via an intermediary such as SWI OS_CallEvery
+		   (use _swix() to issue the SWI call).
+   DEPENDENCIES:   void*		module_wsp		Module workspace pointer
+   		   BOOL			in_use			process1 in use flag
+   		   process_details	process1		client process state
+   DEPENDED ON BY: 
+   INPUT PARAMS:   
+   OUTPUT PARAMS:  
+   RETURN VALUE:   
+   CONSTANTS:      NONE
+   VARIABLES:      _kernel_oserror*	error			result to return
+   		   _kernel_oserror*	error2			rcode from disable_eventhandler
+ */
+/* ************************************************************************** */
+_kernel_oserror *init_module(char *cmd_tail, int podule_base, void *pw)
+{
+  _kernel_oserror *error  = 0;
+  _kernel_oserror *error2 = 0;
+  module_wsp = pw;
+
+#ifdef MEMCHECK
+  MemCheck_InitNoDebug();
+  MemCheck_RedirectToFilename(tmpnam(0));
+  MemCheck_SetStoreMallocFunctions(1);
+  MemCheck_InterceptSCLStringFunctions();
+#endif
+
+  UNUSED(podule_base);
+  UNUSED(cmd_tail);
+  
+#ifdef TRACE
+  Trace_IgnoreFunctions("DebugStart DebugStop Printf event_handler handle_Socket_Async_Event _dprintf");
+  Trace_SetHandlers((Trace_fnstarthandler)DebugStart, (Trace_fnstophandler)DebugStop);
+  Trace_InterceptAllFunctions();
+#endif
+
+  callx_init(module_wsp);
+  // INIT globals
+  inuse = FALSE;  
+  process1.socknum = -1;
+  process1.read_buf_pos = 0;
+  process1.read_buf_size = READBUFLEN;
+  memset(process1.read_buffer, 0, process1.read_buf_size);
+  process1.pollword = 0;  
+  process1.state = PROCESSING;
+  set_timeouts();								// Use hardcoded timeouts  
+  EventV_claimed         = FALSE;
+  Internet_Event_enabled = FALSE;
+
+  error = enable_eventhandler();						// Enable Event handler for Internet Event
+  if (error)									// If failed then
+    error2 = disable_eventhandler();						// Disable the event
+  
+  if (error2)									// If disable_eventhandler returned an error then report that error
+    error = error2;								// else report the error from enabling the event handler
+    
+  return error;
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       kill_module
+   DESCRIPTION:    Function to close down module 
+		   Return NULL if your finalisation succeeds. Otherwise return a pointer to
+		   an error block if your finalisation handler does not wish to die (e.g.
+		   toolbox modules return a 'Task(s) active' error).
+		   fatal, podule and pw are the values of R10, R11 and R12 (respectively)
+		   on entry to the finalisation code.
+   DEPENDENCIES:   void*		module_wsp		Module workspace pointer
+		   process_details	process1		client process state
+   DEPENDED ON BY: 
+   INPUT PARAMS:   
+   OUTPUT PARAMS:  
+   RETURN VALUE:   
+   CONSTANTS:      
+   VARIABLES:      _kernel_oserror*	error			result to return
+ */
+/* ************************************************************************** */
+_kernel_oserror *kill_module(int fatal, int podule, void *pw)
+{
+  _kernel_oserror *error = 0;
+  module_wsp = pw;
+
+  UNUSED(podule);
+  UNUSED(fatal);
+  
+  if (process1.socknum != -1)							// If process has a valid socket allocated, then
+  {
+    shutdown(process1.socknum, 2);						// ensure it's connection is closed
+    socketclose(process1.socknum);						// deallocate the socket
+  }
+  
+  error = callx_remove_all_callafters();
+  error = callx_remove_all_callbacks();
+  error = disable_eventhandler();						// disable event handlers
+
+#ifdef MEMCHECK
+  MemCheck_OutputBlocksInfo();
+#endif
+  
+  return error;
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       set_timeouts
+   DESCRIPTION:    Function to setup default timeouts (UNUSED ATM) Needs to be
+   		   finished.
+   DEPENDENCIES:   
+   DEPENDED ON BY: 
+   INPUT PARAMS:   
+   OUTPUT PARAMS:  
+   RETURN VALUE:   
+   CONSTANTS:      
+   VARIABLES:      
+ */
+/* ************************************************************************** */
+static void set_timeouts(void)
+{
+  timeouts[TIMEOUT_idle]      = 10;						// Number of minutes
+  timeouts[TIMEOUT_default]   = 5;						// Number of minutes
+  timeouts[TIMEOUT_connect]   = 5;						// Number of minutes to wait for 220 response on initial connection to server
+  timeouts[TIMEOUT_RETRblock] = 3;						// Number of minutes to wait before giving up receiving message data
+  timeouts[TIMEOUT_QUIT]      = 2;						// Number of minutes to wait after sending QUIT command
+  timeouts[TIMEOUT_STAT]      = 2;						// Number of minutes to wait after sending STAT command
+  timeouts[TIMEOUT_LIST]      = 2;						// Number of minutes to wait after sending LIST command
+  timeouts[TIMEOUT_RETR]      = 2;						// Number of minutes to wait after sending RETR command
+  timeouts[TIMEOUT_DELE]      = 2;						// Number of minutes to wait after sending QUIT command
+  timeouts[TIMEOUT_NOOP]      = 2;						// Number of minutes to wait after sending NOOP command
+  timeouts[TIMEOUT_RSET]      = 2;						// Number of minutes to wait after sending RSET command
+  timeouts[TIMEOUT_TOP]       = 2;						// Number of minutes to wait after sending TOP  command
+  timeouts[TIMEOUT_USER]      = 2;						// Number of minutes to wait after sending USER command
+  timeouts[TIMEOUT_PASS]      = 2;						// Number of minutes to wait after sending PASS command
+  timeouts[TIMEOUT_APOP]      = 2;						// Number of minutes to wait after sending APOP command
+  timeouts[TIMEOUT_UIDL]      = 2;						// Number of minutes to wait after sending UIDL command
+}
+    
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       enable_eventhandler
+   DESCRIPTION:    Function to claim events and enable Internet Event
+   DEPENDENCIES:   void*		module_wsp		Module workspace pointer
+   		   type			_kernel_oserror		kernel.h
+   		   type			_kernel_swi_regs	kernel.h
+   		   global		EventV_claimed		module.c
+   		   global		Internet_Event_enabled	module.c
+   		   constant		EventV			common.h
+   		   constant		Internet_Event		common.h
+   		   constant		Event_Enable		common.h
+   DEPENDED ON BY: function		init_module		module.c
+   INPUT PARAMS:   NONE
+   OUTPUT PARAMS:  NONE
+   RETURN VALUE:   _kernel_oserror*	NULL			if all okay, else error block
+   CONSTANTS:      NONE
+   VARIABLES:      _kernel_oserror*	error			result to return
+   		   _kernel_swi_regs	r			SWI registers
+ */
+/* ************************************************************************** */
+static _kernel_oserror *enable_eventhandler(void)
+{
+  _kernel_oserror *error = 0;							// Error to return
+  _kernel_swi_regs r;								// Processor registers
+  
+  r.r[0] = EventV;
+  r.r[1] = (int)event_entry;
+  r.r[2] = (int)module_wsp;
+  error = _kernel_swi(OS_Claim, &r, &r);					// Claim EventV
+
+  if (!error)
+  {
+    EventV_claimed = TRUE;							// set claimed global to TRUE
+    r.r[0] = Event_Enable;
+    r.r[1] = Internet_Event;
+    error = _kernel_swi(OS_Byte, &r, &r);					// Enable Internet Event
+  }
+  
+  if (!error)
+    Internet_Event_enabled = TRUE;						// enabled global to TRUE
+    
+  return error;
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       disable_eventhandler
+   DESCRIPTION:    Function to release claimed events and disable event handler
+   DEPENDENCIES:   void*		module_wsp		Module workspace pointer
+   		   type			_kernel_oserror		kernel.h
+   		   type			_kernel_swi_regs	kernel.h
+   		   global		EventV_claimed		module.c
+   		   global		Internet_Event_enabled	module.c
+   		   constant		EventV			common.h
+   		   constant		Internet_Event		common.h
+   		   constant		Event_Disable		common.h
+   DEPENDED ON BY: function		kill_module		module.c
+   INPUT PARAMS:   NONE
+   OUTPUT PARAMS:  NONE
+   RETURN VALUE:   _kernel_oserror*	NULL			if all okay, else error block
+   CONSTANTS:      NONE
+   VARIABLES:      _kernel_oserror*	error			result to return
+   		   _kernel_swi_regs	r			SWI registers
+ */
+/* ************************************************************************** */
+static _kernel_oserror *disable_eventhandler(void)
+{
+  _kernel_oserror *error = 0;							// Error to return
+  _kernel_swi_regs r;								// Processor registers
+  
+  if (Internet_Event_enabled)
+  {
+    r.r[0] = Event_Disable;							// Disable Internet Event
+    r.r[1] = Internet_Event;
+    error = _kernel_swi(OS_Byte, &r, &r);					// Call SWI
+    if (!error)									// If no error then
+      Internet_Event_enabled = FALSE;						// set enabled global to FALSE
+  }
+    
+  if ((!error) && (EventV_claimed))
+  {
+    r.r[0] = EventV;
+    r.r[1] = (int)event_entry;							// Entry point defined by cmhg
+    r.r[2] = (int)module_wsp;							// Our workspace ptr
+    error = _kernel_swi(OS_Release, &r, &r);					// Release EventV
+    if (!error)									// If no error then
+      EventV_claimed = FALSE;							// set claimed global to FALSE
+  }
+
+  return error;
+}
