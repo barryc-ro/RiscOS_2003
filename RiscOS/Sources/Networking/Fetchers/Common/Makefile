@@ -40,7 +40,7 @@ export_libs: ${TARGET} ${DIRS}
         ${CP} ${TARGET} ${LIBDIR}.o.${TARGET} ${CPFLAGS}
         @echo ${COMPONENT}: library export complete
 
-clean:
+clean: export_hdrs
         ${WIPE} o ${WFLAGS}
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
