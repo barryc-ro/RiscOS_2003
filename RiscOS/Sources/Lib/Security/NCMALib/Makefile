@@ -12,6 +12,9 @@
 # Paths
 #
 EXPORT_DIR  = <Lib$Dir>.NCMALib
+EXP_HDR     = <export$dir>
+EXP_C_H     = <Cexport$dir>.h
+EXP_C_O     = <Cexport$dir>.o
 
 #
 # Generic options:
@@ -21,6 +24,7 @@ include Makefiles:StdTools
 COMPONENT = NCMALib
 TARGET   ?= ${COMPONENT}
 TARGETZ   = ${TARGET}ZM
+
 #
 # Flags
 #
@@ -76,6 +80,8 @@ export_hdrs:
         ${CP} h.ncma_exec  ${EXPORT_DIR}.h.ncma_exec    ${CPFLAGS}
         ${CP} h.ncma_fx    ${EXPORT_DIR}.h.ncma_fx      ${CPFLAGS}
         ${CP} h.dynalloc   ${EXPORT_DIR}.h.dynalloc     ${CPFLAGS}
+        ${CP} h.smtags     ${EXP_C_H}.smtags            ${CPFLAGS}
+        ${CP} h.smcard     ${EXP_C_H}.smcard            ${CPFLAGS}
         @echo ${COMPONENT}: export complete (hdrs)
 
 export_libs: ${TARGET} ${TARGETZ}
