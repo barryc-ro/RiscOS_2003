@@ -58,8 +58,8 @@ OBJS		= o.drawfile
 #
 
 .SUFFIXES: .o .s .c
-.c.o:;     $(CC) $(CCFLAGS) -o $@ $<
-.s.o:;     $(AS) $(ASFLAGS) -o $@ $<
+.c.o:;     $(CC) $(CFLAGS) -o $@ $<
+.s.o:;     $(AS) $(AFLAGS) -o $@ $<
 
 
 # ------------------------------------------------------------------------------
@@ -99,4 +99,3 @@ $(TARGET): $(OBJS) local_dirs
 
 # ------------------------------------------------------------------------------
 # Dynamic dependencies:
-o.drawfile: s.drawfile
