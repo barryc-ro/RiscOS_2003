@@ -35,7 +35,7 @@ WFLAGS  = ~CFR~V
 #
 # Libraries
 #
-CLIB      = CLIB:o_aquarius.stubs
+CLIB      = CLIB:o.stubs
 RLIB      = RISCOSLIB:o.risc_oslib
 RSTUBS    = RISCOSLIB:o.rstubs
 ROMSTUBS  = RISCOSLIB:o.romstubs
