@@ -33,6 +33,7 @@
 #include "Browser.h"
 #include "Cookies.h"
 #include "Encoding.h"
+#include "EventLogs.h"
 #include "Fetch.h" /* (Which itself includes URLstat.h) */
 #include "Filetypes.h"
 #include "History.h"
@@ -67,7 +68,7 @@ static fetcher_state   fetch_state;
 
 /* Local definitions */
 
-#define FetchBufferSize 8192 /* Size of buffer for getting data from the URL module in html_get_next_token. */
+#define FetchBufferSize 16384 /* Size of buffer for getting data from the URL module in html_get_next_token. */
 
 /* Local compilation options */
 
@@ -100,7 +101,7 @@ static _kernel_oserror * html_allocate_fetch_buffer(void)
   if (!fetch_buffer)
   {
     #ifdef TRACE
-      if (tl & (1u<<6)) Printf("html_get_next_token: Exiting with error\n");
+      if (tl & (1u<<6)) Printf("html_allocate_fetch_buffer: Exiting with error\n");
     #endif
 
     return make_no_cont_memory_error(8);
@@ -134,20 +135,10 @@ static _kernel_oserror * html_allocate_fetch_buffer(void)
 /* immediately; this function then exits cleanly */
 /* (no errors are thrown any higher up).         */
 /*                                               */
-/* In addition, a token "ProxyExclusions" is     */
-/* looked for - this should contain a comma      */
-/* separated list of domains for which no        */
-/* proxying is done. Each domain should begin    */
-/* with a '.'. The domains are compared with the */
-/* right hand part of the host name in the URL   */
-/* and if there's a match, no proxying will be   */
-/* done. If a domain name does not being with a  */
-/* '.', it is taken to be a host name, and an    */
-/* exact match of the complete host name (albeit */
-/* a case insensitive one) is required to block  */
-/* proxying. This allows URLs that rely on the   */
-/* local domain (e.g. "www", "www.internal") to  */
-/* be excluded from proxying without ambiguity.  */
+/* In addition, "LOProxyExclusions" and other    */
+/* relevant protocol-specific exclusion lists    */
+/* are looked at to see if proxying should be    */
+/* avoided. See the Choices file for more.       */
 /*                                               */
 /* Parameters: Fetch handle for the session;     */
 /*                                               */
@@ -174,7 +165,7 @@ static void html_set_proxy(unsigned int handle,  const char * url)
     /* can write zero terminators in this to make the searching easier. Do  */
     /* need to make sure the buffer contents are invalidated first.         */
 
-    exclusions = list_get_malloc_list_string("ProxyExclusions");
+    exclusions = list_get_malloc_list_string("LOProxyExclusions");
 
     if (exclusions)
     {
@@ -185,7 +176,7 @@ static void html_set_proxy(unsigned int handle,  const char * url)
 
     /* Any protocol specific exclusions? */
 
-    strcpy(t1, "ProxyExclude");
+    strcpy(t1, "LOProxyExclude");
 
     if (strlen(t1) + strlen(d->protocol) + 1 < sizeof(t1))
     {
@@ -1226,7 +1217,7 @@ static _kernel_oserror * html_build_internal_page(browser_data * b, flex_ptr sou
   if (!ok)
   {
     #ifdef TRACE
-      if (tl & (1u<<6)) Printf("html_get_next_token: Exiting with error\n");
+      if (tl & (1u<<6)) Printf("html_build_internal_page: Exiting with error\n");
     #endif
 
     return make_no_cont_memory_error(1);
@@ -1322,7 +1313,7 @@ static _kernel_oserror * html_transfer_to_store(browser_data * b, flex_ptr sourc
   if (!up->fetched && *source)
   {
     #ifdef TRACE
-      if (tl & (1u<<12)) Printf("html_get_next_token: (1) flex_free block %p which held page source\n",source);
+      if (tl & (1u<<12)) Printf("html_transfer_to_store: (1) flex_free block %p which held page source\n",source);
       flexcount -= flex_size(source);
       if (tl & (1u<<14)) Printf("**   flexcount: %d\n",flexcount);
     #endif
@@ -1342,8 +1333,8 @@ static _kernel_oserror * html_transfer_to_store(browser_data * b, flex_ptr sourc
   #ifdef TRACE
     if (tl & (1u<<12))
     {
-      if (*source) Printf("html_get_next_token: flex_extend by %d to %d for page source store\n",r,flex_size(source) + r);
-      else         Printf("html_get_next_token: flex_alloc %d for page source store\n",r);
+      if (*source) Printf("html_transfer_to_store: flex_extend by %d to %d for page source store\n",r,flex_size(source) + r);
+      else         Printf("html_transfer_to_store: flex_alloc %d for page source store\n",r);
     }
   #endif
 
@@ -1370,7 +1361,7 @@ static _kernel_oserror * html_transfer_to_store(browser_data * b, flex_ptr sourc
   if (!ok)
   {
     #ifdef TRACE
-      if (tl & (1u<<6)) Printf("html_get_next_token: Exiting with error\n");
+      if (tl & (1u<<6)) Printf("html_transfer_to_store: Exiting with error\n");
     #endif
 
     return make_no_cont_memory_error(1);
@@ -1380,7 +1371,7 @@ static _kernel_oserror * html_transfer_to_store(browser_data * b, flex_ptr sourc
   /* data from the url_read_data call into it.                          */
 
   #ifdef TRACE
-    if (tl & (1u<<18)) Printf("\0216html_get_next_token: memcpy from %p to %p for %d bytes\0217\n",((char *) (*source)) + oldsize, fetch_buffer, r);
+    if (tl & (1u<<18)) Printf("\0216html_transfer_to_store: memcpy from %p to %p for %d bytes\0217\n",((char *) (*source)) + oldsize, fetch_buffer, r);
   #endif
 
   memcpy(((char *) (*source)) + oldsize, fetch_buffer, r);
@@ -1684,15 +1675,38 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
 
       if (up->context == NULL)
       {
+        /* Just when you thought it was time to get going, exclusions lists */
+        /* rear their ugly and disturbingly time consuming heads...         */
+
+        int               tables  = 0;
+        int               scripts = 0;
+        char            * list;
+        url_description * d       = urlutils_return_description(ref_url);
+
+        if (d)
+        {
+          list = list_get_malloc_list_string("LONoTables");
+          if (list) tables = urlutils_matches_special(d, list) ? 0 : choices.support_tables;
+          free(list);
+
+          list = list_get_malloc_list_string("LONoScripts");
+          if (list) scripts = urlutils_matches_special(d, list) ? 0 : choices.support_js;
+          free(list);
+
+          urlutils_free_description(d);
+        }
+
+        /* Right, *now* we can kick off the parser. */
+
         up->context = HtmlParse(ref_url,                /* Full page URL, so parser can handle relative links */
                                 0,                      /* Length of document - zero at present (not known)   */
                                 up->type,               /* Return type from the HtmlIdentify call             */
                                 choices.support_frames, /* 1 to have FRAMESETs parsed, else 0                 */
                                 choices.support_object, /* 1 to handle OBJECT etc., else get alt. HTML stream */
-                                choices.support_tables, /* 1 to handle TABLE etc., else 0                     */
+                                tables,                 /* 1 to handle TABLE etc., else 0                     */
 
                                 #ifdef JAVASCRIPT
-                                  choices.support_js,   /* 1 to handle <SCRIPT> contents, calling the script  */
+                                  scripts,              /* 1 to handle <SCRIPT> contents, calling the script  */
                                 #else                   /* callback function as necessary and ignoring the    */
                                   0,                    /* contents of <NOSCRIPT>, else 0.                    */
                                 #endif
@@ -1937,8 +1951,6 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
 
         flex_extend(source, o); /* (Which shrinks the source store) */
 
-        /* Interpret the codes returned by HtmlIdentify. */
-
         switch (code)
         {
           #ifndef STRICT_PARSER
@@ -1964,6 +1976,32 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
 
           case 302:
           {
+            /* Log the redirection */
+
+            if (eventlogs_what_to_log() & EventLogs_Log_HTTPMessages)
+            {
+              char tagname[8];
+
+              sprintf(tagname, "HTTP%d:30x (Moved)", code);
+              lookup_token(tagname, 0, 0);
+
+              if (strlen(url) + strlen(tokens) + 3 < sizeof(tokens))
+              {
+                strcat(tokens, ": ");
+                strcat(tokens, url);
+              }
+
+              if (strlen(redirect) + strlen(tokens) + 5 < sizeof(tokens))
+              {
+                strcat(tokens, " -> ");
+                strcat(tokens, redirect);
+              }
+
+              /* Let this fail silently */
+
+              eventlogs_log_message(b, eventlogs_http_message, tokens);
+            }
+
             /* Stop the current fetch and free the source store,   */
             /* remembering to invalidate the anchor pointing to it */
 
@@ -2101,6 +2139,64 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
 
             *waiting   = 2;
             *remaining = (int) redirect; /* Not redirect_to, as it may be freed now */
+          }
+          break;
+
+          case 400:
+          case 403:
+          case 404:
+          case 405:
+          case 406:
+          case 408:
+          case 409:
+          case 410:
+          case 411:
+          case 412:
+          case 413:
+          case 414:
+          case 415:
+          {
+            /* For images or HTTP message event logging, create the required message */
+
+            if (image || (eventlogs_what_to_log() & EventLogs_Log_HTTPMessages))
+            {
+              char tagname[8];
+
+              sprintf(tagname, "HTTP%d:40x (Access)", code);
+
+              erb.errnum = Utils_Error_Custom_Message;
+
+              StrNCpy0(erb.errmess,
+                       lookup_token(tagname,
+                                    0,
+                                    0));
+
+              if (strlen(url) + strlen(erb.errmess) + 3 < sizeof(erb.errmess))
+              {
+                strcat(erb.errmess, ": ");
+                strcat(erb.errmess, url);
+              }
+
+              RetError(eventlogs_log_message(b, eventlogs_http_message, erb.errmess));
+            }
+
+            /* Images return client failure codes as errors */
+
+            if (image) return &erb;
+
+            /* Otherwise, show the page */
+
+            else
+            {
+              /* Well this is the ugly bit; there's no structured */
+              /* way to drop through to the 200 case...           */
+
+              parseable = TYPE_HTMLFILE;
+
+              // This is, of course, completely unacceptable. ;-)
+
+              goto parse_the_page;
+            }
           }
           break;
 
@@ -2279,6 +2375,8 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
 
           case 200:
           {
+parse_the_page:
+
             /* If the urlstat structure says not to parse this data, flag it as */
             /* an unknown type to prevent parsing.                              */
 
@@ -2299,8 +2397,27 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
 
               switch (parseable)
               {
+                /* For an unknown type, do we have faith in the server? */
+
                 default:
                 case TYPE_UNKNOWN:
+                {
+                  if (choices.faith == Choices_Faith_Never)
+                  {
+                    type = urlutils_filetype_from_url(browser_fetch_url(b));
+
+                    if (
+                         type == FileType_TEXT ||
+                         type == FileType_HTML
+                       )
+                    {
+                      parseable = TYPE_HTMLFILE;
+                      *waiting  = 1;
+                      break;
+                    }
+                  }
+                }
+
                 case TYPE_IMAGEFILE: *waiting = 3;
                 break;
 

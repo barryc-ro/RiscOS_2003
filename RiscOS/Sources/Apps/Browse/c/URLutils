@@ -28,7 +28,9 @@
 #include "Fetch.h" /* (Which itself includes URLstat.h) */
 #include "Filetypes.h"
 #include "Javascript.h"
+#include "List.h"
 #include "MimeMap.h"
+#include "URIfile.h"
 #include "URLveneer.h"
 
 #include "URLutils.h"
@@ -168,132 +170,6 @@ int urlutils_urlddcmp(const url_description * url_d1, const url_description * ur
 }
 
 /*************************************************/
-/* urlutils_matches_special()                    */
-/*                                               */
-/* Given a URL description and a string with a   */
-/* comma separated list of entries describing    */
-/* match parameters, return 1 if the URL meets   */
-/* any of the match criteria. The match string   */
-/* should be in a writeable buffer and will be   */
-/* corrupted on exit. The string consists of:    */
-/*                                               */
-/* 1. A fully qualified host name without any    */
-/*    port number (e.g. "www.acorn.com").        */
-/*                                               */
-/* 2. A fully qualified host name followed by a  */
-/*    "/" and the left hand part of a pathname;  */
-/*    e.g. "www.acorn.com/clan" - the full host  */
-/*    and the left hand part of the given URL's  */
-/*    path is compared with this.                */
-/*                                               */
-/* 3. A partial host name beginning with '.' -   */
-/*    the right hand side is matched. Allows     */
-/*    more general domain matches (e.g.          */
-/*    ".co.uk").                                 */
-/*                                               */
-/* So, ".co.uk" matches any protocol and path    */
-/* for any host "<xxx>.co.uk". "www.acorn.com"   */
-/* matches any protocol and path for host        */
-/* "www.acorn.com" only. Finally,                */
-/* "www.acorn.com/clan" matches any protocol for */
-/* host "www.acorn.com" only, and then will only */
-/* match if the path of the URL consists of at   */
-/* least "/clan". Note that this would also      */
-/* match, say, "/clandestine" too - it's just a  */
-/* simple length limited string comparison.      */
-/*                                               */
-/* Parameters: Pointer to a url_description      */
-/*             filled in with details of the URL */
-/*             to examine;                       */
-/*                                               */
-/*             Pointer to a string with the      */
-/*             match parameters in it, comma     */
-/*             separated if many are needed,     */
-/*             which must be in a writeable      */
-/*             buffer.                           */
-/*                                               */
-/* Returns:    1 if there's a match, else 0. The */
-/*             given match string is corrupted.  */
-/*************************************************/
-
-int urlutils_matches_special(const url_description * d, char * writeable)
-{
-  if (d && writeable)
-  {
-    char * at;
-
-    do
-    {
-      /* Get each comma separated section individually */
-
-      at = strtok(writeable, ","), writeable = NULL;
-
-      if (at)
-      {
-        /* Compare only the right hand side of the host name if the */
-        /* entry starts with a '.' (e.g. ".co.uk").                 */
-
-        if (*at == '.')
-        {
-          int hlen   = d->host ? strlen(d->host) : 0;
-          int offset = hlen - strlen(at);
-
-          if (
-               offset >= 0 &&
-               d->host     &&
-               !utils_strcasecmp(d->host + offset, at)
-             )
-             return 1;
-        }
-
-        /* Compare the whole host if the entry doesn't start with '.'; */
-        /* but may include a '/' if we want a partial path match too.  */
-
-        else
-        {
-          char * slash = strchr(at, '/');
-
-          /* If we don't have a slash, just match the host */
-
-          if (!slash)
-          {
-            if (
-                 d->host &&
-                 !utils_strcasecmp(d->host, at)
-               )
-               return 1;
-          }
-
-          /* Otherwise, match the full host, and the left hand side of */
-          /* the path.                                                 */
-
-          else
-          {
-            int len;
-
-            *slash = '\0', slash++;
-            len = strlen(slash);
-
-            if (
-                 d->host                        &&
-                 d->path                        &&
-                 !utils_strcasecmp(d->host, at) &&
-                 !utils_strncasecmp(d->path, slash, len)
-               )
-               return 1;
-
-            else *(--slash) = '/';
-          }
-        }
-      }
-    }
-    while (at);
-  }
-
-  return 0;
-}
-
-/*************************************************/
 /* urlutils_return_description()                 */
 /*                                               */
 /* Given a URL string, returns a url_description */
@@ -429,6 +305,182 @@ void urlutils_free_description(url_description * url_d)
   free(url_d);
 
   return;
+}
+
+/*************************************************/
+/* urlutils_matches_special()                    */
+/*                                               */
+/* Given a URL description and a string with a   */
+/* comma separated list of entries describing    */
+/* match parameters, return 1 if the URL meets   */
+/* any of the match criteria. The match string   */
+/* should be in a writeable buffer and will be   */
+/* corrupted on exit. The string consists of:    */
+/*                                               */
+/* 1. An optional hostname; either fully         */
+/*    qualified (e.g. 'wwww.acorn.com') or       */
+/*    partially if starting with a dot (e.g.     */
+/*    .acorn.com' to match any host with a name  */
+/*    ending in '.acorn.com').                   */
+/*                                               */
+/* 2. An optional port following the host name,  */
+/*    separated by a colon (e.g. 'www:3172').    */
+/*    Note that specifying the default port for  */
+/*    whatever fetch protocol is in use will     */
+/*    never match (e.g. 'www:80' would never     */
+/*    match for an HTTP fetch of server 'www')   */
+/*    so this is only useful for matching        */
+/*    unusual port values.                       */
+/*                                               */
+/* 3. An optional path fragment, which is        */
+/*    matched against the left hand side of the  */
+/*    URL (e.g. 'www/this/that' would match any  */
+/*    path 'this/that', 'this/that/more',        */
+/*    'this/thatandmore.gif', etc.).             */
+/*                                               */
+/* Parameters: Pointer to a url_description      */
+/*             filled in with details of the URL */
+/*             to examine;                       */
+/*                                               */
+/*             Pointer to a string with the      */
+/*             match parameters in it, comma     */
+/*             separated if many are needed,     */
+/*             which must be in a writeable      */
+/*             buffer.                           */
+/*                                               */
+/* Returns:    1 if there's a match, else 0. The */
+/*             given match string is corrupted.  */
+/*************************************************/
+
+int urlutils_matches_special(const url_description * d, char * writeable)
+{
+  if (d && writeable)
+  {
+    char * at;
+
+    char * host = d->host ? d->host : "";
+    char * path = d->path ? d->path : "";
+    char * port = d->port ? d->port : "";
+
+    do
+    {
+      /* Get each comma separated section individually */
+
+      at = strtok(writeable, ","), writeable = NULL;
+
+      if (at)
+      {
+        char * slash = strchr(at, '/');
+        char * colon = strchr(at, ':');
+
+        int    match = 0;
+
+        /* Overwrite key seperator characters with terminators to make */
+        /* subsequent comparisons easier                               */
+
+        if (colon) *colon = '\0', colon++;
+        if (slash) *slash = '\0', slash++;
+
+        /* Match port and left hand side of path if required */
+
+        if (!colon) match++;
+        else if (!utils_strcasecmp(port, colon)) match++;
+
+        if (!slash) match++;
+        else if (!utils_strncasecmp(path, slash, strlen(slash))) match++;
+
+        /* Allow no host (so just match by port or path) */
+
+        if (!*at && (colon || slash)) match++;
+
+        /* Otherwise, do host matching */
+
+        else if (*at)
+        {
+          /* Compare only the right hand side */
+
+          if (*at == '.')
+          {
+            int hlen   = strlen(host);
+            int offset = hlen - strlen(at);
+
+            if (offset >= 0 && !utils_strcasecmp(host + offset, at)) match++;
+          }
+
+          /* Compare the whole thing */
+
+          else
+          {
+            if (!utils_strcasecmp(host, at)) match++;
+          }
+        }
+
+        /* Did we match it? */
+
+        if (match == 3) return 1;
+
+        /* No, so restore the string so strtok will continue to work */
+
+        if (slash) *(--slash) = '/';
+        if (colon) *(--colon) = ':';
+      }
+    }
+    while (at);
+  }
+
+  return 0;
+}
+
+/*************************************************/
+/* urlutils_match_by_token()                     */
+/*                                               */
+/* Similar to urlutils_matches_special, but has  */
+/* a more accessible API. Given a URL and a      */
+/* Choices file token name, see if the list of   */
+/* specifiers expected to be in the value of the */
+/* Choices file token matches the given URL. Has */
+/* to expand the URL to a url_description and go */
+/* through the List dialogue box lookup routines */
+/* so this isn't all that fast; if there is a    */
+/* series of matches to do on the same URL, it   */
+/* would be better to make the url_description   */
+/* externally and call urlutils_matches_special  */
+/* directly.                                     */
+/*                                               */
+/* Parameters: Pointer to the URL to check;      */
+/*                                               */
+/*             Pointer to the Choices file token */
+/*             to check against.                 */
+/*                                               */
+/* Returns:    1 if the value of the token from  */
+/*             the Choices file leads to a match */
+/*             with the URL. For details on the  */
+/*             format, see the Choices file for  */
+/*             comments on things like the       */
+/*             LOProxyExclusions entry, or see   */
+/*             urlutils_matches_special.         */
+/*************************************************/
+
+int urlutils_match_by_token(const char * url, const char * token)
+{
+  url_description * d    = NULL;
+  char            * list = NULL;
+  int               ret  = 0;
+
+  if (!url || !token || !*url || !*token) return 0;
+
+  d = urlutils_return_description(url);
+
+  if (d)
+  {
+    char * list = list_get_malloc_list_string(token);
+    if (list) ret = urlutils_matches_special(d, list);
+  }
+
+  if (d) urlutils_free_description(d);
+  free(list);
+
+  return ret;
 }
 
 /*************************************************/
@@ -878,14 +930,18 @@ get_directory_name:
       int chars = found - e;
       int filetype;
 
-      /* Is there a filetype for this extension? */
+      /* Is there a filetype for this extension? And should we actually */
+      /* strip it anyway?                                               */
 
       if (
-           !utils_strcasecmp(leaf + chars, ".cgi") /* Special case '.cgi' - always strip it */
-           ||
+           choices.strip_extensions &&
            (
-             !mimemap_extension_to_riscos(leaf + chars, &filetype) &&
-             filetype != FileType_DATA
+             !utils_strcasecmp(leaf + chars, ".cgi") /* Special case '.cgi' - always strip it */
+             ||
+             (
+               !mimemap_extension_to_riscos(leaf + chars, &filetype) &&
+               filetype != FileType_DATA
+             )
            )
          )
       {
@@ -997,6 +1053,10 @@ void urlutils_host_name_from_url(char * url, char * host, int size)
 /*                                               */
 /* Examines a URL and returns a RISC OS filetype */
 /* based on the filename extension in the URL.   */
+/*                                               */
+/* FileType_TEXT is returned if no absolute      */
+/* determination can be made (e.g. no filename   */
+/* extension!).                                  */
 /*                                               */
 /* Parameters: Pointer to a null-terminated URL  */
 /*             string.                           */
@@ -1422,6 +1482,8 @@ char * urlutils_relativise_url(const char * base, const char * link)
 /*************************************************/
 /* urlutils_load_uri_file()                      */
 /*                                               */
+/* Version 1.00 files:                           */
+/*                                               */
 /* Loads a URI file. Will take ANT URL files     */
 /* too. The given buffer will be filled with a   */
 /* null-terminated URI from the file.            */
@@ -1439,6 +1501,14 @@ char * urlutils_relativise_url(const char * base, const char * link)
 /* If there is an error opening the file or the  */
 /* file is empty, the contents of the buffer are */
 /* undefined.                                    */
+/*                                               */
+/* Version 1.01 files:                           */
+/*                                               */
+/* As above, but will also automatically scan    */
+/* past the URL looking for command lines and    */
+/* act upon them with no external notification.  */
+/* For example, 'open <url>' will lead to a new  */
+/* window being created.                         */
 /*                                               */
 /* Parameters: Pointer to the buffer for the     */
 /*             URL;                              */
@@ -1459,177 +1529,31 @@ char * urlutils_relativise_url(const char * base, const char * link)
 
 void urlutils_load_uri_file(char * buffer, size_t size, char * tbuffer, size_t tsize, char * path)
 {
-  FILE * fp;
-  int    byte, counter;
-  int    type, found;
-
-  /* Warning - heavy use of 'goto's coming up shortly...! */
+  urifile_command * commands;
 
   if (!size) return;
   memset(buffer, 0, size);
 
   if (tbuffer && tsize) memset(tbuffer, 0, tsize);
 
-  /* Does the file exist? */
+  /* Deal with any actual commands first */
 
-  if (
-       _swix(OS_File,
-             _INR(0,1) | _OUT(0) | _OUT(6),
+  show_error_ret(urifile_parse_uri_file(path, &commands));
 
-             23, /* Read catalogue info for named, stamped object */
-             path,
+  urifile_execute_command_list(commands, 0);
 
-             &found,
-             &type)
-     )
-     return;
+  /* If the first item is command urifile_none, this holds the data */
+  /* we should write into the given buffers.                        */
 
-  /* 'found' should be 1 (a file, rather than not found, a directory, etc.). */
-
-  if (found != 1) return;
-
-  /* Open the file */
-
-  fp = fopen(path, "rb");
-
-  if (fp)
+  if (commands->hdr.type == urifile_none)
   {
-    byte = getc(fp);
-
-    /* For URL files, go straight to URL reading - they're just */
-    /* a terminated, or unterminated URL in a file.             */
-
-    if (type != FileType_URI) goto urlutils_load_uri_file_read_uri;
-
-    /* If it is a URI file, it must start with 'URI'. */
-
-    if (byte != 'U') goto urlutils_load_uri_file_not_a_uri_file;
-
-    byte = getc(fp);
-    if (byte != 'R') goto urlutils_load_uri_file_not_a_uri_file;
-
-    byte = getc(fp);
-    if (byte != 'I') goto urlutils_load_uri_file_not_a_uri_file;
-
-    /* Get to first character after the 'I' */
-
-    byte = getc(fp);
-
-    /* Now find the version number - skip white space */
-
-urlutils_load_uri_file_skip_white_space_1:
-
-    while (byte != EOF && byte < ' ') byte = getc(fp);
-
-    /* If we've hit a hash, this is a comment line - terminated by white */
-    /* space or end of file.                                             */
-
-    if (byte == '#')
-    {
-      /* Now want to *find* the white space to skip the comment */
-
-      while (byte != EOF && byte >= ' ') byte = getc(fp);
-
-      /* If we're not at the end of the file, loop back and continue */
-      /* skipping white space.                                       */
-
-      if (byte != EOF) goto urlutils_load_uri_file_skip_white_space_1;
-    }
-
-    /* By now, we're either at EOF or the start of the first real entry */
-    /* after 'URL', which will be the file version. URI file versions   */
-    /* are guaranteed backwards compatible, so we can skip this bit.    */
-
-    while (byte != EOF && byte >= ' ') byte = getc(fp);
-
-    /* Now we want to get to the URI, so again, skip white space */
-    /* and comment lines. After that, we'll be on the first byte */
-    /* of the URI (or end of file, if it's broken).              */
-
-urlutils_load_uri_file_skip_white_space_2:
-
-    while (byte != EOF && byte < ' ') byte = getc(fp);
-
-    if (byte == '#')
-    {
-      while (byte != EOF && byte >= ' ') byte = getc(fp);
-
-      if (byte != EOF) goto urlutils_load_uri_file_skip_white_space_2;
-    }
-
-    /* Load the URI component - assume everything from here up */
-    /* to any control chracter or EOF is part of the URI. Note */
-    /* that 'byte' already contains the first character.       */
-
-urlutils_load_uri_file_read_uri:
-
-    counter = 0;
-
-    while (byte != EOF && byte >= ' ' && counter < size - 1)
-    {
-      buffer[counter++] = byte;
-      byte              = getc(fp);
-    }
-
-    /* If it's a single '*', the URI is not present */
-
-    if (!strcmp(buffer, "*")) *buffer = 0;
-
-    /* We may still have a title to read... */
-
-    if (type == FileType_URI && tbuffer && tsize)
-    {
-      /* Once more, skip any white space or comments */
-
-urlutils_load_uri_file_skip_white_space_3:
-
-      while (byte != EOF && byte < ' ') byte = getc(fp);
-
-      if (byte == '#')
-      {
-        while (byte != EOF && byte >= ' ') byte = getc(fp);
-
-        if (byte != EOF) goto urlutils_load_uri_file_skip_white_space_3;
-      }
-
-      /* Now read the title */
-
-      counter = 0;
-
-      while (byte != EOF && byte >= ' ' && counter < size - 1)
-      {
-        tbuffer[counter++] = byte;
-        byte               = getc(fp);
-      }
-
-      /* If it's a single '*', the URI is not present */
-
-      if (!strcmp(tbuffer, "*")) *tbuffer = 0;
-    }
-
-    fclose(fp);
+    if (commands->data.none.url)              strncpy(buffer,  commands->data.none.url,   size  - 1);
+    if (commands->data.none.title && tbuffer) strncpy(tbuffer, commands->data.none.title, tsize - 1);
   }
 
-  return;
+  /* Finished */
 
-  /* Error condition exits */
-
-urlutils_load_uri_file_not_a_uri_file:
-
-  /* Not a URI / URL file */
-
-  if (fp) fclose(fp);
-
-  erb.errnum = Utils_Error_Custom_Message;
-
-  StrNCpy0(erb.errmess,
-           lookup_token("NotAURI:This is not a valid URI file.",
-                        0,
-                        0));
-
-  show_error_ret(&erb);
-
-  return;
+  urifile_free_command_list(commands);
 }
 
 /*************************************************/
@@ -1637,7 +1561,9 @@ urlutils_load_uri_file_not_a_uri_file:
 /*                                               */
 /* Looks at a URI file loaded into a buffer, and */
 /* overwrites it with the URL contents extracted */
-/* from the body.                                */
+/* from the body. Will also look for command     */
+/* lines in version 1.01 lines, and act upon     */
+/* them.                                         */
 /*                                               */
 /* Parameters: Pointer to the buffer holding the */
 /*             URI file;                         */

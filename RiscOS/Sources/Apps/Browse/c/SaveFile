@@ -37,6 +37,7 @@
 #include "Utils.h"
 
 #include "Browser.h"
+#include "EventLogs.h"
 #include "Fetch.h"  /* (For ISLINK macro) */
 #include "Filetypes.h"
 #include "History.h"
@@ -60,6 +61,7 @@
 
 static browser_data         * savefile_browser = NULL;
 static HStream              * savefile_token   = NULL;
+static const eventlogs_log  * savefile_log     = NULL;
 static int                    savefile_type    = 0x000;
 static savefile_open_reason   savefile_reason  = save_as_html;
 
@@ -89,6 +91,7 @@ static   int alt_fsfl = 0; /* FrameSaveFrameLocation */
 static   int alt_el   = 0; /* ExportLink             */
 static   int alt_ep   = 0; /* ExportPicture          */
 static   int alt_eb   = 0; /* ExportBackground       */
+static   int alt_log  = 0; /* LogSaveLog             */
 
 /* Static function prototypes */
 
@@ -108,6 +111,8 @@ static int               savefile_item_changed                       (IdBlock * 
 
 static _kernel_oserror * savefile_text_uri_or_url                    (ObjectId window);
 static _kernel_oserror * savefile_toggle_uri_or_url                  (ObjectId window);
+static _kernel_oserror * savefile_text_all_or_selection              (ObjectId window);
+static _kernel_oserror * savefile_toggle_all_or_selection            (ObjectId window);
 static _kernel_oserror * savefile_text_sprite_or_original            (ObjectId window);
 static _kernel_oserror * savefile_toggle_sprite_or_original          (ObjectId window, const char * src);
 static _kernel_oserror * savefile_text_without_backgrounds_or_with   (ObjectId window);
@@ -199,10 +204,15 @@ int savefile_raise_from_shortcut(int eventcode, ToolboxEvent * event, IdBlock * 
 
   if (wimp_get_pointer_info(&info)) return 0;
 
+  /* This'll be from a toolbar or ancestor window because of the way */
+  /* shortcuts work. If we've no ancestor object, the shortcut was   */
+  /* raised from a browser window, so use the selected frame of that */
+  /* ancestor browser. Otherwise it's from the toolbar, so go to the */
+  /* ancestor instead.                                               */
+
   /* Need to know what browser to refer to */
 
   if (idb->ancestor_id != NULL_ObjectId)    source = idb->ancestor_id;
-  else if (idb->parent_id != NULL_ObjectId) source = idb->parent_id;
   else if (idb->self_id != NULL_ObjectId)   source = idb->self_id;
   else return 0; /* (with a surprised look on your face) */
 
@@ -212,7 +222,8 @@ int savefile_raise_from_shortcut(int eventcode, ToolboxEvent * event, IdBlock * 
        toolbox_get_client_handle(0,
                                  source,
                                  (void *) &b)
-       || !b
+       ||
+       (!b && eventcode != ESaveFileShortcutSaveLog)
      )
      return 0;
 
@@ -221,8 +232,6 @@ int savefile_raise_from_shortcut(int eventcode, ToolboxEvent * event, IdBlock * 
 
   switch (eventcode)
   {
-    default: return 0; break;
-
     case ESaveFileShortcutSaveHTML:
     case ESaveFileShortcutSaveLocation:
     case ESaveFileShortcutExportDraw:
@@ -231,7 +240,11 @@ int savefile_raise_from_shortcut(int eventcode, ToolboxEvent * event, IdBlock * 
     case ESaveFileShortcutExportPicture:
     case ESaveFileShortcutExportBackground:
     {
-      if (b->selected_frame) b = b->selected_frame;
+      if (
+           idb->ancestor_id == NULL_ObjectId &&
+           b->selected_frame
+         )
+         b = b->selected_frame;
     }
     break;
   }
@@ -326,11 +339,13 @@ int savefile_raise_from_shortcut(int eventcode, ToolboxEvent * event, IdBlock * 
     }
     break;
 
-    default:
+    case ESaveFileShortcutSaveLog:
     {
-      pc = NULL_ObjectId;
+      pc = LogSaveLog;
     }
     break;
+
+    default: return 0; break;
   }
 
   /* Show the object next to the pointer, which (assuming the Res */
@@ -346,7 +361,7 @@ int savefile_raise_from_shortcut(int eventcode, ToolboxEvent * event, IdBlock * 
                                this,
                                Toolbox_ShowObject_AtPointer,
                                NULL,
-                               b->self_id,
+                               b ? b->self_id : idb->self_id,
                                pc));
   return 1;
 }
@@ -471,8 +486,24 @@ int savefile_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, voi
 
       savefile_browser = b;
       savefile_token   = NULL;
+      savefile_log     = NULL;
+      ok               = 1;
+    }
+    break;
 
-      ok = 1;
+    case LogSaveLog:
+    {
+      ChkError(savefile_switch_to_option(idb->self_id));
+      ChkError(savefile_set_items(idb->self_id, alt_log));
+      ChkError(savefile_set_leafname(idb->self_id, SaveFileWrit, lookup_token("LogLeafname:Log",0,0)));
+      ChkError(savefile_text_all_or_selection(idb->self_id));
+      ChkError(savefile_toggle_all_or_selection(idb->self_id));
+      ChkError(savefile_auto_width(idb->self_id));
+
+      savefile_browser = NULL;
+      savefile_token   = NULL;
+      savefile_log     = eventlogs_find_from_id(idb->ancestor_id);
+      ok               = 1;
     }
     break;
 
@@ -485,7 +516,10 @@ int savefile_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, voi
         ChkError(savefile_set_filetype(idb->self_id, SaveFileDrag, FileType_HTML, 0));
         ChkError(savefile_auto_width(idb->self_id));
 
-        ok = 1;
+        savefile_browser = NULL;
+        savefile_token   = NULL;
+        savefile_log     = NULL;
+        ok               = 1;
       }
       break;
 
@@ -516,7 +550,10 @@ int savefile_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, voi
             ChkError(savefile_auto_width(idb->self_id));
           }
 
-          ok = 1;
+          savefile_browser = NULL;
+          savefile_token   = NULL;
+          savefile_log     = NULL;
+          ok               = 1;
         }
 
         #ifdef TRACE
@@ -547,6 +584,8 @@ int savefile_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, voi
       ChkError(savefile_set_filetype(idb->self_id, SaveFileDrag, FileType_HTML, 0));
 
       savefile_browser = b;
+      savefile_token   = NULL;
+      savefile_log     = NULL;
       ok               = 1;
     }
     break;
@@ -562,8 +601,8 @@ int savefile_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, voi
 
       savefile_browser = b;
       savefile_token   = NULL;
-
-      ok = 1;
+      savefile_log     = NULL;
+      ok               = 1;
     }
     break;
 
@@ -579,8 +618,8 @@ int savefile_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, voi
 
       savefile_browser = b;
       savefile_token   = NULL;
-
-      ok = 1;
+      savefile_log     = NULL;
+      ok               = 1;
     }
     break;
 
@@ -593,8 +632,8 @@ int savefile_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, voi
 
       savefile_browser = b;
       savefile_token   = NULL;
-
-      ok = 1;
+      savefile_log     = NULL;
+      ok               = 1;
     }
     break;
 
@@ -632,8 +671,8 @@ int savefile_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, voi
 
       savefile_browser = b;
       savefile_token   = NULL;
-
-      ok = 1;
+      savefile_log     = NULL;
+      ok               = 1;
     }
     break;
 
@@ -677,8 +716,8 @@ int savefile_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, voi
 
       savefile_browser = b;
       savefile_token   = link;
-
-      ok = 1;
+      savefile_log     = NULL;
+      ok               = 1;
     }
     break;
 
@@ -762,8 +801,8 @@ int savefile_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, voi
 
       savefile_browser = b;
       savefile_token   = image;
-
-      ok = 1;
+      savefile_log     = NULL;
+      ok               = 1;
     }
     break;
 
@@ -806,8 +845,8 @@ int savefile_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, voi
 
       savefile_browser = b;
       savefile_token   = NULL;
-
-      ok = 1;
+      savefile_log     = NULL;
+      ok               = 1;
     }
     break;
 
@@ -1193,6 +1232,21 @@ static int savefile_drag_ended(int eventcode, ToolboxEvent * event, IdBlock * id
     }
     break;
 
+    /* Save a log file */
+
+    case LogSaveLog:
+    {
+      saving = protocols_saving_log;
+
+      if (savefile_log)
+      {
+        size  = save_log_size(savefile_log, alt);
+        extra = (void *) savefile_log;
+      }
+      else size = 0;
+    }
+    break;
+
     #ifndef REMOTE_HOTLIST
 
       /* File size of the entire hotlist */
@@ -1423,6 +1477,18 @@ static int savefile_ok(int eventcode, ToolboxEvent * event, IdBlock * idb, void 
     }
     break;
 
+    /* Export a log file */
+
+    case LogSaveLog:
+    {
+      if (savefile_log)
+      {
+        e = save_save_log(path, savefile_log, alt);
+        if (!e) ok = 1;
+      }
+    }
+    break;
+
     #ifndef REMOTE_HOTLIST
 
       /* Save the hotlist */
@@ -1577,6 +1643,7 @@ _kernel_oserror * savefile_close(ObjectId ancestor, int do_not_close)
 
   savefile_browser = NULL;
   savefile_token   = NULL;
+  savefile_log     = NULL;
   savefile_type    = 0x000;
 
   return e;
@@ -2117,6 +2184,14 @@ static int savefile_item_changed(IdBlock * idb)
     }
     break;
 
+    case LogSaveLog:
+    {
+      alt_log = alt;
+
+      ChkError(savefile_toggle_all_or_selection(idb->self_id));
+    }
+    break;
+
     #ifdef TRACE
 
       default:
@@ -2247,6 +2322,57 @@ static _kernel_oserror * savefile_toggle_uri_or_url(ObjectId window)
 
   if (set_url) return savefile_set_filetype(window, SaveFileDrag, FileType_URL, 0);
   else         return savefile_set_filetype(window, SaveFileDrag, FileType_URI, 0);
+}
+
+/*************************************************/
+/* savefile_text_all_or_selection()              */
+/*                                               */
+/* Set the text in the radio buttons or option   */
+/* button of a Save File dialogue giving the     */
+/* choice of saving either everything or a       */
+/* selection.                                    */
+/*                                               */
+/* Parameters: Object ID of the relevant Save    */
+/*             File dialogue.                    */
+/*************************************************/
+
+static _kernel_oserror * savefile_text_all_or_selection(ObjectId window)
+{
+  /* These can all fail silently if the gadget isn't present */
+
+  optionbutton_set_label(0,
+                         window,
+                         SaveFileOption,
+                         lookup_token("SaveFileOpSel:Selection",0,0));
+
+  radiobutton_set_label (0,
+                         window,
+                         SaveFileRadio1,
+                         lookup_token("SaveFileRaAll:All",0,0));
+
+  radiobutton_set_label (0,
+                         window,
+                         SaveFileRadio2,
+                         lookup_token("SaveFileRaSel:Selection",0,0));
+
+  return 0;
+}
+
+/*************************************************/
+/* savefile_toggle_all_or_selection()            */
+/*                                               */
+/* Called when the option to save a whole log    */
+/* file or a selection is changed.               */
+/*                                               */
+/* Parameters: Object ID of the relevant Save    */
+/*             File dialogue.                    */
+/*************************************************/
+
+static _kernel_oserror * savefile_toggle_all_or_selection(ObjectId window)
+{
+  /* Really nothing to do here - set the file type just to make sure... */
+
+  return savefile_set_filetype(window, SaveFileDrag, FileType_TEXT, 0);
 }
 
 /*************************************************/

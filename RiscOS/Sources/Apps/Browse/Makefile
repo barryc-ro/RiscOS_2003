@@ -263,6 +263,7 @@ OBJS = \
  o.CSIM			\
  o.DragBox		\
  o.Encoding		\
+ o.EventLogs		\
  o.Fetch		\
  o.FetchHTML		\
  o.FetchPage		\
@@ -312,10 +313,13 @@ OBJS = \
  o.SaveSHelp		\
  o.SaveText		\
  o.SetPBoxes		\
+ od.svcprint		\
  o.Tables		\
+ o.TGutils		\
  o.TokenUtils		\
  o.Toolbars		\
  o.Unifont		\
+ o.URIfile		\
  o.URLstat		\
  o.URLutils		\
  o.URLveneer		\
@@ -332,6 +336,7 @@ OBJSZ = \
  oz.CSIM		\
  oz.DragBox		\
  oz.Encoding		\
+ oz.EventLogs		\
  oz.Fetch		\
  oz.FetchHTML		\
  oz.FetchPage		\
@@ -382,9 +387,11 @@ OBJSZ = \
  oz.SaveText		\
  oz.SetPBoxes		\
  oz.Tables		\
+ oz.TGutils		\
  oz.TokenUtils		\
  oz.Toolbars		\
  oz.Unifont		\
+ oz.URIfile		\
  oz.URLstat		\
  oz.URLutils		\
  oz.URLveneer		\
@@ -401,6 +408,7 @@ OBJSD = \
  od.CSIM		\
  od.DragBox		\
  od.Encoding		\
+ od.EventLogs		\
  od.Fetch		\
  od.FetchHTML		\
  od.FetchPage		\
@@ -452,10 +460,12 @@ OBJSD = \
  od.SetPBoxes		\
  od.svcprint		\
  od.Tables		\
+ od.TGutils		\
  od.TokenUtils		\
  od.Toolbars		\
  od.Trace		\
  od.Unifont		\
+ od.URIfile		\
  od.URLstat		\
  od.URLutils		\
  od.URLveneer		\
@@ -472,6 +482,7 @@ OBJSDZ = \
  odz.CSIM		\
  odz.DragBox		\
  odz.Encoding		\
+ odz.EventLogs		\
  odz.Fetch		\
  odz.FetchHTML		\
  odz.FetchPage		\
@@ -523,10 +534,12 @@ OBJSDZ = \
  odz.SetPBoxes		\
  odz.svcprint		\
  odz.Tables		\
+ odz.TGutils		\
  odz.TokenUtils		\
  odz.Toolbars		\
  odz.Trace		\
  odz.Unifont		\
+ odz.URIfile		\
  odz.URLstat		\
  odz.URLutils		\
  odz.URLveneer		\
@@ -543,6 +556,7 @@ OBJS_SURF = \
  o_surf.CSIM		\
  o_surf.DragBox		\
  o_surf.Encoding	\
+ o_surf.EventLogs	\
  o_surf.Fetch		\
  o_surf.FetchHTML	\
  o_surf.FetchPage	\
@@ -592,9 +606,11 @@ OBJS_SURF = \
  o_surf.SaveText	\
  o_surf.SetPBoxes	\
  o_surf.Tables		\
+ o_surf.TGutils		\
  o_surf.TokenUtils	\
  o_surf.Toolbars	\
  o_surf.Unifont		\
+ o_surf.URIfile		\
  o_surf.URLstat		\
  o_surf.URLutils	\
  o_surf.URLveneer	\
@@ -611,6 +627,7 @@ OBJSD_SURF = \
  od_surf.CSIM		\
  od_surf.DragBox	\
  od_surf.Encoding	\
+ od_surf.EventLogs	\
  od_surf.Fetch		\
  od_surf.FetchHTML	\
  od_surf.FetchPage	\
@@ -661,10 +678,12 @@ OBJSD_SURF = \
  od_surf.SetPBoxes	\
  od_surf.svcprint	\
  od_surf.Tables		\
+ od_surf.TGutils	\
  od_surf.TokenUtils	\
  od_surf.Toolbars	\
  od_surf.Trace		\
  od_surf.Unifont	\
+ od_surf.URIfile	\
  od_surf.URLstat	\
  od_surf.URLutils	\
  od_surf.URLveneer	\
@@ -681,6 +700,7 @@ OBJS_ITALK = \
  o_italk.CSIM		\
  o_italk.DragBox	\
  o_italk.Encoding	\
+ o_italk.EventLogs	\
  o_italk.Fetch		\
  o_italk.FetchHTML	\
  o_italk.FetchPage	\
@@ -731,9 +751,11 @@ OBJS_ITALK = \
  o_italk.SaveText	\
  o_italk.SetPBoxes	\
  o_italk.Tables		\
+ o_italk.TGutils	\
  o_italk.TokenUtils	\
  o_italk.Toolbars	\
  o_italk.Unifont	\
+ o_italk.URIfile	\
  o_italk.URLstat	\
  o_italk.URLutils	\
  o_italk.URLveneer	\
@@ -750,6 +772,7 @@ OBJSD_ITALK = \
  od_italk.CSIM		\
  od_italk.DragBox	\
  od_italk.Encoding	\
+ od_italk.EventLogs	\
  od_italk.Fetch		\
  od_italk.FetchHTML	\
  od_italk.FetchPage	\
@@ -801,10 +824,12 @@ OBJSD_ITALK = \
  od_italk.SetPBoxes	\
  od_italk.svcprint	\
  od_italk.Tables	\
+ od_italk.TGutils	\
  od_italk.TokenUtils	\
  od_italk.Toolbars	\
  od_italk.Trace		\
  od_italk.Unifont	\
+ od_italk.URIfile	\
  od_italk.URLstat	\
  od_italk.URLutils	\
  od_italk.URLveneer	\
@@ -1023,7 +1048,7 @@ clean_all: clean
 
 
 # -----------------------------------------------------------------------------
-# Final linkfor ROM Image (using given base address)
+# Final link for ROM Image (using given base address)
 #
 
 rom_link:

@@ -26,11 +26,14 @@
 #include "Utils.h"
 
 #include "Browser.h"
+#include "EventLogs.h"
 #include "FetchPage.h"
 #include "Filetypes.h"
 #include "Frames.h"
+#include "Handlers.h"
 #include "History.h"
 #include "LineOne.h"
+#include "Main.h"
 #include "Multiuser.h"
 #include "Protocols.h"
 #include "Save.h"
@@ -51,30 +54,47 @@
 
   #undef  ATTEMPT_JS_POLL
 
+  /* JavaScript post-execution action structure */
+
+  struct javascript_postexec;
+
+  typedef struct javascript_postexec
+  {
+    struct javascript_postexec * next;
+
+    browser_data               * b;
+    unsigned int                 type;
+
+  } javascript_postexec;
+
   /* Static function prototypes */
 
-  static JSBool PR_CALLBACK   javascript_watchdog           (JSContext * cx, JSScript * script);
-  static void                 javascript_error              (JSContext * cx, const char * message, JSErrorReport * report);
+  static JSBool PR_CALLBACK   javascript_watchdog                 (JSContext * cx, JSScript * script);
+  static void                 javascript_error                    (JSContext * cx, const char * message, JSErrorReport * report);
+  static void                 javascript_clear_post_exec_actions  (void);
+  static _kernel_oserror    * javascript_handle_post_exec_actions (void);
 
   /* Other local statics */
 
-  static unsigned int        watchdog_counter;
-  static unsigned int        watchdog_start;
-  static unsigned int        watchdog_leds;
+  static unsigned int          watchdog_counter;
+  static unsigned int          watchdog_start;
+  static unsigned int          watchdog_leds;
 
-  static browser_data      * script_browser = NULL;
-  static javascript_source   script_source  = JavaScript_Source_Unknown;
-  static char              * script_write_p = NULL;
-  static int                 script_write_l = 0;
+  static browser_data        * script_browser = NULL;
+  static javascript_source     script_source  = JavaScript_Source_Unknown;
+  static char                * script_write_p = NULL;
+  static int                   script_write_l = 0;
 
-  static int                 source_set     = 0;
-  static int                 doc_write_used = 0;
-  static int                 proceed        = 0;
+  static int                   source_set     = 0;
+  static int                   doc_write_used = 0;
+  static int                   proceed        = 0;
 
-  static browser_data      * pending_b      = NULL;
-  static char              * pending_url    = NULL;
-  static int                 pending_record = 0;
-  static int                 pending_stop   = 0;
+  static browser_data        * pending_b      = NULL;
+  static char                * pending_url    = NULL;
+  static int                   pending_record = 0;
+  static int                   pending_stop   = 0;
+
+  static javascript_postexec * postexec_head  = NULL;
 
 #endif
 
@@ -119,6 +139,7 @@ _kernel_oserror * javascript_body_onload(browser_data * b)
 
   #ifdef JAVASCRIPT
 
+    javascript_set_source(JavaScript_Source_MiscEvent);
     e = javascript_process_script(b, b->onload);
 
   #endif
@@ -559,6 +580,10 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
       strcat(erb.errmess, message);
     }
 
+    eventlogs_log_message(script_browser,
+                          eventlogs_script_information,
+                          message);
+
     response = show_error_ask(&erb, "JSErr2:Continue,More info");
 
     /* A response of 4 means 'more info' */
@@ -591,7 +616,7 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
       /* If we have a filename and/or line number, output them */
 
       if (report->filename) fprintf(f, "// %s, ", report->filename);
-      if (report->lineno)   fprintf(f, "%u: ", report->lineno);
+      if (report->lineno)   fprintf(f, "%u: ",    report->lineno);
 
       if (!report->filename && !report->lineno) fputs("// ", f);
 
@@ -1185,6 +1210,10 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
     if (script_source == JavaScript_Source_URLWritable) doc_write_used = 0;
     else                                                doc_write_used = 1;
 
+    /* Ensure any post-execution actions are ditched before starting */
+
+    javascript_clear_post_exec_actions();
+
     /* Compile the script */
 
     #ifdef TRACE
@@ -1314,6 +1343,10 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
       }
     }
 
+    /* Handle any post-execution actions - remember, after this, 'b' may be invalid */
+
+    javascript_handle_post_exec_actions();
+
     /* TRACE builds will report how successful the execution was */
 
     #ifdef TRACE
@@ -1434,6 +1467,10 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
     script_browser = b;
     doc_write_used = 1;
 
+    /* Ensure any post-execution actions are ditched before starting */
+
+    javascript_clear_post_exec_actions();
+
     /* Compile the script */
 
     #ifdef TRACE
@@ -1503,6 +1540,10 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
       }
 
     #endif
+
+    /* Handle any post-execution actions - remember, after this, 'b' may be invalid */
+
+    javascript_handle_post_exec_actions();
 
     /* Finished - copy the document.write() etc. data, or if there is */
     /* none or the script failed, return NULL.                        */
@@ -1704,7 +1745,7 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
   /* restarted at the recorded location.           */
   /*                                               */
   /* At the time of creation, this function's      */
-  /* parameters list mirros exactly those for      */
+  /* parameters list mirrors exactly those for     */
   /* fetchpage_new. To cancel a pending fetch,     */
   /* however, call with a NULL browser_data        */
   /* struct pointer.                               */
@@ -1972,6 +2013,146 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
 //
 //    b->outer_width  = (JSDouble) ((int) ((outline.outline.xmax - outline.outline.xmin) / 2));
 //    b->outer_height = (JSDouble) ((int) ((outline.outline.ymax - outline.outline.ymin) / 2));
+
+    return NULL;
+  }
+
+  /*************************************************/
+  /* javascript_register_post_exec_action()        */
+  /*                                               */
+  /* Register an action to take place after a      */
+  /* script has executed. Usually called by the    */
+  /* script itself somewhere in the native back    */
+  /* end code.                                     */
+  /*                                               */
+  /* Note: To register a requirement to visit a    */
+  /* URL, use javascript_set_pending_fetch instead */
+  /* of this system (actions set here are executed */
+  /* too early for pending fetches to work).       */
+  /*                                               */
+  /* Parameters: Pointer to a browser_data struct  */
+  /*             to which the action is relevant;  */
+  /*                                               */
+  /*             Action type (see JavaScript.h).   */
+  /*************************************************/
+
+  _kernel_oserror * javascript_register_post_exec_action(browser_data * b, unsigned int type)
+  {
+    javascript_postexec * exec = malloc(sizeof(javascript_postexec));
+
+    if (!exec) return make_no_javascript_memory_error(4);
+
+    exec->next = postexec_head;
+    exec->b    = b;
+    exec->type = type;
+
+    postexec_head = exec;
+
+    return NULL;
+  }
+
+  /*************************************************/
+  /* javascript_clear_post_exec_actions()          */
+  /*                                               */
+  /* Get rid of any pending post execution actions */
+  /* (e.g. ready for a new script to run).         */
+  /*************************************************/
+
+  static void javascript_clear_post_exec_actions(void)
+  {
+    javascript_postexec * next;
+
+    while (postexec_head)
+    {
+      next = postexec_head->next;
+      free(postexec_head);
+      postexec_head = next;
+    }
+  }
+
+  /*************************************************/
+  /* javascript_handle_post_exec_actions()         */
+  /*                                               */
+  /* Some scripts do stuff that wants to actually  */
+  /* happen after the script has exitted (e.g.     */
+  /* close a window). This executes commands that  */
+  /* the script has requested.                     */
+  /*************************************************/
+
+  static _kernel_oserror * javascript_handle_post_exec_actions(void)
+  {
+    int get_outa_here = 0;
+
+    javascript_postexec * this;
+    javascript_postexec * next;
+
+    while (postexec_head)
+    {
+      this = postexec_head;
+      next = this->next;
+
+      /* Do whatever action this structure asks for */
+
+      switch (this->type)
+      {
+        case 1:
+        {
+          if (is_known_browser(this->b))
+          {
+            /* If about to close a JS child and it has the input focus, give focus */
+            /* back to the parent instead                                          */
+
+            if (is_known_browser(this->b->bcx_inherited))
+            {
+              WimpGetCaretPositionBlock caret;
+
+              wimp_get_caret_position(&caret);
+
+              if (caret.window_handle == this->b->window_handle)
+              {
+                browser_give_general_focus(this->b->bcx_inherited);
+              }
+            }
+
+            /* Close it */
+
+            handle_close_browser(0, NULL, NULL, this->b);
+
+            /* If we've just shut the executing browser, panic wildly. */
+
+            if (this->b == script_browser) get_outa_here = 1;
+          }
+        }
+        break;
+
+        #ifdef TRACE
+
+          default:
+          {
+            erb.errnum = Utils_Error_Custom_Normal;
+
+            sprintf(erb.errmess,
+                    "Unknown action type %d in javascript_handle_post_exec_actions",
+                    exec->type);
+
+            show_error_ret(&erb)
+          }
+          break;
+
+        #endif
+      }
+
+      /* Remove the structure */
+
+      free(this), postexec_head = next;
+    }
+
+    // Erk. This is horrible. The alternative is to check to see
+    // if 'b' is still valid after each and every call to these
+    // JavaScript routines though, which doesn't bear thinking
+    // about if only from a maintenance viewpoint.
+
+    if (get_outa_here) longjmp(env, Main_FromJSHandler);
 
     return NULL;
   }

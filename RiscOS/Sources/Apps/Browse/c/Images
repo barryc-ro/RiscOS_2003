@@ -1051,6 +1051,20 @@ _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * 
     if (tl & (1u<<14)) Printf("**   flexcount: %d\n",flexcount);
   #endif
 
+  /* If there's data for a URL, copy it into the above allocated block */
+  /* and inform ImageLib of the new image.                             */
+
+  if (ulen)
+  {
+    strcpy(idata[nimages].flex->urldata, url);
+
+    #ifdef ALL_FAST
+      idata[nimages].istore = NewImage(NULL, IMAGE_FAST);
+    #else
+      idata[nimages].istore = NewImage(NULL, background ? IMAGE_FAST : 0);
+    #endif
+  }
+
   /* Set the 'delayed' flag if it's not a background image and */
   /* images are flagged as not being shown right now, or if it */
   /* is a background image and backgrounds are flagged to be   */
@@ -1070,19 +1084,14 @@ _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * 
     idata[nimages].delayed = (!b->show_foreground && b->displayed != Display_External_Image);
   }
 
-  /* If there's data for a URL, copy it into the above allocated block */
-  /* and inform ImageLib of the new image.                             */
+  /* May have the image source in an exclusion list though */
 
-  if (ulen)
-  {
-    strcpy(idata[nimages].flex->urldata, url);
-
-    #ifdef ALL_FAST
-      idata[nimages].istore = NewImage(NULL, IMAGE_FAST);
-    #else
-      idata[nimages].istore = NewImage(NULL, background ? IMAGE_FAST : 0);
-    #endif
-  }
+  if (
+       !idata[nimages].delayed                    &&
+       ulen                                       &&
+       urlutils_match_by_token(url, "LONoImages")
+     )
+     idata[nimages].delayed = 1;
 
   /* Make sure width and height info etc. is correct according */
   /* to the given HStream.                                     */
@@ -1475,7 +1484,8 @@ _kernel_oserror * image_process_null(browser_data * b)
           #endif
 
           /* Only return errors in STRICT_PARSER builds for similar reason to */
-          /* suppression of any errors from html_get above.                   */
+          /* suppression of any errors from html_get above. After all, errors */
+          /* here can include things like "404 Not Found".                    */
 
           #ifdef STRICT_PARSER
             return e;
@@ -3049,15 +3059,9 @@ static _kernel_oserror * image_update_area(browser_data * b, int x, int y, BBox 
 
 static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * box)
 {
-  /* Update the specified image number on the screen, including all       */
-  /* which xref to it. If the image has changed size on screen then start */
-  /* a reformat from the first occurrence (ie the smallest token number), */
-  /* otherwise just do an update of the relevant rectangle for each       */
-  /* occurrence.                                                          */
-
   int  i, actual;
   int  istart, iend;
-  BBox whole, partial;
+  BBox whole;
 
   #ifdef TRACE
     if (tl & (1u<<15)) Printf("image_update_image: Called for image %d\n",image);
@@ -3068,7 +3072,7 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
   /* size. The BBox 'whole' is used for the latter case, so by setting   */
   /* 'box' to the address of this if a BBox was *not* given, we can then */
   /* transparently use this elsewhere and update either the requested    */
-  /* area or the whole image without needing special case code.          */
+  /* area or the whole image without needing other special case code.    */
   /*                                                                     */
   /* If the image's 'hadfirst' flag is clear, it hasn't been through     */
   /* this function yet. In that case, want to ensure that the whole      */
@@ -3109,102 +3113,77 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
     }
   }
 
+  /* Register a per-image filler function if it hasn't already got one */
+
   if (idata[image].istore->RegisterFiller && !idata[image].hadfiller)
   {
     show_error_ret(image_register_filler(image));
   }
 
-  /* When the image library gets some data for an image it will fill */
-  /* in the width_os and height_os fields of the istore structure    */
-  /* that 'image' points to. If the HTML source didn't specify a     */
-  /* size for this or cross referencing images and the size is not   */
-  /* the same as stored in currw / currh, flag that a reformat is    */
-  /* needed for this image.                                          */
-  /*                                                                 */
-  /* Since this is driven by ImageLib suppling data, we only need to */
-  /* do this if the requested image to update holds the image data.  */
+  /* A few things are only done for images with actual image data; */
+  /* only if these change do we need to worry about xrefs.         */
 
-  if (
-       actual == image                     &&
-
-       !idata[actual].hadfirst             &&
-       idata[image].istore->width_os  >= 0 &&
-       idata[image].istore->height_os >= 0
-     )
+  if (actual == image)
   {
-    for (i = 0; i < nimages; i++)
+    /* When the image library gets some data for an image it will fill */
+    /* in the width_os and height_os fields of the istore structure    */
+    /* that 'image' points to. If the HTML source didn't specify a     */
+    /* size for this or cross referencing images and the size is not   */
+    /* the same as stored in currw / currh, flag that a reformat is    */
+    /* needed for this image.                                          */
+
+    if (
+         !idata[actual].hadfirst             &&
+         idata[image].istore->width_os  >= 0 &&
+         idata[image].istore->height_os >= 0
+       )
     {
-      if (
-           (
-             idata[i].xref == image ||
-             i == image
-           )
-           && !idata[i].fixedsize
-         )
+      for (i = 0; i < nimages; i++)
       {
-        BBox size;
-
-        /* Ignore any existing currw and currh values - find the image */
-        /* size based entirely on the HTML and the image itself        */
-
-        image_get_image_size(b,
-                             i,
-                             &size,
-                             1);
-
-        /* Does the returned value differ from the stored size? If so, */
-        /* flag that we must do a reformat for this image. It is up to */
-        /* the reformatter to call back to routines in this source     */
-        /* file and update currw and currh once the image is           */
-        /* incorporated into a line array.                             */
-
         if (
-             size.xmax != idata[i].currw ||
-             size.ymax != idata[i].currh
+             (
+               idata[i].xref == image ||
+               i == image
+             )
+             && !idata[i].fixedsize
            )
-           idata[i].reformat = 1;
-      }
-    }
-  }
-
-  /* If the image is for the background, just refresh the window contents */
-  /* with browser_update_window (remembering to update those windows that */
-  /* cross reference the same background image, too).                     */
-
-  {
-    int            isbackground = 0;
-    browser_data * check        = last_browser;
-
-    /* First check if the image is the background of this browser. If */
-    /* not then check all browsers.                                   */
-
-    if (actual == b->background_image || image == b->background_image) isbackground = 1;
-    else
-    {
-      while (check && !isbackground)
-      {
-        if (actual == check->background_image || image == check->background_image) isbackground = 1;
-
-        check = check->previous;
-      }
-    }
-
-    /* If this is a background, update all instances of the image */
-    /* and exit the update routine here.                          */
-
-    if (isbackground)
-    {
-      /* (Only update other browsers if the image we were asked to update is */
-      /* holding the actual image data, so the appearance may have changed). */
-
-      if (actual == image)
-      {
-        for (i = 0; i < nimages; i++)
         {
-          if ((i == image || idata[i].xref == image) && idata[image].fetched)
-          {
-            browser_update_bottom(idata[i].owner, NULL);
-          }
+          BBox size;
+
+          /* Ignore any existing currw and currh values - find the image */
+          /* size based entirely on the HTML and the image itself        */
+
+          image_get_image_size(b,
+                               i,
+                               &size,
+                               1);
+
+          /* Does the returned value differ from the stored size? If so, */
+          /* flag that we must do a reformat for this image. It is up to */
+          /* the reformatter to call back to routines in this source     */
+          /* file and update currw and currh once the image is           */
+          /* incorporated into a line array.                             */
+
+          if (
+               size.xmax != idata[i].currw ||
+               size.ymax != idata[i].currh
+             )
+             idata[i].reformat = 1;
+        }
+      }
+    }
+
+    /* If the image is for the background, just refresh the window contents */
+    /* with browser_update_window (remembering to update those windows that */
+    /* cross reference the same background image, too).                     */
+
+    if (image == idata[image].owner->background_image)
+    {
+      for (i = 0; i < nimages; i++)
+      {
+        if ((i == image || idata[i].xref == image) && idata[image].fetched)
+        {
+          browser_update_bottom(idata[i].owner, NULL);
         }
       }
 
@@ -3226,10 +3205,9 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
 
     if (i == image || idata[i].xref == image)
     {
-      int       l, x, y;
-      int       noplot = 0;
-      HStream * tp;
-      BBox      ibox;
+      BBox partial;
+      int  l;
+      int  noplot = 0;
 
       /* Set the 'whole' BBox to the size of the base image in OS units */
 
@@ -3311,6 +3289,10 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
       }
       else
       {
+        int       x, y;
+        BBox      ibox;
+        HStream * tp;
+
         x  = idata[i].x;
         y  = idata[i].y;
         tp = idata[i].token;
@@ -4287,7 +4269,7 @@ void image_mark_as_redrawable(browser_data * b, int image)
 /*                                               */
 /* Called by a reformatter to signal an image is */
 /* locked in a line array. Sets the image's      */
-/* canredraw flag and locs the image's size.     */
+/* canredraw flag and locks the image's size.    */
 /*                                               */
 /* Parameters: Pointer to a browser_data struct  */
 /*             relevant to the image;            */

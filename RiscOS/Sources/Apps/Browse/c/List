@@ -34,6 +34,7 @@
 #include "Choices.h"
 #include "ChoiceDefs.h"
 #include "Menus.h"
+#include "TGutils.h"
 #include "Windows.h"
 
 #include "List.h"
@@ -42,29 +43,23 @@
 
 static ObjectId window_id = NULL_ObjectId;
 
-/* Structure to hold details of a known type of list */
-
-typedef struct list_known
-{
-  ComponentId   reference;
-  const char  * choices_token;
-  char        * local_value;
-
-} list_known;
-
-/* Array of known list types */
+/* Array of known list types. Arrange the Choices file token names */
+/* (second field) in order of decreasing length. Where there is    */
+/* more than one item of the same length, arrange in ascending     */
+/* alphabetical order.                                             */
+/*                                                                 */
+/* For list_known's definition, see List.h.                        */
 
 static list_known known[] = {
-                              { CD_ExcludeHTTPBt,  "ProxyExcludehttp", NULL },
-                              { CD_ExcludeFTPBt,   "ProxyExcludeftp",  NULL },
-                              { CD_ExcludeAnyBt,   "ProxyExclusions",  NULL },
-                              { CD_CookieAcceptBt, "CookieAccept",     NULL },
-                              { CD_CookieRejectBt, "CookieReject",     NULL },
-                              { CD_NoImagesBt,     "NoImages",         NULL },
-                              { CD_NoPlugInsBt,    "NoPlugIns",        NULL },
-                              { CD_NoScriptsBt,    "NoScripts",        NULL },
-
-                              { NULL_ComponentId,  NULL,               NULL }
+                              { CD_ExcludeHTTPBt,  "LOProxyExcludehttp", NULL },
+                              { CD_ExcludeFTPBt,   "LOProxyExcludeftp",  NULL },
+                              { CD_ExcludeAnyBt,   "LOProxyExclusions",  NULL },
+                              { CD_CookieAcceptBt, "LOCookieAccept",     NULL },
+                              { CD_CookieRejectBt, "LOCookieReject",     NULL },
+                              { CD_NoPlugInsBt,    "LONoPlugIns",        NULL },
+                              { CD_NoScriptsBt,    "LONoScripts",        NULL },
+                              { CD_NoImagesBt,     "LONoImages",         NULL },
+                              { CD_NoTablesBt,     "LONoTables",         NULL }
                             };
 
 /* Structure to hold details of what a List Add dialogue is open for */
@@ -79,12 +74,14 @@ typedef struct list_add_for
 
 /* Static function prototypes */
 
+static int               list_parent_is_closing                (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
+
 static int               list_ok                               (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
 static int               list_cancel                           (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
 static int               list_add_add                          (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
 static int               list_add_cancel                       (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
 
-static _kernel_oserror * list_closing                          (ObjectId self);
+static _kernel_oserror * list_closing                          (ObjectId self, ObjectId parent);
 static _kernel_oserror * list_add_closing                      (ObjectId self);
 
 static int               list_select_all_handler               (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
@@ -94,6 +91,35 @@ static int               list_remove_item_handler              (int eventcode, T
 static int               list_scrolllist_event_handler         (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
 
 static _kernel_oserror * list_fill_from_comma_separated_string (ObjectId self, char * items);
+static _kernel_oserror * list_fill_from_array_index            (ObjectId self, int index);
+
+/*************************************************/
+/* list_get_known_items()                        */
+/*                                               */
+/* Get a pointer to the array created above that */
+/* holds the types of lists we know about.       */
+/*                                               */
+/* This should really only be of use to very     */
+/* specialised functions, e.g. the Choices file  */
+/* saver.                                        */
+/*                                               */
+/* Parameters: Pointer to an int which is filled */
+/*             in with sizeof(array), since you  */
+/*             can't do this externally on the   */
+/*             value the function returns        */
+/*             directly.                         */
+/*                                               */
+/* Returns:    Pointer to the list_known array.  */
+/*                                               */
+/* Assumes:    The int pointer is mandatory; it  */
+/*             may not be NULL.                  */
+/*************************************************/
+
+const list_known * list_get_known_items(int * entries)
+{
+  *entries = (sizeof(known) / sizeof(known[0]));
+  return known;
+}
 
 /*************************************************/
 /* list_get_malloc_list_string()                 */
@@ -145,7 +171,7 @@ char * list_get_malloc_list_string(const char * token)
 
   /* Find out what list, if any, this is for */
 
-  while (known[index].choices_token && !tkn)
+  while (index < (sizeof(known) / sizeof(known[0])) && !tkn)
   {
     if (!strcmp(known[index].choices_token, token)) tkn = token;
     else index++;
@@ -194,7 +220,7 @@ int list_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, void * 
   // optimisation here is a lot less important than in
   // list_get_malloc_list_string!
 
-  while (known[index].reference != NULL_ComponentId && !tkn)
+  while (index < (sizeof(known) / sizeof(known[0])) && !tkn)
   {
     if (idb->parent_component == known[index].reference) tkn = known[index].choices_token;
     else index ++;
@@ -204,33 +230,24 @@ int list_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, void * 
   {
     /* Don't recognise the parent component ID */
 
-    // Want to close the dialogue, or raise an error or something -
-    // source of dialogue unknown. See Menus.c?
+    #ifdef TRACE
+
+      erb.errnum = Utils_Error_Custom_Normal;
+
+      sprintf(erb.errmess,
+              "Parent component 0x%08x unknown in list_to_be_shown",
+              idb->parent_component);
+
+      ChkError(&erb);
+
+    #endif
 
     return 0;
   }
   else
   {
-    char * string;
-
-    /* Do recognise the parent component ID, so store the index into the */
-    /* array of list_known structures as the List dialogue object's      */
-    /* client handle and fill the ScrollList gadget with the relevant    */
-    /* items.                                                            */
-
     ChkError(toolbox_set_client_handle(0, idb->self_id, (void *) index));
-
-    string = list_get_malloc_list_string(tkn);
-
-    if (string)
-    {
-      _kernel_oserror * e;
-
-      e = list_fill_from_comma_separated_string(idb->self_id, string);
-      free(string);
-
-      ChkError(e);
-    }
+    ChkError(list_fill_from_array_index(idb->self_id, index));
   }
 
   /* Grey out Remove for now, as there's nothing selected to start with */
@@ -281,8 +298,32 @@ int list_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, void * 
                                           list_scrolllist_event_handler,
                                           NULL));
 
+  /* An unusual one - we need to hide *ourselves* if the Choices pane */
+  /* that opened us disappears. Don't forget to deregister it later!  */
+
+  ChkError(event_register_toolbox_handler(idb->parent_id,
+                                          ECD_SubWindowToClose,
+                                          list_parent_is_closing,
+                                          NULL));
+
   window_id = idb->self_id;
 
+  return 1;
+}
+
+/*************************************************/
+/* list_parent_is_closing()                      */
+/*                                               */
+/* Eeek, our parent window is closing - time for */
+/* bed...                                        */
+/*                                               */
+/* Parameters are as standard for a Toolbox      */
+/* event handler.                                */
+/*************************************************/
+
+static int list_parent_is_closing(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
+{
+  if (window_id != NULL_ObjectId) toolbox_hide_object(0, window_id);
   return 1;
 }
 
@@ -336,7 +377,68 @@ int list_add_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, voi
 
 static int list_ok(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
 {
-  ChkError(list_closing(idb->self_id));
+  _kernel_oserror * e;
+  char              field[Limits_List_Item];
+  char            * composite;
+  char            * temp;
+  int               item;
+  int               index;
+  int               count = list_count_items(idb->self_id);
+  size_t            len;
+
+  ChkError(toolbox_get_client_handle(0, idb->self_id, (void *) &index));
+
+  if (index >= 0 && index < (sizeof(known) / sizeof(known[0])))
+  {
+    /* First thing is to take the separate items in the scrolling */
+    /* list and compose them back into a comma separated string.  */
+
+    composite = malloc(1);
+    if (!composite) ChkError(make_no_memory_error(38));
+    *composite = '\0';
+
+    for (item = 0; item < count; item++)
+    {
+      e = scrolllist_get_item_text(0,
+                                   idb->self_id,
+                                   ListScrollList,
+                                   field,
+                                   sizeof(field),
+                                   item,
+                                   NULL);
+
+      if (e)
+      {
+        free(composite);
+        ChkError(e);
+      }
+
+      /* Need to extend buffer to keep existing string, new string, */
+      /* a terminator, and a ',' separator.                         */
+
+      len  = strlen(composite) + strlen(field) + 1 + (item > 0 ? 1 : 0);
+      temp = realloc(composite, len);
+
+      if (!temp)
+      {
+        free(composite);
+        ChkError(make_no_memory_error(38));
+      }
+      else composite = temp;
+
+      /* Add the item to the string */
+
+      if (item > 0) strcat(composite, ",");
+      strcat(composite, field);
+    }
+
+    /* Use this string, discarding any previous value */
+
+    free(known[index].local_value);
+    known[index].local_value = composite;
+  }
+
+  ChkError(list_closing(idb->self_id, idb->parent_id));
 
   return 1;
 }
@@ -353,7 +455,11 @@ static int list_ok(int eventcode, ToolboxEvent * event, IdBlock * idb, void * ha
 
 static int list_cancel(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
 {
-  ChkError(list_closing(idb->self_id));
+  int index;
+
+  ChkError(toolbox_get_client_handle(0, idb->self_id, (void *) (&index)));
+  ChkError(list_fill_from_array_index(idb->self_id, index));
+  ChkError(list_closing(idb->self_id, idb->parent_id));
 
   return 1;
 }
@@ -438,17 +544,22 @@ static int list_add_cancel(int eventcode, ToolboxEvent * event, IdBlock * idb, v
 /*************************************************/
 /* list_closing()                                */
 /*                                               */
-/* If the List dialogue box is closing, call     */
+/* If the List dialogue box may be closing, call */
 /* this to do various tidy-up actions which are  */
 /* the same for any source of closure (e.g. "OK" */
 /* and "Cancel").                                */
 /*                                               */
-/* Parameters: Object ID of the List dialogue.   */
+/* Parameters: Object ID of the List dialogue;   */
+/*                                               */
+/*             Object ID of its parent, or       */
+/*             NULL_ObjectId if there is no      */
+/*             parent in this case.              */
 /*************************************************/
 
-static _kernel_oserror * list_closing(ObjectId self)
+static _kernel_oserror * list_closing(ObjectId self, ObjectId parent)
 {
   WimpGetPointerInfoBlock info;
+  ObjectId                add;
 
   RetError(wimp_get_pointer_info(&info));
 
@@ -481,13 +592,31 @@ static _kernel_oserror * list_closing(ObjectId self)
                                      list_add_item_handler,
                                      NULL);
 
+    if (parent != NULL_ObjectId)
+    {
+      event_deregister_toolbox_handler(parent,
+                                       ECD_SubWindowToClose,
+                                       list_parent_is_closing,
+                                       NULL);
+    }
+
     /* Ensure the object is hidden (may be a keyboard shortcut  */
     /* so the dialogue vaninshing is not assured automatically) */
 
     toolbox_hide_object(0, self);
+    window_id = NULL_ObjectId;
   }
 
-  window_id = NULL_ObjectId;
+  /* Closing or not closing, an event like this may mean any */
+  /* List Add dialogue is out of date                        */
+
+  if (!toolbox_create_object(0, "ListAdd", &add))
+  {
+    /* It's a shared object, so creating it just increments the */
+    /* reference count.                                         */
+
+    toolbox_hide_object(0, add);
+  }
 
   return NULL;
 }
@@ -495,10 +624,10 @@ static _kernel_oserror * list_closing(ObjectId self)
 /*************************************************/
 /* list_add_closing()                            */
 /*                                               */
-/* If the List Add dialogue box is closing, call */
-/* this to do various tidy-up actions which are  */
-/* the same for any source of closure (e.g. "OK" */
-/* and "Cancel").                                */
+/* If the List Add dialogue box may be closing,  */
+/* call this to do various tidy-up actions which */
+/* are the same for any source of closure (e.g.  */
+/* "OK" and "Cancel").                           */
 /*                                               */
 /* This process includes checking the object's   */
 /* client handle - free() is called on this.     */
@@ -578,7 +707,7 @@ static _kernel_oserror * list_add_closing(ObjectId self)
 
 static int list_select_all_handler(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
 {
-  if (window_id != NULL_ObjectId) list_select_all (window_id);
+  if (window_id != NULL_ObjectId) list_select_all(window_id);
   return 1;
 }
 
@@ -596,7 +725,7 @@ static int list_select_all_handler(int eventcode, ToolboxEvent * event, IdBlock 
 
 static int list_clear_selection_handler(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
 {
-  if (window_id != NULL_ObjectId) list_clear_selection (window_id);
+  if (window_id != NULL_ObjectId) list_clear_selection(window_id);
   return 1;
 }
 
@@ -682,7 +811,7 @@ static int list_add_item_handler(int eventcode, ToolboxEvent * event, IdBlock * 
 
 static int list_remove_item_handler(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
 {
-  if (window_id != NULL_ObjectId) list_remove_selected (window_id);
+  if (window_id != NULL_ObjectId) list_remove_selected(window_id);
   return 1;
 }
 
@@ -797,6 +926,42 @@ static _kernel_oserror * list_fill_from_comma_separated_string(ObjectId self, ch
 }
 
 /*************************************************/
+/* list_fill_from_array_index()                  */
+/*                                               */
+/* Given an index into the 'known' array of      */
+/* list_known structures (see top of this file), */
+/* write the relevant items into a List dialogue */
+/* via. list_fill_from_comma_separated_string.   */
+/*                                               */
+/* Parameters: Object ID of the List dialogue;   */
+/*                                               */
+/*             Index into array (this is limit   */
+/*             checked so invalid values can be  */
+/*             passed safely - the function just */
+/*             exits if the value is invalid).   */
+/*************************************************/
+
+static _kernel_oserror * list_fill_from_array_index(ObjectId self, int index)
+{
+  if (index >= 0 && index < (sizeof(known) / sizeof(known[0])))
+  {
+    char * string = list_get_malloc_list_string(known[index].choices_token);
+
+    if (string)
+    {
+      _kernel_oserror * e;
+
+      e = list_fill_from_comma_separated_string(self, string);
+      free(string);
+
+      return e;
+    }
+  }
+
+  return NULL;
+}
+
+/*************************************************/
 /* list_count_items()                            */
 /*                                               */
 /* Returns the number of items present in the    */
@@ -812,17 +977,7 @@ static _kernel_oserror * list_fill_from_comma_separated_string(ObjectId self, ch
 
 int list_count_items(ObjectId self)
 {
-  unsigned int count;
-
-  if (
-       scrolllist_count_items(0,
-                              self,
-                              ListScrollList,
-                              &count)
-     )
-     return 0;
-
-  return count;
+  return tgutils_count_items(self, ListScrollList);
 }
 
 /*************************************************/
@@ -841,21 +996,7 @@ int list_count_items(ObjectId self)
 
 int list_count_selected(ObjectId self)
 {
-  int offset = -1;
-  int count  = 0;
-
-  while (
-          !scrolllist_get_selected(0,
-                                   self,
-                                   ListScrollList,
-                                   offset,
-                                   &offset)
-
-          && offset >= 0
-        )
-        count++;
-
-  return count;
+  return tgutils_count_selected(self, ListScrollList);
 }
 
 /*************************************************/
@@ -869,10 +1010,7 @@ int list_count_selected(ObjectId self)
 
 _kernel_oserror * list_select_all(ObjectId self)
 {
-  return scrolllist_select_item(ScrollList_SelectionChangingMethod_SendEvent | ScrollList_SelectionChangingMethod_OnAll,
-                                self,
-                                ListScrollList,
-                                0);
+  return tgutils_select_all(self, ListScrollList);
 }
 
 /*************************************************/
@@ -886,10 +1024,7 @@ _kernel_oserror * list_select_all(ObjectId self)
 
 _kernel_oserror * list_clear_selection(ObjectId self)
 {
-  return scrolllist_deselect_item(ScrollList_SelectionChangingMethod_SendEvent | ScrollList_SelectionChangingMethod_OnAll,
-                                  self,
-                                  ListScrollList,
-                                  0);
+  return tgutils_clear_selection(self, ListScrollList);
 }
 
 /*************************************************/
@@ -903,32 +1038,7 @@ _kernel_oserror * list_clear_selection(ObjectId self)
 
 _kernel_oserror * list_remove_selected(ObjectId self)
 {
-  int offset;
-
-  do
-  {
-    /* Find a selected item */
-
-    RetError(scrolllist_get_selected(0,
-                                     self,
-                                     ListScrollList,
-                                     -1,
-                                     &offset));
-
-    /* If we gone one, remove it */
-
-    if (offset >= 0)
-    {
-      RetError(scrolllist_delete_items(ScrollList_SelectionChangingMethod_SendEvent | ScrollList_DeleteItems_DoNotJumpToTop,
-                                       self,
-                                       ListScrollList,
-                                       offset,
-                                       offset));
-    }
-  }
-  while (offset >= 0);
-
-  return NULL;
+  return tgutils_remove_selected(self, ListScrollList);
 }
 
 /*************************************************/
