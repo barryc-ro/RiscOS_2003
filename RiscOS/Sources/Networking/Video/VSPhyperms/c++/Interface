@@ -88,18 +88,27 @@ Interface::ReadEnvVar(void)
        result = ErrorOccurred;
     }
     
-    if (setting != NULL)
+    if (setting != NULL){
        EnvTCPtimeout = atoi(setting);
+       setting = getenv("VSPhyperms$INETtimeout");
+    }
     else {
        EnvTCPtimeout = 0;
        result = ErrorOccurred;
+    }
+    
+    if (setting != NULL){
+    	EnvINETtimeout = atoi(setting);
+    }
+    else {
+    	EnvINETtimeout = 0;
+    	result = ErrorOccurred;
     }
 	// -- 
     if (result == ErrorOccurred) {
     	MakeError(VSP_NoReadEnvironment);
     }
     
-    EnvINETtimeout = 50;
     
     return result;
 }
@@ -155,6 +164,21 @@ Interface::~Interface(void)
   disableInternetEvent(pw);
 }
 
+void
+Interface::error_array_print(void)
+{
+  int i, count = 0;
+  printf(" history of last %i error messages, most recent first\n", ERROR_ARRAY);
+  for (i=(errorsOffset-1); i != errorsOffset; --i){
+    if (i < 0) i = ERROR_ARRAY - 1;
+    if (errors[i] != NULL){
+      	++count;
+    	errors[i]->error_print();
+    }
+  } 	
+  printf(" (%i) errors recorded\n", count);
+}
+
 ErrorBlk *Interface::AddError(ErrorBlk *new_error)
 {
   ErrorBlk *errptr;
@@ -194,18 +218,22 @@ Interface::SetServer(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
     	else {
     	     if (regs->r[0] & 0x02) {	// port specified
 	    	p_ControlStream = new Server(EnvServerString, (char*)regs->r[2], EnvTCPtimeout);
+	    	p_ControlStream->set_interface_owner();
 	     }
 	     else {
 	     	p_ControlStream = new Server(EnvServerString, EnvPortString, EnvTCPtimeout);
+	    	p_ControlStream->set_interface_owner();
 	     }
 	}
     }
     else { // R1 specified
     	     if (regs->r[0] & 0x02) {	// port specified
 	    	p_ControlStream = new Server((char*)regs->r[1], (char*)regs->r[2], EnvTCPtimeout);
+	    	p_ControlStream->set_interface_owner();
 	     }
 	     else {
 	     	p_ControlStream = new Server((char*)regs->r[1], EnvPortString, EnvTCPtimeout);
+	    	p_ControlStream->set_interface_owner();
 	     }
     }
     // we should have a connection to the server now
@@ -246,15 +274,18 @@ Interface::OpenStream(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
   if ((regs->r[0] == 0)||(regs->r[4] == 0)) {
     tmp_server = 1;
     p_ControlStream = new Server(EnvServerString, EnvPortString, EnvTCPtimeout);
+
     if ((p_ControlStream != NULL)&&(p_ControlStream->ErrorExists())) {
     	(*non_fatal) = AddError(&(p_ControlStream->ReturnCopyOfError()));
     	delete p_ControlStream; p_ControlStream = NULL;
     	tmp_server = 0;
     }
   }
-  else
-  if (servers.identify((void**)&p_ControlStream, regs->r[4]) == ErrorOccurred) {
-    (*non_fatal) = AddError(&servers.ReturnCopyOfError());
+  else {
+  	p_ControlStream->set_interface_owner();
+  	if (servers.identify((void**)&p_ControlStream, regs->r[4]) == ErrorOccurred) {
+    		(*non_fatal) = AddError(&servers.ReturnCopyOfError());
+  	}
   }
   
   if (*non_fatal == NULL)
@@ -305,8 +336,12 @@ Interface::OpenStream(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
     		tmp = NULL;
     	} // this sets the handle as well.
   }
-  if (tmp_server)
-  	delete p_ControlStream;
+  if (tmp_server){
+    	if (p_ControlStream->stream_uses())
+    		p_ControlStream->clear_interface_owner();
+    	else
+  		delete p_ControlStream;
+  }
   return NoError;
 }
 
@@ -413,7 +448,7 @@ Interface::ReadNPT(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
 error_flag
 Interface::GetAssetList(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
 {
-  Server *tmp;
+  Server *tmp = NULL;
   int new_server = 0; 
 
   if (regs->r[1] == NULL){// connect to default server
@@ -422,6 +457,7 @@ Interface::GetAssetList(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
     	}
     	else{
     	   tmp = new Server(EnvServerString, EnvPortString, EnvTCPtimeout);
+    	   tmp->set_interface_owner();
     	   new_server = 1;
     	   if (tmp->ErrorExists()){
     	   	(*non_fatal) = AddError(&(tmp->ReturnCopyOfError()));
@@ -435,13 +471,13 @@ Interface::GetAssetList(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
   	(*non_fatal) = AddError(&CurrentStreams.ReturnCopyOfError());
   }
   
-  if (((*non_fatal) == NULL)&&(tmp->GetAssetList(regs) == ErrorOccurred)){
+  if ((tmp != NULL)&&((*non_fatal) == NULL)&&(tmp->GetAssetList(regs) == ErrorOccurred)){
   	(*non_fatal) = AddError(&tmp->ReturnCopyOfError());
     	tmp->RemoveErr();
   }
   
-  if (new_server == 1)
-  	delete tmp;
+  if ( (new_server == 1)&&(!(tmp->stream_uses())) )
+  		delete tmp;
   	
   regs->r[2] = NECServerType;
   
@@ -451,16 +487,38 @@ Interface::GetAssetList(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
 error_flag
 Interface::GetSceneList(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
 {
-  Server *tmp;
+  Server *tmp = NULL;
+  int new_server = 0;
   error_flag result = ErrorState();
 
+  if (regs->r[1] == NULL){// connect to default server
+    	if (EnvServerString[0] == NULL) {
+    		(*non_fatal) = AddError(new ErrorBlk(TCP_UnknownServer));
+    	}
+    	else{
+    	   tmp = new Server(EnvServerString, EnvPortString, EnvTCPtimeout);
+    	   tmp->set_interface_owner();
+    	   new_server = 1;
+    	   if (tmp->ErrorExists()){
+    	   	(*non_fatal) = AddError(&(tmp->ReturnCopyOfError()));
+    	   	delete tmp;
+    	   	new_server = 0;
+    	   }
+    	}
+  }
+  else {
   if (servers.identify((void**)&tmp, regs->r[1]) == ErrorOccurred)
   	(*non_fatal) = AddError(&CurrentStreams.ReturnCopyOfError());
-  else 
-    if (tmp->GetSceneAssetList(regs) == ErrorOccurred){
+  }
+  
+  if ((tmp != NULL)&&((*non_fatal) == NULL)&&(tmp->GetSceneAssetList(regs) == ErrorOccurred)){
   	(*non_fatal) = AddError(&tmp->ReturnCopyOfError());
     	tmp->RemoveErr();
-    }
+  }
+  
+  if ( (new_server == 1)&&(!(tmp->stream_uses())) )
+  		delete tmp;
+  
   return ErrorState();
 }
 
@@ -472,7 +530,7 @@ Interface::GetMiscInfo(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
   if (CurrentStreams.identify(&tmp, regs->r[1]) == ErrorOccurred)
   	(*non_fatal) = AddError(&CurrentStreams.ReturnCopyOfError());
   else {
-    if (tmp->GetMiscInfo(&(regs->r[0]), (misc_5_10*)regs->r[2], regs->r[3]) == ErrorOccurred) 
+    if (tmp->GetMiscInfo(&(regs->r[0]), (misc_5_10*)regs->r[2], &(regs->r[3])) == ErrorOccurred) 
   	(*non_fatal) = AddError(&tmp->ReturnCopyOfError());
   }
   return NoError;

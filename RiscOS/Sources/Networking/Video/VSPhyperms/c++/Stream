@@ -18,6 +18,27 @@ Date      Who     Description of change
 #include "swis.h"
 #include "string.h"
 
+Statistics::Statistics(void)
+{
+  dgrams_read = 0;
+  duplicate_dgrams = 0;
+  acks_sent = 0;
+  naks_sent = 0;
+  block_naks_sent = 0;
+  bytes_received = 0;
+} 
+
+void
+Statistics::print(void)
+{
+  printf(" datagrams read                               %i\n", dgrams_read);
+  printf(" duplicate datagrams                          %i\n", duplicate_dgrams);
+  printf(" bytes received                               %i\n", bytes_received);
+  printf(" acks_sent                                    %i\n", acks_sent);
+  printf(" naks_sent                                    %i\n", naks_sent);
+  printf(" entire blocks nakd                           %i\n", block_naks_sent);
+}
+
 StreamToken::StreamToken()
 {
   	list = NULL;
@@ -73,16 +94,6 @@ Stream::MPEGBufferListToNECBlock(StreamToken *buffer)
    
   if ((result != ErrorOccurred)&&(( result = mysource->freeBlock(buffer->block)) == ErrorOccurred))
   	err = &mysource->ReturnCopyOfError();
-
-  if ((result != ErrorOccurred)&&(callback_pending == 0)){    	
-  	_kernel_oserror *e = _swix(OS_AddCallBack, _INR(0,1), VSP_CallBack, pw);	  	
- 		if (e != NULL){
-  			MakeError(e);
-  			result = ErrorOccurred;
- 		}
- 		else
- 			callback_pending = (callback_flag)(callback_pending | callback_foreground);
-  }
   
   buffer->block = NULL;
   buffer->block_header = NULL;
@@ -193,7 +204,7 @@ Stream::NECBlockToMPEGBufferList(StreamToken *buffer)
 error_flag
 Stream::test_empty_buffers(void)
 {
-  int i, callback = 0, tokens = 0;
+  int i,  tokens = 0;
   error_flag result;
   result = ErrorState();
   
@@ -212,10 +223,9 @@ Stream::test_empty_buffers(void)
  	  			else {
  	  	     	  		if (buffers[i].block == NULL){
  	  	     	  	  		buffers[i].in_use = free_token;
- 	  	     	  	  		++callback;
- 	  	     	  		}
+	  	     	  		}
  	  	     	  		else {
- 	  	     	  		  	--(mysource->full_blocks);
+ 	  	     	  		  //	--(mysource->full_blocks);
  	  	     	  		  	--tokens;
  	  	     	  		  	
 						result = NECBlockToMPEGBufferList(&buffers[i]);
@@ -258,7 +268,7 @@ Stream::Stream(int inet_timeout, int initial_block, int MPEGid, PlayList playlis
   
   pw = pwork;
   from = in_from*2; to = in_to*2;
-  callback_pending = (callback_flag)0;
+  callback_pending = callback_tokenfree;
 
   error_flag result = NoError;
   
@@ -272,7 +282,9 @@ Stream::Stream(int inet_timeout, int initial_block, int MPEGid, PlayList playlis
    	result = ErrorOccurred;
   }
   else{ 	
-    	myserver = new Server(server);				// create TCP link, copy passed server
+    	//myserver = new Server(server);				// create TCP link, copy passed server
+    	myserver = server;
+    	myserver->set_stream_owner();
   	mysource = new Source();				// create UDP socket
  	
  	if (myserver->ErrorExists()){ 				// errors on creation of TCP
@@ -347,10 +359,9 @@ Stream::Stream(int inet_timeout, int initial_block, int MPEGid, PlayList playlis
     	_swix(OS_ReadMonotonicTime, _OUT(0), &mt_time);
     	Debug("send play prep ack %i", mt_time);
 #endif   
- 	result = myserver->SendAck(myserver->getMaxRequestedBlock(),
- 			myserver->getMaxRequestedBlock(), play_preparation);// send request for play
+ 	result = myserver->SendAck(myserver->getMaxRequestedBlock(), myserver->getMaxRequestedBlock());// send request for play
+        result = change_state(state_play);	// this will make an imediate callback for trickplay.
   }
-  
 } 	// stream constructor
 
 Stream::~Stream(void)
@@ -379,8 +390,13 @@ Stream::~Stream(void)
   	myserver->AssetEnd(0, (state == state_endreceived));
   
   delete mysink;   mysink = NULL;
-  delete myserver; myserver = NULL;
-
+  if (myserver->interface_uses()){
+    	myserver->clear_stream_owner();
+  }
+  else  {
+  	delete myserver; myserver = NULL;
+  }
+  
   for (i=0;i<NUM_MPEG_Tokens;i++) {
   	delete[] (buffers[i].list);	// allocated in block  	
   	buffers[i].list = NULL;
@@ -400,6 +416,9 @@ Stream::change_state(state_of_play new_state)
 #endif	
 	   
    switch (new_state) {
+     case state_endreceived:
+     	state = state_endreceived;
+     	break;
      case state_stop:
    	if (state != state_stop){
    		mysource->setEndPlayState();		// this ensures no more data is copied upriver.
@@ -454,13 +473,13 @@ Stream::change_state(state_of_play new_state)
      	break;
    }
    
-   if ((callback_pending & callback_trickplay)&&(!(callback_pending & callback_foreground))) {
-  	_kernel_oserror *e = _swix(OS_CallBack, _INR(0,1), VSP_CallBack, pw);	  	
+   if (callback_pending & callback_trickplay) {
+  	_kernel_oserror *e = _swix(OS_AddCallBack, _INR(0,1), VSP_CallBack, pw);	  	
  	if (e != NULL){
   		MakeError(e);
   		result = ErrorOccurred;
  	} 
-    }
+   }
 
    return result;
 }
@@ -539,13 +558,11 @@ Stream::SetPosition(int flags, int pos_time)	 // call to Decoder
   from = abs_time;
   
   callback_pending = (callback_flag) (callback_pending | callback_trickplay);
-  if (!(callback_pending & callback_foreground)) {
-  	_kernel_oserror *e = _swix(OS_CallBack, _INR(0,1), VSP_CallBack, pw);	  	
- 	if (e != NULL){
-  		MakeError(e);
-  		result = ErrorOccurred;
- 	} 
-  }
+  _kernel_oserror *e = _swix(OS_AddCallBack, _INR(0,1), VSP_CallBack, pw);	  	
+  if (e != NULL){
+  	MakeError(e);
+  	result = ErrorOccurred;
+  } 
 
 #ifdef DEBUGLIB
   Debug("set position flags (%i), time = (%i), abs (%i), NPT = (%i)", flags, pos_time, abs_time, from >> 1 );
@@ -564,24 +581,28 @@ Stream::ReadNPT(int *NPT_time)			// call to Decoder
 }
 
 error_flag
-Stream::GetMiscInfo(int *reg_r0, misc_5_10 *ptr, int size)
+Stream::GetMiscInfo(int *reg_r0, misc_5_10 *ptr, int *size)
 {
   int flags = (*reg_r0);
   
   switch (flags) {
     case 0:
-    	if ( size < sizeof(misc_5_10) )
-    		MakeError(VSP_InvalidValue);
+    	if ((ptr == NULL)||(size == 0))
+    		(*size) = sizeof(misc_5_10);
     	else {
-    	  	ptr->h_pixels = most_significant_block.image_width;
-  		ptr->v_pixels = most_significant_block.image_height;
-	 	ptr->play_time = most_significant_block.playback_time;
- 	 	ptr->status_word = most_significant_block.status_word;
- 	 	ptr->scene_number = most_significant_block.scene_number;
- 	 	ptr->head_time = most_significant_block.video_start_time;
-	 	ptr->end_time = most_significant_block.video_end_time;
- 	 	ptr->encode_time = most_significant_block.encode_time;
-	  	ptr->bitrate = most_significant_block.bit_rate_value;
+    	  	if ( (*size) < sizeof(misc_5_10) )
+    	  		MakeError(VSP_InvalidValue);
+    	  	else {
+    	  		ptr->h_pixels = most_significant_block.image_width;
+  			ptr->v_pixels = most_significant_block.image_height;
+	 		ptr->play_time = most_significant_block.playback_time;
+ 	 		ptr->status_word = most_significant_block.status_word;
+ 	 		ptr->scene_number = most_significant_block.scene_number;
+ 	 		ptr->head_time = most_significant_block.video_start_time;
+	 		ptr->end_time = most_significant_block.video_end_time;
+ 	 		ptr->encode_time = most_significant_block.encode_time;
+	  		ptr->bitrate = most_significant_block.bit_rate_value;
+	  	}
     	}
     	break;
     case 1:
@@ -629,21 +650,15 @@ Stream::getBlockVal(void)
 //+++++++++++++++++++++++++++++++ interrupt handlers ++++++++++++++++
 
 error_flag
-Stream::timeslice(void)
+Stream::timeslice(Statistics *stats)
 {
   error_flag result = NoError;
-  int foreground_flag = 0;
   
   if (state == state_stop) return result;
   
 #ifdef DEBUGLIB
-  //Debug("+ts %2.2X, blocks %i, state %i", callback_pending, mysource->full_blocks, state);
+  	//Debug("     , ts+ %2.2X", callback_pending);
 #endif
-		// if there is a request to change the mode of play
-//	if (callback_pending & callback_PlayBufferError){
-	  
-//	}
-//	else
 	if (callback_pending & callback_trickplay){
 	  
         	int playback_id, RequestNum, AckNum, play_mode = 0;
@@ -664,77 +679,70 @@ Stream::timeslice(void)
    		if (result != ErrorOccurred){
      	 		result = myserver->send_playback_request(playback_id, RequestNum, AckNum, from, play_mode);
      	 		if (result == ErrorOccurred){
-     	 		  //
-     	 		  //	if (myserver->ErrorNum() == TCP_NoBuffer){
-     	 		  //	  	myserver->RemoveErr();
-     	 		  //	  	callback_pending = (callback_flag)(callback_pending | callback_PlayBufferError);
-     			//		_kernel_oserror *e = _swix(OS_CallAfter, _INR(0,2), STREAM_NAK_timeout, VSP_CallAfter, pw);	 
- 			//		if (e != NULL){
-  			//			MakeError(e);
-  			//			result = ErrorOccurred;
- 			//		} 	
-     	 		//  	}
-     	 		//  	
-     	 			err = &(myserver->ReturnCopyOfError());
+     	 		  	if (myserver->ErrorNum() == TCP_NoBuffer){
+     	 		  	  	myserver->RemoveErr();
+     	 		 	  	callback_pending = (callback_flag)(callback_pending | callback_trickplay);	
+     	 		 	}
+     	 		 	else  	
+     	 				err = &(myserver->ReturnCopyOfError());
      	 		}
                 }
                 
-                callback_pending = (callback_flag)(callback_pending | callback_foreground);
+                callback_pending = (callback_flag)(callback_pending | callback_block);
                 
-                _kernel_oserror *e = _swix(OS_CallAfter, _INR(0,2), (3*comms_timeout), VSP_CallAfter, pw);	  	
+                _kernel_oserror *e = _swix(OS_CallAfter, _INR(0,2), (comms_timeout), VSP_CallAfterVeneer, pw);	  	
  		if (e != NULL){
   			MakeError(e);
   			result = ErrorOccurred;
  		}
         }
-        else {   // else, if we are freeing a buffer
+        else {   // not trick play, if we are freeing a buffer
   		if (callback_pending & callback_bufferfree){
   			callback_pending = (callback_flag)(callback_pending & ~callback_bufferfree);
 
-  			result = mysource->calculate_freeBlocks();
-  			result = test_empty_buffers();
-  			  		
-  			if (!(callback_pending & callback_foreground))
-  				foreground_flag = 1;	// this restarts the Ack sequence on a full buffer
-  		}
-  		else {
-  		  	if (callback_pending & callback_tokenfree)
-  		  		result = test_empty_buffers();
-  			foreground_flag = 1;
-  		}
-  		
-  		if (foreground_flag == 1){
-  			if (mysource->foregroundExecute(&callback_pending, myserver) == ErrorOccurred){
-  				err = &mysource->ReturnCopyOfError();
-  				result =  ErrorOccurred;
-  			}
+  			result = mysource->calculate_freeBlocks(myserver, callback_pending, stats);
   			
-  			if (callback_pending){
-                		callback_pending = (callback_flag)(callback_pending | callback_foreground);
-     				_kernel_oserror *e = _swix(OS_CallAfter, _INR(0,2), (3*comms_timeout), VSP_CallAfter, pw);	  	
+  			result = test_empty_buffers();
+  			
+  			// this reinitialises the block callback vector if we fill up the blocks
+  			if (!(callback_pending & callback_timeout)){
+  				callback_pending = (callback_flag)(callback_pending | callback_block);
+     				_kernel_oserror *e = _swix(OS_CallAfter, _INR(0,2), comms_timeout, VSP_CallAfterVeneer, pw);	  	
  				if (e != NULL){
   					MakeError(e);
   					result = ErrorOccurred;
- 				} 
-  			}
+ 				}  
+ 			} 
+  		}
+  		else {
+  			if ((!(callback_pending & callback_tokenfree))&&(callback_pending & callback_timeout)){
+  			  	// the source object clears the callback flags
+ 				if (mysource->foregroundExecute(&callback_pending, myserver, stats) == ErrorOccurred){
+  					err = &mysource->ReturnCopyOfError();
+  					result =  ErrorOccurred;
+  				}
+  				
+  				if (callback_pending & callback_nak){
+                			callback_pending = (callback_flag)(callback_pending | callback_nak);
+     					_kernel_oserror *e = _swix(OS_CallAfter, _INR(0,2), NAK_timeout, VSP_CallAfterVeneer, pw);	  	
+ 					if (e != NULL){
+  						MakeError(e);
+  						result = ErrorOccurred;
+ 					} 
+ 				}
+  			  	if (callback_pending & callback_tokenfree)
+  		  			result = test_empty_buffers();
+  		        }
   		}
   	}
   	// calculate if the mpeg player has tokens if so use them as timeout values
   	// also calculate if we own all the tokens then we are starting the stream
   	// wait for more than buffer blocks
-  	
-  	int token_buffers_free = 0;
-  	
-  	for (int i=0; i < NUM_MPEG_Tokens; i++)
-  		if (buffers[i].in_use == free_token) 
-  		  	++token_buffers_free;
-  		  
-  	if ((token_buffers_free == NUM_MPEG_Tokens)&&(mysource->full_blocks >= buffer_blocks)
-  	    &&(result != ErrorOccurred)) {
- 		result = test_empty_buffers();
-  	}
+
 #ifdef DEBUGLIB    	
- // Debug("-ts %2.2X", callback_pending);
+   //unsigned int mt_time;
+   //_swix(OS_ReadMonotonicTime, _OUT(0), &mt_time);
+   //Debug("%i, -ts %2.2X", mt_time, callback_pending);
   
   if (result == ErrorOccurred) {
     	Debug("stream error");
@@ -753,7 +761,7 @@ Stream::server_inetevent(void)
 {
   int event;
   ULINT comms_result;
-  error_flag result;
+  //error_flag result;
   
   if ( myserver->inetevent(&event, &comms_result) == ErrorOccurred) {
   	err = &myserver->ReturnCopyOfError();
@@ -767,29 +775,12 @@ Stream::server_inetevent(void)
   	Debug("+ + play response %i + +", comms_result);	
 #endif  	
  
-  if (event == COMMAND_startend_notification){
-    if (state == state_prestart){
-      
-#ifdef DEBUGLIB      
-        unsigned int mt_time;
-    	_swix(OS_ReadMonotonicTime, _OUT(0), &mt_time);
-    	Debug("received start notification %i", mt_time);
-#endif    	
-        result = change_state(state_play);
-        callback_pending = (callback_flag)(callback_pending | callback_foreground);
-     	_kernel_oserror *e = _swix(OS_CallAfter, _INR(0,2), (3*comms_timeout), VSP_CallAfter, pw);	  	
- 	if (e != NULL){
-  		MakeError(e);
-  		result = ErrorOccurred;
- 	} 
-    }
-    else
-    if (state == state_play){ 			// if already playing
+  if ((event == COMMAND_startend_notification)&&(state == state_play)){
+    	// if already playing
     	mysource->setFinalBlock(comms_result);
     	change_state(state_endreceived);
-    }
   }
-  return result;
+  return NoError;//result;
 }
 
 error_flag
@@ -963,24 +954,48 @@ StreamList::inetEvent(int, int identifier, claim_flag *claim, void *)
   	for (i=0;i<CurrentSize;i++){
   		Stream *stream = ((Stream*)object[i]);
     		if ((stream->getstate() != state_stop)&&(stream->source_sd == identifier)) {
-        		if (stream->callback_pending & callback_foreground){	// remove ticket event
-                		stream->callback_pending = (callback_flag)(stream->callback_pending & ~callback_foreground);
-    				_kernel_oserror *e = _swix(OS_RemoveTickerEvent, _INR(0,1), VSP_CallAfter, stream->pw);	  	
-				if (e != NULL){
-  					MakeError(e);
-  					result = ErrorOccurred;
- 				}
- 		        }
-      			if (stream->mysource->ReadDatagrams(&(stream->callback_pending)) == ErrorOccurred) {
+        		
+        		callback_flag callback = callback_none;
+        		
+      			if (stream->mysource->ReadDatagrams(stream->callback_pending, &callback, stream->myserver, &stats) == ErrorOccurred) {
     				err = &stream->ReturnCopyOfError();
     				result = ErrorOccurred;
       			}
-      			stream->callback_pending = (callback_flag)(stream->callback_pending | callback_foreground);
-  			_kernel_oserror *e = _swix(OS_CallAfter, _INR(0,2), stream->comms_timeout, VSP_CallAfter, stream->pw);	  	
- 			if (e != NULL){						// reset ticker event
-  				MakeError(e);
-  				result = ErrorOccurred;
- 			}
+      			
+      			if (callback & callback_timeout){	// analyse if there is any need to change the callback vector
+#ifdef DEBUGLIB      			
+      				callback_flag tmp = stream->callback_pending;
+#endif      			
+				stream->callback_pending = (callback_flag)(stream->callback_pending & ~callback_timeout);
+     				_swix(OS_RemoveTickerEvent, _INR(0,1), VSP_CallAfterVeneer, stream->pw);	 
+
+ 		        	if (callback & callback_nak){ // initiate callback sequence
+ 		        		stream->callback_pending = (callback_flag)(stream->callback_pending | callback_nak);
+ 		        		_kernel_oserror *e = _swix(OS_CallAfter, _INR(0,2), NAK_timeout, VSP_CallAfterVeneer, stream->pw);	  	
+ 					if (e != NULL){						// reset ticker event
+  						MakeError(e);
+  						result = ErrorOccurred;
+ 					}
+ 		        	}
+ 		        	
+				if (callback & callback_block) {	// block timeout (timeout = block | nak)
+					if ((stream->callback_pending & callback_tokenfree)&&(stream->mysource->getFullBlocks() > stream->buffer_blocks))
+						result = stream->test_empty_buffers();
+					if (result != ErrorOccurred){
+						stream->callback_pending = (callback_flag)(stream->callback_pending | callback_block);
+ 		        			_kernel_oserror *e = _swix(OS_CallAfter, _INR(0,2), stream->comms_timeout, VSP_CallAfterVeneer, stream->pw);	  	
+ 						if (e != NULL){						// reset ticker event
+  							MakeError(e);
+  							result = ErrorOccurred;
+ 						}
+ 					}
+ 		        	}
+#ifdef DEBUGLIB 		        	
+ 		        	unsigned int mt_time;
+    				_swix(OS_ReadMonotonicTime, _OUT(0), &mt_time);
+ 		        	Debug("%i, move callback %2.2X -> %2.2X, %2.2X", mt_time, tmp, stream->callback_pending, callback);
+#endif 		        	
+      			}
     	 		*claim = claim_event;
                 } 
     		else 
@@ -1013,7 +1028,7 @@ StreamList::TimeSliceCall(void *)
     		if(stream->callback_pending){
     			if (stream->source_flag == free_token ){
       				stream->source_flag = claim_token; 		// in use
-       				if (stream->timeslice() == ErrorOccurred){
+       				if (stream->timeslice(&stats) == ErrorOccurred){
     					err = &stream->ReturnCopyOfError();
     					result = ErrorOccurred;
       				}
