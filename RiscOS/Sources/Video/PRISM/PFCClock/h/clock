@@ -35,6 +35,11 @@
 #include "PRISM/PFCClock.h"
 #include "MPEG/mpegtime.h"
 
+typedef struct clock clock_t; /* clock_t is needed by the includes below! */
+
+#include "decoder.h"
+#include "event.h"
+#include "int64.h"
 #include "llist.h"
 
 
@@ -46,17 +51,21 @@
 /*****************************************************************************
 * New type definitions
 *****************************************************************************/
-typedef struct
+struct clock
 {
   stream_handle_t clock_handle;
   unsigned sync_to_stream: 1;
-  unsigned jitter_buffer: 1;
   unsigned session_active: 1;
-  unsigned pcr_seen: 1;
+  unsigned using_pcrs: 1;
+  unsigned tentative_time_established: 1; /* we've had at least one decoder that doesn't know its start time, but none that do */
+  unsigned time_established: 1;           /* we've had at least one decoder that does know its start time */
+  unsigned time_locked: 1;                /* we've had at least one decoder that has reached its start time OR we've had a PCR, so (a) new decoders starting mustn't affect the timebase; (b) if there is a sync master, PCRs are ignored */
+  unsigned time_lock_pending: 1;          /* a callback is set to lock the time, so time_lock_time is valid */
+  unsigned sync_start_pending: 1;         /* a callback is set to initialise a sync master; if an earlier or higher priority sync master begins, it should be used in preference */
   prism_id_t unwrap_id;
   stream_handle_t unwrap_handle;
-  uint32_t jitter_buffer_size;
-  uint32_t default_min_decoder_buffer;
+  uint32_t jitter_buffer;
+  uint32_t min_pre_buffer;
   uint32_t total_fasts;
   uint32_t session_fasts;
   uint32_t total_slows;
@@ -65,8 +74,17 @@ typedef struct
   int32_t current_NPT_wrt_STC;
   int32_t pending_STC_speed;
   int32_t next_STC_speed;
+  int64_t STC_ref_mono;
+  int64_t STC_ref;
+  int64_t NPT_ref_STC;
+  int64_t NPT_ref;
+  int64_t time_lock_time;
+  int64_t sync_start_time;
+  decoder_t *sync_master;
   llist_list_t decoder_list; /* held in order of PRISM ID, then decoder's local handle */
-} clock_t;
+  clock_event_t *event_head;
+  clock_event_t *event_tail;
+};
 
 
 /*****************************************************************************
@@ -82,44 +100,6 @@ typedef struct
 /*****************************************************************************
 * Function prototypes
 *****************************************************************************/
-
-/*****************************************************************************
-* clock_Init
-*
-* Module initialisation entry
-*
-* Assumptions
-*  NONE
-*
-* Inputs
-*  NONE
-*
-* Outputs
-*  NONE
-*
-* Returns
-*  NULL if successful; otherwise pointer to error block
-*****************************************************************************/
-_kernel_oserror *clock_Init(void);
-
-/*****************************************************************************
-* clock_Final
-*
-* Module finalisation (or initialisation failure) entry
-*
-* Assumptions
-*  NONE
-*
-* Inputs
-*  NONE
-*
-* Outputs
-*  NONE
-*
-* Returns
-*  NOTHING
-*****************************************************************************/
-void clock_Final(void);
 
 /*****************************************************************************
 * clock_ListClients
@@ -234,7 +214,7 @@ extern PRISM_DECLARE_FUNCTION_2(_kernel_oserror *, clock_EndSession, uint32_t /*
 * Returns
 *  NULL if successful; otherwise pointer to error block
 *****************************************************************************/
-extern PRISM_DECLARE_FUNCTION_3(_kernel_oserror *, clock_StreamInfo, uint32_t /*reason*/, stream_handle_t /*clock_handle*/, void **/*info*/)
+extern PRISM_DECLARE_FUNCTION_3(_kernel_oserror *, clock_StreamInfo, uint32_t /*reason*/, stream_handle_t /*clock_handle*/, void */*info*/)
 
 /*****************************************************************************
 * clock_SpeedChange
@@ -291,7 +271,7 @@ extern PRISM_DECLARE_FUNCTION_3(_kernel_oserror *, clock_PCRNotify, uint32_t /*f
 * Returns
 *  NULL if successful; otherwise pointer to error block
 *****************************************************************************/
-extern PRISM_DECLARE_FUNCTION_4(_kernel_oserror *, clock_NPTMapping, uint32_t /*flags*/, stream_handle_t /*clock_handle*/, mpeg_time_t */*npt_offset*/, int32_t /*npt_scale*/)
+extern PRISM_DECLARE_FUNCTION_5(_kernel_oserror *, clock_NPTMapping, uint32_t /*flags*/, stream_handle_t /*clock_handle*/, mpeg_time_t */*stc_reference*/, mpeg_interval_t */*npt_reference*/, int32_t /*npt_scale*/)
 
 /*****************************************************************************
 * clock_FreezeClock
@@ -311,6 +291,27 @@ extern PRISM_DECLARE_FUNCTION_4(_kernel_oserror *, clock_NPTMapping, uint32_t /*
 *  NULL if successful; otherwise pointer to error block
 *****************************************************************************/
 extern PRISM_DECLARE_FUNCTION_2(_kernel_oserror *, clock_FreezeClock, uint32_t /*flags*/, stream_handle_t /*clock_handle*/)
+
+/*****************************************************************************
+* clock_TimeLock
+*
+* Commits us to a particular time frame, also enables other people to
+* read the current time
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  flags: unused flags word
+*  clock: pointer to clock struct
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NULL if successful; otherwise pointer to error block
+*****************************************************************************/
+extern _kernel_oserror *clock_TimeLock(uint32_t flags, clock_t *clock);
 
 /*****************************************************************************
 * clock_AbandonAll

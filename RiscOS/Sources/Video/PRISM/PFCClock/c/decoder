@@ -32,9 +32,11 @@
 #include "PRISM/PFCClock.h"
 #include "DebugLib/DebugLib.h"
 
+#include "clock.h"
 #include "decoder.h"
 #include "global.h"
 #include "mess.h"
+#include "time.h"
 
 
 /*****************************************************************************
@@ -109,18 +111,12 @@ _kernel_oserror *decoder_Register(uint32_t flags, prism_id_t decoder_id, stream_
   
   decoder_t decoder =
   {
-//    .preferred_sync_master = flags & 1,
-//    .decoder_id            = decoder_id,
-//    .decoder_handle        = decoder_handle,
-//    .functions             = function_table,
-//    .latency               = latency
-    0
+    .preferred_sync_master = flags & 1,
+    .decoder_id            = decoder_id,
+    .decoder_handle        = decoder_handle,
+    .function_table        = function_table,
+    .latency               = latency
   };
-  decoder.preferred_sync_master = flags & 1;
-  decoder.decoder_id            = decoder_id;
-  decoder.decoder_handle        = decoder_handle;
-  decoder.function_table        = function_table;
-  decoder.latency               = latency;
   
   if (llist_AddSorted(&clock->decoder_list, &decoder, CompareDecoders))
   {
@@ -129,23 +125,16 @@ _kernel_oserror *decoder_Register(uint32_t flags, prism_id_t decoder_id, stream_
     static prism_function_table_decoder_to_clock_t my_table;
     if (!my_table_initialised++)
     {
-//      my_table =
-//      {
-//        global_Veneers->decoder_Deregister,
-//        global_Veneers->decoder_BeginSession,
-//        global_Veneers->decoder_EndSession,
-//        global_Veneers->clock_StreamInfo,
-//        global_Veneers->decoder_SetEvent,
-//        global_Veneers->decoder_ClearEvent,
-//        global_Veneers->decoder_PTSNotify
-//      };
-      my_table.Deregister = global_Veneers->decoder_Deregister;
-      my_table.BeginSession = global_Veneers->decoder_BeginSession;
-      my_table.EndSession = global_Veneers->decoder_EndSession;
-      my_table.StreamInfo = global_Veneers->clock_StreamInfo;
-      my_table.SetEvent = global_Veneers->decoder_SetEvent;
-      my_table.ClearEvent = global_Veneers->decoder_ClearEvent;
-      my_table.PTSNotify = global_Veneers->decoder_PTSNotify;
+      my_table = (prism_function_table_decoder_to_clock_t)
+      {
+        global_Veneers->decoder_Deregister,
+        global_Veneers->decoder_BeginSession,
+        global_Veneers->decoder_EndSession,
+        global_Veneers->clock_StreamInfo,
+        global_Veneers->decoder_SetEvent,
+        global_Veneers->decoder_ClearEvent,
+        global_Veneers->decoder_TSNotify
+      };
     }
     *r_function_table = &my_table;
     return NULL;
@@ -158,7 +147,15 @@ _kernel_oserror *decoder_Register(uint32_t flags, prism_id_t decoder_id, stream_
 
 static bool CompareDecoders(const void *a, const void *b)
 {
-  return ((const decoder_t *) a)->decoder_id > ((const decoder_t *) b)->decoder_id;
+  int32_t decoder_id_diff = ((const decoder_t *) a)->decoder_id - ((const decoder_t *) b)->decoder_id;
+  if (decoder_id_diff != 0)
+  {
+    return decoder_id_diff > 0;
+  }
+  else
+  {
+    return ((const decoder_t *) a)->decoder_handle.local_handle > ((const decoder_t *) b)->decoder_handle.local_handle;
+  }
 }
 
 /*****************************************************************************
@@ -227,7 +224,7 @@ _kernel_oserror *decoder_Deregister(uint32_t flags, prism_id_t decoder_id, strea
 * Returns
 *  NULL if successful; otherwise pointer to error block
 *****************************************************************************/
-_kernel_oserror *decoder_BeginSession(uint32_t flags, prism_id_t decoder_id, stream_handle_t decoder_handle, stream_handle_t clock_handle, uint32_t min_buffer)
+_kernel_oserror *decoder_BeginSession(uint32_t flags, prism_id_t decoder_id, stream_handle_t decoder_handle, stream_handle_t clock_handle, uint32_t pre_buffer, mpeg_time_t *first_ts)
 {
   if (clock_handle.local_handle > global_ClockMax || global_ClockArray[clock_handle.local_handle] == 0)
   {
@@ -253,15 +250,175 @@ _kernel_oserror *decoder_BeginSession(uint32_t flags, prism_id_t decoder_id, str
     llist_NextStep(&step, false);
   }
   
-  decoder->session_active = true;
   if (flags & 1)
   {
-    decoder->min_buffer = min_buffer;
+    decoder->pre_buffer = pre_buffer;
   }
   else
   {
-    decoder->min_buffer = clock->default_min_decoder_buffer;
+    decoder->pre_buffer = clock->min_pre_buffer * (90000 / 1000);
   }
+  {
+    uint32_t min_pre_buffer = (clock->jitter_buffer / 2 + decoder->latency) * (90000 / 1000);
+    decoder->pre_buffer = MAX(decoder->pre_buffer, min_pre_buffer);
+  }
+  
+  /* What we do next depends upon whether this decoder knows its first timestamp, whether */
+  /* other decoders already registered knew their timestamp, and whether we're already committed */
+  /* to a time frame because at least one of the decoders has completed its pre-buffering period */
+  bool irqs_were_off = _kernel_irqs_disabled();
+  if (!irqs_were_off) _kernel_irqs_off();
+  if (first_ts == NULL)
+  {
+    if (clock->time_established)
+    {
+      if (!irqs_were_off) _kernel_irqs_on();
+      int64_t stc = time_ReadMonotonicTime();
+      stc = time_Transform(&stc, &clock->STC_ref_mono, &clock->STC_ref, clock->current_STC_speed);
+      int64_t pre_buffer_64 = { decoder->pre_buffer };
+      decoder->first_ts = ADD64(stc, pre_buffer_64);
+    }
+    else
+    {
+      if (clock->tentative_time_established)
+      {
+        int64_t stc = time_ReadMonotonicTime();
+        stc = time_Transform(&stc, &clock->STC_ref_mono, &clock->STC_ref, clock->current_STC_speed);
+        int64_t pre_buffer_64 = { decoder->pre_buffer };
+        decoder->first_ts = ADD64(stc, pre_buffer_64);
+        /* We don't actually want to start at a negative time, so adjust STC if this was negative */
+        if (LT64(decoder->first_ts, (const int64_t) { 0 }))
+        {
+          /* The small -ve number must be subtracted from (ie absolute value added to) all references to STC values */
+          clock->STC_ref = SUB64(clock->STC_ref, decoder->first_ts);
+          llist_step_t step;
+          llist_StartWalk(&step, &clock->decoder_list, false); /* could simplify this since we know irqs are off */
+          while (step.data != NULL)
+          {
+            decoder_t *other_decoder = (decoder_t *) step.data;
+            if (other_decoder->session_active)
+            {
+              other_decoder->first_ts = SUB64(other_decoder->first_ts, decoder->first_ts);
+            }
+            llist_NextStep(&step, false);
+          }
+          event_CorrectTimes(clock, NEG64(decoder->first_ts));
+          decoder->first_ts = (const int64_t) { 0 };
+        }
+      }
+      else
+      {
+        clock->STC_ref_mono = time_ReadMonotonicTime();
+        int64_t pre_buffer_64 = { decoder->pre_buffer };
+        clock->STC_ref = NEG64(pre_buffer_64);
+        decoder->first_ts = (const int64_t) { 0 };
+        clock->tentative_time_established = true;
+      }
+      if (!irqs_were_off) _kernel_irqs_on();
+    }
+  }
+  else /* first_ts != NULL */
+  {
+    if (clock->time_locked || clock->time_established)
+    {
+      int64_t stc = time_ReadMonotonicTime();
+      stc = time_Transform(&stc, &clock->STC_ref_mono, &clock->STC_ref, clock->current_STC_speed);
+      decoder->first_ts = time_Extend(*first_ts, stc);
+      if (!clock->time_locked) /* else there's nothing we can do to adjust the clock here */
+      {
+        /* If there is insufficient time before we are due to start, move the monotonic reference later to give us more time */
+        int64_t time_remaining = SUB64(decoder->first_ts, stc);
+        int64_t pre_buffer_64 = { decoder->pre_buffer };
+        if (LT64(time_remaining, pre_buffer_64))
+        {
+          clock->STC_ref_mono = SUB64(clock->STC_ref_mono, time_remaining);
+          clock->STC_ref_mono = ADD64(clock->STC_ref_mono, pre_buffer_64);
+        }
+      }
+    }
+    else
+    {
+      if (clock->tentative_time_established)
+      {
+        int64_t monotime = time_ReadMonotonicTime();
+        int64_t stc = time_Transform(&monotime, &clock->STC_ref_mono, &clock->STC_ref, clock->current_STC_speed);
+        clock->STC_ref_mono = monotime;
+        decoder->first_ts = time_Extend(*first_ts, stc);
+        int64_t pre_buffer_64 = { decoder->pre_buffer };
+        clock->STC_ref = SUB64(decoder->first_ts, pre_buffer_64);
+        /* We now have a true timestamp, so the tentative ones can be corrected */
+        int64_t correction = SUB64(clock->STC_ref, stc);
+        llist_step_t step;
+        llist_StartWalk(&step, &clock->decoder_list, false); /* could simplify this since we know irqs are off */
+        while (step.data != NULL)
+        {
+          decoder_t *other_decoder = (decoder_t *) step.data;
+          if (other_decoder->session_active)
+          {
+            other_decoder->first_ts = ADD64(other_decoder->first_ts, correction);
+          }
+          llist_NextStep(&step, false);
+        }
+        event_CorrectTimes(clock, correction);
+      }
+      else
+      {
+        clock->STC_ref_mono = time_ReadMonotonicTime();
+        ((uint32_t *) &decoder->first_ts)[0] = first_ts->word.lo;
+        ((uint32_t *) &decoder->first_ts)[1] = first_ts->word.hi; /* no sign extension in this case */
+        int64_t pre_buffer_64 = { decoder->pre_buffer };
+        clock->STC_ref = SUB64(decoder->first_ts, pre_buffer_64);
+      }
+      clock->time_established = true;
+    }
+    if (!irqs_were_off) _kernel_irqs_on();
+  }
+  
+  /* If time hasn't already been locked (either by PCR receipt or because we are beginning our session late) */
+  /* then we need to set or possibly hasten the callback to lock the time */
+  if (!irqs_were_off) _kernel_irqs_on();
+  if (!clock->time_locked)
+  {
+    if (clock->time_lock_pending)
+    {
+      if (LT64(decoder->first_ts, clock->time_lock_time))
+      {
+        event_Clear(clock, 0, 0, (uint32_t) clock, (_kernel_oserror *(*)(uint32_t, uint32_t)) clock_TimeLock, 0);
+        clock->time_lock_time = decoder->first_ts;
+        event_Set(clock, 0, 0, (uint32_t) clock, (_kernel_oserror *(*)(uint32_t, uint32_t)) clock_TimeLock, 0, (const int64_t) { 0 }, clock->time_lock_time);
+      }
+    }
+    else
+    {
+      clock->time_lock_time = decoder->first_ts;
+      event_Set(clock, 0, 0, (uint32_t) clock, (_kernel_oserror *(*)(uint32_t, uint32_t)) clock_TimeLock, 0, (const int64_t) { 0 }, clock->time_lock_time);
+      clock->time_lock_pending = true;
+    }
+  }
+  if (!irqs_were_off) _kernel_irqs_off();
+  
+  /*  */
+  if (!irqs_were_off) _kernel_irqs_on();
+  if (!irqs_were_off) _kernel_irqs_off();
+  
+  
+//  /* If we haven't decided whether to use PCRs, then if decoder can be a sync master, and */
+//  /* its pre-buffering finishes before any other sync masters (if any), then register (or */
+//  /* move earlier) an event of our own to start the sync mastering process */
+//  /* (Equally, if one of these events is pending when a PCR is received, it must be removed) */
+//  if (!clock->decided_whether_to_use_pcrs && decoder->function_table->ActivateSyncControl != NULL)
+//  {
+//    if (!irqs_were_off) _kernel_irqs_off();
+//    if (clock->sync_master == NULL ||
+//        (decoder->preferred_sync_master && !clock->sync_master->preferred_sync_master) ||
+//        LT64(decoder->first_ts, clock->sync_master->first_ts))
+//    {
+//      clock->sync_master = decoder;
+//    }
+//    if (!irqs_were_off) _kernel_irqs_on();
+//  }
+  
+  decoder->session_active = true;
   
   llist_AbortWalk(&step);
   
@@ -287,6 +444,8 @@ _kernel_oserror *decoder_BeginSession(uint32_t flags, prism_id_t decoder_id, str
 *****************************************************************************/
 _kernel_oserror *decoder_EndSession(uint32_t flags, prism_id_t decoder_id, stream_handle_t decoder_handle, stream_handle_t clock_handle)
 {
+  IGNORE(flags);
+  
   if (clock_handle.local_handle > global_ClockMax || global_ClockArray[clock_handle.local_handle] == 0)
   {
     return mess_MakeError(prism_ERROR_INVALID_PARAMETERS, 1, "DecoderEndSession");
@@ -312,6 +471,7 @@ _kernel_oserror *decoder_EndSession(uint32_t flags, prism_id_t decoder_id, strea
   }
   
   decoder->session_active = false;
+  decoder->sync_master = false;
   
   llist_AbortWalk(&step);
   
@@ -337,6 +497,46 @@ _kernel_oserror *decoder_EndSession(uint32_t flags, prism_id_t decoder_id, strea
 *****************************************************************************/
 _kernel_oserror *decoder_SetEvent(uint32_t flags, prism_id_t decoder_id, uint32_t event_handle, stream_handle_t clock_handle, _kernel_oserror *(*event)(uint32_t, uint32_t), void *when)
 {
+  if (clock_handle.local_handle > global_ClockMax || global_ClockArray[clock_handle.local_handle] == 0)
+  {
+    return mess_MakeError(prism_ERROR_INVALID_PARAMETERS, 1, "DecoderRegister");
+  }
+  
+  clock_t *clock = global_ClockArray[clock_handle.local_handle];
+  decoder_t *decoder;
+  
+  llist_step_t step;
+  llist_StartWalk(&step, &clock->decoder_list, false);
+  while (true)
+  {
+    if (step.data == NULL)
+    {
+      return mess_MakeError(pfcclock_ERROR_DECODER_NOT_REGISTERED, 0);
+    }
+    decoder = (decoder_t *) step.data;
+    if (decoder->decoder_id == decoder_id) /* actually, we should really check decoder_handle here to ensure that we have the right registration - but that means an API change :-( */
+    {
+      break;
+    }
+    llist_NextStep(&step, false);
+  }
+  
+  int64_t event_time;
+  if (flags & 1)
+  {
+    event_time = time_ReadMonotonicTime();
+    event_time = time_Transform(&event_time, &clock->STC_ref_mono, &clock->STC_ref, clock->current_STC_speed);
+    event_time = ADD64(event_time, (int64_t) { *(uint32_t *) when });
+  }
+  else
+  {
+    event_time = *(int64_t *) when;
+  }
+  
+  event_Set(clock, flags, decoder_id, event_handle, event, when, (int64_t) { decoder->latency * (90000 / 1000) }, event_time);
+  
+  llist_AbortWalk(&step);
+  
   return NULL;
 }
 
@@ -359,13 +559,22 @@ _kernel_oserror *decoder_SetEvent(uint32_t flags, prism_id_t decoder_id, uint32_
 *****************************************************************************/
 _kernel_oserror *decoder_ClearEvent(uint32_t flags, prism_id_t decoder_id, uint32_t event_handle, stream_handle_t clock_handle, _kernel_oserror *(*event)(uint32_t, uint32_t), void *when)
 {
+  if (clock_handle.local_handle > global_ClockMax || global_ClockArray[clock_handle.local_handle] == 0)
+  {
+    return mess_MakeError(prism_ERROR_INVALID_PARAMETERS, 1, "DecoderRegister");
+  }
+  
+  clock_t *clock = global_ClockArray[clock_handle.local_handle];
+  
+  event_Clear(clock, flags, decoder_id, event_handle, event, when);
+  
   return NULL;
 }
 
 /*****************************************************************************
-* decoder_PTSNotify
+* decoder_TSNotify
 *
-* Implements SWI PFCClock_DecoderPTSNotify
+* Implements SWI PFCClock_DecoderTSNotify
 *
 * Assumptions
 *  NONE
@@ -379,8 +588,11 @@ _kernel_oserror *decoder_ClearEvent(uint32_t flags, prism_id_t decoder_id, uint3
 * Returns
 *  NULL if successful; otherwise pointer to error block
 *****************************************************************************/
-_kernel_oserror *decoder_PTSNotify(uint32_t flags, stream_handle_t clock_handle, mpeg_time_t *pts)
+_kernel_oserror *decoder_TSNotify(uint32_t flags, stream_handle_t clock_handle, mpeg_time_t *pts)
 {
+  IGNORE(flags);
+  IGNORE(clock_handle);
+  IGNORE(pts);
   return NULL;
 }
 
@@ -404,6 +616,7 @@ _kernel_oserror *decoder_PTSNotify(uint32_t flags, stream_handle_t clock_handle,
 void decoder_LinkFreed(void *link)
 {
   /* Currently, nothing needs freeing */
+  IGNORE(link);
 }
 
 /*****************************************************************************
@@ -446,6 +659,7 @@ void decoder_AbandonAll(void)
 *****************************************************************************/
 void decoder_AbandonComponent(prism_id_t id)
 {
+  IGNORE(id);
 }
 
 /*****************************************************************************
@@ -467,6 +681,7 @@ void decoder_AbandonComponent(prism_id_t id)
 *****************************************************************************/
 void decoder_AbandonClient(stream_handle_t handle)
 {
+  IGNORE(handle);
 }
 
 /*****************************************************************************
@@ -490,6 +705,8 @@ void decoder_AbandonClient(stream_handle_t handle)
 *****************************************************************************/
 void decoder_AbandonRelationship(prism_id_t id, stream_handle_t handle)
 {
+  IGNORE(id);
+  IGNORE(handle);
 }
 
 

@@ -37,7 +37,9 @@
 #include "clock.h"
 #include "decoder.h"
 #include "global.h"
+#include "int64.h"
 #include "mess.h"
+#include "time.h"
 
 
 /*****************************************************************************
@@ -54,7 +56,7 @@
 * Constants
 *****************************************************************************/
 #define DEFAULT_JITTER_BUFFER_SIZE (600)
-#define DEFAULT_DECODER_BUFFER_SIZE (300)
+#define DEFAULT_MIN_PRE_BUFFER (300)
 
 
 /*****************************************************************************
@@ -71,49 +73,6 @@ static const char *ReturnInfoString(prism_id_t id, uint32_t tag);
 /*****************************************************************************
 * Functions
 *****************************************************************************/
-
-/*****************************************************************************
-* clock_Init
-*
-* Module initialisation entry
-*
-* Assumptions
-*  NONE
-*
-* Inputs
-*  NONE
-*
-* Outputs
-*  NONE
-*
-* Returns
-*  NULL if successful; otherwise pointer to error block
-*****************************************************************************/
-_kernel_oserror *clock_Init(void)
-{
-  return NULL;
-}
-
-/*****************************************************************************
-* clock_Final
-*
-* Module finalisation (or initialisation failure) entry
-*
-* Assumptions
-*  NONE
-*
-* Inputs
-*  NONE
-*
-* Outputs
-*  NONE
-*
-* Returns
-*  NOTHING
-*****************************************************************************/
-void clock_Final(void)
-{
-}
 
 /*****************************************************************************
 * clock_ListClients
@@ -168,7 +127,7 @@ _kernel_oserror *clock_ListClients(bool verbose)
     {
       clock_t *clock = global_ClockArray[clock_index];
       /* First line is always about the unwrapper */
-      e = mess_LookUpDirect(clock->session_active ? (clock->pcr_seen ?
+      e = mess_LookUpDirect(clock->session_active ? (clock->using_pcrs ?
                             "PCS3" : "PCS2") : "PCS1",
                             &string, &len);
       if (e) break;
@@ -188,6 +147,20 @@ _kernel_oserror *clock_ListClients(bool verbose)
       {
         printf("%.42s\n", ReturnInfoString(clock->unwrap_id, 5));
       }
+mpeg_time_t STC;
+if (clock_StreamInfo(12, (const stream_handle_t) { 1, 1 }, &STC))
+  printf("STC read error\n");
+else
+  printf("STC = %c%08X\n", STC.word.hi ? '1' : '0', STC.word.lo);
+//printf("events:\n");
+//clock_event_t *event = clock->event_head;
+//while (event != NULL)
+//{
+//  printf("%08X %08X %08X %08X %08X->%08X %08X%08X %08X%08X\n",
+//    event->flags, event->decoder_id, event->event_handle, (int) event->event, (int) event->when, *(int *) event->when,
+//    event->pre_emption.hi, event->pre_emption.lo, event->time.hi, event->time.lo);
+//  event = event->next;
+//}
       /* Subsequent lines are about the decoders */
       llist_StartWalk(step, &clock->decoder_list, false);
       while (!e && step->data != NULL)
@@ -212,6 +185,7 @@ _kernel_oserror *clock_ListClients(bool verbose)
         {
           printf("%.42s\n", ReturnInfoString(decoder->decoder_id, 5));
         }
+printf("%d %08X%08X\n", decoder->pre_buffer, decoder->first_ts.hi, decoder->first_ts.lo);
         llist_NextStep(step, false);
       }
     }
@@ -298,29 +272,37 @@ _kernel_oserror *clock_Register(uint32_t flags, prism_id_t unwrap_id, stream_han
     clock->clock_handle.client_handle = unwrap_handle.client_handle;
     clock->clock_handle.local_handle = local_handle;
     clock->sync_to_stream = flags & 1;
-    clock->jitter_buffer = flags & 2;
-    clock->session_active = clock->pcr_seen = false;
+    clock->session_active = false;
     clock->unwrap_id = unwrap_id;
     clock->unwrap_handle = unwrap_handle;
-    e = _swix(OS_ReadUnsigned, _INR(0,1)|_OUT(2),
-              0,
-              getenv("PRISM$JitterBuffer"),
-              &clock->jitter_buffer_size);
-    if (e)
+    if (flags & 2)
     {
-      clock->jitter_buffer_size = DEFAULT_JITTER_BUFFER_SIZE;
+      e = _swix(OS_ReadUnsigned, _INR(0,1)|_OUT(2),
+                0,
+                getenv("PRISM$JitterBuffer"),
+                &clock->jitter_buffer);
+      if (e)
+      {
+        clock->jitter_buffer = DEFAULT_JITTER_BUFFER_SIZE;
+      }
+    }
+    else
+    {
+      clock->jitter_buffer = 0;
     }
     e = _swix(OS_ReadUnsigned, _INR(0,1)|_OUT(2),
               0,
               getenv("PRISM$MinDecoderBuffer"),
-              &clock->default_min_decoder_buffer);
+              &clock->min_pre_buffer);
     if (e)
     {
-      clock->default_min_decoder_buffer = DEFAULT_DECODER_BUFFER_SIZE;
+      clock->min_pre_buffer = DEFAULT_MIN_PRE_BUFFER;
     }
     clock->total_fasts = clock->session_fasts = clock->total_slows = clock->session_slows = 0;
     clock->current_STC_speed = clock->current_NPT_wrt_STC = clock->pending_STC_speed = clock->next_STC_speed = 0x10000;
+    clock->STC_ref_mono = clock->STC_ref = clock->NPT_ref_STC = clock->NPT_ref = (const int64_t) { 0 };
     llist_Create(&clock->decoder_list, sizeof(decoder_t), malloc, free, decoder_LinkFreed, 4);
+    clock->event_head = clock->event_tail = NULL;
     
     *r_flags = 0;
     *r_clock_handle = clock->clock_handle;
@@ -328,25 +310,17 @@ _kernel_oserror *clock_Register(uint32_t flags, prism_id_t unwrap_id, stream_han
     static prism_function_table_unwrap_to_clock_t my_table;
     if (!my_table_initialised++)
     {
-//      my_table =
-//      {
-//        global_Veneers->clock_Deregister,
-//        global_Veneers->clock_BeginSession,
-//        global_Veneers->clock_EndSession,
-//        global_Veneers->clock_StreamInfo,
-//        global_Veneers->clock_SpeedChange,
-//        global_Veneers->clock_PCRNotify,
-//        global_Veneers->clock_NPTMapping,
-//        global_Veneers->clock_FreezeClock
-//      };
-      my_table.Deregister = global_Veneers->clock_Deregister;
-      my_table.BeginSession = global_Veneers->clock_BeginSession;
-      my_table.EndSession = global_Veneers->clock_EndSession;
-      my_table.StreamInfo = global_Veneers->clock_StreamInfo;
-      my_table.SpeedChange = global_Veneers->clock_SpeedChange;
-      my_table.PCRNotify = global_Veneers->clock_PCRNotify;
-      my_table.NPTMapping = global_Veneers->clock_NPTMapping;
-      my_table.FreezeClock = global_Veneers->clock_FreezeClock;
+      my_table = (prism_function_table_unwrap_to_clock_t)
+      {
+        global_Veneers->clock_Deregister,
+        global_Veneers->clock_BeginSession,
+        global_Veneers->clock_EndSession,
+        global_Veneers->clock_StreamInfo,
+        global_Veneers->clock_SpeedChange,
+        global_Veneers->clock_PCRNotify,
+        global_Veneers->clock_NPTMapping,
+        global_Veneers->clock_FreezeClock
+      };
     }
     *r_function_table = &my_table;
     return NULL;
@@ -425,8 +399,21 @@ _kernel_oserror *clock_BeginSession(uint32_t flags, stream_handle_t clock_handle
   
   clock_t *clock = global_ClockArray[clock_handle.local_handle];
   
-  clock->session_active = true;
+  clock->using_pcrs = false;
+  clock->tentative_time_established = false;
+  clock->time_established = false;
+  clock->time_locked = false;
+  clock->time_lock_pending = false;
+  clock->sync_start_pending = false;
   clock->session_fasts = clock->session_slows = 0;
+  
+  clock->current_STC_speed = clock->pending_STC_speed = clock->next_STC_speed;
+  clock->current_NPT_wrt_STC = 0x10000;
+  clock->NPT_ref_STC = clock->NPT_ref = (const int64_t) { 0 };
+  
+  clock->sync_master = NULL;
+  
+  clock->session_active = true;
   
   return NULL;
 }
@@ -459,8 +446,10 @@ _kernel_oserror *clock_EndSession(uint32_t flags, stream_handle_t clock_handle)
   
   clock_t *clock = global_ClockArray[clock_handle.local_handle];
   
+  event_ClearAll(clock);
+  
   clock->session_active = false;
-  clock->pcr_seen = false;
+  clock->using_pcrs = false;
   
   llist_step_t step;
   llist_StartWalk(&step, &clock->decoder_list, false);
@@ -491,9 +480,159 @@ _kernel_oserror *clock_EndSession(uint32_t flags, stream_handle_t clock_handle)
 * Returns
 *  NULL if successful; otherwise pointer to error block
 *****************************************************************************/
-_kernel_oserror *clock_StreamInfo(uint32_t reason, stream_handle_t clock_handle, void **info)
+_kernel_oserror *clock_StreamInfo(uint32_t reason, stream_handle_t clock_handle, void *info)
 {
-  return NULL;
+  if (clock_handle.local_handle > global_ClockMax || global_ClockArray[clock_handle.local_handle] == 0)
+  {
+    return mess_MakeError(prism_ERROR_INVALID_PARAMETERS, 1, "EndSession");
+  }
+  
+  clock_t *clock = global_ClockArray[clock_handle.local_handle];
+  
+  switch (reason)
+  {
+    case 0:
+    {
+      * (uint32_t *) info = clock->jitter_buffer;
+      return NULL;
+    }
+    
+    case 1:
+    {
+      * (uint32_t *) info = clock->min_pre_buffer;
+      return NULL;
+    }
+    
+    case 2:
+    {
+      * (uint32_t *) info = clock->total_fasts;
+      return NULL;
+    }
+    
+    case 3:
+    {
+      * (uint32_t *) info = clock->session_fasts;
+      return NULL;
+    }
+    
+    case 4:
+    {
+      * (uint32_t *) info = clock->total_slows;
+      return NULL;
+    }
+    
+    case 5:
+    {
+      * (uint32_t *) info = clock->session_slows;
+      return NULL;
+    }
+    
+    case 6:
+    {
+      * (int32_t *) info = clock->current_STC_speed;
+      return NULL;
+    }
+    
+    case 7:
+    {
+      * (int32_t *) info = clock->current_NPT_wrt_STC;
+      return NULL;
+    }
+    
+    case 8:
+    {
+      uint32_t a_hi = ((uint32_t) clock->current_STC_speed) >> 16;
+      uint32_t a_lo = clock->current_STC_speed - (a_hi << 16);
+      uint32_t b_hi = ((uint32_t) clock->current_NPT_wrt_STC) >> 16;
+      uint32_t b_lo = clock->current_NPT_wrt_STC - (b_hi << 16);
+      * (uint32_t *) info = ((a_hi * b_hi) << 16) + a_hi * b_lo + a_lo * b_hi + ((a_lo * b_lo) >> 16);
+      return NULL;
+    }
+    
+    case 9:
+    {
+      * (int32_t *) info = clock->pending_STC_speed;
+      return NULL;
+    }
+    
+    case 10:
+    {
+      uint32_t a_hi = ((uint32_t) clock->pending_STC_speed) >> 16;
+      uint32_t a_lo = clock->pending_STC_speed - (a_hi << 16);
+      uint32_t b_hi = ((uint32_t) clock->current_NPT_wrt_STC) >> 16;
+      uint32_t b_lo = clock->current_NPT_wrt_STC - (b_hi << 16);
+      * (int32_t *) info = ((a_hi * b_hi) << 16) + a_hi * b_lo + a_lo * b_hi + ((a_lo * b_lo) >> 16);
+      return NULL;
+    }
+    
+    case 11:
+    {
+      * (int32_t *) info = clock->next_STC_speed;
+      return NULL;
+    }
+    
+    case 12:
+    {
+      if (!clock->time_locked)
+      {
+        return mess_MakeError(pfcclock_ERROR_CLOCK_NOT_STARTED, 0);
+      }
+      int64_t stc = time_ReadMonotonicTime();
+      stc = time_Transform(&stc, &clock->STC_ref_mono, &clock->STC_ref, clock->current_STC_speed);
+      * (int64_t *) info = stc;
+      * (((uint32_t *) info) + 1) &= 1;
+      return NULL;
+    }
+    
+    case 13:
+    {
+      if (!clock->time_locked)
+      {
+        return mess_MakeError(pfcclock_ERROR_CLOCK_NOT_STARTED, 0);
+      }
+      int64_t npt = time_ReadMonotonicTime();
+      npt = time_Transform(&npt, &clock->STC_ref_mono, &clock->STC_ref, clock->current_STC_speed);
+      npt = time_Transform(&npt, &clock->NPT_ref_STC, &clock->NPT_ref, clock->current_NPT_wrt_STC);
+      * (int64_t *) info = npt;
+      * (((uint32_t *) info) + 1) &= 1;
+      return NULL;
+    }
+    
+    case 14:
+    {
+      if (!clock->time_locked)
+      {
+        return mess_MakeError(pfcclock_ERROR_CLOCK_NOT_STARTED, 0);
+      }
+      int64_t stc = time_ReadMonotonicTime();
+      stc = time_Transform(&stc, &clock->STC_ref_mono, &clock->STC_ref, clock->current_STC_speed);
+      struct { uint32_t s; uint32_t ms; } *info2 = info;
+      time_ConvertToSeconds(&stc, &info2->s, &info2->ms);
+      return NULL;
+    }
+    
+    case 15:
+    {
+      if (!clock->time_locked)
+      {
+        return mess_MakeError(pfcclock_ERROR_CLOCK_NOT_STARTED, 0);
+      }
+      int64_t npt = time_ReadMonotonicTime();
+      npt = time_Transform(&npt, &clock->STC_ref_mono, &clock->STC_ref, clock->current_STC_speed);
+      npt = time_Transform(&npt, &clock->NPT_ref_STC, &clock->NPT_ref, clock->current_NPT_wrt_STC);
+      struct { int32_t s; uint32_t ms; } *info2 = info;
+      bool negative; negative = LT64(npt, (const int64_t) { 0 });
+      if (negative) npt = NEG64(npt);
+      time_ConvertToSeconds(&npt, (uint32_t *) &info2->s, &info2->ms);
+      if (negative) info2->s = -info2->s;
+      return NULL;
+    }
+    
+    default:
+    {
+      return mess_MakeError(prism_ERROR_INVALID_PARAMETERS, 1, "ComponentInfo");
+    }
+  }
 }
 
 /*****************************************************************************
@@ -515,6 +654,9 @@ _kernel_oserror *clock_StreamInfo(uint32_t reason, stream_handle_t clock_handle,
 *****************************************************************************/
 _kernel_oserror *clock_SpeedChange(uint32_t flags, stream_handle_t clock_handle, int32_t new_speed)
 {
+  IGNORE(flags);
+  IGNORE(clock_handle);
+  IGNORE(new_speed);
   return NULL;
 }
 
@@ -537,6 +679,9 @@ _kernel_oserror *clock_SpeedChange(uint32_t flags, stream_handle_t clock_handle,
 *****************************************************************************/
 _kernel_oserror *clock_PCRNotify(uint32_t flags, stream_handle_t clock_handle, mpeg_time_t *pcr)
 {
+  IGNORE(flags);
+  IGNORE(clock_handle);
+  IGNORE(pcr);
   return NULL;
 }
 
@@ -557,8 +702,13 @@ _kernel_oserror *clock_PCRNotify(uint32_t flags, stream_handle_t clock_handle, m
 * Returns
 *  NULL if successful; otherwise pointer to error block
 *****************************************************************************/
-_kernel_oserror *clock_NPTMapping(uint32_t flags, stream_handle_t clock_handle, mpeg_time_t *npt_offset, int32_t npt_scale)
+_kernel_oserror *clock_NPTMapping(uint32_t flags, stream_handle_t clock_handle, mpeg_time_t *stc_reference, mpeg_interval_t *npt_reference, int32_t npt_scale)
 {
+  IGNORE(flags);
+  IGNORE(clock_handle);
+  IGNORE(stc_reference);
+  IGNORE(npt_reference);
+  IGNORE(npt_scale);
   return NULL;
 }
 
@@ -581,6 +731,35 @@ _kernel_oserror *clock_NPTMapping(uint32_t flags, stream_handle_t clock_handle, 
 *****************************************************************************/
 _kernel_oserror *clock_FreezeClock(uint32_t flags, stream_handle_t clock_handle)
 {
+  IGNORE(flags);
+  IGNORE(clock_handle);
+  return NULL;
+}
+
+/*****************************************************************************
+* clock_TimeLock
+*
+* Commits us to a particular time frame, also enables other people to
+* read the current time
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  flags: unused flags word
+*  clock: pointer to clock struct
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NULL if successful; otherwise pointer to error block
+*****************************************************************************/
+extern _kernel_oserror *clock_TimeLock(uint32_t flags, clock_t *clock)
+{
+  IGNORE(flags);
+  clock->time_locked = true;
+  clock->time_lock_pending = false;
   return NULL;
 }
 
@@ -624,6 +803,7 @@ void clock_AbandonAll(void)
 *****************************************************************************/
 void clock_AbandonComponent(prism_id_t id)
 {
+  IGNORE(id);
 }
 
 /*****************************************************************************
@@ -645,6 +825,7 @@ void clock_AbandonComponent(prism_id_t id)
 *****************************************************************************/
 void clock_AbandonClient(stream_handle_t handle)
 {
+  IGNORE(handle);
 }
 
 /*****************************************************************************
@@ -668,6 +849,8 @@ void clock_AbandonClient(stream_handle_t handle)
 *****************************************************************************/
 void clock_AbandonRelationship(prism_id_t id, stream_handle_t handle)
 {
+  IGNORE(id);
+  IGNORE(handle);
 }
 
 
