@@ -41,6 +41,7 @@ void tidy_memory(void)
 }
 
 static NCMA_STATE after_pin(void); /* Declare this routine */
+static NCMA_STATE default_pin_failed();
 
 #endif /* SC_SWAPPING */
 
@@ -48,6 +49,24 @@ static NCMA_STATE after_pin(void); /* Declare this routine */
 #ifdef ENABLE_DEBUGGING
   extern const int DebugOutputDevice;
 #endif /* ENABLE_DEBUGGING */
+
+
+
+
+#ifdef ENABLE_SECOND_DEFAULT_PIN
+/* The variable below is set if the PIN for the current card is 9999. It
+    allows NCMAlite to throw up a different 'connect' screen (connectnp). the
+    desired behaviour is that cards with a 9999 PIN do not allow you access
+    to the change PIN screen and do not pronpt you for the PIN number. */
+static BOOL show_change_pin_screens = TRUE;
+
+/* The variable below is used to test which particular default PIN has been
+    tested. If it is 0, the 0000 pin has been tested. If it is 1, then the
+    9999 pin has been tested. This is a horrible hack. */
+unsigned int default_PIN_attempts = 0;
+#endif /* ENABLE_SECOND_DEFAULT_PIN */
+
+
 
 
 
@@ -184,6 +203,7 @@ char *email_status_string(EMAIL_CLIENT_STATE state)
 
 /* Foward prototypes: */
 NCMA_STATE start_redial(void);
+static NCMA_STATE default_pin_failed(void);
 
 
 
@@ -885,49 +905,42 @@ NCMA_STATE machine(NCMA_TRANS trans)
     	 switch(trans) {
 	     case Trans_AuthFail: /* default PIN failed */
 	          DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: authorization failure for default PIN (auth)\n");
-	          if(card_attempts-->0) {
-	            DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Bad PIN! %d attempts left\n", card_attempts);
-	     	    ncma_dbox_open_to_target(URL_PATH(pin.html), COMMON_DIALOGUE_BOX);
-	     	    return(State_NCMAPin);
-	     	  } else {
-	     	    DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: card has become blocked\n");
-	     	    ncma_dbox_open_to_target(URL_PATH(unblock.html), COMMON_DIALOGUE_BOX);
-	     	    return(State_NCMAUnblock);
-	     	  }
+	          return (default_pin_failed());
 	     	  break;
 
     	     case Trans_Registry: /* test status of default PIN transaction */
                  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Trans_Registry s=0x%x d=0x%x\n", registry_status, registry_delta);
 
-	     	  if(registry_status_asserted(BB_STATUS_LOCKED) || registry_status_asserted(BB_STATUS_AUTHFAIL)) { /* PIN was wrong */
+	     	  if(registry_status_asserted(BB_STATUS_LOCKED) || registry_status_asserted(BB_STATUS_AUTHFAIL))
+                  { /* PIN was wrong */
 	     	      DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: default PIN failed (registry)\n");
-
-	              if(card_attempts-->0) {
-	                DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Bad PIN! %d attempts left\n", card_attempts);
-	     	        ncma_dbox_open_to_target(URL_PATH(pin.html), COMMON_DIALOGUE_BOX);
-	     	        return(State_NCMAPin);
-	     	      } else {
-	     	        ncma_dbox_open_to_target(URL_PATH(unblock.html), COMMON_DIALOGUE_BOX);
-	     	        return(State_NCMAUnblock);
-	     	      }
+	              return (default_pin_failed());
 	     	      break;
-
-
 	     	  }
-		  /* default PIN succeeded */
-	     	  if(registry_status_clear(BB_STATUS_LOCKED) && registry_status_clear(BB_STATUS_AUTHFAIL)) { /* PIN was right */
-	     	      DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: default PIN succeeded\n");
-                      strncpy(old_chv_pin, chv_pin, chv_pin_size);
-                      old_chv_pin_size = chv_pin_size;
 
-		      goto proceed_after_pin;
-	     	      break;
-	          }
+		  /* default PIN succeeded */
+	     	  if(registry_status_clear(BB_STATUS_LOCKED) && registry_status_clear(BB_STATUS_AUTHFAIL))
+                  { /* PIN was right */
+                    #ifdef ENABLE_SECOND_DEFAULT_PIN
+                    if (default_PIN_attempts == 1)
+                    {
+                      /*  It was an attempt with a second default PIN */
+                      show_change_pin_screens = FALSE;
+                    }
+                    #endif /* ENABLE_SECOND_DEFAULT_PIN */
+	     	    DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: default PIN succeeded\n");
+                    strncpy(old_chv_pin, chv_pin, chv_pin_size);
+                    old_chv_pin_size = chv_pin_size;
+
+                    goto proceed_after_pin;
+                    break;
+                 }
 
 
     	 } /* end state_ncmadefaultpin */
     	 break;
 #endif
+
 /*********************************************************************************
 
     +STATE_NCMAPIN
@@ -2023,3 +2036,41 @@ static NCMA_STATE after_pin(void)
 }
 #endif /* SC_SWAPPING */
 
+
+
+
+/* This routine is called if the defaukt_pin or default_pin_2() routines()
+    failed. */
+static NCMA_STATE default_pin_failed(void)
+{
+  DBUG_PRINTF(DBUG_LVL_DIAG, "default_pin_failed()\n");
+
+#ifdef ENABLE_SECOND_DEFAULT_PIN
+  /* If we get here, then attempting to enter a default PIN has failed either
+      once or twice. If the first time, try again with another Pin (9999) */
+  if (default_PIN_attempts == 0)
+  {
+    default_PIN_attempts++;
+    default_pin_2(); /* Fire off the second default pin */
+    return (State_NCMADefaultPIN); /* And return to wait for the reply...*/
+  }
+  else
+  {
+    default_PIN_attempts = 0;
+  }
+#endif /* ENABLE_SECOND_DEFAULT_PIN */
+
+  if(card_attempts-->0)
+  {
+    DBUG_PRINTF(DBUG_LVL_DIAG, "default_pin_failed(): Bad PIN! %d attempts left\n", card_attempts);
+    ncma_dbox_open_to_target(URL_PATH(pin.html), COMMON_DIALOGUE_BOX);
+    return(State_NCMAPin);
+  }
+  else
+  {
+    ncma_dbox_open_to_target(URL_PATH(unblock.html), COMMON_DIALOGUE_BOX);
+    return(State_NCMAUnblock);
+  }
+
+  return (State_NCMAPin);
+}
