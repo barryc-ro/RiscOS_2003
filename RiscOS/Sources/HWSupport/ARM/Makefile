@@ -9,55 +9,12 @@
 #
 
 #
-# Generic options:
-#
-MKDIR   = cdir
-AS      = aasm
-CP      = copy
-RM      = remove
-CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
-CPFLAGS = ~cfr~v
-
-#
 # Program specific options:
 #
-COMPONENT = ARM
-SOURCE    = s.GetAll
-TARGET    = rm.ARM
+COMPONENT  = ARM
+ROM_SOURCE = GetAll.s
 
-#
-# Generic rules:
-#
-rom: ${TARGET}
-        @echo ${COMPONENT}: rom module built
-
-export: 
-        @echo ${COMPONENT}: export complete
-
-install_rom: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom module installed
-
-clean:
-        ${RM} ${TARGET}
-        @echo ${COMPONENT}: cleaned
-
-resources: resources-${CMDHELP}
-        @echo ${COMPONENT}: resource files copied
-
-resources_common:
-        ${MKDIR} ${RESDIR}.${COMPONENT}
-	TokenCheck LocalRes:Messages
-        ${CP} LocalRes:Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
-
-resources-None: resources_common
-	@
-
-resources-: resources_common
-	TokenCheck LocalRes:CmdHelp
-	print LocalRes:CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
-${TARGET}: ${SOURCE}
-        ${AS} ${ASFLAGS} ${SOURCE}
+include StdTools
+include AAsmModule
 
 # Dynamic dependencies:
