@@ -91,6 +91,11 @@ VJEOBJS = \
 all: rm.${COMPONENT} o.dirs
         @echo ${COMPONENT}: complete
 
+# Binary Build Environment augmenting rules
+BBETYPE   = local
+bbe-local: bbe-generic
+  BBE_Export_File Resources.Dictionary
+
 #
 # RISC OS ROM build rules:
 #
