@@ -1,4 +1,4 @@
-# Makefile for INetCardUI
+# Makefile for LazarusUI
 #
 # ***********************************
 # ***    C h a n g e   L i s t    ***
@@ -29,7 +29,7 @@ MAPPINGS	= TranslateRes:Mappings
 #
 # Program specific options:
 #
-COMPONENT	= INetCardUI
+COMPONENT	= LazarusUI
 APP		= !Boot
 SOURCE		=
 TARGET		=
@@ -91,6 +91,7 @@ translate: dirs
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.MA.badurl -o $(RESAPP).HTML.MA.badurl
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.MA.badurldbox -o $(RESAPP).HTML.MA.badurldbox
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.MA.connect -o $(RESAPP).HTML.MA.connect
+        $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.MA.invalid -o $(RESAPP).HTML.MA.invalid
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.MA.logout -o $(RESAPP).HTML.MA.logout
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.MA.pleasewait -o $(RESAPP).HTML.MA.pleasewait
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i TranslateRes:$(APP).HTML.MA.splash -o $(RESAPP).HTML.MA.splash
