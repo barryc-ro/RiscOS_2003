@@ -55,6 +55,7 @@ TARGET    = aof.SoundFX
 OBJS      = o.CMHGSndFX o.SoundFX
 RDIR      = Resources.<UserIF>
 EXPORTS   =
+INSTALLDIR = <Install$Dir>.!SoundFX
 
 #
 # Export Paths for Messages module
@@ -85,6 +86,13 @@ export: ${EXPORTS}
 install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
+
+install: ${SOUNDS}
+        ${MKDIR} ${INSTALLDIR}
+        ${MKDIR} ${INSTALLDIR}.Sounds
+        ${CP} ${RDIR}.Sounds.*       ${INSTALLDIR}.Sounds.* ~cf~r~v
+        ${CP} Resources.Common.!Run  ${INSTALLDIR}.!Run ~cf~r~v
+        @echo ${COMPONENT}: install files copied
 
 clean:
         ${WIPE} o.* ${WFLAGS}
