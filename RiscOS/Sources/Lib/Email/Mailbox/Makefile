@@ -30,7 +30,7 @@
 #
 
 RM		= remove
-
+STRIPDEPND	= stripdepnd
 
 
 
@@ -95,4 +95,5 @@ clean:
 	@$(RM) $(HIERPROF_TARGET)
 	@$(RM) $(MODULE_TARGET)
 	@$(RM) $(DEBUG_TARGET)
+	@$(STRIPDEPND) MainMake
 	@echo $(COMPONENT): cleaned

@@ -100,11 +100,11 @@ LIBS = \
  $(WIMPLIB)\
  $(TOOLBOXLIB)\
  $(EVENTLIB)\
- $(MBOXLIB)d\
+ $(MBOXLIB)$(MC)\
  $(ACORNPOP3)\
  $(ACORNSMTP)\
- $(ELIB)\
- $(COMMON)\
+ $(ELIB)$(MC)\
+ $(COMMON)$(MC)\
  $(EXTRALIBS)\
  $(C++LIB)\
  $(CLIB)\
@@ -383,4 +383,3 @@ rm.!MBoxTestD: odz.ModuleWrap $(OBJSDZ) $(LIBSM) o.dirs
 
 # -----------------------------------------------------------------------------
 # Dynamic dependencies:
-
