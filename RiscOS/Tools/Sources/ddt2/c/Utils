@@ -9,12 +9,16 @@
 /*                                                            */
 /* History: 07-Apr-2000 (ADH): Adapted from Browse source.    */
 /*          16-Oct-2000 (ADH): Imported from PlugPlay.        */
+/*          18-Oct-2000 (ADH): Error reporting functions and  */
+/*                             related definitions moved to   */
+/*                             Error.c / Error.h.             */
 /**************************************************************/
 
 #include <stdlib.h>
 #include <stdio.h>
 #include <setjmp.h>
 #include <string.h>
+#include <stdarg.h>
 #include <ctype.h>
 
 #include <kernel.h>
@@ -22,14 +26,9 @@
 
 #include <tboxlibs/wimplib.h>
 
-#ifdef TRACE
-  #define DEBUGLIB
-#endif
-#include <debuglib/debuglib.h>
-
+#include "Errors.h"
 #include "FromROSLib.h"
 #include "Global.h"
-#include "Main.h"
 #include "MiscDefs.h"
 #include "NestWimp.h"
 #include "Save.h"
@@ -51,7 +50,7 @@ static int  overflow_limit_y          = 0x28f5c1;
 
 /* Local functions */
 
-static char * lookup_in_given (MessagesFD * control, const char * s, int flag, const char * arg);
+static char * lookup_in_given (MessagesFD * control, const char * s, unsigned int num_args, va_list ap);
 
 /**************************************************************/
 /* lookup_token()                                             */
@@ -74,11 +73,11 @@ static char * lookup_in_given (MessagesFD * control, const char * s, int flag, c
 /*                                                            */
 /* Parameters: Pointer to a message token;                    */
 /*                                                            */
-/*             1 to report an error if the token isn't found  */
-/*             as well as returning a string of '!', else 0;  */
+/*             Number of arguments that follow (0 to 4);      */
 /*                                                            */
-/*             An optional pointer to an argument to          */
-/*             substitute into the looked up string, or NULL. */
+/*             Between zero and four pointers to NUL          */
+/*             terminated strings used for substitution into  */
+/*             the string being looked up ('%0' to '%3').     */
 /*                                                            */
 /* Returns:    Pointer to the full message text or '!' to     */
 /*             signal an error; never a null pointer.         */
@@ -87,13 +86,18 @@ static char * lookup_in_given (MessagesFD * control, const char * s, int flag, c
 /*             NULL.                                          */
 /**************************************************************/
 
-char * lookup_token(const char * s, int flag, const char * arg)
+char * lookup_token(const char * s, unsigned int num_args, ...)
 {
-  #ifdef TRACE
-    if (tl & (1u<<0)) dprintf(("", "lookup_token: Called, exitting through lookup_in_given\n"));
-  #endif
+  char    * ret;
+  va_list   ap;
 
-  return lookup_in_given(&meb, s, flag, arg);
+  dprintf(("MsgT", "lookup_token: Called, exitting through lookup_in_given\n"));
+
+  va_start(ap, num_args);
+  ret = lookup_in_given(&meb, s, num_args, ap);
+  va_end(ap);
+
+  return ret;
 }
 
 /**************************************************************/
@@ -107,11 +111,10 @@ char * lookup_token(const char * s, int flag, const char * arg)
 /*                                                            */
 /*             Pointer to a message token;                    */
 /*                                                            */
-/*             1 to report an error if the token isn't found  */
-/*             as well as returning a string of '!', else 0;  */
+/*             Number of arguments that follow (0 to 4);      */
 /*                                                            */
-/*             An optional pointer to an argument to          */
-/*             substitute into the looked up string, or NULL. */
+/*             A va_list built by va_start before calling,    */
+/*             from a variable argument list.                 */
 /*                                                            */
 /* Returns:    Pointer to the full message text or '!' to     */
 /*             signal an error; never a null pointer.         */
@@ -120,21 +123,23 @@ char * lookup_token(const char * s, int flag, const char * arg)
 /*             NULL.                                          */
 /**************************************************************/
 
-static char * lookup_in_given(MessagesFD * control, const char * s, int flag, const char * arg)
+static char * lookup_in_given(MessagesFD * control, const char * s, unsigned int num_args, va_list ap)
 {
   _kernel_oserror * e;
+  char            * args[4];
 
-  #ifdef TRACE
-    if (tl & (1u<<0)) dprintf(("", "lookup_in_given: Lookup token '%s'\n",s));
-  #endif
+  dprintf(("MsgT", "lookup_in_given: Lookup token '%s'\n",s));
 
   if (strcmp(lasttokn, (char *) s))
   {
-    #ifdef TRACE
-      if (tl & (1u<<0)) dprintf(("", "lookup_in_given: Proceeding\n"));
-    #endif
+    dprintf(("MsgT", "lookup_in_given: Proceeding\n"));
 
     StrNCpy0(lasttokn, (char *) s);
+
+    args[0] = num_args > 0 ? va_arg(ap, char *) : 0;
+    args[1] = num_args > 1 ? va_arg(ap, char *) : 0;
+    args[2] = num_args > 2 ? va_arg(ap, char *) : 0;
+    args[3] = num_args > 3 ? va_arg(ap, char *) : 0;
 
     e = _swix(MessageTrans_Lookup,
               _INR(0,7),
@@ -143,279 +148,30 @@ static char * lookup_in_given(MessagesFD * control, const char * s, int flag, co
               s,                  /* String to look up                      */
               tokens,             /* Global buffer to take looked up string */
               sizeof(tokens) - 1, /* Size of the buffer                     */
-              arg,                /* Parameter 0                            */
-              0,                  /* Parameter 1                            */
-              0,                  /* Parameter 2                            */
-              0);                 /* Parameter 3                            */
+              args[0],            /* Parameter 0                            */
+              args[1],            /* Parameter 1                            */
+              args[2],            /* Parameter 2                            */
+              args[3]);           /* Parameter 3                            */
 
     tokens[Limits_Message - 1] = 0;
 
     if (e)
     {
-      /* If the lookup fails, put '!' into the lookup buffer and if the */
-      /* flag passed into the function is 1, report the error too.      */
+      /* If the lookup fails, put '!' into the lookup buffer and report */
+      /* the error directly.                                            */
 
-      #ifdef TRACE
-        if (tl & (1u<<0)) dprintf(("", "lookup_in_given: Failed\n"));
-      #endif
+      dprintf(("MsgT", "lookup_in_given: Failed\n"));
 
       *lasttokn = 0;
       strcpy(tokens, "!");
 
-      if (flag == 1) show_error_cont(e);
+      errors_cont(e);
     }
   }
 
-  #ifdef TRACE
-    if (tl & (1u<<0)) dprintf(("", "lookup_in_given: Returning %s\n",tokens));
-  #endif
+  dprintf(("MsgT", "lookup_in_given: Returning %s\n",tokens));
 
   return (char *) &tokens;
-}
-
-/**************************************************************/
-/* show_error()                                               */
-/*                                                            */
-/* Reports a (generally serious) error and exits with         */
-/* EXIT_FAILURE.                                              */
-/*                                                            */
-/* Parameters: Pointer to a _kernel_oserror structure.        */
-/*                                                            */
-/* Assumes:    The pointer may be NULL.                       */
-/**************************************************************/
-
-void show_error(_kernel_oserror * e)
-{
-  if (e!=NULL)
-  {
-    _kernel_swi_regs r;
-    char             name[Limits_TaskName];
-    char             spri[Limits_OS_SpriteName];
-    WimpSysInfo      s;
-
-    /* This call checks if errors can be reported in the Desktop, */
-    /* or if they need to go into a command window (useful for    */
-    /* CLI routines for example)                                  */
-
-    s.r0=0;
-    s.r1=0;
-    wimp_read_sys_info(3,&s);
-
-    if (s.r0==0) fprintf(stderr,"%s\n",e->errmess);
-    else
-    {
-      StrNCpy0(name,lookup_token("_TaskName:Browse",0,0));  /* Task name for 'Message from...' */
-      StrNCpy0(spri,lookup_token("_SpriName:!browse",0,0)); /* Sprite name to put in error box */
-
-      r.r[0] = (int) e;                                       /* Pointer to error block           */
-      r.r[1] = (2<<9)+(1<<8);                                 /* Category 2 (warning)             */
-      r.r[2] = (int) &name;                                   /* Application name looked up above */
-      r.r[3] = (int) &spri;                                   /* Sprite name looked up above      */
-      r.r[4] = 1;                                             /* Sprite block pointer (1 = WIMP)  */
-      r.r[5] = (int) lookup_token("ErrorBtns:Quit",0,0);      /* Custom button, 'Quit'            */
-
-      _kernel_swi(Wimp_ReportError,&r,&r);
-    }
-
-    exit(EXIT_FAILURE); /* Exit after reporting the error */
-  }
-}
-
-/**************************************************************/
-/* show_error_cont()                                          */
-/*                                                            */
-/* Reports an error but allows execution to then continue     */
-/* (rather than calling exit()) if the user clicks on         */
-/* 'Continue' rather than 'Quit'. This is accomplished by a   */
-/* longjmp back into wherever the setjmp was (e.g. in a poll  */
-/* loop).                                                     */
-/*                                                            */
-/* Parameters: Pointer to a _kernel_oserror structure.        */
-/*                                                            */
-/* Assumes:    The pointer may be NULL.                       */
-/**************************************************************/
-
-void show_error_cont(_kernel_oserror * e)
-{
-  if (e!=NULL)
-  {
-    _kernel_swi_regs r;
-    char             name[Limits_TaskName];
-    char             spri[Limits_OS_SpriteName];
-    WimpSysInfo      s;
-
-    #ifdef TRACE
-      if (e->errnum == Utils_Error_Custom_Fatal) e->errnum = Utils_Error_Custom_Normal;
-    #endif
-
-    /* Force 'Quit' only for fatal errors */
-
-    if (e->errnum == Utils_Error_Custom_Fatal) show_error(e);
-
-    /* This all works in much the same way as show_error above. */
-
-    s.r0=0;
-    s.r1=0;
-    wimp_read_sys_info(3,&s);
-
-    if (s.r0==0) fprintf(stderr,"%s\n",e->errmess);
-    else
-    {
-      StrNCpy0(name, lookup_token("_TaskName:Browse",0,0));
-      StrNCpy0(spri, lookup_token("_SpriName:!browse",0,0));
-
-      r.r[0] = (int) e;
-      r.r[1] = (2<<9)+(1<<8)+1;
-      r.r[2] = (int) &name;
-      r.r[3] = (int) &spri;
-      r.r[4] = 1;
-
-      if (
-           e->errnum != Utils_Error_OS_Escape      &&
-           e->errnum != Utils_Error_Custom_Message
-         )
-         r.r[5] = (int) lookup_token("ErrorBtns:Quit",0,0);
-
-      else r.r[5] = 0;
-
-      _kernel_swi(Wimp_ReportError,&r,&r);
-
-      if (r.r[1] == 1) longjmp(env, Main_FromShowErrorCont);
-
-      exit(EXIT_FAILURE); /* Exit if 'Quit' is selected */
-    }
-  }
-}
-
-/**************************************************************/
-/* show_error_ret()                                           */
-/*                                                            */
-/* Reports an error but allows execution to then continue     */
-/* (rather than calling exit()) if the user clicks on         */
-/* 'Continue' rather than 'Quit'. This is accomplished by     */
-/* simply returning.                                          */
-/*                                                            */
-/* Parameters: Pointer to a _kernel_oserror structure.        */
-/*                                                            */
-/* Assumes:    The pointer may be NULL.                       */
-/**************************************************************/
-
-void show_error_ret(_kernel_oserror * e)
-{
-  if (e!=NULL)
-  {
-    _kernel_swi_regs r;
-    char             name[Limits_TaskName];
-    char             spri[Limits_OS_SpriteName];
-    WimpSysInfo      s;
-
-    #ifdef TRACE
-      if (e->errnum == Utils_Error_Custom_Fatal) e->errnum = Utils_Error_Custom_Normal;
-    #endif
-
-    /* Force 'Quit' only for fatal errors */
-
-    if (e->errnum == Utils_Error_Custom_Fatal) show_error(e);
-
-    /* This all works in much the same way as show_error above. */
-
-    s.r0=0;
-    s.r1=0;
-    wimp_read_sys_info(3,&s);
-
-    if (s.r0==0) fprintf(stderr,"%s\n",e->errmess);
-    else
-    {
-      StrNCpy0(name, lookup_token("_TaskName:Browse",0,0));
-      StrNCpy0(spri, lookup_token("_SpriName:!browse",0,0));
-
-      r.r[0] = (int) e;
-      r.r[1] = (2<<9)+(1<<8)+1;
-      r.r[2] = (int) &name;
-      r.r[3] = (int) &spri;
-      r.r[4] = 1;
-
-      if (
-           e->errnum != Utils_Error_OS_Escape      &&
-           e->errnum != Utils_Error_Custom_Message
-         )
-         r.r[5] = (int) lookup_token("ErrorBtns:Quit",0,0);
-
-      else r.r[5] = 0;
-
-      _kernel_swi(Wimp_ReportError,&r,&r);
-
-      if (r.r[1] != 1) exit(EXIT_FAILURE); /* Exit if 'Quit' is selected, else return normally */
-    }
-  }
-}
-
-/**************************************************************/
-/* show_error_ask()                                           */
-/*                                                            */
-/* Reports an error as a query - return result of button      */
-/* selection by user.                                         */
-/*                                                            */
-/* Parameters: Pointer to a _kernel_oserror structure.        */
-/*                                                            */
-/*             Pointer to a MessageTrans token to look up -   */
-/*             the text is used for the buttons in the error  */
-/*             box.                                           */
-/*                                                            */
-/* Assumes:    The error pointer may be NULL. If so, the      */
-/*             other two are ignored as well. If not, the     */
-/*             other must not be NULL.                        */
-/*                                                            */
-/* Returns:    Return value of R1 from call to SWI            */
-/*             Wimp_ReportError (3, 4 or 5, depending on      */
-/*             which of the up to 3 custom buttons were       */
-/*             activated).                                    */
-/**************************************************************/
-
-int show_error_ask(_kernel_oserror * e, const char * buttons)
-{
-  if (e!=NULL)
-  {
-    _kernel_swi_regs r;
-    char             name[Limits_TaskName];
-    char             spri[Limits_OS_SpriteName];
-    WimpSysInfo      s;
-
-    #ifdef TRACE
-      if (e->errnum == Utils_Error_Custom_Fatal) e->errnum = Utils_Error_Custom_Normal;
-    #endif
-
-    /* Force 'Quit' only for fatal errors */
-
-    if (e->errnum == Utils_Error_Custom_Fatal) show_error(e);
-
-    /* This all works in much the same way as show_error above. */
-
-    s.r0=0;
-    s.r1=0;
-    wimp_read_sys_info(3,&s);
-
-    if (s.r0==0) fprintf(stderr,"%s\n",e->errmess);
-    else
-    {
-      StrNCpy0(name, lookup_token("_TaskName:Browse",0,0));
-      StrNCpy0(spri, lookup_token("_SpriName:!browse",0,0));
-
-      r.r[0] = (int) e;
-      r.r[1] = (4<<9)+(1<<8);
-      r.r[2] = (int) &name;
-      r.r[3] = (int) &spri;
-      r.r[4] = 1;
-
-      r.r[5] = (int) lookup_token((char *) buttons,0,0);
-
-      _kernel_swi(Wimp_ReportError,&r,&r);
-
-      return r.r[1];
-    }
-  }
-
-  return 0;
 }
 
 /**************************************************************/
@@ -434,33 +190,6 @@ int report_toolbox_error(int eventcode,ToolboxEvent *event,IdBlock *idb,void *ha
 }
 
 /**************************************************************/
-/* make_no_memory_error()                                     */
-/*                                                            */
-/* A general error generation routine for failed memory       */
-/* claims. Stores the error in the global error block 'erb'.  */
-/*                                                            */
-/* Parameters: A numerical value to include in the message to */
-/*             help the programmer know where the error came  */
-/*             from.                                          */
-/**************************************************************/
-
-_kernel_oserror * make_no_memory_error(int stage)
-{
-  char num[20];
-
-  sprintf(num, "%d", stage);
-
-  erb.errnum =  0;
-
-  StrNCpy0(erb.errmess,
-           lookup_token("NoMemGen:There is not enough free memory to continue this operation (%0).",
-                        0,
-                        num));
-
-  return &erb;
-}
-
-/**************************************************************/
 /* register_null_claimant()                                   */
 /*                                                            */
 /* Call if you want to claim null polls.                      */
@@ -475,12 +204,12 @@ void register_null_claimant(int eventcode, WimpEventHandler * handler, void * ha
   ChkError(event_register_wimp_handler(-1,eventcode,handler,handle));
 
   #ifdef TRACE
-    if (tl & (1u<<2))
+
     {
       int   shut_up_compiler = (int)   handler;
       int * function_name    = (int *) shut_up_compiler;
 
-      dprintf(("", "register_null_claimant:   Registered a claimant for handle %p\n", handle));
+      dprintf(("Null", "register_null_claimant:   Registered a claimant for handle %p\n", handle));
 
       /* If the word before the function address has ff in the high */
       /* byte, the function name starts as many bytes before the    */
@@ -490,13 +219,14 @@ void register_null_claimant(int eventcode, WimpEventHandler * handler, void * ha
 
       if (((*function_name) & 0xff000000) == 0xff000000)
       {
-        dprintf(("", "                          Handler is '\0213%s\0217'\n", (char *) (((char *) function_name) - ((*function_name) & 0x00ffffff))));
+        dprintf(("Null", "                          Handler is '\0213%s\0217'\n", (char *) (((char *) function_name) - ((*function_name) & 0x00ffffff))));
       }
       else
       {
-        dprintf(("", "                          Cannot find handler's name; address is \02130x%08x\0217\n", (int) handler));
+        dprintf(("Null", "                          Cannot find handler's name; address is \02130x%08x\0217\n", (int) handler));
       }
     }
+
   #endif
 
   if (null_counter == 1)
@@ -507,9 +237,7 @@ void register_null_claimant(int eventcode, WimpEventHandler * handler, void * ha
     mask = (mask & (~Wimp_Poll_NullMask));
     ChkError(event_set_mask(mask));
 
-    #ifdef TRACE
-      if (tl & (1u<<2)) dprintf(("", "register_null_claimant:   \0211Nulls claimed\0217\n"));
-    #endif
+    dprintf(("Null", "register_null_claimant:   \0211Nulls claimed\0217\n"));
   }
 }
 
@@ -528,12 +256,12 @@ void deregister_null_claimant(int eventcode, WimpEventHandler * handler, void * 
   ChkError(event_deregister_wimp_handler(-1,eventcode,handler,handle));
 
   #ifdef TRACE
-    if (tl & (1u<<2))
+
     {
       int   shut_up_compiler = (int)   handler;
       int * function_name    = (int *) shut_up_compiler;
 
-      dprintf(("", "deregister_null_claimant: Deregistered a claimant for handle %p\n", handle));
+      dprintf(("Null", "deregister_null_claimant: Deregistered a claimant for handle %p\n", handle));
 
       /* If the word before the function address has ff in the high */
       /* byte, the function name starts as many bytes before the    */
@@ -543,13 +271,14 @@ void deregister_null_claimant(int eventcode, WimpEventHandler * handler, void * 
 
       if (((*function_name) & 0xff000000) == 0xff000000)
       {
-        dprintf(("", "                          Handler is '\0216%s\0217'\n", (char *) (((char *) function_name) - ((*function_name) & 0x00ffffff))));
+        dprintf(("Null", "                          Handler is '\0216%s\0217'\n", (char *) (((char *) function_name) - ((*function_name) & 0x00ffffff))));
       }
       else
       {
-        dprintf(("", "                          Cannot find handler's name; address is \2160x%08x\0217\n", (int) handler));
+        dprintf(("Null", "                          Cannot find handler's name; address is \2160x%08x\0217\n", (int) handler));
       }
     }
+
   #endif
 
   if (null_counter < 0) null_counter = 0;
@@ -562,9 +291,7 @@ void deregister_null_claimant(int eventcode, WimpEventHandler * handler, void * 
     mask = (mask | Wimp_Poll_NullMask);
     ChkError(event_set_mask(mask));
 
-    #ifdef TRACE
-      if (tl & (1u<<2)) dprintf(("", "deregister_null_claimant: \0212Nulls released\0217\n"));
-    #endif
+    dprintf(("Null", "deregister_null_claimant: \0212Nulls released\0217\n"));
   }
 }
 
@@ -789,12 +516,12 @@ void convert_pair_to_points(int x, int y, int * mpx, int * mpy)
 
     if (abs(x) > overflow_limit_x || abs(y) > overflow_limit_y)
     {
-      erb.errnum = Utils_Error_Custom_Normal;
+      erb.errnum = Errors_Custom_Normal;
       sprintf(erb.errmess,
               "convert_pair_to_points: Can't convert (%d, %d) to millipoints without overflow.",
               x,y);
 
-      show_error_ret(&erb);
+      errors_ret(&erb);
 
       *mpx = *mpy = 0;
 
@@ -860,12 +587,12 @@ void convert_to_points(int x, int * mpx)
 
     if (abs(x) > overflow_limit_x)
     {
-      erb.errnum = Utils_Error_Custom_Normal;
+      erb.errnum = Errors_Custom_Normal;
       sprintf(erb.errmess,
               "convert_to_points: Can't convert '%d' to millipoints without overflow.",
               x);
 
-      show_error_ret(&erb);
+      errors_ret(&erb);
 
       *mpx = 0;
 
@@ -934,7 +661,7 @@ void convert_box_to_points(const BBox * os, BBox * mp)
          abs(os->ymax) > overflow_limit_y
        )
     {
-      erb.errnum = Utils_Error_Custom_Normal;
+      erb.errnum = Errors_Custom_Normal;
       sprintf(erb.errmess,
               "convert_box_to_points: Can't convert (%d, %d, %d, %d) to millipoints without overflow.",
               os->xmin,
@@ -942,7 +669,7 @@ void convert_box_to_points(const BBox * os, BBox * mp)
               os->xmax,
               os->ymax);
 
-      show_error_ret(&erb);
+      errors_ret(&erb);
 
       mp->xmin = mp->ymin = 0;
       mp->xmax = mp->ymax = 0;
@@ -1521,13 +1248,13 @@ int utils_check_scrap(void)
 
   if (!len)
   {
-    erb.errnum = Utils_Error_Custom_Message;
+    erb.errnum = Errors_Custom_Message;
     sprintf(erb.errmess,
             "%s%s",
             Save_ScrapFile,
-            lookup_token("NoScrapDef: not defined.",0,0));
+            lookup_token("NoScrapDef: not defined.",0));
 
-    show_error_ret(&erb);
+    errors_ret(&erb);
 
     return 1;
   }
@@ -1573,7 +1300,7 @@ _kernel_oserror * utils_canonicalise_path(const char * in, char ** out)
 
   *out = malloc(1 - required); /* (Yes, '1 - required' - see above!) */
 
-  if (!*out) return make_no_memory_error(30);
+  if (!*out) return errors_frontend_error(fee_out_of_memory, 1, "utils_canonicalise_path");
 
   RetError(_swix(OS_FSControl,
                  _INR(0, 5) | _OUT(5),
@@ -1623,7 +1350,7 @@ _kernel_oserror * utils_build_tree(const char * path)
   len = strlen(path);
 
   temp = malloc(len + 1);
-  if (!temp) return make_no_memory_error(31);
+  if (!temp) return errors_frontend_error(fee_out_of_memory, 1, "utils_build_tree");
 
 retry:
 

@@ -181,53 +181,98 @@ FILES = \
 # RAM application "DDT2"
 
 OBJSDDT2 = \
+ opp.BEManager		\
+ opp.BEMenu		\
+ opp.DBEDemo		\
+ opp.Errors		\
  opp.FromROSLib		\
  opp.Global		\
  opp.Handlers		\
  opp.Main		\
+ opp.MainMenu		\
+ opp.Menus		\
+ opp.NewProject		\
+ opp.Projects		\
  opp.RMA		\
  opp.Utils		\
+ opp.Windows		\
  o.ROSLib
 
 OBJSDDT2D = \
+ oppd.BEManager		\
+ oppd.BEMenu		\
+ oppd.DBEDemo		\
+ oppd.Errors		\
  oppd.FromROSLib	\
  oppd.Global		\
  oppd.Handlers		\
  oppd.Main		\
+ oppd.MainMenu		\
+ oppd.Menus		\
+ oppd.NewProject	\
+ oppd.Projects		\
  oppd.RMA		\
  oppd.Utils		\
+ oppd.Windows		\
  o.ROSLib
 
 # RAM module "DDT2"
 
 OBJSDDT2RZ = \
+ opprz.BEManager	\
+ opprz.BEMenu		\
+ opprz.DBEDemo		\
+ opprz.Errors		\
  opprz.FromROSLib	\
  opprz.Global		\
  opprz.Handlers		\
  opprz.Main		\
+ opprz.MainMenu		\
+ opprz.Menus		\
+ opprz.NewProject	\
+ opprz.Projects		\
  opprz.RMA		\
  opprz.Utils		\
+ opprz.Windows		\
  o.ROSLib
 
 OBJSDDT2RDZ = \
+ opprdz.BEManager	\
+ opprdz.BEMenu		\
+ opprdz.DBEDemo		\
+ opprdz.Errors		\
  opprdz.FromROSLib	\
  opprdz.Global		\
  opprdz.Handlers	\
  opprdz.Main		\
+ opprdz.MainMenu	\
+ opprdz.Menus		\
+ opprdz.NewProject	\
+ opprdz.Projects	\
  opprdz.RMA		\
  opprdz.Utils		\
+ opprdz.Windows		\
  o.ROSLib
 
 # ROM module "DDT2"; same as RAM module but has "-DROM"
 # on CC command line
 
 OBJSDDT2Z = \
+ oppz.BEManager		\
+ oppz.BEMenu		\
+ oppz.DBEDemo		\
+ oppz.Errors		\
  oppz.FromROSLib	\
  oppz.Global		\
  oppz.Handlers		\
  oppz.Main		\
+ oppz.MainMenu		\
+ oppz.Menus		\
+ oppz.NewProject	\
+ oppz.Projects		\
  oppz.RMA		\
  oppz.Utils		\
+ oppz.Windows		\
  o.ROSLib
 
 
@@ -304,6 +349,7 @@ install: install_common
 	${CP} ${LDIR}.!Run			${INSTDIR}.!Run			${CPFLAGS}~n
 	@echo
 	@echo ${COMPONENT}: Application installed to ${INSTDIR}
+	@echo
 
 installd: install_common
 	${CP} ${TARGET}				${INSTDIR}.!RunImage		${CPFLAGS}~n
@@ -311,6 +357,7 @@ installd: install_common
 	${CP} ${LDIR}.!RunD			${INSTDIR}.!Run			${CPFLAGS}~n
 	@echo
 	@echo ${COMPONENT}: Debug application installed to ${INSTDIR}
+	@echo
 
 install_ram: install_common
 	${CP} ${TARGET}				${INSTDIR}.${APP}		${CPFLAGS}~n
@@ -318,6 +365,7 @@ install_ram: install_common
 	${CP} ${LDIR}.RAM.!Run			${INSTDIR}.!Run			${CPFLAGS}~n
 	@echo
 	@echo ${COMPONENT}: RAM module installed to ${INSTDIR}
+	@echo
 
 install_ramd: install_common
 	${CP} ${TARGET}				${INSTDIR}.${APP}		${CPFLAGS}~n
@@ -325,11 +373,13 @@ install_ramd: install_common
 	${CP} ${LDIR}.RAM.!RunD			${INSTDIR}.!Run			${CPFLAGS}~n
 	@echo
 	@echo ${COMPONENT}: RAM debug module installed to ${INSTDIR}
+	@echo
 
 install_rom: ${ROM_MODULE}
 	${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
 	@echo
 	@echo ${COMPONENT}: ROM Module installed to ${INSTDIR}
+	@echo
 
 resources:
 	${MKDIR} ${RESDIR}
@@ -350,6 +400,7 @@ resources:
 	${XWIPE} ${RESDIR}.About.CVS	${WFLAGS}
 	@echo
 	@echo ${COMPONENT}: Resource files copied to Messages module
+	@echo
 
 clean:
 	${XWIPE}	rm		${WFLAGS}
@@ -368,13 +419,14 @@ clean:
 	${RM}	${DIRS}
 	@echo
 	@echo ${COMPONENT}: Cleaned
+	@echo
 
 clean_all: clean
-	@echo
 	${XWIPE}	syms		${WFLAGS}
 	${XWIPE}	Targets		${WFLAGS}
 	@echo
 	@echo ${COMPONENT}: Cleaned all
+	@echo
 
 ${DIRS}:
 	@${MKDIR} abs
@@ -394,6 +446,7 @@ ${DIRS}:
 	@${MKDIR} Targets.DDT2RM.!DDT2
 	@${MKDIR} Targets.DDT2Ap
 	@${MKDIR} Targets.DDT2Ap.!DDT2
+	@echo
 	create ${DIRS}
 	stamp  ${DIRS}
 
