@@ -18,14 +18,6 @@ EXP_HDR = <Cexport$dir>
 # Generic options:
 #
 include Makefiles:StdTools
-MKDIR   = cdir
-AS      = objasm
-CC      = cc
-CMHG    = cmhg
-CP      = copy
-LD      = link
-RM      = remove
-WIPE    = -wipe
 
 AFLAGS = -depend !Depend -Stamp -quit
 CFLAGS  = -W -c -depend !Depend -zM -zps1 -throwback -pcc -fahn ${INCLUDES} ${DFLAGS} -DCOMPAT_INET4
@@ -117,7 +109,7 @@ ${TARGET}: ${OBJS} ${ROMCSTUBS} ${LIBS}
 # Final link for the ROM Image (using given base address)
 #
 rom_link:
-        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${C_ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
