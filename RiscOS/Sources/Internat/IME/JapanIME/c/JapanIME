@@ -46,18 +46,28 @@
 /* 07-Oct-98  RSP          - Keyboard lock state b5 only tested on Japanese keyboards  */
 /*            RSP          - Fixed problems with title in code input mode              */
 /* 08-Oct-98  RSP          - Convert <tab> key code to Ctrl-key range (&09)            */
+/* 08-Oct-98  RSP          Version 0.02 - Sent to Acorn                                */
 /*            KJB          - Input may be in current alphabet, not necessarily UTF-8   */
 /*            KJB          - Icelandic on/off key is dagger                            */
 /*            KJB          - Stopped VACS code doing block cursor                      */
 /*            KJB          - Keys changed: Page Down=F_CNV_NBLK, Ctrl-Left=F_LLIM,     */
-/*                         All Candidates=F_CNV_NBLK where appropriate,                */
-/*                         Kanji Number=F_CODE. Also adjusted tilde and space.         */
+/*                           All Candidates=F_CNV_NBLK where appropriate,              */
+/*                           Kanji Number=F_CODE. Also adjusted tilde and space.       */
 /*                         - Use F_CHRK code for funny chars. Ignore them in RCNV and  */
-/*                         CODE states. Removed DOPOUND define.                        */
+/*                           CODE states. Removed DOPOUND define.                      */
 /*                         - Fixed code that sets JapanIME$Path.                       */
 /*                         - Initialise wDispListBox to 3, and code type to KUTEN      */
-/* 16-Oct-98  KJB          - Removed tilde/overline unification. Made All Candidates   */
-/*                         work in input mode.                                         */
+/* 09-Oct-98  RSP          - Tidied cases of setting Romanji lock into single function */
+/* 09-Oct-98  RSP          - For safety, stop using grave as IME on/off on Russian k/b */
+/* 12-Oct-98  RSP          - Include PRC_INPUT in All Candidates (F_CNV_NBLK) list     */
+/* 13-Oct-98  RSP          - Test explicitly for 0x2020 in Iceland to allow char table */
+/* 13-Oct-98  RSP          - Proper error numbers used                                 */
+/* 13-Oct-98  RSP          - Save learning buffer on Standby and timer                 */
+/* 14-Oct-98  RSP          - Added Home/End for F_LLIM/F_RLIM                          */
+/* 14-Oct-98  RSP          - Added UpCall handler to trap keyboard lock changes and    */
+/*                           removed code for polling the keyboard state               */
+/* 15-Oct-98  RSP          - Optimised SWI distribution code                           */
+/* 16-Oct-98  KJB          - Removed tilde/overline unification.                       */
 /***************************************************************************************/
 
 
@@ -75,47 +85,60 @@
 #include "charsets.h"
 #include "utf8.h"
 #include "CModuleHdr.h"
-#include "JapanIME.h"
+#include "IntIME.h"
 
 /* ---------------------------------- PRE-PROCESSOR DIRECTIVES ---------------------------------- */
 
 /* SWI numbers - not in h.swis */
-#define         NVRAM_Read      (0x4EE00)
-#define         NVRAM_Write     (0x4EE01)
+#define         NVRAM_Read       (0x4EE00)
+#define         NVRAM_Write      (0x4EE01)
+
+/* Service and UpCall numbers */
+#define         Service_International 0x43
+#define         Service_ShutDown      0x7E
+#define         Service_Standby       0xAD
+#define         UpCallV               0x1D
+#define         UpCall_KeyboardStatus 20
+
+/* bit in keyboard OSByte 202 representing inverse state of Kana Lock */
+#define         ROMANLOCK              0x20
 
 /* Sizes required for VJE areas - See VACS documentation */
-#define         DSP_LEN         (80)
-#define         MODE_LEN        (80)
-#define         MB_LEN          (80)
-#define         LB_LEN          (64 * 9)
-#define         GAKU_SIZE       ((6 * 1024) - 3)
+#define         DSP_LEN          (80)
+#define         MODE_LEN         (80)
+#define         MB_LEN           (80)
+#define         LB_LEN           (64 * 9)
+#define         GAKU_SIZE        ((6 * 1024) - 3)
 
 #if !defined FALSE
-#define         FALSE           0
+#define         FALSE            0
 #endif
 #if !defined TRUE
-#define         TRUE            1
+#define         TRUE             1
 #endif
 #define         PUCHAR unsigned char *
 
 /* keyboard/country numbers */
 #define         UK               1
-#define         JAPAN           32
-#define         USA             48
-#define         DvorakUK        70
-#define         DvorakUSA       71
-#define         ISO4            83
+#define         ICELAND          16
+#define         JAPAN            32
+#define         USA              48
+#define         DvorakUK         70
+#define         DvorakUSA        71
+#define         ISO4             83
 
 /* alphabet numbers */
-#define         UTF8            111
+#define         UTF8             111
 
-/* Error numbers - base TBS!!! */
-#define         ERR_Base         0x770000
+/* Error numbers */
+#define         ERR_Base         0x813210
 #define         ERR_NoDict       0
 #define         ERR_BadConfig    1
 #define         ERR_NoCandidates 2
 #define         ERR_BadCandidate 3
 #define         ERR_CorruptDict  4
+#define         ERR_Max          239
+/* the max allows for numbers for other (non-shared) IME messages */
 
 /* Returned error tags with default messages */
 #define         ERR_NoDictMsg        "NoDict:Unable to open IME dictionary"
@@ -135,7 +158,10 @@
 /* normally be held in Resources: - so the dynamic area will only be used in testing              */
 #define         JapanIME_DynamicArea "JapanIME dictionary"
 
-#define BOTHFLAGS (EISUU_BIT | SCREEN_MODE)
+/* delay between saves of the learning buffer */
+#define         MINSDELAY 30
+
+#define         BOTHFLAGS (EISUU_BIT | SCREEN_MODE)
 
 /* -------------------------------------- GLOBAL VARIABLES -------------------------------------- */
 
@@ -167,7 +193,7 @@ static char     JapanIME_UTF8candidate[(LB_LEN / 9) * 6 + 1];
 
 static BDATA    JapanIME_Bdata;
 
-static UCHAR    JapanIME_SramData[GAKU_SIZE + 2];
+static UCHAR    JapanIME_SramData[GAKU_SIZE + 3];
 
 static char     JapanIME_UTF8input[8];
 static int      JapanIME_UTF8index;
@@ -178,10 +204,12 @@ static int      JapanIME_DynAreaNumber;
 static unsigned JapanIME_KeyboardNumber;
 static unsigned JapanIME_AlphabetNumber;
 static int      JapanIME_KanaLockSave;
-static int      JapanIME_KanaLockReset;
-static int      JapanIME_KanaService;
 static int      JapanIME_LastResult;
-static int      JapanIME_NVRAMsize;
+static int      JapanIME_NVRAMsize;      /* amount of NVRAM storage allocated to IME */
+static int      JapanIME_NVRAMsum;
+static int      JapanIME_NVRAMsavetime;  /* set by interval timer when a NVRAM backup is due */
+static int      JapanIME_ModeSave;       /* set by upcall handler to new state of Kana Lock  */
+static int      JapanIME_UpCalled;
 static Encoding *JapanIME_Enc;
 
 static char JapanIME_KanaLookup[192] = {
@@ -247,13 +275,13 @@ static char JapanIME_CtrlLookup[] = {
   F_CANCEL,       // Cntl-[ / Esc       # after input
   F_CTRL,         // (0x1c)
   F_CTRL,         // (0x1d)
-  F_CTRL,         // Home
+  F_LLIM,         // Home
   F_CTRL,         // (0x1f)
 };
 
 /* a look-up table giving the Alt-key code for the top right IME on/off key for each keyboard.    */
 /* 0 means either the keyboard is not supported or Alt key does not produce a key code            */
-static unsigned short JapanIME_KbdLookup[] = {
+static unsigned char JapanIME_KbdLookup[] = {
   0x0,   // Default
   0xa6,  // UK
   0x0,
@@ -270,7 +298,7 @@ static unsigned short JapanIME_KbdLookup[] = {
   0x0,
   0xac,  // Denmark
   0xa6,  // Norway
-  0x2020,// Iceland
+  0x0,   // Iceland test explicitly for 0x2020 below to allow char table
   0xa6,  // Canada 1
   0xa6,  // Canada 2
   0xa6,  // Canada
@@ -278,7 +306,7 @@ static unsigned short JapanIME_KbdLookup[] = {
   0x0,
   0x0,
   0x0,
-  0x60,  // Russia
+  0x0,   // Russia
   0x0,
   0xac,  // Israel
   0xa6,  // Mexico
@@ -346,6 +374,32 @@ static _kernel_oserror *JapanIME__Fault(int errnum, char *tag)
                _INR(0,2) | _INR(4,7), &err_buffer,
                JapanIME_MsgFile[0] ? JapanIME_MsgFile + 1 : 0,
                0, Module_Title /* %0 if needed */, 0, 0, 0);
+}
+
+/* --------------------------------------------------------------------------- JapanIME__CheckSum */
+static int JapanIME__CheckSum()
+{
+  /* return checksum for the learning buffer - so not saved unnecessarily */
+  int CRC;
+
+  _swix(OS_CRC, _INR(0, 3) | _OUT(0),
+            0, JapanIME_SramData, JapanIME_SramData + GAKU_SIZE + 3, 4, &CRC);
+  return CRC;
+}
+
+/* ------------------------------------------------------------------------ JapanIME__SaveToNVRAM */
+static _kernel_oserror *JapanIME__SaveToNVRAM(int closing)
+{
+  /* Backup the learning buffer to NVRAM (unless checksum has not changed since last load/save).  */
+  /* closing - if non-zero, force a save, regardless of checksum                                  */
+  int oldChecksum = JapanIME_NVRAMsum;
+
+  JapanIME_NVRAMsavetime = 0;
+  if (!closing && (JapanIME_NVRAMsum = JapanIME__CheckSum()) == oldChecksum)
+   return NULL;
+
+  return _swix(NVRAM_Write, _INR(0,2), JapanIME_MemTag, JapanIME_Bdata.lpchSramAddress,
+                                JapanIME_Bdata.wSramMaxSize);
 }
 
 /* ------------------------------------------------------------------------- JapanIME__ProcessUCS */
@@ -427,16 +481,58 @@ static int JapanIME__PutVkey(int key)
   return BasicEdit(&JapanIME_Bdata);
 }
 
+/* ------------------------------------------------------------------- JapanIME__CheckRomanjiLock */
+static void JapanIME__CheckRomanjiLock()
+{
+  /* If ModeSave is set, indicating a change to the Non-Roman bit, set wVjeModeFlag accordingly   */
+  int lockState = JapanIME_ModeSave;
+
+  JapanIME_ModeSave = -1;
+  if (lockState >= 0)
+  {
+    if (lockState)
+      JapanIME_Bdata.wVjeModeFlag &= ~NONROMAN_BIT;         /* clear to match */
+    else
+      JapanIME_Bdata.wVjeModeFlag |= NONROMAN_BIT;          /* set to match */
+  }
+}
+
+#if 0
+/* --------------------------------------------------------------------- JapanIME__SetRomanjiLock */
+static int JapanIME__SetRomanjiLock(int modeFlags, int lockState)
+{
+  /* input: modeFlags is new state of VjeModeFlag                */
+  /*        lockState is new lock state to be applied            */
+  /* returns update flags which may be set as a result of        */
+  /*        SET_MODE - to be Or-ed into with main update changes */
+
+  JapanIME_ModeSave = -1;
+  if (lockState >= 0)
+  {
+    if (lockState)
+      modeFlags &= ~NONROMAN_BIT;         /* clear to match */
+    else
+      modeFlags |= NONROMAN_BIT;          /* set to match */
+  }
+  if (modeFlags != JapanIME_Bdata.wVjeModeFlag)
+  {
+    /* Notify VJE of state changes - and see if any fields (e.g. input indicator) need updating   */
+    JapanIME_Bdata.wVjeModeFlag = modeFlags;
+    JapanIME__PutVkey(F_SET_MODE);
+    return JapanIME_Bdata.wDataUpdate;
+  }
+  return 0;
+}
+
 /* ----------------------------------------------------------------------- JapanIME__SyncKanaLock */
 static int JapanIME__SyncKanaLock()
 {
-  /* called to ensure that the Romanji lock is consistent with the Keyboard's kana lock */
-  int changes = 0;
+  /* called to ensure that the Romanji lock is consistent with the Keyboard's kana lock           */
+  /* returns update flags set as a result of SET_MODE - to be Or-ed into with main update changes */
 
-  if (JapanIME_KeyboardNumber == JAPAN &&
-                        (!JapanIME_KanaService || (JapanIME_Bdata.wVjeModeFlag & EISUU_BIT) != 0))
+  if (JapanIME_KeyboardNumber == JAPAN)
   {
-    int lockState = _kernel_osbyte(202, 0, 0xff) & 0x20;
+    int lockState = _kernel_osbyte(202, 0, 0xff) & ROMANLOCK;
     int modeFlags = JapanIME_Bdata.wVjeModeFlag;
 
     if (lockState == 0 && (modeFlags & BOTHFLAGS) == BOTHFLAGS)
@@ -445,74 +541,46 @@ static int JapanIME__SyncKanaLock()
       /* already arrived, so the only course of action that makes any sense is turn Eisuu off     */
       modeFlags &= ~EISUU_BIT;                                          /* set to kana input mode */
     }
-    if (lockState)
-      modeFlags &= ~NONROMAN_BIT;         /* clear to match */
-    else
-      modeFlags |= NONROMAN_BIT;          /* set to match */
-
-    if (modeFlags != JapanIME_Bdata.wVjeModeFlag)
-    {
-      /* Notify VJE of state changes - and see if any fields (e.g. input indicator) need updating */
-      JapanIME_Bdata.wVjeModeFlag = modeFlags;
-      JapanIME__PutVkey(F_SET_MODE);
-      changes = JapanIME_Bdata.wDataUpdate;
-    }
+    return JapanIME__SetRomanjiLock(modeFlags, lockState);
   }
-  return changes;
-}
-
-/* -------------------------------------------------------------------- JapanIME__CheckLockChange */
-static int JapanIME__CheckLockChange(int newState)
-{
-  /* called when a change of state in the kana lock is detected   */
-  /* It should get called as a result of a Service call - but in  */
-  /* case that does not happen it is called immediately after     */
-  /* changing the kana lock state                                 */
-  /* input: newState zero means lock is being turned on, else &20 */
-  /* output: non-zero if the change cannot be allowed             */
-  /* should only be called if keyboard supports the kana lock     */
-
-  JapanIME_KanaLockReset = TRUE;                        /* set so we know service call is working */
-
-  /* if eisuu state established, rather than just switching to it (when KanaLockSave < 0)         */
-  /* just reset our internal flag showing what the state should be when we leave eisuu state      */
-  if ((JapanIME_Bdata.wVjeModeFlag & BOTHFLAGS) == BOTHFLAGS && JapanIME_KanaLockSave >= 0)
-  {
-    JapanIME_KanaLockSave ^= 0x20;                       /* Flip our saved state of the kana lock */
-    return 1;
-  }
-  /* else get IME to reflect the kana lock state */
-  JapanIME_Bdata.wVjeModeFlag = (JapanIME_Bdata.wVjeModeFlag & ~NONROMAN_BIT);
-  if (newState == 0)
-    JapanIME_Bdata.wVjeModeFlag |= NONROMAN_BIT;
-  JapanIME__PutVkey(F_SET_MODE);
   return 0;
 }
+#endif
 
 /* ------------------------------------------------------------------------ JapanIME__SetKanaLock */
 static int JapanIME__SetKanaLock(int state)
 {
-  /* state = 0x20 to turn the Kana lock off, 0 to turn on */
-  /* return 0x20 if Latin entry; 0 if Kana lock is set    */
-  /* should only be called if keyboard supports kana lock */
-  /* Cheat a little - don't bother to check for fail ...  */
-  /* ... code below will return 0x20 in such cases        */
+  /* Can be called:- When, eg, Ctrl-F3 entered from the keyboard     */
+  /*                 The bit is changed by Configure                 */
+  /*                 Both Eisuu and IME set with lock set            */
+  /*                 Eisuu or IME is exited with a saved lock        */
+  /* state = ROMANLOCK to turn the Kana lock off, 0 to turn on       */
+  /* return ROMANLOCK if Latin entry; 0 if Kana lock is set on entry */
+  /* should only be called if keyboard supports kana lock            */
+  /* Cheat a little - don't bother to check for fail ...             */
+  /* ... code below will return ROMANLOCK in such cases              */
   int oldState;
-  int newState;
 
-  JapanIME_KanaLockReset = FALSE;                     /* will get reset if a service call is made */
-  oldState = _kernel_osbyte(202, state, 0xdf);        /* OS_Byte 202 - read/write keyboard status */
-  newState = (oldState & 0xdf) ^ state;
-  if (oldState != newState && !JapanIME_KanaLockReset)        /* changed but no service call made */
+  JapanIME_UpCalled = 0;
+  oldState = _kernel_osbyte(202, state, 0xff ^ ROMANLOCK) & ROMANLOCK;   /* write keyboard status */
+
+  if (oldState != state && JapanIME_UpCalled == 0)   /* state change requested but no upcall made */
   {
-    if (JapanIME__CheckLockChange(newState & 0x20))                          /* if it objects ... */
-      _kernel_osbyte(202, oldState & 0x20, 0xdf);                  /* restore to original setting */
+    /* if eisuu state established, rather than just switching to it (when KanaLockSave < 0)       */
+    /* just reset our internal flag showing what the state should be when we leave eisuu state    */
+    if ((JapanIME_Bdata.wVjeModeFlag & BOTHFLAGS) == BOTHFLAGS && JapanIME_KanaLockSave >= 0)
+    {
+      JapanIME_KanaLockSave ^= ROMANLOCK;                /* Flip our saved state of the kana lock */
+      _kernel_osbyte(202, oldState, 0xff ^ ROMANLOCK);             /* restore to original setting */
+    }
+    else
+      JapanIME_ModeSave = state;
   }
-  return oldState & 0x20;
+  return oldState;
 }
 
-/* --------------------------------------------------------------------------- JapanIME__IMEState */
-static void JapanIME__CheckIMEState(int oldState)
+/* ---------------------------------------------------------------------- JapanIME__CheckIMEState */
+static int JapanIME__CheckIMEState(int oldState)
 {
   /* called every time there is a potential state change, passing the old state */
 
@@ -528,7 +596,7 @@ static void JapanIME__CheckIMEState(int oldState)
       {
         /* EISUU and VJE are now both on, (while at least one was off before)                     */
         JapanIME_KanaLockSave = -1;                               /* force the kana lock off      */
-        JapanIME_KanaLockSave = JapanIME__SetKanaLock(0x20);      /* turn off and save lock state */
+        JapanIME_KanaLockSave = JapanIME__SetKanaLock(ROMANLOCK); /* turn off and save lock state */
       }
       else if (((oldState & SCREEN_MODE) != 0 && (newState & BOTHFLAGS) == EISUU_BIT) ||
                ((oldState & EISUU_BIT) != 0 && (newState & BOTHFLAGS) == SCREEN_MODE))
@@ -538,6 +606,14 @@ static void JapanIME__CheckIMEState(int oldState)
       }
     }
   }
+  JapanIME__CheckRomanjiLock();
+  if (oldState != JapanIME_Bdata.wVjeModeFlag)
+  {
+    /* Notify VJE of state changes - and see if any fields (e.g. input indicator) need updating   */
+    JapanIME__PutVkey(F_SET_MODE);
+    return JapanIME_Bdata.wDataUpdate;
+  }
+  return 0;
 }
 
 /* --------------------------------------------------------------------------- JapanIME__CheckCNV */
@@ -633,7 +709,7 @@ static _kernel_oserror *JapanIME__OpenDict(char *dictName)
 }
 
 /* --------------------------------------------------------------------- JapanIME__DoProcessInput */
-static _kernel_oserror *JapanIME__DoProcessInput(_kernel_swi_regs *r, int cancel)
+static _kernel_oserror *JapanIME__DoProcessInput(int cancel, _kernel_swi_regs *r)
 {
   /* Main key conversion routine. Entered from ProcessInput, and Cancel (when cancel is set).     */
   /* The registers parameter (r) contains the input and output parameters from the conversion.    */
@@ -650,7 +726,10 @@ static _kernel_oserror *JapanIME__DoProcessInput(_kernel_swi_regs *r, int cancel
 
   memset(r, 0, 20);                                          /* initialise to 'not handled' state */
 
-  changes = JapanIME__SyncKanaLock();          /* check keyboard's Kana lock matches NONROMAN_BIT */
+  changes = JapanIME__CheckIMEState(JapanIME_Bdata.wVjeModeFlag);
+#if 0
+  changes |= JapanIME__SyncKanaLock();         /* check keyboard's Kana lock matches NONROMAN_BIT */
+#endif
 
   if (cancel)
   {
@@ -664,54 +743,51 @@ static _kernel_oserror *JapanIME__DoProcessInput(_kernel_swi_regs *r, int cancel
       JapanIME_AlphabetNumber = _kernel_osbyte(71, 127, 0) & 0xFF;
       if (JapanIME_AlphabetNumber == UTF8)
       {
-        /* inCode may be just part of a character. We need to buffer up until a complete character  */
-        /* has been assembled, and convert it to a UCS value. While an incomplete UTF-8 buffer      */
-        /* exists return an 'key claimed' result to the caller                                      */
+        /* inCode may be just part of a character. We need to buffer up until a complete          */
+        /* character has been assembled, and convert it to a UCS value. While an incomplete UTF-8 */
+        /* buffer exists return an 'key claimed' result to the caller                             */
 
         if (rawKey < 0x80)
         {
           /* trivial convert to UCS :-) */
         }
-        else if (rawKey >= 0x100)               /* not a UTF8 code, so must be a Function key, etc. */
+        else if (rawKey >= 0x100)             /* not a UTF8 code, so must be a Function key, etc. */
         {
           rawKey = 0x80000000 + rawKey - 0x100;
         }
-        else if (JapanIME_UTF8index == 0 && (rawKey & 0xC0) == 0x80)   /* leading continuation byte */
+        else if (JapanIME_UTF8index == 0 && (rawKey & 0xC0) == 0x80) /* leading continuation byte */
           return NULL;
         else
         {
-          if (JapanIME_UTF8index > 0 && (rawKey & 0xC0) != 0x80)        /* start byte in the middle */
+          if (JapanIME_UTF8index > 0 && (rawKey & 0xC0) != 0x80)      /* start byte in the middle */
             JapanIME_UTF8index = 0;
 
           if (JapanIME_UTF8index > 6)
-            return NULL;              /* UTF8_to_UCS4 is misbehaving? do this until next start code */
+            return NULL;            /* UTF8_to_UCS4 is misbehaving? do this until next start code */
 
           JapanIME_UTF8input[JapanIME_UTF8index++] = rawKey;
           JapanIME_UTF8input[JapanIME_UTF8index] = 0;
 
-          if (UTF8_to_UCS4(JapanIME_UTF8input, &rawKey) == 1)         /* returns 1 if not ready yet */
+          if (UTF8_to_UCS4(JapanIME_UTF8input, &rawKey) == 1)       /* returns 1 if not ready yet */
           {
             r->r[0] = IME_KeyClaimed;
-            return NULL;                               /* claimed, but we are not processing it yet */
+            return NULL;                             /* claimed, but we are not processing it yet */
           }
         }
-        JapanIME_UTF8index = 0;                             /* clear ready for next input character */
       }
       else
       {
-        JapanIME_UTF8index = 0;                   /* alphabet isn't UTF-8. */
-
-        if (rawKey >= 0x100)                      /* function keys are function keys */
+        if (rawKey >= 0x100)                                   /* function keys are function keys */
         {
           rawKey = 0x80000000 + rawKey - 0x100;
         }
         else
         {
-          int unclaimed=1;                        /* get a UCS table using Service_International */
+          int unclaimed = 1;                       /* get a UCS table using Service_International */
           const unsigned int *alphabet_table;
-          _swix(OS_ServiceCall, _INR(1,3)|_OUT(1)|_OUT(4), 0x43, 8, JapanIME_AlphabetNumber,
-                                                           &unclaimed, &alphabet_table);
-          if (!unclaimed)
+
+          if (_swix(OS_ServiceCall, _INR(1,3)|_OUT(1)|_OUT(4), 0x43, 8, JapanIME_AlphabetNumber,
+                                     &unclaimed, &alphabet_table) == NULL && !unclaimed)
           {
             rawKey = alphabet_table[rawKey];      /* use the table, otherwise assume direct codes */
           }
@@ -803,6 +879,7 @@ static _kernel_oserror *JapanIME__DoProcessInput(_kernel_swi_regs *r, int cancel
           wVkey = F_LLIM;
           break;
         case 0xAD:        // Ctrl-Right
+        case 0x8B:        // Copy/End key
           wVkey = F_RLIM;
           break;
         case 0x9E:        // PageDown (also Shift-Down!) # after convert
@@ -841,25 +918,25 @@ static _kernel_oserror *JapanIME__DoProcessInput(_kernel_swi_regs *r, int cancel
           wVkey = F_CTRL;
           rawKey = 0x09;
           break;
-        case 0x8E:        // normal Down # after input
-        case 0xc6:        // Henkan (Next convert) # after input
-          wVkey = JapanIME__CheckCNV();
-          if (wVkey == F_CNV)
-            break;        // else return unprocessed
-        case 0xC8:        // All Candidates
-          if (JapanIME_Bdata.wMainStage & (PRC_INPUT | PRC_CNV | PRC_RCNV))
-          {
-            wVkey = F_CNV_NBLK; // brings up candidate list in INPUT, CNV and RCNV states
-            break;
-          }
-          else
-            return NULL;
         case 0xC9:        // Kanji Number
           wVkey = F_CODE;
           break;
         case 0xD9:        // Shift-Kanji Number
           wVkey = F_CODE_CNT;
-          break;
+          break;        case 0x8E:        // normal Down # after input
+        case 0xc6:        // Henkan (Next convert) # after input
+          wVkey = JapanIME__CheckCNV();
+          if (wVkey == F_CNV)
+            break;
+          // else if wMainStage | PRC_EMP, return unprocessed
+        case 0xC8:        // All Candidates
+          if (JapanIME_Bdata.wMainStage & (PRC_INPUT | PRC_CNV | PRC_RCNV))
+          {
+            wVkey = F_CNV_NBLK; // brings up candidate list in CNV and RCNV states
+            break;
+          }
+          // else return (NULL)
+
       /* ---- return the following 'function keys' unhandled
         case 0x80:        // F0/Print
         case 0x81:        // F1
@@ -875,7 +952,6 @@ static _kernel_oserror *JapanIME__DoProcessInput(_kernel_swi_regs *r, int cancel
         case 0xA4:        // Ctrl-F4
         case 0xEA:        // Ctrl-F10
         case 0xEB:        // Ctrl-F11
-        case 0x8B:        // Copy
         case 0x9A:        // Shift-Tab
         case 0x9B:        // Shift-Copy
         ------------------------------------- end of unprocessed f-keys */
@@ -890,6 +966,10 @@ static _kernel_oserror *JapanIME__DoProcessInput(_kernel_swi_regs *r, int cancel
     {
       if (rawKey == 0x7f)                                                /* DEL key # after input */
         wVkey = F_DEL;
+      else if (rawKey == 0x2020 && JapanIME_KeyboardNumber == ICELAND) /* Iceland IME on/off key? */
+        wVkey = F_SCRN;
+      else if (rawKey == 0x203e)    /* overline - tilde/overline are sort of unified in Shift-JIS */
+        rawKey = 0x7e;
       else if (rawKey >= 0x3000 && rawKey < 0x3100)       /* Row 30: Punct, Hiragana and Katakana */
       {
         if (rawKey >= 0x3040)      /* convert Hiragana and Katakana to half-width Shift-JIS codes */
@@ -902,7 +982,7 @@ static _kernel_oserror *JapanIME__DoProcessInput(_kernel_swi_regs *r, int cancel
             rawKey = newKey;            /* Compact VJE can handle it by mapping to a h/w katakana */
         }
         /* deal with punctuation in Row 30 on an ad-hoc basis */
-        else if (rawKey == 0x3000)    /* the Row 30 space - treat as space or CNV virtual key */
+        else if (rawKey == 0x3000)        /* the Row 30 space - treat as space or CNV virtual key */
         {
           if (JapanIME_KeyboardNumber != JAPAN)
             wVkey = F_CNV;
@@ -975,15 +1055,15 @@ static _kernel_oserror *JapanIME__DoProcessInput(_kernel_swi_regs *r, int cancel
   if (wVkey == F_ROM)
   {
     if ((JapanIME_Bdata.wMainStage & PRC_CODE) == 0)
-      JapanIME__SetKanaLock((JapanIME_Bdata.wVjeModeFlag & NONROMAN_BIT) == 0 ? 0 : 0x20);
+      JapanIME__SetKanaLock((JapanIME_Bdata.wVjeModeFlag & NONROMAN_BIT) == 0 ? 0 : ROMANLOCK);
     ret = JapanIME_LastResult = RC_EATEN;
   }
   else
     ret = JapanIME_LastResult = JapanIME__PutVkey(wVkey >= 0 ? wVkey : F_CHRK);
 
-  JapanIME__CheckIMEState(IMEstate);
+  changes |= JapanIME_Bdata.wDataUpdate;       /* add in changes due to kana lock synchronisation */
 
-  JapanIME_Bdata.wDataUpdate |= changes;       /* add in changes due to kana lock synchronisation */
+  JapanIME_Bdata.wDataUpdate = changes | JapanIME__CheckIMEState(IMEstate);
 
   /* 30/09/98 In case VJE returns RC_IGNORED with wDataUpdate set (i.e. it has not been ignored), */
   /* which is certainly the case for F_CTRL, and caused some problems, ignore the RC in this case */
@@ -1074,21 +1154,11 @@ static _kernel_oserror *JapanIME__DoProcessInput(_kernel_swi_regs *r, int cancel
   return NULL;
 }
 
-/* ----------------------------------------------------------------------- JapanIME__ProcessInput */
-_kernel_oserror *JapanIME__ProcessInput(_kernel_swi_regs *r)
-{
-  return JapanIME__DoProcessInput(r, 0);
-}
-
-/* ----------------------------------------------------------------------------- JapanIME__Cancel */
-_kernel_oserror *JapanIME__Cancel(_kernel_swi_regs *r)
-{
-  return JapanIME__DoProcessInput(r, 1);
-}
-
 /* ---------------------------------------------------------------------- JapanIME__GetListEntryN */
 static char *JapanIME__GetListEntryN(int entNum, int *entLen)
 {
+  /* return pointer to text for Candidate list number entNum, and return its length in entLen     */
+  /* If there is no entry corresponding to entNum, return NULL (entLen is then undefined)         */
   char *listEnd;
   char *list;
 
@@ -1104,7 +1174,7 @@ static char *JapanIME__GetListEntryN(int entNum, int *entLen)
 }
 
 /* --------------------------------------------------------------- JapanIME__GetCandidateListInfo */
-_kernel_oserror *JapanIME__GetCandidateListInfo(_kernel_swi_regs *r)
+_kernel_oserror *JapanIME__GetCandidateListInfo(int swiOffset, _kernel_swi_regs *r)
 {
   /* on entry, R0 is a flags word of zero */
   /* returns details of the candidate list as a whole */
@@ -1120,11 +1190,11 @@ _kernel_oserror *JapanIME__GetCandidateListInfo(_kernel_swi_regs *r)
   char *list;
 
   if ((JapanIME_Bdata.wDataStatus & VJE_LBDATA) == 0)
-    return JapanIME__Fault(ERR_NoCandidates, ERR_NoCandidatesMsg);          /* nothing to return */
+    return JapanIME__Fault(ERR_NoCandidates, ERR_NoCandidatesMsg);           /* nothing to return */
 
   list = (char *)JapanIME_Bdata.lpchLBList;           /* zero separated list of Sh-JIS candidates */
-  listEnd = list + JapanIME_Bdata.cchLBListLen;       /* end of list for loop below */
-  r->r[4] = 0;                                        /* running count of candidates this time */
+  listEnd = list + JapanIME_Bdata.cchLBListLen;       /* end of list for loop below               */
+  r->r[4] = 0;                                        /* running count of candidates this time    */
   while (list < listEnd)
   {
     list += strlen(list) + 1;
@@ -1132,7 +1202,7 @@ _kernel_oserror *JapanIME__GetCandidateListInfo(_kernel_swi_regs *r)
   }
   r->r[0] = 0;                                        /* returned flags always zero */
 
-  if (*JapanIME_Bdata.lpchLBTitle)                    /* this version of VJE never returns title */
+  if (*JapanIME_Bdata.lpchLBTitle)                    /* this version of VJE never returns title  */
     JapanIME__CvtToUTF8((char *)JapanIME_Bdata.lpchLBTitle,
                        strlen((char *)JapanIME_Bdata.lpchLBTitle), JapanIME_UTF8candidate);
   else
@@ -1166,7 +1236,7 @@ _kernel_oserror *JapanIME__GetCandidateListInfo(_kernel_swi_regs *r)
           chCode += low - 0x1f;
           if ((JapanIME_Bdata.wHenModFlag & MOD_KUTEN) != 0)
           {
-            chCode = (((chCode >>  8) - 0x20) * 100) + ((chCode & 0xff) - 0x20);   /* JIS -> Kuten */
+            chCode = (((chCode >>  8) - 0x20) * 100) + ((chCode & 0xff) - 0x20);  /* JIS -> Kuten */
             format = "%04.4u";
           }
         }
@@ -1178,7 +1248,7 @@ _kernel_oserror *JapanIME__GetCandidateListInfo(_kernel_swi_regs *r)
     else
       sprintf(JapanIME_UTF8candidate, "%i/%i",
               JapanIME_Bdata.cLBItemPageFirst + JapanIME_Bdata.cLBItemNum - 1,
-              JapanIME_Bdata.cLBItemTotal);             /* make one up nn/tt; nn current, tt total */
+              JapanIME_Bdata.cLBItemTotal);            /* make one up nn/tt; nn current, tt total */
   }
   r->r[1] = (int)JapanIME_UTF8candidate;
   r->r[2] = JapanIME_Bdata.cLBItemTotal;
@@ -1190,7 +1260,7 @@ _kernel_oserror *JapanIME__GetCandidateListInfo(_kernel_swi_regs *r)
 
 
 /* -------------------------------------------------------------- JapanIME__GetCandidateListEntry */
-_kernel_oserror *JapanIME__GetCandidateListEntry(_kernel_swi_regs *r)
+_kernel_oserror *JapanIME__GetCandidateListEntry(int swiOffset, _kernel_swi_regs *r)
 {
   /* on entry, R0 is a flags word of zero */
   /* R1 is the index 1... of the entry */
@@ -1211,7 +1281,7 @@ _kernel_oserror *JapanIME__GetCandidateListEntry(_kernel_swi_regs *r)
 }
 
 /* -------------------------------------------------------------------------- JapanIME__Configure */
-_kernel_oserror *JapanIME__Configure(_kernel_swi_regs *r)
+_kernel_oserror *JapanIME__Configure(int swiOffset, _kernel_swi_regs *r)
 {
 #define eorValue reg1
 #define dictFilename reg1
@@ -1226,6 +1296,8 @@ _kernel_oserror *JapanIME__Configure(_kernel_swi_regs *r)
 
     case IME_Config_Status:
       IMEstate = JapanIME_Bdata.wVjeModeFlag;
+
+      JapanIME__CheckRomanjiLock();
 
       flagValue = (IMEstate & 0x19) |
                  ((IMEstate & 0x60) >> 4) |
@@ -1246,15 +1318,16 @@ _kernel_oserror *JapanIME__Configure(_kernel_swi_regs *r)
       /* 06/10/98 Also apply any changes to the NonRoman bit via SetKanaLock rather than directly */
       if (JapanIME_KeyboardNumber == JAPAN &&
                                  ((flagValue ^ JapanIME_Bdata.wVjeModeFlag) & NONROMAN_BIT) != 0)
-        JapanIME__SetKanaLock((JapanIME_Bdata.wVjeModeFlag & NONROMAN_BIT) == 0 ? 0 : 0x20);
-
-      /* see if any other state(s) changed - which can be reset via SET_MODE                      */
-      if (((flagValue ^ JapanIME_Bdata.wVjeModeFlag) & ~(SCREEN_MODE | NONROMAN_BIT)) != 0)
       {
-        JapanIME_Bdata.wVjeModeFlag = (JapanIME_Bdata.wVjeModeFlag & (SCREEN_MODE | NONROMAN_BIT)) |
-                           (flagValue & ~(SCREEN_MODE | NONROMAN_BIT));   /* reset remaining bits */
-        JapanIME__PutVkey(F_SET_MODE);
+        JapanIME__SetKanaLock((JapanIME_Bdata.wVjeModeFlag & NONROMAN_BIT) == 0 ? 0 : ROMANLOCK);
+        JapanIME__CheckRomanjiLock();
       }
+
+      /* set bits for any other state(s) changed */
+      JapanIME_Bdata.wVjeModeFlag =
+                           (JapanIME_Bdata.wVjeModeFlag & (SCREEN_MODE | NONROMAN_BIT)) |
+                           (flagValue & ~(SCREEN_MODE | NONROMAN_BIT));   /* reset remaining bits */
+
       JapanIME__CheckIMEState(IMEstate);
       break;
 
@@ -1280,28 +1353,30 @@ _kernel_oserror *JapanIME__Configure(_kernel_swi_regs *r)
     default:
       return JapanIME__Fault(ERR_BadConfig, ERR_BadConfigMsg);
   }
+  if (JapanIME_NVRAMsavetime)
+    JapanIME__SaveToNVRAM(0);
   return NULL;
 }
 
 /* ------------------------------------------------------------------------- JapanIME__SWIHandler */
 _kernel_oserror *JapanIME__SWIHandler(int swi_offset, _kernel_swi_regs *r, void *pw)
 {
-  switch (swi_offset & 0x3f)
+  switch (swi_offset)
   {
     case JapanIME_ProcessInput - JapanIME_00:
-      return JapanIME__ProcessInput(r);
+      return JapanIME__DoProcessInput(swi_offset, r);
 
     case JapanIME_Cancel - JapanIME_00:
-      return JapanIME__Cancel(r);
+      return JapanIME__DoProcessInput(swi_offset, r);
 
     case JapanIME_GetCandidateListInfo - JapanIME_00:
-      return JapanIME__GetCandidateListInfo(r);
+      return JapanIME__GetCandidateListInfo(swi_offset, r);
 
     case JapanIME_GetCandidateListEntry - JapanIME_00:
-      return JapanIME__GetCandidateListEntry(r);
+      return JapanIME__GetCandidateListEntry(swi_offset, r);
 
     case JapanIME_Configure - JapanIME_00:
-      return JapanIME__Configure(r);
+      return JapanIME__Configure(swi_offset, r);
 
     default:
       return error_BAD_SWI;
@@ -1320,7 +1395,7 @@ _kernel_oserror *JapanIME__Initialisation(const char *cmd_tail, int podule_base,
   r.r[2] = -1;
   r.r[3] = 0;
   r.r[4] = 3;
-  _kernel_swi(OS_ReadVarVal, &r, &r); /* Must use _kernel_swi because of silly error behaviour */
+  _kernel_swi(OS_ReadVarVal, &r, &r);    /* Must use _kernel_swi because of silly error behaviour */
 
   if (r.r[2] == 0)
   {
@@ -1351,24 +1426,18 @@ _kernel_oserror *JapanIME__Initialisation(const char *cmd_tail, int podule_base,
   JapanIME_Bdata.wKeyType = KEY_STANDARD;                                            /* not used? */
   JapanIME_Bdata.wColorType = CL_SPECIAL;
 
-  /* find out whether changing kana lock causes a Service call and initialise input mode flags.   */
-  /* This is just a way of finding out whether we are running with a kernel which makes service   */
-  /* calls when there is a change in the state of the keyboard lock flags - otherwise unnecessary */
-  JapanIME_KanaLockReset = FALSE;
-  JapanIME_KeyboardNumber = JAPAN;
-  JapanIME_Bdata.wVjeModeFlag |= EISUU_BIT;           /* set modeFlag and keyboard to test values */
-  kLock = _kernel_osbyte(202, 0x20, 0xff);
-  _kernel_osbyte(202, 0x20, 0xff);                  /* flip the lock twice to see if any response */
-  JapanIME_KanaService = JapanIME_KanaLockReset;         /* TRUE if Service call made; else FALSE */
-
   /* see what type of keyboard is really being used - module will be informed of later changes    */
   JapanIME_KeyboardNumber = _kernel_osbyte(71, 255, 0) & 0x7f;            /* read keyboard number */
   if (JapanIME_KeyboardNumber > ISO4)
     JapanIME_KeyboardNumber = 0;                     /* ensure a value in the look-up table range */
 
+  /* Initialise input mode flags and set an upcall handler to monitor changes in Kana Lock state  */
+  kLock = _kernel_osbyte(202, 0, 0xff);                            /* test current keyboard state */
   JapanIME_Bdata.wVjeModeFlag = INP_MASK;         /* ZENKAKU_BIT (Full width); Inactive; Hiragana */
-  if (JapanIME_KeyboardNumber == JAPAN && (kLock & 0x20) == 0)
-    JapanIME_Bdata.wVjeModeFlag |= NONROMAN_BIT;   /* Module loaded with Kana lock already set    */
+  if (JapanIME_KeyboardNumber == JAPAN && (kLock & ROMANLOCK) == 0)
+    JapanIME_Bdata.wVjeModeFlag |= NONROMAN_BIT;      /* Module loaded with Kana lock already set */
+  JapanIME_ModeSave = -1;
+  _swix(OS_Claim, _INR(0,2), UpCallV, JapanIME__UpCall, pw);
 
   JapanIME_Bdata.wCodeMax = 0x987E;
   JapanIME_Bdata.wDispListBox = 3;
@@ -1392,7 +1461,10 @@ _kernel_oserror *JapanIME__Initialisation(const char *cmd_tail, int podule_base,
     memset((PSZ)JapanIME_SramData, 0, 2);                                         /* set to empty */
     JapanIME_Bdata.wSramMaxSize = GAKU_SIZE + 2;
   }
+  JapanIME_NVRAMsavetime = 0;
+  _swix(OS_CallEvery, _INR(0,2), MINSDELAY * 60 * 100, JapanIME__Timer, pw);
   JapanIME__PutVkey(F_SRAM_OPEN);
+  JapanIME_NVRAMsum = JapanIME__CheckSum();
 
   /* set 'sentance' mode, etc, */
   JapanIME_Bdata.wHenModFlag  = (MOD_BUNSETU | MOD_GAKU | MOD_KUTEN_CNV_NO | MOD_KUTEN | MOD_REN);
@@ -1408,25 +1480,22 @@ _kernel_oserror *JapanIME__Initialisation(const char *cmd_tail, int podule_base,
   return NULL;
 }
 
-/* ------------------------------------------------------------------------ JapanIME__SaveToNVRAM */
-_kernel_oserror *JapanIME__SaveToNVRAM()
-{
-  /* Should we test JapanIME_NVRAMsize <= 0 4kb? */
-
-  return _swix(NVRAM_Write, _INR(0,2), JapanIME_MemTag, JapanIME_Bdata.lpchSramAddress,
-                                JapanIME_Bdata.wSramMaxSize);
-}
-
 /* ----------------------------------------------------------------------- JapanIME__Finalisation */
 _kernel_oserror *JapanIME__Finalisation(int fatal, int podule, void *pw)
 {
   int oldState = JapanIME_Bdata.wVjeModeFlag;
 
+  /* release the claimed UpCall vector */
+  _swix(OS_Release, _INR(0,2), UpCallV, JapanIME__UpCall, pw);
+
+  /* release the call every timer */
+  _swix(OS_RemoveTickerEvent, _INR(0,1), JapanIME__Timer, pw);
+
   /* simulate turning VJE off - in case killed while holding the saved state of the kana lock */
   JapanIME_Bdata.wVjeModeFlag &= SCREEN_MODE;
   JapanIME__CheckIMEState(oldState);
 
-  /* close the messages file (on hard close) */
+  /* close the messages file */
   if (JapanIME_MsgFile[0] != 0)
   {
     _swix(MessageTrans_CloseFile, _IN(0), JapanIME_MsgFile + 1);
@@ -1437,7 +1506,7 @@ _kernel_oserror *JapanIME__Finalisation(int fatal, int podule, void *pw)
   if (JapanIME_Enc)
     encoding_delete(JapanIME_Enc);
 
-  JapanIME__SaveToNVRAM();
+  JapanIME__SaveToNVRAM(1);
 
   JapanIME__PutVkey(F_SRAM_CLOSE);
   JapanIME__PutVkey(F_CLOSE);
@@ -1448,14 +1517,60 @@ _kernel_oserror *JapanIME__Finalisation(int fatal, int podule, void *pw)
 /* ---------------------------------------------------------------------------- JapanIME__Service */
 void JapanIME__ServiceHandler(int service_number, _kernel_swi_regs *r, void *pw)
 {
-  if (service_number == 0x43)  /* International */
+  if (service_number == Service_International)  /* International */
+  {
     if (r->r[2] == 6)               /* new keyboard selection - get the new keyboard number in R3 */
       JapanIME_KeyboardNumber = (r->r[3] > ISO4 ? 0 : r->r[3]);  /* ensure in look-up table range */
+  }
+  else if ((service_number == Service_Standby && (r->r[0] & 1) != 0) ||
+            service_number == Service_ShutDown)
+  {
+    JapanIME__SaveToNVRAM(0);
+  }
+}
 
-  /* !!! Need to know when the Kana lock state changes !!! */
-  /* if (JapanIME_KeyboardNumber == JAPAN &&
-                JapanIME__CheckLockChange(newState)) (if VJE turned on in EISUU mode)
-     ... object to the change  */
+/* ---------------------------------------------------------------------- JapanIME__Event_handler */
+int JapanIME__UpCall_handler(_kernel_swi_regs *r, void *pw)
+{
+  /* For intercepting UpCalls when the state of the keyboard locks is changed */
+
+  if (r->r[0] == UpCall_KeyboardStatus && JapanIME_KeyboardNumber == JAPAN)
+  {
+    /* R0 = 20 (UpCall_KeyboardStatus)        */
+    /* R1 = 0 if pre-change, 1 if post-change */
+    /* R2 = old value                         */
+    /* R3 = new value                         */
+
+    if (r->r[1] == 0)       /* pre-change */
+    {
+      JapanIME_UpCalled = 1;
+      if ((JapanIME_Bdata.wVjeModeFlag & BOTHFLAGS) == BOTHFLAGS)     /* IME on and in Eisuu mode */
+      {
+        if ((r->r[2] & ROMANLOCK) != 0 && (r->r[3] & ROMANLOCK) == 0)     /* setting kana lock on */
+        {
+          JapanIME_KanaLockSave ^= ROMANLOCK;            /* Flip our saved state of the kana lock */
+          r->r[3] |= ROMANLOCK;                             /* set b5 back to old set value state */
+          if (r->r[2] == r->r[3])                                             /* if no net change */
+            r->r[0] = 0;
+          return 0;                                          /* do not risk it being changed back */
+        }
+      }
+    }
+    else if (((r->r[2] ^ r->r[3]) & ROMANLOCK) != 0)                    /* bit 5 has been flipped */
+    {
+      // make a note, and deal with it asap
+      JapanIME_ModeSave = (r->r[3] & ROMANLOCK);
+    }
+  }
+  return 1;
+}
+
+/* ---------------------------------------------------------------------- JapanIME__Timer_handler */
+_kernel_oserror *JapanIME__Timer_handler(_kernel_swi_regs *r, void *pw)
+{
+  /* Sets a flag every MINSDELAY minutes, indicating a NVRAM save check is due */
+  JapanIME_NVRAMsavetime = 1;
+  return NULL;
 }
 
 /* ---------------------------------------------------------------------------------------------- */

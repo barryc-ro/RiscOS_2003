@@ -48,7 +48,7 @@ ULIB       = C:Unicode.o.ucodelibz
 #
 # Include files
 #
-INCLUDES = -Ivjesrc,C:,unixlibs,C:Unicode
+INCLUDES = -Ivjesrc,^.IntIME,C:,unixlibs,C:Unicode
 
 # Program specific options:
 #
