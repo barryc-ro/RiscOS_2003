@@ -13,7 +13,9 @@
 #
 MKDIR   = cdir
 CP      = copy
+WIPE    = -wipe
 CPFLAGS = ~cfr~v
+WFLAGS  = ~cfr~v
 
 #
 # Program specific options:
@@ -36,5 +38,9 @@ install: ${RDIR}
 
 resources:
         @echo ${COMPONENT}: resource files copied to Messages module
+
+clean:
+        ${WIPE} @.${APP} ${WFLAGS}
+        @echo ${COMPONENT}: cleaned
 
 # Dynamic dependencies:
