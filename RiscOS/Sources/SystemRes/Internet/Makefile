@@ -119,6 +119,9 @@ install_common: ${COMMONFILES}
 install_STB:
         ${MKDIR} ${INSTDIR}.etc
         ${CP} LocalUserIFRes:!Boot     ${INSTDIR}.!Boot         ${CPFLAGS}
+        ${CP} ${RDIR}.files.Hosts      ${INSTDIR}.etc.hosts     ${CPFLAGS}
+        ${CP} ${RDIR}.files.protocols  ${INSTDIR}.etc.protocols ${CPFLAGS}
+        ${CP} ${RDIR}.files.services   ${INSTDIR}.etc.services  ${CPFLAGS}
 
 install_: ${DISCFILES} dirs
         ${CP} ${RDIR}.!Boot      ${INSTDIR}.!Boot      ${CPFLAGS}
