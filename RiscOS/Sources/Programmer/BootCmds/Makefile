@@ -82,13 +82,13 @@ resources: resources-${CMDHELP}
 
 resources_common:
         ${MKDIR} ${RESDIR}
-        ${CP} Resources.Messages  ${RESDIR}.Messages  ${CPFLAGS}
+        ${CP} LocalRes:Messages  ${RESDIR}.Messages  ${CPFLAGS}
 
 resources-None: resources_common
 	@
 
 resources-: resources_common
-	print Resources.CmdHelp { >> ${RESDIR}.Messages }
+	print LocalRes:CmdHelp { >> ${RESDIR}.Messages }
 
 #
 # ROM target (re-linked at ROM Image build time)
@@ -119,8 +119,8 @@ RM.BootCmdsD: ${OBJSD} ${OSLIB} ${STUBS}
    ${LINK} -rmf -output RM.BootCmdsD ${OBJSD} ${OSLIB} ${STUBS}
    Access RM.BootCmdsD WR/R
 
-o.Messages: Resources.Messages
-   ResGen Messages o.Messages Resources.Messages Resources.BootCmds.Messages
+o.Messages: LocalRes:Messages
+   ResGen Messages o.Messages LocalRes:Messages Resources.BootCmds.Messages
 
 o.Repeat: Resources.Repeat
    ResGen Repeat o.Repeat Resources.Repeat Resources.BootCmds.Repeat
