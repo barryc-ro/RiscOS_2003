@@ -47,6 +47,8 @@ ABSSYM     = RISC_OSLib:o.AbsSym
 EVENTLIB   = Tbox:o.eventlib
 TOOLBOXLIB = Tbox:o.toolboxlib
 WIMPLIB	   = Tbox:o.wimplib
+DEBUGLIB   = <Lib$Dir>.Debuglib.o.debuglib TCPIPLibs:o.socklib5zm  TCPIPLibs:o.inetlibzm
+
 #
 # Include files
 #
@@ -59,7 +61,7 @@ COMPONENT = Builder
 TARGET    = !RunImage
 APP	  = ${INSTDIR}.!${COMPONENT}
 
-OBJS      = o.main o.db o.msg o.env o.file o.parse o.build
+OBJS      = o.main o.msg o.env o.file o.parse o.build
 
 
 #
@@ -81,6 +83,7 @@ clean:
 
 install: ${TARGET}
 	${MKDIR} ${APP}
+        ${WIPE} ${APP}.${TARGET} ${WFLAGS}
 	${CP} ${TARGET} ${APP}.${TARGET} ${CPFLAGS}
 	${CP} Resources.* ${APP}.* ${CPFLAGS}
 	${CHMOD} ${APP} ${CHMODFLAGS}
@@ -90,6 +93,6 @@ install: ${TARGET}
 # Target 
 #
 ${TARGET}: ${OBJS}  
-        ${LD} -o $@ ${OBJS} ${CLIB} ${EVENTLIB} ${TOOLBOXLIB} ${WIMPLIB}
+        ${LD} -o $@ ${OBJS} ${DEBUGLIB} ${CLIB} ${EVENTLIB} ${TOOLBOXLIB} ${WIMPLIB}
 #
 # Dynamic dependencies:o.main:	c.main
