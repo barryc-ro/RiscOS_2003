@@ -31,6 +31,7 @@
 static Desk_bool	KeyDown( int internalkeynumber)
 	{
 	int	r1;
+	if ( internalkeynumber<0)	return Desk_bool_FALSE;
 	if ( _swix( OS_Byte, _INR(0,1)|_OUT(1), 121, internalkeynumber ^ 0x80, &r1))	return Desk_bool_FALSE;
 	return (r1) ? Desk_bool_TRUE : Desk_bool_FALSE;
 	}
@@ -237,6 +238,9 @@ int	Pointer_PtrV_handler( _kernel_swi_regs* r, void* pw)
 	#endif
 	}
 
+
+
+
 // These are low-level internal key numbers. See PRMs 1-156.
 // These should never be changed - other KeyV events are
 // converted into these values, in order to fake mouse
@@ -245,22 +249,43 @@ int	Pointer_PtrV_handler( _kernel_swi_regs* r, void* pw)
 #define	KEY_KEYV_MOUSE_MENU	0x71
 #define	KEY_KEYV_MOUSE_ADJUST	0x72
 
+
+
 // The next 3 sets of constants define the keys used to emulate the mouse.
-// They are currently the cursor keys, plus Delete, End and PageDown.
 
 // These are low-level internal key numbers. See PRMs 1-156.
 #ifdef iconhigh_DESKTOP
-	#define	is_keyv_SELECT( x)	( (x)==0x34 /* Delete		*/	)
-	#define	is_keyv_MENU( x)	( (x)==0x35 /* Copy		*/	)
-	#define	is_keyv_ADJUST( x)	( (x)==0x36 /* Page down	*/	)
-	static int	mouse_buttons_keyv_list[]	= { 0x34, 0x35, 0x36, -1};
+	#define	is_keyv_SELECT( x)	( (x)==0x34 /*Delete*/		)
+	#define	is_keyv_MENU( x)	( (x)==0x35 /*Copy*/		)
+	#define	is_keyv_ADJUST( x)	( (x)==0x36 /*Page down*/	)
+	static int		mouse_buttons_keyv_list[]		= { 0x34, 0x35, 0x36, -1};	// PRMs 1-156
+	static int		mouse_buttons_initdown_internal_list[]	= { 89, 105, 78};		// PRMs 1-849
+	static Desk_bool	mouse_buttons_initdown_list[ 3];					// Used to store state when emulation starts.
 #else
-	#define	is_keyv_SELECT( x)	( (x)==0x47 /* Return*/	)
-	#define	is_keyv_MENU( x)	( (x)==0x93 /* Menu*/ || (x)==0x67 /*keypad enter*/	)
+	#define	is_keyv_SELECT( x)	( (x)==0x47 /*Return*/	)
+	#define	is_keyv_MENU( x)	( (x)==0x93 /*Menu*/ || (x)==0x67 /*keypad enter*/	)
 	#define	is_keyv_ADJUST( x)	(0)
-	static int	mouse_buttons_keyv_list[]	= { 0x47, 0x93, 0x67, -1};
+	static int		mouse_buttons_keyv_list[]		= { 0x47, 0x93, 0x67, -1};	// PRMs 1-156
+	static int		mouse_buttons_initdown_internal_list[]	= { 73, -1/*don't know code for menu*/, 60};		// PRMs 1-849
+	static Desk_bool	mouse_buttons_initdown_list[ 3];					// Used to store state when emulation starts.
 #endif
+/*
+In the above, mouse_buttons_keyv_list[] is a -1 terminated array of the
+KeyV codes that IconHigh converts into mouse button KeyVs.
+mouse_buttons_initdown_internal_list[] contains the corresponding
+internal key numbers, which are used to find which keys are down when
+emulation starts. 
 
+This initial key state info is stored in mouse_buttons_initdown_list[].
+When a KeyV comes through, if it is for a key that was initially
+depressed when emulation started, it is not converted into a mousebutton
+keyv, and then the entry in mouse_buttons_initdown_list[] is zeroed.
+This ensures that a key that is down when emulation starts doesn't stay
+down throughout emulation - this will result in auto repeat starting.
+ */
+
+
+// KeyV numbers - See PRMs 1-156.
 #define	KEY_KEYV_RIGHT		0x64
 #define	KEY_KEYV_LEFT		0x62
 #define	KEY_KEYV_UP		0x59
@@ -272,12 +297,20 @@ int	Pointer_PtrV_handler( _kernel_swi_regs* r, void* pw)
 #define KEY_BUFFER_RIGHT	0x8d
 #define KEY_BUFFER_UP		0x8f
 #define KEY_BUFFER_DOWN		0x8e
+#define KEY_BUFFER_NEAREST	-1
 
+#ifndef iconhigh_DESKTOP
+	#define	is_buffer_TOGGLE( x)	( (x)==0x0e/*Kbd scroll lock*/ || (x)==0xc3/*IRHandset/Kbd 'Stop'*/	)
+	#define	is_buffer_SELECT( x)	( (x)==0x0d/*IRHandset Ok*/	)
+	#define	is_buffer_MENU( x)	( (x)==0xc1/*IRHandset Menu*/	)
+	#define	is_buffer_ADJUST( x)	( 0)
+#else
+	#define	is_buffer_TOGGLE( x)	( (x)==0x0e/*Kbd scroll lock*/	)
+	#define	is_buffer_SELECT( x)	0
+	#define	is_buffer_MENU( x)	0
+	#define	is_buffer_ADJUST( x)	0
+#endif
 
-#define	is_buffer_TOGGLE( x)	( (x)==0x0e/*Kbd scroll lock*/ || (x)==0xc3/*IRHandset/Kbd 'Stop'*/	)
-#define	is_buffer_SELECT( x)	( (x)==0x0d/*IRHandset Ok*/	)
-#define	is_buffer_MENU( x)	( (x)==0xc1/*IRHandset Menu*/	)
-#define	is_buffer_ADJUST( x)	( 0)
 
 // These are internal key numbers, as used by OS_Byte 121, Basic's INKEY(-x) etc. See PRMs 1-849
 #define	KEY_INTERNAL_DOWN	41
@@ -289,13 +322,23 @@ int	Pointer_PtrV_handler( _kernel_swi_regs* r, void* pw)
 
 static void	ReleaseAllMouseKeys( void)
 	{
+	/*
+	#ifndef NO_EXTRA_KEYV
+	int	i;
+		for ( i=0; mouse_buttons_keyv_list[i]!=-1; i++)	{
+			Desk_Debug_Printf( Desk_error_PLACE "ReleaseAllMouseKeys, sending key up for key %i\n", mouse_buttons_keyv_list[i]);
+			_swix( OS_CallAVector, _INR(0,1)|_IN(9), 1, mouse_buttons_keyv_list[i], 0x13);
+				// This is a KeyV keyup event. We rely on the kernel coping gracefully with
+				// KeyV up events for keys that are already up. This is ok according 
+				// to Steve Cormie.
+			}
+	#endif
+	*/
+	// See which mousebutton keys are down.
 	int	i;
 	for ( i=0; mouse_buttons_keyv_list[i]!=-1; i++)	{
-		Desk_Debug_Printf( Desk_error_PLACE "ReleaseAllMouseKeys, sending key up for key %i\n", mouse_buttons_keyv_list[i]);
-		_swix( OS_CallAVector, _INR(0,1)|_IN(9), 1, mouse_buttons_keyv_list[i], 0x13);
-			// This is a KeyV keyup event. We rely on the kernel coping gracefully with
-			// KeyV up events for keys that are already up. This is ok according 
-			// to Steve Cormie.
+		if ( KeyDown( mouse_buttons_initdown_internal_list[i]))	mouse_buttons_initdown_list[i] = Desk_bool_TRUE;
+		else							mouse_buttons_initdown_list[i] = Desk_bool_FALSE;
 		}
 	}
 
@@ -310,9 +353,22 @@ int	Pointer_KeyV_handler( _kernel_swi_regs* r, void* pw)
 	
 	if ( r->r[0]==1 || r->r[0]==2)	{	// key release/press.
 		
-		//original_r1 = r->r[1];
+		Desk_Debug5_Printf( Desk_error_PLACE "KeyV, received key number 0x%02x\n", r->r[1]);
 		
-		Desk_Debug_Printf( Desk_error_PLACE "KeyV, received key number 0x%02x\n", r->r[1]);
+		// Check whether this event is keyup for a key mentioned in mouse_buttons_initdown_list.
+			{
+			int	i;
+			for ( i=0; mouse_buttons_keyv_list[i]!=-1; i++)	{
+				if ( mouse_buttons_keyv_list[i] == r->r[1] && mouse_buttons_initdown_list[i])	{
+					// If we get here, this keyv is for a key that was depressed when emulation started.
+					// Thus we have to let this key up through, otherwise it will be turned into a
+					// mouse button up, and the key will be stuck down and start auto-repeating.
+					mouse_buttons_initdown_list[i] = Desk_bool_FALSE;
+					MemCheck_UnRegisterMiscBlock( r);
+					return 1;
+					}
+				}
+			}
 		
 		// Convert keyboard's pseudo mouse buttons to to menu button change, and pass on call.
 		// Now does intercept call... 18 Feb 1997
@@ -337,7 +393,7 @@ int	Pointer_KeyV_handler( _kernel_swi_regs* r, void* pw)
 					// keyboard buffer.
 				if ( keydown_detected_from_keyv < 0)	{	// Shouldn't happen
 					keydown_detected_from_keyv = 0;
-					Desk_Debug_Printf( Desk_error_PLACE "*** keydown_detected_from_keyv < 0\n");
+					Desk_Debug5_Printf( Desk_error_PLACE "*** keydown_detected_from_keyv < 0\n");
 					}
 				}
 			}
@@ -354,7 +410,7 @@ int	Pointer_KeyV_handler( _kernel_swi_regs* r, void* pw)
 	
 	MemCheck_UnRegisterMiscBlock( r);
 	
-	Desk_Debug_Printf( Desk_error_PLACE "KeyV handler returning with r[1]=0x%02x\n", r->r[1]);
+	Desk_Debug5_Printf( Desk_error_PLACE "KeyV handler returning with r[1]=0x%02x\n", r->r[1]);
 	return ret;	// Pass on the call if ret==1, otherwise intercept.
 	Desk_UNUSED( pw);
 	}
@@ -448,6 +504,7 @@ void	EmulationStartAuto( Desk_window_handle window0, void* pw)
 
 
 
+
 void	HighlightKeyPressHandler( int key, void* pw)
 	{
 	Desk_wimp_point	pos;
@@ -479,6 +536,9 @@ void	HighlightKeyPressHandler( int key, void* pw)
 	
 	else if ( key==KEY_BUFFER_UP    && (!keydown_detected_from_keyv) || KeyDown( KEY_INTERNAL_UP))
 		MoveHighlight( &pos, iconhigh_direction_UP, pw);
+	
+	else if ( key==KEY_BUFFER_NEAREST)
+		MoveHighlight( &pos, iconhigh_direction_NEAREST, pw);
 	
 	SetMousePos( pos.x, pos.y);
 	IconHigh_globals.lastmovement.x = pos.x - oldpos.x;
@@ -553,7 +613,8 @@ _kernel_oserror*	HighlightInsV2_handler( _kernel_swi_regs* r, void* pw)
 	
 	
 	else if ( is_buffer_TOGGLE( global_lastkey))	{
-		IconHigh_globals.paused = (IconHigh_globals.paused) ? Desk_bool_FALSE : Desk_bool_TRUE;
+		//IconHigh_globals.paused = (IconHigh_globals.paused) ? Desk_bool_FALSE : Desk_bool_TRUE;
+		ToggleEmulation();
 		Desk_Debug_Printf( Desk_error_PLACE "Just toggled pause - new status is %i\n", IconHigh_globals.paused);
 		}
 	
@@ -777,6 +838,14 @@ void	EmulationPointerStart( IconHigh_emulationtype emulation, void* pw)
 			}
 		Desk_Error2_EndCatch
 		}
+	
+	if	(
+		   emulation==IconHigh_newemulation_default_HIGHLIGHTING 
+		&& !IconHigh_globals.paused
+		&& (IconHigh_globals.lastmovement.x || IconHigh_globals.lastmovement.y)
+		)
+		HighlightKeyPressHandler( KEY_BUFFER_NEAREST, pw);
+		// Moves pointer to the nearest icon...
 	}
 
 
