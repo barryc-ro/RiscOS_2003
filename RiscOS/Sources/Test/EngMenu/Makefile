@@ -50,12 +50,12 @@ WFLAGS  = ~c~v
 #
 # Libraries
 #
-CLIB   = CLIB:o.stubs CLIB:o.c++lib <Lib$Dir>.RISC_OSLib.o.risc_oslib TCPIPLibs:o.unixlib
+CLIB   = C:o.stubs <Lib$Dir>.c++lib.o.c++lib TCPIPLibs:o.unixlib
 DLIBS  = <LIB$Dir>.DebugLib.o.debuglib TCPIPLibs:o.socklib TCPIPLibs:o.inetlib
 #
 # Include files
 #
-INCLUDES =  -ICLIB:,TCPIPLibs:
+INCLUDES =  -IC:,TCPIPLibs:
 
 
 OBJS     = 	\
