@@ -70,7 +70,7 @@ MDIR      = ${MAPDIR}.${MACHINE}
 # Rule patterns
 #
 .c.${O}:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.${O}:;   ${CMHG} -o $@ $<
+.cmhg.${O}:;   ${CMHG} -p -o $@ $<
 .s.${O}:;      ${AS} ${AFLAGS} $< $@
 
 #
@@ -135,18 +135,3 @@ dirs:
         ${MKDIR} ${RAMTDIR}
 
 # Dynamic dependencies:
-oBoca.module:	c.module
-oBoca.module:	C:h.kernel
-oBoca.module:	C:h.swis
-oBoca.module:	h.module
-oBoca.module:	h.uniqueid
-oBoca.module:	h.error
-oBoca.uniqueid:	c.uniqueid
-oBoca.uniqueid:	C:h.kernel
-oBoca.uniqueid:	C:h.swis
-oBoca.uniqueid:	h.module
-oBoca.uniqueid:	h.uniqueid
-oBoca.uniqueid:	export.h.uniqueid
-oBoca.uniqueid:	h.idblock
-oBoca.uniqueid:	C:h.nvram
-oBoca.idblock: s.Boca2.idblock
