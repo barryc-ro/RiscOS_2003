@@ -190,9 +190,8 @@ install_rom: ${ROM_MODULE}
 resources: LocalRes:Messages LocalRes:ResList
 	@echo
 	${MKDIR} ${RESDIR}
-	${MKDIR} ${RESDIR}.${COMPONENT}
 	TokenCheck LocalRes:Messages
-	${CP} LocalRes:* ${RESDIR}.${COMPONENT}.* ${CPFLAGS}
+	${CP} LocalRes:Messages ${RESDIR}.Messages ${CPFLAGS}
 	@echo
 	@echo ${COMPONENT}: resource files copied to Messages module
 
