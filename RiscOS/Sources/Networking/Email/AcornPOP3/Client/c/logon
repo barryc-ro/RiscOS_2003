@@ -4,7 +4,7 @@
 
 	FILE:		logon.c
 	AUTHOR:		Richard D. Warren
-	VERSION:	0.09 for RISC OS
+	VERSION:	0.10 for RISC OS
 
 	OVERVIEW
 	========
@@ -27,6 +27,8 @@
 					to resolve the address.
 					send_data free'ed in ERROR state.  Fixes possible memory leak
 	18/11/97	0.09	RDW	Memcheck stuff added in GET_HOST_NB code
+	13/01/98	0.10	RDW	Callback/CallAfter support tidied up
+					Fixed call to Resolver_GetHost so it catches R0 being non-0
 */
 
 
@@ -78,6 +80,7 @@
 /* Constants                                                                  */
 /*                                                                            */
 /* ************************************************************************** */
+static const int SLEEP_TIME    = 1;
 static const int TIME_SLICE    = 50;						/* Time slice to use                                                   */
 static const int PORT_NUMBER = 110;						/* Default TCP port number to use                     */
 /*static const char sys_var_POP3_Default_Port[] = "Inet$POP3_Default_Port";*/	/* NOT IMPLEMENTED YET!                               */
@@ -157,6 +160,8 @@ static void logon_FSM_PASS(logon_context *c);
 static void logon_FSM_COMPLETED(logon_context *c);
 static void logon_FSM_ERROR(logon_context *c);
 extern _kernel_oserror *logon_FSM(logon_context *context);
+static _kernel_oserror *logon_CAhandler(_kernel_swi_regs *r, void *pw, void *data);
+static _kernel_oserror *logon_CBhandler(_kernel_swi_regs *r, void *pw, void *data);
 
 
 /* ************************************************************************** */
@@ -295,7 +300,8 @@ extern _kernel_oserror* logon_USER_PASS(char  username[],
       process1.logon_context = context;
       process1.state = CONNECTING;
 //      error = logon_FSM(context);						/* enter the logon FSM                                           */
-      error = set_callback(/*CB_CALLER_FSM, EVENT_NONE, */logon_CBhandler, context);/* set a callback to re-enter the FSM later   */
+//      error = set_callback(/*CB_CALLER_FSM, EVENT_NONE, */logon_CBhandler, context);/* set a callback to re-enter the FSM later   */
+      error = CB_logon(context);
     }
   }
   
@@ -391,7 +397,8 @@ extern _kernel_oserror *logon_FSM(logon_context *context)
       notify_client(&(process1.logon));
     }
     else if (!context->exit)							/* else, if not told to exit FSM, then        */
-      error = set_callback(/*CB_CALLER_FSM, EVENT_NONE, */logon_CBhandler, context);/* set a callback to re-enter the FSM later   */
+      error = CA_logon(context);
+//      error = set_callback(/*CB_CALLER_FSM, EVENT_NONE, */logon_CBhandler, context);/* set a callback to re-enter the FSM later   */
     else									/* else we were told to exit the FSM as it    */
       context->exit = FALSE;							/* will be called back by anothe event        */
   }
@@ -413,22 +420,27 @@ extern _kernel_oserror *logon_FSM(logon_context *context)
    VARIABLES:      
  */
 /* ************************************************************************** */
-extern _kernel_oserror *logon_CBhandler(_kernel_swi_regs *r, void *pw, void *data)
+extern _kernel_oserror* CA_logon(void *data)
 {
-/*  _kernel_oserror *error = 0;
+  return callx_add_callafter(SLEEP_TIME, &logon_CAhandler, data);
+}
+
+
+extern _kernel_oserror* CB_logon(void *data)
+{
+  return callx_add_callback(&logon_CBhandler, data);
+}
+
   
-  if (data)
-  {
-    CB_DATA *cb_data = (CB_DATA*)data;
-    logon_context *c = (logon_context*)cb_data->data;
-    
-    free(cb_data);
-    error = logon_FSM(c);
-  }
-  else
-    error = ERROR(INTERNALERR);
-  
-  return error;*/
+static _kernel_oserror* logon_CAhandler(_kernel_swi_regs *r, void *pw, void *data)
+{
+  dprintf(("", "ENTERED: logon_CAhandler\n"));
+  return callx_add_callback(&logon_CBhandler, data);
+}
+
+
+static _kernel_oserror *logon_CBhandler(_kernel_swi_regs *r, void *pw, void *data)
+{
   return logon_FSM(data);
 }
 
@@ -496,15 +508,51 @@ static void logon_FSM_GET_HOST_NB(logon_context *c)
     #ifdef MEMCHECK
       MemCheck_RegisterMiscBlock((void*)c->r.r[1], sizeof(struct hostent));
     #endif
-    c->pop_server = (struct hostent*)c->r.r[1];
-    memcpy((char*)&(c->pop_server_addr.sin_addr),
-           c->pop_server->h_addr,
-           c->pop_server->h_length);
-    c->pop_server_addr.sin_family = AF_INET;
-    c->state = PREPARE_CONNECT;							/* switch to state PREPARE_CONNECT               */
-    #ifdef MEMCHECK  
-      MemCheck_UnRegisterMiscBlock((void*)c->r.r[1);
-    #endif
+    if (c->r.r[0] == -1)
+    {
+      /* host not found, assume IP address? */
+      /* should move below code to another state/function to share with GET_HOST state machine */
+      c->addr = inet_addr(c->hostname);						/* convert dotted IP address                                */
+      if (c->addr == 0xffffffff)						/* if failed, switch to ERROR state                         */
+      {
+        c->error = ERROR(INTERNETERR);
+        c->errno = errno;
+        c->state = ERROR;
+      }
+      else									/* else, copy out address                                   */
+      {
+        memcpy((char*)&(c->pop_server_addr.sin_addr),
+               &(c->addr),
+               sizeof(c->addr));
+        c->pop_server_addr.sin_family = AF_INET;
+        c->state = PREPARE_CONNECT;						/* switch to state PREPARE_CONNECT                          */
+      }
+    }
+    else if (c->r.r[0] < 0)
+    {
+      /* error, remote failure */
+      c->error = ERROR(RESOLVERFAILED);
+      c->state = ERROR;
+    }
+    else if (c->r.r[0] > 0)
+    {
+      c->error = ERROR(INTERNETERR);
+      c->errno = c->r.r[0];
+      c->state = ERROR;
+    }
+    else
+    {
+      /* success */
+      c->pop_server = (struct hostent*)c->r.r[1];
+      memcpy((char*)&(c->pop_server_addr.sin_addr),
+             c->pop_server->h_addr,
+             c->pop_server->h_length);
+      c->pop_server_addr.sin_family = AF_INET;
+      c->state = PREPARE_CONNECT;							/* switch to state PREPARE_CONNECT               */
+      #ifdef MEMCHECK  
+        MemCheck_UnRegisterMiscBlock((void*)c->r.r[1);
+      #endif
+    }
   }
 }
 
