@@ -8,6 +8,7 @@
 # 29-Mar-96 Rich Buckley  Created
 # 25-Feb-96 Neil Turton   Stolen and adapted  :-)
 # 12-Sep-97 Ant Skelton	  encore une fois
+# 06-Jan-00 Simon Forrest Added support for StripDepnd tool
 
 #
 # Paths
@@ -21,6 +22,7 @@ MKDIR   = cdir
 AS      = aasm
 CP      = copy
 RM      = remove
+STRIP   = stripdepnd
 ASFLAGS = -depend !Depend -Stamp -quit -module -Esc -To $@ -From
 CPFLAGS = ~cfr~v
 
@@ -43,6 +45,7 @@ install_rom: ${TARGET}
 
 clean:
         ${RM} ${TARGET}
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 rom: ${TARGET}
