@@ -112,6 +112,9 @@
 ; 16-Jan-98  TMD  2.49		Fix bug in system buffer parsing of MPEG2 PES packet, revealed by above fix.
 ; 10-Feb-98  TMD  2.50		On real STB2200, use video structure flags to choose PAL or NTSC.
 ; 11-Feb-98  TMD  2.51		Re-register program element handlers on Service_MPEGControlStarting.
+; 11-Mar-98  TMD  2.52		(Conditionally) put in RAMFS debugging
+; 11-Mar-98  TMD  2.53		Make audio packetisation use MPEG2 PES as per video, with multiple of 8 bytes packet header
+; 11-Mar-98  TMD  2.54		Discard initial video/audio packets until we get start of MPEG packet on each
 ;
 
 	LEADR	Module_LoadAddr
@@ -194,7 +197,13 @@ FudgeQSIF SETL	{TRUE}			; if image is SIF or lower resolution, scale to 2 x xres
 AudioSquawkFix1 SETL {TRUE}		; multiple of 8 bytes.
 
 	GBLL	AudioSquawkFix2		; attempt to fix audio squawk problem by padding audio packet headers to a
-AudioSquawkFix2 SETL {FALSE}		; multiple of 8 bytes.
+AudioSquawkFix2 SETL {TRUE}		; multiple of 8 bytes.
+
+	GBLL	AudioDebug
+AudioDebug SETL {FALSE}			; capture audio data to a memory block
+
+	GBLL	DiscardPartialPackets
+DiscardPartialPackets	SETL {TRUE}	; discard initial partial PES packet for both video/audio
 
 ; Structure of a PTS list entry
 
@@ -475,6 +484,14 @@ TrickStops		#	4	; number of times code stopped the decoder
 TrickStarts		#	4	; number of times code started the decoder
 TrickPlayMode		#	4	; NZ => we're doing Oracle-style trick play
  ]
+ [ DiscardPartialPackets
+VideoHadFirstPacket	#	4	; 0 until had first PES packet header
+AudioHadFirstPacket	#	4	; ditto
+ ]
+
+ [ AudioDebug
+AudioCaptureBlockLength	#	4	; length of captured data
+ ]
 
 ; Large blocks
 
@@ -489,6 +506,11 @@ VideoSyncStats		#	&400*8	; pairs of packets, pictures at the time of BeginActive
 LengthStatsArraySize	*	8192	; room for this number of entries (each 1 word full length)
 LengthStatsPosition	#	4	; position in array
 LengthStatsArray	#	LengthStatsArraySize *4
+ ]
+
+ [ AudioDebug
+AudioCaptureBlockMaxLen	*	512*1024
+AudioCaptureBlock	#	AudioCaptureBlockMaxLen
  ]
 
  [ international
@@ -544,7 +566,7 @@ Mod_Title
 	=	"MPEG2Video", 0
 
 Mod_HelpStr
-	=	"MPEG2Video", TAB, "2.51 (11 Feb 1998)", 0
+	=	"MPEG2Video", TAB, "2.54 (11 Mar 1998)", 0
 	ALIGN
 
 Mod_SWITable
@@ -570,6 +592,9 @@ Mod_HC_Table
 	Command ReadL64002, 2, 1
 	Command WriteL64002, 3, 2
 	Command	PacketInfo, 0, 0
+ ]
+ [ AudioDebug
+	Command SaveAudio, 1, 1
  ]
 	=	0
 
@@ -1242,31 +1267,46 @@ debug SETL {FALSE}
 ;	r1 = video stream handle
 ;	r2 -> one or more linked bitstream packets
 
-VideoFullPackets Entry "r0,r11"
+VideoFullPackets Entry "r0,r2,r11"
+ [ debug
 	DLine	"MPEGVideo_FullPackets called"
-	LDR	r11, [r2, #PacketDescriptor_Length]
-	DReg	r11, "Packet length = "
 	LDR	lr, [r2, #PacketDescriptor_Flags]
-	DReg	lr, "Packet flags = "
-	CMP	r11, #0
-	BGE	%FT01					; only complain about -ve length
+	DREG	lr, "Packet flags = "
+	LDR	r11, [r2, #PacketDescriptor_Length]
 	DREG	r11, "Packet length = "
-01
+ ]
+ [ DiscardPartialPackets
+	LDR	lr, VideoHadFirstPacket
+	TEQ	lr, #0
+	BNE	%FT20					; not skipping partial PES packet
+10
+	LDR	lr, [r2, #PacketDescriptor_Flags]	; check if packet is start of MPEG packet
+	TST	lr, #PacketDescriptorFlags_MPEGStart
+	MOVNE	lr, #1					; it is, so indicate we've had 1st packet
+	STRNE	lr, VideoHadFirstPacket
+	BNE	%FT20					; then continue
+	BL	DiscardPacket				; it isn't the start, so throw packet away
+	TEQ	r2, #0					; if more packets
+	BNE	%BT10					; then loop
+	EXIT						; else exit
+20
+ ]
  [ Save1stFullPacket
+	LDR	r11, [r2, #PacketDescriptor_Length]
 	LDR	lr, SavedPacketLength
 	TEQ	lr, #0
-	BNE	%FT05					; [already saved, so skip]
+	BNE	%FT40					; [already saved, so skip]
 	CMP	r11, #?FirstPacket			; if bigger than we've room for
 	MOVHI	r11, #?FirstPacket			; reduce size
 	STR	r11, SavedPacketLength
 	ADR	r0, FirstPacket
 	LDR	lr, [r2, #PacketDescriptor_Start]
 	Push	"r1"
-02
+35
 	SUBS	r11, r11, #1				; copy the packet into saved area
 	LDRCSB	r1, [lr, r11]
 	STRCSB	r1, [r0, r11]
-	BHI	%BT02
+	BHI	%BT35
 	LDR	r1, [r2, #PacketDescriptor_Flags]	; save PTS, or -1 if none
 	TST	r1, #PacketDescriptorFlags_PTSValid
 	MOVEQ	r1, #-1
@@ -1275,7 +1315,7 @@ VideoFullPackets Entry "r0,r11"
 	LDRNEB	r1, [r2, #PacketDescriptor_PTS +4]
 	STR	r1, SavedPacketPTS +4
 	Pull	"r1"
-05
+40
  ]
 	LDR	r11, L64002_Registers
 	MOV	r0, pc
@@ -1287,7 +1327,7 @@ VideoFullPackets Entry "r0,r11"
 	TEQ	r0, #0					; if nothing on list
 	STREQ	r2, VideoPacketListHeadPtr		; then point head at new packets
 	STRNE	r2, [r0, #PacketDescriptor_Link]	; else tail!link = packet
-10
+50
 	LDR	r0, [r2, #PacketDescriptor_Length]
 	LDR	lr, VideoAmountReceived
 	ADD	lr, lr, r0
@@ -1299,10 +1339,10 @@ VideoFullPackets Entry "r0,r11"
 	STRNE	r0, [r2, #PacketDescriptor_Flags]
 
 	TST	r0, #PacketDescriptorFlags_MPEGStart	; is it the start of a new packet?
-	BEQ	%FT30					; [no, so skip this]
+	BEQ	%FT70					; [no, so skip this]
 	LDR	lr, UnknownLengthPacket			; if it is, check to see if we have an indeterminate length packet in progress
 	TEQ	lr, #0
-	BEQ	%FT20
+	BEQ	%FT60
 	Push	"r0,r1"
  [ FullLengthStats
 	ADRL	r0, LengthStatsPosition
@@ -1321,7 +1361,7 @@ VideoFullPackets Entry "r0,r11"
 	MOV	r0, #0
 	STR	r0, UnknownLengthPacket			; and clear the pointer to it
 	Pull	"r0,r1"
-20
+60
  [ TrickPlaySupport
 	LDR	lr, TrickPlayMode
 	TEQ	lr, #0
@@ -1344,21 +1384,21 @@ VideoFullPackets Entry "r0,r11"
 	STRNE	r2, UnknownLengthPacket			; set up pointer to unknown length packet, if doing trick play or always
 							;  fudging
  ]
-30
+70
 	LDR	r0, UnknownLengthPacket			; if we are working out the length
 	TEQ	r0, #0
-	BEQ	%FT40
+	BEQ	%FT80
 	Push	"r1"
 	LDR	r1, [r0, #PacketDescriptor_FullLength]
 	LDR	lr, [r2, #PacketDescriptor_Length]
 	ADD	r1, r1, lr
 	STR	r1, [r0, #PacketDescriptor_FullLength]  ; update total length
 	Pull	"r1"
-40
+80
 	LDR	r0, [r2, #PacketDescriptor_Link]	; go down list of packets to end
 	TEQ	r0, #0
 	MOVNE	r2, r0
-	BNE	%BT10
+	BNE	%BT50
 
 	STR	r2, VideoPacketListTailPtr		; store new tail pointer
 	Pull	"r0"
@@ -1815,6 +1855,10 @@ VideoReset Entry "r0"
  ]
  [ SaveAPacket
 	STR	r0, SavedPacketLength				; throw away any saved packet
+ ]
+ [ DiscardPartialPackets
+	STR	r0, VideoHadFirstPacket				; not had PES packet
+	STR	r0, AudioHadFirstPacket
  ]
 	MOV	r0, #1
 	STR	r0, VideoPreFilling				; we are now pre-filling
@@ -5182,6 +5226,29 @@ CountPackets Entry
 
  ] ; RegDebug
 
+ [ AudioDebug
+SaveAudio_Help
+	=	"*SaveAudio saves the captured audio block to a file.", CR
+SaveAudio_Syntax
+	=	"Syntax: *SaveAudio <filename>", 0
+	ALIGN
+
+SaveAudio_Code Entry
+	LDR	wp, [r12]
+	MOV	r1, r0				; r1 -> command tail ie the filename
+	MOV	r0, #&80
+	SWI	XOS_Find
+	EXIT	VS
+	MOV	r1, r0				; put handle into r1
+	MOV	r0, #2				; write at ptr
+	ADRL	r2, AudioCaptureBlock		; r2 = start address
+	LDR	r3, AudioCaptureBlockLength
+	SWI	XOS_GBPB
+	MOV	r0, #0
+	SWI	XOS_Find
+	EXIT
+ ]
+
 ; **************************************************************************
 ;
 ;	VideoStats - Entry point for MPEGVideo_Stats SWI - Return statistics
@@ -5339,11 +5406,125 @@ AudioOpenStream Entry "r1,r2, r11"
 ;	r2 -> one or more linked bitstream packets
 
 AudioFullPackets Entry "r0,r11"
-	LDR	r11, [r2, #PacketDescriptor_Length]
-	CMP	r11, #0
-	BGE	%FT01					; only complain about -ve length
-	DREG	r11, "Packet length = "
-01
+ [ DiscardPartialPackets
+	LDR	lr, AudioHadFirstPacket
+	TEQ	lr, #0
+	BNE	%FT20					; not skipping partial PES packet
+10
+	LDR	lr, [r2, #PacketDescriptor_Flags]	; check if packet is start of MPEG packet
+	TST	lr, #PacketDescriptorFlags_MPEGStart
+	MOVNE	lr, #1					; it is, so indicate we've had 1st packet
+	STRNE	lr, AudioHadFirstPacket
+	BNE	%FT20					; then continue
+	BL	DiscardPacket				; it isn't the start, so throw packet away
+	TEQ	r2, #0					; if more packets
+	BNE	%BT10					; then loop
+	EXIT						; else exit
+20
+ ]
+ [ AudioDebug
+	Push	"r1-r5"
+	MOV	r0, r2
+	LDR	r1, [r0, #PacketDescriptor_Flags]
+	TST	r1, #PacketDescriptorFlags_MPEGStart	; is it start of an MPEG packet?
+	BEQ	%FT40
+	MOV	r3, #0
+	BL	AudioSendDebug				; send 1st byte of start code
+	BL	AudioSendDebug				; send 2nd byte of start code
+	MOV	r3, #1
+	BL	AudioSendDebug				; send 3rd byte of start code
+	MOV	r3, #&C0
+	BL	AudioSendDebug				; send 4th byte of start code
+	LDR	r4, [r0, #PacketDescriptor_FullLength]
+	TST	r1, #PacketDescriptorFlags_PTSValid
+
+  [ AudioSquawkFix2
+
+; Bug 4-20 on the L64002 bug sheet describes something similar sounding to the audio squawk problem, albeit with
+; serial input of data. It claims it only happens if the PES packet header is not a multiple of 8 bytes.
+; So try padding audio packet headers (using MPEG2 PES packet header) to 16 bytes.
+
+	ADD	r4, r4, #10				; add on ten for flags1, flags2, hdrlen, then either 7 pad or 5 PTS+2 pad
+	MOV	r3, r4, LSR #8
+	BL	AudioSendDebug				; send hi byte of length
+	AND	r3, r4, #&FF
+	BL	AudioSendDebug				; send lo byte of length
+	MOV	r3, #&80				; flags1 (&80)
+	BL	AudioSendDebug
+	MOVEQ	r3, #&00				; flags2 (&00 if no PTS, &80 if is)
+	BL	AudioSendDebug
+	MOV	r3, #7					; header len
+	BL	AudioSendDebug
+
+	MOVEQ	r3, #&FF				; pad with FF if no PTS
+	LDRNE	r4, [r0, #PacketDescriptor_PTS]		; get bits 31..0 of PTS
+	LDRNE	r5, [r0, #PacketDescriptor_PTS+4]	; get bit 32 of PTS
+	MOVNE	r3, r4, LSR #29				; r3 = bits 31..29 in bits 2..0
+	ORRNE	r3, r3, r5, LSL #3			; r3 = bits 32..29 in bits 3..0
+	ORRNE	r3, r3, #&21				; OR in 2 in top nibble indicating PTS, and force bit 0 to 1 (marker)
+	BL	AudioSendDebug
+	MOVNE	r3, r4, LSR #22				; r3 = bits 29..22 in bits 7..0
+	BL	AudioSendDebug				; (only stores bottom 8 bits)
+	MOVNE	r3, r4, LSR #14				; r3 = bits 21..14 in bits 7..0
+	ORRNE	r3, r3, #1				; force bit 0 to 1 (marker)
+	BL	AudioSendDebug
+	MOVNE	r3, r4, LSR #7				; r3 = bits 14..7 in bits 7..0
+	BL	AudioSendDebug
+	MOVNE	r3, r4, LSL #1				; r3 = bits 6..0 in bits 7..1
+	ORRNE	r3, r3, #1
+	BL	AudioSendDebug
+	MOV	r3, #&FF
+	BL	AudioSendDebug				; 2 further padding bytes
+	BL	AudioSendDebug
+ |
+	ADDEQ	r4, r4, #1				; add on one for 0F byte if no PTS
+	ADDNE	r4, r4, #5				; add on five for PTS
+	MOV	r3, r4, LSR #8
+	BL	AudioSendDebug				; send hi byte of length
+	AND	r3, r4, #&FF
+	BL	AudioSendDebug				; send lo byte of length
+	MOVEQ	r3, #&0F				; no PTS, so send terminating code
+	BEQ	%FT30
+
+	LDR	r4, [r0, #PacketDescriptor_PTS]		; get bits 31..0 of PTS
+	LDR	r5, [r0, #PacketDescriptor_PTS+4]	; get bit 32 of PTS
+	MOV	r3, r4, LSR #29				; r3 = bits 31..29 in bits 2..0
+	ORR	r3, r3, r5, LSL #3			; r3 = bits 32..29 in bits 3..0
+	ORR	r3, r3, #&21				; OR in 2 in top nibble indicating PTS, and force bit 0 to 1 (marker)
+	BL	AudioSendDebug
+	MOV	r3, r4, LSR #22				; r3 = bits 29..22 in bits 7..0
+	BL	AudioSendDebug				; (only stores bottom 8 bits)
+	MOV	r3, r4, LSR #14				; r3 = bits 21..14 in bits 7..0
+	ORR	r3, r3, #1				; force bit 0 to 1 (marker)
+	BL	AudioSendDebug
+	MOV	r3, r4, LSR #7				; r3 = bits 14..7 in bits 7..0
+	BL	AudioSendDebug
+	MOV	r3, r4, LSL #1				; r3 = bits 6..0 in bits 7..1
+	ORR	r3, r3, #1
+30
+	BL	AudioSendDebug
+ ]
+
+40
+	LDR	r0, AudioCaptureBlockLength
+	RSBS	r11, r0, #AudioCaptureBlockMaxLen	; bytes free
+	BLE	%FT60					; if <=0 then block full
+	LDR	r1, [r2, #PacketDescriptor_Length]
+	CMP	r1, r11					; find min(packet length, bytes free)
+	MOVCC	r11, r1
+	ADRL	r1, AudioCaptureBlock
+	ADD	r1, r1, r0				; r1 -> free space
+	ADD	r0, r0, r11				; r0 = new length
+	LDR	r2, [r2, #PacketDescriptor_Start]
+50
+	LDRB	lr, [r2], #1
+	STRB	lr, [r1], #1
+	SUBS	r11, r11, #1
+	BNE	%BT50
+	STR	r0, AudioCaptureBlockLength
+60
+	Pull	"r1-r5"
+ ]
 	LDR	r11, L64002_Registers
 	MOV	r0, pc
 	Push	"r0"
@@ -5354,17 +5535,45 @@ AudioFullPackets Entry "r0,r11"
 	TEQ	r0, #0					; if nothing on list
 	STREQ	r2, AudioPacketListHeadPtr		; then point head at new packets
 	STRNE	r2, [r0, #PacketDescriptor_Link]	; else tail!link = packet
-10
+80
 	LDR	r0, [r2, #PacketDescriptor_Link]	; go down list of packets to end
 	TEQ	r0, #0
 	MOVNE	r2, r0
-	BNE	%BT10
+	BNE	%BT80
 
 	STR	r2, AudioPacketListTailPtr		; store new tail pointer
 	Pull	"r0"
 	TEQP	r0, #0					; restore IRQ state
 
 	EXIT
+
+ [ AudioDebug
+AudioSendDebug Entry "r0"
+	LDR	lr, AudioCaptureBlockLength
+	CMP	lr, #AudioCaptureBlockMaxLen
+	EXITS	CS
+	ADRL	r0, AudioCaptureBlock
+	ADD	r0, r0, lr
+	STRB	r3, [r0]
+	ADD	lr, lr, #1
+	STR	lr, AudioCaptureBlockLength
+	EXITS
+ ]
+ [ DiscardPartialPackets
+; in: r2 -> packet to discard by calling packet free routine
+; out: r2 -> next packet
+; This routine is used instead of FreePacket because the packet
+; is not yet on the packet list
+
+DiscardPacket	Entry "r0"
+	MOV	r0, r2
+	LDR	r2, [r0, #PacketDescriptor_Link]
+	MOV	lr, #0
+	STR	lr, [r0, #PacketDescriptor_Link]	; terminate this packet
+	MOV	lr, pc
+	LDR	pc, [r0, #PacketDescriptor_FreeRoutine]
+	EXIT
+ ]
 
 ; **************************************************************************
 ;
@@ -5574,6 +5783,10 @@ AudioReset Entry "r0"
  [ VetSCRValues
 	STR	r0, VetSCRState				; indicate awaiting first SCR
 	STR	r0, BadSCRCount				; no bad'uns yet
+ ]
+
+ [ AudioDebug
+	STR	r0, AudioCaptureBlockLength		; zero record of captured amount
  ]
 	MOV	r0, #1
 	STR	r0, AudioPreFilling
@@ -5936,39 +6149,40 @@ AudioSendNewPacketIfNecessary Entry "r1-r5, r11"
 
 ; Bug 4-20 on the L64002 bug sheet describes something similar sounding to the audio squawk problem, albeit with
 ; serial input of data. It claims it only happens if the PES packet header is not a multiple of 8 bytes.
-; So try padding audio packets to 8 bytes if no PTS or 16 bytes if there is a PTS.
+; So try padding audio packet headers (using MPEG2 PES packet header) to 16 bytes.
 
-	ADDEQ	r4, r4, #2				; add on two for FF 0F bytes if no PTS
-	ADDNE	r4, r4, #10				; add on ten for 5 padding + 5 PTS
+	ADD	r4, r4, #10				; add on ten for flags1, flags2, hdrlen, then either 7 pad or 5 PTS+2 pad
 	MOV	r3, r4, LSR #8
 	BL	AudioWaitAndSendByte			; send hi byte of length
 	AND	r3, r4, #&FF
 	BL	AudioWaitAndSendByte			; send lo byte of length
-	MOV	r3, #&FF				; always send at least one byte of padding
+	MOV	r3, #&80				; flags1 (&80)
 	BL	AudioWaitAndSendByte
-	MOVEQ	r3, #&0F				; no PTS, so send terminating code
-	BEQ	%FT50
-
-	BL	AudioWaitAndSendByte			; send 4 more padding bytes before PTS (r3 = &FF)
+	MOVEQ	r3, #&00				; flags2 (&00 if no PTS, &80 if is)
 	BL	AudioWaitAndSendByte
-	BL	AudioWaitAndSendByte
+	MOV	r3, #7					; header len
 	BL	AudioWaitAndSendByte
 
-	LDR	r4, [r0, #PacketDescriptor_PTS]		; get bits 31..0 of PTS
-	LDR	r5, [r0, #PacketDescriptor_PTS+4]	; get bit 32 of PTS
-	MOV	r3, r4, LSR #29				; r3 = bits 31..29 in bits 2..0
-	ORR	r3, r3, r5, LSL #3			; r3 = bits 32..29 in bits 3..0
-	ORR	r3, r3, #&21				; OR in 2 in top nibble indicating PTS, and force bit 0 to 1 (marker)
+	MOVEQ	r3, #&FF				; pad with FF if no PTS
+	LDRNE	r4, [r0, #PacketDescriptor_PTS]		; get bits 31..0 of PTS
+	LDRNE	r5, [r0, #PacketDescriptor_PTS+4]	; get bit 32 of PTS
+	MOVNE	r3, r4, LSR #29				; r3 = bits 31..29 in bits 2..0
+	ORRNE	r3, r3, r5, LSL #3			; r3 = bits 32..29 in bits 3..0
+	ORRNE	r3, r3, #&21				; OR in 2 in top nibble indicating PTS, and force bit 0 to 1 (marker)
 	BL	AudioWaitAndSendByte
-	MOV	r3, r4, LSR #22				; r3 = bits 29..22 in bits 7..0
+	MOVNE	r3, r4, LSR #22				; r3 = bits 29..22 in bits 7..0
 	BL	AudioWaitAndSendByte			; (only stores bottom 8 bits)
-	MOV	r3, r4, LSR #14				; r3 = bits 21..14 in bits 7..0
-	ORR	r3, r3, #1				; force bit 0 to 1 (marker)
+	MOVNE	r3, r4, LSR #14				; r3 = bits 21..14 in bits 7..0
+	ORRNE	r3, r3, #1				; force bit 0 to 1 (marker)
 	BL	AudioWaitAndSendByte
-	MOV	r3, r4, LSR #7				; r3 = bits 14..7 in bits 7..0
+	MOVNE	r3, r4, LSR #7				; r3 = bits 14..7 in bits 7..0
 	BL	AudioWaitAndSendByte
-	MOV	r3, r4, LSL #1				; r3 = bits 6..0 in bits 7..1
-	ORR	r3, r3, #1
+	MOVNE	r3, r4, LSL #1				; r3 = bits 6..0 in bits 7..1
+	ORRNE	r3, r3, #1
+	BL	AudioWaitAndSendByte
+	MOV	r3, #&FF
+	BL	AudioWaitAndSendByte			; 2 further padding bytes
+	BL	AudioWaitAndSendByte
 50
  |
 	ADDEQ	r4, r4, #1				; add on one for 0F byte if no PTS
@@ -5996,8 +6210,8 @@ AudioSendNewPacketIfNecessary Entry "r1-r5, r11"
 	MOV	r3, r4, LSL #1				; r3 = bits 6..0 in bits 7..1
 	ORR	r3, r3, #1
 50
- ]
 	BL	AudioWaitAndSendByte
+ ]
 	BIC	r1, r1, #PacketDescriptorFlags_MPEGStart ; clear MPEG start bit, so if run out of buffer part way thru,
 	STR	r1, [r0, #PacketDescriptor_Flags]	; we don't send hdr again
 	TEQ	r0, r0					; set EQ state, so we attempt to send data
