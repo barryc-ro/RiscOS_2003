@@ -720,7 +720,7 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 					                		strcpy(sendMessage->data.context_isp.number, show_number);
 
 											StateKicker_SendMessage(RemXfer_StateMachine, SQ_RX_DIAL_ISP, &sendMessage);
-					                		sendMessage->data.sq_rx_dial_isp.tx_flag = (transmit_document != NULL);
+					                		sendMessage->data.sq_rx_dial_isp.tx_flag = (BOOL)(transmit_document != NULL);
 					                		sendMessage->data.sq_rx_dial_isp.rx_flag = TRUE;
 					                		strcpy(sendMessage->data.sq_rx_dial_isp.number, dial_number);
 										}
@@ -752,8 +752,11 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 								Screen_ReportError("Title_RX_SQ_ERROR", messageData);
 								Log_TxConnectingError(RouteDIRECT, &(transmit_document->Connection), messageData);
 #if 1
-								if ((messageData->data.rm_error.rc == 6 /*no carrier*/) ||
-								    (messageData->data.rm_error.rc == 5 /* timeout*/)
+								if ((messageData->data.error.ctx == ctx_Dialler_RCError)
+								    &&
+								    ((messageData->data.error.rc == 6 /*no carrier*/) ||
+								     (messageData->data.error.rc == 5 /* timeout*/)
+								    )
 								   )
                                 {
 									/* we sent SQ_RX_DIAL_DAYTONA, but RemModem cannot detect a carrier, */
@@ -768,6 +771,13 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
                                                                 );
 #else
 									TFax_address_remove(transmit_document->AddressRecord.DirectPhoneNumber);	/* RemModem (sending) didn't find a Daytona */
+#endif
+#if 1 /* PAN-01713 */
+                                    /* override the usual THIRTY_SECOND or FIVE_MINUTE delay */
+                                    transmit_document->Connection.RedialDelay = ONE_SECOND;   /* re-dial as soon as the hangup completes */
+
+                                    /* a special case, don't count a failed dialup */
+                                    transmit_document->Connection.RetryCount -= 1;
 #endif
                                 }
 #endif
@@ -1128,7 +1138,7 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 			
         case ME_SQ_ERROR:
             {
-                Screen_ReportError("Title_RX_SQ_ERROR", messageData);
+                Screen_ReportError("Title_RX_SQ_ERROR", messageData);   /*>>>> Title_ME_SQ_ERROR ??? */
                 if (encoding_document)
                     Log_TxEncodingError(RouteISP, messageData, encoding_document);
             }
@@ -1502,6 +1512,8 @@ static void Log_TxConnecting(enum _SendRoute route, PhoneConnection *connection,
     connection->TimeConnect = now;
     connection->TimeEnd     = now;
 
+    connection->RedialDelay = 30;   /* a sensible default, may be changed depending on the nature of the error */
+
 	strcpy(log_tx_dial_number, dial_number);
 	log_tx_error_count = 0;
 
@@ -1552,7 +1564,25 @@ static void Log_TxConnectingError(enum _SendRoute route, PhoneConnection *connec
 
 		LogFileIF_Message(buffer);
 	}
+#if 1
+    switch (messageData->data.error.code)
+    {
+        case code_NoDialTone:
+            connection->RedialDelay = FIVE_MINUTES;
+            LogFileIF_show_decimal_uint(LOG_DEBUG, "No dial tone, seconds to retry", connection->RedialDelay);
+            break;
 
+        case code_LineBusy:
+            if (connection->RetryCount == 0)
+                connection->RedialDelay = 30;
+            else
+                connection->RedialDelay = FIVE_MINUTES;
+
+            LogFileIF_show_decimal_uint(LOG_DEBUG, "Line busy, seconds to retry", connection->RedialDelay);    
+            break;
+
+    }
+#endif
 	log_tx_error_count++;	
 }
 
@@ -1573,7 +1603,7 @@ static void Log_TxConnectingFailed(enum _SendRoute route, PhoneConnection *conne
 	connection->TimeEnd     = now;  /* }                         */
 
 	connection->RetryCount += 1;	/* count the dial attempt */	
-    connection->RetryTime   = time(NULL) + 30;	/*now() + something(connection->RetryCount);*/
+    connection->RetryTime   = now + connection->RedialDelay;    /* usually THIRTY_SCEONDS or FIVE_MINUTES */
 
 	if (route == RouteISP)
 	{

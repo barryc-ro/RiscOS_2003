@@ -88,6 +88,8 @@ typedef struct
 /* Declare function prototypes */
 static void RemXfer_ForwardError(void (*StateMachine)(int messageNumber, messageDataBlock *messagedata), int messageNumber,
                                  int forwardNumber, messageDataBlock *forwardData);
+static void RemXfer_SendOSError(void (*StateMachine)(int messageNumber, messageDataBlock *messagedata), int messageNumber, _kernel_oserror *error);
+static void RemXfer_SendRCError(void (*StateMachine)(int messageNumber, messageDataBlock *messagedata), int messageNumber, /*const*/ char *text, int rc);
 static void *create_dynamic_area (const size_t size, const char *const name, int *const area_number);
 static _kernel_oserror *remove_dynamic_area (const int area_number);
 static void free_header (NFE_header *header);
@@ -422,7 +424,9 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 #if /*THINK*/ 1
 					/* A 'T1 Timeout' error after connection & before any data transfer is */
 					/* probably a voice caller (later T1 Timeouts are treated as genuine). */
-					if (messageData->data.fx_error.rc == 0x011 /*ERROR_T1_TIMEOUT*/)
+					if ((messageData->data.error.ctx == ctx_Fax_OSError) &&
+					    (messageData->data.error.rc  == 0x011 /*ERROR_T1_TIMEOUT*/)
+					   ) 
 					{
 						StateKicker_SendMessage(PrintQ_MessageHandler, RX_PQ_MAYBE_VOICE, NULL);	/* Send a supplementary message */
 					}
@@ -804,7 +808,9 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 #if /*THINK*/ 1
 					/* A 'T1 Timeout' error after connection & before any data transfer is */
 					/* probably a voice receiver (later T1 Timeouts are treated as genuine). */
-					if (messageData->data.fx_error.rc == 0x011 /*ERROR_T1_TIMEOUT*/)
+					if ((messageData->data.error.ctx == ctx_Fax_OSError) &&
+					    (messageData->data.error.rc  == 0x011 /*ERROR_T1_TIMEOUT*/)
+                       )
 					{
 						/* Remote receiver has answered, but doesn't whistle like a fax machine */
 						StateKicker_SendMessage(SendQ_MessageHandler, RX_SQ_MAYBE_VOICE, NULL);				/* give strong hint to SendQ that its not worth redialling */
@@ -1944,11 +1950,16 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 
 						default:    /* couldn't add message and couldn't recover */
 						{
+#if 1
+                            /* RCM says: we MUST use RemXfer_SendRCError (or RemXfer_SendOSError) rather than rolling our own error messages */
+                            RemXfer_SendRCError(PrintQ_MessageHandler, RX_PQ_ERROR, "Not enough memory to scan mailbox.", 1); 
+#else
 							messageDataBlock *send_message;
 
 							StateKicker_SendMessage (PrintQ_MessageHandler, RX_PQ_ERROR, &send_message);
 							send_message->data.os_error.err.errnum = 0;
 							strcpy (send_message->data.os_error.err.errmess, "Not enough memory to scan mailbox.");
+#endif
 							free_pop3_resources ();
 							Pop3IF_Disconnect();
 							nextstate = INCOMING_9c;
@@ -2014,11 +2025,16 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 					pop3.document_directory = malloc (strlen (messageData->data.new_document_dir.directory) + 1);
 					if (pop3.document_directory == NULL)
 					{
+#if 1
+                        /* RCM says: we MUST use RemXfer_SendRCError (or RemXfer_SendOSError) rather than rolling our own error messages */
+                        RemXfer_SendRCError(PrintQ_MessageHandler, RX_PQ_ERROR, "Not enough memory to print document.", 2);                  
+#else					
 						messageDataBlock *send_message;
 
 						StateKicker_SendMessage (PrintQ_MessageHandler, RX_PQ_ERROR, &send_message);
 						send_message->data.os_error.err.errnum = 0;
 						strcpy (send_message->data.os_error.err.errmess, "Not enough memory to print document.");
+#endif
 						free_pop3_resources ();
 						Pop3IF_Disconnect();
 						nextstate = INCOMING_9c;
@@ -2144,12 +2160,16 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 						pop3.message_filename = malloc (strlen (POP3_DIR) + 16);    /* more than enough for maximum possible number messages */
 						if (pop3.message_filename == NULL)
 						{
+#if 1
+                            /* RCM says: we MUST use RemXfer_SendRCError (or RemXfer_SendOSError) rather than rolling our own error messages */
+                            RemXfer_SendRCError(PrintQ_MessageHandler, RX_PQ_ERROR, "Not enough memory to download EMail message.", 3);
+#else						
 							messageDataBlock *send_message;
 
 							StateKicker_SendMessage (PrintQ_MessageHandler, RX_PQ_ERROR, &send_message);
 							send_message->data.os_error.err.errnum = 0;
 							strcpy (send_message->data.os_error.err.errmess, "Not enough memory to download EMail message.");
-
+#endif
 							free_pop3_resources ();
 							Pop3IF_Disconnect();
 #ifndef PRESERVE_POP3
@@ -2494,6 +2514,9 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 }
 
 
+/*
+ * Forward an error reported by RemModem or FaxIF
+ */
 static void RemXfer_ForwardError(void (*StateMachine)(int messageNumber, messageDataBlock *messagedata), int messageNumber,
                                  int forwardNumber, messageDataBlock *forwardData)
 {
@@ -2501,6 +2524,71 @@ static void RemXfer_ForwardError(void (*StateMachine)(int messageNumber, message
 
     StateKicker_SendMessage(StateMachine, messageNumber, &sendMessage);
     sendMessage->data = forwardData->data;
+#if 0 /*THINK*/
+    /* Map a small set of Fax errors and a small */
+    /* set of modem errors onto common HL_Errors */
+
+    switch (forwardNumber == FX_ERROR)
+    {
+        case FX_ERROR:
+            switch (forwardData->data.fx_error.rc)
+            {
+                case Error_No_Dialtone:
+                = HL_ERROR_NoDialTone;
+                    break;
+    
+                case Error_Busy:
+                = HL_ERROR_LineBusy;
+                    break;
+    
+                case Error_No_Answer:
+                = HL_ERROR_NoAnswer
+                    break;
+    
+                case Error_No_Carrier:
+                = HL_ERROR_NoCarrier
+                    break;
+            }
+            break;
+
+        case RM_RX_ERROR:
+            switch (forwardData->data.rm_error.rc)
+            {
+                case Dialler_AbortedScript_NoDialtone:
+                = HL_ERROR_NoDialTone;
+                    break;
+    
+                case Dialler_AbortedScript_Busy
+                = HL_ERROR_LineBusy;
+                    break;
+    
+                case Dialler_AbortedScript_NoAnswer
+                = HL_ERROR_NoAnswer
+                    break;
+    
+                case Dialler_AbortedScript_NoCarrier
+                = HL_ERROR_NoCarrier
+                    break;
+            }
+            break;
+        
+    }
+#endif
+}
+
+
+/*
+ * Send an error of our own
+ */
+static void RemXfer_SendRCError(void (*StateMachine)(int messageNumber, messageDataBlock *messagedata), int messageNumber, /*const*/ char *text, int rc)
+{
+    StateKicker_SendRCError(StateMachine, messageNumber, code_RemXfer_RCError, ctx_RemXfer_RCError, rc, text);
+}
+
+
+static void RemXfer_SendOSError(void (*StateMachine)(int messageNumber, messageDataBlock *messagedata), int messageNumber, _kernel_oserror *error)
+{
+    StateKicker_SendOSError(StateMachine, messageNumber, code_RemXfer_OSError, ctx_RemXfer_OSError, error);
 }
 
 
@@ -2825,11 +2913,16 @@ static int start_message_download (void)
 	pop3.download_list = emailrx_build_dl_list (free_space);
 	if (pop3.download_list == NULL)
 	{
+#if 1
+        /* RCM says: we MUST use RemXfer_SendRCError (or RemXfer_SendOSError) rather than rolling our own error messages */
+        RemXfer_SendRCError(PrintQ_MessageHandler, RX_PQ_ERROR, "Not enough memory to download EMail messages.", 4);
+#else
 		messageDataBlock *send_message;
 
 		StateKicker_SendMessage (PrintQ_MessageHandler, RX_PQ_ERROR, &send_message);
 		send_message->data.os_error.err.errnum = 0;
 		strcpy (send_message->data.os_error.err.errmess, "Not enough memory to download EMail messages.");
+#endif
 		free_pop3_resources ();
 		Pop3IF_Disconnect();
 		return 1;
@@ -2856,20 +2949,29 @@ static int start_message_download (void)
 
 static void file_error (void)
 {
-	messageDataBlock *send_message;
 	_kernel_oserror *e;
 
+#if 1
+    /* RCM says: we MUST use RemXfer_SendRCError (or RemXfer_SendOSError) rather than rolling our own error messages */
+    e = _kernel_last_oserror();
+    if (e)
+        RemXfer_SendOSError(PrintQ_MessageHandler, RX_PQ_ERROR, e);
+    else
+        RemXfer_SendRCError(PrintQ_MessageHandler, RX_PQ_ERROR, "Unable to open Email report file", 5);    
+#else
+	messageDataBlock *send_message;
 	StateKicker_SendMessage (PrintQ_MessageHandler, RX_PQ_ERROR, &send_message);
 	e = _kernel_last_oserror ();
 	if (e)
 	{
-		send_message->data.os_error.err = *e;
+		send_message->data.os_error.err = *e;                 NO NO NO
 	}
 	else
 	{
 		strcpy (send_message->data.os_error.err.errmess,
 		        lookup_message_token (&message_block, "EmailReport_Error"));
 	}
+#endif
 	free_pop3_resources ();
 	Pop3IF_Disconnect();
 #ifndef PRESERVE_POP3
