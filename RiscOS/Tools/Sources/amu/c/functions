@@ -22,7 +22,6 @@
 #include "err.h"
 #include "filestamp.h"
 #include "wholefls.h"
-#include "hash.h"
 #include "fname.h"
 
 /* Local */
@@ -34,11 +33,24 @@
 #include "patterns.h"
 #include "readmk.h"
 #include "utility.h"
+#include "wildcard.h"
 
 /* Not all of these functions are documented extensively - read the GNU make manual
  * for details of what each function_* function is doing.  The internal utility
  * functions are fully documented here.
+ *
+ * http://www.gnu.org/manual/make/
  */
+
+/* A type for remembering the call stack */
+typedef struct fn_call_stack fn_call_stack;
+struct fn_call_stack {
+  fn_call_stack *prev;
+  int num_params;
+  MacroVar *params;
+};
+static fn_call_stack *call_stack;
+
 
 
 /* This function is used to split up the list of parameters into words with or
@@ -397,15 +409,17 @@ static char *internal_functions_filter(LinePart *lp, bool keep_matches)
   for (count = 0; count < patterns->lineno; ++count) {
     patterns_destroy_substitution(&ps[count]);
   }
+
   free(ps);
   deallocate_line(patterns); /* throw away the patterns and their line object */
 
   *(strings->nextpart) = NULL; /* terminate the list of rejects */
   deallocate_line(strings); /* and throw them and the Line object away */
 
-  *wanted_next = NULL; /* terminate the list of wanted notes */
+  *wanted_next = NULL; /* terminate the list of wanted nodes */
   if (lp->next) {
-    return rejoin_words(lp->next); /* and concatenate them with single spaces */
+    char *cresult = rejoin_words(lp->next); /* and concatenate them with single spaces */
+    return cresult;
   }
   else {
     return Strdup("");
@@ -442,18 +456,45 @@ static char *functions_findstring(LinePart *lp)
 
 static char *functions_dir(LinePart *lp)
 {
+  Line *args = internal_function_make_line(lp, rlr_words);
+  char *cresult;
 
-  /* THIS FUNCTION NEEDS TO BE IMPLEMENTED PLEASE */
+  for (lp = args->firstpart; lp; lp = lp->next) {
+    char *rightdot = strrchr(lp->data, dir_sep);
 
-  return internal_functions__not_implemented(lp);
+    if (rightdot) {
+      rightdot[1] = '\0';
+    }
+    else if (lp->data[0] && lp->data[1]) {
+      strcpy(lp->data, "@.");
+    }
+    else {
+      free(lp->data);
+      lp->data = Strdup("@.");
+    }
+  }
+
+  cresult = rejoin_words(args->firstpart);
+  deallocate_line(args);
+  return cresult;
 }
 
 static char *functions_notdir(LinePart *lp)
 {
+  Line *args = internal_function_make_line(lp, rlr_words);
+  char *cresult;
 
-  /* THIS FUNCTION NEEDS TO BE IMPLEMENTED PLEASE */
+  for (lp = args->firstpart; lp; lp = lp->next) {
+    char *rightdot = strrchr(lp->data, dir_sep);
 
-  return internal_functions__not_implemented(lp);
+    if (rightdot) {
+      memmove(lp->data, rightdot+1, strlen(rightdot));
+    }
+  }
+
+  cresult = rejoin_words(args->firstpart);
+  deallocate_line(args);
+  return cresult;
 }
 
 static char *functions_suffix(LinePart *lp)
@@ -461,7 +502,13 @@ static char *functions_suffix(LinePart *lp)
 
   /* THIS FUNCTION NEEDS TO BE IMPLEMENTED PLEASE */
 
-  return internal_functions__not_implemented(lp);
+  Line *args = internal_function_make_line(lp, rlr_words);
+  Line *result = alloc_line();
+  char *cresult;
+
+  cresult = rejoin_words(result->firstpart);
+  deallocate_line(args);
+  return cresult;
 }
 
 static char *functions_basename(LinePart *lp)
@@ -469,7 +516,13 @@ static char *functions_basename(LinePart *lp)
 
   /* THIS FUNCTION NEEDS TO BE IMPLEMENTED PLEASE */
 
-  return internal_functions__not_implemented(lp);
+  Line *args = internal_function_make_line(lp, rlr_words);
+  Line *result = alloc_line();
+  char *cresult;
+
+  cresult = rejoin_words(result->firstpart);
+  deallocate_line(args);
+  return cresult;
 }
 
 static char *functions_addsuffix(LinePart *lp)
@@ -580,17 +633,94 @@ static char *functions_join(LinePart *lp)
 static char *functions_wildcard(LinePart *lp)
 {
 
-  /* THIS FUNCTION NEEDS TO BE IMPLEMENTED PLEASE */
+  /* THIS FUNCTION NEEDS TO BE IMPLEMENTED PROPERLY PLEASE */
 
-  return internal_functions__not_implemented(lp);
+  /* This currently implements the "test exists" functionality of wildcard ONLY */
+  Line *l = internal_function_make_line(lp, rlr_words);
+  Line *result = alloc_line();
+  LinePart *lp2;
+  char *cresult;
+
+  for (lp2 = l->firstpart; lp2; lp2 = lp2->next) {
+#ifdef DUMMY_IMPLEMENTATION
+    if (wf_filesize(lp2->data) != -1) {
+      append_new_line_part(result)->data = lp2->data;
+      lp2->data = NULL;
+    }
+#else
+    Line *answers = wildcard_resolve(lp2->data);
+    *(result->nextpart) = answers->firstpart;
+    if (answers->firstpart) {
+      result->nextpart = answers->nextpart;
+      answers->firstpart = NULL;
+      deallocate_line(answers);
+    }
+#endif
+  }
+
+  cresult = rejoin_words(result->firstpart);
+  deallocate_line(result);
+  deallocate_line(l);
+
+  return cresult;
 }
 
 static char *functions_foreach(LinePart *lp)
 {
+  MacroVar memory, *active;
+  Line *value_list;
+  Line *result;
+  char *eval;
+  LinePart *this_value;
+  char *cresult;
 
-  /* THIS FUNCTION NEEDS TO BE IMPLEMENTED PLEASE */
+  result = alloc_line();
 
-  return internal_functions__not_implemented(lp);
+  /* Replace macros in first two parameters only */
+  macroise_free(&lp->data, true);
+  macroise_free(&lp->next->data, true);
+
+  /* Get the data we are going to be replacing, and detach from parameter list */
+  eval = lp->next->next->data;
+  lp->next->next = NULL;
+
+  /* Split up the list of words */
+  value_list = internal_function_make_line(lp->next, rlr_words);
+
+  /* Look up the variable we are going to loop, and REPLACE it */
+  active = lookup_macro(lp->data);
+  memory = *active;
+
+  /* Now, set up the macro and evaluate repeatedly */
+  for (this_value = value_list->firstpart; this_value; this_value = this_value->next) {
+    char *data;
+
+    /* Reset the macro value */
+    active->expanded = true;
+    active->origin = org_automatic;
+    active->value = this_value->data;
+    this_value->data = NULL;
+
+    //printf("foreach: substitute %s for '%s' in '%s'\n", lp->data, active->value, eval);
+
+    data = Strdup(eval);
+    macroise_free(&data, true);
+    append_new_line_part(result)->data = data;
+
+    //printf("foreach: substitution gave '%s'\n", data);
+
+    free(active->value); /* May have been changed by var assignment - but this is safe */
+  }
+
+  free(eval);
+  cresult = rejoin_words(result->firstpart);
+  deallocate_line(result);
+  deallocate_line(value_list);
+
+  /* Restore original information about macro */
+  *active = memory;
+
+  return cresult;
 }
 
 static char *functions_origin(LinePart *lp)
@@ -611,58 +741,126 @@ static char *functions_shell(LinePart *lp)
   return internal_functions__not_implemented(lp);
 }
 
+static char *functions_if(LinePart *lp)
+{
+  LinePart *clause = lp->next;
+  char *result;
+
+  /* Evaluate condition */
+  macroise_free(&lp->data, true);
+
+  /* Empty, then move to the else clause (if it exists) */
+  if (!lp->data[0]) clause = clause->next;
+
+  if (clause) {
+    macroise_free(&clause->data, true);
+    result = clause->data;
+    clause->data = NULL;
+  }
+  else {
+    result = Strdup("");
+  }
+
+  return result;
+}
+
+static char *functions_warning(LinePart *lp)
+{
+  amu_err_report("%s", lp->data);
+  return Strdup("");
+}
+
+static char *functions_error(LinePart *lp)
+{
+  amu_err_fail("%s", lp->data);
+  return Strdup("");
+}
+
+
+MacroVar *fn_parameter(int argc)
+{
+  static MacroVar null_mv = { false, org_undefined, "" };
+  if (call_stack && call_stack->num_params > argc) {
+    return &call_stack->params[argc];
+  }
+  else {
+    return &null_mv;
+  }
+}
+
+static void fn_setup_call(LinePart *lp)
+{
+  int argc;
+  LinePart *lpc;
+  fn_call_stack *frame;
+
+  for (argc = 0, lpc = lp; lpc; lpc = lpc->next) ++argc;
+  frame = safe_malloc(sizeof(*frame));
+  frame->prev = call_stack;
+  frame->num_params = argc;
+  frame->params = safe_malloc(sizeof(MacroVar) * argc);
+  call_stack = frame;
+
+  for (argc = 0; lp; lp = lp->next, ++argc) {
+    amu_debug(DEBUGGING3, "fn_setup_call arg %d: '%s'", argc, lp->data);
+    frame->params[argc].expanded = true;
+    frame->params[argc].origin = org_automatic;
+    frame->params[argc].value = lp->data;
+  }
+}
+
+static void fn_exit_call(LinePart *lp)
+{
+  if (call_stack) {
+    int argc;
+    fn_call_stack *prev_frame = call_stack->prev;
+    /* Need to update the list with any updated values */
+    for (argc = 0; lp; lp = lp->next, ++argc) {
+      lp->data = call_stack->params[argc].value;
+    }
+    free(call_stack->params);
+    free(call_stack);
+    call_stack = prev_frame;
+  }
+}
+
+static char *functions_call(LinePart *lp)
+{
+  const function_table *ft;
+  char *result;
+
+  ft = fn_lookup(lp->data);
+
+  if (ft != NULL) {
+    /* built in function */
+    amu_debug(DEBUGGING7, "functions_call(built in): %s", lp->data);
+    result = fn_execute(lp->next, ft);
+  }
+  else {
+    /* user-defined function */
+    amu_debug(DEBUGGING7, "functions_call(user def): %s", lp->data);
+    result = Strdup(lookup_macro(lp->data)->value);
+    fn_setup_call(lp);
+    (void) macroise_free(&result, true);
+    fn_exit_call(lp);
+  }
+
+  return result;
+}
+
+
 /******************************************************************************/
 /******************************************************************************/
 
 /* This is the table of supported functions and the support functions and types.
  *
- * When invoked, each function will be passed the count of entries
- * in the linepart list.  The list is guaranteed to have at least
- * min_args (first numueric parameter of the two) entries.
+ * When invoked, each function will be passed a list of parameters.
+ * The list is guaranteed to have at least min_args (first numeric parameter
+ * of the two) entries.  There may be more than max_args (the other) entries.
  */
 typedef char *(*function_executor)(LinePart *args);
 
-/* A simple enumerated type that can be used to identify functions
- *
- * Headings correspond to the GNU make manual's headings, where further
- * documentation can be found.
- */
-typedef enum {
-  func_not_recognised,
-  /* Functions for String Substitutions and Analysis */
-  func_subst,
-  func_patsubst,
-  func_strip,
-  func_findstring,
-  func_filter,
-  func_filter_out,
-  func_sort,
-  /* Functions for File Names */
-  func_dir,
-  func_notdir,
-  func_suffix,
-  func_basename,
-  func_addsuffix,
-  func_addprefix,
-  func_join,
-  func_word,
-  func_wordlist,
-  func_words,
-  func_firstword,
-  func_wildcard,
-  /* The foreach Function */
-  func_foreach,
-  /* The origin Function */
-  func_origin,
-  /* The shell Function */
-  func_shell,
-
-  /* A magic termination symbol */
-  func__last
-} known_functions;
-
 struct function_table {
-  known_functions code;
   char *name;
   int min_args;
   int max_args;
@@ -673,38 +871,42 @@ struct function_table {
 
 static const function_table func_tab[] =
 {
-  /* key              name   args:min/max expand args?   function to call  */
-  { func_subst,       "subst",      3, 3, true,  functions_subst           },
-  { func_patsubst,    "patsubst",   3, 3, true,  functions_patsubst        },
-  { func_strip,       "strip",      1, 1, true,  functions_strip           },
-  { func_findstring,  "findstring", 2, 2, true,  functions_findstring      },
-  { func_filter_out,  "filter",     2, 2, true,  functions_filter          },
-  { func_filter_out,  "filter-out", 2, 2, true,  functions_filter_out      },
-  { func_sort,        "sort",       1, 1, true,  functions_sort            },
+  /* name      args:min/max    expand args?  function to call  */
+  { "subst",         3,  3,       true,      functions_subst           },
+  { "patsubst",      3,  3,       true,      functions_patsubst        },
+  { "strip",         1,  1,       true,      functions_strip           },
+  { "findstring",    2,  2,       true,      functions_findstring      },
+  { "filter",        2,  2,       true,      functions_filter          },
+  { "filter-out",    2,  2,       true,      functions_filter_out      },
+  { "sort",          1,  1,       true,      functions_sort            },
 
-  { func_dir,         "dir",        1, 1, true,  functions_dir             },
-  { func_notdir,      "notdir",     1, 1, true,  functions_notdir          },
-  { func_suffix,      "suffix",     1, 1, true,  functions_suffix          },
-  { func_basename,    "basename" ,  1, 1, true,  functions_basename        },
-  { func_addsuffix,   "addsuffix",  2, 2, true,  functions_addsuffix       },
-  { func_addprefix,   "addprefix",  2, 2, true,  functions_addprefix       },
-  { func_join,        "join",       2, 2, true,  functions_join            },
+  { "dir",           1,  1,       true,      functions_dir             },
+  { "notdir",        1,  1,       true,      functions_notdir          },
+  { "suffix",        1,  1,       true,      functions_suffix          },
+  { "basename" ,     1,  1,       true,      functions_basename        },
+  { "addsuffix",     2,  2,       true,      functions_addsuffix       },
+  { "addprefix",     2,  2,       true,      functions_addprefix       },
+  { "join",          2,  2,       true,      functions_join            },
 
-  { func_word,        "word",       2, 2, true,  functions_nth_word,       },
-  { func_wordlist,    "wordlist",   3, 3, true,  functions_sth_to_eth_word },
-  { func_words,       "words",      1, 1, true,  functions_words,          },
-  { func_firstword,   "firstword",  1, 1, true,  functions_firstword       },
+  { "word",          2,  2,       true,      functions_nth_word,       },
+  { "wordlist",      3,  3,       true,      functions_sth_to_eth_word },
+  { "words",         1,  1,       true,      functions_words,          },
+  { "firstword",     1,  1,       true,      functions_firstword       },
 
-  { func_wildcard,    "wildcard",   1, 1, true,  functions_wildcard        },
+  { "wildcard",      1,  1,       true,      functions_wildcard        },
+  { "foreach",       3,  3,       false,     functions_foreach         },
+  { "if",            2,  3,       false,     functions_if              },
+  { "origin",        1,  1,       true,      functions_origin          },
+  { "shell",         1,  1,       true,      functions_shell           },
 
-  { func_foreach,     "foreach",    1, 1, false, functions_foreach         },
+  { "warning",       1,  1,       true,      functions_warning         },
+  { "error",         1,  1,       true,      functions_error           },
 
-  { func_origin,      "origin",     1, 1, true,  functions_origin          },
-
-  { func_shell,       "shell",      1, 1, true,  functions_shell           },
+  /* User-defined "function" call we have to permit any number of args */
+  { "call",          1,  INT_MAX, true,      functions_call            },
 
   /* The following line is the terminating record */
-  { func_not_recognised, NULL }
+  { NULL }
 };
 
 const function_table *fn_lookup(char *name)
@@ -712,14 +914,17 @@ const function_table *fn_lookup(char *name)
   const function_table *ft;
 
   for (ft = func_tab; ft->name; ++ft) {
-    if (hash_cistrcmp(name, ft->name) == 0) break;
+    if (strcmp(name, ft->name) == 0) return ft;
   }
 
-  return ft;
+  return NULL;
 }
 
 char *fn_execute(LinePart *argp, const function_table *ft)
 {
+  //char *result = (ft->execute)(argp);
+  //printf("execute: %s exits with '%s'\n", ft->name, result);
+  //return result;
   return (ft->execute)(argp);
 }
 

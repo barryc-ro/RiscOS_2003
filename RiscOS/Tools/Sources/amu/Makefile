@@ -20,6 +20,7 @@ INSTAPP = ${INSTDIR}.Apps.!AMU
 CINCLUDES  = -IC: -I${CLXDIR}
 CDEFINES   = -DDDE
 CFLAGS     = -Wc -ffah
+LDFLAGS    =
 
 #
 # Generic options:
@@ -36,7 +37,7 @@ DIRS=o._dirs
 COMPONENT  = amu
 TARGET     = amu
 
-OBJS       = amu.o md.o macros.o parse.o readmk.o functions.o patterns.o utility.o execute.o
+OBJS       = amu.o md.o macros.o parse.o readmk.o functions.o patterns.o utility.o execute.o wildcard.o dirsearch.o
 LIBS       = ${CLXLIB} ${CLIB}
 
 #

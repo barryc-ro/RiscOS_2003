@@ -1,0 +1,229 @@
+/*
+ * AMU (wildcard.c)
+ *
+ * Copyright (C) Pace Micro Technology plc. 2001
+ *
+ */
+
+/*
+ * This source contains the basic functions callable from makefile macros.
+ * The table of available functions is at the end of this file.
+ *
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+#include <ctype.h>
+#include <limits.h>
+
+/* CLX */
+#include "err.h"
+#include "filestamp.h"
+#include "wholefls.h"
+#include "dir.h"
+#include "fname.h"
+
+/* Local */
+#include "amu.h"
+#include "parse.h"
+#include "readmk.h"
+#include "utility.h"
+#include "functions.h"
+#include "wildcard.h"
+
+/* RISC OS */
+#include "swis.h"
+
+static void wildcard_debug(Line *answers, char *pattern, UnparsedName *un)
+{
+  amu_debug(DEBUGGING3, "* WILDCARD (%s)", pattern);
+  if (un->vol)  amu_debug(DEBUGGING3, "vol : >%.*s<", un->vlen, un->vol);
+  if (un->path) amu_debug(DEBUGGING3, "path: >%.*s<", un->plen, un->path);
+  if (un->root) amu_debug(DEBUGGING3, "root: >%.*s<", un->rlen, un->root);
+  if (un->extn) amu_debug(DEBUGGING3, "extn: >%.*s<", un->elen, un->extn);
+  (void) answers;
+}
+
+/* Reconstruct a full filename - returning it in an allocated buffer */
+static char *wildcard_rebuild_filename(UnparsedName *un, int flags)
+{
+  int s_len = un->vlen + un->plen + un->rlen + un->elen + 32;
+  char *s = safe_malloc(s_len);
+
+  while (fname_unparse(un, flags, s, s_len) < 0) {
+    s_len += 256;
+    free(s);
+    s = safe_malloc(s_len);
+  }
+
+  return s;
+}
+
+
+static bool wildcard_dir_exists(char *name)
+{
+  dir_handle dh = dir_open(name, "*");
+  if (dh) {
+    dir_close(dh);
+  }
+
+  return dh != NULL;
+}
+
+static bool wildcard_file_exists(char *name)
+{
+  return wf_filesize(name) != -1;
+}
+
+static bool wildcard_exists(char *name)
+{
+  return wildcard_file_exists(name) || wildcard_dir_exists(name);
+}
+
+static Line *wildcard_dir_search(char *dir, const char *match, int match_len)
+{
+  char *copy;
+  Line *l = alloc_line();
+  dir_handle dh;
+  dir_entry e;
+
+  /* No path or empty path?  Start at current directory */
+  if (!dir || !*dir) dir = "@";
+
+  copy = memcpy(safe_malloc(match_len + 1), match, match_len);
+
+  amu_debug(DEBUGGING3, "Search '%s' for '%s'", dir, copy);
+
+  dir_init();
+  dh = dir_open(dir, copy);
+  if (dh != NULL) {
+    while (dir_next(dh, &e)) {
+      append_new_line_part(l)->data = Strdup(dir_entryname(e));
+      printf("Found '%s'\n", dir_entryname(e));
+    }
+    dir_close(dh);
+  }
+
+  free(copy);
+  return l;
+}
+
+static Line *wildcard_path_resolve(Line *answers, UnparsedName *un)
+{
+  (void) un;
+  amu_debug(DEBUGGING3, "wildcard_path_resolve");
+  return answers;
+}
+
+static Line *wildcard_leaf_resolve(Line *answers, UnparsedName *un)
+{
+  (void) un;
+  amu_debug(DEBUGGING3, "wildcard_leaf_resolve");
+  return answers;
+}
+
+static Line *wildcard_extn_resolve(Line *answers, UnparsedName *un)
+{
+  char *base;
+  Line *dirsearch;
+  LinePart *dir;
+  UnparsedName backup = *un;
+  bool found;
+
+  un->extn = NULL;
+  un->elen = 0;
+  base = wildcard_rebuild_filename(un, FNAME_AS_NAME);
+  found = wildcard_exists(base);
+  free(base);
+  amu_debug(DEBUGGING3, "wildcard_extn_resolve: %s (%d)", base, found);
+
+
+  un->root = NULL;
+  un->rlen = 0;
+  base = wildcard_rebuild_filename(un, FNAME_AS_NAME);
+  amu_debug(DEBUGGING3, "wildcard_extn_resolve: %s", base);
+
+  dirsearch = wildcard_dir_search(base, backup.extn, backup.elen);
+
+  for (dir = dirsearch->firstpart; dir; dir = dir->next) {
+    char *f;
+    un->root = dir->data;
+    un->rlen = strlen(dir->data);
+    un->extn = backup.extn;
+    un->elen = backup.elen;
+    f = wildcard_rebuild_filename(un, FNAME_AS_NAME);
+    if (filestamp_get(f) != FILESTAMP_NEVER) {
+      printf("Resolved '%s' OK\n", f);
+    }
+    else {
+      printf("Resolve '%s' failed\n", f);
+      free(f);
+    }
+  }
+
+  deallocate_line(dirsearch);
+
+  return answers;
+}
+
+Line *wildcard_resolve(char *pattern)
+{
+  Line *answers = alloc_line();
+  UnparsedName un;
+
+  fname_parse(pattern, suffix_list, &un);
+  wildcard_debug(answers, pattern, &un);
+
+  if (memchr(un.path, '*', un.plen) || memchr(un.path, '?', un.plen)) {
+    return wildcard_path_resolve(answers, &un);
+  }
+
+  if (memchr(un.root, '*', un.rlen) || memchr(un.path, '?', un.rlen)) {
+    if (un.elen == 0) {
+      /* No extension, so it could have been root.* - reverse it */
+      char *s;
+      UnparsedName backup = un;
+
+      backup.rlen = 0;
+      s = wildcard_rebuild_filename(&backup, FNAME_AS_NAME);
+      amu_debug(DEBUGGING3, "Testing '%s'", s);
+      if (wf_filesize(s) != -1) {
+        free(s);
+        return wildcard_leaf_resolve(answers, &un);
+      }
+      free(s);
+      s = memcpy(safe_malloc(un.rlen + 1), un.root, un.rlen);
+      s[un.rlen] = 0;
+      fname_parse(pattern, s, &un);
+      free(s);
+      wildcard_debug(answers, pattern, &un);
+      return wildcard_extn_resolve(answers, &un);
+    }
+    else {
+      return wildcard_leaf_resolve(answers, &un);
+    }
+  }
+
+  if (memchr(un.extn, '*', un.elen) || memchr(un.extn, '?', un.elen)) {
+    return wildcard_extn_resolve(answers, &un);
+  }
+
+  /* No wildcards at all! */
+
+  if (wf_filesize(pattern) != -1) {
+    append_new_line_part(answers)->data = Strdup(pattern);
+  }
+  else {
+    char *s = wildcard_rebuild_filename(&un, FNAME_AS_NAME);
+    if (filestamp_get(s) != FILESTAMP_NEVER) {
+      append_new_line_part(answers)->data = s;
+    }
+    else {
+      free(s);
+    }
+  }
+
+  return answers;
+}
