@@ -113,7 +113,16 @@
 ; 07-Sep-93 0.28 SMC Escape now returns error number 17.
 ;                    Fixed bug in fs_put where Escape was ignored.
 ; 04-Feb-94 0.29 TMD Move GET hdr:Territory below GET hdr:NewErrors
-;
+; 26-Apr-96 0.30 RWB Implemented OS_Args 2 (Read open file extent) to return
+;		     number of bytes in buffer.
+; 30-Apr-96 0.31 RWB Implemented OS_Args 9 (IOCtl) to dispatch IOCtl reason call
+;                    to underlying device driver.
+; 14-May-96 0.32 RWB Overload OS_Args 2 to return free space in buffer if a tx
+;		     stream.
+; 22-May-96 0.33 RWB Issue an upcall when buffer becomes non-dormant.
+;		     Issue upcalls with stream handle when thresholds are passed
+; 14-Jun-96 0.34 RWB Pass file switch handle through to device driver during
+;		     device initialisation.
 
                 GET     hdr:ListOpts
                 GET     hdr:Macros
@@ -171,7 +180,7 @@ FilesAt                 # 4             ; -> files list
 BuffManWkSpace          # 4             ; -> Buffer Manager workspace
 BuffManService          # 4             ;  = address of Buffer Manager service routine
  ]
- 
+
                       [ international
 MessagesWorkspace       # 16            ; area used by message trans for opening files
                       ]
@@ -266,7 +275,12 @@ pf_BlockDevice          * 1:SHL:0       ; bit 0 set => Block device (ie. floppy 
 pf_FullDuplex           * 1:SHL:1       ; bit 1 set => Device supports full duplex operation
 pf_MonitorTransfers     * 1:SHL:2       ; bit 2 set => monitor transfers
 pf_MonitorEOF           * 1:SHL:3       ; bit 3 set => monitor EOF during read
+ [ issue_device_upcalls
+pf_DeviceUpcalls	* 1:SHL:4	; bit 4 set => issue stream upcalls on buffer thresholding
+pf_AllowedBits          * pf_BlockDevice+ pf_FullDuplex+ pf_MonitorTransfers+ pf_MonitorEOF+ pf_DeviceUpcalls
+ |
 pf_AllowedBits          * pf_BlockDevice+ pf_FullDuplex+ pf_MonitorTransfers+ pf_MonitorEOF
+ ]
 
 ff_FileInputOutput      * 1:SHL:0
 ff_FileForTX            * 1:SHL:0       ; bit 0  set => TX
@@ -1509,32 +1523,48 @@ UpCall          ROUT
 
                 TEQ     r0, #UpCall_BufferFilling
                 TEQNE   r0, #UpCall_BufferEmptying
-                MOVNES  pc, lr                                  ; quick check to see if mine
+                MOVNES  pc, lr                    ; quick check to see if mine
 
-                Push    "r0-r4"
+                Push    "r0-r4,pr"
 
-                LDR     r3, FilesAt                             ; -> start of the file list
+                LDR     r3, FilesAt               ; -> start of the file list
 00
-                TEQ     r3, #0                                  ; end of the files list?
-                Pull    "r0-r4", EQ
-                MOVEQS  pc, lr                                  ; yes, so unstack and then exit
+                TEQ     r3, #0                    ; end of the files list?
+                Pull    "r0-r4,pr", EQ
+                MOVEQS  pc, lr                    ; yes, so unstack and then exit
 
                 LDR     lr, [r3, #file_BufferHandle]
-                TEQ     lr, r1                                  ; is it our buffer?
+                TEQ     lr, r1                    ; is it our buffer?
                 LDRNE   r3, [r3, #file_Next]
-                BNE     %00                                     ; loop until all checked
+                BNE     %00                       ; loop until all checked
 
                 TEQ     r0, #UpCall_BufferFilling
                 MOVEQ   r0, #DeviceCall_Halt
-                MOVNE   r0, #DeviceCall_Resume                  ; convert to an understandable device call
+                MOVNE   r0, #DeviceCall_Resume    ; convert to an understandable device call
 
                 LDR     r1, [r3, #file_Parent]
                 LDR     r2, [r3, #file_InternalHandle]
                 BL      CallDevice
-                STRVS   r0, [sp]                                ; write the error address to frame
+                STRVS   r0, [sp]                  ; write the error address to frame
 
-                Pull    "r0-r4, lr"                             ; balance stack (pull extra one to claim vector)
-                BICVCS  pc, lr, #V_bit                          ; only errors are external
+ [ issue_device_upcalls
+; check to see if device driver wants these upcalls forwarding
+		BVS	%10
+		LDR	pr, [r3, #file_Parent]
+		LDR	r1, [pr, #parent_Flags]
+		TST	r1, #pf_DeviceUpcalls
+		BEQ	%10
+; now issue upcalls based on stream handle
+                TEQ     r0, #DeviceCall_Halt
+                MOVEQ   r0, #UpCall_DeviceThresAbove
+                MOVNE   r0, #UpCall_DeviceThresBelow
+                LDR     r1, [r3, #file_FSwitchHandle]
+		SWI	XOS_UpCall
+                STRVS   r0, [sp]
+10
+ ]
+                Pull    "r0-r4,pr, lr"            ; balance stack (pull extra one to claim vector)
+                BICVCS  pc, lr, #V_bit            ; only errors are external
                 ORRS    pc, lr, #V_bit
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++

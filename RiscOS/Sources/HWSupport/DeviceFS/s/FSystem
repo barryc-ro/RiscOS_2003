@@ -71,9 +71,10 @@ fs_control      & fs_name -module_start                         ; -> fs name, eg
                 & fs_args -module_start                         ; -> fs args
                 & fs_close -module_start                        ; -> fs close
                 & fs_file -module_start                         ; -> fs file
-fs_infoword     & fsinfo_special+ fsinfo_flushnotify+ fsinfo_dontusesave+ fsnumber_DeviceFS
+fs_infoword     & fsinfo_special+ fsinfo_flushnotify+ fsinfo_dontusesave+ fsinfo_extrainfo+ fsnumber_DeviceFS
                 & fs_func -module_start                         ; -> fs func
                 & fs_gbpb -module_start                         ; -> gbpb routine
+		& fsextra_IOCtl
 
 fs_badop
                 ADR     r0, ErrorBlock_DeviceFS_BadOp
@@ -308,6 +309,7 @@ open_input
 
                 LDR     r6, [fr, #file_UserSpecialData]         ; -> decoded special field string
                 MOV     r2, fr                                  ;  = internal handle
+		LDR	r4, [fr, #file_FSwitchHandle]
                 MOV     r1, pr
                 MOV     r0, #DeviceCall_Initialise
                 BL      CallDevice                              ; attempt to call the device
@@ -368,6 +370,7 @@ open_output
                 Debug   open, "file flags", r3
 
                 LDR     r6, [fr, #file_UserSpecialData]         ; -> decoded special field string
+		LDR	r4, [fr, #file_FSwitchHandle]
                 MOV     r2, fr
                 MOV     r1, pr
                 MOV     r0, #DeviceCall_Initialise
@@ -471,8 +474,14 @@ make_buffer     ROUT
                 STR     r0, [fr, #file_BufferHandle]
 
                 LDR     r1, [fr, #file_Flags]
+ [ wakeup_data_present
+		TST	r1, #ff_FileForTX
+		ADRNE	r1, wakeup			; normal tx wakeup
+		ADREQ	r1, wakeup_rx			; special rx wakeup
+ |
                 ANDS    r1, r1, #ff_FileForTX                   ; if an output device (r1<>0)
                 ADRNE   r1, wakeup                              ; then use real wake up code else use none
+ ]
                 ADR     r2, detach                              ; try to close stream if someone tries to detach
                 MOV     r3, fr
                 MOV     r4, wp                                  ; workspace + private word
@@ -518,6 +527,26 @@ wakeup          ENTRY   "r0-r3"
                 SWI     XBuffer_ModifyFlags
                 EXITS
 
+ [ wakeup_data_present
+; wake up code, this is called when some data is inserted into a dormant RX buffer.
+wakeup_rx	ENTRY	"r0-r2"
+
+		MOV	r2, pc
+		ORR	r0, r2, #SVC_mode
+		TEQP	r0, #0
+		NOP
+
+		Push	"lr"
+		MOV	r0, #UpCall_DeviceRxDataPresent
+                LDR     r1, [r8, #file_FSwitchHandle]
+		SWI	XOS_UpCall
+		Pull	"lr"
+
+		TEQP	r2, #0
+		NOP
+
+		EXITS
+ ]
 ; detach code, this is called when someone tries to deregister the buffer, or link it some other device
 
 detach          ENTRY   "r0-r2"
@@ -793,7 +822,14 @@ fs_put          ENTRY   "r0-r2, fr, r9"
 ;
 
 fs_args         ROUT
-
+		CMP	r3, #3
+		BNE	%1
+		Push	"r0-r1"
+		MOV	r0, #&3500000
+		LDR	r1, =&40ff0000
+		STR	r1, [r0]
+		Pull	"r0-r1"
+1
                 Debug   args, "fs_args called with reason code", r0
 
                 TEQ     r0, #fsargs_SetEXT                      ; ignore SetEXT
@@ -802,29 +838,117 @@ fs_args         ROUT
                 TEQ     r0, #fsargs_SetPTR
                 TEQNE   r0, #fsargs_EnsureSize
                 TEQNE   r0, #fsargs_WriteZeroes
-                BEQ     fs_badop                                ; these ones give nice clean and tidy errors
+                BEQ     fs_badop                ; these ones give nice errors
 
                 TEQ     r0, #fsargs_ReadPTR
-                TEQNE   r0, #fsargs_ReadEXT
                 TEQNE   r0, #fsargs_ReadSize
-                MOVEQ   r2, #0                                  ; these ones return size pointer
+                MOVEQ   r2, #0			; return 0
                 MOVEQS  pc, lr
+
+                TEQ	r0, #fsargs_ReadEXT
+		BEQ	args_ext
+
+		TEQ	r0, #fsargs_IOCtl
+		BEQ	args_ioctl
 
                 TEQ     r0, #fsargs_ReadLoadExec
                 BEQ     args_loadexec
 
-                TEQ     r0, #fsargs_Flush                       ; is it a flush?
+                TEQ     r0, #fsargs_Flush               ; is it a flush?
                 BEQ     args_flush
 
-                TEQ     r0, #fsargs_EOFCheck                    ; is it a eof read?
-                BEQ     args_eof                                ; then do it
+                TEQ     r0, #fsargs_EOFCheck            ; is it a eof read?
+                BEQ     args_eof                        ; then do it
 
                 B       fs_badop
 
+; handle ioctl's
 
-; handle checking the EOF flag within the system.  Could return errors, assumes that r1
-; on entry contains the internal handle passed to and from fileswitch to the filing
-; system.
+args_ioctl	ENTRY	"r0-r3, fr,pr"
+
+                MOV     fr, r1                     	; -> file record
+		LDR	pr, [fr, #file_Parent]
+
+                MOV     r0, #DeviceCall_IOCtl
+                MOV     r1, pr
+		MOV	r3, r2				; shift r2 up a reg
+		MOV	r2, fr
+                BL      CallDevice
+
+                STRVS   r0, [sp]
+                PullEnv VS
+                ORRVSS  pc, lr, #V_bit
+
+		EXIT
+
+; handle checking of the file extent
+
+args_ext	ENTRY	"r0-r1,r3-r6, fr"
+
+                MOV     fr, r1                     	; -> file record
+
+                LDR     r0, [fr, #file_BufferHandle]
+                CMP     r0, #-1                         ; is the object buffered
+                BEQ     %FT10				; look at rx/tx word
+
+; is this a tx stream
+		LDR	r0, [fr, #file_Flags]
+		TST	r0, #ff_FileForTX
+		BNE	%5
+
+ [ FastBufferMan
+                MOV     r0, #BufferReason_UsedSpace
+                LDR     r1, [fr, #file_BufferPrivId]
+                CallBuffMan
+ |
+                SWI     XBuffer_GetInfo
+ ]
+                STRVS   r0, [sp]
+                PullEnv VS
+                ORRVSS  pc, lr, #V_bit
+
+ [ :LNOT: FastBufferMan
+                MOV	r6, r2
+ ]
+		EXIT
+5
+; deal with tx stream
+ [ FastBufferMan
+                MOV     r0, #BufferReason_FreeSpace
+                LDR     r1, [fr, #file_BufferPrivId]
+                CallBuffMan
+ |
+                SWI     XBuffer_GetInfo
+ ]
+                STRVS   r0, [sp]
+                PullEnv VS
+                ORRVSS  pc, lr, #V_bit
+
+ [ :LNOT: FastBufferMan
+                MOV	r6, r2
+ ]
+		EXIT
+
+10
+; handle the case where none-buffered, just a word
+                LDR     r0, [fr, #file_RXTXWord]
+                CMP     r0, #-1                    	; RX/TX word full
+		MOVEQ	r2, #0				; no
+		MOVNE	r2, #1				; yes
+; is this a tx stream
+		LDR	r0, [fr, #file_Flags]
+		TST	r0, #ff_FileForTX
+		EXIT	EQ
+
+		CMP	r2, #0
+		MOVEQ	r2, #1
+		MOVNE	r2, #0
+
+		EXIT
+
+; handle checking the EOF flag within the system.  Could return errors, assumes
+; that r1 on entry contains the internal handle passed to and from fileswitch to
+; the filing system.
 
 checkeof        ENTRY   "r2"                                    ; internal routine,
                 BL      args_eof

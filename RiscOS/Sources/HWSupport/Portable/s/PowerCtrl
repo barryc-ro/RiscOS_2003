@@ -54,13 +54,19 @@ PowerTab
 ;
 InitSWIPortableControl ENTRY "r0-r2"
         LDR     R1, =InitialPowerState          ;We expect the Kernel to have switched
-        MVN     R0, R1                          ; everything on at start up. But to be on the
-        STR     R1, ConfigExtraBitsCopy         ; safe side, force the hardware to that state
-        BL      SetPwrState                     ; anyway. NB no power-up messages sent.
+        STR     R1, ConfigExtraBitsCopy         ; everything on at start up. But to be on the
+        MVN     R0, R1                          ; safe side, force the hardware to that state
+        STR     R0, ControlInternal             ; anyway.
+        BL      SetPwrState                     ; NB no power-up messages sent.
 
-        MOV     r0, #0                          ;Now try turning as much off as possible,
+        MOV     r0, #0                          ;Now try turning off as much off as possible,
         LDR     r1, =:NOT: PowerSaveBits        ; serial, parallel and FDC etc
         BL      SWIControl                      ; NB this call does send power-down messages.
+
+        MOV     r0, #PortableControl_IntTBallEnable     ;Switch from mouse to trackerball
+        MOV     r1, #:NOT:(PortableControl_IntTBallEnable :OR: PortableControl_ExtMouseEnable)
+        BL      SWIControl
+
         EXITS
 
 
@@ -105,35 +111,45 @@ InitSWIPortableControl ENTRY "r0-r2"
 ;       14      Set => power to FDC oscillator in 82C710/82C711 enabled
 ;  +    15      Set => power to IDC hard disc enabled
 ;       16      Set => LCD palette set up for inverse video
-;       17..31  Reserved: these bits must not be modified, nor assumed to
+;  +    17      Set => trackerball (internal) enabled } see comments in code
+;  +    18      Set => mouse (external) enabled       }
+;  +    19      Set => external keyboard and external mouse power enabled
+;       19..31  Reserved: these bits must not be modified, nor assumed to
 ;                read any particular value.
 ;
 ;
-;            Bit       16..12...8...4...0         
-ControlValidBits    * 2_11110100100001110
-                     ;2_10100011111111111
+;            Bit          16..12...8...4...0         
+ControlValidBits    * 2_11111110100100001110
+                     ;2_00010100011111111111
 
-ControlServiceBits  * 2_01110100000001000         ; bits that require service call when changing
-                     ;2_00100000000001001
+ControlServiceBits  * 2_11101110100000001000         ; bits that require service call when changing
+                     ;2_00000100000000001001
 
-ControlPWRGDBits    * 2_01110000000001000       ;Bits that require PWRGD pin of '665 held high
-ControlConfigBits   * 2_01110000000001000         ; bits that require us to enter config mode in 710/711
-ControlOscilBits    * 2_00100000000001000         ; bits that control the oscillator
-ControlExtraBits    * 2_11110100100001110
+ControlPWRGDBits    * 2_00001110000000001000       ;Bits that require PWRGD pin of '665 held high
+ControlConfigBits   * 2_00001110000000001000         ; bits that require us to enter config mode in 710/711
+ControlOscilBits    * 2_00000100000000001000         ; bits that control the oscillator
+ControlExtraBits    * 2_11111110100100001110
 
-InitialPowerState   * 2_01111100100001010       ;Everything-on state
-PowerSaveBits       * 2_01111100000001000       ;The bits we attempt to powerdown 
-
-;                        IFPPS  B    S L
-;                        DDaCo  a    e C
-;                        ECrMu  c    r D
-;                          aCn  k    i
-;                          lId  l    a
-;                          lA   i    l
-;                          e    g
-;                          l    h
-;                               t
+;>>>suggest renaming InitialPowerState as KernelPowerState
+;>>>have mask of bits to power down (FDC, IDE etc)
+;>>>and mask of bits to power up (trackerball, LCD)
 ;
+InitialPowerState   * 2_11001111100000001000       ;Everything-on state as setup by Kernel
+PowerSaveBits       * 2_10001111100000001000       ;The bits we attempt to powerdown 
+
+Shutdown1Bits       * 2_00001111100000001000
+Shutdown2Bits       * 2_11101111100100001010
+
+;                       EEI IFPPS  B    S L
+;                       xxn DDaCo  a    e C
+;                       ttt ECrMu  c    r D
+;                             aCn  k    i
+;                       PMT   lId  l    a
+;                       ooB   lA   i    l
+;                       wua   e    g
+;                       esl   l    h
+;                       rel        t
+;                       
 SWIControl      ENTRY "r2,r3"
         TEQP    pc, #SVC_mode + I_bit
  [ Debug
@@ -141,7 +157,6 @@ SWIControl      ENTRY "r2,r3"
         DREG    R0, "In 'Real' Portable_Control: EOR &", cc, LongWord
         DREG    R1, ", AND &",, LongWord
  ]
-
         MOV     r3, r0                          ;preserve EOR mask for later
         LDR     R0, ConfigExtraBitsCopy         ;get old state
 
@@ -149,7 +164,50 @@ SWIControl      ENTRY "r2,r3"
         EOR     r1, r1, r3
         LDR     r3, =ControlValidBits
         AND     r1, r1, r3                      ; r1 is now new state
+;
+; R0 = current state, R1 = required state
+;
 
+;
+; Current hardware provides two control lines 'ExternalPower' and 'TrackballNotMouse' to control
+; power too and select between an external keyboard, external mouse or internal trackerball.
+; 
+; ExternalPower controls power to both external PS2 ports. The external keyboard port is
+; connected directly to the KBD port in Morris and is active whenever ExternalPower is active.
+;
+; TrackballNotMouse controls the routing of data to Morris' MSE port. 'Trackball' applies power
+; to the internal trackerball and routes its data to Morris' MSE port. 'Mouse' routes data from
+; the external mouse socket to Morris' MSE port if ExternalPower is active. Selecting 'Mouse'
+; with ExternalPower 'off' leaves both ports inactive and in a low power state.
+;
+; Bit PortableControl_ExtPowerEnable directly controls 'ExternalPower'
+; Bit PortableControl_IntTBallEnable directly controls 'TrackballNotMouse'
+;  
+; PortableControl_ExtMouseEnable := NOT(PortableControl_IntTBallEnable) AND PortableControl_ExtPowerEnable
+;
+; We manufacture the PortableControl_ExtMouseEnable bit and send power down/up messages for it
+; to allow the PS2Driver to correctly kill/reset Morris' MSE port.
+;
+        TST     r1, #PortableControl_IntTBallEnable     ;On current hardware, ExtMouseEnable is 
+        BICNE   r1, r1, #PortableControl_ExtMouseEnable ; inverse of IntTBallEnable
+        ORREQ   r1, r1, #PortableControl_ExtMouseEnable ;
+        TST     r1, #PortableControl_ExtPowerEnable     ; unless power is off of course
+        BICEQ   r1, r1, #PortableControl_ExtMouseEnable ; (in which case mouse is off)
+
+;
+; Floppy and printer are mutually exclusive (both share the same connector), so prevent
+; selection of both.
+;
+        TST     r1, #PortableControl_FDCEnable
+        BICNE   r1, r1, #PortableControl_ParallelEnable
+
+;
+; The code to switch the LCD off if the machine lid is closed is in SetPwrState.
+;
+
+;
+; R0 = current state, R1 = required state
+;
         EOR     r3, r1, r0                      ; r3 = bits that have changed
         LDR     lr, =ControlServiceBits
         AND     r3, r3, lr                      ; r3 = bits that have changed that require service
@@ -195,11 +253,11 @@ SWIControl      ENTRY "r2,r3"
 ; SetPwrState
 ;
 ; Entry
-;   R0  = current state
 ;   R1  = required state
 ;
-; If current state is unknown (eg at module initialisation),
-; set to inverse of required state to overide optimisations.
+; When current state is unknown (eg at module initialisation),
+; set ControlInternal to inverse of required state before
+; calling, to overide optimisations.
 ;
 ; Exit
 ;   R0, R1 preserved
@@ -207,7 +265,28 @@ SWIControl      ENTRY "r2,r3"
 ;
 ; Use R2 for bits that are changing
 ;
-SetPwrState ENTRY
+SetPwrState
+        ENTRY   "R0,R1"
+        LDR     R0, ControlInternal             ;Actual power state
+ [ 1 = 1
+;
+; Rely on docking connector ticker in s.StateMC to spot that the
+; lid is shut whilst the LCD is active. This calls Portable_Stop
+; to freeze the machine. 
+;
+ |
+;
+; Switch LCD off if lid is closed.
+;
+; This overide is not stored in ConfigExtraBitsCopy, so is not seen by callers of
+; Portable_Control. If the lid switch opens, the next call of Portable_Control/SetPwrState
+; will allow the LCD to turn back on. 
+;
+        LDRB    r3, BMU_Flags
+        TST     r3, #PortableBMUF_LidOpen
+        BICEQ   r1, r1, #PortableControl_LCDEnable
+        BICEQ   r1, r1, #PortableControl_BacklightEnable
+ ]
  [ Debug
 ;
 ; report devices powering down
@@ -275,27 +354,33 @@ SetPwrState ENTRY
         EOR     R2, R0, R1                      ; R3 = bits that are changing
 
 
-
  [ SwitchPower
-  [ DisableHDC
         ADR     R2, SwitchControl_IDE
         BL      SwitchOff
-  ]
 
-  [ DisableFDC
         ADR     R2, SwitchControl_FDC
         BL      SwitchOff
-  ]
 
-  [ ConfigSerial
         ADR     R2, SwitchControl_Serial
         BL      SwitchOff
-  ]
 
-  [ DisableSound
         ADR     R2, SwitchControl_Sound
         BL      SwitchOff
-  ]
+
+        ADR     R2, SwitchControl_ExtPower
+        BL      SwitchOff
+
+        ADR     R2, SwitchControl_TBallSelect
+        BL      SwitchOff
+
+        ADR     R2, SwitchControl_FlashWritePower
+        BL      SwitchOff
+
+        ADR     R2, SwitchControl_LCDInverter
+        BL      SwitchOff
+
+        ADR     R2, SwitchControl_LCDLogic
+        BL      SwitchOff
  ]
 
  [ SwitchPower
@@ -315,12 +400,12 @@ SetPwrState ENTRY
         TST     r3, lr                  ; bits that are changing in config
         BEQ     %FT20
 
-
+ [ ConfigCombo
         Push    "r4"
         BL      EnterConfigMode
 
- [ DisableFDC
- [ 1 = 1
+
+   [ 1 = 1
 ;
 ; Standard Microsystems Corporation Application note 4-13 states that we should
 ; disable DMA and IRQ before placing the FDC into low power mode by ensuring
@@ -331,106 +416,73 @@ SetPwrState ENTRY
         TSTNE   r0, #PortableControl_FDCEnable
 
         LDRNE   LR, =FDCDOR             ; if floppy power is changing from 1 to 0
-        LDRNEB  R3, [LR]                ;
-        STRNE   R3, SaveFDCDOR          ;
         MOVNE   R3, #&04                ; write &04 to Digital Output register
         STRNEB  R3, [LR]                ; to disable DMA and IRQ
- ]
- ]
+   ]
 
- [ DisableFDC
-        ADR     R2, UnitControl_FDC
-        BL      ConfigureUnit
- ]
+        ADR     R2, UnitControl_FDC             ;Configure for power state
+        BL      ConfigureUnit                   ;
+                                                ;
+        ADR     R2, UnitControl_FDCrouting      ; and signal routing
+        BL      ConfigureUnit                   ;
 
- [ DisableHDC
         ADR     R2, UnitControl_IDE
         BL      ConfigureUnit
- ]
 
- [ ConfigSerial
         ADR     R2, UnitControl_Serial
         BL      ConfigureUnit
- ]
 
- [ ConfigParallel
         ADR     R2, UnitControl_Parallel
         BL      ConfigureUnit
- ]
 
- [ TurnOffOscillator
+  [ TurnOffOscillator
         ADR     R2, UnitControl_Oscil
         BL      ConfigureUnit
- ]
+  ]
 
         BL      ExitConfigMode
         Pull    "r4"
-
+ ]
 20
  [ SwitchPower
-;>>>may be able to lower PWRGD????
-
+;If everything is dormant, we may be able to lower PWRGD.
         ADR     R2, SwitchControl_PWRGD
         BL      SwitchOff
  ]
 
-
-; [ BMU
-;        LDRB    lr, BMU_Flags
-;        TST     lr, #PortableBMUF_LidOpen
-;        MOV     r3, #&0F
-;        AND     lr, r3, r1              ; bits 0..3
-;        BICEQ   lr, lr, #2              ; knock out LCD enable bit if lid shut
-;        STRB    lr, [r2, #LC_LICR_lo]
-;        AND     lr, r3, r1, LSR #4      ; bits 4..7
-;        STRB    lr, [r2, #LC_LICR_mid]
-;        AND     lr, r3, r1, LSR #8      ; bits 8..11
-;        BICEQ   lr, lr, #1              ; knock out backlight bit if lid shut
-;        STRB    lr, [r2, #LC_LICR_hi]
-; |
-;        MOV     r3, #&0F
-;        AND     lr, r3, r1              ; bits 0..3
-;        STRB    lr, [r2, #LC_LICR_lo]
-;        AND     lr, r3, r1, LSR #4      ; bits 4..7
-;        STRB    lr, [r2, #LC_LICR_mid]
-;        AND     lr, r3, r1, LSR #8      ; bits 8..11
-;        STRB    lr, [r2, #LC_LICR_hi]
-; ]
-;
-;        AND     lr, r3, r1, LSR #16
-;        STRB    lr, PalState
-;
-;        EOR     lr, r0, r1
-;        TST     lr, #1:SHL:16
-;        BLNE    UpdateLCDPalette
-
-
-
  [ SwitchPower
-  [ DisableHDC
         ADR     R2, SwitchControl_IDE
         BL      SwitchOn
-  ]
 
-  [ DisableFDC
         ADR     R2, SwitchControl_FDC
         BL      SwitchOn
-  ]
 
-  [ ConfigSerial
         ADR     R2, SwitchControl_Serial
         BL      SwitchOn
-  ]
 
-  [ DisableSound
         ADR     R2, SwitchControl_Sound
         BL      SwitchOn
-  ]
- ]
 
+        ADR     R2, SwitchControl_TBallSelect
+        BL      SwitchOn
+
+        ADR     R2, SwitchControl_ExtPower
+        BL      SwitchOn
+
+        ADR     R2, SwitchControl_FlashWritePower
+        BL      SwitchOn
+
+        ADR     R2, SwitchControl_LCDLogic      ; Enabling LCD
+        BL      SwitchOn                        ;   Turn on En_Vccl*
+                                                ;   Wait 20ms -0/+100ms
+        ADR     R2, SwitchControl_LCDInverter   ;   Turn on En_Vcct*
+        BL      SwitchOn                        ;
+ ]
+        STR     R1, ControlInternal             ;Actual power state
         EXITS
 
 
+ [ ConfigCombo
 ;
 ; Enter 'Configure' mode of the '665.
 ;
@@ -486,8 +538,6 @@ ConfigureUnit
         EXITS
 
 
-
-
 ConfigPre665
         &       CSR665, &55
         &       CSR665, &55
@@ -496,14 +546,6 @@ ConfigPre665
 ConfigPost665
         &       CSR665, &AA
         &       0, 0
-
-;
-ConfigParallelFDC665
-;       &       CSR665, &04     ;register &04
-;       &       CRD665, &080C   ;PPFD1 mode
-
-        &       CSR665, &04     ;register &04
-        &       CRD665, &040C   ;PPFD2 mode
 
 
 ;
@@ -515,6 +557,11 @@ UnitControl_FDC
         &       CSR665, &00     ;register &00
         &       CRD665, &0018   ;bit 3 is FDC POWER,  hi supplies power
                                 ;bit 4 is FDC ENABLE, hi enables FDC
+
+UnitControl_FDCrouting
+        &       PortableControl_FDCEnable
+        &       CSR665, &04     ;register &04
+        &       CRD665, &0008   ;PPFD2 mode
 
 UnitControl_IDE
         &       PortableControl_IDEEnable
@@ -537,6 +584,7 @@ UnitControl_Parallel
                                 ;               1 1 enabled at address &278 (default)
                                 ;bit 2 is Parallel Port Power, hi supplies power
 
+  [ TurnOffOscillator
 ;
 ; We choose to explicitly enable the Osc and Baud rate generator (BRG) when
 ; required, rather than configure them to enable when the PWRGD input is high. 
@@ -545,7 +593,8 @@ UnitControl_Oscil
         &       CSR665, &00     ;register &00
         &       CRD665, &6060   ;bits 6 & 5 are OSC 0 0 Osc ON, BRG enabled
                                 ;                   1 1 Osc OFF, BRG disabled
-
+  ]
+ ]
 
 
 
@@ -569,6 +618,8 @@ ForceSwitchOn
 
         EXITS
 
+
+;******************************************************************************
 ;
 ; Apply power
 ;
@@ -595,10 +646,18 @@ SwitchOn
 
         TST     R0, R3
         EXITS   NE                      ;NE, was already powered so no surge worries
-    ;>>>delay
+
+;
+; Having turned power on, delay 20mS to reduce instanteous current demands,
+; also meets LCD power up timing.
+;
+        LDR     R0, =(2*1000*20)        ;20mS in half microseconds
+        BL      DoMicroDelay
 
         EXITS
 
+
+;******************************************************************************
 ;
 ; Remove power
 ;
@@ -628,7 +687,7 @@ SwitchOff
 
 PCMCIA_A        * 0
 PCMCIA_B        * 1
-MORRIS_P        * 2
+MORRIS_C        * 2
 MORRIS_AtoD     * 3
 
 
@@ -652,25 +711,72 @@ PortList
 
 SwitchControl_PWRGD                             ;Io_power
         &       ControlPWRGDBits                ;
-        &       PCMCIA_A, &0001                 ;bit0 active low
+        &       PCMCIA_A, &0001                 ;bit0
 
 SwitchControl_FDC                               ;Fdd_power
         &       PortableControl_FDCEnable       ;
-        &       PCMCIA_A, &0010                 ;bit4 active low
+        &       PCMCIA_A, &0010                 ;bit4
 
-SwitchControl_IDE                               ;Hdd_power
+SwitchControl_IDE                               ;Hdd_power and Hd_rst
         &       PortableControl_IDEEnable       ;
-        &       PCMCIA_A, &0004                 ;bit2 active low
+        &       PCMCIA_A, &000C                 ;bit2 & bit3
 
 SwitchControl_Serial                            ;Ser_power
         &       PortableControl_SerialEnable    ;
-        &       PCMCIA_A, &0002                 ;bit1 active low
+        &       PCMCIA_A, &0002                 ;bit1
 
 SwitchControl_Sound
         &       PortableControl_SoundEnable
-        &       MORRIS_AtoD, &0101              ;bit0 active low
+        &       MORRIS_AtoD, &0010              ;bit4
+
+SwitchControl_ExtPower
+        &       PortableControl_ExtPowerEnable
+        &       PCMCIA_B, &0004                 ;bit2
+
+SwitchControl_TBallSelect
+        &       PortableControl_ExtMouseEnable
+        &       PCMCIA_B, &0008                 ;bit3
+
+SwitchControl_FlashWritePower
+        &       PortableControl_PCMCIAEnable
+        &       PCMCIA_B, &0010                 ;bit4
+
+SwitchControl_LCDInverter
+        &       PortableControl_BacklightEnable
+        &       MORRIS_C, &0101                 ;bit0
+
+SwitchControl_LCDLogic
+        &       PortableControl_LCDEnable
+        &       MORRIS_C, &0202                 ;bit1
  ]
 
+
 ;******************************************************************************
+;
+;       DoMicroDelay - Delay for >= R0/2 microseconds
+;
+; in:   R0 = time delay in 1/2 microsecond units
+;       On ARM600, we may or may not be in a 32-bit mode
+;
+; out:  R0 corrupted
+;
+DoMicroDelay ENTRY "R1,R2"
+        MOV     R2, #IOC
+        STRB    R0, [R2, #Timer0LR]     ; copy counter into output latch
+        LDRB    R1, [R2, #Timer0CL]     ; R1 := low output latch
+10
+        STRB    R0, [R2, #Timer0LR]     ; copy counter into output latch
+        LDRB    R14, [R2, #Timer0CL]    ; R14 := low output latch
+        TEQ     R14, R1                 ; unchanged ?
+        BEQ     %BT10                   ; then loop
+        MOV     R1, R14                 ; copy anyway
+        SUBS    R0, R0, #1              ; decrement count
+        BNE     %BT10                   ; loop if not finished
+
+        EXITS
+
+;******************************************************************************
+
+        LTORG
 
         END
