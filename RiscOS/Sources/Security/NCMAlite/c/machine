@@ -55,6 +55,7 @@ static char* store_current_browser_url(void);
 static char* misc_getenv_malloc (const char *variable);
 static bool open_current_browser_url(void);
 NCMA_STATE change_state_to_state(NCMA_STATE state);
+static NCMA_STATE shutdown_transition(void);
 #ifdef SC_SWAPPING
   static NCMA_STATE after_pin(void);
   static NCMA_STATE default_pin_failed(void);
@@ -106,7 +107,7 @@ void tidy_memory(void)
     allows NCMAlite to throw up a different 'connect' screen (connectnp). the
     desired behaviour is that cards with a 9999 PIN do not allow you access
     to the change PIN screen and do not pronpt you for the PIN number. */
-BOOL show_change_pin_screens = TRUE;
+bool show_change_pin_screens = true;
 
 /* The variable below is used to test which particular default PIN has been
     tested. If it is 0, the 0000 pin has been tested. If it is 1, then the
@@ -371,12 +372,12 @@ NCMA_STATE select_screen_to_move_to(void)
   /* Smartcard is not inserted. Go to the 'Welcome' screen and state */
   DBUG_PRINTF(DBUG_LVL_DIAG, "select_screen_to_move_to(): Resetting the smartcard cache.\n");
   reset_cache(); /* was unlock_cache() */
-#ifdef LOCAL_URL_PATHS
+  #ifdef LOCAL_URL_PATHS
   ncma_url_open(URL_PATH(welcome.html));
-#else
+  #else
   ncma_url_open(WELCOME_SCREEN_URL);
-#endif
-  change_state_to_state(State_NCMAInit);
+  #endif
+  return(State_NCMAInit);
 #else
   /* Non SC_SWAPPING builds */
   DBUG_PRINTF(DBUG_LVL_DIAG, "select_screen_to_move_to(): Non SC_SWAPPING build. Going to the 'Connect' screen and state\n");
@@ -409,15 +410,15 @@ void initialise_variables(void)
 {
   DBUG_PRINTF(DBUG_LVL_DIAG, "initialise_variables().\n");
   /* Reinitialise all data */
-  bNoScreenChanges = 0; /* Screen changes are allowed */
-  bRedialRequested = 0; /* No redial has been requested */
+  bNoScreenChanges = false; /* Screen changes are allowed */
+  bRedialRequested = false; /* No redial has been requested */
 #ifdef SC_SWAPPING
   bCardVerified = 0;    /* Card is intially unverified */
   uiPreviousState = State_NCMAInit;
   tidy_memory();
-#ifdef EMAIL_CLIENT
+  #ifdef EMAIL_CLIENT
   uiemail_client_state = email_state_none; /* Reset email client state */
-#endif /* EMAIL_CLIENT */
+  #endif /* EMAIL_CLIENT */
 #endif /* SC_SWAPPING */
 
   /* Ensure that the post_initialisation() routine has been run - it may not have been if the module was soft-loaded */
@@ -448,8 +449,8 @@ NCMA_STATE logoff(void)
   DBUG_PRINTF(DBUG_LVL_DIAG, "logoff() called. Logging out.\n");
   DBUG_PRINTF(DBUG_LVL_DIAG, "logoff(): explicit logout acknowledged, hanging up, flushing cache\n");
 #ifdef POINTLESS_BUTTONS
-  run_from_powerup = 0;
-  pointless_button_clicked = 0;
+  run_from_powerup = false;
+  pointless_button_clicked = false;
   ncma_hourglass_off(); /* might be on, if we're in chimp mode */
 #endif
   ncma_hangup(); /* Hang up the line */
@@ -458,6 +459,34 @@ NCMA_STATE logoff(void)
   return(select_screen_to_move_to());
 }
 
+
+
+
+/*********************************************************************************/
+/* shutdown_transition                                                           */
+/*                                                                               */
+/* This routine deals with shutdown transitions. It has been moved out to        */
+/*  prevent duplicate code from being all over the place.                        */
+/*                                                                               */
+/* Parameters: None                                                              */
+/*                                                                               */
+/* Returns:    The new state.                                                    */
+/*                                                                               */
+/*********************************************************************************/
+static NCMA_STATE shutdown_transition(void)
+{
+  DBUG_PRINTF(DBUG_LVL_DIAG, "shutdown_transition()\n");
+
+  if(ncma_state != State_NCMAShutdown)
+  {   /* if we're not already in shutdown state, save context */
+    pre_shutdown_state = ncma_state;
+    DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: shutdown imminent - pushed state \"%s\"\n", state_string(ncma_state));
+    ncma_dbox_open_to_target(URL_PATH(poweroff.html), STANDBY_DIALOGUE_BOX);
+    return(State_NCMAShutdown);
+  }
+
+  return (ncma_state);
+}
 
 
 
@@ -635,44 +664,19 @@ NCMA_STATE URLConnect_in_NCMA_Connect(void)
 
 
 /*********************************************************************************/
-/* machine                                                                       */
+/* card_removed                                                                  */
 /*                                                                               */
-/* This routine is the main NCMAlite state machine.                              */
+/* This routine deals with the card removed transitions. It has been moved out   */
+/*  of individual states to  prevent duplicate code from being all over the      */
+/*  place.                                                                       */
 /*                                                                               */
-/* Parameters: trans. A transition that has to be performed.                     */
+/* Parameters: None                                                              */
 /*                                                                               */
 /* Returns:    The new state.                                                    */
 /*                                                                               */
 /*********************************************************************************/
-NCMA_STATE machine(NCMA_TRANS trans)
+NCMA_STATE card_removed(void)
 {
-  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: got transition %s in state %s\n", trans_string(trans), state_string(ncma_state));
-
-/*********************************************************************************
-
-    GLOBAL TRANSITIONS
-
- *********************************************************************************/
-
-  switch(trans)
-  { /* global transitions that apply to all states (except maybe State_Sleep) */
-
-    case Trans_Shutdown:
-         if(ncma_state != State_NCMAShutdown) { /* if we're not already in shutdown state, save context */
-    	   pre_shutdown_state = ncma_state;
-    	   DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: shutdown imminent - pushed state \"%s\"\n", state_string(ncma_state));
-    	   ncma_dbox_open_to_target(URL_PATH(poweroff.html), STANDBY_DIALOGUE_BOX);
-    	   return(State_NCMAShutdown);
-    	 }
-    	 break;
-
-    case Trans_Registry: /* HACK - damn s/c layer doesn't always report Card_Removed */
-         if(registry_status_cleared(BB_STATUS_INSERTED)) goto card_removed;
-         break;
-
-    case Trans_CardRemoved:
-         card_removed:
-
 #ifdef SC_SWAPPING
          /* We only want the line to be dropped globally if we are not in
              State_NCMABooted or State_NCMADiallingISP, as those states
@@ -689,8 +693,8 @@ NCMA_STATE machine(NCMA_TRANS trans)
 
     	 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: smartcard removed, hanging up, flushing cache\n");
 #ifdef POINTLESS_BUTTONS
-    	 run_from_powerup = 0;
-    	 pointless_button_clicked = 0;
+    	 run_from_powerup = false;
+    	 pointless_button_clicked = false;
     	 ncma_hourglass_off(); /* might be on, if we're in chimp mode */
 #endif
 	 ncma_hangup();
@@ -716,13 +720,31 @@ NCMA_STATE machine(NCMA_TRANS trans)
        }
 #endif // SC_SWAPPING
 
-        break;
+    return (ncma_state); /* Default behaviour */
+}
 
-    default:
-         break;
-  }
 
-  switch(ncma_state) {
+
+
+
+/*********************************************************************************/
+/* machine                                                                       */
+/*                                                                               */
+/* This routine is the main NCMAlite state machine.                              */
+/*                                                                               */
+/* Parameters: trans. A transition that has to be performed.                     */
+/*                                                                               */
+/* Returns:    The new state.                                                    */
+/*                                                                               */
+/*********************************************************************************/
+NCMA_STATE machine(NCMA_TRANS trans)
+{
+  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: got transition %s in state %s\n", trans_string(trans), state_string(ncma_state));
+
+  /* We switch the state machine on the current state. Each state then individually handles
+      the transitions that it wants. */
+  switch(ncma_state)
+  {
 
 /*********************************************************************************
 
@@ -731,7 +753,20 @@ NCMA_STATE machine(NCMA_TRANS trans)
  *********************************************************************************/
     case State_NCMAInit:  /* start-up, pre WIMP stage */
 
-         switch(trans) {
+         switch(trans)
+         {
+
+           case Trans_Shutdown:
+             return(shutdown_transition());
+             break;
+
+           case Trans_Registry: /* HACK - damn s/c layer doesn't always report Card_Removed */
+             if(registry_status_cleared(BB_STATUS_INSERTED))
+             {
+               return (card_removed());
+             }
+
+             break;
 
            case Trans_ShutdownComplete:
                /* This transition is needed since the standby module now
@@ -739,7 +774,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
                    NCMA goes into either the Init or Connect state (according
                    to whether smartcard is inserted or not) */
                 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Trans_ShutdownComplete received in State_NCMAInit\n");
-                prevent_shutdown = 1;
+                prevent_shutdown = true;
                 if(ui_present()) prod_browser_after_standby();
                 return(State_NCMAInit);
                 break;
@@ -775,12 +810,12 @@ NCMA_STATE machine(NCMA_TRANS trans)
 #else
 		  ncma_url_open(WELCOME_SCREEN_URL);
 #endif
-		  run_from_powerup = 0;
+		  run_from_powerup = false;
 	   	  return(State_NCMAInit);
 	   	}
 
 	   	/* otherwise, there's a card in, so fall through */
-		run_from_powerup = 1;
+		run_from_powerup = true;
 	   	/* \/ \/ \/ \/ \/ DELIBERATE FALL THRU \/ \/ \/ \/ \/ */
 
 
@@ -856,13 +891,12 @@ NCMA_STATE machine(NCMA_TRANS trans)
        		/* clear the hourglass and click condition from 'insert s/c' OSD */
 		DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: smartcard ready - hourglass off\n");
                 ncma_hourglass_off();
-                pointless_button_clicked = 0;
-
+                pointless_button_clicked = false;
 #endif
 
 #ifdef SC_SWAPPING
                 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: setting flag bCardVerified to TRUE - the card has been verified.\n");
-                bCardVerified = 1; /* Card is known to be valid */
+                bCardVerified = true; /* Card is known to be valid */
                 ncma_dbox_close_target(COMMON_DIALOGUE_BOX); /* Closing the 'enter pin' or 'insert smartcard' dialogues */
                 return(after_pin());
 #else
@@ -892,9 +926,20 @@ NCMA_STATE machine(NCMA_TRANS trans)
  *********************************************************************************/
     case State_NCMABadCard: /* waiting for URL/CLI call */
 
-    	 switch(trans) {
+         switch(trans)
+         {
+             case Trans_Shutdown:
+               return(shutdown_transition());
+               break;
+
          #ifdef POINTLESS_BUTTONS
        	     case Trans_Registry:
+               if(registry_status_cleared(BB_STATUS_INSERTED))
+               {
+                 /* HACK - damn s/c layer doesn't always report Card_Removed */
+                 return(card_removed());
+               }
+
        	     case Trans_CardRemoved:
        	     	  return(State_NCMANoCard);
 
@@ -910,7 +955,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
                   ncma_dbox_close_target(COMMON_DIALOGUE_BOX);
                   return(State_NCMAConnect);
 
-         #endif
+         #endif /* POINTLESS_BUTTONS */
     	 } /* end state_ncmabadcard */
 
     	 break;
@@ -922,20 +967,32 @@ NCMA_STATE machine(NCMA_TRANS trans)
  *********************************************************************************/
     case State_NCMANoCard: /* waiting for a smartcard to be inserted */
 
-         switch(trans) {
-	    case Trans_CardOK:
+         switch(trans)
+         {
+
+           case Trans_Shutdown:
+                 return(shutdown_transition());
+                 break;
+
+           case Trans_CardOK:
 	         DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: card_ok event - clearing status delta register\n");
 	         smartcard_status(NULL);
 	    	 return(State_NCMANoCard);
 
 	    case Trans_Timeout: /* user clicked 'Continue' with no card inserted */
 	    	 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Card check timer expired\n");
-	    	 pointless_button_clicked = 0;
+	    	 pointless_button_clicked = false;
 	    	 ncma_hourglass_off();
 	    	 ncma_dbox_open_to_target(URL_PATH(splash.html), COMMON_DIALOGUE_BOX);
 	    	 return(State_NCMANoCard);
 
             case Trans_Registry: /* card activity */
+                 if(registry_status_cleared(BB_STATUS_INSERTED))
+                 {
+                   /* HACK - damn s/c layer doesn't always report Card_Removed */
+                   return(card_removed());
+                 }
+                 break;
 
 #ifdef POINTLESS_BUTTONS
        		 if((run_from_powerup | pointless_button_clicked)==0) {
@@ -949,15 +1006,16 @@ NCMA_STATE machine(NCMA_TRANS trans)
 
             case Trans_URLSmartcardAck:
             case Trans_URLStart: /* repeat click on "continue" from cancel setup screen */
-
-                 if(!pointless_button_clicked) { /* continue not already pressed */
-                     pointless_button_clicked = 1;
+                 if(!pointless_button_clicked)
+                 { /* continue not already pressed */
+                     pointless_button_clicked = true;
                      DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Got click\n");
                      ncma_hourglass_on();
-                     if(!smartcard_present()) {
-                         DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: no card ; starting timer\n");
-                         settimeout(CARD_SCAN_TIMEOUT);
-                         return(State_NCMANoCard);
+                     if(!smartcard_present())
+                     {
+                       DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: no card ; starting timer\n");
+                       settimeout(CARD_SCAN_TIMEOUT);
+                       return(State_NCMANoCard);
                      }
                  }
 
@@ -970,7 +1028,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
 		    DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: invalid smartcard - bailing\n");
 		    ncma_dbox_open_to_target(URL_PATH(invalid.html), COMMON_DIALOGUE_BOX);
                     ncma_hourglass_off();
-                    pointless_button_clicked = 0;
+                    pointless_button_clicked = false;
 		    return(State_NCMABadCard);
 		}
 
@@ -978,7 +1036,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
 		if(smartcard_pin_protected()) {
 		    DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: smartcard PIN protected\n");
                     ncma_hourglass_off();
-                    //pointless_button_clicked = 0;
+                    //pointless_button_clicked = false;
 		    card_attempts = smartcard_blocked();
 		    if(card_attempts>0) {
 #ifdef CHIMPANZEE_INTERFACE
@@ -1060,7 +1118,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
             	 ncma_dbox_open_to_target(URL_PATH(damaged.html), COMMON_DIALOGUE_BOX);
 #ifdef POINTLESS_BUTTONS
                  ncma_hourglass_off();
-                 pointless_button_clicked = 0;
+                 pointless_button_clicked = false;
 #endif
             	 return(State_NCMABadCard);
          } /* end state_ncmanocard */
@@ -1074,14 +1132,25 @@ NCMA_STATE machine(NCMA_TRANS trans)
  *********************************************************************************/
     case State_NCMADefaultPIN:
 
-    	 switch(trans) {
+    	 switch(trans)
+         {
+
+              case Trans_Shutdown:
+                  return(shutdown_transition());
+                  break;
+
 	     case Trans_AuthFail: /* default PIN failed */
 	          DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: authorization failure for default PIN (auth)\n");
 	          return (default_pin_failed());
 	     	  break;
 
     	     case Trans_Registry: /* test status of default PIN transaction */
-                 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Trans_Registry s=0x%x d=0x%x\n", registry_status, registry_delta);
+                  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Trans_Registry s=0x%x d=0x%x\n", registry_status, registry_delta);
+                  if(registry_status_cleared(BB_STATUS_INSERTED))
+                  {
+                    /* HACK - damn s/c layer doesn't always report Card_Removed */
+                    return(card_removed());
+                  }
 
 	     	  if(registry_status_asserted(BB_STATUS_LOCKED) || registry_status_asserted(BB_STATUS_AUTHFAIL))
                   { /* PIN was wrong */
@@ -1097,7 +1166,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
                     if (default_PIN_attempts == 1)
                     {
                       /*  It was an attempt with a second default PIN */
-                      show_change_pin_screens = FALSE;
+                      show_change_pin_screens = false;
                     }
                     #endif /* ENABLE_SECOND_DEFAULT_PIN */
 	     	    DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: default PIN succeeded\n");
@@ -1120,7 +1189,12 @@ NCMA_STATE machine(NCMA_TRANS trans)
  *********************************************************************************/
     case State_NCMAPin:
 
-    	 switch(trans) {
+    	 switch(trans)
+         {
+
+             case Trans_Shutdown:
+                  return(shutdown_transition());
+                  break;
 
 #ifdef SC_SWAPPING
              /* This transition must cope with the case where the card is
@@ -1161,12 +1235,15 @@ NCMA_STATE machine(NCMA_TRANS trans)
 
 	     case Trans_AuthFail: /* the user entered a pin, but it failed */
 	          DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: authorization failure (authfail)\n");
-	          if(card_attempts-->0) {
+	          if(card_attempts-->0)
+	          {
 	            DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Bad PIN! %d attempts left\n", card_attempts);
 	     	    ncma_dbox_open_to_target(URL_PATH(badpin.html), COMMON_DIALOGUE_BOX);
                     ncma_hourglass_off();
 	     	    return(State_NCMABadPin);
-	     	  } else {
+	     	  }
+	     	  else
+                  {
 	     	    DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: card has become blocked\n");
 	     	    ncma_dbox_open_to_target(URL_PATH(unblock.html), COMMON_DIALOGUE_BOX);
                     ncma_hourglass_off();
@@ -1175,8 +1252,12 @@ NCMA_STATE machine(NCMA_TRANS trans)
 	     	  break;
 
     	     case Trans_Registry: /* the user entered a pin, maybe it worked, maybe it didn't */
-                 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Trans_Registry s=0x%x d=0x%x\n", registry_status, registry_delta);
-
+                  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Trans_Registry s=0x%x d=0x%x\n", registry_status, registry_delta);
+                  if(registry_status_cleared(BB_STATUS_INSERTED))
+                  {
+                     /* HACK - damn s/c layer doesn't always report Card_Removed */
+                    return(card_removed());
+                  }
 	     	  if(registry_status_asserted(BB_STATUS_LOCKED) || registry_status_asserted(BB_STATUS_AUTHFAIL)) { /* PIN was wrong */
 	     	      DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: authorization failed (registry)\n");
 
@@ -1199,7 +1280,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
                       old_chv_pin_size = chv_pin_size;
 #ifdef SC_SWAPPING
 	              DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: setting flag bCardVerified to TRUE - the card has been verified. #2\n");
-                      bCardVerified = 1; // Card is known to be valid
+                      bCardVerified = true; // Card is known to be valid
 #endif /* SC_SWAPPING */
 
 #ifdef CHIMPANZEE_INTERFACE
@@ -1208,7 +1289,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
 
 #ifdef SC_SWAPPING
 	              DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: setting flag bCardVerified to TRUE - the card has been verified. #3\n");
-                      bCardVerified = 1; // Card is known to be valid
+                      bCardVerified = true; // Card is known to be valid
 #endif /* SC_SWAPPING */
 
        		      return(State_NCMAApresPIN);
@@ -1231,10 +1312,21 @@ NCMA_STATE machine(NCMA_TRANS trans)
  *********************************************************************************/
     case State_NCMAApresPIN:
 
-         switch(trans) {
+         switch(trans)
+         {
 
-             case Trans_Registry:
-                if(bootblock_read_succeeded()==0) { /* bootblock read ok, but not finished yet */
+            case Trans_Shutdown:
+                return(shutdown_transition());
+                break;
+
+            case Trans_Registry:
+                if(registry_status_cleared(BB_STATUS_INSERTED))
+                {
+                  /* HACK - damn s/c layer doesn't always report Card_Removed */
+                  return(card_removed());
+                }
+                if(bootblock_read_succeeded()==0)
+                { /* bootblock read ok, but not finished yet */
                   DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: not ready reading bootblock (after pin)\n");
                   return(State_NCMAApresPIN);
                 }
@@ -1261,7 +1353,19 @@ NCMA_STATE machine(NCMA_TRANS trans)
  *********************************************************************************/
     case State_NCMABadPin:
 
-         switch(trans) {
+         switch(trans)
+         {
+
+             case Trans_Shutdown:
+                  return(shutdown_transition());
+                  break;
+
+             case Trans_Registry: /* HACK - damn s/c layer doesn't always report Card_Removed */
+                  if(registry_status_cleared(BB_STATUS_INSERTED))
+                  {
+                    return(card_removed());
+                  }
+                  break;
 
 	     case Trans_CardOK:
 	     	  return(State_NCMABadPin);
@@ -1282,7 +1386,19 @@ NCMA_STATE machine(NCMA_TRANS trans)
  *********************************************************************************/
     case State_NCMAConnect:
 
-         switch(trans) {
+         switch(trans)
+         {
+
+             case Trans_Shutdown:
+                   return(shutdown_transition());
+                   break;
+
+             case Trans_Registry: /* HACK - damn s/c layer doesn't always report Card_Removed */
+                   if(registry_status_cleared(BB_STATUS_INSERTED))
+                   {
+                     return(card_removed());
+                   }
+                   break;
 
              case Trans_PowerUp:
                /* Do nothing... PowerUp's can be recieved in State_NCMAConnect on
@@ -1297,7 +1413,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
                    NCMA goes into either the Init or Connect state (according
                    to whether smartcard is inserted or not) */
                   DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Trans_ShutdownComplete received in State_NCMAConnect\n");
-                  prevent_shutdown = 1;
+                  prevent_shutdown = true;
                   if(ui_present()) prod_browser_after_standby();
                   return(State_NCMAInit);
                   break;
@@ -1367,7 +1483,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
 
              case Trans_URLConnectNak:
                   ncma_url_open(WELCOME_SCREEN_URL);
-                  run_from_powerup = 0;
+                  run_from_powerup = false;
                   return(State_NCMAInit);
                   break;
          } /* end state_ncmaconnect */
@@ -1389,20 +1505,31 @@ NCMA_STATE machine(NCMA_TRANS trans)
                  dialling state, it means that a dia request has occured in
                  the middle of a dial. This will ususally happen in the
                  previous dial has failed, and is being restarted. */
-               case Trans_NCMADialUI_Start:
-                 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Trans_NCMADialUI_Start in State_NCMADiallingISP\n");
-                 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine:  Opening the please wait screen and calling start_redial()\n");
-                 ncma_url_open(URL_PATH(pleasewait.html));
-                 if (bRedialRequested)
-                 {
-                   redial_failed = true;
-                   return (start_redial());
-                 }
-                 else
-                 {
-                   ncma_dial();
-                 }
-                 break;
+             case Trans_NCMADialUI_Start:
+                  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Trans_NCMADialUI_Start in State_NCMADiallingISP\n");
+                  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine:  Opening the please wait screen and calling start_redial()\n");
+                  ncma_url_open(URL_PATH(pleasewait.html));
+                  if (bRedialRequested)
+                  {
+                    redial_failed = true;
+                    return (start_redial());
+                  }
+                  else
+                  {
+                    ncma_dial();
+                  }
+                  break;
+
+             case Trans_Shutdown:
+                  return(shutdown_transition());
+                  break;
+
+             case Trans_Registry: /* HACK - damn s/c layer doesn't always report Card_Removed */
+                  if(registry_status_cleared(BB_STATUS_INSERTED))
+                  {
+                    return(card_removed());
+                  }
+                  break;
 
              case Trans_DialBad:
                   /* This transition is recieved when the user clicks 'cancel' on one of the dialler error boxes */
@@ -1445,7 +1572,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
                   {
                     open_current_browser_url();
                     DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: A redial has been requested, so resetting bRedialRequested to 0\n");
-                    bRedialRequested = 0;
+                    bRedialRequested = false;
                   }
                   else
                   {
@@ -1478,7 +1605,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
                   }
 
                   DBUG_PRINTF(DBUG_LVL_DIAG, "Resetting bNoScreenChanges to 0 and moving to State_NCMABooted.\n");
-                  bNoScreenChanges = 0;
+                  bNoScreenChanges = false;
 
     	     	  return(State_NCMABooted);
  		  break;
@@ -1486,7 +1613,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
 #ifdef SC_SWAPPING
              case Trans_CardRemoved:  /* Ignoring this case. */
                DBUG_PRINTF(DBUG_LVL_DIAG, "Ignoring transition Trans_CardRemoved in State_NCMADIallingISP.\n");
-               bCardVerified = 0;
+               bCardVerified = false;
                return(State_NCMADiallingISP);
 #endif /* SC_SWAPPING */
 
@@ -1500,22 +1627,34 @@ NCMA_STATE machine(NCMA_TRANS trans)
  *********************************************************************************/
     case State_NCMABooted:
 
-    	 switch(trans) {
+         switch(trans)
+         {
              /* The transition below is called when the browser wants to
                  restart a dial. If the card is currently verified, then it calls
                  NCDialUI_Start, otherwise it notes that a redial has been requested and
                  prompts for a card to be inserted. */
-               case Trans_NCMADialUI_Start:
-                 DBUG_PRINTF(DBUG_LVL_DIAG, "Trans_NCMADialUI_Start in State_NCMABooted: calling start_redial()\n");
-                 return (start_redial());
+             case Trans_NCMADialUI_Start:
+                  DBUG_PRINTF(DBUG_LVL_DIAG, "Trans_NCMADialUI_Start in State_NCMABooted: calling start_redial()\n");
+                  return (start_redial());
 
-               case Trans_DialOK:
-                 // Ignoring this case as it is produced after a Trans_NCMADialUI_Start if the redial was successful.
-                 DBUG_PRINTF(DBUG_LVL_DIAG, "Ignoring Trans_DialOK\n");
-               return (State_NCMABooted);
+             case Trans_Shutdown:
+                  return(shutdown_transition());
+                  break;
+
+             case Trans_Registry: /* HACK - damn s/c layer doesn't always report Card_Removed */
+                  if(registry_status_cleared(BB_STATUS_INSERTED))
+                  {
+                    return(card_removed());
+                  }
+                  break;
+
+             case Trans_DialOK:
+                  // Ignoring this case as it is produced after a Trans_NCMADialUI_Start if the redial was successful.
+                  DBUG_PRINTF(DBUG_LVL_DIAG, "Ignoring Trans_DialOK\n");
+                  return (State_NCMABooted);
 
     	     case Trans_NCMASurf:
- 	         DBUG_PRINTF(DBUG_LVL_DIAG, "Trans_NCMASurf in State_NCMABooted : calling ncma_url_user() and returning State_NCMABooted\n");
+ 	          DBUG_PRINTF(DBUG_LVL_DIAG, "Trans_NCMASurf in State_NCMABooted : calling ncma_url_user() and returning State_NCMABooted\n");
 		  ncma_url_user();	/* this can happen when the user presses home - just let it fail if it must */
     	     	  return(State_NCMABooted);
 
@@ -1575,7 +1714,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
 		  ncma_hangup();
 	     	  ncma_dbox_close_target(COMMON_DIALOGUE_BOX);
 		  ncma_url_open(WELCOME_SCREEN_URL);
-     		  run_from_powerup = 0;
+     		  run_from_powerup = false;
              	  return(State_NCMAInit);
 
 	     case Trans_HangUp:
@@ -1591,7 +1730,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
 #ifdef SC_SWAPPING
              case Trans_CardRemoved:
                /* Card has been removed. From now on the card will be flagged as being unverified. */
-               bCardVerified = 0;
+               bCardVerified = false;
                return (State_NCMABooted);
 #endif /* SC_SWAPPING */
 
@@ -1631,13 +1770,22 @@ NCMA_STATE machine(NCMA_TRANS trans)
  *********************************************************************************/
     case State_NCMAShutdown:
 
-         switch(trans) {
+         switch(trans)
+         {
+
+             case Trans_Registry: /* HACK - damn s/c layer doesn't always report Card_Removed */
+                  if(registry_status_cleared(BB_STATUS_INSERTED))
+                  {
+                     return(card_removed());
+                  }
+                  break;
 
              case Trans_URLShutdown:
-             	  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Trans_URLShutdown received\n");
+                  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Trans_URLShutdown received\n");
+                  /* Deliberate fall-through */
              case Trans_Shutdown:
-             	  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Trans_Shutdown received\n");
-                  prevent_shutdown = 0;
+                  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Trans_Shutdown received\n");
+                  prevent_shutdown = false;
                   shutdown_nc();
                   ncma_dbox_close_target(STANDBY_DIALOGUE_BOX); /* close my dbox */
                   ncma_dbox_close_target(COMMON_DIALOGUE_BOX);  /* close any other dbox. Yuck. */
@@ -1656,7 +1804,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
 
              case Trans_ShutdownComplete:
              	  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Trans_Complete received\n");
-                  prevent_shutdown = 1;
+                  prevent_shutdown = true;
                   if(ui_present()) prod_browser_after_standby();
                   return(State_NCMAInit);
                   break;
@@ -1670,7 +1818,11 @@ NCMA_STATE machine(NCMA_TRANS trans)
  *********************************************************************************/
     case State_NCMAUnblock:
 
-         switch(trans) {
+         switch(trans)
+         {
+             case Trans_Shutdown:
+                  return(shutdown_transition());
+                  break;
 
              case Trans_URLMismatch: /* user has entered unblock details */
              	  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: unblock PIN mismatch\n");
@@ -1692,25 +1844,29 @@ NCMA_STATE machine(NCMA_TRANS trans)
              	  return(State_NCMAUnblock);
 
     	     case Trans_Registry:
-                 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Trans_Registry s=0x%x d=0x%x\n", registry_status, registry_delta);
+                  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Trans_Registry s=0x%x d=0x%x\n", registry_status, registry_delta);
+                  if(registry_status_cleared(BB_STATUS_INSERTED))
+                  {
+                    /* HACK - damn s/c layer doesn't always report Card_Removed */
+                    return(card_removed());
+                  }
 
-	     	  if(registry_status_asserted(BB_STATUS_LOCKED) || registry_status_asserted(BB_STATUS_AUTHFAIL)) { /* PIN was wrong */
+	     	  if(registry_status_asserted(BB_STATUS_LOCKED) || registry_status_asserted(BB_STATUS_AUTHFAIL))
+                  { /* PIN was wrong */
 	     	      DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: PIN change failed failed\n");
 	     	      ncma_dbox_open_to_target(URL_PATH(unblock.html), COMMON_DIALOGUE_BOX);
 	     	      return(State_NCMAUnblock);
 	     	  }
 
 	     	  if(registry_status_asserted(BB_STATUS_BB_VALID) || registry_status_cleared(BB_STATUS_LOCKED) ||
-	     	  		registry_status_cleared(BB_STATUS_AUTHFAIL)) { /* PIN was right */
+	     	  		registry_status_cleared(BB_STATUS_AUTHFAIL))
+	     	  { /* PIN was right */
 	     	      DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: authorization successful\n");
-
                       strncpy(old_chv_pin, chv_pin, chv_pin_size);
                       old_chv_pin_size = chv_pin_size;
                       ncma_dbox_close_target(COMMON_DIALOGUE_BOX);
-
 		      select_connect_screen_to_display();
         	      return(State_NCMAConnect);
-
 	     	  }
     	 }
     	 break;
@@ -1723,11 +1879,23 @@ NCMA_STATE machine(NCMA_TRANS trans)
  *********************************************************************************/
     case State_NCMABadUnblockPIN:
 
-         switch(trans) {
+         switch(trans)
+         {
 
-             case Trans_URLBadUnblockPINAck:
-                  ncma_dbox_open_to_target(URL_PATH(unblock.html), COMMON_DIALOGUE_BOX);
-                  return(State_NCMAUnblock);
+           case Trans_Shutdown:
+             return(shutdown_transition());
+             break;
+
+           case Trans_Registry: /* HACK - damn s/c layer doesn't always report Card_Removed */
+             if(registry_status_cleared(BB_STATUS_INSERTED))
+             {
+               return(card_removed());
+             }
+             break;
+
+           case Trans_URLBadUnblockPINAck:
+             ncma_dbox_open_to_target(URL_PATH(unblock.html), COMMON_DIALOGUE_BOX);
+             return(State_NCMAUnblock);
          }
          break;
 
@@ -1740,7 +1908,12 @@ NCMA_STATE machine(NCMA_TRANS trans)
  *********************************************************************************/
     case State_NCMANewPIN:
 
-    	 switch(trans) {
+         switch(trans)
+         {
+
+           case Trans_Shutdown:
+                  return(shutdown_transition());
+                  break;
 
 	     case Trans_AuthFail: /* failed setting PIN */ /* this shouldn't happen */
 	          DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: PIN change failure\n");
@@ -1756,10 +1929,13 @@ NCMA_STATE machine(NCMA_TRANS trans)
 	     	  break;
 
 	     case Trans_URLLeavePIN: /* a cancel on the change pin OSD */
-	     	  if(ui_present()) {
+	     	  if(ui_present())
+                  {
 	     	     ncma_url_gsopen(TOPLEVEL_UI_URL);
 	     	     return(State_NCMABooted);
-	     	  } else {
+	     	  }
+	     	  else
+                  {
 	     	    ncma_dbox_close_target(COMMON_DIALOGUE_BOX);
 	     	    select_connect_screen_to_display();
 	     	    return(State_NCMAConnect);
@@ -1767,24 +1943,29 @@ NCMA_STATE machine(NCMA_TRANS trans)
 	     	  break;
 
     	     case Trans_Registry: /* PIN set status from registry */
-                 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Trans_Registry s=0x%x d=0x%x\n", registry_status, registry_delta);
+                  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Trans_Registry s=0x%x d=0x%x\n", registry_status, registry_delta);
+                  if(registry_status_cleared(BB_STATUS_INSERTED))
+                  {
+                    /* HACK - damn s/c layer doesn't always report Card_Removed */
+                    return(card_removed());
+                  }
 
-	     	  if(registry_status_asserted(BB_STATUS_LOCKED) || registry_status_asserted(BB_STATUS_AUTHFAIL)) { /* PIN was wrong */
+	     	  if(registry_status_asserted(BB_STATUS_LOCKED) || registry_status_asserted(BB_STATUS_AUTHFAIL))
+                  { /* PIN was wrong */
 	     	      DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: PIN change failed failed\n"); /* this shouldn't happen */
 	     	      ncma_dbox_open_to_target(URL_PATH(newpin.html), COMMON_DIALOGUE_BOX);
 	     	      return(State_NCMANewPIN);
 	     	  }
 
 	     	  if(registry_status_asserted(BB_STATUS_BB_VALID) || registry_status_cleared(BB_STATUS_LOCKED) ||
-	     	  		registry_status_cleared(BB_STATUS_AUTHFAIL)) { /* PIN was right */
+	     	  		registry_status_cleared(BB_STATUS_AUTHFAIL))
+	     	  { /* PIN was right */
 	     	      DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: authorization successful\n");
-
                       strncpy(old_chv_pin, chv_pin, chv_pin_size);
                       old_chv_pin_size = chv_pin_size;
 		      ncma_dbox_close_target(COMMON_DIALOGUE_BOX);
 		      select_connect_screen_to_display();
         	      return(State_NCMAConnect);
-
 	     	  }
     	 }
     	 break;
@@ -1796,13 +1977,23 @@ NCMA_STATE machine(NCMA_TRANS trans)
 
  *********************************************************************************/
     case State_NCMAMismatch:
+         switch(trans)
+         {
+           case Trans_Shutdown:
+             return(shutdown_transition());
+             break;
 
-         switch(trans) {
+           case Trans_Registry: /* HACK - damn s/c layer doesn't always report Card_Removed */
+             if(registry_status_cleared(BB_STATUS_INSERTED))
+             {
+               return(card_removed());
+             }
+             break;
 
-             case Trans_URLMismatchAck:
-                  ncma_dbox_open_to_target(URL_PATH(newpin.html), COMMON_DIALOGUE_BOX);
-                  return(State_NCMANewPIN);
-                  break;
+           case Trans_URLMismatchAck:
+             ncma_dbox_open_to_target(URL_PATH(newpin.html), COMMON_DIALOGUE_BOX);
+             return(State_NCMANewPIN);
+             break;
          }
          break;
 
@@ -1821,11 +2012,26 @@ NCMA_STATE machine(NCMA_TRANS trans)
          switch(trans)
          {
 
+           case Trans_Shutdown:
+           {
+             return(shutdown_transition());
+             break;
+           }
+
+           case Trans_Registry: /* HACK - damn s/c layer doesn't always report Card_Removed */
+           {
+             if(registry_status_cleared(BB_STATUS_INSERTED))
+             {
+               return(card_removed());
+             }
+             break;
+           }
+
            case Trans_NCMASurf:
            {
              NCMA_STATE state;
              DBUG_PRINTF(DBUG_LVL_DIAG, "Trans_NCMASurf in State_NCMAEmailSelectUser: redialling and calling ncma_url_user() and returning State_NCMABooted\n");
-             bRedialRequested = 0; /* It is not an 'official' redial */
+             bRedialRequested = false; /* It is not an 'official' redial */
              state = start_redial();
              ncma_url_user();  /* this can happen when the user presses home - just let it fail if it must */
              return(state);
@@ -1853,7 +2059,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
            {
              DBUG_PRINTF(DBUG_LVL_DIAG, "Trans_CardRemoved recieved in State_NCMAEmailSelectUser\n");
              /* Card has been removed. From now on the card will be flagged as being unverified. */
-             bCardVerified = 0;
+             bCardVerified = false;
              return (State_NCMAEmailSelectUser);
            }
 
@@ -2015,10 +2221,22 @@ NCMA_STATE machine(NCMA_TRANS trans)
  *********************************************************************************/
     case State_NCMALogout:
 
-    	 switch(trans) {
+    	 switch(trans)
+         {
              case Trans_HUP:
                  /* Do nothing. */
                  return (State_NCMALogout);
+
+             case Trans_Shutdown:
+                 return(shutdown_transition());
+                 break;
+
+             case Trans_Registry: /* HACK - damn s/c layer doesn't always report Card_Removed */
+                 if(registry_status_cleared(BB_STATUS_INSERTED))
+                 {
+                   return(card_removed());
+                 }
+                 break;
 
     	     case Trans_Logout:
         	 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Recieved a Trans_Logout in State_NCMALogout; reopening logout window.\n");
@@ -2061,7 +2279,18 @@ NCMA_STATE machine(NCMA_TRANS trans)
    case State_NCMAWrongISPCard:
     	switch(trans)
         {
-	    case Trans_CardOK:
+            case Trans_Shutdown:
+                 return(shutdown_transition());
+                 break;
+
+            case Trans_Registry: /* HACK - damn s/c layer doesn't always report Card_Removed */
+                 if(registry_status_cleared(BB_STATUS_INSERTED))
+                 {
+                   return(card_removed());
+                 }
+                 break;
+
+            case Trans_CardOK:
 	         DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: card_ok event in State_NCMAWrongISPCard - clearing status delta register\n");
 	         smartcard_status(NULL);
 	    	 return(State_NCMANoCard);
@@ -2074,10 +2303,11 @@ NCMA_STATE machine(NCMA_TRANS trans)
 
 	    case Trans_Timeout: /* user clicked 'Continue' with no card inserted */
 	    	 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Card check timer expired\n");
-	    	 pointless_button_clicked = 0;
+	    	 pointless_button_clicked = false;
 	    	 ncma_hourglass_off();
 	    	 ncma_dbox_open_to_target(URL_PATH(splash.html), COMMON_DIALOGUE_BOX);
-	    	 return(State_NCMANoCard);        }
+	    	 return(State_NCMANoCard);
+        }
 
         break;
 #endif /* SC_SWAPPING */
@@ -2091,24 +2321,24 @@ NCMA_STATE machine(NCMA_TRANS trans)
  *********************************************************************************/
     case State_NCMAPanic:
     default:
-
 	 DBUG_PRINTF(DBUG_LVL_PANIC, "NCMA_machine: PANIC!\n");
 	 return(State_NCMAPanic);
 
   } /* end switch STATE */
 
-  if(trans == Trans_Registry) {
-      DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: sweet nothings from the registry\n");
-      return(ncma_state);
+  if(trans == Trans_Registry)
+  {
+    DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: sweet nothings from the registry\n");
+    return(ncma_state);
   }
 
-  if((trans == Trans_CompleteOK) || (trans == Trans_CompleteBad) || (trans == Trans_AuthFail)) {
+  if((trans == Trans_CompleteOK) || (trans == Trans_CompleteBad) || (trans == Trans_AuthFail))
+  {
     DBUG_PRINTF(DBUG_LVL_DEBUG, "NCMA: spurious I/O ACK from smartcard driver...ignoring\n");
     return(ncma_state);
   }
 
   /* otherwise . . . PANIC!! */
-
   DBUG_PRINTF(DBUG_LVL_PANIC, "NCMA: state machine panic - invalid transition event %s in state %s\n",
   		      trans_string(ncma_trans), state_string(ncma_state));
 
@@ -2146,12 +2376,12 @@ NCMA_STATE start_redial(void)
   current_url_store = store_current_browser_url();
 
   DBUG_PRINTF(DBUG_LVL_DIAG, "start_redial(): Card is unverified; setting bRedialRequested.\n");
-  bRedialRequested = 1;
+  bRedialRequested = true;
   if (!bCardVerified) /* Card is unverified */
   {
     DBUG_PRINTF(DBUG_LVL_DIAG, "start_redial(): Card is unverified; resetting smartcard cache and setting bNoScreenChanges\n");
     reset_cache();
-    bNoScreenChanges = 1;
+    bNoScreenChanges = true;
     /* Check the current status of the card (eg. invalid, inserted, bad) and go to the appropriate screen. */
     if(!smartcard_present())
     {
@@ -2229,8 +2459,8 @@ NCMA_STATE start_redial(void)
   ncma_hourglass_on();
 
   DBUG_PRINTF(DBUG_LVL_DIAG, "start_redial(): setting bRedialRequested and bNoScreenChanges.\n");
-  bRedialRequested = 1;
-  bNoScreenChanges = 1;
+  bRedialRequested = true;
+  bNoScreenChanges = true;
   if(ncma_dial()<0)
   {
     DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: IAP dial initiation failed\n");
@@ -2611,10 +2841,3 @@ NCMA_STATE change_state(NCMA_TRANS transition)
 
 
 
-NCMA_STATE change_state_to_state(NCMA_STATE state)
-{
-  DBUG_PRINTF(DBUG_LVL_DIAG, "change_state_to_state(): Old state %s\n", state_string(ncma_state));
-  ncma_state = state;
-  DBUG_PRINTF(DBUG_LVL_DIAG, "change_state_to_state(): New state %s\n", state_string(ncma_state));
-  return (ncma_state);
-}
