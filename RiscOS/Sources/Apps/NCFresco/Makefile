@@ -6,6 +6,9 @@
 #############################################################################
 #
 # $Log$
+# Revision 1.1.2.4  1997/02/21 20:01:57  smiddle
+# Interim checkin before sending diffs
+#
 # Revision 1.1.2.3  1997/02/19 14:17:47  smiddle
 # Sources fully up to date with ANT and Acorn changes since November
 #
@@ -717,6 +720,7 @@ clean:		sanity
 		cd ./hriscos ; $(RM) *.o htmlcheck,ff8
 		cd ./\!Fresco ; $(RM) *,ff8 *,fd3
 		cd ./\!NCFresco ; $(RM) *,ff8 *,fd3
+		cd ./abs ; $(RM) *
 		$(RM) */builddate.h $(PREDEPS)
 
 depends:
