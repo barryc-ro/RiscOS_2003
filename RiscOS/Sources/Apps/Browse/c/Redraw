@@ -33,6 +33,8 @@
 #include "Forms.h"
 #include "Frames.h"
 #include "Images.h"
+#include "Printing.h" /* Only for the PrintSplitFraction definition at present */
+#include "PrintStyle.h"
 #include "Reformat.h"
 #include "Tables.h"
 #include "TokenUtils.h"
@@ -47,6 +49,10 @@ static void redraw_input_field       (browser_data * b, HStream * t, BBox * box,
 static void redraw_button            (browser_data * b, HStream * t, BBox * box, int in);
 static void redraw_switch            (browser_data * b, HStream * t, int x, int y, char * spr, WimpRedrawWindowBlock * r);
 static void redraw_bullet            (int x, int y, int bullet, WimpRedrawWindowBlock * r);
+
+/* Used for printing */
+
+static int use_noback = 0;
 
 /* Internal recursive functions. These do the actual work that their */
 /* similarly named and oft externally visible counterparts claim to  */
@@ -159,6 +165,15 @@ int redraw_background_colour(browser_data * b,int foregroundcolour)
 int redraw_token_colour(browser_data * b, HStream * t)
 {
   if (t->tagno == TAG_INPUT || t->tagno == TAG_TEXTAREA || t->tagno == TAG_SELECT) return 0;
+
+  /* If we're printing, see if the Print Style dictates that any */
+  /* text should be black.                                       */
+
+  if (printing)
+  {
+    if (printstyle_always_use_black())              return Redraw_Colour_Black;
+    if (printstyle_black_no_backgd() && use_noback) return Redraw_Colour_Black;
+  }
 
   /* If the token represents a link, use different colours according */
   /* to the state of that link (followed, unfollowed etc).           */
@@ -399,11 +414,10 @@ int redraw_start_x(browser_data * b, reformat_cell * cell, HStream * t, int line
   if (t->style & HR) return 0;
 
   /* If the token isn't centred just return the margin value; */
-  /* else work out the centre alignment indentation.          */
+  /* else work out centre or right alignment indentation.     */
 
-
-       if ((t->style & CENTER) || ((t->type & TYPE_ALIGN_MASK) == TYPE_CENTRE)) align = 1;
-  else if ((t->style & RIGHT)  || (t->type & TYPE_ALIGN_MASK) == TYPE_RIGHT) align = 2;
+  if      ((t->style & CENTER) || (t->type & TYPE_ALIGN_MASK) == TYPE_CENTRE) align = 1;
+  else if ((t->style & RIGHT)  || (t->type & TYPE_ALIGN_MASK) == TYPE_RIGHT)  align = 2;
 
   if (align)
   {
@@ -575,6 +589,12 @@ int redraw_selected(browser_data * b, HStream * token)
   browser_data * owner;
   browser_data * ancestor = utils_ancestor(b);
   int            found    = 0;
+
+  /* If printing, don't want to show anything as selected */
+
+  if (printing) return 0;
+
+  /* Otherwise, find out if the token is part of a selection. */
 
   owner = ancestor->selected_owner;
 
@@ -788,27 +808,6 @@ static void redraw_switch(browser_data * b, HStream * t, int x, int y, char * sp
 
   if (r) coords_box_toworkarea(&icon, r);
 
-  #ifdef TRACE
-
-    {
-      int len = utils_len_printf("S%s\0",spr);
-
-      if (len > sizeof(validation))
-      {
-        erb.errnum = Utils_Error_Custom_Normal;
-        sprintf(erb.errmess,
-                "Would have overflowed validation string buffer in redraw_switch (needed %d bytes, had %d)",
-                sizeof(validation),
-                len);
-
-        show_error_ret(&erb);
-
-        return;
-      }
-    }
-
-  #endif
-
   sprintf(validation,"S%s\0",spr);
 
   block.bbox  = icon;
@@ -851,31 +850,10 @@ static void redraw_switch(browser_data * b, HStream * t, int x, int y, char * sp
 
 static void redraw_bullet(int x, int y, int bullet, WimpRedrawWindowBlock * r)
 {
-  char              spr[20];
+  char              spr[32];
   int               w, h;
   BBox              icon;
   WimpPlotIconBlock block;
-
-  #ifdef TRACE
-
-    {
-      int len = utils_len_printf("Sb%d\0", (bullet + bullets - 1) % bullets);
-
-      if (len > sizeof(spr))
-      {
-        erb.errnum = Utils_Error_Custom_Normal;
-        sprintf(erb.errmess,
-                "Would have overflowed sprite name string buffer in redraw_bullet (needed %d bytes, had %d)",
-                sizeof(spr),
-                len);
-
-        show_error_ret(&erb);
-
-        return;
-      }
-    }
-
-  #endif
 
   sprintf(spr, "Sb%d\0", (bullet + bullets - 1) % bullets);
 
@@ -938,6 +916,8 @@ static void redraw_bullet(int x, int y, int bullet, WimpRedrawWindowBlock * r)
 
 _kernel_oserror * redraw_draw(browser_data * b, WimpRedrawWindowBlock * r, int noback, HStream * nocontent)
 {
+  use_noback = noback;
+
   return redraw_draw_r(1, 0, 0, b, b->cell, r, noback, nocontent);
 }
 
@@ -990,15 +970,16 @@ _kernel_oserror * redraw_draw(browser_data * b, WimpRedrawWindowBlock * r, int n
 
 _kernel_oserror * redraw_draw_r(int toplevel, int xorg, int yorg, browser_data * b, reformat_cell * d, WimpRedrawWindowBlock * r, int noback, HStream * nocontent)
 {
-  int               l = 0;
-  int               more, page_bottom = 0;
-  BBox              wbox,fbox,sbox;
-  int               osxorg, osyorg;
   _kernel_oserror * e;
   browser_data    * ancestor = utils_ancestor(b);
+  int               more;
+  int               l = 0;
+  int               page_bottom, page_height;
+  int               osxorg, osyorg;
+  BBox              wbox, fbox, sbox;
 
   #ifdef TRACE
-    if (tl & (1u<<9)) Printf("\nredraw_draw: Called\n");
+    if (tl & (1u<<9)) Printf("\nredraw_draw_r: Called\n");
   #endif
 
    /* Place the x and y origin in OS units into osxorg and osyorg */
@@ -1011,7 +992,7 @@ _kernel_oserror * redraw_draw_r(int toplevel, int xorg, int yorg, browser_data *
   {
     /* There is an HTML stream, so there is something to redraw. */
 
-    wbox = r->redraw_area; /* Set wbox to hold the redraw rectangle details */
+    sbox = r->redraw_area; /* Set wbox to hold the redraw rectangle details */
 
     /* These corrections are to ensure everything is fully redrawn.   */
     /* In particular, Font_StringWidth returns widths based on the    */
@@ -1026,250 +1007,85 @@ _kernel_oserror * redraw_draw_r(int toplevel, int xorg, int yorg, browser_data *
     /* chunks are redrawn within a certain 'tolerance' / distance of  */
     /* the actual redraw rectangle.                                   */
 
-    wbox.xmin -= 12, wbox.xmax += 12;
-    wbox.ymin -=  2, wbox.ymax +=  2;
+    sbox.xmin -= 12, sbox.xmax += 12;
+    sbox.ymin -=  2, sbox.ymax +=  2;
 
-    /* Retain the screen coord version of the redraw rectangle in sbox */
-    /* (wbox holds it now, but this is converted to work area coords   */
-    /* in a moment). Put the screen coordinate version in fbox, with   */
-    /* the OS unit coords converted to millipoints.                    */
-
-    sbox = wbox;
+    /* Convert the screen coord redraw rectangle into millipoints */
 
     convert_box_to_points(&sbox, &fbox);
 
-    /* Convert the visible area of the window to work area */
-    /* coords, putting the result in wbox.                 */
+    /* Convert the screen coord redraw region into work */
+    /* area coords, putting the result in wbox.         */
 
-    coords_box_toworkarea(&wbox,r);
+    wbox = sbox;
+    coords_box_toworkarea(&wbox, r);
 
-    /* Get the page bottom in work area coordinates. This is a printing only */
-    /* concept, where the visible_area BBox will in fact hold the entire     */
-    /* page bounding box.                                                    */
+    /* Get the page bottom in work area coordinates, and the page height. */
+    /* This is really a printing only concept, where the visible_area     */
+    /* BBox will in fact hold the entire page bounding box. The variables */
+    /* aren't used for anything else (at present, hence no 'if' wrapper). */
 
     page_bottom = coords_y_toworkarea(r->visible_area.ymin, r);
+    page_height = r->visible_area.ymax - r->visible_area.ymin;
 
-// if (b->nlines)
-// {
-//   Printf("\n*** LINE ENUMERATION ***\n\nNumber of lines: %d\n\n",b->nlines);
-//
-//   for (l = 0; l < b->nlines; l++)
-//   {
-//     Printf("Line %d\n-y    : %d\nh     : %d\nb     : %d\nn      : %d\nchunks: %d\n\n",
-//             l,
-//             -d->ldata[l].y,
-//             d->ldata[l].h,
-//             d->ldata[l].b,
-//             d->ldata[l].n,
-//             d->ldata[l].chunks);
-//   }
-//
-//   Printf("\n************************\n\n");
-// }
-// else Printf("\n******* NO LINES *******\n\n");
+    /* Now the main redraw section. */
 
     if (b->nchildren)
     {
-      int                         child;
-      unsigned int                colour;
-      browser_data              * c;
-      WimpGetWindowOutlineBlock   co;
-
-      /* If the window has children, want to draw frame borders, not */
-      /* any document content.                                       */
+      /* If this browser has children, it has no directly redrawable content;  */
+      /* however, the frames it contains may need borders drawing around them. */
 
       #ifdef TRACE
-        if (tl & (1u<<9)) Printf("redraw_draw: Have children\n");
+        if (tl & (1u<<9)) Printf("redraw_draw_r: Have children\n");
       #endif
 
-      /* The bottom bit of the colour field is set to indicate */
-      /* that a colour is present, as opposed to having no     */
-      /* colour set. In the latter case default to background  */
-      /* grey, in the former strip off the set bit. Then set   */
-      /* that colour.                                          */
-
-      colour = b->frameset->maxlen;
-      if (!(colour & 1)) colour  = Redraw_Colour_WNGrey;
-      else               colour &= ~1;
-      redraw_set_colour(colour);
-      bbc_rectanglefill(sbox.xmin, sbox.ymin, sbox.xmax - sbox.xmin + 4,sbox.ymax - sbox.ymin + 4);
-
-      #ifdef TRACE
-
-        if (tl & (1u<<23))
-        {
-          BBox rectangle = r->redraw_area;
-
-          redraw_set_colour(0xff884400);
-          bbc_rectangle(rectangle.xmin,rectangle.ymin,rectangle.xmax-rectangle.xmin-1,rectangle.ymax-rectangle.ymin-1);
-
-          redraw_set_colour(0xffaa6600);
-          bbc_rectangle(rectangle.xmin+2,rectangle.ymin+2,rectangle.xmax-rectangle.xmin-5,rectangle.ymax-rectangle.ymin-5);
-
-          redraw_set_colour(0xffcc8800);
-          bbc_rectangle(rectangle.xmin+4,rectangle.ymin+4,rectangle.xmax-rectangle.xmin-9,rectangle.ymax-rectangle.ymin-9);
-        }
-
-      #endif
-
-      /* Now loop round the children, drawing a 3D border around them */
-      /* for border spacings >= 2, a black line for spacing 1, or     */
-      /* nothing for spacing 0 (shouldn't then get redraw events for  */
-      /* the parent, but you never know - e.g. user could have got a  */
-      /* patch that allowed the frames to be moved by dragging on     */
-      /* their work area).                                            */
-
-      if (b->frameset->indent) /* Holds frame spacing (equiv. to border width) */
-      {
-        for (child = 0; child < b->nchildren; child ++)
-        {
-          c                = b->children[child];
-          co.window_handle = c->window_handle;
-
-          if (!wimp_get_window_outline(&co))
-          {
-            if (b->frameset->indent >= 2) redraw_set_colour(Redraw_Colour_AlmostWhite);
-            else                          redraw_set_colour(0);
-
-            /* Bottom edge */
-
-            bbc_rectanglefill(co.outline.xmin,
-                              co.outline.ymin - 2,
-                              co.outline.xmax - co.outline.xmin + 1,
-                              1);
-
-            bbc_rectanglefill(co.outline.xmax,
-                              co.outline.ymin,
-                              1,
-                              co.outline.ymax - co.outline.ymin - 1);
-
-            /* Right hand edge */
-
-            if (b->frameset->indent >= 2) redraw_set_colour(Redraw_Colour_PlinthGrey);
-
-            /* Top edge */
-
-            bbc_rectanglefill(co.outline.xmin - 2,
-                              co.outline.ymax,
-                              co.outline.xmax - co.outline.xmin + 3,
-                              1);
-
-            /* Left hand edge */
-
-            bbc_rectanglefill(co.outline.xmin - 2,
-                              co.outline.ymin - 2,
-                              1,
-                              co.outline.ymax - co.outline.ymin + 1);
-
-            /* If the edges are draggable - for frame resizing - plot icons */
-            /* indicate this.                                               */
-
-            {
-              int  width, height;
-              BBox icon;
-
-              /* Get the sprite size, work out a bounding box and plot */
-              /* this as a virtual icon.                               */
-
-              read_sprite_size("resizeframe", &width, &height);
-
-              /* Can only plot sprites if there's room... The additions to width and */
-              /* height account for the border plotted above.                        */
-
-              if (
-                   width  + 4 <= b->frameset->indent * wimpt_dx() &&
-                   height + 4 <= b->frameset->indent * wimpt_dy()
-                 )
-              {
-                WimpPlotIconBlock block;
-
-                block.flags = 0x1700311B;
-                block.data.ist.buffer = "";
-                block.data.ist.validation = "Sresizeframe";
-                block.data.ist.buffer_size = 4;
-
-                if (frames_can_resize_right(b, child))
-                {
-                  /* Plot to right of frame */
-
-                  icon.xmin = co.outline.xmax + b->frameset->indent - width / 2;
-                  icon.ymin = co.outline.ymin + (co.outline.ymax - co.outline.ymin - height) / 2;
-                  icon.xmax = icon.xmin + width;
-                  icon.ymax = icon.ymin + height;
-
-                  coords_box_toworkarea(&icon, r);
-                  block.bbox  = icon;
-
-                  _swix(Wimp_PlotIcon,
-                        _IN(1) | _INR(4,5),
-
-                        &block,
-                        0,
-                        0);
-                }
-
-                if (frames_can_resize_bottom(b, child))
-                {
-                  /* Plot below the frame */
-
-                  icon.xmin = co.outline.xmin + (co.outline.xmax - co.outline.xmin - width) / 2;
-                  icon.ymin = co.outline.ymin - height / 2 - b->frameset->indent;
-                  icon.xmax = icon.xmin + width;
-                  icon.ymax = icon.ymin + height;
-
-                  coords_box_toworkarea(&icon, r);
-                  block.bbox  = icon;
-
-                  _swix(Wimp_PlotIcon,
-                        _IN(1) | _INR(4,5),
-
-                        &block,
-                        0,
-                        0);
-                }
-
-              /* Closure of long 'if' checking that there is room to plot */
-              /* a resize handle for this frame, given that the frame     */
-              /* itself doesn't have noresize specified. The code above   */
-              /* executes if noresize is not specified and there's room   */
-              /* to do the plot.                                          */
-              }
-
-            /* Closure of code block dealing with resize handle plotting */
-            }
-
-          /* Closure of long 'if' ensuring a wimp_get_window_outline */
-          /* call didn't return an error - the code above executes   */
-          /* if there was no error.                                  */
-          }
-
-        /* Closure of 'for' looping round all children */
-        }
-
-      /* Closure of long 'if' checking that the frameset has spacing */
-      /* between frames. The code above executes if so.              */
-      }
-
-    /* Closure of first part of long 'if' checking if the browser */
-    /* has children. The code above executes if so, the code      */
-    /* below executes if not.                                     */
+      frames_redraw_borders(b, r);
     }
-
-    /* If the browser doesn't have child frames, want to draw the document it holds. */
-
     else
     {
+      /* If the browser doesn't have child frames, want to draw */
+      /* the document it holds instead.                         */
+
       #ifdef TRACE
-        if (tl & (1u<<9)) Printf("redraw_draw: Have no children\n");
+        if (tl & (1u<<9)) Printf("redraw_draw_r: Have no children\n");
       #endif
 
       if (b->stream)
       {
         #ifdef TRACE
-          if (tl &512) Printf("redraw_draw: Have a document\n");
+          if (tl &512) Printf("redraw_draw_r: Have a document\n");
         #endif
 
-        /* If we've not been told not to plot any backgrounds... */
+        /* If printing, handle display style override for backgrounds */
+
+        if (printing)
+        {
+          /* Force background off for some cases... */
+
+          if      (printstyle_show_none()) noback = 1;
+          else if (printstyle_show_in_tables_only)
+          {
+            if (toplevel) noback = 1;
+            else
+            {
+              /* Need to work out if this table cell has a background colour */
+
+              if (d->cdata && d->cdata[0].t->parent)
+              {
+                if (TD_HAS_BGCOL(d->cdata[0].t->parent)) noback = 0;
+                else                                     noback = 1;
+              }
+            }
+          }
+
+          /* ...and on for others */
+
+          if (printstyle_show_all() && toplevel) noback = 0;
+        }
+
+        use_noback = noback;
+
+        /* If we've *not* been told *not* to plot any backgrounds... */
 
         if (!noback)
         {
@@ -1316,22 +1132,9 @@ _kernel_oserror * redraw_draw_r(int toplevel, int xorg, int yorg, browser_data *
 
         #endif
 
-  //      else
-  //      {
-  //        /* If plotting no specific backgrounds, show the default one. */
-  //        /* If printing, assume we want to plot no background at all.  */
-  //
-  //        if (!printing)
-  //        {
-  //          if (b->sourcecolours) redraw_set_colour(redraw_backcol(b));
-  //          else redraw_set_colour(choices.col_back);
-  //          bbc_rectanglefill(sbox.xmin, sbox.ymin, sbox.xmax - sbox.xmin + 4,sbox.ymax - sbox.ymin + 4);
-  //        }
-  //      }
+        /* Loop over every line in this cell. */
 
-        /* For each line that is present in the browser window... */
-
-        for (l = 0; l < (d->nlines); l++)
+        for (l = 0; l < d->nlines; l++)
         {
           /* If there are line chunks for this line, and the bounding box y */
           /* coordinates lie within the redraw rectangle, process the line. */
@@ -1350,18 +1153,40 @@ _kernel_oserror * redraw_draw_r(int toplevel, int xorg, int yorg, browser_data *
             char    * dp;            /* Data Pointer */
             int       cn;            /* Chunk Number */
 
-            if (printing == 1)
+            if (printing == 1 && toplevel)
             {
-              /* If the line would only partially fit on the page, and */
-              /* we're printing, return it's top coordinate (i.e., if  */
-              /* it falls off the bottom). Note that if printing = 2,  */
-              /* this will not be done (so the printing routine can    */
-              /* signal not to split the line in this way).            */
+              /* If printing = 1, it signals that we're not to split lines */
+              /* over the bottom of the page. So if this line will drop    */
+              /* off the bottom, we need to be careful. This gets a bit    */
+              /* hacky now...                                              */
+              /*                                                           */
+              /* To signal to the printing loop that a line was about to   */
+              /* be split but wasn't drawn, the top coord of the line is   */
+              /* returned in the xscroll field of the redraw block passed  */
+              /* to the function. The printing routines use this to work   */
+              /* out where to start the next redraw from.                  */
+              /*                                                           */
+              /* However, for large lines - e.g. very big images, tables,  */
+              /* or lines taller than the whole page - we either should,   */
+              /* or in the latter case must, split that line. So, if the   */
+              /* line is taller than 1/PrintSplitFraction of the page      */
+              /* height, will indeed be split over the page boundary.      */
+              /*                                                           */
+              /* If you add code here, remember that xscroll must be       */
+              /* filled in eventually or the printing loop will exit,      */
+              /* assuming there's no more page to draw.                    */
 
               if (osyorg + d->ldata[l].y < page_bottom)
               {
-                r->xscroll = osyorg + d->ldata[l].y + d->ldata[l].h;
-                return NULL;
+                if (d->ldata[l].h <= page_height / PrintSplitFraction) /* (See Print.h) */
+                {
+                  r->xscroll = osyorg + d->ldata[l].y + d->ldata[l].h;
+                  return NULL;
+                }
+
+                /* The effective 'else' case here has to be handled at the end */
+                /* of printing, or you've just scrolled the page a long way to */
+                /* right...                                                    */
               }
             }
 
@@ -1969,10 +1794,15 @@ _kernel_oserror * redraw_draw_r(int toplevel, int xorg, int yorg, browser_data *
                         bbc_rectanglefill(box.xmin,     box.ymax - o, box.xmax - box.xmin - 1, o - 1);
                         bbc_rectanglefill(box.xmax - o, box.ymin,     o - 1,                   box.ymax - box.ymin - 1);
                       }
-                      else if (redraw_selected(b, tp)) redraw_border_around_box(&box, b->selecol);
+                      else if (redraw_selected(b, tp))
+                      {
+                        redraw_border_around_box(&box, b->selecol);
+                      }
                     }
                     else if (tp->tagno == TAG_INPUT && redraw_selected(b, tp))
+                    {
                       redraw_border_around_box(&box, b->selecol);
+                    }
 
                     /* Redraw the image itself */
 
@@ -2233,6 +2063,15 @@ _kernel_oserror * redraw_draw_r(int toplevel, int xorg, int yorg, browser_data *
             /* area.                                                 */
             }
 
+            /* For printing, tell the print routines where we were up to */
+
+            if (
+                 printing == 1 &&
+                 toplevel      &&
+                 osyorg + d->ldata[l].y < page_bottom
+               )
+               r->xscroll = osyorg + page_bottom;
+
           /* Closure of long 'if' checking if the current line lies */
           /* partially or entirely within the redraw area. The code */
           /* above executes if it does.                             */
@@ -2248,7 +2087,7 @@ _kernel_oserror * redraw_draw_r(int toplevel, int xorg, int yorg, browser_data *
 
       else
       {
-        if (!printing)
+        if (!printing || !toplevel)
         {
           /* Set the graphics background colour to the default  */
           /* and clear the graphics rectangle [to this colour]. */
@@ -2293,8 +2132,8 @@ _kernel_oserror * redraw_draw_r(int toplevel, int xorg, int yorg, browser_data *
           #ifdef TRACE
             if (tl & (1u<<9))
             {
-              Printf("redraw_draw: Empty page, claimed font %p\n",(void *) h);
-              Printf("             Plotting x,y %d,%d\n",x,y);
+              Printf("redraw_draw_r: Empty page, claimed font %p\n",(void *) h);
+              Printf("               Plotting x,y %d,%d\n",x,y);
             }
           #endif
 
@@ -2338,6 +2177,7 @@ _kernel_oserror * redraw_draw_r(int toplevel, int xorg, int yorg, browser_data *
   }
   while (more);
 
+  /* Finished... */
 
   return NULL;
 }

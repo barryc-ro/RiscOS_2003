@@ -3,9 +3,17 @@
 /*                                                 */
 /* Purpose: Printing functions for the browser.    */
 /*                                                 */
+/*          This source is fairly closely tied to  */
+/*          PrintStyle.c, as the Print dialogue    */
+/*          can open and close the Print Style     */
+/*          dialogue.                              */
+/*                                                 */
 /* Author : A.D.Hodgkinson                         */
 /*                                                 */
 /* History: 27-Jan-97: Created.                    */
+/*          25-Aug-97: Overhaul (read rewrite) to  */
+/*                     the new dialogue handling   */
+/*                     model, as for Open URL etc. */
 /***************************************************/
 
 #include "signal.h"
@@ -26,13 +34,13 @@
 #include "svcprint.h"
 #include "Global.h"
 #include "FromROSLib.h"
-#include "TBEvents.h"
 #include "Utils.h"
 
 #include "Browser.h"
 #include "FontManage.h"
 #include "Images.h"
 #include "Memory.h"
+#include "PrintStyle.h"
 #include "Redraw.h"
 #include "Reformat.h"
 #include "Save.h"
@@ -42,39 +50,259 @@
 
 #include "Printing.h"
 
-/* Local structures */
+/* Local structures.                                           */
+/*                                                             */
+/* Holds info on the Print dialogue's contents; small enough   */
+/* to hold as a static, as the code to dynamically allocate it */
+/* would occupy more room than the structure itself.           */
+
+#define End_Whole   0
+#define End_Visible 1
+#define End_Many    2
 
 typedef struct
 {
-  browser_data * p;           /* Records for whom the print dialogue was opened.                                   */
-  int            copies;      /* Number of copies to print.                                                        */
-  int            start;       /* 1 = whole page, 0 = top of visible area.                                          */
-  int            end;         /* 0 = whole page, -1 = to bottom of visible area, > 0 = number of pages to fill.    */
-  int            pages;       /* Remembers the number of pages set, if 'end' is 0 or -1, to enable Cancel to work. */
-  int            reformat;    /* 1 = reformat to fit page (if start is not 0 and end is not -1), else don't.       */
-  int            orientation; /* 1 = portrait, 0 = landscape.                                                      */
+  int            copies;          /* Number of copies to print.                                                        */
+  int            pages;           /* If 'end' is 2, the number of pages to fill.                                       */
+  unsigned int   end          :2; /* 0 = whole page, 1 = to bottom of visible area, 2 = for 'pages' pages.             */
+  unsigned int   start        :1; /* 1 = whole page, 0 = top of visible area.                                          */
+  unsigned int   reformat     :1; /* 1 = reformat to fit page (if start is not 0 and end is not -1), else don't.       */
+  unsigned int   orientation  :1; /* 1 = portrait, 0 = landscape.                                                      */
 
-} print_info;
+} print_contents;
+
+/* The following stores the four basic display type settings */
+/* (underline links, show images etc.) for the browser to be */
+/* printed. This is so that the settings may be restored     */
+/* after a print.                                            */
+
+typedef struct
+{
+  unsigned int underlinelks  :1;
+  unsigned int sourcecolours :1;
+  unsigned int displayimages :1;
+  unsigned int plainback     :1;
+
+} print_restorable;
 
 /* Local variables */
 
-static int        globaljob     = 0;
-static int        globalold_job = 0;
-static int        mustfree      = 0;
+static int              globaljob        = 0;
+static int              globalold_job    = 0;
 
-static print_info print_current;
-static print_info print_old;
+static int              defaults_set     = 0;
+
+static ObjectId         self_id          = 0;
+static ObjectId         window_id        = 0;
+static ObjectId         ancestor_id      = 0;
+static browser_data   * ancestor_browser = NULL;
+
+static print_contents   contents;
+static print_restorable restore;
 
 /* Static function prototypes */
 
-static int  print_pre_initiate (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
-static int  print_pre_restore  (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
+static _kernel_oserror * print_read_contents   (ObjectId dialogue, print_contents * contents);
+static _kernel_oserror * print_set_contents    (ObjectId dialogue, print_contents * contents);
 
-static void print_free_memory  (browser_data * localbrowser);
+static int               print_start           (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
+static int               print_cancel          (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
 
-/* Local macro - swap two signed / unsigned ints / chars. */
+static int               print_check_contents  (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
 
-#define SWAP(a,b) { (a) ^= (b); (b) ^= (a); (a) ^= (b); }
+static _kernel_oserror * print_page            (browser_data * b, int copies, int from, int end, int to, int reformat, int orientation, const char * path);
+
+static void              print_prepare_browser (browser_data * source, browser_data * store, int lmarg, int rmarg);
+static void              print_restore_browser (browser_data * original, browser_data * copy);
+
+/*************************************************/
+/* print_read_contents()                         */
+/*                                               */
+/* Reads the contents of the Print dialogue      */
+/* into a print_contents structure.              */
+/*                                               */
+/* Parameters: Object ID of the dialogue;        */
+/*                                               */
+/*             Pointer to the structure to write */
+/*             to.                               */
+/*************************************************/
+
+static _kernel_oserror * print_read_contents(ObjectId dialogue, print_contents * contents)
+{
+  _kernel_oserror * e;
+  int               state, selected;
+
+  /* Start at top of visible area (0) or whole page (1) radios */
+
+  RetError(radiobutton_get_state(0, dialogue, StartWhole, &state, NULL));
+  contents->start = !!state;
+
+  /* End radios - bottom of page, of visible area, or stop after */
+  /* pages defined in the 'EndManyNum' number range gadget       */
+
+  RetError(radiobutton_get_state(0, dialogue, EndWhole, NULL, &selected));
+  RetError(numberrange_get_value(0, dialogue, EndManyNum, &contents->pages));
+
+  /* Note that EndVisible etc. are component IDs defined in */
+  /* Print.h, whilst End_Visible (with the underscore) etc. */
+  /* are option values defined at the top of this file.     */
+
+  switch (selected)
+  {
+    case EndVisible: contents->end = End_Visible;
+    break;
+
+    case EndMany:    contents->end = End_Many;
+    break;
+
+    default:
+    case EndWhole:   contents->end = End_Whole;
+    break;
+  }
+
+  /* Reformat page to fit */
+
+  RetError(optionbutton_get_state(0, dialogue, ReformToFit, &state));
+  contents->reformat = !!state;
+
+  /* Orientation radios; portrait (1) or landscape (0) */
+
+  RetError(radiobutton_get_state(0, dialogue, OriUpright, &state, NULL));
+  contents->orientation = !!state;
+
+  /* Read the 'Number of copies' number range gadget */
+
+  RetError(numberrange_get_value(0, dialogue, CopiesNum, &contents->copies));
+
+  return NULL;
+}
+
+/*************************************************/
+/* print_set_contents()                          */
+/*                                               */
+/* Sets the contents of the Print dialogue from  */
+/* a print_contents structure.                   */
+/*                                               */
+/* Parameters: Object ID of the dialogue;        */
+/*                                               */
+/*             Pointer to the structure to read  */
+/*             from.                             */
+/*************************************************/
+
+static _kernel_oserror * print_set_contents(ObjectId dialogue, print_contents * contents)
+{
+  _kernel_oserror * e;
+
+  /* Start position */
+
+  if (!contents->start)       RetError(radiobutton_set_state(0, dialogue, StartVisible, 1))
+  else                        RetError(radiobutton_set_state(0, dialogue, StartWhole,   1));
+
+  /* End position, including the 'number of pages to fill' number range */
+
+  switch (contents->end)
+  {
+    default:
+    case End_Whole:    RetError(radiobutton_set_state(0, dialogue, EndWhole,   1));
+    break;
+    case End_Visible:  RetError(radiobutton_set_state(0, dialogue, EndVisible, 1));
+    break;
+    case End_Many:     RetError(radiobutton_set_state(0, dialogue, EndMany,    1));
+    break;
+  }
+
+  RetError(numberrange_set_value(0, dialogue, EndManyNum, contents->pages));
+
+  /* The reformat option, including greying / ungreying it */
+
+  RetError(optionbutton_set_state(0, dialogue, ReformToFit, contents->reformat));
+
+  /* As well as greying / ungreying the reformat option, this handles */
+  /* the label text on the 'pages to fill' number range.              */
+
+  print_check_contents(0, NULL, NULL, NULL);
+
+  /* Orientation */
+
+  if (!contents->orientation) RetError(radiobutton_set_state(0, dialogue, OriSideways, 1))
+  else                        RetError(radiobutton_set_state(0, dialogue, OriUpright,  1));
+
+  /* Number of copies */
+
+  RetError(numberrange_set_value(0, dialogue, CopiesNum, contents->copies));
+
+  return NULL;
+}
+
+/*************************************************/
+/* print_set_defaults()                          */
+/*                                               */
+/* Fills in the local print_contents structure   */
+/* with the default values to put in a Print     */
+/* dialogue, if they have not already been       */
+/* filled in.                                    */
+/*                                               */
+/* If the dialogue is open, the contents are     */
+/* updated.                                      */
+/*                                               */
+/* Returns:    1 if the structure was filled in, */
+/*             else 0.                           */
+/*************************************************/
+
+int print_set_defaults(void)
+{
+  if (!defaults_set)
+  {
+    /* Number of copies */
+
+    contents.copies = atoi(lookup_choice("PrintCopies:1",0,0));
+
+    /* Check it is within bounds */
+
+    if (contents.copies < Limits_Lower_Copies) contents.copies = Limits_Lower_Copies;
+    if (contents.copies > Limits_Upper_Copies) contents.copies = Limits_Upper_Copies;
+
+    /* Start position - 'start' or 'visible', though in fact any */
+    /* non-'visible' string defaults as 'start'.                 */
+
+    if (!strcmp(lookup_choice("PrintStart:start",0,0),"visible")) contents.start = 0;
+    else contents.start = 1;
+
+    /* End position - print the whole page, down to the bottom of the */
+    /* visible area, or fill up as many sheets as specified in the    */
+    /* 'pages' field of the print_contents structure (see below).     */
+
+    if (!strcmp(lookup_choice("PrintEnd:end",0,0),"end"))      contents.end = End_Whole;
+    else if (!strcmp(lookup_choice("PrintEnd",1,0),"visible")) contents.end = End_Visible;
+    else                                                       contents.end = End_Many;
+
+    contents.pages = atoi(lookup_choice("PrintEnd",1,0));
+
+    /* Check it is within bounds */
+
+    if (contents.pages < Limits_Lower_Sheets) contents.pages = Limits_Lower_Sheets;
+    if (contents.pages > Limits_Upper_Sheets) contents.pages = Limits_Upper_Sheets;
+
+    /* Reformat - 'yes' or 'no', default to 'yes' */
+
+    if (!strcmp(lookup_choice("PrintReform:yes",0,0),"no")) contents.reformat = 0;
+    else contents.reformat = 1;
+
+    /* Orientation - 'upright' or 'sideways', though in fact any */
+    /* non-'sideways' string defaults as 'upright'.              */
+
+    if (!strcmp(lookup_choice("PrintOrient:upright",0,0),"sideways")) contents.orientation = 0;
+    else contents.orientation = 1;
+
+    defaults_set = 1;
+
+    if (window_id) print_set_contents(window_id, &contents);
+
+    return 1;
+  }
+
+  else return 0;
+}
 
 /*************************************************/
 /* print_to_be_shown()                           */
@@ -91,32 +319,89 @@ static void print_free_memory  (browser_data * localbrowser);
 
 int print_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
 {
-  ObjectId id;
-  int      upper, lower;
+  int      was_open = 0;
+  ObjectId ps_window;
+  ObjectId ps_ancestor;
 
-  /* Get the browser_data structure pointer */
+  /* If the stored dialogue ID is non-zero on entry, the dialogue */
+  /* was reopened without closing - so get rid of the various     */
+  /* event handlers before we reregister them.                    */
 
-  ChkError(toolbox_get_client_handle(0, idb->ancestor_id, (void *) &print_current.p));
+  if (window_id)
+  {
+    /* Was the Print Style window open too? */
 
-  /* Get the print dialogue's actual window object ID into id. */
+    printstyle_return_dialogue_info(&ps_window, &ps_ancestor);
 
-  ChkError(printdbox_get_window_id(0, idb->self_id, &id));
+    if (ps_window) was_open = 1;
 
+    /* This will close the Print window and Print Style (if open) */
+
+    print_close(0, 1);
+  }
+
+  /* Record the dialogue ID, the ancestor ID, and if this is */
+  /* non-zero, the browser to which that ID refers.          */
+
+  self_id     = idb->self_id;
+  ancestor_id = idb->ancestor_id;
+
+  if (ancestor_id) ChkError(toolbox_get_client_handle(0, ancestor_id, (void *) &ancestor_browser));
+
+  /* If we have a browser, remember its restorable details. */
+
+  if (ancestor_browser)
+  {
+    restore.underlinelks  = ancestor_browser->underlinelks;
+    restore.sourcecolours = ancestor_browser->sourcecolours;
+    restore.displayimages = ancestor_browser->displayimages;
+    restore.plainback     = ancestor_browser->plainback;
+
+    /* If required, force background images off */
+
+    if (!strcmp(lookup_choice("PrintPlain:yes",0,0),"yes")) browser_set_look(ancestor_browser,
+                                                                             window_id,
+                                                                             -1,
+                                                                             -1,
+                                                                             -1,
+                                                                             1);
+  }
+
+  /* Get the underlying window ID */
+
+  ChkError(printdbox_get_window_id(0, self_id, &window_id));
+
+  /* The Print Style dialogue may be open, too. We could take the lazy route */
+  /* and just close it, but instead, we will ask it for its window details,  */
+  /* and then recall its close code and ToBeShown code with the right info.  */
+
+  if (was_open)
+  {
+    IdBlock  ps_id;
+
+    ps_id.self_id = ps_window;
+
+    /* (Make sure the Print Style routines ask the Print routines for the (new) ancestor) */
+
+    ps_id.ancestor_id = NULL;
+
+    printstyle_to_be_shown(0, NULL, &ps_id, NULL);
+  }
   /* Register handlers for alternate Print/Cancel buttons */
 
-  ChkError(event_register_toolbox_handler(id,
+  ChkError(event_register_toolbox_handler(window_id,
                                           EStartPrint,
-                                          print_pre_initiate,
-                                          (void *) idb->ancestor_id));
+                                          print_start,
+                                          (void *) ancestor_id));
 
-  ChkError(event_register_toolbox_handler(id,
+  ChkError(event_register_toolbox_handler(window_id,
                                           ECancelPrint,
-                                          print_pre_restore,
-                                          (void *) idb->ancestor_id));
+                                          print_cancel,
+                                          (void *) ancestor_id));
 
   /* Various alterations of icons / buttons for different UI styles */
 
-  if (!strcmp(lookup_token("AlterNumranges:no",0,0),"yes"))
+  if (!strcmp(lookup_control("AlterNumranges:no",0,0),"yes"))
   {
     _kernel_oserror       * e;
     WimpGetIconStateBlock   icon;
@@ -125,7 +410,7 @@ int print_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, void *
 
     /* Get the object's window handle and the icon handle for the given component */
 
-    e = window_get_wimp_handle(0, id, &icon.window_handle);
+    e = window_get_wimp_handle(0, window_id, &icon.window_handle);
 
     if (!e)
     {
@@ -137,7 +422,7 @@ int print_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, void *
         /* Get the number range's writable component ID */
 
         e = numberrange_get_components(NumberRange_GetComponents_ReturnNumericalField,
-                                      id,
+                                      window_id,
                                       loop == 1 ? CopiesNum : EndManyNum,
                                       &writable,
                                       NULL,
@@ -146,7 +431,7 @@ int print_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, void *
 
         /* Turn this into an icon handle */
 
-        if (!e) e = gadget_get_icon_list(0, id, writable, iconlist, sizeof(iconlist), NULL);
+        if (!e) e = gadget_get_icon_list(0, window_id, writable, iconlist, sizeof(iconlist), NULL);
 
         if (!e)
         {
@@ -159,7 +444,7 @@ int print_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, void *
 
           if (!e)
           {
-            strncpy(buffer, lookup_token("AlterWith",1,0), sizeof(buffer) - 1);
+            strncpy(buffer, lookup_control("AlterWith",1,0), sizeof(buffer) - 1);
             buffer[sizeof(buffer) - 1] = 0;
 
             windows_process_icon_text(&icon, buffer, 0);
@@ -169,140 +454,39 @@ int print_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, void *
     }
   }
 
-  /* If print_current.copies is zero, this is the first time */
-  /* the dialogue has been opened, so set up defaults.       */
-
-  if (!print_current.copies)
-  {
-    /* Number of copies */
-
-    print_current.copies = atoi(lookup_choice("PrintCopies:1",0,0));
-
-    /* Check it's within bounds */
-
-    ChkError(numberrange_get_bounds(NumberRange_LowerBound | NumberRange_UpperBound,
-                                    id,
-                                    CopiesNum,
-
-                                    &lower,
-                                    &upper,
-                                    NULL,
-                                    NULL));
-
-    if (print_current.copies < lower) print_current.copies = lower;
-    if (print_current.copies > upper) print_current.copies = upper;
-
-    /* Start position - 'start' or 'visible', though in fact any */
-    /* non-'visible' string defaults as 'start'.                 */
-
-    if (!strcmp(lookup_choice("PrintStart:start",0,0),"visible")) print_current.start = 0;
-    else print_current.start = 1;
-
-    /* End position - 'end', 'visible', or a number of pages to fill. */
-    /* if 'end' or 'visible' aren't recognised the number of pages is */
-    /* defaulted to, if this gives a result <= 0, 1 is assumed.       */
-
-    if (!strcmp(lookup_choice("PrintEnd:end",0,0),"end"))      print_current.end = 0;
-    else if (!strcmp(lookup_choice("PrintEnd",1,0),"visible")) print_current.end = -1;
-    else
-    {
-      print_current.end = atoi(lookup_choice("PrintEnd",1,0));
-      if (print_current.end <= 0) print_current.end = 1;
-    }
-
-    ChkError(numberrange_get_bounds(NumberRange_LowerBound | NumberRange_UpperBound,
-                                    id,
-                                    CopiesNum,
-
-                                    &lower,
-                                    &upper,
-                                    NULL,
-                                    NULL));
-    if (print_current.end > 1)
-    {
-      /* Check it's within bounds */
-
-      if (print_current.end < lower) print_current.end = lower;
-      if (print_current.end > upper) print_current.end = upper;
-
-      print_current.pages = print_current.end;
-    }
-    else print_current.pages = lower;
-
-    /* Reformat - 'yes' or 'no', default to 'yes' */
-
-    if (!strcmp(lookup_choice("PrintReform:yes",0,0),"no")) print_current.reformat = 0;
-    else print_current.reformat = 1;
-
-    /* Orientation - 'upright' or 'sideways', though in fact any */
-    /* non-'sideways' string defaults as 'upright'.              */
-
-    if (!strcmp(lookup_choice("PrintOrient:upright",0,0),"sideways")) print_current.orientation = 0;
-    else print_current.orientation = 1;
-  }
-
-  /* Copy print_current to print_old in case restoration is needed later, */
-  /* and fill in the dialogue as appropriate.                             */
-
-  print_old = print_current;
-
-  /* Start position */
-
-  if (!print_current.start)       ChkError(radiobutton_set_state(0, id, StartVisible, 1));
-  else                            ChkError(radiobutton_set_state(0, id, StartWhole,   1));
-
-  /* End position, including the 'number of pages to fill' number range */
-
-  if (!print_current.end)         ChkError(radiobutton_set_state(0, id, EndWhole,     1));
-  else if (print_current.end < 0) ChkError(radiobutton_set_state(0, id, EndVisible,   1));
-  else                            ChkError(radiobutton_set_state(0, id, EndMany,      1));
-
-  if (print_current.end > 0)      ChkError(numberrange_set_value(0, id, EndManyNum, print_current.end));
-  else                            ChkError(numberrange_set_value(0, id, EndManyNum, print_current.pages));
-
-  /* The reformat optionn, including greying / ungreying it */
-
-  ChkError(optionbutton_set_state(0, id, ReformToFit, print_current.reformat));
-
-  /* As well as greying / ungreying the reformat option, this handles */
-  /* the label text on the 'pages to fill' number range.              */
-
-  {
-    IdBlock idlocal;
-
-    idlocal.self_id = id;
-    print_check_contents(NULL, NULL, &idlocal, NULL);
-  }
-
-  /* Orientation */
-
-  if (!print_current.orientation) ChkError(radiobutton_set_state(0, id, OriSideways, 1));
-  else                            ChkError(radiobutton_set_state(0, id, OriUpright,  1));
-
-  /* Number of copies */
-
-  ChkError(numberrange_set_value(0, id, CopiesNum, print_current.copies));
-
   /* Register a handler to cope with the pages number range changing */
 
-  ChkError(event_register_toolbox_handler(id,
+  ChkError(event_register_toolbox_handler(window_id,
                                           NumberRange_ValueChanged,
                                           print_check_contents,
-                                          NULL));
+                                          (void *) window_id));
 
-  /* Animation handler if there's an appropriate gadget */
+  /* Similarly, the same function is called to ensure things are greyed */
+  /* or ungreyed as required when the radio buttons that affect the     */
+  /* 'Reformat page to fit paper' option are activated.                 */
 
-  {
-    int temp_type;
+  ChkError(event_register_toolbox_handler(window_id,
+                                          EEnableReformat,
+                                          print_check_contents,
+                                          (void *) window_id));
 
-    if (
-         fixed.dboxanims                                  &&
-         !gadget_get_type(0, id, DisplayAnim, &temp_type)
-       )
-       register_null_claimant(Wimp_ENull,
-                              toolbars_animate_slow,
-                              (void *) id);
-  }
+  /* Install an animation handler, if there's an appropriate gadget */
+
+  if (
+       fixed.dboxanims &&
+       !gadget_get_type(0, window_id, DisplayAnim, NULL)
+     )
+     register_null_claimant(Wimp_ENull,
+                            toolbars_animate_slow,
+                            (void *) window_id);
+
+  /* If defaults have never been set before, set them now */
+
+  print_set_defaults();
+
+  /* Make sure the Print Style dialogue is set up, too */
+
+  printstyle_set_defaults();
 
   /* Done! */
 
@@ -310,191 +494,238 @@ int print_to_be_shown(int eventcode, ToolboxEvent * event, IdBlock * idb, void *
 }
 
 /*************************************************/
-/* print_pre_restore()                           */
+/* print_start()                                 */
 /*                                               */
-/* Called for a non-standard Cancel button in a  */
-/* PrintDBox object or an alternate window it is */
-/* using. Closes the dialogue, resulting in an   */
-/* appropriate DialogueCompleted event being     */
-/* raised; print_restore will consequently be    */
-/* called for the dialogue.                      */
+/* Handles clicks on the 'OK' (or 'Print', etc.) */
+/* button in the Print dialogue.                 */
 /*                                               */
 /* Parameters are as standard for a Toolbox      */
-/* event hander.                                 */
+/* event handler.                                */
 /*************************************************/
 
-static int print_pre_restore(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
+static int print_start(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
 {
-  ChkError(toolbox_hide_object(0, idb->self_id));
+  WimpMessage m;
 
-  return 1;
-}
+  /* First, make sure we effectively OK the contents of the */
+  /* Print Style dialogue.                                  */
 
-/*************************************************/
-/* print_restore()                               */
-/*                                               */
-/* Called when a print dialogue is cancelled.    */
-/* Simply copies the local static print_info     */
-/* structure 'print_old' over 'print_current' so */
-/* that next time the dialogue is opened, it     */
-/* holds the old settings.                       */
-/*                                               */
-/* Parameters are as standard for a Toolbox      */
-/* event hander.                                 */
-/*************************************************/
+  printstyle_ok(0, NULL, NULL, NULL);
 
-int print_restore(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
-{
-//  print_current = print_old;
+  /* Because the printing starts from reception of an external message, */
+  /* can't use a local copy of the print_contents structure and allow   */
+  /* Adjust-clicks on Print/OK/Whatever. So always close the window.    */
 
-  ChkError(event_deregister_toolbox_handlers_for_object(idb->self_id));
-
-  /* If there was a null handler for the dialogue, remove it */
-
-  {
-    int temp_type;
-
-    if (
-         fixed.dboxanims                                            &&
-         !gadget_get_type(0, idb->self_id, DisplayAnim, &temp_type)
-       )
-       deregister_null_claimant(Wimp_ENull,
-                                toolbars_animate_slow,
-                                (browser_data *) idb->self_id);
-  }
-
-  /* Restore focus to the browser window */
-
-  {
-    browser_data * ancestor;
-
-    if (idb->ancestor_id) ChkError(toolbox_get_client_handle(0, idb->ancestor_id, (void *) &ancestor));
-    else ancestor = last_browser;
-
-    if (ancestor) browser_give_general_focus(ancestor);
-  }
-
-  return 1;
-}
-
-/*************************************************/
-/* print_pre_restore()                           */
-/*                                               */
-/* Called for a non-standard Print button in a   */
-/* PrintDBox object or an alternate window it is */
-/* using. Raises appropriate events to complete  */
-/* the dialogue and initate printing through     */
-/* print_initiate.                               */
-/*                                               */
-/* Parameters are as standard for a Toolbox      */
-/* event hander.                                 */
-/*************************************************/
-
-static int print_pre_initiate(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
-{
-  idb->ancestor_id = (ObjectId) handle;
-
-  print_initiate(eventcode, event, idb, (void *) 1 /* (Flag - see print_initiate) */);
-
-  ChkError(toolbox_hide_object(0, idb->self_id));
-
-  return 1;
-}
-
-/*************************************************/
-/* print_initiate()                              */
-/*                                               */
-/* Examines the Print dialogue box's contents    */
-/* and fills in the local static print_info      */
-/* structure 'print_current' with them; then     */
-/* starts a print routine by broadcasting a      */
-/* PrintSave message.                            */
-/*                                               */
-/* Parameters are as standard for a Toolbox      */
-/* event hander.                                 */
-/*************************************************/
-
-int print_initiate(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
-{
-  browser_data * b;
-  ObjectId       id;
-  int            selected;
-
-  /* Get the browser_data pointer for the ancestor window - i.e. */
-  /* the browser from which this print dialogue was opened.      */
-
-  ChkError(toolbox_get_client_handle(0,idb->ancestor_id,(void *) &b));
-
-  /* Get the Object ID of the window that has opened on behalf of */
-  /* the Print dialogue.                                          */
-  /*                                                              */
-  /* If called from print_pre_initiate, the self_id will be that  */
-  /* of the alternate window anyway. (int) handle = 1 flags this. */
-  /*                                                              */
-  /* Amazingly, printdbox_get_window_id doesn't seem to return an */
-  /* error - just an invalid ID - if called on something that is  */
-  /* not a PrintDBox object...                                    */
-
-  if (!((int) handle)) ChkError(printdbox_get_window_id(0, idb->self_id, &id));
-  else id = idb->self_id;
-
-  /* Fill in the local static print_info structure 'print_current'. */
-  /*                                                                */
-  /* 'start' = 1 for whole page, 0 for just the visible area        */
-
-  ChkError(radiobutton_get_state(0, id, StartWhole, &print_current.start, NULL));
-
-  /* 'end' = 0 for whole page, -1 for just the visible area, or */
-  /* any other number = the number of pages to fill.            */
-
-  ChkError(radiobutton_get_state(0, id, EndWhole, NULL, &selected));
-
-  switch (selected)
-  {
-    case EndVisible: print_current.end = -1;
-    break;
-    case EndMany:    ChkError(numberrange_get_value(0, id, EndManyNum, &print_current.end));
-    break;
-    case EndWhole:
-    default:         print_current.end = 0;
-  }
-
-  /* 'reformat' = 1 to reformat to fit the paper, else 0 */
-
-  ChkError(optionbutton_get_state(0, id, ReformToFit, &print_current.reformat));
-
-  /* 'orientation' = 1 for portrait, 0 for landscape */
-
-  ChkError(radiobutton_get_state(0, id, OriUpright, &print_current.orientation, NULL));
-
-  /* Get the number of copies into 'copies' */
-
-  ChkError(numberrange_get_value(0, id, CopiesNum, &print_current.copies));
+  ChkError(print_read_contents(window_id, &contents));
+  ChkError(print_close(0, 0));
 
   /* First stage of printing protocol: Broadcast a PrintSave message */
 
+  m.hdr.your_ref    = 0;
+  m.hdr.action_code = Browser_Message_PrintSave;
+
+  m.data.data_save.destination_window = 0;
+  m.data.data_save.destination_icon   = 0;
+  m.data.data_save.destination_x      = 0;
+  m.data.data_save.destination_y      = 0;
+  m.data.data_save.estimated_size     = -1;
+  m.data.data_save.file_type          = FileType_POUT;
+
+  StrNCpy0(m.data.data_save.leaf_name,
+           lookup_token("PrintName:WebPage",0,0));
+
+  m.hdr.size = (strlen(m.data.data_save.leaf_name) + 44);
+  if (m.hdr.size & 3) m.hdr.size = (m.hdr.size & ~3) + 4;
+
+  ChkError(wimp_send_message(Wimp_EUserMessageRecorded, &m, 0, 0, NULL));
+
+  printer_message_ref = m.hdr.my_ref;
+
+  return 1;
+}
+
+/*************************************************/
+/* print_cancel()                                */
+/*                                               */
+/* Handles clicks on the 'Cancel' button in the  */
+/* Print dialogue.                               */
+/*                                               */
+/* Parameters are as standard for a Toolbox      */
+/* event handler.                                */
+/*************************************************/
+
+static int print_cancel(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
+{
+  WimpGetPointerInfoBlock info;
+
+  /* Restore the old contents */
+
+  ChkError(print_set_contents(window_id, &contents));
+
+  /* If Select was pressed, the dialogue should close. */
+  /* (No button => Escape was pressed).                */
+
+  ChkError(wimp_get_pointer_info(&info));
+
+  if ((info.button_state & Wimp_MouseButtonSelect) || !info.button_state)
   {
-    WimpMessage m;
+    ChkError(print_close(0, 0));
 
-    m.hdr.your_ref    = 0;
-    m.hdr.action_code = Browser_Message_PrintSave;
+    /* If we forced background images off, put them back again */
 
-    m.data.data_save.destination_window = 0;
-    m.data.data_save.destination_icon   = 0;
-    m.data.data_save.destination_x      = 0;
-    m.data.data_save.destination_y      = 0;
-    m.data.data_save.estimated_size     = -1;
-    m.data.data_save.file_type          = FileType_POUT;
+    if (!strcmp(lookup_choice("PrintPlain:yes",0,0),"yes")) browser_set_look(ancestor_browser,
+                                                                             window_id,
+                                                                             -1,
+                                                                             -1,
+                                                                             -1,
+                                                                             restore.plainback);
+  }
 
-    StrNCpy0(m.data.data_save.leaf_name,
-             lookup_token("PrintName:WebPage",0,0));
+  return 1;
+}
 
-    m.hdr.size = (strlen(m.data.data_save.leaf_name) + 44);
-    if (m.hdr.size & 3) m.hdr.size = (m.hdr.size & ~3) + 4;
+/*************************************************/
+/* print_close()                                 */
+/*                                               */
+/* If the Print dialogue is opened, this will    */
+/* close it, deregistering any associated event  */
+/* handlers.                                     */
+/*                                               */
+/* Parameters: An object ID, or 0. If not zero,  */
+/*             the ID must match the ancestor    */
+/*             recorded when the dialogue was    */
+/*             opened or no action is taken.     */
+/*                                               */
+/*             0 to close the dialogue, 1 to do  */
+/*             everything except that.           */
+/*************************************************/
 
-    ChkError(wimp_send_message(Wimp_EUserMessageRecorded, &m, 0, 0, NULL));
+_kernel_oserror * print_close(ObjectId ancestor, int do_not_close)
+{
+  _kernel_oserror * e = NULL;
 
-    printer_message_ref = m.hdr.my_ref;
+  if (ancestor && ancestor != ancestor_id) return NULL;
+
+  /* If the Print Style window is open, this will close it */
+
+  printstyle_close(ancestor_id, do_not_close);
+
+  if (window_id)
+  {
+    /* Deregister associated event handlers */
+
+    e = event_deregister_toolbox_handlers_for_object(window_id);
+    if (e) goto print_close_exit;
+
+    /* If there was a null handler, remove it */
+
+    if (
+         fixed.dboxanims &&
+         !gadget_get_type(0, window_id, DisplayAnim, NULL)
+       )
+       deregister_null_claimant(Wimp_ENull,
+                                toolbars_animate_slow,
+                                (void *) window_id);
+
+    if (!do_not_close)
+    {
+      /* Restore input focus to the browser window */
+
+      if (ancestor_id)
+      {
+        e = browser_give_general_focus(ancestor_browser);
+        if (e) goto print_close_exit;
+      }
+
+      /* Close the dialogue */
+
+      e = toolbox_hide_object(0, self_id);
+    }
+  }
+
+print_close_exit:
+
+  self_id = window_id = 0;
+
+  return e;
+}
+
+/*************************************************/
+/* print_check_contents()                        */
+/*                                               */
+/* If the state of the various radio buttons     */
+/* changes, this may be called to see if the     */
+/* Reformat option in the Print dialogue should  */
+/* be enabled (ungreyed) or disabled (greyed).   */
+/* Similarly, if the contents of the number of   */
+/* sheets to fill number range changes, this     */
+/* should be called to ensure the label has the  */
+/* correct pluralisation applied.                */
+/*                                               */
+/* Parameters are as standard for a Toolbox      */
+/* event handler.                                */
+/*************************************************/
+
+static int print_check_contents(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
+{
+  int          state1, state2, pages;
+  unsigned int flags;
+
+  /* Get the radio button states */
+
+  ChkError(radiobutton_get_state(0, window_id, StartWhole, NULL, &state1));
+  ChkError(radiobutton_get_state(0, window_id, EndWhole,   NULL, &state2));
+
+  /* If the StartVisible and EndVisible radios are not selected, */
+  /* can enable the Reformat option; else disable it. But only   */
+  /* change it's state (don't grey it if already greyed, say).   */
+
+  ChkError(gadget_get_flags(0, window_id, ReformToFit, &flags));
+
+  if (state1 != StartVisible && state2 != EndVisible)
+  {
+    if (flags & Gadget_Faded)
+    {
+      ChkError(gadget_set_flags(0, window_id, ReformToFit, flags & ~Gadget_Faded));
+    }
+  }
+  else
+  {
+    if (!(flags & Gadget_Faded))
+    {
+      ChkError(gadget_set_flags(0, window_id, ReformToFit, flags | Gadget_Faded));
+    }
+  }
+
+  /* Check the pages number range, and update the label if necessary. */
+
+  {
+    char text[Limits_EndManyLabel];
+
+    ChkError(numberrange_get_value(0, window_id, EndManyNum, &pages));
+
+    ChkError(button_get_value(0, window_id, EndManyLabel, text, Limits_EndManyLabel, NULL));
+    text[sizeof(text) - 1] = 0;
+
+    if (pages == 1)
+    {
+      /* If the existing text isn't what we intend to change it to, then change it; */
+      /* i.e. don't set the same thing twice, as this will flicker badly.           */
+
+      if (strcmp(text, lookup_token("PagesSingle:sheet is filled",0,0)))
+      {
+        ChkError(button_set_value(0, window_id, EndManyLabel, lookup_token("PagesSingle:sheet is filled",0,0)));
+      }
+    }
+    else
+    {
+      /* Again, only change the text - don't set the same thing twice. */
+
+      if (strcmp(text, lookup_token("PagesMany:sheets are filled",0,0)))
+      {
+        ChkError(button_set_value(0, window_id, EndManyLabel, lookup_token("PagesMany:sheets are filled",0,0)));
+      }
+    }
   }
 
   return 1;
@@ -507,6 +738,10 @@ int print_initiate(int eventcode, ToolboxEvent * event, IdBlock * idb, void * ha
 /* specified in the local static print_info      */
 /* structure 'print_current'.                    */
 /*                                               */
+/* Entry point is typically from a handler       */
+/* dealing with the printing message protocol    */
+/* (see handle_messages).                        */
+/*                                               */
 /* Parameters: Pointer to pathname to print to.  */
 /*************************************************/
 
@@ -514,19 +749,41 @@ void print_print(const char * path)
 {
   _kernel_oserror * e;
 
+  /* Must have a browser to print */
+
+  if (!ancestor_browser) return;
+
+  /* Do the printing */
+
   printing = 1;
 
-  e = print_page(print_current.p,
-                 print_current.copies,
-                 print_current.start,
-                 print_current.end,
-                 print_current.reformat,
-                 print_current.orientation,
+  e = print_page(ancestor_browser,
+                 contents.copies,
+                 contents.start,
+                 contents.end,
+                 contents.pages,
+                 contents.reformat,
+                 contents.orientation,
                  path);
 
   printing = 0;
 
   if (e) show_error_ret(e);
+
+  /* On completion, with or without error (as e.g. Escape may */
+  /* be pressed and you'd still want the following), restore  */
+  /* the basic browser display characteristics, if the Print  */
+  /* dialogue was closed (i.e. Print activated with Select).  */
+
+  if (!window_id)
+  {
+    show_error_ret(browser_set_look(ancestor_browser,
+                                    0,
+                                    restore.underlinelks,
+                                    restore.sourcecolours,
+                                    restore.displayimages,
+                                    restore.plainback));
+  }
 }
 
 /*************************************************/
@@ -545,11 +802,12 @@ void print_print(const char * path)
 /*             page, else start from the top of  */
 /*             the visible area in the window;   */
 /*                                               */
-/*             0 to end at the bottom of the web */
-/*             page, -1 to end at the bottom of  */
-/*             the visible area, or any >0 value */
-/*             which is taken as the number of   */
-/*             pages to try and fill;            */
+/*             Where to end - End_Whole,         */
+/*             End_Visible or End_Many (as       */
+/*             defined at the top of the file);  */
+/*                                               */
+/*             For End_Many, how many sheets to  */
+/*             fill;                             */
 /*                                               */
 /*             1 to reformat to fit the page     */
 /*             width (orientation is taken into  */
@@ -561,24 +819,31 @@ void print_print(const char * path)
 /*             Pointer to pathname to print to.  */
 /*************************************************/
 
-_kernel_oserror * print_page(browser_data * b, int copies, int from, int to,
-                             int reformat, int orientation, const char * path)
+static _kernel_oserror * print_page(browser_data * b, int copies, int from, int end, int to,
+                                    int reformat, int orientation, const char * path)
 {
   _kernel_oserror       * e = NULL;
 
   WimpRedrawWindowBlock   redraw;
-  int                     job, old_job;
+
   BBox                    box, last_rect;
-  int                     more, page, maxpages, top, bottom, temp, next_line;
-  int                     estimated_pages, area_completed, page_area;
-  int                     lmarg, bmarg, rmarg, tmarg;
+
+  int                     must_restore;
+  int                     job,            old_job;
+  int                     more,           page;
+  int                     top,            bottom;
+  int                     next_line,      temp;
+  int                     estimated_pages;
+  int                     area_completed, page_area;
+  int                     lmarg,          bmarg;
+  int                     rmarg,          tmarg;
+
   unsigned int            features;
 
   int                     portrait  [2] [2] = { {0x10000,  0}, {0, 0x10000} };
   int                     landscape [2] [2] = { {0, -0x10000}, {0x10000, 0} };
 
   browser_data            localbrowser;
-  reformat_cell           localcell;
 
   void (*old_sigint_handler) (int);
 
@@ -610,84 +875,84 @@ _kernel_oserror * print_page(browser_data * b, int copies, int from, int to,
 
   if (!orientation)
   {
-    SWAP(tmarg,rmarg);
-    SWAP(bmarg,lmarg);
+    Swap(tmarg,rmarg);
+    Swap(bmarg,lmarg);
   }
 
-  localbrowser = *b;
-  memset(&localcell, 0, sizeof(localcell));
-
-  /* If the user specified printing to or from something that */
-  /* depends upon the visible area, can't then reformat.      */
-
-  if (reformat && (to >= 0) && from)
-  {
-//    int lastchunk, percentage;
-
-    /* Reformat the page ready for printing.                       */
-    /*                                                             */
-    /* First copy over the existing browser_data structure, and    */
-    /* modify the contents as appropriate.                         */
-
-    localbrowser.previous = localbrowser.next = NULL;
-
-    localbrowser.display_width = rmarg - lmarg;
-
-    convert_to_os(localbrowser.display_width, &localbrowser.display_width);
-
-    localbrowser.display_extent = localbrowser.display_width;
-
-    localbrowser.fetch_status = BS_IDLE;
-    localbrowser.fetch_handle = localbrowser.display_handle;
-
-    localbrowser.source   = NULL;
-    localbrowser.urlfdata = NULL;
-    localbrowser.urlddata = NULL;
-    localbrowser.cell     = &localcell;
-
-    mustfree = 1;
-
-    /* Now call the reformatter, and loop round until finished. */
-
-    _swix(Hourglass_On, 0);
-
-    e = reformat_format_from(&localbrowser, -1, 1, -1);
-    if (e) return e;
-
-    while (reformat_formatting(&localbrowser))
-    {
-      reformat_reformatter(&localbrowser);
-
-// Broken now that there's no such thing as a token number...
-// Moreover, needs adjusting to the cell based model.
-//
-//      /* Percentage progress indicator based on how far down the */
-//      /* token list the reformat has reached.                    */
-//
-//      if (localbrowser.ldata && localbrowser.nlines)
-//      {
-//        lastchunk = localbrowser.ldata[localbrowser.nlines - 1].chunks + localbrowser.ldata[localbrowser.nlines - 1].n - 1;
-//
-//        percentage = (100 * localbrowser.cdata[lastchunk].t) / localbrowser.ntokens;
-//        if (percentage > 99) percentage = 99;
-//
-//        _swix(Hourglass_Percentage, _IN(0), percentage);
-//      }
-    }
-
-    _swix(Hourglass_Off, 0);
-  }
-  else mustfree = 0;
-
-  localbrowser.sourcecolours = 0;
-
-  /* Hourglass for the print job, as this may take some time... */
+  /* Start the hourglass, this could take a while.              */
+  /*                                                            */
   /* Using Hourglass_Start as otherwise the first percentage    */
   /* setting may be missed, since the hourglass isn't actually  */
   /* on yet (there's a default delay before appearance with     */
   /* calling Hourglass_On).                                     */
 
   _swix(Hourglass_Start, _IN(0), 1);
+
+  /* If the user specified printing to or from something that */
+  /* depends upon the visible area, can't then reformat.      */
+
+  if (reformat && end != End_Visible && from)
+  {
+    int leds = 1;
+
+    /* Reformat the page ready for printing. It used to be possible to do all of */
+    /* this in a separate browser_data structure and, being careful about flex,  */
+    /* reformat in that 'virtual' browser. This enabled reformatting internally  */
+    /* not to affect the main browser page.                                      */
+    /*                                                                           */
+    /* Tables, however, screwed this up big time. Table cells were malloced, but */
+    /* no record of this was kept, in the first cut of the code. So in the end,  */
+    /* the address of the cell array was kept in the HStream defining the table. */
+    /* However, you can only have one user of that at any one time...            */
+    /*                                                                           */
+    /* Four solutions to this (where NA = Not Acceptable):                       */
+    /*                                                                           */
+    /* 1. Get rid of the 'reformat to fit page' option (NA)                      */
+    /* 2. Only allow the above when there are no tables on the page (NA)         */
+    /* 3. Copy the entire token stream as well as the flex data (NA)             */
+    /* 4. Reformat in the actual browser and have it reformat again afterwards.  */
+    /*                                                                           */
+    /* Since 1 to 3 aren't acceptable - 3 mostly because not only is it a lot of */
+    /* memory to have to find, but it's in malloc space -> WimpSlot problems -   */
+    /* only 4 is left. So this is what we now do here. Consequently, lots of     */
+    /* bits of the browser_data structure have to be copied away and restored    */
+    /* later, which can get quite messy.                                         */
+    /*                                                                           */
+    /* The fact that option 4 was chosen doesn't mean it isn't hideous...        */
+
+    print_prepare_browser(b, &localbrowser, lmarg, rmarg);
+    must_restore = 1;
+
+    /* Now call the reformatter, and loop round until finished. */
+
+    e = reformat_format_from(b, -1, 1, -1);
+    if (e) return e;
+
+    while (reformat_formatting(b))
+    {
+      reformat_reformatter(b);
+
+      /* It is virtually impossible to assess progress without */
+      /* doing something time consuming like scan the token    */
+      /* list and work out how far down it we are, compared to */
+      /* the whole length. Instead, alternate the LEDs - this  */
+      /* fits in well with what the table reformatter code     */
+      /* will be doing with the hourglass.                     */
+
+      leds ^= 3;
+
+      _swix(Hourglass_LEDs,
+            _INR(0,1),
+
+            3,
+            leds);
+    }
+
+    _swix(Hourglass_LEDs, 0, 0);
+  }
+  else must_restore = 0;
+
+  localbrowser.sourcecolours = 0;
 
   /* Open up the output stream */
 
@@ -710,7 +975,7 @@ _kernel_oserror * print_page(browser_data * b, int copies, int from, int to,
 
     convert_to_os(tmarg - bmarg, &page_height);
 
-    estimated_pages = (reformat_return_extent(&localbrowser, NULL) / page_height) + 1;
+    estimated_pages = (reformat_return_extent(b, NULL) / page_height) + 1;
   }
 
   globaljob = job;
@@ -833,23 +1098,23 @@ _kernel_oserror * print_page(browser_data * b, int copies, int from, int to,
   redraw.yscroll = -top;
   redraw.xscroll = 0;
 
-  /* maxpages will be set either to the user-specified number of */
-  /* sheets of paper to fill ('to' holds that number if greater  */
-  /* than zero), else it holds a very large number - i.e. keep   */
-  /* going until another exit condition occurs within the print  */
-  /* loop (e.g. reaching the end of the web page).               */
-
-  page = 0;
-
-  if (to > 0) maxpages = to;
-  else        maxpages = 0x1000000;
-
   /* Loop round for all pages. The y scroll position is set */
   /* initially to be correct for the place we want to print */
   /* from, and xscroll is set to 0 to mark that no calls    */
   /* to redraw_draw have happened yet.                      */
 
-  while (page <= maxpages)
+  page = 0;
+
+  while (
+          (
+            end == End_Many &&
+            page < to
+          )
+          ||
+          (
+            end != End_Many
+          )
+        )
   {
     page ++;
 
@@ -867,9 +1132,9 @@ _kernel_oserror * print_page(browser_data * b, int copies, int from, int to,
     /* pagination - it *could* be possible that the visible area is taller    */
     /* than a single sheet of paper for the current printer.                  */
 
-    convert_to_os(tmarg - bmarg, &temp); /* temp now holds the printable page height in OS units */
+    convert_to_os(tmarg - bmarg, &temp); /* 'temp' now holds the printable page height in OS units */
 
-    if (to >= 0)
+    if (end != End_Visible)
     {
       redraw.visible_area.ymax = temp,
       redraw.visible_area.ymin = 0;
@@ -979,9 +1244,9 @@ _kernel_oserror * print_page(browser_data * b, int copies, int from, int to,
 
       /* Do the redraw */
 
-      e = redraw_draw(&localbrowser,
+      e = redraw_draw(b,
                       &redraw,
-                      1,
+                      0,
                       0);
 
       if (e) goto out2;
@@ -1063,10 +1328,11 @@ _kernel_oserror * print_page(browser_data * b, int copies, int from, int to,
     if (next_line) redraw.xscroll = next_line;
 
     /* If we should print down to the bottom of the visible */
-    /* area of the page, this is flagged with 'to' < 0; if  */
-    /* 'bottom' = 0 as well, there's nothing more to print. */
+    /* area of the page, this is flagged with 'end' set to  */
+    /* End_Visible; if 'bottom' is zero as well, there's    */
+    /* nothing more to print.                               */
 
-    if (to < 0 && !bottom) break;
+    if (end == End_Visible && !bottom) break;
 
     /* If xscroll is 0, redraw_draw must not have found any */
     /* lines that fell off the bottom of the page - so      */
@@ -1093,10 +1359,6 @@ _kernel_oserror * print_page(browser_data * b, int copies, int from, int to,
 
   image_mode_change();
 
-  /* Turn off the hourglass */
-
-  _swix(Hourglass_Off, 0);
-
   /* Restore the old Escape handler */
 
   signal(SIGINT, old_sigint_handler);
@@ -1113,7 +1375,53 @@ _kernel_oserror * print_page(browser_data * b, int copies, int from, int to,
 
   if (e) goto out3;
 
-  print_free_memory(&localbrowser);
+  /* Remove the hourglass percentage indicator */
+
+  _swix(Hourglass_Percentage,
+        _IN(0),
+
+        100);
+
+  /* Now we have to put the page back where it was... */
+
+  if (must_restore)
+  {
+    int leds = 1;
+
+    print_restore_browser(b, &localbrowser);
+
+    /* As before, sit around whilst the reformatter reformats. */
+
+    e = reformat_format_from(b, -1, 1, -1);
+    if (e) return e;
+
+    while (reformat_formatting(b))
+    {
+      reformat_reformatter(b);
+
+      leds ^= 3;
+
+      _swix(Hourglass_LEDs,
+            _INR(0,1),
+
+            3,
+            leds);
+    }
+
+    /* We don't need to restore anything now */
+
+    must_restore = 0;
+  }
+
+  /* Turn off the hourglass */
+
+  _swix(Hourglass_Off, 0);
+
+  if (must_restore)
+  {
+    print_restore_browser(b, &localbrowser);
+    reformat_format_from(b, -1, 1, -1);
+  }
 
   /* Restore the previous print job */
 
@@ -1140,13 +1448,21 @@ out1: /* 'Emergency exit' if PDriver_SelectJob fails */
         0x00,
         job);
 
+  /* Flag that printing has finished */
+
+  printing = 0;
+
   /* Force the hourglass off */
 
   _swix(Hourglass_Smash, 0);
 
-  /* Free temporarily allocated memory */
+  /* Put the browser back together again */
 
-  print_free_memory(&localbrowser);
+  if (must_restore)
+  {
+    print_restore_browser(b, &localbrowser);
+    reformat_format_from(b, -1, 1, -1);
+  }
 
   /* Ensure images are still OK */
 
@@ -1157,16 +1473,33 @@ out1: /* 'Emergency exit' if PDriver_SelectJob fails */
 out2: /* 'Emergency exit' for errors whilst printing */
 
   signal(SIGINT, old_sigint_handler);
+
   print_abort_print();
-  print_free_memory(&localbrowser);
+
+  printing = 0;
+
+  if (must_restore)
+  {
+    print_restore_browser(b, &localbrowser);
+    reformat_format_from(b, -1, 1, -1);
+  }
+
   image_mode_change();
 
   return e;
 
-out3: /* 'Emergency exit' for errors outside printing, where memory may be temporarily allocted */
+out3: /* 'Emergency exit' for errors after printing */
 
   _swix(Hourglass_Smash, 0);
-  print_free_memory(&localbrowser);
+
+  printing = 0;
+
+  if (must_restore)
+  {
+    print_restore_browser(b, &localbrowser);
+    reformat_format_from(b, -1, 1, -1);
+  }
+
   image_mode_change();
 
   return e;
@@ -1213,101 +1546,110 @@ void print_abort_print(void)
 }
 
 /*************************************************/
-/* print_free_memory()                           */
+/* print_prepare_browser()                       */
 /*                                               */
-/* Frees up browser_data allocated memory used   */
-/* locally for reformatting a page prior to      */
-/* printing.                                     */
+/* Prepares a browser for internal reformatting  */
+/* prior to printing a page, storing various     */
+/* overwritten values into an alternative        */
+/* given structure.                              */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the page to print;    */
+/*                                               */
+/*             Pointer to the browser_data       */
+/*             struct to copy into;              */
+/*                                               */
+/*             Left hand page margin, in         */
+/*             millipoints;                      */
+/*                                               */
+/*             Right hand page margin, in        */
+/*             millipoints.                      */
 /*************************************************/
 
-static void print_free_memory(browser_data * localbrowser)
+static void print_prepare_browser(browser_data * source, browser_data * store, int lmarg, int rmarg)
 {
-  /* mustfree must be set to non-zero for any memory to be freed */
+  store->previous        = source->previous;
+  store->next            = source->next;
+  source->previous       = source->next = NULL;
 
-  if (mustfree)
-  {
-    memory_set_chunk_size(localbrowser, NULL, CK_LINE, 0);
-    memory_set_chunk_size(localbrowser, NULL, CK_LDAT, 0);
-  }
+  store->display_width   = source->display_width;
+  source->display_width  = rmarg - lmarg;
+
+  convert_to_os(source->display_width, &source->display_width);
+
+  store->display_extent  = source->display_extent;
+  source->display_extent = source->display_width;
+
+  store->fetch_status    = source->fetch_status;
+  source->fetch_status   = BS_IDLE;
+  store->fetch_handle    = source->fetch_handle;
+  source->fetch_handle   = source->display_handle;
 }
 
 /*************************************************/
-/* print_check_contents()                        */
+/* print_restore_browser()                       */
 /*                                               */
-/* If the state of the various radio buttons     */
-/* changes, this may be called to see if the     */
-/* Reformat option in the Print dialogue should  */
-/* be enabled (ungreyed) or disabled (greyed).   */
-/* Similarly, if the contents of the number of   */
-/* sheets to fill number range changes, this     */
-/* should be called to ensure the label has the  */
-/* correct pluralisation applied.                */
+/* Puts back the bits and pieces replaced in the */
+/* browser_data struct given to the print        */
+/* routines, copied out because a reformat was   */
+/* required on the page.                         */
 /*                                               */
-/* Parameters are as standard for a Toolbox      */
-/* event handler.                                */
+/* Parameters: Pointer to the browser_data       */
+/*             struct given to the print         */
+/*             routines;                         */
+/*                                               */
+/*             Pointer to the browser_data       */
+/*             struct used to store the over-    */
+/*             written values from the original  */
+/*             copy in print_prepare_browser.    */
 /*************************************************/
 
-int print_check_contents(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
+static void print_restore_browser(browser_data * original, browser_data * copy)
 {
-  int          state1, state2, pages;
-  unsigned int flags;
+  original->previous       = copy->previous;
+  original->next           = copy->next;
+  original->display_width  = copy->display_width;
+  original->display_extent = copy->display_extent;
+  original->fetch_status   = copy->fetch_status;
+  original->fetch_handle   = copy->fetch_handle;
+}
 
-  /* Get the radio button states */
+/*************************************************/
+/* print_return_dialogue_info()                  */
+/*                                               */
+/* Returns information on the Print dialogue,    */
+/* and its ancestor.                             */
+/*                                               */
+/* Parameters: Pointer to an ObjectId, in which  */
+/*             the ID of the PrintDBox object    */
+/*             is placed;                        */
+/*                                               */
+/*             Pointer to an ObjectId, in which  */
+/*             the ID of the underlying window   */
+/*             object is placed;                 */
+/*                                               */
+/*             Pointer to an ObjectId, in which  */
+/*             the ID of the ancestor window is  */
+/*             placed;                           */
+/*                                               */
+/*             Pointer to a pointer to a         */
+/*             browser_data struct, in which the */
+/*             address of the browser_data       */
+/*             struct associated with the        */
+/*             ancestor object is placed.        */
+/*                                               */
+/* Returns:    See parameters list, and note     */
+/*             that the returned values will be  */
+/*             0, 0, 0 and NULL if the Print     */
+/*             dialogue is closed.               */
+/*                                               */
+/* Assumes:    Any of the pointers may be NULL.  */
+/*************************************************/
 
-  ChkError(radiobutton_get_state(0, idb->self_id, StartWhole, NULL, &state1));
-  ChkError(radiobutton_get_state(0, idb->self_id, EndWhole,   NULL, &state2));
-
-  /* If the StartVisible and EndVisible radios are not selected, */
-  /* can enable the Reformat option; else disable it. But only   */
-  /* change it's state (don't grey it if already greyed, say).   */
-
-  ChkError(gadget_get_flags(0, idb->self_id, ReformToFit, &flags));
-
-  if (state1 != StartVisible && state2 != EndVisible)
-  {
-    if (flags & Gadget_Faded)
-    {
-      ChkError(gadget_set_flags(0, idb->self_id, ReformToFit, flags & ~Gadget_Faded));
-    }
-  }
-  else
-  {
-    if (!(flags & Gadget_Faded))
-    {
-      ChkError(gadget_set_flags(0, idb->self_id, ReformToFit, flags | Gadget_Faded));
-    }
-  }
-
-  /* Check the pages number range, and update the label if necessary. */
-
-  {
-    char text[Limits_EndManyLabel];
-
-    ChkError(numberrange_get_value(0, idb->self_id, EndManyNum, &pages));
-
-    ChkError(button_get_value(0, idb->self_id, EndManyLabel, text, Limits_EndManyLabel, NULL));
-    text[sizeof(text) - 1] = 0;
-
-    if (pages == 1)
-    {
-      /* If the existing text isn't what we intend to change it to, then change it; */
-      /* i.e. don't set the same thing twice, as this will flicker badly.           */
-
-      if (strcmp(text, lookup_token("PagesSingle:sheet is filled",0,0)))
-      {
-        ChkError(button_set_value(0, idb->self_id, EndManyLabel, lookup_token("PagesSingle:sheet is filled",0,0)));
-      }
-    }
-    else
-    {
-      /* Again, only change the text - don't set the same thing twice. */
-
-      if (strcmp(text, lookup_token("PagesMany:sheets are filled",0,0)))
-      {
-        ChkError(button_set_value(0, idb->self_id, EndManyLabel, lookup_token("PagesMany:sheets are filled",0,0)));
-      }
-    }
-  }
-
-  return 1;
+void print_return_dialogue_info(ObjectId * self, ObjectId * window, ObjectId * ancestor, browser_data ** ancestor_b)
+{
+  if (self)       *self       = self_id;
+  if (window)     *window     = window_id;
+  if (ancestor)   *ancestor   = ancestor_id;
+  if (ancestor_b) *ancestor_b = ancestor_browser;
 }

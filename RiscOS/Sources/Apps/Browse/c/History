@@ -29,12 +29,13 @@
 #include "svcprint.h"
 #include "Global.h"
 #include "FromROSLib.h"
-#include "TBEvents.h"
 #include "Utils.h"
 
 #include "Browser.h"
 #include "FetchPage.h"
 #include "Memory.h"
+#include "OpenURL.h"
+#include "Save.h"
 #include "Toolbars.h"
 #include "Windows.h"
 
@@ -435,6 +436,10 @@ _kernel_oserror * history_record_global(char * url)
     *(int *) ((char *) global_history + oldsize) = time(NULL);                       /* Timestamp         */
     strcpy(((char *) global_history + oldsize) + sizeof(int), url);                  /* URL string        */
     strcpy(((char *) global_history + oldsize) + sizeof(int) + strlen(url) + 1, ""); /* Null title string */
+
+    /* If required, save the history */
+
+    if (choices.save_history == 2) return history_save(lookup_choice("HistoryPath:Browse:User.History",0,0));
   }
 
   #ifdef TRACE
@@ -942,17 +947,110 @@ _kernel_oserror * history_fetch_backwards(browser_data * b, int new_view)
 }
 
 /*************************************************/
+/* history_menu_popup()                          */
+/*                                               */
+/* Handles clicks on a history menu popup item.  */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the history to show,  */
+/*             or NULL if this is for a global   */
+/*             history from an OpenURL dialogue  */
+/*             box;                              */
+/*                                               */
+/*             Object ID of the item holding the */
+/*             menu gadget;                      */
+/*                                               */
+/*             Component ID of the item that was */
+/*             clicked on;                       */
+/*                                               */
+/*             1 to show the global history even */
+/*             if the first parameter is not     */
+/*             NULL, else 0;                     */
+/*                                               */
+/*             1 to show the URLs, 0 to show     */
+/*             page titles where available.      */
+/*************************************************/
+
+_kernel_oserror * history_menu_popup(browser_data * b, ObjectId object, ComponentId component, int global, int show_urls)
+{
+  _kernel_oserror         * e;
+  WimpGetWindowStateBlock   state;
+  BBox                      menu;
+
+  /* If there's already a menu open, close it */
+  /* (so the action is to toggle the menu).   */
+
+  if ((menusrc == Menu_LocalHist || menusrc == Menu_GlobalHist) && menuhdl == b)
+  {
+    menusrc = Menu_None;
+    menuhdl = NULL;
+
+    return wimp_create_menu((void *) -1, 0, 0);
+  }
+
+  /* Get the Wimp handle for the tool bar and get the window state */
+
+  e = window_get_wimp_handle(0, object, &state.window_handle);
+  if (e) return e;
+
+  e = wimp_get_window_state(&state);
+  if (e) return e;
+
+  /* Get the bounding box of the popup icon that was used */
+
+  e = gadget_get_bbox(0, object, component, &menu);
+  if (e) return e;
+
+  /* Convert that to screen coords ready for opening the menu */
+  /* next to it.                                              */
+
+  coords_box_toscreen(&menu, (WimpRedrawWindowBlock *) &state);
+
+  if (component == DisplayMenu || component == OpenHistory)
+  {
+    /* Build and show menu to right of menu icon for DisplayMenu object */
+
+    e = (history_build_menu(b,
+                            menu.xmax - 2,
+                            menu.ymax,
+                            global,
+                            show_urls,
+                            0));
+    if (e) return e;
+  }
+  else
+  {
+    /* Otherwise, show it to the left of the icon */
+
+    e = history_build_menu(b,
+                           menu.xmin - 4,
+                           menu.ymin + 4,
+                           global,
+                           show_urls,
+                           1);
+    if (e) return e;
+  }
+
+  return NULL;
+}
+
+/*************************************************/
 /* history_build_menu()                          */
 /*                                               */
 /* Builds a history menu for the given browser,  */
 /* showing it at the specified coordinates.      */
 /*                                               */
 /* Parameters: Pointer to a browser_data struct  */
-/*             relevant to the menu;             */
+/*             relevant to the menu, or NULL to  */
+/*             build from the global history;    */
 /*                                               */
 /*             x coordinate to show at;          */
 /*                                               */
 /*             y coordinate to show at;          */
+/*                                               */
+/*             1 to show the global history even */
+/*             if the first parameter is not     */
+/*             NULL;                             */
 /*                                               */
 /*             Non-0 to only show URLs, 0 to     */
 /*             allow titles in the menu;         */
@@ -963,14 +1061,17 @@ _kernel_oserror * history_fetch_backwards(browser_data * b, int new_view)
 /*             left of a given position) else 0. */
 /*************************************************/
 
-_kernel_oserror * history_build_menu(browser_data * b, int x, int y, int show_urls, int subtract)
+_kernel_oserror * history_build_menu(browser_data * b, int x, int y, int global, int show_urls, int subtract)
 {
-  wimp_menuhdr  * mhp;
-  wimp_menuitem * mip;
-  int             size, i, offset, width, awidth, tempwidth, len, entry;
-  int             cspacing = 0, cwidth = 0;
-  char          * menudata;
-  char          * title;
+  _kernel_oserror * e;
+  wimp_menuhdr    * mhp;
+  wimp_menuitem   * mip;
+  int               size, i, offset, width, awidth, tempwidth, len, entry;
+  int               cspacing = 0, cwidth = 0;
+  char            * menudata;
+  char            * title;
+  int               tlen;
+  int               entries;
 
   #ifdef TRACE
     if (tl & (1u<<16)) Printf("history_build_menu: Called with %p\n", (void *) b);
@@ -978,7 +1079,9 @@ _kernel_oserror * history_build_menu(browser_data * b, int x, int y, int show_ur
 
   /* If there are no history items, flag an error. */
 
-  if (!b->hnum)
+  if (b && !b->hnum) global = 1;
+
+  if (global && !global_history)
   {
     erb.errnum = Utils_Error_Custom_Message;
 
@@ -1009,9 +1112,13 @@ _kernel_oserror * history_build_menu(browser_data * b, int x, int y, int show_ur
     /* and width of the text the Wimp is using, assuming that if */
     /* there is no nested wimp, Wimp_TextOp is unavailable.      */
 
-    int vars[3] = {BBC_GCharSizeX, BBC_GCharSpaceX, -1};
+    int vars[3] = {
+                    BBC_GCharSizeX,
+                    BBC_GCharSpaceX,
+                    -1
+                  };
 
-    _swix(OS_ReadVduVariables, _INR(0, 1), &vars, &vars);
+    RetError(bbc_vduvars(vars, vars));
 
     cwidth   = vars[0];
     cspacing = vars[1];
@@ -1020,68 +1127,152 @@ _kernel_oserror * history_build_menu(browser_data * b, int x, int y, int show_ur
   /* Loop round finding the string length of the longest entry */
   /* in 'width' and the OS unit width of it in 'awidth'.       */
 
-  for (i = 0; i < b->hnum; i++)
+  #ifdef TRACE
+    if (tl & (1u<<16))
+    {
+      Printf("\nhistory_build_menu: Widthing menu\n"
+               "=================================\n\n");
+    }
+  #endif
+
+
+  if (b && !global)
   {
-    len   = strlen(b->histdata + offset) + 1;
-    entry = history_visited(b->histdata + offset, 0);
-    title = history_title(b->histdata + offset);
+    entries = b->hnum;
 
-    /* If the URL isn't in the history or it has no title, */
-    /* or if the global choices dictate it, use the URL.   */
-
-    if (entry < 0 || !title || show_urls)
+    for (i = 0; i < entries; i++)
     {
-      size += len + sizeof(wimp_menuitem);
-      if ((len - 1) > width) width  = len - 1;
+      len   = strlen(b->histdata + offset) + 1;
+      entry = history_visited(b->histdata + offset, 0);
+      title = history_title(b->histdata + offset);
 
-      /* Find the width of the entry in OS units. If nested_wimp */
-      /* is set assume Wimp_TextOp is available, else assume it  */
-      /* is not available.                                       */
+      #ifdef TRACE
+        if (tl & (1u<<16))
+        {
+          Printf("Local  - URL  : '%s'\n",   b->histdata + offset);
+          Printf("Local  - Title: '%s'\n\n", title);
+        }
+      #endif
 
-      if (nested_wimp) _swix(Wimp_TextOp,
-                             _INR(0,2) | _OUT(0),
+      /* If the URL isn't in the history or it has no title, */
+      /* or if the global choices dictate it, use the URL.   */
 
-                             1,
-                             b->histdata + offset,
-                             width,
+      if (entry < 0 || !title || show_urls)
+      {
+        size += len + sizeof(wimp_menuitem);
+        if ((len - 1) > width) width = len - 1;
 
-                             &tempwidth);
+        /* Find the width of the entry in OS units. If nested_wimp */
+        /* is set assume Wimp_TextOp is available, else assume it  */
+        /* is not available.                                       */
 
-      /* Spacing is width of char plus the gap between it and the */
-      /* next one. String length is in 'width', so want to do     */
-      /* (width - 1) lots of spacing plus the last char's width.  */
+        if (nested_wimp) _swix(Wimp_TextOp,
+                               _INR(0,2) | _OUT(0),
 
-      else tempwidth = (width - 1) * cspacing + cwidth;
+                               1,
+                               b->histdata + offset,
+                               width,
+
+                               &tempwidth);
+
+        /* Spacing is width of char plus the gap between it and the */
+        /* next one. String length is in 'width', so want to do     */
+        /* (width - 1) lots of spacing plus the last char's width.  */
+
+        else tempwidth = (width - 1) * cspacing + cwidth;
+      }
+      else
+      {
+        tlen = strlen(title);
+        size += tlen + 1 + sizeof(wimp_menuitem);
+        if (tlen > width) width = tlen;
+
+        /* See above code for comments */
+
+        if (nested_wimp) _swix(Wimp_TextOp,
+                               _INR(0,2) | _OUT(0),
+
+                               1,
+                               title,
+                               width,
+
+                               &tempwidth);
+
+        else tempwidth = (width - 1) * cspacing + cwidth;
+      }
+
+      /* If the string is wider than previously recorded, store the new width */
+
+      if (tempwidth > awidth) awidth = tempwidth;
+
+      /* Move past the current URL in the local history */
+
+      offset += len;
     }
-    else
+  }
+  else
+  {
+    int e = flex_size(&global_history) - 1;
+
+    /* The code is analogous to the local history stuff */
+    /* above, so see that for comments.                 */
+
+    entries = 0;
+
+    while (offset < e)
     {
-      int tlen;
+      entries ++;
+      offset  += sizeof(int); /* Skip timestamp */
 
-      tlen = strlen(title);
-      size += tlen + 1 + sizeof(wimp_menuitem);
-      if (tlen > width) width = tlen;
+      len  = strlen((char *) global_history + offset)       + 1;
+      tlen = strlen((char *) global_history + offset + len) + 1;
 
-      /* See above code for comments */
+      #ifdef TRACE
+        if (tl & (1u<<16))
+        {
+          Printf("Global - URL  : '%s'\n",   (char *) global_history + offset);
+          Printf("Global - Title: '%s'\n\n", (char *) global_history + offset + len);
+        }
+      #endif
 
-      if (nested_wimp) _swix(Wimp_TextOp,
-                             _INR(0,2) | _OUT(0),
+      if (tlen < 2 || show_urls)
+      {
+        size += len + sizeof(wimp_menuitem);
+        if ((len - 1) > width) width = len - 1;
 
-                             1,
-                             title,
-                             width,
+        if (nested_wimp) _swix(Wimp_TextOp,
+                               _INR(0, 2) | _OUT(0),
 
-                             &tempwidth);
+                               1,
+                               (char *) global_history + offset,
+                               width,
 
-      else tempwidth = (width - 1) * cspacing + cwidth;
+                               &tempwidth);
+
+        else tempwidth = (width - 1) * cspacing + cwidth;
+      }
+      else
+      {
+        size += tlen + sizeof(wimp_menuitem);
+        if ((tlen - 1) > width) width = tlen - 1;
+
+        if (nested_wimp) _swix(Wimp_TextOp,
+                               _INR(0, 2) | _OUT(0),
+
+                               1,
+                               (char *) global_history + offset + len,
+                               width,
+
+                               &tempwidth);
+
+        else tempwidth = (width - 1) * cspacing + width;
+      }
+
+      if (tempwidth > awidth) awidth = tempwidth;
+
+      offset += len + tlen;
+      offset = (int) WordAlign(offset);
     }
-
-    /* If the string is wider than previously recorded, store the new width */
-
-    if (tempwidth > awidth) awidth = tempwidth;
-
-    /* Move past the current URL in the local history */
-
-    offset += len;
   }
 
   size += 4;
@@ -1103,6 +1294,7 @@ _kernel_oserror * history_build_menu(browser_data * b, int x, int y, int show_ur
   #endif
 
   view_history_menu = malloc(size);
+
   if (!view_history_menu)
   {
     erb.errnum = Utils_Error_Custom_Normal;
@@ -1131,7 +1323,7 @@ _kernel_oserror * history_build_menu(browser_data * b, int x, int y, int show_ur
 
   /* Fill in the header. */
 
-  strncpy(mhp->title, lookup_token("HistMemT:History",0,0), 12);
+  strncpy(mhp->title, lookup_token("HistMenT:History",0,0), 12);
 
   mhp->tit_fcol  = 7;
   mhp->tit_bcol  = 2;
@@ -1141,23 +1333,58 @@ _kernel_oserror * history_build_menu(browser_data * b, int x, int y, int show_ur
   mhp->height    = 44;
   mhp->gap       = 0;
 
-  /* Pointer arithmetic - mip + b->hnum adds b->hnum lots */
+  /* Pointer arithmetic - mip + entries adds entries lots */
   /* of sizeof(mip) to menudata, since the cast to char * */
   /* is the last thing that happens. So menudata points   */
   /* past all the menu structure stuff to the data area.  */
 
-  menudata = (char *) (mip + b->hnum);
+  menudata = (char *) (mip + entries);
   offset   = 0;
 
   /* Fill in each menu item. */
 
-  for (i = 0; i < b->hnum; i++)
-  {
-    len = strlen(b->histdata + offset) + 1;
-    entry = history_visited(b->histdata + offset, 0);
-    title = history_title(b->histdata + offset);
+  #ifdef TRACE
+    if (tl & (1u<<16))
+    {
+      Printf("\nhistory_build_menu: Building menu\n"
+               "=================================\n\n");
+    }
+  #endif
 
-    mip->flags     = (i == b->hnum - 1 ? wimp_MLAST : 0);
+  for (i = 0; i < entries; i++)
+  {
+    if (b && !global)
+    {
+      len   = strlen(b->histdata + offset) + 1;
+      entry = history_visited(b->histdata + offset, 0);
+      title = history_title(b->histdata + offset);
+
+      #ifdef TRACE
+        if (tl & (1u<<16))
+        {
+          Printf("Local  - URL  : '%s'\n",   b->histdata + offset);
+          Printf("Local  - Title: '%s'\n\n", title);
+        }
+      #endif
+    }
+    else
+    {
+      offset += sizeof(int);
+
+      entry = -1;
+      len   = strlen((char *) global_history + offset) + 1;
+      title = (char *) global_history + offset + len;
+
+      #ifdef TRACE
+        if (tl & (1u<<16))
+        {
+          Printf("Global - URL  : '%s'\n",   (char *) global_history + offset);
+          Printf("Global - Title: '%s'\n\n", title);
+        }
+      #endif
+    }
+
+    mip->flags     = (i == entries - 1 ? wimp_MLAST : 0);
     mip->submenu   = (wimp_menuptr) -1;
     mip->iconflags = wimp_ITEXT    |
                      wimp_IFILLED  |
@@ -1172,11 +1399,19 @@ _kernel_oserror * history_build_menu(browser_data * b, int x, int y, int show_ur
     /* have a title string associated with it, or if the     */
     /* global choices dicate it, use the URL in the menu.    */
 
-    if (entry < 0 || !title || show_urls)
+    if (
+         show_urls ||
+         !title    ||
+         (
+           title &&
+           strlen(title) < 1
+         )
+       )
     {
       /* Copy the history item into the data area */
 
-      strcpy(menudata, b->histdata + offset);
+      if (b && !global) strcpy(menudata, b->histdata + offset);
+      else              strcpy(menudata, (char *) global_history + offset);
 
       /* Advance the data pointer, possibly removing any */
       /* CGI information if HIDE_CGI is defined inside   */
@@ -1194,6 +1429,7 @@ _kernel_oserror * history_build_menu(browser_data * b, int x, int y, int show_ur
         /* wide. So leave an indicator to show there was CGI info. */
 
         toolbars_hide_cgi(menudata);
+
         if      (len > strlen(menudata) + 7) strcat(menudata, " (+CGI)");
         else if (len > strlen(menudata) + 4) strcat(menudata, "?...");
 
@@ -1212,7 +1448,14 @@ _kernel_oserror * history_build_menu(browser_data * b, int x, int y, int show_ur
     /* Next item... */
 
     offset += len;
-    mip    ++;
+
+    if (global)
+    {
+      offset += strlen(title) + 1;
+      offset = (int) WordAlign(offset);
+    }
+
+    mip ++;
   }
 
   #ifdef TRACE
@@ -1231,7 +1474,9 @@ _kernel_oserror * history_build_menu(browser_data * b, int x, int y, int show_ur
   #endif
 
   menuhdl = (void *) b;
-  menusrc = Menu_History;
+
+  if (global) menusrc = Menu_GlobalHist;
+  else        menusrc = Menu_LocalHist;
 
   return wimp_create_menu(view_history_menu, x - (subtract ? (mhp->width + 64) : 0), y);
 }
@@ -1248,7 +1493,12 @@ _kernel_oserror * history_build_menu(browser_data * b, int x, int y, int show_ur
 /* to reopen the menu in this case.              */
 /*                                               */
 /* Parameters: Pointer to a browser_data struct  */
-/*             relevant to the history;          */
+/*             relevant to the history, or NULL  */
+/*             for the global history - in this  */
+/*             case it is assumed that the menu  */
+/*             opened from an Open URL dialogue  */
+/*             and appropriate alternative       */
+/*             functions will be called;         */
 /*                                               */
 /*             Pointer to a WimpPollBlock struct */
 /*             from which the menu item that was */
@@ -1257,15 +1507,23 @@ _kernel_oserror * history_build_menu(browser_data * b, int x, int y, int show_ur
 
 _kernel_oserror * history_menu_selection(browser_data * b, WimpPollBlock * block)
 {
-  int    item, adj;
-  char * p;
+  int item, adj;
+  int global;
+  int offset;
+
+  /* What type of menu was it? */
+
+  if (menusrc == Menu_GlobalHist || !b) global = 1;
+  else                                  global = 0;
+
+  /* What item was clicked on? */
 
   item = block->menu_selection[0];
 
   /* If the menu selection appears to be out of range, */
   /* exit quietly.                                     */
 
-  if (item < 0 || (item + 1) > b->hnum)
+  if (!global && (item < 0 || (item + 1) > b->hnum))
   {
     #ifdef TRACE
       if (tl & (1u<<16)) Printf("history_menu_selection: Warning, menu selection out of range\n");
@@ -1283,7 +1541,7 @@ _kernel_oserror * history_menu_selection(browser_data * b, WimpPollBlock * block
   /* into the History list so that forwards /  */
   /* backwards work correctly.                 */
 
-  if (!adj)
+  if (!adj && b)
   {
     /* If jumping from the top of the history, ensure that the */
     /* page we're currently on is added to it first.           */
@@ -1317,13 +1575,31 @@ _kernel_oserror * history_menu_selection(browser_data * b, WimpPollBlock * block
 
   /* Point to the required entry in the history. */
 
-  p = b->histdata;
-
-  while (item--)
+  if (!global)
   {
-    /* Get past each URL... */
+    offset = 0;
 
-    p += strlen(p) + 1;
+    while (item--)
+    {
+      /* Get past each URL... */
+
+      offset += strlen(b->histdata + offset) + 1;
+    }
+  }
+  else
+  {
+    offset = sizeof(int);
+
+    while (item--)
+    {
+      /* Get past each URL, title, and datestamp for next entry */
+
+      offset += strlen((char *) global_history + offset) + 1;
+      offset += strlen((char *) global_history + offset) + 1;
+      offset += sizeof(int);
+
+      offset = (int) WordAlign(offset);
+    }
   }
 
   /* Flag that there is no known menu source anymore */
@@ -1331,12 +1607,133 @@ _kernel_oserror * history_menu_selection(browser_data * b, WimpPollBlock * block
 
   menusrc = Menu_None;
 
-  /* Somewhat non-standard behaviour to have an adjust-click  */
-  /* open a new window instead of leaving the menu up, but    */
-  /* this is more consistent with the rest of the browser UI. */
+  /* If b is set, this is from a browser toolbar */
 
-  if (!adj) return fetchpage_new(b, p, 0, 1);
-  else      return windows_create_browser(p, NULL, NULL, NULL, 0);
+  if (b)
+  {
+    /* Somewhat non-standard behaviour to have an adjust-click  */
+    /* open a new window instead of leaving the menu up, but    */
+    /* this is more consistent with the rest of the browser UI. */
+
+    if (!adj) return fetchpage_new(b,
+                                   (global ? (char *) global_history : b->histdata) + offset,
+                                   0,
+                                   1);
+
+    else return windows_create_browser((global ? (char *) global_history : b->histdata) + offset,
+                                       NULL,
+                                       NULL,
+                                       NULL,
+                                       0);
+  }
+
+  /* Otherwise, if b is NULL, it's from an Open URL dialogue */
+
+  else
+  {
+    return openurl_fill_in_url((char *) global_history + offset);
+  }
+
+  return NULL;
+}
+
+/*************************************************/
+/* history_load()                                */
+/*                                               */
+/* Loads the global history from the given path. */
+/*                                               */
+/* Parameters: Pointer to the full pathname for  */
+/*             the history file.                 */
+/*************************************************/
+
+_kernel_oserror * history_load(char * pathname)
+{
+  _kernel_oserror * e;
+  int               type, length;
+
+  /* Find out the file length */
+
+  e = _swix(OS_File,
+            _INR(0,1) | _OUT(0) | _OUT(4),
+
+            17, /* Read catalogue info */
+            pathname,
+
+            &type,
+            &length);
+
+  if (e) return e;
+
+  if (!type) return NULL; /* Not found - fail quietly, not finding it is fine */
+
+  /* Free any existing store and allocate space for the file */
+
+  if (global_history) flex_free((flex_ptr) &global_history);
+
+  if (length)
+  {
+    if (!flex_alloc((flex_ptr) &global_history, length))
+    {
+      /* Complain if the allocation fails */
+
+      erb.errnum = Utils_Error_Custom_Normal;
+
+      StrNCpy0(erb.errmess,
+               lookup_token("NoMemHiF:There is not enough free memory to load the global history.",
+               0,
+               0));
+
+      return &erb;
+    }
+
+    /* Load the file */
+
+    return _swix(OS_File,
+                 _INR(0,3),
+
+                 16, /* Load named file */
+                 pathname,
+                 global_history,
+                 0);
+  }
+
+  return NULL;
+}
+
+/*************************************************/
+/* history_load()                                */
+/*                                               */
+/* Saves the global history to the given path.   */
+/*                                               */
+/* If there is no global history allocated or it */
+/* is empty, a zero byte length file is written. */
+/*                                               */
+/* Parameters: Pointer to the full pathname for  */
+/*             the history file.                 */
+/*************************************************/
+
+_kernel_oserror * history_save(char * pathname)
+{
+  int    length;
+  FILE * file;
+
+  /* Determine the file length */
+
+  if (!global_history) length = 0;
+  else                 length = flex_size((flex_ptr) &global_history);
+
+  /* Create the file */
+
+  file = fopen(pathname, "wb");
+  if (!file) return _kernel_last_oserror();
+
+  /* Write the data */
+
+  if (fwrite(global_history, 1, length, file) < length) return _kernel_last_oserror();
+
+  /* Close the file and exit */
+
+  fclose(file);
 
   return NULL;
 }

@@ -27,7 +27,6 @@
 #include "svcprint.h"
 #include "Global.h"
 #include "FromROSLib.h"
-#include "TBEvents.h"
 #include "Utils.h"
 
 #include "Fetch.h" /* (Which itself includes URLstat.h) */
@@ -35,6 +34,7 @@
 #include "Forms.h"
 #include "Images.h"
 #include "Mouse.h"
+#include "PrintStyle.h"
 #include "Redraw.h"
 #include "Reformat.h"
 #include "TokenUtils.h"
@@ -53,6 +53,8 @@ static HStream         * browser_get_pointer_token_r   (browser_data * b, reform
 static int               browser_top_line_r            (browser_data * b, reformat_cell * cell, reformat_cell ** ret_cell, WimpGetWindowStateBlock * s, int fully_visible);
 static int               browser_bottom_line_r         (browser_data * b, reformat_cell * cell, reformat_cell ** ret_cell, WimpGetWindowStateBlock * s, int fully_visible);
 static _kernel_oserror * browser_update_token_r        (browser_data * b, reformat_cell * cell, HStream * token, int first, int last, int chunk, int base_x, int base_y, int noback, HStream * nocontent);
+
+static _kernel_oserror * browser_set_look_r            (browser_data * b, ObjectId source, int underlinelks, int sourcecolours, int displayimages, int plainback);
 
 /* Local statics */
 
@@ -1315,9 +1317,21 @@ static int browser_navigate_map(browser_data * b, int key)
   {
     tp = browser_get_pointer_token(b, &p, NULL, NULL);
 
-    if (tp && redraw_selected(b, tp) &&
-        (((tp->style & IMG) && (tp->type & TYPE_ISMAP)) ||
-         (tp->tagno == TAG_INPUT && HtmlINPUTtype(tp) == inputtype_IMAGE)))
+    if (
+         tp                     &&
+         redraw_selected(b, tp) &&
+         (
+           (
+             (tp->style & IMG) &&
+             (tp->type  & TYPE_ISMAP)
+           )
+           ||
+           (
+             tp->tagno         == TAG_INPUT &&
+             HtmlINPUTtype(tp) == inputtype_IMAGE
+           )
+         )
+       )
     {
       int       last_move = 4;
       int       last_key, start_key;
@@ -3996,6 +4010,160 @@ int browser_display_local_reference(browser_data * b, char * url_requested, char
   browser_show_named_anchor(b, p1 + 1);
 
   return 1;
+}
+
+/*************************************************/
+/* browser_set_look()                            */
+/*                                               */
+/* Sets the 'look' of a browser window - i.e.    */
+/* underlined links, using document or default   */
+/* colour schemes, etc.                          */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             to alter (any in a frameset will  */
+/*             do, as all frames are updated);   */
+/*                                               */
+/*             Object ID of the item generating  */
+/*             this change, if appropriate (or   */
+/*             zero if not);                     */
+/*                                               */
+/*             1 to underline links, 0 not to,   */
+/*             -1 to not change this state;      */
+/*                                               */
+/*             1 to use document colours, 0 to   */
+/*             use defaults, -1 to not change    */
+/*             this state;                       */
+/*                                               */
+/*             1 to show images, 0 not to (any   */
+/*             pending image fetches are started */
+/*             up again if 1 is given), or -1 to */
+/*             not change this state;            */
+/*                                               */
+/*             1 to display plain backgrounds, 0 */
+/*             to allow background images (and   */
+/*             here too, any pending image       */
+/*             fetches for background images are */
+/*             restarted if 0 is given), or -1   */
+/*             to not change this state.         */
+/*************************************************/
+
+_kernel_oserror * browser_set_look(browser_data * b, ObjectId source, int underlinelks,
+                                   int sourcecolours, int displayimages, int plainback)
+{
+  /* Check the browser_data pointer is valid */
+
+  if (!b || !is_known_browser(b)) return NULL;
+
+  /* Find the ancestor and call the recursive back-end with it */
+
+  return browser_set_look_r(utils_ancestor(b),
+                            source,
+                            underlinelks,
+                            sourcecolours,
+                            displayimages,
+                            plainback);
+}
+
+/*************************************************/
+/* browser_set_look_r()                          */
+/*                                               */
+/* Recursive back-end to browser_set_look.       */
+/*                                               */
+/* Note that if open, the Print Style dialogue   */
+/* is updated with these changes, if they apply  */
+/* to the browser to which it is relevant (if    */
+/* any).                                         */
+/*                                               */
+/* Parameters: As for browser_set_look. All      */
+/*             children of the browser_data      */
+/*             struct, along with that given     */
+/*             struct, will be updated.          */
+/*************************************************/
+
+static _kernel_oserror * browser_set_look_r(browser_data * b, ObjectId source, int underlinelks,
+                                            int sourcecolours, int displayimages, int plainback)
+{
+  _kernel_oserror * e;
+  int               child;
+  int               redraw = 0;
+
+  /* Scan the child tree */
+
+  if (b->nchildren)
+  {
+    for (child = 0; child < b->nchildren; child ++)
+    {
+      RetError(browser_set_look_r(b->children[child],
+                                  source,
+                                  underlinelks,
+                                  sourcecolours,
+                                  displayimages,
+                                  plainback));
+    }
+  }
+
+  /* Work through the four options, updating the browser if they */
+  /* seem to have changed.                                       */
+
+  if (underlinelks >= 0 && underlinelks != b->underlinelks)
+  {
+    b->underlinelks = underlinelks;
+    redraw          = 1;
+  }
+
+  if (sourcecolours >= 0 && sourcecolours != b->sourcecolours)
+  {
+    b->sourcecolours = sourcecolours;
+    redraw           = 1;
+  }
+
+  if (displayimages >= 0 && displayimages != b->displayimages)
+  {
+    b->displayimages = displayimages;
+    redraw           = 1;
+
+    /* Restart fetches if required */
+
+    if (displayimages) image_restart_fetches(b, 1, 0);
+  }
+
+  if (plainback >= 0 && plainback != b->plainback)
+  {
+    b->plainback = plainback;
+    redraw       = 1;
+
+    /* Again restart fetches if required */
+
+    if (!plainback) image_restart_fetches(b, 0, 1);
+  }
+
+  /* If required, redraw the browser to reflect the changes */
+
+  if (redraw)
+  {
+    WimpGetWindowStateBlock s;
+
+    s.window_handle = b->window_handle;
+    RetError(wimp_get_window_state(&s));
+
+    coords_box_toworkarea(&s.visible_area, (WimpRedrawWindowBlock *) &s);
+
+    RetError(wimp_force_redraw(b->window_handle,
+                               s.visible_area.xmin,
+                               s.visible_area.ymin,
+                               s.visible_area.xmax,
+                               s.visible_area.ymax));
+  }
+
+  /* If there's a Print Style dialogue opened for this browser, the */
+  /* following call will update it appropriately.                   */
+
+  return printstyle_set_look(source,
+                             b->self_id,
+                             underlinelks,
+                             sourcecolours,
+                             displayimages,
+                             plainback);
 }
 
 /*************************************************/

@@ -37,7 +37,6 @@
 #include "svcprint.h"
 #include "Global.h"
 #include "FromROSLib.h"
-#include "TBEvents.h"
 #include "Utils.h"
 
 #include "Browser.h"
@@ -45,6 +44,7 @@
 #include "FetchHTML.h"
 #include "FetchPage.h"
 #include "FontManage.h"
+#include "PrintStyle.h"
 #include "Redraw.h"
 #include "Reformat.h"
 #include "TokenUtils.h"
@@ -55,7 +55,7 @@
 
 /* Statics */
 
-static void              image_load_chunk             (browser_data * b, int image, char * buffer, int bytes);
+static _kernel_oserror * image_load_chunk             (browser_data * b, int image, char * buffer, int bytes);
 static void              image_remove_data            (browser_data * b, int image);
 static void              image_remove_all_data        (browser_data * b, int image);
 static void              image_delay                  (browser_data * b, int image);
@@ -353,7 +353,7 @@ static browser_data * browser_redrawing = NULL;
 /*             buffer.                           */
 /*************************************************/
 
-static void image_load_chunk(browser_data * b, int image, char * buffer, int bytes)
+static _kernel_oserror * image_load_chunk(browser_data * b, int image, char * buffer, int bytes)
 {
   BBox              box;
   _kernel_oserror * e = NULL;
@@ -370,14 +370,16 @@ static void image_load_chunk(browser_data * b, int image, char * buffer, int byt
                                                            bytes,
                                                            &box);
 
-  /* Report any errors as Continue-only in strict parser mode */
+  #ifdef TRACE
+    if (tl & (1u<<15)) Printf("image_load_chunk: Exitting with error\n");
+  #endif
+
+  /* Return errors for STRICT_PARSER builds only */
 
   #ifdef STRICT_PARSER
-    if (e)
-    {
-      e->errnum = Utils_Error_Custom_Message;
-      show_error_ret(e);
-    }
+    if (e) return e;
+  #else
+    if (e) return NULL;
   #endif
 
   /* Update the image on the page to reflect the new data */
@@ -387,6 +389,8 @@ static void image_load_chunk(browser_data * b, int image, char * buffer, int byt
   #ifdef TRACE
     if (tl & (1u<<15)) Printf("image_load_chunk: Successful\n");
   #endif
+
+  return NULL;
 }
 
 /*************************************************/
@@ -753,9 +757,10 @@ _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * 
     for (i = 0; i < nimages; i++)
     {
       if (
-           idata[i].alloc                               && /* The image has data allocated for it.             */
-           !strcmp(url, ddata + image_data_offset(b,i)) && /* This holds a URL which matches that passed in.   */
-           idata[i].xref < 0                               /* The image doesn't cross reference things itself. */
+           idata[i].alloc                               && /* The image has data allocated for it                 */
+           !strcmp(url, ddata + image_data_offset(b,i)) && /* This holds a URL which matches that passed in       */
+           idata[i].xref < 0                            && /* The image doesn't cross reference things itself     */
+           idata[i].background == !!background             /* We're not trying to make a b/g an f/g or vice versa */
          )
       {
         xref = i;       /* If all of the above are satisfied, cross reference */
@@ -840,16 +845,18 @@ _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * 
 
   memset(&idata[nimages], 0, sizeof(image_info)); /* Precautionary catchall */
 
-  idata[nimages].owner   = b;
-  idata[nimages].x       = -1;
-  idata[nimages].y       = -1;
+  idata[nimages].owner      = b;
+  idata[nimages].x          = -1;
+  idata[nimages].y          = -1;
 
-  idata[nimages].alloc   = size;
-  idata[nimages].ualloc  = ulen;
-  idata[nimages].isize   = 0;
+  idata[nimages].alloc      = size;
+  idata[nimages].ualloc     = ulen;
+  idata[nimages].isize      = 0;
 
-  idata[nimages].token   = tp;
-  idata[nimages].xref    = xref;
+  idata[nimages].token      = tp;
+  idata[nimages].xref       = xref;
+
+  idata[nimages].background = !!background;
 
   /* Set the 'delayed' flag if it's not a background image and */
   /* images are flagged as not being shown right now, or if it */
@@ -949,6 +956,8 @@ _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * 
 
 _kernel_oserror * image_process_null(browser_data * b)
 {
+  _kernel_oserror * e;
+
   #ifdef TRACE
     if (tl & (1u<<15)) Printf("image_process_null: Called\n");
   #endif
@@ -984,24 +993,25 @@ _kernel_oserror * image_process_null(browser_data * b)
            fetches < choices.maximages
          )
       {
-        if (
-             html_get(
-                       ddata + image_data_offset(b,image), /* Document to fetch                */
-                       NULL,                               /* Pointer to any extra data        */
-                       (int *) &idata[image].handle,       /* Place to return the fetch handle */
-                       URL_Method_http_GET,                /* Fetch method                     */
+        e = html_get(ddata + image_data_offset(b,image), /* Document to fetch                */
+                     NULL,                               /* Pointer to any extra data        */
+                     (int *) &idata[image].handle,       /* Place to return the fetch handle */
+                     URL_Method_http_GET,                /* Fetch method                     */
 
-                       #ifndef SINGLE_USER
-                         user.name,                        /* User name for MailServ, if using */
-                       #else                               /* a multiuser version              */
-                         NULL,
-                       #endif
+                     #ifndef SINGLE_USER
+                       user.name,                        /* User name for MailServ, if using */
+                     #else                               /* a multiuser version              */
+                       NULL,
+                     #endif
 
-                       0,                                  /* 0 = Don't parse fetched data     */
-                       !b->reloading                       /* 1 = Proxy can be used, 0 = can't */
-                     )
-           )
-           image_abandon(b, image);
+                     0,                                  /* 0 = Don't parse fetched data     */
+                     !b->reloading);                    /* 1 = Proxy can be used, 0 = can't */
+
+        if (e)
+        {
+          show_error_ret(e);
+          image_abandon(b, image);
+        }
       }
     }
     while (image != lastimage && idata[image].handle == 0);
@@ -1024,19 +1034,17 @@ _kernel_oserror * image_process_null(browser_data * b)
         /* call gives an error, abandon the image fetch and */
         /* exit.                                            */
 
-        if (
-             fetch_get_raw_data(
-                                 NULL,                   /* The browser_data structure */
-                                 idata[image].handle,    /* Fetch handle */
-                                 buffer,                 /* Buffer for fetched data */
-                                 sizeof(buffer),         /* Buffer's size */
-                                 &done,                  /* 'done' = 1 for fetch completed, else 0 */
-                                 &bytes                  /* Number of bytes put into buffer */
-                               )
-           )
+        e =  fetch_get_raw_data(NULL,                   /* The browser_data structure */
+                                idata[image].handle,    /* Fetch handle */
+                                buffer,                 /* Buffer for fetched data */
+                                sizeof(buffer),         /* Buffer's size */
+                                &done,                  /* 'done' = 1 for fetch completed, else 0 */
+                                &bytes);                /* Number of bytes put into buffer */
+
+        if (e)
         {
-          image_abandon(b,image);
-          return NULL;
+          image_abandon(b, image);
+          return e;
         }
 
         idata[image].bytesgot += bytes;
@@ -1047,7 +1055,14 @@ _kernel_oserror * image_process_null(browser_data * b)
 
         if (bytes)
         {
-          image_load_chunk(b, image, buffer, bytes);
+          e = image_load_chunk(b, image, buffer, bytes);
+
+          if (e)
+          {
+            image_abandon(b, image);
+            return e;
+          }
+
           toolbars_update_progress(b);
         }
 
@@ -1066,8 +1081,6 @@ _kernel_oserror * image_process_null(browser_data * b)
             #ifdef STRICT_PARSER
 
               /* Report any errors as Continue-only in strict parser mode */
-
-              _kernel_oserror * e;
 
               e = idata[image].istore -> EndLoad(idata[image].istore);
 
@@ -1106,8 +1119,6 @@ _kernel_oserror * image_process_null(browser_data * b)
               #ifdef STRICT_PARSER
 
                 /* Report any errors as Continue-only in strict parser mode */
-
-                _kernel_oserror * e;
 
                 e = idata[image].istore -> BGCol(idata[image].istore,
                                                  &b->aacol);
@@ -1214,19 +1225,17 @@ _kernel_oserror * image_process_null(browser_data * b)
 
         /* Call the fetch routine */
 
-        if (
-             html_get_next_token(
-                                  b,
-                                  idata[image].handle,
-                                  &remn,
-                                  &sofar,
-                                  &tptr,
-                                  &waiting,
-                                  &store,
-                                  ddata + image_data_offset(b, image),
-                                  1
-                                )
-           )
+        e = html_get_next_token(b,
+                                idata[image].handle,
+                                &remn,
+                                &sofar,
+                                &tptr,
+                                &waiting,
+                                &store,
+                                ddata + image_data_offset(b, image),
+                                1);
+
+        if (e)
         {
           /* If there's an error, free the store and ditch the image */
 
@@ -1239,9 +1248,14 @@ _kernel_oserror * image_process_null(browser_data * b)
 
             flex_free(&store);
           }
+
           image_abandon(b, image);
 
-          return NULL;
+          #ifdef TRACE
+            if (tl & (1u<<15)) Printf("image_process_null: Exitting with error\n");
+          #endif
+
+          return e;
         }
 
         #ifdef TRACE_FETCH_STORE
@@ -1385,7 +1399,30 @@ _kernel_oserror * image_process_null(browser_data * b)
               i += n1;
               n -= n1;
 
-              image_load_chunk(b, image, buffer, n1);
+              e = image_load_chunk(b, image, buffer, n1);
+
+              if (e)
+              {
+                /* If there's an error, free the store and ditch the image */
+
+                if (store)
+                {
+                  #ifdef TRACE
+                    flexcount -= flex_size(&store);
+                    if (tl & (1u<<14)) Printf("**   flexcount: %d\n",flexcount);
+                  #endif
+
+                  flex_free(&store);
+                }
+
+                image_abandon(b, image);
+
+                #ifdef TRACE
+                  if (tl & (1u<<15)) Printf("image_process_null: Exitting with error\n");
+                #endif
+
+                return e;
+              }
             }
 
             /* Get rid of any accumulated data and update the status bar */
@@ -1852,14 +1889,22 @@ void image_delay_fetches(browser_data * b)
 /* function.                                     */
 /*                                               */
 /* Parameters: Pointer to a browser_data struct  */
-/*             relevant to the images.           */
+/*             relevant to the images;           */
+/*                                               */
+/*             1 to restart foreground fetches,  */
+/*             else 0;                           */
+/*                                               */
+/*             1 to restart background fetches,  */
+/*             else 0.                           */
 /*************************************************/
 
-void image_restart_fetches(browser_data * b)
+void image_restart_fetches(browser_data * b, int foreground, int background)
 {
   if (nimages)
   {
-    int image;
+    int            image;
+    int            xref;
+    browser_data * xref_b;
 
     /* Loop round all the images */
 
@@ -1873,23 +1918,55 @@ void image_restart_fetches(browser_data * b)
       /* will later be fetched.                                   */
 
       if (
+           idata[image].owner == b &&
            (
-             !idata[image].fetched &&
-             idata[image].delayed
-           )
-           ||
-           (
-             idata[image].fetched  &&
-             !idata[image].success &&
-             !idata[image].istore
+             (
+               !idata[image].fetched &&
+               idata[image].delayed
+             )
+             ||
+             (
+               idata[image].fetched  &&
+               !idata[image].success &&
+               !idata[image].istore
+             )
            )
          )
       {
-        idata[image].success = 0;
-        idata[image].delayed = 0;
-        idata[image].fetched = 0;
+        /* Only fetch foreground or background images if asked to */
+
+        if (
+             (idata[image].background  && background) ||
+             (!idata[image].background && foreground)
+           )
+        {
+          idata[image].success = 0;
+          idata[image].delayed = 0;
+          idata[image].fetched = 0;
+
+          /* Deal with cross referenced images. If this browser cross */
+          /* references another image, and that image isn't owned by  */
+          /* this browser, then clear its fetching flags also and     */
+          /* make sure that this other browser will fetch the data.   */
+
+          xref = idata[image].xref;
+
+          if (xref >= 0 && idata[xref].owner != b)
+          {
+            idata[xref].success = 0;
+            idata[xref].delayed = 0;
+            idata[xref].fetched = 0;
+
+            xref_b = idata[xref].owner;
+
+            if (!xref_b->fetch_handler) fetchpage_claim_nulls(xref_b);
+            toolbars_update_status(xref_b, Toolbars_Status_GetPics);
+          }
+        }
       }
     }
+
+    /* Finally, make sure fetching is started for the given browser */
 
     if (!b->fetch_handler) fetchpage_claim_nulls(b);
     toolbars_update_status(b, Toolbars_Status_GetPics);
@@ -2005,11 +2082,13 @@ static _kernel_oserror * image_update_area(browser_data * b, int x, int y, BBox 
         image_redrawing   = -1;
 
         #ifdef STRICT_PARSER
+
           if (e)
           {
             e->errnum = Utils_Error_Custom_Message;
             show_error_ret(e);
           }
+
         #endif
       }
 
@@ -2637,8 +2716,9 @@ _kernel_oserror * image_fill_background(void * handle, int * i)
   _kernel_oserror         * e      = NULL;
   browser_data            * b      = (browser_data *) handle;
   int                       ximage = (int) i;
-  int                       bimage, image;
   int                       noplot = 0;
+  int                       image;
+  int                       bimage;
   int                       x, y, xorigin, yorigin;
   int                       w, h;
 
@@ -2703,9 +2783,19 @@ _kernel_oserror * image_fill_background(void * handle, int * i)
 
   /* Do a blank rectangle if the image is transparent (has a mask) */
   /* or the image itself can't be plotted, or the browser window   */
-  /* set up not to plot background images.                         */
+  /* set up not to plot background images, or we're printing and   */
+  /* shouldn't plot backgrounds (we must plot something at this    */
+  /* stage!).                                                      */
 
-  if (noplot || idata[bimage].istore->transparent || b->plainback)
+  if (
+       noplot                            ||
+       idata[bimage].istore->transparent ||
+       b->plainback                      ||
+       (
+         printing &&
+         !printstyle_show_all()
+       )
+     )
   {
     redraw_set_colour(redraw_backcol(b));
 
@@ -2717,7 +2807,15 @@ _kernel_oserror * image_fill_background(void * handle, int * i)
 
   /* If there's no background image that can be plotted, exit here */
 
-  if (b->plainback || noplot) return NULL;
+  if (
+       b->plainback ||
+       noplot       ||
+       (
+         printing &&
+         !printstyle_show_all()
+       )
+     )
+     return NULL;
 
   /* Find the scale for the background plotting; if the foreground */
   /* image is scaled, then plotting the background at 1:1 will     */
@@ -2931,11 +3029,13 @@ _kernel_oserror * image_redraw(browser_data * b, WimpRedrawWindowBlock * r, HStr
     image_redrawing   = -1;
 
     #ifdef STRICT_PARSER
+
       if (e)
       {
         e->errnum = Utils_Error_Custom_Message;
         show_error_ret(e);
       }
+
     #endif
 
     if (!e) plotted = 1;
@@ -3957,7 +4057,7 @@ static _kernel_oserror * image_get_image_size(browser_data * b, int image, BBox 
     }
     else
     {
-      int h, temp, size;
+      int  h, temp, size;
       BBox fbox;
 
       /* Claim the font */
@@ -3979,8 +4079,7 @@ static _kernel_oserror * image_get_image_size(browser_data * b, int image, BBox 
                           strlen(tp->text),
                           -1,
                           &temp,
-                          &box->xmax
-                         );
+                          &box->xmax);
 
       convert_to_os(box->xmax, &box->xmax);
 

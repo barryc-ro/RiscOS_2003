@@ -47,12 +47,16 @@
 #include "Find.h"
 #include "FontManage.h"
 #include "Handlers.h"
+#include "History.h"
+#include "Hotlist.h"
 #include "Menus.h"
 #include "MiscDefs.h"
 #include "Mouse.h"
 #include "OpenURL.h"
 #include "Printing.h"
+#include "PrintStyle.h"
 #include "Save.h"
+#include "Toolbars.h"
 #include "URLutils.h"
 #include "Windows.h"
 
@@ -87,11 +91,14 @@
 
 /* Static function prototypes */
 
-static void              initialise_app    (void);
-static _kernel_oserror * open_choices_file (void);
-static void              load_choices      (void);
-static void              catch_errors      (int signum);
-static void              termination       (void);
+static void              initialise_app      (void);
+
+static _kernel_oserror * open_messages_file  (int which);
+static void              close_messages_file (void * control);
+static void              load_choices        (void);
+
+static void              catch_errors        (int signum);
+static void              termination         (void);
 
 /* Make sure the stack starts at a reasonable size to prevent frequent */
 /* stack extensions - this is a directive to the C run time system and */
@@ -103,9 +110,9 @@ int __root_stack_size = 16384;
 // /* attach_event_handlers()                       */
 // /*                                               */
 // /* Called when an object is autocreated by the   */
-// /* toolbox (see initialise_app()). Used to get   */
+// /* toolbox (see initialise_app). Used to get at  */
 // /* the ObjectID of things without needing a      */
-// /* specifically generated event to deliver it    */
+// /* specifically generated event to deliver it.   */
 // /*************************************************/
 //
 // int attach_event_handlers(int eventcode,ToolboxEvent *event,IdBlock *idb,void *handle)
@@ -182,12 +189,19 @@ static void initialise_app(void)
                                 &task_handle,
                                 (void *) &sprite_block));
 
-  show_error(open_choices_file());
+  /* Register a handler for Toolbox errors */
 
   show_error(event_register_toolbox_handler(-1,
                                             Toolbox_Error,
                                             report_toolbox_error,
                                             NULL));
+
+  /* Open the Choices and Controls files */
+
+  cob = chb = NULL;
+
+  show_error(open_messages_file(0));
+  show_error(open_messages_file(1));
 
   /* If the system variable 'Browse$IssueDesktopCommand' is set to 'yes', */
   /* then the AcornURI and/or TaskModule modules were started in !Run and */
@@ -229,15 +243,29 @@ static void initialise_app(void)
   /* Called when the Open URL dialogue is to be shown */
 
   show_error(event_register_toolbox_handler(-1,
-                                            EOpenURLWindow,
+                                            EOpenOpen,
                                             openurl_to_be_shown,
+                                            NULL));
+
+  /* Called when the Open URL dialogue is to be shown from a menu */
+
+  show_error(event_register_toolbox_handler(-1,
+                                            EOpenOpenFromMenu,
+                                            openurl_to_show_from_menu,
                                             NULL));
 
   /* Called when the Find dialogue is to be shown */
 
   show_error(event_register_toolbox_handler(-1,
-                                            EOpenFindWindow,
+                                            EOpenFind,
                                             find_to_be_shown,
+                                            NULL));
+
+  /* Called when the Print Style dialogue is to be shown */
+
+  show_error(event_register_toolbox_handler(-1,
+                                            EOpenPrintStyle,
+                                            printstyle_to_be_shown,
                                             NULL));
 
   /* Called when the Print dialogue is to be shown */
@@ -245,29 +273,6 @@ static void initialise_app(void)
   show_error(event_register_toolbox_handler(-1,
                                             PrintDbox_AboutToBeShown,
                                             print_to_be_shown,
-                                            NULL));
-
-  /* Called when the user clicks on a Print dialogue's Print button */
-
-  show_error(event_register_toolbox_handler(-1,
-                                            PrintDbox_Print,
-                                            print_initiate,
-                                            NULL));
-
-  /* Called when the print dialogue is cancelled */
-
-  show_error(event_register_toolbox_handler(-1,
-                                            PrintDbox_DialogueCompleted,
-                                            print_restore,
-                                            NULL));
-
-  /* Called when radios are used in the Print dialogue which */
-  /* may alter the state of the Reformat option (i.e. enable */
-  /* or disable / ungrey it or grey it out).                 */
-
-  show_error(event_register_toolbox_handler(-1,
-                                            EEnableReformat,
-                                            print_check_contents,
                                             NULL));
 
   /* Called when the Utils submenu is to be opened from the */
@@ -292,6 +297,19 @@ static void initialise_app(void)
   show_error(event_register_toolbox_handler(-1,
                                             EShowFileMenu,
                                             menus_show_file,
+                                            NULL));
+
+  /* Called whenever the main menu is to be opened */
+  /* from a browser window, or closed.             */
+
+  show_error(event_register_toolbox_handler(-1,
+                                            EShowMainMenu,
+                                            menus_show_main,
+                                            NULL));
+
+  show_error(event_register_toolbox_handler(-1,
+                                            EHideMainMenu,
+                                            menus_hide_main,
                                             NULL));
 
   /* Called whenever a menu item is selected */
@@ -430,6 +448,19 @@ static void initialise_app(void)
 
   read_os_to_points();
 
+  #ifndef REMOTE_HOTLIST
+
+    /* Initialise the hotlist */
+
+    show_error(hotlist_initialise());
+    hotlist_load(lookup_choice("HotlistPath:Browse:User.Hotlist",0,0));
+
+  #endif
+
+  /* Load the history */
+
+  show_error(history_load(lookup_choice("HistoryPath:Browse:User.History",0,0)));
+
   /* Find the total number of animation frames for the status bar */
 
   animation_frames = 0;
@@ -502,21 +533,69 @@ static void initialise_app(void)
 }
 
 /*************************************************/
-/* open_choices_file()                           */
+/* open_messages_file()                          */
 /*                                               */
-/* Asks MessageTrans to open the Choices file.   */
+/* Asks MessageTrans to open a Messages file.    */
 /* Looks through a system variable for the path  */
-/* to find the file in before going to the       */
-/* default of 'Choices' inside the application   */
-/* directory.                                    */
+/* to find the file in before going to a         */
+/* default - see the code comments for more      */
+/* information.                                  */
+/*                                               */
+/* Parameters: 0 to load the Choices file, or 1  */
+/*             to load the Controls file.        */
 /*************************************************/
 
-static _kernel_oserror * open_choices_file(void)
+static _kernel_oserror * open_messages_file(int which)
 {
-  char              path[Limits_OS_Pathname];
   _kernel_oserror * e;
+  MessagesFD      * control;
+  char            * sysvar;
+  char            * defpath;
+  char              path[Limits_OS_Pathname];
 
   memset(path, 0, sizeof(path));
+
+  /* Work out what to open.                     */
+  /*                                            */
+  /* If you extend this switch statement, don't */
+  /* forget to extend the one later in the      */
+  /* function too...                            */
+
+  switch (which)
+  {
+    case 0:
+    {
+      sysvar  = "Browse$ChoicesFile";
+      defpath = ".Choices";
+    }
+    break;
+
+    case 1:
+    {
+      sysvar  = "Browse$ControlsFile";
+      defpath = ".Controls";
+    }
+    break;
+
+    default:
+    {
+      #ifdef TRACE
+
+        erb.errnum = Utils_Error_Custom_Fatal;
+
+        sprintf(erb.errmess,
+                "In open_choices_file, passed unrecognised parameter value '%d'",
+                which);
+
+        return &erb;
+
+      #else
+
+        return NULL;
+
+      #endif
+    }
+  }
 
   /* Equivalent to getenv(), but the RISC OS implementation evaluates */
   /* the system variable as an expression which we don't want; hence  */
@@ -526,17 +605,17 @@ static _kernel_oserror * open_choices_file(void)
        _swix(OS_ReadVarVal,
              _INR(0,4),
 
-             "Browse$ChoicesFile", /* Variable name                      */
-             path,                 /* Buffer                             */
-             sizeof(path),         /* Size of buffer                     */
-             0,                    /* Name pointer (0 for 1st call)      */
-             4)                    /* Variable type (4 = literal string) */
+             sysvar,       /* Variable name                      */
+             path,         /* Buffer                             */
+             sizeof(path), /* Size of buffer                     */
+             0,            /* Name pointer (0 for 1st call)      */
+             4)            /* Variable type (4 = literal string) */
      )
   {
     /* If there's an error, assume it was because the variable doesn't exist */
 
     strcat(path, TASKDIR);
-    strcat(path, ".Choices");
+    strcat(path, defpath);
   }
 
   /* Claim RMA for the control block and pathname */
@@ -547,34 +626,51 @@ static _kernel_oserror * open_choices_file(void)
             6,
             sizeof(MessagesFD) + strlen(path) + 1,
 
-            &chb);
+            &control);
 
   if (e) return e;
 
+  /* Update the relevant variable. No need for a default case */
+  /* as the first switch statement must have caught that one. */
+
+  switch (which)
+  {
+    case 0: chb = control; break;
+    case 1: cob = control; break;
+  }
+
+  /* Register the block with MemCheck if required, and copy */
+  /* the pathname into it.                                  */
+
   #ifdef INCLUDE_MEMCHECK
-    MemCheck_RegisterMiscBlock((void *) chb, sizeof(MessagesFD) + strlen(path) + 1);
+    MemCheck_RegisterMiscBlock((void *) control, sizeof(MessagesFD) + strlen(path) + 1);
   #endif
 
-  strcpy((char *) ((int) chb + sizeof(MessagesFD)), path);
+  strcpy((char *) ((int) control + sizeof(MessagesFD)), path);
 
   /* Open the file */
 
   return _swix(MessageTrans_OpenFile,
                _INR(0,2),
 
-               chb,                            /* Pointer to control block */
-               (int) chb + sizeof(MessagesFD), /* Filename                 */
-               0);                             /* 0 to buffer data in RMA  */
+               control,                            /* Pointer to control block */
+               (int) control + sizeof(MessagesFD), /* Filename                 */
+               0);                                 /* 0 to buffer data in RMA  */
 }
 
 /*************************************************/
-/* close_choices_file()                          */
+/* close_messages_file()                         */
 /*                                               */
-/* Closes the Choices messages file and releases */
-/* RMA claimed for it.                           */
+/* Closes a messges file and releases the RMA    */
+/* space claimed for it.                         */
+/*                                               */
+/* Parameters: Pointer to the allocated chunk of */
+/*             RMA space holding the             */
+/*             MessageTrans control block and    */
+/*             Messages file pathname.           */
 /*************************************************/
 
-static void close_choices_file(void)
+static void close_messages_file(void * control)
 {
   /* If the file won't close for some reason, */
   /* MessageTrans may still want to access it */
@@ -585,7 +681,7 @@ static void close_choices_file(void)
        _swix(MessageTrans_CloseFile,
              _IN(0),
 
-             chb)
+             control)
      )
      return;
 
@@ -596,7 +692,7 @@ static void close_choices_file(void)
         _IN(0) | _IN(2),
 
         7,
-        chb);
+        control);
 }
 
 /*************************************************/
@@ -642,85 +738,113 @@ static void load_choices(void)
   if (choices.fontsize > 24) choices.fontsize = 24;
   choices.fontsize *= 16;
 
-  if (!strcmp(lookup_choice("SystemFont:no"  ,0,0),"yes")) choices.systemfont = 1;
-  if (choices.systemfont)    choices.fontsize = FM_Standard_Size;
+  if (!strcmp(lookup_choice("SystemFont:no",0,0),"yes")) choices.systemfont = 1;
+  if (choices.systemfont) choices.fontsize = FM_Standard_Size;
 
-  /* None user-configurable options from the Messages file */
+  /* None user-configurable options from the Controls file */
 
-  fixed.poll_delay          = atoi(lookup_token("AnimSpeed:4",       0,0));
-  fixed.minimum_convergence = atoi(lookup_token("MinConvergence:480",0,0));
-  fixed.show_dstat_for      = atoi(lookup_token("ShowDStatFor:300",  0,0));
-  fixed.quantise            = atoi(lookup_token("Quantise:5",        0,0));
-  fixed.dontgrey            = atoi(lookup_token("DontGrey:0",        0,0));
+  fixed.poll_delay          = atoi(lookup_control("AnimSpeed:4",       0,0));
+  fixed.minimum_convergence = atoi(lookup_control("MinConvergence:480",0,0));
+  fixed.show_dstat_for      = atoi(lookup_control("ShowDStatFor:300",  0,0));
+  fixed.quantise            = atoi(lookup_control("Quantise:5",        0,0));
+  fixed.dontgrey            = atoi(lookup_control("DontGrey:0",        0,0));
 
-  fixed.ptrlnkactvx = atoi(lookup_token("PtrLnkActvX:5",0,0));
-  fixed.ptrlnkactvy = atoi(lookup_token("PtrLnkActvY:2",0,0));
-  fixed.ptrmapactvx = atoi(lookup_token("PtrMapActvX:8",0,0));
-  fixed.ptrmapactvy = atoi(lookup_token("PtrMapActvY:8",0,0));
-  fixed.backoffat   = atoi(lookup_token("BackOffAt:128",0,0));
+  fixed.ptrlnkactvx = atoi(lookup_control("PtrLnkActvX:5",0,0));
+  fixed.ptrlnkactvy = atoi(lookup_control("PtrLnkActvY:2",0,0));
+  fixed.ptrmapactvx = atoi(lookup_control("PtrMapActvX:8",0,0));
+  fixed.ptrmapactvy = atoi(lookup_control("PtrMapActvY:8",0,0));
+  fixed.backoffat   = atoi(lookup_control("BackOffAt:128",0,0));
 
-  if (!strcmp(lookup_token("SwapBars:no"     ,0,0),"yes")) fixed.swapbars     = 1;
-  if (!strcmp(lookup_token("DBoxAnims:no"    ,0,0),"yes")) fixed.dboxanims    = 1;
+  if (!strcmp(lookup_control("SwapBars:no"     ,0,0),"yes")) fixed.swapbars     = 1;
+  if (!strcmp(lookup_control("DBoxAnims:no"    ,0,0),"yes")) fixed.dboxanims    = 1;
 
-  if (!strcmp(lookup_token("AppendStatus:no" ,0,0),"yes")) fixed.appendstatus = 1;
-  if (!strcmp(lookup_token("UseBrackets:yes" ,0,0),"yes")) fixed.usebrackets  = 1;
-  if (!strcmp(lookup_token("AppendURLs:no"   ,0,0),"yes")) fixed.appendurls   = 1;
+  if (!strcmp(lookup_control("AppendStatus:no" ,0,0),"yes")) fixed.appendstatus = 1;
+  if (!strcmp(lookup_control("UseBrackets:yes" ,0,0),"yes")) fixed.usebrackets  = 1;
+  if (!strcmp(lookup_control("AppendURLs:no"   ,0,0),"yes")) fixed.appendurls   = 1;
 
-  if (!strcmp(lookup_token("KeepCaret:no"    ,0,0),"yes")) fixed.keepcaret    = 1;
-  if (!strcmp(lookup_token("ClaimHelp:no"    ,0,0),"yes")) fixed.claimhelp    = 1;
-  if (!strcmp(lookup_token("StopWebServ:no"  ,0,0),"yes")) fixed.stopwebserv  = 1;
-  if (!strcmp(lookup_token("BackWindow:no"   ,0,0),"yes")) fixed.backwindow   = 1;
+  if (!strcmp(lookup_control("KeepCaret:no"    ,0,0),"yes")) fixed.keepcaret    = 1;
+  if (!strcmp(lookup_control("ClaimHelp:no"    ,0,0),"yes")) fixed.claimhelp    = 1;
+  if (!strcmp(lookup_control("StopWebServ:no"  ,0,0),"yes")) fixed.stopwebserv  = 1;
+  if (!strcmp(lookup_control("BackWindow:no"   ,0,0),"yes")) fixed.backwindow   = 1;
 
-  if (!strcmp(lookup_token("IgnoreAdjust:no" ,0,0),"yes")) fixed.ignoreadjust = 1;
-  if (!strcmp(lookup_token("LockToLine:no"   ,0,0),"yes")) fixed.locktoline   = 1;
+  if (!strcmp(lookup_control("IgnoreAdjust:no" ,0,0),"yes")) fixed.ignoreadjust = 1;
+  if (!strcmp(lookup_control("LockToLine:no"   ,0,0),"yes")) fixed.locktoline   = 1;
+
+  /* The ColourProgress option in Messages is a little unusual; it holds */
+  /* 'no' or a Wimp colour number. Default to 11 (red, in the standard   */
+  /* Wimp palette).                                                      */
+
+  if (!strcmp(lookup_control("ColourProgress:11",0,0),"no")) fixed.colour_progress = 255;
+  else
+  {
+    fixed.colour_progress = atoi(lookup_control("ColourProgress:11",0,0));
+    if (fixed.colour_progress > 15) fixed.colour_progress = 11;
+  }
 
   /* Maximum global history size in K, maximum */
   /* view history size in entires, and maximum */
   /* number of images to simultaneously fetch. */
 
+  /* Limit the number of simultaneous image fetches (I recommend */
+  /* a minimum of 2, rather than 1, as most efficient).          */
+
+  choices.maximages = atoi(lookup_choice("MaxImages:5" ,0,0));
+  if (choices.maximages <= 0) choices.maximages = 1;
+
+  /* History list choices */
+
   choices.maxghistory = atoi(lookup_choice("GHistSize:8" ,0,0));
   choices.maxvhistory = atoi(lookup_choice("VhistSize:50",0,0));
-  choices.maximages   = atoi(lookup_choice("MaxImages:5" ,0,0));
 
   if (choices.maxghistory < 1) choices.maxghistory = 1;
   if (choices.maxvhistory < 4) choices.maxvhistory = 4;
-  if (choices.maximages <= 0)  choices.maximages   = 1;
+
+  if      (!strcmp(lookup_choice("SaveHistory:once",0,0),"always")) choices.save_history = 2;
+  else if (!strcmp(lookup_choice("SaveHistory:once",0,0),"once"))   choices.save_history = 1;
+
+  /* Hotlist options */
+
+  if      (!strcmp(lookup_choice("SaveHotlist:always",0,0),"always")) choices.save_hotlist = 2;
+  else if (!strcmp(lookup_choice("SaveHotlist:always",0,0),"once"))   choices.save_hotlist = 1;
+
+  if (!strcmp(lookup_choice("AddHotlist:top",0,0),"bottom"))         choices.add_hotlist  = 1;
+  if (!strcmp(lookup_choice("HotlistType:descriptions",0,0),"urls")) choices.hotlist_show = 1;
 
   /* Page layout */
 
-  choices.leftmargin   = atoi(lookup_choice("LeftMargin:1600"  ,0,0));
-  choices.rightmargin  = atoi(lookup_choice("RightMargin:6400" ,0,0));
-  choices.quotemargin  = atoi(lookup_choice("QuoteMargin:19200",0,0));
-  choices.leading      = atoi(lookup_choice("Leading:4"        ,0,0));
-  choices.leftindent   = atoi(lookup_choice("LeftIndent:12800" ,0,0));
-  choices.minfrmheight = atoi(lookup_choice("MinFrmHeight:48"  ,0,0));
-  choices.minfrmwidth  = atoi(lookup_choice("MinFrmWidth:48"   ,0,0));
+  choices.leftmargin   = atoi(lookup_control("LeftMargin:1600"  ,0,0));
+  choices.rightmargin  = atoi(lookup_control("RightMargin:6400" ,0,0));
+  choices.quotemargin  = atoi(lookup_control("QuoteMargin:19200",0,0));
+  choices.leading      = atoi(lookup_control("Leading:4"        ,0,0));
+  choices.leftindent   = atoi(lookup_control("LeftIndent:12800" ,0,0));
+  choices.minfrmheight = atoi(lookup_control("MinFrmHeight:48"  ,0,0));
+  choices.minfrmwidth  = atoi(lookup_control("MinFrmWidth:48"   ,0,0));
 
   /* Reformatter options */
 
-  if (!strcmp(lookup_choice("RefoWait:no",0,0),"yes")) choices.refowait = 1;
-  if (!strcmp(lookup_choice("RefoHang:no",0,0),"yes")) choices.refohang = 1;
+  if (!strcmp(lookup_control("RefoWait:no",0,0),"yes")) choices.refowait = 1;
+  if (!strcmp(lookup_control("RefoHang:no",0,0),"yes")) choices.refohang = 1;
 
-  choices.refotime = atoi(lookup_choice("RefoTime:500",0,0));
+  choices.refotime = atoi(lookup_control("RefoTime:500",0,0));
   if (choices.refotime < 25)   choices.refotime = 25;
   if (choices.refotime > 2000) choices.refotime = 2000;
 
   /* Miscellaneous options */
 
-  if (!strcmp(lookup_choice("BrickWall:no"    ,0,0),"yes")) choices.brickwall     = 1;
-  if (!strcmp(lookup_choice("DelayImage:yes"  ,0,0),"yes")) choices.delayimages   = 1;
-  if (!strcmp(lookup_choice("DisplayBgs:yes"  ,0,0),"yes")) choices.displaybgs    = 1;
-  if (!strcmp(lookup_choice("UnderlineLks:yes",0,0),"yes")) choices.underlinelks  = 1;
-  if (!strcmp(lookup_choice("OverrideCols:no" ,0,0),"yes")) choices.overridecols  = 1;
-  if (!strcmp(lookup_choice("ShowURLs:no"     ,0,0),"yes")) choices.show_urls     = 1;
-  if (!strcmp(lookup_choice("FixedPtr:yes"    ,0,0),"yes")) choices.fixedptr      = 1;
-  if (!strcmp(lookup_choice("HighlightLks:no" ,0,0),"yes")) choices.highlightlks  = 1;
-  if (!strcmp(lookup_choice("KeyboardCtl:no"  ,0,0),"yes")) choices.keyboardctl   = 1;
-  if (!strcmp(lookup_choice("ClearFirst:yes"  ,0,0),"yes")) choices.clearfirst    = 1;
-  if (!strcmp(lookup_choice("KeepHighlight:no",0,0),"yes")) choices.keephighlight = 1;
+  if (!strcmp(lookup_control("BrickWall:no"    ,0,0),"yes")) choices.brickwall     = 1;
+  if (!strcmp(lookup_control("ClearFirst:yes"  ,0,0),"yes")) choices.clearfirst    = 1;
+  if (!strcmp(lookup_control("KeepHighlight:no",0,0),"yes")) choices.keephighlight = 1;
 
-  if (!strcmp(lookup_choice("UseProxy:no"     ,0,0),"yes")) choices.use_proxy     = 1;
-  if (!strcmp(lookup_choice("FullScreen:no"   ,0,0),"yes")) choices.full_screen   = 1;
+  if (!strcmp(lookup_choice("DelayImage:yes"   ,0,0),"yes")) choices.delayimages   = 1;
+  if (!strcmp(lookup_choice("DisplayBgs:yes"   ,0,0),"yes")) choices.displaybgs    = 1;
+  if (!strcmp(lookup_choice("UnderlineLks:yes" ,0,0),"yes")) choices.underlinelks  = 1;
+  if (!strcmp(lookup_choice("OverrideCols:no"  ,0,0),"yes")) choices.overridecols  = 1;
+  if (!strcmp(lookup_choice("ShowURLs:no"      ,0,0),"yes")) choices.show_urls     = 1;
+  if (!strcmp(lookup_choice("FixedPtr:yes"     ,0,0),"yes")) choices.fixedptr      = 1;
+  if (!strcmp(lookup_choice("HighlightLks:no"  ,0,0),"yes")) choices.highlightlks  = 1;
+  if (!strcmp(lookup_choice("KeyboardCtl:no"   ,0,0),"yes")) choices.keyboardctl   = 1;
+  if (!strcmp(lookup_choice("UseProxy:no"      ,0,0),"yes")) choices.use_proxy     = 1;
+  if (!strcmp(lookup_choice("FullScreen:no"    ,0,0),"yes")) choices.full_screen   = 1;
 
   if      (!strcmp(lookup_choice("HScroll:no" ,0,0),"no"))  choices.h_scroll = 0;
   else if (!strcmp(lookup_choice("HScroll:no" ,0,0),"yes")) choices.h_scroll = 2;
@@ -740,10 +864,11 @@ static void load_choices(void)
   if (!strcmp(lookup_choice("MoveGadgets"  ,0,0),"1")) choices.move_gadgets = 1;
   if (!strcmp(lookup_choice("MoveGadgets:2",0,0),"2")) choices.move_gadgets = 2;
 
-  if (!strcmp(lookup_choice("AnimDrift:no",   0,0),"yes"))    choices.anim_drift   = 1;
-  if (!strcmp(lookup_choice("AnimDrift:no",   0,0),"always")) choices.anim_drift   = 2;
-  if (!strcmp(lookup_choice("SolidResize:yes",0,0),"yes"))    choices.solid_resize = 1;
-  if (!strcmp(lookup_choice("SolidResize:yes",0,0),"always")) choices.solid_resize = 2;
+  if      (!strcmp(lookup_control("AnimDrift:no",   0,0),"yes"))    choices.anim_drift   = 1;
+  else if (!strcmp(lookup_control("AnimDrift:no",   0,0),"always")) choices.anim_drift   = 2;
+
+  if      (!strcmp(lookup_choice("SolidResize:yes",0,0),"yes"))    choices.solid_resize = 1;
+  else if (!strcmp(lookup_choice("SolidResize:yes",0,0),"always")) choices.solid_resize = 2;
 
 
   #ifdef TRACE
@@ -860,7 +985,9 @@ void termination(void)
           task_handle);
   }
 
-  close_choices_file();
+  close_messages_file(cob); cob = NULL;
+  close_messages_file(chb); chb = NULL;
+
   fm_shutdown();
 }
 
@@ -978,6 +1105,7 @@ int main(int argc, char * argv[])
         if (strstr(argv[argp + 1], "JScr")) tl |= (1u<<24);
         if (strstr(argv[argp + 1], "Hotl")) tl |= (1u<<25);
         if (strstr(argv[argp + 1], "Save")) tl |= (1u<<26);
+        if (strstr(argv[argp + 1], "Drag")) tl |= (1u<<27);
 
         if (strstr(argv[argp + 1], "All"))  tl  = 0xffffffff;
 
@@ -1102,6 +1230,26 @@ int main(int argc, char * argv[])
     if (tl & (1u<<13))  Printf("      malloccount: \0216%d\0217\n",malloccount);
     if (tl & (1u<<14))  Printf("      flexcount  : %d\n",flexcount);
   #endif
+
+  #ifndef REMOTE_HOTLIST
+
+    /* Save the hotlist */
+
+    #ifdef TRACE
+      if (tl & (1u<<5)) Printf("main: Calling hotlist_save\n");
+    #endif
+
+    if (choices.save_hotlist) show_error_ret(hotlist_save(lookup_choice("HotlistPath:Browse:User.Hotlist",0,0)));
+
+  #endif
+
+  /* Save the global history */
+
+  #ifdef TRACE
+    if (tl & (1u<<5)) Printf("main: Calling history_save\n");
+  #endif
+
+  if (choices.save_history) history_save(lookup_choice("HistoryPath:Browse:User.History",0,0));
 
   /* This will call the termination() function in passing */
 

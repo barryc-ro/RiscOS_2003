@@ -28,7 +28,6 @@
 
 #include "svcprint.h"
 #include "Global.h"
-#include "TBEvents.h"
 #include "Utils.h"
 
 #include "Browser.h"
@@ -81,8 +80,11 @@ static _kernel_oserror * toolbars_infer_status           (browser_data * b, brow
 static _kernel_oserror * toolbars_add_status_item        (browser_data * ancestor);
 static status_type       toolbars_return_act_status      (browser_data * b);
 
+static int               toolbars_count_file_saves       (browser_data * b);
+static int               toolbars_count_file_saves_r     (browser_data * b);
 static int               toolbars_calculate_progress     (browser_data * b);
-static void              toolbars_create_progress        (browser_data * b, char * buffer);
+static int               toolbars_calculate_progress_r   (browser_data * b, int saves);
+static int               toolbars_create_progress        (browser_data * b, char * buffer, int buffer_size);
 
 /*************************************************/
 /* toolbars_get_upper()                          */
@@ -638,7 +640,7 @@ void toolbars_move_gadgets(browser_data * p)
 static _kernel_oserror * toolbars_animation_set_sprite(browser_data * b)
 {
   ObjectId t;
-  char     v[10];
+  char     v[32];
 
   /* Find the status bar object Id */
 
@@ -651,27 +653,6 @@ static _kernel_oserror * toolbars_animation_set_sprite(browser_data * b)
 
   b->current_frame ++;
   if (b->current_frame >= animation_frames) b->current_frame = 0;
-
-  #ifdef TRACE
-
-    {
-      int len = utils_len_printf("sa%d\0", b->current_frame);
-
-      if (len > sizeof(v))
-      {
-        erb.errnum = Utils_Error_Custom_Normal;
-        sprintf(erb.errmess,
-                "Would have overflowed sprite name string buffer in toolbars_animation_set_sprite (needed %d bytes, had %d)",
-                sizeof(v),
-                len);
-
-        show_error_ret(&erb);
-
-        return 0;
-      }
-    }
-
-  #endif
 
   sprintf(v, "sa%d\0", b->current_frame);
 
@@ -738,7 +719,7 @@ int toolbars_animation_drift(int eventcode, WimpPollBlock * b, IdBlock * idb, br
 /* toolbars_animate_slow()                       */
 /*                                               */
 /* Advances an animation in component            */
-/* DisplayAnim (see TBEvents.h) in an object of  */
+/* DisplayAnim (see Toolbars.h) in an object of  */
 /* ID given in void * handle (must be cast to    */
 /* this to fit as a Wimp event handler) by one   */
 /* frame for each complete cycle of the main     */
@@ -759,7 +740,7 @@ int toolbars_animation_drift(int eventcode, WimpPollBlock * b, IdBlock * idb, br
 int toolbars_animate_slow(int eventcode, WimpPollBlock * b, IdBlock * idb, void * handle)
 {
   ObjectId o = (ObjectId) handle;
-  char     v[10];
+  char     v[32];
   int      slow_animation_frame;
 
   if (toolbox_get_client_handle(0, o, (void **) &slow_animation_frame)) return 0;
@@ -770,27 +751,6 @@ int toolbars_animate_slow(int eventcode, WimpPollBlock * b, IdBlock * idb, void 
 
   slow_animation_frame ++;
   if (slow_animation_frame >= animation_frames * animation_frames) slow_animation_frame = 0;
-
-  #ifdef TRACE
-
-    {
-      int len = utils_len_printf("sa%d\0", slow_animation_frame / animation_frames);
-
-      if (len > sizeof(v))
-      {
-        erb.errnum = Utils_Error_Custom_Normal;
-        sprintf(erb.errmess,
-                "Would have overflowed sprite name string buffer in toolbars_animate_slow (needed %d bytes, had %d)",
-                sizeof(v),
-                len);
-
-        show_error_ret(&erb);
-
-        return 0;
-      }
-    }
-
-  #endif
 
   sprintf(v, "sa%d\0", slow_animation_frame / animation_frames);
 
@@ -1093,7 +1053,7 @@ static _kernel_oserror * toolbars_update_specific_status(browser_data * b, brows
     {
       /* For some messages, a general timeout */
 
-      timeout = atoi(lookup_token("ShowMiscFor:50",0,0));
+      timeout = atoi(lookup_control("ShowMiscFor:50",0,0));
 
       break;
     }
@@ -1102,7 +1062,7 @@ static _kernel_oserror * toolbars_update_specific_status(browser_data * b, brows
     {
       /* Specific timeout for LinkTo messages */
 
-      timeout = atoi(lookup_choice("ShowLinksFor:200",0,0));
+      timeout = atoi(lookup_control("ShowLinksFor:200",0,0));
 
       break;
     }
@@ -1111,7 +1071,7 @@ static _kernel_oserror * toolbars_update_specific_status(browser_data * b, brows
     {
       /* Specific timeout for Help messages */
 
-      timeout = atoi(lookup_token("ShowHelpFor:600",0,0));
+      timeout = atoi(lookup_control("ShowHelpFor:600",0,0));
 
       break;
     }
@@ -1465,7 +1425,7 @@ static int toolbars_write_status(browser_data * ancestor)
     char progress[Limits_FetchProgress];
     int  add;
 
-    toolbars_create_progress(contents[found].b, progress);
+    toolbars_create_progress(contents[found].b, progress, sizeof(progress));
 
     add = 1 + 1 + (fixed.usebrackets ? 2 : 0); /* (Terminating byte, plus separating space, possibly plus 2 brackets) */
 
@@ -1990,61 +1950,208 @@ void toolbars_update_progress(browser_data * b)
   ObjectId          t;
   _kernel_oserror * e;
   browser_data    * ancestor = utils_ancestor(b);
+  int               saves;
 
-  toolbars_create_progress(b, progress);
+  saves = toolbars_create_progress(b, progress, sizeof(progress));
 
   t = toolbars_get_lower(ancestor);
   if (!t) return;
 
-  e = displayfield_get_value(0, t, DisplayBytes, old, sizeof(old), NULL);
+  e = button_get_value(0, t, DisplayBytes, old, sizeof(old), NULL);
 
   /* Only update the display field if the contents have */
   /* changed, to avoid flicker.                         */
 
-  if (!e && strcmp(progress,old)) displayfield_set_value(0, t, DisplayBytes, progress);
+  if (!e && strcmp(progress, old))
+  {
+    int flags;
+    int colour_old, colour_new;
+
+    /* Set the colour if required */
+
+    if (fixed.colour_progress != 255)
+    {
+      if (!button_get_flags(0, t, DisplayBytes, &flags))
+      {
+        browser_data * ancestor = b->ancestor;
+
+        if (!ancestor) ancestor = b;
+
+        /* Remember the old colour, and set the new according  */
+        /* to whether or not file saves are in progress. If    */
+        /* there, use the Messages file defined colour; else   */
+        /* use the colour recorded in the browser_data struct. */
+
+        colour_old = (flags & 0x0f000000) >> 24;
+        colour_new = saves ? fixed.colour_progress : ancestor->progress_colour;
+
+        if (colour_new != colour_old)
+        {
+          button_set_flags(0,
+                           t,
+                           DisplayBytes,
+                           0x0f000000,
+                           colour_new << 24);
+        }
+      }
+    }
+
+    button_set_value(0, t, DisplayBytes, progress);
+  }
   else if (e && fixed.appendstatus) toolbars_update_status(b, Toolbars_Status_Ready);
+}
+
+/*************************************************/
+/* toolbars_count_file_saves()                   */
+/*                                               */
+/* Checks to see if any frames in a given        */
+/* frameset are saving out files.                */
+/*                                               */
+/* Parameters: Pointer to any browser_data       */
+/*             structure in the frameset.        */
+/*                                               */
+/* Returns:    The number of file saves going on */
+/*             in the parent and any children it */
+/*             might have.                       */
+/*************************************************/
+
+static int toolbars_count_file_saves(browser_data * b)
+{
+  browser_data * ancestor = b->ancestor;
+
+  if (!ancestor) ancestor = b;
+
+  return toolbars_count_file_saves_r(ancestor);
+}
+
+/*************************************************/
+/* toolbars_count_file_saves_r()                 */
+/*                                               */
+/* Recursive back-end to                         */
+/* toolbars_count_file_saves.                    */
+/*                                               */
+/* Parameters: Pointer to the ancestor           */
+/*             browser_data struct in the        */
+/*             frameset.                         */
+/*                                               */
+/* Returns:    As toolbars_count_file_saves.     */
+/*************************************************/
+
+static int toolbars_count_file_saves_r(browser_data * b)
+{
+  int i, count = 0;
+
+  if (b->nchildren)
+  {
+    for (i = 0; i < b->nchildren; i++)
+    {
+      count += toolbars_count_file_saves_r(b->children[i]);
+    }
+  }
+
+  if (b->save_file) count ++;
+
+  return count;
 }
 
 /*************************************************/
 /* toolbars_calculate_progress()                 */
 /*                                               */
 /* Works out how much data has been fetched for  */
-/* a given browser and any children it may have. */
+/* a frameset.                                   */
 /*                                               */
-/* Parameters: Pointer to a browser_data struct  */
-/*             relevant to the fetch.            */
+/* If a file save is in progress, the amount of  */
+/* data fetched for that file save and nothing   */
+/* else is returned as a negative number (to     */
+/* flag that this is happening). Callers must    */
+/* remember to check for this, even if only to   */
+/* reverse the sign on the returned value.       */
+/*                                               */
+/* Parameters: Pointer to any browser_data       */
+/*             struct in the frameset in         */
+/*             question.                         */
 /*                                               */
 /* Returns:    The amount collectively fetched,  */
-/*             in bytes.                         */
+/*             in bytes, or the amount fetched   */
+/*             for a file save with its sign     */
+/*             reversed (i.e. a negative number) */
+/*             again in bytes.                   */
 /*************************************************/
 
 static int toolbars_calculate_progress(browser_data * b)
+{
+  browser_data * ancestor = b->ancestor;
+  int            saves    = toolbars_count_file_saves(b);
+
+  if (!ancestor) ancestor = b;
+
+  return toolbars_calculate_progress_r(ancestor, saves);
+}
+
+/*************************************************/
+/* toolbars_calculate_progress_r()               */
+/*                                               */
+/* Recursive back-end to                         */
+/* toolbars_calculate_progress.                  */
+/*                                               */
+/* Parameters: Pointer to the ancestor           */
+/*             browser_data struct in the        */
+/*             frameset;                         */
+/*                                               */
+/*             0 if no browser in the frameset   */
+/*             is saving data to a file, else    */
+/*             non-zero.                         */
+/*                                               */
+/* Returns:    As toolbars_calculate_progress.   */
+/*************************************************/
+
+static int toolbars_calculate_progress_r(browser_data * b, int saves)
 {
   int i, fetched = 0;
 
   if (b->nchildren)
   {
+    int localfetched;
+
+    /* For children, if the frameset has some file saving going on */
+    /* use only negative numbers returned, i.e. report cumulative  */
+    /* file sizes. Otherwise, use only positive numbers, i.e.      */
+    /* report image / page source fetched data.                    */
+
     for (i = 0; i < b->nchildren; i++)
     {
-      fetched += toolbars_calculate_progress(b->children[i]);
+      localfetched = toolbars_calculate_progress_r(b->children[i], saves);
+
+      if (saves)
+      {
+        if (localfetched < 0) fetched += localfetched;
+      }
+      else
+      {
+        if (localfetched > 0) fetched += localfetched;
+      }
     }
   }
 
-  /* Count the image data obtained so far */
+  if (b->save_file)
+  {
+    /* If saving, don't want to confuse the issue with any image */
+    /* fetch information or whatever. So just use the current    */
+    /* output file size.                                         */
 
-  fetched += image_total_bytes_fetched(b);
+    fetched = (int) (-(ftell(b->save_file)));
+  }
+  else
+  {
+    /* Count the image data obtained so far */
 
-  /* Add the current source store size */
+    fetched += image_total_bytes_fetched(b);
 
-  if (b->source) fetched += flex_size((flex_ptr) &b->source);
+    /* Add the current source store size */
 
-  /* If saving, don't want to confuse the issue with any image */
-  /* fetch information or whatever. So just use the current    */
-  /* output file size.                                         */
-
-// And for frames? Hmph.
-
-  if (b->save_file) fetched = (int) (ftell(b->save_file));
+    if (b->save_oldstore) fetched += b->save_oldstore;
+    else if (b->source)   fetched += flex_size((flex_ptr) &b->source);
+  }
 
   return fetched;
 }
@@ -2058,29 +2165,69 @@ static int toolbars_calculate_progress(browser_data * b)
 /* Parameters: Pointer to a browser_data struct  */
 /*             relevant to the fetch;            */
 /*                                               */
-/*             Pointer to the buffer.            */
+/*             Pointer to the buffer;            */
 /*                                               */
-/* Assumes:    That the buffer is large enough   */
-/*             for the string.                   */
+/*             Size of that buffer.              */
+/*                                               */
+/* Returns:    The number of file saves going on */
+/*             inside the frameset, from         */
+/*             toolbars_count_file_saves.        */
 /*************************************************/
 
-static void toolbars_create_progress(browser_data * b, char * buffer)
+static int toolbars_create_progress(browser_data * b, char * buffer, int buffer_size)
 {
   browser_data * ancestor = utils_ancestor(b);
+  int            saves    = 0;
+  int            len      = 1; /* Start with the terminating zero byte accounted for */
   int            fetched;
 
   fetched = toolbars_calculate_progress(ancestor);
+  if (fetched < 0) fetched = -fetched, saves = toolbars_count_file_saves(b); /* If a negative number, the absolute value is the amount of data being saved to a file */
+
+  /* Is the buffer big enough? */
+
+  if      (fetched < 10240)    len = utils_number_length(fetched);
+  else if (fetched < 10485760) len = utils_number_length((fetched + 512)    / 1024)    + 1; /* For 'K' */
+  else                         len = utils_number_length((fetched + 524288) / 1048576) + 1; /* For the 'M' */
+
+  if (saves) len += utils_number_length(saves) + 2;
+
+  if (len > buffer_size)
+  {
+    #ifdef TRACE
+
+      erb.errnum = Utils_Error_Custom_Normal;
+
+      sprintf(erb.errmess,
+              "Buffer size of %d isn't as large as required (%d) in toolbars_create_progress",
+              buffer_size,
+              len);
+
+      show_error_ret(&erb);
+
+    #endif
+
+    return saves;
+  }
 
   /* Write the amount into the buffer; '0' for <=0 bytes, a byte  */
   /* amount for less than 10K, a K amount for less than 10M, else */
   /* an amount in megabytes.                                      */
 
-  if      (fetched < 1)        strcpy (buffer, "0");
-  else if (fetched < 10240)    sprintf(buffer, "%d",   fetched);
-  else if (fetched < 10485760) sprintf(buffer, "%dK", (fetched + 512)    / 1024);
-  else                         sprintf(buffer, "%dM", (fetched + 524288) / 1048576);
+  if (saves < 2)
+  {
+    if      (fetched < 10240)    sprintf(buffer, "%d\0",  fetched);
+    else if (fetched < 10485760) sprintf(buffer, "%dK\0", (fetched + 512)    / 1024);
+    else                         sprintf(buffer, "%dM\0", (fetched + 524288) / 1048576);
+  }
+  else
+  {
+    if      (fetched < 10240)    sprintf(buffer, "%d: %d\0",  saves, fetched);
+    else if (fetched < 10485760) sprintf(buffer, "%d: %dK\0", saves, (fetched + 512)    / 1024);
+    else                         sprintf(buffer, "%d: %dM\0", saves, (fetched + 524288) / 1048576);
+  }
 
-  return;
+  return saves;
 }
 
 /*************************************************/
@@ -2427,7 +2574,7 @@ void toolbars_merged_to_status(browser_data * b, ObjectId t)
     {
       label[sizeof(label) - 1] = 0;
 
-      lookup_token("DisplayStatus:Status",0,0);
+      lookup_token("DisplayStats:Status",0,0);
       if (strcmp(label, tokens))
       {
         StrNCpy0(label, tokens);

@@ -33,6 +33,8 @@
 #			syntax has been ensured to allow folding text
 #			editors to fold the text sensibly - start on
 #			NL, hash, NL; end on '# -'.
+# 1997-08-28	ADH	Added Argonet build. Not much to do in the Makefile
+#			but needs the appropriate TaskObey files.
 #
 
 # -----------------------------------------------------------------------------
@@ -70,7 +72,7 @@ WIPE		= -wipe
 
 AFLAGS		= ${THROWBACK} -depend !Depend -nocache -stamp -quit
 CFLAGS		= ${THROWBACK} -depend !Depend -ffa ${INCLUDES} -wp
-CPFLAGS		= ~cfr~v
+CPFLAGS		= ~cfr~vn
 SQFLAGS		= -f
 WFLAGS		= ~cf~vr
 
@@ -87,7 +89,7 @@ DFLAGS		= -DCOMPAT_INET4 -DSINGLE_USER -DALIAS_URLS -DHACK_LINEONE
 DDFLAGS		= ${DFLAGS} -DSTRICT_PARSER -DTRACE
 DZFLAGS		= -DCOMPAT_INET4 -DSINGLE_USER -DHIDE_CGI -DANTI_TWITTER
 DDZFLAGS	= ${DZFLAGS} -DSTRICT_PARSER -DTRACE
-D_SURFFLAGS	= -DCOMPAT_INET4 -DSINGLE_USER -DHIDE_CGI -DANTI_TWITTER -DHACK_LINEONE
+D_SURFFLAGS	= -DCOMPAT_INET4 -DSINGLE_USER -DANTI_TWITTER -DREMOTE_HOTLIST -DHIDE_CGI -DHACK_LINEONE
 DD_SURFFLAGS	= ${D_SURFFLAGS} -DSTRICT_PARSER -DTRACE
 D_ITALKFLAGS	= -DCOMPAT_INET4 -DALIAS_URLS
 DD_ITALKFLAGS	= ${D_ITALKFLAGS} -DSTRICT_PARSER -DTRACE
@@ -182,6 +184,7 @@ OBJS = \
  o.Authorise		\
  o.Browser		\
  o.Cookies		\
+ o.DragBox		\
  o.Fetch		\
  o.FetchHTML		\
  o.FetchPage		\
@@ -193,6 +196,7 @@ OBJS = \
  o.Global		\
  o.Handlers		\
  o.History		\
+ o.Hotlist		\
  o.Images		\
  o.JavaScript		\
  o.LineOne		\
@@ -203,6 +207,7 @@ OBJS = \
  o.Mouse		\
  o.OpenURL		\
  o.Printing		\
+ o.PrintStyle		\
  o.Redraw		\
  o.Reformat		\
  o.Save			\
@@ -220,6 +225,7 @@ OBJSZ = \
  oz.Authorise		\
  oz.Browser		\
  oz.Cookies		\
+ oz.DragBox		\
  oz.Fetch		\
  oz.FetchHTML		\
  oz.FetchPage		\
@@ -231,6 +237,7 @@ OBJSZ = \
  oz.Global		\
  oz.Handlers		\
  oz.History		\
+ oz.Hotlist		\
  oz.Images		\
  oz.JavaScript		\
  oz.LineOne		\
@@ -241,6 +248,7 @@ OBJSZ = \
  oz.Mouse		\
  oz.OpenURL		\
  oz.Printing		\
+ oz.PrintStyle		\
  oz.Redraw		\
  oz.Reformat		\
  oz.Save		\
@@ -258,6 +266,7 @@ OBJSD = \
  od.Authorise		\
  od.Browser		\
  od.Cookies		\
+ od.DragBox		\
  od.Fetch		\
  od.FetchHTML		\
  od.FetchPage		\
@@ -269,6 +278,7 @@ OBJSD = \
  od.Global		\
  od.Handlers		\
  od.History		\
+ od.Hotlist		\
  od.Images		\
  od.JavaScript		\
  od.LineOne		\
@@ -279,6 +289,7 @@ OBJSD = \
  od.Mouse		\
  od.OpenURL		\
  od.Printing		\
+ od.PrintStyle		\
  od.Redraw		\
  od.Reformat		\
  od.Save		\
@@ -298,6 +309,7 @@ OBJSDZ = \
  odz.Authorise		\
  odz.Browser		\
  odz.Cookies		\
+ odz.DragBox		\
  odz.Fetch		\
  odz.FetchHTML		\
  odz.FetchPage		\
@@ -309,6 +321,7 @@ OBJSDZ = \
  odz.Global		\
  odz.Handlers		\
  odz.History		\
+ odz.Hotlist		\
  odz.Images		\
  odz.JavaScript		\
  odz.LineOne		\
@@ -319,6 +332,7 @@ OBJSDZ = \
  odz.Mouse		\
  odz.OpenURL		\
  odz.Printing		\
+ odz.PrintStyle		\
  odz.Redraw		\
  odz.Reformat		\
  odz.Save		\
@@ -338,6 +352,7 @@ OBJS_SURF = \
  o_surf.Authorise	\
  o_surf.Browser		\
  o_surf.Cookies		\
+ o_surf.DragBox		\
  o_surf.Fetch		\
  o_surf.FetchHTML	\
  o_surf.FetchPage	\
@@ -359,6 +374,7 @@ OBJS_SURF = \
  o_surf.Mouse		\
  o_surf.OpenURL		\
  o_surf.Printing	\
+ o_surf.PrintStyle	\
  o_surf.Redraw		\
  o_surf.Reformat	\
  o_surf.Save		\
@@ -376,6 +392,7 @@ OBJSD_SURF = \
  od_surf.Authorise	\
  od_surf.Browser	\
  od_surf.Cookies	\
+ od_surf.DragBox	\
  od_surf.Fetch		\
  od_surf.FetchHTML	\
  od_surf.FetchPage	\
@@ -397,6 +414,7 @@ OBJSD_SURF = \
  od_surf.Mouse		\
  od_surf.OpenURL	\
  od_surf.Printing	\
+ od_surf.PrintStyle	\
  od_surf.Redraw		\
  od_surf.Reformat	\
  od_surf.Save		\
@@ -416,6 +434,7 @@ OBJS_ITALK = \
  o_italk.Authorise	\
  o_italk.Browser	\
  o_italk.Cookies	\
+ o_italk.DragBox	\
  o_italk.Fetch		\
  o_italk.FetchHTML	\
  o_italk.FetchPage	\
@@ -427,6 +446,7 @@ OBJS_ITALK = \
  o_italk.Global		\
  o_italk.Handlers	\
  o_italk.History	\
+ o_italk.Hotlist	\
  o_italk.Images		\
  o_italk.JavaScript	\
  o_italk.LineOne	\
@@ -437,6 +457,7 @@ OBJS_ITALK = \
  o_italk.Mouse		\
  o_italk.OpenURL	\
  o_italk.Printing	\
+ o_italk.PrintStyle	\
  o_italk.Redraw		\
  o_italk.Reformat	\
  o_italk.Save		\
@@ -454,6 +475,7 @@ OBJSD_ITALK = \
  od_italk.Authorise	\
  od_italk.Browser	\
  od_italk.Cookies	\
+ od_italk.DragBox	\
  od_italk.Fetch		\
  od_italk.FetchHTML	\
  od_italk.FetchPage	\
@@ -465,6 +487,7 @@ OBJSD_ITALK = \
  od_italk.Global	\
  od_italk.Handlers	\
  od_italk.History	\
+ od_italk.Hotlist	\
  od_italk.Images	\
  od_italk.JavaScript	\
  od_italk.LineOne	\
@@ -475,6 +498,7 @@ OBJSD_ITALK = \
  od_italk.Mouse		\
  od_italk.OpenURL	\
  od_italk.Printing	\
+ od_italk.PrintStyle	\
  od_italk.Redraw	\
  od_italk.Reformat	\
  od_italk.Save		\
@@ -561,11 +585,12 @@ install_common: ${FILES}
 	${CP} ${LDIR}.!Sprites		${INSTDIR}.!Sprites	${CPFLAGS}
 	${CP} ${LDIR}.!Sprites22	${INSTDIR}.!Sprites22	${CPFLAGS}
 	${CP} ${LDIR}.Choices		${INSTDIR}.Choices	${CPFLAGS}
+	${CP} ${LDIR}.Controls		${INSTDIR}.Controls	${CPFLAGS}
 	${CP} ${LDIR}.Messages		${INSTDIR}.Messages	${CPFLAGS}
 	${CP} ${LDIR}.Res		${INSTDIR}.Res		${CPFLAGS}
 	${CP} ${LDIR}.Sprites		${INSTDIR}.Sprites	${CPFLAGS}
 	${MKDIR} ${INSTDIR}.User
-	${CP} ${LDIR}.User.Hotlist	${INSTDIR}.User.Hotlist	${CPFLAGS}
+	-${CP} ${LDIR}.User.Hotlist	${INSTDIR}.User.Hotlist	${CPFLAGS}
 
 install: install_common
 	${CP} ${LDIR}.!Run		${INSTDIR}.!Run		${CPFLAGS}
@@ -575,6 +600,7 @@ install: install_common
 	-Access ${INSTDIR}.!Sprites	lr/r
 	-Access ${INSTDIR}.!Sprites22	lr/r
 	-Access ${INSTDIR}.Choices	wr/r
+	-Access ${INSTDIR}.Controls	lr/r
 	-Access ${INSTDIR}.Messages	lr/r
 	-Access ${INSTDIR}.Res		lr/r
 	-Access ${INSTDIR}.Sprites	lr/r
@@ -601,6 +627,7 @@ resources:
 	${CP} ${LDIR}.!Sprites		${RESDIR}.!Sprites	${CPFLAGS}
 	${CP} ${LDIR}.!Sprites22	${RESDIR}.!Sprites22	${CPFLAGS}
 	${CP} ${LDIR}.Choices		${RESDIR}.Choices	${CPFLAGS}
+	${CP} ${LDIR}.Controls		${RESDIR}.Controls	${CPFLAGS}
 	${CP} ${LDIR}.Messages		${RESDIR}.Messages	${CPFLAGS}
 	${CP} ${LDIR}.Res		${RESDIR}.Res		${CPFLAGS}
 	${CP} ${LDIR}.Sprites		${RESDIR}.Sprites	${CPFLAGS}
@@ -644,6 +671,8 @@ o.dirs:
 	@${MKDIR} od_italk
 	@${MKDIR} rm
 	@${MKDIR} Targets
+	@${MKDIR} Targets.Argonet
+	@${MKDIR} Targets.Argonet.!Argo
 	@${MKDIR} Targets.Browse
 	@${MKDIR} Targets.Browse.!Browse
 	@${MKDIR} Targets.Intertalk
