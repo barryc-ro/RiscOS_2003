@@ -87,6 +87,7 @@ resources:
         ${MKDIR} ${RESDIR}.ScrSaver
         ${CP} Resources.${LOCALE}.!Run  ${RESDIR}.ScrSaver.!Run  ${CPFLAGS}
         ${CP} Resources.${LOCALE}.!RunImage  ${RESDIR}.ScrSaver.!RunImage  ${CPFLAGS}
+        ${CP} Resources.${LOCALE}.Sprites  ${RESDIR}.ScrSaver.Sprites  ${CPFLAGS}        
         @echo ${COMPONENT}: resource files copied
 
 #
