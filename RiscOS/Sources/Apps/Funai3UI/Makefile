@@ -77,13 +77,14 @@ dirs:
         $(MKDIR) $(RESRES).NCFrescoA
         $(MKDIR) $(RESRES).ScrSaver
         $(MKDIR) $(RESRES).ICAClient
-        IfThere Resources.$(UI_VARIANT) Then Set Translate_UIResources$Dir Resources.$(UI_VARIANT) Else Set Translate_UIResources$Dir Resources.$(USERIF)
+        IfThere Resources.${USERIF}.${LOCALE}.${UI_VARIANT}.${APP} Then \
+          $(CP) Resources.${USERIF}.${LOCALE}.${UI_VARIANT}.${APP} ${RESAPP} T~V~CFQR
         IfThere <Translate_UIResources$Dir>.$(LOCALE).$(APP) Then \
           $(CP) <Translate_UIResources$Dir>.$(LOCALE).$(APP) $(RESAPP) T~V~CFQR
         $(CP) <Translate_UIResources$Dir>.UK.$(APP) $(RESAPP) T~V~CFQR
 
 translate:
-        IfThere Translate.$(UI_VARIANT) Then Set UITranslateRes$Path Translate.$(UI_VARIANT).$(LOCALE).,Translate.$(UI_VARIANT).UK.,TranslateRes: Else Set UITranslateRes$Path TranslateRes:
+        Set UITranslateRes$Path Translate.${USERIF}.${LOCALE}.${UI_VARIANT}.,Translate.${USERIF}.${LOCALE}.,Translate.${USERIF}.UK.${UI_VARIANT}.,Translate.${USERIF}.UK.
         @echo ** Translating NCDialler...
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i UITranslateRes:$(APP).HTML.Dialling.Busy -o $(RESAPP).HTML.Dialling.Busy
         $(TRANSLATE) $(TRANSFLAGS) -m $(MAPPINGS) -i UITranslateRes:$(APP).HTML.Dialling.Connect -o $(RESAPP).HTML.Dialling.Connect
@@ -138,7 +139,7 @@ translate:
         
 resources: translate dirs
         @echo ** Exporting non-translatable resource files
-        IfThere Resources.$(UI_VARIANT) Then Set LocalUIResources$Path Resources.$(UI_VARIANT).$(LOCALE).,Resources.$(UI_VARIANT).UK.,LocalUserIFRes: Else Set LocalUIResources$Path LocalUserIFRes:
+        Set LocalUIResources$Path Resources.${USERIF}.${LOCALE}.${UI_VARIANT}.,Resources.${USERIF}.${LOCALE}.,Resources.${USERIF}.UK.${UI_VARIANT}.,Resources.${USERIF}.UK.
         $(CP) LocalUIResources:!Boot.!Run $(RESAPP).!Run $(CPFLAGS)
         $(CP) LocalUIResources:!Boot.Palette $(RESAPP).Palette $(CPFLAGS)
         $(CP) LocalUIResources:!Boot.HTML $(RESAPP).HTML $(CPFLAGS)
