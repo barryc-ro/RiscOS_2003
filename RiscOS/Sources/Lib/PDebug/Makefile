@@ -68,11 +68,9 @@ EXPORTS		= ${EXP_HDR}.${COMPONENT}
 
 OBJS = \
  o.Send \
- o.Interrupts \
 
 OBJSZ = \
  oz.Send \
- o.Interrupts \
 
 LIBS = \
  ${DESK} \
