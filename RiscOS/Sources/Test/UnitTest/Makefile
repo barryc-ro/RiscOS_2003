@@ -105,7 +105,7 @@ STB3      = ${BASEOBJS} ${Applic} ${OM}.serial_lib ${OM}.IRRemote ${OM}.MouseTes
             
 Lazarus   = ${BASEOBJS} ${Applic} ${OM}.serial_lib ${OM}.IRRemote ${OM}.MouseTest \
             ${OM}.Graphics ${OM}.CMOS ${OM}.SerialTest ${OM}.TestCard ${OM}.Printer \
-            ${OM}.MPEG ${OM}.Server ${OM}.Parallel ${OM}.Pop          
+            ${OM}.MPEG ${OM}.Server ${OM}.Parallel ${OM}.Pop ${OM}.Serial ${OM}.bufman         
 
 OBJS      = ${Lazarus}
 
