@@ -1,4 +1,12 @@
 # ResEd master Makefile
+#
+# ***********************************
+# ***	 C h a n g e   L i s t	  ***
+# ***********************************
+# Date	     Name   Description
+# ----	     ----   -----------
+# 05-Jun-98  SNB    Created
+#
 
 COMPONENT = ResEd
 EXPDIR = Export
@@ -10,8 +18,14 @@ TGT_MISC = aif.misc
 
 COMMONLIB = sources.common.o.commonlib
 
+
+# These are passed to the sub-makefiles so that they can locate their
+# Templates files and !WinEdit (for header file regeneration)
 TEMP_BASE = ^.^.Resources.!${COMPONENT}
 WINEDIT = WINEDIT=^.^.Resources.!WinEdit CFLAGS="-depend !Depend"
+
+# Sub-Makefiles rely on TARGET macro being not empty - clean target needs
+# to have some dummy setting to avoid errors.
 DUMMYTARGET = TARGET=foo
 
 #
