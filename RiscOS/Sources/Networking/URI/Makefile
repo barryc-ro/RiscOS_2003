@@ -113,7 +113,6 @@ ${DIRS}:
 	${MKDIR} aof
 	${MKDIR} l
 	${MKDIR} linked
-	${MKDIR} map
 	${MKDIR} o
 	${MKDIR} rm
 	create ${DIRS}
@@ -125,7 +124,6 @@ clean:
 	${WIPE} aof	${WFLAGS}
 	${WIPE} l	${WFLAGS}
 	${WIPE} linked	${WFLAGS}
-	${WIPE} map	${WFLAGS}
 	${WIPE} o	${WFLAGS}
 	${WIPE} rm	${WFLAGS}
 	@echo
@@ -192,7 +190,7 @@ ${LIBTARGET}: ${LIBOBJS} ${DIRS}
 
 rom_link: ${DIRS} ${ROM_MODULE}
 	@echo
-	${LD} -o linked.${COMPONENT} -map -rmf -base ${ADDRESS} ${ROMTARGET} ${ABSSYM} > map.${COMPONENT}
+	${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROMTARGET} ${ABSSYM}
 	${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
 	@echo ${COMPONENT}: rom_link complete
 
