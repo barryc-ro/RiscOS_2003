@@ -5,6 +5,14 @@
  *
  * 1997-10-20: BAL
  * Created from MimeQ.c.
+ *
+ * 1998-02-03: BAL
+ * Added support for failing gracefully on unsupported attachment/encoding
+ * types and took the opportunity to modularise the code a bit more.
+ *
+ * 1998-02-25: BAL
+ * Added support for tokenised delivery reports (ie. missing page reports,
+ * delivery confirmation reports).
  */
 
 
@@ -20,16 +28,22 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "toolbox.h"
+#include "msglib.h"
+
 /* Daytona */
 #include "BuildFlags.h"
-#include "NFELib.h"
+#include "NetFax/NFELib/NFELib.h"
+#include "PageList.h"
 #include "StateKicker.h"
 #include "emailrx.h"
 #include "MimeIf.h"
 #include "MimeQ.h"
+#include "main.h"
 #include "PrintQ.h"
 #include "RemXfer.h"
 #include "FileOps.h"
+#include "tokenmsg.h"
 
 
 
@@ -45,7 +59,28 @@ typedef enum
     MD_DECODE_ENTITY_HDR,
     MD_PROCESS_DECODE_MIME_ENTITY_HDR_RESULT,
     MD_PROCESS_DECODE_MIME_ENTITY_BODY_RESULT
-} MD_States;
+} MD_State;
+
+
+
+
+/* =============================================================================
+ * Declare global variables
+ */
+
+static char *document_directory;
+
+static int number_mime_entities;
+static int mime_entity_index;
+static int page;
+
+static NFE_LIST mime_list;  /* list of mime entities in message */
+static NFE_MIME mime_entity;
+static NFE_msg_class message_class;
+static NFE_NF_msg_class nf_message_class;
+
+static NFE_header *message_header;
+static FILE *fp;
 
 
 
@@ -54,6 +89,40 @@ typedef enum
  * Declare function prototypes
  */
 
+static MD_State idle (const int                      message_number,
+                      const messageDataBlock *const  message_data);
+
+static MD_State process_decode_hdr_result (
+                    const int                      message_number,
+                    const messageDataBlock *const  message_data);
+
+static MD_State process_decode_msg_result (
+                    const int                      message_number,
+                    const messageDataBlock *const  message_data);
+
+static MD_State decode_entity_hdr (
+                    const int                      message_number,
+                    const messageDataBlock *const  message_data);
+
+static MD_State process_decode_mime_entity_hdr_result (
+                    const int                      message_number,
+                    const messageDataBlock *const  message_data);
+
+static MD_State process_decode_mime_entity_body_result (
+                    const int                      message_number,
+                    const messageDataBlock *const  message_data);
+
+static MD_State decode_mime_hdr_done (void);
+
+static MD_State decode_mime_body_error (
+                    const messageDataBlock *const  message_data);
+
+static MD_State decode_mime_body_done (void);
+
+static void page_complete (void);
+
+static MD_State next_entity (void);
+
 static int write_headers (FILE *                   fp,
                           const NFE_header *const  message_header);
 
@@ -61,408 +130,564 @@ static int write_headers (FILE *                   fp,
 
 
 /* =============================================================================
- * Define functions
+ * Top-level MIME decode state machine.  Only handles one decoding session
+ * at a time.
  */
 
-extern void MimeDecode_StateMachine (int messageNumber,
-                                     messageDataBlock *messageData)
+extern void MimeDecode_StateMachine (int                 message_number,
+                                     messageDataBlock *  message_data)
 {
-    static char *document_directory;
-
-    static int number_mime_entities;
-    static int mime_entity_index;
-    static int page;
-
-    static MD_States state = MD_IDLE;
-    MD_States nextstate = state;
-
-    static NFE_LIST mime_list;  /* list of mime entities in message */
-    static NFE_MIME mime_entity;
-    static NFE_msg_class message_class;
-    static NFE_NF_msg_class nf_message_class;
-
-    static NFE_header *message_header;
-    static FILE *fp;
-
+    static MD_State  state = MD_IDLE;
 
     switch (state)
     {
         case MD_IDLE:
-            switch (messageNumber)
-            {
-                case RX_MD_DECODE_HDR:
-                    MimeIF_decode_RFC822_hdr (
-                        messageData->data.decode_header.raw_header,
-                        (NFE_header*)
-                            messageData->data.decode_header.message_header,
-                        messageData->data.decode_header.size,
-                        (BOOL) messageData->data.decode_header.file);
-
-                    nextstate = MD_PROCESS_DECODE_HDR_RESULT;
-                    break;
-
-                case RX_MD_DECODE_MSG:
-                    /* Store pointer to message header data structure for future
-                     * reference.  Assumes that all dynamically allocated data
-                     * in the message header remains valid for the lifetime of
-                     * this MIME decode session.
-                     */
-                    message_header = (NFE_header *)
-                        messageData->data.decode_message.message_header;
-
-                    document_directory =
-                        messageData->data.decode_message.document_directory;
-
-                    page = messageData->data.decode_message.start_page;
-
-                    MimeIF_decode_RFC822_msg (
-                        messageData->data.decode_message.filename,
-                        &mime_list,
-                        messageData->data.decode_message.size);
-
-                    nextstate = MD_PROCESS_DECODE_MSG_RESULT;
-                    break;
-
-                default:
-                    nextstate = MD_IDLE;
-                    break;
-            }
+            state = idle (message_number,
+                          message_data);
             break;
-
 
         case MD_PROCESS_DECODE_HDR_RESULT:
-            switch (messageNumber)
-            {
-                case MI_MD_DECODE_RFC822_HDR_ERROR:
-                {
-                    messageDataBlock *send_message;
-
-                    StateKicker_SendMessage (RemXfer_StateMachine,
-                                             MD_RX_DECODE_HDR_ERROR,
-                                             &send_message);
-
-                    send_message->data = messageData->data;
-                    nextstate = MD_IDLE;
-                    break;
-                }
-
-                case MI_MD_DECODE_RFC822_HDR_DONE:
-                    StateKicker_SendMessage (RemXfer_StateMachine,
-                                             MD_RX_DECODE_HDR_DONE,
-                                             NULL);
-                    nextstate = MD_IDLE;
-                    break;
-            }
+            state = process_decode_hdr_result (message_number,
+                                               message_data);
             break;
-
 
         case MD_PROCESS_DECODE_MSG_RESULT:
-            switch (messageNumber)
-            {
-                case MI_MD_DECODE_RFC822_MSG_ERROR:
-                {
-                    messageDataBlock *send_message;
-
-                    StateKicker_SendMessage (RemXfer_StateMachine,
-                                             MD_RX_DECODE_MSG_ERROR,
-                                             &send_message);
-
-                    send_message->data = messageData->data;
-                    nextstate = MD_IDLE;
-                    break;
-                }
-
-                case MI_MD_DECODE_RFC822_MSG_DONE:
-                    if (NFE_LIST_getnum (mime_list, &number_mime_entities) ==
-                            NFE_COMPLETED)
-                    {
-                        if (number_mime_entities > 0)
-                        {
-                            mime_entity_index = 0;
-
-                            StateKicker_SendMessage (MimeDecode_StateMachine,
-                                                     MD_MD_DECODE_ENTITY_HDR,
-                                                     NULL);
-                            nextstate = MD_DECODE_ENTITY_HDR;
-                        }
-                        else
-                        {
-                            messageDataBlock *send_message;
-
-                            /* Finished - no message body */
-                            StateKicker_SendMessage (RemXfer_StateMachine,
-                                                     MD_RX_DECODE_MSG_DONE,
-                                                     &send_message);
-
-                            send_message->data.message_decoded.next_page =
-                                page;
-
-                            /* Don't leak memory */
-                            mime_list = NFE_LIST_destroy (mime_list);
-
-                            nextstate = MD_IDLE;
-                        }
-                    }
-                    else
-                    {
-                        StateKicker_SendMessage (RemXfer_StateMachine,
-                                                 MD_RX_DECODE_MSG_ERROR,
-                                                 NULL);
-                        nextstate = MD_IDLE;
-                    }
-                    break;
-
-                default:
-                    nextstate = MD_PROCESS_DECODE_MSG_RESULT;
-                    break;
-            }
+            state = process_decode_msg_result (message_number,
+                                               message_data);
             break;
-
 
         case MD_DECODE_ENTITY_HDR:
-            switch (messageNumber)
-            {
-                case MD_MD_DECODE_ENTITY_HDR:
-                    mime_entity = NFE_LIST_get (mime_entity_index,
-                                                mime_list);
-
-                    if (mime_entity == NULL)
-                    {
-                        StateKicker_SendMessage (RemXfer_StateMachine,
-                                                 MD_RX_DECODE_MSG_ERROR,
-                                                 NULL);
-                        nextstate = MD_IDLE;
-                        break;
-                    }
-
-                    MimeIF_decode_MIME_hdr (mime_entity,
-                                            &message_class,
-                                            &nf_message_class);
-
-                    nextstate = MD_PROCESS_DECODE_MIME_ENTITY_HDR_RESULT;
-                    break;
-
-                default:
-                    nextstate = MD_DECODE_ENTITY_HDR;
-                    break;
-            }
+            state = decode_entity_hdr (message_number,
+                                       message_data);
             break;
-
 
         case MD_PROCESS_DECODE_MIME_ENTITY_HDR_RESULT:
-            switch (messageNumber)
-            {
-                case MI_MD_DECODE_MIME_HDR_ERROR:
-                {
-                    messageDataBlock *send_message;
-
-                    StateKicker_SendMessage (RemXfer_StateMachine,
-                                             MD_RX_DECODE_MSG_ERROR,
-                                             &send_message);
-
-                    send_message->data = messageData->data;
-                    nextstate = MD_IDLE;
-                    break;
-                }
-
-                case MI_MD_DECODE_MIME_HDR_DONE:
-                    ++mime_entity_index;
-
-                    switch (emailrx_check_supported (message_class,
-                                                     nf_message_class))
-                    {
-                        case EmailSupport_Partial:
-                        case EmailSupport_Full:
-                        {
-                            char page_filename[257];
-
-                            sprintf (page_filename,
-                                     "%s.%d",
-                                     document_directory,
-                                     page);
-
-                            fp = fopen (page_filename, "ab");
-                            if (fp == NULL)
-                            {
-                                StateKicker_SendMessage (RemXfer_StateMachine,
-                                                         MD_RX_DECODE_MSG_ERROR,
-                                                         NULL);
-                                nextstate = MD_IDLE;
-                                break;
-                            }
-
-                            /* We need to print some header information for
-                             * certain types of messages:
-                             *
-                             * All supported non-netfax messages
-                             * The following classes of netfax data:
-                             *   RText
-                             *   Reports
-                             *   Logs
-                             *   FaxErrors
-                             */
-                            if (message_class != NFE_MC_NETFAX_DATA ||
-                                (nf_message_class & (NFE_NFMC_RTEXT  |
-                                                     NFE_NFMC_REPORT |
-                                                     NFE_NFMC_LOG    |
-                                                     NFE_NFMC_FAXERROR)))
-                            {
-                                if (write_headers (fp,
-                                                   message_header))
-                                {
-                                    StateKicker_SendMessage (
-                                        RemXfer_StateMachine,
-                                        MD_RX_DECODE_MSG_ERROR,
-                                        NULL);
-                                    nextstate = MD_IDLE;
-                                    break;
-                                }
-                            }
-
-                            MimeIF_decode_MIME_body (mime_entity,
-                                                     page_filename,
-                                                     fp);
-
-                            StateKicker_SendMessage (RemXfer_StateMachine,
-                                                     MD_RX_NEW_PAGE,
-                                                     NULL);
-
-                            nextstate =
-                                MD_PROCESS_DECODE_MIME_ENTITY_BODY_RESULT;
-                            break;
-                        }
-
-                        default:
-                            /* This entity not supported.  Skip it */
-                            if (mime_entity_index < number_mime_entities)
-                            {
-                                StateKicker_SendMessage (
-                                    MimeDecode_StateMachine,
-                                    MD_MD_DECODE_ENTITY_HDR,
-                                    NULL);
-
-                                nextstate = MD_DECODE_ENTITY_HDR;
-                            }
-                            else
-                            {
-                                messageDataBlock *send_message;
-
-                                StateKicker_SendMessage (RemXfer_StateMachine,
-                                                         MD_RX_DECODE_MSG_DONE,
-                                                         &send_message);
-
-                                send_message->data.message_decoded.next_page =
-                                    page;
-
-                                /* Don't leak memory */
-                                mime_list = NFE_LIST_destroy (mime_list);
-
-                                nextstate = MD_IDLE;
-                            }
-                            break;
-                    }
-                    break;
-
-                default:
-                    nextstate = MD_PROCESS_DECODE_MIME_ENTITY_HDR_RESULT;
-                    break;
-            }
+            state = process_decode_mime_entity_hdr_result (message_number,
+                                                           message_data);
             break;
 
-
         case MD_PROCESS_DECODE_MIME_ENTITY_BODY_RESULT:
-            fclose (fp);
-
-            switch (messageNumber)
-            {
-                case MI_MD_DECODE_MIME_BODY_ERROR:
-                {
-                    messageDataBlock *send_message;
-
-                    StateKicker_SendMessage (RemXfer_StateMachine,
-                                             MD_RX_DECODE_MSG_ERROR,
-                                             &send_message);
-
-                    send_message->data = messageData->data;
-                    nextstate = MD_IDLE;
-                    break;
-                }
-
-                case MI_MD_DECODE_MIME_BODY_DONE:
-                {
-                    messageDataBlock *send_message;
-
-                    StateKicker_SendMessage (RemXfer_StateMachine,
-                                             MD_RX_PAGE_COMPLETE,
-                                             &send_message);
-
-                    /*>>>for now, look specifically for faxes or CAS,
-                     * treating everything else as text!!!
-                     */
-                    send_message->data.md_rx_page_complete.pageType =
-                        FILETYPE_TEXT;
-
-                    if (message_class == NFE_MC_NETFAX_DATA)
-                    {
-                        switch (nf_message_class)
-                        {
-                            case NFE_NFMC_FAX:
-                                send_message->data.md_rx_page_complete.pageType
-                                    = FILETYPE_TIFF;
-                                break;
-
-                            case NFE_NFMC_CONFIG:
-                                send_message->data.md_rx_page_complete.pageType
-                                    = FILETYPE_CONFIG;
-                                break;
-                        }
-                    }
-
-                    send_message->data.md_rx_page_complete.pageNum = page;
-                    ++page;
-
-                    if (mime_entity_index < number_mime_entities)
-                    {
-                        StateKicker_SendMessage (MimeDecode_StateMachine,
-                                                 MD_MD_DECODE_ENTITY_HDR,
-                                                 NULL);
-
-                        nextstate = MD_DECODE_ENTITY_HDR;
-                    }
-                    else
-                    {
-                        messageDataBlock *send_message;
-
-                        StateKicker_SendMessage (RemXfer_StateMachine,
-                                                 MD_RX_DECODE_MSG_DONE,
-                                                 &send_message);
-
-                        send_message->data.message_decoded.next_page = page;
-
-                        /* Don't leak memory */
-                        mime_list = NFE_LIST_destroy (mime_list);
-
-                        nextstate = MD_IDLE;
-                    }
-
-                    break;
-                }
-
-                default:
-                    nextstate = MD_PROCESS_DECODE_MIME_ENTITY_BODY_RESULT;
-                    break;
-            }
+            state = process_decode_mime_entity_body_result (message_number,
+                                                            message_data);
             break;
 
         default:
-            /* Error: state machine has entered an undefined state,
-             * panic and go back to idle
+            state = MD_IDLE;
+            break;
+    }
+}
+
+
+
+
+/* =============================================================================
+ * Routines to deal with inputs for each state of the MIME decode state
+ * machine.
+ */
+
+static MD_State idle (const int                      message_number,
+                      const messageDataBlock *const  message_data)
+{
+    MD_State  nextstate;
+
+    switch (message_number)
+    {
+        case RX_MD_DECODE_HDR:
+            MimeIF_decode_RFC822_hdr (
+                message_data->data.decode_header.raw_header,
+                (NFE_header*) message_data->data.decode_header.message_header,
+                message_data->data.decode_header.size,
+                (BOOL) message_data->data.decode_header.file);
+
+            nextstate = MD_PROCESS_DECODE_HDR_RESULT;
+            break;
+
+        case RX_MD_DECODE_MSG:
+            /* Store pointer to message header data structure for future
+             * reference.  Assumes that all dynamically allocated data
+             * in the message header remains valid for the lifetime of
+             * this MIME decode session.
              */
+            message_header = (NFE_header *)
+                message_data->data.decode_message.message_header;
+
+            document_directory =
+                message_data->data.decode_message.document_directory;
+
+            page = message_data->data.decode_message.start_page;
+
+            MimeIF_decode_RFC822_msg (
+                message_data->data.decode_message.filename,
+                &mime_list,
+                message_data->data.decode_message.size);
+
+            nextstate = MD_PROCESS_DECODE_MSG_RESULT;
+            break;
+
+        default:
             nextstate = MD_IDLE;
             break;
     }
 
-    state = nextstate;
+    return nextstate;
+}
+
+
+
+
+static MD_State process_decode_hdr_result (
+                    const int                      message_number,
+                    const messageDataBlock *const  message_data)
+{
+    MD_State  nextstate;
+
+    switch (message_number)
+    {
+        case MI_MD_DECODE_RFC822_HDR_ERROR:
+        {
+            messageDataBlock *send_message;
+
+            StateKicker_SendMessage (RemXfer_StateMachine,
+                                     MD_RX_DECODE_HDR_ERROR,
+                                     &send_message);
+
+            send_message->data = message_data->data;
+            nextstate = MD_IDLE;
+            break;
+        }
+
+        case MI_MD_DECODE_RFC822_HDR_DONE:
+            StateKicker_SendMessage (RemXfer_StateMachine,
+                                     MD_RX_DECODE_HDR_DONE,
+                                     NULL);
+            nextstate = MD_IDLE;
+            break;
+
+        default:
+            nextstate = MD_PROCESS_DECODE_HDR_RESULT;
+            break;
+    }
+
+    return nextstate;
+}
+
+
+
+
+static MD_State process_decode_msg_result (
+                    const int                      message_number,
+                    const messageDataBlock *const  message_data)
+{
+    MD_State  nextstate;
+
+    switch (message_number)
+    {
+        case MI_MD_DECODE_RFC822_MSG_ERROR:
+        {
+            messageDataBlock *send_message;
+
+            StateKicker_SendMessage (RemXfer_StateMachine,
+                                     MD_RX_DECODE_MSG_ERROR,
+                                     &send_message);
+
+            send_message->data = message_data->data;
+            nextstate = MD_IDLE;
+            break;
+        }
+
+        case MI_MD_DECODE_RFC822_MSG_DONE:
+            if (NFE_LIST_getnum (mime_list, &number_mime_entities) ==
+                    NFE_COMPLETED)
+            {
+                if (number_mime_entities > 0)
+                {
+                    mime_entity_index = 0;
+
+                    StateKicker_SendMessage (MimeDecode_StateMachine,
+                                             MD_MD_DECODE_ENTITY_HDR,
+                                             NULL);
+                    nextstate = MD_DECODE_ENTITY_HDR;
+                }
+                else
+                {
+                    messageDataBlock *send_message;
+
+                    /* Finished - no message body */
+                    StateKicker_SendMessage (RemXfer_StateMachine,
+                                             MD_RX_DECODE_MSG_DONE,
+                                             &send_message);
+
+                    send_message->data.message_decoded.next_page =
+                        page;
+
+                    /* Don't leak memory */
+                    mime_list = NFE_LIST_destroy (mime_list);
+
+                    nextstate = MD_IDLE;
+                }
+            }
+            else
+            {
+                StateKicker_SendMessage (RemXfer_StateMachine,
+                                         MD_RX_DECODE_MSG_ERROR,
+                                         NULL);
+                nextstate = MD_IDLE;
+            }
+            break;
+
+        default:
+            nextstate = MD_PROCESS_DECODE_MSG_RESULT;
+            break;
+    }
+
+    return nextstate;
+}
+
+
+
+
+static MD_State decode_entity_hdr (
+                    const int                      message_number,
+                    const messageDataBlock *const  message_data)
+{
+    MD_State  nextstate;
+
+    switch (message_number)
+    {
+        case MD_MD_DECODE_ENTITY_HDR:
+            mime_entity = NFE_LIST_get (mime_entity_index,
+                                        mime_list);
+
+            if (mime_entity == NULL)
+            {
+                StateKicker_SendMessage (RemXfer_StateMachine,
+                                         MD_RX_DECODE_MSG_ERROR,
+                                         NULL);
+                nextstate = MD_IDLE;
+                break;
+            }
+
+            MimeIF_decode_MIME_hdr (mime_entity,
+                                    &message_class,
+                                    &nf_message_class);
+
+            nextstate = MD_PROCESS_DECODE_MIME_ENTITY_HDR_RESULT;
+            break;
+
+        default:
+            nextstate = MD_DECODE_ENTITY_HDR;
+            break;
+    }
+
+    return nextstate;
+}
+
+
+
+
+static MD_State process_decode_mime_entity_hdr_result (
+                    const int                      message_number,
+                    const messageDataBlock *const  message_data)
+{
+    MD_State  nextstate;
+
+    switch (message_number)
+    {
+        case MI_MD_DECODE_MIME_HDR_ERROR:
+        {
+            messageDataBlock *send_message;
+
+            StateKicker_SendMessage (RemXfer_StateMachine,
+                                     MD_RX_DECODE_MSG_ERROR,
+                                     &send_message);
+
+            send_message->data = message_data->data;
+            nextstate = MD_IDLE;
+            break;
+        }
+
+        case MI_MD_DECODE_MIME_HDR_DONE:
+            nextstate = decode_mime_hdr_done ();
+            break;
+
+        default:
+            nextstate = MD_PROCESS_DECODE_MIME_ENTITY_HDR_RESULT;
+            break;
+    }
+
+    return nextstate;
+}
+
+
+
+
+static MD_State process_decode_mime_entity_body_result (
+                    const int                      message_number,
+                    const messageDataBlock *const  message_data)
+{
+    MD_State  nextstate;
+
+    switch (message_number)
+    {
+        case MI_MD_DECODE_MIME_BODY_ERROR:
+            nextstate = decode_mime_body_error (message_data);
+            break;
+
+        case MI_MD_DECODE_MIME_BODY_DONE:
+            nextstate = decode_mime_body_done ();
+            break;
+
+        default:
+            nextstate = MD_PROCESS_DECODE_MIME_ENTITY_BODY_RESULT;
+            break;
+    }
+
+    fclose (fp);
+
+    return nextstate;
+}
+
+
+
+
+/* =============================================================================
+ * Miscellaneous routines.
+ */
+
+static MD_State decode_mime_hdr_done (void)
+{
+    MD_State  nextstate;
+
+    ++mime_entity_index;
+
+    switch (emailrx_check_supported (message_class,
+                                     nf_message_class))
+    {
+        case EmailSupport_Partial:
+        case EmailSupport_Full:
+        {
+            char page_filename[257];
+
+            sprintf (page_filename,
+                     "%s.%d",
+                     document_directory,
+                     page);
+
+            fp = fopen (page_filename, "ab");
+            if (fp == NULL)
+            {
+                StateKicker_SendMessage (RemXfer_StateMachine,
+                                         MD_RX_DECODE_MSG_ERROR,
+                                         NULL);
+                nextstate = MD_IDLE;
+                break;
+            }
+
+            /* We need to print some header information for certain types of
+             * messages:
+             *
+             * All supported non-netfax messages
+             * The following classes of netfax data:
+             *   RText
+             *   Reports
+             *   Logs
+             *   FaxErrors
+             */
+            if (message_class != NFE_MC_NETFAX_DATA ||
+                (nf_message_class & (NFE_NFMC_RTEXT  |
+                                     NFE_NFMC_REPORT |
+                                     NFE_NFMC_LOG    |
+                                     NFE_NFMC_DELIVERYREPORT)))
+            {
+                if (write_headers (fp,
+                                   message_header))
+                {
+                    StateKicker_SendMessage (
+                        RemXfer_StateMachine,
+                        MD_RX_DECODE_MSG_ERROR,
+                        NULL);
+                    nextstate = MD_IDLE;
+                    break;
+                }
+            }
+
+            MimeIF_decode_MIME_body (mime_entity,
+                                     page_filename,
+                                     fp);
+
+            StateKicker_SendMessage (RemXfer_StateMachine,
+                                     MD_RX_NEW_PAGE,
+                                     NULL);
+
+            nextstate = MD_PROCESS_DECODE_MIME_ENTITY_BODY_RESULT;
+            break;
+        }
+
+        default:
+            /* This entity not supported.  Skip it */
+            nextstate = next_entity ();
+            break;
+    }
+
+    return nextstate;
+}
+
+
+
+
+static MD_State decode_mime_body_error (
+                    const messageDataBlock *const  message_data)
+{
+    MD_State  nextstate;
+
+
+    switch (message_data->data.mime_error.rc)
+    {
+        case NFE_NOTSUPPORTED:
+        {
+            char *  error_string;
+
+            error_string = lookup_message_token (&message_block,
+                                                 "MimeDecode_NotSupported");
+            if (error_string != NULL)
+            {
+                fprintf (fp,
+                         "%s\n",
+                         error_string);
+            }
+
+            page_complete ();
+            nextstate = next_entity ();
+            break;
+        }
+
+        default:
+        {
+            messageDataBlock *  send_message;
+
+            StateKicker_SendMessage (RemXfer_StateMachine,
+                                     MD_RX_DECODE_MSG_ERROR,
+                                     &send_message);
+
+            send_message->data = message_data->data;
+            nextstate = MD_IDLE;
+            break;
+        }
+    }
+
+    return nextstate;
+}
+
+
+
+
+static MD_State decode_mime_body_done (void)
+{
+    MD_State  nextstate;
+
+    page_complete ();
+    nextstate = next_entity ();
+
+    return nextstate;
+}
+
+
+
+
+static void page_complete (void)
+{
+    messageDataBlock *  send_message;
+
+    StateKicker_SendMessage (RemXfer_StateMachine,
+                             MD_RX_PAGE_COMPLETE,
+                             &send_message);
+
+    /*>>>for now, look specifically for faxes or CAS,
+     * treating everything else as text!!!
+     */
+    send_message->data.md_rx_page_complete.pageClass = PageClass_Text;
+    send_message->data.md_rx_page_complete.pageType  = PageType_Text_ENote;
+    send_message->data.md_rx_page_complete.fileType  = FILETYPE_TEXT;
+
+    if (message_class == NFE_MC_NETFAX_DATA)
+    {
+        switch (nf_message_class)
+        {
+            case NFE_NFMC_FAX:
+                send_message->data.md_rx_page_complete.pageClass =
+                    PageClass_TIFF;
+
+                send_message->data.md_rx_page_complete.pageType =
+                    PageType_TIFF_2DMMR;
+
+                send_message->data.md_rx_page_complete.fileType =
+                    FILETYPE_TIFF;
+                break;
+
+            case NFE_NFMC_CONFIG:
+                send_message->data.md_rx_page_complete.pageClass =
+                    PageClass_Config;
+
+                send_message->data.md_rx_page_complete.pageType =
+                    PageType_Config;
+
+                send_message->data.md_rx_page_complete.fileType =
+                    FILETYPE_CONFIG;
+                break;
+
+            case NFE_NFMC_DELIVERYREPORT:
+            {
+                char page_filename[257];
+
+                sprintf (page_filename,
+                         "%s.%d",
+                         document_directory,
+                         page);
+
+                tokenmsg_parse_message (page_filename,
+                                        page_filename);
+
+                break;
+            }
+        }
+    }
+
+    send_message->data.md_rx_page_complete.pageNum = page;
+    ++page;
+}
+
+
+
+
+static MD_State next_entity (void)
+{
+    MD_State  nextstate;
+
+    if (mime_entity_index < number_mime_entities)
+    {
+        StateKicker_SendMessage (MimeDecode_StateMachine,
+                                 MD_MD_DECODE_ENTITY_HDR,
+                                 NULL);
+
+        nextstate = MD_DECODE_ENTITY_HDR;
+    }
+    else
+    {
+        messageDataBlock *send_message;
+
+        StateKicker_SendMessage (RemXfer_StateMachine,
+                                 MD_RX_DECODE_MSG_DONE,
+                                 &send_message);
+
+        send_message->data.message_decoded.next_page = page;
+
+        /* Don't leak memory */
+        mime_list = NFE_LIST_destroy (mime_list);
+
+        nextstate = MD_IDLE;
+    }
+
+    return nextstate;
 }
 
 
@@ -471,9 +696,7 @@ extern void MimeDecode_StateMachine (int messageNumber,
 static int write_headers (FILE *                   fp,
                           const NFE_header *const  message_header)
 {
-    char         text_time[64];
-    char *       full_address;
-    struct tm *  component_time;
+    char *  full_address;
 
 
     if (fputs ("From: ",
@@ -526,14 +749,7 @@ static int write_headers (FILE *                   fp,
         return 1;
     }
 
-    component_time = localtime (&message_header->date);
-
-    strftime (text_time,
-              sizeof (text_time),
-              "%x %X",
-              component_time);
-
-    if (fputs (text_time,
+    if (fputs (message_header->date_hdr,
                fp) == EOF)
     {
         return 1;

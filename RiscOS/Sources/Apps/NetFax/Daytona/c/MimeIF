@@ -14,10 +14,11 @@
 #include <string.h>
 #include "kernel.h"
 
+#include "PageList.h"
 #include "StateKicker.h"
 #include "MimeQ.h"
 
-#include "NFELib.h"
+#include "NetFax/NFELib/NFELib.h"
 #include "MimeIF.h"
 
 #include "wimp.h"
@@ -25,9 +26,15 @@
 
 #include "DebugLib.h"
 #include "SetupIF.h"
-#include "numconvert.h"
+#include "NumConvert/NumConvert.h"
 
 #include "FileOps.h"
+
+
+/*>>>where should these live???*/
+#define DEVICE_NAME "Daytona"
+#define DEVICE_CLASS 1
+
 
 /*
  * N.B. These interface routines assume that ONLY ONE operation of a
@@ -53,6 +60,19 @@ static void MimeIF_SendRCError(void (*StateMachine)(int messageNumber, messageDa
 int MimeIF_callback_required = 0;	/* a count of the number of time-slicing operations in progress */
 
 
+static void set_serial_num(char *serial_num)
+{
+    /* Hmm, NFELib wants 8 bytes of serial number, we have 4    */ 
+    /*      poke lsb of eeprom_serial_number into serial_num[0] */
+    /*           msb of eeprom_serial_number into serial_num[3] */
+    /*           zero serial_num[4..7]                          */
+
+    unsigned int *wp = (unsigned int *)serial_num;
+
+    *wp++ = eeprom_serial_number;
+    *wp   = 0;
+}
+
 /* a struct and ONE variable to hold the parameters of ONE call to NFE_create_MIME_entity between time-slices */
 struct _paramater_list_create_MIME_entity
 {
@@ -71,13 +91,10 @@ typedef struct _paramater_list_create_MIME_entity paramater_list_create_MIME_ent
 static paramater_list_create_MIME_entity create_MIME_entity;	/* hold parameters between time-slices */
 static BOOL								 doing_create_MIME_entity = FALSE;
 
-extern void MimeIF_create_MIME_entity(const char *src_directory, const char *src_leafname, const char *dst_directory, const char *dst_leafname, int filetype, unsigned int doc_num, unsigned int page_num, NFE_MIME *pobj, NFE_NF_msg_class *pclass)
+extern void MimeIF_create_MIME_entity(const char *src_directory, const char *src_leafname, const char *dst_directory, const char *dst_leafname,
+                                      PageClasses PageClass, PageTypes PageType, unsigned int doc_num, unsigned int page_num,
+                                      NFE_MIME *pobj, NFE_NF_msg_class *pclass)
 {
-	/*>>>these should be parameters*/
-    char            *serial = "\x1\x2\x3\x4\x5\x6\x7\x8";	/*>>>pass in eeprom_serial_number?*/
-
-    /*<<<*/
-
 	_kernel_oserror *error;
 	clock_t t_slice = clock () + TIMESLICE;
     NFE_rcode returncode;
@@ -86,21 +103,29 @@ extern void MimeIF_create_MIME_entity(const char *src_directory, const char *src
 
 	dprintf((NULL, "MimeIF_create_MIME_entity (entry)\n"));
 
-	switch (filetype)
-	{
-		case FILETYPE_TEXT:
-			msg_class = NFE_NFMC_RTEXT;
-			break;
+    switch (PageClass)
+    {
+        case PageClass_TIFF:
+            msg_class = NFE_NFMC_FAX;
+            break;
 
-		case FILETYPE_LOGFILE:
-        	msg_class = NFE_NFMC_LOG;
-			break;
+        case PageClass_CAS_Reply:
+            msg_class = NFE_NFMC_REPORT;
+            break;
 
-		case FILETYPE_TIFF:
-		default:
-			msg_class = NFE_NFMC_FAX;
-			break;
-	} 
+        case PageClass_LogFile:
+            msg_class = NFE_NFMC_LOG;
+            break;
+
+        case PageClass_SendReceipt:
+            msg_class = NFE_NFMC_DELIVERYREPORT;
+            break;
+
+        case PageClass_Text:
+        default:
+            msg_class = NFE_NFMC_RTEXT;
+            break;
+    }
 
 	*pclass = msg_class;
 
@@ -117,7 +142,7 @@ extern void MimeIF_create_MIME_entity(const char *src_directory, const char *src
 	    strcat(create_MIME_entity.out_file, ".");
 	    strcat(create_MIME_entity.out_file, dst_leafname);
 
-		strcpy(create_MIME_entity.serial_num, serial);
+		set_serial_num(create_MIME_entity.serial_num);
 
 	    create_MIME_entity.doc_num  = doc_num;
 	    create_MIME_entity.page_num = page_num;
@@ -216,20 +241,16 @@ extern void MimeIF_create_RFC822_msg(const char *dst_directory, const char *dst_
                                      const char *from_emailaddress, const char *domain_name,
                                      /*const*/ char *subject,
                                      unsigned int doc_num, unsigned int msg_num_pages, BOOL exact_num_pages, unsigned int loPage, unsigned int hiPage,
-                                     int objcount, NFE_MIME *objlist, NFE_NF_msg_class *classlist)
+                                     int objcount, NFE_MIME *objlist, NFE_NF_msg_class *classlist,
+                                     BOOL request_receipt)
 {
-	/*>>>these should be parameters*/
-    char            *serial = "\x1\x2\x3\x4\x5\x6\x7\x8";	/*>>>pass in eeprom_serial_number?*/
-
-    /*<<<*/
-
 	static char stash_to_emailaddress[256];
 	static char stash_from_emailaddress[256];
 	static char stash_domain_name[256];
 	static char stash_to_real_name[256];
 
-    static char stash_fax_num[64];
-    static char stash_phone_num[64];
+    static char stash_fax_num[64];      /* our fax number in email format */
+    static char stash_phone_num[64];    /* our voice number in email format */
 
 	static NFE_header header;
 
@@ -255,16 +276,30 @@ extern void MimeIF_create_RFC822_msg(const char *dst_directory, const char *dst_
         header.to.real_name = stash_to_real_name;
         header.from.address = stash_from_emailaddress; /*"rmanby@rmanby.acorn.co.uk";*/
         header.from.real_name = setup_contact_name;    /* eg "Richard C. Manby"; */
-        header.subject = subject;
+
+        if (request_receipt)
+        {
+            /* it would be better if we passed an email address & real name, to allow */
+            /* receipts to go elsewhere, but this meets the spec for now!             */
+            header.return_receipt_to.address = stash_from_emailaddress;
+            header.return_receipt_to.real_name = setup_contact_name;
+        }
+        else
+        {
+            header.return_receipt_to.address = NULL;
+            header.return_receipt_to.real_name = NULL;
+        }
+
+        header.subject = subject;   /* curious: why isn't this stashed? */
         header.id.first_page_num = loPage;
         header.id.last_page_num = hiPage;
         header.id.doc_num = doc_num;
         header.id.msg_num_pages = msg_num_pages;
         header.id.exact_num_pages = (BOOL)exact_num_pages;
         header.id.iap_username = setup_iap_username; /*"rmanby";*/
-        header.details.device = "Daytona";
-        header.details.device_class = 1;	/*>>>eh*/
-        strcpy(header.details.serial_num, serial);
+        header.details.device = DEVICE_NAME;            /*"Daytona"*/
+        header.details.device_class = DEVICE_CLASS;     /* 1 */
+        set_serial_num(header.details.serial_num);
         header.details.software_rev_major = setup_version_major;
         header.details.software_rev_minor = setup_version_minor;
         header.details.domain = stash_domain_name; /*"rmanby.acorn.co.uk";*/
@@ -304,7 +339,7 @@ extern void MimeIF_create_RFC822_msg(const char *dst_directory, const char *dst_
 			                              &returncode
 			                             );
         }
-        
+
 		/* set various states that common_create_RFC822_msg expects */
 		doing_create_RFC822_msg = TRUE;
 	    MimeIF_callback_required += 1;
@@ -537,6 +572,7 @@ static void common_decode_RFC822_msg(_kernel_oserror *error, NFE_rcode returncod
 		switch (returncode)
 		{
 			case NFE_COMPLETED:
+			case NFE_TRUNCATEDMULTI:
 				StateKicker_SendMessage(MimeDecode_StateMachine, MI_MD_DECODE_RFC822_MSG_DONE, NULL);
 				break;
 

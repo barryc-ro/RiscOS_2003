@@ -16,6 +16,7 @@
 #include <stddef.h>
 #include "kernel.h"
 
+#include "PageList.h"
 #include "StateKicker.h"
 #include "Screen.h"
 
@@ -43,6 +44,7 @@ typedef enum s1_priority { /* Status line 1 */
 
    S1_RM_SC_INCOMING,
    S1_PQ_SC_NEW_DOCUMENT,
+   S1_PQ_SC_DOCUMENT_DETAILS,
    S1_PQ_SC_NEW_PAGE,
    S1_PQ_SC_PAGE_COMPLETE,
    S1_PQ_SC_DOCUMENT_COMPLETE,
@@ -85,6 +87,7 @@ typedef enum s2_priority { /* Status line 2 */
 
    S2_RM_SC_INCOMING,
    S2_PQ_SC_NEW_DOCUMENT,
+   S2_PQ_SC_DOCUMENT_DETAILS,
    S2_PQ_SC_NEW_PAGE,
    S2_PQ_SC_PAGE_COMPLETE,
    S2_PQ_SC_DOCUMENT_COMPLETE,
@@ -124,6 +127,7 @@ typedef enum t_priority { /* Title */
 
    T_RM_SC_INCOMING,
 //   T_PQ_SC_NEW_DOCUMENT,
+//   T_PQ_SC_DOCUMENT_DETAILS,
 //   T_PQ_SC_NEW_PAGE,
 //   T_PQ_SC_PAGE_COMPLETE,
    T_PQ_SC_DOCUMENT_COMPLETE,
@@ -163,6 +167,7 @@ typedef enum a_priority { /* Animation */
 
    A_RM_SC_INCOMING,
    A_PQ_SC_NEW_DOCUMENT,
+//   A_PQ_SC_DOCUMENT_DETAILS,
    A_PQ_SC_NEW_PAGE,
    A_PQ_SC_PAGE_COMPLETE,
    A_PQ_SC_DOCUMENT_COMPLETE,
@@ -195,6 +200,7 @@ typedef enum a_priority { /* Animation */
 
 #define Screen_Remote_Modem 0
 #define Screen_Local_Modem 1
+#define Screen_Refresh 2
 #define Screen_Anim_Left 1
 #define Screen_Anim_Middle 2
 #define Screen_Anim_Right 4
@@ -203,13 +209,13 @@ typedef enum a_priority { /* Animation */
 #define Screen_BufSize 32 /* Big enough for "TokTooLong" and "decide" and stringified int */
 
 static int Screen_pri_s[2][2] = {0}; /* Priority for status lines [line][port] */
-static char Screen_tok_s[2][2][Screen_BufSize]; /* Token for status lines [line][port][token] */
+static char Screen_tok_s[2][2][Screen_BufSize] = {0}; /* Token for status lines [line][port][token] */
 static int Screen_pri_t[2] = {0}; /* Priority for title [port] */
-static char Screen_tok_t[2][Screen_BufSize]; /* Token for title [port][token] */
+static char Screen_tok_t[2][Screen_BufSize] = {"Home_Title", "Home_Title"}; /* Token for title [port][token] */
 static int Screen_pri_a[2] = {0}; /* Priority for animation [port] */
-static char Screen_tok_a[2][Screen_BufSize]; /* Token for animation [port][token] */
+static char Screen_tok_a[2][Screen_BufSize] = {"idle", "idle"}; /* Token for animation [port][token] */
 static char Screen_flags_a[2] = {0}; /* Flags for animation [port] */
-static char Screen_param_s[2][2][2][Screen_BufSize]; /* Token for status lines [line][port][parnum][param] */
+static char Screen_param_s[2][2][2][Screen_BufSize] = {0}; /* Params for status lines [line][port][parnum][param] */
 
 /*
  * Stuff for squirrelling information away
@@ -234,6 +240,7 @@ static SQTx sqtx, sqtx2;
 typedef struct sqrx {
    int currpage;
    Context context;
+   char contact[Screen_BufSize];
 } SQRx;
 
 static SQRx sqrx, sqrx2;
@@ -260,6 +267,7 @@ extern int global_routing;
 
 
 #define SPRITE_QUERRYROUTE "decide_0"
+#define SPRITE_QUERRYCANCEL "decide_0"
 #define SPRITE_REPORTERROR "decide_0"	/*>>>will do until John sells us a better one*/
 
 
@@ -268,7 +276,8 @@ typedef enum _HL_RC HL_RC;
 
 extern int HWM_Check(void); /*eh??*/
 
-static void Screen_AnswerRoute(int action);
+static void Screen_AnswerRoute(int DecideAction, int UserChoice);
+static void Screen_AnswerCancel(int DecideAction, int UserChoice);
 
 /*
  * Action messages from LocXfer and RemXfer
@@ -473,7 +482,6 @@ This blows up!
         /* if the processId supplied matches that for the scan, we are streaming */
         /* about to try a SQ_RX_DIAL_FAX or SQ_RX_DIAL_DAYTONA, stash the number and contact name away */
         /* then wait for RM_SC_DIALLING before triggering animations */
-        //@@ Huh, why wait?
         case SQ_SC_CONTEXT_DIRECT:
             /* Lodge context, so that RemModem can report dial progress without knowing who we are calling */
             sqtx.context = Direct;
@@ -562,7 +570,10 @@ This blows up!
             ui_deregister_animation(1);
             ui_deregister_animation(2);
             ui_deregister_animation(4);
+            ui_home_set_sprite(2, "blank_c");
             ui_home_set_sprite(2, "dialerror");
+            ui_home_set_sprite(4, "blank_a");
+            ui_home_set_sprite(4, "dialerror_r");
             ui_home_set_status(1, "TxFax_NoCon", NULL, NULL);
             ui_home_set_status(2, "TxFax_Try", NULL, NULL);
             break;
@@ -706,6 +717,7 @@ This blows up!
 
 /* PrintQ - Incoming call */
         case RM_SC_INCOMING:
+            LogFileIF_Message("RM_SC_INCOMING");
             sqrx.context = Direct;
 #if 0
             pqrx.pid = 0;    /* NYA */
@@ -729,6 +741,7 @@ This blows up!
             break;
 
         case PQ_SC_NEW_DOCUMENT:
+            LogFileIF_Message("PQ_SC_NEW_DOCUMENT");
             sqrx.currpage = 1;
 #if 0
             pqrx.pid = messageData->data.new_document_dir.pid;
@@ -750,9 +763,14 @@ This blows up!
 
         /* issued for incoming email and zmodem documents */
         case PQ_SC_DOCUMENT_DETAILS:
+            LogFileIF_Message("PQ_SC_DOCUMENT_DETAILS");
+//y all this is new
+            strxcpy (sqrx.contact, messageData->data.pq_sc_document_details.ContactName, sizeof (sqrx.contact));
+            Screen_set_status1 (Screen_Remote_Modem, S1_PQ_SC_DOCUMENT_DETAILS, "Recv_Details", sqrx.contact, "");
             break;
 
         case PQ_SC_NEW_PAGE:
+            LogFileIF_Message("PQ_SC_NEW_PAGE");
 //x            ui_deregister_animation(1);
 //x            ui_deregister_animation(2);
 //x            ui_home_set_sprite(2, "idle_1"); /* look to the right */
@@ -770,12 +788,13 @@ This blows up!
             break;
 
         case PQ_SC_PAGE_COMPLETE:
+            LogFileIF_Message("PQ_SC_PAGE_COMPLETE");   
 //x            ui_deregister_animation(1);
 //x            ui_deregister_animation(2);
 //x            ui_home_set_sprite(2, "idle_1"); /* look to the right */
 //x            ui_register_animation(4, "faxrx");
-            if (sqrx.context == Direct)
-               Screen_set_animation (Screen_Remote_Modem, A_PQ_SC_PAGE_COMPLETE, "faxrx", Screen_Anim_Right);
+//y Why reissue this?            if (sqrx.context == Direct)
+//y               Screen_set_animation (Screen_Remote_Modem, A_PQ_SC_PAGE_COMPLETE, "faxrx", Screen_Anim_Right);
 //x            ui_home_set_status(1, "RxFax_Name", NULL, NULL);    /*>>>supply number*/
 //x            ui_home_set_status(2, NULL, NULL, NULL); //@@changed to put page num in 2
             sqrx.currpage = messageData->data.sq_sc_document_complete.ScanCount;
@@ -789,6 +808,7 @@ This blows up!
             break;
 
         case PQ_SC_DOCUMENT_COMPLETE:
+            LogFileIF_Message("PQ_SC_DOCUMENT_COMPLETE");
 //x            ui_window_title("RxFax_Title"); /* Paranoia */
 //yup it's paranoia            Screen_set_title (Screen_Remote_Modem, T_PQ_SC_DOCUMENT_COMPLETE, "RxFax_Title");
 //x            ui_deregister_animation(1);
@@ -969,10 +989,15 @@ This blows up!
 }
 
 
-static void error_finished(void)
+static void error_finished(int ConfirmAction)
 {
-    /*>>>> must reopen our original window */
-    ui_open_window(1, Home_WindowHandle, NULL, "Home_SK1", "Home_SK2", "Home_SK3", "Home_SK4", -1);
+	switch (ConfirmAction)
+	{
+		case ConfirmAction_Finished:
+		    ui_open_window(1, Home_WindowHandle, NULL, "Home_SK1", "Home_SK2", "Home_SK3", "Home_SK4", -1);
+            Screen_set_title (Screen_Refresh, T_IDLE, "");
+            break;
+    }
 }
 
 
@@ -996,7 +1021,6 @@ static struct
     int state;
     unsigned int ProcessId;
 } QuerryRoute = { 0 };
-
 
 extern void Screen_QuerryRoute(unsigned int ProcessId)
 {
@@ -1022,31 +1046,37 @@ extern void Screen_QuerryRoute(unsigned int ProcessId)
  *   RouteISP                                   - soft-key 2 pressed
  *   RouteUNKNOWN (ie use local/global routing) - timeout
  */
-static void Screen_AnswerRoute(int action)
+static void Screen_AnswerRoute(int DecideAction, int UserChoice)
 {
-    messageDataBlock *sendMessage;
+	switch (DecideAction)
+	{
+		case DecideAction_Finished:
+			{
+                messageDataBlock *sendMessage;
 
-    QuerryRoute.state = 0;    /*closed*/
+                QuerryRoute.state = 0;    /*closed*/
 
-    /*>>>> must reopen our original window */
-    ui_open_window(1, Home_WindowHandle, NULL, "Home_SK1", "Home_SK2", "Home_SK3", "Home_SK4", -1);
+                ui_open_window(1, Home_WindowHandle, NULL, "Home_SK1", "Home_SK2", "Home_SK3", "Home_SK4", -1);
+                Screen_set_title (Screen_Refresh, T_IDLE, "");
 
+                StateKicker_SendMessage(SendQ_MessageHandler, SC_SQ_ROUTING, &sendMessage);
+                sendMessage->data.deliveryoptions.pid = QuerryRoute.ProcessId;
 
-    StateKicker_SendMessage(SendQ_MessageHandler, SC_SQ_ROUTING, &sendMessage);
-    sendMessage->data.deliveryoptions.pid = QuerryRoute.ProcessId;
+                switch (UserChoice)
+                {
+                    case 1:
+                        sendMessage->data.deliveryoptions.route = RouteDIRECT;
+                        break;
 
-    switch (action)
-    {
-        case 1:
-            sendMessage->data.deliveryoptions.route = RouteDIRECT;
-            break;
+                    case 2:
+                        sendMessage->data.deliveryoptions.route = RouteISP;
+                        break;
 
-        case 2:
-            sendMessage->data.deliveryoptions.route = RouteISP;
-            break;
-
-        default:
-            sendMessage->data.deliveryoptions.route = RouteUNKNOWN;
+                    default:
+                        sendMessage->data.deliveryoptions.route = RouteUNKNOWN;
+                        break;
+                }
+            }
             break;
     }
 
@@ -1054,6 +1084,78 @@ static void Screen_AnswerRoute(int action)
     while (StateKicker_Deliver() > 1)
         /* null statement */;
 }
+
+
+/*
+ * Ask user to confirm that a fax should be cancelled
+ *
+ * result messages are sent by Screen_AnswerCancel below
+ */
+static struct
+{
+    int state;
+    unsigned int ProcessId;
+} QuerryCancel = { 0 };
+
+extern void Screen_QuerryCancel(unsigned int ProcessId)
+{
+    QuerryCancel.ProcessId = ProcessId;
+
+    if (ui_currently_open_win == Home_WindowHandle)
+    {
+        ui_decide_window("Cancel_Send_Title", "Yes", "No", "Cancel_Send_1", "", "", SPRITE_QUERRYCANCEL, Screen_AnswerCancel, 0);   /* pass 0 as default */
+        QuerryCancel.state = 2;    /*open*/
+    }
+    else
+    {
+        QuerryCancel.state = 1; /*pending*/
+    }
+}
+
+
+/*
+ * return user choice to SendQ_MessageHandler
+ *
+ * sends message:
+ *   SC_SQ_CANCEL_CONFIRMED - soft-key 1 pressed
+ *   SC_SQ_CANCEL_REVOKED   - soft-key 2 pressed
+ *   SC_SQ_CANCEL_REVOKED   - timeout
+ */
+static void Screen_AnswerCancel(int DecideAction, int UserChoice)
+{
+	switch (DecideAction)
+	{
+		case DecideAction_Finished:
+			{
+                messageDataBlock *sendMessage;
+
+                QuerryCancel.state = 0;    /*closed*/
+
+                ui_open_window(1, Home_WindowHandle, NULL, "Home_SK1", "Home_SK2", "Home_SK3", "Home_SK4", -1);
+                Screen_set_title (Screen_Refresh, T_IDLE, "");
+
+                switch (UserChoice)
+                {
+                    case 1:
+                        StateKicker_SendMessage(SendQ_MessageHandler, SC_SQ_CANCEL_CONFIRMED, &sendMessage);
+                        sendMessage->data.sc_sq_cancel_confirmed.pid = QuerryCancel.ProcessId;
+                        break;
+
+                    case 2:
+                    default:
+                        StateKicker_SendMessage(SendQ_MessageHandler, SC_SQ_CANCEL_REVOKED, &sendMessage);
+                        sendMessage->data.sc_sq_cancel_revoked.pid = QuerryCancel.ProcessId;
+                        break;
+                }
+            }
+            break;
+    }
+
+    /* deliver the queued messages */
+    while (StateKicker_Deliver() > 1)
+        /* null statement */;
+}
+
 
 extern void Screen_Force_Open(void)
 {
@@ -1065,7 +1167,19 @@ extern void Screen_Force_Open(void)
     }
     else
     {
-         ui_open_window(1, Home_WindowHandle, NULL, "Home_SK1", "Home_SK2", "Home_SK3", "Home_SK4", -1);
+        ui_open_window(1, Home_WindowHandle, NULL, "Home_SK1", "Home_SK2", "Home_SK3", "Home_SK4", -1);
+        Screen_set_title (Screen_Refresh, T_IDLE, "");
+    }
+
+    if (QuerryCancel.state == 1 /*pending*/)
+    {
+        ui_decide_window("Cancel_Send_Title", "Yes", "No", "Cancel_Send_1", "", "", SPRITE_QUERRYCANCEL, Screen_AnswerCancel, 0);   /* pass 0 as default */
+        QuerryCancel.state = 2;    /*open*/
+    }
+    else
+    {
+        ui_open_window(1, Home_WindowHandle, NULL, "Home_SK1", "Home_SK2", "Home_SK3", "Home_SK4", -1);
+        Screen_set_title (Screen_Refresh, T_IDLE, "");
     }
 }
 
@@ -1077,7 +1191,7 @@ extern void Screen_Force_Open(void)
 extern void Screen_LocalFax_NotConnected(void)
 {
 //@@ TBD new scheme!
-      ui_deregister_animation(10);
+      ui_deregister_animation(10); //@@ This looks wrong to me (10 = 8 + 2; maybe better as 4 + 2)
       ui_register_animation(1, "plug");
 
       if (ui_currently_open_win != Home_WindowHandle)
@@ -1089,7 +1203,10 @@ extern void Screen_LocalFax_NotConnected(void)
         ui_window_title("Title_8_0");
         ui_window_softkeys("Okay", NULL, NULL, NULL);
       }
+      ui_home_set_sprite(2, "blank_c");
       ui_home_set_sprite(2, "exclaim");
+      ui_home_set_sprite(4, "blank_a");
+      ui_home_set_sprite(4, "exclaim_r");
       ui_home_set_status(1, "Line1_8_0", NULL, NULL);
       ui_home_set_status(2, "Line2_8_0", NULL, NULL);
 }
@@ -1153,15 +1270,15 @@ static void Screen_set_title (const int port, const T_Priority pri, const char *
 {
    int winner;
 
-   Screen_pri_t[port] = pri;
-   if (strlen (token) >= sizeof (Screen_tok_t[0]))
-      strcpy (Screen_tok_t[port], "TokTooLong");
-   else
-      strcpy (Screen_tok_t[port], token);
+   if (port != Screen_Refresh) {
+      Screen_pri_t[port] = pri;
+      if (strlen (token) >= sizeof (Screen_tok_t[0]))
+         strcpy (Screen_tok_t[port], "TokTooLong");
+      else
+         strcpy (Screen_tok_t[port], token);
+   }
 
    winner = Screen_pri_t[0] < Screen_pri_t[1];
-   if (Screen_pri_t[winner] == 0 && Screen_tok_t[winner][0] == '\0')
-      winner = 1 - winner; /* If both priorities are zero, try to pick port which has a defined title! */
    ui_window_title (Screen_tok_t[winner]);
 }
 
@@ -1171,8 +1288,8 @@ static void Screen_set_anim_side (const int side, const int interfere, /*const i
       winner = Screen_flags_a[Screen_Local_Modem] & side
                ? Screen_Local_Modem : Screen_Remote_Modem;
 
-   if (Screen_flags_a[winner] & side /* Check where there is any active anim on this side */
-      && (Screen_flags_a[winner] & Screen_Anim_Middle) == 0) { /* If it has a middle it has no side */
+   if (Screen_flags_a[winner] & side) { /* Check where there is any active anim on this side */
+//      && (Screen_flags_a[winner] & Screen_Anim_Middle) == 0) { /* If it has a middle it has no side */
 
       ui_register_animation (side | Screen_flags_a[winner] & Screen_Anim_OneShot/*oneshot*/, Screen_tok_a[winner]);
 
@@ -1180,7 +1297,7 @@ static void Screen_set_anim_side (const int side, const int interfere, /*const i
 
       /* No active anim on this side */
       ui_deregister_animation (side);
-      ui_home_set_sprite(side, "");
+//no longer need to do this as don't overlap      ui_home_set_sprite(side, "");
 
    }
 }
@@ -1198,6 +1315,8 @@ static void Screen_set_animation (const int port, const A_Priority pri, const ch
 
    if (strlen (token) >= sizeof (Screen_tok_a[0]))
       strcpy (Screen_tok_a[port], "decide");
+   else if (*token == '\0')
+      strcpy (Screen_tok_a[port], "idle");
    else
       strcpy (Screen_tok_a[port], token);
 
@@ -1280,18 +1399,21 @@ static void Screen_set_animation (const int port, const A_Priority pri, const ch
 
          case Screen_Anim_Left:
 
+            /* Need to blank in case moving from bigger to smaller */
             ui_deregister_animation(Screen_Anim_Middle);
             ui_home_set_sprite(Screen_Anim_Middle, "idle_2");
             break;
 
          case Screen_Anim_Right:
 
+            /* Need to blank in case moving from bigger to smaller */
             ui_deregister_animation(Screen_Anim_Middle);
             ui_home_set_sprite(Screen_Anim_Middle, "idle_1");
             break;
 
          case Screen_Anim_Left | Screen_Anim_Right:
 
+            /* Need to blank in case moving from bigger to smaller */
             ui_deregister_animation(Screen_Anim_Middle);
             ui_home_set_sprite(Screen_Anim_Middle, "idle_0");
             break;

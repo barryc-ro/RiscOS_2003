@@ -5,6 +5,10 @@
  *
  * 1997-10-20: BAL
  * Created.
+ *
+ * 1998-02-25: BAL
+ * Split up missing page report detection and generation.
+ * Added printed page report (A.K.A. return-receipt, delivery confirmation)
  */
 
 
@@ -17,32 +21,36 @@
 /* CLib */
 #include <assert.h>
 #include "kernel.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include "swis.h"
 
+// Email
+#include "Email/EmailLib/date.h"
+
+/* NetFax specific libraries */
+#include "NetFax/NFELib/NFELib.h"
+
 /* Daytona */
 #include "emailrx.h"
 #include "list.h"
-#include "NFELib.h"
 #include "SetupIF.h"
 
 /* Toolbox */
-#include "toolbox.h"
-
-
+#include "tboxlibs/toolbox.h"
 
 
 /* =============================================================================
  * Define constants
  */
 
-#define PartialDownloadLines    60
+#define PartialDownloadLines    56
 #define MaxParamSize            81
 #define MaxReportSize         4096
 #define MessageBufferSize     1024
-#define ReportsPath           ("Daytona:Resources.UK.Reports")
+#define ReportsPath           ("Daytona:Reports")
 
 
 
@@ -124,10 +132,22 @@ class document_t
 
         virtual int get_number_messages (void);
 
-        virtual int missing_page_report (char *const         local_report,
-                                         char *const         remote_report,
-                                         size_t              local_report_size,
-                                         size_t              remote_report_size,
+        virtual int need_missing_page_report (void)
+        {
+            return 0;
+        }
+
+        virtual char *  generate_missing_page_report (
+            char *const         remote_report_filename,
+            const NFE_header &  header)
+        {
+            M_unused (remote_report_filename);
+            M_unused (header);
+
+            return NULL;
+        }
+
+        virtual int printed_page_report (FILE *const         file,
                                          const NFE_header &  header);
 
         virtual int cover_sheet (char *const         report,
@@ -165,6 +185,7 @@ class netfax_document_t : public document_t
                                const char *const       unique_id,
                                const NFE_message_id &  nf_message_id,
                                bool &                  delete_message);
+
     // Data
     protected:
         netfax_document_id  document_id;
@@ -201,10 +222,16 @@ class netfax_fax_document_t : public netfax_document_t
 
         int get_number_messages (void);
 
-        int missing_page_report (char *const         local_report,
-                                 char *const         remote_report,
-                                 size_t              local_report_size,
-                                 size_t              remote_report_size,
+        int need_missing_page_report (void)
+        {
+            return (connection_count < g_missing_page_threshold);
+        }
+
+        char *  generate_missing_page_report (
+                    char *const         remote_report_filename,
+                    const NFE_header &  header);
+
+        int printed_page_report (FILE *const         file,
                                  const NFE_header &  header);
 
         int cover_sheet (char *const         report,
@@ -250,8 +277,9 @@ class netfax_fax_document_t : public netfax_document_t
  * Declare global variables
  */
 
+MessagesFD*         report_templates = NULL;
+
 static list_handle  document_list;
-static MessagesFD*  report_templates = NULL;
 
 
 
@@ -516,19 +544,101 @@ int document_t::get_number_messages (void)
 
 
 
-int document_t::missing_page_report (char *const         local_report,
-                                     char *const         remote_report,
-                                     size_t              local_report_size,
-                                     size_t              remote_report_size,
+/* -----------------------------------------------------------------------------
++
+   document_t::printed_page_report
+
+   Generate tokens for printed page reports that are common to all types of
+   document.
+
+   Inputs
+   filename: file in which to dump printed 'page' report
+   header:   header for email message being printed
+
+   Returns
+   success: 0
+   failure: -1
+-
+ */
+
+int document_t::printed_page_report (FILE *const         file,
                                      const NFE_header &  header)
 {
-    M_unused (local_report);
-    M_unused (remote_report);
-    M_unused (local_report_size);
-    M_unused (remote_report_size);
-    M_unused (header);
+    NFE_address  from_address;
 
-    // No concept of pages for all documents except netfax fax documents
+    if (*setup_from_mailaddress == '\0')
+    {
+        return -1;
+    }
+    from_address.address = setup_from_mailaddress;
+
+    if (*setup_contact_name == '\0')
+    {
+        from_address.real_name = NULL;
+    }
+    else
+    {
+        from_address.real_name = setup_contact_name;
+    }
+
+    char *raw_from_address = emailrx_construct_full_address (&from_address,
+                                                             0);
+    if (raw_from_address == NULL)
+    {
+        return -1;
+    }
+
+    char *     raw_date;
+    size_t     date_len;
+    NFE_rcode  rc;
+    date       date_processed (FALSE,
+                               NULL,
+                               0,
+                               0,
+                               TRUE);
+    rc = date_processed.GetBodyLen (date_len);
+    if (rc != NFE_COMPLETED)
+    {
+        free (raw_from_address);
+        return -1;
+    }
+
+    raw_date = malloc (date_len + 2);
+    if (raw_date == NULL)
+    {
+        free (raw_from_address);
+        return -1;
+    }
+
+    ++date_len;
+    rc = date_processed.GetUnfoldedBody (raw_date,
+                                         date_len);
+    if (rc != NFE_COMPLETED)
+    {
+        free (raw_date);
+        free (raw_from_address);
+        return -1;
+    }
+
+    int file_rc;
+
+    file_rc = fprintf (file,
+                       "TYPE=PRINTEDPAGES\n"
+                       "DATESENT=%s\n"
+                       "FROM=%s\n"
+                       "DATEPROCESSED=%s\n",
+                       header.date_hdr,
+                       raw_from_address,
+                       raw_date);
+
+    free (raw_from_address);
+    free (raw_date);
+    if (file_rc < 0)
+    {
+        return -1;
+    }
+
+
     return 0;
 }
 
@@ -1058,139 +1168,165 @@ int netfax_fax_document_t::get_number_messages (void)
 
 /* -----------------------------------------------------------------------------
 +
-   netfax_fax_document_t::missing_page_report
+   netfax_fax_document_t::generate_missing_page_report
 
-   Decide whether a missing page report needs to be generated for a document,
-   and if so generate it.
+   Generate a missing page report for a NetFax fax document.
 
    Currently assumes that there will never be more than 9999 pages in a single
    document.
 
    Inputs
-   document_info:      document handle as returned by document iterator
-   local_report:       pointer to local missing page report
-   remote_report:      pointer to remote missing page report
-   local_report_size:  maximum size of local missing page report
-   remote_report_size: maximum size of local missing page report
+   document_info:          document handle as returned by document iterator
+   remote_report_filename: name of file to write remote report into
+   header:                 email header information for this document
 
    Returns
-   -1: error
-    0: missing page report not required
-    1: missing page report required
+   success: pointer to local report - client's responsibility to free
+   failure: NULL
 -
  */
 
-int netfax_fax_document_t::missing_page_report (
-        char *const         local_report,
-        char *const         remote_report,
-        size_t              local_report_size,
-        size_t              remote_report_size,
-        const NFE_header &  header)
+char *  netfax_fax_document_t::generate_missing_page_report (
+            char *const         remote_report_filename,
+            const NFE_header &  header)
 {
-    char               param[4][MaxParamSize + 1];
-    int                string_len;
-    struct tm *        component_time;
-    _kernel_oserror *  e;
-
-
-    if (connection_count < g_missing_page_threshold)
-        return 0;
-
-    // Check that there is enough space for at least a '\0' terminator in
-    // the report strings.  If not return an error.  Also, decrement the
-    // report sizes by one so that all checks automatically take account of a
-    // '\0' terminator.
-    if (--local_report_size < 1)
-        return -1;
-    local_report[0] = '\0';
-
-    if (--remote_report_size < 1)
-        return -1;
-    remote_report[0] = '\0';
-
-
-    component_time = localtime (&header.date);
-
-    // Date parameter
-    strftime (param[0],
-              MaxParamSize + 1,
-              "%x",    // local date representation
-              component_time);
-
-    // Time parameter
-    strftime (param[1],
-              MaxParamSize + 1,
-              "%X",    // local time representation
-              component_time);
+    char *  local_report;
+    char    pages_list[MaxParamSize + 1];
 
 
     // Missing pages list
-    param[3][0] = '\0';
-
+    *pages_list = '\0';
     if (page_list (PageState_Unseen,
-                   param[3],
-                   MaxParamSize + 1))
+                   pages_list,
+                   sizeof (pages_list)))
     {
-        return -1;
+        return NULL;
     }
 
 
     char *full_address = emailrx_construct_full_address (&header.from,
                                                          (int) true);
     if (full_address == NULL)
-        return -1;
+    {
+        return NULL;
+    }
 
-    // Generate local missing page report
-    e = _swix (MessageTrans_GSLookup,
-               _INR (0, 7) | _OUT (3),
-
-               report_templates,
-               "MissingPageL",
-               local_report,
-               local_report_size,
-               param[0],
-               param[1],
-               full_address,
-               param[3],
-
-               &string_len);
+    local_report = emailrx_generate_report_from_message (
+                       "MissingPageL",
+                       header.date_hdr,
+                       full_address,
+                       pages_list,
+                       NULL);
 
     free (full_address);
 
-    if (e != NULL)
-        return -1;
+    if (local_report == NULL)
+    {
+        return NULL;
+    }
 
-    if (local_report_size < string_len)
-        return -1;
+    // Write out the tokenised remote report to a file
+    FILE *  file;
 
+    file = fopen (remote_report_filename,
+                  "w");
+    if (file == NULL)
+    {
+        return NULL;
+    }
 
     full_address = emailrx_construct_full_address (&header.to,
-                                                   (int) true);
+                                                   (int) false);
     if (full_address == NULL)
-        return -1;
+    {
+        return NULL;
+    }
 
-    // Generate remote missing page report
-    e = _swix (MessageTrans_GSLookup,
-               _INR (0, 7) | _OUT (3),
-
-               report_templates,
-               "MissingPageR",
-               remote_report,
-               remote_report_size,
-               param[0],
-               param[1],
-               full_address,
-               param[3],
-
-               &string_len);
+    if (fprintf (file,
+                 "[TOKENISED]\n"
+                 "TYPE=MISSINGPAGES\n"
+                 "FROM=%s\n"
+                 "PAGES=%s\n"
+                 "DATESENT=%s\n"
+                 "DATEPROCESSED=",
+                 full_address,
+                 pages_list,
+                 header.date_hdr) < 0)
+    {
+        free (full_address);
+        return NULL;
+    }
 
     free (full_address);
 
-    if (e != NULL)
-        return -1;
+    date  date_processed (FALSE,
+                          NULL,
+                          0,
+                          0,
+                          TRUE);
 
-    if (remote_report_size < string_len)
+    NFE_CONTEXT context;
+
+    if (date_processed.WriteOut (context,
+                                 0,
+                                 file) != NFE_COMPLETED)
+    {
+        return NULL;
+    }
+
+    return local_report;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
++
+   netfax_fax_document_t::printed_page_report
+
+   Generate tokens for printed page reports that are specific to NetFax fax
+   documents.
+
+   Inputs
+   file:   file descriptor of file in which to dump printed 'page' report
+   header:
+   header for email message being printed
+
+   Returns
+   success: 0
+   failure: -1
+-
+ */
+
+int netfax_fax_document_t::printed_page_report (FILE *const         file,
+                                                const NFE_header &  header)
+{
+    if (document_t::printed_page_report (file,
+                                         header) != 0)
+    {
         return -1;
+    }
+
+    char pages_list[MaxParamSize + 1];
+    *pages_list = '\0';
+
+    // This is a not very elegant at the moment.  There's no reason (apart
+    // from lack of time) why page_list should not be modified so it can write
+    // to a file, thereby not being constrained by arbitrary maximium size;
+
+    if (page_list (PageState_Seen,
+                   pages_list,
+                   sizeof (pages_list)))
+    {
+        return -1;
+    }
+
+    if (fprintf (file,
+                 "PAGES=%s\n",
+                 pages_list) < 0)
+    {
+        return -1;
+    }
 
     return 1;
 }
@@ -2072,41 +2208,126 @@ extern list_handle emailrx_build_dl_list (unsigned int free_space)
 
 /* -----------------------------------------------------------------------------
 +
-   emailrx_missing_page_report
+   emailrx_need_missing_page_report
 
-   Decide whether a missing page report needs to be generated for a document,
-   and if so generate it.
+   Decide whether a missing page report needs to be generated for a document.
+
+   Currently assumes that there will never be more than 9999 pages in a single
+   document.
+
+   Inputs
+   document_info: document handle as returned by document iterator
+
+   Returns
+   0: missing page report not required
+   1: missing page report required
+-
+ */
+
+extern int emailrx_need_missing_page_report (const document_handle    document)
+{
+    return ((document_t *) document)->need_missing_page_report ();
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
++
+   emailrx_generate_missing_page_report
+
+   Generate a missing page report for a document.
+
+   Currently assumes that there will never be more than 9999 pages in a single
+   document.
+
+   Inputs
+   document_info:          document handle as returned by document iterator
+   remote_report_filename: name of file to write remote report into
+   header:                 email headers for this document
+
+   Returns
+   -1: error
+    0: success
+-
+ */
+
+extern char *  emailrx_generate_missing_page_report (
+                   const document_handle    document,
+                   char *const              remote_report_filename,
+                   const NFE_header *const  header)
+{
+    return ((document_t *) document)->generate_missing_page_report (
+                                          remote_report_filename,
+                                          *header);
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
++
+   emailrx_printed_page_report
+
+   Decide whether a printed page report needs to be generated for a document,
+   and if so generate it and dump it in a file.
 
    Currently assumes that there will never be more than 9999 pages in a single
    document.
 
    Inputs
    document_info:      document handle as returned by document iterator
-   local_report:       pointer to local missing page report
-   remote_report:      pointer to remote missing page report
-   local_report_size:  maximum size of local missing page report
-   remote_report_size: maximum size of local missing page report
+   filename:           name of file to dump printed page report in
 
    Returns
    -1: error
-    0: missing page report not required
-    1: missing page report required
+    0: printed page report not required
+    1: printed page report required
 -
  */
 
-extern int emailrx_missing_page_report (
+extern int emailrx_printed_page_report (
                const document_handle    document,
-               char *const              local_report,
-               char *const              remote_report,
-               size_t                   local_report_size,
-               size_t                   remote_report_size,
+               const char *const        filename,
                const NFE_header *const  header)
 {
-    return ((document_t *) document)->missing_page_report (local_report,
-                                                           remote_report,
-                                                           local_report_size,
-                                                           remote_report_size,
-                                                           *header);
+    if (header->return_receipt_to.address == NULL)
+    {
+        return 0;
+    }
+    else
+    {
+        FILE *  file;
+
+        file = fopen (filename,
+                      "w");
+        if (file == NULL)
+        {
+            return -1;
+        }
+
+
+        if (fprintf (file,
+                     "[TOKENISED]\n") < 0)
+        {
+            fclose (file);
+            return -1;
+        }
+
+        if (((document_t *) document)->printed_page_report (file,
+                                                            *header) != 0)
+        {
+            fclose (file);
+            return -1;
+        }
+
+        fprintf (file,
+                 "[END]\n");
+
+        fclose (file);
+
+        return 1;
+    }
 }
 
 
@@ -2283,7 +2504,7 @@ extern int emailrx_check_supported (const NFE_msg_class     message_class,
             if (nf_message_class & NFE_NFMC_LOG)
                 support = EmailSupport_Full;
 
-            if (nf_message_class & NFE_NFMC_FAXERROR)
+            if (nf_message_class & NFE_NFMC_DELIVERYREPORT)
                 support = EmailSupport_Full;
 
             break;
@@ -2331,8 +2552,8 @@ extern int emailrx_check_supported (const NFE_msg_class     message_class,
 -
  */
 
-extern char *emailrx_construct_full_address (const NFE_address *  address,
-                                             const int            gs_trans)
+extern char *emailrx_construct_full_address (const NFE_address *const  address,
+                                             const int                 gs_trans)
 {
     char *  full_address;
     size_t  full_address_len = 1;    // start at 1 to allow for 0 terminator
@@ -2404,6 +2625,101 @@ extern char *emailrx_construct_full_address (const NFE_address *  address,
 
     return full_address;
 }
+
+
+
+
+/* -----------------------------------------------------------------------------
++
+   emailrx_generate_report_from_message
+
+   Generate a report from a message token and up to four parameters.
+
+   Inputs
+   message_token: token in message file
+   param0:        1st parameter (%0 for MessageTrans)
+   param1:        2nd parameter (%1 for MessageTrans)
+   param2:        3rd parameter (%2 for MessageTrans)
+   param3:        4th parameter (%3 for MessageTrans)
+
+   Returns
+   success: pointer to report - client's responsibility to free
+   failure: NULL
+-
+ */
+
+extern char *emailrx_generate_report_from_message (char *  message_token,
+                                                   char *  param0,
+                                                   char *  param1,
+                                                   char *  param2,
+                                                   char *  param3)
+{
+    char *  report;
+    size_t  report_size;
+
+
+    /* Work out roughly how much space will be needed to store the report.
+     * The estimate will be slightly over what's needed because the parameter
+     * substitution characters in the message are not discounted.
+     */
+
+    if (_swix (MessageTrans_GSLookup,
+               _INR (0, 2) | _OUT (3),
+
+               report_templates,
+               message_token,
+               NULL,    /* return read-only string, no substitution */
+
+               &report_size))
+    {
+        return NULL;
+    }
+
+    if (param0)
+    {
+        report_size += strlen (param0);
+    }
+    if (param1)
+    {
+        report_size += strlen (param1);
+    }
+    if (param2)
+    {
+        report_size += strlen (param2);
+    }
+    if (param3)
+    {
+        report_size += strlen (param3);
+    }
+    report_size += 1;    /* 0 terminator */
+
+    report = malloc (report_size);
+    if (report == NULL)
+    {
+        return NULL;
+    }
+
+    if (_swix (MessageTrans_GSLookup,
+               _INR (0, 7),
+
+               report_templates,
+               message_token,
+               report,
+               report_size,
+               param0,
+               param1,
+               param2,
+               param3))
+    {
+        free (report);
+        return NULL;
+    }
+
+    return report;
+}
+
+
+
 
 }    // end of C interface functions
 

@@ -9,23 +9,29 @@
 
 #include "BuildFlags.h"
 #include "StdTypes.h"
+#include "main.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "kernel.h"
 
+#include "PageList.h"
 #include "StateKicker.h"
 #include "SendQ.h"
+#include "LogFileIF.h"
 
 #include "wimp.h"
 #include "wimplib.h"
 
 #include "AddrBookIF.h"
+#include "DataArea.h"
 
 /*#include "UILib.h"*/
 #include "DebugLib.h"
+#include "MemHandle.h"
 
+#if 0
 /*>>>we really shouldn't reuse Neil's wimp message & structure like this, but it'll do for now */
 
 
@@ -45,15 +51,32 @@ typedef struct dayt_winmessage {
       int flags;
   } data;
 } Dayt_WinMessage;
-
+#endif
+#if 0
 #define Other_Program_Window_Message	0x4F7FF
 #define Open_DayAdd_NANSearch     4
 #define Open_DayAdd_NANSearch_Ack 5
-
+#endif
  /*<<<*/
+
+/* a type describing a dynamic area based address record */
+struct _DynamicAddressRecord
+{
+	    AddressArea *area;
+	    void *end;
+        int area_id;
+};
+typedef struct _DynamicAddressRecord DynamicAddressRecord;
 
 
 static int InteractiveSearch_SearchRef = 0;	/* zero means search inactive, non-zero is my_ref field of message that started the search */
+
+static DynamicAddressRecord *AddrBookIF_CreateDynamicAddressRecord(DynamicAddressRecord *pRecord);
+
+
+static void assign                  (char *source, char *buffer, int buflen, BOOL truncate, const char *label);
+static void assign_string_to_dynamic(char *source, char **pfield, void **pend, int area_id, const char *label);
+static void show_string(const char *name, const char *value);
 
 
 #if ADDRESSBOOK_USES_DYNAMICAREA
@@ -95,6 +118,8 @@ extern void AddrBookIF_InteractiveSearch(int *p_SearchRef, AddressRec *AddressRe
 {
     Dayt_WinMessage message;
 
+    LogFileIF_show(LOG_VERBOSE, "Interactive address book search");
+
     message.hdr.size        = sizeof(Dayt_WinMessage);
     message.hdr.your_ref    = 0;	 /* original message */
     message.hdr.action_code = Other_Program_Window_Message;
@@ -122,12 +147,12 @@ extern void AddrBookIF_SearchFaxNumber(int *p_SearchRef, AddressRec *AddressReco
 {
     Dayt_NonInteractiveSearch_Message message;
 
+    LogFileIF_show_string(LOG_VERBOSE, "Search address book, number", phonenumber);
+
     message.hdr.size        = sizeof(Dayt_NonInteractiveSearch_Message);
     message.hdr.your_ref    = 0;	 /* original message */
     message.hdr.action_code = Dayt_NonInteractiveSearch_MessageNum;
-#if ADDRESSBOOK_USES_MESSAGES
-    message.data.fields_to_return = search_flags;
-#endif
+
 	message.data.fields_to_search = Field_FaxNumber | Field_VoiceNumber;
 	strcpy(message.data.search_string, phonenumber);
 
@@ -137,7 +162,7 @@ extern void AddrBookIF_SearchFaxNumber(int *p_SearchRef, AddressRec *AddressReco
 
 	if (p_SearchRef)
     	*p_SearchRef = message.hdr.my_ref;
-}  
+}
 
 /*
  * Process wimp messages from !Address
@@ -164,8 +189,8 @@ extern int AddrBookIF_WimpMessageHandler(WimpMessage *message, void *handle)
 						pAddressRecord->SearchFlags = 0;
 
 		    			strcpy(pAddressRecord->ContactName, search_result->data.data_area->contact_name);
-						strcpy(pAddressRecord->EmailAddress, search_result->data.data_area->email_address);
 	    				strcpy(pAddressRecord->DirectPhoneNumber, search_result->data.data_area->fax_number);
+						strcpy(pAddressRecord->EmailAddress, search_result->data.data_area->email_address);
 	                    pAddressRecord->DeviceClass = search_result->data.data_area->device_class;
 
 						switch (search_result->data.data_area->routing_override)
@@ -183,6 +208,13 @@ extern int AddrBookIF_WimpMessageHandler(WimpMessage *message, void *handle)
 								break;
 						}
 
+                               LogFileIF_show(LOG_VERBOSE, "Record returned");
+                        LogFileIF_show_string(LOG_VERBOSE, " Contact", pAddressRecord->ContactName);
+                        LogFileIF_show_string(LOG_VERBOSE, " Fax    ", pAddressRecord->DirectPhoneNumber);
+                        LogFileIF_show_string(LOG_VERBOSE, " Email  ", pAddressRecord->EmailAddress);
+                   LogFileIF_show_decimal_int(LOG_VERBOSE, " Device ", pAddressRecord->DeviceClass);     
+                   LogFileIF_show_decimal_int(LOG_VERBOSE, " Route  ", pAddressRecord->LocalRouting);
+
 						StateKicker_SendMessage(SendQ_MessageHandler, AD_SQ_FINISH, &sendMessage);
 						sendMessage->data.finish.searchref = message->hdr.your_ref;
 
@@ -196,6 +228,10 @@ extern int AddrBookIF_WimpMessageHandler(WimpMessage *message, void *handle)
 	    				strcpy(pAddressRecord->DirectPhoneNumber, search_result->data.data_area->oneshot_fax_number);
 						strcpy(pAddressRecord->EmailAddress, search_result->data.data_area->oneshot_email_address);
 
+                               LogFileIF_show(LOG_VERBOSE, "One shot, returns:");
+                        LogFileIF_show_string(LOG_VERBOSE, " Fax  ", pAddressRecord->DirectPhoneNumber);
+                        LogFileIF_show_string(LOG_VERBOSE, " Email", pAddressRecord->EmailAddress);
+
 						StateKicker_SendMessage(SendQ_MessageHandler, AD_SQ_FINISH, &sendMessage);
 						sendMessage->data.finish.searchref = message->hdr.your_ref;
 
@@ -204,113 +240,40 @@ extern int AddrBookIF_WimpMessageHandler(WimpMessage *message, void *handle)
 
                     /* An interactive search was started by AddrBookIF_InteractiveSearch() and cancel pressed */
 					case DataReturn_Code_Cancelled:
+					    LogFileIF_show(LOG_VERBOSE, "Search cancelled");
 	                	StateKicker_SendMessage(SendQ_MessageHandler, AD_SQ_CANCEL, &sendMessage);
 	                    sendMessage->data.cancel.searchref = message->hdr.your_ref;
 						break;
 
                     /* non-interactive search, started by AddrBookIF_SearchFaxNumber(), failed to find a matching record */
 					case DataReturn_Code_NotFound:
+					    LogFileIF_show(LOG_VERBOSE, "Search failed");
 	                	StateKicker_SendMessage(SendQ_MessageHandler, AD_SQ_NOTFOUND, &sendMessage);
 	                    sendMessage->data.notfound.searchref = message->hdr.your_ref;
 						break;
 	        	} /*switch (search_result->data.code)*/
 	        }
 	        break;
+
+        case Daytona_DataRelease_MessageNum:
+            {
+                Daytona_DataRelease_Message *sent = (Daytona_DataRelease_Message*)message;
+
+                if (sent->application_code == DataRelease_AppCode_Daytona)
+                {
+                    LogFileIF_show_decimal_uint(LOG_DEBUG, "Releasing DA", sent->data_area_id);
+
+                    /* we sent an Daytona_AddressModify_MessageNum to !Address, which is */
+                    /* now telling us that it's finished with the data block we gave it  */
+                    memhandle_free_area(sent->data_area_id);
+                }
+                else
+                    LogFileIF_show_decimal_uint(LOG_DEBUG, "Not for us: DA", sent->data_area_id);
+            }
+            break;
     } /*switch (message->hdr.action_code)*/
 
 	InteractiveSearch_MayHaveTerminated(message->hdr.your_ref);	/* may zero InteractiveSearch_SearchRef */
-#endif
-#if ADDRESSBOOK_USES_MESSAGES
-    Dayt_InteractiveSearchReturn_Message *search_result = (Dayt_InteractiveSearchReturn_Message *)message;
-    messageDataBlock *sendMessage;
-    AddressRec *pAddressRecord;
-
-	switch (message->hdr.action_code)
-    {
-    	case Dayt_InteractiveSearchReturn_MessageNum:
-        case Dayt_NonInteractiveSearchReturn_MessageNum:
-        	pAddressRecord = SendQ_AddressRecord_from_SearchRef(message->hdr.your_ref);
-	        if (pAddressRecord)	
-	        {
-	    	    switch (search_result->data.field_number)
-	            {
-	            	case FieldNumber_ContactName:
-		    			pAddressRecord->SearchFlags = pAddressRecord->SearchFlags & ~Field_ContactName;
-		    			strcpy(pAddressRecord->ContactName, search_result->data.content.contactname_content);
-	            		break;
-	
-					case FieldNumber_EmailAddress:
-		    			pAddressRecord->SearchFlags = pAddressRecord->SearchFlags & ~Field_EmailAddress;
-						strcpy(pAddressRecord->EmailAddress, search_result->data.content.emailaddress_content);
-	                    break;
-	
-	                case FieldNumber_FaxNumber:
-	    				pAddressRecord->SearchFlags = pAddressRecord->SearchFlags & ~Field_FaxNumber;
-	    				strcpy(pAddressRecord->DirectPhoneNumber, search_result->data.content.faxnumber_content);
-	                    break;
-	
-					case FieldNumber_DeviceClass:
-		    			pAddressRecord->SearchFlags = pAddressRecord->SearchFlags & ~Field_DeviceClass;
-	                    pAddressRecord->DeviceClass = search_result->data.content.deviceclass_content;
-						break;					
-	
-					case FieldNumber_RoutingOverride:
-						pAddressRecord->SearchFlags = pAddressRecord->SearchFlags & ~Field_RoutingOverride;
-	
-						switch (search_result->data.content.routingoverride_content)
-						{
-							case 1:
-								pAddressRecord->LocalRouting = RouteDIRECT;
-								break;
-	
-							case 2:
-								pAddressRecord->LocalRouting = RouteISP;
-								break;
-	
-							default:
-								pAddressRecord->LocalRouting = RouteUNKNOWN;
-								break;
-						}
-						break;
-	
-	            /* user pressed Cancel in interactive search window */
-	                case FieldNumber_Cancelled:
-	                	StateKicker_SendMessage(SendQ_MessageHandler, AD_SQ_CANCEL, &sendMessage);
-	                    sendMessage->data.cancel.searchref = message->hdr.your_ref;
-	                    InteractiveSearch_MayHaveTerminated(message->hdr.your_ref);	/* SHOULD zero InteractiveSearch_SearchRef */
-	                	break;
-	
-	            /* user choose the 'one-shot' fax number and email box from interactive search window */
-					case FieldNumber_OneShot_FaxNumber:
-	    				pAddressRecord->OneShotFlags = pAddressRecord->OneShotFlags & ~Field_FaxNumber;
-	    				strcpy(pAddressRecord->DirectPhoneNumber, search_result->data.content.oneshotfaxnumber_content);
-	                    break;
-	
-					case FieldNumber_OneShot_EmailAddress:
-	    				pAddressRecord->OneShotFlags = pAddressRecord->OneShotFlags & ~Field_EmailAddress;
-						strcpy(pAddressRecord->EmailAddress, search_result->data.content.oneshotemailaddress_content);
-	                    break;
-	
-				/* non-interective search failed to find our phone number */
-	                case FieldNumber_NotFound:
-	                	StateKicker_SendMessage(SendQ_MessageHandler, AD_SQ_NOTFOUND, &sendMessage);
-	                    sendMessage->data.notfound.searchref = message->hdr.your_ref;
-	                    /* no need to consider InteractiveSearch_SearchRef, cos its a non-interactive search */
-	                	break;
-	            } /*switch (search_result->data.field_number)*/
-	
-				if ((search_result->data.field_number != FieldNumber_Cancelled) && (search_result->data.field_number != FieldNumber_NotFound))
-				{
-					if ((pAddressRecord->SearchFlags == 0) || (pAddressRecord->OneShotFlags == 0))
-					{
-						StateKicker_SendMessage(SendQ_MessageHandler, AD_SQ_FINISH, &sendMessage);
-						sendMessage->data.finish.searchref = message->hdr.your_ref;
-						InteractiveSearch_MayHaveTerminated(message->hdr.your_ref);	/* may zero InteractiveSearch_SearchRef */
-					}
-				}
-			}
-    		break;
-    } /*switch (message->hdr.action_code)*/
 #endif
 
 	/* deliver the queued messages */
@@ -324,12 +287,13 @@ extern int AddrBookIF_WimpMessageHandler(WimpMessage *message, void *handle)
 #if ADDRESSBOOK_USES_DYNAMICAREA
 static void SearchDataRelease(Dayt_SearchDataReturn_Message *search_result)
 {
-	Dayt_SearchDataRelease_Message reply;
+	Daytona_DataRelease_Message reply;
 
-	reply.hdr.size = sizeof(Dayt_SearchDataRelease_Message);
+	reply.hdr.size = sizeof(Daytona_DataRelease_Message);
 	reply.hdr.your_ref    = search_result->hdr.my_ref;
-	reply.hdr.action_code = Dayt_SearchDataRelease_MessageNum;
+	reply.hdr.action_code = Daytona_DataRelease_MessageNum;
 
+    reply.application_code = DataRelease_AppCode_DayAdd;
 	reply.data_area_id = search_result->data.data_area_id;
 
 	/* reply directly to task that sent the message */
@@ -337,6 +301,176 @@ static void SearchDataRelease(Dayt_SearchDataReturn_Message *search_result)
     /* we don't care about errors */
 }
 #endif
+
+
+
+
+/*
+ * Ask the AddressBook to update the DeviceClass field of an existing record
+ */
+extern void AddrBookIF_ModifyDeviceClass(
+      /* serial number */  unsigned int *serial_num,
+      /* fax number    */  char *fax_num,     /* NB internal format */
+      /* email address */  char *address,
+      /* device class  */  unsigned int device_class
+                          )
+{
+    DynamicAddressRecord RemoteDetails;
+    
+#if RELEASE_BUILD
+    if (AddrBookIF_CreateDynamicAddressRecord(&RemoteDetails))
+    {
+        LogFileIF_show_decimal_uint(LOG_DEBUG, "AddrBookIF_ModifyDeviceClass DA", RemoteDetails.area_id);
+
+        /* no need to validate fields within RemoteDetails */
+
+        memcpy(RemoteDetails.area->machine_id, serial_num, sizeof(RemoteDetails.area->machine_id)); /* all 16 bytes */
+        
+        assign(fax_num  , RemoteDetails.area->fax_number  , sizeof(RemoteDetails.area->fax_number)  , FALSE, "FaxNumber");
+        assign_string_to_dynamic(address     , &RemoteDetails.area->email_address, &RemoteDetails.end, RemoteDetails.area_id, "EmailAddress");
+
+        RemoteDetails.area->device_class = device_class;
+
+        /* now ask AddressBook to update its records */
+        {
+            Daytona_AddressModify_Message message;
+
+            message.hdr.size        = sizeof(Daytona_AddressModify_Message);
+            message.hdr.your_ref    = 0;	 /* original message */
+            message.hdr.action_code = Daytona_AddressModify_MessageNum;
+
+            message.data.data_area    = RemoteDetails.area;
+            message.data.data_area_id = RemoteDetails.area_id;
+            message.data.action_code  = AddressModify_ActionCode_ModifyDeviceClass;
+            message.data.flags        = 0;
+
+            /* Send Message */
+            (void)wimp_send_message(Wimp_EUserMessage, (WimpMessage*)&message, 0, 0, 0);
+        }
+    }
+#endif
+}
+
+
+extern void AddrBookIF_WriteAddressRecord(
+      /* serial number */  unsigned int *serial_num,
+      /* company name  */  char *organisation,
+      /* contact name  */  char *real_name,
+      /* fax number    */  char *fax_num,     /* NB internal format */
+      /* voice number  */  char *phone_num,   /* NB internal format */
+      /* email address */  char *address,
+      /* software rev. */  unsigned int rev_major, unsigned int rev_minor,
+      /* device class  */  unsigned int device_class
+                          )
+{
+    DynamicAddressRecord RemoteDetails;
+    
+#if RELEASE_BUILD
+    /* Create a dynamic area to hold received address record */
+    if (AddrBookIF_CreateDynamicAddressRecord(&RemoteDetails))
+    {
+        LogFileIF_show_decimal_uint(LOG_DEBUG, "AddrBookIF_WriteAddressRecord DA", RemoteDetails.area_id);
+
+        /* no need to validate fields within RemoteDetails */
+
+        memcpy(RemoteDetails.area->machine_id, serial_num, sizeof(RemoteDetails.area->machine_id)); /* all 16 bytes */
+        
+        memset(RemoteDetails.area->creation_date, 0, sizeof(RemoteDetails.area->creation_date));
+
+        assign(fax_num  , RemoteDetails.area->fax_number  , sizeof(RemoteDetails.area->fax_number)  , FALSE, "FaxNumber");
+        assign(phone_num, RemoteDetails.area->voice_number, sizeof(RemoteDetails.area->voice_number), FALSE, "VoiceNumber");
+
+        {
+            unsigned int *wp = (unsigned int *)&RemoteDetails.area->software_revision;
+
+            *wp++ = rev_minor;
+            *wp   = rev_major;
+        }
+
+        RemoteDetails.area->device_class = device_class;
+        
+        RemoteDetails.area->encryption_method = 0;        /* not supported */
+        RemoteDetails.area->encryption_revision = 0;      /* not supported */
+        RemoteDetails.area->pgp_key_length = 0;           /* not supported */
+        
+        RemoteDetails.area->routing_override = RouteUNKNOWN;    /* ie Global routing */
+
+        /* dynamic bits */
+        assign_string_to_dynamic(organisation, &RemoteDetails.area->company_name , &RemoteDetails.end, RemoteDetails.area_id, "Company");
+        assign_string_to_dynamic(real_name   , &RemoteDetails.area->contact_name , &RemoteDetails.end, RemoteDetails.area_id, "Contact");
+        assign_string_to_dynamic(address     , &RemoteDetails.area->email_address, &RemoteDetails.end, RemoteDetails.area_id, "EmailAddress");
+        
+        RemoteDetails.area->pgp_key = NULL;               /* not supported */
+
+        memset(RemoteDetails.area->oneshot_fax_number, 0, sizeof(RemoteDetails.area->oneshot_fax_number));
+        RemoteDetails.area->oneshot_email_address = NULL;
+
+        {
+            Daytona_AddressModify_Message message;
+
+            message.hdr.size        = sizeof(Daytona_AddressModify_Message);
+            message.hdr.your_ref    = 0;	 /* original message */
+            message.hdr.action_code = Daytona_AddressModify_MessageNum;
+
+            message.data.data_area    = RemoteDetails.area;
+            message.data.data_area_id = RemoteDetails.area_id;
+            message.data.action_code  = AddressModify_ActionCode_Update;
+            message.data.flags        = 0;
+
+            /* Send Message */
+            (void)wimp_send_message(Wimp_EUserMessage, (WimpMessage*)&message, 0, 0, 0);
+        }
+    }
+#endif
+}
+
+
+
+static DynamicAddressRecord *AddrBookIF_CreateDynamicAddressRecord(DynamicAddressRecord *pRecord)
+{
+    if ((pRecord->area = memhandle_create_area(&pRecord->end, &pRecord->area_id)) != NULL)
+        return(pRecord);    /* success, return supplied address */
+
+    return(NULL);   /* failure */
+}
+
+
+/* write string to fixed width destination buffer */
+static void assign(char *source, char *buffer, int buflen, BOOL truncate, const char *label)
+{
+    *buffer = '\0';
+
+    /* null pointer sets empty string ("") */
+    if (source)
+        strncat(buffer, source, buflen);
+
+    if (label)
+        show_string(label, buffer);
+}
+
+
+/* write string to dynamic string within address area */
+static void assign_string_to_dynamic(char *source, char **pfield, void **pend, int area_id, const char *label)
+{
+    memhandle_add_string(pfield, source, pend, area_id);
+
+    if (label)
+        show_string(label, *pfield);
+}
+
+
+static void show_string(const char *name, const char *value)
+{
+	char buffer[256];
+
+    buffer[0] = '\0';
+    strncat(buffer, name   , sizeof(buffer));
+    strncat(buffer, " is '", sizeof(buffer));
+    strncat(buffer, value  , sizeof(buffer));
+    strncat(buffer, "'"    , sizeof(buffer));
+
+    LogFileIF_Message(buffer);
+}
 
 
 /* end of AddrBookIF.c */

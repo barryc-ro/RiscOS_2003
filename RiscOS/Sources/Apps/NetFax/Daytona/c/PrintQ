@@ -11,6 +11,7 @@
 #define PRINTING  1
 #define TEXT2TIFF 1
 #define FILECONVERT 1
+#define NEWCODE 0
 
 #include "StdTypes.h"
 
@@ -20,6 +21,7 @@
 #include <time.h>
 #include "kernel.h"
 
+#include "PageList.h"
 #include "StateKicker.h"
 #include "LogFileIF.h"
 #if PRINTING
@@ -30,6 +32,7 @@
 #endif
 
 #include "PrintQ.h"
+#include "SendQ.h"
 #include "Screen.h"
 #if SUPPORT_EMAIL
 #include "MimeQ.h"
@@ -46,8 +49,9 @@
 
 #include "AddrBookIF.h"
 #include "QuStruct.h"
+#include "QuCommon.h"
 
-#include "NFELib.h"
+#include "NetFax/NFELib/NFELib.h"
 #include "CasIF.h"
 
 #include "DebugLib.h"
@@ -74,10 +78,14 @@ extern void FileConvert_StateMachine(int messageNumber, messageDataBlock *messag
 #endif
 
 
-extern int HWM_Check(void);
 #if 0
 static void common_LogFile_TextTiff(Document text_document);
 #endif
+static void LogRx_failure(messageDataBlock *messageData);
+static void LogRx_new_document(PqRxRoute Source);
+static void LogRx_document_error(Document document, messageDataBlock *messageData);
+static void LogRx_document_complete(Document document);
+
 static void Log_TxConnecting(/*enum _SendRoute route,*/ PhoneConnection *connection);
 static void Log_TxConnectingError(/*enum _SendRoute route,*/ PhoneConnection *connection, messageDataBlock *messageData);
 static void Log_TxConnectingFailed(/*enum _SendRoute route,*/ PhoneConnection *connection);
@@ -89,13 +97,13 @@ static void Log_TxSentDocument(/*enum _SendRoute route,*/ PhoneConnection *conne
 /*static BOOL connection_impossible(enum _SendRoute route, PhoneConnection *connection);*/
 static BOOL connection_requested_now(/*enum _SendRoute route,*/ PhoneConnection *connection);
 
-static _kernel_oserror *PrintQ_CreateDocument(Document *p_document);
+static _kernel_oserror *PrintQ_CreateDocument(Document *p_document, PqRxRoute Source);
 static void PrintQ_NextDocument(Document *p_document);
 static Document document_from_pid(unsigned int pid);
 
 static BOOL maybe_idle = TRUE;	/* strong hint that the local fax may be idle and hence free for printing to */
 
-enum _rx_States { rxIDLE = 0, rxDIRECTCONNECTED, rxISPCONNECTED };
+enum _rx_States { rxIDLE = 0, rxDIRECTCONNECTED };
 enum _tx_States { txIDLE = 0, txCONNECTING, txCONNECTED };
 
 typedef enum _rx_States rx_States;
@@ -124,15 +132,10 @@ extern void PrintQ_MessageHandler(int messageNumber, messageDataBlock *messageDa
 /* receiving */
 		case RX_PQ_ERROR:
 		case RX_PQ_NEW_DOCUMENT:
+		case RX_PQ_DOCUMENT_DETAILS:
 		case RX_PQ_NEW_PAGE:
 		case RX_PQ_PAGE_COMPLETE:
 		case RX_PQ_DOCUMENT_COMPLETE:
-#if SUPPORT_EMAIL		
-		case MD_PQ_NEW_DOCUMENT:
-        case MD_PQ_NEW_PAGE:
-        case MD_PQ_PAGE_COMPLETE:
-		case MD_PQ_DOCUMENT_COMPLETE:
-#endif
 			{
 				rx_States nextstate = rx_state;
 
@@ -143,6 +146,7 @@ extern void PrintQ_MessageHandler(int messageNumber, messageDataBlock *messageDa
                         {
 							case RX_PQ_ERROR:
 								Screen_ReportError("Title_RX_PQ_ERROR", messageData);
+								LogRx_failure(messageData);
 								break;
 								
 							case RX_PQ_NEW_DOCUMENT:
@@ -156,7 +160,7 @@ extern void PrintQ_MessageHandler(int messageNumber, messageDataBlock *messageDa
 											break;
 
 										case 1:
-											if (PrintQ_CreateDocument(&receive_document) != NULL)
+											if (PrintQ_CreateDocument(&receive_document, messageData->data.rx_pq_new_document.Source) != NULL)
 												status = OS_Error;
 											break;
 									}
@@ -174,50 +178,15 @@ extern void PrintQ_MessageHandler(int messageNumber, messageDataBlock *messageDa
 					
 										StateKicker_SendMessage(Screen_StateMachine, PQ_SC_NEW_DOCUMENT, &sendMessage);
 										sendMessage->data.pq_sc_new_document.pid = receive_document->ProcessId;
-										
+
+									    LogRx_new_document(messageData->data.rx_pq_new_document.Source);
+
 										nextstate = rxDIRECTCONNECTED;
 									}
 									else
 										StateKicker_SendMessage(RemXfer_StateMachine, PQ_RX_ABORT_INCOMING, NULL);
 								}
 								break;
-#if SUPPORT_EMAIL
-							case MD_PQ_NEW_DOCUMENT:
-								{
-									switch (HWM_Check(/*DEFAULT_FAX_SIZE*/))
-									{
-										case 3:
-										case 2:
-										    status = Error_NoMemory;
-											break;
-
-										case 1:
-											if (PrintQ_CreateDocument(&receive_document) != NULL)
-												status = OS_Error;
-											break;
-									}
-					
-									if (status == OK)
-									{
-										messageDataBlock *sendMessage;
-					
-										receive_document->ScanState = ScanRUNNING;	/* in progress */
-					
-					                    /* tell MimeDecode where to put the document (fax/text) */
-										StateKicker_SendMessage(MimeDecode_StateMachine, PQ_MD_NEW_DOCUMENT_DIR, &sendMessage);
-										sendMessage->data.new_document_dir.pid = receive_document->ProcessId;
-										strcpy(sendMessage->data.new_document_dir.directory, receive_document->Directory);
-					
-										StateKicker_SendMessage(Screen_StateMachine, PQ_SC_NEW_DOCUMENT, &sendMessage);
-										sendMessage->data.pq_sc_new_document.pid = receive_document->ProcessId;
-
-										nextstate = rxISPCONNECTED;
-									}
-									else
-										StateKicker_SendMessage(MimeDecode_StateMachine, PQ_MD_ABORT_INCOMING, NULL);
-								}
-								break;
-#endif
                         }
                         break;
 
@@ -226,6 +195,7 @@ extern void PrintQ_MessageHandler(int messageNumber, messageDataBlock *messageDa
                         {
 							case RX_PQ_ERROR:
 								Screen_ReportError("Title_RX_PQ_ERROR", messageData);
+								LogRx_document_error(receive_document, messageData);
 								break;
 #if /*THINK*/ 0
                             case RX_PQ_MAYBE_VOICE:
@@ -234,9 +204,15 @@ extern void PrintQ_MessageHandler(int messageNumber, messageDataBlock *messageDa
 							case RX_PQ_NEW_DOCUMENT:
 								StateKicker_SendMessage(RemXfer_StateMachine, PQ_RX_ABORT_INCOMING, NULL);
 								break;
-							
-							case MD_PQ_NEW_DOCUMENT:
-								StateKicker_SendMessage(MimeDecode_StateMachine, PQ_MD_ABORT_INCOMING, NULL);
+
+							case RX_PQ_DOCUMENT_DETAILS:
+								{
+									messageDataBlock *sendMessage;
+
+									StateKicker_SendMessage(Screen_StateMachine, PQ_SC_DOCUMENT_DETAILS, &sendMessage);
+									sendMessage->data.pq_sc_document_details.pid = receive_document->ProcessId;
+                                    strcpy(sendMessage->data.pq_sc_document_details.ContactName, receive_document->AddressRecord.ContactName);
+								}
 								break;
 
 							case RX_PQ_NEW_PAGE:
@@ -260,9 +236,47 @@ extern void PrintQ_MessageHandler(int messageNumber, messageDataBlock *messageDa
 							case RX_PQ_PAGE_COMPLETE:
 								{
                                     messageDataBlock *sendMessage;
-					
-									receive_document->ScanCount += 1;
-					
+#if 1
+                                    if (messageData->data.rx_pq_page_complete.pageClass == PageClass_SendReceipt)
+                                    {
+                                        char filename[256];
+
+                                        /* don't count this page! */
+                                        
+                                        strcpy(filename, receive_document->Directory);
+                                        strcat(filename, ".Receipt");
+
+                                        set_filetypeDN(receive_document->Directory, messageData->data.rx_pq_page_complete.pageNum, FILETYPE_TEXT);
+                                        renameDNDL(receive_document->Directory, messageData->data.rx_pq_page_complete.pageNum, receive_document->Directory, "Receipt");
+
+                                        receive_document->SendReceipt = TRUE;   /* sent to ReceiptAddress */
+                                    }
+                                    else
+#endif
+#if 1
+									if (messageData->data.rx_pq_page_complete.pageClass == PageClass_Config)
+									{
+										char filename[256];
+
+										/* don't count this page! */
+
+										strcpy(filename, receive_document->Directory);
+										strcat(filename, ".CasData");
+
+										set_filetypeDN(receive_document->Directory, messageData->data.rx_pq_page_complete.pageNum, FILETYPE_TEXT);
+										renameDNDL(receive_document->Directory, messageData->data.rx_pq_page_complete.pageNum, receive_document->Directory, "CasData");
+
+										CasIF_OfferClass(NFE_NFMC_CONFIG, filename);
+									}
+									else
+#endif
+					                QuCommon_Page_Complete(receive_document,
+					                                        messageData->data.rx_pq_page_complete.pageNum,
+					                                        messageData->data.rx_pq_page_complete.pageClass,
+					                                        messageData->data.rx_pq_page_complete.pageType,
+					                                        messageData->data.rx_pq_page_complete.fileType
+					                                       );
+					                             
 									switch (HWM_Check())					/* returns 1/2/3 OK/Trigger-send/Abort-Rx */
 									{
 										case 3:
@@ -273,22 +287,7 @@ extern void PrintQ_MessageHandler(int messageNumber, messageDataBlock *messageDa
 										case 1:
 											break;
 									}
-#if 1
-									if (messageData->data.rx_pq_page_complete.pageType == FILETYPE_CONFIG)
-									{
-										char filename[256];
 
-										receive_document->ScanCount -= 1;	/* don't count this page! */
-
-										strcpy(filename, receive_document->Directory);
-										strcat(filename, ".CasData");
-
-										set_filetypeDN(receive_document->Directory, messageData->data.rx_pq_page_complete.pageNum, FILETYPE_TEXT);
-										renameDNDL(receive_document->Directory, messageData->data.rx_pq_page_complete.pageNum, receive_document->Directory, "CasData");
-
-										CasIF_OfferClass(NFE_NFMC_CONFIG, filename);
-									}
-#endif
 									/* poke the animations */
 									StateKicker_SendMessage(Screen_StateMachine, PQ_SC_PAGE_COMPLETE, &sendMessage);
 									sendMessage->data.pq_sc_page_complete.ScanCount = receive_document->ScanCount;
@@ -302,7 +301,10 @@ extern void PrintQ_MessageHandler(int messageNumber, messageDataBlock *messageDa
 									/* poke the animations */
 									StateKicker_SendMessage(Screen_StateMachine, PQ_SC_DOCUMENT_COMPLETE, &sendMessage);
 									sendMessage->data.pq_sc_document_complete.ScanCount = receive_document->ScanCount;
-					
+
+                                    /* log the reception */
+                                    LogRx_document_complete(receive_document);
+
 									receive_document->ScanState = ScanCOMPLETE;	/* complete (3) */
 									receive_document->RequestTx = 1;			/* requesting */
 					
@@ -313,80 +315,6 @@ extern void PrintQ_MessageHandler(int messageNumber, messageDataBlock *messageDa
 
                         }
 						break;
-#if SUPPORT_EMAIL
-					case rxISPCONNECTED:
-						switch (messageNumber)
-						{
-							case RX_PQ_ERROR:
-								Screen_ReportError("Title_RX_PQ_ERROR", messageData);
-								break;
-
-							case RX_PQ_NEW_DOCUMENT:
-								StateKicker_SendMessage(RemXfer_StateMachine, PQ_RX_ABORT_INCOMING, NULL);
-								break;
-							
-							case MD_PQ_NEW_DOCUMENT:
-								StateKicker_SendMessage(MimeDecode_StateMachine, PQ_MD_ABORT_INCOMING, NULL);
-								break;
-
-							case MD_PQ_NEW_PAGE:
-								{
-									/*>>>Trigger page <n> animation*/
-									StateKicker_SendMessage(Screen_StateMachine, PQ_SC_NEW_PAGE, NULL);
-					
-									switch (HWM_Check())					/* returns 1/2/3 OK/Trigger-send/Abort-Rx */
-									{
-										case 3:
-											StateKicker_SendMessage(MimeDecode_StateMachine, PQ_MD_ABORT_INCOMING, NULL);
-											/* drop into... */
-										case 2:
-											receive_document->RequestTx = 1;	/* requesting (or in progress) */
-										case 1:
-											break;
-									}
-								}
-								break;
-					
-							case MD_PQ_PAGE_COMPLETE:
-								{
-					                messageDataBlock *sendMessage;
-					                
-									receive_document->ScanCount += 1;
-					
-									switch (HWM_Check())					/* returns 1/2/3 OK/Trigger-send/Abort-Rx */
-									{
-										case 3:
-											StateKicker_SendMessage(MimeDecode_StateMachine, PQ_MD_ABORT_INCOMING, NULL);
-											/* drop into... */
-										case 2:
-											receive_document->RequestTx = 1;	/* requesting (or in progress) */
-										case 1:
-											break;
-									}
-									
-									/* poke the animations */
-									StateKicker_SendMessage(Screen_StateMachine, PQ_SC_PAGE_COMPLETE, &sendMessage);
-									sendMessage->data.pq_sc_page_complete.ScanCount = receive_document->ScanCount;
-								}
-								break;
-					
-							case MD_PQ_DOCUMENT_COMPLETE:
-								{
-									messageDataBlock *sendMessage;
-
-									StateKicker_SendMessage(Screen_StateMachine, PQ_SC_DOCUMENT_COMPLETE, &sendMessage);
-									sendMessage->data.pq_sc_document_complete.ScanCount = receive_document->ScanCount;
-					
-									receive_document->ScanState = ScanCOMPLETE;	/* complete (3) */
-									receive_document->RequestTx = 1;			/* requesting */
-					
-									receive_document = NULL;	/* this handler no longer needs to reference this document */
-									nextstate = rxIDLE;
-								}
-								break;
-						}
-						break;
-#endif
 				} /* switch (rx_state) */
 
 #if 0
@@ -590,7 +518,7 @@ extern void FileConvert_NextFile(Document document)
 
 static void common_fileconvert(Document document)
 {
-	_kernel_oserror *error = NULL;
+  	_kernel_oserror *error = NULL;
 	char src_leafname[32];      /* eg "1" */
     char dst_directory[256];    /* eg "...PrintQ.0.TX" */
 
@@ -599,8 +527,18 @@ static void common_fileconvert(Document document)
     strcpy(dst_directory, document->Directory);
     strcat(dst_directory, ".TX");
 
-	if (document->tx_StartLine <= 0)
+	if (document->tx_StartLine == 0)
 	{
+#if 1
+/*        BOOL        error;*/
+        PageClasses pageClass;
+        PageTypes   pageType;
+        int         fileType;
+        
+        if (QuCommon_GetClassAndType(document, document->SendCount + 1, &pageClass, &pageType, &fileType) == 0)
+        {
+            if (pageClass == PageClass_TIFF)        
+#else
 		int objecttype, filelength, filetype;
 
 		/* a new source file, does it exist? and what type is it? */
@@ -609,6 +547,7 @@ static void common_fileconvert(Document document)
 		if ((error == NULL) && (objecttype == 1/*file found*/))
 		{
 			if (filetype == FILETYPE_TIFF)
+#endif
 			{
 				char dst_leafname[32];
 					        		
@@ -724,7 +663,7 @@ extern unsigned int PrintQ_ExtIF_NewDocument(char *p_directory)
 		case 3:
 		case 2:
 		case 1:
-			if (PrintQ_CreateDocument(&text_document) == NULL)
+			if (PrintQ_CreateDocument(&text_document, PqRxINTERNAL) == NULL)
 			{
 				strcpy(p_directory, text_document->Directory);
 				return(text_document->ProcessId);	/* created a new document and passed directory name to caller */
@@ -736,32 +675,26 @@ extern unsigned int PrintQ_ExtIF_NewDocument(char *p_directory)
 }
 
 
-extern void PrintQ_ExtIF_FileComplete(unsigned int LogFile_doc_pid, const char *leafname, int filetype)
+extern void PrintQ_ExtIF_FileComplete(unsigned int pid, const char *leafname, PageClasses pageClass, PageTypes pageType, int fileType)
 {
 	Document document;
 
-	if ((document = document_from_pid(LogFile_doc_pid)) != NULL)
+	if ((document = document_from_pid(pid)) != NULL)
 	{
-		
-		document->ScanCount += 1;
-		
-		set_filetypeDL(document->Directory, leafname, filetype);
-		renameDLN(document->Directory, leafname, document->ScanCount);
+		renameDLN(document->Directory, leafname, document->ScanCount + 1);
+		QuCommon_Page_Complete(document, document->ScanCount + 1, pageClass, pageType, fileType);
 	}
 }
 
 
-extern void PrintQ_ExtIF_FileTake(unsigned int LogFile_doc_pid, const char *source_directory, unsigned int source_leafnumber)
+extern void PrintQ_ExtIF_FileTake(unsigned int destination_pid, const char *source_directory, unsigned int source_leafnumber, PageClasses pageClass, PageTypes pageType, int fileType)
 {
 	Document document;
 
-	if ((document = document_from_pid(LogFile_doc_pid)) != NULL)
+	if ((document = document_from_pid(destination_pid)) != NULL)
 	{
-		
-		document->ScanCount += 1;
-		
-		/*set_filetypeDL(document->Directory, leafname, filetype);*/
-		renameDNDN(source_directory, source_leafnumber, document->Directory, document->ScanCount);
+		renameDNDN(source_directory, source_leafnumber, document->Directory, document->ScanCount + 1);
+		QuCommon_Page_Complete(document, document->ScanCount + 1, pageClass, pageType, fileType);
 	}
 }
 
@@ -803,11 +736,11 @@ extern void stubb_StateMachine(int messageNumber, messageDataBlock *messageData)
 }
 #endif
 
-extern void PrintQ_ExtIF_DocumentComplete(unsigned int LogFile_doc_pid)
+extern void PrintQ_ExtIF_DocumentComplete(unsigned int pid)
 {
 	Document text_document;
 
-	if ((text_document = document_from_pid(LogFile_doc_pid)) != NULL)
+	if ((text_document = document_from_pid(pid)) != NULL)
 	{
 		text_document->ScanState = ScanCOMPLETE;
 		/*>>>do we set TxRequest???*/
@@ -833,7 +766,102 @@ static void common_LogFile_TextTiff(Document text_document)
  * Accumulate call statistics, for LogFile and error reporting
  */
 
-static int	           log_error_count = 0;
+
+/*
+ * Log a failed incoming call - connection not established
+ */
+static void LogRx_failure(messageDataBlock *messageData)
+{
+    char buffer[256];
+
+    strcpy(buffer, "Incoming call: ");
+    strncat(buffer, messageData->data.os_error.err.errmess, sizeof(buffer));
+
+    LogFileIF_Message(buffer);  /* we need a global flag to indicate if this is actually an ISP retreive problem */
+}
+
+
+/*
+ * Connection established - document created in PrintQ
+ */
+static int LogRX_error_count = 0;
+
+static void LogRx_new_document(PqRxRoute Source)
+{
+    LogRX_error_count = 0;
+}
+
+
+static void strncat_sender(char *buffer, Document document, int bufsize)
+{
+    switch (document->ScanSource)
+    {
+        case PqRxDIRECT:    /* direct fax or ZMODEM link */
+            if ((document->AddressRecord.ContactName[0] != '\0') || (document->AddressRecord.DirectPhoneNumber[0] != '\0'))
+            {
+                strncat(buffer, document->AddressRecord.ContactName, bufsize);
+                strncat(buffer, " (", bufsize);
+                strncat(buffer, document->AddressRecord.DirectPhoneNumber, bufsize);
+                strncat(buffer, ")", bufsize);
+            }
+            break;
+
+        case PqRxISP:
+            if ((document->AddressRecord.ContactName[0] != '\0') || (document->AddressRecord.EmailAddress[0] != '\0'))
+            {
+                strncat(buffer, document->AddressRecord.ContactName, bufsize);
+                strncat(buffer, " (", bufsize);
+                strncat(buffer, document->AddressRecord.EmailAddress, bufsize);
+                strncat(buffer, ")", bufsize);
+            }
+            break;
+    }
+}
+
+
+static void strncat_page_count(char *buffer, int page_count, int bufsize)
+{
+    char numbuff[128];
+
+    sprintf(numbuff, "%d page(s)", page_count);
+    strncat(buffer, numbuff, bufsize);
+}
+
+
+static void LogRx_document_error(Document document, messageDataBlock *messageData)
+{
+    char buffer[256];
+    
+    strcpy(buffer, "R ");
+    strncat_sender(buffer, document, sizeof(buffer));
+    strncat(buffer, " ", sizeof(buffer));
+    strncat_page_count(buffer, document->ScanCount, sizeof(buffer));
+    strncat(buffer, " Error ", sizeof(buffer));
+    strncat(buffer, messageData->data.os_error.err.errmess, sizeof(buffer));
+
+    LogFileIF_Message(buffer);
+
+    LogRX_error_count++;
+}
+
+
+static void LogRx_document_complete(Document document)
+{
+    if (LogRX_error_count == 0)
+    {
+        char buffer[256];
+        
+        strcpy(buffer, "R ");
+        strncat_sender(buffer, document, sizeof(buffer));
+        strncat(buffer, " ", sizeof(buffer));
+        strncat_page_count(buffer, document->ScanCount, sizeof(buffer));
+        strncat(buffer, " OK ", sizeof(buffer));
+
+        LogFileIF_Message(buffer);
+    }
+}
+
+static int log_tx_error_count = 0;
 
 /*
  * Capture time when dialup started
@@ -846,7 +874,7 @@ static void Log_TxConnecting(/*enum _SendRoute route,*/ PhoneConnection *connect
     connection->TimeConnect = now;
     connection->TimeEnd     = now;
 
-	log_error_count = 0;
+	log_tx_error_count = 0;
 }
 
 
@@ -858,14 +886,14 @@ static void Log_TxConnectingError(/*enum _SendRoute route,*/ PhoneConnection *co
 	char buffer[256];
 	/* There should be one error report, followed by our going idle */
     /* if multiple errors arrive, we report the first only */
-	if (log_error_count == 0)
+	if (log_tx_error_count == 0)
 	{
 		strcpy(buffer, "R Error Printing ");
-		strncat(buffer, messageData->data.os_error.err.errmess, 128);
+		strncat(buffer, messageData->data.os_error.err.errmess, sizeof(buffer));
     	LogFileIF_Message(buffer);
     }
 
-    log_error_count++;
+    log_tx_error_count++;
 }
 
 
@@ -888,7 +916,7 @@ static void Log_TxConnectingFailed(/*enum _SendRoute route,*/ PhoneConnection *c
 	/*>>>Report the failure to the screen and LogFile */
 	/* Fax call to <number> failed <reason> */
     /* ISP dialup on <number> failed <reason> */
-    if (log_error_count == 0)
+    if (log_tx_error_count == 0)
     	LogFileIF_Message("R Error Printing");
 }
 
@@ -900,7 +928,7 @@ static void Log_TxConnected(/*enum _SendRoute route,*/ PhoneConnection *connecti
 	connection->TimeConnect = now;
 	connection->TimeEnd     = now;
 
-	log_error_count = 0;	/* unlikely not to be zero */
+	log_tx_error_count = 0;	/* unlikely not to be zero */
 }
 
 
@@ -908,14 +936,14 @@ static void Log_TxConnectedErrorSendingDoc(/*enum _SendRoute route,*/ PhoneConne
 {
 	char buffer[256];
 	
-	if (log_error_count == 0)
+	if (log_tx_error_count == 0)
 	{
 		strcpy(buffer, "R Error Printing ");
 		strncat(buffer, messageData->data.os_error.err.errmess, 128);
     	LogFileIF_Message(buffer);
     }
 
-	log_error_count++;
+	log_tx_error_count++;
 }
 
 
@@ -923,26 +951,30 @@ static void Log_TxConnectedError(/*enum _SendRoute route,*/ PhoneConnection *con
 {
 	char buffer[256];
 
-	if (log_error_count == 0)
+	if (log_tx_error_count == 0)
 	{
 		strcpy(buffer, "R Error Printing ");
 		strncat(buffer, messageData->data.os_error.err.errmess, 128);
     	LogFileIF_Message(buffer);
     }
 
-	log_error_count++;
+	log_tx_error_count++;
 }
 
 
 static void Log_TxSentDocument(/*enum _SendRoute route,*/ PhoneConnection *connection, Document document)
 {
+    /* we report the reception of documents and errors printing */
+    /* them but don't bother reporting successful printing */
+#if 0
 	char buffer[256];
 
-	if (log_error_count == 0)
+	if (log_tx_error_count == 0)
 	{
 		strcpy(buffer, "R OK");
 		LogFileIF_Message(buffer);
 	}
+#endif
 }
 
 
@@ -970,7 +1002,7 @@ extern unsigned int UniquePId(void)
 
 static Document PrintQ_Document_Queue = NULL;
 
-static _kernel_oserror *PrintQ_CreateDocument(Document *p_document)
+static _kernel_oserror *PrintQ_CreateDocument(Document *p_document, PqRxRoute Source)
 {
 	static unsigned int dir_num = 0;
 
@@ -987,6 +1019,8 @@ static _kernel_oserror *PrintQ_CreateDocument(Document *p_document)
 	document = malloc(sizeof(DocumentRec));
     if (document)
     {
+        memset(document, 0, sizeof(DocumentRec));   /* zero initialise whole block */
+        
     	sprintf(directory, "%s.%d", DIRECTORY_PRINTQ, dir_num);
         dir_num++;
 
@@ -1007,8 +1041,12 @@ static _kernel_oserror *PrintQ_CreateDocument(Document *p_document)
     	*document->CapturedPhoneNumber = '\0';  /* not yet captured from fax machine */
     	*document->AddressRecord.DirectPhoneNumber   = '\0';  /* not yet returned by the address book */
     	*document->AddressRecord.ContactName = '\0';          /* not yet returned by the address book */
+        document->ScanSource = Source;                  /* PqRxDIRECT, PqRxISP or PqRxINTERNAL */
 	    document->ScanState = ScanIDLE;			/* idle (0) */
     	document->ScanCount = 0;                /* no pages received yet */
+    	document->PageList  = NULL;				/* so no classes or types */
+    	document->TotalSize = 0;                /* no space taken by pages (neglecting directory overheads) */
+    	document->BiggestPage = 0;
    	    document->RequestTx = FALSE;
     	document->SendState = SendIDLE;			/* idle (0) */
     	document->SendCount = 0;                /* no pages transmitted yet */
@@ -1035,6 +1073,8 @@ static _kernel_oserror *PrintQ_CreateDocument(Document *p_document)
         	return(error);					/* return the error */
         }
 #endif
+        document->SendReceipt            = FALSE;
+        document->ReceiptAddress         = NULL;
 
         /* link document record to the tail of the queue */
 		if (PrintQ_Document_Queue == NULL)
@@ -1126,6 +1166,29 @@ extern void PrintQ_QueueWalker(void)
 	            	}
 	        	}
 
+#if SUPPORT_EMAIL
+                if (delete_it)
+                {
+                    if ((document->SendReceipt) && (document->ReceiptAddress))
+                    {
+                        char directory[256];
+                        unsigned int SendQ_pid;
+                        
+                        document->SendReceipt = FALSE;  /* ensure one only sent */
+
+                        /* create a new document then move our receipt into it */                        
+                        if ((SendQ_pid = SendQ_ExtIF_NewDocument(directory, document->ReceiptAddress, FALSE, FALSE)) != 0)
+                        {
+                            /* we don't print a hardcopy, nor do we request an acknowledgement of receipt of our receipt */
+
+                            SendQ_ExtIF_Subject(SendQ_pid, "Return receipt");
+                            SendQ_ExtIF_FileTake(SendQ_pid, document->Directory, "Receipt", PageClass_SendReceipt, PageType_SendReceipt, FILETYPE_TEXT);
+                            SendQ_ExtIF_DocumentComplete(SendQ_pid);
+                        }
+                    }
+                }
+#endif
+
 				if (delete_it)
 				{
 	                if (document == previous)
@@ -1145,7 +1208,23 @@ extern void PrintQ_QueueWalker(void)
 	                    	PrintQ_Document_Queue = previous;	/* deleting last item in queue, so point queue at last but one entry */
 	                }
 
+					/* remove the TX subdirectory */
+					{
+						char directory[212];
+						strcpy(directory, document->Directory);
+						strcat(directory, ".TX");
+						os_destroy_directory(directory);
+					}
+
+                    /* remove the document directory */
                     os_destroy_directory(document->Directory);
+
+#if SUPPORT_EMAIL
+                    /* Return receipt file */
+                    remove_fileDL(document->Directory,  "Receipt"); /* Be paranoid, shouldn't be needed */
+                    if (document->ReceiptAddress)
+                        free(document->ReceiptAddress);             /* MUST dispose of address string (if any) */
+#endif
                     free(document);
 
                     document = previous;
@@ -1187,6 +1266,76 @@ static Document document_from_pid(unsigned int pid)
 	}
 
 	return(NULL);	/* not found!!! */
+}
+
+
+extern AddressRec *PrintQ_AddressRecord_from_pid(unsigned int pid)
+{
+	Document document;
+
+	if ((document = document_from_pid(pid)) != NULL)
+		return(&document->AddressRecord);
+
+	return(NULL);	/* not found!!! */
+}
+
+
+static void show_string(const char *name, const char *value)
+{
+	char buffer[256];
+
+    buffer[0] = '\0';
+    strncat(buffer, name   , sizeof(buffer));
+    strncat(buffer, " is '", sizeof(buffer));
+    strncat(buffer, value  , sizeof(buffer));
+    strncat(buffer, "'"    , sizeof(buffer));
+
+    LogFileIF_Message(buffer);
+}
+
+
+
+
+
+static void show_decimal_uint(const char *name, const unsigned int value)
+{
+    char buffer[256];
+
+    sprintf(buffer, "%s = %u", name, value);
+    LogFileIF_Message(buffer);
+}
+
+
+/* write string to fixed width destination buffer */
+static void assign(char *source, char *buffer, int buflen, BOOL truncate, const char *label)
+{
+    *buffer = '\0';
+
+    /* null pointer sets empty string ("") */
+    if (source)
+        strncat(buffer, source, buflen);
+
+    if (label)
+        show_string(label, buffer);
+}
+
+
+extern void PrintQ_SenderDetails(unsigned int pid, unsigned int *serial_number, char *contact_name, char *fax_number, char *email_address, char *receipt_address)
+{
+	Document document;
+
+    if ((document = document_from_pid(pid)) != NULL)
+    {
+        AddressRec *pAddressRecord = &document->AddressRecord;
+
+        show_decimal_uint("SerialNumber", serial_number[0]);
+	    assign(contact_name , pAddressRecord->ContactName      , sizeof(pAddressRecord->ContactName)      , TRUE, "Contact");
+		assign(fax_number   , pAddressRecord->DirectPhoneNumber, sizeof(pAddressRecord->DirectPhoneNumber), FALSE, "FaxNumber");
+		assign(email_address, pAddressRecord->EmailAddress     , sizeof(pAddressRecord->EmailAddress)     , FALSE, "EmailAddress");
+        
+        if ((document->ReceiptAddress = malloc(1 + strlen(receipt_address))) != NULL)
+            strcpy(document->ReceiptAddress, receipt_address); 
+    }
 }
 
 

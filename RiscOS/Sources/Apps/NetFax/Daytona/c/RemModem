@@ -5,6 +5,7 @@
  * History: 1997-07-20: BAL: created
  *          1997-08-01: MGR: revised
  *          1997-09-26: SBF: revised further
+ *          1998-02-20: SBF: added PPP timeout code
  */
 
 
@@ -38,6 +39,7 @@
 #include "socklib.h"
 
 
+#include "PageList.h"
 #include "StateKicker.h"
 #include "RemModem.h"
 #include "RemXfer.h"
@@ -53,6 +55,7 @@
 /* =============================================================================
  * Define constants
  */
+#define PPP_Connection_Error 0x01 /* probably needs formally defining and moving elsewhere? */
 #define PPP_Stats 0x4b606
 #define Dialler_Status                  0x04c6c2
 
@@ -223,6 +226,11 @@ typedef enum error_RM error_RM;
 
 static const char answer_script[] =
     "TIMEOUT 0\n" /* @@@@ Need to specify that we want no timeout */
+    "ABORT 'NO CARRIER'\n"
+    "ABORT ERROR\n"
+    "ABORT 'NO DIALTONE'\n"
+    "ABORT BUSY\n"
+    "ABORT 'NO ANSWER'\n"
     "REPORT FAX\n"
     "REPORT DATA\n"
     "\"\" AT+FCLASS=0\n"
@@ -238,22 +246,38 @@ static const char answer_script[] =
 
 static const char fax_dial_script[] =
     "TIMEOUT 60\n"
+    "ABORT 'NO CARRIER'\n"
+    "ABORT ERROR\n"
+    "ABORT 'NO DIALTONE'\n"
+    "ABORT BUSY\n"
+    "ABORT 'NO ANSWER'\n"
     "\"\" ATE0<Dialler$Global><Dialler$Dial$FaxLocal>\n"
     "\\r\\nOK\\r\\n AT+FCLASS=<Fax$Class>\n" /* @@@@ Need to select Class 0 or 1 prior to script execution */
     "\\r\\nOK\\r\\n ATD<Fax$Number>\n"; /* Need to select number prior to script execution */
 /*    "\\r\\nCONNECT\\r\\n \\c\n"; */
 
 static const char fax_hangup_script[] =
+    "ABORT ERROR\n"
     "\"\" ATH0\n"
     "\\r\\nOK\\r\\n \\c\n";
 
 static const char data_hangup_script[] =
+    "ABORT ERROR\n"
     "\"\" \\d+++\\d\\c\n"
+#if 0
     "\\r\\nOK\\r\\n ATH0\n"
+#endif
+    "\\r\\n \\c\n"
+    "\\r\\n ATH0\n"
     "\\r\\nOK\\r\\n \\c\n";
 
 static const char data_dial_script[] =
     "TIMEOUT 60\n"
+    "ABORT 'NO CARRIER'\n"
+    "ABORT ERROR\n"
+    "ABORT 'NO DIALTONE'\n"
+    "ABORT BUSY\n"
+    "ABORT 'NO ANSWER'\n"
     "\"\" AT+FCLASS=0\n"
     "\\r\\nOK\\r\\n AT%C3L1E0W1\\\\N3<Dialler$Global><Dialler$Dial$DataLocal>\n"
     "\\r\\nOK\\r\\n ATD<Fax$Number>\n" /* Need to select number prior to script execution */
@@ -263,12 +287,21 @@ static const char data_dial_script[] =
 static const char data_answer_script[] =
     "TIMEOUT 15\n"
     "ABORT 'NO CARRIER'\n"
+    "ABORT ERROR\n"
+    "ABORT 'NO DIALTONE'\n"
+    "ABORT BUSY\n"
+    "ABORT 'NO ANSWER'\n"
     "\"\" AT<Dialler$Global><Dialler$Answer$DataLocal>\n"
     "\\r\\nOK\\r\\n ATO\n"
     "\\r\\nCONNECT \\c\n"
     "\\r\\n \\c\n";
 
 static const char outgoing_switchover_script[] =
+    "ABORT 'NO CARRIER'\n"
+    "ABORT ERROR\n"
+    "ABORT 'NO DIALTONE'\n"
+    "ABORT BUSY\n"
+    "ABORT 'NO ANSWER'\n"
     "\"\" AT#CLS=8\n"    /* this may not be necessary */
     "\\r\\nOK\\r\\n AT#CLS=0\n"
     "\\r\\nOK\\r\\n AT&K3<Dialler$Global><Dialler$Dial$SwitchOver>\n"    /* to get around bug in Rockwell script (ensure we get RTS/CTS) */
@@ -277,6 +310,11 @@ static const char outgoing_switchover_script[] =
     "\\r\\n \\c\n";
 
 static const char incoming_switchover_script[] =
+    "ABORT 'NO CARRIER'\n"
+    "ABORT ERROR\n"
+    "ABORT 'NO DIALTONE'\n"
+    "ABORT BUSY\n"
+    "ABORT 'NO ANSWER'\n"
     "\"\" AT#CLS=8\n"    /* this may not be necessary */
     "\\r\\nOK\\r\\n AT#CLS=0\n"
     "\\r\\nOK\\r\\n AT+FAE=0\n"    /* get out of adaptive answering mode */
@@ -288,6 +326,11 @@ static const char incoming_switchover_script[] =
 
 static const char isp_dial_script[] =
     "TIMEOUT 5\n"
+    "ABORT 'NO CARRIER'\n"
+    "ABORT ERROR\n"
+    "ABORT 'NO DIALTONE'\n"
+    "ABORT BUSY\n"
+    "ABORT 'NO ANSWER'\n"
     "\"\" <Dialler$ModemInit><Dialler$Global><Dialler$Dial$ISPLocal>\n"
     "\\r\\nOK\\r\\n ATDT<Dialler$Dial$Number>\n"
     "TIMEOUT 60\n"
@@ -502,7 +545,7 @@ static _kernel_oserror *idle (const int input,
                     char conntype[256];
 
 					StateKicker_SendMessage(Screen_StateMachine, RM_SC_INCOMING, NULL);	/* show incoming call animation */
-					
+
                     /* @@ Find out type of connection -- use REPORT FAX and REPORT DATA in script?*/
                     _swix (Dialler_Status, _INR (0, 2),
 
@@ -544,7 +587,7 @@ static _kernel_oserror *idle (const int input,
         case RX_RM_HANGUP:
         	/* Idle already, but RemXfer must be sent GOING_IDLE */
         	StateKicker_SendMessage(RemXfer_StateMachine, RM_RX_GOING_IDLE, NULL);
-        	/* we haven't sent RM_SC_INCOMING, so don't send RM_SC_INCOMING_COMPLETE */ 
+        	/* we haven't sent RM_SC_INCOMING, so don't send RM_SC_INCOMING_COMPLETE */
             *state = Idle;         /* Already idle */
             break;
 
@@ -591,7 +634,7 @@ static _kernel_oserror *incoming_data (const int input,
                                                     fax_hangup_script,
                                                     remote_modem_data->serial_input_stream,
                                                     remote_modem_data->serial_output_stream);
-                                                    
+
 			       StateKicker_SendMessage(Screen_StateMachine, RM_SC_INCOMING_COMPLETE, NULL);	/* terminate incoming call animation */
                    /*StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_GOING_IDLE, NULL); RCM says: let Incoming_RxFinished issue this*/
                    ActiveLight_Off();
@@ -697,10 +740,10 @@ static _kernel_oserror *incoming_rx_connected (const int input,
 
         case RX_RM_HANGUP:
             e = dialler_start_hangup_script ();
-			StateKicker_SendMessage(Screen_StateMachine, RM_SC_INCOMING_COMPLETE, NULL);	/* terminate incoming call animation */            
+			StateKicker_SendMessage(Screen_StateMachine, RM_SC_INCOMING_COMPLETE, NULL);	/* terminate incoming call animation */
             ActiveLight_Off();
             *state = Incoming_RxFinished; /*@@ Must be careful not to leave script running if error */
-            /*RCM says: RM_RX_GOING_IDLE will be issued by Incoming_RxFinished*/ 
+            /*RCM says: RM_RX_GOING_IDLE will be issued by Incoming_RxFinished*/
             break;
 
         case RX_RM_DIAL_FAX: case RX_RM_DIAL_DAYTONA: case RX_RM_DIAL_ISP:
@@ -1085,6 +1128,57 @@ static _kernel_oserror *outgoing_ppp_connecting (const int input,
 
     switch (input)
     {
+#if 1
+        case RM_RM_POLL_PPP:
+        {
+            int ppp_state;
+            static int timeout_set = 0;
+            static int ppp_timeout = 0;
+
+            if (!timeout_set)
+            {
+              /* Calculate time delay before PPP timeout */
+              ppp_timeout = clock() + (readvareval("Inet$PPPConnectTimeout") * 100); /* Timeout converted to centiseconds */
+              timeout_set = 1; /* set timeout flag */
+            }
+
+            /* Check to see if PPP connection is established */
+            e = get_ppp_state (&ppp_state);
+            if (e == NULL && ppp_state == 1)
+            {
+                /* IP layer is up */
+                timeout_set = 0; /* reset timeout flag for next time */
+                ppp_poll_status = 0;
+               	ActiveLight_On();
+                StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_TXCONNECTED, NULL);
+                *state = Outgoing_TxConnected;
+            }
+
+            /* Timeout (failure) condition; the failure is presumed identical to a Dialler failure, so the code is the
+               same as for the dial failure above */
+            if (clock() > ppp_timeout)
+            {
+              /* Reset timeout flag */
+              timeout_set = 0;
+
+              /* Report error */
+              RemModem_SendRCError(RemXfer_StateMachine, RM_RX_ERROR, "PPP connection timed out", PPP_Connection_Error);
+
+              /* Reset remote modem to known state - ready to answer incoming call */
+              e = RemoteModem_ResetModem();
+              e = dialler_start_answer_script (1,    /* force modem reset before executing script */
+                                               answer_script,
+                                               fax_hangup_script,
+                                               remote_modem_data->serial_input_stream,
+                                               remote_modem_data->serial_output_stream);
+
+              /* Tell RemXfer & Screen about the failure */
+              StateKicker_SendMessage(RemXfer_StateMachine, RM_RX_GOING_IDLE, NULL);
+              StateKicker_SendMessage(Screen_StateMachine, RM_SC_DIAL_COMPLETE, NULL);
+            }
+            break;
+        }
+#else
         case RM_RM_POLL_PPP:
         {
             int ppp_state;
@@ -1100,7 +1194,7 @@ static _kernel_oserror *outgoing_ppp_connecting (const int input,
             }
             break;
         }
-
+#endif
         default:
             *state = Outgoing_PPPConnecting;
             break;
@@ -1197,7 +1291,7 @@ static _kernel_oserror *outgoing_switching_over (const int input,
 #if 1
                         RemModem_SendRCError(RemXfer_StateMachine, RM_RX_ERROR, "Remote modem: Script failed (2)", (messageData->data.dialler.status & 0xFF));
 
-#else                	
+#else
                 		messageDataBlock *sendMessage;
 
                     	StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_ERROR, &sendMessage);
