@@ -11,7 +11,8 @@
 #
 # Paths
 #
-EXP_HDR = <export$dir>
+EXP_HDR  = <export$dir>2
+EXPC_HDR = <CExport$Dir>.h
 
 #
 # Generic options:
@@ -26,7 +27,8 @@ RM      = remove
 WIPE    = -wipe
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -zM -zps1 -ff ${INCLUDES} ${DFLAGS}
+CFLAGS  = -c -depend !Depend -zM -zps1 -ffah -strict ${CFLAGSEXTRA} ${INCLUDES} ${DFLAGS}
+CMHGFLAGS = -p -depend !Depend
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
@@ -45,27 +47,35 @@ ABSSYM    = RISC_OSLib:o.AbsSym
 #
 INCLUDES = -IC:
 
-DFLAGS   =
+DFLAGS   = -DSTANDBY_INITIAL_STATE=${INITIAL_STATE}
 
 #
 # Program specific options:
 #
 COMPONENT = Standby
-TARGET    = aof.Standby
-OBJS      = header.o module.o veneer.o standby.o
-EXPORTS   = 
+TARGET    = aof.${COMPONENT}
+RAMTARGET = rm.${COMPONENT}
+OBJS      = header.o module.o veneer.o standby.o task.o cstart.o robase.o
+EXPORTS   = ${EXP_HDR}.${COMPONENT} ${EXPC_HDR}.${COMPONENT}
+HDR       = h.header
+LIBS      = <Lib$Dir>.tboxlibs.o.wimplib
 
 #
 # Rule patterns
 #
-.c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} -o $@ $<
-.s.o:;      ${AS} ${AFLAGS} $< $@
+.SUFFIXES:	.o .s .c .cmhg .h
+.c.o:;		${CC} ${CFLAGS} -o $@ $<
+.cmhg.o:;	${CMHG} ${CMHGFLAGS} -o $@ $<
+.cmhg.h:;	${CMHG} ${CMHGFLAGS} -d $@ $<
+.s.o:;		${AS} ${AFLAGS} $< $@
+
+
+HDR: cmhg.header
 
 #
 # build a relocatable module:
 #
-all: rm.Standby
+all: ${RAMTARGET}
 
 #
 # RISC OS ROM build rules:
@@ -81,11 +91,12 @@ install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
 clean:
+	${RM} ${HDR}
         ${WIPE} o.* ${WFLAGS}
-        ${WIPE} rm.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
         ${WIPE} map.* ${WFLAGS}
         ${RM} ${TARGET}
+        ${RM} ${RAMTARGET}
         @echo ${COMPONENT}: cleaned
 
 resources:
@@ -93,11 +104,12 @@ resources:
 #        ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.Standby.Messages  ${CPFLAGS}
 #        @echo ${COMPONENT}: resource files copied
 
+
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS} ${ROMCSTUBS}
-        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
+${TARGET}: ${OBJS} ${HDR} ${LIBS} ${ROMCSTUBS}
+        ${LD} -o $@ -aof ${OBJS} ${LIBS} ${ROMCSTUBS}
 
 #
 # Final link for the ROM Image (using given base address)
@@ -108,33 +120,13 @@ rom_link:
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-rm.Standby: ${OBJS} ${CLIB}
-        ${LD} -o $@ -module ${OBJS} ${CLIB}
+${RAMTARGET}: ${OBJS} ${HDR} ${LIBS} ${CLIB}
+        ${LD} -o $@ -module ${OBJS} ${LIBS} ${CLIB}
 
-${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
-        ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
+${EXP_HDR}.${COMPONENT}: export.hdr.${COMPONENT}
+        ${CP} export.hdr.${COMPONENT} $@ ${CPFLAGS}
+
+${EXPC_HDR}.${COMPONENT}: export.h.${COMPONENT}
+        ${CP} export.h.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-o.module:	c.module
-o.module:	C:h.kernel
-o.module:	C:h.swis
-o.module:	h.module
-o.module:	h.standby
-o.module:	h.error
-o.veneer: s.veneer
-o.veneer: Hdr:ListOpts
-o.veneer: Hdr:Macros
-o.veneer: Hdr:System
-o.veneer: Hdr:SWIs
-o.veneer: Hdr:CPU.Generic26
-o.veneer: Hdr:IO.GenericIO
-o.veneer: Hdr:RISCOS
-o.veneer: Hdr:ModHand
-o.standby:	c.standby
-o.standby:	C:h.kernel
-o.standby:	C:h.swis
-o.standby:	h.module
-o.standby:	h.standby
-o.standby:	h.veneer
-o.standby:	h.iomd
-o.standby:	h.error
