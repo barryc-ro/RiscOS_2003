@@ -65,7 +65,7 @@ static char *ro310_2nd_table;
 static _kernel_oserror *LoadPNG(Image *this, const char *data, int len, BBox *changed);
 static _kernel_oserror *EndLoad(Image *this, BBox *changed);
 static _kernel_oserror *Delete(Image *this);
-static _kernel_oserror *Render(Image *this, int x, int y, int scale, int x_size, int y_size);
+static _kernel_oserror *RenderPNG(Image *this, int x, int y, int scale, int x_size, int y_size);
 static _kernel_oserror *ModeChange(Image *this);
 static _kernel_oserror *DumpToCache(Image *this, const char *filename, int *justuseorig);
 static _kernel_oserror *LoadFromCache(Image *this, const char *filename);
@@ -84,6 +84,7 @@ typedef struct png_loaddata
     unsigned int have_bkgd_index:1;
     unsigned int isreally32bit:1;
     unsigned int convto16bit:1;
+    unsigned int removemask:1;
     unsigned int bkgd;           /* Background colour (BBGGRRNN in file gamma, NN=palette number) */
     #ifdef TRACE
     FILE *trace;
@@ -92,6 +93,7 @@ typedef struct png_loaddata
     png_info *info_ptr;
     int sprite_offset;
     int mask_offset;
+    int available_rows;
     const char *errmess;
     BBox changed;
     png_byte *temp;
@@ -195,7 +197,7 @@ int NewPNG(Image *im)
     im->DumpSprite=SaveSpritePNG;
     im->EndLoad=EndLoad;
     im->Delete=Delete;
-    im->Render=Render;
+    im->Render=RenderPNG;
     /*im->ModeChange=ModeChange;*/
     im->LoadFromCache=LoadFromCache;
     im->DumpToCache=DumpToCache;
@@ -657,9 +659,7 @@ void info_callback(png_struct *png_ptr, png_info *info)
 
     mem += load->spritewidth * info->height;
 
-    if (!this->full_alpha &&
-            ((info->color_type & PNG_COLOR_MASK_ALPHA) || (info->valid & PNG_INFO_tRNS))
-        || info->color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
+    if (!this->full_alpha || info->color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
     {
        if (mode > 28)
           load->maskwidth = ((info->width + 31) &~ 31) / 8;
@@ -671,13 +671,38 @@ void info_callback(png_struct *png_ptr, png_info *info)
        have_mask = true;
 
        if (!this->full_alpha)
+       {
            this->transparent = 1;
+           if (!(info->color_type & PNG_COLOR_MASK_ALPHA) && !(info->valid & PNG_INFO_tRNS))
+           {
+               if (this->flags & IMAGE_FAST)
+               {
+                   /* don't bother */
+                   mem -= load->maskwidth * info->height;
+                   load->maskwidth = 0;
+                   have_mask = false;
+                   this->transparent = 0;
+               }
+               else
+                   load->removemask = 1;
+           }
+       }
     }
     else
        have_mask = false;
 
+  trywithoutmask:
     if (!flex_alloc((flex_ptr)&this->private_data2, mem + SprExtendBonus))
     {
+        if (load->removemask)
+        {
+            mem -= load->maskwidth * info->height;
+            have_mask = false;
+            load->removemask = 0;
+            this->transparent = 0;
+            goto trywithoutmask;
+        }
+
         load->errmess = "Insufficient memory";
         longjmp(png_ptr->jmpbuf, 1);
     }
@@ -861,7 +886,7 @@ void info_callback(png_struct *png_ptr, png_info *info)
     if (have_mask)
     {
         load->mask_offset=16 + this->private_data2[13];
-        if (info->interlace_type == 1)
+        if (info->interlace_type == 1 && !load->removemask)
             this->mutable_mask = true;
     }
 
@@ -915,14 +940,40 @@ void row_callback(png_struct *png_ptr, png_byte *new_row, png_uint_32 row_num, i
 
     int oldbudge = flex_set_budge(0);
 
+    /* Increase apparent height of sprite if necessary */
+    if (row_num >= load->available_rows)
+    {
+        load->available_rows = row_num + 1;
+
+        /* If now got one complete pass, take off the temporary mask */
+        if (load->available_rows == this->height && load->removemask)
+        {
+            if (!_swix(OS_SpriteOp, _INR(0,2), 256+30, this->private_data2, "png"))
+            {
+                flex_extend((flex_ptr) &this->private_data2, load->mask_offset);
+                this->private_data2[0] = load->mask_offset;
+                load->mask_offset = 0;
+                load->removemask = 0;
+                this->transparent = 0;
+            }
+        }
+    }
+
          row = (png_byte *) this->private_data2 +
                             load->sprite_offset +
                             load->spritewidth * row_num;
 
     if (load->mask_offset)
+    {
         mask_row = (png_byte *) this->private_data2 +
-                                load->mask_offset +
-                                load->maskwidth * row_num;
+                                 load->mask_offset +
+                                 load->maskwidth * row_num;
+        if (load->removemask)
+        {
+            memset(mask_row, 255, load->maskwidth);
+            mask_row = NULL;
+        }
+    }
     else
         mask_row = NULL;
 
@@ -1331,8 +1382,28 @@ static _kernel_oserror *SaveSpriteAlphaPNG(Image *this, const char *filename, in
 {
     _kernel_oserror *e;
     PNGloaddata *load = (PNGloaddata *) this->private_data;
-    int *temppal, i;
-    unsigned int bg_r, bg_g, bg_b;
+    int *temppal, i, j;
+    unsigned int bg_r, bg_g, bg_b, r, g, b, a, sprwidth, gap;
+    FILE *file;
+    png_byte *p, *m;
+    char *cttable = (char *)ct32k_buffer[1];
+
+    struct
+    {
+        int number;   // Number of sprites
+        int sproff;   // Offset to first sprite
+        int freeoff;  // Offset to first free byte
+        int  next;          // Offset to next sprite
+        char name[12];      // Sprite name
+        int  width;         // Width in words-1      (0..639)
+        int  height;        // Height in scanlines-1 (0..255/511)
+        int  lbit;          // First bit used (left end of row)
+        int  rbit;          // Last bit used (right end of row)
+        int  image;         // Offset to sprite image
+        int  mask;          // Offset to transparency mask
+        int  mode;          // Mode sprite was defined in
+    } fileheader;
+
 
     if (load->have_bkgd)
     {
@@ -1341,7 +1412,7 @@ static _kernel_oserror *SaveSpriteAlphaPNG(Image *this, const char *filename, in
         bg_b = load->bkgd >> 24;
     }
     else
-        bg_r = bg_g = bg_b = 0;
+        bg_r = bg_g = bg_b = 0xFF;
 
     switch (load->color_type)
     {
@@ -1386,31 +1457,126 @@ static _kernel_oserror *SaveSpriteAlphaPNG(Image *this, const char *filename, in
             this->private_data2[15 + i * 2] =
             this->private_data2[15 + i * 2 + 1] = c;
         }
-        break;
-      case PNG_COLOR_TYPE_GRAY_ALPHA:
-        break;
-      case PNG_COLOR_TYPE_RGB_ALPHA:
-        if (load->isreally32bit)
-            this->private_data2[14] = MODE(6, 90, 90);
-        break;
-    }
-
-    e = _swix(OS_SpriteOp, _INR(0,2), 256+12, this->private_data2, filename);
-
-    switch (load->color_type)
-    {
-      case PNG_COLOR_TYPE_PALETTE:
+        e = _swix(OS_SpriteOp, _INR(0,2), 256+12, this->private_data2, filename);
         memcpy(this->private_data2+15, temppal, 256*2*4);
         free(temppal);
-        break;
+        return e;
       case PNG_COLOR_TYPE_GRAY_ALPHA:
-        break;
+        file = fopen(filename, "wb");
+        if (!file) return pngError("Unable to open output file");
+        memset(&fileheader, 0, sizeof fileheader);
+        fileheader.number = 1;
+        fileheader.sproff = 16;
+        fileheader.freeoff = load->mask_offset;
+        fileheader.next = load->mask_offset - 16;
+        strcpy(fileheader.name, "png");
+        fileheader.width = this->private_data2[8];
+        fileheader.height = this->private_data2[9];
+        fileheader.lbit = 0;
+        fileheader.rbit = this->private_data2[11];
+        fileheader.image = 0x82C;
+        fileheader.mask = 0x82C;
+        fileheader.mode = 28;
+        if (fwrite(&fileheader, sizeof fileheader, 1, file) < 1)
+            goto file_error;
+        for (i = 0; i < 256; i++)
+        {
+            int pal[2];
+            pal[0] = pal[1] = (i<<24)|(i<<16)|(i<<8);
+            if (fwrite(pal, sizeof pal[0], 2, file) < 2)
+                goto file_error;
+        }
+
+        p = (png_byte *) this->private_data2 + load->sprite_offset;
+        m = (png_byte *) this->private_data2 + load->mask_offset;
+        for (i = load->spritewidth * this->height; i; i--)
+        {
+            g = *p++; a = *m++;
+
+            if (a != 255)
+            {
+                a = 256 - (a + (a >> 7));
+                g += (load->file_to_1[bg_g] * a) >> 8;
+                g = screen_from_1[g];
+            }
+            if (putc(g, file) == EOF)
+                goto file_error;
+        }
+        fclose(file);
+        return _swix(OS_File, _INR(0,2), 18, filename, 0xFF9);
       case PNG_COLOR_TYPE_RGB_ALPHA:
-        if (load->isreally32bit)
-            this->private_data2[14] = 28;
-        break;
+        file = fopen(filename, "wb");
+        if (!file) return pngError("Unable to open output file");
+        if (osver < 0xA5)
+           sprwidth = ((this->width + 3) >> 2) - 1;
+        else
+           sprwidth = this->private_data2[8];
+        memset(&fileheader, 0, sizeof fileheader);
+        fileheader.number = 1;
+        fileheader.sproff = 16;
+        fileheader.freeoff = 16 +44 + sprwidth * this->height;
+        fileheader.next = 44 + sprwidth * this->height;
+        strcpy(fileheader.name, "png");
+        fileheader.width = sprwidth;
+        fileheader.height = this->private_data2[9];
+        fileheader.lbit = 0;
+        gap = osver < 0xA5 ? (fileheader.width+1)*4-this->width : 0;
+        fileheader.rbit = osver < 0xA5 ? (this->width & 3) * 8 - 1
+                                       : 31;
+        fileheader.image = 0x2C;
+        fileheader.mask = 0x2C;
+        fileheader.mode = osver < 0xA5 ? 28 : MODE(6,90,90);
+        if (fwrite(&fileheader, sizeof fileheader, 1, file) < 1)
+            goto file_error;
+
+        p = (png_byte *) this->private_data2 + load->sprite_offset;
+        for (i = this->height; i; i--)
+        {
+            for (j = this->width; j; j--)
+            {
+                r = *p++; g = *p++; b = *p++; a = *p++;
+
+                if (a != 255)
+                {
+                    a = 256 - (a + (a >> 7));
+                    r += (load->file_to_1[bg_r] * a) >> 8;
+                    g += (load->file_to_1[bg_g] * a) >> 8;
+                    b += (load->file_to_1[bg_b] * a) >> 8;
+                    r = screen_from_1[r];
+                    g = screen_from_1[g];
+                    b = screen_from_1[b];
+                }
+                if (osver < 0xA5)
+                {
+                    unsigned int c = ((b >> 3) << 10) |
+                                     ((g >> 3) << 5) |
+                                     (r >> 3);
+
+                    if (putc(cttable[c], file) == EOF)
+                        goto file_error;
+                }
+                else
+                {
+                    if (putc(r, file) == EOF || putc(g, file) == EOF ||
+                        putc(b, file) == EOF || putc(0, file) == EOF)
+                        goto file_error;
+                }
+            }
+            if (gap)
+            {
+                char zero[4] = { 0 };
+                if (fwrite(&zero, 1, gap, file) < gap)
+                    goto file_error;
+            }
+        }
+        fclose(file);
+        return _swix(OS_File, _INR(0,2), 18, filename, 0xFF9);
     }
-    return e;
+
+  file_error:
+    fclose(file);
+    remove(filename);
+    return pngError("Error writing file");
 }
 
 static _kernel_oserror *DumpToCache(Image *this, const char *filename, int *justuseorig)
@@ -1451,7 +1617,7 @@ static _kernel_oserror *LoadFromCache(Image *this, const char *filename)
 
     if (!e)
     {
-        this->mutable_mask=this->transparent;
+        this->mutable_mask=0;
         if (this->width_os==-1)
             this->width_os=2*this->width;
         if (this->height_os==-1)
@@ -1578,11 +1744,12 @@ static _kernel_oserror *ModeChange(Image *this)
 
 static _kernel_oserror *RenderWithAlpha(Image *this, int x, int y, int scale, int x_size, int y_size, int log2bpp, int printing);
 
-static _kernel_oserror *Render(Image *this, int x, int y, int scale, int x_size, int y_size)
+static _kernel_oserror *RenderPNG(Image *this, int x, int y, int scale, int x_size, int y_size)
 {
     _kernel_oserror *e=NULL;
     PNGloaddata *load = (PNGloaddata *)this->private_data;
     int fac[4];
+    int job = 0;
 
     if (!this || !this->private_data2)
         return pngError("Broken PNG");
@@ -1605,12 +1772,10 @@ static _kernel_oserror *Render(Image *this, int x, int y, int scale, int x_size,
         this->modechanged = 0;
     }
 
+    _swix(PDriver_CurrentJob, _OUT(0), &job);
+
     if (this->full_alpha)
-    {
-        int job = 0;
-        _swix(PDriver_CurrentJob, _OUT(0), &job);
         return RenderWithAlpha(this, x, y, scale, x_size, y_size, job ? (osver >= 0xA5 ? 5 : 3) : log2bpp, job);
-    }
 
     if (load->isreally32bit)
         return pngError("Unable to render this image in this screen mode");
@@ -1672,7 +1837,7 @@ static _kernel_oserror *RenderWithAlpha(Image *this, int x, int y, int scale, in
     int *bgpal;
     char *bgptr;
     PNGloaddata *load=(PNGloaddata *) this->private_data;
-    int width = this->width, height = this->height;
+    int width = this->width, height = this->height, rowstoblend = load->available_rows;
     int clipoffset = 0, xo = 0, yo = 0;
 
     if (!printing)
@@ -1702,18 +1867,20 @@ static _kernel_oserror *RenderWithAlpha(Image *this, int x, int y, int scale, in
             y_size = height * 2;
         }
 
+        /* var.clip = graphics window in external coordinates */
         var.clip.xmin = (var.clip.xmin << var.xeig) + var.ox;
         var.clip.ymin = (var.clip.ymin << var.yeig) + var.oy;
         var.clip.xmax = ((var.clip.xmax+1) << var.xeig) + var.ox;
         var.clip.ymax = ((var.clip.ymax+1) << var.yeig) + var.oy;
 
+        /* If graphics window is totally outside available image, return */
         if (var.clip.xmax < x || var.clip.xmin >= x + x_size ||
-            var.clip.ymax < y || var.clip.ymin >= y + y_size)
+            var.clip.ymax < y + y_size - load->available_rows * 2 || var.clip.ymin >= y + y_size)
             return NULL;
 
         if (var.clip.xmin < x) var.clip.xmin = x;
         if (var.clip.xmax > x + x_size) var.clip.xmax = x + x_size;
-        if (var.clip.ymin < y) var.clip.ymin = y;
+        if (var.clip.ymin < y + y_size - load->available_rows * 2) var.clip.ymin = y + y_size - load->available_rows * 2;
         if (var.clip.ymax > y + y_size) var.clip.ymax = y + y_size;
 
         var.clip.xmin -= x; var.clip.ymin -= y;
@@ -1751,6 +1918,10 @@ static _kernel_oserror *RenderWithAlpha(Image *this, int x, int y, int scale, in
         if (load->color_type == PNG_COLOR_TYPE_RGB_ALPHA)
             clipoffset *= 4;
         clipoffset += (this->height - var.clip.ymax) * load->spritewidth;
+
+        rowstoblend = height;
+        if (this->height - var.clip.ymin > load->available_rows)
+            rowstoblend = load->available_rows - (this->height - var.clip.ymax);
     }
 
   dont_clip:
@@ -1792,7 +1963,26 @@ static _kernel_oserror *RenderWithAlpha(Image *this, int x, int y, int scale, in
         e = _swix(OS_WriteN, _INR(0,1), cmd, 5);
     }
 
-    if (!e) e = load->filler(load->filler_handle1, load->filler_handle2);
+    if (!e)
+    {
+        if (load->filler)
+            e = load->filler(load->filler_handle1, load->filler_handle2);
+        else
+        {
+            unsigned int bg_r, bg_g, bg_b, bg;
+            if (load->have_bkgd)
+            {
+                bg_r = load->file_to_screen[(load->bkgd >> 8) & 0xFF];
+                bg_g = load->file_to_screen[(load->bkgd >> 16) & 0xFF];
+                bg_b = load->file_to_screen[load->bkgd >> 24];
+                bg = (bg_b << 24) | (bg_g << 16) | (bg_r << 8);
+            }
+            else
+                bg = 0xFFFFFF00;
+            _swix(ColourTrans_SetGCOL, _IN(0)|_INR(3,4), bg, 128, 0);
+            _swix(OS_WriteI + 16, 0);
+        }
+    }
 
     e = SwitchFromBufferSprite();
     if (e) goto error2;
@@ -1806,7 +1996,7 @@ static _kernel_oserror *RenderWithAlpha(Image *this, int x, int y, int scale, in
 
     oldbudge = flex_set_budge(0);
 
-    blend_image(width, height,
+    blend_image(width, rowstoblend,
                 (char *) this->private_data2 + load->sprite_offset + clipoffset,
                 (char *) this->private_data2 + load->mask_offset + clipoffset,
                 this->private_data2 + 4 + 11,
@@ -2001,7 +2191,7 @@ static _kernel_oserror *BGColPNG(Image *this, int *bgcol, int dontoverride)
     this->RegisterFiller(this, bgfiller, this, (int *) &bg);
 
     /* Plot the image */
-    this->Render(this, 0, 0, 100, -1, -1);
+    RenderPNG(this, 0, 0, 100, -1, -1);
 
     /* Unswitch output */
     _swix(OS_SpriteOp, _INR(0,3), 0x13c, r1, r2, r3);
