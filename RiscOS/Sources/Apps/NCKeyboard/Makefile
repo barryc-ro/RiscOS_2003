@@ -156,6 +156,7 @@ resources:
 	${CP} LocalUserIFRes:!BootROM ${RESAPP}.!Boot ${CPFLAGS}
 	${CP} LocalUserIFRes:!RunROM ${RESAPP}.!Run ${CPFLAGS}
 	${CP} LocalUserIFRes:Messages ${RESAPP}.Messages ${CPFLAGS}
+       -${CP} LocalUserIFRes:Sprites ${RESAPP}.Sprites ${CPFLAGS}
 	${CP} LocalUserIFRes:Res ${RESAPP}.Res ${CPFLAGS}
 	@echo ${COMPONENT}: resource files copied
 	@echo
