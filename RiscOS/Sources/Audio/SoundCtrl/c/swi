@@ -1,0 +1,925 @@
+/* File:    swi.c
+ * Purpose: SoundCtrl swi handler
+ * Author:  Timothy Roddis
+ * History: 22-Aug-97: TGR: created
+ */
+
+/* ANSI headers */
+
+#include <stdlib.h>
+#include <string.h>
+
+/* RISC OS headers */
+
+#include "kernel.h"
+#include "swis.h"
+
+/* commonlib headers */
+
+#include "defines.h"
+#include "swiextra.h"
+#include "debug.h"
+#include "msgs.h"
+
+/* local headers */
+
+#include "SoundCtrl.h"
+#include "SS.h"
+#include "module.h"
+#include "errors.h"
+#include "globals.h"
+#include "DMA.h"
+#include "dmatfr.h"
+#include "irq.h"
+
+/* Static functions */
+
+/* This data structure and the following array based on records of this type form the
+ * basis of the channel related calls. They provide the information, not just that which
+ * ChannelInfo usesbut that which the SWIs use internally to convert gain/attenuation and
+ * detect facilities present.
+ * Although this offers a good degree of flexibility with respect to various capabilities,
+ * the Playback and Capture channel have been hardwired as the only ones to be codec aware.
+ * This is reasonable since code modifications are required elsewhere to support more than
+ * two channels.
+ * Also, the Phone and Mic volume has had to be hard-wired, as their volume controls
+ * are combined into one register
+ */
+
+typedef struct _channel_info {
+  unsigned int    flags;        // flags as seen by the application writer
+//  unsigned int    intnl_flags;  // internal flags
+  int             resource;     // resources that must be claimed in order to use this
+  int             min;          // minimum volume (dB)
+  int             max;          // maximum volume (dB)
+  int             granularity;  // granularity of volume (dB)
+  unsigned short  ssind_reg;    // volume register (if applicable) else selector register
+  unsigned short  ssind_rate;      // rate control register
+} Static_ChannelInfo;
+
+#define VolAffectADC SoundCtrl_Channel_VolAffectADC
+#define Mute         SoundCtrl_Channel_CanMute
+#define HasAGC       SoundCtrl_Channel_HasAGC
+#define HasSel       SoundCtrl_Channel_HasSelSrcs
+#define Sel          SoundCtrl_Channel_CanIP2Sel
+#define Mixer        SoundCtrl_Channel_CanIP2Mixer
+#define Rates        SoundCtrl_Channel_CtrlRate
+#define Right        SoundCtrl_Channel_HasRight
+#define Left         SoundCtrl_Channel_HasLeft
+
+#define fix(A) ((int)(A*65536))
+
+static Static_ChannelInfo static_channel_info[] = {
+
+  {Mute|Sel|Right|Left,              SoundCtrl_Res_Mixer,
+    fix(-46.5), fix(  0.0), fix(- 1.5), SSInd_MasterVol  , 0},
+
+  {Mute|Sel|Mixer|Right|Left,       -1,
+    fix(-34.5), fix( 12.0), fix(- 1.5), SSInd_LineVol    , 0},
+  {Mute|Sel|Mixer|Right|Left,       -1,
+    fix(-34.5), fix( 12.0), fix(- 1.5), SSInd_CDVol      , 0},
+  {Mute|Sel|Mixer|Right|Left,       -1,
+    fix(-34.5), fix( 12.0), fix(- 1.5), SSInd_SynthVol   , 0},
+  {Mute|Sel|Mixer|Right|Left,       -1,
+    fix(-34.5), fix( 12.0), fix(- 1.5), SSInd_VidVol     , 0},
+
+  {Mute|Sel|Mixer|Left,             -1,
+    fix(-45.0), fix(  0.0), fix(- 3.0), SSInd_MicPhoneVol, 0},
+  {Mute|Sel|Mixer|Left,             -1,
+    fix(-45.0), fix(  0.0), fix(- 3.0), SSInd_MicPhoneVol, 0},
+
+  {Sel|Right,                        SoundCtrl_Res_Mixer,
+    fix(-46.5), fix(  0.0), fix(- 1.5), SSInd_PhoneOutVol, 0},
+
+/* And now the digital channels */
+
+  {Mute|Sel|Mixer|Rates|Right|Left,  SoundCtrl_Res_Playback,
+    fix(-94.5), fix(  0.0), fix(- 1.5), SSInd_PlayVol    , SSInd_PlayRate},
+  {Mute|Sel|Mixer|Rates|Right|Left,  1,
+    fix(-94.5), fix(  0.0), fix(- 1.5), SSInd_FMVol      , SSInd_FMRate},
+  {Mute|Sel|Mixer|Rates|Right|Left, -1,
+    fix(-94.5), fix(  0.0), fix(- 1.5), SSInd_IIS0Vol    , SSInd_IIS0Rate},
+  {Mute|Sel|Mixer|Rates|Right|Left, -1,
+    fix(-94.5), fix(  0.0), fix(- 1.5), SSInd_IIS1Vol    , SSInd_IIS1Rate},
+
+  {HasAGC|Rates|HasSel|Right|Left,   SoundCtrl_Res_Capture,
+    fix(  0.0), fix( 22.5), fix(  1.5), SSInd_ADCCtrl    , SSInd_CaptureRate}
+};
+
+#undef VolAffectADC
+#undef Mutable
+#undef HasAGC
+#undef HasSel
+#undef Sel
+#undef Mixer
+#undef Rates
+#undef Right
+#undef Left
+
+static int static_rsrc_nos[] = { 1,  0,  2,  3,  4,  7, -1, -1};
+static int static_lsrc_nos[] = { 1,  0,  2,  3,  4,  5,  6, -1};
+
+#define Static_SourceMask 0x70
+
+static unsigned int convert_vol_fixd2hw (int min, int max, int granularity, int value);
+
+#define convert_vol_hw2fixd(min, max, gran, val) ((val)*(gran)+((gran)<0?(max):(min)))
+
+/* Extern functions */
+
+/* Swi handler - standard cmhg SWI handling function */
+
+_kernel_oserror *swi_handler (int swi_no, _kernel_swi_regs *r, void *pw) {
+
+  _kernel_oserror *e = NULL;
+
+  IGNORE (pw);
+
+  DEBUG debug_output ("s", Module_Title": handling SWI no. %d (0x%x)\n", swi_no, swi_no+SoundCtrl_00);
+
+  /* Check the channel number & access key here for all SWIs that require them,
+     this saves duplication later on */
+
+  if (global_keys[SoundCtrl_Res_SoundBlaster]) {
+    switch (swi_no + SoundCtrl_00) {
+      case SoundCtrl_Claim:
+      case SoundCtrl_Release:
+      case SoundCtrl_GetHWAddress:
+         break;
+      default:
+         return msgs_make_error (Error_SoundBlaster);
+    }
+  }
+
+  switch (swi_no + SoundCtrl_00) {
+    case  SoundCtrl_SetVolume:
+      if ((unsigned) (r->r[1]) >= sizeof static_channel_info / sizeof(Static_ChannelInfo)) {
+        return msgs_make_error (Error_UKChannel);
+      }
+      if (r->r[2] != global_keys[SoundCtrl_Res_Mixer]) {
+        return msgs_make_error (Error_BadKey);
+      }
+      break;
+    case  SoundCtrl_SetSource:
+    case  SoundCtrl_SetCodec:
+    case  SoundCtrl_Transfer:
+    case  SoundCtrl_SuspendTransfer:
+    case  SoundCtrl_ResumeTransfer:
+    case  SoundCtrl_TerminateTransfer:
+      /* static_channel_info[x].resource is the resource that a channel requires
+       * keys is a list of keys based on resource number */
+
+      DEBUG debug_output ("s3", "Channel: %d\n", r->r[1]);
+
+      if ((unsigned) (r->r[1]) >= sizeof static_channel_info / sizeof(Static_ChannelInfo)) {
+        return msgs_make_error (Error_UKChannel);
+      }
+
+      DEBUG debug_output ("s3", "Resource: %d\n", static_channel_info[r->r[1]].resource);
+
+
+#if FALSE
+      if (static_channel_info[r->r[1]].resource >= SoundCtrl_NoResources) {
+        return msgs_make_error (Error_UKRes);
+      }
+#endif
+      if (static_channel_info[r->r[1]].resource != -1) {
+        DEBUG debug_output ("s3", Module_Title": checking key %08x with %08x\n", r->r[2], global_keys[static_channel_info[r->r[1]].resource]);
+
+        if (r->r[2] != global_keys[static_channel_info[r->r[1]].resource]) {
+          return msgs_make_error (Error_BadKey);
+        }
+      }
+      break;
+    case SoundCtrl_GetVolume:
+    case SoundCtrl_ChannelInfo:
+    case SoundCtrl_GetSource:
+    case SoundCtrl_GetCodec:
+    case SoundCtrl_SampleRateInfo:
+      if ((unsigned) (r->r[1]) >= sizeof static_channel_info / sizeof(Static_ChannelInfo)) {
+        return msgs_make_error (Error_UKChannel);
+      }
+      break;
+  }
+
+  /* Now handle the SWI routines, the lines of stars separate the individual cases */
+
+  switch (swi_no + SoundCtrl_00) {
+
+#if FALSE
+                    /**********************************************************/
+    case  SoundCtrl_HardwareVolume:
+    {
+      unsigned int val;
+
+      *SS_IndAddr = SSInd_HWVol;
+
+      val = (r->r[1] == SoundCtrl_HardwareVolume_Mute      ? SSInd_VMU
+           : r->r[1] == SoundCtrl_HardwareVolume_Increment ? SSInd_VUP
+           : r->r[1] == SoundCtrl_HardwareVolume_Decrement ? SSInd_VDN
+           : 0) | SS_Read16(SS_IndData);
+
+
+      SS_Write16 (SS_IndData, val);
+      break;
+    }
+#endif
+                    /**********************************************************/
+
+    case  SoundCtrl_Claim:
+    {
+      int i;
+
+      DEBUG debug_output ("s", Module_Title": ""Resource: %d, key: %08x, claiming with key %08x\n", r->r[1], global_keys[r->r[1]], r->r[2]);
+
+      if ((unsigned) (r->r[1]) >= SoundCtrl_NoResources) {
+        return msgs_make_error (Error_UKRes);
+      }
+      if (global_keys[SoundCtrl_Res_SoundBlaster]) {
+        if (r->r[1] != SoundCtrl_Res_MPU401 && r->r[1] != SoundCtrl_Res_Gameport) {
+          return msgs_make_error (Error_SoundBlaster);
+        }
+      }
+
+      if (r->r[1] == SoundCtrl_Res_SoundBlaster) {
+        for (i = SoundCtrl_Playback; i < SoundCtrl_NoResources; i++) {
+          if (global_keys[i]) {
+            return msgs_make_error (Error_SoundBlaster);
+          }
+        }
+        if (global_keys[SoundCtrl_Res_Adlib]) {
+            return msgs_make_error (Error_SoundBlaster);
+        }
+        *SS_IndAddr = SSInd_ChipCfg;
+        SS_Write16 (SS_IndData, SS_Read16 (SS_IndData) & ~SSInd_WSE);
+      }
+
+      if (r->r[2] == global_keys[r->r[1]] || !global_keys[r->r[1]]) {
+        r->r[0]       = 1;
+        global_keys[r->r[1]] = r->r[2];
+      } else {
+        r->r[0] = 0;
+      }
+      break;
+    }
+
+                    /**********************************************************/
+
+    case  SoundCtrl_Release:
+      if ((unsigned) (r->r[1]) >= SoundCtrl_NoResources) {
+        return msgs_make_error (Error_UKRes);
+      }
+      if (global_keys[r->r[1]] == r->r[2] || r->r[0] & SoundCtrl_Release_ForceFlag) {
+        global_keys[r->r[1]] = 0;
+      } else {
+        return msgs_make_error (Error_BadKey);
+      }
+
+     if (r->r[1] == SoundCtrl_Res_SoundBlaster) {
+       *SS_IndAddr = SSInd_ChipCfg;
+       SS_Write16 (SS_IndData, SS_Read16 (SS_IndData) | SSInd_WSE);
+     }
+     break;
+
+                    /**********************************************************/
+
+    case  SoundCtrl_SetVolume:
+    {
+      unsigned int lvolume = 0, rvolume = 0, mask, val;
+
+      if (static_channel_info[r->r[1]].min == 0x80000000) {
+        return msgs_make_error (Error_UKChannel);
+      }
+
+      *SS_IndAddr = static_channel_info[r->r[1]].ssind_reg;
+
+      /* generate a bit-mask allowing us to extract the volume info directly */
+
+      mask = ((static_channel_info[r->r[1]].granularity < 0)
+             ?  convert_vol_fixd2hw (static_channel_info[r->r[1]].min,
+                                   static_channel_info[r->r[1]].max,
+                                   static_channel_info[r->r[1]].granularity,
+                                   static_channel_info[r->r[1]].min)
+             :  convert_vol_fixd2hw (static_channel_info[r->r[1]].min,
+                                   static_channel_info[r->r[1]].max,
+                                   static_channel_info[r->r[1]].granularity,
+                                   static_channel_info[r->r[1]].max))
+           | SSInd_MuteFlag;
+
+      DEBUG debug_output ("s", Module_Title": ""Initial mask calculated as %08x\n", mask);
+
+      if (static_channel_info[r->r[1]].flags & SoundCtrl_Channel_HasLeft
+      && r->r[1] != SoundCtrl_PhoneIn) {
+
+        DEBUG debug_output ("s1", Module_Title": ""Channel has left\n");
+
+        mask = mask<<8; // put mask on left side (upper 8-bits)
+
+        if (static_channel_info[r->r[1]].flags & SoundCtrl_Channel_CanMute
+        &&  r->r[0] & SoundCtrl_Volume_LeftMuteFlag) {
+
+          DEBUG debug_output ("s1", Module_Title": ""Muting left\n");
+
+          lvolume = SSInd_MuteFlag;
+
+        } else if (static_channel_info[r->r[1]].flags & SoundCtrl_Channel_HasAGC
+        && r->r[3] == SoundCtrl_Volume_AGC) {
+
+          DEBUG debug_output ("s1", Module_Title": ""Left AGC applied\n");
+
+          lvolume = SSInd_AutoGainCtrl;
+
+        } else {
+
+          lvolume = convert_vol_fixd2hw (static_channel_info[r->r[1]].min,
+                                         static_channel_info[r->r[1]].max,
+                                         static_channel_info[r->r[1]].granularity,
+                                         r->r[3]);
+        }
+      }
+
+      if (static_channel_info[r->r[1]].flags & SoundCtrl_Channel_HasRight
+      || r->r[1] == SoundCtrl_PhoneIn) {
+
+        DEBUG debug_output ("s1", Module_Title": ""Channel has right\n");
+
+        mask = mask | (mask>>8); // copy mask down if shifted up by left channel, otherwise do very little
+
+        if (static_channel_info[r->r[1]].flags & SoundCtrl_Channel_CanMute
+        &&  r->r[0] & SoundCtrl_Volume_RightMuteFlag) {
+
+          DEBUG debug_output ("s1", Module_Title": ""Muting right\n");
+
+          rvolume = SSInd_MuteFlag;
+
+        } else if (static_channel_info[r->r[1]].flags & SoundCtrl_Channel_HasAGC
+        && r->r[4] == SoundCtrl_Volume_AGC) {
+
+          DEBUG debug_output ("s1", Module_Title": ""Right AGC applied\n");
+
+          rvolume = SSInd_AutoGainCtrl;
+
+        } else {
+
+          rvolume = convert_vol_fixd2hw (static_channel_info[r->r[1]].min,
+                                         static_channel_info[r->r[1]].max,
+                                         static_channel_info[r->r[1]].granularity,
+                                         r->r[4]);
+        }
+      }
+
+      val = (lvolume << 8)
+          |  rvolume
+          |  (SS_Read16(SS_IndData) & ~mask);
+
+      DEBUG debug_output ("s", Module_Title ": setting volume to %08x (mask applied %08x)\n", val, ~mask);
+
+      SS_Write16 (SS_IndData, val);
+      break;
+    }
+
+                    /**********************************************************/
+
+    case  SoundCtrl_GetVolume:
+    {
+      unsigned int lvolume, rvolume, mask;
+
+      if (static_channel_info[r->r[1]].min == 0x80000000) {
+        return msgs_make_error (Error_UKChannel);
+      }
+
+      *SS_IndAddr = static_channel_info[r->r[1]].ssind_reg;
+
+      mask = (((static_channel_info[r->r[1]].granularity < 0)
+             ?  convert_vol_fixd2hw (static_channel_info[r->r[1]].min,
+                                   static_channel_info[r->r[1]].max,
+                                   static_channel_info[r->r[1]].granularity,
+                                   static_channel_info[r->r[1]].min)
+             :  convert_vol_fixd2hw (static_channel_info[r->r[1]].min,
+                                   static_channel_info[r->r[1]].max,
+                                   static_channel_info[r->r[1]].granularity,
+                                   static_channel_info[r->r[1]].max))
+           | SSInd_MuteFlag) * 257;
+
+      rvolume     = SS_Read16(SS_IndData) & mask;
+
+      DEBUG debug_output ("s", Module_Title ": volume reg = %08x (mask applied %08x)\n",
+                         rvolume, mask);
+
+      lvolume     = rvolume >> 8;
+      rvolume    &= 0xff;
+
+      r->r[0] = 0;
+
+      if (static_channel_info[r->r[1]].flags & SoundCtrl_Channel_HasLeft
+      && r->r[1] != SoundCtrl_PhoneIn) {
+
+        DEBUG debug_output ("s1", Module_Title": ""Channel has left, vol = %08x\n", lvolume);
+
+        if (static_channel_info[r->r[1]].flags & SoundCtrl_Channel_CanMute
+        &&  lvolume & SSInd_MuteFlag) {
+
+          DEBUG debug_output ("s1", Module_Title": ""muted\n");
+
+          r->r[0] |= SoundCtrl_Volume_LeftMuteFlag;
+
+        } else if (static_channel_info[r->r[1]].flags & SoundCtrl_Channel_HasAGC
+        && lvolume & SSInd_AutoGainCtrl) {
+
+          DEBUG debug_output ("s1", Module_Title": ""AGC\n");
+
+          r->r[3] = SoundCtrl_Volume_AGC;
+
+        } else {
+
+          r->r[3] = convert_vol_hw2fixd (static_channel_info[r->r[1]].min,
+                                         static_channel_info[r->r[1]].max,
+                                         static_channel_info[r->r[1]].granularity,
+                                         lvolume & ~SSInd_MuteFlag);
+        }
+      }
+
+      if (static_channel_info[r->r[1]].flags & SoundCtrl_Channel_HasRight
+      || r->r[1] == SoundCtrl_PhoneIn) {
+
+        DEBUG debug_output ("s1", Module_Title": ""Channel has right, vol = %08x\n", rvolume);
+
+        if (static_channel_info[r->r[1]].flags & SoundCtrl_Channel_CanMute
+        &&  rvolume & SSInd_MuteFlag) {
+
+          DEBUG debug_output ("s1", Module_Title": ""muted\n");
+
+          r->r[0] |= SoundCtrl_Volume_RightMuteFlag;
+
+        } else if (static_channel_info[r->r[1]].flags & SoundCtrl_Channel_HasAGC
+        && rvolume & SSInd_AutoGainCtrl) {
+
+          DEBUG debug_output ("s1", Module_Title": ""AGC\n");
+
+          r->r[4] = SoundCtrl_Volume_AGC;
+
+        } else {
+
+          r->r[4] = convert_vol_hw2fixd (static_channel_info[r->r[1]].min,
+                                         static_channel_info[r->r[1]].max,
+                                         static_channel_info[r->r[1]].granularity,
+                                         rvolume & ~SSInd_MuteFlag);
+        }
+      }
+      break;
+    }
+
+                    /**********************************************************/
+
+    case  SoundCtrl_ChannelInfo:
+    {
+      r->r[2] = r->r[1];
+
+      r->r[0] = static_channel_info[r->r[2]].flags;
+
+      r->r[3] = static_channel_info[r->r[2]].resource;
+      r->r[4] = static_channel_info[r->r[2]].min;
+      r->r[5] = static_channel_info[r->r[2]].max;
+      r->r[6] = abs(static_channel_info[r->r[2]].granularity);
+
+      if (r->r[1]+1 < sizeof static_channel_info / sizeof(Static_ChannelInfo)) {
+        r->r[1]++;
+      }
+      break;
+    }
+
+                    /**********************************************************/
+
+    case  SoundCtrl_SetSource:
+    {
+      int i;
+      unsigned int rsrc = -1, lsrc = -1;
+
+      if (~static_channel_info[r->r[1]].flags & SoundCtrl_Channel_HasSelSrcs
+      ||  ~static_channel_info[r->r[3]].flags & SoundCtrl_Channel_CanIP2Sel
+      ||  ~static_channel_info[r->r[4]].flags & SoundCtrl_Channel_CanIP2Sel) {
+        return msgs_make_error (Error_UKChannel);
+      }
+      *SS_IndAddr = static_channel_info[r->r[1]].ssind_reg;
+
+      DEBUG debug_output ("s1", Module_Title": ""Setting left src: %d, right src: %d\n", r->r[3], r->r[4]);
+
+      for (i = 0; i < sizeof static_lsrc_nos / sizeof(int); i++) {
+        if (static_lsrc_nos[i] == r->r[3]) {
+          DEBUG debug_output ("s1", Module_Title": ""Left channel: %d\n", i);
+          lsrc = i;
+        }
+        if (static_rsrc_nos[i] == r->r[4]) {
+          DEBUG debug_output ("s1", Module_Title": ""Right channel: %d\n", i);
+          rsrc = i;
+        }
+      }
+      DEBUG debug_output ("s1", Module_Title": ""translates as %02x and %02x\n", lsrc, rsrc);
+
+      /* The following catches use of a legitimate left channel as right and vice versa */
+
+      if (lsrc == -1 || rsrc == -1) return msgs_make_error (Error_UKChannel);
+
+      SS_Write16 (SS_IndData, (lsrc<<12)
+                            | (rsrc<<4)
+                            | (SS_Read16(SS_IndData) & ~(Static_SourceMask * 257)));
+      break;
+    }
+
+                    /**********************************************************/
+
+    case  SoundCtrl_GetSource:
+    {
+      unsigned int rsrc, lsrc;
+
+      if (~static_channel_info[r->r[1]].flags & SoundCtrl_Channel_HasSelSrcs) {
+        DEBUG debug_output ("s", Module_Title": ""Channel: %d/%d\n",
+                            r->r[1],
+                            sizeof static_channel_info / sizeof(Static_ChannelInfo));
+
+        return msgs_make_error (Error_UKChannel);
+      }
+      *SS_IndAddr = static_channel_info[r->r[1]].ssind_reg;
+
+      rsrc  = (SS_Read16(SS_IndData) & (Static_SourceMask * 257)) >> 4;
+      lsrc  = rsrc >> 8;
+      rsrc &= (Static_SourceMask>>4);
+
+      /* With an array so small, any early-finish optimisation would be adverse to performance */
+
+      DEBUG debug_output ("s1", Module_Title": ""Left src: %02x, right src: %02x\n", lsrc, rsrc);
+
+      r->r[3] = static_lsrc_nos[lsrc];
+      r->r[4] = static_rsrc_nos[rsrc];
+      break;
+    }
+                    /**********************************************************/
+
+    case  SoundCtrl_SetCodec:
+    {
+      volatile char *ss_cfg = 0;
+      if (~static_channel_info[r->r[1]].flags & SoundCtrl_Channel_CtrlRate) {
+        return msgs_make_error (Error_UKChannel);
+      }
+      switch (r->r[1]) {
+        case SoundCtrl_Capture:
+          ss_cfg = SS_CaptureCfg; // and drop through
+        case SoundCtrl_Playback:
+
+          if (!ss_cfg) ss_cfg = SS_PlayCfg;
+
+          switch (r->r[3]) {
+            case 0: case 1: case 2: case 3: case 6: break;
+            default: return msgs_make_error (Error_UKEnc);
+          }
+
+          *ss_cfg = (*ss_cfg & (SS_TRD | SS_DAZ | SS_PIO | SS_PEN))
+                  | r->r[3] * SS_PCL
+                  | r->r[0] * SS_PST;
+
+          DEBUG debug_output ("s3", Module_Title": ""Written register @ %08p with %02x\n", ss_cfg, *ss_cfg);
+      }
+      *SS_IndAddr = static_channel_info[r->r[1]].ssind_rate;
+
+      r->r[4] >>= 10;
+
+      DEBUG debug_output ("s2", Module_Title": ""Trying to set rate %d\n", r->r[4]);
+
+      if ((unsigned int) (r->r[4]) > SS_MaxRate) {
+        r->r[4] = SS_MaxRate;
+      } else if ((unsigned int) (r->r[4]) < SS_MinRate) {
+        r->r[4] = SS_MinRate;
+      }
+      SS_Write16 (SS_IndData, r->r[4]);
+
+      r->r[4] <<= 10;
+
+      break;
+    }
+                    /**********************************************************/
+
+    case  SoundCtrl_GetCodec:
+    {
+      volatile char *ss_cfg = 0;
+      unsigned int val;
+
+      if (~static_channel_info[r->r[1]].flags & SoundCtrl_Channel_CtrlRate) {
+        return msgs_make_error (Error_UKChannel);
+      }
+      switch (r->r[1]) {
+        case SoundCtrl_Capture:
+          ss_cfg = SS_CaptureCfg; /* and drop through */
+        case SoundCtrl_Playback:
+
+          if (!ss_cfg) ss_cfg = SS_PlayCfg;
+
+          val = *ss_cfg & ~(SS_TRD | SS_DAZ | SS_PIO | SS_PEN);
+
+//          DEBUG debug_output ("s1", "Codec: %04x\n", val);
+
+          r->r[0] = (val & SS_PST) / SS_PST; // see if stereo
+          r->r[3] = (val & (SS_PFMT_Mask|SS_PCL)) / SS_PCL;
+
+          break;
+
+      default:
+          r->r[0] =  SoundCtrl_Codec_Stereo;
+          r->r[3] = -1;
+      }
+
+      *SS_IndAddr = static_channel_info[r->r[1]].ssind_rate;
+
+      r->r[4] = SS_Read16(SS_IndData) << 10;
+
+      break;
+    }
+
+                    /**********************************************************/
+
+    case  SoundCtrl_SampleRateInfo:
+      if (~static_channel_info[r->r[1]].flags & SoundCtrl_Channel_CtrlRate) {
+        return msgs_make_error (Error_UKChannel);
+      }
+      if ((unsigned int) (r->r[3]) > SS_MaxRate) {
+        r->r[3] = SS_MaxRate;
+      } else if ((unsigned int) (r->r[3]) < SS_MinRate) {
+        r->r[3] = SS_MinRate;
+      }
+      if ((r->r[4] = r->r[3]+1) > SS_MaxRate) {
+        r->r[4] = SS_MaxRate;
+      }
+      break;
+
+                    /**********************************************************/
+
+    case  SoundCtrl_Transfer:
+    {
+      unsigned int chan;
+      int size;
+      _kernel_oserror *e, err;
+
+      /* And the next item is brought to you by the Society for the Preservation of the SVC Stack */
+
+      static const struct _control_routs {
+        VoidFunc         *enable,
+                         *disable,
+                         *start,
+                         *completed,
+                         *dma_sync;
+      } control_routs = {
+        dmatfr_enable,
+        dmatfr_disable,
+        dmatfr_start,
+        dmatfr_completed,
+        dmatfr_dmasync
+      };
+
+      DEBUG debug_output ("s2", Module_Title": regs: %08x %08x %08x %08x %08x %08x %08x\n",
+                          r->r[0], r->r[1], r->r[2], r->r[3], r->r[4], r->r[5], r->r[6]);
+
+      DEBUG debug_output ("s2", Module_Title": DMA control routines @%08p\n", &control_routs);
+
+      DEBUG debug_output ("s2", Module_Title": eg. ->enable = %08p, (%08p)\n",
+                          control_routs.enable, dmatfr_enable);
+
+      switch (r->r[1]) {
+        case SoundCtrl_Capture:
+           chan = DMATfr_ChannelCapture;
+           break;
+        case SoundCtrl_Playback:
+           chan = DMATfr_ChannelPlay;
+           break;
+        default:
+            return msgs_make_error (Error_UKChannel);
+      }
+
+      if (global_dma[chan].tag) {
+        /* Transfer in progress: since this is an access protected call I presume that
+         * the programmer knows what (s)he is doing and wishes to interrupt the old
+         * transfer */
+
+         DEBUG debug_output ("s2", Module_Title": terminating past transfer\n");
+
+         _swix (DMA_TerminateTransfer, I0|I1, &err, global_dma[chan].tag);
+
+      }
+
+      /* Just to make sure this is always done (if someone else has left it in an odd state
+       * this is our chance to clear up) */
+
+       /* Should I drain the FIFO here? It seems to work without. */
+
+
+      DEBUG debug_output ("s2", Module_Title": disabling codec and selecting correct base reg\n");
+
+      if (chan == DMATfr_ChannelPlay) {
+        *SS_PlayCfg = *SS_PlayCfg & ~SS_PEN;
+        *SS_IndAddr = SSInd_IRQCtrl;
+#if AD1816_EnableIRQs
+        SS_Write16 (SS_IndData, SS_Read16 (SS_IndData) | SSInd_PIE); /* enable playback IRQ */
+#else
+        SS_Write16 (SS_IndData, SS_Read16 (SS_IndData) & ~SSInd_PIE); /* disable playback IRQ */
+#endif
+        *SS_IndAddr = SSInd_PlayBase;
+      } else {
+        *SS_CaptureCfg = *SS_CaptureCfg & ~SS_CEN;
+        *SS_IndAddr = SSInd_IRQCtrl;
+#if AD1816_EnableIRQs
+        SS_Write16 (SS_IndData, SS_Read16 (SS_IndData) | SSInd_CIE); /* enable capture IRQ */
+#else
+        SS_Write16 (SS_IndData, SS_Read16 (SS_IndData) & ~SSInd_CIE); /* disable capture IRQ */
+#endif
+        *SS_IndAddr = SSInd_CaptureBase;
+      }
+
+      /* if channel not registered then register channel ... */
+
+      if (global_dma[chan].reg_handle == -1) {
+
+#if AD1816_Podule
+
+        DEBUG debug_output ("s2",
+                           Module_Title": (PODULE %d) no past DMA handle\n",AD1816_PoduleNo);
+
+        e = _swix (DMA_RegisterChannel,
+                   I0|I1|I2|I3|I4|I5|O0,
+                   0,               // flags
+                   DMA_LogicalChannel_Podule(AD1816_PoduleNo),
+                   DMA_CycleSpeed,
+                   DMA_TransferLength,               // transfer length (byte-wide interface)
+                   &control_routs,
+                   *(unsigned int *)pw,
+                   &(global_dma[DMATfr_ChannelPlay].reg_handle));
+
+        if (e) return e;
+
+        /* For podules there is only one channel: beware queuing */
+
+        global_dma[DMATfr_ChannelCapture].reg_handle = global_dma[DMATfr_ChannelPlay].reg_handle;
+
+#if AD1816_EnableIRQs
+
+        e = _swix (OS_ClaimDeviceVector,
+                   I0|I1|I2|I3|I4,
+                   OS_Devices_ExpansionCardIRQ,
+                   chan == DMATfr_ChannelPlay ? irq_handle_play : irq_handle_capture,
+                   *(unsigned int *)pw,
+                   SS_IRQStatus,
+                   chan == DMATfr_ChannelPlay ? SS_PI : SS_CI);
+
+        if (e) {
+          _swix (DMA_DeregisterChannel,
+                 I0,
+                 global_dma[chan].reg_handle);
+
+          global_dma[chan].reg_handle = -1;
+
+          return e;
+        }
+#endif
+
+#else
+        DEBUG debug_output ("s2", Module_Title": (MOTHERBOARD) no past DMA handle\n");
+
+        e = _swix (DMA_RegisterChannel,
+                   I0|I1|I2|I3|I4|I5|O0,
+                   0,               // flags
+                   DMA_LogicalChannel_AD1816,
+                   DMA_CycleSpeed,
+                   DMA_TransferLength,
+                   &control_routs,
+                   *(unsigned int *)pw,
+                   &(global_dma[chan].reg_handle));
+
+        if (e) return e;
+#if AD1816_EnableIRQs
+khjkhd
+#endif
+
+#endif
+      }
+      DEBUG debug_output ("s2", Module_Title": DMA handle is %08x\n", global_dma[chan].reg_handle);
+
+
+      /* Disable Playback Enable or Capture enable, allowing us to set DMA flags *
+       * NB: These should be disabled already. */
+
+
+#if AD1816_EnableIRQs
+      if (r->r[4] == 0) { /* infinite transfer rogue value */
+        size = r->r[5];
+      } else {
+        size = r->r[4];
+      }
+      size = size / 4 - 1;
+
+      if (size > SS_DMA_MaxTfr) {
+        size = SS_DMA_MaxTfr; /* AD1816: (65535 + 1) * 4, ie. 256k) */
+      }
+#else
+      size = 0; /* A size of 4 bytes (minimum) */
+#endif
+
+      DEBUG debug_output ("s2", Module_Title": size chosen %08x\n", size);
+
+      SS_Write16 (SS_IndData, size);
+
+      DEBUG debug_output ("s2", Module_Title": callback @%08x with r12 %08x\n", r->r[7], r->r[8]);
+
+//      global_dma[chan].callback     = (void *) (r->r[7]);
+
+      global_dma[chan].callbacks    = * (SoundCtrl_CallbackBlk *) (r->r[7]);
+      global_dma[chan].callback_r12 =                              r->r[8];
+
+      DEBUG debug_output ("s1", Module_Title": so callbacks @ %08p %08p %08p with R12 %08x\n", global_dma[chan].callbacks.start, global_dma[chan].callbacks.process, global_dma[chan].callbacks.end, global_dma[chan].callback_r12);
+
+      DEBUG debug_output ("s1", Module_Title": queuing transfer of %08x, %08x buffer\n", r->r[4], r->r[5]);
+
+      e = _swix (DMA_QueueTransfer, I0|I1|I2|I3|I4|I5|I6|O0,
+                (chan == DMATfr_ChannelPlay ? DMA_QueueTransfer_WriteFlag : 0) | r->r[0],
+                global_dma[chan].reg_handle,
+                chan, /* r11 value for DMA asm control routines */
+                r->r[3],
+                r->r[4],
+                r->r[5],
+                r->r[6],
+                &(global_dma[chan].tag));
+
+      if (e) return e;
+
+      DEBUG debug_output ("s2", Module_Title": returned DMA tfr tag %08x\n", global_dma[chan].tag);
+
+      break;
+    }
+
+                    /**********************************************************/
+
+    case  SoundCtrl_SuspendTransfer:
+    case  SoundCtrl_ResumeTransfer:
+    case  SoundCtrl_TerminateTransfer:
+    {
+      unsigned int chan;
+
+      switch (r->r[1]) {
+        case SoundCtrl_Capture:
+           chan = DMATfr_ChannelCapture;
+           break;
+        case SoundCtrl_Playback:
+           chan = DMATfr_ChannelPlay;
+           break;
+        default:
+            return msgs_make_error (Error_UKChannel);
+      }
+
+      DEBUG debug_output ("s1", Module_Title": Action on channel %d (%d) with DMA tag %08x\n",
+                          r->r[1], chan, global_dma[chan].tag);
+
+      e = _swix ( swi_no + SoundCtrl_00 == SoundCtrl_SuspendTransfer ? DMA_SuspendTransfer
+                : swi_no + SoundCtrl_00 == SoundCtrl_ResumeTransfer  ? DMA_ResumeTransfer
+                :                                                      DMA_TerminateTransfer,
+                I0|I1, 0, global_dma[chan].tag);
+
+      break;
+    }
+                    /**********************************************************/
+
+    case  SoundCtrl_GetHWAddress:
+      r->r[0] = (int)AD1816_SBBase;
+      r->r[1] = (int)AD1816_AdlibBase;
+      r->r[2] = (int)AD1816_MIDIBase;
+      r->r[3] = (int)AD1816_GameBase;
+      break;
+  }
+  return e;
+}
+
+/* convert_vol_fixd2hw (static)
+ *
+ * Parameters:
+ *   min - least value valid (in 16.16 2's complement fixed pt);
+ *   max - greatest value valid (fixed pt);
+ *   granularity - increment, may be negative (fixed pt);
+ *   value - fixed point number to be converted.
+ *
+ * Result:
+ *   return value is an n-bit unsigned integer describing gain/attenuation to the hardware.
+ *
+ * Assumptions:
+ *   a negative granularity means that the max value maps to 0, otherwise the min value maps to 0
+ *
+ */
+
+static unsigned int convert_vol_fixd2hw (int min, int max, int granularity, int value) {
+
+  if (value <= min) {
+    value =  min;
+  } else if (value >= max) {
+    value = max;
+  }
+
+  DEBUG debug_output ("s", Module_Title": min = %08x, max = %08x, gran = %08x, value = %08x\n"Module_Title": return = %08x\n", min, max, granularity, value, (value - ((granularity < 0) ? max : min))/granularity);
+
+  return (value - ((granularity < 0) ? max : min))/granularity;
+}
+
+#undef convert_vol_hw2fixd
