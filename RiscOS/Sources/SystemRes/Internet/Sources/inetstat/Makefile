@@ -1,0 +1,235 @@
+
+
+TARGET=         InetStat
+
+
+INCLUDES=	C:,TCPIPLibs:
+CC=		cc
+RM=             remove
+WFLAGS=         fr~c~v
+WIPE=           -wipe
+
+CFLAGS=		-pcc -I$(INCLUDES) -c ${THROWBACK} -depend !Depend
+
+OBJS=		o.main o.inet o.if o.route o.mroute
+
+LIBS=		C:o.Stubs TCPIPLibs:o.Unixlib TCPIPLibs:o.Inetlib \
+		TCPIPLibs:o.Socklib5
+
+.SUFFIXES:	.c .o
+.c.o:;		$(CC) $(CFLAGS) -o $@ $<
+
+${TARGET}:	$(OBJS) $(LIBS)
+		Link -o $@ $(OBJS) $(LIBS)
+		Squeeze $@
+
+clean:;		${RM} ${TARGET}
+		${WIPE} o.* ${WFLAGS}
+	
+# Dynamic dependencies:
+o.main:	c.main
+o.main:	TCPIPLibs:sys.h.param
+o.main:	TCPIPLibs:sys.h.types
+o.main:	TCPIPLibs:sys.h.cdefs
+o.main:	TCPIPLibs:machine.h.endian
+o.main:	TCPIPLibs:machine.h.ansi
+o.main:	TCPIPLibs:machine.h.types
+o.main:	TCPIPLibs:sys.h.syslimits
+o.main:	TCPIPLibs:sys.h.signal
+o.main:	TCPIPLibs:machine.h.signal
+o.main:	TCPIPLibs:sys.h.cdefs
+o.main:	TCPIPLibs:machine.h.param
+o.main:	TCPIPLibs:machine.h.limits
+o.main:	TCPIPLibs:sys.h.file
+o.main:	TCPIPLibs:sys.h.fcntl
+o.main:	TCPIPLibs:sys.h.types
+o.main:	TCPIPLibs:sys.h.cdefs
+o.main:	TCPIPLibs:sys.h.unistd
+o.main:	TCPIPLibs:sys.h.protosw
+o.main:	TCPIPLibs:sys.h.socket
+o.main:	TCPIPLibs:sys.h.cdefs
+o.main:	TCPIPLibs:netinet.h.in
+o.main:	TCPIPLibs:h.kvm
+o.main:	TCPIPLibs:h.nlist
+o.main:	TCPIPLibs:sys.h.cdefs
+o.main:	TCPIPLibs:sys.h.cdefs
+o.main:	TCPIPLibs:h.netdb
+o.main:	TCPIPLibs:sys.h.cdefs
+o.main:	TCPIPLibs:h.nlist
+o.main:	TCPIPLibs:h.paths
+o.main:	TCPIPLibs:sys.h.cdefs
+o.main:	TCPIPLibs:h.unistd
+o.main:	TCPIPLibs:sys.h.cdefs
+o.main:	TCPIPLibs:sys.h.types
+o.main:	TCPIPLibs:sys.h.unistd
+o.main:	TCPIPLibs:h.err
+o.main:	TCPIPLibs:machine.h.ansi
+o.main:	TCPIPLibs:sys.h.cdefs
+o.main:	TCPIPLibs:h.unixlib
+o.main:	TCPIPLibs:h.riscos
+o.main:	h.netstat
+o.main:	TCPIPLibs:sys.h.cdefs
+o.inet:	c.inet
+o.inet:	TCPIPLibs:sys.h.time
+o.inet:	TCPIPLibs:sys.h.cdefs
+o.inet:	TCPIPLibs:sys.h.param
+o.inet:	TCPIPLibs:sys.h.types
+o.inet:	TCPIPLibs:sys.h.cdefs
+o.inet:	TCPIPLibs:machine.h.endian
+o.inet:	TCPIPLibs:machine.h.ansi
+o.inet:	TCPIPLibs:machine.h.types
+o.inet:	TCPIPLibs:sys.h.syslimits
+o.inet:	TCPIPLibs:sys.h.signal
+o.inet:	TCPIPLibs:machine.h.signal
+o.inet:	TCPIPLibs:sys.h.cdefs
+o.inet:	TCPIPLibs:machine.h.param
+o.inet:	TCPIPLibs:machine.h.limits
+o.inet:	TCPIPLibs:sys.h.socket
+o.inet:	TCPIPLibs:sys.h.cdefs
+o.inet:	TCPIPLibs:sys.h.socketvar
+o.inet:	TCPIPLibs:sys.h.stat
+o.inet:	TCPIPLibs:sys.h.time
+o.inet:	TCPIPLibs:sys.h.cdefs
+o.inet:	TCPIPLibs:sys.h.select
+o.inet:	TCPIPLibs:sys.h.mbuf
+o.inet:	TCPIPLibs:sys.h.protosw
+o.inet:	TCPIPLibs:sys.h.queue
+o.inet:	TCPIPLibs:net.h.route
+o.inet:	TCPIPLibs:net.h.radix
+o.inet:	TCPIPLibs:netinet.h.in
+o.inet:	TCPIPLibs:netinet.h.in_systm
+o.inet:	TCPIPLibs:netinet.h.ip
+o.inet:	TCPIPLibs:netinet.h.in_pcb
+o.inet:	TCPIPLibs:netinet.h.ip_icmp
+o.inet:	TCPIPLibs:netinet.h.icmp_var
+o.inet:	TCPIPLibs:netinet.h.igmp_var
+o.inet:	TCPIPLibs:netinet.h.ip_var
+o.inet:	TCPIPLibs:netinet.h.tcp
+o.inet:	TCPIPLibs:netinet.h.tcpip
+o.inet:	TCPIPLibs:netinet.h.tcp_seq
+o.inet:	TCPIPLibs:netinet.h.tcp_fsm
+o.inet:	TCPIPLibs:netinet.h.tcp_timer
+o.inet:	TCPIPLibs:netinet.h.tcp_var
+o.inet:	TCPIPLibs:netinet.h.tcp_debug
+o.inet:	TCPIPLibs:netinet.h.udp
+o.inet:	TCPIPLibs:netinet.h.udp_var
+o.inet:	TCPIPLibs:arpa.h.inet
+o.inet:	TCPIPLibs:sys.h.cdefs
+o.inet:	TCPIPLibs:h.netdb
+o.inet:	TCPIPLibs:sys.h.cdefs
+o.inet:	TCPIPLibs:h.unixlib
+o.inet:	h.netstat
+o.inet:	TCPIPLibs:sys.h.cdefs
+o.if:	c.if
+o.if:	TCPIPLibs:sys.h.types
+o.if:	TCPIPLibs:sys.h.cdefs
+o.if:	TCPIPLibs:machine.h.endian
+o.if:	TCPIPLibs:machine.h.ansi
+o.if:	TCPIPLibs:machine.h.types
+o.if:	TCPIPLibs:sys.h.protosw
+o.if:	TCPIPLibs:sys.h.socket
+o.if:	TCPIPLibs:sys.h.cdefs
+o.if:	TCPIPLibs:net.h.if
+o.if:	TCPIPLibs:sys.h.socket
+o.if:	TCPIPLibs:sys.h.time
+o.if:	TCPIPLibs:sys.h.cdefs
+o.if:	TCPIPLibs:net.h.if_arp
+o.if:	TCPIPLibs:sys.h.socket
+o.if:	TCPIPLibs:net.h.if_dl
+o.if:	TCPIPLibs:sys.h.cdefs
+o.if:	TCPIPLibs:netinet.h.in
+o.if:	TCPIPLibs:netinet.h.in_var
+o.if:	TCPIPLibs:sys.h.queue
+o.if:	TCPIPLibs:netns.h.ns
+o.if:	TCPIPLibs:sys.h.cdefs
+o.if:	TCPIPLibs:netns.h.ns_if
+o.if:	TCPIPLibs:netiso.h.iso
+o.if:	TCPIPLibs:sys.h.cdefs
+o.if:	TCPIPLibs:netiso.h.iso_var
+o.if:	TCPIPLibs:arpa.h.inet
+o.if:	TCPIPLibs:sys.h.cdefs
+o.if:	C:h.kernel
+o.if:	TCPIPLibs:h.unixlib
+o.if:	h.netstat
+o.if:	TCPIPLibs:sys.h.cdefs
+o.route:	c.route
+o.route:	TCPIPLibs:sys.h.param
+o.route:	TCPIPLibs:sys.h.types
+o.route:	TCPIPLibs:sys.h.cdefs
+o.route:	TCPIPLibs:machine.h.endian
+o.route:	TCPIPLibs:machine.h.ansi
+o.route:	TCPIPLibs:machine.h.types
+o.route:	TCPIPLibs:sys.h.syslimits
+o.route:	TCPIPLibs:sys.h.signal
+o.route:	TCPIPLibs:machine.h.signal
+o.route:	TCPIPLibs:sys.h.cdefs
+o.route:	TCPIPLibs:machine.h.param
+o.route:	TCPIPLibs:machine.h.limits
+o.route:	TCPIPLibs:sys.h.protosw
+o.route:	TCPIPLibs:sys.h.socket
+o.route:	TCPIPLibs:sys.h.cdefs
+o.route:	TCPIPLibs:sys.h.mbuf
+o.route:	TCPIPLibs:net.h.if
+o.route:	TCPIPLibs:sys.h.socket
+o.route:	TCPIPLibs:sys.h.time
+o.route:	TCPIPLibs:sys.h.cdefs
+o.route:	TCPIPLibs:net.h.if_arp
+o.route:	TCPIPLibs:sys.h.socket
+o.route:	TCPIPLibs:net.h.if_dl
+o.route:	TCPIPLibs:sys.h.cdefs
+o.route:	TCPIPLibs:net.h.if_types
+o.route:	TCPIPLibs:net.h.route
+o.route:	TCPIPLibs:net.h.radix
+o.route:	TCPIPLibs:netinet.h.in
+o.route:	TCPIPLibs:netns.h.ns
+o.route:	TCPIPLibs:sys.h.cdefs
+o.route:	TCPIPLibs:sys.h.sysctl
+o.route:	TCPIPLibs:h.netdb
+o.route:	TCPIPLibs:sys.h.cdefs
+o.route:	TCPIPLibs:h.unistd
+o.route:	TCPIPLibs:sys.h.cdefs
+o.route:	TCPIPLibs:sys.h.types
+o.route:	TCPIPLibs:sys.h.unistd
+o.route:	TCPIPLibs:h.err
+o.route:	TCPIPLibs:machine.h.ansi
+o.route:	TCPIPLibs:sys.h.cdefs
+o.route:	h.netstat
+o.route:	TCPIPLibs:sys.h.cdefs
+o.route:	TCPIPLibs:h.riscos
+o.route:	TCPIPLibs:h.unixlib
+o.mroute:	c.mroute
+o.mroute:	TCPIPLibs:sys.h.param
+o.mroute:	TCPIPLibs:sys.h.types
+o.mroute:	TCPIPLibs:sys.h.cdefs
+o.mroute:	TCPIPLibs:machine.h.endian
+o.mroute:	TCPIPLibs:machine.h.ansi
+o.mroute:	TCPIPLibs:machine.h.types
+o.mroute:	TCPIPLibs:sys.h.syslimits
+o.mroute:	TCPIPLibs:sys.h.signal
+o.mroute:	TCPIPLibs:machine.h.signal
+o.mroute:	TCPIPLibs:sys.h.cdefs
+o.mroute:	TCPIPLibs:machine.h.param
+o.mroute:	TCPIPLibs:machine.h.limits
+o.mroute:	TCPIPLibs:sys.h.socket
+o.mroute:	TCPIPLibs:sys.h.cdefs
+o.mroute:	TCPIPLibs:sys.h.socketvar
+o.mroute:	TCPIPLibs:sys.h.stat
+o.mroute:	TCPIPLibs:sys.h.time
+o.mroute:	TCPIPLibs:sys.h.cdefs
+o.mroute:	TCPIPLibs:sys.h.cdefs
+o.mroute:	TCPIPLibs:sys.h.select
+o.mroute:	TCPIPLibs:sys.h.protosw
+o.mroute:	TCPIPLibs:sys.h.mbuf
+o.mroute:	TCPIPLibs:net.h.if
+o.mroute:	TCPIPLibs:sys.h.socket
+o.mroute:	TCPIPLibs:sys.h.time
+o.mroute:	TCPIPLibs:net.h.if_arp
+o.mroute:	TCPIPLibs:sys.h.socket
+o.mroute:	TCPIPLibs:netinet.h.in
+o.mroute:	TCPIPLibs:netinet.h.igmp
+o.mroute:	TCPIPLibs:net.h.route
+o.mroute:	TCPIPLibs:net.h.radix
+o.mroute:	TCPIPLibs:netinet.h.ip_mroute
+o.mroute:	h.netstat
+o.mroute:	TCPIPLibs:sys.h.cdefs
+o.mroute:	TCPIPLibs:h.riscos
