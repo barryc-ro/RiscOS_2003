@@ -10,6 +10,14 @@
 *   Author: Kurt Perry (kurtp) 14-Sep-1995
 *
 *   $Log$
+*   Revision 1.1  1998/01/19 19:12:43  smiddle
+*   Added loads of new files (the thinwire, modem, script and ne drivers).
+*   Discovered I was working around the non-ansi bitfield packing in totally
+*   the wrong way. When fixed suddenly the screen starts doing things. Time to
+*   check in.
+*
+*   Version 0.02. Tagged as 'WinStation-0_02'
+*
 *  
 *     Rev 1.47   06 May 1997 15:44:32   kurtp
 *  Fix MSACCESS 2.0/Win95 bug
@@ -1153,8 +1161,9 @@ TWDeleteDefaultPalette( HWND hwnd, HDC hdc )
      *  Restore default palette
      */
     SelectPalette( hdc, (HPALETTE) GetStockObject( DEFAULT_PALETTE), IsPluginWindow(hwnd) );
+#ifndef RISCOS
     RealizePalette( hdc );
-
+#endif
     /*
      *  Restore system default palette to compatible dc
      */

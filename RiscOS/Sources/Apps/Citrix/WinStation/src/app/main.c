@@ -255,15 +255,15 @@ static int dataopen_handler(WimpMessage *message, void *handle)
 {
     WimpDataOpen *msg = &message->data.data_open;
 
-    if (current_session)
-    {
-	msg_report(utils_msgs_lookup("conn"));
-	return 0;
-    }
-
     if (msg->file_type == filetype_ICA)
     {
 	WimpMessage reply;
+
+	if (current_session)
+	{
+	    msg_report(utils_msgs_lookup("conn"));
+	    return 0;
+	}
 
 	reply = *message;
 	reply.hdr.action_code = Wimp_MDataLoadAck;

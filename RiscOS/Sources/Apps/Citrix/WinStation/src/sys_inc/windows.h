@@ -361,7 +361,7 @@ extern int GetSystemMetrics(int nIndex);
 /* #define LTGRAY_BRUSH        1 */
 /* #define GRAY_BRUSH          2 */
 /* #define DKGRAY_BRUSH        3 */
-/* #define BLACK_BRUSH         4 */
+#define BLACK_BRUSH         4
 #define NULL_BRUSH          5
 /* #define HOLLOW_BRUSH        NULL_BRUSH */
 #define WHITE_PEN           6

@@ -16,6 +16,8 @@
 #include "../../../inc/debug.h"
 #include "../../../inc/mouapi.h"
 
+#include "../../../inc/clib.h"
+
 #include "citrix/ica.h"
 #include "citrix/ica-c2h.h"
 #include "citrix/twcommon.h"
@@ -154,6 +156,9 @@ typedef struct DC__
 	    int pen_col;	// colour number corresponding to pen_col
 	    int text_col;	// colour number corresponding to text_col
 	    int bk_col;		// colour number corresponding to bk_col
+
+	    int brush_solid;	// colour number corresponding to solid brush (if any)
+	    
 	    int action;		// action corresponding to ROP2
 	} local;
 
@@ -168,6 +173,8 @@ typedef struct DC__
 
 	    void *bitmap_coltrans;
 	    HBITMAP bitmap_bitmap;
+
+	    HRGN clip;
 	} current;
     } data;
 } DC;
@@ -217,6 +224,8 @@ typedef struct BRUSH__
 
     struct
     {
+	int solid;		// is it solid or patterned
+	COLORREF colour;
 	sprite_descr sprite;
 	int color_table_type;
     } data;
@@ -251,7 +260,7 @@ typedef struct GDIOBJ__
 /* ---------------------------------------------------------------------------------------------------- */
 
 #define cvtx(dc, x)	((x)*2)
-#define cvty(dc, y)	((dc->data.height - 1 - (y))*2)
+#define cvty(dc, y)	(((dc)->data.height - 1 - (y))*2)
 
 /* ---------------------------------------------------------------------------------------------------- */
 
@@ -326,12 +335,13 @@ coord system is origin at bottom-left
 /* ---------------------------------------------------------------------------------------------------- */
 
 struct os_mode_selector
-   {  int flags;
-      int xres;
-      int yres;
-      int log2_bpp;
-      int frame_rate;
-   };
+{
+    int flags;
+    int xres;
+    int yres;
+    int log2_bpp;
+    int frame_rate;
+};
 
 #define vduvar_XEig	4
 #define vduvar_YEig	5
@@ -418,19 +428,22 @@ static int getspritemode(int bpp)
     return 28;
 }
 
-static sprite_area *create_sprite(int w, int h, int bpp, BOOL palette)
+static int create_sprite(sprite_descr *descr, int w, int h, int bpp, BOOL palette)
 {
     sprite_area *area;
     sprite_header *sprite;
+    BOOL wastage = TRUE;
 
     int bit_width = w * bpp;
-    int word_width = ((32 - bpp) + bit_width + 31)/32; // max left hand wastage + sprite + round up to a word (to allow for grabbing from screen)
+    int word_width = ((wastage ? 32 - bpp : 0) + bit_width + 31)/32; // max left hand wastage + sprite + round up to a word (to allow for grabbing from screen)
     int pal_size = palette ? (8 << bpp) : 0;
 
     int size = sizeof(sprite_area) +
 	sizeof(sprite_header) +
 	pal_size +
 	word_width * 4 * h;
+
+    ASSERT(descr, 0);
 
     TRACE((TC_TW, TT_API4, "create_sprite: %d x %d @ %d bpp palette %d size %d", w, h, bpp, palette, size));
     
@@ -459,7 +472,13 @@ static sprite_area *create_sprite(int w, int h, int bpp, BOOL palette)
 
 	DTRACEBUF((TC_TW, TT_API4, area, sizeof(*area) + sizeof(*sprite)));
     }    
-    return area;
+
+    descr->width = w;
+    descr->height = h;
+    descr->bpp = bpp;
+    descr->area = area;
+
+    return area != NULL;
 }
 
 static void fill_sprite(sprite_descr *descr, const void *bits, int in_line_length)
@@ -502,7 +521,7 @@ static void set_sprite_palette(sprite_descr *descr, const ropalette *palette)
 
 static void fill_sprite_from_screen(sprite_descr *descr, int x, int y)
 {
-    // remove anhy sprite definition in there already
+    // remove any sprite definition in there already
     descr->area->number = 0;
     descr->area->freeoff = descr->area->sproff;
 
@@ -785,6 +804,8 @@ static HGDIOBJ create_object(int tag, int size)
 	link_object(obj);
     }
     
+    TRACE((TC_TW, TT_API4, "create_object: %p tag %d", obj, tag));
+
     return obj;
 }
 
@@ -931,6 +952,7 @@ static void uncache_dc(HDC dc)
     dc->data.local.pen_col = UNSET_COLOUR;
     dc->data.local.text_col = UNSET_COLOUR;
     dc->data.local.bk_col = UNSET_COLOUR;
+    dc->data.local.brush_solid = UNSET_COLOUR;
 }
 
 static void set_current_dc(HDC dc)
@@ -955,6 +977,7 @@ static int getcolournumber(HDC dc, COLORREF colref)
 	colour = (int)colref & 0x000000ff;
 	break;
 
+    case 0:
     case 2:			// choose RGB
 	ASSERT(dc->data.current.palette, 0);
 	
@@ -988,6 +1011,7 @@ static int getrgbval(HDC dc, COLORREF colref)
 	colour = dc->data.current.palette[colref & 0x000000ff].w;
 	break;
 
+    case 0:
     case 2:			// choose RGB
 	colour = colref << 8;
 	colour = REVERSE_WORD(colour);
@@ -1014,38 +1038,46 @@ static void *get_colour_lookup_table(HDC dc, const sprite_descr *descr, int colo
     void *table = NULL;
 
     ASSERT(descr, 0);
-    ASSERT(dc->data.current.palette, 0);
-
-    TRACE((TC_TW, TT_API4, "get_colour_lookup_table: dc %p type %d", dc, color_table_type));
+    ASSERT(descr->area, 0);
 
     area = descr->area;
     spr = first_sprite(area);
 
+    TRACE((TC_TW, TT_API4, "get_colour_lookup_table: dc %p pal %d type %d bpp %d", dc, spr->image != sizeof(sprite_header), color_table_type, descr->bpp));
+
     // if there is no palette in this bitmap
     if (spr->image == sizeof(sprite_header))
     {
-	ASSERT(descr->bpp == 1, descr->bpp);
+	// if 1 bpp bitmap should use the text/bk colours
+	// others will use no lookup - assume current mode
+	if (descr->bpp == 1)
+	{
+	    size = 1 << descr->bpp;
+	    if ((table = malloc(size)) == NULL)
+	    {
+		ASSERT(0, size);
+		return NULL;
+	    }
 
-	// a 1 bpp bitmap should use the text/bk colours
-	if ((table = malloc(1 << descr->bpp)) == NULL)
-	    return NULL;
-
-	// realize text and bk colours if not already
-	if (dc->data.local.text_col == UNSET_COLOUR)
-	    dc->data.local.text_col = getcolournumber(dc, dc->data.text_col);
+	    // realize text and bk colours if not already
+	    if (dc->data.local.text_col == UNSET_COLOUR)
+		dc->data.local.text_col = getcolournumber(dc, dc->data.text_col);
 	
-	if (dc->data.local.bk_col == UNSET_COLOUR)
-	    dc->data.local.bk_col = getcolournumber(dc, dc->data.bk_col);
+	    if (dc->data.local.bk_col == UNSET_COLOUR)
+		dc->data.local.bk_col = getcolournumber(dc, dc->data.bk_col);
 	
-	// fill in lookup table
-	((char *)table)[0] = dc->data.local.bk_col;
-	((char *)table)[1] = dc->data.local.text_col;
+	    // fill in lookup table
+	    ((char *)table)[0] = dc->data.local.bk_col;
+	    ((char *)table)[1] = dc->data.local.text_col;
+	}
     }
-    // if there is a palette, use colourtrans
     else
     {
+	// if there is an RGB palette, use colourtrans
 	if (color_table_type == DIB_RGB_COLORS)
 	{
+	    ASSERT(dc->data.current.palette, 0);
+	    
 	    LOGERR(_swix(ColourTrans_GenerateTable, _INR(0,5) | _OUT(4),
 			 area, spr,
 			 dc->data.mode, dc->data.current.palette,
@@ -1053,24 +1085,31 @@ static void *get_colour_lookup_table(HDC dc, const sprite_descr *descr, int colo
 			 &size));
 	   
 	    if ((table = malloc(size)) == NULL)
+	    {
+		ASSERT(0, size);
 		return NULL;
+	    }
     
 	    LOGERR(_swix(ColourTrans_GenerateTable, _INR(0,5),
 			 area, spr,
 			 dc->data.mode, dc->data.current.palette,
 			 table, 1));
 	}
+	// if there is a palette palette then construct manually
 	else
 	{
 	    const ropalette *in;
 	    char *out;
 	    int i;
 	    
-	    ASSERT(descr->bpp <= 3, descr->bpp);
+	    ASSERT(descr->bpp <= 8, descr->bpp);
 	    
 	    size = 1 << descr->bpp;
 	    if ((table = malloc(size)) == NULL)
+	    {
+		ASSERT(0, size);
 		return NULL;
+	    }
 
 	    in = sprite_palette(spr);
 	    out = table;
@@ -1082,7 +1121,49 @@ static void *get_colour_lookup_table(HDC dc, const sprite_descr *descr, int colo
 	    }
 	}
     }
+
+#ifdef DEBUG
+    if (table)
+	TRACEBUF((TC_TW, TT_API4, table, size));
+#endif
+    
     return table;
+}
+
+// assumed switched by now
+
+static void set__clip(HDC dc, HRGN rgn)
+{
+    TRACE((TC_TW, TT_API4, "set__clip: dc %p rgn %p", dc, rgn));
+    if (rgn == NULL)
+    {
+	_swix(OS_WriteI + 26, 0);
+    }
+    else
+    {
+	char s[9];
+    	region_rect *r = rgn->data.base;
+
+	ASSERT(r->next == NULL, 0);	// can't handle multiple regions as yet
+
+	s[0] = 24;
+	write_word(s+1, cvtx(dc, r->rect.left));
+	write_word(s+3, cvty(dc, r->rect.bottom));
+	write_word(s+5, cvtx(dc, r->rect.right) - 1);
+	write_word(s+7, cvty(dc, r->rect.top) - 1);
+
+	TRACEBUF((TC_TW, TT_API4, s, sizeof(s)));
+	_swix(OS_WriteN, _INR(0,1), s, sizeof(s));
+    }
+}
+
+static void set_clip(HDC dc)
+{
+    if (dc->data.current.clip != dc->data.clip)
+    {
+	dc->data.current.clip = dc->data.clip;
+	set__clip(dc, dc->data.clip);
+    }
 }
 
 /* ---------------------------------------------------------------------------------------------------- */
@@ -1106,6 +1187,7 @@ BOOL LineTo(HDC dc, int x, int y)
     TRACE((TC_TW, TT_API4, "LineTo: dc %p %dx%d", dc, x, y));
 
     switch_output(dc);
+    set_clip(dc);
 
     if (dc->data.local.pen_col == UNSET_COLOUR)
 	dc->data.local.pen_col = getcolournumber(dc, dc->data.pen->data.colref);
@@ -1113,22 +1195,14 @@ BOOL LineTo(HDC dc, int x, int y)
     // don't need to set up bgcol as we aren't using any non solid pens
     if (dc->data.local.pen_col != TRANSPARENT_COLOUR)
     {
-	BOOL set = FALSE;
-
-	if (dc->data.current.fg_col != dc->data.local.pen_col)
+	if (dc->data.current.fg_col != dc->data.local.pen_col ||
+	    dc->data.current.action != dc->data.local.action)
 	{
 	    dc->data.current.fg_col = dc->data.local.pen_col;
-	    set = TRUE;
-	}
-
-	if (dc->data.current.action != dc->data.local.action)
-	{
 	    dc->data.current.action = dc->data.local.action;
-	    set = TRUE;
-	}
 
-	if (set)
 	    LOGERR(_swix(OS_SetColour, _INR(0,1), dc->data.current.action, dc->data.current.fg_col));
+	}
 
 	LOGERR(_swix(OS_Plot, _INR(0,2), 0+5, cvtx(dc, x), cvty(dc, y))); // drawto
     }
@@ -1183,11 +1257,12 @@ static HBITMAP get_relevant_bitmap(HDC dc, bitblt_info *info, BOOL *delete_after
 static void plotbitmap(HDC dc, HBITMAP bitmap, const bitblt_info *info, int action)
 {
     switch_output(dc);
+    set_clip(dc);
+
+    TRACE((TC_TW, TT_API4, "plotbitmap: dc %p bitmap %p", dc, bitmap));
 
     // set a clip window to intersection of the current, Dest and Src
     
-#if 1
-
     if (dc->data.current.bitmap_bitmap != bitmap || dc->data.current.bitmap_coltrans == NULL)
     {
 	dc->data.current.bitmap_bitmap = bitmap;
@@ -1195,19 +1270,12 @@ static void plotbitmap(HDC dc, HBITMAP bitmap, const bitblt_info *info, int acti
     }
 
     LOGERR(_swix(OS_SpriteOp, _INR(0,7),
-		 52 + 512,
+		 dc->data.current.bitmap_coltrans ? 52 + 512 : 28 + 512,
 		 bitmap->data.sprite.area, first_sprite(bitmap->data.sprite.area),
 		 cvtx(dc, info->xDest), cvty(dc, info->yDest),
 		 action,
 		 NULL,
 		 dc->data.current.bitmap_coltrans));
-#else
-    LOGERR(_swix(OS_SpriteOp, _INR(0,5),
-		 28 + 512,
-		 bitmap->data.sprite.area, first_sprite(bitmap->data.sprite.area),
-		 info->xDest*2, info->yDest*2,
-		 action));
-#endif
 }
 
 // need to add support for brush rotation in here
@@ -1216,35 +1284,54 @@ static void plotbitmap(HDC dc, HBITMAP bitmap, const bitblt_info *info, int acti
 static void tilebrush(HDC dc, const bitblt_info *info, int action)
 {
     HBRUSH brush;
-    int x, y;
 
     switch_output(dc);
+    set_clip(dc);
 
     brush = dc->data.brush;
 
-    // get and cache the colourtrans table
-    if (dc->data.current.brush_coltrans == NULL)
-	dc->data.current.brush_coltrans = get_colour_lookup_table(dc, &brush->data.sprite, brush->data.color_table_type);
+    ASSERT(brush, 0);
+
+    if (brush->data.solid)
+    {
+	if (dc->data.local.brush_solid == UNSET_COLOUR)
+	    dc->data.local.brush_solid = getcolournumber(dc, brush->data.colour);
     
-    for (x = 0; x < info->Width; x += 8)
-	for (y = 0; y < info->Height; y += 8)
+	if (dc->data.current.fg_col != dc->data.local.brush_solid ||
+	    dc->data.current.action != 0)
 	{
-#if 1
-	    LOGERR(_swix(OS_SpriteOp, _INR(0,7),
-			 52 + 512,
-			 brush->data.sprite.area, first_sprite(brush->data.sprite.area),
-			 cvtx(dc, info->xDest + x), cvty(dc, info->yDest + y),
-			 action,
-			 NULL,
-			 dc->data.current.brush_coltrans));
-#else
-	    LOGERR(_swix(OS_SpriteOp, _INR(0,5),
-		  28 + 512,
-		  brush->data.sprite.area, first_sprite(brush->data.sprite.area),
-		  (info->xDest + x)*2, (info->yDest + y)*2,
-		  action));
-#endif
-	}   
+	    dc->data.current.fg_col = dc->data.local.brush_solid;
+	    dc->data.current.action = 0;
+	    LOGERR(_swix(OS_SetColour, _INR(0,1), 0, dc->data.current.fg_col));
+	}
+	
+	TRACE((TC_TW, TT_API4, "tilebrush: dc %p brush %p colour %d (%x)", dc, brush, dc->data.current.fg_col, brush->data.colour));
+
+	LOGERR(_swix(OS_Plot, _INR(0,2), 0+4, cvtx(dc, info->xDest), cvty(dc, info->yDest))); // moveto
+	LOGERR(_swix(OS_Plot, _INR(0,2), 96+5, cvtx(dc, info->xDest + info->Width), cvty(dc, info->yDest + info->Height))); // fill
+    }
+    else
+    {
+	int x, y;
+	
+	TRACE((TC_TW, TT_API4, "tilebrush: dc %p brush %p", dc, brush));
+
+	// get and cache the colourtrans table
+	if (dc->data.current.brush_coltrans == NULL)
+	    dc->data.current.brush_coltrans = get_colour_lookup_table(dc, &brush->data.sprite, brush->data.color_table_type);
+    
+	for (x = 0; x < info->Width; x += 8)
+	    for (y = 0; y < info->Height; y += 8)
+	    {
+		LOGERR(_swix(OS_SpriteOp, _INR(0,7),
+			     dc->data.current.brush_coltrans ? 52 + 512 : 28 + 512,
+			     brush->data.sprite.area, first_sprite(brush->data.sprite.area),
+			     cvtx(dc, info->xDest + x), cvty(dc, info->yDest + y),
+			     action,
+			     NULL,
+			     dc->data.current.brush_coltrans));
+	    }
+    }
 }
 
 /*
@@ -1322,6 +1409,13 @@ BOOL BitBlt(HDC dcDest, int xDest, int yDest, int Width, int Height, HDC dcSrc, 
 
     case BLACKNESS:
     case WHITENESS:
+    {
+	HBRUSH old_brush = SelectObject(dcDest, GetStockObject(rop3 == BLACKNESS ? BLACK_BRUSH : WHITE_BRUSH));
+	tilebrush(dcDest, &info, plotaction_WRITE);
+	SelectObject(dcSrc, old_brush);
+	break;
+    }
+
     default:
 	TRACE((TC_TW, TT_API4, "BitBlt: unsupported rop3", rop3));
 	ASSERT(0,0);
@@ -1425,10 +1519,7 @@ HBITMAP CreateBitmapIndirect(CONST BITMAP *b)
     if (bitmap == NULL)
 	return NULL;
     
-    bitmap->data.sprite.area = create_sprite((int)b->bmWidth, (int)b->bmHeight, b->bmBitsPixel, FALSE);
-    bitmap->data.sprite.width = (int)b->bmWidth;
-    bitmap->data.sprite.height = (int)b->bmHeight;
-    bitmap->data.sprite.bpp = b->bmBitsPixel;
+    create_sprite(&bitmap->data.sprite, (int)b->bmWidth, (int)b->bmHeight, b->bmBitsPixel, FALSE);
     bitmap->data.color_table_type = DIB_RGB_COLORS; // actually none at all
 
     if (bitmap->data.sprite.area)
@@ -1481,6 +1572,7 @@ HDC CreateCompatibleDC(HDC dcBase)
     dc->data.planes = dcBase->data.planes;
     dc->data.log2bpp = dcBase->data.log2bpp;
     dc->data.mode = dcBase->data.mode;
+    dc->data.bitmap = CreateBitmap(1, 1, 1, 1, NULL);
     
     return dc;
 }
@@ -1549,10 +1641,7 @@ HBITMAP CreateDIBitmap(HDC dc, CONST BITMAPINFOHEADER *info, DWORD flags, CONST 
     if (bitmap == NULL)
 	return NULL;
     
-    bitmap->data.sprite.width = (int)info->biWidth;
-    bitmap->data.sprite.height = (int)info->biHeight;
-    bitmap->data.sprite.bpp = info->biBitCount;
-    bitmap->data.sprite.area = create_sprite((int)info->biWidth, (int)info->biHeight, info->biBitCount, TRUE);
+    create_sprite(&bitmap->data.sprite, (int)info->biWidth, (int)info->biHeight, info->biBitCount, TRUE);
     bitmap->data.color_table_type = color_table_type;
     
     if (bitmap->data.sprite.area == NULL)
@@ -1581,11 +1670,9 @@ HBRUSH CreateDIBPatternBrush(HGLOBAL gdib, UINT color_table_type)
     ASSERT(info->biWidth >= 8, (int)info->biWidth);
     ASSERT(info->biHeight >= 8, (int)info->biHeight);
     
-    brush->data.sprite.width = 8;
-    brush->data.sprite.height = 8;
-    brush->data.sprite.bpp = info->biBitCount;
-    brush->data.sprite.area = create_sprite(8, 8, info->biBitCount, TRUE);
+    create_sprite(&brush->data.sprite, 8, 8, info->biBitCount, TRUE);
     brush->data.color_table_type = color_table_type;
+    brush->data.solid = FALSE;
 
     if (brush->data.sprite.area == NULL)
     {
@@ -1686,20 +1773,23 @@ HBRUSH CreateSolidBrush(COLORREF colref)
     if (brush == NULL)
 	return NULL;
     
-    brush->data.sprite.area = create_sprite(8, 8, 1, TRUE);
+    brush->data.solid = TRUE;
+    brush->data.colour = colref;
 
-    pal[0].w = 0;
+#if 0
+//  create_sprite(&brush->data.sprite, 8, 8, 1, TRUE);
+
+//  pal[0].w = 0;
     switch (colref >> 24)
     {
     case 1:			// choose palette entry
-	pal[1].w = (int)colref & 0x000000ff;
 	brush->data.color_table_type = DIB_PAL_COLORS;
 	break;
 
     case 2:			// choose RGB
     {
 	unsigned c = colref << 8;
-	pal[1].w = REVERSE_WORD(c);
+	brush->data.colour.w = REVERSE_WORD(c);
 	brush->data.color_table_type = DIB_RGB_COLORS;
 	break;
     }
@@ -1709,15 +1799,16 @@ HBRUSH CreateSolidBrush(COLORREF colref)
 	break;
     }
 
-    if (brush->data.sprite.area == NULL)
-    {
-	free_object((HGDIOBJ)brush);
-	return NULL;
-    }
+//    if (brush->data.sprite.area == NULL)
+//    {
+//	free_object((HGDIOBJ)brush);
+//	return NULL;
+//    }
 
-    clear_sprite(&brush->data.sprite, 0xff);
-    set_sprite_palette(&brush->data.sprite, pal);
-
+//    clear_sprite(&brush->data.sprite, 0xff);
+//    set_sprite_palette(&brush->data.sprite, pal);
+#endif
+    
     return brush;
 }
 
@@ -1946,7 +2037,7 @@ UINT RealizePalette(HDC dc)
     
     if (dc == screen_dc)
     {
-	TRACEBUF((TC_TW, TT_API4, dc->data.current.palette, sizeof(ropalette) << dc->data.log2bpp));
+	TRACEBUF((TC_TW, TT_API4, dc->data.current.palette, sizeof(ropalette) << (1 << dc->data.log2bpp)));
 	LOGERR(_swix(ColourTrans_WritePalette, _INR(0,4),
 		     -1, -1,
 		     dc->data.current.palette,
@@ -1977,26 +2068,35 @@ int SelectClipRgn(HDC dc, HRGN rgn)
 LPVOID SelectObject(HDC dc, LPVOID oobj)
 {
     HGDIOBJ obj = oobj;
+    LPVOID old_obj = NULL;
+
+    ASSERT(obj, 0);
 
     TRACE((TC_TW, TT_API4, "SelectObject: dc %p obj %p %s %d",
 	   dc, obj,
-	   objects[obj ? obj->gdi.tag : 0],
+	   objects[obj && (unsigned)obj->gdi.tag < sizeof(objects)/sizeof(objects[0]) ? obj->gdi.tag : 0],
 	   obj ? obj->gdi.tag : 0));
-    ASSERT(obj, 0);
-	
+
+    if (!obj)
+	return NULL;
+    
     switch (obj->gdi.tag)
     {
     case OBJ_PEN:
+	old_obj = dc->data.pen;
 	dc->data.pen = (HPEN)obj;
 
 	dc->data.local.pen_col = UNSET_COLOUR;
 	break;
 
     case OBJ_BRUSH:
+	old_obj = dc->data.brush;
 	dc->data.brush = (HBRUSH)obj;
 
 	free(dc->data.current.brush_coltrans);
 	dc->data.current.brush_coltrans = NULL;
+
+	dc->data.local.brush_solid = UNSET_COLOUR;
 	break;
 
     case OBJ_BITMAP:
@@ -2004,6 +2104,7 @@ LPVOID SelectObject(HDC dc, LPVOID oobj)
 
 	if (dc->gdi.tag == OBJ_MEMDC)
 	{
+	    old_obj = dc->data.bitmap;
 	    dc->data.bitmap = (HBITMAP)obj;
 
 	    uncache_dc(dc);
@@ -2012,6 +2113,7 @@ LPVOID SelectObject(HDC dc, LPVOID oobj)
 	break;
 
     case OBJ_REGION:
+	old_obj = dc->data.clip;
 	dc->data.clip = (HRGN)obj;
 	break;
 
@@ -2020,7 +2122,9 @@ LPVOID SelectObject(HDC dc, LPVOID oobj)
 	break;
     }
 
-    return obj;
+    TRACE((TC_TW, TT_API4, "SelectObject: old %p type %d", old_obj, old_obj ? ((HGDIOBJ)old_obj)->gdi.tag : 0));
+
+    return old_obj;
 }
 
 HPALETTE SelectPalette(HDC dc, HPALETTE pal, BOOL foreground)
