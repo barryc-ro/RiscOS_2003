@@ -63,6 +63,7 @@ EXPORTS   = \
  ${HDRDIR}.MEMM.ARM600 \
  ${HDRDIR}.MEMM.MEMC1 \
  ${HDRDIR}.Machine.<Machine> \
+ ${HDRDIR}.Machine.Machine \
  ${HDRDIR}.Macros \
  ${HDRDIR}.Messages \
  ${HDRDIR}.NdrDebug \
@@ -127,6 +128,7 @@ ${HDRDIR}.UpCall:     Import.Global.UpCall;         ${CP} Import.Global.UpCall  
 
 # Machine/hardware specific headers:
 ${HDRDIR}.Machine.<Machine>: hdr.Machine.<Machine>; ${CP} hdr.Machine.<Machine>    $@ ${CPFLAGS}
+${HDRDIR}.Machine.Machine:   hdr.Machine.Machine;   ${CP} hdr.Machine.Machine      $@ ${CPFLAGS}
 ${HDRDIR}.ImageSize.2048K:   hdr.ImageSize.2048K;   ${CP} hdr.ImageSize.2048K      $@ ${CPFLAGS}
 ${HDRDIR}.ImageSize.4096K:   hdr.ImageSize.4096K;   ${CP} hdr.ImageSize.4096K      $@ ${CPFLAGS}
 ${HDRDIR}.ImageSize.8192K:   hdr.ImageSize.8192K;   ${CP} hdr.ImageSize.8192K      $@ ${CPFLAGS}
