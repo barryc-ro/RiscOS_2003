@@ -533,6 +533,21 @@ com_ProcessAPDU
 
   if(slot == SLOT_2)
   {
+    switch(g_slot2_state)
+    {
+      case CMD_RESPONSE_HDR:    com_IncomingResponse();
+                                break;
+
+      case CMD_RESPONSE_BODY:   com_IncomingResponse();
+                                break;
+
+      case CMD_CHAIN_LINK:      com_HandleChainLink();
+                                break;
+
+      default:                  com_StartReadSlot2();
+                                break;
+    }
+#if FALSE
     if((g_slot2_state == CMD_RESPONSE_HDR) || (g_slot2_state == CMD_RESPONSE_BODY))
     {
       com_IncomingResponse();
@@ -542,6 +557,7 @@ com_ProcessAPDU
       com_StartReadSlot2(); /** It's for yooo-hooo! **/
       // printf("Returned from StartReadSlot2\n");
     }
+#endif
   }
 }
 
@@ -637,7 +653,7 @@ com_IncomingResponse
   void
 )
 {
-  char          rblock[5];
+  BYTE           rblock[5];
   /** Get NAD/PCB/LEN and remember how many more we want **/
   g_slot2_apdu.NAD = blocking_readbyte();
   g_slot2_apdu.PCB = blocking_readbyte();
@@ -656,22 +672,71 @@ com_IncomingResponse
   g_slot2_apdu.LRC = blocking_readbyte();
 //  printf("Read LRC as &%02X\n", g_slot2_apdu.LRC);
 
-  if((g_slot2_apdu.PCB &0xA0) == 0x20) /** Was it a chained response? **/
+  com_SendAck(); /* Ack the last response... */
+
+  if((g_slot2_apdu.PCB & 0xA0) == 0x20) /** Was it a chained I-block response? **/
   {
-    com_SendAck(); /* Ack the last response... */
     /** Create 'next element' command, and send it **/
     rblock[0] = 0; /* Always 0 for R-blocks */
-    rblock[1] = (g_slot2_apdu.PCB ^ 0x40)/4; 
-    rblock[2] = 0;
+    if(g_slot2_apdu.PCB & 0x40)
+    {
+      rblock[1] = 0x80; /** Got a Seq1, so send Seq0 **/
+//      Exp_SeqNo = 0;
+//      TX_SeqNo[SLOT_2] = 1;
+    }
+    else
+    {
+      rblock[1] = 0x90; /** Got a Seq0, so send Seq1 **/
+//      Exp_SeqNo = 1; /** We want a 1 back **/
+//      TX_SeqNo[SLOT_2] = 0; /** Next time, we send a 0 **/
+    }
+    rblock[2] = 0; /** LEN */
     rblock[3] = rblock[1]; /* Bound to be! */
-    /** SEND THIS SOMEHOW **/
+    g_uc_state = UC_IDLE;
+    g_slot2_state = CMD_RESPONSE_HDR;
+    com_SendFunaiHeader(SLOT_2, CMD_APDU);
+    com_SendBytes(rblock, 4);
+  }
+  else if(g_slot2_apdu.PCB == 0xE1)
+  {
+    /** It's an IFSC response **/
+    IFSC_Value[SLOT_2] = *(g_slot2_dataptr-1); /** 'Know' there was only one data byte **/
   }
   else
   {
-    com_SendAck(); /* Ack the last response... */
     g_uc_state = UC_IDLE;
     g_slot2_state = IDLE;
     sys_SigBroadcast(SCI_CMD2_DONE); /** Data is ready for collection **/
+  }
+}
+
+
+
+/*
+ *  com_HandleChainLink - Deals with a chainlink R-block
+ */ 
+void
+com_HandleChainLink
+(
+  void
+)
+{
+  BYTE           rblock[5];
+  /** Get NAD/PCB/LEN and remember how many more we want **/
+  rblock[0] = blocking_readbyte(); /* NAD */
+  rblock[1] = blocking_readbyte(); /* PCB */
+  rblock[2] = blocking_readbyte(); /* LEN */
+  rblock[3] = blocking_readbyte(); /* LRC */
+
+  com_SendAck(); /* Ack this response... */
+  g_uc_state = UC_IDLE;
+  g_slot2_state = CMD_RESPONSE_HDR; /* In case it's the end of the chain */
+
+  /* Read the R-block we're expecting. Best check it's what we think */
+  if((rblock[1] && 0x80) && (rblock[2] == 0))
+  {
+    /** it'll do **/
+    SendIBlock();
   }
 }
 
@@ -690,7 +755,7 @@ com_StartReadSlot2
   BYTE	cmd[4];
   BYTE  block[10];
   int	retval;
-  
+
 //  printf("=Entered com_startreadslot2 with g_slot2_state = %d\n",g_slot2_state);
   switch(g_slot2_state)
   {
@@ -927,6 +992,9 @@ com_DealWithReadRecord
       )
       {
         int     hcount;
+        int     tempchar;
+
+        IFSC_Value[SLOT_2] = 0x20; /* seems like a sensible default */
         
         if( blocking_readbyte() != 0x3B) return(-1);  /** Same on all supported cards **/
         switch(blocking_readbyte())
@@ -944,7 +1012,9 @@ com_DealWithReadRecord
           case 0x31: g_slot2_cardtype=CARD_STD;break;
           default:  return(-1);
         }
-        switch(blocking_readbyte())
+        tempchar = blocking_readbyte(); /* Get IFSC value */
+//        IFSC_Value[SLOT_2] = tempchar;
+        switch(tempchar)
         {
           case 0x25: if((g_slot2_cardtype!=CARD_OLDURL) && (g_slot2_cardtype!=CARD_REASONA)) return(-1);break;
         }
