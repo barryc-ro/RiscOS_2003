@@ -5,10 +5,11 @@
 # ***********************************
 # Date       Name         Description
 # ----       ----         -----------
-# 20 Sep 1996 Rich Buckley  Created
-# 24 Apr 1997 Rich Buckley  Made machine aware
-# 23 May 1997 Rich Buckley  Changed debug build
-# 22 Apr 1999 David Cotton  Altered to use LocalRes
+# 1996-09-20 RWB          Created
+# 1997-04-24 RWB          Made machine aware
+# 1997-05-23 RWB          Changed debug build
+# 1999-04-22 DC           Altered to use LocalRes
+# 1999-11-23 SBF          Added support for StripDepnd tool
 #
 
 #
@@ -25,9 +26,12 @@ MKDIR   = cdir
 AS      = aasm
 CP      = copy
 RM      = remove
+WIPE    = -wipe
+STRIP   = stripdepnd
 CCFLAGS = -c -depend !Depend -IC:
 ASFLAGS = -depend !Depend -Stamp -quit -module -Throwback -To $@ -From
 CPFLAGS = ~cfr~v
+WFLAGS  = ~c~vr
 
 #
 # Program specific options:
@@ -59,6 +63,8 @@ clean:
         ${RM} ${TARGET}
         ${RM} ${TARGETSA}
         ${RM} ${TARGETD}
+        ${WIPE} rm.${MACHINE} ${WFLAGS}
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 resources:
