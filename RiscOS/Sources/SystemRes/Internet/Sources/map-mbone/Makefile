@@ -8,7 +8,7 @@ RM=             remove
 WFLAGS=         fr~c~v
 WIPE=           -wipe
 
-CFLAGS=		-Wp -I$(INCLUDES) -c ${THROWBACK} -depend !Depend
+CFLAGS=		-Wp -I$(INCLUDES) -DGRAPHLET -c ${THROWBACK} -depend !Depend
 
 OBJS=		o.${TARGET} o.igmp o.inet o.kern
 
