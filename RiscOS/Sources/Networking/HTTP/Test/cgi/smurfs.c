@@ -312,7 +312,10 @@ dump_file(char *filename)
 
   if ((fetch = fopen(filename,"rb"))!=NULL)
   {
-    printf("Content-type: application/octet-stream\n\n");
+    printf("Content-type: application/octet-stream\n");
+    fseek(fetch,0,SEEK_END);
+    printf("Content-length: %d\n\n",ftell(fetch));
+    fseek(fetch,0,SEEK_SET);
     while (!feof(fetch))
     {
       ch = fgetc(fetch);
