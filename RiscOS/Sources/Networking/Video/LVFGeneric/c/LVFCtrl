@@ -115,7 +115,9 @@ _kernel_oserror * lvfctrl_close_stream(session * s)
 /**************************************************************/
 /* lvfctrl_callout_handler()                                  */
 /*                                                            */
-/* Prepare to read more file data.                            */
+/* Prepare to read more file data. Called from the callout    */
+/* library as well as directly by lvfctrl_loop - any changes  */
+/* to behaviour must be compatible with both requirements.    */
 /*                                                            */
 /* THIS FUNCTION MUST BE RE-ENTRANT.                          */
 /*                                                            */
@@ -167,6 +169,50 @@ void lvfctrl_callout_handler(void * handle)
 }
 
 /**************************************************************/
+/* lvfctrl_loop()                                             */
+/*                                                            */
+/* When you decide that you want to loop playback, assuming   */
+/* the file being streamed is open and has the file pointer   */
+/* in a sensible place, call this function. Designed mostly   */
+/* for use by the service call handler in Module.c.           */
+/*                                                            */
+/* Parameters: Pointer to a relevant session structure.       */
+/**************************************************************/
+
+void lvfctrl_loop(session * s)
+{
+  /* If the 'running' flag is set, yikes; there's a pending callout */
+
+  if (s->running != 0)
+  {
+    untimeout(lvfctrl_callout_handler, s);
+    s->running = 0;
+  }
+
+  /* Flag if we're waiting for an empty buffer */
+
+  s->restart    = s->carrier.empty == false ? 1 : 0;
+  s->restart_ok = !s->restart;
+
+  /* Reset the stream (not deferred) */
+
+  _swix(MPEGControl_ResetStream,
+        _INR(0,2),
+
+        ResetStreamFlags_VideoPresent | ResetStreamFlags_AudioPresent,
+        s->mpegid,
+        s->lastplay);
+
+  /* The block read routine would've left the file pointer back at */
+  /* the start and the file open. By calling it, we kick the whole */
+  /* file read process off again. To make our lives easier, we     */
+  /* directly call the callout handler instead - this handles any  */
+  /* errors too. That function is specified to allow this, y'see.  */
+
+  lvfctrl_callout_handler(s);
+}
+
+/**************************************************************/
 /* lvfctrl_read_block()                                       */
 /*                                                            */
 /* Read more file data, setting a callback if there's more    */
@@ -178,6 +224,7 @@ void lvfctrl_callout_handler(void * handle)
 static _kernel_oserror * lvfctrl_read_block(session * s)
 {
   bool restart_ok = s->restart_ok;
+  bool another    = true;
 
   if (restart_ok) s->restart_ok = 0;
 
@@ -258,27 +305,37 @@ static _kernel_oserror * lvfctrl_read_block(session * s)
 
     if (remaining == 0)
     {
+      /* File finished, turn off callout regeneration for now */
+
+      another = false;
+
+      /* If we're looping, make sure we leave the file pointer back at the start */
+      /* but don't do anything else. Later, we'll get called by a Video Control  */
+      /* service call if all Goes To Plan (TM) - see the service handler in      */
+      /* Module.c for more details.                                              */
+
       if (s->loop != 0)
       {
+        /* And yes, not doing 'remaining=extent' and setting 'another' to 'false' */
+        /* means we're relying on that UpCall going around to get looping working */
+        /* at all.                                                                */
+
         RetError(_swix(OS_Args,
                        _INR(0,2),
 
                        1,       /* Write file pointer */
                        s->open,
                        0));
-
-        remaining = extent;
       }
-      else
-      {
-        _swix(VideoControl_ProtocolNotify,
-              _INR(0,3),
 
-              0,
-              s->id,
-              VideoControlProtocolNotifyNewPlayState,
-              vc_play_state_normal_eos);
-      }
+      /* Whether or not we're looping, tell the MPEG system to expect an */
+      /* end of stream.                                                  */
+
+      _swix(MPEGControl_Play,
+            _INR(0,1),
+
+            4,
+            s->mpegid);
     }
 
     if (remaining >= Buffers_BlockSize) read = Buffers_BlockSize;
@@ -326,10 +383,21 @@ static _kernel_oserror * lvfctrl_read_block(session * s)
   /* above should always exit prior to this, to avoid a cascade */
   /* of repeating error reports.                                */
 
-  if (s->running == 0)
+  if (another && s->running == 0)
   {
     timeout(lvfctrl_callout_handler, s, LVFCtrl_CalloutDelay);
     s->running = 1;
+  }
+
+  /* ...and this should never happen, but you can't be too careful... */
+
+  else if (!another && s->running != 0)
+  {
+    /* 'running' is non-zero meaning a callout is already set somehow, but */
+    /* 'another' is false, so stop that callout.                           */
+
+    untimeout(lvfctrl_callout_handler, s);
+    s->running = 0;
   }
 
   return NULL;
