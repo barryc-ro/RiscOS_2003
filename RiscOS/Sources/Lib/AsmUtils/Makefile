@@ -5,7 +5,8 @@
 # ***********************************
 # Date       Name         Description
 # ----       ----         -----------
-# 20-Nov-99  SNB          Created.
+# 20-Nov-1999  SNB          Created.
+# 10-Feb-2000  ADH          Added modulefp and fpsr.
 #
 
 #
@@ -63,13 +64,13 @@ SOURCE     =
 EXPORTS    = 
 
 OBJS=   o.callbacks o.sixtyfour o.heapswis o.rminfo o.irqs \
-        o.osvarlen o.muldiv
+        o.osvarlen o.muldiv o.modulefp o.fpsr
 
 OBJSZ=  oz.callbacks oz.sixtyfour oz.heapswis oz.rminfo oz.irqs \
-        oz.osvarlen oz.muldiv
+        oz.osvarlen oz.muldiv oz.modulefp oz.fpsr
 
 HDRS=   h.callbacks h.sixtyfour h.heapswis h.rminfo h.irqs \
-        h.osvarlen h.muldiv 
+        h.osvarlen h.muldiv h.modulefp h.fpsr
 
 LIBS = ${TARGET} ${TARGETZ}
 
@@ -112,6 +113,8 @@ export_hdrs: ${HDRS} export_dirs
 	${CP} h.irqs       ${LIBDIR}.h.irqs      ${CPFLAGS}
 	${CP} h.osvarlen   ${LIBDIR}.h.osvarlen  ${CPFLAGS}
 	${CP} h.muldiv     ${LIBDIR}.h.muldiv    ${CPFLAGS}
+	${CP} h.modulefp   ${LIBDIR}.h.modulefp  ${CPFLAGS}
+	${CP} h.fpsr       ${LIBDIR}.h.fpsr      ${CPFLAGS}
 	${CP} VersionNum   ${LIBDIR}.LibVersion  ${CPFLAGS}
 	@echo ${COMPONENT}: export complete (hdrs)
 
