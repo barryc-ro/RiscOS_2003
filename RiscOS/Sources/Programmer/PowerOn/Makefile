@@ -18,11 +18,10 @@ EXP_HDR = <export$dir>
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = do mkdir -p
 AS      = aasm
 CP      = copy
 RM      = remove
-STRIP   = stripdepnd
 ASFLAGS = -depend !Depend -Stamp -quit -module -Esc -To $@ -From
 CPFLAGS = ~cfr~v
 
@@ -39,13 +38,17 @@ TARGET     = rm.${COMPONENT}
 all: ${TARGET}
         @echo ${COMPONENT}: standalone module built
 
+install: ${TARGET}
+	${MKDIR} ${INSTDIR}
+        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: ram module installed
+
 install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
 clean:
         ${RM} ${TARGET}
-        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 rom: ${TARGET}
