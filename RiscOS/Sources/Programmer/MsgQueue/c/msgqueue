@@ -16,7 +16,6 @@
 #include <ctype.h>
 #include <assert.h>
 
-
 #include "kernel.h"
 #include "swis.h"
 
@@ -88,9 +87,7 @@ extern unsigned int enter_critical(void);
 extern void restore_critical(int old_state);
 
 BlockOfQueues *findq(int *n);
-_kernel_oserror * freespace_avail (MessageQueue q, unsigned int *total_freespace,
-                                        unsigned int *headspace, unsigned int *tailspace,
-                                        unsigned int msgsize);
+unsigned int freespace_avail (MessageQueue q, unsigned int *headspace, unsigned int *tailspace);
 unsigned int count_msgs (MessageQueue q, unsigned int *largest);
 void report_err(char *mess,int ln);
 
@@ -116,19 +113,13 @@ void report_err(char *mess,int ln);
 /************************************************************************************/
 extern _kernel_oserror *messagequeue_register(messagequeue_register_args *args)
 {
-  BlockOfQueues *current = NULL;
-  int i = 0;
-  BlockOfQueues *p = NULL;
-  unsigned int *p2 = NULL;
-  BlockOfQueues *prev = NULL;
-  int blocknum = 0;
-  int old_state = 0;
-  int flags = 0;
+  BlockOfQueues *current = NULL,*prev = NULL,*p = NULL;
+  int blocknum = 0,old_state = 0,flags = 0,i = 0,queuesize,max_msg_size;
   _kernel_swi_regs regs;
-  int queuesize;
-  char str_sizecheck[12];
+  unsigned int *p2 = NULL;
   ApplicationId application_id;
-  int max_msg_size;
+  char str_sizecheck[12];
+  MessageQueue *q;
 
     old_state = enter_critical();
     if (mutex)
@@ -159,16 +150,7 @@ extern _kernel_oserror *messagequeue_register(messagequeue_register_args *args)
         return make_error(error_BAD_MESSAGE_SIZE,1,str_sizecheck);
     }
 
-    if (max_msg_size < SIZEOF_HDR)
-    {
-        sprintf(str_sizecheck,"%d",max_msg_size);
-        args->out.mq_handle = -1;
-        args->out.pollword = NULL;
-        mutex = 0;
-        return make_error(error_BAD_MESSAGE_SIZE,1,str_sizecheck);
-    }
-
-    if (max_msg_size % 4 != 0)
+    if ((max_msg_size < SIZEOF_HDR) || (max_msg_size % 4 != 0))
     {
         sprintf(str_sizecheck,"%d",max_msg_size);
         args->out.mq_handle = -1;
@@ -298,18 +280,19 @@ extern _kernel_oserror *messagequeue_register(messagequeue_register_args *args)
 
     /* Initialise the new message queue. */
 
-    p->qslots[i].application_id = application_id;
-    p->qslots[i].pollword = 0;
-    p->qslots[i].queue_size = queuesize;
-    p->qslots[i].q_empty = TRUE;
-    p->qslots[i].last_recorded_timestamp = 1;
-    p->qslots[i].head = (unsigned int *)p2;
-    p->qslots[i].tail = (unsigned int *)((int)p2 + (int)(p->qslots[i].queue_size));
-    p->qslots[i].maxsize_single_msg = max_msg_size;
-    p->qslots[i].startof_dispatch = NULL;
-    p->qslots[i].startof_freespace = p->qslots[i].head;
+    q = &(p->qslots[i]);
+    q->application_id = application_id;
+    q->pollword = 0;
+    q->queue_size = queuesize;
+    q->q_empty = TRUE;
+    q->last_recorded_timestamp = 1;
+    q->head = (unsigned int *)p2;
+    q->tail = (unsigned int *)((int)p2 + (int)(q->queue_size));
+    q->maxsize_single_msg = max_msg_size;
+    q->startof_dispatch = NULL;
+    q->startof_freespace = q->head;
     args->out.mq_handle = (blocknum * 32) + i;
-    args->out.pollword = &(p->qslots[i].pollword);
+    args->out.pollword = &(q->pollword);
 
     if (prev != NULL)
     {
@@ -320,14 +303,14 @@ extern _kernel_oserror *messagequeue_register(messagequeue_register_args *args)
 
     #ifdef DEVELOPMENT
     printf("Queue handle %d\n",i);
-    printf("head: %d, 0x%x\n",(int)p->qslots[i].head,(int)p->qslots[i].head);
-    printf("tail: %d, 0x%x\n",(int)p->qslots[i].tail,(int)p->qslots[i].tail);
+    printf("head: %d, 0x%x\n",(int)q->head,(int)q->head);
+    printf("tail: %d, 0x%x\n",(int)q->tail,(int)q->tail);
     #endif
 
     #ifdef CORRUPTION_CHECK
     memset(p2,0xff,queuesize + corruption_allowance);
-    /* Corruption allowance portion should never change.  Check after       */
-    /* each operation and if it does change, report corruption detection.   */
+    /* Corruption allowance portion should never change.  Check after */
+    /* each operation and if it does change, report corruption.       */
     #endif
 
     mutex = 0;  /* We're finished. Allow the next caller in when it next calls. */
@@ -356,8 +339,7 @@ extern _kernel_oserror *messagequeue_deregister(messagequeue_deregister_args *ar
   _kernel_oserror *er = NULL;
   BlockOfQueues *current;
   unsigned int *p;
-  int old_state;
-  int n;
+  int n,old_state;
 
     old_state = enter_critical();
     if (mutex)
@@ -416,42 +398,37 @@ extern _kernel_oserror *messagequeue_deregister(messagequeue_deregister_args *ar
 /************************************************************************************/
 extern _kernel_oserror *messagequeue_send(messagequeue_send_args *args)
 {
-  MessageQueue *q;
-  unsigned int * old_startof_freespace;
-  int timestamp;
-  unsigned int freespace_at_tail = 0;
-  unsigned int freespace_at_head = 0;
-  unsigned int total_freespace = 0;
-  int old_state;
+  unsigned int freespace_at_tail = 0,freespace_at_head = 0,total_freespace = 0;
+  unsigned int *old_startof_freespace, msgsize;
   BlockOfQueues *current;
-  int n;
-  unsigned int msgsize;
+  MessageQueue *q;
+  int timestamp,old_state,n,mq_handle;
   _kernel_oserror *e = NULL;
   _kernel_swi_regs regs;
   char str_msgsize[12];
-  int mq_handle;
   void *message;
+
   #ifdef CORRUPTION_CHECK
   _kernel_oserror ce;
   int i;
-  char *p
+  char *p;
   #endif
 
     mq_handle = args->in.mq_handle;
     message = args->in.buffer;
 
-    if (message != NULL)
+    if (message == NULL)
     {
-        msgsize = *((unsigned int *)(message));
-        if ((msgsize % 4) != 0)
+        return make_error(error_BAD_MESSAGE_SIZE,1,"0");
+    }
+    else
+    {
+        msgsize = *((unsigned int *)message);
+        if (msgsize % 4 != 0)
         {
              sprintf(str_msgsize,"%d",msgsize);
              return make_error(error_BAD_MESSAGE_SIZE,1,str_msgsize);
         }
-    }
-    else
-    {
-        return make_error(error_BAD_MESSAGE_SIZE,1,"0");
     }
 
     n = mq_handle;
@@ -492,11 +469,7 @@ extern _kernel_oserror *messagequeue_send(messagequeue_send_args *args)
 
     old_state = enter_critical();
 
-    if ((e = freespace_avail(current->qslots[n],&total_freespace,&freespace_at_head,&freespace_at_tail,msgsize))
-         != NULL)
-    {
-         return e;
-    }
+    total_freespace = freespace_avail(current->qslots[n],&freespace_at_head,&freespace_at_tail);
 
     if (msgsize > total_freespace)
     {
@@ -668,18 +641,13 @@ extern _kernel_oserror *messagequeue_send(messagequeue_send_args *args)
 /************************************************************************************/
 extern _kernel_oserror *messagequeue_receive(messagequeue_receive_args *args)
 {
-  int buffer_too_small = 0;
-  unsigned int messagespace_at_tail = 0;
-  unsigned int messagespace_at_head = 0;
-  unsigned int cbufsize;
-  int n;
-  unsigned int msgsize;
-  MessageQueue *q = NULL;
+  int buffer_too_small = 0,n,flags,sizeof_buffer;
+  unsigned int messagespace_at_tail = 0,messagespace_at_head = 0,cbufsize,msgsize;
   unsigned int old_state;
+  MessageQueue *q = NULL;
   BlockOfQueues *current = NULL;
-  int flags;
   void *buffer;
-  int sizeof_buffer;
+
   #ifdef CORRUPTION_CHECK
   int h,i;
   _kernel_oserror e;
@@ -839,17 +807,10 @@ extern _kernel_oserror *messagequeue_receive(messagequeue_receive_args *args)
 /************************************************************************************/
 extern _kernel_oserror *messagequeue_status(messagequeue_status_args *args)
 {
-  int usr_handle, internal_index;
+  unsigned int largest_message,freespace_at_tail = 0,freespace_at_head =0;
+  int i,j,usr_handle,internal_index,next_usr_handle = -1;
   BlockOfQueues *current;
   MessageQueue q;
-  int next_usr_handle = -1;
-  int i,j;
-  unsigned int largest_message;
-  unsigned int freespace_at_tail = 0;
-  unsigned int freespace_at_head =0;
-  unsigned int space_remaining;
-
-    /* Find the current message queue */
 
     usr_handle = args->in.mq_handle;
     internal_index = usr_handle;
@@ -893,11 +854,7 @@ extern _kernel_oserror *messagequeue_status(messagequeue_status_args *args)
     args->out.maximum_size = q.maxsize_single_msg;
     args->out.count = count_msgs(q,&largest_message);
     args->out.largest_message = largest_message;
-
-    /* Space remaining */
-    freespace_avail(q,&space_remaining,&freespace_at_head,&freespace_at_tail,0);
-
-    args->out.space_remaining = space_remaining;
+    args->out.space_remaining = freespace_avail(q,&freespace_at_head,&freespace_at_tail);
 
     return NULL;
 }
@@ -946,11 +903,7 @@ BlockOfQueues *findq(int *n)
 /************************************************************************************/
 unsigned int count_msgs (MessageQueue q,unsigned int *largest)
 {
-  unsigned int msg_size;
-  unsigned int count = 0;
-  unsigned int *startof_dispatch = NULL;
-  unsigned int *startof_freespace = NULL;
-
+  unsigned int msg_size,count = 0,*startof_dispatch = NULL,*startof_freespace = NULL;
 
     if (largest != NULL)
     {
@@ -1010,24 +963,15 @@ unsigned int count_msgs (MessageQueue q,unsigned int *largest)
 
 /************************************************************************************/
 /* Function: freespace_avail()                                                      */
-/* Requires: 'q', which is the current message queue. 'total_freespace', 'headspace'*/
-/*           and 'tailspace' do not need to be set on entry, and 'msgsize', which is*/
-/*           the size of the message the caller wishes to insert into the queue. If */
-/*           the caller only wishes to know the total amount of free space available*/
-/*           set msgsize to 0 on entry.                                             */
-/* Returns:  error_MESSAGE_TOO_LARGE if 'msgsize' is greater than the total amt of  */
-/*           available free space, otherwise NULL to indicate no errors.  Call by   */
-/*           reference returns the total free space available in the queue, and, if */
-/*           free space wraps around, returns amt of free space available at tail   */
-/*           and head ends as tailspace and headspace respectively.                 */
+/* Requires: 'q', which is the current message queue. 'headspace' and 'tailspace'   */
+/*           are not set on entry.                                                  */
+/* Returns:  Total free space available in the queue. If free space wraps round,    */
+/*           call by reference returns amt of free space available at tail and head */
+/*           as tailspace and headspace.                                            */
 /************************************************************************************/
-_kernel_oserror * freespace_avail (MessageQueue q,unsigned int *total_freespace,
-  unsigned int *headspace, unsigned int *tailspace, unsigned int msgsize)
+unsigned int freespace_avail (MessageQueue q,unsigned int *headspace, unsigned int *tailspace)
 {
-  unsigned int *startof_dispatch;
-  unsigned int *startof_freespace;
-  unsigned int *qtail;
-  unsigned int *qhead;
+  unsigned int *startof_dispatch,*startof_freespace,*qtail,*qhead,total_freespace = 0;
 
     startof_dispatch = q.startof_dispatch;
     startof_freespace = q.startof_freespace;
@@ -1039,48 +983,43 @@ _kernel_oserror * freespace_avail (MessageQueue q,unsigned int *total_freespace,
     {
          *tailspace = (unsigned int)((int)qtail - (int)startof_freespace);
          *headspace = (unsigned int)((int)startof_dispatch - (int)qhead);
-         *total_freespace = *tailspace + *headspace;
+         total_freespace = *tailspace + *headspace;
     }
     /* Case 2 (refer section 5.4, detailed design 1216,612/DS) */
     else if ((startof_dispatch != NULL) && (startof_dispatch > startof_freespace))
     {
          *tailspace = *headspace = 0;
-         *total_freespace = (unsigned int)((int)startof_dispatch - (int)startof_freespace);
+         total_freespace = (unsigned int)((int)startof_dispatch - (int)startof_freespace);
     }
     /* Case 3 (refer section 5.4, detailed design 1216,612/DS) */
     else if ((startof_dispatch == NULL) && (startof_freespace == qhead))
     {
          *tailspace = *headspace = 0;
-         *total_freespace = q.queue_size;
+         total_freespace = q.queue_size;
     }
     /* Cases 4 and 7 (refer section 5.4, detailed design 1216,612/DS) */
     else if (((startof_dispatch == qhead) && (startof_freespace > startof_dispatch)) ||
              ((startof_dispatch != NULL) && (startof_dispatch == qhead) && (startof_freespace > startof_dispatch)))
     {
          *tailspace = *headspace = 0;
-         *total_freespace = (unsigned int)((int)qtail - (int)startof_freespace);
+         total_freespace = (unsigned int)((int)qtail - (int)startof_freespace);
     }
     /* Case 5 (refer section 5.4, detailed design 1216,612/DS) */
     else if ((startof_dispatch == NULL) && (startof_freespace != qhead))
     {
          *tailspace = (unsigned int)((int)qtail - (int)startof_freespace);
          *headspace = (unsigned int)((int)startof_freespace - (int)qhead);
-         *total_freespace = q.queue_size;
+         total_freespace = q.queue_size;
     }
     /* Cases 6, 9, and 10 (refer section 5.4, detailed design 1216,612/DS) */
     else if ((startof_freespace == startof_dispatch) ||
             ((startof_dispatch == qhead) && (startof_freespace == qtail)))
     {
          *tailspace = *headspace = 0;
-         *total_freespace = 0;
+         total_freespace = 0;
     }
 
-    if (msgsize > (*total_freespace))
-    {
-        return make_error(error_MESSAGE_TOO_LARGE,0);
-    }
-
-    return NULL;
+    return total_freespace;
 }
 
 /************************************************************************************/
@@ -1174,13 +1113,9 @@ void report_err(char *mess,int ln)
 void message_queue_info(void)
 {
   BlockOfQueues *current;
-  unsigned int largest_msg;
+  unsigned int largest_msg,dummy1 = 0,dummy2 = 0;
   MessageQueue q;
-  int old_state;
-  int i = 0;
-  unsigned int freespace = 0;
-  unsigned int dummy1 = 0;
-  unsigned int dummy2 = 0;
+  int old_state,i = 0;
 
     if (head == NULL)
     {
@@ -1215,8 +1150,7 @@ void message_queue_info(void)
           printf("%-10u",q.queue_size);
           printf("%-10u",q.maxsize_single_msg);
           printf("%-10u",count_msgs(q,&largest_msg));
-          freespace_avail(q,&freespace,&dummy1,&dummy2,0);
-          printf("%-10u",freespace);
+          printf("%-10u",freespace_avail(q,&dummy1,&dummy2));
           printf("%-10u\n",largest_msg);
       }
 
