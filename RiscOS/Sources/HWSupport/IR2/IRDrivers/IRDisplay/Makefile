@@ -49,7 +49,7 @@ OBJS      = module.o display.o ir_api.o header.o veneers.o
 # Rule patterns
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} -o $@ $<
+.cmhg.o:;   ${CMHG} -p -o $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
 
 #
@@ -106,23 +106,3 @@ rom_link:
 
 
 # Dynamic dependencies:
-o.module:	c.module
-o.module:	C:h.kernel
-o.module:	C:h.swis
-o.module:	h.utils
-o.module:	h.ir_api
-o.module:	h.module
-o.module:	h.display
-o.display:	c.display
-o.display:	C:h.kernel
-o.display:	C:h.swis
-o.display:	h.utils
-o.display:	h.ir_api
-o.display:	h.display
-o.display:	h.veneers
-o.ir_api:	c.ir_api
-o.ir_api:	C:h.kernel
-o.ir_api:	C:h.swis
-o.ir_api:	h.utils
-o.ir_api:	h.ir_api
-o.ir_api:	h.veneers
