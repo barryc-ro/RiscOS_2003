@@ -21,18 +21,23 @@ EXP_HDR = <export$dir>
 #
 MKDIR   = mkdir -p
 AS      = objasm
+LD      = link
 CP      = copy
 RM      = remove
+WIPE    = -wipe
 CCFLAGS = -c -depend !Depend -IC:
 ASFLAGS = -depend !Depend -Stamp -quit -module -pd "tvtype SETS \"${TV}\""
 CPFLAGS = ~cfr~v
+LDFLAGS = -bin -o ${TARGET}
+WFLAGS  = ~fr~v
 
 #
 # Program specific options:
 #
 COMPONENT = MPEG2Video
-SOURCE    = Hdr.MPEG2Video
-TARGET    = rm.MPEG2Video
+SOURCE    = Hdr.${COMPONENT}
+OBJECT    = o.${COMPONENT}
+TARGET    = rm.${COMPONENT}
 SETUP	  = s.Setup.352x288
 SETUPC	  = s.Setup.352x288C
 
@@ -64,10 +69,14 @@ clean:
         ${RM} ${TARGET}
         ${RM} s.Data.BinSetup
         ${RM} s.Data.BinSetupC
+        ${WIPE} o ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 ${TARGET}: ${SOURCE} s.Data.BinSetupC
-        ${AS} -o $@ ${SOURCE} ${ASFLAGS}
+        ${MKDIR} o
+        ${AS} -o ${OBJECT} ${SOURCE} ${ASFLAGS}
+        ${LD} ${LDFLAGS} ${OBJECT}
+        SetType $@ Module
 
 s.Data.BinSetup: ${SETUP} Tools.ConvSetup
 	/Tools.ConvSetup ${SETUP} s.Data.BinSetup
