@@ -4,7 +4,7 @@
 
 	FILE:		getmsgfile.c
 	AUTHOR:		Richard D. Warren
-	VERSION:	0.16 for RISC OS
+	VERSION:	0.17 for RISC OS
 
 	OVERVIEW
 	========
@@ -41,6 +41,11 @@
 					by waiting for async. operations to
 					call the FSM back.
 	03/06/98	0.16	RDW	Re-entracy changes as per cmdresp.c 0.05
+	19/11/98	0.17	RDW	check_for_space member added to context.  Defaulted to true except on
+					file output version when client wants the module just to write all the
+					data out to file and not check for it exceeding a file limit.
+					FSM_STORE_DATA() state modified to check the check_for_space flag is
+					set before doing a space check.
 */
 
 
@@ -136,6 +141,7 @@ typedef struct
   unsigned int        msg_id;
   unsigned int        num_lines;
   BOOL                no_space;
+  BOOL                check_for_space;						/* for file version, dont_check_for free space         */
   STATES              state;							/* GetListOfMessages FSM state                         */
   int                 retr_timeout;						/* timeout for waiting for server response to LIST cmd */
   unsigned int        pos;							/* position in list                                    */
@@ -211,7 +217,8 @@ extern _kernel_oserror* get_message_to_file(BOOL          del,
                                             unsigned int  space,
                                             unsigned int  msg_id,
                                             unsigned int  num_lines,
-                                            int           timeout)
+                                            int           timeout,
+                                            BOOL          check_for_space)
 {
   _kernel_oserror    *error           = 0;					/* result to return                                              */
   getmsgfile_context *context = new_getmsgfile_context();			/* create a new context for this operation                       */
@@ -227,20 +234,21 @@ extern _kernel_oserror* get_message_to_file(BOOL          del,
       error = ERROR(MALLOCFAILED);
     else
     {
-      context->TOP          = TOP;
+      context->check_for_space = check_for_space;
+      context->TOP             = TOP;
       if (file)
         strcpy(context->filename, filename);
       else
-        context->filename   = filename;
-      context->del          = del;
-      context->file         = file;
-      context->space        = space;
-      context->msg_id       = msg_id;
-      context->num_lines    = num_lines;
-      context->retr_timeout = timeout;
-      context->sock         = process1.socknum;
-      context->t_slice      = 0;						/* NEW */
-      process1.state        = PROCESSING;					/* make sure main state is IDLE so event handler doesn't do anything */
+        context->filename      = filename;
+      context->del             = del;
+      context->file            = file;
+      context->space           = space;
+      context->msg_id          = msg_id;
+      context->num_lines       = num_lines;
+      context->retr_timeout    = timeout;
+      context->sock            = process1.socknum;
+      context->t_slice         = 0;						/* NEW */
+      process1.state           = PROCESSING;					/* make sure main state is IDLE so event handler doesn't do anything */
       error = CB_get_message_to_file(context);
     }
   }
@@ -272,6 +280,7 @@ static getmsgfile_context *new_getmsgfile_context(void)
     memset(c, 0, sizeof(getmsgfile_context));
     c->sock = -1;
     c->state = RETR;
+    c->check_for_space = TRUE;							/* always default to this */
   }
 
   return c;
@@ -632,8 +641,16 @@ static void get_message_to_file_FSM_STORE_DATA(getmsgfile_context *c)
     }
     else if (c->pos < c->space)
     {
-      if (c->pos+size > c->space)						// If size of this chunk is greater than space
-        size = c->space - c->pos;						// set size to only write up to space avail. (no NULL termination though!)
+      BOOL no_space_after_this = FALSE;
+
+      if (c->check_for_space == true)
+      {
+        if (c->pos+size > c->space)						// If size of this chunk is greater than space
+        {
+          size = c->space - c->pos;						// set size to only write up to space avail. (no NULL termination though!)
+          no_space_after_this = TRUE;						// temp. flag so we writeout up to the remaining space, then set no_space flag
+        }
+      }
       if (!c->no_space)
       {
         if (c->file)
@@ -646,6 +663,8 @@ static void get_message_to_file_FSM_STORE_DATA(getmsgfile_context *c)
           c->filename += size;
         }
       }
+      if (no_space_after_this == TRUE)
+        c->no_space = TRUE;
       if (rc < 0)								// If rc < 0 then write failed, so
       {
         c->no_space = TRUE;							// set no_space flag as true so we don't try to write out any more to the file
@@ -745,7 +764,7 @@ static void get_message_to_file_FSM_DELETE_RESPONSE(getmsgfile_context *c)
 /* ************************************************************************** */
 static void get_message_to_file_FSM_COMPLETED(getmsgfile_context *c)
 {
-  if (c->no_space)
+  if ((c->no_space) && (c->check_for_space == true))
     c->error = ERROR(NOSPACE);
   c->space = c->pos;
   if (c->fd)
@@ -789,7 +808,7 @@ static void get_message_to_file_FSM_COMPLETED(getmsgfile_context *c)
 /* ************************************************************************** */
 static void get_message_to_file_FSM_ERROR(getmsgfile_context *c)
 {
-  if (c->no_space)
+  if ((c->no_space) && (c->check_for_space == true))
     c->error = ERROR(NOSPACE);
   c->space = c->pos;
   if (c->fd)
