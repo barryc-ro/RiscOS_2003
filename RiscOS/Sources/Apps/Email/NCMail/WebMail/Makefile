@@ -136,7 +136,7 @@ OBJSD = od.EscapeHTML 	\
 	od.ReadMsg	\
 	od.WimpReg	\
 	od.Feedback	\
-	odPopUp		\
+	od.PopUp		\
 	od.SendMsg	\
 	od.Compose	\
 	od.MailTo 	\
