@@ -90,8 +90,14 @@ debug: rm.${COMPONENT}D
 rom: ${TARGET}
         @echo ${COMPONENT}: all complete
 
-export: ${EXPORTS}
-        @echo ${COMPONENT}: export complete
+export_hdrs:
+	${CP} h.SCTransport ${EXP_C_H}.SCTransport ${CPFLAGS}
+        @echo ${COMPONENT}: export complete (headers)
+
+export_libs:
+        @echo ${COMPONENT}: export complete (libs)
+
+export: export_${PHASE}
 
 install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
