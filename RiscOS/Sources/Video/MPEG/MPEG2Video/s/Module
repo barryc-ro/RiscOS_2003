@@ -139,6 +139,9 @@
 ; 27-Nov-98  TMD  2.72		Removed some debugging code which is now obsolete.
 ; 03-Dec-98  TMD  2.73		Remove CheckAudioFullnessForHeaders flag (obsolete).
 ;				Make square-pixel aspect ratio value produce standard 4:3 output (scaling down doesn't work).
+; 07-Dec-98  TMD  2.74		(Conditionally) support slow-motion (on servers with flow-control).
+; 07-Dec-98  TMD  2.75		Fix muting problem introduced by slow-mo code.
+; 07-Dec-98  TMD  2.76		Zero TrickStopFreeze on switch to normal play.
 ;
 
 	LEADR	Module_LoadAddr
@@ -237,6 +240,9 @@ AudioStats SETL {TRUE}			; gather statistics on arrival of audio data
 
 	GBLL	BigAudioThresholds
 BigAudioThresholds SETL {TRUE}		; start with more audio data buffered, and use a larger threshold range
+
+	GBLL	SlowMotionSupport
+SlowMotionSupport SETL {TRUE}		; support MPEGVideo/Audio_SetSpeed, from 2 to 8
 
 
 ; Structure of a PTS list entry
@@ -382,6 +388,9 @@ VideoChannelUnderruns	#	4	; number of video channel underruns
 UnderrunIRQState	#	4	; 0 => still waiting to start
 					; 1 => on next active field enable the underrun IRQ
 					; 2 => already enabled it once
+ ]
+ [ SlowMotionSupport
+VideoSpeedCount		#	4	; counter incremented during slow motion to control speed
  ]
 
 ; Variables only valid while stream open: audio
@@ -625,7 +634,7 @@ Mod_Title
 	=	"MPEG2Video", 0
 
 Mod_HelpStr
-	=	"MPEG2Video", TAB, "2.73 (03 Dec 1998)", 0
+	=	"MPEG2Video", TAB, "2.76 (07 Dec 1998)", 0
 	ALIGN
 
 Mod_SWITable
@@ -1229,7 +1238,7 @@ VideoOpenStream Entry "r1,r2, r11"
 
 debug SETL {FALSE}
 
-SlowMotion
+VideoSlowMotion
 NewPacket
 SetVideoFormat
 SetBorder
@@ -1281,32 +1290,42 @@ InitStream_Common Entry "r0-r2"
 
 VideoSetSpeed Entry "r0-r2, r11"
 	LDR	r11, L64002_Registers
-	CMP	r2, #8		; don't allow speeds slower than 8
-	EXIT	HI
+	CMP	r2, #8			; don't allow speeds slower than 8
+	MOVHI	r2, #8
+
+ [ :LNOT: SlowMotionSupport
+	CMP	r2, #1			; if don't support slow motion
+	MOVHI	r2, #1			; treat 2 to 8 as 1 (normal play)
+ ]
 
 	LDR	r0, VideoSpeedSetting
-	TST	r0, #&80000000  ; if pre-buffering
-	ORRNE	r2, r2, #&80000000 ; then still pre-buffering, but may have speed setting after
+	TST	r0, #&80000000  	; if pre-buffering
+	ORRNE	r2, r2, #&80000000 	; then still pre-buffering, but may have speed setting after
 	STR	r2, VideoSpeedSetting
 
 	CMP	r2, #1
-	BLT	%FT10		; pause (or pre-buffering)
-	BEQ	%FT20		; normal speed
-
-	MOV	r0, r2
-	BL	SlowMotion
-	EXIT
-
+	BLT	%FT20			; pause (or pre-buffering)
+ [ SlowMotionSupport
+	MOVNE	lr, #0
+	STRNE	lr, VideoSpeedCount	; if slow motion, set count to 0
+	BNE	%FT15			; and put into play mode
+ ]
 10
-	BL	VideoSendPause
+	ADR	lr, VideoLastPTS	; set SCR from last video PTS that was posted
+	LDMIA	lr, {r0, r1}
+	BL	WriteSCR
+ [ SlowMotionSupport
+	MOV	lr, #0
+	STR	lr, TrickStopFreeze	; ensure no left-over slow-mo freeze
+ ]
+15
+	BL	VideoSendPlay
 	CLRV
 	EXIT
 
 20
-	ADR	lr, VideoLastPTS
-	LDMIA	lr, {r0, r1}
-	BL	WriteSCR
-	BL	VideoSendPlay
+	BL	VideoSendPause
+	CLRV
 	EXIT
 
 ; **************************************************************************
@@ -2770,7 +2789,12 @@ AudioSyncCodeIRQ Entry "r8"
 	TST	r1, #&80			; if RATE bit set
 	ORRNE	r0, r0, #4			; then set bit 2 of combined rate
 	STR	r0, AudioSampleRate
-
+ [ SlowMotionSupport
+	LDR	r1, AudioSpeedSetting		; read speed setting
+	CMP	r1, #2				; if negative (prefilling) or 0 or 1 then use speed factor 1
+	SUBGE	r1, r1, #1			; else advance table entry offset by 8 words for each factor above 1
+	ORRGE	r0, r0, r1, LSL #3
+ ]
 	ADR	r1, SampleRateProgTable
 	LDR	r1, [r1, r0, LSL #2]		; extract 3 bytes of registers
 	WriteRegI r1, AudioFrequencyNMOSC0, lr
@@ -2797,6 +2821,65 @@ SampleRateProgTable
 	SampleRateInfo	128, -997		; 48 kHz
 	SampleRateInfo	256, -3119		; 32 kHz
 	SampleRateInfo	0, 0
+ [ SlowMotionSupport
+	SampleRateInfo	49, -1826		; 22.05 kHz, speed 1/2
+	SampleRateInfo	32, -1093		; 24 kHz, speed 1/2
+	SampleRateInfo	64, -3311		; 16 kHz, speed 1/2
+	SampleRateInfo	0, 0
+	SampleRateInfo	98, -1777		; 44.1 kHz, speed 1/2
+	SampleRateInfo	64, -1061		; 48 kHz, speed 1/2
+	SampleRateInfo	128, -3247		; 32 kHz, speed 1/2
+	SampleRateInfo	0, 0
+	SampleRateInfo	68, -3835		; 22.05 kHz, speed 1/3
+	SampleRateInfo	64, -3311		; 24 kHz, speed 1/3
+	SampleRateInfo	49, -3827		; 16 kHz, speed 1/3
+	SampleRateInfo	0, 0
+	SampleRateInfo	103, -2853		; 44.1 kHz, speed 1/3
+	SampleRateInfo	128, -3247		; 48 kHz, speed 1/3
+	SampleRateInfo	69, -2660		; 32 kHz, speed 1/3
+	SampleRateInfo	0, 0
+	SampleRateInfo	49, -3701		; 22.05 kHz, speed 1/4
+	SampleRateInfo	16, -1109		; 24 kHz, speed 1/4
+	SampleRateInfo	32, -3343		; 16 kHz, speed 1/4
+	SampleRateInfo	0, 0
+	SampleRateInfo	49, -1826		; 44.1 kHz, speed 1/4
+	SampleRateInfo	32, -1093		; 48 kHz, speed 1/4
+	SampleRateInfo	64, -3311		; 32 kHz, speed 1/4
+	SampleRateInfo	0, 0
+	SampleRateInfo	3, -284			; 22.05 kHz, speed 1/5
+	SampleRateInfo	46, -3997		; 24 kHz, speed 1/5
+	SampleRateInfo	6, -785			; 16 kHz, speed 1/5
+	SampleRateInfo	0, 0
+	SampleRateInfo	83, -3887		; 44.1 kHz, speed 1/5
+	SampleRateInfo	73, -3135		; 48 kHz, speed 1/5
+	SampleRateInfo	61, -3960		; 32 kHz, speed 1/5
+	SampleRateInfo	0, 0
+	SampleRateInfo	34, -3869		; 22.05 kHz, speed 1/6
+	SampleRateInfo	32, -3343		; 24 kHz, speed 1/6
+	SampleRateInfo	5, -786			; 16 kHz, speed 1/6
+	SampleRateInfo	0, 0
+	SampleRateInfo	68, -3835		; 44.1 kHz, speed 1/6
+	SampleRateInfo	64, -3311		; 48 kHz, speed 1/6
+	SampleRateInfo	49, -3827		; 32 kHz, speed 1/6
+	SampleRateInfo	0, 0
+	SampleRateInfo	14, -1861		; 22.05 kHz, speed 1/7
+	SampleRateInfo	21, -2563		; 24 kHz, speed 1/7
+	SampleRateInfo	7, -1285		; 16 kHz, speed 1/7
+	SampleRateInfo	0, 0
+	SampleRateInfo	28, -1847		; 44.1 kHz, speed 1/7
+	SampleRateInfo	65, -3934		; 48 kHz, speed 1/7
+	SampleRateInfo	7, -639			; 32 kHz, speed 1/7
+	SampleRateInfo	0, 0
+	SampleRateInfo	16, -2433		; 22.05 kHz, speed 1/8
+	SampleRateInfo	8, -1117		; 24 kHz, speed 1/8
+	SampleRateInfo	16, -3359		; 16 kHz, speed 1/8
+	SampleRateInfo	0, 0
+	SampleRateInfo	49, -3701		; 44.1 kHz, speed 1/8
+	SampleRateInfo	16, -1109		; 48 kHz, speed 1/8
+	SampleRateInfo	32, -3343		; 32 kHz, speed 1/8
+	SampleRateInfo	0, 0
+ ]
+
 
 ; Picture Start Code IRQ
 ; We use this to read the Aux FIFO and check the video system buffer
@@ -2949,15 +3032,9 @@ BeginVerticalBlank Entry
  ]
 	EXIT
 
- [ TrickPlaySupport
+ [ TrickPlaySupport :LOR: SlowMotionSupport
 	MACRO
 	DoUnderrunFix
-        LDR	r0, TrickPlayMode
-	TEQ	r0, #0				; if not doing trick play
-	LDRNE	r0, VideoStructureFlags
-	TSTNE	r0, #VideoStructureFlags_TrickPlayUnderrunFix ; or underrun fix not enabled
-	BEQ	%FT09				; then skip this stuff
-
 	LDR	r0, VideoPreFilling
 	TEQ	r0, #0
 	BNE	%FT09				; [prefilling, so don't start decoder]
@@ -2966,10 +3043,30 @@ BeginVerticalBlank Entry
 	CMP	r0, #1				; if shutting down then we'd better restart decoder
 	BCS	%FT04				; so that buffers can empty, so set C=1
 
+ [ SlowMotionSupport
+	LDR	r0, VideoSpeedSetting
+	CMP	r0, #2
+	BLT	%FT03				; [not slow motion, so check trick play]
+	LDR	lr, VideoSpeedCount		; load count of where we are in slow-motion sequence
+	ADD	lr, lr, #1			; increment it
+	CMP	lr, r0				; if >= speed setting
+	MOVCS	lr, #0				; then reset to zero
+	STR	lr, VideoSpeedCount		; always store back
+	B	%FT04				; skip trick play check (CS => start decoder, CC => stop)
+ ]
+
+ [ TrickPlaySupport
+03
+        LDR	r0, TrickPlayMode
+	TEQ	r0, #0				; if not doing trick play
+	LDRNE	r0, VideoStructureFlags
+	TSTNE	r0, #VideoStructureFlags_TrickPlayUnderrunFix ; or underrun fix not enabled
+	BEQ	%FT09				; then skip this stuff
 	BL	VideoGetBufferFullness		; else check if we have enough data in video channel
 ;	LDR	r0, VideoVBVSize
 	LDR	r0, =VideoPreFillSize
 	CMP	r2, r0
+ ]
 04
 	MVN	r1, #IR_DecodeStatus
 	MVNCS	r0, r1				; if enough, start decoder
@@ -2989,16 +3086,19 @@ BeginVerticalBlank Entry
 	MOV	r0, #1
 	STR	r0, FreezeUpdate
   ]
+ [ :LNOT: TrickPlaySupport
+03						; jump to here if not check for trick play stuff
+ ]
 09
 	MEND
- ] ; TrickPlaySupport
+ ] ; TrickPlaySupport :LOR: SlowMotionSupport
 
 ; Begin Active Video interrupt
 ; r0-r3 can be junked
 
 BeginActiveVideo Entry "r4,r5,r8"
 
- [ TrickPlaySupport :LAND: :LNOT: UnderrunFixOnlyOnOddFields
+ [ (TrickPlaySupport :LOR: SlowMotionSupport) :LAND: :LNOT: UnderrunFixOnlyOnOddFields
 	DoUnderrunFix
  ]
 
@@ -3032,7 +3132,7 @@ BeginActiveVideo Entry "r4,r5,r8"
 	TST	r0, #1				; check if an odd field
 	EXIT	NE				; [it's not, so exit]
 
- [ TrickPlaySupport :LAND: UnderrunFixOnlyOnOddFields
+ [ (TrickPlaySupport :LOR: SlowMotionSupport) :LAND: UnderrunFixOnlyOnOddFields
 	DoUnderrunFix
  ]
 ; now check for pending freeze update
@@ -3127,6 +3227,11 @@ BeginActiveVideo Entry "r4,r5,r8"
  [ :LNOT: AllowSyncOnIFrames
 	MOV	lr, #-1
 	STR	lr, [r5, #4]			; cancel posted PTS
+ ]
+ [ SlowMotionSupport
+	LDR	lr, VideoSpeedSetting
+	CMP	lr, #2				; if doing slow-motion
+	BGE	SkipPostedPTS			; then don't perform video-to-audio sync
  ]
 	LDR	lr, VideoStreamFlags
 	TST	lr, #StreamFlags_NoLipSync
@@ -3940,6 +4045,10 @@ ProcessVideoReadPtr Entry
 
 	ADR	r3, VideoPostedPTS
 	STMIA	r3, {r0, r1}				; post PTS for comparison on next odd field vsync IRQ
+ [ SlowMotionSupport
+	ADR	r3, VideoLastPTS
+	STMIA	r3, {r0, r1}				; and save for slow-motion support too
+ ]
 50
 	LDR	r0, VideoNumberOfPostedPTSs
 	ADD	r0, r0, #1
@@ -5851,7 +5960,12 @@ AudioPlay Entry "r0,r2, r11"
 AudioSetSpeed Entry "r0-r2, r11"
 	LDR	r11, L64002_Registers
 	CMP	r2, #8					; don't allow speeds slower than 8
-	EXIT	HI
+	MOVHI	r2, #8
+
+ [ :LNOT: SlowMotionSupport
+	CMP	r2, #1					; if don't support slow motion
+	MOVHI	r2, #1					; treat 2 to 8 as 1 (normal play)
+ ]
 
 	LDR	r0, AudioSpeedSetting
 	TST	r0, #&80000000				; if pre-buffering
@@ -5863,21 +5977,28 @@ AudioSetSpeed Entry "r0-r2, r11"
 	MOVNE	lr, #0					; if pause or slo-mo, reset vetting state
 	STRNE	lr, VetSCRState				; until we receive 1st SCR after return to normal play
  ]
-	BLT	%FT10					; pause (or pre-buffering)
-	BEQ	%FT20					; normal speed
-
-	MOV	r0, r2
-	BL	AudioSlowMotion
+	BLT	%FT20					; [pause (or pre-buffering)]
+ [ SlowMotionSupport
+	BEQ	%FT10					; [normal speed]
+	BL	UpdateMute				; mute the sound
+	BL	AudioSendPlay				; but ensure playing
+	CLRV
 	EXIT
-
+ ]
 10
-	BL	AudioSendPause
+	BL	AudioSendPlay				; normal speed - play
+ [ SlowMotionSupport
+	BL	UpdateMute				; and unmute if slow motion supported
+ ]
 	CLRV
 	EXIT
 
 20
-	BL	AudioSendPlay
+	BL	AudioSendPause				; set pause mode - no need to do UpdateMute
+							; - we can defer it to when they hit play again
+	CLRV
 	EXIT
+
 
  [ SendPlaySWI
 
@@ -6038,15 +6159,29 @@ AudioFreePacket ROUT
 ; out:  -
 ;
 
-AudioMuteSound Entry "r0, r11"
+AudioMuteSound Entry "r0"
+	AND	r0, r0, #1
+	STR	r0, AudioMuted
+	BL	UpdateMute
+	EXIT
+
+UpdateMute Entry "r0, r11"
 	MOV	lr, pc
 	ORR	lr, lr, #I_bit				; disable IRQs around Read/WriteRegI called from fgd
 	TEQP	lr, #0
 
+	LDR	r0, AudioMuted
+	TEQ	r0, #0
+ [ SlowMotionSupport
+	BNE	%FT10					; if user says mute then definitely mute
+	LDR	lr, AudioSpeedSetting			; if user says sound
+	CMP	lr, #2					; but audio in slow-mo
+	MOVGE	r0, #1					; then mute anyway
+	TEQ	r0, #0					; set NE if want to mute
+10
+ ]
 	LDR	r11, L64002_Registers
 	ReadRegI lr, AudioModeControl
-	ANDS	r0, r0, #1
-	STR	r0, AudioMuted
 	BICEQ	lr, lr, #AudioModeControl_AudioSoftMute	; EQ => not muted
 	ORRNE	lr, lr, #AudioModeControl_AudioSoftMute ; NE => muted
 	WriteRegI lr, AudioModeControl, r0
