@@ -9,13 +9,20 @@
 //      19-10-01 Version 1.1 s corby
 //      addition of PWM for VCXO implementation on param 0x08
 //
+//      13-12-01 Veriosn 1.2 s corby
+//      modifications per integration visit to Cambridge
+//
 //*****************************************************************************************
 
 #include "macros.inc"
 
 // code revision
-#define VERSION_ADDRESS         0x600
-#define	VERSION                 {0x4132,0x3331,0x7631,0x2e31 } // A231v1.0
+#define VERSION                 {0x4132,0x3331,0x7631,0x2e32 } // A231v1.2
+
+// hard coded locations
+#define VERSION_LOC     0x600
+#define MPEG_EXEC_DUMMY 0xD0000
+#define AC3_EXEC_DUMMY  0xD0100
 
 // ROM code subroutines and return addresses
 #define exe_kernel_entry        0xE0042
@@ -33,9 +40,9 @@
 #define SPDIF_Syncronization    0xE31ED
 
 // ROM code variables
-#define	Temp_out                0x0400
+#define Temp_out                0x0400
 #define LAYER                   0x05C6
-#define	Temp_out_ptr            0x05ED
+#define Temp_out_ptr            0x05ED
 #define ibfull_cntr             0x05F1
 #define frame_patch             0x07D1
 #define mpeg_bass_list          0x07F4
@@ -127,7 +134,7 @@
 #define PLAY                    0
 #define INIT                    1
 #define PES_bit                 2
-#define FRM_RPT                 11          // frame repeat flag in avs_flags 
+#define FRM_RPT                 11          // frame repeat flag in avs_flags
 
 // parallel read register
 #define FIFO_REQ_BIT            0
@@ -144,24 +151,28 @@
 #define FS_44                   1
 #define FS_48                   0
 #define FS_UNKNOWN              0x0c
-#define FS_32_DIV               0x0465
-#define FS_32_MUL               0x0200
-#define FS_44_DIV               0x0271
-#define FS_44_MUL               0x0188
-#define FS_48_DIV               0x0177
-#define FS_48_MUL               0x0100
+#define FS_32_DIV               0x0001
+#define FS_32_MUL               0x0001
+#define FS_44_DIV               0x0140
+#define FS_44_MUL               0x01b9
+#define FS_48_DIV               0x0002
+#define FS_48_MUL               0x0003
 #define RST_AUDPLL_BIT          1
 // SPDIF channel status bits sample rates
 #define SPDIF_48KHZ             0x20000
 #define SPDIF_44KHZ             0x00000
 #define SPDIF_32KHZ             0x30000
 
+#define IRQ_PIN                 0
 #define VCXO_PIN                1
+#define DBG_PIN                 3
+
+#define TOGGLE_DBG_ON_FRAME
 
 FORWARD D3_TO_SRG;
 FORWARD INCA7_INCA7;
 
-ORG VERSION_ADDRESS;
+ORG VERSION_LOC;
 DATA    version VERSION;
 
 ORG BIT_BUCKET;
@@ -174,9 +185,10 @@ DATA    ie_to_srg       {0x0003CE23};       // for SPDIF mute operation
 DATA    inca7_inca7     {0x00001E38};
 
 ORG;
-DATA    Operation_Reg   {0};                // Operation register
-DATA    Tone_Volume     {0};                // Linear volume for tones.
-DATA    PCM_Volume  2   {0};                // Linear volume for left PCM output.
+DATA    Operation_Reg   {0x00000000};                // Operation register
+DATA    Tone_Volume     {0x0000ffff};                // Linear volume for tones.
+DATA    PCM_Volume  2   {0x0007ffff,
+                         0x0007ffff};                // Linear volume for left PCM output.
 DATA    Dgain_Reg       {0};                // Decoder gain register.
 DATA    Dgain_Upd       {1};                // Decoder gain update flag.
 DATA    PTStol_reg      {DEFAULT_PTS_TOL};  // PTS tolerance defaults.
@@ -208,7 +220,7 @@ DATA    d3_dfifo        {0};                //                  "
 DATA    d4_dfifo        {0};                //                  "
 DATA    a0_dfifo        {0};                //                  "
 DATA    m0_dfifo        {0};                //                  "
-DATA    predictedWrPntr {0};                // 
+DATA    predictedWrPntr {0};                //
 DATA    last_rate       {0};                // used for determining sample rate changes
 DATA    pktLength       {0};                // used by input packet parser
 DATA    timerLoInterval {0};                // variables required for VCXO driver
@@ -258,7 +270,7 @@ DATA    Param_List
           #VCXO_Upd
         };                      // Decoder volume update flag.
 
-SUBROUTINE Restart;
+SUBROUTINE startup;
 SUBROUTINE MPEG_exec_dummy;
 SUBROUTINE AC3_exec_dummy;
 SUBROUTINE USER_exec;
@@ -276,19 +288,21 @@ SUBROUTINE myFramePatch;
 SUBROUTINE endOfCode;
 SUBROUTINE Timer_ISR;
 
-ORG;
-SUBROUTINE Restart {
-    setb    #0,gpio;                            // Clear the IRQ pin.
-    setb    #0,gpioc;                           // It is an output.
-
-    move_m( #Param_List,(user_buf_ptr));        // install paramList ptr for storing input para
-    move_m( #MPEG_exec_dummy,(MPEG_HANDLER));   // set patch to MPEG_HANDLER
-    move_m( #AC3_exec_dummy,(AC3_HANDLER));     // set patch to AC3_HANDLER
-    jmp_2(  (exe_kernel_entry));                // Jump to Loopm.
-    move_m( #USER_exec,(USER_HANDLER));         // set patch to PROL_HANDLER
-}
-
+ORG MPEG_EXEC_DUMMY;
 SUBROUTINE MPEG_exec_dummy {
+#ifdef TOGGLE_DBG_ON_FRAME
+    setb    #DBG_PIN,gpioc;                     // It is an output.
+    tstb    #DBG_PIN,gpio;                      // 
+    dbeq    pinToHi;                            // 
+     nop;
+     nop;
+    clrb    #DBG_PIN,gpio;                      // 
+    jmp     endToggle;
+pinToHi:
+    setb    #DBG_PIN,gpio;                      // 
+endToggle:
+#endif
+//  jmp     #MPEG_exec;
     move    (process_status),d0;                // test init flag
     cmpi    #INIT,d0;                           // is it INIT ?
     dbeq    init;                               // yes, initialize all
@@ -354,7 +368,7 @@ init:
      move   #0,ie;                              //
 }
 
-
+ORG AC3_EXEC_DUMMY;
 SUBROUTINE AC3_exec_dummy {
     move    (process_status),d0;                // test init flag
     cmpi    #INIT,d0;                           // is it INIT ?
@@ -362,7 +376,7 @@ SUBROUTINE AC3_exec_dummy {
      move_m (#AC3_Bkp_ISR,(bkp_entry));         // Set up 1st set of breakpoint handlers
     move_m  (#DISP_NOP,(initproc_ptr));         // no special initialisation
 // Initialization:
-    jsrq    #AC3_exec;                          // Initialize AC3 decoder.  
+    jsrq    #AC3_exec;                          // Initialize AC3 decoder.
     rpt     #4;                                 // Interrupts off.
     move    #0,ie;                              //
     move    ie,clkmode;                         // clear all flags
@@ -391,7 +405,7 @@ SUBROUTINE AC3_exec_dummy {
 //
 //  A record is kept of 256 word boundaries (PCM_target).  Upon a7 reaching the
 //  next boundary (eg 1|2) then PCM_target is incremented and wrapped to the next
-//  boundary (2|3).  At the same time the next block (4) is post-processed, which 
+//  boundary (2|3).  At the same time the next block (4) is post-processed, which
 //  also has the effect of requesting another 512 bytes of data from the host.
 //  Additionally the input pointer (a6) is always reset to point to the next block
 //  (5) to ensure that we always have the sequence of events (req/pp/oput).
@@ -455,7 +469,7 @@ PCM_init:
     move    #PCM_BUF_SIZE,m6;                   // the same....
     move_m  (#PCM_BUF_BASE+BLK_SIZE,(PCM_target));  // next block start
     setb    #16,mode;                           // set BM field (B irqs on)
-//  Synchronize output pointer a7 and SPDIF TX with L/R clock 
+//  Synchronize output pointer a7 and SPDIF TX with L/R clock
     jsrq    #SPDIF_Syncronization;              // L/R channel sync for SDPIF TX
     clrb    #0,a7;                              // sync a7 with L channel (even)
     rts_2;                                      // Return in two.
@@ -475,19 +489,21 @@ SUBROUTINE PCMinject
 
 SUBROUTINE Init_all
 {
+    move_m( #Param_List,(user_buf_ptr));        // install paramList ptr for storing input para
     setb    #2,bcr;                             // enable data breakpoint
     setb    #3,bcr;                             // on write...
     move    ie,(bip);                           // clear burst in progress variable
     move    a6,(predictedWrPntr);               // initialise predicted input write pointer
 // Initialize data requests:
-    setb    #0,gpio;                            // Clear any unserviced data requests.
+    setb    #IRQ_PIN,gpioc;                     // output
+    clrb    #IRQ_PIN,gpio;                      // Clear any unserviced data requests.
 // Modify code:
     move    (Operation_Reg),d2;                 // Get the operation register.
     setb    #IRQ_ENABLE,d2;                     // enable IRQs
     move    d2,(Operation_Reg);                 // and save it
     tstb    #OP_OUT_ENABLE,d2;                  // optical output enabled
     dbeq    end_spdif_init;
-     move   (ie_to_srg),d0;                     // copy 
+     move   (ie_to_srg),d0;                     // copy
      tstb   #OP_PCM_OUT,d2;                     // Check for PCM output on SPDIF.
     dbeq    end_spdif_init;                     // If bit 1 is zero, send pcm
      move   (d3_to_srg),d0;                     // Modify code for PCM out on SPDIf.
@@ -501,7 +517,7 @@ end_spdif_init:
      move   (no_operation),d1;                  // Get instr. for 2ch operation in Intb_ISR.
      move   d3,(spdif_init_flag);               // VF9 enable spdif transmitter L/R resync
     move    (inca7_inca7),d1;                   // Get instr. for 6ch operation in Intb_ISR.
-intb_isr_2ch:                                   // Return instruction in d1.    
+intb_isr_2ch:                                   // Return instruction in d1.
     move    d1m,(INCA7_INCA7);                  // Modify code for 6ch/2ch buffer in Intb_ISR.
 // Clear the fifo:
     move_m  (#in_buf,(in_buf_ptr));             // Initialize the temp input buffer pointer.
@@ -522,7 +538,7 @@ no_pes;
     move_m  (#vfifo_header_ISR,(dfifo_entry));
     move_m  (#Timer_ISR,(timer_entry));         // Load pointer to timer service routine.
     move    #1,ie;                              // Interrupts back on.
-	setb	#11,imr;                            // Enable timer interrupts.
+    setb    #11,imr;                            // Enable timer interrupts.
     rts_2;
      move_m( #Post_Shell,(postproc_ptr));       // Enable post-processing.
 }
@@ -536,7 +552,7 @@ SUBROUTINE Intb_ISR
     clrb    #0,mode;                            // no barrel shift
     setb    #3,mode;                            // Set the multiplication mode.
     tstb    #8,status;                          // Check for left or right.
-    dbeq    left_channel;                       // 
+    dbeq    left_channel;                       //
      move   (PCM_Volume),d4;                    // Get PCM volume setting for left.
      move   (a7),d3;                            // Get data for volume scaling.
     move    (PCM_Volume+1),d4;                  // Replace volume setting if a right interrupt.
@@ -565,33 +581,37 @@ SUBROUTINE vfifo_header_ISR
     push    mode;                               // Save mode register.
     clrb    #0,mode;                            // Set shift direction.
     move    #0,ds;                              // Defeat auto shift modes.
+nextword:
     move    dffcnt,d3;                          // Get the fifo count.
     lshi    #-17,d3;                            // Shift count down to LSB position.
     dbeq    exit;                               // If empty, exit.
      nop;
      nop;
-    move    dfifo,d4;                           // 
-    move    d4,d3;                              // 
+    move    dfifo,d4;                           //
+    move    d4,d3;                              //
     andi    #0xff000,d3;                        // find SYNC
-    cmpi    #SYNC_BYTE,d3;                      // 
-    dbne    exit;                               // or quit out with error
-     andi   #0x00ff0,d4;                        // 
-     lshi   #-4,d4;                             // 
-    move    d4,(pktLength);                     // 
-    move    #in_buf,d3;                         // 
+    cmpi    #SYNC_BYTE,d3;                      //
+    dbne    nextword;                           // or look at next byte in FIFO
+     andi   #0x00ff0,d4;                        //
+     lshi   #-4,d4;                             //
+
+    clrb    #IRQ_PIN,gpio;                      // match sync - clear IRQ
+
+    move    d4,(pktLength);                     //
+    move    #in_buf,d3;                         //
     add     d3,d4;                              // calculate and set breakpoint
     move    d4,bkp3;                            // on write to last word of pkt
-    move    #in_buf,d3;                         // 
-    move    d3,(in_buf_ptr);                    // 
-    db      exit;                               // 
-     move   #vfifo_payload_ISR,d4;              // 
+    move    #in_buf,d3;                         //
+    move    d3,(in_buf_ptr);                    //
+    db      exit;                               //
+     move   #vfifo_payload_ISR,d4;              //
      move   d4,(dfifo_entry);                   // setup ISR for data aquisition
 exit:
     move    (d3_reg),d3;                        //
     move    (d4_reg),d4;                        //
-    pop     mode;                               // 
-    rti_1;                                      // 
-     clrb   #12,imr;                            // Re-enable dfifo interrupts. 
+    pop     mode;                               //
+    rti_1;                                      //
+     clrb   #12,imr;                            // Re-enable dfifo interrupts.
 }
 
 SUBROUTINE vfifo_payload_ISR
@@ -620,79 +640,78 @@ exit:
     move    (d3_dfifo),d3;                      //
     move    (d4_dfifo),d4;                      //
     rti_1;                                      //
-     clrb   #12,imr;                            // Re-enable dfifo interrupts. 
+     clrb   #12,imr;                            // Re-enable dfifo interrupts.
 }
 
 SUBROUTINE vfifo_done
 {
-    setb    #0,gpio;                            // 
-    move    i0,(i0_pkt);                        // 
-    move    a0,(a0_pkt);                        // 
-    move    m0,(m0_pkt);                        // 
-    move    d3,(d3_pkt);                        // 
-    move    d4,(d4_pkt);                        // 
-    move    d5,(d5_pkt);                        // 
-    setb    #12,imr;                            // 
-    move    #vfifo_header_ISR,d3;               // 
-    move    d3,(dfifo_entry);                   // 
-    move    #in_buf,a0;                         // 
-    move    (pktLength),d5;                     // 
-    cmpz    d5  #0,m0;                          // 
+    move    i0,(i0_pkt);                        //
+    move    a0,(a0_pkt);                        //
+    move    m0,(m0_pkt);                        //
+    move    d3,(d3_pkt);                        //
+    move    d4,(d4_pkt);                        //
+    move    d5,(d5_pkt);                        //
+    setb    #12,imr;                            //
+    move    #vfifo_header_ISR,d3;               //
+    move    d3,(dfifo_entry);                   //
+    move    #in_buf,a0;                         //
+    move    (pktLength),d5;                     //
+    cmpz    d5  #0,m0;                          //
 inject_loop:
-    dble    inject_end;                         // 
-     move   (nwa_input_flag),d4;                // 
-     move   (a0)+,d3;                           // 
-    rpt     #4;                                 // 
-    move    #0,ie;                              // 
-    andi    #0xFFFF0,d3;                        // 
-    move    #dfifo_int_a_rti,i0;                // 
-    push    i0;                                 // 
-    push    status;                             // 
-    push    mode;                               // 
-    db      (off_inta);                         // 
-     move   #0,ds;                              // 
-     clrb   #0,mode;                            // 
+    dble    inject_end;                         //
+     move   (nwa_input_flag),d4;                //
+     move   (a0)+,d3;                           //
+    rpt     #4;                                 //
+    move    #0,ie;                              //
+    andi    #0xFFFF0,d3;                        //
+    move    #dfifo_int_a_rti,i0;                //
+    push    i0;                                 //
+    push    status;                             //
+    push    mode;                               //
+    db      (off_inta);                         //
+     move   #0,ds;                              //
+     clrb   #0,mode;                            //
 dfifo_int_a_rti:
-    db      inject_loop;                        // 
-     nop;                                       // 
-     dec    d5;                                 // 
+    db      inject_loop;                        //
+     nop;                                       //
+     dec    d5;                                 //
 inject_end:
-    rpt     #4;                                 // 
-    move    #0,ie;                              // 
-    move    a6,(predictedWrPntr);               // 
-// at this point we have consumed the entire intput packet // enable this coide 
-    move    (bip),d3;                           // 
-    dec     d3;                                 // 
-    dble    end_clear_bip;                      // 
-     move   (req_cntr),d4;                      // 
-     cmpz   d4;                                 // 
-    dble    end_clear_bip;                      // 
-     move   #MAX_REQ_SIZE,i0;                   // 
-     move   a6,a0;                              // 
-    move    m6,m0;                              // 
-    move    (pktLength),d5;                     // 
-    cmpi    #MAX_REQ_SIZE,d5;                   // 
-    dblt    end_clear_bip;                      // 
-     move   (a0)+i;                             // 
-     move   #in_buf+FIFO_SIZE,d4;               // 
-    move    d4,bkp3;                            // 
-    rpt     #4;                                 // 
-    move    dfifo,d4;                           // 
+    rpt     #4;                                 //
+    move    #0,ie;                              //
+    move    a6,(predictedWrPntr);               //
+// at this point we have consumed the entire input packet
+    move    (bip),d3;                           //
+    dec     d3;                                 //
+    dble    end_clear_bip;                      // max requests sent already
+     move   (req_cntr),d4;                      //
+     cmpz   d4;                                 //
+    dble    end_clear_bip;                      // our buffer is full .. no more IRQs
+     move   #MAX_REQ_SIZE,i0;                   //
+     move   a6,a0;                              //
+    move    m6,m0;                              //
+    move    (pktLength),d5;                     //
+    cmpi    #MAX_REQ_SIZE,d5;                   // if host could not send entire packet
+    dblt    end_clear_bip;                      // then quit out - no point requesting more
+     move   (a0)+i;                             //
+     move   #in_buf+FIFO_SIZE,d4;               //
+    move    d4,bkp3;                            //
+    rpt     #4;                                 // empty FIFO of any flush bytes
+    move    dfifo,d4;                           //
     db      end_Vfifo_done;                     // 
-     move   a0,(predictedWrPntr);               // 
-     clrb   #0,gpio;                            // 
+     move    a0,(predictedWrPntr);              //
+     setb    #IRQ_PIN,gpio;                     // request another packet
 end_clear_bip:
-    move    #0,d3;                              // 
+    move    #0,d3;                              //
 end_Vfifo_done:
-    move    d3,(bip);                           // 
-    move    (a0_pkt),a0;                        // 
-    move    (i0_pkt),i0;                        // 
-    move    (m0_pkt),m0;                        // 
-    move    (d3_pkt),d3;                        // 
-    move    (d4_pkt),d4;                        // 
-    move    (d5_pkt),d5;                        // 
-    rti_1;                                      // 
-     clrb    #12,imr;                           // 
+    move    d3,(bip);                           //
+    move    (a0_pkt),a0;                        //
+    move    (i0_pkt),i0;                        //
+    move    (m0_pkt),m0;                        //
+    move    (d3_pkt),d3;                        //
+    move    (d4_pkt),d4;                        //
+    move    (d5_pkt),d5;                        //
+    rti_1;                                      //
+     clrb    #12,imr;                           //
 }
 
 SUBROUTINE AC3_Bkp_ISR
@@ -718,16 +737,16 @@ SUBROUTINE MPG_Bkp_ISR
 skip_vfifo_done:                                // <-+
     move    (sp)+,z;                            // z = status
     move    (sp)+,d3;                           // d3 = return address
-    cmpi    #Sync_wait_out_init+1,d3;           // 
+    cmpi    #Sync_wait_out_init+1,d3;           //
     dbeq    Patch1;                             // Patch1 stops Sync subroutine from waiting
     move    d2,(d2_bkp);                        // for output buffer to cycle to its origin
     cmpi    #MPEG_check_dmph+1,d3;              // before proceeding (Keeps STC from drifting).
-    dbeq    Patch2;                             // Patch2 returns to ROM code after Patch1 
-    move    #trans_samp_time,d2;                // completes and switches the breakpoints to  
+    dbeq    Patch2;                             // Patch2 returns to ROM code after Patch1
+    move    #trans_samp_time,d2;                // completes and switches the breakpoints to
     cmpi    #trans_samp_time+1,d3;              // second set, for Patch3 and Patch4.
     dbeq    Patch3;                             // Patch3 allows changing of the default
     move    (PTStol_reg),d2;                    // PTS tolerances.
-    cmpi    #SoftMute_proc_ROM+1,d3;            // 
+    cmpi    #SoftMute_proc_ROM+1,d3;            //
     dbeq    Patch4;                             // Patch4 corrects Softmute subroutine
     move    (LAYER),d2;                         // to output 1/3 as many samples (128) for
 Exit:
@@ -755,7 +774,7 @@ Patch1:
 
 Patch2:
 // The patch replaces the breakpoint registers with new addresses to extend the
-// number of break addresses available, enabling Patch3 and Patch4.  This could 
+// number of break addresses available, enabling Patch3 and Patch4.  This could
 // not be incorporated in Patch1 because the breakpoint for Patch1 is not achieved
 // on each call to sync, but the breakpoints need updating in all cases.
     move    d2,bkp1;                            // for Patch3
@@ -767,14 +786,14 @@ Patch2:
     move    d2,bkp2;
 
 Patch3:
-// Breakpoint1 is set to the call to trans_samp_time, which calculates the 
-// PTS tolerances in terms of 90 KHz clocks, from units of 128 sample blocks. 
+// Breakpoint1 is set to the call to trans_samp_time, which calculates the
+// PTS tolerances in terms of 90 KHz clocks, from units of 128 sample blocks.
 // PTS tolerance values are in registers d5 (positive tolerance) and d6 (negative
 // tolerance).  If the PTStol_reg is zero, the default ROM code tolerances are
-// left in d5 and d6, otherwise the values in PTStol_reg are used.  They are packed 
+// left in d5 and d6, otherwise the values in PTStol_reg are used.  They are packed
 // with the positive tolerance in bits 7->0 and the negative tolerance in bits 15->8.
     move    ie,(ibfull_cntr);                   // req_cntr+ibfull_cntr wraps ibuffer
-    cmpz    d2;                                 // If it's zero, 
+    cmpz    d2;                                 // If it's zero,
     jeq_2(  Exit);                              // use ROM code tolerances.
      clrb    #0,bsr;                            // Clear breakpoint1 status.
      setb    #0,bct1;                           // Reset breakpoint1 counter.
@@ -821,7 +840,7 @@ SUBROUTINE Post_Shell {
     move    (a2),m4;                            // Get right modulo.
     rpt     #4;
     move    #0,ie;                              // Interrupts off to protect Dgain_Upd
-    move    (Dgain_Upd),d2;     
+    move    (Dgain_Upd),d2;
     cmpz    d2;                                 // Flag is active low.
     jne_2   (End_Dgain_Update);                 //
      move   #1,d2;                              // Reset the flag.
@@ -831,7 +850,7 @@ SUBROUTINE Post_Shell {
     and     d2,d3   #0x3,d4;                    // Get the shift amount.
     move    d3,(Decode_Shift);                  // Save it.
     or      d4,d2;                              // Set the LSBs of the multiplier.
-    move    d2,(Decode_Mult);                   // 
+    move    d2,(Decode_Mult);                   //
 End_Dgain_Update:
     move    #1,ie;                              // re-enable interrupts
     move    (Decode_Mult),d2;                   // Get the multiplier.
@@ -879,7 +898,7 @@ Low_Tone_Selected:
     andi    #0xC000,d3;                         // Mask off sample rate.
     lshi    #-14,d3;                            // Shift it down.
     move    d3,i0;                              // Make sample rate offset.
-    move    #Osc_State,a2;                      // Point to the oscillator state.   
+    move    #Osc_State,a2;                      // Point to the oscillator state.
     move    (a0+i),d2;                          // Get oscillator coeff.
     do_1    (#BLK_SIZE,Osc_Loop);               // Generate 128 samples.
     move    (a2)+,d1;                           // Get Yn-1.
@@ -901,7 +920,7 @@ End_Tone_Insertion:
     move    #0,m3;                              // Clean up
     move    #0,m4;                              //
     rpt     #4;                                 // disable interrupts
-    move    #0,ie;                              // 
+    move    #0,ie;                              //
 // Error and sample rate flags -> start building host read register here <-
     move    (bip),d2;                           // get burst in progress count
     cmpz    d2;                                 // should be no bursts in progress .. ?
@@ -931,60 +950,61 @@ skipDataReq:
     and     d5,d4;                              // more data or notifying the host of a repeated frame
     dbeq    no_IRQ;                             // if not then quit out without triggering an IRQ
      move   #MAX_REQ,d4;                        // number of bursts to go in d4
-     nop;                                       // 
-    move    d4,(bip);                           // 
+     nop;                                       //
+    move    d4,(bip);                           //
     rpt     #4;                                 // Clear the fifo.
-    move    dfifo,d3;                           // 
+    move    dfifo,d3;                           //
     move_m  (#in_buf,(in_buf_ptr));             // point to beginning next packet
     move_m  (#vfifo_header_ISR,(dfifo_entry));  // Load pointer to fifo service routine.
-    move    #in_buf+FIFO_SIZE,d3;               // 
+    move    #in_buf+FIFO_SIZE,d3;               //
     move    d3,bkp3;                            // set eop at end of virtual FIFO
-    clrb    #0,gpio;                            // Send interrupt, active low.
+    setb    #IRQ_PIN,gpio;                      // pulse triggered 60ns
 no_IRQ:
     move    #1,ie;                              // re enable interrupts
-    pop     mode;                               // 
+    pop     mode;                               //
 // update PWM timer here
-    move    (VCXO_Upd),d4;                      // 
-    cmpz    d4;                                 // 
-    dbne    no_VCXO_update;                     // 
-     move   #1,d4;                              // 
-     move   d4,(VCXO_Upd);                      // 
-    move    (VCXOclocks),d4;                    // 
-    move    d4,(timerLoInterval);               // 
-    move    (VCXOclocks+1),d4;                  // 
-    move    d4,(timerHiInterval);               // 
-    setb    #VCXO_PIN,gpio;                     // 
-    move    d4,timer;                           // 
+    move    (VCXO_Upd),d4;                      //
+    cmpz    d4;                                 //
+    dbne    no_VCXO_update;                     //
+     move   #1,d4;                              //
+     move   d4,(VCXO_Upd);                      //
+    move    (VCXOclocks),d4;                    //
+    move    d4,(timerLoInterval);               //
+    move    (VCXOclocks+1),d4;                  //
+    move    d4,(timerHiInterval);               //
+    setb    #VCXO_PIN,gpio;                     //
+    move    d4,timer;                           //
 no_VCXO_update:
-    rts;                                        // 
+    rts;                                        //
 }
 
 SUBROUTINE myFramePatch {
-    move    #TRGT_SIZE,d4;                      // 
-    move    (curr_frame_size),d2;               // 
-    move    d2,(myFrameSize);                   // 
-    rts_2;                                      // 
-     sub    d2,d4;                              // 
-     move   d4,(curr_frame_size);               // 
+    move    #TRGT_SIZE,d4;                      //
+    move    (curr_frame_size),d2;               //
+    move    d2,(myFrameSize);                   //
+    rts_2;                                      //
+     sub    d2,d4;                              //
+     move   d4,(curr_frame_size);               //
 }
 
-SUBROUTINE Timer_ISR 
+SUBROUTINE Timer_ISR
 {
-    tstb    #VCXO_PIN,gpio;                     // 
-    dbeq    loToHi;                             // 
-     move   (timerLoInterval),d4;               // 
-     move   (timerHiInterval),d3;               // 
-    move    d3,timer;                           // 
-    clrb    #VCXO_PIN,gpio;                     // 
-    move    (d3_reg),d3;                        // 
-    rti_1;                                      // 
-     move   (d4_reg),d4;                        // 
+    setb    #VCXO_PIN,gpioc;
+    tstb    #VCXO_PIN,gpio;                     //
+    dbeq    loToHi;                             //
+     move   (timerLoInterval),d4;               //
+     move   (timerHiInterval),d3;               //
+    move    d3,timer;                           //
+    clrb    #VCXO_PIN,gpio;                     //
+    move    (d3_reg),d3;                        //
+    rti_1;                                      //
+     move   (d4_reg),d4;                        //
 loToHi:
-    move    d4,timer;                           // 
-    setb    #VCXO_PIN,gpio;                     // 
-    move    (d3_reg),d3;                        // 
-    rti_1;                                      // 
-     move   (d4_reg),d4;                        // 
+    move    d4,timer;                           //
+    setb    #VCXO_PIN,gpio;                     //
+    move    (d3_reg),d3;                        //
+    rti_1;                                      //
+     move   (d4_reg),d4;                        //
 }
 
 SUBROUTINE endOfCode {
