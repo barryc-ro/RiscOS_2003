@@ -31,6 +31,8 @@
 #endif
 #include <debuglib/debuglib.h>
 
+#include <Global/SWIs.h>
+#include <MPEG/MPEGCtrl.h>
 #include <VideoCtrl.h>
 
 #include "CallOut.h"
@@ -515,6 +517,8 @@ static bool status_proceed_completed(session * s, bool * repeat)
 {
   dprintf(("", "status_proceed_completed: Completed.\n"));
 
+  s->state = protostate_INITIAL;
+
   if (s->destruct)
   {
     /* We're on the way out - no status change to Video Control... */
@@ -532,7 +536,7 @@ static bool status_proceed_completed(session * s, bool * repeat)
     /* We're more or less finished, just need to let Video Control */
     /* know about the status change.                               */
 
-    if (s->play_record != NULL)
+    if (s->have_svbid == 0 && s->play_record != NULL)
     {
       flags |= VC_ProtocolNotify_ResponseReceived_Prepare |
                VC_ProtocolNotify_ResponseReceived_PortInR5;
@@ -562,20 +566,85 @@ static bool status_proceed_completed(session * s, bool * repeat)
       return false;
     }
 
-    /* Tell SVBmip to start */
-
     if (s->play_record != NULL)
     {
-      e = svbctrl_open_stream(s);
+      /* Tell SVBmip to start */
 
-      if (e != NULL)
+      if (s->have_svbid == 0)
       {
-        utils_store_error(e);
+        e = svbctrl_open_stream(s);
 
-        s->state = protostate_ERROR_VCPN;
-        *repeat  = true;
+        if (e != NULL)
+        {
+          utils_store_error(e);
 
-        return false;
+          s->state = protostate_ERROR_VCPN;
+          *repeat  = true;
+
+          return false;
+        }
+      }
+
+      /* Handle pause/unpause (only if we're playing) */
+
+      if (s->have_svbid)
+      {
+        if ((!strcmp(s->play_record, "1") || *s->play_record == '\0') && s->paused != 0)
+        {
+          /* Whilst paused, data still came in so UDPV almost certainly */
+          /* overran. Either way we want to catch up with the stream,   */
+          /* not sit behind. So, do an immediate reset.                 */
+
+          if (
+               (
+                 e = _swix(MPEGControl_ResetStream,
+                           _INR(0,2),
+
+                           ResetStreamFlags_VideoPresent | ResetStreamFlags_AudioPresent,
+                           s->mpegid,
+                           -1) /* Stream type; -1 = "normal playback" */
+               )
+               == NULL
+             )
+          {
+            /* If the reset worked, set speed to 1 */
+
+            e = _swix(MPEGControl_SetSpeed,
+                      _INR(0,2),
+
+                      0,
+                      s->mpegid,
+                      1);
+          }
+
+          if (e == NULL) s->paused = 0;
+        }
+        else if (!strcmp(s->play_record, "0") && s->paused == 0)
+        {
+          /* We're entering pause - just set speed to 0 for freeze frame */
+
+          e = _swix(MPEGControl_SetSpeed,
+                    _INR(0,2),
+
+                    0,
+                    s->mpegid,
+                    0);
+
+          if (e == NULL) s->paused = 1;
+        }
+        else e = NULL;
+
+        /* Error handling for the pause/unpause stuff */
+
+        if (e != NULL)
+        {
+          utils_store_error(e);
+
+          s->state = protostate_ERROR_VCPN;
+          *repeat  = true;
+
+          return false;
+        }
       }
     }
   }

@@ -12,6 +12,7 @@
 
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 
 #include <swis.h>
 
@@ -27,9 +28,12 @@
 #include <inetlib.h>
 #include <netinet/in.h>
 
+#include <SVBmip.h>    /* Exported by SVBmip's !MkExport */
 #include <VideoCtrl.h> /* Exported by VideoCtrl's !MkExport */
 
 #include "Module.h"
+#include "Parameters.h"
+#include "SVBGErrors.h"
 #include "Utils.h"
 
 #include "SVBctrl.h"
@@ -52,36 +56,6 @@ typedef struct svbctrl_channel_info
 
 } svbctrl_channel_info;
 
-/* SWI definitions (at the time of writing SVBmip does not export a header) */
-
-#ifndef SVB_SetServer
-
-  #define SVB_SetServer         0x043c80
-  #define SVB_OpenStream        0x043c81
-  #define SVB_CloseStream       0x043c82
-  #define SVB_CheckEndOfStream  0x043c83
-  #define SVB_SetSpeed          0x043c84
-  #define SVB_SetPosition       0x043c85
-  #define SVB_ReadNPT           0x043c86
-  #define SVB_ReadChannel       0x043c87
-  #define SVB_ReadChannelNames  0x043c88
-  #define SVB_EnumerateChannels 0x043cbc
-  #define SVB_UpdateChannel     0x043cbd
-  #define SVB_RemoveChannel     0x043cbe
-  #define SVB_AddChannel        0x043cbf
-
-#endif
-
-/* Definitions for R0 on entry to SVB_OpenStream */
-
-#define SVB_OpenStream_NumberInR1       (1u<<0) /* R1 = channel number if set, else pointer to string */
-#define SVB_OpenStream_DoNotUseUDPV     (1u<<1) /* If set, don't call UDPV_StartOfPlay */
-
-/* Similarly for SVB_EnumerateChannels */
-
-#define SVB_EnumerateChannels_AsString  (1u<<0) /* Use channel file string if set, else write parsed data block */
-#define SVB_EnumerateChannels_StartAtR1 (1u<<1) /* Start at channel number given in R1 */
-
 /**************************************************************/
 /* svbctrl_retrieve_port()                                    */
 /*                                                            */
@@ -100,7 +74,15 @@ unsigned int svbctrl_retrieve_port(session * s)
   unsigned int           port;
   int                    cont;
 
-  if (s->channel < 1) return 0;
+  /* If channel number is 0, use the URL directly */
+
+  if (s->channel < 1)
+  {
+    if (s->url->port == NULL) return 0;
+    else                      return atoi(s->url->port);
+  }
+
+  /* Otherwise, it's harder - ask SVBmip */
 
   i = malloc(sizeof(svbctrl_channel_info));
   if (i == NULL) return 0;
@@ -162,13 +144,121 @@ _kernel_oserror * svbctrl_open_stream(session * s)
 
     if (e == NULL)
     {
-      e = _swix(SVB_OpenStream,
-                _INR(0,2) | _OUT(0),
+      unsigned int chan_no;
 
-                SVB_OpenStream_NumberInR1 | SVB_OpenStream_DoNotUseUDPV,
-                s->channel,
-                opts[2],
-                &s->svbid);
+      s->mpegid = opts[2];
+
+      /* We can open by host/port or by number */
+
+      if (s->channel < 1 && s->url->port != NULL && s->url->host != NULL)
+      {
+        /* Open by host and port */
+
+        char   host [16];
+        char   port [6];
+        char * found;
+
+        /* Ensure our host and port specifiers are of expected length */
+
+        strncpy(host, s->url->host, sizeof(host));
+        host[sizeof(host) - 1] = '\0';
+        strncpy(port, s->url->port, sizeof(port));
+        port[sizeof(port) - 1] = '\0';
+
+        /* There are two possibilities; we know the channel number or we don't */
+
+        found = parameters_find_item(s->url->query,
+                                     Parameters_ChannelName);
+
+        if (found != NULL)
+        {
+          /* We've been given a channel name, so assemble a full specifier string */
+
+          char * channel = malloc(strlen(found) + 25); /* 25 for "0  aaa.bbb.ccc.ddd:ppppp" (sic.) and terminating NUL */
+
+          if (channel == NULL) e = make_error(svbgeneric_ERROR_MEMORY_EXHAUSTED, 0);
+          else
+          {
+            sprintf(channel, "0 %s %s:%s", found, host, port);
+            free(found);
+
+            e = _swix(SVB_AddChannel,
+                      _INR(0,1) | _OUT(2),
+
+                      SVB_AddChannel_AllocateNumber,
+                      channel,
+
+                      &s->temp_channel);
+
+            free(channel);
+          }
+        }
+        else
+        {
+          /* This is ugly. We don't know what channel name to use. So, add a channel */
+          /* using a name of "0", just to get the number, remove that channel, then  */
+          /* use the number as a name and add again.                                 */
+
+          char channel [37]; /* "0 <n> aaa.bbb.ccc.ddd:ppppp" */
+
+          sprintf(channel, "0 0 %s:%s", host, port);
+
+          /* Add it with name '0' */
+
+          e = _swix(SVB_AddChannel,
+                    _INR(0,1) | _OUT(2),
+
+                    SVB_AddChannel_AllocateNumber,
+                    channel,
+
+                    &s->temp_channel);
+
+          /* If that worked we have the number, so remove it */
+
+          if (e == NULL) e = _swix(SVB_RemoveChannel,
+                                   _INR(0,1),
+
+                                   0,
+                                   s->temp_channel);
+
+          /* Write a new channel specifier with a name derived from the number we */
+          /* expect - yes, we're assuming the same number twice - and add again   */
+
+          if (e == NULL)
+          {
+            sprintf(channel, "0 %d %s:%s", s->temp_channel, host, port);
+
+            e = _swix(SVB_AddChannel,
+                      _INR(0,1) | _OUT(2),
+
+                      SVB_AddChannel_AllocateNumber,
+                      channel,
+
+                      &s->temp_channel);
+          }
+        }
+
+        /* Take a local record of channel number for SVB_OpenStream below */
+
+        chan_no = s->temp_channel;
+      }
+      else
+      {
+        /* Simple case - we're given a channel number */
+
+        chan_no = s->channel;
+      }
+
+      if (e == NULL)
+      {
+        e = _swix(SVB_OpenStream,
+                  _INR(0,2) | _OUT(0),
+
+                  SVB_OpenStream_NumberInR1,
+                  chan_no,
+                  s->mpegid,
+                  &s->svbid);
+      }
     }
 
     if (e == NULL) s->have_svbid = 1;
@@ -192,6 +282,8 @@ _kernel_oserror * svbctrl_close_stream(session * s)
 {
   if (s->have_svbid == 1)
   {
+    /* Close the stream */
+
     _kernel_oserror * e = _swix(SVB_CloseStream,
                                 _INR(0,1),
 
@@ -199,6 +291,19 @@ _kernel_oserror * svbctrl_close_stream(session * s)
                                 s->svbid);
 
     s->have_svbid = 0;
+
+    /* Remove the temporary channel, if allocated */
+
+    if (s->temp_channel > 0)
+    {
+      _swix(SVB_RemoveChannel,
+            _INR(0,1),
+
+            0,
+            s->temp_channel);
+
+      s->temp_channel = 0;
+    }
 
     return e;
   }
