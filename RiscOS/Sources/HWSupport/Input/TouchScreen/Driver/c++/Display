@@ -10,6 +10,7 @@ Pace.
 
 
 #include <stdbool.h>
+#include <stdlib.h>
 //#include <stdio.h>
 
 #include "swis.h"
@@ -25,13 +26,14 @@ display::display()
 
      // because calibration application is not yet up and running...
 
-     TOUCH_SCREEN_POSITION p;
+     TOUCH_SCREEN_POSITION p, s;
      DISPLAY_POSITION d;
 
      /* Yum - matches my screen, anyway */
      p.x = 0x793; p.y = 0x7A3;
+     s.x = 0x002; s.y = 0x002;
      d.x = display_size_x / 2; d.y = display_size_y / 2;
-     set_centre(p, d);
+     set_centre(p, s, d);
 
      p.x = 0xDB5; p.y = 0xD8D;
      d.x = 0; d.y = 0;
@@ -56,10 +58,11 @@ display::display()
 };
 
 
-void display::set_centre(TOUCH_SCREEN_POSITION adc, DISPLAY_POSITION pos)
+void display::set_centre(TOUCH_SCREEN_POSITION adc, TOUCH_SCREEN_POSITION adc_sd, DISPLAY_POSITION pos)
 {
     centre_pos = pos;
     centre_adc = adc;
+    centre_adc_sd = adc_sd;
 
     calibrated = 1;
     //printf("set_centre: pos = (%d,%d), adc = (%03u,%03u)\n");
@@ -116,6 +119,8 @@ void display::set_corner(TOUCH_SCREEN_POSITION adc, DISPLAY_POSITION pos)
          *                   yx = (1/D) * (y2 * y_pos1 - y1 * y_pos2)
          *                   yy = (1/D) * (-x2 * y_pos1 + x1 * y_pos2)      where D = (x1*y2-x2*y1)
          *
+         * I'm having great difficulty fitting enough precision into the fixed point. The system
+         * here works for the case of full-range (ish) ADC, onto a 1280x960 screen (ie xx etc ~= 0.3).
          */
 
         // These values will be 12-bit signed
@@ -130,11 +135,11 @@ void display::set_corner(TOUCH_SCREEN_POSITION adc, DISPLAY_POSITION pos)
         x_pos2 = ((corner_pos[2].x + corner_pos[3].x) - (corner_pos[0].x + corner_pos[1].x) + 1) / 2;
         y_pos2 = ((corner_pos[2].y + corner_pos[3].y) - (corner_pos[0].y + corner_pos[1].y) + 1) / 2;
 
-        D = x_adc1 * y_adc2 - x_adc2 * y_adc1; // 24-bit signed
+        D = (x_adc1 * y_adc2 - x_adc2 * y_adc1) >> 1; // 23-bit signed (1 bit lopped off)
 
         if (D == 0) return; // hmmm
 
-        x_adc1 = ((x_adc1 << 16) + D/2) / D; // 16.16 fixed point - whole part will be zero or small
+        x_adc1 = ((x_adc1 << 16) + D/2) / D; // 15.17 fixed point - whole part will be zero or small
         y_adc1 = ((y_adc1 << 16) + D/2) / D;
         x_adc2 = ((x_adc2 << 16) + D/2) / D;
         y_adc2 = ((y_adc2 << 16) + D/2) / D;
@@ -164,11 +169,11 @@ void display::display_dimensions(void)
 
   centre_pos.x = centre_pos.x * new_x / display_size_x;
   centre_pos.y = centre_pos.y * new_y / display_size_y;
-  for (int i=0; i<4; i++)
-  {
-      mult[i].x = mult[i].x * new_x / display_size_x;
-      mult[i].y = mult[i].y * new_y / display_size_y;
-  }
+
+  xx = xx * new_x / display_size_x;
+  xy = xy * new_x / display_size_x;
+  yx = yx * new_y / display_size_y;
+  yy = yy * new_y / display_size_y;
 
   display_size_x = new_x;
   display_size_y = new_y;
@@ -217,8 +222,8 @@ DISPLAY_POSITION display::translate_position(TOUCH_SCREEN_POSITION in)
        pos.x = in.x - centre_adc.x;
        pos.y = in.y - centre_adc.y;
 
-       translated.x = ((pos.x * xx + pos.y * xy) >> 16) + centre_pos.x;
-       translated.y = ((pos.x * yx + pos.y * yy) >> 16) + centre_pos.y;
+       translated.x = ((pos.x * xx + pos.y * xy) >> 17) + centre_pos.x;
+       translated.y = ((pos.x * yx + pos.y * yy) >> 17) + centre_pos.y;
 
        // signed right shifts do sign extend
        //translated.x = ((((int) in.x - (int) centre_adc.x) * mult[corner].x) >> 16) + centre_pos.x;
@@ -252,17 +257,20 @@ int int_sqrt(unsigned int a)
     for (i-=8; i*i<a; i++)
         continue;
 
-    return i-1;
+    if (abs(i*i-a) <= abs((i-1)*(i-1)-a))
+        return i;
+    else
+        return i-1;
 }
 
 #define MEASUREMENTS 64
 
 int display::calibrate_point(TOUCH_SCREEN_POSITION adc, unsigned int pres,
-                            unsigned int &x_mean, unsigned int &y_mean, unsigned int &p_mean, unsigned int &p_sd)
+                            unsigned int &x_mean, unsigned int &y_mean,
+                            unsigned int &x_sd, unsigned int &y_sd, unsigned int &p_mean, unsigned int &p_sd)
 {
     static int count1, count2, count3;
     static unsigned int x_sum, x_sum2, y_sum, y_sum2, p_sum, p_sum2;
-    int x_sd, y_sd;
     PRESSURE_LEVEL pres_level = tscreen.pressure_measure.get_pressure_level(pres);
 
     _swix(OS_Byte, _IN(0), 19);
@@ -288,8 +296,8 @@ int display::calibrate_point(TOUCH_SCREEN_POSITION adc, unsigned int pres,
             return 1;
         }
 
-        x_sd = int_sqrt((x_sum2 - x_sum / MEASUREMENTS * x_sum) / (MEASUREMENTS - 1));
-        y_sd = int_sqrt((y_sum2 - y_sum / MEASUREMENTS * y_sum) / (MEASUREMENTS - 1));
+        x_sd = int_sqrt(((x_sum2 - x_sum / MEASUREMENTS * x_sum) + (MEASUREMENTS-1)/2) / (MEASUREMENTS - 1));
+        y_sd = int_sqrt(((y_sum2 - y_sum / MEASUREMENTS * y_sum) + (MEASUREMENTS-1)/2) / (MEASUREMENTS - 1));
 
         //printf("x sd = %u, y sd = %u\n", x_sd, y_sd);
 
@@ -310,9 +318,9 @@ int display::calibrate_point(TOUCH_SCREEN_POSITION adc, unsigned int pres,
         return 0;
     }
 
-    x_sd = int_sqrt((x_sum2 - x_sum / MEASUREMENTS * x_sum) / (MEASUREMENTS - 1));
-    y_sd = int_sqrt((y_sum2 - y_sum / MEASUREMENTS * y_sum) / (MEASUREMENTS - 1));
-    p_sd = int_sqrt((p_sum2 - p_sum / MEASUREMENTS * p_sum) / (MEASUREMENTS - 1));
+    x_sd = int_sqrt(((x_sum2 - x_sum / MEASUREMENTS * x_sum) + (MEASUREMENTS-1)/2) / (MEASUREMENTS - 1));
+    y_sd = int_sqrt(((y_sum2 - y_sum / MEASUREMENTS * y_sum) + (MEASUREMENTS-1)/2) / (MEASUREMENTS - 1));
+    p_sd = int_sqrt(((p_sum2 - p_sum / MEASUREMENTS * p_sum) + (MEASUREMENTS-1)/2) / (MEASUREMENTS - 1));
 
     x_mean = x_sum / MEASUREMENTS;
     y_mean = y_sum / MEASUREMENTS;
@@ -331,13 +339,13 @@ int display::calibrate_point(TOUCH_SCREEN_POSITION adc, unsigned int pres,
 int display::calibrate_centre(TOUCH_SCREEN_POSITION adc, DISPLAY_POSITION pos, unsigned int pres)
 {
     int result;
-    TOUCH_SCREEN_POSITION mean;
+    TOUCH_SCREEN_POSITION mean, sd;
     unsigned int p, p_sd;
 
-    result = calibrate_point(adc, pres, mean.x, mean.y, p, p_sd);
+    result = calibrate_point(adc, pres, mean.x, mean.y, sd.x, sd.y, p, p_sd);
     if (result < 3) return result;
 
-    set_centre(mean, pos);
+    set_centre(mean, sd, pos);
 
     tscreen.pressure_measure.set_centre_pressure(p, p_sd, pos);
 
@@ -347,10 +355,10 @@ int display::calibrate_centre(TOUCH_SCREEN_POSITION adc, DISPLAY_POSITION pos, u
 int display::calibrate_corner(TOUCH_SCREEN_POSITION adc, DISPLAY_POSITION pos, unsigned int pres)
 {
     int result;
-    TOUCH_SCREEN_POSITION mean;
+    TOUCH_SCREEN_POSITION mean, sd;
     unsigned int p, p_sd;
 
-    result = calibrate_point(adc, pres, mean.x, mean.y, p, p_sd);
+    result = calibrate_point(adc, pres, mean.x, mean.y, sd.x, sd.y, p, p_sd);
     if (result < 3) return result;
 
     set_corner(mean, pos);
@@ -363,3 +371,7 @@ int display::calibrate_corner(TOUCH_SCREEN_POSITION adc, DISPLAY_POSITION pos, u
     return 3;
 }
 
+bool display::significant_change(const TOUCH_SCREEN_POSITION &old, const TOUCH_SCREEN_POSITION &current) const
+{
+    return (abs(old.x - current.x) >= (centre_adc_sd.x*3/4) || abs(old.y - current.y) >= (centre_adc_sd.y*3/4));
+}

@@ -18,14 +18,11 @@ EXP_HDR = <cexport$dir>
 COMPONENT = TouchScreen
 CMHGNAME  = header
 
-#
-# Internet version compatibility
-#
-#COMPAT = -DCOMPAT_INET4
 
-DEFINES = ${COMPAT} ${OPTIONS}
+DEFINES = -DUSE_TICKER -DUSE_TIMER1 ${OPTIONS}
 
 CFLAGS    = -ffca -c -zM -zps1 -wp ${DEFINES} ${INCLUDES}
+CMHGFLAGS = ${DEFINES} ${INCLUDES}
 
 include Makefiles:StdTools
 
@@ -56,6 +53,8 @@ OBJS      =\
  o.driver\
  o.sensor\
  o.display\
+ o.halveneer\
+ o.halasm\
  $(CMHGOBJ)
 
 #
@@ -120,7 +119,7 @@ ${ROMTARGET}: ${OBJS} ${ROMLIBS} ${DIRS}
 #
 # Final link for the ROM Image (using given base address)
 #
-rom_link:
+rom_link: ${ROMTARGET}
         ${MKDIR} linked
         ${LD} -c++ -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROMTARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
