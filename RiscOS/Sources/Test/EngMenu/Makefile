@@ -44,7 +44,7 @@ AFLAGS = -depend !Depend -Stamp -quit
 CFLAGS  = -c -depend !Depend ${COMMONFLAGS} -Throwback
 Linkflags = -aif -c++ -o $@
 ObjAsmflags = -throwback -NoCache -depend !Depend
-CPFLAGS = ~cfr~v 
+CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
 
@@ -128,11 +128,11 @@ util:  ${UTIL_TARGET} dirs
 	access ${UTIL_TARGET} RW/r
 	SetType ${UTIL_TARGET} Utility
 	@echo ${COMPONENT}: utility complete
-        
+
 instrument: ${I_TARGET} dirs
 	access ${I_TARGET} RW/r
 	@echo ${COMPONENT}: instrument build complete
-	
+
 preprocess: ${OBJSI} dirs
 	@echo ${COMPONENT}: preprocess build complete
 
@@ -143,8 +143,8 @@ dirs:
         ${MKDIR} io
         ${MKDIR} inst
         ${MKDIR} ${RESAPP}
-        
-resources: ${TARGET} dirs
+
+resources: ${TARGET} util dirs
 	squeeze ${TARGET}
 	set EngMenuRes$Path Resources.${USERIF}.${LOCALE}., Resources.${USERIF}.UK.
         ${CP} ${RDIR}.!Run      ${RESAPP}.!Run ${CPFLAGS}
@@ -182,16 +182,16 @@ clean:
         ${WIPE} ${RESAPP}.Messages ${WFLAGS}
         ${WIPE} ${RESAPP}.ConfigNTSC ${WFLAGS}
         ${WIPE} ${RESAPP}.ConfigPAL ${WFLAGS}
-        ${WIPE} ${RESAPP} ${WFLAGS}	
+        ${WIPE} ${RESAPP} ${WFLAGS}
         @echo ${COMPONENT}: cleaned
-        
+
 #
 # Target
 #
 ${UTIL_TARGET}: ${UTILOBJS}
 	${LD} -o $@ -bin ${UTILOBJS}
-	
-	
+
+
 ${I_TARGET}: ${OBJSINST}
 	${LD} ${Linkflags} ${OBJSINST} ${CLIB}
 
