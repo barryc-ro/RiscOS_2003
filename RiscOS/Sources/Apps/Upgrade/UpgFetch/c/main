@@ -1,0 +1,471 @@
+
+/*
+This Application performs the first part of a two part upgrade procedure for
+upgrading the operating system on an NC without the need for a seperate
+operating system or maintainance OS.
+
+This Application Fetches a compressed OS image from a supplied URL via FTP
+and stores it in a dynamic area.  It then triggers a seperate application
+to reprogram the flash memory with the new image.
+
+
+This program provides a Wimp interface for the download process showing a
+bar chart of the progress of the download and status information as to the
+progress.  The program launches the programming task as soon as the download
+is complete.
+
+
+*/
+
+
+/* Created 26th September 2000    Mark Robertshaw
+*/
+
+
+
+
+#include <stdio.h>
+#include <stdlib.h>
+#include "string.h"
+
+#include "swis.h"
+#include "kernel.h"
+
+#include "interface/URL.h"
+#include "math.h"
+#include "wimplib.h"
+#include "toolbox.h"
+
+
+#include "FetchImage.h"
+#include "kill.h"
+
+#include "ui.h"
+#include "messages.h"
+#include "globals.h"
+
+
+
+#define WimpVersion    310
+
+static  WimpPollBlock  poll_block;
+        MessagesFD     messages;
+static  IdBlock        id_block;
+
+int     server_timeout;
+
+
+
+
+
+/*  Main takes a URL as it's only command line argument.  It controls the
+downloading of a compressed image into a dynamic area.  Here are the main
+steps it takes
+
+1) Read URL from Command line
+2) Create a dynamic area to store the compressed image
+3) Connect to the FTP Server
+4) Get the image 32k at the time.
+5) Launch the child task
+
+*/
+
+
+int main(int argc, char *argv[])
+{
+  _kernel_swi_regs regs;                        // kernel swi regs
+  _kernel_oserror *err, *error;                 // kernel errors
+
+  int session_identifier = 0;                   // used to pass to URL module
+
+  char *url = malloc(255);                      // url string
+
+  int dynamic_area_number;                      // dynamic area identifier
+  char *dynamic_area_base_address = NULL;       // base address of area
+  char *dynamic_area_current_ptr;               // pointer to current bit
+
+  char *buffer = malloc(32768);                 // buffer for latest chunk
+
+
+  char command_line_arguments[255];             // used to pass args to
+                                                // child process
+  int memory_bank;                              // memory bank to write to
+
+  char child_task[256];                        // child task to run
+
+  int bytes_read;                              // bytes read in a single pass
+  int total_bytes_read = 0;                    // total bytes read
+  int total_bytes_to_read = 0;                 // total bytes to read
+  int bytes_left_to_read = -1;                 // bytes left to read
+
+  int image_size = 0;                          // size of image
+
+  int checked_free_memory  = FALSE;            // flag
+  int started_getting_data = FALSE;            // flag
+
+
+
+
+  // read the command line arguments
+
+  // There should be two arguments we read the second one, the url
+
+
+  if (argc < 2)
+  {
+    printf("Not enough arguments supplied\n");
+    exit(0);
+  }
+
+
+
+
+  // set up the url
+  strcpy(url, argv[2]);
+
+  // initialise message file
+  init_messages();
+
+
+  initialise_wimp();
+
+
+  // create ourselves a dynamic area
+  regs.r[0] = 0;
+  regs.r[1] = -1;
+  regs.r[2] = 1;
+  regs.r[3] = -1;
+  regs.r[4] = 0;
+  regs.r[5] = -1;
+  regs.r[6] = 0;
+  regs.r[7] = 0;
+  regs.r[8] = (int)"Upgrade Image Area";
+
+  err = _kernel_swi(OS_DynamicArea, &regs, &regs);
+
+  if (err)
+  {
+    error_occurred("CantClaimDynamicArea");
+
+  }
+
+  // set up the dynamic area variables
+  dynamic_area_number = regs.r[1];
+  dynamic_area_base_address = (char*)regs.r[3];
+
+
+
+  // free up some memory by killing running applications
+  if ( !kill_apps() )
+  {
+    error_occurred("CantKillApplications");
+  }
+
+
+  initialise_status_screen();
+
+  // register the session
+
+  regs.r[0] = 0;
+
+  err = _kernel_swi(URL_Register, &regs, &regs);
+
+  status_print("Connecting to the FTP server\n");
+
+
+  if (err)
+  {
+    error_occurred("CantConnectToFTPServer");
+  }
+
+  session_identifier = regs.r[1];
+
+
+
+  // get url
+
+  regs.r[0] = 0;  // we do want the length of the data
+  regs.r[1] = session_identifier;
+  regs.r[2] = 1;
+  regs.r[3] = (int)url;  //location
+  regs.r[4] = NULL;
+  regs.r[5] = 0;
+  regs.r[6] = NULL;
+
+  error = _kernel_swi(URL_GetURL, &regs, &regs);
+
+  if (error)
+  {
+     error_occurred("CantFetchURL");
+
+  }
+
+
+  dynamic_area_current_ptr = dynamic_area_base_address;
+
+  // get the server timeout value from message file
+  server_timeout = atoi( lookup_message_token("ServerTimeout") );
+
+
+
+  /*  This is the main Data fetch routine */
+
+  /* Here we get 32k chunks of data at a time.  If we can we try and read
+  the number of bytes remaining to be read as soon as possible so as to
+  ensure we don't run out of memory in the dynamic area.  If this isn't
+  possible we allocate the memory on the fly and hope for the best !!
+  */
+
+
+
+  while (!error)
+  {
+    regs.r[0] = 0;
+    regs.r[1] = session_identifier;
+    regs.r[2] = (int)buffer;
+    regs.r[3] = 32768;
+
+    // read next 32k chunk
+    error = _kernel_swi(URL_ReadData, &regs, &regs);
+
+    // check to see that we have finished
+    if (error)
+    {
+      break;
+    }
+
+    bytes_read = regs.r[4];
+
+    // update the total bytes read variable
+    total_bytes_read += bytes_read;
+
+
+    if (bytes_read > 0)
+    {
+
+       // if we haven't already done so update the display
+       if (started_getting_data == FALSE)
+       {
+         status_print("Downloading new image\n");
+         started_getting_data = TRUE;
+       }
+
+       // if we haven't already done so, check we have the required free ram.
+       if (checked_free_memory == FALSE)
+       {
+        bytes_left_to_read = regs.r[5];
+
+        // if we receive notification of how much left
+        if (bytes_left_to_read != -1)
+        {
+
+         // make a record of how many bytes to read in total
+         total_bytes_to_read = bytes_left_to_read + total_bytes_read;
+
+         // allocate memory for the whole image
+         regs.r[0] = dynamic_area_number;
+         regs.r[1] = bytes_left_to_read + bytes_read;
+
+         err = _kernel_swi(OS_ChangeDynamicArea, &regs, &regs);
+
+         if (err)
+         {
+           error_occurred("NotEnoughMemory");
+         }
+
+         checked_free_memory = TRUE;
+       }
+
+     }
+
+
+
+     // if we still don't know how large the image is allocate enough
+     // for the currently read block (dynamically)
+
+     if (checked_free_memory == FALSE)
+     {
+       regs.r[0] = dynamic_area_number;
+       regs.r[1] = bytes_read;
+
+       err = _kernel_swi(OS_ChangeDynamicArea, &regs, &regs);
+
+       if (err)
+       {
+         error_occurred("NotEnoughMemory");
+       }
+
+     }
+
+
+     // copy the memory block into the dynamic area
+     memcpy(dynamic_area_current_ptr, buffer, bytes_read);
+
+
+     update_status_screen(total_bytes_read, total_bytes_to_read);
+
+     dynamic_area_current_ptr += bytes_read; // increment the memory pointer
+
+
+     // reset the null reads counter
+     number_of_null_reads = 0;
+     last_timer_value = 0;
+
+
+
+    }
+
+
+   // if no bytes read
+   else check_for_timeout();
+
+   // poll the wimp to update any toolbox changes
+   poll_wimp();
+
+  }
+
+  // finish up
+
+  regs.r[0] = 0;
+  regs.r[1] = session_identifier;
+
+  _kernel_swi(URL_Deregister, &regs, &regs);
+
+
+  // calculate the image size.
+  image_size = dynamic_area_current_ptr - dynamic_area_base_address;
+
+
+  status_print("Programming new image\n");
+  poll_wimp();
+
+
+  // pass the dynamic area address and image size to atmelprog
+
+  strcpy(child_task, lookup_message_token("ChildTask") );
+
+  memory_bank = atoi( lookup_message_token("MemoryBank") );
+
+
+
+  sprintf(command_line_arguments, "%s %i -memory -size %i -os %i",
+                  child_task, (int)dynamic_area_base_address, image_size,
+                  memory_bank);
+
+
+  if ( !close_messages_file() ) exit(0);
+
+
+  _kernel_oscli(command_line_arguments);
+
+}
+
+
+
+
+
+/* This function checks that we are still receiving data from the server
+essentially if we don't receive any data in the time specified in the
+messages file as ServerTimeout it returns an error.
+*/
+
+void check_for_timeout(void)
+{
+  float current_timer_value;
+
+  // increment the number of null reads
+  number_of_null_reads ++;
+
+
+  // set up the timer for the first time
+  if (last_timer_value == 0)
+  {
+    last_timer_value = read_time_in_seconds();
+    return;
+  }
+
+
+
+  // if number of null reads > NULL_COUNTOUT check for data stream
+  if (number_of_null_reads > NULL_COUNTOUT)
+  {
+
+    current_timer_value = read_time_in_seconds();
+
+    // check for activity for NULL_TIMEOUT seconds
+    if ( (current_timer_value - last_timer_value) > server_timeout )
+    {
+      error_occurred("ServerError");
+    }
+
+    else number_of_null_reads = 0;
+
+  }
+
+
+
+}
+
+
+
+
+/* This function is just an interface to the ReadMonotonicTime SWI
+*/
+
+float read_time_in_seconds(void)
+{
+  _kernel_swi_regs regs;
+  float time_in_seconds;
+
+  _kernel_swi(OS_ReadMonotonicTime, &regs, &regs);
+
+  time_in_seconds = (float)regs.r[0] / 100;
+
+  return time_in_seconds;
+}
+
+
+
+
+
+/* Since we are running as a Wimp Toolbox task we need to initialise the
+Toolbox and load our resource file e.t.c. This routine does this for us.
+It also makes a call to initialise our messages.
+
+*/
+
+
+void initialise_wimp()
+{
+  int wimp_messages = 0,
+      toolbox_events = 0;
+
+
+
+  toolbox_initialise(0, WimpVersion, &wimp_messages, &toolbox_events,
+                     "<Fetch$Dir>", &messages, &id_block, 0, 0, 0);
+
+
+
+
+}
+
+
+
+/* This function is just an interface to OS_Reset called to
+reset the machine.  Called when the user clicks the dialogue box to reset
+*/
+
+int reset_machine(int event_code, ToolboxEvent *event,
+                             IdBlock *id_block,void *handle)
+{
+  _kernel_swi_regs regs;
+
+  _kernel_swi(OS_Reset, &regs, &regs);
+
+  return(SUCCESS);
+}
+
+
+
+
