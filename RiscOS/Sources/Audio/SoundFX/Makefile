@@ -156,3 +156,4 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 o.SoundFX:	c.SoundFX
 o.SoundFX:	C:h.kernel
 o.SoundFX:	C:h.swis
+o.SoundFX:	C:h.nvram
