@@ -24,8 +24,6 @@ handle_device_call ROUT
                 SavePSR lr
                 Push    lr
                 JumpAddress lr, device_call_exit, forward       ; load return address
-		MOV	r11, r8			; sort out port workspace
-
                 CMP     r0, #(%20-%10)/4	; validate reason code
                 ADDCC   pc, pc, r0, LSL #2 	; despatch
 		B	%20
@@ -72,7 +70,6 @@ device_call_exit
 ;            for TX
 ;	r4 = file switch file handle
 ;       r6 = pointer to special field control block
-;	r11 = port workspace
 ; out:  r2 = internal stream handle
 ;
 ; This routine is called as a stream is being opened onto the device by
@@ -96,12 +93,12 @@ BufferThreshold		# 4		; required buffer threshold
 ;
 ; If the field is not present, it will be &deaddead
 
-initialise      ENTRY "r0,r4-r5"
+initialise      ENTRY "r0,r4-r5,r9"
  [ debug
 ;		DREG	r2, "initialise stream : "
 ;		DREG	r4, "   fileswitch handle : "
  ]
-		LDR	r10, BaseAddress
+		LDR	r9, HAL_StaticBase
 
                 TST     r3, #1                  ; tx or rx stream ?
                 STREQ   r2, InputStream		; stash input handle
@@ -221,7 +218,7 @@ finalise        Entry	"r0-r3"
 
 ; Must not corrupt Z
 
-wakeup_tx       ENTRY	"r3,r10"
+wakeup_tx       ENTRY	"r0-r3,r9"
  [ debug
 ;		DLINE	"wakeup_tx"
  ]
@@ -229,14 +226,15 @@ wakeup_tx       ENTRY	"r3,r10"
 		BIC	r3, r3, #flag_TxDormant
 		STR	r3, PortFlags
 
-		LDR	r10, BaseAddress
+		LDR	r9, HAL_StaticBase
 ; disable tx interrupts
-                LDRB    r3, UART_interrupt_enable   ; interrupt enable register
-                BIC     r3, r3, #IER_transmit_empty
-                STRB    r3, UART_interrupt_enable
+                MOV     r1, #0
+                MVN     r2, #IER_transmit_empty
+                CallHAL HAL_UARTInterruptEnable
 ; and now enable them
-                ORR     r3, r3, #IER_transmit_empty ; enable tx empty ints
-                STRB    r3, UART_interrupt_enable   ; store back in register
+                MOV     r1, #IER_transmit_empty
+                MVN     r2, #IER_transmit_empty
+                CallHAL HAL_UARTInterruptEnable
 
  		EXIT
 
@@ -339,7 +337,7 @@ create_rx_buffer ENTRY
 ; We have registered for halt/resume information on both streams but only
 ; require information here for the input buffer so check stream handles.
 
-threshold_halt  ENTRY "r0-r1"
+threshold_halt  ENTRY "r0-r1,r9"
  [ debug
 ;		DLINE	"threshold halt"
  [ border_handshake
@@ -351,6 +349,7 @@ threshold_halt  ENTRY "r0-r1"
 		TEQ	r2, r1
 		EXIT	NE
 
+                LDR     r9, HAL_StaticBase
 ; are we doing handshaking ?
 		LDR	r1, PortFlags
 		TST	r1, #flag_UseRTS:OR:flag_UseXon:OR:flag_UseDTR
@@ -394,13 +393,15 @@ threshold_halt  ENTRY "r0-r1"
 ; This routine is called when the free space in the buffer has risen above the
 ; specified threshold.
 
-threshold_resume ENTRY	"r0-r1"
+threshold_resume ENTRY	"r0-r1,r9"
  [ debug
 ;		DLINE	"threshold resume"
  [ border_handshake
 		SetColour off
  ]
  ]
+                LDR     r9, HAL_StaticBase
+
 ; check stream handle
 		LDR	r1, InputStream
 		TEQ	r2, r1
@@ -451,10 +452,12 @@ threshold_resume ENTRY	"r0-r1"
 ; to setup the device correctly and start transmission etc, etc...
 ;
 
-stream_created  ENTRY	"r0-r4"
+stream_created  ENTRY	"r0-r4,r9"
  [ debug
 ;		DREG	r2, "stream created : "
  ]
+                LDR     r9, HAL_StaticBase
+
 		MOV	r4, r2			; save stream handle
 ; get buffer details
 		MOV	r0, r3			; need buffer handle
@@ -541,7 +544,9 @@ ioctl		ROUT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-ioctl_baud	ENTRY 	"r0-r4"
+ioctl_baud	ENTRY 	"r0-r4,r9"
+
+                LDR     r9, HAL_StaticBase
 
 		LDR	r4, [r3, #0]		; load flags
 		LDR	r0, [r3, #4]		; load data
@@ -553,9 +558,14 @@ ioctl_baud	ENTRY 	"r0-r4"
 10
 ; do we wish to read current
 		TST	r4, #ioctl_read
-		LDRNE	r0, BaudRate
-		STRNE	r0, [r3, #4]
+                BEQ     %20
 
+                MOV     r4, r3
+                MOV     r1, #-1
+                CallHAL HAL_UARTRate
+
+                STR     r0, [r4, #4]
+20
                 CLRV
                 EXIT
 
@@ -563,8 +573,9 @@ ioctl_baud	ENTRY 	"r0-r4"
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-ioctl_data	ENTRY	"r0-r4"
+ioctl_data	ENTRY	"r0-r4, r9"
 
+                LDR     r9, HAL_StaticBase
 		LDR	r4, [r3, #0]		; load flags
 		LDR	r1, [r3, #4]		; load data
 
@@ -708,7 +719,9 @@ ioctl_buffer_thres ENTRY "r0-r5"
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-ioctl_ctrl_lines ENTRY "r0-r4"
+ioctl_ctrl_lines ENTRY "r0-r4,r9"
+
+                LDR     r9, HAL_StaticBase
 
 		LDR	r4, [r3, #0]		; load flags
 		LDR	r1, [r3, #4]		; load data
@@ -762,7 +775,9 @@ ioctl_ctrl_lines ENTRY "r0-r4"
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-ioctl_fifo_trig ENTRY "r0-r1"
+ioctl_fifo_trig ENTRY "r0-r1,r9"
+
+                LDR     r9, HAL_StaticBase
 
 		LDR	r1, [r3, #0]		; load flags
 
@@ -789,13 +804,14 @@ ioctl_fifo_trig ENTRY "r0-r1"
 
 ioctl_read_bauds ENTRY "r0-r3"
 
-		ADRL	r1, baud_table
-		ADRL	r2, baud_table_end
-
-		SUB	r0, r2, r1
-		MOV	r0, r0, LSR #3
-
-		STR	r0, [r3, #4]		; store data
+    ! 0, "ioctl_read_bauds not implemented"
+;		ADRL	r1, baud_table
+;		ADRL	r2, baud_table_end
+;
+;		SUB	r0, r2, r1
+;		MOV	r0, r0, LSR #3
+;
+;		STR	r0, [r3, #4]		; store data
 
 		EXIT
 
@@ -805,25 +821,27 @@ ioctl_read_bauds ENTRY "r0-r3"
 
 ioctl_read_baud	ENTRY "r0-r5"
 
-		LDR	r4, [r3, #4]		; load data
-; calc number of bauds again
- 		ADRL	r1, baud_table
-		ADRL	r2, baud_table_end
-		SUB	r5, r2, r1
-		MOV	r5, r5, LSR #3
-; check for invalid index values
-		MOV	r0, #0
-		CMP	r4, #0
-		BLT	%10
-		CMP	r4, r5
-		BGE	%10
+    ! 0, "ioctl_read_baud not implemented"
 
-; calc address of baud rate
-		MOV	r4, r4, LSL #3
-		ADD	r1, r1, r4
-		LDR	r0, [r1]
-10
-		STR	r0, [r3, #4]		; store data
+;		LDR	r4, [r3, #4]		; load data
+;; calc number of bauds again
+; 		ADRL	r1, baud_table
+;		ADRL	r2, baud_table_end
+;		SUB	r5, r2, r1
+;		MOV	r5, r5, LSR #3
+;; check for invalid index values
+;		MOV	r0, #0
+;		CMP	r4, #0
+;		BLT	%10
+;		CMP	r4, r5
+;		BGE	%10
+;
+;; calc address of baud rate
+;		MOV	r4, r4, LSL #3
+;		ADD	r1, r1, r4
+;		LDR	r0, [r1]
+;10
+;		STR	r0, [r3, #4]		; store data
 
                 CLRV
 		EXIT

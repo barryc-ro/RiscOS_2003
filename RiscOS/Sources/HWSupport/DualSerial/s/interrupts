@@ -14,41 +14,30 @@
 ; This interrupt routine will have to handle the arbatration between the two
 ; interrupt sources.
 
-handle_irq	EntryS	"r10-r11"
-		LDR	r11, Port1			; try port 1
-		CMP	r11, #0
-		BEQ	%10
-
-                LDR	r10, BaseAddress		; get the environment
-		LDRB	r1, UART_interrupt_ident	; clears tx empty ints
-		TST	r1, #IIR_no_interrupt		; any interrupts ?
-		BEQ	%20
-
-10
-		LDR	r11, Port2			; now try port 2
-		CMP	r11, #0
-		EXITS	EQ
-                LDR	r10, BaseAddress		; get the environment
+handle_irq	EntryS	"r9"
+                LDR     r9, HAL_StaticBase
+                CallHAL HAL_UARTInterruptID
+                CMP     r0, #-1                         ; any interrupts ?
+                BNE     %FT20
+	        EXITS
 
 irq_poll_loop
-                LDRB    r1, UART_interrupt_ident  ; r1 = interrupt identity
+                CallHAL HAL_UARTInterruptID
 20
-                AND     r1, r1, #IIR_IRQBits	  ; mask off the IRQ bits
-                TST     r1, #IIR_no_interrupt     ; if no more interrupt causes
-                BNE     irq_exit		  ; leave the poll loop
+                CMP     r0, #-1                   ; if no more interrupt causes
+                BEQ     irq_exit		  ; leave the poll loop
 
  [ counting
-		LDR	r0, InterruptCount
-		ADD	r0, r0, #1
-		STR	r0, InterruptCount
+		LDR	r1, InterruptCount
+		ADD	r1, r1, #1
+		STR	r1, InterruptCount
  ]
-                TEQ     r1, #IIR_line_status
+                TEQ     r0, #IID_line_status
                 BEQ     handle_line_status
-                TEQ     r1, #IIR_RX_full
+                TEQ     r0, #IID_RX_full
+		TEQNE	r0, #IID_char_timeout
                 BEQ     handle_rx_full
-		TEQ	r1, #IIR_char_timeout
-                BEQ     handle_rx_full
-                TEQ     r1, #IIR_TX_empty
+                TEQ     r0, #IID_TX_empty
                 BEQ     handle_tx_empty
 
 ; if none of the above, it must be...
@@ -56,7 +45,7 @@ irq_poll_loop
 ; one of the modem control lines has changed, update our soft copy.
 ;
 handle_modem_status
-                LDRB    r0, UART_modem_status	; clear interrupt
+                CallHAL HAL_UARTModemStatus
 ; we need to update the ControlLines information since something has changed
                 LDRB	r3, ControlLines
 		TST	r0, #MSR_CTS_active
@@ -93,8 +82,11 @@ handle_line_status
 		ADD	r0, r0, #1
 		STR	r0, ErrorCount
  ]
-                LDRB    r0, UART_line_status	; clear interrupt
-		LDRB	r1, UART_data_word	; clear byte
+
+                SUB     sp, sp, #4
+                MOV     r1, sp
+                CallHAL HAL_UARTReceiveByte
+                LDR     r0, [sp], #4
 
 		MOV	r1, #0
 		TST	r0, #LSR_overrun
@@ -131,7 +123,9 @@ handle_rx_full
 		ADD	r2, r2, #1
 		STR	r2, ByteCount
  ]
-                LDRB    r2, UART_data_word	; get byte received into r0
+                MOV     r1, #0
+                CallHAL HAL_UARTReceiveByte
+                MOV     r2, r0
 
 ; deal with xon/xoff handshaking
 		LDR	r3, PortFlags		; update flags
@@ -167,13 +161,15 @@ handle_tx_empty
                 LDR	r3, PortFlags
                 TST     r3, #flag_FIFOsPresent
                 MOVEQ   r0, #0                  ; can only send one byte
-                MOVNE   r0, #FIFO_size-1
+                LDRNEB  r0, FIFOSize
+                SUBNE   r0, r0, #1
                 STRB    r0, TxByteCount
                 BL      irq_tx_byte
 
                 B       irq_poll_loop
 
 irq_tx_byte
+                Push    "lr"
 ; are we using handshaking
 		TST	r3, #flag_UseRTS:OR:flag_UseXon:OR:flag_UseDTR
 		BEQ	%60
@@ -219,28 +215,29 @@ irq_tx_byte
 		CallBuffMan
                 BCS     %FT70
 65
-                STRB    r2, UART_data_word
-                MOV     pc, lr
+                MOV     r1, r2
+                CallHAL HAL_UARTTransmitByte
+                Pull    "pc"
 70
                 ORR     r3, r3, #flag_TxDormant		; go to sleep
                 STR	r3, PortFlags
 80
-                LDRB    r1, UART_interrupt_enable
-                BIC     r1, r1, #IER_transmit_empty
-                STRB    r1, UART_interrupt_enable
+                MOV     r1, #0
+                MVN     r2, #IER_transmit_empty
+                CallHAL HAL_UARTInterruptEnable
 
                 MOV     r1, #0				; no more bytes
                 STRB    r1, TxByteCount
 
-                MOV     pc, lr
+                Pull    "pc"
 
 ; no more interrupt causes at present so see if we have any more bytes to stuff
 ; in the FIFO (if there is one) this is done here so that filling any FIFO
 ; takes a lower priority than servicing other interrupts
 
 irq_exit
-		LDRB	r1, UART_line_status
-		TST	r1, #LSR_data_ready
+                CallHAL HAL_UARTLineStatus
+		TST	r0, #LSR_data_ready
 		BNE	handle_rx_full
 
                 LDRB    r1, TxByteCount
@@ -259,7 +256,6 @@ irq_exit
 ; call: give_event
 ;
 ; in:   r1 = DCD, DSR, PE, OV and FE bits where you want them
-;	r11 = port workspace
 ;
 ; This code generates an event about a serial error ie framing error, overrun,
 ; parity error or DCD high
@@ -270,10 +266,7 @@ give_event      ENTRY   "r0-r3"
 		LDR	r2, InputFSHandle	; get file handle
 
                 SavePSR r3
-                BIC     lr, r3, #2_11111        ; clear mode bits
-                TEQ     pc, pc                  ; In a 32-bit mode?  EQ if so
-                ORREQ   lr, lr, #SVC32_mode     ; set SVC32 mode if in IRQ32
-                ORRNE   lr, lr, #SVC_mode       ; set SVC26 mode if in IRQ26
+                ORR     lr, r3, #2_00011        ; up to appropriate SVC mode
                 RestPSR lr,,c                   ; change mode.
                 NOP
 

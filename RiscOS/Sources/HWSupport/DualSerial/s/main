@@ -19,17 +19,7 @@
 ;   depending on which devicefs object was referenced.
 ;
 
-; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;
-; module workspace
-                        ^ 0, wp
-Flags			# 4
-BuffManWkSpace          # 4	; buffer manager workspace
-BuffManService          # 4     ; address of buffer manager routine
-Port1			# 4	; address of port 1 workspace
-Port2			# 4	; address of port 2 workspace
-MessagesWorkspace       # 16    ; needed for messages routines
-workspace               * :INDEX: @
+
 
 ;
 ; bit definitions for Flags
@@ -42,10 +32,14 @@ flag_SerialType2        * 1:SHL:4  ; set => serial type 2 (ie different IRQ line
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
-; port specific workspace
+; workspace
 
-                        ^ 0, r11
-DeviceFSBlock		# 4	; address of devicefs registration block
+                        ^ 0, wp
+Flags			# 4
+BuffManWkSpace          # 4	; buffer manager workspace
+BuffManService          # 4     ; address of buffer manager routine
+MessagesWorkspace       # 16    ; needed for messages routines
+;DeviceFSBlock		# 4	; address of devicefs registration block
 DeviceHandle		# 4	; handle returned from DeviceFS_Register
 InputStream		# 4	; devicefs stream handle
 OutputStream		# 4	; devicefs stream handle
@@ -59,14 +53,36 @@ InputBufferSize		# 4	; buffer size in bytes
 OutputBufferSize	# 4	;
 InputBufferThreshold	# 4	; buffer threshold point in bytes
 OutputBufferThreshold	# 4	;
-BaseAddress		# 4	; base address of register set
+PortNumber              # 4     ;
+HAL_UARTPorts           # 4     ; report number of ports
+HAL_UARTStartUp         # 4     ; setup the uart
+HAL_UARTShutdown        # 4     ; shutdown the uart
+HAL_UARTFeatures        # 4     ; report features
+HAL_UARTReceiveByte     # 4     ; receive a byte, optionally return status
+HAL_UARTTransmitByte    # 4     ; transmit a byte
+HAL_UARTLineStatus      # 4     ; return status (of last reveived byte)
+HAL_UARTInterruptEnable # 4     ; enable interrupts
+HAL_UARTRate            # 4     ;
+HAL_UARTFormat          # 4     ;
+HAL_UARTFIFOSize        # 4     ;
+HAL_UARTFIFOClear       # 4     ;
+HAL_UARTFIFOEnable      # 4     ;
+HAL_UARTFIFOThreshold   # 4     ;
+HAL_UARTInterruptID     # 4     ;
+HAL_UARTBreak           # 4     ;
+HAL_UARTModemControl    # 4     ;
+HAL_UARTModemStatus     # 4     ;
+HAL_UARTDevice          # 4     ;
+    ! 0, "Assuming only one base address for the moment"
+HAL_StaticBase          # 4
 BaudRate		# 4	; ports programmed baud rate
 DataFormat		# 4	; ports programmed data format
 PortFlags		# 4	; port specific flags
 ControlLines		# 1
 TxByteCount		# 1
 FIFOTrigger		# 1
-Dummy1			# 1
+FIFOSize                # 1
+                        AlignSpace
  [ counting
 ByteCount		# 4
 ErrorCount		# 4
@@ -76,7 +92,9 @@ FramingCount		# 4
 InterruptCount		# 4
 BufferOverrun		# 4
  ]
-port_workspace		* :INDEX: @
+DeviceFSBlock_size      * 40
+DeviceFSBlock           # DeviceFSBlock_size
+workspace		* :INDEX: @
 
 ;
 ; bit definitions for PortFlags
@@ -177,12 +195,10 @@ Debug_Module	SETL	False
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
 ; DeviceFS declarations
-device_name1    = "Serial1", 0
-                ALIGN
-device_name2	= "Serial2", 0
+device_name     = "Serial"
+device_n        = "n", 0
 		ALIGN
-
-device_block1   & device_name1 - device_block1
+device_block    & device_name - device_block
                 & DeviceFlag_BufferedDevice + DeviceFlag_DefinePathVariable
                 & 8                             ; default RX buffer flags
                 & 1024                          ; default RX buffer size
@@ -191,20 +207,10 @@ device_block1   & device_name1 - device_block1
                 & 0                             ; reserved field (must be zero)
 
                 & 0                             ; end of table
-
                 ALIGN
+device_block_end
 
-device_block2   & device_name2 - device_block2
-                & DeviceFlag_BufferedDevice + DeviceFlag_DefinePathVariable
-                & 8                             ; default RX buffer flags
-                & 1024                          ; default RX buffer size
-                & 8                             ; default TX buffer flags
-                & 512                           ; default TX buffer size
-                & 0                             ; reserved field (must be zero)
-
-                & 0                             ; end of table
-
-                ALIGN
+                ASSERT  device_block_end - device_name = DeviceFSBlock_size
 
 device_validation = "baud/ndata/nstop/nnoparity,even,odd/snohandshake,rts,xon,dtr/ssize/nthres/n",0
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -262,21 +268,64 @@ xoffchar * &13
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
+	MakeErrorBlock Serial_NoHAL
+
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
 ; This code handles the startup of the module, the routine must claim the
 ; required workspace and then initialise the driver.
 ;
-init            ENTRY	"r7-r11"
+init            ENTRY	"r7-r11", 20
 
-                MOV     r0, #2                  ; check we have the right IO system
-                SWI     XOS_ReadSysInfo
+ [ nohal_debug
+                SWI     OS_WriteS
+                =       "r11 = ",0
+                ALIGN
+                ADD     r0, r11, #'0'
+                SWI     OS_WriteC
+                SWI     OS_NewLine
+ ]
+                TEQ     R11, #0                 ; Loaded from filing system
+                CMPNE   R11, #&03000000         ; ROM loaded
+                BLO     %FT7                    ; We're a reincarnation
+
+; Messages are registered by the base instantiation
+ [ standalonemessages
+                ADRL    r0, resource_file_block
+                SWI     XResourceFS_RegisterFiles
                 EXIT    VS
+ ]
 
-                AND     r1, r1, #&FF
-                TEQ     r1, #1                  ; 82C710 or similar, please
-                BNE     bad_hardware
+                LDR     r9, =EntryNo_HAL_UARTPorts
+                MOV     r8, #0
+ [ nohal_debug
+                MOV     r0, #2
+ |
+                SWI     XOS_Hardware
+ ]
+                BVC     %FT2
+		ADR	r0, ErrorBlock_Serial_NoHAL
+		BL	make_error
+ [ standalonemessages
+                MOV     r6, r0
+                ADRL    r0, resource_file_block
+                SWI     XResourceFS_DeregisterFiles
+                MOV     r0, r6
+ ]
+                SETV
+                EXIT
 
+                ; We have to build the instantations in a callback, so that
+                ; they know who they are, otherwise they think they're the base
+2
+                MOVS    r1, r0
+                EXIT    EQ                      ; exit if no ports
+                ADR     r0, build_instants
+                SWI     XOS_AddCallBack
+
+                EXIT
+
+7
                 LDR     r2, [r12]		; r2 = &wp
                 TEQ     r2, #0                  ; any workspace / warm start?
                 BNE     %10
@@ -291,99 +340,55 @@ init            ENTRY	"r7-r11"
 10
                 MOV     wp, r2                  ; wp -> workspace
 
- [ standalonemessages
-                ADRL    r0, resource_file_block
-                SWI     XResourceFS_RegisterFiles
-                EXIT    VS
- ]
 
                 MOV     r0, #0
                 STR     r0, Flags
                 STR     r0, BuffManService
                 STR     r0, BuffManWkSpace
-                STR     r0, Port1
-                STR     r0, Port2
+                SUB     r0, r11, #1             ; start counting at 0
+                STR     r0, PortNumber
  [ debug
 		SetColour off
  ]
-
-                MOV     r0, #3
-                SWI     XOS_ReadSysInfo
-                EXIT    VS
-                AND     r0, r0, #&000FF000      ; type of each serial port
-                TEQ     r0, #&11 :SHL: 12       ; know about type 1 and 2, must
-                TEQNE   r0, #&22 :SHL: 12       ; both be same type (or not present)
-                TEQNE   r0, #&01 :SHL: 12
-                TEQNE   r0, #&02 :SHL: 12
-                BNE     bad_hardware
-
-                AND     r0, r0, #&0000F000
-                TEQ     r0, #2 :SHL: 12
-                MOVEQ   r0, #flag_SerialType2
-                STREQ   r0, Flags
-
-; check to see if the devices are present
-		LDR	r0, Flags
-		LDR 	r10, =base_address1
-		BL	hardware_probe
-		CMP	r10, #0
-		ORRNE	r0, r0, #flag_Port1Present
-
-		LDR 	r10, =base_address2
-		BL	hardware_probe
-		CMP	r10, #0
-		ORRNE	r0, r0, #flag_Port2Present
-		STR	r0, Flags
-
-; now set these devices up
-		TST	r0, #flag_Port1Present
-		BEQ	%20
-		LDR 	r10, =base_address1
-		ADRL	r9, device_block1
 		BL	establish_device
-		STR	r11, Port1
-		BVS	%40
-20
-		TST	r0, #flag_Port2Present
-		LDR 	r10, =base_address2
-		BEQ	%30
-		ADRL	r9, device_block2
-		BL	establish_device
-		STR	r11, Port2
-		BVS	%40
-30
-; claim the device vector
+ [ nohal_debug
+ |
 		BL 	hardware_claim
-                EXIT
-
-; free workspace up before exit
-40
-                LDR     r11, Port1
-		BL	free_workspace
-                LDR     r11, Port2
-		BL	free_workspace
-		BL	hardware_release
- [ standalonemessages
-                MOV     r6, r0
-                ADRL    r0, resource_file_block
-                SWI     XResourceFS_DeregisterFiles
-                MOV     r0, r6
  ]
-                SETV
                 EXIT
 
-bad_hardware
-        ADR     r0, ErrorBlock_BadHard
-        MOV     r1, #0                          ;only use global message file
-        MOV     r2, #0                          ;use MessageTrans buffer
-        MOV     r4, #0                          ;don't substitute anything
-        MOV     r5, #0
-        MOV     r6, #0
-        MOV     r7, #0
-        SWI     XMessageTrans_ErrorLookup
-        B       %BT40
+; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-        MakeErrorBlock  BadHard
+; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+;
+; Callback to finish off initialisation
+; On entry, r12 = number of instantiations.
+;
+
+build_instants Entry "r0-r4", 20
+                ADR     r1, title
+                MOV     r3, sp
+3               LDRB    r2, [r1], #1           ; Copy over module name
+                TEQ     r2, #0
+                STRNEB  r2, [r3], #1
+                BNE     %BT3
+                MOV     r2, #'%'
+                STRB    r2, [r3], #1
+
+                ADD     r2, r12, #'0'            ; Start at top port
+5               MOV     r4, r3                  ; remember current pointer
+                STRB    r2, [r4], #1
+                MOV     lr, #0
+                STRB    lr, [r4], #1
+                MOV     r0, #ModHandReason_NewIncarnation
+                MOV     r1, sp
+                SWI     XOS_Module
+                SUBVC   r2, r2, #1
+                TEQVC   r2, #'0'
+                MOVVSS  r2, #0
+                BNE     %BT5
+
+                EXIT
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 		LTORG
@@ -393,27 +398,20 @@ bad_hardware
 ;
 	MakeErrorBlock Serial_StreamInUse
 
-final           ENTRY	"r0-r1,r11"
+final           ENTRY	"r0-r1"
 
                 LDR     wp, [r12]               ; wp -> workspace
+                TEQ     r12, #0
+                BEQ     %FT40
 ; see if any streams are in use
-		LDR	r11, Port1
-		CMP	r11, #0
-		BEQ	%10
+ [ nohal_debug
+                TEQ     r0, r0
+ |
 		LDR	r0, InputStream
 		CMP	r0, #0
 		LDREQ	r0, OutputStream
 		CMPEQ	r0, #0
-		BNE	%20
-10
-		LDR	r11, Port2
-		CMP	r11, #0
-		BEQ	%30
-		LDR	r0, InputStream
-		CMP	r0, #0
-		LDREQ	r0, OutputStream
-		CMPEQ	r0, #0
-
+ ]
 		BEQ	%30
 
 ; generate an error
@@ -422,19 +420,16 @@ final           ENTRY	"r0-r1,r11"
 		ADR	r0, ErrorBlock_Serial_StreamInUse
 		B	make_error
 30
+ [ nohal_debug
+ |
 		BL	hardware_release
 
 ; sort the hardware out
-                LDR     r11, Port1
 		BL	hardware_remove		; release any owned IRQs
+ ]
 		BL	unregister_device
-		BL	free_workspace
-
-                LDR     r11, Port2
-		BL	hardware_remove		; release any owned IRQs
-		BL	unregister_device
-		BL	free_workspace
-
+                EXIT
+40
  [ standalonemessages
                 ADRL    R0, resource_file_block
                 SWI     XResourceFS_DeregisterFiles
@@ -471,86 +466,63 @@ service         ROUT
  ]
                 MOVNE   pc, lr
 
-serviceentry    LDR     wp, [r12]
+serviceentry
+                ENTRY   "r1"
+                LDR     wp, [r12]
 
 ; handle devicefs starting up
                 TEQ     r1, #Service_DeviceFSStarting
 		BNE	%10
+ [ nohal_debug
+                SWI     OS_WriteS
+                =       "DeviceFS starting", 0
+                ALIGN
+                SWI     OS_NewLine
+ ]
 
-		Push	"r1,r11,lr"
-		LDR	r1, Flags
-		TST	r1, #flag_Port1Present
-                LDRNE	r11, Port1
-                BLNE	register_device
-
-		TST	r1, #flag_Port2Present
-                LDRNE	r11, Port2
-                BLNE	register_device
-		Pull	"r1,r11,pc"
+                BL	register_device
+                EXIT
 10
 ; handle devicefs going down
                 TEQ     r1, #Service_DeviceFSDying
 		BNE	%20
 
-		Push	"r1,r11"
-		LDR	r1, Flags
-		TST	r1, #flag_Port1Present
-                LDRNE	r11, Port1
+                LDR     r0, PortFlags
+                BIC     r0, r0, #flag_Registered
+                STR     r0, PortFlags
+                MOV     r0, #0
                 STRNE   r0, DeviceHandle
 
-		TST	r1, #flag_Port2Present
-                LDRNE	r11, Port2
-                STRNE   r0, DeviceHandle
-		Pull	"r1,r11"
-		MOV	pc, lr
+                EXIT
 20
  [ standalonemessages
                 TEQ     r1, #Service_ResourceFSStarting
                 BNE     %FT30					; no so continue
-                Push    "r0-r3,lr"
+                Push    "r0-r3"
                 ADRL    r0, resource_file_block
                 MOV     lr, pc
                 MOV     pc, r2
-                Pull    "r0-r3,pc"				; and exit
+                Pull    "r0-r3"
 30
  ]
-                MOV  	pc, lr
+                EXIT
 
-; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-;
-; free workspace
-;
-; in  : r11 port workspace pointer
-;
-free_workspace	ENTRY	"r0-r2"
-		MOVS    r2, r11
-		MOVNE	r0, #ModHandReason_Free
-		SWINE	XOS_Module
-		EXIT
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
 ; establish device
 ;
-; in  : r9 address of devicefs registration block
-;       r10 hardware base address
-;
-; out : r10 address if port is present, 0 otherwise
-;       r11 port workspace pointer
-;
+                MACRO
+                GetHalEntry $entry
+
+                MOV     r9, #EntryNo_$entry
+                SWI     OS_Hardware
+                STR     r0, $entry
+                MEND
+
 establish_device ENTRY "r0-r3"
-
-; we need some workspace
-                MOV     r0, #ModHandReason_Claim
-                LDR     r3, =port_workspace	; amount of workspace
-                SWI     XOS_Module
-                STRVS   r0, [sp]
-                EXIT    VS                      ; return if didn't work
-
-		MOV	r11, r2			; establish port workspace
 
 		MOV	r0, #0
 		STR	r0, DeviceHandle
@@ -589,14 +561,40 @@ establish_device ENTRY "r0-r3"
 		MOV	r0, #default_threshold
 		STR	r0, InputBufferThreshold
 
-		STR	r10, BaseAddress	; store base address
-		STR	r9, DeviceFSBlock	; and registration info
-
 		BL	register_device
                 STRVS   r0, [sp]
 		EXIT	VS
 
+; set up hal calls
+ [ nohal_debug
+ |
+                MOV     R8, #1
+                GetHalEntry HAL_UARTStartUp
+                GetHalEntry HAL_UARTShutdown
+                GetHalEntry HAL_UARTFeatures
+                GetHalEntry HAL_UARTReceiveByte
+                GetHalEntry HAL_UARTTransmitByte
+                GetHalEntry HAL_UARTLineStatus
+                GetHalEntry HAL_UARTInterruptEnable
+                GetHalEntry HAL_UARTRate
+                GetHalEntry HAL_UARTFormat
+                GetHalEntry HAL_UARTFIFOSize
+                GetHalEntry HAL_UARTFIFOClear
+                GetHalEntry HAL_UARTFIFOEnable
+                GetHalEntry HAL_UARTFIFOThreshold
+                GetHalEntry HAL_UARTInterruptID
+                GetHalEntry HAL_UARTBreak
+                GetHalEntry HAL_UARTModemControl
+                GetHalEntry HAL_UARTModemStatus
+                GetHalEntry HAL_UARTDevice
+                STR     R1, HAL_StaticBase
+
+                MOV     r9, r1
+                CallHAL HAL_UARTFIFOSize
+                STRB    r0, FIFOSize
 		BL	hardware_initialise
+ ]
+
                 STRVS   r0, [sp]
 		EXIT
 
@@ -606,21 +604,43 @@ establish_device ENTRY "r0-r3"
 ;
 ; register device
 ;
-; in  : r11 port workspace pointer
-;
-register_device ENTRY "r0-r7"
-		CMP	r11, #0                         ; clears V
-		EXIT	EQ
+register_device ENTRY "r0-r8"
 
 ; have we already been registered
 		LDR	r0, PortFlags
 		TST	r0, #flag_Registered
 		EXIT	NE
 
+; don't... copy the device block onto the workspace
+                ADD     r0, r12, # :INDEX:DeviceFSBlock
+                ADRL    r1, device_name
+                ADRL    r3, device_block_end
+10              LDR     r2, [r1], #4
+                STR     r2, [r0], #4
+                CMP     r1, r3
+                BLT     %BT10
+
+                ADD     r0, r12, # :INDEX:DeviceFSBlock
+                LDR     r2, PortNumber
+    ! 0, "This module only handles port numbers up to 1 - 9"
+                ADD     r2, r2, #'1'
+                STRB    r2, [r0, #device_n - device_name]
+                MOV     r1, r0
+ [ nohal_debug
+                SWI     OS_WriteS
+                =       "Creating device: ",0
+                ALIGN
+                MOV     r0, r1
+                SWI     OS_Write0
+                SWI     OS_NewLine
+ ]
+
+                ADD     r1, r1, #device_block - device_name
+                ; r1 now points to a valid devicefs block.
+
                 MOV     r0, #ParentFlag_FullDuplex :OR: ParentFlag_DeviceUpcalls
-		LDR	r1, DeviceFSBlock
                 ADDR    r2, handle_device_call    	; -> handler
-                MOV     r3, r11				; passed in as r8
+                MOV     r3, #0
                 MOV     r4, wp                         	; -> workspace
                 ADDR    r5, device_validation           ; vaidation
                 MOV     r6, #1				; max RX stream
@@ -643,11 +663,7 @@ register_device ENTRY "r0-r7"
 ;
 ; unregister device
 ;
-; in  : r11 port workspace pointer
-;
 unregister_device ENTRY "r0"
-		CMP	r11, #0                         ; clears V
-		EXIT	EQ
 
 ; have we been registered
 		LDR	r0, PortFlags
@@ -675,15 +691,16 @@ unregister_device ENTRY "r0"
 ;
 serial_command ENTRY "r0-r3"
 
-                LDR     wp, [r12]   		; wp -> workspace
-
-		ADRL	r0, device_name1
-		LDR	r11, Port1
-		BL	serial_command_info
-
-		ADRL	r0, device_name2
-		LDR	r11, Port2
-		BL	serial_command_info
+    ! 0, "Serial info command not implemented"
+;                LDR     wp, [r12]   		; wp -> workspace
+;
+;		ADRL	r1, device_name1
+;		LDR	r11, Port1
+;		BL	serial_command_info
+;
+;		ADRL	r0, device_name2
+;		LDR	r11, Port2
+;		BL	serial_command_info
 
                 CLRV
 		EXIT
@@ -696,17 +713,18 @@ serial_command ENTRY "r0-r3"
 ;
 serial_test_command ENTRY "r0-r3"
 
-                LDR     wp, [r12]   		; wp -> workspace
-
-		ADRL	r0, device_name1
-		LDR	r11, Port1
-		BL	hardware_test
-
-		ADRL	r0, device_name2
-		LDR	r11, Port2
-		BL	hardware_test
-
-                CLRV
+    ! 0, "Serial test command not implemented"
+;                LDR     wp, [r12]   		; wp -> workspace
+;
+;		ADRL	r0, device_name1
+;		LDR	r11, Port1
+;		BL	hardware_test
+;
+;		ADRL	r0, device_name2
+;		LDR	r11, Port2
+;		BL	hardware_test
+;
+;                CLRV
 		EXIT
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -720,6 +738,7 @@ serial_test_command ENTRY "r0-r3"
 ;
 serial_command_info ENTRY "r1-r3"
 
+    ! 0, "Serial test command not implemented"
 		CMP	r11, #0
 		EXIT	EQ
 ; write the port name
