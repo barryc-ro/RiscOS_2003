@@ -92,7 +92,9 @@ rm.Hourgls200: Hdr:Hourglass
 rm.Hourgls200: Hdr:MsgTrans
 rm.Hourgls200: Hdr:FSNumbers
 rm.Hourgls200: Hdr:NewErrors
+rm.Hourgls200: Hdr:Proc
 rm.Hourgls200: Time+Date
+rm.Hourgls200: Hdr:NdrDebug
 rm.Hourglass: s.Module
 rm.Hourglass: Hdr:ListOpts
 rm.Hourglass: Hdr:Macros
@@ -107,4 +109,6 @@ rm.Hourglass: Hdr:Hourglass
 rm.Hourglass: Hdr:MsgTrans
 rm.Hourglass: Hdr:FSNumbers
 rm.Hourglass: Hdr:NewErrors
+rm.Hourglass: Hdr:Proc
 rm.Hourglass: Time+Date
+rm.Hourglass: Hdr:NdrDebug

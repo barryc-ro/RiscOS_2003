@@ -10,8 +10,23 @@
 ;        GET     Hdr:EcoMacros
         GET     Hdr:FSNumbers
         GET     Hdr:NewErrors
+        GET     Hdr:Proc
 
         GET     Time+Date
+        
+        GET     Hdr:NdrDebug
+                GBLL    hostvdu
+hostvdu         SETL    {FALSE}
+                GBLL    debug_flush
+debug_flush     SETL    {TRUE}
+                GBLL    debug
+debug           SETL    {FALSE}
+                GBLL    debugswientry
+debugswientry   SETL    {FALSE}
+                GBLL    debugdepth
+debugdepth      SETL    {FALSE}
+                GBLL    debugcurrent
+debugcurrent    SETL    {FALSE}
 
 bignum          * &3FFFFFFF                             ; A large number to put into PercentageDepth
 
@@ -60,14 +75,18 @@ MySWIChunkBase  * Module_SWISystemBase + HourglassSWI * Module_SWIChunkSize
 HourglassData           #       DataSize                ; My Hourglass data is in here
 HourglassDataEnd        #       0
 
-OldColour1              #       4
-OldColour3              #       4
-PendingColours          #       0
-PendingColour1          #       4
-PendingColour3          #       4
-NewColours              #       0
-NewColour1              #       4
-NewColour3              #       4
+ReturnColours           #       0                       ; Colours to return to when switched fully off
+ReturnColour1           #       4
+ReturnColour3           #       4
+NextHColours            #       0                       ; Colours to reassert at next frame update
+NextHColour1            #       4
+NextHColour3            #       4
+LastHColours            #       0                       ; Colours set at last frame update
+LastHColour1            #       4
+LastHColour3            #       4
+CurrentColours          #       0                       ; Colours actually in use
+CurrentColour1          #       4
+CurrentColour3          #       4
 HourglassTimer          #       4
 HourglassDepth          #       4
 PercentageDepth         #       4
@@ -76,7 +95,7 @@ NewPercentage           #       1
 OldLEDs                 #       1
 NewLEDs                 #       1
 
-OldPointer              #       1                       ; Pointer no. the user was using
+ReturnPointer           #       1                       ; Pointer number to return to when switched fully off
 HourglassState          #       1                       ; State of sand (0..5)
 
         AlignSpace      4, 2                            ; so that the data ptr in the
@@ -154,7 +173,15 @@ HelpString
         DCB     "$OsString", 0
         ALIGN
 
+      [ debug
+        InsertNDRDebugRoutines
+      ]
+
 InitialisationCode ROUT
+      [ debug
+        Debug_Open "<Hourglass$Debug>1"
+        Debug   swientry, "Module initialisation"
+      ]
         Push    "r0-r2, lr"                             ; Push the same registers as Service
         LDR     r2, [ r12 ]                             ; Is our workspace here already?
         TEQ     r2, #0                                  ; If not this will be zero
@@ -178,13 +205,7 @@ InitialiseWorkspace
         STMIA   r0, { r1, r2 }
         ADR     r0, HourglassData
         STR     r0, Block_DataPtr
-        ADR     r0, DefaultColours
-        LDMIA   r0, { r1, r2 }
-        ADR     r0, PendingColours
-        STMIA   r0, { r1, r2 }
-        MOV     r1, #-1
-        STR     r1, NewColour1
-        STR     r1, NewColour3
+        BL      InitialisePointerInfo
 ErrorExitInit
         STRVS   r0, [ sp, #0 ]
 ExitInit
@@ -207,33 +228,14 @@ DefaultColours
         DCD     DefaultColour3
 
 FinalisationCode ROUT
+        Debug   swientry, "Module finalisation"
         LDR     wp, [ r12 ]
-
-        LDR     r0, HourglassDepth                      ; any hourglasses around ?
-        CMP     r0, #0
-        MOVEQ   pc, lr
-
-        Push    lr
-        MOV     r0, #TickerV                            ; get off TickerV
-        ADR     r1, MyTickRoutine
-        MOV     r2, wp
-        SWI     XOS_Release
-
-        MOV     r0, #SetPointer                         ; restore old pointer
-        LDRB    r1, OldPointer
-        SWI     XOS_Byte
-
-        MOV     r0, #WaitForVSync
-        SWI     XOS_Byte                                ; reprogram palette only during flyback
-
-        MOV     r0, #1                                  ; logical Colour 1
-        LDR     r1, OldColour1
-        BL      SetColour
-
-        MOV     r0, #3                                  ; logical Colour 3
-        LDR     r1, OldColour3
-        BL      SetColour
-        Pull    pc
+        Push    "lr"
+        BL      HourglassSmash
+      [ debug
+        Debug_Close
+      ]
+        Pull    "pc"
 
 ServiceCall     ROUT
         CMP     r1, #Service_Reset                      ; is it reset ? EQ,CSet if so
@@ -300,12 +302,13 @@ UnknownSWIError
 ; out:  -
 ;
 
-HourglassOn ROUT
-        Push    "r0, lr"
+HourglassOn ENTRY "r0"
+        Debug   swientry, "Hourglass_On"
         MOV     r0, #StartupDelay
         BL      HourglassStart
-        STRVS   r0, [ sp ]
-        Pull    "r0, pc"
+        EXITS   VC
+        STR     r0, [ sp ]
+        EXIT
 
 ; *****************************************************************************
 ;
@@ -317,29 +320,31 @@ HourglassOn ROUT
 ; out:  -
 ;
 
-HourglassStart ROUT
+HourglassStart ENTRY "r0-r2,r11"
+        Debug   swientry, "Hourglass_Start, R0 =", r0
+        
         LDR     r11, HourglassDepth
+        Debug   depth, "Hourglass_Start: old HourglassDepth =", r11
         ADD     r11, r11, #1                            ; update my depth count
         STR     r11, HourglassDepth
-        CMP     r11, #1                                 ; on 1st entry, really do something
-        MOVHI   pc, lr
+        
+        LDR     r1, HourglassTimer
+        CMP     r11, #1                                 ; update the hourglass timer if this is the first level
+        CMPHI   r0, r1                                  ; or if a deeper level is requesting an even earlier display
+        STRLS   r0, HourglassTimer
+        
+        CMP     r11, #1                                 ; that's all we need to do unless this is the first level
+        EXITS   HI
 
-        Push    "r0-r2, lr"
-        STR     r0, HourglassTimer                      ; the startup delay
-
-        MOV     r0, #1
-        STRB    r0, PointerDirty                        ; indicate shape needs setting up
-
-        MOV     r0, #0
-        STRB    r0, OldLEDs
-        STRB    r0, NewLEDs
-
+        BL      InitialisePointerInfo
+        
         MOV     r0, #TickerV                            ; get on TickerV
         ADR     r1, MyTickRoutine                       ; to do things
         MOV     r2, wp
         SWI     XOS_Claim
-        STRVS   r0, [ sp ]
-        Pull    "r0-r2, pc"
+        EXITS   VC
+        STR     r0, [ sp ]
+        EXIT
 
 ; *****************************************************************************
 ;
@@ -350,10 +355,11 @@ HourglassStart ROUT
 ; out:  -
 ;
 
-HourglassOff ROUT
-        Push    "r0-r3, lr"
+HourglassOff ENTRY "r0-r3, r10"
+        Debug   swientry, "Hourglass_Off"
 
         LDR     r10, HourglassDepth
+        Debug   depth, "Hourglass_Off: old HourglassDepth =", r10
         LDR     r14, PercentageDepth                    ; turn off percentage if we're at the controlling depth now
         TEQ     r10, r14
         MOVEQ   r14, #-1
@@ -362,7 +368,7 @@ HourglassOff ROUT
         STREQ   r14, PercentageDepth
         SUBS    r10, r10, #1                            ; update my depth count
         STRCS   r10, HourglassDepth                     ; store back if wasn't already zero
-        Pull    "r0-r3, pc", NE                         ; if not bottom, leave alone
+        EXITS   NE                                      ; if not bottom, leave alone
 
         MOV     r0, #TickerV                            ; get off TickerV
         ADR     r1, MyTickRoutine
@@ -371,37 +377,9 @@ HourglassOff ROUT
 
         LDRB    r0, PointerDirty                        ; have we set up shape yet ?
         TEQ     r0, #0
-        Pull    "r0-r3, pc",NE, ^                       ; no, then exit
-
-        MOV     r0, #SetPointer                         ; restore old pointer
-        LDRB    r1, OldPointer
-        SWI     XOS_Byte
-
-        LDR     r10, OldColour1
-        LDR     r11, OldColour3
-        LDR     r3, NewColour3
-        TEQ     r11, r3                                 ; Are we changing colour 3?
-        LDR     r3, NewColour1
-        TEQEQ   r10, r3                                 ; If not are we changing colour 1
-        MOVNE   r0, #WaitForVSync                       ; wait until VSync
-        SWINE   XOS_Byte                                ; if called R1, R2 trashed
-
-        MOV     r0, #1                                  ; logical Colour 1
-        MOV     r1, r10
-        TEQ     r1, r3                                  ; NewColour1
-        BLNE    SetColour
-
-        MOV     r0, #3                                  ; logical Colour 3
-        MOV     r1, r11
-        LDR     r10, NewColour3
-        TEQ     r1, r10
-        BLNE    SetColour
-
-        MOV     r0, #-1
-        STR     r0, NewColour1
-        STR     r0, NewColour3
-
-        Pull    "r0-r3, pc",, ^
+        
+        BLEQ    RestorePointer                          ; yes - undo it
+        EXITS                                           ; ignore errors
 
 ; *****************************************************************************
 ;
@@ -412,36 +390,35 @@ HourglassOff ROUT
 ; out:  -
 ;
 
-HourglassSmash ROUT
-        Push    "r0, r1, lr"
-        ADR     r14, DefaultColours
-        LDMIA   r14, { r0, r1 }
-        ADR     r14, PendingColours
-        STMIA   r14, { r0, r1 }
-        MOV     r0, #-1
-        STR     r0, NewColour1
-        STR     r0, NewColour3
+HourglassSmash ENTRY "r0"
+        Debug   swientry, "Hourglass_Smash"
+        
         LDR     r0, HourglassDepth
-        CMP     r0, #0                                  ; if at top, ignore
+        Debug   depth, "Hourglass_Smash: old HourglassDepth =", r0
+        TEQ     r0, #0                                  ; if at top, ignore
 
         MOVNE   r0, #1                                  ; depth count becomes one
         STRNE   r0, HourglassDepth
         MOVNE   r0, #bignum
         STRNE   r0, PercentageDepth
-        SWINE   XHourglass_Off                          ; to force turn-off
-        Pull    "r0, r1, pc"
+        Debug swientry, "r10 on entry =", r10
+        BLNE    HourglassOff                            ; to force turn-off
+        Debug swientry, "r10 on exit =", r10
+        EXITS   VC
+        STR     r0, [sp]
+        EXIT
 
 ; *****************************************************************************
 ;
 ;       HourglassPercentage - Set percentage figures
 ;
-; in:   R0b = percentage to display, outside 0-99 to turn figures off
+; in:   R0 = percentage to display, outside 0-99 to turn figures off
 ;
 ; out:  -
 ;
 
-HourglassPercentage ROUT
-        Push    "r1, lr"
+HourglassPercentage ENTRY "r1"
+        Debug   swientry, "Hourglass_Percentage, percentage =", r0
 
         LDR     r14, HourglassDepth
         LDR     r1, PercentageDepth
@@ -454,7 +431,7 @@ HourglassPercentage ROUT
         MOVHS   r14, #bignum
         STRHS   r14, PercentageDepth
 
-        Pull    "r1, pc"
+        EXITS
 
 ; *****************************************************************************
 ;
@@ -466,13 +443,15 @@ HourglassPercentage ROUT
 ; out:  R0 = old LED state
 ;
 
-HourglassLEDs ROUT
+HourglassLEDs ENTRY "r10, r11"
+        Debug   swientry, "Hourglass_LEDs, R0,R1 =", r0, r1
+        
         LDRB    r10, NewLEDs                            ; read previous values
         AND     r11, r1, r10
         EOR     r0, r0, r11
         STRB    r0, NewLEDs                             ; store new value
         MOV     r0, r10                                 ; return old value
-        MOV     pc, lr
+        EXITS
 
 ; *****************************************************************************
 ;
@@ -485,17 +464,18 @@ HourglassLEDs ROUT
 ;       R1 = Old colour that was being used as colour 3
 ;
 
-HourglassColours
-        Push    "r0, r1, r14"
-        LDR     r14, PendingColour1                     ; Save the old value of Colour1
+HourglassColours ENTRY "r0, r1"
+        Debug   swientry, "Hourglass_Colours, new colours 1,3 =", r0, r1
+        
+        LDR     r14, NextHColour1                       ; Save the old value of Colour1
         STR     r14, [ sp, #0 ]                         ; Put old value in exit stack frame
-        LDR     r14, PendingColour3                     ; Save the old value of Colour3
+        LDR     r14, NextHColour3                       ; Save the old value of Colour3
         STR     r14, [ sp, #4 ]                         ; Put old value in exit stack frame
         CMP     r0, #-1                                 ; Are we changing this colour(1)?
-        STRNE   r0, PendingColour1                      ; Put down the new value
+        STRNE   r0, NextHColour1                        ; Put down the new value
         CMP     r1, #-1                                 ; Are we changing this colour(3)?
-        STRNE   r1, PendingColour3                      ; Put down the new value
-        Pull    "r0, r1, pc",,^                         ; Return with V clear
+        STRNE   r1, NextHColour3                        ; Put down the new value
+        EXITS                                           ; Return with V clear
 
 ; *****************************************************************************
 ;
@@ -503,10 +483,10 @@ HourglassColours
 ;
 
 MyTickRoutine ROUT
-        Push    lr
+        Push    "lr"
         LDRB    r14, UpdateSemaphore
         TEQ     r14, #0                                 ; Are we already doing this?
-        Pull    pc, NE                                  ; Yes, so stay out
+        Pull    "pc", NE                                ; Yes, so stay out
         INC     r14
         STRB    r14, UpdateSemaphore
         LDR     r14, HourglassTimer
@@ -518,26 +498,28 @@ MyTickRoutine ROUT
         MOV     r6, pc
         TEQP    pc, #3                                  ; must be SVC mode here, Enables Ints
         NOP
-        Push    r14                                     ; save SVC r14
+        Push    "r14"                                   ; save SVC r14
         LDRB    r0, PointerDirty                        ; if pointer shape needs setting up
         TEQ     r0, #0
+        DebugIf NE, swientry, "Hourglass being shown"
         BLNE    SetupPointer                            ; then do it
         BL      FillHourglass                           ; some sand falls
         BL      SetupPercentage
         BL      SetupLEDs
         BL      ProgramPointer                          ; and show the world
-        Pull    r14                                     ; restore SVC r14
+        Pull    "r14"                                   ; restore SVC r14
         TEQP    r6, #0                                  ; restore the mode
         NOP
         Pull    "r0-r6"
 ExitTickRoutine
         MOV     r14, #0
         STRB    r14, UpdateSemaphore
-        Pull    pc
+        Pull    "pc"
 
 ; *****************************************************************************
 ;
 ;       SetupPointer - Program initial shape of hourglass etc
+;       Called only when the pointer is dirty - ie first time through ticker routine
 ;
 ; in:   -
 ;
@@ -545,33 +527,20 @@ ExitTickRoutine
 ;
 
 SetupPointer ROUT
-        Push    lr
-
-        MOV     r0, #SetPointer                         ; set the pointer
-        MOV     r1, #NoPointer
-        SWI     XOS_Byte
-        STRVCB  r1, OldPointer                          ; so we can read the old one
-        SWIVC   XOS_Byte                                ; switch back - we only examine it
-
-        MOV     r0, #1
-        MOV     r1, #25
-        SWI     XOS_ReadPalette                         ; examine what the cursor colour was
-        MOVVC   r2, r2, LSR #8
-        STRVC   r2, OldColour1
-
-        MOV     r0, #3
-        MOV     r1, #25
-        SWI     XOS_ReadPalette                         ; examine what the cursor colour was
-        MOVVC   r2, r2, LSR #8
-        STRVC   r2, OldColour3
+        Push    "lr"
 
         MOV     r0, #-1
         STRB    r0, OldPercentage
         STRB    r0, NewPercentage
 
         ADR     r0, HourglassData
+      [ debug
+        ADRL    r1, HourglassShape
+        ADRL    r2, HourglassShapeEnd
+      |
         ADR     r1, HourglassShape
         ADR     r2, HourglassShapeEnd
+      ]
 10
         LDR     r3, [r1], #4
         STR     r3, [r0], #4
@@ -588,7 +557,7 @@ SetupPointer ROUT
         STRB    r3, HourglassState                      ; zero hourglass state
         STRB    r3, PointerDirty                        ; pointer now clean
 
-        Pull    pc
+        Pull    "pc"
 
 ; *****************************************************************************
 ;
@@ -606,7 +575,11 @@ FillHourglass ROUT
         MOVEQ   r0, #0
         STRB    r0, HourglassState
 
+      [ debug
+        ADRL    r1, DiffOffsetTable
+      |
         ADR     r1, DiffOffsetTable
+      ]
         LDR     r0, [r1, r0, LSL #2]                    ; load offset to diff table
         ADD     r0, r0, r1                              ; convert to address
         ADR     r3, HourglassData
@@ -677,13 +650,17 @@ SetupPercentage ROUT
         TEQ     r1, r2
         MOVEQ   pc, r14
 
-        Push    r14
+        Push    "r14"
         STRB    r2, OldPercentage
         CMP     r2, #100
         BHS     %f1                                     ; turn it off
         MOV     r1, #10
         DivRem  r0, r2, r1, r14
+      [ debug
+        ADRL    r3, ChDefNumbers
+      |
         ADR     r3, ChDefNumbers
+      ]
  ASSERT  CharHeight = 9
         ADD     r1, r0, r0, LSL #3  ; * 9
         ADD     r1, r3, r1, LSL #1
@@ -693,19 +670,23 @@ SetupPercentage ROUT
         ADD     r1, r3, r1, LSL #1
         ADD     r0, r0, #8 / PixelsPerByte
         BL      SetupChar
-        ADR     r1, ChDefPercent
+        ADRL    r1, ChDefPercent
         ADD     r0, r0, #8 / PixelsPerByte
         BL      SetupChar
-        Pull    pc
+        Pull    "pc"
 1
         ADR     r0, HourglassData+(PercX/PixelsPerByte)+(PercY * BytesPerLine)
+      [ debug
+        ADRL    r1, ChDefSpace
+      |
         ADR     r1, ChDefSpace
+      ]
         BL      SetupChar
         ADD     r0, r0, #8 / PixelsPerByte
         BL      SetupChar
         ADD     r0, r0, #8 / PixelsPerByte
         BL      SetupChar
-        Pull    pc
+        Pull    "pc"
 
 ; *****************************************************************************
 ;
@@ -733,7 +714,7 @@ SetupCharLoop
 ;
 
 ProgramPointer ROUT
-        Push    lr
+        Push    "r0-r6, lr"
 
         LDRB    r0, Block_PointerNumber
         EOR     r0, r0, #(3 :EOR: 4)
@@ -743,21 +724,42 @@ ProgramPointer ROUT
         ADR     r1, OSWord15Block
         SWI     XOS_Word                                ; reprogram our pointer
 
-        MOV     r0, #1                                  ; logical Colour 1
-        LDR     r1, PendingColour1
-        STR     r1, NewColour1
-        BL      SetColour                               ; we have to do this every time, in case someone else
-                                                        ; has messed up the pointer colours since last time
-        MOV     r0, #3                                  ; logical Colour 3
-        LDR     r1, PendingColour3
-        STR     r1, NewColour3
-        BL      SetColour
-
-        MOV     r0, #SetPointer                         ; and switch to it
+        BL      ReadPointerColours                      ; get CurrentColours
+        
+        ADR     r0, NextHColours
+        LDMIA   r0, { r3, r4 }
+        ADR     r0, CurrentColours
+        LDMIA   r0, { r5, r6 }
+        
+        TEQ     r5, r3                                  ; set the colour(s)/number for the next frame
+        TEQEQ   r6, r4                                  ; avoid reprogramming colours unless strictly necessary
+        MOVNE   r0, #WaitForVSync                       ; at least one needs changing, so wait until VSync
+        SWINE   XOS_Byte
+        MOV     r0, #1
+        TEQ     r5, r3
+        MOVNE   r1, r3
+        BLNE    SetColour ; logical Colour 1
+        MOV     r0, #3
+        TEQ     r6, r4
+        MOVNE   r1, r4
+        BLNE    SetColour ; logical Colour 3
+        MOV     r0, #SetPointer
         LDRB    r1, Block_PointerNumber
-        SWI     XOS_Byte
+        SWI     XOS_Byte ; on exit, R1 is old shape/linkage
+        AND     r1, r1, #&FF
+        
+        CMP     r1, #3                                  ; if we weren't the last to set a colour/number,
+        STRLOB  r1, ReturnPointer                       ; remember the current one for when we switch off
+        ADR     r0, LastHColours
+        LDMIA   r0, { r1, r2 }
+        TEQ     r5, r1
+        STRNE   r5, ReturnColour1
+        TEQ     r6, r2
+        STRNE   r6, ReturnColour3
+        
+        STMIA   r0, { r3, r4 }                          ; LastHColours = NextHColours
 
-        Pull    pc
+        Pull    "r0-r6, pc"
 
         LTORG
 
@@ -782,6 +784,113 @@ SetColour ROUT
         SWI     XOS_Word
         ADD     sp, sp, #8                              ; Trash stack frame
         Pull    "r0-r1, pc"
+
+; *****************************************************************************
+;
+;       InitialisePointerInfo - sets up colour, number etc information
+;
+; in:   -
+;
+; out:  Registers preserved.
+
+InitialisePointerInfo ENTRY "r0-r2"
+        BL      ReadPointerColours                      ; get CurrentColours
+        
+        ADR     r0, CurrentColours                      ; Return = Current
+        LDMIA   r0, { r1, r2 }
+        ADR     r0, ReturnColours
+        STMIA   r0, { r1, r2 }
+        MOV     r0, #1
+        STRB    r0, ReturnPointer ; mustn't read current pointer
+                                  ; number here, it causes flicker
+        
+        ADRL    r0, DefaultColours                      ; NextH = Default
+        LDMIA   r0, { r1, r2 }
+        ADR     r0, NextHColours
+        STMIA   r0, { r1, r2 }
+        
+        MOV     r0, #-1                                 ; LastH = -1 (ie guaranteed != current)
+        STR     r0, LastHColour1
+        STR     r0, LastHColour3
+        
+        MOV     r0, #1
+        STRB    r0, PointerDirty                        ; indicate shape needs setting up
+
+        MOV     r0, #0
+        STRB    r0, OldLEDs
+        STRB    r0, NewLEDs
+
+        EXIT
+
+; *****************************************************************************
+;
+;       RestorePointer - changes pointer number and colours back to the "off" values.
+;
+; in:   -
+;
+; out:  Registers preserved.
+
+RestorePointer ENTRY "r0-r4,r10-r11"
+        BL      ReadPointerColours                      ; get CurrentColours
+
+        MOV     r0, #SetPointer                         ; restore old pointer iff it was most recently changed by us
+        LDRB    r1, ReturnPointer
+        SWI     XOS_Byte ; on exit, R1 is old shape/linkage
+        AND     r3, r1, #&FF
+        CMP     r3, #3
+        SWILO   XOS_Byte ; Oops, shouldn't have done that
+                         ; because someone else had changed
+                         ; the pointer - switch it back.
+                         ; Having pointer-switch flicker
+                         ; here is far better than having it
+                         ; during a pre-emptive read routine.
+
+        LDR     r10, LastHColour1                       ; restore old colour(s) iff they were most recently changed by us
+        LDR     r11, LastHColour3
+        LDR     r3, CurrentColour1
+        LDR     r4, CurrentColour3
+        TEQ     r3, r10
+        TEQNE   r4, r11
+        MOVEQ   r0, #WaitForVSync                       ; at least one needs changing, so wait until VSync
+        SWIEQ   XOS_Byte                                ; if called R1, R2 trashed
+
+        MOV     r0, #1
+        TEQ     r3, r10
+        LDREQ   r1, ReturnColour1
+        BLEQ    SetColour ; logical Colour 1
+
+        MOV     r0, #3
+        TEQ     r4, r11
+        LDREQ   r1, ReturnColour3
+        BLEQ    SetColour ; logical Colour 3
+
+        EXIT
+
+; *****************************************************************************
+;
+;       ReadPointerColours - read the current pointer number and colours 1 & 3
+;       The colours are stored in CurrentColour1 and CurrentColour3.
+;
+; in:   -
+;
+; out:  Registers preserved.
+
+ReadPointerColours ENTRY "r0-r3"
+        MOV     r0, #1
+        MOV     r1, #25
+        SWI     XOS_ReadPalette
+        MOVVC   r2, r2, LSR #8
+        STRVC   r2, CurrentColour1
+        Debug   current, "Current colour 1 =", r2
+
+        MOV     r0, #3
+        MOV     r1, #25
+        SWI     XOS_ReadPalette
+        MOVVC   r2, r2, LSR #8
+        STRVC   r2, CurrentColour3
+        Debug   current, "Current colour 3 =", r2
+        
+        EXIT
 
 ; *****************************************************************************
 
