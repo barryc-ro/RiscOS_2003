@@ -66,18 +66,18 @@ typedef struct mpegctrl_audioblock
 /* Local variables */
 
 static unsigned int palette1[2]  = {
-                                     0xFFFFFF00, 0x000000F0
+                                     0xFFFFFF00, 0x000000FF
                                    };
 
 static unsigned int palette2[4] =  {
-                                     0x00000000, 0x88888800, 0xFFFFFF00, 0x000000F0
+                                     0x00000000, 0x88888800, 0xFFFFFF00, 0x000000FF
                                    };
 
 static unsigned int palette4[16] = {
                                      0x00000000, 0x55555500, 0xAAAAAA00, 0xFFFFFF00,
                                      0x0000FF00, 0x00FF0000, 0x00FFFF00, 0xFF000000,
-                                     0x000000F0, 0x000000F0, 0x000000F0, 0x000000F0,
-                                     0x000000F0, 0x000000F0, 0x000000F0, 0x000000F0
+                                     0x000000FF, 0x000000FF, 0x000000FF, 0x000000FF,
+                                     0x000000FF, 0x000000FF, 0x000000FF, 0x000000FF
                                    };
 
 static unsigned int palette8[8]  = {
@@ -95,7 +95,7 @@ static unsigned int palette16[8] = {
                                    };
 
 static unsigned int palette32[8] = {
-                                     0x01010110, 0x02020200,
+                                     0x010101FF, 0x02020200,
                                      0x04040400, 0x08080800,
                                      0x10101000, 0x20202000,
                                      0x40404000, 0x80808000
@@ -155,27 +155,33 @@ _kernel_oserror * mpegctrl_setup_display(client * c)
 
 _kernel_oserror * mpegctrl_restore_display(client * c)
 {
+  _kernel_oserror * e = NULL;
+
   if (!c->opts.no_redraw && c->havemode)
   {
     c->havemode = 0;
 
     if (c->rstbydsk)
     {
-      _kernel_oserror * e = _swix(Wimp_SetMode,
-                                  _IN(0),
+      /* Reset for the Desktop: Set the Wimp mode */
 
-                                  c->wimpmode);
+      _swix(Wimp_SetMode,
+            _IN(0),
+
+            c->wimpmode);
+
+      /* Cancel the pending command window */
 
       _swix(Wimp_CommandWindow,
             _IN(0),
 
             -1);
 
-      return e;
+      if (e != NULL) return e;
     }
     else
     {
-      _kernel_oserror * e;
+      /* Reset for single tasking modes; set the normal screen mode */
 
       if (c->modecopy != NULL)
       {
@@ -196,11 +202,70 @@ _kernel_oserror * mpegctrl_restore_display(client * c)
                   c->modenumb);
       }
 
-      return e;
+      if (e != NULL) return e;
     }
   }
 
-  return NULL;
+  /* Restore the palette if possible */
+
+  if (c->palcopy != NULL && c->palsize != 0)
+  {
+    unsigned int cols[3] = { 1, 2, 3 }; /* <crusty>Ooough</crusty> */
+
+    /* ColourTrans_WritePalette has trouble in > 256 colour modes */
+    /* and there are big problems on STB 3, so we're forced to    */
+    /* call PaletteV directly.                                    */
+
+//    e = _swix(ColourTrans_WritePalette,
+//              _INR(0,4),
+//
+//              -1,
+//              -1,
+//              c->palcopy,
+//              0,
+//              1u<<1);
+
+    e = _swix(OS_CallAVector,
+              _INR(0,4) | _IN(9),
+
+              0,
+              1u | (24u<<24),        /* Write 1 entry of type 24 (border)       */
+              c->palcopy,            /* Read from the start of the block        */
+              0,
+              8,                     /* Reason code 8: Block write              */
+              PaletteV);
+
+    if (e == NULL)
+    {
+      e = _swix(OS_CallAVector,
+                _INR(0,4) | _IN(9),
+
+                cols,
+                3u | (25u<<24),      /* Write 3 entries of type 25 (mouse)      */
+                c->palcopy + 4,      /* Read from after the border              */
+                0,
+                8,                   /* Reason code 8: Block write              */
+                PaletteV);
+
+    }
+
+    if (e == NULL)
+    {
+      e = _swix(OS_CallAVector,
+                _INR(0,4) | _IN(9),
+
+                0,
+                256u | (16u<<24),    /* Write 256 entries of type 16 (flashing) */
+                c->palcopy + 4 + 12, /* Write from after the border and mouse   */
+                0,
+                8,                   /* Reason code 8: Block write              */
+                PaletteV);
+    }
+
+    free(c->palcopy), c->palcopy = NULL, c->palsize = 0;
+  }
+
+  return e;
 }
 
 /**************************************************************/
@@ -208,7 +273,8 @@ _kernel_oserror * mpegctrl_restore_display(client * c)
 /*                                                            */
 /* Change to a screen mode appropriate for the options        */
 /* settings in the given client structure, if those options   */
-/* allow mode changing.                                       */
+/* allow mode changing. The old mode palette is also recorded */
+/* provided no_palette isn't flagged.                         */
 /*                                                            */
 /* Parameters: Pointer to a client structure containing       */
 /*             options governing what action is taken here.   */
@@ -220,6 +286,91 @@ static _kernel_oserror * mpegctrl_setup_mode(client * c)
   int               modeblock[10];
   unsigned int      mode, rsir;
   bool              in_desktop;
+
+  /* Record palette, if we've not already got inherited details */
+
+  if (!c->opts.no_palette && c->palcopy == NULL)
+  {
+    /* ColourTrans_ReadPalette has trouble in > 256 colour modes */
+    /* and there are big problems on STB 3, so we're forced to   */
+    /* call PaletteV directly.                                   */
+
+    unsigned int size;
+    unsigned int cols [3] = { 1, 2, 3 }; /* Oh, good grief, PaletteV's hideous */
+
+    size = 2048 + 4 + 12; /* Up to 256 flashing colours plus border plus mouse */
+
+//    e = _swix(ColourTrans_ReadPalette,
+//              _INR(0,4) | _OUT(3),
+//
+//              -1,     /* Current mode          */
+//              -1,     /* Current palette       */
+//              0,      /* Return size in R3     */
+//              0,      /* Should be ignored     */
+//              1u<<1,  /* Read flashing colours */
+//
+//              &size);
+//
+//    if (e != NULL) return e;
+
+    c->palcopy = malloc(size);
+
+    if (c->palcopy == NULL)
+    {
+      return make_error(vc_ERROR_MEMORY_EXHAUSTED, 0);
+    }
+    else
+    {
+      c->palsize = size;
+    }
+
+//    e = _swix(ColourTrans_ReadPalette,
+//              _INR(0,4),
+//
+//              -1,
+//              -1,
+//              c->palcopy,
+//              c->palsize,
+//              1u<<1);
+//
+//    if (e != NULL) return e;
+
+    e = _swix(OS_CallAVector,
+              _INR(0,4) | _IN(9),
+
+              0,
+              1u | (24u<<24),      /* Read 1 entry of type 24 (border)       */
+              c->palcopy,          /* Put it at the start of the block       */
+              c->palcopy,
+              7,                   /* Reason code 7: Block read              */
+              PaletteV);
+
+    if (e != NULL) return e;
+
+    e = _swix(OS_CallAVector,
+              _INR(0,4) | _IN(9),
+
+              cols,
+              3u | (25u<<24),      /* Read 3 entries of type 25 (mouse)      */
+              c->palcopy + 4,      /* Put them after the border              */
+              c->palcopy + 4,
+              7,                   /* Reason code 7: Block read              */
+              PaletteV);
+
+    if (e != NULL) return e;
+
+    e = _swix(OS_CallAVector,
+              _INR(0,4) | _IN(9),
+
+              0,
+              256u | (16u<<24),    /* Read 256 entries of type 16 (flashing) */
+              c->palcopy + 4 + 12, /* Put them after the border and mouse    */
+              0,
+              7,                   /* Reason code 7: Block read              */
+              PaletteV);
+
+    if (e != NULL) return e;
+  }
 
   if (!c->opts.no_mode_change)
   {
@@ -255,7 +406,7 @@ static _kernel_oserror * mpegctrl_setup_mode(client * c)
 
               &rsir);
 
-    if (e) return e;
+    if (e != NULL) return e;
 
     if (rsir == 0) in_desktop = false, c->rstbydsk = 0;
     else           in_desktop = true,  c->rstbydsk = 1;
@@ -274,7 +425,7 @@ static _kernel_oserror * mpegctrl_setup_mode(client * c)
 
                   &mode);
 
-        if (e) return e;
+        if (e != NULL) return e;
 
         c->havemode = 1;
         c->wimpmode = mode;
@@ -300,7 +451,7 @@ static _kernel_oserror * mpegctrl_setup_mode(client * c)
 
                   &mode);
 
-        if (e) return e;
+        if (e != NULL) return e;
 
         /* Assume a mode number if <= 256, else selector block. This */
         /* is foul, but the PRM (5a-132) gives no recommended way of */
@@ -394,7 +545,7 @@ static _kernel_oserror * mpegctrl_setup_palette(client * c)
     unsigned int   entries;
     unsigned int   fg, bg;
     unsigned int   log2bpp;
-    unsigned int   trans = 0xffffff10;
+    unsigned int   trans = 0xffffffff;
 
     if (
          _swix(OS_ReadModeVariable,
@@ -444,10 +595,10 @@ static _kernel_oserror * mpegctrl_setup_palette(client * c)
         _swix(OS_CallAVector,
               _INR(0,2) | _IN(4) | _IN(9),
 
-              i,         /* Logical colour */
+              i,         /* Logical colour                            */
               16,        /* Type of colour (16: Logical colour = RGB) */
-              a & trans, /* BBGGRRxx colour setting */
-              2,         /* 2: Set palette */
+              a & trans, /* BBGGRRxx colour setting                   */
+              2,         /* Reason code 2: Set palette                */
               PaletteV);
       }
 
@@ -460,7 +611,7 @@ static _kernel_oserror * mpegctrl_setup_palette(client * c)
 
               1,
               16,
-              0xf0 & trans,
+              0xff & trans,
               2,
               PaletteV);
       }
@@ -497,7 +648,7 @@ static _kernel_oserror * mpegctrl_setup_palette(client * c)
 
           0,
           24,           /* Type of colour (24: Border colour = RGB) */
-          0xf0 & trans,
+          0xff & trans,
           2,
           PaletteV);
 
@@ -506,12 +657,12 @@ static _kernel_oserror * mpegctrl_setup_palette(client * c)
     switch (log2bpp)
     {
       default:
-      case 0: fg = 0,        bg = 1;     break;
-      case 1: fg = 2,        bg = 3;     break;
-      case 2: fg = 3,        bg = 15;    break;
-      case 3: fg = 255,      bg = 1;     break;
-      case 4: fg = 0x7fff,   bg = 1<<15; break;
-      case 5: fg = 0xffffff, bg = 1<<24; break;
+      case 0: fg = 0,        bg = 1;           break;
+      case 1: fg = 2,        bg = 3;           break;
+      case 2: fg = 3,        bg = 15;          break;
+      case 3: fg = 255,      bg = 1;           break;
+      case 4: fg = 0x7fff,   bg = 1<<15;       break;
+      case 5: fg = 0xffffff, bg = (0xffu)<<24; break;
     }
 
     _swix(OS_SetColour,
@@ -622,7 +773,7 @@ _kernel_oserror * mpegctrl_setup_mpeg(client * c)
               MPEGControl_MCCO_MPEGTransport);
   }
 
-  if (e) return e;
+  if (e != NULL) return e;
 
   /* Get our control handle */
 
