@@ -440,6 +440,7 @@ o.sys-riscos:	^.h.pppmodule
 o.sys-riscos:	TCPIPLibs:netinet.h.in
 o.sys-riscos:	TCPIPLibs:netinet.h.ip
 o.sys-riscos:	^.h.slcompress
+o.sys-riscos:	^.h.pppmodule
 o.sys-riscos:	h.pppd
 o.sys-riscos:	TCPIPLibs:sys.h.param
 o.sys-riscos:	TCPIPLibs:sys.h.types
@@ -485,6 +486,8 @@ o.minixlib:	TCPIPLibs:sys.h.cdefs
 o.minixlib:	h.main
 o.minixlib:	h.minixlib
 o.minixlib:	h.riscos_ppp
+o.minixlib:	^.h.pppmodule
+o.minixlib:	^.h.svcprint
 o.dea_crypt:	c.dea_crypt
 o.dea_crypt:	h.dea_crypt
 o.main:	c.main
@@ -560,3 +563,5 @@ o.main:	h.patchlevel
 o.main:	C:h.swis
 o.main:	^.h.pppd
 o.main:	h.main
+o.main:	^.h.dialler
+o.main:	C:h.kernel
