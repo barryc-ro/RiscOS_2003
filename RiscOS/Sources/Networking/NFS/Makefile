@@ -200,6 +200,13 @@ HDRS = \
 all: ${TARGET}
         @echo ${COMPONENT}: all complete
 
+install: ${TARGET} dirs
+        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: install complete
+
+dirs:
+	${MKDIR} ${INSTDIR}
+
 trace: ${DTARGET} ${DIRS}
         @echo ${COMPONENT}: (TRACE) all complete
 
