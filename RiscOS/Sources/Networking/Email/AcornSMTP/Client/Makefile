@@ -4,7 +4,7 @@
 #
 #	FILE:		makefile
 #	AUTHOR:		Richard D. Warren
-#	VERSION:	0.05 for RISC OS
+#	VERSION:	0.06 for RISC OS
 #
 #	OVERVIEW
 #	========
@@ -18,6 +18,7 @@
 #	17/12/97	0.04	RDW	changed so it exports correctly and uses callx from the Lib$Dir
 #					Changes from BAL.
 #	27/01/98	0.05	RDW	Support added to output preprocessed source for McCabe tool
+#	17/03/98	0.06	RDW	Now creates and deletes dirs. aof, o and rm
 
 #
 # Paths
@@ -141,18 +142,28 @@ clean:
                 $(WIPE) rm.*     $(WFLAGS)
                 $(WIPE) aof.*    $(WFLAGS)
 		$(RM) link/sym
+		$(RM) rm
+		$(RM) aof
+		$(RM) linked
+		$(RM) map
+		$(RM) o
+
+local_dirs:
+	${MKDIR} o
+	${MKDIR} aof
+	${MKDIR} rm
 
 #
 # Target 
 #
-${TARGET}:	$(OBJS) $(EXTRAS)
+${TARGET}:	$(OBJS) $(EXTRAS) local_dirs
 		$(MemCheckLD) $(LD) -rmf -s link/sym -o rm.AcornSMTPu $(OBJS) $(STUBS)
 		ModSqz rm.AcornSMTPu $@
 
 #
 # ROM Target 
 #
-${ROMTARGET}: ${OBJS}
+${ROMTARGET}: ${OBJS} $(EXTRAS) local_dirs
         ${LD} -s link/sym -o $@ -aof ${OBJS} ${ROMCSTUBS}
 
 #
