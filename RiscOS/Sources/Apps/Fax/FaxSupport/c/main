@@ -45,7 +45,7 @@
 
 // FTS values
 #define FTSpostDCS "5"           // AT+FTS value after DCS transmitted, before AT+FTM for TCF
-#define FTSpostCFR "5"           // AT+FTS value after CFR received, before AT+FTM for T.4
+#define FTSpostCFR "6"           // AT+FTS value after CFR received, before AT+FTM for T.4
 #define FTSpostT4 "0"            // AT+FTS value after T.4 transmitted, before AT+FTH for PostMC
 // @@ These values are determined by experiement, because there seems to be latency in their  @@
 // @@ execution; they should therefore be redetermined every time the modem firmware changes. @@
@@ -130,6 +130,7 @@ typedef struct state {
    int maxNULs;            // Maximum running count of NULs in TCF
    int timedout;           // Timeout number (0 if none)
    int datarate;           // Data rate in bps
+   int maxdatarate;        // Maximum data rate allowed in bps (0 if none) [rx] //rtpout
    short int minTCF;       // Minimum length of TCF (in ms)
    short int maxTCF;       // Maximum length of TCF (in ms)
    uint imagewidth;        // Input page width for tx
@@ -227,6 +228,8 @@ intern void faxint_strip_SI (State *s, char *SI);
 //intern int newbufmodem_get_char (const uint b);
 intern void faxint_generate_dcs (State *s);
 intern void faxint_select_datarate (State *s);
+intern void faxint_select_halfmaxdatarate (State *s); //rtpout
+intern int faxint_get_maxdatarate (State *s); //rtpout
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -316,6 +319,7 @@ enum {
 // Block states in tx_pre_message_command
 enum {
    BS_tpre_start = 1,
+   BS_tpre_restart,
    BS_tpre_sendTSI,
    BS_tpre_sendDCS,
 //   BS_tpre_wait70ms,
@@ -1046,6 +1050,7 @@ D*/
 
                // Initialise the things GetInfo reads
                s->datarate = 0;
+               s->maxdatarate = 0; //rtpout
                s->TSI[0] = NUL;
                s->DCS[0] = 0;
 
@@ -1074,7 +1079,7 @@ D*/
             //
             // Waits for command after a T.4 page has been received.
             //
-            // Inputs:  R2 = post-message response (MCF or RTN)
+            // Inputs:  R2 = post-message response (MCF or RTN or DCN)
             //
             // Outputs: normally terminates with Info_Getting_T4 pollword
             //             when speed negotiated and T4 modscheme detected
@@ -1567,6 +1572,56 @@ D*/
 
          return NULL;
       }
+
+
+      //rtpout
+      /////////////////////////////////////////////////////////////////////////
+      //
+      // SWI_FaxSupport_SetMaxDatarate
+      //
+      // Set maximum datarate for current reception (reset at start of rx).
+      // If flags word is zero, requests a datarate halving, where possible,
+      // and if it is one, requests the given maximum datarate (other values
+      // reserved).
+      //
+      // Inputs:  R0 = port number
+      //          R1 = flags
+      //          R2 = max datarate if flags == 1
+      //
+      // Outputs: nothing
+      //
+      // Assumes: reception in progress
+      //
+      /////////////////////////////////////////////////////////////////////////
+
+      case FaxSupport_SetMaxDatarate - FaxSupport_00:
+      {
+         int port = r->r[0];
+         State *s = &state[port];
+
+         if (port >= NPORTS) {
+
+            static _kernel_oserror e = { Error_BadPortNumber,
+               "Bad port number"};
+            return &e;
+
+         }
+
+         if (r->r[1] == 0) {
+
+            faxint_select_halfmaxdatarate (s);
+
+         } else if (r->r[1] == 1) {
+
+            s->maxdatarate = r->r[2] / 2400 * 2400;
+            if (s->maxdatarate < 2400 || s->maxdatarate > 14400)
+               s->maxdatarate = 0;
+
+         }
+
+         return NULL;
+      }
+
 
 #ifdef TIMING
       case 63:
@@ -2076,9 +2131,10 @@ intern int faxint_tx_initial_identification (State *s)
 
          }
 
-         if (s->ndata >= 3 + 5 && s->data[2] == NSF
+         if (s->ndata >= 4 + 5 && s->data[2] == NSF
             && s->data[3] == FAX_NSF_COUNTRYCODE
-            && s->data[4] == FAX_NSF_MANUFACTURERCODE) {
+	    && s->data[4] == FAX_NSF_COUNTRYSUBCODE
+            && s->data[5] == FAX_NSF_MANUFACTURERCODE) {
 
             PDebug_TPPrintf ("Block 1: Daytona NSF received\n");
             M_set_info (Info_Got_NSF);
@@ -2111,7 +2167,7 @@ intern int faxint_tx_initial_identification (State *s)
          }
 
          if (s->NSF[0] && s->NSS[0]
-             && (s->NSF[3] & s->NSS[3]) != 0) {
+             && (s->NSF[4] & s->NSS[4]) != 0) {
 
             // @@ The last condition ensures both ends have a common data transfer protocol. @@
             // @@ This check needs to be modified if more than 8 protocols become supported, @@
@@ -2141,6 +2197,7 @@ intern int faxint_tx_initial_identification (State *s)
 
          }
 
+/*spongnowinbs_tpre_restart
          if ((s->DIS[2] & 0x02) == 0) {
 
             PDebug_TPPrintf ("Block 1: Callee cannot receive!\n");
@@ -2150,12 +2207,15 @@ intern int faxint_tx_initial_identification (State *s)
             return LOOPBACK;
 
          }
+*/
 
          PDebug_TPPrintf ("Block 1: OK, received (NSF) (CSI) DIS; "
                           "entering block 4 sending TSI\n");
          M_cancel_timeout (T1);
          s->bits.II = FALSE;
+/*spongmoved too
          s->bits.allowDIS = TRUE;
+*/
          s->block = B_tx_pre_message_command;
          s->blockstate = BS_tpre_start;
          return LOOPBACK;
@@ -2178,9 +2238,10 @@ intern int faxint_tx_initial_identification (State *s)
 // @@ Check subroutine return code?
 
          if (s->subroutine
-            || !(s->ndata >= 3 + 5 && (s->data[2] & ~1) == NSS
+            || !(s->ndata >= 4 + 5 && (s->data[2] & ~1) == NSS
                 && s->data[3] == FAX_NSF_COUNTRYCODE
-                && s->data[4] == FAX_NSF_MANUFACTURERCODE)) {
+		&& s->data[4] == FAX_NSF_COUNTRYSUBCODE
+                && s->data[5] == FAX_NSF_MANUFACTURERCODE)) {
 
             PDebug_TPPrintf ("Block 1: Switchover protocol error\n");
             M_return_error (Error_Switchover_Protocol);
@@ -2210,9 +2271,41 @@ intern int faxint_tx_pre_message_command (State *s)
          // On entry, no timeouts are active
 
          s->ntries = 0;
+         s->bits.allowDIS = TRUE;
+/*spongmovedtobs_tpre_restart
          s->blockstate = BS_tpre_sendTSI;
          faxint_generate_dcs (s);
          faxint_select_datarate (s);
+         return LOOPBACK;
+*/
+         s->blockstate = BS_tpre_restart;
+         return LOOPBACK;
+
+      case BS_tpre_restart:
+
+         if ((s->DIS[2] & 0x02) == 0) {
+
+            PDebug_TPPrintf ("Block 4: Callee cannot receive!\n");
+            s->dcnrc = Error_Cannot_Receive;
+//spongnotneededhere            s->block = B_tx_pre_message_command;
+            s->blockstate = BS_tpre_sendDCN;
+            return LOOPBACK;
+
+         }
+
+         faxint_generate_dcs (s);
+         faxint_select_datarate (s); // So every time go through here datarate is modified
+
+         if (s->datarate == 0) {
+
+            PDebug_TPPrintf ("Block 4: too slow!\n");
+            s->dcnrc = Error_Too_Slow;
+            s->blockstate = BS_tpre_sendDCN;
+            return LOOPBACK;
+
+         }
+
+         s->blockstate = BS_tpre_sendTSI;
          return LOOPBACK;
 
       case BS_tpre_sendTSI:
@@ -2220,6 +2313,7 @@ intern int faxint_tx_pre_message_command (State *s)
          buffermanager_put_string (s->bufIDout, "AT+FTH=3\r");
 
          if (s->bits.allowDIS && s->TSI[0]) { // s->allowDIS only true on entry from tx_initial_id
+                                              // or reentry due to RTP/RTN/EOM
                                               // else other end has responded to DCS with CFR/FTT
                                               // (in which case we don't want to waste time
                                               // resending TSI since we know other end has got it)
@@ -2351,7 +2445,8 @@ intern int faxint_tx_pre_message_command (State *s)
                PDebug_TPPrintf ("Block 4: timeout T4 or FCS/FCERROR; "
                                 "retransmitting (TSI) DCS TCF\n");
                s->subroutine = s->timedout = 0; // Clear timeout/error
-               s->blockstate = BS_tpre_sendTSI;
+               s->datarate += 2400; // Correct for data rate drop in faxint_select_datarate
+               s->blockstate = BS_tpre_restart;//spongBS_tpre_sendTSI;
                return LOOPBACK;
 
             } else {
@@ -2373,16 +2468,16 @@ intern int faxint_tx_pre_message_command (State *s)
 
          }
 
-         if (s->bits.allowDIS) {
-
-            if (s->ndata >= 0 + 5 && s->data[2] == CSI) {
+         if (s->bits.allowDIS && s->ndata >= 0 + 5 && s->data[2] == CSI) {
 
                faxint_strip_SI (s, s->CSI);
                M_set_info (Info_Got_CSI);
 
-            }
+         }
 
-            if (s->ndata >= 3 + 5 && s->data[2] == DIS) {
+         if (s->resp == 0) {
+
+            if (s->bits.allowDIS && s->ndata >= 3 + 5 && s->data[2] == DIS) {
 
                s->DIS[0] = MIN (s->ndata - 5, sizeof s->DIS - 1);
                s->resp = DIS;
@@ -2391,9 +2486,7 @@ intern int faxint_tx_pre_message_command (State *s)
 
             }
 
-         }
-
-         if (s->resp == 0) {
+//spongmoved above         if (s->resp == 0) {
 
             if (s->ndata >= 0 + 5 && (s->data[2] & ~1) == CFR) {
 
@@ -2422,6 +2515,7 @@ intern int faxint_tx_pre_message_command (State *s)
 
          }
 
+/*spongcombinedthiswithnexttest
          if (s->resp == 0) { // Eeek, no response received!
 
             if (++s->ntries < 3) {
@@ -2441,9 +2535,11 @@ intern int faxint_tx_pre_message_command (State *s)
 
             }
          }
+*/
 
-         if (s->resp == DIS) {
+         if (s->resp == 0 || s->resp == DIS) {
 
+/*spongnowinbs_tpre_restart
             // Put this here just in case callee suddenly changes its mind
             if ((s->DIS[2] & 0x02) == 0) {
 
@@ -2453,12 +2549,17 @@ intern int faxint_tx_pre_message_command (State *s)
                return LOOPBACK;
 
             }
+*/
 
             if (++s->ntries < 3) {
 
-               PDebug_TPPrintf ("Block 4: got DIS again; "
+               PDebug_TPPrintf ("Block 4: got DIS again or preMR not received; "
                                 "retransmitting (TSI) DCS TCF\n");
-               s->blockstate = BS_tpre_sendTSI;
+               if (s->resp == 0)
+                  s->datarate += 2400; // Correct for data rate drop in faxint_select_datarate
+               else
+                  s->datarate = 0; // Force back to highest datarate allowed by DIS
+               s->blockstate = BS_tpre_restart;//spongwastpre_sendTSI;
                return LOOPBACK;
 
             } else {
@@ -2474,15 +2575,16 @@ intern int faxint_tx_pre_message_command (State *s)
 
          if (s->resp == FTT) {
 
-            faxint_select_datarate (s);
-            if (s->datarate) {
+//spongnowin bs_tpre_restart            faxint_select_datarate (s);
+//spongnowtested in bs_tpre_restart            if (s->datarate) {
 
-               PDebug_Printf ("%06u  %i  Block 4: dropping rate to %i bps\n"
+               PDebug_Printf ("%06u  %i  Block 4: dropping rate from %i bps\n"
                              , clock (), s->port, s->datarate);
                s->ntries = 0;
-               s->blockstate = BS_tpre_sendTSI;
+               s->blockstate = BS_tpre_restart;//spongBS_tpre_sendTSI;//spongjustcallbs_tpre_restart?
                return LOOPBACK;
 
+/*spongnowtested in bs_tpre_restart
             } else {
 
                PDebug_TPPrintf ("Block 4: too slow!\n");
@@ -2491,7 +2593,7 @@ intern int faxint_tx_pre_message_command (State *s)
                return LOOPBACK;
 
             }
-
+*/
          }
 
          // So we got CFR.  Whee!
@@ -2792,7 +2894,7 @@ intern int faxint_tx_post_message_command (State *s)
          if (s->resp == RTP) {
 
             PDebug_TPPrintf ("Block 5: got RTP after not EOP; back to B at 14400\n");
-            s->datarate = 0;
+            s->datarate = 0; // Force back to highest datarate allowed by DIS
             s->blockstate = BS_tpre_start;
             s->block = B_tx_pre_message_command;
             return LOOPBACK;
@@ -3797,9 +3899,10 @@ intern int faxint_rx_initial_identification (State *s)
 
          }
 
-         if (s->ndata >= 3 + 5 && (s->data[2] & ~1) == NSS
+         if (s->ndata >= 4 + 5 && (s->data[2] & ~1) == NSS
             && s->data[3] == FAX_NSF_COUNTRYCODE
-            && s->data[4] == FAX_NSF_MANUFACTURERCODE) {
+	    && s->data[4] == FAX_NSF_COUNTRYSUBCODE
+            && s->data[5] == FAX_NSF_MANUFACTURERCODE) {
 
             PDebug_TPPrintf ("Block 2: Daytona NSS received\n");
             M_set_info (Info_Got_NSS);
@@ -4173,6 +4276,10 @@ intern int faxint_rx_main_loop (State *s)
 
       case BS_rml_gotPMC:
 
+         //rtpout
+         if (s->datarate > faxint_get_maxdatarate (s) && s->cmd == MPS && s->PMR == MCF)
+            s->PMR = RTP;
+
          buffermanager_put_string (s->bufIDout, "AT+FTH=3\r");
          // @@ Need to indicate break so that don't confuse with same page with temp. carrier loss
          // @@ What am I on about?  I think this is to do with T4s.
@@ -4183,7 +4290,7 @@ intern int faxint_rx_main_loop (State *s)
          s->subroutine = S_send_frame;
          s->substate = SS_sf_start;
          s->blockstate = BS_rml_restart;
-         if (s->cmd == EOM || s->PMR == RTN) {
+         if (s->cmd == EOM || s->PMR == RTN || s->PMR == RTP) { //rtpout
             s->bits.allowDCS = TRUE;
             s->bits.allowT4r = FALSE;
          } else if (s->cmd == MPS) {
@@ -4425,7 +4532,8 @@ intern int faxint_rx_main_loop (State *s)
          s->data[0] = 0xff;
          s->data[1] = Control_Final;
 
-         if (s->ndata >= s->minTCF && s->ndata <= s->maxTCF) {
+         if (s->ndata >= s->minTCF && s->ndata <= s->maxTCF
+            && s->datarate <= faxint_get_maxdatarate (s)) { //rtpout
 
             s->data[2] = CFR + s->bits.X;
             s->bits.allowT4r = TRUE;
@@ -4493,7 +4601,7 @@ intern int faxint_rx_main_loop (State *s)
                           "restarting Phase B tx\n");
          M_start_timeout (T1);
          s->subroutine = s->timedout = 0; // Clear timeout
-         s->datarate = 0;
+         s->datarate = 0; // Force back to highest datarate allowed by DIS
          s->bits.II = TRUE;
          s->bits.X = 0;
          s->block = B_rx_initial_identification;
@@ -5356,4 +5464,66 @@ intern void faxint_select_datarate (State *s)
       s->datarate -= 2400; // No joy; try dropping rate
 
    }
+}
+
+
+//rtpout
+///////////////////////////////////////////////////////////////////////////////
+//
+// faxint_select_halfmaxdatarate
+//
+// Selects a maximum datarate, given the previous datarate.
+// The algorithm is to halve, rounding upwards.
+//
+// A current datarate of 0 behaves as if it were a current datarate of 14400 bps.
+//
+// Inputs:  s           (pointer to state structure)
+//
+// Outputs: s->maxdatarate
+//
+// Assumes: nothing
+//
+// Returns: nothing
+//
+///////////////////////////////////////////////////////////////////////////////
+
+intern void faxint_select_halfmaxdatarate (State *s)
+{
+   int currdatarate = s->datarate;
+
+   if (currdatarate == 0)
+      currdatarate = 14400;
+
+   s->maxdatarate = (currdatarate / 2400 + 1) / 2 * 2400;
+}
+
+
+//rtpout
+///////////////////////////////////////////////////////////////////////////////
+//
+// faxint_get_maxdatarate
+//
+// Gets the maximum datarate, taking account of V.29-only receivers.
+//
+// Inputs:  s           (pointer to state structure)
+//
+// Outputs: nothing
+//
+// Assumes: DIS received and present in s->DIS[]
+//
+// Returns: max datarate to compare with
+//
+///////////////////////////////////////////////////////////////////////////////
+
+intern int faxint_get_maxdatarate (State *s)
+{
+   int maxdatarate = s->maxdatarate;
+
+   if (maxdatarate == 0)
+      maxdatarate = 14400; // Allow max speed if no max specified
+
+   if ((s->DIS[2] & 0x3c) == 1 && maxdatarate < 7200)
+      maxdatarate = 7200; // V.29-only machines can't go below 7200 bps
+
+   return maxdatarate;
 }
