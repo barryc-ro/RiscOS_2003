@@ -27,6 +27,7 @@ TLD     = tlink
 RM      = remove
 WIPE    = -wipe
 DEFMOD  = DefMod
+MODSQZ  = modsqz
 
 AFLAGS = -depend !Depend -Stamp -quit
 CFLAGS  = -c -depend !Depend -zM -zps1 -ffah ${INCLUDES} ${DFLAGS} ${THROWBACK} -DNDEBUG
@@ -151,5 +152,7 @@ rom_link:
 
 rm.${COMPONENT}: ${OBJS} ${OSLIB}
         ${LD} -o $@ -module ${OBJS} ${OSLIB} ${CLIB}
+        ${MODSQZ} $@
+        Access $@ WR/R
 
 # Dynamic dependencies:

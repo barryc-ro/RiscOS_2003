@@ -165,6 +165,7 @@ ${RESF}: LocalRes:Messages
 ${RAM_MODULE}: ${RAM_OBJS} ${TBOXLIB} ${CLIB} ${RESF} ${CLIB}
 	${mkdir} rm
         ${LD} -o $@ -module ${RAM_OBJS} ${TBOXLIB} ${RESF} ${CLIB}
+        ${MODSQZ} $@
         Access $@ RW/R
 
 ${DBG_MODULE}: ${DBG_OBJS} ${TBOXLIB} ${CLIB} ${RESF} ${CLIB}

@@ -31,6 +31,7 @@ CP      = copy
 LD      = link
 TLD	= tlink
 RM      = remove
+MODSQZ  = modsqz
 WIPE    = -wipe
 
 CPFLAGS = ~cfr~v
@@ -129,6 +130,7 @@ ${RESF}: LocalRes:Messages
 ${RAM_MODULE}: ${RAM_OBJS} ${TBOXLIB} ${RESF} ${CLIB}
 	${mkdir} rm
         ${LD} -o $@ -module ${RAM_OBJS} ${TBOXLIB} ${RESF} ${CLIB}
+        ${MODSQZ} $@
         Access $@ RW/R
 
 o.MenuRAM: Menu.c
