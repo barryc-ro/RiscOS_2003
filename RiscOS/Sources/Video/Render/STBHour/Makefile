@@ -56,7 +56,7 @@ ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} -From ${SOURCE} -To $@
 
 ${EXP_HDR}.Hourglass: hdr.Hourglass
-        ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
+        ${CP} hdr.Hourglass $@ ${CPFLAGS}
 
 #
 # Extra Development rules:
