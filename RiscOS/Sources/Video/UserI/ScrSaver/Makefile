@@ -90,9 +90,9 @@ clean:
 resources: ${APPTARGET}
         ${MKDIR} ${RESDIR}.ScrSaver
         ${CP} ${APPTARGET}                               ${RESDIR}.ScrSaver.!RunImage  ${CPFLAGS}
-        ${CP} LocalRes:${UserIF}.!Run         ${RESDIR}.ScrSaver.!Run       ${CPFLAGS}
+        ${CP} Resources.!Run                  ${RESDIR}.ScrSaver.!Run       ${CPFLAGS}
         ${CP} LocalRes:${UserIF}.Messages     ${RESDIR}.ScrSaver.Messages   ${CPFLAGS}
-        ${CP} LocalRes:${UserIF}.Templates    ${RESDIR}.ScrSaver.Templates  ${CPFLAGS}
+        ${CP} Resources.Templates             ${RESDIR}.ScrSaver.Templates  ${CPFLAGS}
         ${SHRINK} LocalRes:${UserIF}.Sprites  ${RESDIR}.ScrSaver.Sprites
         @echo ${COMPONENT}: resource files copied
 
