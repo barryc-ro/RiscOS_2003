@@ -56,10 +56,11 @@ UNIXLIB    = TCPIPLibs:o.unixlibzm
 LIBS       = <Lib$Dir>.tboxlibs.o.wimplib
 C++LIB     = <Lib$Dir>.c++lib.o.c++libz
 LIBSD      = <Lib$Dir>.DebugLib.o.debuglibzm
+ASMUTILS   = C:AsmUtils.o.AsmUtilsZM
 #
 # Include files
 #
-INCLUDES = -IC:,<Lib$Dir>.
+INCLUDES = -IC:AsmUtils,C:,<Lib$Dir>.
 
 DIRS=o._dirs
 
@@ -70,10 +71,10 @@ TARGET    = aof.${COMPONENT}
 
 .SUFFIXES:   .od
 
-OBJS      =	o.sys o.com o.data o.api o.atr o.t0_sm o.t1 o.chan o.irqs \
+OBJS      =	o.sys o.com o.data o.api o.atr o.t0_sm o.t1 o.chan \
 	  	o.serial o.header o.db o.pmsdebug
 
-DOBJS      =	od.sys od.com od.data od.api od.atr od.t0_sm od.t1 od.chan od.irqs \
+DOBJS      =	od.sys od.com od.data od.api od.atr od.t0_sm od.t1 od.chan \
 	  	od.serial od.header od.db od.pmsdebug
 
 #
@@ -136,26 +137,25 @@ ${DIRS}:
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS} ${ROMCSTUBS} ${DIRS}
-        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
+${TARGET}: ${OBJS} ${ROMCSTUBS} ${DIRS} ${ASMUTILS}
+        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS} ${ASMUTILS}
 
 #
 # Final link for the ROM Image (using given base address)
 #
 rom_link:
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 #
 # Target
 #
 rm.${COMPONENT}: ${OBJS} ${CLIB} ${DIRS}
-        ${LD} -rmf -o $@ ${OBJS} ${CLIB}
+        ${LD} -rmf -o $@ ${OBJS} ${CLIB} ${ASMUTILS}
         Access rm.${COMPONENT} RW/R
 
-rm.${COMPONENT}D: ${DOBJS} ${REMOTEDB} ${DIRS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB} 
-        ${LD} -rmf -o $@ ${DOBJS} ${CLIB} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB} 
+rm.${COMPONENT}D: ${DOBJS} ${REMOTEDB} ${DIRS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB} ${ASMUTILS}
+        ${LD} -rmf -o $@ ${DOBJS} ${CLIB} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB} ${ASMUTILS}
         Access rm.${COMPONENT}D RW/R
 
 # dummy target
