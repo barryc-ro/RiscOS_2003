@@ -92,8 +92,8 @@ NODB  =         -UREMOTE_DEBUG -UENABLE_DEBUGGING -DCHIMPANZEE_INTERFACE \
 #
 
 #NCTARGETARCH = ${ETHERNETDB}
-NCTARGETARCH = ${ZIPDB}
-#NCTARGETARCH = ${NODB}
+#NCTARGETARCH = ${ZIPDB}
+NCTARGETARCH = ${NODB}
 
 CCFLAGS = -c ${THROWBACK} -depend !Depend ${INCLUDES} -zM ${NCTARGETARCH} 
 
@@ -224,6 +224,49 @@ rom_link:
 
 
 # Dynamic dependencies:
+o.module:	c.module
+o.module:	C:h.kernel
+o.module:	C:h.swis
+o.module:	h.module
+o.module:	C:h.DBUG
+o.module:	h.machine
+o.module:	h.vectors
+o.module:	h.ncma_cmds
+o.module:	h.ncma_swis
+o.module:	h.ncma_ncma
+o.module:	h.ncma_scard
+o.module:	h.ncma_dial
+o.module:	h.ncma_uid
+o.module:	h.dynalloc
+o.module:	h.ncma_url
+o.module:	h.ncma_fx
+o.module:	C:h.DBUG
+o.header:	cmhg.header
+o.header:	h.cmhg_defs
+o.vectors:	c.vectors
+o.vectors:	C:h.kernel
+o.vectors:	C:h.swis
+o.vectors:	h.ncma_ncma
+o.vectors:	h.machine
+o.vectors:	h.vectors
+o.vectors:	h.module
+o.vectors:	C:h.DBUG
+o.vectors:	C:h.scinter
+o.ncma_cmds:	c.ncma_cmds
+o.ncma_cmds:	C:h.kernel
+o.ncma_cmds:	C:h.swis
+o.ncma_cmds:	h.ncma_cmds
+o.ncma_cmds:	h.ncma_ncma
+o.ncma_cmds:	h.ncma_utils
+o.ncma_cmds:	h.ncma_url
+o.ncma_cmds:	h.ncma_scard
+o.ncma_cmds:	h.ncma_cache
+o.ncma_cmds:	h.ncma_dial
+o.ncma_cmds:	h.machine
+o.ncma_cmds:	h.vectors
+o.ncma_cmds:	h.kprintf
+o.ncma_cmds:	h.dynalloc
+o.ncma_cmds:	C:h.DBUG
 o.ncma_swis:	c.ncma_swis
 o.ncma_swis:	C:h.kernel
 o.ncma_swis:	C:h.swis
@@ -368,46 +411,3 @@ o.ncma_fx:	c.ncma_fx
 o.ncma_fx:	C:h.kernel
 o.ncma_fx:	C:h.swis
 o.ncma_fx:	h.ncma_fx
-o.header:	cmhg.header
-o.header:	h.cmhg_defs
-o.vectors:	c.vectors
-o.vectors:	C:h.kernel
-o.vectors:	C:h.swis
-o.vectors:	h.ncma_ncma
-o.vectors:	h.machine
-o.vectors:	h.vectors
-o.vectors:	h.module
-o.vectors:	C:h.DBUG
-o.vectors:	C:h.scinter
-o.ncma_cmds:	c.ncma_cmds
-o.ncma_cmds:	C:h.kernel
-o.ncma_cmds:	C:h.swis
-o.ncma_cmds:	h.ncma_cmds
-o.ncma_cmds:	h.ncma_ncma
-o.ncma_cmds:	h.ncma_utils
-o.ncma_cmds:	h.ncma_url
-o.ncma_cmds:	h.ncma_scard
-o.ncma_cmds:	h.ncma_cache
-o.ncma_cmds:	h.ncma_dial
-o.ncma_cmds:	h.machine
-o.ncma_cmds:	h.vectors
-o.ncma_cmds:	h.kprintf
-o.ncma_cmds:	h.dynalloc
-o.ncma_cmds:	C:h.DBUG
-o.module:	c.module
-o.module:	C:h.kernel
-o.module:	C:h.swis
-o.module:	h.module
-o.module:	C:h.DBUG
-o.module:	h.machine
-o.module:	h.vectors
-o.module:	h.ncma_cmds
-o.module:	h.ncma_swis
-o.module:	h.ncma_ncma
-o.module:	h.ncma_scard
-o.module:	h.ncma_dial
-o.module:	h.ncma_uid
-o.module:	h.dynalloc
-o.module:	h.ncma_url
-o.module:	h.ncma_fx
-o.module:	C:h.DBUG
