@@ -31,33 +31,34 @@ RM      = remove
 WIPE    = -wipe
 
 AFLAGS  = -depend !Depend -I<Hdr$Dir>.Global.,<Hdr$Dir>.Interface. -Stamp -quit
-CFLAGS  = -ansi -zM -zps1 -Wp -ffah ${INCLUDES} ${DFLAGS}
+CFLAGS  = -ansi -zM -zps1 -ffah -Wp ${INCLUDES} ${DFLAGS}
 DFLAGS  = -DAUTH32 -DCOMPAT_INET4
+# -DDEBUG -DDEBUGSER
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
-INCLUDES  = -ITCPIPLibs:
+INCLUDES  = -ITCPIPLibs:,C:
 
 #
 # Libraries
 #
 ANSILIB   = CLib:o.ansilib
-CLIB      = CLIB:o.stubs
-RLIB      = RISCOSLIB:o.risc_oslib
-ROMCSTUBS = RISCOSLIB:o.romcstubs
+CLIB      = C:o.stubs
+RLIB      = RISC_OSLIB:o.risc_oslib
+#ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.abssym
 C_ABSSYM  = RISCOSLIB:o.c_abssym
 
 SOCKLIBZM = TCPIPLibs:o.socklibzm
 INETLIBZM = TCPIPLibs:o.inetlibzm
-UNIXLIBZM = TCPIPLibs:o.unixlibzm
 
 OBJS =\
  o.fwhdr\
- o.inetfn\
  o.irqs\
  o.module\
  o.objects
+
+# o.inetfn\
 
 #
 # Rule patterns
@@ -93,12 +94,12 @@ clean_all: clean
         ${WIPE} o.* ${WFLAGS}
         @echo ${COMPONENT}: imported objects removed
 
-${ROM_MODULE}: ${OBJS} ${UNIXLIBZM} ${INETLIBZM} ${SOCKLIBZM} ${ROMCSTUBS}
+${ROM_MODULE}: ${OBJS} ${SOCKLIBZM} ${INETLIBZM} ${ROMCSTUBS}
         ${MKDIR} aof
-        ${LD} -o $@ -aof ${OBJS} ${UNIXLIBZM} ${INETLIBZM} ${SOCKLIBZM} ${ROMCSTUBS}
+        ${LD} -o $@ -aof ${OBJS} ${SOCKLIBZM} ${INETLIBZM} ${ROMCSTUBS}
 
-rm.Freeway: ${OBJS} ${UNIXLIBZM} ${INETLIBZM} ${SOCKLIBZM} ${CLIB}
-        ${LD} -o $@ -module ${OBJS} ${UNIXLIBZM} ${INETLIBZM} ${SOCKLIBZM} ${CLIB}
+rm.Freeway: ${OBJS} ${SOCKLIBZM} ${INETLIBZM} ${CLIB}
+        ${LD} -o $@ -rmf ${OBJS} ${SOCKLIBZM} ${INETLIBZM} ${CLIB} 
 
 
 # final link for ROM Image (using given base address)
@@ -113,13 +114,3 @@ rom_link:
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
-o.inetfn:	c.inetfn
-o.inetfn:	TCPIPLibs:sys.h.types
-o.inetfn:	TCPIPLibs:sys.h.cdefs
-o.inetfn:	TCPIPLibs:machine.h.endian
-o.inetfn:	TCPIPLibs:machine.h.ansi
-o.inetfn:	TCPIPLibs:machine.h.types
-o.inetfn:	TCPIPLibs:netinet.h.in
-o.inetfn:	h.module
-o.inetfn:	C:h.kernel
-o.inetfn:	TCPIPLibs:netinet.h.in
