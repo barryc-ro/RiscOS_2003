@@ -9,7 +9,7 @@ EXP_HDR = <export$dir>
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = do mkdir -p
 AS      = objasm
 CC      = cc
 CMHG    = cmhg
@@ -18,6 +18,7 @@ LD      = link
 RM      = remove
 WIPE    = -wipe
 SHRINK  = ShrinkWrapZipCompress
+NOP     = @|
 
 AFLAGS = -depend !Depend ${THROWBACK} -Stamp -quit
 CFLAGS  = -c -depend !Depend -zM -zps1 -ff ${THROWBACK} ${INCLUDES} ${DFLAGS}
@@ -63,7 +64,8 @@ RDIR      = ${RESDIR}.${COMPONENT}
 #
 # build a relocatable module:
 #
-all: ${RAMTARGET} dirs
+all: ram
+        ${NOP}
 
 #
 # RISC OS ROM build rules:
@@ -71,8 +73,16 @@ all: ${RAMTARGET} dirs
 rom: ${TARGET} dirs
         @echo ${COMPONENT}: rom module built
 
+ram: ${RAMTARGET} dirs
+        @echo ${COMPONENT}: ram module built
+
 export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
+
+install: ram
+        ${MKDIR} ${INSTDIR}
+        ${CP} ${RAMTARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: ram module installed
 
 install_rom: ${TARGET} dirs
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
