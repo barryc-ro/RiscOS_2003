@@ -33,7 +33,7 @@ export:	export_$(PHASE)
 export_hdrs:
 	CDir		<Lib$Dir>.$(COMPONENT)
 	Copy		@.h		<Lib$Dir>.$(COMPONENT).h		$(CopyFlags)
-	Copy		@.$(COMPONENT)	<Lib$Dir>.$(COMPONENT).$(COMPONENT)	$(CopyFlags)
+	IfThere		@.$(COMPONENT)	Then Copy @.$(COMPONENT) <Lib$Dir>.$(COMPONENT).$(COMPONENT) $(CopyFlags)
 	Echo		Library $(COMPONENT): 'export_hdrs' finished.
 
 
