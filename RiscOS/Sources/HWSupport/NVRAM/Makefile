@@ -100,6 +100,10 @@ resources:
         ${CP} resources.<System>.Tags ${RDIR}.Tags ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
+BBETYPE = nvram
+bbe-nvram: bbe-generic
+  BBE_Export_Dir Resources.${SYSTEM}
+
 #
 # ROM target (re-linked at ROM Image build time)
 #
