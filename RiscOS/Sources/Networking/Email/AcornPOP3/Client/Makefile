@@ -74,7 +74,7 @@ STUBS=		C:o.Stubs
 ROMCSTUBS=      RISC_OSLib:o.romcstubs
 ABSSYM=         RISC_OSLib:o.AbsSym
 
-DEBUG=		#-DDEBUG -DTRACE #-DMEMCHECK #
+DEBUG=		#-DDEBUG -DTRACE#-DMEMCHECK
 
 COMPAT=		-DCOMPAT_INET4
 
@@ -87,7 +87,7 @@ CMHGFLAGS = -p -IC: -d h.header -throwback
 
 ASMFLAGS=       
 
-DOBJS=          #tml_podule.o debuglib.o trace_PL.o#MemCheck:o.MC_M #
+DOBJS=          #tml_podule.o debuglib.o trace_PL.o #MemCheck:o.MC_M
 
 OBJS=		swihndlers.o handlers.o logon.o logout.o pop_utils.o module.o header.o \
                 errortable.o get.o send.o cmdresp.o callbacks.o elib_priv.o getnummsgs.o \
