@@ -357,4 +357,7 @@ extern os_error *process_utf8(const char *text, int in_n, Encoding *enc, process
 
 #endif
 
+extern int lang_name_to_num(const char *en);
+extern const char *lang_num_to_name(int num);
+
 /* eof util.h */

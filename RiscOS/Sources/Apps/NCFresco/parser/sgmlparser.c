@@ -56,13 +56,16 @@ static int sgml_handle_char(void *handle, UCS4 c)
 {
     SGMLCTX *context = handle;
 
-    /* PRSDBG(("sgml_handle_char: %04x %c\n", c, c >= 0x20 && c <= 0x7E ? c : 0x20)); */
+    PRSDBG(("sgml_handle_char: %04x %c\n", c, c >= 0x20 && c <= 0x7E ? c : 0x20));
     
-    add_char_to_inhand(context, (UCS2) c);
+    if (c != 0xFEFF)
+    {
+	add_char_to_inhand(context, (UCS2) c);
 
-    (*context->state)(context, (UCS2) c);
+	(*context->state)(context, (UCS2) c);
+    }
 
-    /* PRSDBG(("sgml_handle_char: out %d/%d\n", context->pending_close, context->pending_enc_num)); */
+    PRSDBG(("sgml_handle_char: out %d/%d\n", context->pending_close, context->pending_enc_num));
 
     return context->pending_close || context->pending_enc_num;
 }
@@ -252,9 +255,16 @@ extern void sgml_stream_finished (SGMLCTX *context)
 	if (context->encoding)
 	    encoding_delete(context->encoding);
 	context->encoding = encoding_new(csUnicode11, FALSE);
+
+	/* prime the stream to be recognised as little-endian */
+	{
+	    static char ucs2_marker[2] = { 0xFF, 0xFE };
+	    sgml_feed_characters (context, ucs2_marker, 2);
+	}
 #endif
 
-        sgml_feed_characters (context, (char *)&context->inhand.data [context->comment_anchor], stream_end - context->comment_anchor);
+        sgml_feed_characters (context, (char *)&context->inhand.data [context->comment_anchor],
+			      (stream_end - context->comment_anchor) * sizeof(context->inhand.data[0]));
 
         sgml_stream_finished (context);
     }

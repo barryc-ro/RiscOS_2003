@@ -148,15 +148,20 @@ extern void startmeta (SGMLCTX * context, ELEMENT * element, VALUES * attributes
 	if (strcasecomp((m->httpequiv ? m->httpequiv : m->name), "CONTENT-TYPE") == 0)
 	{
 	    int encoding = parse_content_type_header(m->content);
+	    rid_header *rh = me->rh;
 
 	    /* encoding could return 0 if it's unsupported - in which case ignore it */
-	    if (encoding && me->rh->encoding_source == rid_encoding_source_USER)
+	    if (encoding && rh->encoding_source == rid_encoding_source_USER)
 	    {
 		/* write value into the rid header */
-		me->rh->encoding = encoding;
-		me->rh->encoding_source = rid_encoding_source_META;
+		rh->encoding = encoding;
+		rh->encoding_source = rid_encoding_source_META;
 
-		DBG(("set_encoding META %d\n", encoding));
+		mm_free(rh->language);
+		rh->language = strdup(encoding_default_language(encoding));
+		rh->language_num = lang_name_to_num(rh->language);
+
+		DBG(("set_encoding META %d language %s (%d)\n", encoding, rh->language, rh->language_num));
 		
 		/* set stream to have encoding updated */
 		me->rh->encoding_write = sgml_set_encoding(context, encoding);

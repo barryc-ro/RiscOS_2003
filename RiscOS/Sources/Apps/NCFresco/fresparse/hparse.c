@@ -131,6 +131,7 @@ static SGMLBACK def_callback =
 static void html_feed_characters(HTMLCTX *htmlctx, const char *buffer, int bytes)
 {
     SGMLCTX *context = htmlctx->sgmlctx;
+    rid_header *rh;
     
     if (context->enc_num == csAutodetectJP)
     {
@@ -151,10 +152,20 @@ static void html_feed_characters(HTMLCTX *htmlctx, const char *buffer, int bytes
 		    context->autodetect.inhand.data,
 		    bytes, buffer));
 
-	    DBG(("set_encoding AUTODETECT %d (inhand %d)\n", context->autodetect.enc_num, context->autodetect.inhand.ix));
+	    DBG(("set_encoding AUTODETECT %d (inhand %d) language %d\n",
+		 context->autodetect.enc_num, context->autodetect.inhand.ix,
+		 lang_name_to_num(encoding_default_language(context->autodetect.enc_num))));
 
+	    rh = htmlctx->rh;
+	    
 	    /* set the encoding */
-	    htmlctx->rh->encoding_write = sgml_set_encoding(context, context->autodetect.enc_num);
+	    rh->encoding_write = sgml_set_encoding(context, context->autodetect.enc_num);
+
+ 	    /* tell frontend encoding and this base language - used to be after process pending (was there a good reason?) */
+	    rh->encoding = context->autodetect.enc_num;
+	    mm_free(rh->language);
+	    rh->language = strdup(encoding_default_language(context->autodetect.enc_num));
+	    rh->language_num = lang_name_to_num(rh->language);
 
 	    /* process the stuff pending */
 	    if (context->autodetect.inhand.ix)
@@ -167,9 +178,6 @@ static void html_feed_characters(HTMLCTX *htmlctx, const char *buffer, int bytes
 		/* mark buffer as used */
 		context->autodetect.inhand.ix = 0;
 	    }
-	    
- 	    /* tell frontend encoding */
-	    htmlctx->rh->encoding = context->autodetect.enc_num;
 	    break;
 	
 	case autojp_UNDECIDED:
@@ -316,6 +324,9 @@ static HTMLCTX * core_HTMLToRiscos (int encoding )
 	rh->encoding = csASCII;
     else						/* HTTP or override set - use it */
 	rh->encoding = encoding;
+
+    rh->language = strdup(encoding_default_language(rh->encoding));
+    rh->language_num = lang_name_to_num(rh->language);
 #endif
     
 #if 0
@@ -359,7 +370,7 @@ static SGMLCTX * SGML_new(HTMLCTX *me, int encoding)
 
 #if UNICODE
     /* initialiase encoding to what's decided in HTML init, this value will come from user or HTTP header */
-    PRSDBG(("set_encoding: encoding set to %d\n", me->rh->encoding));
+    PRSDBG(("set_encoding: encoding set to %d language %s (%d)\n", me->rh->encoding, me->rh->language, me->rh->language_num));
     context->encoding = encoding_new(me->rh->encoding, FALSE);
 
     /* be safe - if can't load encoding then use ASCII - guaranteed to work */

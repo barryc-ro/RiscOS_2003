@@ -194,7 +194,7 @@ void oselect_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 
             sel->items = mm_calloc(sizeof(fe_menu_item), height);
 	    
-            for(i=0, oi = sel->options; oi; i++, oi = oi->next)
+            for (i=0, oi = sel->options; oi; i++, oi = oi->next)
             {
                 fe_menu_item *ii = ((fe_menu_item*)sel->items) + i;
                 ii->name = oi->text;
@@ -207,15 +207,18 @@ void oselect_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
                     oi->flags &= ~rid_if_SELECTED;
 	    }
 
-	    if ((ti->flag & rid_flag_WIDE_FONT)
+	    /* use the first menu item to pass the flags and language for the entire menu */
+	    if (
+		(ti->flag & rid_flag_WIDE_FONT)
 #if UNICODE
-		&& (strcasecomp(encoding_default_language(rh->encoding), lang_JAPANESE) == 0 ||
-		strcasecomp(encoding_default_language(rh->encoding), lang_CHINESE) == 0 ||
-		strcasecomp(encoding_default_language(rh->encoding), lang_KOREAN))
+		&& (ti->language > 1 || rh->language_num > 1)
 #endif
 		)
 	    {
-		((fe_menu_item*)sel->items)[0].flags |= fe_menu_flag_WIDE;
+		fe_menu_item *first = &((fe_menu_item *)sel->items)[0];
+		first->flags |= fe_menu_flag_WIDE;
+		first->language = ti->language ? ti->language : rh->language_num;
+		
 		BENDBG(("oselect_size: set wide font flag\n"));
 	    }
 	}

@@ -440,6 +440,7 @@ typedef struct rid_option_item {
     struct rid_option_item *next, *prev;
     char *text;                 /* The text displayed for this option */
     char *value;                /* The value given when the option is selected */
+    char language;		/* language number */
     rid_input_flags flags;      /* Checked and/or disabled */
 } rid_option_item;
 
@@ -1013,6 +1014,9 @@ typedef struct rid_header {
     rid_encoding_source encoding_source;
     int encoding;			/* encoding number actually in use (from Unicode/charsets.h) */
     int encoding_write;			/* encoding number of data stored in the rid_header and text zones (utf8 or AcornLatin1) */
+
+    char *language;			/* base language name of the document */
+    int language_num;			/* our code for this language */
 } rid_header;
 
 typedef struct {

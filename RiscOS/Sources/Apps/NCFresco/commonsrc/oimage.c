@@ -66,7 +66,7 @@
 
 /* ----------------------------------------------------------------------------- */
 
-static void oimage_size_alt_text(antweb_doc *doc, const char *alt, const rid_stdunits *req_ww, const rid_stdunits *req_hh, rid_image_flags flags, rid_flag text_flags, int fwidth, int *iw, int *ih, int scalefactor )
+static void oimage_size_alt_text(antweb_doc *doc, const char *alt, const rid_stdunits *req_ww, const rid_stdunits *req_hh, rid_image_flags flags, const rid_text_item *ti, int fwidth, int *iw, int *ih, int scalefactor )
 {
     font_string fs;
     int whichfont;
@@ -97,7 +97,7 @@ static void oimage_size_alt_text(antweb_doc *doc, const char *alt, const rid_std
 
 #ifndef BUILDERS
     {
-	whichfont = antweb_getwebfont2(doc, text_flags, ALT_FONT, ALT_FONT);
+	whichfont = antweb_getwebfont(doc, (rid_text_item *)ti, ALT_FONT);
 	wf = &webfonts[whichfont];
 /* 	wf = &webfonts[ALT_FONT]; */
 
@@ -163,14 +163,14 @@ static void oimage_size_alt_text(antweb_doc *doc, const char *alt, const rid_std
     IMGDBG(("Done sizing alt text: %d,%d\n", *iw, *ih));
 }
 
-void oimage_size_image(antweb_doc *doc, const char *alt, const rid_stdunits *req_ww, const rid_stdunits *req_hh, rid_image_flags flags, rid_flag text_flags, int scale_value, int fwidth, int *iw, int *ih)
+void oimage_size_image(antweb_doc *doc, const char *alt, const rid_stdunits *req_ww, const rid_stdunits *req_hh, rid_image_flags flags, rid_text_item *ti, int scale_value, int fwidth, int *iw, int *ih)
 {
     int width, height;
 
     width = (*iw * scale_value)/100;
     height = (*ih * scale_value)/100;
 
-    IMGDBG(("oimage_size_image: old width %d, height %d, scale %d%% rid flags 0x%x text_flags 0x%x\n", *iw, *ih, scale_value, flags, text_flags));
+    IMGDBG(("oimage_size_image: old width %d, height %d, scale %d%% rid flags 0x%x text_flags 0x%x\n", *iw, *ih, scale_value, flags, ti->flag));
 
     /* if we have an image
      *   if two sizes specified then use those
@@ -226,7 +226,7 @@ void oimage_size_image(antweb_doc *doc, const char *alt, const rid_stdunits *req
     {
         /* if not real then size from the text */
 #ifndef BUILDERS
-	oimage_size_alt_text(doc, alt, req_ww, req_hh, flags, text_flags, fwidth, &width, &height, scale_value);
+	oimage_size_alt_text(doc, alt, req_ww, req_hh, flags, ti, fwidth, &width, &height, scale_value);
 #else
 	width = 16;
 	height = 16;
@@ -493,7 +493,7 @@ void oimage_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
     if (fl & image_flag_REALTHING)
 	tii->flags |= rid_image_flag_REAL;
 
-    oimage_size_image(doc, tii->alt, &tii->ww, &tii->hh, tii->flags, ti->flag, doc->scale_value, fwidth, &width, &height);
+    oimage_size_image(doc, tii->alt, &tii->ww, &tii->hh, tii->flags, ti, doc->scale_value, fwidth, &width, &height);
 
     /* DAF: Formatter doesn't invisible objects please */
     if (width < 1)

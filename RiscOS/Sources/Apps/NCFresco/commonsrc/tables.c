@@ -1721,6 +1721,8 @@ extern void starttable(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 
     generic_start(context, element, attributes);
 
+    set_lang(context, &attributes->value[HTML_TABLE_LANG]);
+
     if ( !config_display_tables )
     {
         TABDBG(("starttable: ignoring\n"));
@@ -2772,6 +2774,8 @@ extern void starttr(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 
     generic_start(context, element, attributes);
 
+    set_lang(context, &attributes->value[HTML_TR_LANG]);
+
     if ( !config_display_tables )
     {
         TABDBG(("starttr: ignoring\n"));
@@ -2922,6 +2926,8 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     TABDBGN(("\n"));
 
     generic_start(context, element, attributes);
+
+    set_lang(context, &attributes->value[HTML_TD_LANG]);
 
     if ( !config_display_tables )
     {

@@ -58,10 +58,15 @@ static int getwebfont(fe_menu mh)
 {
     int whichfont;
 
+    whichfont = backend_getwebfont(mh->parent->displaying,
+				   mh->flags & fe_menu_flag_WIDE, mh->items[0].language, MENU_FONT, MENU_FONT);
+
+#if 0
     if (mh->flags & fe_menu_flag_WIDE)
 	whichfont = WEBFONT_SIZE(3) | WEBFONT_JAPANESE;
     else
 	whichfont = MENU_FONT;
+#endif
 
 #if UNICODE
     /* if we are claiming a wide font then always set it to Unicode encoding */

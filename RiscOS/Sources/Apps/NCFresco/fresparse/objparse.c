@@ -11,6 +11,7 @@
 #include "util.h"
 #include "memwatch.h"
 #include "htmlparser.h"
+#include "webfonts.h"
 
 #include "objects.h"
 
@@ -157,6 +158,7 @@ static rid_text_item_object *connect_object(HTMLCTX *me, rid_object_item *obj)
     if (me->aref && me->aref->first == NULL)
 	me->aref->first = nb;
     GET_ROSTYLE(nb->st);
+    nb->language = UNPACK(me->sgmlctx->tos->effects_active, LANG_NUM);
 
     /* insert parent ptr */
     obj->text_item = nb;

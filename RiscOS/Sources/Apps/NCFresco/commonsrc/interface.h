@@ -203,7 +203,8 @@ extern void frontend_saver_last_name(char *fname);
 
 typedef struct _frontend_menu_handle *fe_menu;
 typedef struct {
-    int flags;
+    char flags;
+    char language;
     char *name;
 } fe_menu_item;
 
@@ -599,12 +600,19 @@ extern be_item backend_locate_id(be_doc doc, const char *id);
 #define be_encoding_READ	(-1)
 extern int backend_doc_encoding(be_doc doc, int encoding);
 
+/* Return the language code for this item or the document if item is
+ * NULL or has no language of its own.
+ */
+extern int backend_doc_item_language(be_doc doc, be_item item);
+
 /* Functions in layout.c */
 /* Write out frame layout as a table, return the number of frames */
 
 typedef void (*be_layout_write_table_fn)(FILE *f, const char *frame_specifier, int w, int h);
 
 extern void backend_layout_write_table(FILE *f, be_doc doc, be_layout_write_table_fn fn, const char *prefix, int w, int h);
+
+extern int backend_getwebfont(be_doc doc, BOOL wide, int language, int font1, int base);
 
 #endif /* __interface_h */
 

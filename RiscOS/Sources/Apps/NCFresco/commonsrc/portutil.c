@@ -19,6 +19,10 @@
 #include "sgmlparser.h"
 #include "akbd.h"
 
+#if UNICODE
+# include "Unicode/languages.h"
+#endif
+
 #define MAX_LINE	256
 
 /* pmatch2 always does a case sensitive match and calls itself recursively */
@@ -1479,5 +1483,83 @@ void fskipline(FILE *in)
 	c = fgetc(in);
     while (c != EOF && c != '\n');
 }
+
+/* ---------------------------------------------------------------------------------------------------- */
+
+#if UNICODE
+
+typedef struct
+{
+    char name[3];
+    char code;
+} lang_spec;
+
+/*
+ * This table must be in alphabetic order of language name (2 lwtter)
+ * For now the code number must agree with the font definition table in backend.c
+ */
+
+static lang_spec languages[] =
+{
+    { lang_GREEK	/* el */, 5 },
+    { lang_ENGLISH	/* en */, 1 },	
+    { lang_HEBREW	/* iw */, 7 },
+    { lang_JAPANESE	/* ja */, 2 },
+    { lang_KOREAN	/* ko */, 4 },
+    { lang_RUSSIAN	/* ru */, 6 },
+    { lang_CHINESE	/* zh */, 3 },
+};
+
+static int lang_compare_function(const void *ain, const void *bin)
+{
+    const char *ap = (const char *) ain;
+    const lang_spec *bp = (const lang_spec *) bin;
+
+    /* DBG(("lang_compare: '%s' with '%s'\n", ap, bp->name)); */
+
+    return strncasecomp( ap, bp->name, 2 );
+}
+
+#endif
+
+int lang_name_to_num(const char *s)
+{
+#if UNICODE
+    lang_spec *matchp = NULL;
+
+    if (s && s[0])
+	matchp = bsearch(s,
+			 languages,
+			 sizeof(languages) / sizeof(languages[0]),
+			 sizeof(languages[0]),
+			 lang_compare_function);
+
+    DBG(("lang_name_to_num: '%s' returns %d\n", s, matchp ? matchp->code : 0));
+    
+    return matchp ? matchp->code : 0;
+#else
+    return NULL;
+#endif
+}
+
+const char *lang_num_to_name(int num)
+{
+#if UNICODE
+    int i;
+    char *out = "";
+    for (i = 0; i < sizeof(languages) / sizeof(languages[0]); i++)
+	if (languages[i].code == num)
+	{
+	    out = languages[i].name;
+	    break;
+	}
+
+    DBG(("lang_num_to_name: %d returns '%s'\n", num, out));
+    
+    return out;
+#endif
+}
+
+/* ---------------------------------------------------------------------------------------------------- */
 
 /* eof portutil.c */

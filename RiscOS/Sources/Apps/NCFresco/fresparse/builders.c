@@ -214,6 +214,32 @@ extern void set_font_type(SGMLCTX *context, int type)
 
 /*****************************************************************************/
 
+static int string_lang_name_to_num(const STRING *lang)
+{
+    char s[3];
+
+    s[0] = lang->bytes >= 1 ? (char) lang->ptr[0] : 0;
+    s[1] = lang->bytes >= 2 ? (char) lang->ptr[1] : 0;
+    s[2] = 0;
+	
+    return lang_name_to_num(s);
+}
+
+/* This sets the LANG_NUM field
+ */
+
+extern void set_lang(SGMLCTX *context, VALUE *lang)
+{
+    if (lang->type == value_string)
+    {
+	int code = string_lang_name_to_num(&lang->u.s);
+	if (code)
+	    SET_EFFECTS(context->tos, LANG_NUM, code);
+    }
+}
+
+/*****************************************************************************/
+
 /* Setting the LCR alignment is now potentially very common */
 
 extern void std_lcr_align(SGMLCTX *context, VALUE *align)
@@ -463,6 +489,7 @@ extern void text_item_push_word(HTMLCTX * me, rid_flag xf, BOOL space)
     if (me->aref && me->aref->first == NULL)
 	me->aref->first = nb;
     GET_ROSTYLE(nb->st);
+    nb->language = UNPACK(me->sgmlctx->tos->effects_active, LANG_NUM);
 
     PRSDBGN(("text_item_push_word: wide %d flags %x font %x\n", nb->flag & rid_flag_WIDE_FONT ? 1 : 0, nb->st.flags, nb->st.wf_index));
     
@@ -485,6 +512,8 @@ extern void text_item_push_word(HTMLCTX * me, rid_flag xf, BOOL space)
             nb->flag |= rid_flag_RINDENT;
 
 	GET_ROSTYLE(nb2->st);
+	nb2->language = UNPACK(me->sgmlctx->tos->effects_active, LANG_NUM);
+
 	rid_text_item_connect(me->rh->curstream, nb2);
     }
 
@@ -680,6 +709,7 @@ extern void text_item_push_image(HTMLCTX * me,
 	me->aref->first = nb;
 
     GET_ROSTYLE(nb->st);
+    nb->language = UNPACK(me->sgmlctx->tos->effects_active, LANG_NUM);
 
     rid_text_item_connect(me->rh->curstream, nb);
 
@@ -757,7 +787,7 @@ extern rid_aref_item *new_aref_item(HTMLCTX* me,
 
 /*****************************************************************************/
 
-extern void new_option_item(HTMLCTX * me, VALUE *value, rid_input_flags flags)
+extern void new_option_item(HTMLCTX * me, VALUE *value, VALUE *lang, rid_input_flags flags)
 {
     rid_option_item *new;
 
@@ -769,6 +799,11 @@ extern void new_option_item(HTMLCTX * me, VALUE *value, rid_input_flags flags)
 
     new->flags = flags;
     new->value = valuestringdup(value);
+
+    if (lang->type == value_string)
+	new->language = string_lang_name_to_num(&lang->u.s);
+    else
+	new->language = UNPACK(me->sgmlctx->tos->effects_active, LANG_NUM);
 
     rid_option_item_connect(me->form->last_select, new);
 }
@@ -938,6 +973,7 @@ extern void text_item_push_select(HTMLCTX * me, VALUE *name, VALUE *size, VALUE 
     if (me->aref && me->aref->first == NULL)
 	me->aref->first = nb;
     GET_ROSTYLE(nb->st);
+    nb->language = UNPACK(me->sgmlctx->tos->effects_active, LANG_NUM);
 
     rid_text_item_connect(me->rh->curstream, nb);
 }
@@ -1007,6 +1043,7 @@ extern void text_item_push_textarea(HTMLCTX * me, VALUE *name, VALUE *rows, VALU
     if (me->aref && me->aref->first == NULL)
 	me->aref->first = nb;
     GET_ROSTYLE(nb->st);
+    nb->language = UNPACK(me->sgmlctx->tos->effects_active, LANG_NUM);
 
 #if NEW_TEXTAREA
     memzone_init(&ta->default_text, MEMZONE_CHUNKS);

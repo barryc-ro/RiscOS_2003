@@ -1019,26 +1019,33 @@ extern os_error *antweb_doc_ensure_font( be_doc doc, int whichfont )
 
 int antweb_getwebfont(antweb_doc *doc, rid_text_item *ti, int base)
 {
-    return antweb_getwebfont2(doc, ti->flag, ti->st.wf_index, base);
+    return backend_getwebfont(doc, ti->flag & rid_flag_WIDE_FONT, ti->language, ti->st.wf_index, base);
 }
 
-int antweb_getwebfont2(antweb_doc *doc, rid_flag text_flags, int font1, int base)
+int backend_getwebfont(be_doc doc, BOOL wide, int language, int font1, int base)
 {
     int whichfont = -1;
 
 #if UNICODE
-    if (text_flags & rid_flag_WIDE_FONT)
+    if (wide)
     {
-	const char *lang = encoding_default_language(doc->rh->encoding);
-	if (strcasecomp(lang, lang_JAPANESE) == 0)
-	    whichfont = (font1 & WEBFONT_SIZE_MASK) | WEBFONT_JAPANESE;
-	else if (strcasecomp(lang, lang_CHINESE) == 0)
-	    whichfont = (font1 & WEBFONT_SIZE_MASK) | WEBFONT_CHINESE;
-	else if (strcasecomp(lang, lang_KOREAN) == 0)
-	    whichfont = (font1 & WEBFONT_SIZE_MASK) | WEBFONT_KOREAN;
+	static int fonts[] =
+	{
+	    -1,	/* unknown/any */
+	    -1, /* WEBFONT_ENGLISH */
+	    WEBFONT_JAPANESE,
+	    WEBFONT_CHINESE,
+	    WEBFONT_KOREAN,
+	    WEBFONT_GREEK,
+	    WEBFONT_RUSSIAN,
+	    WEBFONT_HEBREW
+	};
+
+	int lang = language ? language : doc->rh->language_num;
+	whichfont = (font1 & WEBFONT_SIZE_MASK) | fonts[lang];
     }
 #else
-    if (text_flags & rid_flag_WIDE_FONT)
+    if (wide)
 	whichfont = (font1 & WEBFONT_SIZE_MASK) | WEBFONT_JAPANESE;
 #endif
 
@@ -1069,7 +1076,7 @@ int antweb_getwebfont2(antweb_doc *doc, rid_flag text_flags, int font1, int base
 
 #if UNICODE && defined(RISCOS)
     /* if we are claiming a wide font then set it to the appropriate encoding */
-    if (text_flags)
+    if (wide)
 	webfont_set_wide_format(whichfont);
 #endif
 
@@ -4413,6 +4420,13 @@ extern int backend_doc_encoding(be_doc doc, int encoding)
     }
 
     return old_encoding;
+}
+#endif
+
+#if UNICODE
+extern int backend_doc_item_language(be_doc doc, be_item ti)
+{
+    return ti && ti->language ? ti->language : doc ? doc->rh->language_num : 0;
 }
 #endif
 

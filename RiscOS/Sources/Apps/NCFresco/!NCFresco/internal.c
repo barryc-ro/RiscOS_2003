@@ -160,10 +160,13 @@ static void write_url_with_breaks(FILE *f, const char *url)
 static os_error *fe_version_write_file(FILE *f, be_doc doc, const char *query)
 {
     char *qlink, *qtitle;
-
+    const char *lang;
+    
     qlink = extract_value(query, "url=");
     qtitle = extract_value(query, "title=");
 
+    lang = lang_num_to_name(backend_doc_item_language(doc, NULL));
+    
     fputs(msgs_lookup("versionT"), f);
     fprintf(f, msgs_lookup("version1"), ""/*fresco_version*/);
 
@@ -177,7 +180,7 @@ static os_error *fe_version_write_file(FILE *f, be_doc doc, const char *query)
 	backend_doc_info(doc, NULL, NULL, &url, &title);
 
 	if (title)
-	    fprintf(f, msgs_lookup("version2"), title);
+	    fprintf(f, msgs_lookup("version2"), lang, title);
 
 	if (should_we_display_url(url))
 	{
@@ -212,13 +215,13 @@ static os_error *fe_version_write_file(FILE *f, be_doc doc, const char *query)
 	}
 
 	if ((s = backend_check_meta(doc, "author")) != NULL)
-	    fprintf(f, msgs_lookup("version6"), s);
+	    fprintf(f, msgs_lookup("version6"), lang, s);
 
 	if ((s = backend_check_meta(doc, "description")) != NULL)
-	    fprintf(f, msgs_lookup("version7"), s);
+	    fprintf(f, msgs_lookup("version7"), lang, s);
 
 	if ((s = backend_check_meta(doc, "copyright")) != NULL)
-	    fprintf(f, msgs_lookup("version8"), s);
+	    fprintf(f, msgs_lookup("version8"), lang, s);
     }
 
     if (qlink)
@@ -238,7 +241,7 @@ static os_error *fe_version_write_file(FILE *f, be_doc doc, const char *query)
 	}
 
 	if (qtitle)
-	    fprintf(f, msgs_lookup("version2"), qtitle);
+	    fprintf(f, msgs_lookup("version2"), lang, qtitle);
 
 	if (link != qlink)
 	    mm_free(link);

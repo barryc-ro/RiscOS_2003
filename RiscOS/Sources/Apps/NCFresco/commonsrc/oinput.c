@@ -315,7 +315,7 @@ void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
 
 	antweb_doc_ensure_font( doc, ALT_FONT );
 
-	oimage_size_image(doc, button_text(ii), &ii->ww, &ii->hh, ii->data.image.flags, ti->flag, doc->scale_value, fwidth, &width, &height);
+	oimage_size_image(doc, button_text(ii), &ii->ww, &ii->hh, ii->data.image.flags, ti, doc->scale_value, fwidth, &width, &height);
 
 	width += ii->bw*2*2;
 	height += ii->bw*2*2;
@@ -392,7 +392,7 @@ void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
 	    if (fl & image_flag_REALTHING)
 		ii->data.button.flags |= rid_image_flag_REAL;
 
-	    oimage_size_image(doc, t, &ii->ww, &ii->hh, ii->data.button.flags, ti->flag, doc->scale_value, fwidth, &width, &height);
+	    oimage_size_image(doc, t, &ii->ww, &ii->hh, ii->data.button.flags, ti, doc->scale_value, fwidth, &width, &height);
 
 	    ti->width = width;
 	    ti->max_up = (height - webfonts[WEBFONT_BUTTON].max_down + webfonts[WEBFONT_BUTTON].max_up)/2;
@@ -441,7 +441,7 @@ void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
 	    if (fl & image_flag_REALTHING)
 		ii->data.radio.flags |= rid_image_flag_REAL;
 
-	    oimage_size_image(doc, "*", &ii->ww, &ii->hh, ii->data.radio.flags, ti->flag, doc->scale_value, fwidth, &width, &height);
+	    oimage_size_image(doc, "*", &ii->ww, &ii->hh, ii->data.radio.flags, ti, doc->scale_value, fwidth, &width, &height);
 
 	    width += ii->bw*2*2;
 	    height += ii->bw*2*2;

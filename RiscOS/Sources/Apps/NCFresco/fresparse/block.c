@@ -60,6 +60,8 @@ extern void startdiv (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 {
     generic_start (context, element, attributes);
 
+    set_lang(context, &attributes->value[HTML_DIV_LANG]);
+
     std_lcr_align(context, &attributes->value[HTML_DIV_ALIGN]);
 }
 
@@ -83,6 +85,8 @@ extern void startcentre (SGMLCTX * context, ELEMENT * element, VALUES * attribut
 extern void startpre (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 {
     generic_start (context, element, attributes);
+
+    set_lang(context, &attributes->value[HTML_PRE_LANG]);
 
 #ifdef STBWEB
     add_fixed_to_font(context);

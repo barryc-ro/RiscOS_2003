@@ -55,6 +55,15 @@ static char *webfont_font_name(int n, char *buffer)
 	case WEBFONT_SPECIAL_TYPE_KOREAN:
 	    strcpy(buffer, config_font_names[16]);
 	    break;
+	case WEBFONT_SPECIAL_TYPE_RUSSIAN:
+	    strcpy(buffer, config_font_names[17]);
+	    break;
+	case WEBFONT_SPECIAL_TYPE_GREEK:
+	    strcpy(buffer, config_font_names[18]);
+	    break;
+	case WEBFONT_SPECIAL_TYPE_HEBREW:
+	    strcpy(buffer, config_font_names[19]);
+	    break;
 
 	default:
 	    return NULL;
@@ -318,13 +327,26 @@ int webfont_font_width(int f, const char *s)
 
 int webfont_split_point_char(int f, const char *s, int width, int c, int *segwidth)
 {
-    int coords[5];
+    int coords[9];
     const char *split;
 
-    memset(coords, 0, 4*sizeof(coords[0]));
+    memset(coords, 0, sizeof(coords));
     coords[4] = c;
 
-    _swix(Font_ScanString, _INR(0,5) | _OUT(1) | _OUT(3),
+#if 0
+    DBG(("split_point: "));
+    DBG(("splitchar %d f=%d s %p='%s' flags=%x w=%d h=%d coords=%p split=%p segwidth=%p",
+	 c,
+	 f == -1 ? 0 : webfonts[f].handle,
+	 s, s,
+	 (f == -1 ? 0 : (1<<8)) | (1<<5),	/* pass handle, use coord block */
+	 width * MILIPOINTS_PER_OSUNIT, 400 * MILIPOINTS_PER_OSUNIT,
+	 coords,
+	 &split,
+	 segwidth));
+#endif
+    
+    _swix(Font_ScanString, _INR(0,5) | _OUT(1) | (segwidth ? _OUT(3) : 0),
 	  f == -1 ? 0 : webfonts[f].handle,
 	  s,
 	  (f == -1 ? 0 : (1<<8)) | (1<<5),	/* pass handle, use coord block */
@@ -333,7 +355,7 @@ int webfont_split_point_char(int f, const char *s, int width, int c, int *segwid
 	  &split,
 	  segwidth);
 
-/*  DBG(("split_point: width %d inptr %p outptr %p\n", width, s, split)); */
+    /* DBG((" - split = %p\n", split)); */
 
     return split ? split - s : -1;
 }

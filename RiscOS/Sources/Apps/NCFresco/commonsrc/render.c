@@ -589,9 +589,15 @@ static os_error *paint_fn(const char *text, BOOL last, void *handle)
     paint_info *pi = handle;
     os_error *e;
 
+    /* DBG(("paint_fn: paint '%s' at %d,%d\n", text, pi->x, pi->y)); */
+
     e = (os_error *)_swix(Font_Paint, _INR(0,5),
 			  pi->fh, text, pi->flags, pi->x, pi->y, pi->coords);
 
+#if DEBUG
+    if (e) DBG(("paint_fn: paint e %x '%s'\n", e->errnum, e->errmess));
+#endif
+    
     if (!e && !last)
     {
 	int w, h;
@@ -600,7 +606,11 @@ static os_error *paint_fn(const char *text, BOOL last, void *handle)
 			      pi->fh, text, pi->flags, INT_MAX, INT_MAX, &w, &h);
 	
 	pi->x += w;
-	pi->y += h;
+	/* pi->y += h; */
+
+#if DEBUG
+	if (e) DBG(("paint_fn: scan e %x '%s'\n", e->errnum, e->errmess));
+#endif
     }
 
     return e;

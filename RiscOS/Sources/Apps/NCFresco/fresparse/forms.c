@@ -310,6 +310,7 @@ extern void startinput (SGMLCTX * context, ELEMENT * element, VALUES * attribute
 	if (me->aref && me->aref->first == NULL)
 	    me->aref->first = nb;
 	GET_ROSTYLE(nb->st);
+	nb->language = UNPACK(me->sgmlctx->tos->effects_active, LANG_NUM);
 
 	rid_text_item_connect(me->rh->curstream, nb);
     }
@@ -320,6 +321,8 @@ extern void startinput (SGMLCTX * context, ELEMENT * element, VALUES * attribute
 extern void startselect (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 {
     generic_start (context, element, attributes);
+
+    set_lang(context, &attributes->value[HTML_SELECT_LANG]);
 
     text_item_push_select(htmlctxof(context),
 			  &attributes->value[HTML_SELECT_NAME],
@@ -384,8 +387,9 @@ extern void startoption (SGMLCTX * context, ELEMENT * element, VALUES * attribut
 
     new_option_item(me,
 		    &attributes->value[HTML_OPTION_VALUE],
+		    &attributes->value[HTML_OPTION_LANG],
 		    (attributes->value[HTML_OPTION_DISABLED].type != value_none ? rid_if_DISABLED : 0) +
-		    (attributes->value[HTML_OPTION_SELECTED].type != value_none ? rid_if_CHECKED : 0) );
+		    (attributes->value[HTML_OPTION_SELECTED].type != value_none ? rid_if_CHECKED : 0));
 
     ASSERT(me->last_mode == HTMLMODE_BOGUS);
 

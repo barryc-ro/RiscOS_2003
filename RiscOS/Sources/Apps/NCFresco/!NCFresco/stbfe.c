@@ -3088,7 +3088,7 @@ os_error *fe_hotlist_add(fe_view v)
     tb_status_button(fevent_HOTLIST_ADD, tb_status_button_ACTIVE);
     tb_status_button(fevent_HOTLIST_ADD, tb_status_button_UNPRESSED);
 
-    frontend_complain(hotlist_add(url, title));
+    frontend_complain(hotlist_add(url, title, lang_num_to_name(backend_doc_item_language(v->displaying, NULL))));
 
     while (time(NULL) < t)
 	;

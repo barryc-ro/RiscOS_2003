@@ -1,3 +1,5 @@
+
+
 /* htmlparser.h - HTML context structure to go with SGMLCTX */
 
 #ifndef __htmlparser_h
@@ -123,7 +125,7 @@ extern void incomplete_finish (SGMLCTX * context, ELEMENT * element);
 /* builders.c */
 /* Out of date: No more than MAX_STRING character should result from formatting. */
 /* Use %.*s formatting if uncertain */
-extern void new_option_item(HTMLCTX * me, VALUE *value, rid_input_flags flags);
+extern void new_option_item(HTMLCTX * me, VALUE *value, VALUE *lang, rid_input_flags flags);
 extern void pseudo_html(HTMLCTX *context, const char *fmt, ... );
 extern void select_pre_mode(HTMLCTX *context);
 extern void select_fmt_mode(HTMLCTX *context);
@@ -196,6 +198,7 @@ extern void text_item_push_input(HTMLCTX * me, int flags,
 				 VALUE *numbers,
 				 VALUE *selimage);
 extern void push_fake_search_form(HTMLCTX * me, VALUE *prompt);
+extern void set_lang(SGMLCTX *context, VALUE *lang);
 
 /* hparse.c */
 

@@ -138,7 +138,7 @@ struct config_str
 
     int font_sizes[7];
 
-    char *font_names[17];
+    char *font_names[20];
 
     int mode_keyboard;
     int mode_cursor_toolbar;

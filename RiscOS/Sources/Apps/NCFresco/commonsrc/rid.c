@@ -788,6 +788,8 @@ extern void rid_free(rid_header *rh)
     if (rh->refreshurl)
 	mm_free(rh->refreshurl);
 
+    mm_free(rh->language);
+    
     mm_free(rh);
 }
 

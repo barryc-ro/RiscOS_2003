@@ -17,6 +17,8 @@ extern void starthtml (SGMLCTX * context, ELEMENT * element, VALUES * attributes
 {
     generic_start (context, element, attributes);
 
+    set_lang(context, &attributes->value[HTML_HTML_LANG]);
+    
     htmlctxof(context)->done_auto_body = TRUE;
 
     TASSERT(htmlctxof(context)->aref == NULL);
@@ -245,6 +247,8 @@ extern void startfont (SGMLCTX * context, ELEMENT * element, VALUES * attributes
 {
     HTMLCTX *me = htmlctxof(context);
     int colour = -1;
+
+    set_lang(context, &attributes->value[HTML_FONT_LANG]);
 
     generic_start (context, element, attributes);
 

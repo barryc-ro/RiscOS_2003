@@ -213,7 +213,6 @@ extern int antweb_doc_abort_all(int level);
 extern os_error *antweb_trigger_fetching(antweb_doc *doc);
 extern void antweb_uncache_image_info(antweb_doc *doc);
 extern int antweb_getwebfont(antweb_doc *doc, rid_text_item *ti, int base);
-extern int antweb_getwebfont2(antweb_doc *doc, rid_flag text_flags, int font1, int base);
 
 /* backend.c */
 
