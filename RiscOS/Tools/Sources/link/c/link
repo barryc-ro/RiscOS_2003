@@ -12,6 +12,7 @@
 #include <errno.h>
 #include <signal.h>
 #include <string.h>
+#include <assert.h>
 
 #ifdef __STDC__
 #  include <stdlib.h>
@@ -42,17 +43,13 @@ extern int errno;
 #include "msgnos.h"
 #include "aof.h"
 #include "prgname.h"
+#include "bytesex.h"
 
 #ifdef TARGET_HAS_SYMDEFS
 #include "symdefs.h"
 #endif
 
-#ifdef LINKING_ON_ACORN_RISC_OS
 #include "dem.h"
-#include <assert.h>
-#else
-#include "dem.h"
-#endif
 
 #ifdef TARGET_HAS_AOUT
 #  ifdef TARGET_IS_UNIX
@@ -85,7 +82,7 @@ extern int errno;
 #  define SELF    "ARM Linker"
 #endif
 #ifndef IDFNSTR
-#  define IDFNSTR " Version 5.18 <beta+ release>"
+#  define IDFNSTR " Version 5.20 <beta+ release>"
 #endif            /* NB - leading space is needed */
 #ifndef Module_Date
 #  define BUILDDATE __DATE__
@@ -570,6 +567,7 @@ static struct globalfile fout;
 
 
 static int reversing_bytes = 0;
+static int magic_encode_init = -1;
 
 static int32 hv(int32 v)                     /* to host value... */
 {   /* Return v with the same endian-ness as the host */
@@ -608,43 +606,101 @@ static unsigned short tvs(int32 v)
     return (unsigned short) v;
 }
 
+/* Return 1 if this host is big-endian, 0 if it is little-endian */
+static int find_host_endianness(void)
+{
+    static int endianness = -1;
+
+    if (endianness == -1) {
+        int old_state = bytesex_reversing();
+        bytesex_reverse_auto(bytesex_WANT_LITTLE_ENDIAN);
+        endianness = !!bytesex_reversing();
+        bytesex_reverse(old_state);
+    }
+
+    return endianness;
+}
+
+static int set_object_endianness(int host_order_is_not_ok)
+{
+    if (magic_encode_init == -1) {
+        /* This is the first time a request to set endianness has occurred
+         * Accept the request, but ensure future requiests are for the same thing.
+         */
+        reversing_bytes = magic_encode_init = host_order_is_not_ok;
+        bytesex_reverse(reversing_bytes);
+        reversing_bytes = bytesex_reversing();
+        return 1;
+    }
+    else if (magic_encode_init != host_order_is_not_ok) {
+        bytesex_reverse(reversing_bytes);
+        return 0;
+    }
+    else {
+        bytesex_reverse(reversing_bytes);
+        return 1;
+    }
+}
+
+static int set_object_endianness_explicit(int file_is_big_endian)
+{
+    if (file_is_big_endian) {
+        return set_object_endianness(!find_host_endianness());
+    }
+    else {
+        return set_object_endianness(find_host_endianness());
+    }
+}
+
 #ifdef TARGET_HAS_AOF
-
-static unsigned32 cf_magic = 0;        /* CF_MAGIC in target byte order */
-
 static int is_cf_magic(int32 v)
 {
-    if (cf_magic == 0)
-    {   if (v == CF_MAGIC) {cf_magic = v;  return 1;}
-        reversing_bytes = 1;
-        if (hv(v) == CF_MAGIC) {cf_magic = v;  return 1;}
-        reversing_bytes = 0;
+    int was_reversing;
+
+    if (v == CF_MAGIC) {
+        return set_object_endianness(0); /* current host order is OK */
     }
-    else if (v == cf_magic)
-        return 1;
+
+    was_reversing = reversing_bytes;
+    reversing_bytes = 1;
+    v = hv(v) == CF_MAGIC;
+    reversing_bytes = was_reversing;
+    if (v) {
+        return set_object_endianness(1); /* current host order is not OK */
+    }
+
+    /* Not CF_MAGIC ! */
     return 0;
 }
 
 static int is_reversed_cf_magic(int32 v)
-{   int was_reversing = reversing_bytes;
-    int rc = 0;
-    reversing_bytes = 1;
-    if (hv(v) == cf_magic) rc = 1;
-    reversing_bytes = was_reversing;
-    return rc;
+{
+    if (reversing_bytes) {
+        return (hv(v) == CF_MAGIC);
+    }
+    else {
+        reversing_bytes = 1;
+        v ^= hv(CF_MAGIC);
+        reversing_bytes = 0;
+        return (v == 0);
+    }
 }
+#endif /* TARGET_HAS_AOF */
 
+#if defined(TARGET_HAS_AOF) || defined(TARGET_HAS_ELF)
 static int is_little_endian(void)
 {
+    int32 cf_magic = hv(CF_MAGIC);
     return *((unsigned char *)&cf_magic) == (CF_MAGIC & 255);
 }
+#endif
 
+#ifdef TARGET_HAS_AOF
 static void target_increment(int32 *ip, int32 i)
 {
     *ip = tv(hv(*ip) + i);
 }
-
-#endif /* TARGET_HAS_AOF */
+#endif
 
 static int cistrcmp(const char *s, const char *t)
 {   int sch, tch;
@@ -1192,7 +1248,7 @@ static void setobject(struct oentry *oep)
     if ((sectinram = oep->objbuffer) != NULL)
     {   sectoffset = oep->offset;
         sectsize = oep->size;
-        curfile = oep->fep;
+        curfile = oep->fep;;
     }
     else
         setfilesection(oep->fep, oep->offset, oep->size);
@@ -2138,10 +2194,10 @@ static int32 filetype(struct fentry *fep)
             }
             switch (e->e_ident[EI_DATA]) {
               case ELFDATA2LSB:
-                  reversing_bytes = 0;
-                  break;
               case ELFDATA2MSB:
-                  msg(fatal_badelf_encoding(fep->fname,"2's complement big-endian"));
+                  if (!set_object_endianness_explicit(e->e_ident[EI_DATA] == ELFDATA2MSB))
+                      msg(fatal_byteorder(fep->fname));
+                  break;
               case ELFDATANONE:
                   msg(fatal_badelf_encoding(fep->fname,"Invalid data encoding"));
               default:
@@ -2648,30 +2704,26 @@ static void load1_elf(struct oentry *oep)
     int32 nrelocs;
 
     mapped_elf_section *msec;
-    mapped_elf_section *symtsection;
     mapped_elf_section *shstrt;
     mapped_elf_section *strt;
 
-    symtsection = NULL;
     nsections = hv(elf->e_shnum);
     shstrgsectionid = hv(elf->e_shstrndx);
     strgsectionid = SHN_UNDEF;
 
-    if (nsections == 0 || elf->e_shoff == 0 || hv(elf->e_shentsize) < sizeof(Elf32_Shdr)) {
-        /* We don't like this file at all */
-        msg("1Ignoring useless ELF input file '%s'", oep->fep->fname);
-        return;
+    if (nsections == 0 || elf->e_shoff == 0) {
+        msg(fatal_badelf_file(oep->fep->fname));
+    }
+    if (hv(elf->e_shentsize) < sizeof(Elf32_Shdr)) {
+        msg(fatal_badelf_badsh(oep->fep->fname));
     }
 
     mark_stack();
 
     /* Start by loading the section header table */
-    if (hv(elf->e_shentsize) < sizeof(Elf32_Shdr)) {
-        msg("3ELF object file %s does not contain a valid section header table", oep->fep->fname);
-    }
     sections = elf_load_array(hv(elf->e_shoff), sizeof(Elf32_Shdr), hv(elf->e_shentsize), nsections);
     if (!sections) {
-        msg("3ELF object file %s does not contain a valid section header table", oep->fep->fname);
+        msg(fatal_badelf_badsh(oep->fep->fname));
     }
 
     /* Now construct the internal cache of the sections, mapping all the ones we are going to need
@@ -2690,25 +2742,25 @@ static void load1_elf(struct oentry *oep)
         if (type == SHT_SYMTAB) {
             /* Ensure we have an array of symbols for the symbol table */
             if (entsize == 0 || shsize == 0) {
-                msg("3ELF object file %s contains an invalid symbol table in section %ld", oep->fep->fname, num);
+                msg(fatal_badelf_badsymt(oep->fep->fname, num));
             }
             msec[num].count = shsize / entsize;
             msec[num].data = elf_load_array(shoffset, sizeof(Elf32_Sym), entsize, msec[num].count);
             msec[num].base = nsyms;
             nsyms += msec[num].count;
-            if (symtsection) {
-              msg("3ELF object file %s contains multiple symbol tables", oep->fep->fname);
-            }
-            symtsection = msec + num;
         }
         else if (type == SHT_REL || type == SHT_RELA) {
             /* Automatically upgrade all Elf32_Rel types to Elf32_Rela with r_addend=0 */
             if (entsize == 0 || shsize == 0) {
-                msg("3ELF object file %s contains an invalid relocation table in section %ld", oep->fep->fname, num);
+                msec[num].count = 0;
+                msec[num].data = NULL;
+                msec[num].type = SHT_RELA;
             }
-            msec[num].count = shsize / entsize;
-            msec[num].data = elf_load_array(shoffset, sizeof(Elf32_Rela), entsize, msec[num].count);
-            msec[num].type = SHT_RELA;
+            else {
+                msec[num].count = shsize / entsize;
+                msec[num].data = elf_load_array(shoffset, sizeof(Elf32_Rela), entsize, msec[num].count);
+                msec[num].type = SHT_RELA;
+            }
         }
         else if (type == SHT_STRTAB) {
             msec[num].data = map(hv(sections[num].sh_offset), msec[num].size);
@@ -2737,7 +2789,7 @@ static void load1_elf(struct oentry *oep)
       const int is_code  = (flags & SHF_EXECINSTR) != 0;
 
       if (verboseflag >= 2)
-          msg("0Section %ld has name %s, flags: %#lx  type: %#lx",
+          msg("0    Section %ld has name %s, flags: %#lx  type: %#lx",
               num, elf_string(shstrt, hv(sp->sh_name)), flags, type);
 
       /* The read-only attribute can be done easily and generically */
@@ -2773,10 +2825,6 @@ static void load1_elf(struct oentry *oep)
           attributes |= AOF_ABSAT;
         }
 
-        if (verboseflag >= 2)
-            msg("0addarea(%s, offset %#lx, size %#lx, attributes %#lx",
-                *id?id:"ELF$$NONAME", hv(sp->sh_offset), hv(sp->sh_size), attributes);
-
         if (alignment != 0) {
             int32 aalign = 0;
             for (aalign = 0; aalign < 32; ++aalign) {
@@ -2793,7 +2841,7 @@ static void load1_elf(struct oentry *oep)
           hv(sp->sh_size), USE_REL_CACHE, nrelocs, attributes, num);
         if (ai) {
           if (nrelocs) {
-            ai->relocp = (Elf32_Rela *) salloc(sizeof(Elf32_Rela) * nrelocs);
+            ai->relocp = (Elf32_Rela *) halloc(sizeof(Elf32_Rela) * nrelocs);
             ai->cachedrelocs = (aof_reloc *) halloc(sizeof(aof_reloc) * nrelocs);
             elf_match_relocs(sections, nsections, msec, num, ai->relocp);
           }
@@ -2891,8 +2939,8 @@ static void load1_elf(struct oentry *oep)
             if (num != 0) {
                 char *name = elf_string(strt, hv(sy->st_name));
 
-                if (verboseflag) {
-                    msg("0Symbol %ld (%s) %s%s%s%s%s (STT %#x, STB %#x)", num, name,
+                if (verboseflag >= 2) {
+                    msg("0    Symbol %ld (%s) %s%s%s%s%s (STT %#x, STB %#x)", num, name,
                         (attributes & SYM_WEAKAT) ? "weak " : "",
                         (attributes & SYM_ABSAT) ? "absolute " : "",
                         (attributes & SYM_THUMBAT) ? "thumb " : "",
@@ -2910,97 +2958,222 @@ static void load1_elf(struct oentry *oep)
         }
     }
 
-    /* Transform the Elf32_Rela array into an aof_reloc array in each area */
-    for (num = 0; num < nsections; ++num) if (oep->arealist[num]) {
-        struct aentry *aep = oep->arealist[num];
-        aof_reloc *ar = aep->cachedrelocs;
-        int32 rn;
+    /* No need to transform the relocations to AOF - we'll just alter the relocator to be able
+     * to do just-in-time translation in load2().
+     */
 
-        nrelocs = aep->relocs;
-        msg("0Relocations for area %s total %ld", aep->name, nrelocs);
-        for (rn = 0; rn < nrelocs; ++rn) {
-            Elf32_Rela *ra = aep->relocp + rn;
-            int ok = 0;
-            unsigned32 sid = REL_TYPE2 | (unsigned32) rel2_id(ELF32_R_SYM(ra->r_info));
-            msg("0  Relocation %ld: offset %#06x: %#04x: addend %#010x",
-                rn, ra->r_offset, ELF32_R_TYPE(ra->r_info), ra->r_addend);
-            msg("0    %s  (S = %s)", elf_relocation_type_name(ELF32_R_TYPE(ra->r_info)),
-                oep->numtosym[ELF32_R_SYM(ra->r_info)]->name);
-            ar->rel_offset = ra->r_offset;
-            ar->rel_flags = 0;
-
-            switch (ELF32_R_TYPE(ra->r_info)) {
-                case R_ARM_NONE      : /* Any                  No relocation */
-                    --ar;
-                    --aep->relocs;
-                    ok = 1;
-                    break;
-                case R_ARM_PC24      : /* ARM B/BL             S - P + A */
-                    ar->rel_flags = sid | REL_INSTR | REL_R | REL_A | rel_II(1);
-                    ok = 1;
-                    break;
-                case R_ARM_ABS32     : /* 32-bit word          S + A */
-                    ar->rel_flags = sid | REL_LONG | REL_A;
-                    ok = 1;
-                    break;
-                case R_ARM_REL32     : /* 32-bit word          S - P + A */
-                    ar->rel_flags = sid | REL_LONG | REL_A | REL_R;
-                    ok = 1
-                    break;
-                case R_ARM_PC13      : /* ARM LDR r,[pc,...]   S - P + A */
-                    ar->rel_flags = sid | REL_INSTR | REL_A | REL_R | rel_II(1);
-                    ok = 1;
-                    break;
-                case R_ARM_ABS16     : /* 16-bit halfword      S + A */
-                    ar->rel_flags = sid | REL_SHORT | REL_A;
-                    ok = 1;
-                    break;
-                case R_ARM_ABS12     : /* ARM LDR/STR          S + A */
-                    ar->rel_flags = sid | REL_INSTR | rel_II(1) | REL_A;
-                    ok = 1;
-                    break;
-                case R_ARM_THM_ABS5  : /* Thumb LDR/STR        S + A */
-                    break;
-                case R_ARM_ABS8      : /* 8-bit byte           S + A */
-                    ar->rel_flags = sid | REL_BYTE | REL_A;
-                    ok = 1;
-                    break;
-                case R_ARM_SBREL32   : /* Word                 S - B + A */
-                    ar->rel_flags = sid | REL_LONG | REL_B | REL_A;
-                    ok = 1;
-                    break;
-                case R_ARM_THM_PC22  : /* Thumb BL pair        S - P + A */
-                    break;
-                case R_ARM_THM_PC8   : /* Thumb LDR r,[pc,...] S - P + A */
-                    break;
-                case R_ARM_AMP_VCALL9: /* AMP VCALL            S - B + A */
-                    break;
-                case R_ARM_SWI24     : /* ARM SWI              S + A */
-                    ar->rel_flags = sid | REL_LONG | REL_A;
-                    ok = 1;
-                    break;
-                case R_ARM_THM_SWI8  : /* Thumb SWI            S + A */
-                    break;
-                case R_ARM_XPC25     : /* ARM BLX              S - P + A */
-                    break;
-                case R_ARM_THM_XPC22 : /* Thumb BLX pair       S - P + A */
-                    break;
-            }
-
-            if (!ok) {
-                msg("3Unsupported ARM ELF relocation type %d", (int) ELF32_R_TYPE(ra->r_info));
-            }
-            else {
-                ++ar;
-            }
-        }
-    }
 
     pop_stack();
 #else
     UNUSED(oep);
 #endif
 }
+
+#ifdef TARGET_HAS_ELF
+/*
+ * Perform processing of values, performing sign-extension and trapping of underflow and overflow if necessary
+ * The addend is the r_addend field of an Elf32_Rela relocation. The subend is the "- P" part of the relocation
+ * which needs to be applied here when converting to an AOF relocation to make the relocation be relative to
+ * the start of the area containing the data instead of relative to the position of the instruction inself.
+ */
+static int32 elf_reloc_addend(int32 instr, int32 addend, int32 subend, int signextend, int msb, int unitsshift)
+{
+    int32 r, mask, check;
+
+    /* Firstly, split the value to be changed from the instruction */
+    if (msb < 31) {
+      mask = (int32) ((1L << msb) - 1);
+    }
+    else {
+      mask = 0xffffffff;
+    }
+    r = instr & mask;
+    instr ^= r;
+
+    /* Sign-extend if necessary */
+    if (msb < 31 && signextend) {
+      int shift = 31 - msb;
+      r = (r << shift) >> shift;
+    }
+
+    /* Convert units to bytes if not already bytes (e.g. R_ARM_PC24 encodes signed numbers of words) */
+    /* Shift by negative amount is undefined behaviour, so trap negative unit shifts explicitly      */
+    if (unitsshift > 0) {
+      r <<= unitsshift;
+    }
+    else if (unitsshift != 0) {
+      r >>= -unitsshift;
+    }
+
+    /* Add the addend, subtract the subend */
+    r += addend;
+    r -= subend;
+
+    /* Convert back to original units */
+    if (unitsshift > 0) {
+      r >>= unitsshift;
+    }
+    else if (unitsshift != 0) {
+      r <<= unitsshift;
+    }
+
+    check = (r & ~mask);
+    if (check != 0) {
+      /* Bits were set - potential overflow or underflow - were ALL of them set (if so, it was OK) ? */
+      if ((check | mask) != 0xffffffff) {
+        /* Some but not all - therefore, there was an overflow or underflow */
+        msg(fatal_badelf_ovun);
+      }
+    }
+
+    /* Check bit 31 and bit 31 - unitsshift are the same value if the value was signed? Shouldn't need to. */
+
+    /* Merge new value back into the instruction */
+    return instr | (r & mask);
+}
+
+/* Translate an ELF relocation into an AOF relocation.  Any r_addend processing may be done here.
+ * but if the entire relocation becomes unrequired, return an indication that the reloc should be junked.
+ *
+ * If the aof_reloc is filled in, return 0.
+ * If the aof_reloc is not required, return 1.
+ * If the aof_reloc cannot be generated due to lack of support for the relocation type, do not return.
+ *
+ */
+static int elf_translate_relocation(aof_reloc *aofr, Elf32_Rela *elfr, struct aentry *aep, char *area, int32 size)
+{
+    int result = -1;
+    int32 instrword, *pinstr, temp;
+    unsigned32 sid = REL_TYPE2 | (unsigned32) rel2_sid(ELF32_R_SYM(elfr->r_info));  /* Basic common flags */
+    if (verboseflag >= 4) {
+        msg("0  Relocation: offset %#06x: %#04x: addend %#010x",
+            elfr->r_offset, ELF32_R_TYPE(elfr->r_info), elfr->r_addend);
+        msg("0    %s  (S = %s)", elf_relocation_type_name(ELF32_R_TYPE(elfr->r_info)),
+          aep->oep->numtosym[ELF32_R_SYM(elfr->r_info)]->name);
+    }
+    aofr->rel_offset = elfr->r_offset;
+    if (aofr->rel_offset < 0 || aofr->rel_offset >= size) {
+        msg(fatal_badelf_reloc(aep->oep->fep->fname,aep->name));
+    }
+    aofr->rel_flags = 0;
+    pinstr = (int32 *) (area + (aofr->rel_offset & ~3));
+    instrword = hv(*pinstr);
+
+    switch (ELF32_R_TYPE(elfr->r_info)) {
+        case R_ARM_NONE      : /* Any                  No relocation */
+            result = 1;
+            break;
+        case R_ARM_PC24      : /* ARM B/BL             S - P + A */
+            aofr->rel_flags = sid | REL_INSTR | REL_R | REL_A | rel_II(1);
+            instrword = elf_reloc_addend(instrword, elfr->r_addend, aofr->rel_offset, 1, 23, 2);
+            result = 0;
+            break;
+        case R_ARM_ABS32     : /* 32-bit word          S + A */
+            aofr->rel_flags = sid | REL_LONG | REL_A;
+            instrword += elfr->r_addend;
+            result = 0;
+            break;
+        case R_ARM_REL32     : /* 32-bit word          S - P + A */
+            aofr->rel_flags = sid | REL_LONG | REL_A | REL_R;
+            instrword = elf_reloc_addend(instrword, elfr->r_addend, aofr->rel_offset, 0, 31, 0);
+            result = 0;
+            break;
+        case R_ARM_PC13      : /* ARM LDR r,[pc,...]   S - P + A */
+            aofr->rel_flags = sid | REL_INSTR | REL_A | REL_R | rel_II(1);
+            temp = instrword & 0xFFF;
+            if (instrword & (1<<23)) {
+                temp = -temp; /* Perform sign management, eliminates the "-0" value */
+            }
+            instrword &= 0xFF7FF000;
+            temp = elf_reloc_addend(temp, elfr->r_addend, aofr->rel_offset, 1, 12, 0);
+            if (temp == 0x1000) {
+                /* Out of range: you cannot represent -4096 in signed 1s complement */
+                msg(fatal_badelf_ovun);
+            }
+            if (temp & 1000) { /* if result was negative */
+                instrword |= 1<<23;
+                temp = -((temp << 20) >> 20);
+            }
+            instrword |= (temp & 0xFFF);
+            result = 0;
+            break;
+        case R_ARM_ABS16     : /* 16-bit halfword      S + A */
+            aofr->rel_flags = sid | REL_SHORT | REL_A;
+            if (aofr->rel_offset & 2) {
+                /* Misaligned relocation */
+                instrword = (instrword & 0xffff) | elf_reloc_addend(instrword >> 16, elfr->r_addend << 16, 0, 0, 15, 16);
+            }
+            else {
+                /* Simple aligned relocation */
+                instrword = elf_reloc_addend(instrword, elfr->r_addend << 16, 0, 0, 15, 16);
+            }
+            result = 0;
+            break;
+        case R_ARM_ABS12     : /* ARM LDR/STR          S + A */
+            aofr->rel_flags = sid | REL_INSTR | rel_II(1) | REL_A;
+            instrword = elf_reloc_addend(instrword, elfr->r_addend, aofr->rel_offset, 0, 11, 0);
+            result = 0;
+            break;
+        case R_ARM_THM_ABS5  : /* Thumb LDR/STR        S + A */
+            result = -1;
+            break;
+        case R_ARM_ABS8      : /* 8-bit byte           S + A */
+            aofr->rel_flags = sid | REL_BYTE | REL_A;
+            switch (aofr->rel_offset & 3) {
+                case 0: /* Bottom-byte of word */
+                    instrword = elf_reloc_addend(instrword, elfr->r_addend << 24, 0, 0, 7, 24);
+                    break;
+                case 1: /* bits 8-15 */
+                    instrword = elf_reloc_addend(instrword, elfr->r_addend << 24, 0, 0, 15, 16);
+                    break;
+                case 2: /* bits 16-23 */
+                    instrword = elf_reloc_addend(instrword, elfr->r_addend << 24, 0, 0, 23, 8);
+                    break;
+                case 3: /* bits 24-31 */
+                    instrword = elf_reloc_addend(instrword, elfr->r_addend << 24, 0, 0, 31, 0);
+                    break;
+            }
+            result = 0;
+            break;
+        case R_ARM_SBREL32   : /* Word                 S - B + A */
+            aofr->rel_flags = sid | REL_LONG | REL_B | REL_A;
+            instrword += elfr->r_addend;
+            result = 0;
+            break;
+        case R_ARM_THM_PC22  : /* Thumb BL pair        S - P + A */
+            result = -1;
+            break;
+        case R_ARM_THM_PC8   : /* Thumb LDR r,[pc,...] S - P + A */
+            result = -1;
+            break;
+        case R_ARM_AMP_VCALL9: /* AMP VCALL            S - B + A */
+            result = -1;
+            break;
+        case R_ARM_SWI24     : /* ARM SWI              S + A */
+            aofr->rel_flags = sid | REL_LONG | REL_A | REL_INSTR | rel_II(1);
+            instrword = elf_reloc_addend(instrword, elfr->r_addend, 0, 0, 23, 0);
+            result = 0;
+            break;
+        case R_ARM_THM_SWI8  : /* Thumb SWI            S + A */
+            result = -1;
+            break;
+        case R_ARM_XPC25     : /* ARM BLX              S - P + A */
+            result = -1;
+            break;
+        case R_ARM_THM_XPC22 : /* Thumb BLX pair       S - P + A */
+            result = -1;
+            break;
+    }
+
+    if (result == -1) {
+        msg(fatal_badelf_norsupp(aep->oep->fep->fname, (int) ELF32_R_TYPE(elfr->r_info)));
+    }
+
+    *pinstr = tv(instrword);
+
+    return result;
+}
+#endif
 
 #ifdef TARGET_HAS_SYMDEFS
 /* This routine is called back by the CLX library to insert the global symbols into
@@ -4316,7 +4489,7 @@ case N_BSS:
     else if (aep->oep->fep->type & ELF_MASK)
     {
 #ifdef TARGET_HAS_ELF
-msg("1add_area_xrefs for an ELF file");
+msg("1add_area_xrefs for an ELF file is not implemented yet");
 #endif
     }
     else
@@ -5005,6 +5178,13 @@ static int32 instr_reloc(int32 *p, int32 value, int lim)
 
     if (lim < 0) goto fail;    /* no instruction sequence relocation */
 
+    if ((op = (v & 0x0f000000)) == 0x0f000000)         /* SWI */
+    {
+        int32 swinum = (v & 0xffffff) + value;
+        *p = tv((v & 0xff000000) | swinum);
+        value = swinum - (swinum & 0xffffff);          /* should be 0 */
+    }
+
     if (op == 0x04000000 ||                            /* LDR/STR */
         (op = (v & 0x0e400090)) == 0x00400090 ||       /* LDRH etc */
         (op = (v & 0x0ff00000)) == 0x02800000 ||       /* ADD immediate */
@@ -5335,6 +5515,9 @@ nostrback:
     }
     else
     {
+#ifdef TARGET_HAS_ELF
+        Elf32_Rela *elfreloc = aep->relocp;
+#endif
 #ifdef TARGET_HAS_AOF
         struct globsym *gs;
         aof_reloc *reloc, *r, *rend;
@@ -5465,7 +5648,18 @@ so that we can generate a diagnostic for unlinked components.
             reloc = (aof_reloc *) map(aep->relocoff, siz);
         }
         for (r = reloc, rend = reloc + aep->relocs; r<rend; r++)
-        {   roffset = hv(r->rel_offset);
+        {
+            if (aep->oep->fep->type & ELF_MASK) {
+#ifdef TARGET_HAS_ELF
+                if (elf_translate_relocation(r, elfreloc++, aep, area, areasiz)) {
+                    --rend;
+                    --r;
+                    --aep->relocs;
+                    continue;
+                }
+#endif
+            }
+            roffset = hv(r->rel_offset);
             rflags = hv(r->rel_flags);
             cp = area + roffset;
             if (roffset >= areasiz) msg(fatal_badobj(aep->oep->fep->fname));
