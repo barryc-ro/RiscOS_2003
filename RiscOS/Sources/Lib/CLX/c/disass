@@ -116,32 +116,44 @@ static char *opcodeu(const char *op, char ch, char *o) {
 }
 
 static char *outaddress(unsigned32 instr, unsigned32 address, int32 offset,
-                        int writeback, int w, char *o) {
+                        bool writeback, int w, char *o) {
     char *oldo = o;
-    if (bits(16,19)==15 && bit(24) && !bit(25)) { /* pc based, pre, imm */
-       if (!bit(23)) offset = -offset;
+    int rn = (int) bits(16,19);
+    bool regoff = (bool) bit(25);
+    bool pre = (bool) bit(24);
+    bool up = (bool) bit(23);
+    bool load = (bool) bit(20);
+    if (rn==15 && pre && !regoff && !writeback) {
+       if (!up) offset = -offset;
        address = address+offset+8;
-       o = cb_proc((bit(20) ? D_LOADPCREL : D_STOREPCREL),
+       o = cb_proc((load ? D_LOADPCREL : D_STOREPCREL),
                    offset, address, w, cb_arg, o);
        if (oldo == o) o = outx(address, o);
     } else {
-       if (bit(24) && !bit(25)) /* pre, imm */
-          o = cb_proc((bit(20) ? D_LOAD : D_STORE),
-                      (bit(23) ? offset : -offset),
-                      bits(16,19), w, cb_arg, o);
+       if (pre && !regoff && !writeback)
+          o = cb_proc((load ? D_LOAD : D_STORE),
+                      (up ? offset : -offset),
+                      rn, w, cb_arg, o);
        if (oldo == o) {
           outc('[', o);
-          o = reg(bits(16,19), (bit(24) ? 0 : ']'), o);
+          o = reg(rn, (pre ? 0 : ']'), o);
           outc(',', o);
-          if (!bit(25)) { /* offset is an immediate */
-              o = outh(offset, bit(23), o);
-          } else {
-             if (!bit(23)) outc('-', o);
-             o = shiftedreg(instr, o);
+          if (!pre && !writeback) { /* Wacky CPDT unindexed form */
+             outc('{', o);
+             o = outx(offset, o);
+             outc('}', o);
           }
-          if (bit(24)) {
-             outc(']', o);
-             if (bit(21)) outc('!', o);
+          else {
+             if (!regoff) { /* offset is an immediate */
+                 o = outh(offset, up, o);
+             } else {
+                if (!up) outc('-', o);
+                o = shiftedreg(instr, o);
+             }
+             if (pre) {
+                outc(']', o);
+                if (writeback) outc('!', o);
+             }
           }
        }
     }
@@ -186,7 +198,11 @@ char *outregset(unsigned32 instr, char *o) {
 }
 
 static char *generic_cpdo(unsigned32 instr, char *o) {
-    o = opcode(instr, "CDP", 0, o);
+    bool NV = bits(28,31)==15;
+    if (!NV)
+       o = opcode(instr, "CDP", 0, o);
+    else
+       o = opcodeu("CDP2", 0, o);
     o = outf(o, "P%ld,", bits(8,11));
     o = outx(bits(20,23), o); outc(',', o);
     o = outf(o, "C%ld,", bits(12,15));   /* CRd */
@@ -197,7 +213,11 @@ static char *generic_cpdo(unsigned32 instr, char *o) {
 }
 
 static char *generic_cprt(unsigned32 instr, char *o) {
-    o = opcode(instr, (bit(20) ? "MRC" : "MCR"), 0, o);
+    bool NV = bits(28,31)==15;
+    if (!NV)
+       o = opcode(instr, (bit(20) ? "MRC" : "MCR"), 0, o);
+    else
+       o = opcodeu((bit(20) ? "MRC2" : "MCR2"), 0, o);
     o = outf(o, "P%ld,", bits(8,11));
     o = outx(bits(21,23), o); outc(',', o);
     o = reg(bits(12,15), ',', o);
@@ -208,10 +228,17 @@ static char *generic_cprt(unsigned32 instr, char *o) {
 }
 
 static char *generic_cpdt(unsigned32 instr, unsigned32 address, char *o) {
-    o = opcode(instr, (bit(20) ? "LDC" : "STC"), (bit(22) ? 'L' : 0), o);
+    bool NV = bits(28,31)==15;
+    if (!NV)
+       o = opcode(instr, (bit(20) ? "LDC" : "STC"), (bit(22) ? 'L' : 0), o);
+    else
+       o = opcode(instr, (bit(20) ? "LDC" : "STC"), (bit(22) ? 'L' : 0), o);
     o = outf(o, "P%ld,",bits(8,11));
     o = outf(o, "C%ld,",bits(12,15));
-    return outaddress(instr, address, 4*bits(0,7), (int)bit(21), 0, o);
+    if (bit(24) || bit(21))
+      return outaddress(instr, address, 4*bits(0,7), (int)bit(21), 0, o);
+    else
+      return outaddress(instr, address, bits(0,7), 0, 0, o);
 }
 
 static char fp_dt_widthname(unsigned32 instr) {
@@ -438,43 +465,104 @@ static char *control_extension(unsigned32 instr, char *o) {
       o = reg(bits(0,3), ',', o);
       o = reg(bits(16,19), 0, o);
       if (bits(8,11)) oddity = YES;
+   } else if (bit(7)==1 && bit(4)==0) {
+      char *oldo = o;
+      bool need_rn = NO;
+      bool longmul = NO;
+      if (op1 == 1) {
+         if (!bit(5)) need_rn = YES;
+         o = outs(bit(5) ? "SMULW" : "SMLAW", o);
+      } else {
+         if (op1 == 0) { need_rn = YES; o = outs("SMLA", o); }
+         else if (op1 == 2) { longmul = YES; o = outs("SMLAL", o); }
+         else /* op1==3 */ o = outs("SMUL", o);
+
+         outc(bit(5) ? 'T' : 'B', o);
+      }
+      outc(bit(6) ? 'T' : 'B', o);
+      o = cond(instr, o);
+      o = spacetocol9(oldo, o);
+
+      if (longmul)
+         o = reg(bits(12,15), ',', o);
+      o = reg(bits(16,19), ',', o);
+      o = reg(bits(0,3), ',', o);
+      o = reg(bits(8,11), 0, o);
+      if (need_rn) {
+         outc(',', o);
+         o = reg(bits(12,15), 0, o);
+      }
+      else if (!longmul && bits(12,15))
+         oddity = YES;
    }
+
+   return o;
+}
+
+static char *coprocessor_extension(unsigned32 instr, char *o) {
+   if (bit(22)) {
+      o = opcode(instr, bit(20) ? "MRRC" : "MCRR", 0, o);
+      o = outf(o, "P%ld,", bits(8,11));
+      o = outx(bits(4,7), o); outc(',', o);
+      o = reg(bits(12,15), ',', o);
+      o = reg(bits(16,19), ',', o);
+      o = outf(o, "C%ld,", bits(0,3));
+   }
+
    return o;
 }
 
 static void unconditional_extension(unsigned32 instr, unsigned32 address, char *o) {
 
-    switch (bits(24,27)) {
+   switch (bits(24,27)) {
 
-    case 7:
-       if (bit(4)) goto unknown;
-    case 5:
-       if (bit(24)==0 || bits(20,22)!=5) goto unknown;
-       o = opcodeu("PLD", 0, o);
-       if (bits(12,15) != 15) oddity = YES;
-       o = outaddress(instr, address, bits(0,11), 0, 0, o);
-       break;
+   case 7:
+      if (bit(4)) goto unknown;
+   case 5:
+      if (bit(24)==0 || bits(20,22)!=5) goto unknown;
+      o = opcodeu("PLD", 0, o);
+      if (bits(12,15) != 15) oddity = YES;
+      o = outaddress(instr, address, bits(0,11), 0, 0, o);
+      break;
 
-    case 0xa: case 0xb:
-    {  int32 offset = (((int32)bits(0,23))<<8)>>6; /* sign extend and * 4 */
-       char *oldo;
-       o = opcodeu("BLX", 0, o);
-       offset += bit(24) << 1;
-       oldo = o;
-       address += offset + 8;
-       o = cb_proc(D_BORBL, offset, address, 0, cb_arg, o);
-       if (o == oldo) o = outx(address, o);
-       break;
-    }
+   case 0xa: case 0xb:
+   {  int32 offset = (((int32)bits(0,23))<<8)>>6; /* sign extend and * 4 */
+      char *oldo;
+      o = opcodeu("BLX", 0, o);
+      offset += bit(24) << 1;
+      oldo = o;
+      address += offset + 8;
+      o = cb_proc(D_BORBL, offset, address, 0, cb_arg, o);
+      if (o == oldo) o = outx(address, o);
+      break;
+   }
 
-    default:
-     unknown:
-       o = outs("Undefined instruction", o);
-       oddity = NO;
-    }
+   case 0xc:
+   if (bit(23)==0 && bit(21)==0) {
+      goto unknown;
+   }
+   /* fall through */
 
-    if (oddity) o = outs(" ; (?)", o);
-    outc('\0', o);
+   case 0xd:
+      o = generic_cpdt(instr, address, o);
+      break;
+
+   case 0xe:
+      if (bit(4)==0) { /* CP data processing */
+         o = generic_cpdo(instr, o);
+      } else { /* CP reg to/from ARM reg */
+         o = generic_cprt(instr, o);
+      }
+      break;
+
+   default:
+    unknown:
+      o = outs("Undefined instruction", o);
+      oddity = NO;
+   }
+
+   if (oddity) o = outs(" ; (?)", o);
+   outc('\0', o);
 }
 
 void disass_setregnames(char **rn, char **fn) {
@@ -587,7 +675,7 @@ void disass_32or26(unsigned32 instr, unsigned32 address, char *o, void *cba, dis
              outc('T', o);
           o = spacetocol9(start, o);
           o = reg(bits(12,15), ',', o);
-          o = outaddress(instr, address, bits(0,11), (bit(22) ? 1 : 4), bit(24)==0 || bit(21), o);
+          o = outaddress(instr, address, bits(0,11), (bit(24)==0 || bit(21)), (bit(22) ? 1 : 4), o);
           break;
        }
 
@@ -636,7 +724,15 @@ void disass_32or26(unsigned32 instr, unsigned32 address, char *o, void *cba, dis
        }
        break;
 
-    case 0xc: case 0xd:
+    case 0xc:
+    if (bit(23)==0 && bit(21)==0) {
+       char *oldo = o;
+       o = coprocessor_extension(instr, o);
+       if (o == oldo) goto unknown;
+    }
+    /* fall through */
+
+    case 0xd:
        switch (bits(8,11)) {
        case 1:
           o = fp_cpdt(instr, address, o);
