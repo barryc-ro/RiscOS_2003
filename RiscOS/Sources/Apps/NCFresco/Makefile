@@ -570,7 +570,7 @@ NCFRESCO_BUILD_LIBS=	$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1.o \
 			$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlib.o
 
 NCFRESCO_ROM_LIBS=	$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1.o \
-			$(RISCOS_BUILD_EXPORT)/Lib/CLib/romstubs.o \
+			$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/romcstubs.o \
 			$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/inetlibzm.o \
 			$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlibzm.o
 
@@ -580,13 +580,13 @@ NCFRESCO_BUILD_CFLAGS=	$(NCFRESCO_CFLAGS) -DRISCOS -fa -Fn \
 			-I$(RISCOS_BUILD_EXPORT)/Lib/MemLib \
 			$(BASE_INCS) -J$(RISCOS_BUILD_EXPORT)/Lib/CLib
 
-NCFRESCO_ROM_CFLAGS=	$(NCFRESCO_CFLAGS) -DRISCOS -fa \
+NCFRESCO_ROM_CFLAGS=	$(NCFRESCO_CFLAGS) -DRISCOS -fa -zM -zps1 \
 			-I$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib \
 			-I$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs \
 			-I$(RISCOS_BUILD_EXPORT)/Lib/MemLib \
 			$(BASE_INCS) -J$(RISCOS_BUILD_EXPORT)/Lib/CLib
 
-NCFRESCO_ROM_LDFLAGS=	-aof
+NCFRESCO_ROM_LDFLAGS=	
 
 # This one is for NCFresco in the new style CVS controlled RISC OS build tree
 NCFRESCO_BUILD:		$(PREDEPS)
@@ -603,7 +603,7 @@ NCFRESCO_BUILD:		$(PREDEPS)
 NCFRESCO_BUILD_ROM:	$(PREDEPS)
 		@echo "Making NCFRESCO ROM version for RISCOS in the build tree"
 		@-mkdir aof
-		@cd ./ncfresco; $(MAKE) NCFRESCO_RISCOS \
+		@cd ./ncfresco; $(MAKE) NCFRESCO_AOF \
 		LIBS="$(NCFRESCO_ROM_LIBS)" \
 		OBJS="$(NCFRESCO_ROM_OBJS) $(RISCOS_OBJS)" \
 		VPATH="$(NCFRESCO_VPATH):$(RISCOS_VPATH)" \
