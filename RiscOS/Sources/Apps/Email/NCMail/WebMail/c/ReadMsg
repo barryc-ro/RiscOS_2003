@@ -20,11 +20,12 @@
 
 /* ---------------------------------- PRE-PROCESSOR DIRECTIVES ---------------------------------- */
 
+#define READMSG_ENTITY_RFC822	ENTITY_OK + ENTITY_RFC822
 
 /* -------------------------------------- GLOBAL VARIABLES -------------------------------------- */
 
 /* This is used to pass around MessageIds in the case of Delete messages. */
-char *readmsg_id_ptr = NULL;
+char	*readmsg_id_ptr = NULL;
 
 /* ----------------------------------------- FUNCTIONS ------------------------------------------ */
 
@@ -407,7 +408,8 @@ void readmsg_build_screen(uint32 msg_id)
     case(ENG_PROCESSING):
     case(ENG_FETCHINGMESSAGE):
     {
-      popup_1_open_dialogue( nb_messagetrans_lookup(message_block, (rc == ENG_FETCHINGMESSAGE) ? "READMSG_GetMsgFetch" : "READMSG_Process"),
+      popup_1_open_dialogue( nb_messagetrans_lookup(message_block,
+                           (rc == ENG_FETCHINGMESSAGE) ? "READMSG_GetMsgFetch" : "READMSG_Process"),
                              nb_messagetrans_lookup(message_block, "BUTTON_OK"),
                              readmsg_getmsgfail_cbf,
                              NULL );
@@ -450,6 +452,14 @@ void ncmui_get_message_cbf(eng_return *codes, MessageDescriptor *msg, void *hand
     case(ENG_GETMSGFAILED):
     {
       popup_1_open_dialogue( nb_messagetrans_lookup(message_block, "READMSG_GetMsgFail"),
+                             nb_messagetrans_lookup(message_block, "BUTTON_OK"),
+                             readmsg_getmsgfail_cbf,
+                             NULL );
+      break;
+    }
+    case(ENG_NOMEMORY):
+    {
+      popup_1_open_dialogue( nb_messagetrans_lookup(message_block, "READMSG_GetMsgNoMem"),
                              nb_messagetrans_lookup(message_block, "BUTTON_OK"),
                              readmsg_getmsgfail_cbf,
                              NULL );
@@ -666,7 +676,8 @@ void readmsg_output_attachments(FILE *out, MessageDescriptor *msg)
 {
   uint32			 num_entities = 0;
   uint32			 counter = 0;
-  EntityDescriptor	*ptr;
+  EntityDescriptor		*ptr;
+  bool				 rc = false;
 
   num_entities = readmsg_count_entities(msg->entity_list);
 
@@ -688,12 +699,21 @@ void readmsg_output_attachments(FILE *out, MessageDescriptor *msg)
 
       if (readmsg_validate_attachment(out, counter, num_entities, ptr->typestr, ptr->flags) == true)
       {
-        /* Readable Attachment, so output the Format start tag, the attachment and then the
-         * Format Stop tag.
-         */
-        if (readmsg_output_attachment(out, ptr->fname) == false)
+        /* Readable Attachment */
+        if (ptr->flags == READMSG_ENTITY_RFC822)
         {
-          /* An unexpected error occured such as not enough space in CacheFS or missing file etc */
+          rc = readmsg_output_rfc822(out, ptr);
+        }
+        else
+        {
+          /* Normal message, so output the Format start tag, the attachment and then the
+           * Format Stop tag.
+           */
+          rc = readmsg_output_attachment(out, ptr->data.fname);
+        }
+        /* Check to see that the attachment was output correctly */
+        if (rc == false)
+        {
           fprintf(out, "%s%s\n", nb_messagetrans_lookup(message_block, "READMSG_No_Att"),
                   HTML_LineFeed);
         }
@@ -760,9 +780,11 @@ uint32 readmsg_validate_attachment(FILE *out, uint32 att_num, uint32 atts, char 
   }
 
   /* Now check to see whether we can display the attachment */
+  dprintf(("UI", "Entity Flags: %d\n", type));
   switch(type)
   {
     case(ENTITY_OK):
+    case(READMSG_ENTITY_RFC822):
     {
       rc = true;
       break;
@@ -778,6 +800,12 @@ uint32 readmsg_validate_attachment(FILE *out, uint32 att_num, uint32 atts, char 
     {
       /* Display using best guess view */
       fprintf(out, "%s\n", nb_messagetrans_lookup(message_block, "READMSG_Guess_Read"));
+      rc = true;
+      break;
+    }
+    case(ENTITY_INCOMPLETE):
+    {
+      fprintf(out, "%s\n", nb_messagetrans_lookup(message_block, "READMSG_Incomplete"));
       rc = true;
       break;
     }
@@ -836,7 +864,7 @@ uint32 readmsg_count_entities(EntityDescriptor *ptr)
 /* Returns:    void.                                                    */
 /*                                                                      */
 /************************************************************************/
-uint32 readmsg_output_attachment(FILE *out, char *filename)
+bool readmsg_output_attachment(FILE *out, char *filename)
 {
   FILE			*att_fp = NULL;		// File pointer to source attachment file.
   FILE			*escaped_fp = NULL;	// File pointer to file to store escaped HTML in.
@@ -955,3 +983,225 @@ uint32 readmsg_output_attachment(FILE *out, char *filename)
   }
 }
 
+
+/************************************************************************/
+/* readmsg_rfc822_build_from                                            */
+/*                                                                      */
+/* Function builds the from text in the format:                         */
+/*   <real name> <space> <angle_bracket> <email address> <angle_bracket>*/
+/*                                                                      */
+/* Parameters: msg   - message descriptor to get data from.             */
+/*             from  - pointer for where to store string.               */
+/*                                                                      */
+/* Returns:    from text as pointer.                                    */
+/*                                                                      */
+/************************************************************************/
+bool readmsg_rfc822_build_from(MessageDescriptor *msg, char **from)
+{
+  char			*temp = NULL;
+  char			*ptr = NULL;		/* DO NOT FREE */
+  int32			 temp_len = 0, ptr_len = 0;
+  int			 rc = 0;
+  esc_html_context	 context;
+
+  temp_len = strlen(msg->fromreal) + strlen(msg->fromaddr) + 10;
+  ptr_len = (temp_len * 6) + 5;
+
+  if ( ((temp = malloc(temp_len)) == NULL) ||
+       ((ptr =  malloc(ptr_len)) == NULL) )
+  {
+    ncmui_error_display(1);
+    return(false);
+  }
+  else
+  {
+    if ( (msg->fromreal == NULL) || (strcmp(msg->fromreal, "") == 0) )
+    {
+      /* Real name missing */
+      sprintf(temp, "%s", msg->fromaddr);
+    }
+    else
+    {
+      /* Both filled in */
+      sprintf(temp, "%s <%s>", msg->fromreal, msg->fromaddr);
+    }
+    /* OK, now escape the text */
+    context = NULL;
+    while (rc = escape_html_mem_to_mem (temp, ptr, ptr_len, 1, &context), rc == 0);
+
+    *from = ptr;
+    free(temp);
+    return(true);
+  }
+}
+
+
+/************************************************************************/
+/* readmsg_rfc822_output_headers                                        */
+/*                                                                      */
+/* Function outputs the To, From, CC and Subject details from the       */
+/* supplied RFC822 message.                                             */
+/*                                                                      */
+/* Parameters: out  - file pointer                                      */
+/*             msg  - MessageDescriptor to display.                     */
+/*             html - HTML template to use.                             */
+/*                                                                      */
+/* Returns:    bool                                                     */
+/*                                                                      */
+/************************************************************************/
+bool readmsg_rfc822_output_headers(FILE *out, MessageDescriptor *msg, char *html)
+{
+  char			*output_line = NULL;
+  char			*from = NULL;
+  char			*subject = NULL;
+  char			*to = NULL;
+  char			*cc = NULL;
+  char			*date = NULL;
+  bool			 er = true;
+
+  dprintf(("UI", "readmsg_rfc822_output_headers entered\n"));
+
+  if (msg == NULL)
+    dprintf(("UI", "NULL MESSAGE POINTER!!!\n"));
+
+  /* SUBJECT TEXT
+   * First check to see if the subject text is empty.  If so output INBOX_No_Subject token.
+   */
+  if ( (msg->subject == NULL) || (strcmp(msg->subject, "") == 0) )
+    er = inbox_build_intray_element(nb_messagetrans_lookup(message_block, "INBOX_No_Subject"),
+                                    &subject, 0);
+  else
+    er = inbox_build_intray_element(msg->subject, &subject, 0);
+
+  /* FROM TEXT
+   * First check to see if the fromreal text is empty.  If it is display the email address.
+   */
+  readmsg_rfc822_build_from(msg, &from);
+/*   if ( (msg->fromreal == NULL) || (strcmp(msg->fromreal, "") == 0) ) */
+/*     er = inbox_build_intray_element(msg->fromaddr, &from, 0); */
+/*   else */
+/*     er = inbox_build_intray_element(msg->fromreal, &from, 0); */
+
+  /* TO TEXT */
+  if ( !((msg->to == NULL) || (strcmp(msg->to, "") == 0)) )
+    er = inbox_build_intray_element(msg->to, &to, 0);
+
+  /* CC TEXT */
+  if ( !((msg->cc == NULL) || (strcmp(msg->cc, "") == 0)) )
+    er = inbox_build_intray_element(msg->cc, &cc, 0);
+
+  /* DATE TEXT
+   * First check to see if the fromreal text is empty.  If it is display the email address.
+   */
+  er = inbox_build_intray_element(msg->datestr, &date, 0);
+
+  /*
+   * Build HTML
+   */
+  if ((output_line= malloc(strlen(html) + strlen(from) + strlen(subject) + strlen(date) +
+                           strlen(to) + strlen(cc) + 10)) == NULL)
+  {
+    ncmui_error_display(1);
+    dprintf(("UI", "ERROR: Not enough memory to create inbox listing.\n"));
+  }
+  else
+  {
+    /* Output the escaped data plus the message ID in the correct order based on the html
+     * fragment from the Messages file
+     */
+    dprintf(("UI", "Done malloc of length: %d\n", (strlen(html) + strlen(from) + strlen(subject) +
+             strlen(date) + strlen(to) + strlen(cc) + 10) ));
+
+    sprintf(output_line, html, date,
+                               from,
+                               subject,
+                               to,
+                               cc);
+    fprintf(out, "%s\n", output_line);
+
+    /* Tidy up */
+    if (date != NULL)
+      free(date);
+    if (from != NULL)
+      free(from);
+    if (subject != NULL)
+      free(subject);
+    if (to != NULL)
+      free(to);
+    if (cc != NULL)
+      free(cc);
+    free(output_line);
+  }
+  return(true);
+}
+
+
+/************************************************************************/
+/* readmsg_output_rfc822                                                */
+/*                                                                      */
+/* Function for outputting RFC822 messages.                             */
+/*                                                                      */
+/* Parameters: out                                                      */
+/*             desc - EntityDescriptor for top level message.           */
+/*                                                                      */
+/* Returns:                                                             */
+/*                                                                      */
+/************************************************************************/
+bool readmsg_output_rfc822(FILE *out, EntityDescriptor *desc)
+{
+  dprintf(("UI", "readmsg_output_rfc822() entered\n"));
+
+  debug_output_messagedescriptor(desc->data.msg);
+
+  /* Output RFC822 start marker */
+  fprintf(out, "%s\n", nb_messagetrans_lookup(message_block, "READMSG_RFC822Start"));
+
+  /* Output To, From, Subject, Date, CC details. */
+  readmsg_rfc822_output_headers(out, desc->data.msg,
+                                nb_messagetrans_lookup(message_block, "READMSG_RFC822Header"));
+
+  /* Indent The Display */
+  fprintf(out, "%s\n", nb_messagetrans_lookup(message_block, "READMSG_RFC822Indent"));
+
+
+  /* *** OUTPUT THE MESSAGE ATTACHMENTS HERE *** */
+  readmsg_output_attachments(out, desc->data.msg);
+
+  /* Outdent The Display after the last attachment */
+  fprintf(out, "%s\n", nb_messagetrans_lookup(message_block, "READMSG_RFC822Outdent"));
+
+  /* Output RFC822 stop marker */
+  fprintf(out, "%s\n", nb_messagetrans_lookup(message_block, "READMSG_RFC822Stop"));
+
+  return(true);
+}
+
+
+#if DEBUGLIB
+
+  /************************************************************************/
+  /* debug_output_messagedescriptor                                       */
+  /*                                                                      */
+  /* Function outputs the readable parts of the messagedescriptor.        */
+  /*                                                                      */
+  /* Parameters: pointer to md.                                           */
+  /*                                                                      */
+  /* Returns:    void.                                                    */
+  /*                                                                      */
+  /************************************************************************/
+  void debug_output_messagedescriptor(MessageDescriptor *msg)
+  {
+    dprintf(("UI", "---------------------------------------------------------------\n"));
+    dprintf(("UI", "Message: %d with flags %d\n", msg->ID, msg->flags));
+    dprintf(("UI", "Number of forwards: %d, number of attachments %d\n", msg->forward_num,
+             msg->entity_num));
+    dprintf(("UI", "To:      %s\n", msg->to));
+    dprintf(("UI", "CC:      %s\n", msg->cc));
+    dprintf(("UI", "From:    %s (%s)\n", msg->fromreal, msg->fromaddr));
+    dprintf(("UI", "Subject: %s\n", msg->subject));
+    dprintf(("UI", "Charset: %s\n", msg->charset));
+    dprintf(("UI", "Date:    %s\n", msg->datestr));
+    dprintf(("UI", "---------------------------------------------------------------\n"));
+  }
+
+#endif
