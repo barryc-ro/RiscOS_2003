@@ -3,9 +3,11 @@
 # ***********************************
 # ***    C h a n g e   L i s t    ***
 # ***********************************
-# Date       Name         Description
-# ----       ----         -----------
-# 05Dec95    diz    	  Created
+# Date         Name         Description
+# ----         ----         -----------
+# 05Dec95      diz          Created
+# [ changes - see source control logs or s.itable ]
+# 14 Aug 2000  jrf          Removed requirement for resources
 #
 
 #
@@ -85,9 +87,10 @@ clean:
         @echo ${COMPONENT}: cleaned
 
 resources:
-        ${MKDIR} ${RESDIR}
-        ${MKDIR} ${RESDIR}.Tables
-        ${CP} Tables.8desktop ${RESDIR}.Tables.8desktop ${CPFLAGS}
+        | Removed because we're using the ColourTrans resource file now
+        |${MKDIR} ${RESDIR}
+        |${MKDIR} ${RESDIR}.Tables
+        |${CP} Tables.8desktop ${RESDIR}.Tables.8desktop ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 dirs:
