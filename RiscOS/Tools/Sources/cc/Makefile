@@ -47,15 +47,15 @@ CLXLIB    = C:CLX.o.clxlib
 # Include files
 #
 INCLUDES  = -Iriscos -IC:CLX -Iarm -Icfe -Imip -Iutil -Iccacorn -IC:
-DFLAGS    = 
+DFLAGS    =
 
 #
 # Program specific options:
 #
 COMPONENT  = cc
 TARGET     = ${COMPONENT}
-SOURCE     = 
-EXPORTS    = 
+SOURCE     =
+EXPORTS    =
 
 
 OBJS= o.driver o.aaof o.asd o.asm o.gen o.mcdep o.peephole o.aetree o.bind \
@@ -120,24 +120,25 @@ clean:
         ${RM} ${COMPONENT}
         ${RM} genhdrs
         ${RM} peepgen
-        ${RM} ccacorn.c.headers 
-        ${RM} ccacorn.c.peeppat 
+        ${RM} ccacorn.c.headers
+        ${RM} ccacorn.c.peeppat
         ${RM} ccacorn.h.errors
         @echo ${COMPONENT}: cleaned
 
-export_hdrs: 
+export_hdrs:
 	@echo ${COMPONENT}: export complete (hdrs)
 
-export_libs: 
+export_libs:
         @echo ${COMPONENT}: export complete (libs)
 
-local_dirs:
+o._dirs:
 	${MKDIR} o
+	${TOUCH} $@
 
 #
 # Final link
 #
-${TARGET}: ${OBJS} ${LIBS} ${HDRS} local_dirs
+${TARGET}: ${OBJS} ${LIBS} ${HDRS} o._dirs
         ${LD} ${LDFLAGS} -o ${COMPONENT} ${OBJS} ${LIBS}
 
 # Static dependencies:
