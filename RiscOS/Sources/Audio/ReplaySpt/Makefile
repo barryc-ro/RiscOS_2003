@@ -25,7 +25,9 @@ CP      = copy
 LD      = link
 TLD     = tlink
 RM      = remove
-WIPE    = -wipe
+WIPE    = wipe
+DESTROY = -Destroy
+IGNORE  = -IgnoreErr
 DEFMOD  = DefMod
 
 AFLAGS = -depend !Depend -Stamp -quit
@@ -121,11 +123,11 @@ install: rm.${COMPONENT}
         @echo ${COMPONENT}: installed
 
 clean:
-        ${WIPE} o.* ${WFLAGS}
-        ${WIPE} rm.* ${WFLAGS}
-        ${WIPE} linked.* ${WFLAGS}
-        ${WIPE} map.* ${WFLAGS}
-        ${RM} ${TARGET}
+        ${DESTROY} ${OBJS}
+	${DESTROY} ${ROMOBJS}
+        ${IGNORE} ${WIPE}    linked.${COMPONENT} ${WFLAGS}
+        ${IGNORE} ${WIPE}    map.${COMPONENT} ${WFLAGS}
+        ${IGNORE} ${RM}      ${TARGET}
         @echo ${COMPONENT}: cleaned
 
 resources:
@@ -194,19 +196,6 @@ o.main:	h.play
 o.main:	h.utils
 o.main:	h.stream
 o.main:	OS:h.osfile
-oz.resources: s.resources
-oz.resources: hdr:ListOpts
-oz.resources: hdr:Macros
-oz.resources: hdr:System
-oz.resources: Hdr:SWIs
-oz.resources: Hdr:CPU.Generic26
-oz.resources: Hdr:IO.GenericIO
-oz.resources: Hdr:RISCOS
-oz.resources: hdr:ModHand
-oz.resources: hdr:MsgTrans
-oz.resources: hdr:ResourceFS
-oz.resources: hdr:Proc
-oz.resources: hdr.CVars
 o.muldiv: s.muldiv
 o.access:	c.access
 o.access:	h.msgs
@@ -360,6 +349,19 @@ o.soundplay:	h.soundplay
 o.soundplay:	h.utils
 o.soundplay:	h.stream
 o.soundplay:	OS:h.osfile
+oz.resources: s.resources
+oz.resources: hdr:ListOpts
+oz.resources: hdr:Macros
+oz.resources: hdr:System
+oz.resources: Hdr:SWIs
+oz.resources: Hdr:CPU.Generic26
+oz.resources: Hdr:IO.GenericIO
+oz.resources: Hdr:RISCOS
+oz.resources: hdr:ModHand
+oz.resources: hdr:MsgTrans
+oz.resources: hdr:ResourceFS
+oz.resources: hdr:Proc
+oz.resources: hdr.CVars
 oz.main:	c.main
 oz.main:	C:h.swis
 oz.main:	C:h.kernel
