@@ -151,6 +151,7 @@ export_libs:
 export_hdrs:
         ${CP} h.plugin ${EXP_HDR}.h.plugin ${CPFLAGS}
         ${CP} h.ANT_URL ${EXP_HDR}.h.ANT_URL ${CPFLAGS}
+        ${CP} h.ANT_Msg ${EXP_HDR}.h.ANT_Msg ${CPFLAGS}
         @echo ${COMPONENT}: export complete(hdrs)
 
 #
