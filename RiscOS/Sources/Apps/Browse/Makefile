@@ -40,6 +40,16 @@
 # 1998-07-02	ADH	Prior to 2.06 intermediate checkin, took out
 #			-DJAVASCRIPT from DFLAGS and added comment about
 #			needing to increase !Run file WimpSlot values.
+# 1998-07-07	ADH	Tried to make JavaScript builds easier; if the
+#			component to make is installj rather than install or
+#			installd, then !Run, !Boot and About are sourced
+#			from !RunJ, !BootJ and AboutJ. Define JSUFFIX on the
+#			command line to be -DJAVASCRIPT if doing this, too.
+#			The TARGET binary name should be suffixed with '_J',
+#			since even though the exported copy in "Targets"
+#			overwrites the current exported Surfboard, Desktop
+#			or whatever build, you still probably want to keep
+#			the previous symbols table.
 
 # -----------------------------------------------------------------------------
 # Program specific options
@@ -50,7 +60,6 @@ APP		= !Browse
 MODULE		= rm.!Browse
 ROM_MODULE	= aof.Browse
 LDIR		= Resources.${LOCALE}.${SYSTEM}
-
 
 # -----------------------------------------------------------------------------
 # Export Paths for Messages module
@@ -92,12 +101,9 @@ WFLAGS		= ~cf~vr
 
 BASEFLAGS	= -DCOMPAT_INET4 -DRISCOS -DNSPR20
 
-# With JAVASCRIPT defined, you'll need to up the WimpSlot values in !Run
-# files when the export is complete...
-#
-# DFLAGS		= ${BASEFLAGS} -DSINGLE_USER -DJAVASCRIPT
+# Note JSUFFIX *must* be defined on the command line.
 
-DFLAGS		= ${BASEFLAGS} -DSINGLE_USER
+DFLAGS		= ${BASEFLAGS} ${JSUFFIX} -DSINGLE_USER
 DDFLAGS		= ${DFLAGS} -fn -DSTRICT_PARSER -DTRACE
 DZFLAGS		= ${BASEFLAGS} -DSINGLE_USER -DHIDE_CGI -DANTI_TWITTER
 DDZFLAGS	= ${DZFLAGS} -fn -DSTRICT_PARSER -DTRACE
@@ -127,6 +133,7 @@ FLEXLIB		= tbox:o.flexlib
 EVENTLIB	= tbox:o.eventlib
 TOOLBOXLIB	= tbox:o.toolboxlib
 WIMPLIB		= tbox:o.wimplib
+RENDERLIB	= tbox:o.renderlib
 INETLIB		= TCPIPLibs:o.inetlib
 UNICODELIB	= C:Unicode.o.ucodelib
 MEMLIB		= C:MemLib.o.MemLib
@@ -148,7 +155,8 @@ LIBSM = \
  ${UNICODELIB}z \
  ${JSLIB}zm \
  ${NSPRLIB}zm \
- ${MEMLIB}z
+ ${MEMLIB}z \
+ ${RENDERLIB}
 
 LIBS = \
  ${CLIB} \
@@ -166,7 +174,8 @@ LIBS = \
  ${UNICODELIB} \
  ${JSLIB} \
  ${NSPRLIB} \
- ${MEMLIB}
+ ${MEMLIB} \
+ ${RENDERLIB}
 
 LIBSD = \
  ${CLIB} \
@@ -184,7 +193,8 @@ LIBSD = \
  ${UNICODELIB} \
  ${JSLIB} \
  ${NSPRLIB} \
- ${MEMLIB}
+ ${MEMLIB} \
+ ${RENDERLIB}
 
 
 # -----------------------------------------------------------------------------
@@ -795,7 +805,6 @@ rom: ${ROM_MODULE}
 
 install_common: ${FILES}
 	@echo
-	${CP} ${LDIR}.!Boot			${INSTDIR}.!Boot		${CPFLAGS}n
 	${CP} ${TARGET}				${INSTDIR}.!RunImage		${CPFLAGS}~n
 	${CP} ${LDIR}.!Sprites			${INSTDIR}.!Sprites		${CPFLAGS}n
 	${CP} ${LDIR}.!Sprites22		${INSTDIR}.!Sprites22		${CPFLAGS}n
@@ -808,31 +817,33 @@ install_common: ${FILES}
 	-${CP} ${LDIR}.Sprites22		${INSTDIR}.Sprites22		${CPFLAGS}n
 	${MKDIR} ${INSTDIR}.User
 	-${CP} ${LDIR}.User.Hotlist		${INSTDIR}.User.Hotlist		${CPFLAGS}n
-	-${CP} ${LDIR}.About			${INSTDIR}.About		${CPFLAGS}n
 
 install: install_common
+	${CP} ${LDIR}.!Boot		${INSTDIR}.!Boot	${CPFLAGS}~n
 	${CP} ${LDIR}.!Run		${INSTDIR}.!Run		${CPFLAGS}~n
-	-Access ${INSTDIR}.!Boot	wr/r
-	-Access ${INSTDIR}.!Run		wr/r
-	-Access ${INSTDIR}.!RunImage	wr/r
-	-Access ${INSTDIR}.!Sprites	wr/r
-	-Access ${INSTDIR}.!Sprites22	wr/r
-	-Access ${INSTDIR}.8desktop	wr/r
-	-Access ${INSTDIR}.Choices	wr/r
-	-Access ${INSTDIR}.Controls	wr/r
-	-Access ${INSTDIR}.Messages	wr/r
-	-Access ${INSTDIR}.Res		wr/r
-	-Access ${INSTDIR}.Sprites	wr/r
-	-Access ${INSTDIR}.User.Hotlist	wr/r
-	-Access ${INSTDIR}.About	wr/r
+	-${CP} ${LDIR}.About		${INSTDIR}.About	${CPFLAGS}~n
+	-Access ${INSTDIR}.*		wr/r
+	-Access ${INSTDIR}.User.*	wr/r
 	-Access ${INSTDIR}.About.*	wr/r
 	@echo
 	@echo ${COMPONENT}: Application installed to ${INSTDIR}
 
 installd: install_common
+	${CP} ${LDIR}.!Boot		${INSTDIR}.!Boot	${CPFLAGS}~n
 	${CP} ${LDIR}.!RunD		${INSTDIR}.!Run		${CPFLAGS}~n
+	-${CP} ${LDIR}.About		${INSTDIR}.About	${CPFLAGS}~n
 	@echo
 	@echo ${COMPONENT}: Debug application installed ${INSTDIR}
+
+installj: install_common
+	${CP} ${LDIR}.!BootJ		${INSTDIR}.!Boot	${CPFLAGS}~n
+	${CP} ${LDIR}.!RunJ		${INSTDIR}.!Run		${CPFLAGS}~n
+	${CP} ${LDIR}.AboutJ		${INSTDIR}.About	${CPFLAGS}~n
+	-Access ${INSTDIR}.*		wr/r
+	-Access ${INSTDIR}.User.*	wr/r
+	-Access ${INSTDIR}.About.*	wr/r
+	@echo
+	@echo ${COMPONENT}: Application installed to ${INSTDIR} (JavaScript build)
 
 install_rom: ${ROM_MODULE}
 	${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
@@ -954,6 +965,11 @@ abs.!RI: ${OBJS} ${LIBS} o.dirs
 	${LD} -s syms.!RI -o $@ ${OBJS} ${LIBS}
 	${SQUEEZE} ${SQFLAGS} $@
 
+abs.!RI_J: ${OBJS} ${LIBS} o.dirs
+	@echo
+	${LD} -s syms.!RI_J -o $@ ${OBJS} ${LIBS}
+	${SQUEEZE} ${SQFLAGS} $@
+
 abs.!RI_D: ${OBJSD} ${LIBSD} o.dirs
 	@echo
 	${LD} -debug -s syms.!RI_D -o $@ ${OBJSD} ${LIBSD}
@@ -962,6 +978,10 @@ abs.!RI_Surf: ${OBJS_SURF} ${LIBS} o.dirs
 	@echo
 	${LD}  -s syms.!RI_Surf -o $@ ${OBJS_SURF} ${LIBS}
 
+abs.!RI_Surf_J: ${OBJS_SURF} ${LIBS} o.dirs
+	@echo
+	${LD}  -s syms.!RI_Surf_J -o $@ ${OBJS_SURF} ${LIBS}
+
 abs.!RI_DSurf: ${OBJSD_SURF} ${LIBSD} o.dirs
 	@echo
 	${LD} -debug -s syms.!RI_DSurf -o $@ ${OBJSD_SURF} ${LIBSD}
@@ -969,6 +989,11 @@ abs.!RI_DSurf: ${OBJSD_SURF} ${LIBSD} o.dirs
 abs.!RI_ITalk: ${OBJS_ITALK} ${LIBS} o.dirs
 	@echo
 	${LD} -s syms.!RI_ITalk -o $@ ${OBJS_ITALK} ${LIBS}
+	${SQUEEZE} ${SQFLAGS} $@
+
+abs.!RI_ITalk_J: ${OBJS_ITALK} ${LIBS} o.dirs
+	@echo
+	${LD} -s syms.!RI_ITalk_J -o $@ ${OBJS_ITALK} ${LIBS}
 	${SQUEEZE} ${SQFLAGS} $@
 
 abs.!RI_DITalk: ${OBJSD_ITALK} ${LIBSD} o.dirs
