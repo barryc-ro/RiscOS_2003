@@ -3512,7 +3512,6 @@ void access_set_header_info(char *url, unsigned date, unsigned last_modified, un
 }
 #endif
 
-#ifdef STBWEB
 BOOL access_get_header_info(char *url, unsigned *date, unsigned *last_modified, unsigned *expires)
 {
 #ifndef FILEONLY
@@ -3521,7 +3520,6 @@ BOOL access_get_header_info(char *url, unsigned *date, unsigned *last_modified, 
 #endif
     return FALSE;
 }
-#endif
 
 void access_optimise_cache(void)
 {

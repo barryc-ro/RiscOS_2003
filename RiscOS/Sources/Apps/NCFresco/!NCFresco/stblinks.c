@@ -8,6 +8,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "bbc.h"
+#include "resspr.h"
+
 #include "debug.h"
 #include "interface.h"
 #include "memwatch.h"
@@ -19,6 +22,115 @@
 #include "stbtb.h"
 #include "stbview.h"
 #include "stbutils.h"
+
+#define ICON_SIZE_SMALL	16
+#define ICON_SIZE_LARGE	32
+
+/* ------------------------------------------------------------------------------------------- */
+
+static int opposite_side(int side)
+{
+    int opp = 0;
+    switch (side)
+    {
+    case fe_divider_RIGHT:
+	opp = fe_divider_LEFT;
+	break;
+    case fe_divider_BOTTOM:
+	opp = fe_divider_TOP;
+	break;
+    case fe_divider_TOP:
+	opp = fe_divider_BOTTOM;
+	break;
+    case fe_divider_LEFT:
+	opp = fe_divider_RIGHT;
+	break;
+    }
+    return opp;
+}
+
+static int direction_flags_to_side(int flags)
+{
+    int side = 0;
+    switch (flags & (be_link_VERT|be_link_BACK))
+    {
+    case 0:
+	side = fe_divider_RIGHT;
+	break;
+    case be_link_VERT:
+	side = fe_divider_BOTTOM;
+	break;
+    case be_link_VERT | be_link_BACK:
+	side = fe_divider_TOP;
+	break;
+    case be_link_BACK:
+	side = fe_divider_LEFT;
+	break;
+    }
+    return side;
+}
+
+static int side_to_direction_flags(int side)
+{
+    int flags = 0;
+    switch (side)
+    {
+    case fe_divider_RIGHT:
+	flags = 0;
+	break;
+    case fe_divider_BOTTOM:
+	flags = be_link_VERT;
+	break;
+    case fe_divider_TOP:
+	flags = be_link_VERT | be_link_BACK;
+	break;
+    case fe_divider_LEFT:
+	flags = be_link_BACK;
+	break;
+    }
+    return flags;
+}
+
+#if 0
+/* box is assumed to be relative to parent window of 'v' */
+
+static void convert_box_coords(wimp_box *box, fe_view v)
+{
+    coords_cvtstr cvt;
+
+    cvt = fe_get_cvt(fe_find_top(v));
+    coords_box_toscreen(&box, &cvt);
+
+    cvt = fe_get_cvt(v);
+    coords_box_toworkarea(&box, &cvt);
+}
+#endif
+
+static int scroll_by_flags(fe_view v, int flags)
+{
+    int scrolled = FALSE;
+    if (v->displaying && v->scrolling != fe_scrolling_NO)
+    {
+	if (flags & be_link_VERT)
+	    scrolled = fe_view_scroll_y(v, flags & be_link_BACK ? +1 : -1);
+	else
+	    scrolled = fe_view_scroll_x(v, flags & be_link_BACK ? -1 : +1);
+    }
+    return scrolled;
+}
+
+/* position the pointer in the centre of the visible window. Must give
+ * coords to frontend_pointer_set_position in work area relative
+ * coordinates */
+
+static void centre_pointer(fe_view v)
+{
+    int x, y;
+    coords_cvtstr cvt = fe_get_cvt(v);
+    x = cvt.scx + (v->box.x1 - v->box.x0)/2;
+    y = cvt.scy - (v->box.y1 - v->box.y0)/2;
+    frontend_pointer_set_position(v, x, y);
+}
 
 /* ------------------------------------------------------------------------------------------- */
 
@@ -105,6 +217,64 @@ static fe_view fe_locate_view_by_position(wimp_box *box, int flags)
     v = (fe_view) vals[5];
 
     return v;
+}
+
+/* ------------------------------------------------------------------------------------------- */
+
+static frame_link *find_closest_frame_link(fe_view v, int side, int x, int y, int towards)
+{
+    int min_dist;
+    frame_link *link, *min_link;
+
+    min_link = NULL;
+    min_dist = INT_MAX;
+    link = v->frame_links;
+
+    STBDBG(("find_closest_frame_link: frames v %p side %d from %d,%d\n", v, side, x, y));
+	    
+    while (link)
+    {
+	STBDBG(("find_closest_frame_link: link %p side %d\n", link, link->side));
+
+	if (link->side == side)
+	{
+	    int dist_x, dist_y, dist;
+	    
+	    dist_x = (link->box.x0 + link->box.x1)/2 - x;
+	    dist_y = (link->box.y0 + link->box.y1)/2 - y;
+
+	    dist = dist_x*dist_x + dist_y*dist_y;
+
+	    switch (towards)
+	    {
+	    case fe_divider_TOP:
+		if (dist_y <= 0)
+		    dist = INT_MAX;
+		break;
+	    case fe_divider_BOTTOM:
+		if (dist_y >= 0)
+		    dist = INT_MAX;
+		break;
+	    case fe_divider_LEFT:
+		if (dist_x >= 0)
+		    dist = INT_MAX;
+		break;
+	    case fe_divider_RIGHT:
+		if (dist_x <= 0)
+		    dist = INT_MAX;
+		break;
+	    }
+
+	    if (dist < min_dist)
+	    {
+		min_dist = dist;
+		min_link = link;
+	    }
+	}
+	link = link->next;
+    }
+
+    return min_link;
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -258,7 +428,7 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 	tb_status_set_direction(flags & be_link_BACK ? 1 : 0);
 
     /* set these flags whatever we do */
-    flags |= caretise() | be_link_MOVE_POINTER;
+    flags |= caretise() | be_link_MOVE_POINTER | be_link_DONT_WRAP;
     
     /* move from given position - ignore any current link */
     if ((flags & be_link_XY) && box)
@@ -268,22 +438,28 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 
 	/* decide which view we are going to jump into */
 	if ((v = fe_locate_view_by_position(box, flags)) == NULL)
+	{
+	    STBDBG(("fe_move_highlight_xy: XY no view found\n"));
 	    return;
-	
+	}
+
 	/* convert coords into relative to that view */
 	cbox = *box;
 	
 	wimp_get_wind_state(v->w, &state);
 	coords_box_toworkarea(&cbox, (coords_cvtstr *)&state.o.box);
 	
-	/* see what we can find */
-	v->current_link = backend_highlight_link_xy(v->displaying, NULL, &cbox, flags);
-
 	/* ensure caret and pointer are in window */
 	fe_get_wimp_caret(v->w);
-	if (v->current_link == NULL)
-	    frontend_pointer_set_position(v, (v->box.x1 - v->box.x0)/2, (v->box.y1 - v->box.y0)/2);
+	v->current_link = backend_highlight_link_xy(v->displaying, NULL, &cbox, flags);
 
+	if (v->current_link == NULL)
+	    v->current_link = backend_highlight_link(v->displaying, NULL, flags);
+
+	if (v->current_link == NULL)
+	    centre_pointer(v);
+
+	STBDBG(("fe_move_highlight_xy: XY v %p link %p\n", v, v->current_link));
 	return;
     }
 
@@ -300,53 +476,115 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 
     if (v->parent || v->children)	/* frames */
     {
+	wimp_box link_box;
+
 	/* try and find link on page without using fallback link */
-	if (v->displaying && (new_link = backend_highlight_link(v->displaying, old_link, flags | be_link_DONT_WRAP | be_link_DONT_WRAP_H)) != NULL)
+	if (v->displaying && (new_link = backend_highlight_link(v->displaying, old_link, flags | be_link_DONT_WRAP_H)) != NULL)
 	{
 	    v->current_link = new_link;
+	    STBDBG(("fe_move_highlight_xy: frames v %p link %p\n", v, v->current_link));
 	    return;
 	}
 
-	/* move to frame link icon */
-	if (0)
+	/* get coordinates of current link in screen coords */
+	if (v->current_link)
 	{
+	    coords_cvtstr cvt;
+	    backend_doc_item_bbox(v->displaying, v->current_link, &link_box);
+
+	    cvt = fe_get_cvt(v);
+	    coords_box_toscreen(&link_box, &cvt);
 	}
-	else
+
+	/* move to frame link icon */
+	if (1)
 	{
-	    /* try scrolling and highlighting again */
-	    if (v->displaying && v->scrolling != fe_scrolling_NO)
+	    coords_cvtstr cvt;
+	    wimp_box box;
+	    int side, x, y;
+	    frame_link *link;
+
+	    /* get coords relative to top level window */
+	    cvt = fe_get_cvt(fe_find_top(v));
+	    box = link_box;
+	    coords_box_toworkarea(&box, &cvt);
+
+	    /* find centre of box */
+	    x = (box.x0 + box.x1) / 2;
+	    y = (box.y0 + box.y1) / 2;
+
+	    /* find side to match */
+	    side = direction_flags_to_side(flags);
+	    
+	    /* find closest link */
+	    link = find_closest_frame_link(v, side, x, y, -1);
+
+	    /* if we've found a matching link then return */
+	    if (link)
 	    {
-		if (flags & be_link_VERT)
-		    scrolled = fe_view_scroll_y(v, flags & be_link_BACK ? +1 : -1);
-		else
-		    scrolled = fe_view_scroll_x(v, flags & be_link_BACK ? -1 : +1);
+		STBDBG(("fe_move_highlight_xy: frames v %p closest frame link %p side %d\n", v, link, link->side));
+		backend_remove_highlight(v->displaying);
 
-		if (scrolled)
-		{
-		    if ((new_link = backend_highlight_link(v->displaying, old_link, flags | be_link_DONT_WRAP)) != NULL)
-		    {
-			v->current_link = new_link;
-		    }
-
-		    /* return if scrolled whether or not new link found */
-		    return;
-		}
+		link->flags |= frame_link_flag_SELECTED;
+		fe_refresh_window(fe_find_top(v)->w, NULL);
+		return;
 	    }
 	}
 
-	/* no scroll no wrap - find next frame */
+	STBDBG(("fe_move_highlight_xy: frames v %p try scrolling\n", v));
+
+	/* try scrolling and highlighting again */
+	if (v->displaying && v->scrolling != fe_scrolling_NO)
+	{
+	    if (flags & be_link_VERT)
+		scrolled = fe_view_scroll_y(v, flags & be_link_BACK ? +1 : -1);
+	    else
+		scrolled = fe_view_scroll_x(v, flags & be_link_BACK ? -1 : +1);
+	    
+	    if (scrolled)
+	    {
+		if ((new_link = backend_highlight_link(v->displaying, old_link, flags | be_link_DONT_WRAP_H)) != NULL)
+		{
+		    v->current_link = new_link;
+		}
+
+		/* return if scrolled whether or not new link found */
+		STBDBG(("fe_move_highlight_xy: frames v %p scrolled link %p (current %p)\n", v, new_link, v->current_link));
+		return;
+	    }
+	}
+
+	/* look for new frame */
 	new_v = fe_locate_view_by_position(&v->box, flags);
 
 	/* if another frame then move to it and look for link */
 	if (new_v)
 	{
 	    if (new_v->displaying)
-		v->current_link = backend_highlight_link_xy(new_v->displaying, NULL, &v->box, flags | be_link_XY);
+	    {
+		coords_cvtstr cvt;
+
+		/* get coords relative to new window */
+		cvt = fe_get_cvt(new_v);
+		coords_box_toworkarea(&link_box, &cvt);
+		
+		new_v->current_link = backend_highlight_link_xy(new_v->displaying, NULL, &link_box, flags | be_link_XY);
+		STBDBG(("fe_move_highlight_xy: frames v %p direct link %p\n", new_v, new_v->current_link));
+	    }
 
 	    /* give caret to new window */
 	    fe_get_wimp_caret(new_v->w);
-	    if (v->current_link == NULL)
-		v->current_link = backend_highlight_link(v->displaying, NULL, flags | be_link_DONT_WRAP);
+	    if (new_v->current_link == NULL)
+	    {
+		new_v->current_link = backend_highlight_link(new_v->displaying, NULL, flags);
+		STBDBG(("fe_move_highlight_xy: frames v %p indirect link %p\n", new_v, new_v->current_link));
+	    }
+
+	    if (new_v->current_link == NULL)
+	    {
+		centre_pointer(new_v);
+		STBDBG(("fe_move_highlight_xy: frames v %p set ptr %d,%d\n", new_v, (new_v->box.x1 - new_v->box.x0)/2, - (new_v->box.y1 - new_v->box.y0)/2));
+	    }
 	    return;
 	}
 
@@ -354,14 +592,16 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 	    return;
 	
 	/* if can't move on then beep */
+	STBDBG(("fe_move_highlight_xy: frames v %p can't find new frame\n", v));
 	sound_event(snd_WARN_NO_FIELD);
     }
     else				/* no frames */
     {
 	/* try and find link on page */
-	if (v->displaying && (new_link = backend_highlight_link(v->displaying, old_link, flags | be_link_DONT_WRAP)) != NULL)
+	if (v->displaying && (new_link = backend_highlight_link(v->displaying, old_link, flags)) != NULL)
 	{
 	    v->current_link = new_link;
+	    STBDBG(("fe_move_highlight_xy: no frames v %p new link %p\n", v, new_link));
 	    return;
 	}
 
@@ -381,17 +621,19 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 
 	    if (scrolled)
 	    {
-		if ((new_link = backend_highlight_link(v->displaying, old_link, flags | be_link_DONT_WRAP)) != NULL)
+		if ((new_link = backend_highlight_link(v->displaying, old_link, flags)) != NULL)
 		{
 		    v->current_link = new_link;
 		}
 
 		/* return if scrolled whether or not new link found */
+		STBDBG(("fe_move_highlight_xy: no frames v %p scrolled new link %p\n", v, v->current_link));
 		return;
 	    }
 	}
 
 	/* give warning noise */
+	STBDBG(("fe_move_highlight_xy: no frames v %p can't find new link %p\n", v, v->current_link));
 	sound_event(snd_WARN_NO_FIELD);
     }
 }
@@ -447,7 +689,7 @@ static os_error *fe_frame_link_array__build(fe_view v, void *handle)
     int icon_small = vals[2];
     int icon_large = vals[3];
     
-    STBDBG(("fe_frame_link: consider v %p\n", v));
+    STBDBGN(("fe_frame_link: consider v %p\n", v));
 
     /* if this is not a child window then ignore immediately */
     if (v->children)
@@ -508,14 +750,11 @@ static os_error *fe_frame_link_array__build(fe_view v, void *handle)
 	fl->v = v;
 	fl->box = box;
 
-	STBDBG(("fe_frame_link: add v %p side %d box x:%d-%d y:%d-%d\n", v, side, box.x0, box.x0, box.y0, box.y1));
+	STBDBGN(("fe_frame_link: add v %p side %d box x:%d-%d y:%d-%d\n", v, side, box.x0, box.x0, box.y0, box.y1));
     }
     
     return NULL;
 }
-
-#define ICON_SIZE_SMALL	16
-#define ICON_SIZE_LARGE	32
 
 /* Given a frame, find the frames that border it and build a
  * frame_link list of all the details needed.
@@ -524,13 +763,20 @@ static os_error *fe_frame_link_array__build(fe_view v, void *handle)
 void fe_frame_link_array_build(fe_view v)
 {
     int vals[5];
+    sprite_id id;
+    sprite_info info;
 
     fe_frame_link_array_free(v);
 
+    /* use the left arrow which gives its width as the small size and its height as the large size */
+    id.tag = sprite_id_name;
+    id.s.name = "flleft";
+    sprite_readsize(resspr_area(), &id, &info);
+    
     vals[0] = (int) v;		/* target view */
     vals[1] = NULL;		/* list is put in here */
-    vals[2] = ICON_SIZE_SMALL;	/* icon's small side size (OS) */
-    vals[3] = ICON_SIZE_LARGE;	/* icon's large side size (OS) */
+    vals[2] = info.width << bbc_modevar(info.mode, bbc_XEigFactor);	/* icon's small side size (OS) */
+    vals[3] = info.height << bbc_modevar(info.mode, bbc_YEigFactor);	/* icon's large side size (OS) */
 
     STBDBG(("fe_frame_link_array_build: v %p\n", v));
 
@@ -552,6 +798,115 @@ void fe_frame_link_array_free(fe_view v)
     }
     v->frame_links = NULL;
 }
+
+/* ------------------------------------------------------------------------------------------- */
+
+static frame_link *link_selected(fe_view v)
+{
+    frame_link *fl = NULL;
+    if (v) for (fl = v->frame_links; fl; fl = fl->next)
+    {
+	if (fl->flags & frame_link_flag_SELECTED)
+	    break;
+    }
+
+    return fl;
+}
+
+void fe_frame_link_move(fe_view v, int flags)
+{
+    frame_link *link = link_selected(v);
+    if (link)
+    {
+	int side_movement = direction_flags_to_side(flags);
+	frame_link *new_link;
+	wimp_box box;
+	
+	box = link->box;
+/* 	cvt = fe_get_cvt(fe_find_top(v)); */
+/* 	coords_box_toscreen(&box, &cvt); */
+
+	STBDBG(("fe_frame_link_move: v %p sides link %d movement %d\n", v, link->side, side_movement));
+	
+	/* if pressed in matching direction */
+	if (link->side == side_movement)
+	{
+	    /* try scrolling */
+	    if (scroll_by_flags(v, flags))
+	    {
+		STBDBG(("fe_frame_link_move: scrolled, returning\n"));
+		return;
+	    }
+
+	    /* else move to next frame */
+	    STBDBG(("fe_frame_link_move: to next frame\n"));
+	    fe_move_highlight_xy(v, &box, flags | be_link_XY | be_link_VISIBLE);
+	    return;
+	}
+
+	/* if pressed in opposite direction */
+	if (link->side == opposite_side(side_movement))
+	{
+	    STBDBG(("fe_frame_link_move: back onto page\n"));
+
+	    link->flags &= ~frame_link_flag_SELECTED;
+	    fe_refresh_window(fe_find_top(v)->w, NULL);
+	    fe_move_highlight_xy(v, &box, flags | be_link_XY | be_link_VISIBLE);
+	    return;
+	}
+
+	/* if pressed in other direction try moving to other links */
+	if ((new_link = find_closest_frame_link(v, link->side, (box.x0 + box.x1)/2, (box.y0 + box.y1)/2, side_movement)) != NULL)
+	{
+	    STBDBG(("fe_frame_link_move: to new link %p\n", new_link));
+
+	    link->flags &= ~frame_link_flag_SELECTED;
+	    new_link->flags |= frame_link_flag_SELECTED;
+	    fe_refresh_window(fe_find_top(v)->w, NULL);
+	    return;
+	}
+
+	/* or scroll page */
+	if (scroll_by_flags(v, flags))
+	    return;
+
+	sound_event(snd_WARN_NO_FIELD);
+    }
+}
+
+void fe_frame_link_activate(fe_view v)
+{
+    frame_link *link = link_selected(v);
+    STBDBG(("fe_frame_link_activate: v %p link %p\n", v, link));
+    if (link)
+    {
+	fe_move_highlight_xy(v, &link->box, side_to_direction_flags(link->side) | be_link_XY | be_link_VISIBLE);
+    }   
+}
+
+int fe_frame_link_selected(fe_view v)
+{
+    return link_selected(v) != NULL;
+}
+
+static os_error *fe_frame_link_clear(fe_view v, void *handle)
+{
+    frame_link *link = link_selected(v);
+    if (link)
+    {
+	link->flags &= ~frame_link_flag_SELECTED;
+	fe_refresh_window(fe_find_top(v)->w, NULL);
+    }
+    return NULL;
+    NOT_USED(handle);
+}
+
+void fe_frame_link_clear_all(fe_view v)
+{
+    iterate_frames(fe_find_top(v), fe_frame_link_clear, NULL);
+}
+
+/* ------------------------------------------------------------------------------------------- */
 
 int frontend_view_get_dividers(fe_view v, int *dividers)
 {

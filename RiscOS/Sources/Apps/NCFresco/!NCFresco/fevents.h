@@ -36,6 +36,7 @@
 #define fevent_SUB_CLASS_MISC2              0x00B0
 #define fevent_SUB_CLASS_CODEC              0x00C0
 #define fevent_SUB_CLASS_TOOLBAR2           0x00D0
+#define fevent_SUB_CLASS_FRAME_LINK         0x00E0
 
 /* global events */
 
@@ -184,6 +185,12 @@
 #define fevent_TOOLBAR_MOVE_UP		    0x20D2
 #define fevent_TOOLBAR_MOVE_DOWN	    0x20D3
 #define fevent_TOOLBAR_ACTIVATE		    0x20D4
+
+#define fevent_FRAME_LINK_LEFT		    0x20E0
+#define fevent_FRAME_LINK_RIGHT		    0x20E1
+#define fevent_FRAME_LINK_UP		    0x20E2
+#define fevent_FRAME_LINK_DOWN		    0x20E3
+#define fevent_FRAME_LINK_ACTIVATE	    0x20E4
 
 #define fevent_URLS_MASK	            0x00ff
 #define fevent_ENCODING_MASK	            0x00ff

@@ -109,6 +109,7 @@ void render_plinth(int bcol, int flags, int x, int y, int w, int h, antweb_doc *
 	draw_cornerBR(x+off, y+off, w-off*2, h-off*2, off);
 }
 
+#if 0
 static int colour_distance(wimp_paletteword c1, wimp_paletteword c2)
 {
     int r,g,b;
@@ -117,6 +118,7 @@ static int colour_distance(wimp_paletteword c1, wimp_paletteword c2)
     b = (c1.bytes.blue - c2.bytes.blue);
     return (r*r + g*g + b*b)/3;
 }
+#endif
 
 wimp_paletteword render_get_colour(int colour, be_doc doc)
 {
@@ -402,7 +404,7 @@ int render_background(rid_text_item *ti, antweb_doc *doc )
 
 os_error *render_plot_icon(char *sprite, int x, int y)
 {
-    sprite_pixtrans pt[16];
+    sprite_pixtrans pt[16], *ptp;
     sprite_factors facs;
     sprite_header *sph;
     sprite_area *area;
@@ -441,12 +443,15 @@ os_error *render_plot_icon(char *sprite, int x, int y)
     id.tag = sprite_id_addr;
     id.s.addr = sph;
 
-    ep = wimp_readpixtrans(area, &id, &facs, pt);
-
-    if (ep)
+    if ((ep = wimp_readpixtrans(area, &id, &facs, pt)) != NULL)
 	return ep;
 
-    return sprite_put_scaled(area, &id, 0x8, x, y, &facs, pt);
+    if (bbc_modevar(sph->mode, bbc_Log2BPP) > 2)
+	ptp = NULL;
+    else
+	ptp = pt;
+
+    return sprite_put_scaled(area, &id, 0x8, x, y, &facs, ptp);
 }
 
 

@@ -6,12 +6,15 @@
 
 typedef struct frame_link frame_link;
 
+#define frame_link_flag_SELECTED	0x01
+
 struct frame_link
 {
     frame_link *next;		/* next link in chain */
     fe_view v;			/* the frame this link goes to */
     int side;			/* the side that this link is on (so we know which arrow to display) */
     wimp_box box;		/* bounding box of this link, in parent relative coordinates */
+    int flags;			/* see above */
 };
 
 /* ----------------------------------------------------------------------------- */

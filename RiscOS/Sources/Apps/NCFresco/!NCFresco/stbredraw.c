@@ -226,12 +226,20 @@ int fe_view_scroll_y(fe_view v, int val)
 
 /* ----------------------------------------------------------------------------*/
 
-static char *frame_link_sprite[] =
+static char *frame_link_sprite_uhl[] =
 {
     "flleft",
     "fltop",
     "flright",
     "flbottom"
+};
+
+static char *frame_link_sprite_hl[] =
+{
+    "flleft1",
+    "fltop1",
+    "flright1",
+    "flbottom1"
 };
 
 static void draw_frame_links(wimp_redrawstr *r, fe_view v, const frame_link *fl)
@@ -240,7 +248,11 @@ static void draw_frame_links(wimp_redrawstr *r, fe_view v, const frame_link *fl)
     {
 /* 	STBDBG(("draw_frame_links: fl %p ", fl)); */
 /* 	STBDBG(("side %d pos %d,%d\n", fl->side, fl->box.x0, fl->box.y0)); */
-	render_plot_icon(frame_link_sprite[fl->side], fl->box.x0, fl->box.y0);
+
+	render_plot_icon(
+	    fl->flags & frame_link_flag_SELECTED ? frame_link_sprite_hl[fl->side] : frame_link_sprite_uhl[fl->side],
+	    fl->box.x0, fl->box.y0);
+
 	fl = fl->next;
     }
 }

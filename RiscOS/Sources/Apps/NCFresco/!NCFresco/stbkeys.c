@@ -174,6 +174,7 @@ static key_list stb_function_keys[] =
 #define stb_resizing_keys	0
 #define stb_toolbar_keys	0
 #define stb_osk_keys		0
+#define stb_frame_link_keys		0
 
 /* ------------------------------------------------------------------------------------- */
 
@@ -361,6 +362,7 @@ static key_list nc_movement1_keys[] =
 #define nc_toolbar_keys 0
 #define nc_codec_keys	0
 #define nc_osk_keys	0
+#define nc_frame_link_keys	0
 
 /* ------------------------------------------------------------------------------------- */
 
@@ -530,6 +532,18 @@ static key_list rca_osk_keys[] =
     { 0 }
 };
 
+static key_list rca_frame_link_keys[] =
+{
+    { akbd_LeftK,           fevent_FRAME_LINK_LEFT, key_list_REPEAT },
+    { akbd_RightK,          fevent_FRAME_LINK_RIGHT, key_list_REPEAT },
+    { akbd_UpK,             fevent_FRAME_LINK_UP, key_list_REPEAT },
+    { akbd_DownK,           fevent_FRAME_LINK_DOWN, key_list_REPEAT },
+
+    { 13,		    fevent_FRAME_LINK_ACTIVATE, 0 },
+
+    { 0 }
+};
+
 /* ------------------------------------------------------------------------------------- */
 
 /* Mode dependant special keys */
@@ -565,6 +579,7 @@ static key_list platform_trial_keys[] =
 #define key_map_TOOLBAR		6
 #define key_map_WEB		7
 #define key_map_OSK		8
+#define key_map_FRAME_LINK	9
 
 static key_list *get_key_map(int map)
 {
@@ -591,6 +606,8 @@ static key_list *get_key_map(int map)
 	    return stb_web_keys;
 	case key_map_OSK:
 	    return stb_osk_keys;
+	case key_map_FRAME_LINK:
+	    return stb_frame_link_keys;
 	}
 	break;
 
@@ -615,6 +632,8 @@ static key_list *get_key_map(int map)
 	    return nc_web_keys;
 	case key_map_OSK:
 	    return nc_osk_keys;
+	case key_map_FRAME_LINK:
+	    return nc_frame_link_keys;
 	}
 	break;
 
@@ -639,6 +658,8 @@ static key_list *get_key_map(int map)
 	    return rca_web_keys;
 	case key_map_OSK:
 	    return rca_osk_keys;
+	case key_map_FRAME_LINK:
+	    return rca_frame_link_keys;
 	}
 	break;
     }
@@ -697,6 +718,9 @@ void fe_key_handler(fe_view v, wimp_eventstr *e, BOOL use_toolbox, int browser_m
     {
         event = 0;  /* key handled, no event */
     }
+
+    if (event == -1 && fe_frame_link_selected(v))
+        event = fe_key_lookup(chcode, get_key_map(key_map_FRAME_LINK));
 
     if (event == -1)
 	event = fe_key_lookup(chcode, get_key_map(key_map_MOVEMENT));

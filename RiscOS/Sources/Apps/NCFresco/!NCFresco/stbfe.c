@@ -159,6 +159,9 @@
 #define KeyWatch_Register		0x4E940
 #define KeyWatch_Unregister		0x4E941
 
+#define IconHigh_GetDirection		0x4E701
+#define IconHigh_Stop			0x4E703
+
 /* -------------------------------------------------------------------------- */
 
 
@@ -254,7 +257,10 @@ void fe_pointer_mode_update(pointermode_t mode)
 
         case pointermode_ON:
             if (pointer_mode != pointermode_ON)
+	    {
                 pointer_reset_shape();
+		fe_frame_link_clear_all(main_view);
+	    }
             break;
     }
     pointer_mode = mode;
@@ -358,7 +364,7 @@ void fe_set_pointer(int item_flags)
     num = fe_get_pointer_number(item_flags);
 
     if (!config_display_fancy_ptr && num > 0 && num < 5) /* no_fancy disables hand and caret pointers */
-	return;
+	num = 0;
     
     if (num != pointer_current)
     {
@@ -695,8 +701,8 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
     v->find_last_item = NULL;
 
     /* really not sure about this one */
-/*     if (frontend_view_has_caret(v)) */
-/* 	backend_place_caret(v->displaying, NULL); */
+    if (frontend_view_has_caret(v))
+ 	backend_remove_highlight(v->displaying);
     
     /* check for special page instructions - but only on top page   */
     if (v->parent == NULL)
@@ -944,7 +950,7 @@ fe_view fe_dbox_view(const char *name)
 	box.x0 = text_safe_box.x0;
 	box.x1 = text_safe_box.x1;
 	box.y0 = text_safe_box.y0 + tb_status_height();
-	box.y1 = box.y0 + 128;
+	box.y1 = box.y0 + 88;
 
     	memset(&info.margin, 0, sizeof(info.margin));
     }
@@ -2996,6 +3002,10 @@ static void fe_idle_handler(void)
         /* also update pointer shape    */
         fe_set_pointer(flags);
 
+	/* zero ti if not something useful */
+	if ((flags & (be_item_info_LINK | be_item_info_INPUT | be_item_info_MENU | be_item_info_BUTTON | be_item_info_ACTION | be_item_info_LABEL)) == 0)
+	    ti = NULL;
+	
 	/* try dragging highlight */
 	if (!akbd_pollctl() && pointer_moved && v->displaying && ti != v->current_link)
 	{
@@ -3005,7 +3015,7 @@ static void fe_idle_handler(void)
 	    }
 	    else
 	    {
-/* 		backend_remove_highlight(v->displaying); */
+ 		backend_remove_highlight(v->displaying);
 	    }
 
 	    v->current_link = ti;
@@ -4251,7 +4261,18 @@ void fe_event_process(void)
             fe_update_page_info(find_view(e.data.c.w));
 
 	    fe_get_wimp_caret(e.data.c.w);
-            break;
+
+	    /* disable iconhigh if enabled */
+	    {
+		int mode;
+		_swix(IconHigh_GetDirection, _IN(0) | _OUT(3), 0, &mode);
+		if (mode != 0)
+		    _swix(IconHigh_Stop, _IN(0), 0);
+	    }
+
+	    /* close osk if open */
+	    fe_keyboard_close();
+	    break;
 
         case wimp_EPTRLEAVE:
             break;
@@ -4567,7 +4588,7 @@ static BOOL fe_initialise(void)
     atexit(&fe_tidyup);
 
     gbf_flags &= ~(GBF_FVPR | GBF_GUESS_ELEMENTS | GBF_TABLES_UNEXPECTED);
-/*  gbf_flags |= GBF_TRANSLATE_UNDEF_CHARS; */
+    gbf_flags |= GBF_TRANSLATE_UNDEF_CHARS; /* this needs to not be defined to build a japanese version */
 
     gbf_init();
 

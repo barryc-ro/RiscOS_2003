@@ -91,7 +91,7 @@ static void aref_union_box(be_doc doc, rid_aref_item *aref, wimp_box *box_out)
 
     backend_doc_item_bbox(doc, item, box_out);
 
-    for (item = item->next; item && item->next && item->next->aref == aref; item = item->next)
+    for (item = item->next; item && item->aref == aref; item = item->next)
     {
 	wimp_box box;
 	backend_doc_item_bbox(doc, item, &box);
@@ -485,7 +485,7 @@ static antweb_selection_descr *antweb_highlight_scan_link(be_doc doc, antweb_sel
     wimp_box bbox;
     be_item item = NULL;
 
-    LKDBG((stderr, "antweb_highlight_scan_link: doc %p selection %p item %p flags %x\n", doc, initial, initial ? initial->data.text.item : 0, flags));
+    LKDBG((stderr, "antweb_highlight_scan_link: doc %p selection %p item %p flags %x tag %d\n", doc, initial, initial ? initial->data.text.item : 0, flags, initial ? initial->tag : -1));
 
     if (initial == NULL)
 	return NULL;
@@ -536,23 +536,24 @@ static be_item scan_links_2D(be_doc doc, be_item item, int flags, const wimp_box
     antweb_selection_t sel;
     antweb_selection_descr *link;
 
-    LKDBG((stderr, "backend_highlight_link_2D: doc %p item %p flags %x\n", doc, item, flags));
+    LKDBG((stderr, "backend_highlight_link_2D: doc %p item %p aref %p flags %x\n", doc, item, item ? item->aref : NULL, flags));
 
     if (item == NULL)
     {
 	wimp_box box;
 
 	if (flags & be_link_VERT)
-	{
+	{			/* horizontal line at top or bottom of window */
 	    box.x0 = -0x4000;
 	    box.x1 = 0x4000;
-	    box.y0 = box.y1 = flags & be_link_BACK ? 0x4000 : -0x4000;
+	    box.y0 = box.y1 = flags & be_link_BACK ? -0x4000 : 0x4000;
 	}
 	else
-	{
+	{			/* vertical line at left or right of window */
 	    box.x0 = flags & be_link_BACK ? 0x4000 : -0x4000;
 	    box.x1 = flags & be_link_BACK ? 0x4000 : -0x4000;
-	    box.y0 = box.y1 = 0;
+	    box.y0 = -0x4000;
+	    box.y1 = 0x4000;
 	}
 
 	link = antweb_highlight_scan_xy(doc, NULL, &box, flags, bounds);
@@ -618,7 +619,7 @@ static be_item scan_links_linear(be_doc doc, be_item item, int flags, const wimp
     /* search from current position to end of list */
     while (i != term)
     {
-	LKDBG((stderr, "scan_links_linear: 1st pass i %d\n", i));
+/* 	LKDBG((stderr, "scan_links_linear: 1st pass i %d\n", i)); */
 
 	ti = descriptor_to_item(&doc->selection_list.list[i]);
 
@@ -647,7 +648,7 @@ static be_item scan_links_linear(be_doc doc, be_item item, int flags, const wimp
 
 	while (i != term)
 	{
-	    LKDBG((stderr, "scan_links_linear: 2nd pass i %d\n", i));
+/* 	    LKDBG((stderr, "scan_links_linear: 2nd pass i %d\n", i)); */
 
 	    ti = descriptor_to_item(&doc->selection_list.list[i]);
 
@@ -766,10 +767,13 @@ be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box,
 	    if ((flags & be_link_VISIBLE) == 0 || (flags & be_link_MOVE_POINTER))
 		stream_find_item_location(ti, &x, &y);
 	    
-	    if ((flags & be_link_VISIBLE) == 0)
+	    /* removed the test on the basis that if VISIBLE was set then the item must be partially on screen
+	     * so we's like it to be totally on screen
+	     */
+/* 	    if ((flags & be_link_VISIBLE) == 0) */
 	    {
 #if USE_MARGINS
-		frontend_view_ensure_visable(doc->parent, x, y + ti->max_up + doc->margin.y1, y - ti->max_down + doc->margin.y1);
+		frontend_view_ensure_visable(doc->parent, x + doc->margin.x0, y + ti->max_up + doc->margin.y1, y - ti->max_down + doc->margin.y1);
 #else
 		frontend_view_ensure_visable(doc->parent, x, y + ti->max_up, y - ti->max_down);
 #endif
@@ -780,11 +784,14 @@ be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box,
 		if ((flags & be_link_CARETISE) && match_item(ti, be_link_TEXT, NULL))
 		{
 		    int offset;
+#if 1
+		    offset = -1;
+#else
 		    if (flags & be_link_VERT)
 			offset = be_item_has_caret(doc, item) ? doc->selection.data.text.input_offset : -1;
 		    else
 			offset = flags & be_link_BACK ? -1 : 0;			/* end : beginning */
-
+#endif
 		    LKDBG((stderr, "move_highlight: caretise flags %x old offset %d offset %d old item %p old input %p\n", flags, doc->selection.data.text.input_offset, offset, item, doc->selection.data.text.item));
 		    backend_set_caret(doc, ti, offset);
 		}
@@ -794,7 +801,11 @@ be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box,
 		}
 
 		if (flags & be_link_MOVE_POINTER)
-		    frontend_pointer_set_position(doc->parent, x + 4 /* ti->width/2*/, y);
+#if USE_MARGINS
+		    frontend_pointer_set_position(doc->parent, x + (ti->width + ti->pad)/2 + doc->margin.x0, y + doc->margin.y1);
+#else
+		    frontend_pointer_set_position(doc->parent, x + (ti->width + ti->pad)/2, y);
+#endif
 	    }
         }
     }

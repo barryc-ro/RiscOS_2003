@@ -211,5 +211,10 @@ extern void fe_frame_link_array_free(fe_view v);
 
 extern fe_view fe_next_frame(fe_view v, BOOL next);
 
+extern void fe_frame_link_move(fe_view v, int flags);
+extern void fe_frame_link_activate(fe_view v);
+extern int fe_frame_link_selected(fe_view v);
+extern void fe_frame_link_clear_all(fe_view v);
+
 /* stbfe.h*/
 

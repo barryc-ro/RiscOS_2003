@@ -969,12 +969,12 @@ BOOL tb_status_unstack(void)
 	    setfocus(bar_list->object_handle);
 	}
 
-	STBDBG(("tb_status_unstack(): out\n"));
+	STBDBGN(("tb_status_unstack(): out\n"));
 
 	return TRUE;
     }
 
-    STBDBG(("tb_status_unstack(): out\n"));
+    STBDBGN(("tb_status_unstack(): out\n"));
 
     return FALSE;
 }
@@ -1561,7 +1561,7 @@ void tb_status_show(int small_only)
 		    o.box.y0 += text_safe_box.y0 + bar_list->height;
 		    o.box.y1 += text_safe_box.y0 + bar_list->height;
 
-		    o.y = - text_safe_box.y0 + o.box.y1 - 20;
+		    o.y = - text_safe_box.y0 + o.box.y1 + 10;
 		}
 
 
@@ -1705,7 +1705,7 @@ os_error *tb_status_set_message(int type, const char *msg)
         status_current_type = type;
         e = tb_status_force_redraw();
 
-	STBDBG(("stbtb: msg %d '%s'\n", type, strsafe(s)));
+	STBDBGN(("stbtb: msg %d '%s'\n", type, strsafe(s)));
     }
 
     return e;

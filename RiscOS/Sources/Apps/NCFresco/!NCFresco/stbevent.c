@@ -500,6 +500,32 @@ static void toolbar_event_handler(int event, fe_view v)
 	frontend_complain(fe_status_open_toolbar(v, event - fevent_TOOLBAR_MAIN));
 }
 
+static void frame_link_event_handler(int event, fe_view v)
+{
+    switch (event)
+    {
+    case fevent_FRAME_LINK_LEFT:
+	fe_frame_link_move(v, be_link_BACK);
+	break;
+	
+    case fevent_FRAME_LINK_RIGHT:
+	fe_frame_link_move(v, 0);
+	break;
+
+    case fevent_FRAME_LINK_UP:
+	fe_frame_link_move(v, be_link_VERT | be_link_BACK);
+	break;
+
+    case fevent_FRAME_LINK_DOWN:
+	fe_frame_link_move(v, be_link_VERT);
+	break;
+
+    case fevent_FRAME_LINK_ACTIVATE:
+	fe_frame_link_activate(v);
+	break;
+    }
+}
+
 static void url_event_handler(int event, fe_view v)
 {
     char buf[32], *s;
@@ -615,6 +641,9 @@ void fevent_handler(int event, fe_view v)
 		break;
 	    case fevent_SUB_CLASS_TOOLBAR2:
 		tb_event_handler(event, v);
+		break;
+	    case fevent_SUB_CLASS_FRAME_LINK:
+		frame_link_event_handler(event, v);
 		break;
             }
 	    break;

@@ -195,19 +195,23 @@ static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe
 	/* set up dividers */
 	frame->dividers[rid_frame_divider_TOP] = row == 0 ?
 	    frameset->dividers[rid_frame_divider_TOP] :			/* copy top from parent */
+	   /*  fs->bwidth == 0 ? -1 : */
 	    frame_previous_row->dividers[rid_frame_divider_BOTTOM];	/* use the divider from the row above */
 	
 	frame->dividers[rid_frame_divider_BOTTOM] = row == fs->nrows-1 ?
 	    frameset->dividers[rid_frame_divider_BOTTOM] :		/* copy bottom from parent */
+	    /* fs->bwidth == 0 ? -1 : */
 	    (last_row_divider = divider_current_index++);		/* create new divider and store */
 
 	
 	frame->dividers[rid_frame_divider_LEFT] = col == 0 ?
 	    frameset->dividers[rid_frame_divider_LEFT] :		/* copy left from parent */
+	   /*  fs->bwidth == 0 ? -1 : */
 	    last_col_divider;						/* use the divider created last time around */
 	
 	frame->dividers[rid_frame_divider_RIGHT] = col == fs->ncols-1 ?
 	    frameset->dividers[rid_frame_divider_RIGHT] :		/* copy right from parent */
+	    /* fs->bwidth == 0 ? -1 : */
 	    (last_col_divider = divider_current_index++);		/* create new divider and store */
 
 

@@ -1054,7 +1054,7 @@ static void antweb_unlink_doc(be_doc doc)
 	be_doc dd;
 	for (dd = document_list; dd; dd = dd->next)
 	{
-	    BEDBG((stderr, "dispose_doc: dd %p dd->next %p\n", dd, dd->next));
+/* 	    BEDBG((stderr, "dispose_doc: dd %p dd->next %p\n", dd, dd->next)); */
 	    if (dd->next == doc)
 	    {
 		dd->next = doc->next;
@@ -1077,7 +1077,7 @@ os_error *backend_dispose_doc(be_doc doc)
 {
     BEDBG((stderr, "doc%p: dispose_doc called by %s\n", doc, caller(1) ));
 
-#if DEBUG
+#if 0
     fprintf(stderr, "dispose_doc: checklist: in %p doc->next %p document_list %p\n", doc, doc->next, document_list);
 
     dump_document_list();
@@ -4694,7 +4694,7 @@ const char *backend_check_meta(be_doc doc, const char *name)
 	if (!access_get_header_info(doc->url, NULL, NULL, &expires) || expires == UINT_MAX)
 	    return NULL;
 
-	strftime(rbuf, sizeof(rbuf), TIME_FORMAT, gmtime(&expires));
+	strftime(rbuf, sizeof(rbuf), TIME_FORMAT, gmtime((const time_t *)&expires));
 	return rbuf;
     }
 
@@ -4704,7 +4704,7 @@ const char *backend_check_meta(be_doc doc, const char *name)
 	if (!access_get_header_info(doc->url, NULL, &last_modified, NULL) || last_modified == 0)
 	    return NULL;
 
-	strftime(rbuf, sizeof(rbuf), TIME_FORMAT, gmtime(&last_modified));
+	strftime(rbuf, sizeof(rbuf), TIME_FORMAT, gmtime((const time_t *)&last_modified));
 	return rbuf;
     }
 
