@@ -73,16 +73,16 @@ install_rom: ${ROM_MODULE}
         ${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: Module installed (ROM)
 
-resources: Resources.${LOCALE}.Messages
+resources: LocalRes:Messages
         ${MKDIR} ${RESDIR}
-        ${CP} Resources.${LOCALE}.Messages ${RESDIR}.Messages ${CPFLAGS}
+	TokenCheck LocalRes:Messages
+        ${CP} LocalRes:Messages ${RESDIR}.Messages ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied to Messages module
 
 clean:
         ${WIPE} o.* ${WFLAGS}
         ${WIPE} aof ${WFLAGS}
         ${WIPE} linked ${WFLAGS}
-        ${WIPE} map ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 ${ROM_MODULE}: ${OBJS} ${TBOXLIB} ${ROMCSTUBS}
@@ -92,24 +92,9 @@ ${ROM_MODULE}: ${OBJS} ${TBOXLIB} ${ROMCSTUBS}
 # final link for ROM Image (using given base address)
 rom_link:
         ${MKDIR} linked
-        ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -bin -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM} \
-              -map > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
-o.jcomp: s.jcomp
-o.main:	c.main
-o.main:	C:h.string
-o.main:	C:h.kernel
-o.main:	C:h.swis
-o.main:	C:h.errno
-o.main:	C:h.ctype
-o.main:	<Lib$Dir>.tboxlibint.h.messages
-o.main:	C:h.kernel
-o.main:	<Lib$Dir>.tboxlibint.objects.h.toolbox
-o.main:	h.main
-o.main:	C:h.kernel
