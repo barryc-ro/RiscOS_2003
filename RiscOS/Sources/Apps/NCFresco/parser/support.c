@@ -1285,6 +1285,8 @@ extern void push_inhand(SGMLCTX *context)
     s.ptr = context->inhand.data;
     s.bytes = context->inhand.ix;
 
+#if 0
+    /* SJM: removed because of problems with elements within PRE zone stripping newlines */
     PRSDBG(("push_inhand: bytes %d (%02x) strip initial nl %d cr %d\n", s.bytes, s.ptr[0], context->strip_initial_nl, context->strip_initial_cr));
     
     while ((context->strip_initial_nl || context->strip_initial_cr) && s.bytes > 0)
@@ -1311,6 +1313,8 @@ extern void push_inhand(SGMLCTX *context)
 	    context->strip_initial_cr = 0;
 	}
     }
+#endif
+
 #if 0    
     while ((context->strip_final_nl || context->strip_final_cr) && s.bytes > 0)
     {
@@ -1352,7 +1356,9 @@ extern void push_bar_last_inhand(SGMLCTX *context)
 
     PRSDBG(("push_bar_last_inhand: bytes %d strip initial nl %d cr %d\n", context->inhand.ix, context->strip_initial_nl, context->strip_initial_cr));
 
+#if 0
     context->strip_initial_nl = context->strip_initial_cr = 0;
+#endif
 #if 0
     context->strip_final_nl = context->strip_final_cr = 0;
 #endif

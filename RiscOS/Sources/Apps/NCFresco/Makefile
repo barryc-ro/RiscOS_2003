@@ -390,25 +390,26 @@ cu: CHECKERS_UNIX
 clean:		sanity
 		@echo "Cleaning out objects and executables"
 		-@cd ./fresco_pc && $(RM) *.o *,ff8 *,fd3
-		-@cd ./fresco ; $(RM) *.o *,ff8 *,fd3
+		-@cd ./fresco && $(RM) *.o *,ff8 *,fd3
 		-@cd ./cbfresco && $(RM) *.o
 		-@cd ./cbfresco_pc && $(RM) *.o
 		-@cd ./cbfresco_zm && $(RM) *.o
-		-@cd ./unix ; $(RM) *.o
-		-@cd ./ncfresco ; $(RM) *.o
-		-@cd ./ncfresco_zm ; $(RM) *.o
-		-@cd ./stdalone; $(RM) *.o htmlcheck
-		-@cd ./bunix ; $(RM) *.o builders
-		-@cd ./cunix ; $(RM) *.o builders parse_check format_check check_all
-		-@cd ./hriscos ; $(RM) *.o htmlcheck,ff8
-		-@cd ./\!Fresco ; $(RM) *,ff8 *,fd3
+		-@cd ./unix && $(RM) *.o
+		-@cd ./ncfresco && $(RM) *.o
+		-@cd ./ncfresco_zm && $(RM) *.o
+		-@cd ./ncfresco_rel && $(RM) *.o
+		-@cd ./stdalone && $(RM) *.o htmlcheck
+		-@cd ./bunix && $(RM) *.o builders
+		-@cd ./cunix && $(RM) *.o builders parse_check format_check check_all
+		-@cd ./hriscos && $(RM) *.o htmlcheck,ff8
+		-@cd ./\!Fresco && $(RM) *,ff8 *,fd3
 		-@cd ./abs && $(RM) *
 		-@cd ./aof && $(RM) *
 		-@cd ./rm && $(RM) *
 		-@cd ./fresco_rel && $(RM) *.o
 		-@cd ./fresco_mc && $(RM) *.o
 		-@cd ./fresco_file && $(RM) *.o
-		-@cd ./plotcheck ; $(RM) plotcheck *.o
+		-@cd ./plotcheck && $(RM) plotcheck *.o
 		@echo "Removing some build control files"
 		@$(RM) */builddate.h $(PREDEPS)
 
@@ -594,8 +595,8 @@ PROFILE:
 		@echo "You should do a make clean now!"
 
 realclean:	clean sanity
-		@cd ./RISC_OSLib && $(RM) *.o risc_oslib
-		@cd ./memlib && $(RM) *.o memlib
+		-@cd ./RISC_OSLib && $(RM) *.o risc_oslib
+		-@cd ./memlib && $(RM) *.o memlib
 		@echo "Cleaning generated files (eg htmldefs.c)"
 		@$(RM) -r $(ATTREXTRA) srclist RELEASE buildstamp TAGS \
 		cscope.files cscope.out
@@ -609,14 +610,14 @@ riscoslib:
 # File holding filenames of each source file. These are the files
 # that are considered for searching with tools, etc.
 srclist:
-		@for dir in fresco parser commonsrc ./!Fresco ./!NCFresco ./plingcbfresco \
+		-@for dir in fresco parser commonsrc ./!Fresco ./!NCFresco ./plingcbfresco \
 		fresparse ncfresco stdalone unix bunix rocompat html http libs mimemapmod \
 		tabtests webftp webgopher webimage clib RISC_OSLib include plotcheck \
 		tcpiplibs ; do find $$dir -type f \
 		\( -name \*.h -o -name \*.c \) ; done > srclist
 
 srclist_fresco:
-		@for dir in fresco parser commonsrc ./!Fresco  \
+		-@for dir in fresco parser commonsrc ./!Fresco  \
 		fresparse ncfresco stdalone unix bunix rocompat memlib html http libs mimemapmod \
 		tabtests webftp webgopher webimage clib RISC_OSLib include \
 		tcpiplibs ; do find $$dir -type f \
@@ -843,22 +844,21 @@ NCFRESCO_ANT_LIBS=		../webimage/webimage1
 
 NCFRESCO_BUILD_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1da.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/CLib/stubs.o \
-				../RISC_OSLib/risc_oslib \
+				$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/risc_oslib.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/inetlib.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/socklib.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlibd.o \
-				$(RISCOS_BUILD_EXPORT)/Lib/debug/remote.o \
-				$(RISCOS_BUILD_EXPORT)/Lib/Trace/T_PL.o \
-				../memcheck/mclib
+				$(RISCOS_BUILD_EXPORT)/Lib/debug/remote.o
+
+#				$(RISCOS_BUILD_EXPORT)/Lib/Trace/T_PL.o \
+#				../memcheck/mclib
 
 NCFRESCO_REL_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1da.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/CLib/stubs.o \
-				../RISC_OSLib/risc_oslib \
+				$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/risc_oslib.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/inetlib.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/socklib.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlib.o
-
-#				$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/risc_oslib.o \
 
 NCFRESCO_ROM_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1da.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/romcstubs.o \
@@ -885,7 +885,7 @@ NCFRESCO_DEPENDS:
 		@echo NCFresco dependencies generated
 
 # Export the NCFresco resources for ROM building
-NCFRESCO_BUILD_ROM_EXPORT:
+NCFRESCO_BUILD_ROM_EXPORT_OLD:
 		@-mkdir $(RISCOS_BUILD_RESOURCES)
 		@-mkdir $(RISCOS_BUILD_RESOURCES)/Resources
 		@-mkdir $(RISCOS_BUILD_RESOURCES)/Resources/NCFresco
@@ -905,6 +905,14 @@ NCFRESCO_BUILD_ROM_EXPORT:
 		$(CP) $(CPOPTIONS) aof/ncfresco $(RISCOS_BUILD_OBJECTS)
 		$(CP) $(CPOPTIONS) commonsrc/plugin.h $(RISCOS_BUILD_HEADERS)/plugin
 
+
+# copy the files in each wanted directory except for the links and CVS directories
+NCFRESCO_BUILD_ROM_EXPORT:
+		find Resources/Common/UK -name CVS -prune -o -type f -print -exec $(CP) $(CPOPTIONS) {} $(RISCOS_BUILD_RESOURCES)/Common/UK/ \;
+		find Resources/RCA/UK -name CVS -prune -o -type f -print -exec $(CP) $(CPOPTIONS) {} $(RISCOS_BUILD_RESOURCES)/RCA/UK/ \;
+		find Resources/NC2/UK -name CVS -prune -o -type f -print -exec $(CP) $(CPOPTIONS) {} $(RISCOS_BUILD_RESOURCES)/NC2/UK/ \;
+		$(CP) $(CPOPTIONS) aof/ncfresco				$(RISCOS_BUILD_OBJECTS)
+		$(CP) $(CPOPTIONS) commonsrc/plugin.h			$(RISCOS_BUILD_HEADERS)/plugin
 
 # NCFresco application in the new style CVS controlled RISC OS build tree
 NCFRESCO_BUILD:		$(PREDEPS)

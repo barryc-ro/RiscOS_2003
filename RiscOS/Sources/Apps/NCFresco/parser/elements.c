@@ -1230,8 +1230,13 @@ extern void do_got_element(SGMLCTX *context)
     {
 	parse_then_perform_element_open(context);
 
-	PRSDBG(("do_got_element: set strip initial new line, mode=%d\n", context->tos->matching_mode));
+	PRSDBG(("do_got_element: set strip initial new line, matching mode=%d, tos->element %d (%d)\n",
+		context->tos->matching_mode,
+		context->tos->element, HTML_PRE));
+#if 0
+	/* SJM: removed because of problems with elements within PRE zone stripping newlines */
 	context->strip_initial_nl = context->strip_initial_cr = 1;
+#endif
     }
 
     clear_inhand(context);
