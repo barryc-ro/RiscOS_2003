@@ -120,7 +120,8 @@ dirs:
 
 resources:
         ${MKDIR} ${RDIR}
-        ${CP} resources.<System>.Tags ${RDIR}.Tags ${CPFLAGS}
+        ${CP} resources.<Machine>.Tags ${RDIR}.Tags ${CPFLAGS}
+        ${CP} resources.<Locale>.Messages ${RDIR}.Messages ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 # dummy target
