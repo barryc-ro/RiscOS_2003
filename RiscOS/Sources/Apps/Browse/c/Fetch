@@ -448,9 +448,68 @@ void fetch_preprocess_token(browser_data * b, HStream * tptr)
     }
     else b->formflag = 0;
 
-    /* Closure of long if to see if the HStream structure represented */
-    /* a body tag or header information - the code is run if it's a   */
-    /* body tag.                                                      */
+    /* Tables - need to preprocess any HStreams attached as part of a table */
+    /* tag. Because any one token is only run through this preprocessor     */
+    /* once, and because when this table tag is run through it all of the   */
+    /* HStreams within may not have arrived yet (the page is only partially */
+    /* fetched), it is still necessary to rescan the attached HStreams at a */
+    /* later date (e.g. as part of the reformatting process) to ensure they */
+    /* are all preprocessed correctly.                                      */
+
+    if (tptr->tag == TABLE)
+    {
+      table_stream   * table = (table_stream *) tptr;
+      table_row      * R;
+      table_headdata * D;
+      HStream        * attached, * temp;
+
+      R = table->List;
+
+      /* Scan the rows and cells */
+
+      while (R)
+      {
+        D = R->List;
+
+        while (D)
+        {
+          if (D->Tag)
+          {
+            switch (D->Tag)
+            {
+              case TagTableData:
+              case TagTableHead:
+              {
+                attached = (HStream *) D->List;
+
+                /* Preprocess any attached HStream list */
+
+                while (attached)
+                {
+                  if (!(attached->flags & HFlags_DealtWithToken))
+                  {
+                    temp = b->finaltoken;
+                    fetch_preprocess_token(b, attached);
+                    b->finaltoken = temp;
+                  }
+
+                  attached = attached->next;
+                }
+              }
+              break;
+            }
+          }
+
+          D = D->Next;
+        }
+
+        R = R->Next;
+      }
+    }
+
+    /* Closure of long 'if' to see if the HStream structure represented */
+    /* a body tag or header information - the code is run if it's a     */
+    /* body tag.                                                        */
   }
 
   #ifdef FRAMES_SUPPORT
@@ -1693,7 +1752,11 @@ _kernel_oserror * html_get(char * url, char * extradata, int * handle, int metho
 
     fetch_list = up;
 
-    /* If there is any extra data for POST or whatever, deal with it */
+    /* If there is any extra data for POST or whatever, deal with it. */
+    /* The POST request entries must come first in the extra header   */
+    /* info, so that the browser can make the assumption that         */
+    /* everything from Content-Type forwards may be stripped in the   */
+    /* event of a redirection when the current fetch method is POST.  */
 
     if (extradata)
     {
@@ -1731,7 +1794,9 @@ _kernel_oserror * html_get(char * url, char * extradata, int * handle, int metho
 
         strcpy(up->extradata + 2, extradata);
 
-        /* Header entry for the extra data */
+        /* Header entry for the extra data - again, the removal routines in the  */
+        /* fetcher's redirection code assume that this comes before Content-Type */
+        /* and the actual body content to make life easy there.                  */
 
         sprintf(head, "Content-Length: %d", len);
 
@@ -1994,7 +2059,51 @@ _kernel_oserror * html_close(unsigned int handle)
     }
   #endif
 
-  if (up->stream) HtmlStreamFree(up->stream);
+  if (up->stream)
+  {
+    unsigned int   context = HtmlReturnContext(up->stream);
+    browser_data * browser = last_browser;
+
+    /* Should Never Happen...! */
+
+    if (!context)
+    {
+      erb.errnum = Utils_Error_Custom_Fatal;
+
+      StrNCpy0(erb.errmess,
+               lookup_token("NoContxt:Serious internal error - Block is already free or was not HtmlAlloc'd in html_close(); must exit immediately.",
+                            0,
+                            0));
+
+      return &erb;
+    }
+
+    /* Ensure that any HStream pointers inside any current browser_data */
+    /* structures are not part of this stream - if so, clear them.      */
+
+    while (browser)
+    {
+      /* For now, just a few selected items */
+
+      if (browser->selected && HtmlReturnContext(browser->selected) == context)
+      {
+        browser_clear_selection(browser, 0);
+        browser->selected = NULL;
+      }
+
+      if (browser->highlight && HtmlReturnContext(browser->highlight) == context)
+      {
+        browser_clear_highlight(browser, 0);
+        browser->highlight = NULL;
+      }
+
+      if (browser->pointer_over && HtmlReturnContext(browser->pointer_over) == context) browser->pointer_over = NULL;
+
+      browser = browser->previous;
+    }
+
+    HtmlStreamFree(up->stream);
+  }
 
   if (up->context)
   {
@@ -2624,11 +2733,68 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
             flex_free(source);
             *source = NULL;
 
+            /* Ensure POST requests are now cleared (we shouldn't continue */
+            /* POSTing to redirected URLs)                                 */
+
+            if (up->method == URL_Method_http_POST)
+            {
+              /* When the headers are build, the POST data (starting with a Content-Length */
+              /* entry) are put in first and everything else is inserted above it. As the  */
+              /* comments on this code say, this is organised so we can simplify things    */
+              /* here and just chop off everything at Content-Length and below, rather     */
+              /* than having to carefully remove the appropriate header lines and body.    */
+
+              if (up->extradata)
+              {
+                char * strip = strstr(up->extradata, "Content-Length");
+
+                if (strip)
+                {
+                  int len;
+
+                  /* How much do we want to keep? */
+
+                  len = strstr(up->extradata, "Content-Length") - up->extradata; /* Don't use 'strip' in case flex shifted when 'len' was stacked */
+
+                  #ifdef TRACE
+                    {
+                      int rmv = flex_size((flex_ptr) &up->extradata) - len;
+                      flexcount -= rmv;
+                      if (tl & (1u<<13)) Printf("**   flexcount: %d\n",flexcount);
+                    }
+                  #endif
+
+                  /* Resize the block */
+
+                  flex_extend((flex_ptr) &up->extradata, len);
+                }
+              }
+
+              /* Change the fetch method to GET */
+
+              up->method = URL_Method_http_GET;
+            }
+
+            #ifdef TRACE
+              if (up->extradata)
+              {
+                flexcount -= flex_size((flex_ptr) &up->extradata);
+                if (tl & (1u<<13)) Printf("**   flexcount: %d\n",flexcount);
+              }
+            #endif
+
+            if (up->extradata) flex_free((flex_ptr) &up->extradata);
+
+            up->method = URL_Method_http_GET;
+
             /* Retch: Hack Line One's entry... */
 
             #ifdef HACK_LINEONE
 
-              if (!strcmp(redirect,"http://www.lineone.net/login.cgi"))
+              if (
+                   !strcmp(redirect,"http://www.lineone.net/login.cgi") ||
+                   !strcmp(redirect,"http://www.lineone.net/index.html")
+                 )
               {
                 // Send out cookie...
 
