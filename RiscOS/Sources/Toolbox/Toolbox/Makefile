@@ -111,7 +111,7 @@ RESF=o.msgs
 #
 .c.o:;    ${CC} ${CFLAGS} ${ROMFLAGS} -o $@ $<
 .c.od:;    ${CC} ${CFLAGS} ${ROMFLAGS} -Ddebugging=1 -o $@ $<
-.cmhg.o:; ${CMHG} -p -o $@ $<
+.cmhg.o:; ${CMHG} -depend !Depend -p -o $@ $<
 .s.o:;    ${AS} ${AFLAGS} -o $@ $<
 
 #
