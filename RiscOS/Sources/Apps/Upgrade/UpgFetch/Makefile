@@ -54,6 +54,7 @@ TOOLBOXLIB = Tbox:o.toolboxlib
 WIMPLIB	   = Tbox:o.wimplib
 TCPIPLIB   = <Lib$Dir>.TCPIPLibs.o.*
 ZLIB 	   = <Lib$Dir>.zlib.o.zlib
+
 #
 # Include files
 #
@@ -62,7 +63,7 @@ INCLUDES = -Itbox:,C:,TCPIPLibs:
 # Program specific options:
 #
 COMPONENT = UpgFetch
-TARGET    = image.upgfetch
+TARGET    = aof.UpgFetch
 APP	  = !${COMPONENT}
 
 OBJS      =	\
@@ -89,22 +90,32 @@ all: ${TARGET}
 # RISC OS ROM build rules:
 #
 
-install: ${TARGET}
-	${MKDIR} ${INSTDIR}.${APP}
-        ${CP} ${TARGET} ${INSTDIR}.${APP}.${COMPONENT} ${CPFLAGS}
-        ${CP} Resources.* ${INSTDIR}.${APP}.* ${CPFLAGS}
-        @echo ${COMPONENT}: application installed
+resources: ${TARGET}
+	${MKDIR} ${RESDIR}.^.Apps.${APP}
+        ${CP} ${TARGET} ${RESDIR}.^.Apps.${APP}.${COMPONENT} ${CPFLAGS}
+        ${CP} Resources.* ${RESDIR}.^.Apps.${APP}.* ${CPFLAGS}
+        @echo ${COMPONENT}: all complete
 
 clean:
         ${WIPE} o.*       ${WFLAGS}
+        ${WIPE} aof.*       ${WFLAGS}
+        ${WIPE} rm.*       ${WFLAGS}
         ${WIPE} install.* ${WFLAGS}
         ${RM} ${TARGET}
+        ${RM} o
+        ${RM} aof
+        ${RM} rm
         @echo ${COMPONENT}: cleaned
+
+dirs:
+        ${MKDIR} o
+        ${MKDIR} aof
+        ${MKDIR} rm
 
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS}
+${TARGET}: ${OBJS} dirs
         ${LD} -o $@ ${OBJS} ${CLIB} ${EVENTLIB} ${TOOLBOXLIB} ${WIMPLIB} ${ZLIB} ${TCPIPLIB}
 
 
