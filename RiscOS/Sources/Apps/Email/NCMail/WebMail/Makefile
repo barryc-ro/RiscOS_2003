@@ -40,7 +40,7 @@ DEBUG_TARGET	= $(COMPONENT)d
 # Export Paths for Messages module
 #
 
-RESDIR          = $(RESDIR).$(RES_COMPONENT)
+RESDIR          := $(RESDIR).$(RES_COMPONENT)
 RESAPP          = <Resource$Dir>.Apps.$(APP)
 
 
