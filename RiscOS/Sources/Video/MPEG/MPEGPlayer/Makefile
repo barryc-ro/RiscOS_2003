@@ -9,6 +9,7 @@
 # 11-Apr-95  TMD	  Updated to include DefaultUI, icons
 # 05-May-95  TMD	  Added RelNote to installed files
 # 11-Oct-95  TMD	  Added stuff to make MPEGRes module
+# 13-Nov-98  SMC	  Updated to latest MPEG player
 #
 
 #
@@ -23,9 +24,11 @@ MKDIR   = cdir
 AS      = aasm
 CP      = copy
 RM      = remove
+WIPE    = -wipe
 CCFLAGS = -c -depend !Depend -IC:
 ASFLAGS = -depend !Depend -Stamp -quit -module
 CPFLAGS = ~cfr~v
+WFLAGS  = ~cfr~v
 
 #
 # Export Paths for Messages module
@@ -36,13 +39,15 @@ RESAPP = <resource$dir>.Apps.${APP}
 # Program specific options:
 #
 COMPONENT = MPEGPlayer
-APP       = !M-Code21
+APP       = !MPEG
 RDIR	= Resources
 SOURCE	= s.main
 TARGET	= rm.MPEGRes
 
 RESFILES = \
+  ${RDIR}.!Run		\
   ${RDIR}.!RunImage	\
+  ${RDIR}.!Version	\
   ${RDIR}.DefaultUI	\
   ${RDIR}.icons
 
@@ -51,21 +56,19 @@ RESFILES = \
 # Generic rules:
 #
 
-all: ${RESFILES} ${RDIR}.!Run ${RDIR}.SprExt080 Doc.RelNote ${TARGET}
+all: ${RESFILES}
 	@echo ${COMPONENT}: built
 
 ${TARGET}: ${SOURCE} ${RESFILES}
 	${AS} ${ASFLAGS} ${SOURCE} ${TARGET}
 
-install: ${RDIR}.!Run ${RDIR}.!RunImage ${RDIR}.DefaultUI ${RDIR}.icons ${RDIR}.SprExt080 ${TARGET}
+install: ${RESFILES}
+        ${MKDIR} ${INSTDIR}
         ${CP} ${RDIR}.!Run      ${INSTDIR}.!Run      ${CPFLAGS}
         ${CP} ${RDIR}.!RunImage ${INSTDIR}.!RunImage ${CPFLAGS}
+        ${CP} ${RDIR}.!Version  ${INSTDIR}.!Version ${CPFLAGS}
         ${CP} ${RDIR}.DefaultUI ${INSTDIR}.DefaultUI ${CPFLAGS}
         ${CP} ${RDIR}.icons     ${INSTDIR}.icons     ${CPFLAGS}
-        ${CP} ${RDIR}.SprExt080 ${INSTDIR}.SprExt080 ${CPFLAGS}
-        ${CP} Doc.RelNote       ${INSTDIR}.^.RelNote ${CPFLAGS}
-        ${CP} ${TARGET}		${INSTDIR}.MPEGRes   ${CPFLAGS}
-        SetType ${INSTDIR}.SprExt080 Module
 	@echo ${COMPONENT}: installed
 
 resources: ${RESFILES} ${RDIR}.!RunROM
@@ -76,16 +79,9 @@ resources: ${RESFILES} ${RDIR}.!RunROM
         ${CP} ${RDIR}.icons     ${RESAPP}.icons     ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied to Messages module
 
+clean:
+        ${WIPE} rm.* ${WFLAGS}
+        ${WIPE} !MPEG ${WFLAGS}
+        @echo ${COMPONENT}: cleaned
+
 # Dynamic dependencies:
-rm.MPEGRes: Hdr:ListOpts
-rm.MPEGRes: Hdr:Macros
-rm.MPEGRes: Hdr:System
-rm.MPEGRes: Hdr:SWIs
-rm.MPEGRes: Hdr:CPU.Generic26
-rm.MPEGRes: Hdr:IO.GenericIO
-rm.MPEGRes: Hdr:RISCOS
-rm.MPEGRes: Hdr:Machine.<Machine>
-rm.MPEGRes: Hdr:Services
-rm.MPEGRes: Hdr:Proc
-rm.MPEGRes: Hdr:ResourceFS
-rm.MPEGRes: s.version
