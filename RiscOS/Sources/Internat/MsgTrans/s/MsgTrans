@@ -31,7 +31,7 @@
 ;; 24-Jan-92    0.17    Add new SWI; MessageTrans_CopyError
 ;; 29-Jan-92    0.18    General tidy up, removed all version-conditional
 ;;                      assembly, ensured that the Service entry was fast,
-;;                      made wp constant through out the entire module (i.e.
+;;                      made wp constant through out the entire module (i..e.
 ;;                      it is never used for anything else, removed the funny
 ;;                      sav_token code by a proper passed pointer so that
 ;;                      recursion is not a problem, includes initialising it
@@ -89,7 +89,7 @@ Module_BaseAddr
         GBLL    debugerr                                ; For MessageTrans_ErrorLookup
         GBLL    debugintr                               ; For internationalisation
         GBLL    debugFSW
-        GBLL    svcstkdescr                             ; Copy SVC stack based descriptors to RMA if true
+        GBLL    debughash
 
 debug           SETL   false
 debugxx         SETL   debug :LAND: false
@@ -98,10 +98,18 @@ debugservice    SETL   debug :LAND: false
 debugerr        SETL   debug :LAND: false
 debugintr       SETL   debug :LAND: false
 debugFSW        SETL   debug :LAND: false
-svcstkdescr     SETL   true
+debughash       SETL   debug :LAND: false
 
         GBLL    hostvdu
 hostvdu SETL    false
+
+; The following macro is provided for assistance debugging MessageTrans.
+; By setting it to true, the module title changes to DbgMessageTrans and
+; the SWI chunk prefix changes similarly, the SWI chunk changes to &C0E00
+; This enables it to be softloaded on a RISC OS machine without confusing
+; all the applications and modules relying on MessageTrans services.
+        GBLL    AltTitleAndSWI
+AltTitleAndSWI  SETL   false
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; Workspace layout
@@ -112,23 +120,19 @@ wsorigin                        #       0
 link_header                     #       4
 current_ForegroundBuffer        #       4
 current_IRQBuffer               #       4
-MessageFile_block               #       5*4
-GlobalMessageFile_block         #       5*4
+MessageFile_block               #       8*4
+GlobalMessageFile_block         #       8*4
 Dictionary                      #       4
 ThreadNess                      #       4
-        [ svcstkdescr
-SVCSTK_size                     #       4
-        ]
 MaxThreadNess * 2
 
         ASSERT  (link_header-wsorigin)=0
 
 ForegroundBuffersNo             *       16
-
 IRQBuffersNo                    *       4
-
 Buffersize                      *       &100
 
+; These two must appear consecutively in the workspace
 ForegroundBuffers               #       Buffersize*ForegroundBuffersNo
 IRQBuffers                      #       Buffersize*IRQBuffersNo
 
@@ -149,14 +153,17 @@ workspace_size  * @-wsorigin
         DCD     TitleString      - Module_BaseAddr
         DCD     HelpString       - Module_BaseAddr
         DCD     0                                       ; CommandTable
+        [ AltTitleAndSWI
+        DCD     &C0E00
+        |
         DCD     MessageTransSWI_Base
+        ]
         DCD     MySWIDecode      - Module_BaseAddr
         DCD     MySWINames       - Module_BaseAddr
         DCD     0
         DCD     0
-        DCD     0
+        DCD     MyModuleFlags    - Module_BaseAddr
 
-TitleString     DCB     "MessageTrans", 0
 HelpString      DCB     "MessageTrans", 9, "$Module_MajorVersion ($Module_Date)"
                 [ Module_MinorVersion <> ""
                 DCB     " $Module_MinorVersion"
@@ -170,24 +177,38 @@ HelpString      DCB     "MessageTrans", 9, "$Module_MajorVersion ($Module_Date)"
 
                 ^       0
 fcb_link        #       4                               ; only linked in if not client buffer
-fcb_flags       #       4
+fcb_flags       #       4                               ; flags in proxy blocks
 fcb_fileptr     #       4                               ; pointer to file data: 0 => not loaded
 fcb_filename    #       4                               ; pointer to filename
+fcb_hash        #       4                               ; hash table (if fcb_flags & flg_hashing)
+fcb_clnt_block  #       4                               ; pointer back to client's block
+fcb_reserved    #       8                               ; reserved for future use
 fcb_size        #       0
+
+                ^       0
+fcb_clnt_magic  #       4                               ; magic word in client's proxy block
+fcb_clnt_flags  #       4                               ; flags in the client's block
+fcb_real_block  #       4                               ; pointer to proxy descriptor
+fcb_clnt_spre2  #       4                               ; spare in client's proxy block
+fcb_clnt_size   #       0
+
 
 flg_inresourcefs        *       1 :SHL: 0               ; file data is in resourcefs, else RMA
 flg_ourbuffer           *       1 :SHL: 1               ; means that on closing we must free the buffer
 flg_addtolist           *       1 :SHL: 2               ; means treat seeing as opening
-        [ svcstkdescr
+
+flg_new_api             *       1 :SHL: 26              ; client set R3 to magic value on OpenFile SWI
+flg_worth_hashing       *       1 :SHL: 27              ; set if MessageTrans_OpenFile feels it's worth it
+flg_hashing             *       1 :SHL: 28              ; the client's hash table pointer is valid
 flg_freeblock           *       1 :SHL: 29              ; we allocated this descriptor in the RMA
-flg_ourdescriptor       *       1 :SHL: 30              ; indirect messageblock - fcb_fileptr points to RMA descriptor
-        ]
+flg_proxy               *       1 :SHL: 30              ; fcb_fileptr points to our own descriptor
 flg_sqshinresourcefs    *       1 :SHL: 31              ; means a squashed file in resourcefs
 
+flg_hidden_from_client  *       (2_111111 :SHL: 26)     ; Mask for internal only flags.
 
-        [ svcstkdescr
-OldSVCStackSize         *       8192                    ; Ursula kernels will supply the correct absolute address
-        ]
+MinimumHashableFileSize *       1                       ; minimum file size to enable hashing
+MinimumTokenCount       *       1                       ; number of tokens required to enable hashing
+
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; Init entry - claim and initialise workspace.
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -206,20 +227,6 @@ Init    ENTRY
         STR     r2, [ r12 ]
 01      MOV     wp, r2
 
-        [ svcstkdescr
-        MOV     r0, #6
-        MOV     r1, #0
-        MOV     r2, #16                         ; Ursula: read top of SVC stack call
-        SWI     XOS_ReadSysInfo
-        MOV     r0, sp, LSR #20
-        MOVVS   r2, #OldSVCStackSize
-        ADDVSS  r2, r2, r0, LSL #20             ; clears V
-        TEQ     r2, #0
-        MOVEQ   r2, #OldSVCStackSize
-        SUBNE   r2, r2, r0, LSL #20             ; calculate stack size
-        STR     r2, SVCSTK_size
-        ]
-
         MOV     r0, #0
         STR     r0, link_header
         STR     r0, current_ForegroundBuffer
@@ -231,8 +238,8 @@ Init    ENTRY
 
 ; Try to open message files
         BL      AttemptOpenMessagesFiles
-
-        EXITS
+        CLRV
+        EXIT
 
 MessagesFileName         DCB     "Resources:$.Resources.MsgTrans.Messages", 0
 GlobalMessagesFileName   DCB     "Resources:$.Resources.Global.Messages", 0
@@ -246,13 +253,15 @@ GlobalMessagesFileName   DCB     "Resources:$.Resources.Global.Messages", 0
 ; Error not returned - failure simply means they're not open.
 ;
 
-AttemptOpenMessagesFiles Entry "r0-r2"
+AttemptOpenMessagesFiles Entry "r0-r3"
 
         LDR     r0, MessageFile_block
         TEQ     r0, #0
         BNE     %FT50
         ADR     r0, MessageFile_block + 4
         ADR     r1, MessagesFileName
+        DebugS   xx,"Opening MsgTrans message file", r1
+        LDR     r3, magicnumber
         MOV     r2, #0
         BL      SWIMessageTrans_OpenFile
         MOVVS   r0, #0
@@ -260,19 +269,24 @@ AttemptOpenMessagesFiles Entry "r0-r2"
 
 50
         LDR     r0, GlobalMessageFile_block
-        TEQ     r0, #0
-        EXITS   NE
+        CMP     r0, #0                                  ; clears V
+        EXIT    NE
         ADR     r0, GlobalMessageFile_block + 4
         ADR     r1, GlobalMessagesFileName
+        DebugS   xx,"Opening global message file", r1
         MOV     r2, #0
+        LDR     r3, magicnumber
         BL      SWIMessageTrans_OpenFile
         MOVVS   r0, #0
         STR     r0, GlobalMessageFile_block             ; Either 0 or the correct address
         Debug   xx,"Global file opened ",r0
 
-        EXITS
+        CLRV
+        EXIT
 
         LTORG
+
+magicnumber     DCB     "FAST"
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; Die entry - throw away all blocks without telling anybody
@@ -293,8 +307,8 @@ Die     ENTRY
         LDR     wp, [ r12 ]
 DieLoop
         LDR     r6, link_header
-        TEQ     r6, #0
-        EXITS   EQ
+        CMP     r6, #0                                  ; clears V
+        EXIT    EQ
         LDR     r14, [ r6, #fcb_link ]                  ; Delete block from chain
         STR     r14, link_header
 
@@ -329,9 +343,8 @@ UServTab
         DCD     0                              ;terminator
         DCD     UServTab - Module_BaseAddr     ;anchor
 Service
-        Debug   service,"Service call entry: R0,R1,R2 =", r0, r1, r2
-
         MOV     r0,r0                          ;magic instruction
+        Debug   service,"Service call entry: R0,R1,R2 =", r0, r1, r2
         TEQ     r1, #Service_ResourceFSDying
         TEQNE   r1, #Service_TerritoryStarted
         TEQNE   r1, #Service_ResourceFSStarted
@@ -386,13 +399,21 @@ FinishResourceFS
 ExitServiceResourceFS
         Pull    "r0-r1, pc"
 
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; Module flags.  Bit 0 set means module is 32-bit aware and safe
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+MyModuleFlags   DCD     1       ; 32-bit OK
+
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; SWI decoding: R11 = SWI index to call
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
         MACRO
 $lab    MySWI   $swiname
+        [ :LNOT: AltTitleAndSWI
         ASSERT  MessageTransSWI_Base+(.-jptable)/4 = $swiname
+        ]
 $lab    B       SWI$swiname
         MEND
 
@@ -418,7 +439,11 @@ jptable
 
 maxswi  *       (.-jptable)/4
 
+TitleString
 MySWINames
+        [ AltTitleAndSWI
+        DCB     "Dbg"
+        ]
         DCB     MessageTransSWI_Name, 0
         DCB     "FileInfo", 0
         DCB     "OpenFile", 0
@@ -439,7 +464,7 @@ error_badswi
         MOV     r1, #0
         MOV     r2, #0
         ADR     r4, TitleString
-        SWI     XMessageTrans_ErrorLookup
+        BL      SWIMessageTrans_ErrorLookup
         Pull    "r1,r2,r4,pc"
 
         MakeInternatErrorBlock NoSuchSWI,,BadSWI
@@ -460,17 +485,12 @@ error_badswi
 SWIMessageTrans_FileInfo ENTRY "r3"
 
         BL      internal_fileinfo
-        [ svcstkdescr
-        BICVC   r0, r0, #(flg_ourdescriptor :OR: flg_freeblock :OR: flg_sqshinresourcefs)
-                                                        ; flags not for external consumption
-        |
-        BICVC   r0, r0, #flg_sqshinresourcefs           ; flag not for external consumption
-        ]
+        BICVC   r0, r0, #flg_hidden_from_client         ; flags not for external consumption
         MOVVC   r2, r3                                  ; R2 = size of buffer required
 
         EXIT
 
-; .............................................................................
+; ..............................................................................
 
 ; In    R1 -> filename
 ; Out   R0 = flag word:
@@ -485,7 +505,7 @@ ErrorBlock_Recurse
         DCB     "Recursion in MessageTrans",0
         ALIGN
 
-internal_fileinfo ENTRY "r1,r4-r6"
+internal_fileinfo ENTRY "r1,r4-r7"
 
         LDR     lr, ThreadNess
         CMP     lr, #MaxThreadNess
@@ -537,14 +557,15 @@ internal_fileinfo ENTRY "r1,r4-r6"
         LDREQ   r3, [r2, #8]                            ; Unsquashed size
         ADDEQ   r3, r3, #4
 
-95      MOV     r5, pc
+95      MVNVS   r7, #1 << 31
+        MOVVC   r7, #0
         MOV     r6, r0
         MOV     r0, #0
         SWI     XOS_Find                                ; close file even if error
         MOVVC   r0, r6
-        TEQVCP  r5, #0
+        ADDS    r7, r7, #1                              ; preserve V
 
-        Debug   xx,"Result: r0, r2 =", r0, r2
+        Debug   xx,"Result: r0, r2, r3 =", r0, r2, r3
 
 99
         Debug   FSW,"Out"
@@ -566,43 +587,99 @@ SQSHTag DCB     "SQSH"
 ;       R2 -> buffer to hold file data
 ;             0 => allocate some space in the RMA,
 ;                  or use the file directly if it's in Resources:
+;       If R3 = the constant "FAST" then the client is assumed
+;             to have allocated a 32-byte block and guarantees to
+;             call MessageTrans_CloseFile to allow us to free the
+;             hash table.
+
+
+; Conditions for setting flg_worth_hashing:
+;  "File is large enough" AND
+;   ("Client used new API with magic constant in R3" OR "Client did not supply a buffer in R2")
+
+; Conditions for generating a proxy block:
+;  "Client did not supply a buffer in R2"
 
 SWIMessageTrans_OpenFile Entry "r0-r6"
 
         Debug   xx,"MessageTrans_OpenFile",r0,r1,r2
         DebugS  xx,"Filename =",r1
 
+        LDR     r6, [ r0, #fcb_clnt_magic ]             ; read the client's magic word
+        LDR     r5, magicnumber
+        EOR     r6, r6, r5                              ; R6 = 0 if client magic word matched
         LDR     r14, link_header                        ; Check if the block is already in the list
+        B       %FT10
 OpenScanLoop
-        TEQ     r14, r0
+        LDR     r14, [ r14, #fcb_link ]                 ; no - so go around again
+10      TEQ     r14, r0
         BEQ     err_alreadyopen
         TEQ     r14, #0
-        LDRNE   r14, [ r14, #fcb_link ]
+        BEQ     %FT20                                   ; OK - didn't find it
+        TEQ     r6, #0
+        BNE     OpenScanLoop                            ; magic word didn't match
+        LDR     r4, [ r14, #fcb_flags ]
+        TST     r4, #flg_freeblock                      ; was it our block in the chain?
+        BEQ     OpenScanLoop                            ; no, so go around again
+        LDR     r4, [ r14, #fcb_real_block ]
+        TEQ     r4, r0                                  ; back pointer matches?
+        BNE     OpenScanLoop                            ; no
+        LDR     r5, [ r0, #fcb_clnt_flags ]             ; get client block flags
+        TST     r5, #flg_proxy                          ; proxy flag set?
+        BICEQS  r5, r5, #flg_inresourcefs + flg_proxy   ; after here, Z is set if it wasn't a pointer to us
+        BNE     OpenScanLoop                            ; bits which we didn't
+        LDR     r5, [ r0, #fcb_fileptr ]                ; check the forwards link
+        TEQ     r5, r14                                 ; does it match?
         BNE     OpenScanLoop
+        ; More than likely that this is a re-entered block if we get to here.
+        BEQ     err_alreadyopen
 
+20
         BL      internal_fileinfo                       ; R0 = flags, R2 -> data, R3 = size
-        BVS     ExitOpenFile
+        BVS     ExitOpenQuick                           ; sorry - a problem occurred
 
-        LDR     r4, stk_filedesc                        ; R4 -> file descriptor
-        STR     r0, [ r4, #fcb_flags ]
-        STR     r1, [ r4, #fcb_filename ]
+        LDR     r4, stk_buffersize                      ; get caller's R3
+        LDR     lr, magicnumber                         ; get the magic word
+        TEQ     lr, r4
+        ORREQ   r0, r0, #flg_new_api+flg_worth_hashing  ; remember new API used.
+        LDREQ   r4, stk_filedesc                        ; R4 -> file descriptor
+        MOVEQ   lr, #0
+        STREQ   lr, [r4, #fcb_clnt_block]               ; zero the back pointer
 
         LDR     r14, stk_buffer
-        TEQ     r14, #0                                 ; If client buffer supplied,
+        CMP     r14, #0
+        ORREQ   r0, r0, #flg_worth_hashing
+
+        CMP     r3, #MinimumHashableFileSize            ; big enough to considering hashing this file?
+        BICCC   r0, r0, #flg_worth_hashing              ; no - so forget that we'd like to do it
+
+        LDR     r4, stk_filedesc                        ; R4 -> file descriptor
+        STR     r0, [ r4, #fcb_clnt_flags ]
+        STR     r1, [ r4, #fcb_filename ]
+
+        CMP     r14, #0                                 ; always clears V
         BNE     UseSuppliedBuffer
 
+        BL      CopyDescriptorToRMA                     ; allocate a new descriptor, changes R4
+        BVS     ExitOpenQuick                           ; failed to claim memory
+
+        Debug   xx, "Copied to RMA OK if neccessary"
+        ; By now, R4 points to our own RMA proxy block if necessary, or the original
+        ; client's block pointer.
+
+        Debug   xx, "Make our own buffer"
         TST     r0, #flg_inresourcefs
         BEQ     FileNotDirectROM                        ; If it isn't in ResourceFS
+        Debug   xx, "ResourceFS data"
         STR     r2, [ r4, #fcb_fileptr ]                ; R2 -> message data
 
 ExitOpenFile
-        [ svcstkdescr
-        BLVC    CopyDescriptorToRMA                     ; make duplicate of block in RMA if needed - updates R4
-        ]
         LDRVC   r14, link_header                        ; If not an error, then link in to list
         STRVC   r14, [ r4, #fcb_link ]
         STRVC   r4, link_header
 ExitOpenFile_NoLink
+        BLVC    HashTableAlloc                          ; allocate and construct the hash table if wanted
+ExitOpenQuick
         STRVS   r0, [ sp, #0 ]                          ; If error store in exit frame
         EXIT
 
@@ -636,7 +713,7 @@ FileNotDirectROM
         SWI     XOS_Module
         MOV     r0, r4
         SETV
-        B       ExitOpenFile
+        B       ExitOpenQuick
 
 err_alreadyopen
         Push    "r1, r2"
@@ -647,53 +724,35 @@ err_alreadyopen
         Pull    "r1, r2"
         B       ExitOpenFile
 
-        [ svcstkdescr
-
-        ; This routine examines the position of the client's supplied 4-word buffer to make sure
-        ; that it isn't on the SVC stack.  It if isn't then all is left alone.  Otherwise, a new
-        ; descriptor is grabbed from the RMA and the client's block is reset to be marked to point
-        ; to the (safe) proxy RMA block.  The client's flags have flg_ourdescriptor set.
-        ; Our real blocks have flg_freeblock set.
-
-CopyDescriptorToRMA Entry "r0-r3,r6"
-
-        MOV     r0, sp, LSR #20
-        SUBS    r0, r4, r0, LSL #20                     ; subtract base of SVC stack from descriptor
-        LDRHS   r3, SVCSTK_size                         ; get size of SVC mode stack
-        RSBHSS  r0, r0, r3                              ; was it between that and the top of the stack?
-        EXITS   LO                                      ; it wasn't - so we won't bother copying this one
-
-
+CopyDescriptorToRMA Entry "r0-r3,r5,r6,r7"
         MOV     r3, #fcb_size
         MOV     r0, #ModHandReason_Claim
         SWI     XOS_Module                              ; Try and get a new RMA block for descriptor
-        EXITS   VS                                      ; OK - leave it then
-
-        Debug   xx,"CopyToRMA *PERFORMING COPY* to RMA block",r2
-
+        EXIT    VS                                      ; OK - leave it then
         LDMIA   r4, {r0,r1,r3,r5}                       ; get data from client's original descriptor block
-        ORR     r1, r1, #flg_ourdescriptor              ; Set flag that we allocated this block
-        STR     r1, [ r4, #fcb_flags ]
-        STR     r2, [ r4, #fcb_fileptr ]                ; link back to internal descriptor
-        EOR     r1, r1, #flg_freeblock :OR: flg_ourdescriptor   ; set flg_freeblock, clears flg_ourdescriptor
-        STMIA   r2, {r0,r1,r3,r5}                       ; copy information to our own internal descriptor
+        ORR     r1, r1, #flg_proxy                      ; Set flag that we allocated this block
+        STR     r1, [ r4, #fcb_clnt_flags ]             ; Store flag so TranslateFindDescriptor knows about it
+        STR     r2, [ r4, #fcb_real_block ]             ; link from client descriptor to our new descriptor
+        EOR     r1, r1, #flg_freeblock :OR: flg_proxy   ; set flg_freeblock, clears flg_proxy
+        LDR     r6, magicnumber                         ; get the magic word
+        STR     r6, [ r4, #fcb_clnt_magic ]             ; store the magic word
+        MOV     r6, #0                                  ; hash table pointer set to 0
+        MOV     r7, r2                                  ; backwards pointer to client block
+        STMIA   r2, {r0,r1,r3,r5,r6,r7}                 ; copy information to our own internal descriptor
         MOV     r4, r2                                  ; replace caller's descriptor pointer
-        EXITS                                           ; and return.
-
+        EXIT                                            ; and return.
 
 TranslateFindDescriptor Entry "r1"
 
         ; This routine checks a descriptor to see if it was a proxy that was set up previously
         ; by CopyDescriptorToRMA.  If it was, then the proxy pointer is dereferenced to get the
-        ; real block 'saddress.
+        ; real block's address.
 
         TEQ     r0, #0                                  ; a null pointer?
-        LDRNE   r1, [ r0, #fcb_flags ]                  ; get flags from descriptor block
-        TSTNE   r1, #flg_ourdescriptor                  ; was it a proxy?
-        LDRNE   r0, [ r0, #fcb_fileptr ]                ; It was - follow the proxy link
-        EXITS
-
-        ]
+        LDRNE   r1, [ r0, #fcb_clnt_flags ]             ; get flags from descriptor block
+        TSTNE   r1, #flg_proxy                          ; was it a proxy?
+        LDRNE   r0, [ r0, #fcb_real_block ]             ; It was - follow the proxy link
+        EXIT
 
 
 ; Subroutine for MessageTrans_OpenFile
@@ -704,7 +763,7 @@ TranslateFindDescriptor Entry "r1"
 ;     r3 = length
 ;     r5 = resourcefs source address (if relevant)
 ; Out r0 corrupt
-OpenFile_LoadIntoBuffer Entry "r1-r5"
+OpenFile_LoadIntoBuffer Entry "r1-r6"
 
         ; Store buffer length at start of buffer
         STR     r3, [r2], #4
@@ -734,14 +793,16 @@ OpenFile_LoadIntoBuffer Entry "r1-r5"
         SWI     XSquash_Decompress
 
         ; Free the decompression workspace, ignoring errors
-        Push    "r0,pc"
+        MVNVS   r5, #1<<31
+        MOVVC   r5, #0
+        Push    "r0"
 
         MOV     r2, r1
         MOV     r0, #ModHandReason_Free
         SWI     XOS_Module
 
-        Pull    "r0,lr"
-        TEQP    pc, lr
+        Pull    "r0"
+        ADDS    r5, r5, #1                              ; restore V
 
         EXIT
 
@@ -785,11 +846,12 @@ SWIMessageTrans_GSLookup
 ;       If R2 = 0 this SWI is identical to MessageTrans_Lookup.
 
         CMP     r2, #0
-        SWIEQ   XMessageTrans_Lookup
+        BNE     %FT01
+        SWI     XMessageTrans_Lookup
         STRVS   r0, [ sp, #0 ]
-        Pull    "r0-r1, r4-r7, r8-r10, pc", VS
-        Pull    "r0-r1, r4-r7, r8-r10, pc", EQ
+        Pull    "r0-r1, r4-r7, r8-r10, pc"
 
+01
 ;       Else ...
 
         MOV     r9, r2                                  ; Keep the user's buffer
@@ -824,8 +886,12 @@ SWIMessageTrans_GSLookup
         STRVS   r0, [ sp, #0 ]
         Pull    "r0, r2, r3"
         STRVS   r0, [ sp, #0 ]
+ [ No26bitCode
+        Pull    "r0-r1, r4-r7, r8-r10, pc"              ; corrupt flags
+ |
         Pull    "r0-r1, r4-r7, r8-r10, pc", VS
         Pull    "r0-r1, r4-r7, r8-r10, pc",, ^
+ ]
 
 FreeGSBufferAndExit
         STR     r0, [ sp, #0 ]                          ; Shove error into stack
@@ -834,8 +900,6 @@ FreeGSBufferAndExit
         SWI     XOS_Module
         SETV                                            ; Force error, cleared by SWI
         Pull    "r0-r1, r4-r7, r8-r10, pc"
-
-GSTransIsOK
 
 ; -----------------------------------------------------------------------------
 
@@ -858,30 +922,8 @@ SWIMessageTrans_ErrorLookup Entry "r1-r8"
 ; First find a buffer to use:
 
         CMP     r2,#0
-        BNE     %FT01                                   ; There is a buffer supplied
+        BLEQ    AllocateInternalBuffer                  ; R2=0 means check IRQsema
 
-        MOV     r14, #0
-        LDR     r14, [ r14, #IRQsema ]
-        CMP     r14, #0
-        ADREQ   r2, ForegroundBuffers
-        ADRNEL  r2, IRQBuffers
-        LDREQ   r14, current_ForegroundBuffer
-        LDRNE   r14, current_IRQBuffer
-        ADD     r2, r2, r14, ASL #8                     ; Point at correct buffer to use
-        ADD     r14, r14, #1
-        MOVEQ   r8, #ForegroundBuffersNo
-        MOVNE   r8, #IRQBuffersNo
-        CMP     r14, r8
-        MOVGE   r14, #0
-        MOV     r8, #0
-        LDR     r8, [ r8, #IRQsema ]
-        CMP     r8, #0
-        STREQ   r14, current_ForegroundBuffer
-        STRNE   r14, current_IRQBuffer                  ; And set new buffer number.
-        MOV     r3, #Buffersize
-
-        Debug   err,"Using buffer at ",r2
-01
         ;       Now R2 -> Buffer to use
         ;       R3 =  Buffer Size
         LDR     r14, [ r0 ], #4                         ; Copy error number.
@@ -915,47 +957,33 @@ SWIMessageTrans_ErrorLookup Entry "r1-r8"
 ; Out   R0 -> Error buffer used
 ;       V Set
 
-SWIMessageTrans_CopyError Entry "r9"
+SWIMessageTrans_CopyError Entry "r1-r3"
 
 ; First find a buffer to use:
 
-        MOV     r14, #0
-        LDR     r14, [ r14, #IRQsema ]
-        CMP     r14, #0
-        ADREQ   r9, ForegroundBuffers
-        ADRNEL  r9, IRQBuffers
-        LDREQ   r10, current_ForegroundBuffer
-        LDRNE   r10, current_IRQBuffer
-        ADD     r9, r9, r10, ASL #8                     ; Point at correct buffer to use
-        ADD     r10, r10, #1
-        MOVEQ   r11, #ForegroundBuffersNo
-        MOVNE   r11, #IRQBuffersNo
-        CMP     r10, r11
-        MOVGE   r10, #0
-        CMP     r14, #0
-        STREQ   r10, current_ForegroundBuffer
-        STRNE   r10, current_IRQBuffer                  ; And set new buffer number.
-        MOV     r10, #Buffersize - 4
+        MOV     r2, #0                                  ; look at IRQsema
+        BL      AllocateInternalBuffer
+        SUB     r3, r3, #4
+        MOV     r1, r2                                  ; Keep copy for exit
 
-; Now R9 -> Buffer to use
-;     R10 ~= Buffer Size
+; Now R2 -> Buffer to use
+;     R3 ~= Buffer Size
 
-        Debug   err,"Using buffer at ", r9
+        Debug   err,"Using buffer at ", r2
 
-        MOV     r11, r9
         LDR     r14, [ r0 ], #4                         ; Copy error number.
-        STR     r14, [ r11 ], #4
+        STR     r14, [ r2 ], #4
 
 CopyErrorLoop
-        DECS    r10
-        STREQB  r10, [ r11 ]                            ; Terminate when buffer is about to overflow
+        DECS    r3
+        STREQB  r3, [ r2 ]                              ; Terminate when buffer is about to overflow
         LDRNEB  r14, [ r0 ], #1
-        STRNEB  r14, [ r11 ], #1
+        STRNEB  r14, [ r2 ], #1
         TEQNE   r14, #0
         BNE     CopyErrorLoop
 
         SETV
-        MOV     r0, r9
+        MOV     r0, r1
 
         EXIT
 
@@ -973,6 +1001,9 @@ CopyErrorLoop
 ;       R3 = length of result excluding terminator (if R2<>0)
 ;       R4 = place marker for next call (non-0)
 
+; NOTE: Absolutely do not change the meaning of R4.  The hash table construction
+;       code relies on it being an index into the file data.
+
                 ^       0, sp
 stk_filedesc    #       4               ; r0            ; R0-R3 as for MessageTrans_Lookup
 stk_token       #       4               ; r1
@@ -985,9 +1016,7 @@ SWIMessageTrans_EnumerateTokens Entry "r0-r9"
         Debug   enum,"MessageTrans_EnumerateTokens", r0, r1, r2, r3, r4
         DebugS  enum,"Token to match =",r1
 
-        [ svcstkdescr
         BL      TranslateFindDescriptor
-        ]
 
         MOV     r9, r1                                  ; Save a pointer to the client's token
         BL      EnsureFileIsOpen
@@ -1102,9 +1131,7 @@ EnumerateFoundToken
         BL      skiptonexttoken                         ; ignore errors (EOF), since that's for next time
 
         LDR     r0, stk_filedesc
-        [ svcstkdescr
         BL      TranslateFindDescriptor
-        ]
         LDR     r0, [ r0, #fcb_fileptr ]
         ADD     r0, r0, #4                              ; R0 -> start of file data (ignore size field)
         SUB     r3, r3, r0                              ; R3 = offset within file for next time
@@ -1114,7 +1141,7 @@ EnumerateFoundToken
         CLRV
         B       ExitEnumerateTokens                     ; DON'T return V flag
 
-;.....................................................................................
+;......................................................................................
 
 EnsureFileIsOpen
         ; In    R0 -> data structure
@@ -1160,7 +1187,7 @@ ReOpenBlock
         LDRVC   r3, [ r0, #fcb_fileptr ]
         B       FileNowOpen
 
-;.....................................................................................
+;......................................................................................
 
 ; In    R1 -> input token
 ; Out   R0 = next character in token
@@ -1204,33 +1231,24 @@ SWIMessageTrans_Lookup
 
         CMP     r0, #0                                  ; Were we given a message block?
         BEQ     DoGlobalLookup                          ; No, skip straight to global lookup
-        [ svcstkdescr
         Push    "r0-r3"                                 ; Preserve the inputs in case it fails
         BL      TranslateFindDescriptor
-        |
-        Push    "r1-r3"                                 ; Preserve the inputs in case it fails
-        ]
         BL      internal_lookup
-        [ svcstkdescr
         LDRVC   r0, [sp], #4                            ; Restore old R0 on success to not confuse client
         ADDVS   sp, sp, #4                              ; Junk old R0 on failure - client will get error block
-        ]
         ADDVC   sp, sp, #12                             ; Remove the stored input values R1-R3
         Pull    "pc", VC                                ; Match found so return
         Pull    "r1-r3"                                 ; Restore the stored input values R1-R3
 DoGlobalLookup
         LDR     r0, GlobalMessageFile_block
+        BL      TranslateFindDescriptor
         Debug   xx,"Global file : ", r0
         CMP     r0, #0                                  ; Clears V
         BEQ     NoGlobalMessageFile                     ; What an unlikely thing
         BL      internal_lookup                         ; Look it up again
         Pull    "pc"
 
-NoGlobalMessageFile
-        XError  TokenNotFound
-        Pull    "pc"
-
-internal_lookup ENTRY "r0-r9"
+internal_lookup ENTRY "r0-r10"
 
         Debug   xx,"MessageTrans_Lookup",r0,r1,r2,r3,r4,r5
         DebugS  xx,"Token =",r1
@@ -1238,6 +1256,77 @@ internal_lookup ENTRY "r0-r9"
         MOV     r9, r1                                  ; Pointer to the token for error insertion
         BL      EnsureFileIsOpen
         BVS     %FT98
+
+        LDR     r1, [r0, #fcb_flags]
+        TST     r1, #flg_hashing
+        LDRNE   r8, [r0, #fcb_hash]
+        TEQNE   r8, #0
+        BEQ     findtoken                               ; no hash table, behave as before
+
+        Debug   hash, "Looking up in hash table"
+
+        Push    "r2,r3,r8"
+        MOV     r1, r9                                  ; token we are searching for
+        MOV     r2, r9
+        MOV     r3, #0                                  ; length of the token
+71      BL      get_R0_R1
+        ADDHI   r3, r3, #1
+        BHI     %BT71
+        BL      AllocHashR2R3toR1
+        Debug   hash, "Hash value",r1
+        CMP     r1, #NumBuckets
+        Pull    "r2,r3,r8",EQ
+        BEQ     findtoken                               ; wildcarded :-(   We don't do those
+        MOV     r7, r1                                  ; remember which hash chain for later
+        LDR     r2, [r8, r7, LSL #2]!                   ; retrieve address of first hash entry
+        LDR     r10, [r8, #4]                           ; get terminator
+        Debug   hash, "Hash chain at address",r2
+72
+        MOV     r1, r9
+        CMP     r2, r10                                 ; finished this list?
+        BEQ     %FT78                                   ; done
+        LDR     r3, [r2], #4                            ; get next hash entry
+        Debug   hash, "Next hash address", r3
+73
+        BL      get_R0_R1
+        BLS     %FT76                                   ; terminator?  this could be it!
+        BL      getbyte
+        BVS     %BT72                                   ; error? next!
+        CMP     r8, #"*"                                ; wildcard?
+        BEQ     %FT77
+        CMP     r8, #"/"                                ; also stop if reached end of token
+        CMPNE   r8, #10
+        CMPNE   r8, #":"                                ; if followed by ":", skip to end of line
+        BEQ     %BT72                                   ; try next entry
+        CMP     r8, #"?"
+        CMPNE   r8, r0
+        BEQ     %BT73
+        B       %BT72
+
+76      BL      getbyte
+        BVS     %BT72                                   ; no
+        CMP     r8, #"/"                                ; "/" or newline => alternatives
+        CMPNE   r8, #10
+        CMPNE   r8, #":"                                ; token must be followed by ":"
+        BNE     %BT72
+77
+        LDR     r2, [sp], #12                           ; restore r2, trash stacked r3 & r8
+        B       %FT31                                   ; we got it!
+
+78
+        Debug   hash, "Need to look down wildcard chain if r7 != 00000040.  r7 is", r7
+        TEQ     r7, #NumBuckets                         ; which chain have we just searched?
+        MOVNE   r7, #NumBuckets                         ; so we know next time we've tried the wildcard chain
+        LDRNE   r8, [sp, #8]                            ; get hash table header pointer back
+        ADDNE   r8, r8, #NumBuckets*4                   ; point at wildcard chain header
+        LDMNEIA r8, {r2,r10}                            ; load wildcard chain head and terminator words
+        TEQNE   r2, r10                                 ; quick pre-check to see if chain is empty
+        BNE     %BT72                                   ; try wildcard chain if it's not empty
+        LDR     r2, [sp], #12                           ; already tried wildcard token list, restore R2, trash r3,r8
+        CMP     r0, #&100                               ; LO if we don't have the proper error message yet (R0 is a char)
+        MOVLO   r4, r3                                  ; fake the EOF condition for getbyte
+        BLLO    getbyte                                 ; get and translate the error message
+        B       %FT98                                   ; and give up
 
 ; search each line of the file in turn, looking for <token>:
 
@@ -1283,6 +1372,7 @@ skipline
         BEQ     %FT52
         CMP     r14, #32
         BHS     %BT51
+        Debug   intr,"no token found, return error"
         SETV                                            ; no default - report error
         B       %FT99
 
@@ -1435,17 +1525,30 @@ explp   SUBS    r8, r8, #1
         ADDHI   r0, r0, r14
         BHI     explp
         SUBCCS  r0, r6, #1
-        LDMCCIA sp!, {r0, pc}^
+        LDMCCIA sp!, {r0, pc}
 explp1  LDRB    r8, [r0, #1]!
         CMP     r8, #0
-        LDMEQIA sp!, {r0, pc}^
+        LDMEQIA sp!, {r0, pc}
         CMP     r8, #&1b
         STRNEB  r8, [r1], #1
         LDREQB  r8, [r0, #1]!
         BLEQ    expand_tok1
         B       explp1
 
-;..............................................................................
+NoGlobalMessageFile
+        XError  TokenNotFound
+        Pull    "pc"
+
+ErrorBlock_TokenNotFound
+        DCD     ErrorNumber_MessageTrans_TokenNotFound
+        [       False
+        DCB     "TokenNotFound", 0
+        |
+        DCB     "TokNFnd", 0
+        ]
+        ALIGN
+
+;...............................................................................
 
 ; In    r3 -> next byte in message file
 ;       r4 -> end-of-file
@@ -1499,19 +1602,14 @@ skiptonextline3
         BEQ     skiptonextline0
 skiptonextline4
         CMP     r3, r4
+ [ No26bitCode
+        MOVCC   pc, lr
+ |
         MOVCCS  pc, lr
+ ]
         B       getbyte
 
-;..............................................................................
-ErrorBlock_TokenNotFound
-        DCD     ErrorNumber_MessageTrans_TokenNotFound
-        [       False
-        DCB     "TokenNotFound", 0
-        |
-        DCB     "TokNFnd", 0
-        ]
-        ALIGN
-
+;...............................................................................
 ; In    R3 -> next byte in message file
 ;       R4 -> end-of-file
 ;       R9 -> pointer to the token we are trying to find (for the error message)
@@ -1521,8 +1619,14 @@ ErrorBlock_TokenNotFound
 
 getbyte                                                 ; This version does not push LR in the normal non-end-of-file case.
         CMP     r3, r4                                  ; Check we are within the file
+ [ No26bitCode
+        LDRLOB  r8, [ r3 ], #1                          ; Yes, so read the byte
+        msr LO, CPSR_f, #0                              ; V clear, maintains LO condition
+        MOVLO   pc, lr
+ |
         LDRLOB  r8, [ r3 ], #1                          ; Yes, so read the byte
         BICLOS  pc, lr, #VFlag                          ; Then return with V clear
+ ]
         Push    "r7, lr"                                ; It's an error, get the error message
         ADR     r0, ErrorBlock_TokenNotFound
         ;       R9 is the token to be inserted into the error message
@@ -1563,30 +1667,34 @@ getbyte                                                 ; This version does not 
 ; SWI MessageTrans_CloseFile
 ; In    R0 -> 4-word data structure passed to MessageTrans_OpenFile
 
-SWIMessageTrans_CloseFile ENTRY "r0-r2"
+SWIMessageTrans_CloseFile ENTRY "r0-r3"
 
         Debug   xx,"MessageTrans_CloseFile",r0
 
         ADR     r11, link_header - fcb_link
-        [ svcstkdescr
         BL      TranslateFindDescriptor
-        ]
+        BL      HashTableDelete
 CloseFileLoop
         LDR     r1, [ r11, #fcb_link ]
-        TEQ     r1, #0
+        CMP     r1, #0                                  ; clear V
+ [ No26bitCode
+        EXIT    EQ                                      ; ignore it if unknown
+ |
         EXITS   EQ                                      ; ignore it if unknown
+ ]
         TEQ     r1, r0
         MOVNE   r11, r1
         BNE     CloseFileLoop
 
         LDR     r2, [ r0, #fcb_fileptr ]
-        MOV     r14, #0
-        STR     r14, [ r0, #fcb_fileptr ]
+        MOV     r3, #0
+        STR     r3, [ r0, #fcb_fileptr ]
         LDR     r14, [ r0, #fcb_link ]                  ; delete block from chain
         STR     r14, [ r11, #fcb_link ]
 
-        [ svcstkdescr
         LDR     r14, [ r0, #fcb_flags ]
+        LDR     r1, stk_filedesc                        ; get original client block (may = R0 though)
+        STR     r3, [ r1, #fcb_clnt_magic ]             ; blat the magic word
         TST     r14, #flg_ourbuffer
         MOVEQ   r2, #0                                  ; ensure R2 is set correctly to avoid later test
         TST     r14, #flg_freeblock
@@ -1596,15 +1704,8 @@ CloseFileLoop
         SWINE   XOS_Module
         LDMFD   sp!, {r2}
         ADDS    r2, r2, #0                              ; clears V and sets/clears Z appropriately
-        |
-        TEQ     r2, #0                                  ; no file data to delete
-        ]
         EXIT    EQ
 
-        [ :LNOT:svcstkdescr
-        LDR     r14, [ r0, #fcb_flags ]                 ; delete file block if allocated
-        TST     r14, #flg_ourbuffer                     ; client buffers not included
-        ]
         MOVNE   r0, #ModHandReason_Free
         SWINE   XOS_Module
 
@@ -1627,9 +1728,7 @@ SWIMessageTrans_MakeMenus ENTRY "r1, r4-r11"
 
         Debug   xx,"MessageTrans_MakeMenus", r0, r1, r2, r3
 
-        [ svcstkdescr
         BL      TranslateFindDescriptor
-        ]
 
 loop1   LDRB    r14, [ r1 ]                             ; reached end if title token null
         TEQ     r14, #0
@@ -1745,7 +1844,7 @@ ErrorBlock_BuffOverflow
         DCB     "BufOFlo", 0
         ALIGN
 
-;.....................................................................................
+;......................................................................................
 
 ; In    r1 -> start of token
 ; Out   r1 -> byte after end of token
@@ -1761,7 +1860,7 @@ skiptoken ENTRY
 
         EXIT
 
-;.....................................................................................
+;......................................................................................
 
 ; int_lookup_nopars: lookup with no parameters
 ; In    R0 -> 4-word data structure passed to MessageTrans_LoadFile
@@ -1778,7 +1877,7 @@ int_lookup_nopars ENTRY "r4-r7"
         MOV     r5, #0
         MOV     r6, #0
         MOV     r7, #0
-        SWI     XMessageTrans_Lookup
+        BL      SWIMessageTrans_Lookup
 
         EXIT
 
@@ -1797,6 +1896,255 @@ SWIMessageTrans_Dictionary
         LDMIA   sp!, {r1, r2, r3, pc}
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; Hashing routines
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+; The hash tables are pretty simple.  There are 64 main buckets plus a special
+; bucket for tokens containing wildcards.  The data structure allocated from the
+; RMA has the following structure (specified in C for clarity only)
+
+; struct {
+;   struct {
+;     char **list;
+;   } buckets[64 + 1 + 1];    /* buckets + wildcards + terminator */
+;   char *token[number_of_tokens_in_file];
+; } hashtable;
+
+; Each entry in hashtable.token is a direct pointer into the messages file.
+
+; hashtable.buckets[n].list points to the first entry in hashtable.token for a
+; token which has a hash value of n.  All subsequent entries have the same hash
+; value up to but excluding the entry to which hashtable.buckets[n+1].list
+; points.  All the entries in buckets[].list are valid.  Empty buckets are
+; signified by buckets[n+1].list having the same value as buckets[n].list.  The
+; wildcard bucket (hashtable.buckets[64].list) works in the same way -
+; terminating bucket #63 and marking the first entry in the wildcard bucket (ie
+; bucket #64).   The terminator word (hashtable.buckets[65].list) is used as
+; the terminator for bucket #64 only.
+
+; sizeof(hashtable) will always be 264 + (4 * tokens).
+
+; AllocHashR2R3toR1 generates the bucket number (0-63) for a normal token, or
+; 64 for a wildcarded token.  Thus to lookup a token, calculate the hash value
+; and search the appropriate bucket, then if not found, search the wildcard
+; bucket, then if not found fail the lookup.  Unfortunately, you cannot do
+; anything but a sequential file search if the client asks to lookup something
+; with a wildcard in it - but this should be extremely rare.
+
+NumBuckets      *       64                              ; MUST be a power of two
+        ASSERT (NumBuckets * 4) <= Buffersize           ; must fit in a _kernel_oserror
+
+HashTableDelete ENTRY "r0-r3"
+        ; Delete the hash table in the descriptor pointed to by R0
+        ; Preserves all registers; corrupts all flags.
+        ; Must not write pointer unless we were hashing in case it was a
+        ; small non-proxied descriptor.
+        Debug   hash, "HashTableDelete", r0
+        LDR     r2, [r0, #fcb_flags]                    ; check flags
+        TST     r2, #flg_hashing                        ; hashing enabled?
+        EXIT    EQ                                      ; no - don't touch hash pointer
+        MOV     r1, #0
+        BIC     r2, r2, #flg_hashing                    ; clear hash enable
+        STR     r2, [r0, #fcb_flags]                    ; store flags
+        LDR     r2, [r0, #fcb_hash]                     ; find location of table
+        STR     r1, [r0, #fcb_hash]                     ; mark unused whatever
+        TEQ     r2, #0                                  ; got a hash table?
+        MOVNE   r0, #ModHandReason_Free
+        SWINE   XOS_Module                              ; release hash table
+        EXIT
+
+HashTableAlloc ENTRY "r0-r11"
+        ; Allocate space in the hash table.  R4 is our internal descriptor.
+        ; Preserves all registers.  Corrupts NZC, V clear if OK, V set on error
+        MOV     r0, r4
+        BL      HashTableDelete
+        LDR     r1, [r4, #fcb_flags]
+        BIC     r1, r1, #flg_hashing
+        TST     r1, #flg_worth_hashing                  ; worth the effort and space in descriptor?
+        STR     r1, [r4, #fcb_flags]
+        EXIT    EQ
+        Debug   hash, "HashTableAlloc - constructing hash table"
+        MOV     r0, r4                                  ; store descriptor in r0
+
+        MOV     r2, #-1                                 ; get a foreground buffer
+        BL      AllocateInternalBuffer                  ; abuse of internal buffers - but pretty safe
+        MOV     r8, r2                                  ; for safekeeping - a temporary buffer for the tokens
+        MOV     r9, r3                                  ; ditto
+        MOV     r2, #-1                                 ; get a foreground buffer
+        BL      AllocateInternalBuffer                  ; actually need a couple of them :-)
+        MOV     r6, r2                                  ; for safekeeping - this one holds the counters
+        MOV     r7, #0                                  ; number of wildcard tags
+        MOV     r11, #0                                 ; total number of tags
+        MOV     r4, #NumBuckets                         ; index for enumeration - will be zero at end of 10 loop
+10      SUBS    r4, r4, #1
+        STR     r7, [r6, r4, LSL #2]
+        BNE     %BT10
+        ; ASSERT r4 contains 0 here
+20
+        ADR     r1, StarToken                           ; we want everything
+        MOV     r2, r8                                  ; Set buffer
+        MOV     r3, r9                                  ; size of buffer
+        Push    "r11"
+        BL      SWIMessageTrans_EnumerateTokens         ; get next token
+        Pull    "r11"
+        EXIT    VS
+        TEQ     r2, #0                                  ; done?
+        BEQ     %FT30                                   ; completed the enumeration
+        ADD     r11, r11, #1                            ; inc total
+        BL      AllocHashR2R3toR1                       ; hash R2[0..R3] into R1
+        CMP     r1, #NumBuckets                         ; Got a wildcard?
+        ADDEQ   r7, r7, #1                              ; yes - increment wildcard bucket counter
+        LDRNE   r2, [r6, r1, LSL #2]                    ; no - increment counter for bucket
+        ADDNE   r2, r2, #1
+        STRNE   r2, [r6, r1, LSL #2]
+        B       %BT20
+30
+        Debug   hash, "Tokens in file",r11
+        CMP     r11, #MinimumTokenCount                 ; enough tokens to be worthwhile? Instruction also clears V
+        LDRLO   r11, [r0, #fcb_flags]
+        BICLO   r11, r11, #flg_worth_hashing            ; not worth the effort - don't bother in future
+        STRLO   r11, [r0, #fcb_flags]
+        EXIT    LO
+        ADD     r3, r11, #NumBuckets+2                  ; tag count + one per bucket + wildcard bucket + final terminator
+        MOV     r3, r3, LSL #2                          ; convert to bytes
+        Debug   hash, "Claiming memory", r3
+        MOV     r0, #ModHandReason_Claim
+        SWI     XOS_Module                              ; let's go!
+        EXIT    VS
+        LDR     r0, [sp, #4*4]                          ; get descriptor back into R0 back again
+        STR     r2, [r0, #fcb_hash]                     ; store the hash table memory
+        MOV     r4, #0                                  ; ready the index for enumeration again
+40      SUBS    r3, r3, #4
+        STR     r4, [r2, r3]
+        BNE     %BT40
+        ADD     r1, r2, #(NumBuckets+2)*4               ; skip the bucket pointers and final terminator to find chain mem
+        ; ASSERT r3 and r4 contain 0 here
+50      LDR     r0, [r6, r3, LSL #2]                    ; get r3'th entry from counter table
+        Debug   hash, "Bucket,Entries",r3,r0
+        STR     r1, [r2, r3, LSL #2]                    ; write head pointer
+        ADD     r1, r1, r0, LSL #2                      ; add number of entries
+        ADD     r3, r3, #1                              ; increment r3
+        TEQ     r3, #NumBuckets                         ; done?
+        BNE     %BT50
+        MOV     r11, r2                                 ; remember where the head pointer table is
+        STR     r1, [r2, r3, LSL #2]!                   ; store final header pointer (for wildcard token chain)
+        ADD     r1, r1, r7, LSL #2                      ; number of wildcard chain entries
+        STR     r1, [r2, #4]                            ; store final terminator
+        LDR     r0, [sp, #4*4]                          ; retrieve entry R4 - our internal descriptor
+        LDR     r7, [r0, #fcb_fileptr]                  ; guaranteed valid!
+        ADD     r7, r7, #4                              ; skip over the file size field
+60      ADD     r6, r7, r4                              ; remember where we were at the moment
+        ADR     r1, StarToken
+        MOV     r2, r8
+        MOV     r3, r9
+        Push    "r11"
+        BL      SWIMessageTrans_EnumerateTokens         ; we know what to do now
+        Pull    "r11"
+        TEQ     r2, #0
+        BEQ     %FT70
+        BL      HashAdvanceToRealToken                  ; updates R6 if necessary
+        BL      AllocHashR2R3toR1
+        Debug   hash, "Storing in bucket",r1
+        LDR     r1, [r11, r1, LSL #2]                   ; get the pointer
+65      LDR     r2, [r1], #4                            ; look for a space in the table
+        TEQ     r2, #0
+        BNE     %BT65
+        DebugS  hash, "Storing token", r6
+        STR     r6, [r1, #-4]!                          ; store in table
+        B       %BT60                                   ; next!
+70      LDR     r0, [sp, #4*4]                          ; retrieve client descriptor
+        LDR     r1, [r0, #fcb_flags]                    ; mark the hash table valid
+        ORR     r1, r1, #flg_hashing
+        STR     r1, [r0, #fcb_flags]
+        Debug   hash, "HashTableAlloc exiting having set up the hash table"
+        CLRV
+        EXIT
+
+StarToken
+        DCB     "*", 0
+        ALIGN
+
+        ROUT
+
+HashAdvanceToRealToken ENTRY "r0,r8"
+        ; R2 is the buffer into which the token has been copied
+        ; R4 points to EOF or to the byte following this token's value
+        ; R6 is a pointer into the messages file at or after which the token lives
+        ; Routine updates R6 if it didn't actually point to the token pointed to by R2
+        LDRB    r0, [r2]                ; what we were given
+10      LDRB    r8, [r6]
+        TEQ     r0, r8
+        TEQNE   r8, #"?"
+        TEQNE   r8, #"*"
+        EXIT    EQ                      ; Found the token OK.
+        ADD     r6, r6, #1
+        CMP     r6, r4                  ; EOF or past token value?  Cannot possibly happen? Something is
+        EXIT    EQ                      ; terribly wrong if this safety valve is used - paranoia?
+        CMP     r8, #"#"                ; comment to end of line?
+        BNE     %BT10
+20
+        CMP     r8, #&20
+25      LDRCSB  r8, [r6], #1
+        BCS     %BT20
+30
+        CMP     r8, #27
+        ADDEQ   r6, r6, #1
+        CMPNE   r8, #9
+        CMPNE   r8, #31
+        BNE     %BT10                   ; don't like this character - treat as end of comment
+        LDRB    r8, [r6], #1
+        B       %BT20
+
+        ROUT
+
+AllocHashR2R3toR1 ENTRY "r0,r2-r4"
+        ; Generates the hash of the token at address R2 length R3 into R1
+        ; R1 is NumBuckets if the symbol contains wildcards, else in the
+        ; range 0 to (NumBuckets-1)
+        MOV     r1, #0
+10      LDRB    r4, [r2], #1
+        TEQ     r4, #"?"
+        TEQNE   r4, #"*"
+        MOVEQ   r1, #NumBuckets
+        EXIT    EQ
+        SUBS    r3, r3, #1
+        EORPL   r1, r4, r1, ROR #1
+        BPL     %BT10
+        EOR     r1, r1, r1, LSR #30
+        EOR     r1, r1, r1, LSR #24
+        EOR     r1, r1, r1, LSR #12
+        EOR     r1, r1, r1, LSR #6
+        AND     r1, r1, #(NumBuckets-1)
+        EXIT
+
+AllocateInternalBuffer ENTRY "r8"
+        ; Allocate one of MessageTrans's internal buffers from IRQ or foreground pools
+        ; depending on the kernel's IRQsema flag.  Returns buffer in R2, length in R3
+        ; Used when client does not supply a buffer to *Lookup and in HashTableAlloc
+        ; If R2=0 on entry, the IRQsema is checked
+        ; If R2=-1 on entry, a foreground buffer is used
+        ; R2 anything else will not work
+        ; On exit: R2 points to buffer, R3 is buffer size
+        MVNS    r3, r2                                  ; R3=0, Z set => force foreground pool
+        LDRNE   r3, [ r2, #IRQsema ]                    ; If R3<>0 now, R2 must have been 0
+        TEQNE   r3, #0                                  ; Z set => force foreground pool
+        ADR     r2, ForegroundBuffers
+        ADDNE   r2, r2, #Buffersize*ForegroundBuffersNo
+        LDREQ   r14, current_ForegroundBuffer
+        LDRNE   r14, current_IRQBuffer
+        ADD     r2, r2, r14, LSL #8                     ; Point at correct buffer to use
+        ADD     r14, r14, #1
+        MOVEQ   r8, #ForegroundBuffersNo
+        MOVNE   r8, #IRQBuffersNo
+        CMP     r14, r8
+        MOVGE   r14, #0
+        TEQ     r3, #0
+        STREQ   r14, current_ForegroundBuffer
+        STRNE   r14, current_IRQBuffer                  ; And set new buffer number.
+        MOV     r3, #Buffersize
+        EXIT
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ; Debugging routines
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -1805,4 +2153,3 @@ SWIMessageTrans_Dictionary
       ]
 
         END
-
