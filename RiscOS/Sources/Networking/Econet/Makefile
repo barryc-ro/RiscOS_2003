@@ -6,12 +6,14 @@
 # Date       Name         Description
 # ----       ----         -----------
 # 28-Jun-94  AMcC         Created.
+# 05-Oct-99  SNB          Translates header into C header
 #
 
 #
 # Paths
 #
 EXP_HDR = <export$dir>
+C_EXP_HDR = <cexport$dir>.Interface.h
 
 #
 # Generic options:
@@ -37,7 +39,7 @@ SOURCE200   = OldOS
 TARGET      = rm.Econet
 TARGET200   = rm.Econet200
 HDR         = hdr.${COMPONENT}
-EXPORTS     = ${EXP_HDR}.Econet
+EXPORTS     = ${EXP_HDR}.Econet ${C_EXP_HDR}.Econet
 
 MESSAGESMOD = rm.EconetMsgs
 MESSAGES    = Resources.${LOCALE}.Messages
@@ -97,6 +99,10 @@ ${TARGET200}: ${SOURCE200}
 #
 ${EXP_HDR}.Econet: hdr.Econet
         ${CP} hdr.Econet $@ ${CPFLAGS}
+        
+${C_EXP_HDR}.Econet: hdr.Econet
+        ${mkdir} ${C_EXP_HDR}
+        perl Build:Hdr2H hdr.Econet $@
 
 # 
 # Generate an Econet Messages module
@@ -123,75 +129,3 @@ version:
         Version
 
 #---------------------------------------------------------------------------
-# Dynamic dependencies:
-rm.Econet200: s.Module
-rm.Econet200: Hdr:ListOpts
-rm.Econet200: Hdr:Macros
-rm.Econet200: Hdr:System
-rm.Econet200: Hdr:SWIs
-rm.Econet200: Hdr:CPU.Generic26
-rm.Econet200: Hdr:IO.GenericIO
-rm.Econet200: Hdr:RISCOS
-rm.Econet200: Hdr:CPU.ARM600
-rm.Econet200: Hdr:IO.IOC-A1
-rm.Econet200: Hdr:IO.IOC
-rm.Econet200: Hdr:VIDC.VIDC1A
-rm.Econet200: Hdr:MEMM.MEMC1
-rm.Econet200: Hdr:Symbols
-rm.Econet200: Hdr:FSNumbers
-rm.Econet200: Hdr:CMOS
-rm.Econet200: Hdr:ModHand
-rm.Econet200: Hdr:HostFS
-rm.Econet200: Hdr:Debug
-rm.Econet200: Hdr:Econet
-rm.Econet200: Hdr:Services
-rm.Econet200: Hdr:NewErrors
-rm.Econet200: Hdr:Tokens
-rm.Econet200: Hdr:MsgTrans
-rm.Econet200: Hdr:Portable
-rm.Econet200: Hdr:Podule
-rm.Econet200: Hdr:PoduleReg
-rm.Econet200: s.Macros
-rm.Econet200: Time+Date
-rm.Econet200: s.Memory
-rm.Econet200: s.Interface
-rm.Econet200: s.Commands
-rm.Econet200: s.Receive
-rm.Econet200: s.Transmit
-rm.Econet200: s.Background
-setversion: Time+Date
-rm.Econet: s.Module
-rm.Econet: Hdr:ListOpts
-rm.Econet: Hdr:Macros
-rm.Econet: Hdr:System
-rm.Econet: Hdr:SWIs
-rm.Econet: Hdr:CPU.Generic26
-rm.Econet: Hdr:IO.GenericIO
-rm.Econet: Hdr:RISCOS
-rm.Econet: Hdr:CPU.ARM600
-rm.Econet: Hdr:IO.IOC-A1
-rm.Econet: Hdr:IO.IOC
-rm.Econet: Hdr:VIDC.VIDC1A
-rm.Econet: Hdr:MEMM.MEMC1
-rm.Econet: Hdr:Symbols
-rm.Econet: Hdr:FSNumbers
-rm.Econet: Hdr:CMOS
-rm.Econet: Hdr:ModHand
-rm.Econet: Hdr:HostFS
-rm.Econet: Hdr:Debug
-rm.Econet: Hdr:Econet
-rm.Econet: Hdr:Services
-rm.Econet: Hdr:NewErrors
-rm.Econet: Hdr:Tokens
-rm.Econet: Hdr:MsgTrans
-rm.Econet: Hdr:Portable
-rm.Econet: Hdr:Podule
-rm.Econet: Hdr:PoduleReg
-rm.Econet: s.Macros
-rm.Econet: Time+Date
-rm.Econet: s.Memory
-rm.Econet: s.Interface
-rm.Econet: s.Commands
-rm.Econet: s.Receive
-rm.Econet: s.Transmit
-rm.Econet: s.Background
