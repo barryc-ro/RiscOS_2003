@@ -103,7 +103,7 @@ o.replay: Documents.def.replay
 	${RM} viafile
 	${WIPE} Defmod ~cr
 
-o.main: h.modhdr
+o.main oz.main: h.modhdr
 
 #
 # RISC OS ROM build rules:
