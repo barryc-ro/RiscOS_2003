@@ -50,7 +50,7 @@ ROMTARGET = aof.PPP
 # 
 # The Makefile in pppd must also be changed
 
-BLOCKDRIVERS=	-DBLOCKDRIVERS
+BLOCKDRIVERS=	#-DBLOCKDRIVERS
 
 
 # You may want to link with TinyStubs. if you do, set LD to tlink and
@@ -70,7 +70,9 @@ CFLAGS=		-ffah -zM -I${INCLUDES} -DINET -DCOMPAT_INET4 ${DEBUG}\
 		-zps1 -Wp -depend !Depend -c -throwback -DVJC ${TINYSTUBS}\
 		${BLOCKDRIVERS}
 
-ASMFLAGS=       -PreDefine "BlockDrivers SETL {TRUE}"
+CMHGFLAGS=	-p -I${INCLUDES} ${BLOCKDRIVERS} -depend !Depend
+
+ASMFLAGS=       -PreDefine "BlockDrivers SETL {FALSE}"
 
 OBJS=		o.if_ppp o.slcompress o.pppmodule \
 		o.serial o.mbuf o.ppphdr o.ppp_io o.blockdrive \
@@ -114,14 +116,14 @@ clean:
 #
 # Target 
 #
-${TARGET}:	$(OBJS) pppd
+${TARGET}:	pppd $(OBJS) $(HDRS)
 		$(LD) -rmf -s link/sym -o rm.PPPu $(OBJS) $(STUBS) pppd.o.pppd
 		ModSqz rm.PPPu $@
 
 #
 # ROM Target 
 #
-${ROMTARGET}: ${OBJS} pppd
+${ROMTARGET}: pppd ${OBJS} $(HDRS)
         ${LD} -s link/sym -o $@ -aof ${OBJS} ${ROMCSTUBS} pppd.o.pppd
 
 #
@@ -145,11 +147,6 @@ pppd:
 
 s.blockdrive::	Internal.Driver
 	
-o.ppphdr:	cmhg.ppphdr
-		cmhg -p ${BLOCKDRIVERS} -depend !Depend -throwback \
-		cmhg.ppphdr o.ppphdr h.ppphdr
-
-
 # Dynamic dependencies:
 o.if_ppp:	c.if_ppp
 o.if_ppp:	TCPIPLibs:sys.h.dcistructs
@@ -219,7 +216,8 @@ o.if_ppp:	h.pppd
 o.if_ppp:	h.ppp_io
 o.if_ppp:	h.ppphdr
 o.if_ppp:	h.pppmodule
-o.if_ppp:	h.blockdrive
+o.if_ppp:	h.ioctl
+o.if_ppp:	C:h.kernel
 o.if_ppp:	h.if_ppp
 o.if_ppp:	TCPIPLibs:sys.h.socket
 o.if_ppp:	TCPIPLibs:net.h.if
@@ -320,7 +318,8 @@ o.pppmodule:	TCPIPLibs:sys.h.syslimits
 o.pppmodule:	TCPIPLibs:sys.h.signal
 o.pppmodule:	TCPIPLibs:machine.h.param
 o.pppmodule:	TCPIPLibs:machine.h.limits
-o.pppmodule:	h.blockdrive
+o.pppmodule:	h.ioctl
+o.pppmodule:	C:h.kernel
 o.pppmodule:	pppd.h.main
 o.pppmodule:	h.ppp_io
 o.pppmodule:	h.ppphdr
@@ -358,7 +357,8 @@ o.serial:	C:h.kernel
 o.serial:	C:h.swis
 o.serial:	h.ppp_io
 o.serial:	h.pppmodule
-o.serial:	h.blockdrive
+o.serial:	h.ioctl
+o.serial:	C:h.kernel
 o.serial:	h.if_ppp
 o.serial:	h.ppp
 o.serial:	TCPIPLibs:sys.h.socket
@@ -402,4 +402,5 @@ o.mbuf:	TCPIPLibs:sys.h.socket
 o.mbuf:	TCPIPLibs:netinet.h.in
 o.mbuf:	TCPIPLibs:netinet.h.if_ether
 o.mbuf:	h.mbuf
-o.ppphdr:	cmhg.ppphdr
+o.PPPHdr:	cmhg.PPPHdr
+o.PPPHdr:	cmhg.PPPHdr
