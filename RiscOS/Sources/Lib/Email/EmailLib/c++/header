@@ -62,6 +62,7 @@
 /* ************************************************************************** */
 extern "C"
 {
+  #include <stdlib.h>
   #include <stdio.h>
   #include <string.h>
   #include <ctype.h>
@@ -80,6 +81,7 @@ extern "C"
 {
   #include "ELib.h"
   #include "elib_priv.h"
+  #include "base64.h"
 }
 
 
@@ -372,12 +374,134 @@ ELib_rcode header::GetUnfoldedBody(char *n, uint32 &length)
   }
   else
     error = true;
+
+  if (!error)
+    DecodeWords(n, length);
+
   if (error)
     length = fieldbody_len + 1;
   else
     length = strlen(n) + 1;
 
   return rc;
+}
+
+void header::DecodeWords(char *n, uint32 &length)
+{
+  // find first encoded-word
+  char *pos = strstr(n, "=?");
+
+  if (!pos) return;
+
+  char *last_end = NULL;
+
+  while (pos)
+  {
+    // check it is structurally correct. if not complete, then we've finished
+    char *encoding = strchr(pos+2, '?');
+    if (!encoding) return;
+    encoding++;
+    char *encoded_text = strchr(encoding, '?');
+    if (!encoded_text) return;
+    encoded_text++;
+    char *end = strchr(encoded_text, '?');
+    if (!end) return;
+    if (end[1] != '=')
+    {
+      pos = pos + 2;
+      continue;
+    }
+    end += 2;
+
+    // we have "=?" xx "?" xx "?" xx "?=". check it's not too long. If so, skip over
+    if (end - pos > 75)
+    {
+      pos = end;
+      continue;
+    }
+
+    char word[76];
+    memcpy(word, pos, end-pos);
+    encoding=word+(encoding-pos);
+    encoded_text=word+(encoded_text-pos);
+    encoding[-1]='\0';
+    encoded_text[-1]='\0';
+    word[end-pos-2]='\0';
+
+    // For now, we're not transcoding - we ignore the charset. So the decoded form
+    // will be shorter than the encoded form.
+    char decoded_text[76];
+    char *out = decoded_text;
+
+    if ((encoding[0] == 'Q' || encoding[0] == 'q') && encoding[1] == '\0')
+    {
+      char *in = encoded_text;
+      char *out = decoded_text;
+      char c;
+
+      do
+      {
+        c = *in++;
+
+        switch (c)
+        {
+          case '_':
+            *out++ = ' ';
+            break;
+
+          case '=':
+            if (isxdigit(in[0]) && isxdigit(in[1]))
+            {
+              char d, temp;
+              temp = in[2];
+              in[2] = '\0';
+              d = (char) strtoul(in, NULL, 16);
+              in[2] = temp;
+              *out++ = d < 32 || d == 127 ? '?' : d;
+              break;
+            }
+            /* else fall through */
+
+          default:
+            *out++ = c;
+            break;
+        }
+      }
+      while (c != '\0');
+    }
+    else if ((encoding[0] == 'B' || encoding[0] == 'b') && encoding[1] == '\0')
+    {
+      size_t len = sizeof decoded_text-1;
+      if (base64decode_string(decoded_text, encoded_text, &len) != ELIB_COMPLETED)
+      {
+        pos = end;
+        continue;
+      }
+      decoded_text[len]='\0';
+      for (int i=0; i<len; i++)
+      {
+        if (decoded_text[i] < 32 || decoded_text[i] == 127)
+          decoded_text[i] = '?';
+      }
+    }
+    else
+    {
+      pos = end;
+      continue;
+    }
+
+    /* Strip linear-white-space between encoded-words */
+    if (last_end)
+    {
+      if (strspn(last_end, "\r\n\t ") >= pos - last_end)
+        pos = last_end;
+    }
+
+    size_t decoded_length = strlen(decoded_text);
+    memcpy(pos, decoded_text, decoded_length);
+    last_end = (char *) memmove(pos + decoded_length, end, strlen(end)+1);
+    pos = strstr(last_end, "=?");
+  }
 }
 
 
