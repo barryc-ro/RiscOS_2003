@@ -77,6 +77,7 @@ rm.FileSwitch: Hdr:SWIs
 rm.FileSwitch: Hdr:CPU.Generic26
 rm.FileSwitch: Hdr:IO.GenericIO
 rm.FileSwitch: Hdr:RISCOS
+rm.FileSwitch: Hdr:Machine.<Machine>
 rm.FileSwitch: Hdr:CMOS
 rm.FileSwitch: Hdr:ModHand
 rm.FileSwitch: Hdr:Services
