@@ -57,26 +57,11 @@ TARGET    = aof.SoundFX
 OBJS      = o.CMHGSndFX o.SoundFX
 RDIR      = Resources.<UserIF>
 EXPORTS   =
-SDIR      = ${RDIR}.Sounds
-SOUNDS    = \
-            ${SDIR}.connect \
-            ${SDIR}.disconnect \
-            ${SDIR}.go~back \
-            ${SDIR}.handshake \
-            ${SDIR}.home \
-            ${SDIR}.imminent~t \
-            ${SDIR}.info \
-            ${SDIR}.keyboard~u \
-            ${SDIR}.no-op \
-            ${SDIR}.OK_w_air \
-            ${SDIR}.sound~off \
-            ${SDIR}.sound~on
 
 #
 # Export Paths for Messages module
 #
 RESDIR = <resource$dir>.Resources.${COMPONENT}
-RESSOUDIR = <resource$dir>.Resources.${COMPONENT}.Sounds
 
 #
 # Rule patterns
@@ -113,20 +98,7 @@ clean:
 
 resources: ${SOUNDS}
         ${MKDIR} ${RESDIR}
-        ${MKDIR} ${RESSOUDIR}
-        ${CP} ${RDIR}.EventMap          ${RESSOUDIR}.EventMap   ${CPFLAGS}
-        ${CP} ${SDIR}.connect           ${RESSOUDIR}.connect    ${CPFLAGS}
-        ${CP} ${SDIR}.disconnect        ${RESSOUDIR}.disconnect ${CPFLAGS}
-        ${CP} ${SDIR}.go~back           ${RESSOUDIR}.go~back    ${CPFLAGS}
-        ${CP} ${SDIR}.handshake         ${RESSOUDIR}.handshake  ${CPFLAGS}
-        ${CP} ${SDIR}.home              ${RESSOUDIR}.home       ${CPFLAGS}
-        ${CP} ${SDIR}.imminent~t        ${RESSOUDIR}.imminent~t ${CPFLAGS}
-        ${CP} ${SDIR}.info              ${RESSOUDIR}.info       ${CPFLAGS}
-        ${CP} ${SDIR}.keyboard~u        ${RESSOUDIR}.keyboard~u ${CPFLAGS}
-        ${CP} ${SDIR}.no-op             ${RESSOUDIR}.no-op      ${CPFLAGS}
-        ${CP} ${SDIR}.OK_w_air          ${RESSOUDIR}.OK_w_air   ${CPFLAGS}
-        ${CP} ${SDIR}.sound~off         ${RESSOUDIR}.sound~off  ${CPFLAGS}
-        ${CP} ${SDIR}.sound~on          ${RESSOUDIR}.sound~on   ${CPFLAGS}
+        ${CP} ${RDIR}                   ${RESDIR}               ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 #
