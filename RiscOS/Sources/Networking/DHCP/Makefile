@@ -156,7 +156,7 @@ rom_link:
 h.${CMHGNAME}: ${CMHGOBJ}
 	@|
 
-${EXPORTS}: h.${CMHGNAME} h.dhcpextern
+${EXPORTS}: h.${CMHGNAME} h.dhcpextern ${DIRS}
 	${CP} h.dhcpextern $@ ${CPFLAGS}
 	${AWK} -- "/.define DHCP\_00/,/endif/" h.${CMHGNAME} { >> $@ }
 
