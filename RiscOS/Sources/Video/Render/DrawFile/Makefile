@@ -36,6 +36,7 @@ WFLAGS  = ~c~v
 OSLIB  = OSLib:OSLib.o
 RSTUBS = RISC_OSLib:o.romcstubs
 ABSSYM = RISC_OSLib:o.abssym
+ASMUTILS = C:AsmUtils.o.AsmUtilsZM
 
 #
 # Program specific options:
@@ -45,7 +46,7 @@ TARGET    = aof.DrawFile
 
 
 OBJS = o.bbox o.callback o.declare o.header o.main \
-      o.muldiv o.render o.riscos o.riscosa o.textarea o.trfm o.verify
+      o.render o.riscos o.textarea o.trfm o.verify
 OBJS_310 = \
       o.bbox o.callback o.declare o.files o.header310 oSA.main \
       o.muldiv o.render o.riscos o.textarea o.trfm o.verify
@@ -53,8 +54,6 @@ OBJS_310 = \
 OBJSD = debug.bbox debug.callback debug.declare o.files o.header \
       o.hostfs debug.main o.muldiv debug.render \
       debug.riscos debug.textarea debug.trfm debug.verify debug.trace debug.m
-
-ASMS = s.bbox s.declare s.main s.render s.textarea s.verify
 
 INCS = i.bbox i.declare i.main i.render i.files i.textarea i.verify
 
@@ -100,8 +99,8 @@ resources-: resources_common
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS} ${OSLIB} ${RSTUBS}
-        ${LINK} -o $@ -aof ${OBJS} ${OSLIB} ${RSTUBS}
+${TARGET}: ${OBJS} ${OSLIB} ${RSTUBS} ${ASMUTILS}
+        ${LINK} -o $@ -aof ${OBJS} ${OSLIB} ${RSTUBS} ${ASMUTILS}
 
 #
 # Final link for the ROM Image (using given base address)
@@ -135,7 +134,7 @@ objs: ${OBJS} ${OBJSD}
    @Echo Made objs
 
 map: ${OBJS} ${OSLIB} CLib:o.Stubs
-   ${LINK} -map -output null: -s Symbols ${OBJS} ${OSLIB} CLib:o.Stubs > Map
+   ${LINK} -map -output null: -s Symbols ${OBJS} ${OSLIB} CLib:o.Stubs ${ASMUTILS} > Map
 
 release: RM.DrawFile
    %Copy RM.DrawFile Choices:Boot.PreDesk.DrawFile ~CFLNRV
@@ -143,15 +142,15 @@ release: RM.DrawFile
    @Echo Made release
 
 # Internal targets
-RM.DrawFile: ${OBJS} ${OSLIB} CLib:o.Stubs
-   ${LINK} -module -o $@ ${OBJS} ${OSLIB} CLib:o.Stubs
+RM.DrawFile: ${OBJS} ${OSLIB} CLib:o.Stubs ${ASMUTILS}
+   ${LINK} -module -o $@ ${OBJS} ${OSLIB} CLib:o.Stubs ${ASMUTILS}
 
-RM.DrawFileD: ${OBJSD} ${RESOURCES} ${OSLIB} CLib:o.Stubs
-   ${LINK} -module -o $@ ${OBJSD} ${RESOURCES} ${OSLIB} CLib:o.Stubs
+RM.DrawFileD: ${OBJSD} ${RESOURCES} ${OSLIB} CLib:o.Stubs ${ASMUTILS}
+   ${LINK} -module -o $@ ${OBJSD} ${RESOURCES} ${OSLIB} CLib:o.Stubs ${ASMUTILS}
 
 # For Aquarius
-RM.310.DrawFile: ${OBJS_310} ${RESOURCES310} ${OSLIB} CLib:o.Stubs
-   ${LINK} -module -o $@ ${OBJS_310} ${RESOURCES310} ${OSLIB} CLib:o.Stubs
+RM.310.DrawFile: ${OBJS_310} ${RESOURCES310} ${OSLIB} CLib:o.Stubs ${ASMUTILS}
+   ${LINK} -module -o $@ ${OBJS_310} ${RESOURCES310} ${OSLIB} CLib:o.Stubs ${ASMUTILS}
 
 # Static dependencies:
 
