@@ -71,7 +71,7 @@ NCTARGETARCH = ${NODB}
 # EMAIL_URL lets it be known that we have an EMAIL_URL to fill in the smartcard, it's only
 # relevant for Acorn format card.
 
-CCFLAGS = -c ${THROWBACK} -depend !Depend -wp ${INCLUDES} -zM -DCOMPAT_INET4 ${OPTS} ${NCTARGETARCH} 
+CCFLAGS = -c ${THROWBACK} -depend !Depend -wp ${INCLUDES} -zM -DCOMPAT_INET4 ${OPTS} ${NCTARGETARCH} ${OPTS}
 
 
 
@@ -85,7 +85,6 @@ RSTUBS     = RISCOSLIB:o.rstubs
 ROMSTUBS   = RISCOSLIB:o.romstubs
 ROMCSTUBS  = RISCOSLIB:o.romcstubs
 ABSSYM     = RISC_OSLib:o.AbsSym
-#DBUGLIB    = C:o.DBUGzm
 
 SOCKLIB	   = TCPIPLibs:o.socklibzm
 INETLIB	   = TCPIPLibs:o.inetlibzm
@@ -109,7 +108,7 @@ TARGET    = aof.ISPCapture
 TARGETSA  = rm.ISPCapture
 EXPORTS   =
 BASEOBJS  = module.o header.o ispc_cmds.o dynalloc.o ispc_ispc.o \
-	  ispc_url.o kprintf.o ispc_utils.o usermode.o ispc_file.o
+	  ispc_url.o kprintf.o ispc_utils.o usermode.o ispc_file.o dbugzm.o
 
 ROMOBJS = oz.resources ${BASEOBJS}
 NOTROMOBJS = o.resources ${DBUGLIB} ${BASEOBJS}
@@ -171,8 +170,8 @@ resources:
 #
 # Executable target (static link)
 #
-${TARGETSA}: ${NOTROMOBJS} ${CLIB} ${SOCKLIB} ${INETLIB} header.h
-        ${LD} -o $@ -module ${NOTROMOBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
+${TARGETSA}: ${NOTROMOBJS} ${CLIB} ${SOCKLIB} ${INETLIB} ${LIBSD} header.h
+        ${LD} -o $@ -module ${NOTROMOBJS} ${CLIB} ${SOCKLIB} ${INETLIB} ${LIBSD}
 
 #
 # Exported interface headers
