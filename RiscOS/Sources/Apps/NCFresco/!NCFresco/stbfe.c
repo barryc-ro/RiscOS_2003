@@ -1348,7 +1348,7 @@ static int print_events[] =
 static os_error *fe__print(fe_view v, int size)
 {
     os_error *e = NULL;
-    int old_size = -1;
+    int old_size = -1, old_escape_key;
 
     if (_swix(PDriver_Info, 0) != NULL)
         return makeerror(ERR_NO_PRINTER);
@@ -1375,6 +1375,10 @@ static os_error *fe__print(fe_view v, int size)
 	tb_status_button(fevent_TOOLBAR_EXIT, tb_status_button_PRESSED);
     }
 
+    /* set escape key to ENTER */
+    _swix(OS_Byte, _INR(0,2) | _OUT(1), 220, 13, 0, &old_escape_key);
+    STBDBG(("fe__print: escape key set, old %d\n", old_escape_key));
+    
     if (!e)
 	e = awp_print_document(v->displaying, config_print_scale,
 			       (config_print_nopics ? awp_print_NO_PICS : 0) |
@@ -1386,6 +1390,9 @@ static os_error *fe__print(fe_view v, int size)
 			       (config_print_reversed ? awp_print_REVERSED : 0),
 			       print__copies);
 
+    /* reset escape key */
+    _swix(OS_Byte, _INR(0,2), 220, old_escape_key, 0);
+    
     if (use_toolbox)
     {
 	tb_status_button(print_events[size], tb_status_button_INACTIVE);
@@ -1891,23 +1898,24 @@ int frontend_view_status(fe_view v_orig, int status_type, ...)
 	int fetched = va_arg(ap, int),
 	    fetching = va_arg(ap, int),
 	    waiting = va_arg(ap, int),
-	    errors = va_arg(ap, int);
+	    errors = va_arg(ap, int),
+	    deferred = va_arg(ap, int);
 /* 	    so_far = va_arg(ap, int), */
 /* 	    in_trans = va_arg(ap, int); */
 
 	if (use_toolbox)
 	{
-	    v_orig->images_had = fetched + errors;
+	    v_orig->images_had = fetched + errors + deferred;
 	    v_orig->images_waiting = waiting + fetching;
 
-	    STBDBG(( "stbfe: view status v %p images %d/%d\n", v_orig, fetched + errors, waiting + fetching));
+	    STBDBG(( "stbfe: view status v %p images %d/%d\n", v_orig, fetched + errors + deferred, waiting + fetching));
 
 	    e = set_fetch_message(v_orig);
 	}
 	else
 	{
-	    int total = fetched + errors + waiting + fetching;
-	    v->fetch_images = total ? (fetched + errors)*256/total : 256;
+	    int total = fetched + errors + waiting + fetching + deferred;
+	    v->fetch_images = total ? (fetched + errors + deferred)*256/total : 256;
 
 	    e = statuswin_update_fetch_status(v, v->fetch_status);
 	    if (!e) e = statuswin_update_fetch_info(v, "");
@@ -2225,6 +2233,7 @@ void frontend_frame_layout(fe_view v, int nframes, fe_frame_info *info, int refr
             if (frontend_complain(fe_new_view(v, &box, ip, TRUE, &vv)) == NULL && vv)
 	    {
 		char *url;
+		int flags = fe_open_url_FROM_FRAME;
 
 		vv->frame_index = i;
 		url = ip->src;
@@ -2241,14 +2250,16 @@ void frontend_frame_layout(fe_view v, int nframes, fe_frame_info *info, int refr
 		    fe_frame_specifier_create(vv, specifier, sizeof(specifier));
 		    new_url = fe_history_lookup_specifier(top, specifier, &vv->fetching_data.xscroll, &vv->fetching_data.yscroll);
 		    if (new_url)
+		    {
 			url = new_url;
-
+			flags |= fe_open_url_FROM_HISTORY;
+		    }
 		    STBDBG(("frontend_frame_layout: history override '%s' gets url '%s' offsets %dx%d\n", specifier, strsafe(new_url), vv->fetching_data.xscroll, vv->fetching_data.yscroll));
 		}
 
 		if (url)
 		{
-		    os_error *e = frontend_open_url(url, vv, NULL, NULL, fe_open_url_FROM_FRAME);
+		    os_error *e = frontend_open_url(url, vv, NULL, NULL, flags);
 		    if (e && e->errnum != ANTWEB_ERROR_BASE + ERR_NO_SUCH_FRAG)
 			frontend_complain(e);
 		}

@@ -24,8 +24,8 @@
  * discontiguous in which case it should separate boxes.
  */
 
-#define BORDER_WIDTH	8
-#define LINE_WIDTH	4
+#define BORDER_WIDTH	12
+#define LINE_WIDTH	8
 
 #if 0
 
@@ -162,7 +162,7 @@ void highlight_render_outline(be_item ti, antweb_doc *doc, int hpos, int bline)
 
     if (ti->flag & (rid_flag_SELECTED|rid_flag_ACTIVATED))
     {
-	int x, y, w, h;
+	int x, y, w, h, i;
 
 	render_set_colour(ti->flag & rid_flag_ACTIVATED ? render_colour_ACTIVATED : render_colour_HIGHLIGHT, doc);
 
@@ -171,8 +171,8 @@ void highlight_render_outline(be_item ti, antweb_doc *doc, int hpos, int bline)
 	w = ti->width + BORDER_WIDTH*2;
 	h = ti->max_up + ti->max_down + BORDER_WIDTH*2;
 	
-	bbc_rectangle(x, y, w-1, h-1);
-	bbc_rectangle(x+2, y+2, w - 2*2-1, h - 2*2-1);
+	for (i = 0; i < LINE_WIDTH; i+=2)
+	    bbc_rectangle(x+i, y+i, w - i*2 -1, h - i*2 - 1);
     }
 }
 

@@ -136,6 +136,7 @@ typedef struct _antweb_doc {
     int im_fetching;		/* The number of images being fetched */
     int im_unfetched;		/* The number of images yet to be fetched */
     int im_error;		/* The number of images that failed to get fetched */
+    int im_deferred;		/* The number of images that are deferred */
     int im_in_transit;		/* The number of bytes in the images in transit */
     int im_so_far;		/* The bytes so far for those in transit */
 

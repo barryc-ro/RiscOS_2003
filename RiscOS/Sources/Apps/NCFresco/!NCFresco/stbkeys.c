@@ -709,6 +709,7 @@ static key_list *get_key_map(int map)
 /* ------------------------------------------------------------------------------------- */
 
 /* This view could be null if the caret was in the status bar
+ * event = -2 means that the key should go straight to processkey
  * event = -1 means that the key hasn't been handled so pass it on (processkey)
  * event = 0 means the key has been handled somewhere else so do nothing
  * event > 0 means a real event to handle
@@ -740,21 +741,21 @@ void fe_key_handler(fe_view v, wimp_eventstr *e, BOOL use_toolbox, int browser_m
     {
         event = fe_key_lookup(chcode, get_key_map(key_map_RESIZING));
         if (event == -1)
-            event = 0;
+            event = -2;
     }
 
     if (event == -1 && stbmenu_is_open())
     {
         event = fe_key_lookup(chcode, get_key_map(key_map_MENU));
         if (event == -1)
-            event = 0;
+            event = -2;
     }
 
     if (event == -1 && fe_map_view() != NULL)
     {
         event = fe_key_lookup(chcode, get_key_map(key_map_MAP));
         if (event == -1)
-            event = 0;
+            event = -2;
     }
 
     if (event == -1 && on_screen_kbd)
@@ -770,7 +771,7 @@ void fe_key_handler(fe_view v, wimp_eventstr *e, BOOL use_toolbox, int browser_m
     {
 	event = fe_key_lookup(chcode, get_key_map(key_map_EXTERNAL_POPUP));
 	if (event == -1)
-	    event = 0;
+	    event = -2;
     }
 
     if (event == -1 && fe_frame_link_selected(v))
@@ -813,7 +814,7 @@ void fe_key_handler(fe_view v, wimp_eventstr *e, BOOL use_toolbox, int browser_m
 	event = fe_key_lookup(chcode, get_key_map(key_map_CODECS));
 
     /* call event handler or pass on */
-    if (event != -1)
+    if (event >= 0)
         fevent_handler(event, v);
     else
         wimp_processkey(chcode);

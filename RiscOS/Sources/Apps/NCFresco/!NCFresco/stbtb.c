@@ -1146,7 +1146,7 @@ BOOL tb_status_highlight(BOOL gain)
 
     if (tbi)
     {
-	if (gain)
+	if (gain && !havefocus(tbi))/* get_highlighted(tbi) == -1) */
 	{
 	    int active = get_active(tbi);
 

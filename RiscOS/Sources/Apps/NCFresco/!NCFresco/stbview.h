@@ -173,7 +173,7 @@ struct _frontend_view
 #define NVRAM_SOUND_TAG		"BrowserMusicStatus"
 #define NVRAM_BEEPS_TAG		"BrowserBeepStatus"
 #define NVRAM_SCALING_TAG	"BrowserScaling"
-#define NVRAM_PRINT_COLOUR_TAG	"PrintColour"
+#define NVRAM_PRINT_COLOUR_TAG	"PrinterColour"
 
 /* ----------------------------------------------------------------------------- */
 

@@ -35,11 +35,11 @@
 
 #include "heap.h"
 
-static DynamicArea da_number;
+DynamicArea heap__da;
 static int da_size;
 
-static void *heap__base;
-static int heap_size;
+void *heap__base;
+int heap__size;
 
 static int heap__max = 0;
 static int heap__largest = 0;
@@ -58,22 +58,22 @@ static void cleanup(void)
     heap__dump(stderr);
 #endif
 
-    DynamicArea_Free(&da_number);
+    DynamicArea_Free(&heap__da);
 }
 
 void heapda_init(const char *programname)
 {
-    da_size = heap_size = MemoryPageSize();
+    da_size = heap__size = MemoryPageSize();
     
     /* create the dynamic area */
-    frontend_fatal_error(DynamicArea_Alloc(da_size, programname, &da_number, &heap__base));
+    frontend_fatal_error(DynamicArea_Alloc(da_size, programname, &heap__da, &heap__base));
 
     /* initialise heap as being in the dynamic area we just created */
-    frontend_fatal_error((os_error *)_swix(OS_Heap, _INR(0,1) | _IN(3), 0, heap__base, heap_size));
+    frontend_fatal_error((os_error *)_swix(OS_Heap, _INR(0,1) | _IN(3), 0, heap__base, heap__size));
     
     atexit(cleanup);
 
-    STBDBG(("heapda_init: da size %d heap base %p size %d\n", da_size, heap__base, heap_size));
+    STBDBG(("heapda_init: da size %d heap base %p size %d\n", da_size, heap__base, heap__size));
 }
 
 void *heapda_realloc(void *oldptr, unsigned int size_request)
@@ -82,7 +82,7 @@ void *heapda_realloc(void *oldptr, unsigned int size_request)
     int size;
     void *newptr;
 
-    STBDBG(("heapda_realloc: %p to %d (heap %d da %d)\n", oldptr, size_request, heap_size, da_size));
+    STBDBG(("heapda_realloc: %p to %d (heap %d da %d)\n", oldptr, size_request, heap__size, da_size));
     
     /* if shrink to zero then just remove it */
     if (size_request == 0)
@@ -118,18 +118,18 @@ void *heapda_realloc(void *oldptr, unsigned int size_request)
 
 	/* adjust dynamic area by a page */
 	adjust = MemoryPageSize();
-	DynamicArea_Realloc(da_number, &adjust);
+	DynamicArea_Realloc(heap__da, &adjust);
 	da_size += adjust;
 
-/* 	STBDBG(("heapda_realloc: da %d heap %d\n", da_size, heap_size)); */
+/* 	STBDBG(("heapda_realloc: da %d heap %d\n", da_size, heap__size)); */
 
 	/* if we can't extend DA then return NULL */
 	if (adjust == 0)
 	    return NULL;
 
 	/* adjust heap to match da */
-	frontend_fatal_error((os_error *)_swix(OS_Heap, _INR(0,1)|_IN(3), 5, heap__base, da_size - heap_size));
-	heap_size = da_size;
+	frontend_fatal_error((os_error *)_swix(OS_Heap, _INR(0,1)|_IN(3), 5, heap__base, da_size - heap__size));
+	heap__size = da_size;
 
 	/* and then try again */
     }
@@ -144,11 +144,11 @@ void *heapda_realloc(void *oldptr, unsigned int size_request)
     }
 #endif
 
-    STBDBG(("heapda_realloc: returns %p (heap %d da %d)\n", newptr, heap_size, da_size));
+    STBDBG(("heapda_realloc: returns %p (heap %d da %d)\n", newptr, heap__size, da_size));
 
 #if DEBUG
-    if (heap__max < heap_size)
-	heap__max = heap_size;
+    if (heap__max < heap__size)
+	heap__max = heap__size;
 
     if (heap__largest < size_request)
 	heap__largest = size_request;
@@ -168,7 +168,7 @@ void heapda_free(void *heapptr)
     int moved;
     _kernel_swi_regs r;
     
-    STBDBG(("heapda_free: free %p (%d) (heap %d da %d)\n", heapptr, ((int *)heapptr)[-1], heap_size, da_size));
+    STBDBG(("heapda_free: free %p (%d) (heap %d da %d)\n", heapptr, ((int *)heapptr)[-1], heap__size, da_size));
 
     if (heapptr == NULL)
 	return;
@@ -192,20 +192,20 @@ void heapda_free(void *heapptr)
 	int adjust;
 	
 	/* adjust real size of heap */
-	heap_size -= moved;
+	heap__size -= moved;
 
 	/* try and free some pages */
-	adjust = heap_size - da_size;
+	adjust = heap__size - da_size;
 
-	STBDBGN(("heapda_free: heap_size %d change da by %d\n", heap_size, adjust));
+	STBDBGN(("heapda_free: heap__size %d change da by %d\n", heap__size, adjust));
 
-	DynamicArea_Realloc(da_number, &adjust);
+	DynamicArea_Realloc(heap__da, &adjust);
 	da_size -= adjust;
 
 	STBDBGN(("heapda_free: da_size %d (adjust %d)\n", da_size, adjust));
     }
 
-    STBDBG(("heapda_free: (heap %d da %d)\n", heap_size, da_size));
+    STBDBG(("heapda_free: (heap %d da %d)\n", heap__size, da_size));
 
 #ifdef MemCheck_MEMCHECK
     MemCheck_UnRegisterMiscBlock(heapptr);
@@ -508,6 +508,9 @@ void heap__dump(FILE *f)
 	    hp->base_offset, hp->base_offset,
 	    hp->end_offset, hp->end_offset));
 
+
+    FDBG((f, "Largest object %dK heap %dK\n", heap__largest/1024, heap__max/1024));
+
     scan_list(hp, f);
 
 #ifdef MemCheck_MEMCHECK
@@ -527,8 +530,6 @@ void heap__info(FILE *f)
 	    hp->free_offset, hp->free_offset,
 	    hp->base_offset, hp->base_offset,
 	    hp->end_offset, hp->end_offset));
-
-    FDBG((f, "Largest object %dK heap %dK\n", heap__largest, heap__max));
 }
 
 #else

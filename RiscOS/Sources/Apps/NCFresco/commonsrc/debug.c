@@ -6,6 +6,11 @@
 #include <string.h>
 #include "debug.h"
 
+#ifndef BUILDERS
+#include "swis.h"
+#include "wimp.h"
+#endif
+
 #define DBGPROTO(x) extern void x(const char *fmt, ...)
 
 #ifdef REMOTE_DEBUG
@@ -33,7 +38,10 @@ static int debug_cmd_handler(int argc, char *argv[], void *handle)
 	    extern char   *flexptr__base;
 	    extern char   *flexptr__free;
 	    extern char   *flexptr__slot;
-#endif
+	    extern void   *heap__base;
+	    extern void malloc_stats(void);
+	    extern int malloc_size, malloc_da, heap__size, heap__da, flex__da;
+#endif /* MEMLIB */
 	    if (strcasecomp(argv[1], "dbg") == 0)
 	    {
 		dbglist();
@@ -45,31 +53,36 @@ static int debug_cmd_handler(int argc, char *argv[], void *handle)
 		heap__dump(NULL);
 		handled = 1;
 	    }
-#endif
+#endif /* STBWEB */
 	    else if (strcasecomp(argv[1], "flex") == 0)
 	    {
 #if MEMLIB
-		DBG(("flex: free %p slot %p usage %dK\n", flexptr__free, flexptr__slot, (flexptr__slot - flexptr__base)/1024 - 32));
-#endif
+		DBG(("flex: free %p slot %p usage %dK\n", flexptr__free, flexptr__slot, (flexptr__slot - flexptr__base)/1024));
+#endif /* MEMLIB */
 		handled = 1;
 	    }
 	    else if (strcasecomp(argv[1], "mm") == 0)
 	    {
 		mm__dump(NULL);
+#if MEMLIB
+		malloc_stats();
+		DBG(("mall: msize %dK\n", malloc_size/1024));
+#endif /* MEMLIB */
 		handled = 1;
 	    }
 	    else if (strcasecomp(argv[1], "mem") == 0)
 	    {
 		int us = -1, next = -1, free;
-#if MEMLIB
-		DBG(("flex: da usage %dK\n", (flexptr__slot - flexptr__base)/1024 - 32));
-#endif
 
 		wimp_slotsize(&us, &next, &free);
-		DBG(("slot: us %dK next %dK free %dK\n", us/1024, next/1024, free/1024));
+		DBG(("slot: size %dK total free %dK\n", us/1024, free/1024));
 
-		heap__info(NULL);
-		
+#if MEMLIB
+		DBG(("flex: area %dK size %dK top %dK\n", _swi(OS_ReadDynamicArea, _IN(0) | _RETURN(1), flex__da)/1024, (flexptr__slot - flexptr__base)/1024, (flexptr__free - flexptr__base)/1024));
+		DBG(("heap: area %dK size %dK top %dK\n", _swi(OS_ReadDynamicArea, _IN(0) | _RETURN(1), heap__da)/1024, heap__size/1024, ((int *)heap__base)[3]/1024));
+		DBG(("mall: area %dK size %dK top -\n", _swi(OS_ReadDynamicArea, _IN(0) | _RETURN(1), malloc_da)/1024, malloc_size/1024));
+#endif /* MEMLIB */
+
 		handled = 1;
 	    }
 	}
@@ -116,7 +129,7 @@ void fdbg(void *f, const char *fmts, ...)
     va_end(arglist);
 }
 
-#else
+#else /* REMOTE_DEBUG */
 
 #define DBGFNDEF(x,y) extern void x(const char *fmts, ...) \
 { if (dbg_conf[y].present) \
@@ -131,7 +144,13 @@ void dbg(const char *fmts, ...)
     va_end(arglist);
 }
 
-#endif
+
+/* Really should have better untangling of DEBUG and REMOTE_DEBUG !!! */
+void fdbg(void *f, const char *fmts, ...)
+{
+}
+
+#endif /* REMOTE_DEBUG */
 
 #if DEBUG
 
