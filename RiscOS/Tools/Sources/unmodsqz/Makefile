@@ -5,94 +5,89 @@
 # ***********************************
 # Date       Name         Description
 # ----       ----         -----------
-# 03-Nov-98  SNB          Created
-
-COMPONENT = unmodsqz
-RAM_MODULE = aif.${COMPONENT}
+# 01-Mar-01  SNB          Created
+#
 
 #
 # Paths
 #
-EXP_HDR = <export$dir>
+COMPONENT = unmodsqz
+TARGET    = unmodsqz
+
+CFLAGS    = -Wpc -ffah -IC:CLX -DTARGET_IS_RISCOS
+DIRS      = o._dirs
+
+INSTAPP   = ${INSTDIR}.Apps.!UnModSqz
+LIBDIR    = ${INSTDIR}.Library.Acorn
 
 #
-# Export Paths for Messages module
+# Program specific options:
 #
-RESDIR = <resource$dir>.Resources2.${COMPONENT}
-RESFSDIR   = Resources.${COMPONENT}
+OBJS       = unsqueezec.o unmodsqz.o
+LIBS       = ${CLXLIB} ${CLIB}
+
+include Makefiles:StdTools
+include Makefiles:AppLibs
+include Makefiles:AppStdRule
 
 #
-# Generic options:
+# build a the library:
 #
-MKDIR   = cdir
-AS      = objasm
-CC      = cc
-CMHG    = cmhg
-CP      = copy
-LD      = link
-RM      = remove
-MODSQZ  = modsqz
-SQUEEZE = squeeze
-WIPE    = -wipe
-CD	= dir
-TOUCH	= stamp
-
-CPFLAGS = ~cfr~v
-WFLAGS = ~c~v
-SQZFLAGS = -f
+all:    ${TARGET}
 
 #
-# Include files
+# RISC OS ROM build rules:
 #
-INCLUDES=	-IC: -IC:CLX
+rom: ${TARGET}
+        @echo ${COMPONENT}: rom module built
 
-#
-# Libraries
-#
-CLIB		= Clib:o.Stubs
-ROMCSTUBS	= RISCOSLIB:o.romcstubs
-ABSSYM		= RISC_OSLib:o.AbsSym
-CLXLIB          = C:CLX.o.CLXlib
+export: export_${PHASE}
 
-DEPEND		= -depend !Depend
-ASFLAGS		= ${DEPEND} ${THROWBACK}
-CFLAGS		= -c -ffah ${INCLUDES} ${DEPEND} ${THROWBACK}
-LDFLAGS		= -aif
+install_rom: ${TARGET}
+        @echo ${COMPONENT}: rom module installed
+        
+install_tool: ${TARGET}
+	${MKDIR} ${LIBDIR}.Docs
+	${CP} ${TARGET} ${LIBDIR}.${TARGET} ${CPFLAGS}
+	@echo ${COMPONENT}: tool installed in library
 
-RAM_OBJS	= o.unsqueezec o.unmodsqz
+install: install_resources install_tool
+	@echo ${COMPONENT}: install complete
 
-#
-# Rule patterns
-#
-.c.o:;		${CC} ${CFLAGS} -DTARGET_IS_RISCOS -o $@ $<
-.s.o:;		${AS} ${ASFLAGS} -o $@ $<
-
-#
-# Main rules:
-#
-#
-all: ${RAM_MODULE} o.dirs
-        @echo ${COMPONENT}: Application built
+install_resources:
+	${MKDIR} ${INSTAPP}
+	${CP} LocalRes:!Boot ${INSTAPP}.!Boot ${CPFLAGS}
+	${CP} LocalRes:!Run ${INSTAPP}.!Run ${CPFLAGS}
+	${CP} LocalRes:!Help ${INSTAPP}.!Help ${CPFLAGS}
+	${CP} LocalRes:!Sprites ${INSTAPP}.!Sprites ${CPFLAGS}
+	${CP} LocalRes:!Sprites22 ${INSTAPP}.!Sprites22 ${CPFLAGS}
+	${CP} LocalRes:Messages ${INSTAPP}.Messages ${CPFLAGS}
+	${CP} LocalRes:Templates ${INSTAPP}.Templates ${CPFLAGS}
+	${CC} -C++ -E >${INSTAPP}.Desc LocalRes:Desc
+	${TIDYDESC}  ${INSTAPP}.Desc ${INSTAPP}.Desc
+	@echo ${COMPONENT}: FrontEnd app install in '${INSTAPP}'
 
 clean:
         ${WIPE} o ${WFLAGS}
-        ${WIPE} aif ${WFLAGS}
+        ${RM} ${COMPONENT}
         @echo ${COMPONENT}: cleaned
 
-o.dirs:
+export_hdrs: 
+	@echo ${COMPONENT}: export complete (hdrs)
+
+export_libs: 
+        @echo ${COMPONENT}: export complete (libs)
+
+${DIRS}:
 	${MKDIR} o
-	create $@
-
-export:
-        @echo ${COMPONENT}: export complete
+	${TOUCH} $@
 
 #
-# Targets
+# Final link
 #
-${RAM_MODULE}:	${RAM_OBJS} ${CLIB}
-	${MKDIR} aif
-	${LD} ${LDFLAGS} -o $@ ${RAM_OBJS} ${CLXLIB} ${CLIB}
-	${SQUEEZE} ${SQZFLAGS} $@
-        Access $@ RW/R
+${TARGET}: ${OBJS} ${LIBS} ${DIRS}
+        ${LD} ${LDFLAGS} -o ${COMPONENT} ${OBJS} ${LIBS}
+        ${SQZ} ${SQZFLAGS} $@
+        ${CHMOD} a+rx $@
 
 # Dynamic dependencies:
