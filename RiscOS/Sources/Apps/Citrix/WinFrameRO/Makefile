@@ -52,12 +52,11 @@ resources:
 	${CP} ${SRC}.Sprites     ${RESRES}.Sprites ${CPFLAGS}
 	${CP} ${SRC}.Messages    ${RESRES}.Messages ${CPFLAGS}
 	${CP} ${SRC}.Res         ${RESRES}.Res      ${CPFLAGS}
+	${CP} ${SRC}.Splash      ${RESRES}.Splash   ${CPFLAGS}
 	${CP} ${SRC}.ini.AppSrv   ${RESRES}.ini.AppSrv   ${CPFLAGS}
 	${CP} ${SRC}.ini.Module   ${RESRES}.ini.Module   ${CPFLAGS}
 	${CP} ${SRC}.ini.WFClient ${RESRES}.ini.WFClient ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
-
-#	${CP} ${SRC}.Splash      ${RESRES}.Splash   ${CPFLAGS}
 
 export: export_${PHASE}
 
