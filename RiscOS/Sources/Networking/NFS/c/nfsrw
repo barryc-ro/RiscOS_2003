@@ -37,6 +37,7 @@ Date	   Who      Comments
 /* static struct timeval TIMEOUT = { 25, 0 };  */
 #include "TimeOut.h"
 
+#include "DebugLib/DebugLib.h"
 
 /* try to keep the network busy by juggling many simultaneous transfers */
 
@@ -54,24 +55,28 @@ typedef struct {  /* state per udp packet transfer in progress */
   unused_client *nfs_client;    /* coroutine client */
 
   union {                       /* arguments to rpc (read or write) */
-        readargs rargs;
-        writeargs wargs;
+        READ3args rargs;
+        WRITE3args wargs;
+        readargs r2args;
+        writeargs w2args;
       } coargs;
 
   union {                       /* results from rpc (read or write) */
-        readres rres;
-        attrstat wres;
+        READ3res rres;
+        WRITE3res wres;
+        readres r2res;
+        attrstat w2res;
       } cores;
 
   } nfsrwstate;
 
 /* a function to setup the arguments for the transfer */
-typedef void (*argsfn)(nfsrwstate *rwstate, nfs_fh *fhandle, int *offset, int *nbytes, char **data);
+typedef void (*argsfn)(nfsrwstate *rwstate, RO_nfs_fh3 *fhandle, int *offset, int *nbytes, char **data);
 
 static _kernel_oserror *start_transfer( nfsrwstate      rwstate[],
                                         MountPoint      *mount_point,
                                             u_long      proc,          /* procedure number */
-                                            nfs_fh      *fhandle,
+                                        RO_nfs_fh3      *fhandle,
                                                int      *offset,
                                                int      *nbytes,
                                               char      **data,
@@ -161,9 +166,10 @@ static _kernel_oserror *schedule( nfsrwstate    rwstate[],
   No check was being made on whether the NFS return was valid !
   (RPC return was being checked already)
  ****************************************************************/
-   	       	  	   if(rwstate[co].cores.rres.status != NFS_OK)
+   	       	  	   if(rwstate[co].cores.rres.status != NFS3_OK)
    	       	  	   {
    	       	  	     *idle_slot = TRUE;
+   	       	  	     dprintf(("nfsrw_1", "Multi-RW failure: %d (%p)\n", rwstate[co].cores.rres.status, &rwstate[co]));
    	       	  	     err = rpcnfs_to_riscos_err(&rwstate[co].cores.rres, mount_point, rwstate[co].nfs_client->client);
    	       	  	     return err;
     	       	  	   }
@@ -172,7 +178,7 @@ static _kernel_oserror *schedule( nfsrwstate    rwstate[],
 			   {
                                 endfn(&rwstate[co], arg); /* call endfn when finished transfer */
                                 *idle_slot = TRUE;
-                           } /* endif(rwstate[co].cores.rres.status != NFS_OK) */
+                           } /* endif(rwstate[co].cores.rres.status != NFS3_OK) */
                         }
                         else
                         {
@@ -198,7 +204,7 @@ static _kernel_oserror *schedule( nfsrwstate    rwstate[],
 
         On entry:
         [mount_point]
-        [nfsproc]   procedure number NFSPROC_READ or NFSPROC_WRITE
+        [nfsproc]   procedure number NFSPROC3_READ or NFSPROC3_WRITE
         [fhandle]   the file handle
         [offset]    offset in file to start transfer
         [nbytes]    number of bytes to transfer to or from file
@@ -214,7 +220,7 @@ static _kernel_oserror *schedule( nfsrwstate    rwstate[],
 */
 static _kernel_oserror *transfermany( MountPoint        *mount_point,
                                           u_long        proc,
-                                          nfs_fh        *fhandle,
+                                      RO_nfs_fh3        *fhandle,
                                              int        offset,
                                              int     	nbytes,
                                              char    	*data,
@@ -243,7 +249,7 @@ static _kernel_oserror *transfermany( MountPoint        *mount_point,
                 {
                         err = start_transfer(rwstate, mount_point, proc, fhandle, &offset, &nbytes, &data, &ntransfers, setup_args, xargs, xresults);
                         if (err != NULL) {
-                        	/*  was (&& ntransfers == 0) but that leaves failed transfers in 
+                        	/*  was (&& ntransfers == 0) but that leaves failed transfers in
                         	    the middle of a file unreported.  */
                                 goto abort;
                         }
@@ -282,20 +288,31 @@ abort:
         function to setup the arguments for reading
         passed to transfermany() and called by start_transfer()
 */
-static void setup_readargs(nfsrwstate *rwstate, nfs_fh *fhandle, int *offset, int *nbytes, char **data)
+static void setup_readargs(nfsrwstate *rwstate, RO_nfs_fh3 *fhandle, int *offset, int *nbytes, char **data)
 {
-        rwstate->coargs.rargs.file = *fhandle;
-        rwstate->coargs.rargs.offset = *offset;
-        rwstate->coargs.rargs.count = (*nbytes > NFS_MAXDATA) ? NFS_MAXDATA : *nbytes;
-        *nbytes -= rwstate->coargs.rargs.count;
-        *offset += rwstate->coargs.rargs.count;
-        rwstate->cores.rres.readres_u.reply.data.data_val = *data;
-        *data += rwstate->coargs.rargs.count;
+        if (rwstate->nfs_client->version == NFS_V3) {
+	        rwstate->coargs.rargs.file = fhandle->fh3;
+        	ui64_create(&rwstate->coargs.rargs.offset, *offset);
+	        rwstate->coargs.rargs.count = (*nbytes > NFS_MAXDATA) ? NFS_MAXDATA : *nbytes;
+        	*nbytes -= (int) rwstate->coargs.rargs.count;
+	        *offset += (int) rwstate->coargs.rargs.count;
+        	rwstate->cores.rres.READ3res_u.resok.data.data_val = *data;
+	        *data += rwstate->coargs.rargs.count;
+        }
+        else {
+	        fh2cpy_from_fh3(&rwstate->coargs.r2args.file, &fhandle->fh3);
+        	rwstate->coargs.r2args.offset = *offset;
+	        rwstate->coargs.r2args.count = (*nbytes > NFS_MAXDATA) ? NFS_MAXDATA : *nbytes;
+        	*nbytes -= rwstate->coargs.r2args.count;
+	        *offset += rwstate->coargs.r2args.count;
+        	rwstate->cores.r2res.readres_u.reply.data.data_val = *data;
+	        *data += rwstate->coargs.r2args.count;
+        }
 }  /* endfunction transfermany */
 
 typedef struct {
   int *readres_len;
-  fattr *nattr;
+  fattr3 *nattr;
   } endreadargstr;
 
 /*
@@ -305,9 +322,18 @@ typedef struct {
 static void endread(nfsrwstate *rwstate, void *arg)
 {
         endreadargstr *args = arg;
-        *args->readres_len += rwstate->cores.rres.readres_u.reply.data.data_len;
-        /* This really only needs to be set once, rather than on EVERY endread. */
-        *args->nattr = rwstate->cores.rres.readres_u.reply.attributes; /* get attributes for caller cache update */
+
+        if (rwstate->nfs_client->version == NFS_V3) {
+	        *args->readres_len += rwstate->cores.rres.READ3res_u.resok.data.data_len;
+	        /* This really only needs to be set once, rather than on EVERY endread. */
+	        if (rwstate->cores.rres.READ3res_u.resok.file_attributes.attributes_follow)
+        	        *args->nattr = rwstate->cores.rres.READ3res_u.resok.file_attributes.post_op_attr_u.attributes;
+	        /* get attributes for caller cache update */
+        }
+        else {
+                upcast_fattr(args->nattr, &rwstate->cores.r2res.readres_u.reply.attributes);
+                *args->readres_len += rwstate->cores.r2res.readres_u.reply.data.data_len;
+        }
 }
 
 _kernel_oserror *nfsrw_readmany
@@ -315,10 +341,10 @@ _kernel_oserror *nfsrw_readmany
         int *readres_len,
         char *readres_data,
         MountPoint *mount_point,
-        nfs_fh *fhandle,
-        unsigned offset,
+        RO_nfs_fh3 *fhandle,
+        unsigned long offset,
         int nbytes,
-        fattr *nattr
+        fattr3 *nattr
 )
 {
 #if DEBUGON && 0
@@ -327,15 +353,28 @@ _kernel_oserror *nfsrw_readmany
         _kernel_oserror *err = NULL;
         endreadargstr endreadargs;
 
+	dprintf(("nfsrw_1", "nfsrw_readmany starts ... read %d bytes at %ld\n", nbytes, offset));
+
         *readres_len = 0;  /* CHECK that this is acceptable (0 if error) */
 
         endreadargs.readres_len = readres_len;
         endreadargs.nattr = nattr;
 
-        err = transfermany(mount_point, NFSPROC_READ,
-                           fhandle, (int)offset, nbytes, readres_data,
-                           setup_readargs, endread, &endreadargs,
-                           xdr_readargs, xdr_readres);
+	if (mount_point->host->nfs_version == NFS_V3) {
+	        err = transfermany(mount_point, NFSPROC3_READ,
+        	                   fhandle, (int)offset, nbytes, readres_data,
+                	           setup_readargs, endread, &endreadargs,
+                        	   xdr_READ3args, xdr_READ3res);
+	}
+	else {
+	        err = transfermany(mount_point, NFSPROC_READ,
+        	                   fhandle, (int)offset, nbytes, readres_data,
+                	           setup_readargs, endread, &endreadargs,
+                        	   xdr_readargs, xdr_readres);
+	}
+
+	dprintf(("nfsrw_1", "nfsrw_readmany completes (%serror)\n", err?"":"no "));
+
         if (err != NULL)
                 return err;
 
@@ -347,16 +386,34 @@ _kernel_oserror *nfsrw_readmany
         function to setup the arguments for writing
         passed to transfermany() and called by start_transfer()
 */
-static void setup_writeargs(nfsrwstate *rwstate, nfs_fh *fhandle, int *offset, int *nbytes, char **data)
+static void setup_writeargs(nfsrwstate *rwstate, RO_nfs_fh3 *fhandle, int *offset, int *nbytes, char **data)
 {
-        rwstate->coargs.wargs.file = *fhandle;
-        rwstate->coargs.wargs.offset = *offset;
-        rwstate->coargs.wargs.data.data_len = (*nbytes > NFS_MAXDATA) ? NFS_MAXDATA : *nbytes;
-        *nbytes -= rwstate->coargs.wargs.data.data_len;
-        *offset += rwstate->coargs.wargs.data.data_len;
-        rwstate->coargs.wargs.data.data_val = *data;
-        *data += rwstate->coargs.wargs.data.data_len;
-} /* endfunction nfsrw_readmany */
+        if (rwstate->nfs_client->version == NFS_V3) {
+                dprintf(("nfsrw_2", "setup_writeargs(1): at %8d, write %8d, from %p  (in) (%p)\n", *offset, *nbytes, *data, rwstate));
+	        rwstate->coargs.wargs.file = fhandle->fh3;
+        	ui64_create(&rwstate->coargs.wargs.offset, *offset);
+	        rwstate->coargs.wargs.data.data_len = (*nbytes > NFS_MAXDATA) ? NFS_MAXDATA : *nbytes;
+	        rwstate->coargs.wargs.count = rwstate->coargs.wargs.data.data_len;
+        	*nbytes -= rwstate->coargs.wargs.data.data_len;
+	        *offset += rwstate->coargs.wargs.data.data_len;
+        	rwstate->coargs.wargs.data.data_val = *data;
+	        *data += rwstate->coargs.wargs.data.data_len;
+                dprintf(("nfsrw_2", "setup_writeargs(2): at %8d, write %8d, from %p  (structure)\n",
+                	ui64_value(&rwstate->coargs.wargs.offset),
+                	rwstate->coargs.wargs.data.data_len,
+                	rwstate->coargs.wargs.data.data_val));
+                dprintf(("nfsrw_2", "setup_writeargs(3): at %8d, write %8d, from %p  (remaining)\n", *offset, *nbytes, *data));
+        }
+        else {
+	        fh2cpy_from_fh3(&rwstate->coargs.w2args.file, &fhandle->fh3);
+	        rwstate->coargs.w2args.offset = *offset;
+        	rwstate->coargs.w2args.data.data_len = (*nbytes > NFS_MAXDATA) ? NFS_MAXDATA : *nbytes;
+	        *nbytes -= rwstate->coargs.w2args.data.data_len;
+        	*offset += rwstate->coargs.w2args.data.data_len;
+	        rwstate->coargs.w2args.data.data_val = *data;
+        	*data += rwstate->coargs.w2args.data.data_len;
+        }
+}
 
 /*
         function to call when a write packet has been sent, and the acknowledgement
@@ -364,15 +421,25 @@ static void setup_writeargs(nfsrwstate *rwstate, nfs_fh *fhandle, int *offset, i
 */
 static void endwrite(nfsrwstate *rwstate, void *arg)
 {
-        fattr **nattr = arg;
-        *nattr = &rwstate->cores.wres.attrstat_u.attributes;  /* N.B. this should not be necessary after every packet transferred */
+        fattr3 **nattr = arg;
+        if (rwstate->nfs_client->version == NFS_V3) {
+        	if (rwstate->cores.wres.WRITE3res_u.resok.file_wcc.after.attributes_follow)
+                	*nattr = &rwstate->cores.wres.WRITE3res_u.resok.file_wcc.after.post_op_attr_u.attributes;
+        }
+        else {
+                /* Note: wres and w2res are in a union with each other - so potentially unsafe to upgrade it in situ */
+                fattr fcopy = rwstate->cores.w2res.attrstat_u.attributes;
+                *nattr = &rwstate->cores.wres.WRITE3res_u.resok.file_wcc.after.post_op_attr_u.attributes;
+                upcast_fattr(&rwstate->cores.wres.WRITE3res_u.resok.file_wcc.after.post_op_attr_u.attributes, &fcopy);
+        }
+        /* N.B. this should not be necessary after every packet transferred */
 }
 
 _kernel_oserror *nfsrw_writemany(
-        fattr **nattr,
+        fattr3 **nattr,
         MountPoint *mount_point,
-        nfs_fh *fhandle,
-        unsigned offset,
+        RO_nfs_fh3 *fhandle,
+        unsigned long offset,
         char *data,
         int nbytes
 )
@@ -382,10 +449,22 @@ _kernel_oserror *nfsrw_writemany(
 #endif
         _kernel_oserror *err = NULL;
 
-        err = transfermany(mount_point, NFSPROC_WRITE,
-                           fhandle, (int)offset, nbytes, data,
-                           setup_writeargs, endwrite, nattr,
-                           xdr_writeargs, xdr_attrstat);
+	dprintf(("nfsrw_1", "nfsrw_writemany starts ... write %d bytes at %ld\n", nbytes, offset));
+
+	if (mount_point->host->nfs_version == NFS_V3) {
+	        err = transfermany(mount_point, NFSPROC3_WRITE,
+        	                   fhandle, (int)offset, nbytes, data,
+                	           setup_writeargs, endwrite, nattr,
+                        	   xdr_WRITE3args, xdr_WRITE3res);
+	}
+	else {
+	        err = transfermany(mount_point, NFSPROC_WRITE,
+        	                   fhandle, (int)offset, nbytes, data,
+                	           setup_writeargs, endwrite, nattr,
+                        	   xdr_writeargs, xdr_attrstat);
+	}
+
+	dprintf(("nfsrw_1", "nfsrw_writemany completes (%serror)\n", err?"":"no "));
 
         return err;
 } /* endfunction nfsrw_writemany */

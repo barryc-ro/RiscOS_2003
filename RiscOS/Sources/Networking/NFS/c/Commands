@@ -121,19 +121,19 @@ _kernel_oserror *process_nfsname
         if ( err )
                 return err;
 
-        aargs.aa_ident = encryptstring( username );
-        aargs.aa_password = encryptstring( password );
+        aargs.id = encryptstring( username );
+        aargs.pw = encryptstring( password );
 
         ares = pcnfsd_auth_1( &aargs, pcnfsd_client->client );
 
-        free( aargs.aa_ident );
-        free( aargs.aa_password );
+        free( aargs.id );
+        free( aargs.pw );
 
         if ( ares )
         {
                 release_client( pcnfsd_client );
 
-                switch( ares->ar_stat )
+                switch( ares->stat )
                 {
                 case AUTH_RES_OK:
                         /* do nothing */
@@ -166,9 +166,9 @@ _kernel_oserror *process_nfsname
         machname[MAX_MACHINE_NAME] = 0;
         len = getgroups( NGRPS, gids );
 
-        authorisation = authunix_create( machname, ares->ar_uid, ares->ar_gid, len, (gid_t *) gids );
+        authorisation = authunix_create( machname, ares->uid, ares->gid, len, (gid_t *) gids );
 
-        return new_user( &current_user, username, current_nameing_host, (int)ares->ar_uid, (int)ares->ar_gid, authorisation );
+        return new_user( &current_user, username, current_nameing_host, (int)ares->uid, (int)ares->gid, authorisation );
 }
 
 /*
@@ -381,8 +381,13 @@ _kernel_oserror *nfs_mount_internal( char *mountname, char *mountpath, Host *hos
         _kernel_oserror *err;
         MountPoint *new_mount_point;
         Chain_Link *link;
-        fhstatus *res;
+        union {
+                void *res;
+	        mountres3 *res3;
+        	fhstatus *res1;
+        } res;
         unused_client *mount_client;
+        xdrproc_t freeproc;
 
 
 
@@ -437,7 +442,6 @@ _kernel_oserror *nfs_mount_internal( char *mountname, char *mountpath, Host *hos
         new_mount_point->being_dismounted = No;
 
 
-
         err = get_mount_client_for_mp( &mount_client, new_mount_point );
 
         if ( err )
@@ -449,11 +453,17 @@ _kernel_oserror *nfs_mount_internal( char *mountname, char *mountpath, Host *hos
                 return err;
         }
 
+	if (mount_client->version == MOUNTVERS3) {
+	        res.res3 = mountproc_mnt_3( &new_mount_point->mount_path, mount_client->client );
+	        freeproc = xdr_mountres3;
+	}
+	else {
+	        res.res1 = mountproc_mnt_1( &new_mount_point->mount_path, mount_client->client );
+	        freeproc = xdr_fhstatus;
+	}
 
-        res = mountproc_mnt_1( &new_mount_point->mount_path, mount_client->client );
 
-
-        err = rpcmount_to_riscos_err( res, new_mount_point, mount_client->client );
+        err = rpcmount_to_riscos_err( res.res, new_mount_point, mount_client->client );
 
 
         release_client( mount_client );
@@ -464,10 +474,23 @@ _kernel_oserror *nfs_mount_internal( char *mountname, char *mountpath, Host *hos
                 free( new_mount_point->mount_point_name );
                 free( new_mount_point );
 
+                if (res.res) xdr_free(freeproc, res.res);
+
                 return err;
         }
 
-        new_mount_point->fhandle = *(nfs_fh *)(res->fhstatus_u.fhs_fhandle);
+	if ( freeproc == xdr_mountres3 ) {
+	        /* mount_client is "gone" */
+	        fh3cpy_from_xdr(&new_mount_point->fhandle, (nfs_fh3 *)&res.res3->mountres3_u.mountinfo.fhandle);
+	}
+	else {
+	        static nfs_fh3 fh3;
+	        fh3cpy_from_fhandle(&fh3, (nfs_fh *) &res.res1->fhstatus_u.fhs_fhandle);
+		fh3cpy_from_xdr(&new_mount_point->fhandle, &fh3);
+	}
+	xdr_free(freeproc, res.res);
+
+
         host->usage_count++;
         user->usage_count++;
 
@@ -707,6 +730,7 @@ _kernel_oserror *nfs_dismount
         OpenFile *lastfile;
         FSEntry_Close_Parameter closeparm;
         unused_client *mount_client;
+        void *(*umnt_fn)(dirpath *, CLIENT *);
         char *DiscName;
 
         /*
@@ -774,7 +798,9 @@ _kernel_oserror *nfs_dismount
         if ( err && !error_to_return )
                 error_to_return = err;
 
-        err = rpcmount_to_riscos_err( mountproc_umnt_1( &mount->mount_path, mount_client->client ), mount, mount_client->client );
+	umnt_fn = mount_client->version == MOUNTVERS3 ? mountproc_umnt_3 : mountproc_umnt_1;
+
+        err = rpcmount_to_riscos_err( umnt_fn ( &mount->mount_path, mount_client->client ), mount, mount_client->client );
         release_client( mount_client );
 
         if ( err && !error_to_return )
@@ -968,7 +994,7 @@ _kernel_oserror *command_nfsinfo
                 link = link->forwards )
         {
                 host = Link_Wrapper( link );
-                err = lightweight_printf( "name=<%0s>, usage = %1d\n", host->host_name, host->usage_count );
+                err = lightweight_printf( "name=<%0s>, usage = %1d, NFS version = %2d\n", host->host_name, host->usage_count, host->nfs_version );
         }
 
         if ( !err )
@@ -1294,7 +1320,7 @@ static char *Commands_set_varname(char varbuf[20], int count)
 
 _kernel_oserror *nfs_boot(void)
 {
-        int first, nsecs, nread, flags;
+        int first, nsecs, flags;
         int lasttime, curtime, elapsedtime;
         char server_adr[32], mount_path[64], bootserver_varname[20];
         _kernel_oserror *err;

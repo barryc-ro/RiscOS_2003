@@ -4,6 +4,7 @@
 #endif
 
 #include "access.h"
+#include "DebugLib/DebugLib.h"
 
 #define RISCOS_Style 1 /* When set, if open update fails write access, it returns a read-only handle
                         * when unset, if open update fails write access, it fails */
@@ -14,9 +15,9 @@
 _kernel_oserror *nfs_rename_safely
 (
         MountPoint *mp,
-        nfs_fh *to_dir,
+        RO_nfs_fh3 *to_dir,
         char *to_name,
-        nfs_fh *from_dir,
+        RO_nfs_fh3 *from_dir,
         char *from_name
 )
 {
@@ -41,7 +42,7 @@ _kernel_oserror *nfs_rename_safely
                         /*
                                 If the open file's a match
                         */
-                        if ( memcmp( &of->nfs_fd.dir, from_dir, sizeof( *from_dir ) ) == 0 &&
+                        if ( fh3cmp( &of->nfs_fd.dir, from_dir ) == 0 &&
                                 strcmp( of->nfs_fd.desc.name, from_name ) == 0 )
                         {
                                 /*
@@ -53,7 +54,7 @@ _kernel_oserror *nfs_rename_safely
                                         free( of->nfs_fd.desc.name );
                                         of->nfs_fd.desc.name = new_name;
                                         strcpy( new_name, to_name );
-                                        of->nfs_fd.dir = *to_dir;
+                                        fh3cpy(&of->nfs_fd.dir, to_dir);
                                 }
                                 else
                                 {
@@ -120,20 +121,20 @@ _kernel_oserror *create_nfs_file
         nfs_file_descriptor     *ndesc,
         char                    *riscos_name,
         int                     *length,
-        int                     *load_address,
-        int                     *execute_address,
+        unsigned long           *load_address,
+        unsigned long           *execute_address,
         int                     *access,
         char                    *filling,
         bool_t                  fill_it  /* JRS 7/92 added because filling can have a valid value of 0 */
 )
 {
         _kernel_oserror *err;
-        sattr nattr;
+        sattr3 nattr;
         char *path_to_leaf;
         char *leaf_position;
         riscos_file_description rdesc;
         char time_result[ 5 ];
-        fattr *nattrres;
+        fattr3 *nattrres;
         appendum bit_on_the_end;
         int success;
 
@@ -186,7 +187,7 @@ _kernel_oserror *create_nfs_file
                         }
 
                         rdesc.attr.load_address = NewFile_DefaultLoad | time_result[4];
-                        rdesc.attr.execute_address = *(int *)time_result;
+                        rdesc.attr.execute_address = *(unsigned long *)time_result;
                 }
 
                 if ( access )
@@ -219,12 +220,17 @@ _kernel_oserror *create_nfs_file
                         }
                 }
 
-                nattr.mode = ndesc->desc.attr.mode;
-                nattr.uid = ndesc->mp->user->uid;
-                nattr.gid = ndesc->mp->user->gid;
-                nattr.size = 0;
-                nattr.atime = ndesc->desc.attr.atime;
-                nattr.mtime = ndesc->desc.attr.mtime;
+                nattr.mode.set_it = TRUE;
+                nattr.uid.set_it = TRUE;
+                nattr.gid.set_it = TRUE;
+                nattr.size.set_it = FALSE;
+                nattr.atime.set_it = SET_TO_CLIENT_TIME;
+                nattr.mtime.set_it = SET_TO_CLIENT_TIME;
+                nattr.mode.set_mode3_u.mode = ndesc->desc.attr.mode;
+                nattr.uid.set_uid3_u.uid = ndesc->mp->user->uid;
+                nattr.gid.set_gid3_u.gid = ndesc->mp->user->gid;
+                nattr.atime.set_atime_u.atime = ndesc->desc.attr.atime;
+                nattr.mtime.set_mtime_u.mtime = ndesc->desc.attr.mtime;
 
                 err = nfs_create( &ndesc->file, &nattrres, ndesc->mp, &ndesc->dir, ndesc->desc.name, &nattr );
 
@@ -272,7 +278,7 @@ _kernel_oserror *create_nfs_file
 
         free( path_to_leaf );
 
-        if ( (ndesc->desc.attr.mode & NFSMODE_FMT) != NFSMODE_REG )
+        if ( ndesc->desc.attr.type != NF3REG )
         {
                 /*
                         Object exists and isn't a regular file.
@@ -301,12 +307,12 @@ _kernel_oserror *create_nfs_file
 }
 
 /*
-        Given the fattr for a file and its mount point, return
+        Given the fattr3 for a file and its mount point, return
         the best guess as to what we're permitted to do to it.
 */
-static int access_on_file( fattr *nattr, MountPoint *mount_point )
+static int access_on_file( fattr3 *nattr, MountPoint *mount_point )
 {
-        int access_bits;
+        unsigned long access_bits;
         int result = 0;
 
         /*
@@ -579,11 +585,11 @@ static _kernel_oserror *process_sfdetails
                         return err;
                 }
 
-                pri_args.pia_client = machname;
+                pri_args.system = machname;
                 if ( sfdet->printername )
-                        pri_args.pia_printername = sfdet->printername;
+                        pri_args.pn = sfdet->printername;
                 else
-                        pri_args.pia_printername = "";
+                        pri_args.pn = "";
 
                 pri_res = pcnfsd_pr_init_1( &pri_args, pcnfsd_client->client );
                 err = rpcpcnfsd_pi_to_riscos_err( pri_res, pcnfsd_client->client, spool_hostname );
@@ -626,7 +632,7 @@ static _kernel_oserror *process_sfdetails
                 /*
                         Generate the artificial internal mount point for spooling
                 */
-                err = nfs_mount_internal( artificial_mountname, pri_res->pir_spooldir, spool_host, user_nobody );
+                err = nfs_mount_internal( artificial_mountname, pri_res->dir, spool_host, user_nobody );
 
                 /*
                         Drop 'Nobody' and spool_host given that our handles on these are being dropped now
@@ -773,7 +779,7 @@ _kernel_oserror *fsentry_open( FSEntry_Open_Parameter *parm )
 
                         fshandle = (FileSystemHandle)of;
 
-                        if ( (of->nfs_fd.desc.attr.mode & NFSMODE_FMT) == NFSMODE_DIR )
+                        if ( of->nfs_fd.desc.attr.type == NF3DIR )
                         {
                                 parm->open_result.information_word =
                                         FileInfo_ObjectIsDirectory;
@@ -807,6 +813,7 @@ _kernel_oserror *fsentry_open( FSEntry_Open_Parameter *parm )
                         break;
 
                 default:
+                        dprintf(("", "Unused FSEntry_Open entry called! (%d)\n", parm->open_definition.reason));
                         err = mb_nfserr_BadParameters;
                        /* JRS 7/92 removed return here which would leave hourglass on */
                         break;

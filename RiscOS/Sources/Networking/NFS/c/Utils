@@ -316,6 +316,8 @@ _kernel_oserror *new_host
 
                 new_host->usage_count = 0;
 
+                initialise_nfs_version( new_host );
+
                 initialise_header( &new_host->mount_points );
 
                 /*
@@ -358,7 +360,7 @@ _kernel_oserror *new_host
         return NULL;
 }
 
-static void junk_clients
+void junk_clients
 (
         Chain_Header *client_list
 )
@@ -489,6 +491,7 @@ MountPoint *find_mount
         return NULL;
 }
 
+#if 0
 /*
         Very long arithmetic routines
 */
@@ -597,6 +600,7 @@ void very_long_subtract
         subtract_step( rlo, alo, blo, &carry );
         subtract_step( rhi, ahi, bhi, &carry );
 }
+#endif
 
 /*
         JRS 11/9/92 get quota numbers for free display
@@ -615,7 +619,7 @@ static enum clnt_stat getnfsquota( MountPoint  *mount,
         struct getquota_rslt gq_rslt;
 
         gq_args.gqa_pathp = mount->mount_path;
-        gq_args.gqa_uid = mount->user->uid;
+        gq_args.gqa_uid = (int) mount->user->uid;
 
 #ifdef NETACCESSCOUNT
 NetAccessCountG++;
@@ -631,23 +635,23 @@ NetAccessCountG++;
                 return stat;
         }
 
-        switch (gq_rslt.gqr_status) {
+        switch (gq_rslt.status) {
         case Q_OK:
                 {
-                space->active_quota = gq_rslt.gqr_rquota.rq_active;
+                space->active_quota = gq_rslt.getquota_rslt_u.gqr_rquota.rq_active;
                 if (!space->active_quota)
                         return RPC_SUCCESS;
-                space->sp.quota.space.usage = gq_rslt.gqr_rquota.rq_curblocks *
-                    gq_rslt.gqr_rquota.rq_bsize;
-                space->sp.quota.space.slim = gq_rslt.gqr_rquota.rq_bsoftlimit *
-                    gq_rslt.gqr_rquota.rq_bsize;
-                space->sp.quota.space.hlim = gq_rslt.gqr_rquota.rq_bhardlimit *
-                    gq_rslt.gqr_rquota.rq_bsize;
-                space->sp.quota.space.timeleft = gq_rslt.gqr_rquota.rq_btimeleft;
-                space->sp.quota.files.hlim = gq_rslt.gqr_rquota.rq_fhardlimit;
-                space->sp.quota.files.slim = gq_rslt.gqr_rquota.rq_fsoftlimit;
-                space->sp.quota.files.usage = gq_rslt.gqr_rquota.rq_curfiles;
-                space->sp.quota.files.timeleft = gq_rslt.gqr_rquota.rq_ftimeleft;
+                space->sp.quota.space.usage = gq_rslt.getquota_rslt_u.gqr_rquota.rq_curblocks *
+                    gq_rslt.getquota_rslt_u.gqr_rquota.rq_bsize;
+                space->sp.quota.space.slim = gq_rslt.getquota_rslt_u.gqr_rquota.rq_bsoftlimit *
+                    gq_rslt.getquota_rslt_u.gqr_rquota.rq_bsize;
+                space->sp.quota.space.hlim = gq_rslt.getquota_rslt_u.gqr_rquota.rq_bhardlimit *
+                    gq_rslt.getquota_rslt_u.gqr_rquota.rq_bsize;
+                space->sp.quota.space.timeleft = gq_rslt.getquota_rslt_u.gqr_rquota.rq_btimeleft;
+                space->sp.quota.files.hlim = gq_rslt.getquota_rslt_u.gqr_rquota.rq_fhardlimit;
+                space->sp.quota.files.slim = gq_rslt.getquota_rslt_u.gqr_rquota.rq_fsoftlimit;
+                space->sp.quota.files.usage = gq_rslt.getquota_rslt_u.gqr_rquota.rq_curfiles;
+                space->sp.quota.files.timeleft = gq_rslt.getquota_rslt_u.gqr_rquota.rq_ftimeleft;
                 return RPC_SUCCESS;
                 }
 
@@ -679,7 +683,7 @@ _kernel_oserror *utils_getfsspace( utils_spacestr *space,  char *mount_name )
         enum clnt_stat stat;
         _kernel_oserror *err;
         MountPoint *mount_point = find_mount( mount_name );
-        statfsres *sres;
+        FSSTAT3res *sres;
         unused_client *nfs_client, *quota_client;
         bzero(space, sizeof(*space));
 
@@ -710,19 +714,31 @@ _kernel_oserror *utils_getfsspace( utils_spacestr *space,  char *mount_name )
         if ( err )
                 return err;
 
-        sres = nfsproc_statfs_2( &mount_point->fhandle, nfs_client->client );
+	if (nfs_client->version == NFS_V3)
+	{
+          sres = nfsproc3_fsstat_3( (FSSTAT3args *) &mount_point->fhandle.fh3, nfs_client->client );
+	}
+	else
+	{
+          sres = nfs2_em_fsstat_3( (FSSTAT3args *) &mount_point->fhandle.fh3, nfs_client->client );
+	}
         err = rpcnfs_to_riscos_err( sres, mount_point, nfs_client->client );
         release_client( nfs_client );
 
-        if ( err )
-                return err;
+        if ( !err )
+        {
+                static const unsigned shift = 10;
+                FSSTAT3resok *const res = &sres->FSSTAT3res_u.resok;
+                space->sp.statfs.bsize  = 1UL<<shift;
+                space->sp.statfs.blocks = ui64_value(ui64_shift_right(&res->tbytes, shift));
+                space->sp.statfs.bfree  = ui64_value(ui64_shift_right(&res->fbytes, shift));
+                space->sp.statfs.bavail = ui64_value(ui64_shift_right(&res->abytes, shift));
+        }
 
-        space->sp.statfs.bsize = sres->statfsres_u.reply.bsize;
-        space->sp.statfs.blocks = sres->statfsres_u.reply.blocks;
-        space->sp.statfs.bfree  = sres->statfsres_u.reply.bfree;
-        space->sp.statfs.bavail = sres->statfsres_u.reply.bavail;
+        if (sres != NULL)
+                xdr_free(xdr_FSSTAT3res, sres);
 
-        return NULL;
+        return err;
 }
 
 /* read the appropriate NFS$CreateAccess environment variable */

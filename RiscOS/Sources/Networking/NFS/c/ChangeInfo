@@ -3,21 +3,26 @@
 #include "NFS.h"
 #endif
 
+static const u_int64_t UToR_Offset = { UToR_DateOffset_Lo, UToR_DateOffset_Hi };
+
 /*
-        Convert a UNIX date (GM time in seconds and useconds) to
+        Convert a UNIX date (GM time in seconds and nseconds) to
         a RISC OS date (5 byte format in centiseconds).
 */
 static void unix_date_to_riscos_date
 (
-        unsigned int *riscos_date_lo,
+        /*unsigned int *riscos_date_lo,
         unsigned int *riscos_date_hi,
         unsigned int useconds,
-        unsigned int seconds
+        unsigned int seconds*/
+	u_int64_t *riscos, const nfstime3 *nfs
 )
 {
-        very_long_multiply( riscos_date_lo, riscos_date_hi, seconds, 0, 100, 0 );
-        very_long_add( riscos_date_lo, riscos_date_hi, *riscos_date_lo, *riscos_date_hi, useconds / 10000, 0 );
-        very_long_add( riscos_date_lo, riscos_date_hi, *riscos_date_lo, *riscos_date_hi, UToR_DateOffset_Lo, UToR_DateOffset_Hi );
+        u_int64_t nfs_micro;
+        ui64_create(&nfs_micro, nfs->nseconds / 10000000);
+        ui64_multiply_uu(riscos, nfs->seconds, 100);
+        ui64_add_u64u64(riscos, riscos, &nfs_micro);
+        ui64_add_u64u64(riscos, riscos, &UToR_Offset);
 
 }
 
@@ -28,41 +33,42 @@ static void unix_date_to_riscos_date
 */
 static void riscos_date_to_unix_date
 (
-        unsigned int *useconds,
+        /*unsigned int *useconds,
         unsigned int *seconds,
         unsigned int riscos_date_lo,
-        unsigned int riscos_date_hi
+        unsigned int riscos_date_hi*/
+        nfstime3 *nfs, const u_int64_t *riscos
 )
 {
-        unsigned int a;
-        unsigned int b;
+        unsigned long a, b;
+        u_int64_t tmp;
 
         /*
                 Remove the offset between the two date schemes
         */
-        very_long_subtract( useconds, seconds, riscos_date_lo, riscos_date_hi, UToR_DateOffset_Lo, UToR_DateOffset_Hi );
+        ui64_subtract_u64u64(&tmp, riscos, &UToR_Offset);
 
         /*
-                Take the 5-byte value in *seconds and *useconds
+                Take the 5-byte value in tmp
                 and divide it into two 20 bit chunks.
                 Process each chunk separately, then re-combine:
 
         */
         /* split into top and bottom 20 bits */
-        a = (*seconds << 12) | (*useconds >> 20);
-        b = *useconds & 0xfffff;
+        a = (tmp.high << 12) | (tmp.low >> 20);
+        b = tmp.low & 0xfffff;
 
         /* (a<<20 + b)%100 * 10000 */
-        *useconds = (( ((a%100)<<20) + b )%100) * 10000;
+        nfs->nseconds = (( ((a%100)<<20) + b )%100) * 10000000;
 
         /* (a<<20 + b)/100 */
-        *seconds = ((a/100)<<20) + (((a%100)<<20) + b)/100;
+        nfs->seconds = ((a/100)<<20) + (((a%100)<<20) + b)/100;
 
         /* Round up to the nearest second to get copy newer to work vaguely reasonably */
-        if ( *useconds )
+        if ( nfs->nseconds )
         {
-                (*seconds)++;
-                *useconds = 0;
+                nfs->seconds++;
+                nfs->nseconds = 0;
         }
 }
 
@@ -72,23 +78,22 @@ void nfs_to_riscos_attributes
         nfs_file_description *ndesc
 )
 {
-        unsigned int riscos_date_lo;
-        unsigned int riscos_date_hi;
+        u_int64_t riscos_date;
         int dummy;
 
         /*
                 Transfer the size
         */
-        rattr->file_length = ndesc->attr.size;
+        rattr->file_length = ui64_value(&ndesc->attr.size);
 
-        switch( ndesc->attr.mode & NFSMODE_FMT )
+        switch( ndesc->attr.type )
         {
-        case NFSMODE_REG:
+        case NF3REG:
                 /*
                         Regular file processing
                 */
                 extensions_check_nfs_name_for_extension( ndesc->name, &rattr->load_address, &dummy );
-                if ( rattr->load_address >= 0 )
+                if ( rattr->load_address != -1UL )
                 {
                         /*
                                 Typed file specified by user suffix
@@ -97,13 +102,13 @@ void nfs_to_riscos_attributes
                         /*
                                 Pick up the date
                         */
-                        unix_date_to_riscos_date( &riscos_date_lo, &riscos_date_hi, ndesc->attr.mtime.useconds, ndesc->attr.mtime.seconds );
+                        unix_date_to_riscos_date( &riscos_date, &ndesc->attr.mtime );
 
                         /*
                                 Combine the date and type
                         */
-                        rattr->load_address = 0xfff00000 | (rattr->load_address << FileType_Shift) | (int)(riscos_date_hi & 0xff );
-                        rattr->execute_address = riscos_date_lo;
+                        rattr->load_address = 0xfff00000 | (rattr->load_address << FileType_Shift) | (int)(riscos_date.high & 0xff );
+                        rattr->execute_address = riscos_date.low;
                 }
                 else if ( ndesc->name[ ndesc->chars_before_suffix ] == FileChar_TypedNamePrefix )
                 {
@@ -140,7 +145,7 @@ void nfs_to_riscos_attributes
                                 /*
                                         Pick up the date
                                 */
-                                unix_date_to_riscos_date( &riscos_date_lo, &riscos_date_hi, ndesc->attr.mtime.useconds, ndesc->attr.mtime.seconds );
+                                unix_date_to_riscos_date( &riscos_date, &ndesc->attr.mtime );
 
                                 /*
                                         Extract the type from the file name
@@ -150,8 +155,8 @@ void nfs_to_riscos_attributes
                                 /*
                                         Combine the date and type
                                 */
-                                rattr->load_address = 0xfff00000 | (rattr->load_address << FileType_Shift) | (int)(riscos_date_hi & 0xff );
-                                rattr->execute_address = riscos_date_lo;
+                                rattr->load_address = 0xfff00000 | (rattr->load_address << FileType_Shift) | (int)(riscos_date.high & 0xff );
+                                rattr->execute_address = riscos_date.low;
                         }
                 }
                 else
@@ -163,7 +168,7 @@ void nfs_to_riscos_attributes
                         /*
                                 Pick up the date
                         */
-                        unix_date_to_riscos_date( &riscos_date_lo, &riscos_date_hi, ndesc->attr.mtime.useconds, ndesc->attr.mtime.seconds );
+                        unix_date_to_riscos_date( &riscos_date, &ndesc->attr.mtime );
 
                         /*
                                 Choose between text or unix_ex
@@ -176,19 +181,19 @@ void nfs_to_riscos_attributes
                         /*
                                 Combine the date and type.
                         */
-                        rattr->load_address = 0xfff00000 | (rattr->load_address << FileType_Shift) | (int)(riscos_date_hi & 0xff );
-                        rattr->execute_address = riscos_date_lo;
+                        rattr->load_address = 0xfff00000 | (rattr->load_address << FileType_Shift) | (int)(riscos_date.high & 0xff );
+                        rattr->execute_address = riscos_date.low;
                 }
                 break;
 
-        case NFSMODE_LNK:
+        case NF3LNK:
                 /*
                         Soft links get reflected as soft links.
                 */
-                unix_date_to_riscos_date( &riscos_date_lo, &riscos_date_hi, ndesc->attr.mtime.useconds, ndesc->attr.mtime.seconds );
+                unix_date_to_riscos_date( &riscos_date, &ndesc->attr.mtime );
 
-                rattr->load_address = 0xfff00000 | (FileType_SoftLink << FileType_Shift) | (int)(riscos_date_hi & 0xff );
-                rattr->execute_address = riscos_date_lo;
+                rattr->load_address = 0xfff00000UL | (FileType_SoftLink << FileType_Shift) | (riscos_date.high & 0xffUL );
+                rattr->execute_address = riscos_date.low;
                 break;
 
         default:
@@ -199,13 +204,13 @@ void nfs_to_riscos_attributes
                 /*
                         Pick up the date
                 */
-                unix_date_to_riscos_date( &riscos_date_lo, &riscos_date_hi, ndesc->attr.mtime.useconds, ndesc->attr.mtime.seconds );
+                unix_date_to_riscos_date( &riscos_date, &ndesc->attr.mtime );
 
                 /*
                         Combine the date and type, type is given as UNIX executable.
                 */
-                rattr->load_address = 0xfff00000 | (FileType_UNIXExecutable << FileType_Shift) | (int)(riscos_date_hi & 0xff );
-                rattr->execute_address = riscos_date_lo;
+                rattr->load_address = 0xfff00000UL | (FileType_UNIXExecutable << FileType_Shift) | (riscos_date.high & 0xffUL );
+                rattr->execute_address = riscos_date.low;
         }
 
         /*
@@ -227,14 +232,14 @@ void nfs_to_riscos_attributes
                 block special type
                 named socket
         */
-        switch( ndesc->attr.mode & NFSMODE_FMT )
+        switch( ndesc->attr.type )
         {
-        case NFSMODE_REG:
-        case NFSMODE_LNK:
+        case NF3REG:
+        case NF3LNK:
                 rattr->type = FileType_File;
                 break;
 
-        case NFSMODE_DIR:
+        case NF3DIR:
                 if ( !(ndesc->attr.mode & NFSMODE_OTHERS_EXECUTE) )
                         rattr->access |= FileAccess_Locked;
                 rattr->type = FileType_Directory;
@@ -247,7 +252,7 @@ void nfs_to_riscos_attributes
 }
 
 /*
-        Translate from a fattr to RISCOS file attributes.
+        Translate from a fattr3 to RISCOS file attributes.
 
         Caller reponsible for freeing constructed rdesc.
 */
@@ -274,7 +279,7 @@ static _kernel_oserror *nfs_to_riscos_description
 
 /*
         Converts from riscos to nfs file description.
-        Only these field of the fattr in ndesc are filled in:
+        Only these field of the fattr3 in ndesc are filled in:
                 mode;
                 uid;
                 gid;
@@ -289,6 +294,7 @@ _kernel_oserror *riscos_to_nfs_description
 )
 {
         _kernel_oserror *err;
+        u_int64_t riscos_date;
         YesNoAnswer is_executable = No;
 
         /*
@@ -327,30 +333,33 @@ _kernel_oserror *riscos_to_nfs_description
         /*
                 Fill in the attr
         */
+        ndesc->attr.mode = 0;
         if ( rdesc->attr.type == FileType_Directory )
         {
-                ndesc->attr.mode = NFSMODE_DIR;
-                ndesc->attr.size = -1;
+                ndesc->attr.type = NF3DIR;
+                ui64_create2(&ndesc->attr.size, -1UL, -1UL);  /* -1 as an unsigned long constant? Know your C standard! */
         }
         else if ( (rdesc->attr.type & FileType_File) &&
                         ((rdesc->attr.load_address >> FileType_Shift) & FileType_Mask) == FileType_SoftLink )
         {
-                ndesc->attr.mode = NFSMODE_LNK;
-                ndesc->attr.size = -1;
+                ndesc->attr.type = NF3LNK;
+                ui64_create2(&ndesc->attr.size, -1UL, -1UL);
         }
         else
         {
-                ndesc->attr.mode = NFSMODE_REG;
+                ndesc->attr.type = NF3REG;
 
                 if ( (rdesc->attr.load_address & 0xffffff00) == (0xfff00000 | (FileType_UNIXExecutable << FileType_Shift)) )
                 {
                         is_executable = Yes;
                 }
 
-                ndesc->attr.size = rdesc->attr.file_length;
+                ui64_create2(&ndesc->attr.size, rdesc->attr.file_length, 0);
 
                 if ( ndesc->file_is_lxa )
-                        ndesc->attr.size += sizeof( appendum );
+                {
+                        ui64_add(&ndesc->attr.size, sizeof( appendum ) );
+                }
         }
 
         if ( rdesc->attr.access & FileAccess_OwnerRead )
@@ -390,7 +399,8 @@ _kernel_oserror *riscos_to_nfs_description
         /*
                 Convert the date.
         */
-        riscos_date_to_unix_date( &ndesc->attr.mtime.useconds, &ndesc->attr.mtime.seconds, rdesc->attr.execute_address, rdesc->attr.load_address & 0xff );
+        ui64_create2(&riscos_date, rdesc->attr.execute_address, rdesc->attr.load_address & 0xfful);
+        riscos_date_to_unix_date( &ndesc->attr.mtime, &riscos_date );
 
         ndesc->attr.atime = ndesc->attr.mtime;
 
@@ -403,20 +413,21 @@ _kernel_oserror *riscos_to_nfs_description
 _kernel_oserror *change_info_given_file
 (
         nfs_file_descriptor *ndesc,
-        int *load_address,
-        int *execute_address,
+        unsigned long *load_address,
+        unsigned long *execute_address,
         int *access
 )
 {
         _kernel_oserror *err;
         riscos_file_description rdesc;
-        sattr snattr;
+        sattr3 snattr;
         nfs_file_description new_file_desc;
-        fattr *nattr;
+        fattr3 *nattr;
         appendum bit_on_the_end_of_the_file;
-        int old_mode = ndesc->desc.attr.mode;
+        mode3 old_mode = ndesc->desc.attr.mode;
+        ftype3 old_type = ndesc->desc.attr.type;
 
-        if ( (ndesc->desc.attr.mode & NFSMODE_FMT) == NFSMODE_LNK )
+        if ( ndesc->desc.attr.type == NF3LNK )
         {
                 return mb_not_to_a_soft_link_you_dont;
         }
@@ -446,7 +457,7 @@ _kernel_oserror *change_info_given_file
         /*
                 Leave owner read/write bits alone on directories
         */
-        if ( (old_mode & NFSMODE_FMT) == NFSMODE_DIR )
+        if ( old_type == NF3DIR )
         {
                 new_file_desc.attr.mode =
                         (new_file_desc.attr.mode & ~(NFSMODE_USER_READ | NFSMODE_USER_WRITE)) |
@@ -457,14 +468,21 @@ _kernel_oserror *change_info_given_file
                 Set up most of the fields of snattr for a set attributes
         */
         if ( access )
-                snattr.mode = new_file_desc.attr.mode;
+        {
+                snattr.mode.set_mode3_u.mode = new_file_desc.attr.mode;
+                snattr.mode.set_it = TRUE;
+        }
         else
-                snattr.mode = -1;
-        snattr.uid = -1;
-        snattr.gid = -1;
-        snattr.size = -1;
-        snattr.atime = new_file_desc.attr.atime;
-        snattr.mtime = new_file_desc.attr.mtime;
+        {
+                snattr.mode.set_it = FALSE;
+        }
+        snattr.uid.set_it = FALSE;
+        snattr.gid.set_it = FALSE;
+        snattr.size.set_it = FALSE;
+        snattr.atime.set_it = SET_TO_CLIENT_TIME;
+        snattr.atime.set_atime_u.atime = new_file_desc.attr.atime;
+        snattr.mtime.set_it = snattr.atime.set_it;
+        snattr.mtime.set_mtime_u.mtime = new_file_desc.attr.mtime;
 
         /*
                 Check for change in LXA status
@@ -514,18 +532,17 @@ _kernel_oserror *change_info_given_file
                 /*
                         Shorten file to remove lxa - gets performed in change attributes below.
                 */
-                snattr.size = new_file_desc.attr.size;
+                snattr.size.set_size3_u.size = new_file_desc.attr.size;
+                snattr.size.set_it = TRUE;
         }
 
         /*
-                Don't allow non-owners to explicitely adjust the date stamps
+                Don't allow non-owners to explicitly adjust the date stamps
         */
         if ( ndesc->desc.attr.uid != ndesc->mp->user->uid )
         {
-                snattr.atime.seconds =
-                snattr.atime.useconds =
-                snattr.mtime.seconds =
-                snattr.mtime.useconds = -1;
+                snattr.atime.set_it = DONT_CHANGE;
+                snattr.mtime.set_it = DONT_CHANGE;
         }
 
         /*
@@ -575,8 +592,8 @@ _kernel_oserror *change_info_given_file
 _kernel_oserror *change_info
 (
         char *name,
-        int *load_address,
-        int *execute_address,
+        unsigned long *load_address,
+        unsigned long *execute_address,
         int *access
 )
 {
@@ -612,14 +629,14 @@ _kernel_oserror *change_length_given_file
 )
 {
         _kernel_oserror *err = NULL;
-        sattr nattr;
+        sattr3 nattr;
         appendum bit_on_the_end;
-        fattr *nattrres;
+        fattr3 *nattrres;
         int current_length = riscos_extent( ndesc );
-        int start;
+        unsigned long start;
         int len;
 
-        if ( (ndesc->desc.attr.mode & NFSMODE_FMT) == NFSMODE_LNK )
+        if ( ndesc->desc.attr.type == NF3LNK )
         {
                 return mb_not_to_a_soft_link_you_dont;
         }
@@ -629,16 +646,14 @@ _kernel_oserror *change_length_given_file
         */
         if ( current_length > wanted_length )
         {
-                nattr.mode = -1;
-                nattr.uid = -1;
-                nattr.gid = -1;
-                nattr.size = wanted_length;
-                nattr.atime.seconds = -1;
-                nattr.atime.useconds = -1;
-                nattr.mtime.seconds = -1;
-                nattr.mtime.useconds = -1;
-
-                ndesc->desc.attr.size = wanted_length;
+                nattr.mode.set_it = FALSE;
+	        nattr.uid.set_it = FALSE;
+        	nattr.gid.set_it = FALSE;
+	        nattr.size.set_it = TRUE;
+        	nattr.atime.set_it = DONT_CHANGE;
+                nattr.mtime.set_it = DONT_CHANGE;
+                ui64_create(&nattr.size.set_size3_u.size, wanted_length);
+                ndesc->desc.attr.size = nattr.size.set_size3_u.size;
 
                 /*
                         Write the bit on the end if necessary.
@@ -658,7 +673,7 @@ _kernel_oserror *change_length_given_file
 
                         ndesc->desc.attr = *nattrres;
 
-                        nattr.size += 8;
+                        ui64_add(&nattr.size.set_size3_u.size, 8);
                 }
 
 
@@ -688,7 +703,7 @@ _kernel_oserror *change_length_given_file
         }
         else if ( current_length < wanted_length )
         {
-                err = write_zeros( ndesc, wanted_length - 1, 1 );
+                err = write_zeros( ndesc, wanted_length - 1UL, 1 );
         }
 
         return err;
@@ -700,7 +715,7 @@ int riscos_extent
 )
 {
         if ( ndesc->desc.file_is_lxa )
-                return ndesc->desc.attr.size - sizeof( appendum );
+                return (int) ui64_value(&ndesc->desc.attr.size) - sizeof( appendum );
         else
-                return ndesc->desc.attr.size;
+                return (int) ui64_value(&ndesc->desc.attr.size);
 }

@@ -30,11 +30,7 @@ RM      = remove
 MODSQZ  = modsqz
 WIPE    = -wipe
 CD	= dir
-
-#
-# Uncomment this to add the access counting to the *NFSInfo output
-#
-#OPTIONS   = -DNETACCESSCOUNT
+RPCGEN  = rpcgen
 
 COMPONENT = NFS
 CMHGNAME  = nfscmhg
@@ -42,12 +38,13 @@ CMHGNAME  = nfscmhg
 XCOMPONENT = NFSSTB
 
 DEPENDS = -depend !Depend ${THROWBACK}
-DEFINES = -DPACKETSIZE_COMMAND -DDEBUGON=$(DBUG) ${COMPAT} ${OPTIONS} -Darm
+DEFINES = -DPACKETSIZE_COMMAND -DDEBUGON=$(DBUG) ${COMPAT} ${OPTIONS} -Darm -DRPC_SVC=0 -DRPC_HDR=1
 
 AFLAGS = ${DEPENDS} -Stamp -quit
-CFLAGS  = -c -zM -wdp -ffcah -zps1 ${INCLUDES} ${DEPENDS} ${DEFINES}
-CPCCFLAGS=-c -zM -pcc -ffa -zps1 ${INCLUDES} ${DEPENDS} ${DEFINES}
+CFLAGS  = -ffcah -c -zM -zps1 -wp ${INCLUDES} ${DEPENDS} ${DEFINES}
+RPCCCFLAGS = -ff -c -zM -zps1 -wp ${INCLUDES} ${DEPENDS} ${DEFINES} ${RPCCCFLAGS_EXTRA} 
 CMHGFLAGS = -p ${DEPENDS}
+RPCGENFLAGS = -i 0 -DWANT_NFS3
 
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
@@ -65,6 +62,7 @@ RPCLIB    = TCPIPLibs:rpc.o.rpc_datazm TCPIPLibs:rpc.o.rpclibzm
 INETLIB   = TCPIPLibs:o.inetlibzm
 SOCKLIB   = TCPIPLibs:o.socklibzm
 UNIXLIB   = TCPIPLibs:o.unixlibzm
+DEBUGLIB  = C:DebugLib.o.DebugLibZM
 
 
 #
@@ -75,7 +73,7 @@ COMPAT= -DCOMPAT_INET4
 #
 # Include files
 #
-INCLUDES = -IC:,TCPIPLibs:
+INCLUDES = -ITCPIPLibs:,C:
 
 #
 # Debug flag
@@ -92,17 +90,10 @@ ROMTARGET = aof.${COMPONENT}
 
 OBJS      =	  \
   $(CMHGOBJ)   	  \
-  o.ModuleWrap    \
-  o.Commands      \
-  o.Utils         \
-  o.Clients       \
-  o.ChangeInfo    \
-  o.PutBytesX     \
-  o.pathmunge     \
-  o.Cache         \
   o.printfuncs    \
   o.chains        \
   o.enumdir       \
+  o.enumdir2      \
   o._Args         \
   o._Close        \
   o._File         \
@@ -115,26 +106,46 @@ OBJS      =	  \
   o.RMInfo        \
   o.Static        \
   o.allerrs       \
-  o.nfs_prot_c    \
-  o.nfs_prot_x    \
-  o.pcnfsd_c      \
-  o.pcnfsd_x      \
-  o.mount_clnt    \
-  o.mount_xdr     \
   o.Hourglass     \
   o.extensions    \
   o.access        \
   o.nfsrw         \
   o.db 		  \
-  o.rquota
+  o.rquota_xdr    \
+  o.nfs_prot_clnt \
+  o.nfs_prot_xdr  \
+  o.pcnfsd_clnt   \
+  o.pcnfsd_xdr    \
+  o.mount_clnt    \
+  o.mount_xdr     \
+  o.SixtyFour     \
+  o.ModuleWrap    \
+  o.Commands      \
+  o.Utils         \
+  o.Clients       \
+  o.ChangeInfo    \
+  o.PutBytesX     \
+  o.pathmunge     \
+  o.Cache         \
+  o.V2support     \
+  o.memory        \
+  o.memswis       \
+  o.fh3
 
+HDRS = \
+  mount.h         \
+  nfs_prot.h      \
+  pcnfsd.h        \
+  rquota.h
+  
 #
 # Rule patterns
 #
-#  .SUFFIXES:  .o .s .c .h .cmhg
+.SUFFIXES:  .o .s .c .h .x .cmhg
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
 .cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $< h.$*
 .s.o:;      ${AS} ${AFLAGS} $< $@
+
 
 #
 # build a NFS module
@@ -155,7 +166,7 @@ install_rom: ${ROMTARGET}
         ${CP} ${ROMTARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
-clean:
+clean: autogen-clean
         ${WIPE} o.* ${WFLAGS}
         ${RM} ${TARGET}
         ${RM} ${XTARGET}
@@ -167,14 +178,15 @@ clean:
 #
 # Target 
 #
-${TARGET}: ${XTARGET} ${OBJS} ${RPCLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB}
-        ${LD} -o $@ -rmf ${OBJS} ${RPCLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB} ${CLIB}
+${TARGET}: ${XTARGET} ${OBJS} ${HDRS} ${RPCLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB}
+        ${LD} -o $@ -rmf ${OBJS} ${RPCLIB} ${DEBUGLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB} ${CLIB}
         $(MODSQZ) $(TARGET)
+        Access $@ RW/R
 
 #
 # ROM Target 
 #
-${ROMTARGET}: ${OBJS} ${RPCLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB}
+${ROMTARGET}: ${OBJS} ${HDRS} ${RPCLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB}
         ${LD} -o $@ -aof ${OBJS} ${RPCLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB} ${ROMCSTUBS}
 
 #
@@ -187,13 +199,70 @@ rom_link:
         @echo ${COMPONENT}: rom_link complete
 
 #
-# Some rules that need explicitly declaring
+# Some rules that need explicitly declaring because AMU is crap
 #
-o.mount_clnt :  c.mount_clnt
-                $(CC) ${CPCCFLAGS} c.mount_clnt
 
-o.mount_xdr :   c.mount_xdr
-                $(CC) ${CPCCFLAGS} c.mount_xdr
+# One area per function.  Helps linker throw away all the unused auto-generated code.
+# The compiler cannot typically optimise register usage here because eventually all
+# XDR related functions end up inside rpclib:xdr.c anyway.
+RPCCCFLAGS_EXTRA = -zo
+
+c.mount_clnt   :  x.mount ${HDRS}
+	${RPCGEN} ${RPCGENFLAGS} -l -o $@ mount.x
+c.mount_xdr    :  x.mount ${HDRS}
+	${RPCGEN} ${RPCGENFLAGS} -c -o $@ mount.x
+c.nfs_prot_clnt:  x.nfs_prot ${HDRS}
+	${RPCGEN} ${RPCGENFLAGS} -l -o $@ nfs_prot.x
+c.nfs_prot_xdr :  x.nfs_prot ${HDRS}
+	${RPCGEN} ${RPCGENFLAGS} -c -o $@ nfs_prot.x
+c.pcnfsd_clnt  :  x.pcnfsd ${HDRS}
+	${RPCGEN} ${RPCGENFLAGS} -l -o $@ pcnfsd.x
+c.pcnfsd_xdr   :  x.pcnfsd ${HDRS}
+	${RPCGEN} ${RPCGENFLAGS} -c -o $@ pcnfsd.x
+c.rquota_clnt  :  x.rquota ${HDRS}
+	${RPCGEN} ${RPCGENFLAGS} -l -o $@ rquota.x
+c.rquota_xdr   :  x.rquota ${HDRS}
+	${RPCGEN} ${RPCGENFLAGS} -c -o $@ rquota.x
+
+h.rquota: x.rquota
+	${RPCGEN} ${RPCGENFLAGS} -h -o $@ $*.x
+h.pcnfsd: x.pcnfsd
+	${RPCGEN} ${RPCGENFLAGS} -h -o $@ $*.x
+h.nfs_prot: x.nfs_prot
+	${RPCGEN} ${RPCGENFLAGS} -h -o $@ $*.x
+h.mount: x.mount
+	${RPCGEN} ${RPCGENFLAGS} -h -o $@ $*.x
+
+o.rquota_xdr: c.rquota_xdr
+	${CC} ${RPCCCFLAGS} -o $@ $*.c
+o.rquota_clnt: c.rquota_clnt
+	${CC} ${RPCCCFLAGS} -o $@ $*.c
+o.pcnfsd_xdr: c.pcnfsd_xdr
+	${CC} ${RPCCCFLAGS} -o $@ $*.c
+o.pcnfsd_clnt: c.pcnfsd_clnt
+	${CC} ${RPCCCFLAGS} -o $@ $*.c
+o.mount_xdr: c.mount_xdr
+	${CC} ${RPCCCFLAGS} -o $@ $*.c
+o.mount_clnt: c.mount_clnt
+	${CC} ${RPCCCFLAGS} -o $@ $*.c
+o.nfs_prot_xdr: c.nfs_prot_xdr
+	${CC} ${RPCCCFLAGS} -o $@ $*.c
+o.nfs_prot_clnt: c.nfs_prot_clnt
+	${CC} ${RPCCCFLAGS} -o $@ $*.c
+
+autogen-clean:
+	${RM} h.rquota
+	${RM} h.pcnfsd
+	${RM} h.nfs_prot
+	${RM} h.mount
+	${RM} c.mount_clnt
+	${RM} c.nfs_prot_clnt
+	${RM} c.pcnfsd_clnt
+	${RM} c.rquota_clnt
+	${RM} c.mount_xdr
+	${RM} c.nfs_prot_xdr
+	${RM} c.rquota_xdr
+	${RM} c.pcnfsd_xdr
 
 h.nfsstbcmhg:	$(CMHGOBJ)
 	@

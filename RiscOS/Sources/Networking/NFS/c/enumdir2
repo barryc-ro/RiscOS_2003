@@ -1,4 +1,4 @@
-/*	C.ENUMDIR
+/*	C.ENUMDIR2
 
 Purpose : Utility functions to enumerate the files in a directory.
 
@@ -31,6 +31,9 @@ Date	Who    Comments
 16/2/95 CP     GetNFSDirEntry now goes to specified entry in directory.
 	       Always freshens cache when starting a directory
 	       (position requested == 0)
+17/4/99 SNB    Renamed enumdir2 (the NFS2 directory reader) and functions
+               renamed similarly.  Functions are invoked only from enumdir
+               when the directory handle indicated is an NFS2 handle.
 
 ****************************************************************************/
 
@@ -44,36 +47,23 @@ Date	Who    Comments
 
 #include <string.h>
 
-#include "DebugLib/DebugLib.h"
-
-#undef DEBUGON
-#define DEBUGON 1
-
 static _kernel_oserror * Get_NFS_Directory(MountPoint *,
-		  		    	   RO_nfs_fh3 *,
-		  		    	   cookie3 *,
-		  		    	   entryplus3 **,
+		  		    	   nfs_fh *,
+		  		    	   nfscookie,
+		  		    	   entry **,
 		  		    	   BOOL *);
 
-static void enumdir_update_caches(entryplus3 *);
-
-static void free_dirplus_res(READDIRPLUS3res *);
-
 static BOOL EOF_flagG;
-static entryplus3 *peThisEntryG = NULL;
-static entryplus3 *pePrevEntryG = NULL;
+static entry *peThisEntryG = NULL;
+static entry *pePrevEntryG = NULL;
 static clock_t TimeOutTimeG = 0;
 static MountPoint MountG = {NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL};
-static RO_nfs_fh3 HandleG = {0};
-static cookieverf3 CookieVerfG = { 0 };
+static nfs_fh HandleG = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};  /* 32 x 0 */
 static unsigned int positionG = 0;
-static int est_max_entries = 284; /* Maximum filename total length on requests */
 
-static u_long version = NFS_V3;
+/********* GetNextNFS2DirEntry  ********************************************
 
-/********* GetNextNFSDirEntry  *********************************************
-
-Purpose : Moves on to the next entryplus3 *in the current directory (as opened by
+Purpose : Moves on to the next entry in the current directory (as opened by
 	  GetNFSDirEntry(...), and returns its filename.  A check is made
 	  to see if it is worthwhile freshening the directory information
 	  beforehand.  A flag is filled in (if defined) if a freshen has
@@ -89,13 +79,13 @@ Returns	:  standard riscos error pointer
 
 ****************************************************************************/
 
-_kernel_oserror * GetNextNFSDirEntry(char **FileName, BOOL *Freshened)
+_kernel_oserror * GetNextNFS2DirEntry(char **FileName, BOOL *Freshened)
 {
    _kernel_oserror *err;
 
-   if (version != NFS_V3) return GetNextNFS2DirEntry(FileName, Freshened);
-
-   dprintf(("enumdir3_2", "GetNextNFSEntry\n"));
+#if DEBUGON
+printf("GetNextNFSEntry\n");
+#endif
 
    positionG++;  /* we _know_ that the pointer is going to be moved,
    		    so even if we hit the end of the list, the cache knows
@@ -105,11 +95,16 @@ _kernel_oserror * GetNextNFSDirEntry(char **FileName, BOOL *Freshened)
   if(TimeOutTimeG < clock())
   {
     /* get directory from current position */
-    dprintf(("enumdir3_2", "GetNextNFSDirEntry: freshening, calling Get_NFS_Directory with cookie ..."));
-    err = Get_NFS_Directory(&MountG, &HandleG, &peThisEntryG->cookie, &peThisEntryG, &EOF_flagG);
-    if ( err )
+#if DEBUGON
+printf("GetNextNFSDirEntry: freshening,calling Get_NFS_Directory with cookie %i%i%i%i...", peThisEntryG->cookie[0],peThisEntryG->cookie[1],peThisEntryG->cookie[2],peThisEntryG->cookie[3] );
+#endif
+   err = Get_NFS_Directory(&MountG, &HandleG, peThisEntryG->cookie, &peThisEntryG, &EOF_flagG);
+   if ( err )
    	return err;
-    dprintf(("enumdir3_2", "OK\n"));
+#if DEBUGON
+printf("OK\n");
+#endif
+
 
     /* set freshened flag */
     if(Freshened != NULL)
@@ -131,15 +126,21 @@ _kernel_oserror * GetNextNFSDirEntry(char **FileName, BOOL *Freshened)
     {
        if(!EOF_flagG)
        {
-          dprintf(("enumdir3_2", "GetNextNFSDirEntry: End of chunk,calling Get_NFS_Directory..."));
-          err = Get_NFS_Directory(&MountG, &HandleG, &pePrevEntryG->cookie, &peThisEntryG, &EOF_flagG);
+#if DEBUGON
+printf("GetNextNFSDirEntry: End of chunk,calling Get_NFS_Directory...");
+#endif
+          err = Get_NFS_Directory(&MountG, &HandleG, pePrevEntryG->cookie,
+&peThisEntryG, &EOF_flagG);
 	   if(err)
 	      return err;
-	   dprintf(("enumdir3_2", "OK\n"));
+#if DEBUGON
+printf("OK\n");
+#endif
+
        }
 
        else
-       { /* nextentryplus3 *== NULL && EOF_flagG == TRUE
+       { /* nextentry == NULL && EOF_flagG == TRUE
        	    ie. no nextentry, AND reached end of the directory */
           *FileName = NULL;
           return NULL;
@@ -150,7 +151,7 @@ _kernel_oserror * GetNextNFSDirEntry(char **FileName, BOOL *Freshened)
   }/* endif(TimeOutTimeG < clock()) */
 
   /* whatever has happened before, peThisEntry is now pointing to a valid
-entryplus3 *by now */
+entry by now */
 
    /* now get rid of the awkward file names */
    while((peThisEntryG != NULL) && (reject_nfs_file(peThisEntryG->name) == Yes))
@@ -165,11 +166,16 @@ entryplus3 *by now */
           /* reached end of directory segment, get another */
 	  /* VERY UNLIKELY TO USE THIS CODE ! */
 
-           dprintf(("enumdir3_2", "GetNextNFSDirEntry: End of chunk(2),calling Get_NFS_Directory..."));
-           err = Get_NFS_Directory(&MountG, &HandleG, &pePrevEntryG->cookie, &peThisEntryG, &EOF_flagG);
+#if DEBUGON
+printf("GetNextNFSDirEntry: End of chunk(2),calling Get_NFS_Directory...");
+#endif
+           err = Get_NFS_Directory(&MountG, &HandleG, pePrevEntryG->cookie,
+&peThisEntryG, &EOF_flagG);
 	   if(err)
 	      return err;
-	   dprintf(("enumdir3_2", "OK\n"));
+#if DEBUGON
+printf("OK\n");
+#endif
        }
 
        else
@@ -180,12 +186,11 @@ entryplus3 *by now */
 
    }  /* endwhile (reject_nfs_file(peThisEntry->name) == Yes) */
 
-   /* entryplus3 *now has guaranteed valid name */
+   /* entry now has guaranteed valid name */
 
    if(peThisEntryG != NULL)
    {
       *FileName = peThisEntryG->name;
-      enumdir_update_caches(peThisEntryG);
    }
 
    else
@@ -197,9 +202,9 @@ entryplus3 *by now */
 }  /* endfunction GetNextNFSDirEntry */
 
 
-/********* GetNFSDirEntry  *********************************************
+/********* GetNFS2DirEntry  *********************************************
 
-Purpose : Moves to the specified entryplus3 *in the current directory , and returns
+Purpose : Moves to the specified entry in the current directory , and returns
 	  its filename.
 
 	  The directory data is freshened if the existing data is too old
@@ -221,34 +226,13 @@ Returns	:  standard riscos error pointer
 ****************************************************************************/
 
 
-_kernel_oserror * GetNFSDirEntry (MountPoint *Mount,
-		  		  RO_nfs_fh3 *Handle,
+_kernel_oserror * GetNFS2DirEntry (MountPoint *Mount,
+		  		  nfs_fh *pHandle,
 		  		  int position,
 		  		  char **FileName,
-		  		  BOOL *Freshened,
-		  		  int set_max_entries)
+		  		  BOOL *Freshened)
 {
   _kernel_oserror *err;
-
-  if (version != Mount->host->nfs_version) {
-    /* Version mismatch - abandon current search */
-    version = Mount->host->nfs_version; /* For GetNextNFSDirEntry */
-    if (version == NFS_VERSION) {
-      /* Sufficient to cause mismatch lower down when an NFS3 directory search is continued.
-       * By storing an NFS2 host's mount point here, the complicated conditional below will always
-       * equate to true.
-       */
-      MountG = *Mount;
-    }
-  }
-
-  if (Mount->host->nfs_version == NFS_VERSION) {
-     static nfs_fh fh2;
-     fh2cpy_from_fh3(&fh2, &Handle->fh3);
-     return GetNFS2DirEntry(Mount, &fh2, position, FileName, Freshened);
-  }
-
-  est_max_entries = set_max_entries;
 
   /*------------------------------------------------------------------------
      if the requested directory is not the current one in buffer, or the
@@ -259,23 +243,24 @@ _kernel_oserror * GetNFSDirEntry (MountPoint *Mount,
   if((position == 0) ||
      (position < positionG) ||
      (memcmp(&MountG, Mount, sizeof(MountPoint))) ||
-     (fh3cmp(&HandleG, Handle)) )
+     (memcmp(&HandleG, pHandle, sizeof(nfs_fh))) )
   {   /* new directory, or previous position, or start of directory */
+#if DEBUGON
+if(position == 0)
+   printf("GetNFSDirEntry: start of directory requested\n");
 
-      {
-      if(position == 0)
-          dprintf(("enumdir3_1", "GetNFSDirEntry: start of directory requested\n"));
-      else
-          if ((position < positionG) && (memcmp(&MountG, Mount, sizeof(MountPoint)) ||
-                  fh3cmp(&HandleG, Handle)))
-      	      dprintf(("enumdir3_1", "GetNFSDirEntry: new directory requested\n"));
-          else
-              dprintf(("enumdir3_1", "GetNFSDirEntry: previous position requested\n"));
-      }
+else
+{
+   if ((position < positionG) && (memcmp(&MountG, Mount, sizeof(MountPoint)) || memcmp(&HandleG, pHandle, sizeof(nfs_fh))))
+      printf("GetNFSDirEntry: new directory requested\n");
 
-      memset(&CookieVerfG, 0, sizeof(CookieVerfG));
+   else
+      printf("GetNFSDirEntry: previous position requested\n");
+}
+#endif
+
       MountG = *Mount;
-      fh3cpy(&HandleG, Handle);
+      HandleG = *pHandle;
 
       err = Get_NFS_Directory(&MountG, &HandleG, NULL, &peThisEntryG, &EOF_flagG);
       if ( err )
@@ -289,7 +274,9 @@ _kernel_oserror * GetNFSDirEntry (MountPoint *Mount,
 
         if(peThisEntryG == NULL)
         {
-          dprintf(("enumdir3_1", "GetNFSDirEntry: peThisEntry->nextentryplus3 *== NULL - Get more\n"));
+#if DEBUGON
+   printf("GetNFSDirEntry: peThisEntry->nextentry == NULL - Get another lump of data\n");
+#endif
 
           if(!EOF_flagG)
           {
@@ -297,7 +284,8 @@ _kernel_oserror * GetNFSDirEntry (MountPoint *Mount,
 
    	  /* VERY UNLIKELY TO USE THIS CODE ! */
 
-              err = Get_NFS_Directory(&MountG, &HandleG, &pePrevEntryG->cookie, &peThisEntryG, &EOF_flagG);
+              err = Get_NFS_Directory(&MountG, &HandleG, pePrevEntryG->cookie,
+   &peThisEntryG, &EOF_flagG);
    	   if(err)
    	      return err;
 
@@ -325,13 +313,16 @@ positionG)) */
    -----------------------------------------------------------------------*/
   if(TimeOutTimeG < clock())
   {
-    dprintf(("enumdir3_1", "GetNFSDirEntry: stale data - reloading\n"));
+#if DEBUGON
+printf("GetNFSDirEntry: stale data - reloading\n");
+#endif
+
 
     if(Freshened != NULL)
        *Freshened = TRUE;
 
      /* get directory from current position */
-    err = Get_NFS_Directory(&MountG, &HandleG, &peThisEntryG->cookie, &peThisEntryG, &EOF_flagG);
+    err = Get_NFS_Directory(&MountG, &HandleG, peThisEntryG->cookie, &peThisEntryG, &EOF_flagG);
     if ( err )
     	return err;
 
@@ -343,7 +334,9 @@ positionG)) */
 
       if(peThisEntryG == NULL)
       {
-        dprintf(("enumdir3_1", "GetNFSDirEntry: peThisEntry->nextentryplus3 *== NULL - More data\n"));
+ #if DEBUGON
+ printf("GetNFSDirEntry: peThisEntry->nextentry == NULL - Get another lump of data\n");
+ #endif
 
         if(!EOF_flagG)
         {
@@ -351,7 +344,7 @@ positionG)) */
 
  	  /* VERY UNLIKELY TO USE THIS CODE ! */
 
-            err = Get_NFS_Directory(&MountG, &HandleG, &peThisEntryG->cookie,
+            err = Get_NFS_Directory(&MountG, &HandleG, peThisEntryG->cookie,
  &peThisEntryG, &EOF_flagG);
  	   if(err)
  	      return err;
@@ -386,21 +379,26 @@ positionG)) */
 
    while(positionG < position)
    {
-      /* move to next entryplus3 **/
+      /* move to next entry */
       pePrevEntryG = peThisEntryG;
       peThisEntryG = peThisEntryG->nextentry;
 
       if(peThisEntryG == NULL)
       {
-        dprintf(("enumdir3_1", "GetNFSDirEntry: peThisEntry->nextentryplus3 *== NULL - Get more\n"));
+ #if DEBUGON
+ printf("GetNFSDirEntry: peThisEntry->nextentry == NULL - Get another lump of data\n");
+ #endif
 
         if(!EOF_flagG)
         {
            /* reached end of directory segment, get another */
 
-           err = Get_NFS_Directory(&MountG, &HandleG, &peThisEntryG->cookie, &peThisEntryG, &EOF_flagG);
+
+            err = Get_NFS_Directory(&MountG, &HandleG, peThisEntryG->cookie,
+ &peThisEntryG, &EOF_flagG);
  	   if(err)
  	      return err;
+
         }
 
         else
@@ -423,7 +421,6 @@ positionG)) */
    if(peThisEntryG != NULL)
    {
       *FileName = peThisEntryG->name;
-      enumdir_update_caches(peThisEntryG);
    }
 
    else
@@ -446,7 +443,7 @@ Parameters : MountPoint
 	     		must be set to the required Mount Point and directory
 			handle respectively.
 	     cookie	Cookie where to start (if NULL, then beginning)
-	     entryplus3 ***   Will be filled with the position of the 1st entry
+	     entry **   Will be filled with the position of the 1st entry
 	     BOOL *	EOF flag (TRUE => EOF )
 
 Returns	: NULL if OK, error pointer otherwise.
@@ -456,35 +453,35 @@ Returns	: NULL if OK, error pointer otherwise.
 ****************************************************************************/
 
 
-static _kernel_oserror * Get_NFS_Directory(MountPoint *pmpMountPoint,
-		  		    RO_nfs_fh3 *fhHandle,
-		  		    cookie3 *cookie,
-		  		    entryplus3 **FirstEntry,
+_kernel_oserror * Get_NFS_Directory(MountPoint *pmpMountPoint,
+		  		    nfs_fh *fhHandle,
+		  		    nfscookie cookie,
+		  		    entry **FirstEntry,
 		  		    BOOL *EOF_flag)
 {
-  READDIRPLUS3args args;
-  static READDIRPLUS3res *result = NULL;
+  readdirargs args;
+  readdirres *result;
+  int count;
   unused_client *nfs_client;
   _kernel_oserror *err;
 
 /* start of routine */
 
-   args.dir = fhHandle->fh3;
+   args.dir = *fhHandle;
 
    if(cookie == NULL)
    {
-      ui64_create(&args.cookie, 0);
+      for(count = 0; count < NFS_COOKIESIZE; count++)
+         args.cookie[count] = 0;
    }
 
    else
    {
-      args.cookie = *cookie;
+      for(count = 0; count < NFS_COOKIESIZE; count++)
+         args.cookie[count] = cookie[count];
    }
-   memcpy(args.cookieverf, CookieVerfG, sizeof(CookieVerfG));
-   args.dircount = NFS_MAXDATA;
-   args.maxcount = NFS_MAXDATA; /* no point messing about.  Drag as much as
+    args.count = NFS_MAXDATA; /* no point messing about.  Drag as much as
       		   		   you can across ! */
-
 
    /* actually get a client and do the transfer... */
    err = get_nfs_client_for_mp(&nfs_client, pmpMountPoint);
@@ -492,13 +489,7 @@ static _kernel_oserror * Get_NFS_Directory(MountPoint *pmpMountPoint,
    if(err)
       return err;  /* error ! */
 
-   if (result != NULL)
-   {
-           free_dirplus_res(result);
-   }
-   dprintf(("nfs3call", "nfsproc3_readdirplus_3 ..."));
-   result = nfsproc3_readdirplus_3(&args, nfs_client->client);
-   dprintf(("nfs3call", "%p\n", result));
+   result = nfsproc_readdir_2(&args, nfs_client->client);
 
    err = rpcnfs_to_riscos_err(result, pmpMountPoint, nfs_client->client);
 
@@ -506,18 +497,19 @@ static _kernel_oserror * Get_NFS_Directory(MountPoint *pmpMountPoint,
 
    if(err)
    {
-      memset(&CookieVerfG, 0, sizeof(CookieVerfG));
-      if(err == mb_nfserr_stale)
-      	 cancel_all_caches_by_fhandle(fhHandle);
+      if(err == mb_nfserr_stale) {
+         static RO_nfs_fh3 rofh3;
+         nfs_fh3 fh3;
+      	 cancel_all_caches_by_fhandle(fh3cpy_from_xdr(&rofh3, fh3cpy_from_fhandle(&fh3, fhHandle)));
+      }
 
       return err; /* error ! */
    }
 
-   memcpy(CookieVerfG, result->READDIRPLUS3res_u.resok.cookieverf, sizeof(CookieVerfG));
-   *FirstEntry = result->READDIRPLUS3res_u.resok.reply.entries;
+   *FirstEntry = result->readdirres_u.reply.entries;
 
 
-   *EOF_flag = result->READDIRPLUS3res_u.resok.reply.eof;
+   *EOF_flag = result->readdirres_u.reply.eof;
 
    return NULL;
 
@@ -525,48 +517,4 @@ static _kernel_oserror * Get_NFS_Directory(MountPoint *pmpMountPoint,
 }   /* endfunction Get_NFS_Directory */
 
 
-/********* enumdir_update_caches ********************************************
 
-Purpose : Fills in the caches with the data from the supplied directory entry.
-          The function validates the supplied entry details to ensure that
-          all the fields required are valid before passing them on to the
-          cache updating function.
-
-Parameters : entryplus3. The directory entry object
-
-Returns	: No value.
-
-****************************************************************************/
-
-static void enumdir_update_caches(entryplus3 *e)
-{
-    if (e->name_attributes.attributes_follow && e->name_handle.handle_follows) {
-        RO_nfs_fh3 fh3;
-        fh3cpy_from_xdr(&fh3, &e->name_handle.post_op_fh3_u.handle);
-        nfs_internal_dirplus_update(
-            &MountG,
-            &HandleG,
-            &fh3,
-            e->name,
-            &e->name_attributes.post_op_attr_u.attributes);
-    }
-    else {
-            dprintf(("enumdir3_1", "** No cache update (attributes:%d handle:%d)\n",
-            	!!e->name_attributes.attributes_follow, !!e->name_handle.handle_follows));
-    }
-}   /* endfunction enumdir_update_caches */
-
-
-/* This function not yet implemented */
-static void free_dirplus_res(READDIRPLUS3res *res)
-{
-#if 0
-        if (res->status == NFS3_OK) {
-                entryplus3 **eptr = &res->READDIRPLUS3res_u.resok.reply.entries;
-                entryplus3 *entry = *eptr;
-        }
-#endif
-	dprintf(("enumdir3_3", "xdr_free ... "));
-        xdr_free(xdr_READDIRPLUS3res, res);
-	dprintf(("enumdir3_3", "done\n"));
-}
