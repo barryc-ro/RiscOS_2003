@@ -115,10 +115,10 @@ resources: translate
           $(CP) Resources.$(USERIF).$(LOCALE).$(APP) $(RESAPP) $(CPFLAGS) \
         Else \
           $(CP) Resources.$(USERIF).UK.$(APP) $(RESAPP) $(CPFLAGS)
-        IfThere Resources.$(USERIF).$(LOCALE).NVRAM Then \
-          $(CP) Resources.$(USERIF).$(LOCALE).NVRAM.Tags $(RESRES).NVRAM.Tags $(CPFLAGS) \
+        IfThere Resources.$(USERIF).$(LOCALE).$(MACHINE).NVRAM Then \
+          $(CP) Resources.$(USERIF).$(LOCALE).$(MACHINE).NVRAM.Tags $(RESRES).NVRAM.Tags $(CPFLAGS) \
         Else \
-          $(CP) Resources.$(USERIF).UK.NVRAM.Tags $(RESRES).NVRAM.Tags $(CPFLAGS)
+          $(CP) Resources.$(USERIF).UK.$(MACHINE).NVRAM.Tags $(RESRES).NVRAM.Tags $(CPFLAGS)
         $(CP) Resources.$(USERIF).$(LOCALE).STBPrint.PaperA4 $(RESRES).STBPrint.PaperA4 $(CPFLAGS)
         @echo $(COMPONENT): resource files copied
         
