@@ -4,7 +4,7 @@
 #
 #	FILE:		Makefile
 #	AUTHOR:		Richard D. Warren
-#	VERSION:	0.04 for RISC OS
+#	VERSION:	0.05 for RISC OS
 #
 #	OVERVIEW
 #	========
@@ -16,6 +16,8 @@
 #	27/11/97	0.02	RDW	Fixed NFEDecode target
 #	27/11/97	0.03	RDW	Added MemCheck support for a MemCheck build
 #	20/02/98	0.04	RDW	Cleaned up to work in build env. correctly
+#	25/02/98	0.05	RDW	Commented out DEBUG and DBUGOBJS so it can
+#					be passed from amu commandline
 
 #
 # Paths
@@ -55,8 +57,8 @@ ENCCOMP = NFEencode
 DECCOMP = NFEdecode
 TARGETE = NFEencode
 TARGETD = NFEdecode
-NFELIB = ${LIBDIR}.NetFax.NFELib.o.NFELibd
-EMAILLIB = ${LIBDIR}.Email.EmailLib.o.EmailLibd
+NFELIB = ${LIBDIR}.NetFax.NFELib.o.NFELib
+EMAILLIB = ${LIBDIR}.Email.EmailLib.o.EmailLib
 
 # app or module definitions
 
@@ -72,7 +74,7 @@ ABSSYM=         RISC_OSLib:o.AbsSym
 
 C++LIB=		CPP:o.c++lib 
 
-DEBUG=		#-DMEMCHECK #-DDEBUGLIB
+#DEBUG=		#-DMEMCHECK #-DDEBUGLIB
 
 CFLAGS=		-ffah -I${INCLUDES} ${DEBUG}\
 		-Wp -depend !Depend -c -throwback ${TINYSTUBS}
@@ -81,7 +83,7 @@ C++FLAGS=	-I${INCLUDES} ${DEBUG}\
 		-Wp -depend !Depend -c -throwback ${TINYSTUBS}		
 
 
-DBUGOBJS=       #MemCheck:o.MC #tml_podule.o debuglib.o trace_PL.o# 
+#DBUGOBJS=       #MemCheck:o.MC #tml_podule.o debuglib.o trace_PL.o# 
 
 ASMFLAGS=       
 
@@ -106,10 +108,10 @@ decode:		${DOBJS} local_dirs
 		$(LD) -aif -C++ -o NFEdecode $(NFELIB) $(EMAILLIB) ${DOBJS} $(OBJS) $(C++LIB) $(DBUGOBJS) $(STUBS)
         	@echo ${TARGETD}: complete
 edebug:		${DEOBJS} local_dirs
-		$(LD) -d -aif -C++ -o NFEencode $(NFELIB) $(EMAILLIB) ${DEOBJS} $(OBJS) $(C++LIB) $(DBUGOBJS) $(STUBS)
+		$(LD) -d -aif -C++ -o NFEencode $(NFELIB)d $(EMAILLIB)d ${DEOBJS} $(OBJS) $(C++LIB) $(DBUGOBJS) $(STUBS)
         	@echo ${TARGETE}: complete
 ddebug:		${DDOBJS} local_dirs
-		$(LD) -d -aif -C++ -o NFEdecode $(NFELIB) $(EMAILLIB) ${DDOBJS} $(OBJS) $(C++LIB) $(DBUGOBJS) $(STUBS)
+		$(LD) -d -aif -C++ -o NFEdecode $(NFELIB)d $(EMAILLIB)d ${DDOBJS} $(OBJS) $(C++LIB) $(DBUGOBJS) $(STUBS)
         	@echo ${TARGETD}: complete
 all: 		encode decode
         	@echo ${TARGETL}: all complete

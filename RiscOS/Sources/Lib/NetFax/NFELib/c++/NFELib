@@ -1,10 +1,10 @@
 /*	Project Daytona (757)
 	Acorn Computers Ltd
-	Copyright © 1997. All Rights Reserved.
+	Copyright © 1997, 1998. All Rights Reserved.
 
 	FILE:		NFElib.c++
 	AUTHOR:		Richard D. Warren
-	VERSION:	0.20 for RISC OS
+	VERSION:	0.21 for RISC OS
 
 	OVERVIEW
 	========
@@ -132,6 +132,47 @@
 					extracts the Return-Receipt-To header
 					as long as the message class doesn't
 					have NFE_NFMC_DELIVERYREPORT set
+	23/02/98	0.21	RDW	Tidy up comments and tidy up code, split in to sub
+					functions to make more maintainable.
+					private check_rc() function added
+					NFE_create_MIME_entity() now calls check_rc
+					NFE_create_TEXT_entity() duplicate init. of *rc removed
+					                         initial state label correct to RTEXT from FAX!
+					                         ERROR state, redundant zeroing of context members removed
+					                         as the context get's deleted.
+					                         context var. set to 0, not c var as c is the local handle
+					                         not the one that is returned to the caller.  Same done
+					                         for FINISHED state as well.
+					                         APPLY_ENCODING_BUFSIZE added to replace value in ApplyEncoding call
+					NFE_create_FAX_entity() duplicate init. of *rc removed
+					                        ERROR state, redundant zeroing of context members removed
+					                        as the context get's deleted.
+					                        context var. set to 0, not c var as c is the local handle
+					                        not the one that is returned to the caller.  Same done
+					                        for FINISHED state as well.
+					                        APPLY_ENCODING_BUFSIZE added to replace value in ApplyEncoding call
+					                        create_text_entity_init erronous setting of c.state at end of function
+					                        removed.
+					NFE_create_RFC822_msg() now calls check_rc
+					NFE_create_RFC822_msg() duplicate init. of *rc removed
+					                        ERROR state, redundant zeroing of context members removed
+					                        as the context get's deleted.
+					                        context var. set to 0, not c var as c is the local handle
+					                        not the one that is returned to the caller.  Same done
+					                        for FINISHED state as well.
+					                        destruction of c->mimeentity in FINISHED state removed as this
+					                        object at this point belongs to the rfc822msg object and it
+					                        destroys it.
+					private create_to_hdr() function added for create_rfc822msg_init
+					create_fax_entity_init() changed to cope with SERIAL reversed byte ordering
+					create_messageid_hdr() changed to cope with SERIAL reversed byte ordering
+					NFE_create_TEXT_entity(), NFE_create_FAX_entity(), NFE_create_RFC822_msg(),
+					NFE_decode_mime() FSM's all fixed so they are not entered if returncode has been
+					set to an error.  Bug showed itself as base64encoding failing and returning
+					NFE_INTERNALERR.  This was due to in base64encode, expired() call failed, returncode
+					was set to NFE_NOTENOUGHTTIME before the context instance had been created for the FSM
+					However, the FSM was entered (uninitialised) so we end up in the default: (INTERNALERR)
+					state.  Fixed now.
 */
 
 
@@ -287,6 +328,15 @@ typedef struct
 
 /* ************************************************************************** */
 /*                                                                            */
+/* Constants                                                                  */
+/*                                                                            */
+/* ************************************************************************** */
+const static uint32 APPLY_ENCODING_BUFSIZE  = 3072;				// Size of buffer to use in Applying an Encoding to an entity
+const static uint32 REMOVE_ENCODING_BUFSIZE = 4096;				// Size of buffer to use in Removing an Encoding from an entity
+
+
+/* ************************************************************************** */
+/*                                                                            */
 /* Globals to this file                                                       */
 /*                                                                            */
 /* ************************************************************************** */
@@ -306,7 +356,7 @@ static _kernel_oserror *NFE_create_FAX_entity(NFE_CONTEXT    *context,
                                        const uint32           doc_num,
                                        const uint32           page_num,
                                        MIMEentity*           &obj,
-                                       NFE_rcode *const       rc);
+                                       NFE_rcode *const       rc);		// Function to create a FAX entity (really an entity that requires Base64 encoding)
                                        
 static _kernel_oserror *NFE_create_TEXT_entity(NFE_CONTEXT       *context,
                                                const clock_t      t_slice,
@@ -314,12 +364,44 @@ static _kernel_oserror *NFE_create_TEXT_entity(NFE_CONTEXT       *context,
                                                const char *const  out_file,
                                                NFE_NF_msg_class   type,
                                                MIMEentity*       &obj,
-                                               NFE_rcode *const   rc);
+                                               NFE_rcode *const   rc);		// Function to create a TEXT entity (really an entity that is of text/plain type)
 
-static void create_fax_entity_init(create_fax_context &c);
-static void create_text_entity_init(create_rtext_context &c);
-static void create_rfc822msg_init(create_rfc822msg_context &c);
-static void decode_mime_init(decode_mime_context &c);
+static void create_fax_entity_init(create_fax_context &c);			// Init. function used by NFE_create_FAX_entity
+static void create_text_entity_init(create_rtext_context &c);			// Init. function used by NFE_create_TEXT_entity
+static void create_rfc822msg_init(create_rfc822msg_context &c);			// Init. function used by NFE_create_RFC822msg
+static void decode_mime_init(decode_mime_context &c);				// Init. function used by NFE_decode_mime
+static _kernel_oserror*    check_rc(NFE_rcode *const rc);			// Function to check rc is not null, if it is create _kernel_oserror to return
+static to*                 create_to_hdr(create_rfc822msg_context &c);		// Function to create the "To" header from the NFE_header details
+static from*               create_from_hdr(create_rfc822msg_context &c);	// Function to create the "From" header from the NFE_header details
+static XNFreturnreceiptto* create_returnreceiptto_hdr(create_rfc822msg_context &c);// Function to create the "X-NetFax-Return-Receipt-To" from the NFE_header details
+static subject*            create_subject_hdr(create_rfc822msg_context &c);	// Function to create the "Subject" header from the NFE_header details
+static XNFfaxpages*        create_faxpages_hdr(create_rfc822msg_context &c);	// Function to create the "X-NetFax-FaxPages" header from the NFE_header details
+static messageid*          create_messageid_hdr(create_rfc822msg_context &c);	// Function to create the "Message-ID" header from the NFE_header details
+static XNFdevice*          create_device_hdr(create_rfc822msg_context &c);	// Function to create the "X-NetFax-Device" header from the NFE_header details
+static XNFdeviceclass*     create_deviceclass_hdr(create_rfc822msg_context &c);	// Function to create the "X-NetFax-Device-Class" header from the NFE_header details
+static XNFserial*          create_serial_hdr(create_rfc822msg_context &c);	// Function to create the "X-NetFax-Serial" header from the NFE_header details
+static XNFsoftrev*         create_softrev_hdr(create_rfc822msg_context &c);	// Function to create the "X-NetFax-Software-Rev" header from the NFE_header details
+static XNFfaxnum*          create_faxnum_hdr(create_rfc822msg_context &c);	// Function to create the "X-NetFax-Fax-Number" header from the NFE_header details
+static XNFphonenum*        create_phonenum_hdr(create_rfc822msg_context &c);	// Function to create the "X-NetFax-Phone-Number" header from the NFE_header details
+static Xorganization*      create_organization_hdr(create_rfc822msg_context &c);// Function to create the "X-Organization" header from the NFE_header details
+static XNFmsgclass*        create_msgclass_hdr(create_rfc822msg_context &c);	// Function to create the "X-NetFax-Message-Class" header from the NFE_header details
+
+static NFE_rcode extract_NFE_header(entity &ent, NFE_header *hdr);		// Function to extract the NFE_header details from an entity
+static NFE_rcode extract_NFE_header_NFE_address(from         *the_hdr,
+                                                NFE_address&  addr);		// Function to extract the email address details into a NFE_address
+static NFE_rcode extract_NFE_header_date(date *date_hdr, NFE_header *hdr);	// Function to extract the date into a NFE_header
+static NFE_rcode extract_NFE_header_faxpages(XNFfaxpages *faxpages_hdr,
+                                             NFE_header  *hdr);			// Function to extract the fax pages header details into a NFE_header
+static NFE_rcode extract_NFE_header_messageid(messageid  *messageid_hdr,
+                                              XNFmsgclass*msgclass_hdr,
+                                              NFE_header *hdr);			// Function to extract the message id details into a NFE_header
+static NFE_rcode extract_NFE_header_plain(header *the_hdr, char* &string);	// Function to extract the plain header string contents into a char*
+static NFE_rcode extract_NFE_header_serial(XNFserial  *serial_hdr,
+                                           NFE_header *hdr);			// Function to extract the serial number header details into a NFE_header
+static NFE_rcode extract_NFE_header_softrev(XNFsoftrev *softrev_hdr,
+                                            NFE_header *hdr);			// Function to extract the software revision header details into a NFE_header
+static NFE_rcode extract_NFE_header_faxnum(XNFfaxnum *the_hdr,
+                                           char*     &tele_num);		// Function to extract the telephone header type details into a char*
 
 
 /* ************************************************************************** */
@@ -332,55 +414,56 @@ static void decode_mime_init(decode_mime_context &c);
 /*
    FUNCTION:       NFE_create_MIME_entity
    DESCRIPTION:    Function to create a MIME entity of the possible forms
-   		   defined in the Daytona Email Functional Specification.  The
-   		   type of entity output is determined by the type parameter.
-   		   The function performs the process in small chunks deteremined
-   		   by the t_slice parameter.  The process will continue until it
-   		   either completes (rc = NFE_COMPLETED) or the t_slice period
-   		   is up (rc = NFE_RUNNING) or an error occurs (rc = -ve value).
-   		   If an OS errors occurs then the function return code is NON
-   		   NULL and points to a RISC OS error block.
-   DEPENDENCIES:   data type		NFE_CONTEXT	 NFElib.h
-   		   data type		clock_t		 <time.h>
-   		   data type		NFE_NF_msg_class NFElib.h
-   		   constant		SERIAL_LEN	 NFElib.h
-   		   data type		uint32		 NFElib.h
-   		   data type		NFE_rcode	 NFElib.h
+                   defined in the Daytona Email Functional Specification.  The
+                   type of entity output is determined by the type parameter.
+                   The function performs the process in small chunks deteremined
+                   by the t_slice parameter.  The process will continue until it
+                   either completes (rc = NFE_COMPLETED) or the t_slice period
+                   is up (rc = NFE_RUNNING) or an error occurs (rc = -ve value,
+                   OR rc = +ve value >= 2 - NON-FATAL error).
+                   If an OS errors occurs then the function return code is NON
+                   NULL and points to a RISC OS error block.
+   DEPENDENCIES:   data type            NFE_CONTEXT      NFElib.h
+                   data type            clock_t          <time.h>
+                   data type            NFE_NF_msg_class NFElib.h
+                   constant             SERIAL_LEN       NFElib.h
+                   data type            uint32           Elib.h
+                   data type            NFE_rcode        Elib.h
+                   data type            NFE_MIME         NFElib.h
+                   data type            _kernel_oserror  "kernel.h"
    DEPENDED ON BY: !Daytona Control application
-   INPUT PARAMS:   NFE_CONTEXT		context		create_MIME_entity current process context information
-   		   clock_t		t_slice		clock tick time to return by
-   		   const char *const	in_file		data file to use as input
-   		   NFE_NF_msg_class	type		type of NetFax MIME entity to create
-   		   const char *const	out_file	file to output MIME entity to
-   		   char[SERIAL_LEN]	serial_num	Device serial number
-   		   uint32		doc_num		Fax document number
-   		   uint32		page_num	Fax Page number
-   		   NFE_rcode *const	rc		NetFax Email Library return code.  Must point to a NFE_rcode
-   OUTPUT PARAMS:  NFE_rcode *const	rc		NetFax Email Library return code
-   RETURN VALUE:   _kernel_oserror*			OS error
-   VARIABLES:      _kernel_oserror*	e		return code
+   INPUT PARAMS:   NFE_CONTEXT          context         create_MIME_entity current process context information
+                   clock_t              t_slice         clock tick time to return by
+                   const char *const    in_file         data file to use as input
+                   NFE_NF_msg_class     type            type of NetFax MIME entity to create
+                   const char *const    out_file        file to output MIME entity to
+                   char[SERIAL_LEN]     serial_num      Device serial number
+                   uint32               doc_num         Fax document number
+                   uint32               page_num        Fax Page number
+                   NFE_rcode *const     rc              NetFax Email Library return code.  Must point to a NFE_rcode
+   OUTPUT PARAMS:  NFE_CONTEXT          context         create_MIME_entity current process context information
+                   NFE_rcode *const     rc              NetFax Email Library return code
+                   NFE_MIME            *obj             Created MIME entity
+   RETURN VALUE:   _kernel_oserror*                     OS error
+   VARIABLES:      _kernel_oserror*     e               return code
+                   MIMEentity          *entity          The mime entity to return
  */
 /* ************************************************************************** */
 extern "C" _kernel_oserror *NFE_create_MIME_entity(NFE_CONTEXT           *context,
-                                               const clock_t          t_slice,
-                                               const char *const      in_file,
-                                               const NFE_NF_msg_class type,
-                                               const char *const      out_file,
-                                               const char             serial_num[],
-                                               const uint32           doc_num,
-                                               const uint32           page_num,
-                                               NFE_MIME*              obj,
-                                               NFE_rcode *const       rc)
+                                                   const clock_t          t_slice,
+                                                   const char *const      in_file,
+                                                   const NFE_NF_msg_class type,
+                                                   const char *const      out_file,
+                                                   const char             serial_num[],
+                                                   const uint32           doc_num,
+                                                   const uint32           page_num,
+                                                   NFE_MIME*              obj,
+                                                   NFE_rcode *const       rc)
 {
   _kernel_oserror *e = 0;
-  MIMEentity *entity = 0;							// The MIMEentity to return to the caller, data hidden using NFE_MIME type
+  MIMEentity *entity = 0;							// The MIMEentity to return to the caller, data hidden using NFE_MIME type (obj output parameter)
 
-  if (rc == 0)									// Make sure we can return the return code to the caller
-  {
-    oserror.errnum = 0;
-    sprintf(oserror.errmess, "NFE_rcode ptr cannot be NULL");
-    e = &oserror;
-  }
+  e = check_rc(rc);								// Make sure we can return the return code to the caller
     
   if (!e)									// No sys. error, so proceed
   {
@@ -399,13 +482,27 @@ extern "C" _kernel_oserror *NFE_create_MIME_entity(NFE_CONTEXT           *contex
         case NFE_NFMC_DELIVERYREPORT:
         case NFE_NFMC_RTEXT:							// All of these are text/plain entitys
         {
-          e = NFE_create_TEXT_entity(context, t_slice, in_file, out_file, type, entity, rc);
+          e = NFE_create_TEXT_entity(context,
+                                     t_slice,
+                                     in_file,
+                                     out_file,
+                                     type,
+                                     entity,
+                                     rc);
           *obj = (NFE_MIME*)entity;
           break;
         }
         case NFE_NFMC_FAX:							// Fax is the only image/tiff, oddly enough .......
         {
-          e = NFE_create_FAX_entity(context, t_slice, in_file, out_file, serial_num, doc_num, page_num, entity, rc);
+          e = NFE_create_FAX_entity(context,
+                                    t_slice,
+                                    in_file,
+                                    out_file,
+                                    serial_num,
+                                    doc_num,
+                                    page_num,
+                                    entity,
+                                    rc);
           *obj = (NFE_MIME*)entity;
           break;
         }
@@ -419,7 +516,7 @@ extern "C" _kernel_oserror *NFE_create_MIME_entity(NFE_CONTEXT           *contex
           *rc = NFE_NOTSUPPORTED;						// return error to caller
           break;
         }
-      } // endswitch
+      } // endswitch on type
     } // endif check on return code not being set to an error
   } // endif check on sys. error not being set
   
@@ -429,14 +526,59 @@ extern "C" _kernel_oserror *NFE_create_MIME_entity(NFE_CONTEXT           *contex
 
 /* ************************************************************************** */
 /*
+   FUNCTION:       check_rc
+   DESCRIPTION:    Function private to this file to check that the return code
+                   address is valid (not NULL).  If it is not valid we create
+                   a _kernel_oserror and return that.
+   DEPENDENCIES:   data type            NFE_rcode        Elib.h
+                   data type            _kernel_oserror  "kernel.h"
+   DEPENDED ON BY: function             NFE_create_MIME_entity  NFELib.c++
+   INPUT PARAMS:   NFE_rcode *const     rc              return code address
+   OUTPUT PARAMS:  NONE
+   RETURN VALUE:   _kernel_oserror*                     OS error
+   VARIABLES:      _kernel_oserror*     e               return code
+ */
+/* ************************************************************************** */
+static _kernel_oserror* check_rc(NFE_rcode *const rc)
+{
+  _kernel_oserror *e = 0;
+  
+  if (rc == 0)
+  {
+    oserror.errnum = 0;
+    sprintf(oserror.errmess, "NFE_rcode ptr cannot be NULL");
+    e = &oserror;
+  }
+  
+  return e;
+}  
+
+
+/* ************************************************************************** */
+/*
    FUNCTION:       NFE_create_TEXT_entity
-   DESCRIPTION:    
-   DEPENDENCIES:   
-   DEPENDED ON BY: 
-   INPUT PARAMS:   
-   OUTPUT PARAMS:  
-   RETURN VALUE:   
-   VARIABLES:      
+   DESCRIPTION:    FSM to create a text entity using the EmailLib, ready for
+                   attachment to a message.  (really aught to merge this with
+                   NFE_create_FAX_entity).
+   DEPENDENCIES:   data type            NFE_CONTEXT     NFElib.h
+                   data type            clock_t         <time.h>
+                   data type            NFE_NF_msg_class NFElib.h
+                   data type            uint32          Elib.h
+                   data type            NFE_rcode       Elib.h
+                   data type            MIMEentity      MIMEentity.h
+                   data type            _kernel_oserror  "kernel.h"
+   DEPENDED ON BY: function             NFE_create_MIME_entity  NFELib.c++
+   INPUT PARAMS:   NFE_CONTEXT          context         context handle for the instance of this FSM
+                   clock_t              t_slice         clock tick time to return by
+                   const char *const    in_file         data file to use as input
+                   const char *const    out_file        file to output MIME entity to
+                   NFE_NF_msg_class     type            type of NetFax MIME entity to create
+                   NFE_MIME            *obj             Created MIME entity
+   OUTPUT PARAMS:  NFE_CONTEXT          context         context handle for the instance of this FSM
+                   NFE_rcode *const     rc              NetFax Email Library return code
+   RETURN VALUE:   _kernel_oserror*                     OS error
+   VARIABLES:      _kernel_oserror*     e               return code
+                   create_rtext_context*c               context structure for this FSM
  */
 /* ************************************************************************** */
 static _kernel_oserror *NFE_create_TEXT_entity(NFE_CONTEXT           *context,
@@ -444,134 +586,137 @@ static _kernel_oserror *NFE_create_TEXT_entity(NFE_CONTEXT           *context,
                                                const char *const      in_file,
                                                const char *const      out_file,
                                                NFE_NF_msg_class       type,
-                                               MIMEentity*           &obj,		// reference to a pointer
+                                               MIMEentity*           &obj,	// reference to a pointer
                                                NFE_rcode *const       rc)
 {
-  _kernel_oserror      *e = 0;
-  create_rtext_context *c = 0;
-  *rc = NFE_RUNNING;
+  _kernel_oserror      *e = 0;							// OS error to return
+  create_rtext_context *c = 0;							// Pointer to context structure for instance of this FSM
+
+  *rc = NFE_RUNNING;								// Initialise return code
   
-  if (expired(t_slice))
+  if (expired(t_slice))								// Check we've got enough time to initialise
     *rc = NFE_NOTENOUGHTIME;
   else
   {
-    c = *((create_rtext_context**)context);
-    if (c == 0)
+    c = *((create_rtext_context**)context);					// set the context handle to the one passed in by the caller
+    if (c == 0)									// If 0, then this is to be a new instance of this FSM, so
     {
-      c = (create_rtext_context*)new create_rtext_context;
-      *context = (NFE_CONTEXT*)c;
-      if (!c)
+      c = (create_rtext_context*)new create_rtext_context;			// Create new context structure
+      *context = (NFE_CONTEXT*)c;						// Set context handle so we return this instance
+      if (!c)									// Check creation of context succeeded
         *rc = NFE_MALLOCFAILED;
       else
       {
-        memset(c, 0, sizeof(create_rtext_context));
-        c->type = NFE_CT_CREATE_RTEXT;
-        c->state = CREATE_RTEXT_INIT;
-        c->in_file = in_file;
-        c->out_file = out_file;
+        memset(c, 0, sizeof(create_rtext_context));				// Clear the context
+        c->type      = NFE_CT_CREATE_RTEXT;					// Set the type of this context to catch caller passing it to the wrong FSM
+        c->state     = CREATE_RTEXT_INIT;					// Set initial state of FSM and setup other defaults
+        c->in_file   = in_file;
+        c->out_file  = out_file;
         c->data_type = type;
-        *rc = NFE_RUNNING;
       }
     }
-    else if (c->type != NFE_CT_CREATE_RTEXT)
-      *rc = NFE_INVALIDCONTEXT;
+    else if (c->type != NFE_CT_CREATE_RTEXT)					// else, given handle was not 0, so check this context is for this FSM
+      *rc = NFE_INVALIDCONTEXT;							// if not return error code
   }
   
-  if (expired(t_slice))
+  if (expired(t_slice))								// Check we've been given a big enough time slice for at least one iteration of the FSM
     *rc = NFE_NOTENOUGHTIME;
 
-  do
+  if (*rc >= 0)									// check no error is set before entering FSM
   {
-    switch (c->state)
+    do										// Beginning of FSM loop
     {
-      case CREATE_FAX_INIT:
+      switch (c->state)
       {
-        dprintf(("", "CREATE_RTEXT_INIT\n"));
-        create_text_entity_init(*c);
-        if (c->retcode == NFE_COMPLETED)
-          c->retcode = NFE_RUNNING;
-        break;
-      }
-      case CREATE_RTEXT_ENCODE_INIT:
-      {
-        dprintf(("", "CREATE_RTEXT_ENCODE_INIT\n"));
-        c->retcode = new_context(&(c->apply_encoding_context));
-        if (c->retcode == NFE_COMPLETED)
+        case CREATE_RTEXT_INIT:							// State to create and initialise the MIMEtext entity
         {
-          c->state = CREATE_RTEXT_ENCODE;
-          *rc = NFE_RUNNING;
-          c->retcode = NFE_RUNNING;
+          dprintf(("", "CREATE_RTEXT_INIT\n"));
+          create_text_entity_init(*c);
+          if (c->retcode == NFE_COMPLETED)					// If operation successful, keep the FSM running
+            c->retcode = NFE_RUNNING;
+          break;
         }
-        else
+        case CREATE_RTEXT_ENCODE_INIT:						// State to prepare & initialise for applying the encoding method to this entity
         {
-          c->state = CREATE_RTEXT_ERROR;
-          *rc = NFE_RUNNING;
-        }
-        break;
-      }
-      case CREATE_RTEXT_ENCODE:
-      {
-        dprintf(("", "CREATE_RTEXT_ENCODE\n"));
-        do
-        {
-          c->retcode = c->text->ApplyEncoding(c->apply_encoding_context, t_slice, NFE_TE_7BIT, (char*)c->out_file, 3072);
-        } while ((c->retcode == NFE_RUNNING) && (!expired(t_slice)));
-        dprintf(("", "CREATE_RTEXT_ENCODE: c->retcode: %d\n", c->retcode));
-        if (c->retcode == NFE_COMPLETED)
-        {
-          c->retcode = destroy_context(&(c->apply_encoding_context));
-          if (c->retcode == NFE_COMPLETED)
-            c->state = CREATE_RTEXT_FINISHED;
-          else
+          dprintf(("", "CREATE_RTEXT_ENCODE_INIT\n"));
+          c->retcode = new_context(&(c->apply_encoding_context));			// Create new context handle for the encoding method
+          if (c->retcode == NFE_COMPLETED)					// If successful, switch to encode state
+          {
+            c->state = CREATE_RTEXT_ENCODE;
+            *rc = NFE_RUNNING;
+            c->retcode = NFE_RUNNING;
+          }
+          else									// Else, switch to error state
           {
             c->state = CREATE_RTEXT_ERROR;
             *rc = NFE_RUNNING;
           }
+          break;
         }
-        else if (c->retcode == NFE_RUNNING)
+        case CREATE_RTEXT_ENCODE:						// State to do the encoding of this text entity
         {
-          *rc = c->retcode;
-          c->state = CREATE_RTEXT_ENCODE;
+          dprintf(("", "CREATE_RTEXT_ENCODE\n"));
+          do
+          {
+            c->retcode = c->text->ApplyEncoding(c->apply_encoding_context,
+                                                t_slice,
+                                                NFE_TE_7BIT,
+                                                (char*)c->out_file,
+                                                APPLY_ENCODING_BUFSIZE);
+          } while ((c->retcode == NFE_RUNNING) && (!expired(t_slice)));		// Call Encoding FSM method until completed, an error occurs or the timeslice expires
+          dprintf(("", "CREATE_RTEXT_ENCODE: c->retcode: %d\n", c->retcode));
+  
+          if (c->retcode == NFE_COMPLETED)					// If encoding completed successfully, then
+          {
+            c->retcode = destroy_context(&(c->apply_encoding_context));		// Destroy this context handle
+            if (c->retcode == NFE_COMPLETED)
+              c->state = CREATE_RTEXT_FINISHED;					// Switch to the FINISHED state
+            else
+            {
+              c->state = CREATE_RTEXT_ERROR;
+              *rc = NFE_RUNNING;
+            }
+          }
+          else if (c->retcode == NFE_RUNNING)					// Else, if encoding is not finished yet(still running)
+          {
+            *rc = c->retcode;							// Make sure NFE_RUNNING return code is returned
+            c->state = CREATE_RTEXT_ENCODE;					// and stay in this state (we will drop out of our FSM loop as the time slice has expired)
+          }
+          else									// Else, an error has occured, so switch to ERROR state
+          {
+            c->state = CREATE_RTEXT_ERROR;
+            *rc = NFE_RUNNING;
+          }
+          break;
         }
-        else
+        case CREATE_RTEXT_ERROR:						// State to clean up this FSM instance and return the error that occured
         {
-          c->state = CREATE_RTEXT_ERROR;
-          *rc = NFE_RUNNING;
+          dprintf(("", "CREATE_RTEXT_ERROR\n"));
+          if (c->text)								// If the text entity exists, destroy it
+            delete c->text;
+          *rc = c->retcode;							// Pass out the error code that occured
+          delete c;								// Destroy this context(instance) of the FSM
+          *context = 0;								// Set context handle that's return to 0
+          break;
         }
-        break;
-      }
-      case CREATE_RTEXT_ERROR:
-      {
-        dprintf(("", "CREATE_RTEXT_ERROR\n"));
-        // clean up everything!
-        if (c->text)
-          delete c->text;
-        c->text = 0;
-        *rc = c->retcode;
-        c->state = CREATE_RTEXT_INIT;
-        delete c;
-        c = 0;
-        break;
-      }
-      case CREATE_RTEXT_FINISHED:
-      {
-        dprintf(("", "CREATE_RTEXT_FINISHED\n"));
-        // clean up context
-        obj = c->text;	// return the mime object
-        *rc = NFE_COMPLETED;
-        c->state = CREATE_RTEXT_INIT;
-        delete c;
-        c = 0;
-        break;
-      }
-      default:
-      {
-        dprintf(("", "DEFAULT in CREATE_RTEXT FSM!!!\n"));
-        *rc = NFE_INTERNALERR;
-        break;
-      }
-    } // endswitch
-  } while ((*rc == NFE_RUNNING) && (!expired(t_slice)));
+        case CREATE_RTEXT_FINISHED:						// clean up FSM context, terminate FSM and return
+        {
+          dprintf(("", "CREATE_RTEXT_FINISHED\n"));
+          obj = c->text;							// return the mime object (text entity) that was created
+          *rc = NFE_COMPLETED;							// Set successful termination return code
+          delete c;								// Destroy this context(instance) of the FSM
+          *context = 0;								// Set context handle that's returned to 0
+          break;
+        }
+        default:								// Catch all state to trap disasters
+        {
+          dprintf(("", "DEFAULT in CREATE_RTEXT FSM!!!\n"));
+          *rc = NFE_INTERNALERR;						// We should never get here, unless context gets corrupted
+          break;
+        }
+      } // endswitch on FSM state
+    } while ((*rc == NFE_RUNNING) && (!expired(t_slice)));			// FSM keeps running until an error, it terminates or time slice expires
+  }										// endif on *rc check
   
   dprintf(("", "CREATE_RTEXT before return: *rc: %d\n", *rc));
       
@@ -582,26 +727,30 @@ static _kernel_oserror *NFE_create_TEXT_entity(NFE_CONTEXT           *context,
 /* ************************************************************************** */
 /*
    FUNCTION:       NFE_create_FAX_entity
-   DESCRIPTION:    Function to create a 
-   		   The process will continue until it
-   		   either completes (rc = NFE_COMPLETED) or the t_slice period
-   		   is up (rc = NFE_RUNNING) or an error occurs (rc = -ve value).
-   		   If an OS errors occurs then the function return code is NON
-   		   NULL and points to a RISC OS error block.
-   DEPENDENCIES:   
+   DESCRIPTION:    FSM to create a fax entity using the EmailLib, ready for
+                   attachment to a message.  (really aught to merge this with
+                   NFE_create_TEXT_entity).
+   DEPENDENCIES:   data type            NFE_CONTEXT     NFElib.h
+                   data type            clock_t         <time.h>
+                   data type            uint32          Elib.h
+                   data type            NFE_rcode       Elib.h
+                   data type            MIMEentity      MIMEentity.h
+                   data type            _kernel_oserror  "kernel.h"
    DEPENDED ON BY: 
-   INPUT PARAMS:   NFE_CONTEXT         *context		create_FAX_entity current process context information
-   		   clock_t		t_slice		clock tick time to return by
-   		   const char *const	in_file		data file to use as input
-   		   const char *const	out_file	file to output MIME entity to
-   		   char[SERIAL_LEN]	serial_num	Device serial number
-   		   uint32		doc_num		Fax document number
-   		   uint32		page_num	Fax Page number
-   		   NFE_rcode *const	rc		NetFax Email Library return code.  Must point to a NFE_rcode
-   OUTPUT PARAMS:  NFE_rcode *const	rc		NetFax Email Library return code
-   		   MIMEentity*         &obj		The created MIMEentity
-   RETURN VALUE:   _kernel_oserror*			OS error
-   VARIABLES:      _kernel_oserror*	e		return code
+   INPUT PARAMS:   NFE_CONTEXT         *context         create_FAX_entity current process context information
+                   clock_t              t_slice         clock tick time to return by
+                   const char *const    in_file         data file to use as input
+                   const char *const    out_file        file to output MIME entity to
+                   char[SERIAL_LEN]     serial_num      Device serial number
+                   uint32               doc_num         Fax document number
+                   uint32               page_num        Fax Page number
+                   NFE_rcode *const     rc              NetFax Email Library return code.  Must point to a NFE_rcode
+   OUTPUT PARAMS:  NFE_CONTEXT          context         context handle for the instance of this FSM
+                   NFE_rcode *const     rc              NetFax Email Library return code
+                   MIMEentity*         &obj             The created MIMEentity
+   RETURN VALUE:   _kernel_oserror*                     OS error
+   VARIABLES:      _kernel_oserror*     e               return code
+                   create_fax_context  *c               context structure for this FSM
  */
 /* ************************************************************************** */
 static _kernel_oserror *NFE_create_FAX_entity(NFE_CONTEXT           *context,
@@ -611,136 +760,139 @@ static _kernel_oserror *NFE_create_FAX_entity(NFE_CONTEXT           *context,
                                               const char             serial_num[],
                                               const uint32           doc_num,
                                               const uint32           page_num,
-                                              MIMEentity*           &obj,		// reference to a pointer
+                                              MIMEentity*           &obj,	// reference to a pointer
                                               NFE_rcode *const       rc)
 {
-  _kernel_oserror    *e = 0;
-  create_fax_context *c = 0;
-  *rc = NFE_RUNNING;
+  _kernel_oserror    *e = 0;							// OS error to return
+  create_fax_context *c = 0;							// Pointer to context structure for instance of this FSM
   
-  if (expired(t_slice))
+  *rc = NFE_RUNNING;								// Initialise return code
+  
+  if (expired(t_slice))								// Check we've got enough time to initialise
     *rc = NFE_NOTENOUGHTIME;
   else
   {
-    c = *((create_fax_context**)context);
-    if (c == 0)
+    c = *((create_fax_context**)context);					// set the context handle to the one passed in by the caller
+    if (c == 0)									// If 0, then this is to be a new instance of this FSM, so
     {
-      c = (create_fax_context*)new create_fax_context;
-      *context = (NFE_CONTEXT*)c;
-      if (!c)
+      c = (create_fax_context*)new create_fax_context;				// Create new context structure
+      *context = (NFE_CONTEXT*)c;						// Set context handle so we return this instance
+      if (!c)									// Check creation of context succeeded
         *rc = NFE_MALLOCFAILED;
       else
       {
-        memset(c, 0, sizeof(create_fax_context));
-        c->type = NFE_CT_CREATE_FAX;
-        c->state = CREATE_FAX_INIT;
+        memset(c, 0, sizeof(create_fax_context));				// Clear the context
+        c->type = NFE_CT_CREATE_FAX;						// Set the type of this context to catch caller passing it to the wrong FSM
+        c->state = CREATE_FAX_INIT;						// Set initial state of FSM and setup other defaults
         c->in_file = in_file;
         c->out_file = out_file;
         c->serial_num = serial_num;
         c->doc_num = doc_num;
         c->page_num = page_num;
-        *rc = NFE_RUNNING;
       }
     }
-    else if (c->type != NFE_CT_CREATE_FAX)
-      *rc = NFE_INVALIDCONTEXT;
+    else if (c->type != NFE_CT_CREATE_FAX)					// else, given handle was not 0, so check this context is for this FSM
+      *rc = NFE_INVALIDCONTEXT;							// if not return error code
   }
   
-  if (expired(t_slice))
+  if (expired(t_slice))								// Check we've been given a big enough time slice for at least one iteration of the FSM
     *rc = NFE_NOTENOUGHTIME;
 
-  do
+  if (*rc >= 0)									// check no error is set before entering FSM
   {
-    switch (c->state)
+    do										// Beginning of FSM loop
     {
-      case CREATE_FAX_INIT:
+      switch (c->state)
       {
-        dprintf(("", "CREATE_FAX_INIT\n"));
-        create_fax_entity_init(*c);
-        if (c->retcode == NFE_COMPLETED)
-          c->retcode = NFE_RUNNING;
-        break;
-      }
-      case CREATE_FAX_ENCODE_INIT:
-      {
-        dprintf(("", "CREATE_FAX_ENCODE_INIT\n"));
-        c->retcode = new_context(&(c->apply_encoding_context));
-        if (c->retcode == NFE_COMPLETED)
+        case CREATE_FAX_INIT:							// State to create and initialise the MIMEimage entity
         {
-          c->state = CREATE_FAX_ENCODE;
-          *rc = NFE_RUNNING;
-          c->retcode = NFE_RUNNING;
+          dprintf(("", "CREATE_FAX_INIT\n"));
+          create_fax_entity_init(*c);
+          if (c->retcode == NFE_COMPLETED)					// If operation successful, keep the FSM running
+            c->retcode = NFE_RUNNING;
+          break;
         }
-        else
+        case CREATE_FAX_ENCODE_INIT:						// State to prepare & initialise for applying the encoding method to this entity
         {
-          c->state = CREATE_FAX_ERROR;
-          *rc = NFE_RUNNING;
-        }
-        break;
-      }
-      case CREATE_FAX_ENCODE:
-      {
-        dprintf(("", "CREATE_FAX_ENCODE\n"));
-        do
-        {
-          c->retcode = c->fax->ApplyEncoding(c->apply_encoding_context, t_slice, NFE_TE_BASE64, (char*)c->out_file, 3072);
-        } while ((c->retcode == NFE_RUNNING) && (!expired(t_slice)));
-        dprintf(("", "CREATE_FAX_ENCODE: c->retcode: %d\n", c->retcode));
-        if (c->retcode == NFE_COMPLETED)
-        {
-          c->retcode = destroy_context(&(c->apply_encoding_context));
-          if (c->retcode == NFE_COMPLETED)
-            c->state = CREATE_FAX_FINISHED;
-          else
+          dprintf(("", "CREATE_FAX_ENCODE_INIT\n"));
+          c->retcode = new_context(&(c->apply_encoding_context));			// Create new context handle for the encoding method
+          if (c->retcode == NFE_COMPLETED)					// If successful, switch to encode state
+          {
+            c->state = CREATE_FAX_ENCODE;
+            *rc = NFE_RUNNING;
+            c->retcode = NFE_RUNNING;
+          }
+          else									// Else, switch to error state
           {
             c->state = CREATE_FAX_ERROR;
             *rc = NFE_RUNNING;
           }
+          break;
         }
-        else if (c->retcode == NFE_RUNNING)
+        case CREATE_FAX_ENCODE:							// State to do the encoding of this image entity
         {
-          *rc = c->retcode;
-          c->state = CREATE_FAX_ENCODE;
+          dprintf(("", "CREATE_FAX_ENCODE\n"));
+          do
+          {
+            c->retcode = c->fax->ApplyEncoding(c->apply_encoding_context,
+                                               t_slice,
+                                               NFE_TE_BASE64,
+                                               (char*)c->out_file,
+                                               APPLY_ENCODING_BUFSIZE);
+          } while ((c->retcode == NFE_RUNNING) && (!expired(t_slice)));		// Call Encoding FSM method until completed, an error occurs or the timeslice expires
+          dprintf(("", "CREATE_FAX_ENCODE: c->retcode: %d\n", c->retcode));
+          
+          if (c->retcode == NFE_COMPLETED)					// If encoding completed successfully, then
+          {
+            c->retcode = destroy_context(&(c->apply_encoding_context));		// Destroy this context handle
+            if (c->retcode == NFE_COMPLETED)
+              c->state = CREATE_FAX_FINISHED;					// Switch to the FINISHED state
+            else
+            {
+              c->state = CREATE_FAX_ERROR;
+              *rc = NFE_RUNNING;
+            }
+          }
+          else if (c->retcode == NFE_RUNNING)					// Else, if encoding is not finished yet(still running)
+          {
+            *rc = c->retcode;							// Make sure NFE_RUNNING return code is returned
+            c->state = CREATE_FAX_ENCODE;					// and stay in this state (we will drop out of our FSM loop as the time slice has expired)
+          }
+          else									// Else, an error has occured, so switch to ERROR state
+          {
+            c->state = CREATE_FAX_ERROR;
+            *rc = NFE_RUNNING;
+          }
+          break;
         }
-        else
+        case CREATE_FAX_ERROR:							// State to clean up this FSM instance and return the error that occured
         {
-          c->state = CREATE_FAX_ERROR;
-          *rc = NFE_RUNNING;
+          dprintf(("", "CREATE_FAX_ERROR\n"));
+          if (c->fax)								// If the fax entity exists, destroy it
+            delete c->fax;
+          *rc = c->retcode;							// Pass out the error code that occured
+          delete c;								// Destroy this context(instance) of the FSM
+          *context = 0;								// Set context handle that's return to 0
+          break;
         }
-        break;
-      }
-      case CREATE_FAX_ERROR:
-      {
-        dprintf(("", "CREATE_FAX_ERROR\n"));
-        // clean up everything!
-        if (c->fax)
-          delete c->fax;
-        c->fax = 0;
-        *rc = c->retcode;
-        c->state = CREATE_FAX_INIT;
-        delete c;
-        c = 0;
-        break;
-      }
-      case CREATE_FAX_FINISHED:
-      {
-        dprintf(("", "CREATE_FAX_FINISHED\n"));
-        // clean up context
-        obj = c->fax;	// return the mime object
-        *rc = NFE_COMPLETED;
-        c->state = CREATE_FAX_INIT;
-        delete c;
-        c = 0;
-        break;
-      }
-      default:
-      {
-        dprintf(("", "DEFAULT in CREATE_FAX FSM!!!\n"));
-        *rc = NFE_INTERNALERR;
-        break;
-      }
-    } // endswitch
-  } while ((*rc == NFE_RUNNING) && (!expired(t_slice)));
+        case CREATE_FAX_FINISHED:						// clean up FSM context, terminate FSM and return
+        {
+          dprintf(("", "CREATE_FAX_FINISHED\n"));
+          obj = c->fax;								// return the mime object (text entity) that was created
+          *rc = NFE_COMPLETED;							// Set successful termination return code
+          delete c;								// Destroy this context(instance) of the FSM
+          *context = 0;								// Set context handle that's return to 0
+          break;
+        }
+        default:								// Catch all state to trap disasters
+        {
+          dprintf(("", "DEFAULT in CREATE_FAX FSM!!!\n"));
+          *rc = NFE_INTERNALERR;						// We should never get here, unless context gets corrupted
+          break;
+        }
+      } // endswitch
+    } while ((*rc == NFE_RUNNING) && (!expired(t_slice)));			// FSM keeps running until an error, it terminates or time slice expires
+  }										// endif *rc check
   
   dprintf(("", "CREATE_FAX before return: *rc: %d\n", *rc));
   return e;
@@ -751,126 +903,115 @@ static _kernel_oserror *NFE_create_FAX_entity(NFE_CONTEXT           *context,
 /*
    FUNCTION:       create_fax_entity_init
    DESCRIPTION:    Function to do the CREATE_FAX_INIT state of the
-   		   create_FAX_entity FSM
-   		   
-   DEPENDENCIES:   
-   DEPENDED ON BY: 
-   INPUT PARAMS:   NFE_CONTEXT		context		create_FAX_entity current process context information
-   OUTPUT PARAMS:  NFE_CONTEXT		context		create_FAX_entity current process context information
+                   NFE_create_FAX_entity FSM
+   DEPENDENCIES:   data type           create_fax_context       NFELib.c++
+   DEPENDED ON BY: function            NFE_create_FAX_entity    NFELib.c++
+   INPUT PARAMS:   NFE_CONTEXT         &context         create_FAX_entity current process context information
+   OUTPUT PARAMS:  NFE_CONTEXT         &context         create_FAX_entity current process context information
    RETURN VALUE:   NONE
-   VARIABLES:      NONE
+   VARIABLES:      char                *buf             buffer for creating the name string parameter
+                   contentT            *ct_ptr          pointer to Content-Type header in MIMEimage entity
+                   parameter           *p               pointer to name parameter within Content-Type header
+                   int32                pindex          index of name parameter in list of parameters in Content-Type
+                   XNFmsgclass         *mc              X-NetFax-Message-Class header
+                   headers             *h               pointer to the headers object of this MIMEimage entity
  */
 /* ************************************************************************** */
 static void create_fax_entity_init(create_fax_context &c)
 {
-  c.fax = new MIMEimage(TRUE, (char*)c.in_file, 0, 0, NFE_CT_IMAGE_TIFF, TRUE);		// obj in context struct
-  if (c.fax)
+  c.fax = new MIMEimage(TRUE,
+                        (char*)c.in_file,
+                        0,
+                        0,
+                        NFE_CT_IMAGE_TIFF,
+                        TRUE);							// create a MIMEimage object to be this fax entity (obj in context struct)
+  if (c.fax)									// If created okay, then add the name parameter to the Content-Type header
   {
-    char *buf = 0;
+    char *buf = 0;								// Buffer to use to create the name parameter value
     buf = new char[42];
-    if (buf)
-    {
-      // Add "name" parameter to contenttype field with name set to "FAX_<serial_num>_<doc_num>_<page_num>.tiff"
-      contentT *ct_ptr = 0;
-      c.retcode = c.fax->GetContentType(ct_ptr);
-      if ((c.retcode == NFE_COMPLETED) && (ct_ptr))
+
+    if (buf)									// If buffer created okay, then
+    {										// Add "name" parameter to contenttype field with name
+      contentT  *ct_ptr = 0;							// set to "FAX_<serial_num>_<doc_num>_<page_num>.tiff"
+      parameter *p      = 0;
+      int32      pindex = -1;
+      
+      c.retcode = c.fax->GetContentType(ct_ptr);				// Get the Content Type header in the MIMEimage object
+      if ((c.retcode == NFE_COMPLETED) && (ct_ptr))				// If found okay, then Create the name parameter contents
       {
-        // find the name parameter index position
-        parameter *p      = 0;
-        int32      pindex = -1;
         
-        sprintf(buf, "\"FAX_");
-        for(int32 i=0;i<SERIAL_LEN;i++)
-          sprintf(buf+5+(i*2), "%02x", c.serial_num[i]);
+        sprintf(buf, "\"FAX_");							// Build the name parameter's value ("FAX_<serial_num>_<doc_num>_<page_num>.tiff")
+        for(int32 i=SERIAL_LEN-1;i>=0;i--)
+          sprintf(buf+5+((SERIAL_LEN-1-i)*2), "%02x", c.serial_num[i]);
         sprintf(buf+(strlen(buf)), "_%d_%d.tiff\"", c.doc_num, c.page_num);
-        p = ct_ptr->FindParam(NFE_CT_PARAM_NAME, pindex);
-        // if found then replace it
-        if (!p)
+
+        p = ct_ptr->FindParam(NFE_CT_PARAM_NAME, pindex);			// Search for a name parameter already being present in the Content-Type header
+        if (!p)									// if one is not found then create one
         {
           pindex = -1;
           p = new parameter(FALSE, 0, 0, 0, NFE_CT_PARAM_NAME, TRUE);
           if (!p)
             c.retcode = NFE_MALLOCFAILED;
         }
+      } // endif checking return code of GetContentType() call
         
-        if (c.retcode == NFE_COMPLETED)
+      if (c.retcode == NFE_COMPLETED)
+        c.retcode = p->SetAttribute("name");					// Set parameter attribute to "name" (not needed if parameter already existed, but what the hell...)
+      if (c.retcode == NFE_COMPLETED)
+        c.retcode = p->SetValue(buf);						// Set parameter value to the buffer contents
+      if (c.retcode == NFE_COMPLETED)
+      {
+        if (pindex == -1)							// If index of the parameter object is -1, then we didn't find it in the Content-Type so
+          c.retcode = ct_ptr->AddParam(*p);					// Add it
+        else									// else
+          c.retcode = ct_ptr->ReplaceParam(*p, pindex);				// Replace the current one with this one.
+      }            
+
+      if (c.retcode == NFE_COMPLETED)						// add the x-netfax-message-class header to this entity
+      {
+        XNFmsgclass *mc = new XNFmsgclass(FALSE, 0, 0, 0, NFE_NFMC_FAX, TRUE);	// Create the X-NetFax-Message-Class header object
+
+        if (mc)									// Check object was created okay
         {
-          // insert a new name parameter
-          c.retcode = p->SetAttribute("name");
-          if (c.retcode == NFE_COMPLETED)
+          headers *h = c.fax->GetHdrs();					// Get a handle on the collection of headers for this MIMEimage object
+          if (h)
           {
-            c.retcode = p->SetValue(buf);
+            c.retcode = h->AddHdr(*mc);						// Add the X-NetFax-Message-Class header to the MIMEimage entity
             if (c.retcode == NFE_COMPLETED)
-            {
-              if (pindex == -1)
-                c.retcode = ct_ptr->AddParam(*p);
-              else
-                c.retcode = ct_ptr->ReplaceParam(*p, pindex);
-              
-              if (c.retcode == NFE_COMPLETED)
-              {
-                // add netfax-message-class header
-                XNFmsgclass *mc = new XNFmsgclass(FALSE, 0, 0, 0, NFE_NFMC_FAX, TRUE);
-                if (mc)
-                {
-                  headers *h = c.fax->GetHdrs();
-                  if (h)
-                  {
-                    c.retcode = h->AddHdr(*mc);
-                    if (c.retcode == NFE_COMPLETED)
-                      c.state = CREATE_FAX_ENCODE_INIT;
-                    else
-                      c.state = CREATE_FAX_ERROR;
-                  }
-                  else
-                  {
-                    c.retcode = NFE_FAILED;
-                    c.state = CREATE_FAX_ERROR;
-                  }
-                }
-                else
-                {
-                  c.retcode = NFE_MALLOCFAILED;
-                  c.state = CREATE_FAX_ERROR;
-                }
-              }
-              else
-              {
-                delete p;
-                p = 0;
-                c.state = CREATE_FAX_ERROR;
-              }
-            }
+              c.state = CREATE_FAX_ENCODE_INIT;					// If successful, move to ENCODE_INIT state for this entity
             else
-            {
-              delete p;
-              p = 0;
-              c.state = CREATE_FAX_ERROR;
-            }
+              c.state = CREATE_FAX_ERROR;					// else, switch to the ERROR state to return the error
           }
           else
           {
-            delete p;
-            p = 0;
+            c.retcode = NFE_FAILED;
             c.state = CREATE_FAX_ERROR;
           }
         }
-        else
+        else									// else, XNFmsgclass creation failed, so set return code and move to ERROR state
+        {
+          c.retcode = NFE_MALLOCFAILED;
           c.state = CREATE_FAX_ERROR;
-      }   
-      else
+        }									// endif check the XNFmsgclass was created okay
+      }
+      
+      if (c.retcode != NFE_COMPLETED)
+      {
+        if (p)
+          delete p;
         c.state = CREATE_FAX_ERROR;
-      delete[] buf;
+      }
+      delete[] buf;								// Destroy the buffer memory
     }
-    else
+    else									// Else, creation of buffer failed, so return error
     {
       c.retcode = NFE_MALLOCFAILED;
       c.state = CREATE_FAX_ERROR;
     }
   }
-  else
+  else										// Else, creation of MIMEimage failed, so return error
   {
-    c.retcode = NFE_MALLOCFAILED;	// in context struct
+    c.retcode = NFE_MALLOCFAILED;
     c.state = CREATE_FAX_ERROR;
   }
 }
@@ -880,38 +1021,42 @@ static void create_fax_entity_init(create_fax_context &c)
 /*
    FUNCTION:       create_text_entity_init
    DESCRIPTION:    Function to do the CREATE_RTEXT_INIT state of the
-   		   create_TEXT_entity FSM
-   		   
-   DEPENDENCIES:   
-   DEPENDED ON BY: 
-   INPUT PARAMS:   NFE_CONTEXT		context		create_RTEXT_entity current process context information
-   OUTPUT PARAMS:  NFE_CONTEXT		context		create_RTEXT_entity current process context information
+                   create_TEXT_entity FSM
+   DEPENDENCIES:   data type            create_rtext_context    NFELib.c++
+   DEPENDED ON BY: function             NFE_create_RTEXT_entity NFELib.c++
+   INPUT PARAMS:   NFE_CONTEXT          context         create_RTEXT_entity current process context information
+   OUTPUT PARAMS:  NFE_CONTEXT          context         create_RTEXT_entity current process context information
    RETURN VALUE:   NONE
-   VARIABLES:      NONE
+   VARIABLES:      XNFmsgclass         *mc              X-NetFax-Message-Class header
  */
 /* ************************************************************************** */
 static void create_text_entity_init(create_rtext_context &c)
 {
-  c.text = new MIMEtext(TRUE, (char*)c.in_file, 0, 0, NFE_CT_TEXT_PLAIN, TRUE);		// obj in context struct
-  if (!c.text)
+  c.text = new MIMEtext(TRUE,
+                        (char*)c.in_file,
+                        0,
+                        0,
+                        NFE_CT_TEXT_PLAIN,
+                        TRUE);							// create a MIMEtext object to be this text/plain entity (obj in context struct)
+  if (!c.text)									// If creation failed, return error and switch to ERROR state
   {
-    c.retcode = NFE_MALLOCFAILED;	// in context struct
+    c.retcode = NFE_MALLOCFAILED;
     c.state = CREATE_RTEXT_ERROR;
   }
-  else
+  else										// else, add the x-netfax-message-class header to this entity
   {
-    // add netfax-message-class header
-    XNFmsgclass *mc = new XNFmsgclass(FALSE, 0, 0, 0, c.data_type, TRUE);
-    if (mc)
+    XNFmsgclass *mc = new XNFmsgclass(FALSE, 0, 0, 0, c.data_type, TRUE);	// Create the X-NetFax-Message-Class header object
+
+    if (mc)									// Check object was created okay
     {
-      headers *h = c.text->GetHdrs();
+      headers *h = c.text->GetHdrs();						// Get a handle on the collection of headers for this MIMEimage object
       if (h)
       {
-        c.retcode = h->AddHdr(*mc);
+        c.retcode = h->AddHdr(*mc);						// Add the X-NetFax-Message-Class header to the MIMEimage entity
         if (c.retcode == NFE_COMPLETED)
-          c.state = CREATE_RTEXT_ENCODE_INIT;
+          c.state = CREATE_RTEXT_ENCODE_INIT;					// If successful, move to ENCODE_INIT state for this entity
         else
-          c.state = CREATE_RTEXT_ERROR;
+          c.state = CREATE_RTEXT_ERROR;						// else, switch to the ERROR state to return the error
       }
       else
       {
@@ -919,12 +1064,11 @@ static void create_text_entity_init(create_rtext_context &c)
         c.state = CREATE_RTEXT_ERROR;
       }
     }
-    else
+    else									// else, XNFmsgclass creation failed, so set return code and move to ERROR state
     {
       c.retcode = NFE_MALLOCFAILED;
       c.state = CREATE_RTEXT_ERROR;
-    }
-    c.state = CREATE_RTEXT_ENCODE_INIT;
+    }										// endif check the XNFmsgclass was created okay
   }
 }
 
@@ -933,189 +1077,195 @@ static void create_text_entity_init(create_rtext_context &c)
 /*
    FUNCTION:       NFE_create_RFC822_msg
    DESCRIPTION:    Function to create a RFC822 message given the header
-   		   information for the message and the list of MIME entities
-   		   the message is to have.
-   		   The function performs the process in small chunks deteremined
-   		   by the t_slice parameter.  The process will continue until it
-   		   either completes (rc = NFE_COMPLETED) or the t_slice period
-   		   is up (rc = NFE_RUNNING) or an error occurs (rc = -ve value).
-   		   If an OS errors occurs then the function return code is NON
-   		   NULL and points to a RISC OS error block.
-   DEPENDENCIES:   data type		NFE_CONTEXT	NFElib.h
-   		   data type		clock_t		<time.h>
-   		   data type		NFE_header	NFElib.h
-   		   data type		NFE_LIST	NFElib.h
-   		   data type		NFE_rcode	NFElib.h
+                   information for the message and the list of MIME entities
+                   the message is to have.  In the NFE_header structure passed
+                   in as input, if the return_receipt_to.address is not null,
+                   this is taken to be a valid email address and the
+                   X-NetFax-Return-Receipt-To header will be added to the
+                   message provided the msg_class doesn't have the 10th bit,
+                   NFE_NFMC_DELIVERYREPORT, set.  Also, if the
+                   return_receipt_to.real_name is not null, it will be used
+                   as the RealName with that email address.
+                   If the function completes successfully,
+                   NFE_COMPLETED returned, then the NFE_LIST mime_list is
+                   destroyed by this function.  If an error occurs, the list
+                   is not destroyed.
+                   The function performs the process in small chunks deteremined
+                   by the t_slice parameter.  The process will continue until it
+                   either completes (rc = NFE_COMPLETED) or the t_slice period
+                   is up (rc = NFE_RUNNING) or an error occurs (rc = -ve value,
+                   OR rc = +ve value >= 2 - NON-FATAL error).
+                   If an OS errors occurs then the function return code is NON
+                   NULL and points to a RISC OS error block.
+   DEPENDENCIES:   data type            NFE_CONTEXT     NFElib.h
+                   data type            clock_t         <time.h>
+                   data type            NFE_header      NFElib.h
+                   data type            NFE_LIST        NFElib.h
+                   data type            NFE_rcode       NFElib.h
    DEPENDED ON BY: !Daytona Control application
-   INPUT PARAMS:   NFE_CONTEXT		context		create_RFC822_msg current process context information
-   		   clock_t		t_slice		clock tick time to return by
-   		   NFE_header*		header		RFC822 Message header information.  Must point to a NFE_header object.
-   		   NFE_LIST		mime_list	List holding details of each MIME entity to put in the message
-   		   const char *const	out_file	file to output MIME entity to
-   		   NFE_rcode *const	rc		NetFax Email Library return code.  Must point to a NFE_rcode
-   OUTPUT PARAMS:  NFE_rcode *const	rc		NetFax Email Library return code
-   RETURN VALUE:   _kernel_oserror*			OS error
+   INPUT PARAMS:   NFE_CONTEXT          context         create_RFC822_msg current process context information
+                   clock_t              t_slice         clock tick time to return by
+                   NFE_header*          header          RFC822 Message header information.  Must point to a NFE_header object.
+                   NFE_LIST             mime_list       List holding details of each MIME entity to put in the message
+                   const char *const    out_file        file to output MIME entity to
+                   NFE_rcode *const     rc              NetFax Email Library return code.  Must point to a NFE_rcode
+   OUTPUT PARAMS:  NFE_rcode *const     rc              NetFax Email Library return code
+   RETURN VALUE:   _kernel_oserror*                     OS error
+                   create_rfc822msg_context *c          context structure for this FSM
  */
 /* ************************************************************************** */
 extern "C" _kernel_oserror *NFE_create_RFC822_msg(NFE_CONTEXT       *context,
-                                       const clock_t      t_slice,
-                                       NFE_header        *header,
-                                       NFE_LIST           mime_list,	// make this a MIMEentity? -> either MIMEimage or MIMEmultip holding MIMEimages!! Neat!
-                                       const char *const  out_file,
-                                       NFE_rcode *const   rc)
+                                                  const clock_t      t_slice,
+                                                  NFE_header        *header,
+                                                  NFE_LIST           mime_list,
+                                                  const char *const  out_file,
+                                                  NFE_rcode *const   rc)
 {
-  _kernel_oserror          *e = 0;
-  create_rfc822msg_context *c = 0;
+  _kernel_oserror          *e = 0;							// OS error to return
+  create_rfc822msg_context *c = 0;							// Pointer to context structure for instance of this FSM
   
-  if (rc == 0)
+  e = check_rc(rc);									// Make sure we can return the return code to the caller
+
+  if (!e)
   {
-    oserror.errnum = 0;
-    sprintf(oserror.errmess, "NFE_rcode ptr cannot be NULL");
-    e = &oserror;
-  }
-  else
-  {
-    *rc = NFE_RUNNING;
-    if (expired(t_slice))
+    *rc = NFE_RUNNING;									// Initialise the return code
+    if (expired(t_slice))								// Check we've got enough time to initialise
       *rc = NFE_NOTENOUGHTIME;
     else
     {
-      c = *((create_rfc822msg_context**)context);
-      if (c == 0)
+      c = *((create_rfc822msg_context**)context);					// set the context handle to the one passed in by the caller
+      if (c == 0)									// If 0, then this is to be a new instance of this FSM, so
       {
-        c = (create_rfc822msg_context*)new create_rfc822msg_context;
-        *context = (NFE_CONTEXT)c;
-        if (!c)
+        c = (create_rfc822msg_context*)new create_rfc822msg_context;			// Create new context structure
+        *context = (NFE_CONTEXT)c;							// Set context handle so we return this instance
+        if (!c)										// Check creation of context succeeded
           *rc = NFE_MALLOCFAILED;
         else
         {
-          memset(c, 0, sizeof(create_rfc822msg_context));
-          c->type = NFE_CT_CREATE_RFC822MSG;
-          c->state = CREATE_RFC822MSG_INIT;
-          *rc = NFE_RUNNING;
+          memset(c, 0, sizeof(create_rfc822msg_context));				// Clear the context
+          c->type = NFE_CT_CREATE_RFC822MSG;						// Set the type of this context to catch caller passing it to the wrong FSM
+          c->state = CREATE_RFC822MSG_INIT;						// Set initial state of FSM
         }
       }
-      else if (c->type != NFE_CT_CREATE_RFC822MSG)
-        *rc = NFE_INVALIDCONTEXT;
+      else if (c->type != NFE_CT_CREATE_RFC822MSG)					// else, given handle was not 0, so check this context is for this FSM
+        *rc = NFE_INVALIDCONTEXT;							// if not return error code
     }
     
-    if (expired(t_slice))
+    if (expired(t_slice))								// Check we've been given a big enough time slice for at least one iteration of the FSM
       *rc = NFE_NOTENOUGHTIME;
-    do
+
+    if (*rc >= 0)									// check no error is set before entering FSM
     {
-      switch (c->state)
+      do										// Beginning of FSM loop
       {
-        case CREATE_RFC822MSG_INIT:
+        switch (c->state)
         {
-          dprintf(("", "CREATE_RFC822MSG_INIT\n"));
-          if ((header == 0) || (out_file == 0) || (mime_list == 0))
+          case CREATE_RFC822MSG_INIT:							// State to create and initialise the rfc822msg object
           {
-            c->retcode = NFE_NULLADDR;
-            c->state = CREATE_RFC822MSG_ERROR;
-            *rc = NFE_RUNNING;
-          }
-          else
-          {
-            c->retcode    = NFE_RUNNING;
-            c->header     = header;
-            c->mimeentity = (MIMEentity*)mime_list;
-            c->out_file   = out_file;
-            create_rfc822msg_init(*c);
-            if (c->retcode == NFE_COMPLETED)
-              c->retcode = NFE_RUNNING;
-          }
-          break;
-        }
-        case CREATE_RFC822MSG_WRITEOUT_INIT:
-        {
-          dprintf(("", "CREATE_RFC822MSG_WRITEOUT_INIT\n"));
-          c->file = fopen(c->out_file, "wb");
-          
-          if (c->file)
-          {
-            c->retcode = new_context(&(c->msg_writeout_context));
-            if (c->retcode == NFE_COMPLETED)
+            dprintf(("", "CREATE_RFC822MSG_INIT\n"));
+            if ((header == 0) || (out_file == 0) || (mime_list == 0))			// Check parameters are valid
             {
-              c->retcode = NFE_RUNNING;
-              c->state = CREATE_RFC822MSG_WRITEOUT;
-            }
-          }
-          else
-          {
-            c->retcode = NFE_INVALIDFILENAME;
-            c->state = CREATE_RFC822MSG_ERROR;
-            *rc = NFE_RUNNING;
-          }
-          break;
-        }
-        case CREATE_RFC822MSG_WRITEOUT:
-        {
-          dprintf(("", "CREATE_RFC822MSG_WRITEOUT\n"));
-          do
-          {
-            c->retcode = c->msg->WriteOut(c->msg_writeout_context, t_slice, c->file);
-          } while ((c->retcode == NFE_RUNNING) && (!expired(t_slice)));
-          if (c->retcode == NFE_COMPLETED)
-          {
-            fclose(c->file);
-            c->retcode = destroy_context(&(c->msg_writeout_context));
-            if (c->retcode == NFE_COMPLETED)
-              c->state = CREATE_RFC822MSG_FINISHED;
-            else
-            {
+              c->retcode = NFE_NULLADDR;
               c->state = CREATE_RFC822MSG_ERROR;
               *rc = NFE_RUNNING;
             }
+            else
+            {
+              c->retcode    = NFE_RUNNING;
+              c->header     = header;
+              c->mimeentity = (MIMEentity*)mime_list;
+              c->out_file   = out_file;
+              create_rfc822msg_init(*c);						// Create the rfc822msg object
+              if (c->retcode == NFE_COMPLETED)
+                c->retcode = NFE_RUNNING;
+            }
+            break;
           }
-          else if (c->retcode == NFE_RUNNING)
+          case CREATE_RFC822MSG_WRITEOUT_INIT:						// State to prepare for writing out the rfc822msg object to a file
           {
-            *rc = NFE_RUNNING;
-            c->state = CREATE_RFC822MSG_WRITEOUT;
+            dprintf(("", "CREATE_RFC822MSG_WRITEOUT_INIT\n"));
+            c->file = fopen(c->out_file, "wb");						// Open the file to output the message to
+            
+            if (c->file)
+            {
+              c->retcode = new_context(&(c->msg_writeout_context));			// Create a context handle for the writeout method
+              if (c->retcode == NFE_COMPLETED)
+              {
+                c->retcode = NFE_RUNNING;
+                c->state = CREATE_RFC822MSG_WRITEOUT;					// If successful, switch to the WRITEOUT state
+              }
+            }
+            else									// Else, switch to the ERROR state
+            {
+              c->retcode = NFE_INVALIDFILENAME;
+              c->state = CREATE_RFC822MSG_ERROR;
+              *rc = NFE_RUNNING;
+            }
+            break;
           }
-          else
+          case CREATE_RFC822MSG_WRITEOUT:						// State to drive the WriteOut method of the rfc822msg object
           {
-            fclose(c->file);
-            c->state = CREATE_RFC822MSG_ERROR;
-            *rc = NFE_RUNNING;
+            dprintf(("", "CREATE_RFC822MSG_WRITEOUT\n"));
+            do
+            {
+              c->retcode = c->msg->WriteOut(c->msg_writeout_context, t_slice, c->file);
+            } while ((c->retcode == NFE_RUNNING) && (!expired(t_slice)));		// Call WriteOut FSM method until completed, an error occurs or the timeslice expires
+  
+            if (c->retcode == NFE_COMPLETED)						// If writeout completed successfully, then
+            {
+              fclose(c->file);								// Close the file and destroy the context handle
+              c->retcode = destroy_context(&(c->msg_writeout_context));
+              if (c->retcode == NFE_COMPLETED)
+                c->state = CREATE_RFC822MSG_FINISHED;					// Switch to the FINISHED state
+              else
+              {
+                c->state = CREATE_RFC822MSG_ERROR;
+                *rc = NFE_RUNNING;
+              }
+            }
+            else if (c->retcode == NFE_RUNNING)						// Else, if writeout is not finished yet(still running)
+            {
+              *rc = NFE_RUNNING;							// Make sure NFE_RUNNING return code is returned
+              c->state = CREATE_RFC822MSG_WRITEOUT;					// and stay in this state (we will drop out of our FSM loop as the time slice has expired)
+            }
+            else									// Else, an error has occured, so switch to ERROR state
+            {
+              fclose(c->file);								// Close the file
+              c->state = CREATE_RFC822MSG_ERROR;
+              *rc = NFE_RUNNING;
+            }
+            break;
           }
-          break;
-        }
-        case CREATE_RFC822MSG_ERROR:
-        {
-          dprintf(("", "CREATE_RFC882MSG_ERROR\n"));
-          // clean up everything!
-          if (c->msg)
-            delete c->msg;
-          c->msg = 0;
-          *rc = c->retcode;
-          c->state = CREATE_RFC822MSG_INIT;
-          delete c;
-          c = 0;
-          break;
-        }
-        case CREATE_RFC822MSG_FINISHED:
-        {
-          dprintf(("", "CREATE_RFC822MSG_FINISHED\n"));
-          // clean up context
-          delete c->msg;
-          c->msg = 0;
-          delete c->mimeentity;
-          c->mimeentity = 0;
-          *rc = NFE_COMPLETED;
-          c->state = CREATE_RFC822MSG_INIT;
-          delete c;
-          c = 0;
-          break;
-        }
-        default:
-        {
-          dprintf(("", "DEFAULT in CREATE_RFC822MSG FSM!!!\n"));
-          *rc = NFE_INTERNALERR;
-          break;
-        }
-      } // endswitch
-    } while ((*rc == NFE_RUNNING) && (!expired(t_slice)) && (e == 0));
-  } // endif rc == 0
+          case CREATE_RFC822MSG_ERROR:							// State to clean up this FSM instance and return the error that occured
+          {
+            dprintf(("", "CREATE_RFC882MSG_ERROR\n"));
+            // clean up everything!
+            if (c->msg)									// If the rfc822msg exists, destroy it
+              delete c->msg;
+            *rc = c->retcode;								// Pass out the error code that occured
+            delete c;									// Destroy this context(instance) of the FSM
+            *context = 0;								// Set context handle that's return to 0
+            break;
+          }
+          case CREATE_RFC822MSG_FINISHED:						// clean up FSM context, terminate FSM and return
+          {
+            dprintf(("", "CREATE_RFC822MSG_FINISHED\n"));
+            delete c->msg;								// destroy the rfc822msg object as we've successfully written it out to file
+            *rc = NFE_COMPLETED;							// Set successful termination return code
+            delete c;									// Destroy this context(instance) of the FSM
+            *context = 0;								// Set context handle that's returned to 0
+            break;
+          }
+          default:									// Catch all state to trap disasters
+          {
+            dprintf(("", "DEFAULT in CREATE_RFC822MSG FSM!!!\n"));
+            *rc = NFE_INTERNALERR;							// We should never get here, unless context gets corrupted
+            break;
+          }
+        } // endswitch
+      } while ((*rc == NFE_RUNNING) && (!expired(t_slice)) && (e == 0));		// FSM keeps running until an error, it terminates or time slice expires
+    }											// endif *rc check
+  } // endif _kernel_oserror e check
   
   return e;
 }
@@ -1125,24 +1275,35 @@ extern "C" _kernel_oserror *NFE_create_RFC822_msg(NFE_CONTEXT       *context,
 /*
    FUNCTION:       create_rfc822msg_init
    DESCRIPTION:    Function to do the CREATE_RFC822MSG_INIT state of the
-   		   create_rfc822msg FSM
-   		   
-   DEPENDENCIES:   
-   DEPENDED ON BY: 
-   INPUT PARAMS:   NFE_CONTEXT		context		create_RFC822MSG_entity current process context information
-   OUTPUT PARAMS:  NFE_CONTEXT		context		create_RFC822MSG_entity current process context information
+                   create_rfc822msg FSM
+                   Creates the header objects needed in the message using the
+                   data given in the NFE_header struct(held in the context
+                   instance).  Creates the rfc822msg, adds these headers to the
+                   rfc822msg object then adds the NFE_LIST object (which is
+                   really a MIMEentity to the message to give it a body.
+                   rfc822msg then owns that MIMEentity.
+   DEPENDENCIES:   data type            create_rfc822msg_context        NFELib.c++
+   DEPENDED ON BY: function             NFE_create_RFC822_msg           NFELib.c++
+   INPUT PARAMS:   NFE_CONTEXT          context         create_RFC822MSG_entity current process context information
+   OUTPUT PARAMS:  NFE_CONTEXT          context         create_RFC822MSG_entity current process context information
    RETURN VALUE:   NONE
-   VARIABLES:      NONE
+   VARIABLES:      to                  *to_hdr
+                   from                *from_hdr
+                   XNFfaxpages         *faxpages_hdr
+                   messageid           *messageid_hdr
+                   XNFdevice           *device_hdr
+                   XNFdeviceclass      *deviceclass_hdr
+                   XNFserial           *serial_hdr
+                   XNFsoftrev          *softrev_hdr
+                   XNFfaxnum           *faxnum_hdr
+                   XNFphonenum         *phonenum_hdr
+                   Xorgainization      *organization_hdr
+                   XNFmsgclass         *msgclass_hdr
+                   XNFreturnreceiptto  *returnreceiptto_hdr
  */
 /* ************************************************************************** */
 static void create_rfc822msg_init(create_rfc822msg_context &c)
 {
-  // create header objects needed from filled in members of NFE_header struct
-  // create rfc822msg
-  // added headers to rfc822msg object
-  // rfc822msg += that MIMEentity
-  // rfc822msg.WriteOut to out_file
-  
   to                 *to_hdr              = 0;
   from               *from_hdr            = 0;
   header             *subject_hdr         = 0;
@@ -1158,242 +1319,56 @@ static void create_rfc822msg_init(create_rfc822msg_context &c)
   XNFmsgclass        *msgclass_hdr        = 0;
   XNFreturnreceiptto *returnreceiptto_hdr = 0;
   
-  c.retcode = NFE_COMPLETED;
+  c.retcode = NFE_COMPLETED;							// Default return code to successful completion
   
-  c.msg = new rfc822msg(TRUE, 0, 0, 0, TRUE);
+  c.msg = new rfc822msg(TRUE, 0, 0, 0, TRUE);					// Create the rfc822msg object, memory based and with ownership of it's components
   if (!c.msg)
     c.retcode = NFE_MALLOCFAILED;
-    
+
+  to_hdr = create_to_hdr(c);							// Create the "To" header object
   if (c.retcode == NFE_COMPLETED)
-  {
-    if (c.header->to.address)
-    {
-      to_hdr = new to(FALSE, 0, 0, 0, TRUE);
-      if (to_hdr)
-      {
-        c.retcode = to_hdr->SetAddress(c.header->to.address);
-        if (c.header->to.real_name)
-          c.retcode = to_hdr->SetRealName(c.header->to.real_name);
-      }
-      else
-        c.retcode = NFE_MALLOCFAILED;
-    }
-    else
-      c.retcode = NFE_NULLADDR;
-  }
-  
+    from_hdr = create_from_hdr(c);						// Create the "From" header object
   if (c.retcode == NFE_COMPLETED)
-  {
-    if (c.header->from.address)
-    {
-      from_hdr = new from(FALSE, 0, 0, 0, TRUE);
-      if (from_hdr)
-      {
-        c.retcode = from_hdr->SetAddress(c.header->from.address);
-        if (c.header->from.real_name)
-          c.retcode = from_hdr->SetRealName(c.header->from.real_name);
-      }
-      else
-        c.retcode = NFE_MALLOCFAILED;
-    }
-    else
-      c.retcode = NFE_NULLADDR;
-  }
-  
+    returnreceiptto_hdr = create_returnreceiptto_hdr(c);			// Create the "X-NetFax-Return-Receipt-To" header object
   if (c.retcode == NFE_COMPLETED)
-  {
-    if ((c.header->return_receipt_to.address) && ( !(c.header->netfax_msg_class & NFE_NFMC_DELIVERYREPORT) ))
-    {
-      returnreceiptto_hdr = new XNFreturnreceiptto(FALSE, 0, 0, 0, TRUE);
-      if (returnreceiptto_hdr)
-      {
-        c.retcode = returnreceiptto_hdr->SetAddress(c.header->return_receipt_to.address);
-        if (c.header->return_receipt_to.real_name)
-          c.retcode = returnreceiptto_hdr->SetRealName(c.header->return_receipt_to.real_name);
-      }
-      else
-        c.retcode = NFE_MALLOCFAILED;
-    }
-  }
-  
+    subject_hdr = create_subject_hdr(c);					// Create the "Subject" header object
   if (c.retcode == NFE_COMPLETED)
-  {
-    if (c.header->subject)
-    {
-      subject_hdr = new subject(FALSE, 0, 0, 0, TRUE);
-      if (subject_hdr)
-          c.retcode = subject_hdr->SetBody(c.header->subject);
-      else
-        c.retcode = NFE_MALLOCFAILED;
-    }
-  }
-  
+    faxpages_hdr = create_faxpages_hdr(c);					// Create the "X-NetFax-Fax-Pages" header object  
   if (c.retcode == NFE_COMPLETED)
-  {
-    if (c.header->netfax_msg_class & NFE_NFMC_FAX)	/* only create X-NetFax-Fax-Pages header if FAX data exists in message */
-    {
-      faxpages_hdr = new XNFfaxpages(FALSE, 0, 0, 0, c.header->id.msg_num_pages, c.header->id.exact_num_pages, TRUE);
-      if (!faxpages_hdr)
-        c.retcode = NFE_MALLOCFAILED;
-    }
-  }
-  
+    messageid_hdr = create_messageid_hdr(c);					// Create the "Message-ID" header object
   if (c.retcode == NFE_COMPLETED)
-  {
-    if ((c.header->id.iap_username) && (c.header->details.domain) && (c.header->details.serial_num))
-    {
-      messageid_hdr = new messageid(FALSE, 0, 0, 0, TRUE);
-      if (messageid_hdr)
-      {
-        c.retcode = messageid_hdr->SetDomain(c.header->details.domain);
-        if (c.retcode == NFE_COMPLETED)
-        {
-          if (c.header->id.last_page_num < c.header->id.first_page_num)
-            c.retcode = NFE_FAILED;
-          else
-          {
-            // get date header
-            headers *h = c.msg->GetHdrs();
-            if (h)
-            {
-              date *date_hdr = (date*)h->FindHdr(NFE_HDR_DATE);
-              if (date_hdr)
-              {
-                // get struct tm from date header
-                struct tm datetime;
-                c.retcode = date_hdr->GetDate(datetime);
-                if (c.retcode == NFE_COMPLETED)
-                {
-                  char *buf = 0;
-                  buf = new char[60+SERIAL_LEN+strlen(c.header->id.iap_username)];	// length = 10+1+10+1+10+1+4+2+2+2+2+2+1+SERIAL_LEN+2+strlen(iap_username)+2
-                  if (buf)
-                  {
-                    sprintf(buf, "%d", c.header->id.first_page_num);
-                    if (c.header->id.first_page_num < c.header->id.last_page_num)
-                      sprintf(buf+strlen(buf), "-%d", c.header->id.last_page_num);
-                    sprintf(buf+strlen(buf), ".%d.%d%02d%02d%02d%02d%02d.", c.header->id.doc_num,
-                                                                            datetime.tm_year+1900,
-                                                                            datetime.tm_mon+1,
-                                                                            datetime.tm_mday,
-                                                                            datetime.tm_hour,
-                                                                            datetime.tm_min,
-                                                                            datetime.tm_sec);
-                    int32 tmp = strlen(buf);
-                    for(int32 i=0;i<SERIAL_LEN;i++)
-                      sprintf(buf+tmp+(i*2), "%02x", c.header->details.serial_num[i]);
-                    sprintf(buf+strlen(buf), ".\"%s\"", c.header->id.iap_username);
-                
-                    // first_page_num-last_page_num.doc_num.<YYYY><MM><DD><HH><MM><SS>.serial_num."iap_username"
-                    c.retcode = messageid_hdr->SetLocalpart(buf);
-                    delete[] buf;
-                  }
-                  else
-                    c.retcode = NFE_MALLOCFAILED;
-                }
-              }
-              else
-                c.retcode = NFE_FAILED;
-            }
-            else
-              c.retcode = NFE_FAILED;
-          }
-        }
-      }
-      else
-        c.retcode = NFE_MALLOCFAILED;
-    }
-    else
-      c.retcode = NFE_NULLADDR;
-  }
-        
+    device_hdr = create_device_hdr(c);						// Create the "X-NetFax-Device" header object
   if (c.retcode == NFE_COMPLETED)
-  {
-    if (c.header->details.device)
-    {
-      device_hdr = new XNFdevice(FALSE, 0, 0, 0, c.header->details.device, TRUE);
-      if (!device_hdr)
-        c.retcode = NFE_MALLOCFAILED;
-      else
-      {
-        deviceclass_hdr = new XNFdeviceclass(FALSE, 0, 0, 0, c.header->details.device_class, TRUE);
-        if (!deviceclass_hdr)
-          c.retcode = NFE_MALLOCFAILED;
-      }
-    }
-    else
-      c.retcode = NFE_NULLADDR;
-  }
-  
+    deviceclass_hdr = create_deviceclass_hdr(c);				// Create the "X-NetFax-Device-Class" header object
   if (c.retcode == NFE_COMPLETED)
-  {
-    if (c.header->details.serial_num)
-    {
-      serial_hdr = new XNFserial(FALSE, 0, 0, 0, c.header->details.serial_num, TRUE);
-      if (!serial_hdr)
-        c.retcode = NFE_MALLOCFAILED;
-    }
-    else
-      c.retcode = NFE_NULLADDR;
-  }
-  
+    serial_hdr = create_serial_hdr(c);						// Create the "X-NetFax-Serial" header object
   if (c.retcode == NFE_COMPLETED)
-  {
-    softrev_hdr = new XNFsoftrev(FALSE, 0, 0, 0, c.header->details.software_rev_major, c.header->details.software_rev_minor, TRUE);
-    if (!softrev_hdr)
-      c.retcode = NFE_MALLOCFAILED;
-  }
-  
+    softrev_hdr = create_softrev_hdr(c);					// Create the "X-NetFax-Software-Rev" header object
   if (c.retcode == NFE_COMPLETED)
-  {
-    if (c.header->config.fax_num)
-    {
-      faxnum_hdr = new XNFfaxnum(FALSE, 0, 0, 0, c.header->config.fax_num, TRUE);
-      if (!faxnum_hdr)
-        c.retcode = NFE_MALLOCFAILED;
-    }
-  }
-  
+    faxnum_hdr = create_faxnum_hdr(c);						// Create the "X-NetFax-Fax-Number" header object
   if (c.retcode == NFE_COMPLETED)
-  {
-    if (c.header->config.phone_num)
-    {
-      phonenum_hdr = new XNFphonenum(FALSE, 0, 0, 0, c.header->config.phone_num, TRUE);
-      if (!phonenum_hdr)
-        c.retcode = NFE_MALLOCFAILED;
-    }
-  }
-  
+    phonenum_hdr = create_phonenum_hdr(c);					// Create the "X-NetFax-Phone-Number" header object    
   if (c.retcode == NFE_COMPLETED)
-  {
-    if (c.header->config.organisation)
-    {
-      organization_hdr = new Xorganization(FALSE, 0, 0, 0, c.header->config.organisation, TRUE);
-      if (!organization_hdr)
-        c.retcode = NFE_MALLOCFAILED;
-    }
-  }
-  
+    organization_hdr = create_organization_hdr(c);				// Create the "X-Organization" header object
   if (c.retcode == NFE_COMPLETED)
-  {
-    msgclass_hdr = new XNFmsgclass(FALSE, 0, 0, 0, c.header->netfax_msg_class, TRUE);
-    if (!msgclass_hdr)
-      c.retcode = NFE_MALLOCFAILED;
-  }
+    msgclass_hdr = create_msgclass_hdr(c);					// Create the "X-NetFax-Message-Class" header object
   
-  
-  if ( (to_hdr == 0) ||
+  if ( (to_hdr == 0) ||								// Check that all the headers that should have been created, were
        (from_hdr == 0) ||
-       ((faxpages_hdr == 0) && (c.header->netfax_msg_class & NFE_NFMC_FAX)) ||
+       ((faxpages_hdr == 0) && (c.header->netfax_msg_class & NFE_NFMC_FAX)) ||	// FaxPages header only created if msgclass indicates presence of fax data
        (messageid_hdr == 0) ||
        (device_hdr == 0) ||
        (deviceclass_hdr == 0) ||
        (serial_hdr == 0) ||
        (softrev_hdr == 0) ||
        (msgclass_hdr == 0) ||
-       ((returnreceiptto_hdr == 0) && (c.header->return_receipt_to.address) && (!(c.header->netfax_msg_class & NFE_NFMC_DELIVERYREPORT))) ||
-       (c.retcode != NFE_COMPLETED))
-  {
-    // delete all the headers and msg objects
+       ((returnreceiptto_hdr == 0) &&						// Return-Receipt-To header only created if an email address given in
+        (c.header->return_receipt_to.address) &&				// the NFE_header struct for return-receipt-to and the message is
+        (!(c.header->netfax_msg_class & NFE_NFMC_DELIVERYREPORT))		// not a delivery report (to stop looping of delivery reports)
+       ) ||
+       (c.retcode != NFE_COMPLETED)						// OR did an error occur, then
+     )
+  {										// delete all the headers and msg objects
     if (to_hdr)			delete to_hdr;
     if (from_hdr)		delete from_hdr;
     if (subject_hdr)		delete subject_hdr;
@@ -1409,31 +1384,30 @@ static void create_rfc822msg_init(create_rfc822msg_context &c)
     if (msgclass_hdr)		delete msgclass_hdr;
     if (returnreceiptto_hdr)	delete returnreceiptto_hdr;
     
-    if (c.retcode == NFE_COMPLETED)
-      c.retcode = NFE_FAILED;
+    if (c.retcode == NFE_COMPLETED)						// If no error was set, but a header wasn't created that should have been
+      c.retcode = NFE_FAILED;							// Set error return code (Need a better return code here!)
   }
-  else
+  else										// Else, headers all created OKAY, so add headers and MIMEentity to message
   {
-    // add headers to message
-    // add mimeentity to message
-    headers *h = c.msg->GetHdrs();
+    headers *h = c.msg->GetHdrs();						// Get the headers object of the rfc822msg
     if (h)
     {
-      c.retcode = c.msg->SetTo(*to_hdr);
-      if (c.retcode == NFE_COMPLETED)
+      c.retcode = c.msg->SetTo(*to_hdr);					// Change the default "To" header to this one
+      if (c.retcode == NFE_COMPLETED)						// If copied by rfc822msg okay, destroy this one
       {
         delete to_hdr;
         to_hdr = 0;
       }
-      if (c.retcode == NFE_COMPLETED)	c.retcode = c.msg->SetFrom(*from_hdr);
-      if (c.retcode == NFE_COMPLETED)
+      if (c.retcode == NFE_COMPLETED)	c.retcode = c.msg->SetFrom(*from_hdr);	// Change the default "From" header to this one
+      if (c.retcode == NFE_COMPLETED)						// If copied by rfc822msg okay, destroy this one
       {
         delete from_hdr;
         from_hdr = 0;
       }
-      if (c.retcode == NFE_COMPLETED)	c.retcode = h->AddHdr(*subject_hdr);
-      if (c.retcode == NFE_COMPLETED)	subject_hdr = 0;
-      if ((c.retcode == NFE_COMPLETED) && (faxpages_hdr))	c.retcode = h->AddHdr(*faxpages_hdr);
+      if (c.retcode == NFE_COMPLETED)	c.retcode = h->AddHdr(*subject_hdr);	// Add subject header
+      if (c.retcode == NFE_COMPLETED)	subject_hdr = 0;			// If added, set ptr to 0 as rfc822msg now owns the subject object
+      if ((c.retcode == NFE_COMPLETED) && (faxpages_hdr))
+        c.retcode = h->AddHdr(*faxpages_hdr);
       if (c.retcode == NFE_COMPLETED)	faxpages_hdr = 0;
       if (c.retcode == NFE_COMPLETED)	c.retcode = h->AddHdr(*messageid_hdr);
       if (c.retcode == NFE_COMPLETED)	messageid_hdr = 0;
@@ -1445,46 +1419,45 @@ static void create_rfc822msg_init(create_rfc822msg_context &c)
       if (c.retcode == NFE_COMPLETED)	serial_hdr = 0;
       if (c.retcode == NFE_COMPLETED)	c.retcode = h->AddHdr(*softrev_hdr);
       if (c.retcode == NFE_COMPLETED)	softrev_hdr = 0;
-      if (c.retcode == NFE_COMPLETED)
+      if (c.retcode == NFE_COMPLETED)						// Do the "X-NetFax-Message-Class" header,
       {
         NFE_CT ct;
-        c.retcode = c.mimeentity->GetMajorType(ct);
+        c.retcode = c.mimeentity->GetMajorType(ct);				// Get the type of the MIMEentity
         if (c.retcode == NFE_COMPLETED)
         {
-          if (ct != NFE_CT_MULTIPART)				// if c.mimeentity is not a multipart then 
+          if (ct != NFE_CT_MULTIPART)						// if c.mimeentity is not a multipart then 
           {
-            headers *h = c.mimeentity->GetHdrs();			// get headers of mime entity
-            header *mc = h->FindHdr(NFE_HDR_X_NF_MESSAGE_CLASS);	// look for msgclass header in entity
-            if (mc)							// if found it
+            headers *h = c.mimeentity->GetHdrs();				// get headers of the mime entity
+            header *mc = h->FindHdr(NFE_HDR_X_NF_MESSAGE_CLASS);		// look for a XNFmsgclass header in entity
+            if (mc)								// if we've found one then
             {
-              delete msgclass_hdr;					// delete our one so we don't add it to the message twice
+              delete msgclass_hdr;						// delete our one so we don't add it to the message twice
               msgclass_hdr = 0;
             }
-            else							// else, the entity didn't have one so 
-              c.retcode = h->AddHdr(*msgclass_hdr);			// add it to the message
+            else								// else, the entity didn't have one so 
+              c.retcode = h->AddHdr(*msgclass_hdr);				// add our XNFmsgclass object to the message
           }
-          else							// else this is a multipart, so
+          else									// else this is a multipart, so
           {
-            int32 num = ((MIMEmultip*)c.mimeentity)->GetNumEntities();	// get number of entities in multipart
-            if (num != 1)						// if more than one, then this will stay a multipart message, so add the msgclass header
-              c.retcode = h->AddHdr(*msgclass_hdr);			// otherwise, we'll pick up the msgclass from the one entity in the multipart and the
-          }								// multipart is reduced to the single entity see **** below
+            int32 num = ((MIMEmultip*)c.mimeentity)->GetNumEntities();		// get number of entities in multipart
+            if (num != 1)							// if more than one, then this will stay a multipart message, so add the msgclass header
+              c.retcode = h->AddHdr(*msgclass_hdr);				// otherwise, we'll pick up the msgclass from the one entity in the multipart and the
+          }									// multipart is reduced to the single entity see **** below
         }
       }
-      if (c.retcode == NFE_COMPLETED)	msgclass_hdr = 0;
+      if (c.retcode == NFE_COMPLETED)	msgclass_hdr = 0;			// If all that went okay, then we don't own the msgclass hdr
       
-      if ((c.retcode == NFE_COMPLETED) && (faxnum_hdr))	c.retcode = h->AddHdr(*faxnum_hdr);
-      if ((c.retcode == NFE_COMPLETED) && (faxnum_hdr))	faxnum_hdr = 0;
-      if ((c.retcode == NFE_COMPLETED) && (phonenum_hdr))	c.retcode = h->AddHdr(*phonenum_hdr);
-      if ((c.retcode == NFE_COMPLETED) && (phonenum_hdr))	phonenum_hdr = 0;
-      if ((c.retcode == NFE_COMPLETED) && (organization_hdr))	c.retcode = h->AddHdr(*organization_hdr);
-      if ((c.retcode == NFE_COMPLETED) && (organization_hdr))	organization_hdr = 0;
+      if ((c.retcode == NFE_COMPLETED) && (faxnum_hdr))			c.retcode = h->AddHdr(*faxnum_hdr);
+      if ((c.retcode == NFE_COMPLETED) && (faxnum_hdr))			faxnum_hdr = 0;
+      if ((c.retcode == NFE_COMPLETED) && (phonenum_hdr))		c.retcode = h->AddHdr(*phonenum_hdr);
+      if ((c.retcode == NFE_COMPLETED) && (phonenum_hdr))		phonenum_hdr = 0;
+      if ((c.retcode == NFE_COMPLETED) && (organization_hdr))		c.retcode = h->AddHdr(*organization_hdr);
+      if ((c.retcode == NFE_COMPLETED) && (organization_hdr))		organization_hdr = 0;
       if ((c.retcode == NFE_COMPLETED) && (returnreceiptto_hdr))	c.retcode = h->AddHdr(*returnreceiptto_hdr);
       if ((c.retcode == NFE_COMPLETED) && (returnreceiptto_hdr))	returnreceiptto_hdr = 0;
       
-      if (c.retcode != NFE_COMPLETED)
-      {
-        // delete all the headers and msg objects
+      if (c.retcode != NFE_COMPLETED)						// If adding one of the headers we got an error then
+      {										// Clean up the objects, destroy all the headers
         if (to_hdr)			delete to_hdr;
         if (from_hdr)			delete from_hdr;
         if (subject_hdr)		delete subject_hdr;
@@ -1500,36 +1473,38 @@ static void create_rfc822msg_init(create_rfc822msg_context &c)
         if (msgclass_hdr)		delete msgclass_hdr;
         if (returnreceiptto_hdr)	delete returnreceiptto_hdr;
       }
-      else
+      else									// Else, no error so go and add the MIMEentity to the message
       {
         NFE_CT ct;
-        c.retcode = c.mimeentity->GetMajorType(ct);
+        c.retcode = c.mimeentity->GetMajorType(ct);				// Get the type of the MIMEentity
         if (c.retcode == NFE_COMPLETED)
         {
-          if (ct == NFE_CT_MULTIPART)				// if c.mimeentity is not a multipart then ****
+          if (ct == NFE_CT_MULTIPART)						// if c.mimeentity is a multipart then
           {
-            int32 num = ((MIMEmultip*)c.mimeentity)->GetNumEntities();
-            if (num == 1)
+            int32 num = ((MIMEmultip*)c.mimeentity)->GetNumEntities();		// Get the number entities in the multipart
+            if (num == 1)							// If only one, then don't use multipart, send as single entity
             {
-              MIMEentity *e = ((MIMEmultip*)c.mimeentity)->GetEntity(0);
+              MIMEentity *e = ((MIMEmultip*)c.mimeentity)->GetEntity(0);	// Get that single entity from the multipart
               if (e)
-                *(c.msg) += *e;
+                *(c.msg) += *e;							// Add it into the message
             }
-            else
-              *(c.msg) += *(MIMEentity*)(c.mimeentity);
+            else								// Else, there was more than one entity, so
+              *(c.msg) += *(MIMEentity*)(c.mimeentity);				// Add the multipart to the message
           }
-          else
-            *(c.msg) += *(MIMEentity*)(c.mimeentity);
+          else									// Else, the MIMEentity wasn't a multipart
+            *(c.msg) += *(MIMEentity*)(c.mimeentity);				// So, just add it to the message
         }
         else
-          *(c.msg) += *(MIMEentity*)(c.mimeentity);	// add MIMEentity (mime_list) to msg
-        // check += above worked (change += operator in rfc822msg to set a private data member(parsed?) and add a method to check this data member
-        // this will indicate whether the += operation worked or not!
+          *(c.msg) += *(MIMEentity*)(c.mimeentity);				// add MIMEentity (mime_list) to msg (surely as GetMajorType has failed we shouldn't do this
+          									// too risky to change atm.  Need to look at this later
+        									// check += above worked (change += operator in rfc822msg to set a private data member(parsed?)
+        									// and add a method to check this data member this will indicate whether the += operation worked
+        									// or not!
         c.retcode = NFE_RUNNING;
       }
     }
-    else
-      c.retcode = NFE_FAILED;
+    else									// Else, we failed to get the headers of the message, so return an error
+      c.retcode = NFE_FAILED;							// Need better return code here
   }
   
   if (c.retcode != NFE_RUNNING)
@@ -1541,14 +1516,530 @@ static void create_rfc822msg_init(create_rfc822msg_context &c)
 
 /* ************************************************************************** */
 /*
+   FUNCTION:       create_to_hdr
+   DESCRIPTION:    Function to create the to header given the information
+                   in the NFE_header struct within the context instance.
+   DEPENDENCIES:   data type    create_rfc822msg_context NFELib.c++
+                   data type    to                       to.h
+   DEPENDED ON BY: function     create_rfc822msg_init    NFELib.c++
+   INPUT PARAMS:   create_rfc822msg_context&   c         context instance
+   OUTPUT PARAMS:  NONE
+   RETURN VALUE:   to*                                   The header object
+   VARIABLES:      to*          to_hdr                   The header object
+*/
+/* ************************************************************************** */
+static to* create_to_hdr(create_rfc822msg_context &c)
+{
+  to *to_hdr = 0;
+  
+  if (c.header->to.address)
+  {
+    to_hdr = new to(FALSE, 0, 0, 0, TRUE);
+    if (to_hdr)
+    {
+      c.retcode = to_hdr->SetAddress(c.header->to.address);
+      if (c.header->to.real_name)
+        c.retcode = to_hdr->SetRealName(c.header->to.real_name);
+    }
+    else
+      c.retcode = NFE_MALLOCFAILED;
+  }
+  else
+    c.retcode = NFE_NULLADDR;
+    
+  return to_hdr;
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       create_from_hdr
+   DESCRIPTION:    Function to create the from header given the information
+                   in the NFE_header struct within the context instance.
+   DEPENDENCIES:   data type    create_rfc822msg_context NFELib.c++
+                   data type    from                     from.h
+   DEPENDED ON BY: function     create_rfc822msg_init
+   INPUT PARAMS:   create_rfc822msg_context&   c         context instance
+   OUTPUT PARAMS:  NONE
+   RETURN VALUE:   from*                                 The header object
+   VARIABLES:      from*        from_hdr                 The header object
+*/
+/* ************************************************************************** */
+static from* create_from_hdr(create_rfc822msg_context &c)
+{
+  from *from_hdr = 0;
+  
+  if (c.header->from.address)
+  {
+    from_hdr = new from(FALSE, 0, 0, 0, TRUE);
+    if (from_hdr)
+    {
+      c.retcode = from_hdr->SetAddress(c.header->from.address);
+      if (c.header->from.real_name)
+        c.retcode = from_hdr->SetRealName(c.header->from.real_name);
+    }
+    else
+      c.retcode = NFE_MALLOCFAILED;
+  }
+  else
+    c.retcode = NFE_NULLADDR;
+    
+  return from_hdr;
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       create_returnreceiptto_hdr
+   DESCRIPTION:    Function to create the XNFreturnreceiptto header given the
+                   information in the NFE_header struct within the context
+                   instance.
+   DEPENDENCIES:   data type                   create_rfc822msg_context NFELib.c++
+                   data type                   XNFreturnreceiptto       XNFrtncpt.h
+   DEPENDED ON BY: function                    create_rfc822msg_init
+   INPUT PARAMS:   create_rfc822msg_context&   c                        context instance
+   OUTPUT PARAMS:  NONE
+   RETURN VALUE:   XNFreturnreceiptto*                                  The header object
+   VARIABLES:      XNFreturnreceiptto*         returnreceiptto_hdr      The header object
+*/
+/* ************************************************************************** */
+static XNFreturnreceiptto* create_returnreceiptto_hdr(create_rfc822msg_context &c)
+{
+  XNFreturnreceiptto *returnreceiptto_hdr = 0;
+
+  if ((c.header->return_receipt_to.address) && ( !(c.header->netfax_msg_class & NFE_NFMC_DELIVERYREPORT) ))
+  {
+    returnreceiptto_hdr = new XNFreturnreceiptto(FALSE, 0, 0, 0, TRUE);
+    if (returnreceiptto_hdr)
+    {
+      c.retcode = returnreceiptto_hdr->SetAddress(c.header->return_receipt_to.address);
+      if (c.header->return_receipt_to.real_name)
+        c.retcode = returnreceiptto_hdr->SetRealName(c.header->return_receipt_to.real_name);
+    }
+    else
+      c.retcode = NFE_MALLOCFAILED;
+  }
+  
+  return returnreceiptto_hdr;
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       create_subject_hdr
+   DESCRIPTION:    Function to create the subject header given the
+                   information in the NFE_header struct within the context
+                   instance.
+   DEPENDENCIES:   data type    create_rfc822msg_context NFELib.c++
+                   data type    subject                  subject.h
+   DEPENDED ON BY: function     create_rfc822msg_init
+   INPUT PARAMS:   create_rfc822msg_context&   c         context instance
+   OUTPUT PARAMS:  NONE
+   RETURN VALUE:   subject*                              The header object
+   VARIABLES:      subject*     subject_hdr              The header object
+*/
+/* ************************************************************************** */
+static subject* create_subject_hdr(create_rfc822msg_context &c)
+{
+  subject *subject_hdr = 0;
+  
+  if (c.header->subject)
+  {
+    subject_hdr = new subject(FALSE, 0, 0, 0, TRUE);
+    if (subject_hdr)
+        c.retcode = subject_hdr->SetBody(c.header->subject);
+    else
+      c.retcode = NFE_MALLOCFAILED;
+  }
+  
+  return subject_hdr;
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       create_faxpages_hdr
+   DESCRIPTION:    Function to create the XNFfaxpages header given the
+                   information in the NFE_header struct within the context
+                   instance.
+   DEPENDENCIES:   data type    create_rfc822msg_context NFELib.c++
+                   data type    XNFfaxpages              XNFfaxpage.h
+   DEPENDED ON BY: function     create_rfc822msg_init
+   INPUT PARAMS:   create_rfc822msg_context&   c         context instance
+   OUTPUT PARAMS:  NONE
+   RETURN VALUE:   XNFfaxpages*                          The header object
+   VARIABLES:      XNFfaxpages* faxpages_hdr             The header object
+*/
+/* ************************************************************************** */
+static XNFfaxpages* create_faxpages_hdr(create_rfc822msg_context &c)
+{
+  XNFfaxpages *faxpages_hdr = 0;
+  
+  if (c.header->netfax_msg_class & NFE_NFMC_FAX)				// only create X-NetFax-Fax-Pages header if FAX data exists in message
+  {
+    faxpages_hdr = new XNFfaxpages(FALSE,
+                                   0,
+                                   0,
+                                   0,
+                                   c.header->id.msg_num_pages,
+                                   c.header->id.exact_num_pages,
+                                   TRUE);
+    if (!faxpages_hdr)
+      c.retcode = NFE_MALLOCFAILED;
+  }
+  
+  return faxpages_hdr;
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       create_messageid_hdr
+   DESCRIPTION:    Function to create the messageid header given the
+                   information in the NFE_header struct within the context
+                   instance.
+   DEPENDENCIES:   data type    create_rfc822msg_context NFELib.c++
+                   data type    messageid                messageid.h
+   DEPENDED ON BY: function     create_rfc822msg_init
+   INPUT PARAMS:   create_rfc822msg_context&   c         context instance
+   OUTPUT PARAMS:  NONE
+   RETURN VALUE:   messageid*                            The header object
+   VARIABLES:      messageid* messageid_hdr              The header object
+*/
+/* ************************************************************************** */
+static messageid* create_messageid_hdr(create_rfc822msg_context &c)
+{
+  messageid *messageid_hdr = 0;
+  
+  if ((c.header->id.iap_username) && (c.header->details.domain) && (c.header->details.serial_num))
+  {
+    messageid_hdr = new messageid(FALSE, 0, 0, 0, TRUE);
+    if (messageid_hdr)
+    {
+      c.retcode = messageid_hdr->SetDomain(c.header->details.domain);
+      if (c.retcode == NFE_COMPLETED)
+      {
+        if (c.header->id.last_page_num < c.header->id.first_page_num)
+          c.retcode = NFE_FAILED;
+        else
+        {
+          // get date header
+          headers *h = c.msg->GetHdrs();
+          if (h)
+          {
+            date *date_hdr = (date*)h->FindHdr(NFE_HDR_DATE);
+            if (date_hdr)
+            {
+              // get struct tm from date header
+              struct tm datetime;
+              c.retcode = date_hdr->GetDate(datetime);
+              if (c.retcode == NFE_COMPLETED)
+              {
+                char *buf = 0;
+                buf = new char[60+SERIAL_LEN+strlen(c.header->id.iap_username)];	// length = 10+1+10+1+10+1+4+2+2+2+2+2+1+SERIAL_LEN+2+strlen(iap_username)+2
+                if (buf)
+                {
+                  sprintf(buf, "%d", c.header->id.first_page_num);
+                  if (c.header->id.first_page_num < c.header->id.last_page_num)
+                    sprintf(buf+strlen(buf), "-%d", c.header->id.last_page_num);
+                  sprintf(buf+strlen(buf), ".%d.%d%02d%02d%02d%02d%02d.", c.header->id.doc_num,
+                                                                          datetime.tm_year+1900,
+                                                                          datetime.tm_mon+1,
+                                                                          datetime.tm_mday,
+                                                                          datetime.tm_hour,
+                                                                          datetime.tm_min,
+                                                                          datetime.tm_sec);
+                  int32 tmp = strlen(buf);
+                  for(int32 i=SERIAL_LEN-1;i>=0;i--)
+                    sprintf(buf+tmp+((SERIAL_LEN-1-i)*2), "%02x", c.header->details.serial_num[i]);
+                  sprintf(buf+strlen(buf), ".\"%s\"", c.header->id.iap_username);
+              
+                  // first_page_num-last_page_num.doc_num.<YYYY><MM><DD><HH><MM><SS>.serial_num."iap_username"
+                  c.retcode = messageid_hdr->SetLocalpart(buf);
+                  delete[] buf;
+                }
+                else
+                  c.retcode = NFE_MALLOCFAILED;
+              }
+            }
+            else
+              c.retcode = NFE_FAILED;
+          }
+          else
+            c.retcode = NFE_FAILED;
+        }
+      }
+    }
+    else
+      c.retcode = NFE_MALLOCFAILED;
+  }
+  else
+    c.retcode = NFE_NULLADDR;
+  
+  return messageid_hdr;
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       create_device_hdr
+   DESCRIPTION:    Function to create the XNFdevice header given the
+                   information in the NFE_header struct within the context
+                   instance.
+   DEPENDENCIES:   data type    create_rfc822msg_context NFELib.c++
+                   data type    XNFdevice                XNFdevice.h
+   DEPENDED ON BY: function     create_rfc822msg_init
+   INPUT PARAMS:   create_rfc822msg_context&   c         context instance
+   OUTPUT PARAMS:  NONE
+   RETURN VALUE:   XNFdevice*                            The header object
+   VARIABLES:      XNFdevice*   device_hdr              The header object
+*/
+/* ************************************************************************** */
+static XNFdevice* create_device_hdr(create_rfc822msg_context &c)
+{
+  XNFdevice *device_hdr = 0;
+
+  if (c.header->details.device)
+  {
+    device_hdr = new XNFdevice(FALSE, 0, 0, 0, c.header->details.device, TRUE);
+    if (!device_hdr)
+      c.retcode = NFE_MALLOCFAILED;
+  }
+  else
+    c.retcode = NFE_NULLADDR;
+  
+  return device_hdr;
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       create_deviceclass_hdr
+   DESCRIPTION:    Function to create the XNFdeviceclass header given the
+                   information in the NFE_header struct within the context
+                   instance.
+   DEPENDENCIES:   data type    create_rfc822msg_context NFELib.c++
+                   data type    XNFdeviceclass           XNFdevicec.h
+   DEPENDED ON BY: function     create_rfc822msg_init
+   INPUT PARAMS:   create_rfc822msg_context&   c         context instance
+   OUTPUT PARAMS:  NONE
+   RETURN VALUE:   XNFdeviceclass*                       The header object
+   VARIABLES:      XNFdeviceclass* deviceclass_hdr       The header object
+*/
+/* ************************************************************************** */
+static XNFdeviceclass* create_deviceclass_hdr(create_rfc822msg_context &c)
+{
+  XNFdeviceclass *deviceclass_hdr = 0;
+
+  if (c.header->details.device)
+  {
+    deviceclass_hdr = new XNFdeviceclass(FALSE, 0, 0, 0, c.header->details.device_class, TRUE);
+    if (!deviceclass_hdr)
+      c.retcode = NFE_MALLOCFAILED;
+  }
+  else
+    c.retcode = NFE_NULLADDR;
+  
+  return deviceclass_hdr;
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       create_serial_hdr
+   DESCRIPTION:    Function to create the XNFserial header given the
+                   information in the NFE_header struct within the context
+                   instance.
+   DEPENDENCIES:   data type    create_rfc822msg_context NFELib.c++
+                   data type    XNFserial                XNFserial.h
+   DEPENDED ON BY: function     create_rfc822msg_init
+   INPUT PARAMS:   create_rfc822msg_context&   c         context instance
+   OUTPUT PARAMS:  NONE
+   RETURN VALUE:   XNFserial*                            The header object
+   VARIABLES:      XNFserial*   serial_hdr               The header object
+*/
+/* ************************************************************************** */
+static XNFserial* create_serial_hdr(create_rfc822msg_context &c)
+{
+  XNFserial *serial_hdr = 0;
+  
+  if (c.header->details.serial_num)
+  {
+    serial_hdr = new XNFserial(FALSE, 0, 0, 0, c.header->details.serial_num, TRUE);
+    if (!serial_hdr)
+      c.retcode = NFE_MALLOCFAILED;
+  }
+  else
+    c.retcode = NFE_NULLADDR;
+  
+  return serial_hdr;
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       create_softrev_hdr
+   DESCRIPTION:    Function to create the XNFsoftrev header given the
+                   information in the NFE_header struct within the context
+                   instance.
+   DEPENDENCIES:   data type    create_rfc822msg_context NFELib.c++
+                   data type    XNFsoftrev               XNFsoftrev.h
+   DEPENDED ON BY: function     create_rfc822msg_init
+   INPUT PARAMS:   create_rfc822msg_context&   c         context instance
+   OUTPUT PARAMS:  NONE
+   RETURN VALUE:   XNFsoftrev*                           The header object
+   VARIABLES:      XNFsoftrev*  softrev_hdr              The header object
+*/
+/* ************************************************************************** */
+static XNFsoftrev* create_softrev_hdr(create_rfc822msg_context &c)
+{
+  XNFsoftrev *softrev_hdr = 0;
+  
+  softrev_hdr = new XNFsoftrev(FALSE,
+                               0,
+                               0,
+                               0,
+                               c.header->details.software_rev_major,
+                               c.header->details.software_rev_minor,
+                               TRUE);
+  if (!softrev_hdr)
+    c.retcode = NFE_MALLOCFAILED;
+  
+  return softrev_hdr;
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       create_faxnum_hdr
+   DESCRIPTION:    Function to create the XNFfaxnum header given the
+                   information in the NFE_header struct within the context
+                   instance.
+   DEPENDENCIES:   data type    create_rfc822msg_context NFELib.c++
+                   data type    XNFfaxnum                XNFfaxnum.h
+   DEPENDED ON BY: function     create_rfc822msg_init
+   INPUT PARAMS:   create_rfc822msg_context&   c         context instance
+   OUTPUT PARAMS:  NONE
+   RETURN VALUE:   XNFfaxnum*                            The header object
+   VARIABLES:      XNFfaxnum*   faxnum_hdr               The header object
+*/
+/* ************************************************************************** */
+static XNFfaxnum* create_faxnum_hdr(create_rfc822msg_context &c)
+{
+  XNFfaxnum *faxnum_hdr = 0;
+  
+  if (c.header->config.fax_num)
+  {
+    faxnum_hdr = new XNFfaxnum(FALSE, 0, 0, 0, c.header->config.fax_num, TRUE);
+    if (!faxnum_hdr)
+      c.retcode = NFE_MALLOCFAILED;
+  }
+
+  return faxnum_hdr;
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       create_phonenum_hdr
+   DESCRIPTION:    Function to create the messageid header given the
+                   information in the NFE_header struct within the context
+                   instance.
+   DEPENDENCIES:   data type    create_rfc822msg_context NFELib.c++
+                   data type    XNFphonenum              XNFphoneno.h
+   DEPENDED ON BY: function     create_rfc822msg_init
+   INPUT PARAMS:   create_rfc822msg_context&   c         context instance
+   OUTPUT PARAMS:  NONE
+   RETURN VALUE:   XNFphonenum*                          The header object
+   VARIABLES:      XNFphonenum*   phonenum_hdr           The header object
+*/
+/* ************************************************************************** */
+static XNFphonenum* create_phonenum_hdr(create_rfc822msg_context &c)
+{
+  XNFphonenum *phonenum_hdr = 0;
+  
+  if (c.header->config.phone_num)
+  {
+    phonenum_hdr = new XNFphonenum(FALSE, 0, 0, 0, c.header->config.phone_num, TRUE);
+    if (!phonenum_hdr)
+      c.retcode = NFE_MALLOCFAILED;
+  }
+  
+  return phonenum_hdr;
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       create_organization_hdr
+   DESCRIPTION:    Function to create the Xorganization header given the
+                   information in the NFE_header struct within the context
+                   instance.
+   DEPENDENCIES:   data type    create_rfc822msg_context NFELib.c++
+                   data type    Xorganization            Xorganiz.h
+   DEPENDED ON BY: function     create_rfc822msg_init
+   INPUT PARAMS:   create_rfc822msg_context&   c         context instance
+   OUTPUT PARAMS:  NONE
+   RETURN VALUE:   Xorganization*                        The header object
+   VARIABLES:      Xorganization* organization_hdr       The header object
+*/
+/* ************************************************************************** */
+static Xorganization* create_organization_hdr(create_rfc822msg_context &c)
+{
+  Xorganization *organization_hdr = 0;
+  
+  if (c.header->config.organisation)
+  {
+    organization_hdr = new Xorganization(FALSE, 0, 0, 0, c.header->config.organisation, TRUE);
+    if (!organization_hdr)
+      c.retcode = NFE_MALLOCFAILED;
+  }
+  
+  return organization_hdr;
+}
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       create_msgclass_hdr
+   DESCRIPTION:    Function to create the XNFmsgclass header given the
+                   information in the NFE_header struct within the context
+                   instance.
+   DEPENDENCIES:   data type    create_rfc822msg_context NFELib.c++
+                   data type    XNFmsgclass              XNFmsgclas.h
+   DEPENDED ON BY: function     create_rfc822msg_init
+   INPUT PARAMS:   create_rfc822msg_context&   c         context instance
+   OUTPUT PARAMS:  NONE
+   RETURN VALUE:   XNFmsgclass*                          The header object
+   VARIABLES:      XNFmsgclass* msgclass_hdr             The header object
+*/
+/* ************************************************************************** */
+static XNFmsgclass* create_msgclass_hdr(create_rfc822msg_context &c)
+{
+  XNFmsgclass *msgclass_hdr = 0;
+  
+  if (c.header->netfax_msg_class != NFE_NFMC_NONE)
+  {
+    msgclass_hdr = new XNFmsgclass(FALSE, 0, 0, 0, c.header->netfax_msg_class, TRUE);
+    if (!msgclass_hdr)
+      c.retcode = NFE_MALLOCFAILED;
+  }
+  
+  return msgclass_hdr;
+}
+
+
+/* ************************************************************************** */
+/*
    FUNCTION:       NFE_LIST_create
    DESCRIPTION:    Function to create a new NFE_LIST object.  Returns non-NULL 
-   		   if successful, else returns NULL (failure)
-   DEPENDENCIES:   
+                   if successful, else returns NULL (failure)
+   DEPENDENCIES:   data type    NFE_LIST        NFELib.h
+                   data type    MIMEmultip      MIMEmultip.h
    DEPENDED ON BY: !Daytona Control application
    INPUT PARAMS:   NONE
    OUTPUT PARAMS:  NONE
-   RETURN VALUE:   NFE_LIST			the new list objec
+   RETURN VALUE:   NFE_LIST                     the new list object
  */
 /* ************************************************************************** */
 extern "C" NFE_LIST NFE_LIST_create(void)
@@ -1561,12 +2052,13 @@ extern "C" NFE_LIST NFE_LIST_create(void)
 /*
    FUNCTION:       NFE_LIST_destroy
    DESCRIPTION:    Function to destroy a NFE_LIST object.  Returns NULL 
-   		   if successful, else returns the NFE_LIST
-   DEPENDENCIES:   
+                   if successful, else returns the NFE_LIST
+   DEPENDENCIES:   data type    NFE_LIST        NFELib.h
+                   data type    entity          entity.h
    DEPENDED ON BY: !Daytona Control application
-   INPUT PARAMS:   NFE_LIST	list		the list to destroy
+   INPUT PARAMS:   NFE_LIST     list            the list to destroy
    OUTPUT PARAMS:  NONE
-   RETURN VALUE:   NFE_LIST			the list destroyed list
+   RETURN VALUE:   NFE_LIST                     the destroyed list
  */
 /* ************************************************************************** */
 extern "C" NFE_LIST NFE_LIST_destroy(NFE_LIST list)
@@ -1586,17 +2078,22 @@ extern "C" NFE_LIST NFE_LIST_destroy(NFE_LIST list)
 /*
    FUNCTION:       NFE_LIST_add
    DESCRIPTION:    Function to add a NFE_MIME object to a NFE_LIST list.
-   DEPENDENCIES:   
+   DEPENDENCIES:   data type    NFE_LIST        NFELib.h
+                   data type    MIMEentity      MIMEentity.h
+                   data type    MIMEmultip      MIMEmultip.h
    DEPENDED ON BY: !Daytona Control application
-   INPUT PARAMS:   NFE_MIME		object		MIME object to add to the list
+   INPUT PARAMS:   NFE_MIME     object          MIME object to add to the list
+                   NFE_LIST     list            the list to add to
    OUTPUT PARAMS:  NONE
-   RETURN VALUE:   NFE_rcode				NFE_COMPLETED = success,
-   							-ve = failure
-   VARIABLES:	   NFE_rcode		rc		The return code
+   RETURN VALUE:   NFE_rcode                    NFE_COMPLETED = success,
+                                                -ve = failure
+   VARIABLES:      NFE_rcode    rc              The return code
+                   MIMEmultip  *mp              Typecast of the list
+                   MIMEentity  *o               Typecast of the object
  */
 /* ************************************************************************** */
 extern "C" NFE_rcode NFE_LIST_add(NFE_MIME object,
-                       NFE_LIST list)
+                                  NFE_LIST list)
 {
   NFE_rcode rc = NFE_COMPLETED;
   
@@ -1618,66 +2115,70 @@ extern "C" NFE_rcode NFE_LIST_add(NFE_MIME object,
 /*
    FUNCTION:       NFE_LIST_getnum
    DESCRIPTION:    Function to get number of items in a NFE_LIST.
-   		   An NFE_LIST can either have a rfc822msg or MIMEentity
-   		   "hidden" behind it.  The MIMEentity may be a MIMEmultip.
-   		   So, need to find out the object type, then find out how
-   		   many "items" it has.  A plain rfc822msg (non-mime) has
-   		   1 (1message body).  A rfc822msg with a MIMEentity has
-   		   1 (1message body).  A rfc822msg with a MIMEmultip as
-   		   the MIMEentity has the number of entities in it.
-   DEPENDENCIES:   
+                   An NFE_LIST can either have a rfc822msg or MIMEentity
+                   "hidden" behind it.  The MIMEentity may be a MIMEmultip.
+                   So, need to find out the object type, then find out how
+                   many "items" it has.  A plain rfc822msg (non-mime) has
+                   1 (1message body).  A rfc822msg with a MIMEentity has
+                   1 (1message body).  A rfc822msg with a MIMEmultip as
+                   the MIMEentity has the number of entities in it.
+   DEPENDENCIES:   data type            entity          entity.h
+                   data type            NFE_rcode       ELib.h
+                   data type            MIMEmultip      MIMEmultip.h
+                   data type            MIMEentity      entity.h
+                   data type            rfc822msg       rfc822msg.h
    DEPENDED ON BY: !Daytona Control application
-   INPUT PARAMS:   NFE_MIME		object		MIME object to add to the list
-   OUTPUT PARAMS:  NONE
-   RETURN VALUE:   NFE_rcode				NFE_COMPLETED = success,
-   							-ve = failure
-   VARIABLES:	   NFE_rcode		rc		The return code
+   INPUT PARAMS:   NFE_LIST             list            The list
+   OUTPUT PARAMS:  int32               *num             The number of items in the list
+   RETURN VALUE:   NFE_rcode                            NFE_COMPLETED = success,
+                                                        -ve = failure
+   VARIABLES:      NFE_rcode            rc              The return code
+                   entity              *ent             Typecast of the list
  */
 /* ************************************************************************** */
 extern "C" NFE_rcode NFE_LIST_getnum(NFE_LIST  list,
-                          int32    *num)
+                                     int32    *num)
 {
   NFE_rcode rc = NFE_COMPLETED;
   entity     *ent = (entity*)list;
   
-  if ((num == 0) || (list == 0))
+  if ((num == 0) || (list == 0))						// Check parameters are valid
     rc = NFE_NULLADDR;
   else
   {
-    MIMEentity *e = (MIMEentity*)ent;
-    NFE_ENTITY_TYPE type = ent->GetType();
-    *num = 0;
+    MIMEentity      *e    = (MIMEentity*)ent;					// The list is (at least) a MIMEentity object
+    NFE_ENTITY_TYPE  type = ent->GetType();					// So, get it's real type
+    *num                  = 0;							// Initialise number to 0
     
-    switch (type)
+    switch (type)								// case type of entity, do
     {
-      case NFE_ENTITY_RFC822MSG:
+      case NFE_ENTITY_RFC822MSG:						// entity(the list) is an RFC822msg
       {
         rfc822msg *msg = (rfc822msg*)ent;
-        e = msg->GetMIMEentity();
-        if (!e)
+        e              = msg->GetMIMEentity();					// Does it hold a MIMEentity?
+        if (!e)									// If not then set number to 1 item in list (the plain rfc822 message body)
         {
-          *num = 1;	// this is a plain rfc822 message, no mime so 1 item, the message body
-          break;	// break out of the switch statement
-        }
-        // NOTE, no break we want to fall throught to NFE_ENTITY_MIME below
+          *num = 1;								// this is a plain rfc822 message, no mime so 1 item, the message body
+          break;								// break out of the switch statement
+        }									// NOTE, no break we want to fall through to NFE_ENTITY_MIME below if there was a MIMEentity
       }
-      case NFE_ENTITY_MIME:
+      case NFE_ENTITY_MIME:							// entity (the list or entity from the RFC822msg) is a MIMEentity of some type
       {
         NFE_CT ct;
-        rc = e->GetMajorType(ct);
+        rc = e->GetMajorType(ct);						// Get the type of this MIMEentity
         if (rc == NFE_COMPLETED)
         {
           MIMEmultip *mp = (MIMEmultip*)e;
-          if (ct == NFE_CT_MULTIPART)
+          if (ct == NFE_CT_MULTIPART)						// If it's a multipart, report back the number of entities in it
             *num = mp->GetNumEntities();
-          else
+          else									// Otherwise, return 1
             *num = 1;
         }
         else
           rc = NFE_FAILED;
         break;
       }
-      case NFE_ENTITY_UNKNOWN:
+      case NFE_ENTITY_UNKNOWN:							// if we get here, something has gone horribly wrong!
       default:
       {
         rc = NFE_INTERNALERR;
@@ -1693,69 +2194,76 @@ extern "C" NFE_rcode NFE_LIST_getnum(NFE_LIST  list,
 /*
    FUNCTION:       NFE_LIST_get
    DESCRIPTION:    Function to get the requested "item" at the given position
-   		   in a NFE_LIST.  As a NFE_LIST can be a rfc822msg object,
-   		   a MIMEentity or some sort or a MIMEmultip, we have to check
-   		   which one of these the NFE_LIST is, what is in it and then
-   		   return the item requested.  If the NFE_LIST is a PLAIN
-   		   rfc822msg(eg. no MIME entity in it) or a MIMEentity other
-   		   than a MIMEmultip, then only position 0 can be asked for
-   		   as these only hold one item of data.  However, if the
-   		   item is a MIMEmultip or the rfc822msg holds a MIMEmultip,
-   		   then other position numbers are valid.
-   DEPENDENCIES:   
+                   in a NFE_LIST.  As a NFE_LIST can be a rfc822msg object,
+                   a MIMEentity or some sort or a MIMEmultip, we have to check
+                   which one of these the NFE_LIST is, what is in it and then
+                   return the item requested.  If the NFE_LIST is a PLAIN
+                   rfc822msg(eg. no MIME entity in it) or a MIMEentity other
+                   than a MIMEmultip, then only position 0 can be asked for
+                   as these only hold one item of data.  However, if the
+                   item is a MIMEmultip or the rfc822msg holds a MIMEmultip,
+                   then other position numbers are valid.
+   DEPENDENCIES:   data type            entity          entity.h
+                   data type            NFE_rcode       ELib.h
+                   data type            MIMEmultip      MIMEmultip.h
+                   data type            MIMEentity      entity.h
+                   data type            rfc822msg       rfc822msg.h
+                   data type            NFE_LIST        NFELib.h
+                   data type            NFE_MIME        NFELib.h
    DEPENDED ON BY: !Daytona Control application
-   INPUT PARAMS:   NFE_MIME		object		MIME object to add to the list
+   INPUT PARAMS:   NFE_LIST             list            The list
+                   int32                pos             The item to get from the list
    OUTPUT PARAMS:  NONE
-   RETURN VALUE:   NFE_rcode				NFE_COMPLETED = success,
-   							-ve = failure
-   VARIABLES:	   NFE_rcode		rc		The return code
+   RETURN VALUE:   NFE_rcode                            NFE_COMPLETED = success,
+                                                        -ve = failure
+   VARIABLES:      NFE_rcode            rc              The return code
+                   entity              *entity          Typecast of the list
  */
 /* ************************************************************************** */
 extern "C" NFE_MIME NFE_LIST_get(int32 pos, NFE_LIST list)
 {
-  NFE_rcode rc = NFE_COMPLETED;
-  entity     *ent = (entity*)list;
+  NFE_rcode  rc  = NFE_COMPLETED;
+  entity    *ent = (entity*)list;
   
-  if (list == 0)
+  if (list == 0)								// Check parameter is valid
     rc = NFE_NULLADDR;
   else
   {
-    MIMEentity *e = (MIMEentity*)ent;
-    NFE_ENTITY_TYPE type = ent->GetType();
+    MIMEentity      *e    = (MIMEentity*)ent;					// The list is (at least) a MIMEentity object
+    NFE_ENTITY_TYPE  type = ent->GetType();					// So, get it's real type
     
-    switch (type)
+    switch (type)								// case type of entity, do
     {
-      case NFE_ENTITY_RFC822MSG:
+      case NFE_ENTITY_RFC822MSG:						// entity(the list) is an RFC822msg
       {
         rfc822msg *msg = (rfc822msg*)ent;
-        e = msg->GetMIMEentity();
-        if (!e)
+        e = msg->GetMIMEentity();						// Does it hold a MIMEentity?
+        if (!e)									// If not then 
         {
-          if (pos > 0)	// plain rfc822 message only has one item so if they've asked for an iemt other than 0 return NULL
+          if (pos > 0)								// plain rfc822 message only has one item so if they've asked for an iemt other than 0 return NULL
             ent = 0;
-          break;	// break out of the switch statement
-        }        
-        // NOTE, no break we want to fall throught to NFE_ENTITY_MIME below
+          break;								// break out of the switch statement
+        }									// NOTE, no break we want to fall through to NFE_ENTITY_MIME below if there was a MIMEentity
       }
-      case NFE_ENTITY_MIME:
+      case NFE_ENTITY_MIME:							// entity (the list or entity from the RFC822msg) is a MIMEentity of some type
       {
         NFE_CT ct;
-        rc = e->GetMajorType(ct);
+        rc = e->GetMajorType(ct);						// Get the type of this MIMEentity
         if (rc == NFE_COMPLETED)
         {
           MIMEmultip *mp = (MIMEmultip*)e;
-          if (ct == NFE_CT_MULTIPART)
+          if (ct == NFE_CT_MULTIPART)						// If it's a multipart, Get the entity at the position requested
             ent = mp->GetEntity(pos);
-          else if (pos == 0)
-            ent = e;
-          else
-            ent = 0;
+          else if (pos == 0)							// Else, caller can only request the 0th element of the list as the list is a single entity
+            ent = e;								// return it
+          else									// Else, caller requested oter than the 0th element and this is a single entity, so
+            ent = 0;								// return NULL (Error)
         }
         else
           ent = 0;
         break;
       }
-      case NFE_ENTITY_UNKNOWN:
+      case NFE_ENTITY_UNKNOWN:							// if we get here, something has gone horribly wrong!
       default:
       {
         ent = 0;
@@ -1772,32 +2280,39 @@ extern "C" NFE_MIME NFE_LIST_get(int32 pos, NFE_LIST list)
 /*
    FUNCTION:       NFE_decode_RFC822_hdr
    DESCRIPTION:    Function to decode the information from an RFC822 message
-   		   header.  The input is a filename of a file which holds either
-   		   a complete RFC822 message, or just the headers of such a
-   		   message.  The function will decode the header and fill in
-   		   the given NFE_header structure with the details.
-   		   The function performs the process in small chunks deteremined
-   		   by the t_slice parameter.  The process will continue until it
-   		   either completes (rc = NFE_COMPLETED) or the t_slice period
-   		   is up (rc = NFE_RUNNING) or an error occurs (rc = -ve value).
-   		   If an OS errors occurs then the function return code is NON
-   		   NULL and points to a RISC OS error block.
-   DEPENDENCIES:   data type		NFE_CONTEXT	NFElib.h
-   		   data type		clock_t		<time.h>
-   		   data type		NFE_header	NFElib.h
-   		   data type		NFE_rcode	NFElib.h
+                   header.  The input is a filename of a file which holds either
+                   a complete RFC822 message, or just the headers of such a
+                   message.  The function will decode the header and fill in
+                   the given NFE_header structure with the details.
+                   The function performs the process in small chunks deteremined
+                   by the t_slice parameter.  The process will continue until it
+                   either completes (rc = NFE_COMPLETED) or the t_slice period
+                   is up (rc = NFE_RUNNING) or an error occurs (rc = -ve value,
+                   OR rc = +ve value >= 2 - NON-FATAL error).
+                   If an OS errors occurs then the function return code is NON
+                   NULL and points to a RISC OS error block.
+                   If in the returned NFE_header the return_receipt_to.address
+                   is not NULL, the sender of this message requests a receipt
+                   (delivery report) to be sent back to this email address.
+                   If the address is not null, then the return_receipt_to.real_name
+                   may also be set to the sender's "real name"
+   DEPENDENCIES:   data type            NFE_CONTEXT     NFElib.h
+                   data type            clock_t         <time.h>
+                   data type            NFE_header      NFElib.h
+                   data type            NFE_rcode       NFElib.h
    DEPENDED ON BY: !Daytona Control application
-   INPUT PARAMS:   NFE_CONTEXT		context		decode_RFC822_hdr current process context information
-   		   clock_t		t_slice		clock tick time to return by
-   		   const char *const	in_file		File that holds the RFC822 headers/RFC822 message
-   		   uint32		length		length of the headers in the in_file in characters.  Length is
-   		   					the length to the end of the last header
-   		   NFE_header*		header		RFC822 Message header information.  Must point to a NFE_header object
-   		   NFE_rcode *const	rc		NetFax Email Library return code.  Must point to a NFE_rcode
-   OUTPUT PARAMS:  NFE_header*		header		Header details filled in
-		   NFE_rcode *const	rc		NetFax Email Library return code
-   RETURN VALUE:   _kernel_oserror*			OS error
- */
+   INPUT PARAMS:   NFE_CONTEXT          context         decode_RFC822_hdr current process context information
+                   clock_t              t_slice         clock tick time to return by
+                   const char *const    in_file         File that holds the RFC822 headers/RFC822 message
+                   uint32               length          length of the headers in the in_file in characters.  Length is
+                                                        the length to the end of the last header
+                   NFE_header*          header          RFC822 Message header information.  Must point to a NFE_header object
+                   NFE_rcode *const     rc              NetFax Email Library return code.  Must point to a NFE_rcode
+   OUTPUT PARAMS:  NFE_header*          header          Header details filled in
+                   NFE_rcode *const     rc              NetFax Email Library return code
+   RETURN VALUE:   _kernel_oserror*                     OS error
+   VARIABLES:      _kernel_oserror*     e               OS error to return
+*/
 /* ************************************************************************** */
 extern "C" _kernel_oserror *NFE_decode_RFC822_hdr(NFE_CONTEXT       *context,
                                                   const clock_t      t_slice,
@@ -1809,300 +2324,26 @@ extern "C" _kernel_oserror *NFE_decode_RFC822_hdr(NFE_CONTEXT       *context,
 {
   _kernel_oserror       *e = 0;
 
-  if (expired(t_slice))
-    *rc = NFE_NOTENOUGHTIME;
-  else
+  e = check_rc(rc);								// Make sure we can return the return code to the caller
+  if (!e)
   {
-    if (rc == 0)
-    {
-      oserror.errnum = 0;
-      sprintf(oserror.errmess, "NFE_rcode ptr cannot be NULL");
-      e = &oserror;
-    }
-    else if ((hdr == 0) || (context == 0) || (in_file == 0))
+    if (expired(t_slice))							// Check we've got enough time
+      *rc = NFE_NOTENOUGHTIME;
+    else if ((hdr == 0) || (context == 0) || (in_file == 0))			// Check parameters are valid
       *rc = NFE_NULLADDR;
     else if (length == 0)
       *rc = NFE_FAILED;
     else
     {
-      entity    ent(file, (char*)in_file, 0, length, NFE_ENTITY_UNKNOWN, FALSE);
-      NFE_rcode retcode = NFE_COMPLETED;
-      headers *h = 0;
+      entity     ent(file, (char*)in_file, 0, length, NFE_ENTITY_UNKNOWN, FALSE);	// Create the Entity and give it the file to parse
+      NFE_rcode  retcode = NFE_COMPLETED;
       
-      retcode = ent.ParseData(*context, t_slice);
-      if (retcode >= NFE_COMPLETED)
-      {
-        retcode = NFE_COMPLETED;
-        h = ent.GetHdrs();
-      }
-        
-      if ((retcode == NFE_COMPLETED) && (h))
-      {
-        headers hdrs(*h);
-        
-        to                 *to_hdr            = (to*)hdrs.FindHdr(NFE_HDR_TO);
-        from               *from_hdr          = (from*)hdrs.FindHdr(NFE_HDR_FROM);
-        date               *date_hdr          = (date*)hdrs.FindHdr(NFE_HDR_DATE);
-        subject            *subject_hdr       = (subject*)hdrs.FindHdr(NFE_HDR_SUBJECT);
-        XNFfaxpages        *faxpages_hdr      = (XNFfaxpages*)hdrs.FindHdr(NFE_HDR_X_NF_FAX_PAGES);
-        messageid          *messageid_hdr     = (messageid*)hdrs.FindHdr(NFE_HDR_MESSAGE_ID);
-        XNFdevice          *device_hdr        = (XNFdevice*)hdrs.FindHdr(NFE_HDR_X_NF_DEVICE);
-        XNFdeviceclass     *deviceclass_hdr   = (XNFdeviceclass*)hdrs.FindHdr(NFE_HDR_X_NF_DEVICE_CLASS);
-        XNFserial          *serial_hdr        = (XNFserial*)hdrs.FindHdr(NFE_HDR_X_NF_SERIAL);
-        XNFsoftrev         *softrev_hdr       = (XNFsoftrev*)hdrs.FindHdr(NFE_HDR_X_NF_SOFTWARE_REV);
-        XNFfaxnum          *faxnum_hdr        = (XNFfaxnum*)hdrs.FindHdr(NFE_HDR_X_NF_FAX_NUMBER);
-        XNFphonenum        *phonenum_hdr      = (XNFphonenum*)hdrs.FindHdr(NFE_HDR_X_NF_PHONE_NUMBER);
-        Xorganization      *organization_hdr  = (Xorganization*)hdrs.FindHdr(NFE_HDR_X_ORGANIZATION);
-        XNFmsgclass        *msgclass_hdr      = (XNFmsgclass*)hdrs.FindHdr(NFE_HDR_X_NF_MESSAGE_CLASS);
-        header             *returnpath_hdr    = hdrs.FindHdr("Return-Path");
-        XNFreturnreceiptto *returnreceiptto_hdr = (XNFreturnreceiptto*)hdrs.FindHdr(NFE_HDR_X_NF_RETURN_RECEIPT_TO);
-        
-        if ((!to_hdr) || (!from_hdr) || (!date_hdr))
-          hdr->msg_class = NFE_MC_INVALID;
-        else
-        {
-          uint32 len = 0;
-
-          if (msgclass_hdr)
-            hdr->msg_class = NFE_MC_NETFAX_DATA;
-          else if (returnpath_hdr)
-            hdr->msg_class = NFE_MC_UNKNOWN;
-          else
-            hdr->msg_class = NFE_MC_SMTP_DELIVERY_ERROR;
-
-          retcode = to_hdr->GetBodyLen(len);
-          if (retcode == NFE_COMPLETED)
-          {
-            len += 1;
-            if (hdr->to.address = malloc(len+1))
-              retcode = to_hdr->GetAddress(hdr->to.address, len);
-            if (retcode == NFE_COMPLETED)
-            {
-              retcode = to_hdr->GetBodyLen(len);
-              if (retcode == NFE_COMPLETED)
-              {
-                len+=1;
-                if (hdr->to.real_name = malloc(len+1))
-                {
-                  retcode = to_hdr->GetRealName(hdr->to.real_name, len);
-                  if (retcode == NFE_NODATAPRESENT)
-                  {
-                    free(hdr->to.real_name);
-                    hdr->to.real_name = 0;
-                    retcode = NFE_COMPLETED;
-                  }
-                }
-              }
-            }
-          }
-          
-          retcode = returnreceiptto_hdr->GetBodyLen(len);
-          if (retcode == NFE_COMPLETED)
-          {
-            len += 1;
-            if (hdr->return_receipt_to.address = malloc(len+1))
-              retcode = returnreceiptto_hdr->GetAddress(hdr->return_receipt_to.address, len);
-            if (retcode == NFE_COMPLETED)
-            {
-              retcode = returnreceiptto_hdr->GetBodyLen(len);
-              if (retcode == NFE_COMPLETED)
-              {
-                len+=1;
-                if (hdr->return_receipt_to.real_name = malloc(len+1))
-                {
-                  retcode = returnreceiptto_hdr->GetRealName(hdr->return_receipt_to.real_name, len);
-                  if (retcode == NFE_NODATAPRESENT)
-                  {
-                    free(hdr->return_receipt_to.real_name);
-                    hdr->return_receipt_to.real_name = 0;
-                    retcode = NFE_COMPLETED;
-                  }
-                }
-              }
-            }
-          }
-          
-          retcode = from_hdr->GetBodyLen(len);
-          if (retcode == NFE_COMPLETED)
-          {
-            len += 1;
-            if (hdr->from.address = malloc(len+1))
-              retcode = from_hdr->GetAddress(hdr->from.address, len);
-            if (retcode == NFE_COMPLETED)
-            {
-              retcode = from_hdr->GetBodyLen(len);
-              if (retcode == NFE_COMPLETED)
-              {
-                len+=1;
-                if (hdr->from.real_name = malloc(len+1))
-                  retcode = from_hdr->GetRealName(hdr->from.real_name, len);
-                  if (retcode == NFE_NODATAPRESENT)
-                  {
-                    free(hdr->from.real_name);
-                    hdr->from.real_name = 0;
-                    retcode = NFE_COMPLETED;
-                  }
-              }
-            }
-          }
-          
-          hdr->date = date_hdr->GetDate();
-          retcode = date_hdr->GetBodyLen(len);
-          if (retcode == NFE_COMPLETED)
-          {
-            len += 1;
-            if (hdr->date_hdr = malloc(len+1))
-              retcode = date_hdr->GetUnfoldedNoCommentsBody(hdr->date_hdr, len);
-          }
-          
-          if (faxpages_hdr)
-          {
-            hdr->id.msg_num_pages = faxpages_hdr->GetNumber();
-            hdr->id.exact_num_pages = faxpages_hdr->Exact();
-          }
-          
-          if ((messageid_hdr) && (hdr->msg_class == NFE_MC_NETFAX_DATA) && ((NFE_NF_msg_class)msgclass_hdr->Get() & NFE_NFMC_FAX))	/* if Message-ID header exists and the email is NETFAX DATA compliant and the NETFAX DATA has FAX DATA, then extract the data from the Message-ID header */
-          {
-            retcode = messageid_hdr->GetBodyLen(len);
-            len +=1;
-            char *buf = malloc(len+1);
-            if (buf)
-            {
-              retcode = messageid_hdr->GetLocalpart(buf, len);
-              if (retcode == NFE_COMPLETED)
-              {
-                char *ptr = buf;
-                uint32 size = len;
-                BOOL error = FALSE;
-                
-                error = consume_number(ptr, size, 1, 10, hdr->id.first_page_num);
-                if (!error)
-                {
-                  if (*ptr == '-')
-                  {
-                    error = consume_char(ptr, size, '-');
-                    if (!error)	error = consume_number(ptr, size, 1, 10, hdr->id.last_page_num);
-                  }
-                  else
-                    hdr->id.last_page_num = hdr->id.first_page_num;
-                }
-                if (!error)	error = consume_char(ptr, size, '.');
-                if (!error)	error = consume_number(ptr, size, 1, 10, hdr->id.doc_num);
-                if (!error)	error = consume_char(ptr, size, '.');
-                if (error)	retcode = NFE_FAILED;
-              }
-              delete[]buf;
-            }
-          }
-          else
-          {
-            /* else, fake up the message details */
-            hdr->id.first_page_num = 1;
-            hdr->id.last_page_num = 1;
-            hdr->id.doc_num = 1;
-          }
-          
-          if (subject_hdr)
-          {
-            if (retcode == NFE_COMPLETED)
-              retcode = subject_hdr->GetBodyLen(len);
-            if (retcode == NFE_COMPLETED)
-            {
-              len += 1;
-              if (hdr->subject = malloc(len+1))
-                retcode = subject_hdr->GetUnfoldedNoCommentsBody(hdr->subject, len);
-            }
-          }
-          
-          if (device_hdr)
-          {
-            if (retcode == NFE_COMPLETED)
-              retcode = device_hdr->GetBodyLen(len);
-            if (retcode == NFE_COMPLETED)
-            {
-              len += 1;
-              if (hdr->details.device = malloc(len+1))
-                retcode = device_hdr->GetUnfoldedNoCommentsBody(hdr->details.device, len);
-            }
-          }
-          
-          if (deviceclass_hdr)
-            hdr->details.device_class = deviceclass_hdr->Get();
-          
-          if (serial_hdr)
-          {
-            if (retcode == NFE_COMPLETED)
-            {
-              if (retcode == NFE_COMPLETED)
-              {
-                len = SERIAL_LEN;
-                retcode = serial_hdr->Get(hdr->details.serial_num, len);
-              }
-            }
-          }
-          
-          if (softrev_hdr)
-          {
-            if (retcode == NFE_COMPLETED)
-            {
-              retcode = softrev_hdr->GetMajor(hdr->details.software_rev_major);
-              if (retcode == NFE_COMPLETED)
-                retcode = softrev_hdr->GetMinor(hdr->details.software_rev_minor);
-            }
-          }
-          
-          if (faxnum_hdr)
-          {
-            if (retcode == NFE_COMPLETED)
-            {
-              retcode = faxnum_hdr->GetBodyLen(len);
-              if (retcode == NFE_COMPLETED)
-              {
-                len +=1;
-                if (hdr->config.fax_num = malloc(len+1))
-                  retcode = faxnum_hdr->GetUnfoldedNoCommentsBody(hdr->config.fax_num, len);
-              }
-            }
-          }
-          
-          if (phonenum_hdr)
-          {
-            if (retcode == NFE_COMPLETED)
-            {
-              retcode = phonenum_hdr->GetBodyLen(len);
-              if (retcode == NFE_COMPLETED)
-              {
-                len +=1;
-                if (hdr->config.phone_num = malloc(len+1))
-                  retcode = phonenum_hdr->GetUnfoldedNoCommentsBody(hdr->config.phone_num, len);
-              }
-            }
-          }
-          
-          if (organization_hdr)
-          {
-            if (retcode == NFE_COMPLETED)
-            {
-              retcode = organization_hdr->GetBodyLen(len);
-              if (retcode == NFE_COMPLETED)
-              {
-                len +=1;
-                if (hdr->config.organisation = malloc(len+1))
-                  retcode = organization_hdr->GetUnfoldedNoCommentsBody(hdr->config.organisation, len);
-              }
-            }
-          }
-          
-          if (retcode == NFE_COMPLETED)
-            hdr->netfax_msg_class = (NFE_NF_msg_class)msgclass_hdr->Get();
-        }
-      }
-      if (h)
-        *rc = retcode;
-      else if (retcode >= 0)
-        *rc = NFE_INTERNALERR;
-      else
-        *rc = retcode;
+      retcode = ent.ParseData(*context, t_slice);				// Instruct the entity to parse the data it's been given
+      if (retcode >= NFE_COMPLETED)						// If parsing was successful (or at least non-fatal), then
+        retcode = NFE_COMPLETED;						// Set to successful completition
+      if (retcode == NFE_COMPLETED)
+        retcode = extract_NFE_header(ent, hdr);					// Extract the NFE_header details from the entity
+      *rc = retcode;								// Pass back to caller the return code
     }
   }
   
@@ -2110,35 +2351,309 @@ extern "C" _kernel_oserror *NFE_decode_RFC822_hdr(NFE_CONTEXT       *context,
 }
 
 
+static NFE_rcode extract_NFE_header(entity &ent, NFE_header *hdr)
+{
+  NFE_rcode  retcode = NFE_COMPLETED;
+  headers   *h       = 0;
+  
+  h = ent.GetHdrs();								// Get the headers of the entity
+  if (h)
+  {
+    headers hdrs(*h);								// Don't remember why we make a copy of the headers, there seems to be no point
+    										// However, too risky at this stage to change this, not enough time to test change
+    to                 *to_hdr              = (to*)hdrs.FindHdr(NFE_HDR_TO);	// Get the "To" header, then all the other header's we're interested in
+    from               *from_hdr            = (from*)hdrs.FindHdr(NFE_HDR_FROM);
+    date               *date_hdr            = (date*)hdrs.FindHdr(NFE_HDR_DATE);
+    subject            *subject_hdr         = (subject*)hdrs.FindHdr(NFE_HDR_SUBJECT);
+    XNFfaxpages        *faxpages_hdr        = (XNFfaxpages*)hdrs.FindHdr(NFE_HDR_X_NF_FAX_PAGES);
+    messageid          *messageid_hdr       = (messageid*)hdrs.FindHdr(NFE_HDR_MESSAGE_ID);
+    XNFdevice          *device_hdr          = (XNFdevice*)hdrs.FindHdr(NFE_HDR_X_NF_DEVICE);
+    XNFdeviceclass     *deviceclass_hdr     = (XNFdeviceclass*)hdrs.FindHdr(NFE_HDR_X_NF_DEVICE_CLASS);
+    XNFserial          *serial_hdr          = (XNFserial*)hdrs.FindHdr(NFE_HDR_X_NF_SERIAL);
+    XNFsoftrev         *softrev_hdr         = (XNFsoftrev*)hdrs.FindHdr(NFE_HDR_X_NF_SOFTWARE_REV);
+    XNFfaxnum          *faxnum_hdr          = (XNFfaxnum*)hdrs.FindHdr(NFE_HDR_X_NF_FAX_NUMBER);
+    XNFphonenum        *phonenum_hdr        = (XNFphonenum*)hdrs.FindHdr(NFE_HDR_X_NF_PHONE_NUMBER);
+    Xorganization      *organization_hdr    = (Xorganization*)hdrs.FindHdr(NFE_HDR_X_ORGANIZATION);
+    XNFmsgclass        *msgclass_hdr        = (XNFmsgclass*)hdrs.FindHdr(NFE_HDR_X_NF_MESSAGE_CLASS);
+    header             *returnpath_hdr      = hdrs.FindHdr("Return-Path");
+    XNFreturnreceiptto *returnreceiptto_hdr = (XNFreturnreceiptto*)hdrs.FindHdr(NFE_HDR_X_NF_RETURN_RECEIPT_TO);
+    
+    if ((!to_hdr) || (!from_hdr) || (!date_hdr))				// If there is no source, destination or date header, this is invalid RFC822
+      hdr->msg_class = NFE_MC_INVALID;						// ATM, we need a To & From.  Need to change this to any valid source & destination headers
+    else
+    {
+      if (msgclass_hdr)
+        hdr->msg_class = NFE_MC_NETFAX_DATA;
+      else if (returnpath_hdr)
+        hdr->msg_class = NFE_MC_UNKNOWN;
+      else
+        hdr->msg_class = NFE_MC_SMTP_DELIVERY_ERROR;
+      retcode = extract_NFE_header_NFE_address(to_hdr, hdr->to);		// Extract the "To" details into the "to" NFE_address in NFE_header
+      retcode = extract_NFE_header_NFE_address(returnreceiptto_hdr,
+                                               hdr->return_receipt_to);		// Extract the "X-NetFax-Return-Receipt-To" details into the NFE_header
+      retcode = extract_NFE_header_NFE_address(from_hdr, hdr->from);		// Extract the "From" details into the "from" NFE_address in NFE_header
+      retcode = extract_NFE_header_date(date_hdr, hdr);				// Extract the "Date" details into the NFE_header
+      retcode = extract_NFE_header_faxpages(faxpages_hdr, hdr);			// Extract the "X-NetFax-Fax-Pages" details into the NFE_header
+      retcode = extract_NFE_header_messageid(messageid_hdr, msgclass_hdr, hdr);	// Extract the "Message-ID" details into the NFE_header
+      retcode = extract_NFE_header_plain(subject_hdr, hdr->subject);		// Extract the "Subject" details into the NFE_header
+      retcode = extract_NFE_header_plain(device_hdr, hdr->details.device);	// Extract the "X-NetFax-Device" details into the NFE_header
+      if (deviceclass_hdr)
+        hdr->details.device_class = deviceclass_hdr->Get();			// Extract the "X-NetFax-Device-Class" value into the NFE_header
+      retcode = extract_NFE_header_serial(serial_hdr, hdr);			// Extract the "X-NetFax-Serial" details into the NFE_header
+      retcode = extract_NFE_header_softrev(softrev_hdr, hdr);			// Extract the "X-NetFax-Software-Rev" details into the NFE_header
+      retcode = extract_NFE_header_faxnum(faxnum_hdr, hdr->config.fax_num);	// Extract the "X-NetFax-Fax-Number" details into the NFE_header
+      retcode = extract_NFE_header_faxnum(phonenum_hdr, hdr->config.phone_num);	// Extract the "X-NetFax-Phone-Number" details into the NFE_header (XNFphonenum is child of XNFfaxnum)
+      retcode = extract_NFE_header_plain(organization_hdr,
+                                         hdr->config.organisation);		// Extract the "X-Organization" details into the NFE_header
+      if (retcode == NFE_COMPLETED)
+        hdr->netfax_msg_class = (NFE_NF_msg_class)msgclass_hdr->Get();		// Extract the "X-NetFax-Message-Class" details into the NFE_header
+    }
+  }
+  else										// if we didn't get the headers
+    retcode = NFE_INTERNALERR;							// return INTERNALERR, this should never happen!
+
+  return retcode;
+}
+
+
+static NFE_rcode extract_NFE_header_NFE_address(from *the_hdr, NFE_address& addr)// From header as it is the base class address header
+{
+  NFE_rcode retcode = NFE_COMPLETED;
+  uint32    len     = 0;
+  
+  retcode = the_hdr->GetBodyLen(len);						// Get the length of the To header contents
+  if (retcode == NFE_COMPLETED)							// If okay, create space for the address and Get it into the NFE_address
+  {
+    len += 1;
+    if (addr.address = malloc(len+1))
+      retcode = the_hdr->GetAddress(addr.address, len);
+  }
+  if (retcode == NFE_COMPLETED)							// If okay Get the "real name" of the address
+    retcode = the_hdr->GetBodyLen(len);
+  if (retcode == NFE_COMPLETED)
+  {
+    len+=1;
+    if (addr.real_name = malloc(len+1))
+    {
+      retcode = the_hdr->GetRealName(addr.real_name, len);
+      if (retcode == NFE_NODATAPRESENT)						// If the real name doesn't exist free the buffer created for it
+      {
+        free(addr.real_name);
+        addr.real_name = 0;
+        retcode = NFE_COMPLETED;						// Clear the error code as it's valid not to have a RealName
+      }
+    }
+  }
+  
+  return retcode;
+}
+
+  
+static NFE_rcode extract_NFE_header_date(date *date_hdr, NFE_header *hdr)
+{
+  NFE_rcode retcode = NFE_COMPLETED;
+  uint32    len     = 0;
+  
+  hdr->date = date_hdr->GetDate();
+  retcode   = date_hdr->GetBodyLen(len);
+  if (retcode == NFE_COMPLETED)
+  {
+    len += 1;
+    if (hdr->date_hdr = malloc(len+1))
+      retcode = date_hdr->GetUnfoldedNoCommentsBody(hdr->date_hdr, len);
+  }
+    
+  return retcode;
+}
+
+
+static NFE_rcode extract_NFE_header_faxpages(XNFfaxpages *faxpages_hdr, NFE_header *hdr)
+{
+  NFE_rcode retcode = NFE_COMPLETED;
+  uint32    len     = 0;
+  
+  if (faxpages_hdr)
+  {
+    hdr->id.msg_num_pages   = faxpages_hdr->GetNumber();
+    hdr->id.exact_num_pages = faxpages_hdr->Exact();
+  }
+
+  return retcode;
+}
+
+
+static NFE_rcode extract_NFE_header_messageid(messageid *messageid_hdr, XNFmsgclass *msgclass_hdr, NFE_header *hdr)
+{
+  NFE_rcode retcode = NFE_COMPLETED;
+  uint32    len     = 0;
+  
+  if ((messageid_hdr) &&
+      (hdr->msg_class == NFE_MC_NETFAX_DATA) &&
+      ((NFE_NF_msg_class)msgclass_hdr->Get() & NFE_NFMC_FAX))			// if Message-ID header exists and the email is NETFAX DATA compliant and the NETFAX DATA has FAX DATA, then extract the data from the Message-ID header
+  {
+    retcode = messageid_hdr->GetBodyLen(len);
+    len +=1;
+    char *buf = malloc(len+1);
+    if (buf)
+    {
+      retcode = messageid_hdr->GetLocalpart(buf, len);
+      if (retcode == NFE_COMPLETED)
+      {
+        char *ptr = buf;
+        uint32 size = len;
+        BOOL error = FALSE;
+        
+        error = consume_number(ptr, size, 1, 10, hdr->id.first_page_num);
+        if (!error)
+        {
+          if (*ptr == '-')
+          {
+            error = consume_char(ptr, size, '-');
+            if (!error)	error = consume_number(ptr, size, 1, 10, hdr->id.last_page_num);
+          }
+          else
+            hdr->id.last_page_num = hdr->id.first_page_num;
+        }
+        if (!error)	error = consume_char(ptr, size, '.');
+        if (!error)	error = consume_number(ptr, size, 1, 10, hdr->id.doc_num);
+        if (!error)	error = consume_char(ptr, size, '.');
+        if (error)	retcode = NFE_FAILED;
+      }
+      delete[]buf;
+    }
+  }
+  else
+  {
+    /* else, fake up the message details */
+    hdr->id.first_page_num = 1;
+    hdr->id.last_page_num = 1;
+    hdr->id.doc_num = 1;
+  }
+
+  return retcode;
+}
+
+
+static NFE_rcode extract_NFE_header_plain(header *the_hdr, char* &string)	// char* &string, string is a reference to a char*
+{
+  NFE_rcode retcode = NFE_COMPLETED;
+  uint32    len     = 0;
+  
+  if (the_hdr)
+  {
+    if (retcode == NFE_COMPLETED)
+      retcode = the_hdr->GetBodyLen(len);
+    if (retcode == NFE_COMPLETED)
+    {
+      len += 1;
+      if (string = malloc(len+1))
+        retcode = the_hdr->GetUnfoldedNoCommentsBody(string, len);
+    }
+  }
+
+  return retcode;
+}
+
+
+static NFE_rcode extract_NFE_header_serial(XNFserial *serial_hdr, NFE_header *hdr)
+{
+  NFE_rcode retcode = NFE_COMPLETED;
+  uint32    len     = 0;
+  
+  if (serial_hdr)
+  {
+    if (retcode == NFE_COMPLETED)
+    {
+      if (retcode == NFE_COMPLETED)
+      {
+        len = SERIAL_LEN;
+        retcode = serial_hdr->Get(hdr->details.serial_num, len);
+      }
+    }
+  }
+
+  return retcode;
+}
+
+
+static NFE_rcode extract_NFE_header_softrev(XNFsoftrev *softrev_hdr, NFE_header *hdr)
+{
+  NFE_rcode retcode = NFE_COMPLETED;
+  uint32    len     = 0;
+  
+  if (softrev_hdr)
+  {
+    if (retcode == NFE_COMPLETED)
+    {
+      retcode = softrev_hdr->GetMajor(hdr->details.software_rev_major);
+      if (retcode == NFE_COMPLETED)
+        retcode = softrev_hdr->GetMinor(hdr->details.software_rev_minor);
+    }
+  }
+
+  return retcode;
+}
+
+
+static NFE_rcode extract_NFE_header_faxnum(XNFfaxnum *the_hdr, char* &tele_num)
+{
+  NFE_rcode retcode = NFE_COMPLETED;
+  uint32    len     = 0;
+  
+  if (the_hdr)
+  {
+    if (retcode == NFE_COMPLETED)
+    {
+      retcode = the_hdr->GetBodyLen(len);
+      if (retcode == NFE_COMPLETED)
+      {
+        len +=1;
+        if (tele_num = malloc(len+1))
+          retcode = the_hdr->GetUnfoldedNoCommentsBody(tele_num, len);
+      }
+    }
+  }
+
+  return retcode;
+}
+
+
+  
+
 /* ************************************************************************** */
 /*
    FUNCTION:       NFE_decode_msg_contents
    DESCRIPTION:    Function to decode the body contents of an RFC822 message.
-   		   The input is a filename of a file which holds a complete
-   		   RFC822 message.  The function will decode the contents of
-   		   the message by processing it's headers, and where present,
-   		   the MIME data.  As output it returns an NFE_LIST
-   		   which holds a list of data structures, one for each Netfax
-   		   understood MIME entity in the message (a NFE_MIME).
-   		   The function performs the process in small chunks deteremined
-   		   by the t_slice parameter.  The process will continue until it
-   		   either completes (rc = NFE_COMPLETED) or the t_slice period
-   		   is up (rc = NFE_RUNNING) or an error occurs (rc = -ve value).
-   		   If an OS errors occurs then the function return code is NON
-   		   NULL and points to a RISC OS error block.
-   DEPENDENCIES:   data type		NFE_CONTEXT	NFElib.h
-   		   data type		clock_t		<time.h>
-   		   data type		NFE_header	NFElib.h
-   		   data type		NFE_rcode	NFElib.h
+                   The input is a filename of a file which holds a complete
+                   RFC822 message.  The function will decode the contents of
+                   the message by processing it's headers, and where present,
+                   the MIME data.  As output it returns an NFE_LIST
+                   which holds a list of data structures, one for each Netfax
+                   understood MIME entity in the message (a NFE_MIME).
+                   DO NOT call NFE_LIST_create first.  This function will
+                   create the list for you.
+                   The function performs the process in small chunks deteremined
+                   by the t_slice parameter.  The process will continue until it
+                   either completes (rc = NFE_COMPLETED) or the t_slice period
+                   is up (rc = NFE_RUNNING) or an error occurs (rc = -ve value,
+                   OR rc = +ve value >= 2 - NON-FATAL error).
+                   If an OS errors occurs then the function return code is NON
+                   NULL and points to a RISC OS error block.
+   DEPENDENCIES:   data type            NFE_CONTEXT     NFELib.h
+                   data type            clock_t         <time.h>
+                   data type            uint32          Elib.h
+                   data type            NFE_LIST        NFELib.h
+                   data type            NFE_header      NFELib.h
+                   data type            NFE_rcode       NFELib.h
    DEPENDED ON BY: !Daytona Control application
-   INPUT PARAMS:   NFE_CONTEXT		context		decode_msg_contents current process context information
-   		   clock_t		t_slice		clock tick time to return by
-   		   const char *const	in_file		File that holds the RFC822 message
-   		   uint32		length		length of the message in characters(bytes)
-   		   NFE_rcode *const	rc		NetFax Email Library return code.  Must point to a NFE_rcode
-   OUTPUT PARAMS:  NFE_rcode *const	rc		NetFax Email Library return code
-		   NFE_LIST		mime_list	List of objects, one object for each netfax MIME object
-   RETURN VALUE:   _kernel_oserror*			OS error
+   INPUT PARAMS:   NFE_CONTEXT          context         decode_msg_contents current process context information
+                   clock_t              t_slice         clock tick time to return by
+                   const char *const    in_file         File that holds the RFC822 message
+                   uint32               length          length of the message in characters(bytes)
+                   NFE_rcode *const     rc              NetFax Email Library return code.  Must point to a NFE_rcode
+   OUTPUT PARAMS:  NFE_rcode *const     rc              NetFax Email Library return code
+                   NFE_LIST             mime_list       List of objects, one object for each netfax MIME object
+   RETURN VALUE:   _kernel_oserror*                     OS error
  */
 /* ************************************************************************** */
 extern "C" _kernel_oserror *NFE_decode_msg_contents(NFE_CONTEXT      *context,
@@ -2150,47 +2665,31 @@ extern "C" _kernel_oserror *NFE_decode_msg_contents(NFE_CONTEXT      *context,
 {
   _kernel_oserror *e = 0;
   
-  if (expired(t_slice))
-    *rc = NFE_NOTENOUGHTIME;
-  else
+  e = check_rc(rc);								// Make sure we can return the return code to the caller
+  if (!e)
   {
-    if (rc == 0)
-    {
-      oserror.errnum = 0;
-      sprintf(oserror.errmess, "NFE_rcode ptr cannot be NULL");
-      e = &oserror;
-    }
-    else if ((mime_list == 0) || (context == 0) || (in_file == 0))
+    if (expired(t_slice))							// Check we've got enough time
+      *rc = NFE_NOTENOUGHTIME;
+    else if ((mime_list == 0) || (context == 0) || (in_file == 0))		// Check parameters are valid
       *rc = NFE_NULLADDR;
     else if (length == 0)
       *rc = NFE_FAILED;
     else
     {
-      rfc822msg *msg = new rfc822msg(TRUE, (char*)in_file, 0, length, TRUE);
+      rfc822msg *msg = new rfc822msg(TRUE, (char*)in_file, 0, length, TRUE);	// Create an rfc822msg and give it the data to parse
       
       if (msg)
-        *rc = msg->ParseData(*context, t_slice);
+        *rc = msg->ParseData(*context, t_slice);				// Parse the data if creation worked
+      else
+        *rc = NFE_MALLOCFAILED;							// else, return error
       if (*rc < NFE_COMPLETED)
       {
-        delete msg;
+        if (msg)
+          delete msg;
         mime_list = 0;
       }
       else
-      {
-/*        MIMEentity *e = msg->GetMIMEentity();
-        
-        if (e)
-        {
-          NFE_CT ct;
-          *rc = e->GetMajorType(ct);
-          if (*rc == NFE_COMPLETED)
-            *mime_list = (NFE_LIST)e;
-          else
-            *mime_list = 0;
-        }
-        else*/
-          *mime_list = (NFE_LIST)msg;
-      }
+        *mime_list = (NFE_LIST)msg;
     }
   }
   
@@ -2202,11 +2701,14 @@ extern "C" _kernel_oserror *NFE_decode_msg_contents(NFE_CONTEXT      *context,
 /*
    FUNCTION:       NFE_decode_mime_hdr
    DESCRIPTION:    Function to decode the information from a NFE_MIME object
-   DEPENDENCIES:   
+   DEPENDENCIES:   data type            NFE_MIME         NFELib.h
+                   data type            NFE_NF_msg_class NFELib.h
+                   data type            NFE_msg_class    NFELib.h
    DEPENDED ON BY: !Daytona Control application
-   INPUT PARAMS:   NFE_MIME		mime
-   OUTPUT PARAMS:  NFE_NF_msg_class    *netfax_msg_class
-   RETURN VALUE:   NFE_rcode		rc		NetFax Email Library return code
+   INPUT PARAMS:   NFE_MIME             mime
+   OUTPUT PARAMS:  NFE_NF_msg_class    *netfax_msg_class        netfax data type in mime object
+                   NFE_msg_class       *msg_class               type of message
+   RETURN VALUE:   NFE_rcode            rc                      NetFax Email Library return code
  */
 /* ************************************************************************** */
 extern "C" NFE_rcode NFE_decode_mime_hdr(NFE_MIME          mime,
@@ -2215,55 +2717,52 @@ extern "C" NFE_rcode NFE_decode_mime_hdr(NFE_MIME          mime,
 {
   NFE_rcode rc = NFE_COMPLETED;
   
-  if ((netfax_msg_class == 0) || (msg_class == 0) || (mime == 0))
+  if ((netfax_msg_class == 0) || (msg_class == 0) || (mime == 0))		// Check parameters are valid
     rc = NFE_NULLADDR;
   else
   {
-    entity *ent = (entity*)mime;
-    MIMEentity *e = (MIMEentity*)ent;
-    NFE_ENTITY_TYPE type = ent->GetType();
-    *netfax_msg_class = NFE_NFMC_NONE;
-    *msg_class = NFE_MC_UNKNOWN;
+    entity          *ent  = (entity*)mime;
+    MIMEentity      *e    = (MIMEentity*)ent;
+    NFE_ENTITY_TYPE  type = ent->GetType();
+    *netfax_msg_class     = NFE_NFMC_NONE;					// Default to unknown NetFax type
+    *msg_class            = NFE_MC_UNKNOWN;					// Default to an unknown message
     
-    switch (type)
+    switch (type)								// case type of entity, do
     {
-      case NFE_ENTITY_RFC822MSG:
+      case NFE_ENTITY_RFC822MSG:						// entity(the list) is an RFC822msg
       {
         rfc822msg *msg = (rfc822msg*)ent;
-        *msg_class = NFE_MC_UNKNOWN;
-        ent = msg->GetMIMEentity();
-        if (!ent)
+        *msg_class = NFE_MC_UNKNOWN;						// Default to an unknown message
+        ent = msg->GetMIMEentity();						// Does it hold a MIMEentity?
+        if (!ent)								// If not then 
         {
-          *netfax_msg_class = NFE_NFMC_NONE;
-          break;	// break out of the switch statement
-        }
-        // NOTE, no break we want to fall throught to NFE_ENTITY_MIME below
+          *netfax_msg_class = NFE_NFMC_NONE;					// No NetFax data in message
+          break;								// break out of the switch statement
+        }									// NOTE, no break we want to fall through to NFE_ENTITY_MIME below if there was a MIMEentity
       }
-      case NFE_ENTITY_MIME:
+      case NFE_ENTITY_MIME:							// entity (the list or entity from the RFC822msg) is a MIMEentity of some type
       {
         NFE_CT ct;
-        rc = e->GetMajorType(ct);
+        rc = e->GetMajorType(ct);						// Get the type of this MIMEentity
         if (rc == NFE_COMPLETED)
         {
           MIMEmultip *mp = (MIMEmultip*)e;
-          if (ct == NFE_CT_MULTIPART)
-            rc = NFE_FAILED;			// invalid to pass in a MIMEmultip object.  Must be a atomic MIMEentity (eg. MIMEimage) or a plain rfc822msg
+          if (ct == NFE_CT_MULTIPART)						// If it's a multipart, then return error as it's invalid to pass in a MIMEmultip object.
+            rc = NFE_FAILED;							// Must be a atomic MIMEentity (eg. MIMEimage) or a plain rfc822msg
           else
           {
-            headers *h = ent->GetHdrs();
+            headers *h = ent->GetHdrs();					// Get the headers of the entity
             if (h)
             {
               XNFmsgclass *msgclass_hdr = (XNFmsgclass*)h->FindHdr(NFE_HDR_X_NF_MESSAGE_CLASS);
-              if (msgclass_hdr)
+              if (msgclass_hdr)							// If "X-NetFax-Message-Class" header exists, this is a NETFAX message
               {
                 *netfax_msg_class = (NFE_NF_msg_class)msgclass_hdr->Get();
                 *msg_class = NFE_MC_NETFAX_DATA;
               }
-              else
+              else								// else, this is a NON-NetFax MIMEentity
               {
-                // NON-NetFax MIMEentity
-                // check if it is a text/plain.  If yes, then treat as if it was an RTEXT (MAY REMOVE THIS AND ALLOW THE MESSAGE JUST TO BE HANDLED AS AN RFC822MSG
-                if (ct == NFE_CT_TEXT)
+                if (ct == NFE_CT_TEXT)						// check if it is a text/plain.  If yes, then treat as if it was an RTEXT
                 {
                   *netfax_msg_class = NFE_NFMC_RTEXT;
                   *msg_class = NFE_MC_NETFAX_DATA;
@@ -2273,10 +2772,10 @@ extern "C" NFE_rcode NFE_decode_mime_hdr(NFE_MIME          mime,
           }
         }
         else
-          rc = NFE_FAILED;
+          rc = NFE_FAILED;							// need better error code.  MIMEentity MUST have a content-type header
         break;
       }
-      case NFE_ENTITY_UNKNOWN:
+      case NFE_ENTITY_UNKNOWN:							// if we get here, something has gone horribly wrong!
       default:
       {
         rc = NFE_INTERNALERR;
@@ -2293,282 +2792,302 @@ extern "C" NFE_rcode NFE_decode_mime_hdr(NFE_MIME          mime,
 /*
    FUNCTION:       NFE_decode_mime
    DESCRIPTION:    Function to decode the body contents of a MIME entity in
-   		   a message.  The inputs are a filename of a file which
-   		   holds a complete RFC822 message, the NFE_MIME object
-   		   which describes the MIME entity in the message to decode
-   		   and the filename to put the decoded data in.
-   		   The NFE_MIME object is obtained from the output list from
-   		   the NFE_decode_msg_contents function which must be called
-   		   first.  The function will decode MIME entity by using the
-   		   message's headers and MIME information.
-   		   As output it writes the decoded data into the out_file
-   		   using the given file descriptor fd.  This must be the
-   		   for the given out_file and opened with write permission
-   		   and in binary mode.
-   		   The function performs the process in small chunks deteremined
-   		   by the t_slice parameter.  The process will continue until it
-   		   either completes (rc = NFE_COMPLETED) or the t_slice period
-   		   is up (rc = NFE_RUNNING) or an error occurs (rc = -ve value).
-   		   If an OS errors occurs then the function return code is NON
-   		   NULL and points to a RISC OS error block.
-   DEPENDENCIES:   data type		NFE_CONTEXT		NFElib.h
-   		   data type		clock_t			<time.h>
-   		   data type		NFE_header		NFElib.h
-   		   data type		NFE_rcode		NFElib.h
-   		   function		NFE_decode_msg_contents	NFElib.h
+                   a message.  The inputs are a filename of a file which
+                   holds a complete RFC822 message, the NFE_MIME object
+                   which describes the MIME entity in the message to decode,
+                   the filename to put the decoded data in and the file
+                   handle for that file already opened in binary mode,
+                   at the position in the file to start writing at and
+                   opened with write permission.
+                   The NFE_MIME object is obtained from the output list from
+                   the NFE_decode_msg_contents function which must be called
+                   first.  The function will decode MIME entity by using the
+                   message's headers and MIME information.
+                   As output it writes the decoded data into the out_file
+                   using the given file descriptor fd.  This must be the
+                   for the given out_file and opened with write permission
+                   and in binary mode.
+                   The function performs the process in small chunks deteremined
+                   by the t_slice parameter.  The process will continue until it
+                   either completes (rc = NFE_COMPLETED) or the t_slice period
+                   is up (rc = NFE_RUNNING) or an error occurs (rc = -ve value,
+                   OR rc = +ve value >= 2 - NON-FATAL error).
+                   If an OS errors occurs then the function return code is NON
+                   NULL and points to a RISC OS error block.
+   DEPENDENCIES:   data type            NFE_CONTEXT             NFElib.h
+                   data type            clock_t                 <time.h>
+                   data type            NFE_header              NFElib.h
+                   data type            NFE_rcode               NFElib.h
+                   function             NFE_decode_msg_contents NFElib.h
    DEPENDED ON BY: !Daytona Control application
-   INPUT PARAMS:   NFE_CONTEXT		context		decode_mime current process context information
-   		   clock_t		t_slice		clock tick time to return by
-   		   NFE_MIME		mime		MIME object which describes which entity to decode
-   		   const char *const	out_file	File to write decoded data into
-   		   FILE                *fd		File descriptor of the file
-   		   NFE_rcode *const	rc		NetFax Email Library return code.  Must point to a NFE_rcode
-   OUTPUT PARAMS:  NFE_rcode *const	rc		NetFax Email Library return code
-   RETURN VALUE:   _kernel_oserror*			OS error
+   INPUT PARAMS:   NFE_CONTEXT          context         decode_mime current process context information
+                   clock_t              t_slice         clock tick time to return by
+                   NFE_MIME             mime            MIME object which describes which entity to decode
+                   const char *const    out_file        File to write decoded data into
+                   FILE                *fd              File descriptor of the file
+                   NFE_rcode *const     rc              NetFax Email Library return code.  Must point to a NFE_rcode
+   OUTPUT PARAMS:  NFE_rcode *const     rc              NetFax Email Library return code
+   RETURN VALUE:   _kernel_oserror*                     OS error
+   VARIABLES:      _kernel_oserror     *e               OS error to return
  */
 /* ************************************************************************** */
-extern "C" _kernel_oserror *NFE_decode_mime(NFE_CONTEXT      *context,
-                                            const clock_t     t_slice,
-                                            NFE_MIME          mime,
-                                            const char *const out_file,
-                                            FILE             *fd,
-                                            NFE_rcode *const  rc)
+extern "C" _kernel_oserror *NFE_decode_mime(NFE_CONTEXT       *context,
+                                            const clock_t      t_slice,
+                                            NFE_MIME           mime,
+                                            const char *const  out_file,
+                                            FILE              *fd,
+                                            NFE_rcode *const   rc)
 {
-  _kernel_oserror     *e = 0;
-  decode_mime_context *c = 0;
+  _kernel_oserror     *e = 0;							// OS error to return
+  decode_mime_context *c = 0;							// Pointer to context structure for instance of this FSM
   
-  if (rc == 0)
+  e = check_rc(rc);								// Make sure we can return the return code to the caller
+  if (!e)									// No sys. error, so proceed
   {
-    oserror.errnum = 0;
-    sprintf(oserror.errmess, "NFE_rcode ptr cannot be NULL");
-    e = &oserror;
-  }
-  else
-  {
-    if (expired(t_slice))
+    if (expired(t_slice))							// Check we've got enough time to initialise
       *rc = NFE_NOTENOUGHTIME;
     else
     {
-      *rc = NFE_RUNNING;
-      
-      c = *((decode_mime_context**)context);
-      if (c == 0)
+      *rc = NFE_RUNNING;							// Initialise return code      
+      c = *((decode_mime_context**)context);					// set the context handle to the one passed in by the caller
+      if (c == 0)								// If 0, then this is to be a new instance of this FSM, so
       {
-        c = (decode_mime_context*)new decode_mime_context;
-        *context = (NFE_CONTEXT)c;
-        if (!c)
+        c = (decode_mime_context*)new decode_mime_context;			// Create new context structure
+        *context = (NFE_CONTEXT)c;						// Set context handle so we return this instance
+        if (!c)									// Check creation of context succeeded
           *rc = NFE_MALLOCFAILED;
         else
         {
-          memset(c, 0, sizeof(decode_mime_context));
-          c->type = NFE_CT_DECODE_MIME;
-          c->state = DECODE_MIME_INIT;
-          *rc = NFE_RUNNING;
+          memset(c, 0, sizeof(decode_mime_context));				// Clear the context
+          c->type = NFE_CT_DECODE_MIME;						// Set the type of this context to catch caller passing it to the wrong FSM
+          c->state = DECODE_MIME_INIT;						// Set initial state of FSM and setup other defaults
         }
       }
-      else if (c->type != NFE_CT_DECODE_MIME)
-        *rc = NFE_INVALIDCONTEXT;
+      else if (c->type != NFE_CT_DECODE_MIME)					// else, given handle was not 0, so check this context is for this FSM
+        *rc = NFE_INVALIDCONTEXT;						// if not return error code
     }
     
-    if (expired(t_slice))
+    if (expired(t_slice))							// Check we've been given a big enough time slice for at least one iteration of the FSM
       *rc = NFE_NOTENOUGHTIME;
       
-    do
+    if (*rc >= 0)								// check no error is set before entering FSM
     {
-      switch (c->state)
+      do									// Beginning of FSM loop
       {
-        case DECODE_MIME_INIT:
+        switch (c->state)
         {
-          dprintf(("", "DECODE_MIME_INIT\n"));
-          if ((mime == 0) || (out_file == 0) || (fd == 0))
+          case DECODE_MIME_INIT:						// State to initialise for decoding the entity 
           {
-            c->retcode = NFE_NULLADDR;
-            c->state = DECODE_MIME_ERROR;
-            *rc = NFE_RUNNING;
-          }
-          else
-          {
-            c->retcode = NFE_RUNNING;
-            c->ent      = (entity*)mime;
-            c->out_file = out_file;
-            c->file = fd;
-            decode_mime_init(*c);
-            if (c->retcode == NFE_COMPLETED)
-              c->retcode = NFE_RUNNING;
-          }
-          break;
-        }
-        case DECODE_MIME_DECODE_RFC822_INIT:
-        {
-          dprintf(("", "DECODE_MIME_DECODE_RFC822_INIT\n"));
-          
-          if (c->file)
-          {
-            c->retcode = new_context(&(c->decode_context));
-            if (c->retcode == NFE_COMPLETED)
+            dprintf(("", "DECODE_MIME_INIT\n"));
+            if ((mime == 0) || (out_file == 0) || (fd == 0))			// Check parameters
             {
-              c->state = DECODE_MIME_DECODE_RFC822;
+              c->retcode = NFE_NULLADDR;
+              c->state = DECODE_MIME_ERROR;
+              *rc = NFE_RUNNING;
+            }
+            else
+            {
+              c->retcode = NFE_RUNNING;
+              c->ent      = (entity*)mime;
+              c->out_file = out_file;
+              c->file = fd;
+              decode_mime_init(*c);						// Initialise the FSM
+              if (c->retcode == NFE_COMPLETED)
+                c->retcode = NFE_RUNNING;
+            }
+            break;
+          }
+          case DECODE_MIME_DECODE_RFC822_INIT:					// State to prepare & initialise for decoding the entity if it is a RFC822msg
+          {
+            dprintf(("", "DECODE_MIME_DECODE_RFC822_INIT\n"));
+            
+            if (c->file)								// Check We've got a FILE* pointer
+            {
+              c->retcode = new_context(&(c->decode_context));			// Create new context handle for the decode
+              if (c->retcode == NFE_COMPLETED)					// If successful, switch to the rfc822 decode state
+              {
+                c->state = DECODE_MIME_DECODE_RFC822;
+                *rc = NFE_RUNNING;
+                c->retcode = NFE_RUNNING;
+              }
+              else								// Else, switch to error state
+              {
+                c->state = DECODE_MIME_ERROR;
+                *rc = NFE_RUNNING;
+                destroy_context(&(c->decode_context));
+              }
+            }
+            else									// else, no FILE* given, return error.
+            {
+              c->retcode = NFE_INVALIDFILENAME;
+              c->state = DECODE_MIME_ERROR;
+              *rc = NFE_RUNNING;
+            }        
+            break;
+          }
+          case DECODE_MIME_DECODE_RFC822:						// State to do the decoding of this RFC822 message
+          {
+            dprintf(("", "DECODE_MIME_DECODE_RFC822\n"));
+            do
+            {
+              c->retcode = c->b->WriteOut(c->decode_context, t_slice, c->file);
+            } while ((c->retcode == NFE_RUNNING) && (!expired(t_slice)));		// Call WriteOut FSM method until completed, an error occurs or the timeslice expires
+            
+            if (c->retcode == NFE_COMPLETED)					// If completed successfully, then
+            {
+              c->retcode = destroy_context(&(c->decode_context));			// Destroy this context handle
+              if (c->retcode == NFE_COMPLETED)
+                c->state = DECODE_MIME_FINISHED;					// Switch to the FINISHED state
+              else
+              {
+                c->state = DECODE_MIME_ERROR;
+                *rc = NFE_RUNNING;
+              }
+            }
+            else if (c->retcode == NFE_RUNNING)					// Else, if encoding is not finished yet(still running)
+            {
+              *rc = NFE_RUNNING;							// Make sure NFE_RUNNING return code is returned
+              c->state = DECODE_MIME_DECODE_RFC822;				// and stay in this state (we will drop out of our FSM loop as the time slice has expired)
+            }
+            else									// Else, an error has occured, so switch to ERROR state
+            {
+              c->state = DECODE_MIME_ERROR;
+              *rc = NFE_RUNNING;
+            }
+            break;
+          }
+          case DECODE_MIME_DECODE_IMAGE_INIT:					// State to prepare & initialise for decoding the entity if it is a MIMEentity
+          {
+            dprintf(("", "DECODE_MIME_DECODE_IMAGE_INIT\n"));
+            c->retcode = new_context(&(c->decode_context));			// Create new context handle for the decode
+            if (c->retcode == NFE_COMPLETED)					// If successful, switch to the mimeentity decode state
+            {
+              c->state = DECODE_MIME_DECODE_IMAGE;
               *rc = NFE_RUNNING;
               c->retcode = NFE_RUNNING;
             }
-            else
+            else									// Else, switch to error state
             {
               c->state = DECODE_MIME_ERROR;
               *rc = NFE_RUNNING;
               destroy_context(&(c->decode_context));
             }
+            break;
           }
-          else
+          case DECODE_MIME_DECODE_IMAGE:						// State to do the decoding of this MIMEentity message
           {
-            c->retcode = NFE_INVALIDFILENAME;
-            c->state = DECODE_MIME_ERROR;
-            *rc = NFE_RUNNING;
-          }        
-          break;
-        }
-        case DECODE_MIME_DECODE_RFC822:
-        {
-          dprintf(("", "DECODE_MIME_DECODE_RFC822\n"));
-          do
-          {
-            c->retcode = c->b->WriteOut(c->decode_context, t_slice, c->file);
-          } while ((c->retcode == NFE_RUNNING) && (!expired(t_slice)));
-          if (c->retcode == NFE_COMPLETED)
-          {
-            c->retcode = destroy_context(&(c->decode_context));
-            if (c->retcode == NFE_COMPLETED)
-              c->state = DECODE_MIME_FINISHED;
-            else
+            dprintf(("", "DECODE_MIME_DECODE_IMAGE\n"));
+            do
+            {
+              c->retcode = c->me->RemoveEncoding(c->decode_context,
+                                                 t_slice,
+                                                 (char*)c->out_file,
+                                                 fd,
+                                                 REMOVE_ENCODING_BUFSIZE);
+            } while ((c->retcode == NFE_RUNNING) && (!expired(t_slice)));		// Call RemoveEncoding FSM method until completed, an error occurs or the timeslice expires
+  
+            if (c->retcode == NFE_COMPLETED)					// If completed successfully, then
+            {
+              c->retcode = destroy_context(&(c->decode_context));			// Destroy this context handle
+              if (c->retcode == NFE_COMPLETED)
+                c->state = DECODE_MIME_FINISHED;					// Switch to the FINISHED state
+              else
+              {
+                c->state = DECODE_MIME_ERROR;
+                *rc = NFE_RUNNING;
+              }
+            }
+            else if (c->retcode == NFE_RUNNING)					// Else, if encoding is not finished yet(still running)
+            {
+              *rc = NFE_RUNNING;							// Make sure NFE_RUNNING return code is returned
+              c->state = DECODE_MIME_DECODE_IMAGE;				// and stay in this state (we will drop out of our FSM loop as the time slice has expired)
+            }
+            else									// Else, an error has occured, so switch to ERROR state
             {
               c->state = DECODE_MIME_ERROR;
               *rc = NFE_RUNNING;
             }
+            break;
           }
-          else if (c->retcode == NFE_RUNNING)
+          case DECODE_MIME_ERROR:							// State to clean up this FSM instance and return the error that occured
           {
-            *rc = NFE_RUNNING;
-            c->state = DECODE_MIME_DECODE_RFC822;
+            dprintf(("", "DECODE_MIME_ERROR\n"));
+            *rc = c->retcode;							// Pass out the error code that occured
+            delete c;								// Destroy this context(instance) of the FSM
+            *context = 0;								// Set context handle that's return to 0
+            break;
           }
-          else
+          case DECODE_MIME_FINISHED:						// clean up FSM context, terminate FSM and return
           {
-            c->state = DECODE_MIME_ERROR;
-            *rc = NFE_RUNNING;
+            dprintf(("", "DECODE_MIME_FINISHED\n"));
+            *rc = NFE_COMPLETED;							// Set successful termination return code
+            delete c;								// Destroy this context(instance) of the FSM
+            *context = 0;								// Set context handle that's returned to 0
+            break;
           }
-          break;
-        }
-        case DECODE_MIME_DECODE_IMAGE_INIT:
-        {
-          dprintf(("", "DECODE_MIME_DECODE_IMAGE_INIT\n"));
-          c->retcode = new_context(&(c->decode_context));
-          if (c->retcode == NFE_COMPLETED)
+          default:								// Catch all state to trap disasters
           {
-            c->state = DECODE_MIME_DECODE_IMAGE;
-            *rc = NFE_RUNNING;
-            c->retcode = NFE_RUNNING;
+            dprintf(("", "DECODE_MIME FSM BROKEN!!!\n"));
+            *rc = NFE_INTERNALERR;
+            break;
           }
-          else
-          {
-            c->state = DECODE_MIME_ERROR;
-            *rc = NFE_RUNNING;
-            destroy_context(&(c->decode_context));
-          }
-          break;
-        }
-        case DECODE_MIME_DECODE_IMAGE:
-        {
-          dprintf(("", "DECODE_MIME_DECODE_IMAGE\n"));
-          do
-          {
-            c->retcode = c->me->RemoveEncoding(c->decode_context, t_slice, (char*)c->out_file, fd, 4096);
-          } while ((c->retcode == NFE_RUNNING) && (!expired(t_slice)));
-          if (c->retcode == NFE_COMPLETED)
-          {
-            c->retcode = destroy_context(&(c->decode_context));
-            if (c->retcode == NFE_COMPLETED)
-              c->state = DECODE_MIME_FINISHED;
-            else
-            {
-              c->state = DECODE_MIME_ERROR;
-              *rc = NFE_RUNNING;
-            }
-          }
-          else if (c->retcode == NFE_RUNNING)
-          {
-            *rc = NFE_RUNNING;
-            c->state = DECODE_MIME_DECODE_IMAGE;
-          }
-          else
-          {
-            c->state = DECODE_MIME_ERROR;
-          }
-          break;
-        }
-        case DECODE_MIME_ERROR:
-        {
-          dprintf(("", "DECODE_MIME_ERROR\n"));
-          *rc = c->retcode;
-          delete c;
-          c = 0;
-          break;
-        }
-        case DECODE_MIME_FINISHED:
-        {
-          dprintf(("", "DECODE_MIME_FINISHED\n"));
-          *rc = NFE_COMPLETED;
-          delete c;
-          c = 0;
-          break;
-        }
-        default:
-        {
-          dprintf(("", "DECODE_MIME FSM BROKEN!!!\n"));
-          *rc = NFE_INTERNALERR;
-          break;
-        }
-      } // endswitch
-    } while ((*rc == NFE_RUNNING) && (!expired(t_slice)) && (e == 0));
+        } // endswitch
+      } while ((*rc == NFE_RUNNING) && (!expired(t_slice)) && (e == 0));
+    }										// endif *rc check
   } // endif rc == 0
   
   return e;
 }    
-  
-  
+
+
+/* ************************************************************************** */
+/*
+   FUNCTION:       decode_mime_init
+   DESCRIPTION:    Function to do the DECODE_MIME_INIT state of the
+                   NFE_decode_mime FSM
+   DEPENDENCIES:   data type           decode_mime_context      NFELib.c++
+   DEPENDED ON BY: function            NFE_decode_mime          NFELib.c++
+   INPUT PARAMS:   NFE_CONTEXT         &context         current process context information
+   OUTPUT PARAMS:  NFE_CONTEXT         &context         current process context information
+   RETURN VALUE:   NONE
+   VARIABLES:      
+ */
+/* ************************************************************************** */
 static void decode_mime_init(decode_mime_context &c)
 {
   NFE_ENTITY_TYPE type = c.ent->GetType();
         
-  switch (type)
+  switch (type)									// case type of entity, do
   {
-    case NFE_ENTITY_RFC822MSG:
+    case NFE_ENTITY_RFC822MSG:							// entity is an RFC822msg
     {
       rfc822msg *msg = (rfc822msg*)c.ent;
-      c.me = msg->GetMIMEentity();
-      if (!c.me)
+      c.me = msg->GetMIMEentity();						// Does it hold a MIMEentity?
+      if (!c.me)								// If not, get the body of this plain rfc822msg
       {
         c.b = msg->GetBody();
         if (c.b)
-          c.state = DECODE_MIME_DECODE_RFC822_INIT;
+          c.state = DECODE_MIME_DECODE_RFC822_INIT;				// Switch to the RFC822 decode init state
         else
         {
           c.retcode = NFE_FAILED;
           c.state = DECODE_MIME_ERROR;
         }
-        break;	// break out of switch
-      }
+        break;									// break out of switch
+      }										// NOTE, no break we want to fall through to NFE_ENTITY_MIME below if there was a MIMEentity
     }
-    case NFE_ENTITY_MIME:
+    case NFE_ENTITY_MIME:							// entity (or entity from the RFC822msg) is a MIMEentity of some type
     {
       NFE_CT ct;
       if (c.me == 0)
         c.me = (MIMEentity*)c.ent;
-      c.retcode = c.me->GetMajorType(ct);
+      c.retcode = c.me->GetMajorType(ct);					// Get the type of this MIMEentity
       if (c.retcode == NFE_COMPLETED)
       {
-        if (ct == NFE_CT_MULTIPART)
+        if (ct == NFE_CT_MULTIPART)						// If it's a multipart, then 
         {
-          // get 1st entity in multipart(there should be only one!)
-          c.me = ((MIMEmultip*)c.me)->GetEntity(0);
-          if (c.me == 0)
+          c.me = ((MIMEmultip*)c.me)->GetEntity(0);				// get 1st entity in multipart(there should be only one! as if it is a REAL multipart, the NFE_LIST access methods should
+          if (c.me == 0)							// have been used to extract each entity in turn and given them to this function one at a time
           {
             c.retcode = NFE_FAILED;
             c.state = DECODE_MIME_ERROR;
@@ -2578,26 +3097,12 @@ static void decode_mime_init(decode_mime_context &c)
         }
         if (c.retcode == NFE_COMPLETED)
         {
-/*          switch (ct)
-          {
-            case NFE_CT_IMAGE:
-            case NFE_CT_TEXT:
-            {*/
-              c.state = DECODE_MIME_DECODE_IMAGE_INIT;
-/*              break;
-            }
-            default:
-            {
-              c.state = DECODE_MIME_ERROR;
-              c.retcode = NFE_FAILED;
-              break;
-            }
-          } // endswitch on MIMEentity NFE_CT type*/
+          c.state = DECODE_MIME_DECODE_IMAGE_INIT;				// Switch to DECODE MIME entity init state
         }
       }
       break;
     }
-    default:
+    default:									// if we get here, something has gone horribly wrong!
     {
       c.retcode = NFE_INTERNALERR;
       break;
