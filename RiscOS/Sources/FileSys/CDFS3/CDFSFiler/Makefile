@@ -52,7 +52,7 @@ RLIB      = RISCOSLIB:o.risc_oslib
 RSTUBS    = RISCOSLIB:o.rstubs
 ROMSTUBS  = RISCOSLIB:o.romstubs
 ROMCSTUBS = RISCOSLIB:o.romcstubs
-ABSSYM    = RISC_OSLib:o.AbsSym
+ABSSYM    = RISC_OSLib:o.c_AbsSym
 
 #
 # Include files
@@ -136,7 +136,7 @@ ${MODULE}: ${OBJS} ${TGRLIB} local_dirs
 # ROM target (re-linked at ROM Image build time)
 #
 ${TARGET}: ${OBJS} local_dirs
-        ${LD} -o $@ -aof ${OBJS} ${TGRLIB} ${TBOXLIB} 
+        ${LD} -o $@ -aof ${OBJS} ${TGRLIB} ${TBOXLIB} ${ROMCSTUBS}
 
 #
 # Final link for the ROM Image (using given base address)
