@@ -96,6 +96,7 @@ OBJSZRAM  = oz.handlers oz.main oz.oskbutils oz.oskbime oz.windowops oz.ModuleWr
 OBJSZRAMD = od.handlers od.main od.oskbutils od.oskbime od.windowops oz.ModuleWra1
 EXPORTS   = 
 INSTALLDIR = <Install$Dir>.${APPNAME}
+WRAPPER   = RISC_OSLib:s.ModuleWrap
 
 NORMAL_TARGET = ${COMPONENT}
 DEBUG_TARGET  = ${COMPONENT}d
@@ -162,6 +163,7 @@ clean:
 	${WIPE} linked ${WFLAGS}
 	${RM} ${TARGET}
 	${RM} ${APP}
+        ${RM} s.ModuleWrap
 	${STRIP}
 	@echo
 	@echo ${COMPONENT}: cleaned
@@ -238,8 +240,8 @@ oz.ModuleWrap: s.ModuleWrap s.AppName o.dirs
 oz.ModuleWra1: s.ModuleWrap s.AppName o.dirs
 	${AS} ${AFLAGS} -predefine "REMOVE_RAMLOAD_CHECK SETA 1" s.ModuleWrap $@
 
-#s.ModuleWrap: ${WRAPPER}
-#	${CP} ${WRAPPER} $@ ${CPFLAGS}
+s.ModuleWrap: ${WRAPPER}
+	${CP} ${WRAPPER} $@ ${CPFLAGS}
 
 # -----------------------------------------------------------------------------
 # ROM target (re-linked at ROM Image build time)
