@@ -107,13 +107,3 @@ ${TARGET}: ${OBJS} ${LIBS} local_dirs
 	${SQUEEZE} ${COMPONENT}
 
 # Dynamic dependencies:
-o.aoftoc:	c.aoftoc
-o.aoftoc:	C:CLX.h.aof
-o.aoftoc:	C:CLX.h.chunkfls
-o.aoftoc:	C:CLX.h.chunkfmt
-o.aoftoc:	VersionNum
-o.aoftoc:	c.aoftoc
-o.aoftoc:	C:CLX.h.aof
-o.aoftoc:	C:CLX.h.chunkfls
-o.aoftoc:	C:CLX.h.chunkfmt
-o.aoftoc:	VersionNum
