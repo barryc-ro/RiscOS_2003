@@ -60,6 +60,7 @@ Date		Who	Change
 11/05/2000	BJGA	Now checks video stream handles passed in; byte counters are now 64 bits wide;
 			implemented MPEGVideo_Stats; extra initialisation added to static_VideoStart()
 18/05/2000	BJGA	Issues UpCall_MPEG &1003 when the video speed indicator changes
+26/05/2000	BJGA	Implemented MPEGVideo_GetSprite; fixed an immediate access to a multi-cycle register
 
 ***************************************************************************/
 
@@ -72,6 +73,7 @@ Date		Who	Change
 #include "swis.h"
 
 #include "Global/RISCOS.h"
+#include "Global/Sprite.h"
 #include "Global/SWIs.h"
 #include "Global/UpCall.h"
 #include "DebugLib/DebugLib.h"
@@ -788,6 +790,185 @@ _kernel_oserror *Video_SWISetVideoParameters2 (unsigned int new_state, unsigned 
   return e;
 }
 
+/******	Video_SWIGetSprite() ***********************************************
+
+Purpose:	Handles MPEGVideo_GetSprite
+In:		Flags; video stream handle; sprite area control block pointer
+		for sprite area to create sprite in (or null to use system
+		sprite area); name of sprite to create
+Out:		Pointer to error block
+
+***************************************************************************/
+
+_kernel_oserror *Video_SWIGetSprite (unsigned int flags, stream_handle_t vsh, void *sprite_area, const char *sprite_name)
+{
+  _kernel_oserror *e = NULL;
+  unsigned int DA_number;
+  void *DA_start;
+  bool DA_created = false;
+  char *sprite;
+  unsigned int frame_buffer = 0;
+  unsigned int macroblock_width = 0;
+  unsigned int macroblock_height = 0;
+  bool interlaced = true;
+  unsigned int coded_area_width = 0;
+  unsigned int coded_area_height = 0;
+  unsigned int active_area_width = 0;
+  unsigned int active_area_height = 0;
+  bool active_top_flag = false;
+  unsigned int my_VID_XFA;
+  unsigned int my_VID_XFS;
+  unsigned int left_wastage = 0;
+  unsigned int bottom_wastage = 0;
+  unsigned int right_wastage = 0;
+  unsigned int top_wastage = 0;
+  bool irqs_were_enabled = !_kernel_irqs_disabled ();
+  IGNORE(flags);
+  
+  if (vsh != NULL) /* NULL is allowed, as a special handle meaning "most recently open stream" */
+  {
+    e = static_CheckHandle (vsh);
+  }
+  if (!e)
+  {
+    /* We can't get the information we need if no picture has been displayed since OpenStream or ResetStream */
+    if (Stream.display_frames == NULL)
+    {
+      e = Mess_GenerateError ("Err_NoDisplayedPicture", errno_NO_DISPLAYED_PICTURE, 0);
+    }
+  }
+  if (!e)
+  {
+    /* Read display variables */
+    if (irqs_were_enabled) _kernel_irqs_off ();
+    READ_VID_XFA(my_VID_XFA);
+    READ_VID_XFS(my_VID_XFS);
+    frame_buffer = ((VID_DFP & 0x3FFF) + 2 * (my_VID_XFA & 0x3FFF)) << 8;
+    macroblock_width = VID_XFW;
+    macroblock_height = (my_VID_XFS & 0x3FFF);
+    interlaced = VID_DCF_0 & VID_DCF_USR>>0;
+    coded_area_width = Stream.display_frames->seq.coded_horizontal_size;
+    coded_area_height = Stream.display_frames->seq.coded_vertical_size;
+    active_area_width = Stream.active_horizontal_size;
+    active_area_height = Stream.active_vertical_size;
+    active_top_flag = Stream.active_area_is_at_top;
+    if (irqs_were_enabled) _kernel_irqs_on ();
+    
+    if (macroblock_width == 0) macroblock_width = 1;
+    if (macroblock_height == 0) macroblock_height = 1;
+    macroblock_height /= macroblock_width;
+    if (interlaced)
+    {
+      coded_area_height >>= 1;
+      active_area_height >>= 1;
+    }
+    /* Create a temporary dynamic area to hold a raw copy of the framebuffer */
+    e = _swix (OS_DynamicArea, _INR(0,8)|_OUT(1)|_OUT(3), 0, -1, 622080, -1, 1<<7, 622080, 0, 0, "Framebuffer copy", &DA_number, &DA_start);
+  }
+  if (!e)
+  {
+    DA_created = true;
+    /* Copy the framebuffer to the dynamic area */
+    e = STi3520L_ReadSDRAM (frame_buffer, DA_start, 622080);
+  }
+  if (!e)
+  {
+    /* Create the sprite */
+    int mode_selector [10] = { 1, 720, 576, 5, -1, 4, 1, 5, 1, -1 };
+    if (interlaced)
+    {
+      mode_selector [8] = 2; /* use rectangular pixels when capturing fields */
+    }
+    if (macroblock_width < macroblock_height)
+    {
+      mode_selector [6] = 2; /* quick-and-dirty check for half-res frames */
+    }
+    e = _swix (OS_SpriteOp, _INR(0,6), SpriteReason_CreateSprite | (sprite_area ? 256 : 0), sprite_area, sprite_name, 0, macroblock_width * 16, macroblock_height * (interlaced ? 8 : 16), mode_selector);
+  }
+  if (!e)
+  {
+    /* Get a pointer to the sprite */
+    void *control_block = sprite_area;
+    if (control_block == NULL)
+    {
+      /* SelectSprite will only return a sprite address if we supply a user control block pointer */
+      e = _swix (OS_ReadDynamicArea, _IN(0)|_OUT(0), 3, &control_block);
+    }
+    if (!e)
+    {
+      e = _swix (OS_SpriteOp, _INR(0,2)|_OUT(2), SpriteReason_SelectSprite | 256, control_block, sprite_name, &sprite);
+    }
+  }
+  if (!e)
+  {
+    sprite += *(unsigned int *)(sprite + spImage); /* add in offset to sprite image */
+    /* Do the actual conversion in hand-coded assembler for speed */
+    MiscAsm_ConvertImage (DA_start, sprite, macroblock_width, macroblock_height, (interlaced ? 2 : 0) | (frame_buffer < SDRAM_FRAME_BUFFER_4_START ? 1 : 0));
+    /* Cope with partial macroblocks */
+    if (coded_area_width < macroblock_width * 16)
+    {
+      right_wastage = macroblock_width * 16 - coded_area_width;
+    }
+    if (coded_area_height < macroblock_height * (interlaced ? 8 : 16))
+    {
+      bottom_wastage = macroblock_height * (interlaced ? 8 : 16) - coded_area_height;
+    }
+    /* Trim down from coded area to active area, since the rest of the API is in terms of the active area */
+    if (active_area_width < coded_area_width)
+    {
+      left_wastage = coded_area_width - active_area_width;
+      right_wastage += left_wastage - (left_wastage >> 1);
+      left_wastage >>= 1;
+    }
+    if (active_area_height < coded_area_height)
+    {
+      if (active_top_flag)
+      {
+        bottom_wastage += coded_area_width - active_area_width;
+      }
+      else
+      {
+        top_wastage = coded_area_width - active_area_width;
+        bottom_wastage += top_wastage - (top_wastage >> 1);
+        top_wastage >>= 1;
+      }
+    }
+    /* Apply the wastages */
+    if (right_wastage > 0)
+    {
+      e = _swix (OS_SpriteOp, _INR(0,4), SpriteReason_InsertDeleteColumns | (sprite_area ? 256 : 0), sprite_area, sprite_name, macroblock_width * 16 - right_wastage, -right_wastage);
+    }
+  }
+  if (!e)
+  {
+    if (left_wastage > 0)
+    {
+      e = _swix (OS_SpriteOp, _INR(0,4), SpriteReason_InsertDeleteColumns | (sprite_area ? 256 : 0), sprite_area, sprite_name, 0, -left_wastage);
+    }
+  }
+  if (!e)
+  {
+    if (top_wastage > 0)
+    {
+      e = _swix (OS_SpriteOp, _INR(0,4), SpriteReason_InsertDeleteRows | (sprite_area ? 256 : 0), sprite_area, sprite_name, macroblock_height * (interlaced ? 8 :16) - top_wastage, -top_wastage);
+    }
+  }
+  if (!e)
+  {
+    if (bottom_wastage > 0)
+    {
+      e = _swix (OS_SpriteOp, _INR(0,4), SpriteReason_InsertDeleteRows | (sprite_area ? 256 : 0), sprite_area, sprite_name, 0, -bottom_wastage);
+    }
+  }
+  
+  if (DA_created)
+  {
+    /* Remove the temporary dynamic area */
+    _swix (OS_DynamicArea, _INR(0,1), 1, DA_number);
+  }
+  return e;
+}
+
 /******	Video_InternalReset() **********************************************
 
 Purpose:	Performs a video reset in order to effect error recovery
@@ -819,6 +1000,7 @@ Out:		Pointer to error block
 static _kernel_oserror *static_VideoStart (void)
 {
   _kernel_oserror *e = NULL;
+  unsigned int my_VID_XFA;
   
   /* Perform a soft reset on the 3520 */
   STi3520L_SoftReset (true, false);
@@ -879,7 +1061,8 @@ static _kernel_oserror *static_VideoStart (void)
   Stream.unused_frames->decode_link->decode_link->decode_link->decode_link = &(Stream.frame[4]);
   Stream.unused_frames->decode_link->decode_link->decode_link->decode_link->decode_link = NULL;
   /* If we are displaying one of the anchor frames, then we must decode the prefill anchor frames into the *other* two anchor frame buffers */
-  switch ((VID_DFP & 0x3FFF) + 2 * (VID_XFA & 0x3FFF))
+  READ_VID_XFA(my_VID_XFA);
+  switch ((VID_DFP & 0x3FFF) + 2 * (my_VID_XFA & 0x3FFF))
   {
     case SDRAM_FRAME_BUFFER_1_START/256:
       Stream.next_anchor_frame_buffer = SDRAM_FRAME_BUFFER_2_START/256;
