@@ -71,7 +71,7 @@ WIPE		= -wipe
 
 AFLAGS		= ${THROWBACK} -depend !Depend -nocache -stamp -quit
 CFLAGS		= ${THROWBACK} -depend !Depend -ffa ${INCLUDES} -wp
-CPFLAGS		= ~cfr~vn
+CPFLAGS		= ~cfr~v
 SQFLAGS		= -f
 WFLAGS		= ~cf~vr
 
@@ -478,6 +478,7 @@ OBJS_ITALK = \
  o_italk.Protocols	\
  o_italk.Redraw		\
  o_italk.Reformat	\
+ o_italk.Save		\
  o_italk.SaveFile	\
  o_italk.SaveObject	\
  o_italk.Tables		\
@@ -521,6 +522,7 @@ OBJSD_ITALK = \
  od_italk.Protocols	\
  od_italk.Redraw	\
  od_italk.Reformat	\
+ od_italk.Save		\
  od_italk.SaveFile	\
  od_italk.SaveObject	\
  od_italk.svcprint	\
@@ -601,20 +603,20 @@ rom: ${ROM_MODULE}
 
 install_common: ${FILES}
 	@echo
-	${CP} ${LDIR}.!Boot		${INSTDIR}.!Boot	${CPFLAGS}
-	${CP} ${TARGET}			${INSTDIR}.!RunImage	${CPFLAGS}
-	${CP} ${LDIR}.!Sprites		${INSTDIR}.!Sprites	${CPFLAGS}
-	${CP} ${LDIR}.!Sprites22	${INSTDIR}.!Sprites22	${CPFLAGS}
-	${CP} ${LDIR}.Choices		${INSTDIR}.Choices	${CPFLAGS}
-	${CP} ${LDIR}.Controls		${INSTDIR}.Controls	${CPFLAGS}
-	${CP} ${LDIR}.Messages		${INSTDIR}.Messages	${CPFLAGS}
-	${CP} ${LDIR}.Res		${INSTDIR}.Res		${CPFLAGS}
-	${CP} ${LDIR}.Sprites		${INSTDIR}.Sprites	${CPFLAGS}
+	${CP} ${LDIR}.!Boot		${INSTDIR}.!Boot	${CPFLAGS}n
+	${CP} ${TARGET}			${INSTDIR}.!RunImage	${CPFLAGS}~n
+	${CP} ${LDIR}.!Sprites		${INSTDIR}.!Sprites	${CPFLAGS}n
+	${CP} ${LDIR}.!Sprites22	${INSTDIR}.!Sprites22	${CPFLAGS}n
+	${CP} ${LDIR}.Choices		${INSTDIR}.Choices	${CPFLAGS}n
+	${CP} ${LDIR}.Controls		${INSTDIR}.Controls	${CPFLAGS}n
+	${CP} ${LDIR}.Messages		${INSTDIR}.Messages	${CPFLAGS}n
+	${CP} ${LDIR}.Res		${INSTDIR}.Res		${CPFLAGS}n
+	${CP} ${LDIR}.Sprites		${INSTDIR}.Sprites	${CPFLAGS}n
 	${MKDIR} ${INSTDIR}.User
-	-${CP} ${LDIR}.User.Hotlist	${INSTDIR}.User.Hotlist	${CPFLAGS}
+	-${CP} ${LDIR}.User.Hotlist	${INSTDIR}.User.Hotlist	${CPFLAGS}n
 
 install: install_common
-	${CP} ${LDIR}.!Run		${INSTDIR}.!Run		${CPFLAGS}
+	${CP} ${LDIR}.!Run		${INSTDIR}.!Run		${CPFLAGS}~n
 	-Access ${INSTDIR}.!Boot	lr/r
 	-Access ${INSTDIR}.!Run		lr/r
 	-Access ${INSTDIR}.!RunImage	lr/r
@@ -630,7 +632,7 @@ install: install_common
 	@echo ${COMPONENT}: Application installed to ${INSTDIR}
 
 installd: install_common
-	${CP} ${LDIR}.!RunD		${INSTDIR}.!Run		${CPFLAGS}
+	${CP} ${LDIR}.!RunD		${INSTDIR}.!Run		${CPFLAGS}~n
 	@echo
 	@echo ${COMPONENT}: Debug application installed ${INSTDIR}
 
@@ -724,7 +726,7 @@ clean_all: clean
 
 
 # -----------------------------------------------------------------------------
-# Final link for ROM Image (using given base address)
+# Final linkfor ROM Image (using given base address)
 #
 
 rom_link:
