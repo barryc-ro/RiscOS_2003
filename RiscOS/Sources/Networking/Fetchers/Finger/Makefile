@@ -116,7 +116,7 @@ MSGSF=o.msgs
 #
 .c.o:;    ${CC} ${CFLAGS} ${ROMFLAGS} -o $@ $<
 .c.od:;    ${CC} ${CFLAGS} -DTRACE -o $@ $<
-.cmhg.o:; ${CMHG} -o $@ $< -d $*.h
+.cmhg.o:; ${CMHG} -p -o $@ $< -d $*.h
 
 FingerHdr.h: FingerHdr.o
 	  @|
