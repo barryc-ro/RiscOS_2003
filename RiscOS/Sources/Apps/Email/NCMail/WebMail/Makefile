@@ -10,6 +10,7 @@
 # ====          ====    ===========
 # 1998-09-16    AW      Created
 # 1998-09-22	RDW	Modified to fit into build structure
+# 1998-10-20	RDW	RAM module target added
 
 
 # ------------------------------------------------------------------------------
@@ -160,12 +161,28 @@ OBJSZ = oz.EscapeHTML 	\
 	oz.UserSel	\
 	oz.Errors
 
+OBJSZSL=ozsl.EscapeHTML \
+        ozsl.InBox 	\
+        ozsl.Parser 	\
+        ozsl.WebMail	\
+	ozsl.BrowserIF	\
+	ozsl.Entry	\
+	ozsl.ReadMsg	\
+	ozsl.Feedback	\
+	ozsl.Compose	\
+	ozsl.PopUp	\
+	ozsl.SendMsg	\
+	ozsl.MailTo 	\
+	ozsl.Reply	\
+	ozsl.UserSel	\
+	ozsl.Errors
+
 
 # -----------------------------------------------------------------------------
 # Rule patterns
 #
 
-.SUFFIXES: .o .oz .od .odz .s .c .c++
+.SUFFIXES: .o .oz .ozsl .od .odz .s .c .c++
 
 .c.o:;          @echo
                 @echo Compiling $<
@@ -176,6 +193,11 @@ OBJSZ = oz.EscapeHTML 	\
                 @echo Compiling $<
                 @echo $(DZFLAGS)
                 @$(CC) $(CFLAGS) $(DZFLAGS)       -c -zM -DROM -o $@ $<
+
+.c.ozsl:;	@echo
+		@echo Compiling $<
+		@echo $(DZFLAGS)
+		@${CC} ${CFLAGS} ${DZFLAGS} -c -zM -o $@ $<
 
 .c.od:;         @echo
                 @echo Compiling $<
@@ -201,6 +223,11 @@ OBJSZ = oz.EscapeHTML 	\
                 @echo Compiling $<
                 @echo $(DDFLAGS)
                 @$(C++) $(C++FLAGS) $(DDFLAGS)    -c +g -o $@ $<
+
+.c++.ozsl:;     @echo
+                @echo Compiling $<
+                @echo $(DZFLAGS)
+                @$(C++) $(C++FLAGS) $(DZFLAGS)    -c -zM -o $@ $<
 
 .c++.odz:;      @echo
                 @echo Compiling $<
@@ -240,6 +267,9 @@ export_hdrs:
 
 export_libs: 
 	@echo $(COMPONENT): export complete (libs)
+
+ram: $(MODULE)
+	@echo $(COMPONENT): Module built (RAM)
 
 rom: $(ROM_MODULE)
         @echo $(COMPONENT): Module built (ROM)
@@ -282,6 +312,7 @@ clean:
         $(WIPE) o               $(WFLAGS)
         $(WIPE) od              $(WFLAGS)
         $(WIPE) oz              $(WFLAGS)
+        $(WIPE) ozsl            $(WFLAGS)
         $(WIPE) odz             $(WFLAGS)
         $(RM)   o.dirs
 	$(RM) ^.Build.h.NCMailUI
@@ -293,9 +324,11 @@ o.dirs:
         @$(MKDIR) ^.Build.o
         @$(MKDIR) ^.Build.od
         @$(MKDIR) ^.Build.oz
+        @$(MKDIR) ^.Build.ozsl
         @$(MKDIR) o
         @$(MKDIR) od
         @$(MKDIR) oz
+        @$(MKDIR) ozsl
         @$(MKDIR) odz
         create o.dirs
         stamp  o.dirs
@@ -325,8 +358,8 @@ abs.!RI: $(OBJS) o.dirs
 $(ROM_MODULE): $(OBJSZ) o.dirs
 	$(LB) $(LBFLAGS) ^.Build.oz.NCMailUI $(OBJSZ)
 
-$(MODULE): $(OBJSZ) o.dirs
-	$(LB) $(LBFLAGS) ^.Build.oz.NCMailUI $(OBJSZ)
+$(MODULE): $(OBJSZSL) o.dirs
+	$(LB) $(LBFLAGS) ^.Build.ozsl.NCMailUI $(OBJSZSL)
 
 abs.!RI_D: $(OBJSD) o.dirs
 	$(LB) $(LBFLAGS) ^.Build.od.NCMailUI $(OBJSD)
