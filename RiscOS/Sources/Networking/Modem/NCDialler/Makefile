@@ -126,6 +126,7 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 o.module:	c.module
 o.module:	h.cmhg_modem
 o.module:	C:h.kernel
+o.module:	C:h.kernel
 o.module:	h.smartcard
 o.module:	h.defs
 o.module:	C:h.kernel
