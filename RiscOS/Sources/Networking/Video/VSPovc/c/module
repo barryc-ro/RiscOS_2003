@@ -2,8 +2,7 @@
 
 © Acorn Computers Ltd
 
-Project : OVC VSP module
-Module:
+Project : Acorn OVC
 
 Purpose:
 
@@ -12,29 +11,48 @@ History:
 
 Date      Who     Description of change
 ===========================================
-6oct98    SC      Header added
+25/6/98    CP     Header added
 
-                  Fixed callb_handler so that it doesn't call mnIdle() if the
-                  stream is closed.  Stops crash if ticker goes off during
-                  VSP_CloseStream and sets callback that goes off when the SWI
-                  exits.
+                  Modified to use auto-generated cmhg.h file
+
+                  Converted all functions to ANSI style.
 
 ***************************************************************************/
+/*
+ * module.c
+ *
+ * RISC OS environment dependencies
+ */
 
-#include "types.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "debug.h"
+
+#include "sys/types.h"
 #include "stdio.h"
 #include "vsp.h"
 #include <sys/socket.h>
+#include <socklib.h>
 #include <sys/ioctl.h>
 #include <netinet/in.h>
+#include <inetlib.h>
 #include <net/if.h>
 #include <kernel.h>
 #include <swis.h>
 #include <setjmp.h>
 #include "misc.h"
 
-extern u_long inet_addr();
-extern _kernel_oserror *vsp_error(), *calleverytick();
+#include "cmhg.h"
+
+/* exports from other C files */
+#include "module.h"
+#include "vspc.h"
+#include "mzswrap.h"
+/*#include "smnudp.h"*/
+
+volatile int callbackflag = 0;
 
 struct {
     int  e_nbr;
@@ -68,24 +86,38 @@ struct eblock ovs_error_blocks[N_OVS_ERRORS] = {
     999, "Can't contact video server",
 };
 
-extern int tick_entry();
 extern _kernel_oserror *ovs_error(int); /* fixed prototype */
 
 struct swient {
-    int (*swi_call)();      /* swi handler */
+    _kernel_oserror * (*swi_call)(_kernel_swi_regs *);      /* swi handler */
 };
 
 #define MAXSWI 8
 
-extern int SetServer(_kernel_swi_regs *r);
-extern int OpenStream(_kernel_swi_regs *r);
-extern int CloseStream(_kernel_swi_regs *r);
-extern int CheckEndofStream(_kernel_swi_regs *r);
-extern int SetSpeed(_kernel_swi_regs *r);
-extern int SetPosition(_kernel_swi_regs *r);
-extern int ReadNPT(_kernel_swi_regs *r);
+/* imports */
+extern int mn_started;
+extern void init_yoSysExMap(void);
+extern void init_yoCorbaExTbl(void);
 
-struct swient vsp_ent[MAXSWI] = {
+
+/* global variables */
+int endofstream = 0;
+int endofstream_timer = 0;
+int endofstream_timeout = 0;
+int mpeg_handle;
+int currentop = 0;
+char gw_phy_adr[64];
+char dflt_gw_phy_adr[64];
+int mnidle_timer = 0;
+int boottime = 0;
+int udpport = 0;
+char destadr[128];
+int ovs_vsscan_rate;
+int ovs_slomo_rate;
+
+
+/* static variables */
+static struct swient vsp_ent[MAXSWI] = {
     SetServer,
     OpenStream,
     CloseStream,
@@ -96,40 +128,15 @@ struct swient vsp_ent[MAXSWI] = {
     0,
 };
 
-void *module_wsp = 0;
-int mpeg_handle;
-int endofstream = 0;
-int endofstream_timer = 0;
-int endofstream_timeout = 0;
-int is_atm_mpeg = 0;
-int save_optype = 0;
-int udpport = 0;
-int boottime = 0;
-int skipcnt = 0;
-char destadr[128];
-char gw_phy_adr[64];
-char dflt_gw_phy_adr[64];
-char mpeg_vs_pvc[16];
-int ovs_vsscan_rate;
-int ovs_slomo_rate;
+static void *module_wsp = 0;
+static int is_atm_mpeg = 0;
+static int save_optype = 0;
+static char mpeg_vs_pvc[16];
 
-extern int mn_started;
-extern int vsp_final();
-extern char *inet_ntoa();
-extern void Fire_Up_MediaNet(void);
-extern void init_yoSysExMap(void);
-extern void init_yoCorbaExTbl(void);
-
-int mnidle_timer = 0;
-jmp_buf ljenv;
-int currentop = 0;
-int watchdog_timer = 0;
-int fatal_err = 0;
-
-int init_type = 0;
-int reached = 0;
-int done_pvc = 0;
-int done_callback = 0;
+static jmp_buf ljenv;
+static int watchdog_timer = 0;
+static int init_type = 0;
+static int done_pvc = 0;
 
 void set_watchdog_timer(void)
 {
@@ -141,7 +148,53 @@ void clr_watchdog_timer(void)
     watchdog_timer = 0;
 }
 
-_kernel_oserror *vsp_init(char *cmd_tail, int pbase, void *pw)
+static int read_destadr(void)
+{
+    FILE *fp;
+    int i;
+    char line[256], adr[64], did[128], myadr[64];
+
+    read_my_ip_address(myadr);
+
+    if ((fp = fopen(DESTADRSFILE, "r")) == NULL)
+    {
+        return (0);
+    }
+
+    while(fgets(line, 100, fp) != NULL)
+    {
+        if (line[0] == '|') /* ignore comment lines */
+        {
+            continue;
+        }
+
+        i = sscanf(line, "%s %s", adr, did);
+
+        if (i == 2 && strcmp(adr, myadr) == 0)
+        {
+          /* if 2 values read OK, and the 1st value matches STB IP address then
+             set the destination address to be the value of the second value */
+
+            strcpy(destadr, did);
+            break;
+        }
+    }
+
+    fclose(fp);
+    return (1);
+}
+
+static int enable_tick_handler(void)
+{
+  _kernel_swi_regs r;
+
+  r.r[0] = 100;
+  r.r[1] = (int)tick_entry;
+  r.r[2] = (int)module_wsp;
+  return (_kernel_swi(XOS_Bit | OS_CallEvery, &r, &r) != 0 ? -1 : 0);
+}
+
+_kernel_oserror *vsp_init(const char *cmd_tail, int pbase, void *pw)
 {
     char buf[128];
 
@@ -174,7 +227,6 @@ _kernel_oserror *vsp_init(char *cmd_tail, int pbase, void *pw)
     init_yoCorbaExTbl();
     init_yoSysExMap();
     init_yoCorbaExTbl();
-    atexit(vsp_final);
     return ((_kernel_oserror *)0);
 }
 
@@ -204,44 +256,59 @@ int read_my_ip_address(char *adr)
         if (socketioctl(s, SIOCGIFADDR, (char *)&ifreq) < 0)
             continue;
         sin = (struct sockaddr_in *)&ifreq.ifr_addr;
-        strcpy(adr, inet_ntoa(sin->sin_addr.s_addr));
+        strcpy(adr, inet_ntoa (sin->sin_addr) );
         break;
     }
     socketclose(s);
     return (1);
 }
 
-int tick_handler(_kernel_swi_regs *r)
+static int callback(void (* func)())
 {
-    if (!mn_started)
-        return (1);
+    _kernel_swi_regs r;
+
+    r.r[0] = (int)func;
+    r.r[1] = (int)module_wsp;
+    return (_kernel_swi(XOS_Bit | OS_AddCallBack, &r, &r) != 0 ? -1 : 0);
+}
+
+static void setcallback(void)
+{
+    if (callbackflag == 0) {
+        callbackflag = 1;
+        if (callback(callb_entry) != 0)
+            callbackflag = 0;
+    }
+}
+
+
+_kernel_oserror * tick_handler(_kernel_swi_regs *r, void *pw)
+{
+  if (!mn_started)
+        return (NULL);
     if (watchdog_timer && --watchdog_timer == 0) {
        mn_started = 0;
        currentop = 999;
-       return (1);
+       return (NULL);
     }
     if (mnidle_timer && --mnidle_timer == 0) {
         /* post callback to do mnIdle() */
         setcallback();
     }
     if (endofstream_timer > 0 && --endofstream_timer == 0)
+    {
+#if !defined(NDEBUG) && defined(EOS)
+      SetSystemVariable("OVCdebug$EOS", "normal timeout");
+#endif
         endofstream = 1;
+    }
     else
         local_npt();
-    return (1);
+    return (NULL);
 }
 
-int enable_tick_handler(void)
-{
-  _kernel_swi_regs r;
 
-  r.r[0] = 100;
-  r.r[1] = (int)tick_entry;
-  r.r[2] = (int)module_wsp;
-  return (_kernel_swi(XOS_Bit | OS_CallEvery, &r, &r) != 0 ? -1 : 0);
-}
-
-int disable_tick_handler(void)
+static int disable_tick_handler(void)
 {
   _kernel_swi_regs r;
 
@@ -250,7 +317,7 @@ int disable_tick_handler(void)
   return (_kernel_swi(XOS_Bit | OS_RemoveTickerEvent, &r, &r) != 0 ? -1 : 0);
 }
 
-int vsp_final(void)
+_kernel_oserror * vsp_final(int fatal, int podule, void *pw)
 {
    (void) disable_tick_handler();
    smnudpClose(0);
@@ -293,6 +360,9 @@ vsp_swi_handler(int swinum, _kernel_swi_regs *r, void *pw)
         }
         else
         {
+#if !defined(NDEBUG) && defined(EOS)
+          SetSystemVariable("OVCdebug$close", "ovs_closestream called from longjmp");
+#endif
             (void) ovs_closestream();
         }
 
@@ -307,10 +377,7 @@ vsp_swi_handler(int swinum, _kernel_swi_regs *r, void *pw)
 
 /*ARGSUSED*/
 _kernel_oserror *
-vsp_cli_handler(arg_string, arg_count, cmd_no, pw)
-char *arg_string;
-int arg_count, cmd_no;
-void *pw;
+vsp_cli_handler(const char *arg_string, int arg_count, int cmd_no, void *pw)
 {
     return ((_kernel_oserror *)0);
 }
@@ -389,7 +456,7 @@ int mpeg_streamcount (int handle)
     return (stats[2]);
 }
 
-void do_cli(char *str)
+static void do_cli(char *str)
 {
     _kernel_swi_regs r;
 
@@ -397,7 +464,7 @@ void do_cli(char *str)
     (void) _kernel_swi(XOS_Bit | OS_CLI, &r, &r);
 }
 
-ovs_initmpegpvc()
+void ovs_initmpegpvc(void)
 {
     char buf[48];
 
@@ -408,9 +475,7 @@ ovs_initmpegpvc()
     }
 }
 
-int read_sysvar(var, buf, buflen)
-char *var, *buf;
-int buflen;
+int read_sysvar(char *var, char *buf, int buflen)
 {
     _kernel_swi_regs r;
     _kernel_oserror *e;
@@ -427,66 +492,17 @@ int buflen;
     return (1);
 }
 
-extern int callb_entry();
-volatile int callbackflag = 0;
 
-setcallback()
-{
-    if (callbackflag == 0) {
-        callbackflag = 1;
-        if (callback(callb_entry) != 0)
-            callbackflag = 0;
-    }
-}
-
-int callback(func)
-void (* func)();
-{
-    _kernel_swi_regs r;
-
-    r.r[0] = (int)func;
-    r.r[1] = (int)module_wsp;
-    return (_kernel_swi(XOS_Bit | OS_AddCallBack, &r, &r) != 0 ? -1 : 0);
-}
-
-int callb_handler(rr)
-int *rr;
+_kernel_oserror * callb_handler(_kernel_swi_regs *rr, void *pw)
 {
     if (callbackflag == 0)
-        return (1);
-    /* SCormie (06-Oct-98): Fix data abort problem if call back is set by ticker going off */
-    /* during VSP_CloseStream (shouldn't call mnIdle() if stream is now closed).           */
-    if (mn_started)
-    {
-        mnIdle();
-        mnidle_timer = MNIDLE_TIMEOUT;
-    }
+        return (NULL);
+    mnIdle();
+    mnidle_timer = MNIDLE_TIMEOUT;
     callbackflag = 0;
-    return (1);
+    return (NULL);
 }
 
-int read_destadr(void)
-{
-    FILE *fp;
-    int i;
-    char line[256], adr[64], did[128], myadr[64];
-
-    read_my_ip_address(myadr);
-    if ((fp = fopen(DESTADRSFILE, "r")) == NULL) {
-        return (0);
-    }
-    while(fgets(line, 100, fp) != NULL) {
-        if (line[0] == '|')
-            continue;
-        i = sscanf(line, "%s %s", adr, did);
-        if (i == 2 && strcmp(adr, myadr) == 0) {
-            strcpy(destadr, did);
-            break;
-        }
-    }
-    fclose(fp);
-    return (1);
-}
 
 void ovcabort(void)
 {

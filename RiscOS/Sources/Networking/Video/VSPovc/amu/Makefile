@@ -17,9 +17,9 @@ CC = cc
 CMHG=cmhg
 OBJASM=objasm
 
-#CFLAGS = -c -zM -ffa -wp -throwback -DRISCOS -DSYSTEM -I$(INCLUDES) -DCOMPAT_INET4 -DNDEBUG
-CFLAGS = -c -zM -ffa -wp -throwback -DRISCOS -DSYSTEM -I$(INCLUDES) -DCOMPAT_INET4
-INCLUDES=C:,mx_pri:,mx_pub:,mx_inc:,rts:,TCPIPlibs:
+CFLAGS = -c -zM -ffa -wp -throwback -DRISCOS -DSYSTEM -I$(INCLUDES) -DNDEBUG
+#CFLAGS = -c -zM -ffa -wp -throwback -DRISCOS -DSYSTEM -I$(INCLUDES)
+INCLUDES=C:,mx_pri:,mx_pub:,mx_inc:,rts:
 
 IDLLIB= @.fromidl.lib.libidl
 YOLIB= @.mx.src.yo.lib.libyo
@@ -47,7 +47,7 @@ o.vspc   :  amu.makefile c.vspc h.mzswrap h.module h.vspc debug.h
 
 o.smnudp :  amu.makefile c.smnudp module.h
 
-o.mzswrap:  amu.makefile c.mzswrap h.mzswrap h.module h.vspc h.debug
+o.mzswrap:  amu.makefile c.mzswrap h.mzswrap h.module h.vspc
 
 o.mzscl  :  amu.makefile c.mzscl
 
