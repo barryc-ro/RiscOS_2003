@@ -19,7 +19,7 @@ RM      = remove
 WIPE    = -wipe
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -ff ${INCLUDES} ${DFLAGS}
+CFLAGS  = -c -depend !Depend -ff ${INCLUDES} ${DFLAGS} -DCARET_MESSAGE_14
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 Datatoaofflags = -d data -l len -dp -s -p
