@@ -66,6 +66,7 @@ ${TARGET}: ${SRC}
         ${AS} ${ASFLAGS} ${SRC}
 
 # Dynamic dependencies:
+rm.PPADriverJ: s.AcornHdr
 rm.PPADriverJ: Hdr:ListOpts
 rm.PPADriverJ: Hdr:Macros
 rm.PPADriverJ: Hdr:System
