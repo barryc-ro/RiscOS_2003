@@ -32,7 +32,7 @@ AR	= LibFile
 OPTIONS = -DENSURE_LINE
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend ${THROWBACK} -zM -ff ${INCLUDES} ${DFLAGS} ${OPTIONS}
+CFLAGS  = -c -depend !Depend ${THROWBACK} -zM -ff -Wpc ${INCLUDES} ${DFLAGS} ${OPTIONS}
 CMHGFLAGS = -p ${DFLAGS} ${INCLUDES}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~vr
@@ -49,35 +49,37 @@ ABSSYM     = RISC_OSLib:o.AbsSym
 INETLIB    = TCPIPLibs:o.inetlibzm
 REMOTEDB   = <Lib$Dir>.debug.o.remotezm
 FILEDB     = <Lib$Dir>.debug.o.filezm
+ASMUTILS   = C:AsmUtils.o.AsmUtilsZM
+
 #
 # Include files
 #
-INCLUDES = -IC:,TCPIPLibs:,<Lib$Dir>.
+INCLUDES = -IC: -IC:TCPIPLibs -IC:AsmUtils
 
 # Program specific options:
 #
 COMPONENT = CSFS
 TARGET    = aof.${COMPONENT}
 
-BASEOBJS      =	o.RMInfo o.csfserr o.sfs o.sff o.sfi o.arcs o.arcf o.dir \
+BASEOBJS      =	o.csfserr o.sfs o.sff o.sfi o.arcs o.arcf o.dir \
 	        o.cat o.flex o.fx o.mem o.scrap o.mount o.service o.serx \
 	        o.update o.fs o.interface o.link o.open	o.gbpb o.func	 \
 		o.file o.close o.args o.getbytes o.putbytes o.xstr       \
-		o.usermode o.modulewrap o.header
+		o.modulewrap o.header
 
-RDBASEOBJS    =	ord.RMInfo ord.csfserr ord.sfs ord.sff ord.sfi ord.arcs    \
+RDBASEOBJS    =	ord.csfserr ord.sfs ord.sff ord.sfi ord.arcs    \
 		ord.arcf ord.dir ord.cat ord.flex ord.fx ord.mem ord.scrap \
 		ord.mount ord.service ord.serx ord.update ord.fs 	   \
 		ord.interface ord.link ord.open	ord.gbpb ord.func ord.file \
 		ord.close ord.args ord.getbytes ord.putbytes ord.xstr      \
-		ord.usermode ord.modulewrap ord.header
+		ord.modulewrap ord.header
 
-FDBASEOBJS    =	ofd.RMInfo ofd.csfserr ofd.sfs ofd.sff ofd.sfi ofd.arcs    \
+FDBASEOBJS    =	ofd.csfserr ofd.sfs ofd.sff ofd.sfi ofd.arcs    \
 		ofd.arcf ofd.dir ofd.cat ofd.flex ofd.fx ofd.mem ofd.scrap \
 		ofd.mount ofd.service ofd.serx ofd.update ofd.fs 	   \
 		ofd.interface ofd.link ofd.open	ofd.gbpb ofd.func ofd.file \
 		ofd.close ofd.args ofd.getbytes ofd.putbytes ofd.xstr      \
-		ofd.usermode ofd.modulewrap ofd.header 
+		ofd.modulewrap ofd.header 
 
 OBJS =    o.resources  ${BASEOBJS}
 FDOBJS =  ofd.resources ${FDBASEOBJS}
@@ -135,10 +137,11 @@ resources:
 
 clean:
         ${WIPE} o.* ${WFLAGS}
-        ${WIPE} ord.* ${WFLAGS}
-        ${WIPE} ofd.* ${WFLAGS}
+        ${WIPE} ord ${WFLAGS}
+        ${WIPE} ofd ${WFLAGS}
         ${WIPE} rm.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
+        ${RM} h.modulewrap
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
 
@@ -150,10 +153,10 @@ dirs:
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${ROMOBJS} ${ROMCSTUBS} ${INETLIB}
+${TARGET}: ${ROMOBJS} ${ROMCSTUBS} ${ASMUTILS} ${INETLIB}
 	${MKDIR} o
 	${MKDIR} aof
-        ${LD} -o $@ -aof ${ROMOBJS} ${ROMCSTUBS} ${INETLIB}
+        ${LD} -o $@ -aof ${ROMOBJS} ${ASMUTILS} ${ROMCSTUBS} ${INETLIB}
 
 #
 # Final link for the ROM Image (using given base address)
@@ -168,17 +171,17 @@ rom_link:
 #
 rm.${COMPONENT}: ${OBJS} ${CLIB} ${INETLIB}
 	${MKDIR} rm
-        ${LD} -rmf -o $@ ${OBJS} ${CLIB} ${INETLIB}
+        ${LD} -rmf -o $@ ${OBJS} ${CLIB} ${INETLIB} ${ASMUTILS}
         Access rm.${COMPONENT} RW/R
 
-rm.${COMPONENT}RD: ${RDOBJS} ${CLIB} ${REMOTEDB} ${INETLIB}
+rm.${COMPONENT}RD: ${RDOBJS} ${CLIB} ${REMOTEDB} ${INETLIB} ${ASMUTILS}
 	${MKDIR} rm
-        ${LD} -rmf -o $@ ${RDOBJS} ${CLIB} ${INETLIB} ${REMOTEDB}
+        ${LD} -rmf -o $@ ${RDOBJS} ${CLIB} ${INETLIB} ${REMOTEDB} ${ASMUTILS}
         Access rm.${COMPONENT}RD RW/R
         
-rm.${COMPONENT}FD: ${FDOBJS} ${CLIB} ${FILEDB} ${INETLIB}
+rm.${COMPONENT}FD: ${FDOBJS} ${CLIB} ${FILEDB} ${INETLIB} ${ASMUTILS}
 	${MKDIR} rm
-        ${LD} -rmf -o $@ ${FDOBJS} ${CLIB} ${FILEDB} ${INETLIB}
+        ${LD} -rmf -o $@ ${FDOBJS} ${CLIB} ${FILEDB} ${INETLIB} ${ASMUTILS}
         Access rm.${COMPONENT}FD RW/R
         
 #
