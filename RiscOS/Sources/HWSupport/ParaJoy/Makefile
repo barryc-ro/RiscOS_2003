@@ -56,8 +56,9 @@ install_rom: ${TARGET}
 
 resources:
         ${MKDIR} ${RESDIR}
-        ${CP} ${LDIR}.Messages  ${RESDIR}.Messages  ${CPFLAGS}
-        @echo ${COMPONENT}: resource files copied to Messages module
+	TokenCheck LocalRes:Messages
+        ${CP} LocalRes:Messages  ${RESDIR}.Messages  ${CPFLAGS}
+        @echo ${COMPONENT}: resource files copied
 
 clean:
         ${RM} ${TARGET}
@@ -70,20 +71,3 @@ ${EXP_HDR}.Joystick: hdr.Joystick
         ${CP} hdr.Joystick $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-rm.ParaJoy: Hdr:ListOpts
-rm.ParaJoy: Hdr:Macros
-rm.ParaJoy: Hdr:System
-rm.ParaJoy: Hdr:SWIs
-rm.ParaJoy: Hdr:CPU.Generic26
-rm.ParaJoy: Hdr:IO.GenericIO
-rm.ParaJoy: Hdr:RISCOS
-rm.ParaJoy: Hdr:Machine.<Machine>
-rm.ParaJoy: Hdr:ModHand
-rm.ParaJoy: Hdr:MsgTrans
-rm.ParaJoy: Hdr:NdrDebug
-rm.ParaJoy: Hdr:Podule
-rm.ParaJoy: Hdr:Parallel
-rm.ParaJoy: Version
-rm.ParaJoy: s.ModHead
-rm.ParaJoy: s.SWI
-rm.ParaJoy: s.Tail
