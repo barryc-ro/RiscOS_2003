@@ -17,19 +17,19 @@ MODGEN   = modgen
 MODSQZ   = modsqz
 RM       = remove
 SCANRES  = scanres
-WIPE     = -wipe
+WIPE    = -wipe
 
 CPFLAGS  = ~cfr~v
-WFLAGS   = ~cr~v
- 
+WFLAGS  = ~cr~v
+
 #
 # Program specific options:
 #
 COMPONENT   = AUNMsgs
 VERSION     = 0.07
-TARGET      = rm.${BUILD}.AUNMsgs
+TARGET      = rm.AUNMsgs
 MODULE_HELP = "AUN Messages"
-FILELIST    = Resources.${LOCALE}.${BUILD}
+FILELIST    = Resources.${LOCALE}.<Machine>
 
 #
 # Generic rules:
@@ -42,11 +42,10 @@ install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
 clean:
-	${WIPE} rm.* ${WFLAGS}
+        ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
 
 ${TARGET}: ${FILELIST}
-	${MKDIR} rm.${BUILD}
         ${MODGEN} $@ ${COMPONENT} ${MODULE_HELP} ${VERSION} -via ${FILELIST}
 
 # Dynamic dependencies:
