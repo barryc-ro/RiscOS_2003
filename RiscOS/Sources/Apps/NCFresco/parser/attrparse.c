@@ -68,6 +68,7 @@ static VALUE sgml_do_parse_enum_void_case(SGMLCTX *context, ATTRIBUTE *attribute
 {
     VALUE v;
     STRING *list = attribute->templates;
+    int w;
 
     if (string.bytes == 0)
     {
@@ -88,6 +89,33 @@ static VALUE sgml_do_parse_enum_void_case(SGMLCTX *context, ATTRIBUTE *attribute
 	    return v;
 	}
     }
+
+#ifndef PREVENT_ENUMERATION_GUESSING
+    PRSDBGN(("Attempting to guess enumeration '%.*s'\n", string.bytes, string.ptr));
+
+    for (w = string.bytes - 1; w > 0; w--)
+    {
+	list = attribute->templates;
+
+	for (v.u.i = 0; list->ptr != NULL; list++, v.u.i++)
+	{
+	    if ( list->bytes >= w &&
+		 ( case_sense ?
+		   strncmp(list->ptr, string.ptr, w) :
+		   strnicmp(list->ptr, string.ptr, w)
+		     )  == 0)
+	    {
+		v.type = value_enum;
+		v.u.i++;		/* enumerations from one */
+		PRSDBGN(("Guessed '%.*s' for '%.*s'\n",
+			 list->bytes, list->ptr, string.bytes, string.ptr));
+		return v;
+	    }
+	}
+    }
+
+    PRSDBGN(("Could not guess a matching enumeration\n"));
+#endif
 
     v.type = value_none;
     v.u.i = 0;
@@ -475,6 +503,14 @@ extern VALUE sgml_do_parse_stdunit_void(SGMLCTX *context, ATTRIBUTE *attribute, 
     {
 	goto bad;
     }
+
+#ifdef PLOTCHECK
+    {
+	extern int fwidth_scale;
+	if (v.type == value_absunit)
+	    v.u.f /= fwidth_scale;
+    }
+#endif
 
     return v;
 

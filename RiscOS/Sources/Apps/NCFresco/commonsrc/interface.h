@@ -415,6 +415,7 @@ extern be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_bo
 #define be_link_CLEAR_REST	(1 << 8)	/* clear out all selected items */
 #define be_link_XY		(1 << 9)	/* x,y coordinates given */
 #define be_link_DONT_WRAP_H	(1 << 10)	/* don't wrap in h direction */
+#define be_link_CARETISE	(1 << 11)	/* if a writeabnle ends up with the highlight then caretise it */
 
 /* Activate a given link */
 extern os_error *backend_activate_link(be_doc doc, be_item item, int flags);

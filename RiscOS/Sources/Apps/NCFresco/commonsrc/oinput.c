@@ -54,7 +54,7 @@
 #include "oimage.h"
 
 #ifndef OI_DEBUG
-#define OI_DEBUG DEBUG
+#define OI_DEBUG 0
 #endif
 
 #if OI_DEBUG
@@ -626,6 +626,7 @@ char *oinput_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
 	    os_regset r;
 	    int len = strlen(ii->data.str);
 	    int coords[8];
+	    int text_input_offset;
 
 	    x-=INPUT_TEXT_BORDER_X;
 
@@ -657,11 +658,11 @@ char *oinput_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
 	    ep = os_swix(Font_ScanString, &r);
 
 	    /* This now always sets the caret */
-	    doc->text_input_offset = ep ? strlen(ii->data.str) : ((char *) (long) r.r[1]) - ii->data.str;
+	    text_input_offset = ep ? strlen(ii->data.str) : ((char *) (long) r.r[1]) - ii->data.str;
 
-	    OIDBG((stderr, "Caret set to item %p, offset %d\n", ti, doc->text_input_offset));
+	    OIDBG((stderr, "Caret set to item %p, offset %d\n", ti, text_input_offset));
 
-	    antweb_place_caret(doc, ti);
+	    antweb_place_caret(doc, ti, text_input_offset);
 	}
 	break;
     case rid_it_CHECK:

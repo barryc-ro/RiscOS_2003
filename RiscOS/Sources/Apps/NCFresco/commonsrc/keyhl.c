@@ -269,7 +269,16 @@ static antweb_selection_descr *antweb_highlight_scan_xy(be_doc doc, const antweb
 	int dist1 = -1, secdist1 = INT_MAX;
 	BOOL on_screen = FALSE;
 
-	LKDBG((stderr, "                        : link box    x=%d-%d y=%d-%d\n", link->bbox.x0, link->bbox.x1, link->bbox.y0, link->bbox.y1));
+	LKDBG((stderr, "                        : link %p item %p box    x=%d-%d y=%d-%d\n", link, link->item.data.text, link->bbox.x0, link->bbox.x1, link->bbox.y0, link->bbox.y1));
+
+	if (link->item.tag == doc_selection_tag_TEXT)
+	{
+	    if (start_aref != NULL && link->item.data.text->aref == start_aref)	/* mustn't be part of same link */
+	    {
+		LKDBG((stderr, "                        : same aref\n"));
+		continue;
+	    }
+	}
 
 	/* check and see if this item is visible */
 	if (flags & be_link_BACK)
@@ -312,6 +321,22 @@ static antweb_selection_descr *antweb_highlight_scan_xy(be_doc doc, const antweb
 		if (secdist < 0)
 		    secdist = 0;
 	    }
+	    else
+	    {
+		/* check fallback link */
+		if (flags & be_link_BACK)
+		{
+		    dist1 = link->bbox.y0 - from->y1;		/* dist between roofs */
+		}
+		else
+		{
+		    dist1 = from->y0 - link->bbox.y1;		/* dist between roofs */
+		}
+
+		secdist1 = from->x0 - link->bbox.x1;
+		if (secdist1 < 0)
+		    secdist1 = link->bbox.x0 - from->x1;
+	    }
 	}
 	else
 	{
@@ -328,7 +353,7 @@ static antweb_selection_descr *antweb_highlight_scan_xy(be_doc doc, const antweb
 	    }
 	    else
 	    {
-		/* check fallback link */
+		/* check fallback link, wrap around to the next line and scan from the edge */
 		if (flags & be_link_BACK)
 		{
 		    dist1 = link->bbox.y0 - from->y0;		/* dist between roofs */
@@ -345,20 +370,20 @@ static antweb_selection_descr *antweb_highlight_scan_xy(be_doc doc, const antweb
 	/* is this better than the previous link ? */
 	if (dist > 0 &&							/* dist == 0 implies the one we started on so ignore */
 	    (dist < min_dist						/* if simply closer */
-		|| (dist == min_dist && secdist < min_secdist)) &&	/* if same primary distance and closer secondary distance */
-	    (link->item.tag != doc_selection_tag_TEXT || link->item.data.text->aref != start_aref))	/* mustn't be part of same link */
+		|| (dist == min_dist && secdist < min_secdist)))	/* if same primary distance and closer secondary distance */
 	{
 	    min_dist = dist;
+	    min_secdist = secdist;
 	    min_link = link;
 	}
 
 	/* is this better than the previous fallback link ? */
 	if (dist1 > 0 &&
 	    (dist1 < min_dist1
-	    || (dist1 == min_dist1 && secdist1 < min_secdist1)) && 
-	    (link->item.tag != doc_selection_tag_TEXT || link->item.data.text->aref != start_aref))	/* mustn't be part of same link */
+	    || (dist1 == min_dist1 && secdist1 < min_secdist1)))
 	{
 	    min_dist1 = dist1;
+	    min_secdist1 = secdist1;
 	    min_link1 = link;
 	}
     }
@@ -615,7 +640,7 @@ be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box,
 		aref = item->aref;
 	    }
 
-	    LKDBG((stderr, "Start search at %p, aref=%p, line=%p\n", ti, aref, ti ? ti->line : NULL));
+/* 	    LKDBG((stderr, "Start search at %p, aref=%p, line=%p\n", ti, aref, ti ? ti->line : NULL)); */
 
 	    /* search from here to the end of the list */
 	    while (ti)
@@ -634,7 +659,7 @@ be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box,
 		else
 		{
 		    ti = rid_scan(ti, scan_flags);
-		    LKDBG((stderr, "ti=%p, next=%p, line=%p\n", ti, ti->next, ti->line));
+/* 		    LKDBG((stderr, "ti=%p, next=%p, line=%p\n", ti, ti->next, ti->line)); */
 		}
 	    }
 
@@ -643,7 +668,7 @@ be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box,
 	    {
 		ti = (flags & be_link_BACK) ? doc->rh->stream.text_last : doc->rh->stream.text_list;
 
-		LKDBG((stderr, "No link found, ti wraped to %p\n", ti));
+/* 		LKDBG((stderr, "No link found, ti wraped to %p\n", ti)); */
 
 		while (ti)
 		{
@@ -654,7 +679,7 @@ be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box,
 		    }
 
 		    ti = rid_scan(ti, scan_flags);
-		    LKDBG((stderr, "ti=%p, next=%p, line=%p\n", ti, ti->next, ti->line));
+/* 		    LKDBG((stderr, "ti=%p, next=%p, line=%p\n", ti, ti->next, ti->line)); */
 		}
 	    }
 	}
@@ -685,7 +710,24 @@ be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box,
 	    }
 
             if (item_changed || (flags & be_link_ONLY_CURRENT))
-                backend_update_link(doc, ti, 1);
+	    {
+		if ((flags & be_link_CARETISE) && match_item(ti, be_link_TEXT, NULL))
+		{
+		    int offset;
+		    if (flags & be_link_VERT)
+			offset = item == doc->input ? doc->text_input_offset : -1;
+		    else
+			offset = flags & be_link_BACK ? -1 : 0;			/* end : beginning */
+
+		    LKDBG((stderr, "move_highlight: caretise flags %x old offset %d offset %d old item %p old input %p\n", flags, doc->text_input_offset, offset, item, doc->input));
+		    antweb_place_caret(doc, ti, offset);
+		}
+		else
+		{
+		    antweb_place_caret(doc, NULL, -1);
+		    backend_update_link(doc, ti, 1);
+		}
+	    }
         }
     }
 
@@ -784,6 +826,192 @@ void backend_clear_selected(be_doc doc)
     }
 
     doc->selection.data.text = NULL;
+}
+
+#ifdef STBWEB
+/* FIXME: this needs to be updated for the new selection model */
+be_item backend_find_selected(be_doc doc)
+{
+    be_item ti = doc->rh->stream.text_list;
+    while (ti)
+    {
+        if (ti->flag & rid_flag_SELECTED)
+            break;
+
+        ti = rid_scan(ti, SCAN_RECURSE | SCAN_FWD);
+    }
+    return ti;
+}
+#endif
+
+/* ----------------------------------------------------------------------------- */
+
+/* caret related routines  */
+
+void antweb_default_caret(antweb_doc *doc, BOOL take_caret)
+{
+    if (take_caret || frontend_view_has_caret(doc->parent))
+        antweb_place_caret(doc, doc->input, -1);
+}
+
+void antweb_place_caret(antweb_doc *doc, rid_text_item *ti, int offset)
+{
+    rid_text_item *old_ti = doc->input;
+    int repos = object_caret_REPOSITION;
+
+    doc->input = ti;		/* must set doc->input before calling the remove() function */
+    doc->text_input_offset = offset;
+
+    if (old_ti != ti)
+    {
+	LKDBG((stderr, "antweb_place_caret(): input changed from %p to %p\n", old_ti, ti));
+
+	repos = object_caret_FOCUS;
+
+	if (old_ti && object_table[old_ti->tag].caret)
+	    object_table[old_ti->tag].caret(old_ti, doc->rh, doc, object_caret_BLUR);
+    }
+
+    if (ti && object_table[ti->tag].caret)
+    {
+	(object_table[ti->tag].caret)(ti, doc->rh, doc, repos);
+    }
+    else
+    {
+	/* Give the window the input focus but no visable caret */
+	frontend_view_caret(doc->parent, 0, 0, -1, 0);
+    }
+}
+
+/* ----------------------------------------------------------------------------- */
+
+/*
+ * This mechanism bypasses the code in antweb_place_input() and so may need updating.
+ */
+
+static rid_text_item *antweb_prev_text_input(rid_text_item *ti, be_doc doc)
+{
+    while (ti)
+    {
+	if (ti && object_table[ti->tag].caret &&
+	    (object_table[ti->tag].caret)(ti, doc->rh, doc, object_caret_REPOSITION))
+	    break;
+        ti = rid_scanbr(ti);
+    }
+
+    return ti;
+}
+
+static rid_text_item *antweb_next_text_input(rid_text_item *ti, be_doc doc)
+{
+    while (ti)
+    {
+	if (ti && object_table[ti->tag].caret &&
+	    (object_table[ti->tag].caret)(ti, doc->rh, doc, object_caret_REPOSITION))
+	    break;
+        ti = rid_scanfr(ti);
+    }
+
+    return ti;
+}
+
+/* ----------------------------------------------------------------------------- */
+
+os_error *backend_doc_cursor(be_doc doc, int motion, int *used)
+{
+    int redraw = FALSE;
+    rid_text_item *ti = doc->input;
+    rid_text_item *also_redraw = NULL;
+    int old_offset = doc->text_input_offset;
+
+    doc->text_input_offset = -1;
+
+    *used = 0;
+
+    if (ti == NULL)
+	return NULL;
+
+    redraw = TRUE;		/* The default case negates this if we don't use the key */
+    also_redraw = ti;
+    switch (motion)
+    {
+    case be_cursor_UP:
+    case (be_cursor_UP | be_cursor_WRAP):
+	/*ti = antweb_prev_text_item(ti);*/
+        ti = rid_scanbr(ti);
+        ti = antweb_prev_text_input(ti, doc);
+	if (ti)
+	{
+	    break;
+	}
+	if (motion == 0)
+	{
+	    ti = doc->input;
+	    redraw=FALSE;
+	    break;
+	}
+	/* Otherwise fall through */
+    case (be_cursor_DOWN | be_cursor_LIMIT):
+	ti = antweb_prev_text_input(doc->rh->stream.text_last, doc);
+	break;
+
+    case be_cursor_DOWN:
+    case (be_cursor_DOWN | be_cursor_WRAP):
+	/*ti = ti->next;*/
+        ti = rid_scanfr(ti);
+	ti = antweb_next_text_input(ti, doc);
+	if (ti)
+	{
+	    break;
+	}
+	if (motion == be_cursor_DOWN)
+	{
+	    ti = doc->input;
+	    redraw=FALSE;
+	    break;
+	}
+	/* Otherwise fall through */
+    case (be_cursor_UP | be_cursor_LIMIT):
+	ti = antweb_next_text_input(doc->rh->stream.text_list, doc);
+	break;
+
+    default:
+	redraw=FALSE;
+	also_redraw = NULL;
+	break;
+    }
+
+    if (ti != doc->input)
+    {
+/* 	doc->input = ti; */
+	antweb_place_caret(doc, ti, doc->text_input_offset);
+    }
+    else
+    {
+	doc->text_input_offset = old_offset;
+    }
+
+    if (redraw)
+    {
+	antweb_update_item(doc, doc->input);
+
+	if (also_redraw && also_redraw != doc->input)
+	    antweb_update_item(doc, also_redraw);
+
+	*used = TRUE;
+    }
+
+    return NULL;
+}
+
+be_item backend_place_caret(be_doc doc, be_item item)
+{
+    be_item input = doc->input;
+
+    if (item != backend_place_caret_READ)
+	antweb_place_caret(doc, item, -1);
+
+    return input;
 }
 
 /* ----------------------------------------------------------------------------- */

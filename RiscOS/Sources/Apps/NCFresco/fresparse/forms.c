@@ -438,8 +438,6 @@ extern void startlabel (SGMLCTX * context, ELEMENT * element, VALUES * attribute
 
 extern void finishlabel (SGMLCTX * context, ELEMENT * element)
 {
-    HTMLCTX *htmlctx = htmlctxof(context);
-
     generic_finish (context, element);
 
     finisha(context, element);

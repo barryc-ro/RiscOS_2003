@@ -338,7 +338,7 @@ char *oobject_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, i
 						    bb & wimp_BRIGHT ? "_blank" : ti->aref->target));
 	}
 	else
-	    antweb_place_caret(doc, doc->input);
+	    antweb_default_caret(doc, FALSE);
 
 	return NULL;
     }

@@ -37,7 +37,7 @@
 
 /* DON'T want this going out in production code (again!) */
 
-#if DEBUG
+#if DEBUG || defined(BUILDERS)
 
 static int indent = 0;
 static int at_start = 0;
@@ -113,7 +113,7 @@ static void nonlprint(char *format, ... )
 extern void dump_span(int *base, int span)
 {
   	int x;
-#ifndef CHECKER
+#ifndef NO_PTRS
  	my_print("Base %p, span %d", base, span);
 #else
  	my_print("Span %d", base);
@@ -150,7 +150,7 @@ return;
 
 extern void dump_float_item(rid_float_item *ptr)
 {
-#ifndef CHECKER
+#ifndef NO_PTRS
     my_print("rid_float_item %p", ptr);
     enter();
     FIELD(ptr, ti, "%p");
@@ -163,13 +163,13 @@ extern void dump_float_item(rid_float_item *ptr)
 
 extern void dump_floats_link(rid_floats_link *ptr)
 {
-#ifndef CHECKER
+#ifndef NO_PTRS
     my_print("rid_floats_link %p", ptr);
 #else
     my_print("rid_floats_link");
 #endif
     enter();
-#ifndef CHECKER
+#ifndef NO_PTRS
     FIELD(ptr, left, "%p");
     FIELD(ptr, right, "%p");
 #endif
@@ -182,7 +182,7 @@ extern void dump_floats_link(rid_floats_link *ptr)
 
 extern void dump_pos(rid_pos_item *pi)
 {
-#ifndef CHECKER
+#ifndef NO_PTRS
         my_print("rid_pos_item %p", pi);
 #else
         my_print("rid_pos_item");
@@ -190,7 +190,7 @@ extern void dump_pos(rid_pos_item *pi)
         if (pi == NULL)
         	return;
         enter();
-#ifndef CHECKER
+#ifndef NO_PTRS
                 FIELD(pi, prev, "%p");
                 FIELD(pi, next, "%p");
                 FIELD(pi, st, "%p");
@@ -199,7 +199,7 @@ extern void dump_pos(rid_pos_item *pi)
                 FIELD(pi, left_margin, "%d");
                 FIELD(pi, max_up, "%d");
                 FIELD(pi, max_down, "%d");
-#ifndef CHECKER
+#ifndef NO_PTRS
                 FIELD(pi, first, "%p");
 		FIELD(pi, floats, "%p");
 #endif
@@ -257,7 +257,7 @@ extern void dump_item(rid_text_item *item, char *base)
     };
 
     int i;
-#ifndef CHECKER
+#ifndef NO_PTRS
         my_print("rid_text_item %p", item);
 #else
         my_print("rid_text_item");
@@ -265,7 +265,7 @@ extern void dump_item(rid_text_item *item, char *base)
         if (item == NULL)
         	return;
         enter();
-#ifndef CHECKER
+#ifndef NO_PTRS
 	        if (item->next) FIELD(item, next, "%p");
                 if (item->line) FIELD(item, line, "%p");
 		if (item->aref) FIELD(item, aref, "%p");
@@ -300,7 +300,7 @@ extern void dump_item(rid_text_item *item, char *base)
 
 extern void dump_aref(rid_aref_item *ptr)
 {
-#ifndef CHECKER
+#ifndef NO_PTRS
         my_print("rid_aref_item %p", ptr);
 #else
         my_print("rid_aref_item");
@@ -308,14 +308,14 @@ extern void dump_aref(rid_aref_item *ptr)
         if (ptr == NULL)
         	return;
         enter();
-#ifndef CHECKER
+#ifndef NO_PTRS
                 FIELD(ptr, prev, "%p");
                 FIELD(ptr, next, "%p");
 #endif
                 my_print("name %s", X_OR_NULL(ptr->name));
                 my_print("href %s", X_OR_NULL(ptr->href));
                 my_print("rel %s", X_OR_NULL(ptr->rel));
-#ifndef CHECKER
+#ifndef NO_PTRS
                 FIELD(ptr, first, "%p");
 #endif
         leave();
@@ -327,7 +327,7 @@ extern void dump_aref(rid_aref_item *ptr)
 
 extern void dump_input(rid_input_item *ptr)
 {
-#ifndef CHECKER
+#ifndef NO_PTRS
         my_print("rid_input_item %p", ptr);
 #else
         my_print("rid_input_item");
@@ -335,7 +335,7 @@ extern void dump_input(rid_input_item *ptr)
         if (ptr == NULL)
         	return;
         enter();
-#ifndef CHECKER
+#ifndef NO_PTRS
                 FIELD(ptr, base.prev, "%p");
                 FIELD(ptr, base.next, "%p");
                 FIELD(ptr, base.parent, "%p");
@@ -357,7 +357,7 @@ extern void dump_input(rid_input_item *ptr)
 
 extern void dump_option(rid_option_item *ptr)
 {
-#ifndef CHECKER
+#ifndef NO_PTRS
         my_print("rid_option_item %p", ptr);
 #else
         my_print("rid_option_item");
@@ -365,7 +365,7 @@ extern void dump_option(rid_option_item *ptr)
         if (ptr == NULL)
         	return;
         enter();
-#ifndef CHECKER
+#ifndef NO_PTRS
                 FIELD(ptr, prev, "%p");
                 FIELD(ptr, next, "%p");
 #endif
@@ -379,7 +379,7 @@ extern void dump_option(rid_option_item *ptr)
 
 extern void dump_select( rid_select_item *ptr)
 {
-#ifndef CHECKER
+#ifndef NO_PTRS
         my_print("rid_select_item %p", ptr);
 #else
         my_print("rid_select_item");
@@ -387,7 +387,7 @@ extern void dump_select( rid_select_item *ptr)
         if (ptr == NULL)
         	return;
         enter();
-#ifndef CHECKER
+#ifndef NO_PTRS
                 FIELD(ptr, base.prev, "%p");
                 FIELD(ptr, base.next, "%p");
                 FIELD(ptr, base.parent, "%p");
@@ -396,7 +396,7 @@ extern void dump_select( rid_select_item *ptr)
                 my_print("name %s", X_OR_NULL(ptr->name));
                 FIELD(ptr, count, "%d");
                 FIELD(ptr, size, "%d");
-#ifndef CHECKER
+#ifndef NO_PTRS
                 FIELD(ptr, items, "%p");
                 FIELD(ptr, menuh, "%p");
                 FIELD(ptr, doc, "%p");
@@ -410,7 +410,7 @@ extern void dump_select( rid_select_item *ptr)
 
 extern void dump_textarea_line( rid_textarea_line *ptr)
 {
-#ifndef CHECKER
+#ifndef NO_PTRS
         my_print("rid_textarea_line %p", ptr);
 #else
         my_print("rid_textarea_line");
@@ -418,7 +418,7 @@ extern void dump_textarea_line( rid_textarea_line *ptr)
         if (ptr == NULL)
         	return;
         enter();
-#ifndef CHECKER
+#ifndef NO_PTRS
                 FIELD(ptr, prev, "%p");
                 FIELD(ptr, next, "%p");
 #endif
@@ -428,7 +428,7 @@ extern void dump_textarea_line( rid_textarea_line *ptr)
 
 extern void dump_textarea(rid_textarea_item *ptr)
 {
-#ifndef CHECKER
+#ifndef NO_PTRS
         my_print("rid_textarea_item %p", ptr);
 #else
         my_print("rid_textarea_item");
@@ -436,7 +436,7 @@ extern void dump_textarea(rid_textarea_item *ptr)
         if (ptr == NULL)
         	return;
         enter();
-#ifndef CHECKER
+#ifndef NO_PTRS
                 FIELD(ptr, base.prev, "%p");
                 FIELD(ptr, base.next, "%p");
                 FIELD(ptr, base.parent, "%p");
@@ -450,7 +450,7 @@ extern void dump_textarea(rid_textarea_item *ptr)
                 FIELD(ptr, sx, "%d");
                 FIELD(ptr, sy, "%d");
                 FIELD(ptr, default_lines, "%d");
-#ifndef CHECKER
+#ifndef NO_PTRS
                 FIELD(ptr, def_last_line, "%p");
                 FIELD(ptr, lines, "%p");
                 FIELD(ptr, last_line, "%p");
@@ -463,7 +463,7 @@ extern void dump_textarea(rid_textarea_item *ptr)
 
 extern void dump_form( rid_form_item *ptr)
 {
-#ifndef CHECKER
+#ifndef NO_PTRS
         my_print("rid_form_item %p", ptr);
 #else
         my_print("rid_form_item");
@@ -471,7 +471,7 @@ extern void dump_form( rid_form_item *ptr)
         if (ptr == NULL)
         	return;
         enter();
-#ifndef CHECKER
+#ifndef NO_PTRS
                 FIELD(ptr, prev, "%p");
                 FIELD(ptr, next, "%p");
                 FIELD(ptr, kids, "%p");
@@ -494,7 +494,7 @@ extern void dump_form( rid_form_item *ptr)
 
 extern void dump_caption(rid_table_caption *ptr, char *base)
 {
-#ifndef CHECKER
+#ifndef NO_PTRS
  	my_print("rid_table_caption %p", ptr);
 #else
  	my_print("rid_table_caption");
@@ -502,7 +502,7 @@ extern void dump_caption(rid_table_caption *ptr, char *base)
         if (ptr == NULL)
         	return;
  	enter();
-#ifndef CHECKER
+#ifndef NO_PTRS
  		FIELD(ptr, table, "%p");
  		/*my_print("calign %s", str_from_tag(ptr->calign, strtag_calign));*/
         	/*FIELD(ptr, id, "%p");*/
@@ -511,6 +511,35 @@ extern void dump_caption(rid_table_caption *ptr, char *base)
 #endif
  		dump_stream(&ptr->stream, base);
 	leave();
+}
+
+extern void dump_cell_map(rid_table_item *ptr, char *msg)
+{
+    int x,y;
+    rid_table_cell *cell;
+
+    my_print("Cell occupancy: %s", msg);
+
+    for (y = 0; y < ptr->cells.y; y++)
+    {
+	for (x = 0; x < ptr->cells.x; x++)
+	{
+	    cell = * CELLFOR(ptr, x, y);
+	    if (cell == NULL)
+	    {
+		nonlprint(".");
+	    }
+	    else if (x == cell->cell.x && y == cell->cell.y)
+	    {
+		nonlprint("#");
+	    }
+	    else
+	    {
+		nonlprint("-");
+	    }
+	}
+	my_print("");
+    }
 }
 
 extern void dump_table(rid_table_item *ptr, char *base)
@@ -539,7 +568,7 @@ extern void dump_table(rid_table_item *ptr, char *base)
   	rid_table_cell *cell;
 	int x,y;
 
-#ifndef CHECKER
+#ifndef NO_PTRS
         my_print("rid_table_item %p", ptr);
 #else
         my_print("rid_table_item");
@@ -580,7 +609,7 @@ extern void dump_table(rid_table_item *ptr, char *base)
         	FIELD(ptr, header_rows, "%d");
         	FIELD(ptr, footer_rows, "%d");
         	my_print("num_groups %d %d", ptr->num_groups.x, ptr->num_groups.y);
-#ifndef CHECKER
+#ifndef NO_PTRS
 #if 1
         	FIELD(ptr, array, "%p");
         	FIELD(ptr, rowhdrs, "%p");
@@ -633,27 +662,7 @@ extern void dump_table(rid_table_item *ptr, char *base)
                         my_print("End of table row %d", y);
 		}
 
-		my_print("Cell occupancy");
-		for (y = 0; y < ptr->cells.y; y++)
-		{
-			for (x = 0; x < ptr->cells.x; x++)
-			{
-			 	cell = * CELLFOR(ptr, x, y);
-			 	if (cell == NULL)
-			 	{
-			 		nonlprint(".");
-			 	}
-			 	else if (x == cell->cell.x && y == cell->cell.y)
-			 	{
-			 		nonlprint("#");
-			 	}
-			 	else
-			 	{
-				    nonlprint("-");
-			 	}
-			}
-                        my_print("");
-		}
+		dump_cell_map(ptr, "");
 
         leave();
 }
@@ -663,7 +672,7 @@ extern void dump_table(rid_table_item *ptr, char *base)
 
 extern void dump_props(rid_table_props *ptr)
 {
-#ifndef CHECKER
+#ifndef NO_PTRS
  	my_print("rid_table_props %p", ptr);
 #else
  	my_print("rid_table_props");
@@ -702,7 +711,7 @@ extern void dump_width_info(rid_width_info info)
 
 extern void dump_colgroup(rid_table_colgroup *ptr)
 {
-#ifndef CHECKER
+#ifndef NO_PTRS
   	my_print("rid_table_colgroup %p", ptr);
 #else
   	my_print("rid_table_colgroup");
@@ -710,7 +719,7 @@ extern void dump_colgroup(rid_table_colgroup *ptr)
         if (ptr == NULL)
         	return;
   	enter();
-#ifndef CHECKER
+#ifndef NO_PTRS
   		FIELD(ptr, props, "%p");
 #endif
   		FIELD(ptr, first, "%d");
@@ -735,7 +744,7 @@ extern void dump_rowgroup(rid_table_rowgroup *ptr)
     };
     int i;
 
-#ifndef CHECKER
+#ifndef NO_PTRS
   	my_print("rid_table_rowgroup %p", ptr);
 #else
   	my_print("rid_table_rowgroup");
@@ -743,7 +752,7 @@ extern void dump_rowgroup(rid_table_rowgroup *ptr)
         if (ptr == NULL)
         	return;
   	enter();
-#ifndef CHECKER
+#ifndef NO_PTRS
   		FIELD(ptr, props, "%p");
 #endif
   		FIELD(ptr, span, "%d");
@@ -767,7 +776,7 @@ extern void dump_rowgroup(rid_table_rowgroup *ptr)
 
 extern void dump_colhdr(rid_table_colhdr *ptr)
 {
-#ifndef CHECKER
+#ifndef NO_PTRS
 	my_print("rid_table_colhdr %p", ptr);
 #else
 	my_print("rid_table_colhdr");
@@ -775,7 +784,7 @@ extern void dump_colhdr(rid_table_colhdr *ptr)
         if (ptr == NULL)
         	return;
 	enter();
-#ifndef CHECKER
+#ifndef NO_PTRS
 		FIELD(ptr, colgroup, "%p");
 #endif
 /*		FIELD(ptr, props, "%p");
@@ -809,7 +818,7 @@ extern void dump_rowhdr(rid_table_rowhdr *ptr)
     };
     int i;
 
-#ifndef CHECKER
+#ifndef NO_PTRS
  	my_print("rid_table_rowhdr %p", ptr);
 #else
  	my_print("rid_table_rowhdr");
@@ -817,7 +826,7 @@ extern void dump_rowhdr(rid_table_rowhdr *ptr)
         if (ptr == NULL)
         	return;
  	enter();
-#ifndef CHECKER
+#ifndef NO_PTRS
  		FIELD(ptr, rowgroup, "%p");
 #endif
 /* 		FIELD(ptr, props, "%p");
@@ -844,7 +853,7 @@ extern void dump_rowhdr(rid_table_rowhdr *ptr)
 
 extern void dump_cell(rid_table_cell *ptr, char *base)
 {
-#ifndef CHECKER
+#ifndef NO_PTRS
   	my_print("rid_table_cell %p", ptr);
 #else
   	my_print("rid_table_cell");
@@ -852,7 +861,7 @@ extern void dump_cell(rid_table_cell *ptr, char *base)
         if (ptr == NULL)
         	return;
   	enter();
-#ifndef CHECKER
+#ifndef NO_PTRS
   		FIELD(ptr, parent, "%p");
 #endif
 /*  		FIELD(ptr, props, "%p");
@@ -864,6 +873,7 @@ extern void dump_cell(rid_table_cell *ptr, char *base)
 */		my_print("cell %d %d", ptr->cell.x, ptr->cell.y);
 		my_print("span %d %d", ptr->span.x, ptr->span.y);
 		my_print("size %d %d", ptr->size.x, ptr->size.y);
+		my_print("sleft %d", ptr->sleft);
 		dump_props(ptr->props);
   		dump_stream(&ptr->stream, base);
 	leave();
@@ -873,7 +883,7 @@ extern void dump_stream(rid_text_stream *ptr, char *base)
 {
   	rid_text_item *ti;
   	rid_pos_item *pi;
-#ifndef CHECKER
+#ifndef NO_PTRS
  	my_print("rid_text_stream %p", ptr);
 #else
  	my_print("rid_text_stream");
@@ -881,11 +891,12 @@ extern void dump_stream(rid_text_stream *ptr, char *base)
         if (ptr == NULL)
         	return;
  	enter();
-#ifndef CHECKER
+#ifndef NO_PTRS
   		FIELD(ptr, pos_list, "%p");
   		/*FIELD(ptr, pos_last, "%p");*/
   		FIELD(ptr, text_list, "%p");
   		/*FIELD(ptr, text_last, "%p");*/
+		FIELD(ptr, text_fvpr, "%p");
   		/*FIELD(ptr, parent, "%p");*/
   		/*FIELD(ptr, partype, "%d");*/
 #endif
@@ -897,7 +908,7 @@ extern void dump_stream(rid_text_stream *ptr, char *base)
   		dump_width_info(ptr->width_info);
 		for (ti = ptr->text_list; ti != NULL; ti = ti->next)
 			dump_item(ti, base);
-#ifndef CHECKER
+#ifndef NO_PTRS
   		FIELD(ptr, pos_list, "%p");
 #endif
 		for (pi = ptr->pos_list; pi != NULL; pi = pi->next)
@@ -949,15 +960,20 @@ static void dump_textual_formatting(rid_header *ptr)
 
 extern void dump_header(rid_header *ptr)
 {
-#ifndef CHECKER
+#if 0
+#ifndef NO_PTRS
   	my_print("rid_header %p (%s, %s, %s)", ptr, caller(1), caller(2), caller(3));
 #else
   	my_print("rid_header (%s, %s, %s)", caller(1), caller(2), caller(3));
 #endif
+#else
+	my_print("rid_header");
+#endif
+
         if (ptr == NULL)
         	return;
   	enter();
-#ifndef CHECKER
+#ifndef NO_PTRS
   		FIELD(ptr, curstream, "%p");
   		FIELD(ptr, aref_list, "%p");
   		FIELD(ptr, aref_last, "%p");
@@ -970,7 +986,7 @@ extern void dump_header(rid_header *ptr)
   		dump_stream(&ptr->stream, ptr->texts.data);
   	leave();
 
-	dump_textual_formatting(ptr);
+	/*dump_textual_formatting(ptr);*/
 }
 
 extern void dump_buffer(BUFFER *ptr)
@@ -981,7 +997,7 @@ extern void dump_buffer(BUFFER *ptr)
 
 extern void dump_sgmlctx(SGMLCTX *ptr)
 {
-#ifndef CHECKER
+#ifndef NO_PTRS
     my_print("SGMLCTX %p", ptr);
 #else
     my_print("SGMLCTX");
@@ -990,21 +1006,21 @@ extern void dump_sgmlctx(SGMLCTX *ptr)
 	return;
     enter();
 	FIELD(ptr, magic, "%x");
-#ifndef CHECKER
+#ifndef NO_PTRS
 	FIELD(ptr, elements, "%p");
 #endif
 	FIELD(ptr, mode, "%d");
-#ifndef CHECKER
+#ifndef NO_PTRS
 	FIELD(ptr, clictx, "%p");
 #endif
 	FIELD(ptr, apply_heuristics, "%d");
-#ifndef CHECKER
+#ifndef NO_PTRS
 	FIELD(ptr, tos, "%p");
 #endif
 	FIELD(ptr, line, "%d");
 	dump_buffer(&ptr->inhand);
 	dump_buffer(&ptr->prechop);
-#ifndef CHECKER
+#ifndef NO_PTRS
 	FIELD(ptr, state, "%p");
 	FIELD(ptr, chopper, "%p");
 	FIELD(ptr, deliver, "%p");
@@ -1091,7 +1107,7 @@ extern void dump_table_width_details(rid_table_item *table)
 extern void dump_htmlctx(HTMLCTX *ptr)
 {
     int i;
-#ifndef CHECKER
+#ifndef NO_PTRS
     my_print("HTMLCTX %p", ptr);
 #else
     my_print("HTMLCTX");
@@ -1100,7 +1116,7 @@ extern void dump_htmlctx(HTMLCTX *ptr)
 	return;
     enter();
 	FIELD(ptr, magic, "%x");
-#ifndef CHECKER
+#ifndef NO_PTRS
 	FIELD(ptr, isa, "%p");
 	FIELD(ptr, sgmlctx, "%p");
 	FIELD(ptr, rh, "%p");
@@ -1116,11 +1132,11 @@ extern void dump_htmlctx(HTMLCTX *ptr)
 
 	FIELD(ptr, basetarget, "%s");
 	FIELD(ptr, auto_open_string, "%s");
-#ifndef CHECKER
+#ifndef NO_PTRS
 	FIELD(ptr, frameset, "%p");
 #endif
 	FIELD(ptr, noframe, "%d");
-#ifndef CHECKER
+#ifndef NO_PTRS
 	FIELD(ptr, old_deliver, "%p");
 	FIELD(ptr, object, "%p");
 #endif

@@ -71,7 +71,7 @@ static os_error *fe_version_write_file(FILE *f, be_doc doc, const char *query)
     qtitle = extract_value(query, "title=");
     
     fputs(msgs_lookup("versionT"), f);
-    fprintf(f, msgs_lookup("version1"), fresco_version);
+    fprintf(f, msgs_lookup("version1"), ""/*fresco_version*/);
 
     if (doc)
     {

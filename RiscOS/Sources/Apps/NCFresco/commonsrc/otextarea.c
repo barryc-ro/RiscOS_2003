@@ -370,7 +370,7 @@ char *otextarea_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x,
 	}
     }
 
-    antweb_place_caret(doc, ti);
+    antweb_place_caret(doc, ti, -1);
 #endif /* BUILDERS */
     return NULL;		/* Do not follow links */
 }

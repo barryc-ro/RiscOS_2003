@@ -546,6 +546,10 @@ static rid_table_colgroup * add_new_colgroup(rid_table_item *table)
     table->colgroups = mm_realloc(table->colgroups, (x+1) * sizeof(rid_table_colgroup *) );
     table->colgroups[x] = mm_calloc(1, sizeof(rid_table_colgroup) );
 
+#if DEBUG && 0
+    dump_cell_map(table, "Post add_new_colgroup");
+#endif
+
     return table->colgroups[x];
 }
 
@@ -581,6 +585,10 @@ static rid_table_rowgroup * add_new_rowgroup(rid_table_item *table)
 
     table->rowgroups = mm_realloc(table->rowgroups, (y+1) * sizeof(rid_table_rowgroup *) );
     table->rowgroups[y] = mm_calloc(1, sizeof(rid_table_rowgroup));
+
+#if DEBUG && 0
+    dump_cell_map(table, "Post add_new_rowgroup");
+#endif
 
     return table->rowgroups[y];
 }
@@ -667,7 +675,7 @@ static void add_retro_col(rid_table_item *table)
     {
 	/* no rows yet - no actual size to cell array */
 	TABDBGN(("No rows, so done add_retro_col()\n"));
-	return;
+	goto done;
     }
 
     /* Then add another column */
@@ -704,7 +712,7 @@ static void add_retro_col(rid_table_item *table)
     if (x < 1)
     {
 	TABDBGN(("Not enough columns to have any replication\n"));
-	return;
+	goto done;
     }
 
     TABDBGN(("Replicating any necessary cells\n"));
@@ -714,11 +722,33 @@ static void add_retro_col(rid_table_item *table)
 	cell = * CELLFOR(table, x - 1, y);
 	if (cell != NULL && cell->flags & rid_cf_INF_HORIZ)
 	{
+	    int  t;
 	    * CELLFOR(table, x, y) = cell;
-	    cell->span.x += 1;
-	    TABDBGN(("Cell %d,%d is replicated from %d,%d\n", x, y, cell->cell.x, cell->cell.y));
+	    TABDBG(("Cell %d,%d in %d,%d table with span %d,%d has sleft %d\n",
+		    x, y, table->cells.x, table->cells.y,
+		    cell->span.x, cell->span.y, cell->sleft));
+	    ASSERT(cell->span.x > 0);
+	    t = cell->sleft / cell->span.x;
+
+	    if (y == cell->cell.y)
+	    {
+		cell->span.x += 1;
+		t *= cell->span.x;
+		cell->sleft = t;
+	    }
+
+	    TABDBGN(("Cell %d,%d is replicated from %d,%d, new sleft %d, span %d,%d\n", 
+		     x, y, cell->cell.x, cell->cell.y, t, cell->span.x, cell->span.y));
 	}
     }
+
+done:
+
+#if DEBUG && 0
+    dump_cell_map(table, "Post add_retro_col");
+#endif
+
+    return;
 }
 
 
@@ -816,7 +846,7 @@ static void add_new_row(rid_table_item *table)
     if (y < 1)
     {
 	TABDBGN(("Not enough rows to have anything to spread\n"));
-	return;
+	goto done;
     }
 
     TABDBGN(("Performing any spreading to row %d from row %d\n", y, y-1));
@@ -827,14 +857,22 @@ static void add_new_row(rid_table_item *table)
 	if (cell == NULL || (cell->flags & rid_cf_COMPLETE) != 0 )
 	    continue;
 
-	if ( (cell->flags & rid_cf_INF_VERT) != 0 || cell->sleft > 0 )
+	if ( (cell->flags & rid_cf_INF_VERT) != 0 )
 	{
-	    if ( (cell->flags & rid_cf_INF_VERT) == 0 )
-		did_repl = 1;
+	    TABDBGN(("Replicating INF_VERT %d,%d span %d,%d from %d,%d\n", 
+		     x, y, cell->span.x, cell->span.y, cell->cell.x, cell->cell.y));
+	    * CELLFOR(table, x, y) = cell;
+	    if ( x == cell->cell.x )
+	    {
+		cell->span.y += 1;
+		TABDBGN(("Root cell - bumping span.y to %d\n", cell->span.y));
+	    }
+	}
+	else if ( cell->sleft > 0 )
+	{
+	    did_repl = 1;
 	    TABDBGN(("Replicating %d,%d from %d,%d\n", x, y, cell->cell.x, cell->cell.y));
 	    * CELLFOR(table, x, y) = cell;
-	    if ( (cell->flags & rid_cf_INF_VERT) != 0 )
-		cell->span.y += 1;
 	    cell->sleft -= 1;
 	}
     }
@@ -842,7 +880,7 @@ static void add_new_row(rid_table_item *table)
     if (! did_repl)
     {
 	TABDBGN(("No completion to check for\n"));
-	return;
+	goto done;
     }
 
     TABDBGN(("Replicated non INF_VERT item - checking for completion\n"));
@@ -866,6 +904,13 @@ static void add_new_row(rid_table_item *table)
     }
 
     /* And update row group */
+
+done:
+#if DEBUG && 0
+    dump_cell_map(table, "Post add_new_row");
+#endif
+
+    return;
 }
 
 /*****************************************************************************
@@ -1061,30 +1106,6 @@ static void start_col_growing(rid_table_item *table, int cols, int *firstp, int 
     }
 }
 
-/*****************************************************************************/
-
-#if DEBUG
-
-static void table_consistency_checks(HTMLCTX *me, rid_table_item *table)
-{
-    int i;
-
-    for (i = 0; i < table->cells.x; i++)
-    {
-	if ( table->colhdrs[i]->colgroup == NULL)
-	    TABDBG(("Warning: column header %d has no column group\n", i));
-
-    }
-
-    TABDBG(("\n"));
-    TABDBG(("\n"));
-    TABDBG(("\n"));
-    TABDBG(("\n"));
-    TABDBG(("\n"));
-}
-
-#endif /* DEBUG */
-
 /*****************************************************************************
 
   Reel back any cells spanning multiple rows that never actually saw
@@ -1119,9 +1140,6 @@ static void restrain_rowspan_cells(HTMLCTX *me, rid_table_item *table)
 
 static void tidy_table(HTMLCTX *me, rid_table_item *table)
 {
-#if DEBUG
-    table_consistency_checks(me, table);
-#endif
 }
 
 /*****************************************************************************
@@ -1371,103 +1389,11 @@ extern void rid_getprop(rid_table_item *table, int x, int y, int prop, void *res
 
 /*****************************************************************************
 
-  Perform some table sanity checks. This is a debugging feature.
-
-  */
-
-#if 0
-
-static void dump_table(rid_table_item *table)
-{
-    typedef struct { char *name; BITS bit; } sb;
-
-    static sb rid_tf[] =
-    {
-	{ "rid_tf_COLS_FIXED       ", rid_tf_COLS_FIXED },
-	{ "rid_tf_LINE_START       ", rid_tf_LINE_START },
-	{ "rid_tf_NO_MORE_CELLS    ", rid_tf_NO_MORE_CELLS },
-	{ "rid_tf_DONE_COLGROUP    ", rid_tf_DONE_COLGROUP },
-	{ "rid_tf_IN_COLGROUP      ", rid_tf_IN_COLGROUP },
-	{ "rid_tf_FULL_BORDER      ", rid_tf_FULL_BORDER },
-	{ "rid_tf_GROUP_SPAN       ", rid_tf_GROUP_SPAN },
-	{ "rid_tf_IMPLIED_COLGROUP ", rid_tf_IMPLIED_COLGROUP },
-	{ "rid_tf_3D_BORDERS       ", rid_tf_3D_BORDERS },
-	{ "rid_tf_COLGROUPSECTION  ", rid_tf_COLGROUPSECTION },
-	{ NULL, 0 }
-    };
-    sb *tfp = rid_tf;
-    int i,x,y;
-
-    TABDBG(("Table %p, cells (%d,%d), %d hrows, %d frows, groups (%d,%d), size (%d,%d)\n",
-	    table->cells.x, table->cells.y, table->header_rows, table->footer_rows,
-	    table->num_groups.x, table->num_groups.y, table->size.x, table->size.y));
-    TABDBG(("parent %p, oldstream %p, oldtable %p\n",
-	    table->parent, table->oldstream, table->oldtable));
-
-    for (; tfp->name != NULL; tfp++)
-    {
-	if ( (table->flags & tfp->bit) != 0 )
-	    TABDBG(("%s\n", tfp->name));
-    }
-
-    dump_caption(table->caption);
-
-    TABDBG(("state %0x\n", table->state));
-
-    dump_props(table->props);
-
-    TABDBG(("id %s, frame %d, rules %d\n",
-	    table->id ? table->id : "*NULL*",
-	    table->frame, table->rules ));
-
-    dump_stdunit("userborder", &table->userborder);
-    dump_stdunit("userwidth", &table->userwidth);
-    dump_stdunit("usercellspacing", &table->usercellspacing);
-    dump_stdunit("usercellpadding", &table->usercellpadding);
-
-    TABDBG(("lborder %d, rborder %d, tborder %d, bborder%d\n",
-	    table->lborder, table->rborder, table->tborder, table->bborder));
-    TABDBG(("cellpadding %d, cellspacing %d, gborder (%d,%d), cborder (%d,%d)\n",
-	    table->cellpadding, table->cellspacing,
-	    table->group_border.x, table->group_border.y,
-	    table->cell_border.x, table->cell_border.y));
-
-    dump_width_info("width_info", &table->width_info);
-    TABDBG(("scaff (%d,%d), colgrp %p, rowgrp %p, colhdr %p, rowhdr %p\n",
-	    table->scaff.x, table->scaff.y,
-	    table->cur_colgroup, table->cur_rowgroup,
-	    table->cur_colhdr, table->cur_rowhdr));
-
-    for (i = 0; i < table->num_groups.x; i++)
-	dump_colgroup(&table->colgroups[i]);
-
-    for (i = 0; i < table->num_groups.y; i++)
-	dump_rowgroup(&table->rowgroups[i]);
-
-    for (i = 0; i < table->cells.x; i++)
-	dump_colhdr(&table->colhdrs[i]);
-
-    for (i = 0; i < table->cells.y; i++)
-	dump_rowhdr(&table->rowhdrs[i]);
-
-    for (x = -1, y = 0; (cell = rid_next_root_cell(table, &x, &y)) != NULL; )
-	dump_table_cell(cell);
-
-    TABDBG(("End of table dump\n"));
-}
-
-#endif
-
-
-/*****************************************************************************
-
   Set the scaffolding for the next cell to use and return TRUE, or return
   FALSE if no empty cell can be found. Might insert <TR> elements as
   necessary.
 
   */
-
-
 
 static BOOL find_empty_cell_this_line(rid_table_item *table)
 {
@@ -1627,7 +1553,7 @@ static void table_deliver (SGMLCTX *context, int reason, STRING item, ELEMENT *e
 
 	PRSDBGN(("table_deliver(): removing table_deliver for pre open <%s>\n", element->name.ptr));
 	sgml_remove_deliver(context, &table_deliver);
-
+#if 0				/* SJM: 19Mar97commented out as this kind of stuff should be handled by the parser */
 	if ( context->applying_rules )
 	{
 	    PRSDBGN(("Applying rules - preventing <TD> consideration\n"));
@@ -1651,7 +1577,7 @@ static void table_deliver (SGMLCTX *context, int reason, STRING item, ELEMENT *e
 		pseudo_html(htmlctx, "<td>");
 	    }
 	}
-
+#endif
 	PRSDBGN(("table_deliver(): <%s> now having it's PRE_OPEN delivered\n", element->name.ptr));
 	(*context->deliver) (context, reason, item, element);
 	break;
@@ -1951,37 +1877,6 @@ extern void starttable(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 
   */
 
-#if DEBUG == 3
-static void dump_table_layout(rid_table_item *ptr)
-{
-    int x, y;
-    rid_table_cell *cell;
-
-    fprintf(stderr, "Cell occupancy:\n");
-
-    for (y = 0; y < ptr->cells.y; y++)
-    {
-	for (x = 0; x < ptr->cells.x; x++)
-	{
-	    cell = * CELLFOR(ptr, x, y);
-	    if (cell == NULL)
-	    {
-		fprintf(stderr, ".");
-	    }
-	    else if (x == cell->cell.x && y == cell->cell.y)
-	    {
-		fprintf(stderr, "#");
-	    }
-	    else
-	    {
-		fprintf(stderr, "-");
-	    }
-	}
-	fprintf(stderr, "\n");
-    }
-}
-#endif
-
 extern void finishtable(SGMLCTX *context, ELEMENT *element)
 {
     HTMLCTX *me = htmlctxof(context);
@@ -2023,10 +1918,8 @@ extern void finishtable(SGMLCTX *context, ELEMENT *element)
 	}
     }
 
-
     /* New block level stuff should ensure this? */
     /*must_have_a_word_pushed(me);*/
-
 
     /* SJM: tables now have to manage their own breaks so ensure one if we are not floating */
     /* SJM: push null item for convenience of scanning */
@@ -2036,8 +1929,7 @@ extern void finishtable(SGMLCTX *context, ELEMENT *element)
 	text_item_push_word(me, 0, FALSE);
 
 #if DEBUG == 3
-    dump_table_layout(table);
-    table_consistency_checks(me, table);
+    dump_cell_map(table, "</TABLE>");
 #endif
 }
 
@@ -2715,6 +2607,9 @@ extern void pre_thtd_warning(HTMLCTX *me)
   required. Otherwise, all the span of a cell will either be created
   or truncated (eg ROWSPAN=2 from above).
 
+  DAF: 970315: Above logic fails for <table> <tr> <td colspan=3>0,0 -
+  2,0 <tr> <td colspan=0>0,1 - 2,1 </table>
+
   When the current row cannot offer a location for the cell, we need
   to check whether we should insert <TR> elements or stop because an
   infinite number of <TR> elements will never find an empty cell. This
@@ -2733,6 +2628,8 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     unsigned char tag;
     int x;
     VALUE *attr;
+
+    TABDBGN(("\n"));
 
     generic_start(context, element, attributes);
 
@@ -2844,7 +2741,9 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     if (cell->span.y < 0)
 	cell->span.y = 1;
 
-    cell->sleft = (cell->span.y - 1)*cell->span.x; /* SJM: added *span.x */
+    /* SJM: added *span.x */
+    /* DAF: If INF_HORIZ, *cell->span.x will always give zero! */
+    cell->sleft = (cell->span.y - 1) * (cell->span.x == 0 ? 1 : cell->span.x);
 
     table->scaff.x += 1;		/* Starting looking after this */
 
@@ -2924,12 +2823,17 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     if (cell->span.x == 1 && cell->span.y == 1)
     {       /* 1x1 cell - no more work */
 	cell->flags |= rid_cf_COMPLETE;
-	return;
+	goto done;
     }
+
+    /* Need to ensure span.y of INF_VERT is greater than zero */
+
+    if (cell->span.y == 0)
+	cell->span.y = 1;
 
     if (cell->span.x == 1)
     {       /* Only vertical growth - done in add_row() */
-	return;
+	goto done;
     }
 
     /* Something about the cell's shape requires extra work */
@@ -2970,24 +2874,35 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	    ASSERT(cell->span.x > 0);
 	}
 
-	return;
+	goto done;
     }
 
     if (cell->span.x == 0)
     {
-	TABDBG(("Cell (%d,%d) extends right as far as possible\n",
-		table->scaff.x, table->scaff.y));
+	TABDBG(("Cell (%d,%d) (span %d,%d, sleft %d) extends right as far as possible\n",
+		cell->cell.x, cell->cell.y, cell->span.x, cell->span.y, cell->sleft));
 	for (x = cell->cell.x + 1; x < table->cells.x; x++)
 	{
 	    cellp = CELLFOR(table,x,table->scaff.y);
 
 	    if ( *cellp == NULL )
+	    {
 		*cellp = cell;
+		TABDBG(("Bump span from %d\n", cell->span.x));
+		cell->span.x++;	/* DAF: 970315 */
+	    }
 	    else
 		break;
 	}
 
-	return;
+	cell->span.x++;
+
+	/* DAF: 970315: Can update this value a bit now */
+	cell->sleft = (cell->span.y - 1) * cell->span.x;
+
+	TABDBG(("INF_HORIZ cell (%d,%d) now has span (%d,%d), sleft %d\n",
+		cell->cell.x, cell->cell.y, cell->span.x, cell->span.y, cell->sleft));
+	goto done;
     }
 
     /* Grow col(s) to fit cell, if possible */
@@ -3001,7 +2916,7 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	{
 	    add_retro_col(table);
 	    if (table->state == tabstate_BAD)
-		return;
+		goto done;
 	}
 	/* See if would overlap with a previous cell */
 	cellp = CELLFOR(table, cell->cell.x + x, table->scaff.y);
@@ -3023,7 +2938,7 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	    /* Would overlap - constrict current cell */
 	    cell->span.x = x;       /* ? */
 #endif
-	    return;
+	    goto done;
 	}
 
 	    /* Grow the cell horizontally into the neighbouring cell */
@@ -3032,6 +2947,15 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 
     if (cell->span.y == 1)
 	cell->flags |= rid_cf_COMPLETE;
+
+
+done:
+#if DEBUG && 0
+    TABDBGN(("\n"));
+    dump_cell_map(table, "Cell map after adding new cell");
+#endif
+
+    return;
 }
 
 

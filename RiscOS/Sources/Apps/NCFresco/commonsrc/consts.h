@@ -1,5 +1,8 @@
 /* -*-c-*- */
 
+/* Not all of these are considered contstant! Shame! */
+/* Most should be obtained on a per-document basis.  */
+
 /**********************************************************************/
 
 #define MILIPOINTS_PER_OSUNIT	400
@@ -16,8 +19,14 @@
 #endif
 
 #define MIN_WIN_HEIGHT	-1024
-#define PBREAK_SPACING	12
-#define PBREAK_HEIGHT	(PBREAK_SPACING+4)
+
+#ifdef PLOTCHECK
+#	define PBREAK_SPACING	2
+#	define PBREAK_HEIGHT	(PBREAK_SPACING+2)
+#else
+#	define PBREAK_SPACING	12
+#	define PBREAK_HEIGHT	(PBREAK_SPACING+4)
+#endif
 
 #define BIGINT          0x70000000      /* Used by tables - a wide formatting width */
 

@@ -389,7 +389,7 @@ void fe_open_keyboard(fe_view v)
 }
 
 /* ----------------------------------------------------------------------------------------------------- */
-
+#if 0
 static BOOL fe_caretise(fe_view v)
 {
     /* if the highlighted object is actually an INPUT then place caret  */
@@ -408,7 +408,7 @@ static BOOL fe_caretise(fe_view v)
     }
     return FALSE;
 }
-
+#endif
 /* ----------------------------------------------------------------------------------------------------- */
 
 static void fe_type_file(fe_view v, const char *file_name)
@@ -1318,9 +1318,9 @@ int fe_check_download_finished(fe_view v)
 	    if (pointer_mode != pointermode_OFF)
 		flags |= be_link_TEXT;
 
-	    vcaret->current_link = backend_highlight_link(vcaret->displaying, vcaret->current_link, flags);
-
+	    vcaret->current_link = backend_highlight_link(vcaret->displaying, vcaret->current_link, flags | be_link_CARETISE);
 	    STBDBG(( "stbfe: current link %p/%p\n", vcaret, vcaret->current_link));
+#if 0
 	    if (!fe_caretise(vcaret))
 	    {
 		STBDBG(( "stbfe: place caret %p\n", vcaret));
@@ -1329,6 +1329,7 @@ int fe_check_download_finished(fe_view v)
 
 		STBDBG(( "stbfe: placed caret %p\n", vcaret));
 	    }
+#endif
 	}
     }
 
@@ -2184,6 +2185,91 @@ void fe_open_info(fe_view v, be_item ti, int x, int y)
 
 /* ------------------------------------------------------------------------------------------- */
 
+/*
+ * Using the vert and back flags travel out from box and work out what view we end up in
+ */
+
+static os_error *fe__locate_view_by_position(fe_view v, void *handle)
+{
+    int *vals = handle;
+    int pdist, sdist, s1, s2;
+
+    if (v->children)
+	return NULL;
+    
+    pdist = s1 = s2 = 0;
+    switch (vals[4] & (be_link_VERT|be_link_BACK))
+    {
+    case 0:			/* -> */
+	pdist = v->box.x0 - vals[2];
+
+	s1 = abs(v->box.y0 - vals[3]);
+	s2 = abs(v->box.y1 - vals[3]);
+	break;
+
+    case be_link_VERT:		/* \/ */
+	pdist = vals[3] - v->box.y1;
+
+	s1 = abs(v->box.x0 - vals[2]);
+	s2 = abs(v->box.x1 - vals[2]);
+	break;
+
+    case be_link_VERT | be_link_BACK: /* /\ */
+	pdist = v->box.y0 - vals[3];
+
+	s1 = abs(v->box.x0 - vals[2]);
+	s2 = abs(v->box.x1 - vals[2]);
+	sdist = s1 < s2 ? s1 : s2;
+	break;
+
+    case be_link_BACK:		/* <- */
+	pdist = vals[2] - v->box.x1;
+
+	s1 = abs(v->box.y0 - vals[3]);
+	s2 = abs(v->box.y1 - vals[3]);
+	break;
+    }
+
+    sdist = s1 < s2 ? s1 : s2;
+
+    if (pdist < vals[0] ||
+	(pdist == vals[0] && sdist < vals[1]))
+    {
+	vals[0] = pdist;
+	vals[1] = sdist;
+	vals[5] = (int)v;
+    }
+    
+    return NULL;
+}
+
+static fe_view fe_locate_view_by_position(wimp_box *box, int flags)
+{
+    int vals[6];
+    fe_view v = main_view;
+
+    /* travel to top most popup */
+    while (v->next)
+	v = v->next;
+
+    /* if no frames just return the view */
+    if (v->children == NULL)
+	return v;
+    
+    /* otherwise scan down for the best one */
+    vals[0] = INT_MAX;		/* prim distance */
+    vals[1] = INT_MAX;		/* sec distance */
+    vals[2] = (box->x0 + box->x1) / 2;
+    vals[3] = (box->y0 + box->y1) / 2;
+    vals[4] = flags;
+    vals[5] = NULL;		/* fe_view */
+
+    iterate_frames(v->children, fe__locate_view_by_position, vals);
+    v = (fe_view) vals[5];
+
+    return v;
+}
+
 static fe_view fe_next_frame(fe_view v, BOOL next)
 {
     do
@@ -2251,8 +2337,8 @@ void fe_move_highlight_frame(fe_view v, BOOL next)
 
         if (vv->displaying)
         {
-            vv->current_link = backend_highlight_link(vv->displaying, NULL, (next ? 0 : be_link_BACK) | be_link_VISIBLE | be_link_DONT_HIGHLIGHT);
-
+            vv->current_link = backend_highlight_link(vv->displaying, NULL, (next ? 0 : be_link_BACK) | be_link_VISIBLE | be_link_CARETISE);
+#if 0
             if (vv->current_link)
             {
                 if (!fe_caretise(vv))
@@ -2262,12 +2348,17 @@ void fe_move_highlight_frame(fe_view v, BOOL next)
             {
                 backend_place_caret(vv->displaying, NULL);
             }
+#endif
         }
     }
 }
 
 /*
- * The coordinates passed here are in screen coordinates
+ * The coordinates passed here are in screen coordinates. They are the box enclosing the button
+ * that was highlighted on the toolbar or the transfer link in the frame border.
+
+ * This routine should work out which view to move into first.
+
  */
 
 void fe_move_highlight_xy(fe_view v, wimp_box *box, int flags)
@@ -2278,41 +2369,44 @@ void fe_move_highlight_xy(fe_view v, wimp_box *box, int flags)
 
     STBDBG(("fe_move_highlight_xy: v %p x=%d-%d y=%d-%d flags %x\n", v, box->x0, box->x1, box->y0, box->y1, flags));
 
-    if (!v)
-        return;
-
     if (use_toolbox && (flags & be_link_VERT))
 	tb_status_set_direction(flags & be_link_BACK ? 1 : 0);
     
     pointer_mode = pointermode_ON;  /* so that scroll_changed doesn't reposition highlight  */
 
-    if (v->displaying)
+    if ((flags & be_link_XY) && box)
     {
-	if ((flags & be_link_XY) && box)
-	{
-	    wimp_box cbox;
-	    wimp_wstate state;
-	    
-	    /* if given a position then search from that position */
-	    cbox = *box;
+	wimp_box cbox;
+	wimp_wstate state;
 
-	    wimp_get_wind_state(v->w, &state);
-	    coords_box_toworkarea(&cbox, (coords_cvtstr *)&state.o.box);
+	v = fe_locate_view_by_position(box, flags);
+	if (!v)
+	    return;
+	
+	/* if given a position then search from that position */
+	cbox = *box;
+	
+	wimp_get_wind_state(v->w, &state);
+	coords_box_toworkarea(&cbox, (coords_cvtstr *)&state.o.box);
+	
+	old_link = NULL;
+	new_link = backend_highlight_link_xy(v->displaying, NULL, &cbox, flags | be_link_XY | be_link_DONT_HIGHLIGHT);
+	new_v = v;
+    }
+    else if (!v)
+    {
+	return;
+    }
+    else if (v->displaying)
+    {
+	/* if we had a caret shown then move from here  */
+	/* else from previous selection */
+	old_link = backend_place_caret(v->displaying, backend_place_caret_READ);
+	if (old_link == NULL)
+	    old_link = v->current_link;
 
-	    old_link = NULL;
-	    new_link = backend_highlight_link_xy(v->displaying, NULL, &cbox, flags | be_link_XY | be_link_DONT_HIGHLIGHT);
-	}
-	else
-	{
-	    /* if we had a caret shown then move from here  */
-	    /* else from previous selection */
-	    old_link = backend_place_caret(v->displaying, backend_place_caret_READ);
-	    if (old_link == NULL)
-		old_link = v->current_link;
-
-	    /* try to move to next highlight if there is one */
-	    new_link = backend_highlight_link(v->displaying, old_link, flags | be_link_DONT_WRAP | be_link_DONT_HIGHLIGHT);
-	}
+	/* try to move to next highlight if there is one */
+	new_link = backend_highlight_link(v->displaying, old_link, flags | be_link_DONT_WRAP | be_link_DONT_HIGHLIGHT);
 
 	new_v = v;
     }
@@ -2397,11 +2491,16 @@ void fe_move_highlight_xy(fe_view v, wimp_box *box, int flags)
         /* if the highlighted object is actually an INPUT then place caret  */
         if (new_v->displaying)
 	{
+#if 1
+	    backend_highlight_link(new_v->displaying, new_link, be_link_ONLY_CURRENT | be_link_CARETISE | (flags & be_link_VERT | be_link_BACK));
+				/* include original flags so we know the direction we were trying to travel in */
+#else
 	    if (!fe_caretise(new_v))
 	    {
 		backend_update_link(new_v->displaying, new_link, 1);
 		backend_place_caret(new_v->displaying, NULL);
 	    }
+#endif
 	}
 	else
 	{
@@ -2862,8 +2961,8 @@ void fe_scroll_changed(fe_view v, int x, int y)
             frontend_view_bounds(v, &bb);
 
             dir = box.y1 < bb.y0 ? be_link_BACK : 0;
-            v->current_link = backend_highlight_link(v->displaying, v->current_link, dir | be_link_VISIBLE | be_link_INCLUDE_CURRENT);
-            fe_caretise(v);
+            v->current_link = backend_highlight_link(v->displaying, v->current_link, dir | be_link_VISIBLE | be_link_INCLUDE_CURRENT | be_link_CARETISE);
+/*             fe_caretise(v); */
         }
     }
 }

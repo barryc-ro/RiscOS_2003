@@ -15,6 +15,10 @@
 #include "backend.h"
 #include "fvpr.h"
 #include "images.h"
+#include "myassert.h"
+#include "htmlparser.h"
+
+#include "dump.h"
 
 /*****************************************************************************
 
@@ -202,6 +206,10 @@ extern BOOL fvpr_progress_stream_flush(rid_text_stream *stream)
 
     RENDBG(("fvpr: flushing from %p to %p", stream->text_fvpr, stream->text_last));
 
+#if DEBUG && 0
+    dump_stream(stream, NULL);
+#endif
+
     if (stream->text_fvpr != NULL)
     {
 	if (stream->text_fvpr != stream->text_last)
@@ -212,6 +220,7 @@ extern BOOL fvpr_progress_stream_flush(rid_text_stream *stream)
 
 	    for (ti = stream->text_fvpr; ti != stream->text_last; ti = rid_scanfr(ti))
 	    {
+		TASSERT(ti->line != NULL);
 		ti->flag |= rid_flag_FVPR;
 	    }
 

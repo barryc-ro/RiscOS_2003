@@ -19,7 +19,7 @@
 
 
 #if 0
-/*MEMWATCH >= 2*/
+/* MEMWATCH >= 2 */
 
 /* Defeat tail-call optimisation, so these appear in caller(n) logs! */
 static int foo;

@@ -65,6 +65,7 @@ static int strcount( const char *s, char c )
 
 void coalesce( rid_header *rh, rid_pos_item *line )
 {
+#ifndef BUILDERS
     rid_text_item_text *tit, *tit2;
     rid_text_stream *st;
 
@@ -149,10 +150,12 @@ void coalesce( rid_header *rh, rid_pos_item *line )
 
         tit = tit2;
     }
+#endif
 }
 
 void un_coalesce( rid_header *rh, rid_text_item *ti )
 {
+#ifndef BUILDERS
     rid_text_item_text *tit = (rid_text_item_text*) ti;
     rid_text_stream *st;
     rid_pos_item *line;
@@ -277,4 +280,5 @@ void un_coalesce( rid_header *rh, rid_text_item *ti )
     fdebugf( stderr, "\nunco: out\n" );
 
     /* Phew... */
+#endif
 }

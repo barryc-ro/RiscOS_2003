@@ -162,6 +162,13 @@ static void be_doc_fetch_bg(antweb_doc *doc);
 void be_caption_stream_origin(rid_table_item *table, int *dx, int *dy);
 void be_cell_stream_origin(rid_table_item *table, rid_table_cell *cell, int *dx, int *dy);
 
+#ifdef BUILDERS
+extern
+#else
+static
+#endif
+void be_document_reformat_tail(antweb_doc *doc, rid_text_item *oti, int user_width);
+
 /**********************************************************************/
 
 static be_doc document_list = NULL;
@@ -264,7 +271,7 @@ static int rid_table_holds_image(rid_text_item *item, void *i, antweb_doc *doc)
 
 
 /**********************************************************************/
-
+#if 0
 /*
  * This mechanism bypasses the code in antweb_place_input() and so may need updating.
  */
@@ -294,7 +301,7 @@ static rid_text_item *antweb_next_text_input(rid_text_item *ti, be_doc doc)
 
     return ti;
 }
-
+#endif
 /*****************************************************************************/
 
 #define CLESS(x)	(cless ? toupper(x) : (x))
@@ -563,12 +570,12 @@ static void backend__doc_click(be_doc doc, be_item ti, int x, int y, wimp_bbits 
         }
         else
         {
-	    antweb_place_caret(doc, doc->input);
+	    antweb_default_caret(doc, TRUE);
 	}
     }
     else
     {
-	antweb_place_caret(doc, doc->input);
+	antweb_default_caret(doc, TRUE);
     }
 
     doc->threaded--;
@@ -1794,6 +1801,7 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 
 }
 
+#if 0
 void antweb_place_caret(antweb_doc *doc, rid_text_item *ti)
 {
     rid_text_item *old_ti = doc->input;
@@ -1821,6 +1829,7 @@ void antweb_place_caret(antweb_doc *doc, rid_text_item *ti)
 	frontend_view_caret(doc->parent, 0, 0, -1, 0);
     }
 }
+#endif
 
 extern os_error *antweb_document_sizeitems(antweb_doc *doc)
 {
@@ -2130,7 +2139,7 @@ extern rid_pos_item *be_formater_loop_core( rid_header *rh, rid_text_stream *st,
 
     FMTDBG(("be_formater_loop_core(%p, %p, %p, %x)\n", st, this_item, fmt, flags));
 
-#if DEBUG && 0
+#if DEBUG && 1
     if (flags & rid_fmt_MIN_WIDTH  )
     {
 	FMTDBG(("rid_fmt_MIN_WIDTH  \n"));
@@ -2157,8 +2166,8 @@ extern rid_pos_item *be_formater_loop_core( rid_header *rh, rid_text_stream *st,
     }
 #endif
 
-    FMTDBG(("Entry: left %d, right %d, width %d or %d\n",
-	     *fmt->left, *fmt->right, *fmt->width, display_width));
+    FMTDBG(("Entry: left %d, right %d, width %d or %d, widest %d\n",
+	     *fmt->left, *fmt->right, *fmt->width, display_width, widest));
 
 /*dump_stream(st, NULL );*/
 
@@ -2644,8 +2653,13 @@ extern rid_pos_item *be_formater_loop_core( rid_header *rh, rid_text_stream *st,
     if (widest > *fmt->width)
 	*fmt->width = widest;
 
-    FMTDBG(("Exit:  left %d, right %d, width %d\n",
-	     *fmt->left, *fmt->right, *fmt->width));
+    FMTDBG(("Exit:  left %d, right %d, width %d, widest %d (fwidth %d)\n",
+	     *fmt->left, *fmt->right, *fmt->width, widest, st->fwidth));
+
+    if (widest > st->fwidth)
+    {
+	FMTDBG(("\n\n**** Formatted widest %d exceeds fwidth %d\n\n", widest, st->fwidth));
+    }
 
     if ( (flags & rid_fmt_BUILD_POS) != 0 )
     {
@@ -2718,7 +2732,8 @@ static void sizing_sharing_table_proc(
 }
 #endif
 
-#if DEBUG
+/* DAF: 970317: Was #if DEBUG */
+#if 1
 static void stomp_contained_widths(rid_text_stream *st)
 {
     rid_text_item *ti;
@@ -2776,9 +2791,13 @@ static void be_formater_loop(rid_header *rh, rid_text_item *ti, int scale_value)
         /* Then get min|max widths for tables */
         rid_size_stream(rh, st, &fmt, 0, ti);
 
+	{ static int be_really_really_cautious_about_whether_want_this_feature; }
+
+#if 1
 #if DEBUG
 	fprintf(stderr, "Width after formatting is %d, versus fwidth %d\n",
 		*fmt.width, rh->stream.fwidth);
+#endif
 
 	if (*fmt.width > rh->stream.fwidth)
 	{
@@ -2922,7 +2941,7 @@ void be_document_reformat_tail(antweb_doc *doc, rid_text_item *oti, int user_wid
     /* SJM: this seems to happen, I don't know why */
     if (new == NULL)
 	return;
-    
+
     /* Zero all existing widest and height values in nested items */
     rid_zero_widest_height_from_item(ti);
 
@@ -2981,6 +3000,10 @@ void be_document_reformat_tail(antweb_doc *doc, rid_text_item *oti, int user_wid
 
     FMTDBG(("be_formater_loop() done\n"));
 
+#ifndef BUILDERS
+    antweb_build_selection_list(doc);
+#endif
+
     bb.x1 = doc->rh->stream.widest > user_width ? doc->rh->stream.widest : user_width;
     bb.y0 = doc->rh->stream.height;
 
@@ -3013,6 +3036,8 @@ static void be_set_dimensions(be_doc doc)
 #if USE_MARGINS
         doc->rh->stream.fwidth -= doc->margin.x0 - doc->margin.x1;
 #endif
+	ASSERT(doc->rh->stream.fwidth > 0);
+
         antweb_document_format(doc, doc->rh->stream.fwidth);
 
 /* 	objects_check_movement(doc); moved to inside antweb_document_format() */
@@ -3060,14 +3085,15 @@ os_error *backend_reset_width(be_doc doc, int width)
 #if USE_MARGINS
 	    doc->rh->stream.fwidth -= doc->margin.x0 - doc->margin.x1;
 #endif
+	    ASSERT(doc->rh->stream.fwidth > 0);
+
             antweb_document_format(doc, doc->rh->stream.fwidth);
 
             be_set_dimensions(doc);
         }
     }
 
-    if (frontend_view_has_caret(doc->parent))
-        antweb_place_caret(doc, doc->input);
+    antweb_default_caret(doc, FALSE);
 
     return NULL;
 }
@@ -3521,10 +3547,7 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
 	    }
 	}
 
-	if (frontend_view_has_caret(doc->parent))
-	{
-	    antweb_place_caret(doc, doc->input);
-	}
+	antweb_default_caret(doc, FALSE);
     }
     else
     {
@@ -3672,6 +3695,7 @@ static void antweb_init_page(antweb_doc *doc)
 #if USE_MARGINS
 	doc->rh->stream.fwidth -= doc->margin.x0 - doc->margin.x1;
 #endif
+	ASSERT(doc->rh->stream.fwidth > 0);
 
 	antweb_document_format(doc, doc->rh->stream.fwidth);
 
@@ -3686,8 +3710,7 @@ static void antweb_init_page(antweb_doc *doc)
 
 	be_update_image_info(doc);
 
-	if (frontend_view_has_caret(doc->parent))
-	    antweb_place_caret(doc, NULL);
+	antweb_default_caret(doc, FALSE);
     }
 }
 
@@ -4295,10 +4318,9 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
 #if !defined(STBWEB) && !defined(BUILDERS)
 	if (frontend_view_has_caret(doc->parent))
 	{
-	    doc->text_input_offset = -1;
-
-	    antweb_place_caret(doc, backend_highlight_link(doc, doc->rh->stream.text_list,
-							  be_link_INCLUDE_CURRENT | be_link_TEXT | be_link_DONT_HIGHLIGHT | be_link_VISIBLE));
+	    antweb_place_caret(doc,
+			       backend_highlight_link(doc, doc->rh->stream.text_list, be_link_INCLUDE_CURRENT | be_link_TEXT | be_link_DONT_HIGHLIGHT | be_link_VISIBLE),
+			       -1);
 	}
 #endif
 
@@ -4646,6 +4668,7 @@ os_error *backend_doc_key(be_doc doc, int key, int *used)
     return NULL;
 }
 
+#if 0
 os_error *backend_doc_cursor(be_doc doc, int motion, int *used)
 {
     int redraw = FALSE;
@@ -4732,6 +4755,7 @@ os_error *backend_doc_cursor(be_doc doc, int motion, int *used)
 
     return NULL;
 }
+#endif
 
 #ifdef STBWEB
 os_error *backend_doc_images(be_doc doc, int *waiting, int *fetching, int *fetched, int *errors, int* in_trans, int *so_far)
@@ -5077,6 +5101,7 @@ os_error *backend_activate_link(be_doc doc, be_item item, int flags)
     return NULL;
 }
 
+#if 0
 be_item backend_place_caret(be_doc doc, be_item item)
 {
     be_item input = doc->input;
@@ -5086,6 +5111,7 @@ be_item backend_place_caret(be_doc doc, be_item item)
 
     return input;
 }
+#endif
 
 /* veneers onto access.c functions */
 
@@ -5192,7 +5218,7 @@ void backend_select_item(be_doc doc, be_item item, int select)
 }
 #endif
 
-#ifdef STBWEB
+#if 0
 /* FIXME: this needs to be updated for the new selection model */
 be_item backend_find_selected(be_doc doc)
 {
@@ -5265,16 +5291,14 @@ void backend_doc_reformat(be_doc doc)
 
 	be_set_dimensions(doc);
 
-	if (frontend_view_has_caret(doc->parent))
-	    antweb_place_caret(doc, doc->input);
+	antweb_default_caret(doc, FALSE);
     }
 }
 #endif
 
-#ifdef STBWEB
 void backend_doc_set_scaling(be_doc doc, int scale_value)
 {
-    if (doc)
+    if (doc && (doc->scale_value != scale_value) )
     {
 	doc->scale_value = scale_value;
 
@@ -5283,11 +5307,9 @@ void backend_doc_set_scaling(be_doc doc, int scale_value)
 
 	be_set_dimensions(doc);
 
-	if (frontend_view_has_caret(doc->parent))
-	    antweb_place_caret(doc, doc->input);
+	antweb_default_caret(doc, FALSE);
     }
 }
-#endif
 
 extern void backend_plugin_action(be_doc doc, be_item item, int action)
 {
