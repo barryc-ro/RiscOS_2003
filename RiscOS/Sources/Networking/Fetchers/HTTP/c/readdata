@@ -96,6 +96,9 @@ static int http_read_more_header(_kernel_swi_regs *r, Session *ses)
 			ses->buffer = new_buffer;
 		}
 		else {
+		        #ifdef TRACE
+		        protocol_debug("module_realloc failed!\n");
+		        #endif
 			ses->done = HTTP_ERROR;
 			http_set_return(r, status_ABORTED, r->r[4], 0, ses);
 			return 0;
@@ -209,9 +212,9 @@ static int http_process_chunks(_kernel_swi_regs *r, Session *ses, int *maxbytes)
  */
 static void http_reading_response(_kernel_swi_regs *r, Session *ses)
 {
-	int dataread = 0;
+	int dataread = 0, rawread;
 	char *buffer;
-	int bufsize;
+	int bufsize, toread;
 
 	if (ses->donehead == FALSE) {
 	        if (http_read_more_header(r, ses) == 0) {
@@ -225,7 +228,7 @@ static void http_reading_response(_kernel_swi_regs *r, Session *ses)
 
 	errno = 0;
 	buffer = (char *) r->r[2];
-	bufsize = r->r[3];
+	bufsize = toread = r->r[3];
 
 	if (bufsize <= 0) {
 	        http_set_return(r, status_READING_REPLY, r->r[4], -1, ses);
@@ -246,7 +249,7 @@ static void http_reading_response(_kernel_swi_regs *r, Session *ses)
 		 * the limit of the SVC stack).
 		 *
 		 */
-		int newsize = bufsize;
+		int newsize = toread;
 
 		/* First rule is that we don't know the entity header size */
                 r->r[5] = -1;
@@ -262,7 +265,7 @@ static void http_reading_response(_kernel_swi_regs *r, Session *ses)
 	                return;
 	        }*/
 
-		bufsize = newsize;
+		toread = newsize;
 
 	        /* To get here, the chunker has determined that it is safe to read data directly
 	         * into the client buffer.  The amount of data to read is stored in bufsize, which
@@ -271,7 +274,12 @@ static void http_reading_response(_kernel_swi_regs *r, Session *ses)
 	         */
 	}
 
-	dataread = ses->op->s_recv(ses->sd, buffer, bufsize, 0);
+        #ifdef COMPRESSION
+        if (ses->compression) {
+                dataread = decompress(ses, buffer, bufsize, toread, &rawread);
+        } else
+	#endif
+	dataread = rawread = ses->op->s_recv(ses->sd, buffer, toread, 0);
 
 	#ifdef TRACE
 	protocol_debug("receiving_body state: recv returns %d (errno now %d)\n", dataread, errno);
@@ -284,7 +292,7 @@ static void http_reading_response(_kernel_swi_regs *r, Session *ses)
 	        ses->sent += dataread;
 	        http_write_data_to_client(r, buffer, dataread);
 	        if (ses->chunking) {
-	                ses->chunk_bytes -= dataread;
+	                ses->chunk_bytes -= rawread;
 	                if (ses->chunk_bytes == 0 && r->r[3] > 0) {
 	                        /* See comment in block containing call to http_process_chunks about
 	                         * this tail-recursive call.

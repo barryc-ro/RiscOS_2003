@@ -40,9 +40,9 @@ CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
 CFLAGS	 = -c -depend !Depend ${INCLUDES} -zM -Wp -ffah -zps1 ${DFLAGS}
-DFLAGS	 = -D${SYSTEM} -DCOMPAT_INET4 -DCOOKIE -UTML
+DFLAGS	 = -D${SYSTEM} -DCOMPAT_INET4 -DCOOKIE -DCOMPRESSION -UTML
 ROMFLAGS = -DROM
-INCLUDES = -ITCPIPLibs:,C:
+INCLUDES = -ITCPIPLibs:,C:,C:zlib
 DEBFLAGS = -DTRACE -DUSE_SYSLOG
 
 #
@@ -50,6 +50,7 @@ DEBFLAGS = -DTRACE -DUSE_SYSLOG
 #
 ANSILIB	  = CLib:o.ansilib
 CLIB	  = CLIB:o.stubs
+ZLIB      = C:zlib.o.zlibzm
 DEBLIBS   = <syslog$dir>.c-veneer.o.syslog
 RLIB	  = RISCOSLIB:o.risc_oslib
 ROMCSTUBS = RISCOSLIB:o.romcstubs
@@ -62,6 +63,7 @@ OBJS =\
  o.connpool\
  o.cookie\
  o.dates\
+ o.decompress\
  o.dns\
  o.generic\
  o.header\
@@ -85,6 +87,7 @@ RAM_OBJS =\
  o.connpool\
  o.cookie\
  o.dates\
+ o.decompress\
  o.dns\
  o.generic\
  o.header\
@@ -109,6 +112,7 @@ DBG_OBJS =\
  od.connpool\
  od.cookie\
  od.dates\
+ od.decompress\
  od.dns\
  od.generic\
  od.header\
@@ -189,14 +193,14 @@ rom_link:
 ${MSGSF}: @.Resources.${LOCALE}.Messages
 	resgen messages_file ${MSGSF} Resources.${LOCALE}.Messages ${RESFSDIR}.Messages
 
-${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB}
+${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS} ${ZLIB} ${CLIB}
 	${mkdir} rm
-	${LD} -o $@ -module ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB}
+	${LD} -o $@ -module ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS} ${ZLIB} ${CLIB}
 	Access $@ RW/R
 
-${DBG_MODULE}: ${DBG_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB} ${DEBLIBS}
+${DBG_MODULE}: ${DBG_OBJS} ${MSGSF} ${TCPIPLIBS} ${ZLIB} ${CLIB} ${DEBLIBS}
 	${mkdir} rm
-	${LD} -o $@ -module ${DBG_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB} ${DEBLIBS}
+	${LD} -o $@ -module ${DBG_OBJS} ${MSGSF} ${TCPIPLIBS} ${ZLIB} ${CLIB} ${DEBLIBS}
 	Access $@ RW/R
 
 o.moduleRAM: module.c
