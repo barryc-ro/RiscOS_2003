@@ -11,13 +11,14 @@
 # Program specific options:
 #
 
-COMPONENT = EngMenu
-APP	  = !EngMenu
-RDIR      = Resources.${USERIF}
-LDIR	  = EngMenuRes:
-TARGET    = ${RDIR}.!RunImage
-D_TARGET  = ${RDIR}.!RunImaDB
-I_TARGET  = ${RDIR}.!RunImagI
+COMPONENT   = EngMenu
+APP	    = !EngMenu
+RDIR        = Resources.${USERIF}
+LDIR	    = EngMenuRes:
+TARGET      = ${RDIR}.!RunImage
+UTIL_TARGET = ${RDIR}.CheckStrt
+D_TARGET    = ${RDIR}.!RunImaDB
+I_TARGET    = ${RDIR}.!RunImagI
 
 # Resources paths
 #
@@ -57,6 +58,8 @@ DLIBS  = <LIB$Dir>.DebugLib.o.debuglib TCPIPLibs:o.socklib TCPIPLibs:o.inetlib
 #
 INCLUDES =  -IC:,TCPIPLibs:
 
+UTILOBJS =	\
+o.CheckStrt
 
 OBJS     = 	\
 o.main 		\
@@ -120,6 +123,11 @@ all: ${TARGET} dirs
 d_all: ${D_TARGET} dirs
 	access ${D_TARGET} RW/r
         @echo ${COMPONENT}: all complete
+
+util:  ${UTIL_TARGET} dirs
+	access ${UTIL_TARGET} RW/r
+	SetType ${UTIL_TARGET} Utility
+	@echo ${COMPONENT}: utility complete
         
 instrument: ${I_TARGET} dirs
 	access ${I_TARGET} RW/r
@@ -143,12 +151,14 @@ resources: ${TARGET} dirs
         access ${RESAPP}.!Run WR/r
         ${CP} ${RDIR}.Pace	${RESAPP}.Pace ${CPFLAGS}
         access ${RESAPP}.Pace WR/r
-        ${CP} ${RDIR}.CheckKey	${RESAPP}.CheckKey ${CPFLAGS}
-        access ${RESAPP}.CheckKey WR/r
+        ${CP} ${RDIR}.CheckStrt	${RESAPP}.CheckStrt ${CPFLAGS}
+        access ${RESAPP}.CheckStrt WR/r
         ${CP} ${LDIR}Messages   ${RESAPP}.Messages ${CPFLAGS}
         access ${RESAPP}.Messages WR/r
-        ${CP} ${LDIR}Config     ${RESAPP}.Config ${CPFLAGS}
-        access ${RESAPP}.Config WR/r
+        ${CP} ${LDIR}ConfigNTSC ${RESAPP}.ConfigNTSC ${CPFLAGS}
+        access ${RESAPP}.ConfigNTSC WR/r
+        ${CP} ${LDIR}ConfigPAL ${RESAPP}.ConfigPAL ${CPFLAGS}
+        access ${RESAPP}.ConfigPAL WR/r
         ${CP} ${RDIR}.!RunImage ${RESAPP}.!RunImage ${CPFLAGS}
         access ${RESAPP}.!RunImage WR/r
         access ${RESAPP} /r
@@ -159,6 +169,7 @@ clean:
         ${WIPE} ${TARGET} ${WFLAGS}
         ${WIPE} ${d_TARGET} ${WFLAGS}
         ${WIPE} ${I_TARGET} ${WFLAGS}
+	${WIPE} ${UTIL_TARGET} ${WFLAGS}
         ${WIPE} o ${WFLAGS}
         ${WIPE} d_o ${WFLAGS}
         ${WIPE} i ${WFLAGS}
@@ -166,16 +177,21 @@ clean:
         ${WIPE} inst ${WFLAGS}
         ${WIPE} ${RESAPP}.!Run ${WFLAGS}
         ${WIPE} ${RESAPP}.Pace ${WFLAGS}
-        ${WIPE} ${RESAPP}.CheckKey ${WFLAGS}
+        ${WIPE} ${RESAPP}.CheckStrt ${WFLAGS}
         ${WIPE} ${RESAPP}.!RunImage ${WFLAGS}
         ${WIPE} ${RESAPP}.Messages ${WFLAGS}
-        ${WIPE} ${RESAPP}.Config ${WFLAGS}
+        ${WIPE} ${RESAPP}.ConfigNTSC ${WFLAGS}
+        ${WIPE} ${RESAPP}.ConfigPAL ${WFLAGS}
         ${WIPE} ${RESAPP} ${WFLAGS}	
         @echo ${COMPONENT}: cleaned
         
 #
 # Target
 #
+${UTIL_TARGET}: ${UTILOBJS}
+	${LD} -o $@ -bin ${UTILOBJS}
+	
+	
 ${I_TARGET}: ${OBJSINST}
 	${LD} ${Linkflags} ${OBJSINST} ${CLIB}
 
