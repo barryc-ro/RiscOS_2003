@@ -3,11 +3,11 @@
 # ***********************************
 # ***    C h a n g e   L i s t    ***
 # ***********************************
-# Date       Name   Description
-# ----       ----   -----------
-# 12/05/97  RLougher  Created
-# 04/06/98  SBrodie   Added RAM build into same Makefile
-#
+# Date       Name   	Description
+# ----       ----   	-----------
+# 12/05/97  RLougher  	Created
+# 04/06/98  SBrodie   	Added RAM build into same Makefile
+# 11/08/98  MRobertshaw Updated file for Funai II Build
 
 #
 # Component specific options:
@@ -37,7 +37,8 @@ CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
 CFLAGS   = -c -depend !Depend ${INCLUDES} -zM -ffah -zps1 ${DFLAGS}
-INCLUDES = -IC:tboxlibint,C:tboxlibs,C:
+#INCLUDES = -IC:tboxlibint,C:tboxlibs,C:
+INCLUDES = -Itbox:,C:
 
 #
 # Libraries
@@ -47,8 +48,8 @@ CLIB      = CLIB:o.stubs
 RLIB      = RISCOSLIB:o.risc_oslib
 ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.c_abssym
-TBOXLIB   = c:tboxlibs.o.toolboxlib
-WIMPLIB   = c:tboxlibs.o.wimplib
+TBOXLIB   = tbox:o.toolboxlib
+WIMPLIB   = tbox:o.wimplib
 
 OBJS =\
 	o.Modhdr \
