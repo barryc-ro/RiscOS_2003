@@ -9,29 +9,8 @@
 ; This code is designed to be compiled under AAsm 2.00, NOT ObjAsm.
 ; As a result, you will need "s.Registers" and "s.SWIs" to be with this file.
 
-; *****************************************************************************
-; The following changes have been made to fit these sources in with the RiscOS
-; build tree :
-;	1) Header file Registers replaced with RiscOS system file
-;	2) Header file SWIs replaced with RiscOS system files
-;	3) Version information split into separate file
-
-        GET     Hdr:ListOpts
-	OPT	OptNoList
-        GET     Hdr:Macros
-        GET     Hdr:System
-        GET     Hdr:ModHand
-	GET	Hdr:Parallel
-	GET	Hdr:Buffer
-        LEADR   Module_LoadAddr
-	OPT 	OptList
-
-; Load in some of the Zip driver specific parameters
-	GET	Hdr:IZipFS
-	GET	Version
-
-; Rich Buckley (07 Apr 1997)
-; *****************************************************************************
+	GET	s.AcornHdr			; Use if Acorn is building
+;	GET	s.JasonHdr			; Use if Jason is building
 
 ; In most SWIs, the registers are arranged :
 ;
@@ -131,6 +110,16 @@
 
 	MEND
 
+; IRQsOff turns the IRQ and FIQ off
+
+	MACRO
+$lbl	IRQsOff
+
+$lbl	MOV	lr,pc
+	ORR	lr,lr,#3<<26
+	TEQP	lr,#0
+	MEND
+
 ; Constants
 
 ; The following are tunable - lower values means faster transfer, but problems may occur.
@@ -174,7 +163,7 @@ OldCR1		#	1				; The old configure register #2
 OldCR4		#	1				; The old configure register #4
 OldCommand	#	1				; The old command register
 PPASpeed	#	1				; PPA Speed
-PPAMode		#	1				; PPA Mode (0=SPP, 1=EPP)
+PPAMode		#	1				; PPA Mode (0=SPP, 1=EPP @ &3F0, 2=EPP @ &370)
 OldIOC		#	1				; Old IOC IRQ A mask value
 PPAPrinter	#	1				; Printer status
 Dummies1	#	1				; Dummy bytes to pad out the registers
@@ -1163,6 +1152,7 @@ MI_End
 
 ConfigureEPP
 	STMFD	r13!,{r0-r4,r11,lr}
+	IRQsOff
 	LDR	r11,ParallelAddress
 	ADD	r11,r11,#(&3f0-&278)<<2			; Point to the configuration register
 	MOV	r0,#&55
@@ -1174,6 +1164,7 @@ ConfigureEPP
 	LDRB	r0,[r11,#4]				; Read register 13 (which is chip ID)
 	TEQ	r0,#&66					; &66 is FDC37C666
 	TEQNE	r0,#&65					; &65 is FDC37C665
+	TEQNE	r0,#&03					; &03 is FDC36C669
 
 ; Although to be strictly speaking, Acorn/NC don't use the 37C666, this code
 ; would work on it, should it be fitted.
@@ -1182,9 +1173,31 @@ ConfigureEPP
 	MOVEQ	r0,#1
 	STRB	r0,PPAMode
 
-	MOV	r0,#&aa
+	MOV	r1,#&aa
+	STRB	r1,[r11,#0]
+	TEQ	r0,#0					; If we can't establish EPP mode, then we're gonna have to check SMC669...
+	LDMNEFD	r13!,{r0-r4,r11,pc}^			; Note that the IRQs are automatically restored here
+
+; This code just repeats itself a bit... Nice to compress!
+
+	LDR	r11,ParallelAddress
+	ADD	r11,r11,#(&370-&278)<<2			; Point to the configuration register
+	MOV	r0,#&55
 	STRB	r0,[r11,#0]
-	LDMFD	r13!,{r0-r4,r11,pc}^
+	STRB	r0,[r11,#0]				; Enter configuration mode
+
+	MOV	r0,#13
+	STRB	r0,[r11,#0]
+	LDRB	r0,[r11,#4]				; Read register 13 (which is chip ID)
+	TEQ	r0,#&66					; &66 is FDC37C666
+	TEQNE	r0,#&65					; &65 is FDC37C665
+	TEQNE	r0,#&03					; &03 is FDC37C669
+
+	MOVNE	r0,#0
+	MOVEQ	r0,#2					; Special &370 mode for configuration...
+	STRB	r0,PPAMode
+
+	LDMFD	r13!,{r0-r4,r11,pc}^			; Similarly, IRQs are restored here...
 
 DeconfigureEPP
 	MOVS	pc,lr
@@ -1373,13 +1386,16 @@ EDIL
 	LDMFD	r13!,{r5-r7}
 
 	LDRB	r0,PPAMode
-	TEQ	r0,#1					; SPP mode doesn't need reconfiguring each time
-	LDMNEFD	r13!,{r0-r4,r11,lr}
-	BICNES	pc,lr,#1<<28
+	TEQ	r0,#0					; SPP mode doesn't need reconfiguring each time
+	LDMEQFD	r13!,{r0-r4,r11,lr}
+	BICEQS	pc,lr,#1<<28
 
+	IRQsOff
 
 	LDR	r11,ParallelAddress
-	ADD	r11,r11,#(&3f0-&278)<<2			; Point to the configuration register
+	TEQ	r0,#1
+	ADDEQ	r11,r11,#(&3f0-&278)<<2			; Point to the configuration register
+	ADDNE	r11,r11,#(&370-&278)<<2			; Point to the new configuration register
 
 	MOV	r0,#&55
 	STRB	r0,[r11,#0]
@@ -1419,8 +1435,12 @@ EnableIRQ
 	TEQ	r0,#0					; SPP mode - we didn't configure it, honest!
 	BEQ	EI_NotEPP
 
+	IRQsOff
+
 	LDR	r11,ParallelAddress
-	ADD	r11,r11,#(&3f0-&278)<<2
+	TEQ	r0,#1
+	ADDEQ	r11,r11,#(&3f0-&278)<<2
+	ADDNE	r11,r11,#(&370-&278)<<2
 	MOV	r0,#&55
 	STRB	r0,[r11,#0]
 	STRB	r0,[r11,#0]				; Enter configuration mode
