@@ -31,6 +31,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "sys/types.h"
 #include "sys/socket.h"
 #include "sys/ioctl.h"
@@ -71,23 +72,36 @@
 #define    TS_WONT        6    /* wont " */
 #define    TS_DO          7    /* do " */
 #define    TS_DONT        8    /* dont " */
+#define    TS_ESC         9    /* escaped chracters */
 
 
 /*****************************************************************************
 * File scope Global variables
 *****************************************************************************/
 
-static int sock = -1, msgsock = -1;
+static int sock = -1;
 static int task_id = 0;
-static int child = 0;
 static int pollword = 0;
 static int i = 1;
+
+static task_block *root_task = 0;
 
 /* need this to find out if we are the CAO */
 extern void __module_header (void);
 
 /* turn off stack limit checking for the SVC part of the code */
 #pragma -s1
+
+void* _kernel_RMAalloc (size_t sz) {
+    int mem = 0;
+    if (_swix (OS_Module, _IN(0) | _IN(3) | _OUT (2), 6, sz, &mem)) return 0;
+
+    return (void*) mem;
+}
+
+void _kernel_RMAfree (void* mem) {
+    _swix (OS_Module, _IN(0) | _IN(2), 7, mem);
+}
 
 
 /*****************************************************************************
@@ -188,13 +202,12 @@ _kernel_oserror *module_final(int fatal, int podule, void *pw)
     NOTUSED(fatal);
     NOTUSED(podule);
 
-    /* if we have a child, kill it now */
-    if (child) {
-        WimpPollBlock b;
-        b.user_message.hdr.size = sizeof b.user_message.hdr;
-        b.user_message.hdr.action_code = Wimp_MQuit;
-        wimp_send_message (Wimp_EUserMessage, &b, child, 0, 0);
-    }
+    /* disable and deregister for the internet event */
+    _kernel_osbyte (Event_Disable, Event_Internet, 0);
+    _swix (OS_Release, _INR(0, 2), EventV, internetv_entry, pw);
+
+    /* close our sockets if they're not already closed */
+    if (sock != -1) socketclose (sock);
 
     /* if we started as a wimp task, stop ourselves */
     if (task_id) {
@@ -202,13 +215,23 @@ _kernel_oserror *module_final(int fatal, int podule, void *pw)
         task_id = 0;
     }
 
-    /* disable and deregister for the internet event */
-    _kernel_osbyte (Event_Disable, Event_Internet, 0);
-    _swix (OS_Release, _INR(0, 2), EventV, internetv_entry, pw);
-
-    /* close our sockets if they're not already closed */
-    if (sock != -1) socketclose (sock);
-    if (msgsock != -1) socketclose (msgsock);
+    /* remove task structures close sockets and kill tasks */
+    if (root_task != 0) {
+        task_block* tsk = root_task, *ntsk;
+        while (tsk) {
+            dprintf(("", "closing task %p\n", tsk));
+            socketclose (tsk->sock);
+//          WimpPollBlock b;
+//          memset (&b, 0, sizeof b);
+//          b.user_message.hdr.size = sizeof b.user_message.hdr;
+//          b.user_message.hdr.action_code = Wimp_MQuit;
+//          wimp_send_message (Wimp_EUserMessage, &b, child, 0, 0);
+            wimp_close_down (tsk->task_id);
+            ntsk = tsk->next;
+            _kernel_RMAfree (tsk);
+            tsk = ntsk;
+        }
+    }
 
     return 0;
 }
@@ -239,11 +262,22 @@ int internetv(_kernel_swi_regs *r, void *pw)
 {
     NOTUSED(pw);
 
-    if (r->r[1] != 1 || (r->r[2] != sock && r->r[2] != msgsock)) return 1;
+    /* we're not interested in out of band or other events */
+    if (r->r[1] != 1) return 1;
 
     /* set the pollword to our socket if it's for us. */
     if (r->r[2] == sock) pollword |= TServer_PollWord_RecvSock;
-    else if (r->r[2] == msgsock) pollword |= TServer_PollWord_MsgSock;
+    else if (root_task) {
+        task_block *tsk = root_task;
+        while (tsk) {
+            if (r->r[2] == tsk->sock) {
+                pollword |= TServer_PollWord_MsgSock;
+                tsk->flags |= Task_InternetEvent;
+                break;
+            }
+            tsk = tsk->next;
+        }
+    };
 
     dprintf(("", "Internet event received on socket %d, pollword set to %x\n",
         r->r[2], pollword));
@@ -281,16 +315,16 @@ void module_services(int service_number, _kernel_swi_regs *r, void *pw)
     switch (service_number) {
 
     /* if it's our CAO, claim the service call to leave our memory */
-    case Service_Memory:
-        if (r->r[2] == (int) __module_header) r->r[1] = 0;
-        break;
+//    case Service_Memory:
+//        if (r->r[2] == (int) __module_header) r->r[1] = 0;
+//        break;
 
     /* if we haven't started yet then return the star command to start us and
     claim the service */
     case Service_StartWimp:
         if (task_id == 0) {
             task_id = -1;
-            r->r[0] = (int) "Desktop_TServer";
+            r->r[0] = (int) "Desktop_TServer Enter";
             r->r[1] = 0;
         }
         break;
@@ -341,7 +375,7 @@ _kernel_oserror *commands(const char *arg_string, int argc, int cmd_no, void *pw
         /* Don't start the task if it's already started */
         if (task_id == -1 || task_id == 0) {
             wimp_slot_size (TServer_SlotSize, -1, 0, 0, 0);
-            _swix (OS_Module, _INR(0, 2), Module_Enter, Module_Title, 0);
+            _swix (OS_Module, _INR(0, 2), Module_Enter, Module_Title, arg_string);
         }
         break;
 
@@ -372,6 +406,53 @@ _kernel_oserror *commands(const char *arg_string, int argc, int cmd_no, void *pw
 
 /*****************************************************************************
 * FunctionName
+*  recv_char_escape
+*
+* Description of the function
+*  state machine for handling escape sequences
+*
+* Assumptions
+*
+* Inputs
+*  char c, the character to be processed
+*
+* Outputs
+*
+* Returns
+*  character to output, or -1 if character has been eaten
+*****************************************************************************/
+
+static int recv_char_escape (task_block* tsk, char c) {
+
+    dprintf (("", "recv_char_escape: '%c', state = %d\n", c, tsk->esc_state));
+
+    switch (tsk->state) {
+    case -1:
+        tsk->esc_state = c;
+        return -1;
+        break;
+    case '[':
+        /* map to keys suitable for line editor */
+        switch (c) {
+        case 'A': c = 16;  break;
+        case 'B': c = 14;  break;
+        case 'C': c = 6;   break;
+        case 'D': c = 2;   break;
+        case 'c': c = 5;   break;
+        case 'd': c = 1;   break;
+        }
+        tsk->esc_state = -1;
+        break;
+    default:
+        tsk->esc_state = -1;
+        break;
+    }
+
+    return c;
+}
+
+/*****************************************************************************
+* FunctionName
 *  recv_char
 *
 * Description of the function
@@ -388,15 +469,13 @@ _kernel_oserror *commands(const char *arg_string, int argc, int cmd_no, void *pw
 *  character to output, or -1 if character has been eaten
 *****************************************************************************/
 
-static int recv_char (char c) {
+static int recv_char (task_block* tsk, char c) {
 
-    /* start in DATA state */
-    static int state = TS_DATA;
-    dprintf (("", "State is %d\n", state));
-    switch (state) {
+    dprintf (("", "State is %d\n", tsk->state));
+    switch (tsk->state) {
 
     case TS_CR:
-        state = TS_DATA;
+        tsk->state = TS_DATA;
         /* Strip off \n or \0 after a \r */
         if ((c == 0) || (c == '\n')) {
             break;
@@ -405,7 +484,13 @@ static int recv_char (char c) {
 
     case TS_DATA:
         if (c == IAC) {
-            state = TS_IAC;
+            tsk->state = TS_IAC;
+            break;
+        }
+
+        /* handle escapes here */
+        if (c == '\x1b') {
+            tsk->state = TS_ESC;
             break;
         }
         /*
@@ -420,8 +505,17 @@ static int recv_char (char c) {
          * if CRMOD is set, which it normally is).
          */
         if (c == '\r')
-            state = TS_CR;
+            tsk->state = TS_CR;
         return c;
+        break;
+
+    case TS_ESC:
+        {
+            int ret = recv_char_escape (tsk, c);
+            if (ret == -1) return -1;
+            tsk->state = TS_DATA;
+            return ret;
+        }
         break;
 
     case TS_IAC:
@@ -443,7 +537,7 @@ gotiac:
          * Are You There?
          */
         case AYT:
-            socketwrite(msgsock, "\r\n[Yes]\r\n", 9);
+            socketwrite(tsk->sock, "\r\n[Yes]\r\n", 9);
             return -1;
 
         /*
@@ -470,23 +564,23 @@ gotiac:
          * Begin option subnegotiation...
          */
         case SB:
-            state = TS_SB;
+            tsk->state = TS_SB;
                 return -1;
 
         case WILL:
-            state = TS_WILL;
+            tsk->state = TS_WILL;
                 return -1;
 
         case WONT:
-            state = TS_WONT;
+            tsk->state = TS_WONT;
                 return -1;
 
         case DO:
-            state = TS_DO;
+            tsk->state = TS_DO;
                 return -1;
 
         case DONT:
-            state = TS_DONT;
+            tsk->state = TS_DONT;
                 return -1;
         case EOR:
             return -1;
@@ -508,12 +602,12 @@ gotiac:
             return c;
             return -1;
         }
-        state = TS_DATA;
+        tsk->state = TS_DATA;
         break;
 
     case TS_SB:
         if (c == IAC) {
-            state = TS_SE;
+            tsk->state = TS_SE;
         } else {
 //            SB_ACCUM(c);
         }
@@ -522,39 +616,168 @@ gotiac:
     case TS_SE:
         if (c != SE) {
             if (c != IAC) {
-                state = TS_IAC;
+                tsk->state = TS_IAC;
                 goto gotiac;
             }
 //            SB_ACCUM(c);
-            state = TS_SB;
+            tsk->state = TS_SB;
         } else {
-            state = TS_DATA;
+            tsk->state = TS_DATA;
         }
         break;
 
     case TS_WILL:
-        state = TS_DATA;
+        tsk->state = TS_DATA;
             break;
 
     case TS_WONT:
-        state = TS_DATA;
+        tsk->state = TS_DATA;
             break;
 
     case TS_DO:
-        state = TS_DATA;
+        tsk->state = TS_DATA;
             break;
 
     case TS_DONT:
-        state = TS_DATA;
+        tsk->state = TS_DATA;
             break;
 
     default:
-        printf("telnetd: panic state=%d\n", state);
+        printf("telnetd: panic state=%d\n", tsk->state);
         exit(1);
     }
     return -1;
 }
 
+
+/*****************************************************************************
+* FunctionName
+*  new_connection
+*
+* Description of the function
+*  Handles the creating of a new taskwindow when a connection attempt is made
+*
+* Assumptions
+*
+* Inputs
+*
+* Outputs
+*
+* Returns
+*****************************************************************************/
+
+static void new_connection (void) {
+    char buf[256];
+    task_block* new_task = 0;
+    static const char iwillecho[3] = { IAC, WILL, TELOPT_ECHO };
+
+    new_task = _kernel_RMAalloc (sizeof *new_task);
+
+    if (new_task == 0) {
+        dprintf (("", "couldn't claim memory for new task"));
+        return;
+    }
+
+    new_task->state = TS_DATA;
+    new_task->esc_state = -1;
+    new_task->flags = 0;
+
+    /* accept the connection */
+    if ((new_task->sock = accept (sock, 0, 0)) == 0) return;
+
+    /* enable internet events on the socket */
+    if (socketioctl(new_task->sock, FIOASYNC, &i) < 0) return;
+
+    /* mark it non-blocking */
+    if (socketioctl(new_task->sock, FIONBIO, &i) < 0) return;
+
+    /* tell the telnet terminal that we echo characters */
+    socketwrite(new_task->sock, iwillecho, 3);
+
+    /* start the taskwindow */
+    sprintf (buf, "TaskWindow -name TServerTW -ctrl -txt %d -task %d",
+        (int) new_task,
+        task_id);
+    wimp_start_task (buf, 0);
+
+    new_task->next = root_task;
+    root_task = new_task;
+
+    dprintf(("", "new task created, %p\n", new_task));
+}
+
+/*****************************************************************************
+* FunctionName
+*  data_received
+*
+* Description of the function
+*  Data has been received on one or more of our task sockets
+*
+* Assumptions
+*
+* Inputs
+*   our poll block
+*
+* Outputs
+*
+* Returns
+*****************************************************************************/
+
+static void data_received (WimpPollBlock* block) {
+    int rval;
+    task_block* tsk = root_task;
+    static char recvbuf[RECVBUFSIZE];
+
+    while (tsk) {
+
+        /* Don't do anything if we've not received anything */
+        if ((tsk->flags & Task_InternetEvent) == 0) {
+            tsk = tsk->next;
+            continue;
+        }
+
+        dprintf (("", "data received for tsk %p\n", tsk));
+
+        /* Read the data */
+        while ((rval = socketread(tsk->sock, recvbuf, RECVBUFSIZE)) >= 0) {
+
+            /* if rval == 0 then the client has ended the connection */
+            if (rval == 0) {
+                dprintf (("", "client has ended connection\n"));
+                block->user_message.hdr.size = sizeof block->user_message.hdr;
+                block->user_message.hdr.action_code = TaskWindow_Morite;
+                wimp_send_message (Wimp_EUserMessage, block, tsk->task_id, 0,0);
+                break;
+
+            /* if rval is positive, it's the number of characters received */
+            } else if (rval > 0) {
+                int i;
+
+                /* we're going to write data directly into the message block */
+                char* iptr = block->user_message.data.bytes + 4;
+
+                /* loop through the received data passing the characters through
+                the state machine */
+                for (i = 0; i < rval; ++i) {
+                    int c = recv_char (tsk, recvbuf[i]);
+                    dprintf (("", "%d -> %d\n", recvbuf[i], c));
+                    if (c != -1) *iptr++ = c;
+                }
+
+                /* set up the wimp message and send it */
+                block->user_message.hdr.action_code = TaskWindow_Input;
+                block->user_message.hdr.size = 256;
+                block->user_message.data.words[0] = iptr -
+                    block->user_message.data.bytes - 4;
+                wimp_send_message (Wimp_EUserMessage, block, tsk->task_id, 0,0);
+            }
+        }
+
+        /* Clear the flag */
+        tsk->flags ^= Task_InternetEvent;
+        tsk = tsk->next;
+    }
+}
 
 /*****************************************************************************
 * FunctionName
@@ -577,7 +800,6 @@ gotiac:
 
 static void pollword_nonzero (WimpPollBlock* block)
 {
-    int rval = 0;
     int temp = pollword;
 
     dprintf (("","pollword is: %x\n", pollword));
@@ -586,74 +808,13 @@ static void pollword_nonzero (WimpPollBlock* block)
     pollword = 0;
 
     /* If we receive a message on our listening socket: */
-    if (temp & TServer_PollWord_RecvSock) {
-
-        char buf[256];
-
-        /* If we've already got a connection, kill it, and start a new one */
-        if (child != 0) {
-            socketclose (msgsock);
-            block->user_message.hdr.size = sizeof block->user_message.hdr;
-            block->user_message.hdr.action_code = TaskWindow_Morite;
-            wimp_send_message (Wimp_EUserMessage, block, child, 0, 0);
-        }
-
-        /* accept the connection */
-        if ((msgsock = accept (sock, 0, 0)) == 0) return;
-
-        /* enable internet events on the socket */
-        if (socketioctl(msgsock, FIOASYNC, &i) < 0) return;
-
-        /* mark it non-blocking */
-        if (socketioctl(msgsock, FIONBIO, &i) < 0) return;
-
-        /* tell the telnet terminal that we echo characters */
-        socketwrite(msgsock, "\xff\xfb\1", 3);
-
-        /* start the taskwindow */
-        sprintf (buf, "TaskWindow -name TServerTW -ctrl -txt 1 -task %d", task_id);
-        wimp_start_task (buf, 0);
-    }
+    if (temp & TServer_PollWord_RecvSock) new_connection ();
 
     /* If we receive a message on our comms socket: */
-    if (temp & TServer_PollWord_MsgSock) {
-        static char recvbuf[RECVBUFSIZE];
-
-        /* Read the data */
-        rval = socketread(msgsock, recvbuf, RECVBUFSIZE);
-
-        /* if rval == 0 then the client has ended the connection */
-        if (rval == 0) {
-            block->user_message.hdr.size = sizeof block->user_message.hdr;
-            block->user_message.hdr.action_code = TaskWindow_Morite;
-            wimp_send_message (Wimp_EUserMessage, block, child, 0, 0);
-
-        /* if rval is positive, it's the number of characters received */
-        } else if (rval > 0) {
-            int i;
-
-            /* we're going to write data directly into the message block */
-            char* iptr = block->user_message.data.bytes + 4;
-
-            /* loop through the received data passing the characters through
-            the state machine */
-            for (i = 0; i < rval; ++i) {
-                int c = recv_char (recvbuf[i]);
-                dprintf (("", "%d\n", recvbuf[i]));
-                if (c != -1) *iptr++ = c;
-            }
-
-            /* set up the wimp message and send it */
-            block->user_message.hdr.action_code = TaskWindow_Input;
-            block->user_message.hdr.size = 256;
-            block->user_message.data.words[0] = iptr -
-                block->user_message.data.bytes - 4;
-            wimp_send_message (Wimp_EUserMessage, block, child, 0, 0);
-        }
-    }
+    if (temp & TServer_PollWord_MsgSock) data_received (block);
 
     /* If we receive a debugit message, send the data on */
-    if (temp & TServer_PollWord_DebugIt && msgsock != -1) {
+    if (temp & TServer_PollWord_DebugIt && root_task != 0) {
         int size;
         static char block[258];
 
@@ -668,13 +829,12 @@ static void pollword_nonzero (WimpPollBlock* block)
                 /* terminate with a CR */
                 block[size] = '\r';
                 block[size+1] = '\n';
-                socketwrite(msgsock, block, size + 2);
+                socketwrite(root_task->sock, block, size + 2);
             }
 
         } while (size > 0);
     }
 }
-
 
 /*****************************************************************************
 * FunctionName
@@ -695,8 +855,14 @@ static void pollword_nonzero (WimpPollBlock* block)
 
 static void taskwindow_output (WimpPollBlock* block)
 {
+    task_block* tsk = root_task;
+    while (tsk) {
+        if (tsk->task_id == block->user_message.hdr.sender) break;
+        tsk = tsk->next;
+    }
+
     /* Don't do anything if we don't have a message socket */
-    if (msgsock != -1) {
+    if (tsk) {
         int i, j;
         char* ptr = block->user_message.data.bytes + 4;
         int size = block->user_message.data.words[0];
@@ -706,9 +872,11 @@ static void taskwindow_output (WimpPollBlock* block)
             for (j = i; j < size; ++j) {
                 dprintf(("", "TW:%d\n", ptr[j]));
                 switch (ptr[j]) {
+                case 8:
                 case 10:
                 case 13:
                     continue;
+                case 9:
                 case 127:
                     break;
                 default:
@@ -716,7 +884,7 @@ static void taskwindow_output (WimpPollBlock* block)
 
                         /* zero out these characters as they can cause
                         strange effects in the client */
-                        ptr[j] = 0;
+                        ptr[j] = '.';
                         continue;
                     }
                     if (ptr[j] >=32) continue;
@@ -725,15 +893,27 @@ static void taskwindow_output (WimpPollBlock* block)
             }
 
             /* if we've got anywhere, send out the characters */
-            if (j > i) socketwrite(msgsock, ptr + i, j - i);
+            if (j > i) socketwrite(tsk->sock, ptr + i, j - i);
 
             /* if we hit a control character, send an escape
-               sequence (and bump j) */
+               sequence */
             if (j < size && (ptr[j] < 32 || ptr[j] == 127))
                 switch (ptr[j]) {
+                    case 9:
+                        socketwrite (tsk->sock, "\x1b[C", 3);
+                        break;
                     case 127:
                         dprintf(("","erase\n"));
-                        socketwrite(msgsock, "\x08 \x08", 3);
+                        /* send all deletes together */
+                        {
+                            int k, l;
+                            char buf[10];
+                            for (k = 1; j + k < size && ptr[j+k] == 127; ++k);
+                            l = sprintf (buf, "\x1b[%dD\x1b[%dX", k, k);
+                            dprintf(("", "Writing: '%s'\n", buf));
+                            socketwrite(tsk->sock, buf, l);
+                            j += k - 1;
+                        }
                         break;
                 }
 
@@ -754,27 +934,28 @@ static void taskwindow_output (WimpPollBlock* block)
 * Assumptions
 *
 * Inputs
-*  int argc: ignored
-*  char* argv[]: ignored
+*  none
 *
 * Outputs
 *
 * Returns
-*  program exit status
+*  void
 *****************************************************************************/
 
-int main (int argc, char* argv[]) {
+void tserver (void) {
     WimpPollBlock block;
     int event_code;
     int messages[3] = {TaskWindow_Output, TaskWindow_Ego, 0};
-    NOTUSED(argc);
-    NOTUSED(argv);
 
     /* don't attempt to start the task again */
-    if (task_id != -1) return 0;
+    if (task_id > 0) {
+        dprintf (("", "Not starting tserver: task_id = %d\n", task_id));
+        return;
+    }
 
     wimp_initialise (310, "TServer", messages, 0, &task_id);
 
+    dprintf (("", "TServer starting polling\n"));
     for (;;) {
         wimp_poll (
             Wimp_Poll_NullMask | Wimp_Poll_PollWord,
@@ -789,12 +970,37 @@ int main (int argc, char* argv[]) {
         case Wimp_EUserMessage:
         case Wimp_EUserMessageRecorded:
             switch (block.user_message.hdr.action_code) {
-            case Wimp_MQuit: _swix (OS_ExitAndDie, _IN (0) | _IN (3),
-                0, Module_Title);
+            case Wimp_MQuit:
+                return;
+            case TaskWindow_Output:
+                taskwindow_output (&block);
                 break;
-            case TaskWindow_Output: taskwindow_output (&block); break;
-            case TaskWindow_Ego: child = block.user_message.hdr.sender; break;
-            break;
+            case TaskWindow_Ego:
+                dprintf (("", "Taskwindow started, txt = %x, task = %x\n",
+                    block.user_message.data.words[0],
+                    block.user_message.hdr.sender));
+                ((task_block*)(block.user_message.data.words[0]))->task_id =
+                    block.user_message.hdr.sender;
+                break;
+            case TaskWindow_Morio:
+                {
+                    task_block* tsk = root_task, *last_tsk = 0;
+                    dprintf (("", "task %p is dying\n",
+                        block.user_message.hdr.sender));
+                    while (tsk) {
+                        dprintf (("", "scanning tsk %p\n", tsk));
+                        if (tsk->task_id == block.user_message.hdr.sender) {
+                            socketclose (tsk->sock);
+                            if (last_tsk) last_tsk = tsk->next;
+                            else root_task = 0;
+                            _kernel_RMAfree (tsk);
+                            break;
+                        }
+                        last_tsk = tsk;
+                        tsk = tsk->next;
+                    }
+                }
+                break;
             }
         }
     }
