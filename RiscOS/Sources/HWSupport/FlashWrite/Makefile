@@ -25,7 +25,7 @@ WIPE    	= -wipe
 
 AFLAGS		= -depend !Depend -Stamp -quit ${THROWBACK}
 CFLAGS		= -c -depend !Depend -zM -zps1 -ffah ${INCLUDES} ${THROWBACK} 
-CPPFLAGS	= ~cfr~v
+CPFLAGS		= ~cfr~v
 CMHGFLAGS	= -depend !Depend -p -throwback ${DFLAGS}
 WFLAGS		= ~c~v
 
