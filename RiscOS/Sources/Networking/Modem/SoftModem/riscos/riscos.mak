@@ -35,7 +35,7 @@ SOFTMOD = riscosasm.o devicefs.o module.o modulehdr.o svcprint.o
 #
 LPATH  = riscos
 AFLGS  = $(AFLAGS)
-CFLGS  = $(CINCOPT)inc $(CINCOPTSEP)$(LPATH) $(CFLAGS)
+CFLGS  = $(CINCOPT)inc $(CINCOPTSEP)$(LPATH) $(CINCOPTSEP)dp_crus $(CFLAGS)
 VPATH  = inc $(LPATH)
                     
 #
@@ -99,15 +99,10 @@ o.riscosasm: Hdr:SWIs
 o.riscosasm: Hdr:CPU.Generic26
 o.riscosasm: Hdr:IO.GenericIO
 o.riscosasm: Hdr:RISCOS
-o.module:	riscos.c.module
-o.module:	C:h.kernel
-o.module:	C:h.swis
-o.module:	C:h.Podule
-o.module:	inc.h.sys_def
-o.module:	inc.h.__config
-o.module:	inc.h.risc_os
-o.module:	riscos.h.devicefs
-o.module:	riscos.h.modulehdr
+o.svcprint:	riscos.c.svcprint
+o.svcprint:	C:h.kernel
+o.svcprint:	C:h.swis
+o.svcprint:	riscos.h.svcprint
 o.devicefs:	riscos.c.devicefs
 o.devicefs:	inc.h.sys_def
 o.devicefs:	inc.h.__config
@@ -118,11 +113,19 @@ o.devicefs:	inc.edf.dce_line
 o.devicefs:	riscos.^.dp_crus.h.dsp_drv
 o.devicefs:	riscos.^.DCE_crus.h.iohw_equ
 o.devicefs:	inc.h.mt_pro
+o.devicefs:	dp_crus.h.dosapp
 o.devicefs:	C:h.kernel
 o.devicefs:	C:h.swis
 o.devicefs:	riscos.h.devicefs
 o.devicefs:	riscos.h.svcprint
-o.svcprint:	riscos.c.svcprint
-o.svcprint:	C:h.kernel
-o.svcprint:	C:h.swis
-o.svcprint:	riscos.h.svcprint
+o.module:	riscos.c.module
+o.module:	C:h.kernel
+o.module:	C:h.swis
+o.module:	C:h.Podule
+o.module:	inc.h.sys_def
+o.module:	inc.h.__config
+o.module:	inc.h.risc_os
+o.module:	dp_crus.h.dosapp
+o.module:	dp_crus.h.mt_voice
+o.module:	riscos.h.devicefs
+o.module:	riscos.h.modulehdr

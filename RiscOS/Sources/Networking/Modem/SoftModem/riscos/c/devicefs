@@ -7,6 +7,7 @@
 #include "../dp_crus/dsp_drv.h"
 #include "../DCE_crus/iohw_equ.h"
 #include "mt_pro.h"
+#include "dosapp.h"
 
 #include "kernel.h"
 #include "swis.h"
@@ -19,8 +20,8 @@
 #endif
 
 #define ControlLine_DTR     (1u<<0)
-#define ControlLine_RTS     (1u<<1)   /* Not implemented - read as 0 */
-#define ControlLine_CTS     (1u<<16)  /* Not implemented - read as 0 */
+#define ControlLine_RTS     (1u<<1)   /* Not implemented - read as 1 */
+#define ControlLine_CTS     (1u<<16)  /* Not implemented - read as 1 */
 #define ControlLine_DSR     (1u<<17)
 #define ControlLine_RI      (1u<<18)
 #define ControlLine_DCD     (1u<<19)
@@ -81,6 +82,7 @@ typedef struct sfblock
 typedef struct Stream
 {
     unsigned int devicefs_stream;
+    unsigned int fileswitch_handle;
     unsigned int buffersize;
     unsigned int bufferthreshold;
     unsigned int buffer;
@@ -102,7 +104,7 @@ typedef struct bufparams
     int threshold;
 } bufparams;
 
-static _kernel_oserror *device_initialise(int stream, int flags, sfblock *specialfield, int *ourstream);
+static _kernel_oserror *device_initialise(int stream, int flags, int fileswitch_handle, sfblock *specialfield, int *ourstream);
 static _kernel_oserror *device_finalise(Stream *stream, void *pw);
 static _kernel_oserror *device_wakeupfortx(Stream *stream, void *pw);
 static _kernel_oserror *device_create_tx_buffer(bufparams *params);
@@ -111,6 +113,7 @@ static _kernel_oserror *device_halt(Stream *stream);
 static _kernel_oserror *device_resume(Stream *stream);
 static _kernel_oserror *device_stream_created(Stream *stream, int buffer, void *pw);
 static _kernel_oserror *device_ioctl(Stream *stream, ioctl_t *param);
+static _kernel_oserror *ioctl_control_lines(ioctl_t *param);
 static _kernel_oserror *riscos_start_polling(void *pw);
 static void riscos_stop_polling(void *pw);
 static int podule_rx_int(void), podule_tx_int(void);
@@ -188,7 +191,7 @@ _kernel_oserror *devicefs_handler(_kernel_swi_regs *r, void *pw)
     switch (r->r[0])
     {
       case 0:
-        return device_initialise(r->r[2], r->r[3], (sfblock *)r->r[6], &r->r[2]);
+        return device_initialise(r->r[2], r->r[3], r->r[4], (sfblock *)r->r[6], &r->r[2]);
       case 1:
         return device_finalise((Stream *)r->r[2], pw);
       case 2:
@@ -231,7 +234,7 @@ _kernel_oserror *devicefs_handler(_kernel_swi_regs *r, void *pw)
  * The special field control block will consist of a number of words each
  * corresponding to the field in the device open string.
  */
-_kernel_oserror *device_initialise(int devicefs_stream, int flags, sfblock *specialfield, int *ourstream)
+_kernel_oserror *device_initialise(int devicefs_stream, int flags, int fileswitch_handle, sfblock *specialfield, int *ourstream)
 {
     Stream *stream = (flags & 1) ? &OutputStream : &InputStream;
 
@@ -240,6 +243,7 @@ _kernel_oserror *device_initialise(int devicefs_stream, int flags, sfblock *spec
     devicefs_handler_threaded = 1;
 
     stream->devicefs_stream = devicefs_stream;
+    stream->fileswitch_handle = fileswitch_handle;
 
     if (specialfield->size != 0xDEADDEAD)
         stream->buffersize = specialfield->size;
@@ -287,6 +291,8 @@ static _kernel_oserror *device_finalise(Stream *stream, void *pw)
             riscos_stop_polling(pw);
 
             HaltDSP();
+
+            set_border(0);
 
             hard_reset();
 
@@ -444,7 +450,7 @@ static _kernel_oserror *device_ioctl(Stream *stream, ioctl_t *param)
     return NULL;
 }
 
-static ioctl_control_lines(ioctl_t *param)
+static _kernel_oserror *ioctl_control_lines(ioctl_t *param)
 {
     if (param->write)
     {
@@ -452,7 +458,7 @@ static ioctl_control_lines(ioctl_t *param)
     }
     if (param->read)
     {
-        unsigned int out = ControlLine_RTS | ControlLine_FifosOn;
+        unsigned int out = ControlLine_CTS | ControlLine_FifosOn;
 
         if (uart.dtr)
             out |= ControlLine_DTR;
@@ -463,9 +469,35 @@ static ioctl_control_lines(ioctl_t *param)
         if (uart.ring)
             out |= ControlLine_RI;
 
+        if (uart.dsr)
+            out |= ControlLine_DSR;
+
         param->data = out;
 
     }
+
+    return NULL;
+}
+
+#define Event_RS423Error    7
+
+#define SerialEvent_Parity  (1U<<5)
+#define SerialEvent_Overrun (1U<<4)
+#define SerialEvent_Framing (1U<<3)
+#define SerialEvent_DSR     (1U<<2)
+#define SerialEvent_DCD     (1U<<1)
+
+void send_riscos_serial_event()
+{
+    unsigned int flags = 0;
+
+    if (uart.dsr)
+        flags |= SerialEvent_DSR;
+
+    if (uart.dcd)
+        flags |= SerialEvent_DCD;
+
+    _swix(OS_GenerateEvent, _INR(0,2), Event_RS423Error, flags, InputStream.fileswitch_handle);
 }
 
 /*
@@ -506,7 +538,7 @@ static void riscos_stop_polling(void *pw)
 }
 
 static int maincallback_pending;
-static volatile int poll_loop_threaded;
+volatile int poll_loop_threaded;
 static volatile int interrupt_handler_threaded;
 unsigned int callbacks = 0;
 

@@ -75,5 +75,7 @@ o.dte_riscos:	inc.h.mt_pro
 o.dte_riscos:	dp_crus.h.mt_coext
 o.dte_riscos:	dp_crus.h.dsp_drv
 o.dte_riscos:	inc.h.tracemac
+o.dte_riscos:	dp_crus.h.dosapp
 o.dte_riscos:	C:h.swis
 o.dte_riscos:	C:h.kernel
+o.dte_riscos:	dte.^.riscos.h.devicefs
