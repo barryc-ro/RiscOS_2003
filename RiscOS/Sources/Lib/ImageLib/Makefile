@@ -6,6 +6,7 @@
 # Date       Name         Description
 # ----       ----         -----------
 # 1997-06-25 BAL          Created.
+# 1999-03-09 ADH          'ImageLib:' changed to '${LIBDIR}.ImageLib.'
 #
 
 #
@@ -81,7 +82,7 @@ OBJS =\
  o.rml_misc\
  o.sprite\
  o.xbm
- 
+
 OBJSZ =\
  z.cfsi\
  z.draw\
@@ -151,15 +152,15 @@ clean_all:
         ${WIPE}		z.*		${WFLAGS}
 
 export_hdrs: h.imagetrans o.dirs
-	${CP} h.imagetrans	ImageLib:h.imagetrans	~CFLNR~V
+	${CP} h.imagetrans	${LIBDIR}.ImageLib.h.imagetrans	~CFLNR~V
         @echo ${COMPONENT}: export complete (hdrs)
 
 export_libs: ${TARGET} ${TARGETZ} o.dirs
-	${CP}	${TARGET}	ImageLib:${TARGET}	~CFLNR~V
-	${CP}	${TARGETZ}	ImageLib:${TARGETZ}	~CFLNR~V
-	${CP}	${PNGLIB}	ImageLib:o.libpng-lib	~CFLNR~V
-	${CP}	${PNGLIBZ}	ImageLib:o.libpng-lzm	~CFLNR~V
-	${CP}	${JPEGLIB}	ImageLib:o.libjpeg	~CFLNR~V
+	${CP}	${TARGET}	${LIBDIR}.ImageLib.${TARGET}	~CFLNR~V
+	${CP}	${TARGETZ}	${LIBDIR}.ImageLib.${TARGETZ}	~CFLNR~V
+	${CP}	${PNGLIB}	${LIBDIR}.ImageLib.o.libpng-lib	~CFLNR~V
+	${CP}	${PNGLIBZ}	${LIBDIR}.ImageLib.o.libpng-lzm	~CFLNR~V
+	${CP}	${JPEGLIB}	${LIBDIR}.ImageLib.o.libjpeg	~CFLNR~V
         @echo ${COMPONENT}: export complete (libs)
 
 o.local_dirs:
@@ -170,10 +171,10 @@ o.local_dirs:
 o.dirs:
         ${MKDIR} ${LIBDIR}
         ${MKDIR} ${LIBDIR}.ImageLib
-        ${MKDIR} ImageLib:h
-        ${MKDIR} ImageLib:o
+        ${MKDIR} ${LIBDIR}.ImageLib.h
+        ${MKDIR} ${LIBDIR}.ImageLib.o
  	Create o.dirs
-       
+
 #
 # Final link
 #
