@@ -269,9 +269,9 @@ ${EXPORTS}: h.${CMHG_HDR} h.VideoCtrl
 	${CP} h.VideoCtrl $@ ${CPFLAGS}
 	Do ${AWK} -- "/.define ${SWI_PREFIX}\_00/,/endif/" h.${CMHG_HDR} >>$@
 
-${MSGSF}: LocalRes:Messages LocalRes:ResList
+${MSGSF}: LocalRes:Messages
 	TokenCheck LocalRes:Messages
-	resgen messages_file ${MSGSF} -via LocalRes:ResList
+	resgen messages_file ${MSGSF}
 
 ${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${LIBS} ${CLIB}
 	@echo
