@@ -23,7 +23,7 @@ SQZ     = squeeze
 TOUCH   = create
 WIPE    = -wipe
 
-CCFLAGS = -c -depend !Depend -Wp -ffah ${INCLUDES} ${DFLAGS} ${THROWBACK}
+CCFLAGS = -c -depend !Depend -ffah ${INCLUDES} ${DFLAGS} ${THROWBACK}
 ASFLAGS = -depend !Depend -Stamp -quit
 CPFLAGS = ~cfr~v
 LBFLAGS = -c
