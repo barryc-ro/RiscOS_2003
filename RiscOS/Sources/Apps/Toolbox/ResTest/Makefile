@@ -34,7 +34,7 @@ CPFLAGS = ~cfr~v
 WFLAGS  = ~c~vr
 
 SQZFLAGS =
-CFLAGS	 = -c -depend !Depend ${INCLUDES} -ffa ${DFLAGS}
+CFLAGS	 = -c -depend !Depend ${INCLUDES} -ffah ${DFLAGS}
 DFLAGS	 = -D${SYSTEM}
 INCLUDES = -IC:tboxlibint,C:tboxlibs,TCPIPLibs:,C:
 
