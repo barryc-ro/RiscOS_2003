@@ -17,6 +17,7 @@ MODGEN     = modgen
 RESGEN     = resgen
 BINAOF     = binaof
 BINASM     = binasm
+BIN2C      = bin2c
 
 # Generic options:
 #
@@ -59,7 +60,7 @@ DFLAGS    =
 #
 # Program specific options:
 #
-COMPONENT  = ${resgen} ${modgen} ${binaof} ${binasm}
+COMPONENT  = ${resgen} ${modgen} ${binaof} ${binasm} ${bin2c}
 TARGET     = ${COMPONENT}
 SOURCE     = 
 EXPORTS    = 
@@ -106,6 +107,7 @@ clean:
         ${RM} ${MODGEN}
         ${RM} ${BINAOF}
         ${RM} ${BINASM}
+        ${RM} ${BIN2C}
         @echo ${COMPONENT}: cleaned
 
 export_hdrs: 
@@ -129,6 +131,10 @@ ${BINAOF}: binaof.o
 
 ${BINASM}: binasm.o
 	${LD} ${LDFLAGS} -o $@ binasm.o ${CLIB}
+	${SQUEEZE} ${SQZFLAGS} $@
+
+${BIN2C}: bin2c.o
+	${LD} ${LDFLAGS} -o $@ bin2c.o ${CLXLIB} ${CLIB}
 	${SQUEEZE} ${SQZFLAGS} $@
 
 # Dynamic dependencies:
