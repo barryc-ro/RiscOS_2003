@@ -49,10 +49,20 @@ clean:
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
 
-resources:
-        ${MKDIR} ${RESDIR}.${COMPONENT}
-        ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
+resources: resources-${CMDHELP}
         @echo ${COMPONENT}: resource files copied
+
+resources_common:
+        ${MKDIR} ${RESDIR}.${COMPONENT}
+	TokenCheck LocalRes:Messages
+        ${CP} LocalRes:Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
+
+resources-None: resources_common
+	@
+
+resources-: resources_common
+	TokenCheck LocalRes:CmdHelp
+	print LocalRes:CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
 
 ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}
@@ -61,49 +71,4 @@ ${EXP_HDR}.Font: hdr.Font
         ${CP} hdr.Font $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-rm.Fonts: hdr:ListOpts
-rm.Fonts: hdr:Macros
-rm.Fonts: hdr:System
-rm.Fonts: Hdr:SWIs
-rm.Fonts: Hdr:CPU.Generic26
-rm.Fonts: Hdr:IO.GenericIO
-rm.Fonts: Hdr:RISCOS
-rm.Fonts: hdr:CMOS
-rm.Fonts: hdr:ModHand
-rm.Fonts: hdr:Proc
-rm.Fonts: hdr:Services
-rm.Fonts: hdr:FSNumbers
-rm.Fonts: Hdr:HighFSI
-rm.Fonts: hdr:NewErrors
-rm.Fonts: hdr:Variables
-rm.Fonts: hdr:VduExt
-rm.Fonts: hdr:Debug
-rm.Fonts: hdr:PDriver
-rm.Fonts: hdr:Font
-rm.Fonts: hdr:Super
-rm.Fonts: hdr:MsgTrans
-rm.Fonts: hdr:Sprite
-rm.Fonts: hdr:Draw
-rm.Fonts: hdr:ColourTran
-rm.Fonts: hdr:Wimp
-rm.Fonts: hdr:WimpSpace
-rm.Fonts: hdr:Hourglass
-rm.Fonts: hdr:FileTypes
-rm.Fonts: hdr:Territory
-rm.Fonts: hdr:NDRDebug
-rm.Fonts: hdr:PublicWS
-rm.Fonts: hdr:hostfs
-rm.Fonts: s.Errors
-rm.Fonts: s.Fonts01
-rm.Fonts: Version
-rm.Fonts: s.FontsM
-rm.Fonts: s.ListFonts
-rm.Fonts: s.Fonts02
-rm.Fonts: s.Fonts03
-rm.Fonts: s.Font_Arith
-rm.Fonts: s.Font_BasFP
-rm.Fonts: s.Funcache
-rm.Fonts: s.Fonts04
-rm.Fonts: s.Encoding
-rm.Fonts: s.Blending
-rm.Fonts: hdr:ITable
+
