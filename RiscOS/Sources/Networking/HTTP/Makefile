@@ -16,7 +16,7 @@ EXP_HDR = <Cexport$dir>
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = mkdir -p
 AS      = objasm
 CC      = cc
 CMHG    = cmhg
@@ -24,7 +24,8 @@ CP      = copy
 LD      = link
 RM      = remove
 WIPE    = -wipe
-STRIP   = stripdepnd
+NOP     = |
+
 
 AFLAGS = -depend !Depend -Stamp -quit
 CFLAGS  = -c -depend !Depend ${THROWBACK} -zM -zps1 -ff -wpc ${INCLUDES} ${DFLAGS}
@@ -65,7 +66,7 @@ DIRS = o._dirs
 #
 # Program specific options:
 #
-COMPONENT = http
+COMPONENT = HTTP
 TARGET    = aof.${COMPONENT}
 OBJS      = ModHead.o mimemap.o files.o file.o http.o module.o csfs.o certs.o layershttp.o
 SECUREOBJS= os.ModHead os.mimemap os.files os.file os.http os.module os.csfs os.certs os.predirect os.layershttp os.client
@@ -93,15 +94,34 @@ EXPORTS   = h.httppub h.pads
 #
 # build a relocatable module:
 #
-all: rm.${COMPONENT}mod rm.${COMPONENT}smod rm.${COMPONENT}sxmod rm.${COMPONENT}spmod rm.${COMPONENT}spxmod
+all: all_${TYPE}
+        @echo ${COMPONENT}${TYPE}: built (all)
+
+all_: rm.${COMPONENT}Mod rm.${COMPONENT}sMod rm.${COMPONENT}sxMod rm.${COMPONENT}spMod rm.${COMPONENT}spxMod
+        ${NOP}
+
+all_i: rm.${COMPONENT}Mod
+        ${NOP}
+
+all_s: rm.${COMPONENT}sMod
+        ${NOP}
+
+all_sx: rm.${COMPONENT}sxMod
+        ${NOP}
+
+all_sp: rm.${COMPONENT}spMod
+        ${NOP}
+
+all_spx: rm.${COMPONENT}spxMod
+        ${NOP}
 
 prepro: ${PREPROOBJS}
-	@echo preprocessed module made
+        @echo preprocessed module made
 
 #
 # RISC OS ROM build rules:
 #
-rom:	rom_${TYPE}
+rom:    rom_${TYPE}
         @echo ${COMPONENT}: rom module built
 
 export: ${EXPORTS}
@@ -113,10 +133,29 @@ install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
-install: rm.${COMPONENT}mod rm.${COMPONENT}smod
-	${CP} rm.${COMPONENT}mod ${INSTDIR}.${COMPONENT}mod ${CPFLAGS}
-	${CP} rm.${COMPONENT}smod ${INSTDIR}.${COMPONENT}smod ${CPFLAGS}
-        @echo ${COMPONENT}: installed
+install: install_${TYPE} instdir
+        @echo ${COMPONENT}${TYPE}: installed (ram)
+
+instdir:
+        ${MKDIR} ${INSTDIR}
+
+install_: rm.${COMPONENT}Mod rm.${COMPONENT}sMod rm.${COMPONENT}sxMod rm.${COMPONENT}spMod rm.${COMPONENT}spxMod
+        ${NOP}
+
+install_i: rm.${COMPONENT}Mod
+        ${CP} rm.${COMPONENT}Mod ${INSTDIR}.${COMPONENT}Mod ${CPFLAGS}
+
+install_s: rm.${COMPONENT}sMod
+        ${CP} rm.${COMPONENT}sMod ${INSTDIR}.${COMPONENT}sMod ${CPFLAGS}
+
+install_sx: rm.${COMPONENT}sxMod
+        ${CP} rm.${COMPONENT}sxMod ${INSTDIR}.${COMPONENT}sxMod ${CPFLAGS}
+
+install_sp: rm.${COMPONENT}spMod
+        ${CP} rm.${COMPONENT}spMod ${INSTDIR}.${COMPONENT}spMod ${CPFLAGS}
+
+install_spx: rm.${COMPONENT}spxMod
+        ${CP} rm.${COMPONENT}spxMod ${INSTDIR}.${COMPONENT}spxMod ${CPFLAGS}
 
 clean:
         ${WIPE} aof ${WFLAGS}
@@ -127,7 +166,6 @@ clean:
         ${WIPE} linked ${WFLAGS}
         ${WIPE} map ${WFLAGS}
         ${RM} h.ModHead
-        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 ${DIRS}:
@@ -173,23 +211,23 @@ rom_link: ${DIRS}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-rm.${COMPONENT}mod: ${OBJS} ${DEBUGLIB} ${CLIB} ${INSECURELIBS} ${DIRS}
+rm.${COMPONENT}Mod: ${OBJS} ${DEBUGLIB} ${CLIB} ${INSECURELIBS} ${DIRS}
         ${LD} ${LDFLAGS} -o $@ -module ${OBJS} ${DEBUGLIB} ${CLIB} ${INSECURELIBS}
         Access $@ RW/R
 
-rm.${COMPONENT}smod: ${SECUREOBJS} ${DEBUGLIB} ${CLIB} ${SECURELIBS} ${DIRS}
+rm.${COMPONENT}sMod: ${SECUREOBJS} ${DEBUGLIB} ${CLIB} ${SECURELIBS} ${DIRS}
         ${LD} ${LDFLAGS} -o $@ -module ${SECUREOBJS} ${DEBUGLIB} ${CLIB} ${SECURELIBS}
         Access $@ RW/R
 
-rm.${COMPONENT}sxmod: ${SECUREOBJS} ${DEBUGLIB} ${CLIB} ${SECUREXLIBS} ${DIRS}
+rm.${COMPONENT}sxMod: ${SECUREOBJS} ${DEBUGLIB} ${CLIB} ${SECUREXLIBS} ${DIRS}
         ${LD} ${LDFLAGS} -o $@ -module ${SECUREOBJS} ${DEBUGLIB} ${CLIB} ${SECUREXLIBS}
         Access $@ RW/R
 
-rm.${COMPONENT}spmod: ${PKCS11OBJS} ${DEBUGLIB} ${CLIB} ${PKCS11LIB} ${SECURELIBS} ${DIRS}
+rm.${COMPONENT}spMod: ${PKCS11OBJS} ${DEBUGLIB} ${CLIB} ${PKCS11LIB} ${SECURELIBS} ${DIRS}
         ${LD} ${LDFLAGS} -o $@ -module ${PKCS11OBJS} ${DEBUGLIB} ${CLIB} ${PKCS11LIB} ${SECURELIBS}
         Access $@ RW/R
 
-rm.${COMPONENT}spxmod: ${PKCS11OBJS} ${DEBUGLIB} ${CLIB} ${PKCS11LIB} ${SECUREXLIBS} ${DIRS}
+rm.${COMPONENT}spxMod: ${PKCS11OBJS} ${DEBUGLIB} ${CLIB} ${PKCS11LIB} ${SECUREXLIBS} ${DIRS}
         ${LD} ${LDFLAGS} -o $@ -module ${PKCS11OBJS} ${DEBUGLIB} ${CLIB} ${PKCS11LIB} ${SECUREXLIBS}
         Access $@ RW/R
 
