@@ -52,6 +52,7 @@ riscos_export: riscos_libs
 	@cp -p memflex.h $(RISCOS_BUILD_EXPORT)/Lib/MemLib/
 	@cp -p dynamic.h $(RISCOS_BUILD_EXPORT)/Lib/MemLib/
 	@cp -p subflex.h $(RISCOS_BUILD_EXPORT)/Lib/MemLib/
+	@cp -p mallinfo.h $(RISCOS_BUILD_EXPORT)/Lib/MemLib/
 	@echo Copied libraries
 
 clean:
