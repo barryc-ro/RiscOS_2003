@@ -75,18 +75,7 @@ BuffPtrInitLoop
         MOV     R0, #0          ; EOR with 0
         BL      UpdateLatchB
 
-
-; set up IOC timer 0 before we read from CMOS (cos it uses timer for delays)
-
-        MOV     R1, #IOC
-        LDR     R0, =20000-1    ; R0 = Timer delay (units of 0.5 microsecond)
-                                ; 20000*0.5E-6 = 0.01 Seconds 100Hz
-                                ; TMD 21-May-93: "-1" correction applied
-
-        STRB    R0, [R1, #Timer0LL]     ; Set up the delay
-        MOV     R0, R0, LSR #8
-        STRB    R0, [R1, #Timer0LH]
-        STRB    R0, [R1, #Timer0GO]     ; and start the ticks
+; note that Timer0 is already set up, so CMOS reads will be ok
 
         LDRB    R0, LastBREAK
         TEQ     R0, #0
@@ -100,53 +89,53 @@ BuffPtrInitLoop
  [ StorkPowerSave
         BL      PowerHardware           ;On Stork, ensure Combo chip, Winnie, Floppy etc are powered
  ]
-        [ STB
-        BL      ConfigureCombo
-        |
- [ IO_Type = "IOMD"
-        BL      Configure37C665         ;RiscPC, Kryten and Stork use only SMC 37C665
- |
- ]
-        ]
 
+Combo_eh
+        MOV     r1,#IOMD_Base
+        LDRB    r0,[r1,#IOMD_ID0]
+  [ IOMD2Support
+        TEQ     r0,#IOMD_IOMD2    :AND: &FF
+        BEQ     Combo_Phoebe
+  ]
+  [ IOMD1Support
+        TEQ     r0,#IOMD_Original :AND: &FF
+        TEQNE   r0,#IOMD_7500     :AND: &FF
+        TEQNE   r0,#IOMD_7500FE   :AND: &FF
+        BEQ     Combo_IOMD1
+  ]
+        B       Combo_eh                    ;deliberate hang up
 
+  [ IOMD1Support
+;
+Combo_IOMD1
+        BL      Configure37C665                  ;RiscPC, Kryten and Stork use only SMC 37C665
         MOV     R1, #IOC
-
-        [ :LNOT: NewClockChip
-        MOV     R0, #0
-        STRB    R0, SecondsTime         ; zero seconds and centiseconds
-        STRB    R0, CentiTime
-
-        LDRB    R0, [R1, #IOCControl]   ; load IOC control register
-        AND     R0, R0, #rtc_minutes_bit
-        STRB    R0, MinTick             ; Initialise the minute odd/even flag
-
-        MOV     R0, #1
-        STRB    R0, SecondsDirty        ; mark the seconds as dirty (non-zero)
-        ]
-
         MOV     r0, #timer0_bit :OR: vsync_bit
-        STRB    R0, [R1, #IOCIRQCLRA]   ; clear pending tim0, vsync irqs (+ pack irq if appropriate)
+        STRB    R0, [R1, #IOCIRQCLRA]            ; clear pending tim0, vsync irqs (+ pack irq if appropriate)
         LDRB    R0, [R1, #IOCIRQMSKA]
         ORR     R0, R0, #timer0_bit :OR: vsync_bit
-        STRB    R0, [R1, #IOCIRQMSKA]   ; Enable timer 0 + vsync irqs
+        STRB    R0, [R1, #IOCIRQMSKA]            ; Enable timer 0 + vsync irqs
+        B       Combo_done
 
+  ] ;IOMD1Support
 
- [ E2ROMSupport :LAND: STB
-; Don't set time to value held in RTC if the RTC chip is not fitted
-; system time will default to epoch: Midnight 1st Jan 1900
-        MOV     R1, #0
-        LDRB    R0, [r1, #RTCFitted]
-        TEQ     R0, #1
-        BEQ     %FT28
-; Set default time to UNIX epoch (1970) +1day not RISCOS epoch (1900) so time() doesn't return -1
-secs0070 *      (86400*(365*70+18))     ; from time() in risc_oslib.c.armsys
-        LDR     R7, =(secs0070 * 100)   ; centiseconds LSW
-        MOV     R8, #&33                ; centiseconds MSW
-        BL      Store5ByteInRealTime
-        B       %FT30
-28
- ]
+  [ IOMD2Support
+;
+Combo_Phoebe
+        BL      ConfigureSMC672                  ;Phoebe uses only SMC 672
+        MOV     r1, #IOMD_Base
+        MOV     r0, #(1:SHL:6)                   ;vsync is bit 6  
+        ORR     r0, r0, #(1:SHL:16)              ;timer0 is bit 16
+        STR     r0, [r1, #IOMD2_INTREQ]          ;clear any pending vsync, timer0
+        LDR     r0, [r1, #IOMD2_INTENBL]
+        ORR     r0, r0, #(1:SHL:6)
+        ORR     r0, r0, #(1:SHL:16)
+        STR     r0, [r1, #IOMD2_INTENBL]         ;enable vsync and timer0 irqs
+
+  ] ;IOMD2Support
+
+;
+Combo_done
         BL      CheckYear               ; check for year wrap scenario
         BL      RTCToRealTime
 
@@ -299,7 +288,6 @@ PostInit ROUT
         Pull    R14
         B       KeyPostInit
 
-        [ :LNOT: STB
 ; *****************************************************************************
 ;
 ;       SWI OS_ResyncTime
@@ -315,7 +303,6 @@ ResyncTimeSWI
         BL      RTCToRealTime
         Pull    "LR"
         ExitSWIHandler
-        ]
 
 ; *****************************************************************************
 ;
@@ -336,35 +323,9 @@ UpdateLatchB
         EOR     R3, R3, R0
         STRB    R3, [R2, #LatchBSoftCopy]
 
- [ IO_Type <> "IOMD"                          ; there ain't no Latch B on IOMD!
- ]
-
         TEQP    R14, #0
         Pull    "R2, R3, PC"
 
-        [ STB
-; *****************************************************************************
-;
-;       UpdateCLines - update IOMD_CLINES 8bit IO port
-; In:
-;       r3: new value
-;       r4: mask of bits to set
-;
-; Out:
-;       All regs preserved
-
-UpdateCLines ENTRY "r0, r1"
-        LDR     r0, =(IOMD_Base + IOMD_CLINES)
-        LDRB    r1, [r0]
-        ORR     r1, r1, #IOMD_C_ReadMask        ; Set readable bits
-        BIC     r1, r1, r4                      ; Clear bits to write
-        ORR     r1, r1, r3                      ; Set bits to write
-        STRB    r1, [r0]
-        EXIT
-
-
-; *****************************************************************************
-        |
 ; *****************************************************************************
 ;
 ;       UpdateMonitorTypeLatch - update monitor type latch and soft copy
@@ -393,7 +354,6 @@ UpdateMonitorTypeLatch
 
 
 ; *****************************************************************************
-        ]
 
 ; The initial values for all of the osbyte variables
 ; as decreed by arthur.
@@ -532,27 +492,42 @@ oldirqowner & IRQ
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
 ;       ReadMachineType - Determine machine type and store it in IOSystemType
+;                         also does monitor lead type
 ;
 
 ReadMachineType ENTRY "r0-r12"
- [ IO_Type = "IOMD"
-  [ MorrisSupport
         MOV     r12, #IOMD_Base
-
+10
         LDRB    r0, [r12, #IOMD_ID0]
-        LDRB    r11, [r12, #IOMD_ID1]
-        ORR     r0, r0, r11, LSL #8
-        LDR     r11, =IOMD_Original
-        TEQ     r0, r11
-        MOVEQ   r11, #0                                 ; assume Medusa
-        MOVNE   r11, #IOST_7500                         ; else assume Morris
-        TEQ     r11, #IOST_7500                         ; and set EQ if Morris to do conditional stuff below
+        TEQ     r0, #IOMD_IOMD2    :AND: &FF
+        BEQ     RMT_Phoebe                            ; IOMD2 (Phoebe)
+        TEQ     r0, #IOMD_Original :AND: &FF
+        BEQ     RMT_Medusa                            ; IOMD1 (Risc PC)
+        TEQ     r0, #IOMD_7500     :AND: &FF
+        TEQNE   r0, #IOMD_7500FE   :AND: &FF
+        BEQ     RMT_Morris                            ; 7500 (A7000) or 7500FE (A7000+)
+        B       %BT10                                 ; deliberate panic hang-up (unrecognised IOMD)
 
+RMT_Phoebe
+        MOV     r0, #IOST_IOEB                        ; pretend we've got IOEB
+        MOV     r1, #0
+        STRB    r0, [r1, #IOSystemType]
+        MOV     r2, #0                                ; we can't do monitor lead detect, so assume VGA capable monitor
+        B       %FT90
+
+RMT_Medusa
+        MOV     r11, #0
+        TEQ     r11, #1                               ; set NE for conditional stuff below
+        B       RMT_common
+
+RMT_Morris
+        MOV     r11, #IOST_7500
+        TEQ     r11, #IOST_7500                       ; set EQ for conditional stuff below
+;
+RMT_common
 ;
 ; On Kryten,    Morris pin Event2 is tied low so bit Nevent2 is a ONE
 ; On Stork,     Morris pin Event2 is tied high so bit Nevent2 is a ZERO
-; On STB/NCD,   Morris pin Event2 is tied high so bit Nevent2 is a ZERO, but we don't have a LCD
-;               controller or battery manager so we'll not set IOST_BATMAN
 ;
         LDREQB  r0, [r12, #IOMD_IRQSTD]         ;EQ, Morris
    [ BatManSupport
@@ -564,11 +539,7 @@ ReadMachineType ENTRY "r0-r12"
 ; r11 holds  0                        for  IOMD   (Risc PC)
 ;        or  IOST_7500                for  Morris (Kryten, Falcon, Omega)
 ;        or  IOST_7500 + IOST_BATMAN  for  Morris (Stork)
-  |
-        MOV     r0, #IOST_IOEB                  ; pretend we've got IOEB
-  ]
- |
- ]
+
         MOV     r1, #0                          ; normal Hsync and address pointer
         STRB    r0, [r1, #IOSystemType]
 
@@ -578,117 +549,17 @@ ReadMachineType ENTRY "r0-r12"
         MOVEQ   r2, #&FF                        ; then return all ones for monitor lead type
         BEQ     %FT90
 
-        [ STB
-        LDR     r0, =VIDC                       ; on VIDC20 we invert HSYNC by writing to External Register
 
-  [ MorrisSupport                               ; On Morris, monitor auto-detect has been moved to IOMD_CLINES
-        TST     R11, #IOST_7500
-        LDREQ   r3, =IOMD_MonitorType           ; Not Morris, address is in old place
-    [ IOMD_C_MonitorType = 0                    ; Monitor auto-detect not supported:
-     [ MPEGPoduleNTSCNotPALMask <> 0
-        BEQ     %FT15                           ; not an IOMD-style machine, so skip any STB stuff
-        LDR     r3, =MPEGPoduleNTSCNotPALAddress ; point at podule status register
-        LDRB    r2, [r3]
-        TST     r2, #MPEGPoduleNTSCNotPALMask   ; test PAL/NTSC bit
-        MOVEQ   r2, #4_0331                     ; if bit clear then PAL TV
-        MOVNE   r2, #4_1331                     ; if bit set then NTSC TV
-        B       %FT90
-15
-     |
-        MOVNE   r2, #&FF                        ; then return all ones for monitor lead type
-        BNE     %FT90
-     ]
-    |
-        ASSERT  (IOMD_C_MonitorType = (1<<0))   ; this code only understands auto-detect in bit 0
-        LDRNE   r3, =(IOMD_Base + IOMD_CLINES)
-    ]
-  |
+        LDR     r0, =VIDC                       ; on VIDC20 we invert HSYNC by writing to External Register
         LDR     r3, =IOMD_MonitorType
-  ]
 
         LDR     r1, =VIDCExternal+Ext_InvertCompVSYNC+Ext_DACsOn+Ext_ERegExt ; normal HSYNC value
         STR     r1, [r0]
         ORR     r2, r1, #Ext_InvertHSYNC        ; value for inverted HSYNC
 
-        LDRB    r4, [r3]                        ; base value
-  [ MorrisSupport
-    [ IOMD_C_PALNTSCType <> 0
-        ASSERT  (IOMD_C_PALNTSCType = (1<<4))   ; this code only understands PAL/NTSC auto-detect in bit 4
-        AND     r4, r4, #(IOMD_C_MonitorType :OR: IOMD_C_PALNTSCType)
-        ORR     r4, r4, r4, LSR #1              ; Shift PAL/NTSC bit into bit 3
-        AND     r4, r4, #&0F                    ; only use bits 0..3
-    |
-        AND     r4, r4, #IOMD_C_MonitorType     ; only one bit
-    ]
-  |
-        AND     r4, r4, #&0F                    ; only use bits 0..3
-  ]
-        MOV     r5, #0                          ; bits 0..3   = bits which have ever changed
-                                                ; bits 4..7   = bits whose deinverted value was high last time
-                                                ; bits 8..11  = bits whose deinverted value just went high-low
-                                                ; bits 12..15 = bits whose deinverted value just went high-low-low
-                                                ; bits 16..19 = bits which could be hsync
-                                                ;  ie after every high-low there was low-low (after deinversion)
-                                                ; bits 20..23 = bits which are definitely random
-        MOV     r10, #&0F                       ; used inside CheckBits
-        MOV     r12, #256                       ; number of iterations
-20
-        STR     r2, [r0]
-        LDRB    r6, [r3]                        ; read value with inverted sync
-        STR     r1, [r0]
-        LDRB    r7, [r3]                        ; read value with normal sync
-
-  [ MorrisSupport
-    [ IOMD_C_PALNTSCType <> 0
-        AND     r6, r6, #(IOMD_C_MonitorType :OR: IOMD_C_PALNTSCType)
-        ORR     r6, r6, r6, LSR #1              ; Shift PAL/NTSC bit into bit 3
-        AND     r6, r6, #&0F                    ; only use bits 0..3
-        AND     r7, r7, #(IOMD_C_MonitorType :OR: IOMD_C_PALNTSCType)
-        ORR     r7, r7, r7, LSR #1              ; Shift PAL/NTSC bit into bit 3
-        AND     r7, r7, #&0F                    ; only use bits 0..3
-    |
-        AND     r6, r6, #IOMD_C_MonitorType     ; only one bit
-        AND     r7, r7, #IOMD_C_MonitorType
-    ]
-  |
-        AND     r6, r6, #&0F                    ; only use bits 0..3
-        AND     r7, r7, #&0F
-  ]
-        EOR     r8, r6, r4                      ; bits which have changed from steady value to inverted one
-        ORR     r5, r5, r8                      ; OR into mask of bits which have ever changed
-        EOR     r8, r7, r4                      ; bits which have changed from steady value to normal one
-        ORR     r5, r5, r8                      ; OR into mask of bits which have ever changed
-        EOR     r6, r6, #&0F                    ; deinvert inverted value
-        BL      CheckBits                       ; call check routine with first value
-        MOV     r6, r7
-        BL      CheckBits                       ; call check routine with second value
-        SUBS    r12, r12, #1
-        BNE     %BT20
-        |
-
- [ VIDC_Type = "VIDC20"
-        LDR     r0, =VIDC                       ; on VIDC20 we invert HSYNC by writing to External Register
- |
- ]
- [ IO_Type = "IOMD"
-        LDR     r3, =IOMD_MonitorType
- |
- ]
-
- [ VIDC_Type = "VIDC20"
-        LDR     r1, =VIDCExternal+Ext_InvertCompVSYNC+Ext_DACsOn+Ext_ERegExt ; normal HSYNC value
-        STR     r1, [r0]
-        ORR     r2, r1, #Ext_InvertHSYNC        ; value for inverted HSYNC
- |
- ]
-
- [ MorrisSupport
         TST     R11, #IOST_7500
         BLNE    UpdateMonitorTypeLatch          ;Result back in R4
         LDREQB  r4, [r3]
- |
-        LDRB    r4, [r3]                        ; base value
- ]
         AND     r4, r4, #&0F                    ; only use bits 0..3
         MOV     r5, #0                          ; bits 0..3   = bits which have ever changed
                                                 ; bits 4..7   = bits whose deinverted value was high last time
@@ -700,33 +571,16 @@ ReadMachineType ENTRY "r0-r12"
         MOV     r10, #&0F                       ; used inside CheckBits
         MOV     r12, #256                       ; number of iterations
 20
- [ VIDC_Type = "VIDC20"
         STR     r2, [r0]
- |
- ]
-
- [ MorrisSupport
         TST     R11, #IOST_7500
         BLNE    UpdateMonitorTypeLatch          ;Result back in R4
         MOVNE   r6, r4
         LDREQB  r6, [r3]
- |
-        LDRB    r6, [r3]                        ; read value with inverted sync
- ]
-
- [ VIDC_Type = "VIDC20"
         STR     r1, [r0]
- |
- ]
-
- [ MorrisSupport
         TST     R11, #IOST_7500
         BLNE    UpdateMonitorTypeLatch          ;Result back in R4
         MOVNE   r7,r4
         LDREQB  r7,[r3]
- |
-        LDRB    r7, [r3]                        ; read value with normal sync
- ]
         AND     r6, r6, #&0F
         AND     r7, r7, #&0F
         EOR     r8, r6, r4                      ; bits which have changed from steady value to inverted one
@@ -739,10 +593,6 @@ ReadMachineType ENTRY "r0-r12"
         BL      CheckBits                       ; call check routine with second value
         SUBS    r12, r12, #1
         BNE     %BT20
-
-
-
-        ]
 
 ; now process result
 
@@ -779,19 +629,9 @@ ReadMachineType ENTRY "r0-r12"
         TST     r5, #8
         ORRNE   r2, r2, #3 :SHL: 6
 
-  [ IO_Type = "IOMD" :LAND: {FALSE}
         ASSERT  IOMD_MonitorIDMask = 1
         AND     r2, r2, #3                      ; only bit 0 of ID valid on IOMD-based systems
-  ]
 
-  [ STB :LAND: IOMD_C_TVMode <> 0                               ; set the TVMode to 0 (VGA) if id bits1,0 != 01 (TV)
-        AND     r3, r2, #2_11                   ; bits we're interested in
-        CMP     r3, #2_01                       ; TV?
-        BEQ     %FT90                           ; yes
-        MOV     r3, #0
-        MOV     r4, #IOMD_C_TVMode
-        BL      UpdateCLines
-  ]
 90
         MOV     r1, #0
         STRB    r2, [r1, #MonitorLeadType]
@@ -865,33 +705,10 @@ TranslateMonitorLeadType ENTRY "r0-r2"
         DCD     (($lead):SHL:24):OR:(($sync):SHL:16):OR:(($monitortype):SHL:8):OR:($mode)
         MEND
 
- [ IO_Type = "IOMD"
 MonitorLeadList
-  [ STB
-   [ IOMD_C_MonitorType = 0                                     ; no auto-detect bit
-    [ MPEGPoduleNTSCNotPALMask <> 0
-        MonitorLeadItem 4_0331,  50, 0, 0                       ; PAL TV interlaced overscanned
-        MonitorLeadItem 4_1331,  58, 8, 0                       ; NTSC TV interlaced overscanned
-        MonitorLeadItem 4_3333,  28, 3, 0                       ; VGA-capable monitors 256 colours
-    |
-        MonitorLeadItem 4_3333,  28, 3, 0                       ; assume VGA-capable monitors 256 colours
-    ]
-   |
-     [ IOMD_C_PALNTSCType = 0                                   ; no PAL/NTSC bits:
-        MonitorLeadItem 4_3331,  12, 0, 1                       ; PAL TV assumed
-        MonitorLeadItem 4_3333,  28, 3, 0                       ; VGA-capable monitors 256 colours
-     |                                                          ; wealth of bits:
-        MonitorLeadItem 4_0331,  50, 0, 0                       ; PAL TV interlaced overscanned
-        MonitorLeadItem 4_1331,  58, 8, 0                       ; NTSC TV interlaced overscanned
-        MonitorLeadItem 4_3333,  28, 3, 0                       ; VGA-capable monitors 256 colours
-     ]
-   ]
-  |
         MonitorLeadItem 4_3330,  27, 3, 0                       ; VGA-capable monitors
         MonitorLeadItem 4_3333,  12, 0, 1                       ; Others - assume TV standard
-  ]
- | ;IO_Type = "IOMD"
- ]
+
 
  [ StorkPowerSave
 ;
@@ -928,81 +745,44 @@ PowerHardware           ;On Stork, ensure Combo chip, Winnie, Floppy etc are pow
         EXIT
  ]
 
-        [ STB
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
-;       ConfigureCombo - Configure SMC 665/669 or UMC 8669 if present
+;       ConfigureSMC672 - Configure SMC 672 (assumes we are on Phoebe)
 ;
 
-ComboBase       *       &03010000       ; Base address of combo chip = PC/AT I/O 000H
+  [ IOMD2Support
 
-; SMC-type stuff
-SMC_CSR         *       &03F0 * 4       ; Configuration Select Register (CSR)
-SMC_config      *       &55             ; value to write to enter configuration mode
-SMC_endconfig   *       &AA             ; value to write to end configuration mode
-SMC_IDreg       *       &0D             ; device ID register
-SMC_data        *       &03F1 * 4       ; Configuration Access Port (data)
-SMC_665         *       &65             ; 665 ID
-SMC_669         *       &03             ; 669 ID
+ComboBase         *       &03010000     ; Base address of combo chip = PC/AT I/O 000H
 
-; UMC-type stuff
-UMC_CSR         *       &0108 * 4       ; Configuration Select Register (CSR)
-UMC_config      *       &AA             ; value to write to enter configuration mode
-UMC_endconfig   *       &55             ; value to write to end configuration mode
-UMC_data        *       &0109 * 4       ; Configuration Access Port (data)
+SMC_CSR           *       &03F0 * 4     ; Configuration Select Register (CSR)
+SMC_config        *       &55           ; value to write to enter configuration mode
+SMC_endconfig     *       &AA           ; value to write to end configuration mode
+SMC_IDreg         *       &0D           ; device ID register
+SMC_data          *       &03F1 * 4     ; Configuration Access Port (data)
+SMC_672           *       &40           ; 672 ID
+SMC_672_IDreg     *       &20
 
+command_RESETPS2  *  &AA
+PS2_COMMAND       *  &64*4 
+PS2_DATA          *  &60*4
 
-;
-; Configure SMC 37C665/669 or UMC8669 combo chip
-; Note that older devices (eg 82C710, 82C711, SMC651) are no longer supported
-        ASSERT  :LNOT: OldComboSupport
-
-ConfigureCombo ENTRY "r0,r1"
+ConfigureSMC672 ENTRY "r0,r1"
         TEQP    pc, #SVC_mode + I_bit + F_bit   ; Disable FIQ and IRQ
-        LDR     r0, =ComboBase          ; R0->  Base address of combo chip
+        LDR     r0, =ComboBase                  ; R0->  Base address of combo chip
 
-; See if we have a SMC665/669 and try to configure it
+; See if we have a SMC672 and try to configure it
         MOV     lr, #SMC_config
-        STRB    lr, [r0, #SMC_CSR]      ; Write &55 to CSR twice
         STRB    lr, [r0, #SMC_CSR]      ; to enter configuration mode
 
-        MOV     lr, #SMC_IDreg
+        MOV     lr, #SMC_672_IDreg
         STRB    lr, [r0, #SMC_CSR]
         LDRB    lr, [r0, #SMC_data]
-        TEQ     lr, #SMC_665            ; 665 ?
-        ADREQ   r1, ConfigSMC665Table
-        BEQ     %FT20
-        TEQ     lr, #SMC_669            ; 669 ?
-        ADREQ   r1, ConfigSMC669Table
+        TEQ     lr, #SMC_672            ; 672
+        ADREQ   r1, ConfigSMC672Table
         BEQ     %FT20
 
-; Not a SMC chip that we recognise, maybe we have a UMC8669
-        ADR     r1, ConfigUMC8669Table
-10
-        LDRB    lr, [r1], #1            ; get "Index Entry Valid"
-        STRB    lr, [r0, #UMC_CSR]
-        TEQ     lr, #UMC_endconfig      ; end of table?
-        BEQ     %FT12
-        LDRB    lr, [r1], #1            ; get config index
-        STRB    lr, [r0, #UMC_CSR]
-        LDRB    lr, [r1], #1            ; get config data
-        STRB    lr, [r0, #UMC_data]     ; and write it
-        BNE     %BT10
-
-12
-; UMC8669 is not self-identifying, so see if what we wrote is still there
-        MOV     lr, #UMC_config
-        STRB    lr, [r0, #UMC_CSR]      ; Write &AA to enter config mode
-        MOV     lr, #&C0
-        STRB    lr, [r0, #UMC_CSR]      ; CR0
-        LDRB    r2, [r0, #UMC_data]
-        MOV     lr, #UMC_endconfig      ; maybe don't need to do this
-        STRB    lr, [r0, #UMC_CSR]      ; exit config mode
-        TEQ     r2, #2_00111110         ; Value for CR0 from ConfigUMC8669Table
-
-                                        ; 665s and 669s offer the same features as far as
-        MOVEQ   r1, #IOST_37C665        ; OS_ReadSysInfo(3) is concerned, so use same value for both
-        MOVNE   r1, #0                  ; Don't know what this is, give up
+; Not a SMC chip that we recognise
+        MOV     r1, #0                  ; Don't know what this is, give up
         B       %FT30
 
 ;       SMC config loop
@@ -1013,96 +793,113 @@ ConfigureCombo ENTRY "r0,r1"
         LDRNEB  lr, [r1], #1            ; if not then get config data
         STRNEB  lr, [r0, #SMC_data]     ; and write it
         BNE     %BT20
-                                        ; 665s and 669s offer the same features as far as
+                                        ; 665s, 669s and 672s offer the same features as far as
         MOV     r1, #IOST_37C665        ; OS_ReadSysInfo(3) is concerned, so use same value for both
 
 ;       Record type of chip found
-30
         MOV     r0, #0
         LDRB    lr, [r0, #IOSystemType]
         BIC     lr, lr, #IOST_82C710 :OR: IOST_82C711 :OR: IOST_37C665
         ORR     lr, lr, r1
         STRB    lr, [r0, #IOSystemType]
 
+; reset PS2 uC, just in case (eg. kbd activity during warm reset)
+;
+        LDR     lr, =ComboBase
+        MOV     r0, #command_RESETPS2
+        STRB    r0, [lr, #PS2_COMMAND]
+20      LDRB    r0, [lr, #PS2_COMMAND]
+        ANDS    r0, r0, #1
+        BEQ     %BT20                   ;Wait until something comes back
+        LDRB    r0, [lr, #PS2_DATA]
+
+;       enable external interrupt 10 (ei10), wired as combo SMI interrupt
+;
+        MOV     r0, #IOMD_Base
+        MOV     lr, #1 :SHL: 10
+        STR     lr, [r0,#IOMD2_INTREQ]  ; clear any spurious level interrupt on ei10
+        LDR     lr, [r0,#IOMD2_INTENBL]
+        ORR     lr, lr, #1 :SHL: 10
+        STR     lr, [r0,#IOMD2_INTENBL] ; enable ei10
+
+30
         TEQP    pc, #SVC_mode + I_bit   ; Restore IRQ/FIQ state
         EXIT
 
+ConfigSMC672Table
+;Floppy Drive (8 regs, 3F0-3F7)
+        DCB     &07, 0                  ; Config the FDC first.
+        DCB     &60, &03                ; Address MSP
+        DCB     &61, &F0                ; Address LSP
+        DCB     &70, &05                ; Use IRQ6
+        DCB     &74, &01                ; DMA channel 1
+        DCB     &F0, 2_01001100         ; FDC cfg - Normal, Burst, AT-interface, Noswap, push-pull, active
+        DCB     &F1, 2_00000000         ; FDC cfg - default
+        DCB     &F2, 2_11111111         ; FDC cfg - default again
+        DCB     &F4, 2_00000000
+        DCB     &F5, 2_00000000
+        DCB     &30, 2_00000001         ; Enable it
 
-ConfigSMC665Table
- [ ComboIRQsActiveHigh
-        DCB     &01, 2_10010111         ; Enable config, COM3@338, COM4@238, IRQs active hi,
-                                        ; // is extended & powered @278
- |
-        DCB     &01, 2_10000111         ; Enable config, COM3@338, COM4@238, IRQs active low,
-                                        ; // is extended & powered @278
- ]
-        DCB     &02, 2_11011100         ; COM2 powered & enabled @2F8, COM1 powered & enabled @3F8
-                                        ; (default)
-        DCB     &03, 2_01111000         ; floppy stuff (default)
-        DCB     &04, 2_00000011         ; EPP v1.9, MIDI disabled, normal //floppy,
-                                        ; // uses ECP & EPP modes
-        DCB     &05, 0                  ; 4 drive support, don't swap drives, normal density,
-                                        ; FDC burst mode, IDE@1F0-7,3F6-7, FDC@3F0-7 (default)
-;       DCB     &06, &FF                ; floppy drive types (default)
-;       DCB     &07, 0                  ; don't auto-powerdown anything (default)
-;       DCB     &08, 0                  ; ADRA7:4 address decode (default)
-;       DCB     &09, 0                  ; ADRA10:8 address decode (default)
-;       DCB     &0A, 0                  ; FIFO threshold for ECP // = ??? (default)
-;       DCB     &0B, 0                  ; floppy data rates (default)
-;       DCB     &0C, 0                  ; UART2 & UART1 standard speed, UART2 standard mode,
-                                        ; UART2 full duplex, XMIT active hi, RCV active hi (default)
-        DCB     &00, 2_10111011         ; Valid config, OSC & BR on, FDC enabled & powered,
-                                        ; IDE AT & enabled
+;Serial Port 1 (8 regs, 3F8-3FF)
+        DCB     &07, &04                ; Config Serial Port 1
+        DCB     &60, &03                ; Address MSP
+        DCB     &61, &F8                ; Address LSP
+        DCB     &70, &07                ; IRQ 7
+        DCB     &74, &04                ; No DMA
+        DCB     &F0, 2_00000000         ; No MIDI, HighSpeed disabled, Use unique IRQ
+        DCB     &30, 2_00000001         ; Enable it
+
+;Serial Port 2 (8 regs, 2F8-2FF)
+        DCB     &07, &05                ; Config Serial Port 2
+        DCB     &60, &02                ; Address MSP
+        DCB     &61, &F8                ; Address LSP
+        DCB     &70, &04                ; Use IRQ4
+        DCB     &74, &04                ; No DMA
+        DCB     &F0, 2_00000000         ; No MIDI, HighSpeed disabled
+        DCB     &30, 2_00000001         ; Enable it
+
+;Parallel Port (8 regs, 278-27F)
+        DCB     &07, &03
+        DCB     &60, &02                ; Address MSP
+        DCB     &61, &78                ; Address LSP
+        DCB     &70, &03                ; IRQ3         ;wired to ei11 on IOMD2
+        DCB     &F0, &3B
+        DCB     &30, 2_00000001         ; Enable it
+
+;PS2 Port (8 regs, xx8-xxF)
+        DCB     &07, &07                ; Config PS2 Port
+        DCB     &70, &01                ; KIRQ (IRQ1)
+        DCB     &72, &0C                ; MIRQ (IRQ12)
+        DCB     &30, 2_00000001         ; Enable it
+
+;SIRQs
+        DCB     &07, &08                ; Config Serial Interrupts
+
+;interrupt enables group 1, bits 2..4 are serial2,serial1,floppy (parallel on irq3)
+        DCB     &B4, &00                ; serial2,serial1,floppy disabled (leave to device drivers)
+
+;interrupt enables group 2, bits 0..2 are mouse,keyboard,IR (bit 7 enables SMI output on pin)
+        DCB     &B5, &83                ; mouse,keyboard enabled (leave IR to device driver)
+
+        DCB     &C0, &02                ; pin multiplex control
+        DCB     &30, 2_00000001         ; Enable it
+
+;Global Config
+        DCB     &03, 2_10000011         ; EA, readable
+        DCB     &22, 2_00111001         ; Finally, power up: SP2, SP1, PP1, FDC
+;       DCB     &23, 2_00000000         ; Turn 'intelligent power management' off
+;       DCB     &24, 2_00000100         ; PLL on, Osc on, BRG on.
+        
         DCB     SMC_endconfig, 0        ; Exit config mode
 
-ConfigSMC669Table
-        DCB     &01, 2_10010100         ; Enable config, // is extended, // is  powered
-        DCB     &02, 2_10001000         ; COM2 powered, COM1 powered (default)
-        DCB     &03, 2_01111000         ; floppy stuff (default)
-        DCB     &04, 2_00000011         ; IR rx&tx on COM2 rx & tx pins, EPP v1.9, MIDI disabled,
-                                        ; normal //floppy, uses ECP & EPP modes
-        DCB     &05, 0                  ; 4 drive support, don't swap drives, normal density,
-                                        ; FDC burst mode (default)
-;       DCB     &06, &FF                ; floppy drive types (default)
-;       DCB     &07, 0                  ; don't auto-powerdown anything
-;       DCB     &08, 0                  ; ADRA7:4 address decode (default)
-;       DCB     &09, 0                  ; ADRx disabled, ADRA10:8 address decode (default)
-;       DCB     &0A, 0                  ; FIFO threshold for ECP // = ??? (default)
-;       DCB     &0B, 0                  ; floppy data rates (default)
-;       DCB     &0C, 0                  ; UART2 & UART1 standard speed, UART2 standard mode,
-                                        ; UART2 full duplex, XMIT active hi, RCV active hi (default)
-;       DCB     &1E, &80                ; GAMECS disabled (default)
-;       DCB     &1F, 0                  ; floppy drive types (default)
-        DCB     &20, &FC                ; FDC@3F0-7
-        DCB     &21, &7C                ; IDE@1F0-7
-        DCB     &22, &FD                ; IDE Alternate Status Register @3F6
-        DCB     &23, &9E                ; //@278
-        DCB     &24, &FE                ; COM1@3F8
-        DCB     &25, &BE                ; COM2@2F8
-        DCB     &26, 0                  ; no FDC DMA, no // DMA (default)
-        DCB     &27, 2_01100101         ; FDC uses IRQ_F, // uses IRQ_E
-        DCB     &28, 2_01000011         ; UART1 uses IRQ_D, UART2 uses IRQ_C
-        DCB     &29, 0                  ; IRQIN does not use any IRQ_x (default)
-        DCB     &00, 2_10001010         ; Valid config, FDC powered, IDE enabled
-        DCB     SMC_endconfig, 0        ; Exit config mode
+  ] ;IOMD2Support
 
-ConfigUMC8669Table
-        DCB     UMC_config, &C0, 2_00111110     ; IR full-duplex, games off, IDE on,
-                                                ; // in EPP & ECP mode, UART2 on, UART1 on, FDC off
-        DCB     UMC_config, &C1, 2_00101111     ; Direct access PnP register, Disable PnP,
-                                                ; IDE@1F0-7,3F6-7, //@278, COM2@2F8, COM1@3F8,
-                                                ; FDC@3F0-7
-        DCB     UMC_config, &C2, 2_10000001     ; Not supspended, IR unselected/disabled,
-                                                ; don't swap floppy, IBM mode floppy,
-                                                ; floppy is R/W (default)
-        DCB     UMC_endconfig, 0                ; Exit config mode
-
-        ALIGN
-        |
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
-;       Configure82C710 - Configure 82C710/82C711/SMC 665 if present
-;
+
+  [ IOMD1Support
+
+; Configure37C665 - programs SMC 37C665 (assumes IOMD1 desktop platforms)
 
 ; 82C710 stuff
 
@@ -1116,14 +913,7 @@ ConRegB710      *       &03FA*4
 CRI711Off       *       &03F0*4         ; 82C711 Configuration Register Index port
 CAP711Off       *       CRI711Off +4    ; 82C711 Configuration Access Port (data)
 
-
- [ IO_Type <> "IOMD"
- ]
-
- [ IO_Type <> "IOMD"
- ]
-
-ConfigSMCTable
+ConfigSMC665Table
         DCB     &01, 2_10000111         ; Enable config read, IRQ active low, parallel powered/extended, default addr.
         DCB     &02, 2_00011100         ; 2nd serial port disabled, 1st enabled at &3F8
         DCB     &03, &78                ; extra stuff for SMC
@@ -1139,9 +929,6 @@ ConfigSMCTable
 
         ALIGN
 
- [ IO_Type = "IOMD"
-;
-; Simplified version of Configure82C710 programs SMC 37C665 only.
 ;
 Configure37C665 ENTRY "r0,r1"
         TEQP    pc, #SVC_mode + I_bit + F_bit   ; Disable FIQ and IRQ
@@ -1160,7 +947,7 @@ Configure37C665 ENTRY "r0,r1"
         MOVNE   r1, #0                  ;NE: not a SMC 665 this should never happen
         BNE     %FT30                   ;NE: on a RiscPC, Kryten or Stork
 
-        ADR     r1, ConfigSMCTable      ; R1-> SMC 665 configuration data
+        ADR     r1, ConfigSMC665Table   ; R1-> SMC 665 configuration data
 20
         LDRB    lr, [r1], #1            ; get config index
         STRB    lr, [r0, #CRI711Off]
@@ -1179,10 +966,8 @@ Configure37C665 ENTRY "r0,r1"
 
         TEQP    pc, #SVC_mode + I_bit   ; Restore IRQ/FIQ state
         EXIT
- ]
 
-        ]
-
+  ] ;IOMD1Support
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
@@ -1190,7 +975,8 @@ Configure37C665 ENTRY "r0,r1"
 ;
 ; 10-Dec-93  BCockburn  Modified to leave raw 64 bit ID from chip in RawMachineID
 
-defaultlatch *  20000-1 ; TMD 21-May-93: "-1" correction applied
+
+defaultlatch * T0Ticker100Hz
 
 Tsyc    *       5       ; time between frames - minimum of 1µs, so give it a bit more
 Trstl   *       500     ; time reset pulse held low - minimum of 480µs, so give it a bit more

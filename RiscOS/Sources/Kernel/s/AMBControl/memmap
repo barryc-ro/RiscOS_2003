@@ -43,7 +43,7 @@
         BLO     %BT01
         MEND
 
-  [ AMB_LazyMapIn
+  [ AMB_LazyMapIn :LAND: ARMSASupport
 
 ; ----------------------------------------------------------------------------------
 ;
@@ -128,7 +128,7 @@ AMB_LazyFixUp ROUT
         MOV     r12,r7
         MOV     pc,lr
 
-  ] ;AMB_LazyMapIn
+  ] ;AMB_LazyMapIn :LAND: ARMSASupport
 
 
 ; ----------------------------------------------------------------------------------
@@ -176,10 +176,14 @@ AMB_movepagesin_L2PT ROUT
         SUBS    r8,r8,#1
         BNE     %BT30
 35
+  [ :LNOT: ARMSASupport_Only
         ARM_read_ID r0
         AND     r0,r0,#&F000
         CMP     r0,#&A000
         ARMA_drain_WB EQ         ;because L2PT area for AppSpace will be bufferable
+  |
+        ARMA_drain_WB            ;because L2PT area for AppSpace will be bufferable
+  ]
         Pull    "r0-r10,r12,pc"
 
 ; ----------------------------------------------------------------------------------
@@ -334,40 +338,18 @@ AMB_movepagesout_L2PT ROUT
         SUBS    r8,r8,#1
         BNE     %BT30
 35
+  [ :LNOT: ARMSASupport_Only
         ARM_read_ID r0
         AND     r0,r0,#&F000
         CMP     r0,#&A000
         ARMA_drain_WB EQ         ;because L2PT area for AppSpace will be bufferable
+  |
+        ARMA_drain_WB            ;because L2PT area for AppSpace will be bufferable
+  ]
         Pull    "r0-r8,pc"
 
 ; ----------------------------------------------------------------------------------
 
-  [ ARM810support
-    ;Previously supported ARMs all tolerate cache (clean and) flush _after_
-    ;remapping - ARMs 6,7 because there is no clean, StrongARM because the cache
-    ;writebacks use physical address.
-    ;ARM810 does not support clean of writeback cache after remapping, since
-    ;writebacks use virtual address. Rather than completely restructure code,
-    ;this routine is called before remapping where necessary, and cleans/flushes
-    ;if it finds we are running on ARM 810.
-    ;
-    ;corrupts r3
-    ;
-AMB_cachecleanflush_ifARM810
-        ARM_read_ID r3
-        AND     r3,r3,#&F000
-        CMP     r3,#&8000
-        MOVNE   pc,lr           ;not ARM8
-    [ ARM810cleanflushbroken
-        Push    "lr"
-        ARM8_cleanflush_IDC r3,lr
-        Pull    "pc"
-    |
-        ARM8_cleanflush_IDC r3
-        MOV     pc,lr
-    ]
-
-  ] ;ARM810support
 
 ; ----------------------------------------------------------------------------------
 ;
@@ -439,9 +421,6 @@ AMB_SetMemMapEntries ROUT
 AMB_smme_mapnotlimpid
   ]
 ;
-  [ ARM810support
-        BL      AMB_cachecleanflush_ifARM810
-  ]
         MOV     r3,r5
         BL      AMB_movepagesout_L2PT
         BL      AMB_movepagesin_L2PT
@@ -463,9 +442,6 @@ AMB_smme_mapin
 
 ;all pages destined for same new logical page 'nowhere'
 AMB_smme_mapout
-  [ ARM810support
-        BL      AMB_cachecleanflush_ifARM810
-  ]
         LDR     r3,=DuffEntry
         BL      AMB_movepagesout_L2PT
         BL      AMB_movepagesout_CAM
@@ -489,17 +465,16 @@ AMB_smme_exit
 ; exit: trashes r0-r4,r7-r11 (assumed protected by client)
 ;
 AMB_cachecleanflush
+  [ :LNOT: ARMSASupport_Only
         ARM_read_ID r0
         AND     r0,r0,#&F000
-  [ ARM810support
-        CMP     r0,#&8000      ;cache clean/flush done before remapping if ARM810
-        ARM8_flush_TLB EQ
-        MOVEQ   pc,lr
-  ]
         CMP     r0,#&A000
         ARM67_flush_cache NE
         ARM67_flush_TLB NE
         MOVNE   pc,lr
+  ]
+
+  [ ARMSASupport
 
 ;we have a StrongARM then
 ;
@@ -508,17 +483,6 @@ AMB_cachecleanflush
 ;
         MOV     r0,r4                      ;r0 := start address for clean/flush
         ADD     r1,r0,r8,LSL #Log2PageSize ;r1 := end address for clean/flush (exclusive)
-
-  [ ChocolateScreen
-;quick check - if screen cleaner has pending clean required, then we might as well choose
-;to do a full clean (forget the threshold check below), since this will save screen cleaner work
-;(we're only reading here, so interrupts not a problem)
-
-        MOV     r2,#ARMA_Cleaner_status
-        LDR     r2,[r2]
-        TST     r2,#ACS_VSCcountdown_MASK
-        BNE     AMB_ccf_StrongARM_flushwhole  ;if countdown not zero, screen clean work pending
-  ]
 
         SUB     r2,r1,r0
         CMP     r2,#AMB_ARMA_CleanRange_thresh
@@ -531,6 +495,8 @@ AMB_ccf_StrongARM_flushwhole
         MOV     r2,#0
         LDR     r3,[r2,#ARMA_Cleaner_status]
         ORR     r3,r3,#ACS_NSCsemaphore        ;set semaphore for non-screen clean
+        TST     r3,#ACS_MiniDataCache
+        BICEQ   r3,r3,#ACS_VSCpending_MASK     ;unless screen uses mini cache, force pending VSC clear since we're about to clean cache
         STR     r3,[r2,#ARMA_Cleaner_status]   ;update status
         TEQP    r1,#0                          ;restore IRQ state
         LDR     r1,[r2,#ARMA_Cleaner_flipflop]
@@ -545,13 +511,16 @@ AMB_ccf_StrongARM_flushwhole
         TEQP    r2,#0                          ;disable IRQs to mess with ARMA_Cleaner_status and MMUdomain
         MOV     r2,#0
         LDR     r3,[r2,#ARMA_Cleaner_status]
-        BIC     r3,r3,#ACS_NSCsemaphore:OR:ACS_VSCcountdown_MASK ;clear semaphore and any pending VSC
+        BIC     r3,r3,#ACS_NSCsemaphore          ;clear semaphore
         STR     r3,[r2,#ARMA_Cleaner_status]
   [ ChocolateScreen
         TST     r3,#ACS_SCdisable:OR:ACS_SCsuspend
+        BNE     AMB_ccf_nochoc                 ;do nothing if disabled or suspended
+        TST     r3,#ACS_HardVIDMRD
         ARMA_read_MMUdomain r3,EQ
         BICEQ   r3,r3,#&C
-        ARMA_write_MMUdomain r3,EQ             ;if SC not disabled or suspended, reset screen (domain 1) to fault
+        ARMA_write_MMUdomain r3,EQ             ;if h/w VIDMRD absent, reset screen (domain 1) to fault for VIDMRD emulation
+AMB_ccf_nochoc
   ]
         TEQP    r1,#0                          ;restore IRQ state
         MOV     pc,lr
@@ -567,8 +536,9 @@ AMB_ccf_StrongARM_flushrange
 
         MOV     pc,lr
 
+  ] ;ARMSASupport
 
-  [ AMB_LazyMapIn
+  [ AMB_LazyMapIn :LAND: ARMSASupport
 
 ; ----------------------------------------------------------------------------------
 ;
@@ -599,9 +569,6 @@ AMB_SetMemMapEntries_SparseMapOut ROUT
 
 ;if the number of pages mapped in is small enough, we'll do a clean/flush of data
 ;cache as we go (potentially much cheaper than full clean/flush)
-;(Arguably we could check for pending VSync cleans if ChocolateScreen, and always
-;choose to do full clean if so. Currently considered best to go for the saving always
-;here, with our own - possibly smaller - threshold.)
 
         CMP     r3,#AMB_ARMA_CleanSparseRange_thresh:SHR:Log2PageSize
         MOVLO   r6,#0                             ;r6 := 0 if we are to clean/flush as we go
@@ -711,7 +678,7 @@ AMB_MakeUnsparse ROUT
         Pull    "r0-r2,r12,pc"
 
 
-  ] ;AMB_LazyMapIn
+  ] ;AMB_LazyMapIn :LAND: ARMSASupport
 
 ; ----------------------------------------------------------------------------------
 ;

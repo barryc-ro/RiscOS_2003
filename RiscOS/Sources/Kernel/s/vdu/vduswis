@@ -1014,16 +1014,10 @@ SWIWriteN ROUT
 10
         SUBS    R1, R1, #1
         BCC     %FT90                   ; count has expired (V=0)
-  [ StrongARM
         LDRB    R0, [R10], #1
         Push    PC                      ; need to get to %FT20 - push PC+12 (old ARM) or PC+8 (StrongARM)
         B       PMFWrchDirect
         MOV     R0,R0                   ; NOP for PC+8 case
-  |
-        Push    PC                      ; push address of %FT20
-        LDRB    R0, [R10], #1
-        B       PMFWrchDirect
-  ]
 
 20
         BVS     %FT90
@@ -1076,16 +1070,10 @@ SWIWrite0 ROUT
 10
         LDRB    R0, [R10], #1
         CMP     R0, #0
-  [ StrongARM
         BEQ     %FT80                   ; no more characters
         Push    PC, NE                  ; need to get to %FT20 - push PC+12 (old ARM) or PC+8 (StrongARM)
         BNE     PMFWrchDirect
         MOV     R0,R0                   ;NOP for PC+8
-  |
-        Push    PC, NE                  ; push address of %FT20
-        BNE     PMFWrchDirect
-        B       %FT80                   ; no more characters
-  ]
 
 20
         BVS     %FT80
@@ -1129,16 +1117,10 @@ SWIWriteS ROUT
 10
         LDRB    R0, [R10], #1
         CMP     R0, #0
-  [ StrongARM
         BEQ     %FT80                   ; no more characters
         Push    PC, NE                  ; need to get to %FT20 - push PC+12 (old ARM) or PC+8 (StrongARM)
         BNE     PMFWrchDirect
         MOV     R0,R0                   ;NOP for PC+8
-  |
-        Push    PC, NE                  ; push address of %FT20
-        BNE     PMFWrchDirect
-        B       %FT80                   ; no more characters
-  ]
 20
         BVS     %FT80
         LDR     R0, [R11]
@@ -1914,9 +1896,10 @@ ScreenMode_ChocolateControl ROUT
         ORRNE   r4,r4,#ACS_SCsuspend
         BICEQ   r4,r4,#ACS_SCsuspend
         STR     r4,[LR,#ARMA_Cleaner_status]
+        TSTEQ   r4,#ACS_HardVIDMRD
         ARMA_read_MMUdomain r5,EQ
         BICEQ   r5,r5,#&C
-        ARMA_write_MMUdomain r5,EQ           ;mark domain 1 to fault if we are resuming screen cleaning
+        ARMA_write_MMUdomain r5,EQ           ;mark domain 1 to fault if we are resuming screen cleaning, and we need VIDMRD emulation
         TEQP    r3,#0                        ;restore IRQ status
 20
 ;deal with VSync screen cleaner laziness setting
@@ -1987,16 +1970,27 @@ int_ScreenMode_ChocolateUpdate ROUT
         BNE     %FT06                                   ;update if SC suspended but forced
         TST     r4,#ACS_SCsuspend
         BNE     %FT50                                   ;no update if SC suspended and not forced
-        TST     r4,#ACS_VSCcountdown_MASK               ;also no update if SC not suspended but no VSC is pending
+        TST     r4,#ACS_HardVIDMRD                      ;check for h/w VIDMRD presence
+        BEQ     %FT04
+        MOV     r2,#IOMD_Base
+        LDR     r2,[r2,#IOMD2_VIDMRD]                   ;this also clears flag
+        TST     r2,#1
+        ORRNE   r4,r4,#ACS_SoftVIDMRD
+        STRNE   r4,[LR,#ARMA_Cleaner_status]            ;we *must* stickily reflect transient h/w flag in SoftVIDMRD
+04
+        TST     r4,#ACS_VSCpending_MASK                 ;also no update if SC not suspended but no VSC is pending
         BEQ     %FT50
 06
+        BIC     r4,r4,#ACS_VSCpending_MASK              ;force this clear since we're about to clean (appropriate) cache
         EOR     r4,r4,#ACS_SCflipflop                   ;next screen cleaner area
         ORR     r4,r4,#ACS_SCsemaphore
         STR     r4,[LR,#ARMA_Cleaner_status]            ;update status
         AND     r2,r4,#ACS_SCflipflop                   ;extract SC flipflop bit
         LDR     r1,=ARMA_ScreenCleaners_address
         ADD     r1,r1,r2,LSR #(ACS_SCflipflop_SHIFT-14) ;start address for clean (LSR -14 since 16k area size)
-        ADD     r2,r1,#16*1024                          ;end address (exclusive, 16k cache size)
+        TST     r4,#ACS_MiniDataCache
+        ADDEQ   r2,r1,#16*1024                          ;end address (exclusive, 16k cache size)
+        ADDNE   r2,r1,#1024                             ;end address (exclusive, 1k mini cache size)
         TEQP    r3,#0                                   ;restore IRQs during clean
 10
         LDR     r4,[r1],#32                             ;read next cleaner line into data cache (triggers 8-word line fill)
@@ -2009,17 +2003,18 @@ int_ScreenMode_ChocolateUpdate ROUT
         MOV     r3,PC
         ORR     r4,r3,#I_bit
         TEQP    r4,#0                           ;disable IRQs to mess with ARMA_Cleaner status and MMUdomain
-        ARMA_read_MMUdomain r4
-        BIC     r4,r4,#&C
-        ARMA_write_MMUdomain r4                 ;reset screen (domain 1) to fault
         LDR     r4,[LR,#ARMA_Cleaner_status]
-        BIC     r4,r4,#ACS_SCsemaphore:OR:ACS_VSCcountdown_MASK
+        TST     r4,#ACS_HardVIDMRD
+        ARMA_read_MMUdomain r1, EQ
+        BICEQ   r1,r1,#&C
+        ARMA_write_MMUdomain r1, EQ             ;reset screen (domain 1) to fault for VIDMRD emulation, if necessary
+        BIC     r4,r4,#ACS_SCsemaphore
         STR     r4,[LR,#ARMA_Cleaner_status]
 50
         TEQP    r3,#0                           ;restore IRQ status
         Pull    "r1-r4,PC"
 
- ] ;ChocolateScreen
+  ] ;ChocolateScreen
 
 
 
