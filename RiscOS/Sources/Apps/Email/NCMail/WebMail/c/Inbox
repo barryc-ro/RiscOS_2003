@@ -159,7 +159,10 @@ void inbox_netlink_selected(void)
   if (status.netlink == NetLink_Online)
   {
     dprintf(("UI", "DISCONNECT SELECTED\n"));
+
     rc = eng_disconnect();
+
+    /* If the request isn't running then a transfer is in progress so inform the user */
     if (rc != ENG_RUNNING)
     {
       /* We have a slight problem */
@@ -257,13 +260,18 @@ void ncmui_inbox_render_cbf(eng_rcode rc, MessageDescriptor *msg, bool online, v
 {
   NB_UNUSED(handle);
   NB_UNUSED(msg);
-  NB_UNUSED(online);
 
   dprintf(("UI", "#############################\n"));
   dprintf(("UI", "ncmui_inbox_render_cbf called\n"));
   dprintf(("UI", "Status: %d\n", status.state));
   dprintf(("UI", "rc:     %d\n", rc));
   dprintf(("UI", "#############################\n"));
+
+  if (online != status.netlink)
+  {
+    /* We must have timed out since the last inbox redraw so update before rendering */
+    status.netlink = online;
+  }
 
   if (rc == ENG_COMPLETED)
   {
@@ -428,86 +436,156 @@ void inbox_output_messages_listing(FILE *out)
 {
   eng_rcode		 er;
   MessageDescriptor	*ptr = NULL;
-  char			*token;
-  int			 len = 0;
 
   er = eng_get_mailbox_list(&ptr);
 
-  if (er == ENG_UNPROCESSED)
-  {
-    /* Set internal state */
-    status.state = State_Inbox_Unprocessed;
+  dprintf(("UI", "#####################################\n"));
+  dprintf(("UI", "eng_get_mailbox_list() return code: %d\n", er));
 
-    /* We have an unprocessed Mailbox.  We now have to determine whether we are online or offline,
-     * and display the appropriate message
-     */
-    if (status.netlink == NetLink_Online)
+  switch(er)
+  {
+    case(ENG_UNPROCESSED):
     {
-      fprintf(out, "%s\n", nb_messagetrans_lookup(message_block, "INBOX_Unprocessed_On"));
+      inbox_get_mailbox_list_unprocessed(out);
+      break;
     }
-    else
+    case(ENG_NOMBOX):
     {
-      fprintf(out, "%s\n", nb_messagetrans_lookup(message_block, "INBOX_Unprocessed_Off"));
+      inbox_get_mailbox_list_nombox(out);
+      break;
     }
+    case(ENG_COMPLETED):
+    case(ENG_MBOXINCOMPLETE):
+    {
+      inbox_get_mailbox_list_completed(out, er, ptr);
+      break;
+    }
+    default:
+    {
+      ncmui_error_display(35);
+    }
+  }
+  dprintf(("UI", "#####################################\n"));
+}
+
+
+/************************************************************************/
+/* inbox_get_mailbox_list_completed                                     */
+/*                                                                      */
+/* Function is called when ENG_COMPLETED and ENG_MBOXINCOMPLETE are     */
+/* returned by eng_get_mailbox_list().  Must now output inbox.          */
+/*                                                                      */
+/* Parameters: file pointer.                                            */
+/*             eng_get_mailbox_list() return code.                      */
+/*                                                                      */
+/* Returns:    void.                                                    */
+/*                                                                      */
+/************************************************************************/
+void inbox_get_mailbox_list_completed(FILE *out, eng_rcode er, MessageDescriptor *ptr)
+{
+  char			*token;
+  int			 len = 0;
+
+  /* Set internal state */
+  status.state = State_Inbox;
+
+  /* Get length of Messagetrans token */
+  len = nb_messagetrans_token_length(message_block, "INBOX_Intray_Row");
+
+  if ((token= malloc(len + 5)) == NULL)
+  {
+    ncmui_error_display(1);
   }
   else
   {
-    /* Set internal state */
-    status.state = State_Inbox;
+    /* Get token from messages file */
+    strcpy(token, nb_messagetrans_lookup(message_block, "INBOX_Intray_Row"));
 
-    dprintf(("UI", "#####################################\n"));
-    dprintf(("UI", "eng_get_mailbox_list() return code: %d\n", er));
-
-    /* Get length of Messagetrans token */
-    len = nb_messagetrans_token_length(message_block, "INBOX_Intray_Row");
-
-    if ((token= malloc(len + 5)) == NULL)
+    if (ptr == NULL)
     {
-      ncmui_error_display(1);
-      dprintf(("UI", "ERROR: Not enough memory to create inbox listing.\n"));
+      /* No messages */
+      inbox_get_mailbox_list_nombox(out);
     }
     else
     {
-      /* Get token from messages file */
-      strcpy(token, nb_messagetrans_lookup(message_block, "INBOX_Intray_Row"));
-
-      if (ptr == NULL)
+      while (ptr)
       {
-        fprintf(out, nb_messagetrans_lookup(message_block, "INBOX_No_Messages"));
-      }
-      else
-      {
-
-        while (ptr)
+        /* Check the error flag is not set before attempting to process */
+        if (!(ptr->flags & ERROR))
         {
-          /* Check the error flag is not set before attempting to process */
-          if (!(ptr->flags & ERROR))
-          {
-            dprintf(("", "ID:      %d\n", ptr->ID));
-            dprintf(("", "Flags:   %d\n", ptr->flags));
-            dprintf(("", "From:    %s\n", ptr->fromreal));
-            dprintf(("", "Address: %s\n", ptr->fromaddr));
-            dprintf(("", "Subject: %s\n", ptr->subject));
-            dprintf(("", "Date:    %s\n", asctime(ptr->datestruct)));
+          dprintf(("", "ID:      %d\n", ptr->ID));
+          dprintf(("", "Flags:   %d\n", ptr->flags));
+          dprintf(("", "From:    %s\n", ptr->fromreal));
+          dprintf(("", "Address: %s\n", ptr->fromaddr));
+          dprintf(("", "Subject: %s\n", ptr->subject));
+          dprintf(("", "Date:    %s\n", asctime(ptr->datestruct)));
 
-            inbox_output_message_html(out, ptr, token, len);
-          }
-          ptr = ptr->next;
+          inbox_output_message_html(out, ptr, token, len);
         }
-      }
-      free(token);
-
-      if (er == ENG_MBOXINCOMPLETE)
-      {
-        popup_1_open_dialogue( nb_messagetrans_lookup(message_block, "INBOX_Incomplete"),
-                               nb_messagetrans_lookup(message_block, "BUTTON_OK"),
-                               popup_return_cbf,
-                               NULL );
+        ptr = ptr->next;
       }
     }
+    free(token);
 
-    dprintf(("UI", "#####################################\n"));
+    if (er == ENG_MBOXINCOMPLETE)
+    {
+      popup_1_open_dialogue( nb_messagetrans_lookup(message_block, "INBOX_Incomplete"),
+                             nb_messagetrans_lookup(message_block, "BUTTON_OK"),
+                             popup_return_cbf,
+                             NULL );
+    }
   }
+}
+
+
+/************************************************************************/
+/* inbox_get_mailbox_list_unprocessed                                   */
+/*                                                                      */
+/* Function is called if the return code from eng_get_mailbox_list() is */
+/* ENG_UNPROCESSED.                                                     */
+/*                                                                      */
+/* Parameters: file pointer.                                            */
+/*                                                                      */
+/* Returns:    void.                                                    */
+/*                                                                      */
+/************************************************************************/
+void inbox_get_mailbox_list_unprocessed(FILE *out)
+{
+  /* Set internal state */
+  status.state = State_Inbox_Unprocessed;
+
+  /* We have an unprocessed Mailbox.  We now have to determine whether we are online or offline,
+   * and display the appropriate message
+   */
+  if (status.netlink == NetLink_Online)
+  {
+    fprintf(out, "%s\n", nb_messagetrans_lookup(message_block, "INBOX_Unprocessed_On"));
+  }
+  else
+  {
+    fprintf(out, "%s\n", nb_messagetrans_lookup(message_block, "INBOX_Unprocessed_Off"));
+  }
+}
+
+
+/************************************************************************/
+/* inbox_get_mailbox_list_nombox                                        */
+/*                                                                      */
+/* Function is called if the return code from eng_get_mailbox_list() is */
+/* ENG_NOMBOX.  This may also be called if there are no messages in the */
+/* inbox after processing.                                              */
+/*                                                                      */
+/* Parameters: file pointer.                                            */
+/*                                                                      */
+/* Returns:    void.                                                    */
+/*                                                                      */
+/************************************************************************/
+void inbox_get_mailbox_list_nombox(FILE *out)
+{
+  /* Set internal state */
+  status.state = State_Inbox;
+
+  fprintf(out, nb_messagetrans_lookup(message_block, "INBOX_No_Messages"));
 }
 
 

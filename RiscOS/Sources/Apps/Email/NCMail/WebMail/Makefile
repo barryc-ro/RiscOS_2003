@@ -124,6 +124,7 @@ OBJS = 	o.EscapeHTML 	\
  	o.Compose	\
 	o.SendMsg	\
 	o.MailTo 	\
+	o.Reply		\
 	o.Errors
 
 OBJSD = od.EscapeHTML 	\
@@ -134,10 +135,11 @@ OBJSD = od.EscapeHTML 	\
 	od.Entry	\
 	od.ReadMsg	\
 	od.Feedback	\
-	od.PopUp		\
+	od.PopUp	\
 	od.SendMsg	\
 	od.Compose	\
 	od.MailTo 	\
+	od.Reply	\
 	od.Errors
 
 OBJSZ = oz.EscapeHTML 	\
@@ -152,6 +154,7 @@ OBJSZ = oz.EscapeHTML 	\
 	oz.PopUp	\
 	oz.SendMsg	\
 	oz.MailTo 	\
+	oz.Reply	\
 	oz.Errors
 
 
