@@ -14,7 +14,7 @@
  */
 
 #include "VersionNum"
-#define NON_RELEASE_VSN Module_MajorVersion " (Pace Micro Technology plc.) " Module_MinorVersion
+#define RELEASE_VSN Module_FullVersion
 
 #define TARGET_ENDIANNESS_CONFIGURABLE 1
 #define TARGET_DEFAULT_BIGENDIAN 0       /* 1 => bigendian default */
