@@ -27,10 +27,12 @@ SOURCE    = Source
 SL        = ${SOURCE}.o
 SSLIB     = ${SL}.Drivers ${SL}.Handler ${SL}.Linear ${SL}.Memory ${SL}.Module \
             ${SL}.SampleRate ${SL}.SWIS ${SL}.Vars ${SL}.Volume
+BASICFILES= o.Debug o.Drivers o.Handler o.Linear o.Memory o.Module o.SampleRate o.SWIS \
+            o.Vars o.Volume o.SharedSoun
 
-.o.c:
-	 set tokenisefile $*
-	 utils.detoken1; BASIC
+#.o.c:
+#	 set tokenisefile $*
+#	 utils.detoken1; BASIC
 
 .c.o:
 	 set tokenisefile $*
@@ -57,15 +59,11 @@ clean:
 resources:
         @echo ${COMPONENT}: resource files copied
 
-${TARGET}: o.SharedSoun makebasic
+${TARGET}: ${BASICFILES}
         Set MakeSSnd$Dir @
         Run o.SharedSoun
-        ${WIPE} o.* ~cv
 
 import: Debug.c Drivers.c Handler.c Linear.c Memory.c Module.c SampleRate.c SWIS.c Vars.c Volume.c SharedSoun.c
 	echo made text files
-
-makebasic: Debug.o Drivers.o Handler.o Linear.o Memory.o Module.o SampleRate.o SWIS.o Vars.o Volume.o SharedSoun.o
-	echo made basic files
 
 # Dynamic dependencies:
