@@ -1,0 +1,254 @@
+/*=====================================================================================*/
+/*                                                                                     */
+/*  FILE:  !cd.c.launch                                                                */
+/*  DESCRIPTION:  Routines for launching a cd application.  Currently these include    */
+/*                !VideoCD, !PhotoCD, !AudioCD, and cd's which have both their own     */
+/*                applications and a !RunCD run file in their root directories.        */
+/*  AUTHOR:  srose@omi.co.uk                                                           */
+/*  MODIFICATION HISTORY:                                                              */
+/*    Date         Name                Description                                     */
+/*    ----         ----                -----------                                     */
+/*                                                                                     */
+/*=====================================================================================*/
+
+#include "launch.h"
+
+/*-------------------------------------------------------------------------------------*/
+/*   Inclusion of !cd common header file.  Contains error handling function            */
+/*   prototype.                                                                        */
+/*-------------------------------------------------------------------------------------*/
+
+#include "common.h"
+#ifdef MEMORY_TRACE
+   #include "memory.h"
+#endif
+
+/*-------------------------------------------------------------------------------------*/
+/*   Inclusion of SWI interface header.  Allows constructs of the type                 */
+/*   err = swi(Wimp_Initialise,R0,310,R1,0x4B534154,R2,NULL,R3,msg_list,OUT,R1,        */
+/*   &cd_task_handle,END);                                                             */
+/*-------------------------------------------------------------------------------------*/
+
+#include "swicall.h"
+
+/*-------------------------------------------------------------------------------------*/
+/*   Inclusion of !cd message header file.  Necessary for broadcasting !cd's task      */
+/*   handle to the launched cd application.                                            */
+/*-------------------------------------------------------------------------------------*/
+
+#include "messages.h"
+
+/*-------------------------------------------------------------------------------------*/
+/*   Inclusion of !cd display header file.  Necessary for hourglass usage.             */
+/*-------------------------------------------------------------------------------------*/
+
+#include "display.h"
+
+/*-------------------------------------------------------------------------------------*/
+/*   Inclusion of !cd main header file.  Necessary for RejectCD usage.                 */
+/*-------------------------------------------------------------------------------------*/
+
+#include "main.h"
+
+/*-------------------------------------------------------------------------------------*/
+/*   Inclusion of standard C library header files.                                     */
+/*-------------------------------------------------------------------------------------*/
+
+#include "stdio.h"
+#include "stdlib.h"
+#include "string.h"
+
+
+/*-------------------------------------------------------------------------------------*/
+/*                         Internal function declarations.                             */
+/*-------------------------------------------------------------------------------------*/
+
+static int ApplicationExists(char *app);
+
+/*=====================================================================================*/
+/*                                                                                     */
+/*  FUNCTION:  Launch()                                                                */
+/*  BEHAVIOUR: Attempts to launch the application described by 'cd_app'.               */
+/*             If !cd is searching for either !AudiCD, !VideoCD, or !PhotoCD, and      */
+/*             cannot find it, the cd will be ejected and !cd will resume normal       */
+/*             operation.   If a cd contains a "!RunCD" file or a RunCD wildcard file  */
+/*             in it's root directory, that file has applications on it which are      */
+/*             dealt with  by running that file.                                       */
+/*  REQUIRES:  - 'cd_app', which should be  one of the following strings:              */
+/*                WimpTask *RUN PhotoCD:!Run                                            */
+/*                WimpTask *RUN AudioCD:!Run                                            */
+/*                WimpTask *RUN VideoCD:!Run                                            */
+/*                CDFS:!RunCD  (will also look for RunCD/wildcard if !RunCD is passed  */
+/*                in)                                                                  */
+/*  PREREQUISITES: A call to DetectCdType() should have been made beforehand to        */
+/*                 identify the type of cd present.                                    */
+/*                                                                                     */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+extern void Launch(char *cd_app)
+{
+ extern int wait_for_ack;      /* Setting to TRUE tells the main part of !cd that a cd */
+                               /* task is about to start up, and that it should wait   */
+                               /* for the new task to send an I am now alive message   */
+                               /* before doing much else.  If there is a problem in    */
+                               /* starting up the new task, 'wait_for_ack' will get    */
+                               /* reset to FALSE since there will be no new task to do */
+                               /* this by sending an I am alive message back to !cd.   */
+ extern int splash_screen;     /* 'splash_screen' is either HIDDEN or DISPLAYED.       */
+                               /* It lets the main part of !cd know whether or not the */
+                               /* splash screen needs re-drawing.                      */
+ extern int other_task;        /* ACTIVE or NOT_ACTIVE.                                */
+ char wildcard[20] = "CDFS:$.RunCD/*";
+ FILE *fptr = NULL;
+
+
+   #ifdef FN_TRACE
+     puts("Launch()");
+   #endif
+
+   HourGlass(ON);
+
+   if ((strncmp("CDFS:!RunCD",cd_app,strlen("CDFS:!RunCD"))) == NULL)
+   /* Compact disc has a RunCD or a !RunCD file in it's root directory.  Therefore,    */
+   /* launch by executing that run file.                                               */
+   {
+        splash_screen = HIDDEN;   /* Splash screen's about to disappear.               */
+
+        wait_for_ack = TRUE; /* Don't re-execute this code until the new task has said */
+                             /* whether it's alive or is about to die due to some      */
+                             /* error.                                                 */
+
+        if ((fptr = fopen("CDFS:$.!RunCD","r")) != NULL)     /* Wimp_StartTask never   */
+        {                                                    /* returns errors.        */
+             fclose(fptr);
+             HourGlass(OFF);
+             swi(Wimp_StartTask,R0,"CDFS:$.!RunCD",END);
+             BroadcastPlingCDTaskHandle();
+        }
+        else if ((fptr = fopen(wildcard,"r")) != NULL)
+             {
+                  fclose(fptr);
+                  HourGlass(OFF);
+                  swi(Wimp_StartTask,R0,wildcard,END);
+                  BroadcastPlingCDTaskHandle();
+             }
+             else {
+                    RejectCD(UNKNOWN_CD);
+                    wait_for_ack = FALSE;
+                    ErrorHandler(__FILE__,__LINE__,"Launch()",0,
+                    "Received CDFS:!RunCD or CDFS:RunCD/wildcard but unable to read.",
+                    WARNING);
+                  }
+   }
+   else
+   /* Compact disc does not have a RunCD file in it's root directory. Therefore the   */
+   /* launch is not achieved by executing the !RunCD run file.                        */
+   {
+      splash_screen = HIDDEN;   /* Idle screen's about to disappear.                  */
+
+      wait_for_ack = TRUE;  /* Don't re-execute this code until the new task has said */
+                            /* whether it's alive or is about to die due to some      */
+                            /* error.                                                 */
+
+      /* Wimp_StartTask below results in an error message to the screen and the error */
+      /* checking code not being executed if the application does not exist.  There   */
+      /* fore, do an initial check to see if the application exists.   Wimp_StartTask */
+      /* never returns errors.  Hence no error handling code for that swi call.       */
+
+      if (ApplicationExists(cd_app))
+      {
+          HourGlass(OFF);
+          #ifdef MEMORY_TRACE
+             ShowMem(__FILE__,__LINE__);
+          #endif
+          printf("launching : %s\n",cd_app);
+          swi(Wimp_StartTask,R0,cd_app,END);
+          BroadcastPlingCDTaskHandle();
+      }
+      else
+      /* Requested application cannot be found.                                        */
+      {
+         RejectCD(UNKNOWN_CD);
+
+         wait_for_ack = FALSE;  /* No need to carry on waiting for a dead or alive     */
+                                /* message from the new task.                          */
+
+         ErrorHandler(__FILE__,__LINE__,"Launch()",0,"Can't find application",WARNING);
+      }
+   }
+
+   if (other_task == NOT_ACTIVE)
+       HourGlass(OFF);
+}
+
+/*=====================================================================================*/
+/*                                                                                     */
+/*  FUNCTION:  ApplicationExists()                                                     */
+/*  BEHAVIOUR: Determines if a given application actually exists before trying to      */
+/*             launch it.  This is largely because a failed launch of any of the       */
+/*             WimpTask applications (!VideoCd,!AudioCD,!PhotoCD) gets handled outside */
+/*             of !cd's control and !cd has trouble regaining control.                 */
+/*  REQUIRES:  - 'app', which is expected to be any of the following strings:-         */
+/*                WimpTask *RUN AudioCD:!Run                                            */
+/*                WimpTask *RUN PhotoCD:!Run                                            */
+/*                WimpTask *RUN VideoCD:!Run                                            */
+/*  PREREQUISITES:  'app' must be any of the above three strings.                      */
+/*  RETURNS:   TRUE if both the !Boot and !Run files of the specified application can  */
+/*             be found, FALSE otherwise.                                              */
+/*                                                                                     */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+static int ApplicationExists(char *app)
+{
+ FILE *fptr = NULL;      /* File pointer used for checking that the application's      */
+                         /* !Boot and !Run files exist.                                */
+ int app_exists = FALSE; /* Returns as TRUE if the application's !Boot and !Run files  */
+                         /* were found.                                                */
+ char *filename = NULL;
+
+   #ifdef FN_TRACE
+     puts("ApplicationExists()");
+   #endif
+
+   if ((filename = malloc(strlen(app) - strlen("WimpTask *RUN ") + strlen("!Boot")))
+        == NULL)
+        ErrorHandler(__FILE__,__LINE__,"ApplicationExists()",0,"Insufficient Memory.",
+        FATAL);
+
+   sprintf(filename,"%s",app + strlen("WimpTask *RUN "));
+
+   if ((fptr = fopen(filename,"r")) == NULL)
+        app_exists = FALSE;
+   else
+   {
+        app_exists = TRUE;
+        fclose(fptr);
+   }
+
+   /* If the !Boot file was found, check that the !Run file also exists ...            */
+
+   if (app_exists == TRUE)
+   {
+    /* Strip off "WimpTask " from the string "WimpTask AudioCD:!Run (or photo or video)
+       and replace !Run with !Boot.
+    */
+
+       strncpy(filename,app + strlen("WimpTask *RUN "),7); /* 7 because conveniently,  */
+       filename[7] = '\0';                             /* AudioCD, PhotoCD, and        */
+       strcat(filename,":!Boot");                      /* VideoCD are all 7 characters */
+                                                       /* in length.                   */
+       if ((fptr = fopen(filename,"r")) == NULL)
+            app_exists = FALSE;
+       else
+       {
+            app_exists = TRUE;
+            fclose(fptr);
+       }
+
+   }
+
+   free (filename);
+
+   return app_exists;
+}
+
+/*-------------------------------------------------------------------------------------*/

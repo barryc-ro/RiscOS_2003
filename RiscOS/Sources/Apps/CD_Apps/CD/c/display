@@ -1,0 +1,968 @@
+/*=====================================================================================*/
+/*                                                                                     */
+/*  FILE:  !cd.c.display                                                               */
+/*  DESCRIPTION:  Routines for displaying splash (Please Insert Cd) screen.            */
+/*  AUTHOR:  srose@omi.co.uk                                                           */
+/*  MODIFICATION HISTORY:                                                              */
+/*    Date         Name                Description                                     */
+/*    ----         ----                -----------                                     */
+/*                                                                                     */
+/*=====================================================================================*/
+
+#include "common.h"          /* Common !cd header file.                                */
+#include "display.h"
+#include "stdio.h"           /* Standard C library headers.                            */
+#include "stdlib.h"
+#include "swicall.h"         /* SWI interface header file.                             */
+#ifdef MEMORY_TRACE
+   #include "memory.h"
+#endif
+
+/*-------------------------------------------------------------------------------------*/
+/*                           Internal global variables.                                */
+/*-------------------------------------------------------------------------------------*/
+
+static int xres,yres;   /* x and y screen resolution (in pixels).                      */
+static int xeig,yeig;   /* Number of bits by which a screen pixel position must be     */
+                        /* shifted left to convert to it's corresponding OS coord.     */
+
+/*-------------------------------------------------------------------------------------*/
+/*                         Internal function declarations.                             */
+/*-------------------------------------------------------------------------------------*/
+
+static void ScreenDimensions(void);
+static void CoordConversion(void);
+static void ReadJPEGDimensions(char *fname,int *width,int *height);
+static char * PrepareShadowSprite(int shadowsize,
+                                  int *shadow_screen_area_id,
+                                  int *shadow_first_sprite_offset,
+                                  int original_JPEG_pixel_width,
+                                  int original_JPEG_pixel_height);
+static void JPEGOverlay(char *jpegfile,int minx,int miny,char
+                        *shadow_screen_base,int shadow_first_sprite_offset,
+                        int original_JPEG_pixel_width, int original_JPEG_pixel_height);
+static void ShowScreenDisplay(int dma_id,char
+                              *shadow_screen_base,int shadow_first_sprite_offset);
+static void SetHourGlassPosition(int xpos,int ypos);
+static char *LoadSprite(char *fname,char *sname,int *original_width,int *original_height,
+       char **sptr);
+static void AntiTwitter(int twitter_width,int twitter_height,int x1,int y1);
+
+/*-------------------------------------------------------------------------------------*/
+/*                  Macro definitions specific to display.c                            */
+/*-------------------------------------------------------------------------------------*/
+
+#define OLD_TWITTER   /* OLD_TWITTER means that the old twitter module will be used.   */
+                      /* NEW_TWITTER means that the new twitter module will be used.   */
+                      /* Undefining OLD_TWITTER or NEW_TWITTER will result in no       */
+                      /* twitter being applied.                                        */
+                      /* Currently, the new twitter module is apparantly working, but  */
+                      /* had no effect when used from within !AudioCD.                 */
+
+#undef LOW_MEM        /* Defining LOW_MEM means that the JPEG screen image is scaled   */
+                      /* up whilst plotting to the screen and the shadow sprite for    */
+                      /* holding it after reading it in from file and before plotting  */
+                      /* to the screen, is the same size as the originally supplied    */
+                      /* JPEG (i.e. smaller than screen size unless the original JPEG  */
+                      /* is coincidentally the same size as the screen).  Undefining   */
+                      /* LOW_MEM means that the JPEG is scaled up immediately when     */
+                      /* read into the shadow sprite buffer and therefore the shadow   */
+                      /* sprite buffer will most likely be larger than otherwise.  The */
+                      /* advantage of doing this however, is that anti-twitter can be  */
+                      /* applied before plotting to the screen because the image is    */
+                      /* already screen size.                                          */
+
+/*=====================================================================================*/
+/*                                                                                     */
+/*  FUNCTION:  ShowPleaseInsertCdScreen()                                              */
+/*  BEHAVIOUR: Uses the internal routines in this file to display a splash screen.     */
+/*             A blank sprite is created and the JPEG splash screen is read into this  */
+/*             initially blank sprite.  The stage at which  rescaling takes place      */
+/*             depends upon the macro definition of LOW_MEM, which is defined and      */
+/*             described at the start of this file.                                    */
+/*  PREREQUISITE: The splash screen file can be a JPEG of any size, preferably created */
+/*                in a 24bpp screen mode, because JPEG images are saved at 24bpp.      */
+/*             Conversion down to our 16bpp screen mode takes place automatically at   */
+/*             the plotting stage.                                                     */
+/*                                                                                     */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+extern void ShowPleaseInsertCdScreen(void)
+{
+ int shadow_screen_area_id;        /* The 'shadow' is the dynamic memory area used to  */
+ char *shadow_screen_base = NULL;  /* create a blank sprite before plotting the JPEG   */
+ int shadow_first_sprite_offset;   /* onto it and then displaying the sprite on the    */
+                                   /* screen.                                          */
+ int iLog2BPP;                     /* Used to check that the screen mode is 16bpp      */
+                                   /* before attempting to plot the screen display.    */
+ int original_JPEG_pixel_width;    /* Dimensions of user supplied splash screen.       */
+ int original_JPEG_pixel_height;
+ _kernel_oserror *err = NULL;      /* SWI error handling pointer.                      */
+
+   #ifdef FN_TRACE
+     puts("ShowPleaseInsertCdScreen()");
+   #endif
+
+   if (splash_screen == DISPLAYED)
+       return;
+
+   /* If the screen mode is not 16 bits per pixel then we don't bother plotting the    */
+   /* 'Insert CD screen ', and mark it as hidden.                                      */
+
+   if ((err = swi(OS_ReadModeVariable,R0,-1,R1,9,OUT,R2,&iLog2BPP,END)) != NULL)
+        ErrorHandler(__FILE__,__LINE__,"ShowPleaseInsertCdScreen()",err->errnum,
+        err->errmess,WARNING);
+
+   if (iLog2BPP != 4)
+   {
+     	splash_screen = HIDDEN;
+   	return;
+   }
+
+   ScreenDimensions();    /* Set variables xres and yres which are the number of x     */
+                          /* pixels on the screen, and the number of y pixels, in      */
+                          /* the current screen mode.                                  */
+
+   ReadJPEGDimensions("CD:Splash",&original_JPEG_pixel_width,&original_JPEG_pixel_height);
+
+   /* (original_JPEG_pixel_width * 2 * original_JPEG_pixel_height) + 16 + 44 below,    */
+   /* is the size of the shadow sprite.  Multiply by 2 because a screen mode of 16bpp  */
+   /* is assumed, i.e. 2 bytes per pixel, add 16 bytes to allow for the sprite area    */
+   /* control block, add 44 to allow for the control block within the sprite itself    */
+   /* (refer PRM p. 1-749).  shadow_first_sprite_offset is returned as a pointer to    */
+   /* the control block within the sprite itself (refer PRM p. 1-749).                 */
+   /* shadow_screen_area_id is returned as the number of the dynamic memory area used  */
+   /* for the shadow sprite.                                                           */
+
+   #ifdef LOW_MEM
+   shadow_screen_base=PrepareShadowSprite((original_JPEG_pixel_width*2
+                                           *original_JPEG_pixel_height)+16+44,
+                                           &shadow_screen_area_id,
+                                           &shadow_first_sprite_offset,
+                                           original_JPEG_pixel_width,
+                                           original_JPEG_pixel_height);
+   #else
+   shadow_screen_base=PrepareShadowSprite((xres*2*yres)+16+44,
+                                           &shadow_screen_area_id,
+                                           &shadow_first_sprite_offset,
+                                           original_JPEG_pixel_width,
+                                           original_JPEG_pixel_height);
+   #endif
+
+   #ifdef MEMORY_TRACE
+     ShowMem(__FILE__,__LINE__);
+   #endif
+
+   ShowScreenDisplay(shadow_screen_area_id,shadow_screen_base,
+                     shadow_first_sprite_offset);
+
+   #ifdef MEMORY_TRACE
+     ShowMem(__FILE__,__LINE__);
+   #endif
+
+   splash_screen = DISPLAYED;
+}
+
+/*=====================================================================================*/
+/*                                                                                     */
+/*  FUNCTION:  ShowCdIcon()                                                            */
+/*  BEHAVIOUR: Displays the specified user feedback icon.  No scaling takes place,     */
+/*             however PutSpriteScaled must be used as opposed to PutSprite if colour  */
+/*             translation is to work correctly.                                       */
+/*  REQUIRES:  'icon_type', which is the type of icon to display.  'icon_type' can be  */
+/*              UNKNOWN_CD or FAULTY_CD.                                               */
+/*                                                                                     */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+extern void ShowCdIcon(int icon_type)
+{
+ int original_width;      /* Actual width in pixels of the user supplied JPEG icon.    */
+ int original_height;     /* Actual height of the user supplied JPEG icon.             */
+ int x,y;                 /* Pixel start coordinates at which to plot.                 */
+ char *sprarea = NULL;
+ char *sptr = NULL;
+ char fname[15];
+ char sname[15];
+ int buffersize = 0;
+ char *translation_table = NULL;
+ _kernel_oserror *err = NULL;
+
+   #ifdef FN_TRACE
+     puts("ShowCdIcon()");
+   #endif
+
+   ScreenDimensions();      /* Ensure that xres and yres are set.                      */
+
+   switch (icon_type)
+   {
+     case FAULTY_CD:  sprintf(fname,"CD:FaultyCD");
+                      sprintf(sname,"FaultyCD");
+                      x = xres/2;
+                      y = yres/8;
+                      break;
+
+     case UNKNOWN_CD: sprintf(fname,"CD:UnknownCD");
+                      sprintf(sname,"UnknownCD");
+                      x = (xres/2);
+                      y = yres/8;
+                      break;
+
+     default: ErrorHandler(__FILE__,__LINE__,"ShowCdIcon()",err->errnum,err->errmess,
+              WARNING);
+              return;
+              break;
+   }
+
+   sprarea = LoadSprite(fname,sname,&original_width,&original_height,&sptr);
+
+   if (sprarea == NULL) return;
+
+   CoordConversion();
+
+   /* Colour translation is necessary if the sprites were created in an 8bpp screen    */
+   /* mode (they were at the time of writing this), since !cd normally runs in a 16bpp */
+   /* screen mode.  First, find out the size of the buffer needed to create the colour */
+   /* translation table.                                                               */
+
+   if ((err = swi(ColourTrans_SelectTable,R0,sprarea,R1,sname,R2,-1,R3,0,R4,0,R5,0,
+        R6,0,R7,0,OUT,R4,&buffersize,END)) != NULL)
+   {
+        ErrorHandler(__FILE__,__LINE__,"ShowCdIcon()",err->errnum,err->errmess,WARNING);
+        return;
+   }
+
+   /* Allocate memory for the colour translation table.                                */
+   if ((translation_table = malloc(buffersize)) == NULL)
+   {
+        ErrorHandler(__FILE__,__LINE__,"ShowCdIcon()",err->errnum,err->errmess,WARNING);
+        return;
+   }
+
+   /* Populate the colour translation table.                                           */
+   if ((err = swi(ColourTrans_SelectTable,R0,sprarea,R1,sname,R2,-1,R3,-1,R4,
+        translation_table,R5,0,R6,0,R7,0,OUT,R4,&buffersize,END)) != NULL)
+   {
+        ErrorHandler(__FILE__,__LINE__,"ShowCdIcon()",err->errnum,err->errmess,WARNING);
+        return;
+   }
+
+   /* Plot the sprite on screen, using the colour translation table we've just created.*/
+   if ((err = swi(OS_SpriteOp,R0,256+52,R1,sprarea,R2,sname,R3,x<<xeig,R4,y<<yeig,R5,
+        0x08,R6,0,R7,translation_table,END)) != NULL)
+   {
+        ErrorHandler(__FILE__,__LINE__,"ShowCdIcon()",err->errnum,err->errmess,WARNING);
+        return;
+   }
+
+   AntiTwitter(original_width,original_height,x,y-2);
+
+   #ifdef MEMORY_TRACE
+     ShowMem(__FILE__,__LINE__);
+   #endif
+
+   /* Delete the sprite.  It has been plotted to the screen and is no longer needed.   */
+   if ((err = swi(OS_SpriteOp,R0,512+25,R1,sprarea,R2,sptr,END)) != NULL)
+        ErrorHandler(__FILE__,__LINE__,"ShowCdIcon()",err->errnum,err->errmess,WARNING);
+
+   if (sprarea != NULL)
+       free(sprarea);
+
+  if (translation_table != NULL)
+      free(translation_table);
+
+}
+
+/*=====================================================================================*/
+/*                                                                                     */
+/*  FUNCTION:  AntiTwitter()                                                           */
+/*  BEHAVIOUR: Applies anti-twitter to the specified area of the screen.   Refer to    */
+/*             the macro definitions section at the start of this file for info on     */
+/*             OLD_TWITTER and NEW_TWITTER.                                            */
+/*  REQUIRES:  - 'twitter_width', which is the width in pixels of the area to anti-    */
+/*                twitter.                                                             */
+/*             - 'twitter_height', which is the height of the area to anti-twitter.    */
+/*             - 'x1', which is the horizontal position at which to start (in screen   */
+/*                pixel coordinates).                                                  */
+/*             - 'y1', which is the vertical position at which to start (in screen     */
+/*                pixel coordinates).                                                  */
+/*                                                                                     */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+static void AntiTwitter(int twitter_width,int twitter_height,int x1,int y1)
+{
+ int vdublk[2];     /* Used to get the address of the start of screen memory.          */
+ int scrstart;      /* Start of screen memory.                                         */
+ int linelen;       /* In mode 50 this number will look ridiculous but it is correct!  */
+ _kernel_oserror *err = NULL;
+ #define STBFilter_FilterArea 0x84000  /* SWI number officially allocated from Acorn.  */
+
+   if ((twitter_width % 2) != 0)
+          twitter_width--;
+
+   vdublk[0] = 148;
+   vdublk[1] = -1;
+   if ((err = swi(OS_ReadVduVariables,R0,vdublk,R1,vdublk,END)) != NULL)
+        ErrorHandler(__FILE__,__LINE__,"AntiTwitter()",err->errnum,err->errmess,FATAL);
+   scrstart = vdublk[0];
+
+   if ((err = swi(OS_ReadModeVariable,R0,-1,R1,6,OUT,R2,&linelen,END)) != NULL)
+        ErrorHandler(__FILE__,__LINE__,"AntiTwitter()",err->errnum,err->errmess,FATAL);
+
+     #ifdef OLD_TWITTER
+     if ((err = swi(STBFilter_FilterArea,R0,scrstart,R1,linelen,R2,xres,R3,yres,R4,x1,
+          R5,y1,R6,twitter_width,R7,twitter_height,END)) != NULL)
+            ErrorHandler(__FILE__,__LINE__,"AntiTwitter()",err->errnum,err->errmess,
+            FATAL);
+     #endif
+
+     #ifdef NEW_TWITTER
+     if ((err = swi(STBFilter_FilterArea,
+                    R0,scrstart+(yres-1-(y1+twitter_height))*linelen+x1*2,
+                    R1,scrstart+(yres-1-(y1+twitter_height))*linelen+x1*2,
+                    R4,linelen,R5,twitter_width,R6,4,END)) != NULL)
+           ErrorHandler(__FILE__,__LINE__,"AntiTwitter()",err->errnum,err->errmess,FATAL);
+     #endif
+}
+
+/*=====================================================================================*/
+/*                                                                                     */
+/*  FUNCTION:  ScreenDimensions()                                                      */
+/*  BEHAVIOUR: Sets variables xres and yres, these being the pixel width and height of */
+/*             the screen in whatever the current screen mode is.                      */
+/*                                                                                     */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+static void ScreenDimensions(void)
+{
+ extern int xres;
+ extern int yres;
+ _kernel_oserror *err;
+
+   #ifdef FN_TRACE
+     puts("ScreenDimensions()");
+   #endif
+
+   if ((err = swi(OS_ReadModeVariable,R0,-1,R1,11,OUT,R2,&xres,END))!=NULL)
+        ErrorHandler(__FILE__,__LINE__,"ScreenDimensions()",err->errnum,err->errmess,
+        FATAL);
+
+   if ((err = swi(OS_ReadModeVariable,R0,-1,R1,12,OUT,R2,&yres,END))!=NULL)
+        ErrorHandler(__FILE__,__LINE__,"ScreenDimensions()",err->errnum,err->errmess,
+        FATAL);
+
+   xres++; yres++;  /* OS_ReadModeVariable returns the number of x and y pixels on     */
+                    /* the screen - 1.                                                 */
+}
+
+/*=====================================================================================*/
+/*                                                                                     */
+/*  FUNCTION:  CoordConversion()                                                       */
+/*  BEHAVIOUR: Sets variables xeig and yeig, these being the values by which a screen  */
+/*             pixel position must be shifted left to convert to it's corresponding    */
+/*             OS coordinate position.                                                 */
+/*                                                                                     */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+static void CoordConversion(void)
+{
+ _kernel_oserror *err = NULL;
+
+   if ((err = swi(OS_ReadModeVariable,R0,-1,R1,4,OUT,R2,&xeig,END)) != NULL)
+        ErrorHandler(__FILE__,__LINE__,"CoordConversion()",err->errnum,err->errmess,
+        FATAL);
+
+   if ((err = swi(OS_ReadModeVariable,R0,-1,R1,5,OUT,R2,&yeig,END)) != NULL)
+        ErrorHandler(__FILE__,__LINE__,"CoordConversion()",err->errnum,err->errmess,
+        FATAL);
+
+}
+
+/*=====================================================================================*/
+/*                                                                                     */
+/*  FUNCTION:  ReadJPEGDimensions()                                                    */
+/*  BEHAVIOUR: Reads the pixel width, and the height, of the specified user supplied   */
+/*             JPEG image.   Sets 'width' and 'height' accordingly.                    */
+/*  RETURNS:   'width', which is the width of the specified JPEG image.                */
+/*             'height', which is the height of the specified JPEG image.              */
+/*                                                                                     */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+static void ReadJPEGDimensions(char *fname,int *width,int *height)
+{
+ _kernel_oserror *err = NULL;
+ #define JPEG_FileInfo 0x49981
+
+   #ifdef FN_TRACE
+     puts("ReadJPEGDimensions()");
+   #endif
+
+   if ((err = swi(JPEG_FileInfo,R0,0,R1,fname,OUT,R2,&(*width),R3,&(*height),END))
+        != NULL)
+         ErrorHandler(__FILE__,__LINE__,"ReadJPEGDimensions()",err->errnum,err->errmess,
+         FATAL);
+
+ #undef JPEG_FileInfo
+
+}
+
+/*=====================================================================================*/
+/*                                                                                     */
+/*  FUNCTION:   LoadSprite()                                                           */
+/*  BEHAVIOUR:  Loads and initialises the specified sprite into memory. In the current */
+/*              version of !cd (version 1.09), this applies to the user feedback icons */
+/*              (unknown and faulty cd's).  The reason that they are not JPEGs is that */
+/*              !ChangeFSI does not recognise transparency masks and so they cannot be */
+/*              turned into JPEG's without losing their transparency.                  */
+/*  REQUIRES:   - 'fname', which is the file and path name of the sprite file.         */
+/*              - 'sname', which is the name of the sprite contained within the file.  */
+/*              - 'original_width', which gets returned as the width of the sprite.    */
+/*              - 'original_height', which gets returned as the height of the sprite.  */
+/*              - 'sptr', which gets returned as a pointer to the first sprite in the  */
+/*                 file.                                                               */
+/*                                                                                     */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+static char *LoadSprite(char *fname,char *sname,int *original_width,int *original_height,
+             char **sptr)
+{
+ int type = 0;          /* Used to check that the specified sprite file is really a    */
+                        /* file and not a directory or some other object.              */
+ int sprsize = 0;       /* Sprite size.                                                */
+ char *sprarea = NULL;  /* Points to the sprite area.  Refer PRM p. 1-749.             */
+ int *ptr = NULL;       /* Used in initialising the sprite area.                       */
+ _kernel_oserror *err = NULL;
+
+   /* Check that the specified sprite file exists.  Type returned as 1 indicates that  */
+   /* the object type found is a file.  Also check that it isn't an empty sprite file. */
+
+   if ((err = swi(OS_File,R0,17,R1,fname,OUT,R0,&type,R4,&sprsize,END))
+        !=NULL)
+   {
+          ErrorHandler(__FILE__,__LINE__,"LoadSprite()",err->errnum,err->errmess,WARNING);
+          return NULL;
+   }
+
+   if (type != 1)
+   {
+       ErrorHandler(__FILE__,__LINE__,"LoadSprite()",type,"Sprite file does not exist.",
+       WARNING);
+       return NULL;
+   }
+
+   if (sprsize == 0)
+   {
+       ErrorHandler(__FILE__,__LINE__,"LoadSprite()",0,"Sprite contains no data.",
+       WARNING);
+       return NULL;
+   }
+
+   sprsize = sprsize + 4;     /* Add 4 for word 1 of the sprite area ctrl blk.   See   */
+                              /* PRM p. 1-749.  Sprite was originally created using a  */
+                              /* screensave command in the current version of !cd.     */
+
+   if ((sprarea = malloc(sprsize))==NULL)
+   {
+        ErrorHandler(__FILE__,__LINE__,"LoadSprite()",0,"Insuficient Memory.",WARNING);
+        return NULL;
+   }
+
+   ptr = (int *)sprarea;
+   *ptr = sprsize;       /* Total size of sprite area.                                 */
+   *(ptr+2) = 16;        /* Byte offset to first sprite.                               */
+
+
+   /* Initialise sprite area.                                                          */
+
+   if ((err = swi(OS_SpriteOp,R0,512+9,R1,sprarea,END))!=NULL)
+   {
+        ErrorHandler(__FILE__,__LINE__,"LoadSprite()",err->errnum,err->errmess,WARNING);
+        free(sprarea);
+        return NULL;
+   }
+
+   /* Load sprite into the sprite area.                                                */
+
+   if ((err = swi(OS_SpriteOp,R0,256+10,R1,sprarea,R2,fname,END))!=NULL)
+   {
+        ErrorHandler(__FILE__,__LINE__,"LoadSprite()",err->errnum,err->errmess,WARNING);
+        free(sprarea);
+        return NULL;
+   }
+
+   *sptr = sprarea + 16;     /* Set sprite pointer to point at the control block of    */
+                             /* the first sprite.  Refer PRM p. 1-749.                 */
+
+   /* Read sprite width and height.                                                    */
+
+   if ((err = swi(OS_SpriteOp,R0,256+40,R1,sprarea,R2,sname,OUT,R3,
+        &(*original_width),R4,&(*original_height),END)) != NULL)
+   {
+        ErrorHandler(__FILE__,__LINE__,"LoadSprite()",err->errnum,err->errmess,WARNING);
+        free(sprarea);
+        return NULL;
+   }
+
+   #ifdef MEMORY_TRACE
+     ShowMem(__FILE__,__LINE__);
+   #endif
+
+   return sprarea;
+}
+
+/*=====================================================================================*/
+/*                                                                                     */
+/*  FUNCTION:  PrepareShadowSprite()                                                   */
+/*  BEHAVIOUR: Creates a blank sprite of size 'shadowsize' in the current screen mode  */
+/*             and then calls JPEGOverlay() to fill it with the splash screen.         */
+/*             Whether or not rescaling takes place at this stage depends upon the     */
+/*             macro definition of LOW_MEM, which is defined and described at the      */
+/*             start of this file.                                                     */
+/*  REQUIRES:  - 'shadowsize', which is the size of the sprite area (refer PRM p.1-749)*/
+/*             - 'shadow_area_id, which will be returned as the number of the dynamic  */
+/*                memory area containing the shadow sprite area.                       */
+/*             - 'shadow_first_sprite_offset', which will be returned as a pointer to  */
+/*                the control block within the sprite (refer PRM p. 1-749).            */
+/*             - 'original_JPEG_pixel_width', which is the the width of the user       */
+/*                supplied JPEG splash screen image.                                   */
+/*             - 'original_JPEG_pixel_height', which is the height of the user         */
+/*                supplied JPEG splash screen image.                                   */
+/*  RETURNS:   - 'shadow_area_id' and 'shadow_first_sprite_offset' as mentioned above. */
+/*             - pointer to the base of the sprite area (described on p. 1-749 of the  */
+/*               PRM).                                                                 */
+/*  PREREQUISITES: The original JPEG file can be a JPEG of any size, but refer to      */
+/*                 display header file for ideal dimensions.  Ideally, it should have  */
+/*                 been created in a 24bpp screen mode because JPEG images are saved   */
+/*                 at 24bpp whatever screen mode you're in when you save.  (Conversion */
+/*                 down to out 16bpp screen mode occurs automatically at the plotting  */
+/*                 stage).  Creating the JPEG in a 24bpp screen mode will avoid loss   */
+/*                 of quality.                                                         */
+/*                 The current screen mode must have been selected by a mode number.   */
+/*                 (Refer PRM p.5-111).                                                */
+/*                                                                                     */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+static char * PrepareShadowSprite(int shadowsize,int *shadow_area_id,
+                                                       int *shadow_first_sprite_offset,
+                                                       int original_JPEG_pixel_width,
+                                                       int original_JPEG_pixel_height)
+{
+ _kernel_oserror *err;      /* SWI handling error pointer.                             */
+ char *shadow_screen_base;  /* Points to the sprite area control block (refer PRM      */
+                            /* p. 1-749).  Is also the base address of the dynamic     */
+                            /* memory area used for the shadow sprite.                 */
+ int *ptr;          /* Used to populate the first and third words of the sprite area   */
+                    /* control block (PRM p.1-749).  The first word is the total size  */
+                    /* of the sprite area.  The third  word is the byte offset to the  */
+                    /* sprite itself.                                                  */
+ int base_check;    /* Used as further checks that creation of the dynamic memory area */
+ int size_check;    /* for the shadow sprite was successful.  It is known that in the  */
+                    /* past, OS_DynamicArea has been capable of creating zero sized    */
+                    /* dynamic areas instead of returning an error.  Hence caution.    */
+ int shadowspritemode;  /* Current screen mode and the mode in which the sprite will   */
+                        /* be made.                                                    */
+ int width,height;
+
+   #ifdef FN_TRACE
+     puts("PrepareShadowSprite()");
+   #endif
+
+   /* Find out the current screen mode.  The sprite will be created in that mode.      */
+   if ((err = swi(OS_ScreenMode,R0,1,OUT,R1,&shadowspritemode,END)) != NULL)
+        ErrorHandler(__FILE__,__LINE__,"PrepareShadowSprite()",err->errnum,err->errmess,
+        FATAL);
+
+   /* Create the dynamic area.                                                         */
+
+   if ((err = swi(OS_DynamicArea,R0,0,R1,-1,R2,shadowsize,R3,-1,R4,0,R5,shadowsize,R6,0,
+        R7,0,R8,"shadow",OUT,R1,&(*shadow_area_id),R3,&shadow_screen_base,END))!=NULL)
+         ErrorHandler(__FILE__,__LINE__,"PrepareShadowSprite()",err->errnum,err->errmess,
+         FATAL);
+
+   /* Check that it hasn't created a dynamic area of size zero, this being a known     */
+   /* bug in the past.                                                                 */
+
+   if ((err = swi(OS_DynamicArea,R0,2,R1,*shadow_area_id,OUT,R2,&size_check,R3,
+        &base_check,END))!=NULL)
+         ErrorHandler(__FILE__,__LINE__,"PrepareShadowSprite()",err->errnum,err->errmess,
+         FATAL);
+
+   /* Populate the first and third words of the sprite area control block.             */
+
+   ptr = (int *)shadow_screen_base;
+   *ptr = shadowsize;
+   *(ptr + 2) = 16;    /* Byte offset to the sprite itself.                            */
+
+   /* Initialise sprite area.                                                          */
+
+   if ((err = swi(OS_SpriteOp,R0,512+9,R1,shadow_screen_base,END))!=NULL)
+        ErrorHandler(__FILE__,__LINE__,"PrepareShadowSprite()",err->errnum,err->errmess,
+        FATAL);
+
+   /* Create the sprite.                                                               */
+
+   #ifdef LOW_MEM
+     width = original_JPEG_pixel_width;
+     height = original_JPEG_pixel_height;
+   #else
+     width = xres;
+     height = yres;
+   #endif
+
+   if ((err = swi(OS_SpriteOp,R0,256+15,R1,shadow_screen_base,R2,"shadow",R3,0,R4,
+        width, R5,height,R6,shadowspritemode,END)) != NULL)
+          ErrorHandler(__FILE__,__LINE__,"PrepareShadowSprite()",err->errnum,err->errmess,
+          FATAL);
+
+   /* Update 'shadow_first_sprite_offset' with the base address of the sprites control */
+   /* block.  Note that this is not the same as the sprite AREA's control block.       */
+   /* Refer p. 1-749 for details.                                                      */
+
+   *shadow_first_sprite_offset = (int)shadow_screen_base + 16;
+
+   /* Write the splash screen onto the blank sprite.                                   */
+
+   JPEGOverlay("CD:Splash",0,0,shadow_screen_base,*shadow_first_sprite_offset,
+                original_JPEG_pixel_width,original_JPEG_pixel_height);
+
+   #ifdef MEMORY_TRACE
+     ShowMem(__FILE__,__LINE__);
+   #endif
+
+   return shadow_screen_base;
+
+}
+
+/*=====================================================================================*/
+/*                                                                                     */
+/*  FUNCTION:  JPEGOverlay()                                                           */
+/*  BEHAVIOUR: Plots the JPEG file called 'jpegfile' onto the shadow sprite pointed to */
+/*             by 'shadow_screen_base' and 'shadow_first_sprite_offset'.   Whether or  */
+/*             not rescaling takes place at this stage depends upon the macro          */
+/*             definition of LOW_MEM, which is defined and described at the start of   */
+/*             this file.                                                              */
+/*  PREREQUISITE:  original JPEG file can be a JPEG of any size, ideally created in a  */
+/*                 24bpp screen mode since JPEG images are saved at 24bpp whatever     */
+/*                 screen mode you're in.  Refer to ShowPleaseInsertCdScreen() in the  */
+/*                 display header file for further information.                        */
+/*  REQUIRES:  - 'jpegfile', which is a pointer to the name of the JPEG file.          */
+/*             - 'minx' and 'miny', which are the x and y coordinates at which to      */
+/*                plot.                                                                */
+/*             - 'shadow_screen_base', which points to the base of the blank sprite.   */
+/*             - 'shadow_first_sprite_offset', which points to the control block       */
+/*                within the (initially blank) sprite itself.  (Refer PRM p. 1-749).   */
+/*                Note that this is NOT the sprite AREA control block.                 */
+/*             - 'original_width', which is the pixel width of the user supplied JPEG  */
+/*                image.                                                               */
+/*             - 'original_height', which is the height of the user supplied JPEG.     */
+/*                                                                                     */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+void JPEGOverlay(char *jpegfile,int minx,int miny,char *shadow_screen_base,
+                 int shadow_first_sprite_offset,int original_width,int original_height)
+{
+ _kernel_oserror *err;               /* SWI error handling pointer.                    */
+ int oldscb,oldsptr,oldsa;           /* Used when redirecting output to the shadow     */
+                                     /* sprite.                                        */
+ int *scale;
+ #define JPEG_FileInfo 0x49981       /* JPEG SWI numbers.                              */
+ #define JPEG_PlotFileScaled 0x49983
+
+
+   #ifdef FN_TRACE
+     puts("JPEGOverlay()");
+   #endif
+
+   /* Switch output to the shadow sprite.                                              */
+
+   if ((err = swi(OS_SpriteOp,R0,512+60,R1,shadow_screen_base,R2,
+        shadow_first_sprite_offset,R3,0,OUT,R1,&oldscb,R2,&oldsptr,R3,&oldsa,
+        END))!=NULL)
+         ErrorHandler(__FILE__,__LINE__,"JPEGOverlay()",err->errnum,err->errmess,FATAL);
+
+   #ifdef LOW_MEM   /* LOW_MEM is defined and described at the start of this file.     */
+     scale = 0;
+   #else
+         if ((scale = malloc(16)) == NULL)
+              ErrorHandler(__FILE__,__LINE__,"JPEGOverlay()",0,"Insufficient Memory.",
+                           FATAL);
+
+         /* Scale factors.  Refer PRM p. 1-752.  Note that the scale factors are in    */
+         /* pixels, not in OS coordinates.                                             */
+
+         *scale = xres;
+         *(scale + 1) = yres;
+         *(scale + 2) = original_width;
+         *(scale + 3) = original_height;
+   #endif
+
+   #ifdef MEMORY_TRACE
+     ShowMem(__FILE__,__LINE__);
+   #endif
+
+   /* Plot the JPEG onto the shadow sprite.                                            */
+
+   if ((err = swi(JPEG_PlotFileScaled,R0,jpegfile,R1,minx,R2,miny,R3,scale,R4,0,END))
+        !=NULL)
+          ErrorHandler(__FILE__,__LINE__,"JPEGOverlay()",err->errnum,err->errmess,FATAL);
+
+   #ifdef MEMORY_TRACE
+     ShowMem(__FILE__,__LINE__);
+   #endif
+
+   /* Turn output to the shadow sprite off.                                            */
+
+   if ((err = swi(OS_SpriteOp,R0,256+60,R1,oldscb,R2,oldsptr,R3,oldsa,END))!=NULL)
+        ErrorHandler(__FILE__,__LINE__,"JPEGOverlay()",err->errnum,err->errmess,FATAL);
+
+   #ifdef LOW_MEM
+     free(scale);
+   #endif
+
+}
+
+/*=====================================================================================*/
+/*                                                                                     */
+/*  FUNCTION:  ShowScreenDisplay()                                                     */
+/*  BEHAVIOUR: Plots shadow sprite to the screen.  Whether or not rescaling takes      */
+/*             place at this stage depends upon the value of LOW_MEM, which is defined */
+/*             and described at the start of this file.  Refer to the ShowPleaseInsert */
+/*             CdScreen() description in the display header file for concerns of       */
+/*             resolution loss caused by rescaling vertical height.                    */
+/*  REQUIRES:  - dma_id, via which the dynamic memory area containing the shadow       */
+/*               sprite is accessed.                                                   */
+/*             - 'shadow_screen_base', which points to the shadow control block (refer */
+/*               PRM p.1-749).                                                         */
+/*             - 'first_sprite_offset', which is the address of the sprite itself      */
+/*               (refer PRM p.1-749).                                                  */
+/*  PREREQUISITES: 'xres',and'yres', must have been initialised with a call to         */
+/*                  ScreenDimensions().                                                */
+/*                                                                                     */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+/* Authors note: this was tested for a JPEG whose original width and height was 300    */
+/*               and 200.  Was successfully scaled up to 768 by 576.                   */
+
+static void ShowScreenDisplay(int dma_id,
+                              char *shadow_screen_base,int shadow_first_sprite_offset)
+{
+ int *scale = NULL;  /* Used for scaling up the sprite to double it's original height. */
+ _kernel_oserror *err;  /* SWI error handling pointer.                                 */
+ int scrstart;       /* Address of the start of screen memory.                         */
+ int vdublk[2];      /* Used to obtain the address of the start of screen memory.      */
+ int linelen;        /* Offset in bytes from a point on a pixel row to the same point  */
+                     /* on the pixel row below.  In mode 50, this value will look      */
+                     /* silly.  This is expected.                                      */
+ #define STBFilter_FilterArea 0x84000  /* SWI number (now officially allocated).       */
+
+   #ifdef FN_TRACE
+     puts("ShowScreenDisplay()");
+   #endif
+
+   /* Allow for the possibility of the other task bringing back the mouse and not      */
+   /* getting rid of it.  (Director Player did this).                                  */
+   if ((err = swi(OS_Byte,R0,106,R1,0,END)) != NULL)
+        ErrorHandler(__FILE__,__LINE__,"ShowScreenDisplay()",err->errnum,err->errmess,
+        WARNING);
+
+   #ifdef LOW_MEM
+       if ((scale = malloc(16)) == NULL)
+            ErrorHandler(__FILE__,__LINE__,"ShowScreenDisplay()",0,"Insufficient Memory.",
+            FATAL);
+   #endif
+
+   /* Anti-twitter preparation.                                                        */
+   vdublk[0] = 148;
+   vdublk[1] = -1;
+   if ((err = swi(OS_ReadVduVariables,R0,vdublk,R1,vdublk,END)) != NULL)
+        ErrorHandler(__FILE__,__LINE__,"ShowScreenDisplay()",err->errnum,err->errmess,
+        FATAL);
+   scrstart = vdublk[0];
+   if ((err = swi(OS_ReadModeVariable,R0,-1,R1,6,OUT,R2,&linelen,END)) != NULL)
+        ErrorHandler(__FILE__,__LINE__,"ShowScreenDisplay()",err->errnum,err->errmess,
+        FATAL);
+
+   /* Scale factors.  Refer PRM p. 1-752. Note that the scale factors are done in      */
+   /* pixels, not in OS coordinates.                                                   */
+
+   #ifdef LOW_MEM
+       *scale = xres;
+       *(scale + 1) = yres;
+       *(scale + 2) = original_JPEG_pixel_width;
+       *(scale + 3) = original_JPEG_pixel_height;
+   #endif
+
+
+   /* Apply anti-twitter if LOW_MEM is not defined.  If LOW_MEM is defined, unless the  */
+   /* original JPEG has the same dimensions as the screen, the image won't be of screen */
+   /* size.  Anti-twitter should only be applied once the image is screen size.         */
+   /* Hence if LOW_MEM is defined, anti-twitter is applied to screen memory later on    */
+   /* *after* the image has been scaled up on the screen.                               */
+
+   #ifndef LOW_MEM
+
+       #ifdef NEW_TWITTER
+
+         #error NEW_TWITTER without LOW_MEM doesn't work yet
+
+          /* Anti-twitter the shadow sprite in place.
+           * shadow_first_sprite_offset holds the address of the sprite's control block.
+           * The offset from the control block to the sprite image is held in the word
+           * at byte 32 of the control block.
+           */
+          if ((err = swi(STBFilter_FilterArea,
+                         R0,shadow_first_sprite_offset +
+                         *(((int *) shadow_first_sprite_offset)+8),
+                         R1,shadow_first_sprite_offset +
+                         *(((int *) shadow_first_sprite_offset)+8),
+                         R2,yres, R3,xres, R4,xres, R5,xres, R6,4, END))!=NULL)
+               ErrorHandler(__FILE__,__LINE__,"ShowScreenDisplay()",err->errnum,
+               err->errmess,WARNING);
+
+          #ifdef DEVELOPMENT
+            printf("area:%p, sprite:%p, image:%p, xres:%x, yres:%x\n",
+            (int*) shadow_screen_base, (int*)shadow_first_sprite_offset,
+            (int*) (shadow_first_sprite_offset +
+            *(((int *) shadow_first_sprite_offset)+8)), xres, yres);
+          #endif
+
+       #endif
+
+       #ifdef OLD_TWITTER
+       if ((err = swi(STBFilter_FilterArea,
+                      R0,shadow_first_sprite_offset +
+                      *(((int *) shadow_first_sprite_offset)+8),
+                      R1,xres*2, R2,xres, R3,yres, R4,0, R5,0,R6,xres,R7,yres,END))
+                      != NULL)
+            ErrorHandler(__FILE__,__LINE__,"ShowScreenDisplay()",err->errnum,err->errmess,
+            WARNING);
+
+          #ifdef DEVELOPMENT
+            printf("area:%p, sprite:%p, image:%p, xres:%x, yres:%x\n",
+            (int*) shadow_screen_base, (int*)shadow_first_sprite_offset,
+            (int*) (shadow_first_sprite_offset +
+            *(((int *) shadow_first_sprite_offset)+8)), xres, yres);
+          #endif
+
+       #endif
+
+   #endif
+
+   if ((err = swi(OS_SpriteOp,R0,512+52,R1,shadow_screen_base,R2,
+        shadow_first_sprite_offset,R3,0,R4,0,R5,0,R6,scale,R7,0,END))!=NULL)
+          ErrorHandler(__FILE__,__LINE__,"ShowScreenDisplay()",err->errnum,err->errmess,
+          FATAL);
+
+   /* Anti-twitter.  If LOW_MEM is defined, anti-twitter must be applied after         */
+   /* plotting to the screen (because before that the image is not the right size).    */
+   /* If LOW_MEM is not defined, anti-twitter will have been applied earlier on prior  */
+   /* to the screen plot.                                                              */
+
+   #ifdef LOW_MEM
+
+     #ifdef OLD_TWITTER
+     if ((err = swi(STBFilter_FilterArea,R0,scrstart,R1,linelen,R2,xres,R3,yres,R4,0,R5,
+          0,R6,xres,R7,yres,END)) != NULL)
+            ErrorHandler(__FILE__,__LINE__,"ShowScreenDisplay()",err->errnum,err->errmess,
+            WARNING);
+     #endif
+
+     #ifdef NEW_TWITTER
+       #error NEW_TWITTER with LOW_MEM doesn't work yet
+     if ((err = swi(STBFilter_FilterArea,R0,scrstart,R1,scrstart,R2,yres,R3,linelen,R4,
+          linelen,R5,xres,R6,4,END)) != NULL)
+            ErrorHandler(__FILE__,__LINE__,"ShowScreenDisplay()",err->errnum,err->errmess,
+            WARNING);
+     #endif
+
+   #endif
+
+   /* Remove the dynamic memory area which was used for holding the shadow sprite.     */
+
+   if ((err = swi(OS_DynamicArea,R0,1,R1,dma_id,END))!=NULL)
+        ErrorHandler(__FILE__,__LINE__,"ShowScreenDisplay()",err->errnum,err->errmess,
+        FATAL);
+
+   #ifdef LOW_MEM
+      free(scale);
+   #endif
+}
+
+/*=====================================================================================*/
+/*                                                                                     */
+/*  FUNCTION:   HourGlass()                                                            */
+/*  BEHAVIOUR:  Turns the hourglass on or off.  There is a delay of a third of a sec.  */
+/*              before the hourglass becomes visible, unless HourGlass(OFF) is called  */
+/*              within that time, in which case it won't become visible.               */
+/*                                                                                     */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+extern void HourGlass(int state)
+{
+ #define HourGlass_On 0x406C0
+ #define HourGlass_Off 0x406C1
+ #define HourGlass_Start 0x406C3
+ #define HourGlass_Colours 0x406C6
+ _kernel_oserror *err = NULL;
+
+   SetHourGlassPosition(xres - (xres/6),yres - (yres/5));
+
+   if ((err = swi(Hourglass_Colours,R0,0x00000000,R1,0x0000FFFF,END)) != NULL)
+        ErrorHandler(__FILE__,__LINE__,"HourGlass()",err->errnum,err->errmess,WARNING);
+
+   switch (state)
+   {
+      case ON:     if ((err = swi(HourGlass_On,END)) != NULL)
+                       ErrorHandler(__FILE__, __LINE__,"HourGlass()",err->errnum,
+                                    err->errmess,WARNING);
+                   break;
+
+      case OFF:    if ((err = swi(HourGlass_Off,END)) != NULL)
+                        ErrorHandler(__FILE__,__LINE__,"HourGlass()",err->errnum,
+                        err->errmess,WARNING);
+                   break;
+
+      default:     ErrorHandler(__FILE__,__LINE__,"HourGlass()",0,"Unknown state.",
+                   WARNING);
+                   break;
+   }
+
+}
+
+/*=====================================================================================*/
+/*                                                                                     */
+/*  FUNCTION:   SetHourGlassPosition()                                                 */
+/*  BEHAVIOUR:  Sets the position at which the hourglass will appear.                  */
+/*  REQUIRES:   - 'xpos', which is the x position at which the hourglass will appear.  */
+/*              - 'ypos', which is the y position at which the hourglass will appear.  */
+/*                 Both xpos and ypos must be passed in as screen pixel positions, as  */
+/*                 opposed to OS coordinates.                                          */
+/*                                                                                     */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+static void SetHourGlassPosition(int xpos,int ypos)
+{
+ char *mptr = NULL;              /* Mouse pointer parameter block.                     */
+ _kernel_oserror *err = NULL;    /* Error handling pointer.                            */
+
+   if ((mptr = malloc(5))  == NULL)
+   {
+        ErrorHandler(__FILE__,__LINE__,"SetHourGlassPosition()",0,"Insufficient Memory",
+        WARNING);
+        return;
+   }
+
+   CoordConversion();              /* Ensure xeig and yeig are set.                    */
+   xpos = xpos << xeig;            /* Convert screen pixels to OS coordinates.         */
+   ypos = ypos << yeig;
+
+   *mptr = 3;                           /* Refer PRM p. 1-689 */
+   *(mptr + 1) = (char)xpos;            /* LSB of x position. */
+   *(mptr + 2) = (char)(xpos >> 8);     /* MSB of x position. */
+   *(mptr + 3) = (char)ypos;            /* LSB of y position. */
+   *(mptr + 4) = (char)(ypos >> 8);     /* MSB of y position. */
+
+   if ((err = swi(OS_Word,R0,21,R1,mptr,END)) != NULL)
+        ErrorHandler(__FILE__,__LINE__,"SetHourGlassPosition()",err->errnum,err->errmess,
+        WARNING);
+
+   free(mptr);
+
+}
+
+/*=====================================================================================*/

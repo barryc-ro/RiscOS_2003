@@ -1,0 +1,559 @@
+/*=====================================================================================*/
+/*                                                                                     */
+/*  FILE: !AudioCD.c.Main                                                              */
+/*  DESCRIPTION:  Main high level routines for !AudioCD.                               */
+/*  AUTHOR:  srose@omi.co.uk                                                           */
+/*  MODIFICATION HISTORY:                                                              */
+/*    Date         Name                Description                                     */
+/*    ----         ----                -----------                                     */
+/*                                                                                     */
+/*=====================================================================================*/
+
+#undef GLOBALS__
+
+/*-------------------------------------------------------------------------------------*/
+/*                         Inclusion of !AudioCD header files.                         */
+/*-------------------------------------------------------------------------------------*/
+
+#include "Main.h"
+#include "Common.h"
+#include "Initialise.h"
+#include "ButtonOps.h"
+#include "DriveOps.h"
+#include "Display.h"
+#include "Random.h"
+#include "Help.h"
+
+#define DECLARE__
+  #include "Messages.h"
+#undef DECLARE__
+
+#ifdef DEVELOPMENT__
+  #include "Memory.h"
+#endif
+
+/*-------------------------------------------------------------------------------------*/
+/*                         Inclusion of standard C header files.                       */
+/*-------------------------------------------------------------------------------------*/
+
+#include "ctype.h"
+#include "time.h"
+#include "signal.h"
+#include "stdlib.h"
+#include "stdio.h"
+
+
+/*-------------------------------------------------------------------------------------*/
+/*                         Inclusion of Dizzy's window header.                         */
+/*-------------------------------------------------------------------------------------*/
+
+#include "window.h"
+
+/*-------------------------------------------------------------------------------------*/
+/*   Inclusion of SWI interface header.  Allows constructs of the type                 */
+/*   err = swi(Wimp_Initialise,R0,310,R1,0x4B534154,R2,NULL,R3,msg_list,OUT,R1,        */
+/*   &cd_task_handle,END);                                                             */
+/*-------------------------------------------------------------------------------------*/
+
+#include "swicall.h"
+
+/*-------------------------------------------------------------------------------------*/
+/*                            Internal Function Prototypes.                            */
+/*-------------------------------------------------------------------------------------*/
+
+
+static int *Initialise(char *quit,
+                       char *empty,
+                       int *first_track,int *last_track,int *total_tracks,int paused,
+                       int *total_secs,int help_state);
+
+static void ProcessKey(int key,int first_track,int last_track,int *paused,
+       int *paused_on_track_n,int *help_state,int total_tracks,char empty,int playing,
+       int *play_type,int *random_table,int *random_play,int *random_table_index,
+       int *real_starttime);
+
+/*=====================================================================================*/
+/*                                                                                     */
+/*  FUNCTION:  main()                                                                  */
+/*  BEHAVIOUR: */
+/*                                                                                     */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+int main(void)
+{
+ char key = '\0';
+ int first_track = -1;
+ int last_track;
+ int total_tracks;
+ int paused = FALSE__;
+ int paused_on_track_n;
+ int count = -1;
+ int total_secs;
+ int help_state = OFF__;
+ char quit,empty;
+ int *random_table = NULL;
+ int random_table_index = 0;
+ int random_play = OFF__;
+ int play_type = PLAY_TO_END_OF_CD__;
+ int track_len;
+ _kernel_oserror *err = NULL;
+ int real_starttime;
+ #define TIMEOUT 0xFF
+
+   #ifdef FN_TRACE__
+     puts("main()");
+   #endif
+
+   #ifdef MEMORY_TRACE__
+     ShowMem(__FILE__,__LINE__);
+   #endif
+
+   random_table = Initialise(&quit,&empty,&first_track,&last_track,&total_tracks,paused,
+                  &total_secs,help_state);
+
+   #ifdef RANDOM__
+     printf("\nTable containing track numbers in random order: ");
+     for (i = 0; i < total_tracks; printf(" %d, ",random_table[i]), i++);
+   #endif
+
+   do {
+        if (playing == TRUE__)
+        {
+            Counter(total_tracks,&paused,&count,total_secs,paused_on_track_n,
+                    first_track,last_track,help_state,play_type);
+
+            /* Sometimes the track length is not quite accurate, in which case current */
+            /* right never reaches the track length and things grind to a halt.  The   */
+            /* statement following the OR allows for this by comparing with real clock */
+            /* times rather than with the current head position.                       */
+
+            track_len = (SECONDS__(end_times[current_track])) -
+                        (SECONDS__(start_times[current_track]))-2;
+
+            if ((random_play == ON__) &&
+               ((current_right == track_len) || (time(NULL)-real_starttime >= track_len)))
+            {
+                 if (random_table_index == total_tracks)
+                 {
+                     random_play = OFF__;
+                     Stop(&paused,first_track,last_track,paused_on_track_n,
+                          help_state,play_type);
+                 }
+                 else
+                 {
+                     current_track = random_table[random_table_index];
+                     Play(first_track,last_track,&paused,paused_on_track_n,help_state,
+                          play_type);
+                     random_table_index++;
+                     real_starttime = time(NULL);
+                }
+            }
+        }
+
+        CheckDrawer();
+
+        key=Poll(empty);
+
+        /* Want play of the current track to stop as soon as possible when the user    */
+        /* switches to another track using the digit keys.                             */
+        if ((playing == TRUE__)  && (isdigit(key)))
+        {
+            if ((err = swi (CD_StopDisc,R7,cd_blk,END)) != NULL)
+                 ErrorHandler(__FILE__,__LINE__,"main()",err->errnum,err->errmess,
+                 FATAL__);
+        }
+
+        ProcessKey(key,first_track,last_track,&paused,&paused_on_track_n,&help_state,
+                   total_tracks,empty,playing,&play_type,random_table,&random_play,
+                   &random_table_index,&real_starttime);
+
+     /* Flush keyboard buffer. */
+        if ((err = swi(OS_Byte,R0,15,R1,1,END)) != NULL)
+             ErrorHandler(__FILE__,__LINE__,"main()",err->errnum,err->errmess,WARNING__);
+
+   } while (key != quit);
+
+   Finish();
+}
+
+/*=====================================================================================*/
+/*                                                                                     */
+/*  FUNCTION:  Initialise()                                                            */
+/*  BEHAVIOUR: */
+/*                                                                                     */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+static int *Initialise(char *quit,char *empty,int *first_track,int *last_track,
+                       int *total_tracks,int paused,int *total_secs,int help_state)
+{
+ extern int *poll_blk;
+ char name[10] = "!AudioCD";
+ extern int current_track;
+ extern int audio_task_handle;
+ int version;
+ int *random_table = NULL;
+ _kernel_oserror *err = NULL;
+
+   #ifdef FN_TRACE__
+     puts("Initialise()");
+   #endif
+
+   #ifdef MEMORY_TRACE__
+     ShowMem(__FILE__,__LINE__);
+   #endif
+
+   if ((err = swi(Hourglass_On,END)) != NULL)
+        ErrorHandler(__FILE__,__LINE__,"Initialise()",err->errnum,err->errmess,WARNING__);
+
+   if ((err = swi(Wimp_Initialise,R0,310,R1,0x4B534154,R2,name,R3,msg_list,OUT,R0,
+        &version,R1,&audio_task_handle,END)) != NULL)
+         ErrorHandler(__FILE__,__LINE__,"Initialise()",err->errnum,err->errmess,FATAL__);
+
+   Signals();
+
+   if ( ( hBackgroundWindow = CreateFullScreenWindow() ) == NULL )
+   {
+     ErrorHandler(__FILE__,__LINE__,"Initialise()",0, "Failed to make window",FATAL__ );
+   }
+   else
+   {
+     ShowWindow( hBackgroundWindow, TRUE__ );     /* Show splash screen.                 */
+     if ((err = swi(Wimp_SetCaretPosition,R0,hBackgroundWindow,R1,-1,R2,0,R3,0,R4,0,R5,
+          0,END)) != NULL)
+            ErrorHandler(__FILE__,__LINE__,"Initialise()",0, "Failed to make window",
+            FATAL__ );
+
+   }
+
+   /* Turn off keyboard auto-repeat.                                                   */
+   if ((err = swi(OS_Byte,R0,11,R1,0,END)) != NULL)
+        ErrorHandler(__FILE__,__LINE__,"Initialise()",err->errnum,err->errmess,WARNING__);
+
+   if ((poll_blk = malloc(256)) == NULL)
+         ErrorHandler(__FILE__,__LINE__,"Initialise()",0,
+         "Insufficient Memory: 256 more bytes required.",FATAL__);
+
+   SendMessage(msg_list[TASK_ACTIVE_INDEX],BROADCAST__);
+
+   GetCDBlock();
+
+   /* Turn off mouse pointer.                                                          */
+   if ((err = swi(OS_Byte,R0,106,R1,0,END)) != NULL)
+        ErrorHandler(__FILE__,__LINE__,"Initialise()",err->errnum,err->errmess,WARNING__);
+
+   ScreenDisplay();
+
+   /* Flush keyboard buffer.                                                           */
+   if ((err = swi(OS_Byte,R0,15,R1,1,END)) != NULL)
+        ErrorHandler(__FILE__,__LINE__,"main()",err->errnum,err->errmess,WARNING__);
+
+   KeyDefinitions(&(*quit),&(*empty));
+   *total_secs = ExploreDisc(&(*first_track),&(*last_track),&(*total_tracks));
+   current_track = *first_track;
+   PrepareCounterSprite();
+   GoToTrackN(*first_track,*total_tracks,paused,help_state);
+   random_table = RandomInit(*total_tracks);
+
+   if ((err = swi(Hourglass_Smash,END)) != NULL)
+        ErrorHandler(__FILE__,__LINE__,"Initialise()",err->errnum,err->errmess,WARNING__);
+
+   return random_table;
+}
+
+/*=====================================================================================*/
+/*                                                                                     */
+/*  FUNCTION:  Poll()                                                                  */
+/*  BEHAVIOUR: */
+/*                                                                                     */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+extern char Poll(char empty)
+{
+ unsigned int mask = 14448; /* 00000000000000000011100001110000 */
+ int event_code;
+ int ch = empty;
+ _kernel_oserror *err = NULL;
+
+   #ifdef FN_TRACE__
+     puts("Poll()");
+   #endif
+
+   if ((err = swi(Wimp_Poll,R0,mask,R1,poll_blk,OUT,R0,&event_code,END))
+        != NULL)
+          ErrorHandler(__FILE__,__LINE__,"Poll()",err->errnum,err->errmess,FATAL__);
+
+   switch (event_code)
+   {
+      case 1  : RedrawWindow( hBackgroundWindow );
+
+                #ifdef SCREEN_DUMP__
+                  sprintf(dump_file,"*screensave AudioCD%d",screen);
+                  if ((err = swi(OS_CLI,R0,dump_file,END)) != NULL)
+                       ErrorHandler(__FILE__,__LINE__,"Poll()",err->errnum,err->errmess,
+                       WARNING__);
+                  screen++;
+                #endif
+
+                break;
+
+      case 8  : ch = (char) (*(poll_blk + 6));
+
+                #ifdef KEYS__
+                   printf("key %c, %d, %x received.\n",*(poll_blk + 6),
+                                                       *(poll_blk + 6),
+                                                       *(poll_blk + 6));
+                #endif
+
+                break;
+
+      case 17 : ReadMessage();
+                break;
+   };
+
+   return ch;
+}
+
+/*=====================================================================================*/
+/*                                                                                     */
+/*  FUNCTION:  ProcessKey()                                                            */
+/*  BEHAVIOUR: */
+/*                                                                                     */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+static void ProcessKey(int key,int first_track,int last_track,int *paused,
+       int *paused_on_track_n,int *help_state,int total_tracks,char empty,int playing,
+       int *play_type,int *random_table,int *random_play,int *random_table_index,
+       int *real_starttime)
+{
+ int num;
+
+   #ifdef FN_TRACE__
+     puts("ProcessKey()");
+   #endif
+
+   switch (key)
+   {
+      case PLAY__  :   Play(first_track,last_track,&(*paused),*paused_on_track_n,
+                       *help_state,*play_type);
+                       break;
+
+      case FORWARD__ : Forward(total_tracks,*paused,*help_state);
+                       break;
+
+      case BACK__    : Back(first_track,total_tracks,*paused,*help_state);
+                       break;
+
+      case PAUSE__   : if (*paused == FALSE__)
+                           Pause(&(*paused),&(*paused_on_track_n),*help_state);
+                       else
+                           Unpause(&(*paused),*paused_on_track_n,first_track,last_track,
+                           *help_state,*play_type);
+                       break;
+
+      case STOP__    : Stop(&(*paused),first_track,last_track,*paused_on_track_n,
+                       *help_state,*play_type);
+                       if (*random_play == ON__)
+                       {
+                           *random_play = OFF__;
+                           *play_type = PLAY_TO_END_OF_CD__;
+                       }
+                       break;
+
+      case EJECT__   : Eject(&(*paused),first_track,last_track,*paused_on_track_n,
+                               *help_state,*play_type);
+                       break;
+
+      case HELP__    : if (*help_state == OFF__)
+                           *help_state = Help(ON__,*paused);
+                       else
+                           *help_state = Help(OFF__,*paused);
+                       break;
+
+      case RANDOMIZE__: /* Play from the random table until cancelled or until all     */
+                        /* tracks have been played.                                    */
+
+                         *play_type = PLAY_TO_END_OF_TRACK__;
+                         current_track = random_table[0];
+                         Play(first_track,last_track,&(*paused),*paused_on_track_n,
+                         *help_state,*play_type);
+                         *real_starttime = time(NULL);
+                         *random_play = ON__;
+                         *random_table_index = 1;
+                         break;
+
+      default : if (isdigit(key))
+                {
+                    num = -1;
+                    if (key != empty)
+                        num = ReadDigitSequence(((char) key),empty,first_track,
+                              last_track,*paused,*paused_on_track_n,playing,total_tracks,
+                              *help_state,*play_type);
+
+                    if (num != -1)
+                        GoToTrackN(num,total_tracks,*paused,*help_state);                                 }
+   };
+
+}
+
+/*=====================================================================================*/
+/*                                                                                     */
+/*  FUNCTION:  Finish()                                                                */
+/*  BEHAVIOUR: */
+/*                                                                                     */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+extern void Finish(void)
+{
+ _kernel_oserror *err = NULL;
+
+   #ifdef FN_TRACE__
+     puts("Finish()");
+   #endif
+
+   SendMessage(msg_list[TASK_DEAD_INDEX],BROADCAST__);
+
+   /* If playing, stop play.  This also ensures that when going into standby mode, the */
+   /* cd drive stops playing.  (Although sound would stop coming from the external     */
+   /* speakers on the monitor, sound would still be coming from the headphone socket   */
+   /* of the cd drive (my observations so far).   Don't call Stop() because if an      */
+   /* error occurred within Stop(), control would keep getting passed into the error   */
+   /* handler and then back to Finish() in a never ending loop.                        */
+
+   if (playing)
+   {
+       if ((err = swi(CD_StopDisc,R7,cd_blk,END)) != NULL)
+       {
+            #ifdef DEVELOPMENT__
+                   puts("Unable to execute CD_StopDisc in Finish().");
+            #endif
+       }
+
+   }
+
+   if (buttons_sprarea != NULL) free(buttons_sprarea);
+
+   if (phys_tracks != NULL) free(phys_tracks);
+
+   if (start_times != NULL) free(start_times);
+
+   if (end_times != NULL) free(end_times);
+
+   if (poll_blk != NULL) free(poll_blk);
+
+   if (counter_display_shadowsprite != NULL) free(counter_display_shadowsprite);
+
+   if ((err = swi(Wimp_CloseDown,R0,audio_task_handle,R1,0x4B534154,END)) != NULL)
+   {
+        #ifdef DEVELOPMENT__
+               puts("Finish(): Unable to execute Wimp_CloseDown.");
+        #endif
+   }
+
+   if ((err = swi(OS_Exit,END)) != NULL)
+   {
+        #ifdef DEVELOPMENT__
+               puts("Finish(): Unable to execute OS_Exit().");
+        #endif
+   }
+
+}
+
+/*=====================================================================================*/
+/*                                                                                     */
+/*  FUNCTION:  SignalCatcher()                                                         */
+/*  BEHAVIOUR: Called when error interrupts occur (e.g. bad memory access, division by */
+/*             zero, operating system error, and so on).  From here, we're able to     */
+/*             pass the error to !AudioCD's error handling function.  Refer PRM p. 4-302    */
+/*             and Horspool's C programming book p. 173 for further info.  This        */
+/*             functionality was successfully tested by introducing an "int a = 3/0;"  */
+/*             i.e. division by zero, which is illegal, into another file.  SignalCatcher()  */
+/* trapped the error, !AudioCD shut down, and control was returned to !cd. */
+/*  PREREQUISITES: A call to Signals() must have been executed.  This specifies which  */
+/*                 signals we're interested in catching.                  */
+/*                                                                                     */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+extern void SignalCatcher(int code)
+{
+ char mess[50];
+
+   #ifdef FN_TRACE__
+     puts("SignalCatcher()");
+   #endif
+
+   switch (code)
+   {
+     case SIGABRT : sprintf(mess,"Interrupt -> abort.\n");
+                    break;
+     case SIGFPE  : sprintf(mess,"Interrupt -> arithmetic exception.\n");
+                    break;
+     case SIGILL  : sprintf(mess,"Interrupt -> illegal instruction.\n");
+                    break;
+     case SIGINT  : sprintf(mess,"Interrupt -> attention request from user.\n");
+                    break;
+     case SIGSEGV : sprintf(mess,"Interrupt -> bad memory access.\n");
+                    break;
+     case SIGTERM : sprintf(mess,"Interrupt -> termination request.\n");
+                    break;
+     case SIGSTAK : sprintf(mess,"Interrupt -> stack overflow.\n");
+                    break;
+     case SIGUSR1 : sprintf(mess,"Interrupt -> user definable interrupt.\n");
+                    break;
+     case SIGUSR2 : sprintf(mess,"Interrupt -> user definable interrupt.\n");
+                    break;
+     case SIGOSERROR : sprintf(mess,"Interrupt -> operating system error.\n");
+                    break;
+     default      : sprintf(mess,"Interrupt -> interrupt code is unknown.\n");
+                    break;
+   }
+
+   ErrorHandler(__FILE__,__LINE__,"SignalCatcher()",code,mess,FATAL__);
+}
+
+
+
+/*=====================================================================================*/
+/*                                                                                     */
+/*  FUNCTION:  ErrorHandler()                                                          */
+/*  BEHAVIOUR: Error handler common to all files within !cd.  A fatal error will shut  */
+/*             down !cd.  A warning error will not.  The DEVELOPMENT definition        */
+/*             determines whether or not errors are reported.  It should be defined    */
+/*             (or undefined) in the "common" header file since ErrorHandler() is used */
+/*             by all of !cd's source files.  Note that some error messages form part  */
+/*             of the runtime logic.  For example errors are generated whilst there is */
+/*             no cd in the drive.  !cd relies on these errors to know whether or not  */
+/*             a cd is present.                                                        */
+/*  REQUIRES:  - 'file', which is the name of the source file from which the error     */
+/*                originates.                                                          */
+/*             - 'fn', which is the name of the function from which the error          */
+/*                originates.                                                          */
+/*             - 'ln', which is the line number at which the error occurred.           */
+/*             - 'errnum', which is the error number.  Refer PRM p.1-42 for more info. */
+/*             - 'mess', which is the error message string.                            */
+/*             - 'level', which is the level of error.  This can be FATAL__, resulting */
+/*                in a complete shut down of !cd and most probably requiring a         */
+/*                subsequent hardware reset, or WARNING__, in which case !cd carries on*/
+/*                running.                                                             */
+/*                                                                                     */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+extern void ErrorHandler(char *file,int ln,char *fn, int errnum, char *mess, int level)
+{
+   #ifdef FN_TRACE__
+     puts("ErrorHandler()");
+   #endif
+
+   #ifdef DEVELOPMENT__
+
+      if (level == FATAL__)
+          puts("FATAL ERROR:");
+      else if (level == WARNING__)
+               puts("WARNING:");
+           else
+               puts("WARNING: Unknown error level in ErrorHandler.");
+
+      printf("  Application: !AudioCD\n");
+      printf("  File: %s\n",file);
+      printf("  Line: %d\n",ln);
+      printf("  Function: %s\n",fn);
+      printf("  Error number: %d\n",errnum);
+      printf("  %s\n",mess);
+
+   #endif
+
+   if (level == FATAL__)
+       Finish();
+}

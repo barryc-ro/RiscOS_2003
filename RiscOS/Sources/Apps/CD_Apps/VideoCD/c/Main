@@ -1,0 +1,870 @@
+/*=====================================================================================*/
+/*                                                                                     */
+/*  FILE: !VideoCD.c.Main                                                              */
+/*  DESCRIPTION:  Main high level routines for !VideoCD.                               */
+/*  AUTHOR:  srose@omi.co.uk                                                           */
+/*  MODIFICATION HISTORY:                                                              */
+/*    Date         Name                Description                                     */
+/*    ----         ----                -----------                                     */
+/*                                                                                     */
+/*=====================================================================================*/
+
+#define GLOBALS__
+
+/*-------------------------------------------------------------------------------------*/
+/*                         Inclusion of !VideoCD header files.                         */
+/*-------------------------------------------------------------------------------------*/
+
+#include "Common.h"
+#include "Initialise.h"
+#include "Display.h"
+#include "Pointer.h"
+#include "Help.h"
+#include "window.h"
+
+#ifdef MEMORY_TRACE
+  #include "Memory.h"
+#endif
+
+#define DECLARE__
+  #include "Messages.h"
+#undef DECLARE__
+
+/*-------------------------------------------------------------------------------------*/
+/*                         Inclusion of standard C header files.                       */
+/*-------------------------------------------------------------------------------------*/
+
+#include "stdio.h"
+#include "stdlib.h"
+#include "string.h"
+#include "signal.h"
+#include "time.h"
+
+/*-------------------------------------------------------------------------------------*/
+/*   Inclusion of SWI interface header.  Allows constructs of the type                 */
+/*   err = swi(Wimp_Initialise,R0,310,R1,0x4B534154,R2,NULL,R3,msg_list,OUT,R1,        */
+/*   &cd_task_handle,END);                                                             */
+/*-------------------------------------------------------------------------------------*/
+
+#include "swicall.h"
+
+/*-------------------------------------------------------------------------------------*/
+/*                            Internal Function Prototypes.                            */
+/*-------------------------------------------------------------------------------------*/
+
+static char * Initialise(int *MPEG_file_count,char **title_list,int *max_titles,
+       struct coords **text_positions, struct coords **pointer_positions);
+
+static int Poll(void);
+
+static void StartPlay(char *MPEG_fnames,int file_num,int MPEG_file_count);
+
+static void SelectThenPlay(int MPEG_file_count,char *MPEG_fnames,char *title_list,
+       int max_titles,struct coords *text_positions, struct coords *pointer_positions);
+
+static void ProcessSelection(char *title_list,int MPEG_file_count,int selection,
+       char *MPEG_fnames,struct coords *text_positions,struct coords *pointer_positions,
+       int pwidth,int pheight,int current_first_title_displayed,char ch,int max_titles,
+       struct rubout_buffer r[5],char *rubout_buffer,char *pointer_sprarea);
+
+static int ScrollCheck(int selection,int *scroll_timer,time_t *scroll_time_start,
+       struct coords *text_positions,struct rubout_buffer r[5],char *title_list,
+       int current_first_title_displayed,int max_titles);
+
+/*=====================================================================================*/
+/*                                                                                     */
+/*  FUNCTION:  main()                                                                  */
+/*  BEHAVIOUR: Discovers what MPEG files are on the cd.  If there is only one, play    */
+/*             begins immediately and !VideoCD shuts down automatically when the end   */
+/*             of the movie is reached.  If there is more than one MPEG clip, the user */
+/*             must make a selection before play can commence.  The selection screen   */
+/*             is re-displayed each time a clip finishes.   Note that the player       */
+/*             itself is a separate entity.  It is a BASIC program which deals with    */
+/*             the actual playing of the MPEG clip/s.  It makes use of a BASIC user    */
+/*             interface for handling user requests such as pause, slow motion, and so */
+/*             on.   It does not poll the wimp but it starts up and closes as a wimp   */
+/*             task.                                                                   */
+/*                                                                                     */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+int main(void)
+{
+ #ifdef DEVELOPMENT
+   int i;
+   char *index = NULL;
+ #endif
+
+ char *title_list = NULL;   /* Null separator list of clip titles (music video cd's).  */
+ int max_titles = 0;        /* Total number of titles in the titles list.              */
+ char *MPEG_fnames = NULL;  /* Null separator list of MPEG file names. Example: first  */
+                            /* MPEG clip could have a title "Copyright Notice" and     */
+                            /* filename "AVSEQ01/DAT".   2nd clip title may be         */
+                            /* "Heroes" with corresponding MPEG file name "AVSEQ02/DAT"*/
+ int MPEG_file_count = 0;   /* Number of MPEG files found.   Usually the same as the   */
+                            /* number of titles found.   An example of when this is    */
+                            /* not the case is Bryan Adams "Waking Up The Neighbours,  */
+                            /* where the track titles seem to be part of a bitmap      */
+                            /* display and are therefore unreadable as text.           */
+
+ struct coords *text_positions = NULL; /* Used for displaying track titles, or track   */
+                                       /* title numbers when there are no titles to be */
+                                       /* found.                                       */
+
+ struct coords *pointer_positions = NULL;  /* Used for displaying the pointer at the   */
+                                           /* currently selected clip.                 */
+
+
+  #ifdef FN_TRACE
+    puts("main()");
+  #endif
+
+  #ifdef MEMORY_TRACE
+    ShowMem(__FILE__,__LINE__);
+  #endif
+
+  MPEG_fnames = Initialise(&MPEG_file_count,&title_list,&max_titles,&text_positions,
+  &pointer_positions);
+
+  #ifdef DEVELOPMENT
+
+    printf("\nMPEG files total: %d\n",MPEG_file_count);
+    printf("MPEG files:- ");
+
+    index = MPEG_fnames;
+    for (i = 0; i < MPEG_file_count; i++)
+    {
+         printf("%s\n",index);
+         index += strlen(index) + 1;
+    }
+
+  #endif
+
+  switch (MPEG_file_count)
+  {
+    case 0 : ErrorHandler(__FILE__,__LINE__,"main()",0,"!VideoCD found no MPEG files.",
+             FATAL);
+             break;
+
+    case 1 : StartPlay(MPEG_fnames,1,MPEG_file_count);
+             break;
+
+    default: SelectThenPlay(MPEG_file_count,MPEG_fnames,title_list,max_titles,
+             text_positions,pointer_positions);
+             break;
+  }
+
+  Finish();
+}
+
+/*=====================================================================================*/
+/*                                                                                     */
+/*  FUNCTION:  Initialise()                                                            */
+/*  BEHAVIOUR: Initialises !VideoCD as a wimp task.  Performs signal initialisation to */
+/*             ensure that errors such as bad memory access, division by zero, and     */
+/*             other such errors will be trapped by !VideoCD, should they arise.       */
+/*             Allocates a poll block used for storing messages from !cd.  (!cd's      */
+/*             message passing protocol is described in messages.h), and sends !cd an  */
+/*             "I am alive" message.  Explores the cd and builds a list of MPEG file   */
+/*             names found, as well as a count of how many MPEG files were found.      */
+/*             Builds a list of MPEG titles if more than one MPEG file was found       */
+/*             (titles are not the same as file names. Titles apply mainly to music    */
+/*             videos and are used to provide the user with a means of selecting which */
+/*             clip to play).  Allows for the possibility of there not being any       */
+/*             titles.  Sets coordinates for displaying titles and the selection       */
+/*             cursor.  When there are no titles to display but there is more than one */
+/*             MPEG clip, the text coordinates will be used to display numerics        */
+/*             representing individual MPEG clips.  Ensures that the mouse pointer is  */
+/*             turned off.  Similarly, cursors and hourglass.  Turns on keyboard auto  */
+/*             repeat at a rate of ten centiseconds.                                   */
+/*  RETURNS:   - 'MPEG_fnames', which is a null separator list of MPEG file names      */
+/*                found on the loaded cd.                                              */
+/*             - 'MPEGs', which is the number of MPEG files found on the loaded cd.    */
+/*             - 'title_list', which is a null separator list of titles found (not the */
+/*                same as file names.  Usually applies to some music video cd's), or   */
+/*                NULL if no titles were found.                                        */
+/*             - 'max_titles', which is the number of titles found.                    */
+/*             - 'text_positions', which tell us where to display text on the          */
+/*                selection screen, if applicable. (Not applicable if only 1 MPEG clip */
+/*             - 'pointer_positions', which provides an easy way of moving the pointer */
+/*                on the selection screen.                                             */
+/*                                                                                     */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+static char * Initialise(int *MPEGs,char **title_list,int *max_titles,struct coords **
+                         text_positions,struct coords **pointer_positions)
+{
+ char name[10] = "!VideoCD";
+ int version;
+ extern int *poll_blk;
+ char *MPEG_fnames = NULL;
+ extern int iFontsVersion;
+ _kernel_oserror *err = NULL;
+ #define HourGlass_Off 0x406C1
+
+   #ifdef FN_TRACE
+     puts("Initialise()");
+   #endif
+
+   if ((err = swi(Wimp_Initialise,R0,310,R1,0x4B534154,R2,name,R3,msg_list,OUT,R0,
+        &version,R1,&video_task_handle,END)) != NULL)
+        goto fatal_error_exit;
+
+   Signals();
+
+   if ((poll_blk = malloc(256)) == NULL)
+        goto insufficient_memory_exit;
+
+   SendMessage(msg_list[TASK_ACTIVE_INDEX],BROADCAST);
+
+   Poll();   /* Allow the message to get out immediately.                              */
+
+   MPEG_fnames = GetNumbrOfMPEGFiles(&(*MPEGs));
+
+   if (*MPEGs > 20)     /* Safety check.  Things will go wrong if we try and display   */
+       *MPEGs = 20;     /* more than 20 tracks on the numbers only (no titles) screen  */
+                        /* at the moment.  Need to do something about this in future.  */
+   if ((*MPEGs) > 1)
+   {
+
+   /* Don't worry if there are several MPEG files but no titles to be found.  !VideoCD */
+   /* will display numerics instead.  I strongly suspect that the Bryan Adams cd for   */
+   /* example, contains titles as part of a copyrighted bitmap image and not as        */
+   /* separate text, which is why the titles appear on the CD-i player but are         */
+   /* nowhere to be found as text in any of the files on that particular cd.           */
+
+        *title_list = ReadTrackTitles(&(*max_titles));
+        *text_positions = CreateTextCoords(*title_list,*MPEGs);
+        *pointer_positions = CreatePointerCoords(*title_list,*MPEGs,*text_positions);
+   }
+
+   /* Turn off mouse pointer.                                                          */
+   if ((err = swi(OS_Byte,R0,106,R1,0,END)) != NULL)
+        ErrorHandler(__FILE__,__LINE__,"Initialise()",err->errnum,err->errmess,WARNING);
+
+   CursorsOff();
+
+   /* Ensure that the hourglass is turned off.                                         */
+   if ((err = swi(Hourglass_Smash,END)) != NULL)
+        ErrorHandler(__FILE__,__LINE__,"Initialise()",err->errnum,err->errmess,WARNING);
+
+   /* Turn on keyboard auto-repeat and set auto-repeat rate.                           */
+   if ((err = swi(OS_Byte,R0,11,R1,50,END)) != NULL)
+        ErrorHandler(__FILE__,__LINE__,"Initialise()",err->errnum,err->errmess,WARNING);
+   if ((err = swi(OS_Byte,R0,12,R1,10,END)) != NULL)
+        ErrorHandler(__FILE__,__LINE__,"Initialise()",err->errnum,err->errmess,WARNING);
+
+   /* Font initialisation.   In Fonts() in display.c, the ColourTrans_SetFontColours   */
+   /* swi requires you to specify background and foreground colours to set the best    */
+   /* range of anti-alias colours for the background being used.   Problem - the back  */
+   /* ground isn't necessarily all one colour.  Solution - Dizzy's Fonts401 module     */
+   /* ignores your background specification and works out what the background is on a  */
+   /* pixel basis as it plots your text, blending as necessary.    For this blending   */
+   /* to work, the following initialisation is necessary.                              */
+   if ((err = swi(Font_CacheAddr,OUT,R0,&iFontsVersion,END)) != NULL)
+   {
+        ErrorHandler(__FILE__,__LINE__,"Initialise()",err->errnum,err->errmess,WARNING);
+        iFontsVersion = 0;
+   }
+
+   return MPEG_fnames;
+
+   insufficient_memory_exit:
+     ErrorHandler(__FILE__,__LINE__,"Initialise()",0,
+     "Insufficient Memory: 256 more bytes required.",FATAL);
+     return MPEG_fnames;
+
+   fatal_error_exit:
+     ErrorHandler(__FILE__,__LINE__,"Initialise()",err->errnum,err->errmess,FATAL);
+     return MPEG_fnames;
+
+}
+
+/*=====================================================================================*/
+/*                                                                                     */
+/*  FUNCTION:  SelectThenPlay()                                                        */
+/*  BEHAVIOUR: Used if there is a choice of MPEG clips.  (If only one clip was found   */
+/*             play begins automatically and this function is not called).  Runs in a  */
+/*             continuous loop of playing the selected clip, returning to the          */
+/*             selection screen, playing the next selected clip, returning to the      */
+/*             selection screen, and so on until the user selects "Eject" or manually  */
+/*             ejects the cd.  This function forms the main processing part of         */
+/*             !VideoCD when there exists more than one MPEG clip.                     */
+/*  REQUIRES:  - 'MPEG_file_count', which is the number of MPEG files in the MPEG_     */
+/*                fnames list.                                                         */
+/*             - 'MPEG_fnames', which is a pointer to a null separator list of MPEG    */
+/*                file names found on the cd.                                          */
+/*             - 'title_list', which is a null separator list of titles found on the   */
+/*                cd (typically applies to music video cd's).  It is acceptable for    */
+/*                this to be NULL if there are no titles.                              */
+/*             - 'max_titles', which is the number of titles in the titles list.       */
+/*             - 'text_positions', which is an array of text coordinates used for      */
+/*                displaying titles or clip numbers on the screen.   Values are screen */
+/*                pixels as opposed to OS coordinates.                                 */
+/*             - 'pointer_positions', which is an array of pointer coordinates used    */
+/*                for displaying the selection cursor.  Values are screen pixels as    */
+/*                opposed to OS coordinates.                                           */
+/*                                                                                     */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+static void SelectThenPlay(int MPEG_file_count,char *MPEG_fnames,char *title_list,
+                           int max_titles,struct coords *text_positions,
+                           struct coords *pointer_positions)
+{
+ char ch = '\0';                /* Character received from handset or keyboard.        */
+ int selection;                 /* Reflects current on screen arrow position.          */
+ char *pointer_sprarea = NULL;  /* Pointer displayed on screen and used by the user    */
+ int pointer_sprsize = 0;       /* to select a particular MPEG clip.                   */
+ int pwidth,pheight;            /* Width and height of "Arrow" sprite (no scaling).    */
+ char *rubout_buffer = NULL;    /* Used for rubbing out the Arrow pointer.             */
+ struct rubout_buffer r[5];     /* Used for rubbing out title strings when scrolling.  */
+ int scroll_timer = OFF;        /* Used for scrolling titles (if any).                 */
+ time_t scroll_time_start;
+ int current_first_title_displayed = 1;  /* Only applicable if titles exist - used for */
+ _kernel_oserror *err = NULL;            /* scrolling.                                 */
+ int i;
+ int help_state = OFF;
+
+ #define TITLES_EXIST title_list != NULL
+
+   #ifdef FN_TRACE
+     puts("SelectThenPlay()");
+   #endif
+
+   /* Initialisation of title string rubout buffers necessary as a means of preventing */
+   /* memory leaks later on.  (Don't want to remalloc the buffers when returning from  */
+   /* an MPEG play state).                                                             */
+      for (i = 0; i < 5; r[i].r = NULL, i++)
+
+   if ((hBackgroundWindow = CreateFullScreenWindow()) == NULL)
+   {
+        ErrorHandler(__FILE__,__LINE__,"Initialise()",0,"Failed to make window",FATAL );
+   }
+   else
+   {
+     /* Need to have a window in order to be able to set the caret position and hence
+        read keyboard input. PRM p. 3-40 : a task running under the Wimp should perform
+        all of its input using the Wimp_Poll routine.  Input focus described on
+        p. 3-41
+      */
+
+      ShowWindow(hBackgroundWindow, TRUE);
+
+      if ((err = swi(Wimp_SetCaretPosition,R0,hBackgroundWindow,R1,-1,R2,0,R3,0,R4,0,
+           R5,0,END)) != NULL)
+           ErrorHandler(__FILE__,__LINE__,"Initialise()",0,"Failed to make window",
+           FATAL );
+   }
+
+   if ((TITLES_EXIST) && (strncmp(title_list,"Copyright",strlen("Copyright")) == NULL))
+   {
+        current_first_title_displayed = selection = 2;
+   }
+   else if (TITLES_EXIST)
+        {
+            current_first_title_displayed = 1;
+            selection = 2;
+        }
+        else
+        {
+            current_first_title_displayed = selection = 1;
+        }
+
+   SelectionScreen(MPEG_file_count,text_positions,title_list,max_titles,r,
+                   current_first_title_displayed);
+
+   rubout_buffer = InitPointer(&pointer_sprarea,&pointer_sprsize,
+   &pwidth,&pheight);
+
+   SaveUnderPointer(selection,pointer_positions,MPEG_file_count,rubout_buffer,
+                    pwidth,pheight,title_list,NULL);
+
+   ShowPointer(selection,pointer_sprarea,pointer_positions,MPEG_file_count,title_list,
+               NULL);
+
+   #ifdef SCREEN_DUMP
+      sprintf(dump_file,"*screensave VideoCD%d",screen);
+      if ((err = swi(OS_CLI,R0,dump_file,END)) != NULL)
+           ErrorHandler(__FILE__,__LINE__,"Poll()",err->errnum,err->errmess,WARNING);
+      screen++;
+   #endif
+
+   while (1)
+   {
+    #ifdef MEMORY_TRACE
+       ShowMem(__FILE__,__LINE__);
+    #endif
+
+    ch = Poll();
+
+    if (help_state == OFF)
+    {
+        switch (ch)
+        {
+          case UP_ARROW   : MovePointer(UP_ARROW,&selection,pointer_positions,pwidth,
+                              pheight,rubout_buffer,MPEG_file_count,title_list,ch,
+                              pointer_sprarea);
+                            if ((selection == MPEG_file_count+1) && (!(TITLES_EXIST)))
+                                 Finish();
+                            break;
+
+          case DOWN_ARROW : MovePointer(DOWN_ARROW,&selection,pointer_positions,pwidth,
+                              pheight,rubout_buffer,MPEG_file_count,title_list,ch,
+                              pointer_sprarea);
+                            if ((selection == MPEG_file_count+1) && (!(TITLES_EXIST)))
+                                 Finish();
+                            break;
+
+          case RGHT_ARROW : MovePointer(RGHT_ARROW,&selection,pointer_positions,pwidth,
+                              pheight,rubout_buffer,MPEG_file_count,title_list,ch,
+                              pointer_sprarea);
+                            Finish();
+                            break;
+
+          case DOWN_RIGHT : MovePointer(DOWN_RIGHT,&selection,pointer_positions,pwidth,
+                              pheight,rubout_buffer,MPEG_file_count,title_list,ch,
+                              pointer_sprarea);
+                            Finish();
+                            break;
+
+          case BLUE       : MovePointer(BLUE,&selection,pointer_positions,pwidth,pheight,
+                              rubout_buffer,MPEG_file_count,title_list,ch,
+                              pointer_sprarea);
+                            Finish();
+                            break;
+
+          case SELECT     : ProcessSelection(title_list,MPEG_file_count,selection,
+                              MPEG_fnames,text_positions,pointer_positions,pwidth,
+                              pheight,current_first_title_displayed,ch,max_titles,r,
+                              rubout_buffer,pointer_sprarea);
+                            break;
+
+          case PLAY       : ProcessSelection(title_list,MPEG_file_count,selection,
+                              MPEG_fnames,text_positions,pointer_positions,pwidth,
+                              pheight,current_first_title_displayed,ch,max_titles,r,
+                              rubout_buffer,pointer_sprarea);
+                            break;
+
+          case HELP       : help_state = Help();
+                            break;
+
+        }
+     }
+     else if ((help_state == ON) && (ch == HELP))
+          {
+               SelectionScreen(MPEG_file_count,text_positions,title_list,max_titles,r,
+                 current_first_title_displayed);
+
+               SaveUnderPointer(selection,pointer_positions,MPEG_file_count,
+                 rubout_buffer,pwidth,pheight,title_list,ch);
+
+               ShowPointer(selection,pointer_sprarea,pointer_positions,
+                 MPEG_file_count,title_list,ch);
+
+               help_state = OFF;
+          }
+          else if ((help_state == ON) && (ch == BLUE))
+               {
+                    Finish();
+               }
+
+
+        if ((TITLES_EXIST) && (help_state == OFF))
+             current_first_title_displayed = ScrollCheck(selection,&scroll_timer,
+                                             &scroll_time_start,text_positions,r,
+                                             title_list,current_first_title_displayed,
+                                             max_titles);
+   }
+
+   #undef TITLES_EXIST
+}
+
+/*=====================================================================================*/
+/*                                                                                     */
+/*  FUNCTION:  StartPlay()                                                             */
+/*  BEHAVIOUR: Kicks the MPEG BASIC player into action.                                */
+/*  REQUIRES:  - 'MPEG_fnames', which is a null separator list of all the MPEG files   */
+/*                found on the currently loaded cd.                                    */
+/*             - 'file_num', which tells us which MPEG clip to play from MPEG_fnames.  */
+/*             - 'MPEG_file_count', which is the number of MPEG files in MPEG_fnames.  */
+/*                                                                                     */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+static void StartPlay(char *MPEG_fnames,int file_num,int MPEG_file_count)
+{
+  _kernel_oserror *err = NULL;
+  int i = 1;
+  int ntsc_pal;
+  char *index = NULL;
+  FILE *fptr = NULL;
+  char runit[256];
+
+  #ifdef FN_TRACE
+    puts("StartPlay()");
+  #endif
+
+  index = MPEG_fnames;
+  while ((i < file_num) && (i < MPEG_file_count))
+  {
+          index += strlen(index) + 1;
+          i++;
+  }
+
+  ntsc_pal = Which_TV_Standard();
+
+  if ((fptr = fopen("CDFS:$.MPEGAV.*","r")) != NULL)
+  {
+       fclose(fptr);
+       if (ntsc_pal == NTSC)
+           sprintf(runit,
+           "<VideoCD$Dir>.Player CDFS:$.MPEGAV.%s -ntsc -leave -noerror -hoffset -44",
+           index);
+       else
+           sprintf(runit,
+           "<VideoCD$Dir>.Player CDFS:$.MPEGAV.%s -wide -leave -noerror -hoffset -44",
+           index);
+  }
+  else
+  {
+       if (ntsc_pal == NTSC)
+           sprintf(runit,
+           "<VideoCD$Dir>.Player CDFS:$.%s -ntsc -leave -noerror -hoffset -44",index);
+       else
+           sprintf(runit,
+           "<VideoCD$Dir>.Player CDFS:$.%s -wide -leave -noerror -hoffset -44",
+           index);
+  }
+
+  #ifdef DEVELOPMENT
+    printf("runit: %s\n",runit);
+  #endif
+
+  if ((err = swi(Wimp_StartTask,R0,runit,OUT,R0,&player_handle,END)) != NULL)
+                 ErrorHandler(__FILE__,__LINE__,"main()",err->errnum,err->errmess,FATAL);
+
+}
+
+/*=====================================================================================*/
+/*                                                                                     */
+/*  FUNCTION:  Poll()                                                                  */
+/*  BEHAVIOUR: Polls the wimp for button presses / keyboard input, and messages from   */
+/*             !cd.                                                                    */
+/*  RETURNS:   Key / handset button press value, or '\0' if no input received.         */
+/*                                                                                     */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+static int Poll(void)
+{
+ unsigned int mask = 0xC3872;
+ int event_code;
+ int ch = '\0';
+ _kernel_oserror *err = NULL;
+
+   #ifdef FN_TRACE
+     puts("Poll()");
+   #endif
+
+   if ((err = swi(Wimp_Poll,R0,mask,R1,poll_blk,OUT,R0,&event_code,END))
+        != NULL)
+          ErrorHandler(__FILE__,__LINE__,"Poll()",err->errnum,err->errmess,FATAL);
+
+   switch (event_code)
+   {
+      case  8 : ch = (int) (*(poll_blk + 6));
+
+                #ifdef KEY_INPUT
+                  printf("\nKey received: %x %d %c\n",ch,ch,ch);
+                #endif
+
+                break;
+
+      case 17 : ReadMessage();
+                break;
+   }
+
+   return ch;
+
+}
+
+/*=====================================================================================*/
+/*                                                                                     */
+/*  FUNCTION:  ProcessSelection()                                                      */
+/*  BEHAVIOUR: Processes selection made from the selection menu.  Not applicable if    */
+/*             only one MPEG clip was found.                                           */
+/*  REQUIRES:  - 'title_list', which is a null separator list of title names.          */
+/*             - 'MPEG_file_count', which is the number of MPEG files found.           */
+/*             - 'selection', which identifies what has been selected.  If titles      */
+/*                exist (usually only applies to music video cd's), a selection number */
+/*                of 2 represents the first displayed title (because 1 is the scroll   */
+/*                arrow).                                                              */
+/*             - 'MPEG_fnames', which is a null separator list of MPEG file names.     */
+/*             - 'text_positions', which tells us where to display text when the MPEG  */
+/*                player returns control and the selection screen needs to be redrawn. */
+/*                Not applicable if there is only one MPEG clip and therefore no       */
+/*                selection screen.                                                    */
+/*             - 'pointer_positions', which tells us where to redisplay the selection  */
+/*                screen pointer.  Not applicable if there is only one MPEG clip and   */
+/*                therefore no selection screen.                                       */
+/*             - 'pwdith', which is the width of the pointer sprite used on the        */
+/*                selection screen.                                                    */
+/*             - 'pheight', which is the height of the pointer sprite used on the      */
+/*                selection screen.                                                    */
+/*             - 'current_first_title_displayed', which is used in redrawing the       */
+/*                selection screen after the MPEG player returns control (after play   */
+/*                of the selected clip finishes).  Not used if there are no titles.    */
+/*             - 'ch', which is the key which was pressed.                             */
+/*             - 'max_titles', which tells us how many titles are in the titles_list.  */
+/*             - 'r', which is used for erasing the 5 displayed titles during title    */
+/*                scrolling.                                                           */
+/*             - 'rubout_buffer', which is used for rubbing out the pointer on the     */
+/*                selection screen.                                                    */
+/*             - 'pointer_sprarea', which points to the selection screen pointer       */
+/*                sprite.                                                              */
+/*                                                                                     */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+static void ProcessSelection(char *title_list,int MPEG_file_count,int selection,
+       char *MPEG_fnames,struct coords *text_positions,struct coords *pointer_positions,
+       int pwidth,int pheight,int current_first_title_displayed,char ch,int max_titles,
+       struct rubout_buffer r[5],char *rubout_buffer,char *pointer_sprarea)
+{
+   #ifdef FN_TRACE
+     puts("ProcessSelection()");
+   #endif
+
+   if (title_list == NULL)
+   {
+       if ((MPEG_file_count > 1) && (selection == MPEG_file_count + 1))
+            Finish();
+
+       StartPlay(MPEG_fnames,selection,MPEG_file_count);
+
+       if (MPEG_file_count > 1)
+       {
+           SelectionScreen(MPEG_file_count,text_positions,title_list,max_titles,r,
+                           current_first_title_displayed);
+
+           SaveUnderPointer(selection,pointer_positions,MPEG_file_count,rubout_buffer,
+                            pwidth,pheight,title_list,ch);
+
+           ShowPointer(selection,pointer_sprarea,pointer_positions,MPEG_file_count,
+                       title_list,ch);
+        }
+        else
+           Finish();
+   }
+   else if ((selection != 1) && (selection != 7))
+        {
+             StartPlay(MPEG_fnames,current_first_title_displayed + selection - 2,
+                       MPEG_file_count);
+
+             SelectionScreen(MPEG_file_count,text_positions,title_list,max_titles,r,
+                             current_first_title_displayed);
+
+             SaveUnderPointer(selection,pointer_positions,MPEG_file_count,rubout_buffer,
+                              pwidth,pheight,title_list,ch);
+
+             ShowPointer(selection,pointer_sprarea,pointer_positions,
+                         MPEG_file_count,title_list,ch);
+        }
+
+}
+
+/*=====================================================================================*/
+/*                                                                                     */
+/*  FUNCTION:  ScrollCheck()                                                           */
+/*  BEHAVIOUR: If the menu selection pointer is positioned at one of the on screen     */
+/*             scroll arrows, we're in scroll mode.  Scroll if at least x amount of    */
+/*             time has passed since the last scroll and if there are more titles in   */
+/*             the current scroll direction.  This function is not applicable if no    */
+/*             titles were found, or if only a single MPEG clip was found.             */
+/*  REQUIRES:  - 'selection', which is 1 to scroll up, 7 to scroll down.               */
+/*             - 'scroll_timer', which is ON or OFF.                                   */
+/*             - 'scroll_time_start', which resets the timer at the start of each      */
+/*                scroll.                                                              */
+/*             - 'text_positions', which tells us where to display titles.             */
+/*             - 'r', which is a group of title backgrounds used for rubbing out       */
+/*                titles before writing new ones.                                      */
+/*             - 'title_list', which is a null separator list of titles.               */
+/*             - 'current_first_title_displayed', which tells us which of the titles   */
+/*                in the title list is the first one currently displayed on the screen.*/
+/*             - 'max_titles', which is the number of titles in the title list.        */
+/*                                                                                     */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+static int ScrollCheck(int selection,int *scroll_timer,time_t *scroll_time_start,
+                       struct coords *text_positions,struct rubout_buffer r[5],
+                       char *title_list,int current_first_title_displayed,int max_titles)
+{
+   #ifdef FN_TRACE
+     puts("ScrollCheck()");
+   #endif
+
+   switch (selection)
+   {
+      case 7 : if (*scroll_timer == OFF)
+               {
+                   ScrollDown(1,text_positions,r,title_list,
+                   &current_first_title_displayed,max_titles);
+                   *scroll_time_start = time(NULL);
+                   *scroll_timer = ON;
+               } else if (time(NULL) - (*scroll_time_start) > 1)
+                      {
+                          ScrollDown(1,text_positions,r,title_list,
+                          &current_first_title_displayed,max_titles);
+                          *scroll_time_start = time(NULL);
+                      }
+               break;
+
+      case 1 : if (*scroll_timer == OFF)
+               {
+                   ScrollUp(1,text_positions,r,title_list,&current_first_title_displayed,
+                   max_titles);
+                   *scroll_time_start = time(NULL);
+                   *scroll_timer = ON;
+                } else if (time(NULL) - (*scroll_time_start) > 1)
+                       {
+                           ScrollUp(1,text_positions,r,title_list,
+                           &current_first_title_displayed,max_titles);
+                           *scroll_time_start = time(NULL);
+                       }
+                break;
+
+      default: *scroll_timer  = OFF;
+               break;
+   }
+
+   return current_first_title_displayed;
+}
+
+/*=====================================================================================*/
+/*                                                                                     */
+/*  FUNCTION:  Finish()                                                                */
+/*  BEHAVIOUR: Closes down !VideoCD and returns to a !cd idle state.                   */
+/*             Any malloc'd or calloc'd memory will automatically be freed as a result */
+/*             of executing Wimp_CloseDown, since memory used for  mallocing and       */
+/*             calloc-ing comes from a task's wimpslot.                                */
+/*                                                                                     */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+extern void Finish(void)
+{
+ _kernel_oserror *err = NULL;
+
+   #ifdef FN_TRACE
+     puts("Finish()");
+   #endif
+
+   SendMessage(msg_list[TASK_DEAD_INDEX],BROADCAST);   /* Tell !cd I'm about to die.  */
+
+   Poll();  /* Allow the message to get out straight away.                            */
+
+   if (hBackgroundWindow != NULL)
+       DestroyWindow(hBackgroundWindow);
+
+   if ((err = swi(Wimp_CloseDown,R0,video_task_handle,R1,0x4B534154,END)) != NULL)
+   {
+        #ifdef DEVELOPMENT
+               puts("Finish(): Unable to execute Wimp_CloseDown.");
+        #endif
+   }
+
+   if ((err = swi(OS_Exit,END)) != NULL)
+   {
+        #ifdef DEVELOPMENT
+               puts("Finish(): Unable to execute OS_Exit().");
+        #endif
+   }
+
+}
+
+/*=====================================================================================*/
+/*                                                                                     */
+/*  FUNCTION:  SignalCatcher()                                                         */
+/*  BEHAVIOUR: Called when error interrupts occur (e.g. bad memory access, division by */
+/*             zero, operating system error, and so on).  From here, we're able to     */
+/*             pass the error to !AudioCD's error handling function.  Refer PRM p.     */
+/*             4-302 and Horspool's C programming book p. 173 for further info.  This  */
+/*             functionality was successfully tested by introducing an "int a = 3/0;"  */
+/*             i.e. division by zero, which is illegal, into another file.  Signal     */
+/*             Catcher() trapped the error, !AudioCD shut down, and control was        */
+/*             returned to !cd.                                                        */
+/*  PREREQUISITES: A call to Signals() must have been executed.  This specifies which  */
+/*                 signals we're interested in catching.                               */
+/*                                                                                     */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+extern void SignalCatcher(int code)
+{
+ char mess[50];
+
+   #ifdef FN_TRACE
+     puts("SignalCatcher()");
+   #endif
+
+   switch (code)
+   {
+     case SIGABRT : sprintf(mess,"Interrupt -> abort.\n");
+                    break;
+     case SIGFPE  : sprintf(mess,"Interrupt -> arithmetic exception.\n");
+                    break;
+     case SIGILL  : sprintf(mess,"Interrupt -> illegal instruction.\n");
+                    break;
+     case SIGINT  : sprintf(mess,"Interrupt -> attention request from user.\n");
+                    break;
+     case SIGSEGV : sprintf(mess,"Interrupt -> bad memory access.\n");
+                    break;
+     case SIGTERM : sprintf(mess,"Interrupt -> termination request.\n");
+                    break;
+     case SIGSTAK : sprintf(mess,"Interrupt -> stack overflow.\n");
+                    break;
+     case SIGUSR1 : sprintf(mess,"Interrupt -> user definable interrupt.\n");
+                    break;
+     case SIGUSR2 : sprintf(mess,"Interrupt -> user definable interrupt.\n");
+                    break;
+     case SIGOSERROR : sprintf(mess,"Interrupt -> operating system error.\n");
+                    break;
+     default      : sprintf(mess,"Interrupt -> interrupt code is unknown.\n");
+                    break;
+   }
+
+   ErrorHandler(__FILE__,__LINE__,"SignalCatcher()",code,mess,FATAL);
+}
+
+/*=====================================================================================*/
+/*                                                                                     */
+/*  FUNCTION:  ErrorHandler()                                                          */
+/*  BEHAVIOUR: Error handler common to all files within !VideoCD.  A fatal error will  */
+/*             shut down !VideoCD.  A warning error will not.  The DEVELOPMENT         */
+/*             definition determines whether or not errors are reported.  It should be */
+/*             defined (or undefined) in the "common" header file since ErrorHandler() */
+/*             is used by all of !VideoCD's source files.                              */
+/*  REQUIRES:  - 'file', which is the name of the source file from which the error     */
+/*                originates.                                                          */
+/*             - 'fn', which is the name of the function from which the error          */
+/*                originates.                                                          */
+/*             - 'ln', which is the line number at which the error occurred.           */
+/*             - 'errnum', which is the error number.  Refer PRM p.1-42 for more info. */
+/*             - 'mess', which is the error message string.                            */
+/*             - 'level', which is the level of error.  This can be FATAL, resulting   */
+/*                in a complete shut down of !VideoCD, or WARNING, in which case       */
+/*                !VideoCD carries on running.                                         */
+/*                                                                                     */
+/* - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+extern void ErrorHandler(char *file,int ln,char *fn, int errnum, char *mess, int level)
+{
+   #ifdef FN_TRACE
+     puts("ErrorHandler()");
+   #endif
+
+   #ifdef DEVELOPMENT
+
+      if (level == FATAL)
+          puts("FATAL ERROR:");
+      else if (level == WARNING)
+               puts("WARNING:");
+           else
+               puts("WARNING: Unknown error level in ErrorHandler.");
+
+      printf("  Application: !VideoCD\n");
+      printf("  File: %s\n",file);
+      printf("  Line: %d\n",ln);
+      printf("  Function: %s\n",fn);
+      printf("  Error number: %d\n",errnum);
+      printf("  %s\n",mess);
+
+   #endif
+
+   if (level == FATAL)
+       Finish();
+}
