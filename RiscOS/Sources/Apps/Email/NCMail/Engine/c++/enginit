@@ -6,7 +6,6 @@
 #include "kernel.h"
 #include "stdlib.h"
 #include "swis.h"
-#include "string.h"
 
 #include "tboxlibs/event.h"
 #include "tboxlibs/toolbox.h"
@@ -15,10 +14,6 @@
 #include "tboxlibs/wimp.h"
 
 #include "Email/Mailbox/WimpRegistry.h"
-#include "Email/Mailbox/Account.h"
-#include "Email/Mailbox/POP3/POP3Account.h"
-#include "Email/Mailbox/SendQ/SendQAccount.h"
-
 #include "Email/NetLink/NetLink.h"
 #include "Email/NetLink/Permanent.h"
 
@@ -34,12 +29,11 @@
 #include "engevent.h"
 #include "engtypes.h"
 #include "engmanager.h"
-#include "engstr.h"
 #include "enguiapi.h"
 #include "engprocess.h"
 #include "engmsgs.h"
-#include "engfile.h"
 #include "engcbf.h"
+#include "engstr.h"
 
 extern "C"
 {
@@ -51,7 +45,7 @@ _kernel_oserror  *err;
 IdBlock idblock;
 bool appquit = false;
 int ourhandle;
-char *appname, *realname = 0, *emailaddr = 0;
+char *appname;;
 
 static int *msglist;
 
@@ -115,13 +109,12 @@ bool AppInit(void)
   netlink = new PermanentNetLink();
   linestatus = netlink->GetStatus();
   online = (linestatus == NetLink::Connected) ? true : false;
-  dprintf(("Eng", "NetLink status = %d\n",linestatus));
   dprintf(("Eng", "We are %sonline\n",(online) ? "" : "not "));
+  netlink->RegisterCallback(LineChange, 0);
   
   ncmui_initialise(infobuf, online);
   StopTimeoutCount();
   StopReconnectCount();
-  netlink->RegisterCallback(LineChange, 0);
 
   WimpRegistry::Instance()->SetTaskID(ourhandle);
 
@@ -139,19 +132,6 @@ bool AppInit(void)
   ** to receive pre-standby notification.
   */
 
-  if (((realname = GetSysVar("Inet$EmailRealName")) == 0) || ((emailaddr = GetSysVar("Inet$EmailAddress")) == 0))
-  {
-    /* real name and/or email address missing */
-    dprintf(("Eng", "User details missing\n"));
-    initstate.rc = ENG_BADUSERDETAILS;
-    initstate.context = precreate;
-  }
-  else
-  {
-    dprintf(("Eng", "Real name = %s, address = %s\n",realname,emailaddr));
-    initstate.context = creatingpop;
-  }
-
   if ((size = GetSysVar("NCMail$ThresholdSize")) != 0)
   {
     regs.r[0] = 10;
@@ -168,7 +148,8 @@ bool AppInit(void)
     ourmboxin->maxsize = 0x8000;
 
   free(size);
-  state |= INIT;
+  state |= CHANGEUSER;
+  changestate.context = readytoread;
 
   return true;
 
@@ -188,16 +169,25 @@ void PreShutDown(WimpMessage *msg)
   else if ((popstatus == acctconnected) || (smtpstatus == acctconnected))
   {
     /* object to quit and disconnect from servers if connected */
-    msg->hdr.your_ref = msg->hdr.my_ref;
-    regs.r[0] = 19;
-    regs.r[1] = (int) msg;
-    _kernel_swi(Wimp_SendMessage,&regs,&regs);
-    dprintf(("Eng", "Objecting to shutdown\n"));
     StopTimeoutCount();
     StopReconnectCount();
     state |= PREQUIT;
     PreDisconnect(true);
   }
+
+  else if (sendpending)
+  {
+    /* warn user that messages haven't been sent */
+  }
+
+  else
+    return;
+
+  msg->hdr.your_ref = msg->hdr.my_ref;
+  regs.r[0] = 19;
+  regs.r[1] = (int) msg;
+  _kernel_swi(Wimp_SendMessage,&regs,&regs);
+  dprintf(("Eng", "Objecting to shutdown\n"));
 
 }
 
@@ -240,178 +230,3 @@ void ShutDown(void)
 }
 
 
-void SetupStore(void)
-{
-
-  char storename[14];
-  char attstr[3];
-
-  strcpy(storename, "NCMailStore:*");
-  strcpy(attstr, "WR");
-
-  /* create directory to store user's mail */
-
-  CreateDirectory("<NCMailStore$Dir>");
-  CreateDirectory("<NCMailStore$Dir>.<NCMail$User>");
-
-  /* unlock and clear out any files from directory if they exist */
-
-  regs.r[0] = 24;
-  regs.r[1] = (int) storename;
-  regs.r[2] = (int) attstr;
-  _kernel_swi(OS_FSControl,&regs,&regs);
-  regs.r[0] = 27;
-  regs.r[3] = 0;
-  _kernel_swi(OS_FSControl,&regs,&regs);
-
-}
-
-
-void GoSMTP(bool b)
-{
-  initstate.context = creatingsmtp;
-}
-
-
-void GoProcess(bool b)
-{
-  initstate.context = smtpacctok;
-}
-
-
-void GoPopCr(bool b)
-{
-  initstate.context = creatingpop;
-}
-
-
-/*
-** CreatePOPAccount() sets up a new POP3 account.
-** This is called when NCMail is first entered and the account
-** stays valid until the user logs off or goes into standby mode.
-*/
-
-void CreatePOPAccount(void)
-{
-
-  ELib_rcode code;
-  char *popuser = 0, *poppassword = 0, *pophostname = 0;
-
-  if (((popuser = GetSysVar("Inet$EmailPOP3User")) == 0) || ((poppassword = GetSysVar("Inet$EmailPOP3Password")) == 0) || ((pophostname = GetSysVar("Inet$EmailPOP3Hostname")) == 0))
-  {
-    initstate.context = popacctfailure;
-    initstate.rc = ENG_BADPOPDETAILS;
-    dprintf(("Eng", "Some POP account details missing\n"));
-    return;
-  }
-  dprintf(("Eng", "POP3 user = %s, password = %s, hostname = %s \n",popuser,poppassword,pophostname));
-
-  SetupStore();
-
-  /* create new POP3 account */
-
-  POPaccount = new POP3Account(popuser, poppassword, pophostname, code);
-  if (code < 0)
-  {
-    /* error creating POP3 account */
-    initstate.context = popacctfailure;
-    initstate.rc = ENG_NOPOPACCOUNT;
-    dprintf(("Eng", "***ERROR*** Error creating POP account, rc = %d\n",code));
-  }
-  else
-  {
-    initstate.context = creatingsmtp;
-    popstatus = acctcreated;
-    POPaccount->SetConnectionState(online);
-  }
-  free(popuser);
-  free(poppassword);
-  free(pophostname);
-
-}
-
-
-void CreateSMTPAccount(void)
-{
-
-  ELib_rcode code;
-  char *smtphostname;
-
-  if ((smtphostname = GetSysVar("Inet$EmailSMTPHostname")) == 0)
-  {
-    initstate.context = smtpacctfailure;
-    initstate.rc = ENG_BADSMTPDETAILS;
-    dprintf(("Eng", "SMTP hostname missing\n"));
-    return;
-  }
-
-  dprintf(("Eng", "SMTP hostname = %s\n",smtphostname));
-
-  SMTPaccount = new SendQAccount(smtphostname, code);
-  if (code < 0)
-  {
-    /* error creating SMTP account */
-    initstate.context = smtpacctfailure;
-    initstate.rc = ENG_NOSMTPACCOUNT;
-    dprintf(("Eng", "***ERROR*** Error creating SMTP account, rc = %d\n",code));
-  }
-  else
-  {
-    initstate.context = smtpacctok;
-    smtpstatus = acctcreated;
-    SMTPaccount->SetConnectionState(online);
-  }
-  free(smtphostname);
-
-}
-
-
-void DoCreateAccount(void)
-{
-
-  switch (initstate.context)
-  {
-
-    case precreate :
-
-      initstate.context = idle;
-      (*callbacklist.statusfunc)(initstate.rc, callbacklist.statushandle, GoPopCr);
-      break;
-
-    case creatingpop :
-
-      /* do we need to notify UI that we are connecting to mail servers? */
-      dprintf(("Eng", "context = creatingpop\n"));
-      CreatePOPAccount();
-      break;
-
-    case creatingsmtp :
-
-      dprintf(("Eng", "context = creatingsmtp\n"));
-      CreateSMTPAccount();
-      break;
-
-    case smtpacctok :
-
-      dprintf(("Eng", "context = smtpacctok\n"));
-      state &= ~INIT;
-      if ((online) && ((popstatus != acctnonexistent) || (smtpstatus != acctnonexistent)))
-        StartProcess();
-      break;
-
-    case popacctfailure :
-
-      dprintf(("Eng", "context = popacctfailure\n"));
-      initstate.context = idle;
-      (*callbacklist.statusfunc)(initstate.rc, callbacklist.statushandle, GoSMTP);
-      break;
-
-    case smtpacctfailure :
-
-      dprintf(("Eng", "context = smtpacctfailure\n"));
-      initstate.context = idle;
-      (*callbacklist.statusfunc)(initstate.rc, callbacklist.statushandle, GoProcess);
-      break;
-
-  }
-}

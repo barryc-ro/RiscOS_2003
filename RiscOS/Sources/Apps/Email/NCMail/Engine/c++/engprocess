@@ -81,8 +81,10 @@ eng_rcode POPAccountDisconnect(void)
     popprocessstate.disconnectobj = new MBoxOpCB_disconnect((MBoxCBHandlerFn) eng_mbox_cbfunc, (void *) pop);
     return (eng_rcode) POPaccount->Disconnect(popprocessstate.disconnectobj);
   }
-  else
-    return ENG_COMPLETED;
+  else if (state & DISCONNECT)
+    popprocessstate.context = disconnected;
+
+  return ENG_COMPLETED;
 
 }
 
@@ -249,7 +251,7 @@ void DoSMTPProcess(void)
         state &= ~SEND;
       }
       else
-        (*callbacklist.statusfunc)(smtpprocessstate.rc, callbacklist.statushandle, DefunctSMTP);
+        (*callbacklist.statusfunc)(ENG_SMTPCONNECTFAIL, callbacklist.statushandle, DefunctSMTP);
 
       break;
 
@@ -265,7 +267,7 @@ void DoSMTPProcess(void)
         smtpprocessstate.context = readytodisconnect;
       }
       else
-        (*callbacklist.statusfunc)(smtpprocessstate.rc, callbacklist.statushandle, DeadSMTP);
+        (*callbacklist.statusfunc)(ENG_CANTPROCESSSMTP, callbacklist.statushandle, DeadSMTP);
 
       break;
 
@@ -353,11 +355,16 @@ void DoSMTPProcess(void)
       CleanupOutbox();
       smtpstatus = acctcreated;
       state &= ~(TIMEOUT + PROCESSSMTP);
+
+      if (state & CHANGEUSER)
+        changestate.context = readytoread;
+
       if (state & SEND)
       {
         (*callbacklist.sendfunc)(smtpprocessstate.rc, callbacklist.sendhandle);
         state &= ~SEND;
       }        
+
       if ((state & DISCONNECT) && (!(state & PROCESSPOP)))
       {
         state &= ~DISCONNECT;
@@ -459,7 +466,7 @@ void DoPOPProcess(void)
       dprintf(("Eng", "POP context = connectfailure\n",));
       RemoveObj((MBoxOpCB**) &popprocessstate.connectobj);
       popprocessstate.context = idle;
-      (*callbacklist.statusfunc)(popprocessstate.rc, callbacklist.statushandle, DefunctPOP);
+      (*callbacklist.statusfunc)(ENG_POPCONNECTFAIL, callbacklist.statushandle, DefunctPOP);
       break;
 
     case processfailure :
@@ -468,7 +475,7 @@ void DoPOPProcess(void)
       dprintf(("Eng", "POP context = processfailure\n",));
       RemoveObj((MBoxOpCB**) &popprocessstate.processobj);
       popprocessstate.context = idle;
-      (*callbacklist.statusfunc)(popprocessstate.rc, callbacklist.statushandle, DeadPOP);
+      (*callbacklist.statusfunc)(ENG_CANTPROCESSPOP, callbacklist.statushandle, DeadPOP);
 
       break;
 
@@ -480,7 +487,7 @@ void DoPOPProcess(void)
         changed = popprocessstate.processobj->mailbox_changed;
       RemoveObj((MBoxOpCB**) &popprocessstate.processobj);
       popprocessstate.context = idle;
-      if (state & (DISCONNECT | TIMEOUT))
+      if (state & (DISCONNECT | TIMEOUT | CHANGEUSER))
         POPAccountDisconnect();
 
       else
@@ -514,11 +521,22 @@ void DoPOPProcess(void)
       popstatus = acctcreated;
       if (state & TIMEOUT)
         state &= ~(PROCESSPOP + TIMEOUT);
-      else if ((state & DISCONNECT) && (!(state & PROCESSSMTP)))
+
+      else if (state & CHANGEUSER)
       {
-        state &= ~(DISCONNECT + PROCESSPOP);
-        DisconnectFromISP();
+        state &= ~PROCESSPOP;
+        changestate.context = disconnectsmtp;
       }
+
+      else if (state & DISCONNECT)
+      {
+        if (!(state & PROCESSSMTP))
+        {
+          state &= ~(DISCONNECT + PROCESSPOP);
+          DisconnectFromISP();
+        }
+      }
+
       else
         popprocessstate.context = readytoexpunge;
 
@@ -642,7 +660,7 @@ void ReconcileMailbox(uint32 n)
 
   msglist.Reset();
 
-  if ((tempmbox = (MailboxDescriptor *) malloc(sizeof(MailboxDescriptor *))) == 0)
+  if ((tempmbox = (MailboxDescriptor *) malloc(sizeof(MailboxDescriptor))) == 0)
   {
     dprintf(("Eng", "***ERROR*** Malloc failure setting up temp list\n"));
     errorflag = true;
