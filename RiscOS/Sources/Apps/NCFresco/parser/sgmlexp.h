@@ -193,11 +193,7 @@ extern int sgml_translation(SGMLCTX *context, char *ptr, int bytes, int rules);
  * the character that A.N.Other platform gives you. yuk!
  */
 
-#ifdef SGML_PC_UNDEF_KEYS
 extern char convert_undefined_key_code(char c);
-#else
-#define convert_undefined_key_code(c) (c)
-#endif
 
 /*****************************************************************************
 

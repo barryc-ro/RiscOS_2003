@@ -2,6 +2,7 @@
 /* (C) Copyright ANT Limited 1996. All rights reserved. */
 
 #include "sgmlparser.h"
+#include "gbf.h"
 
 /*****************************************************************************/
 
@@ -51,6 +52,7 @@ extern void sgml_note_message(SGMLCTX * context, const char *fmt, ... )
 extern void sgml_feed_characters(SGMLCTX *context, const char *buffer, int bytes)
 {
     int i;
+    BOOL convert_char = gbf_active(GBF_TRANSLATE_UNDEF_CHARS);
 
     ASSERT(context->magic == SGML_MAGIC);
 
@@ -58,8 +60,12 @@ extern void sgml_feed_characters(SGMLCTX *context, const char *buffer, int bytes
 
     for (i = 0; i < bytes; i++, buffer++)
     {
+	char c = *buffer;
+
 	/* optionally convert undefined keys to PC keymap */
-	const char c = convert_undefined_key_code(*buffer);
+	if (convert_char)
+	    c = convert_undefined_key_code(c);
+
 	add_char_to_inhand(context, c);
 #if 0
 	PRSDBGN(("sgml_feed_characters(): '%c' in '%s'\n", c, get_state_name(context->state)));

@@ -16,6 +16,7 @@
 #include "htmlparser.h"
 #endif
 
+#include "gbf.h"
 #include "util.h"
 
 /** THIS TABLE MUST BE IN strncmp() ORDER FOR THIS TO WORK **/
@@ -395,7 +396,6 @@ char * ISO_Latin1[] = {
 };
 
 #endif
-#ifdef SGML_PC_UNDEF_KEYS
 
 /*
  * keys with names below have been translated to the appropriate key
@@ -444,8 +444,6 @@ char convert_undefined_key_code(char c)
 	return pc_translate_keys[c-128];
     return c;
 }
-
-#endif
 
 /*****************************************************************************/
 
@@ -573,7 +571,8 @@ extern int sgml_translation(SGMLCTX *context, char *in_ptr, int in_bytes, int ru
 		(x >= 32 || isspace((char)x))
 		)
 	    {
-		x = convert_undefined_key_code((int)x);
+		if (gbf_active(GBF_TRANSLATE_UNDEF_CHARS))
+		    x = convert_undefined_key_code((int)x);
 
 		*out_ptr++ = (char) x;
 		out_bytes++;

@@ -12,6 +12,7 @@
 #define GBF_GUESS_ELEMENTS		0x00000004
 #define GBF_GUESS_ATTRIBUTES		0x00000008
 #define GBF_GUESS_ENUMERATIONS		0x00000010
+#define GBF_TRANSLATE_UNDEF_CHARS	0x00000020
 
 extern int gbf_flags;
 extern int gbf_active(int gbf);

@@ -542,7 +542,7 @@ int frontend_view_bounds(fe_view v, wimp_box *box)
     box->x0 = ws.o.x;
     box->x1 = ws.o.x + (ws.o.box.x1 - ws.o.box.x0);
 
-    STBDBGN(("view bounds: %d,%d %d,%d (status %d)\n", box->x0, box->y0, box->x1, box->y1, fe_status_height_top(v)));
+/*     STBDBGN(("view bounds: %d,%d %d,%d (status %d)\n", box->x0, box->y0, box->x1, box->y1, fe_status_height_top(v))); */
 
     return 1;
 }

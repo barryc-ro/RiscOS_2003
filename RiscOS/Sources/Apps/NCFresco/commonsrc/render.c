@@ -507,12 +507,14 @@ int render_text(be_doc doc, const char *text, int x, int y)
     }
 
     /* do we need different character set? */
+#if 1
     if (doc->encoding != be_encoding_LATIN1)
     {
 	RENDBG(("render_text: set bit 12\n"));
 	flags |= 1<<12;
     }
-
+#endif
+    
     font_paint((char *)text, flags, x, y);
 
     return TRUE;

@@ -5065,6 +5065,8 @@ static BOOL fe_initialise(void)
     atexit(&fe_tidyup);
 
     gbf_flags &= ~GBF_FVPR | GBF_GUESS_ELEMENTS;
+/*  gbf_flags |= GBF_TRANSLATE_UNDEF_CHARS; */
+
     gbf_init();
 
     STBDBG(( "task handle: %x\n", task_handle));

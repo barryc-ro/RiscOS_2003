@@ -3761,7 +3761,7 @@ static void antweb_doc_background_change(void *h, void *i, int status, wimp_box 
     int fl;
     antweb_doc *doc = (antweb_doc *) h;
 
-    BEDBG((stderr, "antweb_doc_background_change(): doc %p status %d\n", doc, status));
+/*  BEDBG((stderr, "antweb_doc_background_change(): doc %p status %d\n", doc, status)); */
 
     switch (status)
     {

@@ -44,6 +44,24 @@
 /* Make this 1 to see item boundaries */
 #define DEBUG_ITEMS 0
 
+
+#if DEBUG
+static void dump_data(const char *s, int len)
+{
+    int i;
+    fprintf(stderr, "data: (%2d)", len);
+
+    for (i = 0; i < len; i++)
+	fprintf(stderr, " %02x", s[i]);
+
+    fprintf(stderr, "\n          ");
+    for (i = 0; i < len; i++)
+	fprintf(stderr, "  %c", s[i] < ' ' ? '.' : s[i]);
+
+    fputc('\n', stderr);
+}
+#endif
+
 /* An empty text object does not have any padding either. */
 /* This is so the object inserted by <BR> has no effective width */
 
@@ -228,6 +246,10 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
     if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
 	return;
 
+    /* quick exit if there is no text to display */
+    if (rh->texts.data[tit->data_off] == 0)
+	return;
+    
 #ifdef STBWEB
     draw_highlight_box = ti->aref && (ti->aref->href || ti->aref->flags & rid_aref_LABEL) &&
 	((ti->flag & (rid_flag_SELECTED|rid_flag_ACTIVATED)) == rid_flag_SELECTED);
@@ -277,6 +299,10 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
 
     flexmem_noshift();
 
+#if 0
+    dump_data(rh->texts.data + tit->data_off, strlen(rh->texts.data + tit->data_off));
+#endif
+    
     no_text = !render_text(doc, rh->texts.data + tit->data_off, hpos, b);
     if (ti->pad)
 	no_text = FALSE;

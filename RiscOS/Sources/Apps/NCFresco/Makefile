@@ -183,39 +183,7 @@ FRESCO_OBJS=	configgui.o fontmenu.o frontend.o guibits.o guidata.o \
 		$(SGML_OBJS) $(HTML_OBJS) $(COMM_OBJS)
 FRESCO_LIBS=    ../webimage/webimage ../memlib/memlib
 
-# ----------------------------------------------------------------------
-
-RISCOS_BUILD_EXPORT=../../../../Export
-
-NCFRESCO_INCS=	-I../\!NCFresco
-NCFRESCO_BASECFLAGS= -wp -DSTBWEB -DSTBWEB_BUILD $(NCFRESCO_INCS) -DOLD_COMMENTS=0 -DSGML_PC_UNDEF_KEYS -DUSE_MARGINS=1 -DMEMLIB=1 -DCOMPAT_INET4
-
-# Production flag set
-NCFRESCO_PRODUCTION_CFLAGS= $(NCFRESCO_BASECFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -DSGML_REPORTING=0 -DNDEBUG
-NCFRESCO_DEBUG_CFLAGS= $(NCFRESCO_BASECFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=2 -Fn -DSGML_REPORTING=1 -DLINK_DEBUG=1
-NCFRESCO_MEMCHECK_CFLAGS= $(NCFRESCO_BASECFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=0 -Fn -DSGML_REPORTING=1 -DLINK_DEBUG=0 -zpc1 -DMemCheck_MEMCHECK -fw -g
-NCFRESCO_HIERPROF_CFLAGS= $(NCFRESCO_BASECFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -Fn -DSGML_REPORTING=0 -DNDEBUG -DHierProf_PROFILE
-
-NCFRESCO_CFLAGS= $(NCFRESCO_DEBUG_CFLAGS)
-
-NCFRESCO_ASFLAGS=-I$(RISCOS_BUILD_EXPORT)/Hdr/Global -I$(RISCOS_BUILD_EXPORT)/Hdr/Interface -I$(RISCOS_BUILD_EXPORT)/Hdr/Interface2
-NCFRESCO_ROM_ASFLAGS=-I$(RISCOS_BUILD_EXPORT)/Hdr/Global -I$(RISCOS_BUILD_EXPORT)/Hdr/Interface -I$(RISCOS_BUILD_EXPORT)/Hdr/Interface2
-
-NCFRESCO_VPATH=	../!NCFresco
-NCFRESCO_BASEOBJS=	clipboard.o stbfe.o stbhist.o stbhots.o stbkeys.o stbmap.o \
-		stbevent.o stbmenu.o stbopen.o stbredraw.o stbstatus.o stbtb.o stbutils.o \
-		alarm.o sutil.o ncreg.o internal.o \
-		$(SGML_OBJS) $(HTML_OBJS) $(COMM_OBJS)
-NCFRESCO_MEMOBJS= flex.o heap.o da.o
-
-# NCFRESCO_OBJS=		$(NCFRESCO_BASEOBJS)
-NCFRESCO_OBJS=	$(NCFRESCO_BASEOBJS) $(NCFRESCO_MEMOBJS)
-NCFRESCO_ROM_OBJS=	$(NCFRESCO_BASEOBJS) $(NCFRESCO_MEMOBJS) rolib.o ModuleWrap.o
-NCFRESCO_LIBS=	../webimage/webimage1
-# NCFRESCO_LIBS=	../webimage/webimage1m ../memcheck/MC
-NCFRESCO_LDFLAGS=
-
-# -------------
+# -----------------------------------------------------------------------------
 #
 # C compiler flags for CBFresco (v similar to NCFresco)
 #
@@ -395,7 +363,6 @@ clean:		sanity
 		-@cd ./cunix ; $(RM) *.o builders parse_check format_check check_all
 		-@cd ./hriscos ; $(RM) *.o htmlcheck,ff8
 		-@cd ./\!Fresco ; $(RM) *,ff8 *,fd3
-		-@cd ./\!NCFresco ; $(RM) *,ff8 *,fd3
 		-@cd ./abs && $(RM) *
 		-@cd ./aof && $(RM) *
 		-@cd ./plotcheck ; $(RM) plotcheck *.o
@@ -556,13 +523,6 @@ srclist:
 		tcpiplibs ; do find $$dir -type f \
 		\( -name \*.h -o -name \*.c \) ; done > srclist
 
-srclist_ncfresco:
-		@for dir in fresco parser commonsrc ./!NCFresco \
-		fresparse ncfresco stdalone unix bunix rocompat html http libs mimemapmod \
-		tabtests webftp webgopher webimage clib RISC_OSLib include \
-		tcpiplibs ; do find $$dir -type f \
-		\( -name \*.h -o -name \*.c \) ; done > srclist
-
 srclist_fresco:
 		@for dir in fresco parser commonsrc ./!Fresco  \
 		fresparse ncfresco stdalone unix bunix rocompat memlib html http libs mimemapmod \
@@ -570,130 +530,7 @@ srclist_fresco:
 		tcpiplibs ; do find $$dir -type f \
 		\( -name \*.h -o -name \*.c \) ; done > srclist
 
-
-
 STDALONE:	HTMLCHECK_UNIX BUILDERS_UNIX
-
-sr:		NCFRESCO_RISCOS
-
-NCFRESCO:	NCFRESCO_RISCOS
-
-NCFRESCO_BUILD_LIBS=	$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1.o \
-			$(RISCOS_BUILD_EXPORT)/Lib/CLib/stubs.o \
-			$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/risc_oslib.o \
-			$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/inetlib.o \
-			$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/socklib.o \
-			$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlib.o
-
-NCFRESCO_ROM_LIBS=	$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1.o \
-			$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/romcstubs.o \
-			$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/inetlibzm.o \
-			$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/socklibzm.o \
-			$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlibzm.o
-
-NCFRESCO_BUILD_CFLAGS=	$(NCFRESCO_CFLAGS) -DRISCOS -fa -Fn \
-			-I$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib \
-			-I$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs \
-			-I$(RISCOS_BUILD_EXPORT)/Lib/MemLib \
-			-I$(RISCOS_BUILD_EXPORT)/Lib/WebImage \
-			-I$(RISCOS_BUILD_EXPORT)/C \
-			$(BASE_INCS) -J$(RISCOS_BUILD_EXPORT)/Lib/CLib
-
-NCFRESCO_ROM_CFLAGS=	$(NCFRESCO_PRODUCTION_CFLAGS) -DRISCOS -fa -zM -zps1 -DSTBWEB_ROM=1 \
-			-I$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib \
-			-I$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs \
-			-I$(RISCOS_BUILD_EXPORT)/Lib/MemLib \
-			-I$(RISCOS_BUILD_EXPORT)/Lib/WebImage \
-			-I$(RISCOS_BUILD_EXPORT)/C \
-			$(BASE_INCS) -J$(RISCOS_BUILD_EXPORT)/Lib/CLib
-
-NCFRESCO_ROM_LDFLAGS=	
-
-NCFRESCO_DEPENDS:
-		cd ncfresco ; armdepend -M Makefile $(NCFRESCO_BUILD_CFLAGS) ../parser/*.c ../fresparse/*.c ../parser/*.c ../!NCFresco/*.c
-		@echo NCFresco dependencies generated
-
-# Export the NCFresco resources for ROM building
-
-NCFRESCO_BUILD_RESOURCES=$(RISCOS_BUILD_RESOURCES)/Resources/NCFresco
-NCFRESCO_BUILD_APPS	=$(RISCOS_BUILD_RESOURCES)/Apps/!NCFresco
-CP=cp
-CPOPTIONS=-p
-
-NCFRESCO_BUILD_ROM_RESOURCES:
-		@-mkdir $(RISCOS_BUILD_RESOURCES)
-		@-mkdir $(RISCOS_BUILD_RESOURCES)/Resources
-		@-mkdir $(RISCOS_BUILD_RESOURCES)/Resources/NCFresco
-		@-mkdir $(RISCOS_BUILD_RESOURCES)/Apps
-		@-mkdir $(RISCOS_BUILD_RESOURCES)/Apps/!NCFresco
-		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/!Boot2,feb	$(NCFRESCO_BUILD_APPS)/!Boot,feb
-		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/!Run4,feb	$(NCFRESCO_BUILD_APPS)/!Run,feb
-		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/!Sprites3,ff9	$(NCFRESCO_BUILD_APPS)/!Sprites,ff9
-		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/Res,fae	$(NCFRESCO_BUILD_RESOURCES)
-		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/Sprites,ff9	$(NCFRESCO_BUILD_RESOURCES)
-		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/SetScrap,ffb	$(NCFRESCO_BUILD_RESOURCES)
-		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/Config	$(NCFRESCO_BUILD_RESOURCES)
-		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/Messages	$(NCFRESCO_BUILD_RESOURCES)
-		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/MimeMap	$(NCFRESCO_BUILD_RESOURCES)
-
-
-# This one is for NCFresco in the new style CVS controlled RISC OS build tree
-NCFRESCO_BUILD:		$(PREDEPS)
-		@echo "Making NCFRESCO for RISCOS in the build tree"
-		@-mkdir abs
-		@cd ./ncfresco; $(MAKE) NCFRESCO_RISCOS \
-		LIBS="$(NCFRESCO_BUILD_LIBS)" \
-		OBJS="$(NCFRESCO_OBJS) $(RISCOS_OBJS)" \
-		VPATH="$(NCFRESCO_VPATH):$(RISCOS_VPATH)" \
-		CFLAGS="$(NCFRESCO_BUILD_CFLAGS)" \
-		LDFLAGS="$(NCFRESCO_LDFLAGS)"
-		$(POSTACTS)
-
-NCFRESCO_BUILD_ROM:	$(PREDEPS)
-		@echo "Making NCFRESCO ROM version for RISCOS in the build tree"
-		@-mkdir aof
-		@cd ./ncfresco; $(MAKE) NCFRESCO_AOF \
-		LIBS="$(NCFRESCO_ROM_LIBS)" \
-		OBJS="$(NCFRESCO_ROM_OBJS) $(RISCOS_OBJS)" \
-		VPATH="$(NCFRESCO_VPATH):$(RISCOS_VPATH)" \
-		CFLAGS="$(NCFRESCO_ROM_CFLAGS)" \
-		ASFLAGS="$(NCFRESCO_ROM_ASFLAGS)" \
-		LDFLAGS="$(NCFRESCO_ROM_LDFLAGS)"
-		$(POSTACTS) \
-		cp -p aof/ncfresco $(RISCOS_BUILD_OBJECTS)
-
-NCFRESCO_RISCOS:	$(PREDEPS)
-		@echo "Making NCFRESCO for RISCOS"
-		@cd ./ncfresco; $(MAKE) NCFRESCO_RISCOS \
-		LIBS="$(NCFRESCO_LIBS) $(RISCOS_LIBS)" \
-		OBJS="$(NCFRESCO_OBJS) $(RISCOS_OBJS)" \
-		VPATH="$(NCFRESCO_VPATH):$(RISCOS_VPATH)" \
-		CFLAGS="$(NCFRESCO_CFLAGS) $(RISCOS_CFLAGS)" \
-		LDFLAGS="$(NCFRESCO_LDFLAGS)"
-		$(POSTACTS)
-
-
-NCFRESCO_NT:
-		@echo Making NCFRESCO on NT
-		@cd ncfresco_pc
-		@nmake /nologo /f Makepc NCFRESCO_PC \
-		LIBS="$(NCFRESCO_LIBS) $(RISCOS_LIBS)" \
-		OBJS="$(NCFRESCO_OBJS) $(RISCOS_OBJS)" \
-		VPATH="$(NCFRESCO_VPATH):$(RISCOS_VPATH)" \
-		CFLAGS="$(NCFRESCO_CFLAGS) $(RISCOS_CFLAGS)" \
-		LDFLAGS="$(NCFRESCO_LDFLAGS)" \
-		$(POSTACTS)
-
-NCFRESCO_MODULE:	$(PREDEPS)
-		@echo "Making NCFRESCO module for RISCOS"
-		@cd ./ncfresco; $(MAKE) NCFRESCO_MODULE \
-		LIBS="$(NCFRESCO_MODLIBS)" \
-		OBJS="$(NCFRESCO_MODOBJS) $(RISCOS_OBJS)" \
-		VPATH="$(NCFRESCO_VPATH):$(RISCOS_VPATH)" \
-		CFLAGS="$(NCFRESCO_MODCFLAGS) $(RISCOS_CFLAGS)" \
-		ASFLAGS="$(NCFRESCO_ASFLAGS)" \
-		LDFLAGS="$(NCFRESCO_MODLDFLAGS)"
-		$(POSTACTS)
 
 
 CBFRESCO:	CBFRESCO_RISCOS
@@ -727,83 +564,6 @@ CBFRESCO_NT:
 		VPATH="$(CBFRESCO_VPATH):$(RISCOS_VPATH)" \
 		CFLAGS="$(CBFRESCO_CFLAGSD) $(RISCOS_CFLAGS) $(PC_CFLAGS)"
 
-
-NCFRESCO_BUILDSTAMP:
-		@cp -f ../buildstamp .
-
-# Create a fresh directory holding the items that constitute
-# a release. Rebuild from scratch every time to be certain
-# that lingering files such as cookies don't end up here.
-NCFRESCO_DIST:  NCFRESCO_BUILD
-		@echo "Building the NCFRESCO RELEASE directory"
-		-@$(RM) -r $(RELS)
-		-@mkdir $(REL)
-		@mkdir $(RELS)
-		@cp -p \!NCFresco/Resources/UK/\!Boot1,feb $(RELS)/\!Boot,feb
-		@cp -p \!NCFresco/Resources/UK/\!Run3,feb $(RELS)/\!Run,feb
-		@cp -p ./abs/ncfresco $(RELS)/\!RunImage,ff8
-		@cp -p \!NCFresco/Resources/UK/\!Sprites3,ff9 $(RELS)/\!Sprites,ff9
-		@cp -p \!NCFresco/Resources/UK/Res,fae $(RELS)
-		@cp -p \!NCFresco/Resources/UK/Sprites3,ff9 $(RELS)/Sprites,ff9
-		@cp -p \!NCFresco/Resources/UK/TileV,ff9 $(RELS)
-		@cp -p \!NCFresco/Resources/UK/TileN,ff9 $(RELS)
-		@cp -p \!NCFresco/Resources/UK/\!Help $(RELS)
-		@cp -p \!NCFresco/Resources/UK/MimeMap $(RELS)
-		@cp -p \!NCFresco/Resources/UK/Config $(RELS)
-		@cp -p \!NCFresco/Resources/UK/Messages $(RELS)
-		@cp -p \!NCFresco/Resources/UK/Help,faf $(RELS)
-		@cp -p \!NCFresco/Resources/UK/Welcome,faf $(RELS)
-		@cp -p \!NCFresco/Resources/UK/SetScrap,ffb $(RELS)
-
-		@chmod 644 $(RELS)/\!Help
-		@chmod 644 $(RELS)/MimeMap
-		@chmod 644 $(RELS)/Config
-		@chmod 644 $(RELS)/Messages
-
-#		@tar cf ncfresco.tar $(RELS)
-#		@gzip ncfresco.tar
-
-		@echo ""
-		@echo "Built an Ncfresco release directory under $(REL)"
-		@echo ""
-		@echo "Please check this directory thoroughly before releasing it!"
-		@echo ""
-
-NCFRESCO_RELEASE: NCFRESCO_BUILD
-		@echo "Building NCFRESCO release pack"
-		@cp -pr $(RELS) ../release/browser
-		@./fixlicense ../release/browser/\!NCFresco/\!RunImage,ff8 1000000 "Acorn Network Computers Dev"
-		@cp -pr ../release/stbmods/* ../release/browser/\!NCFresco
-		@cd ../release ; tar cf ncfresco.tar browser
-		@gzip -f ../release/ncfresco.tar
-		@uuencode ../release/ncfresco.tar.gz ../release/ncfresco.tar.gz > ../release/ncfresco.tar.gz.uue
-		@echo "Done"
-
-
-NCFRESCO_TEST_RUNIMAGE: NCFRESCO_BUILD
-		@echo "Updating NCFresco installation on bungle"
-		@rcp -r abs/ncfresco 'bungle:/export/home/ncd/rcadev/Apps/\!NCFresco'
-		@echo "Done"
-		@echo ""
-
-NCFRESCO_TEST_RUNIMAGE_STAMP: NCFRESCO_BUILD
-		@echo "Updating NCFresco installation on bungle"
-		@rcp -r ../release/browser/\!NCFresco/\!RunImage,ff8 'bungle:/export/home/ncd/default/boot/WWW/Dev/\!NCFresco'
-		@echo "Done"
-		@echo ""
-
-NCFRESCO_TEST:	NCFRESCO_DIST
-		@echo "Installing NCFresco release on bungle"
-		@rcp -r RELEASE/\!NCFresco 'bungle:/export/home/ncd/rcadev/Apps/'
-		@echo "Done"
-		@echo ""
-
-NCFRESCO_BINARIES:
-		@echo "packaging NCFresco binary resources"
-		@tar cvf ../ncfrescobin.tar \!NCFresco/Resources/UK/*Sprites* \!NCFresco/Resources/UK/Res* \!NCFresco/Resources/UK/Messages
-		@gzip -f ../ncfrescobin.tar
-		@uuencode ../ncfrescobin.tar.gz ../ncfrescobin.tar.gz > ../ncfrescobin.tar.gz.uue
-
 FIXL:
 		@echo "Making FIXL for UNIX"
 		@cd ./fixl; $(MAKE) FIXL_UNIX \
@@ -816,11 +576,6 @@ FIXL:
 # starts with a !, which find takes as meaninga predicate. Hence ./
 TAGS:		srclist_fresco
 		@echo "Building emacs TAGS file for fresco"
-		@etags `cat srclist`
-		@$(RM) srclist
-
-TAGS_NCFRESCO:	srclist_ncfresco
-		@echo "Building emacs TAGS file for ncfresco"
 		@etags `cat srclist`
 		@$(RM) srclist
 
@@ -877,6 +632,266 @@ fresh:		HTML TAGS
 		./makelinks
 
 #############################################################################
+
+
+# ===========================================================================
+#
+# NCFRESCO defines
+#
+# There are three sets of instructions for some items
+# NCFRESCO_BUILD_xxx	- NC build tree standalone application
+# NCFRESCO_ROM_xxx	- NC build tree ROM module
+# NCFRESCO_RAM_xxx	- NC build tree standalone module
+# NCFRESCO_ANT_xxx	- ANT build tree standalone application
+#
+# ===========================================================================
+
+#uncomment this to build dependencies...
+#RISCOS_BUILD_EXPORT=../../../../Export
+#RISCOS_BUILD_RESOURCES=../../../../Install
+
+CP=				cp
+CPOPTIONS=			-p
+
+NCFRESCO_BUILD_RESOURCES=	$(RISCOS_BUILD_RESOURCES)/Resources/NCFresco
+NCFRESCO_BUILD_APPS=		$(RISCOS_BUILD_RESOURCES)/Apps/!NCFresco
+NCFRESCO_TEST_DIR=		bungle:/export/home/ncd/rcadev/
+
+
+NCFRESCO_INCS=			-I../\!NCFresco
+NCFRESCO_BASE_CFLAGS=		-wp -DSTBWEB -DSTBWEB_BUILD -DOLD_COMMENTS=0 -DUSE_MARGINS=1 -DMEMLIB=1 -DCOMPAT_INET4 $(NCFRESCO_INCS)
+
+# several alternative flag sets
+NCFRESCO_PRODUCTION_CFLAGS=	$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -DSGML_REPORTING=0 -DNDEBUG
+NCFRESCO_DEBUG_CFLAGS=		$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=2 -Fn -DSGML_REPORTING=1 -DLINK_DEBUG=1
+NCFRESCO_MEMCHECK_CFLAGS=	$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=0 -Fn -DSGML_REPORTING=1 -DLINK_DEBUG=0 -zpc1 -DMemCheck_MEMCHECK -fw -g
+NCFRESCO_HIERPROF_CFLAGS=	$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -Fn -DSGML_REPORTING=0 -DNDEBUG -DHierProf_PROFILE
+
+# choose one here
+NCFRESCO_CFLAGS=		$(NCFRESCO_PRODUCTION_CFLAGS)
+
+NCFRESCO_BUILD_CFLAGS=		$(NCFRESCO_CFLAGS) -DRISCOS -fa -Fn \
+				-I$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib \
+				-I$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs \
+				-I$(RISCOS_BUILD_EXPORT)/Lib/MemLib \
+				-I$(RISCOS_BUILD_EXPORT)/Lib/WebImage \
+				-I$(RISCOS_BUILD_EXPORT)/C \
+				$(BASE_INCS) -J$(RISCOS_BUILD_EXPORT)/Lib/CLib
+
+NCFRESCO_ROM_CFLAGS=		$(NCFRESCO_PRODUCTION_CFLAGS) -DRISCOS -fa -zM -zps1 -DSTBWEB_ROM=1 \
+				-I$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib \
+				-I$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs \
+				-I$(RISCOS_BUILD_EXPORT)/Lib/MemLib \
+				-I$(RISCOS_BUILD_EXPORT)/Lib/WebImage \
+				-I$(RISCOS_BUILD_EXPORT)/C \
+				$(BASE_INCS) -J$(RISCOS_BUILD_EXPORT)/Lib/CLib
+
+NCFRESCO_ANT_ASFLAGS=		-Ihdr
+NCFRESCO_BUILD_ASFLAGS=		-I$(RISCOS_BUILD_EXPORT)/Hdr/Global -I$(RISCOS_BUILD_EXPORT)/Hdr/Interface -I$(RISCOS_BUILD_EXPORT)/Hdr/Interface2
+NCFRESCO_ROM_ASFLAGS=		$(NCFRESCO_BUILD_ASFLAGS)
+NCFRESCO_RAM_ASFLAGS=		$(NCFRESCO_BUILD_ASFLAGS) -predefine "REMOVE_RAMLOAD_CHECK SETL {TRUE}"
+
+NCFRESCO_ANT_LDFLAGS=
+NCFRESCO_BUILD_LDFLAGS=
+NCFRESCO_ROM_LDFLAGS=	
+NCFRESCO_RAM_LDFLAGS=	
+
+NCFRESCO_VPATH=			../!NCFresco
+
+NCFRESCO_BASE_OBJS=		clipboard.o stbfe.o stbhist.o stbhots.o stbkeys.o stbmap.o \
+				stbevent.o stbmenu.o stbopen.o stbredraw.o stbstatus.o stbtb.o stbutils.o \
+				alarm.o sutil.o ncreg.o internal.o flex.o heap.o da.o \
+				$(SGML_OBJS) $(HTML_OBJS) $(COMM_OBJS)
+
+
+NCFRESCO_ANT_OBJS=		$(NCFRESCO_BASE_OBJS)
+NCFRESCO_BUILD_OBJS=		$(NCFRESCO_BASE_OBJS)
+NCFRESCO_ROM_OBJS=		$(NCFRESCO_BASE_OBJS) rolib.o ModuleWrap.o
+NCFRESCO_RAM_OBJS=		$(NCFRESCO_BASE_OBJS) ModuleWrap.o
+
+
+NCFRESCO_ANT_LIBS=		../webimage/webimage1
+
+NCFRESCO_BUILD_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1.o \
+				$(RISCOS_BUILD_EXPORT)/Lib/CLib/stubs.o \
+				$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/risc_oslib.o \
+				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/inetlib.o \
+				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/socklib.o \
+				$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlib.o
+
+NCFRESCO_ROM_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1.o \
+				$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/romcstubs.o \
+				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/inetlibzm.o \
+				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/socklibzm.o \
+				$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlibzm.o
+
+NCFRESCO_RAM_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1.o \
+				$(RISCOS_BUILD_EXPORT)/Lib/CLib/stubs.o \
+				$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/risc_oslibzm.o \
+				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/inetlibzm.o \
+				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/socklibzm.o \
+				$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlibzm.o
+
+# --------------------
+
+sr:		NCFRESCO_RISCOS
+
+NCFRESCO:	NCFRESCO_RISCOS
+
+NCFRESCO_DEPENDS:
+		cd ncfresco ; armdepend -M Makefile $(NCFRESCO_BUILD_CFLAGS) ../parser/*.c ../fresparse/*.c ../parser/*.c ../!NCFresco/*.c ../!NCFresco/*.s
+		@echo NCFresco dependencies generated
+
+# Export the NCFresco resources for ROM building
+
+NCFRESCO_BUILD_ROM_RESOURCES:
+		@-mkdir $(RISCOS_BUILD_RESOURCES)
+		@-mkdir $(RISCOS_BUILD_RESOURCES)/Resources
+		@-mkdir $(RISCOS_BUILD_RESOURCES)/Resources/NCFresco
+		@-mkdir $(RISCOS_BUILD_RESOURCES)/Apps
+		@-mkdir $(RISCOS_BUILD_RESOURCES)/Apps/!NCFresco
+		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/!Boot2,feb	$(NCFRESCO_BUILD_APPS)/!Boot,feb
+		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/!Run4,feb	$(NCFRESCO_BUILD_APPS)/!Run,feb
+		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/!Sprites4,ff9	$(NCFRESCO_BUILD_APPS)/!Sprites,ff9
+		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/Res,fae	$(NCFRESCO_BUILD_RESOURCES)
+		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/Sprites4,ff9	$(NCFRESCO_BUILD_RESOURCES)/Sprites,ff9
+		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/SetScrap,ffb	$(NCFRESCO_BUILD_RESOURCES)
+		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/Config	$(NCFRESCO_BUILD_RESOURCES)
+		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/Messages	$(NCFRESCO_BUILD_RESOURCES)
+		$(CP) $(CPOPTIONS) !NCFresco/Resources/UK/MimeMap	$(NCFRESCO_BUILD_RESOURCES)
+
+
+# This one is for NCFresco in the new style CVS controlled RISC OS build tree
+NCFRESCO_BUILD:		$(PREDEPS)
+		@echo "Making NCFRESCO for RISCOS in the build tree"
+		@-mkdir abs
+		@cd ./ncfresco; $(MAKE) NCFRESCO_RISCOS \
+		LIBS="$(NCFRESCO_BUILD_LIBS)" \
+		OBJS="$(NCFRESCO_BUILD_OBJS)" \
+		VPATH="$(NCFRESCO_VPATH):$(RISCOS_VPATH)" \
+		ASFLAGS="$(NCFRESCO_BUILD_ASFLAGS)" \
+		CFLAGS="$(NCFRESCO_BUILD_CFLAGS)" \
+		LDFLAGS="$(NCFRESCO_BUILD_LDFLAGS)"
+		$(POSTACTS)
+
+NCFRESCO_ROM:	$(PREDEPS)
+		@echo "Making NCFRESCO ROM version for RISCOS in the build tree"
+		@-mkdir aof
+		@cd ./ncfresco; $(MAKE) NCFRESCO_AOF \
+		LIBS="$(NCFRESCO_ROM_LIBS)" \
+		OBJS="$(NCFRESCO_ROM_OBJS)" \
+		VPATH="$(NCFRESCO_VPATH):$(RISCOS_VPATH)" \
+		CFLAGS="$(NCFRESCO_ROM_CFLAGS)" \
+		ASFLAGS="$(NCFRESCO_ROM_ASFLAGS)" \
+		LDFLAGS="$(NCFRESCO_ROM_LDFLAGS)"
+		$(POSTACTS) \
+		$(CP) $(CPOPTIONS) aof/ncfresco $(RISCOS_BUILD_OBJECTS)
+
+NCFRESCO_RISCOS:	$(PREDEPS)
+		@echo "Making NCFRESCO for RISCOS"
+		@cd ./ncfresco; $(MAKE) NCFRESCO_RISCOS \
+		LIBS="$(NCFRESCO_ANT_LIBS) $(RISCOS_LIBS)" \
+		OBJS="$(NCFRESCO_ANT_OBJS)" \
+		VPATH="$(NCFRESCO_VPATH):$(RISCOS_VPATH)" \
+		CFLAGS="$(NCFRESCO_ANT_CFLAGS) $(RISCOS_CFLAGS)" \
+		LDFLAGS="$(NCFRESCO_ANT_LDFLAGS)"
+		$(POSTACTS)
+
+
+NCFRESCO_NT:
+		@echo Making NCFRESCO on NT
+		@cd ncfresco_pc
+		@nmake /nologo /f Makepc NCFRESCO_PC \
+		LIBS="$(NCFRESCO_ANT_LIBS) $(RISCOS_LIBS)" \
+		OBJS="$(NCFRESCO_ANT_OBJS) $(RISCOS_OBJS)" \
+		VPATH="$(NCFRESCO_VPATH):$(RISCOS_VPATH)" \
+		CFLAGS="$(NCFRESCO_ANT_CFLAGS) $(RISCOS_CFLAGS)" \
+		LDFLAGS="$(NCFRESCO_ANT_LDFLAGS)" \
+		$(POSTACTS)
+
+NCFRESCO_RAM:	$(PREDEPS)
+		@echo "Making NCFRESCO module for RISCOS"
+		@cd ./ncfresco; $(MAKE) NCFRESCO_MODULE \
+		LIBS="$(NCFRESCO_RAM_LIBS)" \
+		OBJS="$(NCFRESCO_RAM_OBJS) $(RISCOS_OBJS)" \
+		VPATH="$(NCFRESCO_VPATH):$(RISCOS_VPATH)" \
+		CFLAGS="$(NCFRESCO_RAM_CFLAGS) $(RISCOS_CFLAGS)" \
+		ASFLAGS="$(NCFRESCO_RAM_ASFLAGS)" \
+		LDFLAGS="$(NCFRESCO_RAM_LDFLAGS)"
+		$(POSTACTS)
+
+ncfresco_srclist:
+		@for dir in fresparse parser commonsrc ./!NCFresco \
+		http ebftp webgopher webimage \
+		 ; do find $$dir -type f \
+		\( -name \*.h -o -name \*.c \) ; done > srclist
+
+NCFRESCO_TAGS:	ncfresco_srclist
+		@echo "Building emacs TAGS file for ncfresco"
+		@etags `cat srclist`
+		@$(RM) srclist
+
+# Create a fresh directory holding the items that constitute
+# a release. Rebuild from scratch every time to be certain
+# that lingering files such as cookies don't end up here.
+NCFRESCO_DIST:  NCFRESCO_BUILD
+		@echo "Building the NCFRESCO RELEASE directory"
+		-@$(RM) -r $(RELS)
+		-@mkdir $(REL)
+		@mkdir $(RELS)
+		@cp -p \!NCFresco/Resources/UK/\!Boot1,feb $(RELS)/\!Boot,feb
+		@cp -p \!NCFresco/Resources/UK/\!Run3,feb $(RELS)/\!Run,feb
+		@cp -p ./abs/ncfresco $(RELS)/\!RunImage,ff8
+		@cp -p \!NCFresco/Resources/UK/\!Sprites3,ff9 $(RELS)/\!Sprites,ff9
+		@cp -p \!NCFresco/Resources/UK/Res,fae $(RELS)
+		@cp -p \!NCFresco/Resources/UK/Sprites3,ff9 $(RELS)/Sprites,ff9
+		@cp -p \!NCFresco/Resources/UK/TileV,ff9 $(RELS)
+		@cp -p \!NCFresco/Resources/UK/TileN,ff9 $(RELS)
+		@cp -p \!NCFresco/Resources/UK/\!Help $(RELS)
+		@cp -p \!NCFresco/Resources/UK/MimeMap $(RELS)
+		@cp -p \!NCFresco/Resources/UK/Config $(RELS)
+		@cp -p \!NCFresco/Resources/UK/Messages $(RELS)
+		@cp -p \!NCFresco/Resources/UK/Help,faf $(RELS)
+		@cp -p \!NCFresco/Resources/UK/Welcome,faf $(RELS)
+		@cp -p \!NCFresco/Resources/UK/SetScrap,ffb $(RELS)
+
+		@chmod 644 $(RELS)/\!Help
+		@chmod 644 $(RELS)/MimeMap
+		@chmod 644 $(RELS)/Config
+		@chmod 644 $(RELS)/Messages
+
+		@echo ""
+		@echo "Built an Ncfresco release directory under $(REL)"
+		@echo ""
+		@echo "Please check this directory thoroughly before releasing it!"
+		@echo ""
+
+
+NCFRESCO_RELEASE: NCFRESCO_BUILD FIXL
+		@echo "Building NCFRESCO release pack"
+		@cp -pr $(RELS) ../release/browser
+		@./fixlicense ../release/browser/\!NCFresco/\!RunImage,ff8 1000000 "Acorn Network Computers Dev"
+		@cp -pr ../release/stbmods/* ../release/browser/\!NCFresco
+		@cd ../release ; tar cf ncfresco.tar browser
+		@gzip -f ../release/ncfresco.tar
+		@uuencode ../release/ncfresco.tar.gz ../release/ncfresco.tar.gz > ../release/ncfresco.tar.gz.uue
+		@echo "Done"
+
+NCFRESCO_TEST:	NCFRESCO_DIST
+		@echo "Installing NCFresco release on bungle"
+		@rcp -r RELEASE/\!NCFresco '$(NCFRESCO_TEST_DIR)/Apps'
+		@echo "Done"
+		@echo ""
+
+NCFRESCO_BINARIES:
+		@echo "packaging NCFresco binary resources"
+		@tar cvf ~/tmp/ncfrescobin.tar \!NCFresco/Resources/UK/*Sprites* \!NCFresco/Resources/UK/Res* \!NCFresco/Resources/UK/Messages
+		@gzip -f ~/tmp/ncfrescobin.tar
+		@uuencode ~/tmp/ncfrescobin.tar.gz ~/tmp/ncfrescobin.tar.gz > ~/tmp/ncfrescobin.tar.gz.uue
+
+# ========================================================================================================================
+
+
 
 # eof fresco/Makefile
 

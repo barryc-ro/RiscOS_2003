@@ -1453,7 +1453,7 @@ int frontend_internal_url(const char *path, const char *query, const char *bfile
 
 os_error *fe_open_version(fe_view v)
 {
-    fe_open_info(v, NULL, 0, 0);
+    fe_open_info(v, v->current_link, 0, 0);
     return NULL;
 }
 

@@ -306,7 +306,7 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
 	}
     }
 
-    STBDBG(("check referer '%s'\n", referer));
+    STBDBG(("check referer '%s'\n", strsafe(referer)));
 
     /* If it's the same page then just move the right point */
     if (referer) /*  && (flags & fe_open_url_NO_CACHE) == 0) */
