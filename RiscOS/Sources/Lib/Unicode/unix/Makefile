@@ -28,8 +28,7 @@ Objects =  autojp.o unictype.o \
 	enc_ascii.o \
 	enc_utf16.o \
 	enc_ucs4.o \
-	acorn.o \
-	combine.o
+	acorn.o
 
 ObjectsD =  autojp.od unictype.od \
 	utf8.od \
@@ -42,8 +41,7 @@ ObjectsD =  autojp.od unictype.od \
 	enc_ascii.od \
 	enc_utf16.od \
 	enc_ucs4.od \
-	acorn.od \
-	combine.od
+	acorn.od
 
 ObjectsZ =  autojp.oz unictype.oz \
 	utf8.oz \
@@ -56,8 +54,7 @@ ObjectsZ =  autojp.oz unictype.oz \
 	enc_ascii.oz \
 	enc_utf16.oz \
 	enc_ucs4.oz \
-	acorn.oz \
-	combine.oz
+	acorn.oz
 
 all: ucodelib
 
@@ -82,7 +79,6 @@ riscos_export: riscos_libs
 	@-cp -p ucodelibz $(RISCOS_BUILD_EXPORT)/Lib/Unicode/ucodelibz.o
 	@cp -p autojp.h $(RISCOS_BUILD_EXPORT)/Lib/Unicode/
 	@cp -p charsets.h $(RISCOS_BUILD_EXPORT)/Lib/Unicode/
-	@cp -p combine.h $(RISCOS_BUILD_EXPORT)/Lib/Unicode/
 	@cp -p unictype.h $(RISCOS_BUILD_EXPORT)/Lib/Unicode/
 	@cp -p encoding.h $(RISCOS_BUILD_EXPORT)/Lib/Unicode/
 	@cp -p iso10646.h $(RISCOS_BUILD_EXPORT)/Lib/Unicode/
@@ -108,11 +104,8 @@ unictype.c: ../data/UNIDATA2 mkunictype
 	echo Made unictype.c
 
 mkunictype: mkunictype.c
-	gcc -o mkunictype mkunictype.c
+	rsh starman 'cd /projects2/smiddle/renaissa/RiscOS/Sources/Lib/Unicode/unix ; cc -o mkunictype mkunictype.c'
 	echo Made mkunictype
-
-links: ; ./mklinks
-	echo made links
 
 # Do not faff with the following comment as Make looks for it explicitly:
 # Dynamic dependencies:

@@ -74,8 +74,7 @@ OBJS = autojp.o \
 	enc_ascii.o \
 	enc_utf16.o \
 	enc_ucs4.o \
-	acorn.o \
-	combine.o
+	acorn.o
 
 OBJSZ = \
 	oz.autojp \
@@ -90,8 +89,7 @@ OBJSZ = \
 	oz.enc_ascii \
 	oz.enc_utf16 \
 	oz.enc_ucs4 \
-	oz.acorn \
-	oz.combine
+	oz.acorn
 
 
 OBJSD = \
@@ -107,10 +105,9 @@ OBJSD = \
 	od.enc_ascii \
 	od.enc_utf16 \
 	od.enc_ucs4 \
-	od.acorn \
-	od.combine
+	od.acorn
 
-HDRS = autojp.h charsets.h encoding.h iso10646.h languages.h unictype.h utf8.h combine.h
+HDRS = autojp.h charsets.h encoding.h iso10646.h languages.h unictype.h utf8.h
 
 LIBS = ${TARGET} ${TARGETD} ${TARGETZ} 
 
@@ -142,9 +139,9 @@ install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
 clean:
-        ${WIPE} o ${WFLAGS}
-        ${WIPE} oz ${WFLAGS}
-        ${WIPE} od ${WFLAGS}
+        ${WIPE} o.* ${WFLAGS}
+        ${WIPE} oz.* ${WFLAGS}
+        ${WIPE} od.* ${WFLAGS}
         ${RM} ${COMPONENT}
         ${RM} ${COMPONENTZ}
         ${RM} ${COMPONENTD}
@@ -155,7 +152,6 @@ clean:
 export_hdrs: ${HDRS} dirs
 	${CP} h.autojp   ${UNICODELIBDIR}.h.* ${CPFLAGS}
 	${CP} h.charsets ${UNICODELIBDIR}.h.* ${CPFLAGS}
-	${CP} h.combine  ${UNICODELIBDIR}.h.* ${CPFLAGS}
 	${CP} h.encoding ${UNICODELIBDIR}.h.* ${CPFLAGS}
 	${CP} h.iso10646 ${UNICODELIBDIR}.h.* ${CPFLAGS}
 	${CP} h.languages ${UNICODELIBDIR}.h.* ${CPFLAGS}
