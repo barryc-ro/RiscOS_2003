@@ -71,6 +71,7 @@ typedef struct
     struct
     {
 	unsigned date, last_modified, expires;
+	int encoding;
     } header;
 } cache_item;
 
@@ -726,7 +727,7 @@ static void cache_update_size(char *cfile)
     }
 }
 
-static void cache_header_info(char *url, unsigned date, unsigned last_modified, unsigned expires)
+static void cache_header_info(char *url, unsigned date, unsigned last_modified, unsigned expires, int encoding)
 {
     cache_item *cc = cache_ptr_from_url(url, NULL);
     if (cc)
@@ -739,10 +740,12 @@ static void cache_header_info(char *url, unsigned date, unsigned last_modified, 
 	 */
 	if (expires != UINT_MAX)
 	    cc->header.expires = expires;
+
+	cc->header.encoding = encoding;
     }
 }
 
-static BOOL cache_get_header_info(char *url, unsigned *date, unsigned *last_modified, unsigned *expires)
+static BOOL cache_get_header_info(char *url, unsigned *date, unsigned *last_modified, unsigned *expires, int *encoding)
 {
     cache_item *cc = cache_ptr_from_url(url, NULL);
     if (cc)
@@ -753,6 +756,8 @@ static BOOL cache_get_header_info(char *url, unsigned *date, unsigned *last_modi
 	     *last_modified = cc->header.last_modified;
 	if (expires)
 	    *expires = cc->header.expires;
+	if (encoding)
+	    *encoding = cc->header.encoding;
 
 	return TRUE;
     }

@@ -1024,6 +1024,23 @@ extern void encoding_leaf_to_path(char *out, const char *leaf)
     PRSDBG(("encoding_leaf_to_path: path '%s' leaf '%s' out '%s'\n", config_encoding_path, leaf, out));
 }
 
+extern int parse_content_type_header(const char *value)
+{
+    static const char *tags[] = { "CHARSET", 0 };
+    name_value_pair output[1];
+    char *s = strdup(value);
+    int encoding = 0;
+		    
+    parse_http_header(s, tags, output, sizeof(output)/sizeof(output[0]));
+
+    if (output[0].value)
+	encoding = encoding_number_from_name(output[0].value);
+    
+    mm_free(s);
+
+    return encoding;
+}
+
 #endif
 
 /*****************************************************************************/

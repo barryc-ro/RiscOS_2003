@@ -276,7 +276,7 @@ static void misc_event_handler(int event, fe_view v)
 	break;
 
     case fevent_STOP_LOADING:
-	frontend_complain(fe_abort_fetch(v));
+	frontend_complain(fe_abort_fetch(v, FALSE));
 	break;
 
     case fevent_HOME:
@@ -358,7 +358,7 @@ static void misc_event_handler(int event, fe_view v)
 	if (fe_internal_check_popups(event & fevent_CLEAR_POPUPS))
 	{
 	    if (fe_abort_fetch_possible(v))
-		frontend_complain(fe_abort_fetch(v));
+		frontend_complain(fe_abort_fetch(v, FALSE));
 	    else
 		frontend_complain(fe_reload(v));
 	}
@@ -534,10 +534,13 @@ static void focus_event_handler(int event, fe_view v)
 {
     switch (event &~ fevent_CLEAR_POPUPS)
     {
-        case fevent_GIVE_FOCUS:
-            break;
-        case fevent_REMOVE_FOCUS:
-            break;
+    case fevent_USER_UNLOAD:
+	fe_user_unload();
+	break;
+
+    case fevent_USER_LOAD:
+	fe_user_load();
+	break;
     }
 }
 

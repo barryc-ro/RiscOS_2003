@@ -79,7 +79,7 @@ void otext_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 #else /* BUILDERS */
     int whichfont;
     struct webfont *wf;
-    const char *s;
+    char *s;
 
     flexmem_noshift();		/* no shift whilst accessing text array */
 
@@ -120,8 +120,8 @@ void otext_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	int len;
 
 	/* set font and read width */
-/* 	flags = doc->encoding != be_encoding_LATIN1 && (ti->flag & rid_flag_WIDE_FONT) ? 1<<12 : 0; */
-	flags = (1<<8) | (1<<7);		/* use font handle, use length */
+/* 	font_setfont(wf->handle); */
+	flags |= (1<<8)/*  | (1<<7) */;
 
 	_swix(Font_ScanString, _INR(0,7) | _OUT(3),
 	      wf->handle, s, flags,
@@ -129,17 +129,26 @@ void otext_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	      NULL, NULL, str_len,
 	      &width1);
 
-	len = str_len;
-	while (len && s[len-1] == ' ')
-	    len--;
+	if (flags & (1<<12))
+	{
+	    width2 = width1;
+	}
+	else
+	{
+	    flags |= 1<<7;
 
-	/* read width again without added spaces */
-	_swix(Font_ScanString, _INR(0,7) | _OUT(3),
-	      wf->handle, s, flags,
-	      INT_MAX, INT_MAX,
-	      NULL, NULL, len,
-	      &width2);
+	    len = str_len;
+	    while (len && s[len-1] == ' ')
+		len--;
 
+	    /* read width again without added spaces */
+	    _swix(Font_ScanString, _INR(0,7) | _OUT(3),
+		  wf->handle, s, flags,
+		  INT_MAX, INT_MAX,
+		  NULL, NULL, len,
+		  &width2);
+	}
+	
 	ti->width = (width2 + MILIPOINTS_PER_OSUNIT/2) / MILIPOINTS_PER_OSUNIT;
 	ti->pad = (width1 + MILIPOINTS_PER_OSUNIT/2) / MILIPOINTS_PER_OSUNIT - ti->width;
 #endif
@@ -263,22 +272,22 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
     }
 
 #if DEBUG_ITEMS
-    bbc_move( hpos, b - ti->max_down );
-    bbc_drawby( ti->width, ti->max_up + ti->max_down );
+    render_set_colour(0x0000ff00 | render_colour_RGB, doc);
+    bbc_rectangle( hpos, b - ti->max_down, ti->width, ti->max_up + ti->max_down);
 #endif
 
     flexmem_noshift();
 
-    RENDBG(("otext_redraw: fg %08x bg %08x text '%s' vlink=%08x - %08x\n", tfc, tbc, rh->texts.data + tit->data_off, doc->rh->colours.vlink, render_get_colour(render_colour_CREF, doc).word));
+    RENDBG(("otext_redraw: fg %08x bg %08x text '%s' w %d vlink=%08x - %08x\n", tfc, tbc, rh->texts.data + tit->data_off, ti->width, doc->rh->colours.vlink, render_get_colour(render_colour_CREF, doc).word));
 
 #if 0
     dump_data(rh->texts.data + tit->data_off, strlen(rh->texts.data + tit->data_off));
 #endif
 
     no_text = !render_text(doc, rh->texts.data + tit->data_off, hpos, b);
+
     if (ti->pad)
 	no_text = FALSE;
-
     flexmem_shift();
 
 #ifdef STBWEB

@@ -402,6 +402,10 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
 
     parent->threaded++;
 
+    /* Abort the current fetch before getting the new page */
+    if ((flags & fe_open_url_FROM_FRAME) == 0)
+	fe_abort_fetch(parent, TRUE);
+    
     STBDBG(("frontend_open_url: backend IN transient %d\n", parent->open_transient));
     ep = backend_open_url(parent, &parent->fetching, url, bfile, flags & fe_open_url_NO_REFERER ? NULL : referer, oflags);
     STBDBG(("frontend_open_url: backend OUT fetching %p error %x\n", parent->fetching, ep ? ep->errnum : 0));

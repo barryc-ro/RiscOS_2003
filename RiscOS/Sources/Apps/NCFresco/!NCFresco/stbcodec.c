@@ -150,7 +150,7 @@ void codec_event_handler(int event, fe_view v)
 
     case fevent_CODEC_STOP_PAGE:
 	if (fe_abort_fetch_possible(v))
-	    frontend_complain(fe_abort_fetch(v));
+	    frontend_complain(fe_abort_fetch(v, FALSE));
 	else
 	{
 	    send_action(v, plugin_state_STOP);

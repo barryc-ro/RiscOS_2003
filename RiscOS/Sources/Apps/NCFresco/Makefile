@@ -844,7 +844,7 @@ NCFRESCO_REL_OBJS=		$(NCFRESCO_BASE_OBJS) rlib_alloc.o
 
 NCFRESCO_ANT_LIBS=		../webimage/webimage1
 
-NCFRESCO_BUILD_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1ff.o \
+NCFRESCO_BUILD_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1da.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/CLib/stubs.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/risc_oslib.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/inetlib.o \
@@ -861,7 +861,8 @@ NCFRESCO_REL_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1da.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/risc_oslib.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/inetlib.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/socklib.o \
-				$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlib.o
+				$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlib.o \
+				$(RISCOS_BUILD_EXPORT)/Lib/Unicode/ucodelib.o
 
 NCFRESCO_ROM_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1da.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/romcstubs.o \
@@ -917,7 +918,9 @@ NCFRESCO_BUILD_ROM_EXPORT:
 		find Resources/Common/UK $(FINDOPTIONS) -exec $(CP) $(CPOPTIONS) {} $(RISCOS_BUILD_RESOURCES)/Common/UK/ \;
 		find Resources/RCA/UK $(FINDOPTIONS) -exec $(CP) $(CPOPTIONS) {} $(RISCOS_BUILD_RESOURCES)/RCA/UK/ \;
 		find Resources/NC2/UK $(FINDOPTIONS) -exec $(CP) $(CPOPTIONS) {} $(RISCOS_BUILD_RESOURCES)/NC2/UK/ \;
-		$(CP) $(CPOPTIONS) aof/ncfresco				$(RISCOS_BUILD_OBJECTS)
+		find Resources/CM/UK $(FINDOPTIONS) -exec $(CP) $(CPOPTIONS) {} $(RISCOS_BUILD_RESOURCES)/Peregrine2/UK/ \;
+		-$(CP) $(CPOPTIONS) aof/ncfresco			$(RISCOS_BUILD_OBJECTS)
+		-$(CP) $(CPOPTIONS) aof/ncf_flash			$(RISCOS_BUILD_OBJECTS)
 		$(CP) $(CPOPTIONS) commonsrc/plugin.h			$(RISCOS_BUILD_HEADERS)/plugin
 
 # NCFresco application in the new style CVS controlled RISC OS build tree
@@ -956,6 +959,19 @@ NCFRESCO_ROM:	$(PREDEPS)
 		VPATH="$(NCFRESCO_VPATH):$(RISCOS_VPATH)" \
 		CFLAGS="$(NCFRESCO_ROM_CFLAGS)" \
 		ASFLAGS="$(NCFRESCO_ROM_ASFLAGS)" \
+		LDFLAGS="$(NCFRESCO_ROM_LDFLAGS)"
+		$(POSTACTS) \
+
+# NCFresco ROM aof file in the new style CVS controlled RISC OS build tree
+NCFRESCO_FLASH:	$(PREDEPS)
+		@echo "Making NCFRESCO Flash version for RISCOS in the build tree"
+		@-mkdir aof
+		@cd ./ncfresco_zm; $(MAKE) NCFRESCO_FLASH \
+		LIBS="$(NCFRESCO_ROM_LIBS)" \
+		OBJS="$(NCFRESCO_ROM_OBJS)" \
+		VPATH="$(NCFRESCO_VPATH):$(RISCOS_VPATH)" \
+		CFLAGS="$(NCFRESCO_ROM_CFLAGS)" \
+		ASFLAGS="$(NCFRESCO_RAM_ASFLAGS)" \
 		LDFLAGS="$(NCFRESCO_ROM_LDFLAGS)"
 		$(POSTACTS) \
 

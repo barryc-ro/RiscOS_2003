@@ -147,34 +147,23 @@ extern void startmeta (SGMLCTX * context, ELEMENT * element, VALUES * attributes
 	/* only set encoding from here if not set by HTTP header or user */
 	if (strcasecomp((m->httpequiv ? m->httpequiv : m->name), "CONTENT-TYPE") == 0)
 	{
-	    static const char *tags[] = { "CHARSET", 0 };
-	    name_value_pair output[1];
-	    char *s = strdup(m->content);		    
-		    
-	    parse_http_header(s, tags, output, sizeof(output)/sizeof(output[0]));
+	    int encoding = parse_content_type_header(m->content);
 
-	    if (output[0].value)
+	    if (me->rh->encoding_source == rid_encoding_source_USER)
 	    {
-		int encoding = encoding_number_from_name(output[0].value);
-		
-		if (me->rh->encoding_source == rid_encoding_source_USER)
-		{
-		    /* write value into the rid header */
-		    me->rh->encoding = encoding;
-		    me->rh->encoding_source = rid_encoding_source_META;
+		/* write value into the rid header */
+		me->rh->encoding = encoding;
+		me->rh->encoding_source = rid_encoding_source_META;
 
-		    DBG(("set_encoding META %d\n", encoding));
+		DBG(("set_encoding META %d\n", encoding));
 		
-		    /* set stream to have encoding updated */
-		    sgml_set_encoding(context, encoding);
-		}
-		else
-		{
-		    DBG(("set_encoding META %d ignored\n", encoding));
-		}
+		/* set stream to have encoding updated */
+		sgml_set_encoding(context, encoding);
 	    }
-
-	    mm_free(s);
+	    else
+	    {
+		DBG(("set_encoding META %d ignored\n", encoding));
+	    }
 	}
 #endif
     }

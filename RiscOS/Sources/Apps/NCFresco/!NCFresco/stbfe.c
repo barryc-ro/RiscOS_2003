@@ -174,6 +174,9 @@
 #define Service_SmartCard		0xBA
 #define smartcard_INSERTED		0x01
 
+#define Service_Standby			0xAD
+#define standby_SHUTDOWN		0x01
+
 #define KeyWatch_Register		0x4E940
 #define KeyWatch_Unregister		0x4E941
 
@@ -1888,7 +1891,7 @@ int fe_check_download_finished(fe_view v)
 	    }
 #endif
 	    if (strncmp(top->name, TARGET_DBOX, sizeof(TARGET_DBOX)-1) == 0)
-		pointer_limit(top->box.x0, top->box.y0, top->box.x1, top->box.y1);
+		pointer_limit(top->box.x0, top->box.y0, top->box.x1-frontend_dx, top->box.y1-frontend_dy);
 	}
 	else
 	{
@@ -2808,28 +2811,32 @@ int fe_abort_fetch_possible(fe_view v)
 
 static os_error *fe__abort_fetch(fe_view v, void *handle)
 {
+    BOOL quiet = (BOOL)handle;
     os_error *e = NULL;
     if (v->fetching)
     {
 	backend_dispose_doc(v->fetching);
 	v->fetching = NULL;
 
-	frontend_view_status(v, sb_status_ABORTED);
+	if (!quiet)
+	    frontend_view_status(v, sb_status_ABORTED);
     }
     else if (v->displaying)
     {
         e = backend_doc_abort(v->displaying);
 
-	frontend_view_status(v, sb_status_ABORTED);
+	if (!quiet)
+	    frontend_view_status(v, sb_status_ABORTED);
     }
     return e;
     handle = handle;
 }
 
-os_error *fe_abort_fetch(fe_view v)
+os_error *fe_abort_fetch(fe_view v, BOOL quiet)
 {
-    sound_event(snd_ABORT);
-    return iterate_frames(v, fe__abort_fetch, NULL);
+    if (!quiet)
+	sound_event(snd_ABORT);
+    return iterate_frames(v, fe__abort_fetch, (void *)quiet);
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -4992,6 +4999,32 @@ static int offer_window_focus_handler(wimp_w w, int flags)
 
 /* ------------------------------------------------------------------------------------------- */
 
+void fe_user_unload(void)
+{
+    BOOL toolbar = tb_is_status_showing();
+
+    STBDBG(("fe_user_unload:\n"));
+    
+    /* on a shutdown flush the cache and stuff */
+    re_read_config(ncfresco_loaddata_NOT_ALL | ncfresco_loaddata_FLUSH);
+
+    fe_status_unstack_all();
+
+    /* this ensures that when we come out of standby the toolbar is as when we left it */
+    if (!toolbar)
+	tb_status_hide(FALSE);
+}
+
+void fe_user_load(void)
+{
+    STBDBG(("fe_user_load:\n"));
+
+    /* flush and reload everything */
+    re_read_config(0);
+}
+
+/* ------------------------------------------------------------------------------------------- */
+
 /*
  * I can't do anything useful here as PREQUIT is sent before the user confirms it.
  */
@@ -5179,7 +5212,9 @@ static void fe_handle_service_message(wimp_msgstr *msg)
 	int delta = r->r[4];
 	if (delta == -1)
 	{			/* smartcard removed */
-	    fe_dbox_cancel();
+	    if (config_event_smartcard_out)
+		fevent_handler(config_event_smartcard_out, 0);
+	    break;
 #if 0
 	    fe_history_dispose(main_view);
  	    fe_global_history_dispose();
@@ -5193,28 +5228,33 @@ static void fe_handle_service_message(wimp_msgstr *msg)
 	    plugin_list_dispose();
 #endif
 	}
+
 	else if (delta & smartcard_INSERTED)
 	{			/* smartcard inserted */
+	    if (config_event_smartcard_in)
+		fevent_handler(config_event_smartcard_in, 0);
 	}
 	break;
     }
 
-    case Service_ShutdownComplete:
+    case Service_Standby:
     {
-	BOOL toolbar = tb_is_status_showing();
-
-	/* on a shutdown flush the cache and stuff */
-	re_read_config(ncfresco_loaddata_NOT_ALL | ncfresco_loaddata_FLUSH);
-
-	fe_status_unstack_all();
-
-	/* this ensures that when we come out of standby the toolbar is as when we left it */
-	if (!toolbar)
-	    tb_status_hide(FALSE);
+	int flags = r->r[0];
+	STBDBG(("service_standby: flags %08x event %x\n", flags, config_event_standby_out));
+	if ((flags & standby_SHUTDOWN) == 0)
+	    if (config_event_standby_out)
+		fevent_handler(config_event_standby_out, 0);
 	break;
     }
 
+    case Service_ShutdownComplete:
+	if (config_event_standby_in)
+	    fevent_handler(config_event_standby_in, 0);
+	break;
+    
 #if 0
+    /* This is defined out because the feature has flaws relating to
+       accessing strings and so isn't implemented in the NVRAM module */
     case Service_NVRAM:
     {
 	int reason = r->r[0];
@@ -5814,7 +5854,7 @@ static void fe_tidyup(void)
 #endif
     _swix(TaskModule_DeRegisterService, _INR(0,2), 0, Service_SmartCard, task_handle);
     _swix(TaskModule_DeRegisterService, _INR(0,2), 0, Service_ShutdownComplete, task_handle);
-/*     _swix(TaskModule_DeRegisterService, _INR(0,2), 0, Service_NVRAM, task_handle); */
+    _swix(TaskModule_DeRegisterService, _INR(0,2), 0, Service_Standby, task_handle);
 
     /* disable keywatch stuff */
     if (keywatch_pollword)
@@ -6101,8 +6141,8 @@ static BOOL fe_initialise(void)
 	e = (os_error *)_swix(TaskModule_RegisterService, _INR(0,2), 0, Service_SmartCard, task_handle);
     if (!e)
 	e = (os_error *)_swix(TaskModule_RegisterService, _INR(0,2), 0, Service_ShutdownComplete, task_handle);
-/*     if (!e) */
-/* 	e = (os_error *)_swix(TaskModule_RegisterService, _INR(0,2), 0, Service_NVRAM, task_handle); */
+    if (!e)
+	e = (os_error *)_swix(TaskModule_RegisterService, _INR(0,2), 0, Service_Standby, task_handle);
 #if DEBUG
     if (e)
     {

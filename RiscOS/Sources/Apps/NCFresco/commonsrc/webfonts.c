@@ -186,7 +186,7 @@ os_error *webfonts_initialise( void )
 	e = NULL;
     }
 #endif
-    
+
     return e;
 }
 
@@ -504,7 +504,7 @@ void webfont_set_wide_format(int fh)
     static char format[] =
     {
 	0,			/* latin1 */
-	0,			/* utf8 */
+	12,			/* utf8 */
 	0,			/* unicode */
 	1,			/* sjis */
 	3,			/* euc */

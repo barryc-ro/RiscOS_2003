@@ -3284,6 +3284,14 @@ static void antweb_doc_progress2(void *h, int status, int size, int so_far, int 
 	    if (config_encoding_user_override)
 		encoding_source = rid_encoding_source_USER_FIXED;
 	    else
+#if 0
+	    {
+		int enc = access_get_encoding(doc->ah);
+		if (enc)
+		{
+		    encoding = 
+		}
+#endif
 	    {
 		http_header_item *list = access_get_headers(doc->ah);
 	    
@@ -3291,21 +3299,11 @@ static void antweb_doc_progress2(void *h, int status, int size, int so_far, int 
 		{
 		    if (strcasecomp(list->key, "CONTENT-TYPE") == 0)
 		    {
-			static const char *tags[] = { "CHARSET", 0 };
-			name_value_pair output[1];
-			char *s = strdup(list->value);		    
-		    
-			parse_http_header(s, tags, output, sizeof(output)/sizeof(output[0]));
+			int encoding = parse_content_type_header(list->value);
+			encoding_source = rid_encoding_source_HTTP;
 
-			if (output[0].value)
-			{
-			    encoding = encoding_number_from_name(output[0].value);
-			    encoding_source = rid_encoding_source_HTTP;
+			DBG(("set_encoding HTTP %d\n", encoding));
 
-			    DBG(("set_encoding HTTP %d\n", encoding));
-			}
-			
-			mm_free(s);
 			break;
 		    }
 		}

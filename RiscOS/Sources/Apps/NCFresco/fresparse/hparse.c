@@ -296,11 +296,13 @@ static SGMLCTX * SGML_new(HTMLCTX *me, int encoding)
 
 #if UNICODE
     /* initialiase encoding to what's decided in HTML init, this value will come from user or HTTP header */
+    PRSDBG(("set_encoding: encoding set to %d\n", me->rh->encoding));
     context->encoding = encoding_new(me->rh->encoding, FALSE);
 
     /* be safe - if can't load encoding then use ASCII - guaranteed to work */
     if (context->encoding == NULL)
     {
+	PRSDBG(("set_encoding: default to ASCII\n"));
 	me->rh->encoding = csASCII;
 	context->encoding = encoding_new(me->rh->encoding, FALSE);
     }
@@ -310,22 +312,38 @@ static SGMLCTX * SGML_new(HTMLCTX *me, int encoding)
     /* initialiase autodetect routines */
     if (encoding == csAutodetectJP)
     {
+	PRSDBG(("set_encoding: jp autodetect enabled\n"));
 	context->autodetect.state = autojp_state_INIT;
 	context->autodetect.enc_num = csAutodetectJP;
     }
 
     /* select format to store in internally */
-    switch (config_encoding_internal)
     {
-    case 0:
-	context->encoding_write = encoding_new(csAcornLatin1, TRUE);
-	break;
-    case 3:
-	context->encoding_write = encoding_new(csShiftJIS, TRUE);
-	break;
-    case 4:
-	context->encoding_write = encoding_new(csEUCPkdFmtJapanese, TRUE);
-	break;
+	int enc = 0;
+	switch (config_encoding_internal)
+	{
+	case 0:
+	    enc = csAcornLatin1;
+	    break;
+	case 3:
+	    enc = csShiftJIS;
+	    break;
+	case 4:
+	    enc = csEUCPkdFmtJapanese;
+	    break;
+	}
+
+	PRSDBG(("set_encoding: write encoding set to %d\n", enc));
+	
+	if (enc)
+	    context->encoding_write = encoding_new(enc, TRUE);
+    }
+
+    if ((config_encoding_internal == 0 || config_encoding_internal == 3 || config_encoding_internal == 4) &&
+	context->encoding_write == NULL)
+    {
+	PRSDBG(("set_encoding: write encoding default to ASCII\n"));
+	context->encoding_write = encoding_new(csASCII, TRUE);
     }
 #endif
     

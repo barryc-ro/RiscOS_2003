@@ -80,6 +80,9 @@ extern void sgml_set_encoding(SGMLCTX *context, int enc_num)
 
 	context->enc_num = enc_num;
 	context->encoding = encoding_new(enc_num, FALSE);
+
+	/* inform htmlparser that the encoding has changed */
+	
     }
 }
 
@@ -265,8 +268,13 @@ extern void sgml_stream_finished (SGMLCTX *context)
         PRSDBG(("Recovering in %s\n", get_state_name (context->state)));
 
 #if UNICODE
-	/* kill current encoding and restart as Unicode11 (UCS2) - don't record this change anywhere */
-	sgml_set_encoding(context, csUnicode11);
+	/* kill current encoding and restart as Unicode11 (UCS2) - we
+	 * don't want record this change anywhere as we are not really
+	 * changin encoding - so we do the encoding change by hand
+	 */
+	if (context->encoding)
+	    encoding_delete(context->encoding);
+	context->encoding = encoding_new(csUnicode11, FALSE);
 #endif
 
         sgml_feed_characters (context, (char *)&context->inhand.data [context->comment_anchor], stream_end - context->comment_anchor);
@@ -329,6 +337,8 @@ extern void sgml_free_context(SGMLCTX *context)
     free_buffer((UBUFFER *)&context->autodetect.inhand);
     if (context->encoding)
 	encoding_delete(context->encoding);
+    if (context->encoding_write)
+	encoding_delete(context->encoding_write);
 #endif
     
     mm_free(context);

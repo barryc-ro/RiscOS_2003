@@ -47,6 +47,7 @@ static void colspan_algorithmLR(rid_table_item *table, int slot, BOOL horiz)
     pcp_cell the_cells = table->colspans;
 
     TASSERT (max > 0);
+    TASSERT (the_cells != 0);
 
     /* do a left-to-right pass trying to set leftmosts */
     
@@ -107,6 +108,7 @@ static void colspan_algorithmRL(rid_table_item *table, int slot, BOOL horiz)
     pcp_cell the_cells = table->colspans;
 
     TASSERT (max > 0);
+    TASSERT (the_cells != 0);
 
     /* now do a right-to-left pass trying to set rightmosts */
     /* NB we count rightmosts downwards from 0 = rhs and then add the
@@ -165,7 +167,11 @@ extern int colspan_algorithm(rid_table_item *table, int slot, BOOL horiz)
     if (max == 0)
 	return 0;
 
+    /* SJM: don't know why this happens but it did */
+    if (the_cells == 0)
+	return 0;
 
+ 
     colspan_algorithmLR(table, slot, horiz);
 
     colspan_algorithmRL(table, slot, horiz);

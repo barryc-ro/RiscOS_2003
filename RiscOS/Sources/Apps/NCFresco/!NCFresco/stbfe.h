@@ -68,7 +68,7 @@ extern os_error *fe_print(fe_view v, int size);
 extern const char *fe_printer_name(void);
 
 extern int fe_abort_fetch_possible(fe_view v);
-extern os_error *fe_abort_fetch(fe_view v);
+extern os_error *fe_abort_fetch(fe_view v, BOOL quiet);
 
 extern int fe_doc_flag_state(fe_view v, int flags);
 extern os_error *fe_doc_flag_toggle(fe_view v, int flags);
@@ -152,6 +152,9 @@ extern int movepointer(void);
 extern void fe_no_new_page(fe_view v, os_error *e);
 extern void fe_ensure_highlight_after_fetch(fe_view v);
 extern BOOL fe_check_autoscroll(fe_view v, const wimp_mousestr *mp);
+
+extern void fe_user_unload(void);
+extern void fe_user_load(void);
 
 /* From internal.h */
 

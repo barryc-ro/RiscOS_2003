@@ -231,6 +231,7 @@ static int image_thread_data_more;
 static int image_thread_data_status;
 static int do_memory_panic = FALSE;
 static int disallow_memory_panic = 0;
+static int in_image_find = 0;
 
 /* extern for use of NCFresco frontend */
 int spriteextend_version;
@@ -446,8 +447,8 @@ static void image_put_bytes(char *buf, int buf_len, void *h)
 
     if ( (i->put_offset + buf_len)  > i->our_area->size)
     {
-	usrtrc( "Too much image data: %x + %x > %x\n",
-		i->put_offset, buf_len, i->our_area->size);
+	usrtrc( "i%p: Too much image data: %x + %x > %x\n",
+		i, i->put_offset, buf_len, i->our_area->size);
     }
     else
     {
@@ -1033,10 +1034,16 @@ static void image_set_error(image i)
 {
     IMGDBG(("im%p: in set_error\n", i));
     i->flags |= (image_flag_ERROR | image_flag_CHANGED);
-    i->flags &= ~image_flag_RENDERABLE;
+    i->flags &= ~image_flag_RENDERABLE | image_flag_REALTHING;
 
     set_default_image(i, SPRITE_NAME_ERROR, FALSE);
     free_pt(i);
+
+    if (i->cfile)
+    {
+	mm_free(i->cfile);
+	i->cfile = NULL;
+    }
 }
 
 static void image_issue_callbacks(image i, int changed, wimp_box *box)
@@ -1164,7 +1171,8 @@ static access_complete_flags image_completed(void *h, int status, char *cfile, c
 
     fetching_dec(i);
 
-    image_fetch_next();
+    if (!in_image_find)
+	image_fetch_next();
 
     if (i->magic != IMAGE_MAGIC)
 	return 0;
@@ -1589,6 +1597,7 @@ os_error *image_find(char *url, char *ref, int flags, image_callback cb, void *h
 
     if (i)
     {
+	IMGDBG(("im%p: inc use %d Asked to find image '%s'\n", i, i->use_count, url));
 	i->use_count++;
 	if ((flags & image_find_flag_DEFER) == 0 &&
 	    (i->flags & image_flag_DEFERRED) != 0 )
@@ -1598,7 +1607,7 @@ os_error *image_find(char *url, char *ref, int flags, image_callback cb, void *h
     }
     else
     {
-	IMGDBG(("Making new image\n"));
+	IMGDBG(("im%p: Making new image\n", i));
 
 	i = image_alloc(sizeof(*i));
 	if (!i)
@@ -1701,6 +1710,8 @@ os_error *image_find(char *url, char *ref, int flags, image_callback cb, void *h
 		/* If the file is already around then we don't care if it was deferred, do we? */
 		i->flags &= ~(image_flag_WAITING | image_flag_DEFERRED);
 
+		in_image_find++;
+    
 		ep = access_url( url,
 				 (flags & image_find_flag_NEED_SIZE ? access_IMAGE : 0) |
 				 (flags & image_find_flag_URGENT ? access_MAX_PRIORITY : 0),
@@ -1714,6 +1725,8 @@ os_error *image_find(char *url, char *ref, int flags, image_callback cb, void *h
 
 		    fetching_dec(i);
 		}
+
+		in_image_find--;
 	    }
 	}
 	else
@@ -1950,7 +1963,7 @@ os_error *image_loose(image i, image_callback cb, void *h)
 	return makeerror(ERR_BAD_IMAGE_HANDLE);
     }
 
-    IMGDBG(("Loose image called: '%s', use count %d\n", i->url ? i->url : "", i->use_count));
+    IMGDBG(("im%p: Loose image called: '%s', use count %d\n", i, i->url ? i->url : "", i->use_count));
 
     link = &(i->cblist);
     cbs = i->cblist;
@@ -2003,7 +2016,7 @@ os_error *image_loose(image i, image_callback cb, void *h)
 	    }
 	    else
 	    {
-		IMGDBG(("Unkeeping the file\n"));
+		IMGDBG(("im%p: Unkeeping the file %s\n", i, i->url));
 
 		access_unkeep(i->url);
 	    }
@@ -2179,7 +2192,7 @@ os_error *image_flush(image i, int flags)
 	}
 	else
 	{
-	    IMGDBG(("Unkeeping the file\n"));
+	    IMGDBG(("im%p: Unkeeping the file: '%s'\n", i, i->url));
 
 	    access_unkeep(i->url);
 	}
@@ -2194,7 +2207,7 @@ os_error *image_flush(image i, int flags)
 
     /* pdh: moved this outside the above if */
     i->flags |= image_flag_TO_RELOAD | image_flag_WAITING;
-    i->flags &= ~image_flag_RENDERABLE;
+    i->flags &= ~(image_flag_RENDERABLE | image_flag_REALTHING);
 
     /* If we already have the image then dispose of it */
     /* SJM: add or ->data_area so that JPEGs can be reloaded */
@@ -2324,7 +2337,7 @@ os_error *image_expire(image i)
 
     IMGDBGN(("image: expire %p\n", i));
 
-    access_set_header_info(i->url, 1, 0, 0); /* date > expires */
+    access_set_header_info(i->url, 1, 0, 0, 0); /* date > expires */
 
     return NULL;
 }
@@ -3779,7 +3792,7 @@ int image_average_colour(image i)
 
     IMGDBG(("Calculating average colour\n"));
 
-    if (i == NULL || i->magic != IMAGE_MAGIC || i->plotter != plotter_SPRITE)
+    if (i == NULL || i->magic != IMAGE_MAGIC || i->plotter != plotter_SPRITE || (i->flags & image_flag_RENDERABLE) == 0)
 	return (int) config_colours[render_colour_BACK].word;
 
     flexmem_noshift();

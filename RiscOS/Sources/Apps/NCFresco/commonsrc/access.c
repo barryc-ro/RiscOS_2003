@@ -175,6 +175,7 @@ typedef struct _access_item {
 	    unsigned last_modified;	/* from headers */
 	    unsigned expires;		/* from headers */
 	    unsigned date;		/* from headers */
+	    int encoding;		/* from headers */
 #if SSL_UI
 	    struct
 	    {
@@ -1474,7 +1475,7 @@ static void access_http_fetch_done(access_handle d, http_status_args *si)
             cache->update_size(cfile);
 
 	if (cache->header_info)
-	    cache->header_info(d->url, d->data.http.date, d->data.http.last_modified, d->data.http.expires);
+	    cache->header_info(d->url, d->data.http.date, d->data.http.last_modified, d->data.http.expires, d->data.http.encoding);
     }
 
     mm_free(cfile);
@@ -1715,6 +1716,12 @@ static void access_http_fetch_alarm(int at, void *h)
 		{
 		    d->data.http.date = (unsigned)HTParseTime(list->value);
 		}
+#if UNICODE
+		else if (strcasecomp("CONTENT-TYPE", list->key) == 0)
+		{
+		    d->data.http.encoding = parse_content_type_header(list->value);
+		}
+#endif
 	    }
 
 
@@ -2422,7 +2429,7 @@ static BOOL access_file_fetch(access_handle d)
 #ifndef FILEONLY
 	/* only update the header info if this is a file: read, not from the cache */
 	if ((d->flags & access_FROM_CACHE) == 0 && cache->header_info)
-	    cache->header_info(d->url, time(NULL), d->data.file.last_modified, UINT_MAX);
+	    cache->header_info(d->url, time(NULL), d->data.file.last_modified, UINT_MAX, 0);
 #endif
 	d->complete(d->h, status_COMPLETED_FILE, d->ofile ? d->ofile : d->data.file.fname, d->url);
 
@@ -2916,7 +2923,7 @@ static void access_internal_fetch_alarm(int at, void *h)
 	if (cache->header_info)
 	{
 	    unsigned now = (unsigned)time(NULL);
-	    cache->header_info(d->url, now, now, 0);
+	    cache->header_info(d->url, now, now, 0, 0);
 	}
     }
 
@@ -4016,20 +4023,20 @@ void access_flush_cache(void)
 #endif
 
 #ifdef STBWEB
-void access_set_header_info(char *url, unsigned date, unsigned last_modified, unsigned expires)
+void access_set_header_info(char *url, unsigned date, unsigned last_modified, unsigned expires, int encoding)
 {
 #ifndef FILEONLY
     if (cache->header_info)
-	cache->header_info(url, date, last_modified, expires);
+	cache->header_info(url, date, last_modified, expires, encoding);
 #endif
 }
 #endif
 
-BOOL access_get_header_info(char *url, unsigned *date, unsigned *last_modified, unsigned *expires)
+BOOL access_get_header_info(char *url, unsigned *date, unsigned *last_modified, unsigned *expires, int *encoding)
 {
 #ifndef FILEONLY
     if (cache->get_header_info)
-	return cache->get_header_info(url, date, last_modified, expires);
+	return cache->get_header_info(url, date, last_modified, expires, encoding);
 #endif
     return FALSE;
 }

@@ -692,7 +692,6 @@ int render_text(be_doc doc, const char *text, int x, int y)
 #else
     font_paint((char *)text, flags, x*400, y*400);
 #endif
-    
     return TRUE;
 }
 

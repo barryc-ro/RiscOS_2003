@@ -677,8 +677,6 @@ os_error *hotlist_add(const char *url, const char *title)
     if (url == NULL)
 	return NULL;
     
-    sound_event(snd_HOTLIST_ADD);
-
     hotlist__add(strdup(url), strdup(title), time(NULL), TRUE);
     hotlist__trim_length();
     hotlist__sort(hotlist__compare_alpha);
@@ -689,6 +687,8 @@ os_error *hotlist_add(const char *url, const char *title)
     if (hotlist_changed && !hotlist_write(config_hotlist_file))
 	return makeerror(ERR_CANT_OPEN_HOTLIST);
 
+    sound_event(snd_HOTLIST_ADD);
+
     return NULL;
 }
 
@@ -696,8 +696,6 @@ os_error *hotlist_remove(const char *url)
 {
     os_error *ep;
     
-    sound_event(snd_HOTLIST_REMOVE);
-
     hotlist__remove(NULL, url);
     
 /*     if ((ep = ensure_modem_line()) != NULL) */
@@ -705,6 +703,8 @@ os_error *hotlist_remove(const char *url)
     
     if (hotlist_changed && !hotlist_write(config_hotlist_file))
 	return makeerror(ERR_CANT_OPEN_HOTLIST);
+
+    sound_event(snd_HOTLIST_REMOVE);
 
     return NULL;
 }

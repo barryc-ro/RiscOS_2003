@@ -155,7 +155,7 @@ static os_error *fe_version_write_file(FILE *f, be_doc doc, const char *query)
 	    write_url_with_breaks(f, url);
 	}
 
-	if (access_get_header_info(url, NULL, &last_modified, &expires))
+	if (access_get_header_info(url, NULL, &last_modified, &expires, NULL))
 	{
 	    char rbuf[32];
 	    int dst, timezone;

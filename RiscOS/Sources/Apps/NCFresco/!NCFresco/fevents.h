@@ -140,8 +140,8 @@
 #define fevent_HIGHLIGHT_FRAME_LEFT	    0x206A
 #define fevent_HIGHLIGHT_FRAME_RIGHT        0x206B
 
-#define fevent_GIVE_FOCUS                   0x2070
-#define fevent_REMOVE_FOCUS                 0x2071
+#define fevent_USER_UNLOAD                  0x2070
+#define fevent_USER_LOAD		    0x2071
 
 #define fevent_OPEN_PRINT_OPTIONS           0x2080
 #define fevent_OPEN_FIND                    0x2081
