@@ -61,7 +61,7 @@ resources_alt:
 	Set NCFrescoROAltRes$Path NCFrescoRORes:Alt.,NCFrescoRORes:
 	Set NCFrescoROAltTransRes$Path NCFrescoROTransRes:Alt.,NCFrescoROTransRes:
 	${MKDIR} ${RESRES_ALT}
-	${CP} NCFrescoROAltRes:SpritesROM          ${RESRES_ALT}.Sprites  ${CPFLAGS}
+	${CP} NCFrescoROAltRes:Sprites             ${RESRES_ALT}.Sprites  ${CPFLAGS}
 	${TR} -i NCFrescoROAltTransRes:Messages -o ${RESRES_ALT}.Messages ${TRFLAGS}
 	${CP} NCFrescoROAltRes:Res                 ${RESRES_ALT}.Res      ${CPFLAGS}
 	Unset NCFrescoRORes$Path
@@ -78,8 +78,8 @@ resources_base:
 	${MKDIR} ${RESRES}.html
 	${CP} NCFrescoRORes:!BootROM    	${RESAPP}.!Boot    ${CPFLAGS}
 	${CP} NCFrescoRORes:!RunROM     	${RESAPP}.!Run     ${CPFLAGS}
-	${CP} NCFrescoRORes:!SpritesROM 	${RESAPP}.!Sprites ${CPFLAGS}
-	${CP} NCFrescoRORes:SpritesROM  	${RESRES}.Sprites  ${CPFLAGS}
+	${CP} NCFrescoRORes:!Sprites    	${RESAPP}.!Sprites ${CPFLAGS}
+	${CP} NCFrescoRORes:Sprites     	${RESRES}.Sprites  ${CPFLAGS}
 	${TR} -i NCFrescoROTransRes:Messages -o ${RESRES}.Messages ${TRFLAGS}
 	${CP} NCFrescoRORes:Res         	${RESRES}.Res      ${CPFLAGS}
 	${CP} NCFrescoRORes:MimeMap     	${RESRES}.MimeMap  ${CPFLAGS}
