@@ -15,7 +15,6 @@ MKDIR   = cdir
 AS      = aasm
 CP      = copy
 RM      = remove
-STRIP   = stripdepnd
 CCFLAGS = -c -depend !Depend -IC:
 ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
 CPFLAGS = ~cfr~v
@@ -42,7 +41,6 @@ install_rom: ${TARGET}
 
 clean:
         ${RM} ${TARGET}
-        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 resources: resources-${CMDHELP}
