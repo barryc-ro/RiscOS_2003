@@ -56,8 +56,7 @@ WFLAGS		= ~cf~vr
 # These are for the standard Desktop build (plus debug)
 
 DFLAGS		= 
-#DFLAGS		= -DDEBUGLIB
-DDFLAGS		= -fn -DDEBUGLIB -DTEST
+DDFLAGS		= ${DFLAGS} -fn -DDEBUGLIB
 DZFLAGS		= 
 DDZFLAGS	= ${DZFLAGS} -fn
 
@@ -106,11 +105,7 @@ LIBS = \
  ${TOOLBOXLIB} \
  ${EVENTLIB} \
  ${CLIB} \
- ${NUMCONVERTLIB} \
-# ${DEBUGLIB} \
-# TCPIPLibs:o.socklib5 \
-# TCPIPLibs:o.unixlib \
-# TCPIPLibs:o.inetlib \
+ ${NUMCONVERTLIB}
 
 
 LIBSD = \
@@ -391,3 +386,5 @@ rm.!DayAddD: odz.ModuleWrap ${OBJSDZ} ${LIBSM} o.dirs
 
 # -----------------------------------------------------------------------------
 # Dynamic dependencies:
+
+
