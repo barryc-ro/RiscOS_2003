@@ -21,11 +21,14 @@ DBG_OBJS = od.main ${RAMRESOURCES} o.Modhdr od.create od.delete od.events od.get
 #
 include C:tboxlibint.TboxMake
 
+DCSRESDIR = <resource$dir>.Resources2
+
 #
 # Module specific rules:
 #
-resources: LocalRes:DCS.Messages LocalREs:DCS.Res LocalRes:Quit.Messages LocalRes:Quit.Res
-        ${CP} Resources.${LOCALE}.*   ${RESDIR}.*  ${CPFLAGS}
+resources: LocalRes:DCS.Messages LocalRes:DCS.Res LocalRes:Quit.Messages LocalRes:Quit.Res
+        ${MKDIR} ${DCSRESDIR}
+        ${CP} Resources.${LOCALE}.*   ${DCSRESDIR}.*  ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied to Messages module
 
 ${RAMRESOURCES}: LocalRes:DCS.Messages LocalRes:DCS.Res LocalRes:Quit.Messages LocalRes:Quit.Res
