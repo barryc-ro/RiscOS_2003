@@ -57,7 +57,7 @@ INCLUDES =
 #
 # Program specific options:
 #
-TARGET    = exe.${COMPONENT}
+TARGET    = ${COMPONENT}
 
 OBJS      = tftpserver.o main.o Strcmp_ci.o Strdup.o momanager.o \
 mofile.o moobject.o configure.o i18n.o icmpsocket.o parser.o lexer.o \
