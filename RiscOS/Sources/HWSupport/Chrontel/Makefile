@@ -107,21 +107,22 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 #        ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-o.chrontel:	c.chrontel
-o.chrontel:	C:h.kernel
-o.chrontel:	C:h.swis
-o.chrontel:	h.chrontel
-o.chrontel:	h.iomd
-o.chrontel:	C:h.nvram
-o.chrontel:	h.debugit
-o.debugit:	c.debugit
-o.debugit:	h.debugit
-o.debugit:	C:h.swis
-o.debugit:	C:h.kernel
-o.debugit:	C:h.kernel
 o.module:	c.module
 o.module:	C:h.kernel
 o.module:	C:h.swis
 o.module:	h.module
 o.module:	h.chrontel
 o.module:	h.debugit
+o.chrontel:	c.chrontel
+o.chrontel:	C:h.kernel
+o.chrontel:	C:h.swis
+o.chrontel:	h.chrontel
+o.chrontel:	h.iomd
+o.chrontel:	C:h.nvram
+o.chrontel:	C:h.standby
+o.chrontel:	h.debugit
+o.debugit:	c.debugit
+o.debugit:	h.debugit
+o.debugit:	C:h.swis
+o.debugit:	C:h.kernel
+o.debugit:	C:h.kernel
