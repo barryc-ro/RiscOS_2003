@@ -83,15 +83,18 @@ IOEBdevice      ROUT
                 B       ioeb_open                               ; open a stream
                 B       ioeb_close                              ; close the stream
                 B       ioeb_wakeupTX                           ; wake up because someones transfering
-                MOVS    pc, lr
-                MOVS    pc, lr
-                MOVS    pc, lr
+                MOVS    pc, lr					; wakeup RX
+                MOVS    pc, lr					; sleep RX
+                MOVS    pc, lr					; enum dir
                 B       common_createTX                         ; create buffer for TX
                 B       common_createRX                         ; create buffer for RX
-                MOVS    pc, lr
+                MOVS    pc, lr					; halt
                 B       ioeb_resume                             ; start sender sending again
-                MOVS    pc, lr
+                MOVS    pc, lr					; end of data
                 B       ioeb_created                            ; output or input stream created
+		B	ioeb_monitorTX				; check sending is okay
+		MOVS	pc, lr					; monitor rx
+		MOVS	pc, lr					; ioctl
 10
                 ADRL    r0, ErrorBlock_Parallel_BadCall         ; if not within valid range
                 DoError                                         ; then generate an error
@@ -256,8 +259,203 @@ ioeb_created    ENTRY   "r0-r2"
 
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+;
+; call: ioeb_monitorTX
+;
+; in:	r0  = reason code (12)
+; 	r1  =
+;       r2  = internal handle
+;
+; out:  r0-r2 corrupted
+;
+; This routine is called by DeviceFS to check the device if the TX buffer is
+; almost full. It can therefore be used to report printer error conditions
 
+;Message tokens
+paper		=		"Paper", 0
+online		=		"OnLine", 0
+printer		=		"Printer", 0
+		ALIGN
 
+		[		false
+
+; First, a version that just returns any printer error straight back to the caller (for testing).
+
+ioeb_monitorTX	ROUT
+		LDR 		r1, =pp_stat
+		LDRB		r0, [r1]		; read status register byte
+
+		TST		r0, #pp_stat_error	; pp_stat_error clear for any of pe, offline, other error
+		MOVNES		pc, lr			; All o k
+
+		;We've got an error, so what type is it?
+		Debug		j, "some sort of error"
+		TST		r0, #pp_stat_pe		; out of paper?
+		BNE		paper_out
+
+		TST		r0, #pp_stat_slct	; off-line?
+		BEQ		off_line
+		B		not_working
+
+paper_out	ADRL		r0, ErrorBlock_Parallel_PaperOut
+		B		make_error
+
+off_line	ADRL		r0, ErrorBlock_Parallel_Offline
+		B		make_error
+
+not_working	ADRL		r0, ErrorBlock_Parallel_OtherError
+		;fall through
+
+make_error
+		[		international
+		B		MakeError
+		|
+		ORRS		pc, lr, #V_bit
+		]
+		|
+
+; Now the real code: make an upcall on printer error, resuming if it's handled properly.
+
+ioeb_monitorTX	ROUT
+		LDR 		r1, =pp_stat
+		LDRB		r0, [r1]		; read status register byte
+
+		TST		r0, #pp_stat_error	; pp_stat_error clear for any of pe, offline, other error
+		MOVNES		pc, lr			; All o k
+
+		;We've got an error, so what type is it?
+		Debug		j, "some sort of error"
+		ENTRY		"r1-r9"			; OS_UpCall needs up to r6, but we can corrupt up to r2
+		TST		r0, #pp_stat_pe		; out of paper?
+		BNE		paper_out
+
+		TST		r0, #pp_stat_slct	; off-line?
+		BEQ		off_line
+		B		not_working
+
+paper_out
+		Debug		j, "paper out"
+		MOV		r4, #0			;iteration count
+		ADR		r6, paper
+		B		do_lookup_and_upcall
+
+off_line
+		Debug		j, "printer not connected"
+		MOV		r4, #0			;iteration count
+		ADRL		r6, online
+		B		do_lookup_and_upcall
+
+not_working
+		Debug		j, "printer not working"
+		MOV		r4, #0			;iteration count
+		ADRL		r6, printer
+		;fall through
+
+do_lookup_and_upcall
+		;Convert token in r6 to message in r6
+		BL		OpenMessages
+		ADDVS		r6, r0, #4
+		BVS		do_upcall		;if it went wrong, use the error as the message
+
+		ADRL		r0, MessagesWorkspace
+		MOV		r1, r6
+		ADRL		r2, localerrorblock
+		MOV		r3, #?localerrorblock
+		SWI		XMessageTrans_Lookup
+		MOVVC		r6, r2
+		ADDVS		r6, r0, #4		;if it went wrong, use the error as the message
+
+		BL		CloseMessages
+
+do_upcall	;Make the upcall
+		MOV		r0, #UpCall_MediaNotPresent
+		MOV		r1, #fsnumber_DeviceFS
+		MOV		r2, #-1			;message in r6 (not media type)
+		MOV		r3, #-1			;device number irrelevant
+		;r4 cleared first time, incremented subsequently
+		MOV		r5, #&7FFFFFFF		;timeout (very big)
+		;r6 set up depending on reason for upcall
+
+		Debug		j, "OS_UpCall called", r0
+		SWI		XOS_UpCall
+		Debug		j, "OS_UpCall returned", r0
+		EXIT		VS
+
+		CMP		r0, #-1
+		BNE		not_cancel
+
+cancel
+		Debug		j, "user cancelled operation"
+		MOV		r0, #UpCall_MediaSearchEnd
+		Debug		j, "OS_UpCall called", r0
+		SWI		XOS_UpCall
+		Debug		j, "OS_UpCall returned", r0
+		EXIT		VS
+
+		;Try to report the error state as it is now, but make sure that some error
+		;is reported even if all conditions have been (coincidentally) cleared.
+		LDR 		r1, =pp_stat
+		LDRB		r0, [r1]		; read status register byte
+
+		TST		r0, #pp_stat_error	; pp_stat_error clear for any of pe, offline, other error
+		ADRNEL		r0, ErrorBlock_Parallel_OtherError
+		BNE		make_error		; doesn't seem to be an error any more!
+
+		; now we've got an error, so what type is it?
+		TST		r0, #pp_stat_pe		; paper out?
+		ADRNEL		r0, ErrorBlock_Parallel_PaperOut
+		BNE		make_error
+
+		TST		r0, #pp_stat_slct	; off-line?
+		ADREQL		r0, ErrorBlock_Parallel_Offline
+		ADRNEL		r0, ErrorBlock_Parallel_OtherError
+		;fall through
+
+make_error
+		;r0 -> error block
+		PullEnv
+		[		international
+		B		MakeError
+		|
+		ORRS		pc, lr, #V_bit
+		]
+
+not_cancel	TEQ		r0, #0
+		DebugIf		NE, j, "never happens (intercepted vector should always have r0 == 0 or -1)", r0
+		EXITS		NE
+
+confirm
+		Debug		j, "user said it's ok now"
+		;checking that there is really media there now
+		LDR 		r1, =pp_stat
+		LDRB		r0, [r1]		; read status register byte
+		TST		r0, #pp_stat_error	; pp_stat_error clear for any of pe, offline, other error
+		BNE		media_loaded		; All o k
+
+		;Still got an error, so what type is it now?
+		TST		r0, #pp_stat_pe
+		ADRNEL		r6, paper		; paper out
+		BNE		media_missing
+
+		TST		r0, #pp_stat_slct
+		ADREQL		r6, online		; off-line
+		ADRNEL		r6, printer		; miscellaneous
+		;fall through
+
+media_missing
+		Debug		j, "media still missing", r4
+		ADD		r4, r4, #1		;increment iteration count
+		B		do_lookup_and_upcall	;make upcall again
+
+media_loaded
+		Debug		j, "media now present"
+		MOV		r0, #UpCall_MediaSearchEnd
+		Debug		j, "OS_UpCall called", r0
+		SWI		XOS_UpCall
+		Debug		j, "OS_UpCall returned", r0
+		EXIT		VS
+		EXITS
+		]
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
@@ -361,7 +559,20 @@ ioeb_busy       ENTRY   "r0"
 ;
 ; Also assumes that the direction bit within pp_ctrl has been setup correctly
 ; so that the port is defined for output rather than input.
-;
+
+;Entry
+;	IRQ mode, interrupts off
+;	r3 -> base of IOC memory space
+;	r12 -> workspace
+;	Not currently threaded (non-reentrant)
+;Exit
+;	Interrupt serviced
+;	r0--r3, r12 corrupted
+;Notes
+;	Execution time <= 100µs
+;	SWI's called by method on P R M p1-127 (X SWI's only)
+;	Error stored---somewhere???
+;	Calls re-entrant SWI's only
 
 ioeb_irqwrite   ROUT
 
@@ -370,9 +581,7 @@ ioeb_irqwrite   ROUT
 ; So now we should wait for PACK to go high, and then clear our interrupt
 
                 LDR     r1, =pp_stat
-		Push	"lr"
-		BL	common_get_loop_factor			; Get CPU speed rating
-		Pull	"lr"
+		LDR	r0, LoopFactor				; Get CPU speed rating
                 MOV     r2, r0, LSR #2                          ; loop until PACK is high
 								; loop set from loop factor / 4
 10
@@ -387,10 +596,8 @@ ioeb_irqwrite   ROUT
 
 15
         [ CheckBusyAfterAck
-		Push	"lr"
-		BL	common_get_loop_factor			; Get CPU speed rating
-		Pull	"lr"
-		MOV	R2, R0, LSR #2				; Scale rating to our needs
+		LDR	r0, LoopFactor				; Get CPU speed rating
+		MOV	r2, r0, LSR #2				; Scale rating to our needs
 
 20
                 LDRB    r0, [r1]
@@ -494,6 +701,10 @@ ioeb_strobe     ENTRY
 
 ; no need to explicitly wait for 1µs with data valid, there's no way we can send another character within 1µs
 ; since we have to call SWI XDeviceFS_TransmitChar to get each char.
+		[	FastBufferMan				; but not if we're using FastBufferMan JRC 14-Apr-1997
+                LDRB    r0, [lr]
+                LDRB    r0, [lr]
+		]
 
 ; now cancel any pending callafter, since we've just transmitted a char
 
@@ -728,7 +939,4 @@ UpdateIOEBCtrl  ENTRY   "r2"
 
                 EXITS                                           ; exit, restoring original IRQ state
 
-; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-
                 END
-

@@ -85,7 +85,11 @@
 ; 18-Mar-97 0.44 JIFL Added timing loop function common_get_loop_factor to
 ;		      ensure processor speed independence
 ; 23-Apr-97 0.45 BAL Fixed bug where IOEB halt and resume routines were corrupting R3
-;
+;        (ARTtmp)
+; 29 Apr 97 0.45 JRC Calculate loop factor in init code; added Paper, OnLine, Printer message tokens;
+;        (Spinner)   make appropriate upcalls in ioeb_monitorTX when paper out etc; use
+;                    ParallelDeviceDriver$Path for resources; added 'j' debug flag.
+; 16 May 97 0.46 KJB Two version 0.45s merged.
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -97,7 +101,7 @@
                 GET     Hdr:NewErrors
                 GET     Hdr:Services
                 GET     Hdr:Symbols
-                GET     Hdr:NdrDebug
+                GET     Hdr:NDRDebug
 		GET	Hdr:HostFS
                 GET     Hdr:Proc
                 GET     Hdr:DevNos
@@ -113,6 +117,7 @@
                 GET     Hdr:MsgTrans
                 GET     Hdr:ResourceFS
                 GET     Hdr:Portable
+                GET     Hdr:UpCall
 
                 GBLL    debug
                 GBLL    hostvdu
@@ -147,14 +152,15 @@ byte    RN      0
 tmp     RN      2
  ]
 
- [ :LNOT: :DEF: standalonemessages
+		[	:LNOT: :DEF: standalonemessages
                 GBLL    standalonemessages
 standalonemessages SETL {FALSE}
- ]
+		]
 
 debug           SETL    false
-hostvdu         SETL    true
+hostvdu         SETL    false
 international   SETL    true
+debug_file	SETS	"<PDDDebug>"
 
 inter           SETD    false
 open            SETD    false
@@ -162,10 +168,10 @@ close           SETD    false
 out             SETD    false
 in              SETD    false
 irq             SETD    false
+j		SETD	true
 
                 GET     Version
                 GET     s.Errors
-
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
@@ -221,11 +227,11 @@ power_state             # 4             ;
  ]
                       [ international
 MessagesWorkspace       # 16            ; block of workspace for opening message files
+localerrorblock		# 256		; do not use MessageTrans error block, as it gets trashed too easily
                       ]
 
 LoopFactor		# 4		; factor for tight loops giving a delay
-					; of 1us. Do not read directly - use
-					; common_get_loop_factor
+					; of 1us
 
 wsrequired              * :INDEX: @
 
@@ -246,6 +252,13 @@ f_UseFIFO               * 1:SHL:4       ; bit 4 set => register fastparallel: de
 
 if_PendingCallAfter     * 1:SHL:0       ; bit 0 set => pending CallAfter exists
 if_ReadHalted           * 1:SHL:1       ; bit 1 set => input stream halted
+
+; default flags for DeviceFS_Register
+ [ NewHardware
+dfsr_flags		* ParentFlag_MonitorTransfers ; Monitor TX/RX functions available
+ |
+dfsr_flags		* 0
+ ]
 
 hardware_IOC            * 0             ; which hardware type being used
 hardware_IOEB           * 1
@@ -297,15 +310,18 @@ switable        = "Parallel", 0
                 = "Op", 0
                 = 0
 
-              [ international
-                ! 0, "Internationalised version"
-resource_file   = "Resources:$.Resources.Parallel.Messages", 0
-              ]
+ 		[	international
+		!	0, "Internationalised version"
+resource_file   =	"ParallelDeviceDriver:Messages", 0
+		]
                 ALIGN
 
                 MakeErrorBlock Parallel_BadCall
                 MakeErrorBlock Parallel_BadHardware
                 MakeErrorBlock Parallel_InUse
+		MakeErrorBlock Parallel_PaperOut
+		MakeErrorBlock Parallel_Offline
+		MakeErrorBlock Parallel_OtherError
 
                 ALIGN
 
@@ -354,8 +370,9 @@ fastblock
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-
-
+setvar	=	"If ""<ParallelDeviceDriver$Path>"" = """" then "
+	=	"Set ParallelDeviceDriver$Path Resources:$.Resources.Parallel."
+	=	0 ;so lazy!
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
@@ -377,10 +394,20 @@ init            ENTRY   "r7"
 10
                 MOV     wp, r2                                  ; wp -> workspace
 
+		[	debug
+		Debug_Open "<PDDDebug>"
+		]
+
+		Debug	j, "initialised"
+
         [ standalonemessages
                 ADR     r0, resourcefsfiles
                 SWI     XResourceFS_RegisterFiles   ; ignore errors (starts on Service_ResourceFSStarting)
         ]
+
+		ADR	r0, setvar
+		SWI	XOS_CLI
+		EXIT	VS
 
                 MOV     r0, #0                                  ; zap workspace
                 STRB    r0, Flags
@@ -389,7 +416,7 @@ init            ENTRY   "r7"
                 STR     r0, DeviceHandle
                 STR     r0, BufferHandle
                 STR     r0, HardwareBase
-		STR	r0, LoopFactor
+		BL	common_get_loop_factor
         [ FastCentronics
                 STR     r0, FastHandle
         ]
@@ -502,6 +529,12 @@ final           ENTRY
                 TEQ     r0, #0
                 SWINE   XDeviceFS_Deregister
         ]
+
+		Debug	j, "terminated"
+
+		[	debug
+		Debug_Close
+		]
 
                 EXITS
 
@@ -660,7 +693,7 @@ svc_starting
                 Push    "r0, lr"
 
                 BL      registerdevice
-                ADRVC   r0, setsysvar
+                ADRVCL	r0, setsysvar
                 SWIVC   XOS_CLI                                 ; setup system variable
 
                 Pull    "r0, pc",,^
@@ -766,7 +799,7 @@ ParallelOp      ROUT
                 Push    "r3"
                 LDR     r3, HardwareBase                        ; Make sure the correct hardware is there
                 TEQ     r3, #0
-                ADREQ   r0, ErrorBlock_Parallel_BadHardware
+                ADREQL  r0, ErrorBlock_Parallel_BadHardware
                 Pull    "r3"
         [ international
                 BEQ     MakeError
@@ -818,7 +851,7 @@ registerdevice  ENTRY   "r0-r7"
  [ NewHardware
                 ADRNEL  r2, IOEBdevice
  ]
-                MOV     r0, #0                                  ; flags for registering device
+                MOV     r0, #dfsr_flags                         ; flags for registering device
                 ADRL    r1, block                               ; device description block
                 MOV     r3, #0
                 MOV     r4, wp
@@ -837,7 +870,7 @@ registerdevice  ENTRY   "r0-r7"
                 TST     r0, #f_UseFIFO
                 EXIT    EQ
 
-                MOV     r0, #0
+                MOV     r0, #dfsr_flags
                 ADRL    r1, fastblock
                 ADRL    r2, FastDevice
                 MOV     r6, #0
@@ -949,10 +982,16 @@ MakeErrorWithDeviceName ALTENTRY
                 B       MakeErrorEntry
 
 MakeError       ALTENTRY
+		[	debug
+		ADD	r0, r0, #4
+		DebugS	j, "MakeError", r0, 252
+		SUB	r0, r0, #4
+		]
                 MOV     r4, #0
 MakeErrorEntry
                 LDRB    r1, Flags
                 TST     r1, #f_WeHaveMessages                   ; has the messages file been closed?
+		DebugIf	EQ, j, "opening messages file"
                 BLEQ    OpenMessages
 
                 LDRB    r1, Flags
@@ -961,17 +1000,41 @@ MakeErrorEntry
                 ORREQS  pc, lr, #VFlag                          ; if still not open then return with V set
 
                 ADR     r1, MessagesWorkspace                   ; -> message control block
-                MOV     r2, #0
-                MOV     r3, #0
+		ADR	r2, localerrorblock			; was 'MOV r2, #0', but for some reason
+								; MsgTrans trashes the block. JRC 21-Apr-1997
+                MOV     r3, #?localerrorblock
                 MOV     r5, #0
                 MOV     r6, #0
                 MOV     r7, #0                                  ; no substitution + use internal buffers
+		[	debug
+		ADD	r0, r0, #4
+		DebugS	j, "looking up", r0, 252
+		SUB	r0, r0, #4
+		]
                 SWI     XMessageTrans_ErrorLookup
+		[	debug
+		ADD	r0, r0, #4
+		DebugS	j, "answer was", r0, 252
+		SUB	r0, r0, #4
+		Debug	j, "buffer", r0
+		]
 
+		Debug	j, "closing messages file"
                 BL      CloseMessages                           ; attempt to close the doofer
 
+		[	debug
+		PullEnv
+		Push	r0
+		MOV	r0, sp
+		Debug	j, "exit sp", r0
+		Debug	j, "exit flags", pc
+		Pull	r0
+		Debug	j, "returning to", lr
+		MOV	pc, lr
+		|
                 EXIT                                            ; return, r0 -> block, V set
-
+		]
+		ALIGN
               ]
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
