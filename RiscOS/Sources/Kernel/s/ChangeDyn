@@ -135,6 +135,7 @@ DynArea_OD8Clamp2         # 4                       ;clamp value on area max siz
                                                     ;(default -1, set by R2 of OS_DynamicArea 8)
 DynArea_OD8Clamp3         # 4                       ;clamp value on area max size for OS_DynamicArea 0 for a Sparse area
                                                     ;(default 4G-4k, set by R3 of OS_DynamicArea 8)
+DynArea_SortedList        # 4                       ;alphabetically sorted list of non-system areas, or 0 if none
 DynArea_SysQHandleArray   # 4*(ChangeDyn_MaxArea+1) ;for system areas 0..MaxArea, word = ptr to DANode, or 0 if not created yet
 DynArea_FreeQHandles      # 4                       ;index of first free quick handle, starting at 1 (or 0 for none)
 DynArea_QHandleArray      # 4*DynArea_NumQHandles   ;1 word per quick handle
@@ -796,6 +797,9 @@ DynArea_ErrorTranslateAndExit
         LDR     r10, DynArea_OD8Clamp3   ; clamp for sparse dynamic area
         CMP     r5, r10                  ; if requested max size is > relevant clamp
         MOVHI   r5, r10                  ; then clamp it!
+        LDR     r10, [sp]                ; requested initial size, from stack
+        CMP     r5, r10
+        MOVLO   r5, r10                  ; we must try to honour initial size (allowed to break clamp)
         MOV     r10, #0
         LDR     r11, [r10, #Page_Size]
         B       DAC_roundup
@@ -806,6 +810,9 @@ DAC_notsparse
         LDRNE   r10, DynArea_OD8Clamp2   ; clamp for max size requested of some specific value
         CMP     r5, r10                  ; if requested max size is > relevant clamp
         MOVHI   r5, r10                  ; then clamp it!
+        LDR     r10, [sp]                ; requested initial size, from stack
+        CMP     r5, r10
+        MOVLO   r5, r10                  ; we must try to honour initial size (allowed to break clamp)
   ]
 
         MOV     r10, #0
@@ -884,6 +891,7 @@ DAC_roundup
         STR     r7, [r2, #DANode_Size]          ; initial size is zero before we grow it
         STR     r7, [r2, #DANode_SubLink]       ; initialise as not part of any sublist
         STR     r7, [r2, #DANode_SparseHWM]     ; initial high water mark if Sparse, redundant otherwise
+        STR     r7, [r2, #DANode_SortLink]      ; initially, not on alphabetically sorted list
 
 ; now make copy of string
 
@@ -963,6 +971,8 @@ DAC_roundup
         STR     r8, [r2, #DANode_Link]
         STR     r2, [r7, #DANode_Link]
 
+
+
   [ DynArea_QuickHandles
         MOV     r11, #0
         LDR     r11, [r11, #DynArea_ws]
@@ -983,6 +993,40 @@ DAC_roundup
         SWI     XOS_ChangeDynamicArea
         BVS     %FT90                           ; deal with error - r0,r1,r2 still stacked
         Pull    "r0, r1, r2"
+
+  [ DynArea_QuickHandles
+;
+; Now put node on alphabetically sorted list
+;
+        Push    "r3,r4,r5,r7,r8,r9"
+        MOV     r11, #0
+        LDR     r11, [r11, #DynArea_ws]
+        ADR     r8, DynArea_SortedList - DANode_SortLink ;so that [r8, #DANode_SortLink] addresses list header)
+75
+        MOV     r7, r8                       ; previous
+        LDR     r8, [r7, #DANode_SortLink]
+        TEQ     r8, #0
+        BEQ     %FT78
+        ;ho hum, UK case insensitive string compare
+        LDR     r3, [r2, #DANode_Title]
+        LDR     r9, [r8, #DANode_Title]
+76
+        LDRB    r4, [r3],#1
+        uk_LowerCase r4,r11
+        LDRB    r5, [r9],#1
+        uk_LowerCase r5,r11
+        CMP     r4, r5
+        BNE     %FT77
+        CMP     r4, #0
+        BNE     %BT76
+77
+        BHI     %BT75
+78
+        STR     r2, [r7, #DANode_SortLink]  
+        STR     r8, [r2, #DANode_SortLink]
+79
+        Pull    "r3,r4,r5,r7,r8,r9"
+  ] ;DynArea_QuickHandles
 
   [ DA_Batman
         TST     r4, #DynAreaFlags_SparseMap
@@ -1141,6 +1185,29 @@ DAR_notsparse
         Pull    "r0-r2"
 
 DAR_delink
+
+  [ DynArea_QuickHandles
+;
+; delink from sorted list
+;
+        Push    "r7,r8,r11"
+        MOV     r11, #0
+        LDR     r11, [r11, #DynArea_ws]
+        ADR     r8, DynArea_SortedList - DANode_SortLink ;so that [r8, #DANode_SortLink] addresses list header)
+DAR_sdloop
+        MOV     r7, r8                      ;previous
+        LDR     r8, [r7, #DANode_SortLink]
+        TEQ     r8, #0                      ;just in case not on list, shouldn't happen  
+        BEQ     DAR_sddone
+        TEQ     r8, r10
+        BNE     DAR_sdloop
+        LDR     r8, [r8, #DANode_SortLink]
+        STR     r8, [r7, #DANode_SortLink]
+DAR_sddone
+        Pull    "r7,r8,r11"
+
+  ] ;DynArea_QuickHandles
+
 ; Now just de-link from list (r10 -> node, r11 -> prev)
 
         LDR     lr, [r10, #DANode_Link] ; store our link
@@ -1354,12 +1421,14 @@ DynArea_GetChangeInfo ROUT
 
 DynArea_EnumerateInfo ROUT
         Push    "lr"
-        CMP     r1, #-1                         ; if starting from beginning
-        LDREQ   r10, [r1, #DAList+1]            ; then load pointer to 1st node
-        BEQ     %FT10                           ; and skip
 
         MOV     r11, #0
         LDR     r11, [r11, #DynArea_ws]
+
+        CMP     r1, #-1                         ; if starting from beginning
+        LDREQ   r10, DynArea_SortedList         ; then load pointer to 1st node on sorted list
+        BEQ     %FT10                           ; and skip
+
         LDR     r10, DynArea_LastEnumHandle
         CMP     r10, r1
         LDREQ   r10, DynArea_LastEnumPtr        ; pick up where we left off
@@ -1368,7 +1437,7 @@ DynArea_EnumerateInfo ROUT
         BCC     %FT14
 
 08
-        LDR     r10, [r10, #DANode_Link]        ; find next one
+        LDR     r10, [r10, #DANode_SortLink]    ; find next one
 10
         TEQ     r10, #0                         ; if at end
         MOVEQ   r1, #-1                         ; then return -1
@@ -1441,12 +1510,14 @@ DynArea_SetClamps ROUT
         LDR     lr,  DynArea_OD8Clamp2
         LDR     r9,  DynArea_OD8Clamp3
 
-        CMP     r1, #0
-        STRNE   r1, DynArea_OD8Clamp1
-        CMP     r2, #0
-        STRNE   r2, DynArea_OD8Clamp2
-        CMP     r3, #0
-        STRNE   r3, DynArea_OD8Clamp3
+;insist on at least 1M for a clamp value (ignore anything lower)
+;
+        CMP     r1, #&100000
+        STRHS   r1, DynArea_OD8Clamp1
+        CMP     r2, #&100000
+        STRHS   r2, DynArea_OD8Clamp2
+        CMP     r3, #&100000
+        STRHS   r3, DynArea_OD8Clamp3
 
         MOV     r1, r10
         MOV     r2, lr
@@ -1671,13 +1742,19 @@ DynArea_SparseRelease ROUT
 ;       All other registers preserved
 
 DynArea_Enumerate ALTENTRY
-        CMP     r1, #-1                         ; if starting from beginning
-        LDREQ   r10, [r1, #DAList+1]            ; then load pointer to 1st node
-        BEQ     %FT10                           ; and skip
-
   [ DynArea_QuickHandles
         MOV     r11, #0
         LDR     r11, [r11, #DynArea_ws]
+  ]
+        CMP     r1, #-1                         ; if starting from beginning
+  [ DynArea_QuickHandles
+        LDREQ   r10, DynArea_SortedList         ; then load pointer to 1st node on sorted list
+  |
+        LDREQ   r10, [r1, #DAList+1]            ; then load pointer to 1st node
+  ]
+        BEQ     %FT10                           ; and skip
+
+  [ DynArea_QuickHandles
         LDR     r10, DynArea_LastEnumHandle
         CMP     r10, r1
         LDREQ   r10, DynArea_LastEnumPtr        ; pick up where we left off
@@ -1689,7 +1766,11 @@ DynArea_Enumerate ALTENTRY
         BCC     UnknownDyn                      ; complain if passed in duff area number
 
 08
+  [ DynArea_QuickHandles
+        LDR     r10, [r10, #DANode_SortLink]    ; find next one
+  |
         LDR     r10, [r10, #DANode_Link]        ; find next one
+  ]
 10
         TEQ     r10, #0                         ; if at end
         MOVEQ   r1, #-1                         ; then return -1
@@ -2459,7 +2540,7 @@ InitDynamicAreas ENTRY "r0-r8,r11"
 
         MOV     lr, #FreePoolDANode
         ADR     r0, InitFreePoolTable
-        LDMIA   r0, {r0-r8}                     ; copy initial data into node
+        LDMIA   r0, {r0-r8}                        ; copy initial data into node
         LDR     r5, [lr, #RAMLIMIT-FreePoolDANode] ; max size is RAMLIMIT
         STMIA   lr, {r0-r8}
 
@@ -2518,6 +2599,7 @@ InitDynamicAreas ENTRY "r0-r8,r11"
 
         MOV     r0, #0                          ; initialise module list to empty
         STR     r0, [r0, #Module_List]
+
         MOV     lr, #SysHeapDANode              ; initialise system heap node
         ADR     r0, InitSysHeapTable
         LDMIA   r0, {r0-r8}
@@ -2612,6 +2694,13 @@ DynArea_QHinit_loop2
         ADD     r1, r1, #DynArea_NumQHandles        ; first non-quick DA number -1
         STR     r1, DynArea_TreacleGuess
 
+        LDR     r1, =FreePoolDANode
+        STR     r1, DynArea_SortedList              ; initially, FreePool at front of sorted list,
+        LDR     r2, =SysHeapDANode
+        STR     r2, [r1, #DANode_SortLink]          ; and SysHeap second...
+        MOV     r1, #0
+        STR     R1, [r2, #DANode_SortLink]          ; ...and last
+
         ADR     r1, DynArea_SysQHandleArray
         MOV     r2, #SysHeapDANode
         STR     r2, [r1, #ChangeDyn_SysHeap:SHL:2]
@@ -2632,7 +2721,7 @@ DynArea_QHinit_loop2
 
         LTORG
 
-        ASSERT DANode_NodeSize = 11*4 ;so that tables below just might be valid DANodes
+;note that words of a DANode beyond 0..8 are assumed to be safely initialised as 0
 
 InitFreePoolTable
         &       0                               ; link: no more nodes on list
@@ -2644,8 +2733,6 @@ InitFreePoolTable
         &       0                               ; no workspace needed
         &       0                               ; no handler needed
         &       FreePoolString                  ; title
-        &       0                               ; no sublist
-        &       0                               ; not sparse
 
 InitSysHeapTable
         &       FreePoolDANode                  ; link -> free pool node, since FreePoolAddress > SysHeapStart
@@ -2657,8 +2744,6 @@ InitSysHeapTable
         &       SysHeapStart                    ; workspace pointer -> base of heap
         &       DynAreaHandler_SysHeap          ; area handler
         &       SysHeapString                   ; title
-        &       0                               ; no sublist
-        &       0                               ; not sparse
 
 InitAppSpaceTable
         &       0                               ; link: not on list
@@ -2670,8 +2755,6 @@ InitAppSpaceTable
         &       0                               ; no workspace needed
         &       0                               ; no handler needed
         &       AppSpaceString                  ; title
-        &       0                               ; no sublist
-        &       0                               ; not sparse
 
 FreePoolString
         =       "Free pool", 0
