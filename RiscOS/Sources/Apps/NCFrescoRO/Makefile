@@ -25,7 +25,7 @@ CCFLAGS = -c -depend !Depend -IC:
 ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
 CPFLAGS = ~cfr~v
 TRFLAGS = ${THROWBACK} -marko "´´" -markc "ªª" -htmlo "êê" -htmlc "ëë" -m NCFrescoROTransRes:Mappings
-SQFLAGS = 
+SQFLAGS =
 
 #
 # Program specific options:
@@ -44,7 +44,7 @@ bbe-fresco: bbe-generic
 #
 # Generic rules:
 #
-rom: 
+rom:
         @echo ${COMPONENT}: rom module built
 
 clean:
@@ -120,6 +120,7 @@ install:
 	${CP} NCFrescoRORes:Res         	${INSTALLDIR}.Res      ${CPFLAGS}
 	${CP} NCFrescoRORes:MimeMap     	${INSTALLDIR}.MimeMap  ${CPFLAGS}
 	-${CP} NCFrescoRORes:Config      	${INSTALLDIR}.Config   ${CPFLAGS}
+${CP} ${Lib$Dir}.LocaleRes.LocaleRes${INSTALLDIR}.LocaleRes
 	${GETVERS} NCFrescoRORes:Welcome ${INSTALLDIR}.Welcome VersionNum
 	${TR} -i NCFrescoROTransRes:html.badurl    -o ${INSTALLDIR}.html.badurl    ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favs      -o ${INSTALLDIR}.html.favs      ${TRFLAGS}
@@ -138,7 +139,7 @@ install:
 	${TR} -i NCFrescoROTransRes:html.sslserv   -o ${INSTALLDIR}.html.sslserv   ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.ssltoken  -o ${INSTALLDIR}.html.ssltoken  ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.url       -o ${INSTALLDIR}.html.url       ${TRFLAGS}
-	${SQ} abs.!RunIm-${ITYPE}                     ${INSTALLDIR}.!RunImage      ${SQFLAGS}
+${CP} rm.ncfrrm-${ITYPE}               ${INSTALLDIR}.!RunImage      ${CPFLAGS}
 	Unset NCFrescoROTransRes$Path
 	Unset NCFrescoRORes$Path
         @echo ${COMPONENT}: resource files copied
