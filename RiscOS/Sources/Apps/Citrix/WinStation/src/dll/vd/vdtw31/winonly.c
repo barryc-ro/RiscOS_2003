@@ -265,6 +265,10 @@ void far InitThinwire( COLOR_CAPS reqColorCaps, USHORT uWidth, USHORT uHeight )
             "InitThinwire: uWidth(%d) uHeight(%d) cx(%d) cy(%d)",
             uWidth, uHeight, cx, cy ));
 
+    TRACE(( TC_TW, TT_TW_CONNECT,
+            "InitThinwire: curColorCaps %d reqColorCaps %d",
+            curColorCaps, reqColorCaps ));
+
 #if 1
     SetMode(reqColorCaps, uWidth, uHeight);
 #else
@@ -524,6 +528,10 @@ int TWDestroyWindow( HWND hWnd )
         lpfnTimerProc = NULL;
     }
 #endif
+
+    // SJM moved here so that colour can be set up properly on a second connection
+    curColorCaps = Color_Cap_Max;
+   
     return( rc );
 }
 

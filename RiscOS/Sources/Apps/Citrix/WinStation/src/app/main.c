@@ -435,17 +435,39 @@ static int proginfo_handler(int event_code, ToolboxEvent *event, IdBlock *id_blo
     NOT_USED(handle);
 }
 
+static char *icamgr_path(void)
+{
+    char *s = strdup(getenv(MGR_DIR_VAR));
+    if (s == NULL)
+	s = strdup(MGR_DIR_DEFAULT);
+    return s;
+}
+
+static BOOL icamgr_exists(const char *path)
+{
+    int type;
+    return _swix(OS_File, _INR(0,1) | _OUT(0), 17, path, &type) == NULL &&
+	(type & 2) != 0;
+}
+
 static int icon_menu_handler(int event_code, ToolboxEvent *event, IdBlock *id_block,
                          void *handle)
 {
     BOOL connected = session_connected(current_session);
+    char *dir;
 
     TRACE((TC_UI, TT_API1, "icon_menu_handler: id_block %p\n", id_block));
     TRACE((TC_UI, TT_API1, "                   self_id %p\n", id_block->self_id));
 
     LOGERR(menu_set_fade(0, id_block->self_id, tbres_c_CONNECT, !connected));
     LOGERR(menu_set_fade(0, id_block->self_id, tbres_c_DISCONNECT, !connected));
+    LOGERR(menu_set_fade(0, id_block->self_id, tbres_c_CONNECT_SUBMENU, connected));
 
+    dir = icamgr_path();
+    LOGERR(menu_set_fade(0, id_block->self_id, tbres_c_CONFIGURE, !icamgr_exists(dir)));
+    free(dir);
+    dir = NULL;
+    
     if (connect_menu_id == NULL_ObjectId)
 	connect_menu_id = serverlist_create_menu( APPSRV_FILE );
 

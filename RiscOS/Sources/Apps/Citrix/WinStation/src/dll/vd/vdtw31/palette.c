@@ -98,22 +98,10 @@
 /*
  *  Currently only valid for windows client's
  */
-#ifndef DOS
 
 /*=============================================================================
 ==   Typedefs and Structures
 =============================================================================*/
-
-#ifdef  WIN16
-#define   PALCALLBACK   CALLBACK _loadds
-TIMERPROC lpfnPaletteTimerProc = NULL;
-#else
-#define   PALCALLBACK   CALLBACK 
-#endif
-#define   PALETTE_TIMER_ID          102
-#define   PALETTE_TIMER_TIMEOUT     2500
-
-void      PALCALLBACK PaletteTimerProc( HWND hWnd, UINT msg, UINT idTimer, DWORD dwTime );
 
 
 /*=============================================================================
@@ -124,8 +112,7 @@ BOOL    bUseStaticEntries( HWND, HDC );
 BOOL    SetStaticColorUse( HWND, HDC, BOOL );
 USHORT  TWRealizePalette( HWND, HDC, UINT *, USHORT );
 VOID    UpdateSystemColors( HWND, HDC, BOOL );
-BOOL    CALLBACK EnumWindowsProc( HWND, LPARAM );
-BOOL    IsPluginWindow(HWND);
+
 
 /*=============================================================================
 ==   Defines and typedefs
@@ -160,12 +147,6 @@ BOOL    IsPluginWindow(HWND);
  */
 #define BYTES_PER_ENTRY                     3
 
-
-#define VALIDATE_SYSTEM_LOGICAL_STATIC      0
-#define VALIDATE_SYSTEM_LOGICAL_ALL         1
-#define VALIDATE_SYSTEM_DEFAULT_STATIC      2
-
-
 /*=============================================================================
  ==   Data
  ============================================================================*/
@@ -177,9 +158,7 @@ HPALETTE     vhPalette             = NULL;
 HGLOBAL      vhLogPalette          = NULL;
 LOGPALETTE * vpLogPalette          = NULL;
 BOOL         vfPaletteDevice       = TRUE;
-DWORD        vdwPaletteTime        = 0L;
 BOOL         vfUsingDefaultPalette = TRUE;
-BOOL         vfWeirdSystemPalette  = FALSE;
 BOOL         vfPaletteAvailable    = FALSE;
 
 
@@ -213,66 +192,6 @@ const PALETTEENTRY BASEPALETTE[20] =
     { 0xFF,0xFF,0xFF,0 },       // 19
 };
 
-
-/*
- *  These structs are used to map the system colors
- *  when the client is using the static colors in the
- *  system palette.  It also stores the current colors
- *  before changing so it can restore the system colors.
- */ 
-#define rgbBlack    RGB(0,0,0)
-#define rgbWhite    RGB(255,255,255)
-
-#if 0
-#define NumSysColors (sizeof(SysPalIndex)/sizeof(SysPalIndex[0]))
-static int SysPalIndex[] = {
-    COLOR_ACTIVEBORDER,   
-    COLOR_ACTIVECAPTION,  
-    COLOR_APPWORKSPACE,   
-    COLOR_BACKGROUND,     
-    COLOR_BTNFACE,        
-    COLOR_BTNSHADOW,      
-    COLOR_BTNTEXT,        
-    COLOR_CAPTIONTEXT,    
-    COLOR_GRAYTEXT,       
-    COLOR_HIGHLIGHT,      
-    COLOR_HIGHLIGHTTEXT,  
-    COLOR_INACTIVEBORDER, 
-    COLOR_INACTIVECAPTION,
-    COLOR_MENU,           
-    COLOR_MENUTEXT,       
-    COLOR_SCROLLBAR,      
-    COLOR_WINDOW,         
-    COLOR_WINDOWFRAME,    
-    COLOR_WINDOWTEXT,     
-};
-static COLORREF OldColors[NumSysColors];
-
-#endif
-
-static COLORREF MonoColors[] = {
-    rgbBlack,
-    rgbWhite,
-    rgbWhite,
-    rgbWhite,
-    rgbWhite,
-    rgbBlack,
-    rgbBlack,
-    rgbBlack,
-    rgbBlack,
-    rgbBlack,
-    rgbWhite,
-    rgbWhite,
-    rgbWhite,
-    rgbWhite,
-    rgbBlack,
-    rgbWhite,
-    rgbWhite,
-    rgbBlack,
-    rgbBlack,
-};
-
-
 #ifdef DEBUG
 char * pszIdRealize[] = {
     "TWREALIZEPALETTE_INIT_FG",
@@ -291,378 +210,6 @@ char * pszIdRealize[] = {
  ****
  ****************************************************************************/
 
-PALETTEENTRY apalSystem[LOGICAL_PALETTE_SIZE];
-
-BOOL
-ValidateSystemPalette( HWND hwnd, HDC hdc, USHORT uMode ) 
-{
-    INT i;
-
-    TRACE((TC_TW,TT_TW_PALETTE, "ValidateSystemPalette: enter, uMode = %u", uMode));
-
-    /*
-     *  Do not bother on non-palette devices or if we ar not active
-     */
-    if ( (vfPaletteDevice == TRUE) && 
-         (vpLogPalette != NULL ) /*&&
-         (hwnd == GetActiveWindow()) */) {
-
-        TRACE((TC_TW,TT_TW_PALETTE, "ValidateSystemPalette: validating" ));
-
-        /*
-         *  Validate palette size
-         */
-//      ASSERT( GetDeviceCaps( hdc, SIZEPALETTE ) == LOGICAL_PALETTE_SIZE, LOGICAL_PALETTE_SIZE );
-
-        /*
-         *  Read system palette
-         */
-        GetSystemPaletteEntries( hdc, 0, LOGICAL_PALETTE_SIZE, apalSystem );
-
-        /*
-         *  Validate each entry
-         */
-        if ( uMode == VALIDATE_SYSTEM_LOGICAL_STATIC ) {
-
-            /*
-             *  Static values
-             */
-            for ( i = 0; i < 10; i++ ) {
-        
-                // First 10
-                if ( (vpLogPalette->palPalEntry[i].peRed   != apalSystem[i].peRed)   ||
-                     (vpLogPalette->palPalEntry[i].peGreen != apalSystem[i].peGreen) ||
-                     (vpLogPalette->palPalEntry[i].peBlue  != apalSystem[i].peBlue) ) {
-
-                    TRACE((TC_TW,TT_TW_PALETTE, "ValidateSystemPalette: exit FALSE" ));
-                    return FALSE;
-                }
-        
-                // Last 10
-                if ( (vpLogPalette->palPalEntry[i+LOGICAL_PALETTE_STATIC].peRed   != apalSystem[i+LOGICAL_PALETTE_STATIC].peRed)   ||
-                     (vpLogPalette->palPalEntry[i+LOGICAL_PALETTE_STATIC].peGreen != apalSystem[i+LOGICAL_PALETTE_STATIC].peGreen) ||
-                     (vpLogPalette->palPalEntry[i+LOGICAL_PALETTE_STATIC].peBlue  != apalSystem[i+LOGICAL_PALETTE_STATIC].peBlue) ) {
-        
-                    TRACE((TC_TW,TT_TW_PALETTE, "ValidateSystemPalette: exit FALSE" ));
-                    return FALSE;
-                }
-            }
-        }
-        else if ( uMode == VALIDATE_SYSTEM_LOGICAL_ALL ) {
-
-            for ( i=0; i<LOGICAL_PALETTE_SIZE; i++ ) {
-    
-                // all
-                if ( (vpLogPalette->palPalEntry[i].peRed   != apalSystem[i].peRed)   ||
-                     (vpLogPalette->palPalEntry[i].peGreen != apalSystem[i].peGreen) ||
-                     (vpLogPalette->palPalEntry[i].peBlue  != apalSystem[i].peBlue) ) {
-                    
-                    TRACE((TC_TW,TT_TW_PALETTE, "ValidateSystemPalette: exit FALSE" ));
-                    return FALSE;
-                }
-            }
-        }
-        else if ( uMode == VALIDATE_SYSTEM_DEFAULT_STATIC ) {
-
-            /*
-             *  Static values
-             */
-            for ( i = 0; i < 10; i++ ) {
-        
-                // First 10
-                if ( (BASEPALETTE[i].peRed   != apalSystem[i].peRed)   ||
-                     (BASEPALETTE[i].peGreen != apalSystem[i].peGreen) ||
-                     (BASEPALETTE[i].peBlue  != apalSystem[i].peBlue) ) {
-
-                    TRACE((TC_TW,TT_TW_PALETTE, "ValidateSystemPalette: entry %u, FALSE", i ));
-                    return FALSE;
-                }
-        
-                // Last 10
-                if ( (BASEPALETTE[i+10].peRed   != apalSystem[i+LOGICAL_PALETTE_STATIC].peRed)   ||
-                     (BASEPALETTE[i+10].peGreen != apalSystem[i+LOGICAL_PALETTE_STATIC].peGreen) ||
-                     (BASEPALETTE[i+10].peBlue  != apalSystem[i+LOGICAL_PALETTE_STATIC].peBlue) ) {
-        
-                    TRACE((TC_TW,TT_TW_PALETTE, "ValidateSystemPalette: entry %u, FALSE", i+10 ));
-                    return FALSE;
-                }
-            }
-        }
-    }
-
-    TRACE((TC_TW,TT_TW_PALETTE, "ValidateSystemPalette: exit TRUE" ));
-    return TRUE;
-}
-
-
-#if 0
-/****************************************************************************
- *
- *  PaletteTimerProc
- *
- *  PARAMETERS:
- *     none
- *
- *  RETURN:
- *
- ****************************************************************************/
-
-void PALCALLBACK
-PaletteTimerProc( HWND hwnd, UINT msg, UINT idTimer, DWORD dwTime ) 
-{
-
-    TRACE(( TC_TW, TT_TW_PALETTE, "PaletteTimerProc: idTimer %u", idTimer ));
-
-    /*
-     *  Kill the timer
-     */
-    KillTimer( hwnd, idTimer );
-
-    /*
-     *  Force repaint of screen
-     */
-    InvalidateRect( hwnd, NULL, FALSE );
-}
-#endif
-
-#if 0
-/****************************************************************************
- *
- *  EnumWindowsProc
- *
- *  This function is called for all top level windows.
- *
- *  PARAMETERS:
- *
- ****************************************************************************/
-
-BOOL CALLBACK
-EnumWindowsProc( HWND hwnd, LPARAM lParam )
-{
-
-    /*
-     *  Notify this window
-     */
-    SendMessage( hwnd, WM_SYSCOLORCHANGE, (WPARAM)0, (LPARAM)0 );
-
-    /* 
-     *  Keep enumerating
-     */
-    return( 1 );
-}
-#endif
-
-#if 0
-/****************************************************************************
- *
- *  UpdateSystemColors
- *
- *  This is routine determines if the static entries of the system
- *  palette have change and then sets or resets the system colors
- *  then notifies all top level windows.
- *
- *  PARAMETERS:
- *
- ****************************************************************************/
-
-VOID 
-UpdateSystemColors( HWND hwnd, HDC hdc, BOOL fSysColors )
-{
-       INT  i;
-       BOOL fNotify = FALSE;
-static BOOL f_I_ChangedSysColors = FALSE;
-
-    TRACE((TC_TW,TT_TW_PALETTE, "VDTW: UpdateSystemColors - enter"));
-
-    /*
-     *  Only needed for palette devices
-     */
-    if ( vfPaletteDevice ) {
-    
-        /* 
-         *  Have the static colors been set?
-         */
-        if ( (fSysColors == TRUE) && (f_I_ChangedSysColors == FALSE)) { 
-    
-            TRACE((TC_TW,TT_TW_PALETTE, "VDTW: UpdateSystemColors - use static colors"));
-    
-            /* 
-             *  Make a note that it was me who changed the system colors
-             */
-            f_I_ChangedSysColors = TRUE;
-
-            /*
-             *  Save old colors
-             */
-            for ( i=0; i<NumSysColors; i++ ) {
-                OldColors[i] = GetSysColor( SysPalIndex[i] );
-            }
-    
-            /*
-             *  Set system colors
-             */
-            SetSysColors( NumSysColors, SysPalIndex, MonoColors );
-            /*
-             *  Notify everyone else
-             */
-            fNotify = TRUE;
-        }
-        else if ((fSysColors == FALSE) && (f_I_ChangedSysColors == TRUE)) {
-    
-            TRACE((TC_TW,TT_TW_PALETTE, "VDTW: UpdateSystemColors - free static colors"));
-    
-            /*
-             *  Reset note 
-             */
-            f_I_ChangedSysColors = FALSE;
-    
-            /*
-             *  Set system colors
-             */
-            SetSysColors( NumSysColors, SysPalIndex, OldColors );
-            /*
-             *  Notify everyone else
-             */
-            fNotify = TRUE;
-        }
-    
-        /*
-         *  Do I need to notify all top level windows?
-         */
-        if ( fNotify ) {
-            EnumWindows( (WNDENUMPROC)EnumWindowsProc, (LPARAM)0 );
-            TRACE((TC_TW,TT_TW_PALETTE, "VDTW: UpdateSystemColors - notify others"));
-        }
-    }
-#ifdef DEBUG
-    else {
-        TRACE((TC_TW,TT_TW_PALETTE, "VDTW: UpdateSystemColors - skipped, non-palette device"));
-    }
-#endif
-}
-#endif
-
-
-/****************************************************************************
- *
- *  bUseStaticEntries
- *
- *  This is routine determines if the static entries of the system
- *  palette should be used or not
- *
- *  PARAMETERS:
- *
- ****************************************************************************/
-
-BOOL
-bUseStaticEntries( HWND hwnd, HDC hdc )
-{
-    USHORT i;
-    BOOL   fUse = FALSE;
-
-    /*
-     *  Only needed for palette devices
-     */
-    if ( vfPaletteDevice ) {
-
-        /*
-         *  Use static entries if any static entries are not the defaults
-         */
-        for ( i = 0; i < 10; i++ ) {
-    
-            // First 10
-            if ( (vpLogPalette->palPalEntry[i].peRed   != BASEPALETTE[i].peRed)   ||
-                 (vpLogPalette->palPalEntry[i].peGreen != BASEPALETTE[i].peGreen) ||
-                 (vpLogPalette->palPalEntry[i].peBlue  != BASEPALETTE[i].peBlue) ) {
-    
-                fUse = TRUE;
-                break;
-            }
-    
-            // Last 10
-            if ( (vpLogPalette->palPalEntry[i+LOGICAL_PALETTE_STATIC].peRed   != BASEPALETTE[i+10].peRed)   ||
-                 (vpLogPalette->palPalEntry[i+LOGICAL_PALETTE_STATIC].peGreen != BASEPALETTE[i+10].peGreen) ||
-                 (vpLogPalette->palPalEntry[i+LOGICAL_PALETTE_STATIC].peBlue  != BASEPALETTE[i+10].peBlue) ) {
-    
-                fUse = TRUE;
-                break;
-            }
-        }
-    
-        TRACE((TC_TW,TT_TW_PALETTE, "VDTW: bUseStaticEntries - %s", (fUse ? "TRUE" : "FALSE")));
-    }
-    else {
-
-        fUse = TRUE;
-        TRACE((TC_TW,TT_TW_PALETTE, "VDTW: bUseStaticEntries - always use for non-palette devices"));
-    }
-
-    return( fUse );
-}
-
-
-/****************************************************************************
- *
- *  SetStaticColorUse
- *
- *  This is routine sets or resets the static color usage
- *
- *  PARAMETERS:
- *
- ****************************************************************************/
-
-BOOL   
-SetStaticColorUse( HWND hwnd, HDC hdc, BOOL bUseStaticColors )
-{
-    BOOL fChanged = FALSE;
-
-    /*
-     *  Only needed for palette devices
-     */
-    if ( vfPaletteDevice ) {
-    
-        /*
-         *  Use static entries
-         */
-        if ( bUseStaticColors == TRUE ) {
-    
-            /*
-             *  Are we not already using the static entries?
-             */
-            if( GetSystemPaletteUse( hdc ) == SYSPAL_STATIC ) {
-                SetSystemPaletteUse( hdc, SYSPAL_NOSTATIC );
-                UnrealizeObject( (HGDIOBJ)vhPalette );
-                fChanged = TRUE;
-                TRACE((TC_TW,TT_TW_PALETTE, "VDTW: SetStaticColorUse - SetSystemPaletteUse(SYSPAL_NOSTATIC)" ));
-            }
-        }
-    
-        /*
-         *  Reset static entry use
-         */
-        else { 
-    
-            /*
-             *  Are we currently using the static entries?
-             */
-            if( GetSystemPaletteUse( hdc ) == SYSPAL_NOSTATIC ) {
-                SetSystemPaletteUse( hdc, SYSPAL_STATIC );
-                UnrealizeObject( (HGDIOBJ)vhPalette );
-                fChanged = TRUE;
-                TRACE((TC_TW,TT_TW_PALETTE, "VDTW: SetStaticColorUse - SetSystemPaletteUse(SYSPAL_STATIC)" ));
-            }
-        }
-    }
-#ifdef DEBUG
-    else {
-        fChanged = FALSE;
-        TRACE((TC_TW,TT_TW_PALETTE, "VDTW: SetStaticColorUse - skipped for non-palette device" ));
-    }
-#endif
-    return( fChanged );
-}
-
-
 /****************************************************************************
  *
  *  w_TWCmdPaletteSet
@@ -678,7 +225,7 @@ SetStaticColorUse( HWND hwnd, HDC hdc, BOOL bUseStaticColors )
  *
  ****************************************************************************/
 
-void 
+static void 
 w_TWCmdPaletteSet( HWND hwnd, 
                    HDC hdc, 
                    PTWPALETTEHEADER pTWPalHeader,
@@ -906,13 +453,7 @@ w_TWCmdPaletteSet( HWND hwnd,
     /*
      *  Realize flag
      */
-    if ( vfPaletteDevice ) {
-        fRealizePalette = (/*hwnd == GetActiveWindow() */ TRUE ? TWREALIZEPALETTE_SET_FG :
-                                                       TWREALIZEPALETTE_SET_BG);
-    }
-    else {
-        fRealizePalette = TWREALIZEPALETTE_SET_FG;
-    }
+    fRealizePalette = TWREALIZEPALETTE_SET_FG;
 
     /*
      *  Realize the new palette
@@ -1043,10 +584,10 @@ TWCreateDefaultPalette( HWND hwnd, HDC hdc )
     }
     else {
         vfPaletteDevice = FALSE;
-        fRealizePalette = TWREALIZEPALETTE_INIT_FG;
-        SetSystemPaletteUse( hdc, SYSPAL_NOSTATIC );
     }
 
+    fRealizePalette = TWREALIZEPALETTE_INIT_FG;
+    
     /*
      *  Logical palette is now initialized
      */
@@ -1057,32 +598,10 @@ TWCreateDefaultPalette( HWND hwnd, HDC hdc )
      */
     TWRealizePalette( hwnd, hdc, &cColors, fRealizePalette );
 
-#ifdef WIN16
-    /*
-     *  Create timer hook instance
-     */
-    lpfnPaletteTimerProc = (TIMERPROC) MakeProcInstance( (FARPROC) PaletteTimerProc, ghInstance );
-    ASSERT( lpfnPaletteTimerProc != NULL, 0 );
-#endif
-
     /*
      *  Note that we are currently using the default palette
      */
     vfUsingDefaultPalette = TRUE;
-
-    /*
-     *  Is the default system palette weird?
-     */
-#ifdef WIN32
-    if ( (vfPaletteDevice == TRUE) &&
-         (ValidateSystemPalette( hwnd, hdc, VALIDATE_SYSTEM_DEFAULT_STATIC ) == FALSE) ) {
-        vfWeirdSystemPalette = TRUE;
-    }
-    else
-#endif
-    {
-        vfWeirdSystemPalette = FALSE;
-    }
 
     TRACE((TC_TW,TT_TW_ENTRY_EXIT+TT_TW_PALETTE, "VDTW: TWCreateDefaultPalette - exit" ));
 }
@@ -1101,38 +620,21 @@ TWCreateDefaultPalette( HWND hwnd, HDC hdc )
 VOID
 TWUseSystemPalette( HWND hwnd, HDC hdc )
 {
-    BOOL fSysColorsChanged;
-
     TRACE((TC_TW,TT_TW_ENTRY_EXIT+TT_TW_PALETTE, "VDTW: TWUseSystemPalette - enter" ));
-
-    /*
-     *  Static colors in use by us?
-     */
-    fSysColorsChanged = SetStaticColorUse( hwnd, hdc, FALSE );
-
     /*
      *  Restore system default palette
      */
-    SelectPalette( hdc, (HPALETTE) GetStockObject( DEFAULT_PALETTE), IsPluginWindow(hwnd) );
+    SelectPalette( hdc, (HPALETTE) GetStockObject( DEFAULT_PALETTE), TRUE );
     RealizePalette( hdc );
 
     /*
      *  Restore system default palette to compatible dc
      */
     if ( compatDC ) {
-        SelectPalette( compatDC, (HPALETTE) GetStockObject( DEFAULT_PALETTE), IsPluginWindow(hwnd) );
+        SelectPalette( compatDC, (HPALETTE) GetStockObject( DEFAULT_PALETTE), TRUE );
         RealizePalette( compatDC );
     }
 
-#ifndef RISCOS
-    /*
-     *  Reset system colors, etc.
-     */
-    if ( fSysColorsChanged ) {
-        UpdateSystemColors( hwnd, hdc, FALSE );
-    }
-#endif
-    
     TRACE((TC_TW,TT_TW_ENTRY_EXIT+TT_TW_PALETTE, "VDTW: TWUseSystemPalette - exit" ));
 }
 
@@ -1150,20 +652,14 @@ TWUseSystemPalette( HWND hwnd, HDC hdc )
 VOID
 TWDeleteDefaultPalette( HWND hwnd, HDC hdc )
 {
-    BOOL    fSysColorsChanged;
     HGLOBAL hretcode;
 
     TRACE((TC_TW,TT_TW_ENTRY_EXIT+TT_TW_PALETTE, "VDTW: TWDeleteDefaultPalette - enter" ));
 
     /*
-     *  Static colors in use by us?
-     */
-    fSysColorsChanged = SetStaticColorUse( hwnd, hdc, FALSE );
-
-    /*
      *  Restore default palette
      */
-    SelectPalette( hdc, (HPALETTE) GetStockObject( DEFAULT_PALETTE), IsPluginWindow(hwnd) );
+    SelectPalette( hdc, (HPALETTE) GetStockObject( DEFAULT_PALETTE), TRUE );
 #ifndef RISCOS
     RealizePalette( hdc );
 #endif
@@ -1172,7 +668,7 @@ TWDeleteDefaultPalette( HWND hwnd, HDC hdc )
      *  Restore system default palette to compatible dc
      */
     if ( compatDC ) {
-        SelectPalette( compatDC, (HPALETTE) GetStockObject( DEFAULT_PALETTE), IsPluginWindow(hwnd) );
+        SelectPalette( compatDC, (HPALETTE) GetStockObject( DEFAULT_PALETTE), TRUE );
         RealizePalette( compatDC );
     }
 
@@ -1205,28 +701,6 @@ TWDeleteDefaultPalette( HWND hwnd, HDC hdc )
         vhLogPalette = NULL;
     }
 
-#ifndef RISCOS
-    /*
-     *  Reset system colors, etc.
-     */
-    UpdateSystemColors( hwnd, hdc, FALSE );
-
-    /*
-     *  Kill palette timer
-     */
-    KillTimer( hwnd, PALETTE_TIMER_ID );
-#endif
-    
-#ifdef WIN16
-    /*
-     *  If timer proc instance exists then destroy it
-     */
-    if ( lpfnPaletteTimerProc != NULL ) {
-        FreeProcInstance( lpfnPaletteTimerProc );
-        lpfnPaletteTimerProc = NULL;
-    }
-#endif
-
     /*
      *  Logical Palette is no longer available
      */
@@ -1252,12 +726,6 @@ TWRealizePalette( HWND hwnd, HDC hdc, UINT * pcColors, USHORT idRealizePalette )
 {
     UINT i;
     BYTE peFlags = 0;
-    BOOL fSysColorStatic;
-    BOOL fSysColorsChanged = FALSE;
-    BOOL fDontChangeStatic = FALSE;
-static DWORD cUpdateColors = 0;
-static BOOL  fSystemColorsUsed = FALSE;
-static BOOL  fWeTookStaticColors = FALSE;
 
     TRACE((TC_TW,TT_TW_ENTRY_EXIT+TT_TW_PALETTE, 
            "VDTW: TWRealizePalette - %s", pszIdRealize[idRealizePalette] ));
@@ -1268,102 +736,6 @@ static BOOL  fWeTookStaticColors = FALSE;
     if ( !vfPaletteAvailable ) {
         *pcColors = 0;
         return( CLIENT_STATUS_SUCCESS );
-    }
-
-    /*
-     *  Do we need to use any of the static entries?
-     */
-    if ( (vfWeirdSystemPalette == TRUE) &&
-         (idRealizePalette != TWREALIZEPALETTE_FOCUS) &&
-         (idRealizePalette != TWREALIZEPALETTE_BG) &&
-         (idRealizePalette != TWREALIZEPALETTE_SET_BG) ) {
-
-        /*
-         *  Note for set
-         */
-        fDontChangeStatic   = TRUE;
-        fWeTookStaticColors = TRUE;
-
-        /*
-         *  Set our use of static colors
-         */
-        (void) SetStaticColorUse( hwnd, hdc, TRUE );
-
-        TRACE((TC_TW,TT_TW_PALETTE, "VDTW: TWRealizePalette - using static entries"));
-    }
-    else if ( ((idRealizePalette == TWREALIZEPALETTE_BG) || 
-               (idRealizePalette == TWREALIZEPALETTE_FOCUS) ) && 
-              (fWeTookStaticColors == TRUE) ) {
-
-        /*
-         *  Note for reset
-         */
-        fWeTookStaticColors = FALSE;
-
-        /*
-         *  Reset our use of static colors
-         */
-        (void) SetStaticColorUse( hwnd, hdc, FALSE );
-
-        /*
-         *  Make this a background realization
-         */
-        idRealizePalette= TWREALIZEPALETTE_SET_BG;
-
-        TRACE((TC_TW,TT_TW_PALETTE, "VDTW: TWRealizePalette - not using static colors"));
-    }
-
-    /*
-     *  Possibility of static color changes
-     */
-    if ( (idRealizePalette == TWREALIZEPALETTE_FG)       || 
-         (idRealizePalette == TWREALIZEPALETTE_FOCUS)    ||
-         (idRealizePalette == TWREALIZEPALETTE_SET_FG)   ||
-         (idRealizePalette == TWREALIZEPALETTE_SET_BG)   ||
-         (idRealizePalette == TWREALIZEPALETTE_INIT_FG) ) {
-
-        /*
-         *  Only use static color while in foreground
-         */
-        if ( fDontChangeStatic || fWeTookStaticColors ) {
-
-            /*
-             *  Bad shit happening
-             */
-            peFlags = PC_NOCOLLAPSE;
-            TRACE((TC_TW,TT_TW_PALETTE, "VDTW: TWRealizePalette - using static entries because of fucked up system palette!"));
-        }
-        else if ( (idRealizePalette != TWREALIZEPALETTE_FOCUS) &&
-                  (idRealizePalette != TWREALIZEPALETTE_SET_BG) &&
-                  (bUseStaticEntries( hwnd, hdc ) == TRUE) ) {
-
-            /*
-             *  Set the dc mode to using static entries in system palette
-             */
-            fSysColorStatic = TRUE;
-            fSysColorsChanged = SetStaticColorUse( hwnd, hdc, fSysColorStatic );
-    
-            /*
-             *  Set no collapse bit for low static entries
-             */
-            peFlags = PC_NOCOLLAPSE;
-            TRACE((TC_TW,TT_TW_PALETTE, "VDTW: TWRealizePalette - using static entries"));
-        }
-        else if ( (vfWeirdSystemPalette == FALSE) ||
-                 ((vfWeirdSystemPalette == TRUE) && 
-                  (fWeTookStaticColors == TRUE)) ) {
-    
-            /*
-             *  Set the dc mode to restore static entries in system palette
-             */
-            fSysColorStatic = FALSE;
-            fSysColorsChanged = SetStaticColorUse( hwnd, hdc, fSysColorStatic );
-    
-            /*
-             *  Reset no collapse bit for low static entries
-             */
-            TRACE((TC_TW,TT_TW_PALETTE, "VDTW: TWRealizePalette - NOT using static entries"));
-        }
     }
 
     /*
@@ -1394,7 +766,7 @@ static BOOL  fWeTookStaticColors = FALSE;
         /*
          *  Select palette into our dc 
          */
-        SelectPalette( hdc, (vhPalette = hNewPalette), IsPluginWindow(hwnd) );
+        SelectPalette( hdc, (vhPalette = hNewPalette), TRUE );
         *pcColors = RealizePalette( hdc );
         TRACE((TC_TW,TT_TW_PALETTE, "VDTW: TWRealizePalette - Select New Palette"));
         TRACE((TC_TW,TT_TW_PALETTE, "VDTW: TWRealizePalette - %u colors realized", *pcColors ));
@@ -1403,7 +775,7 @@ static BOOL  fWeTookStaticColors = FALSE;
          *  Select palette to compatible dc
          */
         if ( compatDC ) {
-            SelectPalette( compatDC, vhPalette, IsPluginWindow(hwnd) );
+            SelectPalette( compatDC, vhPalette, TRUE );
             RealizePalette( compatDC );
         }
     
@@ -1420,26 +792,20 @@ static BOOL  fWeTookStaticColors = FALSE;
          *  Note that we are no longer using the default palette
          */
         vfUsingDefaultPalette = FALSE;
-
-
-        /*
-         *  Validate system palette
-         */
-//      ASSERT( ValidateSystemPalette( hwnd, hdc, VALIDATE_SYSTEM_DEFAULT_ALL ), 0 );
     }
     else {
 
         /*
          *  Realize palette
          */
-        SelectPalette( hdc, vhPalette, IsPluginWindow(hwnd) );
+        SelectPalette( hdc, vhPalette, TRUE );
         *pcColors = RealizePalette( hdc );
 
         /*
          *  Select palette to compatible dc
          */
         if ( compatDC ) {
-            SelectPalette( compatDC, vhPalette, IsPluginWindow(hwnd) );
+            SelectPalette( compatDC, vhPalette, TRUE );
             RealizePalette( compatDC );
         }
     
@@ -1447,111 +813,8 @@ static BOOL  fWeTookStaticColors = FALSE;
         TRACE((TC_TW,TT_TW_PALETTE, "VDTW: TWRealizePalette - %u colors realized", *pcColors ));
     }
 
-    /*
-     *  Map logical palette into system palette
-     */
-
-    /*
-     *  Did any logical palette entries get remapped to the system palette?
-     */
-    if ( (*pcColors != 0) || 
-         ((idRealizePalette == TWREALIZEPALETTE_FG) && (cUpdateColors != 0) ||
-         (vfPaletteDevice == FALSE) ) ) {
-
-        /*
-         *  Foreground, background, etc.
-         */
-        if ( (idRealizePalette == TWREALIZEPALETTE_INIT_FG) ) {
-            /* do nothing */;
-        }
-        else if ( (idRealizePalette == TWREALIZEPALETTE_INIT_BG) ) {
-            /* do nothing */;
-        }
-        else if ( idRealizePalette == TWREALIZEPALETTE_FG ) {
-            if ( (vfPaletteDevice == TRUE) && 
-                 ((vfUsingDefaultPalette == FALSE) || 
-                  (fSystemColorsUsed == TRUE)) ) {
-//                InvalidateRect( hwnd, NULL, FALSE );
-                cUpdateColors = 0;
-                fSystemColorsUsed = FALSE;
-            }
-        }
-        else if ( idRealizePalette == TWREALIZEPALETTE_BG ) {
-            if ( (vfPaletteDevice == TRUE) && 
-                 (vfUsingDefaultPalette == FALSE) ) {
-                if ( !IsPluginWindow(hwnd) && (++cUpdateColors < MAX_UPDATE_COLORS) ) {
-//                    UpdateColors( hdc );
-                }
-                else {
-//                    InvalidateRect( hwnd, NULL, FALSE );
-                    cUpdateColors = 0;
-                }
-            }
-            else if( (vfPaletteDevice == TRUE) && 
-                     (GetSystemPaletteUse( hdc ) == SYSPAL_NOSTATIC) ) {
-                fSystemColorsUsed = TRUE;
-            }
-        }
-        else if ( (idRealizePalette == TWREALIZEPALETTE_SET_FG) ) {
-            if ( !vfPaletteDevice ) {
-
-                DWORD dwCurrentTime = 0; // GetCurrentTime();
-
-#ifndef RISCOS
-                /*
-                 *  Decide wether to invalidate now or later
-                 */
-                if ( dwCurrentTime < (vdwPaletteTime + PALETTE_TIMER_TIMEOUT) ) {
-    
-                    if ( SetTimer( hwnd, 
-                                   PALETTE_TIMER_ID, 
-                                   PALETTE_TIMER_TIMEOUT,
-#ifdef WIN16
-                              (TIMERPROC) lpfnPaletteTimerProc ) ==
-#else
-                              (TIMERPROC) PaletteTimerProc ) ==
-#endif
-                         0 ) {
-
-                        TRACE((TC_TW,TT_TW_PALETTE, 
-                               "VDTW: TWRealizePalette - SetTimer failed, InvalidateRect"));
-
-                        InvalidateRect( hwnd, NULL, FALSE );
-                    }
-                    vdwPaletteTime = dwCurrentTime;
-                }
-                else
-#endif
-		{
-                    vdwPaletteTime = dwCurrentTime;
-//                    InvalidateRect( hwnd, NULL, FALSE );
-                    TRACE((TC_TW,TT_TW_PALETTE, 
-                           "VDTW: TWRealizePalette - Timeout window expired, InvalidateRect"));
-                }
-            }
-        }
-        else if ( (idRealizePalette == TWREALIZEPALETTE_SET_BG) ) {
-            /* do nothing */;
-        }
-        else if ( idRealizePalette == TWREALIZEPALETTE_FOCUS ) {
-            if ( (vfPaletteDevice == TRUE) && (vfUsingDefaultPalette == FALSE) ) {
-//                UpdateColors( hdc );
-            }
-        }
-    }
-
-#ifndef RISCOS
-    /*
-     *  Update the system colors
-     */
-    if ( fSysColorsChanged == TRUE ) {
-        UpdateSystemColors( hwnd, hdc, fSysColorStatic );
-    }
-#endif
-
     return( CLIENT_STATUS_SUCCESS );
 }
-#endif
 
 
 /****************************************************************************
@@ -1577,9 +840,6 @@ void
 TWCmdPalette( HWND hwnd, HDC hdc )
 {
     USHORT rc = 0;
-#ifdef DOS
-    ASSERT( FALSE, 0 );
-#else
     TWPALETTEHEADER TWPalHeader;
     TWPALETTEHEADERCACHE TWPalHeaderCache;
 
@@ -1633,41 +893,7 @@ TWCmdPalette( HWND hwnd, HDC hdc )
 
 done:
 
-#endif
-
     TRACE((TC_TW,TT_TW_ENTRY_EXIT+TT_TW_PALETTE, "VDTW: TWCmdPalette: exit" ));
     TWCmdReturn( !rc ); // return to NewNTCommand or ResumeNTCommand
-}
-
-/****************************************************************************
- *
- * IsPluginWindow
- *
- * Determines whether we are running in a plugin window or not
- *
- *  PARAMETERS:
- *     hwnd (input)
- *        window handle
- *
- *  RETURN: 
- *     TRUE  - plugin window present
- *     FALSE - standalone window
- ****************************************************************************/
-BOOL    IsPluginWindow(HWND hWnd)
-{
-#if defined( DOS ) || defined(RISCOS)
-   return(FALSE);
-#else
-   PWFEINSTANCE pInstanceData = (PWFEINSTANCE)GetWindowLong( hWnd, GWL_INSTANCEDATA );
-
-   if(pInstanceData == NULL)
-      return(FALSE);
-
-   if(pInstanceData->hWndPlugin)
-      return(TRUE);
-   else
-      return(FALSE);
-#endif
-
 }
 

@@ -381,8 +381,11 @@ USHORT TWWindowsStop( PVD pVd )
    SetCursor( LoadCursor( NULL, IDC_ARROW ) );
 #endif
 
+#if 0
+   // SJM: no longer reset colorcaps as this causes any palette changes to be lost when switching back in
    curColorCaps = Color_Cap_Max;
-   
+#endif
+
    return( CLIENT_STATUS_SUCCESS );
 }
 

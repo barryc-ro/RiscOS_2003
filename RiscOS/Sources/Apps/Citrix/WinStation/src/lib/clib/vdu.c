@@ -57,9 +57,9 @@ void GetModeSpec(int *width, int *height)
 int GetSafeModeSpec(int *width, int *height)
 {
     int x0, y0, x1, y1;
-    if (LOGERR(_swix(ModeFiles_SafeArea, _IN(0) | _OUTR(0,3),
+    if (_swix(ModeFiles_SafeArea, _IN(0) | _OUTR(0,3),
 		     0, /* flags */
-		     &x0, &y0, &x1, &y1)) == NULL)
+		     &x0, &y0, &x1, &y1) == NULL)
     {
 	if (width)
 	    *width = (x1 - x0)/2;
@@ -84,7 +84,7 @@ int IsATV(void)
     if (is_a_tv_var == -1)
     {
 	int type;
-	if (LOGERR(_swix(ModeFiles_MonitorType, _IN(0) | _OUT(0), 0, &type)))
+	if (_swix(ModeFiles_MonitorType, _IN(0) | _OUT(0), 0, &type))
 	{
 	    char *s = getenv("TV$Type");
 	    is_a_tv_var = s && (stricmp(s, "PAL") == 0 || stricmp(s, "NTSC") == 0);
@@ -145,13 +145,13 @@ int GetModeNumber(void)
 void FadeScreen(unsigned colour)
 {
     int ref;
-    if (LOGERR(_swix(ScreenFade_FadeRectangle, _INR(0,7) | _OUT(1),
+    if (_swix(ScreenFade_FadeRectangle, _INR(0,7) | _OUT(1),
 		     1<<8,
 		     0, 0, -1, -1, 
 		     FADE_TIME,
 		     colour,
 		     FADE_LINE_SPACING,
-		     &ref)) == NULL)
+		     &ref) == NULL)
     {
 	
 	int status;
@@ -163,7 +163,7 @@ void FadeScreen(unsigned colour)
 	}
 	while ((status & 0xff) != 0xff);
 
-	LOGERR(_swix(ScreenFade_ReleaseFade, _INR(0,1), 0, ref));
+	_swix(ScreenFade_ReleaseFade, _INR(0,1), 0, ref);
     }
 }
 
