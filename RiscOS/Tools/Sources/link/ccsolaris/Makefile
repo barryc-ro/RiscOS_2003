@@ -58,9 +58,9 @@ install: ${TARGET}
 	strip ${RISCOS_BUILD_TOOLS}/${TARGET}
 
 clean:
-	-rm ${OBJALL}
-	-rm ${TARGET}
-	-rm $(DERIVED)
+	-rm -f ${OBJALL} *.[ch] VersionNum
+	-rm -f ${TARGET}
+	-rm -f $(DERIVED)
 	@echo cleaned ${TARGET}
 
 realclean: clean
