@@ -4,6 +4,9 @@
  * R C Manby
  *
  * Started 18 September 1997
+ *
+ * 1998-06-08: BAL
+ * Added MemCheck support.
  */
 
 
@@ -15,6 +18,7 @@
 #include <string.h>
 #include "kernel.h"
 
+#include "MemCheck/MemCheck.h"
 
 #include "wimp.h"
 #include "wimplib.h"
@@ -50,19 +54,22 @@ extern void SmtpIF_Register(void)
     unsigned int flags = 0;
     _kernel_oserror  *error = NULL;
 
-	dprintf((NULL, "SmtpIF_Register (entry)\n"));
+    dprintf((NULL, "SmtpIF_Register (entry)\n"));
 
     /* only if not already registered */
     if (SmtpIF_pollword_address == NULL)
     {
         if ((error = _AcornSMTP_Register(&flags, &SmtpIF_pollword_address)) != NULL)
         {
-			dprintf((NULL, "SmtpIF_Register Error: '%s'\n", error->errmess));
+            dprintf((NULL, "SmtpIF_Register Error: '%s'\n", error->errmess));
 
             SmtpIF_pollword_address = NULL;
             SmtpIF_SendOSError(RemXfer_StateMachine, SP_RX_REGISTER_ERROR, error);
-            return;	/* registration failed */
+            return; /* registration failed */
         }
+
+        MemCheck_RegisterMiscBlock (SmtpIF_pollword_address,
+                                    sizeof (void *));
     }
     /* was already registered or has just registered OK */
     StateKicker_SendMessage(RemXfer_StateMachine, SP_RX_REGISTER_DONE, NULL);
@@ -78,14 +85,15 @@ extern void SmtpIF_DeRegister(void)
     _kernel_oserror  *error = NULL;
     unsigned int flags = 0;
 
-	dprintf((NULL, "SmtpIF_DeRegister (entry)\n"));
+    dprintf((NULL, "SmtpIF_DeRegister (entry)\n"));
 
     /* only if registered */
     if (SmtpIF_pollword_address != NULL)
     {
+        MemCheck_UnRegisterMiscBlock (SmtpIF_pollword_address);
         error = _AcornSMTP_DeRegister(&flags, &SmtpIF_pollword_address);
 
-        SmtpIF_pollword_address = NULL;	/* mark as deregistered, even if we got an error */
+        SmtpIF_pollword_address = NULL; /* mark as deregistered, even if we got an error */
 
         if (error != NULL)
         {
@@ -104,17 +112,17 @@ extern void SmtpIF_DeRegister(void)
 extern void SmtpIF_SendMail(char *message, char *recipient, char *sender, char *hostname)
 {
     _kernel_oserror  *error = NULL;
-	unsigned int flags = 1;
+    unsigned int flags = 1;
 
     IDnum = NULL;
 
-	dprintf((NULL, "SmtpIF_SendMail (entry)\n"));
+    dprintf((NULL, "SmtpIF_SendMail (entry)\n"));
 
-	if ((error = _AcornSMTP_SendMail(&flags, SmtpIF_pollword_address, message, recipient, sender, hostname, -1/*port_num*/, &IDnum)) == NULL)
+    if ((error = _AcornSMTP_SendMail(&flags, SmtpIF_pollword_address, message, recipient, sender, hostname, -1/*port_num*/, &IDnum)) == NULL)
     {
-    	/* swi call accepted */
-    	SmtpIF_Check_PollWord = TRUE;
-    	poll_reason = AcornSMTP_SendMail;
+        /* swi call accepted */
+        SmtpIF_Check_PollWord = TRUE;
+        poll_reason = AcornSMTP_SendMail;
     }
     else
     {
@@ -123,53 +131,56 @@ extern void SmtpIF_SendMail(char *message, char *recipient, char *sender, char *
         SmtpIF_SendOSError(RemXfer_StateMachine, SP_RX_SENDMAIL_ERROR, error);
     }
 
-	dprintf((NULL, "SmtpIF_SendMail (exit)\n"));
+    dprintf((NULL, "SmtpIF_SendMail (exit)\n"));
 }
 
 
 extern void SmtpIF_PollStatus(void)
 {
-	if (SmtpIF_Check_PollWord)
-	{
-		/* poll for SWI completion */
-	    if (*((volatile int*)SmtpIF_pollword_address) != 0)
-		{
-			switch (poll_reason)
-			{
-		    	case AcornSMTP_SendMail:
-		        	{
-		            	AcornSMTP_SendMail_data *sm_data;
-		            	unsigned int flags;
+    if (SmtpIF_Check_PollWord)
+    {
+        /* poll for SWI completion */
+        if (*((volatile int*)SmtpIF_pollword_address) != 0)
+        {
+            switch (poll_reason)
+            {
+                case AcornSMTP_SendMail:
+                    {
+                        AcornSMTP_SendMail_data *sm_data;
+                        unsigned int flags;
 
-					  	sm_data = _AcornSMTP_SendMailData(SmtpIF_pollword_address);
-					  	if (sm_data)
-					  	{
-					  	    dprintf((NULL, "Got SendMailData: Flags: 0x%X\n", sm_data->flags));
+                        sm_data = _AcornSMTP_SendMailData(SmtpIF_pollword_address);
+                        if (sm_data)
+                        {
+                            MemCheck_RegisterMiscBlock (sm_data,
+                                                        sizeof (AcornSMTP_SendMail_data));
+                            dprintf((NULL, "Got SendMailData: Flags: 0x%X\n", sm_data->flags));
 
-		                    if (sm_data->error == NULL)
-		                    {
-		                    	StateKicker_SendMessage(RemXfer_StateMachine, SP_RX_SENDMAIL_DONE, NULL);
-		                    }
-		                    else
-		                    {
-		        				dprintf((NULL, "Error: '%s (%d)'\n", sm_data->error, sm_data->errno));
+                            if (sm_data->error == NULL)
+                            {
+                                StateKicker_SendMessage(RemXfer_StateMachine, SP_RX_SENDMAIL_DONE, NULL);
+                            }
+                            else
+                            {
+                                dprintf((NULL, "Error: '%s (%d)'\n", sm_data->error, sm_data->errno));
 
-		        				SmtpIF_SendOSError3(RemXfer_StateMachine, SP_RX_SENDMAIL_ERROR, sm_data->error, sm_data->errno, sm_data->smtp_response);
-		                    }
+                                SmtpIF_SendOSError3(RemXfer_StateMachine, SP_RX_SENDMAIL_ERROR, sm_data->error, sm_data->errno, sm_data->smtp_response);
+                            }
 
-					  	  	if (sm_data->smtp_response) dprintf((NULL, "SMTP Response: %s\n", sm_data->smtp_response));
-					  	}
-					  	/* release the returned data - this clears the pollword */
+                            if (sm_data->smtp_response) dprintf((NULL, "SMTP Response: %s\n", sm_data->smtp_response));
+                        }
+                        /* release the returned data - this clears the pollword */
                         flags = 0;
+                        MemCheck_UnRegisterMiscBlock (sm_data);
                         _AcornSMTP_ReleaseData(&flags, &SmtpIF_pollword_address, AcornSMTP_SendMail, sm_data);
                         SmtpIF_Check_PollWord = FALSE;
-		            }
-		    		break; /*AcornSMTP_SendMail*/
-		    } /*switch (poll_reason)*/
-		}
+                    }
+                    break; /*AcornSMTP_SendMail*/
+            } /*switch (poll_reason)*/
+        }
     }
 
-	/* deliver the queued messages */
+    /* deliver the queued messages */
     while (StateKicker_Deliver() > 1)
         /* null statement */;
 }
@@ -180,12 +191,12 @@ static void SmtpIF_SendOSError(void (*StateMachine)(int messageNumber, messageDa
 #if 1
     StateKicker_SendOSError(StateMachine, messageNumber, code_SMTP_OSError, ctx_SMTP_OSError, error);
 #else
-	messageDataBlock *sendMessage;
+    messageDataBlock *sendMessage;
 
     StateKicker_SendMessage(StateMachine, messageNumber, &sendMessage);
     sendMessage->data.smtp_error.from = ErrorFrom_SMTP;
-    sendMessage->data.smtp_error.rc = 0;	/*>>>should this be zero???*/
-    sendMessage->data.smtp_error.err = *error;	/* MUST copy message block rather than pointer (which will be stale when the message arrives) */
+    sendMessage->data.smtp_error.rc = 0;    /*>>>should this be zero???*/
+    sendMessage->data.smtp_error.err = *error;  /* MUST copy message block rather than pointer (which will be stale when the message arrives) */
 #endif
 }
 
@@ -200,7 +211,7 @@ static void SmtpIF_SendOSError3(void (*StateMachine)(int messageNumber, messageD
         char buff[256];
 
         sprintf(buff, "%s (%d)", error->errmess, errno);
-        StateKicker_SendRCError(StateMachine, messageNumber, code_SMTP_RCError, ctx_SMTP_RCError, errno, buff);    
+        StateKicker_SendRCError(StateMachine, messageNumber, code_SMTP_RCError, ctx_SMTP_RCError, errno, buff);
     }
     else
     {
@@ -214,25 +225,25 @@ static void SmtpIF_SendOSError3(void (*StateMachine)(int messageNumber, messageD
             strncat(err.errmess, smtp_response, sizeof(err.errmess));
             strncat(err.errmess, ")"          , sizeof(err.errmess));
         }
-        
-        StateKicker_SendOSError(StateMachine, messageNumber, code_SMTP_OSError, ctx_SMTP_OSError, &err);    
+
+        StateKicker_SendOSError(StateMachine, messageNumber, code_SMTP_OSError, ctx_SMTP_OSError, &err);
     }
 #else
-	messageDataBlock *sendMessage;
+    messageDataBlock *sendMessage;
 
     StateKicker_SendMessage(StateMachine, messageNumber, &sendMessage);
 
     /* if error is 'Network error', add the network error number */
     if (error->errnum == (ErrorBase_AcornSMTP + 4))
     {
-    	sendMessage->data.smtp_error.rc = errno;
-      	sendMessage->data.smtp_error.err.errnum = error->errnum;
-      	sprintf(sendMessage->data.smtp_error.err.errmess, "%s (%d)", error->errmess, errno);
+        sendMessage->data.smtp_error.rc = errno;
+        sendMessage->data.smtp_error.err.errnum = error->errnum;
+        sprintf(sendMessage->data.smtp_error.err.errmess, "%s (%d)", error->errmess, errno);
     }
     else
     {
-    	sendMessage->data.smtp_error.rc = 0;	/*>>>should this be zero*/
-    	sendMessage->data.smtp_error.err = *error;	/* MUST copy message block rather than pointer (which will be stale when the message arrives) */
+        sendMessage->data.smtp_error.rc = 0;    /*>>>should this be zero*/
+        sendMessage->data.smtp_error.err = *error;  /* MUST copy message block rather than pointer (which will be stale when the message arrives) */
 #if 1
         if (smtp_response)
         {

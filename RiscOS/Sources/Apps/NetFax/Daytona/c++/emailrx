@@ -78,6 +78,9 @@
  * Pruned some dead code.
  *
  * Added emailrx_current_date_time for RManby.
+ *
+ * 1998-06-09: BAL
+ * Altered removal of documents from document list after MemCheck complained.
  */
 
 
@@ -109,6 +112,9 @@ extern "C"
 // Toolbox
 #include "tboxlibs/toolbox.h"
 #include "tboxlibs/wimp.h"
+
+// Miscellaneous
+#include "MemCheck/MemCheck.h"
 
 // Daytona
 #include "emailrx.h"
@@ -241,7 +247,7 @@ class document_t
                                  size_t              report_size,
                                  const NFE_header &  header);
 
-        virtual void  tidy (void);
+        virtual bool  tidy (void);
 
         virtual void  update_flags (void);
 
@@ -347,7 +353,7 @@ class netfax_fax_document_t : public netfax_document_t
                           size_t              report_size,
                           const NFE_header &  header);
 
-        virtual void  tidy (void);
+        virtual bool  tidy (void);
 
 #ifdef TEST
         virtual void  dump_to_file (FILE *const  file);
@@ -422,8 +428,6 @@ static int match_message (const void *const  data1,
 static int compare_page_nums (const void *const  data1,
                               const void *const  data2);
 
-static void free_document (void *  document);
-
 static void free_message (void *  message);
 
 static int truncate_doc_list (void);
@@ -493,6 +497,9 @@ document_t::~document_t (void)
         free (return_receipt_address);
     }
     list_destroy (message_list);
+
+    list_remove_item (document_list,
+                      item_handle);
 }
 
 
@@ -550,8 +557,6 @@ void document_t::remove_from_list (list_handle list)
 {
     list_remove_item (list,
                       this->item_handle);
-
-    delete this;
 }
 
 
@@ -1012,17 +1017,21 @@ int document_t::cover_sheet (char *const         report,
 
 
 
-void document_t::tidy (void)
+bool document_t::tidy (void)
 {
+    bool  delete_document = false;
+
     if (get_number_messages (MessageFlags_Printed,
                              0) == 0)
     {
-        remove_from_list (document_list);
+        delete_document = true;
     }
     else
     {
         update_flags ();
     }
+
+    return delete_document;
 }
 
 
@@ -2621,8 +2630,10 @@ int netfax_fax_document_t::page_list (char *const         string,
 
 
 
-void netfax_fax_document_t::tidy (void)
+bool netfax_fax_document_t::tidy (void)
 {
+    bool  delete_document = false;
+
     if (connection_count < g_missing_page_threshold ||
         get_number_messages (MessageFlags_Printed,
                              0) > 0)
@@ -2633,8 +2644,10 @@ void netfax_fax_document_t::tidy (void)
     }
     else
     {
-        remove_from_list (document_list);
+        delete_document = true;
     }
+
+    return delete_document;
 }
 
 
@@ -2658,7 +2671,7 @@ extern int emailrx_initialise (void)
 {
     _kernel_oserror *  e;
 
-    document_list = list_create (free_document);
+    document_list = list_create (NULL);
     if (document_list == NULL)
         return 1;
 
@@ -2674,6 +2687,9 @@ extern int emailrx_initialise (void)
 
     if (e != NULL)
         return 1;
+
+    MemCheck_RegisterMiscBlock (report_templates,
+                                sizeof (MessagesFD) + strlen (ReportsPath) + 1);
 
     strcpy ((char *) ((int) report_templates + sizeof (MessagesFD)),
             ReportsPath);
@@ -2724,6 +2740,8 @@ extern void emailrx_finalise (void)
 
                7,
                report_templates);
+
+        MemCheck_UnRegisterMiscBlock (report_templates);
     }
 }
 
@@ -2768,9 +2786,10 @@ extern int emailrx_new_message (const unsigned int       size,
                                 const unsigned int       max_free_space,
                                 int *const               delete_message)
 {
-    unsigned int  message_flags        = 0;
-    unsigned int  message_number_lines = 0;
-    document_t *  document             = NULL;
+    unsigned int      message_flags        = 0;
+    unsigned int      message_number_lines = 0;
+    document_t *      document             = NULL;
+    list_item_handle  item;
 
 
     *delete_message = 0;
@@ -2804,10 +2823,9 @@ extern int emailrx_new_message (const unsigned int       size,
                 header->details.serial_num,
                 SERIAL_LEN);
 
-        document = (document_t *) list_find_item (
-                                      document_list,
-                                      netfax_fax_document_t::match_doc,
-                                      &new_document_id);
+        item =  list_find_item (document_list,
+                                netfax_fax_document_t::match_doc,
+                                &new_document_id);
     }
     else
     {
@@ -2827,16 +2845,15 @@ extern int emailrx_new_message (const unsigned int       size,
         // library; all text/plain MIME messages are given the same fake
         // document ID, device class etc.
 
-        document = (document_t *) list_find_item (
-                                      document_list,
-                                      document_t::match_doc,
-                                      unique_id);
+        item = list_find_item (document_list,
+                               document_t::match_doc,
+                               unique_id);
     }
 
     bool  document_created = false;
     bool  impossible = false;
 
-    if (document == NULL)
+    if (item == NULL)
     {
         // document not in document list
         document = create_doc (*header,
@@ -2852,6 +2869,8 @@ extern int emailrx_new_message (const unsigned int       size,
     }
     else
     {
+        document = (document_t *) list_item_data (item);
+
         // Document is already in document list.  Now have to check whether
         // message is already in message list for this document.
 
@@ -2881,7 +2900,7 @@ extern int emailrx_new_message (const unsigned int       size,
 
             if (document_created)
             {
-                document->remove_from_list (document_list);
+                delete document;
             }
         }
         else
@@ -3543,7 +3562,10 @@ extern void  emailrx_tidy (void)
          !M_list_finished (i);
          document = (document_t *) M_list_next (i))
     {
-        document->tidy ();
+        if (document->tidy ())
+        {
+            delete document;
+        }
     }
 }
 
@@ -3813,24 +3835,6 @@ static int compare_page_nums (const void *const  data1,
 
 
 /* -----------------------------------------------------------------------------
-   free_document
-
-   Deallocate storage for a document when a document is removed
-   from a list of documents.
-
-   Inputs:
-   document: pointer to document
- */
-
-static void free_document (void *  document)
-{
-    delete document;
-}
-
-
-
-
-/* -----------------------------------------------------------------------------
    free_message
 
    Deallocate storage for message information when a message is removed
@@ -3840,8 +3844,14 @@ static void free_document (void *  document)
    message_info: pointer to message information
  */
 
-static void free_message (void *  message)
+static void free_message (void *  data)
 {
+    message_t *  message = (message_t *) data;
+
+    if (message->unique_id)
+    {
+        free (message->unique_id);
+    }
     free (message);
 }
 
@@ -3872,42 +3882,47 @@ static int truncate_doc_list (void)
     list_initialise_iterator (&document_iterator,
                               document_list);
 
-    document = (document_t *) (document_iterator.reset) (&document_iterator);
+    document = (document_t *) M_list_reset (document_iterator);
 
-    while (!(document_iterator.finished) (&document_iterator))
+    while (!M_list_finished (document_iterator))
     {
         message_count += document->get_number_messages (0,
                                                         0);
 
-        document = (document_t *) (document_iterator.next) (&document_iterator);
+        document = (document_t *) M_list_next (document_iterator);
     }
 
     /* Work out approximate 1/3 of total number messages */
     one_third_number_messages = message_count / 3;
     if (one_third_number_messages == 0)
+    {
         return -1;
+    }
 
     /* Iterate over the document list again to find the cut-off point.  Cut off
      * whole documents, not just bits.
      */
     message_count = 0;
-    document = (document_t *) (document_iterator.reset) (&document_iterator);
+    document = (document_t *) M_list_reset (document_iterator);
 
-    while (!(document_iterator.finished) (&document_iterator))
+    while (!M_list_finished (document_iterator))
     {
         message_count += document->get_number_messages (0,
                                                         0);
         if (message_count > one_third_number_messages)
+        {
             break;
+        }
 
-        document = (document_t *) (document_iterator.next) (&document_iterator);
+        document = (document_t *) M_list_next (document_iterator);
     }
 
     /* Remove all documents from the cut-off point to the end of the list */
-    while (!(document_iterator.finished) (&document_iterator))
+    while (!M_list_finished (document_iterator))
     {
-        document->remove_from_list (document_list);
-        document = (document_t *) (document_iterator.next) (&document_iterator);
+        M_list_next (document_iterator);
+        delete document;
+        document = (document_t *) M_list_current (document_iterator);
     }
 
     return one_third_number_messages;
