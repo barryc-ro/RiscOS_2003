@@ -19,7 +19,6 @@
 #                     directories. Removed 200 and 300 directories.
 #                     Made SysPaths set Boot$OSVersion if not already set,
 #                     and correct "3.50" to "350".
-# 10-Aug-98      SNB  Added DDEUtils source and removed binary imports.
 
 VPATH = @ <Support$Dir>
 
@@ -67,17 +66,15 @@ MODULES = \
       310.Modules.ABIMod \
       310.Modules.BASIC64 \
       310.Modules.Colours \
+      310.Modules.DDEUtils \
       310.Modules.DDT \
       310.Modules.FrontEnd \
       310.Modules.Network.URL.File \
       310.Modules.Network.URL.URL \
       310.Modules.SCSIFiler \
       310.Modules.SerialUtil \
-      ${DDEUTILS} \
+      370.Modules.DDEUtils \
       370.Modules.DDT
-
-DDEUTILS =\
- rm.DDEUtils
 
 FILES =\
  ${LDIR}.!Boot\
@@ -93,10 +90,8 @@ OBJS = o.main o.x
 #
 # Rule patterns
 #
-.SUFFIXES: .oz .od .asm .s
+.SUFFIXES: .oz .od .asm
 .c.o:;    ${CC} ${CFLAGS} -ff -o $@ $<
-.s.o:;    ${AS} ${AFLAGS} $< $@
-.s.od:;   ${AS} ${AFLAGS} -g $< $@
 .c.oz:;   ${CC} ${CFLAGS} -ff -zM -zps1 -o $@ $<
 .c.od:;   ${CC} ${CFLAGS} -DTRACE=1 -g -o $@ $<
 .asm.o:;  ${AS} ${AFLAGS} $< $@
@@ -130,14 +125,14 @@ install: ${FILES}
         ${CP} 310.Modules.ABIMod           ${INSTDIR}.310.Modules.* ${CPFLAGS}
         ${CP} 310.Modules.BASIC64          ${INSTDIR}.310.Modules.* ${CPFLAGS}
         ${CP} 310.Modules.Colours          ${INSTDIR}.310.Modules.* ${CPFLAGS}
-        ${CP} ${DDEUTILS}                  ${INSTDIR}.310.Modules.* ${CPFLAGS}
+        ${CP} 310.Modules.DDEUtils         ${INSTDIR}.310.Modules.* ${CPFLAGS}
         ${CP} 310.Modules.DDT              ${INSTDIR}.310.Modules.* ${CPFLAGS}
         ${CP} 310.Modules.FrontEnd         ${INSTDIR}.310.Modules.* ${CPFLAGS}
         ${CP} 310.Modules.SCSIFiler        ${INSTDIR}.310.Modules.* ${CPFLAGS}
         ${CP} 310.Modules.SerialUtil       ${INSTDIR}.310.Modules.* ${CPFLAGS}
         ${CP} 310.Modules.Network.URL.File ${INSTDIR}.310.Modules.Network.URL.* ${CPFLAGS}
         ${CP} 310.Modules.Network.URL.URL  ${INSTDIR}.310.Modules.Network.URL.* ${CPFLAGS}
-        ${CP} ${DDEUTILS}                  ${INSTDIR}.370.Modules.* ${CPFLAGS}
+        ${CP} 370.Modules.DDEUtils         ${INSTDIR}.370.Modules.* ${CPFLAGS}
         ${CP} 370.Modules.DDT              ${INSTDIR}.370.Modules.* ${CPFLAGS}
         ${CP} Modules.SSound               ${INSTDIR}.Modules.*     ${CPFLAGS} # shouldn't be in here
         |
@@ -155,7 +150,6 @@ clean:
         ${WIPE} o.* ${WFLAGS}
         ${WIPE} oz.* ${WFLAGS}
         ${WIPE} od.* ${WFLAGS}
-        ${RM} ${DDEUTILS}
         ${RM} abs.SysPaths
         @echo ${COMPONENT}: cleaned
 
@@ -172,7 +166,7 @@ clean_all:
         Access ${INSTDIR}.350.Modules.* rw/
         -Destroy ${OBJS} ${OBJSD} abs.SysPaths ${INSTDIR}.!Boot \
               ${INSTDIR}.!Help ${INSTDIR}.!Run ${INSTDIR}.!Sprites \
-              ${INSTDIR}.!Sprites22 ${INSTDIR}.SysPaths ${DDEUTILS} o.DDEUtils 
+              ${INSTDIR}.!Sprites22 ${INSTDIR}.SysPaths
         Wipe ${INSTDIR}.200 ${WFLAGS}R
         Wipe ${INSTDIR}.300 ${WFLAGS}R
         Wipe ${INSTDIR}.310 ${WFLAGS}R
@@ -189,8 +183,20 @@ abs.SysPaths: ${OBJS} ${OSLIB} ${CLIB}
 abs.SysPathsD: ${OBJSD} ${OSLIB} ${CLIB}
         ${LD} -o $@ -debug ${OBJSD} ${OSLIB} ${CLIB}
 
-${DDEUTILS}: o.DDEUtils
-	${LD} -m -o $@ o.DDEUtils
-
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
+o.main:	c.main
+o.main:	OS:h.macros
+o.main:	OS:h.os
+o.main:	OS:h.types
+o.main:	OS:h.osgbpb
+o.main:	OS:h.fileswitch
+o.main:	OS:h.osmodule
+o.main:	Support:h.x
+o.x:	<Support$Dir>.c.x
+o.x:	C:h.kernel
+o.x:	C:h.swis
+o.x:	OS:h.macros
+o.x:	OS:h.os
+o.x:	OS:h.types
+o.x:	<Support$Dir>.h.x

@@ -84,7 +84,7 @@ RESF=o.res
 # Rule patterns
 #
 .c.o:;    ${CC} ${CFLAGS} ${ROMFLAGS} -o $@ $<
-.cmhg.o:; ${CMHG} -p -o $@ $<
+.cmhg.o:; ${CMHG} -o $@ $<
 
 #
 # Main rules:
