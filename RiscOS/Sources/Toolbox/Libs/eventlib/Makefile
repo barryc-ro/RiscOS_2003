@@ -6,6 +6,9 @@
 # Date		Name		Description
 # ----		----		-----------
 # 1997-09-03	BAL		Created
+# 1997-09-23	BAL		Fixed broken export for module build
+# 				Removed rogue reference to TARGETZM in
+#                               install_rom rule
 #
 
 
@@ -54,7 +57,7 @@ ABSSYM		= RISC_OSLib:o.AbsSym
 # Include files
 #
 
-INCLUDES	= -IC:,tbox:
+INCLUDES	= -Itbox:,C:
 #DFLAGS		= -Ddebugging=1
 
 
@@ -64,8 +67,8 @@ INCLUDES	= -IC:,tbox:
 
 COMPONENT	= eventlib
 COMPONENTZ	= eventlibm
-TARGET		= ${COMPONENT}
-TARGETZ		= ${COMPONENTZ}
+TARGET		= eventlib
+TARGETZ		= eventlibm
 EXPORTS		= ${EXP_HDR}.${COMPONENT}
 
 OBJS		=\
@@ -110,7 +113,7 @@ rom: ${TARGET} ${TARGETZ}
 
 export: export_${PHASE}
 
-install_rom: ${TARGET} ${TARGETZM}
+install_rom: ${TARGET} ${TARGETZ}
 	${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
 	@echo ${COMPONENT}: rom module installed
 
@@ -125,7 +128,7 @@ export_hdrs: h.event dirs
 	${CP}	h.event		${LIBDIR}.tboxlibs.h.event	${CPFLAGS}
 	@echo ${COMPONENT}: export complete (hdrs)
 
-export_libs: ${TARGET} dirs
+export_libs: ${TARGET} ${TARGETZ} dirs
 	${CP}	${TARGET}	${LIBDIR}.tboxlibs.o.${TARGET}	${CPFLAGS}
 	${CP}	${TARGETZ}	${LIBDIR}.tboxlibs.o.${TARGETZ}	${CPFLAGS}
 	@echo ${COMPONENT}: export complete (libs)
@@ -157,74 +160,3 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 
 # ------------------------------------------------------------------------------
 # Dynamic dependencies:
-o.!!version: s.!!version
-o.event:	c.event
-o.event:	C:h.kernel
-o.event:	h.debug
-o.event:	h.types
-o.event:	tbox:h.wimp
-o.event:	tbox:h.toolbox
-o.event:	h.event
-o.event:	h.event
-o.event:	h.wimpevent
-o.event:	h.tbevent
-o.event:	h.wimpmsg
-o.tbevent:	c.tbevent
-o.tbevent:	C:h.kernel
-o.tbevent:	h.event
-o.tbevent:	tbox:h.wimp
-o.tbevent:	tbox:h.toolbox
-o.tbevent:	h.debug
-o.tbevent:	h.types
-o.tbevent:	h.tbevent
-o.wimpevent:	c.wimpevent
-o.wimpevent:	C:h.kernel
-o.wimpevent:	h.debug
-o.wimpevent:	h.event
-o.wimpevent:	tbox:h.wimp
-o.wimpevent:	tbox:h.toolbox
-o.wimpevent:	h.types
-o.wimpevent:	h.wimpevent
-z.event:	c.event
-z.event:	C:h.kernel
-z.event:	h.debug
-z.event:	h.types
-z.event:	tbox:h.wimp
-z.event:	tbox:h.toolbox
-z.event:	h.event
-z.event:	h.event
-z.event:	h.wimpevent
-z.event:	h.tbevent
-z.event:	h.wimpmsg
-z.tbevent:	c.tbevent
-z.tbevent:	C:h.kernel
-z.tbevent:	h.event
-z.tbevent:	tbox:h.wimp
-z.tbevent:	tbox:h.toolbox
-z.tbevent:	h.debug
-z.tbevent:	h.types
-z.tbevent:	h.tbevent
-z.wimpevent:	c.wimpevent
-z.wimpevent:	C:h.kernel
-z.wimpevent:	h.debug
-z.wimpevent:	h.event
-z.wimpevent:	tbox:h.wimp
-z.wimpevent:	tbox:h.toolbox
-z.wimpevent:	h.types
-z.wimpevent:	h.wimpevent
-o.wimpmsg:	c.wimpmsg
-o.wimpmsg:	C:h.kernel
-o.wimpmsg:	h.debug
-o.wimpmsg:	h.event
-o.wimpmsg:	tbox:h.wimp
-o.wimpmsg:	tbox:h.toolbox
-o.wimpmsg:	h.types
-o.wimpmsg:	h.wimpmsg
-z.wimpmsg:	c.wimpmsg
-z.wimpmsg:	C:h.kernel
-z.wimpmsg:	h.debug
-z.wimpmsg:	h.event
-z.wimpmsg:	tbox:h.wimp
-z.wimpmsg:	tbox:h.toolbox
-z.wimpmsg:	h.types
-z.wimpmsg:	h.wimpmsg

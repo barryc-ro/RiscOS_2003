@@ -7,6 +7,9 @@
 # ----		----		-----------
 # 1997-07-18	BAL		Created
 # 1997-09-03	BAL		Tidied up for committal
+# 1997-09-23	BAL		Fixed broken export for module build
+# 				Removed rogue reference to TARGETZM in
+#                               install_rom rule
 #
 
 
@@ -102,7 +105,7 @@ rom: ${TARGET} ${TARGETZ}
 
 export: export_${PHASE}
 
-install_rom: ${TARGET} ${TARGETZM}
+install_rom: ${TARGET} ${TARGETZ}
 	${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
 	@echo ${COMPONENT}: rom module installed
 
@@ -117,7 +120,7 @@ export_hdrs: h.flex dirs
 	${CP}	h.flex		${LIBDIR}.tboxlibs.h.flex	${CPFLAGS}
 	@echo ${COMPONENT}: export complete (hdrs)
 
-export_libs: ${TARGET} dirs
+export_libs: ${TARGET} ${TARGETZ} dirs
 	${CP}	${TARGET}	${LIBDIR}.tboxlibs.o.${TARGET}	${CPFLAGS}
 	${CP}	${TARGETZ}	${LIBDIR}.tboxlibs.o.${TARGETZ}	${CPFLAGS}
 	@echo ${COMPONENT}: export complete (libs)
@@ -148,18 +151,4 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 
 
 # ------------------------------------------------------------------------------
-# Dynamic dependencies
-## Dynamic dependencies:
 # Dynamic dependencies:
-o.flex:	c.flex
-o.flex:	C:h.kernel
-o.flex:	C:h.swis
-o.flex:	h.opts
-o.flex:	h.flex
-o.flex:	h.swiextra
-z.flex:	c.flex
-z.flex:	C:h.kernel
-z.flex:	C:h.swis
-z.flex:	h.opts
-z.flex:	h.flex
-z.flex:	h.swiextra
