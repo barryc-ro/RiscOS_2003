@@ -211,7 +211,12 @@ Second word - other items
 #define LIST_ITEM_TYPE_MASK     0x0000000f
 #define LIST_ITEM_TYPE_SHIFT    40
 
-/* 12..31 spare */
+/* 12..19 pdh Right-hand indent */
+
+#define STYLE_RINDENT_MASK      0x000000ff
+#define STYLE_RINDENT_SHIFT     44
+
+/* 20..31 spare */
 
 /* Third word - list item number */
 

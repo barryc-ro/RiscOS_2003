@@ -5,18 +5,18 @@
 /* Transfer status codes */
 
 typedef enum {
-    /* H = HTTP, G = Gopher, F = FTP */
+    /* H = HTTP (h=secure only), G = Gopher, F = FTP */
 
     status_NEW = 0,			/*     New, untouched connection state variable */
 
     /* Before we have a connection */
     status_DNS = 100,			/* HGF Waiting for the DNS lookup to complete */
-    status_AWAITING_CONNECTION,		/*   F Queued waiting for service (e.g. sequential FTPs) */
+    status_AWAITING_CONNECTION,		/* H F Queued waiting for service (e.g. sequential FTPs) */
     status_CONNECTING,			/* HGF Connect call made but not yet connected */
     status_REDIALLING,			/* HGF Waiting for line to go up */
 
     /* Sorting out getting at data */
-    status_AUTHENTICATING = 200,	/*   F Sending authication information and waiting for a reply */
+    status_AUTHENTICATING = 200,	/* h F Sending authication information and waiting for a reply */
 /**/status_REUSE_CHECKING,              /*   F Seeing if can reuse an existing connection */
     status_DIRECTORY_CHANGING,		/*   F Getting to the right place to fetch the data */
     status_NEGOTIATING,			/*   F Agreeing how we are going to get the data back */
@@ -34,14 +34,18 @@ typedef enum {
     status_FINISHING = 400,		/*   F Tidying up after a transfer */
 
     /* OK to close */
-    status_COMPLETED_FILE = 500,	/* HGF File fetched */
-    status_COMPLETED_DIR,		/*   F Directory fetched */
-    status_FAIL_CONNECT,		/* HGF Failed to get through to the remote host */
-    status_FAIL_REQUEST,		/* H F Request truned down by remote host */
-    status_FAIL_DNS,			/* HGF Could not look up the remote host name */
-    status_FAIL_PASSWORD,		/*   F Bad password caused login failure */
-    status_COMPLETED_CACHE,		/*     Data fetched from cache */
-    status_BAD_FILE_TYPE		/* H   Frontend cannot handle file type */
+    status_COMPLETED_FILE = 500,    /* HGF File fetched */
+    status_COMPLETED_DIR,	    /*   F Directory fetched */
+    status_FAIL_CONNECT,	    /* HGF Failed to get through to the remote host */
+    status_FAIL_REQUEST,	    /* H F Request truned down by remote host */
+    status_FAIL_DNS,		    /* HGF Could not look up the remote host name */
+    status_FAIL_PASSWORD,	    /*   F Bad password caused login failure */
+    status_COMPLETED_CACHE,	    /*     Data fetched from cache */
+    status_BAD_FILE_TYPE,           /* H   Frontend cannot handle file type */
+    status_FAIL_VERIFY,             /* h   Remote host identity couldn't be verified */
+    status_FAIL_LOCAL,              /* H   Local failure (eg no disc space) */
+    status_COMPLETED_PART           /* H   Done one part of a server push */
+
 
     } transfer_status;
 

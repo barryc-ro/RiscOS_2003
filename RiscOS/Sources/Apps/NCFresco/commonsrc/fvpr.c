@@ -133,7 +133,7 @@ extern BOOL fvpr_progress_stream(rid_text_stream *stream)
 	case rid_tag_TABLE:
 	{
 	    rid_table_item *table = ((rid_text_item_table *)ti)->table;
-	    
+
 	    if ((table->flags & rid_tf_FINISHED) == 0)
 	    {
 		RENDBG(("fvpr: table not completed yet\n"));
@@ -167,12 +167,15 @@ extern BOOL fvpr_progress_stream(rid_text_stream *stream)
 
 	changed = TRUE;
 
+	RENDBG(("fvpr: FVPR marking from %p to just before %p\n", mark, ti));
+
 	if (ti == NULL)
 	{
 	    ti = stream->text_last;
-	}
 
-	RENDBG(("fvpr: FVPR marking from %p to just before %p\n", mark, ti));
+	    /* pdh: make sure last item marked! */
+	    ti->flag |= rid_flag_FVPR;
+	}
 
 	for (; mark != ti; mark = rid_scanfr(mark))
 	{
@@ -211,6 +214,9 @@ extern BOOL fvpr_progress_stream_flush(rid_text_stream *stream)
 	    {
 		ti->flag |= rid_flag_FVPR;
 	    }
+
+	    /* pdh: last one too! */
+	    stream->text_last->flag |= rid_flag_FVPR;
 	}
     }
 

@@ -107,6 +107,17 @@ extern void startdl (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 {
     generic_start (context, element, attributes);
     bump_current_indent(context);
+
+    if ( attributes->value[HTML_DL_COMPACT].type == value_void )
+    {
+        PRSDBG(("This DL is compact\n"));
+        PACK( context->tos->effects_active, LIST_ITEM_TYPE, TRUE );
+    }
+    else
+    {
+        PRSDBG(("This DL isn't compact\n" ));
+        PACK( context->tos->effects_active, LIST_ITEM_TYPE, FALSE );
+    }
 }
 
 /*****************************************************************************
@@ -200,10 +211,25 @@ extern void startdd (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 	x = UNPACK(context->tos->outer->effects_active, STYLE_INDENT);
 	PACK(context->tos->effects_active, STYLE_INDENT, x + INDENT_WIDTH);
 	PACK(context->tos->effects_active, STYLE_WF_INDEX, WEBFONT_DD);*/
-#ifndef STBWEB
+#if 0 /* ndef STBWEB */
 	bump_current_indent(context);
 #endif
 	PRSDBG(("startdD(): set indent to %d\n", UNPACK(context->tos->effects_active, STYLE_INDENT)));
+    }
+
+    /* pdh: This kinda assumes we're inside a DL, but fortunately if we
+     * aren't, LIST_ITEM_TYPE is going to be zero
+     */
+    if ( UNPACK( context->tos->outer->effects_active, LIST_ITEM_TYPE ) )
+    {
+        HTMLCTX *me = htmlctxof( context );
+
+        text_item_revoke_break( me );
+        /* item_type here doesn't matter as any "bullet" in a DL must
+         * be our magic one
+         */
+        PRSDBG(("Pushing fake DL bullet\n"));
+        text_item_push_bullet( me, 0 );
     }
 }
 
@@ -215,7 +241,7 @@ extern void startdt (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
     {
 	BITS x;
 	x = UNPACK(context->tos->outer->effects_active, STYLE_INDENT);
-#ifdef STBWEB
+#if 1 /* def STBWEB */
 	if (x >= INDENT_WIDTH)
 	{
 	    x -= INDENT_WIDTH;
@@ -226,6 +252,7 @@ extern void startdt (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 	PACK(context->tos->effects_active, STYLE_INDENT, x + 2);
 	PACK(context->tos->effects_active, STYLE_WF_INDEX, WEBFONT_DT);
 #endif
+
 	PRSDBG(("startdt(): set indent to %d\n", UNPACK(context->tos->effects_active, STYLE_INDENT)));
     }
 }

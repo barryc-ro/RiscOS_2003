@@ -191,6 +191,8 @@ typedef SHORTISH rid_flag;
 #define rid_flag_COLOUR_SHIFT      8
 
 #define rid_flag_FVPR		0x1000	/* Item reach FVPR style final values */
+#define rid_flag_COALESCED      0x2000  /* Item has been coalesced with next */
+#define rid_flag_RINDENT        0x4000  /* Right indent (or not! only one level) */
 
 #define RID_COLOUR(rid) ( ( (rid)->st.flags >> STYLE_COLOURNO_SHIFT ) \
                          & STYLE_COLOURNO_MASK )
@@ -1193,8 +1195,8 @@ struct rid_meta_item
 struct rid_fmt_info
 {
         int  (*margin_proc) (rid_text_stream *stream, rid_text_item *item);
-        int  (*tidy_proc)   (rid_pos_item *new_pos, int width, int display_width);
-        void (*table_proc)  (rid_text_stream *stream, rid_text_item *item, rid_fmt_info *parfmt);
+        int  (*tidy_proc)   (rid_header *rh, rid_pos_item *new_pos, int width, int display_width);
+        void (*table_proc)  (rid_header *rh, rid_text_stream *stream, rid_text_item *item, rid_fmt_info *parfmt);
         char align_char;
         int *left, *right, *width;
         char *text_data;
@@ -1205,7 +1207,7 @@ struct rid_fmt_info
 
 #ifdef BUILDERS
 
-typedef struct 
+typedef struct
 {
     intxy		size;
     char *		text;

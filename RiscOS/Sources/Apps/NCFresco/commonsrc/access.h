@@ -21,6 +21,8 @@ typedef int access_url_flags;
 #define access_FORGROUND	0x02
 #define access_CHECK_EXPIRE	0x04
 #define access_CHECK_FILE_TYPE	0x08
+#define access_PRIORITY         0x10    /* jump the HTTP keep-alive queue? */
+#define access_IMAGE            0x20    /* http fetch prefix first? */
 #define access_INTERNAL_FLAGS	0x0ffff
 /* Flags used internally but not used in the initial call */
 #define access_SECURE		0x10000	/* The access will be started on a secure socket */

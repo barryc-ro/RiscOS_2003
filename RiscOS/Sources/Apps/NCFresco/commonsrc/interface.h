@@ -108,7 +108,7 @@ int frontend_view_status(fe_view v, int status_type, ...);
 #define sb_status_FINISHED	11	/* Got to the end of doc_complete */
                                         /* (void) */
 #define sb_status_PLUGIN	12	/* A plugin has opened an instance or changed busy or play state */
-                                        /* (plugin instance, int busy, int play_state) */
+                                        /* (plugin instance, int busy, int play_state, int opening, int closing) */
 
 #define sb_status_PROGRESS_ABORTED  (-1)
 #define sb_status_PROGRESS_LOCAL    (-2)

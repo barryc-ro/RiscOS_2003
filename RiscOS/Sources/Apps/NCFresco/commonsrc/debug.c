@@ -45,24 +45,26 @@ static dbg_conf_item dbg_conf[]=
     { "OBJDBGN", 0 },
     { "PRSDBG", 0 },
     { "PRSDBGN", 0 },
+    { "PPDBG", 0 },
+    { "PPDBGN", 0 },
     { "RENDBG", 0 },
     { "RENDBGN", 0 },
     { "DICDBG", 0 },
     { "DICDBGN", 0 },
-    { "CNFDBG", 0 }, 
+    { "CNFDBG", 0 },
     { "CNFDBGN", 0 },
-    { "FMTDBG", 0 }, 
+    { "FMTDBG", 0 },
     { "FMTDBGN", 0 },
-    { "IMGDBG", 0 }, 
+    { "IMGDBG", 0 },
     { "IMGDBGN", 0 },
-    { "CKIDBG", 0 }, 
+    { "CKIDBG", 0 },
     { "CKIDBGN", 0 },
-    { "ACCDBG", 0 }, 
+    { "ACCDBG", 0 },
     { "ACCDBGN", 0 } ,
-    { "STBDBG", 0 }, 
+    { "STBDBG", 0 },
     { "STBDBGN", 0 },
-    { "HTSDBG", 0 }, 
-    { "HTSDBGN", 0 } 
+    { "HTSDBG", 0 },
+    { "HTSDBGN", 0 }
 };
 
 enum
@@ -73,6 +75,8 @@ enum
     objn,
     prs,
     prsn,
+    pp,
+    ppn,
     ren,
     renn,
     dic,
@@ -110,6 +114,8 @@ extern void dbginit(void)
     OBJDBGN(("Excessive Object debugging present\n"));
     PRSDBG(("Parser debugging present\n"));
     PRSDBGN(("Excessive Parser debugging present\n"));
+    PPDBG(("Parser progress debugging present\n"));
+    PPDBGN(("Excessive Parser progress debugging present\n"));
     RENDBG(("Rendering image debugging present\n"));
     RENDBGN(("Excessive Rendering image debugging present\n"));
     DICDBG(("Debug image change debugging present\n"));
@@ -137,6 +143,8 @@ DBGFNDEF(objdbg, obj)
 DBGFNDEF(objdbgn, objn)
 DBGFNDEF(prsdbg, prs)
 DBGFNDEF(prsdbgn, prsn)
+DBGFNDEF(ppdbg, pp)
+DBGFNDEF(ppdbgn, ppn)
 DBGFNDEF(rendbg, ren)
 DBGFNDEF(rendbgn, renn)
 DBGFNDEF(dicdbg, dic)

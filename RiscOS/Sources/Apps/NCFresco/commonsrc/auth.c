@@ -358,6 +358,8 @@ auth_lookup_result auth_lookup(char *url, auth_type *type, char **user, char **p
     return auth_lookup_FAIL;
 }
 
+#define UU_BUFFER_SIZE 256
+
 char *auth_lookup_string(char *url)
 {
     auth_type type;
@@ -372,10 +374,15 @@ char *auth_lookup_string(char *url)
     switch (type)
     {
     case auth_type_BASIC:
-	buffer = mm_malloc(256);
+	buffer = mm_malloc(UU_BUFFER_SIZE);
 	sprintf(temp, "%s:%s", user, passwd);
 	strcpy(buffer, "Basic ");
-	uuencode(temp, buffer+6, sizeof(buffer)-6);
+	uuencode(temp, buffer+6, UU_BUFFER_SIZE-6);
+	/* pdh: not
+	 *	uuencode(temp, buffer+6, sizeof(buffer)-6);
+	 * as sizeof(buffer) isn't 256, it's 4...
+	 */
+
 	break;
     default:
 	usrtrc( "Unknown auth type\n");

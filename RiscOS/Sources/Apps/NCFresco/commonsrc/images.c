@@ -164,6 +164,7 @@ typedef struct _image_info
     int file_type;
     webimage_str *wi;
     image_flags flags;
+    int find_flags;
     sprite_area **areap;
     sprite_area *our_area, *their_area, *cache_area;
     wimp_paletteword cache_bgcol;
@@ -370,12 +371,12 @@ static int new_image_get_bytes(char *buf, int buf_len, void *h, BOOL *flush)
     {
 	thread_wait("Need more data");
 
-	IMGDBG(("Now have %d bytes\n", image_thread_data_size));
+	IMGDBG(("im%p: getbytes(%d), have none\n", h, buf_len));
     }
 
     if (image_thread_data_size == 0)
     {
-	IMGDBG(("get_bytes: out: rc=-1\n"));
+	IMGDBGN(("get_bytes: out: rc=-1\n"));
 	return -1;
     }
 
@@ -388,7 +389,7 @@ static int new_image_get_bytes(char *buf, int buf_len, void *h, BOOL *flush)
 
     *flush = (image_thread_data_size == 0);
 
-    IMGDBGN(("get_bytes: out: rc=%d\n", rc));
+    IMGDBGN(("im%p: getbytes(%d) gave %d\n", h, buf_len, rc));
 
     return rc;
 }
@@ -606,9 +607,9 @@ static int bastard_main(int argc, char **argv)
     void *i;
     int flags;
 
-    IMGDBG(("Bastard_main called %d, %p\n", argc, argv));
-
     i = (void *) argv;
+
+    IMGDBG(("im%p: bastard_main called\n", i));
 
     flags = (config_deep_images ? webimage_DEEPSPRITE : 0) +
 	((((image)i)->flags & image_flag_NO_BLOCKS) ? 0 : webimage_BLOCKDETAIL);
@@ -627,7 +628,7 @@ static int bastard_main(int argc, char **argv)
 			flags,
 			((image)i)->errbuf);	/* Flags */
 
-    IMGDBG(("Bastard_main done r=%d\n", (int)result));
+    IMGDBG(("im%p: bastard_main done r=%d\n", i, (int)result));
 
     return (int) (long) result;
 }
@@ -636,7 +637,7 @@ static int bastard_main(int argc, char **argv)
 
 static int image_thread_start(image i)
 {
-    IMGDBG(("About to start thread\n"));
+    IMGDBG(("im%p: starting thread\n",i));
 
     image_thread_data_size = 0;
     image_thread_data_ptr = 0;
@@ -647,7 +648,7 @@ static int image_thread_start(image i)
 
     i->tt = thread_start(&bastard_main, 0, (char**) i, 4096);
 
-    IMGDBG(("New thread 0x%p\n", i->tt));
+    IMGDBG(("im%p: thread %p started\n", i, i->tt));
 
     return (i->tt != 0);
 }
@@ -676,7 +677,8 @@ static int image_thread_process(image i, int fh, int from, int to)
 	    image_thread_data_ptr = buffer;
 	    image_thread_data_more = ((from + len) < to);
 
-	    IMGDBG(("Running thread again\n"));
+	    IMGDBG(("im%p: running thread again (%d..%d, %s)\n",
+	            i, from, from+len, ((from+len)<to) ? "more" : "final"));
 
 	    MemCheck_RegisterMiscBlock(buffer, sizeof(buffer));
 	    thread_run(i->tt);
@@ -919,17 +921,34 @@ static void image_progress(void *h, int status, int size, int so_far, int fh, in
 
     rd = i->flags & image_flag_RENDERABLE;
 
-    IMGDBG(("Image progress in...\n"));
+    IMGDBG(("im%p: progress in, status %d, data %d/%d\n",i,status,so_far,size));
 
     if (so_far == -1)
 	so_far = 0;
 
     i->flags &= ~(image_flag_CHANGED);
 
+    if ( status == status_COMPLETED_PART && so_far == size )
+    {
+        /* We can't rewind webimage, so we must start again */
+        if ( i->tt )
+            image_thread_end(i);
+
+        IMGDBG(("im%p: completed a part\n",i));
+
+        rd = 0;
+
+        i->data_so_far = 0;
+        i->data_size = size;
+        i->flags |= image_flag_NO_BLOCKS;
+        image_thread_start(i);
+    }
+
     more_data = (i->data_so_far != so_far);
     if (more_data)
     {
-	if (status == status_GETTING_BODY)
+	if (status == status_GETTING_BODY
+	    || status == status_COMPLETED_PART)
 	{
 	    if (i->tt == NULL)
 	    {
@@ -938,8 +957,8 @@ static void image_progress(void *h, int status, int size, int so_far, int fh, in
 		image_thread_start(i);
 	    }
 
-	    IMGDBG(("Data arriving; file=%d, last had %d, now got %d\n",
-		    fh, i->data_so_far, so_far));
+	    IMGDBG(("im%p: data arriving; file=%d, last had %d, now got %d\n",
+		    i, fh, i->data_so_far, so_far));
 
 	    if (i->tt)
 	    {
@@ -1239,13 +1258,17 @@ static void image_fetch_next(void)
 
 	    reload = (i->flags & image_flag_TO_RELOAD) ? access_NOCACHE : 0;
 
+	    /* only check for expiry if image_find() was called with CHECK_EXPIRE on */
+	    if (i->find_flags & image_find_flag_CHECK_EXPIRE)
+		reload |= access_CHECK_EXPIRE;
+
 	    i->flags &= ~(image_flag_WAITING | image_flag_TO_RELOAD);
 
 	    being_fetched++;	/* In case it comes from the cache we increment this here */
 
 	    IMGDBG(("Incremented fetching count, now %d\n", being_fetched));
 
-	    ep = access_url(i->url, reload | access_CHECK_EXPIRE, 0, 0, i->ref,
+	    ep = access_url(i->url, reload | access_IMAGE, 0, 0, i->ref,
 			    &image_progress, &image_completed, i, &(i->ah));
 
 	    if (ep)
@@ -1436,7 +1459,8 @@ os_error *image_find(char *url, char *ref, int flags, image_callback cb, void *h
 	i->id.tag = sprite_id_name;
 	i->id.s.name = i->sname;
 	i->plotter = plotter_SPRITE;
-
+	i->find_flags = flags;
+	
 	if (sprite_readsize(i->their_area, &i->id, &info) == NULL)
 	{
 	    i->width = info.width;
@@ -1509,7 +1533,8 @@ os_error *image_find(char *url, char *ref, int flags, image_callback cb, void *h
 	    /* If the file is already around then we don't care if it was deferred, do we? */
 	    i->flags &= ~(image_flag_WAITING | image_flag_DEFERRED);
 
-	    ep = access_url(url, 0, 0, 0, i->ref, &image_progress, &image_completed, i, &(i->ah));
+	    ep = access_url( url, access_IMAGE, 0, 0, i->ref, &image_progress,
+	                     &image_completed, i, &(i->ah));
 	    if (ep)
 	    {
 		i->ah = NULL;

@@ -141,9 +141,11 @@ extern void text_item_push_bullet(HTMLCTX * me, int item_type);
 extern void push_fake_search_form(HTMLCTX * me, VALUE *prompt);
 extern void text_item_push_break(HTMLCTX * me);
 extern void text_item_ensure_break(HTMLCTX * me);
+extern void text_item_revoke_break(HTMLCTX * me);
 extern void text_item_push_hr(HTMLCTX * me, VALUE *align, VALUE *noshade, VALUE *size, VALUE *width);
 extern void new_form_item(HTMLCTX * me, VALUE *action, VALUE *method, VALUE *target, VALUE *id);
 extern void bump_current_indent(SGMLCTX *context);
+extern void bump_current_rindent(SGMLCTX *context); /* Right-hand indent */
 extern void add_fixed_to_font(SGMLCTX *context);
 extern void add_bold_to_font(SGMLCTX *context);
 extern void add_italic_to_font(SGMLCTX *context);

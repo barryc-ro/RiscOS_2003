@@ -35,6 +35,7 @@
   PRODUCTION	Defined as 1 for production. Mutex DEVELOPMENT
   TABDBG	Table debugging
   PRSDBG	Parser debugging
+  PPDBG         Parser progress debugging
   RENDBG	Render debugging
   DICDBG	Debug Image Change
   CNFDBG	Configuration debugging
@@ -105,6 +106,7 @@ extern void dbginit(void);
 #define TABDBG(x)
 #define OBJDBG(x)
 #define PRSDBG(x)
+#define PPDBG(x)
 #define RENDBG(x)
 #define DICDBG(x)
 #define CNFDBG(x)
@@ -120,6 +122,7 @@ extern void dbginit(void);
 #define TABDBG(x)	tabdbg x
 #define OBJDBG(x)	objdbg x
 #define PRSDBG(x)	prsdbg x
+#define PPDBG(x)        ppdbg x
 #define RENDBG(x)	rendbg x
 #define DICDBG(x)	dicdbg x
 #define CNFDBG(x)	cnfdbg x
@@ -131,10 +134,13 @@ extern void dbginit(void);
 #define HTSDBG(x)	htsdbg x
 
 /* -v1 and -v0 are NorCroft printf() checking indicators */
+#ifdef __acorn
 #pragma -v1
+#endif
 DBGPROTO(tabdbg);
 DBGPROTO(objdbg);
 DBGPROTO(prsdbg);
+DBGPROTO(ppdbg);
 DBGPROTO(rendbg);
 DBGPROTO(dicdbg);
 DBGPROTO(cnfdbg);
@@ -144,7 +150,9 @@ DBGPROTO(ckidbg);
 DBGPROTO(accdbg);
 DBGPROTO(stbdbg);
 DBGPROTO(htsdbg);
+#ifdef __acorn
 #pragma -v0
+#endif
 
 #endif	/* DEBUG < 1 */
 
@@ -157,6 +165,7 @@ DBGPROTO(htsdbg);
 #define TABDBGN(x)
 #define OBJDBGN(x)
 #define PRSDBGN(x)
+#define PPDBGN(x)
 #define RENDBGN(x)
 #define DICDBGN(x)
 #define CNFDBGN(x)
@@ -172,6 +181,7 @@ DBGPROTO(htsdbg);
 #define TABDBGN(x)	tabdbgn x
 #define OBJDBGN(x)	objdbgn x
 #define PRSDBGN(x)	prsdbgn x
+#define PPDBGN(x)	ppdbgn x
 #define RENDBGN(x)	rendbgn x
 #define DICDBGN(x)	dicdbgn x
 #define CNFDBGN(x)	cnfdbgn x
@@ -186,6 +196,7 @@ DBGPROTO(htsdbg);
 DBGPROTO(tabdbgn);
 DBGPROTO(objdbgn);
 DBGPROTO(prsdbgn);
+DBGPROTO(ppdbgn);
 DBGPROTO(rendbgn);
 DBGPROTO(dicdbgn);
 DBGPROTO(cnfdbgn);

@@ -135,7 +135,7 @@ void oselect_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 
     /* This isn't quite right but it will do for now */
     width = webfont_tty_width(6, 1); /* Length of '<none>' in chars */
-    
+
     if (font_setfont(wf->handle) != 0)
 	return;
 #else
@@ -173,27 +173,39 @@ void oselect_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 
     if ((sel->flags & rid_if_NOPOPUP) == 0)
     {
-	/* don't repeat this if we resize as it leaks memory and resets selections */
-	if (height && sel->items == NULL)
-	{
-	    sel->items = mm_calloc(sizeof(fe_menu_item), height);
+        /* pdh: Repeat this if we resize with a different number of items,
+         * otherwise the damn buffer ain't big enough...
+         */
 
-	    for(i=0, oi = sel->options; oi; i++, oi = oi->next)
-	    {
-		fe_menu_item *ii = ((fe_menu_item*)sel->items) + i;
-		ii->name = oi->text;
-		if (oi->flags & rid_if_CHECKED)
-		{
-		    oi->flags |= rid_if_SELECTED;
-		    ii->flags = fe_menu_flag_CHECKED;
-		}
-		else
-		    oi->flags &= ~rid_if_SELECTED;
-	    }
-	}
+        if ( (height != sel->count) || !sel->items )
+        {
+            if ( sel->items )
+                mm_free( sel->items );
 
-	sel->menuh = frontend_menu_create(doc->parent, select_menu_callback, ti, height, sel->items, sel->size, width);
-	sel->count = height;
+            sel->items = mm_calloc(sizeof(fe_menu_item), height);
+
+            for(i=0, oi = sel->options; oi; i++, oi = oi->next)
+            {
+                fe_menu_item *ii = ((fe_menu_item*)sel->items) + i;
+                ii->name = oi->text;
+                if (oi->flags & rid_if_CHECKED)
+                {
+                    oi->flags |= rid_if_SELECTED;
+                    ii->flags = fe_menu_flag_CHECKED;
+                }
+                else
+                    oi->flags &= ~rid_if_SELECTED;
+            }
+        }
+
+        /* pdh: in view of the fact we may come through here twice on the same
+         * select item (if it straddles a packet boundary) it's unwise to do
+         * this here
+         *
+        sel->menuh = frontend_menu_create(doc->parent, select_menu_callback, ti, height, sel->items, sel->size, width);
+         */
+
+    sel->count = height;
     }
 
     ti->width = width + 16;
@@ -310,7 +322,6 @@ char *oselect_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, i
     if (sel->flags & rid_if_NOPOPUP)
     {
 	rid_option_item *oi;
-	int i;
 
 	/* find the first selected */
 	for (oi = sel->options; oi; oi = oi->next)
@@ -327,14 +338,23 @@ char *oselect_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, i
 		oi->next->flags |= rid_if_SELECTED;
 	    else
 		sel->options->flags |= rid_if_SELECTED;
-	}	
-
+	}
 	antweb_update_item(doc, ti);
     }
     else
     {
 	wimp_box box;
 	backend_doc_item_bbox(doc, ti, &box);
+
+        /* pdh: moved menu brewing into here */
+
+        if ( !sel->menuh )
+        {
+            sel->menuh = frontend_menu_create( doc->parent,
+                                               select_menu_callback, ti,
+                                               sel->count, sel->items,
+                                               sel->size, ti->width-48-16 );
+        }
 
 	frontend_menu_raise(((rid_text_item_select *)ti)->select->menuh, box.x1, box.y1);
     }

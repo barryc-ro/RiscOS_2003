@@ -45,7 +45,7 @@ static int munge_frameset_list(VALUE *item, rid_stdunits **list_out, rid_frame_u
     up = *list_out = mm_calloc(sizeof(rid_stdunits), n);
     memcpy(up, item->u.l.items, sizeof(rid_stdunits) * n);
 
-    total->mult = total->pcent = total->px = 0;
+    total->mult = total->pcent = total->px = 0.0f;
     for (i = 0; i < n; i++, up++)
     {
 	switch (up->type)

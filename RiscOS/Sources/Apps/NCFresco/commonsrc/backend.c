@@ -117,6 +117,12 @@
 #include "../http/httppub.h"
 #endif
 
+#include "coalesce.h"
+
+#if DEBUG
+#include "unwind.h"
+#endif
+
 #ifndef PP_DEBUG
 #define PP_DEBUG 0
 #endif
@@ -129,10 +135,12 @@
 #define LINK_DEBUG 0
 #endif
 
+#if 0   /* pdh: done the usual XXXDBG way now */
 #if PP_DEBUG
 #define PPDBG(a) fprintf a
 #else
 #define PPDBG(a)
+#endif
 #endif
 
 #if BE_DEBUG
@@ -947,11 +955,11 @@ os_error *backend_doc_flush_image(be_doc doc, void *imh, int flags)
     return ep;
 }
 
-static os_error *backend__dispose_doc(be_doc doc)
+static void be_dispose_doc_contents( be_doc doc )
 {
     rid_text_item *ti;
 
-    BEDBG((stderr, "Disposing of doc 0x%p, url is '%s'\n", doc, doc->url ? doc->url : "<none>"));
+    BEDBG((stderr, "doc%p: disposing of contents, url is '%s'\n", doc, doc->url ? doc->url : "<none>"));
 
     alarm_removeall(doc);
 
@@ -994,13 +1002,22 @@ static os_error *backend__dispose_doc(be_doc doc)
 	}
 
 	rid_free(doc->rh);
+	doc->rh = NULL;
     }
 
+    /* SJM free spacing list */
+    layout_free_spacing_list(doc);
+}
+
+static os_error *backend__dispose_doc(be_doc doc)
+{
     if (doc->ah)
     {
 	BEDBG((stderr, "Calling access_abort on 0x%p\n", doc->ah));
 	access_abort(doc->ah);
     }
+
+    be_dispose_doc_contents( doc );
 
     if (doc->cfile)
 	mm_free(doc->cfile);
@@ -1017,9 +1034,6 @@ static os_error *backend__dispose_doc(be_doc doc)
     /* SJM if an imagemap is fetching then dispose of it */
     if (doc->fetching)
         backend_dispose_doc(doc->fetching);
-
-    /* SJM free spacing list */
-    layout_free_spacing_list(doc);
 
     doc->magic = 0;
 
@@ -1075,6 +1089,8 @@ static BOOL antweb_doc_in_list(be_doc doc)
 
 os_error *backend_dispose_doc(be_doc doc)
 {
+    BEDBG((stderr, "doc%p: dispose_doc called by %s\n", doc, caller(1) ));
+
 #if DEBUG
     fprintf(stderr, "dispose_doc: checklist: in %p doc->next %p document_list %p\n", doc, doc->next, document_list);
 
@@ -1185,14 +1201,14 @@ static void be_view_redraw(antweb_doc *doc, wimp_box *box)
     bb.y1 += doc->margin.y1;
 #endif
 
-    /* 
+    /*
 
        Having update the display tree, update our notion of what can
        be displayed progressively (FVPR-wise). We place this here so
        that changes from image data receiving (don't know size to
        knowing size state change specifically) can correctly propogate
        their changes.
-    
+
        */
 /*
 #ifndef BUILDERS
@@ -1537,6 +1553,7 @@ static void antweb_write_textarea(FILE *f, rid_textarea_item *tai, int *first)
     }
 }
 
+#ifdef STBWEB
 BOOL backend_submit_form(be_doc doc, const char *id, int right)
 {
     rid_form_item *form;
@@ -1552,6 +1569,7 @@ BOOL backend_submit_form(be_doc doc, const char *id, int right)
 
     return FALSE;
 }
+#endif
 
 /* The 'right' flag indicates a right click */
 
@@ -1838,7 +1856,7 @@ extern os_error *antweb_document_sizeitems(antweb_doc *doc)
     return NULL;
 }
 
-static int antweb_formater_tidy_line(rid_pos_item *new, int width, int display_width)
+static int antweb_formater_tidy_line( rid_header *rh, rid_pos_item *new, int width, int display_width)
 {
     int spare;
 
@@ -1906,6 +1924,7 @@ static int antweb_formater_tidy_line(rid_pos_item *new, int width, int display_w
 
 	    new->left_margin += spare;
 	}
+	break;
     }
 
     return (new->max_up + new->max_down);
@@ -2082,7 +2101,7 @@ static char *state_names[] = { "DONE", "MARGIN", "WORD", "TIDY",
 			       "CLEAR_L", "CLEAR_R", "CLEAR", "ENDST" };
 #endif
 
-extern rid_pos_item *be_formater_loop_core( rid_text_stream *st, rid_text_item *this_item, rid_fmt_info *fmt, int flags)
+extern rid_pos_item *be_formater_loop_core( rid_header *rh, rid_text_stream *st, rid_text_item *this_item, rid_fmt_info *fmt, int flags)
 {
     rid_pos_item *pos = NULL;
     rid_text_item *line_first;	/* Like pos->first but always there */
@@ -2091,6 +2110,7 @@ extern rid_pos_item *be_formater_loop_core( rid_text_stream *st, rid_text_item *
     int pad = 0;		/* holds padding from previous item */
     int align_margin = 0;	/* extra margin space due to character alignment */
     int left_margin = 0;	/* value for pos->left_margin if doing it */
+    int right_margin = 0;
     int width = 0;		/* total width of line so far */
     int state = MARGIN;		/* state machine control variable */
     int height = st->height;
@@ -2099,6 +2119,7 @@ extern rid_pos_item *be_formater_loop_core( rid_text_stream *st, rid_text_item *
     rid_float_tmp_info fl, fr;
     int max_up=0, max_down=0;	/* Needed for float formatting even if there is no pos list */
     int prev_flags;
+    BOOL bNoLinefeed = FALSE;
 
     line_first = NULL;
 
@@ -2177,9 +2198,14 @@ extern rid_pos_item *be_formater_loop_core( rid_text_stream *st, rid_text_item *
     if (this_item != NULL && this_item->tag == rid_tag_TABLE)
     {
 	FMTDBG(("Initial table proc call\n"));
-	(*fmt->table_proc) (st, this_item, fmt);
+	(*fmt->table_proc) (rh, st, this_item, fmt);
 	FMTDBG(("Initial table proc call finished\n"));
     }
+
+    un_coalesce( rh, this_item );
+
+    if ( this_item )
+        un_coalesce( rh, this_item->next );
 
     while (state != DONE)
     {
@@ -2198,6 +2224,9 @@ extern rid_pos_item *be_formater_loop_core( rid_text_stream *st, rid_text_item *
 	    split = DONT;
 	    state = (this_item == NULL) ? ((fr.ti == NULL && fl.ti == NULL) ? DONE : CLEAR) : WORD;
 	    left_margin = state == DONE ? 0 : (*fmt->margin_proc) (st, this_item);
+ 	    right_margin = (this_item && (this_item->flag & rid_flag_RINDENT))
+ 	                    ? INDENT_WIDTH*INDENT_UNIT : 0;
+
 	    width = left_margin;
 	    if ( (flags & rid_fmt_BUILD_POS) != 0 )
 	    {
@@ -2248,7 +2277,7 @@ extern rid_pos_item *be_formater_loop_core( rid_text_stream *st, rid_text_item *
 	    }
 
 	    /* Work out the length of the line, accounting for the floats */
-	    display_width = st->fwidth;
+	    display_width = st->fwidth - right_margin;
 	    if (fl.ti)
 	    {
 		TASSERT(fl.ti->width >= 0);
@@ -2428,6 +2457,11 @@ extern rid_pos_item *be_formater_loop_core( rid_text_stream *st, rid_text_item *
 #endif
 		this_item = next;
 
+                un_coalesce( rh, this_item );
+
+                if ( this_item )
+                    un_coalesce( rh, this_item->next );
+
 		if (over)
 		    last = next;
 	    }
@@ -2452,7 +2486,7 @@ extern rid_pos_item *be_formater_loop_core( rid_text_stream *st, rid_text_item *
 		else if (this_item->tag == rid_tag_TABLE)
 		{
 		    FMTDBGN(("Calling table proc\n"));
-		    (*fmt->table_proc) (st, this_item, fmt);
+		    (*fmt->table_proc) (rh, st, this_item, fmt);
 		    FMTDBGN(("Called table proc\n"));
 		}
 	    }
@@ -2463,8 +2497,23 @@ extern rid_pos_item *be_formater_loop_core( rid_text_stream *st, rid_text_item *
 
 	    if (split == MAYBE)
 	    {
-		if ( align_margin + width + pad +
-		     (this_item->width > 0 ? this_item->width : 0) > display_width)
+	        /* pdh: bodge here for DL COMPACT */
+	        if ( this_item->tag == rid_tag_BULLET
+	             && ((rid_text_item_bullet*)this_item)->list_type
+	                     == HTML_DL )
+	        {
+	            FMTDBG(("Found fake DL bullet %d (%d,%d,%d)\n",
+	                    ((rid_text_item_bullet*)this_item)->list_type,
+	                     width, left_margin, INDENT_WIDTH*INDENT_UNIT));
+
+                    if ( width < left_margin + INDENT_WIDTH*INDENT_UNIT - 4 )
+                        bNoLinefeed = TRUE;
+
+	            split = MUST;
+	        }
+	        else if ( align_margin + width + pad +
+		          (this_item->width > 0 ? this_item->width : 0)
+		           > display_width)
 		{ split = MUST; }
 		else
 		{ split = DONT; }
@@ -2547,10 +2596,29 @@ extern rid_pos_item *be_formater_loop_core( rid_text_stream *st, rid_text_item *
 
 	    if ( (flags & rid_fmt_BUILD_POS) != 0 )
 	    {
+	        int ht;
 		pos->left_margin = left_margin;
 		pos->max_up = max_up;
 		pos->max_down = max_down;
-		height -= (*fmt->tidy_proc) (pos, width, display_width);
+
+		ht = (*fmt->tidy_proc) (rh, pos, width, display_width);
+
+                if ( bNoLinefeed )
+                {
+                    FMTDBG(("Not linefeeding by %d as bNoLinefeed set\n",ht));
+                }
+
+		if ( !bNoLinefeed )
+                    height -= ht;
+
+                bNoLinefeed = FALSE;
+
+                /* Once we've finished this line, it's safe to coalesce the
+                 * previous one
+                 */
+                if ( pos->prev
+                     && pos->prev->leading == 0 )
+                    coalesce( rh, pos->prev );
 	    }
 
 	    /* These functions clear the floating items when they have run out of length */
@@ -2603,13 +2671,13 @@ extern rid_pos_item *be_formater_loop_core( rid_text_stream *st, rid_text_item *
 
 /*****************************************************************************/
 
-extern int  dummy_tidy_proc(rid_pos_item *new, int width, int display_width)
+extern int  dummy_tidy_proc(rid_header *rh, rid_pos_item *new, int width, int display_width)
 {
     FMTDBG(("dummy_tidy_proc()\n"));
     return 0;
 }
 
-extern void dummy_table_proc(rid_text_stream *stream, rid_text_item *item, rid_fmt_info *parfmt)
+extern void dummy_table_proc(rid_header *rh, rid_text_stream *stream, rid_text_item *item, rid_fmt_info *parfmt)
 {
     FMTDBG(("dummy_table_proc()\n"));
     return;
@@ -2703,7 +2771,7 @@ static void be_formater_loop(rid_header *rh, rid_text_item *ti, int scale_value)
         fmt.text_data = rh->texts.data;
 
         /* Then get min|max widths for tables */
-        rid_size_stream(st, &fmt, 0, ti);
+        rid_size_stream(rh, st, &fmt, 0, ti);
 
 #if DEBUG
 	fprintf(stderr, "Width after formatting is %d, versus fwidth %d\n",
@@ -2726,7 +2794,7 @@ static void be_formater_loop(rid_header *rh, rid_text_item *ti, int scale_value)
 	    stomp_contained_widths(&rh->stream);
 
 	    /* Then get min|max widths for tables */
-	    rid_size_stream(st, &fmt, 0, ti);
+	    rid_size_stream(rh, st, &fmt, 0, ti);
 	}
 
 #endif
@@ -2741,7 +2809,7 @@ static void be_formater_loop(rid_header *rh, rid_text_item *ti, int scale_value)
         fmt.text_data = rh->texts.data;
 	fmt.scale_value = scale_value;
 
-        be_formater_loop_core(st, ti, &fmt, rid_fmt_BUILD_POS);
+        be_formater_loop_core(rh, st, ti, &fmt, rid_fmt_BUILD_POS);
 
         FMTDBG(("be_formater_loop done\n"));
 
@@ -2778,7 +2846,7 @@ os_error *antweb_document_format(antweb_doc *doc, int user_width)
 
     objects_check_movement(doc);
 
-    
+
 #if DEBUG
     FMTDBG(("antweb_document_format() done doc %p, rid_header %p\n", doc, doc->rh));
 
@@ -3246,6 +3314,9 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
 
 	antweb_document_format(doc, doc->rh->stream.fwidth);
 
+        /* pdh: added this */
+        fvpr_progress_stream( &doc->rh->stream );
+
 	DICDBG(("Reformat done\n"));
 
 	if (doc->rh->stream.height != old_height)
@@ -3708,7 +3779,7 @@ static void be_pparse_doc(antweb_doc *doc, int fh, int from, int to)
     rh = doc->rh;
 
     ti = rh->stream.text_last;
-    PPDBG((stderr, "Old last item is 0x%p\n", ti));
+    PPDBG(("Old last item is 0x%p\n", ti));
     while (from < to)
     {
 	len = (to-from) > sizeof(buffer) ? sizeof(buffer) : (to-from);
@@ -3718,19 +3789,19 @@ static void be_pparse_doc(antweb_doc *doc, int fh, int from, int to)
 	gpb.data_addr = buffer;
 	gpb.number = len;
 	gpb.seq_point = from;
-	PPDBG((stderr, "Reading %d bytes from file %d.\n", len, fh));
+	PPDBG(("Reading %d bytes from file %d.\n", len, fh));
 	ep = os_gbpb(&gpb);
 	if (ep == NULL)
 	{
-	    PPDBG((stderr, "Sending %d bytes to the parser.\n", len));
+	    PPDBG(("Sending %d bytes to the parser.\n", len));
 	    (((pparse_details*)doc->pd)->data)(doc->ph, buffer, len, (from + len) < to );
 	}
 	else
 	{
-	    PPDBG((stderr, "Getting file data returned error: %s\n", ep->errmess));
-	    PPDBG((stderr, "In: file=%d, buffer=%p, number=%d, seq=%d\n",
+	    PPDBG(("Getting file data returned error: %s\n", ep->errmess));
+	    PPDBG(("In: file=%d, buffer=%p, number=%d, seq=%d\n",
 		    fh, buffer, len, from));
-	    PPDBG((stderr, "Out: file=%d, buffer=%p, number=%d, seq=%d\n",
+	    PPDBG(("Out: file=%d, buffer=%p, number=%d, seq=%d\n",
 		    fh, buffer, len, from));
 	}
 
@@ -3741,7 +3812,7 @@ static void be_pparse_doc(antweb_doc *doc, int fh, int from, int to)
 #if PP_DEBUG
     if ((rh->margin.left != -1 && rh->margin.left*2 != doc->margin.x0) ||
 	(rh->margin.top != -1 && rh->margin.top*2 != doc->margin.y1))
-	PPDBG((stderr, "setting margins to %d,%d\n", doc->margin.x0, doc->margin.y1));
+	PPDBG(("setting margins to %d,%d\n", doc->margin.x0, doc->margin.y1));
 #endif
     if (rh->margin.left != -1)
 	doc->margin.x0 = rh->margin.left*2;
@@ -3752,16 +3823,16 @@ static void be_pparse_doc(antweb_doc *doc, int fh, int from, int to)
     if (ti == NULL)
     {
 	ti = rh->stream.text_list;
-	PPDBG((stderr, "No old value, first item is at 0x%p\n", ti));
+	PPDBG(("No old value, first item is at 0x%p\n", ti));
     }
     else
     {
         /* Inefficient but correct - and easy! */
         if (ti->tag != rid_tag_TABLE && ti->tag != rid_tag_TEXTAREA)/* SJM: 240196: quick hack to add texteareas here */
             ti = rid_scanf(ti);
-	PPDBG((stderr, "Moved on from last item to 0x%p\n", ti));
+	PPDBG(("Moved on from last item to 0x%p\n", ti));
     }
-    PPDBG((stderr, "Sizing objects from 0x%p\n", ti));
+    PPDBG(("Sizing objects from 0x%p\n", ti));
     while (ti)
     {
 	(object_table[ti->tag].size)(ti, rh, doc);
@@ -3770,7 +3841,7 @@ static void be_pparse_doc(antweb_doc *doc, int fh, int from, int to)
     }
 
 
-    PPDBG((stderr, "Done sizing\n"));
+    PPDBG(("Done sizing\n"));
 }
 
 static void be_doc_fetch_bg(antweb_doc *doc)
@@ -3802,6 +3873,14 @@ static void antweb_doc_progress(void *h, int status, int size, int so_far, int f
     /* Make the world turn a little */
     frontend_view_status(doc->parent, sb_status_WORLD);
 
+    if ( status == status_COMPLETED_PART )
+    {
+        PPDBG(("doc%p: disposing of contents due to completed part\n", doc ));
+        be_dispose_doc_contents( doc );
+        doc->lbytes = 0;
+        doc->flags &= ~doc_flag_DISPLAYING;
+    }
+
     if (status == doc->lstatus && so_far == doc->lbytes)
 	return;
 
@@ -3815,14 +3894,15 @@ static void antweb_doc_progress(void *h, int status, int size, int so_far, int f
 	threaded = doc;
     }
 
-    if (so_far > 0 && ftype != -1 && fh && status == status_GETTING_BODY)
+    if (so_far > 0 && ftype != -1 && fh &&
+         (status == status_GETTING_BODY) || (status == status_COMPLETED_PART) )
     {
 	int lastptr = doc->lbytes;
 
 	if (doc->lstatus != status_GETTING_BODY || lastptr == -1)
 	    lastptr = 0;
 
-	PPDBG((stderr, "Data arriving; type = 0x%03x, file=%d, last had %d, now got %d\n",
+	PPDBG(("Data arriving; type = 0x%03x, file=%d, last had %d, now got %d\n",
 		ftype, fh, lastptr, so_far));
 
 	if (doc->pd == NULL)
@@ -3830,7 +3910,7 @@ static void antweb_doc_progress(void *h, int status, int size, int so_far, int f
 
 	if (doc->ph == NULL && ((pparse_details*)doc->pd)->new)
 	{
-	    PPDBG((stderr, "About to make a new parser stream\n"));
+	    PPDBG(("About to make a new parser stream\n"));
 	    doc->ph = (((pparse_details*)doc->pd)->new)(url, ftype);
 	    if (doc->ph)
 	    {
@@ -3845,9 +3925,9 @@ static void antweb_doc_progress(void *h, int status, int size, int so_far, int f
 
 		if (doc->rh->stream.text_last)
 		{
-		    PPDBG((stderr, "Sizing the first few items...\n"));
+		    PPDBG(("Sizing the first few items...\n"));
 		    antweb_document_sizeitems(doc);
-		    PPDBG((stderr, "... done\n"));
+		    PPDBG(("... done\n"));
 		}
 	    }
 	}
@@ -3864,10 +3944,10 @@ static void antweb_doc_progress(void *h, int status, int size, int so_far, int f
 	    osi = ofi ? ofi->last_select : NULL;
 	    ooi = osi ? osi->last_option : NULL;
 
-	    PPDBG((stderr, "Calling pparse from progress\n"));
+	    PPDBG(("Calling pparse from progress\n"));
 	    be_pparse_doc(doc, fh, lastptr, so_far);
 
-	    PPDBG((stderr, "pparse from progress done\n"));
+	    PPDBG(("pparse from progress done\n"));
 
                     /* pdh: only do this if it's not already been done */
 		    if ( (doc->rh->bgt & rid_bgt_IMAGE)
@@ -3888,7 +3968,7 @@ static void antweb_doc_progress(void *h, int status, int size, int so_far, int f
 		  osi != (ofi ? ofi->last_select : NULL) ||		/*     we are in a different select item */
 		  ooi != (osi ? osi->last_option : NULL) ) ) )		/*     we are in a different object */
 	    {
-		PPDBG((stderr, "Text list seems to have changed.\n"));
+		PPDBG(( "Text list seems to have changed.\n"));
 
 		if ((doc->flags & doc_flag_DISPLAYING) == 0)
 		{
@@ -3971,9 +4051,10 @@ static void antweb_doc_progress(void *h, int status, int size, int so_far, int f
 		    }
 		    else
 		    {
-			PPDBG((stderr, "Reformatting the tail\n"));
+			PPDBG(( "Reformatting the tail\n"));
+			TASSERT( doc->rh );
 			be_document_reformat_tail(doc, oti, doc->rh->stream.fwidth);
-			PPDBG((stderr, "Tail reformat done\n"));
+			PPDBG(( "Tail reformat done\n"));
 		    }
 		}
 
@@ -3998,7 +4079,7 @@ static void antweb_doc_progress(void *h, int status, int size, int so_far, int f
     }
 
 #if PP_DEBUG
-    PPDBG((stderr, "Progress done\n"));
+    PPDBG(( "Progress done\n"));
 
     if (doc->rh) dump_header(doc->rh);
 
@@ -4037,12 +4118,12 @@ static os_error *be_parse_file_to_end(antweb_doc *doc)
 	return ep;
 
     fh = r.r[0];
-    PPDBG((stderr, "Opened file on handle %d\n", fh));
+    PPDBG(( "Opened file on handle %d\n", fh));
     if (doc->lbytes != fsize)
     {
-	PPDBG((stderr, "Calling pparse from parse_to_end\n"));
+	PPDBG(( "Calling pparse from parse_to_end\n"));
 	be_pparse_doc(doc, fh, doc->lbytes, fsize);
-	PPDBG((stderr, "pparse from parse_to_end done\n"));
+	PPDBG(( "pparse from parse_to_end done\n"));
     }
 
     /* OH BARF BARF BARF BARF */
@@ -4052,12 +4133,12 @@ static os_error *be_parse_file_to_end(antweb_doc *doc)
 
     ti = doc->rh->stream.text_last;
 
-    PPDBG((stderr, "Closing file %d\n", fh));
+    PPDBG(( "Closing file %d\n", fh));
     r.r[0] = 0;
     r.r[1] = fh;
 
     os_find(&r);
-    PPDBG((stderr, "Closing parser down\n"));
+    PPDBG(( "Closing parser down\n"));
     doc->rh = ((pparse_details*)doc->pd)->close(doc->ph, doc->cfile);
     doc->ph = NULL;
 
@@ -4073,7 +4154,7 @@ static os_error *be_parse_file_to_end(antweb_doc *doc)
 
 
 
-    PPDBG((stderr, "New rid_header at 0x%p\n", doc->rh));
+    PPDBG(( "New rid_header at 0x%p\n", doc->rh));
     return NULL;
 }
 #endif
@@ -4090,6 +4171,8 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
     frontend_view_status(doc->parent, sb_status_PROGRESS, status);
 
     doc->ah = NULL;
+
+    BEDBG(( stderr, "doc%p: antweb_doc_complete(%d) called\n", doc, status ));
 
     ACCDBG(("Access completed, doc=%p, status=%d, file='%s', url='%s'\n",
 	    doc, status, strsafe(cfile), url));
@@ -4147,6 +4230,12 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
     }
 #endif    
     
+    /* pdh: @@@@ FIXME
+     * This doesn't belong here (there may be images arriving) but I can't
+     * see some pages without it!
+     */
+    fvpr_progress_stream_flush( &doc->rh->stream );
+
     doc->cfile = strdup(cfile);
     if (doc->url == NULL)
 	doc->url = strdup(url);
@@ -4154,12 +4243,11 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
     BEDBG((stderr, "Completed opening %s\n", url));
     BEDBG((stderr, "Cache file is '%s'\n", doc->cfile));
 
-
     ft = file_type(cfile);
 
     if (doc->ph)
     {
-        PPDBG((stderr, "Closing parser down\n"));
+        PPDBG(("Closing parser down\n"));
         doc->rh = ((pparse_details*)doc->pd)->close(doc->ph, doc->cfile);
         doc->ph = NULL;
 
@@ -4436,8 +4524,8 @@ extern os_error *backend_open_url(fe_view v, be_doc *docp,
 
     ep = access_url(use_url,
 		    (flags & be_openurl_flag_NOCACHE ? access_NOCACHE : 0) |
-			(flags & be_openurl_flag_HISTORY ? 0 : access_CHECK_EXPIRE) |
-			access_CHECK_FILE_TYPE,
+		    (flags & be_openurl_flag_HISTORY ? 0 : access_CHECK_EXPIRE) |
+		    access_CHECK_FILE_TYPE | access_PRIORITY,
 		    NULL, bfile, referer,
 		    &antweb_doc_progress, &antweb_doc_complete, new, &new->ah);
 
@@ -4928,7 +5016,7 @@ be_item backend_highlight_link(be_doc doc, be_item item, int flags)
 	/* de highlight original only if the highlight has ended up changing */
         if (item_changed && item && (flags & be_link_ONLY_CURRENT) == 0)
 	    backend_update_link(doc, item, 0);
-	
+
         if (ti)
         {
 	    int x, y;
@@ -5042,7 +5130,7 @@ void backend_clear_selected(be_doc doc)
 	    ti->flag &= ~rid_flag_SELECTED;
 	    be_update_item_highlight(doc, ti);
 	}
-	
+
 	ti = rid_scan(ti, SCAN_RECURSE | SCAN_FWD);
     }
 
@@ -5142,6 +5230,7 @@ void backend_image_expire(be_doc doc, void *imh)
 }
 #endif
 
+#ifdef STBWEB
 void backend_doc_reformat(be_doc doc)
 {
     if (doc)
@@ -5155,7 +5244,9 @@ void backend_doc_reformat(be_doc doc)
 	    antweb_place_caret(doc, doc->input);
     }
 }
+#endif
 
+#ifdef STBWEB
 void backend_doc_set_scaling(be_doc doc, int scale_value)
 {
     if (doc)
@@ -5171,19 +5262,25 @@ void backend_doc_set_scaling(be_doc doc, int scale_value)
 	    antweb_place_caret(doc, doc->input);
     }
 }
+#endif
 
 extern void backend_plugin_action(be_doc doc, be_item item, int action)
 {
+    plugin pp = NULL;
+
     if (item && item->tag == rid_tag_OBJECT)
     {
 	rid_text_item_object *tio = (rid_text_item_object *) item;
 	rid_object_item *obj = tio->object;
 
 	if (obj->type == rid_object_type_PLUGIN)
-	    plugin_send_action(obj->state.plugin.pp, action);
+	    pp = obj->state.plugin.pp;
     }
+
+    if (action != -1)
+	plugin_send_action(pp, action);
     else
-	plugin_send_action(NULL, action);
+	plugin_send_abort(pp);
 
     NOT_USED(doc);
 }

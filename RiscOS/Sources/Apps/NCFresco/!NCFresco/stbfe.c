@@ -1404,9 +1404,13 @@ int frontend_view_status(fe_view v_orig, int status_type, ...)
 	void *pp = va_arg(ap, void *);
 	int busy = va_arg(ap, int);
 	int state = va_arg(ap, int);
+	int opening = va_arg(ap, int);
+	int closing = va_arg(ap, int);
 
+	STBDBG(("stbfe_view_status: pp %p busy %d state %d opening %d closing %d\n", pp, busy, state, opening, closing));
+	
 	if (use_toolbox)
-	    tb_codec_state_change(state);
+	    tb_codec_state_change(state, opening);
 	break;
     }
     }
@@ -2236,8 +2240,10 @@ void fe_cursor_movement(fe_view v, int x, int y)
 /*     backend_doc_cursor(v->displaying, y > 0 ? be_cursor_UP : be_cursor_DOWN, &used); */
     backend_highlight_link(v->displaying, NULL, be_link_TEXT | (y > 0 ? be_link_BACK : 0));
     
+#if 0				/* FIXME: this now has different behaviour than it used to */
     if (!used)
 	fe_view_scroll_y(v, y);
+#endif
 }
 
 /* ------------------------------------------------------------------------------------------- */

@@ -18,6 +18,7 @@
 # html		Run attrgen.py on attrconf, generating basic SGML tables
 # links		Build any necessary soft links
 # realclean	Clean and also delete generated source files/state
+# riscoslib     Build RISC_OSLib on Unix
 # sanity	Perform directory tree sanity checks
 # srclist	File holding filename of each source file
 # stdalone	Stand alone version of parser (STDALONE)
@@ -38,7 +39,7 @@ POSS_TARGETS=	br bu BUILDERS BUILDERS_RISCOS BUILDERS_UNIX CHECKERS_UNIX clean \
 		HTMLCHECK HTMLCHECK_RISCOS HTMLCHECK_UNIX links    \
 		memlib mu \
 		MOST MOST_UNIX realclean sanity srclist sr NCFRESCO \
-		NCFRESCO_RISCOS TAGS TESTS xref
+		NCFRESCO_RISCOS riscoslib TAGS TESTS xref
 
 all:
 		@echo
@@ -85,7 +86,7 @@ COMM_OBJS=	Serial.o access.o auth.o backend.o bittabs.o config.o \
 		unwind.o url.o util.o version.o webfonts.o \
 		cookie.o cache2.o cache3.o stream.o debug.o usrtrc.o \
 		tablesize.o oobject.o objects.o plugin.o pluginfile.o \
-		files.o rlib_alloc.o fvpr.o
+		files.o rlib_alloc.o fvpr.o remote.o coalesce.o
 
 BASE_VPATH=	..:../commonsrc:../fresparse:../parser
 BASE_INCS=	-I.. -I../commonsrc -I../fresparse -I../parser
@@ -103,7 +104,11 @@ RISCOS_VPATH=	$(BASE_VPATH)
 RISCOS_OBJS=	$(BASE_OBJS)
 RISCOS_LIBS=	../RISC_OSLib/risc_oslib \
 		../clib/o/inetlib \
+		../clib/o/socklib \
 		../clib/o/stubs
+
+# Socklib is only needed in Fresco itself by the remote debugging code
+# (none of its members should get linked into release builds)
 
 unused1=	\
 		-W \
@@ -190,7 +195,7 @@ NCFRESCO_BASEOBJS=	clipboard.o stbfe.o stbhist.o stbhots.o stbkeys.o stbmap.o \
 		stbevent.o stbmenu.o stbopen.o stbredraw.o stbstatus.o stbtb.o stbutils.o \
 		alarm.o sutil.o ncreg.o internal.o \
 		$(SGML_OBJS) $(HTML_OBJS) $(COMM_OBJS)
-NCFRESCO_MEMOBJS= flex.o heap.o da.o 
+NCFRESCO_MEMOBJS= flex.o heap.o da.o
 
 NCFRESCO_OBJS=	$(NCFRESCO_BASEOBJS)
 # NCFRESCO_OBJS=	$(NCFRESCO_BASEOBJS) $(NCFRESCO_MEMOBJS)
@@ -350,19 +355,25 @@ buildstamp-trigger:
 		@echo "Hi there" > buildstamp-trigger
 
 # Arrange that all files will be recompiled. See also realclean
+# Note the use of cd && rm - this is for directories that might
+# not exist when one doesn't want rm * executed in the wrong
+# directory (as happened to me!!!).
 clean:		sanity
 		@echo "Cleaning out objects and executables"
-		-cd ./fresco_pc ; $(RM) *.o *,ff8 *,fd3
-		@cd ./fresco ; $(RM) *.o *,ff8 *,fd3
-		@cd ./unix ; $(RM) *.o
-		@cd ./ncfresco ; $(RM) *.o *,ff8 *,fd3
-		@cd ./stdalone; $(RM) *.o htmlcheck
-		@cd ./bunix ; $(RM) *.o builders
-		@cd ./cunix ; $(RM) builders parse_check format_check check_all
-		@cd ./hriscos ; $(RM) *.o htmlcheck,ff8
-		@cd ./\!Fresco ; $(RM) *,ff8 *,fd3
-		@cd ./\!NCFresco ; $(RM) *,ff8 *,fd3
-		@cd ./abs ; $(RM) *
+		-cd ./fresco_pc && $(RM) *.o *,ff8 *,fd3
+		-@cd ./fresco ; $(RM) *.o *,ff8 *,fd3
+		-@cd ./cbfresco && $(RM) *.o
+		-@cd ./cbfresco_pc && $(RM) *.o
+		-@cd ./cbfresco_zm && $(RM) *.o
+		-@cd ./unix ; $(RM) *.o
+		-@cd ./ncfresco ; $(RM) *.o *,ff8 *,fd3
+		-@cd ./stdalone; $(RM) *.o htmlcheck
+		-@cd ./bunix ; $(RM) *.o builders
+		-@cd ./cunix ; $(RM) builders parse_check format_check check_all
+		-@cd ./hriscos ; $(RM) *.o htmlcheck,ff8
+		-@cd ./\!Fresco ; $(RM) *,ff8 *,fd3
+		-@cd ./\!NCFresco ; $(RM) *,ff8 *,fd3
+		-@cd ./abs && $(RM) *
 		@echo "Removing some build control files"
 		@$(RM) */builddate.h $(PREDEPS)
 
@@ -499,11 +510,17 @@ mr:		MOST_RISCOS
 mu:		MOST_UNIX
 
 realclean:	clean sanity
+		@cd ./RISC_OSLib && $(RM) *.o risc_oslib
+		@cd ./memlib && $(RM) *.o memlib
 		@echo "Cleaning generated files (eg htmldefs.c)"
 		@$(RM) -r $(ATTREXTRA) srclist RELEASE buildstamp TAGS \
 		cscope.files cscope.out
 		@echo "Removing ALL symbolic links"
 		@find . -type l -exec rm {} \;
+
+riscoslib:
+		@echo "Making RISC_OSLib"
+		@cd ./RISC_OSLib; $(MAKE) -f MakeUnix
 
 # File holding filenames of each source file. These are the files
 # that are considered for searching with tools, etc.
@@ -540,6 +557,7 @@ NCFRESCO_BUILD_LIBS=	$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1.o \
 			$(RISCOS_BUILD_EXPORT)/Lib/CLib/stubs.o \
 			$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/risc_oslib.o \
 			$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/inetlib.o \
+			$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/socklib.o \
 			$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlib.o
 
 NCFRESCO_ROM_LIBS=	$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1.o \

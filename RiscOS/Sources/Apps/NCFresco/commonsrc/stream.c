@@ -436,7 +436,10 @@ void stream_render(rid_text_stream *stream, antweb_doc *doc,
     RENDBG(("Left = %d, right = %d\n", left, right));
     RENDBG(("Scanning down\n"));
 
-    for (pi = stream->pos_list; pi->next && pi->next->top > top; pi = pi->next)
+    /* pdh: test that used to be here didn't DTRT for DL COMPACT, which ends
+     * up using two pos items on the same line
+     */
+    for (pi = stream->pos_list; pi->next && (pi->top-pi->max_up-pi->max_down) > top; pi = pi->next)
     {
 	RENDBGN(("Skipping line, top=%d\n", pi->top));
     }
@@ -535,7 +538,7 @@ void stream_write_as_drawfile(be_doc doc, rid_text_stream *stream,
     int dwidth;
     wimp_paletteword trans;
 
-    trans.word = ~0;
+    trans.word = (unsigned int)~0;
 
     dwidth = (stream->fwidth > stream->widest) ? stream->fwidth : stream->widest;
 

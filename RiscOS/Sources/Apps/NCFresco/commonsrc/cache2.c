@@ -29,7 +29,7 @@
 
 static char scrapname[256];
 static char *scrap_leaf_ptr;
-static unsigned int scrap_lastcall = -1;
+static unsigned int scrap_lastcall = (unsigned int)-1;
 static int scrap_cycle;
 
 /* ----------------------------------------------------------------------------------------------- */

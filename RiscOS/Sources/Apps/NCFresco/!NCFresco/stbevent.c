@@ -514,7 +514,12 @@ static void codec_event_handler(int event, fe_view v)
     }
     else if (event == fevent_CODEC_CLOSE)
     {
-	/* do something else... */
+	be_item item = NULL;
+
+	if (v && v->displaying)
+	    item = v->current_link;
+
+	backend_plugin_action(v->displaying, item, -1);
     }
 }
 

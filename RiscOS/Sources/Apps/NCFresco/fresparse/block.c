@@ -39,6 +39,7 @@ extern void startblockquote (SGMLCTX * context, ELEMENT * element, VALUES * attr
     text_item_push_word(htmlctxof(context), rid_flag_LINE_BREAK, FALSE);
 #endif
     bump_current_indent(context);
+    bump_current_rindent(context);
 }
 
 extern void finishblockquote (SGMLCTX * context, ELEMENT * element)

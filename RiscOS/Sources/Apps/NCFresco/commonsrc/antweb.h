@@ -1,11 +1,19 @@
 /* -*-c-*- */
 
+#ifndef fresco_antweb_h
+#define fresco_antweb_h
+
 #ifndef __wimp_h
 #include "wimp.h"
 #endif
 
+#ifndef __rid_h
 #include "rid.h"
+#endif
+
+#ifndef __access_h
 #include "access.h"
+#endif
 
 #define POLL_INTERVAL	20	/* centi-seconds */
 
@@ -121,5 +129,7 @@ extern int antweb_get_edges(const rid_text_item *ti, int *left, int *right);
 extern int antweb_render_background(wimp_redrawstr *rr, void *h, int update);
 extern int antweb_doc_abort_all(void);
 extern os_error *antweb_document_sizeitems(antweb_doc *doc);
+
+#endif
 
 /* eof antweb.h */

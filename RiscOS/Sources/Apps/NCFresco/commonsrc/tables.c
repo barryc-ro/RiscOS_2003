@@ -2880,6 +2880,7 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	add_bold_to_font(context);
     /* SJM: ensure no indent is carried into cell */
     PACK(context->tos->effects_active, STYLE_INDENT, 0);
+    PACK(context->tos->effects_active, STYLE_RINDENT, 0);
 
     switch (tag)
     {
@@ -3110,9 +3111,9 @@ extern void finishth (SGMLCTX * context, ELEMENT * element)
   */
 
 
-/*static*/ extern void rid_size_table( rid_table_item *table, rid_fmt_info *parfmt );
+/*static*/ extern void rid_size_table( rid_header *rh, rid_table_item *table, rid_fmt_info *parfmt );
 
-static void dummy_table_min(rid_text_stream *stream, rid_text_item *item, rid_fmt_info *parfmt)
+static void dummy_table_min(rid_header *rh, rid_text_stream *stream, rid_text_item *item, rid_fmt_info *parfmt)
 {
     rid_table_item *table = ((rid_text_item_table *)item)->table;
 
@@ -3120,7 +3121,7 @@ static void dummy_table_min(rid_text_stream *stream, rid_text_item *item, rid_fm
     return;
 }
 
-static void dummy_table_max(rid_text_stream *stream, rid_text_item *item, rid_fmt_info *parfmt)
+static void dummy_table_max(rid_header *rh, rid_text_stream *stream, rid_text_item *item, rid_fmt_info *parfmt)
 {
     rid_table_item *table = ((rid_text_item_table *)item)->table;
 
@@ -3129,10 +3130,10 @@ static void dummy_table_max(rid_text_stream *stream, rid_text_item *item, rid_fm
 }
 
 
-extern void rid_size_stream(rid_text_stream *stream, rid_fmt_info *fmt, int flags, rid_text_item *ti)
+extern void rid_size_stream(rid_header *rh, rid_text_stream *stream, rid_fmt_info *fmt, int flags, rid_text_item *ti)
 {
     rid_width_info *info = &stream->width_info;
-    void (*old_tab_proc)(rid_text_stream *stream, rid_text_item *item, rid_fmt_info *parfmt);
+    void (*old_tab_proc)(rid_header *rh, rid_text_stream *stream, rid_text_item *item, rid_fmt_info *parfmt);
 
     if (ti == NULL)
 	ti = stream->text_list;
@@ -3145,7 +3146,7 @@ extern void rid_size_stream(rid_text_stream *stream, rid_fmt_info *fmt, int flag
     {
 	if (ti->tag == rid_tag_TABLE)
 	{
-	    rid_size_table( ((rid_text_item_table *)ti)->table, fmt );
+	    rid_size_table( rh, ((rid_text_item_table *)ti)->table, fmt );
 	}
     }
 
@@ -3156,7 +3157,7 @@ extern void rid_size_stream(rid_text_stream *stream, rid_fmt_info *fmt, int flag
 	fmt->width = &info->minwidth;
 	old_tab_proc = fmt->table_proc;
 	fmt->table_proc = dummy_table_min;
-	be_formater_loop_core(stream, stream->text_list, fmt, flags | rid_fmt_MIN_WIDTH);
+	be_formater_loop_core(rh, stream, stream->text_list, fmt, flags | rid_fmt_MIN_WIDTH);
 	fmt->table_proc = old_tab_proc;
 #if DEBUG && 0
 	TABDBG(("rid_size_table(): formatted to MIN_WIDTH\n"));
@@ -3171,7 +3172,7 @@ extern void rid_size_stream(rid_text_stream *stream, rid_fmt_info *fmt, int flag
 	fmt->width = &info->maxwidth;
 	old_tab_proc = fmt->table_proc;
 	fmt->table_proc = dummy_table_max;
-	be_formater_loop_core(stream, stream->text_list, fmt, flags | rid_fmt_MAX_WIDTH);
+	be_formater_loop_core(rh, stream, stream->text_list, fmt, flags | rid_fmt_MAX_WIDTH);
 	fmt->table_proc = old_tab_proc;
 #if DEBUG && 0
 	TABDBG(("rid_size_table(): formatted to MAX_WIDTH\n"));

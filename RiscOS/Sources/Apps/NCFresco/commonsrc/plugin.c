@@ -636,6 +636,29 @@ int plugin_send_action(plugin pp, int new_action)
     return 1;
 }
 
+int plugin_send_abort(plugin pp)
+{
+    wimp_msgstr msg;
+    message_plugin_abort *abort = (message_plugin_abort *) &msg.data;
+
+    /* if no plugin specified then use the top of the helper list */
+    if (pp == NULL)
+	pp = helper_list;
+    
+    OBJDBG(("plugin: send abort %p state %d\n", pp, pp->state));
+
+    /* Build message block */
+    abort->flags = 0;
+
+    msg.hdr.size = sizeof(msg.hdr) + sizeof(*abort);
+    msg.hdr.action = (wimp_msgaction)MESSAGE_PLUGIN_ABORT;
+    msg.hdr.your_ref = 0;
+
+    plugin_send_message(&msg, pp);
+
+    return 1;
+}
+
 /* ----------------------------------------------------------------------------- */
 
 static void plugin_send_stream_new(plugin_stream_private *psp, int your_ref)
@@ -1078,14 +1101,24 @@ plugin plugin_helper(const char *url, int ftype, const char *mime_type, void *pa
 {
     plugin pp;
     rid_object_item obj;
+    rid_object_param param;
 
-    OBJDBG(("plugin: helper url %s ftype %x mime_type %s\n", url, ftype, mime_type));
+    OBJDBG(("plugin: helper url %s ftype %x mime_type '%s'\n", url, ftype, strsafe(mime_type)));
 
+    memset(&param, 0, sizeof(param));
+    param.name = "AUTOSTART";
+    param.value = "TRUE";
+    param.valuetype = HTML_PARAM_VALUETYPE_DATA;
+
+    memset(&obj, 0, sizeof(obj));
+    obj.element = HTML_A;
     obj.data = strdup(url);
     obj.data_ftype = ftype;
     obj.data_mime_type = strdup(mime_type);
     
     obj.classid_ftype = -1;
+
+    obj.params = &param;
     
     pp = plugin_new(&obj, NULL, NULL);
 
@@ -1261,7 +1294,7 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 			mm_free(url);
 		    }
 
-		    frontend_view_status(pp->doc ? pp->doc->parent : NULL, sb_status_PLUGIN, pp, (pp->opening_flags & plugin_opening_BUSY) != 0, pp->play_state);
+		    frontend_view_status(pp->doc ? pp->doc->parent : pp->helper.parent, sb_status_PLUGIN, pp, (pp->opening_flags & plugin_opening_BUSY) != 0, pp->play_state, 1, 0);
 
 		    break;
 		}
@@ -1280,6 +1313,8 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 
 	    if (closed->flags & plugin_closed_ERROR_MSG)
 		frontend_complain((os_error *)&closed->errnum);
+
+	    frontend_view_status(pp->doc ? pp->doc->parent : pp->helper.parent, sb_status_PLUGIN, pp, FALSE, pp->play_state, 0, 1);
 	    break;
 	}
 
@@ -1478,7 +1513,7 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 	{
  	    message_plugin_busy *busy = (message_plugin_busy *)&msg->data;
 
-	    OBJDBG(("plugin: msg busy %p state %d\n", pp, pp->state));
+	    OBJDBG(("plugin: msg busy %p flags %x state %d new play_state %d\n", pp, busy->flags, pp->state, busy->state));
 
 	    if (busy->flags & plugin_busy_STATE_VALID)
 		pp->play_state = busy->state;
@@ -1488,7 +1523,7 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 	    else
 		pp->opening_flags &= ~plugin_opening_BUSY;
 
-	    frontend_view_status(pp->doc ? pp->doc->parent : NULL, sb_status_PLUGIN, pp, (pp->opening_flags & plugin_opening_BUSY) != 0, pp->play_state);
+	    frontend_view_status(pp->doc ? pp->doc->parent : pp->helper.parent, sb_status_PLUGIN, pp, (pp->opening_flags & plugin_opening_BUSY) != 0, pp->play_state, 0, 0);
 
 	    break;
 	}

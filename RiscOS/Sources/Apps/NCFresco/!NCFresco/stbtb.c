@@ -2233,16 +2233,17 @@ static int codec_component[] =
     fevent_CODEC_RECORD
 };
 
-void tb_codec_state_change(int state)
+void tb_codec_state_change(int state, BOOL opening)
 {
-    if (bar_list && bar_list->num != TOOLBAR_CODEC)
+    if (opening && (bar_list == NULL || bar_list->num != TOOLBAR_CODEC))
 	tb_status_new(NULL, TOOLBAR_CODEC);
 
-    if (bar_list)
+    if (bar_list && bar_list->num == TOOLBAR_CODEC)
     {
 	int i;
+	
 	for (i = 0; i < sizeof(codec_component)/sizeof(codec_component[0]); i++)
-	    setstate(bar_list->object_handle, codec_component[state], state == i);
+	    setstate(bar_list->object_handle, codec_component[i], state == i);
     }
 }
 

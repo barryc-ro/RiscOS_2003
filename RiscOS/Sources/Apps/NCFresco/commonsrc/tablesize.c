@@ -412,7 +412,7 @@ static void done_table_sizing(rid_table_item *table)
 
  */
 
-static void size_child_items(rid_table_item *table, rid_fmt_info *parfmt)
+static void size_child_items(rid_header *rh, rid_table_item *table, rid_fmt_info *parfmt)
 {
     const int cellsx = table->cells.x;
     const int cb = table->cellspacing + 2 * table->cellpadding;
@@ -443,7 +443,7 @@ static void size_child_items(rid_table_item *table, rid_fmt_info *parfmt)
     {
 	/* Don't forget to ensure padding space for the caption as well */
 	TABDBGN(("size_child_items(): sizing table's caption stream\n"));
-	rid_size_stream(&table->caption->stream, &fmt, 0, NULL);
+	rid_size_stream(rh, &table->caption->stream, &fmt, 0, NULL);
 	table->caption->stream.width_info.minwidth += cb;
 	table->caption->stream.width_info.maxwidth += cb;
     }
@@ -496,7 +496,7 @@ static void size_child_items(rid_table_item *table, rid_fmt_info *parfmt)
 
 	TABDBGN(("size_child_items(): doing the rid_size_stream()\n"));
 
-	rid_size_stream(&cell->stream, &fmt, flags, NULL);
+	rid_size_stream(rh, &cell->stream, &fmt, flags, NULL);
 
 #if DEBUG && 0
 	TABDBG(("size_child_items(): rid_width_info for cell initialised to:\n"));
@@ -754,7 +754,7 @@ static void size_child_items(rid_table_item *table, rid_fmt_info *parfmt)
 
 /*****************************************************************************/
 
-extern void rid_size_table( rid_table_item *table, rid_fmt_info *parfmt )
+extern void rid_size_table( rid_header *rh, rid_table_item *table, rid_fmt_info *parfmt )
 {
     /* Iterate whilst we have %age total unacceptably large */
     /* The amount of work could be reduced, but this is at */
@@ -782,7 +782,7 @@ extern void rid_size_table( rid_table_item *table, rid_fmt_info *parfmt )
 	TABDBG(("\n\nrid_size_table(%p, %p)\n", table, parfmt));
 
 	ready_table_for_sizing(table);
-	size_child_items(table, parfmt);
+	size_child_items(rh,table, parfmt);
     } while ( new_sizer(table) );
 #endif
 
@@ -1757,7 +1757,7 @@ static void rid_table_place_cols(rid_text_stream *stream,
 /* Chooses widths and then heights */
 /* Sets xoff and yoff for items */
 
-extern void rid_table_share_width(rid_text_stream *stream, rid_text_item *orig_item, rid_fmt_info *parfmt)
+extern void rid_table_share_width(rid_header *rh, rid_text_stream *stream, rid_text_item *orig_item, rid_fmt_info *parfmt)
 {
     rid_table_item *table = ((rid_text_item_table *)orig_item)->table;
     rid_table_cell *cell;
@@ -1855,7 +1855,7 @@ extern void rid_table_share_width(rid_text_stream *stream, rid_text_item *orig_i
     {
 	TABDBGN(("Formatting the caption.\n"));
 
-	be_formater_loop_core(&table->caption->stream,
+	be_formater_loop_core( rh, &table->caption->stream,
 			      table->caption->stream.text_list,
 			      &fmt, rid_fmt_BUILD_POS);
     }
@@ -1864,7 +1864,7 @@ extern void rid_table_share_width(rid_text_stream *stream, rid_text_item *orig_i
     {
 	TABDBGN(("Formatting cell %d,%d\n", x, y));
 
-	be_formater_loop_core(&cell->stream, cell->stream.text_list, &fmt, rid_fmt_BUILD_POS);
+	be_formater_loop_core( rh, &cell->stream, cell->stream.text_list, &fmt, rid_fmt_BUILD_POS);
 
 	/* Handle <TD HEIGHT=Npx> */
 

@@ -14,9 +14,11 @@ extern void init_usrtrc(void)
 	emit = 1;
 }
 
+#ifdef __acorn
 #pragma -v1
+#endif
+
 extern void usrtrc(const char *fmt, ...)
-#pragma -v0
 {
     if (emit)
     {
@@ -27,5 +29,9 @@ extern void usrtrc(const char *fmt, ...)
 	va_end(arglist);
     }
 }
+
+#ifdef __acorn
+#pragma -v0
+#endif
 
 /* eof usrtrc.c */

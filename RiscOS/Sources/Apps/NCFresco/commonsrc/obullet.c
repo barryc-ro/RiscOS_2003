@@ -31,8 +31,11 @@
 #include "indent.h"
 
 #ifndef BULLET_CHAR
-#define BULLET_CHAR 0x8F
+#define BULLET_CHAR '\x8F'
 #endif
+
+/* You don't want to set this to 1 */
+#define DEBUG_DLCOMPACT 0
 
 #ifndef BUILDERS
 static void roman_one_five_ten(char *s, int n, char *oft)
@@ -107,7 +110,7 @@ static char *obullet_string(rid_text_item_bullet *tib, BOOL symfont)
     {
     case HTML_UL:
 	buffer[0] = BULLET_CHAR;
-	buffer[1] = 160;
+	buffer[1] = (char)160;
 	buffer[2] = 0;
 	switch (tib->item_type)
 	{
@@ -157,11 +160,19 @@ static char *obullet_string(rid_text_item_bullet *tib, BOOL symfont)
 	strcat(buffer, ")\240");
 	break;
 
+    case HTML_DL:       /* fake bullet for transferring info to formatter */
+#if DEBUG_DLCOMPACT
+        strcpy( buffer, "hoho" );
+#else
+        *buffer = 0;
+#endif
+        break;
+
     case HTML_MENU:
     case HTML_DIR:
     default:
 	buffer[0] = BULLET_CHAR;
-	buffer[1] = 160;
+	buffer[1] = (char)160;
 	buffer[2] = 0;
 	break;
     }
@@ -184,6 +195,11 @@ void obullet_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     case HTML_DIR:
 	ti->width = INDENT_WIDTH * INDENT_UNIT;
 	break;
+
+    case HTML_DL:
+        ti->width = 0;
+        break;
+
     default:
 	ti->width = 2 * INDENT_UNIT;
 	break;
@@ -207,6 +223,11 @@ void obullet_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     if ((ti->flag & rid_flag_FVPR) == 0)
 	return;
 
+#if !DEBUG_DLCOMPACT
+    if ( tib->list_type == HTML_DL )
+        return;
+#endif
+
     symfont = FALSE;
     fh = webfonts[ti->st.wf_index].handle;
 
@@ -220,7 +241,7 @@ void obullet_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 	    symfont = TRUE;
 	}
     }
-    
+
     if (fs->lf != fh)
     {
 	fs->lf = fh;
@@ -267,6 +288,9 @@ void obullet_astext(rid_text_item *ti, rid_header *rh, FILE *f)
 {
     rid_text_item_bullet *tib = (rid_text_item_bullet*) ti;
 
+    if ( tib->list_type == HTML_DL )
+        return;
+
     if (tib->list_no == 0)
 	fputs("      * ", f);
     else
@@ -291,6 +315,9 @@ void obullet_asdraw(rid_text_item *ti, antweb_doc *doc, int fh,
     wimp_box tb;
     font_string fstr;
     int hp;
+
+    if ( tib->list_type == HTML_DL )
+        return;
 
     buffer = obullet_string(tib, FALSE);
 

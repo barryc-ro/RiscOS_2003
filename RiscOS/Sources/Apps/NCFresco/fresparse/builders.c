@@ -107,9 +107,10 @@ extern void select_last_mode(HTMLCTX *me)
 
 extern void bump_current_indent(SGMLCTX *context)
 {
-    BITS x = UNPACK(context->tos->effects_active, STYLE_INDENT);
+    BITS x = UNPACK( context->tos->effects_active, STYLE_INDENT);
+    BITS rx = UNPACK( context->tos->effects_active, STYLE_RINDENT );
 
-    if (x < (256 - INDENT_WIDTH) )
+    if (x < (256 - INDENT_WIDTH - rx) )
     {
 	x += INDENT_WIDTH;
 	PACK(context->tos->effects_active, STYLE_INDENT, x);
@@ -118,6 +119,23 @@ extern void bump_current_indent(SGMLCTX *context)
     else
     {
 	PRSDBG(("bump_current_indent(): at rightmost margin!\n"));
+    }
+}
+
+extern void bump_current_rindent(SGMLCTX *context)
+{
+    BITS x = UNPACK( context->tos->effects_active, STYLE_INDENT);
+    BITS rx = UNPACK( context->tos->effects_active, STYLE_RINDENT );
+
+    if (rx < (256 - INDENT_WIDTH - x) )
+    {
+	rx += INDENT_WIDTH;
+	PACK(context->tos->effects_active, STYLE_RINDENT, rx);
+	PRSDBGN(("bump_current_rindent(%p): now %d\n", context, rx));
+    }
+    else
+    {
+	PRSDBG(("bump_current_rindent(): at leftmost margin!\n"));
     }
 }
 
@@ -282,6 +300,7 @@ extern void text_item_push_word(HTMLCTX * me, rid_flag xf, BOOL space)
 /*    int i;*/
     char *ptr = me->inhand_string.ptr;
     int bytes = me->inhand_string.bytes;
+    int rindent;
 
     ASSERT(me->magic == HTML_MAGIC);
 
@@ -407,6 +426,11 @@ extern void text_item_push_word(HTMLCTX * me, rid_flag xf, BOOL space)
 	me->aref->first = nb;
     GET_ROSTYLE(nb->st);
 
+    /* pdh: bodge warning: only one level of right indent supported */
+    rindent = UNPACK(me->sgmlctx->tos->effects_active, STYLE_RINDENT);
+    if ( rindent != 0 )
+        nb->flag |= rid_flag_RINDENT;
+
     rid_text_item_connect(me->rh->curstream, nb);
 
     if (nb2 != NULL)
@@ -414,6 +438,12 @@ extern void text_item_push_word(HTMLCTX * me, rid_flag xf, BOOL space)
 	PRSDBG(("text_item_push_word(): adding 2nd half of split word\n"));
 	nb2->tag = rid_tag_TEXT;
 	nb2->aref = me->aref;	/* Current anchor, or NULL */
+
+        /* pdh: bodge warning: only one level of right indent supported */
+        rindent = UNPACK(me->sgmlctx->tos->effects_active, STYLE_RINDENT);
+        if ( rindent != 0 )
+            nb->flag |= rid_flag_RINDENT;
+
 	GET_ROSTYLE(nb2->st);
 	rid_text_item_connect(me->rh->curstream, nb2);
     }
@@ -422,6 +452,14 @@ extern void text_item_push_word(HTMLCTX * me, rid_flag xf, BOOL space)
     string_free(&me->inhand_string);
 
     return;
+}
+
+/*****************************************************************************/
+
+extern void text_item_revoke_break( HTMLCTX *me )
+{
+    if ( me->rh && me->rh->curstream && me->rh->curstream->text_last )
+        me->rh->curstream->text_last->flag &= ~rid_flag_LINE_BREAK;
 }
 
 /*****************************************************************************/
@@ -449,7 +487,7 @@ extern void new_form_item(HTMLCTX * me, VALUE *action, VALUE *method, VALUE *tar
 
     if (id->type == value_string)
 	new->id = stringdup(id->u.s);
-    
+
     rid_form_item_connect(me->rh, new);
     me->form = new;
 }
@@ -781,7 +819,7 @@ extern void text_item_push_select(HTMLCTX * me, VALUE *name, VALUE *size, VALUE 
     htmlriscos_colour(selcolor, &sel->base.colours.select);
     if (nopopup->type != value_none)
 	sel->flags |= rid_if_NOPOPUP;
-    
+
     if (name->type == value_string)
 	sel->name = stringdup(name->u.s);
     if (size->type != value_integer)
@@ -831,7 +869,7 @@ extern void text_item_push_textarea(HTMLCTX * me, VALUE *name, VALUE *rows, VALU
     htmlriscos_colour(bgcolor, &ta->base.colours.back);
     htmlriscos_colour(selcolor, &ta->base.colours.select);
     htmlriscos_colour(cursor, &ta->base.colours.cursor);
-    
+
     if (name->type == value_string)
 	ta->name = stringdup(name->u.s);
 
@@ -1076,7 +1114,7 @@ extern void push_fake_search_form(HTMLCTX * me, VALUE *prompt)
 
   SJM: Currently this is only called from the <BR> code. We don't want it to
   push a break if the previous word has line break set.
-  
+
   */
 
 extern void text_item_push_break(HTMLCTX * me)
@@ -1102,9 +1140,9 @@ extern void text_item_push_break(HTMLCTX * me)
 	rid_text_item_text *ti = mm_calloc(1, sizeof(*ti));
 
 	PRSDBG(("line break\n"));
-     
+
 	nb = (rid_text_item *) ti;
-     
+
 	nb->tag = rid_tag_TEXT;
 	nb->flag |= rid_flag_LINE_BREAK | rid_flag_EXPLICIT_BREAK;
 	nb->aref = me->aref;	/* Current anchor, or NULL */
@@ -1119,7 +1157,7 @@ extern void text_item_push_break(HTMLCTX * me)
 	flexmem_shift();
 
 	rid_text_item_connect(me->rh->curstream, nb);
-    
+
     }
     else
     {
@@ -1167,7 +1205,7 @@ extern void text_item_push_hr(HTMLCTX *me, VALUE *align, VALUE *noshade, VALUE *
     rid_text_item *ti;
 
     if ( (ti = me->rh->curstream->text_last) != NULL )
-	ti->flag  |= rid_flag_LINE_BREAK;
+	ti->flag |= rid_flag_LINE_BREAK;
 
     item = mm_calloc(1, sizeof(*item));
     item->base.tag = rid_tag_HLINE;

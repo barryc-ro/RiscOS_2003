@@ -144,6 +144,7 @@ typedef struct _access_item {
     access_complete_fn complete;
     void *h;
     void *transport_handle;
+    BOOL hadwholepart;          /* used for serverpush (see http_fetch_alarm) */
     struct _access_item *redirect;
     struct _access_item *next, *prev;
     union {
@@ -854,8 +855,12 @@ static os_error *access_http_fetch_start(access_handle d)
     httpo.in.fname = d->ofile ? d->ofile : cache->scrapfile_name();
     httpo.in.bname = d->data.http.body_file;
     httpo.in.flags = 0;
-    if (d->flags & access_SECURE)
+    if ( d->flags & access_SECURE)
 	httpo.in.flags |= http_open_flags_SECURE;
+    if ( d->flags & access_PRIORITY )
+        httpo.in.flags |= http_open_flags_PRIORITY;
+    if ( d->flags & access_IMAGE )
+        httpo.in.flags |= http_open_flags_IMAGE;
 
     ep = os_swix(HTTP_Open, (os_regset *) &httpo);
 
@@ -1134,10 +1139,21 @@ static void access_http_fetch_done(access_handle d, http_status_args *si)
     /* The http close does not need to delete the file as we have already if it was removed from the cache */
     access_http_close(d->transport_handle, http_close_DELETE_BODY );
 
-
 #ifdef STBWEB
     last_http_headers = si->out.headers;
 #endif
+
+    /* What? A bug, in some Netscape software? Surely not.
+     * If we've got an error, but we were in a server-push situation and
+     * the previous part finished fine, kid ourselves that the previous part
+     * was the final one. Unlike most Netscape bugs, they've posted the source
+     * code for this one on the Web:
+     *      http:/www.netscape.com/assist/net_sites/mozilla/doit.c
+     */
+
+    if ( si->out.status != status_COMPLETED_FILE
+         && d->hadwholepart )
+        si->out.status = status_COMPLETED_FILE;
 
     if (d->complete)
 	cache_it = d->complete(d->h, si->out.status, si->out.status == status_COMPLETED_FILE ? cfile : NULL, d->url);
@@ -1254,7 +1270,7 @@ static void access_http_fetch_alarm(int at, void *h)
 	d->ftype = httpft.out.ftype;
 	d->ft_is_set = 1;
 
-#ifdef STBWEB
+#if 0
 #define MIME_TYPE_SERVER_PUSH	"MULTIPART/X-MIXED-REPLACE"
 	/* check and see if it is a server-push stream */
 	/* must do before the extension checking */
@@ -1307,7 +1323,8 @@ static void access_http_fetch_alarm(int at, void *h)
 	}
     }
 
-    if (si.out.status >= status_COMPLETED_FILE)
+    if ( (si.out.status >= status_COMPLETED_FILE)
+         && (si.out.status != status_COMPLETED_PART) )
     {
 	http_header_item *list;
 	BOOL done = TRUE;
@@ -1468,8 +1485,29 @@ static void access_http_fetch_alarm(int at, void *h)
                 d->ftype ));
 
 	/* Keep going */
-	if (d->progress)
-	    d->progress(d->h, si.out.status, si.out.data_size, si.out.data_so_far, si.out.ro_fh, readable ? d->ftype : -1, d->url );
+	if ( d->progress &&
+	     (!d->hadwholepart || si.out.status==status_COMPLETED_PART) )
+	    d->progress(d->h,
+	                d->hadwholepart ? status_COMPLETED_PART : si.out.status,
+	                d->hadwholepart ? si.out.data_so_far : si.out.data_size,
+	                si.out.data_so_far, si.out.ro_fh,
+	                readable ? d->ftype : -1, d->url );
+
+        if ( si.out.status == status_COMPLETED_PART )
+        {
+            http_completedpart_args cpa;
+
+            d->hadwholepart = TRUE;
+
+            cpa.in.handle = d->transport_handle;
+            cpa.in.flags = 0;
+            cpa.in.newfname = NULL;
+
+            os_swix(HTTP_CompletedPart, (os_regset *) &cpa);
+
+            ACCDBG(("Completed a part!\n"));
+        }
+
 	access_reschedule(&access_http_fetch_alarm, d, POLL_INTERVAL);
     }
 }
@@ -2032,6 +2070,77 @@ static void access_file_fetch_alarm(int at, void *h)
 /*     visdelay_end(); */
 }
 
+
+static os_error *access_new_file(const char *file, char *url, access_url_flags flags, char *ofile, 
+				 access_progress_fn progress, access_complete_fn complete,
+				 void *h, access_handle *result)
+{
+    access_handle d = NULL;
+    int ft = file_type(file);
+    int fh = ro_fopen(file, RO_OPEN_READ);
+    os_error *ep = NULL;
+    
+    if (fh)
+    {
+	BOOL do_reschedule;
+
+	d = mm_calloc(1, sizeof(*d));
+
+	d->access_type = access_type_FILE;
+	d->flags = flags;
+	d->url = strdup(url);
+	if (ofile)
+	{
+	    d->ofile = strdup(ofile);
+	    set_file_type(ofile, ft);
+	}
+
+	d->progress = progress;
+	d->complete = complete;
+	d->h = h;
+	access_link(d);
+	    
+	d->data.file.fname = strdup(file);
+	d->ftype = ft;
+	d->data.file.fh = fh;
+	d->data.file.ofh = ofile ? ro_fopen(ofile, RO_OPEN_WRITE) : 0;
+		
+	d->data.file.size = ro_get_extent(fh);
+	d->data.file.last_modified = file_last_modified(file);
+#if 0		
+	/* if this is an image then immediately process the first 256 bytes of the image to get the size */
+	if (flags & access_IMAGE)
+	{
+	    d->data.file.chunk = 256;
+	    do_reschedule = d->data.file.chunk > d->data.file.size;
+
+	    access_file_fetch_alarm(0, d);
+	}
+	else
+#endif
+	{
+	    do_reschedule = TRUE;
+	}
+
+	if (do_reschedule)
+	{
+	    d->data.file.chunk = FILE_INITIAL_CHUNK;
+	    access_reschedule(&access_file_fetch_alarm, d, FILE_POLL_INTERVAL);
+	}
+	else
+	{
+	    d = NULL;
+	}
+    }
+    else
+    {
+	ep = (os_error *)_kernel_last_oserror();
+    }
+
+    *result = d;
+    return ep;
+}
+
 /* ------------------------------------------------------------ */
 
 int access_url_type_and_size(char *url, int *ftypep, int *sizep)
@@ -2570,28 +2679,6 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
     else
 	cfile = cache->lookup(url, flags & access_CHECK_EXPIRE ? 1 : 0);
 
-#if 0
-    if (cfile)
-    {
-	FILE *f;
-
-	ACCDBG(("Cache hit on '%s'... testing if the file is still there.\n", cfile));
-
-	f = fopen(cfile, "r");
-	if (f)
-	    fclose(f);
-	else
-	{
-	    ACCDBG(("File not there, removing the cache entry.\n"));
-
-	    cache->remove(url);
-
-	    cache->lookup_free_name(cfile);
-	    cfile = NULL;
-	}
-    }
-#endif
-
     if (cfile)
     {
 	access_complete_flags fl;
@@ -2616,8 +2703,19 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 	    }
 	}
 
+	/* if the file is in cache then
+	 * if it is an image then we want to load only the start (to get the size)
+	 * and then let the rest come in its own time.
+	 * if it is HTML then we want to load it all at once.
+	 */
+
 	if (ep == NULL && !file_missing)
 	{
+#if 1
+	    ep = access_new_file(cfile, url, flags, ofile, progress, complete, h, result);
+	    if (ep)
+		file_missing = TRUE;
+#else
 	    if (!access_progress_flush(h, cfile, url, progress))
 		file_missing = TRUE;
 	    else
@@ -2627,6 +2725,7 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 		if (fl & access_KEEP)
 		    cache->keep(url);
 	    }
+#endif
 	}
 
 	if (file_missing)
@@ -2636,11 +2735,13 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 	    cache->lookup_free_name(cfile);
 	    cfile = NULL;
 	}
+#if 0
 	else
 	{
 	    ACCDBGN(("Cache hit '%s' returning the cache file\n", cfile));
 	    *result = NULL;
 	}
+#endif
     }
 
 #endif /*ndef FILEONLY */
@@ -2734,10 +2835,10 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 		}
 
 		mm_free(path);
-		mm_free(cfile);
+		/* cfile will be freed at end of section */
 		*result = NULL;
 	    }
-	    else
+	    else /* if (!path_is_directory(cfile)) */
 	    {
 		ft = file_type(cfile);
 
@@ -2773,7 +2874,7 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 		    if (fh)
 			fclose(fh);
 		}
-		else
+		else /* if (ft != FILETYPE_URL) */
 		{
 		    /* what does this bit do? */
 		    if (ft == -1)
@@ -2805,86 +2906,16 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 			    complete(h, status_COMPLETED_FILE, cfile, url);
 			}
 
-			mm_free(cfile);
 			*result = NULL;
 		    }
 		    else
 		    {
-			r.r[0] = 0x4f;
-			r.r[1] = (int) (long) cfile;
-
-			ep = os_find(&r);
-
-			if (ep == NULL)
-			    fh = r.r[0];
-			else
-			    fh = 0;
-
-			if (ep == NULL && ofile)
-			{
-			    r.r[0] = 0x8f;
-			    r.r[1] = (int) (long) ofile;
-
-			    ep = os_find(&r);
-
-			    ofh = r.r[0];
-			}
-
-			if (ep == NULL)
-			{
-			    d = mm_calloc(1, sizeof(*d));
-
-			    d->access_type = access_type_FILE;
-			    d->flags = flags;
-			    d->url = strdup(url);
-			    if (ofile)
-			    {
-				d->ofile = strdup(ofile);
-				set_file_type(ofile, ft);
-			    }
-			    d->progress = progress;
-			    d->complete = complete;
-			    d->h = h;
-			    access_link(d);
-
-			    d->data.file.fname = cfile;
-			    d->ftype = ft;
-			    d->data.file.fh = fh;
-#ifdef STBWEB
-			    d->data.file.chunk = ft == FILETYPE_JPEG ? 128*1024 : FILE_INITIAL_CHUNK;
-#else
-			    d->data.file.chunk = FILE_INITIAL_CHUNK;
-#endif
-			    d->data.file.ofh = ofh;
-
-			    r.r[0] = 2;
-			    r.r[1] = d->data.file.fh;
-
-			    os_args(&r);
-
-			    d->data.file.size = r.r[2];
-
-			    d->data.file.last_modified = file_last_modified(cfile);
-			    
-			    access_reschedule(&access_file_fetch_alarm, d, FILE_POLL_INTERVAL);
-
-			    *result = d;
-			}
-			else
-			{
-			    if (fh)
-			    {
-				r.r[0] = 0;
-				r.r[1] = fh;
-
-				os_find(&r);
-			    }
-			    mm_free(cfile);
-			    *result = NULL;
-			}
+			ep = access_new_file(cfile, url, flags, ofile, progress, complete, h, result);
 		    }
-		}
-	    }
+		} /* ft == FILETYPE_URL */
+	    } /* path_is_directory(cfile) */
+
+	    mm_free(cfile);
 	}
 	else if (strcasecomp(scheme, "icontype") == 0)
 	{
@@ -3300,11 +3331,7 @@ static void access_abort_item(access_handle d)
     case access_type_FILE:
 	if (d->data.file.fh)
 	{
-	    os_regset r;
-
-	    r.r[0] = 0;
-	    r.r[1] = d->data.file.fh;
-	    os_find(&r);
+	    ro_fclose(d->data.file.fh);
 	    d->data.file.fh = 0;
 	}
 	break;
@@ -3482,6 +3509,7 @@ void access_optimise_cache(void)
 #endif
 }
 
+#ifdef STBWEB
 BOOL access_is_scheme_supported(const char *scheme)
 {
     int i;
@@ -3502,5 +3530,6 @@ BOOL access_is_scheme_supported(const char *scheme)
 
     return FALSE;
 }
+#endif
 
 /* eof access.c */

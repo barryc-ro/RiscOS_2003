@@ -2,6 +2,13 @@
 
 /* Interface to the displayable objects (rid_text_items) in the ANTWeb system */
 
+#ifndef fresco_object_h
+#define fresco_object_h
+
+#ifndef fresco_antweb_h
+#include "antweb.h"
+#endif
+
 /* Size an object: use the object data to fill in the header.  This
  * may allocate resources. */
 
@@ -190,3 +197,5 @@ void *oobject_image_handle(rid_text_item *ti, antweb_doc *doc, int reason);
 
 /* Finally, a jump table to dispatch from */
 extern object_methods object_table[];
+
+#endif

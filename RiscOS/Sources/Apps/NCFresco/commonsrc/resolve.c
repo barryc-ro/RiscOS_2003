@@ -33,7 +33,7 @@ extern os_error *netloc_resolve(char *location, int def_port, int *status, void 
     os_error *ep;
 
     sa->sin_family = AF_INET;
-    sa->sin_port = htons(def_port);
+    sa->sin_port = htons((short)def_port);
 
     if ( (p=strchr(location, ':')) != 0)
     {
@@ -44,7 +44,7 @@ extern os_error *netloc_resolve(char *location, int def_port, int *status, void 
 	
 	if ( (i=atoi(portstr)) != 0)
 	{
-	    sa->sin_port = htons(i);
+	    sa->sin_port = htons((short)i);
 	}
 	else if ( ( sp = getservbyname(portstr, "tcp") ) == NULL)
 	{

@@ -40,6 +40,9 @@
 #include "version.h"
 #include "dfsupport.h"
 
+/* Make this 1 to see item boundaries */
+#define DEBUG_ITEMS 0
+
 /* An empty text object does not have any padding either. */
 /* This is so the object inserted by <BR> has no effective width */
 
@@ -74,7 +77,7 @@ void otext_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     font_strwidth(&fs);
     flexmem_shift();
 
-    ti->pad = (fs.x / MILIPOINTS_PER_OSUNIT);
+    ti->pad = (fs.x + MILIPOINTS_PER_OSUNIT/2) / MILIPOINTS_PER_OSUNIT;
 
     fs.x = 1 << 30;
     fs.y = 1 << 30;
@@ -88,7 +91,7 @@ void otext_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     font_strwidth(&fs);
     flexmem_shift();
 
-    ti->width = fs.x / MILIPOINTS_PER_OSUNIT;
+    ti->width = (fs.x + MILIPOINTS_PER_OSUNIT/2) / MILIPOINTS_PER_OSUNIT;
 
     if (str_len == 0)
     {
@@ -256,6 +259,11 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
 	b += wf->max_up/2;
 	break;
     }
+
+#if DEBUG_ITEMS
+    bbc_move( hpos, b - ti->max_down );
+    bbc_drawby( ti->width, ti->max_up + ti->max_down );
+#endif
 
     flexmem_noshift();
 
