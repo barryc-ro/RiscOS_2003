@@ -1,0 +1,646 @@
+/**************************************************************/
+/* File:    Play.c                                            */
+/*          (C) 2002 Pace Micro Technology PLC                */
+/*          All rights reserved                               */
+/*                                                            */
+/* Purpose: Implement RTSPHSAC_Play.                          */
+/*                                                            */
+/* Author:  A.D.Hodgkinson. Based on URL_Fetcher source by    */
+/*          S.N.Brodie and P. Wain.                           */
+/*                                                            */
+/* History: 08-Nov-1999 (ADH): Created.                       */
+/*          25-Jul-2002 (ADH): Imported to RTSP HSAC from     */
+/*                             RTSP OVS.                      */
+/**************************************************************/
+
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+#include <math.h>
+
+#include <swis.h>
+#include <AsmUtils/modulefp.h>
+
+#ifdef TRACE2
+  #define TRACE
+#endif
+#ifdef TRACE
+  #define DEBUGLIB
+#endif
+#include <debuglib/debuglib.h>
+
+#include <VideoCtrl.h>
+
+#include "Generic.h"
+#include "Global.h"
+#include "Headers.h"
+#include "MPEGCtrl.h"
+#include "RTSPHErrors.h"
+#include "Session.h"
+#include "Status.h"
+#include "Utils.h"
+
+#include "Play.h"
+
+/* Local functions */
+
+static _kernel_oserror * play_send_play    (session * s);
+static _kernel_oserror * play_build_play   (session * s);
+static void              play_process_speed (session * s, const char * scale);
+
+/**************************************************************/
+/* play_play()                                                */
+/*                                                            */
+/* Implement RTSPHSAC_Play. See the Video Control             */
+/* specification, 2501,817/FS, for more.                      */
+/**************************************************************/
+
+_kernel_oserror * play_play(_kernel_swi_regs * r)
+{
+  session    * s    = session_find_by_id(r->r[1]);
+  char       * scale;
+  modulefp_buf buf;
+  bool         fail = false;
+
+  dprintf(("Entry_0", "play_play: Called\n"));
+  dprintf(("Entry_1", " r0=&%08x\n",r->r[0]));
+  dprintf(("Entry_1", " r1=&%08x\n",r->r[1]));
+  dprintf(("Entry_1", " r2='%s'\n",r->r[2] ? (char *)r->r[2] : "NULL"));
+  dprintf(("Entry_1", " r3='%s'\n",r->r[3] ? (char *)r->r[3] : "NULL"));
+  #ifdef TRACE
+  if ((r->r[0] & VC_Play_R4ThroughR7AreValid) != 0)
+  {
+    dprintf(("Entry_1", " r4='%s'\n",r->r[4] ? (char *)r->r[4] : "NULL"));
+    dprintf(("Entry_1", " r5=%08x\n",r->r[5]));
+    dprintf(("Entry_1", " r6=%08x\n",r->r[6]));
+    dprintf(("Entry_1", " r7=%08x\n",r->r[7]));
+  }
+  #endif
+
+  if (s == NULL)
+  {
+    dprintf(("", "play_play: ID not found\n"));
+
+    return make_error(rtsphsac_ERROR_CLIENT_ID_NOT_FOUND, 0);
+  }
+
+  if (
+       s->state == protostate_DNS       ||
+       s->state == protostate_CONNECTED ||
+       s->state == protostate_SENDING   ||
+       s->state == protostate_RECEIVING
+     )
+  {
+    dprintf(("", "play_play: In progress\n"));
+
+    return make_error(rtsphsac_ERROR_IN_PROGRESS, 0);
+  }
+
+  if (s->server_session == NULL)
+  {
+    dprintf(("", "play_play: No server session\n"));
+
+    return make_error(rtsphsac_ERROR_NO_SERVER_SESSION, 0);
+  }
+
+  /* Find the new play mode and speed */
+
+  scale = (char *) r->r[3];
+
+  modulefp_enable(&buf);
+  play_process_speed(s, scale);
+  modulefp_disable(&buf);
+
+  dprintf(("", "play_play: Next play mode is %d, next speed is 1/%d\n", s->next_playmode, s->next_speed));
+
+  /* We can only do reduced rate playing if the MPEGDriver module is present */
+
+  if (s->next_speed > 1)
+  {
+    if (
+        _swix(OS_Module,
+              _INR(0,1),
+
+              18,
+              ReducedRateSlowmoSupportModule) /* Play.h */
+
+        != NULL
+       )
+    {
+      dprintf(("", "play_play: No reduced rate support, changing next speed to 1\n"));
+      s->next_speed = 1;
+    }
+  }
+
+  /* Copy R2 and R3 away */
+
+  free(s->play_record);
+  s->play_record  = Strdup(scale   == NULL ? "" : scale);
+
+  free(s->range_record);
+  s->range_record = Strdup(r->r[2] == NULL ? "" : (char *) r->r[2]);
+
+  if (s->play_record == NULL || s->range_record == NULL)
+    fail = true;
+
+  /* Copy R4-R6 away */
+
+  free(s->saved_r4), s->saved_r4 = NULL;
+  free(s->saved_r5), s->saved_r5 = NULL;
+  s->saved_r6 = 0;
+
+  if ((r->r[0] & VC_Play_R4ThroughR7AreValid) != 0)
+  {
+    if (r->r[4] != 0)
+    {
+      s->saved_r4 = Strdup((char *) r->r[4]);
+      if (s->saved_r4 == NULL)
+        fail = true;
+    }
+  
+    if (r->r[5] != 0 && r->r[6] != 0)
+    {
+      s->saved_r6 = r->r[6];
+      s->saved_r5 = malloc(r->r[6]);
+  
+      if (s->saved_r5 == NULL)
+        fail = true;
+      else
+        memcpy(s->saved_r5, (void *) r->r[5], r->r[6]);
+    }
+  }
+
+  if (fail)
+  {
+    dprintf(("", "play_play: Out of memory\n"));
+    return make_error(rtsphsac_ERROR_MEMORY_EXHAUSTED, 0);
+  }
+
+  /* Ensure everything is reset for a new command */
+
+  session_reset_session(s);
+
+  /* Build the initial command and set the command chain */
+
+  if (s->next_playmode == MPEGCtrl_MCRS_Trick_Freeze)
+  {
+    /* Speed is 0 - send a PAUSE command */
+
+    RetError(play_build_pause(s));
+  }
+  else if (s->started == 0 || s->use_playnow != 0)
+  {
+    /* First play command, or using x-playNow; send PLAY command */
+
+    RetError(play_build_play(s));
+  }
+  else
+  {
+    /* Already playing, and not using x-playNow; send PAUSE then PLAY. */
+
+    s->next_command_cb = play_send_play;
+    RetError(play_build_pause(s));
+  }
+
+  /* Send the command */
+
+  dprintf(("", "play_play: Successful; exitting through status_send\n"));
+
+  return status_send(s);
+}
+
+/**************************************************************/
+/* play_send_play()                                           */
+/*                                                            */
+/* Called only ever as a callback_fn_ptr (see Session.h).     */
+/*                                                            */
+/* This is the last item in a chain of commands for the       */
+/* server and sends the actual PLAY command off. No further   */
+/* callback function is set.                                  */
+/*                                                            */
+/* Parameters: Pointer to a session that just completed a     */
+/*             successful PAUSE command.                      */
+/**************************************************************/
+
+static _kernel_oserror * play_send_play(session * s)
+{
+  dprintf(("", "play_send_play: Called for &%08X\n", (int) s));
+
+  /* Ensure everything is reset for a new command */
+
+  session_reset_session(s);
+
+  /* Build the command */
+
+  RetError(play_build_play(s));
+
+  /* Send the command */
+
+  dprintf(("", "play_send_play: Exitting through status_send()\n"));
+
+  return status_send(s);
+}
+
+/**************************************************************/
+/* play_build_pause()                                         */
+/*                                                            */
+/* Build a PAUSE command inside the given session based on    */
+/* the URL details inside it.                                 */
+/*                                                            */
+/* Parameters: Pointer to a relevant session structure.       */
+/**************************************************************/
+
+_kernel_oserror * play_build_pause(session * s)
+{
+  bool fail = false;
+
+  /* Start adding headers */
+
+  if (
+       headers_add_header(&s->headers,
+                          Headers_CommandName_Pause,
+                          s->url->full)
+       == NULL
+     )
+     fail = true;
+
+  /* A sequence header */
+
+  else if (headers_add_sequence_header(&s->headers) == NULL) fail = true;
+
+  /* Range (if any) */
+
+  else if (
+            s->next_command_cb == NULL && /* No range for transient PAUSE */
+
+            s->range_record != NULL &&
+
+            *s->range_record != 0 &&
+
+            headers_add_header(&s->headers,
+                               Headers_HeaderName_Range,
+                               s->range_record)
+            == NULL
+          )
+          fail = true;
+
+  /* The session header */
+
+  else if (
+            headers_add_header(&s->headers,
+                               Headers_HeaderName_Session,
+                               s->server_session)
+            == NULL
+          )
+          fail = true;
+
+  else if (s->next_command_cb == NULL)  /* Ignore user data for transient PAUSE */
+  {
+    /* Get extra data from the client and store it */
+
+    if (s->saved_r4 != NULL)
+    {
+      headers_parse_user_header(s->saved_r4, strlen(s->saved_r4), s);
+    }
+
+    /* Support R5 and R6 body data extensions. */
+
+    if (s->saved_r5 != NULL && s->saved_r6 > 0)
+    {
+      s->data     = s->saved_r5, s->saved_r5 = NULL;
+      s->data_len = s->saved_r6, s->saved_r6 = 0;
+
+      if (headers_set_content_length(&s->headers, s->data_len) == NULL)
+        fail = true;
+    }
+  }
+
+  /* Did anything fail? */
+
+  if (fail)
+  {
+    dprintf(("", "play_build_pause: Out of memory\n"));
+    return make_error(rtsphsac_ERROR_MEMORY_EXHAUSTED, 0);
+  }
+
+  dprintf(("", "play_build_pause: Successful\n"));
+
+  s->change_pending = 1;
+
+  return NULL;
+}
+
+/**************************************************************/
+/* play_build_play()                                          */
+/*                                                            */
+/* Build a PLAY command inside the given session based on     */
+/* the play_record and URL details inside it.                 */
+/*                                                            */
+/* Parameters: Pointer to a relevant session structure.       */
+/**************************************************************/
+
+static _kernel_oserror * play_build_play(session * s)
+{
+  const char * scale = s->play_record;
+  bool         fail = false;
+
+  /* Alter Scale header when Speed header is to be used */
+
+  if (s->next_speed > 1)
+  {
+    if (s->next_playmode == MPEGCtrl_MCRS_Trick_SFWD)
+      scale = "1";
+    else if (s->next_playmode == MPEGCtrl_MCRS_Trick_SRWD)
+      scale = "-1";
+  }
+
+  /* Start adding headers */
+
+  if (
+       headers_add_header(&s->headers,
+                          Headers_CommandName_Play,
+                          s->url->full)
+       == NULL
+     )
+     fail = true;
+
+  /* A sequence header */
+
+  else if (headers_add_sequence_header(&s->headers) == NULL) fail = true;
+
+  /* Range */
+
+  else if (
+            s->range_record != NULL &&
+
+            *s->range_record != 0 &&
+
+            headers_add_header(&s->headers,
+                               Headers_HeaderName_Range,
+                               s->range_record)
+            == NULL
+          )
+          fail = true;
+
+  /* The playback rate - first, Scale playback (trick play) */
+
+  else if (
+            scale != NULL &&
+
+            *scale != 0 &&
+
+            headers_add_header(&s->headers,
+                               Headers_HeaderName_Scale,
+                               scale)
+            == NULL
+          )
+          fail = true;
+
+  /* Second, Speed playback (alter data delivery rate, for slowmo play) */
+
+  else if (
+            s->next_speed > 1 &&
+
+            headers_add_header(&s->headers,
+                               Headers_HeaderName_Speed,
+                               s->play_record)
+            == NULL
+          )
+          fail = true;
+
+  /* x-playNow to defeat play queueing, if the server supports it */
+
+  else if (
+            s->use_playnow != 0 &&
+
+            headers_add_header(&s->headers,
+                               Headers_HeaderName_PlayNow,
+                               Headers_HeaderValue_PlayNow)
+            == NULL
+          )
+          fail = true;
+
+  /* The session header */
+
+  else if (
+            headers_add_header(&s->headers,
+                               Headers_HeaderName_Session,
+                               s->server_session)
+            == NULL
+          )
+          fail = true;
+
+  else
+  {
+    /* Get extra data from the client and store it */
+
+    if (s->saved_r4 != NULL)
+    {
+      headers_parse_user_header(s->saved_r4, strlen(s->saved_r4), s);
+    }
+
+    /* Support R5 and R6 body data extensions. */
+
+    if (s->saved_r5 != NULL && s->saved_r6 > 0)
+    {
+      s->data     = s->saved_r5, s->saved_r5 = NULL;
+      s->data_len = s->saved_r6, s->saved_r6 = 0;
+
+      if (headers_set_content_length(&s->headers, s->data_len) == NULL)
+        fail = true;
+    }
+  }
+
+  /* Did anything fail? */
+
+  if (fail)
+  {
+    dprintf(("", "play_build_play: Out of memory\n"));
+    return make_error(rtsphsac_ERROR_MEMORY_EXHAUSTED, 0);
+  }
+
+  dprintf(("", "play_build_play: Successful\n"));
+
+  s->change_pending = 1;
+
+  return NULL;
+}
+
+/**************************************************************/
+/* play_process_speed()                                       */
+/*                                                            */
+/* Process a string which should contain a number which may   */
+/* be negative or a decimal fraction, e.g. "-0.4", "55",      */
+/* ".4" but not (say) "1/3" or "    65".                      */
+/*                                                            */
+/* Parameters: Pointer to the string. If NULL, "1" is used.   */
+/*                                                            */
+/* Returns:    An int containing an indication of play mode   */
+/*             within the string; see MPEGCtrl.h.             */
+/**************************************************************/
+
+static void play_process_speed(session * s, const char * scale)
+{
+  double  d;
+  char  * endp;
+
+  if (scale == NULL || *scale == '\0')
+  {
+    s->next_speed = 1;
+    s->next_playmode = MPEGCtrl_MCRS_Trick_Play;
+    return;
+  }
+
+  d = strtod(scale, &endp);
+
+  if (d <= -1)      /* scale <= -1.0 */
+  {
+    s->next_speed = 1;
+    s->next_playmode = MPEGCtrl_MCRS_Trick_FRWD;
+  }
+  else if (d < 0)   /* -1.0 < scale < 0 */
+  {
+    s->next_speed = (int)floor(1 / -d);
+    if (s->next_speed > MPEGCtrl_MCSS_SlowestRate)
+      s->next_speed = MPEGCtrl_MCSS_SlowestRate;
+    s->next_playmode = MPEGCtrl_MCRS_Trick_SRWD;
+  }
+  else if (d > 1)   /* scale >= 1.0 */
+  {
+    s->next_speed = 1;
+    s->next_playmode = MPEGCtrl_MCRS_Trick_FFWD;
+  }
+  else if (d == 1)  /* scale == 1.0 */
+  {
+    s->next_speed = 1;
+    s->next_playmode = MPEGCtrl_MCRS_Trick_Play;
+  }
+  else if (d > 0)   /* 0 < scale < 1.0 */
+  {
+    s->next_speed = (int)floor(1 / d);
+    if (s->next_speed > MPEGCtrl_MCSS_SlowestRate)
+      s->next_speed = MPEGCtrl_MCSS_SlowestRate;
+    s->next_playmode = MPEGCtrl_MCRS_Trick_SFWD;
+  }
+  else if (endp == scale) /* Invalid string */
+  {
+    s->next_speed = 1;
+    s->next_playmode = MPEGCtrl_MCRS_Trick_Play;
+  }
+  else              /* scale == 0 */
+  {
+    s->next_speed = 1;
+    s->next_playmode = MPEGCtrl_MCRS_Trick_Freeze;
+  }
+}
+
+/**************************************************************/
+/* play_alter_playback_characteristics()                      */
+/*                                                            */
+/* Set speed and reset parameters for a play mode change.     */
+/*                                                            */
+/* Parameters: Pointer to the session structure for the       */
+/*             playback stream in question;                   */
+/**************************************************************/
+
+static _kernel_oserror * play_alter_playback_characteristics(session * s)
+{
+  _kernel_oserror * e = NULL;
+  unsigned int      flags;
+
+  dprintf(("", "play_alter_playback_characteristics called with playmode %d\n", s->next_playmode));
+
+  if (s->mpegid != 0)
+  {
+    if (s->next_playmode == MPEGCtrl_MCRS_Trick_Freeze)
+    {
+      /* Immediate set speed to 0 */
+
+      e = _swix(MPEGControl_SetSpeed,
+                _INR(0,2),
+    
+                0,
+                s->mpegid,
+                0);
+
+      dprintf(("", "play_alter_playback_characteristics: Set speed to 0\n"));
+    }
+    else
+    {
+      if (
+          s->next_playmode == MPEGCtrl_MCRS_Trick_Play ||
+          (s->next_playmode == MPEGCtrl_MCRS_Trick_SFWD && s->next_speed > 1)
+         )
+      {
+        /* Normal play, or forwards slow motion - flag video and audio */
+
+        flags = MPEGCtrl_MCRS_VideoPresent |
+                MPEGCtrl_MCRS_AudioPresent;
+
+        dprintf(("", "play_alter_playback_characteristics: Resetting stream for normal play, speed=%d\n", s->next_speed));
+      }
+      else
+      {
+        /* Trick play - flag a trick play stream */
+
+        flags = MPEGCtrl_MCRS_VideoPresent |
+                MPEGCtrl_MCRS_NewIsTrickPlay;
+
+        dprintf(("", "play_alter_playback_characteristics: Resetting stream for trick play, speed=%d\n", s->next_speed));
+      }
+
+      /* Reset */
+
+      e = _swix(MPEGControl_ResetStream,
+                _INR(0,2),
+    
+                flags,
+                s->mpegid,
+                s->next_playmode);
+
+      /* Set speed */
+
+      if (e == NULL)
+        e = _swix(MPEGControl_SetSpeed,
+                  _INR(0,2),
+    
+                  0,
+                  s->mpegid,
+                  s->next_speed);
+    }
+  }
+
+  return e;
+}
+
+/**************************************************************/
+/* play_command_completed()                                   */
+/*                                                            */
+/* Called when a PLAY/PAUSE command has completed             */
+/* successfully.                                              */
+/*                                                            */
+/* Parameters: Pointer to the session structure for the       */
+/*             playback stream in question;                   */
+/**************************************************************/
+
+_kernel_oserror * play_command_completed(session * s)
+{
+  dprintf(("", "play_command_completed called, next_playmode is %d\n", s->next_playmode));
+
+  /* If video is playing, tell the MPEG system about the change now.    */
+  /* If video is not yet playing, but we are starting in a trick mode   */
+  /* we also need to tell the MPEG system, since Video Control will not */
+  /* open the stream with the right flags.                              */
+
+  if (
+      s->started != 0 ||
+      s->playmode == MPEGCtrl_MCRS_Trick_FFWD ||
+      s->playmode == MPEGCtrl_MCRS_Trick_FRWD
+     )
+    play_alter_playback_characteristics(s);
+
+  s->playmode = s->next_playmode;
+  s->speed = s->next_speed;
+
+  return NULL;
+}
