@@ -42,7 +42,6 @@ ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.abssym
 TBOXLIB   = tbox:o.toolboxlib
 WIMPLIB   = tbox:o.wimplib
-GLIB      = tbox:o.glib
 
 OBJS =\
 	o.Modhdr \
@@ -59,12 +58,16 @@ OBJS =\
 	o.Text \
 	o.ScrollLisS \
 	o.Utils \
-	o.TAsel_ven
+	o.TAsel_ven \
+	o.glib \
+	o.glib3 \
+	o.rmensure \
+	o.string32
 #
 # Rule patterns
 #
 .c.o:;    ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:; ${CMHG} -O $@ $<
+.cmhg.o:; ${CMHG} -o $@ $<
 .s.o:;    $(ASM) $< $@
 
 #
@@ -85,9 +88,9 @@ clean:
         ${WIPE} map ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
-${ROM_MODULE}: ${OBJS} ${TBOXLIB} $(WIMPLIB) $(GLIB) # ${ROMCSTUBS}
+${ROM_MODULE}: ${OBJS} ${TBOXLIB} $(WIMPLIB) # ${ROMCSTUBS}
         ${MKDIR} aof
-        ${LD} -o $@ -aof ${OBJS} ${TBOXLIB} $(WIMPLIB) $(GLIB) ${ROMCSTUBS}
+        ${LD} -o $@ -aof -via objs ${TBOXLIB} $(WIMPLIB) ${ROMCSTUBS}
 
 # final link for ROM Image (using given base address)
 rom_link:
@@ -112,9 +115,9 @@ o.TextGadget:	tbox:h.gadgets
 o.TextGadget:	tbox:h.wimplib
 o.TextGadget:	h.TextGadgets
 o.TextGadget:	h.myswis
-o.TextGadget:	tbox:h.glib
+o.TextGadget:	h.glib
 o.TextGadget:	C:h.kernel
-o.TextGadget:	tbox:h.rmensure
+o.TextGadget:	h.rmensure
 o.TextGadget:	h.TextArea
 o.TextGadget:	h.TextAreaP
 o.TextGadget:	h.modmem
@@ -141,9 +144,9 @@ o.TextArea:	tbox:h.wimp
 o.TextArea:	tbox:h.window
 o.TextArea:	tbox:h.gadgets
 o.TextArea:	tbox:h.wimplib
-o.TextArea:	tbox:h.glib
+o.TextArea:	h.glib
 o.TextArea:	C:h.kernel
-o.TextArea:	tbox:h.string32
+o.TextArea:	h.string32
 o.TextArea:	h.riscos_utils
 o.TextArea:	tbox:h.toolbox
 o.TextArea:	h.TextGadgets
@@ -170,9 +173,9 @@ o.ScrollList:	tbox:h.wimp
 o.ScrollList:	tbox:h.window
 o.ScrollList:	tbox:h.gadgets
 o.ScrollList:	tbox:h.wimplib
-o.ScrollList:	tbox:h.glib
+o.ScrollList:	h.glib
 o.ScrollList:	C:h.kernel
-o.ScrollList:	tbox:h.string32
+o.ScrollList:	h.string32
 o.ScrollList:	h.riscos_utils
 o.ScrollList:	tbox:h.toolbox
 o.ScrollList:	h.Font
@@ -195,9 +198,9 @@ o.Scrollbar:	tbox:h.wimp
 o.Scrollbar:	tbox:h.window
 o.Scrollbar:	tbox:h.gadgets
 o.Scrollbar:	tbox:h.wimplib
-o.Scrollbar:	tbox:h.glib
+o.Scrollbar:	h.glib
 o.Scrollbar:	C:h.kernel
-o.Scrollbar:	tbox:h.string32
+o.Scrollbar:	h.string32
 o.Scrollbar:	h.riscos_utils
 o.Scrollbar:	tbox:h.toolbox
 o.Scrollbar:	h.TextGadgets
@@ -208,25 +211,3 @@ o.Scrollbar:	h.Scrollbar
 o.Scrollbar:	h.debug
 o.Scrollbar:	h.myswis
 o.Scrollbar:	h.Utils
-o.riscos_uti:	c.riscos_uti
-o.riscos_uti:	C:h.kernel
-o.riscos_uti:	C:h.swis
-o.riscos_uti:	tbox:h.wimp
-o.riscos_uti:	tbox:h.wimplib
-o.riscos_uti:	tbox:h.toolbox
-o.riscos_uti:	tbox:h.window
-o.riscos_uti:	tbox:h.gadgets
-o.riscos_uti:	h.riscos_utils
-o.riscos_uti:	tbox:h.toolbox
-o.TextMan:	c.TextMan
-o.TextMan:	C:h.kernel
-o.TextMan:	C:h.swis
-o.TextMan:	h.TextMan
-o.TextMan:	h.MemMan
-o.TextMan:	C:h.kernel
-o.MemMan:	c.MemMan
-o.MemMan:	C:h.swis
-o.MemMan:	C:h.kernel
-o.MemMan:	C:h.kernel
-o.MemMan:	h.MemMan
-o.MemMan:	C:h.kernel
