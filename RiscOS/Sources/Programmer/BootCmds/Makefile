@@ -11,7 +11,7 @@
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = do mkdir -p
 CC      = cc -IOS: -fach -wp -DBOOTCMDS
 CP      = copy
 CPFLAGS = ~cfr~v
@@ -65,6 +65,7 @@ export:
 install: install_${COMPONENT}
 
 install_BootCmds: RM.BootCmds
+        ${MKDIR} ${INSTDIR}
         ${CP} RM.BootCmds ${INSTDIR}.BootCmds ${CPFLAGS}
         @echo ${COMPONENT}: ram module installed
 
