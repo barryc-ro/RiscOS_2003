@@ -32,6 +32,8 @@ SOURCE    = s.ITable
 TARGET    = rm.ITable
 EXPORTS   = ${EXP_HDR}.${COMPONENT}
 
+RESDIR = <resource$dir>.Resources.${COMPONENT}
+
 #
 # Generic rules:
 #
@@ -48,6 +50,12 @@ install_rom: ${TARGET}
 clean:
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
+
+resources:
+        ${MKDIR} ${RESDIR}
+        ${MKDIR} ${RESDIR}.Tables
+        ${CP} Tables.8desktop ${RESDIR}.Tables.8desktop ${CPFLAGS}
+        @echo ${COMPONENT}: resource files copied
 
 ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}

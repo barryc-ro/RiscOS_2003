@@ -96,7 +96,6 @@ o.compress:	h.cssr
 o.compress:	h.defs
 o.compress:	h.zssr
 o.compress:	h.defs
-o.comp_ass: s.comp_ass
 o.comp_ass: hdr:ListOpts
 o.comp_ass: hdr:Macros
 o.comp_ass: hdr:System
@@ -110,7 +109,6 @@ o.cssr:	C:h.kernel
 o.cssr:	h.debug
 o.cssr:	h.cssr
 o.cssr:	h.defs
-o.debug: s.debug
 o.debug: Hdr:ListOpts
 o.debug: Hdr:Macros
 o.debug: Hdr:System
@@ -120,7 +118,6 @@ o.debug: Hdr:IO.GenericIO
 o.debug: Hdr:RISCOS
 o.debug: Hdr:ModHand
 o.debug: Hdr:HostFS
-o.mr_module: s.mr_module
 o.mr_module: Hdr:ListOpts
 o.mr_module: Hdr:Macros
 o.mr_module: Hdr:System
@@ -135,7 +132,6 @@ o.mr_module: Hdr.StaticDecl
 o.mr_module: Hdr.statics
 o.mr_module: s.Version
 o.mr_module: Hdr.debug
-o.statics: s.statics
 o.statics: Hdr:ListOpts
 o.statics: Hdr:Macros
 o.statics: Hdr:System
@@ -149,7 +145,6 @@ o.trial:	c.trial
 o.trial:	C:h.kernel
 o.trial:	h.debug
 o.trial:	h.mr_module
-o.zcat_ass: s.zcat_ass12
 o.zcat_ass: s.zcat_ass
 o.zcat_ass: hdr:ListOpts
 o.zcat_ass: hdr:Macros

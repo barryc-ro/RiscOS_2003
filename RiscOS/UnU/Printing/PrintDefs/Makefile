@@ -11,6 +11,7 @@
 # 30-Nov-94  MJS    Add Acorn JP-360
 # 14-Dec-94  MJS    Remove Acorn JP-360 (!)
 # 08-Mar-95  MJS    Add Olivetti
+# 24-Jun-95  PJC    Add Canon LBP8 Mk III
 #
 
 #
@@ -52,6 +53,14 @@ FILES =\
  ${DDIR}.Canon.BI.BJC-600\
  ${DDIR}.Canon.BI.BJC-800\
  ${DDIR}.Canon.BI.BubbleJet\
+ ${DDIR}.Canon.PS.LPB8MkIII.LPB8MkIII\
+ ${DDIR}.Canon.PS.LPB8MkIII.FeedInst\
+ ${DDIR}.Canon.PS.LPB8MkIII.Feeds.1Upper\
+ ${DDIR}.Canon.PS.LPB8MkIII.Feeds.2Lower\
+ ${DDIR}.Canon.PS.LPB8MkIII.Feeds.3Mixed\
+ ${DDIR}.Canon.PS.LPB8MkIII.Feeds.4Duplex\
+ ${DDIR}.Canon.PS.LPB8MkIII.Feeds.5Tumble\
+ ${DDIR}.Canon.PS.LPB8MkIII.Feeds.6Manual\
  ${LDIR}.Citizen\
  ${DDIR}.Citizen.BI.Swift-24\
  ${LDIR}.Epson\
@@ -144,12 +153,22 @@ install: ${FILES}
         ${CP} ${DDIR}.Apple.PS.LW-II-NTX     ${INSTDIR}.Apple.LW-II-NTX  ${CPFLAGS}
         |
         ${MKDIR} ${INSTDIR}.Canon
-        ${CP} ${LDIR}.Canon                  ${INSTDIR}.Canon.Read_Me    ${CPFLAGS}
-        ${CP} ${DDIR}.Canon.BI.BJC-4000      ${INSTDIR}.Canon.BJC-4000   ${CPFLAGS}
-        ${CP} ${DDIR}.Canon.BI.BJ-130e       ${INSTDIR}.Canon.BJ-130e    ${CPFLAGS}
-        ${CP} ${DDIR}.Canon.BI.BJC-600       ${INSTDIR}.Canon.BJC-600    ${CPFLAGS}
-        ${CP} ${DDIR}.Canon.BI.BJC-800       ${INSTDIR}.Canon.BJC-800    ${CPFLAGS}
-        ${CP} ${DDIR}.Canon.BI.BubbleJet     ${INSTDIR}.Canon.BubbleJet  ${CPFLAGS}
+        ${CP} ${LDIR}.Canon                            ${INSTDIR}.Canon.Read_Me                ${CPFLAGS}
+        ${CP} ${DDIR}.Canon.BI.BJC-4000                ${INSTDIR}.Canon.BJC-4000               ${CPFLAGS}
+        ${CP} ${DDIR}.Canon.BI.BJ-130e                 ${INSTDIR}.Canon.BJ-130e                ${CPFLAGS}
+        ${CP} ${DDIR}.Canon.BI.BJC-600                 ${INSTDIR}.Canon.BJC-600                ${CPFLAGS}
+        ${CP} ${DDIR}.Canon.BI.BJC-800                 ${INSTDIR}.Canon.BJC-800                ${CPFLAGS}
+        ${CP} ${DDIR}.Canon.BI.BubbleJet               ${INSTDIR}.Canon.BubbleJet              ${CPFLAGS}
+        ${MKDIR} ${INSTDIR}.Canon.LPB8MkIII
+        ${MKDIR} ${INSTDIR}.Canon.LPB8MkIII.Feeds
+        ${CP} ${DDIR}.Canon.PS.LPB8MkIII.LPB8MkIII     ${INSTDIR}.Canon.LPB8MkIII.LPB8MkIII     ${CPFLAGS}
+        ${CP} ${DDIR}.Canon.PS.LPB8MkIII.FeedInst      ${INSTDIR}.Canon.LPB8MkIII.FeedInst      ${CPFLAGS}
+        ${CP} ${DDIR}.Canon.PS.LPB8MkIII.Feeds.1Upper  ${INSTDIR}.Canon.LPB8MkIII.Feeds.1Upper  ${CPFLAGS}
+        ${CP} ${DDIR}.Canon.PS.LPB8MkIII.Feeds.2Lower  ${INSTDIR}.Canon.LPB8MkIII.Feeds.2Lower  ${CPFLAGS}
+        ${CP} ${DDIR}.Canon.PS.LPB8MkIII.Feeds.3Mixed  ${INSTDIR}.Canon.LPB8MkIII.Feeds.3Mixed  ${CPFLAGS}
+        ${CP} ${DDIR}.Canon.PS.LPB8MkIII.Feeds.4Duplex ${INSTDIR}.Canon.LPB8MkIII.Feeds.4Duplex ${CPFLAGS}
+        ${CP} ${DDIR}.Canon.PS.LPB8MkIII.Feeds.5Tumble ${INSTDIR}.Canon.LPB8MkIII.Feeds.5Tumble ${CPFLAGS}
+        ${CP} ${DDIR}.Canon.PS.LPB8MkIII.Feeds.6Manual ${INSTDIR}.Canon.LPB8MkIII.Feeds.6Manual ${CPFLAGS}
         |
         ${MKDIR} ${INSTDIR}.Citizen
         ${CP} ${LDIR}.Citizen                ${INSTDIR}.Citizen.Read_Me  ${CPFLAGS}

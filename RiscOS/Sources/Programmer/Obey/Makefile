@@ -62,6 +62,7 @@ rm.Obey: Hdr:SWIs
 rm.Obey: Hdr:CPU.Generic26
 rm.Obey: Hdr:IO.GenericIO
 rm.Obey: Hdr:RISCOS
+rm.Obey: Hdr:Machine.<Machine>
 rm.Obey: hdr:ModHand
 rm.Obey: hdr:Services
 rm.Obey: hdr:UpCall

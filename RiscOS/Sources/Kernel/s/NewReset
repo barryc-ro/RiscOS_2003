@@ -802,6 +802,75 @@ kbdwait
 kbdthere
     ]
 
+ [ ValidateCMOS
+; Do a POR if some super-critical values are shagged or if checksum is invalid.
+        MOV	R3, #-1                 ; do all RAM if we do any
+        BL      ValChecksum             ; Always check the checksum
+        BNE	cmos_reset
+
+; ScreenSizeCMOS, RAMDiscCMOS, SysHeapCMOS, RMASizeCMOS and SpriteSizeCMOS
+; should be 0. Happily they are at consecutive addresses so we can loop through
+; them.
+	MOV	R1, #ScreenSizeCMOS
+reset_loop
+	MOV	R0, R1
+	BL	Read
+	TEQ	R0, #0
+	BNE	cmos_reset
+	INC	R1
+	TEQ	R1, #SpriteSizeCMOS
+	BHI	reset_loop
+
+; FontCMOS should be <= 32 (128K)
+	MOV	R0, #FontCMOS
+	BL	Read
+	CMP	R0, #32
+	BHI	cmos_reset
+
+	MOV	R0, #VduCMOS
+	BL	Read
+ [ IOMD_C_MonitorType = 0 :LAND: MPEGPoduleNTSCNotPALMask = 0
+; Force TV if we don't have a MonitorType auto-detect bit
+	TEQ	R0, #(Sync_Separate :OR: MonitorType0)
+ |
+; Force auto-detect of monitor stuff if we have a MonitorType auto-detect bit
+	TEQ	R0, #(Sync_Auto :OR: MonitorTypeAuto)
+ ]
+	BNE	cmos_reset
+
+; Year should be >=1995, <=2020
+; (2020 is arbitrary, but everything breaks soon after that)
+	MOV	R0, #YearCMOS+1
+	BL	Read
+	TEQ	R0, #19
+	BNE	check20
+
+; 20th century: year should be 95 to 99
+	MOV	R0, #YearCMOS
+	BL	Read
+	CMP	r0,#95
+	BLT	cmos_reset
+	CMP	r0,#99
+	BHI	cmos_reset
+	B	checkboot
+
+check20
+	TEQ	R0, #20
+	BNE	cmos_reset
+
+; 21st century: year should <= 20
+	MOV	R0, #YearCMOS
+	BL	Read
+	CMP	R0, #20
+	BHI	cmos_reset
+
+checkboot
+; Bit 4 of DBTBCMOS should be 1 (Boot)
+	MOV	R0, #DBTBCMOS
+	BL	Read
+	TEQ	R0, #(1:SHL:4)
+	BNE	cmos_reset
+ ]
 
 ; IF power-on bit set in IOC AND R/T/Del/Copy pressed THEN reset CMOS RAM
 ; note that memory cleared if POR, so key info has had plenty of time!
@@ -825,12 +894,18 @@ kbdthere
         BEQ     no_cmos_reset           ; if zero then CMOS is protected
  ]
 
+ [ IOMD_C_FrontPanelButton <> 0
+        MOV     r0, #IOMD_Base          ; if front panel button pressed then CMOS reset
+        LDRB    r0, [r0, #IOMD_CLINES]
+        TST     r0, #IOMD_C_FrontPanelButton
+        BEQ     cmos_reset
+ ]
+
         MOV     R0, #InitKbdWs
         LDR     R7, [R0, #R_Down_Flag]
         CMP     R7, #0
         BEQ     no_cmos_reset           ; power on bit checked again there
 
-        ADD     sp, sp, #4              ; junk CannotReset flag from stack
 
 ; CMOS reset detectified.
 ; **************************************************************************
@@ -849,9 +924,12 @@ kbdthere
     [ ChecksumCMOS
         BL      ValChecksum             ; unless the CMOS ram's corrupt ..
         MOVNE   R3, #-1                 ; .. then blast it anyway.
+cmos_reset
+        ADD     sp, sp, #4              ; junk CannotReset flag from stack
         MOVNE   R0, #0                  ; even the econet station number
         MOVEQ   R0, #1
     |
+        ADD     sp, sp, #4              ; junk CannotReset flag from stack
         MOV     R0, #1                  ; leave the econet station number
     ]
         MOV     R1, #0                  ; zero it first
@@ -876,12 +954,41 @@ skipskipforTC
 ; first full reset defaults
         CMP     r3, #-1
         BNE     pounds_bleeding_Caspell
+
+ [ IOMD_C_PALNTSCType <> 0
+        MOV     r4, #IOMD_Base          ; configure territory, country and timezone based on PAL/NTSC bit
+        LDRB    r4, [r4, #IOMD_CLINES]
+        MOV     r0, #TerritoryCMOS
+        TST     r4, #IOMD_C_PALNTSCType
+        MOVEQ   r1, #0                  ; PAL = territory UK
+        MOVNE   r1, #49                 ; NTSC = territory USA
+        BL      Write
+        MOV     r0, #CountryCMOS
+        TST     r4, #IOMD_C_PALNTSCType
+        MOVEQ   r1, #1                  ; PAL = country UK
+        MOVNE   r1, #48                 ; NTSC = country USA
+        BL      Write
+        MOV     r0, #TimeZoneCMOS
+        TST     r4, #IOMD_C_PALNTSCType
+        MOVEQ   r1, #0                  ; PAL = 0 from UTC (GMT)
+        MOVNE   r1, #&E0                ; NTSC = -8 hours from UTC (USA Pacific)
+        BL      Write
+        MOV     r0, #MiscellaneousNCCMOS
+        TST     r4, #IOMD_C_PALNTSCType
+        MOVEQ   r1, #0                  ; PAL = A4 paper size
+        MOVNE   r1, #1                  ; NTSC = US letter paper size
+        BL      Write
+ |
         MOV     r0, #CountryCMOS
         MOV     r1, #1                  ; country UK
         BL      Write
+ ]
+
+ [ :LNOT: STB
         MOV     r0, #NewADFSCMOS
         MOV     r1, #&41                ; floppies=1, ST506=0, IDE=1 (changed 01-Sep-93)
         BL      Write
+ ]
 pounds_bleeding_Caspell
 
 ; IF R or Delete pressed THEN set sync 0 ELSE set sync Auto
@@ -897,11 +1004,22 @@ pounds_bleeding_Caspell
 
  [ MorrisSupport
         MOV     R8, #IOMD_Base
+  [ {TRUE} ; cope with ARM7500FE
+; Change test around so if not IOMD_Original, do the code,
+; rather than checking for ARM7500 (which would exclude ARM7500FE)
+	LDRB	r0, [r8, #IOMD_ID0]
+	LDRB	r1, [r8, #IOMD_ID1]
+	ORR	r0, r0, r1, LSL #8
+	LDR	r1, =IOMD_Original
+	TEQ	r0, r1
+	BEQ	dont_program_mousetype
+  |
         LDRB    R0, [R8, #IOMD_ID0]
         CMP     R0, #&98
         LDRB    R0, [R8, #IOMD_ID1]
         CMPEQ   r0, #&5B
         BNE     dont_program_mousetype
+  ]
 ;
 ; Morris based machines use PS2 mice/tracker balls
 ;
@@ -910,7 +1028,7 @@ pounds_bleeding_Caspell
         BL      Write
 
   [ Select16BitSound
-; set print and sound CMOS (16bit sound)
+; set print and sound CMOS (16bit sound). We set this differently on STBs
         B       Config16BitSound
   ]
 dont_program_mousetype
@@ -956,6 +1074,28 @@ ConfigSoundDone
 
         LTORG
 
+ [ ValidateCMOS
+DefaultCMOSTable ; list of non-zero options wanted :
+; byte pairs of offset, value
+; terminated by offset &FF
+        =       KeyDelCMOS,             32
+        =       KeyRepCMOS,             8
+        =       MODETVCMOS,             &10                                     ; TV 0,1
+        =       StartCMOS,	        (2:SHL:3)				; NOCAPS
+        =       DBTBCMOS,	        (1:SHL:4)				; Boot
+        =       YearCMOS,               96
+        =       YearCMOS+1,             19
+  [ IOMD_C_MonitorType = 0
+; TV if we don't have a MonitorType auto-detect bit
+	=	VduCMOS,	        Sync_Separate :OR: MonitorType0
+  |
+; auto-detect if we have a MonitorType auto-detect bit
+	=	VduCMOS,	        Sync_Auto :OR: MonitorTypeAuto
+  ]
+        =       MouseStepCMOS,          2
+	=	DesktopFeaturesCMOS,	desktopfeaturebit_3D :OR: (8:SHL:1)	; 3D, Homerton
+	=       ModemTimeoutCMOS,       10                                      ; 5 minutes
+ | ;ValidateCMOS
 DefaultCMOSTable ; list of non-zero options wanted :
 ; byte pairs of offset, value
 ; terminated by offset &FF
@@ -1032,6 +1172,7 @@ DefaultCMOSTable ; list of non-zero options wanted :
         =       AlarmAndTimeCMOS,2_00010000 ; !Alarm autosave on
         =       FSLockCMOS+5,   &EA     ; Checksum for no password
         =       CDROMFSCMOS,    &60     ; drives = 0, buffer size = 32K
+ ] ;ValidateCMOS
         =       &FF
         ALIGN
 
@@ -1701,16 +1842,21 @@ clearmswis
         SUBS    R2, R2, #1
         BGE     clearmswis
 
-     [  International
+ [ International
         MOV     R1, #-1                                 ; We don't have a message file yet !
         STRB    R1, [R0, #ErrorSemaphore]               ; Don't translate errors.
         STR     R0, [R0, #KernelMessagesBlock]          ; No message file open.
-     ]
+ ]
 
         MOV     R0, #IOC
         LDRB    R1, [R0, #IOCIRQSTAA]
         ANDS    R1, R1, #por_bit
-        STRNEB  R1, [R0, #IOCIRQCLRA]   ; clear POR if set
+        STRNEB  R1, [R0, #IOCIRQCLRA]   		; clear POR if set
+
+	MOV	R0, #0
+	MOV	R1, R1, LSR #4
+	STRB	R1, [R0, #ResetType]			; Save POR state in workspace (bit 0 of ResetType)
+
         LDREQ   R0, =OsbyteVars + :INDEX: LastBREAK
         LDREQB  R0, [R0]
         TSTEQ   R0, #&80                ; tbs set if memory cleared
@@ -1800,10 +1946,10 @@ CopyDefaultIRQ1V
 
         TEQP    pc, #SVC_mode           ; enable IRQs
         NOP
-
+      [ DoInitialiseMode
         BL      InitialiseMode          ; select correct screen mode, in case any
                                         ; stupid module prints anything in initialisation
-
+      ]
         MOV     R0, #&FD                ; read last reset type
         MOV     R1, #0
         MOV     R2, #&FF
@@ -1867,8 +2013,9 @@ SkipHardResetPart2                      ; code executed on all types of reset
         TEQ     r1, #0
         STRNEB  r0, [r0, #ErrorSemaphore] ; then allow errors to be translated
       ]
-
+    [ DoInitialiseMode
         BL      InitialiseMode
+     [ :LNOT: STB                      ; don't print stuff on STB type products
         SWI     XOS_WriteS
         =       10, "$SystemName ", 0   ; now RISC OS (no +) again
         ALIGN
@@ -1894,6 +2041,8 @@ SkipHardResetPart2                      ; code executed on all types of reset
         =       "K", 10,13, 10, 0       ; title complete
         ALIGN
       ]
+     ]
+    ]
         MOV     r0, #0                  ; Set DomainId to 0 every reset
         STR     r0, [r0, #DomainId]     ; before calling anyone
 
@@ -1910,8 +2059,11 @@ SkipHardResetPart2                      ; code executed on all types of reset
         MOV     R1, #Service_ReleaseFIQ
         SWI     XOS_ServiceCall
 
+ [ SoftResets
+        ! 0, "!!!! SoftReset is true => resets close all open files !!!!"
         MOV     R0, #FSControl_Shut     ; Open files get closed at reset
         SWI     XOS_FSControl
+ ]
 
         BL      PostInit
 
@@ -1979,7 +2131,9 @@ HorologicalDelayLoop1
         BL      WriteMultiField
 
 64
+    [ DoInitialiseMode
         BL      InitialiseMode
+
       [ International
         SWI     XOS_WriteI+10
         BLVC    WriteS_Translated
@@ -1990,6 +2144,7 @@ HorologicalDelayLoop1
         =       10,"Monitor type reconfigured.",10,13,10,0
         ALIGN
       ]
+    ]
         B       %FT75
 
 BranchThroughZeroInstruction2
@@ -2110,6 +2265,7 @@ str_booterror   DCB     "Boot$Error",0
 
 
 AutoBootCosNoKbd
+     [ :LNOT: STB
       [ International
         SWI     XOS_WriteI+7
         BLVC    WriteS_Translated
@@ -2120,6 +2276,7 @@ AutoBootCosNoKbd
         =       7, "No keyboard present - autobooting", 10,13,0
         ALIGN
       ]
+     ]
         B       Hortoculture_Kicking
 
 

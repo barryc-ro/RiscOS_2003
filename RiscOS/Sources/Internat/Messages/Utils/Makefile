@@ -82,12 +82,6 @@ o.MsgExt:	c.MsgExt
 o.MsgExt:	h.msgcommon
 o.MsgCommon:	c.MsgCommon
 o.MsgCommon:	h.msgcommon
-o.TokGen:	c.TokGen
-o.TokGen:	C:h.swis
-o.TokGen:	C:h.kernel
-o.MsgTok:	c.MsgTok
-o.MsgTok:	C:h.swis
-o.MsgTok:	C:h.kernel
 o.MsgExt2:	c.MsgExt2
 o.MsgExt2:	C:h.swis
 o.MsgExt2:	C:h.kernel
@@ -100,3 +94,9 @@ o.MsgTok2:	C:h.kernel
 o.ScanRes:	c.ScanRes
 o.ScanRes:	C:h.swis
 o.ScanRes:	C:h.kernel
+o.MsgTok:	c.MsgTok
+o.MsgTok:	C:h.swis
+o.MsgTok:	C:h.kernel
+o.TokGen:	c.TokGen
+o.TokGen:	C:h.swis
+o.TokGen:	C:h.kernel

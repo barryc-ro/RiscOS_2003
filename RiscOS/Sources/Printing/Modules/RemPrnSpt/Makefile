@@ -140,14 +140,18 @@ ${MSGSMOD}: ${MESSAGES} Makefile
         ${MODGEN} $@ ${MODNAME} ${HELPSTR} ${VERSION} ${MESSAGES} ${RESPATH}
 
 # Dynamic dependencies:
-o.list:	c.list
-o.list:	C:h.kernel
-o.list:	h.RemPrnSpt
-o.list:	h.Debug
-o.list:	h.Errors
-o.list:	h.ListP
-o.list:	h.Msgs
-o.init: s.init
+o.debug:	c.debug
+o.debug:	C:h.swis
+o.debug:	C:h.kernel
+o.debug:	C:h.kernel
+o.eventqueue:	c.eventqueue
+o.eventqueue:	C:h.kernel
+o.eventqueue:	C:h.swis
+o.eventqueue:	h.RemPrnSpt
+o.eventqueue:	h.debug
+o.eventqueue:	h.msgs
+o.eventqueue:	h.List
+o.eventqueue:	h.EventQueue
 o.init: hdr:ListOpts
 o.init: hdr:Macros
 o.init: hdr:System
@@ -162,18 +166,13 @@ o.init: hdr:HighFSI
 o.init: hdr:NewErrors
 o.init: hdr:MsgTrans
 o.init: hdr:PDriver
-o.debug:	c.debug
-o.debug:	C:h.swis
-o.debug:	C:h.kernel
-o.debug:	C:h.kernel
-o.eventqueue:	c.eventqueue
-o.eventqueue:	C:h.kernel
-o.eventqueue:	C:h.swis
-o.eventqueue:	h.RemPrnSpt
-o.eventqueue:	h.debug
-o.eventqueue:	h.msgs
-o.eventqueue:	h.List
-o.eventqueue:	h.EventQueue
+o.list:	c.list
+o.list:	C:h.kernel
+o.list:	h.RemPrnSpt
+o.list:	h.Debug
+o.list:	h.Errors
+o.list:	h.ListP
+o.list:	h.Msgs
 o.module:	c.module
 o.module:	C:h.kernel
 o.module:	C:h.swis

@@ -634,6 +634,12 @@ process_redrawable_window
 redrlp  BVS     ExitPoll                        ; <<<< wot?
         TEQ     R0,#0
         BEQ     repollwimp
+ [ Twitter
+        BL      checktwitter
+        LDRNE   r14, getrectflags
+        ORRNE   r14, r14, #getrect_twitter
+        STRNE   r14, getrectflags
+ ]
         BL      int_get_rectangle               ; will draw the user icons
         B       redrlp
 ;
@@ -1725,6 +1731,47 @@ returnclick
 ;----------------------------------------------------------------------------
 
 trykeys
+ [ KeyboardMenus
+        MOV     r6, #-1                 ; so we can tell later on if we read a key
+        LDR     r4, menuSP
+        CMP     r4, #0
+        BLT     %FT00                   ; no menu open so don't grab special keys
+
+        ADR     r5, menudata            ; if it's a dbox then don't grab keys
+        LDR     r5, [r5, r4]
+        TST     r5, #3
+        BNE     %FT00
+
+        ADR     r14, menuhandles        ; if menu has caret then don't grab keys
+        LDR     r14, [r14, r4]
+        LDR     r0, menucaretwindow
+        TEQ     r0, r14
+        BEQ     %FT00
+        
+        MOV     r0, #4                  ; allow us to read cursor keys
+        MOV     r1, #1
+        SWI     XOS_Byte
+        MOV     r3, r1
+        MOV     r0, #&81                ; INKEY(0)
+        MOV     r1, #0
+        MOV     r2, #0
+        SWI     XOS_Byte
+        MOV     r6, r1
+        MOV     r7, r2
+        MOV     r0, #4                  ; restore cursor key state
+        MOV     r1, r3
+        SWI     XOS_Byte
+        CMP     r7, #&FF                ; was there a key?
+        BEQ     nothing
+        
+        TEQ     r6, #13                 ; check for return and cursor keys
+        TEQNE   r6, #136
+        TEQNE   r6, #137
+        TEQNE   r6, #138
+        TEQNE   r6, #139
+        BEQ     handlemenukey
+ ]
+00
         LDR     handle,caretdata+0
         CMP     handle,#0
         BLE     %FT01                   ; still read character (may be hot!)
@@ -1732,20 +1779,26 @@ trykeys
         BL      checkhandle             ; check it hasn't been deleted!
         MOVVS   handle,#nullptr
         STRVS   handle,caretdata+0      ; if deleted, turn it off
-        BVS     trykeys
+        BVS     %BT00
 ;
         LDR     R14,[handle,#w_taskhandle]
-         CMP    R14,#0
-         LDRLT  R14,menutaskhandle
-         LDR    R14,[wsptr,R14]
-         LDR    R14,[R14,#task_flagword]
+        CMP     R14,#0
+        LDRLT   R14,menutaskhandle
+
+        LDR     R14,[wsptr,R14]
+        LDR     R14,[R14,#task_flagword]
         TST     R14,#keypress_bit
         BNE     nothing                 ; temporarily disabled
 
 01
+ [ KeyboardMenus
+        CMP     r6, #0
+        BLLT    inkey0                  ; if we don't have a key yet then get one (preserves flags)
+        MOVLTS  r6, r1
+ |
         BL      inkey0                  ; may branch elsewhere
         MOVS    R6,R1                   ; actual key value
-;
+ ]
         BNE     %FT01
         BL      inkey0                  ; may branch elsewhere!
         MOVS    R6,R1
@@ -1759,6 +1812,17 @@ trykeys
 
         TEQ     R6,#&1B                 ; escape?
         BNE     %FT02
+
+ [ KeyboardMenus
+        CMP     r4, #0                  ; if no menu open then skip
+        BLT     %FT02
+        TST     r5, #3                  ; check for dialogue
+        SUBNE   r0, r4, #4              ; if dialogue open then just remove it
+        MOVEQ   r0, #-4                 ; otherwise remove whole menu tree
+        CMP     r0, #0
+        BLLT    menusdeleted            ; send Message_MenusDeleted if whole menu going (preserves r0)
+        BL      closemenus
+ |
         LDR     R0,menuSP
         CMP     R0,#0
         BLT     %FT02
@@ -1766,6 +1830,7 @@ trykeys
         BL      menusdeleted            ; send Message_MenusDeleted
         MOVVC   R0,#-4
         BLVC    closemenus
+ ]
         BVC     nothing                 ; absorb escape if used to close menus
         B       ExitPoll                ; report error if any
 
@@ -1811,7 +1876,122 @@ inkey0
         BEQ     nothing
         MOVS    PC,LR                   ; must preserve flags
 
+ [ KeyboardMenus
+; In:   r4 = menuSP
+;       r5 -> menu data
+;       r6 = key pressed
+;
+handlemenukey
+        LDR     R14, menutaskhandle
+        Task    R14,,"KeyPressed"       ; page in correct task
 
+        LDR     r14, mousexpos
+        STR     r14, lastxpos
+        LDR     r14, mouseypos
+        STR     r14, lastypos
+        
+        ADR     r14, menuselections
+        LDR     r1, [r14, r4]           ; r1 = previous selection index
+
+        TEQ     r6, #13
+        BNE     trymenucursorkeys
+        CMP     r1, #0                  ; handle return
+        BLT     nothing                 ; do nothing if no selection
+        STR     r4, whichmenu
+        MOV     r2, #4                  ; fake SELECT mouse button
+        B       gomenuselect
+
+trymenucursorkeys
+        TEQ     r6, #137                ; check for right (sub-menu)
+        BNE     trymenuleft
+        CMP     r1, #0                  ; handle right
+        BLT     nothing
+        ADD     r7, r1, r1, LSL #1      ; r7 = selected item * 3 (also used later)
+        ADD     r6, r5, r7, LSL #3      ; r6 -> selected menu item
+        LDR     r1, [r6, #mi_submenu]   ; r1 -> sub-menu data block
+        CMP     r1, #0                  ; check for sub-menu/dbox
+        BLE     nothing
+        ADR     r14, menuhandles        ; get menu window handle
+        LDR     handle, [r14, r4]
+        BL      checkhandle
+        BVS     nothing
+        LDR     r2, reversedmenu
+        CMP     r2, #"\"
+        LDREQ   r2, [handle, #w_wax0]   ; get menu x
+        LDRNE   r2, [handle, #w_wax1]
+        LDR     r14, [handle, #w_icons]
+        ADD     r14, r14, #i_bby1
+        ADD     r7, r7, #1              ; r7 = middle icon
+        LDR     r3, [r14, r7, ASL #i_shift]
+        LDR     r14, [handle, #w_way1]
+        ADD     r3, r3, r14             ; get menu y
+        LDR     r14, [handle, #w_scy]
+        SUB     r3, r3, r14             ; adjust for scrolling
+ [ NCMenus
+        ADD     r3, r3, #24             ; adjust for NCMenus border
+ ]
+        LDR     r14, [r6, #mi_mflags]
+        TST     r14, #mif_warning
+        BLNE    sendmenuwarning         ; preserves flags
+        BLEQ    int_create_menu
+        B       nothing
+
+trymenuleft
+        TEQ     r6, #136
+        BLNE    trymenuupdown           ; preserves flags
+        BNE     nothing
+        SUBS    r0, r4, #4              ; handle left
+        BLGE    closemenus
+        B       nothing
+        
+trymenuupdown
+; In:   r1 = current selected menu item
+;       r4 = menuSP
+;       r5 -> menu data
+;       r6 = key pressed
+; Out:  Could corrupt almost anything
+;       Flags preserved
+;
+        Push    "lr"
+        MOV     r7, #0                  ; determine how many items in menu
+00
+        ADD     r7, r7, #1
+        LDR     r0, [r5], #mi_size
+        TST     r0, #mif_lastone
+        BEQ     %BT00
+
+        MOV     r0, r1                  ; start with current menu item
+trynextupdown
+        TEQ     r6, #138                ; check for down
+        BNE     trymenuupkey
+        ADD     r0, r0, #1              ; handle down key
+        CMP     r0, r7
+        MOVGE   r0, #0                  ; wrap if necessary
+        B       %FT10
+
+trymenuupkey
+        TEQ     r6, #139                ; check for up
+        BNE     %FT20
+        SUBS    r0, r0, #1              ; handle up key
+        SUBLT   r0, r7, #1              ; wrap if necessary
+10
+        TEQ     r0, r1                  ; if all menu items grey then don't loop forever
+        BEQ     %FT20
+
+        ADR     r14, menuhandles
+        LDR     handle, [r14, r4]       ; get menu window handle
+        BL      checkhandle
+        BVS     %FT20
+        Push    "r6,r7"
+        BL      menuhighlight
+        Pull    "r6,r7"
+        BVS     %FT20
+        TEQ     r14, #0
+        BEQ     trynextupdown           ; if item greyed out then try next
+20
+        Pull    "pc",,^
+ ]
+ 
 ;----------------------------------------------------------------------------
 ; Return to next task with null event
 ; The 'PollIdle' class of tasks is considered first,

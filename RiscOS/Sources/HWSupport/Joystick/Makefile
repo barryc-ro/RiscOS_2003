@@ -6,6 +6,7 @@
 # Date       Name         Description
 # ----       ----         -----------
 # 25-May-94  AMcC         Created.
+# 22-Aug-96  TMD	  Adapted for multiple hardware variants
 #
 
 #
@@ -18,7 +19,7 @@ EXP_HDR = <export$dir>
 #
 COMPONENT = Joystick
 SOURCE    = s.Front
-TARGET    = rm.Joystick
+TARGET    = rm.${MACHINE}.Joystick
 EXPORTS   = ${EXP_HDR}.${COMPONENT}
 RDIR      = Resources
 LDIR      = ${RDIR}.${LOCALE}
@@ -63,6 +64,7 @@ clean:
         @echo ${COMPONENT}: cleaned
 
 ${TARGET}: ${SOURCE}
+	cdir rm.${MACHINE}
         ${AS} ${ASFLAGS} ${SOURCE}
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
@@ -76,6 +78,7 @@ rm.Joystick: Hdr:SWIs
 rm.Joystick: Hdr:CPU.Generic26
 rm.Joystick: Hdr:IO.GenericIO
 rm.Joystick: Hdr:RISCOS
+rm.Joystick: Hdr:Machine.<Machine>
 rm.Joystick: Hdr:ModHand
 rm.Joystick: Hdr:MsgTrans
 rm.Joystick: Hdr:NdrDebug
@@ -86,3 +89,22 @@ rm.Joystick: s.ticky
 rm.Joystick: s.SWI
 rm.Joystick: s.Service
 rm.Joystick: s.Tail
+rm.Peregrine.Joystick: Hdr:ListOpts
+rm.Peregrine.Joystick: Hdr:Macros
+rm.Peregrine.Joystick: Hdr:System
+rm.Peregrine.Joystick: Hdr:SWIs
+rm.Peregrine.Joystick: Hdr:CPU.Generic26
+rm.Peregrine.Joystick: Hdr:IO.GenericIO
+rm.Peregrine.Joystick: Hdr:RISCOS
+rm.Peregrine.Joystick: Hdr:Machine.<Machine>
+rm.Peregrine.Joystick: Hdr:Machine.<Machine>
+rm.Peregrine.Joystick: Hdr:ModHand
+rm.Peregrine.Joystick: Hdr:MsgTrans
+rm.Peregrine.Joystick: Hdr:NdrDebug
+rm.Peregrine.Joystick: Hdr:Podule
+rm.Peregrine.Joystick: Version
+rm.Peregrine.Joystick: s.ModHead
+rm.Peregrine.Joystick: s.ticky
+rm.Peregrine.Joystick: s.SWI
+rm.Peregrine.Joystick: s.Service
+rm.Peregrine.Joystick: s.Tail

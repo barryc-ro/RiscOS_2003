@@ -68,6 +68,7 @@ rm.Fonts: Hdr:SWIs
 rm.Fonts: Hdr:CPU.Generic26
 rm.Fonts: Hdr:IO.GenericIO
 rm.Fonts: Hdr:RISCOS
+rm.Fonts: Hdr:Machine.<Machine>
 rm.Fonts: hdr:CMOS
 rm.Fonts: hdr:ModHand
 rm.Fonts: hdr:Proc
@@ -105,3 +106,5 @@ rm.Fonts: s.Font_BasFP
 rm.Fonts: s.Funcache
 rm.Fonts: s.Fonts04
 rm.Fonts: s.Encoding
+rm.Fonts: s.Blending
+rm.Fonts: hdr:ITable

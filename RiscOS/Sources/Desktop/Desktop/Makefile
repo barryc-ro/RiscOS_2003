@@ -59,8 +59,10 @@ rm.Desktop: Hdr:SWIs
 rm.Desktop: Hdr:CPU.Generic26
 rm.Desktop: Hdr:IO.GenericIO
 rm.Desktop: Hdr:RISCOS
+rm.Desktop: Hdr:Machine.<Machine>
 rm.Desktop: Hdr:ModHand
 rm.Desktop: Hdr:Services
+rm.Desktop: Hdr:Machine.<Machine>
 rm.Desktop: Hdr:CMOS
 rm.Desktop: Hdr:Proc
 rm.Desktop: Hdr:FSNumbers

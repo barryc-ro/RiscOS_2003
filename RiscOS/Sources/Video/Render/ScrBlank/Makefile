@@ -78,6 +78,8 @@ rm.ScrBlank: Hdr:Portable
 rm.ScrBlank: Hdr:Proc
 rm.ScrBlank: Hdr:ColourTran
 rm.ScrBlank: Hdr:ScrBlank
+rm.ScrBlank: Hdr:PaletteV
+rm.ScrBlank: Hdr:UpCall
 rm.ScrBlank: Hdr:HostFS
 rm.ScrBlank: Hdr:Debug
 rm.ScrBlank: Version

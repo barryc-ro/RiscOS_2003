@@ -6,6 +6,7 @@
 # Date       Name   Description
 # ----       ----   -----------
 # 25-Oct-94  AMcC   Created
+# 06-Jan-96  JRH    Cut Components down for OmNC build
 #
 
 DIR = tbox
@@ -25,7 +26,9 @@ COMPONENTS =\
  scale\
  Toolbox\
  Window\
- Common
+ TinyStubs\
+ Common\
+ wimplib
 
 #
 # Generic options:
@@ -48,7 +51,8 @@ WFLAGS  = ~c~v
 all: ${COMPONENTS}
         @echo all: Complete
 
-makefiles:
+export:
+        ${CP} TinyStubs.MakeROM TinyStubs.Makefile ${CPFLAGS}
         ${CP} tbox.colourdbox.MakeROM tbox.colourdbox.Makefile ${CPFLAGS}
         ${CP} tbox.colourmenu.MakeROM tbox.colourmenu.Makefile ${CPFLAGS}
         ${CP} tbox.common.MakeROM tbox.common.Makefile ${CPFLAGS}
@@ -75,6 +79,7 @@ rom_link: ${COMPONENTS}
 clean: ${COMPONENTS}
         @echo clean: Complete
 
+TinyStubs:;   @echo $@ ...;  ${CD} $@; ${MAKE}; back
 common:;      @echo $@ ...;  ${CD} ${DIR}.$@; ${MAKE};  back
 colourdbox:;  @echo $@ ...;  ${CD} ${DIR}.$@; ${MAKE};  back
 colourmenu:;  @echo $@ ...;  ${CD} ${DIR}.$@; ${MAKE};  back
@@ -90,3 +95,4 @@ saveas:;      @echo $@ ...;  ${CD} ${DIR}.$@; ${MAKE};  back
 scale:;       @echo $@ ...;  ${CD} ${DIR}.$@; ${MAKE};  back
 Toolbox:;     @echo $@ ...;  ${CD} ${DIR}.$@; ${MAKE};  back
 Window:;      @echo $@ ...;  ${CD} ${DIR}.$@; ${MAKE};  back
+wimplib:;     @echo $@ ...;  ${CD} $@; ${MAKE}; back

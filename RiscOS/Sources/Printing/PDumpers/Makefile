@@ -7,6 +7,7 @@
 # ----       ----         -----------
 # 27-May-94  AMcC         Created.
 # 03-Nov-94  MJS          Added EscapeP2 dumper
+# 24-Jul-95  MJS          Added CanonX dumper
 #
 
 #
@@ -22,7 +23,8 @@ EXPORTS   = ${EXP_HDR}.PDumper
 DUMPERS   = DotMatrix \
             ImageWriter \
             LaserJet \
-            EscapeP2
+            EscapeP2 \
+            CanonX
 
 #
 # Generic options:
@@ -60,6 +62,7 @@ install: ${DUMPERS}
         CPFDL PDumperIW
         CPFDL PDumperLJ
         CPFDL PDumperE2
+        CPFDL PDumperCX
         |
         Unset Alias$CPFDL
         Unset Alias$CPFD
@@ -70,6 +73,7 @@ install_rom: ${DUMPERS}
         ${CP} rm.PDumperIW ${INSTDIR}.PDumperIW ${CPFLAGS}
         ${CP} rm.PDumperLJ ${INSTDIR}.PDumperLJ ${CPFLAGS}
         ${CP} rm.PDumperE2 ${INSTDIR}.PDumperE2 ${CPFLAGS}
+        ${CP} rm.PDumperCX ${INSTDIR}.PDumperCX ${CPFLAGS}
         @echo ${COMPONENT}: installed (rom)
 
 clean:
@@ -101,6 +105,11 @@ LaserJet:
 EscapeP2:
         ${DIR} PDumperE2
         ${MAKE} ^.rm.PDumperE2
+        @back
+
+CanonX:
+        ${DIR} PDumperCX
+        ${MAKE} ^.rm.PDumperCX
         @back
 
 24Pin:

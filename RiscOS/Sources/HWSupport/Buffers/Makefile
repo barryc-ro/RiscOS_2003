@@ -75,6 +75,27 @@ ${TARGETSA}: s.StandAlone ${RESOURCES}
         ${AS} ${ASFLAGS} s.StandAlone
 
 # Dynamic dependencies:
+rm.Buffers: Hdr:ListOpts
+rm.Buffers: Hdr:Macros
+rm.Buffers: Hdr:System
+rm.Buffers: Hdr:SWIs
+rm.Buffers: Hdr:CPU.Generic26
+rm.Buffers: Hdr:IO.GenericIO
+rm.Buffers: Hdr:RISCOS
+rm.Buffers: Hdr:ModHand
+rm.Buffers: Hdr:FSNumbers
+rm.Buffers: Hdr:NewErrors
+rm.Buffers: Hdr:Services
+rm.Buffers: Hdr:Symbols
+rm.Buffers: Hdr:NdrDebug
+rm.Buffers: Hdr:DDVMacros
+rm.Buffers: Hdr:UpCall
+rm.Buffers: Hdr:MsgTrans
+rm.Buffers: Hdr:Proc
+rm.Buffers: Hdr:ResourceFS
+rm.Buffers: Version
+rm.Buffers: s.Errors
+rm.Buffers: s.MoveBlock
 rm.BuffersSA: s.Buffers
 rm.BuffersSA: Hdr:ListOpts
 rm.BuffersSA: Hdr:Macros
@@ -98,24 +119,3 @@ rm.BuffersSA: Version
 rm.BuffersSA: s.Errors
 rm.BuffersSA: s.ResFiles
 rm.BuffersSA: s.MoveBlock
-rm.Buffers: Hdr:ListOpts
-rm.Buffers: Hdr:Macros
-rm.Buffers: Hdr:System
-rm.Buffers: Hdr:SWIs
-rm.Buffers: Hdr:CPU.Generic26
-rm.Buffers: Hdr:IO.GenericIO
-rm.Buffers: Hdr:RISCOS
-rm.Buffers: Hdr:ModHand
-rm.Buffers: Hdr:FSNumbers
-rm.Buffers: Hdr:NewErrors
-rm.Buffers: Hdr:Services
-rm.Buffers: Hdr:Symbols
-rm.Buffers: Hdr:NdrDebug
-rm.Buffers: Hdr:DDVMacros
-rm.Buffers: Hdr:UpCall
-rm.Buffers: Hdr:MsgTrans
-rm.Buffers: Hdr:Proc
-rm.Buffers: Hdr:ResourceFS
-rm.Buffers: Version
-rm.Buffers: s.Errors
-rm.Buffers: s.MoveBlock

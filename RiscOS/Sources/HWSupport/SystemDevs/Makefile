@@ -64,6 +64,26 @@ ${TARGETSA}: s.StandAlone ${RESOURCES}
         ${AS} ${ASFLAGS} s.StandAlone
 
 # Dynamic dependencies:
+rm.SystemDevs: Hdr:ListOpts
+rm.SystemDevs: Hdr:Macros
+rm.SystemDevs: Hdr:System
+rm.SystemDevs: Hdr:SWIs
+rm.SystemDevs: Hdr:CPU.Generic26
+rm.SystemDevs: Hdr:IO.GenericIO
+rm.SystemDevs: Hdr:RISCOS
+rm.SystemDevs: Hdr:ModHand
+rm.SystemDevs: Hdr:Services
+rm.SystemDevs: Hdr:Proc
+rm.SystemDevs: Hdr:FSNumbers
+rm.SystemDevs: Hdr:HighFSI
+rm.SystemDevs: Hdr:LowFSi
+rm.SystemDevs: Hdr:NewErrors
+rm.SystemDevs: Hdr:CMOS
+rm.SystemDevs: Hdr:Variables
+rm.SystemDevs: Hdr:MsgTrans
+rm.SystemDevs: Hdr:ResourceFS
+rm.SystemDevs: Version
+rm.SystemDevs: s.MsgCode
 rm.sa.SystemDevs: s.SystemDevs
 rm.sa.SystemDevs: Hdr:ListOpts
 rm.sa.SystemDevs: Hdr:Macros
@@ -86,23 +106,3 @@ rm.sa.SystemDevs: Hdr:ResourceFS
 rm.sa.SystemDevs: Version
 rm.sa.SystemDevs: s.MsgCode
 rm.sa.SystemDevs: s.ResFiles
-rm.SystemDevs: Hdr:ListOpts
-rm.SystemDevs: Hdr:Macros
-rm.SystemDevs: Hdr:System
-rm.SystemDevs: Hdr:SWIs
-rm.SystemDevs: Hdr:CPU.Generic26
-rm.SystemDevs: Hdr:IO.GenericIO
-rm.SystemDevs: Hdr:RISCOS
-rm.SystemDevs: Hdr:ModHand
-rm.SystemDevs: Hdr:Services
-rm.SystemDevs: Hdr:Proc
-rm.SystemDevs: Hdr:FSNumbers
-rm.SystemDevs: Hdr:HighFSI
-rm.SystemDevs: Hdr:LowFSi
-rm.SystemDevs: Hdr:NewErrors
-rm.SystemDevs: Hdr:CMOS
-rm.SystemDevs: Hdr:Variables
-rm.SystemDevs: Hdr:MsgTrans
-rm.SystemDevs: Hdr:ResourceFS
-rm.SystemDevs: Version
-rm.SystemDevs: s.MsgCode

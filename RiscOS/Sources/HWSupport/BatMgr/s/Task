@@ -98,7 +98,9 @@ MToken_CycleZero        DCB     "CycN",0
 IconBarMenuDef
 IconBarMenu     Menu    MT1
 M1O_Info        Item    M1I1
+ [ EstimateSetting
 M1O_Estimate    Item    M1I2
+ ]
  [ CycleBattery
 M1O_Cycle       Item    M1I7
  ]
@@ -110,19 +112,37 @@ M1O_Parallel    Item    M1I5
 M1O_Remove      Item    M1I6
  [ PowerDown_SerialParallel
   [ CycleBattery
+   [ EstimateSetting
                 ASSERT  IconBarMenuItems = 7
-  |
+   |
                 ASSERT  IconBarMenuItems = 6
+   ]
+  |
+   [ EstimateSetting
+                ASSERT  IconBarMenuItems = 6
+   |
+                ASSERT  IconBarMenuItems = 5
+   ]
   ]
  |
   [ CycleBattery
+   [ EstimateSetting
                 ASSERT  IconBarMenuItems = 5
-  |
+   |
                 ASSERT  IconBarMenuItems = 4
+   ]
+  |
+   [ EstimateSetting
+                ASSERT  IconBarMenuItems = 4
+   |
+                ASSERT  IconBarMenuItems = 3
+   ]
   ]
  ]
                 DCB     0               ; terminates menu list
 
+
+ [ EstimateSetting
                 ALIGN
 EstimateMenuDef
 EstimateMenu    Menu    MT2
@@ -133,6 +153,7 @@ M2O_1Quarter    Item    M2I4
 M2O_Empty       Item    M2I5
                 ASSERT  EstimateMenuItems = 5
                 DCB     0               ; terminates menu list
+ ]
 
  [ CycleBattery
                 ALIGN
@@ -152,7 +173,9 @@ M3O_Abort       Item    M3I5
 
                 ^       0
 M1A_ON_Info     #       1
+ [ EstimateSetting
 M1A_ON_Estimate #       1
+ ]
  [ CycleBattery
 M1A_ON_Cycle    #       1
  ]
@@ -167,7 +190,9 @@ M1A_ON_Remove   #       1
 
                 ^       0
 M1B_ON_Info     #       1
+ [ EstimateSetting
 M1B_ON_Estimate #       1
+ ]
  [ CycleBattery
 M1B_ON_Cycle    #       1
  ]
@@ -178,6 +203,7 @@ M1B_ON_Parallel #       1
 M1B_ON_Remove   #       1
 
 
+ [ EstimateSetting
 ; Menu option numbers for Menu 2
 
                 ^       0
@@ -186,7 +212,7 @@ M2_ON_3Quarters #       1
 M2_ON_Half      #       1
 M2_ON_1Quarter  #       1
 M2_ON_Empty     #       1
-
+ ]
 
  [ CycleBattery
 ; Menu option numbers for Menu 3
@@ -204,9 +230,6 @@ M3_ON_Abort     #       1
 
                 ALIGN
 MsgList         DCD     Message_PreQuit
- [ CycleBattery
-                DCD     Service_Portable        ;So we can inhibit power saving whilst cycling (discharging) the battery
- ]
                 DCD     0
 
 ;******************************************************************************
@@ -220,6 +243,11 @@ Shutdown        ROUT
 ;    R1 undefined
 
         Push    "R0,LR"
+ [ DelayedUpdates
+        ADR     R0,CB_TicklePollword            ; R0 -> code
+        MOV     R1,MWP                          ; R1 = R12 value
+        SWI     XOS_RemoveTickerEvent
+ ]
         LDR     R0,TaskHandle
         LDR     R1,TASK
         SWI     XWimp_CloseDown
@@ -613,6 +641,22 @@ WE_PollWordChanged      ROUT
         MOV     R1,#0                           ; zero pollword
         STR     R1,PollWord
 
+ [ HotKeyTasks
+        TEQS    R0,#PollWordReason_Task1
+        ADREQ   R0, Task1VarName
+        BEQ     StartTask                       ;Will branch to WE_Null
+
+        TEQS    R0,#PollWordReason_Task2
+        ADREQL  R0, Task2VarName
+        BEQ     StartTask                       ;Will branch to WE_Null
+
+        TEQS    R0,#PollWordReason_DelIcon
+        BEQ     StartDelIcon                    ;Will branch to WE_Null
+
+        TEQS    R0,#PollWordReason_Task4
+        BEQ     StartShutdown                   ;Will branch to WE_Null
+ ]
+
         TEQS    R0,#PollWordReason_AddIcon      ; check reason
         BNE     WE_Null                         ; branch if not add icon
 
@@ -635,7 +679,7 @@ WE_Null ROUT
 ;
 ; Exit:
 ;    VS => R0 -> error
-;    VS => R0 undefined
+;    VC => R0 undefined
 ;    R1-R2 undefined
 
         Push    "LR"
@@ -677,16 +721,18 @@ WE_Null ROUT
         TSTNES  R1,#PortableBMUF_Threshold_2    ; has it become set
         BLNE    Task_SecondThreshold            ; act on it if so
 
+ [ EstimateSetting
 ; If "charge state known" or "battery present" changed, clear
 ; estimating flag (if charge state became unknown, estimate is now
 ; invalid, if charge state became known, we don't care about estimate,
 ; if battery removed OR inserted, estimate will be invalid)
 
- [ F
+  [ F
         TSTS    R2,#PortableBMUF_ChargeKnown :OR: PortableBMUF_BatteryPresent
         LDRNEB  R0,Task_Flags                   ; if changed, clear flag
         BICNE   R0,R0,#F_Estimating             ; so user will be forced to
         STRNEB  R0,Task_Flags                   ; enter new estimate
+  ]
  ]
 
 ; update icon
@@ -694,8 +740,67 @@ WE_Null ROUT
         BL      CalcPercent
         BLVC    UpdateIcon
 
+ [ DelayedUpdates
+; Events such as threshold changes where we switch the charger on or off cause
+; commands to be sent to the BMU. These commands are not actioned immedeateley.
+; This means that UpdateIcon may display outdated charging/discharging information.
+; This misleading display will remain until XWimp_PollIdle returns some (long) time
+; in the future.
+; Set up a call after routine to tickle the poll word to cause update sooner.
+
+        TEQS    R2,#0                           ;Has anything changed?
+        BLNE    UpdateLater                     ;NE, yes
+ ]
         Pull    "PC"
 
+
+ [ HotKeyTasks
+StartDelIcon
+        Push    "LR"
+        BL      DeleteIcon
+        Pull    "LR"
+        B       WE_Null
+
+StartShutdown
+        Push    "LR"
+        MOV     R0,#0                           ; 'Normal' shutdown
+        SWI     XTaskManager_Shutdown
+        Pull    "LR"
+        B       WE_Null
+
+StartTask
+        Push    "LR"
+        ASSERT VarType_Expanded = 3
+;Read the command into a buffer
+        ADR     R1, WorkBlock
+        MOV     R2, #255        ;blksize-1
+        MOV     R3, #0
+        MOV     R4, #VarType_Expanded           ;might be useful to expand a macro
+        SWI     XOS_ReadVarVal
+        MOVVS   R2, #0                          ;treat an error as an empty variable
+
+;If the command string is not empty, pass it to Wimp_StartTask
+        CMP     R2, #0
+        ADRNE   R0, WorkBlock
+        MOVNE   R1, #0
+        STRNEB  R1, [R0, R2]                    ;terminate the string
+        SWINE   XWimp_StartTask
+
+        Pull    "LR"
+        B       WE_Null
+
+Task1VarName
+        DCB     "ToolBox$Key", 0
+Task1DefValue
+        DCB     "Filer_OpenDir Resources:$.Apps", 0     ;By default, open the Apps directory
+
+Task2VarName
+        DCB     "Heart$Key", 0
+Task2DefValue
+        DCB     "Resources:$.Apps.!Edit", 0
+
+        ALIGN
+ ]
 ;******************************************************************************
 
 WE_OpenWindow   ROUT
@@ -822,8 +927,10 @@ WE_MenuSelection        ROUT
         TEQS    R0,#M1A_ON_Parallel
         BEQ     %F30
  ]
+ [ EstimateSetting
         TEQS    R0,#M1A_ON_Estimate
         BEQ     %F40
+ ]
  [ CycleBattery
         TEQS    R0,#M1A_ON_Cycle
         BEQ     %FT50
@@ -832,7 +939,9 @@ WE_MenuSelection        ROUT
         MOVNES  PC,LR
 
 ; Option: remove icon from icon bar
-
+ [ HotKeyTasks
+        B       DeleteIcon
+ |
         wsaddr  R1,WorkBlock
         MOV     R0,#-1
         LDR     R2,IconHandle
@@ -846,7 +955,7 @@ WE_MenuSelection        ROUT
         STRVCB  R0,Task_Flags
 
         MOV     PC,LR
-
+ ]
 ;~~~~~~~~~~~~~~~
 10
 
@@ -900,6 +1009,7 @@ WE_MenuSelection        ROUT
  ]
 
 ;~~~~~~~~~~~~~~~
+ [ EstimateSetting
 
 40
 ; Option: set estimate
@@ -926,20 +1036,23 @@ WE_MenuSelection        ROUT
         SWI     XPortable_WriteBMUVariable
         MOVVS   PC,LR
 
- [ F
+  [ F
 ; set flag to say it's ok to use estimate
 
         LDRB    R0,Task_Flags
         ORR     R0,R0,#F_Estimating
         STRB    R0,Task_Flags
- ]
+  ]
 
         Push    "LR"
-
+  [ DelayedUpdates
+        BL      UpdateLater
+  |
         BL      CalcPercent
         BLVC    UpdateIcon
-
+  ]
         Pull    "PC"
+ ]
 
 ;~~~~~~~~~~~~~~~
  [ CycleBattery
@@ -965,7 +1078,12 @@ WE_MenuSelection        ROUT
         Push    "LR"
         MOV     R0, R3                          ;Cycle count=0 abort cycling
         BL      StartCycling                    ; >0 means start discharging
-        BL      UpdateIcon
+  [ DelayedUpdates
+        BL      UpdateLater
+  |
+        BL      CalcPercent
+        BLVC    UpdateIcon
+  ]
         Pull    "PC"
  ]
 
@@ -1057,6 +1175,43 @@ CreateIcon      ENTRY   "R1-R9"
 
         EXIT
 
+ [ DelayedUpdates
+;******************************************************************************
+
+UpdateLater     ENTRY   "R0-R2"
+;
+; Events such as threshold changes where we switch the charger on or off cause
+; commands to be sent to the BMU. These commands are not actioned immedeateley.
+; This means that UpdateIcon may display outdated charging/discharging information.
+; This misleading display will remain until XWimp_PollIdle returns some (long) time
+; in the future.
+; Set up a call after routine to tickle the poll word to cause update sooner.
+
+        MOV     R0,#BMUUpdateDelay - 1          ; (-1 for OS bug)
+        ADR     R1,CB_TicklePollword
+        MOV     R2,MWP                          ; R2 = R12 value to pass
+        SWI     XOS_CallAfter
+        EXITS
+
+
+CB_TicklePollword
+        ENTRY   "R0"
+;
+; Entry:
+;    MWP -> workspace
+;    MODE: SVC
+;    IRQs disabled
+;
+; Exit:
+;    All registers preserved
+
+        LDR     R0,PollWord
+        TEQ     R0,#0
+        MOVEQ   R0,#PollWordReason_BMUEvent
+        STREQ   R0,PollWord
+
+        EXITS
+ ]
 ;******************************************************************************
 
 UpdateIcon      ENTRY   "R1-R7"
@@ -1130,8 +1285,10 @@ UpdateIcon      ENTRY   "R1-R7"
         TSTS    R0,#PortableBMUF_BatteryPresent ; battery present?
         BEQ     %F30                            ; branch if not
         TSTS    R0,#PortableBMUF_ChargeKnown    ; charge state known?
+ [ EstimateSetting
         LDREQB  R0,Task_Flags                   ; if not, check estimate
         TSTEQS  R0,#F_Estimating
+ ]
         BEQ     %F30                            ; branch if not estimating
 
 ; charge state is known or is estimated
@@ -1196,6 +1353,40 @@ UpdateIcon      ENTRY   "R1-R7"
         MOV     R4,#0
         SWI     XColourTrans_SetGCOL
 
+ [ OnStork
+        MOV     R0, #PortableBMUVar_ChargeCurrent       ;read charge rate
+        SWI     XPortable_ReadBMUVariable
+        BVS     %FT25                                   ;branch if error
+
+        CMP     R1, #0
+        BEQ     %FT21                           ;EQ, not charging
+
+;don't indicate charging if pack is fully charged (ie on maintainance charge)
+        LDRB    R0,Task_BMU_Flags               ; get BMU flags
+        TSTS    R0,#PortableBMUF_Threshold_3
+        BNE     %FT25                           ;NE, maintainance charge, display nothing
+
+        MOV     R1,#">"                         ;charging indicator
+        LDR     R3,RightX
+        B       %FT23
+
+21
+        MOV     R0, #PortableBMUVar_DischargeCurrent
+        SWI     XPortable_ReadBMUVariable
+        BVS     %FT25                           ;branch if error
+        CMP     R1, #0
+        BEQ     %FT25                           ;EQ, not discharging either!
+
+        MOV     R1,#"<"                         ;discharge indicator
+        LDR     R3,LeftX
+23
+; R1 = character to paint
+; R3 = X position
+        MOV     R0,#SpriteReason_PaintCharScaled
+        LDR     R4,MidY                         ; R4 = Y coord
+        MOV     R6,#0                           ; no scale factors
+        SWI     XOS_SpriteOp
+ |
 ; read charge rate from portable module
 
         MOV     R0,#PortableBMUV_ChargeRate     ; read charge rate
@@ -1223,6 +1414,7 @@ UpdateIcon      ENTRY   "R1-R7"
         LDRNE   R4,MidY                         ; R4 = Y coord
         MOVNE   R6,#0                           ; no scale factors
         SWINE   XOS_SpriteOp
+ ]
 25
 ; switch output back to how it was before, using saved values
 
@@ -1245,11 +1437,13 @@ UpdateIcon      ENTRY   "R1-R7"
         CMP     R4,#0
         BNE     %FT27
  ]
+ [ EstimateSetting
         TSTS    R0,#PortableBMUF_BatteryPresent ; battery present?
         EORNE   R0,R0,#PortableBMUF_ChargeKnown ; reverse sense of test
         TSTNES  R0,#PortableBMUF_ChargeKnown    ; charge not known?
         LDRNEB  R0,Task_Flags                   ; if not, estimating?
         TSTNES  R0,#F_Estimating
+ ]
 27      MOVNE   R4,#&07000000                   ; EOR word (foreground = 7)
         MOVEQ   R4,#&01000000                   ; EOR word (foreground = 1)
         MOV     R5,#&0F000000                   ; clear word
@@ -1282,6 +1476,35 @@ UpdateIcon      ENTRY   "R1-R7"
 
         B       %BT20                           ; all done
 
+ [ HotKeyTasks
+;******************************************************************************
+
+DeleteIcon      ENTRY   "R1-R2"
+;
+; Removes the icon from the icon bar
+;
+; Entry:
+;    MODE: USR
+;
+; Exit:
+;    VS => R0 -> error
+;    VC => R0 undefined
+;    Task_Flags updated
+
+        wsaddr  R1,WorkBlock
+        MOV     R0,#-1
+        LDR     R2,IconHandle
+        STMIA   R1,{R0,R2}
+        SWI     XWimp_DeleteIcon
+
+; Clear flag: icon no longer present
+
+        LDRVCB  R0,Task_Flags
+        BICVC   R0,R0,#F_IconPresent
+        STRVCB  R0,Task_Flags
+
+        EXIT
+ ]
 ;******************************************************************************
 
 CreateWindow    ENTRY   "R1-R6"
@@ -1331,7 +1554,7 @@ MakeMenu        ENTRY   "R1-R4"
 ;    VC => R0 undefined
 ;    All other registers preserved
 
-
+ [ EstimateSetting
 ; Make Estimate menu structure in RAM
 
         wsaddr  R0,MsgTransBlk
@@ -1340,6 +1563,7 @@ MakeMenu        ENTRY   "R1-R4"
         MOV     R3,#?EstimateMenu
         SWI     XMessageTrans_MakeMenus
         EXIT    VS
+ ]
 
  [ CycleBattery
 ; Make Cycle menu structure in RAM
@@ -1369,6 +1593,7 @@ MakeMenu        ENTRY   "R1-R4"
         STR     R0,[R2,#m_headersize+mi_size*M1A_ON_Info+mi_submenu]
         ASSERT  M1A_ON_Info = M1B_ON_Info
 
+ [ EstimateSetting
 ; Insert pointer to submenu structure
 
         wsaddr  R0,EstimateMenu
@@ -1383,14 +1608,54 @@ MakeMenu        ENTRY   "R1-R4"
         LDRNE   R1,[R2,#m_headersize+mi_size*M1A_ON_Estimate+mi_iconflags]
         ORRNE   R1,R1,#is_shaded
         STRNE   R1,[R2,#m_headersize+mi_size*M1A_ON_Estimate+mi_iconflags]
+ ]
 
  [ CycleBattery
-
 ; Insert pointer to submenu structure
 
         wsaddr  R0,CycleMenu
         STR     R0,[R2,#m_headersize+mi_size*M1A_ON_Cycle+mi_submenu]
         ASSERT  M1A_ON_Cycle = M1B_ON_Cycle
+
+; If no battery or no charger, grey out Cycle item
+
+        LDRB    R0,Task_BMU_Flags               ; get flags
+        AND     R0,R0,#PortableBMUF_BatteryPresent :OR: PortableBMUF_ChargerPresent
+        TEQS    R0,#PortableBMUF_BatteryPresent :OR: PortableBMUF_ChargerPresent
+        LDRNE   R1,[R2,#m_headersize+mi_size*M1A_ON_Cycle+mi_iconflags]
+        ORRNE   R1,R1,#is_shaded
+        STRNE   R1,[R2,#m_headersize+mi_size*M1A_ON_Cycle+mi_iconflags]
+;>>>
+;>>>Grey cycle menu entries as appropriate
+;>>>be carefull about preserving R2
+;>>>look at cycle count
+
+        wsaddr  R2,CycleMenu
+
+        LDRB    R0, CycleCount
+        CMP     R0, #0
+
+        LDRNE   R1,[R2,#m_headersize+mi_size*M3O_1+mi_iconflags]
+        ORRNE   R1,R1,#is_shaded
+        STRNE   R1,[R2,#m_headersize+mi_size*M3O_1+mi_iconflags]
+
+        LDRNE   R1,[R2,#m_headersize+mi_size*M3O_2+mi_iconflags]
+        ORRNE   R1,R1,#is_shaded
+        STRNE   R1,[R2,#m_headersize+mi_size*M3O_2+mi_iconflags]
+
+        LDRNE   R1,[R2,#m_headersize+mi_size*M3O_3+mi_iconflags]
+        ORRNE   R1,R1,#is_shaded
+        STRNE   R1,[R2,#m_headersize+mi_size*M3O_3+mi_iconflags]
+
+        LDRNE   R1,[R2,#m_headersize+mi_size*M3O_4+mi_iconflags]
+        ORRNE   R1,R1,#is_shaded
+        STRNE   R1,[R2,#m_headersize+mi_size*M3O_4+mi_iconflags]
+
+        LDREQ   R1,[R2,#m_headersize+mi_size*M3O_Abort+mi_iconflags]
+        ORREQ   R1,R1,#is_shaded
+        STREQ   R1,[R2,#m_headersize+mi_size*M3O_Abort+mi_iconflags]
+
+        wsaddr  R2,IconBarMenu          ;restore R2
  ]
 
  [ PowerDown_SerialParallel
@@ -1761,10 +2026,12 @@ Task_T1Change   ENTRY   "R1"
         EXIT    NE                              ; yes, so suppress low battery warning
  ]
 
- [ F
+ [ EstimateSetting
+  [ F
         LDRB    R0,Task_Flags                   ; no longer estimating
         BIC     R0,R0,#F_Estimating
         STRB    R0,Task_Flags
+  ]
  ]
 
 ; warn user
@@ -1876,12 +2143,26 @@ CalcPercent     ENTRY   "R1-R4"
         BEQ     %F50                            ; branch if not
 
 ; charge state is known (but there is a window here)
+ [ OnStork
+; calculate ChargeLevel / UsableCapacity
+
+        MOV     R0,#PortableBMUVar_ChargeLevel  ; read available capacity
+        SWI     XPortable_ReadBMUVariable
+ |
 ; calculate (MeasuredCapacity - UsedCapacity) / UsableCapacity
 
         MOV     R0,#PortableBMUV_UsedCapacity   ; read used capacity
         SWI     XPortable_ReadBMUVariable
-10
+ ]
 
+10
+ [ OnStork
+; R1 = available or estimated capacity
+
+        MOVVC   R3,R1                           ; save value
+        MOVVC   R0,#PortableBMUVar_BatteryCapacity ; read usable capacity
+        SWIVC   XPortable_ReadBMUVariable
+ |
 ; R1 = used or estimated capacity
 
         MOVVC   R3,R1                           ; save value
@@ -1890,21 +2171,29 @@ CalcPercent     ENTRY   "R1-R4"
         MOVVC   R2,R1                           ; save value
         MOVVC   R0,#PortableBMUV_UsableCapacity ; read usable capacity
         SWIVC   XPortable_ReadBMUVariable
+ ]
         EXIT    VS
 
+ [ OnStork
+; R1 = usable capacity
+; R3 = available or esimated capacity
+
+; set Percent = R3 * 100 / R1
+ |
 ; R1 = usable capacity
 ; R2 = measured capacity
 ; R3 = used or esimated capacity
 
 ; set Percent = (R2 - R3) * 100 / R1
 
-        SUBS    R3,R2,R3                        ; R3 = measured - used
+        SUBS    R3,R2,R3                        ; R3 = measured - used (ie available)
         MOVLT   R3,#0                           ; R3 < 0 => R3 = 0
+ ]
         MOV     R0,#100                         ; R3 *= 100
         MUL     R3,R0,R3
         TEQS    R1,#0                           ; must'nt divide by 0
         MOVEQ   R1,#1
-        DivRem  R4,R3,R1,R0                     ; R4 = (meas - used)*100/usable
+        DivRem  R4,R3,R1,R0                     ; R4 = available*100/usable
         CMPS    R4,#100
         MOVHI   R4,#100
         STRB    R4,Percent
@@ -1915,6 +2204,7 @@ CalcPercent     ENTRY   "R1-R4"
 ;~~~~~~~~~~~~~~~
 50
 ; charge state not known
+ [ EstimateSetting
 ; if estimating, calculate percent based on estimate
 
         MOV     R0,#PortableBMUV_ChargeEstimate ; read estimate
@@ -1926,6 +2216,7 @@ CalcPercent     ENTRY   "R1-R4"
         BICEQ   R0,R0,#F_Estimating             ; if not, clear it
         STRB    R0,Task_Flags
         BNE     %B10                            ; branch if valid
+ ]
         EXIT
 
 ;******************************************************************************

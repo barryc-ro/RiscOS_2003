@@ -331,10 +331,23 @@ DoSwiWinPowerControl    ROUT
 ; Case R0 = 0 - read drive spin status
 ;    Cmd(CheckPower), return SecCount
 
+ [ IDEPower
+;If drive is powered down, return a 'not spinning' indication.
+;
+;
+        LDR     R0, Portable_Flags
+        TST     R0, #PortableControl_IDEEnable
+        MOVEQ   R2, #0                          ; power off, so not spinning
+        BEQ     %FT15
+;we know the drive is powered, so no need to call WinIDEcontrol to power it up
+ ]
         MOV     R0,#IDECmdCheckPower
         BL      WinIDEPollCommand       ; (R0,R5->R0,V)
         BVS     %FT70                   ; branch if error
         LDRB    R2,IDERegSecCount       ; if ok, get power state
+ [ IDEPower
+15
+ ]
         BL      UnlockIDEController
         Pull    "R3-R5,IDE,PC"
 
@@ -345,6 +358,19 @@ DoSwiWinPowerControl    ROUT
 ;    Cmd(Idle,n)
 ;    Pstate = n
 ;    return old state
+
+ [ IDEPower
+        Push    "R1"
+        MOV     R0, #1
+        BL      WinIDEcontrol
+        Pull    "R1"
+
+        Push    "R5"
+        MOV     R0, #0                  ;>>>drive number
+        MOV     R5,#WinIDETimeoutSpinup
+        BL      WinIDEWaitReady
+        Pull    "R5"
+ ]
 
         STRB    R2,WinIDEParmSecCount   ; save parameter for command
         MOV     R0,#IDECmdIdle
@@ -369,6 +395,22 @@ DoSwiWinPowerControl    ROUT
 ;    Case R2 != 0 - spin up
 ;       Cmd(Idle,Pstate)
 
+ [ IDEPower
+        LDR     R0, Portable_Flags
+        TST     R0, #PortableControl_IDEEnable
+        CMPEQ   R2, #0
+        BEQ     %FT35
+        Push    "R1"
+        MOV     R0, #1
+        BL      WinIDEcontrol
+        Pull    "R1"
+
+        Push    "R5"
+        MOV     R0, #0                  ;>>>drive number
+        MOV     R5,#WinIDETimeoutSpinup
+        BL      WinIDEWaitReady
+        Pull    "R5"
+ ]
         LDRB    LR,WinIDEDriveNum       ; LR = drive number
         sbaddr  R3,WinIDEPowerState     ; R3 -> drive power states
         LDRB    R0,[R3,LR]              ; R0 = power state of this drive
@@ -378,6 +420,9 @@ DoSwiWinPowerControl    ROUT
         MOVEQ   R0,#IDECmdStandby       ; if so, set standby mode
         MOVNE   R0,#IDECmdIdle          ; else set idle mode
         BL      WinIDEPollCommand       ; (R0,R5->R0,V)
+ [ IDEPower
+35
+ ]
         BLVC    UnlockIDEController
         Pull    "R3-R5,IDE,PC",VC       ; return if no error
 
@@ -753,7 +798,57 @@ DoSwiIDEUserOp  ROUT
         ORRS    PC,LR,#V_bit
 
 ;*********************************************************************
+ [ IDEPower
+WinIDEcontrol   ROUT
+;
+; Enable/Disable IDE hardware for power saving on the portable
+;
+; Entry:
+;    R0 = New state, 0= disable, !0= enable
+;
+; Exit:
+;    R1 = Portable_Flags
+;
+; Modifies:
+;       R0
+;       Preserves flags
+;       Updates Portable_Flags word
 
+        LDR     R1, Portable_Flags
+        TST     R1, #Portable_Present           ; Portable present?
+        MOVEQS  PC, LR                          ; No then exit
+
+        Push    "R2,LR"
+        TEQ     R0, #0                          ; Disabling IDE?
+        MOVNE   R0, #PortableControl_IDEEnable  ; No then set enable bit
+        AND     LR, R1, #PortableControl_IDEEnable ; Get IDE enable bit
+        TEQ     LR, R0                          ; Any change
+        Pull    "R2,PC",EQ,^                    ; No then exit
+                 
+        MOV     R2, PC                          ; Save CPU mode
+        ORR     LR, R2, #SVC_mode
+        TEQP    LR, #0                          ; Switch to SVC mode
+        NOP
+        Push    "LR"                            ; Save SVC_LR
+
+        MOV     R1, #:NOT:PortableControl_IDEEnable ; IDE enable bit mask
+        SWI     XPortable_Control               ; En/Disable IDE H/W
+        ORRVC   R1, R1, #Portable_Present       ; No error -> portable
+        MOVVS   R1, #PortableControl_FDCEnable  ; Error -> not portable, FDC enabled
+        ORRVS   R1, R1, #PortableControl_IDEEnable ; Error -> not portable, IDE enabled
+
+        Pull    "LR"                            ; Restore SVC_LR
+        TEQP    R2, #0                          ; Restore CPU mode
+        NOP
+
+ [ Debug10p
+        DREG    R1,"New portable flags:"
+ ]
+        STR     R1, Portable_Flags              ; Save enable state
+        Pull    "R2,PC",,^
+
+;*********************************************************************
+ ]
 WinLowLevelIDE  ROUT
 ;
 ; Called from WinLowLevel when the drive number indicates that
@@ -792,6 +887,16 @@ WinLowLevelIDE  ROUT
 ;    R5-R9 undefined
 
         Push    "IDE,LR"
+
+ [ IDEPower
+;
+; Ensure power is on, 
+;
+        Push    "R0, R1"
+        MOV     R0, #1
+        BL      WinIDEcontrol           ; Enable IDE H/W
+        Pull    "R0, R1"
+ ]
 
 ; try to lock IDE controller
 

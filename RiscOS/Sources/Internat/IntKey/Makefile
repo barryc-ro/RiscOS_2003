@@ -24,7 +24,12 @@ CPFLAGS = ~cfr~v
 # Program specific options:
 #
 COMPONENT = IntKey
-SOURCE    = ${LOCALE}.Source.IntKeyMod
+#
+# We use <Keyboard> here instead of ${LOCALE} so that the keyboard handler
+# can be built for a different country than the main build (eg. allows USA
+# keyboard handler with UK ROM messages).
+#
+SOURCE    = <Keyboard>.Source.IntKeyMod
 TARGET    = rm.IntKey
 
 #
@@ -45,7 +50,7 @@ clean:
         @echo ${COMPONENT}: cleaned
 
 ${TARGET}: ${SOURCE}
-        set IKHG$Country ${LOCALE}
+        set IKHG$Country <Keyboard>
         ${AS} ${ASFLAGS} ${SOURCE}
         unset IKHG$Country
 
@@ -62,5 +67,6 @@ rm.IntKey: Hdr:ModHand
 rm.IntKey: Hdr:Services
 rm.IntKey: Hdr:Proc
 rm.IntKey: !IKHG.Source.Chars.Latin1
-rm.IntKey: <Locale>.Source.KeyStruct
+rm.IntKey: <Keyboard>.Source.KeyStruct
 rm.IntKey: UK.Source.UKPCKbd
+rm.IntKey: <Keyboard>.Source.USAKbd

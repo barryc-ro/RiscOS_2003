@@ -92,6 +92,7 @@ rm.Free: Hdr:ADFS
 rm.Free: Hdr:RamFS
 rm.Free: Hdr:SCSIFS
 rm.Free: Hdr:Econet
+rm.Free: Hdr:PCCardFS
 rm.Free: Hdr:UpCall
 rm.Free: Hdr:HostFS
 rm.Free: Hdr:NdrDebug
@@ -105,5 +106,6 @@ rm.Free: s.RAMFS
 rm.Free: s.SCSI
 rm.Free: s.NETFS
 rm.Free: s.NFS
+rm.Free: s.PCCardFS
 rm.Free: s.SWIs
 rm.Free: s.Tail
