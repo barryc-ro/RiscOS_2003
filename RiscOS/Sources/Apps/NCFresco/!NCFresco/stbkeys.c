@@ -316,6 +316,26 @@ static key_list nc_movement1_keys[] =
     { 0 }
 };
 
+static key_list nc_toolbar_keys[] =
+{
+    { akbd_LeftK,           fevent_TOOLBAR_MOVE_LEFT, key_list_REPEAT },
+    { akbd_RightK,          fevent_TOOLBAR_MOVE_RIGHT, key_list_REPEAT },
+    { akbd_UpK,             fevent_TOOLBAR_MOVE_UP, key_list_REPEAT },
+    { akbd_DownK,           fevent_TOOLBAR_MOVE_DOWN, key_list_REPEAT },
+
+    { 13,                   fevent_TOOLBAR_ACTIVATE },
+
+    { akbd_PageUpK,         fevent_SCROLL_PAGE_UP, key_list_REPEAT },
+    { akbd_PageDownK,       fevent_SCROLL_PAGE_DOWN, key_list_REPEAT },
+
+    { akbd_Sh + akbd_Ctl + akbd_UpK,    fevent_SCROLL_UP, key_list_REPEAT },
+    { akbd_Sh + akbd_Ctl + akbd_DownK,  fevent_SCROLL_DOWN, key_list_REPEAT },
+    { akbd_Sh + akbd_Ctl + akbd_LeftK,  fevent_SCROLL_LEFT, key_list_REPEAT },
+    { akbd_Sh + akbd_Ctl + akbd_RightK, fevent_SCROLL_RIGHT, key_list_REPEAT },
+
+    { 0 }
+};
+
 /* ------------------------------------------------------------------------------------- */
 
 static key_list platform_riscos_keys[] =
@@ -513,6 +533,19 @@ static key_list rca_movement1_keys[] =
     { 0 }
 };
 
+static key_list rca_codec_keys[] =
+{
+    { akbd_Sh + akbd_Ctl + akbd_Fn+1, fevent_CODEC_STOP },
+    { akbd_Sh + akbd_Ctl + akbd_Fn+2, fevent_CODEC_PLAY },
+    { akbd_Sh + akbd_Ctl + akbd_Fn+3, fevent_CODEC_PAUSE },
+    { akbd_Sh + akbd_Ctl + akbd_Fn+4, fevent_CODEC_REWIND },
+    { akbd_Sh + akbd_Ctl + akbd_Fn+5, fevent_CODEC_FAST_FORWARD },
+    { akbd_Sh + akbd_Ctl + akbd_Fn+6, fevent_CODEC_RECORD },
+    { akbd_Sh + akbd_Ctl + akbd_Fn+7, fevent_CODEC_MUTE },
+
+    { 0 }
+};
+
 /* ------------------------------------------------------------------------------------- */
 
 /* This view could be null if the caret was in the status bar
@@ -526,6 +559,11 @@ void fe_key_handler(fe_view v, wimp_eventstr *e, BOOL use_toolbox, int browser_m
     wimp_caretstr *cs = &e->data.key.c;
     int chcode = e->data.key.chcode;
     int event = -1;
+
+    if (v == NULL && cs->w == tb_status_w())
+    {
+        event = fe_key_lookup(chcode, nc_toolbar_keys);
+    }
 
     if (resizing_view)
     {
@@ -609,6 +647,10 @@ void fe_key_handler(fe_view v, wimp_eventstr *e, BOOL use_toolbox, int browser_m
         }
     }
 
+    /* check for the handset transport keys */
+    if (event == -1)
+	event = fe_key_lookup(chcode, rca_codec_keys);
+    
     /* call event handler or pass on */
     if (event != -1)
         fevent_handler(event, v ? v : main_view);

@@ -167,7 +167,7 @@ extern void text_item_push_image(HTMLCTX * me,
 				 VALUE *ismap,
 				 VALUE *hspace,
 				 VALUE *vspace);
-extern void new_aref_item(HTMLCTX* me,
+extern rid_aref_item * new_aref_item(HTMLCTX* me,
 			  VALUE *href,
 			  VALUE *name,
 			  VALUE *rel,

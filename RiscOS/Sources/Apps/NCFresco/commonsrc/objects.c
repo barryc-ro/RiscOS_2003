@@ -24,10 +24,6 @@ rid_object_type objects_type_test(int ftype)
     if (image_type_test(ftype))
 	return rid_object_type_IMAGE;
 
-    /* If it is a drawfile we can handle it */
-    if (ftype == FILETYPE_DRAWFILE)
-	return rid_object_type_INTERNAL;
-
     /* We should be abelt o handle these via floating frames eventually
     if (ftype == FILETYPE_TEXT || ftype == FILETYPE_HTML || ftype == FILETYPE_GOPHER)
 	return rid_object_type_FRAME;

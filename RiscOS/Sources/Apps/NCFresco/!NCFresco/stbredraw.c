@@ -607,10 +607,11 @@ int frontend_view_ensure_visable(fe_view v, int x, int top, int bottom)
 
 /* ----------------------------------------------------------------------------*/
 
-int frontend_view_caret(fe_view v, int x, int y, int height, int on_screen)
+int frontend_view_caret(fe_view v, int x, int y, int hh, int on_screen)
 {
     wimp_caretstr cs;
     int r;
+    int height = hh < 0 ? hh : hh & 0x0000ffff; /* actual height without flags */
 
     if (!v || v->magic != ANTWEB_VIEW_MAGIC)
 	return 1;
@@ -630,7 +631,7 @@ int frontend_view_caret(fe_view v, int x, int y, int height, int on_screen)
     if (height < 0)
 	cs.height = (-height) | (1 << 25);	/* Invisible caret */
     else
-	cs.height = height;
+	cs.height = hh;
     cs.index = 0;
     cs.x = x;
     cs.y = y;

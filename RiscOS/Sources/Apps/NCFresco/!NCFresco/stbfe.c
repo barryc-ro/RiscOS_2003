@@ -391,6 +391,8 @@ void fe_open_keyboard(fe_view v)
 static BOOL fe_caretise(fe_view v)
 {
     /* if the highlighted object is actually an INPUT then place caret  */
+    STBDBG(("fe_caretise(): v %p link %p\n", v, v->current_link));
+    
     if (v->current_link)
     {
         int flags;
@@ -398,7 +400,7 @@ static BOOL fe_caretise(fe_view v)
         if (frontend_complain(backend_item_info(v->displaying, v->current_link, &flags, NULL, NULL)) == NULL &&
             (flags & be_item_info_INPUT))
         {
-            frontend_complain(backend_activate_link(v->displaying, v->current_link, wimp_BLEFT));
+            frontend_complain(backend_activate_link(v->displaying, v->current_link, FALSE));
             return TRUE;
         }
     }
@@ -1770,6 +1772,8 @@ os_error *fe_handle_enter(fe_view v)
         }
         else if (flags & be_item_info_INPUT)
         {
+	    STBDBG(( "stbfe: activate link in %p\n", v->current_link));
+
             e = backend_activate_link(v->displaying, v->current_link, 0);
         }
         else
@@ -2510,6 +2514,8 @@ os_error *fe_status_open_toolbar(fe_view v, int bar)
 
 void fe_scroll_changed(fe_view v, int x, int y)
 {
+    STBDBG(("fe_scroll_changed(): v %p link %p\n", v, v ? v->current_link : 0));
+
     if (use_toolbox)
     {
     }
@@ -3008,9 +3014,15 @@ static void fe_idle_handler(void)
 	if (!akbd_pollctl() && pointer_moved && v->displaying && ti != v->current_link)
 	{
 	    if (ti)
-		backend_highlight_link(v->displaying, ti, be_link_ONLY_CURRENT | be_link_CLEAR_REST);
+	    {
+		ti = backend_highlight_link(v->displaying, ti, be_link_ONLY_CURRENT);
+		if (ti != v->current_link)
+		    backend_update_link(v->displaying, v->current_link, 0);
+	    }
 	    else
+	    {
 		backend_clear_selected(v->displaying);
+	    }
 
 	    v->current_link = ti;
 	}
@@ -4053,8 +4065,8 @@ void fe_event_process(void)
 
             STBDBG(( "key: view %p '%s' key %x\n", v, v && v->name ? v->name : "", e.data.key.chcode));
 
-	    if (v || !tb_key_handler(&e.data.key.c, e.data.key.chcode))
-		fe_key_handler(v ? v : main_view, &e, use_toolbox, v->browser_mode);
+/* 	    if (v || !tb_key_handler(&e.data.key.c, e.data.key.chcode)) */
+	    fe_key_handler(v, &e, use_toolbox, v->browser_mode);
             break;
         }
 

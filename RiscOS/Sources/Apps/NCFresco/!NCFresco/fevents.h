@@ -34,6 +34,7 @@
 #define fevent_SUB_CLASS_TOOLBAR            0x00A0
 #define fevent_SUB_CLASS_MISC2              0x00B0
 #define fevent_SUB_CLASS_CODEC              0x00C0
+#define fevent_SUB_CLASS_TOOLBAR2           0x00D0
 
 /* global events */
 
@@ -160,12 +161,20 @@
 #define fevent_OPEN_WRITEABLE		    0x20B2
 #define fevent_STOP_OR_RELOAD		    0x20B3
 
+/* The order here must match the table in stbevent.c */
 #define fevent_CODEC_STOP		    0x20C0
 #define fevent_CODEC_PLAY		    0x20C1
 #define fevent_CODEC_PAUSE		    0x20C2
 #define fevent_CODEC_REWIND		    0x20C3
-#define fevent_CODEC_FFWD		    0x20C4
+#define fevent_CODEC_FAST_FORWARD	    0x20C4
 #define fevent_CODEC_RECORD		    0x20C5
+#define fevent_CODEC_MUTE		    0x20C6
+
+#define fevent_TOOLBAR_MOVE_LEFT	    0x20D0
+#define fevent_TOOLBAR_MOVE_RIGHT	    0x20D1
+#define fevent_TOOLBAR_MOVE_UP		    0x20D2
+#define fevent_TOOLBAR_MOVE_DOWN	    0x20D3
+#define fevent_TOOLBAR_ACTIVATE		    0x20D4
 
 #define fevent_URLS_MASK	            0x00ff
 

@@ -584,7 +584,7 @@ extern void text_item_push_image(HTMLCTX * me,
 
 /*****************************************************************************/
 
-extern void new_aref_item(HTMLCTX* me,
+extern rid_aref_item *new_aref_item(HTMLCTX* me,
 			  VALUE *href,
 			  VALUE *name,
 			  VALUE *rel,
@@ -620,6 +620,8 @@ extern void new_aref_item(HTMLCTX* me,
 
     rid_aref_item_connect(me->rh, new);
     me->aref = new;
+
+    return new;
 }
 
 /*****************************************************************************/

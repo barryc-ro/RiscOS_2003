@@ -75,6 +75,7 @@ struct config_str
     int display_jpeg;
     int display_leading;
     int display_leading_percent;
+    int display_char_password;
     
     int proxy_http_on;
     int proxy_https_on;
@@ -198,6 +199,7 @@ extern struct config_str config_array;
 #define config_display_jpeg (config_array.display_jpeg)
 #define config_display_leading (config_array.display_leading)
 #define config_display_leading_percent (config_array.display_leading_percent)
+#define config_display_char_password (config_array.display_char_password)
 
 #define config_proxy_http_on (config_array.proxy_http_on)
 #define config_proxy_https_on (config_array.proxy_https_on)

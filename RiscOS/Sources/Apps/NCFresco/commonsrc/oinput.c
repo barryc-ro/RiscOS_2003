@@ -52,6 +52,15 @@
 
 #include "stream.h"
 
+#ifndef OI_DEBUG
+#define OI_DEBUG DEBUG
+#endif
+
+#if OI_DEBUG
+#define OIDBG(a) fprintf a
+#else
+#define OIDBG(a)
+#endif
 /* ---------------------------------------------------------------------- */
 
 #ifndef Wimp_TextOp
@@ -69,13 +78,6 @@ extern void translate_escaped_text(char *src, char *dest, int len);
 extern void oimage_size_image(const char *alt, int req_ww, int req_hh, rid_image_flags flags, BOOL defer_images, int scale_value, int *iw, int *ih);
 extern image oimage_fetch_image(antweb_doc *doc, const char *src);
 extern void oimage_flush_image(image im);
-
-/* ---------------------------------------------------------------------- */
-
-#ifndef BUILDERS
-static char *passwd_dummy =
-    "---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------";
-#endif
 
 /* ---------------------------------------------------------------------- */
 
@@ -272,7 +274,7 @@ void oinput_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	    if (fl & image_flag_REALTHING)
 		ii->data.radio.flags |= rid_image_flag_REAL;
 
-	    oimage_size_image(t, ii->ww, ii->hh, ii->data.radio.flags, doc->flags & doc_flag_DEFER_IMAGES, doc->scale_value, &width, &height);
+	    oimage_size_image("*", ii->ww, ii->hh, ii->data.radio.flags, doc->flags & doc_flag_DEFER_IMAGES, doc->scale_value, &width, &height);
 
 	    ti->width = width;
 	    ti->max_up = (height + webfonts[WEBFONT_BASE].max_up) / 2;
@@ -398,7 +400,8 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	    ta_box.y1 = bline+ti->max_up-8;
 	    if (coords_intersection(&ta_box, g, &gwind_box))
 	    {
-		char *str = ii->tag == rid_it_TEXT ? ii->data.str : passwd_dummy + 255 - slen;
+		char buf[256];
+		char *str;
 		int coords[8];
 
 		coords[0] = coords[1] = 0;
@@ -407,6 +410,17 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 		    
 		bbc_gwindow(gwind_box.x0, gwind_box.y0, gwind_box.x1-dx, gwind_box.y1-dy);
 
+		if (ii->tag == rid_it_PASSWD)
+		{
+		    if (slen >= sizeof(buf)) /* safe but inaccurate (if we have > 256 char passwords) */
+			slen = sizeof(buf)-1;
+		    memset(buf, config_display_char_password, slen);
+		    buf[slen] = 0;
+		    str = buf;
+		}
+		else
+		    str = ii->data.str;
+		
 		_swix(Font_Paint, _INR(1,5), str,
 		      (config_display_blending ? 0x800 : 0) + (ii->flags & rid_if_NUMBERS ? (1<<5) : 0),
 		      plotx * MILIPOINTS_PER_OSUNIT,
@@ -476,7 +490,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
     case rid_it_RADIO:
     case rid_it_CHECK:
     {
-	void *im = ii->data.radio.tick ? ii->data.radio.im_off : ii->data.radio.im_on;
+	void *im = ii->data.radio.tick ? ii->data.radio.im_on : ii->data.radio.im_off;
 	if (im)
 	{
 	    int oox = ox, ooy = oy;
@@ -609,6 +623,7 @@ char *oinput_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
 	    os_error *ep;
 	    os_regset r;
 	    int len = strlen(ii->data.str);
+	    int coords[8];
 
 	    x-=INPUT_TEXT_BORDER_X;
 
@@ -624,22 +639,27 @@ char *oinput_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
 				     ii->flags & rid_if_NUMBERS);
 	    }
 
+	    coords[0] = coords[1] = 0;
+	    coords[2] = NUMBERS_SPACING_X * MILIPOINTS_PER_OSUNIT;
+	    coords[3] = 0;
+	    coords[4] = -1;
+		    
 	    r.r[0] = (int) (long) webfonts[WEBFONT_TTY].handle;
 	    r.r[1] = (int) (long) ii->data.str;
-	    r.r[2] = (1 << 17) | (1 << 8) | (1 << 7);
+	    r.r[2] = (1 << 17) | (1 << 8) | (1 << 7) | (ii->flags & rid_if_NUMBERS ? (1<<5) : 0);
 	    r.r[3] = x * MILIPOINTS_PER_OSUNIT;
 	    r.r[4] = 0;
+	    r.r[5] = (int) coords; /* only used if NUMBERS is set */
 	    r.r[7] = len;
 
 	    ep = os_swix(Font_ScanString, &r);
 
 	    /* This now always sets the caret */
 	    doc->text_input_offset = ep ? strlen(ii->data.str) : ((char *) (long) r.r[1]) - ii->data.str;
-	    doc->input = ti;
-#if 0
-	    fprintf(stderr, "Caret set to item %p, offset %d\n", doc->input, doc->text_input_offset);
-#endif
-	    antweb_place_caret(doc);
+
+	    OIDBG((stderr, "Caret set to item %p, offset %d\n", ti, doc->text_input_offset));
+
+	    antweb_place_caret(doc, ti);
 	}
 	break;
     case rid_it_CHECK:
@@ -655,7 +675,8 @@ char *oinput_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
 		if (ife->tag == rid_form_element_INPUT)
 		{
 		    rid_input_item *iis = (rid_input_item *)ife;
-		    if (iis->tag == rid_it_RADIO && ii != iis && strcasecomp(ii->name, iis->name) == 0)
+		    if (iis->tag == rid_it_RADIO && ii != iis && strcasecomp(ii->name, iis->name) == 0 &&
+			iis->data.radio.tick != FALSE) /* only update if needs to change */
 		    {
 			iis->data.radio.tick = FALSE;
 			antweb_update_item(doc, iis->base.display);
@@ -857,9 +878,9 @@ BOOL oinput_caret(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int repos)
 	    doc->text_input_offset = slen;
 	    repos = 1;
 	}
-	if (doc->text_input_offset >= slen && (ii->flags & rid_if_NUMBERS))
+	if (doc->text_input_offset >= ii->max_len && (ii->flags & rid_if_NUMBERS))
 	{
-	    doc->text_input_offset = slen-1;
+	    doc->text_input_offset = ii->max_len-1;
 	    repos=1;
 	}
 
@@ -933,6 +954,8 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
     int i;
 
     ii = ((rid_text_item_input *) ti)->input;
+
+    OIDBG((stderr, "oinput_key(): key %d tag %d text_input_offset %d\n", key, ii->tag, doc->text_input_offset));
 
     if (doc->text_input_offset < 0)
 	doc->text_input_offset = strlen(ii->data.str);
@@ -1093,9 +1116,6 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 		break;
 
 	    default:
-#if DEBUG
-                fprintf(stderr, "Key %d\n", key);
-#endif
 		/* Ignore spurious control chars */
 		break;
 	    }

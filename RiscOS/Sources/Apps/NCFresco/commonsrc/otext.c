@@ -269,7 +269,7 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
     flexmem_shift();
 
 #ifdef STBWEB
-    if (ti->aref && ti->aref->href &&
+    if (ti->aref && (ti->aref->href || ti->aref->flags & rid_aref_LABEL) &&
 	((ti->flag & (rid_flag_SELECTED|rid_flag_ACTIVATED)) == rid_flag_SELECTED) )
     {
 	BOOL first = ti->aref->first == ti;
@@ -310,7 +310,7 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
     }
     else
 #endif /* STBWEB */
-	if ((ti->st.flags & rid_sf_UNDERLINE) || ((doc->flags & doc_flag_UL_LINKS) && ti->aref && ti->aref->href) )
+	if ((ti->st.flags & rid_sf_UNDERLINE) || ((doc->flags & doc_flag_UL_LINKS) && ti->aref && ti->aref->href && (ti->aref->flags & rid_aref_LABEL) == 0) )
 	{
 	    if (!no_text)
 	    {

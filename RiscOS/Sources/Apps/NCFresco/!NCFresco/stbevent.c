@@ -14,6 +14,7 @@
 #include "images.h"
 #include "interface.h"
 #include "version.h"
+#include "plugin.h"
 
 #include "fevents.h"
 
@@ -432,6 +433,19 @@ static void open_event_handler(int event, fe_view v)
         case fevent_OPEN_KEYBOARD:
 	    fe_open_keyboard(v);
             break;
+
+    case fevent_OPEN_RELATED_STUFF:
+	frontend_open_url("ncfrescointernal:openpanel?name=related", v, TARGET_INFO, NULL, fe_open_url_NO_CACHE);
+	break;
+
+    case fevent_OPEN_FONT_SIZE:
+	break;
+
+    case fevent_OPEN_MUSIC:
+	break;
+
+    case fevent_OPEN_BEEPS:
+	break;
     }
 }
 
@@ -459,9 +473,34 @@ static void url_event_handler(int event, fe_view v)
 	frontend_complain(frontend_open_url(s, v, NULL, NULL, 0));
 }
 
+/* The order here is determined by that in fevents.h */
+
+static int codec_actions[] =
+{
+    plugin_state_STOP,
+    plugin_state_PLAY,
+    plugin_state_PAUSE,
+    plugin_state_REWIND,
+    plugin_state_FAST_FORWARD,
+    plugin_state_RECORD
+};
+
 static void codec_event_handler(int event, fe_view v)
 {
-    
+    int action = event - fevent_CODEC_STOP;
+    if (action < sizeof(codec_actions)/sizeof(codec_actions[0]))
+    {
+	be_item item = NULL;
+
+	if (v && v->displaying)
+	    item = v->current_link;
+
+	backend_plugin_action(v->displaying, item, codec_actions[action]);
+    }
+    else if (event == fevent_CODEC_MUTE)
+    {
+	/* do something else... */
+    }
 }
 
 void fevent_handler(int event, fe_view v)
@@ -521,6 +560,9 @@ void fevent_handler(int event, fe_view v)
 		break;
 	    case fevent_SUB_CLASS_CODEC:
 		codec_event_handler(event, v);
+		break;
+	    case fevent_SUB_CLASS_TOOLBAR2:
+		tb_event_handler(event, v);
 		break;
             }
 	    break;

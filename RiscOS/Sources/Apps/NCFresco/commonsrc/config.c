@@ -106,6 +106,7 @@ config_item citems[] = {
 { config_INT,	"display.jpeg",	(void *)offsetof(struct config_str, display_jpeg),		"0,1,3: on the fly, 2: decompress", (void *) 2 },
 { config_INT,	"display.leading",	(void *)offsetof(struct config_str, display_leading),		"half leading", (void *) 25 },
 { config_BOOL,	"display.leading.percent",	(void *)offsetof(struct config_str, display_leading_percent), "% or OS units", (void *) 1 },
+{ config_INT,	"display.char.password",	(void *)offsetof(struct config_str, display_char_password), "password char", (void *) '-' },
 { config_COMMENT, NULL, NULL, "", NULL },
 { config_URL,	"document.default",	(void *)offsetof(struct config_str, doc_default),		"Default document",		"Welcome"  },
 { config_URL,	"document.handler.user",	(void *)offsetof(struct config_str, document_handler_user),	       "Handler URL",		NULL  },

@@ -254,8 +254,9 @@ typedef struct rid_style_item {
 
 typedef int rid_aref_flags;
 
-#define rid_aref_CHECKED_CACHE  0x01
-#define rid_aref_IN_CACHE       0x02
+#define rid_aref_CHECKED_CACHE  0x01	/* we have checked the cache/history to see if this link is there */
+#define rid_aref_IN_CACHE       0x02	/* this link is in the cache or history and should be coloured differently */
+#define rid_aref_LABEL	        0x04	/* this link is not to a URL but to a form item */
 
 typedef struct rid_aref_item {
     struct rid_aref_item *next, *prev;  /* Linked list */
@@ -1279,6 +1280,7 @@ typedef struct
 /* Function prototypes for rid.c */
 
 /*extern void nullfree(void **vpp);*/
+extern void rid_free_object(rid_object_item *obj);
 extern void rid_free_pos(rid_pos_item *p);
 extern void rid_free_pos_tree(rid_pos_item *p);
 extern void rid_free_text(rid_text_item *p);

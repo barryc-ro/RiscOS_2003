@@ -285,7 +285,7 @@ int render_text_link_colour(rid_header *rh, rid_text_item *ti, antweb_doc *doc)
 {
     int rcol;
 
-    if (ti->aref == NULL || ti->aref->href == NULL)
+    if (ti->aref == NULL || ti->aref->href == NULL || (ti->aref->flags & rid_aref_LABEL))
     {
         /* pdh: It's not a link -- but what colour is it? */
         int no = RID_COLOUR(ti);    /* defined in rid.h */

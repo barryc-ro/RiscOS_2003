@@ -364,6 +364,7 @@ os_error *backend_item_info(be_doc doc, be_item ti, int *flags, char **link, voi
 #define be_item_info_USEMAP	(1 << 7) /* The item is a clientside imagemap */
 #define be_item_info_SECURE	(1 << 8) /* If ACTION then dest URL is https:... */
 #define be_item_info_PLUGIN	(1 << 9) /* The item is a plugin, 'im' is the internal plugin handle */
+#define be_item_info_LABEL	(1 << 10) /* The item is a LABEL for a form element */
 
 os_error *backend_image_size_info(be_doc doc, void *imh, int *width, int *height, int *bpp);
 os_error *backend_image_file_info(be_doc doc, void *imh, int *load, int *exec, int *size);
@@ -442,8 +443,10 @@ extern void backend_select_item(be_doc doc, be_item ti, int select);
 /* return the first item with SELETED bit set */
 extern be_item backend_find_selected(be_doc doc);
 
-/* this takes 1,0,-1 to change the SELECTED flag status */
-extern void backend_update_link(be_doc doc, be_item item, int selected);
+/* this takes 1,0,-1 to change the SELECTED flag status
+ * It returns item or if item is a link then the first item in that anchor sequence
+ */
+extern be_item backend_update_link(be_doc doc, be_item item, int selected);
 
 /* this takes 0 or 1 to change the ACTIVATED flag status */
 extern void backend_update_link_activate(be_doc doc, be_item item, int activated);
@@ -474,6 +477,8 @@ extern void backend_plugin_action(be_doc doc, be_item item, int action);
 #define be_plugin_HELPER	0x0400
 
 extern void backend_plugin_info(be_doc doc, void *pp, int *flags, int *state);
+
+extern be_item backend_locate_id(be_doc doc, const char *id);
 
 #endif /* __interface_h */
 

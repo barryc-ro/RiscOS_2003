@@ -285,7 +285,7 @@ extern void rid_free_pos_tree(rid_pos_item *p)
     }
 }
 
-static void rid_free_object(rid_object_item *obj)
+void rid_free_object(rid_object_item *obj)
 {
     rid_object_param *param = obj->params;
 
@@ -424,12 +424,10 @@ extern void rid_free_form_elements(rid_form_element *f)
 	case rid_form_element_INPUT:
 	{
 	    rid_input_item *p = (rid_input_item *)f;
-	    if (p->name)
-		mm_free(p->name);
-	    if (p->value)
-		mm_free(p->value);
-	    if (p->src)
-		mm_free(p->src);
+	    mm_free(p->name);
+	    mm_free(p->value);
+	    mm_free(p->src);
+	    mm_free(p->src_sel);
 
 	    switch(p->tag)
 	    {
@@ -462,6 +460,7 @@ extern void rid_free_form_elements(rid_form_element *f)
 	}
 	}
 
+	mm_free(f->id);
 	mm_free(f);
 	f = next;
     }

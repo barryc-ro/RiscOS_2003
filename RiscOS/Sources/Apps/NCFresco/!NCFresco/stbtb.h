@@ -6,7 +6,8 @@
 extern int tb_init(int *m_list);
 extern void tb_events(int *event, fe_view v);
 extern void tb_cleanup(void);
-extern BOOL tb_key_handler(wimp_caretstr *cs, int key);
+/* extern BOOL tb_key_handler(wimp_caretstr *cs, int key); */
+extern void tb_event_handler(int event, fe_view v);
 
 /* emulation calls for Risco_OSLib stuff */
 extern void *tb_resspr_area(void);

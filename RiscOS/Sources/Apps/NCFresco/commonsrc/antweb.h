@@ -90,11 +90,11 @@ extern rid_header *parse_gif_file(char *fname, char *url);
 extern void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box);
 extern void antweb_update_item(antweb_doc *doc, rid_text_item *ti);
 extern void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right);
-extern void antweb_place_caret(antweb_doc *doc);
+extern void antweb_place_caret(antweb_doc *doc, rid_text_item *ti);
 extern BOOL antweb_pointer_in_image(antweb_doc *doc, rid_text_item *ti, wimp_mousestr *m, int *xx, int *yy, BOOL in_pixels);
 extern BOOL antweb_locate_item(rid_text_item *ti, int *xx, int *yy);
 extern os_error *antweb_document_format(antweb_doc *doc, int user_width);
-extern os_error *antweb_handle_url(antweb_doc *doc, const char *href, const char *query, const char *target);
+extern os_error *antweb_handle_url(antweb_doc *doc, rid_aref_item *aref, const char *query, const char *target);
 extern void antweb_update_item_trim(antweb_doc *doc, rid_text_item *ti, wimp_box *box, BOOL wont_plot_all);
 
 extern void be_update_link(antweb_doc *doc, rid_aref_item *aref, int selected);

@@ -416,6 +416,30 @@ extern void finishtextarea (SGMLCTX * context, ELEMENT * element)
 
 /*****************************************************************************/
 
+extern void startlabel (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
+{
+    HTMLCTX *htmlctx = htmlctxof(context);
+    VALUE none, empty;
+    rid_aref_item *aref;
 
+    generic_start (context, element, attributes);
+
+    none.type = value_none;
+    aref = new_aref_item(htmlctx,
+			 attributes->value[HTML_LABEL_FOR].type == value_string ? &attributes->value[HTML_LABEL_FOR] : &empty,
+			 &none, &none, &none, &none);
+    aref->flags |= rid_aref_LABEL;
+}
+
+extern void finishlabel (SGMLCTX * context, ELEMENT * element)
+{
+    HTMLCTX *htmlctx = htmlctxof(context);
+
+    generic_finish (context, element);
+
+    finisha(context, element);
+}
+
+/*****************************************************************************/
 
 /* eof forms.c */

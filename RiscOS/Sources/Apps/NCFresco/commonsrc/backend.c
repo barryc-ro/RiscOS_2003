@@ -444,18 +444,42 @@ os_error *backend_doc_locate_item(be_doc doc, int *x, int *y, be_item *ti)
  * NULL will use the document default. a target of _blank forces a new window to open.
  */
 
-os_error *antweb_handle_url(be_doc doc, const char *href, const char *query, const char *target)
+os_error *antweb_handle_url(be_doc doc, rid_aref_item *aref, const char *query, const char *target)
 {
     os_error *e = NULL;
     BOOL new_win = target && strcasecomp(target, "_blank") == 0;
-
-    if (!href)
-        return NULL;
+    const char *href = aref->href;
 
     BEDBG((stderr, "antweb_handle_url for '%s' target '%s'\n", strsafe(href), strsafe(target)));
 
+    if (aref->flags & rid_aref_LABEL)
+    {
+	be_item ti = NULL;
+	if (href)
+	{
+	    ti = backend_locate_id(doc, href);
+	}
+	else
+	{
+	    ti = aref->first;
+	    while (ti && ti->aref == aref)
+	    {
+		if (ti->tag == rid_tag_INPUT || ti->tag == rid_tag_SELECT || ti->tag == rid_tag_TEXTAREA)
+		    break;
+
+		ti = rid_scanf(ti);
+	    }
+	}
+		
+	backend_activate_link(doc, ti, 0);
+    }
+    else
 #ifndef STBWEB
-    if (href[0] == '#' && !new_win)
+    if (!href)
+    {
+	return NULL;
+    }
+    else if (href[0] == '#' && !new_win)
     {
         /* Special case a move to a fragment in the same document and the same window */
         e = backend_goto_fragment(doc, (char *)&href[1]);
@@ -505,7 +529,7 @@ static void backend__doc_click(be_doc doc, be_item ti, int x, int y, wimp_bbits 
         {
 	    (object_table[ti->tag].click)(ti, doc->rh, doc, x, y, bb);
 	}
-	else if (ti->aref && ti->aref->href)
+	else if (ti->aref && (ti->aref->href || (ti->aref->flags & rid_aref_LABEL)))
 	{
 	    if (akbd_pollctl())
 	    {
@@ -521,18 +545,18 @@ static void backend__doc_click(be_doc doc, be_item ti, int x, int y, wimp_bbits 
 	            backend_update_link_activate(doc, ti, 0);
     	        }
 		if (follow_link)
-		    frontend_complain(antweb_handle_url(doc, ti->aref->href, NULL,
+		    frontend_complain(antweb_handle_url(doc, ti->aref, NULL,
 							(bb & wimp_BRIGHT) ? "_blank" : ti->aref->target));
             }
         }
         else
         {
-	    antweb_place_caret(doc);
+	    antweb_place_caret(doc, doc->input);
 	}
     }
     else
     {
-	antweb_place_caret(doc);
+	antweb_place_caret(doc, doc->input);
     }
 
     doc->threaded--;
@@ -616,18 +640,28 @@ os_error *backend_item_pos_info(be_doc doc, be_item ti, int *px, int *py, int *f
 	    }
         }
 
-	if (ti->aref && ti->aref->href && (f & be_item_info_USEMAP) == 0)
+	if (ti->aref)
 	{
-	    f |= be_item_info_LINK;
+	    if (ti->aref->flags & rid_aref_LABEL)
+	    {
+		f |= be_item_info_LABEL;
 
-	    if (link && !*link)
-		*link = ti->aref->href;
+		if (link && !*link)
+		    *link = ti->aref->href;
+	    }
+	    else if (ti->aref->href && (f & be_item_info_USEMAP) == 0)
+	    {
+		f |= be_item_info_LINK;
 
-	    if (title && !*title)
-		*title = ti->aref->title;
+		if (link && !*link)
+		    *link = ti->aref->href;
 
-	    if (ti->tag == rid_tag_IMAGE && ( ((rid_text_item_image *) ti)->flags & rid_image_flag_ISMAP) )
-		f |= be_item_info_ISMAP;
+		if (title && !*title)
+		    *title = ti->aref->title;
+
+		if (ti->tag == rid_tag_IMAGE && ( ((rid_text_item_image *) ti)->flags & rid_image_flag_ISMAP) )
+		    f |= be_item_info_ISMAP;
+	    }
 	}
 
 	if (ti->tag == rid_tag_INPUT)
@@ -1730,9 +1764,11 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 
 }
 
-void antweb_place_caret(antweb_doc *doc)
+void antweb_place_caret(antweb_doc *doc, rid_text_item *ti)
 {
-    rid_text_item *ti = doc->input;
+    rid_text_item *old_ti = doc->input;
+
+    doc->input = ti;
 
     if (ti && object_table[ti->tag].caret)
     {
@@ -2933,7 +2969,7 @@ os_error *backend_reset_width(be_doc doc, int width)
     }
 
     if (frontend_view_has_caret(doc->parent))
-        antweb_place_caret(doc);
+        antweb_place_caret(doc, doc->input);
 
     return NULL;
 }
@@ -3386,7 +3422,7 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
 
 	if (frontend_view_has_caret(doc->parent))
 	{
-	    antweb_place_caret(doc);
+	    antweb_place_caret(doc, doc->input);
 	}
     }
     else
@@ -3547,12 +3583,10 @@ static void antweb_init_page(antweb_doc *doc)
 
 	doc->flags |= doc_flag_DISPLAYING;
 
-	doc->input = NULL;
-
 	be_update_image_info(doc);
 
 	if (frontend_view_has_caret(doc->parent))
-	    antweb_place_caret(doc);
+	    antweb_place_caret(doc, NULL);
     }
 }
 
@@ -4089,6 +4123,9 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
         doc->rh = ((pparse_details*)doc->pd)->close(doc->ph, doc->cfile);
         doc->ph = NULL;
 
+	/* SJM: temporary hack to try and see pages... */
+	fvpr_progress_stream_flush(&doc->rh->stream);
+
 	if ((doc->flags & doc_flag_DISPLAYING) == 0)
 	{
 	    BEDBG((stderr, "visit called from complete\n"));
@@ -4123,10 +4160,10 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
 #ifndef STBWEB
 	if (frontend_view_has_caret(doc->parent))
 	{
-	    doc->input = backend_highlight_link(doc, doc->rh->stream.text_list, be_link_INCLUDE_CURRENT | be_link_TEXT | be_link_DONT_HIGHLIGHT | be_link_VISIBLE);
 	    doc->text_input_offset = -1;
 
-	    antweb_place_caret(doc);
+	    antweb_place_caret(doc, backend_highlight_link(doc, doc->rh->stream.text_list,
+							  be_link_INCLUDE_CURRENT | be_link_TEXT | be_link_DONT_HIGHLIGHT | be_link_VISIBLE));
 	}
 #endif
 
@@ -4532,7 +4569,8 @@ os_error *backend_doc_cursor(be_doc doc, int motion, int *used)
 
     if (ti != doc->input)
     {
-	doc->input = ti;
+/* 	doc->input = ti; */
+	antweb_place_caret(doc, ti);
     }
     else
     {
@@ -4607,13 +4645,15 @@ static void be_update_item_highlight(be_doc doc, be_item ti)
  * if selected is -1 then it toggles the state of the selected bit
  */
 
-void backend_update_link(be_doc doc, be_item item, int selected)
+be_item backend_update_link(be_doc doc, be_item item, int selected)
 {
     be_item ti;
     BOOL changed;
 
     if (item == NULL)
-        return;
+        return NULL;
+
+/*     BEDBG((stderr, "backend_update_link: item %p tag %d aref %p href %s updating %d\n", item, item->tag, item->aref, item->aref ? strsafe(item->aref->href) : "", selected)); */
 
     /* if it isn't actually a link then toggle the flag anyway */
     if (item->aref == NULL)
@@ -4621,19 +4661,20 @@ void backend_update_link(be_doc doc, be_item item, int selected)
         item->flag = adjust_flag(item->flag, selected, &changed);
 	if (changed)
 	    be_update_item_highlight(doc, item);
-        return;
+        return item;
     }
-
-#if 0
-    fprintf(stderr, "Aref to %s updating\n", item->aref->href);
-#endif
 
     for (ti = item->aref->first; ti && ti->aref == item->aref; ti = rid_scanfr(ti))
     {
         ti->flag = adjust_flag(ti->flag, selected, &changed);
+
+/* 	BEDBG((stderr, "                     item %p tag %d changed %d\n", ti, ti->tag, changed)); */
+
 	if (changed)
 	    be_update_item_highlight(doc, ti);
     }
+
+    return item->aref->first;
 }
 
 void backend_update_link_activate(be_doc doc, be_item item, int activate)
@@ -4689,8 +4730,18 @@ static BOOL be_item_onscreen(be_doc doc, be_item ti, const wimp_box *bounds, int
 
 static BOOL match_item(be_item ti, int flags, rid_aref_item *aref)
 {
+    BOOL aref_valid = ti->aref && (ti->aref->href || (ti->aref->flags & rid_aref_LABEL));
+    BOOL aref_changed_enough = ti->aref != aref || (flags & (be_link_INCLUDE_CURRENT | be_link_ONLY_CURRENT));
+
     if (ti->tag == rid_tag_TEXTAREA)
+    {
+	if ((flags & be_link_TEXT) == 0)
+	{
+	    if (aref_valid && !aref_changed_enough)
+		return FALSE;
+	}
 	return TRUE;
+    }
 
     if (ti->tag == rid_tag_INPUT)
     {
@@ -4699,6 +4750,10 @@ static BOOL match_item(be_item ti, int flags, rid_aref_item *aref)
 	    rid_input_tag tag = ((rid_text_item_input *)ti)->input->tag;
 	    return tag == rid_it_TEXT || tag == rid_it_PASSWD;
 	}
+
+	if (aref_valid && !aref_changed_enough)
+	    return FALSE;
+
 	return TRUE;
     }
 
@@ -4711,19 +4766,24 @@ static BOOL match_item(be_item ti, int flags, rid_aref_item *aref)
 		return TRUE;
 	}
 
-	if ((ti->tag == rid_tag_SELECT) ||
-	    (ti->tag == rid_tag_IMAGE && ((rid_text_item_image *)ti)->usemap))
+	if (ti->tag == rid_tag_SELECT)
+	{
+	    if (aref_valid && !aref_changed_enough)
+		return FALSE;
+	    return TRUE;
+	}
+
+	if (ti->tag == rid_tag_IMAGE && ((rid_text_item_image *)ti)->usemap)
 	    return TRUE;
 
 	/* check for tag specifically in case a table gets an AREF around it */
 	if ((ti->tag == rid_tag_TEXT || ti->tag == rid_tag_IMAGE || ti->tag == rid_tag_OBJECT) &&
-	    ti->aref && ti->aref->href && (ti->aref != aref || (flags & (be_link_INCLUDE_CURRENT | be_link_ONLY_CURRENT))) )
+	    aref_valid && aref_changed_enough)
 	    return TRUE;
     }
 
     return FALSE;
 }
-
 
 be_item backend_highlight_link(be_doc doc, be_item item, int flags)
 {
@@ -4742,7 +4802,7 @@ be_item backend_highlight_link(be_doc doc, be_item item, int flags)
     else
     {
         if (flags & (be_link_INCLUDE_CURRENT|be_link_ONLY_CURRENT))
-            ti = item;
+            ti = item->aref ? item->aref->first : item;			/* backtrack to start of anchor sequence */
         else
             ti = rid_scan(item, scan_flags);
 
@@ -4803,10 +4863,10 @@ be_item backend_highlight_link(be_doc doc, be_item item, int flags)
 
     if ((flags & be_link_DONT_HIGHLIGHT) == 0)
     {
-        /* de highlight original only if the highlight has ended up changing */
-	if (flags & be_link_CLEAR_REST)
-	    backend_clear_selected(doc);
-        else if (item != ti && item)
+	BOOL item_changed = item != ti && (item == NULL || item->aref != ti->aref);
+
+	/* de highlight original only if the highlight has ended up changing */
+        if (item_changed && item && (flags & be_link_ONLY_CURRENT) == 0)
 	    backend_update_link(doc, item, 0);
 	
         if (ti)
@@ -4824,7 +4884,7 @@ be_item backend_highlight_link(be_doc doc, be_item item, int flags)
 #endif
 	    }
 
-            if (item != ti || (flags & be_link_ONLY_CURRENT))
+            if (item_changed || (flags & be_link_ONLY_CURRENT))
                 backend_update_link(doc, ti, 1);
         }
     }
@@ -4851,10 +4911,7 @@ be_item backend_place_caret(be_doc doc, be_item item)
     be_item input = doc->input;
 
     if (item != backend_place_caret_READ)
-    {
-	doc->input = item;
-	antweb_place_caret(doc);
-    }
+	antweb_place_caret(doc, item);
 
     return input;
 }
@@ -5008,7 +5065,7 @@ void backend_doc_reformat(be_doc doc)
 	be_set_dimensions(doc);
 
 	if (frontend_view_has_caret(doc->parent))
-	    antweb_place_caret(doc);
+	    antweb_place_caret(doc, doc->input);
     }
 }
 
@@ -5024,11 +5081,11 @@ void backend_doc_set_scaling(be_doc doc, int scale_value)
 	be_set_dimensions(doc);
 
 	if (frontend_view_has_caret(doc->parent))
-	    antweb_place_caret(doc);
+	    antweb_place_caret(doc, doc->input);
     }
 }
 
-void backend_plugin_action(be_doc doc, be_item item, int action)
+extern void backend_plugin_action(be_doc doc, be_item item, int action)
 {
     if (item && item->tag == rid_tag_OBJECT)
     {
@@ -5041,10 +5098,64 @@ void backend_plugin_action(be_doc doc, be_item item, int action)
     NOT_USED(doc);
 }
 
-void backend_plugin_info(be_doc doc, void *pp, int *flags, int *state)
+extern void backend_plugin_info(be_doc doc, void *pp, int *flags, int *state)
 {
     plugin_info(pp, flags, state);
     NOT_USED(doc);
 }
+
+extern be_item backend_locate_id(be_doc doc, const char *id)
+{
+    rid_header *rh = doc->rh;
+    if (rh)
+    {
+	be_item ti = rh->stream.text_list;
+	rid_aref_item *last_aref = NULL;
+
+	while (ti)
+	{
+	    switch (ti->tag)
+	    {
+	    case rid_tag_TEXT:
+	    case rid_tag_IMAGE:
+		if (ti->aref && ti->aref != last_aref)
+		{
+		    if (ti->aref->name && strcmp(ti->aref->name, id) == 0)
+			return ti;
+		    last_aref = ti->aref;
+		}
+		break;
+		
+	    case rid_tag_INPUT:
+		if (strcmp(((rid_text_item_input *)ti)->input->base.id, id) == 0)
+		    return ti;
+		break;
+
+	    case rid_tag_TEXTAREA:
+		if (strcmp(((rid_text_item_textarea *)ti)->area->base.id, id) == 0)
+		    return ti;
+		break;
+
+	    case rid_tag_SELECT:
+		if (strcmp(((rid_text_item_select *)ti)->select->base.id, id) == 0)
+		    return ti;
+		break;
+
+	    case rid_tag_OBJECT:
+		if (strcmp(((rid_text_item_object *)ti)->object->id, id) == 0)
+		    return ti;
+		break;
+
+	    case rid_tag_TABLE:
+		if (strcmp(((rid_text_item_table *)ti)->table->id, id) == 0)
+		    return ti;
+		break;
+	    }
+	    ti = rid_scanfr(ti);
+	}
+    }
+    return NULL;
+}
+
 
 /* eof backend.c */

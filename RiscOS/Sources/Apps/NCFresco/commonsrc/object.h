@@ -180,6 +180,7 @@ void oobject_dispose(rid_text_item *ti, rid_header *rh, antweb_doc *doc);
 char * oobject_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, int y, wimp_bbits bb);
 void oobject_astext(rid_text_item *ti, rid_header *rh, FILE *f);
 void oobject_asdraw(rid_text_item *ti, antweb_doc *doc, int fh, int x, int y, int *fileoff, wimp_box *bb);
+void *oobject_image_handle(rid_text_item *ti, antweb_doc *doc, int reason);
 
 
 /* Finally, a jump table to dispatch from */

@@ -34,8 +34,20 @@
 #include "version.h"
 #include "dfsupport.h"
 
+#include "images.h"
 #include "objects.h"
 #include "pluginfn.h"
+#include "imagemap.h"
+
+/* ----------------------------------------------------------------------------- */
+
+extern void oimage_render_text(rid_text_item *ti, antweb_doc *doc, object_font_state *fs, wimp_box *bbox, const char *text);
+extern void oimage_render_border(rid_text_item *ti, antweb_doc *doc, wimp_box *bbox, int bw);
+extern void oimage_size_image(const char *alt, int req_ww, int req_hh, rid_image_flags flags, BOOL defer_images, int scale_value, int *iw, int *ih);
+extern image oimage_fetch_image(antweb_doc *doc, const char *src);
+extern void oimage_flush_image(image im);
+extern int oimage_decode_align(rid_image_flags flags, int height);
+extern BOOL oimage_handle_usemap(rid_text_item *ti, antweb_doc *doc, int x, int y, wimp_bbits bb, rid_map_item *map);
 
 /* ----------------------------------------------------------------------------- */
 
@@ -65,66 +77,25 @@ static int get_value(rid_text_item *ti, rid_stdunits *val, int def)
     return 0;
 }
 
-#ifndef BUILDERS
-static void draw_text(rid_text_item *ti, antweb_doc *doc, object_font_state *fs, wimp_box *bbox, const char *text)
+
+static BOOL oobject_renderable(rid_object_item *obj, antweb_doc *doc)
 {
-    if (text)
-    {
-	wimp_box box;
-	struct webfont *wf;
-	int tfc;
+    int fl;
+    if (obj->state.image.im == NULL)
+	return FALSE;
 
-	wf = &webfonts[ALT_FONT];
+    if (doc->flags & doc_flag_NO_PICS)
+	return FALSE;
+    
+    image_info((image) obj->state.image.im, 0, 0, 0, &fl, 0, 0);
+    if (fl & image_flag_REALTHING)
+	return TRUE;
 
-	if (fs->lf != wf->handle)
-	{
-	    fs->lf = wf->handle;
-	    font_setfont(fs->lf);
-	}
-
-	if (fs->lfc != (tfc = render_link_colour(ti, doc) ) )
-	{
-	    fs->lfc = tfc;
-	    render_set_font_colours(fs->lfc, render_colour_BACK, doc);
-	}
-
-	box.x0 = bbox->x0 + PLINTH_PAD/2;
-	box.x1 = bbox->x1 - PLINTH_PAD/2;
-	box.y0 = bbox->y0 + PLINTH_PAD/2;
-	box.y1 = bbox->y1 - PLINTH_PAD/2;
-	write_text_in_box(fs->lf, text, &box);
-    }
+    if (obj->standby == NULL && ((doc->flags & doc_flag_DEFER_IMAGES) != 0 || (obj->hh == -1 && obj->ww == -1)))
+	return TRUE;
+    
+    return FALSE;
 }
-#endif
-
-#ifndef BUILDERS
-static void draw_border(rid_text_item *ti, antweb_doc *doc, wimp_box *bbox, int bw)
-{
-    int dx = frontend_dx;
-    int dy = frontend_dy;
-    int x, y, w, h;
-
-    render_set_colour(render_link_colour(ti, doc), doc);
-
-    x = bbox->x0 - bw;
-    y = bbox->y0 - bw;
-    w = bbox->x1 - bbox->x0 + bw*2;
-    h = bbox->y1 - bbox->y0 + bw*2;
-
-    if (bw <= 1)
-    {
-	bbc_rectangle(x, y, w-dx, h-dy);
-	bbc_rectangle(x+2, y+2, w-2*2-dx, h-2*2-dy);
-    }
-    else
-    {
-	bbc_rectanglefill(x, y, w-dx, bw-dy);
-	bbc_rectanglefill(x, y + h - bw, w-dx, bw-dy);
-	bbc_rectanglefill(x, y + bw, bw-dx, h - (bw*2)-dy);
-	bbc_rectanglefill(x + w - bw, y + bw, bw-dx, h - (bw*2)-dy);
-    }
-}
-#endif
 
 /* ----------------------------------------------------------------------------- */
 
@@ -143,8 +114,8 @@ void oobject_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	    ti->line ? ti->line->floats : 0));
 
     /* Convert from user values to OS unit values */
-    obj->ww = get_value(ti, &obj->userwidth, 128);
-    obj->hh = get_value(ti, &obj->userheight, 128);
+    obj->ww = get_value(ti, &obj->userwidth, -1);
+    obj->hh = get_value(ti, &obj->userheight, -1);
 
     /* no border specified implies thin border - but only if this is a link */
     obj->bwidth = get_value(ti, &obj->userborder, tio->base.aref || obj->usemap ? 2 : 0);
@@ -152,56 +123,29 @@ void oobject_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     obj->hspace = get_value(ti, &obj->userhspace, 0);
     obj->vspace = get_value(ti, &obj->uservspace, 0);
 
-    /* Get values for text_item */
-    width = obj->ww;
-    height = obj->hh;
-
-    width += (obj->bwidth + obj->hspace) * 2;
-    height += (obj->bwidth + obj->vspace) * 2;
-
-    ti->width = width;
-    ti->pad = 0;
-
-    if (obj->iflags & rid_image_flag_ATOP)
-    /* TOP and TEXTTOP */
+    switch (obj->type)
     {
-	ti->max_up = webfonts[WEBFONT_BASE].max_up;
-    }
-    else if (obj->iflags & rid_image_flag_ABOT)
+    case rid_object_type_IMAGE:
     {
-	if (obj->iflags & rid_image_flag_ABSALIGN)
-	/* ABSBOTTOM */
-	{
-	    ti->max_up = height - webfonts[WEBFONT_BASE].max_down;
-	}
-	else
-	/* BOTTOM and BASELINE */
-	{
-	    ti->max_up = height;
-	}
-    }
-    else if (obj->iflags & rid_image_flag_ABSALIGN)
-    /* ABSMIDDLE */
-    {
-	ti->max_up = (webfonts[WEBFONT_BASE].max_up -
-		      webfonts[WEBFONT_BASE].max_down + height) >> 1;
-    }
-    else
-    /* MIDDLE */
-    {
-	ti->max_up = height >> 1;
-    }
-    ti->max_down = height - ti->max_up;
+	image_flags fl;
+	if (obj->state.image.im == NULL)
+	    obj->state.image.im = oimage_fetch_image(doc, obj->data);
+   
+	image_info((image) obj->state.image.im, &width, &height, 0, &fl, 0, 0);
 
-    OBJDBG(("oobject: size to w=%d,u=%d,d=%d\n", ti->width, ti->max_up, ti->max_down));
+	if (fl & image_flag_REALTHING)
+	    obj->iflags |= rid_image_flag_REAL;
+
+	oimage_size_image(obj->standby, obj->ww, obj->hh, obj->iflags, config_defer_images, doc->scale_value, &width, &height);
+	break;
+    }
 
 #ifndef BUILDERS
-#if 1
-    if (obj->type == rid_object_type_PLUGIN)
-    {
-	if (obj->state.plugin.pp == NULL)
+    case rid_object_type_PLUGIN:
+	if (obj->state.plugin.pp == NULL &&
+	    (obj->classid_ftype != -1 || obj->data_ftype != -1))
 	{
-	    obj->state.plugin.pp = plugin_new(obj, doc);
+	    obj->state.plugin.pp = plugin_new(obj, doc, ti);
 
 	    /* position plugin initially off screen */
 
@@ -213,14 +157,31 @@ void oobject_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 		obj->state.plugin.box[3] = obj->state.plugin.box[1] + obj->hh;
 	    }
 
-	    plugin_send_open(obj->state.plugin.pp, (wimp_box *)obj->state.plugin.box);
+	    plugin_send_open(obj->state.plugin.pp, (wimp_box *)obj->state.plugin.box, 0 /* open_flags */);
 
 	    if (doc->object_handler_count++ == 0)
 		frontend_message_add_handler(plugin_message_handler, doc);
 	}
-    }
+	break;
 #endif
-#endif /* BUILDERS */
+	
+    default:
+	/* Get values for text_item */
+	width = obj->ww != -1 ? 128 : obj->ww;
+	height = obj->hh != -1 ? 128 : obj->hh;
+	break;
+    }
+    
+    width += (obj->bwidth + obj->hspace) * 2;
+    height += (obj->bwidth + obj->vspace) * 2;
+
+    ti->width = width;
+    ti->pad = 0;
+
+    ti->max_up = oimage_decode_align(obj->iflags, height);
+    ti->max_down = height - ti->max_up;
+
+    OBJDBG(("oobject: size to w=%d,u=%d,d=%d\n", ti->width, ti->max_up, ti->max_down));
 }
 
 
@@ -248,6 +209,25 @@ void oobject_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     switch (obj->type)
     {
     case rid_object_type_IMAGE:
+	if (oobject_renderable(obj, doc))
+	{
+	    int oox = ox, ooy = oy;
+#if USE_MARGINS
+	    oox -= doc->margin.x0;
+	    ooy -= doc->margin.y1;
+#endif
+	    image_render((image) obj->state.image.im, bbox.x0, bbox.y0,
+			 (bbox.x1 - bbox.x0)/2,
+			 (bbox.y1 - bbox.y0)/2,
+			 doc->scale_value, antweb_render_background, doc,
+			 oox, ooy);
+
+	    do_plinth = FALSE;
+	}
+	else
+	{
+	    do_alt = TRUE;
+	}
 	break;
 
     case rid_object_type_INTERNAL:
@@ -257,33 +237,9 @@ void oobject_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 	break;
 
     case rid_object_type_PLUGIN:
-    {
-#if 0
-	wimp_box box;
-
-	objects_bbox(doc, ti, &box);
-
-	if (obj->state.plugin.pp == NULL)
-	{
-	    obj->state.plugin.pp = plugin_new(obj, doc);
-
-	    *(wimp_box *)obj->state.plugin.box = box;
-	    plugin_send_open(obj->state.plugin.pp, (wimp_box *)&box);
-
-	    if (doc->object_handler_count++ == 0)
-		frontend_message_add_handler(plugin_message_handler, doc);
-	}
-	else if (box.x0 != obj->state.plugin.box[0] || box.x1 != obj->state.plugin.box[2] || 
-	    box.y0 != obj->state.plugin.box[1] || box.y1 != obj->state.plugin.box[3])
-	{
-	    *(wimp_box *)obj->state.plugin.box = box;
-	    plugin_send_reshape(obj->state.plugin.pp, (wimp_box *)&box);
-	}
-#endif
 	do_alt = TRUE;
-
+	do_plinth = TRUE;
 	break;
-    }
 
     case rid_object_type_UNKNOWN:
 	break;
@@ -294,10 +250,10 @@ void oobject_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 		  bbox.x0, bbox.y0, bbox.x1 - bbox.x0, bbox.y1 - bbox.y0, doc);
 
     if (do_alt)
-	draw_text(ti, doc, fs, &bbox, obj->standby);
+	oimage_render_text(ti, doc, fs, &bbox, obj->standby);
 
     if ((ti->flag & rid_flag_SELECTED) || bw)
-	draw_border(ti, doc, &bbox, bw);
+	oimage_render_border(ti, doc, &bbox, bw);
 
 #endif /* BUILDERS */
 }
@@ -311,6 +267,7 @@ void oobject_dispose(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     switch (obj->type)
     {
     case rid_object_type_IMAGE:
+	image_loose((image) obj->state.image.im, &antweb_doc_image_change, doc);
 	break;
 
     case rid_object_type_INTERNAL:
@@ -343,8 +300,51 @@ char *oobject_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, i
     switch (obj->type)
     {
     case rid_object_type_IMAGE:
-	/* Pass to oimage code */
-	break;
+    {
+	int flags;
+
+	image_info((image) obj->state.image.im, NULL, NULL, NULL, &flags, NULL, NULL);
+
+	/* Only show image if the ALT key is held down */
+	if ((flags & image_flag_DEFERRED) && kbd_pollalt())
+	{
+	    frontend_complain(image_flush((image) obj->state.image.im, 0));
+	    return NULL;
+	}
+    
+	if (obj->usemap || obj->map)
+	{
+	    /* Remember that the y is in work area co-ordinates */
+	    x = x - obj->bwidth - obj->hspace;
+	    y = ((ti->max_up) - obj->bwidth - obj->vspace) - y;
+
+	    image_os_to_pixels((image)obj->state.image.im, &x, &y, doc->scale_value);
+
+	    if (oimage_handle_usemap(ti, doc, x, y, bb,
+				     obj->map ? obj->map : imagemap_find_map(rh, obj->usemap)))
+		return NULL;
+	}
+
+	/* follow link or just place caret */
+	if (ti->aref && ti->aref->href)
+	{
+	    BOOL follow_link = TRUE;
+	    if (config_display_time_activate)
+	    {
+		backend_update_link_activate(doc, ti, 1);
+		follow_link = wait_for_release(config_display_time_activate);
+		backend_update_link_activate(doc, ti, 0);
+	    }
+	    
+	    if (follow_link)
+		frontend_complain(antweb_handle_url(doc, ti->aref, NULL,
+						    bb & wimp_BRIGHT ? "_blank" : ti->aref->target));
+	}
+	else
+	    antweb_place_caret(doc, doc->input);
+
+	return NULL;
+    }
 
     case rid_object_type_INTERNAL:
 	/* Pass to oimage code ? */
@@ -367,6 +367,35 @@ char *oobject_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, i
 
     return "";			/* Follow links, no fuss at all */
 }
+
+void *oobject_image_handle(rid_text_item *ti, antweb_doc *doc, int reason)
+{
+    rid_text_item_object *tio = (rid_text_item_object *) ti;
+    rid_object_item *obj = tio->object;
+
+    if (obj->type == rid_object_type_IMAGE)  switch (reason)
+    {
+    case object_image_HANDLE:
+	return obj->state.image.im;
+
+    case object_image_ABORT:
+	oimage_flush_image(obj->state.image.im);
+	break;
+
+    case object_image_BOX:
+    {
+	static wimp_box box;
+	box.x0 = obj->hspace + obj->bwidth;
+	box.x1 = -box.x0;
+	box.y0 = obj->vspace + obj->bwidth;
+	box.y1 = -box.y0;
+	return &box;
+    }
+    }
+
+    return NULL;
+}
+
 
 void oobject_astext(rid_text_item *ti, rid_header *rh, FILE *f)
 {

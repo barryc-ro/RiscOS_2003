@@ -2063,13 +2063,87 @@ void tb_events(int *event, fe_view v)
     }
 }
 
+void tb_event_handler(int event, fe_view v)
+{
+    tb_bar_info *tbi = bar_list;
+    int claimed = FALSE;
+
+    STBDBG(("tb_event_handler(): v %p event %d\n", v, event));
+    
+    if (tbi)
+    {
+	fe_view v = fe_selected_view();
+	if (!v)
+	    v = main_view;
+
+	claimed = TRUE;
+
+	fe_pointer_mode_update(pointermode_OFF);
+
+	switch (event)
+	{
+	case fevent_TOOLBAR_MOVE_LEFT:
+	    /* move to previous icon */
+	    movehighlight(tbi, -1);
+	    break;
+
+	case fevent_TOOLBAR_MOVE_RIGHT:
+	    /* move to next icon */
+	    movehighlight(tbi, +1);
+	    break;
+
+	case fevent_TOOLBAR_MOVE_UP:
+	    /* transfer focus back to main window */
+	    if (config_display_control_top)
+	    {
+		pointer_mode = pointermode_ON;
+		fevent_handler(fevent_SCROLL_UP, v);
+		pointer_mode = pointermode_OFF;
+	    }
+	    else
+	    {
+		setstate(tbi->object_handle, tbi->buttons[tbi->highlight].cmp, 0);
+		fe_move_highlight(v, be_link_VERT | be_link_BACK);
+	    }
+	    break;
+
+	case fevent_TOOLBAR_MOVE_DOWN:
+	    if (config_display_control_top)
+	    {
+		setstate(tbi->object_handle, tbi->buttons[tbi->highlight].cmp, 0);
+		fe_move_highlight(v, be_link_VERT);
+	    }
+	    else
+	    {
+		pointer_mode = pointermode_ON;
+		fevent_handler(fevent_SCROLL_DOWN, v);
+		pointer_mode = pointermode_OFF;
+	    }
+	    break;
+
+	case fevent_TOOLBAR_ACTIVATE:
+	{
+	    int cmp = tbi->buttons[tbi->highlight].cmp;
+	    int action;
+	    os_error *e = (os_error *)_swix(Toolbox_ObjectMiscOp, _INR(0,3) | _OUT(0), 0, tbi->object_handle, 0x140143, cmp, &action);
+
+	    STBDBG(("tb_event_handler(): err '%s' action %x\n", e ? e->errmess : "", action));
+
+	    if (!e)
+		fevent_handler(action, v);
+	    break;
+	}
+	}
+    }
+}
+
 /* --------------------------------------------------------------------------*/
 
 BOOL tb_status_check_pointer(wimp_mousestr *mp)
 {
     tb_bar_info *tbi = bar_list;
 
-    STBDBG(("tb_key_handler(): w %x i %d\n", mp->w, mp->i));
+    STBDBG(("tb_status_check_pointer(): w %x i %d\n", mp->w, mp->i));
 
     if (tbi && tbi->window_handle == mp->w)
     {
@@ -2100,6 +2174,7 @@ void tb_status_set_direction(int up)
 
 /* --------------------------------------------------------------------------*/
 
+#if 0
 BOOL tb_key_handler(wimp_caretstr *cs, int key)
 {
     tb_bar_info *tbi = bar_list;
@@ -2171,6 +2246,7 @@ BOOL tb_key_handler(wimp_caretstr *cs, int key)
     }
     return claimed;
 }
+#endif
 
 /* --------------------------------------------------------------------------*/
 

@@ -52,6 +52,8 @@
 #include "object.h"
 #include "version.h"
 
+/* ----------------------------------------------------------------------------- */
+
 #ifndef DRAW_AREA_HIGHLIGHT
 #define DRAW_AREA_HIGHLIGHT 0
 #endif
@@ -61,6 +63,8 @@
 #define NONE_STRING	"[IMAGE]"
 
 #define ALT_FONT    (WEBFONT_SIZE(2) + WEBFONT_FLAG_FIXED)
+
+/* ----------------------------------------------------------------------------- */
 
 static void oimage_size_alt_text(const char *alt, int req_ww, int req_hh, rid_image_flags flags, BOOL defer_images, int *iw, int *ih)
 {
@@ -230,6 +234,175 @@ void oimage_flush_image(image im)
     }
 }
 
+#ifndef BUILDERS
+void oimage_render_text(rid_text_item *ti, antweb_doc *doc, object_font_state *fs, wimp_box *bbox, const char *text)
+{
+    if (text)
+    {
+	wimp_box box;
+	struct webfont *wf;
+	int tfc;
+
+	wf = &webfonts[ALT_FONT];
+
+	if (fs->lf != wf->handle)
+	{
+	    fs->lf = wf->handle;
+	    font_setfont(fs->lf);
+	}
+
+	if (fs->lfc != (tfc = render_link_colour(ti, doc) ) )
+	{
+	    fs->lfc = tfc;
+	    render_set_font_colours(fs->lfc, render_colour_BACK, doc);
+	}
+
+	box.x0 = bbox->x0 + PLINTH_PAD/2;
+	box.x1 = bbox->x1 - PLINTH_PAD/2;
+	box.y0 = bbox->y0 + PLINTH_PAD/2;
+	box.y1 = bbox->y1 - PLINTH_PAD/2;
+	write_text_in_box(fs->lf, text, &box);
+    }
+}
+#endif
+
+#ifndef BUILDERS
+void oimage_render_border(rid_text_item *ti, antweb_doc *doc, wimp_box *bbox, int bw)
+{
+    int dx = frontend_dx;
+    int dy = frontend_dy;
+    int x, y, w, h;
+
+    render_set_colour(render_link_colour(ti, doc), doc);
+
+    x = bbox->x0 - bw;
+    y = bbox->y0 - bw;
+    w = bbox->x1 - bbox->x0 + bw*2;
+    h = bbox->y1 - bbox->y0 + bw*2;
+
+    if (bw <= 1)
+    {
+	bbc_rectangle(x, y, w-dx, h-dy);
+	bbc_rectangle(x+2, y+2, w-2*2-dx, h-2*2-dy);
+    }
+    else
+    {
+	bbc_rectanglefill(x, y, w-dx, bw-dy);
+	bbc_rectanglefill(x, y + h - bw, w-dx, bw-dy);
+	bbc_rectanglefill(x, y + bw, bw-dx, h - (bw*2)-dy);
+	bbc_rectanglefill(x + w - bw, y + bw, bw-dx, h - (bw*2)-dy);
+    }
+}
+#endif
+
+int oimage_decode_align(rid_image_flags flags, int height)
+{
+    int max_up;
+
+    if (flags & rid_image_flag_ATOP)
+    /* TOP and TEXTTOP */
+    {
+	max_up = webfonts[WEBFONT_BASE].max_up;
+    }
+    else if (flags & rid_image_flag_ABOT)
+    {
+	if (flags & rid_image_flag_ABSALIGN)
+	/* ABSBOTTOM */
+	{
+	    max_up = height - webfonts[WEBFONT_BASE].max_down;
+	}
+	else
+	/* BOTTOM and BASELINE */
+	{
+	    max_up = height;
+	}
+    }
+    else if (flags & rid_image_flag_ABSALIGN)
+    /* ABSMIDDLE */
+    {
+	max_up = (webfonts[WEBFONT_BASE].max_up -
+		      webfonts[WEBFONT_BASE].max_down + height) >> 1;
+    }
+    else
+    /* MIDDLE */
+    {
+	max_up = height / 2;
+    }
+
+    return max_up;
+}
+
+BOOL oimage_handle_usemap(rid_text_item *ti, antweb_doc *doc, int x, int y, wimp_bbits bb, rid_map_item *map)
+{
+    BOOL handled = FALSE;
+
+    if (map && (map->flags & rid_map_ERROR) == 0)
+    {
+	rid_area_item *area;
+	area = imagemap_find_area(map, x, y);
+
+	if (area && area->href)	/* an area with NOHREF will have area->href == NULL */
+	{
+	    BOOL follow_link = TRUE;
+	    if (config_display_time_activate)
+	    {
+		int was_selected = ti->flag & rid_flag_SELECTED;
+
+		/* highlight the area (and dehighlight image) */
+/* 		tii->data.usemap.selection = area; */
+		backend_update_link_activate(doc, ti, 1);
+
+		follow_link = wait_for_release(config_display_time_activate);
+
+		/* de highlight the area */
+		backend_update_link_activate(doc, ti, 0);
+
+		/* restore the original selection if there was one */
+/* 		tii->data.usemap.selection = NULL; */
+		if (was_selected)
+		    backend_update_link(doc, ti, 1);
+	    }
+
+	    if (follow_link)
+	    {
+		rid_aref_item aref;
+		memset(&aref, 0, sizeof(aref));
+		aref.href = area->href;
+		frontend_complain(antweb_handle_url(doc, &aref, NULL,
+						    bb & wimp_BRIGHT ? "_blank" : area->target));
+	    }
+	}
+
+	/* if there is no area then there is no link to follow */
+	handled = TRUE;;
+    }
+    /* if we can't find the right map then fall through to check server map */
+    return handled;
+}
+
+/* ----------------------------------------------------------------------------- */
+
+static BOOL oimage_renderable(rid_text_item_image *tii, antweb_doc *doc)
+{
+    int fl;
+    if (tii->im == NULL)
+	return FALSE;
+
+    if (doc->flags & doc_flag_NO_PICS)
+	return FALSE;
+    
+    image_info((image) tii->im, 0, 0, 0, &fl, 0, 0);
+    if (fl & image_flag_REALTHING)
+	return TRUE;
+
+    if (tii->alt == NULL && ((doc->flags & doc_flag_DEFER_IMAGES) != 0 || (tii->hh == -1 && tii->ww == -1)))
+	return TRUE;
+    
+    return FALSE;
+}
+
+/* ----------------------------------------------------------------------------- */
+
 void oimage_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 {
     rid_text_item_image *tii = (rid_text_item_image *) ti;
@@ -254,57 +427,10 @@ void oimage_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     ti->width = width;
     ti->pad = 0;
 
-    if (tii->flags & rid_image_flag_ATOP)
-    /* TOP and TEXTTOP */
-    {
-	ti->max_up = webfonts[WEBFONT_BASE].max_up;
-    }
-    else if (tii->flags & rid_image_flag_ABOT)
-    {
-	if (tii->flags & rid_image_flag_ABSALIGN)
-	/* ABSBOTTOM */
-	{
-	    ti->max_up = height - webfonts[WEBFONT_BASE].max_down;
-	}
-	else
-	/* BOTTOM and BASELINE */
-	{
-	    ti->max_up = height;
-	}
-    }
-    else if (tii->flags & rid_image_flag_ABSALIGN)
-    /* ABSMIDDLE */
-    {
-	ti->max_up = (webfonts[WEBFONT_BASE].max_up -
-		      webfonts[WEBFONT_BASE].max_down + height) >> 1;
-    }
-    else
-    /* MIDDLE */
-    {
-	ti->max_up = height >> 1;
-    }
-
+    ti->max_up = oimage_decode_align(tii->flags, height);
     ti->max_down = height - ti->max_up;
 }
 
-static BOOL draw_image(rid_text_item_image *tii, antweb_doc *doc)
-{
-    int fl;
-    if (tii->im == NULL)
-	return FALSE;
-
-    if (doc->flags & doc_flag_NO_PICS)
-	return FALSE;
-    
-    image_info((image) tii->im, 0, 0, 0, &fl, 0, 0);
-    if (fl & image_flag_REALTHING)
-	return TRUE;
-
-    if (tii->alt == NULL && ((doc->flags & doc_flag_DEFER_IMAGES) != 0 || (tii->hh == -1 && tii->ww == -1)))
-	return TRUE;
-    
-    return FALSE;
-}
 
 void oimage_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc,
 		   int hpos, int bline, object_font_state *fs,
@@ -312,37 +438,51 @@ void oimage_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc,
 {
 #ifndef BUILDERS
     rid_text_item_image *tii = (rid_text_item_image *) ti;
-    /* SJM added usemap */
-/*     int is_link = (ti->aref != NULL && ti->aref->href != NULL) || (tii->usemap != NULL); */
     int bw = tii->bwidth;
-    int x, y, w, h;
+    wimp_box bbox;
 
     if ((ti->flag & rid_flag_FVPR) == 0)
 	return;
 
-    x = hpos + tii->hspace*2;
-    y = bline - ti->max_down + tii->vspace*2;
-    w = ti->width - tii->hspace*2*2;
-    h = ti->max_up + ti->max_down - tii->vspace*2*2;
+    bbox.x0 = hpos + tii->hspace*2 + bw*2;
+    bbox.y0 = bline - ti->max_down + tii->vspace*2 + bw*2;
+    bbox.x1 = bbox.x0 + ti->width - tii->hspace*2*2 - bw*2*2;
+    bbox.y1 = bbox.y0 + ti->max_up + ti->max_down - tii->vspace*2*2 - bw*2*2;
 
-    if (draw_image(tii, doc))
+    if (oimage_renderable(tii, doc))
     {
 	int oox = ox, ooy = oy;
 #if USE_MARGINS
 	oox -= doc->margin.x0;
 	ooy -= doc->margin.y1;
-#endif
+#endif /* USE_MARGINS */
+
+#if 1
+	image_render((image) tii->im, bbox.x0, bbox.y0,
+		     (bbox.x1 - bbox.x0)/2,
+		     (bbox.y1 - bbox.y0)/2,
+		     doc->scale_value, antweb_render_background, doc,
+		     oox, ooy);
+#else
 	image_render((image) tii->im, x + (bw*2), y + (bw*2),
 		     w/2 - bw*2, h/2 - bw*2, doc->scale_value, antweb_render_background, doc,
 		     oox, ooy);
+#endif
     }
     else
     {
+#if 1
+	render_plinth(render_colour_BACK, render_plinth_NOFILL | render_plinth_DOUBLE,
+		  bbox.x0, bbox.y0, bbox.x1 - bbox.x0, bbox.y1 - bbox.y0, doc);
+#else
 	render_plinth(render_colour_BACK, render_plinth_NOFILL | render_plinth_DOUBLE,
 		      x + (bw*2), y + (bw*2),
 		      w - (bw*4), h - (bw*4),
 		      doc);
-
+#endif
+#if 1
+	oimage_render_text(ti, doc, fs, &bbox, tii->alt);
+#else
 	if (tii->alt)
         {
 	    struct webfont *wf;
@@ -370,11 +510,14 @@ void oimage_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc,
 	    box.y1 = y + h - PLINTH_PAD/2;
 	    write_text_in_box(fs->lf, tii->alt ? tii->alt : NONE_STRING, &box);
         }
-
+#endif
     }
 
     if ((ti->flag & rid_flag_SELECTED) || bw)
     {
+#if 1
+	oimage_render_border(ti, doc, &bbox, bw*2);
+#else
 	render_set_colour(render_link_colour(ti, doc), doc);
 
 	IMGDBGN(("Drawing image border.  flagbit=0x%x, bw=%d\n",
@@ -402,6 +545,7 @@ void oimage_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc,
 	    }
 
         }
+#endif
     }
 #endif /* BUILDERS */
 }
@@ -450,48 +594,11 @@ char *oimage_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
 
         image_os_to_pixels((image)tii->im, &x, &y, doc->scale_value);
 
-        if (tii->usemap)
-        {
-            rid_map_item *map;
-            map = imagemap_find_map(rh, tii->usemap);
-            if (map && (map->flags & rid_map_ERROR) == 0)
-            {
-                rid_area_item *area;
-                area = imagemap_find_area(map, x, y);
+	if (tii->usemap &&
+	    oimage_handle_usemap(ti, doc, x, y, bb, imagemap_find_map(rh, tii->usemap)))
+	    return NULL;
 
-                if (area && area->href)	/* an area with NOHREF will have area->href == NULL */
-                {
-		    BOOL follow_link = TRUE;
-                    if (config_display_time_activate)
-                    {
-                        int was_selected = ti->flag & rid_flag_SELECTED;
-
-                        /* highlight the area (and dehighlight image) */
-                        tii->data.usemap.selection = area;
-                        backend_update_link_activate(doc, ti, 1);
-
-                        follow_link = wait_for_release(config_display_time_activate);
-
-                        /* de highlight the area */
-                        backend_update_link_activate(doc, ti, 0);
-
-                        /* restore the original selection if there was one */
-                        tii->data.usemap.selection = NULL;
-                        if (was_selected)
-                            backend_update_link(doc, ti, 1);
-                    }
-
-		    if (follow_link)
-			frontend_complain(antweb_handle_url(doc, area->href, NULL,
-							    bb & wimp_BRIGHT ? "_blank" : area->target));
-                }
-
-                /* if there is no area then there is no link to follow */
-                return NULL;
-            }
-            /* if we can't find the right map then fall through to check server map */
-        }
-
+	/* if we can't find the right map then fall through to check server map */
         if ((tii->flags & rid_image_flag_ISMAP) != 0)
 	    sprintf(qbuffer, "?%d,%d", x, y);
     }
@@ -508,11 +615,11 @@ char *oimage_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
 	}
 
 	if (follow_link)
-	    frontend_complain(antweb_handle_url(doc, ti->aref->href, qbuffer,
+	    frontend_complain(antweb_handle_url(doc, ti->aref, qbuffer,
 						bb & wimp_BRIGHT ? "_blank" : ti->aref->target));
     }
     else
-        antweb_place_caret(doc);
+        antweb_place_caret(doc, doc->input);
 
 #endif /* BUILDERS */
 
@@ -619,7 +726,7 @@ void oimage_update_highlight(rid_text_item *ti, antweb_doc *doc)
     }
     else
 #endif
-    if (!draw_image(tii, doc))
+    if (!oimage_renderable(tii, doc))
     {
         antweb_update_item_trim(doc, ti, &trim, TRUE);
     }
@@ -641,5 +748,7 @@ void oimage_update_highlight(rid_text_item *ti, antweb_doc *doc)
         antweb_update_item_trim(doc, ti, &trim, TRUE);
     }
 }
+
+/* ----------------------------------------------------------------------------- */
 
 /* eof oimage.c */
