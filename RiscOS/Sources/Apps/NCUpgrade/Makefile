@@ -40,7 +40,7 @@ RESAPP          = <Resource$Dir>.Apps.${APP}
 
 MKDIR		= cdir
 AS		= objasm
-CC		= cc #${MemCheckCC} cc
+CC		= ${MemCheckCC} cc
 CMHG		= cmhg
 CP		= copy
 LD		= link #${MemCheckLD} link
@@ -185,8 +185,6 @@ OBJSZ = \
  oz.nvram \
  oz.ppp \
  oz.progrmng \
-
-#OBJSZ =
 
 OBJSD = \
  od.main \
@@ -353,26 +351,26 @@ s.ModuleWrap: ${WRAPPER}
 # Static dependencies
 #
 
-abs.!RI: ${OBJS} ${LIBS} o.dirs
+abs.!RI: ${OBJS} ${EXTRALIBS} ${LIBS} o.dirs
 	@echo
-	${LD} -s syms.!RI -o $@ ${OBJS} ${LIBS}
+	${LD} -s syms.!RI -o $@ ${OBJS} ${LIBS} ${EXTRALIBS}
 	${SQUEEZE} ${SQFLAGS} $@
 
-abs.!RI_D: ${OBJSD} ${LIBSD} o.dirs
+abs.!RI_D: ${OBJSD} ${LIBSD} ${EXTRALIBS} o.dirs
 	@echo
-	${LD} -s syms.!RI_D -o $@ ${OBJSD} ${LIBSD}
+	${LD} -s syms.!RI_D -o $@ ${OBJSD} ${LIBSD} ${EXTRALIBS}
 
-${MODULE}: oz.ModuleWrap ${OBJSZ} ${LIBSM} ${CLIB} o.dirs
+${MODULE}: oz.ModuleWrap ${OBJSZ} ${LIBSM} ${EXTRALIBS} ${CLIB} o.dirs
 	@echo
-	${LD} -s syms.RAMMod -o $@ -module oz.ModuleWrap ${OBJSZ} ${LIBSM} ${CLIB}
+	${LD} -s syms.RAMMod -o $@ -module oz.ModuleWrap ${OBJSZ} ${LIBSM} ${EXTRALIBS} ${CLIB}
 
-${ROM_MODULE}: oz.ModuleWrap ${OBJSZ} ${ROMCSTUBS} ${LIBSM} o.dirs
+${ROM_MODULE}: oz.ModuleWrap ${OBJSZ} ${ROMCSTUBS} ${LIBSM} ${EXTRALIBS} o.dirs
 	@echo
-	${LD} -s syms.ROMMod -o $@ -aof oz.ModuleWrap ${OBJSZ} ${LIBSM} ${ROMCSTUBS}
+	${LD} -s syms.ROMMod -o $@ -aof oz.ModuleWrap ${OBJSZ} ${LIBSM} ${EXTRALIBS} ${ROMCSTUBS}
 
-rm.!GUID: odz.ModuleWrap ${OBJSDZ} ${LIBSM} o.dirs
+rm.!GUID: odz.ModuleWrap ${OBJSDZ} ${LIBSM} ${EXTRALIBS} o.dirs
 	@echo
-	${LD} -s syms.ROMDMod -o $@ -module oz.ModuleWrap ${OBJSDZ} ${LIBSM}
+	${LD} -s syms.ROMDMod -o $@ -module oz.ModuleWrap ${OBJSDZ} ${LIBSM} ${EXTRALIBS}
 
 
 # -----------------------------------------------------------------------------
