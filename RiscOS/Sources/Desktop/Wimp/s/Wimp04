@@ -3056,7 +3056,39 @@ inversefunc ENTRY "R1-R4"
         TST     R12,#is_inverted        ; Inverting?
         BEQ     %FT10                   ; No then jump
 
-        [ UrsulaHighlighting            ; New highlighting for Risc PC 2 release
+      [ UrsulaHighlighting              ; New highlighting for Risc PC 2 release
+      [ true
+        MOV     R0, R1, LSL#8           ; Convert to 16 bit fixed point
+        ADD     R0, R0, #128
+        MOV     R1, R2, LSL#8           ; Convert to 16 bit fixed point
+        ADD     R1, R1, #128
+        MOV     R2, R3, LSL#8           ; Convert to 16 bit fixed point
+        ADD     R2, R2, #128
+        SWI     XColourTrans_ConvertRGBToHSV ; R0->H, R1->S, R2->V
+
+        LDR     R3, =&FFFF
+        CMP     R1, #1:SHL:16
+        MOVHS   R1, R3
+        CMP     R2, #1:SHL:16
+        MOVHS   R2, R3
+        
+        MUL     R4, R1, R2              ; can't use MLA in case of overflow
+        SUB     R2, R3, R2              ; V = 1 - V
+        SUB     R2, R2, R2, LSR#2       ; V = .25 (3 - 3V)
+        ADD     R2, R2, R1, LSR#2       ; V = .25 (3 - 3V + S)
+        ADD     R2, R2, R4, LSR#18      ; V = .25 (3 - 3V + S + SV)
+        
+        SWI     XColourTrans_ConvertHSVToRGB ; R0->R, R1->G, R2->B
+        CMP     R2, #1:SHL:16
+        MOVLO   R3, R2, LSR#8           ; Convert to 8 bit
+        MOVHS   R3, #255
+        CMP     R1, #1:SHL:16
+        MOVLO   R2, R1, LSR#8           ; Convert to 8 bit
+        MOVHS   R2, #255
+        CMP     R0, #1:SHL:16
+        MOVLO   R1, R0, LSR#8           ; Convert to 8 bit
+        MOVHS   R1, #255
+      |                                 ; Alternative (original) Ursula highlighting scheme
         TEQ     R1,R2
         TEQEQ   R1,R3                   ; grey ?
         BEQ     %FT20
@@ -3089,8 +3121,9 @@ inversefunc ENTRY "R1-R4"
         SUB     R1,R1,R1,LSR #2
         SUB     R2,R2,R2,LSR #2         ; darken a little
         SUB     R3,R3,R3,LSR #2
+      ]
 
-        |
+      |
 
         TEQ     R1,R2
         TEQEQ   R1,R3                   ; grey ?
@@ -3133,7 +3166,7 @@ inversefunc ENTRY "R1-R4"
         MOVLO   R1,R0, LSR #8           ; Convert to 8 bit
         MOVHS   R1, #255
 
-        ]
+      ]
         Debug   inverse,"Inverted red,green,blue",R1,R2,R3
 
 10      TST     R12,#is_shaded          ; Shaded?
@@ -3200,7 +3233,7 @@ graphicswindow ROUT
 ;
         STR     R10,commandflag
 ;
-       Pull    "x0,y0,x1,y1,R10,PC"
+       Pull    "x0,y0,x1,y1,R10,PC",,^
 
 ;
 ; clear graphics window
@@ -3279,8 +3312,19 @@ nodrag
         TEQ     R14,#0
         MOVNE   R14,#0
         STRNEB  R14,dragflag
+        ; Plot to remove box
+      [ Autoscr
+        BEQ     %FT06
+        LDR     R14, dragflags
+        TST     R14, #dragf_clip ; clipped dragboxes must only be redrawn within their own window's visible rectangles
+        MOV     R0, #drg_off
+        BLNE    dottedbox1_clipped
+        BLEQ    dottedbox1
+06
+      |
         MOVNE   R0,#drg_off
         BLNE    dottedbox1
+      ]
         Pull    "x0,y0,x1,y1,PC",,^
 
 ;
@@ -3290,40 +3334,60 @@ nodrag
 yesdrag
         Push    "cx0,cy0,cx1,cy1,LR"
 ;
-        ADR     R14,dragx0
+        ADR     R14,dragx0              ; Examine the old dragbox
         LDMIA   R14,{cx0,cy0,cx1,cy1}
         LDRB    R14,dragflag
         CMP     R14,#0
         BNE     %FT01
 ;
-        LDR     R14,dragtype
+        LDR     R14,dragtype            ; Leading edge
         CMP     R14,#drag_subr_posn
         BLT     yesdr1
         B       yesdrplot               ; Do a plot the first time round (NOT A MOVE !)
 01
-        CMP     x0,cx0
+        CMP     x0,cx0                  ; Dragbox continuing
         CMPEQ   y0,cy0
         CMPEQ   x1,cx1
         CMPEQ   y1,cy1
-        BEQ     yesdr2
+        BEQ     yesdr2                  ; just rotate the dashes if it's keeping the same position
 ;
 yesdr1
-        LDR     R14,dragtype
+        LDR     R14,dragtype            ; Dragbox moving
         CMP     R14,#drag_scrollboth
         CMPNE   R14,#drag_subr_posn-1
         LDRGT   R14,dragsubr_move       ; does it have a move routine?
         CMPGT   R14,#1
         BLE     %FT01
 ;
-        MOV     R0,#drg_move            ; coordinates have changed
-        BL      dottedbox1              ; dot-dash pattern doesn't rotate here
+        ; Plot to translate/resize box - dashes don't rotate here
+      [ Autoscr
+        LDR     R14, dragflags
+        TST     R14, #dragf_clip ; clipped dragboxes must only be redrawn within their own window's visible rectangles
+        MOV     R0, #drg_move
+        BLNE    dottedbox1_clipped
+        BLEQ    dottedbox1
+      |
+        MOV     R0,#drg_move
+        BL      dottedbox1
+      ]
         B       %FT02
-01
-        BL      nodrag
+
+01                                      ; No move routine - remove and redraw
+        BL      nodrag                  ; Remove old box
 yesdrplot
+        ; Plot to (re)draw box
+      [ Autoscr
+        LDR     R14, dragflags
+        TST     R14, #dragf_clip ; clipped dragboxes must only be redrawn within their own window's visible rectangles
+        MOV     R0, #drg_on
+        BLNE    dottedbox1_clipped
+        BLEQ    dottedbox1
+      |
         MOV     R0,#drg_on
         BL      dottedbox1
-02
+      ]
+
+02                                      ; Dragbox has now been moved
         ADR     R14,dragx0
         STMIA   R14,{x0,y0,x1,y1}       ; store new coords
         MOV     R14,#1
@@ -3331,13 +3395,123 @@ yesdrplot
         Pull    "cx0,cy0,cx1,cy1,PC",,^
 ;
 yesdr2
-        BL      rotdotdash              ; rotate dot-dash pattern (if nec.)
+        ; Plot to rotate dashes, if necessary
+      [ Autoscr
+        BL      rotdotdash
+        BNE     %FT01                   ; don't do anything if timer hasn't counted down
+        MOV     R0, #drg_move
+        STRB    R0, dragaction
+        LDRB    R0, dotdash2
+        LDR     R14, dragflags
+        TST     R14, #dragf_clip ; clipped dragboxes must only be redrawn within their own window's visible rectangles
+        BLNE    dottedbox_clipped
+        BLEQ    dottedbox
+01
+      |
+        BL      rotdotdash
         MOVEQ   R0,#drg_move
         STREQB  R0,dragaction
         LDREQB  R0,dotdash2
         BLEQ    dottedbox
+      ]
         Pull    "cx0,cy0,cx1,cy1,PC",,^
 
+      [ Autoscr
+;
+; force the drag rectangle off/on (if it is enabled, and if it intersects the current graphics window)
+;
+
+forcedrag_off
+        ENTRY   "R0-y1"
+;
+        LDRB    R14, dragflag
+        CMP     R14, #0
+        EXIT    EQ
+        
+        ADR     R14, dragx0
+        LDMIA   R14, {x0, y0, x1, y1}
+        Push    "x0, y0, x1, y1"
+        ADR     R14, clipx0
+        LDMIA   R14, {cx0, cy0, cx1, cy1}
+        
+        SUBS    R0, x1, x0
+        ADDLT   x0, x0, R0              ; ensure right way round
+        SUBLT   x1, x1, R0
+        LDR     R0, dx
+        SUB     x0, x0, R0              ; add a pixel all round for luck
+        ADD     x1, x1, R0
+        
+        SUBS    R0, y1, y0
+        ADDLT   y0, y0, R0              ; ensure right way round
+        SUBLT   y1, y1, R0
+        LDR     R0, dy
+        SUB     y0, y0, R0              ; add a pixel all round for luck
+        ADD     y1, y1, R0
+        
+        CMP     x0, cx0
+        MOVGT   cx0, x0                 ; cx0 = max (x0, cx0)
+        CMP     x1, cx1
+        MOVLT   cx1, x1                 ; cx1 = min (x1, cx1)
+        CMP     y0, cy0
+        MOVGT   cy0, y0                 ; cy0 = max (y0, cy0)
+        CMP     y1, cy1
+        MOVLT   cy1, y1                 ; cy1 = min (y1, cy1)
+        CMP     cx1, cx0
+        CMPGT   cy1, cy0
+        
+        Pull    "x0, y0, x1, y1"
+        MOVGT   R0, #drg_off
+        BLGT    dottedbox1              ; don't write back to the drag flag
+;
+        EXIT
+
+forcedrag_on
+        ENTRY   "R0-y1"
+;
+        LDRB    R14, dragflag
+        CMP     R14, #0
+        EXIT    EQ
+        
+        TEQ     R14, #2                 ; special code => get new dragbox position from tempworkspace
+        ASSERT  :INDEX:tempworkspace = 0
+        ADDEQ   R14, wsptr, #4*4
+        ADRNE   R14, dragx0
+        LDMIA   R14, {x0, y0, x1, y1}
+        Push    "x0, y0, x1, y1"
+        ADR     R14, clipx0
+        LDMIA   R14, {cx0, cy0, cx1, cy1}
+        
+        SUBS    R0, x1, x0
+        ADDLT   x0, x0, R0              ; ensure right way round
+        SUBLT   x1, x1, R0
+        LDR     R0, dx
+        SUB     x0, x0, R0              ; add a pixel all round for luck
+        ADD     x1, x1, R0
+        
+        SUBS    R0, y1, y0
+        ADDLT   y0, y0, R0              ; ensure right way round
+        SUBLT   y1, y1, R0
+        LDR     R0, dy
+        SUB     y0, y0, R0              ; add a pixel all round for luck
+        ADD     y1, y1, R0
+        
+        CMP     x0, cx0
+        MOVGT   cx0, x0                 ; cx0 = max (x0, cx0)
+        CMP     x1, cx1
+        MOVLT   cx1, x1                 ; cx1 = min (x1, cx1)
+        CMP     y0, cy0
+        MOVGT   cy0, y0                 ; cy0 = max (y0, cy0)
+        CMP     y1, cy1
+        MOVLT   cy1, y1                 ; cy1 = min (y1, cy1)
+        CMP     cx1, cx0
+        CMPGT   cy1, cy0
+        
+        Pull    "x0, y0, x1, y1"
+        MOVGT   R0, #drg_on
+        BLGT    dottedbox1              ; don't write back to the drag flag
+;
+        EXIT
+      |
 ;
 ; force the drag rectangle off/on (if it is enabled)
 ;
@@ -3365,6 +3539,68 @@ forcedrag_on
         BLNE    dottedbox1              ; don't write back to the drag flag
 ;
         Pull    "R0,R1,x0,y0,x1,y1,PC"
+      ]
+
+      [ Autoscr
+; Routines to call dottedbox1 and dottedbox from within an update_window loop
+;
+dottedbox_clipped
+        ENTRY   "cx0, cy0, cx1, cy1, handle"
+        Debug   autoscr, "Called dottedbox_clipped"
+        ADR     R1, dottedbox
+        B       %FT01
+dottedbox1_clipped
+        ALTENTRY
+        Debug   autoscr, "Called dottedbox1_clipped"
+        ADR     R1, dottedbox1
+01
+; initialise window rects for the redraw loop
+        LDR     handle, draghandle
+        Abs     handle, handle
+        Debug   autoscr, "dottedbox(1)_clipped: handle, draghandle =", handle, #draghandle
+        Push    "R0, R1, x0, y0, x1, y1"
+        
+        ADD     R1, handle, #w_wax0
+        LDMIA   R1, {cx0, cy0, cx1, cy1, x0, y0}
+        SUB     cx0, cx0, x0            ; get work area x origin
+        SUB     cy0, cy1, y0            ; get work area y origin
+        LDMIA   sp, {R0, R1, x0, y0}
+        SUB     x0, x0, cx0             ; make window-relative
+        SUB     y0, y0, cy0
+        SUB     x1, x1, cx0
+        SUB     y1, y1, cy0
+        SUBS    R14, x1, x0             ; is x0 < x1 ?
+        SUBLT   x1, x1, R14             ; swap them over if not
+        ADDLT   x0, x0, R14
+        SUBS    R14, y1, y0             ; is y0 < y1?
+        SUBLT   y1, y1, R14             ; swap them over if not
+        ADDLT   y0, y0, R14
+        LDR     R14, dx
+        SUB     x0, x0, R14             ; add 1-pixel borders
+        ADD     x1, x1, R14
+        LDR     R14, dy
+        SUB     y0, y0, R14
+        ADD     y1, y1, R14
+        
+        MOV     R0, #getrect_firstrect :OR: getrect_updating :OR: getrect_noicons
+        BL      int_update_window2
+        Debug   autoscr, "Clipped dragbox redraw: exited int_update_window2"
+02
+; redraw loop
+        BL      int_get_rectangle
+        Debug   autoscr, "Clipped dragbox redraw loop: R0 on exit from int_get_rectangle =", R0
+        BVS     %FT10
+        TEQ     R0, #0                  ; finished?
+        BEQ     %FT10
+        LDMIA   sp, {R0, R1, x0, y0, x1, y1}
+        MOV     R14, PC                 ; return to PC+12
+        MOV     PC, R1                  ; equivalent of BL dottedbox[1]
+        NOP
+        BVC     %BT02
+10
+        Pull    "R0, R1, x0, y0, x1, y1"
+        EXITS
+      ]
 
 ;
 ; draw a dotted box (similar to hollowrectangle)
@@ -3410,31 +3646,68 @@ dottedbox
         SUB     y1,y1,R14
 ;
         Push    "R1,R2"
+      [ true
+        LDR     R0, log2bpp
+        TEQ     R0, #0
+        BEQ     %FT01                   ; use inverse for 2-colour modes
+        Push    "R3, R4"
+        LDR     R0, =&80808000          ; mid-grey ensures maximum contrast against all colours
+        MOV     R3, #0
+        MOV     R4, #3
+        SWI     XColourTrans_SetGCOL
+        Pull    "R3, R4"
+        BVS     %FT01                   ; use old scheme as fallback
+        Plot    &04,x0,y0
+        Plot    &15,x1,y0               ; restart, both endpoints
+        Plot    &35,x1,y1               ; continue, omit first point
+        Plot    &35,x0,y1               ; continue, omit first point
+        Plot    &3D,x0,y0               ; continue, omit both endpoints
+        B       %FT02
+01
+      ]
         Plot    &04,x0,y0
         Plot    &16,x1,y0               ; restart, both endpoints
         Plot    &36,x1,y1               ; continue, omit first point
         Plot    &36,x0,y1               ; continue, omit first point
         Plot    &3E,x0,y0               ; continue, omit both endpoints
+      [ true
+02
+      ]
 ;
         Pull    "R1,R2,x1,y1,R10-R12,PC"
 
 callsubr
         Debug   ub,"User Drag",R14
 
+      [ Autoscr
+        Push    "cx0, cy0, cx1, cy1, x0, y0" ; must preserve R2-R5 over call now!
+      |
         Push    "x0,y0"                 ; written back later
+      ]
         LDRB    R8,dragaction           ; dragaction = offset from dragwsptr
         ADR     R14,dragwsptr
         LDR     R8,[R14,R8]
         CMP     R8,#0                   ; if null routine, don't call it
+      [ Autoscr
+        ADD     R0, sp, #4*4    ; skip cx0 - cy1 on stack
+        LDMIA   R0,{R0-R3}      ; ALWAYS LOAD THESE !!!
+      |
         LDMIA   sp,{R0-R3}      ; ALWAYS LOAD THESE !!!
+      ]
         ADRGT   R14,dragx0
         LDMGTIA R14,{R4-R7}
         LDRGT   R12,dragwsptr           ; get appropriate workspace pointer
         ADRGT   R14,returnaddress + SVC_mode
         MOVGT   PC,R8
 returnaddress
+      [ Autoscr
+        ADD     R14, sp, #4*4   ; skip cx0 - cy1 on stack
+        STMIA   R14,{R0-R3}             ; may have been modified
+        Pull    "cx0,cy0,cx1,cy1,x0,y0,x1,y1,R10-R12,PC"
+      |
         STMIA   sp,{R0-R3}              ; may have been modified
         Pull    "x0,y0,x1,y1,R10-R12,PC"
+      ]
 
 ;
 ; ensure we have the right dot-dash pattern
@@ -3873,6 +4146,15 @@ SWIWimp_DragBox
         BLLE    nodragging              ; preserves flags
         BLE     ExitWimp                ; <=0 ==> cancel current dragbox
 ;
+      [ Autoscr
+        LDR     R14, openidentifier2    ; watch out for extended API
+        TEQ     R2, R14
+        MOVEQ   R14, #0                 ; ensure <> "TASK"
+        STREQ   R14, [sp, #1*4]         ; and store where it will be reloaded into R2 on exit
+        MOVNE   R0, #0                  ; flags default to 0 if non-extended version of call
+        Push    "R0"                    ; reload into R1 later
+      ]
+;
         LDR     handle,[userblk],#4     ; window handle (maybe)
         LDR     R0,[userblk],#4         ; drag type
 ;
@@ -3883,9 +4165,23 @@ SWIWimp_DragBox
         ADRGT   R14,dragwsptr
         STMGTIA R14,{R1-R4}
 ;
+      [ Autoscr
+        RSBS    R14, R0, #drag_user
+        CMPLE   R0, #drag_scrollboth -1 ; LE => drag type is in range 5 through 11
+                                        ; so we need only validate the window handle if dragf_inwind is set
+        SETPSR  Z_bit, R14, LE          ; now NE => window drag, EQ => drag type 5-11
+        
+        LDREQ   R14, [sp]               ; get the new dragflags pushed above
+        TSTEQ   R14, #dragf_anchor :OR: dragf_clip  ; window-relative bit(s) set => window handle needs validating
+        
+        BLNE    checkhandle_iconbar
+        
+        Pull    "R1"                    ; retrieve new dragflags
+      |
         CMP     R0,#drag_scrollboth
         CMPNE   R0,#drag_user-1
         BLLE    checkhandle_iconbar     ; only do this if SYSTEM drag!
+      ]
 ;
         LDMVCIA userblk,{cx0,cy0,cx1,cy1,x0,y0,x1,y1}
         BLVC    int_drag_box
@@ -3893,6 +4189,7 @@ SWIWimp_DragBox
 
 ;
 ; Entry:           R0 = drag type
+;                  R1 = flags word (as passed in R0 to extended form of SWI)
 ;     cx0,cy0,cx1,cy1 = initial drag box position
 ;                       not used if drag type = 1,2,3,4 or 7
 ;         x0,y0,x1,y1 = parent box
@@ -3919,11 +4216,11 @@ int_drag_box
 
 ; if a dragbox starts, cancel any pending double-click state
 
-;;        LDR     R14,mouseflags
-;;        TST     R14,#mf_wait2clicks
-;;        BICNE   R14,R14,#mf_wait2clicks
-;;        STRNE   R14,mouseflags
-;;        BLNE    doubleptr_off                   ; only changes ptr if shape = 1
+        LDR     R14,mouseflags
+        TST     R14,#mf_wait2clicks
+        BICNE   R14,R14,#mf_wait2clicks
+        STRNE   R14,mouseflags
+        BLNE    doubleptr_off                   ; only changes ptr if shape = 1
 
         LDR     R14,mousexpos
         STR     R14,dragoldx
@@ -3955,11 +4252,34 @@ int_drag_box_continue                   ; treat mouse as being at last posn
         CMP     R14,#0
         BLEQ    nodragging
 ;
+      [ Autoscr
+        LDRNE   R1, dragflags           ; keep old dragflags if continuing
+        
+        CMP     R0, #drag_scrollboth
+        CMPNE   R0, #drag_user - 1
+        BICLE   R1, R1, #dragf_anchor :OR: dragf_clip  ; window-relative dragging is not applicable to window drags!
+        STR     R1, dragflags           ; store new dragflags
+
+        RSBS    R14, R0, #drag_user
+        CMPLE   R0, #drag_scrollboth -1
+        SETPSR  Z_bit, R14, LE          ; NE => window drag, EQ => drag type 5-11
+        LDREQ   R14, dragflags
+        TSTEQ   R14, #dragf_anchor :OR: dragf_clip  ; now NE => window handle is needed later
+        
+        Rel     R14, handle, NE
+        MOVEQ   R14, #0
+        STR     R14, draghandle         ; ensure handle = 0 if we won't be using it
+        Debug   autoscr, "New draghandle =", #draghandle
+        
+        CMP     R0, #drag_scrollboth
+        CMPNE   R0, #drag_user - 1
+      |
         CMP     R0,#drag_scrollboth
         CMPNE   R0,#drag_user-1
         Rel     R14,handle,LE
         MOVGT   R14,#0
         STR     R14,draghandle          ; ensure handle=0 if not window drag
+      ]
         LDRLE   R14,[handle,#w_taskhandle]  ; remember who started it!
         LDRGT   R14,taskhandle              ; no window assoc. if user drag
         STR     R14,dragtask

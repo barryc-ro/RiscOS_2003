@@ -2357,6 +2357,22 @@ inittasks
         STR     R0,menus_temporary      ; there aren't any!
         STR     R0,dragtype
         STR     R0,draghandle
+      [ Autoscr
+        STR     R0, dragflags
+        STR     R0, autoscr_state
+        STR     R0, autoscr_handle
+        STR     R0, autoscr_pz_x0
+        STR     R0, autoscr_pz_y0
+        STR     R0, autoscr_pz_x1
+        STR     R0, autoscr_pz_y1
+        STR     R0, autoscr_pause
+        STR     R0, autoscr_next_t
+        STR     R0, autoscr_last_t
+        STR     R0, autoscr_last_x
+        STR     R0, autoscr_last_y
+        STRB    R0, autoscr_scrolling
+        STRB    R0, autoscr_pausing
+      ]
         STRB    R0,dragflag
         STRB    R0,dotdash              ; impossible dot-dash pattern
 	ADRL	R14,freepoolinuse
@@ -4136,7 +4152,11 @@ dontforceit
 ;
 ; close window (we'll reinsert it into the stack later on)
 ;
+      [ Autoscr
+        BL      int_close_window2               ; remove window from stack, and add to openingwinds list
+      |
         BL      int_close_window                ; remove window from stack, and add to openingwinds list
+      ]
 ;
 ; we need to reopen child windows according to their alignment flags - make a note of how the parent's moving
 ;
@@ -4715,27 +4735,104 @@ int_flush_opens ROUT
 
         Debug   opn,"int_flush_opens"
 
+      [ Autoscr
+        ; Remember the drag window's old visible area (only used for clipped dragboxes)
+        ; This is necessary because data in window block has been forgotten when we get round to blockcopying        
+        ; Also use this opportunity to check, for window-anchored rubber-box drags, whether the work area has moved
+        Push    "R0, x0, y0, x1, y1"
+        LDR     R14, dragflags
+        TST     R14, #dragf_anchor :OR: dragf_clip
+        LDRNE   R14, dragtype
+        TEQNE   R14, #0
+        MOVEQ   R0, #0                  ; don't bother doing either if not doing a window-related drag
+        LDRNE   R0, draghandle
+        Abs     R0, R0, NE
+        ADDNE   R0, R0, #w_old_wax0
+        LDMNEIA R0, {x0, y0, x1, y1}
+        ASSERT  :INDEX:tempworkspace = 0
+        STMNEIA wsptr, {x0, y0, x1, y1} ; store old visible area in tempworkspace +0 - +12
+        ADDNE   R0, R0, #w_opening_link - w_old_wax0
+                                        ; make suitable for comparison with opening window links
+        LDR     x0, dragflags
+        TST     x0, #dragf_anchor
+        MOVEQ   R0, #0                  ; only link to work area if the correct flag bit is set
+        LDR     x0, dragtype
+        TEQ     x0, #drag_user2
+        TEQNE   x0, #drag_subr_size
+        TEQNE   x0, #drag_subr_size2
+        MOVNE   R0, #0                  ; don't link to work area unless drag type 6, 9 or 11
+        
+        MOV     x0, #0                  ; flag that we haven't found it yet
+        Debug   autoscr, "About to scan opening handles in int_flush_opens"
+      ]
+
 ; child windows can be ignored if they are moving with their parent's work area
 ; for each window in the 'opening' list, go through its list of children (from back to front)
 ; removing them from the list if they're moving with the parent (and not changing stack order)
 
         LDR     handle,openingwinds+lh_forwards
-
 10      
-    ; [ debugopn
-    ;   Push    "R0,R14,handle"
-    ;   SUB     handle, handle, #w_opening_link
-    ;   LDR     R14,[handle,#w_flags]
-    ;   LDR     R0,[handle,#w_old_flags]
-    ;   Debug   opn, "int_flush_opens: handle, old/new flags:", handle, R0, R14
-    ;   Pull    "R0,R14,handle"
-    ; ]
+      [ Autoscr
+        TEQ     handle, R0
+        MOVEQ   x0, #1                  ; yes, the drag's window is in the opening list
+      ]
         LDR     R14,[handle,#ll_forwards]
         CMP     R14,#nullptr
         MOVNE   R14,#0
         STRNE   R14,[handle,#w_xoffset - w_opening_link]
         LDRNE   handle,[handle,#ll_forwards]
         BNE     %BT10
+
+      [ Autoscr
+        TEQ     x0, #1                  ; was the drag's window in the opening list?
+        BNE     %FT06
+        
+        Debug   autoscr, "Before adjust:", x0, y0, x1, y1
+        LDR     R14, dragflags
+        TST     R14, #dragf_clip
+        BLEQ    defaultwindow
+        BLEQ    forcedrag_off           ; remove old dragbox now - but only if not clipped
+        
+        ADR     R14, dragx0
+        LDMIA   R14, {x0, y0, x1, y1}   ; load old drag box position
+        
+        LDR     handle, draghandle
+        Abs     handle, handle
+        LDR     R0, [handle, #w_wax0]
+        LDR     R14, [handle, #w_scx]
+        SUB     R0, R0, R14
+        LDR     R14, [handle, #w_old_wax0]
+        SUB     R0, R0, R14
+        LDR     R14, [handle, #w_old_scx]
+        ADD     R0, R0, R14             ; R0 now holds the horizontal shift of the work area
+        ADD     x0, x0, R0
+        
+        LDR     R0, [handle, #w_way1]
+        LDR     R14, [handle, #w_scy]
+        SUB     R0, R0, R14
+        LDR     R14, [handle, #w_old_way1]
+        SUB     R0, R0, R14
+        LDR     R14, [handle, #w_old_scy]
+        ADD     R0, R0, R14             ; R0 now holds the vertical shift of the work area
+        ADD     y1, y1, R0
+        
+        LDR     R0, dragflags
+        TST     R0, #dragf_clip
+        ASSERT  :INDEX:tempworkspace = 0
+        ADDNE   R14, wsptr, #4*4        ; remember position to plot new dragbox at
+        ADREQ   R14, dragx0             ; store updated position back again
+        STMIA   R14, {x0, y0, x1, y1}
+        BLEQ    forcedrag_on            ; plot new dragbox now (corrupts flags) - but only if not clipped
+        
+        LDRB    R14, dragflag
+        TST     R0, #dragf_clip
+        TEQNE   R14, #0
+        MOVNE   R14, #2                 ; special dragflag code to indicate redraw position is in tempworkspace
+        STRNEB  R14, dragflag
+        Debug   autoscr, "After adjust:", x0, y0, x1, y1
+06
+        Pull    "R0, x0, y0, x1, y1"
+      ]
 
         ; having marked all windows on the list as 'unvisited', we can scan the list
 
@@ -4884,6 +4981,20 @@ int_flush_opens ROUT
         Debug   opn,"int_flush_opens exitting"
 
         CheckAllWindows "int_flush_opens (after)"
+
+      [ Autoscr
+        LDRB    R14, dragflag   ; Now that we've called int_blockcopy_all, the dragbox has been correctly
+        TEQ     R14, #2         ; repositioned within all the copied rectangles (provided any change was, in
+        MOVEQ   R14, #1         ; fact, necessary due to anchoring, of course), so we can go back to
+        STREQB  R14, dragflag   ; forcedrag_on getting its coordinates from dragx0 - dragy1.
+        Push    "x0, y0, x1, y1", EQ
+        ASSERT  :INDEX:tempworkspace = 0
+        ADDEQ   R14, wsptr, #4*4
+        LDMEQIA R14, {x0, y0, x1, y1}
+        ADREQ   R14, dragx0
+        STMEQIA R14, {x0, y0, x1, y1}
+        Pull    "x0, y0, x1, y1", EQ
+      ]
 
       [ debugcheck :LAND: debug
         LDR     handle,allwinds + lh_forwards
@@ -5877,7 +5988,7 @@ openwlp1end
 
 int_blockcopy   ROUT
 
-        Debug   opn,"int_block_copy"
+        Debug   opn,"int_blockcopy"
 
         ADR     R2,xoffset
         LDMIA   R2,{x0,y0}
@@ -5914,8 +6025,13 @@ int_blockcopy_all
 
         LDR     R14,commandflag                 ; KJB: check we're actually in
         TEQ     R14,#cf_dormant                 ;      the desktop
+      [ Autoscr
+        Pull    "handle, userblk, PC", NE       ; BJGA: exit straight away if we're not
+                                                ;       leave graphics window / dragbox until later
+      |
         BLEQ    defaultwindow                   ; set to whole screen
         BL      forcedrag_off                   ; remove drag rectangle
+      ]
 
         SetRectPtrs
 
@@ -6026,6 +6142,42 @@ goblockcopy
         SUB     y0,cy0,R14
         SUB     x1,cx1,R0
         SUB     y1,cy1,R14
+      [ Autoscr
+        LDRB    R14, dragflag
+        TEQ     R14, #0          ; don't bother if not dragging
+        BEQ     %FT06
+        LDR     R14, dragflags
+        TST     R14, #dragf_clip
+        BNE     %FT05
+        BL      graphicswindow   ; non-clipped dragboxes can also be plotted just in visible rectangles (reduces flicker)
+        BL      forcedrag_off    ; corrupts flags
+        B       %FT06
+05      LDR     R14, draghandle  ; for clipped dragboxes, check we're block-copying the right window
+        Abs     R14, R14
+        LDR     R0, [sp, #1*4]   ; get handle from stack
+        SUB     R0, R0, #w_opening_link
+        TEQ     R0, R14
+        BNE     %FT06
+        
+        Push    "cx0, cy0, cx1, cy1, x0, y0, x1, y1"
+        ASSERT  :INDEX:tempworkspace = 0         ; now we must also restrict redraw to exclude the borders
+        LDMIA   wsptr, {cx0, cy0, cx1, cy1}      ; get old visible area stored back in int_flush_opens
+        CMP     cx0, x0
+        MOVGT   x0, cx0                          ; x0 = max (cx0, x0)
+        CMP     cx1, x1
+        MOVLT   x1, cx1                          ; x1 = min (cx1, x1)
+        CMP     cy0, y0
+        MOVGT   y0, cy0                          ; y0 = max (cy0, y0)
+        CMP     cy1, y1
+        MOVLT   y1, cy1                          ; y1 = min (cy1, y1)
+        CMP     x1, x0
+        CMPGT   y1, y0                           ; don't plot anything if there's no work area in this rectangle
+        BLGT    graphicswindow
+        BLGT    forcedrag_off
+        Pull    "cx0, cy0, cx1, cy1, x0, y0, x1, y1"
+        
+06      BL      defaultwindow
+      ]
 	Push	"cx0"				; because Plot corrupts
         Plot    4,x0,y0
         LDR     R14,dx
@@ -6047,6 +6199,43 @@ goblockcopy
 	Pull	"cx0"
 
         Debug   opn,"Block-copied rectangle to",cx0,cy0,cx1,cy1
+
+      [ Autoscr
+        LDRB    R14, dragflag
+        TEQ     R14, #0          ; don't bother if not dragging
+        BEQ     %FT06
+        LDR     R14, dragflags
+        TST     R14, #dragf_clip
+        BNE     %FT05
+        Push    "cx0 - cy1"      ; non-clipped dragboxes can also be plotted just in visible rectangles (reduces flicker)
+        Pull    "x0 - y1"        ; use stack to shift values from cx0-cy1 to x0-y1
+        BL      graphicswindow
+        BL      forcedrag_on     ; corrupts flags
+        B       %FT06
+05      LDR     R14, draghandle  ; for clipped dragboxes, check we're block-copying the right window
+        Abs     R14, R14
+        LDR     R0, [sp, #1*4]   ; get handle from stack
+        SUB     R0, R0, #w_opening_link
+        TEQ     R0, R14
+        BNE     %FT06
+        
+        ADD     R14, R14, #w_wax0                ; now we must also restrict redraw to exclude the borders
+        LDMIA   R14, {x0, y0, x1, y1}            ; get new visible area
+        CMP     cx0, x0
+        MOVGT   x0, cx0                          ; x0 = max (cx0, x0)
+        CMP     cx1, x1
+        MOVLT   x1, cx1                          ; x1 = min (cx1, x1)
+        CMP     cy0, y0
+        MOVGT   y0, cy0                          ; y0 = max (cy0, y0)
+        CMP     cy1, y1
+        MOVLT   y1, cy1                          ; y1 = min (cy1, y1)
+        CMP     x1, x0
+        CMPGT   y1, y0                           ; don't plot anything if there's no work area in this rectangle
+        BLGT    graphicswindow
+        BLGT    forcedrag_on
+        
+06      BL      defaultwindow
+      ]
 
 10      MOV     R0,#invalidrects
         MOV     R1,R0
@@ -6107,7 +6296,9 @@ blcopydone
 
         Debug   opn,"int_blockcopy_all exitting"
 
+      [ :LNOT: Autoscr
         BL      forcedrag_on                    ; restore drag rectangle
+      ]
 
         Pull    "handle,userblk,PC"
 
@@ -6314,7 +6505,35 @@ isparentof      ROUT
 ; internal entry point - handle --> window definition
 ;-----------------------------------------------------------------------------
 
+      [ Autoscr
 int_close_window
+; if this was the autoscrolling window, or the window-relative dragbox window,
+; turn off autoscrolling and/or dragging as appropriate
+        Push    "R0, R14"
+        LDR     R0, autoscr_state
+        TST     R0, #af_enable
+        TOGPSR  Z_bit, R0              ; EQ => autoscroll enabled
+        LDREQ   R0, autoscr_handle
+        Abs     R0, R0, EQ
+        TEQ     R0, handle             ; EQ => autoscroll enabled for this window
+        MOVEQ   R0, #0
+        BLEQ    int_autoscroll          ; turn off autoscrolling
+        
+        LDR     R0, dragtype
+        TEQ     R0, #0
+        LDRNE   R0, dragflags
+        TSTNE   R0, #dragf_anchor :OR: dragf_clip
+        TOGPSR  Z_bit, R0              ; EQ => window-relative drag
+        LDREQ   R0, draghandle
+        Abs     R0, R0, EQ
+        TEQ     R0, handle             ; EQ => window-relative drag for this window
+        BLEQ    nodragging              ; turn off dragging
+        Pull    "R0, R14"
+
+int_close_window2 ; special entry point if window is due to be re-opened immediately afterwards
+      |
+int_close_window
+      ]
         Push    "R1-R9,LR"                      ; must match stacking above
 
         Debug   opn,"Closing window",handle
@@ -6531,7 +6750,13 @@ redrawoutlp
         CallFilter rectanglefilter
 
         BL      graphicswindow
+      [ Autoscr
+        LDR     R14, dragflags
+        TST     R14, #dragf_clip ; clipped dragboxes must only be redrawn within their own window's work area
+        BLEQ    forcedrag_off           ; remove drag box while updating
+      |
         BL      forcedrag_off           ; remove drag box while updating
+      ]
 ;
         Push    "R1"
 ;
@@ -7055,7 +7280,13 @@ nohscroll
       ]
 
 doneborder
+      [ Autoscr
+        LDR     R14, dragflags
+        TST     R14, #dragf_clip ; clipped dragboxes must only be redrawn within their own window's work area
+        BLEQ    forcedrag_on            ; put back drag rectangle if nec.
+      |
         BL      forcedrag_on            ; put back drag rectangle if nec.
+      ]
 
         Pull    "R1"
 
@@ -7909,6 +8140,8 @@ checkredrawhandle
 int_get_rectangle
         Push    LR
 ;
+        Debug   opn, "int_get_rectangle", handle, #getrectflags
+;
         SWI     XOS_WriteI+5            ; just in case
 ;
 ; draw user icons for previous rectangle (if redrawing)
@@ -7954,7 +8187,18 @@ int_get_rectangle
         STR     R14,getrectflags
         MOVEQ   R14,#0                  ; invalidate current dot-dash
         STREQB  R14,dotdash             ; (user may have changed it)
+      [ Autoscr
+        BNE     %FT06            ; don't do it if firstrect
+        LDR     R14, dragflags
+        TST     R14, #dragf_clip ; clipped dragboxes must only be redrawn within their own window
+        LDRNE   R14, draghandle
+        Abs     R14, R14, NE
+        TEQNE   R14, handle
         BLEQ    forcedrag_on            ; put drag box back if nec.
+06
+      |
+        BLEQ    forcedrag_on            ; put drag box back if nec.
+      ]
         Pull    "PC",VS
 ;
 ; delete top rectangle from list and return it to the user
@@ -8021,7 +8265,16 @@ getrectend
 ;
         LDMIA   sp,{x0,y0,x1,y1}
         BL      graphicswindow
+      [ Autoscr
+        LDR     R14, dragflags
+        TST     R14, #dragf_clip ; clipped dragboxes must only be redrawn within their own window
+        LDRNE   R14, draghandle
+        Abs     R14, R14, NE
+        TEQNE   R14, handle
+        BLEQ    forcedrag_off           ; get rid of drag box if nec.
+      |
         BL      forcedrag_off           ; get rid of drag box if nec.
+      ]
 ;
         LDR     R14,getrectflags
         TST     R14,#getrect_redrawing

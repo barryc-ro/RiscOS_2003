@@ -1463,9 +1463,15 @@ gotwork
         STR     R0,menudragdelay
 ;
       [ SpritePriority
-        MOV     R0,#ReadCMOS
-        MOV     R0,#1 ; ie ROM has priority - will need to add CMOS read stuff when allocated
-        STR     R0,preferredpool
+        MOV     R0, #ReadCMOS
+        MOV     R0, #1 ; ie ROM has priority - will need to add CMOS read stuff when allocated
+        STR     R0, preferredpool
+      ]
+;
+      [ Autoscr
+        MOV     R0, #ReadCMOS
+        MOV     R0, #5 ; ie 0.5 seconds - will need to add CMOS read stuff when allocated
+        STRB    R0, autoscr_default_pause
       ]
 ;
         ADRL    R14,paltable            ; initialise palette
@@ -2517,6 +2523,11 @@ drag_subr_posn2 *       10              ; doesn't stop when buttons released
 drag_subr_size2 *       11              ; doesn't stop when buttons released
 drag_scrollboth *       12              ; drag both scroll bars
 
+ [ Autoscr
+dragf_anchor    *       2_00000001      ; anchor rubber boxes to work area
+dragf_clip      *       2_00000010      ; clip dragbox by window visible rectangles
+ ]
+
 getrect_firstrect       * 2_00001
 getrect_updating        * 2_00010
 getrect_redrawing       * 2_00100
@@ -2805,14 +2816,21 @@ dragwsptr       #       4               ; for user-supplied subroutines
 dragsubr_on     #       4               ; for user-supplied subroutines
 dragsubr_off    #       4               ; for user-supplied subroutines
 dragsubr_move   #       4               ; for user-supplied subroutines
-
-wimpswiintercept        #       4       ; Wimp_Extend SWI intercepter
-plotsprCB               #       4       ; backdrop tiling CB
-
+ [ Autoscr
+dragflags       #       4               ; as passed to Wimp_DragBox in R0
+ ]
 
 drg_on          *       dragsubr_on   - dragwsptr
 drg_off         *       dragsubr_off  - dragwsptr
 drg_move        *       dragsubr_move - dragwsptr
+
+wimpswiintercept        #       4       ; Wimp_Extend SWI intercepter
+plotsprCB               #       4       ; backdrop tiling CB
+
+        ALIGNHASH  16
+; these have moved!
+RAM_SWIEntry            #       12      ; 3 instructions for getting R12 back
+OScopy_ChangeDynamic    #       4       ; this must follow immediately
 
         ALIGNHASH  16			; missing HASH! JRC 25 Jul 1997
 clipx0          #       4
@@ -3027,10 +3045,39 @@ menuSP          #       4
 menuhandles     #       4*maxmenus      ; handle of relevant window
 menudata        #       4*maxmenus      ; ptrs to menu definitions (-1 if dial)
 menuselections  #       4*maxmenus      ; selection index in each menu
-        ALIGNHASH  16
 
-RAM_SWIEntry            #       12      ; 3 instructions for getting R12 back
-OScopy_ChangeDynamic    #       4       ; this must follow immediately
+ [ Autoscr
+; main autoscrolling variables
+autoscr_state           #       4       ; flags word
+autoscr_handle          #       4       ; window being scrolled
+autoscr_pz_x0           #       4       ; pause zone sizes
+autoscr_pz_y0           #       4
+autoscr_pz_x1           #       4
+autoscr_pz_y1           #       4
+autoscr_user_pause      #       4       ; minimum pause time (cs), or -1 to use default
+autoscr_user_rout       #       4       ; user routine, or < &8000 to use Wimp-supplied
+autoscr_user_wsptr      #       4       ; user routine workspace (if above >= &8000)
+
+autoscr_pause           #       4       ; minimum pause time (cs) (explicit if default)
+autoscr_rout            #       4       ; routine (user or Wimp)
+autoscr_wsptr           #       4       ; workspace (user or Wimp)
+autoscr_next_t          #       4       ; time when to start autoscrolling, or when next to update
+autoscr_last_t          #       4       ; time of last update
+autoscr_last_x          #       4       ; position of mouse at last examination
+autoscr_last_y          #       4
+autoscr_old_ptr_colours #     3*4       ; used when restoring pointer after autoscroll pointer use
+autoscr_old_ptr_number  #       1
+autoscr_default_pause   #       1       ; derived from CMOS (ds)
+autoscr_scrolling       #       1       ; used to determine next setting of flag bit 8
+autoscr_pausing         #       1       ; used to determine whether timer is dirty, also a "don't re-enter" flag
+
+autoscr_speed_factor    *       5       ; -log2 of number of pointer offsets to scroll per centisecond
+autoscr_update_delay    *       8       ; hardwired minimum interval between updates (cs)
+                                        ; is necessary to ensure null events have a chance to be seen
+        ALIGNHASH   4
+autoscr_END             #       0
+ ]
+
 systemfontwidth #       4
 systemfonty0    #       4
 systemfonty1    #       4
@@ -3408,6 +3455,12 @@ maxwork         *       :INDEX:@
                 ! 0,    "#allwinds              = R12+&" :CC: :STR: :INDEX: allwinds
                 ! 0,    "Task Pointers          = R12+&" :CC: :STR: :INDEX: taskpointers
                 ! 0,    "Filter bits            = R12+&" :CC: :STR: :INDEX: prefilterWP
+ [ Autoscr
+                ! 0,    "#dragtype              = R12+&" :CC: :STR: :INDEX: dragtype
+                ! 0,    "#dragflags             = R12+&" :CC: :STR: :INDEX: dragflags
+                ! 0,    "#autoscr_state         = R12+&" :CC: :STR: :INDEX: autoscr_state
+                ! 0,    " autoscr data size     =      " :CC: :STR: (:INDEX: autoscr_END - :INDEX: autoscr_state)
+ ]
 
 
                 ! 0,    "Workspace used               &":CC::STR:maxwork:CC:" bytes."
@@ -4038,6 +4091,7 @@ x       MySWI   Wimp_SetColourMapping   ; 56      ; Wimp_Init not nec.
 x       MySWI   Wimp_SetWatchdogState   ; 58      ; 322
 x       MySWI   Wimp_Extend             ; 59
         MySWI   Wimp_ResizeIcon         ; 60
+x       MySWI   Wimp_AutoScroll         ; 61      ; checks done later
 
 endjptable
 maxnewswi   *   (endjptable-jptable)/4
@@ -4126,6 +4180,8 @@ Wimp_SWInames
         DCB     "SetWatchdogState",0
         DCB     "Extend",0
         DCB     "ResizeIcon",0
+        
+        DCB     "AutoScroll",0
 
         DCB     0
         ALIGN
@@ -4559,6 +4615,7 @@ mywrch
         MOV     userblk,sp
         BL      int_open_window
 
+        Debug   opn, "Calling int_flush_opens to open command window"
       [ ChildWindows
         BLVC    int_flush_opens         ; flush this before calling visibleouterportion
       ]
@@ -4701,6 +4758,11 @@ setptr_shape
         Push    "R0-R7,LR"
 
         MOV     R0,#SpriteReason_SetPointerShape
+      [ Autoscr
+        LDR     R14, autoscr_state      ; don't reprogram pointer if autoscrolling is enabled
+        TST     R14, #af_enable
+        ORRNE   R3, R3, #&10
+      ]
         MOV     R4,#0                   ; active point at top-left
         MOV     R5,#0
         MOV     R6,#0
