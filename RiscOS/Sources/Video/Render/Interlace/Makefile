@@ -45,16 +45,7 @@ DISCTARGETS =	rm.Interls \
 
 INSTROMTARGET = ${INSTDIR}.${COMPONENT}
 
-# This is a nasty hack to stop amu from complaining when INSTDIR is not set.
-HACK=.hack.^
-
-INSTALLTARGETS = ${INSTDIR}.Interls${HACK} \
-		 ${INSTDIR}.Interlw${HACK} \
-		 ${INSTDIR}.Interlx${HACK} \
-		 ${INSTDIR}.Interly${HACK} \
-		 ${INSTDIR}.Interlz${HACK}
-
-.SUFFIXES: .Hdr .rm ${HACK}
+.SUFFIXES: .Hdr .rm
 
 #
 # Generic rules:
@@ -76,30 +67,13 @@ install_rom: ${ROMTARGET}
 all: ${DISCTARGETS}
 	@echo ${COMPONENT}: disc modules built
 
-install: ${INSTALLTARGETS}
+install: ${DISCTARGETS}
+	${CP} rm.Interls ${INSTDIR}.Interls ${CPFLAGS}
+	${CP} rm.Interlw ${INSTDIR}.Interlw ${CPFLAGS}
+	${CP} rm.Interlx ${INSTDIR}.Interlx ${CPFLAGS}
+	${CP} rm.Interly ${INSTDIR}.Interly ${CPFLAGS}
+	${CP} rm.Interlz ${INSTDIR}.Interlz ${CPFLAGS}
 	@echo ${COMPONENT}: disc modules installed
-
-${INSTDIR}.Interls${HACK}: rm.Interls
-	${CP} $? $@ ${CPFLAGS}
-
-${INSTDIR}.Interlt${HACK}: rm.Interlt
-	${CP} $? $@ ${CPFLAGS}
-
-${INSTDIR}.Interlu${HACK}: rm.Interlu
-	${CP} $? $@ ${CPFLAGS}
-
-${INSTDIR}.Interlv${HACK}: rm.Interlv
-	${CP} $? $@ ${CPFLAGS}
-
-${INSTDIR}.Interlw${HACK}: rm.Interlw
-	${CP} $? $@ ${CPFLAGS}
-
-${INSTDIR}.Interly${HACK}: rm.Interly
-	${CP} $? $@ ${CPFLAGS}
-
-${INSTDIR}.Interlz${HACK}: rm.Interlz
-	${CP} $? $@ ${CPFLAGS}
-
 
 #
 # ROM variants
@@ -113,6 +87,10 @@ rm.Falcon.Interlace: rm.Interlw
 	${CP} $? $@ ${CPFLAGS}
 
 rm.Peregrine.Interlace: rm.Interly
+	${MKDIR} rm.${MACHINE}
+	${CP} $? $@ ${CPFLAGS}
+	
+rm.STB3.Interlace: rm.Interly
 	${MKDIR} rm.${MACHINE}
 	${CP} $? $@ ${CPFLAGS}
 	
