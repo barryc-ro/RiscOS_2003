@@ -10,7 +10,8 @@
 # ====          ====    ===========
 # 1998-09-16    AW      Created
 # 1998-09-22	RDW	Modified to fit into build structure
-
+# 1998-10-20	RDW	RAM module target added
+#			!Boot file added
 
 # ------------------------------------------------------------------------------
 # Paths
@@ -161,6 +162,7 @@ INCLUDES        = -Itbox:,C:,<Lib$Dir>,<Lib$Dir>.Email.Mailbox
 # $(TARGET)
 
 FILES = \
+ $(LPATH)!Boot \
  $(LPATH)!Run \
  $(TARGET)
 
@@ -185,13 +187,17 @@ OBJSZ=  oz.engcbf oz.engdownld oz.engfile oz.engevent \
         oz.enginit oz.engmanager oz.engparse oz.engprocess \
         oz.engsend oz.engstr oz.enguiapi oz.enguser
 
+OBJSZSL=ozsl.engcbf ozsl.engdownld ozsl.engfile ozsl.engevent \
+        ozsl.enginit ozsl.engmanager ozsl.engparse ozsl.engprocess \
+        ozsl.engsend ozsl.engstr ozsl.enguiapi ozsl.enguser
+
 
 
 # -----------------------------------------------------------------------------
 # Rule patterns
 #
 
-.SUFFIXES: .o .oz .od .odz .s .c .c++
+.SUFFIXES: .o .oz .ozsl .od .odz .s .c .c++
 
 .c.o:;          @echo
                 @echo Compiling $<
@@ -202,6 +208,11 @@ OBJSZ=  oz.engcbf oz.engdownld oz.engfile oz.engevent \
                 @echo Compiling $<
                 @echo $(DZFLAGS)
                 @$(CC) $(CFLAGS) $(DZFLAGS)       -c -zM -DROM -o $@ $<
+
+.c.ozsl:;	@echo
+		@echo Compiling $<
+		@echo $(DZFLAGS)
+		@${CC} ${CFLAGS} ${DZFLAGS} -c -zM -o $@ $<
 
 .c.od:;         @echo
                 @echo Compiling $<
@@ -222,6 +233,11 @@ OBJSZ=  oz.engcbf oz.engdownld oz.engfile oz.engevent \
                 @echo Compiling $<
                 @echo $(DZFLAGS)
                 @$(C++) $(C++FLAGS) $(DZFLAGS)    -c -zM -DROM -o $@ $<
+
+.c++.ozsl:;     @echo
+                @echo Compiling $<
+                @echo $(DZFLAGS)
+                @$(C++) $(C++FLAGS) $(DZFLAGS)    -c -zM -o $@ $<
 
 .c++.od:;       @echo
                 @echo Compiling $<
@@ -271,6 +287,9 @@ export_libs:
 rom: $(ROM_MODULE)
         @echo $(COMPONENT): Module built (ROM)
 
+ram: $(MODULE)
+	@echo $(COMPONENT): Module built (RAM)
+
 all: library
         @echo $(COMPONENT): all built (Disc)
 
@@ -287,11 +306,13 @@ install_common: $(FILES)
         @echo
 
 install: install_common
+        $(CP) $(LPATH)!Boot             ^.Build.$(INSTDIR).!Boot        $(CPFLAGS)
         $(CP) $(LPATH)!Run              ^.Build.$(INSTDIR).!Run         $(CPFLAGS)
         @echo
         @echo $(COMPONENT): Application installed to ^.Build.$(INSTDIR)
 
 installd: install_common
+        $(CP) $(LPATH)!Boot             ^.Build.$(INSTDIR).!Boot        $(CPFLAGS)
         $(CP) $(LPATH)!RunD             ^.Build.$(INSTDIR).!Run         $(CPFLAGS)
         @echo
         @echo $(COMPONENT): Debug application installed ^.Build.$(INSTDIR)
@@ -300,7 +321,8 @@ resources:
 	@echo $(RESDIR)
         $(MKDIR) $(RESDIR)
         $(MKDIR) $(RESAPP)
-        $(CP) $(LPATH)ROM.!Run          $(RESAPP).!Run          $(CPFLAGS)
+        $(CP) $(LPATH)!BootROM         $(RESAPP).!Boot         $(CPFLAGS)
+        $(CP) $(LPATH)!RunROM          $(RESAPP).!Run          $(CPFLAGS)
         @echo
         @echo $(COMPONENT): Resource files copied to Messages module
 
@@ -309,8 +331,9 @@ clean:
         $(WIPE) o               $(WFLAGS)
         $(WIPE) od              $(WFLAGS)
         $(WIPE) oz              $(WFLAGS)
+        $(WIPE) ozsl            $(WFLAGS)
         $(WIPE) odz             $(WFLAGS)
-        $(WIPE) syms             $(WFLAGS)
+        $(WIPE) syms            $(WFLAGS)
         $(RM)   syms
         $(RM)   o.dirs
 	$(RM)   ^.Build.h.enguiapi
@@ -322,6 +345,7 @@ o.dirs:
         @$(MKDIR) o
         @$(MKDIR) od
         @$(MKDIR) oz
+        @$(MKDIR) ozsl
         @$(MKDIR) odz
         @$(MKDIR) syms
         create o.dirs
@@ -351,8 +375,8 @@ abs.!RI: $(OBJS) o.dirs
 $(ROM_MODULE): $(OBJSZ) o.dirs
 	$(LD) $(LDFLAGS) -o ^.Build.oz.Engine $(OBJSZ)
 
-$(MODULE): $(OBJSZ) o.dirs
-	$(LD) $(LDFLAGS) -o ^.Build.oz.Engine $(OBJSZ)
+$(MODULE): $(OBJSZSL) o.dirs
+	$(LD) $(LDFLAGS) -o ^.Build.ozsl.Engine $(OBJSZSL)
 
 abs.!RI_D: $(OBJSD) o.dirs
 	$(LD) $(LDFLAGS) -o ^.Build.od.Engine $(OBJSD)
