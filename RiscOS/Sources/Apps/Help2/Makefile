@@ -7,6 +7,7 @@
 # ----       ----   -----------
 # 31-Mar-98  RML    Created
 # 27-Apr-98  RML    ROM build rules added
+# 01-May-98  RML    Creates rm directory
 
 #
 # Program specific options:
@@ -17,8 +18,9 @@ MODULE      = rm.${COMPONENT}
 ROM_MODULE  = aof.${COMPONENT}
 RDIR        = Resources
 LDIR        = ${RDIR}.${LOCALE}
+MODULE_NAME = !Help
 MODULE_HELP = "!Help"
-VERSION     = 3.06
+VERSION     = 1.00
 FILELIST    = ${RDIR}.Filelist
 
 #
@@ -133,6 +135,7 @@ resources: resources-${TYPE}
         @echo ${COMPONENT}: resource files copied to Messages module
 
 clean:
+        ${WIPE} rm.*     ${WFLAGS}
         ${WIPE} o.*      ${WFLAGS}
         ${WIPE} ${APP}.* ${WFLAGS}
         ${RM} ${MODULE}
@@ -148,7 +151,8 @@ Resources.!RunImage: ${OBJS} ${EVENTLIB} ${TOOLBOXLIB} ${WIMPLIB} ${CLIB}
        ${LD} -o $@ ${CLIB} ${EVENTLIB} ${TOOLBOXLIB} ${WIMPLIB} ${OBJS}
 
 ${MODULE}: ${FILES}
-           ${MODGEN} $@ ${COMPONENT} ${MODULE_HELP} ${VERSION} -via ${FILELIST}
+           ${MKDIR} rm
+           ${MODGEN} $@ ${MODULE_NAME} ${MODULE_HELP} ${VERSION} -via ${FILELIST}
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
