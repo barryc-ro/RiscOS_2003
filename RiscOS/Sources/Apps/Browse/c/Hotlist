@@ -68,7 +68,6 @@ static int            menu_itemno = 0;                    /* Item over which men
 static int            menu_select        = 0;             /* 1 if an item had to be selected when the menu was opened */
 static unsigned int   last_selected_item = 0xffffffff;    /* The last item which was selected */
 
-static int            hotlist_dragging   = 0;             /* Holds a set of values for different dragging cases (see Hotlist.h) */
 static unsigned int   highlighted_itemno;                 /* During dragging, the number of a directory item using the '...+' sprite */
 static hotlist_item * hotlist_current_highlighted = NULL; /* To save scanning lists, pointer to the highlighted item */
 static int            hl_show_urls;                       /* 0 when url descriptions to be shown, 1 to show urls */
@@ -77,6 +76,17 @@ static int            hl_show_urls;                       /* 0 when url descript
 static unsigned int   hotlist_bbar_size = 0;              /* Height in OS units of the button bar */
 static unsigned int   alter_new;                          /* Remembers if the edit dialogue is Alter or New; see   */
                                                           /* HOTLIST_MENUSECTION_NEW and HOTLIST_MENUSECTION_ALTER */
+
+/* Local structures */
+
+typedef struct hl_dragging_details
+{
+  char         drag_type;       /* One of HOTIST_NOT_DRAGGING, HOTLIST_BOX_DRAG, HOTLIST_SOLID_DRAG_OBJECT, HOTLIST_SOLID_DRAG_SPRITE, or HOTLIST_BOX_DRAG_SELECTION - See Hotlist.h */
+  unsigned int using_adjust:1;
+}
+hl_dragging_details;
+
+static hl_dragging_details hotlist_dragging;
 
 /* Event handler prototypes */
 
@@ -167,25 +177,22 @@ static _kernel_oserror * hotlist_launch_url              (hotlist_item * item);
 static _kernel_oserror * hotlist_process_click_on_item   (unsigned int itemno, hotlist_item * item, int buttons, int x, int y);
 static _kernel_oserror * hotlist_process_click           (int x, int y, int buttons);
 static int               hotlist_preopen                 (void);
-static void              hotlist_set_menu_details        (ObjectId menuid);
+static _kernel_oserror * hotlist_set_menu_details        (ObjectId menuid);
 static _kernel_oserror * hotlist_save_entries            (FILE * fileptr, hotlist_item * list, int type);
 static void              hotlist_lower_tags              (char * string);
-static _kernel_oserror * hotlist_load_directory          (FILE * fileptr, hotlist_item * target);
 static void              hotlist_drag_renderer           (hotlist_item * item, unsigned int item_height, unsigned int item_dir_width, unsigned int item_url_width);
 static _kernel_oserror * hotlist_start_drag              (void);
 static _kernel_oserror * hotlist_start_drag_backend      (void);
 static _kernel_oserror * hotlist_modified                (unsigned int type);
 static void              hotlist_convert_drag_selection  (hotlist_item * item);
-_kernel_oserror        * hotlist_autoscroll              (int window);
+static _kernel_oserror * hotlist_autoscroll              (int window);
+static _kernel_oserror * hotlist_load_directory          (FILE * fileptr, hotlist_item * target);
 
 static int               hotlist_get_selected_shape      (BBox * box);
-static void              hotlist_get_selected_shape_r    (hotlist_item * list,
-                                                          BBox         * box,
-                                                          unsigned int * itemno,
-                                                          int          * found,
-                                                          unsigned int   item_height);
-void hotlist_select_box(unsigned int first_item, unsigned int last_item, int minx, int maxx);
-void hotlist_select_box_r(unsigned int first_item, unsigned int last_item, hotlist_item *item, unsigned int *itemno, int minx, int maxx);
+static _kernel_oserror * hotlist_get_selected_shape_r    (hotlist_item * list, BBox * box, unsigned int * itemno, int * found, unsigned int item_height);
+
+static _kernel_oserror * hotlist_select_box              (unsigned int first_item, unsigned int last_item, int minx, int maxx);
+static _kernel_oserror * hotlist_select_box_r            (unsigned int first_item, unsigned int last_item, hotlist_item *item, unsigned int *itemno, int minx, int maxx);
 
 /* Save Protocol */
 
@@ -527,7 +534,6 @@ static void hotlist_unlink(hotlist_item *item)
 /* This function creates a new directory         */
 /* at the beginning of the given parent.         */
 /*                                               */
-/*                                               */
 /* Parameters: Pointer to a hotlist_item of type */
 /*             directory that represents the     */
 /*             parent item for this new entry;   */
@@ -655,7 +661,7 @@ static _kernel_oserror * hotlist_new_url(hotlist_item * parent, unsigned int pos
   if ((item = malloc(sizeof(hotlist_item))) == NULL)
   {
     #ifdef TRACE
-        if (tl & (1<<25)) Printf("Error: Could not allocate room for new URL item\n");
+        if (tl & (1<<25)) Printf("hotlist_new_url: Could not allocate room for new URL item\n");
     #endif
 
     goto hotlist_new_url_no_memory; /* See bottom of function */
@@ -812,7 +818,7 @@ static void hotlist_delete_item(hotlist_item * item)
 /*             children. If this is not the case */
 /*             then both it and its children     */
 /*             will become unlinked from the     */
-/*             hotlist structure (nasty...).     */
+/*             hotlist structure (nasty...!).    */
 /*************************************************/
 
 static _kernel_oserror * hotlist_move_item(hotlist_item * source, hotlist_item * target, unsigned int position)
@@ -844,7 +850,7 @@ static _kernel_oserror * hotlist_move_item(hotlist_item * source, hotlist_item *
 
     source = source->data.directory_content;
 
-    while(source)
+    while (source)
     {
       tempptr = source->next;
 
@@ -857,6 +863,7 @@ static _kernel_oserror * hotlist_move_item(hotlist_item * source, hotlist_item *
       source = tempptr;
     }
   }
+
   return NULL;
 }
 
@@ -906,7 +913,7 @@ static _kernel_oserror * hotlist_copy_item(hotlist_item * source, hotlist_item *
 
     case hl_url:
     {
-      return hotlist_new_url(target, position, source->name, source->data.url);
+      RetError(hotlist_new_url(target, position, source->name, source->data.url));
     }
     break;
 
@@ -2130,9 +2137,7 @@ _kernel_oserror * hotlist_clear_selection(void)
                            hl_ALL,
                            HOTLIST_G_IS_SELECTED)
      )
-  {
-    return hotlist_redraw_now();
-  }
+     return hotlist_redraw_now();
 
   return NULL;
 }
@@ -2181,6 +2186,8 @@ static _kernel_oserror * hotlist_launch_url(hotlist_item * item)
 
 static _kernel_oserror * hotlist_process_click_on_item(unsigned int itemno, hotlist_item * item, int buttons, int x, int y)
 {
+  _kernel_oserror * e = NULL;
+
   switch (buttons)
   {
     /* The window button type is Double/Click/Drag, so */
@@ -2194,17 +2201,19 @@ static _kernel_oserror * hotlist_process_click_on_item(unsigned int itemno, hotl
       {
         switch(item->type)
         {
-          case hl_directory: hotlist_directory_open_close(item, itemno);
+          case hl_directory: e = hotlist_directory_open_close(item, itemno);
           break;
 
-          case hl_url: hotlist_launch_url(item);
+          case hl_url:       e = hotlist_launch_url(item);
           break;
         }
+
+        if (e) show_error_ret(e);
 
         /* Deselect the item that was double-clicked upon */
 
         item->flags &= ~HOTLIST_G_IS_SELECTED;
-        hotlist_redraw_items(itemno, itemno);
+        e = hotlist_redraw_items(itemno, itemno);
       }
     }
     break;
@@ -2220,28 +2229,34 @@ static _kernel_oserror * hotlist_process_click_on_item(unsigned int itemno, hotl
       {
         switch(item->type)
         {
-          case hl_directory: hotlist_directory_open_close(item, itemno);
+          case hl_directory: e = hotlist_directory_open_close(item, itemno);
           break;
 
           case hl_url:
           {
-            hotlist_launch_url(item);
-            toolbox_hide_object(0, hotlist_windowid);
+            e = hotlist_launch_url(item);
+
+            if (!e) toolbox_hide_object(0, hotlist_windowid);
           }
           break;
         }
 
+        if (e) show_error_ret(e);
+
         /* Deselect the item that was double-clicked upon */
 
         item->flags &= ~HOTLIST_G_IS_SELECTED;
-        hotlist_redraw_items(itemno, itemno);
+        e = hotlist_redraw_items(itemno, itemno);
       }
     }
     break;
 
     /* Drag with Select */
 
-    case 64: hotlist_start_drag();
+    case 64:
+    {
+      e = hotlist_start_drag();
+    }
     break;
 
     /* Drag with Adjust */
@@ -2259,110 +2274,160 @@ static _kernel_oserror * hotlist_process_click_on_item(unsigned int itemno, hotl
 
       /* Start the drag and redraw the item clicked upon */
 
-      hotlist_start_drag();
-      hotlist_redraw_items(itemno, itemno);
+      e = hotlist_start_drag();
+
+      if (!e) e = hotlist_redraw_items(itemno, itemno);
     }
     break;
 
-    case 1024:                   /* Click select */
-    if (item->flags & HOTLIST_G_IS_SELECTED)
+    /* Click with Select */
+
+    case 1024:
     {
-      /* Do nothing when selected */
+      if (!(item->flags & HOTLIST_G_IS_SELECTED)) /* (Do nothing when selected) */
+      {
+        /* Clear the selected flags of everything else */
+
+        e = hotlist_clear_selection();
+
+        /* Select this item and if a directory, all items within it */
+
+        item->flags |= HOTLIST_G_IS_SELECTED | HOTLIST_G_REDRAW_NOW;
+
+        if (item->type == hl_directory) hotlist_set_flags(item->data.directory_content,
+                                                          hl_ALL,
+                                                          HOTLIST_G_IS_SELECTED);
+
+        /* Redraw to reflect the selection */
+
+        if (!e) e = hotlist_redraw_now();
+      }
+
+      last_selected_item = itemno;
     }
-    else
+    break;
+
+    /* Click with Adjust */
+
+    case 256:
     {
-      hotlist_clear_selection();
-      item->flags |= HOTLIST_G_IS_SELECTED | HOTLIST_G_REDRAW_NOW;
+      /* Swap the selected state of the item */
+
+      item->flags ^= HOTLIST_G_IS_SELECTED;
+      item->flags |= HOTLIST_G_REDRAW_NOW;
+
+      last_selected_item = itemno;
+
+      /* If a directory, select or deselect the contents */
+
       if (item->type == hl_directory)
       {
-        hotlist_set_flags(item->data.directory_content, hl_ALL, HOTLIST_G_IS_SELECTED);
+        if (item->flags & HOTLIST_G_IS_SELECTED)
+        {
+          hotlist_set_flags(item->data.directory_content, hl_ALL, HOTLIST_G_IS_SELECTED);
+        }
+        else
+        {
+          hotlist_clear_flags(item->data.directory_content, hl_ALL, HOTLIST_G_IS_SELECTED);
+        }
       }
-      hotlist_redraw_now();
-    }
-    last_selected_item = itemno;
-    break;
 
-    case 256:                   /* Click adjust */
-    item->flags ^= HOTLIST_G_IS_SELECTED;
-    item->flags |= HOTLIST_G_REDRAW_NOW;
-    last_selected_item = itemno;
-    if (item->type == hl_directory)
-    {
-      if (item->flags & HOTLIST_G_IS_SELECTED)
-      {
-        hotlist_set_flags(item->data.directory_content, hl_ALL, HOTLIST_G_IS_SELECTED);
-      }
-      else
-      {
-        hotlist_clear_flags(item->data.directory_content, hl_ALL, HOTLIST_G_IS_SELECTED);
-      }
+      /* Redraw to reflect the selection */
+
+      e = hotlist_redraw_now();
     }
-    hotlist_redraw_now();
     break;
   }
 
-  return NULL;
+  /* Return any errors that may have been generated */
+
+  return e;
 }
 
 /*************************************************/
 /* hotlist_process_click()                       */
 /*                                               */
-/* This function handles mouse clicks on the     */
-/* hotlist window                                */
+/* This function deals with mouse clicks on the  */
+/* hotlist window.                               */
 /*                                               */
-/* Parameters: x position                        */
-/*             y position                        */
-/*             button state                      */
+/* Parameters: X position of click, in window    */
+/*             coords;                           */
+/*                                               */
+/*             Y position of click, in window    */
+/*             coords;                           */
+/*                                               */
+/*             Button state (as returned by      */
+/*             Wimp_GetPointerInfo).             */
 /*************************************************/
 
 static _kernel_oserror * hotlist_process_click(int x, int y, int buttons)
 {
-  unsigned int item_height, item_dir_width, item_url_width;
-  hotlist_item *item;
-  int xmin, xmax;
-  unsigned int itemno;
-  _kernel_oserror *e;
+  _kernel_oserror * e = NULL;
+  hotlist_item    * item;
+  unsigned int      item_height, item_dir_width, item_url_width;
+  unsigned int      itemno;
+  int               xmin, xmax;
+
+  /* Get information on what was clicked upon */
 
   RetError(hotlist_get_entry_sizes(&item_height, &item_dir_width, &item_url_width));
 
   itemno = -y / item_height;
-  item = hotlist_find_item(hotlist_root->data.directory_content, itemno);
-  if (item) hotlist_get_shape(&xmin, &xmax, item);
+  item   = hotlist_find_item(hotlist_root->data.directory_content, itemno);
+
+  if (item) RetError(hotlist_get_shape(&xmin, &xmax, item));
 
   if (item && x >= xmin && x <= xmax)
   {
+    /* If we have a specific item, process the click on it */
+
     return hotlist_process_click_on_item(itemno, item, buttons, x, y);
   }
   else
   {
+    /* Otherwise, actions depend on the button type */
+
     switch(buttons)
     {
-      case Wimp_MouseButtonSelect:
-      break; /* Double click select */
+      /* Drag with Select */
 
-      case Wimp_MouseButtonAdjust:
-      break; /* Double click adjust */
+      case 64:
+      {
+        RetError(hotlist_clear_selection());
 
-      case 64:                     /* Drag select */
-      hotlist_clear_selection();
-      hotlist_selection_box_start();
+        e = hotlist_selection_box_start();
+      }
       break;
 
-      case 16:                     /* Drag adjust */
-      hotlist_selection_box_start();
+      /* Drag with Adjust */
+
+      case 16:
+      {
+        e = hotlist_selection_box_start();
+      }
       break;
+
+      /* Click with Select */
 
       case 1024:
-      hotlist_clear_selection();
-      last_selected_item = 0xffffffff;
-      break;                   /* Click select */
+      {
+        e = hotlist_clear_selection();
+
+        last_selected_item = 0xffffffff;
+      }
+      break;
+
+      /* Click with Adjust */
 
       case 256:
-      last_selected_item = 0xffffffff;
-      break;                   /* Click adjust */
+      {
+        last_selected_item = 0xffffffff;
+      }
+      break;
     }
   }
-  return NULL;
+
+  return e;
 }
 
 /*************************************************/
@@ -2377,7 +2442,7 @@ static _kernel_oserror * hotlist_process_click(int x, int y, int buttons)
 /* value, which may well drag the visible area   */
 /* down too.                                     */
 /*                                               */
-/* Returns:    1 if window was already open, 0   */
+/* Returns:    1 if window was already open,     */
 /*             or 0 if it was closed.            */
 /*************************************************/
 
@@ -2393,55 +2458,53 @@ static int hotlist_preopen(void)
   unsigned int              objectstate;
   int                       height, width;
 
-  e = toolbox_get_object_state(0, hotlist_windowid, &objectstate);
+  #define HotlistPreopen_ShowError(e) {if(e){show_error_ret(e);return 0;}}
 
-  if (e)
-  {
-    show_error_ret(e);
-    return 0;
-  }
+  /* Is the window open or closed? */
+
+  e = toolbox_get_object_state(0, hotlist_windowid, &objectstate);
+  HotlistPreopen_ShowError(e);
+
+  /* Get entry sizes */
 
   e = hotlist_get_entry_sizes(&item_height, &item_dir_width, &item_url_width);
+  HotlistPreopen_ShowError(e);
 
-  if (e)
-  {
-    show_error_ret(e);
-    return 0;
-  }
+  /* General information */
 
   number = hotlist_count_displayed_items(hotlist_root->data.directory_content);
   maxlen = hotlist_get_max_width(hotlist_root->data.directory_content) + 4;
 
-  e = window_get_wimp_handle(0, hotlist_windowid, &state.window_handle);
+  /* Find out window details */
 
-  if (e)
-  {
-    show_error_ret(e);
-    return 0;
-  }
+  e = window_get_wimp_handle(0, hotlist_windowid, &state.window_handle);
+  HotlistPreopen_ShowError(e);
 
   e = wimp_get_window_state(&state);
-  if (e)
-  {
-    show_error_ret(e);
-    return 0;
-  }
+  HotlistPreopen_ShowError(e);
+
+  /* Sanity check... */
 
   if (number < HOTLIST_WINDOW_MIN_HEIGHT) number = HOTLIST_WINDOW_MIN_HEIGHT;
   if (maxlen < HOTLIST_WINDOW_MIN_WIDTH)  maxlen = HOTLIST_WINDOW_MIN_WIDTH;
 
+  /* If the window is open, get its extent */
+
   if (objectstate & Toolbox_GetObjectState_Showing)
   {
     e = window_get_extent(0, hotlist_windowid, &bbox);
-    if (e)
-    {
-      show_error_ret(e);
-      return 0;
-    }
+    HotlistPreopen_ShowError(e);
   }
+
+  /* Work out the y extent and x extent required for showing */
+  /* as much of the visible items in the hotlist as possible */
 
   bbox.ymin = -number * item_height;
   bbox.xmax = maxlen;
+
+  /* If the window was already open, don't let the visible */
+  /* area change - otherwise go for a best fit to the      */
+  /* items, as worked out above.                           */
 
   if (objectstate & Toolbox_GetObjectState_Showing)
   {
@@ -2452,28 +2515,27 @@ static int hotlist_preopen(void)
     if (bbox.xmax < width) bbox.xmax = width;
   }
 
+  /* Account for a button bar, if one were present. */
+
   bbox.ymax = hotlist_bbar_size;
   bbox.xmin = 0;
 
+  /* Set the extent */
+
   e = window_set_extent(0, hotlist_windowid, &bbox);
-  if (e)
-  {
-    show_error_ret(e);
-    return 0;
-  }
+  HotlistPreopen_ShowError(e);
+
+  /* (Re)open the window */
 
   if (objectstate & Toolbox_GetObjectState_Showing)
   {
     e = window_get_wimp_handle(0, hotlist_windowid, &state.window_handle);
+
     if (!e) e = wimp_get_window_state(&state);
     if (!e) e = toolbox_get_parent(0, hotlist_windowid, &parent_id, &parent_component);
     if (!e) e = toolbox_show_object(0, hotlist_windowid, Toolbox_ShowObject_FullSpec, &(state.visible_area), parent_id, parent_component);
 
-    if (e)
-    {
-      show_error_ret(e);
-      return 0;
-    }
+    HotlistPreopen_ShowError(e);
   }
 
   return !!(objectstate & Toolbox_GetObjectState_Showing);
@@ -2482,42 +2544,65 @@ static int hotlist_preopen(void)
 /*************************************************/
 /* hotlist_redraw_handler()                      */
 /*                                               */
-/* This function redraws the hotlist window      */
+/* This handles redraw events from the Wimp, for */
+/* the hotlist window.                           */
+/*                                               */
+/* Parameters are as standard for a Wimp event   */
+/* handler.                                      */
 /*************************************************/
 
-static int hotlist_redraw_handler(int event_code, WimpPollBlock *event, IdBlock *id_block, void *handle)
+static int hotlist_redraw_handler(int event_code, WimpPollBlock * event, IdBlock * id_block, void * handle)
 {
-  unsigned int item_height, item_dir_width, item_url_width;
-  unsigned int first_item, last_item;
-  int more;
-  WimpRedrawWindowBlock block;
+  _kernel_oserror       * e = NULL;
+  WimpRedrawWindowBlock   block;
+  unsigned int            item_height, item_dir_width, item_url_width;
+  unsigned int            first_item, last_item;
+  int                     more;
 
-  hotlist_get_entry_sizes(&item_height, &item_dir_width, &item_url_width);
+  /* Get entry sizes */
+
+  ChkError(hotlist_get_entry_sizes(&item_height, &item_dir_width, &item_url_width));
 
   block.window_handle = event->redraw_window_request.window_handle;
 
+  /* Start the redraw loop */
+
   wimp_redraw_window(&block, &more);
-  while(more)
+
+  while (more && !e)
   {
-    first_item = -(block.redraw_area.ymax - (block.visible_area.ymax - block.yscroll)) / item_height;
+    /* Work out which bits to redraw... */
+
+    first_item =  -(block.redraw_area.ymax - (block.visible_area.ymax - block.yscroll)) / item_height;
     last_item  = (-(block.redraw_area.ymin - (block.visible_area.ymax - block.yscroll)) / item_height) + 1;
 
-    hotlist_draw(hotlist_root->data.directory_content,
-                 first_item,
-                 last_item);
-    wimp_get_rectangle(&block, &more);
+    /* ...and redraw them */
+
+    e = hotlist_draw(hotlist_root->data.directory_content,
+                     first_item,
+                     last_item);
+
+    /* Get the next redraw rectangle */
+
+    if (!e) e = wimp_get_rectangle(&block, &more);
   }
-  return 0;
+
+  return 1;
 }
 
 /*************************************************/
 /* hotlist_mouse_click_handler()                 */
 /*                                               */
-/* This function handles mouse clicks in the     */
-/* hotlist window                                */
+/* Event handler to deal with mouse clicks in    */
+/* the hotlist window; converts coordinates from */
+/* screen to window, and runs the result through */
+/* hotlist_process_click.                        */
+/*                                               */
+/* Parameters are as standard for a Wimp event   */
+/* handler.                                      */
 /*************************************************/
 
-static int hotlist_mouse_click_handler(int event_code, WimpPollBlock *event, IdBlock *id_block, void *handle)
+static int hotlist_mouse_click_handler(int event_code, WimpPollBlock * event, IdBlock * id_block, void * handle)
 {
   WimpGetWindowStateBlock state;
 
@@ -2526,86 +2611,150 @@ static int hotlist_mouse_click_handler(int event_code, WimpPollBlock *event, IdB
 
   wimp_set_caret_position(state.window_handle, -1, 0, 0, -1, -1);
 
-  hotlist_process_click(event->mouse_click.mouse_x + (state.xscroll - state.visible_area.xmin),
-                        event->mouse_click.mouse_y + (state.yscroll - state.visible_area.ymax),
-                        event->mouse_click.buttons);
-  return 0;
+  ChkError(hotlist_process_click(event->mouse_click.mouse_x + (state.xscroll - state.visible_area.xmin),
+                                 event->mouse_click.mouse_y + (state.yscroll - state.visible_area.ymax),
+                                 event->mouse_click.buttons));
+  return 1;
 }
 
 /*************************************************/
 /* hotlist_menuclose_handler()                   */
 /*                                               */
-/* This function handles closed menu events      */
+/* Called when menus close.                      */
+/*                                               */
+/* Parameters are as standard for a Toolbox      */
+/* event handler.                                */
 /*************************************************/
 
-static int hotlist_menuclose_handler(int event_code, ToolboxEvent *event, IdBlock *id_block, void *handle)
+static int hotlist_menuclose_handler(int event_code, ToolboxEvent * event, IdBlock * id_block, void * handle)
 {
   ObjectId submenu_id;
+
+  /* Deselect any items selected by the menu */
+
   if (menu_select)
   {
     hotlist_clear_selection();
     menu_select = 0;
   }
-  show_error(menu_get_sub_menu_show(0, id_block->self_id, HOTLIST_URL_MENUITEM, &submenu_id));
-  if (submenu_id) show_error(toolbox_delete_object(0, submenu_id));
-  menu_set_sub_menu_show(0, id_block->self_id, HOTLIST_URL_MENUITEM, 0);
-  return 0;
+
+  /* Get rid of any submenus */
+
+  ChkError(menu_get_sub_menu_show(0, id_block->self_id, HOTLIST_URL_MENUITEM, &submenu_id));
+
+  if (submenu_id) ChkError(toolbox_delete_object(0, submenu_id));
+
+  ChkError(menu_set_sub_menu_show(0, id_block->self_id, HOTLIST_URL_MENUITEM, 0));
+
+  return 1;
 }
 
+/*************************************************/
+/* hotlist_set_menu_details()                    */
+/*                                               */
+/* When a menu is to be opened or the hotlist    */
+/* state changes in a way that can affect open   */
+/* menus, this can be used to update the menu    */
+/* contents.                                     */
+/*                                               */
+/* Parameters: Object ID of the hotlist root     */
+/*             menu.                             */
+/*************************************************/
 
-
-void hotlist_set_menu_details(ObjectId menuid)
+static _kernel_oserror * hotlist_set_menu_details(ObjectId menuid)
 {
-  hotlist_item * item;
-  char entrytext[32];
-  ObjectId submenu_id;
+  _kernel_oserror * e;
+  hotlist_item    * item;
+  char              entrytext[Limits_Hotlist_ItemName];
+  ObjectId          submenu_id;
 
   switch (hotlist_count_selected_items())
   {
+    /* No selected items - set the URL/Directory name string to */
+    /* "URL ''" and grey it out, along with the Clear Selection */
+    /* entry.                                                   */
+
     case 0:
     {
-      menu_set_entry_text(0, menuid, HOTLIST_URL_MENUITEM, "URL ''");
-      menu_set_fade(0, menuid, HOTLIST_URL_MENUITEM, 1);
-      menu_set_fade(0, menuid, HOTLIST_CLEARSELECTION_MENUITEM, 1); /* Fade clear selection */
+      RetError(menu_set_entry_text(0, menuid, HOTLIST_URL_MENUITEM, "URL ''"));
+
+      RetError(menu_set_fade(0, menuid, HOTLIST_URL_MENUITEM, 1));
+      RetError(menu_set_fade(0, menuid, HOTLIST_CLEARSELECTION_MENUITEM, 1));
     }
     break;
+
+    /* Only 1 item selected */
 
     case 1:
     {
-      item = hotlist_find_selected_item();             /* One item selected */
+      int name_len;
+
+      item = hotlist_find_selected_item();
 
       switch(item->type)
       {
+        /* One directory selected - set the URL/Directory name */
+        /* string to a relevant value, and create and attach   */
+        /* the relevant submenu.                               */
+
         case hl_directory:
-        strcpy(entrytext, "Dir. '");
-        toolbox_create_object(0, "HLDirmenu", &submenu_id);
-        menu_set_sub_menu_show(0, menuid, HOTLIST_URL_MENUITEM, submenu_id);
+        {
+          StrNCpy0(entrytext, "Dir. '");
+
+          RetError(toolbox_create_object(0, "HLDirmenu", &submenu_id));
+          RetError(menu_set_sub_menu_show(0, menuid, HOTLIST_URL_MENUITEM, submenu_id));
+        }
         break;
+
+        /* Similarly, deal with a single URL being selected */
 
         case hl_url:
-        strcpy(entrytext, "URL '");
-        toolbox_create_object(0, "HLURLmenu", &submenu_id);
-        menu_set_sub_menu_show(0, menuid, HOTLIST_URL_MENUITEM, submenu_id);
-        break;
+        {
+          StrNCpy0(entrytext, "URL '");
 
+          RetError(toolbox_create_object(0, "HLURLmenu", &submenu_id));
+          RetError(menu_set_sub_menu_show(0, menuid, HOTLIST_URL_MENUITEM, submenu_id));
+        }
+        break;
       }
 
-      strncat(entrytext, item->name, 10);
-      if (strlen(item->name) > 10) strcat(entrytext, "...");
-      strcat(entrytext, "'");
-      menu_set_entry_text(0, menuid, HOTLIST_URL_MENUITEM, entrytext);
-      menu_set_fade(0, menuid, HOTLIST_URL_MENUITEM, 0);                    /* unfade URL '' */
-      menu_set_fade(0, menuid, HOTLIST_CLEARSELECTION_MENUITEM, 0);         /* unfade clear selection */
+      name_len = strlen(item->name);
+
+      /* Add the item name in. If the whole item will not fit, put as much as */
+      /* will do, followed by '...'.                                          */
+
+      if (name_len < sizeof(entrytext) - strlen(entrytext) - 1) strcat(entrytext, item->name); /* ('<' accounts for terminator, -1 accounts for closing "'") */
+      else if (sizeof(entrytext) - strlen(entrytext) > 5)
+      {
+        strncat(entrytext, item->name, sizeof(entrytext) - strlen(entrytext) - 5);             /* (-5 accounts for closing "'", "..." and terminator)        */
+        strcat(entrytext, "...");
+      }
+
+      if (strlen(entrytext) < sizeof(entrytext) - 1) strcat(entrytext, "'");
+
+      /* Set the text, unfade the item, and unfade the Clear Selection item */
+
+      RetError(menu_set_entry_text(0, menuid, HOTLIST_URL_MENUITEM, entrytext));
+
+      RetError(menu_set_fade(0, menuid, HOTLIST_URL_MENUITEM, 0));
+      RetError(menu_set_fade(0, menuid, HOTLIST_CLEARSELECTION_MENUITEM, 0));
     }
     break;
 
+    /* Many items selected */
+
     default:
     {
-      menu_set_entry_text(0, menuid, HOTLIST_URL_MENUITEM, "Selection");    /* Multiple items selected */
-      menu_set_fade(0, menuid, HOTLIST_URL_MENUITEM, 0);                    /* unfade URL '' */
-      menu_set_fade(0, menuid, HOTLIST_CLEARSELECTION_MENUITEM, 0);         /* unfade clear selection */
-      toolbox_create_object(0, "HLSlctmenu", &submenu_id);
-      menu_set_sub_menu_show(0, menuid, HOTLIST_URL_MENUITEM, submenu_id);
+      /* Set the URL/Directory name string, ungrey that item and Clear Selection, */
+      /* and create and attach an appropriate submenu.                            */
+
+      RetError(menu_set_entry_text(0, menuid, HOTLIST_URL_MENUITEM, "Selection"));
+
+      RetError(menu_set_fade(0, menuid, HOTLIST_URL_MENUITEM, 0));
+      RetError(menu_set_fade(0, menuid, HOTLIST_CLEARSELECTION_MENUITEM, 0));
+
+      RetError(toolbox_create_object(0, "HLSlctmenu", &submenu_id));
+      RetError(menu_set_sub_menu_show(0, menuid, HOTLIST_URL_MENUITEM, submenu_id));
     }
     break;
 
@@ -2614,27 +2763,38 @@ void hotlist_set_menu_details(ObjectId menuid)
   /* If *everything* is selected, want to grey out Select All; */
   /* else ungrey it.                                           */
 
-  if (hotlist_contents_selected(hotlist_root)) menu_set_fade(0, menuid, HOTLIST_SELECTALL_MENUITEM, 1);
-  else                                         menu_set_fade(0, menuid, HOTLIST_SELECTALL_MENUITEM, 0);
+  if (hotlist_contents_selected(hotlist_root)) RetError(menu_set_fade(0, menuid, HOTLIST_SELECTALL_MENUITEM, 1))
+  else                                         RetError(menu_set_fade(0, menuid, HOTLIST_SELECTALL_MENUITEM, 0))
 
-  menu_get_sub_menu_show(0, menuid, HOTLIST_DISPLAY_MENUITEM, &submenu_id);
+  /* Set the ticks on 'Show Descriptions' or 'Show URLs' in the */
+  /* Display submenu.                                           */
+
+  RetError(menu_get_sub_menu_show(0, menuid, HOTLIST_DISPLAY_MENUITEM, &submenu_id));
 
   if (hl_show_urls)
   {
-    menu_set_tick(0, submenu_id, HOTLIST_MENU_SHOWDESCRIPTIONS, 0);
-    menu_set_tick(0, submenu_id, HOTLIST_MENU_SHOWURLS, 1);
+    RetError(menu_set_tick(0, submenu_id, HOTLIST_MENU_SHOWDESCRIPTIONS, 0));
+    RetError(menu_set_tick(0, submenu_id, HOTLIST_MENU_SHOWURLS, 1));
   }
   else
   {
-    menu_set_tick(0, submenu_id, HOTLIST_MENU_SHOWDESCRIPTIONS, 1);
-    menu_set_tick(0, submenu_id, HOTLIST_MENU_SHOWURLS, 0);
+    RetError(menu_set_tick(0, submenu_id, HOTLIST_MENU_SHOWDESCRIPTIONS, 1));
+    RetError(menu_set_tick(0, submenu_id, HOTLIST_MENU_SHOWURLS, 0));
   }
+
+  /* Finished */
+
+  return NULL;
 }
 
 /*************************************************/
 /* hotlist_menuopen_handler()                    */
 /*                                               */
-/* This function handles opened menu events      */
+/* Handles events raised when menus are about to */
+/* be shown.                                     */
+/*                                               */
+/* Parameters are as standard for a Toolbox      */
+/* event handler.                                */
 /*************************************************/
 
 static int hotlist_menuopen_handler(int event_code, ToolboxEvent * event, IdBlock * id_block, void * handle)
@@ -2646,45 +2806,56 @@ static int hotlist_menuopen_handler(int event_code, ToolboxEvent * event, IdBloc
   int                       xmin, xmax, window_handle;
   ObjectId                  sub_menu;
 
-  hotlist_get_entry_sizes(&item_height, &item_dir_width, &item_url_width);
+  /* Get entry sizes. */
+
+  ChkError(hotlist_get_entry_sizes(&item_height, &item_dir_width, &item_url_width));
 
   if (event_code == EHotlistToBeShown)
   {
-    window_get_wimp_handle(0, hotlist_windowid, &window_handle);
-    state.window_handle = window_handle;
-    wimp_get_window_state(&state);
+    /* Work out which item the pointer was over. */
 
-    wimp_get_pointer_info(&pointerblock);
+    ChkError(window_get_wimp_handle(0, hotlist_windowid, &window_handle));
+
+    state.window_handle = window_handle;
+    ChkError(wimp_get_window_state(&state));
+
+    ChkError(wimp_get_pointer_info(&pointerblock));
+
     pointerblock.x = pointerblock.x + (state.xscroll - state.visible_area.xmin);
     pointerblock.y = pointerblock.y + (state.yscroll - state.visible_area.ymax);
 
     menu_itemno = -pointerblock.y / item_height;
   }
 
-  menu_get_sub_menu_show(0, id_block->self_id, HOTLIST_DISPLAY_MENUITEM, &sub_menu);
+  ChkError(menu_get_sub_menu_show(0, id_block->self_id, HOTLIST_DISPLAY_MENUITEM, &sub_menu));
+
+  /* If there are no selected items, select the one the menu */
+  /* was opened over.                                        */
 
   if (hotlist_count_selected_items() == 0)
   {
     item = hotlist_find_item(hotlist_root->data.directory_content, menu_itemno);
 
-    if (item)
-    {
-      hotlist_get_shape(&xmin, &xmax, item);
-    }
+    if (item) ChkError(hotlist_get_shape(&xmin, &xmax, item));
 
     if (item && pointerblock.x >= xmin && pointerblock.x <= xmax)
     {
       item->flags |= HOTLIST_G_IS_SELECTED | HOTLIST_G_REDRAW_NOW;
       if (item->type == hl_directory) hotlist_set_flags(item->data.directory_content, hl_ALL, HOTLIST_G_IS_SELECTED);
+
       menu_select = 1;
-      hotlist_redraw_now();
+
+      ChkError(hotlist_redraw_now());
     }
   }
 
-  hotlist_set_menu_details(id_block->self_id);
+  /* Update the menus */
+
+  ChkError(hotlist_set_menu_details(id_block->self_id));
 
   return 0;
 }
+
 /*************************************************/
 /* hotlist_save_entries()                        */
 /*                                               */
@@ -2710,8 +2881,8 @@ static int hotlist_menuopen_handler(int event_code, ToolboxEvent * event, IdBloc
 
 static _kernel_oserror * hotlist_save_entries(FILE * fileptr, hotlist_item * list, int type)
 {
-  int               written;
   _kernel_oserror * e;
+  int               written;
 
   /* Follow the directory list */
 
@@ -2739,6 +2910,7 @@ static _kernel_oserror * hotlist_save_entries(FILE * fileptr, hotlist_item * lis
           if (type == 0 || (type == 1 && list->flags & HOTLIST_G_IS_SELECTED))
           {
             HotlistWrite(fprintf(fileptr, "<h4>%s</h4>\n", list->name));
+
             if (list->flags & HOTLIST_D_IS_OPEN)
             {
               HotlistWrite(fprintf(fileptr, "<ul><!--open-->\n"));
@@ -2932,6 +3104,7 @@ static _kernel_oserror * hotlist_load_directory(FILE * fileptr, hotlist_item * t
   long int          file_position;
   int               character, count;
   int               target_type;
+
   /* Go through the file in chunks */
 
   target_type = 0; /* At end of directory */
@@ -3272,6 +3445,11 @@ _kernel_oserror * hotlist_initialise(void)
   BBox              bbox;
   unsigned int      item_height, item_dir_width, item_url_width;
 
+  /* Set some initial flags */
+
+  hotlist_dragging.drag_type    = HOTLIST_NOT_DRAGGING;
+  hotlist_dragging.using_adjust = 0;
+
   /* Create root directory item */
 
   RetError(hotlist_new_directory(NULL, "Root", 0, &hotlist_root));
@@ -3583,147 +3761,139 @@ static int hotlist_clear_selection_handler(int event_code, ToolboxEvent * event,
 
   hotlist_set_menu_details(main_menu);
 
-  return 0;
+  return 1;
 }
 
 /*************************************************/
 /* hotlist_menu_openall_handler()                */
 /*                                               */
-/* This function handles the open all menu item  */
+/* Deal with the Open All menu item.             */
+/*                                               */
+/* Parameters are as standard for a Toolbox      */
+/* event handler.                                */
 /*************************************************/
 
-static int hotlist_menu_openall_handler(int event_code, ToolboxEvent *event, IdBlock *id_block, void *handle)
+static int hotlist_menu_openall_handler(int event_code, ToolboxEvent * event, IdBlock * id_block, void * handle)
 {
   if (hotlist_root->data.directory_content)
   {
     menu_itemno = 0;
-    hotlist_set_flags(hotlist_root->data.directory_content, hl_directory, HOTLIST_D_IS_OPEN);
+
+    /* Set all Open flags, clear all Redraw Now flags, and force a redraw of everything */
+
+    hotlist_set_flags  (hotlist_root->data.directory_content, hl_directory, HOTLIST_D_IS_OPEN);
     hotlist_clear_flags(hotlist_root->data.directory_content, hl_directory, HOTLIST_G_REDRAW_NOW);
-    hotlist_redraw_items(0, hotlist_count_displayed_items(hotlist_root->data.directory_content));
+
+    ChkError(hotlist_redraw_items(0, hotlist_count_displayed_items(hotlist_root->data.directory_content)));
+
     hotlist_preopen();
   }
-  return 0;
+
+  return 1;
 }
 
 /*************************************************/
 /* hotlist_menu_closeall_handler()               */
 /*                                               */
-/* This function handles the close all menu      */
-/* item                                          */
+/* Deal with the Close All menu item.            */
+/*                                               */
+/* Parameters are as standard for a Toolbox      */
+/* event handler.                                */
 /*************************************************/
 
-static int hotlist_menu_closeall_handler(int event_code, ToolboxEvent *event, IdBlock *id_block, void *handle)
+static int hotlist_menu_closeall_handler(int event_code, ToolboxEvent * event, IdBlock * id_block, void * handle)
 {
   unsigned int noitems;
+  ObjectId     main_menu;
+
   if (hotlist_root->data.directory_content)
   {
     menu_itemno = 0;
+
+    /* Clear all Open and Redraw Now flags, and deselect all items */
+
     noitems = hotlist_count_displayed_items(hotlist_root->data.directory_content);
 
     hotlist_clear_flags(hotlist_root->data.directory_content,
                         hl_directory,
                         HOTLIST_D_IS_OPEN | HOTLIST_G_REDRAW_NOW);
-    hotlist_clear_selection();
-    hotlist_redraw_items(0, noitems);
-    menu_set_entry_text(0, id_block->self_id, HOTLIST_URL_MENUITEM, "URL ''");
-    menu_set_fade(0, id_block->self_id, HOTLIST_URL_MENUITEM, 1); /* Fade URL'' selection */
-    menu_set_fade(0, id_block->self_id, HOTLIST_CLEARSELECTION_MENUITEM, 1); /* Fade clear selection */
+
+    ChkError(hotlist_clear_selection());
+    ChkError(hotlist_redraw_items(0, noitems));
+
+    /* Get the main menu ID */
+
+    ChkError(window_get_menu(0, hotlist_windowid, &main_menu));
+
+    /* Update the menus to reflect there's nothing selected */
+
+    ChkError(hotlist_set_menu_details(main_menu));
+
     hotlist_preopen();
   }
-  return 0;
+
+  return 1;
 }
 
 /*************************************************/
 /* hotlist_menu_delete_handler()                 */
 /*                                               */
-/* This function handles the delete menu item    */
+/* Deal with the Delete menu item.               */
+/*                                               */
+/* Parameters are as standard for a Toolbox      */
+/* event handler.                                */
 /*************************************************/
 
-static int hotlist_menu_delete_handler(int event_code, ToolboxEvent *event, IdBlock *id_block, void *handle)
+static int hotlist_menu_delete_handler(int event_code, ToolboxEvent * event, IdBlock * id_block, void * handle)
 {
-  hotlist_item *item;
-  unsigned int noitems;
+  hotlist_item * item;
+  unsigned int   noitems;
+  ObjectId       hotlist_window;
+
+  if (!id_block->ancestor_id) hotlist_window = id_block->self_id;
+  else                        hotlist_window = id_block->ancestor_id;
+
+  /* If there are no selected items, can't do anything */
 
   noitems = hotlist_count_displayed_items(hotlist_root->data.directory_content);
 
   if (!hotlist_count_selected_items()) return 0;
 
-  while((item = hotlist_find_selected_item())!=NULL)
+  /* Delete all selected items */
+
+  while ((item = hotlist_find_selected_item()) != NULL)
   {
     hotlist_delete_item(item);
   }
+
+  /* Redraw */
+
   hotlist_redraw_items(0, noitems);
+
+  /* Update the window extent */
+
   hotlist_preopen();
-  toolbox_hide_object(0, id_block->ancestor_id);
+
+  /* The hotlist has been modified... */
 
   hotlist_modified(HL_MODIFIED_DELETE);
 
-  return 0;
-}
+  /* Finished */
 
-/*************************************************/
-/* hotlist_show_editurl_handler()                */
-/*                                               */
-/* This function fills in the description and    */
-/* url fields of the edit url dialogue box       */
-/*************************************************/
-
-static int hotlist_show_editurl_handler(int event_code, ToolboxEvent *event, IdBlock *id_block, void *handle)
-{
-  hotlist_item *item;
-  ObjectId dboxid;
-
-  #ifdef TRACE
-    if (tl & (1u<<25)) Printf("hotlist_show_editurl_handler: Called\n");
-  #endif
-
-  item = hotlist_find_selected_item();
-  if (!item) return 0;
-  menu_get_sub_menu_show(0, id_block->self_id, id_block->self_component, &dboxid);
-  alter_new = HOTLIST_MENUSECTION_ALTER;
-  window_set_title(0, dboxid, "Edit URL");
-  writablefield_set_value(0, dboxid, 0x01, item->name);
-  writablefield_set_value(0, dboxid, 0x05, item->data.url);
-  actionbutton_set_text(0, dboxid, 0x02, "Alter");
-  return 0;
-}
-
-/*************************************************/
-/* hotlist_show_rendirectory_handler()           */
-/*                                               */
-/* This function fills in the name field of the  */
-/* rename directory dialogue box                 */
-/*************************************************/
-
-static int hotlist_show_rendirectory_handler(int event_code, ToolboxEvent *event, IdBlock *id_block, void *handle)
-{
-  hotlist_item *item;
-  ObjectId dboxid;
-
-  #ifdef TRACE
-    if (tl & (1u<<25)) Printf("hotlist_show_rendirectory_handler: Called\n");
-  #endif
-
-  item = hotlist_find_selected_item();
-  if (!item) return 0;
-
-  menu_get_sub_menu_show(0, id_block->self_id, id_block->self_component, &dboxid);
-
-  alter_new = HOTLIST_MENUSECTION_ALTER;
-  window_set_title(0, dboxid, "Rename Directory");
-  writablefield_set_value(0, dboxid, 0x01, item->name);
-  actionbutton_set_text(0, dboxid, 0x02, "Rename");
-  return 0;
+  return 1;
 }
 
 /*************************************************/
 /* hotlist_show_newurl_handler()                 */
 /*                                               */
-/* This function emptys the description and url  */
-/* fields of the new url dialogue box            */
+/* This function fills in the edit / create URL  */
+/* dialogue to be a New URL object.              */
+/*                                               */
+/* Parameters are as standard for a Toolbox      */
+/* event handler.                                */
 /*************************************************/
 
-static int hotlist_show_newurl_handler(int event_code, ToolboxEvent *event, IdBlock *id_block, void *handle)
+static int hotlist_show_newurl_handler(int event_code, ToolboxEvent * event, IdBlock * id_block, void * handle)
 {
   ObjectId dboxid;
 
@@ -3731,24 +3901,77 @@ static int hotlist_show_newurl_handler(int event_code, ToolboxEvent *event, IdBl
     if (tl & (1u<<25)) Printf("hotlist_show_newurl_handler: Called\n");
   #endif
 
-  menu_get_sub_menu_show(0, id_block->self_id, id_block->self_component, &dboxid);
+  ChkError(menu_get_sub_menu_show(0, id_block->self_id, id_block->self_component, &dboxid));
 
   alter_new = HOTLIST_MENUSECTION_NEW;
-  writablefield_set_value(0, dboxid, 0x01, "");
-  writablefield_set_value(0, dboxid, 0x05, "");
-  window_set_title(0, dboxid, "Create new URL");
-  actionbutton_set_text(0, dboxid, 0x02, "Create");
-  return 0;
+
+  /* Set the title, clear the description writable and URL writable, */
+  /* and set the default action button text. 'Cancel' stays as       */
+  /* 'Cancel'.                                                       */
+
+  ChkError(window_set_title(0, dboxid, lookup_token("HotlistCreateURLTitle:Create new URL",0,0)));
+
+  ChkError(writablefield_set_value(0, dboxid, HOTLIST_NEWURL_NAME, ""));
+  ChkError(writablefield_set_value(0, dboxid, HOTLIST_NEWURL_URL,  ""));
+
+  ChkError(actionbutton_set_text  (0, dboxid, HOTLIST_NEWURL_NEW,  lookup_token("HotlistCreateURLAction:Create",0,0)));
+
+  return 1;
+}
+
+/*************************************************/
+/* hotlist_show_editurl_handler()                */
+/*                                               */
+/* This function fills in the edit / create URL  */
+/* dialogue to be an Edit URL object.            */
+/*                                               */
+/* Parameters are as standard for a Toolbox      */
+/* event handler.                                */
+/*************************************************/
+
+static int hotlist_show_editurl_handler(int event_code, ToolboxEvent * event, IdBlock * id_block, void * handle)
+{
+  hotlist_item * item;
+  ObjectId       dboxid;
+
+  #ifdef TRACE
+    if (tl & (1u<<25)) Printf("hotlist_show_editurl_handler: Called\n");
+  #endif
+
+  /* Must have a selected item... */
+
+  item = hotlist_find_selected_item();
+  if (!item) return 0;
+
+  ChkError(menu_get_sub_menu_show(0, id_block->self_id, id_block->self_component, &dboxid));
+
+  alter_new = HOTLIST_MENUSECTION_ALTER;
+
+  /* Set the title, description writable, URL writable, and  */
+  /* default action button text. 'Cancel' stays as 'Cancel'. */
+
+  ChkError(window_set_title(0, dboxid, lookup_token("HotlistEditURLTitle:Edit URL",0,0)));
+
+  ChkError(writablefield_set_value(0, dboxid, HOTLIST_NEWURL_NAME, item->name));
+  ChkError(writablefield_set_value(0, dboxid, HOTLIST_NEWURL_URL,  item->data.url));
+
+  ChkError(actionbutton_set_text  (0, dboxid, HOTLIST_NEWURL_NEW,  lookup_token("HotlistEditURLAction:Alter",0,0)));
+
+  return 1;
 }
 
 /*************************************************/
 /* hotlist_show_newdirectory_handler()           */
 /*                                               */
-/* This function emptys the name field of the    */
-/* new directory dialogue box                    */
+/* This function fills in the edit / create      */
+/* directory dialogue to be a New Directory      */
+/* object.                                       */
+/*                                               */
+/* Parameters are as standard for a Toolbox      */
+/* event handler.                                */
 /*************************************************/
 
-static int hotlist_show_newdirectory_handler(int event_code, ToolboxEvent *event, IdBlock *id_block, void *handle)
+static int hotlist_show_newdirectory_handler(int event_code, ToolboxEvent * event, IdBlock * id_block, void * handle)
 {
   ObjectId dboxid;
 
@@ -3756,315 +3979,523 @@ static int hotlist_show_newdirectory_handler(int event_code, ToolboxEvent *event
     if (tl & (1u<<25)) Printf("hotlist_show_newdirectory_handler: Called\n");
   #endif
 
-  menu_get_sub_menu_show(0, id_block->self_id, id_block->self_component, &dboxid);
+  ChkError(menu_get_sub_menu_show(0, id_block->self_id, id_block->self_component, &dboxid));
 
   alter_new = HOTLIST_MENUSECTION_NEW;
-  writablefield_set_value(0, dboxid, 0x01, "");
-  window_set_title(0, dboxid, "Create new Directory");
-  actionbutton_set_text(0, dboxid, 0x02, "Create");
-  return 0;
+
+  /* Set the title, clear the writable contents, and set */
+  /* the default action button text. 'Cancel' stays as   */
+  /* 'Cancel'.                                           */
+
+  ChkError(window_set_title(0, dboxid, lookup_token("HotlistCreateDirTitle:Create new directory",0,0)));
+
+  ChkError(writablefield_set_value(0, dboxid, HOTLIST_NEWDIRECTORY_NAME, ""));
+  ChkError(actionbutton_set_text  (0, dboxid, HOTLIST_NEWDIRECTORY_NEW,  lookup_token("HotlistCreateDirAction:Create",0,0)));
+
+  return 1;
+}
+
+/*************************************************/
+/* hotlist_show_rendirectory_handler()           */
+/*                                               */
+/* This function fills in the edit / create      */
+/* directory dialogue to be a Rename Directory   */
+/* object.                                       */
+/*                                               */
+/* Parameters are as standard for a Toolbox      */
+/* event handler.                                */
+/*************************************************/
+
+static int hotlist_show_rendirectory_handler(int event_code, ToolboxEvent * event, IdBlock * id_block, void * handle)
+{
+  hotlist_item * item;
+  ObjectId       dboxid;
+
+  #ifdef TRACE
+    if (tl & (1u<<25)) Printf("hotlist_show_rendirectory_handler: Called\n");
+  #endif
+
+  /* Must have a selected item... */
+
+  item = hotlist_find_selected_item();
+  if (!item) return 0;
+
+  ChkError(menu_get_sub_menu_show(0, id_block->self_id, id_block->self_component, &dboxid));
+
+  alter_new = HOTLIST_MENUSECTION_ALTER;
+
+  /* Set the title, writable contents, and default action */
+  /* button text. 'Cancel' stays as 'Cancel'.             */
+
+  ChkError(window_set_title(0, dboxid, lookup_token("HotlistRenameDirTitle:Rename directory",0,0)));
+
+  ChkError(writablefield_set_value(0, dboxid, HOTLIST_NEWDIRECTORY_NAME, item->name));
+  ChkError(actionbutton_set_text  (0, dboxid, HOTLIST_NEWDIRECTORY_NEW,  lookup_token("HotlistRenameDirAction:Rename",0,0)));
+
+  return 1;
 }
 
 /*************************************************/
 /* hotlist_newedit_url_handler()                 */
 /*                                               */
-/* This function either alters the selected urls */
-/* name and url fields or creates a new url in   */
-/* the directory the pointer was in when menu    */
-/* was clicked in the hotlist window.            */
+/* This function either alters the name and URL  */
+/* fields of a selected URL, or creates a new    */
+/* URL item in the directory that the pointer    */
+/* was over when the main menu was opened.       */
+/*                                               */
+/* Parameters are as standard for a Toolbox      */
+/* event handler.                                */
 /*************************************************/
 
-static int hotlist_newedit_url_handler(int event_code, ToolboxEvent *event, IdBlock *id_block, void *handle)
+static int hotlist_newedit_url_handler(int event_code, ToolboxEvent * event, IdBlock * id_block, void * handle)
 {
-  hotlist_item *item, *tempitem;
-  char *tempdesc, *tempurl;
-  int size, atend;
+  _kernel_oserror * e = NULL;
+  hotlist_item    * item;
+  hotlist_item    * tempitem;
+  char            * tempdesc;
+  char            * tempurl;
+  int               size;
+
+  /* Is there a selected item? */
 
   item = hotlist_find_selected_item();
-  writablefield_get_value(0,
-                          id_block->self_id,
-                          HOTLIST_NEWURL_NAME,
-                          NULL,
-                          0,
-                          &size);
-  tempdesc = malloc(size);
-  if (!tempdesc) return 0; /* ERROR can't rename */
-  writablefield_get_value(0,
-                          id_block->self_id,
-                          HOTLIST_NEWURL_NAME,
-                          tempdesc,
-                          size,
-                          &size);
 
-  writablefield_get_value(0,
-                          id_block->self_id,
-                          HOTLIST_NEWURL_URL,
-                          NULL,
-                          0,
-                          &size);
-  tempurl = malloc(size);
+  /* Get the length of the description (name) text */
+
+  ChkError(writablefield_get_value(0,
+                                   id_block->self_id,
+                                   HOTLIST_NEWURL_NAME,
+                                   NULL,
+                                   0,
+                                   &size));
+
+  /* Try to allocate space for it */
+
+  tempdesc = malloc(size + 1); /* '+1' to be safe (above call *should* return 'size of buffer required'...) */
+
+  if (!tempdesc)
+  {
+    show_error_cont(make_no_memory_error(15));
+    return 1;
+  }
+
+  /* Get the value, making absolutely sure it's terminated */
+
+  ChkError(writablefield_get_value(0,
+                                   id_block->self_id,
+                                   HOTLIST_NEWURL_NAME,
+                                   tempdesc,
+                                   size,
+                                   NULL));
+  tempdesc[size] = 0;
+
+  /* Do the same for the URL */
+
+  ChkError(writablefield_get_value(0,
+                                   id_block->self_id,
+                                   HOTLIST_NEWURL_URL,
+                                   NULL,
+                                   0,
+                                   &size));
+  tempurl = malloc(size + 1);
+
   if (!tempurl)
   {
     free(tempdesc);
-    return 0; /* ERROR can't rename */
-  }
-  writablefield_get_value(0,
-                          id_block->self_id,
-                          HOTLIST_NEWURL_URL,
-                          tempurl,
-                          size,
-                          &size);
 
-  switch(alter_new)
+    show_error_cont(make_no_memory_error(15));
+    return 1;
+  }
+
+  ChkError(writablefield_get_value(0,
+                                   id_block->self_id,
+                                   HOTLIST_NEWURL_URL,
+                                   tempurl,
+                                   size,
+                                   NULL));
+  tempurl[size] = 0;
+
+  /* 'alter_new' is set by the menu handling functions to */
+  /* reflect whether we should create or alter items.     */
+
+  switch (alter_new)
   {
     case HOTLIST_MENUSECTION_NEW:
-    tempitem = hotlist_find_item(hotlist_root->data.directory_content, menu_itemno);
-    if (!tempitem)
     {
-      show_error(hotlist_new_url(hotlist_root,
-                                 HOTLIST_POSITION_END,
-                                 tempdesc,
-                                 tempurl));
-      atend = 1;
-    }
-    else
-    {
-      show_error(hotlist_new_url(tempitem,
-                                 HOTLIST_POSITION_AFTER,
-                                 tempdesc,
-                                 tempurl));
-      atend = 0;
-    }
+      /* Create a new item. First, find the one the menu was */
+      /* opened over.                                        */
 
-    hotlist_preopen();
+      tempitem = hotlist_find_item(hotlist_root->data.directory_content, menu_itemno);
 
-    if (atend)
-    {
-      hotlist_redraw_items(hotlist_count_displayed_items(hotlist_root->data.directory_content)-1,
-                           hotlist_count_displayed_items(hotlist_root->data.directory_content)-1);
+      /* If we can't, add to the start of the root directory */
+
+      if (!tempitem)
+      {
+        menu_itemno = 0;
+
+        e = hotlist_new_url(hotlist_root,
+                            HOTLIST_POSITION_BEGINNING,
+                            tempdesc,
+                            tempurl);
+      }
+
+      /* Otherwise add it after the item */
+
+      else
+      {
+        e = hotlist_new_url(tempitem,
+                            HOTLIST_POSITION_AFTER,
+                            tempdesc,
+                            tempurl);
+      }
+
+      if (!e)
+      {
+        /* Ensure the window extent is up to date */
+
+        hotlist_preopen();
+
+        /* Deal with redraw issues */
+
+        e = hotlist_redraw_items(menu_itemno,
+                                 hotlist_count_displayed_items(hotlist_root->data.directory_content));
+
+        hotlist_clear_flags(hotlist_root, hl_ALL, HOTLIST_G_REDRAW_NOW);
+
+        /* Call the 'hotlist has changed' function */
+
+        hotlist_modified(HL_MODIFIED_ADD);
+      }
+
+      /* Free temporary data and report any errors */
+
+      free(tempdesc);
+      free(tempurl);
+
+      ChkError(e);
     }
-    else
-    {
-      hotlist_redraw_items(menu_itemno,
-                           hotlist_count_displayed_items(hotlist_root->data.directory_content));
-    }
-    hotlist_clear_flags(hotlist_root, hl_ALL, HOTLIST_G_REDRAW_NOW);
-    hotlist_modified(HL_MODIFIED_ADD);
-    free(tempdesc);
-    free(tempurl);
     break;
 
     case HOTLIST_MENUSECTION_ALTER:
-    free(item->name);
-    free(item->data.url);
-    item->name = tempdesc;
-    item->data.url = tempurl;
-    item->flags |= HOTLIST_G_REDRAW_NOW;
-    hotlist_preopen();
-    hotlist_redraw_now();
-    hotlist_modified(HL_MODIFIED_ALTER);
-    break;
+    {
+      /* Alter an existing item. First, free its URL and */
+      /* description text.                               */
 
+      free(item->name);
+      free(item->data.url);
+
+      /* Point to the new URL and description */
+
+      item->name     = tempdesc;
+      item->data.url = tempurl;
+
+      /* Deal with redraw issues */
+
+      item->flags |= HOTLIST_G_REDRAW_NOW;
+
+      hotlist_preopen();
+
+      e = hotlist_redraw_now();
+
+      /* Call the 'hotlist has changed' function */
+
+      hotlist_modified(HL_MODIFIED_ALTER);
+
+      /* Report any errors */
+
+      ChkError(e);
+    }
+    break;
   }
-  return 0;
+
+  return 1;
 }
 
 /*************************************************/
 /* hotlist_newren_directory_handler()            */
 /*                                               */
-/* This function either alters the selected      */
-/* directorys name or creates a new directory in */
-/* the directory the pointer was in when menu    */
-/* was clicked in the hotlist window.            */
+/* As hotlist_newedit_url_handler, but for       */
+/* directory items.                              */
+/*                                               */
+/* Parameters are as standard for a Toolbox      */
+/* event handler.                                */
 /*************************************************/
 
-static int hotlist_newren_directory_handler(int event_code, ToolboxEvent *event, IdBlock *id_block, void *handle)
+static int hotlist_newren_directory_handler(int event_code, ToolboxEvent * event, IdBlock * id_block, void * handle)
 {
-  int size, atend;
-  hotlist_item *item, *tempitem;
-  char *tempname;
+  _kernel_oserror * e = NULL;
+  hotlist_item    * item;
+  hotlist_item    * tempitem;
+  char            * tempname;
+  int               size;
+
+  /* This bit is similar to the start of hotlist_newedit_url_handler */
 
   item = hotlist_find_selected_item();
-  writablefield_get_value(0,
-                          id_block->self_id,
-                          HOTLIST_NEWDIRECTORY_NAME,
-                          NULL,
-                          0,
-                          &size);
-  tempname = malloc(size);
-  if (!tempname) return 0; /* ERROR can't rename */
-  writablefield_get_value(0,
-                          id_block->self_id,
-                          HOTLIST_NEWDIRECTORY_NAME,
-                          tempname,
-                          size,
-                          &size);
 
-  switch(alter_new)
+  ChkError(writablefield_get_value(0,
+                                   id_block->self_id,
+                                   HOTLIST_NEWDIRECTORY_NAME,
+                                   NULL,
+                                   0,
+                                   &size));
+
+  tempname = malloc(size + 1);
+
+  if (!tempname)
+  {
+    show_error_cont(make_no_memory_error(16));
+    return 1;
+  }
+
+  ChkError(writablefield_get_value(0,
+                                   id_block->self_id,
+                                   HOTLIST_NEWDIRECTORY_NAME,
+                                   tempname,
+                                   size,
+                                   NULL));
+
+  switch (alter_new)
   {
     case HOTLIST_MENUSECTION_NEW:
-    tempitem = hotlist_find_item(hotlist_root->data.directory_content, menu_itemno);
+    {
+      tempitem = hotlist_find_item(hotlist_root->data.directory_content, menu_itemno);
 
-    if (!tempitem)
-    {
-      hotlist_new_directory(hotlist_root,
-                            tempname,
-                            HOTLIST_POSITION_END,
-                            &tempitem);
-      atend = 1;
-    }
-    else
-    {
-      hotlist_new_directory(tempitem,
-                            tempname,
-                            HOTLIST_POSITION_AFTER,
-                            &tempitem);
-      atend = 0;
-    }
+      /* If we can't find the item the pointer was near, at at the */
+      /* start of the root; else add near the item.                */
 
-    hotlist_preopen();
+      if (!tempitem)
+      {
+        menu_itemno = 0;
 
-    if (atend)
-    {
-      hotlist_redraw_items(hotlist_count_displayed_items(hotlist_root->data.directory_content)-1,
-                           hotlist_count_displayed_items(hotlist_root->data.directory_content)-1);
+        e = hotlist_new_directory(hotlist_root,
+                                  tempname,
+                                  HOTLIST_POSITION_BEGINNING,
+                                  &tempitem);
+      }
+      else
+      {
+        e = hotlist_new_directory(tempitem,
+                                  tempname,
+                                  HOTLIST_POSITION_AFTER,
+                                  &tempitem);
+      }
+
+      if (!e)
+      {
+        hotlist_preopen();
+
+        e = hotlist_redraw_items(menu_itemno,
+                                 hotlist_count_displayed_items(hotlist_root->data.directory_content));
+
+        hotlist_clear_flags(hotlist_root, hl_ALL, HOTLIST_G_REDRAW_NOW);
+        hotlist_modified(HL_MODIFIED_ADD);
+      }
+
+      /* Free the temporary block and report any errors */
+
+      free(tempname);
+
+      ChkError(e);
     }
-    else
-    {
-      hotlist_redraw_items(menu_itemno,
-                           hotlist_count_displayed_items(hotlist_root->data.directory_content));
-    }
-    hotlist_clear_flags(hotlist_root, hl_ALL, HOTLIST_G_REDRAW_NOW);
-    hotlist_modified(HL_MODIFIED_ADD);
-    free(tempname);
     break;
 
     case HOTLIST_MENUSECTION_ALTER:
-    free(item->name);
-    item->name = tempname;
-    item->flags |= HOTLIST_G_REDRAW_NOW;
-    hotlist_preopen();
-    hotlist_redraw_now();
-    hotlist_modified(HL_MODIFIED_ALTER);
-    break;
+    {
+      /* Free the item's existing name, link to the new */
+      /* name, and do the relevant redraws / hotlist    */
+      /* modified calls.                                */
 
+      free(item->name);
+
+      item->name = tempname;
+      item->flags |= HOTLIST_G_REDRAW_NOW;
+
+      hotlist_preopen();
+
+      e = hotlist_redraw_now();
+
+      hotlist_modified(HL_MODIFIED_ALTER);
+
+      /* Report any errors */
+
+      ChkError(e);
+    }
+    break;
   }
-  return 0;
+
+  return 1;
 }
 
 /*************************************************/
-/* hotlist_newren_directory_handler()            */
+/* hotlist_reset_url_handler()                   */
 /*                                               */
 /* This function is called when Cancel is        */
-/* clicked on in the new or edit url dialogue    */
-/* box.  It resets the contents to their         */
-/* previous state.                               */
+/* clicked on in the New (aka Edit) URL dialogue */
+/* box. It resets the contents to their previous */
+/* state.                                        */
+/*                                               */
+/* Parameters are as standard for a Toolbox      */
+/* event handler.                                */
 /*************************************************/
 
-static int hotlist_reset_url_handler(int event_code, ToolboxEvent *event, IdBlock *id_block, void *handle)
+static int hotlist_reset_url_handler(int event_code, ToolboxEvent * event, IdBlock * id_block, void * handle)
 {
-  hotlist_item *item;
-  switch(alter_new)
+  /* Action depends on whether we were altering, or creating an item */
+
+  switch (alter_new)
   {
     case HOTLIST_MENUSECTION_NEW:
-    writablefield_set_value(0, id_block->self_id, 0x01, "");
-    writablefield_set_value(0, id_block->self_id, 0x05, "");
+    {
+      ChkError(writablefield_set_value(0, id_block->self_id, HOTLIST_NEWURL_NAME, ""));
+      ChkError(writablefield_set_value(0, id_block->self_id, HOTLIST_NEWURL_URL,  ""));
+    }
     break;
 
     case HOTLIST_MENUSECTION_ALTER:
-    item = hotlist_find_selected_item();
-    writablefield_set_value(0, id_block->self_id, 0x01, item->name);
-    writablefield_set_value(0, id_block->self_id, 0x05, item->data.url);
-    break;
+    {
+      hotlist_item * item = hotlist_find_selected_item();
 
+      if (item)
+      {
+        ChkError(writablefield_set_value(0, id_block->self_id, HOTLIST_NEWURL_NAME, item->name));
+        ChkError(writablefield_set_value(0, id_block->self_id, HOTLIST_NEWURL_URL,  item->data.url));
+      }
+    }
+    break;
   }
-  return 0;
+
+  return 1;
 }
 
 /*************************************************/
 /* hotlist_reset_directory_handler()             */
 /*                                               */
-/* This function is called when Cancel is        */
-/* clicked on in the new or rename directory     */
-/* dialogue box.  It resets the contents to      */
-/* their previous state.                         */
+/* Similar to hotlist_reset_url_handler, but for */
+/* resetting the New (aka Rename) Directory      */
+/* dialogue.                                     */
+/*                                               */
+/* Parameters are as standard for a Toolbox      */
+/* event handler.                                */
 /*************************************************/
 
-static int hotlist_reset_directory_handler(int event_code, ToolboxEvent *event, IdBlock *id_block, void *handle)
+static int hotlist_reset_directory_handler(int event_code, ToolboxEvent * event, IdBlock * id_block, void * handle)
 {
-  hotlist_item *item;
-  switch(alter_new)
+  switch (alter_new)
   {
     case HOTLIST_MENUSECTION_NEW:
-    writablefield_set_value(0, id_block->self_id, 0x01, "");
+    {
+      ChkError(writablefield_set_value(0,
+                                       id_block->self_id,
+                                       HOTLIST_NEWDIRECTORY_NAME,
+                                       ""));
+    }
     break;
 
     case HOTLIST_MENUSECTION_ALTER:
-    item = hotlist_find_selected_item();
-    writablefield_set_value(0, id_block->self_id, 0x01, item->name);
-    break;
+    {
+      hotlist_item * item = hotlist_find_selected_item();
 
+      if (item) ChkError(writablefield_set_value(0,
+                                                 id_block->self_id,
+                                                 HOTLIST_NEWDIRECTORY_NAME,
+                                                 item->name));
+    }
+    break;
   }
-  return 0;
+
+  return 1;
 }
 
 /*************************************************/
 /* hotlist_drag_renderer()                       */
 /*                                               */
-/* renders a single hotlist item at 0,0 for use  */
-/* with draganobject                             */
+/* Renders a single hotlist item at 0,0 for use  */
+/* with DragAnObject.                            */
 /*                                               */
-/* Parameters: pointer to the item to render     */
+/* Parameters: Pointer to the item to render;    */
+/*                                               */
+/*             Height of a hotlist item in OS    */
+/*             units;                            */
+/*                                               */
+/*             Width of a hotlist directory      */
+/*             sprite in OS units;               */
+/*                                               */
+/*             Width of a hotlist URL sprite in  */
+/*             OS units.                         */
 /*************************************************/
 
-static void hotlist_drag_renderer(hotlist_item *item, unsigned int item_height, unsigned int item_dir_width, unsigned int item_url_width)
+static void hotlist_drag_renderer(hotlist_item * item, unsigned int item_height,
+                                  unsigned int item_dir_width, unsigned int item_url_width)
 {
-  /* DONT PUT Printf's in here, doesn't work (on pipefs anyway) */
+  /* DON'T put Printf's in here... Doesn't work, at least, */
+  /* not with PipeFS output methods.                       */
 
   WimpIconBlock hotlist_iconblock;
-  int           temp_width, text_width;
+  int           temp_width;
+  int           text_width;
 
-  hotlist_iconblock.flags = HOTLIST_SPRITE_ICON_FLAGS;
+  /* Create an icon block for the sprite component */
 
-  hotlist_iconblock.data.is.sprite_area = (void*)sprite_block;
+  hotlist_iconblock.flags               = HOTLIST_SPRITE_ICON_FLAGS;
+  hotlist_iconblock.data.is.sprite_area = (void *) sprite_block;
 
-  switch(item->type)                                                /* Set appropriate sprite and width of sprite */
+  /* Set appropriate sprite and width of sprite */
+
+  switch(item->type)
   {
     case hl_url:
-    hotlist_iconblock.data.is.sprite = URL_SPRITE;
-    hotlist_iconblock.data.is.sprite_name_length = strlen(URL_SPRITE);
-    temp_width = item_url_width;
+    {
+      hotlist_iconblock.data.is.sprite             = URL_SPRITE;
+      hotlist_iconblock.data.is.sprite_name_length = strlen(URL_SPRITE);
+
+      temp_width = item_url_width;
+    }
     break;
 
     case hl_directory:
-    temp_width = item_dir_width;
-    hotlist_iconblock.data.is.sprite = CLOSED_DIRECTORY_SPRITE;
-    hotlist_iconblock.data.is.sprite_name_length = strlen(CLOSED_DIRECTORY_SPRITE);
+    {
+      hotlist_iconblock.data.is.sprite             = CLOSED_DIRECTORY_SPRITE;
+      hotlist_iconblock.data.is.sprite_name_length = strlen(CLOSED_DIRECTORY_SPRITE);
+
+      temp_width = item_dir_width;
+    }
     break;
 
     default:
-    temp_width = 0; /* Prevent warnings */
+    {
+      temp_width = 0;
+    }
     break;
   }
+
+  /* Set the bounding box */
 
   hotlist_iconblock.bbox.xmin = 2;
   hotlist_iconblock.bbox.xmax = 2 + temp_width;
   hotlist_iconblock.bbox.ymax = 2 + item_height;
   hotlist_iconblock.bbox.ymin = 2;
 
-  if (wimp_plot_icon(&hotlist_iconblock))                               /* Plot sprite icon */
-  {
-    /* Error has happened, don't know what to do about it */
-  }
+  /* Plot the item */
+
+  if (wimp_plot_icon(&hotlist_iconblock)) return; /* Bail out on error! */
+
+  /* Create an icon block for the text component */
 
   if (item->type == hl_url && hl_show_urls) utils_text_width(item->data.url, &text_width, 0);
   else                                      utils_text_width(item->name,     &text_width, 0);
 
-  hotlist_iconblock.flags               = HOTLIST_TEXT_ICON_FLAGS_DRAG;
-  hotlist_iconblock.bbox.xmin           = temp_width + 4;
-  hotlist_iconblock.bbox.xmax           = temp_width + text_width + 16;
-  hotlist_iconblock.bbox.ymax           = item_height;
-  hotlist_iconblock.bbox.ymin           = 4;
+  hotlist_iconblock.flags = HOTLIST_TEXT_ICON_FLAGS_DRAG;
+
+  /* Set the bounding box */
+
+  hotlist_iconblock.bbox.xmin = temp_width + 4;
+  hotlist_iconblock.bbox.xmax = temp_width + text_width + 16;
+  hotlist_iconblock.bbox.ymax = item_height;
+  hotlist_iconblock.bbox.ymin = 4;
+
+  /* Set the text according to the item type */
+
   if (item->type == hl_url && hl_show_urls)
   {
     hotlist_iconblock.data.it.buffer      = item->data.url;
@@ -4078,10 +4509,13 @@ static void hotlist_drag_renderer(hotlist_item *item, unsigned int item_height, 
     hotlist_iconblock.data.it.validation  = NULL;
   }
 
-  if (wimp_plot_icon(&hotlist_iconblock))
-  {
-    /* Error has happened, don't know what to do about it */
-  }
+  /* Plot the icon */
+
+  wimp_plot_icon(&hotlist_iconblock);
+
+  /* Finished */
+
+  return;
 }
 
 /*************************************************/
@@ -4139,6 +4573,10 @@ static _kernel_oserror * hotlist_start_drag_backend(void)
   RetError(wimp_get_pointer_info(&pointerblock));
   RetError(hotlist_get_entry_sizes(&item_height, &item_dir_width, &item_url_width));
 
+  /* Record whether ot not Adjust (and only Adjust) was used */
+
+  hotlist_dragging.using_adjust = (pointerblock.button_state == Wimp_MouseButtonAdjust);
+
   /* Get the shape of the selected items */
 
   hotlist_get_selected_shape(&bbox);
@@ -4182,7 +4620,7 @@ static _kernel_oserror * hotlist_start_drag_backend(void)
            item->type == hl_directory &&
            (
              !(item->flags & HOTLIST_D_IS_OPEN) ||
-             hotlist_no_contents_selected(item->data.directory_content)   ||
+             hotlist_no_contents_selected(item->data.directory_content) ||
              item->data.directory_content == NULL
            )
          )
@@ -4217,7 +4655,8 @@ static _kernel_oserror * hotlist_start_drag_backend(void)
 
       /* Finished; flag that we're solid-dragging an object and exit */
 
-      hotlist_dragging = HOTLIST_SOLID_DRAG_OBJECT;
+      hotlist_dragging.drag_type = HOTLIST_SOLID_DRAG_OBJECT;
+
       return NULL;
     }
     else
@@ -4249,7 +4688,8 @@ static _kernel_oserror * hotlist_start_drag_backend(void)
 
       /* Finished; flag that we're solid-dragging an object and exit */
 
-      hotlist_dragging = HOTLIST_SOLID_DRAG_SPRITE;
+      hotlist_dragging.drag_type = HOTLIST_SOLID_DRAG_SPRITE;
+
       return NULL;
     }
   }
@@ -4278,7 +4718,8 @@ static _kernel_oserror * hotlist_start_drag_backend(void)
 
   /* Finished; flag that we're dragging an object with a dashed outline and exit */
 
-  hotlist_dragging = HOTLIST_BOX_DRAG;
+  hotlist_dragging.drag_type = HOTLIST_BOX_DRAG;
+
   return NULL;
 }
 
@@ -4290,7 +4731,8 @@ static _kernel_oserror * hotlist_start_drag_backend(void)
 
 static int hotlist_drag_stop_handler(int event_code, ToolboxEvent * event, IdBlock * id_block, void * handle)
 {
-  int dragging = hotlist_dragging;
+  _kernel_oserror * e;
+  int               dragging = hotlist_dragging.drag_type;
 
   #ifdef TRACE
     if (tl & (1u<<25)) Printf("hotlist_drag_stop_handler: Called\n");
@@ -4299,19 +4741,21 @@ static int hotlist_drag_stop_handler(int event_code, ToolboxEvent * event, IdBlo
   /* If we're not dragging in the hotlist, something weird is */
   /* going on! So definitely, ignore the event...             */
 
-  if (!hotlist_dragging) return 0;
+  if (hotlist_dragging.drag_type == HOTLIST_NOT_DRAGGING) return 0;
 
   /* Make sure we clear the dragging flag as soon as possible. */
   /* If it gets left switched on, then drags in other parts of */
   /* the browser could get misinterpreted by the hotlist code. */
 
-  dragging         = hotlist_dragging;
-  hotlist_dragging = 0;
+  dragging                   = hotlist_dragging.drag_type;
+  hotlist_dragging.drag_type = HOTLIST_NOT_DRAGGING;
 
   if (hotlist_current_highlighted)
   {
     hotlist_current_highlighted->flags &= ~HOTLIST_D_IS_HIGHLIGHTED;
-    hotlist_redraw_items(highlighted_itemno, highlighted_itemno);
+
+    ChkError(hotlist_redraw_items(highlighted_itemno, highlighted_itemno));
+
     hotlist_current_highlighted = NULL;
   }
 
@@ -4323,14 +4767,14 @@ static int hotlist_drag_stop_handler(int event_code, ToolboxEvent * event, IdBlo
 
     default:
     {
-      hotlist_dragging = 0;
+      hotlist_dragging.drag_type = HOTLIST_NOT_DRAGGING;
 
       #ifdef TRACE
 
         erb.errnum = Utils_Error_Custom_Normal;
         sprintf(erb.errmess,
-                "Value %d of hotlist_dragging not understood in hotlist_drag_stop_handler",
-                hotlist_dragging);
+                "Value %d of hotlist_dragging.drag_type not understood in hotlist_drag_stop_handler",
+                hotlist_dragging.drag_type);
 
         show_error_ret(&erb);
 
@@ -4344,9 +4788,11 @@ static int hotlist_drag_stop_handler(int event_code, ToolboxEvent * event, IdBlo
     {
       /* Stop drag an object */
 
-      _swix(DragAnObject_Stop, 0);
+      e = _swix(DragAnObject_Stop, 0);
 
       deregister_null_claimant(Wimp_ENull, hotlist_null_handler, NULL);
+
+      ChkError(e);
     }
     break;
 
@@ -4354,8 +4800,11 @@ static int hotlist_drag_stop_handler(int event_code, ToolboxEvent * event, IdBlo
     {
       /* Stop drag a sprite */
 
-      _swix(DragASprite_Stop, 0);
+      e = _swix(DragASprite_Stop, 0);
+
       deregister_null_claimant(Wimp_ENull, hotlist_null_handler, NULL);
+
+      ChkError(e);
     }
     break;
 
@@ -4363,21 +4812,26 @@ static int hotlist_drag_stop_handler(int event_code, ToolboxEvent * event, IdBlo
     {
       /* Stop drag box */
 
-      wimp_drag_box(NULL);
+      e = wimp_drag_box(NULL);
 
       deregister_null_claimant(Wimp_ENull, hotlist_null_drag_select_handler, NULL);
 
       /* Deselect anything that is currently selected */
 
       hotlist_clear_flags(hotlist_root->data.directory_content, hl_ALL, HOTLIST_G_DRAG_SELECTED);
-      hotlist_redraw_now();
+      ChkError(hotlist_redraw_now());
+
+      ChkError(e);
     }
     break;
 
     case HOTLIST_BOX_DRAG:
     {
-      wimp_drag_box(NULL);
+      e = wimp_drag_box(NULL);
+
       deregister_null_claimant(Wimp_ENull, hotlist_null_handler, NULL);
+
+      ChkError(e);
     }
     break;
   }
@@ -4397,7 +4851,7 @@ static int hotlist_drag_stop_handler(int event_code, ToolboxEvent * event, IdBlo
 /* datatype (URI or HTML) to that window.        */
 /*************************************************/
 
-static int hotlist_drag_completed_handler(int event_code, WimpPollBlock *event, IdBlock *id_block, void *handle)
+static int hotlist_drag_completed_handler(int event_code, WimpPollBlock * event, IdBlock * id_block, void * handle)
 {
   WimpGetWindowStateBlock   state;
   WimpGetPointerInfoBlock   pointerblock;
@@ -4420,14 +4874,14 @@ static int hotlist_drag_completed_handler(int event_code, WimpPollBlock *event, 
   /* this because someone else completed a drag (e.g. a save */
   /* dialogue). In that case, ignore the event.              */
 
-  if (!hotlist_dragging) return 0;
+  if (hotlist_dragging.drag_type == HOTLIST_NOT_DRAGGING) return 0;
 
   /* Make sure we clear the dragging flag as soon as possible. */
   /* If it gets left switched on, then drags in other parts of */
   /* the browser could get misinterpreted by the hotlist code. */
 
-  dragging         = hotlist_dragging;
-  hotlist_dragging = 0;
+  dragging                   = hotlist_dragging.drag_type;
+  hotlist_dragging.drag_type = HOTLIST_NOT_DRAGGING;
 
   /* Check if SHIFT is pressed */
 
@@ -4455,8 +4909,8 @@ static int hotlist_drag_completed_handler(int event_code, WimpPollBlock *event, 
 
         erb.errnum = Utils_Error_Custom_Normal;
         sprintf(erb.errmess,
-                "Value %d of hotlist_dragging not understood in hotlist_drag_completed_handler",
-                hotlist_dragging);
+                "Value %d of hotlist_dragging.drag_type not understood in hotlist_drag_completed_handler",
+                hotlist_dragging.drag_type);
 
         show_error_ret(&erb);
 
@@ -4577,9 +5031,16 @@ static int hotlist_drag_completed_handler(int event_code, WimpPollBlock *event, 
       {
         if ((-winy % item_height) > item_height / 2)
         {
-          /* If we're over half way past the item, place after it */
+          /* If we're over half way past the item, place after it, unless */
+          /* it is an open directory with something inside. Again, the    */
+          /* null handler dealing with highlighting directory sprites     */
+          /* reflects this situation correctly.                           */
 
-          if (targetitem->type == hl_directory && targetitem->flags & HOTLIST_D_IS_OPEN)
+          if (
+               targetitem->type == hl_directory      &&
+               targetitem->flags & HOTLIST_D_IS_OPEN &&
+               targetitem->data.directory_content
+             )
           {
             position = HOTLIST_POSITION_BEGINNING;
           }
@@ -4726,81 +5187,117 @@ static int hotlist_drag_completed_handler(int event_code, WimpPollBlock *event, 
     }
   }
 
-  return 0;
+  /* If we were using Adjust, close the window */
+
+  if (hotlist_dragging.using_adjust)
+  {
+    hotlist_dragging.using_adjust = 0;
+
+    ChkError(toolbox_hide_object(0, hotlist_windowid));
+  }
+
+  /* Finished */
+
+  return 1;
 }
 
 /*************************************************/
 /* hotlist_autoscroll()                          */
 /*                                               */
-/* Auto scrolls a window.                        */
+/* Auto-scrolls a window.                        */
 /*                                               */
-/* Parameters: handle of toolbox window to       */
-/*             scroll or 0 to reset autoscroll.  */
+/* Parameters: Object ID of the window to scroll */
+/*             or 0 to reset autoscrolling.      */
 /*************************************************/
 
-_kernel_oserror * hotlist_autoscroll(int window)
+static _kernel_oserror * hotlist_autoscroll(int window)
 {
-  ObjectId parent;
-  ComponentId component;
-  int scroll_changed;
-  _kernel_oserror *e;
-  ObjectId over_window;
-  BBox extent;
-  int x, y, position;
-  int autoscroll_newtime;
-  WimpGetWindowStateBlock state;
+  _kernel_oserror         * e;
+  WimpGetWindowStateBlock   state;
+  ObjectId                  over_window;
+  ObjectId                  parent;
+  ComponentId               component;
+  BBox                      extent;
+  int                       scroll_changed;
+  int                       x, y, position;
+  int                       autoscroll_newtime;
 
-  static unsigned int scrolling, autoscroll_oldtime, mouse_shape = Mouse_Shape_Normal;
+  static unsigned int       scrolling, autoscroll_oldtime;
+  static unsigned int       mouse_shape = Mouse_Shape_Normal;
 
   /* Reset autoscroll handling if requested */
+
   if (!window)
   {
     #ifdef TRACE
-      if (tl & (1<<25)) Printf("hotlist_autoscroll: resetting\n");
+      if (tl & (1<<25)) Printf("hotlist_autoscroll: Resetting\n");
     #endif
+
     scrolling = 0;
+
     mouse_set_pointer_shape(Mouse_Shape_Normal);
     mouse_shape = Mouse_Shape_Normal;
 
-    return _swix(OS_ReadMonotonicTime, _OUTR(0, 0), &autoscroll_oldtime);
+    return _swix(OS_ReadMonotonicTime,
+                 _OUT(0),
+
+                 &autoscroll_oldtime);
   }
 
   /* What window is the pointer over? */
+
   RetError(window_get_pointer_info(0, &x, &y, NULL, &over_window, NULL));
+
+  /* Get information on the window given to the function */
 
   RetError(window_get_wimp_handle(0, window, &state.window_handle));
   RetError(wimp_get_window_state(&state));
   RetError(window_get_extent(0, window, &extent));
 
+  /* Find location of pointer relative to the given window */
 
-  /* Find location of pointer */
-  if ((x < state.visible_area.xmin) ||
-      (x > state.visible_area.xmax) ||
-      (y < state.visible_area.ymin) ||
-      (y > state.visible_area.ymax))
+  if (
+       x < state.visible_area.xmin ||
+       x > state.visible_area.xmax ||
+       y < state.visible_area.ymin ||
+       y > state.visible_area.ymax
+     )
   {
-    position = 0; /* Outside visible area */
+    /* Outside the visible area */
+
+    position = 0;
+  }
+  else if (
+            x > state.visible_area.xmin + choices.auto_scroll_margin &&
+            x < state.visible_area.xmax - choices.auto_scroll_margin &&
+            y > state.visible_area.ymin + choices.auto_scroll_margin &&
+            y < state.visible_area.ymax - choices.auto_scroll_margin
+          )
+  {
+    /* Pointer is inside the non-scrolling region of the given window */
+
+    position = 1;
   }
   else
-  if ((x > state.visible_area.xmin + choices.auto_scroll_margin) &&
-      (x < state.visible_area.xmax - choices.auto_scroll_margin) &&
-      (y > state.visible_area.ymin + choices.auto_scroll_margin) &&
-      (y < state.visible_area.ymax - choices.auto_scroll_margin))
   {
-    position = 1; /* Inside non scrolling region */
+    /* Pointer is inside the scrolling region of the given window */
+
+    position = 2;
   }
-  else
-  {
-    position = 2; /* Inside scrolling region */
-  }
+
+  /* Work out what scroll settings to give, flagging if there is */
+  /* a change in 'scroll_changed'.                               */
 
   scroll_changed = 0;
 
   if (position == 0 || position == 2)
   {
+    /* Check position relative to the top/bottom of the window */
+
     if (y > state.visible_area.ymax - choices.auto_scroll_margin)
     {
-      /* Top */
+      /* At or over the top of the window */
+
       if (state.yscroll < extent.ymax)
       {
         scroll_changed = 1;
@@ -4811,7 +5308,7 @@ _kernel_oserror * hotlist_autoscroll(int window)
     {
       if (y < state.visible_area.ymin + choices.auto_scroll_margin)
       {
-        /* Bottom */
+        /* At or under the bottom of the window */
 
         if (state.yscroll > extent.ymin + (state.visible_area.ymax - state.visible_area.ymin))
         {
@@ -4821,9 +5318,12 @@ _kernel_oserror * hotlist_autoscroll(int window)
       }
     }
 
+    /* Check the position relative to the left/right of the window, too */
+
     if (x > state.visible_area.xmax - choices.auto_scroll_margin)
     {
-      /* Right */
+      /* At or to the right of the right hand edge of the window */
+
       if (state.xscroll < extent.xmax - (state.visible_area.xmax - state.visible_area.xmin))
       {
         scroll_changed = 1;
@@ -4834,7 +5334,8 @@ _kernel_oserror * hotlist_autoscroll(int window)
     {
       if (x < state.visible_area.xmin + choices.auto_scroll_margin)
       {
-        /* Left */
+        /* At or to the left of the left hand edge of the window */
+
         if (state.xscroll > extent.xmin)
         {
           scroll_changed = 1;
@@ -4844,24 +5345,43 @@ _kernel_oserror * hotlist_autoscroll(int window)
     }
   }
 
-  switch(position)
+  /* Deal with flags and the mouse pointer */
+
+  switch (position)
   {
+    /* If we're outside the visible area of the window, and not scrolling, */
+    /* set the pointer back to a normal shape (else leave it alone).       */
+
     case 0:
-    if (!scrolling)
     {
-      RetError(_swix(OS_ReadMonotonicTime, _OUTR(0, 0), &autoscroll_oldtime));
-      if (mouse_shape != Mouse_Shape_Normal)
+      if (!scrolling)
       {
-        mouse_set_pointer_shape(Mouse_Shape_Normal);
-        mouse_shape = Mouse_Shape_Normal;
+        RetError(_swix(OS_ReadMonotonicTime,
+                       _OUT(0),
+
+                       &autoscroll_oldtime));
+
+        if (mouse_shape != Mouse_Shape_Normal)
+        {
+          mouse_set_pointer_shape(Mouse_Shape_Normal);
+          mouse_shape = Mouse_Shape_Normal;
+        }
       }
     }
     break;
+
+    /* If we're in the non-scrolling region, unset the 'scrolling' flag */
+    /* and set the mouse pointer back to a normal shape.                */
 
     case 1:
     {
       scrolling = 0;
-      RetError(_swix(OS_ReadMonotonicTime, _OUTR(0, 0), &autoscroll_oldtime));
+
+      RetError(_swix(OS_ReadMonotonicTime,
+                     _OUT(0),
+
+                     &autoscroll_oldtime));
+
       if (mouse_shape != Mouse_Shape_Normal)
       {
         mouse_set_pointer_shape(Mouse_Shape_Normal);
@@ -4870,36 +5390,72 @@ _kernel_oserror * hotlist_autoscroll(int window)
     }
     break;
 
+    /* If inside the scrolling region, wait a while on the 'ToScroll' */
+    /* pointer, then start scrolling.                                 */
+
     case 2:
-    if ((!scrolling) && scroll_changed)
     {
-      RetError(_swix(OS_ReadMonotonicTime, _OUTR(0, 0), &autoscroll_newtime));
-      if ((autoscroll_newtime - autoscroll_oldtime) > choices.auto_scroll_delay)
+      if (!scrolling && scroll_changed)
       {
-        scrolling = 1;
-      }
-      else
-      {
-        if (mouse_shape != Mouse_Shape_ToScroll)
+        RetError(_swix(OS_ReadMonotonicTime,
+                       _OUT(0),
+
+                       &autoscroll_newtime));
+
+        /* If we exceed the autoscroll delay, set the scrolling flag */
+
+        if (autoscroll_newtime - autoscroll_oldtime > choices.auto_scroll_delay)
         {
-          mouse_shape = Mouse_Shape_ToScroll;
-          mouse_set_pointer_shape(Mouse_Shape_ToScroll);
+          scrolling = 1;
+        }
+
+        /* Otherwise, set the 'ToScroll' pointer */
+
+        else
+        {
+          if (mouse_shape != Mouse_Shape_ToScroll)
+          {
+            mouse_shape = Mouse_Shape_ToScroll;
+            mouse_set_pointer_shape(Mouse_Shape_ToScroll);
+          }
         }
       }
-    }
-    if (!scroll_changed)
-    {
-      RetError(_swix(OS_ReadMonotonicTime, _OUTR(0, 0), &autoscroll_oldtime));
+
+      /* If the scroll position hasn't changed, update oldtime */
+
+      if (!scroll_changed)
+      {
+        RetError(_swix(OS_ReadMonotonicTime,
+                       _OUT(0),
+
+                       &autoscroll_oldtime));
+      }
     }
     break;
   }
+
+  /* Closing actions to take if scrolling is in progress. */
 
   if (scrolling)
   {
     if (scroll_changed)
     {
-      RetError(toolbox_get_parent(0, window, &parent, &component));
-      RetError(toolbox_show_object(0, window, Toolbox_ShowObject_FullSpec, &(state.visible_area), parent, component));
+      /* If the scroll position has changed, update the window */
+
+      RetError(toolbox_get_parent(0,
+                                  window,
+                                  &parent,
+                                  &component));
+
+      RetError(toolbox_show_object(0,
+                                   window,
+                                   Toolbox_ShowObject_FullSpec,
+                                   &state.visible_area,
+                                   parent,
+                                   component));
+
+      /* Ensure the pointer shape is correct */
+
       if (mouse_shape != Mouse_Shape_Scrolling)
       {
         mouse_shape = Mouse_Shape_Scrolling;
@@ -4908,14 +5464,21 @@ _kernel_oserror * hotlist_autoscroll(int window)
     }
     else
     {
+      /* If the scroll position has not changed, set the pointer */
+      /* shape to normal, and unset the scrolling flag - we've   */
+      /* scrolled to the limit of the window extent.             */
+
       if (mouse_shape != Mouse_Shape_Normal)
       {
         mouse_shape = Mouse_Shape_Normal;
         mouse_set_pointer_shape(Mouse_Shape_Normal);
+
         scrolling = 0;
       }
     }
   }
+
+  /* Finished */
 
   return NULL;
 }
@@ -4923,119 +5486,183 @@ _kernel_oserror * hotlist_autoscroll(int window)
 /*************************************************/
 /* hotlist_null_handler()                        */
 /*                                               */
-/* Called every null event while drag is in      */
-/* operation                                     */
+/* Called every null event while a drag is in    */
+/* operation.                                    */
+/*                                               */
+/* Parameters are as standard for a Wimp event   */
+/* handler.                                      */
 /*************************************************/
 
-static int hotlist_null_handler(int event_code, WimpPollBlock *event, IdBlock *id_block, void *handle)
+static int hotlist_null_handler(int event_code, WimpPollBlock * event, IdBlock * id_block, void * handle)
 {
-  int x, y, buttons;
-  unsigned int itemno;
-  int          xmin, xmax;
-  unsigned int item_height, item_dir_width, item_url_width;
-  int new_time;
-  hotlist_item *item;
-  ObjectId window;
-  ComponentId component;
-  WimpGetWindowStateBlock state;
+  WimpGetWindowStateBlock   state;
+  hotlist_item            * item;
+  ObjectId                  window;
+  unsigned int              item_height, item_dir_width, item_url_width;
+  unsigned int              itemno;
+  int                       x, y, buttons;
+  int                       xmin, xmax;
+  int                       remove_highlight = 0;
 
-  window_get_pointer_info(0, &x, &y, &buttons, &window, &component);
+  /* Get information on the pointer position */
 
-  show_error_ret(hotlist_autoscroll(hotlist_windowid));
+  ChkError(window_get_pointer_info(0, &x, &y, &buttons, &window, NULL));
+
+  /* Deal with autoscroll */
+
+  ChkError(hotlist_autoscroll(hotlist_windowid));
 
   if (window == hotlist_windowid)
   {
-    window_get_wimp_handle(0, window, &state.window_handle);
+    /* The pointer is over the hotlist window */
+
+    ChkError(window_get_wimp_handle(0, window, &state.window_handle));
 
     /* Display arrow pointing into directory to say that dropping */
-    /* here will put in directory rather than next to it          */
-    wimp_get_window_state(&state);
-    hotlist_get_entry_sizes(&item_height, &item_dir_width, &item_url_width);
+    /* here will put in directory rather than next to it. First,  */
+    /* get the window state.                                      */
+
+    ChkError(wimp_get_window_state(&state));
+
+    /* Work out the item that the pointer is over */
+
+    ChkError(hotlist_get_entry_sizes(&item_height, &item_dir_width, &item_url_width));
 
     x += (state.xscroll - state.visible_area.xmin);
     y += (state.yscroll - state.visible_area.ymax);
 
     itemno = -y / item_height;
-    item = hotlist_find_item(hotlist_root->data.directory_content, itemno);
+    item   = hotlist_find_item(hotlist_root->data.directory_content, itemno);
+
+    /* Is this a directory item which is already not selected? (The */
+    /* selected check is so that we don't end up highlighting the   */
+    /* item we're dragging if this item is a directory).            */
 
     if (item && item->type == hl_directory && !(item->flags & HOTLIST_G_IS_SELECTED))
     {
-      hotlist_get_shape(&xmin, &xmax, item);
-      if (x >= xmin && x <= xmin + item_dir_width)
+      ChkError(hotlist_get_shape(&xmin, &xmax, item));
+
+      /* If we're over the directory sprite, or half way under the item height when */
+      /* the directory is open and has contents.                                    */
+
+      if (
+           (
+             x >= xmin &&
+             x <= xmin + item_dir_width
+           )
+           ||
+           (
+             ((-y % item_height) > item_height / 2) &&
+             item->flags & HOTLIST_D_IS_OPEN        &&
+             item->data.directory_content
+           )
+         )
       {
+        /* ...and the currently highlighted item isn't the one we're over... */
+
         if (hotlist_current_highlighted != item)
         {
+          /* ...then first, clear any highlighted item */
+
           if (hotlist_current_highlighted)
           {
             hotlist_current_highlighted->flags &= ~HOTLIST_D_IS_HIGHLIGHTED;
-            hotlist_redraw_items(highlighted_itemno, highlighted_itemno);
+
+            ChkError(hotlist_redraw_items(highlighted_itemno, highlighted_itemno));
           }
+
+          /* Now highlight the item we're over */
+
           item->flags |= HOTLIST_D_IS_HIGHLIGHTED;
+
           hotlist_current_highlighted = item;
-          highlighted_itemno = itemno;
-          hotlist_redraw_items(highlighted_itemno, highlighted_itemno);
-          _swix(OS_ReadMonotonicTime, _OUTR(0, 0), &autoopen_oldtime);
+          highlighted_itemno          = itemno;
+
+          ChkError(hotlist_redraw_items(highlighted_itemno, highlighted_itemno));
+
+          /* Reset the auto-open timer */
+
+          ChkError(_swix(OS_ReadMonotonicTime,
+                         _OUT(0),
+
+                         &autoopen_oldtime));
         }
         else
         {
-          _swix(OS_ReadMonotonicTime, _OUTR(0, 0), &new_time);
+          int new_time;
 
-          /* Auto open directories */
+          /* If we've stayed over the same highlighted item, */
+          /* keep a count of for how long, and if required,  */
+          /* automatically open the directory.               */
+
+          ChkError(_swix(OS_ReadMonotonicTime,
+                         _OUT(0),
+
+                         &new_time));
 
           if (
-               choices.auto_open_delay                                 &&
-               !(item->flags & HOTLIST_D_IS_OPEN)                      &&
-               (new_time - autoopen_oldtime) > choices.auto_open_delay
+               choices.auto_open_delay                               &&
+               !(item->flags & HOTLIST_D_IS_OPEN)                    &&
+               new_time - autoopen_oldtime > choices.auto_open_delay
              )
           {
+            /* Auto-open the directory */
+
             item->flags |= HOTLIST_D_IS_OPEN;
 
             hotlist_preopen();
-            hotlist_redraw_items(highlighted_itemno,
-                                 hotlist_count_displayed_items(hotlist_root->data.directory_content));
+
+            ChkError(hotlist_redraw_items(highlighted_itemno,
+                                          hotlist_count_displayed_items(hotlist_root->data.directory_content)));
           }
         }
       }
       else
       {
-        if (hotlist_current_highlighted)
-        {
-          hotlist_current_highlighted->flags &= ~HOTLIST_D_IS_HIGHLIGHTED;
-          hotlist_redraw_items(highlighted_itemno, highlighted_itemno);
-          hotlist_current_highlighted = NULL;
-        }
+        /* If we're not over a directory sprite, clear any existing */
+        /* highlight.                                               */
+
+        remove_highlight = 1;
       }
     }
-    else
-    {
-      if (hotlist_current_highlighted)
-      {
-        hotlist_current_highlighted->flags &= ~HOTLIST_D_IS_HIGHLIGHTED;
-        hotlist_redraw_items(highlighted_itemno, highlighted_itemno);
-        hotlist_current_highlighted = NULL;
-      }
-    }
+
+    /* If we're not over a directory at all, never mind it's directory */
+    /* sprite component, again, clear any existing highlight.          */
+
+    else remove_highlight = 1;
   }
+
+  /* The following executes if the pointer is not over the hotlist window */
+
   else
   {
-    /* non hotlist window */
-    if (hotlist_current_highlighted)
-    {
-      hotlist_current_highlighted->flags &= ~HOTLIST_D_IS_HIGHLIGHTED;
-      hotlist_redraw_items(highlighted_itemno, highlighted_itemno);
-      hotlist_current_highlighted = NULL;
-    }
+    /* Again, clear any highlighted directory sprite. */
+
+    remove_highlight = 1;
   }
+
+  /* If we're not over a directory sprite, clear any existing */
+  /* highlight.                                               */
+
+  if (remove_highlight && hotlist_current_highlighted)
+  {
+    hotlist_current_highlighted->flags &= ~HOTLIST_D_IS_HIGHLIGHTED;
+
+    ChkError(hotlist_redraw_items(highlighted_itemno, highlighted_itemno));
+
+    hotlist_current_highlighted = NULL;
+  }
+
+  /* Finished */
+
   return 0;
 }
 
-/* Simple non-scrolling selection box, to be improved later */
-
-/* Workarea relative corner of selection box may not be needed later */
-///////////////////////////////////////////////////////////////////////
+//
+// Simple non-scrolling selection box, to be improved later...
+// Workarea relative corner of selection box may not be needed.
+//
 static int selection_x, selection_y;
-///////////////////////////////////////////////////////////////////////
-///////////////////////////////////////////////////////////////////////
 
 /*************************************************/
 /* hotlist_start_drag()                          */
@@ -5044,36 +5671,52 @@ static int selection_x, selection_y;
 /* box operation in the hotlist window.          */
 /*************************************************/
 
-static _kernel_oserror *hotlist_selection_box_start(void)
+static _kernel_oserror * hotlist_selection_box_start(void)
 {
-  _kernel_oserror *err;
-  WimpDragBox box;
-  WimpGetPointerInfoBlock pointerblock;
-  WimpGetWindowStateBlock state;
+  _kernel_oserror         * e;
+  WimpGetPointerInfoBlock   pointerblock;
+  WimpGetWindowStateBlock   state;
+  WimpDragBox               box;
 
-  wimp_get_pointer_info(&pointerblock);                          /* Read pointer position */
+  /* Get the pointer position and info on the hotlist window */
 
-  show_error(window_get_wimp_handle(0, hotlist_windowid, &state.window_handle));
-  wimp_get_window_state(&state);
+  RetError(wimp_get_pointer_info(&pointerblock));
+
+  RetError(window_get_wimp_handle(0, hotlist_windowid, &state.window_handle));
+  RetError(wimp_get_window_state(&state));
+
+  /* Remember the pointer position in window coordinates */
 
   selection_x = pointerblock.x + (state.xscroll - state.visible_area.xmin);
   selection_y = pointerblock.y + (state.yscroll - state.visible_area.ymax);
 
+  /* Set up the drag box structure */
+
   box.drag_type         = Wimp_DragBox_DragRubberDash;
-  box.dragging_box.xmin = pointerblock.x;                          /* box shape */
+
+  box.dragging_box.xmin = pointerblock.x;
   box.dragging_box.xmax = pointerblock.x;
   box.dragging_box.ymin = pointerblock.y;
   box.dragging_box.ymax = pointerblock.y;
-  box.parent_box.xmin   = state.visible_area.xmin;  /* Bounding box for dragged box */
+
+  box.parent_box.xmin   = state.visible_area.xmin;
   box.parent_box.xmax   = state.visible_area.xmax;
   box.parent_box.ymin   = state.visible_area.ymin;
   box.parent_box.ymax   = state.visible_area.ymax;
-  err = wimp_drag_box(&box);                                           /* start drag box */
-  if (err) return err;
-  hotlist_dragging = HOTLIST_BOX_DRAG_SELECTION;                 /* Set global variable saying we are currently dragging */
-                                                                 /* so we know whether to process a user_drag_box event  */
+
+  /* Start the drag */
+
+  RetError(wimp_drag_box(&box));
+
+  /* Set global variable saying we are currently dragging */
+  /* so we know whether to process a user_drag_box event  */
+
+  hotlist_dragging.drag_type = HOTLIST_BOX_DRAG_SELECTION;
+
+  /* Install the null handler */
 
   register_null_claimant(Wimp_ENull, hotlist_null_drag_select_handler, NULL);
+
   return NULL;
 }
 
@@ -5093,21 +5736,27 @@ static _kernel_oserror *hotlist_selection_box_start(void)
 static int hotlist_null_drag_select_handler(int event_code, WimpPollBlock * event, IdBlock * id_block, void * handle)
 {
   WimpGetPointerInfoBlock pointerblock;
-  unsigned int item_height, item_dir_width, item_url_width;
-  int workx, worky;
   WimpGetWindowStateBlock state;
-  unsigned int item_min, item_max;
-  int minx, maxx;
+  unsigned int            item_height, item_dir_width, item_url_width;
+  unsigned int            item_min,    item_max;
+  int                     workx,       worky;
+  int                     minx,        maxx;
 
-  wimp_get_pointer_info(&pointerblock);                          /* Read pointer position */
+  /* Find the pointer position and get information on the hotlist window */
 
-  show_error(window_get_wimp_handle(0, hotlist_windowid, &state.window_handle));
-  wimp_get_window_state(&state);
+  ChkError(wimp_get_pointer_info(&pointerblock));
 
-  hotlist_get_entry_sizes(&item_height, &item_dir_width, &item_url_width);
+  ChkError(window_get_wimp_handle(0, hotlist_windowid, &state.window_handle));
+  ChkError(wimp_get_window_state(&state));
+
+  ChkError(hotlist_get_entry_sizes(&item_height, &item_dir_width, &item_url_width));
+
+  /* Get the mouse position in window coordinates */
 
   workx = pointerblock.x + (state.xscroll - state.visible_area.xmin);
   worky = pointerblock.y + (state.yscroll - state.visible_area.ymax);
+
+  /* Work out the items spanned by the drag box */
 
   item_min = -worky / item_height;
   if (-selection_y / item_height < item_min) item_min = -selection_y / item_height;
@@ -5125,7 +5774,9 @@ static int hotlist_null_drag_select_handler(int event_code, WimpPollBlock * even
     maxx = selection_x;
   }
 
-  hotlist_select_box(item_min, item_max, minx, maxx);
+  /* Select them */
+
+  ChkError(hotlist_select_box(item_min, item_max, minx, maxx));
 
   return 0;
 }
@@ -5137,84 +5788,158 @@ static int hotlist_null_drag_select_handler(int event_code, WimpPollBlock * even
 /* visible items in the range first_item to      */
 /* last_item where their horizontal visible area */
 /* intersects with the a line draw from minx to  */
-/* maxx.  Clears the HOTLIST_G_DRAG_SELECTED     */
-/* flag for all other items                      */
+/* maxx. Clears the HOTLIST_G_DRAG_SELECTED      */
+/* flag for all other items.                     */
 /*                                               */
-/* Parameters: first visible item                */
-/* handler.    last visible item                 */
-/*             minx workspace relative           */
-/*             maxx workspace relative           */
+/* Parameters: Number of the first visible item; */
+/*                                               */
+/*             Number of the last visible item;  */
+/*                                               */
+/*             minx (window coords);             */
+/*                                               */
+/*             maxx (window coords).             */
 /*************************************************/
 
-void hotlist_select_box(unsigned int first_item, unsigned int last_item, int minx, int maxx)
+_kernel_oserror * hotlist_select_box(unsigned int first_item, unsigned int last_item, int minx, int maxx)
 {
-  unsigned int itemno;
-  hotlist_select_box_r(first_item, last_item, hotlist_root->data.directory_content, &itemno, minx, maxx);
+  unsigned int itemno = 0;
+
+  return hotlist_select_box_r(first_item,
+                              last_item,
+                              hotlist_root->data.directory_content,
+                              &itemno,
+                              minx,
+                              maxx);
 }
 
 /*************************************************/
 /* hotlist_select_box_r()                        */
 /*                                               */
-/* Recursive backend to hotlist_select_box       */
+/* Recursive backend to hotlist_select_box.      */
+/*                                               */
+/* Parameters: Number of the first visible item; */
+/*                                               */
+/*             Number of the last visible item;  */
+/*                                               */
+/*             First item in the directory to    */
+/*             scan;                             */
+/*                                               */
+/*             Pointer to an int, in which the   */
+/*             current item number is kept (for  */
+/*             internal use only);               */
+/*                                               */
+/*             minx (window coords);             */
+/*                                               */
+/*             maxx (window coords).             */
 /*************************************************/
 
-void hotlist_select_box_r(unsigned int first_item, unsigned int last_item, hotlist_item *item, unsigned int *itemno, int minx, int maxx)
+_kernel_oserror * hotlist_select_box_r(unsigned int first_item, unsigned int last_item, hotlist_item * item,
+                                       unsigned int * itemno, int minx, int maxx)
 {
-  int itemxmin, itemxmax;
-  while(item)
-  {
-    /* Do stuff */
+  _kernel_oserror * e;
+  int               itemxmin, itemxmax;
 
+  while (item)
+  {
     if (*itemno >= first_item && *itemno <= last_item)
     {
-      hotlist_get_shape(&itemxmin, &itemxmax, item);
-      if ((!(maxx < itemxmin || minx > itemxmax)))
+      /* As long as we're within the item number specified, deal with items */
+
+      RetError(hotlist_get_shape(&itemxmin, &itemxmax, item));
+
+      /* Select items within the horizontal range */
+
+      if (!(maxx < itemxmin || minx > itemxmax))
       {
         if (!(item->flags & HOTLIST_G_DRAG_SELECTED))
         {
           item->flags |= HOTLIST_G_DRAG_SELECTED;
-          hotlist_redraw_items(*itemno, *itemno);
-          if (item->type == hl_directory && !(item->flags & HOTLIST_D_IS_OPEN)) /* If directory is closed select everything in it */
+
+          e = hotlist_redraw_items(*itemno, *itemno);
+
+          /* If directory is closed, select everything in it (if it is open, */
+          /* we should only select items the drag box covers).               */
+
+          if (item->type == hl_directory && !(item->flags & HOTLIST_D_IS_OPEN))
           {
-            hotlist_set_flags(item->data.directory_content, hl_ALL, HOTLIST_G_DRAG_SELECTED);
+            hotlist_set_flags  (item->data.directory_content, hl_ALL, HOTLIST_G_DRAG_SELECTED);
             hotlist_clear_flags(item->data.directory_content, hl_ALL, HOTLIST_G_REDRAW_NOW);
           }
+
+          if (e) return e;
         }
       }
+
+      /* Deselect items outside of the horizontal range */
+
       else
       {
         if (item->flags & HOTLIST_G_DRAG_SELECTED)
         {
           item->flags &= ~HOTLIST_G_DRAG_SELECTED;
-          hotlist_redraw_items(*itemno, *itemno);
-          if (item->type == hl_directory && !(item->flags & HOTLIST_D_IS_OPEN)) /* If directory is closed unselect everything in it */
+
+          e = hotlist_redraw_items(*itemno, *itemno);
+
+          /* If directory is closed unselect everything in it */
+
+          if (item->type == hl_directory && !(item->flags & HOTLIST_D_IS_OPEN))
           {
-            hotlist_clear_flags(item->data.directory_content, hl_ALL, HOTLIST_G_DRAG_SELECTED | HOTLIST_G_REDRAW_NOW);
+            hotlist_clear_flags(item->data.directory_content,
+                                hl_ALL,
+                                HOTLIST_G_DRAG_SELECTED | HOTLIST_G_REDRAW_NOW);
           }
+
+          if (e) return e;
         }
       }
     }
     else
     {
+      /* If we're not within the item numbers specified, then deselect things */
+
       if (item->flags & HOTLIST_G_DRAG_SELECTED)
       {
         item->flags &= ~HOTLIST_G_DRAG_SELECTED;
-        hotlist_redraw_items(*itemno, *itemno);
-        if (item->type == hl_directory && !(item->flags & HOTLIST_D_IS_OPEN)) /* If directory is closed unselect everything in it */
+
+        e = hotlist_redraw_items(*itemno, *itemno);
+
+        /* If directory is closed unselect everything in it */
+
+        if (item->type == hl_directory && !(item->flags & HOTLIST_D_IS_OPEN))
         {
-          hotlist_clear_flags(item->data.directory_content, hl_ALL, HOTLIST_G_DRAG_SELECTED | HOTLIST_G_REDRAW_NOW);
+          hotlist_clear_flags(item->data.directory_content,
+                              hl_ALL,
+                              HOTLIST_G_DRAG_SELECTED | HOTLIST_G_REDRAW_NOW);
         }
+
+        if (e) return e;
       }
     }
 
+    /* Increment the item number character */
+
     *itemno += 1;
+
+    /* Recurse for any open directory items */
 
     if (item->type == hl_directory && item->flags & HOTLIST_D_IS_OPEN)
     {
-      hotlist_select_box_r(first_item, last_item, item->data.directory_content, itemno, minx, maxx);
+      RetError(hotlist_select_box_r(first_item,
+                                    last_item,
+                                    item->data.directory_content,
+                                    itemno,
+                                    minx,
+                                    maxx));
     }
+
+    /* Get the next item */
+
     item = item->next;
   }
+
+  /* Finished */
+
+  return NULL;
 }
 
 /*************************************************/
@@ -5232,7 +5957,7 @@ void hotlist_select_box_r(unsigned int first_item, unsigned int last_item, hotli
 
 static unsigned int hotlist_contents_selected(hotlist_item * item)
 {
-  while(item)
+  while (item)
   {
     /* Keep trying to find an unselected item and */
     /* immediately return 0 if found.             */
@@ -5398,6 +6123,10 @@ static void hotlist_convert_drag_selection(hotlist_item *item)
 
 static _kernel_oserror * hotlist_modified(unsigned int type)
 {
+  #ifdef TRACE
+    if (tl & (1u<<25)) Printf("hotlist_modified: Called\n");
+  #endif
+
   if (choices.save_hotlist == Choices_SaveHotlist_Always) return hotlist_save(lookup_choice("HotlistPath:Browse:User.Hotlist",0,0));
 
   return NULL;
@@ -5594,32 +6323,186 @@ _kernel_oserror * hotlist_add_position(int x, int y, char * description, char * 
 }
 
 /*************************************************/
+/* hotlist_add_html_file()                       */
+/*                                               */
+/* Read in an HTML file, adding items starting   */
+/* at the specified position.                    */
+/*                                               */
+/* Parameters: Screen relative x position;       */
+/*                                               */
+/*             Screen relative y position;       */
+/*                                               */
+/*             Pathname of the HTML file.        */
+/*************************************************/
+
+_kernel_oserror * hotlist_add_html_file(int x, int y, char * path)
+{
+  _kernel_oserror         * e;
+  hotlist_item            * targetitem;
+  hotlist_item            * newitem;
+  FILE                    * fileptr;
+  WimpGetWindowStateBlock   state;
+  unsigned int              item_height, item_dir_width, item_url_width;
+  int                       winx, winy;
+  int                       top, position;
+
+  /* Calculate window relative coordinates */
+
+  RetError(window_get_wimp_handle(0,
+                                  hotlist_windowid,
+                                  &state.window_handle));
+
+  RetError(wimp_get_window_state(&state));
+
+  winx = coords_x_toworkarea(x, (WimpRedrawWindowBlock *) &state);
+  winy = coords_y_toworkarea(y, (WimpRedrawWindowBlock *) &state);
+
+  /* Calculate which item add is over */
+
+  hotlist_get_entry_sizes(&item_height, &item_dir_width, &item_url_width);
+
+  top        = (-winy) / item_height;
+  targetitem = hotlist_find_item(hotlist_root->data.directory_content, top);
+
+  /* Decide where to put the new item */
+
+  if (targetitem)
+  {
+    if ((-winy % item_height) > item_height / 2)
+    {
+      /* Put item after the target if we're over */
+      /* half way past its height                */
+
+      position = HOTLIST_POSITION_AFTER;
+    }
+    else
+    {
+      /* Otherwise, put item before the target */
+
+      position = HOTLIST_POSITION_BEFORE;
+    }
+  }
+  else
+  {
+    /* Put item at end of root directory */
+
+    position   = HOTLIST_POSITION_END;
+    targetitem = hotlist_root;
+  }
+
+  /* Open the file */
+
+  fileptr = fopen(path, "r");
+
+  if (fileptr == NULL)
+  {
+    erb.errnum = Utils_Error_Custom_Normal;
+
+    StrNCpy0(erb.errmess,
+             lookup_token("HlCantLoad:Hotlist file could not be loaded",
+                          0,
+                          0));
+
+    return &erb;
+  }
+
+  /* Load it, adding to the bottom of the root directory */
+
+  e = hotlist_load_directory(fileptr, hotlist_root);
+
+  fclose(fileptr);
+
+  /* Clear all of the various flags for redraw, */
+  /* selection etc. now that we have a new      */
+  /* hotlist.                                   */
+
+  hotlist_clear_flags(hotlist_root, hl_ALL, HOTLIST_G_REDRAW_NOW);
+
+  if (e) return e;
+
+  /* Move to the intended load position; first, find */
+  /* the item we just added, then move it to the     */
+  /* relevant position relative to the target item,  */
+  /* as worked out above.                            */
+
+  newitem = hotlist_root->data.directory_content;
+  while (newitem && newitem->next) newitem = newitem->next;
+
+  if (newitem)
+  {
+    /* Need to set the selected flags on the directory, or hotlist_move_item */
+    /* will think we're moving only part of it, and will end up just copying */
+    /* the directory item.                                                   */
+
+    hotlist_set_flags(newitem, hl_ALL, HOTLIST_G_IS_SELECTED);
+
+    RetError(hotlist_move_item(newitem, targetitem, position));
+
+    /* Now deselect it... */
+
+    hotlist_clear_flags(newitem, hl_ALL, HOTLIST_G_IS_SELECTED);
+  }
+
+  /* Handle redraw */
+
+  hotlist_preopen();
+
+  /* Optimise the redraw to do as little as possible depending */
+  /* upon where in the list the item was added.                */
+
+  RetError(hotlist_redraw_items(top,
+                                hotlist_count_displayed_items(hotlist_root->data.directory_content)));
+
+  /* Exit through the 'has modified' routine */
+
+  return hotlist_modified(HL_MODIFIED_ADD);
+}
+
+/*************************************************/
 /* hotlist_get_selected_shape()                  */
 /*                                               */
 /* This routine gets the coordinates required to */
 /* bound every selected item in the hotlist      */
 /* window (window relative coordinated)          */
 /*                                               */
-/* Parameters: pointer to window relative        */
-/*             bounding box                      */
+/* Parameters: Pointer to window relative        */
+/*             bounding box.                     */
 /*                                               */
-/* Returns:    1 if there were selected item(s)  */
-/*             0 if there weren't                */
+/* Returns:    1 if there were selected item(s), */
+/*             0 if there weren't.               */
 /*************************************************/
 
 static int hotlist_get_selected_shape(BBox * box)
 {
-  unsigned int itemno, item_height;
-  int found;
+  _kernel_oserror * e;
+  unsigned int      itemno, item_height;
+  int               found;
 
   found  = 0;
   itemno = 0;
-  hotlist_get_entry_sizes(&item_height, NULL, NULL);
-  hotlist_get_selected_shape_r(hotlist_root->data.directory_content,
-                               box,
-                               &itemno,
-                               &found,
-                               item_height);
+
+  /* Get item sizes */
+
+  e = hotlist_get_entry_sizes(&item_height, NULL, NULL);
+
+  if (e)
+  {
+    show_error_ret(e);
+    return 0;
+  }
+
+  /* Enter the recursive routine */
+
+  e = hotlist_get_selected_shape_r(hotlist_root->data.directory_content,
+                                   box,
+                                   &itemno,
+                                   &found,
+                                   item_height);
+  if (e)
+  {
+    show_error_ret(e);
+    return 0;
+  }
 
   return found;
 }
@@ -5628,59 +6511,79 @@ static int hotlist_get_selected_shape(BBox * box)
 /* hotlist_get_selected_shape_r()                */
 /*                                               */
 /* Recursive back-end to                         */
-/* hotlist_get_selected_shape_r()                */
+/* hotlist_get_selected_shape().                 */
 /*                                               */
-/* Parameters: Pointer to a hotlist_item         */
+/* Parameters: Pointer to a hotlist_item;        */
 /*                                               */
-/*             pointer to window relative        */
-/*             bounding box                      */
+/*             Pointer to window relative        */
+/*             bounding box;                     */
 /*                                               */
-/*             Pointer to the current item no    */
+/*             Pointer to the current item       */
+/*             number (for internal use);        */
 /*                                               */
-/*             pointer to found flag             */
+/*             Pointer to found flag;            */
 /*                                               */
 /*             The height of a single entry in   */
-/*             os units                          */
+/*             OS units.                         */
 /*************************************************/
 
-static void hotlist_get_selected_shape_r(hotlist_item * list,
-                                         BBox         * box,
-                                         unsigned int * itemno,
-                                         int          * found,
-                                         unsigned int item_height)
+static _kernel_oserror * hotlist_get_selected_shape_r(hotlist_item * list, BBox * box, unsigned int * itemno, int * found, unsigned int item_height)
 {
-  int newxmin, newxmax;
-  while(list)
+  _kernel_oserror * e;
+  int               newxmin, newxmax;
+
+  while (list)
   {
     if (list->flags & HOTLIST_G_IS_SELECTED)
     {
-      hotlist_get_shape(&newxmin, &newxmax, list);
+      RetError(hotlist_get_shape(&newxmin, &newxmax, list));
+
+      /* If we've already found an open item, then only extend the */
+      /* bounding box in appropriate directions.                   */
 
       if (*found)
       {
         if (newxmin < box->xmin) box->xmin = newxmin;
         if (newxmax > box->xmax) box->xmax = newxmax;
-        box->ymin = -((*itemno)+1)* item_height;
+
+        box->ymin = -((*itemno) + 1) * item_height;
       }
       else
       {
-        /* This section run for first selected item found only */
+        /* This section run for first selected item found only; */
+        /* set the selected shape box to match the item's       */
+        /* bounding box.                                        */
+
         box->xmin = newxmin;
         box->xmax = newxmax;
-        box->ymax = -(*itemno)     * item_height;
-        box->ymin = -((*itemno)+1) * item_height;
+        box->ymax = -(*itemno)       * item_height;
+        box->ymin = -((*itemno) + 1) * item_height;
+
+        /* Flag that we've found a selected item */
+
         *found = 1;
       }
     }
 
-    *itemno +=1;
+    *itemno += 1;
 
     /* Recursively scan all open directories */
 
     if (list->type == hl_directory && (list->flags & HOTLIST_D_IS_OPEN))
     {
-      hotlist_get_selected_shape_r(list->data.directory_content, box, itemno, found, item_height);
+      RetError(hotlist_get_selected_shape_r(list->data.directory_content,
+                                            box,
+                                            itemno,
+                                            found,
+                                            item_height));
     }
+
+    /* Follow the list */
+
     list = list->next;
   }
+
+  /* Finished */
+
+  return NULL;
 }
