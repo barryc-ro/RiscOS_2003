@@ -61,7 +61,7 @@ export:
 
 
 resources:
-	Copy		@.resources.$(LOCALE) <resource$dir>.Resources.$(COMPONENT) ~cfr~v
+	IfThere		@.resources.$(LOCALE)	Then Copy @.resources.$(LOCALE) <resource$dir>.Resources.$(COMPONENT) ~cfr~v
 	Echo		Component $(COMPONENT): 'resources' finished.
 
 
