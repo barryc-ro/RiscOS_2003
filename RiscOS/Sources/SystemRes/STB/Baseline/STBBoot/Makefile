@@ -33,7 +33,6 @@ TRANSLATE	= translate
 # Paths and filenames for files and directories within this component:
 #
 INRESDIR	= LocalUserIFRes:Applet
-INVSNFILE	= LocalUserIFRes:Version
 INCHOICEDIR	= LocalUserIFRes:Choices
 INPREDIR	= LocalUserIFRes:PreDesktop
 INDESKDIR	= LocalUserIFRes:Desktop
@@ -44,8 +43,6 @@ INUTILDIR	= LocalUserIFRes:Utilities
 # Destination paths and filenames for files and directories to be installed to:
 #
 OUTRESDIR	= $(INSTDIR).$(RES)
-OUTVSNDIR	= $(INSTDIR).$(VERSN)
-OUTVSNFILE	= $(OUTVSNDIR).$(COMPONENT)
 OUTCHOICEDIR	= $(OUTRESDIR).$(CHOICES)
 OUTPREDIR	= $(OUTRESDIR).$(PRE)
 OUTDESKDIR	= $(OUTRESDIR).$(DESK)
@@ -93,8 +90,6 @@ install: translate dirs
 	$(CP) $(INDESKDIR).*     $(OUTDESKDIR).*     $(CPFLAGS)
 	$(CP) $(INLIBDIR).*      $(OUTLIBDIR).*      $(CPFLAGS)
 	$(CP) $(INUTILDIR).*     $(OUTUTILDIR).*     $(CPFLAGS)
-	$(CP) $(INVSNFILE)       $(OUTVSNFILE)       $(CPFLAGS)
-	Do $(AWK) -- "/.define.*CMHG.*/" VersionNum >>$(OUTVSNFILE)
 	$(CHMOD) $(INSTDIR)
 	@echo $(COMPONENT): RAM module installed
 
@@ -115,7 +110,6 @@ dirs:
 	$(MKDIR) $(OUTDESKDIR).400
 	$(MKDIR) $(OUTPREDIR).300
 	$(MKDIR) $(OUTPREDIR).400
-	$(MKDIR) $(OUTVSNDIR)
 
 translate: dirs
 	$(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(TRANSRESDIR).!Run        -o $(OUTRESDIR).!Run
