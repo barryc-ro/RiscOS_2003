@@ -40,7 +40,7 @@ ASFLAGS  = ${THROWBACK} -depend !Depend -Stamp -quit
 CCFLAGS  = ${THROWBACK} -c -depend !Depend ${INCLUDES} ${DFLAGS} -zM -ffah
 CPFLAGS  = ~cfr~v
 WFLAGS   = ~c~v
-DFLAGS   = -D${MACHINE}
+DFLAGS   = ${OPTIONS}
 
 TOKENS   = Hdr:Tokens
 
