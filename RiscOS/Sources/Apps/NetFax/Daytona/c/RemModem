@@ -24,6 +24,13 @@
  *    first.
  * b) Not reset the 'poll PPP' flag.
  * c) Get stuck in the 'PPP connecting' state.
+ *
+ * 1998-03-18: BAL
+ * Removed Dialler polling from RemModem_PollStatus due to changes in the way
+ * Daytona is informed of Dialler status changes (equivalent now done in
+ * TaskModIf).
+ *
+ * Removed some dead code.
  */
 
 
@@ -31,7 +38,6 @@
 /* =============================================================================
  * Include header files
  */
-
 
 #include "StdTypes.h"
 
@@ -49,7 +55,6 @@
 #include "sys/dcistructs.h"
 #include "sys/errno.h"
 #include "sys/socket.h"
-/*#include "sys/sockio.h"*/
 #include "sys/ioctl.h"
 
 #include "net/if.h"
@@ -63,8 +68,10 @@
 #include "RemXfer.h"
 #include "Screen.h"
 
-#include "Dialler.h"
+#include "dialler.h"
+#include "DiallerIF.h"
 #include "DaytonaHW.h"
+#include "main.h"
 #include "serial.h"
 #include "DebugLib.h"
 
@@ -73,24 +80,27 @@
 /* =============================================================================
  * Define constants
  */
-#define PPP_Connection_Error 0x01 /* probably needs formally defining and moving elsewhere? */
-#define PPP_Stats 0x4b606
-#define Dialler_Status                  0x04c6c2
+
+#define PPP_Connection_Error          0x01
+    /* probably needs formally defining and moving elsewhere? */
+#define PPP_Stats                     0x4b606
 
 /* Data connection types (as passed to "AT+FCLASS" modem command */
-#define Modem_DataMode                  "0"
-#define Modem_FaxMode                   "1"
-#define Modem_ISPMode           "2"  /* Assume data connection until told otherwise! */
+#define Modem_DataMode                "0"
+#define Modem_FaxMode                 "1"
+#define Modem_ISPMode                 "2"
+    /* Assume data connection until told otherwise! */
+
+#define RM_RM_POLL_PPP                0x667
+
 
 enum state_RM
 {
     Idle,
-/*     Answered, */
     Incoming_Data,
     Incoming_RxConnected,
     Incoming_SwitchingOver,
     Incoming_RxFinished,
-/*     Incoming_StartAnswer, */
     Outgoing_Dial,
     Outgoing_Dialling,
     Outgoing_PPPConnecting,
@@ -98,7 +108,6 @@ enum state_RM
     Outgoing_SwitchingOver,
     Outgoing_PPPDisconnecting,
     Outgoing_TxFinished,
-/*     Outgoing_StartAnswer, */
     Blocking
 };
 typedef enum state_RM state_RM;
@@ -124,102 +133,106 @@ typedef enum state_RM state_RM;
  * Declare function prototypes
  */
 
-static _kernel_oserror *idle (const int input,
-                              messageDataBlock *const messageData,
-                              remoteModemDataBlock *const remote_modem_data,
-                              state_RM *const state);
+static _kernel_oserror *idle (
+                            const int                    input,
+                            messageDataBlock *const      messageData,
+                            remoteModemDataBlock *const  remote_modem_data,
+                            state_RM *const              state);
 
-static _kernel_oserror *incoming_data (const int input,
-                                       messageDataBlock *const messageData,
-                                       remoteModemDataBlock *const remote_modem_data,
-                                       state_RM *const state);
+static _kernel_oserror *incoming_data (
+                            const int                    input,
+                            messageDataBlock *const      messageData,
+                            remoteModemDataBlock *const  remote_modem_data,
+                            state_RM *const              state);
 
-#if 0
-static _kernel_oserror *answered (const int input,
-                                  messageDataBlock *const messageData,
-                                  remoteModemDataBlock *const remote_modem_data,
-                                  state_RM *const state);
-#endif
+static _kernel_oserror *incoming_rx_connected (
+                            const int                    input,
+                            messageDataBlock *const      messageData,
+                            remoteModemDataBlock *const  remote_modem_data,
+                            state_RM *const              state);
 
-static _kernel_oserror *incoming_rx_connected (const int input,
-                                               messageDataBlock *const messageData,
-                                               remoteModemDataBlock *const remote_modem_data,
-                                               state_RM *const state);
+static _kernel_oserror *incoming_switching_over (
+                            const int                    input,
+                            messageDataBlock *const      messageData,
+                            remoteModemDataBlock *const  remote_modem_data,
+                            state_RM *const              state);
 
-static _kernel_oserror *incoming_switching_over (const int input,
-                                                 messageDataBlock *const messageData,
-                                                 remoteModemDataBlock *const remote_modem_data,
-                                                 state_RM *const state);
+static _kernel_oserror *incoming_rx_finished (
+                            const int                    input,
+                            messageDataBlock *const      messageData,
+                            remoteModemDataBlock *const  remote_modem_data,
+                            state_RM *const              state);
 
-static _kernel_oserror *incoming_rx_finished (const int input,
-                                              messageDataBlock *const messageData,
-                                              remoteModemDataBlock *const remote_modem_data,
-                                              state_RM *const state);
+static _kernel_oserror *outgoing_dial (
+                            const int                    input,
+                            messageDataBlock *const      messageData,
+                            remoteModemDataBlock *const  remote_modem_data,
+                            state_RM *const              state,
+                            const char *const            number,
+                            const char *const            connection_type);
 
-#if  0
-static _kernel_oserror *incoming_start_answer (const int input,
-                                               messageDataBlock *const messageData,
-                                               remoteModemDataBlock *const remote_modem_data,
-                                               state_RM *const state);
-#endif
+static _kernel_oserror *outgoing_dialling (
+                            const int                    input,
+                            messageDataBlock *const      messageData,
+                            remoteModemDataBlock *const  remote_modem_data,
+                            state_RM *const              state,
+                            const char *const            connection_type);
 
-static _kernel_oserror *outgoing_dial (const int input,
-                                       messageDataBlock *const messageData,
-                                       remoteModemDataBlock *const remote_modem_data,
-                                       state_RM *const state,
-                                       const char *const number,
-                                       const char *const connection_type);
+static _kernel_oserror *outgoing_ppp_connecting (
+                            const int                    input,
+                            messageDataBlock *const      messageData,
+                            remoteModemDataBlock *const  remote_modem_data,
+                            state_RM *const              state);
 
-static _kernel_oserror *outgoing_dialling (const int input,
-                                           messageDataBlock *const messageData,
-                                           remoteModemDataBlock *const remote_modem_data,
-                                           state_RM *const state,
-                                           const char *const connection_type);
+static _kernel_oserror *outgoing_tx_connected (
+                            const int                    input,
+                            messageDataBlock *const      messageData,
+                            remoteModemDataBlock *const  remote_modem_data,
+                            state_RM *const              state,
+                            const char *const            connection_type);
 
-static _kernel_oserror *outgoing_ppp_connecting (const int input,
-                                                 messageDataBlock *const messageData,
-                                                 remoteModemDataBlock *const remote_modem_data,
-                                                 state_RM *const state);
+static _kernel_oserror *outgoing_switching_over (
+                            const int                    input,
+                            messageDataBlock *const      messageData,
+                            remoteModemDataBlock *const  remote_modem_data,
+                            state_RM *const              state);
 
-static _kernel_oserror *outgoing_tx_connected (const int input,
-                                               messageDataBlock *const messageData,
-                                               remoteModemDataBlock *const remote_modem_data,
-                                               state_RM *const state,
-                                               const char *const connection_type);
+static _kernel_oserror *outgoing_ppp_disconnecting (
+                            const int                    input,
+                            messageDataBlock *const      messageData,
+                            remoteModemDataBlock *const  remote_modem_data,
+                            state_RM *const              state);
 
-static _kernel_oserror *outgoing_switching_over (const int input,
-                                                 messageDataBlock *const messageData,
-                                                 remoteModemDataBlock *const remote_modem_data,
-                                                 state_RM *const state);
+static _kernel_oserror *outgoing_tx_finished (
+                            const int                    input,
+                            messageDataBlock *const      messageData,
+                            remoteModemDataBlock *const  remote_modem_data,
+                            state_RM *const              state);
 
-static _kernel_oserror *outgoing_ppp_disconnecting (const int input,
-                                                    messageDataBlock *const messageData,
-                                                    remoteModemDataBlock *const remote_modem_data,
-                                                    state_RM *const state);
+static _kernel_oserror *blocking (
+                            const int                    input,
+                            messageDataBlock *const      messageData,
+                            remoteModemDataBlock *const  remote_modem_data,
+                            state_RM *const              state);
 
-static _kernel_oserror *outgoing_tx_finished (const int input,
-                                              messageDataBlock *const messageData,
-                                              remoteModemDataBlock *const remote_modem_data,
-                                              state_RM *const state);
+static _kernel_oserror *get_ppp_state (int *const  ppp_state);
 
-#if 0
-static _kernel_oserror *outgoing_start_answer (const int input,
-                                               messageDataBlock *const messageData,
-                                               remoteModemDataBlock *const remote_modem_data,
-                                               state_RM *const state);
-#endif
+static _kernel_oserror *RemoteModem_ResetModem (void);
 
-static _kernel_oserror *blocking (const int input,
-                                  messageDataBlock *const messageData,
-                                  remoteModemDataBlock *const remote_modem_data,
-                                  state_RM *const state);
+static void RemModem_SendOSError (
+                void               (*StateMachine) (
+                                       int                 messageNumber,
+                                       messageDataBlock *  messagedata),
+                int                messageNumber,
+                _kernel_oserror *  error);
 
-static _kernel_oserror *get_ppp_state (int *const ppp_state);
-
-static _kernel_oserror *RemoteModem_ResetModem(void);
-
-static void RemModem_SendOSError(void (*StateMachine)(int messageNumber, messageDataBlock *messagedata), int messageNumber, _kernel_oserror *error);
-static void RemModem_SendRCError(void (*StateMachine)(int messageNumber, messageDataBlock *messagedata), int messageNumber, const char *text, int rc);
+static void RemModem_SendRCError (
+                void          (*StateMachine) (
+                                  int                 messageNumber,
+                                  messageDataBlock *  messagedata),
+                int           messageNumber,
+                const char *  text,
+                int           rc);
 
 
 /* =============================================================================
@@ -276,15 +289,14 @@ static const char fax_dial_script[] =
 
 static const char fax_hangup_script[] =
     "ABORT ERROR\n"
+    "TIMEOUT 5\n"
     "\"\" ATH0\n"
     "\\r\\nOK\\r\\n \\c\n";
 
 static const char data_hangup_script[] =
     "ABORT ERROR\n"
+    "TIMEOUT 5\n"
     "\"\" \\d+++\\d\\c\n"
-#if 0
-    "\\r\\nOK\\r\\n ATH0\n"
-#endif
     "\\r\\n \\c\n"
     "\\r\\n ATH0\n"
     "\\r\\nOK\\r\\n \\c\n";
@@ -350,7 +362,7 @@ static const char isp_dial_script[] =
     "ABORT BUSY\n"
     "ABORT 'NO ANSWER'\n"
     "\"\" <Dialler$ModemInit><Dialler$Global><Dialler$Dial$ISPLocal>\n"
-    "\\r\\nOK\\r\\n ATDT<Dialler$Dial$Number>\n"
+    "\\r\\nOK\\r\\n ATD<Dialler$Dial$Number>\n"
     "TIMEOUT 60\n"
     "\\r\\nCONNECT \\c\n"
     "<Dialler$Dial$Prompt1> <Dialler$Dial$Response1>\n"
@@ -360,39 +372,36 @@ static const char isp_dial_script[] =
     "<Dialler$Dial$Prompt5> <Dialler$Dial$Response5>\n"
     "CONNECTION_TIMEOUT 0\n";
 
-static unsigned int last_status = 0;
 
-
-#define DI_RM_STATUS_CHANGED 0x666
-#define RM_RM_POLL_PPP 0x667
 
 
 /* =============================================================================
  * Define functions
  */
+
 /* flash the active light */
 void ActiveLight_On(void)
 {
-	_kernel_swi_regs  r;
+    _kernel_swi_regs  r;
 
-	r.r[0] = 0;
-	r.r[1] = DaytonaHW_LED_Active;
-	r.r[2] = 0;
-	r.r[3] = 75;
-	r.r[4] = 75;
+    r.r[0] = 0;
+    r.r[1] = DaytonaHW_LED_Active;
+    r.r[2] = 0;
+    r.r[3] = 75;
+    r.r[4] = 75;
     _kernel_swi(DaytonaHW_LED, &r, &r);
 
 }
 
 void ActiveLight_Off(void)
 {
-	_kernel_swi_regs  r;
+    _kernel_swi_regs  r;
 
-	r.r[0] = 0;
-	r.r[1] = DaytonaHW_LED_Active;
-	r.r[2] = 0;
-	r.r[3] = 0;
-	r.r[4] = 0;
+    r.r[0] = 0;
+    r.r[1] = DaytonaHW_LED_Active;
+    r.r[2] = 0;
+    r.r[3] = 0;
+    r.r[4] = 0;
     _kernel_swi(DaytonaHW_LED, &r, &r);
 }
 
@@ -442,11 +451,6 @@ extern void RemModem_StateMachine (const int messageNumber, messageDataBlock *me
             e = incoming_data (messageNumber, messageData, remote_modem_data, &state);
             break;
 
-#if 0
-        case Answered:
-            e = answered (messageNumber, messageData, remote_modem_data, &state);
-            break;
-#endif
         case Incoming_RxConnected:
             e = incoming_rx_connected (messageNumber, messageData, remote_modem_data, &state);
             break;
@@ -459,11 +463,6 @@ extern void RemModem_StateMachine (const int messageNumber, messageDataBlock *me
             e = incoming_rx_finished (messageNumber, messageData, remote_modem_data, &state);
             break;
 
-#if 0
-        case Incoming_StartAnswer:
-            e = incoming_start_answer (messageNumber, messageData, remote_modem_data, &state);
-            break;
-#endif
         case Outgoing_Dial:
 #if 1
             e = outgoing_dial (messageNumber, messageData, remote_modem_data, &state, stash_number, stash_connection_type);
@@ -496,11 +495,6 @@ extern void RemModem_StateMachine (const int messageNumber, messageDataBlock *me
             e = outgoing_tx_finished (messageNumber, messageData, remote_modem_data, &state);
             break;
 
-#if 0
-        case Outgoing_StartAnswer:
-            e = outgoing_start_answer (messageNumber, messageData, remote_modem_data, &state);
-            break;
-#endif
         case Blocking:
             e = blocking (messageNumber, messageData, remote_modem_data, &state);
             break;
@@ -515,7 +509,9 @@ extern void RemModem_StateMachine (const int messageNumber, messageDataBlock *me
 
     if (e != NULL) /* Oops, _kernel_oserror error; report, reset modem, and go idle */
     {
-    	RemModem_SendOSError(RemXfer_StateMachine, RM_RX_ERROR, e);
+        dprintf ((NULL, "RemModem_StateMachine error: %s\n", e->errmess));
+
+        RemModem_SendOSError(RemXfer_StateMachine, RM_RX_ERROR, e);
 
         /* BAL: the assumption below is not valid */
         (void) RemoteModem_ResetModem ();
@@ -562,7 +558,7 @@ static _kernel_oserror *idle (const int input,
                 {                      /* Accept call: enough memory */
                     char conntype[256];
 
-					StateKicker_SendMessage(Screen_StateMachine, RM_SC_INCOMING, NULL);	/* show incoming call animation */
+                    StateKicker_SendMessage(Screen_StateMachine, RM_SC_INCOMING, NULL); /* show incoming call animation */
 
                     /* @@ Find out type of connection -- use REPORT FAX and REPORT DATA in script?*/
                     _swix (Dialler_Status, _INR (0, 2),
@@ -581,11 +577,6 @@ static _kernel_oserror *idle (const int input,
                     }
                     else if (strcmp (conntype, "DATA") == 0)
                     {
-#if 0 /* Original "ATO" send */
-                        Serial_Write_String(REMMODEM, "ATO\r\n"); /* Send "ATO" to modem to resume online connection */
-                        /* +++ Should really swallow the "CONNECT" string here!!! +++ */
-                        StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_INCOMING_DAYTONA, NULL);
-#endif
                         e = dialler_start_answer_script (0,    /* don't force modem reset before starting script */
                                                          data_answer_script,
                                                          data_hangup_script,
@@ -603,9 +594,9 @@ static _kernel_oserror *idle (const int input,
             break;
 
         case RX_RM_HANGUP:
-        	/* Idle already, but RemXfer must be sent GOING_IDLE */
-        	StateKicker_SendMessage(RemXfer_StateMachine, RM_RX_GOING_IDLE, NULL);
-        	/* we haven't sent RM_SC_INCOMING, so don't send RM_SC_INCOMING_COMPLETE */
+            /* Idle already, but RemXfer must be sent GOING_IDLE */
+            StateKicker_SendMessage(RemXfer_StateMachine, RM_RX_GOING_IDLE, NULL);
+            /* we haven't sent RM_SC_INCOMING, so don't send RM_SC_INCOMING_COMPLETE */
             *state = Idle;         /* Already idle */
             break;
 
@@ -653,7 +644,7 @@ static _kernel_oserror *incoming_data (const int input,
                                                     remote_modem_data->serial_input_stream,
                                                     remote_modem_data->serial_output_stream);
 
-			       StateKicker_SendMessage(Screen_StateMachine, RM_SC_INCOMING_COMPLETE, NULL);	/* terminate incoming call animation */
+                   StateKicker_SendMessage(Screen_StateMachine, RM_SC_INCOMING_COMPLETE, NULL); /* terminate incoming call animation */
                    /*StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_GOING_IDLE, NULL); RCM says: let Incoming_RxFinished issue this*/
                    ActiveLight_Off();
                    *state = Incoming_RxFinished;
@@ -671,7 +662,7 @@ static _kernel_oserror *incoming_data (const int input,
                                              remote_modem_data->serial_input_stream,
                                              remote_modem_data->serial_output_stream);
 
-			StateKicker_SendMessage(Screen_StateMachine, RM_SC_INCOMING_COMPLETE, NULL);	/* terminate incoming call animation */
+            StateKicker_SendMessage(Screen_StateMachine, RM_SC_INCOMING_COMPLETE, NULL);    /* terminate incoming call animation */
             /*StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_GOING_IDLE, NULL); RCM says: let Incoming_RxFinished issue this*/
             ActiveLight_Off();
             *state = Incoming_RxFinished;
@@ -691,49 +682,6 @@ static _kernel_oserror *incoming_data (const int input,
     return e;
 }
 
-
-
-
-#if 0
-static _kernel_oserror *answered (const int input,
-                                  messageDataBlock *const messageData,
-                                  remoteModemDataBlock *const remote_modem_data,
-                                  state_RM *const state)
-{
-    _kernel_oserror *e = NULL;
-
-    switch (input)
-    {
-/* @@ Now bypassed
-        case ModemError: /@ @@ where is the appropriate #define? @/
-            e = daytonahw_reset_modem (DaytonaHW_Modem_Remote);
-            *state = Incoming_StartAnswer;
-            StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_INCOMING_FAILED, NULL);
-            break;
-
-        case VoiceConnection: /@ @@ where is the appropriate #define? @/
-            e = daytonahw_reset_modem (DaytonaHW_Modem_Remote);
-            *state = Incoming_StartAnswer;
-            StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_INCOMING_VOICE, NULL);
-            break;
-
-        case FaxConnection:
-            *state = Incoming_RxConnected;
-            StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_INCOMING_FAX, NULL);
-            break;
-
-        case ZModemConnection:
-            *state = Incoming_RxConnected;
-            StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_INCOMING_DAYTONA, NULL);
-            break;
-*/
-        default:
-            break;
-    }
-
-    return e;
-}
-#endif
 
 
 
@@ -758,7 +706,7 @@ static _kernel_oserror *incoming_rx_connected (const int input,
 
         case RX_RM_HANGUP:
             e = dialler_start_hangup_script ();
-            StateKicker_SendMessage(Screen_StateMachine, RM_SC_INCOMING_COMPLETE, NULL);	/* terminate incoming call animation */
+            StateKicker_SendMessage(Screen_StateMachine, RM_SC_INCOMING_COMPLETE, NULL);    /* terminate incoming call animation */
             ActiveLight_Off();
             *state = Incoming_RxFinished; /*@@ Must be careful not to leave script running if error */
             /*RCM says: RM_RX_GOING_IDLE will be issued by Incoming_RxFinished*/
@@ -810,19 +758,19 @@ static _kernel_oserror *incoming_switching_over (const int input,
                     break;
 
                 case Dialler_ScriptFailed:
-                	{
+                    {
 #if 1
                         RemModem_SendRCError(RemXfer_StateMachine, RM_RX_ERROR, "Remote modem: Script failed (1)", (messageData->data.dialler.status & 0xFF));
 #else
-                		messageDataBlock *sendMessage;
+                        messageDataBlock *sendMessage;
 
-                    	StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_ERROR, &sendMessage);
-                    	sendMessage->data.rm_error.rc = 0;	/*>>>should rc be zero???*/
-                    	sendMessage->data.rm_error.err.errnum = 0;	/*>>>should this be 'internal error + rc? */
-                    	sprintf(sendMessage->data.rm_error.err.errmess, "Remote modem: Script failed (1)");
+                        StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_ERROR, &sendMessage);
+                        sendMessage->data.rm_error.rc = 0;  /*>>>should rc be zero???*/
+                        sendMessage->data.rm_error.err.errnum = 0;  /*>>>should this be 'internal error + rc? */
+                        sprintf(sendMessage->data.rm_error.err.errmess, "Remote modem: Script failed (1)");
 #endif
-                    	*state = Incoming_RxConnected;
-                    	/*>>>Will be sent back RX_RM_HANGUP in response???*/
+                        *state = Incoming_RxConnected;
+                        /*>>>Will be sent back RX_RM_HANGUP in response???*/
                     }
                     break;
 
@@ -876,7 +824,7 @@ static _kernel_oserror *incoming_rx_finished (const int input,
                                                  remote_modem_data->serial_input_stream,
                                                  remote_modem_data->serial_output_stream);
 
-                StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_GOING_IDLE, NULL);	/*RCM says: hasn't this already been issued by previous state???*/
+                StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_GOING_IDLE, NULL); /*RCM says: hasn't this already been issued by previous state???*/
             }
             break;
 
@@ -896,47 +844,6 @@ static _kernel_oserror *incoming_rx_finished (const int input,
     return e;
 }
 
-
-
-
-#if 0
-static _kernel_oserror *incoming_start_answer (const int input,
-                                               messageDataBlock *const messageData,
-                                               remoteModemDataBlock *const remote_modem_data,
-                                               state_RM *const state)
-{
-    _kernel_oserror *e = NULL;
-
-    switch (input)
-    {
-/* @@ Now bypassed
-        case DI_RM_STATUS_CHANGED:
-            dprintf((NULL, "Dialler status: 0x%X\n", messageData->data.dialler.status));
-
-            dialler_monitor_answer_script ((int *) state,
-                                         messageData->data.dialler.status,
-                                         Incoming_StartAnswer,
-                                         Idle,
-                                         Idle);
-            /@ probably want to turn dialler failed state into an error state @/
-            break;
-
-        case RX_RM_HANGUP:
-            *state = Incoming_StartAnswer; /@ Already doing hangup @/
-            break;
-
-        case RX_RM_DIAL_FAX: case RX_RM_DIAL_DAYTONA: case RX_RM_DIAL_ISP:
-            *state = Incoming_StartAnswer;
-            StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_DIAL_REJECTED, NULL);
-            break;
-*/
-        default:
-            break;
-    }
-
-    return e;
-}
-#endif
 
 
 
@@ -999,12 +906,12 @@ static _kernel_oserror *outgoing_dial (const int input,
                 }
                 else if (strcmp(connection_type, Modem_ISPMode) == 0)
                 {
-                	_swix (OS_SetVarVal, _INR (0, 4), /* Set up number to dial for script */
-                       "Dialler$Dial$Number",
-                       number,
-                       strlen (number),
-                       0,
-                       4); /* VarType_LiteralString */
+                    _swix (OS_SetVarVal, _INR (0, 4), /* Set up number to dial for script */
+                           "Dialler$Dial$Number",
+                            number,
+                            strlen (number),
+                            0,
+                            4); /* VarType_LiteralString */
 
                    (void)Serial_Set_Baudrate(REMMODEM, 115200);
                    dial_script = isp_dial_script;
@@ -1088,7 +995,7 @@ static _kernel_oserror *outgoing_dialling (const int input,
                 }
                 else
                 {
-                	ActiveLight_On();
+                    ActiveLight_On();
                     StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_TXCONNECTED, NULL);
                 }
             }
@@ -1109,23 +1016,6 @@ static _kernel_oserror *outgoing_dialling (const int input,
                 StateKicker_SendMessage (Screen_StateMachine, RM_SC_DIAL_COMPLETE, NULL);
             }
             break;
-
-/*
-        case Modem_Timeout: @@ All this goes, yes?
-            e = daytonahw_reset_modem (DaytonaHW_Modem_Remote);
-            *state = Outgoing_StartAnswer;
-            *output = DialFailed_NoAnswer;
-            break;
-
-        case Modem_Error:
-            e = daytonahw_reset_modem (DaytonaHW_Modem_Remote);
-            *state = Outgoing_StartAnswer;
-            *output = DialFailed_Error;
-
-        case Modem_Connected:
-            *state = Outgoing_TxConnected;
-            *output = TxConnected;
-*/
 
         default:
             break;
@@ -1295,20 +1185,20 @@ static _kernel_oserror *outgoing_switching_over (const int input,
                     break;
 
                 case Dialler_ScriptFailed:
-                	{
+                    {
 #if 1
                         RemModem_SendRCError(RemXfer_StateMachine, RM_RX_ERROR, "Remote modem: Script failed (2)", (messageData->data.dialler.status & 0xFF));
 
 #else
-                		messageDataBlock *sendMessage;
+                        messageDataBlock *sendMessage;
 
-                    	StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_ERROR, &sendMessage);
-                    	sendMessage->data.rm_error.rc = 0;	/*>>>should rc be zero???*/
-                    	sendMessage->data.rm_error.err.errnum = 0;	/*>>>should this be 'internal error + rc? */
-                    	sprintf(sendMessage->data.rm_error.err.errmess, "Remote modem: Script failed (2)");
+                        StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_ERROR, &sendMessage);
+                        sendMessage->data.rm_error.rc = 0;  /*>>>should rc be zero???*/
+                        sendMessage->data.rm_error.err.errnum = 0;  /*>>>should this be 'internal error + rc? */
+                        sprintf(sendMessage->data.rm_error.err.errmess, "Remote modem: Script failed (2)");
 #endif
-                    	*state = Outgoing_TxConnected;
-                    	/*>>>Will be sent back RX_RM_HANGUP in response???*/
+                        *state = Outgoing_TxConnected;
+                        /*>>>Will be sent back RX_RM_HANGUP in response???*/
                     }
                     break;
 
@@ -1423,48 +1313,6 @@ static _kernel_oserror *outgoing_tx_finished (const int input,
 
 
 
-#if 0
-static _kernel_oserror *outgoing_start_answer (const int input,
-                                   messageDataBlock *const messageData,
-                                               remoteModemDataBlock *const remote_modem_data,
-                                               state_RM *const state)
-{
-    _kernel_oserror *e = NULL;
-
-    switch (input)
-    {
-#if 0
-/* @@ Now bypassed */
-        case DI_RM_STATUS_CHANGED:
-            dprintf((NULL, "Dialler status: 0x%X\n", messageData->data.dialler.status));
-
-            e = dialler_start_answer_script (1,    /* force modem reset before executing script */
-                                             answer_script,
-                                             fax_hangup_script,
-                                             remote_modem_data->serial_input_stream,
-                                             remote_modem_data->serial_output_stream);
-            *state = Idle;
-            break;
-
-        case RX_RM_HANGUP:
-            *state = Outgoing_StartAnswer; /@ Already doing hangup @/
-            break;
-
-        case RX_RM_DIAL_FAX: case RX_RM_DIAL_DAYTONA: case RX_RM_DIAL_ISP:
-            *state = Outgoing_StartAnswer;
-            StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_DIAL_REJECTED, NULL);
-            break;
-#endif
-        default:
-            break;
-    }
-
-    return e;
-}
-#endif
-
-
-
 static _kernel_oserror *blocking (const int input,
                           messageDataBlock *const messageData,
                                   remoteModemDataBlock *const remote_modem_data,
@@ -1483,11 +1331,6 @@ static _kernel_oserror *blocking (const int input,
 
     switch (input)
     {
-/* @@@@
-        case Modem_Reset: /@ @@ Huh?  This can't happen here, can it? @/
-            execute modem remoyte answer script;
-*/
-
         case RX_RM_HANGUP:
             *state = Blocking; /* Would be idle if someone wasn't calling us */
             break;
@@ -1516,14 +1359,16 @@ extern _kernel_oserror *RemModem_Initialise (void)
     g_remote_modem_data.serial_input_stream = Modem[REMMODEM].FileIn;
     g_remote_modem_data.serial_output_stream = Modem[REMMODEM].FileOut;
 
-    e = dialler_start_answer_script (1,    /* force modem reset before executing script */
-                                     answer_script,
-                                     fax_hangup_script,
-                                     remote_modem_data->serial_input_stream,
-                                     remote_modem_data->serial_output_stream);
+    e = dialler_start_answer_script (
+            1,    /* force modem reset before executing script */
+            answer_script,
+            fax_hangup_script,
+            remote_modem_data->serial_input_stream,
+            remote_modem_data->serial_output_stream);
 
     return e;
 }
+
 
 
 
@@ -1537,33 +1382,11 @@ extern void RemModem_Finalise (void)
 
 extern void RemModem_PollStatus(void)
 {
-    _kernel_oserror  *error;
-    unsigned int current_status;
-
-    if ((error = dialler_status(&current_status)) != NULL)
-    {
-        /*>>>should this be passed as an error to RemModem?*/
-    }
-    else
-    {
-        if (last_status != current_status)
-        {
-            messageDataBlock *sendMessage;
-
-            StateKicker_SendMessage(RemModem_StateMachine, DI_RM_STATUS_CHANGED, &sendMessage);
-            sendMessage->data.dialler.status = current_status;
-
-            last_status = current_status;
-
-                    /* deliver the queued messages */
-                        while (StateKicker_Deliver() > 1)
-                        /* null statement */;
-        }
-    }
-
     if (ppp_poll_status)
     {
-        StateKicker_SendMessage (RemModem_StateMachine, RM_RM_POLL_PPP, NULL);
+        StateKicker_SendMessage (RemModem_StateMachine,
+                                 RM_RM_POLL_PPP,
+                                 NULL);
 
         /* deliver the queued messages */
         while (StateKicker_Deliver() > 1)
@@ -1581,19 +1404,30 @@ static _kernel_oserror *get_ppp_state (int *const ppp_state)
     struct ifreq ifr;
 
     s = socket (PF_INET, SOCK_RAW, 0);
-    if (s == -1) return &_inet_error;
+    if (s == -1)
+    {
+        return &_inet_error;
+    }
 
     strcpy (ifr.ifr_name, "ppp0");
     if (socketioctl (s, SIOCGIFFLAGS, &ifr) == -1)
+    {
         return &_inet_error;
+    }
 
     if (ifr.ifr_ifru.ifru_flags & IFF_UP)
+    {
         *ppp_state = 1;
+    }
     else
+    {
         *ppp_state = 0;
+    }
 
     if (socketclose (s) == -1)
+    {
         return &_inet_error;
+    }
 #endif
     return NULL;
 }
@@ -1613,24 +1447,28 @@ static _kernel_oserror *RemoteModem_ResetModem(void)
 }
 
 
+
+
 static void RemModem_SendOSError(void (*StateMachine)(int messageNumber, messageDataBlock *messagedata), int messageNumber, _kernel_oserror *error)
 {
-	messageDataBlock *sendMessage;
+    messageDataBlock *sendMessage;
 
     StateKicker_SendMessage(StateMachine, messageNumber, &sendMessage);
-    sendMessage->data.rm_error.rc = 0;	/*>>>should this be zero???*/
-    sendMessage->data.rm_error.err = *error;	/* MUST copy message block rather than pointer (which will be stale when the message arrives)  */
+    sendMessage->data.rm_error.rc = 0;  /*>>>should this be zero???*/
+    sendMessage->data.rm_error.err = *error;    /* MUST copy message block rather than pointer (which will be stale when the message arrives)  */
 }
+
+
 
 
 static void RemModem_SendRCError(void (*StateMachine)(int messageNumber, messageDataBlock *messagedata), int messageNumber, const char *text, int rc)
 {
-	messageDataBlock *sendMessage;
+    messageDataBlock *sendMessage;
 
     /* parcel return code up as error message */
     StateKicker_SendMessage(StateMachine, messageNumber, &sendMessage);
     sendMessage->data.rm_error.rc = rc;
-    sendMessage->data.rm_error.err.errnum = 0;	/*>>>should this be 'internal' plus rc???*/
+    sendMessage->data.rm_error.err.errnum = 0;  /*>>>should this be 'internal' plus rc???*/
     sprintf(sendMessage->data.rm_error.err.errmess, "%s (%d)", text, rc);
 }
 

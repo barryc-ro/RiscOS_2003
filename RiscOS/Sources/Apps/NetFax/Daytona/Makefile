@@ -76,6 +76,8 @@ ABSSYM          = RISC_OSLib:o.c_abssym
 WRAPPER         = RISC_OSLib:s.ModuleWrap
 
 SOCKLIB         = TCPIPLibs:o.socklib5
+INETLIB		= TCPIPLibs:o.inetlib
+UNIXLIB		= TCPIPLibs:o.unixlib
 
 EVENTLIB        = tbox:o.eventlib
 TOOLBOXLIB      = tbox:o.toolboxlib
@@ -91,6 +93,7 @@ UILIB		= <Lib$Dir>.NetFax.UILib.o.UILib
 ERRORLIB	= ${LIBDIR}.ErrorLib.o.ErrorLib
 MSGLIB		= ${LIBDIR}.MsgLib.o.MsgLib
 NUMCONVERT	= ${LIBDIR}.NumConvert.o.numconv
+DEBUGLIB	= <Lib$Dir>.DebugLib.o.DebugLib
 
 
 LIBSM = \
@@ -129,6 +132,7 @@ LIBS = \
 
 
 LIBSD = \
+ ${DEBUGLIB}\
  ${UILIB} \
  ${NFELIB} \
  ${EMAILLIB}\
@@ -140,7 +144,9 @@ LIBSD = \
  ${WIMPLIB} \
  ${TOOLBOXLIB} \
  ${EVENTLIB} \
+ ${INETLIB}\
  ${SOCKLIB} \
+ ${UNIXLIB}\
  ${C++LIB} \
  ${NUMCONVERT} \
  ${CLIB}
@@ -184,7 +190,8 @@ OBJS = \
  o.AddrBookIF \
  o.AddrFile \
  o.CasIF\
- o.Dialler \
+ o.DiallerBIF\
+ o.DiallerIF \
  o.emailrx \
  o.EnoteIF\
  o.FaxIF \
@@ -214,6 +221,7 @@ OBJS = \
  o.slideshow\
  o.SmtpIF \
  o.StateKicke \
+ o.TaskModIF\
  o.TextTiffIF\
  o.tokenmsg\
  o.ui \
@@ -227,7 +235,8 @@ OBJSZ = \
  oz.AddrBookIF \
  oz.AddrFile \
  oz.CasIF\
- oz.Dialler \
+ oz.DiallerBIF\
+ oz.DiallerIF \
  oz.emailrx\
  oz.EnoteIF\
  oz.FaxIF \
@@ -257,6 +266,7 @@ OBJSZ = \
  oz.slideshow\
  oz.SmtpIF \
  oz.StateKicke \
+ oz.TaskModIF\
  oz.TextTiffIF\
  oz.tokenmsg\
  oz.ui \
@@ -270,7 +280,8 @@ OBJSD =\
  od.AddrBookIF \
  od.AddrFile \
  od.CasIF\
- od.Dialler \
+ od.DiallerBIF\
+ od.DiallerIF \
  od.emailrx\
  od.EnoteIF\
  od.FaxIF \
@@ -300,6 +311,7 @@ OBJSD =\
  od.slideshow\
  od.SmtpIF \
  od.StateKicke \
+ od.TaskModIF\
  od.TextTiffIF\
  od.tokenmsg\
  od.ui \
@@ -308,7 +320,6 @@ OBJSD =\
  od.zFakeScan \
  od.ZmodemIF
 
-#OBJSDZ =
 
 
 # -----------------------------------------------------------------------------
