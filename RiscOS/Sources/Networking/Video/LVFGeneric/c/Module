@@ -90,17 +90,23 @@ void * module_wsp = NULL;
 
 /* Local variables */
 
-static int    registered                        = 0;
 static int    clibrary_realloc_routine_is_buggy = 1;
+
+static int    registered                        = 0;
+static bool   prism_registered                  = false;
+static bool   callback_pending_flag             = false;
 
 /* Local functions */
 
-static _kernel_oserror * module_try_to_register        (void);
-static _kernel_oserror * module_try_to_deregister      (void);
-static _kernel_oserror * module_register               (void);
+static _kernel_oserror * module_try_to_register         (void);
+static _kernel_oserror * module_try_to_deregister       (void);
+static _kernel_oserror * module_register                (void);
+static _kernel_oserror * module_prism_try_to_register   (void);
+static _kernel_oserror * module_prism_try_to_deregister (void);
+static _kernel_oserror * module_prism_register          (void);
 
-static void              module_check_os_version       (void);
-static void              module_atexit                 (void);
+static void              module_check_os_version        (void);
+static void              module_atexit                  (void);
 
 /**************************************************************/
 /* module_try_to_register()                                   */
@@ -220,6 +226,109 @@ static _kernel_oserror * module_register(void)
 }
 
 /**************************************************************/
+/* module_prism_try_to_register()                             */
+/*                                                            */
+/* Attempts to register with PRISM. Exits if already          */
+/* registered. "prism_registered" is set if registration      */
+/* is successful, else left at its previous value.            */
+/**************************************************************/
+
+static _kernel_oserror * module_prism_try_to_register(void)
+{
+  _kernel_oserror * e;
+
+  dprintf(("", "module_prism_try_to_register: Called\n"));
+
+  if (prism_registered)
+  {
+    dprintf(("", "module_prism_try_to_register: Already registered, exitting\n"));
+    return NULL;
+  }
+
+  e = _swix(PRISM_ComponentRegister,
+            _INR(0,4),
+
+            0,
+            LVFGeneric_00,
+            LVFGeneric_PRISMID,
+            Module_VersionNumber,
+            Module_Help " © Pace 2000 (" Module_Date ")");
+
+  if (e == NULL) prism_registered = true;
+
+  dprintf(("", "module_prism_try_to_register: Finished, prism_registered = %d\n", prism_registered));
+
+  return e;
+}
+
+/**************************************************************/
+/* module_prism_try_to_deregister()                           */
+/*                                                            */
+/* Attempts to deregister with PRISM. Exits if not            */
+/* registered. "prism_registered" is cleared whether or not   */
+/* the call to PRISM to deregister raises an error.           */
+/**************************************************************/
+
+static _kernel_oserror * module_prism_try_to_deregister(void)
+{
+  _kernel_oserror * e;
+
+  dprintf(("", "module_prism_try_to_deregister: Called\n"));
+
+  if (prism_registered == false)
+  {
+    dprintf(("", "module_prism_try_to_deregister: Not registered, exitting\n"));
+    return NULL;
+  }
+
+  e = _swix(PRISM_ComponentDeregister,
+            _INR(0,2),
+
+            0,
+            LVFGeneric_00,
+            LVFGeneric_PRISMID);
+
+  prism_registered = false;
+
+  dprintf(("", "module_prism_try_to_deregister: Finished, e = %p\n", e));
+  if (e) dprintf(("", "module_prism_try_to_register: '%s'\n", e->errmess));
+
+  return e;
+}
+
+/**************************************************************/
+/* module_prism_register()                                    */
+/*                                                            */
+/* Attempts to register with PRISM. If we get "SWI not known" */
+/* and this isn't a ROM build, try loading PRISM. That should */
+/* send the "started" service call around which leads to      */
+/* another attempt to register later.                         */
+/**************************************************************/
+
+static _kernel_oserror * module_prism_register(void)
+{
+  _kernel_oserror * e = module_prism_try_to_register();
+
+  if (e == NULL) return NULL;
+  if (e->errnum != PRISM_NoSuchSWI) return e;
+
+  #ifndef ROM
+
+    /* Try to load PRISM - if it starts it should send round a       */
+    /* service call that'll prompt us to attempt registration again. */
+
+    _swix(OS_Module,
+          _INR(0,1),
+
+          1, /* Load */
+          "System:Modules.PRISM.PRISM");
+
+  #endif
+
+  return NULL;
+}
+
+/**************************************************************/
 /* module_check_os_version()                                  */
 /*                                                            */
 /* Sets clibrary_realloc_routine_is_buggy to a non-zero value */
@@ -326,13 +435,32 @@ _kernel_oserror * module_init(CMHG_CONST char * cmd_fail, int podule_base, void 
 
     if (e != NULL) return e;
 
-    /* Register with Video Control - No Such SWI is hidden, other */
-    /* errors are reported.                                       */
-
-    e = module_register();
-    if (e != NULL && e->errnum != LVFGeneric_NoSuchSWI) return e;
-
   #endif
+
+  /* Register with Video Control - No Such SWI is hidden, other */
+  /* errors are reported.                                       */
+
+  e = module_register();
+  if (e != NULL && e->errnum != LVFGeneric_NoSuchSWI) return e;
+
+  /* Register with PRISM - No Such SWI is hidden, other */
+  /* errors are reported.                               */
+
+  e = module_prism_register();
+  if (e != NULL && e->errnum != 0x1E6) return e;
+
+  /* Callback to send "I'm starting" service call for PRISM */
+
+  if (
+       _swix(OS_AddCallBack,
+             _INR(0,1),
+
+             callback_entry,
+             pw)
+
+       == NULL
+     )
+     callback_pending_flag = true;
 
   return callout_init(pw);
 }
@@ -348,6 +476,18 @@ _kernel_oserror * module_init(CMHG_CONST char * cmd_fail, int podule_base, void 
 static void module_atexit(void)
 {
   dprintf(("", "module_atexit: Called\n"));
+
+  /* Ensure pending callbacks are cancelled */
+
+  if (callback_pending_flag == true)
+  {
+    (void) _swix(OS_RemoveCallBack,
+                 _INR(0,1),
+                 callback_entry,
+                 module_wsp);
+
+    callback_pending_flag = false;
+  }
 
   callout_final(module_wsp);
   messages_file_close();
@@ -367,13 +507,61 @@ static void module_atexit(void)
   /* (but hopefully reliable!) stuff first, above.                 */
 
   module_try_to_deregister();
+  module_prism_try_to_deregister();
   session_free_list();
+
+  /* Send the "dying" service call for PRISM */
+
+  (void) _swix(OS_ServiceCall,
+               _INR(0,4),
+
+               PRISMModuleDying,
+               Service_PRISM_Core,
+               0,
+               LVFGeneric_PRISMID,
+               Module_VersionNumber);
 
   #ifdef ROM
     #ifndef NO_TINYSTUBS
       if(!__ROM) _swix(TinySupport_Die, 0);
     #endif
   #endif
+}
+
+/**************************************************************/
+/* callback_handler()                                         */
+/*                                                            */
+/* Standard callback handler. When invoked, assumes the       */
+/* module has just started, and issues Service_PRISM_Core     */
+/* / ModuleStarted.                                           */
+/*                                                            */
+/* Parameters: As normal for a CMHG callback handler.         */
+/**************************************************************/
+
+int callback_handler(_kernel_swi_regs * r, void * pw)
+{
+  (void) pw;
+  (void) r;
+
+  if (callback_pending_flag == false)
+  {
+    return 1;
+  }
+
+  callback_pending_flag = false;
+
+  dprintf(("", "callback_handler: Sending Service_PRISM_Core\n"));
+
+  _swix(OS_ServiceCall,
+        _INR(0,4),
+
+        PRISMModuleStarted,
+        Service_PRISM_Core,
+        0,
+        LVFGeneric_PRISMID,
+        Module_VersionNumber);
+
+  return 1;
 }
 
 /**************************************************************/
@@ -388,55 +576,89 @@ void service_handler(int service_number, _kernel_swi_regs * r, void * pw)
 {
   dprintf(("", "service_handler: Called for %08x (%d, %d)\n", service_number, r->r[0], r->r[2]));
 
-  if (service_number == Service_VideoControl)
+  switch (service_number)
   {
-    switch (r->r[0])
+    case Service_VideoControl:
     {
-      case VideoControlModuleStarted: module_try_to_register(); break;
-      case VideoControlModuleDying:   registered = 0; /* Can't actively deregister as Video Control has gone away */
-      default: break;
-
-      /* To be consistent with other modules, when the file streamer reaches end-of-file it */
-      /* tells the MPEG system to expect and end-of-stream. Once the MPEG system believes   */
-      /* it has delivered all data to the user (e.g. MPEG chip buffers are empty, all       */
-      /* the buffer chunks we passed it have been released) it raises an appopriate         */
-      /* UpCall_MPEG. Video Control sees it and issues Service_VideoControl 5 (we rely on   */
-      /* Video Control 0.28 or later). We see that service call and restart streaming from  */
-      /* the file's beginning.                                                              */
-      /*                                                                                    */
-      /* This has a distinct advantage over restarting the file streaming with no signals   */
-      /* at all, even though it introduces a slight pause at the loop point:                */
-      /*                                                                                    */
-      /* * Top-level software sees the expected "streaming->EOS->streaming" transition and  */
-      /*   can thus detect a loop, which may be used to e.g. only loop for 'n' times;       */
-      /*                                                                                    */
-      /* * We can issue a stream reset call, because we know exactly when the MPEG system   */
-      /*   has finished showing all the data. This then avoids any possible loop point      */
-      /*   glitches that can occur if you're not going from (say) I-frame to I-frame.       */
-
-      case VideoControlNewPlayState:
+      switch (r->r[0])
       {
-        /* Loop for normal EOS. Don't try to loop for timeout EOS, it can just make things */
-        /* worse if, say, the network's gone away for NFS-based file playback.             */
+        case VideoControlModuleStarted: module_try_to_register(); break;
+        case VideoControlModuleDying:   registered = 0; /* Can't actively deregister as Video Control has gone away */
+        default: break;
 
-        if (
-             (r->r[3] & VC_SVC_NewPlayState_StateIsInR4) != 0 &&
-             r->r[4] == vc_play_state_normal_eos
-           )
+        /* To be consistent with other modules, when the file streamer reaches end-of-file it */
+        /* tells the MPEG system to expect and end-of-stream. Once the MPEG system believes   */
+        /* it has delivered all data to the user (e.g. MPEG chip buffers are empty, all       */
+        /* the buffer chunks we passed it have been released) it raises an appopriate         */
+        /* UpCall_MPEG. Video Control sees it and issues Service_VideoControl 5 (we rely on   */
+        /* Video Control 0.28 or later). We see that service call and restart streaming from  */
+        /* the file's beginning.                                                              */
+        /*                                                                                    */
+        /* This has a distinct advantage over restarting the file streaming with no signals   */
+        /* at all, even though it introduces a slight pause at the loop point:                */
+        /*                                                                                    */
+        /* * Top-level software sees the expected "streaming->EOS->streaming" transition and  */
+        /*   can thus detect a loop, which may be used to e.g. only loop for 'n' times;       */
+        /*                                                                                    */
+        /* * We can issue a stream reset call, because we know exactly when the MPEG system   */
+        /*   has finished showing all the data. This then avoids any possible loop point      */
+        /*   glitches that can occur if you're not going from (say) I-frame to I-frame.       */
+
+        case VideoControlNewPlayState:
         {
-          session * s;
+          /* Loop for normal EOS. Don't try to loop for timeout EOS, it can just make things */
+          /* worse if, say, the network's gone away for NFS-based file playback.             */
 
-          /* We need to match the Video Control client ID with our own session */
-
-          for (s = session_return_head(); s; s = s->next)
+          if (
+               (r->r[3] & VC_SVC_NewPlayState_StateIsInR4) != 0 &&
+               r->r[4] == vc_play_state_normal_eos
+             )
           {
-            if (s->vcid == r->r[2] && s->loop != 0) lvfctrl_loop(s);
+            session * s;
+
+            /* We need to match the Video Control client ID with our own session */
+
+            for (s = session_return_head(); s; s = s->next)
+            {
+              if (s->vcid == r->r[2] && s->loop != 0) lvfctrl_loop(s);
+            }
           }
         }
+        break;
       }
-      break;
     }
-  }
+    break;
+
+    case Service_PRISM_Core:
+    {
+      switch (r->r[0])
+      {
+        case PRISMSessionAborting:
+        case PRISMCleanShutdown:
+        case PRISMAbortiveShutdown:
+        {
+          //// Presently undefined
+        }
+        break;
+
+        case PRISMModuleStarted:
+        {
+          /* If this is PRISM, re-register with it */
+
+          if (r->r[3] == PRISM_PRISMID) module_prism_try_to_register();
+        }
+
+        case PRISMModuleDying:
+        {
+          /* If this is PRISM, note that we're not registered anymore */
+
+          if (r->r[3] == PRISM_PRISMID) prism_registered = false;
+        }
+        break;
+      }
+    }
+
+  } /* 'switch (service_number)' */
 }
 
 /**************************************************************/
