@@ -103,7 +103,13 @@ extern void startinput (SGMLCTX * context, ELEMENT * element, VALUES * attribute
 			 &attributes->value[HTML_INPUT_SIZE],
 			 &attributes->value[HTML_INPUT_SRC],
 			 &attributes->value[HTML_INPUT_TYPE],
-			 &attributes->value[HTML_INPUT_VALUE] );
+			 &attributes->value[HTML_INPUT_VALUE],
+			 &attributes->value[HTML_INPUT_ID],
+			 &attributes->value[HTML_INPUT_BGCOLOR],
+			 &attributes->value[HTML_INPUT_SELCOLOR],
+			 &attributes->value[HTML_INPUT_CURSOR],
+			 &attributes->value[HTML_INPUT_NOCURSOR],
+			 &attributes->value[HTML_INPUT_NUMBERS]);
 }
 
 /*****************************************************************************/
@@ -115,7 +121,11 @@ extern void startselect (SGMLCTX * context, ELEMENT * element, VALUES * attribut
     text_item_push_select(htmlctxof(context),
 			  &attributes->value[HTML_SELECT_NAME],
 			  &attributes->value[HTML_SELECT_SIZE],
-			  &attributes->value[HTML_SELECT_MULTIPLE]);
+			  &attributes->value[HTML_SELECT_MULTIPLE],
+			  &attributes->value[HTML_SELECT_ID],
+			  &attributes->value[HTML_SELECT_BGCOLOR],
+			  &attributes->value[HTML_SELECT_SELCOLOR],
+			  &attributes->value[HTML_SELECT_NOPOPUP]);
 
     /*select_str_mode(htmlctxof(context));*/
 }
@@ -229,7 +239,11 @@ extern void starttextarea (SGMLCTX * context, ELEMENT * element, VALUES * attrib
     text_item_push_textarea(me,
 			    &attributes->value[HTML_TEXTAREA_NAME],
 			    &attributes->value[HTML_TEXTAREA_ROWS],
-			    &attributes->value[HTML_TEXTAREA_COLS]);
+			    &attributes->value[HTML_TEXTAREA_COLS],
+			    &attributes->value[HTML_TEXTAREA_ID],
+			    &attributes->value[HTML_TEXTAREA_BGCOLOR],
+			    &attributes->value[HTML_TEXTAREA_SELCOLOR],
+			    &attributes->value[HTML_TEXTAREA_CURSOR]);
 
     ASSERT(me->last_mode == HTMLMODE_BOGUS);
 

@@ -531,6 +531,7 @@ void fe_dispose_view(fe_view v)
     if (selected_view == v)
 	selected_view = NULL;
     
+    mm_free(v->selected_id);
     mm_free(v->name);
     mm_free(v->return_page);
 

@@ -628,6 +628,10 @@ os_error *backend_item_pos_info(be_doc doc, be_item ti, int *px, int *py, int *f
 	    rid_text_item_input *tii = (rid_text_item_input *) ti;
 	    rid_input_item *ii = tii->input;
 
+	    /* do this first so we can check imh in switch */
+	    if (object_table[ti->tag].imh != NULL)
+		imh = (object_table[ti->tag].imh)(ti, doc, object_image_HANDLE);
+
 	    switch (ii->tag)
 	    {
 	    case rid_it_TEXT:
@@ -647,7 +651,11 @@ os_error *backend_item_pos_info(be_doc doc, be_item ti, int *px, int *py, int *f
 		    /* Don't set the link flag, use the fact that be_item_info_ACTION is set */
 		    if (link)
 			*link = ii->base.parent->action;
-                }
+
+		    /* Do set the ISMAP flag for an image SUBMIT unless the NOCURSOR flag is set */
+		    if (imh && (ii->flags & rid_if_NOCURSOR) == 0)
+			f |= be_item_info_ISMAP;
+		}
 		break;
 	    case rid_it_RESET:
 	    case rid_it_RADIO:
@@ -663,9 +671,6 @@ os_error *backend_item_pos_info(be_doc doc, be_item ti, int *px, int *py, int *f
 
         if (ti->tag == rid_tag_SELECT)
             f |= be_item_info_MENU;
-
-	if (object_table[ti->tag].imh != NULL)
-	    imh = (object_table[ti->tag].imh)(ti, doc, object_image_HANDLE);
     }
     else
     {
@@ -4127,6 +4132,9 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
 	    PPDBG((stderr, "setting margins to %d,%d\n", doc->margin.x0, doc->margin.y1));
 #endif
 	}
+#else
+	doc->rh = ((pparse_details*)doc->pd)->close(doc->ph, doc->cfile);
+	doc->ph = NULL;
 #endif
 	
 #if 1
@@ -4942,6 +4950,22 @@ const char *backend_check_meta(be_doc doc, const char *name)
     return NULL;
 }
 
+void backend_clear_selected(be_doc doc)
+{
+    be_item ti = doc->rh->stream.text_list;
+    while (ti)
+    {
+	if (ti->flag & rid_flag_SELECTED)
+	{
+	    ti->flag &= ~rid_flag_SELECTED;
+	    be_update_item_highlight(doc, ti);
+	}
+	
+	ti = rid_scan(ti, SCAN_RECURSE | SCAN_FWD);
+    }
+}
+
+#if 0
 void backend_select_item(be_doc doc, be_item item, int select)
 {
     int new_flag;
@@ -4969,6 +4993,7 @@ void backend_select_item(be_doc doc, be_item item, int select)
     item->flag = new_flag;
     be_update_item_highlight(doc, item);
 }
+#endif
 
 be_item backend_find_selected(be_doc doc)
 {

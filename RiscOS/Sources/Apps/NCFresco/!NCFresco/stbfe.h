@@ -123,6 +123,7 @@ extern void fe_force_fit(fe_view v, BOOL force);
 extern void fe_iconise(BOOL iconise);
 extern fe_view fe_locate_view(const char *name);
 extern void fe_submit_form(fe_view v, const char *id);
+extern void fe_open_keyboard(fe_view v);
 
 /* From internal.h */
 

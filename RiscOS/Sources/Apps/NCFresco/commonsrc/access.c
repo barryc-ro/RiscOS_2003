@@ -34,6 +34,7 @@
 
 #include "memwatch.h"
 
+#include "msgs.h"
 #include "os.h"
 #include "alarm.h"
 #include "wimp.h"
@@ -357,7 +358,7 @@ static BOOL access_do_redial(access_handle d, alarm_handler continue_fn)
 #ifdef CBPROJECT
         InetDial_Connect();
 #else
-        os_cli("*Redial");
+        os_cli(msgs_lookup("redial"));
 #endif
 
         if (d->progress)
@@ -399,6 +400,8 @@ static void access_redial_alarm(int at, void *h)
 # endif
 
 #else
+
+/* Fresco */
 
 # define access_do_redial(d,f)  0
 # define access_redial_alarm    0

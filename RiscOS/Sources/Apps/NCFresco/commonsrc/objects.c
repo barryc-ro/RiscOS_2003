@@ -43,18 +43,23 @@ rid_object_type objects_type_test(int ftype)
     return rid_object_type_UNKNOWN;
 }
 
+/* This returns false if we are nbot yet formatted enough to get a position */
 
-void objects_bbox(be_doc doc, be_item ti, wimp_box *box)
+BOOL objects_bbox(be_doc doc, be_item ti, wimp_box *box)
 {
     rid_text_item_object *tio = (rid_text_item_object *)ti;
     rid_object_item *obj = tio->object;
 
-    backend_doc_item_bbox(doc, ti, box);
+    if (backend_doc_item_bbox(doc, ti, box) == NULL)
+    {
+	box->x0 += obj->hspace + obj->bwidth;
+	box->x1 -= obj->hspace + obj->bwidth;
+	box->y0 += obj->vspace + obj->bwidth;
+	box->y1 -= obj->vspace + obj->bwidth;
 
-    box->x0 += obj->hspace + obj->bwidth;
-    box->x1 -= obj->hspace + obj->bwidth;
-    box->y0 += obj->vspace + obj->bwidth;
-    box->y1 -= obj->vspace + obj->bwidth;
+	return TRUE;
+    }
+    return FALSE;
 }
 
 void objects_check_movement(be_doc doc)
@@ -75,11 +80,16 @@ void objects_check_movement(be_doc doc)
 	    wimp_box box;
 	    objects_bbox(doc, ti, &box);
 
-	    *(wimp_box *)obj->state.plugin.box = box;
+	    /* new - check for change in box */
+	    if (box.x0 != obj->state.plugin.box[0] || box.x1 != obj->state.plugin.box[2] || 
+		box.y0 != obj->state.plugin.box[1] || box.y1 != obj->state.plugin.box[3])
+	    {
+		*(wimp_box *)obj->state.plugin.box = box;
 
 #ifndef BUILDERS
-	    plugin_send_reshape(obj->state.plugin.pp, &box);
+		plugin_send_reshape(obj->state.plugin.pp, &box);
 #endif
+	    }
 	}
     }
 }

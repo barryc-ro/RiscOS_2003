@@ -440,8 +440,6 @@ static int find_tag(const char *tags[], const char *name)
 
  */
 
-#if 1
-
 static int add_tag(char *name, int name_len, char *value, int value_len, const char *tags[], name_value_pair *output, int free_offset)
 {
     int tag_num;
@@ -634,59 +632,6 @@ int parse_http_header(char *header_data, const char *tags[], name_value_pair *ou
 
     return unknown;
 }
-
-#else
-
-#define SEPARATORS ";\n\r"
-
-
-void parse_http_header(char *header_data, const char *tags[], char *values[])
-{
-    char *s;
-    int i;
-
-    /* zero the output array first */
-    for (i = 0; tags[i]; i++)
-        values[i] = NULL;
-
-    s = strtok(header_data, SEPARATORS);
-    if (s) do
-    {
-        char *name;
-        char *equals, *value;
-        int tag_num;
-
-        /* s is either NAME or VALUE or NAME=VALUE, whitespace can be anywhere */
-        name = skip_space(s);
-        value = "";
-        equals = strchr(s, '=');
-
-        if (equals)
-        {
-            *equals = '\0';
-            value = equals + 1;
-        }
-
-        tag_num = find_tag(tags, name);
-        if (tag_num != -1)
-        {
-            values[tag_num] = skip_space(value);
-        }
-        else
-        {
-            /* if searching for the null entry use full NAME=VALUE */
-            if (equals)
-                *equals = '=';
-
-            tag_num = find_tag(tags, "");
-            if (tag_num != -1)
-                values[tag_num] = name;
-        }
-    }
-    while ((s = strtok(NULL, SEPARATORS)) != NULL);
-}
-
-#endif
 
 /* ---------------------------------------------------------------------------------------------------------- */
 
@@ -1163,7 +1108,6 @@ unsigned long HTParseTime (const char *str)
 
     if (!str) return 0;
 
-#if 1
     if (strchr(str, ',') || strchr(str, '-'))
     {
 	s = (char *)str;
@@ -1197,76 +1141,6 @@ unsigned long HTParseTime (const char *str)
 	s = skip_to_num(s);
 	tm.tm_sec = (int)strtoul(s, &s, 10);
     }
-#else
-#if 1
-    /* Thursday, 10-Jun-93 01:29:59 GMT, or */
-    /* 10-Jun-93 01:29:59  - the abbreviated unoffical, but Netscape accepts it version */
-    if (strchr(str, '-') != NULL)
-    {
-	if ((s = strchr(str, ',')) != NULL) /* If we have the comma then skip past it */
-	    s++;
-	else
-	    s = str;
-	
-	while (*s && *s==' ')
-	    s++;
-
-	if ((int)strlen(s) < 18)
-	    return 0;
-
-	tm.tm_mday = make_num(s);
-	tm.tm_mon = make_month(s+3);
-	tm.tm_year = make_num(s+7);
-	if (tm.tm_year < 70)
-	    tm.tm_year += 100;
-	tm.tm_hour = make_num(s+10);
-	tm.tm_min = make_num(s+13);
-	tm.tm_sec = make_num(s+16);
-    }
-    else if ((s = strchr(str, ',')) != NULL)	/* Thu, 10 Jan 1993 01:29:59 GMT */
-    {
-	s++;
-	while (*s && *s==' ')
-	    s++;
-
-	tm.tm_mday = make_num(s);
-	tm.tm_mon = make_month(s+3);
-	tm.tm_year = (100*make_num(s+7) - 1900) + make_num(s+9);
-	tm.tm_hour = make_num(s+12);
-	tm.tm_min = make_num(s+15);
-	tm.tm_sec = make_num(s+18);
-    }
-#else    
-    if ((s = strchr(str, ',')) != NULL) {	 /* Thursday, 10-Jun-93 01:29:59 GMT */
-	s++;				/* or: Thu, 10 Jan 1993 01:29:59 GMT */
-	while (*s && *s==' ') s++;
-	if (strchr(s,'-')) {				     /* First format */
-	    if ((int)strlen(s) < 18) {
-		return 0;
-	    }
-	    tm.tm_mday = make_num(s);
-	    tm.tm_mon = make_month(s+3);
-	    tm.tm_year = make_num(s+7);
-	    if (tm.tm_year < 70)
-		tm.tm_year += 100;
-	    tm.tm_hour = make_num(s+10);
-	    tm.tm_min = make_num(s+13);
-	    tm.tm_sec = make_num(s+16);
-	} else {					    /* Second format */
-	    if ((int)strlen(s) < 20) {
-		return 0;
-	    }
-	    tm.tm_mday = make_num(s);
-	    tm.tm_mon = make_month(s+3);
-	    tm.tm_year = (100*make_num(s+7) - 1900) + make_num(s+9);
-	    tm.tm_hour = make_num(s+12);
-	    tm.tm_min = make_num(s+15);
-	    tm.tm_sec = make_num(s+18);
-
-	}
-    }
-#endif
-#endif
     else {	      /* Try the other format:  Wed Jun  9 01:29:59 1993 GMT */
 	s = (char *)str;
 	while (*s && *s==' ') s++;

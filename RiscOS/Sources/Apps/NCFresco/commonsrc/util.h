@@ -137,4 +137,23 @@ extern os_error *ensure_modem_line(void);
 /*extern void null_free(void **vpp);*/
 #define STRING_FREE(s) nullfree((void **)(s));
 
+typedef enum
+{
+    key_action_NO_ACTION,
+    key_action_NEWLINE,
+    key_action_DELETE_LEFT,
+    key_action_DELETE_RIGHT,
+    key_action_DELETE_ALL,
+    key_action_DELETE_TO_END,
+    key_action_DELETE_TO_START,
+    key_action_LEFT,
+    key_action_RIGHT,
+    key_action_START_OF_LINE,
+    key_action_END_OF_LINE,
+    key_action_UP,
+    key_action_DOWN
+} input_key_action;
+
+extern input_key_action lookup_key_action(int key);
+
 /* eof util.h */

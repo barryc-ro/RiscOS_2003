@@ -279,6 +279,13 @@ typedef struct rid_form_element
     struct rid_form_item *parent;
     struct rid_text_item *display;
     rid_form_element_tag tag;
+    char *id;
+    struct
+    {
+	int back;
+	int select;
+	int cursor;
+    } colours;
 } rid_form_element;
 
 
@@ -299,6 +306,9 @@ typedef int rid_input_flags;
 #define rid_if_DISABLED 0x02
 #define rid_if_SCANNED	0x04		/* Used when checking elements at end of form */
 #define rid_if_SELECTED	0x08		/* with OPTION, was it selected by the user */
+#define rid_if_NOCURSOR	0x10		/* with IMAGE, don't need x,y coords */
+#define rid_if_NOPOPUP	0x20		/* with SELECT, don't popup menu */
+#define rid_if_NUMBERS	0x40		/* with TEXT, PASSWORD, only allow numbers */
 
 typedef int rid_image_flags;
 #define rid_image_flag_ISMAP    0x01
@@ -996,6 +1006,8 @@ struct rid_object_item
 
     char *standby;              /* Text to use in place */
     char *name;
+
+    char *id;
 
     /* Sizes passed in from HTML */
     rid_stdunits userborder;			/* border width */

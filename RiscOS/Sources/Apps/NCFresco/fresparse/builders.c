@@ -239,6 +239,10 @@ extern void htmlriscos_colour(VALUE *col, int *word)
 	    ((w1 & 0xff) << 24);
     }
     break;
+
+    default:
+	*word = -1;		/* set to -1 if invalid colour specification */
+	break;
     }
 }
 
@@ -740,7 +744,7 @@ extern void new_area_item(HTMLCTX *me,
 
 /*****************************************************************************/
 
-extern void text_item_push_select(HTMLCTX * me, VALUE *name, VALUE *size, VALUE *multiple)
+extern void text_item_push_select(HTMLCTX * me, VALUE *name, VALUE *size, VALUE *multiple, VALUE *id, VALUE *bgcolor, VALUE *selcolor, VALUE *nopopup)
 {
     rid_text_item_select *new;
     rid_text_item *nb;
@@ -755,9 +759,16 @@ extern void text_item_push_select(HTMLCTX * me, VALUE *name, VALUE *size, VALUE 
     nb = &(new->base);
     sel = mm_calloc(1, sizeof(*sel));
     new->select = sel;
+
     sel->base.display = nb;
     sel->base.tag = rid_form_element_SELECT;
 
+    sel->base.id = valuestringdup(id);
+    htmlriscos_colour(bgcolor, &sel->base.colours.back);
+    htmlriscos_colour(selcolor, &sel->base.colours.select);
+    if (nopopup->type != value_none)
+	sel->flags |= rid_if_NOPOPUP;
+    
     if (name->type == value_string)
 	sel->name = stringdup(name->u.s);
     if (size->type != value_integer)
@@ -785,7 +796,7 @@ extern void text_item_push_select(HTMLCTX * me, VALUE *name, VALUE *size, VALUE 
 
 /*****************************************************************************/
 
-extern void text_item_push_textarea(HTMLCTX * me, VALUE *name, VALUE *rows, VALUE *cols)
+extern void text_item_push_textarea(HTMLCTX * me, VALUE *name, VALUE *rows, VALUE *cols, VALUE *id, VALUE *bgcolor, VALUE *selcolor, VALUE *cursor)
 {
     rid_text_item_textarea *new;
     rid_text_item *nb;
@@ -803,6 +814,11 @@ extern void text_item_push_textarea(HTMLCTX * me, VALUE *name, VALUE *rows, VALU
     ta->base.display = nb;
     ta->base.tag = rid_form_element_TEXTAREA;
 
+    ta->base.id = valuestringdup(id);
+    htmlriscos_colour(bgcolor, &ta->base.colours.back);
+    htmlriscos_colour(selcolor, &ta->base.colours.select);
+    htmlriscos_colour(cursor, &ta->base.colours.cursor);
+    
     if (name->type == value_string)
 	ta->name = stringdup(name->u.s);
 
@@ -843,7 +859,13 @@ extern void text_item_push_input(HTMLCTX * me, int flags,
 				 VALUE *size,
 				 VALUE *src,
 				 VALUE *type,
-				 VALUE *value)
+				 VALUE *value,
+				 VALUE *id,
+				 VALUE *bgcolor,
+				 VALUE *selcolor,
+				 VALUE *cursor,
+				 VALUE *nocursor,
+				 VALUE *numbers)
 {
     rid_text_item_input *new;
     rid_text_item *nb = NULL;
@@ -898,9 +920,19 @@ extern void text_item_push_input(HTMLCTX * me, int flags,
     in->base.tag = rid_form_element_INPUT;
     in->tag = tag;
 
-    if (checked->type == value_void)
+    in->base.id = valuestringdup(id);
+    htmlriscos_colour(bgcolor, &in->base.colours.back);
+    htmlriscos_colour(selcolor, &in->base.colours.select);
+    htmlriscos_colour(cursor, &in->base.colours.cursor);
+
+    if (nocursor->type != value_none)
+	in->flags |= rid_if_NOCURSOR;
+    if (numbers->type != value_none)
+	in->flags |= rid_if_NUMBERS;
+
+    if (checked->type != value_none)
 	in->flags |= rid_if_CHECKED;
-    if (disabled->type == value_void)
+    if (disabled->type != value_none)
 	in->flags |= rid_if_DISABLED;
 
     if (name->type == value_string)

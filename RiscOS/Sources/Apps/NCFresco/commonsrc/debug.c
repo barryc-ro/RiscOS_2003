@@ -22,6 +22,7 @@ DBGPROTO(cnfdbg);
 DBGPROTO(imgdbg);
 DBGPROTO(ckidbg);
 DBGPROTO(accdbg);
+DBGPROTO(htsdbg);
 DBGPROTO(tabdbgn);
 DBGPROTO(prsdbgn);
 DBGPROTO(rendbgn);
@@ -30,6 +31,7 @@ DBGPROTO(cnfdbgn);
 DBGPROTO(imgdbgn);
 DBGPROTO(ckidbgn);
 DBGPROTO(accdbgn);
+DBGPROTO(htsdbgn);
 #pragma -v0
 #endif
 
@@ -58,7 +60,9 @@ static dbg_conf_item dbg_conf[]=
     { "ACCDBG", 0 }, 
     { "ACCDBGN", 0 } ,
     { "STBDBG", 0 }, 
-    { "STBDBGN", 0 } 
+    { "STBDBGN", 0 },
+    { "HTSDBG", 0 }, 
+    { "HTSDBGN", 0 } 
 };
 
 enum
@@ -84,7 +88,9 @@ enum
     acc,
     accn,
     stb,
-    stbn
+    stbn,
+    hts,
+    htsn
 };
 
 extern void dbginit(void)
@@ -120,6 +126,8 @@ extern void dbginit(void)
     ACCDBGN(("Excessive access debugging present\n"));
     STBDBG(("NCFresco debugging present\n"));
     STBDBGN(("Excessive NCFresco debugging present\n"));
+    HTSDBG(("HTTPSave debugging present\n"));
+    HTSDBGN(("Excessive HTTPSave debugging present\n"));
 }
 
 /* **** N.B.  These don't need semi-colons at the end as they define functions */
@@ -145,6 +153,8 @@ DBGFNDEF(accdbg, acc)
 DBGFNDEF(accdbgn, accn)
 DBGFNDEF(stbdbg, stb)
 DBGFNDEF(stbdbgn, stbn)
+DBGFNDEF(htsdbg, hts)
+DBGFNDEF(htsdbgn, htsn)
 
 #else	/* DEBUG */
 

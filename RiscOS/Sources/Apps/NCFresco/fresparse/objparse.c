@@ -16,11 +16,6 @@
 
 /* -------------------------------------------------------------------------- */
 
-static char *valuestringdup(const VALUE *v)
-{
-    return v->type == value_string ? stringdup(v->u.s) : NULL;
-}
-
 static int mimetype_to_filetype(STRING s)
 {
     char *ss = stringdup(s);
@@ -80,7 +75,7 @@ static int extension_to_filetype(STRING s)
 
 /* -------------------------------------------------------------------------- */
 
-static rid_object_item *make_base_object (HTMLCTX *me, const VALUE *classid, const VALUE *classid_type, const VALUE *data, const VALUE *data_type)
+static rid_object_item *make_base_object (HTMLCTX *me, const VALUE *classid, const VALUE *classid_type, const VALUE *data, const VALUE *data_type, const VALUE *id)
 {
     int classid_ftype, data_ftype, ftype;
     rid_object_item *obj;
@@ -126,6 +121,8 @@ static rid_object_item *make_base_object (HTMLCTX *me, const VALUE *classid, con
     /* Can handle it so allocate structure and fill in values */
     obj = mm_calloc(sizeof(*obj), 1);
     obj->type = objtype;
+
+    obj->id = valuestringdup(id);
 
     obj->classid_ftype = classid_ftype;
     obj->classid = valuestringdup(classid);
@@ -356,7 +353,8 @@ extern void startapplet (SGMLCTX * context, ELEMENT * element, VALUES * attribut
 		&attributes->value[HTML_APPLET_CODE],
 		&java_type,
 		&none,
-		&none);
+		&none,
+		&attributes->value[HTML_APPLET_ID]);
 
     if (obj)
     {
@@ -530,7 +528,8 @@ extern void startobject(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 		&attributes->value[HTML_OBJECT_CLASSID],
 		&attributes->value[HTML_OBJECT_CODETYPE],
 		&attributes->value[HTML_OBJECT_DATA],
-		&attributes->value[HTML_OBJECT_TYPE]);
+		&attributes->value[HTML_OBJECT_TYPE],
+		&attributes->value[HTML_OBJECT_ID]);
 
     if (obj)
     {
@@ -589,7 +588,8 @@ extern void startembed(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 		&none,
 		&none,
 		&attributes->value[HTML_EMBED_SRC],
-		&none);
+		&none,
+		&attributes->value[HTML_EMBED_ID]);
 
     if (obj)
     {
@@ -667,6 +667,7 @@ extern void startbgsound(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 		&none,
 		&none,
 		&attributes->value[HTML_BGSOUND_SRC],
+		&none,
 		&none);
 
     if (obj)

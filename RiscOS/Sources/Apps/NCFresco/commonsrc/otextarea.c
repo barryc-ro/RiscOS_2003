@@ -162,8 +162,11 @@ void otextarea_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hp
     int line_gap = webfonts[WEBFONT_TTY].max_up + webfonts[WEBFONT_TTY].max_down;
     int dx = frontend_dx, dy = frontend_dy;
     wimp_box ta_box, gwind_box;
+    int bg;
 
     tai = ((rid_text_item_textarea *)ti)->area;
+
+    bg = tai->base.colours.back == -1 ? render_colour_WRITE : tai->base.colours.back;
 
     if (fs->lf != webfonts[WEBFONT_TTY].handle)
     {
@@ -174,10 +177,10 @@ void otextarea_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hp
     if (fs->lfc != render_colour_INPUT_F )
     {
 	fs->lfc = render_colour_INPUT_F;
-	render_set_font_colours(fs->lfc, render_colour_INPUT_B, doc);
+	render_set_font_colours(fs->lfc, bg, doc);
     }
 
-    render_plinth(render_colour_WRITE, render_plinth_RIM | render_plinth_IN,
+    render_plinth(bg, render_plinth_RIM | render_plinth_IN,
 		  hpos, bline - ti->max_down,
 		  ti->width, (ti->max_up + ti->max_down), doc );
 
@@ -475,10 +478,9 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
     }
     else
     {
-	switch (key)
+	switch (lookup_key_action(key))
 	{
-	case 13:
-	case 10:
+	case key_action_NEWLINE:
 	    {
 		rid_textarea_line *new_tal;
 
@@ -514,10 +516,7 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 		flags |= (SPLIT_DOWN | REDRAW_LINE | REPOS_CARET);
 	    }
 	    break;
-#ifndef STBWEB
-	case 127:   /* riscos: Delete left */
-#endif
-	case 8:     /* Delete left */
+	case key_action_DELETE_LEFT:
 	    if (tai->cx > len)
 	    {
 		tai->cx = len;
@@ -556,10 +555,7 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 		flags |= (REDRAW_LINE | REPOS_CARET | JOIN_LINES);
 	    }
 	    break;
-	case akbd_Ctl + akbd_CopyK:
-#ifndef STBWEB
-	case 11:		/* ctrl-K */
-#endif
+	case key_action_DELETE_TO_END:
 	    if (tai->cx > len)
 	    {
 		tai->cx = len;
@@ -574,12 +570,7 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 		break;
 	    }
 	    /* Otherwise, fall throught and do a ctrl-D to the end of line */
-#ifdef STBWEB
-	case 127:           /* STB: Delete right */
-#else
-	case akbd_CopyK:    /* riscos: Delete right */
-	case 4:			/* ctrl-D */
-#endif
+	case key_action_DELETE_RIGHT:
 	    if (tai->cx > len)
 	    {
 		tai->cx = len;
@@ -613,15 +604,12 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 		flags |= (REDRAW_LINE | REPOS_CARET | JOIN_LINES);
 	    }
 	    break;
-	case 21:
+	case key_action_DELETE_ALL:
 	    tal->text[0] = 0;
 	    tai->cx = 0;
 	    flags |= (REDRAW_LINE | REPOS_CARET);
 	    break;
-	case akbd_LeftK:
-#ifndef STBWEB
-	case 2:			/* ctrl-B */
-#endif
+	case key_action_LEFT:
 	    if (tai->cx > 0)
 	    {
 		tai->cx--;
@@ -633,10 +621,7 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 #endif
 	    break;
 
-	case akbd_RightK:
-#ifndef STBWEB
-	case 6:			/* ctrl-F */
-#endif
+	case key_action_RIGHT:
 	    if (tai->cx < MAX_TEXT_LINE)
 	    {
 		tai->cx++;
@@ -648,32 +633,17 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 #endif
 	    break;
 
-	case akbd_LeftK + akbd_Ctl:
-#ifndef STBWEB
-	case 1:			/* ctrl-A */
-#endif
-#ifdef STBWEB
-        case 0x1E:              /* STB: home */
-#endif
+	case key_action_START_OF_LINE:
 	    tai->cx = 0;
 	    flags |= REPOS_CARET;
 	    break;
 
-	case akbd_RightK + akbd_Ctl:
-#ifndef STBWEB
-	case 5:			/* ctrl-E */
-#endif
-#ifdef STBWEB
-        case akbd_CopyK:        /* STB: end */
-#endif
+	case key_action_END_OF_LINE:
 	    tai->cx = len;
 	    flags |= REPOS_CARET;
 	    break;
 
-	case akbd_UpK:
-#ifndef STBWEB
-	case 16:		/* ctrl-P */
-#endif
+	case key_action_UP:
 	    if (tal->prev)
 	    {
 		tai->cy--;
@@ -685,10 +655,7 @@ BOOL otextarea_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 		flags &= ~CHAR_USED;
 	    }
 	    break;
-	case akbd_DownK:
-#ifndef STBWEB
-	case 14:		/* ctrl-N */
-#endif
+	case key_action_DOWN:
 	    if (tal->next)
 	    {
 		tai->cy++;

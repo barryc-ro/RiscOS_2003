@@ -71,6 +71,8 @@ struct plugin_stream_private
     int file_handle;
     int file_type;
     transfer_status status;
+
+    int msgref;				/* wimp message ref of last stream message sent */
 };
 
 struct plugin_private
@@ -80,6 +82,7 @@ struct plugin_private
 
     plugin_state state;
     plugin_box box;			/* last bounding box sent to plugin */
+    int pending_reshape;		/* */
     int msgref;				/* our ref from last message sent */
     char *parameter_file;		/* pointer to parameter file */
     void *instance;			/* plugin's private word pointer */
@@ -302,6 +305,9 @@ static void plugin_write_parameter_numeric(FILE *f, const char *name, const rid_
     case value_pcunit:
 	sprintf(buf, "%g%%", val->u.f);
 	break;
+
+    default:
+	return;
     }
 
     plugin_write_parameter_record(f, plugin_parameter_DATA, name, buf, NULL);
@@ -333,8 +339,8 @@ static void plugin_write_parameter_file(FILE *f, rid_object_item *obj, antweb_do
     plugin_write_parameter_record(f, plugin_parameter_SPECIAL, plugin_parameter_UA_VERSION, VERSION_NUMBER, NULL);
     plugin_write_parameter_record(f, plugin_parameter_SPECIAL, plugin_parameter_API_VERSION, plugin_API_VERSION, NULL);
 
-/*
     plugin_write_parameter_string(f, "ID", obj->id);
+/*
     plugin_write_parameter_string(f, "CLASS", obj->classname);
     plugin_write_parameter_string(f, "STYLE", obj->style);
     plugin_write_parameter_string(f, "LANG", obj->lang);
@@ -454,7 +460,7 @@ int plugin_send_open(plugin pp, wimp_box *box)
     message_plugin_open *open = (message_plugin_open *) &msg.data;
     rid_object_item *obj = pp->obj;
 
-    OBJDBG(("plugin: send open %p at %d,%d,%d,%d\n", pp, box->x0, box->y0, box->x1, box->y1));
+    OBJDBG(("plugin: send open %p ftype %x/%x at %d,%d,%d,%d\n", pp, obj->classid_ftype, obj->data_ftype, box->x0, box->y0, box->x1, box->y1));
 
     /* Write message header */
     msg.hdr.size = sizeof(msg.hdr) + sizeof(*open);
@@ -472,6 +478,8 @@ int plugin_send_open(plugin pp, wimp_box *box)
     plugin_send_message(&msg, pp);
 
     pp->state = plugin_state_SENT_OPEN;
+
+    /* store the box aaway */
     pp->box = *(plugin_box *)box;
 
     return 1;
@@ -480,11 +488,23 @@ int plugin_send_open(plugin pp, wimp_box *box)
 int plugin_send_reshape(plugin pp, wimp_box *box)
 {
     wimp_msgstr msg;
-    message_plugin_reshape *reshape = (message_plugin_reshape *) &msg.data;
+    message_plugin_reshape *reshape;
+
+    /* store the box aaway */
+    pp->box = *(plugin_box *)box;
+
+    if (pp->state != plugin_state_OPEN)
+    {
+	OBJDBG(("plugin: pp %p - no reshape as opening not received as yet\n", pp));
+	pp->pending_reshape = TRUE;
+	return 0;
+    }
 
     OBJDBG(("plugin: send reshape %p at %d,%d,%d,%d\n", pp, box->x0, box->y0, box->x1, box->y1));
 
     /* Build message block */
+    reshape = (message_plugin_reshape *) &msg.data;
+
     reshape->flags = 0;
     reshape->box = *(plugin_box *)box;
     reshape->window_handle = (plugin_w)frontend_get_window_handle(pp->doc->parent);
@@ -515,6 +535,25 @@ int plugin_send_close(plugin pp)
     plugin_send_message(&msg, pp);
 
     pp->state = plugin_state_SENT_CLOSE;
+
+    return 1;
+}
+
+int plugin_send_focus(plugin pp)
+{
+    wimp_msgstr msg;
+    message_plugin_focus *focus = (message_plugin_focus *) &msg.data;
+
+    OBJDBG(("plugin: send focus %p state %d\n", pp, pp->state));
+
+    /* Build message block */
+    focus->flags = 0;
+
+    msg.hdr.size = sizeof(msg.hdr) + sizeof(*focus);
+    msg.hdr.action = (wimp_msgaction)MESSAGE_PLUGIN_FOCUS;
+    msg.hdr.your_ref = 0;
+
+    plugin_send_message(&msg, pp);
 
     return 1;
 }
@@ -901,16 +940,19 @@ void plugin_destroy(plugin pp)
 {
     OBJDBG(("plugin: destroy pp %p\n", pp));
 
-    plugin_stream_dispose_all(pp);
+    if (pp)			/* FIX: didn't check NULL before */
+    {
+	plugin_stream_dispose_all(pp);
 
-    if (pp->state < plugin_state_SENT_CLOSE)
-	plugin_send_close(pp);
+	if (pp->state < plugin_state_SENT_CLOSE)
+	    plugin_send_close(pp);
+	
+	free_rma_strings(-1, pp);
+	
+	remove_parameter_file(pp);
 
-    free_rma_strings(-1, pp);
-
-    remove_parameter_file(pp);
-
-    mm_free(pp);
+	mm_free(pp);
+    }
 }
 
 /* ----------------------------------------------------------------------------- */
@@ -939,6 +981,7 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
     if ((pp = locate_object(doc, ((message_plugin_base *)&msg->data)->instance.parent)) == NULL)
 	return FALSE;
 
+    /* after this point we assume the message is for us and therefore claim it */
     if (e->e != wimp_EACK)
     {
 	/* Free any strings referenced by this msg reference */
@@ -953,7 +996,7 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 	{
 	    message_plugin_opening *opening = (message_plugin_opening *)&msg->data;
 
-	    OBJDBG(("plugin: msg opening %p state %d\n", pp, pp->state));
+	    OBJDBG(("plugin: msg opening %p state %d from task %x\n", pp, pp->state, msg->hdr.task));
 
 	    if (msg->hdr.your_ref == pp->msgref)
 	    {
@@ -976,6 +1019,11 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 		    pp->task = msg->hdr.task;
 
 		    obj = pp->obj;
+
+		    if (pp->pending_reshape)
+		    {
+			plugin_send_reshape(pp, (wimp_box *)&pp->box);
+		    }
 
 		    /* Now we need to open a stream for the data/code for the plugin */
 
@@ -1081,7 +1129,7 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 
 	    OBJDBG(("plugin: msg stream_new %p state %d refs %d/%d\n", pp, pp->state, msg->hdr.your_ref, pp->msgref));
 
-	    if (msg->hdr.your_ref == pp->msgref)
+	    if (msg->hdr.your_ref != 0)
 	    {
 		/* Reply: filled in plugin instance handle and possibly a request to change the stream type */
 		if ((psp = locate_stream(pp, stream_new->stream.instance.parent)) != NULL)
@@ -1198,8 +1246,8 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 
 	    OBJDBG(("plugin: msg focus %p state %d\n", pp, pp->state));
 
-	    /* Not the best place really but will do for now */
 	    backend_place_caret(pp->doc, NULL);
+	    backend_update_link(pp->doc, pp->obj->text_item, 1);
 	    
 	    break;
 	}
@@ -1210,7 +1258,7 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 	}
     }
     /* It is an ACK so check that the msg ref matches */
-    else if (msg->hdr.my_ref == pp->msgref)
+    else 
     {
 	/* Free any strings referenced by this msg reference */
 	free_rma_strings(msg->hdr.my_ref, NULL);
@@ -1226,21 +1274,24 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 
 	    OBJDBG(("plugin: msg open bounce %p state %d refs %d/%d\n", pp, pp->state, msg->hdr.my_ref, pp->msgref));
 	    
-	    /* Plugin open message has bounced, run task and try again */
-	    if (pp->state == plugin_state_SENT_OPEN)
+	    if (msg->hdr.my_ref == pp->msgref)
 	    {
-		frontend_plugin_start_task(open->file_type);
+		/* Plugin open message has bounced, run task and try again */
+		if (pp->state == plugin_state_SENT_OPEN)
+		{
+		    frontend_plugin_start_task(open->file_type);
 
-		OBJDBG(("plugin: msg open run filetype %03x\n", open->file_type));
+		    OBJDBG(("plugin: msg open run filetype %03x\n", open->file_type));
 
-		plugin_send_open(pp, (wimp_box *)&pp->box);
-		pp->state = plugin_state_SENT_OPEN_2;
-	    }
-	    /* message has bounced a second time - mark the plugin as dead */
-	    else
-	    {
-		pp->state = plugin_state_ABORTED;
-		remove_parameter_file(pp);
+		    plugin_send_open(pp, (wimp_box *)&pp->box);
+		    pp->state = plugin_state_SENT_OPEN_2;
+		}
+		/* message has bounced a second time - mark the plugin as dead */
+		else
+		{
+		    pp->state = plugin_state_ABORTED;
+		    remove_parameter_file(pp);
+		}
 	    }
 	    break;
 	}
@@ -1291,10 +1342,6 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 	/* ------------------------------------------------------------ */
 
 	}
-    }
-    else
-    {
-	return FALSE;
     }
 
     return TRUE;

@@ -13,7 +13,7 @@
 
 extern rid_object_type objects_type_test(int ftype);
 extern void objects_check_movement(be_doc doc);
-extern void objects_bbox(be_doc doc, be_item ti, wimp_box *box);
+extern BOOL objects_bbox(be_doc doc, be_item ti, wimp_box *box);
 
 #endif
 

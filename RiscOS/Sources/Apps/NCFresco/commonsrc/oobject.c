@@ -194,6 +194,31 @@ void oobject_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     ti->max_down = height - ti->max_up;
 
     OBJDBG(("oobject: size to w=%d,u=%d,d=%d\n", ti->width, ti->max_up, ti->max_down));
+
+#if 1
+    if (obj->type == rid_object_type_PLUGIN)
+    {
+	if (obj->state.plugin.pp == NULL)
+	{
+	    obj->state.plugin.pp = plugin_new(obj, doc);
+
+	    /* position plugin initially off screen */
+
+	    if (!objects_bbox(doc, ti, (wimp_box *)obj->state.plugin.box))
+	    {
+		obj->state.plugin.box[0] = 0;
+		obj->state.plugin.box[1] = 0x1000;
+		obj->state.plugin.box[2] = obj->state.plugin.box[0] + obj->ww;
+		obj->state.plugin.box[3] = obj->state.plugin.box[1] + obj->hh;
+	    }
+
+	    plugin_send_open(obj->state.plugin.pp, (wimp_box *)obj->state.plugin.box);
+
+	    if (doc->object_handler_count++ == 0)
+		frontend_message_add_handler(plugin_message_handler, doc);
+	}
+    }
+#endif
 }
 
 
@@ -221,44 +246,6 @@ void oobject_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 	break;
 
     case rid_object_type_INTERNAL:
-#ifdef STBWEB
-
-#define fsnum_resourcefs	0x2E
-#define DrawFile_Render		0x45540
-	
-	if (obj->data_ftype == FILETYPE_DRAWFILE)
-	{
-	    if (obj->data && strncasecomp(obj->data, "resources:", sizeof("resources:")-1) == 0)
-	    {
-		int fh;
-		os_error *e;
-
-		e = (os_error *)_swix(OS_Find, _INR(0,1) | _OUT(0), 0x4f, obj->data, &fh);
-		if (!e)
-		{
-		    int fs, size;
-		    void *ptr;
-		    e = (os_error *)_swix(OS_Args, _INR(0,1)|_OUT(2), 254, fh, &fs);
-		    if (!e && (fs & 0xff) == fsnum_resourcefs)
-			e = (os_error *)_swix(OS_FSControl, _IN(0)|_IN(1)|_OUT(1), 21, fh, &ptr);
-		    if (!e)
-			e = (os_error *)_swix(OS_Args, _INR(0,1)|_OUT(2), 2, fh, &size);
-		    if (!e)
-		    {
-			int trfm[6];
-			trfm[0] = trfm[3] = 1<<16;
-			trfm[1] = trfm[2] = 0;
-			trfm[4] = bbox.x0*256;
-			trfm[5] = bbox.y0*256;
-			e = (os_error *)_swix(DrawFile_Render, _INR(0,4), 0, ptr, size, &trfm, g);
-			if (!e) do_plinth = FALSE;
-		    }
-
-		    _swix(OS_Find, _INR(0,1), 0, fh);
-		}		    
-	    }
-	}
-#endif
 	break;
 
     case rid_object_type_FRAME:
@@ -266,6 +253,7 @@ void oobject_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 
     case rid_object_type_PLUGIN:
     {
+#if 0
 	wimp_box box;
 
 	objects_bbox(doc, ti, &box);
@@ -286,7 +274,7 @@ void oobject_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 	    *(wimp_box *)obj->state.plugin.box = box;
 	    plugin_send_reshape(obj->state.plugin.pp, (wimp_box *)&box);
 	}
-
+#endif
 	do_alt = TRUE;
 
 	break;
@@ -327,11 +315,14 @@ void oobject_dispose(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	break;
 
     case rid_object_type_PLUGIN:
-	plugin_destroy(obj->state.plugin.pp);
-	obj->state.plugin.pp = NULL;
+	if (obj->state.plugin.pp) /* must check here to get handler_count correct */
+	{
+	    plugin_destroy(obj->state.plugin.pp);
+	    obj->state.plugin.pp = NULL;
 
-	if (--doc->object_handler_count == 0)
-	    frontend_message_remove_handler(plugin_message_handler, doc);
+	    if (--doc->object_handler_count == 0)
+		frontend_message_remove_handler(plugin_message_handler, doc);
+	}
 	break;
 
     case rid_object_type_UNKNOWN:
@@ -358,8 +349,9 @@ char *oobject_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, i
 	/* Won't be received */
 	break;
 
+	/* This is received when the highlight is moved to the plugin and enter pressed */
     case rid_object_type_PLUGIN:
-	/* Won't be received */
+	plugin_send_focus(obj->state.plugin.pp);
 	break;
 
     case rid_object_type_UNKNOWN:

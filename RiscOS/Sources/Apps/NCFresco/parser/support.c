@@ -136,6 +136,13 @@ extern char *strip_stringdup(STRING s)
     return x;
 }
 
+/* From VALUE to malloced string iff of type string */
+
+char *valuestringdup(const VALUE *v)
+{
+    return v->type == value_string ? stringdup(v->u.s) : NULL;
+}
+
 /*****************************************************************************/
 
 /* FROM CHAR* TO STRING VIA ALLOC */

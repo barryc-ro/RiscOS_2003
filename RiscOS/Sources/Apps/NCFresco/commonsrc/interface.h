@@ -428,8 +428,13 @@ extern void backend_temp_file_register(char *url, char *file_name);
 
 extern const char *backend_check_meta(be_doc doc, const char *name);
 
+/* Clear selection from all items */
+extern void backend_clear_selected(be_doc doc);
+
+#if 0
 /* Select an item, whatever its type */
 extern void backend_select_item(be_doc doc, be_item ti, int select);
+#endif
 
 /* return the first item with SELETED bit set */
 extern be_item backend_find_selected(be_doc doc);

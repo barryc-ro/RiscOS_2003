@@ -67,6 +67,7 @@ extern char *get_state_name(state_fn fn);
 extern int strnicmp(char *a, char *b, int n);
 extern char *stringdup(STRING s);
 extern char *strip_stringdup(STRING s);
+extern char *valuestringdup(const VALUE *v);
 extern STRING mkstring(char *ptr, int n);
 extern STRING mktempstring(char *ptr);
 extern STRING stringcat(STRING a, STRING b);

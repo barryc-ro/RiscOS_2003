@@ -3,7 +3,23 @@
  * http://www.netscape.com/newsref/std/cookie_spec.html
  *
  * 26/3/96: SJM: Started
+
+
+ * Port numbers
+ * In netscape 3
  *
+ *  - A cookie cannot have an explicit port number in the DOMAIN= tag or
+ *    else it will be rejected.
+ *
+ *  - A cookie with an explicit domain of acorn.co.uk will be sent to
+ *    bungle.acorn.co.uk and bungle.acorn.co.uk:80
+ *
+ *  - A cookie with an implied domain of acorn.co.uk is treated as being
+ *    distinct from one with an implied domain of acorn.co.uk:80 and the
+ *    cookies from each will not be sent to one another.
+ *
+ * So a cookie with no domain specified is given a port number of PORT_NONE.
+ * A cookie with a domain specified is given a port number of PORT_ANY.
  */
 
 #include <ctype.h>
@@ -31,6 +47,10 @@ typedef struct cookie_domain cookie_domain;
 
 #define cookie_SECURE		0x00000001	/* must be sent over secure channel */
 
+#define PORT_NONE		(-1)
+#define PORT_ANY		(-2)
+#define PORT_UNSPECIFIED	(-3)
+
 struct cookie_item
 {
     cookie_item *next;          /* link to next cookie */
@@ -48,6 +68,7 @@ struct cookie_domain
 {
     cookie_domain *next;        /* link to next domain */
     char *domain;               /* as originally passed in the set-cookie header */
+    int port;			/* port number originally specified with domain or PORT_UNSPECIFIED */
     int cookie_count;           /* number of cookies in the cookie_list */
     cookie_item *cookie_list;   /* cookies in the domain */
 };
@@ -94,6 +115,29 @@ static unsigned long get_time(void)
     tt.tm_isdst = 0;
     
     return (unsigned long) mktime(&tt);
+}
+
+/* ---------------------------------------------------------------------------------------------------- */
+
+/*
+ * if netloc has a port number then insert a null over the :
+ * and return the port number.
+ */
+
+static int strip_port_from_domain(char *netloc)
+{
+    int port;
+    char *colon;
+
+    port = PORT_UNSPECIFIED;
+
+    if (netloc && (colon = strrchr(netloc, ':')) != NULL)
+    {
+	port = atoi(colon+1);
+	*colon = '\0';
+    }
+
+    return port;
 }
 
 /* ---------------------------------------------------------------------------------------------------- */
@@ -186,14 +230,15 @@ static void cookie_check_expiry(unsigned long now)
  * Find a matching domain name in the global domain list
  */
 
-static cookie_domain *find_domain(const char *domain)
+static cookie_domain *find_domain(const char *domain, int port)
 {
     cookie_domain *d;
 
     /* search for the domain */
     for (d = domain_list; d; d = d->next)
     {
-        if (strcasecomp(domain, d->domain) == 0)
+        if (strcasecomp(domain, d->domain) == 0 &&
+	    port == d->port)
             break;
     }
 
@@ -256,10 +301,12 @@ static int match_strings(const char *match, const char *strings[])
  * It takes any pointer in and writes out malloced pointers
  */
 
-static BOOL get_domain_and_path(const char *domain_in, const char *path_in, const char *url, char **domain_out, char **path_out)
+static BOOL get_domain_and_path(char *domain_in, const char *path_in, const char *url, char **domain_out, char **path_out, int *port_out)
 {
     char *scheme, *netloc, *path, *params, *query, *frag;
+    int url_port;
 
+#if 0	/* not used now */
     /* if null url passed in then we were loading from the cookie file */
     /* there shouldn't be any errors in this... */
     if (!url)
@@ -271,19 +318,38 @@ static BOOL get_domain_and_path(const char *domain_in, const char *path_in, cons
         }
 
         *domain_out = strdup(domain_in);
+	*port_out = strip_port_from_domain(*domain_out);
+
         *path_out = strdup(path_in);
         return TRUE;
     }
-
+#endif
+    
     url_parse((char *)url, &scheme, &netloc, &path, &params, &query, &frag);
 
-    if (domain_in && domain_in)
+    if (netloc == NULL)
+    {
+	CKIDBG(( "cookie: null domain int input URL\n"));
+	url_free_parts(scheme, netloc, path, params, query, frag);
+	return FALSE;
+    }
+    
+    /* strip off the port number from the domain */
+    url_port = strip_port_from_domain(netloc);
+    
+    /* if we have a domain possed in */
+    if (domain_in)
     {
         const char *s;
         const char *top_level;
         int c, dots;
+	int port;
 
-        if (!tail_compare(netloc, domain_in))
+	port = strip_port_from_domain(domain_in);
+
+	/* if the cookie domain has no port specified then match otherwise only if the ports are the same */
+        if ((port == PORT_UNSPECIFIED || port == url_port) && 
+	    !tail_compare(netloc, domain_in))
         {
             CKIDBG(( "cookie: attempt to set cookie for wrong domain\n  domain '%s'\n  cookie '%s'\n", netloc, domain_in));
             return FALSE;
@@ -310,10 +376,12 @@ static BOOL get_domain_and_path(const char *domain_in, const char *path_in, cons
         }
 
         *domain_out = strdup(domain_in);
+	*port_out = port == PORT_UNSPECIFIED ? PORT_ANY : port;
     }
     else
     {
         *domain_out = netloc;
+	*port_out = url_port == PORT_UNSPECIFIED ? PORT_NONE : url_port;
         netloc = NULL;
     }
 
@@ -350,7 +418,7 @@ static BOOL get_domain_and_path(const char *domain_in, const char *path_in, cons
 
 /* ---------------------------------------------------------------------------------------------------- */
 
-static void cookie_add(char *name, char *value, char *domain, char *path, unsigned long expires, int secure, unsigned long used)
+static void cookie_add(char *name, char *value, char *domain, char *path, unsigned long expires, int secure, unsigned long used, int port)
 {
     cookie_domain *d;
     cookie_item *c, *last_c, *new_c;
@@ -360,7 +428,7 @@ static void cookie_add(char *name, char *value, char *domain, char *path, unsign
         strsafe(name), strsafe(value), strsafe(domain), strsafe(path), (int)expires, secure));
     CKIDBG(("cookie: current time %lx\n", time_now));
     
-    d = find_domain(domain);
+    d = find_domain(domain, port);
 
     if (d)
     {
@@ -376,6 +444,7 @@ static void cookie_add(char *name, char *value, char *domain, char *path, unsign
         /* if not found then allocate a new domain */
         d = mm_calloc(sizeof(cookie_domain), 1);
         d->domain = domain;
+	d->port = port;
 
         /* add domain on the front of the list */
         d->next = domain_list;
@@ -518,6 +587,7 @@ void cookie_received_header(const char *header, const char *url)
     char *name, *value, *domain, *path;
     unsigned long expires;
     int secure;
+    int port;
 
     CKIDBG(( "cookie: header '%s' from '%s'\n", strsafe(header), strsafe(url)));
 
@@ -534,7 +604,7 @@ void cookie_received_header(const char *header, const char *url)
     }
 
     /* get the domain and path, checking that its valid */
-    if (!get_domain_and_path(vals[0].value, vals[1].value, url, &domain, &path))
+    if (!get_domain_and_path(vals[0].value, vals[1].value, url, &domain, &path, &port))
     {
         mm_free(header_copy);
         return;
@@ -566,7 +636,7 @@ void cookie_received_header(const char *header, const char *url)
     mm_free(header_copy);
 
     /* add to list */
-    cookie_add(name, value, domain, path, expires, secure, 0);
+    cookie_add(name, value, domain, path, expires, secure, 0, port);
 }
 
 /* ---------------------------------------------------------------------------------------------------- */
@@ -587,6 +657,7 @@ http_header_item *cookie_add_headers(http_header_item *hlist, const char *url, i
     int len_netloc, len_path;
     unsigned long time_now = get_time();
     BOOL quote_strings = FALSE;
+    int port;
     
     CKIDBG(( "cookie: get cookies for '%s'\n", url));
 
@@ -603,6 +674,8 @@ http_header_item *cookie_add_headers(http_header_item *hlist, const char *url, i
     if (path == NULL)
         path = strdup("/");
 
+    port = strip_port_from_domain(netloc);
+    
     len_netloc = strlen(netloc);
     len_path = strlen(path);
 
@@ -612,9 +685,16 @@ http_header_item *cookie_add_headers(http_header_item *hlist, const char *url, i
 	cookie_item *last_c;
 	
         /* check host */
-        start = len_netloc - strlen(d->domain);
-        if (start < 0 || strcasecomp(d->domain, netloc + start) != 0)
-            continue;
+	if (d->port == PORT_ANY ||
+	    d->port == port ||
+	    (d->port == PORT_NONE && port == PORT_UNSPECIFIED))
+	{
+	    start = len_netloc - strlen(d->domain);
+	    if (start < 0 || strcasecomp(d->domain, netloc + start) != 0)
+		continue;
+	}
+	else
+	    continue;
 
         CKIDBG(( "cookie: found matching domain '%s'\n", d->domain));
 
@@ -644,8 +724,8 @@ http_header_item *cookie_add_headers(http_header_item *hlist, const char *url, i
                 continue;
 	    }
 	    	    
-            /* check path */
-            if (strncasecomp(c->path, path, strlen(c->path)) != 0)
+            /* check path - didn't use to be case-sensitive! */
+            if (strncmp(c->path, path, strlen(c->path)) != 0)
             {
                 CKIDBG(( "cookie: path '%s' doesn't match '%s'\n", c->path, path));
                 continue;
@@ -723,10 +803,23 @@ static void cookie_read_line(char *buf)
     char *name, *value, *domain, *path;
     unsigned long expires, used;
     BOOL secure;
+    int port;
 
     name = strdup(strtok(buf, SEPARATORS));
     value = strdup(strtok(NULL, SEPARATORS));
+
+    /* special logic to store difference between no ports with and without explicit domains */
     domain = strdup(strtok(NULL, SEPARATORS));
+    if ((s = strrchr(domain, ':')) != NULL)
+    {
+	port = s[1] == '\0' ? PORT_NONE : atoi(s+1);
+	s[0] = '\0';
+    }
+    else
+    {
+	port = PORT_ANY;
+    }
+
     path = strdup(strtok(NULL, SEPARATORS));
 
     /* The flags word, capital means set lower case means clear */
@@ -739,7 +832,7 @@ static void cookie_read_line(char *buf)
     s = strtok(NULL, SEPARATORS);
     used = strtoul(s, NULL, 16);
        
-    cookie_add(name, value, domain, path, expires, secure, used);
+    cookie_add(name, value, domain, path, expires, secure, used, port);
 }
 
 /* ---------------------------------------------------------------------------------------------------- */
@@ -786,7 +879,23 @@ void cookie_write_file(const char *file_name)
                 {
 		    /* Format two writer */
 #if 1
-                    fprintf(f, "%s\t%s\t%s\t%s\t%c\t%08lx\t%08lx\n", c->name, c->value, d->domain, c->path,
+                    fprintf(f, "%s\t%s\t%s", c->name, c->value, d->domain);
+		    switch (d->port)
+		    {
+		    case PORT_ANY:
+			break;
+
+		    case PORT_UNSPECIFIED:
+			fprintf(f, ":"); /* use a blank : to tell the explicit domain case */
+			break;
+
+		    default:
+			fprintf(f, ":%d", d->port);
+			break;
+		    }
+
+		    fprintf(f, "\t%s\t%c\t%08lx\t%08lx\n", 
+			    c->path,
 			    c->flags & cookie_SECURE ? 'S' : 's',
 			    c->expires, c->used);
 #endif

@@ -171,29 +171,37 @@ void oselect_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 	height ++;
     }
 
-    /* don't repeat this if we resize as it leaks memory and resets selections */
-    if (height && sel->items == NULL)
+    if ((sel->flags & rid_if_NOPOPUP) == 0)
     {
-	sel->items = mm_calloc(sizeof(fe_menu_item), height);
-
-	for(i=0, oi = sel->options; oi; i++, oi = oi->next)
+	/* don't repeat this if we resize as it leaks memory and resets selections */
+	if (height && sel->items == NULL)
 	{
-	    fe_menu_item *ii = ((fe_menu_item*)sel->items) + i;
-	    ii->name = oi->text;
-	    if (oi->flags & rid_if_CHECKED)
+	    sel->items = mm_calloc(sizeof(fe_menu_item), height);
+
+	    for(i=0, oi = sel->options; oi; i++, oi = oi->next)
 	    {
-		oi->flags |= rid_if_SELECTED;
-		ii->flags = fe_menu_flag_CHECKED;
+		fe_menu_item *ii = ((fe_menu_item*)sel->items) + i;
+		ii->name = oi->text;
+		if (oi->flags & rid_if_CHECKED)
+		{
+		    oi->flags |= rid_if_SELECTED;
+		    ii->flags = fe_menu_flag_CHECKED;
+		}
+		else
+		    oi->flags &= ~rid_if_SELECTED;
 	    }
-	    else
-		oi->flags &= ~rid_if_SELECTED;
 	}
+
+	sel->menuh = frontend_menu_create(doc->parent, select_menu_callback, ti, height, sel->items, sel->size, width);
+	sel->count = height;
     }
 
-    sel->menuh = frontend_menu_create(doc->parent, select_menu_callback, ti, height, sel->items, sel->size, width);
-    sel->count = height;
+    ti->width = width + 16;
 
-    ti->width = width + 48 + 16;
+    /* add on width for the the POPUP icon */
+    if ((sel->flags & rid_if_NOPOPUP) == 0)
+	ti->width += 48;
+
 #ifndef SELECT_CURRENT_FONT
     ti->max_up = webfonts[WEBFONT_TTY].max_up + 6;
     ti->max_down = webfonts[WEBFONT_TTY].max_down + 8;
@@ -213,7 +221,9 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     char *str = NULL;
     font_string fstr;
 
-    render_plinth(render_colour_INPUT_B, render_plinth_IN,
+    int bg = sel->base.colours.back == -1 ? render_colour_INPUT_B : sel->base.colours.back;
+
+    render_plinth(bg, render_plinth_IN,
 		  hpos, bline - ti->max_down,
 		  ti->width - 52, (ti->max_up + ti->max_down), doc );
 
@@ -248,7 +258,7 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     if (fs->lfc != render_colour_INPUT_F)
     {
 	fs->lfc = render_colour_INPUT_F;
-	render_set_font_colours(fs->lfc, render_colour_INPUT_B, doc);
+	render_set_font_colours(fs->lfc, bg, doc);
     }
 
     fstr.s = str;
@@ -260,7 +270,8 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     font_paint(str, font_OSCOORDS + (config_display_blending ? 0x800 : 0),
 	       hpos + ((ti->width - 68 - (fstr.x / MILIPOINTS_PER_OSUNIT)) >> 1) + 10, bline);
 
-    render_plot_icon("gright", hpos + ti->width - 48, bline + ((ti->max_up - ti->max_down) >> 1) - 22);
+    if ((sel->flags & rid_if_NOPOPUP) == 0)
+	render_plot_icon("gright", hpos + ti->width - 48, bline + ((ti->max_up - ti->max_down) >> 1) - 22);
 
     /* SJM */
     if (ti->flag & rid_flag_SELECTED)
@@ -289,10 +300,38 @@ void oselect_dispose(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 char *oselect_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, int y, wimp_bbits bb)
 {
 #ifndef BUILDERS
-    wimp_box box;
-    backend_doc_item_bbox(doc, ti, &box);
+    rid_select_item *sel = ((rid_text_item_select *) ti)->select;
+    if (sel->flags & rid_if_NOPOPUP)
+    {
+	rid_option_item *oi;
+	int i;
 
-    frontend_menu_raise(((rid_text_item_select *)ti)->select->menuh, box.x1, box.y1);
+	/* find the first selected */
+	for (oi = sel->options; oi; oi = oi->next)
+	    if (oi->flags & rid_if_SELECTED)
+		break;
+
+	/* deselect it and select the next one, wrapping around */
+	if (oi == NULL)
+	    sel->options->flags |= rid_if_SELECTED;
+	else
+	{
+	    oi->flags &= ~rid_if_SELECTED;
+	    if (oi->next)
+		oi->next->flags |= rid_if_SELECTED;
+	    else
+		sel->options->flags |= rid_if_SELECTED;
+	}	
+
+	antweb_update_item(doc, ti);
+    }
+    else
+    {
+	wimp_box box;
+	backend_doc_item_bbox(doc, ti, &box);
+
+	frontend_menu_raise(((rid_text_item_select *)ti)->select->menuh, box.x1, box.y1);
+    }
 #endif /* BUILDERS */
     return NULL;		/* Links should not be followed */
 }

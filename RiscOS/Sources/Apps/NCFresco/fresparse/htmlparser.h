@@ -180,8 +180,8 @@ extern void new_area_item(HTMLCTX *me,
 			  VALUE *href,
 			  VALUE *target,
 			  VALUE *alt);
-extern void text_item_push_select(HTMLCTX * me, VALUE *name, VALUE *size, VALUE *multiple);
-extern void text_item_push_textarea(HTMLCTX * me, VALUE *name, VALUE *rows, VALUE *cols);
+extern void text_item_push_select(HTMLCTX * me, VALUE *name, VALUE *size, VALUE *multiple, VALUE *id, VALUE *bgcolor, VALUE *selcolor, VALUE *nopopup);
+extern void text_item_push_textarea(HTMLCTX * me, VALUE *name, VALUE *rows, VALUE *cols, VALUE *id, VALUE *bgcolor, VALUE *selcolor, VALUE *cursor);
 extern void text_item_push_input(HTMLCTX * me, int flags,
 				 VALUE *align,
 				 VALUE *checked,
@@ -191,7 +191,13 @@ extern void text_item_push_input(HTMLCTX * me, int flags,
 				 VALUE *size,
 				 VALUE *src,
 				 VALUE *type,
-				 VALUE *value);
+				 VALUE *value,
+				 VALUE *id,
+				 VALUE *bgcolor,
+				 VALUE *selcolor,
+				 VALUE *cursor,
+				 VALUE *nocursor,
+				 VALUE *numbers);
 extern void push_fake_search_form(HTMLCTX * me, VALUE *prompt);
 
 /* hparse.c */

@@ -402,6 +402,7 @@ char *oimage_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
 	return NULL;
     }
 
+#if 0				/* SJM: 190297 this should never have been there really */
     /* try selecting items */
     if (akbd_pollctl() && (flags & image_flag_FETCHED))
     {
@@ -409,7 +410,8 @@ char *oimage_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
         antweb_place_caret(doc);
         return NULL;
     }
-
+#endif
+    
     if (tii->usemap || (tii->flags & rid_image_flag_ISMAP) != 0)
     {
 	/* Remember that the y is in work area co-ordinates */

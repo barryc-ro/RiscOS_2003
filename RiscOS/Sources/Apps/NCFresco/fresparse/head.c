@@ -148,7 +148,7 @@ extern void startmeta (SGMLCTX * context, ELEMENT * element, VALUES * attributes
 
     	    rh->refreshurl = strdup(vals[0].value);
 	    rh->refreshtime = vals[1].name == NULL ? -1 :
-		strcasecomp(vals[1].name, "ondispose") ? -2 :
+		!strcasecomp(vals[1].name, "ondispose") ? -2 :
 		atoi(vals[1].name);
 
     	    mm_free(s);

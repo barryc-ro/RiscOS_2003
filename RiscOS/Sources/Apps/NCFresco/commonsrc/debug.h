@@ -113,6 +113,7 @@ extern void dbginit(void);
 #define CKIDBG(x)
 #define ACCDBG(x)
 #define STBDBG(x)
+#define HTSDBG(x)
 
 #else	/* DEBUG < 1 */
 
@@ -127,6 +128,7 @@ extern void dbginit(void);
 #define CKIDBG(x)	ckidbg x
 #define ACCDBG(x)	accdbg x
 #define STBDBG(x)	stbdbg x
+#define HTSDBG(x)	htsdbg x
 
 /* -v1 and -v0 are NorCroft printf() checking indicators */
 #pragma -v1
@@ -141,6 +143,7 @@ DBGPROTO(imgdbg);
 DBGPROTO(ckidbg);
 DBGPROTO(accdbg);
 DBGPROTO(stbdbg);
+DBGPROTO(htsdbg);
 #pragma -v0
 
 #endif	/* DEBUG < 1 */
@@ -162,6 +165,7 @@ DBGPROTO(stbdbg);
 #define CKIDBGN(x)
 #define ACCDBGN(x)
 #define STBDBGN(x)
+#define HTSDBGN(x)
 
 #else	/* DEBUG < 2 */
 
@@ -176,6 +180,7 @@ DBGPROTO(stbdbg);
 #define CKIDBGN(x)	ckidbgn x
 #define ACCDBGN(x)	accdbgn x
 #define STBDBGN(x)	stbdbgn x
+#define HTSDBGN(x)	htsdbgn x
 
 #pragma -v1
 DBGPROTO(tabdbgn);
@@ -189,6 +194,7 @@ DBGPROTO(imgdbgn);
 DBGPROTO(ckidbgn);
 DBGPROTO(accdbgn);
 DBGPROTO(stbdbgn);
+DBGPROTO(htsdbgn);
 #pragma -v0
 
 #endif	/* DEBUG < 2 */

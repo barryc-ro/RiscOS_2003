@@ -198,6 +198,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
     rid_input_item *ii = tii->input;
     int plotx;
     int slen;
+    int bg;
 
     switch (ii->tag)
     {
@@ -228,6 +229,8 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 
 	slen = strlen(ii->data.str);
 
+	bg = ii->base.colours.back == -1 ? render_colour_WRITE : ii->base.colours.back;
+    
 	if (fs->lf != webfonts[WEBFONT_TTY].handle)
 	{
 	    fs->lf = webfonts[WEBFONT_TTY].handle;
@@ -237,7 +240,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	if (fs->lfc != render_colour_INPUT_F )
 	{
 	    fs->lfc = render_colour_INPUT_F;
-	    render_set_font_colours(fs->lfc, render_colour_INPUT_B, doc);
+	    render_set_font_colours(fs->lfc, bg, doc);
 	}
 
 	if (ti == doc->input)
@@ -294,7 +297,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	    }
 	}
 
-	render_plinth(render_colour_WRITE, render_plinth_RIM | render_plinth_IN,
+	render_plinth(bg, render_plinth_RIM | render_plinth_IN,
 		      hpos, bline - ti->max_down,
 		      ti->width, (ti->max_up + ti->max_down), doc );
 
@@ -413,11 +416,13 @@ char *oinput_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
 	{
 	    frontend_complain(image_flush((image) ii->data.image.im, 0));
 	}
+#if 0				/* SJM: 190297 this should never have been there really */
 	else if (akbd_pollctl())
 	{
             backend_select_item(doc, ti, -1);
             antweb_place_caret(doc);
 	}
+#endif
 	else
 	{
 	    x = x-2;
@@ -784,22 +789,38 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 
 	if (key >= 32 && key < 256 && key != 127)
 	{
-	    if (len+1 <= ii->max_len)	/* 15/8/96: DAF: < to <= */
+	    if (ii->flags & rid_if_NUMBERS)
 	    {
-		memmove(ii->data.str + i + 1, ii->data.str + i, (len + 1 - i));
-
-		ii->data.str[i] = key;
-		doc->text_input_offset++;
-		redraw = TRUE;
+		if (isdigit(key))
+		{
+		    if (i >= ii->max_len)
+			i--;
+		    if (i <= ii->max_len)
+			doc->text_input_offset++;
+		    
+		    ii->data.str[i] = key;
+		    redraw = TRUE;
+		    used = TRUE;
+		}
 	    }
-	    used = TRUE;
+	    else 
+	    {
+		if (len+1 <= ii->max_len)	/* 15/8/96: DAF: < to <= */
+		{
+		    memmove(ii->data.str + i + 1, ii->data.str + i, (len + 1 - i));
+
+		    ii->data.str[i] = key;
+		    doc->text_input_offset++;
+		    redraw = TRUE;
+		}
+		used = TRUE;
+	    }
 	}
 	else
 	{
-	    switch (key)
+	    switch (lookup_key_action(key))
 	    {
-	    case 13:
-	    case 10:
+	    case key_action_NEWLINE:
 		if (ii->base.parent && ii->base.parent->last_text == NULL)
 		{
 		    rid_input_item *first;
@@ -844,10 +865,7 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 		    }
 		}
 		break;
-#ifndef STBWEB
-	    case 127:
-#endif
-	    case 8:
+	    case key_action_DELETE_LEFT:
 		if (i > 0)
 		{
 		    memmove(ii->data.str + i - 1, ii->data.str + i, (len + 1 - i));
@@ -855,28 +873,18 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 		    redraw = TRUE;
 		}
 		break;
-	    case 21:		/* ctrl-U */
+	    case key_action_DELETE_ALL:
 		ii->data.str[0] = 0;
 		doc->text_input_offset = 0;
 		redraw = TRUE;
 		break;
 
-	    case akbd_Ctl + akbd_CopyK:
-#ifndef STBWEB
-	    case 11:		/* ctrl-K */
-#endif
+	    case key_action_DELETE_TO_END:
 		ii->data.str[i] = 0;
 		redraw = TRUE;
 		break;
 
-#ifdef STBWEB
-	    case 127:           /* STB: Delete right */
-#else
-	    case akbd_CopyK:    /* riscos: Delete right */
-#endif
-#ifndef STBWEB
-	    case 4:		/* ctrl-D */
-#endif
+	    case key_action_DELETE_RIGHT:
 		if (i < len)
 		{
 		    memmove(ii->data.str + i, ii->data.str + i + 1, (len - i));
@@ -884,10 +892,7 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 		}
 		break;
 
-	    case akbd_LeftK:
-#ifndef STBWEB
-	    case 2:		/* ctrl-B */
-#endif
+	    case key_action_LEFT:
 #ifdef STBWEB
 		if (i > 0)
 		{
@@ -901,10 +906,7 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 #endif
 		break;
 
-	    case akbd_RightK:
-#ifndef STBWEB
-	    case 6:		/* ctrl-F */
-#endif
+	    case key_action_RIGHT:
 #ifdef STBWEB
 		if (i < len)
 		{
@@ -918,27 +920,16 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 #endif
 		break;
 
-	    case akbd_LeftK + akbd_Ctl:
-#ifndef STBWEB
-	    case 1:		/* ctrl-A */
-#endif
-#ifdef STBWEB
-            case 0x1E:          /* STB: home */
-#endif
+	    case key_action_START_OF_LINE:
 		doc->text_input_offset = 0;
 		redraw = TRUE;
 		break;
 
-	    case akbd_RightK + akbd_Ctl:
-#ifndef STBWEB
-	    case 5:		/* ctrl-E */
-#endif
-#ifdef STBWEB
-            case akbd_CopyK:        /* STB: end */
-#endif
+	    case key_action_END_OF_LINE:
 		doc->text_input_offset = len;
 		redraw = TRUE;
 		break;
+
 	    default:
 #if DEBUG
                 fprintf(stderr, "Key %d\n", key);
@@ -948,6 +939,7 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 	    }
 	}
 	break;
+
     default:
 	break;
     }

@@ -410,6 +410,7 @@ static void open_event_handler(int event, fe_view v)
             break;
 
         case fevent_OPEN_KEYBOARD:
+	    fe_open_keyboard(v);
             break;
     }
 }

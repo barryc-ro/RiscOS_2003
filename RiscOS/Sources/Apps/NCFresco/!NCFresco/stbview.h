@@ -138,7 +138,13 @@ struct _frontend_view
 
     int threaded;
     int delete_pending;
+
+    char *selected_id;
 };
+
+#define fe_keyboard_UNKNOWN	(-1)
+#define fe_keyboard_ONLINE	0
+#define fe_keyboard_OFFLINE	1
 
 #define fe_object_type_NONE      0
 #define fe_object_type_LINK      1

@@ -25,6 +25,7 @@
 #define MESSAGE_PLUGIN_URL_ACCESS	0x4D54D
 #define MESSAGE_PLUGIN_URL_NOTIFY	0x4D54E
 #define MESSAGE_PLUGIN_STATUS		0x4D54F
+#define MESSAGE_PLUGIN_BUSY		0x4D550
 
 /* ----------------------------------------------------------------------------- */
 

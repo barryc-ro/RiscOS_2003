@@ -153,7 +153,7 @@ extern void image_get_cooler_table(void);
 
 static void fe_drag(const wimp_mousestr *m);
 static BOOL fe_resize(const wimp_mousestr *m);
-static void fe_status_mode(fe_view v, int mode);
+static void fe_status_mode(fe_view v, int mode, int override);
 static os_error *fe_status_state(fe_view v, int state);
 
 static void check_pending_scroll(fe_view v);
@@ -203,6 +203,9 @@ static int toolbar_pending_mode_change = FALSE;
 static fe_message_handler_item *message_handlers = NULL;
 
 static int user_status_open = TRUE;
+
+static int linedrop_time = 0;
+static int keyboard_state = fe_keyboard_OFFLINE;
 
 /* ----------------------------------------------------------------------------------------------------- */
 
@@ -295,15 +298,18 @@ static int pointer_current = 0;
 
 void fe_set_pointer(int item_flags)
 {
-    int num = fe_get_pointer_number(item_flags);
+    int num;
+
+    if (!config_display_fancy_ptr)
+	return;
+    
+    num = fe_get_pointer_number(item_flags);
 
     if (num != pointer_current)
     {
         pointer_info *info = &pointers[num];
 
-#if 1
         STBDBG(( "stbfe: set pointer %d '%s' mode %d\n", num, strsafe(info->name), pointer_mode));
-#endif
 
         if (info->name)
         {
@@ -339,6 +345,39 @@ int fe_bg_colour(fe_view v)
     wimp_readpalette(&pal);
 
     return find_closest_colour(pw.word, (int *)pal.c, 16);
+}
+
+/* ----------------------------------------------------------------------------------------------------- */
+
+void fe_linedrop(int called_at, void *handle)
+{
+    os_error *e = os_cli(msgs_lookup("hangup"));
+    if (e && e->errnum != 214)	/* file not found */
+	frontend_complain(e);
+    
+    linedrop_time = 0;
+
+    NOT_USED(called_at);
+    NOT_USED(handle);
+}
+
+/* ----------------------------------------------------------------------------------------------------- */
+
+void fe_open_keyboard(fe_view v)
+{
+    char buffer[256];
+    int n;
+
+    n = sprintf(buffer, "NCKeyboard %s",
+	    keyboard_state == fe_keyboard_ONLINE ? "-extension 0" : "");
+    
+    if (config_display_control_top)
+	sprintf(buffer + n, "-scrolldown %d", text_safe_box.y1 - tb_status_height());
+    else
+	sprintf(buffer + n, "-scrollup %d", text_safe_box.y0 + tb_status_height());
+
+    fe_start_task(buffer, NULL);
+    NOT_USED(v);
 }
 
 /* ----------------------------------------------------------------------------------------------------- */
@@ -467,6 +506,15 @@ void frontend_fade_frame(fe_view v, wimp_paletteword colour)
 
 /* ----------------------------------------------------------------------------------------------------- */
 
+static int decode_string(const char *input, const char *matches[], int nmatches)
+{
+    int i;
+    for (i = 0; i < nmatches; i++)
+	if (strcasecomp(input, matches[i]) == 0)
+	    return i;
+    return -1;
+}
+
 /*
  * If there is a fragment id then 'url' parameter will always contain it.
  */
@@ -546,22 +594,52 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
     /* check for special page instructions - but only on top page   */
     if (v->parent == NULL)
     {
-        const char *s = backend_check_meta(doc, "BROWSERMODE");
-        int mode = s == NULL ? fe_browser_mode_WEB :
-            strcasecomp(s, "DESKTOP") == 0 ? fe_browser_mode_DESKTOP :
-            strcasecomp(s, "DBOX") == 0 ? fe_browser_mode_DBOX :
-            strcasecomp(s, "HOTLIST") == 0 ? fe_browser_mode_HOTLIST :
-            strcasecomp(s, "HISTORY") == 0 ? fe_browser_mode_HISTORY :
-            strcasecomp(s, "APP") == 0 ? fe_browser_mode_APP :
-            fe_browser_mode_WEB;
+        char *ncmode;
+        const char *bmode;
+	int mode = fe_browser_mode_WEB;
+	int toolbar_state = -1;
 
-	if (/* mode != fe_browser_mode_DESKTOP && */ previous_mode == fe_browser_mode_DESKTOP)
+	if ((ncmode = strdup(backend_check_meta(doc, "NCBROWSERMODE"))) != NULL)
+	{
+	    static const char *content_tag_list[] = { "SELECTED", "TOOLBAR", "KEYBOARD", "LINEDROP" };
+	    static const char *on_off_list[] = { "OFF", "ON" };
+	    static const char *keyboard_list[] = { "ONLINE", "OFFLINE" }; /* order must agree with #defines in stbview.h */
+	    name_value_pair vals[4];
+
+	    parse_http_header(ncmode, content_tag_list, vals, sizeof(vals)/sizeof(vals[0]));
+
+	    mm_free(v->selected_id);
+	    v->selected_id = strdup(vals[0].value);
+	    toolbar_state = decode_string(vals[1].value, on_off_list, sizeof(on_off_list)/sizeof(on_off_list[0]));
+	    keyboard_state = decode_string(vals[1].value, on_off_list, sizeof(keyboard_list)/sizeof(keyboard_list[0]));
+	    
+	    /* set up a pending line drop */
+	    if (vals[1].value && linedrop_time == 0)
+	    {
+		linedrop_time = alarm_timenow() + atoi(vals[1].value)*100;
+		alarm_set(linedrop_time, fe_linedrop, &linedrop_time);
+	    }
+
+	    mm_free(ncmode);
+	}
+
+	if ((bmode = backend_check_meta(doc, "BROWSERMODE")) != NULL)
+	{
+	    mode = strcasecomp(ncmode, "DESKTOP") == 0 ? fe_browser_mode_DESKTOP :
+		strcasecomp(ncmode, "DBOX") == 0 ? fe_browser_mode_DBOX :
+		strcasecomp(ncmode, "HOTLIST") == 0 ? fe_browser_mode_HOTLIST :
+		strcasecomp(ncmode, "HISTORY") == 0 ? fe_browser_mode_HISTORY :
+		strcasecomp(ncmode, "APP") == 0 ? fe_browser_mode_APP :
+		fe_browser_mode_WEB;
+	}
+	
+	/* decide on what to store in the way of return pages */
+	if (previous_mode == fe_browser_mode_DESKTOP)
 	{
 	    mm_free(v->return_page);
 	    v->return_page = strdup(previous_url);
 	}
 
-#if 1
 	if (mode == fe_browser_mode_APP)
 	{
 	    if (previous_mode != fe_browser_mode_APP)
@@ -575,17 +653,6 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 	    mm_free(v->app_return_page);
 	    v->app_return_page = NULL;
 	}
-#else
-	if (mode == fe_browser_mode_APP)
-	{
-	    v->app_return_page = strdup(previous_url);
-	}
-	else
-	{
-	    mm_free(v->app_return_page);
-	    v->app_return_page = NULL;
-	}
-#endif
 	
 	switch (mode)
         {
@@ -601,10 +668,12 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 	    break;
 	}
 
-        fe_status_mode(v, mode);
+        fe_status_mode(v, mode, toolbar_state);
     }
     else
-        fe_status_mode(v, v->parent->browser_mode);
+    {
+        fe_status_mode(v, v->parent->browser_mode, -1);
+    }
 
     v->pending_scroll = fe_history_visit(v, url, title);
 
@@ -662,7 +731,7 @@ void fe_dbox_dispose(void)
         fe_dispose_view(dbox_view);
         dbox_view = NULL;
 
-        fe_status_mode(main_view, main_view->browser_mode);
+        fe_status_mode(main_view, main_view->browser_mode, -1);
 
 	/* update main view with the correct URL */
         if (main_view->displaying)
@@ -1282,12 +1351,15 @@ void frontend_pass_doc(fe_view v, char *url, char *cfile, int ftype)
     STBDBG(( "frontend_pass_doc url '%s' cfile '%s' ft %x\n", url, cfile, ftype));
 
     memset(&msg, 0, sizeof(msg));
+#if 0
+#else
     msg.hdr.size = sizeof(wimp_msgstr);
     msg.hdr.action = wimp_MDATAOPEN;
     msg.data.dataopen.type = ftype;
     strcpy(msg.data.dataopen.name, cfile);
     frontend_fatal_error(wimp_sendmessage(wimp_ESENDWANTACK, &msg, 0));
-
+#endif
+    
     if (v)
     {
 	v->fetching = NULL;
@@ -2333,7 +2405,7 @@ wimp_w fe_status_window_handle(void)
     return !use_toolbox ? statuswin_w : tb_is_status_showing() ? tb_status_w() : -1;
 }
 
-static void fe_status_mode(fe_view v, int mode)
+static void fe_status_mode(fe_view v, int mode, int override)
 {
     v->browser_mode = mode;
 
@@ -2341,7 +2413,11 @@ static void fe_status_mode(fe_view v, int mode)
     {
 	if (v->parent == NULL)
 	{
-	    switch (mode)
+	    if (override != -1)
+	    {
+		fe_status_state(fe_find_top(v), override);
+	    }
+	    else switch (mode)
 	    {
 		/* if desktop mode then disable toolbar */
 	    case fe_browser_mode_DESKTOP:
@@ -2516,7 +2592,7 @@ coords_cvtstr fe_get_cvt(fe_view v)
 /* Idle handling - status stuff */
 /* ------------------------------------------------------------------------------------------- */
 
-static os_error *get_item_info(fe_view v, const wimp_mousestr *mp, int *flags, char **link)
+static os_error *get_item_info(fe_view v, const wimp_mousestr *mp, int *flags, char **link, be_item *ti_out)
 {
     coords_pointstr p;
     coords_cvtstr cvt;
@@ -2529,7 +2605,9 @@ static os_error *get_item_info(fe_view v, const wimp_mousestr *mp, int *flags, c
 
     e = backend_doc_locate_item(v->displaying, &p.x, &p.y, &ti);
     if (!e) e = backend_item_pos_info(v->displaying, ti, &p.x, &p.y, flags, link, NULL, NULL);
-
+    if (!e && ti_out)
+	*ti_out = ti;
+    
     return e;
 }
 
@@ -2670,7 +2748,7 @@ static void dump_views(fe_view top, int indent)
 static void fe_idle_handler(void)
 {
     wimp_mousestr m;
-    BOOL pointer_moved, highlight_moved /* shift, shift_changed */;
+    BOOL pointer_moved, highlight_moved;
     fe_view v, v_over;
 
     int flags;
@@ -2679,21 +2757,16 @@ static void fe_idle_handler(void)
     frontend_fatal_error(wimp_get_point_info(&m));
     pointer_moved = m.x != pointer_last_pos.x || m.y != pointer_last_pos.y;
 
-/*  shift = akbd_pollsh(); */
-/*  shift_changed = shift != pointer_last_shift; */
-
     /* update last pointer position */
     pointer_last_pos = m;
-/*     pointer_last_shift = shift; */
 
 #if 0
-if (pointer_moved)
-{
-    STBDBG(( "p %d,%d w %x v %p main %p\n", m.x, m.y, m.w, v, main_view));
-    dump_views(main_view, 2);
-}
+    if (pointer_moved)
+    {
+	STBDBG(( "p %d,%d w %x v %p main %p\n", m.x, m.y, m.w, v, main_view));
+	dump_views(main_view, 2);
+    }
 #endif
-
     /* are we dragging the page around? */
     if (dragging_view)
     {
@@ -2720,7 +2793,7 @@ if (pointer_moved)
         if (v_over)
         {
 	    v = v_over;
-            get_item_info(v, &m, &flags, &link);
+            get_item_info(v, &m, &flags, &link, NULL);
             if (pointer_moved)
                 fe_update_link(v, flags, link);
         }
@@ -2800,10 +2873,7 @@ if (pointer_moved)
     if (v->children)
     {
         int type = fe_check_resize(v, m.x, m.y, NULL, NULL, NULL);
-#if 0
-        if (type != be_resize_NONE)
-            STBDBG(( "stbfe: resize %d\n", type));
-#endif
+
         switch (type)
         {
             case be_resize_WIDTH:
@@ -2825,7 +2895,8 @@ if (pointer_moved)
 
     /* otherwise update link from current position  */
     {
-        get_item_info(v, &m, &flags, &link);
+	be_item ti = NULL;
+        get_item_info(v, &m, &flags, &link, &ti);
         if (pointer_moved/*  || shift_changed */)
             fe_update_link(v, flags, /* !akbd_pollsh() ? NULL : */ link);
 
@@ -2835,6 +2906,15 @@ if (pointer_moved)
 
         /* also update pointer shape    */
         fe_set_pointer(flags);
+
+	/* try dragging highlight */
+	if (!akbd_pollctl() && pointer_moved && v->displaying && ti != v->current_link)
+	{
+	    backend_clear_selected(v->displaying);
+	    if (ti)
+		backend_update_link(v->displaying, ti, TRUE);
+	    v->current_link = ti;
+	}
     }
 }
 
