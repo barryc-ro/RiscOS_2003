@@ -1,0 +1,216 @@
+/******	Log.c *************************************************************\
+
+Project:	Ursula (RISC OS for Risc PC II)
+Component:	Configure Installer module (for SysMerge/FontMerge/BootMerge)
+This file:	Handling the log file and backup directory
+
+History:
+Date		Who	Change
+----------------------------------------------------------------------------
+17/12/1997	BJGA	Started
+05/01/1998	BJGA	Internationalised
+07/01/1998	BJGA	Implememted Log_GetDir and Log_Final
+14/01/1998	BJGA	Implemented unified Log_Write
+27/01/1998	BJGA	Log_Write now writes to stdout if no log dir is defined
+
+\**************************************************************************/
+
+/* CLib */
+#include <stdlib.h>
+#include <stdio.h>
+#include <stdarg.h>
+#include "kernel.h"
+#include "swis.h"
+/* Common */
+#include "str.h"
+/* local headers */
+#include "Defs.h"
+#include "File.h"
+#include "Log.h"
+#include "Mess.h"
+
+static BOOL LogActive = FALSE;
+static char *LogDir = NULL;
+
+
+/******	Log_SetDir() ******************************************************\
+
+Purpose:	Sets or unsets the log directory
+In:		"File"name to use, or NULL to unset
+Out:		Pointer to error block
+
+\**************************************************************************/
+
+_kernel_oserror *Log_SetDir (const char *newdir)
+{
+  _kernel_oserror *err = NULL;
+  
+  if (newdir == NULL)
+  {
+    LogActive = FALSE;
+  }
+  else
+  {
+    LogActive = TRUE;
+    err = File_Canonicalise (newdir, &LogDir);
+    if (err) LogActive = FALSE; /* Just in case */
+  }
+  
+  return err;
+}
+
+/******	Log_GetDir() ******************************************************\
+
+Purpose:	Returns log dir string
+Out:		Pointer to string, or NULL if none
+
+\**************************************************************************/
+
+const char *Log_GetDir (void)
+{
+  const char *dir;
+  if (LogActive)
+  {
+    dir = LogDir;
+  }
+  else
+  {
+    dir = NULL;
+  }
+  return dir;
+}
+
+/******	Log_Final() *******************************************************\
+
+Purpose:	Called at module exit, frees workspace
+
+\**************************************************************************/
+
+void Log_Final (void)
+{
+  free (LogDir);
+}
+
+/******	Log_ShowDir() *****************************************************\
+
+Purpose:	Prints the current log directory
+Out:		Pointer to error block (if message lookup failed)
+
+\**************************************************************************/
+
+_kernel_oserror *Log_ShowDir (void)
+{
+  _kernel_oserror *err = NULL;
+  char *text;
+  
+  if (LogActive)
+  {
+    err = Mess_LookUp ("LogDirIs", &text, 1, LogDir);
+  }
+  else
+  {
+    err = Mess_LookUp ("LogDirIsnt", &text, 0);
+  }
+  if (!err) printf ("%s\n", text);
+  
+  return err;
+}
+
+/******	Log_Write() *******************************************************\
+
+Purpose:	Writes an entry into the log file (if any)
+		Entry is preceded by date/time
+In:		operation:	first part of string
+		file:		full pathname (made logdir-relative if poss)
+		other args:	format string and parameters, as printf
+				(only apply if |file| is non-NULL)
+Out:		Pointer to error block
+
+\**************************************************************************/
+
+_kernel_oserror *Log_Write (const char *operation, const char *file, ...)
+{
+  _kernel_oserror *err = NULL;
+  char *logfile = NULL,
+       *time;
+  FILE *log = stdout; /* default, for debugging and when no log dir */
+  va_list ap;
+  
+#ifdef debug_DRY_RUN
+  printf ("Writing to log file:\n  ");
+#else
+  if (LogActive)
+  {
+    /* Build log file name */
+    logfile = malloc (str_len (LogDir) + 5);
+    if (logfile == NULL) err = Mess_GenerateError ("NoMem", errno_DONT_CARE, 0);
+    if (!err)
+    {
+      sprintf (logfile, "%s.Log", LogDir);
+      log = fopen (logfile, "a");
+      if (log == NULL) err = Mess_GenerateError ("CantOpen", errno_DONT_CARE, 1, LogDir);
+    }
+  }
+#endif
+  if (!err)
+  {
+    
+    /* Write date/time */
+    
+    time = malloc (128); /* should be easily big enough */
+    if (!time) err = Mess_GenerateError ("NoMem", errno_DONT_CARE, 0);
+    if (!err)
+    {
+      time[0] = 0;
+      err = _swix (OS_Word, _INR(0,1), 14, time);
+                        /* Territory_ConvertStandardDateAndTime format */
+    }                   /* wouldn't match with old log files           */
+    if (!err)
+    {
+      str_cpy (time, time); /* null-terminate */
+      fprintf (log, "%s: %s", time, operation);
+    }
+    free (time);
+    
+    /* Write file name, relative to LogDir if possible */
+    
+    if (file != NULL && !err)
+    {
+      const char *small_file = file; /* pathname without LogDir prefix */
+      int LogLen = str_len (LogDir);
+      
+      if (LogActive && *(file + LogLen) == '.') /* rules out some cases */
+      {
+        /* Compare the beginning of the pathname with LogDir */
+        char *temp = malloc (LogLen + 1);
+        int diff = 1; /* != 0 by default */
+        
+        if (!temp) err = Mess_GenerateError ("NoMem", errno_DONT_CARE, 0);
+        if (!err)
+        {
+          str_ncpy (temp, file, LogLen + 1);
+          err = _swix (Territory_Collate, _INR(0,3)|_OUT(0),
+            -1, LogDir, temp, 1 /* ignore case */, &diff);
+        }
+        if (diff == 0) small_file = file + LogLen + 1;
+        free (temp);
+      }
+      if (!err) fprintf (log, " %s", small_file);
+    }
+    
+    /* And print the remainder of the string, if applicable */
+    
+    if (file != NULL && !err)
+    {
+      char *format;
+      va_start(ap, file);
+      format = va_arg(ap, char *);
+      vfprintf(log, format, ap);
+      va_end(ap);
+    }
+  }
+  
+  free (logfile);
+  if (log != stdout) fclose(log);
+  return err;
+}
