@@ -211,7 +211,7 @@ clean:
 
 export_hdrs: h.DebugLib dirs
 	$(CP)	h.DebugLib	$(EXPORT_DIR).h.DebugLib 	$(CPFLAGS)
-	$(CP)   VersionNum      $(EXPORT_DIR).VersionNum 	$(CPFLAGS)
+	$(CP)   VersionNum      $(EXPORT_DIR).LibVersion 	$(CPFLAGS)
 	@echo * $(COMPONENT): export complete (hdrs)
 
 export_libs: $(TARGET) $(TARGETZ) dirs
