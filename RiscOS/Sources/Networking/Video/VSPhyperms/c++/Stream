@@ -1,4 +1,5 @@
 /**************************************
+
  Stream.c
 
 impliments standard Stream class.
@@ -29,6 +30,7 @@ static char *play_mode_strings[] = {
   "still",
   "releasestill",
   "streamlive",
+  "pauselive",
   "pause"
 };
 #endif
@@ -531,6 +533,16 @@ Stream::PostPresentationSetup()
     // set the server to listen to the port returned from the presentation
     ipAddress.s_addr = ntohl(ipAddress.s_addr);		// ipaddress of server as port are set in the asset presentation
 
+#ifdef DEBUGLIB
+    if (Debug(debug_always))
+    {
+        ULINT clientportnum;
+
+        mysource->getLocalPort((int*)&clientportnum);
+        Debug("setting server address to (%8.8x) port (%d) client (%d) not binding\n", ipAddress.s_addr, portnum, clientportnum);
+    }
+#endif
+
     if ( (!ErrorExists()) && (mysource->setServerDetails(&ipAddress, (int)portnum) == ErrorOccurred))
     {
     	if (err_ptr == NULL) err_ptr = &mysource->ReturnCopyOfError();
@@ -683,11 +695,15 @@ Stream::swap_source(void)
             {
                 Source *tmp = mysource;
                 Source *tmp2 = new SourceLIVE((*tmp));
+                size_t num_tokens = mysource->getNumBlocks() >> 1;
+
+                if (num_tokens < VOD_tokens_to_Pass)
+                    num_tokens = VOD_tokens_to_Pass;
 
                 _kernel_irqs_off();
 
                 source = source_streamlive;
-                num_tokens_to_pass = MAX_NUM_MPEG_Tokens;
+                num_tokens_to_pass = num_tokens;
                 mysource = tmp2;
 
                 _kernel_irqs_on();
@@ -718,7 +734,9 @@ Stream::swap_source(void)
 inline ULINT
 Stream::trick_modes(void)
 {
-  return ((source == source_streamlive) ? (trick_normal_play | trick_backward_jump) : (trick_modes_available));
+  return ((source == source_streamlive) ?
+          (trick_normal_play | trick_backward_jump | trick_pause | trick_jump_most_rec) :
+          (trick_modes_available));
 }
 
 error_flag
@@ -755,8 +773,10 @@ Stream::change_state(state_of_play new_state)
     }
 
 #ifdef DEBUGLIB
-   	if (Debug(debug_streaminfo)) Debug("state %d -> %d, from = %d in (%d-%d)", state, new_state, from, start, end);
+   	//if (Debug(debug_streaminfo))
+   	Debug("state %d -> %d, from = %d in (%d-%d)", state, new_state, from, start, end);
 #endif
+
        switch (new_state)
         {
                 case state_slow:
@@ -863,14 +883,7 @@ Stream::change_state(state_of_play new_state)
                     if (trick_modes() & trick_normal_play)
                     {
 
-                        if (source_streamlive == source)
-                        {
-                            swap_source();
-                            if ((state_pause == state)&&(stream_flags & flags_sceneblanking))
-                                reset_sink(mode_normalplay);
-                        }
-                        else
-                        if ((source_multicast == source)&&(state_pause == state))
+                        if ((source_multicast == source)&&((state_pauselive == state) ||(state_pause == state)))
                         {
                             reset_sink(mode_normalplay);
                         }
@@ -889,9 +902,10 @@ Stream::change_state(state_of_play new_state)
                     }
                     break;
                case state_streamlive:
+               case state_pauselive:
                     if (trick_modes() & trick_jump_most_rec)
                     {
-                        if (mysource->get_most_significant_mode() != mode_streamlive)// do we need to change server file
+                        if (source_streamlive != source) // do we need to change server file
                         {
                             callback_pending += callback_trickplay;
 #ifdef DEBUGLIB
@@ -899,8 +913,20 @@ Stream::change_state(state_of_play new_state)
 #endif
                             swap_source();
                             from = 0xFFFFFFFF;
+                        }
+
+                        if (new_state == state_pauselive)
+                        {
                             if (stream_flags & flags_RTSPinterface)
-                                mysink.SetSpeed(1);
+                                mysink.SetSpeed(0);
+                            state = state_pauselive;
+                        }
+                        else
+                        {
+                            if ((new_state == state_streamlive)&&(stream_flags & flags_RTSPinterface))
+                            {
+                                reset_sink(mode_normalplay);
+                            }
                             state = state_streamlive;
                         }
                     }
@@ -932,6 +958,16 @@ Stream::change_state(state_of_play new_state)
                     }
                     break;
         } /* switch */
+
+        /* if we are leaving stream live we need to change the state */
+        /* note this will denote a discontinuity in the stream which will cause a reset */
+        if ((source_streamlive == source) && (state != state_stop) &&
+            (state != state_streamlive) && (state != state_pauselive))
+        {
+           swap_source();
+
+           callback_pending += callback_trickplay;
+        }
 
         if (old_state == state_step)
             test_empty_buffers(num_tokens_to_pass);
@@ -1243,6 +1279,11 @@ Stream::GetMiscInfo(ULINT *reg_r0, misc_5_10 *ptr, int *size)
     			(*reg_r0) = trick_modes();
    			break;
     		case 0x02:
+                        if (state_pauselive == state)
+                        {
+                            (*reg_r0) = state_pause;
+                        }
+                        else
 	    		if (state > state_still)
 	    			(*reg_r0) = state_play;
 	    		else
@@ -1299,6 +1340,7 @@ Stream::create_RTSP_playblock(server_response_type server_response)
                 sprintf(num_strings[3], "1/%d", state_value);
                 break;
             case state_pause:
+            case state_pauselive:
                 sprintf(num_strings[3], "0.00");
                 break;
             default:
@@ -1434,9 +1476,23 @@ Stream::RTSP_play(bool forward, ULINT numerator, ULINT denominator, position_typ
             {
                 if (trick_modes() & trick_jump_most_rec)
                 {
-                    n_state = state_streamlive;
+                    if ( n_state == state_pause )
+                    {
+                        n_state = state_pauselive;
+                    }
+                    else
+                    {
+                        if (state_play != n_state)
+                        {
+                            server_response = RTSP_MethodNotAllowed;
+                        }
+                        else
+                        {
+                            n_state = state_streamlive;
+                        }
+                    }
                     play_start = length;
-                    if (state_streamlive != state)
+                    if (source_streamlive != source)
                         update_state = true;
                 }
                 else
@@ -1445,15 +1501,35 @@ Stream::RTSP_play(bool forward, ULINT numerator, ULINT denominator, position_typ
                 }
             }
             else
-            if (pos_from->numer == TIME_end)
             {
-                play_start = length - 1;
-                update_state = true;
-            }
-            else
-            {
-                /* if undefined */
-                play_start = getNECTime();
+                if (source_streamlive == source)
+                {
+                    update_state = true;
+                }
+
+                if (pos_from->numer == TIME_end)
+                {
+                    /* storage live has a valid length of -1 which has special meaning */
+                    play_start = (-1 == length) ? length : length - 1;
+                    update_state = true;
+                }
+                else
+                {
+                    /* if undefined,  */
+                    if ((state_prestart == state)&&(trick_modes() & trick_jump_most_rec))
+                    {
+                        play_start = length;
+
+                        if (source_streamlive != source)
+                            update_state = true;
+
+                        n_state = state_streamlive;
+                    }
+                    else
+                    {
+                        play_start = getNECTime();
+                    }
+                }
             }
         }
         else
@@ -1484,9 +1560,16 @@ Stream::RTSP_play(bool forward, ULINT numerator, ULINT denominator, position_typ
                 }
                 else
                 {
-                    if (pos_from->numer == TIME_now)
+                    if (pos_to->numer == TIME_now)
                     {
-                        play_end = getNECTime();
+                        if (source == source_streamlive)
+                        {
+                            play_end = length;
+                        }
+                        else
+                        {
+                            play_end = getNECTime();
+                        }
                     }
                     else
                     {
@@ -1513,11 +1596,11 @@ Stream::RTSP_play(bool forward, ULINT numerator, ULINT denominator, position_typ
         }
     }
 #ifdef DEBUGLIB
-    if (Debug(debug_RTSP))
-    {
-        Debug("calculating server response (%d) new state (%d), current (%d)", server_response,  n_state, state);
-        Debug("play_start (%d) play_end (%d) start (%d) end (%d),length(%d)\n",play_start, play_end, start, end, length);
-    }
+    //if (Debug(debug_RTSP))
+    //{
+        Debug("calculating server response (%d) new state (%d), current (%d)", server_response, n_state, state);
+        Debug("play_start (%d) play_end (%d) start (%d) end (%d) length(%d) speed(%d)\n",play_start, play_end, start, end, length, speed);
+    //}
 #endif
     if (!ErrorExists())
     {
@@ -1573,6 +1656,17 @@ Stream::RTSP_play(bool forward, ULINT numerator, ULINT denominator, position_typ
                     /* this may set the trickplay flag */
                     change_state(n_state);
                 }
+#ifdef DEBUGLIB
+                else
+                if (Debug(debug_RTSP))
+                {
+                    if (0 == (callback_pending & callback_trickplay))
+                    {
+                        Debug("failed to recognise request; update state (%d) n_state(%d) state(%d) speed(%d)\n",
+                               update_state, n_state, state, speed);
+                    }
+                }
+#endif
             }
         }
 
@@ -1616,7 +1710,7 @@ Stream::RTSP_play(bool forward, ULINT numerator, ULINT denominator, position_typ
                      MakeErrorOnError(VideoControlInformNewStatus(RTSP_proto_identity));
                  }
 
-                 if ((true == update_state) && (state != state_pause))
+                 if ((true == update_state) && (state != state_pause) && (state != state_pauselive))
                  {
                      if (callback_pending & callback_bufferswait)
                      {
@@ -1781,6 +1875,7 @@ Stream::timeslice(Statistics *stats)
                     mode = mode_fastrewind;
                     break;
                 case state_streamlive:
+                case state_pauselive:
                     mode = mode_streamlive;
                     AckNum     = (size_t)(NEC_databurstval);
                     RequestNum = NEC_to;
@@ -2284,7 +2379,7 @@ Stream::source_inetevent(int code, Statistics *stats)
                         (mysink.validHandle())
                        )
                     {
-                        if ((tokenfree() == false)&&(state != state_pause))
+                        if ((tokenfree() == false)&&(state != state_pause)&&(state != state_pauselive))
                         {
                             reset_sink(mysource->get_most_significant_mode());
                         }
@@ -2294,7 +2389,8 @@ Stream::source_inetevent(int code, Statistics *stats)
                     {
                         if (source == source_multicast)
                         {
-                            if (mysource->getFullBlocks() >= mysource->getNumBlocks()>>2)// back to normal play.
+                            if ( (state != state_pause)&&(state != state_pauselive)
+                                 &&(mysource->getFullBlocks() >= mysource->getNumBlocks()>>2)) // back to normal play.
                             {
                                 if (mysink.SetSpeed(1) == ErrorOccurred)
                                 {
@@ -2311,9 +2407,13 @@ Stream::source_inetevent(int code, Statistics *stats)
                         {
                             size_t full_blocks = mysource->getFullBlocks();
 
-                            if ( (state != state_pause) &&
-                                 ((source_vod == source) && (full_blocks >= buffer_blocks)) ||
-                                 (full_blocks >=mysource->getNumBlocks()>>2)
+#ifdef DEBUGLIB
+                            if (Debug(debug_streaminfo)) Debug("buffers wait (%d) blocks\n", full_blocks);
+#endif
+
+                            if ( (state != state_pause) && (state != state_pauselive) &&
+                                 (((source_vod == source) && (full_blocks >= buffer_blocks)) ||
+                                 (full_blocks >= mysource->getNumBlocks()>>2))
                                )
                             {
                                 if (stream_flags & flags_commspause)
@@ -2467,13 +2567,13 @@ StreamList::inetEvent(int code, int identifier, claim_flag *claim, void *)
     			  		do {
         					_kernel_irqs_on();
 #ifdef DEBUGLIB
-						//if (Debug(debug_callbacks)) Debug("source++ (%d)", stream->inet_udp_reenter);
+						if (Debug(debug_callbacks)) Debug("source++ (%d)", stream->inet_udp_reenter);
 #endif
     		  				if (stream->source_inetevent(code, &stats) == ErrorOccurred){
     		  	  				if (err_ptr == NULL) err_ptr = &stream->ReturnCopyOfError();
     		  				}
 #ifdef DEBUGLIB
-						//if (Debug(debug_callbacks)) Debug("source--");
+						if (Debug(debug_callbacks)) Debug("source--");
 #endif
     		  				_kernel_irqs_off();
     		  			} while ((--(stream->inet_udp_reenter)) > 0);
@@ -2576,7 +2676,11 @@ StreamList::DummyAckPoll(void)
   if (ErrorState() != ErrorOccurred){
   	for (int i=0; i<Size(); ++i)
     		if (object[i] != NULL)
-    		  	((Stream*)object[i])->DummyAckCall();
+                {
+                    Stream *stream = ((Stream*)object[i]);
+
+                    stream->DummyAckCall();
+                }
   }
   return  NoError;
 }
