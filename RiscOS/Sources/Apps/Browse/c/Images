@@ -83,7 +83,9 @@ static int               image_count_fetches          (browser_data * b);
 static int               image_get_token_image_xref   (browser_data * b, HStream * token);
 static int               image_get_token_image_actual (browser_data * b, HStream * token);
 
-static _kernel_oserror * image_get_image_size         (browser_data * b, int image, BBox * box);
+static void              image_lock_image_size        (browser_data * b, int image);
+static void              image_unlock_image_size      (browser_data * b, int image);
+static _kernel_oserror * image_get_image_size         (browser_data * b, int image, BBox * box, int ignore_stored);
 static _kernel_oserror * image_set_image_size         (browser_data * b, int image, BBox * box);
 
 static int               image_can_be_saved_as_sprite (browser_data * b, int i);
@@ -917,15 +919,6 @@ _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * 
 
   if (!background)
   {
-    BBox size;
-
-    /* Have a guess at the image size to start with */
-
-    image_get_image_size(b, nimages, &size);
-
-    idata[nimages].currw = size.xmax;
-    idata[nimages].currh = size.ymax;
-
     /* Need to flag if the HTML gives us an absolute size */
 
     if (
@@ -934,10 +927,23 @@ _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * 
          OBJECT_WIDTH_UNITS (token) == UNITS_PIXELS &&
          OBJECT_HEIGHT_UNITS(token) == UNITS_PIXELS
        )
-       idata[nimages].fixedsize = 1;
-  }
+       idata[nimages].fixedsize = 1, idata[nimages].canredraw = 1;
 
-//  if (!choices.refo_wait) idata[nimages].canredraw = 1; /* If not waiting, reformats are immediate so canredraw is always true */
+    else
+    {
+      /* If reformats aren't immediate, image_update_image may ask for */
+      /* one and then if canredraw is set, will start updating the     */
+      /* image. This is invalid unless the reformat has definitely     */
+      /* occurred (a full size image plots inside a default size       */
+      /* placeholder...). However, if reformats happen straight away,  */
+      /* we'll always be able to redraw.                               */
+
+      if (!choices.refo_wait) idata[nimages].canredraw = 1;
+      else                    idata[nimages].canredraw = 0;
+    }
+
+    idata[nimages].currw = idata[nimages].currh = -1;
+  }
 
   nimages++;
 
@@ -949,29 +955,6 @@ _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * 
 
     image_update_image(b, nimages - 1, NULL);
   }
-
-// This cross referencing trick to help unknown image sizes
-// looks to be deprecated in the face of the image history,
-// and may cause problems when one and only one dimension for
-// a particular image is specified in the HTML source.
-//
-//  else
-//  {
-//    /* If this is a cross-referencing image, and it hasn't got  */
-//    /* its fixedsize flag set, then it has no size info yet.    */
-//    /* In that case, get it from the image it cross references. */
-//
-//    if (!idata[nimages - 1].fixedsize && !idata[nimages - 1].currw && !idata[nimages - 1].currh)
-//    {
-//      int xref = idata[nimages - 1].xref;
-//
-//      if (xref >= 0 && idata[xref].istore)
-//      {
-//        idata[nimages - 1].currw = idata[xref].istore->width_os;
-//        idata[nimages - 1].currh = idata[xref].istore->height_os;
-//      }
-//    }
-//  }
 
   /* Reflect any change of status */
 
@@ -2249,8 +2232,9 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
   /* When the image library gets some data for an image it will fill */
   /* in the width_os and height_os fields of the istore structure    */
   /* that 'image' points to. If the HTML source didn't specify a     */
-  /* size for this or cross referencing images, fill in currw /      */
-  /* currh with the new values.                                      */
+  /* size for this or cross referencing images and the size is not   */
+  /* the same as stored in currw / currh, flag that a reformat is    */
+  /* needed for this image.                                          */
 
   if (
        !idata[actual].hadfirst             &&
@@ -2270,16 +2254,25 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
       {
         BBox size;
 
+        /* Ignore any existing currw and currh values - find the image */
+        /* size based entirely on the HTML and the image itself        */
+
         image_get_image_size(b,
                              i,
-                             &size);
+                             &size,
+                             1);
 
-        if (size.xmax != idata[i].currw || size.ymax != idata[i].currh)
-        {
-          idata[i].reformat = 1;
-          idata[i].currw    = size.xmax;
-          idata[i].currh    = size.ymax;
-        }
+        /* Does the returned value differ from the stored size? If so, */
+        /* flag that we must do a reformat for this image. It is up to */
+        /* the reformatter to call back to routines in this source     */
+        /* file and update currw and currh once the image is           */
+        /* incorporated into a line array.                             */
+
+        if (
+             size.xmax != idata[i].currw ||
+             size.ymax != idata[i].currh
+           )
+           idata[i].reformat = 1;
       }
     }
   }
@@ -2341,8 +2334,7 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
 
       /* Set the 'whole' BBox to the size of the base image in OS units */
 
-      whole.xmax = idata[i].currw;
-      whole.ymax = idata[i].currh;
+      image_get_image_size(b, i, &whole, 0);
 
       /* Ensure the redraw box returned by the image Load call */
       /* (or the BBox 'whole' from above) is scaled to fit the */
@@ -2359,10 +2351,10 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
            idata[image].istore->height_os > 0
          )
       {
-        partial.xmin = (box->xmin * idata[i].currw) / idata[image].istore->width_os;
-        partial.ymin = (box->ymin * idata[i].currh) / idata[image].istore->height_os;
-        partial.xmax = (box->xmax * idata[i].currw) / idata[image].istore->width_os;
-        partial.ymax = (box->ymax * idata[i].currh) / idata[image].istore->height_os;
+        partial.xmin = (box->xmin * whole.xmax) / idata[image].istore->width_os;
+        partial.ymin = (box->ymin * whole.ymax) / idata[image].istore->height_os;
+        partial.xmax = (box->xmax * whole.xmax) / idata[image].istore->width_os;
+        partial.ymax = (box->ymax * whole.ymax) / idata[image].istore->height_os;
       }
       else partial = *box;
 
@@ -2407,6 +2399,10 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
 
             reformat_format_from(idata[i].owner, l - 1, 0, i);
           }
+
+         /* If we don't need to reformat, we can (potentially!) redraw */
+
+          else idata[i].canredraw = 1;
         }
       }
       else
@@ -2458,6 +2454,10 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
 
                 reformat_format_from(idata[i].owner, l - 1, 0, i);
               }
+
+              /* If we don't need to reformat, we can redraw */
+
+              else idata[i].canredraw = 1;
             }
 
             /* If no reformat was needed, just do a redraw (which clears the  */
@@ -2486,7 +2486,7 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
             /* the bottom. That way can miss out a middle section.        */
 
             ubox.ymin = partial.ymin;
-            ubox.ymax = idata[i].currh;
+            ubox.ymax = whole.ymax;
 
             image_update_area(idata[i].owner,
                               x,
@@ -2514,7 +2514,7 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
             /* a vertical strip in the middle may be untouched.            */
 
             ubox.xmin = partial.xmin;
-            ubox.xmax = idata[i].currw;
+            ubox.xmax = whole.xmax;
 
             image_update_area(idata[i].owner,
                               x,
@@ -3119,7 +3119,7 @@ _kernel_oserror * image_redraw(browser_data * b, WimpRedrawWindowBlock * r, HStr
     const char * text;
     HStream    * tp   = NULL;
 
-    image_get_image_size(b, actual, &box);
+    image_get_image_size(b, actual, &box, 0);
 
     box.xmin += x;
     box.ymin += y;
@@ -3286,11 +3286,11 @@ void image_mark_as_redrawable(browser_data * b, int image)
 }
 
 /*************************************************/
-/* image_token_check_redrawable()                */
+/* image_token_reformatted()                     */
 /*                                               */
-/* Checks to see if an image has a known width   */
-/* and height, and if so, marks it as            */
-/* redrawable. Used for delayed reformatting.    */
+/* Called by a reformatter to signal an image is */
+/* locked in a line array. Sets the image's      */
+/* canredraw flag and locs the image's size.     */
 /*                                               */
 /* Parameters: Pointer to a browser_data struct  */
 /*             relevant to the image;            */
@@ -3299,27 +3299,36 @@ void image_mark_as_redrawable(browser_data * b, int image)
 /*             representing the image.           */
 /*************************************************/
 
-void image_token_check_redrawable(browser_data * b, HStream * token)
+void image_token_reformatted(browser_data * b, HStream * token)
 {
   int  image;
-  BBox size;
+  int  xref;
 
   /* Get the image number */
 
   image = image_get_token_image_actual(b, token);
-
   if (image < 0 || image > nimages) return;
 
-  image_get_image_size(b, image, &size);
+  if (idata[image].xref >= 0) xref = idata[image].xref;
+  else                        xref = image;
 
-  idata[image].currw = size.xmax;
-  idata[image].currh = size.ymax;
+  /* Lock the image size */
 
-//  /* Exit if the image has no known size yet */
-//
-//  if (idata[image].currw <= 0 || idata[image].currh <= 0) return;
-//
-  /* Mark it as redrawable */
+  image_lock_image_size(b, image);
+
+  /* Exit if the image has no known real size yet - even if its size */
+  /* is fixed in the HTML, there's no point marking it as redrawable */
+  /* if there is no image data to redraw...!                         */
+
+  if (
+       !idata[xref].istore                ||
+       idata[xref].istore->width_os  <= 0 ||
+       idata[xref].istore->height_os <= 0
+     )
+     return;
+
+  /* We do have some data and the reformatter has fixed the image in */
+  /* the line array, so mark it as redrawable now.                   */
 
   image_mark_as_redrawable(b, image);
 
@@ -3904,6 +3913,116 @@ static int image_get_token_image_actual(browser_data * b, HStream * token)
 }
 
 /*************************************************/
+/* image_lock_image_size()                       */
+/*                                               */
+/* Ask image_get_image_size for the size of an   */
+/* image, making sure currw and currh are -1 so  */
+/* that it works the size out from first         */
+/* principles, then set that size jn currw and   */
+/* currh for future reference.                   */
+/*                                               */
+/* Designed to be called by the reformatter when */
+/* it encounters an image and stores it in a     */
+/* line array.                                   */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the image;            */
+/*                                               */
+/*             Number of the image.              */
+/*************************************************/
+
+static void image_lock_image_size(browser_data * b, int image)
+{
+  BBox size;
+
+  /* Rediscover the image size - so ignore any stored */
+  /* values in currw and currh.                       */
+
+  if (image_get_image_size(b, image, &size, 1)) return;
+
+  /* Now lock the size by (re)storing it in currw and currh */
+
+  idata[image].currw = size.xmax;
+  idata[image].currh = size.ymax;
+
+  return;
+}
+
+/*************************************************/
+/* image_lock_token_image_size()                 */
+/*                                               */
+/* As image_lock_image_size, but takes a pointer */
+/* to an HStream rather than an image number.    */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the image;            */
+/*                                               */
+/*             Pointer to an HStream struct      */
+/*             representing the image.           */
+/*************************************************/
+
+void image_lock_token_image_size(browser_data * b, HStream * token)
+{
+  int  image = image_get_token_image_actual(b, token);
+
+  if (image < 0) return;
+
+  image_lock_image_size(b, image);
+
+  return;
+}
+
+/*************************************************/
+/* image_unlock_image_size()                     */
+/*                                               */
+/* Set currw and currh for an image to -1, so    */
+/* that image_get_image_size will start working  */
+/* the size out from first principles rather     */
+/* than using any prestored value.               */
+/*                                               */
+/* Designed to be called by the reformatter when */
+/* it destroys a line array with images in it.   */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the image;            */
+/*                                               */
+/*             Number of the image.              */
+/*************************************************/
+
+static void image_unlock_image_size(browser_data * b, int image)
+{
+  idata[image].currw = -1;
+  idata[image].currh = -1;
+
+  return;
+}
+
+/*************************************************/
+/* image_unlock_token_image_size()               */
+/*                                               */
+/* As image_unlock_image_size, but takes a       */
+/* pointer to an HStream rather than an image    */
+/* number.                                       */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the image;            */
+/*                                               */
+/*             Pointer to an HStream struct      */
+/*             representing the image.           */
+/*************************************************/
+
+void image_unlock_token_image_size(browser_data * b, HStream * token)
+{
+  int image = image_get_token_image_actual(b, token);
+
+  if (image < 0) return;
+
+  image_unlock_image_size(b, image);
+
+  return;
+}
+
+/*************************************************/
 /* image_get_image_size()                        */
 /*                                               */
 /* Returns the size of an image in OS units.     */
@@ -3917,12 +4036,19 @@ static int image_get_token_image_actual(browser_data * b, HStream * token)
 /*             no directly associated data);     */
 /*                                               */
 /*             Pointer to a BBox into which the  */
-/*             size information is placed.       */
+/*             size information is placed (xmax  */
+/*             and ymax fields filled with       */
+/*             width and height currently - xmin */
+/*             and ymin always zero);            */
+/*                                               */
+/*             1 to ignore the image's currw and */
+/*             currh fields, else use those if   */
+/*             they are present.                 */
 /*                                               */
 /* Assumes:    The BBox pointer is not NULL.     */
 /*************************************************/
 
-static _kernel_oserror * image_get_image_size(browser_data * b, int image, BBox * box)
+static _kernel_oserror * image_get_image_size(browser_data * b, int image, BBox * box, int ignore_stored)
 {
   int       awidth      = 0; /* Available page / cell width */
   int       aheight     = 0; /* Same, but height            */
@@ -3963,9 +4089,27 @@ static _kernel_oserror * image_get_image_size(browser_data * b, int image, BBox 
 
   #else
 
-    if (image < 0 || image >= nimages) return NULL;
+    if (!box || image < 0 || image >= nimages) return NULL;
 
   #endif
+
+  /* Zero contents of the BBox */
+
+  memset(box, 0, sizeof(BBox));
+
+  /* Can we return a prestored size? */
+
+  if (!ignore_stored && idata[image].currw >= 0 && idata[image].currh >= 0)
+  {
+    box->xmax = idata[image].currw;
+    box->ymax = idata[image].currh;
+
+    #ifdef TRACE
+      if (tl & (1u<<15)) Printf("image_get_image_size: Successful\n");
+    #endif
+
+    return NULL;
+  }
 
   /* If this cross references another image, get its number */
 
@@ -4006,11 +4150,7 @@ static _kernel_oserror * image_get_image_size(browser_data * b, int image, BBox 
   awidth -= subtract;
   if (awidth < 0) awidth = 0;
 
-  /* Zero contents of the BBox */
-
-  memset(box, 0, sizeof(BBox));
-
-  /* Get the real image dimensions if possible */
+  /* Try to get the image size from the actual image data (i.e. ImageLib) */
 
   if (idata[actual].istore)
   {
@@ -4180,7 +4320,7 @@ _kernel_oserror * image_get_token_image_size(browser_data * b, HStream * token, 
     if (tl & (1u<<15)) Printf("image_get_token_image_size: Exitting through image_get_image_size\n");
   #endif
 
-  return image_get_image_size(b, image, box);
+  return image_get_image_size(b, image, box, 0);
 }
 
 /*************************************************/
@@ -4301,7 +4441,7 @@ _kernel_oserror * image_get_back_image_size(browser_data * b, BBox * box)
     if (tl & (1u<<15)) Printf("image_get_back_image_size: Called, exitting through image_get_image_size\n");
   #endif
 
-  return (image_get_image_size(b, b->background_image, box));
+  return (image_get_image_size(b, b->background_image, box, 1));
 }
 
 /*************************************************/
