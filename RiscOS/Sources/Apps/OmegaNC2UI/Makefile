@@ -64,6 +64,10 @@ dirs:
         @echo ** Creating directory structure
         $(MKDIR) $(EXPORTDIR)
         $(MKDIR) $(RESAPP)
+        $(MKDIR) $(RESAPP).HTML-Ether
+        $(MKDIR) $(RESAPP).HTML-Modem
+        $(MKDIR) $(RESAPP).HTML-Ether.Setup
+        $(MKDIR) $(RESAPP).HTML-Modem.Setup
         $(MKDIR) $(RESRES)
         $(MKDIR) $(RESRES).NVRAM
         $(MKDIR) $(RESRES).NCDialCtrl
