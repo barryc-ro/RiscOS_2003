@@ -73,50 +73,75 @@ AOFFile		= AOF_File
 AOFFileZ	= AOF_FileZ
 EXPORTS		= $(EXP_HDR).$(COMPONENT)
 
-OBJS = \
- o.debug \
- o.inits \
- o.quits \
- o.output \
- o.serial_lib \
- o.buffering \
- o.misc \
+OBJS =\
+ o.debug\
+ o.serial_lib\
+ o.buffering\
+ o.misc\
+ o.debugit\
+ o.file\
+ o.pdebug\
+ o.printf\
+ o.serial\
+ o.socket\
+ o.tml\
+ o.tracker\
 
-OBJSZ = \
- oz.debug \
- oz.inits \
- oz.quits \
- oz.output \
- oz.serial_lib \
- oz.buffering \
- oz.misc \
+OBJSZ =\
+ oz.debug\
+ oz.serial_lib\
+ oz.buffering\
+ oz.misc\
+ oz.debugit\
+ oz.file\
+ oz.pdebug\
+ oz.printf\
+ oz.serial\
+ oz.socket\
+ oz.tml\
+ oz.tracker\
 
-OBJSD = \
- od.debug \
- od.inits \
- od.quits \
- od.output \
- od.serial_lib \
- od.buffering \
- od.misc \
+OBJSD =\
+ od.debug\
+ od.serial_lib\
+ od.buffering\
+ od.misc\
+ od.debugit\
+ od.file\
+ od.pdebug\
+ od.printf\
+ od.serial\
+ od.socket\
+ od.tml\
+ od.tracker\
 
-OBJSMC = \
- oMC.debug \
- oMC.inits \
- oMC.quits \
- oMC.output \
- oMC.serial_lib \
- oMC.buffering \
- oMC.misc \
+OBJSMC =\
+ oMC.debug\
+ oMC.serial_lib\
+ oMC.buffering\
+ oMC.misc\
+ oMC.debugit\
+ oMC.file\
+ oMC.pdebug\
+ oMC.printf\
+ oMC.serial\
+ oMC.socket\
+ oMC.tml\
+ oMC.tracker\
 
-OBJSMCD = \
- oMCD.debug \
- oMCD.inits \
- oMCD.quits \
- oMCD.output \
- oMCD.serial_lib \
- oMCD.buffering \
- oMCD.misc \
+OBJSMCD =\
+ oMCD.debug\
+ oMCD.serial_lib\
+ oMCD.buffering\
+ oMCD.misc\
+ oMCD.debugit\
+ oMCD.file\
+ oMCD.pdebug\
+ oMCD.printf\
+ oMCD.serial\
+ oMCD.socket\
+ oMCD.tml\
+ oMCD.tracker\
 
 LIBS = \
  $(PDEBUG) \
