@@ -10,6 +10,7 @@
 # ====		====	===========
 # 1997-10-06	BAL	Created
 # 1998-01-28	MGR	Beautified and made parent of FaxSupport
+# 1998-05-13	BAL	Added export of headers
 
 # -----------------------------------------------------------------------------
 # Program specific options
@@ -24,12 +25,14 @@ LDIR		= Resources.${LOCALE}
 
 
 # -----------------------------------------------------------------------------
-# Export Paths for Messages module
+# Paths for Messages module and Exports
 #
 
 RESDIR          = ${RESDIR}.${COMPONENT}
 RESAPP          = <Resource$Dir>.Apps.${APP}
 
+LIBDIR		= <Lib$Dir>
+FAXLIBDIR	= ${LIBDIR}.fax
 
 # -----------------------------------------------------------------------------
 # Generic options
@@ -243,9 +246,15 @@ install_rom: ${ROM_MODULE} subcomponent
 	@echo
 	@echo ${APP}: Module installed (ROM)
 
-export: ${EXPORTS} subcomponent
-	@echo
-	@echo ${APP}: No exports
+export: export_${PHASE} subcomponent
+
+export_hdrs: export_dirs
+	${CP} h.global	${FAXLIBDIR}.h.* ${CPFLAGS}
+	${CP} h.RCcodes	${FAXLIBDIR}.h.* ${CPFLAGS}
+	@echo ${COMPONENT}: Export complete (hdrs)
+
+export_libs:
+        @echo ${COMPONENT}: No libraries to export
 
 resources: subcomponent
 	@echo
@@ -294,6 +303,11 @@ o.dirs:
 	${MKDIR} Targets.${APP}
 	@create o.dirs
 	@stamp  o.dirs
+
+export_dirs:
+	${MKDIR} ${LIBDIR}
+	${MKDIR} ${FAXLIBDIR}
+	${MKDIR} ${FAXLIBDIR}.h
 
 
 # -----------------------------------------------------------------------------
