@@ -851,6 +851,20 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
     if (frontend_view_has_caret(v))
  	backend_remove_highlight(v->displaying);
 
+    if (v == main_view)
+    {
+	fe_view vv = fe_find_top_popup(main_view);
+
+	STBDBG(("frontend_view_visit: popup %p trans %d pos %d\n", vv, vv->open_transient, vv->transient_position));
+	
+	if (vv->open_transient &&
+	    (vv->transient_position == fe_position_TOOLBAR_WITH_COORDS || vv->transient_position == fe_position_TOOLBAR)
+	    )
+	{
+	    fe_dispose_view(vv);
+	}
+    }
+
     /* fade down previous displayed frame as long as it's not the same one (server-push) */
     is_server_push = v->displaying == doc;
     if (v->displaying && !is_server_push)

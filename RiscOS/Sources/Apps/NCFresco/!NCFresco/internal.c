@@ -1895,6 +1895,20 @@ static int internal_action_opentoolbar(const char *query, const char *bfile, con
     NOT_USED(flags);
 }
 
+/* ------------------------------------------------------------------------------------------- */
+
+static int internal_action_crash(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
+{
+#if DEBUG
+    *(int *)(-1) = 0;
+#endif
+    return fe_internal_url_NO_ACTION;
+    NOT_USED(bfile);
+    NOT_USED(referer);
+    NOT_USED(file);
+    NOT_USED(flags);
+}
+
 /* ----------------------------------------------------------------------------------------------------- */
 
 static int internal_decode_cancel(const char *query, const char *bfile, const char *referer, const char *file, char **new_url, int *flags)
@@ -2096,6 +2110,8 @@ static internal_url_str internal_url_info[] =
     { "reload", internal_action_reload },
     { "favsadd", internal_action_favoritesadd },
     { "favsremove", internal_action_favoritesremove },
+
+    { "crash", internal_action_crash },
 
     { 0, 0 }
 };

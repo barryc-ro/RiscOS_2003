@@ -561,7 +561,9 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	    {
 		BOOL select = has_caret && i == doc->selection.data.text.input_offset;
 		render_plinth_from_list(select ? bg : bg1,
-					select ? config_colour_list[render_colour_list_WRITE_HIGHLIGHT] : config_colour_list[render_colour_list_WRITE],
+					select && config_colour_list[render_colour_list_WRITE_HIGHLIGHT] ?
+					  config_colour_list[render_colour_list_WRITE_HIGHLIGHT] :
+					  config_colour_list[render_colour_list_WRITE],
 					0,
 					hpos + i * (NUMBERS_SPACING_X + char_width),
 					bline - ti->max_down,
@@ -572,7 +574,9 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	else
 	{
 	    render_plinth_from_list(bg,
-				    has_caret ? config_colour_list[render_colour_list_WRITE_HIGHLIGHT] : config_colour_list[render_colour_list_WRITE],
+				    has_caret && config_colour_list[render_colour_list_WRITE_HIGHLIGHT] ?
+				      config_colour_list[render_colour_list_WRITE_HIGHLIGHT] :
+				      config_colour_list[render_colour_list_WRITE],
 				    0,
 				    hpos, bline - ti->max_down,
 				    ti->width, (ti->max_up + ti->max_down), doc );

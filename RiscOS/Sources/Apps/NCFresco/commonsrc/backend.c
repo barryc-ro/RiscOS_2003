@@ -2526,8 +2526,9 @@ static void be_set_dimensions(be_doc doc)
 
     BENDBG(( "be_set_dimensions: doc%p to %dx%d\n", doc, w, h));
 
-#if /* !defined(STBWEB) &&  */!defined(BUILDERS)
+#if !defined(STBWEB) && !defined(BUILDERS)
     /* pdh: Fresco wants this, don't know whether NCFresco does */
+    /* SJM: Neither should use it as it wipes out any changes made to the margins by BODY attributes */
     frontend_view_margins( doc->parent, &doc->margin );
 #endif
 

@@ -4594,3 +4594,6 @@ stbutils.o:	../commonsrc/interface.h
 stbutils.o:	../!NCFresco/stbutils.h
 stbutils.o:	../!NCFresco/stbfe.h
 stbutils.o:	../../../../Export/Lib/RISC_OSLib/coords.h
+version.h:      ../VersionNum
+ModuleWrap.o:   ../!NCFresco/ModuleWrap.s ../!NCFresco/ResFiles.s ../!NCFresco/AppName.s ../VersionASM
+version.h:      ../VersionNum
