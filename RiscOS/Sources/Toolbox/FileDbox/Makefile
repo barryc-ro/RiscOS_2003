@@ -66,6 +66,8 @@ OBJS =\
  o.MakeList\
  o.miscop\
  o.show\
+ o.Sort\
+ o.Sprite\
  o.task\
  o.getitemtex\
  o.setstate\
@@ -139,9 +141,8 @@ ${ROM_MODULE}: ${OBJS} ${TBOXLIB} ${DESKLIB} ${ROMCSTUBS}
 rom_link:
         ${MKDIR} linked
         ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -bin -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM} \
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM} \
               -map > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
