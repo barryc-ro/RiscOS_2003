@@ -28,8 +28,8 @@ WIPE    = -wipe
 CD	= dir
 LIBFILE = libfile
 
-CFLAGS   = -c -depend !Depend -Wap -zps0 ${INCLUDES} -fah -Fn ${DFLAGS}
-CFLAGSZM = -c -depend !Depend -Wap -zps1 ${INCLUDES} -fah -Fn ${DFLAGS} -zM
+CFLAGS   = -c -depend !Depend -Wap -zps0 ${INCLUDES} -ffah ${DFLAGS}
+CFLAGSZM = -c -depend !Depend -Wap -zps1 ${INCLUDES} -ffah ${DFLAGS} -zM
 CPFLAGS  = ~cfr~v
 WFLAGS   = ~c~v
 LIBFILEFLAGS = -c -o $@
@@ -60,8 +60,8 @@ DEBUGLIBZM = debuglibm
 
 EXPORTS     = ${LIBDIR}.tboxlibint
 
-OBJ      = o.mem o.messages o.string32 o.rmensure o.objsupport o.slist o.toolboxmem
-OBJZM    = z.mem z.messages z.string32 z.rmensure z.objsupport z.slist z.toolboxmem
+OBJ      = o.mem o.messages o.string32 o.rmensure o.objmodule o.objsupport o.slist o.toolboxmem
+OBJZM    = z.mem z.messages z.string32 z.rmensure z.objmodule z.objsupport z.slist z.toolboxmem
 
 DBG_OBJ	  = o.debug 
 DBG_OBJZM = z.debug 
