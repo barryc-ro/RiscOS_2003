@@ -1,0 +1,1143 @@
+/* mx/src/yc/yccmap.c */
+
+
+/*
+ORACLE, Copyright (c) 1982, 1983, 1986, 1990 ORACLE Corporation
+ORACLE Utilities, Copyright (c) 1981, 1982, 1983, 1986, 1990, 1991 ORACLE Corp
+
+Restricted Rights
+This program is an unpublished work under the Copyright Act of the
+United States and is subject to the terms and conditions stated in
+your  license  agreement  with  ORACORP  including  retrictions on
+use, duplication, and disclosure.
+
+Certain uncopyrighted ideas and concepts are also contained herein.
+These are trade secrets of ORACORP and cannot be  used  except  in
+accordance with the written permission of ORACLE Corporation.
+*/
+
+
+
+#ifndef SYSI_ORACLE
+#include <sysi.h>
+#endif
+#ifndef YCC0_ORACLE
+#include <ycc0.h>
+#endif
+#ifndef YSL_ORACLE
+#include <ysl.h>
+#endif
+#ifndef YSFMT_ORACLE
+#include <ysfmt.h>
+#endif
+#ifndef YCCFP_ORACLE
+#include <yccfp.h>
+#endif
+#ifndef YCCP0_ORACLE
+#include <yccp0.h>          
+#endif
+
+
+STATICF void yccGenCopyFreeMacros( 
+           ycctx* ctx, yccfp* fp, CONST char* derived, CONST char* base);
+STATICF void yccGenAliasAllocator( ycctx* ctx, yccfp* fp, yrobj* type);
+STATICF void yccmap(ycctx *ctx);
+STATICF boolean yccSymFlush( dvoid* usrp, dvoid* elm);
+
+
+
+
+
+STATICF void yccmap(ycctx *ctx)
+{
+  char  base[SYSFP_MAX_PATHLEN];
+  CONST char* path;
+  ub4 baselen;
+  yccctx cctx;
+  ycfile* noreg files;
+  noreg ub4 fcount;
+  boolean hdronly, tmpl, iaosrvr;
+  ub4 hdridx, clntidx, srvridx, thidx, tcidx, iaoidx;
+
+  NOREG(files);
+  NOREG(fcount);
+  hdridx = clntidx = srvridx = thidx = tcidx = iaoidx = 0;
+  iaosrvr = FALSE;
+
+    
+  sysfpExtractBase(base, ctx->srcnm);
+  baselen = strlen(base);
+  path = ysResGetLast("mnidlc.outputpath");
+  fcount = (ub4) 1;
+  hdridx = (ub4) 0;
+  if ( !(hdronly = ysResGetBool("mnidlc.header-only")) )
+  {
+    clntidx = (ub4) fcount++;
+    srvridx = (ub4) fcount++;
+  }
+  if ( (tmpl = ysResGetBool("mnidlc.server-template")) )
+  {                                     
+    thidx = (ub4) fcount++;
+    if ( !ysResGetBool( "mnidlc.tmpl-hdr-only") )
+    {
+      tcidx = (ub4) fcount++;
+      if ( (iaosrvr = ysResGetBool("mnidlc.iao-srvr-gen")) )
+        iaoidx = (ub4) fcount++;
+    }
+  }
+
+    
+  files = (ycfile*) ysmGlbAlloc(sizeof(ycfile) * fcount, "ycfile");
+  sysfpForm(files[hdridx].target, path, base, SYSFPKIND_CHEADER);
+  if ( !hdronly )
+  {
+    base[baselen] = 'C';
+    base[baselen+1] = '\0';
+    sysfpForm(files[clntidx].target, path, base, SYSFPKIND_CSOURCE);
+    base[baselen] = 'S';
+    sysfpForm(files[srvridx].target, path, base, SYSFPKIND_CSOURCE);
+  }
+  if ( tmpl )
+  {
+    base[baselen] = 'I';
+    base[baselen+1] = '\0';
+    sysfpForm(files[thidx].target, path, base, SYSFPKIND_CHEADER);
+    if ( !ysResGetBool( "mnidlc.tmpl-hdr-only") )
+    {
+      sysfpForm(files[tcidx].target, path, base, SYSFPKIND_CSOURCE);
+      if ( iaosrvr )
+      {
+        base[baselen] = 'G';
+        sysfpForm(files[iaoidx].target, path, base, SYSFPKIND_CSOURCE);
+      }
+    }
+  }
+  if ( !ycFileInit( (ycfile*)files, (ub4)fcount, path) )
+  {                                         
+    ysmGlbFree((dvoid*)files);
+    return;
+  }
+
+    
+  
+  CLRSTRUCT(cctx);
+  cctx.tcpfx_yccctx = (ycStyleCORBA(ctx) ? "TC" : "YCTC");
+  cctx.seqpfx_yccctx = (ycStyleCORBA(ctx) ? "CORBA" : "YCIDL");
+  ctx->langctx = &cctx;
+
+  yseTry
+  {
+      
+    base[baselen] = '\0';                  
+    ycchdr(ctx, base, &(files[hdridx]));                       
+
+    if (ysResGet("mnidlc.server-template"))            
+      ycctmpl(ctx, base, &(files[thidx]));
+
+    if (!ysResGet("mnidlc.header-only"))
+    {
+      yccclnt(ctx, base, &(files[clntidx]));              
+      yccsrv(ctx, base, &(files[srvridx]));              
+    }
+    ycSymTblFlush( ctx->symtbl, (ycsymwcb)yccSymFlush, (dvoid*)0);
+    ycFileRename((ycfile*)files, (ub4)fcount);
+  }
+  yseCatchAll
+  {
+    CONST char* fn;
+    sword ln;
+    ub4 i;
+
+    yseGetLoc(&fn, &ln);
+    ysRecord( YCMSG(0), YCERRSEV, YSLSTR(ysidToStr(yseExid)), 
+              YSLSTR(fn), YSLSB4(ln), YSLEND);
+    for (i = 0; i < fcount; i++)
+      DISCARD sysfpRemove(files[i].newtmp);
+  }
+  yseEnd
+  ysmGlbFree((dvoid*)files);
+}
+
+
+
+
+void yccGenTypeCode( ycctx* ctx, yccfp* fp, CONST char* name, CONST yotk* tc,
+                     boolean external)
+{
+  boolean useGlob = yccUseGlobals( ctx);
+  CONST char* tcpfx = yccTCPrefix(ctx);
+  CONST char* tcnm;
+
+  if ( tc )                  
+  {
+    if ( external )
+    {
+      if ( !useGlob )
+        yccfpPrint( fp, "static %syotk %s__tc[]", YCCCDATA(ctx), name);
+      else
+        yccfpPrint( fp, "%s%s yotk %s_%s[]", 
+                    YCCEXDEF(ctx), YCCCDATA(ctx), tcpfx, name);
+    }
+    else     
+    {
+      yccfpPrint(fp, "static %syotk %s_%s[]", YCCCDATA(ctx), tcpfx, name);
+    }
+
+    yccfpPrint( fp, " = \n");
+    yccfpIncIndent( fp);
+    yccFormatTypeCodeDefn( ctx, fp, tc);
+    yccfpDecIndent( fp);
+
+    if ( external )
+    {
+      tcnm = yccGetPrimitiveName( ctx, yrpkTypeCode);
+      yccfpPrint( fp, "%s %s__getTC(void)\n{\n", tcnm, name);
+      yccfpIncIndent( fp);
+      if ( !useGlob )
+        yccfpPrint( fp, "return (%s)%s__tc;\n", tcnm, name);
+      else
+        yccfpPrint( fp, "return (%s)%s_%s;\n", tcnm, tcpfx, name);
+      yccfpDecIndent( fp);
+      yccfpPrint( fp, "}\n\n");
+    }
+  }
+  else                       
+  {
+    tcnm = yccGetPrimitiveName( ctx, yrpkTypeCode);
+    yccfpPrint( fp, "%s %s__getTC(void);\n", tcnm, name);
+    if ( !useGlob )
+    {
+      yccfpStartPP( fp);
+      yccfpPrint( fp, "#ifndef %s_%s\n", tcpfx, name);
+      yccfpPrint( fp, "#define %s_%s   (%s__getTC())\n", tcpfx, name, name);
+      yccfpPrint( fp, "#endif\n");
+      yccfpEndPP( fp);
+    }
+    else
+      yccfpPrint( fp, "%s%syotk %s_%s[];\n", 
+                  YCCEXREF(ctx), YCCCDATA(ctx), tcpfx, name);
+  }
+}
+
+
+
+void yccGenTypeCodeMacro( ycctx* ctx, yccfp* fp, CONST char* alias, 
+                          yrobj* basetype)
+{
+  CONST char* tcpfx = yccTCPrefix(ctx);
+
+  yccfpStartPP( fp);
+  yccfpPrint( fp, "#ifndef %s_%s\n#define %s_%s ", tcpfx, alias, tcpfx, alias);
+  yccGenTypeCodeName( ctx, fp, basetype);
+  yccfpPrint( fp, "\n#endif /* %s_%s */\n\n", tcpfx, alias);
+  yccfpEndPP( fp);
+}
+
+
+
+
+void yccGenSysIncls(ycctx* ctx, yccfp* fp, boolean impl)
+{
+  yccfpStartPP( fp);
+  if ( impl && (ctx->style & YCSTYLE_ORA) )
+    yccfpPrint(fp, "#ifndef SYSI_ORACLE\n#include <sysi.h>\n#endif\n");
+  else if ( !impl )
+    yccfpPrint(fp, "#ifndef SYSX_ORACLE\n#include <sysx.h>\n#endif\n");
+
+  if ( (ctx->objAdaptor == YCOA_BOA) || (ctx->style & YCSTYLE_CORBA) )
+    yccfpPrint(fp, "#ifndef YOORB_ORACLE\n#include <yoorb.h>\n#endif\n\n");
+  else
+    yccfpPrint(fp, "#ifndef YO_ORACLE\n#include <yo.h>\n#endif\n\n");
+  yccfpEndPP( fp);
+}
+
+
+
+
+void yccGenFuncHdr( ycctx* ctx, yccfp* fp, yrobj* rettype, yrobj* intf,
+        CONST char* funcName, yslst* params, yslst* ctxs, boolean fptr, 
+        yccfnk kind)
+{
+  ysle* le;
+
+  if ( rettype )
+    yccGenParamType( ctx, fp, rettype, YOMODE_RETURN);
+  else
+    yccGenParamType( ctx, fp, yrGetPrimitive( ctx->repository, yrpkvoid),
+                     YOMODE_RETURN);
+
+  if ( !fptr )
+  {
+    switch (kind)
+    {
+      case yccfnk_normal:
+        yccfpPrint(fp, " %s( ", funcName);
+        break;
+      case yccfnk_nw:
+        yccfpPrint(fp, " %s_nw( ", funcName);
+        break;
+      default:
+        yseThrow(YC_EX_FAILURE);
+    }
+  }
+  else
+  {
+    CONST char* kwdpfx = ((*ctx->lang->kwdchk)(ctx, funcName) ? "_" : "");
+
+    switch (kind)
+    {
+      case yccfnk_normal:
+        yccfpPrint(fp, " (*%s%s)( ", kwdpfx, funcName);
+        break;
+      default:
+        yseThrow(YC_EX_FAILURE);
+    }
+  }
+
+  yccGenTypeName(ctx, fp, intf);
+  if ( ycCORBA1_2(ctx) )
+    yccfpPrint( fp, "%s, %s*%s", 
+                fptr ? "" : " or", yccEnvPar( ctx), fptr ? "" : " ev");
+  else if ( !fptr )
+    yccfpPrint(fp, " or");
+
+  if ( params )
+  {
+    for (le = ysLstHead(params); le; le = ysLstNext(le))
+    {
+      yrpar* par = (yrpar*) ysLstVal(le);
+
+      yccfpPrint(fp, ", ");
+      yccGenParamType( ctx, fp, par->type, par->mode);
+      if ( !fptr )
+      {
+        yccfpPrint( fp, " ");
+        yccGenSimpleName( ctx, fp, par->name);
+      }
+    }
+  }
+  if ( !ycCORBA1_2(ctx) )
+  {
+    if ( !ycIsEmptyLst(ctxs) )
+      yccfpPrint( fp, ", CORBA_Context%s", fptr ? "" : " corbctx_");
+    yccfpPrint( fp, ", %s*%s", yccEnvPar( ctx), fptr ? "" : " ev");
+  }
+  if ( kind == yccfnk_nw )
+    yccfpPrint( fp, ", ysevt*%s)", fptr ? "" : " _sem");
+  else
+    yccfpPrint( fp, ")");
+}
+
+
+
+
+STATICF void yccGenCopyFreeMacros( 
+           ycctx* ctx, yccfp* fp, CONST char* derived, CONST char* base)
+{
+  yccfpStartPP( fp);
+  if ( ctx->objAdaptor == YCOA_BOA )
+  {
+    yccfpPrint( fp, "#define ORA_CORBA_%s__free(ev, val, ffunc) ", derived);
+    yccfpPrint( fp, "ORA_CORBA_%s__free((ev), (val),(ffunc))\n", base);
+    yccfpPrint( fp, "#define ORA_CORBA_%s__copy(ev, dest, src, afunc) ",
+                derived);
+    yccfpPrint( fp, "ORA_CORBA_%s__copy((ev),(dest),(src),(afunc))\n", base);
+  }
+  else
+  {
+    yccfpPrint( fp, "#define %s__free(val, ffunc) %s__free((val),(ffunc))\n",
+                    derived, base);
+    yccfpPrint( fp, "#define %s__copy(dest, src, afunc) ", derived);
+    yccfpPrint( fp, "%s__copy((dest),(src),(afunc))\n", base);
+  }
+  yccfpEndPP( fp);
+}
+
+
+
+
+boolean ycIsAnonymous( ycctx* ctx, yrobj* type)
+{
+  if ( yrGetKind(type) == yrdkAlias )
+    type = yrAliasData(type).type;     
+  switch ( yrGetKind(type) )
+  {
+    case yrdkString:
+    case yrdkSequence:
+    case yrdkArray:
+      return TRUE;
+    default:
+      return FALSE;
+  }
+}
+
+
+
+
+void yccGenCopyFree( ycctx* ctx, yccfp* fp, yrobj* type, boolean defn)
+{
+  CONST char* tname;
+  boolean inherited = ycgInherited( ctx, type);
+ 
+    
+  switch (yrGetKind( type))
+  {
+    case yrdkAlias:
+    {
+      yrobj* basetype = yrGetAliasBaseType(type);
+
+      if ( (yrGetKind(basetype) == yrdkPrimitive) || 
+           ycIsCorbaObject( ctx, basetype) )
+        return;
+      
+    }
+    case yrdkStruct:
+    case yrdkUnion:
+    case yrdkInterface:
+    case yrdkException:
+    case yrdkEnum:
+      if ( defn && (!ycShouldGenCode( ctx, type) || inherited) )
+        return; 
+      tname = yccGetAbsoluteName(ctx, type, (yrobj*)0);
+      break;
+    default:
+      return;
+  }
+
+    
+  if ( inherited )
+  {
+    yrobj* inInterface = ycgScopeLookup( ctx, yrdkInterface);
+    CONST char* dname = yccGetAbsoluteName( ctx, type, inInterface);
+
+    yccGenCopyFreeMacros( ctx, fp, dname, tname);
+    ysmGlbFree( (dvoid*)dname);
+    return;
+  }
+
+    
+  if ( (yrGetKind(type) == yrdkAlias) && !ycIsAnonymous(ctx, type) )
+  {
+    CONST char* bname;
+
+    if ( !defn )
+    {
+      bname = yccGetAbsoluteName( ctx, yrAliasData(type).type, (yrobj*)0);
+      yccGenCopyFreeMacros( ctx, fp, tname, bname);
+    }   
+  }
+    
+  else
+  {
+    CONST char* voidstr = YCCVOID(ctx);
+    boolean doingBOA = (ctx->objAdaptor == YCOA_BOA);
+    CONST char* prefix = (doingBOA ? "ORA_CORBA_" : "");
+
+      
+    yccfpPrint( fp, "void %s%s__free( ", prefix, tname);
+    if ( doingBOA )
+      yccfpPrint( fp, "CORBA_Environment* ev, ");
+    yccGenParamType( ctx, fp, type, YOMODE_INOUT);
+    yccfpPrint( fp, " val, ysmff ffunc)");
+    if ( defn )
+    {
+      yccfpPrint( fp, "\n{\n");
+      yccfpIncIndent( fp);
+      if ( doingBOA )
+      {
+        yccfpPrint( fp, "if ( ev->_major != CORBA_NO_EXCEPTION )\n");
+        yccfpIncIndent( fp);
+        yccfpPrint( fp, "return;\n");
+        yccfpDecIndent( fp);
+        yccfpPrint( fp, "yseTry\n{\n");
+        yccfpIncIndent( fp);
+      }
+
+      yccfpPrint( fp, "yotkFreeVal( ");
+      yccGenTypeCodeName( ctx, fp, type);
+      yccfpPrint( fp, ", (%s*)val, ffunc);\n", voidstr);
+      yccfpDecIndent( fp);
+      yccfpPrint( fp, "}\n");
+
+      if ( doingBOA )
+      {
+        yccfpPrint( fp, "yseCatchAll\n{\n");
+        yccfpIncIndent( fp);
+        yccfpPrint( fp, "ev->_major = CORBA_SYSTEM_EXCEPTION;\n");
+        yccfpPrint( fp, "ev->id = (CORBA_char*) yseExid;\n");
+        yccfpDecIndent( fp);
+        yccfpPrint( fp, "}\nyseEnd\n");
+        yccfpDecIndent( fp);
+        yccfpPrint( fp, "}\n");
+      }
+      yccfpPrint( fp, "\n");
+    }
+    else
+      yccfpPrint( fp, ";\n");
+
+      
+    yccfpPrint( fp, "void %s%s__copy( ", prefix, tname);
+    if ( doingBOA )
+      yccfpPrint( fp, "CORBA_Environment* ev, ");
+    yccGenParamType( ctx, fp, type, YOMODE_INOUT);
+    yccfpPrint( fp, " dest, ");
+    yccGenParamType( ctx, fp, type, YOMODE_INOUT);
+    yccfpPrint( fp, " src, ysmaf afunc)");
+    if ( defn )
+    {
+      yccfpPrint( fp, "\n{\n");
+      yccfpIncIndent( fp);
+      if ( doingBOA )
+      {
+        yccfpPrint( fp, "if ( ev->_major != CORBA_NO_EXCEPTION )\n");
+        yccfpIncIndent( fp);
+        yccfpPrint( fp, "return;\n");
+        yccfpDecIndent( fp);
+        yccfpPrint( fp, "yseTry\n{\n");
+        yccfpIncIndent( fp);
+      }
+      yccfpPrint( fp, "yotkCopyVal( ");
+      yccGenTypeCodeName( ctx, fp, type);
+      yccfpPrint( fp, ", (%s*)dest, (%s*)src, afunc);\n", voidstr, voidstr);
+      yccfpDecIndent( fp);
+      yccfpPrint( fp, "}\n");
+      if ( doingBOA )
+      {
+        yccfpPrint( fp, "yseCatchAll\n{\n");
+        yccfpIncIndent( fp);
+        yccfpPrint( fp, "ev->_major = CORBA_SYSTEM_EXCEPTION;\n");
+        yccfpPrint( fp, "ev->id = (CORBA_char*) yseExid;\n");
+        yccfpDecIndent( fp);
+        yccfpPrint( fp, "}\nyseEnd\n");
+        yccfpDecIndent( fp);
+        yccfpPrint( fp, "}\n");
+      }
+      yccfpPrint( fp, "\n");
+    }
+    else
+      yccfpPrint( fp, ";\n");
+  }
+}
+
+
+
+
+void yccGenParamType( ycctx* ctx, yccfp* fp, yrobj* type, sword mode)
+{
+  boolean genName = TRUE;	
+
+  for (;;)
+  {
+    switch (yrGetKind(type))
+    {
+      case yrdkInterface:
+      case yrdkEnum:
+	  
+        if ( genName )
+          yccGenTypeName(ctx, fp, type);
+        if ( (mode == YOMODE_OUT) || (mode == YOMODE_INOUT) )
+          yccfpPrint(fp,"*");
+        return;
+      case yrdkUnion:
+      case yrdkStruct:
+      case yrdkSequence:
+      case yrdkException:
+        if ( genName )
+          yccGenTypeName(ctx, fp, type);
+        if ( yccIsVariableType( ctx, type) )
+        {
+          if ( mode != YOMODE_OUT )
+            yccfpPrint(fp,"*");
+          else
+            yccfpPrint(fp,"**");
+        }
+        else if ( mode != YOMODE_RETURN )
+            yccfpPrint(fp,"*");
+        return;
+      case yrdkAlias:
+        if ( genName )
+        {
+          yrobj* base = yrGetAliasBaseType( type);
+
+          if ( (yrGetKind(base) == yrdkArray) &&
+               ((mode == YOMODE_RETURN) ||
+               ((mode == YOMODE_OUT) && yccIsVariableType( ctx, base))) )
+          {
+            CONST char* tname = yccGetAbsoluteName(ctx, type, (yrobj*)0);
+
+            if ( mode == YOMODE_RETURN )
+              yccfpPrint( fp, "%s_slice*", tname);
+            else     
+              yccfpPrint( fp, "%s_slice**", tname);
+            return;
+          }
+          else
+            yccGenTypeName(ctx, fp, type);
+          genName = FALSE;
+          type = base;
+        }
+        break;
+      case yrdkString:
+          
+        if ( genName )
+          yccGenPrimitiveName(ctx, fp, yrpkstring);
+        if ( (mode == YOMODE_OUT) || (mode == YOMODE_INOUT) )
+          yccfpPrint(fp, "*");
+        return;
+      case yrdkArray:
+        return;
+      case yrdkPrimitive:
+        if ( genName )
+          yccGenTypeName(ctx, fp, type);
+        if ( yrPrimData(type).kind == yrpkany )    
+        {
+          if ( yccIsVariableType( ctx, type) )
+          {
+            if ( mode != YOMODE_OUT )
+              yccfpPrint(fp,"*");
+            else
+              yccfpPrint(fp,"**");
+          }
+          else if ( mode != YOMODE_RETURN )
+              yccfpPrint(fp,"*");
+        }
+        else if ( (mode == YOMODE_OUT) || (mode == YOMODE_INOUT) )
+             yccfpPrint(fp, "*");
+        return;
+      default:
+        yseThrow(YS_EX_FAILURE);
+        break;
+    }
+  }
+}
+
+
+
+
+boolean yccIsVariableType( ycctx* ctx, yrobj* type)
+{
+  boolean result = FALSE;
+  ysle* le;
+  ycsym* syminfo = (ycsym*)0;
+
+  if ( ycCORBA1_2( ctx) )
+    return FALSE;           
+
+    
+  switch (yrGetKind(type))
+  {
+    case yrdkPrimitive:
+      switch ( yrPrimData(type).kind)
+      {
+        case yrpkany:
+        case yrpkstring:
+        case yrpkTypeCode:
+        case yrpkobjref:
+          return TRUE;
+          break;
+        default:
+          return FALSE;
+          break;
+      }
+      break;
+    case yrdkInterface:
+    case yrdkString:
+    case yrdkSequence:
+      return TRUE;
+      break;
+    case yrdkArray:
+    case yrdkStruct:
+    case yrdkException:    
+    case yrdkUnion:
+    case yrdkAlias:
+      syminfo = ycSymLookup( ctx->symtbl, type);
+      break;
+    default:
+      return FALSE;
+      break;
+  }
+
+  if ( syminfo && syminfo->isVarType )       
+    return ((syminfo->isVarType > 0) ? TRUE : FALSE);
+
+    
+  switch (yrGetKind(type))
+  {
+    case yrdkArray:
+      result = yccIsVariableType( ctx, yrArrayData(type).elmtype);
+      break;
+    case yrdkStruct:
+    case yrdkException:    
+      for ( le = ysLstHead( yrStructData(type).mbrs); le; le = ysLstNext(le))
+      {
+        if ((result = yccIsVariableType(ctx, ((yrstrmbr*)ysLstVal(le))->type)))
+          break;
+      }
+      break;
+    case yrdkUnion:
+      
+      for ( le = ysLstHead( yrUnionData(type).arms); le; le = ysLstNext(le))
+      {
+        if ((result = yccIsVariableType(ctx, ((yrunmbr*)ysLstVal(le))->type)))
+          break;
+      }
+      break;
+    case yrdkAlias:
+      result = yccIsVariableType( ctx, yrGetAliasBaseType( type));
+      break;
+    default:
+      result = FALSE;
+      break;
+  }
+  if ( syminfo )                         
+    syminfo->isVarType = result;
+  return result;
+}
+
+
+
+
+
+void yccGenAllocator( ycctx* ctx, yccfp* fp, yrobj* type, boolean defn)
+{
+  CONST char* tname;
+  boolean inherited;
+
+  if ( defn || ycCORBA1_2( ctx) || !yccIsVariableType( ctx, type) )
+    return;
+
+  tname = yccGetAbsoluteName(ctx, type, (yrobj*)0);
+  switch ( yrGetKind(type) )
+  {
+    case yrdkSequence:             
+    {
+      yrobj* etype = yrSeqData(type).elmtype;
+      CONST char* ename = yccGetAbsoluteName( ctx, etype, (yrobj*)0);
+
+      yccfpStartPP( fp);
+      yccfpPrint( fp, "#define %s_allocbuf(len) ", tname);
+      yccfpPrint( fp, "((%s*) yoAllocBufTk((len), sizeof((%s)), ",
+                  ename, ename);
+      yccGenTypeCodeName(ctx, fp, etype);
+      yccfpPrint( fp, "))\n");
+      yccfpEndPP( fp);
+      
+    }
+    case yrdkUnion:
+    case yrdkStruct:
+      inherited = ycgInherited( ctx, type);
+      yccfpStartPP( fp);
+      if ( inherited )
+      {
+        CONST char* dname = 
+           yccGetAbsoluteName( ctx, type, ycgScopeLookup( ctx, yrdkInterface));
+    
+        yccfpPrint( fp, "#define %s__alloc() ", dname);
+        yccfpPrint( fp, "  ((%s*) %s__alloc())\n", dname, tname);
+        ysmGlbFree( (dvoid*)dname);
+      }
+      else
+      {
+        yccfpPrint( fp, "#define %s__alloc() ", tname);
+        yccfpPrint( fp, "    ((%s*) yoAllocTk( sizeof(%s), ", tname, tname);
+        yccGenTypeCodeName( ctx, fp, type);
+        yccfpPrint( fp, "))\n");
+      }
+      yccfpEndPP( fp);
+      break;
+    case yrdkAlias:
+      yccGenAliasAllocator( ctx, fp, type);
+      break;
+    default:
+      return;
+  }
+}
+
+
+
+
+
+STATICF void yccGenAliasAllocator( ycctx* ctx, yccfp* fp, yrobj* type)
+{
+  CONST char* tname;
+  yrobj* base = yrGetAliasBaseType( type);
+  boolean inherited = ycgInherited( ctx, type);
+
+    
+  if ( inherited )
+    tname = yccGetAbsoluteName(ctx, type, ycgScopeLookup( ctx, yrdkInterface));
+  else
+    tname = yccGetAbsoluteName(ctx, type, (yrobj*)0);
+
+  yccfpStartPP( fp);
+  switch (yrGetKind( base))
+  {
+    case yrdkString:
+      yccfpPrint( fp, "#define %s__alloc(len)  CORBA_string_alloc((len))\n", 
+                  tname);
+      break;
+    case yrdkPrimitive:
+      if ( yrPrimData(base).kind == yrpkany )
+        yccfpPrint( fp, "#define %s__alloc()  CORBA_any_alloc()\n", tname);
+      else if ( yrPrimData(base).kind == yrpkstring )
+        yccfpPrint( fp, "#define %s__alloc(len) CORBA_string_alloc((len))\n", 
+                    tname);
+      break;
+    case yrdkArray:
+      if ( inherited )
+      {
+        CONST char* bname = yccGetAbsoluteName( ctx, type, (yrobj*)0);
+    
+        yccfpPrint( fp, "#define %s__alloc() ", tname);
+        yccfpPrint( fp, "((%s_slice*) %s__alloc())\n", tname, bname);
+      }
+      else
+      {
+        yccfpPrint( fp, "#define %s__alloc() ", tname);
+        yccfpPrint( fp, "((%s_slice*) yoAllocTk( sizeof(%s), ", tname, tname);
+        yccGenTypeCodeName( ctx, fp, type);
+        yccfpPrint( fp, "))\n");
+      }
+      break;
+    case yrdkSequence:
+      yccfpPrint( fp, "#define %s_allocbuf(len) ", tname);
+      yccfpPrint( fp, "(%s_allocbuf((len)))\n",
+                  yccGetAbsoluteName( ctx, base, (yrobj*)0));
+      
+    case yrdkStruct:
+    case yrdkUnion:
+      yccfpPrint( fp, "#define %s__alloc() ", tname);
+      yccfpPrint( fp, "((%s*) %s__alloc())\n", 
+                  tname, yccGetAbsoluteName( ctx, base, (yrobj*)0));
+      break;
+    case yrdkInterface:
+    case yrdkException:
+    case yrdkEnum:
+    default:
+      break;
+  }
+  yccfpEndPP( fp);
+
+  if ( inherited )
+    ysmGlbFree( (dvoid*)tname);
+}
+
+
+
+
+void yccGenSupportFuncs( ycctx* ctx, yccfp* fp, yrobj* type, boolean defn)
+{
+  CONST char* nm = (char*)0;
+  yrobj* inInterface;
+  boolean inherited = FALSE;
+
+  if ( ctx->lang->flags & YCCFLG_NO_SUPP_FUNCS )
+    return;
+
+  if ( !defn )
+  {
+    inherited = ycgInherited( ctx, type);
+
+    if ( inherited )
+    {
+      inInterface = ycgScopeLookup( ctx, yrdkInterface);
+      nm = yccGetAbsoluteName( ctx, type, inInterface);
+    }
+    else
+      nm = yccGetAbsoluteName( ctx, type, (yrobj*)0);
+
+    yccfpStartPP( fp);
+
+    if ( ctx->objAdaptor == YCOA_BOA )
+    {
+      yccfpPrint( fp, "#ifndef ORA_CORBA_%s_SUPP_FUNCS\n", nm);
+      yccfpPrint( fp, "#define ORA_CORBA_%s_SUPP_FUNCS\n", nm);
+    }
+    else
+      yccfpPrint( fp, "#ifndef %s_SUPP_FUNCS\n#define %s_SUPP_FUNCS\n",
+                  nm, nm);
+    yccfpEndPP( fp);
+  }
+
+  yccGenCopyFree( ctx, fp, type, defn);
+  yccGenAllocator( ctx, fp, type, defn);
+
+  if ( !defn )
+  {
+    yccfpStartPP( fp);
+    if ( ctx->objAdaptor == YCOA_BOA )
+      yccfpPrint( fp, "#endif /* ORA_CORBA_%s_SUPP_FUNCS */\n\n", nm);
+    else
+      yccfpPrint( fp, "#endif /* %s_SUPP_FUNCS */\n\n", nm);
+    yccfpEndPP( fp);
+  
+    if ( inherited )
+      ysmGlbFree( (dvoid*)nm);
+  }
+}
+
+
+
+
+
+boolean yccTakeAddrOf( ycctx* ctx, yrobj* type, sword mode)
+{
+  if ( mode != YOMODE_IN )
+    return FALSE;
+
+  for (;;)	
+  {
+    switch (yrGetKind(type))
+    {
+      case yrdkUnion:
+      case yrdkStruct:
+      case yrdkSequence:
+      case yrdkArray:
+        return FALSE;                           
+
+      case yrdkAlias:                           
+        type = yrGetAliasBaseType( type);
+        break;
+
+      case yrdkInterface:
+      case yrdkEnum:
+      case yrdkString:
+        return TRUE;                            
+
+      case yrdkPrimitive:
+        if ( yrPrimData(type).kind == yrpkany )		
+          return FALSE;
+        else
+          return TRUE;
+
+      default:
+        yseThrow(YS_EX_FAILURE);
+        break;
+    }
+  }
+}
+
+
+
+
+ub2 yccGetLineLimit( ycctx* ctx)
+{
+  ub2 maxline;
+  CONST char* limit;
+
+  limit = ysResGetLast( "mnidlc.c-line-limit");
+  if ( limit )
+  {
+    maxline = (ub2) strtoul( limit, (char**)0, 10);
+    if ( maxline < YCC_MIN_LINE )    
+      maxline = YCC_MIN_LINE;
+  }
+  else if ( ctx->style & YCSTYLE_ORA )
+    maxline = YCC_OCCS_MAX_LINE;
+  else
+    maxline = YCC_DFLT_MAX_LINE;
+  return maxline;
+}
+
+
+
+
+void yccGenId( ycctx* ctx, yccfp* fp, CONST char* nm1, CONST char* nm2, 
+               boolean interface, CONST char* defn)
+{
+  boolean useGlob = yccUseGlobals( ctx);
+
+  if ( defn )
+  {
+    if ( !useGlob )
+      yccfpPrint( fp, "static ysidDecl(%s___id) = ", nm2);
+    else if ( interface )
+      yccfpPrint( fp, "%sysidDecl(%s__id) = ", YCCEXDEF(ctx), nm1);
+    else
+      yccfpPrint( fp, "%sysidDecl(%s) = ", YCCEXDEF(ctx), nm1);
+    if ( strlen(defn) > (size_t)70 )    
+    {
+      yccfpPrint( fp, "\n {\n");
+      yccfpIncIndent( fp);
+      yccGenStrAsChar( ctx, fp, defn);
+      yccfpPrint( fp, " '\\0'\n");
+      yccfpDecIndent( fp);
+      yccfpPrint( fp, " };\n\n");
+    }
+    else                                 
+      yccfpPrint( fp, "\"%s\";\n\n", defn);
+
+    yccfpPrint( fp, "CONST ysid* %s__getId(void)\n{\n", nm2);
+    yccfpIncIndent( fp);
+    if ( !useGlob )
+      yccfpPrint( fp, "return (CONST ysid*)%s___id;\n", nm2);
+    else if ( interface )
+      yccfpPrint( fp, "return (CONST ysid*)%s__id;\n", nm1);
+    else
+      yccfpPrint( fp, "return (CONST ysid*)%s;\n", nm1);
+    yccfpDecIndent( fp);
+    yccfpPrint( fp, "}\n\n");
+
+  }
+  else
+  {
+    yccfpPrint( fp, "CONST ysid* %s__getId(void);\n", nm2);
+    if ( !useGlob )
+    {
+      yccfpStartPP( fp);
+      if ( interface )
+        yccfpPrint( fp, "#ifndef %s__id\n#define %s__id   (%s__getId())\n", 
+                    nm1, nm1, nm2);
+      else
+        yccfpPrint( fp, "#ifndef %s\n#define %s   (%s__getId())\n", 
+                    nm1, nm1, nm2);
+      yccfpPrint( fp, "#endif\n");
+      yccfpEndPP( fp);
+    }
+    else if ( interface )
+      yccfpPrint( fp, "%sysidDecl(%s__id);\n", YCCEXREF(ctx), nm1);
+    else
+      yccfpPrint( fp, "%sysidDecl(%s);\n", YCCEXREF(ctx), nm1);
+  }
+}
+
+
+
+
+static CONST_DATA char* yccKwdTbl[] = 
+{
+  "auto",
+  "break",
+  "continue",
+  "do",
+  "else",
+  "extern",
+  "for",
+  "goto",
+  "if",
+  "int",
+  "register",
+  "return",
+  "signed",
+  "sizeof",
+  "static",
+  "volatile",
+  "while"
+};
+
+static CONST_DATA size_t yccKwdCnt = sizeof(yccKwdTbl) / sizeof(char*);
+
+
+
+boolean yccIsKeyword( ycctx* ctx, CONST char* name)
+{
+  CONST char **low; 
+  CONST char **mid;
+  CONST char **high;
+  sword  cmp;
+  boolean matched = FALSE;
+
+  
+  high = yccKwdTbl + yccKwdCnt;
+  low = yccKwdTbl;
+
+  while ( !matched && (low < high) )
+  {
+    mid = low + (high - low) / 2;
+    cmp = strcmp(name, *mid);
+    if (cmp < 0)
+      high = mid;
+    else if (cmp > 0)
+      low = mid + 1;
+    else
+      matched = TRUE;
+  }
+  return matched;
+}
+
+
+
+
+ycgmap* yccLangMap( ycctx* ctx)
+{
+  ycgmap* map = (ycgmap*) ysmGlbAlloc( sizeof(ycgmap), "ycgmap");
+
+  CLRSTRUCT(*map);
+  map->langid = YCG_C_LANG;
+  map->driver = yccmap;
+
+    
+  if ( ysResGetBool("mnidlc.c-cplus-kwd") )
+    map->flags |= YCCFLG_CPLUS_KWD;
+  if ( ysResGetBool("mnidlc.static-typecodes") )
+    map->flags |= YCCFLG_STATIC_TC;
+  if ( !ysResGetBool("mnidlc.nobuiltin-seq") )
+    map->flags |= YCCFLG_BUILTIN_SEQ;
+  if ( ysResGetBool("mnidlc.c-global-const") )
+    map->flags |= YCCFLG_GLOB_CONST;
+  if ( ysResGetBool("mnidlc.c-no-supp") )
+    map->flags |= YCCFLG_NO_SUPP_FUNCS;
+  if ( ysResGetBool("mnidlc.c-no-async") )
+    map->flags |= YCCFLG_NO_ASYNC;
+
+    
+  if ( map->flags & YCCFLG_CPLUS_KWD )
+    map->kwdchk = yccpIsKeyword;
+  else
+    map->kwdchk = yccIsKeyword;
+
+  return map;
+}
+
+
+
+STATICF boolean yccSymFlush( dvoid* usrp, dvoid* elm)
+{
+  ycsym* sym = (ycsym*)elm;
+
+  if ( sym && sym->lang.c.absnm )
+  {
+    ysmGlbFree( (dvoid*)sym->lang.c.absnm);
+  }
+  return TRUE;
+}
+
+
+
+void yccGenConstVal( ycctx* ctx, yccfp* fp, yrobj* constobj)
+{
+  dvoid *value;
+
+  value = yrConstData(constobj).val._value;
+  switch (yotkGetKind(yrConstData(constobj).val._type))
+  {
+    case yotkString:
+      yccfpPrint(fp, "%s", *((char **) value));
+      break;
+    case yotkBoolean:
+      if ( *(boolean*)value )
+        yccfpPrint(fp, "%s", ycStyleOra(ctx) ? "TRUE" : "1");
+      else
+        yccfpPrint(fp, "%s", ycStyleOra(ctx) ? "FALSE" : "0");
+      break;
+    case yotkChar:
+      yccfpPrint(fp, "'%c'", *((char *) value));
+      break;
+    case yotkShort:
+      yccfpPrint(fp, "%d", *((sb2 *) value));
+      break;
+    case yotkUshort:
+      yccfpPrint(fp, "%u", *((ub2 *) value));
+      break;
+    case yotkLong:
+      yccfpPrint(fp, "%ld", *((sb4 *) value));
+      break;
+    case yotkEnum:
+    case yotkUlong:
+      yccfpPrint(fp, "%lu", *((ub4 *) value));
+      break;
+    default:
+      yseThrow(YC_EX_FAILURE);
+      break;
+    }
+}

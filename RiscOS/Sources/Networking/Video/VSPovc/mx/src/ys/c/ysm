@@ -1,0 +1,467 @@
+/* mx/src/ys/ysm.c */
+
+
+/*
+ORACLE, Copyright (c) 1982, 1983, 1986, 1990 ORACLE Corporation
+ORACLE Utilities, Copyright (c) 1981, 1982, 1983, 1986, 1990, 1991 ORACLE Corp
+
+Restricted Rights
+This program is an unpublished work under the Copyright Act of the
+United States and is subject to the terms and conditions stated in
+your  license  agreement  with  ORACORP  including  retrictions on
+use, duplication, and disclosure.
+
+Certain uncopyrighted ideas and concepts are also contained herein.
+These are trade secrets of ORACORP and cannot be  used  except  in
+accordance with the written permission of ORACLE Corporation.
+*/
+
+
+
+#ifndef SYSI_ORACLE
+#include <sysi.h>
+#endif
+#ifndef YS_ORACLE
+#include <ys.h>
+#endif
+#ifndef YSMSC_ORACLE
+#include <ysmsc.h>
+#endif
+#ifndef YSI_ORACLE
+#include <ysi.h>
+#endif
+#ifndef YSMI_ORACLE
+#include <ysmi.h>
+#endif
+
+
+externdef ysidDecl(YS_EX_OUTMEM) = "ys::outmem";
+static    ysidDecl(YS_EX_REFREE) = "ys::refree";
+
+externdef ysmtagDecl(YSMHP_TAG) = "ysmhp";
+externdef ysmtagDecl(YSMEOB_TAG) = "(end of buffer)";
+externdef ysmtagDecl(YSMFREE_TAG) = "(freed block)";
+
+
+ysmhp *ysmCreate(ysmaf af, ysmrf rf, ysmff ff, ysbv *bv, sword nbv)
+{
+  ysmhp   *hp;
+  sb4      sz, init;
+  ysmahdr *ahdr;
+  ysmfhdr *prevptr, *fhdr;
+  ub1     *buf;
+
+  
+  if ((af || rf || ff) && (!(af && rf && ff) || (bv || nbv)))
+    yseThrow(YS_EX_BADPARAM);
+
+  if ((bv || nbv) && !(bv && nbv > 0))
+    yseThrow(YS_EX_BADPARAM);
+
+  if (af)
+    {
+      
+      if (!(ahdr = (ysmahdr *) (*af)(sizeof(ysmahdr) + sizeof(ysmhp))))
+	yseThrow(YS_EX_FAILURE);
+
+      ahdr->sz = -((sb4) (sizeof(ysmahdr) + sizeof(ysmhp)));
+      ahdr->tag = YSMHP_TAG;
+      hp = (ysmhp *) (ahdr + 1);
+
+      hp->roveptr = (ysmfhdr *) 0;
+      hp->limit = 0;
+      hp->inuse = hp->maxusg = 0;
+      hp->bv = bv, hp->nbv = nbv;
+    }
+  else
+    {
+      
+      sz = (sb4) ysTruncVal(bv->len, SYSM_STRICT_ALIGN);
+      sz = (sz - 2 * sizeof(ysmahdr) - sizeof(ysmhp));
+      if (sz < (sb4) YSM_MIN_SIZE)
+	yseThrow(YS_EX_BADPARAM);
+
+      
+      ahdr = (ysmahdr *) (bv->buf + sz);
+      ahdr->sz = -((sb4) (sizeof(ysmahdr) + sizeof(ysmhp)));
+      ahdr->tag = YSMHP_TAG;
+      hp = (ysmhp *) (ahdr + 1);
+
+      
+      hp->limit = 0;
+      hp->maxusg = hp->inuse = -ahdr->sz;
+      hp->bv = bv, hp->nbv = nbv;
+
+      
+      prevptr = hp->roveptr = (ysmfhdr *) bv->buf;
+      init = sizeof(ysmhp) + sizeof(ysmahdr);
+
+      do
+	{
+	  
+	  sz = (sb4) ysTruncVal(bv->len, SYSM_STRICT_ALIGN);
+	  sz = (sz - sizeof(ysmahdr));
+	  buf = bv->buf;
+
+	  if (sz < YSM_MIN_SIZE || (0x7fffffff - hp->limit) < sz)
+	    yseThrow(YS_EX_BADPARAM);
+
+	  hp->limit += sz;
+
+	  
+	  ahdr = (ysmahdr *) (buf + sz);
+	  ahdr->sz = -1;
+	  ahdr->tag = YSMEOB_TAG;
+
+	  
+	  fhdr = (ysmfhdr *) buf;
+	  fhdr->sz = sz - init;
+	  fhdr->prev = prevptr;
+	  prevptr->next = fhdr;
+
+	  
+	  if (--nbv)
+	    prevptr = fhdr, init = 0, bv++;
+	} while (nbv);
+
+      
+      hp->roveptr->prev = fhdr;
+      fhdr->next = hp->roveptr;
+    }
+
+  
+  hp->bhvr = YSM_THROW;
+  hp->afcnt = 0;
+  hp->af = af, hp->rf = rf, hp->ff = ff;
+
+  return hp;
+}
+
+
+void ysmDestroy(ysmhp *hp)
+{
+  ysmahdr *ahdr;
+
+  if (hp->ff)
+    {
+      ahdr = ((ysmahdr *) hp) - 1;
+      (*hp->ff)((dvoid *) ahdr);
+    }
+}
+
+
+dvoid *ysmAlloc(ysmhp *hp, size_t len, CONST char *tag)
+{
+  sb4      sz;
+  ysmfhdr *ptr, *nextptr;
+  ysmahdr *ahdr;
+  dvoid   *buf;
+
+  
+  ysmCheck((dvoid *) hp, YSMHP_TAG);
+
+  
+  sz = (sb4) len;
+  if (sz < 0 || (hp->limit && (sz > hp->limit - hp->inuse)))
+    ptr = (ysmfhdr *) 0;
+  else if (hp->af)
+    {
+      
+      sz += sizeof(ysmahdr);
+      ptr = (ysmfhdr *) (*hp->af)((size_t) sz);
+    }
+  else
+    {
+      
+      if (sz < (sizeof(ysmfhdr) - sizeof(ysmahdr)))
+	sz = YSM_MIN_SIZE;
+      else
+	sz = ysRoundVal(sz + sizeof(ysmahdr), SYSM_STRICT_ALIGN);
+
+      
+      ptr = hp->roveptr;
+      for (;;)
+	{
+	  nextptr = (ysmfhdr *) (((ub1 *) ptr) + ptr->sz);
+	  if (nextptr->sz > 0)
+	    {
+	      
+	      ptr->sz += nextptr->sz;
+	      nextptr->prev->next = nextptr->next;
+	      nextptr->next->prev = nextptr->prev;
+	      if (hp->roveptr == nextptr)
+		hp->roveptr = ptr;
+	    }
+	  else if (ptr->sz < sz)
+	    {
+	      
+	      ptr = ptr->next;
+	      if (ptr == hp->roveptr)
+		{
+		  ptr = (ysmfhdr *) 0;
+		  buf = (dvoid *) 0;
+		  break;
+		}
+	    }
+	  else
+	    {
+	      
+	      if (ptr->sz - sz < YSM_MIN_SIZE)
+		{
+		  if (ptr->next == ptr)
+		    {
+		      
+		      ptr = (ysmfhdr *) 0;
+		    }
+		  else
+		    {
+		      ptr->prev->next = ptr->next;
+		      ptr->next->prev = ptr->prev;
+		      hp->roveptr = ptr->next;
+		      sz = ptr->sz;
+		    }
+		}
+	      else
+		{
+		  ptr->sz -= sz;
+		  hp->roveptr = ptr;
+
+		  ptr = (ysmfhdr *) (((ub1 *) ptr) + ptr->sz);
+		}
+	      break;
+	    }
+	}
+    }
+
+  if (ptr)
+    {
+      
+      ahdr = (ysmahdr *) ptr;
+      ahdr->sz = -sz;
+      ahdr->tag = tag;
+
+      hp->inuse += sz;
+      if (hp->inuse > hp->maxusg)
+	hp->maxusg = hp->inuse;
+
+      buf = (dvoid *) (ahdr + 1);
+    }
+  else
+    {
+      
+      if (hp == ysmGlbHeap())
+	ysePanic(YS_EX_OUTMEM);
+
+      hp->afcnt++;
+      buf = (dvoid *) 0;
+    }
+
+  
+  if (!buf && hp->bhvr == YSM_THROW)
+    yseThrowObj(YS_EX_OUTMEM, hp);
+
+  return buf;
+}
+
+
+dvoid *ysmRealloc(ysmhp *hp, dvoid *buf, size_t len)
+{
+  ysmahdr *ahdr;
+  sb4      oldsz, sz, diff;
+  ysmfhdr *ptr;
+  sword    oldbhvr;
+  dvoid   *oldbuf;
+
+  
+  ysmCheck((dvoid *) hp, YSMHP_TAG);
+  if (!buf)
+    return ysmAlloc(hp, len, "NULL PTR REALLOC");
+
+  
+  ahdr = ((ysmahdr *) buf) - 1;
+  oldsz = -ahdr->sz - sizeof(ysmahdr);
+  sz = (sb4) len;
+  diff = sz - oldsz;
+
+  if (sz < 0 || (hp->limit && (diff > hp->limit - hp->inuse)))
+    ahdr = (ysmahdr *) 0, buf = (dvoid *) 0;
+  else if (hp->rf)
+    {
+      
+      sz += sizeof(ysmahdr);
+      ahdr = (ysmahdr *) (*hp->rf)((dvoid *) ahdr, (size_t) sz);
+      if (!ahdr)
+	buf = (dvoid *) 0;
+    }
+  else if (sz <= oldsz)
+    {
+      
+      if (sz < (sizeof(ysmfhdr) - sizeof(ysmahdr)))
+	sz = YSM_MIN_SIZE;
+      else
+	sz = ysRoundVal(sz + sizeof(ysmahdr), SYSM_STRICT_ALIGN);
+
+      
+      ptr = (ysmfhdr *) (((ub1 *) ahdr) + sz);
+      ptr->next = hp->roveptr;
+      ptr->prev = hp->roveptr->prev;
+      ptr->next->prev = ptr;
+      ptr->prev->next = ptr;
+    }
+  else
+    {
+      
+      oldbhvr = hp->bhvr;
+      hp->bhvr = YSM_RETURN;
+      oldbuf = buf;
+      buf = ysmAlloc(hp, len, ahdr->tag);
+      hp->bhvr = oldbhvr;
+      ahdr = (ysmahdr *) 0;
+
+      if (buf)
+	{
+	  DISCARD memcpy(buf, oldbuf, len);
+	  ysmFree(hp, oldbuf);
+	}
+    }
+
+  if (ahdr)
+    {
+      
+      ahdr->sz = -sz;
+      hp->inuse += (sz - oldsz);
+      if (hp->inuse > hp->maxusg)
+	hp->maxusg = hp->inuse;
+
+      buf = (dvoid *) (ahdr + 1);
+    }
+  else if (!buf)
+    {
+      
+      hp->afcnt++;
+    }
+
+  
+  if (!buf && hp->bhvr == YSM_THROW)
+    yseThrowObj(YS_EX_OUTMEM, hp);
+
+  return buf;
+}
+
+
+void ysmFree(ysmhp *hp, dvoid *buf)
+{
+  sb4      sz;
+  ysmfhdr *ptr;
+  ysmahdr *ahdr;
+
+  
+  ysmCheck((dvoid *) hp, YSMHP_TAG);
+
+  if (!buf)
+    return;
+
+  
+  ahdr = ((ysmahdr *) buf) - 1;
+  if (ahdr->tag == YSMFREE_TAG)
+    ysePanic(YS_EX_REFREE);
+  sz = -ahdr->sz;
+  hp->inuse -= sz;
+
+  
+  if (hp->ff)
+    {
+      
+      ahdr->tag = YSMFREE_TAG;
+      (*hp->ff)((dvoid *) ahdr);
+    }
+  else
+    {
+      
+      ptr = (ysmfhdr *) ahdr;
+      ptr->sz = sz;
+
+      
+      ptr->next = hp->roveptr;
+      ptr->prev = hp->roveptr->prev;
+      ptr->next->prev = ptr;
+      ptr->prev->next = ptr;
+    }
+}
+
+
+size_t ysmGetSize(dvoid *buf)
+{
+  ysmahdr *ahdr;
+
+  ahdr = (ysmahdr *) (((ub1 *) buf) - sizeof(ysmahdr));
+  return (size_t) ((-ahdr->sz) - sizeof(ysmahdr));
+}
+
+
+sword ysmSetBehavior(ysmhp *hp, sword bhvr)
+{
+  sword  old;
+
+  ysmCheck((dvoid *) hp, YSMHP_TAG);
+
+  
+  if (hp == ysmGlbHeap())
+    yseThrow(YS_EX_BADPARAM);
+
+  
+  old = hp->bhvr;
+  hp->bhvr = bhvr;
+  return old;
+}
+
+
+sb4 ysmSetLimit(ysmhp *hp, sb4 limit)
+{
+  sword i;
+  sb4   total;
+
+  if (hp->af)
+    hp->limit = (limit ? max(limit, hp->inuse) : 0);
+  else
+    {
+      for (i = 0, total = 0; i < hp->nbv; i++)
+	total += (sb4) hp->bv[i].len;
+
+      if (!limit)
+	limit = total;
+
+      hp->limit = max(min(limit, total), hp->inuse);
+    }
+
+  return hp->limit;
+}
+
+
+void ysmGetStats(ysmhp *hp, sb4 *limit, sb4 *curusage, sb4 *maxusage,
+		sb4 *afcnt)
+{
+  ysmCheck((dvoid *) hp, YSMHP_TAG);
+  *limit = hp->limit;
+  *curusage = hp->inuse;
+  *maxusage = hp->maxusg;
+  *afcnt = hp->afcnt;
+}
+
+
+void ysmAlterTag(dvoid *ptr, CONST char *newtag)
+{
+  ysmahdr *ahdr;
+
+  if (!ptr)
+    ysePanic(YS_EX_BADMAGIC);
+
+  ahdr = (ysmahdr *) (((ub1 *) ptr) - sizeof(ysmahdr));
+  ahdr->tag = newtag;
+}
+
+
+void ysmFGlbFree(dvoid *ptr)
+{
+  ysmFree(ysmGlbHeap(), ptr);
+}

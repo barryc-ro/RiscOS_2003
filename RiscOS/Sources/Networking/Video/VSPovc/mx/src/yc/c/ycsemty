@@ -1,0 +1,657 @@
+/* mx/src/yc/ycsemty.c */
+
+
+/*
+ORACLE, Copyright (c) 1982, 1983, 1986, 1990 ORACLE Corporation
+ORACLE Utilities, Copyright (c) 1981, 1982, 1983, 1986, 1990, 1991 ORACLE Corp
+
+Restricted Rights
+This program is an unpublished work under the Copyright Act of the
+United States and is subject to the terms and conditions stated in
+your  license  agreement  with  ORACORP  including  retrictions on
+use, duplication, and disclosure.
+
+Certain uncopyrighted ideas and concepts are also contained herein.
+These are trade secrets of ORACORP and cannot be  used  except  in
+accordance with the written permission of ORACLE Corporation.
+*/
+
+
+
+#ifndef SYSI_ORACLE
+#include <sysi.h>
+#endif
+#ifndef YR_ORACLE
+#include <yr.h>
+#endif
+#ifndef YC_ORACLE
+#include <yc.h>
+#endif
+#ifndef YSSTR_ORACLE
+#include <ysstr.h>
+#endif
+
+
+STATICF void ycsValidateRecursion( ycctx* ctx, yrobj* type);
+externdef ysidDecl(YC_EX_RECURSION) = "::YC_EX_RECURSION";
+
+
+void ycsTypeDcl(ycctx *ctx, yrobj *scope, yctTypeDcl *td)
+{
+  switch (td->tag)
+    {
+    case ycttTypeDeclarator:
+      ycsTypeDecl(ctx, scope, MEMBER(td, typedecl));
+      break;
+    case ycttStructType:
+      DISCARD ycsStructType(ctx, scope, MEMBER(td, structtype));
+      break;
+    case ycttUnionType:
+      DISCARD ycsUnionType(ctx, scope, MEMBER(td, uniontype));
+      break;
+    case ycttEnumType:
+      DISCARD ycsEnumType(ctx, scope, MEMBER(td, enumtype));
+      break;
+    default:
+      yseThrow(YS_EX_FAILURE);
+      break;
+    }
+}
+
+
+void ycsTypeDecl(ycctx *ctx, yrobj *scope, yctTypeDeclarator *td)
+{
+  ycsProcDecls(ctx, scope, td->typespec, td->declarators, (dvoid *) 0,
+	       ycsCreateAlias);
+}
+
+void ycsCreateAlias(ycctx *ctx, yrobj *scope, CONST char *id, yrobj *type,
+		    dvoid *usrp, ycln* lninfo)
+{
+  yrobj* alias = yrCreateAlias( scope, id, type);
+  yrSetSrcInfo( alias, lninfo->name, lninfo->line);
+  DISCARD ycSymInsert( ctx->symtbl, alias);
+  ycsAddObj(ctx, scope, alias);
+}
+
+
+yrobj *ycsStructType(ycctx *ctx, yrobj *scope, yctStructType *st)
+{
+  yslst *mbrs;
+  ysle  *le;
+  yctMember *mbr;
+  yrobj* sobj;
+
+  if (!ycsNewDef(ctx, scope, st->id, st->line))
+    return (yrobj *) 0;
+
+  mbrs = ysLstCreate();
+  sobj = yrCreateStruct(scope, st->id, mbrs);
+  yrSetSrcInfo( sobj, st->line->name, st->line->line);
+  DISCARD ycSymInsert( ctx->symtbl, sobj);
+
+  for (le = ysLstHead(st->members); le; le = ysLstNext(le))
+  {
+    mbr = (yctMember *) ysLstVal(le);
+    ycsProcDecls(ctx, sobj, mbr->typespec, mbr->declarators,
+                 (dvoid *) mbrs, ycsCreateMember);
+  }
+
+    
+  ycsAddObj(ctx, scope, sobj);
+  ycsValidateRecursion( ctx, sobj);
+  return sobj;
+}
+
+void ycsCreateMember(ycctx *ctx, yrobj *scope, CONST char *id, yrobj *type,
+		     dvoid *usrp, ycln* lninfo)
+{
+  yrstrmbr *mbr;
+  ysle* le;
+
+    
+  for ( le = ysLstHead((yslst*)usrp); le; le = ysLstNext(le))
+  {
+    mbr = (yrstrmbr*)ysLstVal(le);
+ 
+    if ( strcmp( id, mbr->name) == 0 )
+    {
+      ysRecord( YCMSG(105), YCERRSEV, YCERRLN(lninfo), YSLSTR(id), YSLEND);
+      break;
+    }
+  }
+  mbr = (yrstrmbr *) ysmGlbAlloc(sizeof(yrstrmbr), "yrstrmbr");
+  mbr->name = ysStrDup(id);
+  mbr->type = type;
+  DISCARD ysLstEnq((yslst *) usrp, (dvoid *) mbr);
+}
+
+
+STATICF yrobj* ycsConstructArray( ycctx* ctx, yrobj* scope, yrobj* elemType,
+	yctComplexDeclarator* cd)
+{
+  ysle* le;
+  yctFixedArraySize* fa;
+  ub4 len;
+  yrobj* type = elemType;
+
+  for (le = ysLstTail(cd->arraysize); le; le = ysLstPrev(le))
+  {
+    fa = (yctFixedArraySize *) ysLstVal(le);
+    len = ycsPosIntExpr(ctx, scope, fa->intconst);
+    type = yrCreateArray(ctx->repository, len, type);
+    DISCARD ycSymInsert( ctx->symtbl, type);
+  }
+  return type;
+}
+
+yrobj *ycsUnionType(ycctx *ctx, yrobj *scope, yctUnionType *ut)
+{
+  yrobj *newobj, *disc, *type;
+  yslst *arms;
+  ysle  *le, *le2;
+  char  *nm;
+  yrunmbr *mbr;
+  yotkKind dknd;
+  yctCase *cs;
+  yctCaseLabel *cl;
+  yctDeclarator *decl;
+  yctComplexDeclarator *cd;
+  yslst* names;
+
+  if (!ycsNewDef(ctx, scope, ut->id, ut->line))
+    return (yrobj *) 0;
+
+  arms = ysLstCreate();
+  newobj = yrCreateUnion(scope, ut->id, (yrobj*)0, arms);
+  yrSetSrcInfo( newobj, ut->line->name, ut->line->line);
+  DISCARD ycSymInsert( ctx->symtbl, newobj);
+
+  if (!(disc = ycsSwitchType(ctx, newobj, ut->typespec)))
+    return (yrobj *) 0;
+  yrUnionData(newobj).disctype = disc;
+
+  dknd = ycsGetTypeKind(ctx, disc);
+  names = ysLstCreate();
+  for (le = ysLstHead(ut->cases); le; le = ysLstNext(le))
+    {
+      cs = (yctCase *) ysLstVal(le);
+      decl = cs->elemspec->declarator;
+      nm = (char *) 0;
+
+      if (!(type = ycsTypeSpec(ctx, newobj, cs->elemspec->typespec)))
+	continue;
+
+      if (decl->tag == (ub4)ycttSimple)
+	{
+	  if (ycsNewDef(ctx, newobj, MEMBER(decl, simple), decl->line))
+	    nm = MEMBER(decl, simple);
+	}
+      else
+	{
+	  cd = (yctComplexDeclarator *) MEMBER(decl, complex);
+	  if (ycsNewDef(ctx, newobj, cd->id, decl->line))
+	  {
+              type = ycsConstructArray( ctx, newobj, type, cd);
+	      nm = cd->id;
+	  }
+	}
+
+      
+      if ( nm )
+      {
+        for ( le2 = ysLstHead(names); le2; le2 = ysLstNext(le2))
+        {
+          if ( strcmp( nm, (char*) ysLstVal(le2)) == 0 )
+          {
+            ysRecord( YCMSG(100), YCERRSEV, YCERRLN(cs->line), 
+                      YSLSTR(nm),YSLEND);
+            nm = (char*)0;
+            break;
+          }
+        }
+      }
+
+      if (!nm)
+	continue;       
+
+      for (le2 = ysLstHead(cs->caselabels); le2; le2 = ysLstNext(le2))
+	{
+	  cl = (yctCaseLabel *) ysLstVal(le2);
+	  mbr = (yrunmbr *) ysmGlbAlloc(sizeof(yrunmbr), "yrunmbr");
+          CLRSTRUCT(*mbr);          
+          mbr->name = ysStrDup(nm);
+	  mbr->type = type;
+
+	  if (cl->constexp)
+	    DISCARD ycsEvalExpr(ctx, newobj, &mbr->label, dknd, cl->constexp);
+	  else	
+          {
+	    mbr->label._type = yotkDuplicateWaf(yoTcOctet, (ysmaf) ycAllocTC); 
+            mbr->label._value = ysmGlbAlloc(sizeof(ub4), "yrunmbr");
+            *(ub4*)mbr->label._value = (ub4)0;
+          }
+
+          DISCARD ysLstEnq(arms, (dvoid *) mbr);
+	}
+      DISCARD ysLstEnq( names, (dvoid*)nm);
+    }
+    ysLstDestroy( names, (ysmff)0);
+
+    
+  ycsAddObj(ctx, scope, newobj);
+  ycsValidateRecursion( ctx, newobj);
+  return newobj;
+}
+
+
+void ycsProcDecls(ycctx *ctx, yrobj *scope, yctTypeSpec *ts, yslst *decls,
+		  dvoid *usrp,
+		  void (*crt)(ycctx *ctx, yrobj *scope, CONST char *id,
+			      yrobj *type, dvoid *usrp, ycln* lninfo))
+{
+  yrobj *type, *elmtype;
+  ysle  *le;
+  yctDeclarator *decl;
+  yctComplexDeclarator *cd;
+
+  
+  if (!(type = ycsTypeSpec(ctx, scope, ts)))
+    return;
+
+  
+  for (le = ysLstHead(decls); le; le = ysLstNext(le))
+    {
+      decl = (yctDeclarator *) ysLstVal(le);
+
+      if (decl->tag == (ub4)ycttSimple)
+	{
+	  if (ycsNewDef(ctx, scope, MEMBER(decl, simple), decl->line))
+	    (*crt)(ctx, scope, MEMBER(decl, simple), type, usrp, decl->line);
+	}
+      else
+	{
+	  cd = (yctComplexDeclarator *) MEMBER(decl, complex);
+	  if (ycsNewDef(ctx, scope, cd->id, decl->line))
+	  {
+	    elmtype = ycsConstructArray( ctx, scope, type, cd);
+	    (*crt)(ctx, scope, cd->id, elmtype, usrp, decl->line);
+	  }
+	}
+
+    }
+}
+
+
+yrobj *ycsEnumType(ycctx *ctx, yrobj *scope, yctEnumType *et)
+{
+  yrobj *newobj, *cobj;
+  ub4    i, *cv;
+  CONST yotk*   tk;
+  yslst *ids;
+  ysle  *le;
+  yctEnumerator *eid;
+
+  if (!ycsNewDef(ctx, scope, et->id, et->line))
+    return (yrobj *) 0;
+
+  ids = ysLstCreate();
+  newobj = yrCreateEnum(scope, et->id, ids);
+  yrSetSrcInfo( newobj, et->line->name, et->line->line);
+  DISCARD ycSymInsert( ctx->symtbl, newobj);
+
+  
+  for (i = 0,le = ysLstHead(et->enumerators); le; i++,le = ysLstNext(le))
+  {
+    eid = (yctEnumerator *) ysLstVal(le);
+    if (ycsNewDef(ctx, scope, eid->id, eid->line))
+    {
+	cv = (ub4 *) ysmGlbAlloc(sizeof(ub4), "enum value");
+	*cv = i;
+	cobj = yrCreateConstant(scope, eid->id, newobj, (yoany*) 0);
+	yrSetSrcInfo( cobj, et->line->name, et->line->line);
+        DISCARD ycSymInsert( ctx->symtbl, cobj);
+	yrConstData(cobj).val._value = (dvoid *) cv;
+	DISCARD ysLstEnq(ids, (dvoid *) cobj);
+    }
+  }
+
+    
+  tk = yrGetTypeCode(newobj);
+  for ( le = ysLstHead(ids); le; le = ysLstNext(le))
+  {
+    yrobj* cobj = (yrobj*) ysLstVal(le);
+    yrConstData(cobj).val._type = yotkDuplicateWaf(tk, (ysmaf) ycAllocTC);
+  }
+
+    
+  ycsAddObj(ctx, scope, newobj);
+  return newobj;
+}
+
+
+
+yrobj *ycsSwitchType(ycctx *ctx, yrobj *scope, yctSwitchTypeSpec *ts)
+{
+  yrobj   *type;
+  yrpk     kind = yrpkvoid;
+  yotkKind tknd;
+  yctIntegerType *it;
+
+  if (ts->tag == (ub4)ycttScopedName)
+    {
+      type = ycsNameToType(ctx, scope, MEMBER(ts, name));
+      tknd = ycsGetTypeKind(ctx, type);
+      switch (tknd)
+	{
+	case yotkShort:
+	case yotkLong:
+	case yotkUshort:
+	case yotkUlong:
+	case yotkBoolean:
+	case yotkChar:
+	case yotkEnum:
+	  return type;
+	default:
+          ysRecord( YCMSG(72), YCERRSEV, YCERRLN(ts->line), YSLEND);
+	  return (yrobj *) 0;
+	}
+    }
+  else if (ts->tag == (ub4)ycttEnumType)
+    return ycsEnumType(ctx, scope, MEMBER(ts, enumtype));
+  else
+    {
+      switch (ts->tag)
+	{
+	case ycttIntegerType:
+	  it = MEMBER(ts, inttype);
+	  switch (it->long_t)
+	    {
+	    case 0: kind = (it->signed_t ? yrpkshort : yrpkushort); break;
+	    case 1: kind = (it->signed_t ? yrpklong : yrpkulong); break;
+	    case 2: kind = yrpklonglong; break;
+	    }
+	  break;
+	case ycttCharType: kind = yrpkchar; break;
+	case ycttBooleanType: kind = yrpkboolean; break;
+	}
+      return yrGetPrimitive(ctx->repository, kind);
+    }
+}
+
+
+yrobj *ycsTypeSpec(ycctx *ctx, yrobj *scope, yctTypeSpec *ts)
+{
+  yctConstrTypeSpec *ct;
+
+  if (ts->tag == (ub4)ycttSimple)
+    return ycsSimpleTypeSpec(ctx, scope, MEMBER(ts, simple));
+  else
+    {
+      ct = MEMBER(ts, constr);
+      switch (ct->tag)
+	{
+	case ycttStructType:
+	  return ycsStructType(ctx, scope, MEMBER(ct, structtype));
+	case ycttUnionType:
+	  return ycsUnionType(ctx, scope, MEMBER(ct, uniontype));
+	case ycttEnumType:
+	  return ycsEnumType(ctx, scope, MEMBER(ct, enumtype));
+	default:
+	  return (yrobj *) 0;
+	}
+    }
+}
+
+yrobj *ycsSimpleTypeSpec(ycctx *ctx, yrobj *scope, yctSimpleTypeSpec *st)
+{
+  yrobj *elmt, *newobj;
+  ub4 bound;
+  yctTemplateTypeSpec *tt;
+  yctStringType *strt;
+  yctSequenceType *seqt;
+
+  switch (st->tag)
+    {
+    case ycttBase:
+      return ycsBaseTypeSpec(ctx, scope, MEMBER(st, base));
+    case ycttTemplate:
+      tt = MEMBER(st, template);
+      if (tt->tag == (ub4)ycttSeqType)
+	{
+	  seqt = MEMBER(tt, seqtype);
+	  elmt = ycsSimpleTypeSpec(ctx, scope, seqt->simple);
+	  bound = (seqt->intconst ?
+		   ycsPosIntExpr(ctx, scope, seqt->intconst) : 0);
+	  newobj = yrCreateSequence(ctx->repository, bound, elmt);
+	  yrSetSrcInfo( newobj, st->line->name, st->line->line);
+          DISCARD ycSymInsert( ctx->symtbl, newobj);
+	  ycsAddObj(ctx, scope, newobj);
+	  return newobj;
+	}
+      else
+	{
+	  strt = MEMBER(tt, strtype);
+	  if (!strt->intconst)
+	    return yrGetPrimitive(ctx->repository, yrpkstring);
+	  else
+	    {
+              yrobj* newobj;
+
+	      bound = ycsPosIntExpr(ctx, scope, strt->intconst);
+	      newobj = yrCreateString(ctx->repository, bound);
+              DISCARD ycSymInsert( ctx->symtbl, newobj);
+              return newobj;
+	    }
+	}
+    case ycttScopedName:
+      return ycsNameToType(ctx, scope, MEMBER(st, name));
+    default:
+      return (yrobj *) 0;
+    }
+}
+
+yrobj *ycsBaseTypeSpec(ycctx *ctx, yrobj *scope, yctBaseTypeSpec *bt)
+{
+  yrpk kind = yrpkvoid;
+  yctIntegerType *it;
+
+  switch (bt->tag)
+    {
+    case ycttFloatType:
+      kind = (MEMBER(bt, floattype) == YCTFLOAT ? yrpkfloat : yrpkdouble);
+      ysRecord( YCMSG(81), YCERRSEV, YCERRLN(bt->line), YSLEND);
+      break;
+    case ycttIntegerType:
+      it = MEMBER(bt, inttype);
+      switch (it->long_t)
+	{
+	case 0: kind = (it->signed_t ? yrpkshort : yrpkushort); break;
+	case 1: kind = (it->signed_t ? yrpklong : yrpkulong); break;
+	case 2: kind = yrpklonglong; break;
+	}
+      break;
+    case ycttCharType: kind = yrpkchar; break;
+    case ycttBooleanType: kind = yrpkboolean; break;
+    case ycttOctetType: kind = yrpkoctet; break;
+    case ycttAnyType: kind = yrpkany; break;
+    case ycttTypeCodeType: kind = yrpkTypeCode; break;
+    }
+
+  return yrGetPrimitive(ctx->repository, kind);
+}
+
+
+
+
+
+STATICF void ycsRecursionErr( ycctx* ctx, yrobj* taboo, yrobj* err, 
+	CONST char* field)
+{
+  ycln ln;
+  char* name = yrGetAbsoluteName(taboo);
+
+  ln.name = yrGetSrcName(err);
+  ln.line = yrGetSrcLine(err);
+
+  if ( taboo == err )	
+    ysRecord( YCMSG(79), YCERRSEV, YCERRLN(&ln), YSLSTR(name), 
+              YSLSTR(field), YSLEND);
+  else			
+  {
+    char* nestedName = yrGetAbsoluteName(err);
+    ysRecord( YCMSG(80), YCERRSEV, YCERRLN(&ln), YSLSTR(name), 
+              YSLSTR(field), YSLSTR(nestedName), YSLEND);
+    ysmGlbFree( (dvoid*)nestedName);
+  }
+  ysmGlbFree( (dvoid*) name);
+}
+
+
+
+
+
+STATICF void ycsCheckRecursion( ycctx* ctx, yrobj* taboo, yrobj* type, 
+	yslst* done)
+{
+  yrobj* p = (yrobj*)0;
+  ysle* le = (ysle*)0;
+
+  switch ( yrGetKind(type))
+  {
+    case yrdkStruct:
+        
+      for ( le = ysLstHead(done); le; le = ysLstNext(le))
+	if ( (dvoid*)type == ysLstVal(le) )
+	  break;
+      if ( !le )	
+      {
+	for (le = ysLstHead( yrStructData(type).mbrs); le; 
+		le = ysLstNext(le))
+	{
+          yrstrmbr* mem = (yrstrmbr*) ysLstVal(le);
+          if ( mem->type == taboo )
+          {
+            ycsRecursionErr( ctx, taboo, type, mem->name);
+	    mem->type = yrGetPrimitive( yrGetRepository(type), yrpklong);
+          }
+          else if ( (type==taboo) && (yrGetKind(mem->type) == yrdkSequence) &&
+          	(yrSeqData(mem->type).elmtype == taboo) )
+            continue;		
+          else
+          {
+            yseTry
+	      ycsCheckRecursion( ctx, taboo, mem->type, done);
+            yseCatch( YC_EX_RECURSION)
+            {
+	      ycsRecursionErr( ctx, taboo, type, mem->name);
+              mem->type = yrGetPrimitive( yrGetRepository(type), yrpklong);
+            }
+            yseEnd
+          }
+	}
+	DISCARD ysLstEnq(done, (dvoid*)type);
+      }      
+      break;
+
+    case yrdkUnion:
+        
+      for ( le = ysLstHead(done); le; le = ysLstNext(le))
+	if ( (dvoid*)type == ysLstVal(le) )
+	  break;
+      if ( !le )	
+      {
+          
+	for (le = ysLstHead( yrUnionData(type).arms); le; 
+		le = ysLstNext(le))
+	{
+          yrunmbr* mem = (yrunmbr*) ysLstVal(le);
+          if ( mem->type == taboo )
+          {
+            ycsRecursionErr( ctx, taboo, type, mem->name);
+	    mem->type = yrGetPrimitive( yrGetRepository(type), yrpklong);
+          }
+          else if ( (type==taboo) && (yrGetKind(mem->type) == yrdkSequence) &&
+          	(yrSeqData(mem->type).elmtype == taboo) )
+            continue;		
+          else
+          {
+            yseTry
+	      ycsCheckRecursion( ctx, taboo, mem->type, done);
+            yseCatch( YC_EX_RECURSION)
+            {
+	      ycsRecursionErr( ctx, taboo, type, mem->name);
+              mem->type = yrGetPrimitive( yrGetRepository(type), yrpklong);
+            }
+            yseEnd
+          }
+	}
+	DISCARD ysLstEnq(done, (dvoid*)type);
+      }      
+      break;
+
+    case yrdkArray:
+      for (p = yrArrayData(type).elmtype; yrGetKind(p) == yrdkArray;
+	 p = yrArrayData(p).elmtype)
+	 ;    
+      if ( p == taboo )
+      {
+        yseThrow( YC_EX_RECURSION);
+      }
+      else if ( yrGetKind(p) == yrdkSequence )
+      {
+	for (p = yrSeqData(type).elmtype; 
+	      yrGetKind(p) == yrdkSequence;
+	      p = yrSeqData(p).elmtype)
+	   ;    
+	if ( p == taboo )	
+	{
+	  yseThrow( YC_EX_RECURSION);
+	}
+      }
+      ycsCheckRecursion( ctx, taboo, p, done);
+      break;
+
+    case yrdkSequence:
+      
+      for (p = yrSeqData(type).elmtype; 
+	    yrGetKind(p) == yrdkSequence;
+	    p = yrSeqData(p).elmtype)
+	 ;    
+      if ( p == taboo )
+      {
+	yseThrow( YC_EX_RECURSION);
+      }
+      
+      break;
+    default:
+      break;
+  }
+}
+
+
+
+
+
+STATICF void ycsValidateRecursion( ycctx* ctx, yrobj* type)
+{
+  yslst* validated = (yslst*)0;
+
+  switch ( yrGetKind(type))
+  {
+    case yrdkStruct:
+    case yrdkUnion:
+      validated = ysLstCreate();
+      yseTry
+	ycsCheckRecursion( ctx, type, type, validated);
+      yseCatchAll
+        
+      yseEnd
+      ysLstDestroy( validated, (ysmff)0);
+      break;
+    default:
+      break;
+  }
+  return;
+}
+

@@ -1,0 +1,395 @@
+/* mx/src/mn/mznops.c */
+
+
+/*
+ORACLE, Copyright (c) 1982, 1983, 1986, 1990 ORACLE Corporation
+ORACLE Utilities, Copyright (c) 1981, 1982, 1983, 1986, 1990, 1991 ORACLE Corp
+
+Restricted Rights
+This program is an unpublished work under the Copyright Act of the
+United States and is subject to the terms and conditions stated in
+your  license  agreement  with  ORACORP  including  retrictions on
+use, duplication, and disclosure.
+
+Certain uncopyrighted ideas and concepts are also contained herein.
+These are trade secrets of ORACORP and cannot be  used  except  in
+accordance with the written permission of ORACLE Corporation.
+*/
+
+
+
+#ifndef SYSI_ORACLE
+#include <sysi.h>
+#endif
+#ifndef MN_ORACLE
+#include <mn.h>
+#endif
+#ifndef MZN_ORACLE
+#include <mzn.h>
+#endif
+#ifndef MZNI_ORACLE
+#include <mzni.h>
+#endif
+#ifndef YS_ORACLE
+#include <ys.h>
+#endif
+
+
+
+sb4 mznsInsert(mznctx *nsctx, mznent *entry)
+{
+  mznbkt *nmbkt, *pb, *bkt, *idpb, *idbkt;
+  ub4     key;
+  sb4     sts;
+
+  
+  if (!(nmbkt = (mznbkt *) ysmGlbAlloc(sizeof(mznbkt),"mznbkt")))
+    return MNERR_OUTMEM;
+ 
+  nmbkt->older = (mznbkt *) 0;
+  nmbkt->entry = entry;
+  nmbkt->alias = (char *) 0;
+  nmbkt->nsctx = nsctx;
+
+ retry:                    
+
+  
+  key = mznsKey((ub1 *) entry->name, strlen(entry->name) + 1);
+
+  for (pb = (mznbkt *) 0, bkt = nsctx->names[key];
+       bkt && mznsStrcmp(entry->name, bkt->entry->name) > 0;
+       pb = bkt, bkt = bkt->next) ;
+
+  if (bkt && !mznsStrcmp(entry->name, bkt->entry->name))
+    {
+      
+      if (bkt->alias)
+	{
+	  ysmGlbFree(nmbkt);
+	  return MNERR_DUPLICATE;
+	}
+      else if (!entry->id || !bkt->entry->id)
+	goto dup_error;
+
+      if (memcmp(bkt->entry->id->id, entry->id->id, sizeof(entry->id->id)))
+	goto dup_error;
+
+      
+      for (idpb = (mznbkt *) 0, idbkt = bkt;
+	   idbkt && mnrIdCmp(idbkt->entry->id, entry->id, TRUE) > 0;
+	   idpb = idbkt, idbkt = idbkt->older) ;
+
+      
+      if (idbkt && !mnrIdCmp(idbkt->entry->id, entry->id, TRUE))
+	{
+	  bkt = idbkt;
+	  goto dup_error;
+	}
+
+      if (idpb)
+	{
+	  
+	  idpb->older = nmbkt;
+	  nmbkt->older = idbkt;
+	}
+      else
+	{
+	  
+	  nmbkt->older = bkt;
+
+	  nmbkt->next = bkt->next;
+	  if (pb)
+	    pb->next = nmbkt;
+	  else
+	    nsctx->names[key] = nmbkt;
+	}
+    }
+  else
+    {
+      
+      nmbkt->next = bkt;
+
+      if (pb)
+	pb->next = nmbkt;
+      else
+	nsctx->names[key] = nmbkt;
+    }
+
+  mnDeathWatch(&nmbkt->entry->addr,mznDeathHandler,(dvoid *) nmbkt);
+  return 0;
+
+ dup_error:
+  
+  sts = mnEcho(&bkt->entry->addr, (ub4) 2000, (mnHandler) 0, (dvoid *) 0);
+  if (sts >= 0)
+    {
+      ysmGlbFree(nmbkt);
+      return MNERR_DUPLICATE;
+    }
+  else
+    {
+      mznsDelete(nsctx, bkt->entry->name, bkt->entry->id);
+      mtlLog("WARNING: old entry for %s is being replaced", entry->name);
+      goto retry;
+    }
+}
+
+
+mznent *mznsFind(mznctx *nsctx, const char *name, const mnrid *id)
+{
+  mznbkt *bkt;
+  ub4     key;
+
+  if (!name)
+    return (mznent *) 0;
+
+  key = mznsKey((ub1 *) name, strlen(name) + 1);
+
+  for (bkt = nsctx->names[key];
+       bkt && mznsStrcmp(name, bkt->entry->name) > 0;
+       bkt = bkt->next) ;
+
+  if (bkt && !mznsStrcmp(name, bkt->entry->name))
+    {
+      if (id)
+	while (bkt && mnrIdCmp(bkt->entry->id, id, FALSE) != 0)
+	  bkt = bkt->older;
+    }
+  else
+    bkt = (mznbkt *) 0;
+
+  if (bkt)
+    {
+      if (bkt->alias)
+	return mznsFind(nsctx, bkt->alias, (const mnrid *) 0);
+      else
+	return bkt->entry;
+    }
+  else
+    return (mznent *) 0;
+}
+
+
+sb4 mznsDelete(mznctx *nsctx, const char *name, const mnrid *id)
+{
+  mznbkt *pb, *bkt, *idpb, *idbkt;
+  ub4     key;
+
+  if (!name)
+    return MNERR_NOTFOUND;
+
+  
+  key = mznsKey((ub1 *) name, strlen(name) + 1);
+
+  for (pb = (mznbkt *) 0, bkt = nsctx->names[key];
+       bkt && mznsStrcmp(name, bkt->entry->name) > 0;
+       pb = bkt, bkt = bkt->next) ;
+
+  if (!bkt || mznsStrcmp(name, bkt->entry->name))
+    return MNERR_NOTFOUND;
+
+  if (bkt->entry->id)
+    {
+      
+      if (!id || memcmp(bkt->entry->id->id, id->id, sizeof(id->id)))
+	return MNERR_NOTFOUND;
+
+      
+      for (idpb = (mznbkt *) 0, idbkt = bkt;
+	   idbkt && mnrIdCmp(idbkt->entry->id, id, TRUE) > 0;
+	   idpb = idbkt, idbkt = idbkt->older) ;
+
+      if (!idbkt || mnrIdCmp(idbkt->entry->id, id, TRUE))
+	return MNERR_NOTFOUND;
+
+      if (idpb)
+	{
+	  
+	  idpb->older = idbkt->older;
+	}
+      else
+	{
+	  
+	  if (idbkt->older)
+	    {
+	      idbkt->older->next = bkt->next;
+
+	      if (pb)
+		pb->next = idbkt->older;
+	      else
+		nsctx->names[key] = idbkt->older;
+	    }
+	  else
+	    {
+	      
+	      if (pb)
+		pb->next = bkt->next;
+	      else
+		nsctx->names[key] = bkt->next;
+	    }
+	}
+
+      bkt = idbkt;
+    }
+  else
+    {
+      
+      if (pb)
+	pb->next = bkt->next;
+      else
+	nsctx->names[key] = bkt->next;
+    }
+
+  
+  if (bkt->alias)
+    ysmGlbFree(bkt->alias);
+  else
+    DISCARD mnDeathIgnore(&bkt->entry->addr,bkt);
+
+  mnxFree(mznxEntry, (dvoid *) bkt->entry);
+  ysmGlbFree(bkt->entry);
+  ysmGlbFree(bkt);
+
+  return 0;
+}
+
+
+sb4 mznsQuery(mznctx *nsctx, const char *name, ub4 qt, mnxStream *stream)
+{
+  mznbkt *bkt, *prog;
+  ub4     cnt, i;
+  sb4     sts;
+  char   *tmpnm;
+
+  cnt = 0;
+
+  
+  for (i = 0; i < MZNROWS; i++)
+    for (bkt = nsctx->names[i], sts = 0; bkt && !sts; bkt = bkt->next)
+      {
+	
+	if (name && !mznsNameEq(bkt->entry->name, name))
+	  continue;
+
+	if (!bkt->entry->id && !(qt & MZN_PORTS))
+	  continue;
+
+	if (bkt->entry->id && !(qt & MZN_PROGRAMS))
+	  continue;
+
+	
+	if (bkt->alias)
+	  {
+	    tmpnm = (char *)bkt->entry->name;
+	    bkt->entry->name = (char *)
+	      ysmGlbAlloc(strlen(tmpnm) + strlen(bkt->alias) + 2,
+			  "entry->name");
+	    sprintf( (char *)bkt->entry->name, "%s:%s", tmpnm, bkt->alias);
+	  }
+	else
+	  tmpnm = (char *) 0;
+
+	
+	if (!(qt & MZN_ALL_PROGRAMS))
+	  {
+	    sts = (*stream->push)(stream, (dvoid *) bkt->entry);
+	    cnt++;
+	  }
+	else
+	  for (prog = bkt; prog && !sts; prog = prog->older)
+	    {
+	      sts = (*stream->push)(stream, (dvoid *) prog->entry);
+	      cnt++;
+	    }
+
+	
+	if (tmpnm)
+	  {
+	    ysmGlbFree( (dvoid *)bkt->entry->name);
+	    bkt->entry->name = tmpnm;
+	  }
+      }
+
+  
+  (*stream->close)(stream, (sb4) 0);
+  return (sb4) cnt;
+}
+
+
+sb4 mznsMakeAlias(mznctx *nsctx, const char *name, const char *alias)
+{
+  mznbkt *nmbkt, *pb, *bkt;
+  ub4 key;
+
+  
+  key = mznsKey((ub1 *) name, strlen(name) + 1);
+
+  for (pb = (mznbkt *) 0, bkt = nsctx->names[key];
+       bkt && mznsStrcmp(name, bkt->entry->name) > 0;
+       pb = bkt, bkt = bkt->next) ;
+
+  if (bkt && !mznsStrcmp(name, bkt->entry->name))
+    {
+      
+      if (!bkt->alias)
+	goto dup_error;
+      else
+	{
+	  ysmGlbFree((dvoid*)name);
+	  ysmGlbFree(bkt->alias);
+	  bkt->alias = (char *)alias;
+	}
+    }
+  else
+    {
+      
+      if (!(nmbkt = (mznbkt *) ysmGlbAlloc(sizeof(mznbkt), "mznbkt")))
+	return MNERR_OUTMEM;
+
+      nmbkt->older= (mznbkt *) 0;
+      nmbkt->entry = (mznent *) ysmGlbAlloc(sizeof(mznent), "mznent");
+      nmbkt->entry->name = name;
+      nmbkt->entry->id = (mnrid *) 0;
+      nmbkt->alias = (char *)alias;
+      nmbkt->nsctx = nsctx;
+
+      nmbkt->next = bkt;
+
+      if (pb)
+	pb->next = nmbkt;
+      else
+	nsctx->names[key] = nmbkt;
+    }
+
+  return 0;
+
+ dup_error:
+  
+  ysmGlbFree((dvoid *)name);
+  ysmGlbFree((dvoid *)alias);
+  return MNERR_DUPLICATE;
+}
+
+
+ub4 mznsKey(ub1 *buf, size_t sz)
+{
+  ub4 key;
+
+  for (key = 0; sz; sz--, buf++)
+    key += *buf;
+
+  return key % MZNROWS;
+}
+
+
+sb4 mznsStrcmp(const char *s1, const char *s2)
+{
+  for (; *s1 && tolower(*s1) == tolower(*s2); s1++, s2++) ;
+  return *s1 - *s2;
+}
+
+
+boolean mznsNameEq(const char *str, const char *regexp)
+{
+  return !mznsStrcmp(str, regexp);
+}

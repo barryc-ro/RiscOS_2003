@@ -1,0 +1,395 @@
+/* mx/src/yc/ycmain.c */
+
+
+/*
+ORACLE, Copyright (c) 1982, 1983, 1986, 1990 ORACLE Corporation
+ORACLE Utilities, Copyright (c) 1981, 1982, 1983, 1986, 1990, 1991 ORACLE Corp
+
+Restricted Rights
+This program is an unpublished work under the Copyright Act of the
+United States and is subject to the terms and conditions stated in
+your  license  agreement  with  ORACORP  including  retrictions on
+use, duplication, and disclosure.
+
+Certain uncopyrighted ideas and concepts are also contained herein.
+These are trade secrets of ORACORP and cannot be  used  except  in
+accordance with the written permission of ORACLE Corporation.
+*/
+
+
+
+#ifndef SYSI_ORACLE
+#include <sysi.h>
+#endif
+#ifndef YC_ORACLE
+#include <yc.h>
+#endif
+#ifndef YSL_ORACLE
+#include <ysl.h>
+#endif
+
+
+
+
+static struct ysargmap map[] =
+{
+  { 'a', "mnidlc.obj-adaptor", YSARG_MANY },
+  { 'D', "mnidlc.preprocess.define", YSARG_MANY },
+  { 'E', "mnidlc.preprocess-only=true", 0 },
+  { 'I', "mnidlc.preprocess.include", YSARG_MANY },
+  { 'i', "mnidlc.gen-include=true", 0},
+  { 'l', "mnidlc.header-only=true", 0 },
+  { 'n', "mnidlc.no-output=true", 0 },
+  { 'o', "mnidlc.outputpath", 1 },
+  { 'q', "mnidlc.nobuiltin-seq=true", 0 },
+  { 'r', "mnidlc.save-repository=true", 0 },
+  { 'S', "mnidlc.server-template=true", 0 },
+  { 's', "mnidlc.c-mapping.style", YSARG_MANY },
+  { 'U', "mnidlc.preprocess.undef", YSARG_MANY },
+  { 'w', "mnidlc.no-warn=true",0},
+#ifdef YCITL
+  { 'z', "mnidlc.itl-only=true", 0 },
+  { 'Z', "mnidlc.itl-mapping=true", 0 },
+#endif
+  { YSARG_PARAM, "mnidlc.sourcefile", 1 },
+  { 0, (char *) 0, 0 }
+};
+
+
+
+
+STATICF boolean ycAll(ycctx *ctx);
+STATICF void yctxFree( ycctx* ctx);
+STATICF boolean ycProcessCmdLine( ycctx* ctx);
+STATICF boolean ycProcessLang( ycctx* ctx);
+
+
+
+
+boolean ycMain(dvoid *osdp, char *nm, sword argc, char **argv)
+{
+  boolean ok;
+  ycctx  ctx;
+  sword  sts;
+  char   buf[100];
+  yssnk* errsink = (yssnk*)0;
+
+  
+  ysInit(osdp, "mnidlc");
+
+  CLRSTRUCT( ctx);
+  sts = ysArgParse(argc, argv, map);
+  if (sts == YSARG_VERSION)
+  {
+    yslError("Oracle Media Net IDL Compiler\n");
+    buf[0] = '\0';
+    yslError(ysVersion(buf, sizeof(buf)));
+  }
+  ok = (sts == YSARG_NORMAL);
+
+  
+  if (ok)
+  {
+    if ( !ysResGetLast( "ys.log.msg-path") )
+    {
+      yslError("Warning: ys.log.msg-path not set. Unable to locate messages.\n");
+    }
+        
+    errsink = ysSinkFind( "tty");
+    if ( errsink )
+      ysSinkDestroy( errsink);
+      
+    errsink = ysSinkCreate("mnidlc", ycRecordCB, (dvoid*) &ctx);
+    ysSinkSetFilter(errsink, ysFilterSimple, (dvoid *) 0,
+                    (ysFilterCB *) 0, (dvoid **) 0);
+    if ( ysResGet( "mnidlc.debug-trace-type") )
+      ysAddFilter( errsink, YC_MSG_FILTER(7));    
+    else if ( ysResGetBool( "mnidlc.verbose") )
+      ysAddFilter( errsink, YC_MSG_FILTER(6));    
+    else if ( ysResGetBool( "mnidlc.no-warn") )
+      ysAddFilter( errsink, YC_MSG_FILTER(3));    
+    else
+      ysAddFilter( errsink, YC_MSG_FILTER(4));    
+  }
+
+  
+  if ( ok && (ok = ycProcessCmdLine( &ctx)) )
+  {
+    yseTry
+    {
+      ctx.srcnm = ysResGetLast("mnidlc.sourcefile");
+      ok = (ctx.srcnm ? ycAll(&ctx) : TRUE);
+      if ( ctx.errcnt || ctx.wrncnt )
+        ysRecord( YCMSG(4), YCINFOSEV, YSLSB4(ctx.errcnt), 
+                  YSLSB4(ctx.wrncnt), YSLEND);
+    }
+    yseCatch( YC_EX_SYNTAX)
+    {
+      ysRecord( YCMSG(48), YCERRSEV, YSLEND);
+      ok = FALSE;
+    }
+    yseCatchAll
+    {
+      CONST char* fn;
+      sword ln;
+
+      yseGetLoc(&fn, &ln);
+      ysRecord( YCMSG(0), YCERRSEV, YSLSTR(ysidToStr(yseExid)), 
+                YSLSTR(fn), YSLSB4(ln), YSLEND);
+      ok = FALSE;
+    }
+    yseEnd
+  }
+
+  
+  if ( errsink )
+    ysSinkDestroy( errsink);
+
+  yctxFree( &ctx);
+  ysTerm(osdp);
+  return ok;
+}
+
+
+
+STATICF boolean ycAll(ycctx *ctx)
+{
+  sysb8 clk;
+  ysle* le;
+
+  
+  ctx->errcnt = 0;
+  ctx->wrncnt = 0;
+  ctx->nms = ysLstCreate();
+
+  ycpp(ctx);                                               
+  if (!ctx->errcnt && !ysResGet("mnidlc.preprocess-only"))
+  {
+    ycprs(ctx);                                                 
+
+    if (!ctx->errcnt)
+    {
+      yslst* traceopts;
+
+      ctx->repository = yrCreateRepository();
+      ctx->corba_object = yrLookup( ctx->repository, "CORBA::Object");
+        
+      traceopts = ysResGet( "mnidlc.debug-trace-type");
+      if ( traceopts )
+      {
+        for ( le = ysLstHead( traceopts); le; le = ysLstNext(le) )
+          if ( ysStrCaseCmp( "ifr", (char*) ysLstVal(le)) == 0 )
+          {
+             yrSetTraceLevel( ctx->repository, 1);
+	     break;
+          }
+      }
+
+      ctx->symtbl = ycSymTblCreate();
+      ycSymInsert( ctx->symtbl, ctx->corba_object);   
+      ycsem(ctx);
+      if ( !ctx->errcnt )
+      {
+        ysClock(&clk);
+        ctx->tmpfn = (ub4) sysb8msk(&clk);
+        if ( ysResGet("mnidlc.save-repository") )           
+           ycDumpIFR( ctx);
+	if ( !ctx->errcnt && !ysResGet("mnidlc.no-output") )
+        {    
+          for (le = ysLstHead(ctx->cgmaps); le; le = ysLstNext(le))
+          {
+            ycgmap* lang = (ycgmap*)ysLstVal(le);
+
+            ctx->lang = lang;
+            (*lang->driver)( ctx);                          
+          }
+        }
+      }
+      ycSymTblDestroy( ctx->symtbl);
+      yrDestroyRepository( ctx->repository, (ysmff)0, (ysmff)0);
+    }
+  }
+
+  ysLstDestroy(ctx->nms, (ysmff) ysStrDestroy);
+  ctx->nms = (yslst*)0;
+  return (ctx->errcnt ? FALSE : TRUE);
+}
+
+
+
+
+
+STATICF void yctxFree( ycctx* ctx)
+{
+  
+  
+  
+  
+  
+  
+
+  if ( ctx->tu )
+  {
+    ysLstDestroy(ctx->tu, (ysmff) ycLnFree);
+    ctx->tu = (yslst*)0;
+  }
+
+  if ( ctx->root )
+  {
+    ycfDefns( ctx->root);
+    ctx->root = (yslst*) 0;
+  }
+
+  if ( ctx->newobjs )
+  {
+    ysLstDestroy( ctx->newobjs, (ysmff)ycgObjDestroy);
+    ctx->newobjs = (yslst*)0;
+  }
+
+  if ( ctx->seqs )
+  {
+    ysLstDestroy( ctx->seqs, (ysmff)0);
+    ctx->seqs = (yslst*)0;
+  }
+
+  if ( ctx->scopes )
+    ycgDestroyScopeStack(ctx);
+
+  if ( ctx->cgmaps )
+    ysLstDestroy( ctx->cgmaps, (ysmff)ysmFGlbFree);
+}
+
+
+
+STATICF boolean ycProcessCmdLine( ycctx* ctx)
+{
+  boolean ok = TRUE;
+  CONST char* arg;
+
+    
+  if ( (arg = ysResGetLast( "mnidlc.c-mapping.style")) )
+  {
+    if ( !ysStrCaseCmp( arg, "ansi") )
+      ctx->style = YCSTYLE_ANSI;
+    else if ( !ysStrCaseCmp( arg, "oracle") )
+      ctx->style = YCSTYLE_ORA;
+    else if ( !ysStrCaseCmp( arg, "corba") )
+    {
+      ctx->style = YCSTYLE_CORBA;
+      ctx->style |= YCSTYLE_ANSI;
+    }
+    else
+    {
+      ysRecord( YCMSG(7), YCERRSEV, YSLSTR(arg), YSLEND);
+      ok = FALSE;
+    }
+  }
+  else
+    ctx->style = YCSTYLE_ANSI;     
+
+    
+  arg = ysResGetLast( "mnidlc.obj-adaptor");
+
+  if ( !arg )
+    ctx->objAdaptor = YCOA_BOA;
+  else if ( ysStrCaseCmp( arg, "coa") == 0 )
+  {
+    if ( ycStyleCORBA(ctx) )
+    {
+      ysRecord( YCMSG(107), YCWARNSEV, YSLEND);
+      ctx->objAdaptor = YCOA_BOA;
+    }
+    else
+      ctx->objAdaptor = YCOA_COA;
+  }
+  else if ( ysStrCaseCmp( arg, "boa") == 0 )
+    ctx->objAdaptor = YCOA_BOA;
+  else
+  {
+    ysRecord( YCMSG(85), YCERRSEV, YSLSTR(arg), YSLEND);
+    ok = FALSE;
+  }
+
+    
+  arg = ysResGetLast( "mnidlc.corba-vers");
+   
+  if ( !arg )
+    ctx->corbaVers = YCORB_1_2;
+  else
+  {
+    if ( strcmp( arg, "1.2") == 0 )
+      ctx->corbaVers = YCORB_1_2;
+    else if ( strcmp( arg, "2.0") == 0 )
+      ctx->corbaVers = YCORB_2_0;
+    else
+    {
+      ysRecord( YCMSG(87), YCERRSEV, YSLSTR(arg), YSLEND);
+      ok = FALSE;
+    }
+  }
+    
+  if ( ok )
+    ok = ycProcessLang(ctx);
+  return ok;
+}
+
+
+
+
+#ifndef YC_LANG_LEN_MAX
+#define YC_LANG_LEN_MAX 10
+   
+#endif
+
+STATICF boolean ycProcessLang( ycctx* ctx)
+{
+  boolean genC = FALSE;
+  boolean genCPlus = FALSE;
+  boolean genITL = FALSE;
+  yslst* langs;
+
+     
+  langs = ysResGet( "mnidlc.language");
+  if ( langs )
+  {
+    ysle* le;
+    for ( le = ysLstHead(langs); le; le = ysLstNext(le))
+    {
+      char* name = (char*) ysLstVal(le);
+
+      if ( (name[1] == '\0') && ((name[0] == 'c') || (name[0] == 'C')) )
+        genC = TRUE;            
+      else
+      {
+        if ( ysStrCaseCmp( "cplus", name) == 0 )
+          genCPlus = TRUE;     
+        else if ( ysStrCaseCmp( "itl", name) == 0 )
+          genITL = TRUE;       
+        else
+        {
+          ysRecord( YCMSG(101), YCERRSEV, YSLSTR(name), YSLEND);
+          return FALSE;
+        }
+      }
+    }
+  }
+    
+  else if ( ysResGetBool("mnidlc.itl-only") )    
+    genITL = TRUE;
+  else                    
+  {
+    if ( ysResGetBool("mnidlc.itl-mapping") )    
+      genITL = TRUE;
+    genC = TRUE;
+  }
+
+  langs = ysLstCreate();
+  if ( genC )
+    DISCARD ysLstEnq( langs, (dvoid*)yccLangMap(ctx));
+  else if ( genCPlus )
+    DISCARD ysLstEnq( langs, (dvoid*)yccpLangMap(ctx));
+  else if ( genITL )
+    DISCARD ysLstEnq( langs, (dvoid*)yciLangMap(ctx));
+  ctx->cgmaps = langs;
+  return TRUE;
+}

@@ -1,0 +1,781 @@
+/* mx/src/mn/mzmgs.c */
+
+
+/*
+ORACLE, Copyright (c) 1982, 1983, 1986, 1990 ORACLE Corporation
+ORACLE Utilities, Copyright (c) 1981, 1982, 1983, 1986, 1990, 1991 ORACLE Corp
+
+Restricted Rights
+This program is an unpublished work under the Copyright Act of the
+United States and is subject to the terms and conditions stated in
+your  license  agreement  with  ORACORP  including  retrictions on
+use, duplication, and disclosure.
+
+Certain uncopyrighted ideas and concepts are also contained herein.
+These are trade secrets of ORACORP and cannot be  used  except  in
+accordance with the written permission of ORACLE Corporation.
+*/
+
+
+
+
+#ifndef SYSI_ORACLE
+#include <sysi.h>
+#endif
+
+#ifndef MN_ORACLE
+#include <mn.h>
+#endif
+
+#ifndef MNR_ORACLE
+#include <mnr.h>
+#endif
+
+#ifndef MNRC_ORACLE
+#include <mnrc.h>
+#endif
+
+#ifndef MNX_ORACLE
+#include <mnx.h>
+#endif
+
+#ifndef MZMGS_ORACLE
+#include <mzmgs.h>
+#endif
+
+#ifndef MZMGU_ORACLE
+#include <mzmgu.h>
+#endif
+
+#ifndef MTCCTX_ORACLE
+#include <mtcctx.h>
+#endif
+
+#ifndef YS_ORACLE
+#include <ys.h>
+#endif
+
+#ifndef YSTM_ORACLE
+#include <ystm.h>
+#endif
+
+
+
+   
+typedef struct
+{
+  mzmgsStFunc *statFunc_mzmgsSvc;       
+  dvoid     *statArg_mzmgsSvc;          
+  mzmgsAdminFunc *adminFunc_mzmgsSvc;   
+  dvoid     *adminArg_mzmgsSvc;         
+  mnrs      *svcRpc_mzmgsSvc;           
+
+  sb4               svcType_mzmgsSvc;           
+  mzmguTimeTicks    operStatChanged_mzmgsSvc;   
+  mzmguTimeTicks    upTime_mzmgsSvc; 
+
+} mzmgsSvc;
+
+
+
+# define MZMGS_DEFINCR  10
+
+typedef struct                  
+{
+  
+  sword     incrAmt_mzmgsContext; 
+  sword     numSlots_mzmgsContext; 
+  mzmgsSvc  *svcArray_mzmgsContext; 
+  sword     numSvcs_mzmgsContext; 
+
+  mzmguPInfo    pi_mzmgsContext;
+
+  ub4       operStat_mzmgsContext; 
+  ub4       adminStat_mzmgsContext; 
+
+} mzmgsContext;
+
+
+
+
+
+
+STATICF sb4 mzmgsInit(void);            
+STATICF mzmgsSvc *mzmgsSLookup( mzmgsContext *ctx, mnrs *svc );
+STATICF mzmgsSvc *mzmgsNewSvc( mzmgsContext *ctx );
+
+STATICF sb4 mzmgsGInfo( mnrsc *call, ub4 svcstats, ub4 procstats,
+               mzmguTimeTicks *now, mzmguSInfo *si, mzmguPInfo *pi );
+
+STATICF void mzmgsGSvcProcInfo( mnrsc  *call, mnbv  *inargs, ub4 incnt );
+STATICF void mzmgsSetAdminState( mnrsc  *call, mnbv  *inargs, ub4 incnt );
+
+STATICF char *mzmgsAffinity();
+
+
+
+externdef CONST_W_PTR mnrid mzmgsCidCommonMib =
+  { { 1, 212, 55, 114, 131, 169, 217, 223  }, MNVERS(1, 0) };
+
+externdef CONST_W_PTR mnrod   mzmgsROpers[] =
+{
+    {mzmgsGSvcProcInfo,     "GSvcProcInfo"},
+    {mzmgsSetAdminState,    "SetSvcAdminState"}
+};
+
+#ifdef RISCOS
+externdef CONST_W_PTR mnrcd   mzmgsRComp =
+{  0,
+     sizeof(mzmgsROpers)/sizeof(mnrod), 0, "CommonMib" };
+
+void mzmgs_staticinit(void)
+{
+    mzmgsRComp.cid = &mzmgsCidCommonMib;
+    mzmgsRComp.opers = mzmgsROpers;
+}
+
+#else
+externdef CONST_W_PTR mnrcd   mzmgsRComp =
+{  &mzmgsCidCommonMib,
+     sizeof(mzmgsROpers)/sizeof(mnrod), mzmgsROpers, "CommonMib" };
+#endif
+
+
+
+
+
+
+
+sb4 mzmgsCommonMib(mnrs *svcRpc, sb4 svcType,
+                   mzmgsStFunc *svcStatFunc, dvoid *svcStatArg,
+                   mzmgsAdminFunc *svcAdminFunc, dvoid *svcAdminArg )
+                   
+{
+  mzmgsContext *ctx;
+  mzmgsSvc *svc;
+  sb4 rv = 0;
+
+  do                            
+  {
+    if( (rv = mzmgsInit()) )
+      break;
+
+    if( !(ctx = (mzmgsContext *)mtcctxGet( MZMGSCTX, (ub4)0 )) )
+    {
+      
+      rv = mzmInitFailed;
+      break;
+    }
+
+    
+    if( !(svc = mzmgsSLookup( ctx, svcRpc )))
+    {
+      if( !(svc = mzmgsNewSvc( ctx )) )
+      {
+        rv = mzmMallocFailed;
+        break;
+      }
+      
+      rv = mnrAddComp( svcRpc, &mzmgsRComp, (dvoid *)svc );
+    }
+    svc->svcRpc_mzmgsSvc = svcRpc;
+    svc->svcType_mzmgsSvc = svcType;
+    svc->upTime_mzmgsSvc =
+      svc->operStatChanged_mzmgsSvc =
+        mzmgsTimeStamp();
+    svc->statFunc_mzmgsSvc = svcStatFunc;
+    svc->statArg_mzmgsSvc = svcStatArg;
+    svc->adminFunc_mzmgsSvc = svcAdminFunc;
+    svc->adminArg_mzmgsSvc = svcAdminArg;
+
+  } while ( FALSE );
+
+  
+  return rv;
+}
+
+
+sb4 mzmgsAddCommonMib(mnrs *svcRpc, sb4 svcType,
+                      mzmgsStFunc *svcStatFunc, dvoid *svcStatArg )
+{
+  return( mzmgsCommonMib( svcRpc, svcType, svcStatFunc, svcStatArg,
+                         (mzmgsAdminFunc*)0, (dvoid *)0) );
+}
+
+
+
+sb4 mzmgsDelCommonMib(mnrs *svcRpc)
+{
+  mzmgsContext *ctx;
+  mzmgsSvc *svc;
+  mzmgsSvc *lsvc;
+  sb4 rv = 0;
+
+  do                            
+  {
+    if( (rv = mzmgsInit()) )
+      break;
+
+    if( !(ctx = (mzmgsContext *)mtcctxGet( MZMGSCTX, (ub4)0 )) )
+    {
+      
+      rv = mzmInitFailed;
+      break;
+    }
+
+    
+    if( (svc = mzmgsSLookup( ctx, svcRpc )) )
+    {
+      
+      lsvc = &ctx->svcArray_mzmgsContext[ctx->numSvcs_mzmgsContext-1];
+      while( svc < lsvc )
+      {
+        svc[0] = svc[1];
+        svc++;
+      }
+      ctx->numSvcs_mzmgsContext--;
+    }
+
+  } while ( FALSE );
+
+  return rv;
+}
+
+
+
+
+
+
+
+void mzmgsStatChange( mnrs *svcRpc, ub4 newState )
+{
+  mzmgsContext *ctx;
+  mzmgsSvc *svc;
+
+  if(!(ctx = (mzmgsContext *)mtcctxGet( MZMGSCTX, (ub4)0 )))
+    return;
+  
+  svc = mzmgsSLookup( ctx, svcRpc );
+  if( svc )
+  {
+    svc->operStatChanged_mzmgsSvc = mzmgsTimeStamp();
+
+    
+  }
+}
+
+
+
+
+
+mzmguTimeTicks mzmgsTimeStamp(void)
+{
+  sysb8 ticks;
+  sysb8 tenk;
+
+  ysGetUpTime( &ticks );
+
+  
+  sysb8mak( &tenk, (sb4)0, (ub4)10000 );
+  sysb8div( &ticks, &ticks, &tenk );
+
+  return( (mzmguTimeTicks)(sysb8msk( &ticks )) );
+}
+
+
+
+
+
+
+
+STATICF sb4 mzmgsInit(void)             
+{
+  sb4 rv = 0;
+  mzmgsContext *ctx = (mzmgsContext*)NULL;
+
+  mzmguPInfo    *pi;            
+  mzmguPSInfo   *ps;            
+  mzmguPRInfo   *pr;            
+
+  do
+  {
+    if( !mtcctxInit() )
+    {
+      rv = mzmNoContextInit;
+      break;
+    }
+    if( mtcctxGet( MZMGSCTX, (ub4)0 ) ) 
+    {
+      rv = 0;
+      mtcctxDone();             
+      break;
+    }
+    if( !(ctx = (mzmgsContext *)ysmGlbAlloc( sizeof(*ctx),"mzmgsContext")) )
+    {
+      rv = mzmMallocFailed;
+      break;
+    }
+    ctx->incrAmt_mzmgsContext = MZMGS_DEFINCR;
+    ctx->numSlots_mzmgsContext = 0;
+    ctx->svcArray_mzmgsContext = (mzmgsSvc*)NULL;
+    ctx->numSvcs_mzmgsContext = 0;
+
+    
+    pi = &ctx->pi_mzmgsContext;
+
+    ps = &pi->static_mzmguPInfo;
+
+    
+    ps->procName_mzmguPSInfo = (char *)ysProgName();
+
+    ps->procHost_mzmguPSInfo = (char *)ysGetHostName();
+    ps->procAffinity_mzmguPSInfo = (char *)ysGetAffinity();
+    if ( !(ps->procAffinity_mzmguPSInfo) )
+       ps->procAffinity_mzmguPSInfo = (char *)mzmgsAffinity();
+
+    pr = &pi->run_mzmguPInfo;
+    pr = pr;                    
+    pr->pid_mzmguPRInfo = (char *)ysGetPid();
+    pr->operStatus_mzmguPRInfo = mzmguPRunning;
+    pr->cpuCs_mzmguPRInfo = 0;
+    pr->memKb_mzmguPRInfo = 0;
+
+    if( MTCCTXSUCC == mtcctxPut( MZMGSCTX, (ub4)0, (dvoid *)ctx) )
+    {
+      rv = 0;
+    }
+    else
+    {
+      rv = mzmNoContextInit;
+      ysmGlbFree( (dvoid *)ctx );
+    }
+
+  } while (FALSE);
+
+  return( rv );
+}
+
+
+
+
+
+
+STATICF mzmgsSvc *mzmgsSLookup( mzmgsContext *ctx, mnrs *svcRpc )
+{
+  mzmgsSvc *svc;
+  sword i;
+
+  if( !ctx || !svcRpc )
+    return( (mzmgsSvc*)NULL );
+
+  for(i = 0, svc = ctx->svcArray_mzmgsContext;
+      i < ctx->numSlots_mzmgsContext; i++, svc++ )
+    if( svc->svcRpc_mzmgsSvc == svcRpc )
+      return( svc );
+
+  return( (mzmgsSvc*)NULL );
+}
+
+
+
+STATICF mzmgsSvc *mzmgsNewSvc( mzmgsContext *ctx )
+{
+  mzmgsSvc  *svc;
+  sword     nelm;
+
+  
+  if( ctx->numSvcs_mzmgsContext < ctx->numSlots_mzmgsContext ) 
+  {
+    svc = &ctx->svcArray_mzmgsContext[ctx->numSvcs_mzmgsContext];
+  }
+  else                          
+  {
+    nelm = ctx->incrAmt_mzmgsContext + ctx->numSlots_mzmgsContext;
+    if( (svc = (mzmgsSvc *)ysmGlbAlloc( nelm * sizeof(*svc), "mzmgsSvc")) )
+    {
+      DISCARD memset( svc, 0, nelm * sizeof(*svc) );
+      DISCARD memcpy( (dvoid *)svc, (dvoid *)ctx->svcArray_mzmgsContext,
+                     ctx->numSlots_mzmgsContext * sizeof(*svc) );
+      if( ctx->svcArray_mzmgsContext )
+        ysmGlbFree( (dvoid *)ctx->svcArray_mzmgsContext );
+      ctx->svcArray_mzmgsContext = svc;
+      svc = &svc[ ctx->numSlots_mzmgsContext ];
+      ctx->numSlots_mzmgsContext = nelm;
+    }
+  }
+  if( svc )
+    ctx->numSvcs_mzmgsContext++;
+
+  return( svc );
+}
+
+
+
+# ifdef NEVER
+
+
+STATICF void mzmcTrapHandler( void  *usrp, sb4   val )
+{
+  mzmcctx  *ctx = (mzmcctx *)usrp;
+
+  
+  
+}
+
+
+mzmcErr   mzmcTrap VAFD((cx, trapSrc, trapId, addr VAAELLIPSIS))
+mzmcctx  *cx VAFDAD
+ub4   trapSrc VAFDAD
+ub4   trapId VAFDAD
+mna  *addr VAFDAD
+VAFDELLIPSIS
+{
+  va_list     p;
+  mnx        *xstr;
+  mnbv       *inargs;
+  ub4         incnt;
+  mnHandler   handler = mnDiscard;
+  dvoid      *usrp = 0;
+  sb4         sts = 0;
+
+  
+  if (!ctx->mzmgsRegBh)
+  {
+    ctx->mzmgsRegBh = mnrFindServer(MON_PROC_NAME, (const mnrid *)0);
+    if (!ctx->mzmgsRegBh) return mzmcBindErr;
+  }
+
+  
+  xstr = mnxCreate((mndrp *)0, MNXDIR_ENCODE, &inargs, &incnt, (dvoid *)0);
+  if (!xstr) return mzmcMemErr;
+
+  sts = mnxB4(xstr, &trapSrc);
+  if (sts > 0) sts = mnxB4(xstr, &trapId);
+  if (sts > 0) sts = mnxAddr(xstr, addr);
+  
+  if (sts > 0) sts = mnxAddr(xstr, addr);
+
+  
+  VASTART(p, addr);
+  if (sts > 0)
+  {
+    switch (trapSrc)
+    {
+    case MZMCTSUSM:                                            
+      switch (trapId)
+      {
+      case MZMCTILINKDOWN:
+        
+        {
+          mna  *linkid;
+          linkid = va_arg(p, mna *);
+          sts = mnxAddr(xstr, linkid);
+        }
+        break;
+      default:                                         
+        break;
+      }
+
+    default:                                               
+      break;
+    }
+  }
+  va_end(p);
+
+  
+  if (sts < 1)
+  {
+    DISCARD mnxDestroy(xstr, TRUE);
+    return mzmcFailed;
+  }
+
+  
+  if (ctx->mzmcctxtcb)
+  {
+    handler = mzmcTrapHandler;
+    usrp    = (dvoid *)cx;
+  }
+  
+  sts = mnrCall(ctx->mzmgsRegBh, (dvoid **)0, "trap", inargs,
+                incnt, (mnbv **)0, (ub4 *)0, handler, usrp);
+
+  
+  DISCARD mnxDestroy(xstr, TRUE);
+
+  if (sts) return mzmcFailed;
+
+  return mzmcNoErr;
+}
+
+# endif
+
+
+
+
+STATICF sb4 mzmgsGInfo( mnrsc *call, ub4 svcstats, ub4 procstats,
+                       mzmguTimeTicks *now, mzmguSInfo *si, mzmguPInfo *pi )
+{
+  sb4           rv = 0;
+  mzmgsContext  *ctx;
+  mnrs          *sh;
+  mzmgsSvc      *svc;           
+
+  mzmguSStats   *ss;            
+
+  mzmguPInfo    *ctx_pi;        
+  mzmguPRInfo   *pr;            
+
+  sysb8         cpu_time;               
+  sysb8         ten;
+
+  *now = mzmgsTimeStamp();
+
+  
+
+  ctx = (mzmgsContext *)mtcctxGet( MZMGSCTX, (ub4)0 );
+  sh = mnrGetHandle( call );
+  if( svcstats && !(svc = mzmgsSLookup( ctx, sh )) )
+  {
+    rv = mzmNoService;
+
+    if( svcstats )
+      DISCARD memset( (dvoid *)si, 0, sizeof(*si) );
+
+    if( procstats )
+      DISCARD memset( (dvoid *)pi, 0, sizeof(*pi) );
+
+    return mzmNoService;
+  }
+
+  if( svcstats )
+  {
+    
+    si->svcType_mzmguSInfo = svc->svcType_mzmgsSvc;
+    si->svcUpTime_mzmguSInfo = svc->upTime_mzmgsSvc;
+    si->changedOperStatus_mzmguSInfo = svc->operStatChanged_mzmgsSvc;
+
+    ss = &si->svcStats_mzmguSInfo; 
+
+    
+    if( svc->statFunc_mzmgsSvc )
+      (*svc->statFunc_mzmgsSvc)( ss, svc->statArg_mzmgsSvc, &ss );
+    else
+      ss  = (mzmguSStats*)svc->statArg_mzmgsSvc;
+
+    
+    if( !ss )
+    {
+      ss = &si->svcStats_mzmguSInfo;
+      ss->OperStatus_mzmguSStats = mzmguStRunning;
+      ss->AdminStatus_mzmguSStats = mzmguStRunning;
+      ss->ChangedAdminStatus_mzmguSStats = svc->upTime_mzmgsSvc;
+      ss->InboundAssocs_mzmguSStats = 0;
+      ss->OutboundAssocs_mzmguSStats = 0;
+      ss->TotInboundAssocs_mzmguSStats = 0;
+      ss->TotOutboundAssocs_mzmguSStats = 0;
+      ss->LastInbound_mzmguSStats = svc->upTime_mzmgsSvc;
+      ss->LastOutbound_mzmguSStats = svc->upTime_mzmgsSvc;
+      ss->RejectedInboundAssocs_mzmguSStats = 0;
+      ss->FailedOutboundAssocs_mzmguSStats = 0;
+    }
+
+    
+    if( ss != &si->svcStats_mzmguSInfo ) 
+      DISCARD memcpy((dvoid*)&si->svcStats_mzmguSInfo,
+                     (dvoid*)ss, sizeof(*ss));
+  }
+  if( procstats )
+  {
+    ctx_pi = &ctx->pi_mzmgsContext;
+    pr = &ctx_pi->run_mzmguPInfo;
+    pr = pr;                    
+    pr->cpuCs_mzmguPRInfo = mzmgsCpuCs();
+    pr->memKb_mzmguPRInfo = ysGetMemUsage();
+    DISCARD memcpy( (dvoid*)pi, (dvoid*)ctx_pi, sizeof(*pi) );
+  }
+  return( rv );
+}
+
+
+ub4 mzmgsCpuCs(void)
+{
+    sysb8       cpu_time;
+    sysb8       ten;
+        
+    DISCARD ysGetCpuTime( &cpu_time );
+    DISCARD sysb8mak( &ten, (sb4)0, (ub4)10000 );
+    DISCARD sysb8div( &cpu_time, &cpu_time, &ten );
+    return( (ub4)sysb8msk( &cpu_time ) );
+}
+
+
+
+STATICF void  mzmgsGSvcProcInfo( mnrsc  *call, mnbv  *inargs, ub4   incnt )
+{
+  mnx       *xstr;
+  mnbv      *outargs;
+  ub4       outcnt;
+  boolean   sts;                
+
+  ub4       procstats;          
+  ub4       svcstats;           
+  sb4       ret_stat;
+
+  mzmguTimeTicks  now;
+
+  mzmguSInfo    si;             
+  mzmguSStats   *ss;            
+
+  mzmguPInfo    pi;
+  mzmguPSInfo   *ps;            
+  mzmguPRInfo   *pr;            
+
+  
+
+  procstats = svcstats = FALSE;
+
+  xstr = mnxCreate((mndrp *)0, MNXDIR_DECODE, &inargs, &incnt, (dvoid *)0);
+  sts = mnxB4(xstr, &svcstats) && mnxB4(xstr, &procstats);
+  mnxDestroy(xstr, FALSE);
+
+  ret_stat = mzmgsGInfo( call, svcstats, procstats, &now, &si, &pi );
+  if( !sts )
+    ret_stat = mzmSvcGetArg;
+
+  
+  xstr = mnxCreate((mndrp *)0, MNXDIR_ENCODE, &outargs, &outcnt, (dvoid *)0);
+
+  if( (sts = mnxSB4( xstr, &ret_stat )) )
+    sts = mnxSB4( xstr, (sb4*)&now );
+
+  if( sts && svcstats ) do              
+  {
+    ss = &si.svcStats_mzmguSInfo;
+
+    
+    sts = mnxSB4( xstr, &si.svcType_mzmguSInfo );
+    if( !sts ) break;
+    sts = mnxSB4( xstr, (sb4*)&si.svcUpTime_mzmguSInfo );
+    if( !sts ) break;
+    sts = mnxSB4( xstr, (sb4*)&si.changedOperStatus_mzmguSInfo );
+    if( !sts ) break;
+
+    
+    sts = mnxB4( xstr,  &ss->OperStatus_mzmguSStats );
+    if( !sts ) break;
+    sts = mnxB4( xstr,  &ss->AdminStatus_mzmguSStats );
+    if( !sts ) break;
+    sts = mnxSB4( xstr, (sb4*)  &ss->ChangedAdminStatus_mzmguSStats );
+    if( !sts ) break;
+    sts = mnxB4( xstr,  &ss->InboundAssocs_mzmguSStats );
+    if( !sts ) break;
+    sts = mnxB4( xstr,  &ss->OutboundAssocs_mzmguSStats );
+    if( !sts ) break;
+    sts = mnxB4( xstr,  &ss->TotInboundAssocs_mzmguSStats );
+    if( !sts ) break;
+    sts = mnxB4( xstr,  &ss->TotOutboundAssocs_mzmguSStats );
+    if( !sts ) break;
+    sts = mnxSB4( xstr, (sb4*)  &ss->LastInbound_mzmguSStats );
+    if( !sts ) break;
+    sts = mnxSB4( xstr, (sb4*)  &ss->LastOutbound_mzmguSStats );
+    if( !sts ) break;
+    sts = mnxB4( xstr,  &ss->RejectedInboundAssocs_mzmguSStats );
+    if( !sts ) break;
+    sts = mnxB4( xstr,  &ss->FailedOutboundAssocs_mzmguSStats );
+  } while( FALSE );
+
+  if( sts && procstats ) do             
+  {
+    
+    ps = &pi.static_mzmguPInfo;
+    sts = mnxDynStr( xstr, &ps->procName_mzmguPSInfo );
+    if( !sts ) break;
+    sts = mnxDynStr( xstr, &ps->procHost_mzmguPSInfo );
+    if( !sts ) break;
+    sts = mnxDynStr( xstr, &ps->procAffinity_mzmguPSInfo );
+    if( !sts ) break;
+
+    
+    pr = &pi.run_mzmguPInfo;
+    sts = mnxDynStr( xstr, &pr->pid_mzmguPRInfo );
+    if( !sts ) break;
+    sts = mnxB4( xstr, &pr->operStatus_mzmguPRInfo );
+    if( !sts ) break;
+    sts = mnxB4( xstr, &pr->cpuCs_mzmguPRInfo );
+    if( !sts ) break;
+    sts = mnxB4( xstr, &pr->memKb_mzmguPRInfo );
+  } while( FALSE );
+
+  
+
+  DISCARD mnrReturnCall(call, outargs, outcnt, mnDiscard, (dvoid *)0);
+  mnxDestroy(xstr, TRUE);
+}
+
+
+
+
+
+
+STATICF void  mzmgsSetAdminState( mnrsc  *call, mnbv  *inargs, ub4   incnt )
+{
+  mnx       *xstr;
+  mnbv      *outargs;
+  ub4       outcnt;
+  boolean   sts;                
+  mzmgsContext  *ctx;
+  mnrs          *sh;
+  mzmgsSvc      *svc;           
+
+  ub4       newState;
+  sb4       ret_stat = 0;
+
+  
+
+  xstr = mnxCreate((mndrp *)0, MNXDIR_DECODE, &inargs, &incnt, (dvoid *)0);
+  sts = mnxB4(xstr, &newState);
+  mnxDestroy(xstr, FALSE);
+
+  if( !sts )
+    ret_stat = mzmSvcGetArg;
+
+  
+
+  ctx = (mzmgsContext *)mtcctxGet( MZMGSCTX, (ub4)0 );
+  sh = mnrGetHandle( call );
+  if( !(svc = mzmgsSLookup( ctx, sh )) )
+    ret_stat = mzmNoService;
+
+  
+  xstr = mnxCreate((mndrp *)0, MNXDIR_ENCODE, &outargs, &outcnt, (dvoid *)0);
+  sts = mnxSB4( xstr, &ret_stat );
+  DISCARD mnrReturnCall(call, outargs, outcnt, mnDiscard, (dvoid *)0);
+  mnxDestroy(xstr, TRUE);
+
+  
+  if( !ret_stat )
+  {
+    if( svc->adminFunc_mzmgsSvc )
+    {
+      (*svc->adminFunc_mzmgsSvc)( newState, svc->adminArg_mzmgsSvc );
+    }
+    else if( newState == mzmguStDown )
+    {
+      
+      mnTerm();
+      exit( 0 );
+    }
+  }
+}
+
+
+STATICF char *mzmgsAffinity(void)
+{
+  char *s;
+  const char *buf = "none";
+  if( (s = (char *)ysmGlbAlloc( strlen(buf)+ 1,"mzmgsAffinity" )) )
+    DISCARD strcpy( s, buf );
+  return( s );
+}
+
+

@@ -1,0 +1,1016 @@
+/* mx/src/mn/mna.c */
+
+
+/*
+ORACLE, Copyright (c) 1982, 1983, 1986, 1990 ORACLE Corporation
+ORACLE Utilities, Copyright (c) 1981, 1982, 1983, 1986, 1990, 1991 ORACLE Corp
+
+Restricted Rights
+This program is an unpublished work under the Copyright Act of the
+United States and is subject to the terms and conditions stated in
+your  license  agreement  with  ORACORP  including  retrictions on
+use, duplication, and disclosure.
+
+Certain uncopyrighted ideas and concepts are also contained herein.
+These are trade secrets of ORACORP and cannot be  used  except  in
+accordance with the written permission of ORACLE Corporation.
+*/
+
+
+
+#ifndef SYSI_ORACLE
+#include <sysi.h>
+#endif
+#ifndef MN_ORACLE
+#include <mn.h>
+#endif
+#ifndef MNI_ORACLE
+#include <mni.h>
+#endif
+
+
+typedef struct mnalcl  mnalcl;                            
+typedef struct mnadesc mnadesc;                
+typedef struct mnatdd  mnatdd;                        
+typedef struct mnad mnad;                                
+typedef struct mnadc mnadc;                
+
+#define MNAROWS  256                            
+
+struct mnad
+{
+  mna target;                                       
+  mnadc *calls;                                
+  mnad *next;                                            
+  mnad *prev;
+};
+
+struct mnadc
+{
+  mnsem *sem;
+  mnadc *next;
+};
+
+struct mnactx
+{
+  mnrte  *hosts[MNAROWS];                              
+  mnrte  *nets;                                               
+  mnalcl *locals;                            
+  mnaDeathH mortH;                           
+  dvoid *mortP;                       
+  mnp *dport;                                          
+  mna  dfrom;                            
+  ub1  dbuf[MNADPLEN];                                
+  mnad *targets[MNAROWS];
+};
+
+struct mnalcl
+{
+  mnalcl *next;                                             
+  mna     addr;                                             
+  mnp    *port;                                               
+  mnnio  *nio;                                                 
+};
+
+struct mnadesc
+{
+  mna   *addr;
+  mnbv   bv;
+  ub4    cnt;
+  ub1    buf[sizeof(sb4) + sizeof(mna)];
+  mnsem *sem;
+};
+
+struct mnatdd
+{
+  mna     addr;
+  mnnio  *nio;
+  mnalcl *scl;
+  mnsem  *sem;
+};
+
+STATICF void mnaDeathWatchComp(mnctx *ctx, mnad **hb, mnad *d, sb4 sts);
+STATICF void mnaDeathRecv(dvoid *usrp, sb4 val);
+
+
+void mnaInit(mnctx *ctx, mnnio **nios, ub4 nnio, mnnpa *gtwy)
+{
+  mnactx *actx;
+  ub4     i, rcnt, icnt;
+  mnnio  *gwnio;
+  mna     addr;
+  mnalcl *lcl;
+
+  
+  ctx->actx = actx = (mnactx *) mnmAlloc(ctx, MNM_MAINPOOL, sizeof(mnactx));
+  DISCARD memset(actx, 0, sizeof(mnactx));
+  gwnio = (mnnio *) 0;
+
+  DISCARD memset(&addr, 0, sizeof(mna));
+  addr.bits[5] = 1;
+
+  
+  for (i = rcnt = icnt = 0; i < nnio; i++)
+    {
+      
+      mnnNewNio(ctx, nios[i]);
+
+      
+      if (!gtwy)
+	mnnSetSubnet(nios[i], &addr);
+
+      
+      if (gtwy && !gwnio && (nios[i]->flags & MNNFLG_SEND) &&
+	  !memcmp(gtwy->family, nios[i]->pa.family, sizeof(gtwy->family)))
+	gwnio = nios[i];
+
+      if ((nios[i]->flags & MNNFLG_RECV) &&
+	  (nios[i]->recv || (nios[i]->flags & MNNFLG_INTR)))
+	{
+	  rcnt++;
+
+	  if (nios[i]->flags & MNNFLG_INTR)
+	    icnt++;
+	}
+    }
+
+  
+  if (icnt)
+    ctx->flags |= MNFLG_INTR;
+
+  
+  if (rcnt - icnt > 1)
+    {
+      mnPrint(MNLWARN, "NIO strobing enabled");
+      ctx->flags |= MNFLG_STROBE;
+    }
+
+  
+  for (i = 0; i < nnio && !ctx->rnio; i++)
+    if (nios[i]->flags & MNNFLG_RECV)
+      if (rcnt == icnt || !(nios[i]->flags & MNNFLG_INTR))
+	ctx->rnio = nios[i];
+
+  
+  if (!ctx->rnio)
+    mnPrint(MNLFATAL, "no NIO capable of receiving was found");
+  else if (!(ctx->rnio->flags & MNNFLG_INTR))
+    mnPrint(MNLINFO, "Media Net will use an NIO recv() call to block");
+  else
+    mnPrint(MNLINFO, "Media Net will use a pause() call to block");
+
+  
+  DISCARD mnTimer(MNARTEHB, mnaRouteReaper, (dvoid *) 0);
+
+  
+  if (!gtwy)
+    return;
+
+  
+  mnaClear(&addr);
+  DISCARD mnaInsertRoute(ctx, &addr, (ub4) 0, gwnio, gtwy,
+			 MNAFLG_PERM | MNAFLG_SELF);
+
+  
+  for (i = 0; i < nnio; i++)
+    if ((nios[i]->flags & MNNFLG_RECV) ||
+	((nios[i]->flags & MNNFLG_CIRC) && (nios[i]->flags & MNNFLG_SEND)))
+      {
+	mnaClear(&addr);
+	if (mnaRequest(ctx, &addr, (mnHandler) 0, (mnsem *) 0))
+	  mnPrint(MNLFATAL, "could not contact address server");
+
+	mnnSetSubnet(nios[i], &addr);
+
+	if ((nios[i]->flags & MNNFLG_CIRC) && (nios[i]->flags & MNNFLG_SEND))
+	  DISCARD mnaInsertRoute(ctx, &addr, (ub4) 0,
+				 nios[i], &nios[i]->pa, MNAFLG_PERM);
+
+	
+	lcl = (mnalcl *) mnmAlloc(ctx, MNM_MAINPOOL, sizeof(mnalcl));
+	mnaCopy(&lcl->addr, &addr);
+	lcl->port = (mnp *) 0;
+	lcl->nio = nios[i];
+
+	lcl->next = actx->locals;
+	actx->locals = lcl;
+      }
+
+  
+  DISCARD mnAddr(&addr,MNADEATHPORT);
+  actx->dport = mnOpen(MNPROTO_MESSAGE);
+  DISCARD mnBind(actx->dport,&addr);
+  DISCARD mnRecv(actx->dport,&actx->dfrom,actx->dbuf,MNADPLEN,(ub4)0,
+                 mnaDeathRecv,(dvoid *)actx);
+}
+
+
+void mnaTerm(mnctx *ctx)
+{
+  mnactx *actx;
+  mnnio  *scn;
+  mnalcl *scl;
+  mnrte  *scr;
+  mnad   *d,*nd;
+  mnadc  *c,*nc;
+  mna     asaddr;
+  ub4     i;
+
+  actx = ctx->actx;
+
+
+  
+  for(i = 0; i < MNAROWS; i++)
+    for(d = actx->targets[i]; d ; d = nd)
+    {
+      for(c = d->calls; c; c = nc)
+      {
+        mneSet(ctx, c->sem, MNERR_DISCONN, TRUE);
+        nc = c->next;
+        mnmFree(ctx, (dvoid *)c);
+      }
+      nd = d->next;
+      mnmFree(ctx, (dvoid *)d);
+    }
+
+  
+  for (scl = actx->locals; scl; scl = actx->locals)
+    {
+      DISCARD mnAddr(&asaddr, MNARSADDR);
+      if (!mnaEq(&scl->addr, &asaddr))
+	DISCARD mnoSend(ctx, MNOTYP_ADDRRELEASE, &asaddr, &scl->addr);
+
+      actx->locals = scl->next;
+      mnmFree(ctx, (dvoid *) scl);
+    }
+
+  
+  while (ctx->nios)
+    {
+      scn = ctx->nios;
+      ctx->nios = mnnNextNio(ctx->nios);
+
+      mnnFreeNio(ctx, scn);
+    }
+
+  
+  for (i = 0; i < MNAROWS; i++)
+    for (scr = actx->hosts[i]; scr; scr = actx->hosts[i])
+      {
+	actx->hosts[i] = scr->next;
+	mnmFree(ctx, (dvoid *) scr);
+      }
+
+  
+  for (scr = actx->nets; scr; scr = actx->nets)
+    {
+      actx->nets = scr->next;
+      mnmFree(ctx, (dvoid *) scr);
+    }
+
+  mnmFree(ctx, (dvoid *) actx);
+}
+
+
+void mnaTeardown(mnctx *ctx, mnnio *nio, mnHandler handler, dvoid *usrp)
+{
+  mnactx *actx;
+  boolean headend;
+  mnalcl *scl;
+  mna     addr, asaddr;
+  mnrte  *rte;
+  mnsem  *sem;
+  mnatdd *desc;
+  sb4     sts;
+
+  sem = mneMakeSem(ctx, handler, usrp);
+
+  actx = ctx->actx;
+  headend = ((nio->flags & MNNFLG_CIRC) && (nio->flags & MNNFLG_SEND));
+
+  
+  mnnSubnet(nio, &addr);
+  for (scl = actx->locals; scl && !mnaEq(&scl->addr, &addr); scl = scl->next) ;
+  if (!scl)
+    {
+      mneSet(ctx, sem, 0, TRUE);
+      return;
+    }
+
+  DISCARD mnAddr(&asaddr, MNARSADDR);
+  DISCARD mnoSend(ctx, MNOTYP_ADDRRELEASE, &asaddr, &addr);
+
+  
+  if (headend)
+    {
+      rte = mnaFindRoute(ctx, &addr);
+      if (rte && mnaEq(&addr, &rte->addr))
+	mnaDeleteRoute(ctx, rte);
+    }
+
+  
+  desc = (mnatdd *) mnmAlloc(ctx, MNM_MAINPOOL, sizeof(mnatdd));
+  mnaClear(&desc->addr);
+  desc->nio = nio;
+  desc->scl = scl;
+  desc->sem = sem;
+
+  DISCARD mnaRequest(ctx, &desc->addr, mnaReopen, (dvoid *) desc);
+
+  if (!handler && !usrp)
+    {
+      sts = mnSemWait(sem);
+      mnSemFree(sem);
+    }
+}
+
+void mnaReopen(dvoid *usrp, sb4 sts)
+{
+  mnctx  *ctx;
+  boolean headend;
+  mnatdd *desc;
+
+  ctx  = mnGlbCtx;
+  desc = (mnatdd *) usrp;
+
+  if (sts)
+    mnPrint(MNLFATAL, "could not contact address server");
+
+  mnnSetSubnet(desc->nio, &desc->addr);
+
+  
+  headend = ((desc->nio->flags & MNNFLG_CIRC) &&
+	     (desc->nio->flags & MNNFLG_SEND));
+  if (headend)
+    DISCARD mnaInsertRoute(ctx, &desc->addr, (ub4) 0, desc->nio,
+			   &desc->nio->pa, MNAFLG_PERM);
+
+  
+  mnaCopy(&desc->scl->addr, &desc->addr);
+
+  mneSet(ctx, desc->sem, (sb4) 0, TRUE);
+  mnmFree(ctx, (dvoid *) desc);
+}
+
+
+boolean mnaIsDest(mnctx *ctx, mna *nioaddr, mna *dst)
+{
+  mnactx *actx;
+  mnalcl *scl;
+  mna     claddr;
+
+  actx = ctx->actx;
+  mnaClear(&claddr);
+
+  
+  if (mnaWellKnown(dst))
+    {
+      for (scl = ctx->actx->locals; scl && !mnaEq(&scl->addr, dst);
+	   scl = scl->next) ;
+      return (scl != 0);
+    }
+  else if (mnaNetEq(nioaddr, &claddr))
+    return TRUE;
+  else
+    return mnaNetEq(nioaddr, dst);
+}
+
+
+sb4 mnaRequest(mnctx *ctx, mna *addr, mnHandler handler, dvoid *usrp)
+{
+  mnsem   *sem;
+  mnadesc *desc;
+  sb4      sts;
+
+  sem = mneMakeSem(ctx, handler, usrp);
+
+  sts = mnoSendAddrRequest(ctx, addr);
+  if (sts >= 0)
+    {
+      desc = (mnadesc *) mnmAlloc(ctx, MNM_MAINPOOL, sizeof(mnadesc));
+      desc->addr = addr;
+      desc->bv.len = sizeof(desc->buf);
+      desc->bv.buf = desc->buf;
+      desc->cnt = 0;
+      desc->sem = sem;
+      DISCARD mnoRecv(ctx, (mna *) 0, &desc->bv, (ub4) 1, 5000,
+		      mnaRequestHandle, (dvoid *) desc);
+    }
+  else
+    mneSet(ctx, sem, sts, TRUE);
+
+  if (!handler && !usrp)
+    {
+      sts = mnSemWait(sem);
+      mnSemFree(sem);
+    }
+  else
+    sts = 0;
+  return sts;
+}
+
+void mnaRequestHandle(dvoid *usrp, sb4 sts)
+{
+  mnctx   *ctx;
+  mnadesc *desc;
+
+  ctx = mnGlbCtx;
+
+  desc = (mnadesc *) usrp;
+  if (sts != MNOTYP_ADDRREPLY)
+    mnPrint(MNLWARN, "address request failure: sts=%ld, cnt=%d",
+	    sts, desc->cnt);
+  else
+    {
+      sts = smnNtoh4(*((sb4 *) desc->buf));
+      if (!sts)
+	mnaCopy(desc->addr, (mna *) (desc->buf + sizeof(sb4)));
+    }
+
+  if (sts == MNERR_TIMEOUT && desc->cnt < 3)
+    {
+      mnoSendAddrRequest(ctx, desc->addr);
+      desc->cnt++;
+      mnoRecv(ctx, (mna *) 0, &desc->bv, (ub4) 1, 5000,
+	      mnaRequestHandle, (dvoid *) desc);
+    }
+  else
+    {
+      mneSet(ctx, desc->sem, sts, TRUE);
+      mnmFree(ctx, (dvoid *) desc);
+    }
+}
+
+
+mnrte *mnaInsertRoute(mnctx *ctx, mna *addr, ub4 mask, mnnio *nio, mnnpa *pa,
+		      ub4 flags)
+{
+  mnactx *actx;
+  mnrte  *rte;
+  ub4     key, i;
+  mna     claddr;
+
+  actx = ctx->actx;
+
+  
+  if (!(flags & MNAFLG_SELF))
+    {
+      mnaClear(&claddr);
+      if (mnaEq(&claddr, addr))
+	{
+	  return mnaFindRoute(ctx, addr);
+	  
+	}
+    }
+
+  
+  rte = (mnrte *) mnmAlloc(ctx, MNM_MAINPOOL, sizeof(mnrte));
+
+  rte->prev = (mnrte *) 0;
+  mnaCopy(&rte->addr, addr);
+  rte->mask = mask;
+  rte->nio = nio;
+  CPSTRUCT(rte->pa, *pa);
+  rte->refcnt = 0;
+  rte->flags = flags;
+  rte->itime = smnClock();
+
+  
+  if (!mnaWellKnown(addr) && mnaIsNet(addr))
+    {
+      
+      if (actx->nets)
+	actx->nets->prev = rte;
+      rte->next = actx->nets;
+      actx->nets = rte;
+    }
+  else
+    {
+      
+      for (key = i = 0; i < 6; i++)
+	key += addr->bits[i];
+
+      key &= (MNAROWS - 1);
+
+      if (actx->hosts[key])
+	actx->hosts[key]->prev = rte;
+      rte->next = actx->hosts[key];
+      actx->hosts[key] = rte;
+    }
+
+  return rte;
+}
+
+
+mnrte *mnaFindRoute(mnctx *ctx, mna *dst)
+{
+  mnactx *actx;
+  mnrte  *scr;
+  ub4     key, i;
+
+  actx = ctx->actx;
+
+  
+  for (key = i = 0; i < 6; i++)
+    key += dst->bits[i];
+
+  key &= (MNAROWS - 1);
+
+  if (mnaWellKnown(dst))
+    for (scr = actx->hosts[key];
+	 scr && (!mnaEq(dst, &scr->addr) || (scr->flags & MNAFLG_DELETE));
+	 scr = scr->next) ;
+  else
+    for (scr = actx->hosts[key];
+	 scr && (!mnaNetEq(dst, &scr->addr) || (scr->flags & MNAFLG_DELETE));
+	 scr = scr->next) ;
+
+  
+  if (!scr)
+    for (scr = actx->nets; scr; scr = scr->next)
+      if ((sysxGetUaB4(dst->bits) & scr->mask) == sysxGetUaB4(scr->addr.bits))
+	break;
+
+  return scr;
+}
+
+
+void mnaDeleteRoute(mnctx *ctx, mnrte *rte)
+{
+  mnactx *actx;
+  ub4     key, i;
+  char    tmpbuf[32];
+
+  actx = ctx->actx;
+
+  
+  if(actx->mortH)
+    (*actx->mortH)(actx->mortP, &rte->addr, rte);
+
+  
+  if (rte->refcnt)
+    {
+      rte->flags |= MNAFLG_DELETE;
+      return;
+    }
+
+  mnAtos(&rte->addr, tmpbuf, 32);
+  mnPrint(MNLWARN, "deleting route for address %s", tmpbuf);
+
+  if (rte->next)
+    rte->next->prev = rte->prev;
+
+  if (rte->prev)
+    rte->prev->next = rte->next;
+  else
+    {
+      
+      if (!mnaWellKnown(&rte->addr) && mnaIsNet(&rte->addr))
+	actx->nets = rte->next;
+      else
+	{
+	  for (key = i = 0; i < 6; i++)
+	    key += rte->addr.bits[i];
+
+	  key &= (MNAROWS - 1);
+
+	  actx->hosts[key] = rte->next;
+	}
+    }
+
+  mnmFree(ctx, (dvoid *) rte);
+}
+
+
+
+void mnaRouteReaper(dvoid *ptr, sb4 val)
+{
+  mnctx  *ctx;
+  mnactx *actx;
+  ub4     i;
+  sb4     current;
+  mnrte  *prev, *scr, *tmp;
+  mna     asaddr, dwaddr;
+  mnalcl *scl;
+  char    out[MNAMAXLEN];
+
+  ctx = mnGlbCtx;
+  current = (sb4) smnClock();
+  mnPrint(MNLINFO, "reaping routes");
+
+  
+  actx = ctx->actx;
+  for (i = 0; i < MNAROWS; i++)
+    for (prev = (mnrte *) 0, scr = actx->hosts[i]; scr; )
+      {
+	
+	if (!scr->refcnt && !(scr->flags & ~MNAFLG_DELETE) &&
+	    smnModSub(current, scr->itime) > MNARTELIFE)
+	  {
+	    mnAtos(&scr->addr, out, MNAMAXLEN);          
+	    mnPrint(MNLWARN, "reaping %s: current=%d, itime=%d",
+		out, current, scr->itime);
+
+
+	    if (scr->next)
+	      scr->next->prev = scr->prev;
+
+	    if (prev)
+	      prev->next = scr->next;
+	    else
+	      actx->hosts[i] = scr->next;
+
+	    tmp = scr;
+	    scr = scr->next;
+
+            
+            if(actx->mortH)
+              (*actx->mortH)(actx->mortP, &tmp->addr, tmp);
+
+	    mnmFree(ctx, (dvoid *) tmp);
+	  }
+	else
+	  prev = scr, scr = scr->next;
+      }
+
+  
+  DISCARD mnAddr(&asaddr, MNARSADDR);
+  DISCARD mnAddr(&dwaddr, MNADEATHADDR);
+  for (scl = actx->locals; scl; scl = scl->next)
+    if (!mnaEq(&scl->addr, &asaddr) && !mnaEq(&scl->addr, &dwaddr))
+      DISCARD mnoSend(ctx, MNOTYP_ADDRHB, &asaddr, &scl->addr);
+
+  
+  DISCARD mnTimer(MNARTEHB, mnaRouteReaper, (dvoid *) 0);
+}
+
+
+sb4 mnaBind(mnctx *ctx, mna *addr, mnp *port, boolean req)
+{
+  mnactx *actx;
+  sb4     sts;
+  mnalcl *lcl;
+
+  actx = ctx->actx;
+
+  if (req)
+    if (sts = mnaRequest(ctx, addr, (mnHandler) 0, (dvoid *) 0))
+      return sts;
+
+  lcl = (mnalcl *) mnmAlloc(ctx, MNM_MAINPOOL, sizeof(mnalcl));
+  mnaCopy(&lcl->addr, addr);
+  lcl->port = port;
+  lcl->nio = (mnnio *) 0;
+
+  lcl->next = actx->locals;
+  actx->locals = lcl;
+
+  return 0;
+}
+
+
+mnp *mnaFind(mnctx *ctx, mna *addr)
+{
+  mnactx *actx;
+  mnalcl *scl;
+
+  actx = ctx->actx;
+
+  for (scl = actx->locals; scl && !mnaEq(&scl->addr, addr); scl = scl->next) ;
+  return (scl ? scl->port : (mnp *) 0);
+}
+
+
+void mnaUnbind(mnctx *ctx, mnp *port)
+{
+  mnactx *actx;
+  mnalcl *prl, *scl;
+  mna     asaddr;
+
+  actx = ctx->actx;
+
+  for (prl = (mnalcl *) 0, scl = actx->locals;
+       scl && scl->port != port;
+       prl = scl, scl = scl->next) ;
+
+  if (scl)
+    {
+      if (prl)
+	prl->next = scl->next;
+      else
+	actx->locals = scl->next;
+
+      DISCARD mnAddr(&asaddr, MNARSADDR);
+      if (!mnaEq(&scl->addr, &asaddr))
+	DISCARD mnoSend(ctx, MNOTYP_ADDRRELEASE, &asaddr, &scl->addr);
+      mnmFree(ctx, (dvoid *) scl);
+    }
+}
+
+
+void mnaSetDeath(mnctx *ctx, mnaDeathH mortH, dvoid *mortP)
+{
+  mnactx *actx = ctx->actx;
+
+  actx->mortH = mortH;
+  actx->mortP = mortP;
+}
+
+
+STATICF void mnaDeathRecv(dvoid *usrp, sb4 val)
+{
+  mnctx *ctx;
+  mnactx *actx = (mnactx *) usrp;
+  ub1 *buf = actx->dbuf;
+  ub1 type;
+  mna target;
+  ub4 i,key;
+  mnad *d;
+  sb4 sts;
+
+  ctx = mnGlbCtx;
+
+  if(val == MNADPLEN)
+  {
+    type = *buf;
+    mnaCopy(&target,(mna *)(buf+1));
+  
+    switch(type)
+    {
+    case MNADT_DEAD:
+      sts = 0;
+      break;
+    case MNADT_BADWATCH:
+      sts = MNERR_BADADDR;
+      break;
+    default:
+      sts = -1;
+      break;
+    }
+
+    if(sts != -1)
+    {
+      for (key = i = 0; i < 6; i++)
+        key += target.bits[i];
+      key &= (MNAROWS - 1);
+
+      for(d = actx->targets[key]; d; d = d->next)
+        if(mnaEq(&d->target,&target)) break;
+      if(d)                                        
+        mnaDeathWatchComp(ctx, actx->targets+key,d,sts);
+    }
+  }
+
+  
+  DISCARD mnRecv(actx->dport,&actx->dfrom,actx->dbuf,MNADPLEN,(ub4)0,
+                 mnaDeathRecv,(dvoid *)actx);
+}
+
+
+STATICF void mnaDeathWatchComp(mnctx *ctx, mnad **hb, mnad *d, sb4 sts)
+{
+  mnadc *c, *nc;
+
+  
+  if(d->next)
+    d->next->prev = d->prev;
+  if(d->prev)
+    d->prev->next = d->next;
+  else
+    *hb = d->next;
+
+  for(c = d->calls; c; c = nc)
+  { 
+    mneSet(ctx, c->sem, sts, TRUE);
+    nc = c->next;
+    mnmFree(ctx, (dvoid *)c);
+  }
+  mnmFree(ctx,(dvoid *)d);
+}
+
+sb4 mnDeathWatch(mna *addr, mnHandler handler, dvoid *usrp)
+{
+  mnctx *ctx;
+  mnactx *actx;
+  mna target, deathw;
+  mnsem *sem = (mnsem *) 0;
+  sb4 sts = 0;
+  ub1 msg[MNADPLEN];
+  ub4 key, i;
+  mnad *d, *fnd;
+  mnadc *c;
+
+  ctx = mnGlbCtx;
+  actx = ctx->actx;
+
+  sem = mneMakeSem(ctx, handler, usrp);
+
+  mnaNetCopy(&target,addr);                   
+
+  
+  for (key = i = 0; i < 6; i++)
+    key += target.bits[i];
+  key &= (MNAROWS - 1);
+
+  for(d = actx->targets[key]; d; d = d->next)
+    if(mnaEq(&d->target,&target)) break;
+
+  fnd = d;
+  if(!d)
+  {
+    d = (mnad *) mnmAlloc(ctx, MNM_MAINPOOL, sizeof(mnad));
+    CLRSTRUCT(*d);
+    mnaCopy(&d->target,&target);
+    d->next = actx->targets[key];
+    actx->targets[key] = d;
+    if(d->next) d->next->prev = d;
+  }
+
+  
+  c = (mnadc *) mnmAlloc(ctx, MNM_MAINPOOL, sizeof(mnadc));
+  c->sem = sem;
+  c->next = d->calls;
+  d->calls = c;
+
+  
+  if(!fnd)
+  {
+    mnAddr(&deathw,MNADEATHADDR);
+    *msg = MNADT_WATCH;
+    mnaCopy((mna *)(msg+1),&target);
+    sts = mnSend(actx->dport,&deathw,msg,MNADPLEN,(mnHandler)0,(dvoid *)0);
+    if(sts < 0)
+    {
+      fnd = d;
+      for(d = actx->targets[key]; d && d != fnd; d = d->next);
+      if(d)                                  
+        mnaDeathWatchComp(ctx,actx->targets+key,d,sts);
+    }
+  }
+
+  if(!handler && !usrp)
+  {
+    sts = mnSemWait(sem);
+    mnSemFree(sem);
+  }
+  else
+    sts = 0;
+
+  return sts;
+}
+
+sb4 mnDeathIgnore(mna *addr, dvoid *usrp)
+{
+  mnctx *ctx;
+  mnactx *actx;
+  mna target;
+  ub4 key, i;
+  mnad *d;
+  mnadc *c, **pcp;
+  ub1 msg[MNADPLEN];
+  mna deathw;
+  sb4 sts;
+
+  ctx = mnGlbCtx;
+  actx = ctx->actx;
+
+  
+  mnaNetCopy(&target,addr);
+
+  
+  for (key = i = 0; i < 6; i++)
+    key += target.bits[i];
+  key &= (MNAROWS - 1);
+
+  for(d = actx->targets[key]; d; d = d->next)
+    if(mnaEq(&d->target,&target)) break;
+
+  if(d)
+  {
+    for(c = d->calls, pcp = &d->calls; c; pcp = &c->next, c = c->next)
+      if(c->sem == usrp || mnSemGetUsrp(c->sem) == usrp) break;
+    if(c)
+    {
+      *pcp = c->next;
+      mneSet(ctx, c->sem, MNSTS_ABORTED, TRUE);
+      mnmFree(ctx,(dvoid *)c);
+    }
+  }
+  if(!d || !c)
+    sts = MNERR_NOTFOUND;
+  else
+  {
+    if(!d->calls)
+    {
+      if(d->next)
+        d->next->prev = d->prev;
+      if(d->prev)
+        d->prev->next = d->next;
+      else
+        actx->targets[key] = d->next;
+      mnmFree(ctx,(dvoid *)d);
+
+      
+      mnAddr(&deathw,MNADEATHADDR);
+      *msg = MNADT_RMWATCH;
+      mnaCopy((mna *)(msg+1),&target);
+      DISCARD mnSend(actx->dport,&deathw,msg,MNADPLEN,mnDiscard,(dvoid *)0);
+    }
+    else
+      DISCARD mnIdle();
+
+    sts = 0;
+  }
+
+  return sts;
+}
+
+
+STATICF ub4 mnaStrtoul(const char *in, const char **out)
+{
+  ub4 base, v, d;
+
+  
+  if (*in != '0')
+    base = 10;
+  else if (in[1] == 'x' || in[1] == 'X')
+    {
+      base = 16;
+      in += 2;
+    }
+  else
+    base = 8;
+
+  v = 0;
+  while (*in)
+    {
+      switch (*in)
+	{
+	case '0': d = 0; break; case '1': d = 1; break; case '2': d = 2; break;
+	case '3': d = 3; break; case '4': d = 4; break; case '5': d = 5; break;
+	case '6': d = 6; break; case '7': d = 7; break; case '8': d = 8; break;
+	case '9': d = 9; break;
+	case 'a': case 'A': d = 10; break; case 'b': case 'B': d = 11; break;
+	case 'c': case 'C': d = 12; break; case 'd': case 'D': d = 13; break;
+	case 'e': case 'E': d = 14; break; case 'f': case 'F': d = 15; break;
+	default: d = 17; break;
+	}
+
+      if (d >= base)
+	break;
+
+      v = (v * base) + d;
+      in++;
+    }
+
+  *out = in;
+  return v;
+}
+
+
+sb4 mnAddr(mna *addr, const char *in)
+{
+  ub4 bytes[8], i;
+
+  i = 0;
+  do
+    {
+      if (i && *in == '.')
+	in++;
+
+      
+      bytes[i++] = mnaStrtoul(in, &in);
+    } while (i < 8 && *in == '.');
+
+  if (*in || (i != 2 && i != 4))
+    return MNERR_BADPARAM;
+
+  if (i == 2)
+    for (i = 0; i < 2; i++)
+      sysxPutUaB4(&addr->bits[i * 4], bytes[i]);
+  else
+    for (i = 0; i < 4; i++)
+      sysxPutUaB2(&addr->bits[i * 2], bytes[i]);
+
+  return 0;
+}
+
+
+void mnAtos(mna *addr, char *out, size_t len)
+{
+  char buf[MNAMAXLEN];                         
+
+  DISCARD sprintf(buf, "%d.%d.%d.%d",
+		  sysxGetUaB2(&addr->bits[0]),
+		  sysxGetUaB2(&addr->bits[2]),
+		  sysxGetUaB2(&addr->bits[4]),
+		  sysxGetUaB2(&addr->bits[6]));
+
+  DISCARD memcpy(out, buf, min(strlen(buf) + 1, len));
+}
+
+void mnaSetPort(mna *addr, ub2 prtno)
+{
+  mnaSetPortNum(addr, prtno);
+}
+

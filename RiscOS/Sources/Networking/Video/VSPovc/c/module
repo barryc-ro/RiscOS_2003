@@ -1,0 +1,471 @@
+/*
+ * module.c
+ *
+ * RISC OS environment dependencies
+ */
+#include "types.h"
+#include "stdio.h"
+#include "vsp.h"
+#include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <netinet/in.h>
+#include <net/if.h>
+#include <kernel.h>
+#include <swis.h>
+#include <setjmp.h>
+#include "misc.h"
+
+extern u_long inet_addr();
+extern _kernel_oserror *vsp_error(), *calleverytick();
+
+struct {
+    int  e_nbr;
+    char e_string[64];
+} ebuf = { 0 };
+
+struct eblock {
+    int err_nbr;
+    char *err_string;
+};
+
+struct eblock error_blocks[N_ERRORS] = {
+    VSP_E_WRONGCTRL,   "Invalid play control value",
+    VSP_E_UNKSERVER,   "Video server not known",
+    VSP_E_INVHANDLE,   "Invalid stream handle",
+    VSP_E_NOHANDLE,    "No stream handle available",
+    VSP_E_NOMEMORY,    "No memory",
+};
+
+#define N_OVS_ERRORS 9
+
+struct eblock ovs_error_blocks[N_OVS_ERRORS] = {
+    1,   "Movie not found",
+    2,   "Session allocation error",
+    3,   "Insufficient network resources. Please try again later",
+    4,   "Factory error",
+    5,   "Prepare error",
+    6,   "Play error",
+    7,   "There has been a fatal error. Please reboot.",
+    8,   "Invalid channel selection",
+    999, "Can't contact video server",
+};
+
+extern int tick_entry();
+extern _kernel_oserror *ovs_error(int); /* fixed prototype */
+
+struct swient {
+    int (*swi_call)();      /* swi handler */
+};
+
+#define MAXSWI 8
+
+extern int SetServer(_kernel_swi_regs *r);
+extern int OpenStream(_kernel_swi_regs *r);
+extern int CloseStream(_kernel_swi_regs *r);
+extern int CheckEndofStream(_kernel_swi_regs *r);
+extern int SetSpeed(_kernel_swi_regs *r);
+extern int SetPosition(_kernel_swi_regs *r);
+extern int ReadNPT(_kernel_swi_regs *r);
+
+struct swient vsp_ent[MAXSWI] = {
+    SetServer,
+    OpenStream,
+    CloseStream,
+    CheckEndofStream,
+    SetSpeed,
+    SetPosition,
+    ReadNPT,
+    0,
+};
+
+void *module_wsp = 0;
+int mpeg_handle;
+int endofstream = 0;
+int endofstream_timer = 0;
+int endofstream_timeout = 0;
+int is_atm_mpeg = 0;
+int save_optype = 0;
+int udpport = 0;
+int boottime = 0;
+int skipcnt = 0;
+char destadr[128];
+char gw_phy_adr[64];
+char dflt_gw_phy_adr[64];
+char mpeg_vs_pvc[16];
+int ovs_vsscan_rate;
+int ovs_slomo_rate;
+
+extern int mn_started;
+extern int vsp_final();
+extern char *inet_ntoa();
+extern void Fire_Up_MediaNet(void);
+extern void init_yoSysExMap(void);
+extern void init_yoCorbaExTbl(void);
+
+int mnidle_timer = 0;
+jmp_buf ljenv;
+int currentop = 0;
+int watchdog_timer = 0;
+int fatal_err = 0;
+
+int init_type = 0;
+int reached = 0;
+int done_pvc = 0;
+int done_callback = 0;
+
+void set_watchdog_timer(void)
+{
+    watchdog_timer = WATCHDOG_TIMEOUT;
+}
+
+void clr_watchdog_timer(void)
+{
+    watchdog_timer = 0;
+}
+
+_kernel_oserror *vsp_init(char *cmd_tail, int pbase, void *pw)
+{
+    char buf[128];
+
+    module_wsp = pw;
+    if (read_sysvar("MPEG$EOSTimeout", buf, sizeof(buf)) != 0)
+        endofstream_timeout = atoi(buf);
+    if (read_sysvar("MPEG$DTType", buf, sizeof(buf)) == 0)
+        return ((_kernel_oserror *)0);
+    if (caseless_strcmp(buf, "ATM_AAL5") == 0)
+        is_atm_mpeg = 1;
+    if (read_sysvar("MPEG$UDPPort", buf, sizeof(buf)) != 0)
+        udpport = atoi(buf);
+    if (read_sysvar("MPEG$ATMpvc", buf, sizeof(buf)) != 0)
+        strcpy(mpeg_vs_pvc, buf);
+    if (read_sysvar("OMN_ADDR", dflt_gw_phy_adr, sizeof(dflt_gw_phy_adr)) == 0)
+        return ((_kernel_oserror *)0);
+    if (read_sysvar("OVS$ScanRate", buf, sizeof(buf)) != 0)
+        ovs_vsscan_rate = atoi(buf);
+    else
+        ovs_vsscan_rate = OVS_VSSCAN_RATE;
+    if (read_sysvar("OVS$SloMoRate", buf, sizeof(buf)) != 0)
+        ovs_slomo_rate = atoi(buf);
+    else
+        ovs_slomo_rate = OVS_SLOWMO_RATE;
+    boottime = time(0);
+    destadr[0] = 0;
+    (void) read_destadr();
+    (void) enable_tick_handler();
+    init_yoSysExMap();
+    init_yoCorbaExTbl();
+    init_yoSysExMap();
+    init_yoCorbaExTbl();
+    atexit(vsp_final);
+    return ((_kernel_oserror *)0);
+}
+
+int read_my_ip_address(char *adr)
+{
+    char buf[512];
+    struct ifconf ifc;
+    struct ifreq ifreq, *ifr;
+    struct sockaddr_in *sin;
+    int s, n;
+
+    if ((s = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
+        return (0);
+    ifc.ifc_len = sizeof (buf);
+    ifc.ifc_buf = buf;
+    if (socketioctl(s, SIOCGIFCONF, (char *)&ifc) < 0) {
+        socketclose(s);
+        return (0);
+    }
+    ifr = ifc.ifc_req;
+    for (n = ifc.ifc_len / sizeof (struct ifreq); n > 0; n--, ifr++) {
+        ifreq = *ifr;
+        if (socketioctl(s, SIOCGIFFLAGS, (char *)&ifreq) < 0 || ifreq.ifr_flags & IFF_LOOPBACK)
+            continue;
+        if ((ifreq.ifr_flags & (IFF_BROADCAST|IFF_UP)) != (IFF_BROADCAST|IFF_UP))
+            continue;
+        if (socketioctl(s, SIOCGIFADDR, (char *)&ifreq) < 0)
+            continue;
+        sin = (struct sockaddr_in *)&ifreq.ifr_addr;
+        strcpy(adr, inet_ntoa(sin->sin_addr.s_addr));
+        break;
+    }
+    socketclose(s);
+    return (1);
+}
+
+int tick_handler(_kernel_swi_regs *r)
+{
+    if (!mn_started)
+        return (1);
+    if (watchdog_timer && --watchdog_timer == 0) {
+       mn_started = 0;
+       currentop = 999;
+       return (1);
+    }
+    if (mnidle_timer && --mnidle_timer == 0) {
+        /* post callback to do mnIdle() */
+        setcallback();
+    }
+    if (endofstream_timer > 0 && --endofstream_timer == 0)
+        endofstream = 1;
+    else
+        local_npt();
+    return (1);
+}
+
+int enable_tick_handler(void)
+{
+  _kernel_swi_regs r;
+
+  r.r[0] = 100;
+  r.r[1] = (int)tick_entry;
+  r.r[2] = (int)module_wsp;
+  return (_kernel_swi(XOS_Bit | OS_CallEvery, &r, &r) != 0 ? -1 : 0);
+}
+
+int disable_tick_handler(void)
+{
+  _kernel_swi_regs r;
+
+  r.r[0] = (int)tick_entry;
+  r.r[1] = (int)module_wsp;
+  return (_kernel_swi(XOS_Bit | OS_RemoveTickerEvent, &r, &r) != 0 ? -1 : 0);
+}
+
+int vsp_final(void)
+{
+   (void) disable_tick_handler();
+   smnudpClose(0);
+   return (0);
+}
+
+_kernel_oserror *ovs_error(int err)
+{
+    int i;
+
+    if (!err)
+        return ((_kernel_oserror *)0);
+    for (i = 0; i < N_OVS_ERRORS; i++) {
+        if (ovs_error_blocks[i].err_nbr == err) {
+            ebuf.e_nbr = err;
+            sprintf(ebuf.e_string, "%s\n", ovs_error_blocks[i].err_string);
+            return ((_kernel_oserror *)&ebuf);
+        }
+    }
+    ebuf.e_nbr = err;
+    sprintf(ebuf.e_string, "Unspecified Error %d\n", err);
+    return ((_kernel_oserror *)&ebuf);
+}
+
+_kernel_oserror *
+vsp_swi_handler(int swinum, _kernel_swi_regs *r, void *pw)
+{
+    int optype;
+    _kernel_oserror *err = 0;
+     struct swient *callp = &vsp_ent[swinum];
+
+    if ((optype = setjmp(ljenv)) != 0)
+    {
+        clr_watchdog_timer();
+        save_optype = optype;
+
+        if (optype == 999)
+        {
+            smnudpClose(0);
+        }
+        else
+        {
+            (void) ovs_closestream();
+        }
+
+        return (ovs_error(optype));
+    }
+
+    set_watchdog_timer();
+    err = (_kernel_oserror *)(*(callp->swi_call))(r);
+    clr_watchdog_timer();
+    return (err);
+}
+
+/*ARGSUSED*/
+_kernel_oserror *
+vsp_cli_handler(arg_string, arg_count, cmd_no, pw)
+char *arg_string;
+int arg_count, cmd_no;
+void *pw;
+{
+    return ((_kernel_oserror *)0);
+}
+
+void ovs_initstream(int handle, int skipcnt)
+{
+    _kernel_swi_regs r;
+
+    if (is_atm_mpeg) {
+        char video_host[6];
+        int i;
+
+        video_host[0] = 0; video_host[1] = 0;
+        for (i = 2; i < 6; i++)
+            video_host[i] = 1;
+        r.r[0] = 0;
+        r.r[1] = (int)video_host;
+        r.r[2] = MPEG_PORT_AAL5;
+        r.r[3] = handle;
+        r.r[4] = 0;
+        r.r[5] = 0;
+        (void) _kernel_swi(XOS_Bit | StreamInitSWI_ATM, &r, &r);
+        init_type = 1;
+    }
+    else {
+        r.r[0] = 2;
+        r.r[1] = 0;
+        r.r[2] = 0;
+        r.r[3] = handle;
+        r.r[4] = skipcnt;
+        (void) _kernel_swi(XOS_Bit | StreamInitSWI, &r, &r);
+        init_type = 2;
+    }
+}
+
+_kernel_oserror *vsp_error(int err)
+{
+    int i;
+
+    if (!err)
+        return ((_kernel_oserror *)0);
+    for (i = 0; i < N_ERRORS; i++) {
+        if (error_blocks[i].err_nbr == err) {
+            ebuf.e_nbr = err;
+            strcpy(ebuf.e_string, error_blocks[i].err_string);
+            return ((_kernel_oserror *)&ebuf);
+        }
+    }
+    ebuf.e_nbr = err;
+    sprintf(ebuf.e_string, "Unspecified error %d\n", err);
+    return ((_kernel_oserror *)&ebuf);
+}
+
+
+#define MPEGControl_Stats           0x492c9
+
+int tags[2];
+int stats[3];
+
+int mpeg_streamcount (int handle)
+{
+    _kernel_swi_regs r;
+    _kernel_oserror *e;
+
+    tags[0] = 0;  /* tag value for amount received by ctrl module */
+    tags[1] = -1; /* terminator */
+
+    stats[2] = -1;  /* default value */
+
+    r.r[0] = 0;
+    r.r[1] = handle;
+    r.r[2] = (int)tags;
+    r.r[3] = (int)stats;
+    r.r[4] = 12;
+    e = _kernel_swi(XOS_Bit | MPEGControl_Stats, &r, &r);
+    return (stats[2]);
+}
+
+void do_cli(char *str)
+{
+    _kernel_swi_regs r;
+
+    r.r[0] = (int)str;
+    (void) _kernel_swi(XOS_Bit | OS_CLI, &r, &r);
+}
+
+ovs_initmpegpvc()
+{
+    char buf[48];
+
+    if (is_atm_mpeg) {
+        done_pvc = 1;
+        sprintf(buf, "atm25pvc 1.1.1.1 32 %s", mpeg_vs_pvc);
+        do_cli(buf);
+    }
+}
+
+int read_sysvar(var, buf, buflen)
+char *var, *buf;
+int buflen;
+{
+    _kernel_swi_regs r;
+    _kernel_oserror *e;
+
+    r.r[0] = (int)var;
+    r.r[1] = (int)buf;
+    r.r[2] = buflen;
+    r.r[3] = 0;
+    r.r[4] = 0;
+    e = _kernel_swi(XOS_Bit | OS_ReadVarVal, &r, &r);
+    if (e || r.r[2] == 0)
+        return (0);
+    buf[r.r[2]] = 0;
+    return (1);
+}
+
+extern int callb_entry();
+volatile int callbackflag = 0;
+
+setcallback()
+{
+    if (callbackflag == 0) {
+        callbackflag = 1;
+        if (callback(callb_entry) != 0)
+            callbackflag = 0;
+    }
+}
+
+int callback(func)
+void (* func)();
+{
+    _kernel_swi_regs r;
+
+    r.r[0] = (int)func;
+    r.r[1] = (int)module_wsp;
+    return (_kernel_swi(XOS_Bit | OS_AddCallBack, &r, &r) != 0 ? -1 : 0);
+}
+
+int callb_handler(rr)
+int *rr;
+{
+    if (callbackflag == 0)
+        return (1);
+    mnIdle();
+    mnidle_timer = MNIDLE_TIMEOUT;
+    callbackflag = 0;
+    return (1);
+}
+
+int read_destadr(void)
+{
+    FILE *fp;
+    int i;
+    char line[256], adr[64], did[128], myadr[64];
+
+    read_my_ip_address(myadr);
+    if ((fp = fopen(DESTADRSFILE, "r")) == NULL) {
+        return (0);
+    }
+    while(fgets(line, 100, fp) != NULL) {
+        if (line[0] == '|')
+            continue;
+        i = sscanf(line, "%s %s", adr, did);
+        if (i == 2 && strcmp(adr, myadr) == 0) {
+            strcpy(destadr, did);
+            break;
+        }
+    }
+    fclose(fp);
+    return (1);
+}
+
+void ovcabort(void)
+{
+    longjmp(ljenv, currentop);
+}

@@ -1,0 +1,642 @@
+/* mx/src/mn/mnn.c */
+
+
+/*
+ORACLE, Copyright (c) 1982, 1983, 1986, 1990 ORACLE Corporation
+ORACLE Utilities, Copyright (c) 1981, 1982, 1983, 1986, 1990, 1991 ORACLE Corp
+
+Restricted Rights
+This program is an unpublished work under the Copyright Act of the
+United States and is subject to the terms and conditions stated in
+your  license  agreement  with  ORACORP  including  retrictions on
+use, duplication, and disclosure.
+
+Certain uncopyrighted ideas and concepts are also contained herein.
+These are trade secrets of ORACORP and cannot be  used  except  in
+accordance with the written permission of ORACLE Corporation.
+*/
+
+
+
+#ifndef SYSI_ORACLE
+#include <sysi.h>
+#endif
+#ifndef MN_ORACLE
+#include <mn.h>
+#endif
+#ifndef MNI_ORACLE
+#include <mni.h>
+#endif
+
+
+typedef struct mnnctx mnnctx;
+
+struct mnnctx
+{
+  mnnio *next;                                          
+  mna    subnet;                                              
+  mnq    inp;                                   
+  mnq    out;                                   
+  ub1   *buf;                          
+  mnnhdr phdr;                    
+  ysle  *le;                                      
+};
+
+
+void mnnNewNio(mnctx *ctx, mnnio *nio)
+{
+  mnnctx *nctx;
+
+  if (nio->pktmax < MNNPKTMIN)
+    mnPrint(MNLFATAL, "minimum packet size (>=96) %ld", nio->pktmax);
+
+  nctx = (mnnctx *) mnmAlloc(ctx, MNM_MAINPOOL, sizeof(mnnctx));
+
+  mnaClear(&nctx->subnet);
+  mnqInit(&nctx->inp);
+  mnqInit(&nctx->out);
+
+  if (nio->recv)
+    nctx->buf = (ub1 *) mnmAlloc(ctx, MNM_RECVPOOL, nio->pktmax);
+
+  nio->priv = (dvoid *) nctx;
+
+  
+  nctx->next = ctx->nios;
+  ctx->nios = nio;
+
+  if (nio->recv || (nio->flags & MNNFLG_RECV))
+    nctx->le = ysLstEnq(ctx->rcvnios, (dvoid *) nio);
+  else
+    nctx->le = (ysle *) 0;
+}
+
+
+void mnnFreeNio(mnctx *ctx, mnnio *nio)
+{
+  mnnctx *nctx;
+  mnnpkt *pkt;
+
+  nctx = (mnnctx *) nio->priv;
+
+  if (nio->recv)
+    mnmFree(ctx, (dvoid *) nctx->buf);
+
+  while (pkt = (mnnpkt *) mnqDeq(&nctx->inp))
+    if (!(pkt->flags & MNNFLG_TL))
+      mnmFree(ctx, (dvoid *) pkt);
+
+  while (pkt = (mnnpkt *) mnqDeq(&nctx->out))
+    if (!(pkt->flags & MNNFLG_TL))
+      mnmFree(ctx, (dvoid *) pkt);
+
+  if (nio->close)
+    (*nio->close)(nio);
+
+  if (nctx->le)
+    DISCARD ysLstRem(ctx->rcvnios, (dvoid *) nctx->le);
+  mnmFree(ctx, (dvoid *) nctx);
+}
+
+
+mnnio *mnnFindNio(mnctx *ctx, char *family)
+{
+  mnnio *scn;
+
+  for (scn = ctx->nios;
+       scn && memcmp(family, scn->pa.family, sizeof(scn->pa.family));
+       scn = mnnNextNio(scn)) ;
+  return scn;
+}
+
+
+void mnnScanNio(mnctx *ctx)
+{
+  mnnio *scn;
+  ysle  *le;
+
+  for (le = ysLstHead(ctx->rcvnios); le; le = ysLstNext(le))
+    {
+      scn = (mnnio *) ysLstVal(le);
+      if (scn->recv)
+	while (mnnRecvPkt(ctx, scn, TRUE, (ub4) 0) >= 0) ;
+
+      if (scn->flags & MNNFLG_RECV)
+	mnnProcPkt(ctx, scn);
+    }
+}
+
+
+sb4 mnnRecvPkt( mnctx *ctx, mnnio *nio, boolean poll, ub4 timeout)
+{
+  mnnctx *nctx;
+  mnnpa   pa;
+  sb4     cnt;
+
+  nctx = (mnnctx *) nio->priv;
+  cnt = (*nio->recv)(nio, &pa, nctx->buf, nio->pktmax, poll, timeout);
+
+  if (cnt > 0)
+    mnnPushBuf(nio, &pa, nctx->buf, (size_t) cnt);
+
+  return cnt;
+}
+
+
+void mnnProcPkt(mnctx *ctx, mnnio *nio)
+{
+  mnnctx *nctx;
+  mnnpkt *pkt;
+  mnnhdr *phdr;
+  ub2     cksm;
+
+  nctx = (mnnctx *) nio->priv;
+
+  while (nctx->inp.head)
+    {
+      
+      MN_CRITICAL_REGION
+	pkt = (mnnpkt *) mnqDeq(&nctx->inp);
+      MN_END_CRITICAL_REGION
+
+      phdr = (mnnhdr *) &pkt[1];
+
+      
+      if (!(nio->flags & MNNFLG_CKSM))
+	{
+	  phdr->proto |= MNNVRS;
+
+	  if (pkt->flags & MNNFLG_CPY)
+	    cksm = mnnCheckSum((ub1 *) &phdr[1], pkt->len - sizeof(mnnhdr))
+	      - phdr->cksm;
+	  else
+	    cksm = mnnCheckSum((ub1 *) phdr, pkt->len);
+
+	  if (cksm)
+	    {
+	      mnPrint(MNLERROR, "checksum error: hdr=%lx, act=%lx",
+		      cksm, phdr->cksm);
+	      mnmFree(ctx, (dvoid *) pkt);
+	      continue;
+	    }
+	}
+
+      phdr->proto &= 0x0f;
+      
+      
+      if (phdr->flags & MNNFLG_RSR)
+	{
+	  CPSTRUCT(*((mnnpa *) &phdr[1]), pkt->pa);
+	  phdr->flags &= ~MNNFLG_RSR;
+	  pkt->flags &= ~MNNFLG_RSR;
+	}
+
+      
+      if (mnaIsDest(ctx, &nctx->subnet, &phdr->dst) ||
+	  (phdr->flags & MNNFLG_ACC))
+	{
+	  if (phdr->proto == MNPROTO_OCP)
+	    mnoIn(ctx, pkt);
+	  else
+	    mntIn(ctx, pkt);
+	  ctx->idleactive = TRUE;
+	}
+      else if (ctx->flags & MNFLG_FORWARD)
+	mnnForward(ctx, nio, pkt);
+      else
+	{
+	  mnPrint(MNLERROR, "misrouted packet");
+	  mnmFree(ctx, (dvoid *) pkt);
+	}
+    }
+}
+
+
+void mnnForward(mnctx *ctx, mnnio *nio, mnnpkt *pkt)
+{
+  mnrte  *rte;
+  mnnhdr *phdr;
+
+  phdr = (mnnhdr *) &pkt[1];
+  rte = mnaFindRoute(ctx, &phdr->dst);
+  if (!rte)
+    {
+      DISCARD mnoSend(ctx, MNOTYP_DESTNOTREACH, &phdr->src, &phdr->dst);
+      mnmFree(ctx, (dvoid *) pkt);
+    }
+  else
+    {
+      if (rte->nio == nio && !(nio->flags & MNNFLG_CIRC))
+	DISCARD mnoSendRedirect(ctx, pkt, rte, (ub4) 0);
+
+      pkt->nio = rte->nio;
+      CPSTRUCT(pkt->pa, rte->pa);
+      DISCARD mnnSendPkt(ctx, pkt);
+    }
+}
+
+
+sb4 mnnSendPkt(mnctx *ctx, mnnpkt *pkt)
+{
+  mnnctx *nctx;
+  mnnhdr *phdr;
+  ub1    *buf;
+  ub2     cksm;
+  ub4     xlen;
+  sb4     sts;
+
+  buf = ((ub1 *) &pkt[1]) + pkt->off;
+
+  
+  phdr = (mnnhdr *) buf;
+  phdr->proto |= MNNVRS;
+  phdr->flags = (ub1) (pkt->flags & 0xff);
+  
+  
+  
+  DISCARD memset((ub1 *) &phdr->cksm, 0, sizeof(phdr->cksm));
+  sysxPutUaB4(((ub1 *) &phdr->len), pkt->len - sizeof(mnnhdr));
+  sysxPutUaB4(((ub1 *) &phdr->seqid), pkt->seqid);
+
+  if (!pkt->nio->send)
+    {
+      nctx = (mnnctx *) pkt->nio->priv;
+      mnqEnq(&nctx->out, pkt);
+      return 0;
+    }
+  else if (pkt->flags & MNNFLG_TL)
+    {
+      
+      if (!(pkt->nio->flags & MNNFLG_CKSM))
+        {
+	  cksm = mnnCheckSum(buf, pkt->len);
+	  DISCARD memcpy((ub1 *) &phdr->cksm, (ub1 *) &cksm,
+			 sizeof(phdr->cksm));
+        }
+
+      mnnTrace("SEND", buf, (size_t) pkt->len);
+      return (*pkt->nio->send)(pkt->nio, &pkt->pa, buf, (size_t) pkt->len);
+    }
+  else
+    {
+      do
+	{
+	  mnnFragment(pkt, &buf, &xlen);
+	  mnnTrace("SEND", buf, (size_t) (xlen + sizeof(mnnhdr)));
+	  sts = (*pkt->nio->send)(pkt->nio, &pkt->pa, buf,
+				  (size_t) (xlen + sizeof(mnnhdr)));
+
+	  
+	  if (pkt->len > sizeof(mnnhdr))
+	    DISCARD memmove((dvoid *) (buf + xlen),
+			    (dvoid *) buf, sizeof(mnnhdr));
+	    
+	} while (pkt->len > sizeof(mnnhdr) && sts >= 0);
+
+      mnmFree(ctx, (dvoid *) pkt);
+      return sts;
+    }
+}
+
+
+void mnnFragment(mnnpkt *pkt, ub1 **bufp, ub4 *xlenp)
+{
+  ub1    *buf;
+  mnnhdr *phdr;
+  ub4     pylen, maxlen, xlen;
+
+  
+  buf = ((ub1 *) &pkt[1]) + pkt->off;
+  phdr = (mnnhdr *) buf;
+  pylen = pkt->len - sizeof(mnnhdr);
+  maxlen = pkt->nio->pktmax - sizeof(mnnhdr);
+  xlen = min(pylen, maxlen);
+
+  
+  phdr->len = smnHton4(xlen);
+  phdr->seqid = smnHton4(pkt->seqid);
+  phdr->flags = (ub1) (pkt->flags & 0xff);
+
+  
+  pkt->len -= xlen;
+  pkt->off += xlen;
+  pkt->seqid += (sb4) xlen;
+
+  
+  if (pkt->len > sizeof(mnnhdr))
+    phdr->flags |= MNNFLG_MTC;
+
+  pkt->flags &= ~MNNFLG_FST;
+
+  
+  phdr->cksm = 0;
+  if (!(pkt->nio->flags & MNNFLG_CKSM))
+    phdr->cksm = mnnCheckSum(buf, xlen + sizeof(mnnhdr));
+
+  *bufp = buf;
+  *xlenp = xlen;
+}
+
+
+ub2 mnnCheckSum(ub1 *buf, ub4 len)
+{
+  ub4  sum, cnt;
+  ub2 *ptr;
+  ub1  tmp[2];
+
+  for (sum = 0, cnt = len >> 1, ptr = (ub2 *) buf; cnt; cnt--)
+    sum += *ptr++;
+
+  if (len & 0x1)
+    {
+      tmp[0] = *((ub1 *) ptr);
+      tmp[1] = 0;
+      ptr = (ub2 *) tmp;
+      sum += *ptr;
+    }
+
+  sum = (sum >> 16) + (sum & 0xffff);
+  sum += (sum >> 16);
+  sum = ~sum;
+
+  return (ub2) (sum & 0xffff);
+}
+
+
+void mnnSetSubnet(mnnio *nio, mna *addr)
+{
+  mnnctx *nctx;
+
+  nctx = (mnnctx *) nio->priv;
+  mnaCopy(&nctx->subnet, addr);
+}
+
+
+void mnnSubnet(mnnio *nio, mna *addr)
+{
+  mnnctx *nctx;
+
+  nctx = (mnnctx *) nio->priv;
+  mnaCopy(addr, &nctx->subnet);
+}
+
+
+sb4 mnnPullBuf(mnnio *nio, mnnpa *pa, ub1 *buf, size_t len)
+{
+  mnnctx *nctx;
+  mnnpkt *pkt;
+  ub4     xlen;
+  ub1    *pbuf;
+
+  len &= ~0x3;
+
+  if (len < MNNPKTMIN)
+    return MNERR_TRUNCATE;
+
+  nctx = (mnnctx *) nio->priv;
+  if (!(pkt = (mnnpkt *) nctx->out.head))
+    return MNERR_WOULDBLOCK;
+
+  if (pa)
+    CPSTRUCT(*pa, pkt->pa);
+
+  if (pkt->flags & MNNFLG_TL)
+    {
+      if (len < pkt->len)
+	{
+	  mnPrint(MNLERROR, "would truncate packet length=%ld", pkt->len);
+	  return MNERR_TRUNCATE;
+	}
+
+      xlen = pkt->len - sizeof(mnnhdr);
+      pbuf = ((ub1 *) &pkt[1]) + pkt->off;
+      DISCARD memcpy(buf, pbuf, (size_t) pkt->len);
+      mnqDeq(&nctx->out);
+    }
+  else
+    {
+      nio->pktmax = (size_t) len;
+
+      mnnFragment(pkt, &pbuf, &xlen);
+      DISCARD memcpy(buf, pbuf, (size_t) (xlen + sizeof(mnnhdr)));
+
+      
+      if (pkt->len > sizeof(mnnhdr))
+	DISCARD memmove((dvoid *) (pbuf + xlen), (dvoid *) pbuf,
+			sizeof(mnnhdr));
+	
+      else
+	{
+	  mnqDeq(&nctx->out);
+	  mnmFree(mnGlbCtx, (dvoid *) pkt);
+	}
+    }
+
+  return (sb4) (xlen + sizeof(mnnhdr));
+}
+
+
+sb4 mnnTestBuf(mnnio *nio)
+{
+  mnnctx *nctx;
+  mnnpkt *pkt;
+
+  nctx = (mnnctx *) nio->priv;
+  pkt = (mnnpkt *) nctx->out.head;
+  return (pkt ? pkt->len : MNERR_WOULDBLOCK);
+}
+
+
+void mnnPushBuf(mnnio *nio, mnnpa *pa, ub1 *buf, size_t len)
+{
+  mnctx  *ctx;
+  mnnctx *nctx;
+  mnnpkt *pkt;
+  mnnhdr *phdr;
+  ub4     sz, plen; 
+  ub1     proto;
+  sb4     seqid;
+
+  ctx = mnGlbCtx;
+  mnnTrace("RECV", buf, len);
+
+  
+  MN_CRITICAL_REGION
+    nctx = (mnnctx *) nio->priv;
+    if (!nctx)
+      {
+	mnPrint(MNLERROR, "NIO not yet initialized");
+	goto leave;
+      }
+
+    
+    proto = *buf;
+    if (((proto & 0xf0) != MNNVRS) || ((proto & 0x0f) >= MNPROTO_MAX))
+      {
+	mnPrint(MNLERROR, "bad version/protocol=%d", proto);
+	goto leave;
+      }
+
+    
+    phdr = (mnnhdr *) buf;
+
+    
+    plen = smnNtoh4(phdr->len);
+    if (plen + sizeof(mnnhdr) > len)
+      {
+	mnPrint(MNLERROR, "truncated packet length=%d, in header=%d",
+		len, plen);
+	goto leave;
+      }
+    else
+      len = (size_t) (plen + sizeof(mnnhdr));
+
+    if (!mnmPoolLowwtr(ctx, MNM_RECVPOOL) || (phdr->flags & MNNFLG_PRI))
+      {
+	sz = sizeof(mnnpkt) + len;
+	pkt = (mnnpkt *) mnmAlloc(ctx, MNM_RECVPOOL, (size_t) sz);
+      }
+    else
+      pkt = (mnnpkt *) 0;
+
+    if (pkt)
+      {
+	
+	DISCARD memcpy(&pkt[1], buf, len);
+	phdr = (mnnhdr *) &pkt[1];
+	phdr->proto &= 0x0f;
+	seqid = smnNtoh4(phdr->seqid);
+
+	
+	if (phdr->flags & MNNFLG_CPY)
+	  {
+	    CPSTRUCT(phdr->src, nctx->phdr.src);
+	    CPSTRUCT(phdr->dst, nctx->phdr.dst);
+	    seqid += nctx->phdr.seqid;
+	  }
+
+	
+	pkt->len = len;
+	pkt->off = 0;
+	pkt->flags = phdr->flags;
+	pkt->seqid = seqid;
+	pkt->nio = nio;
+	CPSTRUCT(pkt->pa, *pa);
+	pkt->stime = 0;
+
+	if (phdr->proto == MNPROTO_BLOB)
+	  {
+	    phdr->proto = MNPROTO_STREAM;
+	    nctx->phdr.seqid = smnNtoh4(phdr->seqid);
+	    CPSTRUCT(nctx->phdr.src, phdr->src);
+	    CPSTRUCT(nctx->phdr.dst, phdr->dst);
+	  }
+
+	
+	mnqEnq(&nctx->inp, pkt);
+      }
+    else
+      mnPrint(MNLWARN, "discarding packet", len);
+ leave:
+  MN_END_CRITICAL_REGION
+}
+
+
+void mnnTeardown(mnnio *nio, mnHandler handler, dvoid *usrp)
+{
+  mnctx  *ctx;
+  mnnctx *nctx;
+  mnnpkt *pkt;
+
+  ctx = mnGlbCtx;
+  nctx = (mnnctx *) nio->priv;
+
+  
+  while (pkt = (mnnpkt *) mnqDeq(&nctx->inp))
+    if (!(pkt->flags & MNNFLG_TL))
+      mnmFree(ctx, (dvoid *) pkt);
+
+  while (pkt = (mnnpkt *) mnqDeq(&nctx->out))
+    if (!(pkt->flags & MNNFLG_TL))
+      mnmFree(ctx, (dvoid *) pkt);
+
+  
+  mnaTeardown(ctx, nio, handler, usrp);
+}
+
+
+void mnnTrace(const char *pfx, ub1 *buf, size_t len)
+{
+  mnnhdr     *phdr;
+  const char *p, *t;
+  char        from[MNAMAXLEN], to[MNAMAXLEN];
+  ub4         proto;
+  mnctx      *ctx;
+
+  ctx = mnGlbCtx;
+
+  if (!(ctx->flags & MNFLG_TRACE))
+    return;
+
+  phdr = (mnnhdr *) buf;
+
+  if ((phdr->proto & 0xf0) != MNNVRS)
+    {
+      mnPrint(MNLINFO, "%s: bad version", pfx);
+      return;
+    }
+  else
+    proto = phdr->proto & 0x0f;
+
+  if (smnNtoh4(phdr->len) + sizeof(mnnhdr) > len)
+    {
+      mnPrint(MNLINFO, "%s: truncated packet", pfx);
+      return;
+    }
+
+  mnAtos(&phdr->src, from, MNAMAXLEN);
+  mnAtos(&phdr->dst, to, MNAMAXLEN);
+
+  if (proto == MNPROTO_OCP)
+    {
+      switch (smnNtoh4(phdr->seqid))
+	{
+	case MNOTYP_DESTNOTREACH: t = "DESTNOTREACH"; break;
+	case MNOTYP_DESTNOTVALID: t = "DESTNOTVALID"; break;
+	case MNOTYP_REDIRECT: t = "REDIRECT"; break;
+	case MNOTYP_RESET: t = "RESET"; break;
+	case MNOTYP_ADDRHB: t = "ADDRHB"; break;
+	case MNOTYP_ADDRREQUEST: t = "ADDRREQUEST"; break;
+	case MNOTYP_ADDRREPLY: t = "ADDRREPLY"; break;
+	case MNOTYP_ADDRRELEASE: t = "ADDRRELEASE"; break;
+	case MNOTYP_ECHOREQUEST: t = "ECHOREQUEST"; break;
+	case MNOTYP_ECHOREPLY: t = "ECHOREPLY"; break;
+	case MNOTYP_SETDOMAIN: t = "SETDOMAIN"; break;
+	case MNOTYP_ADDRSYNCH: t = "ADDRSYNCH"; break;
+	case MNOTYP_RESETRCVR: t = "RESETRCVR"; break;
+	default: t = "<unknown>"; break;
+	}
+      mnPrint(MNLINFO, "%-4.4sOCP     len=%5d %-12.12s src=%s dst=%s",
+	      pfx, smnNtoh4(phdr->len), t, from, to);
+    }
+  else
+    {
+      switch (proto)
+	{
+	case MNPROTO_MESSAGE: p = "MSG"; break;
+	case MNPROTO_STREAM: p = "STR"; break;
+	case MNPROTO_BLOB: p = "BLB"; break;
+	default: p = "UNK"; break;
+	}
+
+      if (phdr->flags & MNNFLG_ACK)
+	t = "ACK";
+      else if (phdr->flags & MNNFLG_FST)
+	t = (phdr->flags & MNNFLG_MTC) ? "FST" : "ALL";
+      else
+	t = (phdr->flags & MNNFLG_MTC) ? "MID" : "END";
+
+      mnPrint(MNLINFO, "%-4.4s%s %s len=%5d seq=%08x src=%s dst=%s",
+	      pfx, p, t, smnNtoh4(phdr->len), smnNtoh4(phdr->seqid), from, to);
+    }
+}

@@ -1,0 +1,342 @@
+/* mx/src/ys/yst.c */
+
+
+/*
+ORACLE, Copyright (c) 1982, 1983, 1986, 1990 ORACLE Corporation
+ORACLE Utilities, Copyright (c) 1981, 1982, 1983, 1986, 1990, 1991 ORACLE Corp
+
+Restricted Rights
+This program is an unpublished work under the Copyright Act of the
+United States and is subject to the terms and conditions stated in
+your  license  agreement  with  ORACORP  including  retrictions on
+use, duplication, and disclosure.
+
+Certain uncopyrighted ideas and concepts are also contained herein.
+These are trade secrets of ORACORP and cannot be  used  except  in
+accordance with the written permission of ORACLE Corporation.
+*/
+
+
+
+#ifndef SYSI_ORACLE
+# include <sysi.h>
+#endif
+
+#ifndef SYST_ORACLE
+# include <syst.h>
+#endif
+
+#ifndef YST_ORACLE
+# include <yst.h>
+#endif
+
+#ifndef YSE_ORACLE
+# include <yse.h>
+#endif
+
+#ifndef YSLST_ORACLE
+# include <yslst.h>
+#endif
+
+
+
+
+static   ysmtagDecl( YstGlobal ) = "ystGlobal";
+static   ysmtagDecl( YstThread ) = "ystThread";
+
+
+static   ysidDecl( YST_EX_UNCAUGHT ) = "yst::uncaught";
+
+
+struct ystThd
+{
+  sysejb   jmpBuf;                        
+  void   (*func)( dvoid  *arg );                    
+  dvoid   *arg;                                     
+  dvoid   *stkhdl;                                       
+  sysb8    tid;                                                 
+  ysle    *link;                             
+  yslst   *curQ;                       
+};
+
+
+struct ystGbl
+{
+  ystThd  *curThd;                        
+  sysb8    lastTid;                                        
+  yslst   *runq;                                                
+  yslst   *suspendq;                                      
+  ub4      totalStkMem;                    
+  sysejb   mainJmpBuf;                              
+  ystThd  *freeThd;                                        
+};
+typedef struct ystGbl   ystGbl;
+
+
+
+
+STATICF void   ystSwitch( ystGbl  *gbl, ystThd *thd )
+{
+  sb4   jumped;                                               
+
+  
+  jumped = (sb4)syseSet(gbl->curThd->jmpBuf);
+
+  
+  if (jumped)
+  {
+    
+    if (gbl->freeThd)
+    {
+      systStkFree(gbl->freeThd->stkhdl);
+      ysmGlbFree((dvoid *)gbl->freeThd);
+      gbl->freeThd = (ystThd *) 0;
+    }
+  }
+  else
+  {
+    
+    if (ysLstCount(gbl->runq) == 0)
+    {
+      
+      ysePanic(YS_EX_SHUTDOWN);
+    }
+    else
+    {
+      
+      if (thd && (thd->curQ == gbl->runq)) 
+	gbl->curThd = (ystThd *)ysLstRem(gbl->runq, thd->link);
+      
+      else gbl->curThd = (ystThd *)ysLstPop(gbl->runq);
+      
+      syseJmp(gbl->curThd->jmpBuf, 1);
+    }
+  }
+}
+
+
+STATICF void   ystDispatch( )
+{
+  ystGbl  *gbl;                                            
+
+  
+  gbl = (ystGbl *)yscGet(YSC_YSTCTX);
+  yseTry;
+  {
+    
+    (*gbl->curThd->func)(gbl->curThd->arg);
+  }
+  yseCatchAll;
+  {
+    
+    ysePanic(YST_EX_UNCAUGHT);
+  }
+  yseEnd;
+
+  DISCARD ystExit();
+}
+
+
+STATICF dvoid *ystStart( sysejb   jbuf, ub4 stksiz, ub4 totalStkMem )
+{
+  
+  if (syseSet(jbuf))
+    ystDispatch();
+  else
+    return systStkInit(jbuf, stksiz, totalStkMem);
+}
+
+
+
+
+sword   ystInit( ub4 totalStkMem )
+{
+  ystGbl  *gbl;                                            
+  ystThd  *thd;                                            
+
+  
+  gbl = (ystGbl *)ysmGlbAlloc(sizeof(ystGbl), YstGlobal);
+  DISCARD yscSet(YSC_YSTCTX, (dvoid *)gbl);
+
+  
+  DISCARD memset((dvoid *)gbl, 0, sizeof(ystGbl));
+
+  
+  gbl->runq     = ysLstCreate();
+  gbl->suspendq = ysLstCreate();
+
+  
+  gbl->totalStkMem = totalStkMem;
+
+  
+  thd = (ystThd *)ysmGlbAlloc(sizeof(ystThd), YstThread);
+
+  
+  sysb8ext(&thd->tid, 1);
+  sysb8ext(&gbl->lastTid, 1);
+
+  
+  gbl->curThd = thd;
+
+  return 0;
+}
+
+
+
+
+sword ystTerm( void )
+{
+  ystGbl  *gbl;                                            
+  
+  
+  gbl = (ystGbl *)yscGet(YSC_YSTCTX);
+
+  
+  if (gbl->curThd) ysmGlbFree((dvoid *)gbl->curThd);
+
+  
+  while (ysLstCount(gbl->runq)) DISCARD ysLstPop(gbl->runq);
+  ysLstDestroy(gbl->runq, ysmFGlbFree);
+
+  while (ysLstCount(gbl->suspendq)) DISCARD ysLstPop(gbl->suspendq);
+  ysLstDestroy(gbl->suspendq, ysmFGlbFree);
+
+  
+  if (gbl)
+  {
+    ysmGlbFree((dvoid *)gbl);
+    DISCARD yscSet(YSC_YSTCTX, (dvoid *)0);
+  }
+
+  return 0;
+}
+
+
+ystThd *ystCreate( void (*func)( dvoid  *arg ), dvoid  *arg, ub4   stksiz )
+{
+  ystThd  *thd;                                            
+  ystGbl  *gbl;                                            
+
+  
+  gbl = (ystGbl *)yscGet(YSC_YSTCTX);
+  if (!gbl)
+    {
+      DISCARD ystInit((ub4)(256 * 1024));
+      gbl = (ystGbl *)yscGet(YSC_YSTCTX);
+    }
+
+  
+  thd = (ystThd *)ysmGlbAlloc(sizeof(ystThd), YstThread);
+
+  
+  thd->func = func;
+  thd->arg  = arg;
+
+  
+  sysb8addb4(&gbl->lastTid, &gbl->lastTid, 1);
+  sysb8set(&thd->tid, &gbl->lastTid);
+
+  
+  thd->stkhdl = ystStart(thd->jmpBuf, stksiz, gbl->totalStkMem);
+
+  
+  thd->link = ysLstEnq(gbl->runq, (dvoid *)thd);
+  thd->curQ = gbl->runq;
+
+  return thd;
+}
+
+
+sword   ystExit( )
+{
+  ystGbl  *gbl;                                            
+
+  
+  gbl = (ystGbl *)yscGet(YSC_YSTCTX);
+  if (!gbl) return -1;
+
+  
+  gbl->freeThd = gbl->curThd;
+
+  
+  ystSwitch(gbl, (ystThd *)0);
+
+  return 0;
+}
+
+
+ystThd *ystSelf(void)
+{
+  ystGbl *gbl;                                      
+
+  
+  gbl = (ystGbl *) yscGet(YSC_YSTCTX);
+
+  return (gbl ? gbl->curThd : (ystThd *) 0);
+}
+
+
+void ystPrint(ystThd *thr, char *buf, size_t len)
+{
+  
+  if (thr)
+    DISCARD sysb8fmt(buf, "%Ld", &thr->tid);
+  else
+    DISCARD strcpy(buf, "0");
+}
+
+
+void   ystYield( ystThd *thd )
+{
+  ystGbl  *gbl;                                            
+
+  
+  gbl = (ystGbl *)yscGet(YSC_YSTCTX);
+  if (!gbl) return;
+
+  
+  gbl->curThd->link = ysLstEnq(gbl->runq, (dvoid *)gbl->curThd);
+  gbl->curThd->curQ = gbl->runq;
+
+  
+  ystSwitch(gbl, thd);
+}
+
+
+void   ystSuspend( ystThd *nextThd )
+{
+  ystGbl  *gbl;                                            
+
+  
+  gbl = (ystGbl *)yscGet(YSC_YSTCTX);
+  if (!gbl) return;
+
+  
+  gbl->curThd->link = ysLstEnq(gbl->suspendq, (dvoid *)gbl->curThd);
+  gbl->curThd->curQ = gbl->suspendq;
+
+  
+  ystSwitch(gbl, nextThd);
+}
+
+
+void   ystResume( ystThd *thd )
+{
+  ystGbl  *gbl;                                            
+
+  
+  gbl = (ystGbl *)yscGet(YSC_YSTCTX);
+  if (!gbl) return;
+
+  
+  if (thd && (thd->curQ == gbl->suspendq))
+  {
+    
+    DISCARD ysLstRem(gbl->suspendq, thd->link);
+
+    
+    thd->link = ysLstEnq(gbl->runq, (dvoid *)thd);
+    thd->curQ = gbl->runq;
+  }
+}
+

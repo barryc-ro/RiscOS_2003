@@ -1,0 +1,519 @@
+/* mx/src/mn/mnm.c */
+
+
+/*
+ORACLE, Copyright (c) 1982, 1983, 1986, 1990 ORACLE Corporation
+ORACLE Utilities, Copyright (c) 1981, 1982, 1983, 1986, 1990, 1991 ORACLE Corp
+
+Restricted Rights
+This program is an unpublished work under the Copyright Act of the
+United States and is subject to the terms and conditions stated in
+your  license  agreement  with  ORACORP  including  retrictions on
+use, duplication, and disclosure.
+
+Certain uncopyrighted ideas and concepts are also contained herein.
+These are trade secrets of ORACORP and cannot be  used  except  in
+accordance with the written permission of ORACLE Corporation.
+*/
+
+
+
+#ifndef SYSI_ORACLE
+#include <sysi.h>
+#endif
+#ifndef YSMSC_ORACLE
+#include <ysmsc.h>
+#endif
+#ifndef MN_ORACLE
+#include <mn.h>
+#endif
+#ifndef MNI_ORACLE
+#include <mni.h>
+#endif
+
+
+typedef struct mnpool mnpool;
+typedef struct mnmhdr mnmhdr;
+
+#define MNM_SIZEMAX       0x3fffffff
+#define MNM_MKSZ(ty, sz)  (((ty) << 30) | (sz))
+#define MNM_POOLTYPE(sz)  ((sz) >> 30)
+#define MNM_FREE(sz)      (!((sz) & 0xc0000000))
+
+struct mnpool
+{
+  ub4     sz;                                          
+  ub4     inuse;                                
+  ub4     lowwtr;                                          
+  mnsem  *sem;                  
+  boolean outmem;                 
+  ub4     omcnt;                                 
+  ub4     maxusg;                                           
+};
+
+struct mnmhdr
+{
+  ub4     sz;                                           
+  mnmhdr *prev;                                    
+  mnmhdr *next;                                   
+};
+
+struct mnmctx
+{
+  ub1    *bbuf;                                         
+  mnAlloc alloc;                                  
+  mnFree  free;                                         
+  mnpool  pools[MNM_MAXPOOL];                            
+  mnmhdr *roveptr;                                 
+};
+
+
+mnmctx *mnmInit(mnbv *bv, ub4 nbv, mnAlloc alloc, mnFree free)
+{
+  mnmctx *mctx;
+  mnmhdr *ptr, *prevptr;
+  ub1    *buf;
+  ub4     len, total;
+
+  if (bv && nbv && bv[0].len > 1024)
+    {
+      mctx = (mnmctx *) bv[0].buf;
+      DISCARD memset(mctx, 0, sizeof(mnmctx));
+
+      len = bv[0].len - sizeof(mnmctx) - offsetof(mnmhdr, prev);
+      mctx->bbuf = buf = bv[0].buf + sizeof(mnmctx);
+      prevptr = mctx->roveptr = (mnmhdr *) buf;
+      total = 0;
+
+      do
+	{
+	  ptr = (mnmhdr *) (buf + len);
+	  ptr->sz = MNM_MKSZ(MNM_MAINPOOL, 0);
+
+	  ptr = (mnmhdr *) buf;
+	  ptr->prev = prevptr;
+	  prevptr->next = ptr;
+	  ptr->sz = len;
+
+	  total += len - sizeof(mnmhdr);
+
+	  prevptr = ptr;
+
+	  nbv--;
+	  if (nbv)
+	    {
+	      bv++;
+	      len = bv->len - offsetof(mnmhdr, prev);
+	      buf = bv->buf;
+	    }
+	} while (nbv);
+
+      mctx->roveptr->prev = ptr;
+      ptr->next = mctx->roveptr;
+
+      mctx->pools[MNM_MAINPOOL].sz = total;
+
+      mctx->alloc = alloc;
+      mctx->free = free;
+    }
+  else if (alloc && free)
+    {
+      
+      mctx = (mnmctx *) (*alloc)(sizeof(mnmctx));
+
+      if (mctx)
+	{
+	  DISCARD memset(mctx, 0, sizeof(mnmctx));
+	  mctx->alloc = alloc;
+	  mctx->free = free;
+	  mctx->pools[MNM_MAINPOOL].sz = MNM_SIZEMAX;
+	}
+    }
+  else
+    mctx = (mnmctx *) 0;
+
+  return mctx;
+}
+
+
+void mnmTerm(mnctx *ctx)
+{
+  mnmctx *mctx;
+  mnpool *pool;
+
+  mctx = ctx->mctx;
+
+  mnPrint(MNLINFO, "Memory Usage:");
+
+  pool = &mctx->pools[MNM_MAINPOOL];
+  mnPrint(MNLINFO, "   Main Pool: sz=%ld, maxusg=%ld",
+	  pool->sz,
+	  pool->maxusg - mctx->pools[MNM_SENDPOOL].sz
+	  - mctx->pools[MNM_RECVPOOL].sz);
+
+  pool = &mctx->pools[MNM_SENDPOOL];
+  mnPrint(MNLINFO, "   Send Pool: sz=%ld, maxusg=%ld, omcnt=%ld",
+	  pool->sz, pool->maxusg, pool->omcnt);
+
+  pool = &mctx->pools[MNM_RECVPOOL];
+  mnPrint(MNLINFO, "   Recv Pool: sz=%ld, maxusg=%ld, omcnt=%ld",
+	  pool->sz, pool->maxusg, pool->omcnt);
+
+  if (mctx->free && !mctx->roveptr)
+    (*mctx->free)((dvoid *) mctx);
+}
+
+
+dvoid *mnmAlloc(mnctx *ctx, ub4 poolid, size_t len)
+{
+  mnmctx *mctx;
+  mnpool *pool;
+  ub1    *buf;
+  mnmhdr *ptr, *nextptr;
+  boolean maybe;
+
+  if (!len)
+    return (dvoid *) 0;
+
+  
+  if (poolid == MNM_MAYBEPOOL)
+    {
+      poolid = MNM_MAINPOOL;
+      maybe = TRUE;
+    }
+  else
+    maybe = FALSE;
+
+  mctx = ctx->mctx;
+  pool = &mctx->pools[poolid];
+
+  MN_CRITICAL_REGION
+    
+    if ((len > MNM_SIZEMAX - 16) || (len > pool->sz - pool->inuse - 16))
+      buf = (ub1 *) 0;
+    else if (mctx->roveptr && (poolid == MNM_RECVPOOL || !mctx->alloc))
+      {
+	
+	ptr = mctx->roveptr;
+	len += offsetof(mnmhdr, prev);
+	len = max(len, sizeof(mnmhdr));
+	len = (size_t) ysRoundVal(len, 4);
+
+	for (;;)
+	  {
+	    nextptr = (mnmhdr *) (((ub1 *) ptr) + ptr->sz);
+	    if (MNM_FREE(nextptr->sz))
+	      {
+		ptr->sz += nextptr->sz;
+
+		nextptr->prev->next = nextptr->next;
+		nextptr->next->prev = nextptr->prev;
+		if (mctx->roveptr == nextptr)
+		  mctx->roveptr = ptr;
+	      }
+	    else if (ptr->sz < len)
+	      {
+		ptr = ptr->next;
+		if (ptr == mctx->roveptr)
+		  {
+		    ptr = (mnmhdr *) 0;
+		    break;
+		  }
+	      }
+	    else
+	      break;
+	  }
+
+	if (ptr)
+	  {
+	    
+	    if (ptr->sz - len < 16)
+	      {
+		ptr->prev->next = ptr->next;
+		ptr->next->prev = ptr->prev;
+		mctx->roveptr = ptr->next;
+		ptr->sz = MNM_MKSZ(poolid, ptr->sz);
+	      }
+	    else
+	      {
+		ptr->sz -= len;
+		mctx->roveptr = ptr;
+
+		ptr = (mnmhdr *) (((ub1 *) ptr) + ptr->sz);
+		ptr->sz = MNM_MKSZ(poolid, len);
+	      }
+
+	    buf = ((ub1 *) ptr) + offsetof(mnmhdr, prev);
+	    pool->inuse += ptr->sz & MNM_SIZEMAX;
+	  }
+	else
+	  buf = (ub1 *) 0;
+      }
+    else
+      {
+	
+	buf = (ub1 *) (*mctx->alloc)(offsetof(mnmhdr, prev) + len);
+
+	if (buf)
+	  {
+	    *((ub4 *) buf) = MNM_MKSZ(poolid, len);
+	    buf += offsetof(mnmhdr, prev);
+	    pool->inuse += len;
+	  }
+      }
+  MN_END_CRITICAL_REGION
+
+  if (pool->inuse > pool->maxusg)
+    pool->maxusg = pool->inuse;
+
+  
+  if (!buf)
+    {
+      if (poolid == MNM_MAINPOOL && !maybe)
+	{
+	  mnPrint(MNLERROR, "out of memory");
+	  ysePanic(YS_EX_OUTMEM);
+	}
+      else
+	{
+	  mnSetLastError(ctx, MNERR_OUTMEM);
+	  pool->omcnt++;
+	  if (!pool->outmem)
+	    {
+	      pool->outmem = TRUE;
+	      mnPrint(MNLERROR, "out of buffers %ld:%ld", poolid, len);
+	    }
+	}
+    }
+  else
+    pool->outmem = FALSE;
+
+  return (dvoid *) buf;
+}
+
+
+void mnmFree(mnctx *ctx, dvoid *ptrp)
+{
+  mnmctx *mctx;
+  mnpool *pool;
+  ub1    *buf;
+  mnmhdr *ptr, *nextptr;
+  ub4     len, poolid;
+
+  if (!ptrp)
+    return;
+
+  mctx = ctx->mctx;
+  buf = (ub1 *) ptrp;
+  buf -= offsetof(mnmhdr, prev);
+  len = *((ub4 *) buf);
+  poolid = MNM_POOLTYPE(len);
+  len &= MNM_SIZEMAX;
+
+  MN_CRITICAL_REGION
+    if (mctx->roveptr && (poolid == MNM_RECVPOOL || !mctx->alloc))
+      {
+	ptr = (mnmhdr *) buf;
+	ptr->sz = len;
+
+	ptr->next = mctx->roveptr;
+	ptr->prev = mctx->roveptr->prev;
+	ptr->next->prev = ptr;
+	ptr->prev->next = ptr;
+
+	nextptr = (mnmhdr *) (((ub1 *) ptr) + ptr->sz);
+	if (MNM_FREE(nextptr->sz))
+	  {
+	    ptr->sz += nextptr->sz;
+
+	    nextptr->prev->next = nextptr->next;
+	    nextptr->next->prev = nextptr->prev;
+	    if (mctx->roveptr == nextptr)
+	      mctx->roveptr = ptr;
+	  }
+      }
+    else
+      {
+	
+	(*mctx->free)((dvoid *) buf);
+      }
+
+    pool = &mctx->pools[poolid];
+    pool->inuse -= len;
+    if (pool->sem && (pool->sz - pool->inuse >= pool->lowwtr))
+      {
+	mneSet(ctx, pool->sem, (sb4) 0, TRUE);
+	pool->sem = (mnsem *) 0;
+      }
+  MN_END_CRITICAL_REGION
+}
+
+
+sb4 mnmWait(mnctx *ctx, ub4 poolid)
+{
+  mnmctx *mctx;
+  mnpool *pool;
+
+  mctx = ctx->mctx;
+  pool = &mctx->pools[poolid];
+
+  pool->sem = mnSemAlloc((dvoid *) 0);
+  mneLatch(ctx, pool->sem);
+  return mnSemWait(pool->sem);
+}
+
+
+sb4 mnmPoolAlloc(mnctx *ctx, ub4 poolid, ub4 poolsz, ub4 lowwtr)
+{
+  mnmctx *mctx;
+  mnpool *mp, *pool;
+
+  mctx = ctx->mctx;
+  pool = &mctx->pools[poolid];
+  mp = &mctx->pools[MNM_MAINPOOL];
+
+  if (mp->sz - mp->inuse < poolsz)
+    return MNERR_OUTMEM;
+
+  mp->inuse += poolsz;
+  pool->sz = poolsz;
+  pool->inuse = 0;
+  pool->lowwtr = lowwtr;
+  pool->sem = (mnsem *) 0;
+  return 0;
+}
+
+
+boolean mnmPoolLowwtr(mnctx *ctx, ub4 poolid)
+{
+  mnpool *pool;
+
+  pool = &ctx->mctx->pools[poolid];
+  return (pool->sz - pool->inuse <= pool->lowwtr);
+}
+
+
+ub4 mnmPoolSpace(mnctx *ctx, ub4 poolid)
+{
+  mnpool *pool;
+
+  pool = &ctx->mctx->pools[poolid];
+  return pool->sz - pool->inuse;
+}
+
+
+sb4 mnmSetPool(mnctx *ctx, ub4 poolid, ub4 len)
+{
+  mnmctx *mctx;
+  mnpool *pool, *mp;
+
+  mctx = ctx->mctx;
+  pool = &mctx->pools[poolid];
+  mp = &mctx->pools[MNM_MAINPOOL];
+
+  if (len < pool->inuse)
+    return MNERR_ALREADY;
+
+  if (len > pool->sz && (mp->sz - mp->inuse < len - pool->sz + 4096))
+    return MNERR_OUTMEM;
+
+  mp->inuse += len - pool->sz;
+  pool->sz = len;
+  pool->lowwtr = min(len / 30, pool->lowwtr);
+  return 0;
+}
+
+
+void mnmConfig(mnctx *ctx, mnAlloc alloc, mnFree free)
+{
+  ctx->mctx->alloc = alloc;
+  ctx->mctx->free = free;
+}
+
+
+dvoid *mnmUserAlloc(mnctx *ctx, size_t len)
+{
+  dvoid *buf;
+  sb4    sts;
+
+  if (!ctx->mctx->alloc)
+    {
+      sts = MNERR_NOTINIT;
+      buf = (dvoid *) 0;
+    }
+  else if (!(buf = (*ctx->mctx->alloc)(len)))
+    {
+      sts = MNERR_OUTMEM;
+      mnPrint(MNLERROR, "out of user memory %ld", len);
+    }
+  else
+    sts = 0;
+
+  if (sts)
+    mnSetLastError(ctx, MNERR_OUTMEM);
+
+  return buf;
+}
+
+
+void mnmUserFree(mnctx *ctx, dvoid *ptr)
+{
+  if (ctx->mctx->free)
+    (*ctx->mctx->free)(ptr);
+}
+
+#ifdef DEBUG
+
+void mnmDump(mnctx *ctx, boolean dump)
+{
+  mnmctx *mctx;
+  mnmhdr *ptr;
+  ub4     total, cnt, totalloc, totfree, largest;
+
+  mctx = ctx->mctx;
+
+  if (mctx->alloc)
+    {
+      printf("Memory is user-controlled\n");
+      return;
+    }
+
+  cnt = totfree = totalloc = total = largest = 0;
+  ptr = (mnmhdr *) mctx->bbuf;
+  do
+    {
+      if (dump)
+	printf("%lx: pool %d, size %d\n",
+	       ptr, MNM_POOLTYPE(ptr->sz), ptr->sz & MNM_SIZEMAX);
+
+      if (MNM_FREE(ptr->sz))
+	{
+	  totfree += ptr->sz;
+	  largest = max(largest, ptr->sz);
+	}
+      else
+	totalloc += ptr->sz & MNM_SIZEMAX;
+      cnt++;
+      if (ptr->sz == MNM_MKSZ(MNM_MAINPOOL, 0))
+	break;
+
+      ptr = (mnmhdr *) (((ub1 *) ptr) + (ptr->sz & MNM_SIZEMAX));
+    } while (1);
+
+  ptr = mctx->roveptr;
+  do
+    {
+      if (!MNM_FREE(ptr->sz))
+	printf("error in free list\n");
+      total += ptr->sz;
+      ptr = ptr->next;
+    } while (ptr != mctx->roveptr);
+
+  printf("blocks=%d, alloc=%d, free=%d, free-by-list=%d, largest=%d\n",
+	 cnt, totalloc, totfree, total, largest);
+  printf("inuse=%d, %d, %d\n",
+	 mctx->pools[MNM_MAINPOOL].inuse,
+	 mctx->pools[MNM_SENDPOOL].inuse,
+	 mctx->pools[MNM_RECVPOOL].inuse);
+}
+#endif
