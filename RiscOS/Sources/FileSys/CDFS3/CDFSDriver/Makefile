@@ -96,10 +96,11 @@ module.h: cmhg.Hdr
 #
 # Generic rules:
 #
-rom: ${TARGET}
+rom: ${TARGET} module.h
         @echo ${COMPONENT}: rom module built
 
-export: ${EXPORTS}
+export: 
+	@|${EXPORTS}
         @echo ${COMPONENT}: export complete
 
 install_rom: ${TARGET}
@@ -115,6 +116,8 @@ clean:
         ${RM} h.module
         ${RM} ${TARGET}
         ${WIPE} o.* ${WFLAGS}
+        ${WIPE} linked.* ${WFLAGS}
+        ${RM} linked
         ${WIPE} aof.* ${WFLAGS}
         ${RM} aof
         @echo ${COMPONENT}: cleaned
@@ -140,8 +143,8 @@ rom_link:
         @echo ${COMPONENT}: rom_link complete
 
 
-#${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
-#        ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
+${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
+        ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 
 #---------------------------------------------------------------------------
