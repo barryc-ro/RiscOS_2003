@@ -23,7 +23,7 @@ WPFLAGS=FR~C~V
 
 INCLUDES = C:SSLeay,TCPIPLibs:,C:
 DEFINES  = -DRISCOS -DMFUNC -DFLAT_INC -DNO_DES -DNO_IDEA
-EFLAGS   = -zM -zps1 -Wpand
+EFLAGS   = -zM -zps1 -Wpand -ff
 CC       = cc
 
 
