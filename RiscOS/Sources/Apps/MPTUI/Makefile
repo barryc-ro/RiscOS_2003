@@ -73,6 +73,7 @@ dirs:
         ${MKDIR} ${RESRES}.NCDialCtrl
         ${MKDIR} ${RESRES}.NCDialCtrl.Files
         ${MKDIR} ${RESRES}.NCDialCtrl.Files.PPP
+        ${MKDIR} ${RESRES}.STBPrint
         IfThere Resources.${USERIF}.${LOCALE}.${APP} Then \
 	  ${CP} Resources.${USERIF}.${LOCALE}.${APP} ${RESAPP} T~V~CFQR
 	${CP} Resources.${USERIF}.UK.${APP} ${RESAPP} T~V~CFQR
@@ -112,7 +113,8 @@ translate: dirs
         ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.Setup.Acknow -o ${RESAPP}.HTML.Setup.Acknow
         ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.Setup.BSD -o ${RESAPP}.HTML.Setup.BSD
         ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.Setup.IntroWel -o ${RESAPP}.HTML.Setup.IntroWel
-        ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.Setup.Options -o ${RESAPP}.HTML.Setup.Options
+        ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML-Modem.Setup.Options -o ${RESAPP}.HTML-Modem.Setup.Options
+        ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML-Ether.Setup.Options -o ${RESAPP}.HTML-Ether.Setup.Options
         ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.Setup.Printing -o ${RESAPP}.HTML.Setup.Printing
         ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.Setup.Printing2 -o ${RESAPP}.HTML.Setup.Printing2
         ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.Setup.Sounds -o ${RESAPP}.HTML.Setup.Sounds
@@ -132,18 +134,8 @@ resources: translate
           ${CP} Resources.${USERIF}.${LOCALE}.NVRAM.Tags ${RESRES}.NVRAM.Tags ${CPFLAGS} \
         Else \
           ${CP} Resources.${USERIF}.UK.NVRAM.Tags ${RESRES}.NVRAM.Tags ${CPFLAGS}
-        IfThere Resources.${USERIF}.${LOCALE}.NCDialCtrl.Files.PPP.IP-Up Then \
-          ${CP} Resources.${USERIF}.${LOCALE}.NCDialCtrl.Files.PPP.IP-Up ${RESRES}.NCDialCtrl.Files.PPP.IP-Up ${CPFLAGS} \
-        Else
-          ${CP} Resources.${USERIF}.Japan.NCDialCtrl.Files.PPP.IP-Up ${RESRES}.NCDialCtrl.Files.PPP.IP-Up ${CPFLAGS}
-        IfThere Resources.${USERIF}.${LOCALE}.NCDialCtrl.Files.PPP.IP-Up Then \
-          ${CP} Resources.${USERIF}.${LOCALE}.NCDialCtrl.Files.PPP.IP-Up ${RESRES}.NCDialCtrl.Files.PPP.IP-Up ${CPFLAGS} \
-        Else
-          ${CP} Resources.${USERIF}.Japan.NCDialCtrl.Files.PPP.IP-Up ${RESRES}.NCDialCtrl.Files.PPP.IP-Up ${CPFLAGS}
-        IfThere Resources.${USERIF}.${LOCALE}.STBPrint.PaperA4 Then \
-          ${CP} Resources.${USERIF}.${LOCALE}.STBPrint ${RESRES}.STBPrint ${CPFLAGS} \
-        Else
-          ${CP} Resources.${USERIF}.Japan.STBPrint ${RESRES}.STBPrint ${CPFLAGS}
+        ${CP} Resources.${USERIF}.${LOCALE}.NCDialCtrl.Files.PPP.IP-Up ${RESRES}.NCDialCtrl.Files.PPP.IP-Up ${CPFLAGS}
+        ${CP} Resources.${USERIF}.${LOCALE}.STBPrint.PaperA4 ${RESRES}.STBPrint.PaperA4 ${CPFLAGS}
         @echo $(COMPONENT): resource files copied
         
 # Dynamic dependencies:
