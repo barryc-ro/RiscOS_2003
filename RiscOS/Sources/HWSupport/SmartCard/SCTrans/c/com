@@ -122,7 +122,8 @@ com_SetResetInd(void)
 int
 com_ReadBytes(BYTE *data, int len)
 {
-  return (serial_read_stream(iInputStream, (char*)data, len));
+  return (
+  serial_read_stream(iInputStream, (char*)data, len));
 }
 
 /*
@@ -599,23 +600,34 @@ blocking_readbyte
 )
 {
   int value;
-#if 0
-  unsigned int o_val, n_val;
-
-  _swix(OS_ReadMonotonicTime, _OUT(0), &o_val);
-
-  do {
-    value = serial_read_byte(iInputStream);
-    _swix(OS_ReadMonotonicTime, _OUT(0), &n_val);
-  } while( (value == -1) && ((n_val-o_val) < 100) );
-#else
   do {
     value = serial_read_byte(iInputStream);
   } while (value == -1);
-#endif
   return(value);
 }
 
+/*       Read Serial Byte with Timeout
+         -----------------------------
+
+On entry:  timeout specified in cs
+On exit:   returns byte read or -1 if nothing received in timeout period
+
+*/
+
+int readbyte_timeout(int timeout_cs)
+{
+  int value;
+  unsigned int start_time, current_time;
+
+  _swix(OS_ReadMonotonicTime, _OUT(0), &start_time);
+
+  do {
+    value = serial_read_byte(iInputStream);
+    _swix(OS_ReadMonotonicTime, _OUT(0), &current_time);
+  } while( (value == -1) && ((current_time-start_time) < timeout_cs) );
+
+  return(value);
+}
 
 /*
  *  com_ProcessError
@@ -814,6 +826,21 @@ void com_slot2_Iblock(BYTE *data)
   }
 }
 
+/*   Incoming Response Failed
+     ------------------------
+
+Called by incoming_response if incoming data is incorrect or if a timeout occurs.
+err contains error code which is used to generate an event.
+*/
+
+void com_incoming_bad(int err)
+{
+  com_SendAck();                 /* Something badly wrong, but attempt to recover */
+  g_uc_state = UC_IDLE;          /* Restore idle states */
+  g_slot2_state = IDLE;
+  sys_SigBroadcast(err);         /* Generate error for slot2 command */
+}
+
 
 /*  Read and Process Incoming Response
     ----------------------------------
@@ -827,45 +854,69 @@ g_slot2_state indicates our current state:
 
 OUTSTANDING WORK:
 
-We should verify the checksum and send an R-block error if it fails.
-We should also check that the response matches our current state (above)
-and complain if we get data that we are not expecting.
+If the checksum i incorrect we should send an R-block to ask the card to send again
+instead of generating an error immediately.
 
+We should also check that the response matches our current state
+and complain if we get data that we are not expecting.
 */
 
 void com_IncomingResponse(void)
 {
-  int i;
-  static BYTE slot2_INF[256];         /* Slot 2 INF data. Static to avoid using too much stack space. */
-  BYTE Xor_Check;                     /* Exclusive OR checksum - Longitudinal Redundancy Check */
+  int i, byte, slot;
+  static BYTE data[4+256];         /* Slot 2 data including header and INF. Static to avoid using too much stack space. */
+  BYTE Xor_Check;                  /* Exclusive OR checksum - Longitudinal Redundancy Check */
 
-  /** Get NAD/PCB/LEN from block header **/
-  g_slot2_apdu.NAD = blocking_readbyte();
-  g_slot2_apdu.PCB = blocking_readbyte();
-  g_slot2_apdu.LEN = blocking_readbyte();   /* Length of data that follows */
+  Xor_Check=0;
+  g_slot2_apdu.LEN=0;        /* This is updated from the third byte of the incoming data */
+
+  for (i=0; i<4+g_slot2_apdu.LEN; i++)     /*3 header bytes, 1 LRC byte plus (0-254) INF bytes */
+  {
+    byte= readbyte_timeout(90);            /* Read data byte, returns -1 if no data within 90cs */
+    if (byte==-1)                          /* Check for timeout reading INF byte */
+    {
+       /* Wait to see if we have a card removed message (0x0C) within 1s which would explain the timeout: */
+      if (readbyte_timeout(100)==MSG_CARDREMOVE && (slot=readbyte_timeout(10)) >0 && (slot==1 || slot==2) )
+      {
+        pms_debug("  Card %d removed", slot);
+        com_ProcessCardRemoved(slot);    /* Slot number (1 or 2) */
+        g_uc_state = UC_IDLE;            /* Restore idle states */
+      }
+      else
+      {
+        pms_debug("  Data timeout reading slot 2");
+        com_incoming_bad(SCI_ERROR2);         /* Use general purpose error for other cases */
+      }
+      return;
+    }
+    switch (i)
+    {
+      case 0:g_slot2_apdu.NAD = byte; break;  /* NAD is first byte of data */
+      case 1:g_slot2_apdu.PCB = byte; break;  /* PCB is second byte of data */
+      case 2:g_slot2_apdu.LEN = byte; break;  /* LEN - note that this is used in loop test so must be inside loop */
+    }
+    data[i]=byte;
+    Xor_Check^=byte;    /* This includes the checksum byte so Xor_Check will be 0 if good */
+  }
+
+  com_SendAck();                              /* Ack this response */
+  pms_debug("  Ack sent");
 
   debug_printf(db, "Read NAD/PCB/LEN as &%02X, &%02X, &%02X\n",g_slot2_apdu.NAD, g_slot2_apdu.PCB, g_slot2_apdu.LEN);
   pms_debug("Incoming Response NAD &%02X, PCB &%02X, LEN &%02X",g_slot2_apdu.NAD, g_slot2_apdu.PCB, g_slot2_apdu.LEN);
 
-  Xor_Check=g_slot2_apdu.NAD ^ g_slot2_apdu.PCB ^ g_slot2_apdu.LEN;
-
-  for (i=0; i<g_slot2_apdu.LEN; i++)
+  if (Xor_Check)    /* Checksum failed */
   {
-    slot2_INF[i] = blocking_readbyte();       /* Read INF data (if any) */
-    Xor_Check^=slot2_INF[i];
+    pms_debug("Bad checksum");
+    com_incoming_bad(SCI_ERROR2);        /* We should really send an R-block asking for the card to try again */
+    return;
   }
-  g_slot2_apdu.LRC = blocking_readbyte();     /* Read XOR checksum */
-  com_SendAck();                              /* Ack this response */
-  pms_debug("  Ack sent");
-
-  /***  OUTSTANDING: NEED TO CHECK CHECKSUM AND SEND R-BLOCK ERROR IF IT FAILS. NOT IMPLEMENTED YET ***/
-
 
   switch (g_slot2_apdu.PCB & 0xC0)         /* Bits b8 and b7 of PCB indicate type of block (note ISO7816 numbers bits b8-b1) */
   {
-    case 0xC0:   com_slot2_Sblock(slot2_INF); break;  /* S-block */
-    case 0x80:   com_slot2_Rblock(); break;           /* R-block, no INF field in R block*/
-    default:     com_slot2_Iblock(slot2_INF); break;  /* I-block */
+    case 0xC0:   com_slot2_Sblock(data+3); break;  /* S-block, INF field is at data+3, after 3 byte header */
+    case 0x80:   com_slot2_Rblock(); break;        /* R-block, no INF field in R block*/
+    default:     com_slot2_Iblock(data+3); break;  /* I-block */
   }
 }
 
