@@ -35,6 +35,10 @@
 
 #include "module.h"
 
+/* Magic word in R5 for UDPV_StartOfPlay extended interface (v1.16 up) */
+
+#define UDPV_Magic_Word  (0x56504455) /* "UDPV" */
+
 /* Default port number to use in absence of any other instructions */
 
 #define VIDEO_PORT       0x801a
@@ -102,7 +106,7 @@ static int  udpv_streamstatus (_kernel_swi_regs *r);
 
 static int  read_sysvar       (char *var, char *buf, int buflen);
 
-static int  do_getsock        (int port, int inputsocket);
+static int  do_getsock        (const char * address, int port, int inputsocket);
 static void init_session      (int handle, int skipsize);
 static void close_session     (void);
 
@@ -337,12 +341,25 @@ _kernel_oserror *udpv_swi_handler(int swi_offset, _kernel_swi_regs *r, void *pw)
 
 static int udpv_startofplay(_kernel_swi_regs *r)
 {
-  int port = r->r[2];
+  int  port = r->r[2];
+  bool extif;
+
+  /* Using the extended interface? */
+
+  if (r->r[5] == UDPV_Magic_Word /* (see top of file) */)
+  {
+    extif   = true;
+    r->r[5] = 0;
+    r->r[6] = 0;
+  }
+  else extif = false;
+
+  /* Reset stats */
 
   bytes_received     = 0;
   datagrams_received = 0;
 
-  if (port == 0) port = default_video_port;
+  if (port == 0 && !extif) port = default_video_port;
 
   #ifdef TRACE
     sequence_expected = 0;
@@ -355,10 +372,9 @@ static int udpv_startofplay(_kernel_swi_regs *r)
     if (do_debug) printf("Get socket for port %d\n", port);
   #endif
 
-  /* If the port we're asked for isn't the port we're using */
-  /* now (if any), close the existing socket.               */
+  /* Do we have a socket open? Shock, horror! */
 
-  if (port != video_port && vsock != -1)
+  if (vsock != -1)
   {
     socketclose(vsock);
     vsock = -1;
@@ -366,20 +382,19 @@ static int udpv_startofplay(_kernel_swi_regs *r)
 
   /* Open the requested socket */
 
-  if (vsock == -1)
-  {
-    vsock = do_getsock(port, 1);
+  vsock = do_getsock(extif ? (const char *) r->r[7] : NULL, port, 1);
 
-    #ifdef TRACE
-      if (do_debug && vsock < 0) printf("Socket open failed!\n");
-    #endif
-  }
+  #ifdef TRACE
+    if (do_debug && vsock < 0) printf("Socket open failed!\n");
+  #endif
 
   /* If that worked, mark this new port as our working one and */
   /* initialise the buffers and session.                       */
 
   if (vsock >= 0)
   {
+    if (extif) r->r[7] = vsock;
+
     video_port = port;
     bufs_allocate_main_buffer(); /* This resets offset pointers and can resize the buffer - see bufs.c */
     init_session(r->r[3], r->r[4]);
@@ -399,6 +414,12 @@ static int udpv_startofplay(_kernel_swi_regs *r)
 static int udpv_endofplay(_kernel_swi_regs *r)
 {
   (void) r;
+
+  if (vsock != -1)
+  {
+    socketclose(vsock);
+    vsock = -1;
+  }
 
   close_session();
 
@@ -530,15 +551,18 @@ static int read_sysvar(char *var, char *buf, int buflen)
 /*                                                            */
 /* Try to open the listening socket for video data.           */
 /*                                                            */
-/* Parameters: Port number to read on;                        */
+/* Parameters: Optional pointer to dotted quad IP address to  */
+/*             bind to;                                       */
+/*                                                            */
+/*             Port number to read on;                        */
 /*                                                            */
 /*             0 to just create it but leave it unbound, else */
 /*             also bind the socket.                          */
 /*                                                            */
-/* Returns:    Input socket number or -1 for failuer.         */
+/* Returns:    Input socket number or -1 for failure.         */
 /**************************************************************/
 
-static int do_getsock(int port, int inputsocket)
+static int do_getsock(const char * address, int port, int inputsocket)
 {
   struct sockaddr_in addr;
   int                arg, sock, on;
@@ -580,8 +604,16 @@ static int do_getsock(int port, int inputsocket)
   if (inputsocket != 0)
   {
     addr.sin_family      = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);
     addr.sin_port        = htons((u_short)port);
+
+    if (address != NULL)
+    {
+      addr.sin_addr.s_addr = inet_addr(address);
+    }
+    else
+    {
+      addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    }
 
     if (bind(sock, (struct sockaddr *)&addr, sizeof (addr)) < 0)
     {
