@@ -17,6 +17,7 @@
 #include "window.h"
 #include "event.h"
 
+#include "plugin.h"
 #include "m.h"
 #include "plugclient.h"
 #include "client.h"
@@ -215,7 +216,7 @@ static void process_tag_params(pluginclient_instance *plugin, client_midi_ptr cm
  * ----------------------------------------------------------------------
  */
 
-static void client_midi_init(int argc, char *argv[])
+static _kernel_oserror *client_midi_init(int argc, char *argv[])
 {
   _kernel_swi_regs regs;
   char temp_str[256];
@@ -253,9 +254,10 @@ static void client_midi_init(int argc, char *argv[])
 
   err_fatal(_kernel_swi(Synth_Memory, &regs, &regs));
 
+  return NULL;
 } /* client_midi_init */
 
-static void client_midi_shutdown(void)
+static _kernel_oserror *client_midi_shutdown(void)
 {
   _kernel_swi_regs regs;
 
@@ -269,6 +271,7 @@ static void client_midi_shutdown(void)
   regs.r[0] = -1;
   err_fatal(_kernel_swi(Synth_RemoveInstrument, &regs, &regs));
 
+  return NULL;
 } /* client_midi_shutdown */
 
 /* ----------------------------------------------------------------------
@@ -276,125 +279,133 @@ static void client_midi_shutdown(void)
  * ----------------------------------------------------------------------
  */
 
-static int client_midi_action(client_ptr cp, int reason)
+static _kernel_oserror *client_midi_action(client_ptr cp, int reason)
 {
-  client_midi_ptr cmp = (client_midi_ptr) cp;
-  _kernel_swi_regs regs;
-
-  TRACE2("client_midi_action(): instance %p reason %d active client %p playing %d paused %d\n" _
-         cmp _ reason _ active_midi_client _ cmp->midi_playing _ cmp->midi_paused);
-
-  switch (reason)
-  {
-    case client_action_STOP:
-           if ((active_midi_client==cmp) && cmp->midi_playing)
-           {
-             err_report(_kernel_swi(MIDIPlay_Stop, &regs, &regs));
-             utils_delay (2); /*Important, reason unknown. JRC 26 Jun 1997*/
-           }
-           cmp->midi_playing=cmp->midi_paused=FALSE;
-           pluginclient_send_busy(cmp->plugin, 0, plugin_state_STOP);
-           break;
-
-    case client_action_PLAY:
-           /* if we're paused, unpause */
-           if ((active_midi_client==cmp) && cmp->midi_paused)
-           {
-             regs.r[0] = 1; /* unpause */
-             err_report(_kernel_swi(MIDIPlay_Start, &regs, &regs));
-             pluginclient_send_busy(cmp->plugin, 0, plugin_state_PLAY);
-           } /* if */
-
-           /* if we're active but stopped, restart */
-           else if ((active_midi_client==cmp) && !cmp->midi_playing)
-           {
-             regs.r[0] = 0;
-             regs.r[1] = cmp->starttime * 100;
-             err_report(_kernel_swi(MIDIPlay_Start, &regs, &regs));
-             pluginclient_send_busy(cmp->plugin, 0, plugin_state_PLAY);
-           } /* else if */
-
-           /* if we're inactive, restart */
-           else if (active_midi_client != cmp)
-           {
-             /* Just check */
-             if (!cmp->file_name)
-               return 1;
-
-             /* stop the old client (if there is one) and become the new
-              * active one */
-
-             if (active_midi_client)
-             {
-               client_midi_action((client_ptr) active_midi_client,
-                                  client_action_STOP);
-
+   client_midi_ptr cmp = (client_midi_ptr) cp;
+   _kernel_swi_regs regs;
+   _kernel_oserror *error = NULL;
+ 
+   TRACE2 ("client_midi_action(): instance %p reason %d active client %p "
+         " playing %d paused %d\n" _ cmp _ reason _ active_midi_client _
+         cmp->midi_playing _ cmp->midi_paused);
+ 
+   switch (reason)
+   {
+      case plugin_state_STOP:
+         if (active_midi_client == cmp && cmp->midi_playing)
+         {
+            if ((error = _kernel_swi (MIDIPlay_Stop, &regs, &regs)) != NULL)
+               goto finish;
+            utils_delay (2); /*Important, reason unknown. JRC 26 Jun 1997*/
+         }
+         cmp->midi_playing = cmp->midi_paused = FALSE;
+         pluginclient_send_busy(cmp->plugin, 0, plugin_state_STOP);
+      break;
+ 
+      case plugin_state_PLAY:
+         /* if we're paused, unpause */
+         if (active_midi_client == cmp && cmp->midi_paused)
+         {
+            regs.r[0] = 1; /* unpause */
+            if ((error = _kernel_swi (MIDIPlay_Start, &regs, &regs)) != NULL)
+               goto finish;
+            pluginclient_send_busy(cmp->plugin, 0, plugin_state_PLAY);
+         } /* if */
+ 
+         /* if we're active but stopped, restart */
+         else if (active_midi_client == cmp && !cmp->midi_playing)
+         {
+            regs.r[0] = 0;
+            regs.r[1] = cmp->starttime * 100;
+            if ((error = _kernel_swi (MIDIPlay_Start, &regs, &regs)) != NULL)
+               goto finish;
+            pluginclient_send_busy(cmp->plugin, 0, plugin_state_PLAY);
+         } /* else if */
+ 
+         /* if we're inactive, restart */
+         else if (active_midi_client != cmp && cmp->file_name != NULL)
+         {
+            /* stop the old client (if there is one) and become the new
+             * active one */
+ 
+            if (active_midi_client)
+            {
+               if ((error = client_midi_action((client_ptr) active_midi_client,
+                     plugin_state_STOP)) != NULL)
+                  goto finish;
+ 
                /* tell MIDI player to close file */
-               err_report(_kernel_swi(MIDIPlay_Close, &regs, &regs));
                TRACE5("calling MIDIPlay_Close for %s\n" _ active_midi_client->file_name);
-             } /* if */
+               if ((error = _kernel_swi (MIDIPlay_Close, &regs, &regs)) != NULL)
+                  goto finish;
+            } /* if */
+ 
+            active_midi_client = cmp;
+ 
+            /* tell MIDI player about file */
+            regs.r[0] = 2; /* data type = file */
+            regs.r[1] = (int) cmp->file_name;
+            regs.r[2] = 0; /* actually unused */
+            regs.r[3] = 0; /* flags */
+            if ((error = _kernel_swi (MIDIPlay_File, &regs, &regs)) != NULL)
+               goto finish;
 
-             active_midi_client = cmp;
+            /* start playback */
+            cmp->curr_loop=cmp->loop;
+            if ((error = client_midi_action(cp, plugin_state_UNMUTE)) != NULL)
+               goto finish;
 
-             /* tell MIDI player about file */
-             regs.r[0] = 2; /* data type = file */
-             regs.r[1] = (int) &cmp->file_name[0];
-             regs.r[2] = 0; /* actually unused */
-             regs.r[3] = 0; /* flags */
-             err_report(_kernel_swi(MIDIPlay_File, &regs, &regs));
+            regs.r[0] = 0;
+            regs.r[1] = cmp->starttime * 100;
+            if ((error = _kernel_swi (MIDIPlay_Start, &regs, &regs)) != NULL)
+               goto finish;
 
-             /* start playback */
-             cmp->curr_loop=cmp->loop;
-             client_midi_action(cp, client_action_UNMUTE);
+            pluginclient_send_busy(cmp->plugin, 0, plugin_state_PLAY);
+         } /* else if */
+ 
+         cmp->midi_playing=TRUE;
+         cmp->midi_paused=FALSE;
+      break;
+ 
+      case plugin_state_PAUSE:
+         if (active_midi_client == cmp && cmp->midi_playing)
+         {
+            if ((error = _kernel_swi (MIDIPlay_Stop, &regs, &regs)) != NULL)
+               goto finish;
+            utils_delay (2); /*Important, reason unknown. JRC 26 Jun 1997*/
+            pluginclient_send_busy(cmp->plugin, 0, plugin_state_PAUSE);
+            cmp->midi_paused=TRUE;
+            cmp->midi_playing=FALSE;
+         } /* if */
+      break;
+ 
+      case plugin_state_MUTE:
+         if (active_midi_client == cmp)
+         {
+            regs.r[0] = 0; /* set volume to 0 */
+            if ((error = _kernel_swi (MIDIPlay_Volume, &regs, &regs)) != NULL)
+               goto finish;
+         } /* if */
+      break;
+ 
+      case plugin_state_UNMUTE:
+         if (active_midi_client == cmp)
+         {
+            regs.r [0] = cmp->volume == -1? 255: cmp->volume; /* set volume to
+                                                               * volume or max
+                                                               */
+            if ((error = _kernel_swi (MIDIPlay_Volume, &regs, &regs)) != NULL)
+               goto finish;
+         } /* if */
+      break;
+   } /* switch */
 
-             regs.r[0] = 0;
-             regs.r[1] = cmp->starttime * 100;
-             err_report(_kernel_swi(MIDIPlay_Start, &regs, &regs));
-             pluginclient_send_busy(cmp->plugin, 0, plugin_state_PLAY);
-           } /* else if */
-
-           cmp->midi_playing=TRUE;
-           cmp->midi_paused=FALSE;
-           break;
-
-    case client_action_PAUSE:
-           if ((active_midi_client==cmp) && cmp->midi_playing)
-           {
-             err_report(_kernel_swi(MIDIPlay_Stop, &regs, &regs));
-             utils_delay (2); /*Important, reason unknown. JRC 26 Jun 1997*/
-             pluginclient_send_busy(cmp->plugin, 0, plugin_state_PAUSE);
-             cmp->midi_paused=TRUE;
-             cmp->midi_playing=FALSE;
-           } /* if */
-           break;
-
-    case client_action_MUTE:
-           if (active_midi_client==cmp)
-           {
-             regs.r[0] = 0; /* set volume to 0 */
-             err_report(_kernel_swi(MIDIPlay_Volume, &regs, &regs));
-           } /* if */
-           break;
-
-    case client_action_UNMUTE:
-           if (active_midi_client==cmp)
-           {
-             regs.r[0] = (cmp->volume==-1) ? 255 : cmp->volume; /* set volume to
-                                                                 * volume or max
-                                                                 */
-             err_report(_kernel_swi(MIDIPlay_Volume, &regs, &regs));
-           } /* if */
-           break;
-
-    default:
-           break;
-  } /* switch */
-
-  return 1;
+finish:
+   return error;
 } /* client_midi_action */
 
 
-static void client_midi_idle(client_ptr cp)
+static _kernel_oserror *client_midi_idle(client_ptr cp)
 {
   client_midi_ptr cmp = (client_midi_ptr) cp;
   _kernel_swi_regs regs;
@@ -418,7 +429,7 @@ static void client_midi_idle(client_ptr cp)
       {
         if (cmp->curr_loop != -1)
           cmp->curr_loop--;
-        client_midi_action(cp, client_action_PLAY);
+        return client_midi_action(cp, plugin_state_PLAY);
       } /* if */
       else
       {
@@ -426,8 +437,8 @@ static void client_midi_idle(client_ptr cp)
       } /* else */
     } /* if */
   } /* if */
-
-  return;
+  
+  return NULL;
 } /* client_midi_idle */
 
 
@@ -436,31 +447,36 @@ static void client_midi_idle(client_ptr cp)
  * ----------------------------------------------------------------------
  */
 
-static int client_midi_open(pluginclient_instance *plugin, client_ptr *client_data,
+static _kernel_oserror *client_midi_open(pluginclient_instance *plugin, client_ptr *client_data,
                             int *opening_flags)
 {
-    client_midi_ptr cmp = m_CALLOC (sizeof *cmp, 1);
+   client_midi_ptr cmp;
+   _kernel_oserror *error = NULL;
 
-    TRACE2("client_midi_open() cmp=%p\n" _ cmp);
+   TRACE2 ("+client_midi_open()\n");
 
-    if (cmp)
-    {
-	/* store the instance value */
-	cmp->plugin = plugin;
+   if ((cmp = m_CALLOC (sizeof *cmp, 1)) == NULL)
+   {
+      error = utils_msgs_error_lookup (1, "Memory");
+      goto finish;
+   }
 
-	/* check the parameters from the file */
-	process_tag_params(plugin, cmp);
+   /* store the instance value */
+   cmp->plugin = plugin;
 
-	*opening_flags = client_open_FETCH_DATA | client_open_ALLOW_ACTION;
-    } /* if */
+   /* check the parameters from the file */
+   process_tag_params(plugin, cmp);
 
-    *client_data = cmp;
+   *opening_flags = plugin_opening_FETCH_DATA | plugin_opening_CAN_ACTION;
+   *client_data = (client_ptr *) cmp;
 
-    return (cmp != NULL);
+finish:
+   TRACE2 ("-client_midi_open() cmp=%p\n" _ cmp);
+   return error;
 } /* client_midi_open */
 
 
-static void client_midi_close(client_ptr *cp)
+static _kernel_oserror *client_midi_close(client_ptr *cp)
 {
     client_midi_ptr cmp = (client_midi_ptr) *cp;
     _kernel_swi_regs regs;
@@ -489,6 +505,7 @@ static void client_midi_close(client_ptr *cp)
     m_FREE(cmp, sizeof *cmp);
     
     *cp = NULL;
+    return NULL;
 } /* client_midi_close */
 
 
@@ -509,7 +526,7 @@ static void client_midi_close(client_ptr *cp)
  *   at once.
  */
 
-static void client_midi_stream_new(client_ptr cp, const char *mime_type,
+static _kernel_oserror *client_midi_stream_new(client_ptr cp, const char *mime_type,
                                    plugin_stream *stream, int seekable,
                                    int *stream_type)
 {
@@ -519,67 +536,96 @@ static void client_midi_stream_new(client_ptr cp, const char *mime_type,
 
     /* Just tell them we only want the whole file */
     *stream_type = plugin_stream_TYPE_ASFILEONLY;
+    return NULL;
 }
 
 /*
  * The stream requested has finished downloading and is now available
  */
 
-static int client_midi_stream_as_file(client_ptr cp, plugin_stream *stream,
+static _kernel_oserror *client_midi_stream_as_file(client_ptr cp, plugin_stream *stream,
                                       const char *cache_file)
 {
-    client_midi_ptr cmp = (client_midi_ptr) cp;
+   client_midi_ptr cmp = (client_midi_ptr) cp;
+   _kernel_oserror *error = NULL;
 
-    TRACE2("client_midi_stream_as_file(): instance %p\n" _ cmp);
+   TRACE2("client_midi_stream_as_file(): instance %p\n" _ cmp);
     
-    NOT_USED (stream);
+   NOT_USED (stream);
 
-    if (!cmp->file_name) /* just in case */
-      cmp->file_name = strdup(cache_file);
+   if (cmp->file_name == NULL) /* just in case */
+   {
+      if ((cmp->file_name = strdup (cache_file)) == NULL)
+      {
+         error = utils_msgs_error_lookup (1, "Memory");
+         goto finish;
+      }
+   }
 
-    /* start playback */
-    if (cmp->autostart)
-      client_midi_action(cp, client_action_PLAY);
+   /* start playback */
+   if (cmp->autostart)
+      if ((error = client_midi_action (cp, plugin_state_PLAY)) != NULL)
+         goto finish;
 
-    return 1;
+finish:
+   return error;
 }
 
 /* ---------------------------------------------------------------------- */
 
 /* play a straightforward file */
-static client_ptr client_midi_play_file(const char *file_name, int filetype,
+static _kernel_oserror *client_midi_play_file(const char *file_name, int filetype,
                                           ObjectId window_oid,
-                                          pluginclient_instance *plugin)
+                                          pluginclient_instance *plugin, client_ptr *cp)
 {
-  client_midi_ptr cmp;
+   client_midi_ptr cmp;
+   _kernel_oserror *error = NULL;
 
-  TRACE2("client_play_midi_file(): file \"%s\", type &%X, plugin %d\n" _ file_name _
-         filetype _ plugin);
-  /*m_ASSERT (pluginclient_exists (plugin)); No---might not be linked into
-      list yet. JRC 1 Jul 1997*/
+   NOT_USED (window_oid); NOT_USED (filetype);
 
-  NOT_USED (window_oid);
+   TRACE2("client_play_midi_file(): file \"%s\", type &%X, plugin %d\n" _ file_name _
+          filetype _ plugin);
 
-  /* create and clear cmp */
-  cmp = m_CALLOC (sizeof *cmp, 1);
+   /*Might not be linked into list yet. JRC 1 Jul 1997*/
 
-  if (cmp)
-  {
-    cmp->autostart=TRUE;
-    cmp->loop = FALSE;
-    cmp->starttime = 0;
-    cmp->endtime = -1;
-    cmp->volume = -1;
-    cmp->plugin = plugin;
+   /* create and clear cmp */
+   if ((cmp = m_CALLOC (sizeof *cmp, 1)) == NULL)
+   {
+      error = utils_msgs_error_lookup (1, "Memory");
+      goto finish;
+   }
 
-    cmp->file_name = strdup(file_name);
+   if ((cmp->file_name = strdup (file_name)) == NULL)
+   {
+      m_FREE (cmp, sizeof *cmp);
+      return utils_msgs_error_lookup (1, "Memory");
+   }
 
-    client_midi_action(cmp, client_action_PLAY);
-  } /* if */
+   cmp->autostart = TRUE;
+   cmp->loop      = FALSE;
+   cmp->starttime = 0;
+   cmp->endtime   = -1;
+   cmp->volume    = -1;
+   cmp->plugin    = plugin;
 
-  return (client_ptr) cmp;
+   if ((error = client_midi_action (cmp, plugin_state_PLAY)) != NULL)
+      goto finish;
+  
+   *cp = (client_ptr) cmp;
 
-  NOT_USED(filetype);
+finish:
+   if (error != NULL)
+   {
+      if (cmp != NULL)
+      {
+         if (cmp->file_name != NULL)
+            m_FREE (cmp->file_name, strlen (cmp->file_name) + 1);
+
+         m_FREE (cmp, sizeof *cmp);
+      }
+   }
+   
+   return error;
 } /* client_midi_play_file */
 
 /* ---------------------------------------------------------------------- */
