@@ -41,6 +41,8 @@ FILES=\
  ${RDIR}.bin.Host\
  ${SDIR}.ifconfig.IfConfig\
  ${SDIR}.inetstat.InetStat\
+ ${SDIR}.map-mbone.Map-MBone\
+ ${SDIR}.mtrace.MTrace\
  ${SDIR}.ping.Ping\
  ${SDIR}.pong.Pong\
  ${SDIR}.utils.utl.RMFind\
@@ -64,6 +66,8 @@ NETUTILS = \
         ${SDIR}.arp.ARP              \
         ${SDIR}.ifconfig.IfConfig    \
         ${SDIR}.inetstat.InetStat    \
+        ${SDIR}.map-mbone.Map-MBone  \
+        ${SDIR}.mtrace.MTrace        \
         ${SDIR}.ping.Ping            \
         ${SDIR}.pong.Pong            \
         ${SDIR}.utils.utl.RMFind     \
@@ -98,6 +102,8 @@ install: ${FILES}
         ${CP} ${SDIR}.arp.ARP               ${INSTDIR}.bin.ARP          ${CPFLAGS}
         ${CP} ${SDIR}.ifconfig.IfConfig     ${INSTDIR}.bin.IfConfig     ${CPFLAGS}
         ${CP} ${SDIR}.inetstat.InetStat     ${INSTDIR}.bin.InetStat     ${CPFLAGS}
+        ${CP} ${SDIR}.map-mbone.Map-MBone   ${INSTDIR}.bin.Map-MBone    ${CPFLAGS}
+        ${CP} ${SDIR}.mtrace.MTrace         ${INSTDIR}.bin.MTrace       ${CPFLAGS}
         ${CP} ${SDIR}.ping.Ping             ${INSTDIR}.bin.Ping         ${CPFLAGS}
         ${CP} ${SDIR}.pong.Pong             ${INSTDIR}.bin.Pong         ${CPFLAGS}
         ${CP} ${SDIR}.utils.utl.RMFind      ${INSTDIR}.bin.RMFind       ${CPFLAGS}
@@ -134,6 +140,8 @@ resources-NetUtils: ${NETUTILS}
         ${CP} ${SDIR}.arp.ARP               ${RESD}.bin.ARP          ${CPFLAGS}
         ${CP} ${SDIR}.ifconfig.IfConfig     ${RESD}.bin.IfConfig     ${CPFLAGS}
         ${CP} ${SDIR}.inetstat.InetStat     ${RESD}.bin.InetStat     ${CPFLAGS}
+        ${CP} ${SDIR}.map-mbone.Map-MBone   ${RESD}.bin.Map-MBone    ${CPFLAGS}
+        ${CP} ${SDIR}.mtrace.MTrace         ${RESD}.bin.MTrace       ${CPFLAGS}
         ${CP} ${SDIR}.ping.Ping             ${RESD}.bin.Ping         ${CPFLAGS}
         ${CP} ${SDIR}.pong.Pong             ${RESD}.bin.Pong         ${CPFLAGS}
         ${CP} ${SDIR}.utils.utl.RMFind      ${RESD}.bin.RMFind       ${CPFLAGS}
@@ -170,6 +178,21 @@ ${SDIR}.inetstat.InetStat: ${SDIR}.inetstat.c.main \
 	${SDIR}.inetstat.c.route\
 	${SDIR}.inetstat.c.mroute
 	dir ${SDIR}.inetstat
+	@amu_machine
+	@up
+	@up
+
+${SDIR}.map-mbone.Map-MBone: ${SDIR}.map-mbone.c.Map-MBone \
+	${SDIR}.map-mbone.c.igmp \
+	${SDIR}.map-mbone.c.inet \
+	${SDIR}.map-mbone.c.kern
+	dir ${SDIR}.map-mbone
+	@amu_machine
+	@up
+	@up
+
+${SDIR}.mtrace.MTrace: ${SDIR}.mtrace.c.MTrace
+	dir ${SDIR}.mtrace
 	@amu_machine
 	@up
 	@up
