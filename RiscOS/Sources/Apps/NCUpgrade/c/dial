@@ -23,10 +23,14 @@
 /* System includes */
 #include "kernel.h"
 #include "swis.h"
+#include "toolbox.h"
 #include "Dialler.h"
+#include "DebugLib/DebugLib.h"
+#include "MsgLib/MsgLib.h"
 
 /* Local includes */
 #include "ui.h"
+#include "ui_globals.h"  /* Unsightly, but necessary */
 #include "errors.h"
 #include "main.h"
 #include "dial.h"
@@ -43,7 +47,7 @@ static enum dial_state dial_state = IDLE;
 /*                             Function Prototypes                                  */
 /************************************************************************************/
 
-static int initialise_with_dialler_and_dial_ISP(void);
+int initialise_with_dialler_and_dial_ISP(void);
 static int tell_dialler_to_hang_up(void);
 static int check_dialler_status_word(void);
 static void reset_modem(void);
@@ -247,7 +251,7 @@ extern int dialler_stateMachine(int reason)
 /* Notes:     The controllerless modem does not recognise +++ so this was abandoned */
 /*            in the hangup script.  The hangup script below has been checked by Ben*/
 /************************************************************************************/
-static int initialise_with_dialler_and_dial_ISP(void)
+int initialise_with_dialler_and_dial_ISP(void)
 {
 #ifndef DIALLER_SIMULATION
     _kernel_oserror *e;
@@ -257,72 +261,99 @@ static int initialise_with_dialler_and_dial_ISP(void)
     char            *current = new_dial_script;
     char            *new_dial_end = new_dial_script + sizeof(new_dial_script);
     int i;
+    int count = 0;
 
-    for (i = 0; i < MAXIMUM_SCRIPT_SIZE; i++)
-    {
-         *(new_dial_script + i) = '\0';
-    }
+    *(new_dial_script) = '\0';
 
     /* We build our final dial script (in new_dial_script) by substituting the
        user details into the dial script which is specified through the UI
        (usr_details->isp.modem_script). */
     while (*script)
     {
-        if (script[0])
+      /* Get the next line from the login script (lines are seperated by \n)
+         and copy into new_dial_string (at position pointed to by current) */
+      script = get_script_string(current, script, new_dial_end);
+
+      /* If null pointer returned from get_script_string, then there was
+         not enough room to copy the next line into new_dial_script */
+      if (!script)
+      {
+          error_handler(__FILE__,__LINE__,"initialise_with_dialler_and_dial_ISP()",0,"Dial script too long",WARNING);
+          return DIAL_ERROR_SCRIPT_TOO_LONG;
+      }
+
+      dprintf (("", "\n*** Script line %2d***\n%s\n*********************\n", count++, current));
+
+      /* Check for login string (usually 'ogin: ') */
+      if (strcmp(current, LOGIN_STRING) == 0)
+      {
+          strcat(current, usr_details->isp.username);
+      }
+
+      /* Check for password string (usually 'assword: ') */
+      else if (strcmp(current, PASSWORD_STRING) == 0)
+      {
+          strcat(current, usr_details->isp.password);
+      }
+
+      /* Check for country code string (usually 'OK AT*NC').  If "OK AT*NC2n" is specified, where 'n' is */
+      /* a modem country code (USA-0,Norway-1,UK-2,Germany-3,Sweden-4,Denmark-5,Finland-6), get_country_ */
+      /* code() is not called and the value of 'n' is used (tested and verified).  If 'n' is NOT         */
+      /* specified, i.e. there is just "OK AT*NC", then get_country_code() maps the dialling country     */
+      /* code specified on the Dialling Options screen to the required AT*NC modem code (e.g. a dialling */
+      /* country code of 44 entered on the Dialling Options screen ends up as AT*NC2).  Tested and       */
+      /* verified.                                                                                       */
+      else if (strcmp(current, COUNTRY_STRING) == 0)
+      {
+          if (atoi (lookup_message_token (&ui_message_block, "Uses_CountryCode")) == 1)
+            sprintf(current, "%s%d", COUNTRY_STRING, get_country_code(usr_details->phone.country_code));
+          else
+            *current = '\0';
+      }
+
+      /* Check for dial command (begins 'OK ATD') */
+      else if (strncmp(current, DIAL_STRING, strlen(DIAL_STRING)) == 0)
+      {
+          current[strlen(DIAL_STRING)-1] = '\0';
+          switch (usr_details->phone.dial_mode)
+          {
+            case DialMode_Tone:
+              dprintf (("", "\n$$$$$$$$$$ Tone\n"));
+              strcat (current, "DT");
+              break;
+
+            case DialMode_Pulse20:
+              dprintf (("", "\n$$$$$$$$$$ Pulse20\n"));
+              strcat (current, "&P3");
+              /* and fall through to pulse 10 */
+
+            default:
+            case DialMode_Pulse10:
+              strcat (current, "DP");
+          }
+          strcat(current, usr_details->phone.outside_line_prefix);
+          strcat(current, usr_details->phone.call_waiting_prefix);
+          strcat(current, usr_details->isp.phone_number);
+      }
+
+      /* Move current on to point to next line */
+      #if 0
+        for (i = 0; i < strlen (current)+1; i++)
         {
-            /* Get the next line from the login script (lines are seperated by \n)
-               and copy into new_dial_string (at position pointed to by current) */
-            script = get_script_string(current, script, new_dial_end);
-
-            /* If null pointer returned from get_script_string, then there was
-               not enough room to copy the next line into new_dial_script */
-            if (!script)
-            {
-                error_handler(__FILE__,__LINE__,"initialise_with_dialler_and_dial_ISP()",0,"Dial script too long",WARNING);
-                return DIAL_ERROR_SCRIPT_TOO_LONG;
-            }
-
-            /* Check for login string (usually 'ogin: ') */
-            if (strcmp(current, LOGIN_STRING) == 0)
-            {
-                strcat(current, usr_details->isp.username);
-            }
-
-            /* Check for password string (usually 'assword: ') */
-            else if (strcmp(current, PASSWORD_STRING) == 0)
-            {
-                strcat(current, usr_details->isp.password);
-            }
-
-            /* Check for country code string (usually 'OK AT*NC').  If "OK AT*NC2n" is specified, where 'n' is */
-            /* a modem country code (USA-0,Norway-1,UK-2,Germany-3,Sweden-4,Denmark-5,Finland-6), get_country_ */
-            /* code() is not called and the value of 'n' is used (tested and verified).  If 'n' is NOT         */
-            /* specified, i.e. there is just "OK AT*NC", then get_country_code() maps the dialling country     */
-            /* code specified on the Dialling Options screen to the required AT*NC modem code (e.g. a dialling */
-            /* country code of 44 entered on the Dialling Options screen ends up as AT*NC2).  Tested and       */
-            /* verified.                                                                                       */
-            else if (strcmp(current, COUNTRY_STRING) == 0)
-            {
-                sprintf(current, "%s%d", COUNTRY_STRING, get_country_code(usr_details->phone.country_code));
-            }
-
-            /* Check for dial command (begins 'OK ATD') */
-            else if (strncmp(current, DIAL_STRING, strlen(DIAL_STRING)) == 0)
-            {
-                strcat(current, usr_details->phone.outside_line_prefix);
-                strcat(current, usr_details->phone.call_waiting_prefix);
-                strcat(current, usr_details->isp.phone_number);
-            }
-
-            /* Move current on to point to next line */
-            current += strlen(current);
-            *current++ = LINE_FEED;
+          dprintf (("", "current[%d] = c:%c  0x%x\n", i, current[i] ? current[i] : '~', current[i]));
         }
+      #endif
+      strcat (current, "\n");
+      current += strlen(current);
+      dprintf (("", "\n*&*&*&* Dial script follows *&*&*&*\n%s\n", new_dial_script));
     }
+
 
     /* Terminate string */
     *current++ = LINE_FEED;
-    *current++ = 0;
+    *current++ = '\0';
+
+    dprintf (("", "\n*&*&*&* Final Dial script follows *&*&*&*\n%s\n", new_dial_script));
 
     /* Now call DiallerB */
     e = _swix(DiallerB_Dial, _INR(0,4),
@@ -614,7 +645,7 @@ static char *get_script_string(char *ptr, char *script, char *end)
     script+=2;
 
     /* Terminate string */
-    *ptr = 0;
+    *ptr = '\0';
 
     return script;
 }

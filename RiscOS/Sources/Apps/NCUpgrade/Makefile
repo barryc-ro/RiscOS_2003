@@ -65,7 +65,7 @@ WFLAGS		= ~cf~vr
 # These are for the standard Desktop build (plus debug)
 
 DFLAGS		= 
-DDFLAGS		= -fn -DDEBUGLIB -DDEBUG
+DDFLAGS		= -fn -DDEBUG -DDEBUGLIB
 DZFLAGS		= 
 DDZFLAGS	= -fn -DDEBUGLIB
 
@@ -161,6 +161,7 @@ RESFILES = \
 OBJS = \
  o.main \
  o.strings \
+ o.ui_display \
  o.ui_menu \
  o.ui_misc \
  o.dial \
@@ -176,6 +177,7 @@ OBJS = \
 OBJSZ = \
  oz.main \
  oz.strings \
+ oz.ui_display \
  oz.ui_main \
  oz.ui_menu \
  oz.ui_misc \
@@ -191,6 +193,7 @@ OBJSZ = \
 OBJSD = \
  od.main \
  od.strings \
+ od.ui_display \
  od.ui_main \
  od.ui_menu \
  od.ui_misc \
@@ -202,7 +205,23 @@ OBJSD = \
  od.ppp \
  od.progrmng \
  od.leds \
-  
+
+OBJSI = \
+ i.main \
+ i.strings \
+ i.ui_display \
+ i.ui_menu \
+ i.ui_misc \
+ i.dial \
+ i.error \
+ i.ftp \
+ i.flashstubs \
+ i.nvram \
+ i.ppp \
+ i.progrmng \
+ i.ui_main \
+ i.leds \
+
 #OBJSDZ =
 
 
@@ -210,9 +229,11 @@ OBJSD = \
 # Rule patterns
 #
 
-.SUFFIXES: .o .oz .od .odz .s .c
+.SUFFIXES: .o .oz .od .odz .s .c .i
 
 .c.o:;		${CC} ${CFLAGS} ${DFLAGS} ${EXTRAFLAGS} -c -o $@ $<
+
+.c.i:;		${CC} ${CFLAGS} ${DFLAGS} ${EXTRAFLAGS} -c -C -E $< >> $@
 
 .c.oz:;		${CC} ${CFLAGS} ${DZFLAGS} ${EXTRAFLAGS} -c -zM -DROM -o $@ $<
 
@@ -281,6 +302,7 @@ resources:
 	@echo
 	@echo ${COMPONENT}: Resource files copied to Messages module
 
+preprocess:	$(OBJSI) o.dirs
 clean:
 	@echo starting
 	${WIPE}	abs		${WFLAGS}
@@ -288,6 +310,7 @@ clean:
 	${WIPE}	linked		${WFLAGS}
 	${WIPE}	map		${WFLAGS}
 	${WIPE}	o		${WFLAGS}
+	${WIPE}	i		${WFLAGS}
 	${WIPE}	od		${WFLAGS}
 	${WIPE}	oz		${WFLAGS}
 	${WIPE}	odz		${WFLAGS}
@@ -303,6 +326,7 @@ o.dirs:
 	@${MKDIR} aof
 	@${MKDIR} linked
 	@${MKDIR} map
+	@${MKDIR} i
 	@${MKDIR} o
 	@${MKDIR} od
 	@${MKDIR} oz
@@ -356,12 +380,12 @@ s.ModuleWrap: ${WRAPPER}
 
 abs.!RI: ${OBJS} ${EXTRALIBS} ${LIBS} o.dirs
 	@echo
-	${LD} -s syms.!RI -o $@ ${OBJS} ${LIBS} ${EXTRALIBS}
+	${LD} ${LINKEXTRA} -s syms.!RI -o $@ ${OBJS} ${LIBS} ${EXTRALIBS}
 	${SQUEEZE} ${SQFLAGS} $@
 
 abs.!RI_D: ${OBJSD} ${LIBSD} ${EXTRALIBS} o.dirs
 	@echo
-	${LD} -s syms.!RI_D -o $@ ${OBJSD} ${LIBSD} ${EXTRALIBS}
+	${LD} ${LINKEXTRA} -s syms.!RI_D -o $@ ${OBJSD} ${LIBSD} ${EXTRALIBS}
 
 ${MODULE}: oz.ModuleWrap ${OBJSZ} ${LIBSM} ${EXTRALIBS} ${CLIB} o.dirs
 	@echo
