@@ -33,10 +33,11 @@
 /*          09-Sep-97: RML: Made use of flex_set_budge to avoid stack problems on pre-RPC                  */
 /*                          machines.                                                                      */
 /*          18-Sep-97: RML: Added flex_deferred_compaction in gifstream_plot.                              */ 
+/*          22-Sep-97: RML: Fixed problem with npixels not being updated sometimes in lzw decoder, so      */
+/*                          imagelib thinks image is corrupted.                                            */
 /*---------------------------------------------------------------------------------------------------------*/
 /* To do :                                                                                                 */
 /*                                                                                                         */
-/* render_read_still_image & render_read_animated_image appear to be the wrong way around!                 */
 /*---------------------------------------------------------------------------------------------------------*/
 
 
@@ -84,6 +85,25 @@
 #define min(a, b) (a<b ? a : b)
 
 #define NETSCAPE_ID 1
+
+#define State_ReadGifSignature      1
+#define State_ReadScreenDescriptor  2
+#define State_ReadGlobalColourMap   3
+#define State_InventGlobalColourMap 4
+#define State_ReadExtensionBlock    5
+#define State_ReadImageDescriptor   6
+#define State_ReadLocalColourMap    7
+#define State_PreImageData          8
+#define State_NoMoreFrames          9
+#define State_ReportWriteLine       10
+#define State_ReadApplicationExt    11
+#define State_ReadGraphicControlExt 12
+#define State_ReadDataBlock         13
+#define State_ReadImageData         14
+#define State_EndImageData          15
+
+#define Type_InternalLZW     1
+#define Type_AnimatedSprites 2
 
 /*---------------------------------------------------------------------------------------------------------*/
 
@@ -170,14 +190,14 @@ static char         report_temp[255];         // Temporary - for debugging purpo
 
 /*------------------------------------------------------------------------------------------------------*/
 
-static _kernel_oserror* gifstream_read_animated_image(GIFloaddata *load, BBox *changed);
+static _kernel_oserror* gifstream_read_still_image(GIFloaddata *load, BBox *changed);
 static int              gifstream_ReadCode(GIFloaddata *load, int CodeSize, int ReadMask);
 static void             gifstream_abandon_image(int handle);
 static _kernel_oserror* gifstream_error(char *s);
 static int              gifstream_valid_handle(int handle);
 static void             gifstream_initialise(void);
 static void             gifstream_add_palette(GIFloaddata *load);
-static _kernel_oserror* gifstream_read_still_image(GIFloaddata *load, BBox *changed);
+static _kernel_oserror* gifstream_read_image_data(GIFloaddata *load, BBox *changed);
 static _kernel_oserror* gifstream_read_gif_signature(GIFloaddata *load);
 static _kernel_oserror* gifstream_read_screen_descriptor(GIFloaddata *load);
 static _kernel_oserror* gifstream_read_global_colour_map(GIFloaddata *load);
@@ -268,11 +288,11 @@ _kernel_oserror* gifstream_begin(int *return_gifhandle, int flags)
    store[n]->width                   = -1;
    store[n]->height                  = -1;
    store[n]->render_handle           = -1;
-   store[n]->state                   = 1;
+   store[n]->state                   = State_ReadGifSignature;
    store[n]->bytes_so_far_in_section = 0;
    store[n]->current_frame           = 0;
    store[n]->last_full_frame         = -1;
-   store[n]->flags.render_type       = 1;
+   store[n]->flags.render_type       = Type_InternalLZW;
 
    /* Set flags */
    store[n]->flags.image_fast          = 0;
@@ -282,7 +302,7 @@ _kernel_oserror* gifstream_begin(int *return_gifhandle, int flags)
    store[n]->flags.regen_tables        = 0;
    store[n]->flags.mutable_mask        = 0;
    store[n]->flags.load_ended          = 0;
-   store[n]->flags.render_type         = 1;
+   store[n]->flags.render_type         = Type_InternalLZW;
    store[n]->flags.lpb                 = 0;
    store[n]->flags.unused              = 0;
 
@@ -333,7 +353,7 @@ _kernel_oserror* gifstream_end(int handle)
     /* If not a valid handle, return */
     if (!gifstream_valid_handle(handle)) return NULL;
    
-    if (load->flags.render_type==2)
+    if (load->flags.render_type == Type_AnimatedSprites)
     {
         if (!load->flags.client_stream_ended) gifstream_end_image_data(load);
         e=render_animate_end(load->render_handle);
@@ -373,7 +393,7 @@ _kernel_oserror* gifstream_delete(int handle)
    if (store[handle]->OutCode) flex_free((flex_ptr) &store[handle]->OutCode);
 
    /* Tell c.render to delete it's data */
-   if (load->flags.render_type==1) e=render_delete(load->render_handle);
+   if (load->flags.render_type==Type_InternalLZW) e=render_delete(load->render_handle);
    else e=render_animate_delete(load->render_handle);
 
    /* Free array entry */
@@ -428,7 +448,7 @@ _kernel_oserror* gifstream_load(int handle, char *buffer, int size, BBox *change
      h=store[handle]->screen_height;
    }
 
-   if (store[handle]->flags.render_type==2)
+   if (store[handle]->flags.render_type==Type_AnimatedSprites)
        store[handle]->flags.mutable_mask = 0;
 
    *return_width  = w;
@@ -467,7 +487,7 @@ _kernel_oserror* gifstream_plot(int handle, int x, int y, scale_factor scale)
     old_deferred_state = flex_set_deferred_compaction(0);
 
     /* Plot the image */
-    if (load->flags.render_type==1) e=render_whole_scaled(load->render_handle,x,y,scale);
+    if (load->flags.render_type==Type_InternalLZW) e=render_whole_scaled(load->render_handle,x,y,scale);
     else e=gifstream_animated_plot(handle, x, y, scale);
     if (e) gifstream_abandon_image(handle);
 
@@ -514,7 +534,7 @@ _kernel_oserror* gifstream_mode_change(int handle)
    GIFloaddata     *load = store[handle];
    _kernel_oserror *e=NULL;
 
-   if (load->flags.render_type==1) e=render_mode_change(load->render_handle);
+   if (load->flags.render_type==Type_InternalLZW) e=render_mode_change(load->render_handle);
    else e=render_animate_mode_change(load->render_handle);
    if (e) gifstream_abandon_image(handle);
 
@@ -540,7 +560,7 @@ int gifstream_need_redraw(int handle, BBox *changed)
 {
     GIFloaddata *load = store[handle];
 
-    if (load->flags.render_type==1) return 1;
+    if (load->flags.render_type==Type_InternalLZW) return 1;
 
     return render_animate_need_redraw(store[handle]->render_handle, changed);
 }
@@ -574,56 +594,55 @@ static _kernel_oserror* gifstream_animated_load(int handle, char *buffer, int si
 
     while ((load->dataptr < load->dataend) && (!e) && (more_frames))
     {
-        //printf("state %d\n",load->state);
         switch (load->state)
         {
-            case 1:
+            case State_ReadGifSignature:
                 e=gifstream_read_gif_signature(load);
                 break;
-            case 2:
+            case State_ReadScreenDescriptor:
                 e=gifstream_read_screen_descriptor(load);
                 break;
-            case 3:
+            case State_ReadGlobalColourMap:
                 e=gifstream_read_global_colour_map(load);
                 break;
-            case 4:
+            case State_InventGlobalColourMap:
                 e=gifstream_invent_global_colour_map(load);
                 break;
-            case 10:
+            case State_ReportWriteLine:
                 report_string("--------------------------------------------------------------------------------");
                 report_value("frame", load->current_frame); report_string("");
-                load->state=5;
+                load->state=State_ReadExtensionBlock;
                 break;
-            case 5:
+            case State_ReadExtensionBlock:
                 e=gifstream_read_extension_block(load);
                 break;
-            case 11:
+            case State_ReadApplicationExt:
                e=gifstream_read_application_extension(load);
                break;
-            case 12:
+            case State_ReadGraphicControlExt:
                e=gifstream_read_graphic_control_extension(load);
                break;
-            case 13:
+            case State_ReadDataBlock:
                e=gifstream_read_data_block(load);
                break;
-            case 6:
+            case State_ReadImageDescriptor:
                e=gifstream_read_image_descriptor(load);
                break;
-            case 7:
+            case State_ReadLocalColourMap:
                e=gifstream_read_local_colour_map(load);
                break;
-            case 8:
+            case State_PreImageData:
                e=gifstream_pre_image_data(load, load->current_frame);
                break;
-            case 14:
+            case State_ReadImageData:
                oldstate=flex_set_budge(0);
-               e=gifstream_read_still_image(load, changed);
+               e=gifstream_read_image_data(load, changed);
                flex_set_budge(oldstate);
                break;
-            case 15:
+            case State_EndImageData:
                e=gifstream_end_image_data(load);
                break;
-            case 9:
+            case State_NoMoreFrames:
                more_frames=0;
                break;
             default:
@@ -675,7 +694,7 @@ static _kernel_oserror* gifstream_read_gif_signature(GIFloaddata *load)
         else if (strncmp(load->temp,"GIF87a",6)==0) load->gif89 = 0;
         else return gifstream_error("Not a GIF file.");
 
-        load->state=2;
+        load->state = State_ReadScreenDescriptor;
         load->bytes_so_far_in_section=0;
     }
 
@@ -723,8 +742,8 @@ static _kernel_oserror* gifstream_read_screen_descriptor(GIFloaddata *load)
         report_value ("  screen_y  ", load->screen_height);
         report_value ("  background", load->Background);
 
-        if (crpixel && 128) load->state=3;
-        else load->state=4;
+        if (crpixel && 128) load->state = State_ReadGlobalColourMap;
+        else load->state = State_InventGlobalColourMap;
 
         load->bytes_so_far_in_section=0;
     }
@@ -755,7 +774,7 @@ static _kernel_oserror* gifstream_read_global_colour_map(GIFloaddata *load)
     if (load->bytes_so_far_in_section == size_of_map)
     {
         report_string("Reading Global Colour Table");
-        load->state=10;
+        load->state = State_ReportWriteLine;
         load->bytes_so_far_in_section=0;
     }
 
@@ -788,7 +807,7 @@ static _kernel_oserror* gifstream_invent_global_colour_map(GIFloaddata *load)
     }
 
     load->Background = -1;
-    load->state = 10;
+    load->state = State_ReportWriteLine;
 
     return NULL;
 }
@@ -821,7 +840,7 @@ static _kernel_oserror* gifstream_read_image_descriptor(GIFloaddata *load)
 
         if (dataptr[0]==59)
         {
-            load->state=9;
+            load->state = State_NoMoreFrames;
             return NULL;
         }
 
@@ -835,7 +854,7 @@ static _kernel_oserror* gifstream_read_image_descriptor(GIFloaddata *load)
         if (dataptr[0]!=44)
         {
             report_string("*** WARNING - Corrupt GIF file ***");
-            load->state=9;
+            load->state = State_NoMoreFrames;
             return NULL;
         }
 
@@ -862,8 +881,8 @@ static _kernel_oserror* gifstream_read_image_descriptor(GIFloaddata *load)
         report_value("  colormap       ",load->HasColormap);
         report_value("  image bpp      ",load->image_bpp);
 
-        if (load->HasColormap) load->state=7;
-        else load->state=8;
+        if (load->HasColormap) load->state = State_ReadLocalColourMap;
+        else load->state = State_PreImageData;
 
         load->bytes_so_far_in_section = 0;
     }
@@ -895,7 +914,7 @@ static _kernel_oserror* gifstream_read_local_colour_map(GIFloaddata *load)
     if (load->bytes_so_far_in_section == size_of_map)
     {
         report_string("Reading local colour map");
-        load->state=8;
+        load->state = State_PreImageData;
         load->bytes_so_far_in_section = 0;
     }
 
@@ -932,17 +951,17 @@ static _kernel_oserror* gifstream_read_extension_block(GIFloaddata *load)
 
         if (introducer!=33)
         {
-            load->state=6;
+            load->state = State_ReadImageDescriptor;
             return NULL;
         }
 
         report_value("Reading extension",code);
 
-        if      (code==0xFF) load->state = 11;   /* Application extension     */
-        else if (code==0xF9) load->state = 12;   /* Graphic control extension */
-        else if (code==0xFE) load->state = 13;   /* Comment extension         */
-        else if (code==0x01) load->state = 13;   /* Plain text extension      */
-        else                 load->state = 13;   /* Unrecognised extension    */
+        if      (code==0xFF) load->state = State_ReadApplicationExt;    /* Application extension     */
+        else if (code==0xF9) load->state = State_ReadGraphicControlExt; /* Graphic control extension */
+        else if (code==0xFE) load->state = State_ReadDataBlock;         /* Comment extension         */
+        else if (code==0x01) load->state = State_ReadDataBlock;         /* Plain text extension      */
+        else                 load->state = State_ReadDataBlock;         /* Unrecognised extension    */
 
         load->substage = 0;
         load->bytes_so_far_in_section = 0;
@@ -1016,7 +1035,7 @@ static _kernel_oserror* gifstream_read_application_extension(GIFloaddata *load)
         if (load->substage_size==0)
         {
             load->bytes_so_far_in_section=0;
-            load->state=5;
+            load->state = State_ReadExtensionBlock;
             report_string("  end block");
             return NULL;
         }
@@ -1085,7 +1104,7 @@ static _kernel_oserror* gifstream_read_graphic_control_extension(GIFloaddata *lo
         report_string("Reading graphic control extension");
 
         load->bytes_so_far_in_section = 0;
-        load->state = 5;
+        load->state = State_ReadExtensionBlock;
 
         if (load->delay>-1)
         {
@@ -1150,7 +1169,7 @@ static _kernel_oserror* gifstream_read_data_block(GIFloaddata *load)
         if (load->substage_size==0)
         {
             load->bytes_so_far_in_section=0;
-            load->state=5;
+            load->state = State_ReadExtensionBlock;
             return NULL;
         }
     }
@@ -1235,7 +1254,7 @@ static _kernel_oserror* gifstream_pre_image_data(GIFloaddata *load, int frame)
     fr.disposal     = load->disposal;
     fr.interlace    = load->Interlace;
 
-    if (load->flags.render_type==1)
+    if (load->flags.render_type==Type_InternalLZW)
     {
         int handle;
 
@@ -1256,7 +1275,7 @@ static _kernel_oserror* gifstream_pre_image_data(GIFloaddata *load, int frame)
 
     /* Supply render with the local palette */
     oldstate=flex_set_budge(0);
-    if (load->flags.render_type==2)
+    if (load->flags.render_type==Type_AnimatedSprites)
     {
         put_palette = (int*)render_animate_add_local_palette(load->render_handle, 8);
 
@@ -1276,7 +1295,7 @@ static _kernel_oserror* gifstream_pre_image_data(GIFloaddata *load, int frame)
 
     report_string("About to decode...");
 
-    load->state = 14;
+    load->state = State_ReadImageData;
 
     return NULL;
 }
@@ -1298,7 +1317,7 @@ static _kernel_oserror* gifstream_end_image_data(GIFloaddata *load)
     _kernel_oserror *e;
     int              oldstate;
 
-    if (load->flags.render_type==1)
+    if (load->flags.render_type==Type_InternalLZW)
     {
         oldstate=flex_set_budge(0);
         e=render_end(load->render_handle);
@@ -1316,7 +1335,7 @@ static _kernel_oserror* gifstream_end_image_data(GIFloaddata *load)
 
     load->last_full_frame++;
     load->dataptr++;
-    load->state = 10;
+    load->state = State_ReportWriteLine;
     load->current_frame++;
     load->bytes_so_far_in_section = 0;
     load->flags.client_stream_ended=1;
@@ -1324,18 +1343,18 @@ static _kernel_oserror* gifstream_end_image_data(GIFloaddata *load)
     if (load->npixels!=load->maxpixels)
     {
         //printf("Corrupt frame!");
-        if (load->flags.render_type==2) render_mark_corrupt_frame(load->render_handle);
+        if (load->flags.render_type==Type_AnimatedSprites) render_mark_corrupt_frame(load->render_handle);
         //_swi(OS_ReadC,0);
     }
 
-    if (load->flags.image_fast) load->state=9;
+    if (load->flags.image_fast) load->state = State_NoMoreFrames;
 
     return NULL;
 }
 
 
 /*--------------------------------------------------------------------------------------------*
- * gifstream_read_still_image                                                                 *
+ * gifstream_read_image_data                                                                  *
  *                                                                                            *
  * Decodes some more image data and passes it to the still (inanimate) part of render.        *
  *                                                                                            *
@@ -1345,7 +1364,7 @@ static _kernel_oserror* gifstream_end_image_data(GIFloaddata *load)
  * Returns: error, if one occurred, else null.                                                *
  *--------------------------------------------------------------------------------------------*/
 
-_kernel_oserror *gifstream_read_still_image(GIFloaddata *load, BBox *changed)
+_kernel_oserror *gifstream_read_image_data(GIFloaddata *load, BBox *changed)
 {
     _kernel_oserror *e;
     char     *spr_buff;
@@ -1360,9 +1379,9 @@ _kernel_oserror *gifstream_read_still_image(GIFloaddata *load, BBox *changed)
     int       npixels = load->npixels, InCode=load->InCode, Code=load->Code;
     int       OutCount=0;
 
-    if (load->flags.render_type==1)
+    if (load->flags.render_type==Type_InternalLZW)
     {
-        e = gifstream_read_animated_image(load, changed);
+        e = gifstream_read_still_image(load, changed);
         now_to = load->last_row - 2;
         render_changed(load->render_handle, load->last_bounded, now_to, load->Interlace, changed);
         load->last_bounded = now_to;
@@ -1370,12 +1389,6 @@ _kernel_oserror *gifstream_read_still_image(GIFloaddata *load, BBox *changed)
     }
 
     spr_buff = load->spr_buff = render_animate_return_spr_address(load->render_handle);
-
-    /*
-    if (this->private_data2==NULL)
-        return gifError("Insufficient memory");
-    load->ptr = (byte *)this->private_data2+this->private_data2[12] + 16 + load->YC * load->spritewidth + load->XC;
-    */
 
 restart:
     if (load->bytes_so_far_in_section == 0)
@@ -1386,7 +1399,8 @@ restart:
         if (load->bytes_so_far_in_section == 0)
         {
             load->dataptr--;
-            load->state=15;
+            load->npixels = npixels;  /* So this can be inspected by gifstream_end_image_data() */
+            load->state = State_EndImageData;
             return NULL;
         }
         if (load->dataptr==load->dataend)
@@ -1608,10 +1622,7 @@ stage2:
         }
         if (npixels >= load->maxpixels) break;
     }
-    load->state=15;
-
-    report_value("  EOFCode  ",EOFCode);
-    report_value("  code     ",Code);
+    load->state = State_EndImageData;
 
 exit:
 
@@ -1636,7 +1647,7 @@ exit:
 
 
 /*--------------------------------------------------------------------------------------------*
- * gifstream_read_animated_image                                                              *
+ * gifstream_read_still_image                                                                 *
  *                                                                                            *
  * Continues the decoding of the image data (not the header) - called by gifstream_load.      *
  *                                                                                            *
@@ -1647,7 +1658,7 @@ exit:
  * Returns: Error, if one occurred, else null.                                                *
  *--------------------------------------------------------------------------------------------*/
 
-static _kernel_oserror *gifstream_read_animated_image(GIFloaddata *load, BBox *changed)
+static _kernel_oserror *gifstream_read_still_image(GIFloaddata *load, BBox *changed)
 {
     _kernel_oserror *e;
     char     *spr_buff;
@@ -1667,12 +1678,6 @@ static _kernel_oserror *gifstream_read_animated_image(GIFloaddata *load, BBox *c
 
     if (npixels==0) gifstream_add_palette(load);
 
-    /*
-    if (this->private_data2==NULL)
-        return gifError("Insufficient memory");
-    load->ptr = (byte *)this->private_data2+this->private_data2[12] + 16 + load->YC * load->spritewidth + load->XC;
-    */
-
 restart:
     if (load->bytes_so_far_in_section == 0)
     {
@@ -1682,7 +1687,8 @@ restart:
         if (load->bytes_so_far_in_section == 0)
         {
             load->dataptr--;
-            load->state=15;
+            load->npixels = npixels;  /* So this can be inspected by gifstream_end_image_data() */
+            load->state = State_EndImageData;
             return NULL;
         }
         if (load->dataptr==load->dataend)
@@ -1899,72 +1905,9 @@ stage2:
         }
         if (npixels >= load->maxpixels) break;
     }
-    load->state=15;
+    load->state = State_EndImageData;
 
 exit:
-
-/*
-    if (!Interlace)
-    {
-        if (load->YC > OrigYC)
-        {
-            changed->xmax=this->width_os;
-            changed->ymax=(this->height-OrigYC)*this->height_os/this->height;
-            changed->ymin=(this->height-load->YC)*this->height_os/this->height;
-        }
-    }
-    else
-    {
-        if (load->YC != OrigYC)
-        {
-            byte *sptr=(byte *)this->private_data2+this->private_data2[12] + 16;
-            byte *mptr=(transparent>=0)?sptr+load->maskoffset:NULL;
-            int linesize=load->spritewidth;
-
-            changed->xmax=this->width_os;
-            if (load->YC >= OrigYC && load->Pass >= OrigPass+1 ||
-                load->YC <= OrigYC && load->Pass >= OrigPass+2)
-            {
-                changed->ymax=this->height_os;
-                changed->ymin=0;
-            }
-            else
-            {
-                changed->ymax=(this->height-OrigYC)*this->height_os/this->height;
-                changed->ymin=(this->height-load->YC)*this->height_os/this->height;
-                switch (load->Pass)
-                {
-                  case 1:
-                    changed->ymin-=3*this->height_os/this->height;
-                    break;
-                  case 2:
-                    changed->ymin-=1*this->height_os/this->height;
-
-                    break;
-                }
-            }
- */
-            /* Now to fill in the interlaced bits */
-    //        if (OrigPass==load->Pass)
-                /* We're on the same pass */
-    //            FillInInterlace(sptr, mptr, OrigYC, load->YC, OrigPass-1, OrigPass, linesize, this->height);
-    //        else if (OrigYC > load->YC)
-    //        {
-                /* We're on a later pass, above the previous end point */
-    //            FillInInterlace(sptr, mptr, 0, load->YC, OrigPass, load->Pass, linesize, this->height);
-    //            FillInInterlace(sptr, mptr, load->YC, OrigYC, OrigPass, load->Pass-1, linesize, this->height);
-    //            FillInInterlace(sptr, mptr, OrigYC, this->height, OrigPass-1, load->Pass-1, linesize, this->height);
-    //        }
-    //        else
-    //        {
-                /* We're on a later pass, below the previous end point */
-    //            FillInInterlace(sptr, mptr, 0, OrigYC, OrigPass, load->Pass, linesize, this->height);
-    //            FillInInterlace(sptr, mptr, OrigYC, load->YC, OrigPass-1, load->Pass, linesize, this->height);
-    //            FillInInterlace(sptr, mptr, load->YC, this->height, OrigPass-1, load->Pass-1, linesize, this->height);
-    //        }
-    //    }
-    //}
-
 
     load->CodeSize=CodeSize; load->MaxCode=MaxCode;
     load->ReadMask=ReadMask; load->FreeCode=FreeCode;
@@ -1974,9 +1917,6 @@ exit:
 
     load->CurCode=CurCode;
     load->InCode=InCode; load->Code=Code;
-
-    //report_value("npixels   ",load->npixels);
-    //report_value("maxpixels ",load->maxpixels);
 
     return NULL;
 }
@@ -2130,7 +2070,7 @@ _kernel_oserror* gifstream_register_filler(int handle, FillerFunction *fill_fn, 
     load->handle1 = handle1;
     load->handle2 = handle2;
 
-    if (store[handle]->flags.render_type==2)
+    if (store[handle]->flags.render_type==Type_AnimatedSprites)
         render_register_filler(load->render_handle, load->fill_fn, load->handle1, load->handle2);
 
     return 0;
@@ -2154,7 +2094,7 @@ static _kernel_oserror* gifstream_make_animation(GIFloaddata *load)
     frame_str        fr;
     int              an_handle, oldstate;
 
-    if (load->flags.render_type!=1) return NULL;
+    if (load->flags.render_type!=Type_InternalLZW) return NULL;
 
     fr.frame_off    = 0;
     fr.delay        = load->delay;
@@ -2174,7 +2114,7 @@ static _kernel_oserror* gifstream_make_animation(GIFloaddata *load)
     flex_set_budge(oldstate);
     if (e) return e;
 
-    load->flags.render_type = 2;
+    load->flags.render_type = Type_AnimatedSprites;
     load->render_handle     = an_handle;
 
     e = render_register_filler(load->render_handle, load->fill_fn, load->handle1, load->handle2);
@@ -2193,7 +2133,8 @@ _kernel_oserror* gifstream_export_sprite(int handle, char* filename)
     /* If not a valid handle, return */
     if (!gifstream_valid_handle(handle)) return NULL;
 
-    if (store[handle]->flags.render_type==1) e=render_export_sprite(store[handle]->render_handle, filename);
+    if (store[handle]->flags.render_type==Type_InternalLZW)
+        e=render_export_sprite(store[handle]->render_handle, filename);
     else e=render_export_animated_sprites(store[handle]->render_handle, filename);
     
     return e;
