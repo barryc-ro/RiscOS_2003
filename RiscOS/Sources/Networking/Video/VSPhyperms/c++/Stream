@@ -133,7 +133,7 @@ Stream::Stream(int inet_timeout, InternetObject *server, int MPEGid, int source_
   source = source_multicast;
   
   pw = pwork;
-  high_speed_file = false;
+  speed_file = file_speed_normal;
   source_flag = free_token;
   comms_timeout = inet_timeout;
   from = endofstream = 0; 	
@@ -172,7 +172,7 @@ Stream::Stream(int inet_timeout, int initial_block, int MPEGid, PlayList playlis
   ULINT portnum;		// of server object, receiving
     
   // STB specific variables
-  high_speed_file = false;
+  speed_file = file_speed_normal;
   source = source_vod;
   source_flag = free_token;
   comms_timeout = inet_timeout;
@@ -266,6 +266,7 @@ Stream::Stream(int inet_timeout, int initial_block, int MPEGid, PlayList playlis
   }
 
   if (!ErrorExists()){
+    	callback_pending += callback_trickplay;	// from set
         change_state(state_play);	// this will make an imediate callback for trickplay.
         server->send_message_StartNotification(initial_block);
   }
@@ -291,7 +292,7 @@ Stream::~Stream(void)
    	do {
    	  	++count;
     		RemoveErr();
- 		if (mysink.DropBuffers() == ErrorOccurred)
+ 		if (mysink.ResetStream(3) == ErrorOccurred)
  			break;
  		if (count > 10) {
  			mysink.CloseStream();	
@@ -364,20 +365,24 @@ Stream::trick_modes(void)
 
 error_flag
 Stream::change_state(state_of_play new_state)
-{ 
+{
+  	state_of_play old_state = state;
+	// if from time has not already been set, ie jump
+	if (!(callback_pending & callback_trickplay))
+		from = getNECTime();
+
 #ifdef DEBUGLIB
    	Debug("state %i -> %i, from = %i", state, new_state, from);
 #endif
+		
 	switch (new_state) {
      		case state_slow:
      			if (trick_modes() & trick_slow_play)
      				state = state_slow;
      			break;
      		case state_step:
-     			if (trick_modes() & trick_step_play){
+     			if (trick_modes() & trick_step_play)
      				state = state_step;
-     				test_empty_buffers();
-     			}
      			break;
      		case state_endreceived:
      			state = state_endreceived;
@@ -408,24 +413,16 @@ Stream::change_state(state_of_play new_state)
      				}
    			break;
      		case state_pause:
-     			if (trick_modes() & trick_pause) {
-   				from = getNECTime();
+     			if (trick_modes() & trick_pause)
      				state = state_pause;
-     			}	
      			break;
      		case state_play:
         		if (trick_modes() & trick_normal_play) {
      	  			if (source != source_vod)
      	  				swap_source();
-                   		else
-                   		if (state == state_step)
-         	 			test_empty_buffers();
          	 			
-         	      		if ((high_speed_file == true)||((state != state_pause)&&(state != state_step)&&(state != state_slow)))
+         	      		if (speed_file & file_fast_play)	// do we need to change server file
      		  			callback_pending += callback_trickplay;
-     		  		
-   				if ((state == state_fast_forward)||(state == state_fast_rewind))
-   					from = getNECTime();
    					
    				state = state_play;
 			}
@@ -440,22 +437,28 @@ Stream::change_state(state_of_play new_state)
         		break;
      		case state_fast_forward:
         		if (trick_modes() & trick_fast_forward){
-        		  	if (state != state_fast_forward)
-   					from = getNECTime();
+        		  	
+         	      		if (!(speed_file & file_fast_forward))
+     		  			callback_pending += callback_trickplay;
+     		  			
          			state =  state_fast_forward;
-     	  			callback_pending += callback_trickplay;
 			}
      			break;
      		case state_fast_rewind:
         		if (trick_modes() & trick_fast_rewind){
-        			if (state != state_fast_rewind)
-   					from = getNECTime();
-     				state =  state_fast_rewind;
-     	  			callback_pending += callback_trickplay;
+        		  
+     				if (!(speed_file & file_fast_rewind))
+     		  			callback_pending += callback_trickplay;
+     		  		
+     		  		state =  state_fast_rewind;
 			}
      			break;
         }
    
+   	if (old_state == state_step)
+     		test_empty_buffers();
+     		
+   	// the trick flag is set if this trick requires dialogue with the server ie change file or jump.
    	if ((!ErrorExists())&&(callback_pending & callback_trickplay)) {
 #ifdef DEBUGLIB
   		ULINT current_min, future_min;
@@ -556,7 +559,9 @@ Stream::SetPosition(int flags, int pos_time)	 // call to Decoder
   		MakeError(VSP_InvalidValue);
   	else {
   		from = abs_time;
-  
+  		
+  		callback_pending += callback_trickplay;
+  		
   		if (abs_time == 0xFFFFFFFF)
   			change_state(state_streamlive);
   		else
@@ -574,7 +579,7 @@ Stream::getNECTime(void)
 {
   ULINT time;
   
-  if (high_speed_file == true)
+  if (speed_file & file_fast_play)
     	time = (ULINT)(mysource->get_most_significant_time()) * fast_playback_ratio;
   else
   	time = (ULINT)mysource->get_most_significant_time();
@@ -596,7 +601,7 @@ Stream::ReadNPT(ULINT *NPT_time)
 	    	int current_min = (int)((getNECTime() >> 1) / 60);
  		Debug("NPT (%2i:%2i:%2i) %i, (%i)", 
   					   (int)(current_min/60), (int)(current_min % 60), (int)((getNECTime()>>1) % 60),
-  					   getNECTime(), (high_speed_file == true));
+  					   getNECTime(), (speed_file & file_fast_play));
 #endif
 		(*NPT_time) = (getNECTime() >> 1);
 	}
@@ -687,7 +692,8 @@ Stream::timeslice(Statistics *stats)
 
   		callback_pending -= callback_bufferfree;
   			
-  		if (tokenfree()) test_empty_buffers();
+  		if ((!(callback_pending & callback_bufferswait))&&(tokenfree()))
+  		  	test_empty_buffers();
   			
                 // this reinitialises the block callback vector if we fill up the blocks
   		if (!(callback_pending & callback_timeout)){
@@ -710,22 +716,22 @@ Stream::timeslice(Statistics *stats)
 #endif  				
        			switch (state){
         			case state_fast_forward:
-        				high_speed_file = true;
+        				speed_file = file_fast_forward;
         				from /= fast_playback_ratio;
         	  			play_mode = 3;
         	  			break;
         	  		case state_fast_rewind:
         				from /= fast_playback_ratio;
-        				high_speed_file = true;
+        				speed_file = file_fast_rewind;
         	  			play_mode = 4;
         	  			break;
         	  		case state_streamlive:
-        				high_speed_file = false;
+        				speed_file = file_speed_normal;
         	  		  	callback_pending += callback_bufferswait;
         	  			play_mode = 7;
         	  			break;
         	  		default:
-        				high_speed_file = false;
+        				speed_file = file_speed_normal;
         				play_mode = 0;
         				break;
         		}
@@ -778,7 +784,7 @@ Stream::timeslice(Statistics *stats)
  		}
   	}
   }
-  if (ErrorExists()){
+  if ((state != state_stop)&&(ErrorExists())){
     	myserver->send_message_Error(err_ptr);
   }
  
@@ -805,7 +811,7 @@ Stream::server_inetevent(int code)
   	}
   }
   
-  if (ErrorExists()) {
+  if ((state != state_stop)&&(ErrorExists())) {
     	myserver->send_message_Error(err_ptr);
   }   	
   return NoError;
@@ -836,11 +842,15 @@ Stream::source_inetevent(int code, Statistics *stats)
   				callback_pending += callback;
       			}  
   				
-  			if ((callback_pending & callback_bufferswait)&&(mysource->getFullBlocks() > buffer_blocks)){
-					callback_pending -= callback_bufferswait;
+  			if (callback_pending & callback_bufferswait){
+  				if (mysource->getFullBlocks() > buffer_blocks){
+  				  
+					mysink.ResetStream((speed_file)?1:3);
 					
+					callback_pending -= callback_bufferswait;
 					for (int i = 0; i < NUM_MPEG_Tokens; ++i)
 						test_empty_buffers();
+				}
 			}
 			else {
 				if (tokenfree())
@@ -850,7 +860,7 @@ Stream::source_inetevent(int code, Statistics *stats)
  	}
   }
   
-  if (ErrorExists()) {
+  if ((state != state_stop)&&(ErrorExists())) {
   	myserver->send_message_Error(err_ptr);
   }
   return NoError; 		         
@@ -864,7 +874,7 @@ Stream::DummyAckCall(void)
  	if (err_ptr == NULL) err_ptr = &(myserver->ReturnCopyOfError());
   }
   
-  if (ErrorExists()){
+  if ((state != state_stop)&&(ErrorExists())){
     	myserver->send_message_Error(err_ptr);
   }
    return NoError;
@@ -967,7 +977,7 @@ Stream::ServiceDynamicAreaRenumber(int old_id, int new_id)
     	if (err_ptr == NULL) err_ptr = &(mysource->ReturnCopyOfError());
   }
   
-  if (ErrorExists())
+  if ((state != state_stop)&&(ErrorExists()))
   	myserver->send_message_Error(err_ptr);
   	
   return NoError;
