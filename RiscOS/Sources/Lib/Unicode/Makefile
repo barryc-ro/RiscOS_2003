@@ -28,6 +28,7 @@ LB      = libfile
 TOUCH   = create
 WIPE    = -wipe
 SQUEEZE = squeeze
+STRIP   = stripdepnd
 
 CCFLAGS = -c -depend !Depend -fah -Ws ${INCLUDES} ${DFLAGS} ${THROWBACK}
 ASFLAGS = -depend !Depend -Stamp -quit
@@ -127,7 +128,8 @@ OBJSD = \
 	od.enc_system \
 	od.acorn \
 	od.combine \
-	od.riscos
+	od.riscos \
+	od.debug
 
 HDRS = autojp.h charsets.h encoding.h iso10646.h iso3166.h languages.h unictype.h utf8.h combine.h
 
@@ -170,6 +172,8 @@ clean:
 	${RM} local_dirs
         ${RM} c.unictype
         ${RM} mkunictype
+        ${RM} TextConv
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 export_hdrs: ${HDRS} dirs
