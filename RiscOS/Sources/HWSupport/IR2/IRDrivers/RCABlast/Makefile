@@ -109,10 +109,6 @@ rom_link:
 
 
 # Dynamic dependencies:
-o.codetables:	c.codetables
-o.codetables:	C:h.kernel
-o.codetables:	h.driver
-o.codetables:	h.codetables
 o.module:	c.module
 o.module:	C:h.kernel
 o.module:	C:h.swis
@@ -121,6 +117,16 @@ o.module:	h.ir_api
 o.module:	h.module
 o.module:	h.driver
 o.module:	h.rcablast
+o.ir_api:	c.ir_api
+o.ir_api:	C:h.kernel
+o.ir_api:	C:h.swis
+o.ir_api:	h.utils
+o.ir_api:	h.ir_api
+o.ir_api:	h.veneers
+o.codetables:	c.codetables
+o.codetables:	C:h.kernel
+o.codetables:	h.driver
+o.codetables:	h.codetables
 o.driver:	c.driver
 o.driver:	C:h.kernel
 o.driver:	C:h.swis
@@ -130,9 +136,3 @@ o.driver:	h.driver
 o.driver:	h.veneers
 o.driver:	h.rcablast
 o.driver:	h.codetables
-o.ir_api:	c.ir_api
-o.ir_api:	C:h.kernel
-o.ir_api:	C:h.swis
-o.ir_api:	h.utils
-o.ir_api:	h.ir_api
-o.ir_api:	h.veneers
