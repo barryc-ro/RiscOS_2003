@@ -57,6 +57,7 @@ CFLAGS  = ${THROWBACK} ${COMPAT} -c -depend !Depend -fafh ${INCLUDES} ${DFLAGS} 
 CPFLAGS = ~cfr~v
 SQFLAGS = -f
 WFLAGS  = ~c~vr
+OFLAGS     = -depend !Depend ${THROWBACK}
 
 #
 # Libraries
@@ -299,8 +300,12 @@ ClrMonitor: Source.ClrMonitor.o.main
    ${LD} ${LDFLAGS} -o $@ Source.ClrMonitor.o.main ${OSLIB} ${CLIB}
    ${SQUEEZE} $@
 
-Utils.FreePool: Source.FreePool.Source.FreePool
-   AAsm ${AFLAGS} Source.FreePool.Source.FreePool Utils.FreePool -stamp -quit
+Source.FreePool.o.FreePool:
+   ${AS} ${OFLAGS} -o Source.FreePool.o.FreePool Source.FreePool.Source.FreePool
+
+Utils.FreePool: Source.FreePool.o.FreePool
+   ${MKDIR} Source.FreePool.o
+   ${LD} ${LDFLAGS} -o $@ -bin Source.FreePool.o.FreePool
    SetType Utils.FreePool Utility
 
 Utils.VProtect: rm.VProtect
@@ -330,9 +335,3 @@ Library.IfThere: Hdr:RISCOS
 Library.IfThere: Hdr:Proc
 Library.IfThere: Hdr:ModHand
 Library.IfThere: Hdr:ResourceFS
-Utils.FreePool: OS:Hdr.Macros
-Utils.FreePool: OS:Hdr.OS
-Utils.FreePool: OS:Hdr.Types
-Utils.FreePool: OS:Hdr.Wimp
-Utils.FreePool: OS:Hdr.OSSpriteOp
-Utils.FreePool: OS:Hdr.Font
