@@ -28,17 +28,18 @@ CHMOD	= access
 
 FLAG_OPTS = -UFIFO_RECOVER -DDEBUG_TRAIL -UDEBUG -URUNS_ON_ARM700 \
 		-DLIMIT_TABLES -DPACKET_JUNKING -DUSE_DYNAMIC_AREAS \
-		-DNDEBUG 
+		-DNDEBUG
 
 
 #FLAG_OPTS = -UFIFO_RECOVER -DDEBUG_TRAIL -DDEBUG -URUNS_ON_ARM700 \
-#		-DLIMIT_TABLES -DPACKET_JUNKING -DUSE_DYNAMIC_AREAS
-#
+#		-DLIMIT_TABLES -DPACKET_JUNKING -DUSE_DYNAMIC_AREAS \
+#  	        -DNDEBUG
+
 
 
 AFLAGS     = -depend !Depend ${THROWBACK} -Stamp -quit
 CFLAGS     = -c -wp -depend !Depend ${THROWBACK} -zM -zps1 -ff ${INCLUDES} ${DFLAGS} ${FLAG_OPTS}
-CMHGFLAGS  = -p ${DFLAGS} ${THROWBACK} ${INCLUDES}
+CMHGFLAGS  = -depend !Depend -p ${DFLAGS} ${THROWBACK} ${INCLUDES}
 CPFLAGS    = ~cfr~v
 WFLAGS     = ~c~vr
 CHMODFLAGS = RW/R
@@ -72,11 +73,14 @@ OBJS      = atmio.o buffers.o mbuf.o module.o panther.o utils.o header.o \
 		dci_stuff.o resources.o callproto.o commands.o boson.o \
 		listen.o pvc.o nvram.o atm_conf.o ipconv.o nbit_mask.o
 
+HDR = h.header
+
 #
 # Rule patterns
 #
 .c.o:;      ${CC}   ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $< h.$*
+.cmhg.o:;	$(CMHG) $(CMHGFLAGS) $< -o $@
+.cmhg.h:;	$(CMHG) $(CMHGFLAGS) $< -d $@
 .s.o:;      ${AS}   ${AFLAGS} $< $@
 
 
@@ -102,14 +106,10 @@ clean:
         ${WIPE} o.*      ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
         ${WIPE} map.*    ${WFLAGS}
-        ${RM} h.header
+        ${RM} $(HDR)
         ${RM} ${RMTARGET}
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
-
-# dummy target
-h.header: cmhg.header
-	@echo
 
 #
 # ROM target (re-linked at ROM Image build time)
@@ -129,16 +129,11 @@ rom_link:
 #
 # Relocatable module target
 #
-${RMTARGET}: ${OBJS}
+${RMTARGET}: ${OBJS} $(HDR)
         ${LD} -rmf -o $@ ${OBJS} ${CLIB}
         ${CHMOD} rm.${COMPONENT} ${CHMODFLAGS}
 
 ${EXP_C_H}.${COMPONENT}:	h.${COMPONENT}
         ${CP} h.${COMPONENT} $@ ${CPFLAGS}
 
-# specific files
-h.cmhg: cmhg.header
-        ${cmhg} -p -d h.cmhg cmhg.header
-
-#
 # Dynamic dependencies:
