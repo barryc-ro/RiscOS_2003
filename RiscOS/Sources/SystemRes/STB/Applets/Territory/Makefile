@@ -3,14 +3,19 @@
 #
 # Initial version: 21 Jan 2002, SAR
 #         updates: 14 Feb 2002, SAR
+#    more updates: 01 Mar 2002, SAR
 
 COMPONENT = Territory
-INSTAPP   = ${INSTDIR}.!${COMPONENT}
+
+INSTAPP   = ${INSTDIR}.${APP}.!${COMPONENT}
+CMNLOCDIR = ${INSTAPP}.${Locale}
+
+INSTHTML  = ${INSTDIR}.${HTML}.<STB$OS>.${Locale}
+INSTCHOI  = ${INSTDIR}.${CHOICE}.${COMPONENT}
+
 INSTOPTS  = ${INSTAPP}.<STB$OS>.${Locale}
 INSTPICS  = ${INSTOPTS}.pics
-HTMLDIR   = ${INSTHTML}.<STB$OS>.${Locale}
-CMNRESDIR = ${INSTAPP}
-CMNLOCDIR = ${CMNRESDIR}.${Locale}
+
 MSGSDIR   = Messages
 
 MSG_CHECK    = ^.^.^.^.Networking.CheckURL.Resources.${Locale}.,^.^.^.^.Networking.CheckURL.Resources.UK.
@@ -39,13 +44,14 @@ dirs:
 	${MKDIR} ${INSTAPP}
 	${MKDIR} ${INSTOPTS}
 	${MKDIR} ${INSTPICS}
-	${MKDIR} ${HTMLDIR}
-	${MKDIR} ${CMNRESDIR}
-	${MKDIR} ${CMNRESDIR}.Canada1
-	${MKDIR} ${CMNRESDIR}.France
-	${MKDIR} ${CMNRESDIR}.Germany
-	${MKDIR} ${CMNRESDIR}.Norway
-	${MKDIR} ${CMNRESDIR}.Spain
+	${MKDIR} ${INSTHTML}
+	${MKDIR} ${INSTCHOI}
+	${MKDIR} ${INSTAPP}
+	${MKDIR} ${INSTAPP}.Canada1
+	${MKDIR} ${INSTAPP}.France
+	${MKDIR} ${INSTAPP}.Germany
+	${MKDIR} ${INSTAPP}.Norway
+	${MKDIR} ${INSTAPP}.Spain
 	${MKDIR} ${CMNLOCDIR}.CheckURL
 	${MKDIR} ${CMNLOCDIR}.FilterMgr
 	${MKDIR} ${CMNLOCDIR}.Parallel
@@ -101,20 +107,21 @@ unset_vars:
 	@unset STB$OS
 
 resources: res_pprimer res_parallel res_filter res_check build_message_files
-	${IFTHERE} TerrRes:!Boot      ${IFTHEN} ${CP} TerrRes:!Boot      ${INSTAPP}.!Boot              ${CPFLAGS}
-	${IFTHERE} TerrRes:!Run       ${IFTHEN} ${CP} TerrRes:!Run       ${INSTAPP}.!Run               ${CPFLAGS}
-	${IFTHERE} TerrRes:!RunImage  ${IFTHEN} ${CP} TerrRes:!RunImage  ${INSTAPP}.!RunImage          ${CPFLAGS}
-	${IFTHERE} TerrRes:banners    ${IFTHEN} ${CP} TerrRes:banners    ${INSTOPTS}.pics.banners      ${CPFLAGS}
-	${IFTHERE} TerrRes:misc       ${IFTHEN} ${CP} TerrRes:misc       ${INSTOPTS}.pics.misc         ${CPFLAGS}
-	${IFTHERE} TerrRes:teleopts   ${IFTHEN} ${CP} TerrRes:teleopts   ${INSTOPTS}.pics.teleopts     ${CPFLAGS}
-	${IFTHERE} TerrRes:JScript    ${IFTHEN} ${CP} TerrRes:JScript    ${INSTHTML}.JScript           ${CPFLAGS}
-	${IFTHERE} TerrRes:SendMsg    ${IFTHEN} ${CP} TerrRes:SendMsg    ${INSTHTML}.SendMsg           ${CPFLAGS}
-	${IFTHERE} TerrRes:Test       ${IFTHEN} ${CP} TerrRes:Test       ${INSTHTML}.Test              ${CPFLAGS}
-	${IFTHERE} ${MSGSDIR}.Canada1 ${IFTHEN} ${CP} ${MSGSDIR}.Canada1 ${CMNRESDIR}.Canada1.Messages ${CPFLAGS}
-	${IFTHERE} ${MSGSDIR}.France  ${IFTHEN} ${CP} ${MSGSDIR}.France  ${CMNRESDIR}.France.Messages  ${CPFLAGS}
-	${IFTHERE} ${MSGSDIR}.Germany ${IFTHEN} ${CP} ${MSGSDIR}.Germany ${CMNRESDIR}.Germany.Messages ${CPFLAGS}
-	${IFTHERE} ${MSGSDIR}.Norway  ${IFTHEN} ${CP} ${MSGSDIR}.Norway  ${CMNRESDIR}.Norway.Messages  ${CPFLAGS}
-	${IFTHERE} ${MSGSDIR}.Spain   ${IFTHEN} ${CP} ${MSGSDIR}.Spain   ${CMNRESDIR}.Spain.Messages   ${CPFLAGS}
+	${IFTHERE} TerrRes:!Boot      ${IFTHEN} ${CP} TerrRes:!Boot      ${INSTAPP}.!Boot            ${CPFLAGS}
+	${IFTHERE} TerrRes:!Run       ${IFTHEN} ${CP} TerrRes:!Run       ${INSTAPP}.!Run             ${CPFLAGS}
+	${IFTHERE} TerrRes:!RunImage  ${IFTHEN} ${CP} TerrRes:!RunImage  ${INSTAPP}.!RunImage        ${CPFLAGS}
+	${IFTHERE} TerrRes:banners    ${IFTHEN} ${CP} TerrRes:banners    ${INSTOPTS}.pics.banners    ${CPFLAGS}
+	${IFTHERE} TerrRes:misc       ${IFTHEN} ${CP} TerrRes:misc       ${INSTOPTS}.pics.misc       ${CPFLAGS}
+	${IFTHERE} TerrRes:teleopts   ${IFTHEN} ${CP} TerrRes:teleopts   ${INSTOPTS}.pics.teleopts   ${CPFLAGS}
+	${IFTHERE} TerrRes:Choices    ${IFTHEN} ${CP} TerrRes:Choices    ${INSTCHOI}                 ${CPFLAGS}
+	${IFTHERE} TerrRes:JScript    ${IFTHEN} ${CP} TerrRes:JScript    ${INSTHTML}.JScript         ${CPFLAGS}
+	${IFTHERE} TerrRes:SendMsg    ${IFTHEN} ${CP} TerrRes:SendMsg    ${INSTHTML}.SendMsg         ${CPFLAGS}
+	${IFTHERE} TerrRes:Test       ${IFTHEN} ${CP} TerrRes:Test       ${INSTHTML}.Test            ${CPFLAGS}
+	${IFTHERE} ${MSGSDIR}.Canada1 ${IFTHEN} ${CP} ${MSGSDIR}.Canada1 ${INSTAPP}.Canada1.Messages ${CPFLAGS}
+	${IFTHERE} ${MSGSDIR}.France  ${IFTHEN} ${CP} ${MSGSDIR}.France  ${INSTAPP}.France.Messages  ${CPFLAGS}
+	${IFTHERE} ${MSGSDIR}.Germany ${IFTHEN} ${CP} ${MSGSDIR}.Germany ${INSTAPP}.Germany.Messages ${CPFLAGS}
+	${IFTHERE} ${MSGSDIR}.Norway  ${IFTHEN} ${CP} ${MSGSDIR}.Norway  ${INSTAPP}.Norway.Messages  ${CPFLAGS}
+	${IFTHERE} ${MSGSDIR}.Spain   ${IFTHEN} ${CP} ${MSGSDIR}.Spain   ${INSTAPP}.Spain.Messages   ${CPFLAGS}
 
 build_message_files:
 	@Update Canada1
@@ -158,14 +165,14 @@ translate:
 	${IFTHERE} TerrTrans:Television        ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:Television        -o ${INSTOPTS}.Television
 	${IFTHERE} TerrTrans:Text              ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:Text              -o ${INSTOPTS}.Text
 	${IFTHERE} TerrTrans:options/css       ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:options/css       -o ${INSTOPTS}.options/css
-	${IFTHERE} TerrTrans:html.body/html    ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.body/html    -o ${HTMLDIR}.body/html
-	${IFTHERE} TerrTrans:html.body_h/html  ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.body_h/html  -o ${HTMLDIR}.body_h/html
-	${IFTHERE} TerrTrans:html.home/html    ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.home/html    -o ${HTMLDIR}.home/html
-	${IFTHERE} TerrTrans:html.home_h/html  ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.home_h/html  -o ${HTMLDIR}.home_h/html
-	${IFTHERE} TerrTrans:html.index/html   ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.index/html   -o ${HTMLDIR}.index/html
-	${IFTHERE} TerrTrans:html.index_h/html ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.index_h/html -o ${HTMLDIR}.index_h/html
-	${IFTHERE} TerrTrans:html.side/html    ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.side/html    -o ${HTMLDIR}.side/html
-	${IFTHERE} TerrTrans:html.top/html     ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.top/html     -o ${HTMLDIR}.top/html
-	${IFTHERE} TerrTrans:html.homecss/css  ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.homecss/css  -o ${HTMLDIR}.homecss/css
+	${IFTHERE} TerrTrans:html.body/html    ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.body/html    -o ${INSTHTML}.body/html
+	${IFTHERE} TerrTrans:html.body_h/html  ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.body_h/html  -o ${INSTHTML}.body_h/html
+	${IFTHERE} TerrTrans:html.home/html    ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.home/html    -o ${INSTHTML}.home/html
+	${IFTHERE} TerrTrans:html.home_h/html  ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.home_h/html  -o ${INSTHTML}.home_h/html
+	${IFTHERE} TerrTrans:html.index/html   ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.index/html   -o ${INSTHTML}.index/html
+	${IFTHERE} TerrTrans:html.index_h/html ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.index_h/html -o ${INSTHTML}.index_h/html
+	${IFTHERE} TerrTrans:html.side/html    ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.side/html    -o ${INSTHTML}.side/html
+	${IFTHERE} TerrTrans:html.top/html     ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.top/html     -o ${INSTHTML}.top/html
+	${IFTHERE} TerrTrans:html.homecss/css  ${IFTHEN} ${TRANSLATE} ${TRANSFLAGS} -i TerrTrans:html.homecss/css  -o ${INSTHTML}.homecss/css
 
 # Dynamic dependencies:
