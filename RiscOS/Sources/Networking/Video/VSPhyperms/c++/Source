@@ -43,7 +43,7 @@ Source::calculateMaxCompleteBlock(void)
 {
   MemBlock *mb;
   
-  while (((mb = mem_map.findExistingBlock(max_completed_block+1)) != NULL)&&(mb->inuse)&&(mb->completed))
+  while (((mb = mem_map->findExistingBlock(max_completed_block+1)) != NULL)&&(mb->inuse)&&(mb->completed))
   	max_completed_block++;
   
   full_blocks = (int)(max_completed_block - last_block_sent);
@@ -93,9 +93,9 @@ Source::calculatePosAckSequence(Server *server)
                			size_t block_location;
                			MemBlock *mb;
                			for (ULINT i = prior_max_request+1; i <= MAX_block_request; i++){
-               				mb = mem_map.findBlock(i, &block_location);
-               				if ((mb == NULL)&&(mem_map.ErrorExists())){
-              				  	mem_map.RemoveErr();
+               				mb = mem_map->findBlock(i, &block_location);
+               				if ((mb == NULL)&&(mem_map->ErrorExists())){
+              				  	mem_map->RemoveErr();
                				}
                			}
                		}
@@ -116,21 +116,28 @@ Source::calculatePosNAKSequence(int *naks_sent, Server *server, int max_block)
 {
         MemBlock *mb;
         int dgm, min_val, max_val;	// nak calcs
-        
+        size_t i;
         error_flag result = ErrorState();
                      
-        for (size_t i = (int)(max_completed_block+1); ( (i <= max_block)&&(result!=ErrorOccurred)&&((*naks_sent) < MAX_NAKS) ); i++) {
-               if (((mb = mem_map.findExistingBlock(i)) == NULL)||(mb->dgrams_received == 0))	{// rare block missing case
-                 	(*naks_sent)++;
-                 	if (server->SendNak(i, 0, i, -1) == ErrorOccurred) {
-                 		err = &(server->ReturnCopyOfError());
-                 		result = ErrorOccurred;
+        i = (int)(max_completed_block+1);
+        
+        while( (i <= max_block)&&(result!=ErrorOccurred)&&((*naks_sent) < mem_map->dgrams_per_block) ) {
+               if (((mb = mem_map->findExistingBlock(i)) == NULL)||(mb->dgrams_received == 0))	{// rare block missing case
+               		if (*naks_sent != 0)
+               			break;
+               		else {
+                 		(*naks_sent) += mem_map->dgrams_per_block;
+                 		if (server->SendNak(i, 0, i, -1) == ErrorOccurred) {
+                 			err = &(server->ReturnCopyOfError());
+                 			result = ErrorOccurred;
+                 		}
+                 		break;
                  	}
                }
                else 
 	       if ((mb->inuse)&&(!mb->completed)) {
                		dgm = 0;                 	  	                 	  	
-               		while ((dgm < mb->dgrams_in_block)&&(result != ErrorOccurred)&&((*naks_sent) < MAX_NAKS)){
+               		while ((dgm < mb->dgrams_in_block)&&(result != ErrorOccurred)&&((*naks_sent) < mem_map->dgrams_per_block)){
                	  		while ((mb->nec_block.iov[dgm].iov_base != NULL)&&(dgm < mb->dgrams_in_block)) dgm++;
                	  		
                	  		min_val = dgm;
@@ -140,7 +147,7 @@ Source::calculatePosNAKSequence(int *naks_sent, Server *server, int max_block)
                	  		max_val = dgm - 1;
 
                 		if (min_val <= max_val){
-                 			  (*naks_sent)++;
+                 			  (*naks_sent) += (max_val - min_val)+1;
                  			  mb->pending_nak = 1;
                  			  if (server->SendNak(mb->block_id, min_val, mb->block_id, max_val) == ErrorOccurred) {
                  				err = &(server->ReturnCopyOfError());
@@ -149,6 +156,7 @@ Source::calculatePosNAKSequence(int *naks_sent, Server *server, int max_block)
                  		}
                  	}// while datagrams      
                }// in use and not completed
+               i++;
          }// for loop
          return result;
 }
@@ -156,56 +164,52 @@ Source::calculatePosNAKSequence(int *naks_sent, Server *server, int max_block)
 //---------------------------------------------------------------------- public -- object creation/deletion methods --------------------
 // this creates the udp link and sets local variables
 // 
-Source::Source(size_t blocks)
-        : max_block_received(invalid_block_marker)
+Source::Source(void)
 {
-  	mem_map.max_blocks = blocks;
-        mem_map.da_number = -1;
-        mem_map.da_base = 0;
-        mem_map.dgram_use = 0;
-  	mem_map.max_block_size = 0;
-  	stream_end_block = 0;
-  	current_play_id = 0;
+  	stream_end_block = current_play_id = full_blocks = 0;
   	
-  	full_blocks = 0;
+   	mem_map = NULL;
+   	
+        max_block_received = invalid_block_marker;
+  	
   	
     	// Initialisation completed successfully
         sd = sd.creat(PF_INET, SOCK_DGRAM);
         setSocketError(sd.bind());
-        MakeError(VSP_SourceUninit);
 }
+
 // this is to be called after the asset presentation dialogue
 error_flag
-Source::Allocate(size_t block_size, size_t initial_block_num, size_t datagram_size)
+Source::Allocate(size_t max_blocks, size_t block_size, size_t initial_block_num, size_t datagram_size)
 {
-  	error_flag result;
+  	error_flag result = ErrorState();
   	
- 	if (ErrorExists()&&(ErrorNum() == VSP_SourceUninit))
-  		RemoveErr();
-  		
-  	mem_map.max_block_size = block_size + sizeof(struct udphdr);
+ 	if ((result == ErrorOccurred)&&(ErrorNum() == VSP_SourceUninit))
+  		RemoveErr();	// if source memory not allocated error has occurred it is no longer relevant
   	
-  	if (initial_block_num < 1){
-  	  	MakeError(VSP_InvalidValue);
-  	  	result = ErrorOccurred;
-  	}
-  	else 					// must be less than one by specification;
-  		max_block_received = last_block_sent = max_completed_block = initial_block_num -1;
-
-	mem_map.dgram_size = datagram_size;
-	
-        if (mem_map.dgram_size <= sizeof(struct udphdr)) {
-                MakeError(VSP_DatagramSizeError);
-                result = ErrorOccurred;
-        }
- 	else {	
-  		if (result != ErrorOccurred)
-  			result = mem_map.initLimits();
-  		if (result != ErrorOccurred)
-  			result = mem_map.createDynamicArea();
-  		if (result != ErrorOccurred)
-  			result = mem_map.initDynamicArea();
-  	}
+	if (result != ErrorOccurred) {	
+  		if (initial_block_num < 1){
+  		  	MakeError(VSP_InvalidValue);
+  		  	result = ErrorOccurred;
+  		}
+  		else {					// must be greater than one by specification;
+  			max_block_received = last_block_sent = max_completed_block = initial_block_num -1;
+        	
+        		if (datagram_size <= sizeof(struct udphdr)) {
+        		        MakeError(VSP_DatagramSizeError);
+        		        result = ErrorOccurred;
+        		}
+ 			else {	
+   				mem_map = new SourceMemMap(max_blocks, block_size + sizeof(struct udphdr), datagram_size);
+   		
+   				if (mem_map->ErrorState() == ErrorOccurred){
+   		  			delete mem_map;
+   		  			mem_map = NULL;
+   		  			MakeError(VSP_SourceUninit);
+   		                }
+   		        }
+   	        }
+   	}
        	return result;
 }
 
@@ -215,16 +219,11 @@ Source::Allocate(size_t block_size, size_t initial_block_num, size_t datagram_si
 // Errors: None.
 //
 //
-Source::~Source()
+Source::~Source(void)
 {
-        if (mem_map.da_base != 0) {
-                (void) _swix(OS_DynamicArea, _INR(0,1), 1, mem_map.da_number);
-        }
-
-        if (mem_map.dgram_use != 0) {
-                delete mem_map.dgram_use;
-                mem_map.dgram_use = NULL;
-        }
+  	delete mem_map;
+  	mem_map = NULL;
+        
         sd.close();
 }
 
@@ -326,8 +325,8 @@ Source::getBlockStatus(size_t *num_blocks, size_t *max_blocks_r, size_t *num_fre
         	size_t full_blocks = 0;
         	size_t empty_blocks = 0;
         	
-                for (n = 0; n < mem_map.max_blocks; n++) {
-                        MemBlock *mb = mem_map.getBlock(n);
+                for (n = 0; n < mem_map->max_blocks; n++) {
+                        MemBlock *mb = mem_map->getBlock(n);
                         if (!mb->inuse) empty_blocks++;
                         else if (mb->completed) full_blocks++;
                 }
@@ -336,7 +335,7 @@ Source::getBlockStatus(size_t *num_blocks, size_t *max_blocks_r, size_t *num_fre
         }
         
         if (max_blocks_r != 0) {
-                *max_blocks_r = mem_map.max_blocks;
+                *max_blocks_r = mem_map->max_blocks;
         }
 
         return NoError;
@@ -350,10 +349,10 @@ Source::setEndPlayState(void)
 {
    	current_play_id = -1;
    	
-        for (int i=0;i<mem_map.max_blocks; i++){
-        	MemBlock *mb = mem_map.getBlock(i);
+        for (int i=0;i<mem_map->max_blocks; i++){
+        	MemBlock *mb = mem_map->getBlock(i);
         	if ((mb->inuse)&&(!mb->mpeg_owned))
-        	   mem_map.freeBlock_background(mb);
+        	   mem_map->freeBlock_background(mb);
         }
         full_blocks = 0; 
 }
@@ -374,10 +373,10 @@ Source::setNewPlayState(int *play_state, int *request_num, int *max_complete)
 
   	*play_state = ++current_play_id;
   		
-        for (i=0;i<mem_map.max_blocks; i++){
-        	mb = mem_map.getBlock(i);
+        for (i=0;i<mem_map->max_blocks; i++){
+        	mb = mem_map->getBlock(i);
         	if ((mb->inuse)&&(!mb->mpeg_owned))
-        	   mem_map.freeBlock_background(mb);
+        	   mem_map->freeBlock_background(mb);
         }
         full_blocks = 0;
          
@@ -390,7 +389,7 @@ Source::setNewPlayState(int *play_state, int *request_num, int *max_complete)
    	(*request_num) = (int)(max_completed_block + freebuf);
    	
 	for (i = (int)max_completed_block+1; i <= (*request_num); i++)
-		mem_map.findBlock(i);
+		mem_map->findBlock(i);
   		 	
      return result;
 }
@@ -408,10 +407,10 @@ Source::getBlock(NECBlock **block)
         MemBlock *mb;
         error_flag result = ErrorState();
         
-        mb = mem_map.findExistingBlock(last_block_sent + 1);
+        mb = mem_map->findExistingBlock(last_block_sent + 1);
         	
  	if (mb != NULL && mb->inuse && mb->completed) {
-        	result = mem_map.memMemBlockToNECBlock(mb, block);
+        	result = mem_map->memMemBlockToNECBlock(mb, block);
           	(*block)->iov_size = mb->dgrams_in_block;
                 ++last_block_sent;
                 mb->mpeg_owned = 1;
@@ -436,7 +435,7 @@ Source::freeBlock(const NECBlock *block)
 {
   MemBlock *mb;
          
-  error_flag result = mem_map.memNECBlockToMemBlock(block, &mb);
+  error_flag result = mem_map->memNECBlockToMemBlock(block, &mb);
   if (result != ErrorOccurred){
   	mb->to_be_freed = 1;
   	mb->mpeg_owned = 0;
@@ -451,10 +450,10 @@ Source::calculate_freeBlocks(void)
   	
  	error_flag result = ErrorState();
       	 
-        for (i = 0; ( (i < mem_map.max_blocks)&&(result != ErrorOccurred)); i++) {
-                MemBlock *mb = mem_map.getBlock(i);
+        for (i = 0; ( (i < mem_map->max_blocks)&&(result != ErrorOccurred)); i++) {
+                MemBlock *mb = mem_map->getBlock(i);
                 if (mb->to_be_freed != 0){
-                	result = mem_map.freeBlock_background(mb);
+                	result = mem_map->freeBlock_background(mb);
                 }
         }
         full_blocks = (int)(max_completed_block - last_block_sent);
@@ -480,8 +479,11 @@ Source::foregroundExecute(callback_flag *callback_flags, Server *server)
         if (result != ErrorOccurred)
  		result = calculatePosNAKSequence(&naks, server, (int)server->getMaxRequestedBlock());
 		
+       	full_blocks = (int)(max_completed_block - last_block_sent);
+
 #ifdef DEBUGLIB
-        //Debug("naks %i, [%i-%i]", naks, server->getMaxRequestedBlock(), max_completed_block);
+        Debug("naks %i, [%i-%i], %i, %i", naks, server->getMaxRequestedBlock(), 
+        			max_completed_block, stream_end_block, full_blocks);
         //result = getMiscInfo(0);
 #endif
         if (naks == 0)
@@ -490,7 +492,6 @@ Source::foregroundExecute(callback_flag *callback_flags, Server *server)
         if (result != ErrorOccurred)
         	result = calculatePosAckSequence(server);
        	
-       	full_blocks = (int)(max_completed_block - last_block_sent);
        	
     return result;
 }
@@ -505,8 +506,8 @@ Source::foregroundExecute(callback_flag *callback_flags, Server *server)
 error_flag
 Source::serviceDynamicAreaRenumber(int old_id, int new_id)
 {
-        if (old_id == mem_map.da_number) {
-                mem_map.da_number = new_id;
+        if (old_id == mem_map->getDaNumber()) {
+                mem_map->setDaNumber(new_id);
         }
         return NoError;
 }
@@ -556,16 +557,16 @@ Source::ReadDatagrams(callback_flag *flags)
         
         while (( size > 0)&&(result != ErrorOccurred)){
                       
-         	result = mem_map.memFindFreeDatagramBuffer(&dgram);
+         	result = mem_map->memFindFreeDatagramBuffer(&dgram);
         
          	if ( result != ErrorOccurred) {
                 	struct iovec iov[2];
                 
                 	iov[0].iov_len =  sizeof(NECDatagram);
-                	iov[1].iov_len =  (unsigned int)(mem_map.dgram_size - sizeof(NECDatagram)) ;
+                	iov[1].iov_len =  (unsigned int)(mem_map->dgram_size - sizeof(NECDatagram)) ;
                 
                 	iov[0].iov_base = (char*) dgram;
-                	iov[1].iov_base = (char*) mem_map.findPayloadBuffer(dgram);  
+                	iov[1].iov_base = (char*) mem_map->findPayloadBuffer(dgram);  
                                               
                 	size = sd.read(iov,sizeof(iov)/sizeof(struct iovec));
                      
@@ -581,7 +582,7 @@ Source::ReadDatagrams(callback_flag *flags)
                	 				max_block_received = dgram->block_number;
                 			}                			
                			       					// lookup the datagram's slot within the memblock
-                 			MemBlock *mb = mem_map.findBlock(dgram->block_number);
+                 			MemBlock *mb = mem_map->findBlock(dgram->block_number);
                  			
        					if (mb->nec_block.iov[dgram->dgram_seq].iov_base == NULL) {
        					  
@@ -608,11 +609,11 @@ Source::ReadDatagrams(callback_flag *flags)
 #ifdef DEBUGLIB       					
        						Debug("duplicate dgram");
 #endif       						
-       					  	result = mem_map.memFreeDatagram(dgram);
+       					  	result = mem_map->memFreeDatagram(dgram);
        					}
                		        }
                		        else
-               		        	result = mem_map.memFreeDatagram(dgram);
+               		        	result = mem_map->memFreeDatagram(dgram);
 	               	}// (size > datagram)
         	       	else {
                 	  	if (size > 0) {		// Oh erk - this datagram was way too short
@@ -624,7 +625,7 @@ Source::ReadDatagrams(callback_flag *flags)
                                         	MakeError(TCP_ReadFail);
                                         	result = ErrorOccurred;
                                 	}
-                               result = mem_map.memFreeDatagram(dgram);
+                               result = mem_map->memFreeDatagram(dgram);
                         }
                 }// no error result
         }// while datagrams
@@ -650,8 +651,8 @@ Source::getMiscInfo(int flags)
     	}               
 	Debug("MiscInfo - max_rec %i, max comp %i, play id %i", max_block_received, max_completed_block, current_play_id);
 
-         for (int i = 0; ( (i < mem_map.max_blocks)&&(result != ErrorOccurred) ); i++) {
-               MemBlock *mb = mem_map.getBlock(i);
+         for (int i = 0; ( (i < mem_map->max_blocks)&&(result != ErrorOccurred) ); i++) {
+               MemBlock *mb = mem_map->getBlock(i);
                Debug("block (%i)(%i)(%i)(%i)[%i] - %i, %i/%i, p_id = %i",
               	 mb->to_be_freed!=0, mb->mpeg_owned!=0, mb->completed!=0, mb->inuse!=0, mb->block_id, mb->pending_nak!=0,  
               	 mb->dgrams_received, mb->dgrams_in_block, mb->special_play_id);
