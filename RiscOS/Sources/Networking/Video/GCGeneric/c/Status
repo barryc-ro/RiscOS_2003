@@ -1,0 +1,807 @@
+/**************************************************************/
+/* File:    Status.c                                          */
+/*                                                            */
+/* Purpose: Implement GCGeneric_Status and handle the state   */
+/*          machine.                                          */
+/*                                                            */
+/* Author:  J.R.Byrne. Based on RTSPOVS etc. source by        */
+/*          A.D.Hodgkinson.                                   */
+/*                                                            */
+/* History: 12-Nov-2002 (JRB): Created.                       */
+/**************************************************************/
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <stdbool.h>
+#include <ctype.h>
+
+#include <swis.h>
+
+#include <inetlib.h>
+#include <socklib.h>
+#include <unixlib.h>
+#include <sys/errno.h>
+
+#ifndef ENOERROR
+  #define ENOERROR 0
+#endif
+
+#ifdef TRACE2
+  #define TRACE
+#endif
+#ifdef TRACE
+  #define DEBUGLIB
+#endif
+#include <debuglib/debuglib.h>
+
+#include <VideoCtrl.h>
+
+#include "CallOut.h"
+#include "Connect.h"
+#include "Generic.h"
+#include "Global.h"
+#include "Headers.h"
+#include "Module.h"
+#include "MPEGCtrl.h"
+#include "Play.h"
+#include "GCGenErrors.h"
+#include "GCGenHdr.h"
+#include "Session.h"
+#include "Setup.h"
+#include "Utils.h"
+
+#include "Status.h"
+
+/* Local options */
+
+#undef DUMP_HEADERS_TO_CACHEFS
+
+/*
+ * #define DUMP_HEADERS_TO_CACHEFS "Cache:$.Test"
+ */
+
+/* Local variables */
+
+static _kernel_oserror final;
+static char            recbuf[2048];
+
+/* Local functions */
+
+static bool status_proceed_completed (session * s, bool * repeat);
+static bool status_proceed_connected (session * s, bool * repeat);
+static bool status_proceed_sending   (session * s, bool * repeat);
+static bool status_proceed_default   (session * s, bool * repeat);
+static bool status_proceed_dns       (session * s, bool * repeat);
+static bool status_proceed_error     (session * s, bool * repeat);
+static bool status_proceed_initial   (session * s, bool * repeat);
+
+
+/**************************************************************/
+/* status_status()                                            */
+/*                                                            */
+/* Implement GCGeneric_Status. See the Video Control           */
+/* specification, 2501,817/FS, for more.                      */
+/**************************************************************/
+
+_kernel_oserror * status_status(_kernel_swi_regs * r)
+{
+  _kernel_oserror * e = NULL;
+  session         * s = session_find_by_id(r->r[1]);
+
+  dprintf(("Entry_2", "status_status: Called\n"));
+
+  if (!s)
+  {
+    dprintf(("Error_0", "status_status: ID not found\n"));
+    return make_error(GCGeneric_ERROR_CLIENT_ID_NOT_FOUND, 0);
+  }
+
+  /* If we have no command queue, return the real state */
+
+  if (s->next_command_cb == NULL)
+  {
+    r->r[0] = s->reported_state;
+    r->r[2] = s->response_code;
+  }
+
+  /* Otherwise, return a "connected and waiting" indication */
+
+  else
+  {
+    r->r[0] = VC_Status_ConnectionEstablished;
+    r->r[2] = 0;
+  }
+
+  /* Error, or normal state? */
+
+  e = status_check_error(s);
+
+  dprintf(("Entry_2", "status_status: Returning status %08x, response %d, error %p\n", r->r[0], r->r[2], e));
+
+  return e;
+}
+
+/**************************************************************/
+/* status_proceed_on_callout()                                */
+/*                                                            */
+/* A CallOut handler (see CallOut.h) which drives the state   */
+/* machine. Used for anything that can't be event driven,     */
+/* such as waiting for a DNS lookup to complete.              */
+/*                                                            */
+/* THIS FUNCTION MUST BE RE-ENTRANT.                          */
+/*                                                            */
+/* Parameters: The handle should point to the session struct  */
+/*             we're interested in.                           */
+/**************************************************************/
+
+void status_proceed_on_callout(void * handle)
+{
+  session * s = (session *) handle;
+
+  dprintf(("State_0", "status_proceed_on_callout: Called for %p, forwarding to status_proceed\n", s));
+
+  if (s->dying != 0) return;
+
+  if (s->callout_set != 0)
+  {
+    s->callout_set = 0;
+    status_proceed(s);
+  }
+}
+
+/**************************************************************/
+/* status_proceed()                                           */
+/*                                                            */
+/* Main module state machine.                                 */
+/*                                                            */
+/* THIS FUNCTION MUST BE RE-ENTRANT.                          */
+/*                                                            */
+/* Parameters: Pointer to the session struct to work for.     */
+/**************************************************************/
+
+void status_proceed(session * s)
+{
+  bool repeat;
+
+  dprintf(("State_0", "status_proceed: Called for %p\n", s));
+
+  do
+  {
+    repeat = false;
+
+    switch (s->state)
+    {
+      default:
+      {
+        if (status_proceed_default(s, &repeat)) return;
+      }
+      break;
+
+      /* Error states: Various things went wrong... */
+
+      case protostate_ERROR:
+      case protostate_ERROR_DEAD:
+      case protostate_ERROR_MEM:
+      case protostate_ERROR_WRITE:
+      case protostate_ERROR_READ:
+      case protostate_ERROR_CONNECTION:
+      case protostate_ERROR_NO_TOKEN:
+      case protostate_ERROR_NOT_IMPLEMENTED:
+      case protostate_ERROR_TIMEOUT:
+      case protostate_ERROR_DNS:
+      case protostate_ERROR_VCPN:
+      {
+        if (status_proceed_error(s, &repeat)) return;
+      }
+      break;
+
+      /* Idle */
+
+      case protostate_INITIAL:
+      {
+        if (status_proceed_initial(s, &repeat)) return;
+      }
+      break;
+
+      /* After calling opensock (Connect.c) to kick things off, we're */
+      /* waiting for DNS lookup to complete.                          */
+
+      case protostate_DNS:
+      {
+        if (status_proceed_dns(s, &repeat)) return;
+      }
+      break;
+
+      /* DNS is complete, and we're connected. Well, almost, could still try to */
+      /* send down the socket and get ENOTCONN for a while...! At this point,   */
+      /* call any connection callback function immediately, add in a sequence   */
+      /* header, and move to a SENDING state to send the command off.           */
+
+      case protostate_CONNECTED:
+      {
+        if (status_proceed_connected(s, &repeat)) return;
+      }
+      break;
+
+      /* Whilst we could still be in an ENOTCONN state, the state machine */
+      /* is way ahead and will be issuing socket_write calls.             */
+
+      case protostate_SENDING:
+      {
+        if (status_proceed_sending(s, &repeat)) return;
+      }
+      break;
+
+      case protostate_COMPLETED:
+      {
+        if (status_proceed_completed(s, &repeat)) return;
+      }
+      break;
+    }
+  }
+  while (repeat);
+
+  dprintf(("State_0", "status_proceed: Successful\n"));
+}
+
+/**************************************************************/
+/* status_proceed_default()                                   */
+/*                                                            */
+/* State machine handler for an unknown state.                */
+/*                                                            */
+/* Parameters: Pointer to a session structure for this state; */
+/*                                                            */
+/*             Pointer to a boolean, in which true is         */
+/*             written to go around the state table again,    */
+/*             else the contents are unaltered.               */
+/*                                                            */
+/* Returns:    True if the state table should be exitted      */
+/*             immediately, false to proceed normally.        */
+/**************************************************************/
+
+static bool status_proceed_default(session * s, bool * repeat)
+{
+  dprintf(("State_0,Error_0", "status_proceed_default: UNKNOWN STATE %d ENTERED\n", s->state));
+
+  s->state = protostate_COMPLETED;
+  *repeat  = true;
+
+  return false;
+}
+
+/**************************************************************/
+/* status_proceed_error()                                     */
+/*                                                            */
+/* State machine handler for any error state.                 */
+/*                                                            */
+/* Parameters: Pointer to a session structure for this state; */
+/*                                                            */
+/*             Pointer to a boolean, in which true is         */
+/*             written to go around the state table again,    */
+/*             else the contents are unaltered.               */
+/*                                                            */
+/* Returns:    True if the state table should be exitted      */
+/*             immediately, false to proceed normally.        */
+/**************************************************************/
+
+static bool status_proceed_error(session * s, bool * repeat)
+{
+  (void)repeat;
+  
+  dprintf(("State_0,Error_0", "status_proceed_error: General error\n"));
+
+  if (s->destruct)
+  {
+    dprintf(("State_0,Error_0", "status_proceed_error: Session self-destructing (on error), state machine exitting\n"));
+    session_free_item(s);
+    return true;
+  }
+  else
+  {
+    /* Video Control needs to know about this... */
+
+    if (s->reported == 0 && s->id != 0)
+    {
+      s->reported = 1;
+
+      _swix(VideoControl_ProtocolNotify,
+            _INR(0,3),
+
+            0,
+            s->id,
+            VideoControlProtocolNotifyNewStatus,
+            0);
+
+      dprintf(("State_0,Error_0", "status_proceed_error: Main session error - notified Video Control of new status\n"));
+    }
+  }
+
+  return false;
+}
+
+/**************************************************************/
+/* status_proceed_initial()                                   */
+/*                                                            */
+/* State machine handler for an initial (idling) state.       */
+/*                                                            */
+/* Parameters: Pointer to a session structure for this state; */
+/*                                                            */
+/*             Pointer to a boolean, in which true is         */
+/*             written to go around the state table again,    */
+/*             else the contents are unaltered.               */
+/*                                                            */
+/* Returns:    True if the state table should be exitted      */
+/*             immediately, false to proceed normally.        */
+/**************************************************************/
+
+static bool status_proceed_initial(session * s, bool * repeat)
+{
+  (void)s;
+  (void)repeat;
+  
+  dprintf(("State_0", "status_proceed_initial: Initial state\n"));
+
+  return false;
+}
+
+/**************************************************************/
+/* status_proceed_dns()                                       */
+/*                                                            */
+/* State machine handler for a DNS (resolving) state: "After  */
+/* calling opensock (Connect.c) to kick things off, we're     */
+/* waiting for DNS lookup to complete".                       */
+/*                                                            */
+/* Parameters: Pointer to a session structure for this state; */
+/*                                                            */
+/*             Pointer to a boolean, in which true is         */
+/*             written to go around the state table again,    */
+/*             else the contents are unaltered.               */
+/*                                                            */
+/* Returns:    True if the state table should be exitted      */
+/*             immediately, false to proceed normally.        */
+/**************************************************************/
+
+static bool status_proceed_dns(session * s, bool * repeat)
+{
+  int port;
+
+  dprintf(("State_0", "status_proceed_dns: DNS; recalling opensock\n"));
+
+  if (s->url->port && *s->url->port) port = atoi(s->url->port);
+  else                               port = GCGeneric_DefaultPort;
+
+  s->sd = opensock(s->url->host,
+                   port,
+                   NULL,
+                   &s->state,
+                   s->sd);
+
+  /* If we're still in the DNS state, set another callout. Otherwise we */
+  /* have to wait until the Internet event handler gets triggered when  */
+  /* the socket gets connected.                                         */
+
+  if (s->sd < 0 || s->state == protostate_DNS)
+  {
+    unsigned now = utils_read_time();
+
+    if (s->state == protostate_ERROR) s->err_no = -s->sd;
+
+    dprintf(("State_1", "status_proceed_dns: Still in DNS state / sd < 0\n"));
+
+    /* Check timeout */
+
+    if (utils_time_difference(s->last, now) > Headers_Timeout_General)
+    {
+      dprintf(("State_0,Error_0", "status_proceed_dns: DNS timeout\n"));
+
+      s->state = protostate_ERROR_TIMEOUT;
+      *repeat  = true;
+    }
+    else if (s->callout_set == 0)
+    {
+      dprintf(("State_1", "status_proceed_dns: Setting a %dcs callout for DNS lookup\n", Session_State_Timer));
+
+      s->callout_set = 1;
+      timeout(status_proceed_on_callout, s, Session_State_Timer);
+    }
+  }
+
+  return false;
+}
+
+/**************************************************************/
+/* status_proceed_connected()                                 */
+/*                                                            */
+/* State machine handler for a connected (post-DNS, but could */
+/* be waiting for actual connection) state: "DNS is complete, */
+/* and we're connected. Well, almost, could still try to send */
+/* down the socket and get ENOTCONN for a while...! At this   */
+/* point, call any connection callback function immediately,  */
+/* add in a sequence header, and move to a SENDING state to   */
+/* send the command off".                                     */
+/*                                                            */
+/* Parameters: Pointer to a session structure for this state; */
+/*                                                            */
+/*             Pointer to a boolean, in which true is         */
+/*             written to go around the state table again,    */
+/*             else the contents are unaltered.               */
+/*                                                            */
+/* Returns:    True if the state table should be exitted      */
+/*             immediately, false to proceed normally.        */
+/**************************************************************/
+
+static bool status_proceed_connected(session * s, bool * repeat)
+{
+  /* Socket is connected. */
+
+  dprintf(("State_0", "status_proceed_connected: Connected\n"));
+
+  s->last = utils_read_time();
+
+  if (s->connected_cb != NULL)
+  {
+    dprintf(("State_1", "status_proceed_connected: Calling callback function.\n"));
+
+    // And we do what exactly with errors...?
+
+    s->connected_cb(s);
+    s->connected_cb = NULL;
+  }
+
+  s->reported_state |= VC_Status_NewStatus | VC_Status_ConnectionEstablished;
+  s->response_code = 200;
+
+  s->state = protostate_COMPLETED;
+  *repeat  = true;
+
+  return false;
+}
+
+/**************************************************************/
+/* status_proceed_sending()                                   */
+/*                                                            */
+/* State machine handler for a sending state: "Whilst we      */
+/* could still be in an ENOTCONN state, the state machine is  */
+/* way ahead and will be issuing socket_write calls".         */
+/*                                                            */
+/* Parameters: Pointer to a session structure for this state; */
+/*                                                            */
+/*             Pointer to a boolean, in which true is         */
+/*             written to go around the state table again,    */
+/*             else the contents are unaltered.               */
+/*                                                            */
+/* Returns:    True if the state table should be exitted      */
+/*             immediately, false to proceed normally.        */
+/**************************************************************/
+
+static bool status_proceed_sending(session * s, bool * repeat)
+{
+  int    sent;
+  time_t now;
+
+  /* We're sending a command out */
+
+  dprintf(("State_0", "status_proceed_sending: Sending (%d of %d done so far) to socket %d...\n", s->reqptr, s->reqlen, s->sd));
+
+  sent = socketwrite(s->sd,
+                     s->full_request + s->reqptr,
+                     s->reqlen - s->reqptr);
+
+  dprintf(("State_1", "status_proceed_sending: ...sent %d this time\n", sent));
+
+  now = utils_read_time();
+
+  if (sent <= 0)
+  {
+    /* No data was sent */
+
+    if ( sent  == 0           ||
+         errno == ENOTCONN    ||
+         errno == EWOULDBLOCK
+       )
+    {
+      /* Check timeout and retry */
+
+      if (utils_time_difference(s->last, now) > Headers_Timeout_General)
+      {
+        s->state = protostate_ERROR_TIMEOUT;
+        *repeat  = true;
+      }
+      else if (s->callout_set == 0)
+      {
+        dprintf(("State_1", "status_proceed_sending: Setting %dcs callout for send timeout\n", Session_State_Retry));
+
+        s->callout_set = 1;
+        timeout(status_proceed_on_callout, s, Session_State_Retry);
+      }
+    }
+    else
+    {
+      /* An error occurred */
+
+      dprintf(("State_1,Error_0", "status_proceed_sending: Error %d\n", errno));
+
+      s->state  = protostate_ERROR_WRITE;
+      s->err_no = errno;
+      *repeat   = true;
+    }
+  }
+  else
+  {
+    /* Some data was sent */
+
+    s->reported_state |= VC_Status_ConnectionEstablished;
+    s->last            = now;
+    s->reqptr         += sent;
+
+    if (s->reqptr >= s->reqlen)
+    {
+      dprintf(("State_1", "status_proceed_sending: Full message sent\n"));
+  
+      free(s->full_request), s->full_request = NULL;
+      s->reqptr = s->reqlen = 0;
+
+      s->state = protostate_COMPLETED;
+      *repeat  = true;
+    }
+    else
+    {
+      /* Some data left to send - try again */
+
+      *repeat  = true;
+    }
+  }
+
+  return false;
+}
+
+/**************************************************************/
+/* status_proceed_completed()                                 */
+/*                                                            */
+/* State machine handler for a completed state (tidy up).     */
+/*                                                            */
+/* Parameters: Pointer to a session structure for this state; */
+/*                                                            */
+/*             Pointer to a boolean, in which true is         */
+/*             written to go around the state table again,    */
+/*             else the contents are unaltered.               */
+/*                                                            */
+/* Returns:    True if the state table should be exitted      */
+/*             immediately, false to proceed normally.        */
+/**************************************************************/
+
+static bool status_proceed_completed(session * s, bool * repeat)
+{
+  _kernel_oserror * e;
+
+  dprintf(("State_0", "status_proceed_completed: Called.\n"));
+
+  /* We may have to send another command */
+
+  if (s->next_command_cb)
+  {
+    e = (s->next_command_cb)(s);
+
+    if (e != NULL)
+    {
+      if (s->destruct)
+      {
+        session_free_item(s);
+        return true;
+      }
+      else
+      {
+        final.errnum = e->errnum;
+        strncpy(final.errmess, e->errmess, sizeof(final.errmess));
+
+        s->state = protostate_ERROR_VCPN;
+        *repeat  = true;
+      }
+    }
+
+    /* If the called routine did not change the state, repeat. */
+
+    if (s->state == protostate_COMPLETED)
+      *repeat = true;
+
+    return false;
+  }
+  else if (s->destruct)
+  {
+    /* We're on the way out - no status change to Video Control... */
+
+    dprintf(("State_0", "status_proceed_completed: Session self-destructing (completed), state machine exitting\n"));
+    session_free_item(s);
+    return true;
+  }
+  else if (s->id != 0)
+  {
+    /* Finished. Since G-cluster is a one-way system and never sends us any */
+    /* responses, we only bother calling VideoControl_ProtocolNotify after  */
+    /* the Setup and the first Play. Once the stream has started only key   */
+    /* presses are sent and we do nothing on finishing transmission.        */
+
+    dprintf(("State_0","status_proceed_completed: Calling VideoControl_ProtocolNotify (prepare=%d)\n", (s->starting != 0)));
+
+    if (s->started == 0)
+    {
+      e = _swix(VideoControl_ProtocolNotify,
+                _INR(0,4),
+  
+                0,
+                s->id,
+                VideoControlProtocolNotifyNewStatus,
+                (s->starting != 0) ? VC_ProtocolNotify_NewStatus_Prepare : 0,
+                NULL);
+  
+      /* Yikes, Video Control had a problem */
+  
+      if (e != NULL)
+      {
+        final.errnum = e->errnum;
+        strncpy(final.errmess, e->errmess, sizeof(final.errmess));
+  
+        s->state = protostate_ERROR_VCPN;
+        *repeat  = true;
+  
+        return false;
+      }
+  
+      if (s->starting != 0)
+      {
+        int opts[4];
+  
+        s->starting = 0;
+        s->started = 1;
+    
+        /* Get the MPEGControl handle for this stream */
+    
+        opts[0] = vc_tags_control_handle;
+        opts[1] = 1;
+        opts[2] = 0;
+        opts[3] = vc_tags__end;
+      
+        e = _swix(VideoControl_ProtocolOptions,
+                  _INR(0,2),
+      
+                  0,
+                  s->vcid,
+                  opts);
+      
+        if (e == NULL) s->mpegid = (unsigned int) opts[2];
+        dprintf(("State_1", "status_proceed_completed: read MPEGControl handle as %08X\n", s->mpegid));
+      }
+    }
+  }
+
+  /* If we got here, we've definitely finished the whole sequence correctly */
+  /* so it's safe to reset the state.                                       */
+
+  s->state = protostate_INITIAL;
+
+  return false;
+}
+
+/**************************************************************/
+/* status_check_error()                                       */
+/*                                                            */
+/* Examine a session structure to see if there's an error     */
+/* state and if so return an appropriate _kernel_oserror.     */
+/*                                                            */
+/* Parameters: Pointer to the session structure to examine.   */
+/*                                                            */
+/* Returns:    NULL or pointer to a filled in _kernel_oserror */
+/*             if the session was in an error state.          */
+/**************************************************************/
+
+_kernel_oserror * status_check_error(session * s)
+{
+  _kernel_oserror * e   = NULL;
+  int               use = GCGeneric_ERROR_CONNECT_GENERAL;
+
+  switch (s->state)
+  {
+    /* Error states: Various things went wrong... */
+
+    case protostate_ERROR_READ:
+    case protostate_ERROR_WRITE:
+    {
+      /* For a socket with a failed read or write we should do a   */
+      /* getsockopt call to extract something more meaningful than */
+      /* will be present in the session's copy of errno...         */
+
+      if (s->sd >= 0)
+      {
+        int err, so, size = sizeof(int);
+
+        err = getsockopt(s->sd, SOL_SOCKET, SO_ERROR, &so, &size);
+        dprintf(("Error_0", "s->err_no was %d, getsockopt returned %d, SO_ERROR was %d\n", s->err_no, err, so));
+        if (err == 0 && so != ENOERROR) s->err_no = so;
+      }
+
+      /* Read or write error? */
+
+      if (s->state == protostate_ERROR_READ) use = GCGeneric_ERROR_CONNECT_READ;
+      else                                   use = GCGeneric_ERROR_CONNECT_WRITE;
+
+    } /* (...and drop through to next set of conditions) */
+
+    case protostate_ERROR:
+    case protostate_ERROR_DEAD:
+    case protostate_ERROR_CONNECTION:
+    case protostate_ERROR_NO_TOKEN:
+    case protostate_ERROR_NOT_IMPLEMENTED:
+    {
+      char         en[16];
+      const char * message;
+      char       * dup;
+
+      /* If there's nothing recorded in the session's copy of errno */
+      /* or it's out of range, report the number; else report a     */
+      /* message from the errno table in Unixlib.                   */
+
+      if (s->err_no == ENOERROR || s->err_no >= sys_nerr)
+      {
+        sprintf(en, "%d", s->err_no);
+        message = en;
+      }
+      else message = sys_errlist[s->err_no];
+
+      /* Aesthetics - ensure first letter of sub-message is lower case */
+
+      dup = Strdup(message);
+      if (dup != NULL && isupper(dup[0])) dup[0] = tolower(dup[0]);
+
+      /* Generate the full report */
+
+      e = make_error(use, 1, dup == NULL ? message : dup);
+      free(dup);
+    }
+    break;
+
+    case protostate_ERROR_MEM:
+    {
+      e = make_error(GCGeneric_ERROR_MEMORY_EXHAUSTED, 0);
+    }
+    break;
+
+    case protostate_ERROR_TIMEOUT:
+    {
+      e = make_error(GCGeneric_ERROR_CONNECT_TIMEOUT, 0);
+    }
+    break;
+
+    case protostate_ERROR_DNS:
+    {
+      char * host;
+
+      if (s->url && s->url->host && *s->url->host) host = s->url->host;
+      else                                         host = "<?>";
+
+      e = make_error(GCGeneric_ERROR_CONNECT_DNS, 1, host);
+    }
+    break;
+
+    case protostate_ERROR_VCPN:
+    {
+      e = &final;
+    }
+    break;
+  }
+
+  #ifdef TRACE
+
+    if (e != NULL && strlen(e->errmess) < (sizeof(e->errmess) - 12))
+    {
+      sprintf(strchr(e->errmess, '\0'), " (%08X)", (unsigned int) s);
+    }
+
+    if (e != NULL)
+      dprintf(("Error_0", "status_check_error: Returning error &%x: %s\n", e->errnum, e->errmess));
+
+  #endif
+
+
+  return e;
+}
