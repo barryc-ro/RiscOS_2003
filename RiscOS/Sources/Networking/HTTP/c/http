@@ -33,6 +33,12 @@
  *               not working and crashing again!
  * SJM 01-Oct-97 Added USE_MIMEMAPMOD. Added PROXY_REDIRECT code. Added BUFFER_EXTEND code.
  *		 Only PROXY_REDIRECT tested at the moment and that is only for one customers use.
+ * SJM 02-Oct-97 Bit more on PROXY_REDIRECT (to allow disabling the proxy altogether). 
+ *		 Found bug bug when trying to use IMAGE and TUNNEL. When the socket is closed the
+ *		 tunnelling flag and SSL context are lost. Added new flag to restart tunnelling,
+ *		 ensured SSL context is freed in socket close, stopped 'object' field from being
+ *		 modified when sending headers, and stopped the zeroing of data_so_far on reopening
+ *		 SSL connection.
  */
 
 #include <errno.h>
@@ -1613,7 +1619,7 @@ static _kernel_oserror *http_prosecute( http_connection *c )
                 if ( SSL_errno() == EWOULDBLOCK )
                     return NULL;    /* still trying */
 
-		fdebugf( log_file, "SSL_connect returned %d (errno=%d)\n", rc,
+		fdebugf( log_file, "%p: SSL_connect returned %d (errno=%d)\n", c, rc,
                                SSL_errno() );
 #if DEBUG
 		if (rc)
@@ -1628,7 +1634,7 @@ static _kernel_oserror *http_prosecute( http_connection *c )
                 return NULL;
             }
 
-            fdebugf( log_file, "SSL_connect returned %d (errno=%d)\n", rc,
+            fdebugf( log_file, "%p: SSL_connect returned %d (errno=%d)\n", c, rc,
                                SSL_errno() );
 
             /* Add some fake headers to provide SSL information */
@@ -1742,7 +1748,7 @@ static _kernel_oserror *http_prosecute( http_connection *c )
 
     case status_GETTING_BODY:
 #ifndef NO_SECURE
-        if ( ( c->flags & http_open_flags_TUNNEL )
+        if ( ( c->flags & http_flags_TUNNELLING )
              && (c->rc/100) == 2 )
         {
             /* Proxy negotiation has completed -- crack on with the SSL
@@ -1760,17 +1766,21 @@ static _kernel_oserror *http_prosecute( http_connection *c )
             else
                 SSL_set_verify( c->SSL, SSL_VERIFY_NONE, NULL );
 
-            c->flags &= ~http_open_flags_TUNNEL;
+            c->flags &= ~http_flags_TUNNELLING;
 
             http_set_status( c, status_AUTHENTICATING );
 
             /* Complete flush of the six bytes of cack that BT is liable
              * to have sent us
              */
-            c->data_so_far = 0;
-            c->buf_off = 0;
-            c->buf_used = 0;
-
+	    /* SJM: range use means we need this information! */
+	    if ((c->flags & http_flags_GOTFIRST) == 0)
+	    {
+		c->data_so_far = 0;
+		c->buf_off = 0;
+		c->buf_used = 0;
+	    }
+	    
             http_prosecute( c );
             return NULL;
         }
@@ -1954,6 +1964,8 @@ static _kernel_oserror *http_prosecute( http_connection *c )
              && (c->data_so_far < c->total_size
                  || (c->flags & http_flags_RANGEBROKEN) ) )
         {
+	    fdebugf( log_file, "%p: calling requeue so_far %d total %d RANGE %s\n",
+		     c, c->data_so_far, c->total_size, c->flags & http_flags_RANGEBROKEN ? "BROKEN" : "OK" );
             http_requeue( c );
             return NULL;
         }
@@ -2001,23 +2013,18 @@ static _kernel_oserror *http_destroy( http_connection *c, int error )
 
 
 #if PROXY_REDIRECT && !defined(NO_SECURE)
-static _kernel_oserror *get_address(const char *var, struct sockaddr_in *sa)
+
+#define HTTPS_PORT	443
+
+/*
+ * Note modifies location!
+ */
+
+static void get_address(char *location, struct sockaddr_in *sa)
 {
-    char *location = getenv(var);
     char *p;
     struct hostent *hp;
 
-    memset(sa, 0, sizeof(*sa));
-    
-    if (location == NULL || location[0] == 0)
-    {
-	fdebugf (log_file, "get_address: '%s' not set\n", var);
-	return NULL;
-    }
-
-    if ((location = strdup(location)) == NULL)
-        return make_error(err_NO_MEMORY);
-    
     sa->sin_family = AF_INET;
     
     if ( (p=strchr(location, ':')) != 0)
@@ -2033,26 +2040,39 @@ static _kernel_oserror *get_address(const char *var, struct sockaddr_in *sa)
 	*p = 0;
     }
 
-#if 1
     hp = gethostbyname(location);
     if (hp)
 	memcpy(&sa->sin_addr, hp->h_addr, hp->h_length);
-#else
-    if ( strspn(location, "0123456789.") == strlen(location) )
-	sa->sin_addr.s_addr = (unsigned int) inet_addr(location);
-#endif    
     
     fdebugf( log_file, "get address: '%s' host=0x%08lx, port=0x%04x (%d)\n",
 	     location,
 	     sa->sin_addr.s_addr,
 	     sa->sin_port, htons(sa->sin_port));
+}
 
+static _kernel_oserror *get_address_var(const char *var, struct sockaddr_in *sa)
+{
+    char *location = getenv(var);
+
+    memset(sa, 0, sizeof(*sa));
+
+    if (location == NULL || location[0] == 0)
+    {
+	fdebugf (log_file, "get_address: '%s' not set\n", var);
+	return NULL;
+    }
+
+    if ((location = strdup(location)) == NULL)
+        return make_error(err_NO_MEMORY);
+
+    get_address(location, sa);
+    
     free(location);
   
     return NULL;
 }
 
-static _kernel_oserror *check_proxy_redirect(struct sockaddr_in *sa, int *pflags)
+static _kernel_oserror *check_proxy_redirect(struct sockaddr_in *sa, int *pflags, char **object)
 {
     struct sockaddr_in proxy, proxy_s;
     _kernel_oserror *e;
@@ -2060,7 +2080,7 @@ static _kernel_oserror *check_proxy_redirect(struct sockaddr_in *sa, int *pflags
     if ((*pflags & http_open_flags_SECURE) == 0)
 	return NULL;
 
-    if ((e = get_address("HTTP$Proxy", &proxy)) != NULL)
+    if ((e = get_address_var("HTTP$Proxy", &proxy)) != NULL)
 	return e;
 
     /* If proxy not equal to the host then ignore
@@ -2075,19 +2095,68 @@ static _kernel_oserror *check_proxy_redirect(struct sockaddr_in *sa, int *pflags
 	return NULL;
     }
 
-    if ((e = get_address("HTTPS$Proxy", &proxy_s)) != NULL)
+    if ((e = get_address_var("HTTPS$Proxy", &proxy_s)) != NULL)
 	return e;
 
-    /* If SSL proxy not set then ignore - could try and parse request string to bypass proxy altogether here */
+    /* If SSL proxy not set then try and parse request string to bypass proxy altogether */
     if (proxy_s.sin_addr.s_addr == 0 || proxy_s.sin_port == 0)
     {
-	fdebugf( log_file, "check_proxy_redirect: SSL proxy not specified\n" );
-	return NULL;
+	char *s, *path, *host;
+
+	fdebugf( log_file, "check_proxy_redirect: SSL proxy not specified - go direct\n" );
+
+	/* URL is https://host[:port]/path
+	 * We have already weeded out http: so it is safe to assume the above format
+	 * resolves the host and port and put in proxy_s, and put the new path back in object
+	 */
+
+	/* set host pointer. If not found then use original request */
+	s = strstr(*object, "//");
+	if (s == NULL)
+	    return NULL;
+	host = s + 2;
+
+	/* find start of path and allocate new path string, cope with
+           unterminated case for safety */
+	s = strchr(host, '/');
+	if (s)
+	{
+	    path = strdup(s);
+	    *s = 0;
+	}
+	else
+	{
+	    path = strdup("/");
+	}
+
+	/* init the proxy to HTTPS port */
+	memset(&proxy_s, 0, sizeof(proxy_s));
+	proxy_s.sin_port = htons((short)HTTPS_PORT);
+
+	/* resolve the host name (still in *object) */
+	get_address(host, &proxy_s);
+	if (proxy_s.sin_addr.s_addr == 0)
+	{
+	    fdebugf( log_file, "check_proxy_redirect: can't resolve host '%s'\n", host );
+	    return make_error(err_NO_SUCH_HOST);
+	}
+
+	/* replace the object ptr */
+	free(*object);
+	*object = path;
+	
+	/* not proxying to ensure tunnel flag disabled */
+	*pflags &= ~http_open_flags_TUNNEL;
+
+	fdebugf( log_file, "check_proxy_redirect: going direct to host '%s' path '%s'\n", host, path );
+    }
+    else
+    {
+	*pflags |= http_open_flags_TUNNEL;
     }
 
     /* Otherwise override the proxy information and set tunnelling */
     *sa = proxy_s;
-    *pflags |= http_open_flags_TUNNEL;
 
     fdebugf( log_file, "check_proxy_redirect: to host=0x%08lx, port=0x%04x (%d)\n",
 	     sa->sin_addr.s_addr,
@@ -2138,15 +2207,26 @@ static _kernel_oserror *http_open(http_open_args *args)
 
     new->flags = args2.in.flags;
 
+    new->object = strdup(args2.in.object);
+    if (new->object == NULL)
+    {
+        return http_destroy(new,err_NO_MEMORY);
+    }
+
 #if PROXY_REDIRECT && !defined(NO_SECURE)
     /* If it feels neceesary this will update the addr and flags */
-    if ((e = check_proxy_redirect(&new->sa, &new->flags)) != NULL)
+    if ((e = check_proxy_redirect(&new->sa, &new->flags, &new->object)) != NULL)
     {
 	fdebugf( log_file, "%p: proxy redirect returns error '%s'\n", new, e->errmess );
-	free(new);
+	http_close_handle(new, 0);
 	return e;
     }
 #endif
+
+    /* There appears to be a bug with restarting fetches and tunnelling proxies
+    if (new->flags & http_open_flags_TUNNEL)
+	new->flags &= ~http_open_flags_IMAGE;
+     */
     
 #if EXTEND_BUFFER
     new->buffer = malloc(MAX_LINE);
@@ -2199,12 +2279,6 @@ static _kernel_oserror *http_open(http_open_args *args)
      * The connection process may take a little time.  So we go off and make
      * the data file and come back in a moment to check if we are done.
      */
-
-    new->object = strdup(args2.in.object);
-    if (new->object == NULL)
-    {
-        return http_destroy(new,err_NO_MEMORY);
-    }
 
     http_copy_headers(args2.in.headers, &(new->sendhead_base) );
 
@@ -2312,6 +2386,7 @@ static void http_show_flags( http_connection *c )
     if ( f & http_flags_RANGEBROKEN )   fdebugf( log_file, " range-broken" );
     if ( f & http_flags_GOTFIRST )      fdebugf( log_file, " got-first" );
     if ( f & http_flags_CHUNKED )       fdebugf( log_file, " chunked" );
+    if ( f & http_flags_TUNNELLING )    fdebugf( log_file, " tunnelling" );
 
     if ( !f )
         fdebugf( log_file, " none" );
@@ -2331,6 +2406,11 @@ static int http_open_socket( http_connection *c )
 {
     int rc, i;
 
+    /* SJM: set the tunnelling flag here, so that it is always in step
+       with the original request */
+    if (c->flags & http_open_flags_TUNNEL)
+	c->flags |= http_flags_TUNNELLING;
+	
     if ( c->socket != -1 )
         fdebugf( log_file, "%p: *** open_socket called when socket=%d\n", c,
                            c->socket );
@@ -2400,7 +2480,7 @@ static int http_open_socket( http_connection *c )
          * transaction in unsecure mode and only call SSL_connect() once
          * the proxy headers have been exchanged.
          */
-        if ( !(c->flags & http_open_flags_TUNNEL) )
+        if ( !(c->flags & http_flags_TUNNELLING) )
         {
             c->SSL = SSL_new( ssl_context );
             SSL_set_fd( c->SSL, c->socket );
@@ -2444,7 +2524,7 @@ static int http_open_socket( http_connection *c )
  *------------------------------------------------------------------------*/
 
 #define RELEVANT_FLAGS ( http_open_flags_SECURE | http_open_flags_VERIFY | \
-                         http_open_flags_TUNNEL )
+                         http_flags_TUNNELLING )
 
 static BOOL http_queue_new( http_connection *me )
 {
@@ -2902,7 +2982,7 @@ _kernel_oserror *http_close_handle(http_connection *c, int flags)
 
     http_set_status( c, status_FINISHING );  /* sort out sockets_connecting */
 
-#ifndef NO_SECURE
+#if 0 /* ndef NO_SECURE SJM: moved into socket_close */
     if ( c->SSL != NULL )
     {
         fdebugf( log_file, "Closing SSL connection\n" );
@@ -3186,7 +3266,7 @@ void http_send_request(http_connection *c)
 
 #ifndef NO_SECURE
     /* semi-bodge */
-    if ( c->flags & http_open_flags_TUNNEL
+    if ( c->flags & http_flags_TUNNELLING
          && !c->SSL )
     {
         char *host = c->object + 8; /* "https://" */
@@ -3204,11 +3284,13 @@ void http_send_request(http_connection *c)
 
         fdebugf( log_file, "%p: sending request %s", c, tmp_buffer );
 
+#if 0	/* SJM: don't strip object down here as we may want to reuse it */
         strcpy( tmp_buffer, slash );
         if ( !*tmp_buffer )
             strcpy( tmp_buffer, "/" );
         free( c->object );
         c->object = strdup( tmp_buffer );
+#endif
 
         http_set_status( c, status_WAITING );
         return;
@@ -3219,13 +3301,38 @@ void http_send_request(http_connection *c)
 
     iov[0].iov_base = meth;
     iov[0].iov_len  = strlen(meth);
+#if 0
     iov[1].iov_base = c->object;
     iov[1].iov_len  = strlen(c->object);
+#else
+#ifndef NO_SECURE
+    /* SJM: if tunnelling then skip to path */
+    if (c->SSL && (c->flags & http_open_flags_TUNNEL))
+    {
+        char *slash = strchr(c->object + 8, '/' );
+	if (slash)
+	{
+	    iov[1].iov_base = slash;
+	    iov[1].iov_len  = strlen(slash);
+	}
+	else
+	{
+	    iov[1].iov_base = "/";
+	    iov[1].iov_len  = 1;
+	}
+    }
+    else
+#endif
+    {
+	iov[1].iov_base = c->object;
+	iov[1].iov_len  = strlen(c->object);
+    }
+#endif    
     iov[2].iov_base = tmp_buffer;
     iov[2].iov_len  = strlen(tmp_buffer);
 
     fdebugf( log_file, "%p: sending %d request %s%s %s\n", c, c->onthissocket,
-             meth, c->object, http_version );
+             meth, iov[1].iov_base, http_version );
 
     /* Note there's an assumption here that we can send the whole request
      * line without getting an EWOULDBLOCK.
@@ -3942,7 +4049,16 @@ void http_socket_close(http_connection *c)
 {
     if (c->socket != -1)
     {
-        totalsockets--;
+#ifndef NO_SECURE
+	if ( c->SSL != NULL )
+	{
+	    fdebugf( log_file, "Closing SSL connection\n" );
+	    SSL_free( c->SSL );
+	    c->SSL = NULL;
+	}
+#endif
+
+	totalsockets--;
 
         fdebugf( log_file, "%p: closing socket %d (%d left)\n", c, c->socket,
                  totalsockets );
