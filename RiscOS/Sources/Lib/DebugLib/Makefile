@@ -26,7 +26,7 @@ WIPE		= -wipe
 
 CCFLAGS		= -c -depend !Depend -ffah ${INCLUDES} ${DFLAGS} ${THROWBACK}
 ASFLAGS		= -depend !Depend -Stamp -quit
-CPFLAGS		= ~clfnr~v
+CPFLAGS		= ~cf~nr~v
 LBFLAGS		= -c
 LNFLAGS		= -aof
 WFLAGS		= ~CFR~V
@@ -45,6 +45,10 @@ ROMCSTUBS	= RISCOSLIB:o.romcstubs
 ABSSYM		= RISC_OSLib:o.AbsSym
 
 REMOTEDBLIB	= ${LIBDIR}.debug.o.lremote
+PDEBUG		= Libs.PD_PL
+PDEBUGZM	= Libs.PD_M_PL
+#PDEBUG		= ${LIBDIR}.PDebug.o.Lib_PL
+#PDEBUGZM	= ${LIBDIR}.PDebug.o.Lib_M_PL
 
 
 # ------------------------------------------------------------------------------
@@ -79,12 +83,12 @@ OBJSZ = \
  oz.serial_lib \
 
 LIBS = \
- libs.pd_pl \
+ ${PDEBUG} \
  libs.t_pl \
  ${REMOTEDBLIB} \
 
 LIBSZ = \
- libs.pd_m_pl \
+ ${PDEBUGZM} \
  libs.t_m_pl \
  ${REMOTEDBLIB}zm \
 

@@ -90,7 +90,7 @@ LIBS = \
  ${WIMPLIB} \
  ${TOOLBOXLIB} \
  ${EVENTLIB} \
- ${ERRORLIB}m \
+ ${ERRORLIB} \
  ${CLIB} \
  ${MEMCHECKLIB} \
  ${DEBUGLIB} \
