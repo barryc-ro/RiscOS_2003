@@ -97,6 +97,7 @@ OBJSZRAMD = od.handlers od.main od.oskbutils od.oskbime od.windowops oz.ModuleWr
 EXPORTS   = 
 INSTALLDIR = <Install$Dir>.${APPNAME}
 WRAPPER   = RISC_OSLib:s.ModuleWrap
+INSTRES   = ${INSTDIR}.Resources.${Locale}
 
 NORMAL_TARGET = ${COMPONENT}
 DEBUG_TARGET  = ${COMPONENT}d
@@ -200,13 +201,26 @@ resources:
 	@echo ${COMPONENT}: resource files copied
 	@echo
 
-install: install_${OPTIONS} install_common
+install: install_${OPTIONS}
 	@echo INSTDIR: ${INSTDIR}: resource files copied
 	@echo ${COMPONENT}: resource files copied
 	@echo
 
-install_common:
+install_STB: ram
+        ${MKDIR} ${INSTRES}
+	${CP} LocalUserIFRes:!BootRAM       ${INSTDIR}.!Boot        ${CPFLAGS}
+	${CP} LocalUserIFRes:!RunRAM        ${INSTDIR}.!Run         ${CPFLAGS}
+	${CP} rm.${COMPONENT}               ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        ${CP} LocalUserIFRes:Messages       ${INSTRES}.Messages     ${CPFLAGS}
+        ${CP} LocalUserIFRes:Res            ${INSTRES}.Res          ${CPFLAGS}
+        ${CP} LocalUserIFRes:Sprites        ${INSTRES}.Sprites      ${CPFLAGS}
+	${CP} <Lib$Dir>.LocaleRes.LocaleRes ${INSTDIR}.LocaleRes    ${CPFLAGS}
+
+install_: ${APP}
 	${MKDIR} ${INSTDIR}
+	${CP} LocalUserIFRes:!Boot ${INSTDIR}.!Boot ${CPFLAGS}
+	${CP} LocalUserIFRes:!Run ${INSTDIR}.!Run ${CPFLAGS}
+	${CP} ${APP} ${INSTDIR}.!RunImage ${CPFLAGS}
 	${CP} LocalUserIFRes:Messages ${INSTDIR}.Messages ${CPFLAGS}
 	${CP} LocalUserIFRes:Res ${INSTDIR}.Res ${CPFLAGS}
 	IfThere LocalUserIFRes:Graphics Then \
@@ -215,16 +229,6 @@ install_common:
 		${CP} LocalUserIFRes:Sprites ${INSTDIR}.Sprites ${CPFLAGS}
 	IfThere LocalUserIFRes:TVSprs Then \
 		${CP} LocalUserIFRes:TVSprs ${INSTDIR}.TVSprs ${CPFLAGS}
-
-install_STB: ram
-	${CP} LocalUserIFRes:!BootRAM ${INSTDIR}.!Boot ${CPFLAGS}
-	${CP} LocalUserIFRes:!RunRAM ${INSTDIR}.!Run ${CPFLAGS}
-	${CP} rm.${COMPONENT} ${INSTDIR}.${RMDIR}.${COMPONENT} ${CPFLAGS}
-
-install_: ${APP}
-	${CP} LocalUserIFRes:!Boot ${INSTDIR}.!Boot ${CPFLAGS}
-	${CP} LocalUserIFRes:!Run ${INSTDIR}.!Run ${CPFLAGS}
-	${CP} ${APP} ${INSTDIR}.!RunImage ${CPFLAGS}
 
 # -----------------------------------------------------------------------------
 # Static dependencies
