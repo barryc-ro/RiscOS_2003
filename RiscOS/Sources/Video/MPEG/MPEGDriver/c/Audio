@@ -91,6 +91,10 @@ static _kernel_oserror *static_CheckHandle (mpeg_stream_handle_t ash);
 /* Private constants */
 /*********************/
 
+#ifndef ErrorNumber_BuffOverflow
+#define ErrorNumber_BuffOverflow 0x1E5
+#endif
+
 #define DEFAULT_AUDIO_BUFFER_PREFILL         (16*1024)
 #define DEFAULT_AUDIO_BUFFER_LOW_WATER_MARK  (8*1024)
 #define DEFAULT_AUDIO_BUFFER_HIGH_WATER_MARK (24*1024)
@@ -474,11 +478,71 @@ Out:		Pointer to error block
 _kernel_oserror *Audio_SWIStats (unsigned int flags, mpeg_stream_handle_t ash, unsigned int *tags, void *buffer, int buffer_size, void **return_pointer, int *return_buffer_remaining)
 {
   _kernel_oserror *e = NULL;
+  unsigned int tag;
+  bool irqs_were_enabled = !_kernel_irqs_disabled ();
+  struct data_out
+  {
+    unsigned int tag;
+    unsigned int length;
+    unsigned int data [7];
+  };
   IGNORE(flags);
   IGNORE(ash);
-  IGNORE(tags);
+  
   *return_pointer = buffer;
   *return_buffer_remaining = buffer_size;
+  
+  while ((tag = *tags++) != -1)
+  {
+    struct data_out *output = *(struct data_out **)return_pointer;
+    switch (tag)
+    {
+      case 0x2012:
+        *return_buffer_remaining -= 12;
+        if (*return_buffer_remaining >= 0)
+        {
+          output->tag = tag;
+          output->length = sizeof(int);
+          if (Stream.audio.state != stream_closed)
+          {
+            output->data[0] = (VID_ABL & 0x3FFF) * 256;
+          }
+          else
+          {
+            output->data[0] = 0;
+          }
+        }
+        *(char **)return_pointer += 12;
+        break;
+      case 0x2013:
+      case 0x2014:
+        *return_buffer_remaining -= 12;
+        if (*return_buffer_remaining >= 0)
+        {
+          output->tag = tag;
+          output->length = sizeof(int);
+          output->data[0] = 0;
+          if (Stream.audio.state != stream_closed)
+          {
+            if (irqs_were_enabled) _kernel_irqs_off ();
+            output->data[0] = (Stream.audio.since_reset.amount_received.lsw - Stream.audio.since_reset.amount_sent.lsw);
+            if (tag == 0x2014)
+            {
+              output->data[0] += (VID_ABL & 0x3FFF) * 256;
+            }
+            if (irqs_were_enabled) _kernel_irqs_on ();
+          }  
+        }
+        *(char **)return_pointer += 12;
+        break;
+    }
+  }
+  
+  if (*return_buffer_remaining < 0)
+  {
+    e = Mess_GenerateError ("Err_BufOvf", ErrorNumber_BuffOverflow, 0);
+  }
+  
   return e;
 }
 
