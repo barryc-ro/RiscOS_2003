@@ -168,7 +168,7 @@ o.local_dirs:
 	${MKDIR} z
 	Create o.local_dirs
 	
-o.dirs:
+o.dirs: o.local_dirs
         ${MKDIR} ${LIBDIR}
         ${MKDIR} ${LIBDIR}.ImageLib
         ${MKDIR} ${LIBDIR}.ImageLib.h
