@@ -17,7 +17,6 @@ Pace.
 #include "Global/RISCOS.h"
 #include "Global/IOCtl.h"
 #include "Global/HALEntries.h"
-
 #include "swis.h"
 
 extern "C" {
@@ -34,17 +33,18 @@ static PRESSURE_STATUS pressure_gradient(unsigned int current_pressure,
 
 static void inform_kernel(unsigned int x, unsigned int y);
 
+
 // local macros
-#define LEFT_MOUSE_BUTTON(states)       (states & 0x00000004)
-#define MIDDLE_MOUSE_BUTTON(states)     (states & 0x00000002)
-#define RIGHT_MOUSE_BUTTON(states)      (states & 0x00000001)
+#define LEFT_MOUSE_BUTTON(states)       (states & 4)
+#define MIDDLE_MOUSE_BUTTON(states)     (states & 2)
+#define RIGHT_MOUSE_BUTTON(states)      (states & 1)
 
 #define BYTE_1(x)     ((x) & 0x000000ff)
 #define BYTE_2(x)    (((x) & 0x0000ff00) >> 8)
 
 
 // these are defined here, but mouse button values may be already be defined in a .h file.
-#define LEFT_MOUSE_BUTTON_KEYCODE   0x70
+#define LEFT_MOUSE_BUTTON_KEYCODE    0x70
 #define MIDDLE_MOUSE_BUTTON_KEYCODE  0x71
 
 
@@ -82,9 +82,9 @@ int pointerv_handler(_kernel_swi_regs *r, void *pw)
         case 2:
           /* Should activate and deactivate here. Kernel bug - doesn't call on boot? */
           break;
-        default:
-          break;
 
+        default:
+          ;
      }
 
      return 1;
@@ -101,19 +101,17 @@ int Driver(_kernel_swi_regs *r, void *pw)
 {
 
      static TOUCH_SCREEN_POSITION    touched_position;         // will contain data returned by HAL
-     static DISPLAY_POSITION    display_position;         // will contain HAL data translated to pixels
-     static PRESSURE_LEVEL     last_pressure = ZERO;
-     static PRESSURE_LEVEL     current_pressure;
-     static PRESSURE_STATUS    status;
-     static bool               left_down = false, middle_down = false;
+     static DISPLAY_POSITION         display_position;         // will contain HAL data translated to pixels
+     static PRESSURE_LEVEL           last_pressure = ZERO;
+     static PRESSURE_LEVEL           current_pressure;
+     static PRESSURE_STATUS          status;
+     static bool                     left_down = false, middle_down = false;
 
      (void)r;
      (void)pw;
 
-
+     // just to see if screen is being touched at all
      current_pressure = tscreen.pressure_measure.get_pressure_level();
-     status = pressure_gradient(current_pressure, last_pressure);
-     last_pressure = current_pressure;
 
 
      if(current_pressure != ZERO)
@@ -126,6 +124,16 @@ int Driver(_kernel_swi_regs *r, void *pw)
 
         // here we need to convert the measured x and y data to a screen position
         display_position = display_device.translate_position(touched_position);
+
+        // now that we know what part of the screen is touched we can calibrate the pressure
+        current_pressure = tscreen.pressure_measure.get_pressure_level
+                           (((display_device.get_display_size_x() * display_position.x) / 100),
+                            ((display_device.get_display_size_y() * display_position.y) / 100));
+
+        status = pressure_gradient(current_pressure, last_pressure);
+        last_pressure = current_pressure;
+
+
 
 #ifdef TEST
         // inform the os where the screen was pressed
@@ -217,6 +225,9 @@ PRESSURE_STATUS pressure_gradient(unsigned int current_pressure,
 }
 
 
+
+
+
 #ifdef TEST
 // inform the os of the new mouse position
 void inform_kernel(unsigned int x, unsigned int y)
@@ -238,7 +249,7 @@ void inform_kernel(unsigned int x, unsigned int y)
 static struct { int errno; char errmess[8]; } BadHardError = { 0x603, "BadHard" };
 
 /*************************************************************************************
-   module_initialise claims the vector TickerV
+   module_initialise claims the vector PointerV
 **************************************************************************************/
 _kernel_oserror *module_initialise(const char *cmd_tail, int podule_base, void *pw)
 {
@@ -247,12 +258,15 @@ _kernel_oserror *module_initialise(const char *cmd_tail, int podule_base, void *
 
   (void)cmd_tail;
   (void)podule_base;
+  (void)pw;
 
   ______main();
+
 
   e = _swix(OS_Hardware, _INR(8,9)|_OUT(0), 0, EntryNo_HAL_TouchscreenType, &flags);
   if (e || (flags & 0xFF) == 0)
     return _swix(MessageTrans_ErrorLookup, _INR(0,2), &BadHardError, 0, 0);
+
 
 #ifdef TEST
   return _swix(OS_Claim, _INR(0, 2), TickerV, pointerv_entry, pw);
@@ -269,6 +283,7 @@ _kernel_oserror *module_finalise(int fatal, int podule, void *pw)
 {
   (void)fatal;
   (void)podule;
+  (void)pw;
 
 #ifdef TEST
   return _swix(OS_Release, _INR(0, 2), TickerV, pointerv_entry, pw);
@@ -287,12 +302,14 @@ _kernel_oserror *swi_handler(int swi_no, _kernel_swi_regs *r, void *pw)
   (void)pw;
   (void)r;
 
-  _kernel_oserror* err_code = 0;
-
   TOUCH_SCREEN_POSITION pos;
+  _kernel_oserror* error_code = 0;
 
   pos.x = tscreen.x_position_measure.get_x_position();
   pos.y = tscreen.y_position_measure.get_y_position();
+
+  r->r[0] = 0; // r0 is used to pass info back to the calibration app.
+               // always reset to 0 just to be safe.
 
   switch(swi_no)
   {
@@ -301,42 +318,49 @@ _kernel_oserror *swi_handler(int swi_no, _kernel_swi_regs *r, void *pw)
               {
                      case 0:       // the user is pressing the centre of the display
                        display_device.set_centre(pos);
+                       r->r[0] = 1;
                        break;
 
                      case 1:       // the user is pressing the bottom centre of the display
                        display_device.set_bottom_centre(pos);
+                       r->r[0] = 1;
                        break;
 
                      case 2:       // the user is pressing the top centre of the display
                        display_device.set_top_centre(pos);
+                       r->r[0] = 1;
                        break;
 
                      case 3:       // the user is pressing the left centre of the diaplay
                        display_device.set_left_centre(pos);
+                       r->r[0] = 1;
                        break;
 
                      case 4:       // the user is pressing the right centre of the display
                        display_device.set_right_centre(pos);
+                       r->r[0] = 1;
                        break;
 
                      case 5:       // r2 contains the light pressure threshold
                        tscreen.pressure_measure.set_light_threshold(r->r[2]);
+                       r->r[0] = 1;
                        break;
 
                      case 6:       // r2 contains the firm pressure threshold
                        tscreen.pressure_measure.set_firm_threshold(r->r[2]);
+                       r->r[0] = 1;
                        break;
 
                      default:
-                       err_code = error_BAD_SWI;
+                       error_code = error_BAD_SWI;
               }
               break;
 
          default:
-              err_code = error_BAD_SWI;
+              error_code = error_BAD_SWI;
   }
+  return error_code;
 
-  return err_code;
 }
 
 /*************************************************************************************
