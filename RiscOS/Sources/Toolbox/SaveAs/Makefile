@@ -6,6 +6,7 @@
 # Date       Name   Description
 # ----       ----   -----------
 # 06-Jan-94  AMcC   Created
+# 04-Feb-98  SNB    Updated to allow RAM builds
 #
 
 #
@@ -28,6 +29,7 @@ CC      = cc
 CMHG    = cmhg
 CP      = copy
 LD      = link
+TLD	= tlink
 RM      = remove
 WIPE    = -wipe
 
@@ -132,9 +134,9 @@ ${RESF}: @.Resources.${LOCALE}.Res
 	resgen res_file ${RESF} Resources.${LOCALE}.Res Resources.${COMPONENT}.Res
 
 
-${RAM_MODULE}: ${RAM_OBJS} ${TBOXLIB} ${CLIB} ${RESF} ${MSGSF}
+${RAM_MODULE}: ${RAM_OBJS} ${TBOXLIB} ${RESF} ${MSGSF}
 	${mkdir} rm
-        ${LD} -o $@ -module ${RAM_OBJS} ${TBOXLIB} ${CLIB} ${RESF} ${MSGSF}
+        ${TLD} -o $@ -module ${RAM_OBJS} ${TBOXLIB} ${RESF} ${MSGSF}
         Access $@ RW/R
 
 o.mainRAM: main.c
