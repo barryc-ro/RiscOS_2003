@@ -52,29 +52,3 @@ ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}
 
 # Dynamic dependencies:
-rm.SerMouse: Hdr:ListOpts
-rm.SerMouse: Hdr:Macros
-rm.SerMouse: Hdr:System
-rm.SerMouse: Hdr:SWIs
-rm.SerMouse: Hdr:CPU.Generic26
-rm.SerMouse: Hdr:IO.GenericIO
-rm.SerMouse: Hdr:RISCOS
-rm.SerMouse: Hdr:ModHand
-rm.SerMouse: Hdr:Services
-rm.SerMouse: Hdr:MsgTrans
-rm.SerMouse: Hdr:ResourceFS
-rm.SerMouse: Hdr:Buffer
-rm.SerMouse: Hdr:HighFSI
-rm.SerMouse: Hdr:CMOS
-rm.SerMouse: Hdr:HostFS
-rm.SerMouse: Hdr:NdrDebug
-rm.SerMouse: Hdr:DDVMacros
-rm.SerMouse: Hdr:Proc
-rm.SerMouse: Hdr:Pointer
-rm.SerMouse: Version
-rm.SerMouse: s.Front
-rm.SerMouse: s.Macros
-rm.SerMouse: s.ModHead
-rm.SerMouse: s.SerMouse
-rm.SerMouse: s.Driver
-rm.SerMouse: s.Tail
