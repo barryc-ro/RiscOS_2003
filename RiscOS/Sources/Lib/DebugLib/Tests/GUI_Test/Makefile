@@ -10,7 +10,6 @@ COMPONENT	= DebugTest
 APP		= !DebugTest
 MODULE		= rm.!DebugTest
 ROM_MODULE	= aof.DebugTest
-LDIR		= Resources.${LOCALE}
 
 # -----------------------------------------------------------------------------
 # Export Paths for Messages module
@@ -109,16 +108,16 @@ INCLUDES	= -Itbox:,C:
 DIRS = o._dirs
 
 FILES =\
- ${LDIR}.!Boot\
- ${LDIR}.!Run\
- ${LDIR}.!Sprites22\
- ${LDIR}.Messages\
- ${LDIR}.Res\
+ LocalRes:!Boot\
+ LocalRes:!Run\
+ LocalRes:!Sprites22\
+ LocalRes:Messages\
+ LocalRes:Res\
  ${TARGET}
 
 # Include these in the ROM module
 RESFILES =\
- ${LDIR}.!Sprites22\
+ LocalRes:!Sprites22\
 
 
 # -----------------------------------------------------------------------------
@@ -187,13 +186,13 @@ rom: ${ROM_MODULE}
 
 install_common: ${FILES}
 	@echo
-	${CP} ${LDIR}.!Boot			${INSTDIR}.!Boot		${CPFLAGS}
-	${CP} ${LDIR}.!Sprites22		${INSTDIR}.!Sprites22   	${CPFLAGS}
-	${CP} ${LDIR}.Messages			${INSTDIR}.Messages		${CPFLAGS}
-	${CP} ${LDIR}.Res			${INSTDIR}.Res			${CPFLAGS}
+	${CP} LocalRes:!Boot			${INSTDIR}.!Boot		${CPFLAGS}
+	${CP} LocalRes:!Sprites22		${INSTDIR}.!Sprites22   	${CPFLAGS}
+	${CP} LocalRes:Messages			${INSTDIR}.Messages		${CPFLAGS}
+	${CP} LocalRes:Res			${INSTDIR}.Res			${CPFLAGS}
 
 install: install_common
-	${CP} ${LDIR}.!Run		${INSTDIR}.!Run		${CPFLAGS}
+	${CP} LocalRes:!Run		${INSTDIR}.!Run		${CPFLAGS}
 	${CP} ${TARGET}			${INSTDIR}.!RunImage	${CPFLAGS}
 	-Access ${INSTDIR}.!Boot	lr/r
 	-Access ${INSTDIR}.!Run		lr/r
@@ -204,7 +203,7 @@ install: install_common
 	@echo ${COMPONENT}: Application installed to ${INSTDIR}
 
 installd: install_common
-	${CP} ${LDIR}.!RunT		${INSTDIR}.!RunT	${CPFLAGS}
+	${CP} LocalRes:!RunT		${INSTDIR}.!RunT	${CPFLAGS}
 	${CP} ${TARGET}			${INSTDIR}.!RunImageT	${CPFLAGS}
 	@echo
 	@echo ${COMPONENT}: Debug application installed ${INSTDIR}
@@ -218,10 +217,10 @@ resources:
 	${MKDIR} ${RESDIR}
 	${MKDIR} ${RESAPP}
 	${MKDIR} ${RESDIR}.User
-	${CP} ${LDIR}.ROM.!Run		${RESAPP}.!Run		${CPFLAGS}
-	${CP} ${LDIR}.!Sprites22        ${RESDIR}.!Sprites22	${CPFLAGS}
-	${CP} ${LDIR}.Messages		${RESDIR}.Messages	${CPFLAGS}
-	${CP} ${LDIR}.Res		${RESDIR}.Res		${CPFLAGS}
+	${CP} LocalRes:ROM.!Run		${RESAPP}.!Run		${CPFLAGS}
+	${CP} LocalRes:!Sprites22	${RESDIR}.!Sprites22	${CPFLAGS}
+	${CP} LocalRes:Messages		${RESDIR}.Messages	${CPFLAGS}
+	${CP} LocalRes:Res		${RESDIR}.Res		${CPFLAGS}
 	@echo
 	@echo ${COMPONENT}: Resource files copied to Messages module
 
@@ -291,8 +290,8 @@ oz.ModuleWrap: s.ModuleWrap s.AppName ${RESFILES}
 s.ModuleWrap: ${WRAPPER}
 	${CP} ${WRAPPER} $@ ${CPFLAGS}
 
-s.AppName: ${LDIR}.Messages
-	awk -f awk.AppName ${LDIR}.Messages > $@
+s.AppName: LocalRes:Messages
+	awk -f awk.AppName LocalRes:Messages > $@
 
 
 # -----------------------------------------------------------------------------
