@@ -21,7 +21,7 @@ WFLAGS  = ~cfr~v
 # Program specific options:
 #
 COMPONENT = AHVC
-APP       = SysEnv
+APP       = ${COMPONENT}
 RDIR	= Resources
 
 
