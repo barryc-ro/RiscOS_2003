@@ -31,12 +31,13 @@ DLIBS  = <LIB$Dir>.DebugLib.o.debuglib TCPIPLibs:o.socklib TCPIPLibs:o.inetlib
 #
 # Include files
 #
-INCLUDES =  -ICLIB:
+INCLUDES =  -ICLIB:,TCPIPLibs:
 
 # Program specific options:
 #
 COMPONENT = EngMenu
 TARGET    = !EngMenu.!RunImage
+D_TARGET  = !EngMenu.!RunImaDB
 
 OBJS     = 	\
 o.main 		\
@@ -45,6 +46,14 @@ o.message	\
 o.parser	\
 o.menuhier	\
 o.menu
+
+d_OBJS     = 	\
+d_o.main 	\
+d_o.graphics	\
+d_o.message	\
+d_o.parser	\
+d_o.menuhier	\
+d_o.menu
 
 OBJSI     =	\
 i.main 		\
@@ -66,9 +75,11 @@ oi.instlib
 #
 # Rule patterns
 #
-.SUFFIXES:	.o .oi .s .c .c++ .i .cmhg .inst
-.c++.o:;    ${C++} ${CFLAGS} ${DFLAGS} -o $@ $<
-.c.o:;      ${CC} ${CFLAGS} ${DFLAGS} -o $@ $<
+.SUFFIXES:	.d_o .o .oi .s .c .c++ .i .cmhg .inst
+.c++.o:;    ${C++} ${CFLAGS} -o $@ $<
+.c.o:;      ${CC} ${CFLAGS} -o $@ $<
+.c++.d_o:;    ${C++} ${CFLAGS} ${DFLAGS} -o $@ $<
+.c.d_o:;      ${CC} ${CFLAGS} ${DFLAGS} -o $@ $<
 .cmhg.o:;   ${CMHG} -o $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
 .c++.i:;    ${CC} ${C++FLAGS} -c -C -E $< >> $@
@@ -80,8 +91,12 @@ oi.instlib
 #
 all: ${TARGET} dirs
         @echo ${COMPONENT}: all complete
+
+d_all: ${D_TARGET} dirs
+        @echo ${COMPONENT}: all complete
 dirs:
         ${MKDIR} o
+        ${MKDIR} d_o
         ${MKDIR} i
         ${MKDIR} oi
         ${MKDIR} inst
@@ -95,6 +110,7 @@ instrument: ${OBJSINST} dirs
 
 clean:
         ${WIPE} o ${WFLAGS}
+        ${WIPE} d_o ${WFLAGS}
         ${WIPE} i ${WFLAGS}
         ${WIPE} oi ${WFLAGS}
         ${WIPE} inst ${WFLAGS}
@@ -105,79 +121,10 @@ clean:
 # Target
 #
 ${TARGET}: ${OBJS}
-        ${LD} ${Linkflags} ${OBJS} ${CLIB} ${DLIBS}
+        ${LD} ${Linkflags} ${OBJS} ${CLIB}
+
+${D_TARGET}: ${d_OBJS}
+        ${LD} ${Linkflags} ${d_OBJS} ${CLIB} ${DLIBS}
 
 #
 # Dynamic dependencies:
-o.message:	c++.message
-o.message:	h.message
-o.message:	CLIB:h.kernel
-o.message:	CLIB:h.kernel
-o.message:	CLIB:h.swis
-o.message:	<Lib$Dir>.DebugLib.h.DebugLib
-o.graphics:	c++.graphics
-o.graphics:	CLIB:h.kernel
-o.graphics:	CLIB:h.swis
-o.graphics:	C:h.os
-o.graphics:	C:h.bbc
-o.graphics:	h.main
-o.graphics:	CLIB:h.kernel
-o.graphics:	CLIB:h.swis
-o.graphics:	h.graphics
-o.graphics:	h.message
-o.graphics:	CLIB:h.kernel
-o.menu:	c++.menu
-o.menu:	h.menu
-o.menu:	CLIB:h.kernel
-o.menu:	CLIB:h.swis
-o.menu:	h.main
-o.menu:	CLIB:h.kernel
-o.menu:	CLIB:h.swis
-o.menu:	h.message
-o.menu:	CLIB:h.kernel
-o.menu:	h.graphics
-o.menu:	h.message
-o.menu:	h.main
-o.menu:	CLIB:h.ctype
-o.parser:	c++.parser
-o.parser:	h.menuhier
-o.parser:	h.menu
-o.parser:	CLIB:h.kernel
-o.parser:	CLIB:h.swis
-o.parser:	h.main
-o.parser:	CLIB:h.kernel
-o.parser:	CLIB:h.swis
-o.parser:	h.message
-o.parser:	CLIB:h.kernel
-o.parser:	h.graphics
-o.parser:	h.message
-o.parser:	CLIB:h.ctype
-o.parser:	h.main
-o.menuhier:	c++.menuhier
-o.menuhier:	h.menuhier
-o.menuhier:	h.menu
-o.menuhier:	CLIB:h.kernel
-o.menuhier:	CLIB:h.swis
-o.menuhier:	h.main
-o.menuhier:	CLIB:h.kernel
-o.menuhier:	CLIB:h.swis
-o.menuhier:	h.message
-o.menuhier:	CLIB:h.kernel
-o.menuhier:	h.graphics
-o.menuhier:	h.message
-o.main:	c++.main
-o.main:	h.main
-o.main:	CLIB:h.kernel
-o.main:	CLIB:h.swis
-o.main:	CLIB:h.swis
-o.main:	h.menuhier
-o.main:	h.menu
-o.main:	CLIB:h.kernel
-o.main:	CLIB:h.swis
-o.main:	h.main
-o.main:	h.message
-o.main:	CLIB:h.kernel
-o.main:	h.graphics
-o.main:	h.message
-o.main:	C:h.bbc
-o.main:	C:h.os
