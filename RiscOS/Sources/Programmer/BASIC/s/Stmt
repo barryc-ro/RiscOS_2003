@@ -9,7 +9,7 @@ CASE    ROUT
         TEQ     TYPE,#0
         BLNE    FLOATZ
         BL      PUSHTYPE
-        STMFD   SP!,{TYPE}
+        STR     TYPE,[SP,#-4]!
         SUB     R7,AELINE,#1
         MVN     R6,#0                  ;count of nesting depth: will see OF, so start at -1
         B       %02
@@ -37,9 +37,9 @@ CASE    ROUT
         BCS     ENDCAS
         TEQ     R4,#TOTHER
         BEQ     CASEEL
-CASEWH  STMFD   SP!,{R7}               ;rqd if go back to %00
+CASEWH  STR     R7,[SP,#-4]!               ;rqd if go back to %00
         BL      AEEXPR
-        LDMFD   SP!,{R7}
+        LDR     R7,[SP],#4
         MOV     LINE,AELINE
         LDMFD   SP,{R4,R5,R6}
         TEQ     R4,#0
@@ -127,49 +127,102 @@ CHAIN   BL      LOADER
 CLEAR   BL      DONES
         BL      SETFSA
         B       NXT
-DIMSPA  SUB     LINE,LINE,#1           ;because of Spaces
-        BL      CRAELV
+DIMSPA  SUB     LINE,LINE,#1           ;because of SPACES returning ptr /after/ first non-space char
+        BL      CRAELV                 ;create an LV. EQ means failed.
+        ;IACC is the ptr to the value (or SIB)
+        ;TYPE is 0 byte, 4 int, 5 FP, 129 $(), 128 string. Array ref is type+256
         BEQ     BADDIM
         CMP     TYPE,#TFPLV+1
-        BCS     ERTYPENUM
-        STMFD   SP!,{IACC,TYPE}
-        BL      EXPR
-        BL      INTEGY
-        ADD     R7,IACC,#1
-        LDR     IACC,[ARGP,#FSA]
-        LDMFD   SP!,{R4,R5}
-        STMFD   SP!,{IACC,R7}
-        BL      STOREA                 ;store thing, may yet fail
-        LDMFD   SP!,{IACC,R7}
-        TEQ     R7,#0
-        BMI     BADDIMSIGN
-        ADD     R7,R7,#3
+        BHS     ERTYPENUM              ;error if var is not numeric
+DIMSPA2 LDRB    R10, [AELINE],#1       ;skip any spaces before the LOCAL or expression
+        TEQ     R10, #" "
+        BEQ     DIMSPA2
+        TEQ     R10, #TLOCAL           ;is there a LOCAL token?
+        LDREQ   R4, [SP]
+        SUBNE   AELINE,AELINE,#1       ;no. do the normal DIM from the heap
+        BNE     DIMHEAP
+        TEQ     R4, #TPROC             ;yes. are we in a PROC/FN (and not a FOR, etc)?
+        TEQNE   R4, #TFN
+        BNE     ERRNLC                 ;no. return an error
+        STMFD   SP!,{IACC,TYPE}        ;push the variable's details
+        BL      EXPR                   ;evaluate the expression at AELINE into
+        BL      INTEGY                 ;force the expression to integer (error if not correct type)
+        ADDS    R7,IACC,#1             ;R7 = result+1. Check if -ve (in this case, DIM p% LOCAL -1 will give p%=SP)
+        ADDMI   SP,SP,#8
+        BMI     BADDIMSIGN             ;it is. return an error
+        LDR     IACC,[ARGP,#FSA]       ;load the free pointer
+        ADD     R7,R7,#3               ;round to whole number of words
         BIC     R7,R7,#3
-        ADD     R7,IACC,R7
+        LDMFD   SP!,{R4,R5}            ;pull the stacked LV details into R4,R5
+        ADD     IACC,R7,IACC           ;add bytes to claim onto the free pointer
+        ADD     IACC,IACC,#512         ;generous allocation of free space below stack
+        CMP     IACC,SP                ;will the claim leave much room in for our stack/heap?
+        BHI     BADDIMSIZE             ;no. return an error
+        SUB     IACC,SP,R7             ;block is claimed from the stack
+        ADD     IACC,IACC,#12          ;three words at top of block are the PROC/FN status (moved below if claim OK)
+        STR     R7,[SP,#-4]!           ;push the block size
+        BL      STOREA                 ;store thing, may yet fail
+        LDR     R6,[SP],#4             ;recover our DIM details
+        TEQ     R6,#0                  ;was the claim for zero (i.e. -1 to read SP) bytes?
+        BEQ     DIMNXT                 ;yes. move on to the next part of the DIM
+        LDR     R7,[ARGP,#DIMLOCAL]    ;load DIM LOCAL list pointer
+        LDMFD   SP!,{R0,R3,R4}         ;load PROC/FN status words
+        MOV     R5,#TDIM               ;magic marker!
+        SUB     SP,SP,R6               ;claim block from stack
+        ; Stack...
+        ;   SP+24.. = n claimed bytes
+        ;   SP+20   = pointer to next DIM LOCAL (may be zero)
+        ;   SP+16   = number of bytes claimed (n)
+        ;   SP+12   = TDIM
+        ;   SP+8    = LINE for PROC/FN
+        ;   SP+4    = AELINE for PROC/FN
+        ;   SP      = TPROC or TFN
+        STMFD   SP!,{R0,R3,R4,R5,R6,R7};push the stuff onto the stack
+        ADD     R0,SP,#12
+        STR     R0,[ARGP,#DIMLOCAL]    ;store this as head of DIM LOCAL list
+        B       DIMNXT                 ;move on to the next part of the DIM
+DIMHEAP STMFD   SP!,{IACC,TYPE}        ;push the LV details
+        BL      EXPR                   ;evaluate the expression at AELINE into
+        BL      INTEGY                 ;force the expression to integer (error if not correct type)
+        ADD     R7,IACC,#1             ;R7 = result+1
+        LDR     IACC,[ARGP,#FSA]       ;read free pointer into IACC
+        LDMFD   SP!,{R4,R5}            ;pull the stacked LV details into R4,R5
+        STMFD   SP!,{IACC,R7}          ;push the new DIM details {free ptr,bytes}
+        BL      STOREA                 ;store thing, may yet fail
+        LDMFD   SP!,{IACC,R7}          ;recover our DIM details
+        TEQ     R7,#0                  ;was the size -ve? (DIM p% -1 gives p%=FSA and FSA is unchanged)
+        BMI     BADDIMSIGN             ;yes. return an error
+        ADD     R7,R7,#3               ;round to a whole number of words
+        BIC     R7,R7,#3               ;...
+        ADD     R7,IACC,R7             ;R7 is now the new position of FSA if we claim the block
         ADD     R6,R7,#512             ;generous allocation of free space below stack
-        CMP     R6,SP
-        BCS     BADDIMSIZE
-        STR     R7,[ARGP,#FSA]
-DIMNXT  MOV     LINE,AELINE
-        CMP     R10,#","
-        BNE     DONEXT
-DIM     BL      SPACES
-        MOV     R0,R10
-        BL      WORDCQ
-        CMPCS   R10,#"A"
-        BCC     BADDIM                 ;taken if WORDCQ failed, or if 0-9
-;now have first char of item in R10 as rqd
-        MOV     TYPE,#TFPLV
-        MOV     AELINE,LINE
+        CMP     R6,SP                  ;will the claim leave much room in for our stack?
+        BCS     BADDIMSIZE             ;no. return an error
+        STR     R7,[ARGP,#FSA]         ;yes. claim the memory
+DIMNXT  MOV     LINE,AELINE            ;is there another item to DIM?
+        CMP     R10,#","               ;...
+        BNE     DONEXT                 ;no. move on to the next statement
+; *************************************
+; *
+; * Entry point for a DIM statement
+; *
+DIM     BL      SPACES                 ;skip spaces, place non-space char in R10. LINE = ptr to char /after/ R10
+        MOV     R0,R10                 ;move non-space char into R0
+        BL      WORDCQ                 ;is the char in ['A'-'Z','a'-'z','0'-'9']? CS if yes
+        CMPCS   R10,#"A"               ;if yes, is char a digit?
+        BCC     BADDIM                 ;taken if WORDCQ failed, or if '0'-'9'
+; now have first char of item in R10 as rqd
+        MOV     TYPE,#TFPLV            ;TYPE = real
+        MOV     AELINE,LINE            ;scan to the end of the identifier
 DIMNO   LDRB    R0,[AELINE],#1
         BL      WORDCQ
-        BCS     DIMNO
-        CMP     R0,#"("
-        BEQ     DIMVAR
-        CMP     R0,#"%"
-        MOVEQ   TYPE,#4
-        CMPNE   R0,#"$"
-        BNE     DIMSPA
+        BCS     DIMNO                  ;AELINE = ptr to char after identifier
+        CMP     R0,#"("                ;is this the subscripts?
+        BEQ     DIMVAR                 ;yes
+        CMP     R0,#"%"                ;no. is this an integer array?
+        MOVEQ   TYPE,#4                ;yes
+        CMPNE   R0,#"$"                ;no. is this a string array?
+        BNE     DIMSPA                 ;no. this is a DIM blk size. do it...
         CMP     TYPE,#TFPLV
         MOVEQ   TYPE,#128
         LDRB    R0,[AELINE],#1
@@ -177,7 +230,7 @@ DIMNO   LDRB    R0,[AELINE],#1
         BNE     DIMSPA
 DIMVAR  MOV     R4,LINE
         LDRB    R3,[R4],#1             ;arrays always 2 or more chars
-        STMFD   SP!,{TYPE}             ;size of actual array elements
+        STR     TYPE,[SP,#-4]!         ;size of actual array elements
         BL      LOOKUP
         BNE     DIMVA2                 ;does not exist: easy!
         ADD     IACC,IACC,#3
@@ -190,9 +243,9 @@ DIMVA2  MOV     TYPE,#4                ;creates null pointer to rest of array
         BL      CREATE                 ;lvalue in facc
         MOV     R3,#0
 DIMVA3  ADD     CLEN,ARGP,#STRACC      ;subscript list built in STRACC
-        LDMFD   SP!,{TYPE}             ;get original type from stack
+        LDR     TYPE,[SP],#4           ;get original type from stack
         MOV     R1,#1                  ;count of entries
-        STMFD   SP!,{IACC}             ;save l value
+        STR     IACC,[SP,#-4]!         ;save l value
 RDLOOP  STMFD   SP!,{R1,R3,TYPE}       ;allocation place, number of entries, type
         BL      SPUSH
         BL      EXPR
@@ -234,12 +287,12 @@ RDLOOM  MOVS    R7,R7,LSR #1
         ADD     R6,R7,#1024            ;plus generous allowance
         CMP     R6,SP
         BCS     DIMRAM
-        LDMFD   SP!,{R6}               ;address to alter
+        LDR     R6,[SP],#4             ;address to alter
         CMP     R3,#1
         SUBEQ   SP,SP,IACC
         MOVEQ   R4,SP
-        STMEQFD SP!,{IACC}
-        STMEQFD SP!,{R6}
+        STREQ   IACC,[SP,#-4]!
+        STREQ   R6,[SP,#-4]!
         ADDEQ   IACC,TYPE,#256
         LDREQ   R7,[ARGP,#LOCALARLIST]
         STMEQFD SP!,{IACC,R7}
@@ -281,6 +334,9 @@ END     BL      SPACES
         BL      ENDER
         B       CLRSTK
 ENDCHANGE
+        LDR     R0,[ARGP,#DIMLOCAL]    ;are there any DIM locals in force?
+        TEQ     R0,#0
+        BNE     ERMVSTK
         BL      AEEXDN
         SUB     R7,R0,#&8000           ;subtract start of world
         LDR     R4,[ARGP,#HIMEM]
@@ -339,7 +395,7 @@ ENDCHANGELOCALARDONE
         BEQ     NXT
         B       ERRENDARRAYREF
 ENDPR   BL      DONES
-ENDPRA  LDMFD   SP!,{R4}
+ENDPRA  LDR     R4,[SP],#4
         TEQ     R4,#TPROC
         BNE     ENDPRP
         BL      ENDTRC
@@ -364,12 +420,12 @@ ENDWHM  LDR     R4,[SP]
         CMP     R4,#TENDWH
         BNE     ENDWHP
         LDR     AELINE,[SP,#8]         ;get expression pointer
-        STMFD   SP!,{R10}              ;preserve next character
+        STR     R10,[SP,#-4]!          ;preserve next character
         BL      EXPR
         TEQ     TYPE,#0
         BEQ     ERTYPEINT
         BLMI    SFIX
-        LDMFD   SP!,{R10}
+        LDR     R10,[SP],#4
         CMP     IACC,#0
         LDRNE   LINE,[SP,#4]           ;restart
         BNE     STMT
@@ -378,9 +434,9 @@ ENDWHM  LDR     R4,[SP]
 ENVEL   SUB     SP,SP,#16
         MOV     R1,#0
         MOV     AELINE,LINE
-ENVELP  STMFD   SP!,{R1}
+ENVELP  STR     R1,[SP,#-4]!
         BL      INTEXC
-        LDMFD   SP!,{R1}
+        LDR     R1,[SP],#4
         STRB    IACC,[SP,R1]
         ADD     R1,R1,#1
         CMP     R1,#13
@@ -480,7 +536,7 @@ GOFACT  AND     R1,LINE,#CACHEMASK
         CMP     R4,LINE
         ADDEQ   LINE,LINE,R2
         MOVEQ   PC,R14
-        STMFD   SP!,{R14}
+        STR     R14,[SP,#-4]!
         MOV     AELINE,LINE
         BL      SPTSTN
         BEQ     GOTOT2
@@ -491,7 +547,7 @@ GOFACT  AND     R1,LINE,#CACHEMASK
         BCS     NOLINE
         SUB     LINE,AELINE,#1
         BL      FNDLNO
-        LDMCSFD SP!,{PC}
+        LDRCS   PC,[SP],#4
         B       NOLINE
 GOTOT2  BL      FNDLNO
         BCC     NOLINE
@@ -499,7 +555,7 @@ GOTOT2  BL      FNDLNO
         ADD     R3,ARGP,R3,LSL #CACHESHIFT
         SUB     R2,LINE,AELINE
         STMIA   R3,{R1,R2,AELINE}
-        LDMFD   SP!,{PC}
+        LDR     PC,[SP],#4
 ;Address of cr before line in R1 of FACC. cs if found
 FNDLNO  LDR     R1,[ARGP,#PAGE]
 FNDLNONEXT
@@ -712,29 +768,36 @@ LOCALDATA
         MOV     R0,#TDATA
         STMFD   SP!,{R0,R1}
         B       NXT
-LOCAL   BL      SPACES
-        CMP     R10,#TERROR
-        BEQ     LOCALERROR
-        CMP     R10,#TDATA
-        BEQ     LOCALDATA
-        LDR     R0,[SP]
-        TEQ     R0,#TPROC
-        TEQNE   R0,#TFN
-        BNE     ERRNLC
-        SUB     LINE,LINE,#1
-LOCALP  BL      CRAELV
-        BEQ     DONXTS
-        MOV     LINE,AELINE
-        LDMFD   SP!,{R5,R6,R7}
-        MOV     R10,IACC
-        MOV     AELINE,TYPE
-        CMP     TYPE,#256
-        BCS     LOCALARRAY
-        BL      VARIND
-        BL      PUSHTYPE
-        STMFD   SP!,{R10,AELINE}
-        STMFD   SP!,{R5,R6,R7}
-        MOV     R0,#0
+; *************************************
+; *
+; * Entry point for a LOCAL statement
+; *
+LOCAL   BL      SPACES                 ;skip spaces
+        CMP     R10,#TERROR            ;is this LOCAL ERROR ?
+        BEQ     LOCALERROR             ;yes. do it
+        CMP     R10,#TDATA             ;no. is this LOCAL DATA ?
+        BEQ     LOCALDATA              ;yes. do it
+        LDR     R0,[SP]                ;check that we are in the body of a PROC or FN
+        TEQ     R0,#TPROC              ;DEFinition and not inside any structure (like
+        TEQNE   R0,#TFN                ;a FOR loop) which uses the stack...
+        BNE     ERRNLC                 ;oops, return an error
+        SUB     LINE,LINE,#1           ;because of SPACES returning ptr /after/ first non-space char
+LOCALP  BL      CRAELV                 ;create an LV (EQ = failed)
+        BEQ     DONXTS                 ;failed, do the next statement
+        MOV     LINE,AELINE            ;LINE=ptr to after the variable
+        LDMFD   SP!,{R5,R6,R7}         ;pull some stuff from the stack...
+        ;R5=PROC/FN token
+        ;R6=AELINE for first statement in routine
+        ;R7=LINE for first statement in routine
+        MOV     R10,IACC               ;R10=value
+        MOV     AELINE,TYPE            ;AELINE=type
+        CMP     TYPE,#256              ;what is the type of the identifier to make local?
+        BCS     LOCALARRAY             ;array.
+        BL      VARIND                 ;return the L-value for this identifier
+        BL      PUSHTYPE               ;push the value of this identifier onto the stack
+        STMFD   SP!,{R10,AELINE}       ;push the L-value for this identifier
+        STMFD   SP!,{R5,R6,R7}         ;push the PROC/FN status stuff back onto the stack
+        MOV     R0,#0                  ;initialise the new local variable
         CMP     AELINE,#128
         BEQ     LOCALZS
         BCS     LOCALZR
@@ -745,7 +808,7 @@ LOCALZN STRB    R0,[R10],#1
 LOCALARRAY
         LDR     R1,[IACC]
         MOV     R2,#4
-        STMFD   SP!,{R1}
+        STR     R1,[SP,#-4]!
         STMFD   SP!,{IACC,R2}
         STMFD   SP!,{R5,R6,R7}
         MOV     R1,#1
@@ -1001,7 +1064,7 @@ ONERRF  BL      DONES
         B       NXT
 RESTOREERROR
         BL      DONES
-        LDMFD   SP!,{R0}
+        LDR     R0,[SP],#4
         CMP     R0,#TERROR
         BNE     ONERRX
         LDMFD   SP!,{R1,R2}
@@ -1010,10 +1073,10 @@ RESTOREERROR
         B       NXT
 RESTOREDATA
         BL      DONES
-        LDMFD   SP!,{R0}
+        LDR     R0,[SP],#4
         CMP     R0,#TDATA
         BNE     ERRDATASTACK
-        LDMFD   SP!,{R1}
+        LDR     R1,[SP],#4
         STR     R1,[ARGP,#DATAP]
         B       NXT
 PRINT   BL      SPACES
@@ -1141,19 +1204,19 @@ TAB     STMFD   SP!,{R4,R5,R14}
         MOVCS   IACC,R1
         BLCC    NLINE
         B       PRSPEY
-TAB2    STMFD   SP!,{IACC}
+TAB2    STR     IACC,[SP,#-4]!
         BL      BRA
         BL      INTEGZ
         SWI     WRITEI+31
         MOV     R1,IACC
-        LDMFD   SP!,{IACC}
+        LDR     IACC,[SP],#4
         SWI     WRITEC
         MOV     R0,R1
         SWI     WRITEC
         MOV     LINE,AELINE
         B       PRSPEX
-PROC    MOV     AELINE,LINE
-        LDR     R1,[ARGP,#PROCPTR]
+PROC    MOV     AELINE,LINE            ;AELINE -> start of identifier
+        LDR     R1,[ARGP,#PROCPTR]     ;base of look-up table for PROC identifiers
         B       FNBODY
 READEN  BL      STORE
         STR     AELINE,[ARGP,#DATAP]
@@ -1293,7 +1356,7 @@ POPA    TEQ     R4,#TUNTIL
         ADD     R7,SP,#4
         BL      CLRSTRARRAY
         MOV     R14,R6
-POPA2   LDMFD   SP!,{R6}
+POPA2   LDR     R6,[SP],#4
         ADD     SP,SP,R6
         MOVS    R6,#0                  ;signal POP was possible
         MOV     PC,R14
@@ -1303,6 +1366,15 @@ POPA2   LDMFD   SP!,{R6}
 ;use r4,r5,r6. r0 preserved.
 POPLOCALAR
         ADD     R4,ARGP,#LOCALARLIST-4
+        LDR     R5,[ARGP,#DIMLOCAL]    ;pop all the DIM LOCALs from the vanishing bit of stack
+        TEQ     R5,#0
+        CMPNE   R0,R5
+        BLS     POPLOCALAR1            ;LS=(NOT C OR Z) i.e. skip when R5=0 or R0<=R5
+POPDIMS LDR     R5,[R5,#8]             ;load next pointer
+        TEQ     R5,#0
+        CMPNE   R0,R5
+        BHI     POPDIMS                ;HI=(C AND NOT Z) i.e. stop when R5=0 or R5>=R0
+        STR     R5,[ARGP,#DIMLOCAL]
 POPLOCALAR1
         LDR     R4,[R4,#4]             ;get next field
         TEQ     R4,#0                  ;reached end of list?
@@ -1369,12 +1441,12 @@ VOICES  BL      AEEXDN
         SWI     SOUNDCONFIGURE
         B       NXT
 VOICE   BL      INTEXA
-        STMFD   SP!,{IACC}
+        STR     IACC,[SP,#-4]!
         BL      EXPR
         TEQ     TYPE,#0
         BNE     ERTYPESTR
         BL      AEDONE
-        LDMFD   SP!,{R0}
+        LDR     R0,[SP],#4
         ADD     R1,ARGP,#STRACC
         MOV     R4,#0
         STRB    R4,[CLEN]
@@ -1384,10 +1456,10 @@ TEMPO   BL      AEEXDN
         SWI     SOUNDEVENTTEMPO
         B       NXT
 STEREO  BL      INTEXA
-        STMFD   SP!,{IACC}
+        STR     IACC,[SP,#-4]!
         BL      EXPRDN
         MOV     R1,IACC
-        LDMFD   SP!,{R0}
+        LDR     R0,[SP],#4
         SWI     SOUNDSTEREO
         B       NXT
 SOUND   BL      SPACES
@@ -1397,15 +1469,15 @@ SOUND   BL      SPACES
         BEQ     SOUNDON
         SUB     AELINE,LINE,#1
         BL      INTEXC
-        STMFD   SP!,{IACC}
+        STR     IACC,[SP,#-4]!
         BL      INTEXC
         MOV     IACC,IACC,LSL #16
-        LDMFD   SP!,{R1}
+        LDR     R1,[SP],#4
         MOV     R1,R1,LSL #16
         ORR     IACC,IACC,R1,LSR #16
-        STMFD   SP!,{IACC}
+        STR     IACC,[SP,#-4]!
         BL      INTEXC
-        STMFD   SP!,{IACC}
+        STR     IACC,[SP,#-4]!
         BL      EXPR
         BL      INTEGY
         LDMFD   SP!,{R1,R2}
@@ -1457,7 +1529,7 @@ SWAP2   STMFD   SP!,{R4,R5}            ;lv1
         MOV     AELINE,SP
         BL      VARIND                 ;of lv2
         BL      PUSHTYPE               ;value of lv2
-        STMFD   SP!,{TYPE}
+        STR     TYPE,[SP,#-4]!
         LDR     IACC,[AELINE,#8]
         LDR     TYPE,[AELINE,#12]
         BL      VARIND                 ;value of lv1
@@ -1592,7 +1664,7 @@ WIDTH   BL      AEEXDN
         B       NXT
 WHILE   BL      SPACES
         SUB     AELINE,LINE,#1
-        STMFD   SP!,{AELINE}           ;pointer to expression
+        STR     AELINE,[SP,#-4]!       ;pointer to expression
         BL      EXPR
         BL      INTEGY
         SUB     LINE,AELINE,#1

@@ -128,12 +128,13 @@ OLDERR                          #       4*9
 SWICODE                         #       8
 OS_Exit_ABEX                    *       SWICODE
 OS_Exit_RetCode                 *       SWICODE+4
+DIMLOCAL                        #       4                      ;pointer to head of DIM LOCAL list
 SEED                            #       5
 LISTOP                          #       1
 BYTESM                          #       1
 MEMM                            #       1
-
-CALLEDNAME                      #       0-(MEMM+1)
+; <- Insert new bits here
+CALLEDNAME                      #       0-(MEMM+1)             ;needs to be /at least/ one byte for -quit flag
 
  [ FP=0
 CACHESIZE                       *       128
@@ -148,23 +149,28 @@ CACHECHECK                      *       4*2                    ;address where ch
  ]
 
 VCACHE                          #       CACHESIZE*16
-
 FREE                            #       0                      ;start of everything else
-;GOSUB.RETURN is TRETURN, ADDR
-;REPEAT.UNTIL is TUNTIL, ADDR
-;WHILE.ENDWHILE is TENDWH, block start ADDR, expr start ADDR
-;integer FOR.NEXT is TNEXT, varaddr, ADDR, step, limit
-;fp FOR.NEXT is TFOR, varaddr, ADDR, step (8), limit (8)
-;FN is n words on stack, the bottom being TFN
-;PROC is n words on stack, the bottom being TPROC
-;LOCAL A(X) is 256+{4,5,128}, linklist, address, numbytes, arraylist
 
-;Cache structure:
-;variable   IACC, MOVEBY, CHECK, TYPE
-;number     IACC, MOVEBY, CHECK, TYPE
-;GOTO       R1,   MOVEBY, CHECK
-;THENline   R1,         , CHECK
-;FN/PROC    IACC, MOVEBY, CHECK, ( or not
+; BASIC's stack structure [SP,SP+4,SP+8...]:
+;
+; GOSUB.RETURN       is TRETURN, ADDR
+; REPEAT.UNTIL       is TUNTIL, ADDR
+; WHILE.ENDWHILE     is TENDWH, block start ADDR, expr start ADDR
+; integer FOR.NEXT   is TNEXT, varaddr, ADDR, step, limit
+; fp FOR.NEXT        is TFOR, varaddr, ADDR, step (8), limit (8)
+; FN                 is n words on stack, the bottom being TFN
+; PROC               is n words on stack, the bottom being TPROC
+; LOCAL A(X)         is 256+{4,5,128}, linklist, address, numbytes, arraylist
+; LOCAL ERROR        is TERROR, !ERRSTK, !ERRORH
+; DIM var LOCAL expr is TDIM, bytes (rounded upto whole multiple of 4), linklist (going up the stack)
+;
+; BASIC VCache structure:
+;
+; variable   IACC, MOVEBY, CHECK, TYPE
+; number     IACC, MOVEBY, CHECK, TYPE
+; GOTO       R1,   MOVEBY, CHECK
+; THENline   R1,         , CHECK
+; FN/PROC    IACC, MOVEBY, CHECK, ( or not
 
 CFLAG                           *       &20000000
 SAFECRUNCH                      *       15
@@ -204,19 +210,20 @@ F1      FN      1
 F2      FN      2
 F7      FN      7
  ]
-IACC    RN      R0
+IACC    RN      R0                     ;pointer to some data (i.e. a variable's value)
 CLEN    RN      R2                     ;actually contains STRACC+CLEN
-ARGP    RN      R8
-TYPE    RN      R9
-AELINE  RN      R11
-LINE    RN      R12
-SP      RN      R13
+ARGP    RN      R8                     ;workspace pointer
+TYPE    RN      R9                     ;type of a variable/expression
+AELINE  RN      R11                    ;pointer to some interesting part of the current line
+LINE    RN      R12                    ;pointer to the current position in the program (i.e. for errors)
+SP      RN      R13                    ;stack pointer
 SOURCE  RN      R1
 DEST    RN      R2
 MODE    RN      R3
 CONSTA  RN      R4                     ;0 for none, tconst for allowed
 SMODE   RN      R5
 
+; Types...
 TINTEGER                        *       &40000000              ;string TYPE is 0
 TFP                             *       &80000000
 TEFP                            *       &20000000
@@ -344,9 +351,13 @@ MOVEMEMORY
         LDMNEFD SP!,{R0,R2-R8,PC}       ;if not, not in a position to surrender memory.
         SUB     SP,SP,#4
         STMIA   SP,{SP}^                ;get user mode stack pointer
-        MOV     R0,R0
+        LDR     R4,[ARGP,#DIMLOCAL]     ;are there any DIM LOCALs in use?
+        TEQ     R4,#0
+        MOVNE   R1,#0                   ;yes. refuse to move the stack
+        LDMNEFD SP!,{R0,R2-R8,PC}
         LDR     R5,[SP],#4
         LDR     R4,[ARGP,#HIMEM]
+        MOV     R0,R0
         SUBS    R5,R4,R5                ;amount of space on stack
  [ ONLYEMPTY
         MOVNE   R1,#0
@@ -495,6 +506,7 @@ MAIN    MOV     ARGP,#VARS
         STR     R0,[ARGP,#INSTALLLIST]
         STR     R0,[ARGP,#TRACEFILE]
         STR     R0,[ARGP,#TALLY]
+        STR     R0,[ARGP,#DIMLOCAL]
         STRB    R0,[ARGP,#LISTOP]
         STRB    R0,[ARGP,#MEMM]
         MVN     R0,#0
@@ -778,10 +790,10 @@ CLRSTK  MOV     ARGP,#VARS
         ADD     LINE,ARGP,#OUTPUT
         BL      SPTSTN
         BNE     DC
-        STMFD   SP!,{SMODE}
+        STR     SMODE,[SP,#-4]!
         MOV     R4,R0
         BL      INSRT
-        LDMFD   SP!,{SMODE}
+        LDR     SMODE,[SP],#4
         CMP     SMODE,#&1000
         BCC     WARNC
         MOV     R0,#0
@@ -1367,7 +1379,7 @@ FLUSHCACHE1
 PURGECACHE
 
  [ DO32BIT = 1
-        STMFD   SP!,{R14}
+        STR     R14,[SP,#-4]!
         MRS     R14,CPSR
  ]
         MOV     R5,#0
@@ -1403,7 +1415,7 @@ PURGECACHEA1
  ]
  [ DO32BIT = 1
         MSR     CPSR_f,R14
-        LDMFD   SP!,{PC}
+        LDR     PC,[SP],#4
  |
         MOVS    PC,R14
  ]
@@ -1420,7 +1432,7 @@ PURGECACHEB2
         BNE     PURGECACHEB2
  [ DO32BIT = 1
         MSR     CPSR_f,R14
-        LDMFD   SP!,{PC}
+        LDR     PC,[SP],#4
  |
         MOVS    PC,R14
  ]
@@ -1586,31 +1598,31 @@ ERRHAN  =       TTRACE,TOFF,":"
         ALIGN
 ;remove from line number in r4 to line number in r5
 REMOVE  MOV     R0,R4
-        STMFD   SP!,{R14}
+        STR     R14,[SP,#-4]!
         BL      FNDLNO
         MOV     R6,R1
         ADD     R0,R5,#1               ;next line plus one
         BL      FNDLNONEXT             ;continue from where we are now
         CMP     R1,R6
-        LDMLSFD SP!,{PC}               ;very easy
+        LDRLS   PC,[SP],#4               ;very easy
         LDR     R0,[ARGP,#TOP]
 REMOVL  LDRB    R2,[R1],#1             ;pick up a byte from high up
         STRB    R2,[R6],#1             ;put it low down
         CMP     R1,R0
         BNE     REMOVL
         STR     R6,[ARGP,#TOP]
-        LDMFD   SP!,{PC}
-INSERT  STMFD   SP!,{R14}              ;insert at end of text
+        LDR     PC,[SP],#4
+INSERT  STR     R14,[SP,#-4]!              ;insert at end of text
         LDR     R1,[ARGP,#TOP]
         SUB     R1,R1,#2               ;address of cr
         B       INSRTS
 ;insert the line whose number is in R4, whose first char is ptd to by LINE
-INSRT   STMFD   SP!,{R14}
+INSRT   STR     R14,[SP,#-4]!
         MOV     R5,R4
         BL      REMOVE
         LDRB    R0,[LINE]
         CMP     R0,#13
-        LDMEQFD SP!,{PC}
+        LDREQ   PC,[SP],#4
         MOV     R0,R4
         BL      FNDLNO                 ;get position to R1
         LDRB    R0,[ARGP,#LISTOP]
@@ -1650,7 +1662,7 @@ INSLP1  LDRB    R0,[LINE],#1
         CMP     R0,#" "
         BEQ     INSLP1
         TEQ     R0,#13
-        LDMEQFD SP!,{PC}
+        LDREQ   PC,[SP],#4
         TEQ     R0,#TELSE
         MOVEQ   R0,#TELSE2
         STREQB  R0,[R1]
@@ -1658,7 +1670,7 @@ INSLP2  LDRB    R0,[LINE],#1
         STRB    R0,[R1,#1]!
         TEQ     R0,#13
         BNE     INSLP2
-        LDMFD   SP!,{PC}
+        LDR     PC,[SP],#4
  [ RELEASEVER=0
 PATOUT  BIC     R2,R14,#&FC000003
         BL      PATA
