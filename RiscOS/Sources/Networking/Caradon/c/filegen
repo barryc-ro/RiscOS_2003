@@ -1,6 +1,8 @@
 #include <ctype.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 
 #include "defs.h"
 /* #include "inlines.h" */
@@ -12,11 +14,16 @@
 
 ErrorPtr err;
 
-#ifdef MODEM
-extern char *enternnpc, *proceed, *proceedc;
-#else
+#ifdef ETHERNET
 extern char *enternpc;
+#else
+extern char *enternnpc, *proceed, *proceedc;
+#ifdef ISDN
+extern char* clearmsg;
 #endif
+#endif
+
+#define PPP_ISDN_DEVICE "ISDNdata:"	/* Use ISDNdata for PPP 1.15 or ISDNdata: for PPP 1.16 or later */
 
 extern BOOL redial;
 
@@ -26,6 +33,8 @@ extern char *cmos_number(void);
 extern int  ncregenq(char *, void *, int);
 extern void oscli(char *);
 
+extern void debug(char *, ...);
+
 typedef struct
 {
   unsigned int cntrl;
@@ -33,12 +42,100 @@ typedef struct
   void *next;
 } script_list;
 
+
+/*	ISDN Check
+	----------
+
+Ensure that we are compiling ISDN version. (In theory we
+can support ETHERNET and MODEM versions too, but it is
+untested with this version.
+*/
+
+#ifdef ETHERNET
+error "Please compile using ISDN flag"
+#endif
+
+#ifdef MODEM
+error "Please compile using ISDN flag"
+#endif
+
+#ifndef ISDN
+error "Please compile using ISDN flag"
+#endif
+
+char *quote(char *in, char *out)
+{
+  char c;
+  int inl = 0, outl = 0;
+
+  do
+  {
+    c = in[inl];
+
+    switch (c)
+    {
+    case '<':
+      inl++;
+      out[outl++] = '&';
+      out[outl++] = 'l';
+      out[outl++] = 't';
+      out[outl++] = ';';
+      break;
+
+    case '>':
+      inl++;
+      out[outl++] = '&';
+      out[outl++] = 'g';
+      out[outl++] = 't';
+      out[outl++] = ';';
+      break;
+
+    case '&':
+      inl++;
+      out[outl++] = '&';
+      out[outl++] = 'a';
+      out[outl++] = 'm';
+      out[outl++] = 'p';
+      out[outl++] = ';';
+      break;
+
+    case '"':
+      inl++;
+      out[outl++] = '&';
+      out[outl++] = 'q';
+      out[outl++] = 'u';
+      out[outl++] = 'o';
+      out[outl++] = 't';
+      out[outl++] = ';';
+      break;
+
+    default:
+      out[outl++] = in[inl++];
+      break;
+    }
+  } while (c);
+  
+  return(out);
+}
+
+/*	Create Files
+	------------
+
+Create PPP.options file is written.
+
+When using ISDN we use an mtu and mru of 1500 and a device name
+of ISDNdata (oor ISDNdata: if using PPP 1.16 or later).
+
+*/
+
 BOOL CreateFiles(carddata *scard)
 {
+  BOOL exitstat = FALSE;
   FILE *out;
-  int scstatus;
-#ifdef MODEM
-  char buffer[512], dns2[80];
+  int scstatus, length;
+  char *ht_id = NULL, *ht_pw = NULL;
+#ifndef ETHERNET
+  char buffer[512], dns2[80], *ht_num = NULL; 
   int big, byte;
   struct in_addr ina, inb;
 #endif
@@ -58,26 +155,57 @@ BOOL CreateFiles(carddata *scard)
     {
       NewPage("file:/WWWRoot:InsertC");
     }
-    return(FALSE);
+    goto genexit;
   }
  if ((scstatus & 0x10) != 0) /* Card Locked */
   {
     NewPage("file:/WWWRoot:EnterC");
-    return(FALSE);
+    goto genexit;
   }
-  if (_swix(OS_File, _IN(0) | _IN(1) | _IN(4), 8, "<Wimp$ScrapDir>", 75))
-    return(FALSE);
-  if (_swix(OS_File, _IN(0) | _IN(1) | _IN(4), 8, "<Wimp$ScrapDir>.Sennen", 75))
-    return(FALSE);
-#ifdef MODEM
-  if (_swix(OS_File, _IN(0) | _IN(1) | _IN(4), 8, "<Wimp$ScrapDir>.Sennen.Files", 75))
-    return(FALSE);
-  if (_swix(OS_File, _IN(0) | _IN(1) | _IN(4), 8, "<Wimp$ScrapDir>.Sennen.Files.PPP", 75))
-    return(FALSE);
+  if (_swix(OS_File, _INR(0, 1) | _IN(4), 8, "<Wimp$ScrapDir>", 75))
+    goto genexit;
+  if (_swix(OS_File, _INR(0, 1) | _IN(4), 8, "<Wimp$ScrapDir>.Sennen", 75))
+    goto genexit;
+#ifndef ETHERNET
+  if (_swix(OS_File, _INR(0, 1) | _IN(4), 8, "<Wimp$ScrapDir>.Sennen.Files", 75))
+    goto genexit;
+  if (_swix(OS_File, _INR(0, 1) | _IN(4), 8, "<Wimp$ScrapDir>.Sennen.Files.PPP", 75))
+    goto genexit;
 
-  ncregenq("LOGIN_ID", scard->loginid, 40);
-  ncregenq("LOGIN_SECRET", scard->loginsecret, 40);
-
+  if (scard->loginid)
+    free(scard->loginid);
+  length = ncregenq("LOGIN_ID", scard->loginid, 0);
+  scard->loginid = malloc(length + 4);
+  if (length == 0 || scard->loginid == NULL)
+  {
+    goto genexit;
+  }
+  ncregenq("LOGIN_ID", scard->loginid, length + 2);
+  ht_id = malloc(3 * length + 4);
+  if (ht_id == NULL)
+  {
+    goto genexit;
+  }
+  quote(scard->loginid, ht_id);
+  debug("LOGIN_ID: %s\n", scard->loginid);
+  
+  if (scard->loginsecret)
+    free(scard->loginsecret);
+  length = ncregenq("LOGIN_SECRET", scard->loginsecret, 0);
+  scard->loginsecret = malloc(length + 4);
+  if (length == 0 || scard->loginsecret == NULL)
+  {
+    goto genexit;
+  }
+  ncregenq("LOGIN_SECRET", scard->loginsecret, length + 2);
+  ht_pw = malloc(3 * length + 4);
+  if (ht_pw == NULL)
+  {
+    goto genexit;
+  }
+  quote(scard->loginsecret, ht_pw);
+  debug("LOGIN_SECRET: %s\n", scard->loginsecret);
+  
   if (!redial)
   {
     ncregenq("DNS_PRIMARY", &ina.s_addr, 16);
@@ -86,9 +214,12 @@ BOOL CreateFiles(carddata *scard)
       inb.s_addr = ina.s_addr;
     strcpy(dns2, inet_ntoa(inb));
     sprintf(buffer, "Set Inet$Resolvers %s %s", inet_ntoa(ina), dns2);
+    debug("%s\n", buffer);
     oscli(buffer);
+    
     ncregenq("ISP_DOMAIN", dns2, 80);
     sprintf(buffer, "Set Inet$LocalDomain %s", dns2);
+    debug("%s\n", buffer);
     oscli(buffer);
     strcpy(dns2, scard->loginid);
     {
@@ -102,25 +233,41 @@ BOOL CreateFiles(carddata *scard)
       }
     }
     sprintf(buffer, "Set Inet$HostName %s", dns2);
+    debug("%s\n", buffer); 
     oscli(buffer);
-    _swix(OS_Module, _IN(0) | _IN(1), 3, "Resolver");
+    oscli("ResolverConfig");
   }
+  
+  /* Create PPP options file... */
   if (out = fopen("<Wimp$ScrapDir>.Sennen.Files.PPP.Options", "w"), out)
   {
+#ifdef MODEM
     fprintf(out, "ModemCard:0\n115200\nname %s\nnoipdefault\n", scard->loginid);
+#endif
+#ifdef ISDN
+    fprintf(out, PPP_ISDN_DEVICE "\nname %s\nnoipdefault\n", scard->loginid);
+#endif
     if (ncregenq("STATIC_IP", &ina.s_addr, 16), ina.s_addr)
       fprintf(out, "%s:\n", inet_ntoa(ina));
-    fprintf(out, "defaultroute\nmodem\ncrtscts\n");
-    fprintf(out, "asyncmap 0\nmtu 296\nmru 296\n");
+    fprintf(out, "defaultroute\nmodem\ncrtscts\nasyncmap 0\n");
+#ifdef ISDN
+    fprintf(out, "mtu 1500\nmru 1500\n");
+#else
+    fprintf(out, "mtu 296\nmru 296\n");
+#endif
     _swix(OS_Byte, _IN(0) | _IN(1) | _OUT(2), 161, 0xA2, &byte);
     if (byte & 0x3F)
       fprintf(out, "idle-disconnect %d\n", (byte & 0x3F) * 60);
     fclose(out);
+    debug("PPP options OK");
   }
   else
   {
-    return(FALSE);
+    goto genexit;
   }
+ 
+  /* Create Sennen script... */
+  debug("Creating Sennen script\n");
   if (out = fopen("<Wimp$ScrapDir>.Sennen.Files.Script", "w"), out)
   {
     char *scrbuff;
@@ -130,7 +277,7 @@ BOOL CreateFiles(carddata *scard)
     if (scrbuff = osmodget(big + 10), scrbuff == NULL)
     {
       fclose(out);
-      return(FALSE);
+      goto genexit;
     }
 
     ncregenq("SEND_EXPECT", scrbuff, big + 10);
@@ -145,8 +292,13 @@ BOOL CreateFiles(carddata *scard)
   }
   else
   {
-    return(FALSE);
+    exitstat = FALSE;
+    goto genexit;
   }
+  
+  /* Create PAP secrets */
+  debug("Creating PAP secrets\n");
+  
   if (out = fopen("<Wimp$ScrapDir>.Sennen.Files.PPP.PAPSecrets", "w"), out)
   {
     fprintf(out, "%s * %s\n", scard->loginid, scard->loginsecret); 
@@ -154,8 +306,10 @@ BOOL CreateFiles(carddata *scard)
   }
   else
   {
-    return(FALSE);
+    goto genexit;
   }
+  
+  /* Create CHAP Secret file */
   if (out = fopen("<Wimp$ScrapDir>.Sennen.Files.PPP.CHAPSecret", "w"), out)
   {
     fprintf(out, "%s * %s\n", scard->loginid, scard->loginsecret); 
@@ -163,61 +317,128 @@ BOOL CreateFiles(carddata *scard)
   }
   else
   {
-    return(FALSE);
+    goto genexit;
   }
+  
+  /*	Create EnterNNPC file
+	---------------------
+
+  Create EnterNNPC file in Sennen directory by doing a printf with the enternnpc
+  string (a file in the Caradon.d directory).
+  */
+
+  debug ("Creating NNPC file\n");
   if (out = fopen("<Wimp$ScrapDir>.Sennen.EnterNNPC", "w"), out)
   {
-    ncregenq("PSTN_NUM", scard->pstnnum, 40);
-    fprintf(out, enternnpc, scard->pstnnum, scard->loginid, scard->loginsecret);
+    if (scard->pstnnum)
+      free(scard->pstnnum);
+    length = ncregenq("PSTN_NUM", scard->pstnnum, 0);
+    scard->pstnnum = malloc(length + 4);
+    if (length == 0 || scard->pstnnum == NULL)
+    {
+      goto genexit;
+    }
+    ncregenq("PSTN_NUM", scard->pstnnum, length + 2);
+    ht_num = malloc(3 * length + 4);
+    if (ht_num == NULL)
+    {
+      goto genexit;
+    }
+    quote(scard->pstnnum, ht_num);
+
+    fprintf(out, enternnpc, ht_num, ht_id, ht_pw);
     fclose(out);
-    _swix(OS_File, _IN(0) | _IN(1) | _IN(2), 18, "<Wimp$ScrapDir>.Sennen.EnterNNPC", 0xFAF);
+    _swix(OS_File, _INR(0, 2), 18, "<Wimp$ScrapDir>.Sennen.EnterNNPC", 0xFAF);
   }
   else
   {
-    return(FALSE);
+    goto genexit;
   }
+  
+  /* Create Proceed file */
+  debug ("Creating Proceed file\n");
   if (out = fopen("<Wimp$ScrapDir>.Sennen.Proceed", "w"), out)
   {
-    fprintf(out, proceed, scard->loginid);
+    fprintf(out, proceed, ht_id);
     fclose(out);
-    _swix(OS_File, _IN(0) | _IN(1) | _IN(2), 18, "<Wimp$ScrapDir>.Sennen.Proceed", 0xFAF);
+    _swix(OS_File, _INR(0, 2), 18, "<Wimp$ScrapDir>.Sennen.Proceed", 0xFAF);
   }
   else
   {
-    return(FALSE);
+    goto genexit;
   }
+
+  /* Create ProceedC file */
+  debug ("Creating ProceedC file\n");
   if (out = fopen("<Wimp$ScrapDir>.Sennen.ProceedC", "w"), out)
   {
-    fprintf(out, proceedc, scard->loginid);
+    fprintf(out, proceedc, ht_id);
     fclose(out);
-    _swix(OS_File, _IN(0) | _IN(1) | _IN(2), 18, "<Wimp$ScrapDir>.Sennen.ProceedC", 0xFAF);
+    _swix(OS_File, _INR(0, 2), 18, "<Wimp$ScrapDir>.Sennen.ProceedC", 0xFAF);
+    exitstat = TRUE;
   }
   else
   {
-    return(FALSE);
+    goto genexit;
   }
 #else
-#if FALSE
-  ncregenq("DNS_PRIMARY", &ina.s_addr, 16);
-  ncregenq("DNS_BACKUP", &inb.s_addr, 16);
-  strcpy(dns2, inet_ntoa(inb));
-  sprintf(buffer, "Set Inet$Resolvers %s %s", inet_ntoa(ina), dns2);
-  oscli(buffer);
-#endif
-  ncregenq("LOGIN_ID", scard->loginid, 40);
-  ncregenq("LOGIN_SECRET", scard->loginsecret, 40);
+  /* Ethernet files... */
+
+
+  if (scard->loginid)
+    free(scard->loginid);
+  length = ncregenq("LOGIN_ID", scard->loginid, 0);
+  scard->loginid = malloc(length + 4);
+  if (length == 0 || scard->loginid == NULL)
+  {
+    goto genexit;
+  }
+  ncregenq("LOGIN_ID", scard->loginid, length + 2);
+  ht_id = malloc(3 * length + 4);
+  if (ht_id == NULL)
+  {
+    goto genexit;
+  }
+  quote(scard->loginid, ht_id);
+
+  if (scard->loginsecret)
+    free(scard->loginsecret);
+  length = ncregenq("LOGIN_SECRET", scard->loginsecret, 0);
+  scard->loginsecret = malloc(length + 4);
+  if (length == 0 || scard->loginsecret == NULL)
+  {
+    goto genexit;
+  }
+  ncregenq("LOGIN_SECRET", scard->loginsecret, length + 2);
+  ht_pw = malloc(3 * length + 4);
+  if (ht_pw == NULL)
+  {
+    goto genexit;
+  }
+  quote(scard->loginsecret, ht_pw);
 
   if (out = fopen("<Wimp$ScrapDir>.Sennen.EnterNPC", "w"), out)
   {
-    ncregenq("PSTN_NUM", scard->pstnnum, 40);
-    fprintf(out, enternpc, scard->loginid, scard->loginsecret);
+    fprintf(out, enternpc, ht_id, ht_pw);
     fclose(out);
-    _swix(OS_File, _IN(0) | _IN(1) | _IN(2), 18, "<Wimp$ScrapDir>.Sennen.EnterNPC", 0xFAF);
+    _swix(OS_File, _INR(0, 2), 18, "<Wimp$ScrapDir>.Sennen.EnterNPC", 0xFAF);
+    exitstat = TRUE;
   }
   else
   {
-    return(FALSE);
+    goto genexit;
   }
 #endif
-  return(TRUE);
+genexit:
+  debug("genexit\n");
+  if (ht_id)
+    free(ht_id);
+  if (ht_pw)
+    free(ht_pw);
+#ifndef ETHERNET
+  if (ht_num)
+    free(ht_num);
+#endif    
+  return(exitstat);
 }
+
