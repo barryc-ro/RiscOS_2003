@@ -37,6 +37,19 @@ E2ROMAddress2K_OTP	*	&60     ; 24C174 device - OTP section
 E2ROMAddress4K          *       &a4     ; 24C32 device - 4K (top 1K protectable)
 E2ROMAddress8K          *       &a2     ; 24C64 device - 8K (top 2K protectable)
 E2ROMAddress16K         *       &a8     ; 24C128 device - 16K
+E2ROMAddress32K         *       &a6     ; 24CS256 device - 32K (top 2K possibly OTP)
+  ]
+
+; Choose a lower limit on the number of ticks per clock phase based on the
+; MaxI2Cspeed variable defined in Hdr:Machine.<Machine>
+  [ MaxI2Cspeed >= 1000
+I2Cticks        *       1
+  |
+  [ MaxI2Cspeed >= 400
+I2Cticks        *       3
+  |
+I2Cticks        *       10
+  ]
   ]
 
 ; *****************************************************************************
@@ -104,7 +117,6 @@ SetC1C0 ROUT
 	MOV	R2, #IOC
 	STRB	R0, [R2, #IOCControl]
 
- [ ClockNVMemoryFast
         [ :LNOT: :DEF: TestHarness
         MOV	R0, #0
         LDRB	R0, [R0, #NVRamSpeed]
@@ -113,9 +125,6 @@ SetC1C0 ROUT
         ]
         TEQ     R0, #0
         MOVEQ   R0, #10                         ; default value if speed not checked yet
- |
-        MOV     R0, #10                         ; 5탎 delay
- ]
 	BL	DoMicroDelay
 
  [ No26bitCode
@@ -231,7 +240,7 @@ Start	ROUT
 	MOV	R1, #1
 	BL	SetC1C0
 
- [ :LNOT: ClockNVMemoryFast
+ [ I2Cticks >= 10
 ; Hold start condition for BMU
 
 	MOV	R2, #IOC
@@ -511,6 +520,17 @@ WriteWithError ROUT
 
         MakeErrorBlock CoreNotWriteable
 
+WriteWithoutProtection                  ; allowing write to "OTP" and protected section
+        Push    "R0-R4, R14"
+        BL      MangleCMOSAddress
+        Pull    "R0-R4, PC", CS         ; if invalid, then exit
+        MOV     R2, R0
+        MOV     R3, R1
+        CMP     R0, #&10
+        MOVLO   R4, #&1000000           ; don't change checksum for OTP
+        BLO     %FT10
+        B       %FT08                   ; do change checksum for protected region
+
 Write
 	Push	"R0-R4, R14"
 	BL	MangleCMOSAddress
@@ -530,6 +550,7 @@ Write
 
 	MOV	R2, R0
 	MOV	R3, R1
+08
  [ ChecksumCMOS
 	BL	ReadStraight		; calculate new checksum :
 	MOV	R4, R0
@@ -1601,14 +1622,12 @@ InitCMOSCache	ENTRY "r0-r6"
 ; Need to set the slowest speed so we can probe
 
         MOV     R2, #0
-      [ ClockNVMemoryFast
         MOV     R3, #10         ; Default speed setting (5탎 delays)
 	[ :LNOT: :DEF: TestHarness
         STRB    R3, [R2, #NVRamSpeed]
 	|
         STRB    R3, NVSpeed
 	]
-      ]
 
 ;	First determine what hardware we've got fitted, R4 holds the number of
 ;	256 byte blocks that we've found
@@ -1623,6 +1642,7 @@ InitCMOSCache	ENTRY "r0-r6"
 	|
 	STRB	R4, RTCFlag
 	]
+        MOV     R3, #10         ; assume 100kHz to start with
         MOV     R5, #4          ; assume 16 byte page size to start with
         MOV     R6, #0          ; assume not protected
 
@@ -1631,9 +1651,7 @@ InitCMOSCache	ENTRY "r0-r6"
 	MOV	r0, #(E2ROMAddress2K+14)
 	BL	DummyAccess
 	MOVVC	R4, #8
-      [ ClockNVMemoryFast
         MOVVC   R3, #3          ; Fast speed setting (1.5탎 delays)
-      ]
 	BVC	%FT5
 
 ; Have we got a 1K E� ?
@@ -1658,9 +1676,7 @@ InitCMOSCache	ENTRY "r0-r6"
 	BL	DummyAccess
 	MOVVC	R4, #64
         MOVVC   R5, #6          ; 64 byte page size
-      [ ClockNVMemoryFast
         MOVVC   R3, #3          ; Fast speed setting (1.5탎 delays)
-      ]
         BVC     %FT5
 
 ; Have we got a 4K device?
@@ -1671,9 +1687,7 @@ InitCMOSCache	ENTRY "r0-r6"
 	MOVVC	R4, #16
         MOVVC   R6, #12         ; Only bottom 3K writable
         MOVVC   R5, #5          ; 32 byte page size
-      [ ClockNVMemoryFast
         MOVVC   R3, #3          ; Fast speed setting (1.5탎 delays)
-      ]
         BVC     %FT5
 
 ; Have we got an 8K device?
@@ -1684,11 +1698,20 @@ InitCMOSCache	ENTRY "r0-r6"
 	MOVVC	R4, #32
         MOVVC   R6, #24         ; Only bottom 6K writable
         MOVVC   R5, #5          ; 32 byte page size
-      [ ClockNVMemoryFast
         MOVVC   R3, #3          ; Fast speed setting (1.5탎 delays)
-      ]
+        BVC     %FT5
 
-	MOVVS   R1, #RTCAddress
+; Have we got a 32K device?
+
+        MOV     r1, #E2ROMAddress32K
+        MOV     r0, #E2ROMAddress32K
+        BL      DummyAccess
+        MOVVC   R4, #128        ; 128,120,6,1
+        MOVVC   R6, #120        ; Only bottom 30K writable
+        MOVVC   R5, #6          ; 64 byte page size
+        MOVVC   R3, #1          ; Hyper-fast speed setting (0.5탎 delays - 1MHz part)
+
+        MOVVS   R1, #RTCAddress
         MOVVS   R5, #8          ; 256 byte page size for CMOS
 
 5
@@ -1700,17 +1723,17 @@ InitCMOSCache	ENTRY "r0-r6"
         TEQ     R6, #0
         MOVEQ   R6, R4
         STRB    R6, [R2, #NVRamWriteSize]
-      [ ClockNVMemoryFast
+
+        CMP     R3, #I2Cticks   ; clamp speed to maximum bus speed
+        MOVLO   R3, #I2Cticks
         STRB    R3, [R2, #NVRamSpeed]
-      ]
+
 	LDR	R3, =CMOSRAMCache
 	|
 	STRB    R1, NVBase
 	STRB	R4, NVSize
         STRB    R5, NVPageSize
-      [ ClockNVMemoryFast
         STRB    R3, NVSpeed
-      ]
 	ADR	R3, i2cWorkSpace
 	]
 
