@@ -4,6 +4,7 @@
 # The Library needs to participate in the generation of the BBE by exporting
 # those tools required by the BBE.
 #
+include Makefiles:StdTools
 
 BBETYPE = library
 bbe-library: bbe-generic-resources-get-alias
