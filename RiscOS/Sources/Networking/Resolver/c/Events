@@ -33,7 +33,6 @@
 #include "herrno.h"
 #include "netdb.h"
 
-#include "sys/types.h"
 #include "libs/desklib/Core.h"
 #include "libs/desklib/LinkList.h"
 #include "libs/desklib/Time.h"
@@ -43,14 +42,23 @@
 #include "res_query.h"
 #include "Core.h"
 #include "Hosts.h"
+#ifdef ANTPPP
+#    include "MonitorIf.h"
+#endif
 
 
 /* Global variables */
 extern void *private_word;
-static volatile int tick_pending = 0, datagram_pending = 0, callback_pending = 0;
+static volatile int tick_pending = 0;
+static volatile int datagram_pending = 0;
+static volatile int callback_pending = 0;
 
 static int              s = -1;         /* socket used for communications */
 static fd_set        	dsmask;
+#ifdef ANTPPP
+extern BOOL		online = FALSE; /* PPP status */
+#endif
+
 
 #ifndef FD_SET
 #define NFDBITS         32
@@ -151,9 +159,9 @@ extern void clear_callback(void)
  */
 extern int inetevent_handler(_kernel_swi_regs *r, void *pw)
 {
-  if (r->r[0] == Event_Internet /* && r->r[1] == 0 */ && r->r[2] == s)
+  if (r->r[0] == Event_Internet && r->r[2] == s)
   {
-    TRACE2("******** inetevent_handler: %x %x\n", r->r[1], r->r[2]);
+    TRACE2("******** inetevent_handler: client %x %x\n", r->r[1], r->r[2]);
     datagram_pending = 1;
     setup_callback();
     return(VIA_STACK);
@@ -192,8 +200,27 @@ extern void res_tick(void)
     if ((cr->dns) && (cr->failure == -3) && (cr->dns->state == dns_OK) &&
         (cr->dns->time+cache_delay <= ct))
     {
+#ifdef ANTPPP
+      port_status_str state;
+      _kernel_swi_regs r;
+#endif
       /* DNS retry period expired */
       TRACE1("res_tick: RETRY DELAY timed out! relaunching '%s'\n", cr->hostname);
+#ifdef ANTPPP
+      r.r[0] = (int) "Modem";
+      r.r[1] = (int) &state;
+      r.r[2] = 0;
+      r.r[3] = sizeof(state);
+      if (!_kernel_swi(XOS_Bit | ArcPPP_ReadPortStatus, &r, &r))
+      {
+        if (!online && state.flags.b.using_port && state.flags.b.connected)
+        {
+          online = TRUE;
+          /* Closing down socket in case we are demand dialling? */
+          res_close();
+        }
+      } else online = TRUE;
+#endif
       res_launch(cr->hostname, cr, cr->dns->numeric);
     }
     if ((cr->dns) && (cr->dns->state == dns_PENDING) && (cr->dns->time+cache_TIMEOUT <= ct))
@@ -224,12 +251,29 @@ extern void res_tick(void)
       else
       {
         /* No more name servers, mark as failed */
-        TRACE("res_tick: failed\n");
-        cr->flags = flags_FAILED;
-        TRACE("res_tick: updated PENDING to FAILED\n");
-        heap_free(cr->dns);
-        cr->dns = NULL;
-        cr->failure = -2;
+
+        /* Hmmm .... */
+
+        TRACE1("res_tick: failed retry %d\n", cr->retry);
+        if (cr->retry < cache_retries)
+        {
+          TRACE("res_tick: updated PENDING to RETRY PENDING\n");
+          cr->time = cr->dns->time = Time_Monotonic();
+          cr->retry++;
+          cr->flags = flags_PENDING;
+          TRACE1("res_tick: RETRY #%d\n", cr->retry);
+          cr->failure = -3;
+          cr->dns->state = dns_OK;
+          setup_ticker(cache_delay);
+        }
+        else
+        {
+          cr->flags = flags_FAILED;
+          TRACE("res_tick: updated PENDING to FAILED\n");
+          cr->failure = -2;
+          heap_free(cr->dns);
+          cr->dns = NULL;
+        }
       }
     }
     cr = (cache_rec *) cr->header.next;
@@ -245,7 +289,7 @@ extern int callback_handler(_kernel_swi_regs *regs, void *pw)
   callback_pending = 0;
   if (datagram_pending)
   {
-    TRACE("******** callback_handler: datagram\n");
+    TRACE("******** callback_handler: client datagram\n");
     datagram_pending = 0;
     /* Handle incoming data */
     res_rec();
@@ -336,7 +380,7 @@ extern void res_process(cache_rec *cr)
   if ((err) || (!cr->dns->domain) || !(*cr->dns->domain) || (cr->dns->numeric))
   {
     /* Complete failure - mark as failed */
-    TRACE("res_process: failed\n");
+    TRACE2("res_process: failed retry %d errno %d\n", cr->retry, cr->dns->errno);
     if ((cr->retry < cache_retries) && (cr->dns->errno == HOST_NOT_FOUND))
     {
       TRACE("res_process: updated PENDING to RETRY PENDING\n");
@@ -428,6 +472,9 @@ extern int res_send(char *buf, int buflen, char *answer, int anslen, dns_rec *r)
 }
 
 
+/* Don't want this allocated off the stack */
+static char inpacket[MAXPACKET];
+
 /*  Process incoming packets.
  */
 extern void res_rec(void)
@@ -437,10 +484,9 @@ extern void res_rec(void)
   struct timeval t;
   int inlen, fromlen;
   int snum;
-  char inpacket[MAXPACKET];
   cache_rec *cr;
 
-  TRACE("res_rec: entry\n");
+  TRACE1("res_rec: entry %d\n", sizeof(fd_set));
   do
   {
     readfds = dsmask;
@@ -453,7 +499,7 @@ extern void res_rec(void)
       HEADER *hp;
 
       fromlen = sizeof(struct sockaddr);
-      inlen = recvfrom(s, (char *) &inpacket, sizeof(inpacket), 0,
+      inlen = recvfrom(s, inpacket, MAXPACKET, 0,
                        (struct sockaddr *) &raddr, &fromlen);
       if (inlen < 0)
       {
@@ -470,7 +516,7 @@ extern void res_rec(void)
       if (!cr) continue;
 
       /* We have a valid reply packet - what shall we do with it? */
-      memcpy(&cr->dns->buf, (char *) &inpacket, MAXPACKET);
+      memcpy(&cr->dns->buf, inpacket, MAXPACKET);
 
       /* Check for errors from DNS server */
       if (hp->rcode != NOERROR || ntohs(hp->ancount) == 0)
@@ -534,6 +580,7 @@ extern void res_rec(void)
         heap_free(cr->dns);
         cr->dns = NULL;
         cr->failure = 0;
+        cachemerge(cr);
       }
     }
   } while (snum > 0);

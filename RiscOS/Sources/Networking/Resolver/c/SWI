@@ -18,8 +18,10 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <ctype.h>
 #include "swis.h"
-#include "sys/types.h"
+#include "htypes.h"
+#include "netinet/in.h"
 #include "sys/errno.h"
 #include "netdb.h"
 #include "libs/desklib/Core.h"
@@ -31,6 +33,9 @@
 #include "res_query.h"
 #include "ExtLib.h"
 #include "Core.h"
+#ifdef ANTPPP
+#include "MonitorIf.h"
+#endif
 
 
 /* Global variables */
@@ -38,12 +43,13 @@ extern void 		*private_word = NULL;
 static _kernel_oserror 	rm_errbad = { 0x1e6, "Bad SWI call" };
 static _kernel_oserror 	rm_badprm = { 0x0, "Bad parameters to Resolver SWI" };
 static _kernel_oserror 	rm_badcache = { 0x0, "Bad cache entry" };
+static _kernel_oserror 	rm_noclient = { 0x0, "No DNS service configured" };
 #ifdef app_TIMED
 static _kernel_oserror 	rm_badtime = { 0x0, "Pre-release Resolver code has timed out. Contact ANT Ltd <support@ant.co.uk> for a newer version." };
 static BOOL CheckClock(void);
 #endif
-extern _kernel_oserror *ant_res_init(void);
-
+extern _kernel_oserror *res_init(void);
+extern BOOL		dns_client = FALSE;
 
 #ifdef DEBUG
 extern FILE 		*omniout = NULL;		/* Debug trace file handle */
@@ -86,43 +92,46 @@ static void module_final(void)
  */
 extern _kernel_oserror *config_init(void)
 {
-  char *cp;
+  char s[96];
+#ifdef ANTPPP
+  port_status_str state;
+  _kernel_swi_regs r;
+#endif
 
-  if ((cp = getenv("Inet$Resolvers")) == NULL)
-  {
-#if !ROM
+  if (_kernel_getenv("Inet$Resolvers", s, 95) != NULL)
     fprintf(stderr, "Warning: <Inet$Resolvers> not set at Resolver module startup\n");
-#endif
-  }
-  if ((cp = getenv("Inet$Hostname")) == NULL)
-  {
-#if !ROM
+  if (_kernel_getenv("Inet$Hostname", s, 95) != NULL)
     fprintf(stderr, "Warning: <Inet$Hostname> not set at Resolver module startup\n");
-#endif
-  }
-  if (cp = getenv("Inet$ResolverDelay"))
+  if (_kernel_getenv("Inet$ResolverDelay", s, 95) == NULL)
   {
-    cache_delay = atoi(cp)*100;
+    cache_delay = atoi(s)*100;
     if (cache_delay < 2*100 || cache_delay > 60*100)
     {
-#if !ROM
       fprintf(stderr, "Warning: <Inet$ResolverDelay> must be between 2 and 60 seconds - using default of %d seconds\n", cache_DELAY/100);
-#endif
       cache_delay = cache_DELAY;
     }
   }
-  if (cp = getenv("Inet$ResolverRetries"))
+  if (_kernel_getenv("Inet$ResolverRetries", s, 95) == NULL)
   {
-    cache_retries = atoi(cp);
+    cache_retries = atoi(s);
     if (cache_retries < 1 || cache_retries > 10)
     {
-#if !ROM
       fprintf(stderr, "Warning: <Inet$ResolverRetries> must be between 1 and 10 - using default of %d retries\n", cache_RETRIES);
-#endif
       cache_retries = cache_RETRIES;
     }
   }
-  return(ant_res_init());
+#ifdef ANTPPP
+  r.r[0] = (int) "Modem";
+  r.r[1] = (int) &state;
+  r.r[2] = 0;
+  r.r[3] = sizeof(state);
+  if (!_kernel_swi(XOS_Bit | ArcPPP_ReadPortStatus, &r, &r))
+  {
+    if (state.flags.b.using_port && state.flags.b.connected) online = TRUE;
+      else online = FALSE;
+  } else online = TRUE;
+#endif
+  return(res_init());
 }
 
 
@@ -138,7 +147,8 @@ extern _kernel_oserror *Initialise(char *cmd_tail, int podule_base, void *privat
 #endif
   debuginit();
   TRACE("Initialise:\n");
-  if ((ep = setup_ticker_and_event())) return(ep);
+  ep = setup_ticker_and_event();
+  if (ep != NULL) return ep;
   atexit(&module_final);
   cacheinit();
   config_init();
@@ -175,6 +185,22 @@ static int escape_press(void)
     _kernel_swi(OS_Byte, &r,&r);
   }
   return(carry);
+}
+
+
+/*  Return TRUE if a valid hostname string - must consist only
+ *  of alphanumeric, '-', '_' and '.' characters.
+ */
+static BOOL validhost(char *hostname)
+{
+  if (!hostname || !strlen(hostname)) return(FALSE);
+  while (*hostname != '\0')
+  {
+    if (!isalnum(*hostname) && *hostname != '-' && *hostname != '.' && *hostname != '_')
+      return(FALSE);
+    hostname++;
+  }
+  return(TRUE);
 }
 
 
@@ -235,7 +261,7 @@ static _kernel_oserror *gethost(_kernel_swi_regs *r)
 
   /* Check for bad parameters on entry */
   r->r[1] = 0;
-  if (!hostname || !strlen(hostname)) return(&rm_badprm);
+  if (!validhost(hostname)) return(&rm_badprm);
 
   /* Process callbacks */
   collect_callbacks();
@@ -243,7 +269,7 @@ static _kernel_oserror *gethost(_kernel_swi_regs *r)
   /* Lookup hostname in cache, ensuring it hasn't timed out */
   cr = cachefind(hostname, 0);
 
-  TRACE2("gethost: '%s' %x\n", hostname, (int) cr);
+  /* TRACE2("gethost: '%s' %x\n", hostname, (int) cr); */
   if (cr)
   {
     /* Move cache item to front of linked list */
@@ -297,11 +323,14 @@ static _kernel_oserror *gethost(_kernel_swi_regs *r)
     {
       /* If found entry in hosts file, add to local cache */
       TRACE("gethost: found in hosts file\n");
-      cacheadd(host->h_name, host, flags_VALID | flags_HOST);
+      cachemerge(cacheadd(host->h_name, host, flags_VALID | flags_HOST));
       r->r[0] = 0;
       r->r[1] = (int) host;
       return(NULL);
     }
+
+    /* If no DNS client service, return with error */
+    if (!dns_client) return(&rm_noclient);
 
     /* If numeric request, then launch as "%u.%u.%u.%u.in-addr.arpa" */
     if ((s_addr = _inetaddr(hostname)) != -1)
@@ -320,7 +349,8 @@ static _kernel_oserror *gethost(_kernel_swi_regs *r)
     /* Item not in hosts file, send off a remote resolver request */
     TRACE("gethost: launching...\n");
     cr->failure = -2;
-    if (err = res_launch(hostname, cr, numeric))
+    err = res_launch(hostname, cr, numeric);
+    if (err)
     {
       cacheclear(cr);
       return(err);
@@ -408,7 +438,7 @@ extern _kernel_oserror *command_handler(char *arg_string, int arg_count,
 
 #ifdef app_TIMED
 
-#include "libs/desklib/SWI.h"
+#include "DeskLib:SWI.h"
 #include <time.h>
 
 #define _OS_Word			0x000007

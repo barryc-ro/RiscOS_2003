@@ -26,7 +26,7 @@ RM      = remove
 WIPE    = -wipe
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -zM -zps1 -ff ${INCLUDES} ${DFLAGS} -pcc -DCOMPAT_INET4
+CFLAGS  = -c -depend !Depend -zM -zps1 -throwback -pcc -ff ${INCLUDES} ${DFLAGS} -DCOMPAT_INET4
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 LDFLAGS = 
@@ -39,7 +39,7 @@ RLIB      = RISCOSLIB:o.risc_oslib
 RSTUBS    = RISCOSLIB:o.rstubs
 ROMSTUBS  = RISCOSLIB:o.romstubs
 ROMCSTUBS = RISCOSLIB:o.romcstubs
-ABSSYM    = RISC_OSLib:o.AbsSym
+ABSSYM    = RISC_OSLib:o.c_AbsSym
 INETLIB=TCPIPLibs:o.inetlibzm
 SOCKLIB=TCPIPLibs:o.socklibzm
 UNIXLIB=TCPIPLibs:o.unixlibzm
@@ -124,10 +124,6 @@ rm.${COMPONENT}: ${OBJS} ${CLIB} ${LIBS}
         ${LD} ${LDFLAGS} -o $@ -module ${OBJS} ${CLIB} ${LIBS}
 
 # Dynamic dependencies:
-o.StrCaseCmp:	c.StrCaseCmp
-o.Stubs: s.Stubs
-o.Stubs: hdr.RegDefs
-o.Stubs: hdr.SwiNos
 o.res_query:	c.res_query
 o.res_query:	TCPIPLibs:sys.h.types
 o.res_query:	TCPIPLibs:sys.h.cdefs
@@ -137,8 +133,6 @@ o.res_query:	TCPIPLibs:machine.h.types
 o.res_query:	TCPIPLibs:sys.h.socket
 o.res_query:	TCPIPLibs:sys.h.cdefs
 o.res_query:	TCPIPLibs:netinet.h.in
-o.res_query:	TCPIPLibs:netns.h.ns
-o.res_query:	TCPIPLibs:sys.h.cdefs
 o.res_query:	h.netdb
 o.res_query:	C:h.kernel
 o.res_query:	TCPIPLibs:arpa.h.inet
@@ -204,7 +198,6 @@ o.Events:	h.resolv
 o.Events:	TCPIPLibs:sys.h.types
 o.Events:	h.herrno
 o.Events:	h.netdb
-o.Events:	TCPIPLibs:sys.h.types
 o.Events:	libs.desklib.h.Core
 o.Events:	libs.desklib.h.LinkList
 o.Events:	libs.desklib.h.Time
@@ -216,6 +209,7 @@ o.Events:	h.Core
 o.Events:	h.Hosts
 o.Cache:	c.Cache
 o.Cache:	C:h.kernel
+o.Cache:	h.htypes
 o.Cache:	h.netdb
 o.Cache:	libs.desklib.h.Core
 o.Cache:	libs.desklib.h.LinkList
@@ -310,6 +304,8 @@ o.res_init:	TCPIPLibs:arpa.h.inet
 o.res_init:	TCPIPLibs:sys.h.cdefs
 o.res_init:	h.Debug
 o.res_init:	C:h.kernel
+o.res_init:	libs.desklib.h.Core
+o.res_init:	libs.desklib.h.LinkList
 o.res_mkquer:	c.res_mkquer
 o.res_mkquer:	TCPIPLibs:sys.h.types
 o.res_mkquer:	TCPIPLibs:sys.h.cdefs
@@ -331,14 +327,15 @@ o.res_mkquer:	TCPIPLibs:sys.h.cdefs
 o.res_mkquer:	TCPIPLibs:machine.h.endian
 o.res_mkquer:	h.resolv
 o.res_mkquer:	TCPIPLibs:sys.h.types
+o.StrCaseCmp:	c.StrCaseCmp
+o.Stubs: s.Stubs
+o.Stubs: hdr.RegDefs
+o.Stubs: hdr.SwiNos
 o.SWI:	c.SWI
 o.SWI:	C:h.kernel
 o.SWI:	C:h.swis
-o.SWI:	TCPIPLibs:sys.h.types
-o.SWI:	TCPIPLibs:sys.h.cdefs
-o.SWI:	TCPIPLibs:machine.h.endian
-o.SWI:	TCPIPLibs:machine.h.ansi
-o.SWI:	TCPIPLibs:machine.h.types
+o.SWI:	h.htypes
+o.SWI:	TCPIPLibs:netinet.h.in
 o.SWI:	TCPIPLibs:sys.h.errno
 o.SWI:	C:h.kernel
 o.SWI:	h.netdb
