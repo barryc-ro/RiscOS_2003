@@ -30,7 +30,7 @@ RESFSDIR   = Resources.${COMPONENT}
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = do mkdir -p
 AS      = objasm
 CC      = cc
 CMHG    = cmhg
@@ -102,6 +102,11 @@ ramtrace: ${DBG_MODULE} o._dirs
 
 rom: ${ROM_MODULE} o._dirs
         @echo ${COMPONENT}: Module built (ROM)
+
+install: ${RAM_MODULE} o._dirs
+        ${MKDIR} ${INSTDIR}
+        ${CP} ${RAM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: Module installed (RAM)
 
 install_rom: ${ROM_MODULE}
         ${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
