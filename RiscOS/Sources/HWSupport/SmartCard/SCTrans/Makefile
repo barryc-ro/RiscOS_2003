@@ -54,6 +54,8 @@ REMOTEDB   = <Lib$Dir>.debug.o.remotezm
 #
 INCLUDES = -IC:,<Lib$Dir>.
 
+DIRS=o._dirs
+
 # Program specific options:
 #
 COMPONENT = SCTrans
@@ -104,21 +106,24 @@ install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
 clean:
+        ${WIPE} aof ${WFLAGS}
+        ${WIPE} linked ${WFLAGS}
+        ${WIPE} map ${WFLAGS}
         ${WIPE} o ${WFLAGS}
         ${WIPE} od ${WFLAGS}
         ${WIPE} rm ${WFLAGS}
-        ${WIPE} linked ${WFLAGS}
-        ${WIPE} map ${WFLAGS}
-        ${WIPE} aof ${WFLAGS}
         ${RM} h.header
         @echo ${COMPONENT}: cleaned
-dirs:
+
+${DIRS}:
+	${MKDIR} aof
+	${MKDIR} linked
+	${MKDIR} map
         ${MKDIR} o
         ${MKDIR} od
         ${MKDIR} rm
-        ${MKDIR} linked
-        ${MKDIR} map
-        ${MKDIR} aof
+        create ${DIRS}
+	stamp  ${DIRS}
 
 #
 # ROM target (re-linked at ROM Image build time)
@@ -137,11 +142,11 @@ rom_link:
 #
 # Target
 #
-rm.${COMPONENT}: ${OBJS} ${CLIB} dirs
+rm.${COMPONENT}: ${OBJS} ${CLIB} ${DIRS}
         ${LD} -rmf -o $@ ${OBJS} ${CLIB}
         Access rm.${COMPONENT} RW/R
 
-rm.${COMPONENT}D: ${DOBJS} ${REMOTEDB} dirs
+rm.${COMPONENT}D: ${DOBJS} ${REMOTEDB} ${DIRS}
         ${LD} -rmf -o $@ ${DOBJS} ${CLIB} ${REMOTEDB}
         Access rm.${COMPONENT}D RW/R
 
