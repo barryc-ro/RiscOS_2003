@@ -7,7 +7,7 @@
 # ----       ----         -----------
 # 17-Mar-1997  RWB 	  New for CSFS
 # 28 May 1997  RWB 	  Different Debug build
-
+# 11 Jun 1997  SC	  Added option for ensure line
 
 #
 # Paths
@@ -649,3 +649,57 @@ o.service:	h.mount
 o.service:	h.service
 o.service:	h.usermode
 o.service:	C:h.kernel
+od.service:	c.service
+od.service:	C:h.kernel
+od.service:	C:h.swis
+od.service:	h.Consts
+od.service:	C:debug.h.remote
+od.service:	h.RMInfo
+od.service:	h.veneers
+od.service:	h.Interface
+od.service:	h.fsentries
+od.service:	h.ModuleWrap
+od.service:	h.flex
+od.service:	h.csfserr
+od.service:	h.xstr
+od.service:	h.str
+od.service:	h.etc
+od.service:	h.csfs
+od.service:	h.scrap
+od.service:	h.fs
+od.service:	h.sfs
+od.service:	h.arcs
+od.service:	h.cat
+od.service:	h.fx
+od.service:	h.mount
+od.service:	h.service
+od.service:	h.usermode
+od.service:	C:h.kernel
+od.mount:	c.mount
+od.mount:	C:h.kernel
+od.mount:	C:h.swis
+od.mount:	TCPIPLibs:h.inetlib
+od.mount:	TCPIPLibs:sys.h.types
+od.mount:	TCPIPLibs:sys.h.cdefs
+od.mount:	TCPIPLibs:machine.h.endian
+od.mount:	TCPIPLibs:machine.h.ansi
+od.mount:	TCPIPLibs:machine.h.types
+od.mount:	TCPIPLibs:netinet.h.in
+od.mount:	TCPIPLibs:h.netdb
+od.mount:	TCPIPLibs:sys.h.cdefs
+od.mount:	h.etc
+od.mount:	h.csfserr
+od.mount:	h.consts
+od.mount:	C:debug.h.remote
+od.mount:	h.flex
+od.mount:	h.xstr
+od.mount:	h.fs
+od.mount:	h.str
+od.mount:	h.csfs
+od.mount:	h.link
+od.mount:	h.arcs
+od.mount:	h.fx
+od.mount:	h.cat
+od.mount:	h.dir
+od.mount:	h.service
+od.mount:	h.mount
