@@ -7,6 +7,7 @@
 # ----       ----         -----------
 # 25-May-94  AMcC         Created.
 # 21-Nov-00  SBF          Added StripDepnd support.
+# 26-Feb-01  SBF          StripDepnd support moved to MkClean
 #
 
 #
@@ -23,7 +24,6 @@ LD      = link
 CP      = copy
 RM      = remove
 WIPE    = -wipe
-STRIP   = -stripdepnd
 CCFLAGS = -c -depend !Depend -IC:
 ASFLAGS = -depend !Depend -Stamp -quit ${OPTS} -To $@ -From
 LDFLAGS = -bin -o $@
@@ -56,7 +56,6 @@ clean:
         ${RM} ${TARGET}
 	${WIPE} o ${WFLAGS}
         ${RM} z.SystemDisc
-        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 resources:
