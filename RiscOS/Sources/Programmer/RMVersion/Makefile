@@ -67,13 +67,19 @@ clean:
 	${RM} ${TARGET_A}
         @echo ${COMPONENT}: cleaned
 
-export_libs: ${OBJ_A} ${OBJ_Z} dirs
+export_libs: export_docs ${OBJ_A} ${OBJ_Z} dirs
 	${AR} ${ARFLAGS} -o ${LIBDIR}.${COMPONENT}.o.RMVersion ${OBJ_A}
 	${AR} ${ARFLAGS} -o ${LIBDIR}.${COMPONENT}.o.RMVersionZ ${OBJ_Z}
         @echo ${COMPONENT}: export complete (libs)
 
-export_hdrs: ${HDRS} dirs
+export_hdrs: export_docs ${HDRS} dirs
 	${CP} h ${LIBDIR}.${COMPONENT}.h ${CPFLAGS}
+	${CP} VersionNum ${LIBDIR}.${COMPONENT}.VersionNum ${CPFLAGS}
+        @echo ${COMPONENT}: export complete (hdrs)
+
+export_docs: dirs
+	${CP} VersionNum ${LIBDIR}.${COMPONENT}.VersionNum ${CPFLAGS}
+	${CP} Docs ${LIBDIR}.${COMPONENT}.Docs ${CPFLAGS}
 
 dirs:
 	${MKDIR} ${LIBDIR}
