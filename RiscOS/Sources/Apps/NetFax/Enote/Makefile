@@ -55,7 +55,8 @@ WFLAGS          = ~cf~vr
 
 # These are for the standard Desktop build (plus debug)
 
-DFLAGS          = 
+#DFLAGS          = -DPLAYING
+DFLAGS		= -DNOFORMS
 DDFLAGS         = ${DFLAGS} -DDEBUGLIB -fn
 DZFLAGS         = 
 DDZFLAGS        = ${DZFLAGS} -fn
@@ -394,4 +395,3 @@ rm.!DayNoteD: odz.ModuleWrap ${OBJSDZ} ${LIBSM} o.dirs
 
 # -----------------------------------------------------------------------------
 # Dynamic dependencies:
-
