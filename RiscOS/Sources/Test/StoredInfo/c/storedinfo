@@ -9,6 +9,7 @@
 #include "nvram.h"
 #include "standby.h"
 
+#include "module.h"
 #include "storedinfo.h"
 #include "veneer.h"
 #include "error.h"
@@ -16,7 +17,7 @@
 
 static ERROR_STRUCT( BADPARM, "BadParm" );
 
-static int MinsInOp, FaultsIndex;
+static int OldMinsInOp, MinsInOp, FaultsIndex;
 static int Flags = 0;
 
 fault_code storedinfo_faultsbuffer[STOREDINFO_FAULT_COUNT];
@@ -85,15 +86,6 @@ CheckSum( char *buffer, int bufsz )
 }
 
 
-static void
-SetMinsInOp( void )
-{
-	int check = CheckSum( (char *)&MinsInOp, STOREDINFO_MINSINOP_SIZE );
-	_swix( NVRAM_Write, _INR(0,2), STOREDINFO_MINSINOP_TAG, &MinsInOp, 0 );
-	_swix( NVRAM_Write, _INR(0,2), STOREDINFO_MINSINOPCHECK_TAG, &check, 0 );
-}
-
-
 static _kernel_oserror *
 CheckMinsInOp( void )
 {
@@ -108,8 +100,9 @@ CheckMinsInOp( void )
 			/* If checksum is invalid then initialise. */
 			if ( !ValidCheckSum((char *)&MinsInOp, STOREDINFO_MINSINOP_SIZE, check) )
 			{
+				OldMinsInOp = -1;
 				MinsInOp = 0;
-				SetMinsInOp();
+				storedinfo_setminsinop();
 			}
 		}
 	}
@@ -207,20 +200,50 @@ SetSystemVar( char *var, char *val )
 
 
 void
+storedinfo_setminsinop( void )
+{
+	if ( MinsInOp != OldMinsInOp )
+	{
+		int check = CheckSum( (char *)&MinsInOp, STOREDINFO_MINSINOP_SIZE );
+		_swix( NVRAM_Write, _INR(0,2), STOREDINFO_MINSINOP_TAG, &MinsInOp, 0 );
+		_swix( NVRAM_Write, _INR(0,2), STOREDINFO_MINSINOPCHECK_TAG, &check, 0 );
+	
+		/* Remember old MinsInOp so we don't set the same value twice. */
+		OldMinsInOp = MinsInOp;
+	}
+}
+
+
+void
 storedinfo_callback( _kernel_swi_regs *r, void *pw )
 {
+	/* Increment minutes count. */
 	if ( Flags & STOREDINFO_COUNTING_FLAG )
-	{
-		/* Increment minutes count and set in NVRAM. */
 		MinsInOp += 1;
-		SetMinsInOp();
+
+	if ( !(Flags & STOREDINFO_TRANSIENTSET_FLAG) )
+	{
+		_kernel_oserror *err = _swix( OS_AddCallBack, _INR(0,1), veneer_storedinfo_transient, pw );
+		if ( err == NULL ) Flags |= STOREDINFO_TRANSIENTSET_FLAG;
 	}
+}
+
+
+void
+storedinfo_transient( _kernel_swi_regs *r, void *pw )
+{
+	storedinfo_setminsinop();
 
 	/* Try to set warranty clock if we need to. This won't work until we've	*/
 	/* connected to a time server for the first time and the NC is in	*/
 	/* operation (we wouldn't be here otherwise).				*/
 	if ( Flags & STOREDINFO_SETWARRANTY_FLAG )
 		if ( SetWarranty(0) ) Flags &= ~STOREDINFO_SETWARRANTY_FLAG;
+
+	Flags &= ~STOREDINFO_TRANSIENTSET_FLAG;
+
+	NOT_USED( r );
+	NOT_USED( pw );
 }
 
 
