@@ -1,0 +1,411 @@
+/* -> asdsupp.c
+ * Title: ARM Symbolic Debugger support module
+ * Copyright (C) 1991 Advanced RISC Machines Limited. All rights reserved.
+ */
+
+#ifndef AAsm
+
+#include "aof.h"
+#include "asdfmt.h"
+#include "asdsupp.h"
+#include "bytesex.h"
+#include "code.h"
+#include "constant.h"
+#include "aofvars.h"
+#include "store.h"
+#include "globvars.h"
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
+
+typedef struct fragment_list *fragment_list_ptr;
+
+typedef struct fragment_list {
+  fragment_list_ptr next;
+  unsigned int      avail;
+  Relocation        relocation;
+  Fragment          frag;
+} fragment_list;
+
+typedef struct file_list *file_list_ptr;
+
+typedef struct file_list {
+  file_list_ptr     next;
+  ItemFileEntry     entry;
+  char             *name;
+  fragment_list_ptr frag;
+} file_list;
+
+typedef struct section_list *section_list_ptr;
+
+typedef struct section_list {
+  section_list_ptr next;
+  ItemSection   item;
+  Relocation    relocation;
+  char         *name;
+  ItemFileInfo  file_info;
+  file_list_ptr file_list;
+} section_list;
+
+#define FRAGMENT_LIST_SIZE 0x100
+
+static fragment_list_ptr frag_list = NULL,
+                         curr_frag = NULL;
+
+static section_list_ptr sect_list = NULL,
+                        curr_sect = NULL;
+
+static file_list_ptr curr_file = NULL;
+
+static unsigned32 lastsize = 0,
+                  lastline = 0,
+                  code_offset;
+
+static char *section_name = "??";
+
+void asdsupp_section_name(const char *s, int len)
+{ char *t = strncpy((char *)mymalloc(len + 1), s, len);
+  t[len] = 0;
+  section_name = t;
+}
+
+static fragment_list_ptr new_fragment_list(void)
+{
+  fragment_list_ptr ptr = (fragment_list_ptr) mymalloc(FRAGMENT_LIST_SIZE);
+  ptr ->next = NULL;
+  ptr->avail =
+      (FRAGMENT_LIST_SIZE - ((char *)ptr->frag.lineinfo - (char *)ptr));
+          /* Length available to this fragment */
+  ptr->frag.size = 0;
+  ptr->frag.firstline = 0;
+  ptr->frag.lastline = 0;
+  ptr->frag.codestart = code_offset;
+  ptr->frag.codesize = 0;
+  ptr->relocation.aof_reloc.rel_offset = 0; /* Unknown as yet */
+  ptr->relocation.aof_reloc.rel_flags = (areaNumber-1L) + REL_LONG + REL_TYPE2;
+  return ptr;
+}
+
+static section_list_ptr new_section_list(char *name)
+{
+  section_list_ptr ptr = (section_list_ptr) mymalloc(sizeof(*ptr));
+  ptr->next = NULL;
+  ptr->item.n.name[0] = strlen(section_name);
+      /* Length of the following name, excluding padding */
+  ptr->name = (char *)mymalloc(ptr->item.n.name[0]+1);
+  strcpy(ptr->name, section_name);
+  ptr->file_list = NULL;
+  code_offset = 0;
+  ptr->item.codestart = 0;  /* = Offset from base of code. A relocation is */
+                            /* generated for this word which relocates it  */
+                            /* wrt the base of the code area, ie a type-2  */
+                            /* relocation with A = 0, R = 0, FT = 10 and   */
+                            /* SID = area index of code area               */
+  ptr->item.codesize = 0;   /* Size of code area */
+  ptr->item.fileinfo.i = 0; /* 0 for now */
+  ptr->item.debugsize = 0;  /* Total size of this section (inc. file info) */
+
+  ptr->file_info.id = asd_codeword(ITEMFILEINFO, 0);
+
+  ptr->relocation.aof_reloc.rel_offset = 0; /* Unknown as yet */
+  ptr->relocation.aof_reloc.rel_flags = (areaNumber-1)+REL_LONG+REL_TYPE2;
+
+  return ptr;
+}
+
+static file_list_ptr new_file_list(char *name)
+{
+  file_list_ptr ptr = (file_list_ptr) mymalloc(sizeof(*ptr));
+  ptr->next = NULL;
+  ptr->entry.len = 0;
+  ptr->entry.date = 0;
+  *ptr->entry.filename = strlen(name);
+  ptr->name = (char *)mymalloc(*ptr->entry.filename+1);
+  strcpy(ptr->name, name);
+  ptr->frag = NULL;
+  frag_list = curr_frag = NULL;
+  lastsize = lastline = 0;
+  return ptr;
+}
+
+static unsigned32 fragment_size(fragment_list_ptr ptr, unsigned32 start)
+/* start is offset of start of this structure from start of debug area */
+{ unsigned32 size = 0;
+  if (ptr != NULL) size = (char *)ptr->frag.lineinfo - (char *)&ptr->frag;
+  while (ptr)
+  { if (start != 0L)
+    { ptr->relocation.aof_reloc.rel_offset =
+          start + (char *)&ptr->frag.codestart - (char *)&ptr->frag;
+      start = 0; /* So we only touch the first in the list */
+    }
+    size += ptr->frag.size;
+    ptr = ptr->next;
+  }
+  return size;  /* Not padded */
+}
+
+static unsigned32 file_entry_size(file_list_ptr ptr, unsigned32 start)
+/* start is offset of start of this structure from start of debug area */
+{
+  unsigned32 size = (sizeof(ItemFileEntry) + 3L) & ~3L;
+  size += (*ptr->entry.filename /* Length of name      */
+            + 1L                /* length byte; no Zero termination */
+            - 4L                /* already accounted   */
+            + 3L) & ~3L;        /* Padding & Rounding  */
+  size += sizeof(int32);        /* Number of fragments */
+  return size + ((fragment_size(ptr->frag, (start != 0L) ? size + start : 0L)
+                  + 3L) & ~3L) /* padded to word boundary */;
+}
+
+static unsigned32 file_entry_list_size(file_list_ptr ptr, unsigned32 start)
+/* start is offset of start of this structure from start of debug area */
+{
+  unsigned32 size = sizeof(CodeAndLen);
+  while (ptr)
+  { ptr->entry.len = file_entry_size(ptr, (start != 0L) ? start + size : 0L);
+    size += ptr->entry.len;
+    ptr = ptr->next;
+  }
+  return size + sizeof(unsigned32);
+    /* Allow for NULL entry terminating list */
+}
+
+static void free_fragment_list(fragment_list_ptr ptr)
+{ fragment_list_ptr next;
+  while (ptr)
+  { next = ptr->next;
+    free(ptr);
+    ptr = next;
+  }
+}
+
+static void free_file_list(file_list_ptr ptr)
+{ file_list_ptr next;
+  while (ptr)
+  { next = ptr->next;
+    free(ptr->name);
+    free_fragment_list(ptr->frag);
+    ptr = next;
+  }
+}
+
+static void write_fragments(fragment_list_ptr ptr, FILE *output)
+{ Fragment frag;
+  long pos;
+  if (ptr == NULL) return;
+  frag.size = bytesex_hostval(fragment_size(ptr, 0));
+  frag.firstline = bytesex_hostval(ptr->frag.firstline);
+  frag.lastline = bytesex_hostval(ptr->frag.lastline);
+  frag.codestart = bytesex_hostval(ptr->frag.codestart);
+  frag.codesize = bytesex_hostval(ptr->frag.codesize);
+  fwrite(&frag, 1, (char *)frag.lineinfo - (char *)&frag, output);
+  PutReloc(ptr->relocation);
+  /* Now for the tricky bit of writing out the line information */
+  while (ptr != NULL && ptr->frag.size > 0)
+  { fwrite(ptr->frag.lineinfo,
+        sizeof(unsigned char), (size_t)(ptr->frag.size), output);
+    ptr = ptr->next;
+  }
+  pos = ftell(output);
+  while (pos & 3L) {fputc(0, output);  ++pos;}  /* Ensure aligned */
+}
+
+static void write_file_entry(file_list_ptr ptr, FILE *output)
+{ long pos;
+  int32 size;
+  ItemFileEntry temp;
+  if (ptr == NULL) return;
+  temp.len  = bytesex_hostval(ptr->entry.len);
+  temp.date = bytesex_hostval(ptr->entry.date);
+  temp.filename[0] = ptr->entry.filename[0];
+  fwrite(&temp, 1, temp.filename+1 - (char *)&temp, output);
+  fwrite(ptr->name, 1, temp.filename[0], output);  /* The filename */
+  pos = ftell(output);
+  while (pos & 3L) {fputc(0, output);  ++pos;}     /* Pad the name */
+  size = bytesex_hostval((ptr->frag != NULL) ? 1L : 0L);  /* 0/1 fragments */
+  fwrite(&size, sizeof(int32), 1, output);
+  write_fragments(ptr->frag, output);
+}
+
+static void write_file_entry_list(file_list_ptr ptr, FILE *output)
+{
+  unsigned32 temp = file_entry_list_size(ptr, 0L);
+  if (temp >= 65536) temp=0;
+  temp = bytesex_hostval(asd_codeword(ITEMFILEINFO, temp));
+  fwrite(&temp, sizeof(unsigned32), 1, output);
+  while(ptr)
+  { write_file_entry(ptr, output);
+    ptr = ptr->next;
+  }
+  temp = 0;
+  fwrite(&temp, sizeof(unsigned32), 1, output);  /* Last (NULL) entry */
+}
+
+static void write_section(section_list_ptr ptr, FILE *output)
+{ long pos;
+  ItemSection temp;
+  memset(&temp, 0, sizeof(temp));
+  temp.id = bytesex_hostval(ptr->item.id);
+  temp.lang = LANG_ASM;
+  temp.flags = 1;          /* = 1 => line info, no var info */
+  temp.asdversion = 2;
+  temp.codestart  = bytesex_hostval(ptr->item.codestart);
+  temp.codesize   = bytesex_hostval(ptr->item.codesize);
+  temp.fileinfo.i = bytesex_hostval(ptr->item.fileinfo.i);
+  temp.debugsize  = bytesex_hostval(ptr->item.debugsize);
+  temp.n.name[0]  = ptr->item.n.name[0];
+  fwrite(&temp, 1, ptr->item.n.name + 1 - (char *)&ptr->item, output);
+  fwrite(ptr->name, 1, ptr->item.n.name[0], output);
+  pos = ftell(output);
+  while (pos & 3L) {fputc(0, output);  ++pos;} /* Pad the name */
+  write_file_entry_list(ptr->file_list, output);
+  PutReloc(ptr->relocation);
+}
+
+static void asdsupp_fragment_end(unsigned32 line)
+/* Used internally as common code */
+{ unsigned lineinc = (unsigned)(line - lastline),
+           codeinc = (unsigned)(lastsize);
+  if (curr_file == NULL || frag_list == NULL) return;
+  /* Nothing to do if no file, or nothing in the fragment anyway */
+  if (curr_frag->avail == curr_frag->frag.size ||
+      ((codeinc >= 0x100 || lineinc >= 0x100) &&
+      curr_frag->frag.size >= curr_frag->avail - 6L))
+  {
+    /* Current fragment full, or won't take current entry anyway */
+    curr_frag->next = new_fragment_list();
+    curr_frag = curr_frag->next;
+  }
+
+  if (codeinc < 0x100 && lineinc < 0x100)
+  {
+    curr_frag->frag.lineinfo[curr_frag->frag.size++] = codeinc;
+    curr_frag->frag.lineinfo[curr_frag->frag.size++] = lineinc;
+  }
+  else
+  { curr_frag->frag.lineinfo[curr_frag->frag.size++] = 0;
+    curr_frag->frag.lineinfo[curr_frag->frag.size++] = 0;
+    curr_frag->frag.lineinfo[curr_frag->frag.size++] =
+        target_is_big_endian ? lineinc >> 8 : lineinc & 0xff;
+    curr_frag->frag.lineinfo[curr_frag->frag.size++] =
+        target_is_big_endian ? lineinc & 0xff : lineinc >> 8;
+    curr_frag->frag.lineinfo[curr_frag->frag.size++] =
+        target_is_big_endian  ? codeinc >> 8 : codeinc & 0xff;
+    curr_frag->frag.lineinfo[curr_frag->frag.size++] =
+        target_is_big_endian  ? codeinc & 0xff : codeinc >> 8;
+  }
+  frag_list->frag.codesize += (unsigned32)codeinc;
+  code_offset += (unsigned32)codeinc;
+  frag_list->frag.lastline += (unsigned32)lineinc;
+}
+
+void asdsupp_line_end(unsigned32 size, unsigned32 line)
+{
+  if (curr_file == NULL) return; /* Nothing to do if no file */
+  if (frag_list == NULL)
+  { frag_list = new_fragment_list();
+    curr_frag = frag_list;
+    curr_file->frag = frag_list;
+  }
+  if (frag_list->frag.firstline == 0)
+  { /* Nothing added to this fragment yet */
+    frag_list->frag.firstline = line;
+    frag_list->frag.lastline = line;
+  }
+  else
+    asdsupp_fragment_end(line);
+  lastsize = size;
+  lastline = line;
+}
+
+void asdsupp_new_file(char *name, unsigned32 line)
+{
+  if (curr_sect == NULL) return; /* Nothing to do if no area */
+  asdsupp_fragment_end(line);
+  if (curr_file == NULL)
+  { curr_file = new_file_list(name);
+    curr_sect->file_list = curr_file;
+  }
+  else
+  { curr_file->next = new_file_list(name);
+    curr_file = curr_file->next;
+  }
+}
+
+void asdsupp_new_section(char *name)
+{
+  if (sect_list == NULL)
+  { sect_list = new_section_list(name);
+    curr_sect = sect_list;
+  }
+  else
+  { curr_sect->next = new_section_list(name);
+    curr_sect = curr_sect->next;
+  }
+  curr_file = NULL;
+  curr_frag = NULL;
+  frag_list = NULL;
+}
+
+void asdsupp_section_end(unsigned32 size, unsigned32 line)
+{ int len;
+  if (sect_list == NULL ||              /* Nothing to do if no items */
+      curr_sect->item.fileinfo.i != 0)  /* or already done...        */
+      return;
+  /* Now complete current item */
+  asdsupp_fragment_end(line);
+  len = (sizeof(ItemSection) + 1        /* Area name length byte */ +
+     strlen(curr_sect->name) + 3        /* Rounding */
+    - 4 /* Don't include item.name */) & ~3; /* Rounded up to word boundary */
+  curr_sect->item.id = asd_codeword(ITEMSECTION, (int32)len);
+  curr_sect->item.fileinfo.i = len;     /* Same in case of ObjAsm */
+  curr_sect->item.debugsize = 0;        /* To be filled in when dumped */
+  curr_sect->item.codesize = size;      /* Size of code area */
+}
+
+void asdsupp_free_section_list(void)
+{
+  section_list_ptr ptr = sect_list, next;
+  while (ptr)
+  { next = ptr->next;
+    free(ptr->name);
+    free_file_list(ptr->file_list);
+    ptr = next;
+  }
+}
+
+void asdsupp_declare_debug_area(void)
+{ if (make_debug && sect_list != NULL)
+  { areaNumber++;
+    AddAreaDeclaration(NULL, 2, AOF_DEBUGAT+AOF_RONLYAT);
+    currArea->dec.area_size = asdsupp_debug_area_size();
+  }
+}
+
+unsigned32 asdsupp_debug_area_size(void)
+{ int len;
+  section_list_ptr ptr = sect_list;
+  unsigned32 size = 0;
+  while (ptr)
+  { ptr->relocation.aof_reloc.rel_offset = size +
+      (char*)&ptr->item.codestart - (char*)&ptr->item;
+    len = (int) asd_len_(ptr->item.id);
+    ptr->item.debugsize = len + file_entry_list_size(ptr->file_list, size+len);
+    size += ptr->item.debugsize;
+    ptr = ptr->next;
+  }
+  return size;
+}
+
+void asdsupp_write_debug_area(FILE *output)
+{
+  section_list_ptr ptr = sect_list;
+  while (ptr)
+  { write_section(ptr, output);
+    ptr = ptr->next;
+  }
+}
+
+#endif /* not AAsm */
+
+/* End asdsupp.c */

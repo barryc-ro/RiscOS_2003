@@ -1,0 +1,828 @@
+/* -> code.c
+ * Title: Code file writing
+ * Copyright (C) 1991 Advanced RISC Machines Limited. All rights reserved.
+ */
+
+#include <stdio.h>
+
+#include "options.h"
+#ifndef AAsm
+#  include "aof.h"
+#  include "aout.h"
+#  include "chunkfmt.h"
+#  include "nametyp.h"
+#  include "aofvars.h"
+#  include "occur.h"
+#  include "store.h"
+#  include "tables.h"
+#  include "version.h"
+#  include <string.h>
+#  include <stdlib.h>
+#  ifdef __GNUC__
+#    include <unistd.h>
+#  endif
+#endif
+
+#include "asm.h"
+#include "bytesex.h"
+#include "code.h"
+#include "errors.h"
+#include "globvars.h"
+#include "listing.h"
+#include "message.h"
+
+#define MaxBuffer 4096
+
+static char buffer[MaxBuffer+3], *ptr = buffer;
+static CARDINAL codePtr, lastCodeWord;
+
+#ifndef AAsm
+#define RelocBufferSize 256
+#define RelocsInBuffer 128
+
+#define MaxChunks 7
+
+#define NumChunks 5
+static Name debug_area = {sizeof(code_DEBUG_AREA)-1, code_DEBUG_AREA};
+
+static CARDINAL data_offset;
+
+AreaDeclarationPointer currArea;
+static AreaDeclarationPointer area = NULL;
+CARDINAL totalAreas;
+
+static CARDINAL        relocPos,
+                       endHeaderPtr,
+                       endFixedHeaderPtr,
+                       endAreaPtr,
+                       endSymbolsPtr,
+                       endStringsPtr,
+                       endIdPtr;
+
+static char relocBuffer[RelocBufferSize], *relocPtr = relocBuffer;
+static cf_entry        chunkEntry;
+
+static long int        relocFilePtr;
+
+typedef struct aout_relocs *Aout_Relocs_Ptr;
+
+typedef struct aout_relocs {
+  /*
+   * A means of keeping relocation information in store
+   * until we are ready to output it all
+   */
+  Aout_Relocs_Ptr        link; /* next in the list */
+  CARDINAL               ptr;  /* Where we are in this one */
+  struct relocation_info relocs[RelocsInBuffer];
+} Aout_Relocs;
+
+static Aout_Relocs_Ptr text_aout_relocs = NULL,
+                       data_aout_relocs = NULL,
+                       current_text_aout_relocs = NULL,
+                       current_data_aout_relocs = NULL;
+
+typedef struct aout_code *Aout_Code_Ptr;
+
+typedef struct aout_code {
+  /*
+   * A means of keeping code in store
+   * until we are ready to output it all
+   */
+  Aout_Code_Ptr link; /* next in the list */
+  CARDINAL      ptr;  /* Where we are in this one */
+  char          buffer[MaxBuffer];
+} Aout_Code;
+
+static Aout_Code_Ptr text = NULL,
+                     data = NULL,
+                     current_text,
+                     current_data;
+
+void RelocInit(void)
+{
+  CARDINAL i;
+  if (output_style == AofOS) {
+    if ((RelocBufferSize % sizeof(aof_reloc) != 0) ||
+      (sizeof(aof_reloc) != 8)) {
+      Report(FatalError,code_relocinit_badbufsize);
+    }; /* if */
+    relocPos = 0;
+    relocFilePtr = ftell(codeStream);
+    if (!noInitArea) {
+      i = (CARDINAL)currArea->dec.area_size;
+      while (i > 0) {
+        if (i >= RelocBufferSize) {
+          fwrite(relocPtr, 1, RelocBufferSize, codeStream);
+          i -= RelocBufferSize;
+        } else {
+          fwrite(relocPtr, 1, (size_t)i, codeStream);
+          i = 0;
+        }; /* if */
+      }; /* while */
+      fseek(codeStream, relocFilePtr, SEEK_SET);
+      relocFilePtr += currArea->dec.area_size;
+    }; /* if */
+  } else {
+    if (input_style == ObjAsmIS) {
+      if (!noInitArea) {
+        if (area_is_code) {
+          text_aout_relocs = (Aout_Relocs_Ptr) 
+                             mymalloc(sizeof(*text_aout_relocs));
+          current_text_aout_relocs = text_aout_relocs;
+          current_text_aout_relocs->ptr = 0;
+          current_text_aout_relocs->link = NULL;
+          fseek(codeStream, endHeaderPtr, SEEK_SET);
+          /* Ensure we write in the code segment */
+        } else {
+          data_aout_relocs = (Aout_Relocs_Ptr)
+                              mymalloc(sizeof(*data_aout_relocs));
+          current_data_aout_relocs = data_aout_relocs;
+          current_data_aout_relocs->ptr = 0;
+          current_data_aout_relocs->link = NULL;
+          fseek(codeStream, data_offset, SEEK_SET);
+          /* Ensure we write in the data segment */
+        }; /* if */
+      }; /* if */
+    } else {
+      text_aout_relocs = (Aout_Relocs_Ptr) mymalloc(sizeof(*text_aout_relocs));
+      current_text_aout_relocs = text_aout_relocs;
+      current_text_aout_relocs->ptr = 0;
+      current_text_aout_relocs->link = NULL;
+      data_aout_relocs = (Aout_Relocs_Ptr) mymalloc(sizeof(*data_aout_relocs));
+      current_data_aout_relocs = data_aout_relocs;
+      current_data_aout_relocs->ptr = 0;
+      current_data_aout_relocs->link = NULL;
+    }; /* if */
+  }; /* if */
+  codePtr = 0;
+} /* End RelocInit */
+
+static void WriteAndFreeRelocs(Aout_Relocs_Ptr *ptr)
+/* Output then free up space allocated to relocations */
+{
+  Aout_Relocs_Ptr temp = *ptr;
+  while (temp != NULL) {
+    fwrite(temp->relocs, sizeof(struct relocation_info), (size_t)temp->ptr,
+      codeStream);
+    *ptr = temp->link;
+    free(temp);
+    temp = *ptr;
+  };
+}
+
+void RelocEnd(void)
+{
+  fseek(codeStream, relocFilePtr, SEEK_SET);
+  if (output_style == AofOS) {
+    fwrite(relocPtr, 1, (size_t)relocPos, codeStream);
+    relocFilePtr += relocPos;
+  } else {
+    /* Output the two relocation structures */
+    WriteAndFreeRelocs(&text_aout_relocs);
+    WriteAndFreeRelocs(&data_aout_relocs);
+  };
+} /* End RelocEnd */
+
+void PutReloc(Relocation reloc)
+{
+  long int m;
+  unsigned32 a[2];
+  a[0] = bytesex_hostval(reloc.aof_reloc.rel_offset - currArea->dec.area_base);
+  a[1] = bytesex_hostval(reloc.aof_reloc.rel_flags);
+  if (output_style == AofOS)
+  { if (relocPos == RelocBufferSize)
+    { m = ftell(codeStream);
+      RelocEnd();
+      relocPos = 0;
+      fseek(codeStream, m, SEEK_SET);
+    }
+    memcpy(relocPtr + relocPos, a/* was &reloc */, 8);
+    relocPos += 8;
+  }
+  else
+  { Aout_Relocs_Ptr temp = (area_is_code) ? current_text_aout_relocs :
+      current_data_aout_relocs;
+    if (temp->ptr == RelocsInBuffer) {
+      /* Time for a new buffer */
+      temp->link = (Aout_Relocs_Ptr) mymalloc(sizeof(*temp));
+      temp = temp->link;
+      temp->link = NULL;
+      temp->ptr = 0;
+      if (area_is_code) current_text_aout_relocs = temp;
+      else current_data_aout_relocs = temp;
+    };
+    memcpy(temp->relocs + temp->ptr++, a/* was &reloc */,
+      sizeof(struct relocation_info));
+  }
+  if (input_style == ObjAsmIS)
+    currArea->dec.area_nrelocs++;
+  else
+  { if (area_is_code) {
+      /*********More work required here */
+      aout_header.a_trsize += sizeof(struct relocation_info);
+    } else {
+      /*********More work required here */
+      aout_header.a_drsize += sizeof(struct relocation_info);
+    }
+  }
+} /* End PutReloc */
+
+#endif /* not AAsm */
+
+void CodeInit(void)
+{
+#ifndef AAsm
+  fseek(codeStream, endHeaderPtr, SEEK_SET);
+  if (output_style == ADotOutOS) {
+    /*********More work required here */
+    data_offset = (CARDINAL)(aout_header.a_text + endHeaderPtr);
+/*
+    code_relocation_offset = (CARDINAL)(data_offset + aout_header.a_data);
+*/
+  }; /* if */
+  text = (Aout_Code_Ptr) mymalloc(sizeof(*text));
+  current_text = text;
+  data = (Aout_Code_Ptr) mymalloc(sizeof(*data));
+  current_data = data;
+  current_text->ptr = 0;
+  current_data->ptr = 0;
+  current_text->link = NULL;
+  current_data->link = NULL;
+#else
+  codePtr = 0;
+#endif
+  lastCodeWord = 0;
+} /* End CodeInit */
+
+#ifndef AAsm
+static void WriteAndFreeCode(Aout_Code_Ptr *ptr)
+/* Output then free up space allocated to relocations */
+{
+  Aout_Code_Ptr temp = *ptr;
+  while (temp != NULL) {
+    fwrite(temp->buffer, 1, (size_t)(temp->ptr), codeStream);
+    *ptr = temp->link;
+    free(temp);
+    temp = *ptr;
+  };
+}
+#endif
+
+void CodeEnd(void)
+{
+#ifndef AAsm
+  if (input_style == AsIS) {
+    fseek(codeStream, endHeaderPtr, SEEK_SET);
+    /* Output the two code structures */
+    current_text->ptr = (current_text->ptr + 3) & ~3;
+    current_data->ptr = (current_data->ptr + 3) & ~3;
+    WriteAndFreeCode(&text);
+    WriteAndFreeCode(&data);
+  } else
+  /*
+   * In the case of ObjAsm, ensure the data output is defined even when
+   * the area does not fill the entire slot available to it. Zero the
+   * last one, two or three bytes as appropriate.
+   */
+    while (codePtr & 3) ptr[codePtr++] = 0;
+#endif
+  if (codePtr != 0) fwrite(ptr, 1, (size_t)codePtr, codeStream);
+#ifndef AAsm
+  codePtr = 0;
+#endif
+} /* End CodeEnd */
+
+
+/**** Added by NRaine ****/
+
+void CodeBuffer(char *frombuffer, int32 size)
+{
+#ifdef BINARY_INCLUDES
+  int i;
+  for (i=0;i<size;i++) CodeByte(frombuffer[i]);
+#else
+  /* Avoid unused warning */
+  frombuffer = frombuffer;  size = size;
+#endif
+}
+
+void CodeByte(char byte)
+{
+  lastCodeWord = 0;               /* instr sequence ends with DCB, DCW */
+#ifndef AAsm
+  if (noInitArea) {
+    if (byte != 0) Report(AsmError,errors_BadNoInit);
+    return;
+  }; /* if */
+  if (input_style == ObjAsmIS) {
+    ptr[codePtr++] = byte;
+    if (codePtr == MaxBuffer) CodeEnd();
+  } else {
+    Aout_Code_Ptr temp = (area_is_code) ? current_text : current_data;
+    if (temp->ptr == MaxBuffer) {
+      /* Time for a new buffer */
+      temp->link = (Aout_Code_Ptr) mymalloc(sizeof(*temp));
+      temp = temp->link;
+      temp->link = NULL;
+      temp->ptr = 0;
+      if (area_is_code) current_text = temp; else current_data = temp;
+    };
+    temp->buffer[temp->ptr++] = byte;
+  };
+#else
+  ptr[codePtr++] = byte;
+  if (codePtr == MaxBuffer) {
+    fwrite(ptr, 1, MaxBuffer, codeStream);
+    codePtr = 0;
+  }; /* if */
+#endif
+  programCounter++;
+  ListByteValue(byte);
+} /* End CodeByte */
+
+static int WarnIfBanked(CARDINAL reg)
+{   reg &= 15;
+    if (reg >= 8 && reg <= 14)
+    {   if ((lastCodeWord & 0x0e500000) == 0x08500000)
+            /* LDM Rn, <Rlist-R15>^ or STM Rn, <Rlist>^ */
+            Report(AsmError,code_warnifbanked_error);
+        else if (!pc_is_32bit)
+            Report(ReportWarning,code_warnifbanked_warn);
+        return 1;
+    }
+    return 0;
+}
+
+static void CheckCodeWord(CARDINAL word)
+{ CARDINAL last = lastCodeWord;
+
+  if ((last & 0x0d90f000) == 0x0110f000 ||
+      /* TSTP|TEQP|CMPP|CMNP Rn, <op2> */
+      (last & 0x0e508000) == 0x08500000)
+      /* LDM Rn, <Rlist-R15>^ */
+  {   /* relatively infrequently executed path... */
+
+      /* First check for conditional impossibility... */
+      if (((last ^ word) >> 28) == 1L)
+          /* complementary condition codes: so can't both be executed */
+          goto out;
+
+      if ((word & 0x0e000010) == 0x00000000 ||  /* DOP Rd,Rn,Rm{,SHF #n} */
+          (word & 0x0e000000) == 0x02000000 ||  /* DOP Rd,Rn, #n   */
+          (word & 0x0fc000f0) == 0x00000090)    /* MUL/MLA Rd,Rm,Rs{,Rn} */
+      {
+          if (WarnIfBanked(word >> 16) || WarnIfBanked(word >> 12)) goto out;
+      }
+
+      if ((word & 0x0fb00ff0) == 0x01000090 ||  /* SWP Rd,Rm,[Rn]  */
+          (word & 0x0c000000) == 0x04000000 ||  /* LDR/STR Rd, any */ 
+          (word & 0x0a000000) == 0x08000000)    /* LDM/STM/LDC/STC */
+      {
+          if (WarnIfBanked(word >> 16)) goto out;
+      }
+
+      if ((word & 0x0e000090) == 0x00000010 ||  /* DOP Rd,Rn,Rm{,SHF Rs} */
+          (word & 0x0fc000f0) == 0x00000090)    /* MUL/MLA Rd,Rm,Rs{,Rn} */
+      {
+          if (WarnIfBanked(word >> 12)) goto out;
+      }
+
+      if ((word & 0x0e000010) == 0x00000000 ||  /* DOP Rd,Rn,Rm{,SHF #n} */
+          (word & 0x0e000000) == 0x06000000)    /* LDR/STR Rd,[Rn+-Rm]   */
+      {
+          WarnIfBanked(word); 
+      }
+  } 
+out:
+  lastCodeWord = word;
+}
+
+static void code_word(CARDINAL word)
+/* Assumes word aligned put */
+{
+  CARDINAL n;
+  char    *adr = ptr + codePtr;
+#ifndef AAsm
+  if (noInitArea) {
+    if (word != 0) Report(AsmError,errors_BadNoInit);
+    return;
+  }; /* if */
+  if (input_style == ObjAsmIS) {
+#endif
+    (*(int32 *)adr) = bytesex_hostval(word);
+    codePtr += 4;
+    if (codePtr >= MaxBuffer) {
+      fwrite(ptr, 1, MaxBuffer, codeStream);
+      codePtr -= MaxBuffer;
+      for (n = 0; n <= 3; n++) ptr[n] = ptr[MaxBuffer+n];
+    }; /* if */
+#ifndef AAsm
+  } else {
+    Aout_Code_Ptr temp = (area_is_code) ? current_text : current_data;
+    if (temp->ptr >= MaxBuffer) {
+      /* Time for a new buffer */
+      temp->link = (Aout_Code_Ptr) mymalloc(sizeof(*temp));
+      temp = temp->link;
+      temp->link = NULL;
+      temp->ptr = 0;
+      if (area_is_code) current_text = temp; else current_data = temp;
+    }; /* if */
+    (*(int32 *)(temp->buffer+temp->ptr)) = bytesex_hostval(word);
+    temp->ptr += 4;
+  }; /* if */
+#endif
+  programCounter += 4;
+  ListWordValue(word);
+}
+
+void CodeWord(CARDINAL word)
+{
+#ifndef AAsm
+  if (area_is_code)
+#endif
+    CheckCodeWord(word);
+  code_word(word);
+}
+
+void CodeDataWord(CARDINAL word)
+{ /* Called from DCD/& - use to avoid illegal instr srquence check */
+  lastCodeWord = 0;
+  code_word(word);
+}
+
+#ifndef AAsm
+
+CARDINAL AreaStartValue(CARDINAL areaNumber, Name *name)
+{
+  AreaDeclarationPointer ptr = area;
+
+  while (ptr != NULL) {
+    areaNumber--;
+    if (areaNumber == 0) {
+      *name = ptr->name;
+      return (CARDINAL)(ptr->dec.area_base);
+    }; /* if */
+    ptr = ptr->next;
+  }
+  Report(FatalError,code_areanumber_error);
+  return NULL;
+} /* End AreaStartValue */
+
+aof_area *GetArea(CARDINAL areaNumber)
+{
+  AreaDeclarationPointer temp = area;
+  while ((temp != NULL) && (areaNumber > 1)) {
+    temp = temp->next;
+    areaNumber--;
+  }; /* while */
+  if (temp != NULL) return &temp->dec;
+  Report(FatalError,code_areanumber_error);
+  return NULL; /* Never reached, but stops the silly compiler whinging */
+}
+
+void AddSymbol(SymbolPointer symbolPointer)
+{
+  symbolPointer->aOFData.stringPosition = stringOffset;
+  symbolPointer->aOFData.symbolId = symbolId++;
+  stringOffset += (symbolPointer->key.length + 1);
+  /* Changed so word alignment no longer required */
+} /* End AddSymbol */
+
+void AddSymbolToTable(SymbolPointer symbolPointer,
+  Name name,
+  BOOLEAN external,
+  BOOLEAN weak)
+{
+  CARDINAL i;
+  output_style_set = TRUE;
+  if (output_style == AofOS)
+  { aof_symbol *sy = &extern_symbolTable[symbolPointer->aOFData.symbolId];
+    sy->sym_value = symbolPointer->value.card;
+    sy->sym_name = symbolPointer->aOFData.stringPosition;
+    sy->sym_AT = 0;
+    if (symbolPointer->u.s.sdt == FixedSDT)
+    { sy->sym_areaname = GetAreaName(symbolPointer->area);
+      sy->sym_AT |= SYM_LOCALDEFAT;
+      if (symbolPointer->u.s.fst == AbsoluteFST)
+        sy->sym_AT |= SYM_ABSAT;
+    }
+    else
+      sy->sym_areaname = 0;
+    if (external) sy->sym_AT |= SYM_REFAT;
+    if (weak) sy->sym_AT |= SYM_WEAKAT;
+    sy->sym_AT |= ((int32)symbolPointer->u.s.aof_xat << 8L);
+  }
+  else
+  { struct nlist *sy = &aout_symbolTable[symbolPointer->aOFData.symbolId];
+    sy->n_value = symbolPointer->value.card;
+    sy->n_un.n_strx = (int32)symbolPointer->aOFData.stringPosition;
+    sy->n_other = 0;
+    sy->n_desc = 0;
+    if (symbolPointer->u.s.sdt == FixedSDT) {
+      if (symbolPointer->u.s.fst == AbsoluteFST) {
+        sy->n_type = N_ABS;
+      } else {
+        /* Need area type */
+        if (input_style == ObjAsmIS) {
+          aof_area *dec;
+          dec = GetArea(symbolPointer->area);
+          sy->n_type = (dec->area_attributes & AOF_CODEAT) ? N_TEXT :
+            (dec->area_attributes & AOF_0INITAT) ? N_BSS : N_DATA;
+        } else {
+          sy->n_type = (segment_type == CodeST) ? N_TEXT :
+            (segment_type == DataST) ? N_DATA : N_BSS;
+        };
+      }; /* if */
+    } else {
+      sy->n_type = 0; /* Imported symbol */
+    }; /* if */
+    if (external) sy->n_type |= N_EXT;
+    if (weak) {
+      Report(AsmError,errors_BadWeak);
+      return;
+    };
+  }; /* if */
+  i = symbolPointer->aOFData.stringPosition;
+/* Not necessary for style 150!
+  if (output_style == ADotOutOS) i += 4;
+*/
+  memcpy(stringTable+i, name.key, (size_t)name.length);
+  stringTable[i+name.length] = 0; /* Terminate */
+} /* End AddSymbolToTable */
+
+void AddAreaDeclaration(SymbolPointer ptr, CARDINAL alignment, CARDINAL attr)
+{
+  AreaDeclarationPointer areaPtr;
+  switch (pass) {
+    case 1:
+    if (area == NULL) {
+      area = (AreaDeclarationPointer) mymalloc(sizeof(*area));
+      areaPtr = area;
+      totalAreas = 1;
+    } else {
+      totalAreas++;
+      areaPtr = area;
+      while (areaPtr->next != NULL) areaPtr = areaPtr->next;
+      areaPtr->next = (AreaDeclarationPointer) mymalloc(sizeof(*areaPtr->next));
+      areaPtr = areaPtr->next;
+    }
+    areaPtr->next = NULL;
+    if (ptr != NULL)
+        areaPtr->name = ptr->key;
+    else
+        areaPtr->name = debug_area;
+    areaPtr->dec.area_attributes = (int32)attr + alignment;
+    areaPtr->dec.area_base = 0;      /*Default*/
+    if (ptr && ptr->aOFData.symbolId == SymbolIdUnset)
+    { areaPtr->dec.area_name = stringOffset;
+      AddSymbol(ptr);
+    }
+    else
+      areaPtr->dec.area_name =
+         (ptr) ? ptr->aOFData.stringPosition : stringOffset;
+    if (!ptr) stringOffset += debug_area.length + 1;
+    areaPtr->dec.area_nrelocs = 0;
+    currArea = areaPtr;
+    if (asmMode == AbsoluteAM)
+    { areaPtr->dec.area_attributes |= AOF_ABSAT;
+      areaPtr->dec.area_base = programCounter;
+    }
+    header.aof_nareas++;
+    break;
+
+    case 2:
+    currArea = (currArea==NULL || currArea->next==NULL) ? area : currArea->next;
+    noInitArea = (currArea->dec.area_attributes & AOF_0INITAT) != 0;
+  }; /* case */
+  area_is_code = (currArea->dec.area_attributes & AOF_CODEAT) != 0;
+} /* End AddAreaDeclaration */
+
+BOOLEAN FakeFirstAreaDeclaration()
+{ Name name;
+  SymbolPointer symbolPointer;
+
+  name.length = 7;
+  name.key = "$$$$$$$";
+  symbolPointer = LookupFixed(name, FALSE);
+  if ((symbolPointer == NULL) ||
+    ((symbolPointer)->u.s.sds != UndefinedSDS)) {
+    Report(AsmError,errors_MulDefSym);
+    return FALSE;
+  }
+  Report(ReportWarning,code_fakefirstareadecl);
+  AddDef(symbolPointer);
+  /*Symbol is defined and label type and relocatable*/
+  symbolPointer->area = areaNumber = 1;
+  symbolPointer->u.s.fst = RelocatableFST;
+  symbolPointer->u.s.sds = DefinedSDS;
+  symbolPointer->u.s.sdt = FixedSDT;
+  symbolPointer->length = 0;
+  symbolPointer->value.card = programCounter;
+  AddAreaDeclaration(symbolPointer, /* alignment */ 2, /* attrs */ AOF_CODEAT);
+  return TRUE;
+}
+
+void P1InitAreas(void)
+{
+  AreaDeclarationPointer ptr = area,
+                         temp;
+
+  while (ptr != NULL) {
+    temp = ptr->next;
+    free(ptr);
+    ptr = temp;
+  }; /* while */
+  area = NULL;
+  currArea = NULL;
+  segment_type = CodeST;
+  area_is_code = TRUE;
+  code_size = 0;
+  data_size = 0;
+  bss_size = 0;
+} /* End P1InitAreas */
+
+void P2InitAreas(void)
+{
+  currArea = NULL;
+  segment_type = CodeST;
+  area_is_code = TRUE;
+  code_size = 0;
+  data_size = 0;
+  bss_size = 0;
+} /* End P2InitAreas */
+
+void DumpSymbolTable(void)
+{
+  /*Now output the area ChunkEntry*/
+  endAreaPtr = (CARDINAL)ftell(codeStream);
+  if (output_style == AofOS) {
+    fseek(codeStream, 3*sizeof(int32) + sizeof(cf_entry), SEEK_SET);
+    memcpy(chunkEntry.cfe_key, OBJ_AREA, 8);
+    chunkEntry.cfe_offset = bytesex_hostval(endHeaderPtr);
+    chunkEntry.cfe_size =
+      bytesex_hostval((int32)endAreaPtr - (int32)endHeaderPtr);
+    fwrite(&chunkEntry, 1, sizeof(cf_entry), codeStream);
+    fseek(codeStream, endAreaPtr, SEEK_SET);
+    if (bytesex_reversing) {
+      unsigned i = 0;
+      while (i < (symbolId * sizeof(aof_symbol))/sizeof(unsigned32)) {
+        unsigned32 a = bytesex_hostval(((unsigned32 *)extern_symbolTable)[i++]);
+        fwrite(&a, 1, sizeof(unsigned32), codeStream);
+      };
+    } else
+      /*********More work required here */
+      fwrite(extern_symbolTable, 1, (size_t)symbolId * sizeof(aof_symbol),
+          codeStream);
+  } else {
+    fwrite(aout_symbolTable, 1, (size_t)symbolId * sizeof(struct nlist),
+          codeStream);
+  }; /* if */
+  endSymbolsPtr = (CARDINAL)ftell(codeStream);
+} /* End DumpSymbolTable */
+
+void DumpStringTable(void)
+{
+  while (stringOffset & 3) stringTable[stringOffset++] = 0;
+  fwrite(stringTable, 1, (size_t)stringOffset, codeStream);
+  endStringsPtr = (CARDINAL)ftell(codeStream);
+  if (output_style == AofOS) {
+    fprintf(codeStream, code_dumpstringtable_f1, AsmType, AsmName, Version, Special, 0);
+    endIdPtr = (CARDINAL)ftell(codeStream);
+    while (endIdPtr & 3) {
+      fputc(0, codeStream);
+      endIdPtr++;
+    }; /* while */
+    fseek(codeStream, 3*sizeof(int32) + 2*sizeof(cf_entry), SEEK_SET);
+    memcpy(chunkEntry.cfe_key, OBJ_SYMT, 8);
+    chunkEntry.cfe_offset = bytesex_hostval(endAreaPtr);
+    chunkEntry.cfe_size =
+      bytesex_hostval((int32)endSymbolsPtr - (int32)endAreaPtr);
+    fwrite(&chunkEntry, 1, sizeof(cf_entry), codeStream);
+    memcpy(chunkEntry.cfe_key, OBJ_STRT, 8);
+    chunkEntry.cfe_offset = bytesex_hostval(endSymbolsPtr);
+    chunkEntry.cfe_size =
+      bytesex_hostval((int32)endStringsPtr - (int32)endSymbolsPtr);
+    fwrite(&chunkEntry, 1, sizeof(cf_entry), codeStream);
+    memcpy(chunkEntry.cfe_key, OBJ_IDFN, 8);
+    chunkEntry.cfe_offset = bytesex_hostval(endStringsPtr);
+    chunkEntry.cfe_size =
+      bytesex_hostval((int32)endIdPtr - (int32)endStringsPtr);
+    fwrite(&chunkEntry, 1, sizeof(cf_entry), codeStream);
+  }; /* if */
+  /* Not relevant for a.out */
+} /* End DumpStringTable */
+
+void DumpHeader(void)
+{
+  CARDINAL i;
+  unsigned32 a[3];
+  a[0] = bytesex_hostval(CF_MAGIC);
+  a[1] = bytesex_hostval(MaxChunks);
+  a[2] = bytesex_hostval(NumChunks);
+  if (output_style == AofOS) {
+    /*First dump out the chunk header information*/
+    if (sizeof(cf_entry) != 16) Report(FatalError,code_dumpheader_chunkentry_size);
+    fseek(codeStream, 0, SEEK_SET);
+    fwrite(a, 1, 12, codeStream);
+    memcpy(chunkEntry.cfe_key, OBJ_HEAD, 8);
+    chunkEntry.cfe_offset =
+      bytesex_hostval(3 * sizeof(int32) + MaxChunks * sizeof(cf_entry));
+#define aof_header_size 24
+    if (sizeof(aof_header) - sizeof(aof_area) != aof_header_size)
+      Report(FatalError,code_dumpheader_aofheader_size);
+    chunkEntry.cfe_size =
+      bytesex_hostval(aof_header_size + header.aof_nareas * sizeof(aof_area));
+    for (i = 1; i <= NumChunks; i++)
+      /*Leave space for other ChunkEntrys*/
+      fwrite(&chunkEntry, 1, sizeof(cf_entry), codeStream);
+    /*Now put in some dummy chunks to keep mergecf happy*/
+    memcpy(chunkEntry.cfe_key,code_dumpheader_unused,8);
+    chunkEntry.cfe_offset = 0;
+    chunkEntry.cfe_size = 0;
+    for (i = 1; i <= MaxChunks - NumChunks; i++)
+      fwrite(&chunkEntry, 1, sizeof(cf_entry), codeStream);
+    if (bytesex_reversing) {
+      unsigned32 a[6];
+      unsigned32 i = 0;
+      if (6 * sizeof(unsigned32) != aof_header_size)
+        Report(FatalError,code_dumpheader_aofheader_size2);
+      while (i < 6) {
+        a[i] = bytesex_hostval(((unsigned32 *)&header)[i]);
+        i++;
+      };
+      fwrite(a, 1, aof_header_size, codeStream);
+    } else
+      fwrite(&header, 1, aof_header_size, codeStream);
+    endFixedHeaderPtr = (CARDINAL)ftell(codeStream);
+    for (i = 1; i <= header.aof_nareas * sizeof(aof_area); i++)
+      fputc(0, codeStream);
+    endHeaderPtr = endFixedHeaderPtr +
+      (CARDINAL)header.aof_nareas * sizeof(aof_area);
+    relocFilePtr = endHeaderPtr;
+  } else {
+    fseek(codeStream, 0, SEEK_SET);
+    /*********More work required here */
+    fwrite(&aout_header, 1, sizeof(struct exec), codeStream);
+    endFixedHeaderPtr = (CARDINAL)ftell(codeStream);
+    /* Now fill out to start of text relocation area */
+    for (i = 1; i <= aout_header.a_text + aout_header.a_data; i++)
+      fputc(0, codeStream);
+    relocFilePtr = ftell(codeStream);
+    fseek(codeStream, endFixedHeaderPtr, SEEK_SET);
+    endHeaderPtr = endFixedHeaderPtr;
+  }; /* if */
+} /* End DumpHeader */
+
+void DumpAreaDecs(void)
+{
+  AreaDeclarationPointer ptr;
+  CARDINAL l = (CARDINAL)ftell(codeStream),
+           m;
+  if (output_style == AofOS) {
+    fseek(codeStream, endFixedHeaderPtr, SEEK_SET);
+    ptr = area;
+    while (ptr != NULL) {
+      unsigned32 a[5];
+      unsigned i = 0;
+      if (5 * sizeof(unsigned32) != sizeof(aof_area))
+        Report(FatalError,code_dumpareadecs_badsize);
+      while (i < 5) {
+        a[i] = bytesex_hostval(((unsigned32 *)&ptr->dec)[i]);
+        i++;
+      };
+      fwrite(a/* was &ptr->dec*/, 1, sizeof(aof_area), codeStream);
+      m = (CARDINAL)ptr->dec.area_name;
+      if (m) {
+        memcpy(stringTable+m, ptr->name.key, (size_t)ptr->name.length);
+        /* Only copy if not the debug area name */
+        stringTable[m+ptr->name.length] = 0;
+      };
+      ptr= ptr->next;
+    }; /* while */
+  } else {
+    /* Just sort out the relocation area sizes */
+    if (input_style == ObjAsmIS) {
+      for (m = 1; m <= areaNumber; m++) {
+        aof_area *dec = GetArea(m);
+        if (dec->area_attributes & AOF_CODEAT) {
+          /*********More work required here */
+          aout_header.a_trsize =
+            dec->area_nrelocs * sizeof(struct relocation_info);
+        } else if (!(dec->area_attributes & AOF_0INITAT)) {
+          /*********More work required here */
+          aout_header.a_drsize =
+            dec->area_nrelocs * sizeof(struct relocation_info);
+        };
+      }; /* for */
+    }; /* if */
+    fseek(codeStream, 0, SEEK_SET);
+    /* Ready to output updated header */
+    /*********More work required here */
+    fwrite(&aout_header, 1, sizeof(struct exec), codeStream);
+  }; /* if */
+  fseek(codeStream, l, SEEK_SET);
+} /* End DumpAreaDecs */
+
+#endif
+
+/* End code.c */

@@ -1,0 +1,386 @@
+/* -> locallab.c
+ * Title:  Local label handling
+ * Copyright (C) 1991 Advanced RISC Machines Limited. All rights reserved.
+ */
+
+#include "constant.h"
+#include "errors.h"
+#include "globvars.h"
+#include "locallab.h"
+#include "nametyp.h"
+#ifndef AAsm
+#  include "aofvars.h"
+#endif
+#include "p1line.h"
+#include "store.h"
+#include "tables.h"
+#include "tokens.h"
+#include "vars.h"
+#include "message.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <ctype.h>
+#include <string.h>
+
+typedef enum {
+  Label, /*Just an ordinary label*/
+  Rout,  /*A routine start*/
+  Start, /*Start of table*/
+  End,   /*End of table*/
+  MacUp, /*Going up a macro level (towards source)*/
+  MacDown/*Going down a macro level (deeper into macros)*/
+  } LLType;
+
+typedef struct LocalLabel *LLPointer;
+
+typedef struct LocalLabel {
+  LLType    type;
+  CARDINAL  value, /*The PC value possibly associated with the local label*/
+            key;   /*The label name*/
+#ifndef AAsm
+  CARDINAL  area;  /* The area defining the label, only relevant for as mode */
+#endif
+  LLPointer next,  /*Forward chain*/
+            prev;  /*Backwards chain*/
+} LocalLabel;
+
+typedef enum {
+  Back,
+  Forwards,
+  Both
+  } SearchType;
+
+typedef enum {
+  Above,
+  This,
+  Any
+  } MacroLevelType;
+
+static BOOLEAN       initialised = FALSE;
+static LLPointer     lLPointer,/*The current position*/
+                     lLStart;  /*The start of the table*/
+static SymbolPointer routine;
+
+void InitLocalLabels(void)
+/*Initialise the table ready for an assembly*/
+{
+  LLPointer pointer,
+            newPointer;
+  if (pass == 1) {
+    if (initialised) {
+      pointer = lLStart;
+      while (pointer != NULL) {
+        newPointer = pointer->next;
+        free(pointer);
+        pointer = newPointer;
+      }; /* while */
+    };
+    lLStart = (LLPointer) mymalloc(sizeof(*lLStart));
+    lLStart->type = Start;
+    lLStart->prev = NULL;
+    lLStart->next = (LLPointer) mymalloc(sizeof(*lLStart));
+    lLStart->next->type = End;
+    lLStart->next->next = NULL;
+    lLStart->next->prev = lLStart;
+    initialised = TRUE;
+  };
+  lLPointer = lLStart->next;/*Pointing at the end of the table*/
+  routine = NULL;
+} /* End InitLocalLabels */
+
+static BOOLEAN MacroLevelCheck(CARDINAL currentMacroLevel, 
+                               MacroLevelType levelType)
+{
+  switch (levelType) {
+    default:
+    case Any:
+    return TRUE;
+    case This:
+    return currentMacroLevel == macroLevel;
+    case Above:
+    return currentMacroLevel <= macroLevel;
+  };
+} /* End MacroLevelCheck */
+
+#ifdef AAsm
+static BOOLEAN SearchBack(CARDINAL key,
+    CARDINAL *value, MacroLevelType levelType)
+{
+#else
+static BOOLEAN SearchBack(CARDINAL key,
+    CARDINAL *value, CARDINAL *area, MacroLevelType levelType)
+{
+#endif
+  CARDINAL  currentMacroLevel;
+  LLPointer pointer;
+
+  currentMacroLevel = macroLevel;
+  pointer = lLPointer->prev;
+  do {
+    switch (pointer->type) {
+      case Label:
+      if ((pointer->key == key) &&
+        MacroLevelCheck(currentMacroLevel, levelType)) {
+        *value = pointer->value;
+#ifndef AAsm
+        *area = pointer->area;
+#endif
+        return TRUE;
+      };
+      break;
+
+      case Rout:
+      case Start:
+      case End:
+      return FALSE;
+
+      case MacUp:
+      currentMacroLevel++;
+      break;
+
+      case MacDown:
+      currentMacroLevel--;
+
+    };
+  pointer = pointer->prev;/*Back along the chain*/
+  } while (1);
+} /* End SearchBack */
+
+#ifdef AAsm
+static BOOLEAN SearchForwards(CARDINAL key, 
+    CARDINAL *value, MacroLevelType levelType)
+{
+#else
+static BOOLEAN SearchForwards(CARDINAL key, 
+    CARDINAL *value, CARDINAL *area, MacroLevelType levelType)
+{
+#endif
+  CARDINAL  currentMacroLevel;
+  LLPointer pointer;
+
+  currentMacroLevel = macroLevel;
+  pointer = lLPointer;
+  do {
+    switch (pointer->type) {
+      case Label:
+      if ((pointer->key == key) &&
+        MacroLevelCheck(currentMacroLevel, levelType)) {
+        *value = pointer->value;
+#ifndef AAsm
+        *area = pointer->area;
+#endif
+        return TRUE;
+      };
+      break;
+
+      case Rout:
+      case Start:
+      case End:
+      return FALSE;
+
+      case MacUp:
+      currentMacroLevel--;
+      break;
+
+      case MacDown:
+      currentMacroLevel++;
+
+    };
+    pointer = pointer->next;/*Forwards along the chain*/
+  } while (1);
+} /* End SearchForwards */
+
+static BOOLEAN CheckRoutineName(char *line, CARDINAL *index)
+/*
+Check the routine name if given
+Returns TRUE if ok, FALSE if error reported
+*/
+{
+  Name     name;
+  if ((routine != NULL) && SymbolTest(line, index, &name)) {
+    /*Non-null routine name exists so check name given*/
+    if ((name.length != routine->key.length) ||
+      (memcmp(name.key, routine->key.key, (size_t)(name.length)) != 0)) {
+      Report(AsmError,errors_WrongRout);
+      return FALSE;
+    };
+  };
+  return TRUE;
+} /* End CheckRoutineName */
+
+CARDINAL LabelUse(char *line, CARDINAL *index, BOOLEAN *found, CARDINAL *area)
+{
+/*
+ * Look up the value of a local label
+ * index assumed pointing past the %
+ */
+  char           ch = toupper(line[*index]);
+  CARDINAL       value,
+                 key;
+  SearchType     searchType;
+  MacroLevelType macroLevelType;
+
+  /*Now look for the search type*/
+  searchType = Both;
+  if (ch == 'F') {
+    searchType = Forwards;
+    ch = toupper(line[++(*index)]);
+  } else if (ch == 'B') {
+    searchType = Back;
+    ch = toupper(line[++(*index)]);
+  };
+
+  /*Now look for macro level type*/
+  macroLevelType = Above;
+  if (ch == 'T') {
+    macroLevelType = This;
+    ch = line[++(*index)];
+  } else if (ch == 'A') {
+    macroLevelType = Any;
+    ch = line[++(*index)];
+  };
+
+  /*Now look for the local label number*/
+  if (!isdigit(ch)) {
+    Report(AsmError,errors_BadLocNum);
+    return 0;
+  };
+  key = DecimalNumber(line, index);
+  if (errorFound || !CheckRoutineName(line, index)) return 0;
+
+  /*Now search for the defining occurrence*/
+  switch (searchType) {
+    case Both:
+    *found = SearchBack(key, &value,
+#ifndef AAsm
+      area,
+#endif
+      macroLevelType) ||
+      SearchForwards(key, &value,
+#ifndef AAsm
+      area,
+#endif
+      macroLevelType);
+    break;
+
+    case Back:
+    *found = SearchBack(key, &value,
+#ifndef AAsm
+      area,
+#endif
+      macroLevelType);
+    break;
+
+    case Forwards:
+    *found = SearchForwards(key, &value,
+#ifndef AAsm
+      area,
+#endif
+      macroLevelType);
+    break;
+  }
+  return value;
+} /* End LabelUse */
+
+static void AddEntry(LLType type)
+{
+  LLPointer temp  = lLPointer->prev;
+  temp->next = (LLPointer) mymalloc(sizeof(*temp)); /*Create a new element*/
+  temp->next->prev = temp;            /*Insert its back link*/
+  temp->next->next = lLPointer;       /*Insert its forward link*/
+  lLPointer->prev = temp->next;       /*Point back to it from the end*/
+  temp->next->type = type;
+} /* End AddEntry */
+
+void LabelDef(char *line, CARDINAL *index)
+/*
+Define a local label from within the text
+index assumed pointing at a decimal digit
+*/
+{
+  CARDINAL  name;
+  LLPointer temp;
+
+  /*First check the syntax*/
+  name = DecimalNumber(line, index);
+  if (errorFound || !CheckRoutineName(line, index)) return;
+  if (!TermCheck(line[*index])) {
+#ifndef AAsm
+    if ((line[*index] == Colon) &&
+      (!input_style_set || (input_style == AsIS))) {
+      if (!input_style_set) SetImplicitRegisters();
+      input_style_set = TRUE;
+      input_style = AsIS;
+      output_style_set = TRUE;
+      output_style = ADotOutOS;
+      if (!TermCheck(line[++(*index)])) {
+        Report(AsmError,errors_SynAfterLocLab);
+        return;
+      };
+    } else {
+#endif
+      Report(AsmError,errors_SynAfterLocLab);
+      return;
+#ifndef AAsm
+    };
+  } else {
+    /* Valid terminator before : implies ObjAsm style or error */
+    if (!input_style_set) {
+      input_style_set = TRUE;
+      input_style = ObjAsmIS;
+      if (line[*index] == AtSymbol) {
+        Report(AsmError,errors_BadLocNum);
+        return;
+      }; /* if */
+    } else {
+      if (input_style == AsIS) {
+        Report(AsmError,errors_BadLocNum);
+        return;
+      };  /* if */
+    }; /* if */
+#endif
+  };
+  while (isWhiteSpace(line[*index])) (*index)++;
+
+  /*Now handle according to pass*/
+  if (pass == 1) {
+    /*Define the label*/
+    AddEntry(Label);
+    temp = lLPointer->prev;   /*The new element*/
+    temp->value = programCounter;/*The value of the local label*/
+    temp->key = name;            /*The name of the local label*/
+#ifndef AAsm
+    temp->area = areaNumber;
+#endif
+  } else
+    /*Pass the definition in the table*/
+    lLPointer = lLPointer->next;
+} /* End LabelDef */
+
+void NewRoutine(SymbolPointer symbolPointer)
+/*Define a new routine name*/
+{
+  routine = symbolPointer;
+  if (pass == 1)
+    /*Remember new name*/
+
+    /*Generate a new entry for it*/
+    AddEntry(Rout);
+  else lLPointer = lLPointer->next;
+} /* End NewRoutine */
+
+void MacroUp(void)
+/*Add an end of macro token to the table*/
+{
+  if (pass == 1) AddEntry(MacUp);
+  else lLPointer = lLPointer->next;
+} /* End MacroUp */
+
+void MacroDown(void)
+/*Add a start of macro token to the table*/
+{
+  if (pass == 1) AddEntry(MacDown);
+  else lLPointer = lLPointer->next;
+} /* End MacroDown */
+
+/* End locallab.c */

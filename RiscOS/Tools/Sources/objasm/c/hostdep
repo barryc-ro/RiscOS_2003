@@ -1,0 +1,183 @@
+/* hostdep.c
+ * Title:      Encapsulate machine dependent bits in one module
+ * Copyright (C) 1989 Acorn Computers Limited
+ * Copyright (C) 1991-2 Advanced RISC Machines Limited. All rights reserved.
+ */
+
+
+/*
+ * IDJ: 26-Apr-94: changed so that Acorn can use the ROM C library, so we
+ * rename things to use the old names (eg _kernel_swi etc).
+ */
+
+
+#include "hostdep.h"
+
+#ifdef HOST_IS_RISCOS
+
+#include <stdio.h>
+#include <signal.h>
+#include <stdlib.h>
+#include <string.h>
+#ifdef __acorn
+#include "kernel.h"
+#define __riscos_swi_regs      _kernel_swi_regs
+#define __riscos_error         _kernel_oserror
+#define __riscos_swi(a,b,c)    _kernel_swi((a),(b),(c))
+#define __riscos_osfile_block  _kernel_osfile_block
+#define __riscos_osfile(a,b,c) _kernel_osfile((a),(b),(c))   
+#else
+#include <riscos.h>
+#endif
+
+#include "asm.h"
+#include "constant.h"
+#include "errors.h"
+#include "globvars.h"
+#include "ddeswis.h"
+#include "message.h"
+
+#define EscAck     0x7E
+#define ReadAll    5
+#define WriteLoad  2
+#define WriteExec  3
+#define SetType    0x12
+
+#define OS_CLI     0x5
+
+static int escape = 0;
+
+static char firstfile[MaxLineLength+1];
+
+static BOOLEAN throwback = FALSE,
+               got_throwback = FALSE;
+
+static int throwback_session_id;
+
+BOOLEAN PollEscape(void)
+{
+  int i = escape;
+  if (i || _kernel_escape_seen()) {
+    fprintf(stderr,hostdep_pollescape_esc);
+    totalErrors++;
+  }
+  escape = 0;
+  return i;
+}
+
+void SetLoadAndExec(CARDINAL address)
+{
+  __riscos_osfile_block block;
+
+  block.load = (int)address;
+  (void)__riscos_osfile(WriteLoad, codeFileName, &block);
+  block.exec = (int)address;
+  (void)__riscos_osfile(WriteExec, codeFileName, &block);
+}
+
+static void settype(unsigned int type)
+{
+  __riscos_osfile_block block;
+  block.load = type;
+  (void)__riscos_osfile(SetType, codeFileName, &block);
+}
+
+void StampModule(BOOLEAN type)
+{
+  settype((type) ? 0xFFA : 0xFF8);
+}
+
+static void EscapeHandler(int sig)
+{ sig = sig;
+  escape = 1;
+  signal(SIGINT, EscapeHandler);
+}
+
+void Init_osd(void)
+{ escape = 0;
+  signal(SIGINT, EscapeHandler);
+}
+
+void set_throwback(BOOLEAN bool)
+{
+  throwback = bool;
+}
+
+static void throwback_send_file(void)
+/* Used at most once, to give the top level file name */
+{
+  __riscos_swi_regs regs;
+  __riscos_error *err;
+  regs.r[0] = SWI_Throwback_SendReason_Processing;
+  regs.r[1] = throwback_session_id;
+  regs.r[2] = (int)firstfile;
+  err = __riscos_swi(SWI_Throwback_Send, &regs, &regs);
+  if (err) {
+    Report(ReportInfo,hostdep_throwback_sf_unable,err->errnum, err->errmess);
+    exit(1);
+  }
+}
+
+void throwback_start(void)
+{
+  if (throwback && !got_throwback) {
+    __riscos_swi_regs regs;
+    __riscos_error *err = __riscos_swi(SWI_Throwback_Start, &regs, &regs);
+    throwback_session_id = regs.r[1];
+    if (err) {
+      Report(ReportInfo,hostdep_throwback_start_unable,err->errnum, err->errmess);
+      exit(1);
+    }
+    got_throwback = TRUE;
+    throwback_send_file();
+  }
+}
+
+void throwback_send_error(char *filename, int line, char *error, int level)
+{
+  if (throwback) {
+    __riscos_swi_regs regs;
+    __riscos_error *err;
+    regs.r[0] = SWI_Throwback_SendReason_ErrorDetails;
+    regs.r[1] = throwback_session_id;
+    regs.r[2] = (int)filename;
+    regs.r[3] = line;
+    regs.r[4] = level; /* Severity */
+    regs.r[5] = (int)error;
+    err = __riscos_swi(SWI_Throwback_Send, &regs, &regs);
+    if (err) {
+      Report(ReportInfo,hostdep_throwback_se_unable,err->errnum, err->errmess);
+      exit(1);
+    }
+  }
+}
+
+void throwback_end(void)
+{
+  if (throwback && got_throwback) {
+    __riscos_swi_regs regs;
+    __riscos_error *err;
+    regs.r[0] = throwback_session_id;
+    err = __riscos_swi(SWI_Throwback_End, &regs, &regs);
+    if (err) {
+      Report(ReportInfo,hostdep_throwback_end_unable,err->errnum, err->errmess);
+      exit(1);
+    }
+    throwback = FALSE;
+    got_throwback = FALSE;
+  }
+}
+
+void set_first_file(char *filename)
+{
+  strncpy(firstfile, filename, MaxLineLength);
+  firstfile[MaxLineLength] = 0;
+}
+
+#endif /* HOST_IS_RISCOS */
+
+#ifdef __ZTC__
+unsigned int _stack = 16*1024;    /* set stack size for Zortech C... Yuk. */
+#endif
+
+/* End hostdep.c */

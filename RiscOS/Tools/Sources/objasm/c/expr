@@ -1,0 +1,1046 @@
+/* -> expr.c
+ * Title: Expression parser
+ * Copyright (C) 1991 Advanced RISC Machines Limited. All rights reserved.
+ * RCS $Revision$
+ */
+
+#include "p1line.h"
+#include "apply.h"
+#ifndef AAsm
+#  include "aofvars.h"
+#  include "code.h"
+#  include "getline.h"
+#  include "locallab.h"
+#endif
+#include "constant.h"
+#include "errors.h"
+#include "exprstor.h"
+#include "exprtyp.h"
+#include "expr.h"
+#include "globvars.h"
+#include "nametyp.h"
+#include "occur.h"
+#include "tables.h"
+#include "tokens.h"
+#include "vars.h"
+#include "message.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+
+static char       exprString[MaxStringSize];
+static CARDINAL   stackPointer;
+static BOOLEAN    initialised = FALSE;
+static Name       shiftTable[6];/*5 => 0*/
+static StringName stringName;
+
+
+/* 
+ * IDJ: 20-nov-94: bug fix from ARM to fix op prec bug, caused by
+ *                 priorities table being incomplete (bug ref:AQU-00039)
+ */
+
+#if 0
+static CARDINAL   priorities[] = /*The operator precedences*/
+{
+  /* STBot*/ 0,
+  /* STTop*/ 0,
+  /* Bra*/ 8,
+  /* Ket*/ 0,
+  /* LAnd*/ 1,
+  /* LOr*/ 1,
+  /* LEor*/ 1,
+  /* Less*/ 2,
+  /* OpEquals*/ 2,
+  /* LessEquals*/ 2,
+  /* Greater*/ 2,
+  /* NotEquals*/ 2,
+  /* GreaterEquals*/ 2,
+  /* Plus*/ 3,
+  /* Minus*/ 3,
+  /* Ror*/ 4,
+  /* Rol*/ 4,
+  /* Shr*/ 4,
+  /* Shl*/ 4,
+  /* BAnd*/ 3,
+  /* BOr*/ 3,
+  /* BEor*/ 3,
+  /* Left*/ 5,
+  /* Right*/ 5,
+  /* Cc*/ 5,
+  /* Star*/ 6,
+  /* Slash*/ 6,
+  /* Mod*/ 6,
+  /* UPlus*/ 7,
+  /* UMinus*/ 7,
+  /* LNot*/ 7,
+  /* BNot*/ 7,
+  /* Len*/ 7,
+  /* Chr*/ 7,
+  /* Str*/ 7,
+  /* Base*/ 7,
+  /* Index*/ 7,
+#ifdef BINARY_INCLUDES
+  /* FLoad*/ 7,     /* added by NRaine */
+  /* FExec*/ 7,     /* added by NRaine */
+  /* FSize*/ 7,     /* added by NRaine */
+  /* FAttr*/ 7      /* added by NRaine */
+#endif
+};
+#endif
+
+
+static CARDINAL   priorities[] = /*The operator precedences*/
+{
+  /* STBot*/ 0,
+  /* STTop*/ 0,
+  /* Bra*/ 8,
+  /* Ket*/ 0,
+  /* LAnd*/ 1,
+  /* LOr*/ 1,
+  /* LEor*/ 1,
+  /* Less*/ 2,
+  /* OpEquals*/ 2,
+  /* LessEquals*/ 2,
+  /* Greater*/ 2,
+  /* NotEquals*/ 2,
+  /* GreaterEquals*/ 2,
+  /* Plus*/ 3,
+  /* Minus*/ 3,
+  /* Ror*/ 4,
+  /* Rol*/ 4,
+  /* Shr*/ 4,
+  /* Shl*/ 4,
+  /* BAnd*/ 3,
+  /* BOr*/ 3,
+  /* BEor*/ 3,
+  /* Left*/ 5,
+  /* Right*/ 5,
+  /* Cc*/ 5,
+  /* Star*/ 6,
+  /* Slash*/ 6,
+  /* Mod*/ 6,
+  /* UPlus*/ 7,
+  /* UMinus*/ 7,
+  /* LNot*/ 7,
+  /* BNot*/ 7,
+  /* Len*/ 7,
+  /* FLoad*/ 7,     /* added by NRaine */
+  /* FExec*/ 7,     /* added by NRaine */
+  /* FSize*/ 7,     /* added by NRaine */
+  /* FAttr*/ 7,      /* added by NRaine */
+  /* Chr*/ 7,
+  /* Str*/ 7,
+  /* Base*/ 7,
+  /* Index*/ 7,
+  /* Defined*/ 7,
+  /* ODummy */ 7
+};
+
+static void ShiftInit(void)
+/*Initialise table of shifters*/
+
+{
+  CopyName(0, "ASL", shiftTable);
+  CopyName(1, "LSR", shiftTable);
+  CopyName(2, "ASR", shiftTable);
+  CopyName(3, "ROR", shiftTable);
+  CopyName(4, "RRX", shiftTable);
+  CopyName(5, "LSL", shiftTable);
+  initialised = TRUE;
+} /* End ShiftInit */
+
+
+CARDINAL CPSRorSPSR(char *line, CARDINAL *index)
+{
+/* Returns: 0       - not matched
+            1       - CPSR
+            2       - SPSR
+           +4       - ctl only
+           +8       - flg only
+          +12       - ctl + flg
+ */
+  Name     name;
+  CARDINAL value, len;
+
+  while (isWhiteSpace(line[*index])) (*index)++;
+  if (!SymbolTest(line, index, &name)) return 0;
+  if ((len = name.length) != 4 && len != 8) return 0;
+  if (strncmp(name.key, "CPSR", 4) == 0 ||
+      strncmp(name.key, "cpsr", 4) == 0)
+    value = 1;
+  else if (strncmp(name.key, "SPSR", 4) == 0 ||
+           strncmp(name.key, "spsr", 4) == 0)
+    value = 2;
+  else
+    return 0;
+  if (len == 8)
+  { if (strncmp(name.key+4, "_ctl", 4) == 0)
+      value += 4;
+    else if (strncmp(name.key+4, "_flg", 4) == 0)
+      value += 8;
+    else if (strncmp(name.key+4, "_all", 4) == 0)
+      value += 12;
+    else
+      value = 0;
+  }
+  return value;
+}
+
+
+CARDINAL ShiftedRegister(char *line,
+  CARDINAL *index,
+  BOOLEAN   allowRegisterShift)
+/*This actually returns a twelve bit value suitable for ORing into the opcode*/
+{
+  CARDINAL value,
+           shift,
+           shifter;
+  Name     name;
+  BOOLEAN  defined;
+  char     temp[3];
+
+  if (!initialised) ShiftInit();
+  value = RegisterExpr(line, index);
+  if (errorFound) return 0;
+  if (line[*index] != Comma) return value;
+  (*index)++;
+  /*Now sort out the shifted part*/
+  while (isWhiteSpace(line[*index])) (*index)++;
+  if (!SymbolTest(line, index, &name)) {
+     Report(AsmError,errors_BadShift);
+     return 0;
+  }; /* if */
+  temp[2] = 0;
+  for (shift = 0; shift <= 2; shift++)
+  { if (!islower(name.key[shift])) break;
+    temp[shift] = toupper(name.key[shift]);
+  }
+  if (shift == 3) name.key = temp;
+  if ((name.length != 3) ||
+    !NameLookup(shiftTable, name, FALSE, &shifter, 6)) {
+    Report(AsmError,errors_UnkShift);
+    return 0;
+  }; /* if */
+  /*Now we may look for further register or immediate operand*/
+  if (shifter == 5) shifter = 0;
+  if (shifter == 4) return value + 0x60;
+  while (isWhiteSpace(line[*index])) (*index)++;
+  if (line[*index] != Hash) {
+    if (allowRegisterShift)
+       return RegisterExpr(line, index)*0x100 + shifter*0x20 + 0x10 + value;
+     Report(AsmError,errors_HashMissing);
+     return 0;
+  }; /* if */
+
+  (*index)++;
+  shift = ConstantExpr(line, index, FALSE, &defined);
+  if (errorFound) return 0;
+  switch (shifter) {
+    case 0:
+    if (shift <= 31) return shift*0x80 + value;
+    break;
+ 
+    case 1:
+    if ((shift >= 1) && (shift <= 32)) return (shift % 32)*0x80 + 0x20 + value;
+    break;
+ 
+    case 2:
+    if ((shift >= 1) && (shift <= 32)) return (shift % 32)*0x80 + 0x40 + value;
+    break;
+ 
+    case 3:
+    if ((shift >= 1) && (shift <= 31)) return shift*0x80 + 0x60 + value;
+  }; /* case */
+  Report(AsmError,errors_ShiftOpt);
+  return 0;
+} /* End ShiftedRegister */
+
+CARDINAL AnyRegisterExpr(char *line, CARDINAL *index, BOOLEAN *Int)
+/*Just read and return the value of a register symbol*/
+{
+  Name          name;
+  SymbolPointer symbolPointer;
+
+  while (isWhiteSpace(line[*index])) (*index)++;
+  if (!SymbolTest(line, index, &name)) {
+    Report(AsmError,errors_BadSym);
+    return 0;
+  }; /* if */
+  while (isWhiteSpace(line[*index])) (*index)++;
+  symbolPointer = LookupRef(name, FALSE);
+  if ((symbolPointer == NULL) || (symbolPointer->u.s.sdt != RegisterNameSDT) ||
+    ((symbolPointer->u.s.rt != IntRT) && (symbolPointer->u.s.rt != RealRT))) {
+    Report(AsmError,errors_BadReg);
+    return 0;
+  }; /* if */
+  *Int = symbolPointer->u.s.rt == IntRT;
+  AddUse(symbolPointer);
+  return symbolPointer->value.card;
+} /* End AnyRegisterExpr */
+
+CARDINAL RegisterExpr(char *line, CARDINAL *index)
+/*Just read and return the value of a register symbol*/
+{
+  Name          name;
+  SymbolPointer symbolPointer;
+
+  while (isWhiteSpace(line[*index])) (*index)++;
+  if (!SymbolTest(line, index, &name)) {
+    Report(AsmError,errors_BadSym);
+    return 0;
+  }; /* if */
+  while (isWhiteSpace(line[*index])) (*index)++;
+  symbolPointer = LookupRef(name, FALSE);
+  if ((symbolPointer == NULL) || (symbolPointer->u.s.sdt != RegisterNameSDT) ||
+    (symbolPointer->u.s.rt != IntRT)) {
+    Report(AsmError,errors_BadReg);
+    return 0;
+  }
+  AddUse(symbolPointer);
+  if (pass == 1 && nofp != 0 && symbolPointer->value.card == nofp &&
+      strcmp(symbolPointer->key.key, "fp") == 0)
+    Report(ReportWarning, expr_fp_used_nofp);
+  return symbolPointer->value.card;
+} /* End RegisterExpr */
+
+CARDINAL FPRegisterExpr(char *line, CARDINAL *index)
+/*Just read and return the value of a floating point register symbol*/
+{
+  Name          name;
+  SymbolPointer symbolPointer;
+
+  while (isWhiteSpace(line[*index])) (*index)++;
+  if (!SymbolTest(line, index, &name)) {
+    Report(AsmError,errors_BadSym);
+    return 0;
+  }; /* if */
+  while (isWhiteSpace(line[*index])) (*index)++;
+  symbolPointer = LookupRef(name, FALSE);
+  if ((symbolPointer == NULL) || (symbolPointer->u.s.sdt != RegisterNameSDT) ||
+    (symbolPointer->u.s.rt != RealRT)) {
+    Report(AsmError,errors_BadReg);
+    return 0;
+  }; /* if */
+  if (symbolPointer->value.card >= 16) Report(AsmError,errors_FPRegRange);
+  AddUse(symbolPointer);
+  return symbolPointer->value.card;
+} /* End FPRegisterExpr */
+
+CARDINAL CPRegisterExpr(char *line, CARDINAL *index)
+/*Just read and return the value of a coprocessor register symbol*/
+{
+  Name          name;
+  SymbolPointer symbolPointer;
+
+  while (isWhiteSpace(line[*index])) (*index)++;
+  if (!SymbolTest(line, index, &name)) {
+    Report(AsmError,errors_BadSym);
+    return 0;
+  }; /* if */
+  while (isWhiteSpace(line[*index])) (*index)++;
+  symbolPointer = LookupRef(name, FALSE);
+  if ((symbolPointer == NULL) || (symbolPointer->u.s.sdt != RegisterNameSDT) ||
+    (symbolPointer->u.s.rt != CopRRT)) {
+    Report(AsmError,errors_BadReg);
+    return 0;
+  }; /* if */
+  if (symbolPointer->value.card >= 16) Report(AsmError,errors_CPRegRange);
+  AddUse(symbolPointer);
+  return symbolPointer->value.card;
+} /* End CPRegisterExpr */
+
+CARDINAL CPNameExpr(char *line, CARDINAL *index)
+/*Just read and return the value of a coprocessor name symbol*/
+{
+  Name          name;
+  SymbolPointer symbolPointer;
+
+  while (isWhiteSpace(line[*index])) (*index)++;
+  if (!SymbolTest(line, index, &name)) {
+    Report(AsmError,errors_BadSym);
+    return 0;
+  }; /* if */
+  while (isWhiteSpace(line[*index])) (*index)++;
+  symbolPointer = LookupRef(name, FALSE);
+  if ((symbolPointer == NULL) || (symbolPointer->u.s.sdt != RegisterNameSDT) ||
+    (symbolPointer->u.s.rt != CopNRT)) {
+    Report(AsmError,errors_BadReg);
+    return 0;
+  }; /* if */
+  if (symbolPointer->value.card >= 16) Report(AsmError,errors_CPNameRange);
+  AddUse(symbolPointer);
+  return symbolPointer->value.card;
+} /* End CPNameExpr */
+
+BOOLEAN LogicalExpr(char *line, CARDINAL *index)
+{
+  BOOLEAN defined;
+  return AssertExpr(line, index, FALSE, &defined);
+} /* End LogicalExpr */
+
+static void Expression(char *line, CARDINAL *index, BOOLEAN allowUnd,
+    BOOLEAN  *defined)
+{
+/*
+Evaluate as far as possible an expression
+*/
+#define HeapSize 1024 /*Amount of heap allocated for string bashing*/
+  char        exprHeap[HeapSize];
+  EStackEntry eStackEntry;
+  Operator    prevOp,
+              op;
+  BOOLEAN     tokDefined;
+  CARDINAL    i;
+
+  InitExprStore(exprHeap, HeapSize);
+  InitTokens();
+  *defined = TRUE;/*So far the expression is defined*/
+  stackPointer = 0;
+  /*Initialise the stack*/
+  
+  eStack[0].type = OperatorEST;
+  eStack[0].u.operater = STBot;
+  prevOp = STBot;
+  op = STBot;
+  
+  /*The start of the evaluation loop*/
+  do {
+    stackPointer++;
+    Token(line, index, &eStack[stackPointer], &tokDefined);
+    if (errorFound) return;
+    if (eStack[stackPointer].type == OperatorEST) {
+      prevOp = op;
+      /*Better be unary or Bra otherwise we shall moan*/
+      if (eStack[stackPointer].u.operater == Plus)
+        eStack[stackPointer].u.operater = UPlus;
+      else if (eStack[stackPointer].u.operater == Minus)
+        eStack[stackPointer].u.operater = UMinus;
+      op = eStack[stackPointer].u.operater;
+      if ((op != Bra) && (op < UPlus)) {
+        /*It's a binary operator so it's an error and we give up*/
+        Report(AsmError,errors_UnExpOp);
+        return;
+      }; /* if */
+    } else {
+      *defined = *defined && tokDefined;/*Update expression definition status*/
+      if (!(*defined || allowUnd)) {
+        Report(AsmError,errors_UnDefSym);
+        return;
+      };
+      /*Now we go look for an operator*/
+      do {
+        if (AllComment(line, index) || (line[*index] == ']')) {
+          prevOp = op;
+          op = STTop;
+        } else {
+          Token(line, index, &eStackEntry, &tokDefined);
+          if (errorFound) return;
+          if (eStackEntry.type != OperatorEST) {
+            Report(AsmError,errors_UnExpOpnd);
+            return;
+          };
+          prevOp = op;
+          op = eStackEntry.u.operater;
+          if (op >= UPlus) {
+            Report(AsmError,errors_UnExpUnOp);
+            return;
+          }; /* if */
+        }; /* if */
+        if (op == STTop) {
+          while ((prevOp != STBot) && !errorFound)
+             /*Apply previous operator until run out of them*/
+             Apply(&prevOp, &stackPointer);
+          if (errorFound) return;
+          /*
+          Here we've arrived at the bottom of the stack
+          so check we're not returning a string that's going to go away
+          */
+          if (eStack[1].u.operand.operandType == StringOT) {
+            for (i = 1; i <= eStack[1].u.operand.u.string.length; i++)
+              exprString[i-1] = eStack[1].u.operand.u.string.key[i-1];
+            eStack[1].u.operand.u.string.key = exprString;
+          };
+          return;
+        }; /* if */
+        /*Now we're sure it's an operator*/
+        if (op == Ket) {
+          while ((prevOp != Bra) && (prevOp != STBot) && !errorFound)
+            Apply(&prevOp, &stackPointer);
+          if (errorFound) return;
+          if (prevOp == STBot) {
+            Report(AsmError,errors_BraMiss);
+            return;
+          }; /* if */
+          /*Throw away Bra and Ket and look for an operator*/
+          ShuffleDown(stackPointer-1, stackPointer, &prevOp);
+          stackPointer--;
+          op = prevOp;
+        } else {
+          while ((priorities[prevOp] >= priorities[op]) &&
+            (prevOp != Bra) && !errorFound)
+             /*Here we attempt to do the previous operator*/
+             Apply(&prevOp, &stackPointer);
+          if (errorFound) return;
+          /*Just stack the current operator as it's of higher priority*/
+          stackPointer++;
+          eStack[stackPointer].type = OperatorEST;
+          eStack[stackPointer].u.operater = op;
+          break;/*Going to look for an operand now*/
+        }; /* if */
+      } while (1); /* Loop */
+    }; /* if */
+  } while (1); /* Loop */
+} /* End Expression */
+
+BOOLEAN AssertExpr(char *line,
+  CARDINAL *index,
+  BOOLEAN   allowUnd, 
+  BOOLEAN  *defined)
+{
+  Expression(line, index, allowUnd, defined);
+  if (!errorFound && *defined) {
+    if (eStack[1].u.operand.operandType == LogicalOT)
+      return eStack[1].u.operand.u.bool;
+    Report(AsmError,errors_BadExprType);
+  }; /* if */
+  return FALSE;
+} /* End AssertExpr */
+
+CARDINAL FPConstant(char *line, CARDINAL *index)
+{
+  char ch;
+
+  while (isWhiteSpace(line[*index])) (*index)++;
+  ch = line[*index];
+  (*index)++;
+  switch (ch) {
+    case '0':
+    if (line[*index] != Dot) return 0;
+    (*index)++;
+    if (line[*index] != '5') {
+      Report(AsmError,errors_BadFPCon);
+      return 0;
+    }; /* if */
+    (*index)++;
+    return 6;
+
+    case '1':
+    if (line[*index] != '0') return 1;
+    (*index)++;
+    return 7;
+
+    case '2':
+    case '3':
+    case '4':
+    case '5':
+    return (CARDINAL)ch - '0';
+
+    default:
+    (*index)++;
+    Report(AsmError,errors_BadFPCon);
+    return 0;
+  }; /* case */
+} /* End FPConstant */
+
+CARDINAL ConstantExpr(char *line,
+  CARDINAL *index,
+  BOOLEAN   allowUnd, 
+  BOOLEAN  *defined)
+{
+  CARDINAL oindex=*index;
+  Expression(line, index, allowUnd, defined);
+  if (errorFound || !*defined) return 0;
+  switch (eStack[1].u.operand.operandType) {
+    case ConstantOT:
+    return eStack[1].u.operand.u.constant;
+
+    case StringOT:
+    if (eStack[1].u.operand.u.string.length == 1)
+      return eStack[1].u.operand.u.string.key[0];
+   }; /* case */
+  Report(AsmError, errors_ExpectedConstExpr,oindex);
+  return 0;
+} /* End ConstantExpr */
+
+
+CARDINAL ConstantOrAddressExpr(char *line,
+  CARDINAL    *index, 
+  OperandType *type,
+  BOOLEAN      allowUnd, 
+  BOOLEAN     *defined)
+{
+  CARDINAL oindex=*index;
+  Expression(line, index, allowUnd, defined);
+  if (!errorFound && *defined) {
+    *type = eStack[1].u.operand.operandType;
+    switch (*type) {
+      case ConstantOT:
+      return eStack[1].u.operand.u.constant;
+
+      case PCRelOT:
+      return eStack[1].u.operand.u.pLabel;
+
+      case StringOT:
+      *type = ConstantOT;
+      if (eStack[1].u.operand.u.string.length == 1)
+        return eStack[1].u.operand.u.string.key[0];
+
+     }; /* case */
+     Report(AsmError,errors_ExpectedConstOrAddrExpr,oindex);
+     return 0;
+
+  }; /* if */
+  return 0;
+} /* End ConstantOrAddressExpr */
+
+CARDINAL NotStringExpr(char *line,
+  CARDINAL    *index, 
+  CARDINAL    *reg,
+  OperandType *type, 
+  BOOLEAN      allowUnd,
+  BOOLEAN     *defined)
+{
+  CARDINAL i,
+           j;
+
+  Expression(line, index, allowUnd, defined);
+  if (errorFound || !*defined) return 0;
+  *type = eStack[1].u.operand.operandType;
+  switch (*type) {
+    case ConstantOT:
+    return eStack[1].u.operand.u.constant;
+
+    case PCRelOT:
+    return eStack[1].u.operand.u.pLabel;
+
+    case RegRelOT:
+    j = 0;
+    for (i = 0; i <= 15; i++) {
+      j += abs(eStack[1].u.operand.u.regRel.registers[i]);
+        /* Could be negative */
+      if (eStack[1].u.operand.u.regRel.registers[i] != 0) *reg = i;
+    }; /* for */
+    if (j == 1) return eStack[1].u.operand.u.regRel.offset;
+    break;
+
+    case StringOT:
+    *type = ConstantOT;
+    if (eStack[1].u.operand.u.string.length == 1)
+      return eStack[1].u.operand.u.string.key[0];
+
+   }; /* case */
+  Report(AsmError,errors_BadExprType);
+  return 0;
+} /* End NotStringExpr */
+
+CARDINAL AddressExpr(char *line,
+  CARDINAL *index,
+  BOOLEAN   allowUnd, 
+  BOOLEAN  *defined)
+{
+  CARDINAL oindex=*index;
+  Expression(line, index, allowUnd, defined);
+  if (!errorFound && *defined) {
+    switch (eStack[1].u.operand.operandType) {
+      case PCRelOT:
+      return eStack[1].u.operand.u.pLabel;
+
+      case ConstantOT:
+      if (asmMode == AbsoluteAM) return eStack[1].u.operand.u.constant;
+    }
+    Report(AsmError,errors_ExpectedAddrExpr,oindex);
+    return 0;
+  }; /* if */
+  return 0;
+} /* End AddressExpr */
+
+void StringExpr(char *line, CARDINAL *index, Name *string)
+{
+  CARDINAL oindex=*index;
+  BOOLEAN defined;
+  Expression(line, index, FALSE, &defined);
+  string->length = 0;
+  if (!errorFound) {
+    if (eStack[1].u.operand.operandType != StringOT)
+      Report(AsmError,errors_ExpectedStringExpr,oindex);
+    else *string = eStack[1].u.operand.u.string;
+  }; /* if */
+} /* End StringExpr */
+
+CARDINAL RegisterRelExpr(char *line,
+  CARDINAL *index,
+  CARDINAL *reg,
+  BOOLEAN   allowUnd, 
+  BOOLEAN  *defined)
+{
+  CARDINAL i, j, ri;
+  CARDINAL oindex=*index;
+  Expression(line, index, allowUnd, defined);
+  if (errorFound || !*defined) return 0;
+  switch (eStack[1].u.operand.operandType) {
+    case RegRelOT:
+    j = 0;
+    for (i = 0; i <= 15; i++) {
+/*    j += abs(eStack[1].u.operand.u.regRel.registers[i]); */
+/*    Could be negative  - Surely NOT!!! LDS - 18-Jun-91 */
+      /* All following arithmetic modulo 256... */
+      ri = eStack[1].u.operand.u.regRel.registers[i];
+      j += ri;
+      if (ri != 0)
+      {  if (eStack[1].u.operand.u.regRel.based) i += 256;
+         *reg = i;
+      }
+    }
+    if ((j & 255) == 1) return eStack[1].u.operand.u.regRel.offset;
+    break;
+
+    case PCRelOT:
+    *reg = 15;
+    return eStack[1].u.operand.u.pLabel;
+
+    case ConstantOT:
+    if (asmMode == AbsoluteAM) {
+      *reg = 15;
+      return eStack[1].u.operand.u.constant;
+    }
+  }
+  Report(AsmError,errors_ExpectedRegRelExpr,oindex);
+  return 0;
+} /* End RegisterRelExpr */
+
+CARDINAL StringOrConstantExpr(char *line,
+  CARDINAL    *index, 
+  BOOLEAN      allowUnd,
+  OperandType *type)
+/*In case of a string the returned CARDINAL is a NamePointer*/
+{
+  CARDINAL oindex=*index;
+  BOOLEAN defined;
+
+  Expression(line, index, allowUnd, &defined);
+  if (errorFound || !defined) {
+    *type = ConstantOT;
+    return 0;
+  }; /* if */
+  *type = eStack[1].u.operand.operandType;
+  switch (*type) {
+    case ConstantOT:
+    return eStack[1].u.operand.u.constant;
+
+    case StringOT:
+    stringName.length = eStack[1].u.operand.u.string.length;
+    stringName.key = eStack[1].u.operand.u.string.key;
+    return (CARDINAL) &stringName;
+
+    default:
+    Report(AsmError,errors_ExpectedStringOrConstExpr,oindex);
+    return 0;
+
+  }; /* case */
+} /* End StringOrConstantExpr */
+
+CARDINAL RegisterListExpr(char *line, CARDINAL *index)
+{
+  CARDINAL block_data_bits = 0,
+           reg1,
+           reg2;
+
+  while (isWhiteSpace(line[*index])) (*index)++;
+  if (line[*index] != CurlyBra) {
+    Name          name;
+    SymbolPointer sy;
+      
+    if (!SymbolTest(line, index, &name)) {
+      Report(AsmError,errors_BadSym);
+      return 0;
+    }; /* if */
+    while (isWhiteSpace(line[*index])) (*index)++;
+    sy = LookupRef(name, FALSE);
+    if ((sy == NULL) || (sy->u.s.sdt != FixedSDT) ||
+      (sy->u.s.fst != RegisterListFST)) {
+      Report(AsmError,errors_BadRegList);
+      return 0;
+    }; /* if */
+    AddUse(sy);
+    return sy->value.card;
+  }; /* if */
+  (*index)++;
+  do {
+    reg1 = RegisterExpr(line, index);
+    if (errorFound) return 0;
+    if (line[*index] == Dash) {
+      (*index)++;
+      reg2 = RegisterExpr(line, index);
+      if (errorFound) return 0;
+      if (reg2 < reg1) {
+        Report(AsmError,errors_BadRegRange);
+        return 0;
+      }; /* if */
+    } else {
+      reg2 = reg1;
+    }; /* if */
+    while (reg1 <= reg2) {
+      if ((1L << reg1) & block_data_bits) {
+        Report(AsmError,errors_BadRegInBD);
+        return 0;
+      }; /* if */
+      block_data_bits |= 1L << reg1;
+      reg1++;
+    }; /* while */
+    if (line[*index] != Comma) break;
+    (*index)++;
+  } while (1); /* loop */
+  if (line[*index] != CurlyKet) {
+    Report(AsmError,errors_KetMiss);
+    return 0;
+  }; /* if */
+  (*index)++;
+  while (isWhiteSpace(line[*index])) (*index)++;
+  return block_data_bits;
+} /* End RegisterListExpr */
+
+#ifndef AAsm
+
+static Table_Symbol my_symbol;
+/* Used to fake a symbol for other segment local label references */
+
+SymbolPointer ExternalExpr(char *line, CARDINAL *index, CARDINAL *offset)
+{
+  CARDINAL      oldIndex = *index;
+  Name          name;
+  SymbolPointer symbolPointer;
+  BOOLEAN       defined;
+
+  (void)AllComment(line, index);
+  if (!SymbolTest(line, index, &name)) {
+    char ch;
+    if ((input_style == ObjAsmIS) || !isdigit(line[*index])) return NULL;
+      /* No problem for ObjAsm style, and no reference if no digit */
+    (void)DecimalNumber(line, index);
+    ch = line[*index];
+    if (((ch == 'b') || (ch == 'f')) && TermCheck(line[++(*index)])) {
+      char     temp[MaxLineLength+2];
+      CARDINAL dummy,
+               area;
+      *temp = ch;
+      memcpy(temp+1, line+oldIndex, (size_t)(*index - oldIndex - 1));
+      temp[*index-oldIndex] = CR;
+      dummy = 0;
+      *offset = LabelUse(temp, &dummy, &defined, &area);
+      if (!defined || (area == areaNumber)) {
+        *index = oldIndex;
+        return NULL;
+      }; /* if */
+      my_symbol.u.status = 0; /* Initialise */
+      my_symbol.u.s.sdt = FixedSDT;
+      my_symbol.u.s.fst = RelocatableFST;
+      my_symbol.u.s.sds = DefinedSDS;
+      my_symbol.value.card = *offset;
+      my_symbol.area = area;
+      symbolPointer = &my_symbol;
+    } else {
+      *index = oldIndex;
+      return NULL;
+    }; /* if */
+  } else {
+    symbolPointer = LookupRef(name, TRUE);
+    if ((symbolPointer == NULL) ||
+      ((symbolPointer->u.s.sdt != FixedSDT) &&
+      (symbolPointer->u.s.sdt != ExternalSDT)) ||
+      ((symbolPointer->u.s.sdt == FixedSDT) &&
+      ((symbolPointer->u.s.sds != DefinedSDS) ||
+       (symbolPointer->u.s.fst != RelocatableFST) ||
+       (symbolPointer->area == areaNumber)))) {
+      *index = oldIndex;
+      return NULL;
+    }; /* if */
+    if (symbolPointer->u.s.sdt == ExternalSDT) {
+      *offset = 0;
+    } else {
+      *offset = (input_style == ObjAsmIS) ? symbolPointer->value.card -
+      AreaStartValue(symbolPointer->area, &name) : symbolPointer->value.card;
+      /* Note AreaStartValue has updated name to be the area name! */
+      /* Note AreaStartValue no longer used cos no absolute areas */
+      symbolPointer = LookupRef(name, TRUE);
+    }; /* if */
+    AddUse(symbolPointer);
+  }; /* if */
+  while (isWhiteSpace(line[*index])) { (*index)++; }; /* while */
+  if ((line[*index] == PlusSign) || (line[*index] == MinusSign)) {
+    /*Allow positive and negative offset on externals and out of area symbols*/
+    *offset += ConstantExpr(line, index, pass == 1, &defined);
+  } else if (!TermCheck(line[*index]) && (line[*index] != Comma)) {
+    *index = oldIndex;
+    return NULL; /* Make sure other expression types can't sneak in */
+  }; /* if */
+  return symbolPointer;
+} /* End ExternalExpr */
+
+#endif /* not AAsm */
+
+void ShuffleDown(CARDINAL pointerLo,
+  CARDINAL  pointerHi, 
+  Operator *op)
+/*
+Shuffle down the stack one element
+so that the element at pointerLo is removed
+op is the new previous operator
+*/
+{
+  *op = eStack[pointerLo-1].u.operater;
+  while (pointerLo < pointerHi) {
+    switch (eStack[pointerLo+1].type) {
+      case OperatorEST:
+      eStack[pointerLo].type = OperatorEST;
+      eStack[pointerLo].u.operater = eStack[pointerLo+1].u.operater;
+      break;
+
+      case OperandEST:
+      eStack[pointerLo].type = OperandEST;
+      eStack[pointerLo].u.operand.operandType =
+        eStack[pointerLo+1].u.operand.operandType;
+      switch (eStack[pointerLo].u.operand.operandType) {
+        case ConstantOT:
+        case UnDefOT:
+        eStack[pointerLo].u.operand.u.constant =
+          eStack[pointerLo+1].u.operand.u.constant;
+        break;
+
+        case StringOT:
+        eStack[pointerLo].u.operand.u.string =
+          eStack[pointerLo+1].u.operand.u.string;
+        break;
+
+        case PCRelOT:
+        eStack[pointerLo].u.operand.u.pLabel =
+          eStack[pointerLo+1].u.operand.u.pLabel;
+        break;
+
+        case RegRelOT:
+        eStack[pointerLo].u.operand.u.regRel =
+          eStack[pointerLo+1].u.operand.u.regRel;
+        break;
+
+        case LogicalOT:
+        eStack[pointerLo].u.operand.u.bool =
+          eStack[pointerLo+1].u.operand.u.bool;
+      }; /* case */
+    }; /* case */
+    pointerLo++;
+  }; /* while */
+} /* End ShuffleDown */
+
+#define short_string(arg)  ((arg.operandType == StringOT) && \
+  (arg.u.string.length == 1))
+
+BOOLEAN ArgSyntaxCheck(Operand arg1,
+  Operand  arg2, 
+  Operator op)
+/*Returns true if the arguments are ok*/
+{
+
+  switch (op) {
+    default:
+    case STBot:
+    case STTop:
+    case Bra:
+    case Ket:
+    return FALSE;
+
+    case LAnd:
+    case LOr:
+    case LEor:
+    return (arg1.operandType == LogicalOT) && (arg2.operandType == LogicalOT);
+
+    case OpEquals: 
+    if (arg1.operandType == LogicalOT && arg2.operandType == LogicalOT)
+      return TRUE;         /* Drop through for all other OpEquals cases */
+    case Less:
+    case LessEquals:
+    case Greater:
+    case NotEquals:
+    case GreaterEquals:
+    return (arg1.operandType != LogicalOT) &&
+           (arg2.operandType != LogicalOT) &&
+           ((arg1.operandType == arg2.operandType) ||
+            (arg1.operandType == UnDefOT) ||
+            (arg2.operandType == UnDefOT) ||
+            (((short_string(arg2) || (arg2.operandType == ConstantOT)) &&
+             short_string(arg1) || (arg1.operandType == ConstantOT))
+           ));
+
+    case Plus:
+    case Minus:
+    return
+      ((arg1.operandType != LogicalOT)
+       &&
+       ((arg1.operandType != StringOT) || short_string(arg1)))
+      &&
+      ((arg2.operandType != LogicalOT)
+       &&
+       ((arg2.operandType != StringOT) || short_string(arg2)));
+
+    case Ror:
+    case Rol:
+    case Shr:
+    case Shl:
+    case BAnd:
+    case BOr:
+    case BEor:
+    case Star:
+    case Slash:
+    case Mod:
+    return ((arg1.operandType == ConstantOT) ||
+           short_string(arg1) ||
+           (arg1.operandType == UnDefOT))
+          &&
+          ((arg2.operandType == ConstantOT) ||
+           short_string(arg2) ||
+           (arg2.operandType == UnDefOT));
+
+    case Left:
+    case Right:
+    return (arg1.operandType == StringOT) && (arg2.operandType == ConstantOT);
+
+    case Cc:
+    return (arg1.operandType == StringOT) && (arg2.operandType == StringOT);
+
+
+    case UPlus:
+    case UMinus:
+    case Index:
+    return (arg1.operandType != LogicalOT) &&
+          ((arg1.operandType != StringOT) || short_string(arg1));
+
+    case LNot:
+    return arg1.operandType == LogicalOT;
+
+    case BNot:
+    return (arg1.operandType == ConstantOT) || (arg1.operandType == UnDefOT) ||
+      short_string(arg1);
+
+#ifdef BINARY_INCLUDES
+    case FLoad:                               /* Added by NRaine */
+    case FExec:                               /* Added by NRaine */
+    case FSize:                               /* Added by NRaine */
+    case FAttr:                               /* Added by NRaine */
+#endif
+
+    case Len:
+    return arg1.operandType == StringOT;
+
+    case Chr:
+    return arg1.operandType == ConstantOT;
+
+    case Str:
+    return (arg1.operandType == ConstantOT) || (arg1.operandType == LogicalOT);
+
+    case Base:
+    return (arg1.operandType == RegRelOT) || (arg1.operandType == PCRelOT);
+
+  }; /* case */
+} /* End ArgSyntaxCheck */
+
+/* End expression.c */

@@ -1,0 +1,486 @@
+/* -> literals.c
+ * Title: Handle literal operands
+ * Copyright (C) 1991 Advanced RISC Machines Limited. All rights reserved.
+ */
+
+#ifndef AAsm
+#  include "aof.h"
+#  include "aofvars.h"
+#  include <string.h>
+#endif
+#include "code.h"
+#include "errors.h"
+#include "globvars.h"
+#include "literals.h"
+#include "store.h"
+#include "tables.h"
+#include "message.h"
+#include <stdio.h>
+#include <stdlib.h>
+
+typedef enum {
+  ConstantLT,                         /* The order of these is important */
+  AddressLT,
+  FPSingleLT,                         /* One value only to here */
+  FPDoubleLT,                         /* 2 values...            */
+  ExternalLT                          /* 3 values...            */
+  } LiteralType;
+
+typedef struct {
+  CARDINAL      offset;               /* MUST be first field */
+  unsigned32    symbolId;
+  SymbolPointer symbolPointer;
+} ExternalLiteral;
+
+typedef struct {
+  CARDINAL value1,
+           value2;
+} FPDoubleLiteral;
+
+typedef struct Literal *LiteralPointer;
+typedef struct LiteralBlock *LiteralBlockPointer;
+
+typedef struct Literal {
+  LiteralType type;
+  union {
+    /* case ConstantLT */
+    /* case FPSingleLT */
+    CARDINAL constant;
+
+    /* case AddressLT */
+    CARDINAL offset;
+
+    /* case ExternalLT */
+    ExternalLiteral ext;
+
+    /* case FPDoubleLT */
+    FPDoubleLiteral fpdouble;
+  } u;
+  CARDINAL       address;
+  int            flags;
+  LiteralPointer link;
+  CARDINAL       area;
+#ifdef DEBUG
+  LiteralBlockPointer literalBlock;
+#endif
+} Literal;
+
+typedef struct LiteralBlock {
+  CARDINAL address,  /*The address of the start of the pool for this file*/
+           size;     /*A multiple of four*/
+  LiteralBlockPointer link;
+  LiteralPointer literalPointer, currentLiteralPointer;
+  CARDINAL index;
+} LiteralBlock;
+
+static LiteralBlockPointer literalBlockPointer = NULL,
+                      currentBlockPointer = NULL;
+static LiteralPointer literalPointer = NULL,
+                      currentLiteralPointer = NULL;  /* used only in pass 1 */
+static CARDINAL literalBlockIndex = 0;
+
+void LiteralAsmStart(void)
+{
+  if (pass == 2) return;
+  currentBlockPointer = NULL;
+}
+
+void LiteralFileStart(void)
+{
+  switch (pass)
+  {
+case 1:
+    if (literalBlockPointer == NULL)
+    { /*This is the first file*/
+      literalBlockPointer = (LiteralBlockPointer)
+                            mymalloc(sizeof(*literalBlockPointer));
+      currentBlockPointer = literalBlockPointer;
+    }
+    else
+    { /*This is a subsequent file*/
+      currentBlockPointer->link = (LiteralBlockPointer)
+                                  mymalloc(sizeof(*currentBlockPointer));
+      currentBlockPointer = currentBlockPointer->link;
+    }
+    currentBlockPointer->link = NULL;
+    currentBlockPointer->size = 0;
+    currentBlockPointer->literalPointer = NULL;
+    currentBlockPointer->currentLiteralPointer = NULL;
+    currentBlockPointer->address = 0;  /* A safe temporary value */
+    currentBlockPointer->index = ++literalBlockIndex;
+    literalPointer = currentLiteralPointer = NULL;
+    break;
+
+case 2:
+    if (currentBlockPointer->link == NULL)
+    { /* At end of pass 1 (== start of pass 2) or end of pass 2... */
+#ifdef DEBUG
+      LiteralPointer p;
+      for (p = literalPointer;  p != NULL;  p = p->link)
+        fprintf(stderr, "Block %3lu literal (%u, %u) %.8lx at %.6lx\n",
+        p->literalBlock->index, p->flags, p->type, p->u.constant, p->address);
+#endif
+      currentBlockPointer = literalBlockPointer;
+    }
+    else
+    { LiteralPointer p, q;
+      /* Deallocate all literals of the previous file */
+      p = literalPointer;
+      while (p != NULL)
+      {  q = p->link;
+         free(p);
+         p = q;
+      }
+      currentBlockPointer = currentBlockPointer->link;
+    }
+    literalPointer = currentBlockPointer->literalPointer;
+    break;
+  }
+}
+
+static CARDINAL literal_size(LiteralType t)
+{
+  if (t == FPDoubleLT) return 8L;
+  return 4L;
+}
+
+void LiteralFileEnd(void)
+{
+  CARDINAL       i;
+  LiteralPointer tempLP;
+  LiteralBlockPointer tempLBP;
+
+  switch (pass) {
+    case 1:
+    if (currentBlockPointer->size != 0)
+    { while ((programCounter % 4) != 0) programCounter++;
+      currentBlockPointer->address = programCounter;
+      programCounter += currentBlockPointer->size;
+      tempLP = currentBlockPointer->literalPointer;
+      while (tempLP != NULL)
+      { tempLP->address = currentBlockPointer->address;
+        tempLP->flags |= ADDRSET;
+        currentBlockPointer->address += literal_size(tempLP->type);
+        tempLP = tempLP->link;
+      }
+    }
+    currentBlockPointer->link =
+      tempLBP = (LiteralBlockPointer) mymalloc(sizeof(*currentBlockPointer));
+    tempLBP->size = 0;
+    tempLBP->link = NULL;
+    tempLBP->address = programCounter;
+    tempLBP->literalPointer = NULL;
+    tempLBP->currentLiteralPointer = NULL;
+    currentBlockPointer = tempLBP;
+    currentBlockPointer->index = ++literalBlockIndex;
+    break;
+
+    case 2:
+    /* Output the current literal pool */
+    if (currentBlockPointer->size != 0)
+    { while ((programCounter % 4) != 0) CodeByte(0);
+
+      for (i = 0, tempLP = currentBlockPointer->literalPointer;
+           (tempLP != NULL && i < currentBlockPointer->size);
+           tempLP = tempLP->link)
+      {
+        switch (tempLP->type)
+        {
+case ConstantLT:
+case FPSingleLT:
+          CodeDataWord(tempLP->u.constant);
+          i += 4;
+          break;
+
+#ifndef AAsm
+case AddressLT:
+          {
+            Relocation reloc;
+            if (output_style == AofOS)
+            { /* Now done with type 2 relocations */
+              reloc.aof_reloc.rel_offset = (int32)programCounter;
+              reloc.aof_reloc.rel_flags = REL_TYPE2 | REL_LONG |
+                (areaNumber - 1L);
+                /* Note inconsistent use of area number */
+            }
+            else
+            { int a[2];
+              a[0] = 0;  a[1] = 0;
+              memcpy(&reloc, a, 8); /* Ensure all fields clear first */
+              reloc.aout_reloc.r_address = programCounter;
+              reloc.aout_reloc.r_symbolnum = N_TEXT;
+                /* Literals only occur in text area */
+              reloc.aout_reloc.r_length = 2; /* long */
+              reloc.aout_reloc.r_pcrel = 0;  /* No PC relocation needed */
+              reloc.aout_reloc.r_extern = 0; /* Don't use symbol */
+              reloc.aout_reloc.r_neg = 0;
+            }
+            PutReloc(reloc);
+          }
+          CodeDataWord(tempLP->u.offset);
+          i += 4;
+          break;
+
+case ExternalLT:
+          {
+            Relocation reloc;
+            CARDINAL value = tempLP->u.ext.offset;
+            if (output_style == AofOS)
+            { /* Now done with type 2 relocations */
+              reloc.aof_reloc.rel_offset = (int32)programCounter;
+              reloc.aof_reloc.rel_flags = REL_TYPE2 | REL_LONG |
+                ((tempLP->u.ext.symbolPointer->u.s.sdt == ExternalSDT) ?
+                 (REL_A | (tempLP->u.ext.symbolId & 0xffffff)) :
+                 (tempLP->u.ext.symbolPointer->area - 1L));
+                /* Note inconsistent use of area number */
+            }
+            else
+            { int a[2];
+              a[0] = 0;  a[1] = 0;
+              memcpy(&reloc, a, 8); /* Ensure all fields clear first */
+              reloc.aout_reloc.r_address = programCounter;
+              if (tempLP->u.ext.symbolPointer->u.s.sdt == ExternalSDT) {
+                reloc.aout_reloc.r_symbolnum = (int)(tempLP->u.ext.symbolId);
+                reloc.aout_reloc.r_length = 2; /* long */
+                reloc.aout_reloc.r_pcrel = 0;  /* No PC relocation needed */
+                reloc.aout_reloc.r_extern = 1; /* Use symbol */
+              } else {
+                reloc.aout_reloc.r_length = 2; /* long */
+                reloc.aout_reloc.r_pcrel = 0;  /* No PC relocation needed */
+                reloc.aout_reloc.r_extern = 0; /* Don't use symbol */
+                if (input_style == ObjAsmIS) {
+                  aof_area *dec = GetArea(tempLP->u.ext.symbolPointer->area);
+                  reloc.aout_reloc.r_symbolnum =
+                      (dec->area_attributes & AOF_0INITAT) ? N_BSS : N_DATA;
+                    /* External literals can't be from the text area */
+                  /*
+                   * Now as this value is within the data or bss areas it needs
+                   * a_text or a_text+a_data adding in to make it relative
+                   * to the entire output.
+                   */
+                  value += (CARDINAL)aout_header.a_text;
+                  if (dec->area_attributes & AOF_0INITAT) value +=
+                    (CARDINAL)aout_header.a_data;
+                } else {
+                  reloc.aout_reloc.r_symbolnum =
+                    (tempLP->u.ext.symbolPointer->area == BssST) ?
+                    N_BSS : N_DATA;
+                    /* External literals can't be from the text area */
+                  /*
+                   * Now as this value is within the data or bss areas it needs
+                   * a_text or a_text+a_data adding in to make it relative
+                   * to the entire output.
+                   */
+                  value += (CARDINAL)aout_header.a_text;
+                  if (tempLP->u.ext.symbolPointer->area == BssST) value +=
+                    (CARDINAL)aout_header.a_data;
+                }
+              }
+              reloc.aout_reloc.r_neg = 0;
+            };
+            PutReloc(reloc);
+            CodeDataWord(value);
+          }
+          i += 4;
+          break;
+#endif
+
+case FPDoubleLT:
+          CodeDataWord(tempLP->u.fpdouble.value1);
+          CodeDataWord(tempLP->u.fpdouble.value2);
+          i += 8;
+          break;
+        }
+      }
+    }
+    currentBlockPointer = currentBlockPointer->link;
+    if (literalPointer == NULL)
+      literalPointer = currentBlockPointer->literalPointer;
+  }
+}
+
+static void AdjustLiteralPointer()
+{ /* Called during pass 2 only */
+  /* No point in searching for literal more than 4K-4-8 backwards... */
+  LiteralPointer thisLP, nextLP;
+  thisLP = literalPointer;
+  while ((thisLP->address + 0xFF8) <= programCounter)
+  { nextLP = thisLP->link;
+    free(thisLP);
+    thisLP = nextLP;
+  }
+  literalPointer = thisLP;
+}
+
+static int same_value2(LiteralPointer lp, CARDINAL value2, LiteralType type)
+{
+  if (type == ExternalLT)
+  { SymbolPointer s = (SymbolPointer)value2;
+    return (lp->u.ext.symbolId == s->aOFData.symbolId);
+  }
+  else if (type == FPDoubleLT)
+    return (lp->u.fpdouble.value2 == value2);
+  else
+    return 1;
+}
+
+static LiteralPointer add_literal(
+  int flags, CARDINAL value, CARDINAL value2, LiteralType type)
+{
+  LiteralPointer tempLP;
+  static Literal dummyLiteral;  /* all fields 0 */
+
+  if (pass == 1)
+  { if (flags & DEFINED)
+    { for (tempLP = literalPointer;  tempLP != NULL;  tempLP = tempLP->link)
+      {
+        if ((tempLP->flags & DEFINED) &&
+            tempLP->type == type &&
+            tempLP->u.constant == value &&
+#ifndef AAsm
+            tempLP->area == areaNumber &&
+#endif
+           (type < FPDoubleLT || same_value2(tempLP, value2, type)) &&
+           (!(tempLP->flags & ADDRSET) ||
+            abs((int)(tempLP->address - programCounter - 8)) < 0x1000))
+        {
+#ifdef DEBUG
+fprintf(stderr, "Block %3lu find1 (%u, %u) %.8lx pc=%.6lx\n",
+  tempLP->literalBlock->index, flags, type, value, programCounter);
+#endif
+          return tempLP;
+        }
+      }
+    }
+    /* Add a new literal to the next pool */
+    tempLP = (LiteralPointer) mymalloc(sizeof(*literalPointer));
+    if (literalPointer == NULL)
+      literalPointer = tempLP;
+    else
+      currentLiteralPointer->link = tempLP;
+    currentLiteralPointer = tempLP;
+    if (currentBlockPointer->literalPointer == NULL)
+      currentBlockPointer->literalPointer = tempLP;
+    currentBlockPointer->currentLiteralPointer = tempLP;
+    tempLP->flags = flags;
+    tempLP->type = type;
+    tempLP->u.constant = value;
+    tempLP->link = NULL;
+    tempLP->address = 0;
+#ifndef AAsm
+    tempLP->area = areaNumber;
+#endif
+    currentBlockPointer->size += 4;
+#ifdef DEBUG
+    tempLP->literalBlock = currentBlockPointer;
+    fprintf(stderr, "Block %3lu add1  (%u, %u) %.8lx pc=%.6lx\n",
+      currentBlockPointer->index,flags, type, value, programCounter);
+#endif
+    return tempLP;
+  }
+
+  /* pass == 2 */
+  AdjustLiteralPointer();
+  /* look first for precisely this item amongst previous ones..      */
+  /* this may cause undefined AddressLTs to become defined.          */
+#ifdef DEBUG_V
+  fprintf(stderr,"Looking for %08X, type %i\n",value,type);
+#endif
+  for (tempLP = literalPointer;  tempLP != NULL;  tempLP = tempLP->link) {
+#ifdef DEBUG_V
+    fprintf(stderr,"  comparing with %08X, type %i, address=%X\n",
+      tempLP->u.constant,tempLP->type,tempLP->address);
+#endif
+    if (tempLP->type == type && tempLP->u.constant == value &&
+        (type < FPDoubleLT || same_value2(tempLP, value2, type)) &&
+#ifndef AAsm
+        tempLP->area == areaNumber &&
+#endif
+        abs((int)(tempLP->address - programCounter - 8)) < 0x1000)
+    {
+      tempLP->flags |= DEFINED;
+#ifdef DEBUG
+      fprintf(stderr, "Block %3lu find2 (%u, %u) %.8lx pc=%.6lx at %.6lx\n",
+        tempLP->literalBlock->index, tempLP->flags, type, value,
+          programCounter,tempLP->address);
+#endif
+      return tempLP;
+    }
+  }
+
+  /* Look for the next mutable (not yet output) undefined slot of type type    */
+  /* Note that ConstantLT's can be turned into others as the type isn't always */
+  /* known during pass 1 - Yukk !                                              */
+#ifdef DEBUG_V
+  fprintf(stderr,"Looking to place %08X, type %i\n",value,type);
+#endif
+  for (tempLP = currentBlockPointer->literalPointer;
+      tempLP != NULL;  tempLP = tempLP->link) {
+#ifdef DEBUG_V
+    fprintf(stderr,"  considering %08X, type %i, flags=%i, address=%X\n",
+      tempLP->u.constant, tempLP->type, tempLP->flags, tempLP->address);
+#endif
+    if ((tempLP->flags & DEFINED) == 0 && 
+         (tempLP->type == type || tempLP->type==ConstantLT) &&
+#ifndef AAsm
+        tempLP->area == areaNumber &&
+#endif
+        abs((int)(tempLP->address - programCounter - 8)) < 0x1000)
+    {
+      tempLP->flags |= DEFINED;
+      tempLP->type = type;
+      tempLP->u.constant = value;
+#ifdef DEBUG
+      fprintf(stderr, "Block %3lu find3 (%u, %u) %.8lx pc=%.6lx at %.6lx\n",
+        tempLP->literalBlock->index, tempLP->flags, tempLP->type, value,
+          programCounter, tempLP->address);
+#endif
+      return tempLP;
+    }
+  }
+  /* Get here because no literal could be found within addressable range */
+  Report(AsmError,literals_literalpool_too_far);
+  return &dummyLiteral;
+}
+
+CARDINAL AddLiteral(BOOLEAN defined, BOOLEAN removable, CARDINAL value)
+{ int flags = 0;
+  if (removable) return 0;
+  if (defined) flags |= DEFINED;
+  return add_literal(flags, value, 0, ConstantLT)->address;
+}
+
+#ifndef AAsm
+CARDINAL AddExternalLiteral(SymbolPointer symbolPointer, CARDINAL value)
+{ LiteralPointer tempLP =
+    add_literal(DEFINED, value, (CARDINAL)symbolPointer, ExternalLT);
+  tempLP->u.ext.symbolId = symbolPointer->aOFData.symbolId;
+  tempLP->u.ext.symbolPointer = symbolPointer;
+  return tempLP->address;
+}
+
+CARDINAL AddAddressLiteral(CARDINAL value, BOOLEAN defined)
+{
+  return add_literal(defined, value, 0, AddressLT)->address;
+}
+#endif
+
+CARDINAL AddFPLiteralSingle(CARDINAL value)
+{
+  return add_literal(DEFINED, value, 0, FPSingleLT)->address;
+}
+
+CARDINAL AddFPLiteralDouble(CARDINAL value1, CARDINAL value2)
+{ LiteralPointer tempLP =
+    add_literal(DEFINED, value1, value2, FPDoubleLT);
+  tempLP->u.fpdouble.value2 = value2;
+  return tempLP->address;
+}
+
+void LiteralOrg(void)
+/* Define a literal origin at the current PC */
+{
+  LiteralFileEnd();
+}
+
+/* End literals.c */

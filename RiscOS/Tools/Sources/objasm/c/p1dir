@@ -1,0 +1,1570 @@
+/* -> p1dir.c
+ * Title: Pass 1 directive handler
+ * Copyright (C) 1991 Advanced RISC Machines Limited. All rights reserved.
+ */
+
+#include "hostdep.h"
+#include "macrotyp.h"
+#ifndef AAsm
+#  include "aofvars.h"
+#  include "asdsupp.h"
+#  include "asm.h"
+#  include "code.h"
+#  include "tokens.h"
+#endif
+#include "condasm.h"
+#include "constant.h"
+#include "errors.h"
+#include "expr.h"
+#include "exprtyp.h"
+#include "formatio.h"
+#include "fpio.h"
+#include "getdir.h"
+#include "globvars.h"
+#include "initdir.h"
+#include "listing.h"
+#include "literals.h"
+#include "locallab.h"
+#include "nametyp.h"
+#include "occur.h"
+#include "p1line.h"
+#include "p1dir.h"
+#include "store.h"
+#include "tables.h"
+#include "vars.h"
+#include "message.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+
+static void CancelListForCond(void)
+{
+  if (!((1 << ListCondPC) & listStatus)) CancelLineList();
+} /* EndCancelListForCond */
+
+static void CancelListForSet(void)
+{
+  if (!((1 << ListSETPC) && listStatus)) CancelLineList();
+} /* EndCancelListForSet */
+
+static char mnoteLine[MaxLineLength];
+
+static BOOLEAN DefineProgramLabel(Name name, SymbolPointer *symbolPointer)
+{ SymbolPointer p;
+  *symbolPointer = p = LookupFixed(name, FALSE);
+  if (p == NULL || (p->u.s.sds != UndefinedSDS)) {
+    Report(AsmError,errors_MulDefSym);
+    return TRUE;
+  }
+  AddDef(p);
+  /* Symbol is defined and label type and relocatable or reg-relative */
+  p->u.s.fst = RelocatableFST;
+  { unsigned32 attr;
+    if ((p->area = areaNumber) != 0)
+    { attr = currArea->dec.area_attributes;
+      if (attr & AOF_ABSAT) {
+        p->u.s.fst = AbsoluteFST;
+      }
+      if (attr & AOF_BASEDAT)
+      { p->u.s.fst = RegisterRelativeFST;
+        p->u.s.fsr = (BITFIELD)(attr >> AOF_BASESHIFT) & 0xf;
+        p->u.s.bt  = 1;
+      }
+    }
+  }
+  p->u.s.sds = DefinedSDS;
+  p->u.s.sdt = FixedSDT;
+  p->length = 0;
+  p->value.card = programCounter;
+  return FALSE;
+}
+
+#ifndef AAsm
+
+static CARDINAL xattribute(char *s, CARDINAL l, BOOLEAN export)
+{ char name[12];
+  int ch;
+  if (l < sizeof(name))
+  { name[l] = 0;
+    while (l > 0)
+    { --l;
+      ch = s[l];
+      name[l] = isupper(ch) ? tolower(ch) : ch;
+    }
+    if (strcmp(name, "fpregargs") == 0)
+      return SYM_FPREGAT >> 8;
+    if (export)
+    { if (strcmp(name, "data") == 0)
+        return SYM_DATAAT >> 8;
+      if (strcmp(name, "leaf") == 0)
+        return SYM_LEAFAT >> 8;
+      if (strcmp(name, "usessb") == 0)
+        return SYM_USESSBAT >> 8;
+    }
+    else if (strcmp(name, "weak") == 0)
+      /* will be caught by later code using a different mechanism */
+      return 0;
+  }
+  Report(ReportWarning,p1dir_xattr_not_recog);
+  return 0;
+}
+
+static CARDINAL AOF_extra_attributes(char *line,
+  CARDINAL *lineIndex,
+  BOOLEAN export)
+{
+  CARDINAL p = *lineIndex, xat = 0, q;
+  int bra;
+  while (isWhiteSpace(line[p])) p++;
+  if ((bra = line[p]) == '[' || !export && bra == ',')
+  { do
+    { p++; while (isWhiteSpace(line[p])) p++;
+      q = p;
+      while (isalpha(line[q])) ++q;
+      xat |= xattribute(line+p, q-p, export);
+      p = q;
+      while (isWhiteSpace(line[p])) p++;
+      if (bra == ',') goto out;
+    } while (line[p] == ',');
+    if (line[p] == ']') {
+      p++; while (isWhiteSpace(line[p])) p++;
+    } else
+      Report(AsmError,errors_MissSqKet);
+  }
+out:
+  if (xat != 0) *lineIndex = p;
+  return xat;
+}
+
+#endif /* not AAsm */
+
+BOOLEAN P1Directive(char *line,
+  BOOLEAN *wasLink, 
+  BOOLEAN *passEnded,
+  char   **linkPointer)
+/*
+The returned value indicates error OR handled (i.e. was directive)
+*/
+{
+  CARDINAL lineIndex = 0, i, j, value;
+  Name     name, string;
+
+#ifndef AAsm
+  SymbolPointer         eSymbolPointer;
+#endif
+  SymbolPointer         symbolPointer;
+  BOOLEAN               symbolFound,
+#ifndef AAsm
+                        label_found = FALSE,
+                        local_label_found = FALSE,
+#endif
+                        ifBool,
+                        fromInterface,
+                        defined;
+  DirectiveNumber       directiveNumber;
+#ifndef AAsm
+  AsDirectiveNumber     as_dir_num;
+#endif
+  OperandType           operandType;
+  StructureStackElement s;
+  NamePointer           namePointer;
+
+  fromInterface = (wasLink == NULL) || (passEnded == NULL);
+
+  symbolFound =  SymbolTest(line, &lineIndex, &name);
+  if (!isWhiteSpace(line[lineIndex])) {
+#ifndef AAsm
+  /* terminating colon allowed in As style, but only for program labels */
+    if (symbolFound) {
+      if (input_style_set && (input_style == ObjAsmIS)) {
+        return FALSE;
+      }; /* if */
+      if ((line[lineIndex] != Colon) || (!isWhiteSpace(line[lineIndex+1]))) {
+        lineIndex++;
+        return FALSE;
+      } else {
+        if (line[lineIndex]!=Colon) lineIndex++;
+        if (!input_style_set) SetImplicitRegisters();
+        input_style_set = TRUE;
+        input_style = AsIS;
+        output_style_set = TRUE;
+        output_style = ADotOutOS;
+        label_found = TRUE;
+      }; /* if */
+    } else {
+      /* May be local label in as style */
+      if (isdigit(*line)) {
+        (void) DecimalNumber(line, &lineIndex);
+        if ((line[lineIndex] == Colon) && (isWhiteSpace(line[lineIndex+1])) &&
+            (!input_style_set || (input_style == AsIS))) {
+          lineIndex++;
+          local_label_found = TRUE;
+          if (!input_style_set) SetImplicitRegisters();
+          input_style_set = TRUE;
+          input_style = AsIS;
+          output_style_set = TRUE;
+          output_style = ADotOutOS;
+        } else {
+          if (line[lineIndex] == Colon) lineIndex++;
+          /* No it's not! */
+          return FALSE;
+        }; /* if */
+      } else {
+        return FALSE;
+      }; /* if */
+    }; /* if */
+#else
+    return FALSE;
+#endif
+  };
+  lineIndex++; while (isWhiteSpace(line[lineIndex])) lineIndex++;;
+  /*Now we should be pointing at the directive name*/
+  if (OneCharacterDirective(line, &lineIndex, &directiveNumber)
+    || (DirTest(line, &lineIndex, &string) &&
+        NameDirective(&directiveNumber, string))) {
+#ifndef AAsm
+    /*
+     * Here we've spotted a directive.
+     * This implies ObjAsm format or as format.
+     */
+    if (directiveNumber == TStyleChange) {
+      if (input_style_set && (input_style == ObjAsmIS)) {
+        return FALSE;
+        /* . is a bad directive in established ObjAsm style */
+      } else {
+        if (!input_style_set) SetImplicitRegisters();
+        input_style_set = TRUE;
+        input_style = AsIS;
+        output_style_set = TRUE;
+        output_style = ADotOutOS;
+        lineIndex++;
+        /* Now we must look for the as type directive */
+        if (DirTest(line, &lineIndex, &string) &&
+          AsNameDirective(&as_dir_num, string)) {
+          int alignment = as_directive_alignment[as_dir_num];
+          if (!AsDirectiveSyntax(as_dir_num, line[lineIndex],
+            symbolFound && !label_found)) {
+            return TRUE;
+          };
+          if (alignment != 1)
+            while ((programCounter % alignment) != 0) programCounter++;
+          if (local_label_found) {
+            value = 0;
+            LabelDef(line, &value);
+          };
+          if ((directiveNumber = 
+               (DirectiveNumber) asToObj[as_dir_num]) == TStyleChange)
+          {
+            if (label_found && DefineProgramLabel(name, &symbolPointer)) {
+              return TRUE;
+            };
+            switch (as_dir_num) {
+              /* Listing directives */
+              case AsListOff:
+              nextListState &= ~(1 << ListSETPC);
+              break;
+
+              case AsListOn:
+              nextListState |= 1 << ListSETPC;
+              break;
+
+              case AsListFull:
+              /* What does this mean? */
+              break;
+
+              case AsPage:
+              if ((1 << ListPC) & listStatus) {
+                ListLine();
+                PageThrow();
+              }; /* if */
+              break;
+
+  /* Segment directives */
+              case AsText:
+              case AsData:
+              case AsBss:
+              switch (segment_type) {
+                case CodeST:
+                code_size = programCounter;
+                break;
+                case DataST:
+                data_size = programCounter;
+                break;
+                case BssST:
+                bss_size = programCounter;
+              };
+              switch (as_dir_num) {
+                case AsText:
+                programCounter = code_size;
+                area_is_code = TRUE;
+                noInitArea = FALSE;
+                segment_type = CodeST;
+                break;
+                case AsData:
+                programCounter = data_size;
+                area_is_code = FALSE;
+                noInitArea = FALSE;
+                segment_type = DataST;
+                break;
+                case AsBss:
+                programCounter = bss_size;
+                area_is_code = FALSE;
+                noInitArea = TRUE;
+                segment_type = BssST;
+              };
+              areaNumber = segment_type; /* To get label references right */
+              break;
+
+/* These two irrelevant on ARM */
+              case AsEven:
+              case AsOdd:
+              break;
+
+  /* Identifier control */
+              case AsCommon:
+              /* What's this mean? */
+              break;
+
+  /* Space allocation and value planting */
+              case AsAscii:
+              /* Plant ascii string */
+              case AsAsciz:
+              /* Plant ascii string zero terminated */
+              StringExpr(line, &lineIndex, &string);
+              programCounter += string.length;
+              if (as_dir_num == AsAsciz) programCounter++;
+              /* One more for terminating zero */
+              break;
+
+              case AsExtend:
+              /* Plant FP extended number. Is this allowed? */
+              break;
+
+              case AsPacked:
+              /* Plant FP packed number. Is this allowed? */
+              break;
+
+              default:
+              case AsTitle:
+              case AsAlign:
+              case AsPool:
+              case AsEqu:
+              case AsRequ:
+              case AsGlobal:
+              case AsFequ:
+              case AsCequ:
+              case AsPequ:
+              case AsSpace:
+              case AsByte:
+              case AsShort:
+              case AsLong:
+              case AsFloat:
+              case AsDouble:
+              Report(FatalError,p1dir_p1dir_unexpected);
+            };
+            goto check_for_more_lines;
+          };
+        } else {
+          return TRUE;
+        }; /* if */
+      }; /* if */
+    } else {
+      if (input_style_set && (input_style == AsIS)) {
+        return FALSE;
+        /*
+         * All ObjAsm directives currently considered bad within as.
+         * This may change if we decide to extend as to allow
+         * some sensible features to be added, such as conditional
+         * assembly, assembly time variables etc.
+         */
+      } else {
+        input_style_set = TRUE;
+        input_style = ObjAsmIS;
+      }; /* if */
+    }; /* if */
+#endif
+  } else {
+    return FALSE;
+  }; /* if */
+  if (notSkipping || allowDirInCond[directiveNumber]) {
+#ifndef AAsm
+    if (input_style_set && (input_style == ObjAsmIS))
+#endif
+    if (!DirectiveSyntax(directiveNumber, line[lineIndex], symbolFound)) {
+      return TRUE;
+    }; /* if */
+#ifndef AAsm
+    if (disallowDirOutsideArea[directiveNumber] && (input_style == ObjAsmIS)) {
+      output_style_set = TRUE;
+      if (areaNumber == 0) {
+        Report(AsmError,errors_ADirMissing);
+        if (!FakeFirstAreaDeclaration()) return TRUE;
+      }; /* if */
+    }
+#endif
+  } else {
+    return TRUE; /* Pretend we've handled it if conditionally ignored */
+  }
+  switch (directiveNumber) {
+    case TIF:
+    s.type = ConditionalSSET;
+    s.u.condEl.state = listStatus; /* Stack listing status */
+    s.u.condEl.notSkipping = notSkipping;
+    if (notSkipping) {
+      if (!LogicalExpr(line, &lineIndex))
+      { notSkipping = FALSE;
+        if (terseState) nextListState &= ~(1 << ListPC);
+      }
+    } else {
+      while (line[lineIndex] != CR) lineIndex++;
+    }
+    if (!Stack(s)) break;
+    CancelListForCond();
+    break;
+
+    case TELSE:
+    if (!Unstack(&s)) break;
+    if (s.type != ConditionalSSET) {
+      if (s.type != WhileSSET) Stack(s);
+      Report(AsmError,errors_StructErr);
+      exception = StackErr;
+      break;
+    }
+    Stack(s); /* put it back */
+    if (notSkipping) {
+      notSkipping = FALSE;
+      if (terseState) nextListState &= ~(1 << ListPC);
+    } else if (s.u.condEl.notSkipping) {
+      notSkipping = TRUE;
+      if ((1 << ListPC) & s.u.condEl.state) nextListState |= (1 << ListPC);
+    }
+    CancelListForCond();
+    break;
+
+    case TFI:
+    if (!Unstack(&s)) break;
+    if (s.type != ConditionalSSET) {
+      if (s.type != WhileSSET) Stack(s);
+      Report(AsmError,errors_StructErr);
+      exception = StackErr;
+      break;
+    }
+    nextListState = s.u.condEl.state;
+    notSkipping = s.u.condEl.notSkipping;
+    if (((1 << ListPC) & nextListState) && !((1 << ListPC) & listStatus)) {
+      listStatus |= (1 << ListPC);
+      ListLineNumber();
+    }
+    CancelListForCond();
+    break;
+
+    case TMNOTE:
+    ListLine();
+    value = ConstantExpr(line, &lineIndex, FALSE, &defined);
+    if (errorFound) return TRUE;
+    if (line[lineIndex] != Comma) {
+      Report(AsmError,errors_CommaMissing);
+      return TRUE;
+    }; /* if */
+    lineIndex++;
+    StringExpr(line, &lineIndex, &name);
+    memcpy(mnoteLine, name.key, (size_t)(name.length));
+    mnoteLine[name.length] = 0;
+    if (value != 0) Report(AsmError,mnoteLine);
+    break;
+
+    case THASH:
+    if (symbolFound) {
+      symbolPointer = LookupRef(name, FALSE);
+      if (symbolPointer != NULL) {
+        /*Symbol already exists, so better be PCRelative*/
+        if (symbolPointer->u.s.sdt != FixedSDT) {
+          Report(AsmError,errors_BadSymType);
+          return TRUE;
+        }; /* if */
+        if (symbolPointer->u.s.sds != UndefinedSDS) {
+          Report(AsmError,errors_MulDefSym);
+          return TRUE;
+        };
+      } else {
+        symbolPointer = LookupFixed(name, FALSE);/* insert the symbol */
+      }; /* if */
+      AddDef(symbolPointer);
+#ifndef AAsm
+      symbolPointer-> area = areaNumber;
+#endif
+      switch (variableCounter.type) {
+        case FixedVCT:
+        symbolPointer->u.s.fst = AbsoluteFST;
+        symbolPointer->value.card = variableCounter.u.offset;
+        break;
+
+        case RelativeVCT:
+        if (variableCounter.u.relativeVC.reg == 15)
+          symbolPointer->u.s.fst = RelocatableFST;
+        else {
+          symbolPointer->u.s.fst = RegisterRelativeFST;
+          symbolPointer->u.s.fsr = (BITFIELD)(variableCounter.u.relativeVC.reg);
+        }; /* if */
+        symbolPointer->value.card = variableCounter.u.relativeVC.offset;
+
+      }; /* case */
+      symbolPointer->u.s.sds = DefinedSDS;
+    }; /* if */
+    value = ConstantExpr(line, &lineIndex, FALSE, &defined);
+    if (errorFound) return TRUE;
+    if (symbolFound) symbolPointer->length = value;
+    switch (variableCounter.type) {
+      case FixedVCT:
+      ListWordValue(variableCounter.u.offset);
+      variableCounter.u.offset += value;
+      break;
+
+      case RelativeVCT:
+      ListWordValue(variableCounter.u.relativeVC.offset);
+      variableCounter.u.relativeVC.offset += value;
+
+    }; /* case */
+    break;
+
+    case TSTAR:
+#ifndef AAsm
+    if ((input_style == AsIS) && (line[lineIndex] == CurlyBra)) {
+      goto try_rlist;
+    };
+#endif
+    value = NotStringExpr(line, &lineIndex, &i, &operandType, TRUE, &defined);
+    if (errorFound) return TRUE;
+    symbolPointer = LookupRef(name, FALSE);
+    if (symbolPointer == NULL) symbolPointer = LookupFixed(name, FALSE);
+    AddDef(symbolPointer);
+    if (symbolPointer->u.s.sds != UndefinedSDS) {
+      Report(AsmError,errors_MulDefSym);
+      return TRUE;
+    }; /* if */
+    if (symbolPointer->u.s.sdt != FixedSDT) {
+      Report(AsmError,errors_BadSymType);
+      return TRUE;
+    }; /* if */
+#ifndef AAsm
+    symbolPointer->area = areaNumber;
+#endif
+    if (defined) {
+      switch (operandType) {
+        case ConstantOT:
+        symbolPointer->u.s.fst = AbsoluteFST;
+        break;
+
+        case PCRelOT:
+        symbolPointer->u.s.fst = RelocatableFST;
+        break;
+
+        case RegRelOT:
+        symbolPointer->u.s.fst = RegisterRelativeFST;
+        symbolPointer->u.s.fsr = (BITFIELD) i;
+      }; /* case */
+      symbolPointer->u.s.sds = DefinedSDS;
+      symbolPointer->value.card = value;
+      ListWordValue(value);
+    } else {
+      symbolPointer->u.s.sds = PartDefinedSDS;
+    }; /* if */
+    symbolPointer->length = 0;
+    break;
+
+    case TEQUAL:
+    if (symbolFound && DefineProgramLabel(name, &symbolPointer)) return TRUE;
+    if (keepingAll && symbolFound && 
+       (symbolPointer->aOFData.symbolId == SymbolIdUnset)) {
+      AddSymbol(symbolPointer);
+    }
+    i = programCounter;
+    do {
+      value = StringOrConstantExpr(line, &lineIndex, TRUE, &operandType);
+      if (errorFound) return TRUE;
+      switch (operandType) {
+        case ConstantOT:
+        programCounter++;
+        break;
+
+        case StringOT:
+        namePointer = (NamePointer)value;
+        programCounter += namePointer->length;
+
+      }; /* case */
+      if (line[lineIndex] != Comma) break;
+      lineIndex++;
+
+    } while (1); /* loop */
+    if (symbolFound) symbolPointer->length = programCounter - i;
+    break;
+
+    case TPERC:
+    if (symbolFound && DefineProgramLabel(name, &symbolPointer)) return TRUE;
+    if (keepingAll && symbolFound && 
+       (symbolPointer->aOFData.symbolId == SymbolIdUnset)) {
+      AddSymbol(symbolPointer);
+    }
+    i = ConstantExpr(line, &lineIndex, FALSE, &defined);
+    programCounter += i;
+    if (symbolFound) symbolPointer->length = i;
+    break;
+
+    case TDCW:
+    if (programCounter & 1) programCounter++;
+    if (symbolFound && DefineProgramLabel(name, &symbolPointer)) return TRUE;
+    if (keepingAll && symbolFound &&
+       (symbolPointer->aOFData.symbolId == SymbolIdUnset)) {
+      AddSymbol(symbolPointer);
+    }
+    i = programCounter;
+    /*Now handle value to be output */
+    do {
+      value = ConstantExpr(line, &lineIndex, TRUE, &defined);
+      programCounter += 2;
+      if (errorFound || (line[lineIndex] != Comma)) break;
+      lineIndex++;
+    } while (1); /* loop */
+    if (symbolFound) symbolPointer->length = programCounter - i;
+    break;
+
+    case TAMP:
+    while ((programCounter % 4) != 0) programCounter++;
+    if (symbolFound && DefineProgramLabel(name, &symbolPointer)) return TRUE;
+    if (keepingAll && symbolFound &&
+       (symbolPointer->aOFData.symbolId == SymbolIdUnset)) {
+      AddSymbol(symbolPointer);
+    }
+    i = programCounter;
+    /*Now handle value to be output */
+    do {
+#ifdef AAsm
+      value = ConstantExpr(line, &lineIndex, TRUE, &defined);
+#else
+      eSymbolPointer = ExternalExpr(line, &lineIndex, &value);
+      /* Ignore all but first one for the moment */
+      if (eSymbolPointer == NULL) {
+        value = ConstantOrAddressExpr(line, &lineIndex, &operandType, TRUE,
+        &defined);
+      }
+#endif
+      programCounter += 4;
+      if (errorFound || (line[lineIndex] != Comma)) break;
+      lineIndex++;
+    } while (1);
+    if (symbolFound) symbolPointer->length = programCounter - i;
+    break;
+
+    case THAT:
+    value =
+      ConstantOrAddressExpr(line, &lineIndex, &operandType, FALSE, &defined);
+    if (errorFound) return TRUE;
+    switch (operandType) {
+      case ConstantOT:
+      if (line[lineIndex] == Comma) {
+        lineIndex++;
+        i = RegisterExpr(line, &lineIndex);
+        if (errorFound) return TRUE;
+#ifndef AAsm
+        if ((areaNumber == 0) && (i == 15)) Report(AsmError,errors_ADirMissing);
+#endif
+        variableCounter.type = RelativeVCT;
+        variableCounter.u.relativeVC.reg = i;
+        variableCounter.u.relativeVC.offset = value;
+      } else {
+        variableCounter.type = FixedVCT;
+        variableCounter.u.offset = value;
+      }; /* if */
+      break;
+
+      case PCRelOT:
+#ifndef AAsm
+      if ((areaNumber == 0) && (i == 15)) Report(AsmError,errors_ADirMissing);
+#endif
+      variableCounter.type = RelativeVCT;
+      variableCounter.u.relativeVC.reg = 15;
+      variableCounter.u.relativeVC.offset = value;
+
+    }; /* case */
+    break;
+
+    case TEND:
+    if (fromInterface) return FALSE;
+    CheckStack();
+    *passEnded = TRUE;
+    break;
+
+    case TLNK:
+    if (fromInterface) return FALSE;
+    CheckStack();
+    *wasLink = TRUE;
+    *linkPointer = line + lineIndex;
+    if (exception == None) while (!TermCheck(line[lineIndex])) lineIndex++;
+    break;
+
+    case TGET:
+    GetDir(line, &lineIndex);
+    if (exception == None) return TRUE;
+    break;
+
+#ifdef BINARY_INCLUDES
+    case TGETBIN:                        /* added by NRaine */
+    GetBin1(line, &lineIndex);
+    if (exception == None) return TRUE;
+    break;
+#endif
+
+    case TORG:
+    if (asmModeSet || (programCounter != 0))
+    { Report(AsmError,errors_TooLateOrg);
+      return TRUE;
+    }
+    value = ConstantExpr(line, &lineIndex, FALSE, &defined);
+    if (errorFound) return TRUE;
+    programCounter = value;
+#ifdef AAsm
+    loadAddress = value;
+#else
+    if (value & 3) Report(ReportWarning,p1dir_p1dir_ORG_forced);
+    value &= ~3;
+    if (areaNumber)
+    { currArea->dec.area_base = value;
+      currArea->dec.area_attributes |= AOF_ABSAT;
+    }
+#endif
+    asmMode = AbsoluteAM;
+    asmModeSet = TRUE;
+    break;
+
+    case TOPT:
+    value = ConstantExpr(line, &lineIndex, FALSE, &defined);
+    i = value / 4;
+    if ((i & 1) && ((1 << ListPC) & listStatus)) {
+      ListLine();
+      PageThrow();
+    }; /* if */
+    if ((i / 2) & 1) lineNumber = 0;
+    i = i / 4;
+    if (i % 4 == 1) nextListState |= 1 << ListSETPC;
+    else if ((i % 4) == 2) nextListState &= ~(1 << ListSETPC);
+    i = i / 4;
+    if ((i % 4) == 1) nextListState |= 1 << ListMacExpPC;
+    else if ((i % 4) == 2) nextListState &= ~(1 << ListMacExpPC);
+    i = i / 4;
+    if ((i % 4) == 1) nextListState |= 1 << ListMacCallPC;
+    else if ((i % 4) == 2) nextListState &= ~(1 << ListMacCallPC);
+    i = i / 4;
+    if ((i % 4) == 1) nextListState |= 1 << ListPC;
+    else if ((i % 4) == 2) nextListState &= ~(1 << ListPC);
+    i = i / 4;
+    if ((i % 4) == 1) nextListState |= 1 << ListCondPC;
+    else if ((i % 4) == 2) nextListState &= ~(1 << ListCondPC);
+    i = i / 4;
+    if ((i % 4) == 1) nextListState |= 1 << ListMendPC;
+    else if ((i % 4) == 2) nextListState &= ~(1 << ListMendPC);
+    i = i / 4;
+    if ((i % 4) == 1) nextListState |= 1 << ListOptsPC;
+    else if ((i % 4) == 2) nextListState &= ~(1 << ListOptsPC);
+    if (!((1 << ListOptsPC) & listStatus)) CancelLineList();
+    break;
+
+    case TTTL:
+#ifndef AAsm
+    if ((input_style == AsIS) && label_found &&
+      DefineProgramLabel(name, &symbolPointer)) return TRUE;
+#endif
+    while (isWhiteSpace(line[lineIndex])) lineIndex++;
+    value = lineIndex;
+    while (line[lineIndex] != CR) lineIndex++;
+    name.length = lineIndex - value;
+    name.key = line + value;
+    SetTitle(name);
+    break;
+
+    case TSUBTTL:
+    while (isWhiteSpace(line[lineIndex])) lineIndex++;
+    value = lineIndex;
+    while (line[lineIndex] != CR) lineIndex++;
+    name.length = lineIndex - value;
+    name.key = line + value;
+    SetSubtitle(name);
+    break;
+
+    case TRN:
+    value = ConstantExpr(line, &lineIndex, FALSE, &defined);
+    if (errorFound) return TRUE;
+    if (value >= 0x10) {
+      Report(AsmError,errors_RegRange);
+      return TRUE;
+    }; /* if */
+    symbolPointer = DefineReg(name);
+    if (symbolPointer == NULL ||
+        symbolPointer->value.card != -1 && symbolPointer->value.card != value)
+    {
+      Report(AsmError,errors_RegSymExists);
+      return TRUE;
+    }; /* if */
+    AddDef(symbolPointer);
+    symbolPointer->value.card = value;
+    ListRegValue(value);
+    break;
+
+    case TFN:
+    value = ConstantExpr(line, &lineIndex, FALSE, &defined);
+    if (errorFound) return TRUE;
+    if (value >= 8) {
+      Report(AsmError,errors_RegRange);
+      return TRUE;
+    }; /* if */
+    symbolPointer = DefineFPReg(name);
+    if (symbolPointer == NULL ||
+        symbolPointer->value.card != -1 && symbolPointer->value.card != value)
+    {
+      Report(AsmError,errors_RegSymExists);
+      return TRUE;
+    };
+    AddDef(symbolPointer);
+    symbolPointer->value.card = value;
+    ListRegValue(value);
+    break;
+
+    case TCN:
+    value = ConstantExpr(line, &lineIndex, FALSE, &defined);
+    if (errorFound) return TRUE;
+    if (value >= 0x10) {
+      Report(AsmError,errors_RegRange);
+      return TRUE;
+    }; /* if */
+    symbolPointer = DefineCoprocReg(name);
+    if (symbolPointer == NULL ||
+        symbolPointer->value.card != -1 && symbolPointer->value.card != value)
+    {
+      Report(AsmError,errors_RegSymExists);
+      return TRUE;
+    };
+    AddDef(symbolPointer);
+    symbolPointer->value.card = value;
+    ListRegValue(value);
+    break;
+
+    case TCP:
+    value = ConstantExpr(line, &lineIndex, FALSE, &defined);
+    if (errorFound) return TRUE;
+    if (value >= 0x10) {
+      Report(AsmError,errors_RegRange);
+      return TRUE;
+    }; /* if */
+    symbolPointer = DefineCoprocName(name);
+    if (symbolPointer == NULL ||
+        symbolPointer->value.card != -1 && symbolPointer->value.card != value)
+    {
+      Report(AsmError,errors_RegSymExists);
+      return TRUE;
+    };
+    AddDef(symbolPointer);
+    symbolPointer->value.card = value;
+    ListRegValue(value);
+    break;
+
+    case TWHILE:
+    s.type = WhileSSET;
+    s.u.whileEl.lineNumber = lineNumber-1;
+    s.u.whileEl.pointer = oldPointerInFile;
+    s.u.whileEl.state = listStatus;
+    s.u.whileEl.notSkipping = notSkipping;
+    if (!Stack(s)) break;
+    if (notSkipping) {
+      if (!LogicalExpr(line, &lineIndex)) {
+        notSkipping = FALSE;
+        if (terseState) nextListState &= ~(1 << ListPC);
+      }
+    } else {
+      while (line[lineIndex] != CR) lineIndex++;
+    }
+    CancelListForCond();
+    break;
+
+    case TWEND:
+    WendDir();
+    if (exception != None) break;
+    CancelListForCond();
+    break;
+
+    case TMACRO:
+    if (macroLevel != 0)
+      Report(FatalError,p1dir_p1dir_macro_within);
+    if (!notSkipping) IgnoreMacroDefinition();
+    else DefineMacro();
+    if (exception == None) return TRUE;
+    /* Make sure exceptions handled before returning */
+    break;
+
+    case TMEXIT:
+    if (MexitDir() && exception == None) return TRUE;
+    break;
+
+    case TMEND:
+    if (MendDir() && exception == None) return TRUE;
+    break;
+
+    case TGBLA:
+    if (! SymbolTest(line, &lineIndex, &name)) {
+      Report(AsmError,errors_BadGlob);
+      return TRUE;
+    }; /* if */
+    symbolPointer = DefineGlobalA(name);
+    if (symbolPointer == NULL) {
+      Report(AsmError,errors_GlobExists);
+      return TRUE;
+    }; /* if */
+    symbolPointer->u.s.p2d = 0;
+    CancelListForSet();
+    break;
+
+    case TGBLL:
+    if (! SymbolTest(line, &lineIndex, &name)) {
+      Report(AsmError,errors_BadGlob);
+      return TRUE;
+    }; /* if */
+    symbolPointer = DefineGlobalL(name);
+    if (symbolPointer == NULL) {
+      Report(AsmError,errors_GlobExists);
+      return TRUE;
+    }; /* if */
+    symbolPointer->u.s.p2d = 0;
+    CancelListForSet();
+    break;
+
+    case TGBLS:
+    if (! SymbolTest(line, &lineIndex, &name)) {
+      Report(AsmError,errors_BadGlob);
+      return TRUE;
+    }; /* if */
+    symbolPointer = DefineGlobalS(name);
+    if (symbolPointer == NULL) {
+      Report(AsmError,errors_GlobExists);
+      return TRUE;
+    }; /* if */
+    symbolPointer->u.s.p2d = 0;
+    CancelListForSet();
+    break;
+
+    case TLCLA:
+    if (macroLevel == 0) {
+      Report(AsmError,errors_LocNotAllowed);
+      return TRUE;
+    }; /* if */
+    if (! SymbolTest(line, &lineIndex, &name)) {
+      Report(AsmError,errors_BadLoc);
+      return TRUE;
+    }; /* if */
+    symbolPointer = DefineLocalA(name);
+    if (symbolPointer == NULL) {
+      Report(AsmError,errors_LocExists);
+      return TRUE;
+    }; /* if */
+    CancelListForSet();
+    break;
+
+    case TLCLL:
+    if (macroLevel == 0) {
+      Report(AsmError,errors_LocNotAllowed);
+      return TRUE;
+    }; /* if */
+    if (!SymbolTest(line, &lineIndex, &name)) {
+      Report(AsmError,errors_BadLoc);
+      return TRUE;
+    }; /* if */
+    symbolPointer = DefineLocalL(name);
+    if (symbolPointer == NULL) {
+      Report(AsmError,errors_LocExists);
+      return TRUE;
+    }; /* if */
+    CancelListForSet();
+    break;
+
+    case TLCLS:
+    if (macroLevel == 0) {
+      Report(AsmError,errors_LocNotAllowed);
+      return TRUE;
+    }; /* if */
+    if (!SymbolTest(line, &lineIndex, &name)) {
+      Report(AsmError,errors_BadLoc);
+      return TRUE;
+    }; /* if */
+    symbolPointer = DefineLocalS(name);
+    if (symbolPointer == NULL) {
+      Report(AsmError,errors_LocExists);
+      return TRUE;
+    }; /* if */
+    CancelListForSet();
+    break;
+
+    case TSETA:
+    value = ConstantExpr(line, &lineIndex, FALSE, &defined);
+    if (errorFound) return TRUE;
+    if (fromInterface)
+    { /* Implicit GBLA... */
+      symbolPointer = DefineGlobalA(name);
+      if (symbolPointer == NULL) {
+        Report(AsmError,errors_GlobExists);
+        return TRUE;
+      }
+      symbolPointer->u.s.p2d = 1;
+    }
+    else
+    { symbolPointer = LookupLocalA(name);
+      if (symbolPointer == NULL) symbolPointer = LookupGlobalA(name);
+      if (symbolPointer == NULL) {
+        Report(AsmError,errors_WrongSy);
+        return TRUE;
+      }
+    }
+    symbolPointer->value.card = value;
+    ListWordValue(value);
+    CancelListForSet();
+    break;
+
+    case TSETL:
+    ifBool = LogicalExpr(line, &lineIndex);
+    if (errorFound) return TRUE;
+    if (fromInterface)
+    { /* Implicit GBLL... */
+      symbolPointer = DefineGlobalL(name);
+      if (symbolPointer == NULL) {
+        Report(AsmError,errors_GlobExists);
+        return TRUE;
+      }
+      symbolPointer->u.s.p2d = 1;
+    }
+    else
+    { symbolPointer = LookupLocalL(name);
+      if (symbolPointer == NULL) symbolPointer = LookupGlobalL(name);
+      if (symbolPointer == NULL) {
+        Report(AsmError,errors_WrongSy);
+        return TRUE;
+      }
+    }
+    symbolPointer->value.bool = ifBool;
+    ListBoolValue(ifBool);
+    CancelListForSet();
+    break;
+
+    case TSETS:
+    StringExpr(line, &lineIndex, &string);
+    if (errorFound) return TRUE;
+    if (fromInterface)
+    { /* Implicit GBLS... */
+      symbolPointer = DefineGlobalS(name);
+      if (symbolPointer == NULL) {
+        Report(AsmError,errors_GlobExists);
+        return TRUE;
+      }
+      symbolPointer->u.s.p2d = 1;
+    }
+    else
+    { symbolPointer = LookupLocalS(name);
+      if (symbolPointer == NULL) symbolPointer = LookupGlobalS(name);
+      if (symbolPointer == NULL) {
+        Report(AsmError,errors_WrongSy);
+        return TRUE;
+      }
+    }
+    ListStringValue(string);
+    symbolPointer->value.ptr->length = string.length;
+    if (string.length > symbolPointer->value.ptr->maxLength) {
+      if (symbolPointer->value.ptr->maxLength > 0)
+        free(symbolPointer->value.ptr->key);
+      symbolPointer->value.ptr->key = (char *) mymalloc((size_t)(string.length));
+      symbolPointer->value.ptr->maxLength = symbolPointer->value.ptr->length;
+    }
+    if (string.length > 0)
+      memcpy(symbolPointer->value.ptr->key, string.key, (size_t)(string.length));
+    CancelListForSet();
+    break;
+
+    case TASSERT:
+    if ((! AssertExpr(line, &lineIndex, TRUE, &defined)) && defined) {
+      Report(AsmError,p1dir_p1dir_assert_failed);
+    /*exception = EndOfInput; */
+    }
+    break;
+
+    case TROUT:
+    while ((programCounter % 4) != 0) programCounter++;
+    if (symbolFound) {
+      symbolPointer = LookupFixed(name, FALSE);
+      if (symbolPointer == NULL) {
+        Report(AsmError,errors_MulDefSym);
+        return TRUE;
+      }; /* if */
+      if (DefineProgramLabel(name, &symbolPointer)) return TRUE;
+    } else symbolPointer = NULL;
+    NewRoutine(symbolPointer);
+    break;
+
+    case TALIGN:
+#ifndef AAsm
+    if ((input_style == AsIS) && label_found &&
+      DefineProgramLabel(name, &symbolPointer)) return TRUE;
+#endif
+    if (
+#ifndef AAsm
+        (input_style == ObjAsmIS) &&
+#endif
+        AllComment(line, &lineIndex)) value = 4;
+    else {
+      value = ConstantExpr(line, &lineIndex, FALSE, &defined);
+      if (errorFound) return TRUE;
+    }; /* if */
+#ifndef AAsm
+    if (input_style == ObjAsmIS) {
+#endif
+      if (line[lineIndex] == Comma) {
+        lineIndex++;
+        j = ConstantExpr(line, &lineIndex, FALSE, &defined);
+        if (errorFound) return TRUE;
+      } else j = 0;
+#ifndef AAsm
+    }; /* if */
+#endif
+    i = value;
+#ifndef AAsm
+    if (input_style == ObjAsmIS) {
+#endif
+      if (value != 0) while ((value % 2) == 0) value /= 2;
+#ifndef AAsm
+    } else {
+      i = 4;
+      j = value;
+      value = 1;
+      if (j > 3) {
+        Report(AsmError,errors_BadAlign);
+        return TRUE;
+      }; /* if */
+    }; /* if */
+#endif
+    if (value != 1) {
+      Report(AsmError,errors_BadAlign);
+      return TRUE;
+    }; /* if */
+    /*Now align*/
+    programCounter += (j - programCounter) % i;
+    break;
+
+    case TLTORG:
+#ifndef AAsm
+    if ((input_style == AsIS) && label_found &&
+      DefineProgramLabel(name, &symbolPointer)) return TRUE;
+#endif
+    LiteralOrg();/*Set up the origin*/
+    break;
+
+#ifndef AAsm
+    case TIMPORT:
+#ifdef HOST_IS_RISCOS
+    if (absolute_flag)
+        return TRUE;
+#endif
+    if (!SymbolTest(line, &lineIndex, &name))
+      Report(AsmError,errors_BadImport);
+    else
+    { CARDINAL xat = 0;
+      ifBool = FALSE;
+      if (AllComment(line, &lineIndex)) goto DoneImport;
+      xat = AOF_extra_attributes(line, &lineIndex, FALSE);
+      if (AllComment(line, &lineIndex)) goto DoneImport;
+      if (line[lineIndex] != Comma)
+      { Report(AsmError,errors_CommaMissing);
+        return TRUE;
+      }
+      lineIndex++;
+      if (AllComment(line, &lineIndex) ||
+        (memcmp(line+lineIndex, "WEAK", 4) != 0) ||
+        /* Check only precisely what is required */
+        !AllComment(line+4, &lineIndex))
+      {
+        Report(AsmError,errors_BadIMAttr);
+        return TRUE;
+      }
+      lineIndex += 4;
+      ifBool = TRUE;
+DoneImport:
+      symbolPointer = LookupRef(name, FALSE);
+      if ((symbolPointer != NULL))
+      { if (symbolPointer->u.s.sdt != ExternalSDT)
+        { Report(AsmError,errors_ImportExists);
+          return TRUE;
+        }
+      }
+      else
+        symbolPointer = LookupExternal(name);
+      AddDef(symbolPointer);
+      symbolPointer->u.s.aof_xat = (BITFIELD) xat;
+      if (symbolPointer->aOFData.symbolId == SymbolIdUnset)
+      { symbolPointer->value.bool = ifBool;
+        AddSymbol(symbolPointer);
+      }
+      else if (!ifBool)
+        symbolPointer->value.bool = FALSE; /*Record WEAK bit*/
+    }
+    break;
+
+    case TEXPORT:
+#ifdef HOST_IS_RISCOS
+    if (absolute_flag)
+        return TRUE;
+#endif
+    if ((input_style == AsIS) && label_found &&
+      DefineProgramLabel(name, &symbolPointer)) return TRUE;
+    for (;;)
+    { if (!SymbolTest(line, &lineIndex, &name))
+        Report(AsmError,errors_BadExport);
+      else
+      { symbolPointer = LookupRef(name, FALSE);
+        if (symbolPointer == NULL)
+          symbolPointer = LookupFixed(name, FALSE);
+        AddUse(symbolPointer);
+        if ((symbolPointer->u.s.sdt != FixedSDT) ||
+          (symbolPointer->u.s.fst == RegisterRelativeFST) ||
+          (symbolPointer->u.s.fst == RegisterListFST))
+        {
+          Report(AsmError,errors_BadExportType);
+        }
+        else
+        { if (symbolPointer->aOFData.symbolId == SymbolIdUnset)
+            AddSymbol(symbolPointer);
+          symbolPointer->u.s.at = ExportAT;
+        }
+      }
+      symbolPointer->u.s.aof_xat =
+         (BITFIELD) AOF_extra_attributes(line, &lineIndex, TRUE);
+      if (AllComment(line, &lineIndex)) break;
+      if (line[lineIndex] != Comma) { Report(AsmError,errors_CommaMissing); return TRUE; }
+      lineIndex++; while (isWhiteSpace(line[lineIndex])) lineIndex++;
+    }
+    break;
+
+    case TSTRONG:
+#ifdef HOST_IS_RISCOS
+    if (absolute_flag)
+        return TRUE;
+#endif
+    if (output_style == ADotOutOS) {
+      Report(AsmError,errors_BadStrong);
+      return TRUE;
+    }; /* if */
+    if (!SymbolTest(line, &lineIndex, &name)) {
+      Report(AsmError,errors_BadImport);
+    } else {
+      symbolPointer = LookupRef(name, FALSE);
+      if ((symbolPointer != NULL)) {
+        if ((symbolPointer->u.s.sdt != ExternalSDT) ||
+          (symbolPointer->u.s.sds != UndefinedSDS)) {
+          Report(AsmError,errors_ImportExists);
+          return TRUE;
+        }; /* if */
+      } else {
+        symbolPointer = LookupExternal(name);
+      }; /* if */
+      AddDef(symbolPointer);
+      symbolPointer->u.s.sds = DefinedSDS;
+      if (symbolPointer->aOFData.symbolId == SymbolIdUnset) {
+        AddSymbol(symbolPointer);
+      }; /* if */
+      symbolPointer->u.s.at = ExportedAT;
+    }
+    break;
+
+    case TKEEP:
+#ifdef HOST_IS_RISCOS
+    if (absolute_flag)
+        return TRUE;
+#endif
+    if (AllComment(line, &lineIndex)) {
+      keepingAll = TRUE;
+      return TRUE;
+    }
+    /* Fall through */
+    case TLEAF:
+    if (!SymbolTest(line, &lineIndex, &name)) {
+      Report(AsmError,errors_BadExport);
+    } else {
+      symbolPointer = LookupRef(name, FALSE);
+      if (symbolPointer == NULL) {
+        symbolPointer = LookupFixed(name, FALSE);
+      }
+      AddUse(symbolPointer);
+      if ((symbolPointer->u.s.sdt != FixedSDT) ||
+        (symbolPointer->u.s.fst == RegisterRelativeFST) ||
+        (symbolPointer->u.s.fst == RegisterListFST)) {
+        Report(AsmError,errors_BadExportType);
+      } else if (symbolPointer->aOFData.symbolId == SymbolIdUnset) {
+        AddSymbol(symbolPointer);
+      }
+      if (directiveNumber == TLEAF)
+          symbolPointer->u.s.aof_xat = (BITFIELD)(SYM_LEAFAT >> 8);
+    }
+    break;
+
+    case TAREA:
+    if (!SymbolTest(line, &lineIndex, &name)) {
+      Report(AsmError,errors_NoAreaName);
+    } else if (DefineProgramLabel(name, &symbolPointer)) {
+      return TRUE;
+    } else {
+      int32 k;
+      if (currArea != NULL)
+      { LiteralOrg();
+        currArea->dec.area_size =
+          (((int32)programCounter + 3) & ~3) - currArea->dec.area_base;
+          /* Round up size to word boundary */
+      }
+      ++areaNumber;
+      symbolPointer->area = areaNumber;
+      /*Handle the attributes and alignment here*/
+      i = 2; /*Default alignment*/
+      k = 0; /*Default attributes */
+      for (;;)
+      { ifBool = FALSE;
+        while (isWhiteSpace(line[lineIndex])) { lineIndex++; }; /* while */
+        if (line[lineIndex] != Comma) { break; }; /* if */
+        lineIndex++;
+        if (AreaAttrName(line, &lineIndex, &j))
+        { k |= j;
+          if (output_style == ADotOutOS)
+          { /* Check not too many areas of each type */
+            switch (j) {
+              case 0: /* Data area */
+              if (dataareas++ != 0) {
+                Report(AsmError,errors_TooManyData);
+                return TRUE;
+              };
+              break;
+
+              case AOF_CODEAT:
+              if (textareas++ != 0) {
+                Report(AsmError,errors_TooManyCode);
+                return TRUE;
+              };
+              break;
+
+              case AOF_0INITAT:
+              if (bssareas++ != 0) {
+                Report(AsmError,errors_TooMany0Init);
+                return TRUE;
+              };
+              break;
+            }
+          }
+          if (j == AOF_BASEDAT)
+          { j = RegisterExpr(line, &lineIndex);
+            if (errorFound) return TRUE;
+            if (area_of_base[j] != 0)
+            { Report(AsmError,errors_BaseInUse);
+              return TRUE;
+            }
+            k |= (j << AOF_BASESHIFT);
+            area_of_base[j] = areaNumber;
+          }
+        } else if (SymbolTest(line, &lineIndex, &name) &&
+          (name.length == 5) && (memcmp (name.key, "ALIGN", 5) == 0)) {
+          while (isWhiteSpace(line[lineIndex])) lineIndex++;
+          if (line[lineIndex] != Equals)
+            ifBool = TRUE;
+          else
+          { lineIndex++;
+            j = ConstantExpr(line, &lineIndex, FALSE, &defined);
+            if (errorFound) return TRUE;
+            if ((j < 2) || (j > 32)) ifBool = TRUE; else i = j;
+          }
+        } else {
+          Report(AsmError,errors_BadAttr);
+        }
+        if (j==AOF_ABSAT) {
+          symbolPointer->u.s.fst = AbsoluteFST;
+        }
+        if (ifBool) { Report(AsmError,errors_BadAttr); return TRUE; }
+      } /* loop */
+      if (k & AOF_CODEAT)
+      { if (k & (AOF_0INITAT|AOF_BASEDAT))
+        { Report(AsmError,errors_BadAttrs);
+          return TRUE;
+        }
+        if (pc_is_32bit)     k += AOF_32bitAT;
+        if (!sw_stack_check) k += AOF_NOSWSTKCK;
+      }
+      if (make_debug &&
+          currArea != NULL && currArea->dec.area_attributes & AOF_CODEAT)
+        asdsupp_section_end(currArea->dec.area_size, lineNumber);
+      AddAreaDeclaration(symbolPointer, i, k);
+      if (make_debug && currArea->dec.area_attributes & AOF_CODEAT)
+      { char temp[MaxLineLength];
+        k = symbolPointer->key.length;
+        memcpy(temp, symbolPointer->key.key, (size_t)k);
+        temp[k] = 0;   /* Produce a proper string for asdsupp */
+        asdsupp_new_section(temp);
+        asdsupp_new_file(error_filename(), lineNumber);
+      }
+      if (asmMode != AbsoluteAM) programCounter = 0;
+      last_pc = programCounter;
+      NewRoutine(symbolPointer);
+      symbolPointer->value.card = 0;
+    }
+    break;
+
+    case TENTRY:
+#ifdef HOST_IS_RISCOS
+    if (absolute_flag)
+        return TRUE;
+#endif
+    if (header.aof_entryarea != 0) {
+      Report(AsmError,errors_EntryExists);
+    } else {
+      header.aof_entryarea = areaNumber;
+      header.aof_entryoffset = (int32)programCounter;
+    }; /* if */
+    break;
+
+    case TAOUT:
+    case TAOF:
+#ifdef HOST_IS_RISCOS
+    if (absolute_flag)
+        return TRUE;
+#endif
+    if (output_style_set) {
+      Report(AsmError,errors_TooLateStyle);
+      return TRUE;
+    };
+    output_style_set = TRUE;
+    output_style = (directiveNumber == TAOF) ? AofOS : ADotOutOS;
+    break;
+
+#else /* AAsm */
+    case TLEADR:
+    value = ConstantExpr(line, &lineIndex, TRUE, &defined);
+    break;
+
+    case TAREA:
+    /* treat as comment and mostly ignore */
+    Report(ReportWarning,p1dir_p1dir_area_ignored);
+    while (line[lineIndex] != CR) ++lineIndex;
+    break;
+#endif
+
+    case TNOOP:
+    if (symbolFound && DefineProgramLabel(name, &symbolPointer)) {
+      return TRUE;
+    }
+    programCounter += 4;     /* output a NOOP */
+    break;
+
+    case TDCFS:
+    while ((programCounter % 4) != 0) programCounter++;
+    if (symbolFound && DefineProgramLabel(name, &symbolPointer))
+      return TRUE;
+    i = programCounter;
+    /*Now handle value to be output */
+    do {
+      switch (Read(line, &lineIndex, Single, &value, &value)) {
+        case ReadOverflow:
+        Report(AsmError,errors_FPOver);
+        break;
+
+        case NoNumberFound:
+        Report(AsmError,errors_FPNoNum);
+
+      }; /* case */
+      programCounter += 4;
+      while (isWhiteSpace(line[lineIndex])) lineIndex++;
+      if (errorFound || (line[lineIndex] != Comma)) break;
+      lineIndex++;
+    } while (1);
+    if (symbolFound) symbolPointer->length = programCounter - i;
+    break;
+
+    case TDCFD:
+    while ((programCounter % 4) != 0) programCounter++;
+    if (symbolFound && DefineProgramLabel(name, &symbolPointer))
+      return TRUE;
+    i = programCounter;
+    /*Now handle value to be output */
+    do {
+      switch (Read(line, &lineIndex, Double, &value, &value)) {
+        case ReadOverflow:
+        Report(AsmError,errors_FPOver);
+        break;
+
+        case NoNumberFound:
+        Report(AsmError,errors_FPNoNum);
+
+      }; /* case */
+      programCounter += 8;
+      while (isWhiteSpace(line[lineIndex])) lineIndex++;
+      if (errorFound || (line[lineIndex] != Comma)) break;
+      lineIndex++;
+    } while (1);
+    if (symbolFound) symbolPointer->length = programCounter - i;
+    break;
+
+    case TNOFP:
+    if (hadFP) { Report(AsmError,errors_FPTooLate); return TRUE; }; /* if */
+    allowFP = FALSE;
+    break;
+
+    case TRLIST:
+try_rlist:
+    while (isWhiteSpace(line[lineIndex])) lineIndex++;
+    value = RegisterListExpr(line, &lineIndex);
+    if (errorFound) return TRUE;
+    symbolPointer = LookupRef(name, FALSE);
+    if (symbolPointer != NULL) {
+      Report(AsmError,errors_TooLateRegList);
+      return TRUE;
+    }; /* if */
+    symbolPointer = LookupFixed(name, FALSE);
+    AddDef(symbolPointer);
+    symbolPointer->u.s.sds = DefinedSDS;
+    symbolPointer->u.s.fst = RegisterListFST;
+#ifndef AAsm
+    symbolPointer->area = areaNumber;
+#endif
+    symbolPointer->value.card = value;
+    ListWordValue(value);
+    symbolPointer->length = 0;
+    break;
+
+  }; /* switch */
+  if (exception != None) {
+/*
+    if ((exception == EndOfInput) || (exception == StackUnderflow))
+      exception = FileNotFound;
+    else if ((exception == StackOverflow) || (exception == StackErr)) {
+      UnwindToGet();
+      exception = FileNotFound;
+    };
+*/
+    return TRUE;
+  };
+#ifndef AAsm
+check_for_more_lines:
+#endif
+  if (!errorFound) {
+#ifdef AAsm
+    while (isWhiteSpace(line[lineIndex])) lineIndex++;
+    if ((line[lineIndex] != CommentSymbol) && (line[lineIndex] != CR))
+#else
+    if (!AllComment(line, &lineIndex) && (line[lineIndex] != CommentSymbol))
+#endif
+    { Report(AsmError,errors_BadEOL);
+    }
+  }
+#ifndef AAsm
+  end_of_line = lineIndex;
+#endif
+  return TRUE;
+
+} /* End P1Directive */
+
+/* End p1directives.c */

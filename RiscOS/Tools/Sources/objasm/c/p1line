@@ -1,0 +1,1306 @@
+/* -> p1line.c
+ * Title: The line processing routine for Pass 1
+ * Copyright (C) 1991 Advanced RISC Machines Limited. All rights reserved.
+ */
+
+/*
+ * RCS $Revision$
+ * Checkin $Date$
+ * Revising $Author$
+ */
+
+#include "code.h"
+#include "condasm.h"
+#include "constant.h"
+#include "errors.h"
+#include "expr.h"
+#include "exprtyp.h"
+#include "formatio.h"
+#include "fpio.h"
+#include "getline.h"
+#include "globvars.h"
+#include "listing.h"
+#include "literals.h"
+#include "locallab.h"
+#include "macrotyp.h"
+#include "nametyp.h"
+#ifndef AAsm
+#  include "aofvars.h"
+#  include "tokens.h"
+#endif
+#include "occur.h"
+#include "opcode.h"
+#include "p1dir.h"
+#include "p1line.h"
+#include "tables.h"
+#include "vars.h"
+#include "message.h"
+#include <stdio.h>
+#include <ctype.h>
+#ifndef AAsm
+#  include <string.h>
+#endif
+
+/* Bit values */
+
+#define Type1ValueShift  21       /*Bit 21 onwards for four bits*/
+#define Type1ImmBit      0x2000000/*The bit distinguishing Imm from Reg*/
+#define Type2RegBit      0x2000000/*The bit distinguishing Imm from Reg*/
+#define PreBit           0x1000000/*The pre/post bit for type 2/4 opcodes*/
+#define UpBit            0x800000/*The up/down bit for type 2/4 opcodes*/
+#define PSRBit           0x400000/*The PSR update bit for group 4 opcodes*/
+#define WriteBackBit     0x200000/*The writeback bit for data transfer opcodes*/
+#define WriteBack        32      /* flag added to r15 denoting write back */
+
+#define ANDVal           0x00
+#define TSTVal           0x08
+#define CMNVal           0x0B
+#define MOVVal           0x0D
+#define BICVal           0x0E
+#define MVNVal           0x0F
+
+/* Bit positions */
+
+#define TransBit         21
+#define LoadBit          20
+#define CLnBit           22
+#define DoubleBit        15
+
+static BOOLEAN Rotatable(CARDINAL value)
+{
+  CARDINAL i,
+           j,
+           k;
+  for (i = 0; i <= 1; i++) {
+    j = value;
+    k = 0;
+    do {
+      if (value < 0x100) return TRUE;
+      if (k >= 0x10) break; /* if */
+      value = (value / 4) + (value % 4) * 0x40000000;
+      k++;
+    } while (1); /* loop */
+    value ^= -1;
+  }; /* for */
+  return FALSE;
+} /* End Rotatable */
+
+BOOLEAN P1LineHandler(char **linkPointer, BOOLEAN *wasLink)
+/*
+ The returned value indicates if the pass has finished.
+ */
+{
+  Name          name,  /* Used for the opcode */
+                lname; /* Used for the label */
+  SymbolPointer symbolPointer;
+  char         *line;
+  CARDINAL      lineIndex = 0,
+                old_index,
+                after_symbol,
+                pastOpcode,
+                opcodeValue,
+                value1,
+                value2,
+                value;
+  OpcodeType    opcodeType;
+  BOOLEAN       passEnded = FALSE,
+                opcodeFound = FALSE,
+                symbol_found = FALSE,
+                defined;
+  OperandType   type;
+  Size          fPSize;
+
+  *wasLink = FALSE;
+  errorFound = FALSE;
+  if (GetLine(&line, TRUE))
+  { line = SubstituteString(line);
+    currentLinePointer = line;
+  }
+  if (exception == EndOfInput)
+  {
+#ifndef AAsm
+    exception = None;
+    if (input_style_set && (input_style == ObjAsmIS))
+      Report(ReportWarning,p1line_p1line_missing_END);
+#endif
+    return TRUE;
+  }
+
+  /* Now check for all comment */
+  ListLineNumber();
+  ListAddress();
+#ifndef AAsm
+  do {
+  /* Allow multiple assembler lines per source line for as */
+  if (AllComment(line, &lineIndex))
+#else
+  {  /* keep topcc happy */
+  while (isWhiteSpace(line[lineIndex])) lineIndex++;
+  if ((line[lineIndex] == CommentSymbol) || (line[lineIndex] == CR))
+#endif
+    return FALSE;
+#ifndef AAsm
+/* Sort out lines starting # */
+  if (line[lineIndex] == Hash) {
+    if (input_style_set) {
+      if (input_style == AsIS) {
+        return FALSE;
+      }; /* if */
+    } else {
+      if (lineIndex == 0) {
+        input_style_set = TRUE;
+        input_style = AsIS;
+        SetImplicitRegisters();
+        output_style_set = TRUE;
+        output_style = ADotOutOS;
+        return FALSE;
+      }; /* if */
+    }; /* if */
+  }; /* if */
+#endif
+  lineIndex = 0;
+  /*pass first item on line*/
+#ifndef AAsm
+  if (input_style_set && (input_style == AsIS) && (isWhiteSpace(*line))) {
+    /* 
+     * Here we must check that the stupid format hasn't allowed a label
+     * in a non column one position.
+     */
+    lineIndex++; while (isWhiteSpace(line[lineIndex])) lineIndex++;
+    old_index = lineIndex;   /* Remember the symbol start */
+    if (SymbolTest(line, &lineIndex, &lname) && (line[lineIndex] == Colon)) {
+      line += old_index;
+    }; /* if */
+    lineIndex = 0;
+    /* This should now point at the indented label if there is one */
+  }; /* if */
+#endif
+  symbol_found=SymbolTest(line, &lineIndex, &lname);
+  if (symbol_found) {
+    after_symbol = lineIndex;
+#ifndef AAsm
+    if ((line[lineIndex] == Colon) &&
+      (!input_style_set || (input_style == AsIS))) {
+      if (!input_style_set) SetImplicitRegisters();
+      input_style_set = TRUE;
+      input_style = AsIS;
+      output_style_set = TRUE;
+      output_style = ADotOutOS;
+      lineIndex++;
+    }; /* if */
+    if (!TermCheck(line[lineIndex])) {
+      symbol_found = FALSE;
+      while (!TermCheck(line[lineIndex])) {
+        lineIndex++;
+      }; /* while */
+    }; /* if */
+#else
+    if (!termin[line[lineIndex]]) {
+      symbol_found = FALSE;
+      while (!termin[line[lineIndex]]) {
+        lineIndex++;
+      }; /* while */
+    }; /* if */
+#endif
+  } else {
+#ifndef AAsm
+    while (!TermCheck(line[lineIndex])) {
+#else
+    while (!termin[line[lineIndex]]) {
+#endif
+      lineIndex++;
+    }; /* while */
+    after_symbol = lineIndex; /* Even though no symbol passed */
+  }; /* if */
+  pastOpcode = 0;  /* keep dataflow happy */
+#ifndef AAsm
+  if (!AllComment(line, &lineIndex) && (line[lineIndex] != CommentSymbol)) {
+#else
+  while (isWhiteSpace(line[lineIndex])) lineIndex++;
+  if ((line[lineIndex] != CommentSymbol) && (line[lineIndex] != CR)) {
+#endif
+    old_index = lineIndex;
+    /* In case of macro */
+    (void) DirTest(line, &lineIndex, &name);
+    opcodeFound = TRUE;
+    pastOpcode = lineIndex;
+    if (errorFound || P1Directive(line, wasLink, &passEnded, linkPointer)) {
+#ifndef AAsm
+      if ((input_style == ObjAsmIS) || errorFound || passEnded ||
+           (exception != None) ||
+           *wasLink || (line[end_of_line] != CommentSymbol))
+        return passEnded || (exception != None);
+      lineIndex = end_of_line;
+      goto check_for_more_lines;
+#else
+      return passEnded || (exception != None);
+#endif
+    }; /* if */
+  }; /* if */
+
+  /*Now handle WHILE and conditional stuff*/
+  if (!notSkipping) return FALSE;  /* Line conditionally ignored */
+
+  /*Now search for a valid opcode or macro*/
+  if (opcodeFound)
+  { if (Opcode(name, &opcodeType, &opcodeValue))
+    {
+#ifndef AAsm
+      if (!input_style_set) SetImplicitRegisters();
+      input_style_set = TRUE;
+      if (input_style == AsIS)
+      { output_style_set = TRUE;
+        output_style = ADotOutOS;
+      }
+#endif
+      programCounter = (programCounter+3) & ~3;
+#ifndef AAsm
+      if ((areaNumber == 0) && (input_style == ObjAsmIS))
+      { Report(AsmError,errors_ADirMissing);
+        if (!FakeFirstAreaDeclaration()) return FALSE;
+      }
+      output_style_set = TRUE;
+#endif
+    }
+    else
+    { if (SymbolTest(line, &old_index, &name))
+      { /* Get the symbol name right */
+        ExpandMacro(line, name);
+        if (exception != None) return TRUE;
+        return FALSE;
+      }
+      opcodeFound = FALSE;
+    }
+  }
+
+  /*Now sort out local or ordinary labels*/
+  lineIndex = after_symbol;
+  if (!isWhiteSpace(*line)) {
+    if (symbol_found) {
+#ifndef AAsm
+      if (line[lineIndex] == Colon) {
+        if ((input_style == AsIS) || !input_style_set) {
+          if (!input_style_set) SetImplicitRegisters();
+          input_style_set = TRUE;
+          input_style = AsIS;
+          output_style_set = TRUE;
+          output_style = ADotOutOS;
+          lineIndex++;
+        }; /* if */
+      } else {
+        if ((input_style == ObjAsmIS) || !input_style_set) {
+          input_style_set = TRUE;
+          input_style = ObjAsmIS;
+        } else {
+          Report(AsmError,errors_SynAfterLab);
+          return FALSE;
+        }; /* if */
+      }; /* if */
+#endif
+      symbolPointer = LookupFixed(lname, FALSE);
+      if (symbolPointer == NULL) {
+        Report(AsmError,errors_MulDefSym);
+        return FALSE;
+      } /* if */
+      AddDef(symbolPointer);
+      if ((opcodeFound && (!isWhiteSpace(line[lineIndex]))) ||
+        !termin[line[lineIndex]]) {
+        Report(AsmError,errors_SynAfterLab);
+        return FALSE;
+      }
+      /*Here we check for double definition etc.*/
+      if (symbolPointer->u.s.sds != UndefinedSDS) {
+        Report(AsmError,errors_MulDefSym);
+        return FALSE;
+      }
+      if (currArea==NULL) {
+        Report(FatalError,p1line_label_in_no_area);
+      }
+      /*Symbol is defined and label type and relocatable*/
+      symbolPointer->u.s.sds = DefinedSDS;
+      symbolPointer->u.s.fst = (currArea->dec.area_attributes & AOF_ABSAT)
+                               ? AbsoluteFST : RelocatableFST;
+      symbolPointer->u.s.sdt = FixedSDT;
+      symbolPointer->length = (opcodeFound) ? 4 : 0;
+      symbolPointer->value.card = programCounter;
+#ifndef AAsm
+      { unsigned32 attr;
+        if ((symbolPointer->area = areaNumber) != 0)
+        { attr = currArea->dec.area_attributes;
+          if (attr & AOF_BASEDAT)
+          { symbolPointer->u.s.fst = RegisterRelativeFST;
+            symbolPointer->u.s.fsr = (BITFIELD)(attr >> AOF_BASESHIFT) & 0xf;
+            symbolPointer->u.s.bt  = 1;
+          }
+        } 
+        symbolPointer->area = areaNumber;
+        if (keepingAll && (symbolPointer->aOFData.symbolId == SymbolIdUnset))
+          AddSymbol(symbolPointer);
+      }
+#endif
+    } else if (isdigit(*line)) {
+      lineIndex = 0;
+      LabelDef(line, &lineIndex);
+      if (errorFound) return FALSE;
+    } else { 
+      Report(AsmError,errors_InvLineStart);
+      return FALSE;
+    }; /* if */
+    asmModeSet = TRUE;
+  };
+  if (opcodeFound) {
+#ifndef AAsm
+    if (!area_is_code && (input_style == ObjAsmIS)) {
+      Report(AsmError,errors_CodeInDataArea);
+      return FALSE;
+    }; /* if */
+#endif
+    lineIndex = pastOpcode;
+    if ((opcodeValue & 0xF0000000) == 0xF0000000)
+      Report(ReportWarning,p1line_p1line_res_instr);
+    switch (opcodeType) {
+
+      case MVP:    /* MRS and MSR */
+      if (!pc_is_32bit)
+        Report(ReportWarning,p1line_p1line_bad_MRS);
+      if ((opcodeValue & ~0xF0000000) == MRSCode)
+      { /* MRS Rd, CPSR/SPSR[_all] */
+        value = RegisterExpr(line, &lineIndex); /*Destination*/
+        if (errorFound) return FALSE;
+        if (line[lineIndex] != Comma) {
+          Report(AsmError,errors_CommaMissing);
+          return FALSE;
+        }
+        lineIndex++; /*Step past comma*/
+        value = CPSRorSPSR(line, &lineIndex);   /*Source*/
+        if (value == 0) {
+          Report(AsmError,errors_BadCPSRorSPSR);
+          return FALSE;
+        }
+        if ((value & 12)==4 || (value & 12)==8) { /* _ctl, _flg not permitted */
+          Report(AsmError,errors_MRSnoCtlorFlg);
+          return FALSE;
+        }
+      }
+      else
+      { /* MSR CPSR/SPSR[_flg,_ctl,_all] */
+        value = CPSRorSPSR(line, &lineIndex);     /*Destination*/
+        if (value == 0) 
+        { Report(AsmError,errors_BadCPSRorSPSR);
+          return FALSE;
+        }
+        if (line[lineIndex] != Comma) {
+          Report(AsmError,errors_CommaMissing);
+          return FALSE;
+        }
+        if ((value & 12)==4) {      /* MSR_ctl : give a warning */
+          Report(ReportWarning,p1line_p1line_ctl_warn);
+        }
+        lineIndex++;/*Step past*/
+        while (isWhiteSpace(line[lineIndex])) lineIndex++;
+        if (line[lineIndex] == Hash && ((value & 12)==0 || (value & 12)==12)) {
+          Report(ReportWarning,p1line_p1line_8bit_warn);
+        }
+        goto DPoperand2;
+      }
+      break;
+
+      case DataProcessing:
+      value = RegisterExpr(line, &lineIndex);/*Read the destination*/
+      if (errorFound) return FALSE;
+      if (line[lineIndex] != Comma) {
+         Report(AsmError,errors_CommaMissing);
+         return FALSE;
+      }; /* if */
+      lineIndex++; /*Step past comma*/
+      /*
+      Now handle extra register unless MOV or MVN or test
+      First get the opcode name bits
+      */
+      value1 = (opcodeValue >> Type1ValueShift) & 15;
+      if ((value1 != MOVVal) && (value1 != MVNVal) &&
+         ((value1 > CMNVal) || (value1 < TSTVal))) {
+        /*Here we need another register*/
+        value = RegisterExpr(line, &lineIndex);/*Read the destination*/
+        if (errorFound) return FALSE;
+        if (line[lineIndex] != Comma) {
+          Report(AsmError,errors_CommaMissing);
+          return FALSE;
+        }; /* if */
+        lineIndex++; /*Step past comma*/
+      }
+      else if (value1 != MOVVal && value1 != MVNVal)
+      {
+        if (pc_is_32bit && (value == 15))
+          Report(ReportWarning,p1line_p1line_TSTP_warn);
+      }
+
+DPoperand2:
+      /*Now look for immediate or register form*/
+      while (isWhiteSpace(line[lineIndex])) lineIndex++;
+      if (line[lineIndex] == Hash) {
+        lineIndex++;
+        /*Now look for immediate form*/
+        value = ConstantExpr(line, &lineIndex, TRUE, &defined);
+        if (errorFound) { return FALSE; }; /* if */
+        /*Now see if (we have a rotator as well*/
+        if (line[lineIndex] == Comma) {
+          /*Look for a rotator*/
+          lineIndex++;
+          value = ConstantExpr(line, &lineIndex, FALSE, &defined);
+        }; /* if */
+      } else {
+        /*Now look for register form*/
+        value = ShiftedRegister(line, &lineIndex, TRUE);
+        if ((value & 0xF10) == 0xF10)
+          Report(ReportWarning,p1line_p1line_res_pc_rs);
+      }; /* if */
+      break;
+
+      case DataTransfer:
+      value2 = RegisterExpr(line, &lineIndex);  /* Destination/source */
+      if (errorFound) return FALSE;
+      if (line[lineIndex] != Comma)
+      { Report(AsmError,errors_CommaMissing);
+        return FALSE;
+      }
+      lineIndex++;  /* Step past */
+      while (isWhiteSpace(line[lineIndex])) lineIndex++;
+      if (line[lineIndex] == SquareBra)
+      { lineIndex++;
+        value1 = RegisterExpr(line, &lineIndex);
+        if (errorFound) return FALSE;
+        /*Here we split according to pre/post indexing*/
+        if (line[lineIndex] == SquareKet)
+        { /*This is the post-indexed form*/
+          lineIndex++;
+          while (isWhiteSpace(line[lineIndex])) lineIndex++;
+          if (line[lineIndex] != Comma)
+          { /* Allow optional shriek */
+            if (line[lineIndex] == Shriek)
+            { lineIndex++;
+              value1 += WriteBack;
+            }
+            else if ((1L << TransBit) & opcodeValue)
+              /* Force writeback on LDRT ..., [Rb]...    */
+              /* ... to be compatible with past practice */
+              value1 += WriteBack;
+          }
+          else
+          { lineIndex++;
+            value1 += WriteBack;
+            while (isWhiteSpace(line[lineIndex])) lineIndex++;
+            if (line[lineIndex] == Hash)
+            { lineIndex++;
+              value = ConstantExpr(line, &lineIndex, TRUE, &defined);
+            }
+            else
+            { /*Here we must allow an optional + or -*/
+              if ((line[lineIndex] == PlusSign) ||
+                (line[lineIndex] == MinusSign)) lineIndex++;
+              value = ShiftedRegister(line, &lineIndex, FALSE);
+              if ((value1 & 15) == (value & 15))
+                Report(ReportWarning,p1line_p1line_res_rm_rn);
+            }
+          }
+        }
+        else if (line[lineIndex] != Comma)
+        { Report(AsmError,errors_CommaMissing);
+          return FALSE;
+        }
+        else
+        { /* Pre-index case: Check translate bit not set in opcode */
+          if ((1L << TransBit) & opcodeValue)
+          { Report(AsmError,errors_BadTrans);
+            return FALSE;
+          }
+          lineIndex++;
+          while (isWhiteSpace(line[lineIndex])) lineIndex++;
+          if (line[lineIndex] == Hash) {
+            lineIndex++;
+            value = ConstantExpr(line, &lineIndex, TRUE, &defined);
+          } else {
+            /*Here we must allow an optional + or -*/
+            if ((line[lineIndex] == PlusSign) ||
+              (line[lineIndex] == MinusSign)) lineIndex++;
+            value = ShiftedRegister(line, &lineIndex, FALSE);
+          }; /* if */
+          if (errorFound) return FALSE;
+          if (line[lineIndex] != SquareKet) {
+            Report(AsmError,errors_MissSqKet);
+            return FALSE;
+          }; /* if */
+          lineIndex++;
+          while (isWhiteSpace(line[lineIndex])) lineIndex++;
+          if (line[lineIndex] == Shriek)
+          { lineIndex++;
+            value1 += WriteBack;
+          }
+        }
+      }
+      else
+      { /* Look for a PC or register relative expression,  or a literal */
+        if ((1L << TransBit) & opcodeValue)
+        { Report(AsmError,errors_BadTrans);
+          return FALSE;
+        }
+        value1 = 0;    /* must re-initialise this */
+#ifndef AAsm
+        if ((((line[lineIndex] == Equals) && (input_style == ObjAsmIS)) ||
+             ((line[lineIndex] == Hash) && (input_style == AsIS)))
+#else
+        if ((line[lineIndex] == Equals)
+#endif
+          && ((1L << LoadBit) & opcodeValue)) {
+          lineIndex++;
+#ifndef AAsm
+          symbolPointer = ExternalExpr(line, &lineIndex, &value);
+          if (symbolPointer == NULL) {
+            value = ConstantOrAddressExpr(line, &lineIndex, &type,
+              TRUE, &defined);
+            if (errorFound) { return FALSE; }; /* if */
+/* If the symbol is not yet defined, or it is defined, but the offset
+ * cannot be generated by rotation, then we MUST add a lieral pool slot.
+ * If on the second pass it turns out that the value could in fact have
+ * been generated by roatation, then this can be done, and the literal
+ * pool slot left unused (by this LDR, =)
+ */
+#if 0
+/* Optimising pc relative expressions into an ADD or SUB rather than an
+ * LDR has been deemed undesirable, and thus is no longer done
+ */
+           if (defined && (type==PCRelOT)) {   /* Use the absolute */
+              if (value >= programCounter+8) {  /* value of the offset */
+                value -= programCounter + 8;    /* to test for */
+              } else {                          /* rotatability */
+                value = programCounter + 8 - value;
+              }
+            }
+            if (!defined || !Rotatable(value)) {
+              if (type==PCRelOT) {
+                value = AddAddressLiteral(value,defined);
+              } else {
+              }
+            }
+#endif
+            if (type==PCRelOT) {
+              value = AddAddressLiteral(value,defined);
+            } else {
+              if (!defined || !Rotatable(value)) {
+                value = AddLiteral(defined, 0, value);
+              }
+            }
+          } else {
+            value = AddExternalLiteral(symbolPointer, value);
+          }
+#else
+          value = ConstantExpr(line, &lineIndex, TRUE, &defined);
+          value = AddLiteral(defined, defined && Rotatable(value), value);
+#endif
+        } else {
+#ifndef AAsm
+          symbolPointer = ExternalExpr(line, &lineIndex, &value);
+          if (symbolPointer == NULL) {
+            value = RegisterRelExpr(line, &lineIndex, &value1, TRUE, &defined);
+            value1=15;
+          }
+#else
+          value = RegisterRelExpr(line, &lineIndex, &value1, TRUE, &defined);
+          value1=15;
+#endif
+          if (line[lineIndex] == Shriek)
+          { lineIndex++;
+            value1 += WriteBack;
+          }
+        }
+      }
+      if (value1 == (15 + WriteBack))
+        Report(ReportWarning,p1line_p1line_undef_pc_wb);
+      if (value1 == (value2 + WriteBack) && ((1L << LoadBit) & opcodeValue))
+        Report(ReportWarning,p1line_p1line_undef_dest_wb);
+      break;
+
+      case SWI:
+#ifndef AAsm
+      symbolPointer = ExternalExpr(line, &lineIndex, &value);
+      if (symbolPointer == NULL)
+#endif
+        value = ConstantExpr(line, &lineIndex, TRUE, &defined);
+      break;
+
+      case BlockData:
+      value = RegisterExpr(line, &lineIndex);
+      if (errorFound) return FALSE;
+      if (line[lineIndex] == Shriek)
+      { lineIndex++;
+        value += WriteBack;
+        while (isWhiteSpace(line[lineIndex])) lineIndex++;
+      }
+      if (line[lineIndex] != Comma) {
+        Report(AsmError,errors_CommaMissing);
+        return FALSE;
+      }; /* if */
+      lineIndex++;
+      value1 = RegisterListExpr(line, &lineIndex);
+      if (line[lineIndex] == Hat)
+      { lineIndex++;
+        if ((value1 & (1L << 15)) == 0 && (value & WriteBack))
+          Report(ReportWarning,p1line_p1line_xfer_warn);
+      }
+      if ((value & 15) == 15)
+        Report(ReportWarning,p1line_p1line_psr1_warn);
+      break;
+
+      case Branch:
+#ifndef AAsm
+      symbolPointer = ExternalExpr(line, &lineIndex, &value);
+      if (symbolPointer == NULL)
+      { OperandType type;
+        value = ConstantOrAddressExpr(line, &lineIndex, &type, TRUE, &defined);
+      }
+#else
+      value = AddressExpr(line, &lineIndex, TRUE, &defined);
+#endif
+      break;
+
+      case Adr:
+      case ADRL:
+      value = RegisterExpr(line, &lineIndex);
+      if (errorFound) return FALSE;
+      if (line[lineIndex] != Comma) {
+        Report(AsmError,errors_CommaMissing);
+        return FALSE;
+      }; /* if */
+      lineIndex++;
+      if ((value == 15) && (opcodeType == ADRL)) {
+        Report(AsmError,errors_BadADRL);
+        return FALSE;
+      }
+      symbolPointer = ExternalExpr(line, &lineIndex, &value);
+      if (symbolPointer == NULL)
+        value = NotStringExpr(line, &lineIndex, &value, &type, TRUE, &defined);
+#ifdef DISALLOW_EXTERNAL_ADR
+      else
+      {
+        Report(AsmError,errors_no_external_adrs);
+        return FALSE;
+      }
+#endif
+      if (opcodeType == ADRL) programCounter += 4; /*Double word opcode*/
+      break;
+
+      case SWP:
+      value = RegisterExpr(line, &lineIndex);/*Destination*/
+      if (errorFound) return FALSE;
+      if (line[lineIndex] != Comma) {
+        Report(AsmError,errors_CommaMissing);
+        return FALSE;
+      }; /* if */
+      lineIndex++;/*Step past*/
+      value1 = RegisterExpr(line, &lineIndex);/*Source*/
+      if (errorFound) return FALSE;
+      if (line[lineIndex] != Comma) {
+        Report(AsmError,errors_CommaMissing);
+        return FALSE;
+      }; /* if */
+      lineIndex++;/*Step past*/
+      while (isWhiteSpace(line[lineIndex])) lineIndex++;
+      if (line[lineIndex] != SquareBra) {
+        Report(AsmError,errors_MissBra);
+        return FALSE;
+      }; /* if */
+      lineIndex++;
+      value2 = RegisterExpr(line, &lineIndex);
+      if (errorFound) { return FALSE; };
+      if (line[lineIndex] != SquareKet) {
+        Report(AsmError,errors_MissSqKet);
+        return FALSE;
+      }; /* if */
+      lineIndex++;
+      if (value == 15 || value1 == 15)
+        Report(ReportWarning,p1line_p1line_pc_src_warn);
+      if (value2 == 15)
+        Report(ReportWarning,p1line_p1line_undef_swp);
+      break;
+
+      case FPDataTransfer:
+      value = FPRegisterExpr(line, &lineIndex);  /* Destination/source */
+      if (errorFound) return FALSE;
+      if (line[lineIndex] != Comma) {
+        Report(AsmError,errors_CommaMissing);
+        return FALSE;
+      }
+      lineIndex++;/*Step past*/
+      while (isWhiteSpace(line[lineIndex])) lineIndex++;
+      if (line[lineIndex] == SquareBra)
+      { lineIndex++;
+        value1 = RegisterExpr(line, &lineIndex);
+        if (errorFound) return FALSE;
+        /* Here we split according to pre/post indexing */
+        if (line[lineIndex] == SquareKet)
+        { /* This is probably the post-indexed form */
+          lineIndex++;
+          while (isWhiteSpace(line[lineIndex])) lineIndex++;
+          if (line[lineIndex] != Comma)
+          { /* Allow optional shriek */
+            if (line[lineIndex] == Shriek)
+            { lineIndex++;
+              value1 += WriteBack;
+            }
+          }
+          else
+          { lineIndex++;
+            value1 += WriteBack;
+            while (isWhiteSpace(line[lineIndex])) lineIndex++;
+            if (line[lineIndex] == Hash)
+            { lineIndex++;
+              value = ConstantExpr(line, &lineIndex, TRUE, &defined);
+            }
+            else
+              Report(AsmError,errors_HashMissing);
+          }
+        }
+        else if (line[lineIndex] != Comma) Report(AsmError,errors_CommaMissing);
+        else
+        { /* This is the pre-index case */
+          lineIndex++;
+          while (isWhiteSpace(line[lineIndex])) lineIndex++;
+          if (line[lineIndex] == Hash) {
+            lineIndex++;
+            value = ConstantExpr(line, &lineIndex, TRUE, &defined);
+          } else Report(AsmError,errors_HashMissing);
+          if (errorFound) return FALSE;
+          if (line[lineIndex] != SquareKet) {
+            Report(AsmError,errors_MissSqKet);
+            return FALSE;
+          }
+          lineIndex++;
+          while (isWhiteSpace(line[lineIndex])) lineIndex++;
+          if (line[lineIndex] == Shriek)
+          { lineIndex++;
+            value1 += WriteBack;
+          }
+        }
+      }
+      else
+      { /* Look for a PC or register relative expression, or a literal */
+        if ((line[lineIndex] == Equals) && ((1L << LoadBit) & opcodeValue) &&
+          !((1L << CLnBit) & opcodeValue)) {
+          /*Don't allow literals for extended or packed formats.*/
+          lineIndex++;
+          fPSize = ((1L << DoubleBit) & opcodeValue) ? Double : Single;
+          switch (Read(line, &lineIndex, fPSize, &value1, &value2)) {
+            case ReadOverflow:
+            Report(AsmError,errors_FPOver);
+            return FALSE;
+            break;
+
+            case NoNumberFound:
+            Report(AsmError,errors_FPNoNum);
+            return FALSE;
+
+          }; /* case */
+          switch (fPSize) {
+            case Single:
+            value = AddFPLiteralSingle(value1);
+            break;
+
+            case Double:
+            value = AddFPLiteralDouble(value1, value2);
+
+          }; /* case */
+        }
+        else
+        { value = RegisterRelExpr(line, &lineIndex, &value1, TRUE, &defined);
+          if (line[lineIndex] == Shriek)
+          { lineIndex++;
+            value1 += WriteBack;
+          }
+        }
+      }
+      if (value1 == (15 + WriteBack))
+        Report(ReportWarning,p1line_p1line_undef_pc_wb);
+      break;
+
+      case FPDyadic:
+      value = FPRegisterExpr(line, &lineIndex);/*Read the destination*/
+      if (errorFound) return FALSE;
+      if (line[lineIndex] != Comma) {
+        Report(AsmError,errors_CommaMissing);
+        return FALSE;
+      }; /* if */
+      lineIndex++;/*Step past*/
+      value = FPRegisterExpr(line, &lineIndex);/*Read first source*/
+      if (errorFound) return FALSE;
+      if (line[lineIndex] != Comma) {
+        Report(AsmError,errors_CommaMissing);
+        return FALSE;
+      }; /* if */
+      lineIndex++;/*Step past*/
+      /*Now look for immediate or register form*/
+      while (isWhiteSpace(line[lineIndex])) lineIndex++;
+      if (line[lineIndex] == Hash) {
+        lineIndex++;
+        value = FPConstant(line, &lineIndex);
+      } else
+        /*Now look for register form*/
+        value = FPRegisterExpr(line, &lineIndex);
+      break;
+
+      case FPMonadic:
+      case FPCompare:
+      case FPNorm:
+#ifndef AAsm
+      if (opcodeType == FPNorm)
+        currArea->dec.area_attributes |= AOF_FP3AT;
+#endif
+      value = FPRegisterExpr(line, &lineIndex);/*Read the destination*/
+      if (errorFound) return FALSE;
+      if (line[lineIndex] != Comma) {
+        Report(AsmError,errors_CommaMissing);
+        return FALSE;
+      }; /* if */
+      lineIndex++;/*Step past*/
+      /*Now look for immediate or register form*/
+      while (isWhiteSpace(line[lineIndex])) lineIndex++;
+      if (line[lineIndex] == Hash) {
+        lineIndex++;
+        /*Now look for immediate form*/
+        value = FPConstant(line, &lineIndex);
+      } else
+        /*Now look for register form*/
+        value = FPRegisterExpr(line, &lineIndex);
+      break;
+
+      case FPFloat:
+      value = FPRegisterExpr(line, &lineIndex);/*Read the destination*/
+      if (errorFound) return FALSE;
+      if (line[lineIndex] != Comma) {
+        Report(AsmError,errors_CommaMissing);
+        return FALSE;
+      }; /* if */
+      lineIndex++;/*Step past*/
+      value = RegisterExpr(line, &lineIndex);
+      break;
+
+      case FPFix:
+      value = RegisterExpr(line, &lineIndex);/*Read the destination*/
+      if (errorFound) { return FALSE; }; /* if */
+      if (line[lineIndex] != Comma) {
+        Report(AsmError,errors_CommaMissing);
+        return FALSE;
+      }; /* if */
+      lineIndex++;/*Step past*/
+      value = FPRegisterExpr(line, &lineIndex);
+      break;
+
+      case FPStatus:
+      value = RegisterExpr(line, &lineIndex);
+      if (value == 15)
+        Report(ReportWarning,p1line_p1line_psr2_warn);
+      break;
+
+      case FPBlock:
+      case FPStack:
+#ifndef AAsm
+      currArea->dec.area_attributes |= AOF_FP3AT;
+#endif
+      value = FPRegisterExpr(line, &lineIndex);  /* Destination/source */
+      if (errorFound) return FALSE;
+      if (line[lineIndex] != Comma)
+      { Report(AsmError,errors_CommaMissing);
+        return FALSE;
+      }
+      lineIndex++; while (isWhiteSpace(line[lineIndex])) lineIndex++;
+      value = ConstantExpr(line, &lineIndex, TRUE, &defined);
+      if (errorFound) return FALSE;
+      if (line[lineIndex] != Comma)
+      { Report(AsmError,errors_CommaMissing);
+        return FALSE;
+      }
+      lineIndex++; while (isWhiteSpace(line[lineIndex])) lineIndex++;
+      if (line[lineIndex] != SquareBra) {
+        /* Look for a PC or register relative expression */
+        value = RegisterRelExpr(line, &lineIndex, &value1, TRUE, &defined);
+        if (line[lineIndex] == Shriek)
+        { lineIndex++;
+          value1 += WriteBack;
+        }
+      } else { /* [ Rx ... form */
+        lineIndex++;
+        value1 = RegisterExpr(line, &lineIndex);
+        if (errorFound) return FALSE;
+        /* Here we split according to pre/post indexing */
+        if (line[lineIndex] == SquareKet)
+        { /* This is probably the post-indexed form */
+          lineIndex++; while (isWhiteSpace(line[lineIndex])) lineIndex++;
+          if (line[lineIndex] != Comma)
+          { /* Allow optional shriek with LFMss and SFMss */
+            if (line[lineIndex] == Shriek)
+            { lineIndex++;
+              value1 += WriteBack;
+            }
+          }
+          else
+          { if (opcodeType == FPStack) return TRUE;
+              /* Let end of line check sort it out */
+            lineIndex++; while (isWhiteSpace(line[lineIndex])) lineIndex++;
+            if (line[lineIndex] == Hash)
+            { lineIndex++;
+              value = ConstantExpr(line, &lineIndex, TRUE, &defined);
+              value1 += WriteBack;
+            }
+            else
+              Report(AsmError,errors_HashMissing);
+          }
+        }
+        else if (opcodeType == FPStack)
+        { Report(AsmError,errors_MissSqKet);
+          return FALSE;
+        }
+        else if (line[lineIndex] != Comma)
+        { Report(AsmError,errors_CommaMissing);
+          return FALSE;
+        }
+        else
+        { /* This is the pre-index case for FPBlock */
+          lineIndex++; while (isWhiteSpace(line[lineIndex])) lineIndex++;
+          if (line[lineIndex] == Hash)
+          { lineIndex++;
+            value = ConstantExpr(line, &lineIndex, TRUE, &defined);
+          }
+          else
+            Report(AsmError,errors_HashMissing);
+          if (errorFound) return FALSE;
+          if (line[lineIndex] != SquareKet)
+          { Report(AsmError,errors_MissSqKet);
+            return FALSE;
+          }
+          lineIndex++; while (isWhiteSpace(line[lineIndex])) lineIndex++;
+          if (line[lineIndex] == Shriek)
+          { lineIndex++;
+            value1 += WriteBack;
+          }
+        }
+        if (value1 == (15 + WriteBack))
+          Report(ReportWarning,p1line_p1line_undef_pc_wb);
+      }
+      break;
+
+      case CPDT:
+      value = CPNameExpr(line, &lineIndex);
+      if (errorFound) return FALSE;
+      if (line[lineIndex] != Comma)
+      { Report(AsmError,errors_CommaMissing);
+        return FALSE;
+      }
+      lineIndex++;  /* Step past */
+      value = CPRegisterExpr(line, &lineIndex); /* Destination/source */
+      if (errorFound) return FALSE;
+      if (line[lineIndex] != Comma)
+      { Report(AsmError,errors_CommaMissing);
+        return FALSE;
+      }
+      lineIndex++;  /* Step past */
+      while (isWhiteSpace(line[lineIndex])) lineIndex++;
+      if (line[lineIndex] == SquareBra)
+      { lineIndex++;
+        value1 = RegisterExpr(line, &lineIndex);
+        if (errorFound) return FALSE;
+        /* Here we split according to pre/post indexing */
+        if (line[lineIndex] == SquareKet)
+        { /* This is probably the post-indexed form */
+          lineIndex++;
+          while (isWhiteSpace(line[lineIndex])) lineIndex++;
+          if (line[lineIndex] != Comma)
+          { /* Allow optional shriek */
+            if (line[lineIndex] == Shriek)
+            { lineIndex++;
+              value1 += WriteBack;
+            }
+          }
+          else
+          { lineIndex++;
+            value1 += WriteBack;
+            while (isWhiteSpace(line[lineIndex])) lineIndex++;
+            if (line[lineIndex] == Hash)
+            { lineIndex++;
+              value = ConstantExpr(line, &lineIndex, TRUE, &defined);
+            }
+            else
+              Report(AsmError,errors_HashMissing);
+          }
+        }
+        else if (line[lineIndex] != Comma)
+        { Report(AsmError,errors_CommaMissing);
+          return FALSE;
+        }
+        else
+        { /* This is the pre-index case */
+          lineIndex++;
+          while (isWhiteSpace(line[lineIndex])) lineIndex++;
+          if (line[lineIndex] == Hash) {
+            lineIndex++;
+            value = ConstantExpr(line, &lineIndex, TRUE, &defined);
+          } else Report(AsmError,errors_HashMissing);
+          if (errorFound) return FALSE;
+          if (line[lineIndex] != SquareKet) {
+            Report(AsmError,errors_MissSqKet);
+            return FALSE;
+          }; /* if */
+          lineIndex++;
+          while (isWhiteSpace(line[lineIndex])) lineIndex++;
+          if (line[lineIndex] == Shriek)
+          { lineIndex++;
+            value1 += WriteBack;
+          }
+        }
+      }
+      else
+      { /* Here we look for a PC or register relative expression */
+        value = RegisterRelExpr(line, &lineIndex, &value1, TRUE, &defined);
+        if (line[lineIndex] == Shriek)
+        { lineIndex++;
+          value1 += WriteBack;
+        }
+      }
+      if (value1 == (15 + WriteBack))
+        Report(ReportWarning,p1line_p1line_useless_instr);
+      break;
+
+      case CPDO:
+      value = CPNameExpr(line, &lineIndex);
+      if (errorFound) return FALSE;
+      if (line[lineIndex] != Comma) {
+        Report(AsmError,errors_CommaMissing);
+        return FALSE;
+      }; /* if */
+      lineIndex++;/*Step past*/
+      value = ConstantExpr(line, &lineIndex, FALSE, &defined);
+      if (errorFound) { return FALSE; }; /* if */
+      if (value >= 0x10) {
+        Report(AsmError,errors_CPOpRange);
+        return FALSE;
+      }; /* if */
+      if (line[lineIndex] != Comma) {
+        Report(AsmError,errors_CommaMissing);
+        return FALSE;
+      }; /* if */
+      lineIndex++;/*Step past*/
+      value = CPRegisterExpr(line, &lineIndex);
+      if (errorFound) return FALSE;
+      if (line[lineIndex] != Comma) {
+        Report(AsmError,errors_CommaMissing);
+        return FALSE;
+      }; /* if */
+      lineIndex++;/*Step past*/
+      value = CPRegisterExpr(line, &lineIndex);
+      if (errorFound) { return FALSE; }; /* if */
+      if (line[lineIndex] != Comma) {
+        Report(AsmError,errors_CommaMissing);
+        return FALSE;
+      }; /* if */
+      lineIndex++;/*Step past*/
+      value = CPRegisterExpr(line, &lineIndex);
+      if (errorFound) return FALSE;
+      if (line[lineIndex] == Comma) {
+        lineIndex++;/*Step past*/
+        value = ConstantExpr(line, &lineIndex, FALSE, &defined);
+        if (value >= 8) Report(AsmError,errors_CPOpRange);
+      }; /* if */
+      break;
+
+      case CPRT:
+      value = CPNameExpr(line, &lineIndex);
+      if (errorFound) return FALSE;
+      if (line[lineIndex] != Comma) {
+        Report(AsmError,errors_CommaMissing);
+        return FALSE;
+      }; /* if */
+      lineIndex++;/*Step past*/
+      value = ConstantExpr(line, &lineIndex, FALSE, &defined);
+      if (errorFound) return FALSE;
+      if (value >= 8) {
+        Report(AsmError,errors_CPOpRange);
+        return FALSE;
+      }; /* if */
+      if (line[lineIndex] != Comma) {
+        Report(AsmError,errors_CommaMissing);
+        return FALSE;
+      }; /* if */
+      lineIndex++;/*Step past*/
+      value = RegisterExpr(line, &lineIndex);
+      if (errorFound) return FALSE;
+      if (line[lineIndex] != Comma) {
+        Report(AsmError,errors_CommaMissing);
+        return FALSE;
+      }; /* if */
+      lineIndex++;/*Step past*/
+      if (value == 15 && (opcodeValue & ~0xF0000000) == MCRCode)
+        Report(ReportWarning,p1line_p1line_psr3_warn);
+      value = CPRegisterExpr(line, &lineIndex);
+      if (errorFound) return FALSE;
+      if (line[lineIndex] != Comma) {
+        Report(AsmError,errors_CommaMissing);
+        return FALSE;
+      }; /* if */
+      lineIndex++;/*Step past*/
+      value = CPRegisterExpr(line, &lineIndex);
+      if (errorFound) return FALSE;
+      if (line[lineIndex] == Comma) {
+        lineIndex++;/*Step past*/
+        value = ConstantExpr(line, &lineIndex, FALSE, &defined);
+        if (value >= 8) Report(AsmError,errors_CPOpRange);
+      }; /* if */
+      break;
+
+      case MUL:
+      case MLA:
+      value = RegisterExpr(line, &lineIndex);/*Read the destination*/
+      if (errorFound) return FALSE;
+      if (line[lineIndex] != Comma)
+      { Report(AsmError,errors_CommaMissing);
+        return FALSE;
+      }
+      lineIndex++;/*Step past*/
+      value1 = RegisterExpr(line, &lineIndex);/*Read the first source*/
+      if (errorFound) return FALSE;
+      if (value1 == value)
+        Report(ReportWarning,p1line_p1line_undef_rd_rm);
+      if (value == 15)
+        Report(ReportWarning,p1line_p1line_useless_2);
+      if (line[lineIndex] != Comma)
+      { Report(AsmError,errors_CommaMissing);
+        return FALSE;
+      }
+      lineIndex++;/*Step past*/
+      value = RegisterExpr(line, &lineIndex);/*Read the second source*/
+      if (errorFound) return FALSE;
+      value2 = 0;
+      if (opcodeType == MLA)
+      { if (line[lineIndex] != Comma)
+        { Report(AsmError,errors_CommaMissing);
+          return FALSE;
+        }
+        lineIndex++;/*Step past*/
+        value2 = RegisterExpr(line, &lineIndex); /* Read the addend */
+      }
+      if (value == 15 || value1 == 15 || value2 == 15)
+        Report(ReportWarning,p1line_p1line_dubious);
+      break;
+
+      case SMULL:
+      case SMLAL:
+      case UMULL:
+      case UMLAL:
+      { CARDINAL value3;
+        if ((cpu_version & 128)==0) {
+          Report(ReportWarning,errors_incompatibleinstrs);
+        }
+        value = RegisterExpr(line, &lineIndex); /* Read the Lo destination */
+        if (errorFound) return FALSE;
+        if (line[lineIndex] != Comma) {
+          Report(AsmError,errors_CommaMissing);
+          return FALSE;
+        }
+        lineIndex++; /* Step past */
+        value1 = RegisterExpr(line, &lineIndex);/* Read the high destination */
+        if (errorFound) return FALSE;
+        if (line[lineIndex] != Comma)
+        { Report(AsmError,errors_CommaMissing);
+          return FALSE;
+        }
+        lineIndex++; /* Step past */
+        value2 = RegisterExpr(line, &lineIndex); /* Read the first source */
+        if (errorFound) return FALSE;
+        if (line[lineIndex] != Comma)
+        { Report(AsmError,errors_CommaMissing);
+          return FALSE;
+        }
+        lineIndex++; /* Step past */
+        value3 = RegisterExpr(line, &lineIndex); /* Read the second source */
+        if (errorFound) return FALSE;
+        if (value == value1 || value1 == value2 || value2 == value)
+          Report(ReportWarning,p1line_longmul_undef_rdlo_rdhi_rm);
+        if (value == 15 || value1 == 15 || value2 == 15 || value3 == 15)
+          Report(AsmError,p1line_longmul_r15_operand);
+        break;
+      }
+
+    }; /* case */
+    programCounter += 4;  /* Another 4 bytes produced */
+  };
+#ifndef AAsm
+check_for_more_lines:
+  if (!errorFound) {
+    if (!AllComment(line, &lineIndex)) {
+      if (line[lineIndex] == CommentSymbol) {
+        /* Multiple line coming up.
+         * Note above implies as style, as otherwise it would be comment
+         */
+        line += lineIndex+1; /* Point to next line */
+        lineIndex = 0;
+        opcodeFound = FALSE;
+        symbol_found = FALSE;
+      } else {/* Really is a bad line, even in this case */
+        Report(AsmError,errors_BadEOL);
+        return FALSE;
+      }; /* if */
+    } else
+      return FALSE;
+  }
+  } while (1); /* For as multiple line case */
+#else
+  if (!errorFound) {
+    while (isWhiteSpace(line[lineIndex])) lineIndex++;
+    if ((line[lineIndex] != CommentSymbol) && (line[lineIndex] != CR))
+        Report(AsmError,errors_BadEOL);
+  }
+  }
+  return FALSE;
+#endif
+} /* End P1LineHandler */
+
+BOOLEAN AllComment(char *line, CARDINAL *index)
+/*Check for line all comment*/
+{
+#ifndef AAsm
+  char ch;
+  if (line[0] == '*') return TRUE;
+#endif
+  while (isWhiteSpace(line[*index])) (*index)++;
+#ifndef AAsm
+  ch = line[*index];
+  if (ch == CommentSymbol) {
+    if (!input_style_set) {
+      input_style_set = TRUE;
+      input_style = ObjAsmIS;
+    }
+    if (input_style == ObjAsmIS) return TRUE;
+  }
+  if (ch == AtSymbol) {
+    if (!input_style_set) {
+      input_style_set = TRUE;
+      input_style = AsIS;
+      SetImplicitRegisters();
+      output_style_set = TRUE;
+      output_style = ADotOutOS;
+    };
+    if (input_style == AsIS) return TRUE;
+  }
+  return (ch == CR);
+#else
+  return (line[*index] == CommentSymbol) || (line[*index] == CR);
+#endif
+}
+
+BOOLEAN TermCheck(char ch)
+{
+  return (isWhiteSpace(ch)) ||
+#ifndef AAsm
+  ((ch == AtSymbol) && (input_style == AsIS)) ||
+#endif
+  (ch == CommentSymbol) || (ch == CR);
+}
+
+/* End p1line.c */
