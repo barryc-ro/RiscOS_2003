@@ -31,7 +31,7 @@ TARGET    =
 # Export Paths for Messages module
 #
 RESAPP = <resource$dir>.${APP}
-
+RESRES = <Resource$Dir>.Resources
 #
 # Generic rules:
 #
@@ -49,8 +49,7 @@ clean:
 
 resources:
         ${CP} Resources.<UserIf>.${LOCALE}.${APP}   ${RESAPP}   ${CPFLAGS}
-
-        ${CP} Resources.<UserIf>.${LOCALE}.Wimp.Sprites <resource$dir>.Wimp.Sprites ${CPFLAGS}
+        ${CP} Resources.<UserIf>.${LOCALE}.Wimp.Sprites ${RESRES}.Wimp.Sprites ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
         
 # Dynamic dependencies:
