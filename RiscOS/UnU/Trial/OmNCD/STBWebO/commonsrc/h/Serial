@@ -1,5 +1,0 @@
-/* Title: Serial.h
- */
-
-extern int VerifySerial(char *buffer);
-extern void serial_encode(char *buffer, int n);
