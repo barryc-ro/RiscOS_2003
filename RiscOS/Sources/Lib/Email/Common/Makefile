@@ -1,18 +1,56 @@
 # File:    Makefile
-# Purpose: Makefile for Common Email library
-# Author:  Richard Warren
+# Purpose: Makefile for Common email library
+# Author:  Ben Laughton
 #
 # History:
 #
-# 1998-10-22: RDW
-#   Created from Mailbox Library makefile by Ben Laughton
+# 1998-08-26: BAL
+# Created
+# 1998-10-02: RDW
+# EXP_SUB_DIR added to create <LIB$DIR>.Email directory before creating Common
+# directory within it
+
+# ------------------------------------------------------------------------------
+# Paths
+#
+
+EXP_HDR		= <export$dir>
+LIBDIR		= <Lib$Dir>
+EXP_SUB_DIR	= <Lib$Dir>.Email
+EXP_DIR		= $(EXP_SUB_DIR).Common
 
 
 # ------------------------------------------------------------------------------
 # Generic options
 #
 
+MKDIR		= cdir
+AS		= objasm
+CP		= copy
+CC		= $(MemCheckCC) cc
+C++		= $(MemCheckCC) c++
+#C++		= g++
+CM		= cmhg
 RM		= remove
+LD		= link
+LB		= libfile
+WIPE		= -wipe
+
+CCFLAGS		= -c -depend !Depend -ffah -wP\
+		  -I$(INCLUDES) $(DFLAGS) $(THROWBACK) $(CCEXTRA)
+C++FLAGS	= -c -depend !Depend -ffa -wP\
+		  -I$(INCLUDES) $(DFLAGS) $(THROWBACK) $(C++EXTRA)
+ASFLAGS		= -depend !Depend -Stamp -quit
+CPFLAGS		= ~clfnr~v
+LBFLAGS		= -c
+WFLAGS		= ~CFR~V
+
+
+# ------------------------------------------------------------------------------
+# Include files
+#
+
+INCLUDES	= C:,<Lib$Dir>.C++Lib,<Lib$Dir>
 
 
 # ------------------------------------------------------------------------------
@@ -20,61 +58,87 @@ RM		= remove
 #
 
 COMPONENT	= Common
-NORMAL_TARGET	= $(COMPONENT)
-MEMCHECK_TARGET	= $(COMPONENT)MC
-HIERPROF_TARGET	= $(COMPONENT)HP
-MODULE_TARGET	= $(COMPONENT)zm
-DEBUG_TARGET	= $(COMPONENT)d
+TARGET		= Common
+TARGETD		= Commond
+TARGETZ		= Commonzm
+
+OBJS =
 
 
 
 
 # ------------------------------------------------------------------------------
-# Build rules
+# Rule patterns
 #
 
-all:
-	@amu -f MainMake $(MFLAGS) TARGET=$(NORMAL_TARGET) EXT=o
-	@echo $(COMPONENT): build complete
+.SUFFIXES: .o .od .z .s .h .c .c++
+.c.o:;		$(CC)  $(CCFLAGS)  -o $@ $<
+.c.od:;		$(CC)  $(CCFLAGS)  -g -o $@ $<
+.c.z:;		$(CC)  $(CCFLAGS)  -zm -zps1 -o $@ $<
+.c++.o:;	$(C++) $(C++FLAGS) -o $@ $<
+.c++.od:;	$(C++) $(C++FLAGS) +g -o $@ $<
+.s.o:;		$(AS)  $(ASFLAGS)  -o $@ $<
 
-debug:
-	@amu -f MainMake $(MFLAGS) TARGET=$(DEBUG_TARGET) EXT=od
-	@echo $(COMPONENT): debug build complete
 
-preprocess:
-	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=i
-	@echo $(COMPONENT): preprocessing complete
+# ------------------------------------------------------------------------------
+# Build all the library
+#
+
+all:	$(TARGET)
+
+debug:	$(TARGETD) export_hdrs
+	$(CP)	$(TARGETD)	$(EXP_DIR).o.$(TARGETD)		$(CPFLAGS)
+
+# ------------------------------------------------------------------------------
+# RISC OS ROM build rules
+#
+
+#test:
+#	echo $(OBJS) { > tf }
+#	sed s/o./od./g tf { > tf2 }
 
 export: export_$(PHASE)
 
-export_hdrs:
-	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=AvoidAMUBug
-	@echo $(COMPONENT): export complete (hdrs)
+#install_rom: $(TARGET)
+#	$(CP) $(TARGET) $(INSTDIR).$(COMPONENT) $(CPFLAGS)
+#	echo $(COMPONENT): rom module installed
 
-export_libs:
-	@amu -f MainMake $(MFLAGS) TARGET=$(NORMAL_TARGET) EXT=o
-	@amu -f MainMake $(MFLAGS) TARGET=$(MODULE_TARGET) EXT=z
-	@echo $(COMPONENT): export complete (libs)
-
-export_libsMC:
-	@amu -f MainMake $(MFLAGS) MemCheckCC=MemCheck.CC TARGET=$(MEMCHECK_TARGET) EXT=oMC
-	@echo $(COMPONENT): export complete (MemCheck libs)
-	
-export_libsHP:
-	@amu -f MainMake $(MFLAGS) TARGET=$(HIERPROF_TARGET) EXT=oHP
-	@echo $(COMPONENT): export complete (HierProf libs)
-	
 clean:
-	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=o
-	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=oMC
-	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=oHP
-	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=od
-	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=i
-	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=z
-	@$(RM) $(NORMAL_TARGET)
-	@$(RM) $(HIERPROF_TARGET)
-	@$(RM) $(MEMCHECK_TARGET)
-	@$(RM) $(NORMAL_TARGET)
-	@$(RM) $(MODULE_TARGET)
-	@$(RM) $(DEBUG_TARGET)
 	@echo $(COMPONENT): cleaned
+
+export_hdrs: dirs
+	$(CP)	h.*		$(EXP_DIR).h.*			$(CPFLAGS)
+	@echo $(COMPONENT): export complete (hdrs)		$(CPFLAGS)
+
+#export_libs: $(TARGET) dirs
+#	$(CP)	$(TARGET)	$(EXP_DIR).o.$(TARGET)		$(CPFLAGS)
+#	@echo $(COMPONENT): export complete (libs)
+
+dirs:
+	$(MKDIR) $(LIBDIR)
+	$(MKDIR) $(EXP_SUB_DIR)
+	$(MKDIR) $(EXP_DIR)
+	$(MKDIR) $(EXP_DIR).h
+
+
+# ------------------------------------------------------------------------------
+# Final link
+#
+
+#$(TARGET): $(OBJS) $(LOCALOBJS) $(MBOXCBOBJS) $(POP3OBJS) $(SENDQOBJS) local_dirs
+#	$(LB) $(LBFLAGS) -o $@ $(OBJS) $(LOCALOBJS) $(MBOXCBOBJS) $(POP3OBJS)\
+#	                       $(SENDQOBJS)
+#
+#$(TARGETD): $(OBJSD) $(LOCALOBJSD) $(MBOXCBOBJSD) $(POP3OBJSD) $(SENDQOBJSD) local_dirs_d
+#	$(LB) $(LBFLAGS) -o $@ $(OBJSD) $(LOCALOBJSD) $(MBOXCBOBJSD)\
+#	                       $(POP3OBJSD) $(SENDQOBJSD)
+#
+#$(TARGETZ): $(OBJSZ) local_dirs
+#	$(LB) $(LBFLAGS) -o $(TARGETZ) $(OBJSZ)
+#
+#$(EXP_HDR).$(COMPONENT): hdr.$(COMPONENT)
+#	$(CP) hdr.$(COMPONENT) $@ $(CPFLAGS)
+
+
+# ------------------------------------------------------------------------------
+# Dynamic dependencies:
