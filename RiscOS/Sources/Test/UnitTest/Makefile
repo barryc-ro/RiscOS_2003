@@ -23,6 +23,7 @@
 # 1999-08-04    NCE		Added -DUSERIF${USSERIF} to cflags so that I can switch things
 # 				on UserIF.  This is used on Lazarus builds.
 # 1999-08-10	NCE		Added Lazarus Target
+# 2000-10-19    RLT             Added NVRAMTags to Lazarus target
 
 #
 # Paths
@@ -105,7 +106,8 @@ STB3      = ${BASEOBJS} ${Applic} ${OM}.serial_lib ${OM}.IRRemote ${OM}.MouseTes
             
 Lazarus   = ${BASEOBJS} ${Applic} ${OM}.serial_lib ${OM}.IRRemote ${OM}.MouseTest \
             ${OM}.Graphics ${OM}.CMOS ${OM}.SerialTest ${OM}.TestCard ${OM}.Printer \
-            ${OM}.MPEG ${OM}.Server ${OM}.Parallel ${OM}.Pop ${OM}.Serial ${OM}.bufman         
+            ${OM}.MPEG ${OM}.Server ${OM}.Parallel ${OM}.Pop ${OM}.Serial ${OM}.bufman \
+            ${OM}.NVRAMTags
 
 OBJS      = ${Lazarus}
 
