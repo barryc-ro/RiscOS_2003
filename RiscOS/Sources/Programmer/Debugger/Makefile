@@ -50,7 +50,7 @@ install_rom: $(TARGET)
 
 clean:
         $(RM) $(TARGET)
-        $(RM) s.TokHelpSrc
+        $(RM) TokHelpSrc
         @echo ${COMPONENT}: cleaned
 
 resources:
@@ -90,27 +90,6 @@ rm.Jordan.Debugger: Hdr:Debugger
 rm.Jordan.Debugger: Version
 rm.Jordan.Debugger: Hdr:Debug
 rm.Jordan.Debugger: TokHelpSrc
-rm.Morris.Debugger: Hdr:ListOpts
-rm.Morris.Debugger: Hdr:Macros
-rm.Morris.Debugger: Hdr:System
-rm.Morris.Debugger: Hdr:SWIs
-rm.Morris.Debugger: Hdr:CPU.Generic26
-rm.Morris.Debugger: Hdr:IO.GenericIO
-rm.Morris.Debugger: Hdr:RISCOS
-rm.Morris.Debugger: Hdr:Machine.<Machine>
-rm.Morris.Debugger: Hdr:ModHand
-rm.Morris.Debugger: Hdr:Services
-rm.Morris.Debugger: Hdr:FSNumbers
-rm.Morris.Debugger: Hdr:NewErrors
-rm.Morris.Debugger: Hdr:EnvNumbers
-rm.Morris.Debugger: Hdr:Proc
-rm.Morris.Debugger: Hdr:VduExt
-rm.Morris.Debugger: Hdr:Tokens
-rm.Morris.Debugger: Hdr:MsgTrans
-rm.Morris.Debugger: Hdr:Debugger
-rm.Morris.Debugger: Version
-rm.Morris.Debugger: Hdr:Debug
-rm.Morris.Debugger: TokHelpSrc
 rm.Omega.Debugger: Hdr:ListOpts
 rm.Omega.Debugger: Hdr:Macros
 rm.Omega.Debugger: Hdr:System
@@ -132,3 +111,26 @@ rm.Omega.Debugger: Hdr:Debugger
 rm.Omega.Debugger: Version
 rm.Omega.Debugger: Hdr:Debug
 rm.Omega.Debugger: TokHelpSrc
+rm.Morris.Debugger: Hdr:ListOpts
+rm.Morris.Debugger: Hdr:Macros
+rm.Morris.Debugger: Hdr:System
+rm.Morris.Debugger: Hdr:SWIs
+rm.Morris.Debugger: Hdr:CPU.Generic26
+rm.Morris.Debugger: Hdr:IO.GenericIO
+rm.Morris.Debugger: Hdr:RISCOS
+rm.Morris.Debugger: Hdr:Machine.<Machine>
+rm.Morris.Debugger: Hdr:ModHand
+rm.Morris.Debugger: Hdr:Services
+rm.Morris.Debugger: Hdr:FSNumbers
+rm.Morris.Debugger: Hdr:NewErrors
+rm.Morris.Debugger: Hdr:EnvNumbers
+rm.Morris.Debugger: Hdr:Proc
+rm.Morris.Debugger: Hdr:VduExt
+rm.Morris.Debugger: Hdr:Tokens
+rm.Morris.Debugger: Hdr:MsgTrans
+rm.Morris.Debugger: Hdr:Debugger
+rm.Morris.Debugger: Version
+rm.Morris.Debugger: Hdr:Debug
+rm.Morris.Debugger: TokHelpSrc
+rm.Morris.Debugger: s.FP
+rm.Morris.Debugger: s.Thumb
