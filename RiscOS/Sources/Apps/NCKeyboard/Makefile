@@ -207,25 +207,23 @@ install: install_${OPTIONS} install_common
 
 install_common:
 	${MKDIR} ${INSTDIR}
-
-install_STB: ram
-	${CP} LocalUserIFRes:!Boot ${INSTDIR}.!Boot ${CPFLAGS}
-	${CP} LocalUserIFRes:!Run ${INSTDIR}.!Run ${CPFLAGS}
 	${CP} LocalUserIFRes:Messages ${INSTDIR}.Messages ${CPFLAGS}
 	${CP} LocalUserIFRes:Res ${INSTDIR}.Res ${CPFLAGS}
-	${CP} rm.${COMPONENT} ${INSTDIR}.${RMDIR}.${COMPONENT} ${CPFLAGS}
-
-install_: ${APP}
-	${CP} LocalUserIFRes:!BootROM ${INSTDIR}.!Boot ${CPFLAGS}
-	${CP} LocalUserIFRes:!Run ${INSTDIR}.!Run ${CPFLAGS}
-	${CP} LocalUserIFRes:Messages ${INSTDIR}.Messages ${CPFLAGS}
 	IfThere LocalUserIFRes:Graphics Then \
 		${CP} LocalUserIFRes:Graphics ${INSTDIR}.Sprites ${CPFLAGS}
 	IfThere LocalUserIFRes:Sprites Then \
 		${CP} LocalUserIFRes:Sprites ${INSTDIR}.Sprites ${CPFLAGS}
 	IfThere LocalUserIFRes:TVSprs Then \
 		${CP} LocalUserIFRes:TVSprs ${INSTDIR}.TVSprs ${CPFLAGS}
-	${CP} LocalUserIFRes:Res ${INSTDIR}.Res ${CPFLAGS}
+
+install_STB: ram
+	${CP} LocalUserIFRes:!BootRAM ${INSTDIR}.!Boot ${CPFLAGS}
+	${CP} LocalUserIFRes:!RunRAM ${INSTDIR}.!Run ${CPFLAGS}
+	${CP} rm.${COMPONENT} ${INSTDIR}.${RMDIR}.${COMPONENT} ${CPFLAGS}
+
+install_: ${APP}
+	${CP} LocalUserIFRes:!Boot ${INSTDIR}.!Boot ${CPFLAGS}
+	${CP} LocalUserIFRes:!Run ${INSTDIR}.!Run ${CPFLAGS}
 	${CP} ${APP} ${INSTDIR}.!RunImage ${CPFLAGS}
 
 # -----------------------------------------------------------------------------
