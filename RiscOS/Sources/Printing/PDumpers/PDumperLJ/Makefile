@@ -82,6 +82,5 @@ ${TARGET}: ${SOURCE}
 ^.rm.PDumperLJ: s.AbortJob
 ^.rm.PDumperLJ: ^.Generic.s.AbortJob
 ^.rm.PDumperLJ: s.StartJob
-^.rm.PDumperLJ: ^.Generic.s.StartJob
 ^.rm.PDumperLJ: s.MiscOp
 ^.rm.PDumperLJ: ^.Generic.s.MiscOp
