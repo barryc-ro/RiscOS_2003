@@ -10,8 +10,8 @@
 #
 # Program specific options:
 #
-COMPONENT  = Slider !Settings
-APP        = !Settings
+COMPONENT  = Slider !SvrSetup
+APP        = !SvrSetup
 RDIR       = Resources
 LDIR       = ${RDIR}.${LOCALE}
 
@@ -103,12 +103,3 @@ Resources.!RunImage: ${OBJS} ${EVENTLIB} ${TOOLBOXLIB} ${WIMPLIB} ${CLIB}
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
-o.slideset:	c.slideset
-o.slideset:	C:h.swis
-o.slideset:	C:h.kernel
-o.slideset:	tbox:h.toolbox
-o.slideset:	tbox:h.wimp
-o.slideset:	tbox:h.event
-o.slideset:	tbox:h.window
-o.slideset:	tbox:h.gadgets
-o.slideset:	tbox:h.wimplib

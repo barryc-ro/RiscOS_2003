@@ -10,8 +10,8 @@
 #
 # Program specific options:
 #
-COMPONENT  = Smear !Settings
-APP        = !Settings
+COMPONENT  = Smear !SvrSetup
+APP        = !SvrSetup
 RDIR       = Resources
 LDIR       = ${RDIR}.${LOCALE}
 
