@@ -108,7 +108,7 @@ clean:
         ${WIPE} o.* ${WFLAGS}
         ${WIPE} oz.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
-        ${WIPE} s.* ${WFLAGS}
+        ${WIPE} src.* ${WFLAGS}
         ${RM} ${TARGET}
         ${RM} ${RAMTARGET}
         ${RM} ${APP}
