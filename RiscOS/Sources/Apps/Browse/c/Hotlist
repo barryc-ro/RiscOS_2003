@@ -56,7 +56,7 @@ static unsigned int   last_selected_item = 0xffffffff;    /* The last item which
 static int            hotlist_dragging   = 0;             /* Holds a set of values for different dragging cases (see Hotlist.h) */
 static unsigned int   highlighted_itemno;                 /* During dragging, the number of a directory item using the '...+' sprite */
 static hotlist_item * hotlist_current_highlighted = NULL; /* To save scanning lists, pointer to the highlighted item */
-
+static int            hl_show_urls;                       /* 0 when url descriptions to be shown, 1 to show urls */
 
 
 static unsigned int   hotlist_bbar_size = 0;              /* Height in OS units of the button bar */
@@ -90,6 +90,8 @@ static ToolboxEventHandler   hotlist_newedit_url_handler;
 static ToolboxEventHandler   hotlist_newren_directory_handler;
 static ToolboxEventHandler   hotlist_reset_url_handler;
 static ToolboxEventHandler   hotlist_reset_directory_handler;
+static ToolboxEventHandler   hotlist_show_descriptions_handler;
+static ToolboxEventHandler   hotlist_show_urls_handler;
 
 /* Debug functions */
 
@@ -137,6 +139,7 @@ static void              hotlist_lower_tags              (char * string);
 static _kernel_oserror * hotlist_load_directory          (FILE * fileptr, hotlist_item * target);
 static void              hotlist_drag_renderer           (hotlist_item * item, unsigned int item_height, unsigned int item_dir_width, unsigned int item_url_width);
 static void              hotlist_start_drag              (void);
+static _kernel_oserror * hotlist_modified                (unsigned int type);
 
 /* List manupulation */
 
@@ -1366,7 +1369,10 @@ static void _hotlist_draw(hotlist_item *list,
       wimp_plot_icon(&hotlist_iconblock);                               /* Plot sprite icon */
 
       regs.r[0] = 1;
-      regs.r[1] = (int)list->name;
+      
+      if (list->type == hl_url && hl_show_urls) regs.r[1] = (int)list->data.url;
+      else                                      regs.r[1] = (int)list->name;
+      
       regs.r[2] = 0;
       wimp_text_op(&regs);                                              /* Get width of text for text icon */
 
@@ -1380,8 +1386,17 @@ static void _hotlist_draw(hotlist_item *list,
       hotlist_iconblock.bbox.xmax = indent+temp_width+2+regs.r[0] + 12;
       hotlist_iconblock.bbox.ymax = (-item_height*item_number) - 2;
       hotlist_iconblock.bbox.ymin = (-item_height*item_number) - item_height + 2;
-      hotlist_iconblock.data.it.buffer      = list->name;
-      hotlist_iconblock.data.it.buffer_size = strlen(list->name);
+      
+      if (list->type == hl_url && hl_show_urls)
+      {
+        hotlist_iconblock.data.it.buffer      = list->data.url;
+        hotlist_iconblock.data.it.buffer_size = strlen(list->data.url);
+      }
+      else
+      {
+        hotlist_iconblock.data.it.buffer      = list->name;
+        hotlist_iconblock.data.it.buffer_size = strlen(list->name);
+      }
 
       wimp_plot_icon(&hotlist_iconblock);
 
@@ -1454,7 +1469,10 @@ static void _hotlist_get_max_width(hotlist_item *list, unsigned int indent)
     }
 
     regs.r[0] = 1;
-    regs.r[1] = (int)list->name;
+    
+    if (list->type == hl_url && hl_show_urls) regs.r[1] = (int)list->data.url;
+    else                                      regs.r[1] = (int)list->name;
+    
     regs.r[2] = 0;
     wimp_text_op(&regs);
 
@@ -1575,6 +1593,8 @@ _kernel_oserror * hotlist_add(char * description, char * url, int at_bottom)
     break;
   }
 
+  if (!e) return hotlist_modified(HL_MODIFIED_ADD);
+
   return e;
 }
 
@@ -1610,7 +1630,10 @@ static void hotlist_get_shape(unsigned int *xmin,
   count -= 2;
 
   regs.r[0] = 1;
-  regs.r[1] = (int)item->name;
+  
+  if (item->type == hl_url && hl_show_urls) regs.r[1] = (int)item->data.url;
+  else                                      regs.r[1] = (int)item->name;
+  
   regs.r[2] = 0;
   wimp_text_op(&regs);
 
@@ -1929,6 +1952,13 @@ static void hotlist_window_preopen(hl_opentype type)
   BBox bbox;
   WimpGetWindowStateBlock state;
   int height, width;
+  unsigned int objectstate;
+
+  if (type == already_open)
+  {
+    toolbox_get_object_state(0, hotlist_windowid, &objectstate);
+    if (!objectstate & Toolbox_GetObjectState_Showing) return;
+  }
 
   hotlist_get_entry_sizes(&item_height, &item_dir_width, &item_url_width);
 
@@ -2095,6 +2125,19 @@ void hotlist_set_menu_details(ObjectId menuid)
     break;
 
   }
+  
+  menu_get_sub_menu_show(0, menuid, HOTLIST_DISPLAY_MENUITEM, &submenu_id);
+
+  if (hl_show_urls)
+  {
+    menu_set_tick(0, submenu_id, HOTLIST_MENU_SHOWDESCRIPTIONS, 0);
+    menu_set_tick(0, submenu_id, HOTLIST_MENU_SHOWURLS, 1);
+  }
+  else
+  {
+    menu_set_tick(0, submenu_id, HOTLIST_MENU_SHOWDESCRIPTIONS, 1);
+    menu_set_tick(0, submenu_id, HOTLIST_MENU_SHOWURLS, 0);
+  }
 }
 
 /*************************************************/
@@ -2111,6 +2154,7 @@ static int hotlist_menuopen_handler(int event_code, ToolboxEvent * event, IdBloc
   unsigned int              item_height, item_dir_width, item_url_width;
   unsigned int              xmin, xmax;
   int                       window_handle;
+  ObjectId                  sub_menu;
 
   hotlist_get_entry_sizes(&item_height, &item_dir_width, &item_url_width);
 
@@ -2127,6 +2171,8 @@ static int hotlist_menuopen_handler(int event_code, ToolboxEvent * event, IdBloc
     menu_itemno = -pointerblock.y / item_height;
   }
 
+  menu_get_sub_menu_show(0, id_block->self_id, HOTLIST_DISPLAY_MENUITEM, &sub_menu);
+
   if (hotlist_count_selected_items() == 0)
   {
     item = hotlist_find_item(hotlist_root->data.directory_content, menu_itemno);
@@ -2138,9 +2184,10 @@ static int hotlist_menuopen_handler(int event_code, ToolboxEvent * event, IdBloc
 
     if (item && pointerblock.x >= xmin && pointerblock.x <= xmax)
     {
-      item->flags |= HOTLIST_G_IS_SELECTED;
+      item->flags |= HOTLIST_G_IS_SELECTED | HOTLIST_G_REDRAW_NOW;
+      if (item->type == hl_directory) hotlist_set_flags(item->data.directory_content, hl_ALL, HOTLIST_G_IS_SELECTED);
       menu_select = 1;
-      hotlist_redraw_items(menu_itemno, menu_itemno);
+      hotlist_redraw_now();
     }
   }
 
@@ -2643,7 +2690,9 @@ _kernel_oserror * hotlist_load(char * filename)
   #endif
 
   /* Finished; redraw issues are left to the caller */
-
+  
+  if (!e) return hotlist_modified(HL_MODIFIED_LOAD);
+  
   return e;
 }
 
@@ -2792,6 +2841,16 @@ _kernel_oserror * hotlist_initialise(void)
                                           hotlist_reset_directory_handler,
                                           NULL));
 
+  RetError(event_register_toolbox_handler(-1,
+                                          HotlistShowDesc,
+                                          hotlist_show_descriptions_handler,
+                                          NULL));
+  
+  RetError(event_register_toolbox_handler(-1,
+                                          HotlistShowURLs,
+                                          hotlist_show_urls_handler,
+                                          NULL));
+
   return NULL;
 }
 
@@ -2812,9 +2871,9 @@ _kernel_oserror * hotlist_initialise(void)
 
 _kernel_oserror * hotlist_open(int show_type, void * type, int show_urls)
 {
-  // Not implemented yet...
+  /* Sets show descriptions / show URLs */
 
-  show_urls = show_urls;
+  hl_show_urls = show_urls;
 
   /* Set the size of the window etc. */
 
@@ -2881,6 +2940,8 @@ static int hotlist_menu_selectall_handler(int event_code, ToolboxEvent * event, 
 
     hotlist_set_menu_details(id_block->self_id);
   }
+  
+  menu_select = 0;
 
   return 1;
 }
@@ -2970,6 +3031,9 @@ static int hotlist_menu_delete_handler(int event_code, ToolboxEvent *event, IdBl
   hotlist_redraw_items(0, noitems);
   hotlist_window_preopen(already_open);
   toolbox_hide_object(0, id_block->ancestor_id);
+  
+  hotlist_modified(HL_MODIFIED_DELETE);
+  
   return 0;
 }
 
@@ -3139,7 +3203,10 @@ static int hotlist_newedit_url_handler(int event_code, ToolboxEvent *event, IdBl
                                tempdesc,
                                tempurl));
     hotlist_window_preopen(already_open);
-    hotlist_redraw_now();
+    hotlist_redraw_items(menu_itemno,
+                         hotlist_count_displayed_items(hotlist_root->data.directory_content));
+    hotlist_clear_flags(hotlist_root, hl_ALL, HOTLIST_G_REDRAW_NOW);
+    hotlist_modified(HL_MODIFIED_ADD);
     free(tempdesc);
     free(tempurl);
     break;
@@ -3152,7 +3219,7 @@ static int hotlist_newedit_url_handler(int event_code, ToolboxEvent *event, IdBl
     item->flags |= HOTLIST_G_REDRAW_NOW;
     hotlist_window_preopen(already_open);
     hotlist_redraw_now();
-    //toolbox_hide_object(0, id_block->ancestor_id);
+    hotlist_modified(HL_MODIFIED_ALTER);
     break;
 
   }
@@ -3202,7 +3269,10 @@ static int hotlist_newren_directory_handler(int event_code, ToolboxEvent *event,
                           HOTLIST_POSITION_END,
                           &tempitem);
     hotlist_window_preopen(already_open);
-    hotlist_redraw_now();
+    hotlist_redraw_items(menu_itemno,
+                         hotlist_count_displayed_items(hotlist_root->data.directory_content));
+    hotlist_clear_flags(hotlist_root, hl_ALL, HOTLIST_G_REDRAW_NOW);
+    hotlist_modified(HL_MODIFIED_ADD);
     free(tempname);
     break;
 
@@ -3212,6 +3282,7 @@ static int hotlist_newren_directory_handler(int event_code, ToolboxEvent *event,
     item->flags |= HOTLIST_G_REDRAW_NOW;
     hotlist_window_preopen(already_open);
     hotlist_redraw_now();
+    hotlist_modified(HL_MODIFIED_ALTER);
     //toolbox_hide_object(0, id_block->ancestor_id);
     break;
 
@@ -3325,7 +3396,9 @@ static void hotlist_drag_renderer(hotlist_item *item, unsigned int item_height, 
   }
 
   regs.r[0] = 1;
-  regs.r[1] = (int)item->name;
+  
+  if (item->type == hl_url && hl_show_urls) regs.r[1] = (int)item->data.url;
+  else                                      regs.r[1] = (int)item->name;
   regs.r[2] = 0;
   if (wimp_text_op(&regs))                                              /* Get width of text for text icon */
   {
@@ -3337,8 +3410,16 @@ static void hotlist_drag_renderer(hotlist_item *item, unsigned int item_height, 
   hotlist_iconblock.bbox.xmax           = temp_width + regs.r[0] + 16;
   hotlist_iconblock.bbox.ymax           = item_height;
   hotlist_iconblock.bbox.ymin           = 4;
-  hotlist_iconblock.data.it.buffer      = item->name;
-  hotlist_iconblock.data.it.buffer_size = strlen(item->name);
+  if (item->type == hl_url && hl_show_urls)
+  {
+    hotlist_iconblock.data.it.buffer      = item->data.url;
+    hotlist_iconblock.data.it.buffer_size = strlen(item->data.url);
+  }
+  else
+  {
+    hotlist_iconblock.data.it.buffer      = item->name;
+    hotlist_iconblock.data.it.buffer_size = strlen(item->name);
+  }
 
   if (wimp_plot_icon(&hotlist_iconblock))
   {
@@ -3676,6 +3757,7 @@ static int hotlist_drag_completed_handler(int event_code, WimpPollBlock *event, 
         if (sourceitem->type == hl_directory) hotlist_clear_flags(sourceitem->data.directory_content, hl_ALL, HOTLIST_G_IS_SELECTED);
         targetitem = sourceitem;
       }
+      hotlist_modified(HL_MODIFIED_MOVE);
     }
     else
     {
@@ -3695,6 +3777,7 @@ static int hotlist_drag_completed_handler(int event_code, WimpPollBlock *event, 
                           &targetitem);
         if (sourceitem->type == hl_directory) hotlist_clear_flags(sourceitem->data.directory_content, hl_ALL, HOTLIST_G_IS_SELECTED);
       }
+      hotlist_modified(HL_MODIFIED_COPY);
     }
 
     bottom2 = hotlist_count_displayed_items(hotlist_root->data.directory_content);
@@ -4128,4 +4211,49 @@ static unsigned int hotlist_no_contents_selected(hotlist_item * item)
   }
 
   return 1;
+}
+
+/*************************************************/
+/* hotlist_show_descriptions_handler()           */
+/*                                               */
+/* Selects show descriptions and redraws hotlist */
+/* window and menu to reflect this               */
+/*************************************************/
+
+static int hotlist_show_descriptions_handler(int event_code, ToolboxEvent *event, IdBlock *id_block, void *handle)
+{
+  hl_show_urls = 0;
+  hotlist_set_menu_details(id_block->parent_id);
+  hotlist_window_preopen(already_open);
+  hotlist_redraw_items(0,
+                       hotlist_count_displayed_items(hotlist_root->data.directory_content));
+  return 1;
+}
+
+/*************************************************/
+/* hotlist_show_urls_handler()                   */
+/*                                               */
+/* Selects show urls and redraws hotlist  window */
+/* and menu to reflect this                      */
+/*************************************************/
+
+static int hotlist_show_urls_handler(int event_code, ToolboxEvent *event, IdBlock *id_block, void *handle)
+{
+  hl_show_urls = 1;
+  hotlist_set_menu_details(id_block->parent_id);
+  hotlist_window_preopen(already_open);
+  hotlist_redraw_items(0,
+                       hotlist_count_displayed_items(hotlist_root->data.directory_content));
+  return 1;
+}
+
+/*************************************************/
+/* hotlist_modified()                            */
+/*                                               */
+/* Called whenever the hotlist is modified       */
+/*************************************************/
+
+static _kernel_oserror *hotlist_modified(unsigned int type)
+{
+  return NULL;
 }
