@@ -113,7 +113,7 @@ ${TARGET}: ${SOURCE} ${DATA}.Tokenised ${DIRS}
 # Tokenise the Messages file using Help and Dictionary Tokens
 #
 ${DATA}.Tokenised: ${DICTIONARY} ${HELPTOKENS} ${HELPTAGS}
-        Print ${HELPTOKENS} { >> ${PROCESSDIR}.Resources.Help.Messages }
+        Print ${HELPTOKENS} { > ${PROCESSDIR}.Resources.Help.Messages }
         ${MSGTOK} ${HELPTOKENS} ${HELPTAGS}
         ${CP} ${DICTIONARY} ${PROCESSDIR}.Resources.Kernel.Dictionary ${CPFLAGS}
         ${MSGTOK2} ${DICTTOKENS} ${DICTTAGS}

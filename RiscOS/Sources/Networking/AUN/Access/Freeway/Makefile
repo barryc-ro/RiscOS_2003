@@ -45,7 +45,7 @@ INCLUDES  = -ITCPIPLibs:,C:
 ANSILIB   = CLib:o.ansilib
 CLIB      = C:o.stubs
 RLIB      = RISC_OSLIB:o.risc_oslib
-#ROMCSTUBS = RISCOSLIB:o.romcstubs
+ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.abssym
 C_ABSSYM  = RISCOSLIB:o.c_abssym
 

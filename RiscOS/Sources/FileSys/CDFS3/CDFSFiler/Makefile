@@ -46,7 +46,7 @@ TOKENS   = Hdr:Tokens
 # Libraries
 #
 CLIB      = CLIB:o.stubs
-TGRLIB    = CommonLib:o.commonlibm
+TGRLIB    = tgrlib:o.tgrlib
 TBOXLIB   = tbox:o.eventlibm tbox:o.toolboxlib tbox:o.renderlib tbox:o.wimplib
 RLIB      = RISCOSLIB:o.risc_oslib
 RSTUBS    = RISCOSLIB:o.rstubs
@@ -57,7 +57,7 @@ ABSSYM    = RISC_OSLib:o.c_AbsSym
 #
 # Include files
 #
-INCLUDES = -ITbox:,CommonLib:,C:
+INCLUDES = -ITbox:,tgrlib:,C:
 
 #
 # Export Paths for Messages module
@@ -98,7 +98,8 @@ res.o: Res.!Sprites22
 rom: ${TARGET}
         @echo ${COMPONENT}: rom module built
 
-export: ${EXPORTS}
+export: 
+        @|${EXPORTS}
         @echo ${COMPONENT}: export complete
 
 install_rom: ${TARGET}

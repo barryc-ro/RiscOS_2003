@@ -261,7 +261,7 @@ rom_link:
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-oz.ModuleWrap: s.ModuleWrap s.AppName ${RESFILES}
+oz.ModuleWrap: s.ModuleWrap s.AppName ${RESFILES} s.resfiles
         ${AS} ${AFLAGS} s.ModuleWrap $@
 
 s.ModuleWrap: ${WRAPPER}
@@ -303,3 +303,24 @@ Debug.${APP}.Templates: $(LDIR).Templates
         ${CP} $(LDIR).Templates $@ ${CPFLAGS}
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
+oz.ModuleWrap: s.ModuleWrap
+oz.ModuleWrap: s.AppName
+oz.ModuleWrap: Hdr:ListOpts
+oz.ModuleWrap: Hdr:Macros
+oz.ModuleWrap: Hdr:System
+oz.ModuleWrap: Hdr:SWIs
+oz.ModuleWrap: Hdr:CPU.Generic26
+oz.ModuleWrap: Hdr:IO.GenericIO
+oz.ModuleWrap: Hdr:RISCOS
+oz.ModuleWrap: Hdr:ModHand
+oz.ModuleWrap: Hdr:EnvNumbers
+oz.ModuleWrap: Hdr:Proc
+oz.ModuleWrap: Hdr:FSNumbers
+oz.ModuleWrap: Hdr:NewErrors
+oz.ModuleWrap: Hdr:Services
+oz.ModuleWrap: Hdr:ResourceFS
+oz.ModuleWrap: Hdr:MsgTrans
+oz.ModuleWrap: Hdr:Variables
+oz.ModuleWrap: Hdr:UpCall
+oz.ModuleWrap: s.ResFiles
+o.jpeg: asm.jpeg

@@ -75,6 +75,7 @@ MkTables.maketables:   MkTables.o.maketables ${CLIB}
         link $(linkflags) -o $@ MkTables.o.maketables ${CLIB}
 
 Palettes.8desktop: MkTables.maketables rm.Colours
+        ${MKDIR} Tables
         rmload rm.Colours
         MkTables.maketables @  
         settype Tables.8greys text
@@ -82,4 +83,3 @@ Palettes.8desktop: MkTables.maketables rm.Colours
         MkTables.dosqueeze
         
 # Dynamic dependencies:
-

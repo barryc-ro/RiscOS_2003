@@ -46,19 +46,17 @@ TOKENS   = Hdr:Tokens
 # Libraries
 #
 CLIB      = CLIB:o.stubs
-TGRLIB    = CommonLib:o.commonlibm
+TGRLIB    = tgrlib:o.tgrlib
 RLIB      = RISCOSLIB:o.risc_oslib
 RSTUBS    = RISCOSLIB:o.rstubs
 ROMSTUBS  = RISCOSLIB:o.romstubs
 ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.c_AbsSym
 
-COMMONLIB = <CommonLib$Path>
-
 #
 # Include files
 #
-INCLUDES = -ICOMMONLIB:,C:
+INCLUDES = -Itgrlib:,C:
 
 #
 # Export Paths for Messages module

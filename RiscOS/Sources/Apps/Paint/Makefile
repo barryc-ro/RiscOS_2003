@@ -237,7 +237,7 @@ rom_link:
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-oz.ModuleWrap: s.ModuleWrap ${RESFILES}
+oz.ModuleWrap: s.ModuleWrap ${RESFILES} s.AppName s.Resfiles
         ${AS} ${AFLAGS} s.ModuleWrap $@
 
 s.ModuleWrap: ${WRAPPER}

@@ -69,11 +69,11 @@ install: ${DUMPERS}
         @echo ${COMPONENT}: installed (disc)
 
 install_rom: ${DUMPERS}
-        ${CP} rm.PDumperDM ${INSTDIR}.PDumperDM ${CPFLAGS}
-        ${CP} rm.PDumperIW ${INSTDIR}.PDumperIW ${CPFLAGS}
-        ${CP} rm.PDumperLJ ${INSTDIR}.PDumperLJ ${CPFLAGS}
-        ${CP} rm.PDumperE2 ${INSTDIR}.PDumperE2 ${CPFLAGS}
-        ${CP} rm.PDumperCX ${INSTDIR}.PDumperCX ${CPFLAGS}
+        ${CP} PDumperDM.rm.PDumperDM ${INSTDIR}.PDumperDM ${CPFLAGS}
+        ${CP} PDumperIW.rm.PDumperIW ${INSTDIR}.PDumperIW ${CPFLAGS}
+        ${CP} PDumperLJ.rm.PDumperLJ ${INSTDIR}.PDumperLJ ${CPFLAGS}
+        ${CP} PDumperE2.rm.PDumperE2 ${INSTDIR}.PDumperE2 ${CPFLAGS}
+        ${CP} PDumperCX.rm.PDumperCX ${INSTDIR}.PDumperCX ${CPFLAGS}
         @echo ${COMPONENT}: installed (rom)
 
 clean:
