@@ -38,7 +38,7 @@ RM      = remove
 WIPE    = -wipe
 
 CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module
+ASFLAGS = -depend !Depend -stamp -quit -module
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
