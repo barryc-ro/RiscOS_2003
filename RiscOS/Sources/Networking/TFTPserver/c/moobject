@@ -1,0 +1,531 @@
+/*
+ *
+ *  Copyright (c) 1999 by Pace Micro Technologies plc. All Rights Reserved.
+ *
+ *
+ * This software is furnished under a license and may be used and copied
+ * only in accordance with the terms of such license and with the
+ * inclusion of the above copyright notice. This software or any other
+ * copies thereof may not be provided or otherwise made available to any
+ * other person. No title to and ownership of the software is hereby
+ * transferred.
+ *
+ * The information in this software is subject to change without notice
+ * and should not be construed as a commitment by Pace Micro Techonologies
+ * plc.
+ *
+ *
+ *                PROPRIETARY NOTICE
+ *
+ * This software is an unpublished work subject to a confidentiality agreement
+ * and is protected by copyright and trade secret law.  Unauthorized copying,
+ * redistribution or other use of this work is prohibited.
+ *
+ * The above notice of copyright on this source code product does not indicate
+ * any actual or intended publication of such source code.
+ */
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <stddef.h>
+#include <signal.h>
+
+#include "sys/types.h"
+#include "sys/socket.h"
+#include "netinet/in.h"
+#include "arpa/inet.h"
+#include "sys/uio.h"
+
+#include "multicaster.h"
+
+/* Well-known port for tftp-mcast */
+static const short port_id = 1758;
+
+typedef struct tftp_client {
+        struct sockaddr_in	client;
+        unsigned int		oack_acked:1;
+        int			last_ack_received;
+} tftp_client;
+
+struct multicaster_object {
+        multicaster_object	*next;
+
+	/* The multicast destination address + parameter for msghdr.
+	 */
+	struct sockaddr_in 	target;
+
+	/* The source address for this object */
+	struct sockaddr_in	source;
+
+	/* File handle of the object being multicasted */
+	multicast_file		*f;
+
+	/* Socket handle */
+	multicast_socket	s;
+
+	/* TFTP header information prepended to data packets */
+	struct tftphdr		header;
+
+	/* The payload data buffer descriptor */
+	int			iov_size;
+	struct iovec		iov[2];
+
+
+	/* The buffer for holding the file data (appears after this object in memory) */
+	size_t			size_of_buffer;
+	char			*buffer;
+
+	/* Data sent tracking information */
+	int			current_part_number;
+	int			max_part_number;
+
+	/* Client tracking information */
+	int			clients;	/* Actual number of known active clients */
+	int			clients_alloc; 	/* size of currently allocated client array */
+	tftp_client		*master_client;	/* ID of the master client */
+	tftp_client		*client;	/* Array of known clients */
+};
+
+
+static void multicaster_activate_master_client(multicaster_object *);
+
+multicast_socket multicaster_get_socket(multicaster_object *mo)
+{
+        return mo->s;
+}
+
+multicaster_object **multicaster_get_next(multicaster_object *mo)
+{
+        return &mo->next;
+}
+
+multicast_file *multicaster_get_file(multicaster_object *mo)
+{
+        return mo->f;
+}
+
+size_t multicaster_get_buffer_size(multicaster_object *mo)
+{
+        return mo->size_of_buffer;
+}
+
+size_t multicaster_get_total_size(multicaster_object *mo)
+{
+        return multicast_file_get_size(mo->f);
+}
+
+struct sockaddr_in *multicaster_get_target(multicaster_object *mo)
+{
+        return &mo->target;
+}
+
+static tftp_client *multicaster_lookup_client(multicaster_object *mo, struct sockaddr_in *sin)
+{
+        int i;
+
+        for (i=0; i<mo->clients; ++i) {
+                if (memcmp(sin, &mo->client[i].client, sizeof(*sin)) == 0) {
+                        return &mo->client[i];
+                }
+        }
+
+        return NULL;
+}
+
+int multicaster_set_iovec(multicaster_object *mo, struct iovec *iov)
+{
+        (void) memcpy(iov, mo->iov, sizeof(mo->iov));
+        return mo->iov_size;
+}
+
+static void multicaster_write_iovec(multicaster_object *mo,
+	void *header, int header_len, void *data, int data_len)
+{
+        mo->iov[0].iov_base = header;
+        mo->iov[0].iov_len = header_len;
+        mo->iov[1].iov_base = data;
+        mo->iov[1].iov_len = data_len;
+	if (data_len == 0) {
+	        mo->iov_size = 1;
+	}
+	else {
+	        mo->iov_size = 2;
+	}
+}
+
+bmc_status multicaster_object_ctor(multicaster_object *mo, multicast_file *mf,
+		struct in_addr *interface)
+{
+        bmc_status status;
+
+        /* Initialise various members to safe values */
+        mo->s = multicaster_INVALID_SOCKET;
+
+	/* The file handle */
+        mo->f = mf;
+
+	/* Initialise the client list */
+	mo->clients = 0;
+	mo->clients_alloc = 0;
+	mo->master_client = NULL;
+	mo->client = NULL;
+
+	/* Set up the source address for the packets */
+	memset(&mo->source, '\0', sizeof(mo->source));
+	mo->source.sin_family = AF_INET;
+	mo->source.sin_len = sizeof(mo->source);
+	mo->source.sin_port = 0;
+	mo->source.sin_addr = *interface;
+
+	/* Calculate and cache the destination address for multicast packets */
+	memset(&mo->target, '\0', sizeof(mo->target));
+	mo->target.sin_family = AF_INET;
+	mo->target.sin_len = sizeof(mo->target);
+	mo->target.sin_port = htons(port_id);
+	mo->target.sin_addr = configure_read_target_address(
+		multicast_file_get_filename(mo->f), interface);
+
+	/* Ensure that the target IP address is a multicast address */
+	if (!IN_MULTICAST(htonl(mo->target.sin_addr.s_addr))) {
+	        return bmc_NOT_MULTICAST;
+	}
+
+	mo->max_part_number = 1 + multicast_file_get_size(mo->f) / mo->size_of_buffer;
+
+	/* Set up the destination socket address for sending */
+	status = platform_create_socket(&mo->s);
+        if (status == bmc_OK) {
+                /* Create a binding to the interface */
+		status = platform_bind_socket(mo->s, interface->s_addr, 0);
+		if (status == bmc_OK) {
+		        /* Find out what the source port is for future reference */
+		        status = platform_get_local_port(mo->s, &mo->source.sin_port);
+		}
+        }
+	if (status != bmc_OK) {
+	        return status;
+	}
+
+        /* Set up the I/O vector for data sending */
+	mo->iov_size = sizeof(mo->iov)/sizeof(*mo->iov);
+	multicaster_write_iovec(mo, &mo->header, offsetof(struct tftphdr, th_data),
+		mo->buffer, mo->size_of_buffer);
+
+	mo->current_part_number = -1;
+
+	return bmc_OK;
+}
+
+multicaster_object *multicaster_new(size_t bufsize)
+{
+        multicaster_object *mo = calloc(1, sizeof(*mo) + bufsize);
+
+        if (mo != NULL) {
+		mo->size_of_buffer = bufsize;
+		mo->buffer = (char *) (mo + 1);
+                mo->f = NULL;
+        }
+
+        return mo;
+}
+
+void multicaster_object_dtor(multicaster_object *mo)
+{
+        if (mo->client != NULL) {
+                free(mo->client);
+        }
+	if (mo->f != NULL) {
+	        multicast_file_destroy(mo->f);
+	}
+	if (mo->s != multicaster_INVALID_SOCKET) {
+	        platform_close_socket(mo->s);
+	        mo->s = multicaster_INVALID_SOCKET;
+	}
+	free(mo);
+}
+
+static int multicaster_read_next_part(multicaster_object *mo, int last_acked_part_number)
+{
+        size_t offset;
+
+	printf("ack %d; max %d\n", last_acked_part_number, mo->max_part_number);
+
+        if (last_acked_part_number >= mo->max_part_number) {
+                /* This client has finished - signal this by returning zero */
+                return 0;
+        }
+
+        mo->current_part_number = last_acked_part_number + 1;
+	mo->header.th_opcode = htons(DATA);
+	mo->header.th_block = htons(mo->current_part_number);
+
+	offset = (mo->current_part_number - 1) * mo->size_of_buffer;
+
+	multicaster_write_iovec(mo, &mo->header, offsetof(struct tftphdr, th_data),
+		mo->buffer, multicast_file_read(mo->buffer, offset, mo->size_of_buffer, mo->f));
+
+	/* Next block has been cued up ready for transmission ... indicate by returning 1 */
+	return 1;
+}
+
+
+static void multicaster_remove_client(multicaster_object *mo, tftp_client *client)
+{
+	if (client == NULL) {
+	        client = &mo->client[0];
+	}
+
+	fprintf(stderr, "multicaster_object(%p): Removing client %s\n", mo,
+		inet_ntoa(client->client.sin_addr));
+
+	if (client == mo->master_client) {
+	        mo->master_client = NULL;
+	}
+
+	if (client - mo->client == mo->clients - 1) {
+	        /* This was the last client - just decrement the count of clients */
+	        --mo->clients;
+	}
+	else {
+                /* Shift everything else up one space */
+                --mo->clients;
+                (void) memmove(client, client + 1,
+                	sizeof(*mo->client) * (mo->client + mo->clients - client));
+                if (mo->master_client > client) {
+                        /* Master client has moved - re-align the master_client pointer */
+			--mo->master_client;
+                }
+	}
+
+        if (mo->clients <= 0) {
+                mo_manager_delink(mo);
+                mo_manager_destroy(mo);
+        }
+        else {
+                /* If we just killed the master client, allocate a new master client */
+                if (mo->master_client == NULL) {
+                	multicaster_activate_master_client(mo);
+                }
+        }
+}
+
+static void multicaster_init_client(multicaster_object *mo, tftp_client *c, struct sockaddr_in *sin)
+{
+        memset(c, '\0', sizeof(*c));
+        c->client = *sin;
+        c->oack_acked = 0;
+}
+
+bmc_status multicaster_add_client(multicaster_object *mo, struct sockaddr_in *sin)
+{
+        size_t idx;
+
+	fprintf(stderr, "multicaster_add_client: %s:%d\n", inet_ntoa(sin->sin_addr), ntohs(sin->sin_port));
+
+	for (idx=0; idx<mo->clients; ++idx) {
+		fprintf(stderr, "multicaster_add_client: compare with %s:%d\n",
+			inet_ntoa(mo->client[idx].client.sin_addr),
+			ntohs(mo->client[idx].client.sin_port));
+	        if (memcmp(sin, &mo->client[idx].client, sizeof(*sin)) == 0) {
+	                /* Found the client already in the list */
+	                return bmc_ALREADY;
+	        }
+	}
+
+	fprintf(stderr, "New client\n");
+
+	if (mo->clients == mo->clients_alloc) {
+	        static const size_t allocation_granularity = 16;
+	        size_t master_idx = mo->master_client - mo->client;
+	        tftp_client *clients;
+	        size_t new_size;
+
+	        new_size = (mo->clients_alloc + allocation_granularity) * sizeof(*mo->client);
+	        clients = realloc(mo->client, new_size);
+	        if (clients == NULL) {
+	                return bmc_MALLOC_FAILED;
+	        }
+	        mo->client = clients;
+	        mo->clients_alloc += allocation_granularity;
+	        if (mo->master_client) {
+	                mo->master_client = &mo->client[master_idx];
+	        }
+	}
+
+	multicaster_init_client(mo, &mo->client[mo->clients++], sin);
+
+	if (mo->master_client == NULL) {
+	        /* Elect this new client as the master - tftpserver.c will see to it
+	         * that the client is sent an OACK indicating that it is the master
+	         * client.
+	         */
+                mo->master_client = mo->client;
+	}
+
+	return bmc_OK;
+}
+
+static size_t multicaster_format_oack(char *buffer, int is_master)
+{
+        return sprintf(buffer, "multicast%c,,%d%c", '\0', is_master?1:0, '\0');
+}
+
+static void multicaster_activate_master_client(multicaster_object *mo)
+{
+        (void) mo;
+
+        if (mo->clients > 0) {
+                mo->master_client = mo->client;
+                mo->current_part_number = -1;
+                mo->iov[0].iov_len = offsetof(struct tftphdr, th_stuff);
+                mo->iov[1].iov_len = multicaster_format_oack(mo->buffer, 1);
+		mo->header.th_opcode = htons(OACK);
+		platform_transmit_to(mo, &mo->master_client->client);
+        }
+}
+
+void multicaster_process_packet(multicaster_object *mo)
+{
+        (void) tftpserver_process_packet(mo);
+}
+
+int multicaster_is_this_the_master_client(multicaster_object *mo, struct sockaddr_in *clnt)
+{
+	return mo->master_client && mo->master_client == multicaster_lookup_client(mo, clnt);
+}
+
+/* As each multicaster object is bound to a particular local interface for transmissions
+ * we use this routine to check if the supplied address matches the local address being
+ * used.
+ */
+int multicaster_check_interface(multicaster_object *mo, struct in_addr *address)
+{
+        return memcmp(&mo->source.sin_addr, address, sizeof(*address)) == 0;
+}
+
+/* Handle an ERROR packet arriving on this multicaster's port */
+void multicaster_investigate_error(multicaster_object *mo, int err, struct sockaddr_in *sender)
+{
+        tftp_client *client;
+
+        (void) err;
+
+	client = multicaster_lookup_client(mo, sender);
+	if (client == NULL) {
+	        /* Not ours! Ignore it */
+	}
+	else {
+	        multicaster_remove_client(mo, client);
+	        fprintf(stderr, "%s: ERROR  code %d (%s) Abandonning the client\n",
+	        	inet_ntoa(sender->sin_addr), err, i18n_translate_tftp_error_code(err));
+	}
+}
+
+/* Shut up an old long-lost master client */
+static void multicaster_gag_client(multicaster_object *mo, tftp_client *c)
+{
+	struct iovec iov[sizeof(mo->iov)/sizeof(*mo->iov)];
+	struct tftphdr header;
+	char message[SEGSIZE];
+
+        (void) memcpy(iov, mo->iov, sizeof(iov));
+
+	header.th_opcode = ntohs(OACK);
+
+	multicaster_write_iovec(mo, &header, offsetof(struct tftphdr, th_msg),
+		&message, multicaster_format_oack(message, 0));
+
+	platform_transmit_to(mo, &c->client);
+
+	/* Restore old contents of iovec */
+	multicaster_write_iovec(mo, iov[0].iov_base, iov[0].iov_len, iov[1].iov_base, iov[1].iov_len);
+}
+
+
+static void multicaster_generate_error(multicaster_object *mo, short ecode, const char *msg,
+		struct sockaddr_in *dest)
+{
+	struct iovec iov[sizeof(mo->iov)/sizeof(*mo->iov)];
+	struct tftphdr header;
+	char message[SEGSIZE];
+
+        (void) memcpy(iov, mo->iov, sizeof(iov));
+
+	header.th_opcode = ntohs(ERROR);
+	header.th_code = ntohs(ecode);
+	message[0] = '\0';
+	strncat(message, msg ? msg : i18n_translate_tftp_error_code(ecode), sizeof(message));
+
+	multicaster_write_iovec(mo, &header, offsetof(struct tftphdr, th_msg),
+		&message, strlen(message) + 1);
+
+	platform_transmit_to(mo, dest);
+
+	/* Restore old contents of iovec */
+	multicaster_write_iovec(mo, iov[0].iov_base, iov[0].iov_len, iov[1].iov_base, iov[1].iov_len);
+}
+
+
+/* Handle an ACK packet arriving on this multicaster's port */
+void multicaster_process_ack(multicaster_object *mo, int block, struct sockaddr_in *sender)
+{
+        tftp_client *client;
+
+	client = multicaster_lookup_client(mo, sender);
+	if (client == NULL) {
+	        /* We don't know anything about this client */
+	        multicaster_generate_error(mo, EBADID, NULL, sender);
+	        return;
+	}
+
+        if (client == mo->master_client) {
+                fprintf(stderr, "This was the master client\n");
+
+                if (block < mo->current_part_number) {
+                        /* We must ONLY re-transmit on a timeout later (Sorcerer ahoy!) */
+                        fprintf(stderr, "Duplicate ACK\n");
+                        return;
+                }
+
+                if (multicaster_read_next_part(mo, block)) {
+                        bmc_status status;
+
+                        if (mo->clients == 1) {
+                                status = platform_transmit_to(mo, &client->client);
+                        }
+                        else {
+                                status = platform_transmit(mo);
+                        }
+                        if (status != bmc_OK) {
+                                multicaster_generate_error(mo, EUNDEF,
+                                	platform_translate_errno(),
+                                	&client->client);
+                                multicaster_remove_client(mo, client);
+                        }
+                }
+                else {
+                        /* Client has finished - if there are no clients left, the
+                         * multicaster_remove_client function will destroy US (the mo)
+                         * so be very careful about using mo after this call!
+                         */
+                        multicaster_remove_client(mo, client);
+                }
+        }
+        else {
+		if (block == 0 && !client->oack_acked) {
+		        /* Client has acked our OACK */
+		        client->oack_acked = 1;
+		}
+		else if (block == mo->max_part_number) {
+		        /* Client has finished - see warning above regarding this call */
+		        multicaster_remove_client(mo, client);
+		}
+		else {
+		        /* An old master client that we lost contact with and has returned?
+		         * A buggy client?  Tell it to shut up
+		         */
+		        multicaster_gag_client(mo, client);
+		}
+        }
+}
