@@ -25,6 +25,7 @@
 #	18/02/98	0.08	RDW	Split NetFax NFE code from generic emaillibrary
 #	25/02/98	0.09	RDW	Commented out DEBUG so it can be passed from
 #					amu commandline
+#					create_ent, extract_hdr and utils objects added
 
 #
 # Paths
@@ -93,11 +94,11 @@ ASMFLAGS=
 
 HDRS=		h.NFELib
 
-OBJS=		o.NFELib
+OBJS=		o.NFELib o.create_ent o.extracthdr o.utils
 
-OBJSZ=		z.NFELib
+OBJSZ=		z.NFELib z.create_ent z.extracthdr z.utils
 
-OBJSD =		od.NFELib
+OBJSD =		od.NFELib od.create_ent od.extracthdr od.utils
 
 #
 # Rule patterns
