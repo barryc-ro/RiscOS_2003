@@ -73,29 +73,6 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-rm.SysOnly.MPEGCtrl: Hdr.GetAll
-rm.SysOnly.MPEGCtrl: Hdr:ListOpts
-rm.SysOnly.MPEGCtrl: Hdr:Macros
-rm.SysOnly.MPEGCtrl: Hdr:System
-rm.SysOnly.MPEGCtrl: Hdr:SWIs
-rm.SysOnly.MPEGCtrl: Hdr:CPU.Generic26
-rm.SysOnly.MPEGCtrl: Hdr:IO.GenericIO
-rm.SysOnly.MPEGCtrl: Hdr:RISCOS
-rm.SysOnly.MPEGCtrl: Hdr:CMOS
-rm.SysOnly.MPEGCtrl: Hdr:ModHand
-rm.SysOnly.MPEGCtrl: Hdr:Services
-rm.SysOnly.MPEGCtrl: Hdr:Proc
-rm.SysOnly.MPEGCtrl: Hdr:FSNumbers
-rm.SysOnly.MPEGCtrl: Hdr:NewErrors
-rm.SysOnly.MPEGCtrl: Hdr:MsgTrans
-rm.SysOnly.MPEGCtrl: Hdr:Debug
-rm.SysOnly.MPEGCtrl: Hdr:VduExt
-rm.SysOnly.MPEGCtrl: Hdr:Podule
-rm.SysOnly.MPEGCtrl: Hdr:DevNos
-rm.SysOnly.MPEGCtrl: Hdr:MPEGCtrl
-rm.SysOnly.MPEGCtrl: Hdr:MPEGVideo
-rm.SysOnly.MPEGCtrl: Hdr:MPEGAudio
-rm.SysOnly.MPEGCtrl: s.Module
 rm.MPEGCtrl: Hdr:ListOpts
 rm.MPEGCtrl: Hdr:Macros
 rm.MPEGCtrl: Hdr:System
@@ -119,3 +96,27 @@ rm.MPEGCtrl: Hdr:MPEGCtrl
 rm.MPEGCtrl: Hdr:MPEGVideo
 rm.MPEGCtrl: Hdr:MPEGAudio
 rm.MPEGCtrl: s.Module
+rm.SysOnly.MPEGCtrl: Hdr.GetAll
+rm.SysOnly.MPEGCtrl: Hdr:ListOpts
+rm.SysOnly.MPEGCtrl: Hdr:Macros
+rm.SysOnly.MPEGCtrl: Hdr:System
+rm.SysOnly.MPEGCtrl: Hdr:SWIs
+rm.SysOnly.MPEGCtrl: Hdr:CPU.Generic26
+rm.SysOnly.MPEGCtrl: Hdr:IO.GenericIO
+rm.SysOnly.MPEGCtrl: Hdr:RISCOS
+rm.SysOnly.MPEGCtrl: Hdr:Machine.<Machine>
+rm.SysOnly.MPEGCtrl: Hdr:CMOS
+rm.SysOnly.MPEGCtrl: Hdr:ModHand
+rm.SysOnly.MPEGCtrl: Hdr:Services
+rm.SysOnly.MPEGCtrl: Hdr:Proc
+rm.SysOnly.MPEGCtrl: Hdr:FSNumbers
+rm.SysOnly.MPEGCtrl: Hdr:NewErrors
+rm.SysOnly.MPEGCtrl: Hdr:MsgTrans
+rm.SysOnly.MPEGCtrl: Hdr:Debug
+rm.SysOnly.MPEGCtrl: Hdr:VduExt
+rm.SysOnly.MPEGCtrl: Hdr:Podule
+rm.SysOnly.MPEGCtrl: Hdr:DevNos
+rm.SysOnly.MPEGCtrl: Hdr:MPEGCtrl
+rm.SysOnly.MPEGCtrl: Hdr:MPEGVideo
+rm.SysOnly.MPEGCtrl: Hdr:MPEGAudio
+rm.SysOnly.MPEGCtrl: s.Module
