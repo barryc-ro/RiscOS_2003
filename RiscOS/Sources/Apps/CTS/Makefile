@@ -17,6 +17,7 @@
 COMPONENT	= CTS
 APP		= !CTS
 MODULE		= rm.!CTS
+MODULE_D	= rm.!CTSD
 ROM_MODULE	= aof.CTS
 
 # -----------------------------------------------------------------------------
@@ -56,7 +57,7 @@ WFLAGS		= ~cf~vr
 DFLAGS		= 
 DDFLAGS		= -fn -DDEBUGLIB
 DZFLAGS		= 
-DDZFLAGS	= ${DZFLAGS} -fn
+DDZFLAGS	= ${DZFLAGS} -fn -DDEBUGLIB
 
 
 # -----------------------------------------------------------------------------
@@ -107,6 +108,15 @@ LIBSD =\
  ${INETLIB}\
  ${SOCKLIB}\
  ${CLIB}\
+
+LIBSDM =\
+ ${WIMPLIB}\
+ ${TOOLBOXLIB}\
+ ${EVENTLIB}m\
+ ${DEBUGLIB}zm\
+ ${UNIXLIB}zm\
+ ${INETLIB}zm\
+ ${SOCKLIB}zm\
 
 
 # -----------------------------------------------------------------------------
@@ -196,8 +206,26 @@ OBJSD =\
  od.st_started\
  od.utils
  
-#OBJSDZ =
-
+OBJSDZ =\
+ odz.client\
+ odz.ctsmessage\
+ odz.ctsbrowser\
+ odz.ctsui\
+ odz.ctsutils\
+ odz.plugclient\
+ o.scevent\
+ odz.smartcard\
+ odz.statetable\
+ odz.st_aux\
+ odz.st_basic\
+ odz.st_change\
+ odz.st_errorclose\
+ odz.st_verify\
+ odz.st_apdu\
+ odz.st_text\
+ odz.st_open\
+ odz.st_started\
+ odz.utils
 
 # -----------------------------------------------------------------------------
 # Rule patterns
@@ -229,9 +257,11 @@ rom: ${ROM_MODULE}
 ram: ${MODULE}
 	@echo ${COMPONENT}: Module built (RAM)
 
+ramD: ${MODULE_D}
+	@echo ${COMPONENT}: Debug module built (RAM)
+
 install_common: ${FILES}
 	@echo
-	${CP} LocalRes:!Boot			${INSTDIR}.!Boot		${CPFLAGS}
 	${CP} LocalRes:!Sprites			${INSTDIR}.!Sprites		${CPFLAGS}
 	${CP} LocalRes:Messages			${INSTDIR}.Messages		${CPFLAGS}
 	${CP} LocalRes:Res			${INSTDIR}.Res			${CPFLAGS}
@@ -272,10 +302,25 @@ install: install_common
 	@echo ${COMPONENT}: Application installed to ${INSTDIR}
 
 installd: install_common
+	${CP} LocalRes:!Boot			${INSTDIR}.!Boot		${CPFLAGS}
 	${CP} LocalRes:!RunT		${INSTDIR}.!Run		${CPFLAGS}
 	${CP} ${TARGET}			${INSTDIR}.!RunImage	${CPFLAGS}
 	@echo
 	@echo ${COMPONENT}: Debug application installed to ${INSTDIR}
+
+installram: install_common ram
+	${CP} LocalRes:RAM.!Boot	${INSTDIR}.!Boot	${CPFLAGS}
+	${CP} LocalRes:RAM.!Run		${INSTDIR}.!Run		${CPFLAGS}
+	${CP} ${MODULE}			${INSTDIR}.!CTS		${CPFLAGS}
+	@echo
+	@echo ${COMPONENT}: Ram module installed to ${INSTDIR}
+
+installramD: install_common ramD
+	${CP} LocalRes:RAM.!Boot	${INSTDIR}.!Boot	${CPFLAGS}
+	${CP} LocalRes:RAM.!Run		${INSTDIR}.!Run		${CPFLAGS}
+	${CP} ${MODULE_D}		${INSTDIR}.!CTS		${CPFLAGS}
+	@echo
+	@echo ${COMPONENT}: Debug ram module installed to ${INSTDIR}
 
 install_rom: ${ROM_MODULE}
 	${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
@@ -402,13 +447,13 @@ ${MODULE}: oz.ModuleWra1 ${OBJSZ} ${LIBSM} ${EXTRALIBS} ${CLIB} ${DIRS}
 	@echo
 	${LD} -s syms.RAMMod -o $@ -module oz.ModuleWra1 ${OBJSZ} ${LIBSM} ${EXTRALIBS} ${CLIB}
 
+${MODULE_D}: oz.ModuleWra1 ${OBJSDZ} ${LIBSDM} ${EXTRALIBS} ${CLIB} ${DIRS}
+	@echo
+	${LD} -s syms.RAMModD -o $@ -module oz.ModuleWra1 ${OBJSDZ} ${LIBSDM} ${EXTRALIBS} ${CLIB}
+
 ${ROM_MODULE}: oz.ModuleWrap ${OBJSZ} ${ROMCSTUBS} ${LIBSM} ${EXTRALIBS} ${DIRS}
 	@echo
 	${LD} -s syms.ROMMod -o $@ -aof oz.ModuleWrap ${OBJSZ} ${LIBSM} ${EXTRALIBS} ${ROMCSTUBS}
-
-rm.!CTSD: odz.ModuleWrap ${OBJSDZ} ${LIBSM} ${EXTRALIBS} ${DIRS}
-	@echo
-	${LD} -s syms.ROMDMod -o $@ -module oz.ModuleWrap ${OBJSDZ} ${LIBSM} ${EXTRALIBS}
 
 
 # -----------------------------------------------------------------------------

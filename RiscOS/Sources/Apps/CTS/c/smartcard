@@ -514,6 +514,8 @@ cts_sc_status cts_sc_pin_op_response(
         return cts_sc_status_COMPLETE;
 }
 
+/* The assembler routine */
+extern void SCEvent_handler (void);
 
 /* One-time initialisation for getting events out of the smartcard module */
 enum {
@@ -532,8 +534,13 @@ static void cts_sc_disable_events(void)
 
 static void cts_sc_release_vector(void)
 {
-	(void) _swix(OS_Release, _INR(0,2), Event_Vector,
+#ifdef ROM
+        (void) _swix(OS_Release, _INR(0,2), Event_Vector,
+		SCEvent_handler, cts_sc_pollword);
+#else
+        (void) _swix(OS_Release, _INR(0,2), Event_Vector,
 		cts_sc_pollword + 3, cts_sc_pollword);
+#endif
 }
 
 static void cts_sc_exit_lowlevel(void)
@@ -541,14 +548,31 @@ static void cts_sc_exit_lowlevel(void)
         rma_free(cts_sc_pollword);
 }
 
+
 _kernel_oserror *cts_sc_init_lowlevel(void **pollwordp)
 {
+        _kernel_oserror *e;
+#ifdef ROM
+        /* RAM or ROM module - we don't need to do the code-copying shenanigans. */
+        cts_sc_pollword = rma_alloc(3 * sizeof(int));
+        if (cts_sc_pollword == NULL) {
+                dprintf(("", "Memory exhaustion!\n"));
+                raise(SIGTERM);
+        }
+	atexit(cts_sc_exit_lowlevel);
+        memset(cts_sc_pollword, '\0', 3 * sizeof(int));
+        *pollwordp = cts_sc_pollword + 1; /* Must watch the reason code field. */
+
+	e = _swix(OS_Claim, _INR(0,2), Event_Vector, SCEvent_handler, cts_sc_pollword);
+#else
         /* These are the addresses of the function within the application code
          * that we are going to copy to RMA to catch events
          */
+        /* This isn't done in the case of a RAM/ROM module, because the offsets
+           we're working correctly, and we ending up trying to allocate an awful
+           lot of memory */
         extern const char *const scevent_code_limit, *scevent_code_base;
         const size_t event_handler_size = scevent_code_limit - scevent_code_base;
-        _kernel_oserror *e;
 
 	dprintf(("cts_sc", "smartcard low level init: claim %#08x bytes of RMA\n",
 		3 * sizeof(int) + event_handler_size));
@@ -568,6 +592,7 @@ _kernel_oserror *cts_sc_init_lowlevel(void **pollwordp)
         *pollwordp = cts_sc_pollword + 1; /* Must watch the reason code field. */
 
 	e = _swix(OS_Claim, _INR(0,2), Event_Vector, cts_sc_pollword + 3, cts_sc_pollword);
+#endif
 	if (e != NULL) return e;
 	atexit(cts_sc_release_vector);
 	e = _swix(OS_Byte, _INR(0,1), EnableEvent, Event_Expansion);
