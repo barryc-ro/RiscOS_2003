@@ -152,6 +152,7 @@ rm.Omega.PS2Driver: Hdr:CPU.Generic26
 rm.Omega.PS2Driver: Hdr:IO.GenericIO
 rm.Omega.PS2Driver: Hdr:RISCOS
 rm.Omega.PS2Driver: Hdr:Machine.<Machine>
+rm.Omega.PS2Driver: Hdr:Machine.<Machine>
 rm.Omega.PS2Driver: Hdr:IO.IOMDL
 rm.Omega.PS2Driver: Hdr:DevNos
 rm.Omega.PS2Driver: Hdr:KEYV
