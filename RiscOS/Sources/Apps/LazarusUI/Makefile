@@ -136,7 +136,6 @@ resources: translate
         $(CP) LazUILocalRes:$(APP).Palette $(RESAPP).Palette $(CPFLAGS)
         $(CP) LazUILocalRes:NVRAM.$(MACHINE).Tags $(RESRES).NVRAM.Tags $(CPFLAGS)
         $(CP) LazUILocalRes:STBPrint.PaperA4 $(RESRES).STBPrint.PaperA4 $(CPFLAGS)
-        $(CP) LazUILocalRes:$(APP).Modules.CSFS $(RESAPP).Modules.CSFS $(CPFLAGS)
         @echo $(COMPONENT): resource files copied
         UnSet LazUILocalRes$path
         
