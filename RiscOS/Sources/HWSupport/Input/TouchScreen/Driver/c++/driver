@@ -28,8 +28,8 @@ extern "C" void ______main();
 int Driver(_kernel_swi_regs *r, void *pw);
 
 // local function prototypes
-static PRESSURE_STATUS pressure_gradient(unsigned int current_pressure,
-                                         unsigned int last_pressure);
+static PRESSURE_STATUS pressure_gradient(PRESSURE_LEVEL &current_pressure,
+                                         PRESSURE_LEVEL last_pressure);
 
 static void inform_kernel(unsigned int x, unsigned int y);
 
@@ -46,11 +46,37 @@ static void inform_kernel(unsigned int x, unsigned int y);
 // these are defined here, but mouse button values may be already be defined in a .h file.
 #define LEFT_MOUSE_BUTTON_KEYCODE    0x70
 #define MIDDLE_MOUSE_BUTTON_KEYCODE  0x71
+#define RIGHT_MOUSE_BUTTON_KEYCODE  0x72
+#define PROG_KEYCODE 0x7e
+#define FN_KEYCODE   0x7f
 
 
 
 display     display_device;      // create a display object
 touchscreen tscreen;             // create a touchscreen object
+
+static bool prog_down, fn_down;
+
+int keyevent_handler(_kernel_swi_regs *r, void *pw)
+{
+    int key = r->r[2];
+    int down = r->r[1];
+
+    (void)pw;
+
+    if (key != FN_KEYCODE && key != PROG_KEYCODE)
+        return 1;
+
+    if (down != 0 && down != 1)
+        return 1;
+
+    if (key == PROG_KEYCODE)
+        prog_down = down;
+    else
+        fn_down = down;
+
+    return 1;
+}
 
 int pointerv_handler(_kernel_swi_regs *r, void *pw)
 {
@@ -105,7 +131,25 @@ int Driver(_kernel_swi_regs *r, void *pw)
      static PRESSURE_LEVEL           last_pressure = ZERO;
      static PRESSURE_LEVEL           current_pressure;
      static PRESSURE_STATUS          status;
-     static bool                     left_down = false, middle_down = false;
+     static bool                     left_down = false, middle_down = false, right_down = false;
+     static bool                     active;
+     static int                      irqs_off;
+
+     if (!display_device.is_calibrated())
+         return 1;
+
+     irqs_off = _kernel_irqs_disabled();
+     if (!irqs_off)
+        _kernel_irqs_off();
+
+     if (active)  // don't re-enter ourselves
+     {
+         if (!irqs_off) _kernel_irqs_on();
+         return 1;
+     }
+
+     active = true;
+     _kernel_irqs_on();  // enable interrupts - we may be some time
 
      (void)r;
      (void)pw;
@@ -126,68 +170,60 @@ int Driver(_kernel_swi_regs *r, void *pw)
         display_position = display_device.translate_position(touched_position);
 
         // now that we know what part of the screen is touched we can calibrate the pressure
-        current_pressure = tscreen.pressure_measure.get_pressure_level
-                           (((display_device.get_display_size_x() * display_position.x) / 100),
-                            ((display_device.get_display_size_y() * display_position.y) / 100));
+        // (and double-check to make sure the buggers haven't let go, invalidating the position)
+        current_pressure = tscreen.pressure_measure.get_pressure_level(
+                              display_device.which_corner(touched_position), display_position);
 
         status = pressure_gradient(current_pressure, last_pressure);
-        last_pressure = current_pressure;
+     }
 
+     last_pressure = current_pressure;
 
+     if(current_pressure != ZERO)
+     {
 
 #ifdef TEST
         // inform the os where the screen was pressed
         inform_kernel(display_position.x, display_position.y);
 #else
-        if(last_pressure == ZERO || current_pressure != FIRM)
-        {
-           r->r[2] = display_position.x;
-           r->r[3] = display_position.y;
-           r->r[4] = 0x6F736241; /* Magic word: "Abso" - indicates absolute coordinates */
-        }
+        r->r[2] = display_position.x;
+        r->r[3] = display_position.y;
+        r->r[4] = 0x6F736241; /* Magic word: "Abso" - indicates absolute coordinates */
 #endif
 
 
 
-        if(status == INCREASING)
+        if(status == INCREASING && current_pressure >= LIGHT)
         {
-           if(current_pressure == LIGHT)
+           if(current_pressure == FIRM || fn_down)
            {
-              // left mouse button down
-              _swix(OS_CallAVector, _INR(0, 1) | _IN(9), KeyV_KeyDown, LEFT_MOUSE_BUTTON_KEYCODE, KeyV);
-              left_down = true;
-           }
-
-
-           else if(current_pressure == FIRM)
-           {
-                // need to lift  left mouse button if moving from LIGHT
                 if(left_down)
                 {
                    _swix(OS_CallAVector, _INR(0, 1) | _IN(9), KeyV_KeyUp, LEFT_MOUSE_BUTTON_KEYCODE, KeyV);
                    left_down = false;
                 }
 
+                if(right_down)
+                {
+                   _swix(OS_CallAVector, _INR(0, 1) | _IN(9), KeyV_KeyUp, RIGHT_MOUSE_BUTTON_KEYCODE, KeyV);
+                   right_down = false;
+                }
+
                 _swix(OS_CallAVector, _INR(0, 1) | _IN(9), KeyV_KeyDown, MIDDLE_MOUSE_BUTTON_KEYCODE, KeyV);
                 middle_down = true;
            }
-        }
-
-             // if the applied tscreen.pressure has decreased
-        else if(status == DECREASING)
-        {
-           if(middle_down)
+           else if (prog_down)
            {
-              _swix(OS_CallAVector, _INR(0, 1) | _IN(9), KeyV_KeyUp, MIDDLE_MOUSE_BUTTON_KEYCODE, KeyV);
-              middle_down = false;
+                _swix(OS_CallAVector, _INR(0, 1) | _IN(9), KeyV_KeyDown, RIGHT_MOUSE_BUTTON_KEYCODE, KeyV);
+                right_down = true;
+           }
+           else
+           {
+              // left mouse button down
+              _swix(OS_CallAVector, _INR(0, 1) | _IN(9), KeyV_KeyDown, LEFT_MOUSE_BUTTON_KEYCODE, KeyV);
+              left_down = true;
            }
 
-           if (left_down)
-           {
-               // left mouse button up
-               _swix(OS_CallAVector, _INR(0, 1) | _IN(9), KeyV_KeyUp, LEFT_MOUSE_BUTTON_KEYCODE, KeyV);
-               left_down = false;
-           }
 
         }
 
@@ -196,6 +232,12 @@ int Driver(_kernel_swi_regs *r, void *pw)
      else  // this code executes when screen is not being touched at all
      {
            // report all mouse buttons to be in the up state
+           if(right_down)
+           {
+              _swix(OS_CallAVector, _INR(0, 1) | _IN(9), KeyV_KeyUp, RIGHT_MOUSE_BUTTON_KEYCODE, KeyV);
+              right_down = false;
+           }
+
            if(middle_down)
            {
               _swix(OS_CallAVector, _INR(0, 1) | _IN(9), KeyV_KeyUp, MIDDLE_MOUSE_BUTTON_KEYCODE, KeyV);
@@ -211,18 +253,32 @@ int Driver(_kernel_swi_regs *r, void *pw)
 
      }
 
+     active = false;
+
+     if (!irqs_off)
+         _kernel_irqs_on();  // restore interrupt status
+
      return 1;
 }
 
 
 // function to detect if the screen is being pressed harder or softer that at last measurement
-PRESSURE_STATUS pressure_gradient(unsigned int current_pressure,
-                                  unsigned int last_pressure)
+PRESSURE_STATUS pressure_gradient(PRESSURE_LEVEL &current_pressure,
+                                  PRESSURE_LEVEL last_pressure)
 {
          if (current_pressure == last_pressure)
              return STATIC;
          else if (current_pressure < last_pressure)
-             return DECREASING;
+         {
+             if (current_pressure != ZERO)
+             {
+                 /* Stickyness - they're not allowed to let go partially */
+                 current_pressure = last_pressure;
+                 return STATIC;
+             }
+             else
+                 return DECREASING;
+         }
          else
              return INCREASING;
 }
@@ -249,6 +305,17 @@ void inform_kernel(unsigned int x, unsigned int y)
 }
 #endif
 
+void service_handler(int service_number, _kernel_swi_regs *r, void *pw)
+{
+    (void) service_number;
+    (void) r;
+    (void) pw;
+
+    // only Service_ModeChange at the moment
+
+    display_device.display_dimensions();
+}
+
 static struct { int errno; char errmess[8]; } BadHardError = { 0x603, "BadHard" };
 
 /*************************************************************************************
@@ -270,6 +337,14 @@ _kernel_oserror *module_initialise(const char *cmd_tail, int podule_base, void *
   if (e || (flags & 0xFF) == 0)
     return _swix(MessageTrans_ErrorLookup, _INR(0,2), &BadHardError, 0, 0);
 
+  // yeah, yeah - error handling...
+
+  e = _swix(OS_Claim, _INR(0,2), EventV, keyevent_entry, pw);
+  if (e) return e;
+
+  e = _swix(OS_Byte, _INR(0,1), 14, Event_Keyboard);
+  if (e) return e;
+
 
 #ifdef TEST
   return _swix(OS_Claim, _INR(0, 2), TickerV, pointerv_entry, pw);
@@ -286,7 +361,9 @@ _kernel_oserror *module_finalise(int fatal, int podule, void *pw)
 {
   (void)fatal;
   (void)podule;
-  (void)pw;
+
+  _swix(OS_Byte, _INR(0,1), 13, Event_Keyboard);
+  _swix(OS_Release, _INR(0,2), EventV, keyevent_entry, pw);
 
 #ifdef TEST
   return _swix(OS_Release, _INR(0, 2), TickerV, pointerv_entry, pw);
@@ -306,51 +383,49 @@ _kernel_oserror *swi_handler(int swi_no, _kernel_swi_regs *r, void *pw)
   (void)r;
 
   TOUCH_SCREEN_POSITION pos;
+  DISPLAY_POSITION disp;
+  unsigned int pres;
+  PRESSURE_LEVEL pres_level;
   _kernel_oserror* error_code = 0;
 
   pos.x = tscreen.x_position_measure.get_x_position();
   pos.y = tscreen.y_position_measure.get_y_position();
+  pres = tscreen.pressure_measure.get_raw_pressure();
+  pres_level = tscreen.pressure_measure.get_pressure_level(pres);
 
   r->r[0] = 0; // r0 is used to pass info back to the calibration app.
                // always reset to 0 just to be safe.
 
+  disp.x = r->r[2];
+  disp.y = r->r[3];
+
   switch(swi_no)
   {
-         case TSDriver_Calibrate:  // values are being passed in from the calibration application
+         case TSDriver_Calibrate - TSDriver_00:
               switch(r->r[1])
               {
-                     case 0:       // the user is pressing the centre of the display
-                       display_device.set_centre(pos);
+                     case 0:       // the user is pressing nothing
+                       r->r[0] = tscreen.pressure_measure.calibrate_release(pres);
+                       break;
+
+                     case 1:       // the user is pressing the centre of the display
+                       r->r[0] = display_device.calibrate_centre(pos, disp, pres);
+                       break;
+
+                     case 2:       // the user is pressing a corner of the display
+                     case 3:
+                     case 4:
+                     case 5:
+                       r->r[0] = display_device.calibrate_corner(pos, disp, pres);
+                       break;
+
+                     case 6:       // r2 contains the light pressure threshold
+                       tscreen.pressure_measure.set_light_threshold((unsigned int) r->r[2] >> 20);
                        r->r[0] = 1;
                        break;
 
-                     case 1:       // the user is pressing the bottom centre of the display
-                       display_device.set_bottom_centre(pos);
-                       r->r[0] = 1;
-                       break;
-
-                     case 2:       // the user is pressing the top centre of the display
-                       display_device.set_top_centre(pos);
-                       r->r[0] = 1;
-                       break;
-
-                     case 3:       // the user is pressing the left centre of the diaplay
-                       display_device.set_left_centre(pos);
-                       r->r[0] = 1;
-                       break;
-
-                     case 4:       // the user is pressing the right centre of the display
-                       display_device.set_right_centre(pos);
-                       r->r[0] = 1;
-                       break;
-
-                     case 5:       // r2 contains the light pressure threshold
-                       tscreen.pressure_measure.set_light_threshold(r->r[2]);
-                       r->r[0] = 1;
-                       break;
-
-                     case 6:       // r2 contains the firm pressure threshold
-                       tscreen.pressure_measure.set_firm_threshold(r->r[2]);
+                     case 7:       // r2 contains the firm pressure threshold
+                       tscreen.pressure_measure.set_firm_threshold((unsigned int) r->r[2] >> 20);
                        r->r[0] = 1;
                        break;
 
@@ -383,8 +458,29 @@ _kernel_oserror *command_handler(const char *arg_string, int argc, int cmd_no, v
 
 //  }
 
+  printf("Transformation matrix: (%8d,%8d)\n", display_device.get_xx(), display_device.get_xy());
+  printf("                       (%8d,%8d)\n", display_device.get_yx(), display_device.get_yy());
+  printf("ADC centre:            (%8d,%8d)\n", display_device.get_centre_adc().x, display_device.get_centre_adc().y);
+  printf("Screen centre:         (%8d,%8d)\n", display_device.get_centre_pos().x, display_device.get_centre_pos().y);
+  printf("Zero pressure:         %5d\n", tscreen.pressure_measure.get_zero_pressure());
+  printf("Release pressure:      %5d\n", tscreen.pressure_measure.get_release_pressure());
+  printf("VLight pressure:       %5d\n", tscreen.pressure_measure.get_vlight_pressure());
+  printf("Light pressure:        %5d\n", tscreen.pressure_measure.get_light_pressure());
+  printf("Firm pressure:         %5d\n\n", tscreen.pressure_measure.get_firm_pressure());
+  printf("Centre pressure:       %5d\n", tscreen.pressure_measure.get_centre_pressure());
+#if 0
+  printf("Pressure adjustments:  (%d,%d,%d,%d)\n", tscreen.pressure_measure.get_pressure_adjust(0),
+                                                   tscreen.pressure_measure.get_pressure_adjust(1),
+                                                   tscreen.pressure_measure.get_pressure_adjust(2),
+                                                   tscreen.pressure_measure.get_pressure_adjust(3));
+#endif
+  printf("Corner pressures:      (%5d,%5d,%5d,%5d)\n", tscreen.pressure_measure.get_corner_pressure(0),
+                                                       tscreen.pressure_measure.get_corner_pressure(1),
+                                                       tscreen.pressure_measure.get_corner_pressure(2),
+                                                       tscreen.pressure_measure.get_corner_pressure(3));
+
+
+
   return 0;
 }
-
-
 

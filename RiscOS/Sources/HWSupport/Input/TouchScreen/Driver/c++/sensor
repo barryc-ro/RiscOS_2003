@@ -8,30 +8,14 @@ or transferred to any third party without the prior written permission of
 Pace.
 *************************************************************************/
 
-#include <stdbool.h>
+//#include <stdio.h>
+#include <stdlib.h>
+#include "display.h"
 #include "sensor.h"
 #include "Global/HALEntries.h"
 #include "swis.h"
 
 
-
-// ideally this array would be private to the pressure sensor class.
-// made global to avoid initialisation problems.
-// all mulpliers here have been multiplied by 1000 to avoid the use
-// of floating point variables.
-static unsigned int calibration_multipliers[10][10] =
-{
-         { 1000,1000,1000,1000,1000,1000,1000,1000,1000,1000 },
-         { 1000,1000,1000,1000,1000,1000,1000,1000,1000,1000 },
-         { 1000,1000,700, 700, 700, 700, 700, 700, 1000,1000 },
-         { 1000,1000,700, 600, 600, 600, 600, 700, 1000,1000 },
-         { 1000,1000,700, 600, 500, 500, 600, 700, 1000,1000 },
-         { 1000,1000,700, 600, 500, 500, 600, 700, 1000,1000 },
-         { 1000,1000,700, 600, 600, 600, 600, 700, 1000,1000 },
-         { 1000,1000,700, 700, 700, 700, 700, 700, 1000,1000 },
-         { 1000,1000,1000,1000,1000,1000,1000,1000,1000,1000 },
-         { 1000,1000,1000,1000,1000,1000,1000,1000,1000,1000 }
-};
 
 
 
@@ -90,7 +74,7 @@ void sensor::measurement(void)
      _swix(OS_Hardware, _IN(0)|_INR(8,9)|_OUT(0),
                         type, 0, EntryNo_HAL_TouchscreenRead,
                         &measurement_data);
-
+     measurement_data >>= 20; // truncate to 12 bits
 #endif
 
 }
@@ -144,106 +128,202 @@ pressure_sensor::pressure_sensor()
      type = CONFIGURED_FOR_PRESSURE_MEASUREMENT;
 
      // some default values
-     vlight_pressure_threshold = 0x10000000;
-     light_pressure_threshold  = 0x48000000;
-     firm_pressure_threshold   = 0x54000000;
-
+     release_pressure_threshold = 0x1C0;
+     vlight_pressure_threshold  = 0x3C0;
+     light_pressure_threshold   = 0x3C0;
+     firm_pressure_threshold    = 0x520;
 }
 
-
-
-// read the pressure level and set it to one of three levels
-PRESSURE_LEVEL pressure_sensor::get_pressure_level(void)
+PRESSURE_LEVEL pressure_sensor::get_pressure_level(unsigned int pres)
 {
+     PRESSURE_LEVEL pressure;
 
-     PRESSURE_LEVEL  pressure = ZERO;
-
-     measurement();
-
-     if(measurement_data >= vlight_pressure_threshold)
+     if(pres >= release_pressure_threshold)
      {
-         if(measurement_data < light_pressure_threshold)
-         {
-            pressure = VLIGHT;
-         }
-
-         else if(measurement_data < firm_pressure_threshold)
-         {
-            pressure = LIGHT;
-         }
-
-         else
+         if(pres >= firm_pressure_threshold)
          {
             pressure = FIRM;
          }
-
-         return pressure;
+         else if(pres >= light_pressure_threshold)
+         {
+            pressure = LIGHT;
+         }
+         else if (pres >= vlight_pressure_threshold)
+         {
+            pressure = VLIGHT;
+         }
+         else
+         {
+            pressure = NONZERO;
+         }
      }
 
      else
      {
-         return ZERO;
+         pressure = ZERO;
      }
 
+     return pressure;
 }
 
+
+// this is now just used as a basic "are they touching" check
+PRESSURE_LEVEL pressure_sensor::get_pressure_level(void)
+{
+
+     measurement();
+
+     return get_pressure_level(measurement_data);
+}
+
+unsigned int pressure_sensor::get_raw_pressure(void)
+{
+     measurement();
+     return measurement_data;
+}
+
+#define MEASUREMENTS 64
+
+int pressure_sensor::calibrate_release(unsigned int pres)
+{
+    static int count;
+    static unsigned int sum, sum2;
+    static int variance, mean;
+
+    _swix(OS_Byte, _IN(0), 19);
+
+    if (++count < MEASUREMENTS)
+    {
+        sum += pres;
+        sum2 += pres*pres; // 24-bits - up to 256 measurements
+
+        return 1;
+    }
+
+    variance = int_sqrt((sum2 - sum / MEASUREMENTS * sum) / (MEASUREMENTS - 1));
+    mean = sum / MEASUREMENTS;
+
+    if (variance > 0x40)
+    {
+        count = sum = sum2 = 0;
+        return 0;
+    }
+
+    //printf("pressure sd = %03x, mean = %03x\n", variance, mean);
+
+    zero_pressure = mean;
+    release_pressure_threshold = mean + 5 * variance;
+    vlight_pressure_threshold = mean + 15 * variance;
+    light_pressure_threshold = vlight_pressure_threshold;
+
+    count = sum = sum2 = 0;
+
+    return 3;
+}
 
 
 /* an added complexity of a resistive touch screen is that the same
    pressure level will give different readings depending on what part
    of the touch screen the pressure was applied to. this function attempts
-   to calibrate pressure. because the pressure sensor knows nothing about
-   the touch screen, the position of the touched part of the screen has
-   to be passed in as parameters. the bottom left corner of the ts is 0,0.
-   the top right corner of the ts is 100, 100.
-*/
-PRESSURE_LEVEL pressure_sensor::get_pressure_level(unsigned int x_display_percentage,
-                                                   unsigned int y_display_percentage)
-{
+   to calibrate pressure.
 
-     PRESSURE_LEVEL  pressure = ZERO;
-     unsigned int calibration_multiplier;
+   the assumed relation is:
+
+          p  =  (p  - p ) D/a + p
+           u      c    0         0
+
+   where p  = uncalibrated pressure,  p = calibrated pressure (ie calibrated to match centre)
+          u                            c
+         p  = zero pressure,          D = distance from centre of screen
+          0
+
+               a(p  - p )
+                  u    0
+   so    p  =  ----------  + p
+          c         D         0
+
+*/
+PRESSURE_LEVEL pressure_sensor::get_pressure_level(int corner, DISPLAY_POSITION pos)
+{
+     int xdist, ydist, dist, adj;
 
      measurement();
 
-     // now calibrate measurement
-     // first will need to round display percentages to nearest 10%
-     x_display_percentage = (((x_display_percentage + 5) / 10) * 10);
-     y_display_percentage = (((y_display_percentage + 5) / 10) * 10);
+    /* xdist = pos.x - pos_centre.x;
+     ydist = pos.y - pos_centre.y;
 
-     calibration_multiplier = calibration_multipliers[x_display_percentage]
-                                                     [y_display_percentage];
+     dist = abs(xdist) + abs(ydist);
 
+     measurement_data = measurement_data - zero_pressure; // 12-bit signed
 
-     measurement_data = (measurement_data * calibration_multiplier) / 1000;
+     adj = pressure_adjust[corner] / dist;
 
-     // now the pressure has been calibrated
+     measurement_data = ((int) measurement_data * adj) >> 16;
 
-     if(measurement_data >= vlight_pressure_threshold)
-     {
-         if(measurement_data < light_pressure_threshold)
-         {
-            pressure = VLIGHT;
-         }
+     measurement_data = measurement_data + zero_pressure;
 
-         else if(measurement_data < firm_pressure_threshold)
-         {
-            pressure = LIGHT;
-         }
+     // now the pressure has been calibrated*/
 
-         else
-         {
-            pressure = FIRM;
-         }
+     return get_pressure_level(measurement_data);
 
-         return pressure;
-     }
+}
 
-     else
-     {
-         return ZERO;
-     }
+void pressure_sensor::set_thresholds()
+{
+    unsigned int p, p_max, p_min;
+    int i;
 
+    p = (2 * pressure_centre + pressure_corner[0] + pressure_corner[1] + pressure_corner[2] + pressure_corner[3]) / 6;
+
+    p_max = pressure_centre + 2*pressure_centre_sd;
+    p_min = pressure_centre;
+
+    for (i=0; i<4; i++)
+    {
+        if (pressure_corner[i] + 2*pressure_corner_sd[i] > p_max)
+            p_max = pressure_corner[i] + 2*pressure_corner_sd[i];
+        if (pressure_corner[i] < p_min)
+            p_min = pressure_corner[i];
+    }
+
+    light_pressure_threshold = (1*zero_pressure + 2*p_min) / 3;
+    vlight_pressure_threshold = light_pressure_threshold;
+    release_pressure_threshold = (2*zero_pressure + 1*p_min) / 3;
+    firm_pressure_threshold = p_max;
+
+}
+
+void pressure_sensor::set_centre_pressure(unsigned int p, unsigned int p_sd, DISPLAY_POSITION pos)
+{
+//    light_pressure_threshold = p - 2 * p_sd;
+//    vlight_pressure_threshold = light_pressure_threshold;
+//    firm_pressure_threshold = p + 5 * p_sd;
+//
+//    release_pressure_threshold = (light_pressure_threshold + zero_pressure) / 2;
+//
+    pos_centre = pos;
+    pressure_centre = p;
+    pressure_centre_sd = p_sd;
+
+}
+
+void pressure_sensor::set_corner_pressure(int corner, unsigned int p, unsigned int p_sd, DISPLAY_POSITION pos)
+{
+    //int xdist, ydist, dist, adj;
+
+    pressure_corner[corner] = p;
+    pressure_corner_sd[corner] = p_sd;
+
+    //xdist = pos.x - pos_centre.x;
+    //ydist = pos.y - pos_centre.y;
+
+    //dist = abs(xdist) + abs(ydist);
+
+    // get the inverse of the factor that the corner is higher than the centre (24.8)
+    //adj = ((pressure_centre - zero_pressure) << 16) / (p - zero_pressure);
+
+    // adjustment per distance (16.16)
+    //pressure_adjust[corner] = adj * dist;
 }
 
 
