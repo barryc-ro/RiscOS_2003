@@ -1,63 +1,21 @@
 # Makefile for Task Window
 #
-# ***********************************
-# ***    C h a n g e   L i s t    ***
-# ***********************************
 # Date       Name         Description
 # ----       ----         -----------
-# 25-May-94  AMcC         Created.
+# 26-Feb-01  SNB          Re-written to use AAsmModule
 #
-
-#
-# Paths
-#
-EXP_HDR = <export$dir>
-
-#
-# Generic options:
-#
-MKDIR   = cdir
-AS      = aasm
-CP      = copy
-RM      = remove
-CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
-CPFLAGS = ~cfr~v
 
 #
 # Program specific options:
 #
-COMPONENT = TaskWindow
-SOURCE    = s.Taskman
-TARGET    = rm.TaskWindow
-EXPORTS   = ${EXP_HDR}.TaskWindow
+COMPONENT   = TaskWindow
+ROM_SOURCE  = Taskman.s
+HEADER1     = TaskWindow
 
 #
 # Generic rules:
 #
-rom: ${TARGET}
-        @echo ${COMPONENT}: rom module built
-
-export: ${EXPORTS}
-        @echo ${COMPONENT}: export complete
-
-install_rom: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom module installed
-
-clean:
-        ${RM} ${TARGET}
-        @echo ${COMPONENT}: cleaned
-
-resources:
-        ${MKDIR} ${RESDIR}.${COMPONENT}
-        ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
-        @echo ${COMPONENT}: resource files copied
-
-${TARGET}: ${SOURCE}
-        ${AS} ${ASFLAGS} ${SOURCE}
-
-${EXP_HDR}.TaskWindow: hdr.TaskWindow
-        ${CP} hdr.TaskWindow $@ ${CPFLAGS}
+include Makefiles:StdTools
+include Makefiles:AAsmModule
 
 # Dynamic dependencies:
