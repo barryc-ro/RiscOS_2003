@@ -55,7 +55,7 @@ LIBS =\
  ${SOCKLIB}\
  ${UNIXLIB}\
 # MemCheck:o.MC_M\
-		
+
 
 LIBSD =\
  ${INETLIB}\
