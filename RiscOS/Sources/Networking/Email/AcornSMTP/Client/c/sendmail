@@ -4,7 +4,7 @@
 
 	FILE:		sendmail.c
 	AUTHOR:		Richard D. Warren
-	VERSION:	0.07 for RISC OS
+	VERSION:	0.08 for RISC OS
 
 	OVERVIEW
 	========
@@ -31,6 +31,17 @@
 					reached the end of the message, just kept reading & sending
 					the first buffers worth forever....
 	13/01/98	0.07	RDW	Fixed call to Resolver_GetHost so it catches R0 being non-0
+	14/01/98	0.08	RDW	sendmail_FSM_FROM_RESPONSE changed if MAIL FROM response is
+					not successful, error is now FAILEDTOSEND and response is
+					returned to caller.
+					sendmail_FSM_TO_RESPONSE changed if RCPT TO response is
+					not successful, error is now FAILEDTOSEND and response is
+					returned to caller.
+					FATALERROR state added (this was the original ERROR state
+					The ERROR state now trys to do a QUIT SMTP command
+					before switching the FATALERROR to return the error to
+					the client).
+					
 */
 
 
@@ -127,6 +138,7 @@ typedef enum
   QUIT,
   QUIT_RESPONSE,
   ERROR,
+  FATALERROR,
   COMPLETED
 } STATES;									/* sendmail FSM states                                 */
 
@@ -135,6 +147,8 @@ typedef struct
   time_t              t_slice;							/* timeslice, time to exit FSM by for re-entracy later */
   _kernel_oserror    *error;							/* OS error                                            */
   int                 errno;							/* Internet errno copy                                 */
+  _kernel_oserror    *error_copy;						/* COPY OF OS error - used for graceful ERROR REPORT   */
+  int                 errno_copy;						/* COPY OF Internet errno copy, as error_copy above    */
   BOOL                end;							/* has the FSM ended?                                  */
   BOOL                exit;							/* exit FSM without setting callback                   */
   BOOL                file;
@@ -149,6 +163,7 @@ typedef struct
   struct hostent     *smtp_server;						/* server address structure                            */
   struct servent     *smtp_service;						/* service struct from Service lookup in services file */
   char               *response;							/* response line from server                           */
+  char               *response_copy;						/* COPY OF response line from server                   */
   u_long              addr;							/* 32bit address for dotted IP lookup                  */
   _kernel_swi_regs    r;							/* SWI registers to use in SWI calls                   */
   char               *send_data;						/* data to send to server                              */
@@ -159,7 +174,7 @@ typedef struct
   unsigned int        senders_pos;						/* position in senders array */
   unsigned int        num_of_senders;
   unsigned int        num_of_recipients;
-  unsigned int        recipients_success;						/* how many successful MAIL FROMS have there been      */
+  unsigned int        recipients_success;					/* how many successful MAIL FROMS have there been      */
   unsigned int        recipients_pos;						/* position in senders array */
   
   unsigned int        buf_len;
@@ -201,6 +216,7 @@ static void sendmail_FSM_QUIT(sendmail_context *c);
 static void sendmail_FSM_QUIT_RESPONSE(sendmail_context *c);
 static void sendmail_FSM_COMPLETED(sendmail_context *c);
 static void sendmail_FSM_ERROR(sendmail_context *c);
+static void sendmail_FSM_FATALERROR(sendmail_context *c);
 static _kernel_oserror *sendmail_FSM(sendmail_context *context);
 static _kernel_oserror *sendmail_CAhandler(_kernel_swi_regs *r, void *pw, void *data);
 static _kernel_oserror *sendmail_CBhandler(_kernel_swi_regs *r, void *pw, void *data);
@@ -472,7 +488,7 @@ static _kernel_oserror *sendmail_FSM(sendmail_context *context)
     context->t_slice = clock() + TIME_SLICE;
     do										/* FSM do-while loop                    */
     {
-      if (context->error)
+      if ((context->error) && (context->state != FATALERROR))
         context->state = ERROR;
       switch (context->state)
       {
@@ -560,6 +576,10 @@ static _kernel_oserror *sendmail_FSM(sendmail_context *context)
           dprintf(("", "sendmail: ERROR\n"));
           sendmail_FSM_ERROR(context);
           break;
+        case FATALERROR:
+          dprintf(("", "sendmail: FATALERROR\n"));
+          sendmail_FSM_FATALERROR(context);
+          break;
         default:
           dprintf(("", "sendmail: INTERNAL ERROR\n"));
           error = ERROR(INTERNALERR);
@@ -636,7 +656,7 @@ static void sendmail_FSM_INIT(sendmail_context *c)
     if (!c->fd)
     {
       c->error = ERROR(WRITEFAIL);
-      c->state = ERROR;
+      c->state = FATALERROR;
     }
   }
   
@@ -681,7 +701,7 @@ static void sendmail_FSM_GET_HOST_NB(sendmail_context *c)
   c->r.r[0] = (int)c->hostname;
   c->error = _kernel_swi(Resolver_GetHost, &(c->r), &(c->r));			/* Lookup hostname                               */
   if (c->error)									/* If error, then go into ERROR state            */
-    c->state = ERROR;
+    c->state = FATALERROR;
   else if (c->r.r[0] == EINPROGRESS)						/* else, if lookup in process stay in this state */
   {
     c->state = GET_HOST_NB;
@@ -701,7 +721,7 @@ static void sendmail_FSM_GET_HOST_NB(sendmail_context *c)
       {
         c->error = ERROR(INTERNETERR);
         c->errno = errno;
-        c->state = ERROR;
+        c->state = FATALERROR;
       }
       else									/* else, copy out address                                   */
       {
@@ -716,13 +736,13 @@ static void sendmail_FSM_GET_HOST_NB(sendmail_context *c)
     {
       /* error, remote failure */
       c->error = ERROR(RESOLVERFAILED);
-      c->state = ERROR;
+      c->state = FATALERROR;
     }
     else if (c->r.r[0] > 0)
     {
       c->error = ERROR(INTERNETERR);
       c->errno = c->r.r[0];
-      c->state = ERROR;
+      c->state = FATALERROR;
     }
     else
     {
@@ -764,7 +784,7 @@ static void sendmail_FSM_GET_HOST(sendmail_context *c)
     {
       c->error = ERROR(INTERNETERR);
       c->errno = errno;
-      c->state = ERROR;
+      c->state = FATALERROR;
     }
     else									/* else, copy out address                                   */
     {
@@ -812,7 +832,7 @@ static void sendmail_FSM_PREPARE_CONNECT(sendmail_context *c)
   {
     c->error = ERROR(INTERNETERR);
     c->errno = errno;
-    c->state = ERROR;
+    c->state = FATALERROR;
   }
   else										/* else socket created successfully, so                                   */
   {
@@ -822,7 +842,7 @@ static void sendmail_FSM_PREPARE_CONNECT(sendmail_context *c)
     {
       c->error = ERROR(INTERNETERR);
       c->errno = errno;
-      c->state = ERROR;
+      c->state = FATALERROR;
     }
     else									/* make socket generate Internet Events                                   */
     {
@@ -831,7 +851,7 @@ static void sendmail_FSM_PREPARE_CONNECT(sendmail_context *c)
       {
         c->error = ERROR(INTERNETERR);
         c->errno = errno;
-        c->state = ERROR;
+        c->state = FATALERROR;
       }
       else									/* if socket successfully non-blocking and asyncronous, then              */
         c->state = CONNECT;							/* switch to CONNECT state                                                */
@@ -863,7 +883,7 @@ static void sendmail_FSM_CONNECT(sendmail_context *c)
     {
       c->error = ERROR(INTERNETERR);
       c->errno = errno;
-      c->state = ERROR;
+      c->state = FATALERROR;
     }
     else if (errno != EISCONN)							/* else if error is NOT ALREADY CONNECTED then                            */
     {
@@ -890,7 +910,7 @@ static void sendmail_FSM_GREETING(sendmail_context *c)
                               (function)&sendmail_FSM,
                               c);						/* get greeting from server                                               */
   if (c->error)									/* if command_response returned an error, switch to ERROR state           */
-    c->state = ERROR;
+    c->state = FATALERROR;
   else										/* else, switch to USER state and exit connect FSM as command_response will */
   {										/* call connect_FSM back with our context (c) when it is completed          */
     c->state = HELO;
@@ -903,9 +923,9 @@ static void sendmail_FSM_HELO(sendmail_context *c)
 {
   if (!response("220 ", c->response))						/* if previous response (the greeting) was not positive, then             */
   {
-    dprintf(("", "sendmail_FSM_HELO: response: %s\n", c->response));
+    dprintf(("", "sendmail_FSM_GREETING: response: %s\n", c->response));
     c->error = ERROR(CONREFUSED);
-    c->state = ERROR;								/* switch to ERROR state with CONNECTION REFUSED error                    */
+    c->state = FATALERROR;								/* switch to ERROR state with CONNECTION REFUSED error                    */
     destroy_response(&(c->response));						/* destroy the response now we're finished with it                        */
   }
   else										/* else, greeting was okay, so                                            */
@@ -928,7 +948,7 @@ static void sendmail_FSM_HELO(sendmail_context *c)
                                   (function)&sendmail_FSM,
                                   c);
       if (c->error)
-        c->state = ERROR;
+        c->state = FATALERROR;
       else									/* else, switch to PASS state and exit connect FSM as command_response will */
       {										/* call connect_FSM back with our context (c) when it is completed          */
         c->state = FROM;
@@ -938,7 +958,7 @@ static void sendmail_FSM_HELO(sendmail_context *c)
     else									/* else, allocate for command failed, so switch to ERROR state            */
     {
       c->error = ERROR(MALLOCFAILED);
-      c->state = ERROR;
+      c->state = FATALERROR;
     }
   }
 }
@@ -947,6 +967,7 @@ static void sendmail_FSM_HELO(sendmail_context *c)
 static void sendmail_FSM_FROM(sendmail_context *c)
 {
 //  if (!response("2xx should check return code from HELO command here!
+  dprintf(("", "sendmail_FSM_HELO: response: %s\n", c->response));
   destroy_response(&c->response);
   destroy(&(c->send_data));
   do_senders(timeouts[TIMEOUT_MAIL], c);
@@ -956,7 +977,7 @@ static void sendmail_FSM_FROM(sendmail_context *c)
     c->exit  = TRUE;
   }
   else
-    c->state = ERROR;
+    c->state = FATALERROR;
 }
 
 
@@ -966,8 +987,8 @@ static void sendmail_FSM_FROM_RESPONSE(sendmail_context *c)
   if (!response("250 ", c->response))
   {
     dprintf(("", "sendmail_FSM_FROM_RESPONSE: senders refused: %s\nresponse: %s\n", c->senders[c->senders_pos-1], c->response));
-    destroy_response(&(c->response));						/* destroy the response now we're finished with it                        */
-    c->error = ERROR(FAILED);							/* NEED MORE SPECIFIC ERROR HERE!!!! */
+//    destroy_response(&(c->response));						/* REMOVED AS WE NOW PASS THIS OUT TO Client : destroy the response now we're finished with it                        */
+    c->error = ERROR(FAILEDTOSEND);
     c->state = ERROR;
   }
   else										/* else, greeting was okay, so                                            */
@@ -981,7 +1002,7 @@ static void sendmail_FSM_FROM_RESPONSE(sendmail_context *c)
       c->state = TO;
     else
     {
-      c->error = ERROR(FAILED);		// see comments in sendmail_FSM_TO_RESPONSE
+      c->error = ERROR(FAILEDTOSEND);		// see comments in sendmail_FSM_TO_RESPONSE
       c->state = ERROR;
     }
   }
@@ -1008,8 +1029,8 @@ static void sendmail_FSM_TO_RESPONSE(sendmail_context *c)
   if (!response("25x ", c->response))
   {
     dprintf(("", "sendmail_FSM_TO_RESPONSE: recipients refused: %s\nresponse: %s\n", c->recipients[c->recipients_pos-1], c->response));
-    destroy_response(&(c->response));						/* destroy the response now we're finished with it                        */
-    c->error = ERROR(FAILED);							/* NEED MORE SPECIFIC ERROR HERE!!!! */
+//    destroy_response(&(c->response));						/* REMOVED AS WE NOW PASS THIS OUT TO Client :  destroy the response now we're finished with it                        */
+    c->error = ERROR(FAILEDTOSEND);
     c->state = ERROR;
   }
   else										/* else, greeting was okay, so                                            */
@@ -1023,7 +1044,7 @@ static void sendmail_FSM_TO_RESPONSE(sendmail_context *c)
       c->state = DATA;
     else
     {
-      c->error = ERROR(FAILED);		// need a error to say all recipients failed, also, need to report back which ones failed and
+      c->error = ERROR(FAILEDTOSEND);		// need a error to say all recipients failed, also, need to report back which ones failed and
       						// which worked, same from senders.  Hows about for each successful one, remove it from the
       						// array?  then return the array to the caller with the failed ones still present?
       c->state = ERROR;
@@ -1058,8 +1079,8 @@ static void sendmail_FSM_DATA_RESPONSE(sendmail_context *c)
   if (!response("354 ", c->response))
   {
     dprintf(("", "sendmail_FSM_DATA_RESPONSE: DATA command refused, response: %s\n", c->response));
-    destroy_response(&(c->response));
-    c->error = ERROR(FAILED);		// need specific error here
+//    destroy_response(&(c->response));
+    c->error = ERROR(FAILEDTOSEND);		// need specific error here
     c->state = ERROR;
   }
   else
@@ -1135,7 +1156,7 @@ static void sendmail_FSM_GET_DATA_BLOCK(sendmail_context *c)
           if ((*pos == '.') && (c->new_line))		/* if the current char is a '.' and this is the start of a new line, then */
           {
             *pos2 = '.';					/* insert an 'extra' '.' before this character */
-            pos++;						/* move to next position in temporary output buffer */
+            pos2++;						/* move to next position in temporary output buffer */		// HERE!!!!
             c->new_line = FALSE;				/* reset new_line flag to FALSE */
           }
           if ((*pos == LF) && (c->prev_char == CR))	/* if current char is LF and the previous read char was CR, then */
@@ -1215,8 +1236,8 @@ static void sendmail_FSM_END_OF_DATA_RESPONSE(sendmail_context *c)
   if (!response("250 ", c->response))
   {
     dprintf(("", "sendmail_FSM_END_OF_DATA_RESPONSE: END_OF_DATA command refused, response: %s\n", c->response));
-    destroy_response(&(c->response));
-    c->error = ERROR(FAILED);		// need specific error here
+//    destroy_response(&(c->response));
+    c->error = ERROR(FAILEDTOSEND);		// need specific error here
     c->state = ERROR;
   }
   else
@@ -1239,7 +1260,7 @@ static void sendmail_FSM_QUIT(sendmail_context *c)
                               (function)&sendmail_FSM,
                               c);
   if (c->error)
-    c->state = ERROR;
+    c->state = FATALERROR;
   else
   {
     c->state = QUIT_RESPONSE;
@@ -1255,12 +1276,15 @@ static void sendmail_FSM_QUIT_RESPONSE(sendmail_context *c)
     dprintf(("", "sendmail_FSM_QUIT_RESPONSE: QUIT command refused, response: %s\n", c->response));
     destroy_response(&(c->response));
     c->error = ERROR(FAILED);		// need specific error here
-    c->state = ERROR;
+    c->state = FATALERROR;
   }
   else
   {
     destroy_response(&(c->response));
-    c->state = COMPLETED;
+    if (c->error_copy)
+      c->state = FATALERROR;
+    else
+      c->state = COMPLETED;
   }
 }
 
@@ -1284,10 +1308,34 @@ static void sendmail_FSM_COMPLETED(sendmail_context *c)
 
 static void sendmail_FSM_ERROR(sendmail_context *c)
 {
+  c->response_copy = c->response;
+  c->response = 0;
+  c->error_copy = c->error;
+  c->error = 0;
+  c->errno_copy = c->errno;
+  c->errno = 0;
+  c->state = QUIT;
+}
+
+
+static void sendmail_FSM_FATALERROR(sendmail_context *c)
+{
   process1.sendmail.flags = 0;
-  process1.sendmail.error = c->error;
-  process1.sendmail.errno = c->errno;
-  process1.sendmail.smtp_response = 0;		// do this later
+  if (c->response_copy)
+    process1.sendmail.smtp_response = c->response_copy;
+  else
+    process1.sendmail.smtp_response = c->response;
+  
+  if (c->error_copy)
+    process1.sendmail.error = c->error_copy;
+  else
+    process1.sendmail.error = c->error;
+  
+  if (c->errno_copy)
+    process1.sendmail.errno = c->errno_copy;
+  else
+    process1.sendmail.errno = c->errno;
+  
   if (c->sock >= 0)
   {
     shutdown(c->sock,2);
