@@ -51,7 +51,7 @@ struct tftp_client {
 	unsigned int		connected:1;
 	unsigned int		unicast_only:1;
 	unsigned int		timeout_pending:1;
-	unsigned int		timing:1;
+	unsigned int		retransmitted:1;
 	unsigned int		oack_send_blksize:1;
 	unsigned int		oack_send_tsize:1;
 	short			discard_lives;
@@ -59,7 +59,6 @@ struct tftp_client {
 	unsigned long		packet_count;
 	platform_time   	rtt_average_8;
 	platform_time   	rtt_deviation_4;
-	platform_time   	last_rtt;
 	platform_time   	rto;
 	platform_time		last_transmission;
 	platform_time		elected_at;
@@ -162,7 +161,7 @@ static void multicaster_timeout_retransmitted(multicaster_object *mo, tftp_clien
 	(void) mo;
 
 	client->timeout = platform_time_current_time() + (client->rto *= 2);
-	client->timing = 0;
+	client->retransmitted = 1;
 }
 
 static void multicaster_set_discard_timeout(multicaster_object *mo, tftp_client *client)
@@ -175,7 +174,6 @@ static void multicaster_set_discard_timeout(multicaster_object *mo, tftp_client 
 static void multicaster_cancel_timeouts(multicaster_object *mo, tftp_client *client)
 {
 	client->timeout_pending = 0;
-	client->timing = 0;
 }
 
 static void multicaster_initialise_rtt(multicaster_object *mo, tftp_client *client)
@@ -185,11 +183,9 @@ static void multicaster_initialise_rtt(multicaster_object *mo, tftp_client *clie
 	client->rtt_average_8 = 0;
 	client->rtt_deviation_4 = 300;
 	client->rto = 300;
-	client->last_rtt = 0;
-	client->last_transmission = now;
 	client->elected_at = now;
 	client->packet_count = 0;
-	platform_log(LOG_DEBUG, "Initialising: RTT=%.1f, Var=%.1f, RTO=%d\n",
+	platform_log(LOG_DEBUG, "Initialising: RTT=%.1f, Dev=%.1f, RTO=%d\n",
 		client->rtt_average_8/8.0, client->rtt_deviation_4/4.0, client->rto);
 }
 
@@ -197,7 +193,7 @@ static void multicaster_start_rtt(multicaster_object *mo, tftp_client *client)
 {
     	platform_time now = platform_time_current_time();
 
-	client->timing = 1;
+	client->retransmitted = 0;
 	client->timeout_pending = 1;
 	client->last_transmission = now;
 	client->timeout = now + client->rto;
@@ -210,44 +206,67 @@ static void multicaster_timeout_ack_received(multicaster_object *mo, tftp_client
 
         multicaster_set_discard_timeout(mo, client);
 
-	if (client->timing)
+	if (!client->retransmitted)
 	{
 		platform_time_diff err;
 
                 /* Update our smoothed RTT estimators as per Van Jacobsen's
-                 * paper "Congestion Avoidance and Control (1988)"
+                 * paper "Congestion Avoidance and Control" (1988).
+                 *
+                 * Note that we don't have the magic initialisation from the
+                 * first ACK that Berkeley TCP code does (a:=m, v:=m/2) -
+                 * we just let it head in the correct direction with the
+                 * usual gain.
+                 *
+                 * There's lots of subtle integer rounding and clock phasing
+                 * allowance going on here - see Van Jacobsen for details.
                  */
 
+                /* Error in our current RTT estimate from this measurement */
     		err = rtt - (client->rtt_average_8 >> 3);
 
+                /* Average RTT follows measurements with gain of 0.125 */
     		client->rtt_average_8 += err;
+
+    		/* Mean deviation follows measurements with gain of 0.25 */
     		if (err < 0)
     			err = -err;
     		client->rtt_deviation_4 += err - (client->rtt_deviation_4 >> 2);
+
+                /* Retransmit time-out = average + 4 * deviation */
+                client->rto = (client->rtt_average_8 >> 3) + client->rtt_deviation_4;
+
+                /* Enforce a minimum RTO. As we're almost certainly on a LAN, it should
+                 * be quite low. Let's say 50ms, to allow for a bit of client jitter
+                 * (ACKs are probably being sent by a user process, unlike TCP).
+                 * At a minimum it rto must be >0 so that exponential backoff works :)
+                 */
+                if (client->rto < 1)
+                        client->rto = 1;
         }
-
-        /* Always update our "last rtt", even if retransmitted. This is the time
-         * between the first transmission of a packet and the first received
-         * ACK. This allows us to recover if we end up with a drastically
-         * low estimate RTT, as we can only update our RTT estimate if
-         * we get an ACK before we retransmit.
-         */
-        client->last_rtt = rtt;
-
-        /* RTO is calculated as average + 4 times deviation */
-        client->rto = (client->rtt_average_8 >> 3) + client->rtt_deviation_4;
-
-        /* Clamp it a little - must allow a reasonable response time.
-         * Also, must be > 0 or exponential back-off doesn't work :)
-         */
-        if (client->rto <= client->last_rtt )
-                client->rto = client->last_rtt + 1;
+        else
+        {
+                /* If we retransmitted the last DATA packet, the RTT estimate and
+                 * (backed off) RTO are left untouched. This is Karn's algorithm, from
+                 * "Improving Round-Trip Time Estimates in Reliable Transport Protocols"
+                 * (1987).
+                 *
+                 * Briefly, we don't touch RTT as we don't want dropped packets to
+                 * change our smoothed RTT estimate, and we can't tell which DATA
+                 * packet is being ACKed anyway. We keep RTO backed off so that we have
+                 * a chance of getting a real RTT measurement next time if our smoothed
+                 * RTT is too low.
+                 *
+                 * This second part is a critical constituent of Karn's
+                 * paper, and is overlooked by most commentators...
+                 */
+        }
 
         client->timeout = now + client->rto;
  	client->last_transmission = now;
-        client->timing = 1;
-	platform_log(LOG_DEBUG, "RTT=%.1f, Var=%.1f, RTO=%d, Last RTT=%d\n",
-		client->rtt_average_8/8.0, client->rtt_deviation_4/4.0, client->rto, client->last_rtt);
+        client->retransmitted = 0;
+	platform_log(LOG_DEBUG, "Measured=%d, RTT=%.1f, Dev=%.1f, RTO=%d\n",
+		rtt, client->rtt_average_8/8.0, client->rtt_deviation_4/4.0, client->rto);
 }
 
 
@@ -966,4 +985,6 @@ void multicaster_check_timeout(multicaster_object *mo, platform_time now)
 		}
 	}
 }
+
+
 
