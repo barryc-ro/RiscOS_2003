@@ -47,8 +47,6 @@ INCLUDES = -IC:
 
 LIBS     = C:o.replay
 
-DFLAGS   =
-
 #
 # Program specific options:
 #
