@@ -1,0 +1,156 @@
+#include <stdlib.h>
+
+#include "encoding.h"
+
+#include "iso2022.h"
+#include "shiftjis.h"
+
+
+static UCS2 *roman, *katakana, *kanji;
+
+typedef struct ShiftJIS_Encoding
+{
+    Encoding e;
+    char prev;
+} ShiftJIS_Encoding;
+
+/*
+ * Routines for encoding Microsoft's Shift-JIS
+ * Number: 17
+ * Names: Shift_JIS
+ *        MS_Kanji
+ *        csShiftJIS
+ */
+
+static UCS4 kanji_to_ucs(int c1, int c2)
+{
+    UCS4 u;
+
+    /*
+     * Shift-JIS encodes kanji using byte pairs:
+     *     first byte 0x81-0x9F, 0xE0-0xEF
+     *    second byte 0x40-0x7E, 0x80-0xFC
+     *
+     * Removing the gap, and shifting to a base of 0,
+     * that gives us:
+     *     first byte 0-46
+     *    second byte 0-187
+     * And 47*188 = 8836 = 94*94... these 8836 codes
+     * are those of JIS X 0208.
+     *
+     * Also there are "user-defined" characters:
+     *     first byte 0xF0-0xFC
+     *    second byte 0x40-0x7E, 0x80-0xFC
+     *
+     * We turn all those into good ol' 0xFFFD.
+     *
+     * We assume that c1 is in the range 0x81-0x9F, 0xE0-0xFC,
+     * courtesy of range checking in shiftjis_read.
+     */
+    if (c1 >= 0xF0 || c2 < 0x40 || c2 == 0x7F || c2 > 0xFC)
+        return 0xFFFD;
+
+    if (c1 >= 0xE0)
+        c1 -= 0xC1;
+    else
+        c1 -= 0x81;
+
+    if (c2 >= 0x80)
+        c2 -= 0x41;
+    else
+        c2 -= 0x40;
+
+    u = kanji[188 * c1 + c2];
+
+    return u == NULL_UCS2 ? 0xFFFD : u;
+}
+
+static void shiftjis_reset(Encoding *e)
+{
+    ShiftJIS_Encoding *sj = (ShiftJIS_Encoding *) e;
+
+    if (!roman)
+        roman = iso2022_find_table(94, 0x4A);
+
+    if (!katakana)
+        katakana = iso2022_find_table(94, 0x49);
+
+    if (!kanji)
+        kanji = iso2022_find_table(94*94, 0x42);
+
+    sj->prev = 0;
+}
+
+static unsigned int shiftjis_read(struct Encoding *e,
+                                  int (*ucs_out)(void *, UCS4),
+                                  const char *s,
+                                  unsigned int n,
+                                  void *handle)
+{
+    ShiftJIS_Encoding *sj = (ShiftJIS_Encoding *) e;
+    unsigned int count;
+
+    for (count = n; count; count--)
+    {
+        char c = *s++;
+        UCS4 u;
+
+        if (sj->prev)
+        {
+            u = kanji_to_ucs(sj->prev, c);
+            sj->prev = 0;
+        }
+        else
+        {
+            if (c < 0x21)
+                u = c;
+            else if (c < 0x80)
+                u = roman[c - 0x21];
+            else if (c == 0x7F)
+                u = 0x007F;
+            else if (c == 0x80)
+                u = 0x005C; /* Backslash - a Mac extension */
+            else if (c < 0xA0)
+            {
+                sj->prev = c;
+                continue;
+            }
+            else if (c == 0xA0)
+                u = 0xFFFD;
+            else if (c < 0xE0)
+                u = katakana[c - 0xA1];
+            else if (c < 0xFD)
+            {
+                sj->prev = c;
+                continue;
+            }
+            else if (c == 0xFD)
+                u = 0x00A9; /* Copyright - a Mac extension */
+            else if (c == 0xFE)
+                u = 0x2122; /* Trademark - a Mac extension */
+            else /* c == 0xFF */
+                u = 0x2026; /* Ellipsis - a Mac extension */
+        }
+
+        if (u == NULL_UCS2)
+            u = 0xFFFD;
+
+        if (ucs_out)
+            if (ucs_out(handle, u))
+                break;
+    }
+
+    return n - count;
+}
+
+static void shiftjis_delete(Encoding *e)
+{
+}
+
+Encoding enc_shiftjis =
+{
+    shiftjis_read,
+    shiftjis_reset,
+    sizeof(ShiftJIS_Encoding) - sizeof(Encoding),
+    shiftjis_delete
+};

@@ -6,6 +6,7 @@
 # Date       Name         Description
 # ----       ----         -----------
 # 12-Dec-96  KJB          Created.
+# 08-Jul-97  BAL          Added build suitable for modules.
 #
 
 #
@@ -25,12 +26,13 @@ CM      = cmhg
 RM      = remove
 LD      = link
 LB      = libfile
-WIPE    = wipe
+TOUCH   = create
+WIPE    = -wipe
 
-CCFLAGS = -c -depend !Depend -fah -throwback ${INCLUDES} ${DFLAGS}
+CCFLAGS = -c -depend !Depend -ffah -throwback ${INCLUDES} ${DFLAGS}
 ASFLAGS = -depend !Depend -Stamp -quit
 CPFLAGS = ~cfr~v
-LBFLAGS = -c -o
+LBFLAGS = -c
 WFLAGS  = ~CFR~V
 
 #
@@ -46,16 +48,18 @@ ABSSYM    = RISC_OSLib:o.AbsSym
 #
 # Include files
 #
-INCLUDES = -IC:
+INCLUDES  = -Iencodings,tbox:,C:,TCPIPLibs:
 DFLAGS    = -DLIBRARY -DNDEBUG -DNEWSPACING -DTonyTables
 
 #
 # Program specific options:
 #
-COMPONENT = HTMLLib
-SOURCE    = ...
-TARGET    = ${COMPONENT}
-EXPORTS   = ${EXP_HDR}.${COMPONENT}
+COMPONENT  = HTMLLib
+COMPONENTZ = HTMLLibzm
+SOURCE     = ...
+TARGET     = ${COMPONENT}
+TARGETZ    = ${COMPONENTZ}
+EXPORTS    = ${EXP_HDR}.${COMPONENT}
 
 OBJS =\
  o.display\
@@ -63,16 +67,91 @@ OBJS =\
  o.rules\
  o.veneers\
  o.new_stream\
- o.anchor_inf\
  o.HTTPSuport\
  o.font\
- o.HTMLTables
+ o.HTMLTables\
+ o.attributes\
+ o.attrvenrs\
+ o.object\
+ o.ol\
+ encodings.o.utf8\
+ encodings.o.encoding\
+ encodings.o.iso2022\
+ encodings.o.iso8859-1\
+ encodings.o.iso8859-2\
+ encodings.o.iso8859-3\
+ encodings.o.iso8859-4\
+ encodings.o.iso8859-5\
+ encodings.o.iso8859-7\
+ encodings.o.iso8859-8\
+ encodings.o.iso8859-9\
+ encodings.o.iso8859-10\
+ encodings.o.iso8859-13\
+ encodings.o.sami\
+ encodings.o.koi8r\
+ encodings.o.welsh\
+ encodings.o.microsoft\
+ encodings.o.acorn\
+ encodings.o.apple\
+ encodings.o.shiftjis\
+ encodings.o.bigfive\
+ encodings.o.euc-jp\
+ encodings.o.euc-kr\
+ encodings.o.euc-cn\
+ encodings.o.enc_utf8\
+ encodings.o.enc_ascii\
+ encodings.o.enc_utf16\
+ encodings.o.enc_ucs4
  
+OBJSZ =\
+ z.display\
+ z.malloc\
+ z.rules\
+ z.veneers\
+ z.new_stream\
+ z.HTTPSuport\
+ z.font\
+ z.HTMLTables\
+ z.attributes\
+ z.attrvenrs\
+ z.object\
+ z.ol\
+ encodings.z.utf8\
+ encodings.z.encoding\
+ encodings.z.iso2022\
+ encodings.z.iso8859-1\
+ encodings.z.iso8859-2\
+ encodings.z.iso8859-3\
+ encodings.z.iso8859-4\
+ encodings.z.iso8859-5\
+ encodings.z.iso8859-7\
+ encodings.z.iso8859-8\
+ encodings.z.iso8859-9\
+ encodings.z.iso8859-10\
+ encodings.z.iso8859-13\
+ encodings.z.sami\
+ encodings.z.koi8r\
+ encodings.z.welsh\
+ encodings.z.microsoft\
+ encodings.z.acorn\
+ encodings.z.apple\
+ encodings.z.shiftjis\
+ encodings.z.bigfive\
+ encodings.z.euc-jp\
+ encodings.z.euc-kr\
+ encodings.z.euc-cn\
+ encodings.z.enc_utf8\
+ encodings.z.enc_ascii\
+ encodings.z.enc_utf16\
+ encodings.z.enc_ucs4
+
+
 #
 # Rule patterns
 #
-.SUFFIXES: .o .s .h .cmhg .c
+.SUFFIXES: .o .s .h .cmhg .c .z
 .c.o:;     ${CC} ${CCFLAGS} -o $@ $<
+.c.z:;     ${CC} ${CCFLAGS} -zM -o $@ $<
 .s.o:;     ${AS} ${ASFLAGS} -o $@ $<
 .cmhg.o:;  ${CM} ${CMFLAGS} -o $@ $<
 .cmhg.h:;  ${CM} ${CMFLAGS} -d $@ $<
@@ -80,7 +159,7 @@ OBJS =\
 #
 # build a the library:
 #
-all: ${COMPONENT}
+all:	${COMPONENT} #${COMPONENTZ}
 
 #
 # build a test program:
@@ -91,202 +170,67 @@ html_riscos2: ${COMPONENT} o.main o.svcprint o.irqs ${CLIB}
 #
 # RISC OS ROM build rules:
 #
-rom: ${TARGET}
+rom: ${TARGET} ${TARGETZ}
         @echo ${COMPONENT}: rom module built
 
 export: export_${PHASE}
 
-install_rom: ${TARGET}
+install_rom: ${TARGET} ${TARGETZM}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
 clean:
-        ${WIPE} o.* ${WFLAGS}
+        ${WIPE} encodings.o ${WFLAGS}
+        ${WIPE} encodings.z ${WFLAGS}
+        ${WIPE} o ${WFLAGS}
+        ${WIPE} z ${WFLAGS}
         ${RM} ${TARGET}
+        ${RM} ${TARGETZ}
         ${RM} html_riscos2
+        ${RM} local_dirs
         @echo ${COMPONENT}: cleaned
 
 export_hdrs: h.html2_ext h.api h.struct h.tags dirs
-	Copy h.html2_ext    HTMLLib:h.html2_ext      ~CFLNR~V
-	Copy h.api          HTMLLib:h.HTMLLib        ~CFLNR~V
-	Copy h.struct       HTMLLib:h.struct         ~CFLNR~V
-	Copy h.tags         HTMLLib:h.tags           ~CFLNR~V
-	Copy h.tablestruc   HTMLLib:h.tablestruc     ~CFLNR~V
-        @echo ${COMPONENT}: export complete (hdrs)
+	Copy h.html2_ext                HTMLLib:h.html2_ext                ~CFLNR~V
+	Copy h.api                      HTMLLib:h.HTMLLib                  ~CFLNR~V
+	Copy h.struct                   HTMLLib:h.struct                   ~CFLNR~V
+	Copy h.tags                     HTMLLib:h.tags                     ~CFLNR~V
+	Copy h.tablestruc               HTMLLib:h.tablestruc               ~CFLNR~V
+	Copy encodings.h.iso10646       HTMLLib:h.iso10646                 ~CFLNR~V
+	Copy encodings.h.utf8           HTMLLib:h.utf8                     ~CFLNR~V
+	Every.Every2 "Resources.Encodings...* -x ..CVS ..CVS.*" Copy %0 HTMLLib:%0 ~CFLN~R~V
+	@echo ${COMPONENT}: export complete (hdrs)
 
-export_libs: ${TARGET} dirs
+export_libs: ${TARGET} ${TARGETZ} dirs
 	Copy ${TARGET}      HTMLLib:o.${TARGET}      ~CFLNR~V
+	Copy ${TARGETZ}     HTMLLib:o.${TARGETZ}     ~CFLNR~V
         @echo ${COMPONENT}: export complete (libs)
 
 local_dirs:
 	${MKDIR} o
+	${MKDIR} z
+	${MKDIR} encodings.o
+	${MKDIR} encodings.z
+	${TOUCH} local_dirs
 	
 dirs:
         ${MKDIR} ${LIBDIR}
         ${MKDIR} ${LIBDIR}.HTMLLib
         ${MKDIR} ${LIBDIR}.HTMLLib.h
         ${MKDIR} ${LIBDIR}.HTMLLib.o
-        
+        ${MKDIR} ${LIBDIR}.HTMLLib.Resources
+        ${MKDIR} ${LIBDIR}.HTMLLib.Resources.Encodings
+
 #
 # Final link
 #
 ${TARGET}: ${OBJS} local_dirs
-        ${LB} ${LBFLAGS} ${COMPONENT} ${OBJS}
-        ${CP} @.${COMPONENT} @.o.${COMPONENT} ${CPFLAGS}
+        ${LB} ${LBFLAGS} -o ${COMPONENT} ${OBJS}
+
+${TARGETZ}: ${OBJSZ} local_dirs
+	${LB} ${LBFLAGS} -o ${COMPONENTZ} ${OBJSZ}
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-o.irqs: s.irqs
-o.irqs: Hdr:ListOpts
-o.irqs: Hdr:Macros
-o.irqs: Hdr:System
-o.irqs: Hdr:SWIs
-o.irqs: Hdr:CPU.Generic26
-o.irqs: Hdr:IO.GenericIO
-o.irqs: Hdr:RISCOS
-o.display:	c.display
-o.display:	h.html2_ext
-o.display:	h.tablestruc
-o.display:	h.tags
-o.display:	h.struct
-o.display:	C:h.string
-o.display:	h.internal
-o.display:	h.tags
-o.display:	h.struct
-o.display:	h.tablestruc
-o.display:	C:h.ctype
-o.display:	C:h.stdio
-o.display:	c.display
-o.display:	h.html2_ext
-o.display:	h.tablestruc
-o.display:	h.tags
-o.display:	h.struct
-o.display:	C:h.string
-o.display:	h.internal
-o.display:	h.tags
-o.display:	h.struct
-o.display:	h.tablestruc
-o.display:	C:h.ctype
-o.display:	C:h.stdio
-o.malloc:	c.malloc
-o.malloc:	C:h.swis
-o.malloc:	C:h.kernel
-o.malloc:	h.struct
-o.malloc:	h.html2_ext
-o.malloc:	h.tablestruc
-o.malloc:	h.internal
-o.malloc:	h.tags
-o.malloc:	h.struct
-o.malloc:	h.tablestruc
-o.malloc:	C:h.ctype
-o.rules:	c.rules
-o.rules:	h.html2_ext
-o.rules:	h.tablestruc
-o.rules:	h.internal
-o.rules:	h.tags
-o.rules:	h.struct
-o.rules:	h.tablestruc
-o.rules:	C:h.ctype
-o.rules:	h.html2
-o.rules:	h.tags
-o.rules:	h.rules
-o.rules:	h.tags
-o.rules:	h.html2_ext
-o.rules:	h.struct
-o.rules:	C:h.string
-o.rules:	C:h.ctype
-o.veneers:	c.veneers
-o.veneers:	h.api
-o.veneers:	h.html2_ext
-o.veneers:	h.tablestruc
-o.veneers:	h.tags
-o.veneers:	h.struct
-o.veneers:	h.internal
-o.veneers:	h.tags
-o.veneers:	h.struct
-o.veneers:	h.tablestruc
-o.veneers:	C:h.ctype
-o.veneers:	C:h.flex
-o.veneers:	C:h.stdio
-o.veneers:	C:h.kernel
-o.veneers:	h.HTMLTables
-o.veneers:	h.html2_ext
-o.veneers:	h.tags
-o.veneers:	h.internal
-o.veneers:	h.tablestruc
-o.new_stream:	c.new_stream
-o.new_stream:	h.html2_ext
-o.new_stream:	h.tablestruc
-o.new_stream:	h.tags
-o.new_stream:	h.struct
-o.new_stream:	C:h.string
-o.new_stream:	h.internal
-o.new_stream:	h.tags
-o.new_stream:	h.struct
-o.new_stream:	h.tablestruc
-o.new_stream:	C:h.ctype
-o.new_stream:	h.HTMLTables
-o.new_stream:	h.html2_ext
-o.new_stream:	h.tags
-o.new_stream:	h.internal
-o.new_stream:	h.tablestruc
-o.new_stream:	h.api
-o.new_stream:	h.html2_ext
-o.new_stream:	h.tags
-o.new_stream:	h.struct
-o.anchor_inf:	c.anchor_inf
-o.anchor_inf:	C:h.stdio
-o.anchor_inf:	C:h.stdlib
-o.anchor_inf:	C:h.limits
-o.anchor_inf:	h.html2_ext
-o.anchor_inf:	h.tablestruc
-o.anchor_inf:	h.tags
-o.anchor_inf:	h.struct
-o.anchor_inf:	C:h.string
-o.anchor_inf:	h.internal
-o.anchor_inf:	h.tags
-o.anchor_inf:	h.struct
-o.anchor_inf:	h.tablestruc
-o.anchor_inf:	C:h.ctype
-o.anchor_inf:	h.HTMLTables
-o.anchor_inf:	h.html2_ext
-o.anchor_inf:	h.tags
-o.anchor_inf:	h.internal
-o.anchor_inf:	h.tablestruc
-o.HTTPSuport:	c.HTTPSuport
-o.HTTPSuport:	h.html2_ext
-o.HTTPSuport:	h.tablestruc
-o.HTTPSuport:	h.tags
-o.HTTPSuport:	h.struct
-o.HTTPSuport:	C:h.string
-o.HTTPSuport:	h.internal
-o.HTTPSuport:	h.tags
-o.HTTPSuport:	h.struct
-o.HTTPSuport:	h.tablestruc
-o.HTTPSuport:	C:h.ctype
-o.HTTPSuport:	C:h.stdio
-o.HTTPSuport:	h.HTTPSuport
-o.font:	c.font
-o.font:	h.html2_ext
-o.font:	h.tablestruc
-o.font:	h.struct
-o.font:	h.tags
-o.font:	h.internal
-o.font:	h.tags
-o.font:	h.struct
-o.font:	h.tablestruc
-o.font:	C:h.ctype
-o.HTMLTables:	c.HTMLTables
-o.HTMLTables:	h.HTMLTables
-o.HTMLTables:	h.html2_ext
-o.HTMLTables:	h.tablestruc
-o.HTMLTables:	h.tags
-o.HTMLTables:	h.internal
-o.HTMLTables:	h.tags
-o.HTMLTables:	h.struct
-o.HTMLTables:	h.tablestruc
-o.HTMLTables:	C:h.ctype
-o.HTMLTables:	h.tablestruc
-o.HTMLTables:	h.tablestruc
