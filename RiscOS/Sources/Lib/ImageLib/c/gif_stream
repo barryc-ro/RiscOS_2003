@@ -36,9 +36,20 @@
 /*          22-Sep-97: RML: Fixed problem with npixels not being updated sometimes in lzw decoder, so      */
 /*                          imagelib thinks image is corrupted.                                            */
 /*          22-Sep-97: KJB: Copes with there being no clear code at the start of the LZW stream.           */
+/*          23-Sep-97: KJB: Would fail big-time if the LZW minimum code size wasn't the same as the global */
+/*                          colour map size.                                                               */
+/*                          Would restrict colour values to the size of the global colour map, so if an    */
+/*                          image in an animated GIF had 128 colours while the global map had 64 colours,  */
+/*                          it would fail (although this was masked by the above bug - as such an image    */
+/*                          would necessarily have a minimum code size > the global colour map size).      */
+/*                          Reduced memory usage by 32K per stream by turning the Prefix array into        */
+/*                          shorts, and Suffix and OutCode into chars.                                     */
+/*                          Fixed spelling of "colour" in various places.                                  */
 /*---------------------------------------------------------------------------------------------------------*/
 /* To do :                                                                                                 */
-/*                                                                                                         */
+/*     Can the other lzw routines be speeded up and have memory usage reduced? They're far more general    */
+/*     purpose than these, and hence slower. Kind of ironic given that they're used for the direct         */
+/*     plotting.                                                                                           */
 /*---------------------------------------------------------------------------------------------------------*/
 
 
@@ -68,8 +79,6 @@
 #define EXTENSION     0x21
 #define IMAGESEP      0x2c
 #define TRAILER       0x3b
-#define INTERLACEMASK 0x40
-#define COLORMAPMASK  0x80
 
 #define PutSpriteScaled 52
 #define PutSpriteScaled_UseMask 0x08
@@ -121,8 +130,8 @@ typedef struct gif_loaddata
                 XC, YC,		            /* Output X and Y coords of current pixel     */
                 Pass,			    /* Used by output routine if interlaced pic   */
                 BitsPerPixel,		    /* Bits per pixel, read from GIF header       */
-                ColorMapSize,		    /* number of colors                           */
-                Background,		    /* background color                           */
+                ColourMapSize,		    /* number of colours                          */
+                Background,		    /* background colour                          */
                 CodeSize,		    /* Code size, read from GIF header            */
                 InitCodeSize,		    /* Starting code size, used during Clear      */
                 Code,			    /* Value returned by ReadCode                 */
@@ -134,11 +143,11 @@ typedef struct gif_loaddata
                 FirstFree,		    /* First free code, generated per GIF spec    */
                 FreeCode,		    /* Decompressor,next free slot in hash table  */
                 FinChar,		    /* Decompressor variable                      */
-                BitMask,		    /* AND mask for data size                     */
+                BitMask,		    /* current AND mask for data size             */
                 ReadMask,		    /* Code AND mask for current code size        */
                 Misc;                       /* miscellaneous bits (interlace, local cmap) */
     int         gif89;                      /* &5c                                        */
-    boolean     Interlace, HasColormap;
+    boolean     Interlace, HasColourmap;
     int         state;
     byte       *origptr;
     int         aspect;
@@ -152,9 +161,9 @@ typedef struct gif_loaddata
     int         readimagestate;
     int         loadinto;
     int         blocksize;                  /* 4A0 */
-    int        *Prefix;                     /* Hash table used by decompressor */
-    int        *Suffix;
-    int        *OutCode;                    /* Output array used by the decompressor */
+    short      *Prefix;                     /* Hash table used by decompressor */
+    char       *Suffix;
+    char       *OutCode;                    /* Output array used by the decompressor */
 
     /* Fields added to structure by RML */
     render_flags  flags;                      // Bitfield containing various flags (see. h.render)
@@ -260,20 +269,20 @@ _kernel_oserror* gifstream_begin(int *return_gifhandle, int flags)
    memset(store[n], 0, sizeof *store[n]);
 
    /* Get memory for various tables */
-   if (!flex_alloc((flex_ptr) &store[n]->Prefix, 4097 *sizeof(int)))
+   if (!flex_alloc((flex_ptr) &store[n]->Prefix, 4097 *sizeof(short)))
    {
        free(store[n]);
        return gifstream_error("Can't get memory for prefix table.");
    }
 
-   if (!flex_alloc((flex_ptr) &store[n]->Suffix, 4097 *sizeof(int)))
+   if (!flex_alloc((flex_ptr) &store[n]->Suffix, 4097 *sizeof(char)))
    {
        flex_free((flex_ptr) &store[n]->Prefix);
        free(store[n]);
        return gifstream_error("Can't get memory for suffix table.");
    }
 
-   if (!flex_alloc((flex_ptr) &store[n]->OutCode, 4097 *sizeof(int)))
+   if (!flex_alloc((flex_ptr) &store[n]->OutCode, 4097 *sizeof(char)))
    {
        flex_free((flex_ptr) &store[n]->Prefix);
        flex_free((flex_ptr) &store[n]->Suffix);
@@ -282,9 +291,9 @@ _kernel_oserror* gifstream_begin(int *return_gifhandle, int flags)
    }
 
    /* Clear tables */
-   memset(store[n]->Prefix, 0, sizeof(int)*4096);
-   memset(store[n]->Suffix, 0, sizeof(int)*4096);
-   memset(store[n]->OutCode, 0, sizeof(int)*4096);
+   memset(store[n]->Prefix, 0, sizeof(short)*4096);
+   memset(store[n]->Suffix, 0, sizeof(char)*4096);
+   memset(store[n]->OutCode, 0, sizeof(char)*4096);
 
    store[n]->transparent             = -1;
    store[n]->width                   = -1;
@@ -515,10 +524,10 @@ void gifstream_add_palette(GIFloaddata *load)
    sprite_header *spr_header = (sprite_header*) ((char*)spr + sizeof(sprite_area));
    int            i;
 
-   report_value("Adding palette, colourmap ", load->HasColormap);
+   report_value("Adding palette, colourmap ", load->HasColourmap);
 
    for (i=0; i<256; i++) {
-     if (load->HasColormap)
+     if (load->HasColourmap)
         spr_header->palette[i*2] = spr_header->palette[i*2+1] = (load->local_pal[i*3]<<8)+
                                                                 (load->local_pal[i*3+1]<<16)+
                                                                 (load->local_pal[i*3+2]<<24);
@@ -735,8 +744,7 @@ static _kernel_oserror* gifstream_read_screen_descriptor(GIFloaddata *load)
         load->aspect        = dataptr[6];
 
         load->BitsPerPixel  = (crpixel & 7) + 1;
-        load->ColorMapSize  = 1 << load->BitsPerPixel;
-        load->BitMask       = load->ColorMapSize - 1;
+        load->ColourMapSize = 1 << load->BitsPerPixel;
         load->delay         = -1;
 
         report_string("\nScreen descriptor");
@@ -766,7 +774,7 @@ static _kernel_oserror* gifstream_read_screen_descriptor(GIFloaddata *load)
 
 static _kernel_oserror* gifstream_read_global_colour_map(GIFloaddata *load)
 {
-    int         size_of_map = load->ColorMapSize * 3;
+    int         size_of_map = load->ColourMapSize * 3;
     int         len         = min(size_of_map - load->bytes_so_far_in_section, load->dataend - load->dataptr);
 
     memcpy(load->palette + load->bytes_so_far_in_section, load->dataptr, len);
@@ -867,9 +875,9 @@ static _kernel_oserror* gifstream_read_image_descriptor(GIFloaddata *load)
         load->height = dataptr[7] + (dataptr[8] * 256);
         load->Misc   = dataptr[9];
 
-        load->image_bpp   = (load->Misc & 7) +1;
-        load->HasColormap = load->Misc & 128;
-        load->Interlace   = load->Misc & 64;
+        load->image_bpp    = (load->Misc & 7) +1;
+        load->HasColourmap = load->Misc & 128;
+        load->Interlace    = load->Misc & 64;
 
         if (load->Interlace && (load->transparent!=-1)) load->flags.mutable_mask=true;
 
@@ -880,10 +888,10 @@ static _kernel_oserror* gifstream_read_image_descriptor(GIFloaddata *load)
         report_value("  width          ",load->width);
         report_value("  height         ",load->height);
         report_value("  load->Misc     ",load->Misc);
-        report_value("  colormap       ",load->HasColormap);
+        report_value("  colourmap      ",load->HasColourmap);
         report_value("  image bpp      ",load->image_bpp);
 
-        if (load->HasColormap) load->state = State_ReadLocalColourMap;
+        if (load->HasColourmap) load->state = State_ReadLocalColourMap;
         else load->state = State_PreImageData;
 
         load->bytes_so_far_in_section = 0;
@@ -1219,9 +1227,9 @@ static _kernel_oserror* gifstream_pre_image_data(GIFloaddata *load, int frame)
     frame=frame;
 
     /* Reset the tables in preperation */
-    memset(load->Prefix, 0, sizeof(int)*4096);
-    memset(load->Suffix, 0, sizeof(int)*4096);
-    memset(load->OutCode, 0, sizeof(int)*4096);
+    memset(load->Prefix, 0, sizeof(short)*4096);
+    memset(load->Suffix, 0, sizeof(char)*4096);
+    memset(load->OutCode, 0, sizeof(char)*4096);
     load->BitOffset=0;
 
     load->CodeSize = *load->dataptr++;
@@ -1234,6 +1242,11 @@ static _kernel_oserror* gifstream_pre_image_data(GIFloaddata *load, int frame)
     load->FreeCode  = load->FirstFree = load->ClearCode + 2;
     load->CodeSize++;
 
+    if (load->HasColourmap)
+        load->BitMask = (1 << load->image_bpp) - 1;
+    else
+        load->BitMask = load->ColourMapSize - 1;
+
     load->InitCodeSize              = load->CodeSize;
     load->MaxCode                   = (1 << load->CodeSize);
     load->ReadMask                  = load->MaxCode - 1;
@@ -1242,7 +1255,6 @@ static _kernel_oserror* gifstream_pre_image_data(GIFloaddata *load, int frame)
     load->maxpixels                 = load->width * load->height;
     load->readimagestate            = 0;
     load->loadinto                  = 0;
-    load->ColorMapSize              = (1 << ((load->Misc &7)+1));
     load->bytes_so_far_in_section   = 0;
     load->XC                        = 0;
     load->YC                        = 0;
@@ -1284,7 +1296,7 @@ static _kernel_oserror* gifstream_pre_image_data(GIFloaddata *load, int frame)
 
         for (n=0; n<256; n++)
         {
-            if (load->HasColormap)
+            if (load->HasColourmap)
                 put_palette[n*2] = put_palette[n*2+1] = (load->local_pal[n*3]  <<8)+
                                                         (load->local_pal[n*3+1]<<16)+
                                                         (load->local_pal[n*3+2]<<24);
@@ -1493,7 +1505,7 @@ stage3:
                  * associated output code on the output queue.
                  */
 
-                while (CurCode > BitMask)
+                while (CurCode > EOFCode)
                 {
     	            if (OutCount > 4096) break;   /* corrupt file */
     	            load->OutCode[OutCount++] = load->Suffix[CurCode];
@@ -1747,7 +1759,7 @@ stage3:
                  * associated output code on the output queue.
                  */
 
-                while (CurCode > BitMask)
+                while (CurCode > EOFCode)
                 {
     	            if (OutCount > 4096) break;   /* corrupt file */
     	            load->OutCode[OutCount++] = load->Suffix[CurCode];
