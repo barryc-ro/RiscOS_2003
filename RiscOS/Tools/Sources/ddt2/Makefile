@@ -205,6 +205,7 @@ OBJSDDT2 = \
  opp.TGUtils		\
  opp.UpCallMenu		\
  opp.Utils		\
+ opp.Watchpoint		\
  opp.Windows		\
  o.ROSLib
 
@@ -233,6 +234,7 @@ OBJSDDT2D = \
  oppd.TGUtils		\
  oppd.UpCallMenu	\
  oppd.Utils		\
+ oppd.Watchpoint	\
  oppd.Windows		\
  o.ROSLib
 
@@ -263,6 +265,7 @@ OBJSDDT2RZ = \
  opprz.TGUtils		\
  opprz.UpCallMenu	\
  opprz.Utils		\
+ opprz.Watchpoint	\
  opprz.Windows		\
  o.ROSLib
 
@@ -291,6 +294,7 @@ OBJSDDT2RDZ = \
  opprdz.TGUtils		\
  opprdz.UpCallMenu	\
  opprdz.Utils		\
+ opprdz.Watchpoint	\
  opprdz.Windows		\
  o.ROSLib
 
@@ -323,6 +327,7 @@ OBJSDDT2Z = \
  oppz.UpCallMenu	\
  oppz.Utils		\
  oppz.Windows		\
+ oppz.Watchpoint	\
  o.ROSLib
 
 
