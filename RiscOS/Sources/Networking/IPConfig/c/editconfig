@@ -31,6 +31,7 @@
 #include "module.h"
 #include "utils.h"
 #include "lineedit.h"
+#include "atmconfig.h"
 
 /* This header exported by RiscOS/Sources/Programmer/HdrSrc (HdrSrc-0_10 and later) */
 #include "Global.Upcall.h"
@@ -222,20 +223,21 @@ static void ReadNBBSCMOS(char *buf)
 {
 	int i;
 	/* Reads the name of the primary boot server */
-	for (i = 0; i<15; ++i) {
-		*buf++ = read_cmos_byte(cmos_NB_BOOT_SERVER + i);
+	buf[0] = read_cmos_byte(cmos_NB_BOOT_SERVER_BYTE_0);
+	for (i = 1; i<cmos_NB_BOOT_SERVER_SZ; ++i) {
+		buf[i] = read_cmos_byte(cmos_NB_BOOT_SERVER + i - 1);
 	}
-	*buf = read_cmos_byte(cmos_NB_BOOT_SERVER_BYTE_16);
 }
 
 static void WriteNBBSCMOS(char *buf)
 {
 	int i;
-	/* Reads the name of the primary boot server */
-	for (i = 0; i<15; ++i) {
-		write_cmos_byte(cmos_NB_BOOT_SERVER + i, *buf++);
+	/* Writes the name of the primary boot server */
+        write_cmos_byte(cmos_NB_BOOT_SERVER_ZERO_MARKER, 0);
+	write_cmos_byte(cmos_NB_BOOT_SERVER_BYTE_0, *buf);
+	for (i = 1; i<cmos_NB_BOOT_SERVER_SZ; ++i) {
+		write_cmos_byte(cmos_NB_BOOT_SERVER + i - 1, buf[i]);
 	}
-	write_cmos_byte(cmos_NB_BOOT_SERVER_BYTE_16, *buf);
 }
 
 /* Read a \0 terminated string from CMOS.
@@ -276,6 +278,7 @@ void ReadIPData( ip_data *ip )
 	ReadIPCMOS( cmos_NBNS_IP, &ip->nbns_ip );
 	ReadNBBSCMOS( ip->nbns_bootserver );
 	ReadStringCMOS( cmos_BOOT_MOUNT, ip->boot_mount, cmos_BOOT_MOUNT_SZ );
+	ip->nbbs_zero_marker = read_cmos_byte(cmos_NB_BOOT_SERVER_ZERO_MARKER);
 
 	ip->atm_flags = ReadATMCMOS( &ip->atm_pvc, &ip->atm_boot1, &ip->atm_boot2 );
 
@@ -309,7 +312,9 @@ void WriteIPData( ip_data *ip )
 	WriteIPCMOS( cmos_IP_ADDR_3, &ip->addr3_ip );
 	WriteIPCMOS( cmos_IP_ADDR_4, &ip->addr4_ip );
 	WriteIPCMOS( cmos_NBNS_IP, &ip->nbns_ip );
-	WriteNBBSCMOS ( ip->nbns_bootserver );
+	if (ip->nbbs_zero_marker == 0) {
+	        WriteNBBSCMOS ( ip->nbns_bootserver );
+	}
 	WriteStringCMOS( cmos_BOOT_MOUNT, ip->boot_mount );
 	WriteATMCMOS ( ip->atm_flags, ip->atm_pvc, &ip->atm_boot1, &ip->atm_boot2 );
 
@@ -356,6 +361,21 @@ void found_atm_card(void)
 static void wait_getchar(void)
 {
 	(void) fgetc(stdin);
+}
+
+/* called to re-open messages file when the editor is first entered
+ * (in case any new overriding files have appeared during ROM init)
+ * and if the filesystem number is changed.
+ */
+static void reopen_messages(void)
+{
+	(void)messages_file_close();
+	if (module_open_messages()) {
+		reboot(0,0);
+		#ifdef TRACE
+		wait_getchar();
+		#endif
+	}
 }
 
 #pragma -v1
@@ -547,6 +567,39 @@ static void ShowIPConfigLine(const char *tag, const struct in_addr *p)
 	}
 }
 
+static int editconfig_is_null_atm_address(const struct atm_addr *atm)
+{
+        int i;
+
+	for (i=0; i<sizeof(*atm); ++i) {
+	        if (atm->bytes[i] != 0) return 0;
+	}
+
+	return 1;
+}
+
+static char *FormatATMAddress(const struct atm_addr *atm, char *buffer)
+{
+        int b;
+
+        for (b=0; b<sizeof(*atm); ++b) {
+                sprintf(buffer + b*2, "%02x", atm->bytes[b]);
+        }
+
+        return buffer;
+}
+
+static void ShowATMAddressLine(const struct atm_addr *atm)
+{
+        if (editconfig_is_null_atm_address(atm)) {
+                puts(unset);
+        }
+        else {
+                char buffer[sizeof(*atm) * 2 + 1];
+		puts(FormatATMAddress(atm, buffer));
+        }
+}
+
 static void PrintATMData( const ip_data *ip )
 {
 	if (ip->atm_flags & (1<<atm_config_item_BOOT_PVC) && lm_print_hdr("ATMPVCAddr")) {
@@ -558,20 +611,10 @@ static void PrintATMData( const ip_data *ip )
 		}
 	}
 	if (ip->atm_flags & (1<<atm_config_item_ADDR_1) && lm_print_hdr("ATMAddr1")) {
-	        int b;
-
-	        for (b=0; b<cmos_ATM_ADDRESS_SZ; ++b) {
-			printf("%02x", ip->atm_boot1.bytes[b]);
-	        }
-        	newline();
+	        ShowATMAddressLine(&ip->atm_boot1);
 	}
 	if (ip->atm_flags & (1<<atm_config_item_ADDR_2) && lm_print_hdr("ATMAddr2")) {
-	        int b;
-
-	        for (b=0; b<cmos_ATM_ADDRESS_SZ; ++b) {
-			printf("%02x", ip->atm_boot2.bytes[b]);
-	        }
-	        newline();
+	        ShowATMAddressLine(&ip->atm_boot2);
 	}
 }
 
@@ -582,6 +625,11 @@ static void PrintIPData( const ip_data *ip )
 	char msg[64];
 
 	Cls();
+
+	if (!using_atm_card() && lm_print_hdr("MACAddr")) {
+	        format_mac_address(&ip->ether_a, msg, ':');
+	        puts(msg);
+	}
 
 	ShowIPConfigLine("IPAddr", &ip->client_ip);
 	ShowIPConfigLine("SNMask", &ip->netmask_ip);
@@ -610,6 +658,7 @@ static void PrintIPData( const ip_data *ip )
 		read_msg(ip->static_flag ? "Enabled" : "Disabled", msg, sizeof(msg));
 		puts(msg);
 	}
+
 
 	newline();
 }
@@ -701,17 +750,17 @@ static void GetATMAddr( const char *message, struct atm_addr *addr, int item)
 	for (;;) {
 	        struct atm_addr new_addr;
 		char buf[2 * sizeof(*addr)+1];
-		int i, clr = 1;
+		int i;
 
-		for (i=0; i<sizeof(*addr); ++i) {
-		        sprintf(buf + i*2, "%02x", addr->bytes[i]);
-		        if (clr && addr->bytes[i]) clr = 0;
+		if (editconfig_is_null_atm_address(addr)) {
+		        buf[0] = '\0';
+		}
+		else {
+			FormatATMAddress(addr, buf);
 		}
 
-		if (clr) buf[0] = '\0';
-
 		if (!GetString(message, buf, sizeof(buf), buf)) {
-			/* No PVC query message was present, abort this function */
+			/* No query message was present, abort this function */
 			return;
 		}
 
@@ -930,17 +979,30 @@ static int editconfig_address_reachable(const struct in_addr *client,
 void editconfig_exec_atm_start(ip_data *ip)
 {
 	struct in_addr *pvc_dest;
+	struct in_addr *remote_ip;
 	char IParg[sizeof("123.123.123.123")];
 	char pvc_address[sizeof("12345")];
 	char cmdbuf[64];
 	const char *pcmdbuf;
 	size_t inoutlength;
 
+	/* In the case of LanManFS over ATM, we need to be able to reach the NetBIOS
+	 * nameserver (because we don't know the boot server's IP address - NetBIOS
+	 * always deals in NetBIOS names!)  Therefore, test reachability of the NBNS
+	 * and not the (non-configured) boot server IP address.
+	 */
+	if (ip->configured_fs == filesystem_LANMANFS) {
+	        remote_ip = &ip->nbns_ip;
+	}
+	else {
+	        remote_ip = &ip->server_ip;
+	}
+
 	/* Can we see the boot server?  If so, establish the PVC to the boot server.
 	 * If not, then we establish the PVC to the gateway instead
 	 */
-	if (editconfig_address_reachable(&ip->client_ip, &ip->netmask_ip, &ip->server_ip)) {
-		pvc_dest = &ip->server_ip;
+	if (editconfig_address_reachable(&ip->client_ip, &ip->netmask_ip, remote_ip)) {
+		pvc_dest = remote_ip;
 	}
 	else {
 		pvc_dest = &ip->gateway_ip;
@@ -1084,13 +1146,7 @@ static void CheckFSData(void)
 			newline();
 			write_tag_msg_nl("NVFSDone");
 			wait_getchar();
-			(void)messages_file_close();
-			if (module_open_messages()) {
-				reboot(0,0);
-				#ifdef TRACE
-				wait_getchar();
-				#endif
-			}
+			reopen_messages();
 			break;
 		}
 	}
@@ -1100,7 +1156,7 @@ static void CheckFSData(void)
  * The main routine controlling the reconfiguration of the CMOS.  Does not
  * exit (in non-trace builds).
  */
-void editconfig_service(void *pw)
+void editconfig_service(void *pw, const struct ether_addr *eaddr)
 {
 	#ifndef TRACE
 	/* Set the default escape handler to reboot the machine. Don't need
@@ -1121,6 +1177,8 @@ void editconfig_service(void *pw)
 	(void) pw;
 	#endif
 
+	reopen_messages();
+
 	ReadMainVars();
 
 	CheckFSData();
@@ -1130,6 +1188,7 @@ void editconfig_service(void *pw)
 		int bits, cpbuf;
 		char buf[cmos_BOOT_MOUNT_SZ];
 
+		ip.ether_a = *eaddr;
 		ReadIPData( &ip );
 		PrintIPData( &ip );
 
@@ -1230,6 +1289,7 @@ void editconfig_service(void *pw)
 
 		if (GetString( "QNBBSMain", buf, cmos_NB_BOOT_SERVER_SZ, ip.nbns_bootserver)) {
 			ip.nbns_bootserver[0] = '\0';
+			ip.nbbs_zero_marker = 0;
 			(void) strncat(ip.nbns_bootserver, buf, cmos_NB_BOOT_SERVER_SZ);
 			newline();
 		}
