@@ -25,7 +25,7 @@ STRIP   = -StripDepnd
 ZIP     = zip
 
 ASFLAGS = -depend !Depend -Stamp -quit -module
-CCFLAGS = -c ${THROWBACK} -depend !Depend ${INCLUDES}
+CCFLAGS = -c ${THROWBACK} -depend !Depend ${INCLUDES} ${OPTS}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 INCLUDES= -IC:
