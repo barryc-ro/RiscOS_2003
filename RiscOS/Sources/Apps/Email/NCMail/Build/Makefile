@@ -112,9 +112,11 @@ INETLIB		= $(LIBDIR).TCPIPLibs.o.inetlib
 UNIXLIB		= $(LIBDIR).TCPIPLibs.o.unixlib
 NBLIB	        = $(LIBDIR).NBLib.o.nblib
 ERRORLIB	= $(LIBDIR).ErrorLib.o.ErrorLib
+RMVERSION	= $(LIBDIR).RMVersion.o.RMVersion
 
 LIBS = \
  $(NBLIB)\
+ $(RMVersion) \
  $(WIMPLIB)\
  $(TOOLBOXLIB)\
  $(EVENTLIB)\
@@ -131,6 +133,7 @@ LIBS = \
 
 LIBSM = \
  $(NBLIB)zm\
+ $(RMVersion) \
  $(WIMPLIB)\
  $(TOOLBOXLIB)\
  $(EVENTLIB)m\
@@ -147,6 +150,7 @@ LIBSM = \
 
 LIBSD = \
  $(NBLIB)\
+ $(RMVersion) \
  $(WIMPLIB)\
  $(TOOLBOXLIB)\
  $(EVENTLIB)\
@@ -163,6 +167,7 @@ LIBSD = \
 
 LIBSHP = \
  $(NBLIB)\
+ $(RMVersion) \
  $(WIMPLIB)\
  $(TOOLBOXLIB)\
  $(EVENTLIB)\
@@ -179,6 +184,7 @@ LIBSHP = \
 
 LIBSMC = \
  $(NBLIB)MC\
+ $(RMVersion) \
  $(WIMPLIB)\
  $(TOOLBOXLIB)\
  $(EVENTLIB)\
