@@ -27,7 +27,7 @@
 #ifndef configure_multicaster_h_included
 #define configure_multicaster_h_included
 
-extern void configure_init(void);
+extern void configure_init(const char * /*configuration file*/);
 extern void configure_reread_configuration_file(void);
 extern void configure_create_permanent_file_cache(void);
 

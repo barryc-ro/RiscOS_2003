@@ -102,6 +102,6 @@ typedef unsigned long platform_time;
 typedef signed long platform_time_diff;
 
 /* Configuration filename */
-#define CONFIG_FILE "mvbd.conf"
+#define CONFIG_FILE "/etc/mvbd.conf"
 
 #endif

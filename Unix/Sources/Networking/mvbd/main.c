@@ -54,12 +54,18 @@
 
 const char *ident(void)
 {
-        static char ident[] = "$Id$ " Module_FullVersion;
+        static char ident[] = "$VersionNum: " Module_FullVersion " $";
         return ident;
 }
 
 static char id[] = "video_multiblaster[            ]";
 static int log_options = 0;
+
+enum command_line_options {
+        cli_EXIT = 1,
+        cli_VERBOSE = 2,
+        cli_DUMP_CONF = 4
+};
 
 static bmc_status main_run(void)
 {
@@ -86,14 +92,63 @@ static void sighup_handler(int sig)
 }
 #endif
 
+static void main_arg_syntax(void)
+{
+        platform_log(LOG_CRIT, "Missing argument to -f parameter\n");
+        exit(EXIT_FAILURE);
+}
+
+/* This function returns the name of the configuration file if it has been
+ * overridden on the command-line with a -f option, otherwise it returns
+ * NULL to indicate that the built-in default location should be used.
+ */
+static const char *main_parse_args(int argc, char **argv, int *options)
+{
+        const char *filename = NULL;
+        *options = 0;
+
+        while (argc-- > 1) {
+                const char *arg = *++argv;
+                if (*arg++ != '-') break;
+                while (*arg) {
+                        switch (*arg++) {
+                                case 'c':
+                                        *options |= cli_DUMP_CONF;
+                                        break;
+                                case 'v':
+                                        *options |= cli_VERBOSE;
+                                        break;
+                                case 'x':
+                                        *options |= cli_EXIT;
+                                        break;
+                                case 'f':
+                                        if (argc-- > 1) {
+                                                filename = *++argv;
+                                        }
+                                        else {
+                                                main_arg_syntax();
+                                        }
+                                        break;
+                                default:
+                                        break;
+                        }
+                }
+
+        }
+
+        return filename;
+}
+
 static bmc_status main_initialise(int argc, char **argv)
 {
         /* The order of these is important to ensure atexit fns are called in
          * the right order
          */
+        int options = 0;
+
         /* Start with the low-level stuff */
         platform_init();
-        configure_init();
+        configure_init(main_parse_args(argc, argv, &options));
         platform_init_post_config();
 
         /* Now the high-level abstract stuff */
@@ -104,25 +159,18 @@ static bmc_status main_initialise(int argc, char **argv)
 #ifdef SIGHUP
         signal(SIGHUP, sighup_handler);
 #endif
-        while (argc-- > 1) {
-                const char *arg = *++argv;
-                if (*arg++ != '-') break;
-                while (*arg) {
-                        switch (*arg++) {
-                                case 'c':
-                                        raise(SIGUSR1); /* dump config */
-                                        break;
-                                case 'v':
-                                        log_options = VERBOSE_LOG_OPTIONS;
-                                        platform_reopen_log();
-                                        break;
-                                case 'x':
-                                        exit(EXIT_SUCCESS);
-                                default:
-                                        break;
-                        }
-                }
 
+        if (options & cli_DUMP_CONF) {
+                raise(SIGUSR1);
+        }
+
+        if (options & cli_VERBOSE) {
+                log_options = VERBOSE_LOG_OPTIONS;
+                platform_reopen_log();
+        }
+
+        if (options & cli_EXIT) {
+                exit(EXIT_SUCCESS);
         }
 
         return main_run();

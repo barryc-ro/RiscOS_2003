@@ -62,12 +62,14 @@ typedef struct configuration {
 static configuration conf;
 static void config_dump(int);
 
+static char *configuration_file = NULL;
 static const char *default_root = "/";
 
-void configure_establish_defaults(void)
+void configure_establish_defaults(const char *conf_file)
 {
         struct in_addr default_ia;
 
+        configuration_file = conf_file;
         inet_aton("239.192.0.2", &default_ia);
         conf.default_address = cidr_alloc(default_ia, 32);
         inet_aton("0.0.0.0", &default_ia);
@@ -89,7 +91,7 @@ static void configure_parse(FILE *f)
 
 void configure_reread_configuration_file(void)
 {
-        FILE *f = platform_configuration_open(NULL);
+        FILE *f = platform_configuration_open(configuration_file);
 
         if (f != NULL) {
                 filelist_free(conf.files);
@@ -99,9 +101,9 @@ void configure_reread_configuration_file(void)
         }
 }
 
-void configure_init(void)
+void configure_init(const char *args)
 {
-        configure_establish_defaults();
+        configure_establish_defaults(args);
         signal(SIGUSR1, config_dump);
         configure_reread_configuration_file();
 }
