@@ -118,7 +118,6 @@ rom_link:
 
 
 # Dynamic dependencies:
-o.Calls: s.Calls
 o.Module:	c.Module
 o.Module:	C:h.kernel
 o.Module:	C:h.swis
@@ -131,3 +130,4 @@ o.AppFlash:	C:h.swis
 o.AppFlash:	h.module
 o.AppFlash:	h.appflash
 o.AppFlash:	h.error
+o.Calls: s.Calls
