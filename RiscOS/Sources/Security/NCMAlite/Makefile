@@ -64,6 +64,8 @@ INCLUDES= -IC:
 # use SILENT_HUP to ignore the line dropping out from under us, otherwise return to the 'Connect' screen
 # use VERIFY_URL to check the home URL before sending it to the browser and generating an error if it seems bogus
 # use SC_SWAPPING if you want to enable the smartcard swapping extensions used in th Funai 2 project.
+# use TWIN_SMARTCARD_DEMO to build the variant needed for the Funai 3 twin smartcard demo, with the URL being read off the second card.
+# use DUAL_SMARTCARDS if you want to use the second smartcard stack from serial 2 instead of the stack normallu used from Serial 1. This should never be defined at the same time as TWIN_SMARTCARD_DEMO
 
 # Override any options by setting the OPTS in the Build options
 
@@ -94,8 +96,8 @@ NODB  =         -UREMOTE_DEBUG -UENABLE_DEBUGGING -DCHIMPANZEE_INTERFACE \
 		-UETHERNET -DSEND_SERIALID_LENGTH \
 		-DENABLE_HTTP_PROXY -DENABLE_HTTPS_PROXY \
 		-DISP_CAPTURE -UTRAP_PPP_TIMEOUTS -UUSE_NETINIT \
-		-DSILENT_HUP -UVERIFY_URL ${TYPE}
-
+		-DSILENT_HUP -UVERIFY_URL ${TYPE} -DTWIN_SMARTCARD_DEMO
+		
 #
 # select one of these
 #
