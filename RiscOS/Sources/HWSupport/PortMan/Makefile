@@ -159,6 +159,10 @@ ${EXP_C_H}.${COMPONENT}:	h.${COMPONENT}
 ${EXP_HDR}.${COMPONENT}:	hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
+BBETYPE = local
+bbe-local: bbe-generic
+  BBE_Export_Dir Resources.<Machine>
+
 # Extra dependencies:
 o.module: h.header
 sao.module: h.saheader
