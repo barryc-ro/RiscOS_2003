@@ -4,6 +4,7 @@
 /**/
 
 #include <stddef.h>
+#include <stdio.h>
 #include "kernel.h"
 #include "swis.h"
 
@@ -16,6 +17,7 @@
 
 
 static int CurrentX = 0, CurrentY = 0, LastReset, State;
+static int vclock, divider;
 
 static dirmapping Directions[5] = {
 	{ "up",		0,	1 },
@@ -25,6 +27,7 @@ static dirmapping Directions[5] = {
 	{ NULL,		0,	0 }
 };
 
+static char print_buffer[128];
 
 /* Modify IOLINES register. */
 /**/
@@ -65,7 +68,6 @@ static void
 MoveOne( int directions )
 {
 	int irqs_on = !_kernel_irqs_disabled();
-	int vclock = ReadVClock();
 
 	TRACE( "move" _ "Moving, directions = 0x%02X\n" _ directions );
 
@@ -203,17 +205,15 @@ Lower( char c )
 /* Perform case insensitive string comparison - returns true if the same */
 /**/
 static int
-StrNoCaseCmp( char *str1, char *str2 )
+StrNNoCaseCmp( char *str1, char *str2, int len )
 {
-	/* Only need to check for one string terminator as the second condition	*/
-	/* catches the other string terminating when the first does not.	*/
-	while ( (*str1 != '\0') && (Lower(*str1) == Lower(*str2)) )
+	while ( len && (Lower(*str1) == Lower(*str2)) )
 	{
-		str1++; str2++;
+		str1++; str2++; len--;
 	}
 
 	/* Return true if the strings are the same. */
-	return (*str1 == '\0') && (*str2 == '\0');
+	return len==0;
 }
 
 
@@ -221,12 +221,12 @@ StrNoCaseCmp( char *str1, char *str2 )
 /* and non-zero if a match is found otherwise return 0.			*/
 /**/
 static int
-FindDeltas( char *direction, int *dx, int *dy )
+FindDeltas( char *direction, int length, int *dx, int *dy )
 {
 	int i;
 
 	for ( i = 0; Directions[i].name != NULL; i++ )
-		if ( StrNoCaseCmp(Directions[i].name, direction) )
+		if ( StrNNoCaseCmp(Directions[i].name, direction, length) && Directions[i].name[length]==0 )
 		{
 			*dx = Directions[i].dx;
 			*dy = Directions[i].dy;
@@ -241,19 +241,58 @@ FindDeltas( char *direction, int *dx, int *dy )
 /* These are case insensitive.							*/
 /**/
 void
-chrontel_move( char *direction )
+chrontel_move( char *direction, int length )
 {
-	if ( StrNoCaseCmp(direction, "reset") )
+	if ( length==5 && StrNNoCaseCmp("reset", direction, length) )
 		SetDisplay( 0, 0 );
 	else
 	{
 		/* Get movement deltas. */
 		int dx, dy;
 
-		if ( FindDeltas(direction, &dx, &dy) )
+		if ( FindDeltas(direction, length, &dx, &dy) )
 			/* Add the deltas from the table to the current position to set the new position. */
 			SetDisplay( CurrentX + dx, CurrentY + dy );
 	}
+}
+
+
+/* Write out a string. */
+_kernel_oserror *
+os_write0(const char *str)
+{
+	_kernel_swi_regs r;
+	r.r[0]=(int)str;
+	return _kernel_swi(OS_Write0, &r, &r);
+}
+
+
+/* Report on the status of the Chrontel device and FSynth. */
+_kernel_oserror *
+chrontel_status( void )
+{
+	sprintf(print_buffer, "Current offsets: X=%+d Y=%+d\r\n"
+	       "Mode clock: %6d  Clock%2d=%6d      Divider=%2d          Current=%6d\r\n",
+	       CurrentX, CurrentY, get_modeclock(), vclock, clock_rate[vclock], divider,
+	       divider==0?0:clock_rate[vclock]/divider);
+	return os_write0(print_buffer);
+}
+
+
+/* List the available clocks. */
+_kernel_oserror *
+chrontel_clocks( void )
+{
+	int i;
+	_kernel_oserror *err;
+
+	for(i=0; i<16; i+=4) {
+		sprintf(print_buffer, "%6d    %6d    %6d    %6d\r\n", clock_rate[i],
+		        clock_rate[i+1], clock_rate[i+2], clock_rate[i+3]);
+		err=os_write0(print_buffer);
+		if(err) return err;
+	};
+	return 0;
 }
 
 
@@ -291,6 +330,23 @@ chrontel_setup( void )
 
 }
 
+void
+chrontel_newmode( void )
+{
+	_kernel_swi_regs r;
+	int clk_div=get_vclock_div(); /* Get the clock index and divider. */
+
+	if(clk_div==0) clk_div=ReadVClock(); /* Just in case it failed */
+	
+	vclock = clk_div & 0xf;
+	divider = clk_div >> 4;
+	r.r[0]=divider-1;
+	if(divider && _kernel_swi(OS_VIDCDivider, &r, &r))
+		return;
+
+	/* Do a dummy move to set all position controls and video clock to defaults. */
+	MoveOne( 0 );
+}
 
 _kernel_oserror *
 chrontel_initialise( void )
@@ -303,8 +359,7 @@ chrontel_initialise( void )
 
 	TRACE( "init" _ "chrontel_initialise: LastReset = %d\n" _ LastReset );
 
-	/* Do a dummy move to set all position controls and video clock to defaults. */
-	MoveOne( 0 );
+	chrontel_newmode();
 
 	/* Power up Chrontel device. */
 	chrontel_power( CHRONTEL_POWERUP );
