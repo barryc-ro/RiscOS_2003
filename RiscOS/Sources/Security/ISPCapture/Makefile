@@ -105,6 +105,8 @@ ROMOBJS = oz.resources ${BASEOBJS}
 NOTROMOBJS = o.resources ${DBUGLIB} ${BASEOBJS}
 
 RESDIR = <resource$dir>.Resources.${COMPONENT}
+HTMLDIR = <resource$dir>.!Boot.HTML
+LDIR = Resources.${LOCALE}.${SYSTEM}
 
 NOTROMRESDEP = html.ISPC1 html.ISPC2 html.ISPC3 html.ISPC4
 
@@ -146,8 +148,11 @@ clean:
 resources:
 #        ${MKDIR} <resource$dir>.Resources
 #        ${MKDIR} <resource$dir>.Resources.ISPCapture
-        
-#        @echo ${COMPONENT}: resource files copied
+        ${MKDIR} ${HTMLDIR}.ISPCapture
+        ${CP} ${LDIR}.HTML.connect ${HTMLDIR}.MA.connect ${CPFLAGS}
+        ${CP} ${LDIR}.HTML.ISPC1 ${HTMLDIR}.ISPCapture.ISPC1 ${CPFLAGS}
+        ${CP} ${LDIR}.HTML.ISPC2 ${HTMLDIR}.ISPCapture.ISPC2 ${CPFLAGS}
+        @echo ${COMPONENT}: resource files copied
 
 #
 # Executable target (static link)
