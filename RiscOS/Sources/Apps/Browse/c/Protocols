@@ -82,7 +82,7 @@
 
 /* Local definitions */
 
-#define RTB_Size 16 /* RAM transfer buffer size, in bytes */
+#define RTB_Size 4096 /* RAM transfer buffer size, in bytes */
 
 /* Local variables */
 
@@ -149,13 +149,19 @@ static int            save_sprite_transmitted            = 0;
 static browser_data * save_sprite_browser                = NULL;
 static HStream      * save_sprite_token                  = NULL;
 
-/* Loading files */
+/* Loading data. For RAM transfer, buffers must be */
+/* visible to all functions so they can be freed   */
+/* in the event of a transfer failure.             */
 
 static WimpMessage  * pending_data_save_ack              = NULL;
 static char         * data_save_suggested_leafname       = NULL;
-static int            ram_fetch_reference                = 0;
 
 static void         * rtb                                = NULL;
+static int            ram_fetch_reference                = 0;
+
+static char         * ram_load_uri_buffer                = NULL;
+static int            ram_load_buffer_size               = 0;
+static int            ram_load_started                   = 0;
 
 /* Printing */
 
@@ -817,7 +823,8 @@ static _kernel_oserror * protocols_atats_got_data_save_ack(WimpMessage * m)
 
         if (!url) url = " ";
 
-        return save_save_uri(path, url, 0);
+        e = save_save_uri(path, url, 0);
+        if (!e) ok = 1;
       }
     }
   }
@@ -1773,6 +1780,10 @@ _kernel_oserror * protocols_atatl_got_data_save(WimpMessage * m)
       /* Remember my_ref in case it bounces */
 
       ram_fetch_reference = raf->hdr.my_ref;
+
+      /* Flag that we've not started transfer of actual data yet */
+
+      ram_load_started = 0;
     }
     else ram = 0; /* So that the Message_DataSaveAck goes out instead */
   }
@@ -1804,6 +1815,16 @@ _kernel_oserror * protocols_atatl_got_data_save(WimpMessage * m)
 /* 'pending' block by the same function that     */
 /* sends the Message_RAMFetch.                   */
 /*                                               */
+/* Alternatively, a Message_RAMFetch being sent  */
+/* in reply to a Message_RAMTransmit *during*    */
+/* RAM transfer could bounce, and this function  */
+/* would be called. In that case, we should      */
+/* abort data transfer. The other end is meant   */
+/* to raise an error (which is odd, since it     */
+/* seems likely that it will have died - since   */
+/* it's sending, the changes of running out of   */
+/* memory at that end are slim).                 */
+/*                                               */
 /* See PRM 3-255.                                */
 /*                                               */
 /* Parameters: Pointer to the WimpMessage struct */
@@ -1813,36 +1834,83 @@ _kernel_oserror * protocols_atatl_got_data_save(WimpMessage * m)
 _kernel_oserror * protocols_atatl_ram_fetch_bounced(WimpMessage * m)
 {
   #ifdef TRACE
-    if (tl & (1u<<28)) Printf("protocols_atat_ram_fetch_bounced: Called\n");
+    if (tl & (1u<<28)) Printf("protocols_atatl_ram_fetch_bounced: Called\n");
   #endif
 
-  if (m->hdr.my_ref == ram_fetch_reference && pending_data_save_ack)
+  if (m->hdr.my_ref == ram_fetch_reference)
   {
-    _kernel_oserror * e;
+    if (!ram_load_started && pending_data_save_ack)
+    {
+      /* The bounce is from the first Message_RAMFetch, so try using */
+      /* scrap file transfer instead.                                */
 
-    #ifdef TRACE
-      if (tl & (1u<<28)) Printf("protocols_atatl_ram_fetch_bounced: This is a recognised message bounce\n");
-    #endif
+      _kernel_oserror * e;
 
-    /* Before doing this, make sure Scrap is present - the call */
-    /* will raise an error if not, before returning here        */
+      #ifdef TRACE
+        if (tl & (1u<<28)) Printf("protocols_atatl_ram_fetch_bounced: Recognised bounce for a new transfer - using Scrap instead\n");
+      #endif
 
-    if (utils_check_scrap()) return NULL;
+      /* Before doing this, make sure Scrap is present - the call */
+      /* will raise an error if not, before returning here        */
 
-    /* Send the pending message */
+      if (utils_check_scrap()) return NULL;
 
-    e = wimp_send_message(Wimp_EUserMessage,
-                          pending_data_save_ack,
-                          pending_data_save_ack->hdr.sender,
-                          0,
-                          NULL);
+      /* Send the pending message */
 
-    /* Free the block and return any error that may have been generated */
+      e = wimp_send_message(Wimp_EUserMessage,
+                            pending_data_save_ack,
+                            pending_data_save_ack->hdr.sender,
+                            0,
+                            NULL);
 
-    free(pending_data_save_ack);
-    pending_data_save_ack = 0;
+      /* Free the block and return any error that may have been generated */
 
-    return e;
+      free(pending_data_save_ack);
+      pending_data_save_ack = NULL;
+
+      return e;
+    }
+    else
+    {
+      #ifdef TRACE
+        if (tl & (1u<<28)) Printf("protocols_atatl_ram_fetch_bounced: Recognised bounce for an ongoing transfer - aborting\n");
+      #endif
+
+      /* The bounce is from an ongoing RAM transfer, so abort that */
+      /* transfer - free any in-use buffers.                       */
+
+      if (ram_load_uri_buffer)
+      {
+        free(ram_load_uri_buffer);
+        ram_load_uri_buffer = NULL;
+
+        #ifdef TRACE
+          malloccount -= ram_load_buffer_size;
+          if (tl & (1u<<13)) Printf("** malloccount (protocols_atatl_ram_fetch_bounced): \0212%d\0217\n",malloccount);
+        #endif
+      }
+
+      ram_load_buffer_size = 0;
+
+      if (rtb)
+      {
+        free(rtb);
+        rtb = NULL;
+
+        #ifdef TRACE
+          malloccount -= RTB_Size;
+          if (tl & (1u<<13)) Printf("** malloccount (protocols_atatl_ram_fetch_bounced): \0212%d\0217\n",malloccount);
+        #endif
+      }
+
+      /* Free the pending Message_DataSaveAck block, if present */
+
+      if (pending_data_save_ack)
+      {
+        free(pending_data_save_ack);
+        pending_data_save_ack = 0;
+      }
+    }
   }
 
   return NULL;
@@ -1872,7 +1940,11 @@ _kernel_oserror * protocols_atatl_got_ram_transmit(WimpMessage * m)
     if (tl & (1u<<28)) Printf("protocols_atatl_got_ram_transmit: Called with %d bytes to receive\n", m->data.ram_transmit.nbytes);
   #endif
 
-  /* Flag if we've finished */
+  /* Flag that transfer is in progress */
+
+  ram_load_started = 1;
+
+  /* Flag if we've finished, too */
 
   if (m->data.ram_transmit.nbytes < RTB_Size) finished = 1;
   else if (m->data.ram_transmit.nbytes > RTB_Size) m->data.ram_transmit.nbytes = RTB_Size; /* You *never* know...! */
@@ -1886,7 +1958,7 @@ _kernel_oserror * protocols_atatl_got_ram_transmit(WimpMessage * m)
       erb.errnum = Utils_Error_Custom_Normal;
 
       sprintf(erb.errmess,
-              "Expected to get buffer %p but got %p instead, in protocols_atat_got_ram_transmit",
+              "Expected to get buffer %p but got %p instead, in protocols_atatl_got_ram_transmit",
               rtb,
               m->data.ram_transmit.buffer);
 
@@ -1917,17 +1989,19 @@ _kernel_oserror * protocols_atatl_got_ram_transmit(WimpMessage * m)
       case FileType_URL: /* Same as for URI files, so no 'break' */
       case FileType_URI:
       {
-        static char * uri_buffer  = NULL;
-        static int    buffer_size = 0;
-        int           first       = 0;
+        int first = 0;
 
-        /* Only proceed if any bytes were transferred */
+        /* Only proceed with transfer if there are some bytes to get  */
+        /* (otherwise, this was the last message with the final chunk */
+        /* of data having exactly filled the buffer last time - so    */
+        /* act upon the buffer contents now, without trying to        */
+        /* transfer zero bytes first).                                */
 
         if (m->data.ram_transmit.nbytes)
         {
           /* Allocate or extend the local buffer to take in the URI file */
 
-          if (!uri_buffer)
+          if (!ram_load_uri_buffer)
           {
             /* Note we allocate 1 byte more than needed to allow a terminator to */
             /* be inserted after the URL string when the transfer has ended;     */
@@ -1936,12 +2010,12 @@ _kernel_oserror * protocols_atatl_got_ram_transmit(WimpMessage * m)
             /* control char such as ASCII 10 or 13, which C would not treat as a */
             /* string terminator).                                               */
 
-            uri_buffer = malloc(m->data.ram_transmit.nbytes + 1);
-            first      = 1;
+            ram_load_uri_buffer = malloc(m->data.ram_transmit.nbytes + 1);
+            first               = 1;
 
             /* Complain if the allocation fails */
 
-            if (!uri_buffer)
+            if (!ram_load_uri_buffer)
             {
               e = make_no_memory_error(7);
 
@@ -1953,7 +2027,7 @@ _kernel_oserror * protocols_atatl_got_ram_transmit(WimpMessage * m)
               else
               {
                 malloccount += m->data.ram_transmit.nbytes + 1;
-                if (tl & (1u<<13)) Printf("** malloccount (protocols_atat_got_ram_transmit): \0211%d\0217\n",malloccount);
+                if (tl & (1u<<13)) Printf("** malloccount (protocols_atatl_got_ram_transmit): \0211%d\0217\n",malloccount);
               }
 
             #endif
@@ -1964,21 +2038,21 @@ _kernel_oserror * protocols_atatl_got_ram_transmit(WimpMessage * m)
 
             /* realloc to a new size */
 
-            local = realloc(uri_buffer, buffer_size + m->data.ram_transmit.nbytes);
+            local = realloc(ram_load_uri_buffer, ram_load_buffer_size + m->data.ram_transmit.nbytes);
 
             if (!local)
             {
               /* If the allocation fails, free the whole thing */
 
-              free(uri_buffer);
-              uri_buffer  = NULL;
+              free(ram_load_uri_buffer);
+              ram_load_uri_buffer = NULL;
 
               #ifdef TRACE
-                malloccount -= buffer_size;
-                if (tl & (1u<<13)) Printf("** malloccount (protocols_atat_got_ram_transmit): \0212%d\0217\n",malloccount);
+                malloccount -= ram_load_buffer_size;
+                if (tl & (1u<<13)) Printf("** malloccount (protocols_atatl_got_ram_transmit): \0212%d\0217\n",malloccount);
               #endif
 
-              buffer_size = 0;
+              ram_load_buffer_size = 0;
 
               e = make_no_memory_error(7);
 
@@ -1989,11 +2063,11 @@ _kernel_oserror * protocols_atatl_got_ram_transmit(WimpMessage * m)
 
             else
             {
-              uri_buffer = local;
+              ram_load_uri_buffer = local;
 
               #ifdef TRACE
                 malloccount += m->data.ram_transmit.nbytes;
-                if (tl & (1u<<13)) Printf("** malloccount (protocols_atat_got_ram_transmit): \0211%d\0217\n",malloccount);
+                if (tl & (1u<<13)) Printf("** malloccount (protocols_atatl_got_ram_transmit): \0211%d\0217\n",malloccount);
               #endif
             }
           }
@@ -2003,7 +2077,7 @@ _kernel_oserror * protocols_atatl_got_ram_transmit(WimpMessage * m)
             /* Copy the data from the file transfer buffer into */
             /* the cumulative URI file buffer                   */
 
-            memcpy(uri_buffer + buffer_size - !first,
+            memcpy(ram_load_uri_buffer + ram_load_buffer_size - !first,
                    rtb,
                    m->data.ram_transmit.nbytes);
 
@@ -2011,99 +2085,102 @@ _kernel_oserror * protocols_atatl_got_ram_transmit(WimpMessage * m)
             /* is the first time we've allocated data, to allow room for a     */
             /* string terminator when the transfer finishes.                   */
 
-            buffer_size += m->data.ram_transmit.nbytes + !!first;
+            ram_load_buffer_size += m->data.ram_transmit.nbytes + !!first;
 
             /* If tracing the process of the transfer, show the buffer contents */
             /* (but don't bother showing the uninitialised last byte).          */
 
             #ifdef TRACE
-              if (tl & (1u<<28)) trace_dump_buffer(uri_buffer,
-                                                   buffer_size - 1,
+              if (tl & (1u<<28)) trace_dump_buffer(ram_load_uri_buffer,
+                                                   ram_load_buffer_size - 1,
                                                    2);
             #endif
+          }
+        }
 
-            /* If the transfer has finished, fetch the URL */
+        /* If the transfer has finished, fetch the URL */
 
-            if (finished)
+        if (finished)
+        {
+          /* Remember we allocated 1 byte more than needed at the start, */
+          /* so that this terminator could be inserted. This is required */
+          /* for URL files, and won't hurt for URI files.                */
+
+          ram_load_uri_buffer[ram_load_buffer_size - 1] = 0;
+
+          /* For URI files, parse the contents - this call leaves the */
+          /* URI the file contained at the head of the buffer.        */
+
+          if (pending_data_save_ack->data.data_save_ack.file_type == FileType_URI)
+          {
+            urlutils_extract_uri(ram_load_uri_buffer, ram_load_buffer_size);
+          }
+
+          if (pending_data_save_ack->data.data_save_ack.destination_window <= 0)
+          {
+            /* The original Message_DataSave was for no specific window */
+
+            e = windows_create_browser(ram_load_uri_buffer, NULL, NULL, NULL, 0);
+          }
+
+          #ifndef REMOTE_HOTLIST
+
+            else
             {
-              /* Remember we allocated 1 byte more than needed at the start, */
-              /* so that this terminator could be inserted. This is required */
-              /* for URL files, and won't hurt for URI files.                */
+              /* As with DataLoad, this can go to a Hotlist window or a browser; */
+              /* the hotlist is the simpler case, check that first.              */
 
-              uri_buffer[buffer_size - 1] = 0;
+              ObjectId this;
+              int      handled = 0;
 
-              /* For URI files, parse the contents - this call leaves the */
-              /* URI the file contained at the head of the buffer.        */
+              /* If we can get the window object ID... */
 
-              if (pending_data_save_ack->data.data_save_ack.file_type == FileType_URI) urlutils_extract_uri(uri_buffer, buffer_size);
-
-              if (pending_data_save_ack->data.data_save_ack.destination_window <= 0)
+              if (
+                   !window_wimp_to_toolbox(0,
+                                           pending_data_save_ack->data.data_save_ack.destination_window,
+                                           -1,
+                                           &this,
+                                           NULL)
+                 )
               {
-                /* The original Message_DataSave was for no specific window */
+                /* ...and it matches that of the hotlist, add the item. */
 
-                e = windows_create_browser(uri_buffer, NULL, NULL, NULL, 0);
+                if (this == hotlist_return_window_id())
+                {
+                  ChkError(hotlist_add_position(pending_data_save_ack->data.data_save_ack.destination_x,
+                                                pending_data_save_ack->data.data_save_ack.destination_y,
+                                                ram_load_uri_buffer,
+                                                ram_load_uri_buffer));
+
+                  handled = 1;
+                }
               }
 
-              #ifndef REMOTE_HOTLIST
+              if (!handled)
+              {
+                browser_data * b;
 
-                else
-                {
-                  /* As with DataLoad, this can go to a Hotlist window or a browser; */
-                  /* the hotlist is the simpler case, check that first.              */
+                /* The message was for a specific window, so find out which one */
 
-                  ObjectId this;
-                  int      handled = 0;
+                utils_browser_from_window(pending_data_save_ack->data.data_save_ack.destination_window, &b);
 
-                  /* If we can get the window object ID... */
-
-                  if (
-                       !window_wimp_to_toolbox(0,
-                                               pending_data_save_ack->data.data_save_ack.destination_window,
-                                               -1,
-                                               &this,
-                                               NULL)
-                     )
-                  {
-                    /* ...and it matches that of the hotlist, add the item. */
-
-                    if (this == hotlist_return_window_id())
-                    {
-                      ChkError(hotlist_add_position(pending_data_save_ack->data.data_save_ack.destination_x,
-                                                    pending_data_save_ack->data.data_save_ack.destination_y,
-                                                    uri_buffer,
-                                                    uri_buffer));
-
-                      handled = 1;
-                    }
-                  }
-
-                  if (!handled)
-                  {
-                    browser_data * b;
-
-                    /* The message was for a specific window, so find out which one */
-
-                    utils_browser_from_window(pending_data_save_ack->data.data_save_ack.destination_window, &b);
-
-                    if (b && !b->small_fetch) e = fetchpage_new(b, uri_buffer, 1, 0);
-                  }
-                }
-
-              #endif
-
-              free (uri_buffer);
-              uri_buffer = NULL;
-
-              #ifdef TRACE
-                malloccount -= buffer_size;
-                if (tl & (1u<<13)) Printf("** malloccount (protocols_atat_got_ram_transmit): \0212%d\0217\n",malloccount);
-              #endif
-
-              buffer_size = 0;
-
-              if (!e) ok = 0;
+                if (b && !b->small_fetch) e = fetchpage_new(b, ram_load_uri_buffer, 1, 0);
+              }
             }
-          }
+
+          #endif
+
+          free (ram_load_uri_buffer);
+          ram_load_uri_buffer = NULL;
+
+          #ifdef TRACE
+            malloccount -= ram_load_buffer_size;
+            if (tl & (1u<<13)) Printf("** malloccount (protocols_atatl_got_ram_transmit): \0212%d\0217\n",malloccount);
+          #endif
+
+          ram_load_buffer_size = 0;
+
+          if (!e) ok = 0;
         }
       }
       break;
@@ -2116,7 +2193,7 @@ _kernel_oserror * protocols_atatl_got_ram_transmit(WimpMessage * m)
 
           erb.errnum = Utils_Error_Custom_Normal;
           sprintf(erb.errmess,
-                  "Unrecognised filetype 0x%03x (%x) in protocols_atat_got_ram_transmit",
+                  "Unrecognised filetype 0x%03x (%x) in protocols_atatl_got_ram_transmit",
                   pending_data_save_ack->data.data_save_ack.file_type,
                   pending_data_save_ack->data.data_save_ack.file_type);
 
@@ -2151,32 +2228,40 @@ _kernel_oserror * protocols_atatl_got_ram_transmit(WimpMessage * m)
       if (tl & (1u<<28)) Printf("protocols_atatl_got_ram_transmit: Sending RAMFetch in reply\n");
     #endif
 
-    e = wimp_send_message(Wimp_EUserMessage,
+    e = wimp_send_message(Wimp_EUserMessageRecorded,
                           raf,
                           m->hdr.sender,
                           0,
                           NULL);
+
+    ram_fetch_reference = m->hdr.my_ref;
   }
 
-  /* Free the RAM transfer buffer, if required; we no  */
-  /* longer have a pending Message_DataSaveAck either, */
-  /* so can free that too.                             */
+  /* Either we've finished or there was an error higher up */
 
   if (finished || !ok)
   {
+    /* Free the RAM transfer buffer, if required. */
+
     if (rtb) free(rtb);
     rtb = NULL;
 
-    if (pending_data_save_ack)
-    {
-      free(pending_data_save_ack);
-      pending_data_save_ack = 0;
-    }
-
     #ifdef TRACE
       malloccount -= RTB_Size;
-      if (tl & (1u<<13)) Printf("** malloccount (protocols_atat_got_ram_transmit): \0212%d\0217\n",malloccount);
+      if (tl & (1u<<13)) Printf("** malloccount (protocols_atatl_got_ram_transmit): \0212%d\0217\n",malloccount);
     #endif
+
+    /* Free any pending Message_DataSaveAck */
+
+    if (pending_data_save_ack)
+    {
+      #ifdef TRACE
+        if (tl & (1u<<28)) Printf("protocols_atatl_got_ram_transmit: Freeing old pending Acknowledge block\n");
+      #endif
+
+      free(pending_data_save_ack);
+      pending_data_save_ack = NULL;
+    }
   }
 
   return e;
@@ -2652,9 +2737,9 @@ int protocols_ih_send_help_request(int eventcode, WimpPollBlock * block, IdBlock
   static int last_window = 0;
   static int last_icon   = 0;
 
-  /* Only proceed if the fixed choices say to do so */
+  /* Only proceed if the Controls say to do so */
 
-  if (fixed.claimhelp)
+  if (controls.claim_help)
   {
     /* Don't sent out requests too often */
 
@@ -2730,7 +2815,7 @@ int protocols_ih_send_help_request(int eventcode, WimpPollBlock * block, IdBlock
 
 _kernel_oserror * protocols_ih_help_request_bounced(WimpMessage * m)
 {
-  if (fixed.claimhelp)
+  if (controls.claim_help)
   {
     _kernel_oserror         * e;
     ObjectId                  o, a = -1;
@@ -2785,7 +2870,7 @@ _kernel_oserror * protocols_ih_got_help_reply(WimpMessage * m)
 
   /* Don't do anything if the Controls say not to. */
 
-  if (fixed.claimhelp)
+  if (controls.claim_help)
   {
     _kernel_oserror         * e;
     ObjectId                  o, a = 0;

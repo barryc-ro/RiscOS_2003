@@ -217,6 +217,7 @@ OBJS = \
  o.Tables		\
  o.TokenUtils		\
  o.Toolbars		\
+ o.Unifont		\
  o.URLstat		\
  o.URLutils		\
  o.URLveneer		\
@@ -229,6 +230,7 @@ OBJSZ = \
  oz.Browser		\
  oz.Cookies		\
  oz.DragBox		\
+ oz.Encoding		\
  oz.Fetch		\
  oz.FetchHTML		\
  oz.FetchPage		\
@@ -261,6 +263,7 @@ OBJSZ = \
  oz.Tables		\
  oz.TokenUtils		\
  oz.Toolbars		\
+ oz.Unifont		\
  oz.URLstat		\
  oz.URLutils		\
  oz.URLveneer		\
@@ -308,10 +311,10 @@ OBJSD = \
  od.TokenUtils		\
  od.Toolbars		\
  od.Trace		\
+ od.Unifont		\
  od.URLstat		\
  od.URLutils		\
  od.URLveneer		\
- od.Unifont             \
  od.Utils		\
  od.Windows		\
  o.ROSLib
@@ -321,6 +324,7 @@ OBJSDZ = \
  odz.Browser		\
  odz.Cookies		\
  odz.DragBox		\
+ odz.Encoding		\
  odz.Fetch		\
  odz.FetchHTML		\
  odz.FetchPage		\
@@ -355,6 +359,7 @@ OBJSDZ = \
  odz.TokenUtils		\
  odz.Toolbars		\
  odz.Trace		\
+ odz.Unifont		\
  odz.URLstat		\
  odz.URLutils		\
  odz.URLveneer		\
@@ -367,6 +372,7 @@ OBJS_SURF = \
  o_surf.Browser		\
  o_surf.Cookies		\
  o_surf.DragBox		\
+ o_surf.Encoding	\
  o_surf.Fetch		\
  o_surf.FetchHTML	\
  o_surf.FetchPage	\
@@ -398,6 +404,7 @@ OBJS_SURF = \
  o_surf.Tables		\
  o_surf.TokenUtils	\
  o_surf.Toolbars	\
+ o_surf.Unifont		\
  o_surf.URLstat		\
  o_surf.URLutils	\
  o_surf.URLveneer	\
@@ -410,6 +417,7 @@ OBJSD_SURF = \
  od_surf.Browser	\
  od_surf.Cookies	\
  od_surf.DragBox	\
+ od_surf.Encoding	\
  od_surf.Fetch		\
  od_surf.FetchHTML	\
  od_surf.FetchPage	\
@@ -443,6 +451,7 @@ OBJSD_SURF = \
  od_surf.TokenUtils	\
  od_surf.Toolbars	\
  od_surf.Trace		\
+ od_surf.Unifont	\
  od_surf.URLstat	\
  od_surf.URLutils	\
  od_surf.URLveneer	\
@@ -455,6 +464,7 @@ OBJS_ITALK = \
  o_italk.Browser	\
  o_italk.Cookies	\
  o_italk.DragBox	\
+ o_italk.Encoding	\
  o_italk.Fetch		\
  o_italk.FetchHTML	\
  o_italk.FetchPage	\
@@ -487,6 +497,7 @@ OBJS_ITALK = \
  o_italk.Tables		\
  o_italk.TokenUtils	\
  o_italk.Toolbars	\
+ o_italk.Unifont	\
  o_italk.URLstat	\
  o_italk.URLutils	\
  o_italk.URLveneer	\
@@ -499,6 +510,7 @@ OBJSD_ITALK = \
  od_italk.Browser	\
  od_italk.Cookies	\
  od_italk.DragBox	\
+ od_italk.Encoding	\
  od_italk.Fetch		\
  od_italk.FetchHTML	\
  od_italk.FetchPage	\
@@ -533,6 +545,7 @@ OBJSD_ITALK = \
  od_italk.TokenUtils	\
  od_italk.Toolbars	\
  od_italk.Trace		\
+ od_italk.Unifont	\
  od_italk.URLstat	\
  od_italk.URLutils	\
  od_italk.URLveneer	\
@@ -606,18 +619,18 @@ rom: ${ROM_MODULE}
 
 install_common: ${FILES}
 	@echo
-	${CP} ${LDIR}.!Boot		  ${INSTDIR}.!Boot	  ${CPFLAGS}n
-	${CP} ${TARGET}			  ${INSTDIR}.!RunImage	  ${CPFLAGS}~n
-	${CP} ${LDIR}.!Sprites		  ${INSTDIR}.!Sprites	  ${CPFLAGS}n
-	${CP} ${LDIR}.!Sprites22	  ${INSTDIR}.!Sprites22	  ${CPFLAGS}n
-	${CP} ${LDIR}.Choices		  ${INSTDIR}.Choices	  ${CPFLAGS}n
-	${CP} ${LDIR}.Controls		  ${INSTDIR}.Controls	  ${CPFLAGS}n
-	${CP} ${LDIR}.Messages		  ${INSTDIR}.Messages	  ${CPFLAGS}n
-	${CP} ${LDIR}.Res		  ${INSTDIR}.Res	  ${CPFLAGS}n
-	${CP} ${LDIR}.Sprites		  ${INSTDIR}.Sprites	  ${CPFLAGS}n
-	${CP} HTMLLib:Resources.Encodings ${INSTDIR}.Encodings    ${CPFLAGS}n
+	${CP} ${LDIR}.!Boot			${INSTDIR}.!Boot		${CPFLAGS}n
+	${CP} ${TARGET}				${INSTDIR}.!RunImage		${CPFLAGS}~n
+	${CP} ${LDIR}.!Sprites			${INSTDIR}.!Sprites		${CPFLAGS}n
+	${CP} ${LDIR}.!Sprites22		${INSTDIR}.!Sprites22		${CPFLAGS}n
+	${CP} ${LDIR}.Choices			${INSTDIR}.Choices		${CPFLAGS}n
+	${CP} ${LDIR}.Controls			${INSTDIR}.Controls		${CPFLAGS}n
+	${CP} ${LDIR}.Messages			${INSTDIR}.Messages		${CPFLAGS}n
+	${CP} ${LDIR}.Res			${INSTDIR}.Res			${CPFLAGS}n
+	${CP} ${LDIR}.Sprites			${INSTDIR}.Sprites		${CPFLAGS}n
+	${CP} HTMLLib:Resources.Encodings	${INSTDIR}.Encodings		${CPFLAGS}n
 	${MKDIR} ${INSTDIR}.User
-	-${CP} ${LDIR}.User.Hotlist	  ${INSTDIR}.User.Hotlist ${CPFLAGS}n
+	-${CP} ${LDIR}.User.Hotlist		${INSTDIR}.User.Hotlist		${CPFLAGS}n
 
 install: install_common
 	${CP} ${LDIR}.!Run		${INSTDIR}.!Run		${CPFLAGS}~n

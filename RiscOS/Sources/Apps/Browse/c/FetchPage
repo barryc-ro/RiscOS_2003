@@ -73,6 +73,7 @@ int fetchpage_fetch(int eventcode, WimpPollBlock * b, IdBlock * idb, browser_dat
 {
   _kernel_oserror * e;
   int               tf_start, tf_now, priority;
+  int               fetching, formatting;
 
   #ifdef TRACE
     {
@@ -92,40 +93,64 @@ int fetchpage_fetch(int eventcode, WimpPollBlock * b, IdBlock * idb, browser_dat
 
     if (e)
     {
-      handle->savelink = 0;
+      handle->save_link = 0;
       show_error_cont(e);
     }
   }
 
   /* Call the fetcher / reformatter, allowing a certain */
-  /* amount of time inside each only. Whilst still      */
-  /* fetching data, relax the timing as there's no      */
-  /* point hanging here waiting for stuff; otherwise,   */
-  /* be somewhat more aggressive as the reformat can    */
-  /* progress a lot faster.                             */
+  /* amount of time inside each only.                   */
 
   _swix(OS_ReadMonotonicTime, _OUT(0), &tf_start);
   tf_now = tf_start;
 
-  /* Some fairly crude load balancing */
+  /* Some fairly crude load balancing. If the fetcher is idle, */
+  /* but this function is being called, chances are we're      */
+  /* formatting. Otherwise, we may be processing tokens - so   */
+  /* the actual fetch is complete but the fetcher is still     */
+  /* working on the data from HTMLLib. Otherwise, it may be    */
+  /* that the main fetch is active; or we could be spooling    */
+  /* data to a file.                                           */
 
-  if (!fetch_fetching(handle)) priority = 20;
-  else if (handle->fetch_status != BS_PROCESS) priority = 4;
-  else priority = 10;
+  if      (handle->fetch_status == BS_IDLE)                           priority = 15; /* Not fetching, may be solid formatting    */
+  else if (handle->fetch_status == BS_PROCESS)                        priority = 8;  /* Processing tokens, but fetch is complete */
+  else if (handle->fetch_status == BS_FETCHING)                       priority = 3;  /* Fetching tokens (so fetch is incomplete) */
+  else if (handle->fetch_status == BS_DATAFETCH && handle->save_file) priority = 2;  /* Saving data to a file (fetch incomplete) */
+  else                                                                priority = 0;
 
-  while ((tf_now - tf_start < priority) && (fetch_fetching(handle) || reformat_formatting(handle)))
+  /* The main fetch/reformat loop */
+
+  fetching   = fetch_fetching(handle);
+  formatting = reformat_formatting(handle);
+
+  do
   {
+
     /* If fetching, call the reformatter. */
 
-    if (fetch_fetching(handle)) fetch_fetcher(handle);
+    if (fetching) fetch_fetcher(handle);
 
     /* If reformatting, call the reformatter. */
 
-    if (reformat_formatting(handle)) reformat_reformatter(handle);
-    ChkError(windows_check_tools(handle, NULL));
+    if (formatting)
+    {
+      reformat_reformatter(handle);
+      ChkError(windows_check_tools(handle, NULL));
+    }
+
+    fetching   = fetch_fetching(handle);
+    formatting = reformat_formatting(handle);
+
+    /* Re-read the time, and keep going whilst we're   */
+    /* inside the maximum time specified by 'priority' */
+    /* and fetching and/or formatting.                 */
 
     _swix(OS_ReadMonotonicTime, _OUT(0), &tf_now);
   }
+  while (
+          tf_now - tf_start < priority &&
+          (fetching || formatting)
+        );
 
   /* Process images on a lower priority */
 
@@ -191,11 +216,11 @@ int fetchpage_fetch(int eventcode, WimpPollBlock * b, IdBlock * idb, browser_dat
         /* There are no pending images, so we seem to have finished - */
         /* but is there a reformat pending?                           */
 
-        if (handle->refotime)
+        if (handle->refo_time)
         {
           /* Yes, so flush the queue */
 
-          reformat_format_from(handle, handle->refoline, 1, -1);
+          reformat_format_from(handle, handle->refo_line, 1, -1);
         }
         else
         {
@@ -227,8 +252,9 @@ int fetchpage_fetch(int eventcode, WimpPollBlock * b, IdBlock * idb, browser_dat
 
             ChkError(reformat_check_extent(handle));
 
-            /* Ensure the status bar is up to date */
+            /* Update the status bar */
 
+            toolbars_cancel_all(handle);
             toolbars_update_status(handle, Toolbars_Status_Viewing);
           }
 
@@ -369,31 +395,36 @@ static _kernel_oserror * fetchpage_preprocessed(browser_data * b, int record, in
   _kernel_oserror * e;
 
   if (
-       !b->savelink &&
+       !b->save_link &&
        browser_display_local_reference(b,
                                        url_buffer,
                                        browser_current_url(b))
      )
   {
-    if (choices.keyboardctl) browser_move_selection(b, akbd_RightK);
+    if (choices.keyboard_ctrl) browser_move_selection(b, akbd_RightK);
 
     return NULL;
   }
 
   /* Only cancel stuff if we're allowed to */
 
-  if (b->allow_cancel && !b->savelink)
+  if (b->allow_cancel)
   {
     e = fetch_cancel(b);
     if (e) return e;
 
     /* If required, stop all fetching in all frames, else leave */
-    /* images but stop everything else.                         */
+    /* images but stop everything else. Note that we don't      */
+    /* touch file fetching - clicking on links will allow those */
+    /* to continue, so several frames in a frameset could fetch */
+    /* to a file simultaneously (the progress display in the    */
+    /* status bar is aware of this, and will alter its display  */
+    /* appropriately).                                          */
 
     if (stop)
     {
-      if (choices.brickwall) frames_abort_fetching(utils_ancestor(b), 1);
-      else                   frames_abort_fetching(utils_ancestor(b), 0);
+      if (controls.brick_wall) frames_abort_fetching(utils_ancestor(b), 1, 0);
+      else                     frames_abort_fetching(utils_ancestor(b), 0, 0);
     }
   }
 
@@ -404,7 +435,7 @@ static _kernel_oserror * fetchpage_preprocessed(browser_data * b, int record, in
   /* Set the displayed type for internal / normal URLs, and */
   /* carry out any required special actions for the former. */
 
-  if (!b->savelink)
+  if (!b->save_link)
   {
     /* Before we reset the display type, check if we're displaying */
     /* a temporary file. If so, force the 'record' flag off, as    */
@@ -901,7 +932,7 @@ void fetchpage_release_nulls(browser_data * b)
     /* the animation finishes on the first frame, and that handler is */
     /* not already installed, install it.                             */
 
-    if (choices.anim_drift && !b->anim_drift)
+    if (controls.anim_drift && !b->anim_drift)
     {
       register_null_claimant(Wimp_ENull,(WimpEventHandler *) toolbars_animation_drift,b);
       b->anim_drift = 1;

@@ -61,6 +61,7 @@ static void              image_remove_all_data        (browser_data * b, int ima
 static void              image_delay                  (browser_data * b, int image);
 static void              image_abandon                (browser_data * b, int image);
 static void              image_delete_image_entry     (int image);
+static void              image_refetch                (browser_data * b, int image, int priority);
 
 static _kernel_oserror * image_update_area            (browser_data * b, int x, int y, BBox * ubox, int image, int redraw);
 static _kernel_oserror * image_update_image           (browser_data * b, int image, BBox * box);
@@ -193,7 +194,7 @@ static browser_data * browser_redrawing = NULL;
 //   token=si[1];
 //   ip=NULL;
 //   if(token>0) ip=image_get_token_image_xref(b,token);
-//   else if(b->backimage>0) ip=image_info_addr(b,b->backimage);
+//   else if(b->background_image>0) ip=image_info_addr(b,b->background_image);
 //   if(ip && ip->istore && ip->istore->width>0)
 //   {
 //     int  len;
@@ -233,9 +234,9 @@ static browser_data * browser_redrawing = NULL;
 //
 //   ip=NULL;
 //   if(token && fetch_token_address(b,token)->style&IMG) ip=image_get_token_image_xref(b,token);
-//   if(!ip && b->backimage>0)
+//   if(!ip && b->background_image>0)
 //   {
-//     ip=image_info_addr(b,b->backimage);
+//     ip=image_info_addr(b,b->background_image);
 //     token=0;
 //   }
 //   if(ip && ip->istore && ip->istore->width>0) ip->istore->StartExport(ip->istore,&size);
@@ -262,7 +263,7 @@ static browser_data * browser_redrawing = NULL;
 // {
 //   image_info * ip;
 //
-//   ip=image_info_addr(b,b->backimage);
+//   ip=image_info_addr(b,b->background_image);
 //   return(image_savesprite_start_save1(ip,isize));
 // }
 //
@@ -271,7 +272,7 @@ static browser_data * browser_redrawing = NULL;
 // {
 //   image_info    * ip;
 //
-//   ip=image_info_addr(b,b->backimage);
+//   ip=image_info_addr(b,b->background_image);
 //   return(image_savesprite_save_image1(ip));
 // }
 //
@@ -280,7 +281,7 @@ static browser_data * browser_redrawing = NULL;
 // {
 //   image_info * ip;
 //
-//   ip=image_info_addr(b,b->backimage);
+//   ip=image_info_addr(b,b->background_image);
 //   if(ip && idata[i].istore && idata[i].istore->width>0) idata[i].istore->EndExport(idata[i].istore);
 // }
 
@@ -522,6 +523,13 @@ static void image_remove_all_data(browser_data * b, int image)
 /* hasn't all been fetched, but allow the fetch  */
 /* to continue later on.                         */
 /*                                               */
+/* Call with care. Keeping part of an image is   */
+/* dangerous - ImageLib may object. Normally,    */
+/* this should only be called for images which   */
+/* have not started to fetch. Stopping an image  */
+/* mid-fetch is more safely done through         */
+/* image_abandon.                                */
+/*                                               */
 /* Parameters: Pointer to a browser_data struct  */
 /*             relevant to the image;            */
 /*                                               */
@@ -544,7 +552,7 @@ static void image_delay(browser_data * b, int image)
 
   /* If this is a background, go back to the plain background */
 
-  if (image == b->backimage) b->aacol = redraw_backcol(b);
+  if (image == b->background_image) b->antialias_colour = redraw_backcol(b);
 
   if (idata[image].istore) image_update_image(b, image, NULL);
 
@@ -556,6 +564,38 @@ static void image_delay(browser_data * b, int image)
   #ifdef TRACE
     if (tl & (1u<<15)) Printf("image_delay: Successful\n");
   #endif
+}
+
+/*************************************************/
+/* image_delay_fetches()                         */
+/*                                               */
+/* Stops any images which have not started to    */
+/* fetch for a given browser from fetching at    */
+/* all, by setting the image's 'delayed' flag.   */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the images.           */
+/*************************************************/
+
+void image_delay_fetches(browser_data * b)
+{
+  if (nimages)
+  {
+    int image;
+
+    for (image = 0; image < nimages; image++)
+    {
+      /* Only interested in non-cross referencing images */
+      /* owned by this browser which are not fetching.   */
+
+      if (
+           idata[image].owner == b &&
+           idata[image].xref < 0   &&
+           !idata[image].handle
+         )
+         image_delay(b, image);
+    }
+  }
 }
 
 /*************************************************/
@@ -588,7 +628,7 @@ static void image_abandon(browser_data * b, int image)
 
   /* If this is a background, go back to the plain background */
 
-  if (image == b->backimage) b->aacol = redraw_backcol(b);
+  if (image == b->background_image) b->antialias_colour = redraw_backcol(b);
 
   if (idata[image].istore)
   {
@@ -650,7 +690,7 @@ void image_abort_fetches(browser_data * b)
 
         /* If this is a background, go back to the plain background */
 
-        if (i == b->backimage) b->aacol = redraw_backcol(b);
+        if (i == b->background_image) b->antialias_colour = redraw_backcol(b);
 
         if (idata[i].istore)
         {
@@ -718,12 +758,13 @@ void image_abort_fetches(browser_data * b)
 /*             1 if the image is for the         */
 /*             background (it will be turned     */
 /*             into a sprite for fast plotting), */
-/*             else 0. If 2, then the backimage  */
-/*             field of the browser_data         */
-/*             structure is filled in with the   */
-/*             relevant image number and the     */
-/*             image will again be turned into a */
-/*             sprite for fast plotting.         */
+/*             else 0. If 2, then the            */
+/*             background_image field of the     */
+/*             browser_data structure is filled  */
+/*             in with the relevant image number */
+/*             and the image will again be       */
+/*             turned into a sprite for fast     */
+/*             plotting.                         */
 /*************************************************/
 
 _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * token, int background)
@@ -860,14 +901,17 @@ _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * 
 
   if (background)
   {
-    idata[nimages].delayed   = b->plainback;
+    idata[nimages].delayed   = !b->show_background;
     idata[nimages].canredraw = 1;
 
     /* Set the background image number */
 
-    if (background == 2) b->backimage = nimages;
+    if (background == 2) b->background_image = nimages;
   }
-  else idata[nimages].delayed = !b->displayimages && b->displayed != Display_External_Image;
+  else
+  {
+    idata[nimages].delayed = (!b->show_foreground && b->displayed != Display_External_Image);
+  }
 
   // This works, but you've then got to alter the dataoffset fields
   // of higher images whenever you remove any data from one lower in
@@ -889,7 +933,7 @@ _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * 
     if (tp->cols > 0 && tp->rows > 0) idata[nimages].fixedsize = 1, idata[nimages].canredraw = 1;
   }
 
-  if (!choices.refowait) idata[nimages].canredraw = 1; /* If not waiting, reformats are immediate so canredraw is always true */
+  if (!choices.refo_wait) idata[nimages].canredraw = 1; /* If not waiting, reformats are immediate so canredraw is always true */
 
   nimages++;
 
@@ -1109,7 +1153,7 @@ _kernel_oserror * image_process_null(browser_data * b)
           /* called, the sprite will plot slowly resulting in       */
           /* (typically) painfully slow redraws.                    */
 
-          if (image == idata[image].owner->backimage)
+          if (image == idata[image].owner->background_image)
           {
             if (idata[image].istore->width > 0)
             {
@@ -1118,7 +1162,7 @@ _kernel_oserror * image_process_null(browser_data * b)
                 /* Report any errors as Continue-only in strict parser mode */
 
                 e = idata[image].istore -> BGCol(idata[image].istore,
-                                                 &b->aacol);
+                                                 &b->antialias_colour);
 
                 if (e)
                 {
@@ -1131,11 +1175,11 @@ _kernel_oserror * image_process_null(browser_data * b)
                 /* If not in Strict mode, ignore any errors */
 
                 idata[image].istore -> BGCol(idata[image].istore,
-                                             &b->aacol);
+                                             &b->antialias_colour);
 
               #endif
             }
-            else b->aacol = redraw_backcol(b);
+            else b->antialias_colour = redraw_backcol(b);
           }
 
           image_update_image(b, image, &end);
@@ -1516,7 +1560,7 @@ static void image_delete_image_entry(int image)
 
   while (b)
   {
-    if (b->backimage > image) b->backimage--;
+    if (b->background_image > image) b->background_image--;
 
     b = b->previous;
   }
@@ -1597,9 +1641,9 @@ _kernel_oserror * image_discard(browser_data * b)
       idata[xref].priority   = idata[i].priority;
 
       /* If this is a background image for the cross referencer, */
-      /* must update the browser_data 'backimage' field.         */
+      /* must update the browser_data 'background_image' field.  */
 
-      if (i == idata[i].owner->backimage) idata[i].owner->backimage = xref;
+      if (i == idata[i].owner->background_image) idata[i].owner->background_image = xref;
 
       /* If the cross referencee was being fetched, may need to */
       /* claim fetch nulls in the cross referencer to finish    */
@@ -1749,6 +1793,96 @@ _kernel_oserror * image_discard(browser_data * b)
 }
 
 /*************************************************/
+/* image_refetch()                               */
+/*                                               */
+/* Reloads an image, redrawing as required and   */
+/* setting the priority flag as asked.           */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the images;           */
+/*                                               */
+/*             The image number;                 */
+/*                                               */
+/*             Value to set Priority flag to (so */
+/*             that if 'show foreground images'  */
+/*             is turned off, the image will     */
+/*             override it).                     */
+/*************************************************/
+
+static void image_refetch(browser_data * b, int image, int priority)
+{
+  int i;
+
+  /* Sanity check */
+
+  if (image < 0 || image >= nimages || !b) return;
+
+  /* Use the cross referenced base image if necessary */
+
+  if (idata[image].xref >= 0) image = idata[image].xref;
+
+  if (
+       (
+         !idata[image].fetched &&  /* If the image isn't fetched...  */
+         idata[image].delayed      /* ...and was flagged as delayed, */
+       )
+       ||
+       (
+         idata[image].fetched  &&  /* or has fetched but...       */
+         !idata[image].success &&  /* ...not successfully, and... */
+         !idata[image].istore      /* ...it has no ImageLib entry */
+       )
+     )
+  {
+    /* If the image says it isn't fetched, reset its 'bytesgot' counter */
+
+    if (!idata[image].fetched) idata[image].bytesgot = 0;
+
+    /* Set up the flags */
+
+    idata[image].success  = 0;
+    idata[image].delayed  = 0;
+    idata[image].fetched  = 0;
+    idata[image].priority = priority;
+
+    /* If we deleted the ImageLib entry, need to recreate it */
+
+    if (!idata[image].istore && idata[image].xref == -1)
+    {
+      idata[image].istore = NewImage(NULL, image == b->background_image ? IMAGE_FAST : 0);
+    }
+
+    /* Now handle the fetching */
+
+    if (!b->fetch_handler)
+    {
+      fetchpage_claim_nulls(b);
+      toolbars_update_status(b, Toolbars_Status_GetPics);
+    }
+  }
+  else
+  {
+    /* If the image is already loaded, just redraw it */
+
+    idata[image].priority = priority;
+    idata[image].hadfirst = 0;
+    image_update_image(b, image, NULL);
+  }
+
+  /* Deal with all cross referencers of the base image */
+
+  for (i = 0; i < nimages; i++)
+  {
+    if (idata[i].xref == image)
+    {
+      idata[i].priority = priority;
+      idata[i].hadfirst = 0;
+      image_update_image(b, i, NULL);
+    }
+  }
+}
+
+/*************************************************/
 /* image_reload()                                */
 /*                                               */
 /* Reloads an image, redrawing as required and   */
@@ -1766,94 +1900,11 @@ _kernel_oserror * image_discard(browser_data * b)
 
 void image_reload(browser_data * b, HStream * token)
 {
-  if (nimages)
-  {
-    int i, image;
+  int image = image_get_token_image_xref(b, token);
 
-    /* First, start a fetch on the base image if necessary, */
-    /* otherwise just set the priority flag and redraw it.  */
+  if (image < 0) return;
 
-    image = image_get_token_image_xref(b, token);
-
-    if (image < 0) return;
-
-    if (
-         (
-           !idata[image].fetched &&
-           idata[image].delayed
-         )
-         ||
-         (
-           idata[image].fetched  &&
-           !idata[image].success &&
-           !idata[image].istore
-         )
-       )
-    {
-      if (!idata[image].fetched) idata[image].bytesgot = 0;
-
-      idata[image].success  = 0;
-      idata[image].delayed  = 0;
-      idata[image].fetched  = 0;
-      idata[image].priority = 1;
-
-      /* If we deleted the ImageLib entry, need to recreate it */
-
-      if (!idata[image].istore && idata[image].xref == -1)
-      {
-        idata[image].istore = NewImage(NULL, image == b->backimage ? IMAGE_FAST : 0);
-      }
-
-      /* Now handle the fetching */
-
-      if (!b->fetch_handler)
-      {
-        fetchpage_claim_nulls(b);
-        toolbars_update_status(b, Toolbars_Status_GetPics);
-      }
-    }
-    else
-    {
-      idata[image].priority = 1;
-      idata[image].hadfirst = 0;
-      image_update_image(b, image, NULL);
-    }
-
-    /* Now set the priority flag on all images that cross */
-    /* reference the base image.                          */
-
-    for (i = 0; i < nimages; i++)
-    {
-      if (idata[i].xref == image)
-      {
-        idata[i].priority = 1;
-        idata[i].hadfirst = 0;
-        image_update_image(b, i, NULL);
-      }
-    }
-  }
-}
-
-/*************************************************/
-/* image_delay_fetches()                         */
-/*                                               */
-/* Suspends image loading temporarily.           */
-/*                                               */
-/* Parameters: Pointer to a browser_data struct  */
-/*             relevant to the images.           */
-/*************************************************/
-
-void image_delay_fetches(browser_data * b)
-{
-  if (nimages)
-  {
-    int image;
-
-    for (image = 0; image < nimages; image++)
-    {
-      if (!idata[image].handle) image_delay(b, image);
-    }
-  }
+  image_refetch(b, image, 1);
 }
 
 /*************************************************/
@@ -1877,9 +1928,7 @@ void image_restart_fetches(browser_data * b, int foreground, int background)
 {
   if (nimages)
   {
-    int            image;
-//    int            xref;
-//    browser_data * xref_b;
+    int image;
 
     /* Loop round all the images */
 
@@ -1892,21 +1941,7 @@ void image_restart_fetches(browser_data * b, int foreground, int background)
       /* then clear all the fetch flags for the image so that it  */
       /* will later be fetched.                                   */
 
-      if (
-           idata[image].owner == b &&
-           (
-             (
-               !idata[image].fetched &&
-               idata[image].delayed
-             )
-             ||
-             (
-               idata[image].fetched  &&
-               !idata[image].success &&
-               !idata[image].istore
-             )
-           )
-         )
+      if (idata[image].owner == b)
       {
         /* Only fetch foreground or background images if asked to */
 
@@ -1914,64 +1949,9 @@ void image_restart_fetches(browser_data * b, int foreground, int background)
              (idata[image].background  && background) ||
              (!idata[image].background && foreground)
            )
-        {
-          image_reload(idata[image].owner, idata[image].token);
-
-//          idata[image].success = 0;
-//          idata[image].delayed = 0;
-//          idata[image].fetched = 0;
-//
-//          /* If we deleted the ImageLib entry, need to recreate it and */
-//          /* restart fetching                                          */
-//
-//          if (!idata[image].istore && idata[image].xref == -1) idata[image].istore = NewImage(NULL, image == b->backimage ? IMAGE_FAST : 0);
-//
-//          /* Start the fetch */
-//
-//          if (!b->fetch_handler)
-//          {
-//            fetchpage_claim_nulls(b);
-//            toolbars_update_status(b, Toolbars_Status_GetPics);
-//          }
-//
-//          /* Deal with cross referenced images. If this browser cross */
-//          /* references another image, and that image isn't owned by  */
-//          /* this browser, then clear its fetching flags also and     */
-//          /* make sure that this other browser will fetch the data.   */
-//
-//          xref = idata[image].xref;
-//
-//          if (xref >= 0 && idata[xref].owner != b)
-//          {
-//            idata[xref].success = 0;
-//            idata[xref].delayed = 0;
-//            idata[xref].fetched = 0;
-//
-//            xref_b = idata[xref].owner;
-//
-//            /* If we deleted the ImageLib entry, need to recreate it and */
-//            /* restart fetching                                          */
-//
-//            if (!idata[xref].istore && idata[xref].xref == -1) idata[xref].istore = NewImage(NULL, image == xref_b->backimage ? IMAGE_FAST : 0);
-//
-//            /* Start the fetch */
-//
-//            if (!xref_b->fetch_handler)
-//            {
-//              fetchpage_claim_nulls(xref_b);
-//              toolbars_update_status(xref_b, Toolbars_Status_GetPics);
-//            }
-//          }
-
-        /* Closure of 'if' checking whether to restart fetches for */
-        /* foreground or background images                         */
-        }
+           image_refetch(idata[image].owner, image, 0);
       }
-
-    /* Closure of 'for' loop going through all of the images */
     }
-
-  /* Closure of 'if (nimages)' */
   }
 }
 
@@ -2065,7 +2045,7 @@ static _kernel_oserror * image_update_area(browser_data * b, int x, int y, BBox 
     while(more)
     {
       if (
-           b->displayimages                       ||
+           b->show_foreground                     ||
            b->displayed == Display_External_Image ||
            idata[xref].priority
          )
@@ -2262,12 +2242,12 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
     /* First check if the image is the background of this browser. If */
     /* not then check all browsers.                                   */
 
-    if (actual == b->backimage || image == b->backimage) isbackground = 1;
+    if (actual == b->background_image || image == b->background_image) isbackground = 1;
     else
     {
       while (check && !isbackground)
       {
-        if (actual == check->backimage || image == check->backimage) isbackground = 1;
+        if (actual == check->background_image || image == check->background_image) isbackground = 1;
 
         check = check->previous;
       }
@@ -2495,7 +2475,7 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
   //              /* to refresh the whole area below the line just altered. Else,   */
   //              /* just redraw the line.                                          */
   //
-  //              if (b->backimage != -1)
+  //              if (b->background_image != -1)
   //              {
   //                /* Redraw everything below the line */
   //
@@ -2756,9 +2736,9 @@ _kernel_oserror * image_fill_background(void * handle, int * i)
   /* Can't plot a background image if there's no such image or */
   /* it's not fully fetched.                                   */
 
-  if (b->backimage >= 0)
+  if (b->background_image >= 0)
   {
-    bimage = b->backimage;
+    bimage = b->background_image;
     if (idata[bimage].xref >= 0) bimage = idata[bimage].xref;
   }
   else bimage = -1, noplot = 1;
@@ -2805,7 +2785,7 @@ _kernel_oserror * image_fill_background(void * handle, int * i)
   if (
        noplot                            ||
        idata[bimage].istore->transparent ||
-       b->plainback                      ||
+       !b->show_background               ||
        (
          printing &&
          !printstyle_show_all()
@@ -2823,8 +2803,8 @@ _kernel_oserror * image_fill_background(void * handle, int * i)
   /* If there's no background image that can be plotted, exit here */
 
   if (
-       b->plainback ||
-       noplot       ||
+       !b->show_background ||
+       noplot              ||
        (
          printing &&
          !printstyle_show_all()
@@ -2875,8 +2855,8 @@ _kernel_oserror * image_fill_background(void * handle, int * i)
 
     tempx = - (float) (idata[image].x);
 
-    if (!fixed.swapbars) htop = toolbars_button_height(b) + toolbars_url_height(b);
-    else                 htop = toolbars_status_height(b);
+    if (!controls.swap_bars) htop = toolbars_button_height(b) + toolbars_url_height(b);
+    else                     htop = toolbars_status_height(b);
 
     if (htop) htop += wimpt_dy();
 
@@ -2923,8 +2903,8 @@ _kernel_oserror * image_fill_background(void * handle, int * i)
 
     xorigin = -idata[image].x;
 
-    if (!fixed.swapbars) htop = toolbars_button_height(b) + toolbars_url_height(b);
-    else                 htop = toolbars_status_height(b);
+    if (!controls.swap_bars) htop = toolbars_button_height(b) + toolbars_url_height(b);
+    else                     htop = toolbars_status_height(b);
 
     if (htop) htop += wimpt_dy();
 
@@ -3018,7 +2998,7 @@ _kernel_oserror * image_redraw(browser_data * b, WimpRedrawWindowBlock * r, HStr
        image  >= 0 &&
        actual >= 0 &&
        (
-         b->displayimages                       ||
+         b->show_foreground                     ||
          b->displayed == Display_External_Image ||
          idata[actual].priority
        )
@@ -3218,11 +3198,11 @@ _kernel_oserror * image_redraw(browser_data * b, WimpRedrawWindowBlock * r, HStr
                     vcent,
                     tp->text,
                     1,
-                    b->backimage >= 0 && !b->plainback);
+                    b->background_image >= 0 && b->show_background);
 
             /* Underline text if it's a link and the browser is set to underline links */
 
-            if (b->underlinelks && ISLINK(tp))
+            if (b->underline_links && ISLINK(tp))
             {
               redraw_set_colour(colour);
               bbc_move(xpos, vcent - 7);
@@ -3272,14 +3252,14 @@ int image_tile_window(browser_data * b, WimpRedrawWindowBlock * r, int xorigin, 
   int               image;
 
   #ifdef TRACE
-    if (tl & (1u<<15)) Printf("image_tile_window: Called, backimage = %d\n",b->backimage);
+    if (tl & (1u<<15)) Printf("image_tile_window: Called, background_image = %d\n",b->background_image);
   #endif
 
   /* Can only tile if there's a background image defined and fully fetched */
 
-  if (b->backimage < 0) return 0;
+  if (b->background_image < 0) return 0;
 
-  image = b->backimage;
+  image = b->background_image;
   if (idata[image].xref >= 0) image = idata[image].xref;
 
   if (!idata[image].fetched || !idata[image].istore) return 0;
@@ -4109,7 +4089,7 @@ static _kernel_oserror * image_get_image_size(browser_data * b, int image, BBox 
 
       box->ymax = fbox.ymax - fbox.ymin;
 
-      convert_to_os(choices.fontsize, &temp);
+      convert_to_os(choices.font_size, &temp);
 
       if (temp < 16) temp = 16;
 
@@ -4131,7 +4111,7 @@ static _kernel_oserror * image_get_image_size(browser_data * b, int image, BBox 
       {
         int remain;
 
-        convert_to_os(b->leftmargin + b->rightmargin, &remain);
+        convert_to_os(b->left_margin + b->right_margin, &remain);
 
         remain = b->display_width - remain;
         if (remain > 320) remain = 320;
@@ -4205,7 +4185,7 @@ _kernel_oserror * image_get_back_image_size(browser_data * b, BBox * box)
     if (tl & (1u<<15)) Printf("image_get_back_image_size: Called, exitting through image_get_image_size\n");
   #endif
 
-  return (image_get_image_size(b, b->backimage, box));
+  return (image_get_image_size(b, b->background_image, box));
 }
 
 /*************************************************/
@@ -4456,7 +4436,7 @@ int image_token_can_be_saved_as_sprite(browser_data * b, HStream * image)
 
   /* Find the image number */
 
-  if (!image) i = b->backimage;
+  if (!image) i = b->background_image;
   else        i = image_get_token_image_xref(b, image);
 
   /* Complain if we can't in TRACE builds */
@@ -4506,7 +4486,7 @@ _kernel_oserror * image_export_sprite(char * path, browser_data * b, HStream * i
 
   /* Find the image number */
 
-  if (!image) i = b->backimage;
+  if (!image) i = b->background_image;
   else        i = image_get_token_image_xref(b, image);
 
   /* Must have image data... */
