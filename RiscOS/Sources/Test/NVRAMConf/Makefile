@@ -102,6 +102,3 @@ ${DTARGET}: ${dOBJS}
 
 
 # Dynamic dependencies:
-
-o.main: c.main C:h.swis C:h.kernel C:h.kernel <Lib$Dir>.DebugLib.h.DebugLib
-od.main: c.main C:h.swis C:h.kernel C:h.kernel <Lib$Dir>.DebugLib.h.DebugLib C:debug.h.remote
