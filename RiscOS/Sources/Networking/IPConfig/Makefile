@@ -22,6 +22,7 @@ DBG_MODULE = rm.${COMPONENT}D
 # -DDNS_SUPPORT_NAME_TO_ADDRESS     - include the name->IP address code
 # -DINHIBIT_AUTO_START              - wait for a prod before doing anything
 # -DINHIBIT_CMOS_EDITOR             - stop editor running (for STB400)
+# -DUSENVRAM                        - use NVRAM module and not CMOS directly
 #
 # None of these are included by default.
 
@@ -77,7 +78,7 @@ SOCKLIB		= TCPIPLibs:o.socklibzm
 
 DEPEND		= -depend !Depend
 DBGFLAGS        = -DTRACE
-DEFINES         = -DUSECMOS -DCOMPAT_INET4
+DEFINES         = -DCOMPAT_INET4
 CENV		= ${DEPEND} ${THROWBACK} ${OPTIONS}
 
 ASFLAGS		= ${DEPEND} ${THROWBACK}
@@ -85,10 +86,13 @@ CFLAGS		= -c -ffah -zM -zps1 -Wp ${INCLUDES} ${DEFINES} ${CENV}
 CMHGFLAGS	= ${DEPEND} ${THROWBACK} -p
 
 ROM_OBJS	= o.iicpoke or.module or.ifrconfig or.editconfig or.utils\
+                  or.nvram or.nvram_cmos\
 		  or.lineedit or.Strncmp_ci o.atmconfig  o.dns o.ipconfhdr
 RAM_OBJS	= o.iicpoke o.module  o.ifrconfig  o.editconfig  o.utils \
+                  o.nvram o.nvram_cmos\
 		  o.lineedit  o.Strncmp_ci  o.atmconfig  o.dns o.ipconfhdr  ${RESF}
 DBG_OBJS	= o.iicpoke od.module od.ifrconfig od.editconfig od.utils\
+		  od.nvram od.nvram_cmos\
 		  od.lineedit od.Strncmp_ci od.atmconfig od.dns od.ipconfhdr ${DBGRESF}
 
 RESF		= o.msgs
