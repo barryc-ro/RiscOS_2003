@@ -108,10 +108,8 @@ static _kernel_oserror *static_RegisterMe (unsigned int flags, protocol_fns_t *m
 static _kernel_oserror *static_DeregisterMe (unsigned int flags, protocol_fns_t *me);
 static _kernel_oserror *static_HowMuchData (unsigned int flags, void *handle, unsigned int max, unsigned int *bytes);
 static _kernel_oserror *static_GiveMeData (unsigned int flags, void *handle);
-static _kernel_oserror *static_PTS (unsigned int flags, void *handle, clk PTS);
 static _kernel_oserror *static_Underrun (unsigned int flags, void *handle);
 static _kernel_oserror *static_StreamInfoChanging (unsigned int flags, void *handle);
-static _kernel_oserror *static_TickerV (void *handle);
 
 static unsigned int static_ReadBufferVariable (const char *name, unsigned int default_value);
 static _kernel_oserror *static_AudioStart (audio_structure_t *stream);
@@ -133,10 +131,8 @@ static unsigned int AC3_Decoders = 0;
 
 static const common_toplevel_fns_t TopLevel = { static_RegisterMe, static_DeregisterMe };
 static const buffer_fns_t Buffer = { static_HowMuchData, static_GiveMeData };
-static const scheduler_fns_t Scheduler = { static_PTS, static_Underrun };
+static const scheduler_fns_t Scheduler = { static_Underrun };
 static const presentation_fns_t Presentation = { static_StreamInfoChanging };
-
-static void (*TickerV_Veneer) (void);
 
 /*********************/
 /* Private constants */
@@ -173,61 +169,44 @@ Out:		Error pointer if something prevented us from detecting hardware
 _kernel_oserror *AudGeneric_Initialise (bool *use)
 {
   _kernel_oserror *e = NULL;
-  /* Create a TickerV veneer for our use */
-  TickerV_Veneer = MiscAsm_CreateSimpleVeneer (static_TickerV);
-  if (TickerV_Veneer == NULL)
+  e = RecogMPA_Init ();
+  if (!e)
   {
-    e = Mess_GenerateError ("NoMem", errno_NO_MEM, 0);
-  }
-  else
-  {
-    e = RecogMPA_Init ();
+    e = RecogAC3_Init ();
     if (e)
     {
-      MiscAsm_DestroySimpleVeneer (TickerV_Veneer);
+      RecogMPA_Final ();
     }
     else
     {
-      e = RecogAC3_Init ();
+      e = ZoranPara_Init (&TopLevel, &Buffer, &Scheduler, &Presentation);
       if (e)
       {
+        RecogAC3_Final ();
         RecogMPA_Final ();
-        MiscAsm_DestroySimpleVeneer (TickerV_Veneer);
       }
       else
       {
-        e = ZoranPara_Init (&TopLevel, &Buffer, &Scheduler, &Presentation);
+        /* Extend this as follows:
+        e = ZoranMMap_Init (&TopLevel, &Buffer, &Scheduler, &Presentation);
         if (e)
         {
+          ZoranPara_Final ();
           RecogAC3_Final ();
           RecogMPA_Final ();
-          MiscAsm_DestroySimpleVeneer (TickerV_Veneer);
         }
         else
         {
-          /* Extend this as follows:
-          e = ZoranMMap_Init (&TopLevel, &Buffer, &Scheduler, &Presentation);
+          e = AudL64105_Init (&TopLevel, &Buffer, &Scheduler, &Presentation);
           if (e)
           {
+            ZoranMMap_Final ();
             ZoranPara_Final ();
             RecogAC3_Final ();
             RecogMPA_Final ();
-            MiscAsm_DestroySimpleVeneer (TickerV_Veneer);
           }
-          else
-          {
-            e = AudL64105_Init (&TopLevel, &Buffer, &Scheduler, &Presentation);
-            if (e)
-            {
-              ZoranMMap_Final ();
-              ZoranPara_Final ();
-              RecogAC3_Final ();
-              RecogMPA_Final ();
-              MiscAsm_DestroySimpleVeneer (TickerV_Veneer);
-            }
-          }
-          */
         }
+        */
       }
     }
   }
@@ -283,10 +262,6 @@ _kernel_oserror *AudGeneric_Finalise (void)
         }
       }
     }
-  }
-  if (!e)
-  {
-    MiscAsm_DestroySimpleVeneer (TickerV_Veneer);
   }
   return e;
 }
@@ -502,22 +477,6 @@ static _kernel_oserror *static_GiveMeData (unsigned int flags, void *handle)
   return e;
 }
 
-/******	static_PTS() *******************************************************
-
-Purpose:	PTS being presented
-In:		flags:          reserved, mbz
-		handle:         audio stream handle
-Out:		Error pointer
-
-***************************************************************************/
-
-static _kernel_oserror *static_PTS (unsigned int flags, void *handle, clk PTS)
-{
-  _kernel_oserror *e = NULL;
-  audio_structure_t *stream = (audio_structure_t *) handle;
-  return e;
-}
-
 /******	static_Underrun() **************************************************
 
 Purpose:	Decoding has underrun
@@ -550,53 +509,6 @@ static _kernel_oserror *static_StreamInfoChanging (unsigned int flags, void *han
   audio_structure_t *stream = (audio_structure_t *) handle;
   return e;
 }
-
-
-static _kernel_oserror *static_TickerV (void *handle)
-{
-  _kernel_oserror *e = NULL;
-  audio_structure_t *stream = (audio_structure_t *) handle;
-  unsigned int total_audio_queueing = 0;
-
-//{
-//  char string [12];
-//  _swix (OS_Write0, _IN(0), "TickerV");
-//  _swix (OS_ConvertHex8, _INR(0,2), handle, string, 12);
-//  _swix (OS_Write0, _IN(0), string);
-//}
-  
-  /* Now test for the various audio buffer thresholds */
-  if (stream->decoder)
-  {
-    stream->decoder->readfullness (0, stream->decoder_session_id, &total_audio_queueing);
-  }
-#if 1
-  total_audio_queueing += stream->audio.since_reset.amount_received.lsw - stream->audio.since_reset.amount_sent.lsw;
-#else
-  {
-    bitstream_packet_t *packet = stream->audio.packet_list_head;
-    for (; packet != NULL; packet = packet->link)
-    {
-      total_audio_queueing += packet->length;
-    }
-  }
-#endif
-  
-  /* If we've reached prefill buffer-fullness, tell control unit so */
-  if (stream->audio.state == stream_prefilling && stream->audio.prefill_state == ps_initialising && total_audio_queueing > stream->audio_buffer_prefill)
-  {
-    /* Update state machine */
-    stream->audio.prefill_state = ps_waiting_for_play_command;
-//    dprintf (("AudGeneric", "Stuff: audio.prefill_state = waiting_for_play_command\n"));
-    /* Note, we may be re-entered via SWI MPEGAudio_Play at this point */
-    _swix (MPEGControl_Play, _INR(0,1), StreamFlags_AudioPresent, stream->csh);
-  }
-  
-  return e;
-}
-
-
-
 
 /******	AudGeneric_SWIOpenStream() *****************************************
 
@@ -792,7 +704,7 @@ _kernel_oserror *AudGeneric_SWIFullPackets (unsigned int type, unsigned int flag
         // Determination of the initial timestamp needs to be part of the stream characterisation process
         // This is going to take a while to implement, so just estimate high for the time being
         // BODGE ALERT!
-        _swix (MPEGControl_Play, _INR(0,1), StreamFlags_AudioPresent, stream->csh);
+//        _swix (MPEGControl_Play, _INR(0,1), StreamFlags_AudioPresent, stream->csh);
       }
       else
       {
@@ -873,7 +785,11 @@ _kernel_oserror *AudGeneric_SWICloseStream (unsigned int flags, mpeg_stream_hand
   if (!e)
   {
     /* Stop playing the old stream, only playing out the old data if we were playing at normal speed */
-    static_AudioStop (stream, false /*stream->rs_flags.video_present && Stream.video.speed_indicator == 1 && stream->audio.state == stream_open*/);
+#ifdef BODGEOVS
+    static_AudioStop (stream, false);
+#else
+    static_AudioStop (stream, stream->rs_flags.video_present && Stream.video.speed_indicator == 1 && stream->audio.state == stream_open);
+#endif
     
     if (stream->current_data_type != NULL_DATA_TYPE && stream->decoder)
     {
@@ -1312,7 +1228,8 @@ static _kernel_oserror *static_AudioStart (audio_structure_t *stream)
 //  IRQ_EnableCommonIRQs ();
 //  IRQ_EnableAudioPrefillIRQs ();
   
-  _swix (OS_Claim, _INR(0,2), TickerV, TickerV_Veneer, stream);
+  /* We don't use this as a machanism to time starts anymore, but don't delay anything that might be relying on us */
+  _swix (MPEGControl_Play, _INR(0,1), StreamFlags_AudioPresent, stream->csh);
   
   return e;
 }
@@ -1360,16 +1277,12 @@ static unsigned int static_AudioStop (audio_structure_t *stream, bool play_out)
     /* Release interrupts */
 //    IRQ_DisableCommonIRQs ();
 //    IRQ_DisableAudioIRQs ();
-    
-    _swix (OS_Release, _INR(0,2), TickerV, TickerV_Veneer, stream);
   }
   else
   {
     /* Release interrupts */
 //    IRQ_DisableCommonIRQs ();
 //    IRQ_DisableAudioIRQs ();
-    
-    _swix (OS_Release, _INR(0,2), TickerV, TickerV_Veneer, stream);
     
     /* Go directly to closed, do not pass GO, do not collect £200 */
     stream->audio.state = stream_closed;

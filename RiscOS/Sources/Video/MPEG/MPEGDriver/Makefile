@@ -35,7 +35,7 @@ WFLAGS  = ~c~v
 CFLAGS   = ${VARIANT} -depend !Depend ${THROWBACK} ${INCLUDES} -c -ffah -zM -zps1
 SFLAGS   = ${VARIANT} -depend !Depend ${THROWBACK} ${INCLUDES} -s -ffah -zM -zps1 -DDEBUGLIB
 PFLAGS   = ${VARIANT} -depend !Depend ${THROWBACK} ${INCLUDES} -c -E -C -DDEBUGLIB
-OFLAGS   = -depend !Depend ${THROWBACK}
+OFLAGS   = ${ASMVARIANT} -depend !Depend ${THROWBACK}
 INCLUDES = -IC:
 CMHGFLAGS= -p ${THROWBACK}
 
