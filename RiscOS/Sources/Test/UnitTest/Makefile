@@ -143,11 +143,13 @@ clean_all: clean
 	@echo ${COMPONENT}: cleaned all
 
 install: ${TARGET}
+	SetMacro LocalResMac$Path  Resources.${MACHINE}.<Locale>.,Resources.${MACHINE}.UK.
 	${MKDIR} ${APP}
 	${CP} ${TARGET} ${APP}.${TARGET} ${CPFLAGS}
-	${CP} Resources.${MACHINE}.${LOCALE}.* ${APP}.* ${CPFLAGS}
+	${CP} LocalResMac:* ${APP}.* ${CPFLAGS}
 	${CP} ${CRUNCHED}.TestCard ${APP}.TestCard ${CPFLAGS}
 	${CP} ${CRUNCHED}.Gen_lib ${APP}.Gen_lib ${CPFLAGS}
+	UnSet LocalResMac$Path
 	@echo ${COMPONENT}: installed
 
 dirs:
@@ -158,12 +160,14 @@ dirs:
 	
 resources: ${TARGET}
 	${MKDIR} ${APP}
+	SetMacro LocalResMac$Path  Resources.${MACHINE}.<Locale>.,Resources.${MACHINE}.UK.
 	${CP} ${TARGET} ${APP}.${TARGET} ${CPFLAGS}
-	${CP} Resources.${MACHINE}.${LOCALE}.* ${APP}.* ${CPFLAGS}
+	${CP} LocalResMac:* ${APP}.* ${CPFLAGS}
 	${CP} ${CRUNCHED}.TestCard ${APP}.TestCard ${CPFLAGS}
 	${CP} ${CRUNCHED}.Gen_lib ${APP}.Gen_lib ${CPFLAGS}
 	${MKDIR} ${RESDIR}
 	${CP} ${APP} ${RESDIR}.${APP} ${CPFLAGS}
+	UnSet LocalResMac$Path
 	@echo ${COMPONENT}: built & installed
 
 #
