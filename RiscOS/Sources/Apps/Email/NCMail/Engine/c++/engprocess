@@ -29,7 +29,6 @@
 #include "enguiapi.h"
 #include "engmanager.h"
 #include "enginit.h"
-/* #include "engdebug.h" */
 #include "engcbf.h"
 #include "engprocess.h"
 #include "engfile.h"
@@ -104,7 +103,6 @@ eng_rcode SMTPAccountDisconnect(void)
 void RemoveObj(MBoxOpCB **obj)
 {
 
-  dprintf(("Eng", "Removing object at 0x%x\n",*obj));
   if (*obj)
     delete *obj;
   *obj = 0;
@@ -113,33 +111,7 @@ void RemoveObj(MBoxOpCB **obj)
 
 /*
 ** StartProcess() initiates the processing of the mailbox via callback.
-**
-** The process is as follows (assuming no errors):
-**
-** (1) PROCESS state is activated. This causes the rest of the process
-**     to be executed in stages via null events.
-** (2) readyforsending:    Connect to the SMTP account.
-** (3a) connected:         on successful connection the SMTP mailbox
-**                         is processed - i.e. queued messages are sent.
-** (3b) connectfailure:    SMTP connection has failed.
-** (4a) smtpdone:          SMTP account has been processed.
-** (4b) processfailure:    SMTP processing failed.
-** (5a) smtpdisconnected:  SMTP account has been disconnected,
-                           now connect to POP.
-** (5b) disconnectfailure: SMTP disconnection failure.
-** (6a) connected:         on successful connection the POP mailbox
-**                         is processed.
-** (6b) connectfailure:    POP connection has failed.
-** (7a) popdone:           POP account has been processed,
-                           so get number of messages.
-** (7b) processfailure:    POP processing failed.
-** (8a) gotnumber:         Got number of messages, ready to
-                           reconcile mailbox.
-** (8b) getnumfailure:     Getting number of messages failed.
-**
-** Mailbox is now reconciled in ReconcileMailbox() described below.
-** Finally ProcessDone() finishes the process ready for
-** downloading headers.
+** The POP and SMTP mailboxes are processed in parallel.
 */
 
 void StartProcess(void)
@@ -524,7 +496,7 @@ void ReconcileMailbox(uint32 n)
   uint32 i;
   Message::Flags flags;
   Message *obj;
-  ELib_list msglist = inbox->GetMessages();
+  ELib_list& msglist = inbox->GetMessages();
 
   /* check through our list to see if any are missing
      from mailbox's list, and destroy them */
@@ -595,14 +567,16 @@ void ProcessDone(bool changed)
   state.state &= ~PROCESSPOP;
   if (changed)
   {
-    if (state.emailactive)
+    if (state.connected)
     {
+      /* go off and get headers for Inbox */
       state.download.msg = ourmboxin->list;
       state.download.substate = readytodownload;
       state.download.rc = ENG_COMPLETED;
       state.state |= DOWNLOADHDR;
     }
-    else
+
+    if (!state.emailactive)
     {
       if (newmail)
       {
@@ -613,11 +587,6 @@ void ProcessDone(bool changed)
       {
         /* tell browser there's no new mail */
       }
-
-      /*
-      ** Since email is not active,
-      ** should we disconnect from POP account now?
-      */
     }
   }
   else
@@ -684,37 +653,54 @@ void SortMailbox(void)
 void DoMark(void)
 {
 
+  ELib_rcode code;
+
   switch (state.mark.substate)
   {
     case readytomark :
 
       dprintf(("Eng", "Mark substate = readytomark\n"));
       state.mark.substate = idle;
-      if (state.mark.current == state.mark.total)
+      if (state.state & MARKDELETE)
       {
-        /* all messages marked for deletion */
-        dprintf(("Eng", "All messages marked\n"));
-        free(state.mark.list);
-        if (state.connected)
+        if (state.mark.current == state.mark.total)
         {
-          /* expunge mailbox now */
-          dprintf(("Eng", "About to expunge\n"));
-          state.popprocess.substate = readytoexpunge;
-          state.state |= PROCESSPOP;
+          /* all messages marked for deletion */
+          dprintf(("Eng", "All messages marked\n"));
+          free(state.mark.list);
+          if (state.connected)
+          {
+            /* expunge mailbox now */
+            dprintf(("Eng", "About to expunge\n"));
+            state.popprocess.substate = readytoexpunge;
+            state.state |= PROCESSPOP;
+          }
+          else
+            state.mark.substate = readytodisplay;
         }
-        else
-          state.mark.substate = readytodisplay;
-      }
 
+        else
+        {
+          MessageDescriptor *msg = FindDescriptor(state.mark.list[state.mark.current], ourmboxin);
+          state.mark.setobj = new MBoxOpCB_setflags((MBoxCBHandlerFn) eng_mbox_cbfunc, 0);
+
+          state.mark.msg = msg;
+          state.mark.substate = idle;
+          code = msg->mboxobj->SetFlags(state.mark.setobj, Message::Delete, Message::Set);
+          if (code < 0)
+          {
+            /* mailbox has signalled an error in marking */
+            dprintf(("Eng", "Error calling SetFlags, rc=%d\n",code));
+            state.mark.substate = markfailure;
+          }
+        }
+      }
+      
       else
       {
-        MessageDescriptor *msg = FindDescriptor(state.mark.list[state.mark.current], ourmboxin);
-        ELib_rcode code;
         state.mark.setobj = new MBoxOpCB_setflags((MBoxCBHandlerFn) eng_mbox_cbfunc, 0);
-
-        state.mark.msg = msg;
         state.mark.substate = idle;
-        code = msg->mboxobj->SetFlags(state.mark.setobj, Message::Delete, Message::Set);
+        code = state.mark.msg->mboxobj->SetFlags(state.mark.setobj, Message::Read, Message::Set);
         if (code < 0)
         {
           /* mailbox has signalled an error in marking */
@@ -722,24 +708,38 @@ void DoMark(void)
           state.mark.substate = markfailure;
         }
       }
+
       break;
 
     case markfailure :
 
       dprintf(("Eng", "Mark substate = markfailure\n"));
       RemoveObj((MBoxOpCB**) &state.mark.setobj);
-      state.mark.rc = ENG_DELETEFAILED;
-      ++state.mark.current;
-      state.mark.substate = readytomark;
+      state.mark.rc = ENG_MARKFAILED;
+      if (state.state & MARKDELETE)
+      {
+        ++state.mark.current;
+        state.mark.substate = readytomark;
+      }
+      else
+        state.mark.substate = readdone;
 
       break;
 
-    case markdone :
+    case readdone :
+
+      RemoveObj((MBoxOpCB**) &state.mark.setobj);
+      state.mark.msg->flags |= READ;
+      state.state &= ~MARKREAD;
+
+      break;
+
+    case deletedone :
     {
       MessageDescriptor *msg = state.mark.msg;
       char *file = SetFilename(msg->ID, false);
 
-      dprintf(("Eng", "Mark substate = markdone\n"));
+      dprintf(("Eng", "Mark substate = deletedone\n"));
       RemoveObj((MBoxOpCB**) &state.mark.setobj);
       msg->flags |= MARKED;
       DestroyDescriptor(msg, ourmboxin);
