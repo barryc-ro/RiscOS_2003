@@ -76,7 +76,7 @@ dirs:
         $(MKDIR) $(RESRES).NCFresco
         $(MKDIR) $(RESRES).NCFrescoA
         $(MKDIR) $(RESRES).ScrSaver
-        $(MKDIR) $(RESRES).WinFrameRO
+        $(MKDIR) $(RESRES).ICAClient
         IfThere Resources.$(USERIF).$(LOCALE).$(APP) Then \
           $(CP) Resources.$(USERIF).$(LOCALE).$(APP) $(RESAPP) T~V~CFQR
         $(CP) Resources.$(USERIF).UK.$(APP) $(RESAPP) T~V~CFQR
