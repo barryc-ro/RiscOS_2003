@@ -4,7 +4,7 @@
 CLXPATH=../../../../RiscOS/Sources/Lib/CLX/ccsolaris
 CLX=${CLXPATH}/clx.a
 
-CFLAGS=-c -O -I${CLXPATH}  -DNO_VERSION_STRINGS -DEXTENSION_SYSV $(CFL)
+CFLAGS=-c -O -I${CLXPATH}  -DNO_VERSION_STRINGS -DEXTENSION_SYSV -DHOST_WANTS_NO_BANNER=1 $(CFL)
 CC=gcc
 DERIVED=headers.c peeppat.c datenow.h errors.h
 

@@ -19,7 +19,12 @@
  * host-machine issue.
  */
 
-#define NON_RELEASE_VSN "5.08 (Acorn Computers Ltd)"
+#ifdef __acorn
+# include "VersionNum"
+# define NON_RELEASE_VSN Module_MajorVersion " (Acorn Computers Ltd) " Module_MinorVersion
+#else
+# define NON_RELEASE_VSN "5.08 (Acorn Computers Ltd)"
+#endif
 
 #define TARGET_ENDIANNESS_CONFIGURABLE 1
 #define TARGET_DEFAULT_BIGENDIAN 0       /* 1 => bigendian default */
@@ -66,10 +71,6 @@
 
 #ifndef RELEASE_VSN
 #  define ENABLE_ALL          1 /* -- to enable all debugging options */
-#endif
-
-#if 1
-#define HOST_WANTS_NO_BANNER 1
 #endif
 
 /* mac-specific options - find a better home for these sometime! */
