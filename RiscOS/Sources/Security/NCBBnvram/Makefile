@@ -57,6 +57,11 @@ RSTUBS     = RISCOSLIB:o.rstubs
 ROMSTUBS   = RISCOSLIB:o.romstubs
 ROMCSTUBS  = RISCOSLIB:o.romcstubs
 ABSSYM     = RISC_OSLib:o.AbsSym
+SOCKLIB    = TCPIPLibs:o.socklibzm
+INETLIB    = TCPIPLibs:o.inetlibzm
+UNIXLIB    = TCPIPLibs:o.unixlibzm
+LIBDIR     = <Lib$Dir>
+REMOTELIB  = ${LIBDIR}.debug.o.remotezm
 
 #
 # Rule patterns
@@ -113,16 +118,16 @@ ${EXP_C_H}.smcard:	h.smcard
 	${CP} h.smcard $@ ${CPFLAGS}
 
 
-${TARGETSA}: ${OBJS} ${CLIB} ${LIBS} ${LIBSD} ${DIRS}
+${TARGETSA}: ${OBJS} ${CLIB} ${LIBS} ${LIBSD} ${DIRS} ${SOCKLIB} ${INETLIB} 
 	${MKDIR} rm
-        ${LD} -o $@ -module ${OBJS} ${CLIB} ${LIBS} ${LIBSD}
+        ${LD} -o $@ -module ${OBJS} ${CLIB} ${LIBS} ${LIBSD} ${SOCKLIB} ${INETLIB}
 
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS} ${ROMCSTUBS} ${LIBS} ${LIBSD} ${DIRS}
+${TARGET}: ${OBJS} ${ROMCSTUBS} ${LIBS} ${LIBSD} ${DIRS} ${SOCKLIB} ${INETLIB}
 	${MKDIR} aof
-        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS} ${LIBS} ${LIBSD}
+        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS} ${LIBS} ${LIBSD} ${SOCKLIB} ${INETLIB}
 
 
 #
