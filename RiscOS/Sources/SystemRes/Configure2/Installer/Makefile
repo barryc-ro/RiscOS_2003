@@ -19,7 +19,6 @@ COMPONENT  = Installer
 RDIR       = Resources
 LDIR       = ${RDIR}.${LOCALE}
 RAM_MODULE = rm.${COMPONENT}
-INSTDIR    = ${INSTDIR}
 
 #
 # Generic options:
