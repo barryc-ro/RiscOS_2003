@@ -43,14 +43,18 @@
 
 06/04/98  SMC  2.06 Added support for IR on the parallel port.
 
-28/09/98  OL   2.08 Added a call the KeyWatch module to ignore the next key that is sent.
-23/09/98  SMC  2.09 Initialise IRmapping to UNDEFINED before filling in specific mappings
-                    (spurious/corrupt IR codes could produce bogus keys).
-                    Only remember last codes that were keys, otherwise we could drop key
-                    ups.
-01/12/98 SAR   2.10 Doesn't now change the screen mode when the module initialises
-                    (this screwed-up the progress bar on NTSC TV STBs).
+28/09/98  OL   2.08 Added a call the KeyWatch module to ignore the next key
+                    that is sent.
+23/09/98  SMC  2.09 Initialise IRmapping to UNDEFINED before filling in
+                    specific mappings (spurious/corrupt IR codes could
+                    produce bogus keys).  Only remember last codes that were
+                    keys, otherwise we could drop key ups.
+01/12/98 SAR   2.10 Doesn't now change the screen mode when the module
+                    initialises (this screwed-up the progress bar on NTSC
+                    TV STBs).
 05/02/99 SAR   2.11 Fix IR standby issue for iMagic
+10/02/1999 NDT 2.12 Fixed key press in standby bug.  Rationalised the way
+                    the module deals with key up and key down events.
  */
 
 #include <stdio.h>
@@ -61,6 +65,8 @@
 
 #include "kernel.h"
 #include "swis.h"
+
+#include "iriface.h"
 
 #undef DEBUG
 #undef DEBUGFILE		/* Messages go to a file. Doesn't really work */
@@ -96,6 +102,8 @@
 
 /* Macro for getting the IR RC5 code including the toggle bit */
 #define IR_READ ((int)*ir_address)
+
+#define IN_STANDBY ((0x80&*(volatile char*)0x0320000c)!=0)
 
 #define MPEGVideo_CardControl	0x49305
 #define STBState_Standby	0x4b404
@@ -199,20 +207,21 @@ const Default defaults[] = {
 
 #define NUM_DEFAULTS (sizeof defaults / sizeof (Default))
 
-void *private_word_pointer ;
-
 _kernel_swi_regs regs ;
 _kernel_oserror *e ;
 _kernel_oserror err ;
+
+#ifdef MOUSE
 char osword_block[9] ;
+#endif
 
 int last_code = NULL_CODE ;
+int done_key_up = TRUE ;
+
+#ifdef MOUSE
 int last_fire = 0 ;
-int last_time = -1 ;
-int remote_count = 0 ;
 int mouse_step = 4 ;
-int emulate_mouse = 1 ;
-int first = FALSE ;
+#endif
 
 #ifdef DEBUG
 #  ifdef DEBUGFILE
@@ -241,44 +250,42 @@ static int phandle = 0;
  * Forward function decls
  */
 
-extern int IR_callevery_entry (_kernel_swi_regs *r, void *pw) ;
-extern int IR_callback_entry (_kernel_swi_regs *r, void *pw) ;
-extern int IR_keyv_entry (_kernel_swi_regs *r, void *pw) ;
-void IR_write_LEDs (void) ;
-void clear_mappings (void) ;
-void default_mappings (void) ;
-void write_mpeg_control (int ctrl0, int ctrl1) ;
-void fake_mouse_move (MouseMove where) ;
-
+static void clear_mappings (void) ;
+static void default_mappings (void) ;
 #ifdef MOUSE
-void fake_mouse_click (MouseButton buttons) ;
+static void fake_mouse_move (MouseMove where) ;
+static void fake_mouse_click (MouseButton buttons) ;
 #endif
 
-void fake_key (int thing_pressed, KeyDir dir) ;
+static void fake_key (int thing_pressed, KeyDir dir) ;
+static void do_key_up (void);
 
-/*
- * Standard module routines
- */
+/**************************************************************************
+* Standard module routines                                                *
+**************************************************************************/
 
-void IR_modfinal (void)
+_kernel_oserror *IR_modfinal (int fatal, int podule, void *pw)
 {
   regs.r[0] = (int) IR_callevery_entry ;
-  regs.r[1] = (int) private_word_pointer ;
+  regs.r[1] = (int) pw ;
   _kernel_swi (OS_RemoveTickerEvent, &regs, &regs) ;
 
   if (on_keyv)
   {
     regs.r[0] = KeyV ;
     regs.r[1] = (int) IR_keyv_entry ;
-    regs.r[2] = (int) private_word_pointer ;
+    regs.r[2] = (int) pw ;
     _kernel_swi (OS_Release, &regs, &regs) ;
   }
+
+  /* Release the current key - we're going away. */
+  do_key_up();
 
 /* 21/7/97:CP:remove pending callback */
   if( callback_activeG == TRUE )
   {
     regs.r[0] = (int) IR_callback_entry;
-    regs.r[1] = (int) private_word_pointer;
+    regs.r[1] = (int) pw;
     _kernel_swi(OS_RemoveCallBack, &regs, &regs);
 
     callback_activeG = FALSE;
@@ -292,16 +299,16 @@ void IR_modfinal (void)
     _kernel_swi (OS_Find, &regs, &regs);
   }
 #endif
+  return 0;
 }
 
-_kernel_oserror *IR_modinit (char *cmd_tail, int podule_base, void *pw)
+/*************************************************************************/
+_kernel_oserror *IR_modinit (const char *cmd_tail, int podule_base, void *pw)
 {
   int carry;
   char podule_header_buffer[16];
   int product_type;
   int ir_offset;
-
-  private_word_pointer = pw;
 
 #if 0
      _swix(OS_WriteC, _IN(0), 22);
@@ -325,7 +332,8 @@ _kernel_oserror *IR_modinit (char *cmd_tail, int podule_base, void *pw)
   regs.r[3] = (int) PODULE_NUMBER;
   e = _kernel_swi (Podule_ReadHeader, &regs, &regs);
   if (e) return (e);
-  product_type = ((int) podule_header_buffer[3]) | ( ((int) podule_header_buffer[4]) << 8);
+  product_type =  ((int) podule_header_buffer[3]) |
+                ( ((int) podule_header_buffer[4]) << 8);
   switch (product_type)
   {
       case PRODUCT_TYPE_STB2_MPEG0:		/* STB 2 with no MPEG */
@@ -343,7 +351,7 @@ _kernel_oserror *IR_modinit (char *cmd_tail, int podule_base, void *pw)
 
   /* Now read address of base of EASI space for podule */
   regs.r[0] = PODULE_READINFO_EASILOGICAL;
-  regs.r[1] = (int)&ir_address;			/* address to return value into */
+  regs.r[1] = (int)&ir_address;		/* address to return value into */
   regs.r[2] = 4;
   regs.r[3] = PODULE_NUMBER;
   e = _kernel_swi (Podule_ReadInfo, &regs, &regs);
@@ -368,19 +376,13 @@ _kernel_oserror *IR_modinit (char *cmd_tail, int podule_base, void *pw)
 
 #endif
 
-  /*
-   * Wait for IR micro to take the online/standby code away
-   * This relies on STBState having told the IR micro that the Standby key has
-   * been noticed, by enabling the watchdog timer.
-   */
-  while ( (IR_READ & ~TOGGLE_BIT) == (ONLINE_CODE & ~TOGGLE_BIT) );
-
   /* Set up default mappings before enabling events etc. */
   default_mappings ();
 
+
   regs.r[0] = 5 ; /* Every 5 centiseconds */
   regs.r[1] = (int) IR_callevery_entry ;
-  regs.r[2] = (int) private_word_pointer ;
+  regs.r[2] = (int) pw ;
   if ((e = _kernel_swi (OS_CallEvery, &regs, &regs)) != NULL)
   {
     return (e) ;
@@ -388,7 +390,7 @@ _kernel_oserror *IR_modinit (char *cmd_tail, int podule_base, void *pw)
 
   regs.r[0] = KeyV ;
   regs.r[1] = (int) IR_keyv_entry ;
-  regs.r[2] = (int) private_word_pointer ;
+  regs.r[2] = (int) pw ;
   if ((e = _kernel_swi (OS_Claim, &regs, &regs)) != NULL)
   {
     return (e);
@@ -416,26 +418,33 @@ _kernel_oserror *IR_modinit (char *cmd_tail, int podule_base, void *pw)
   return NULL ;
 }
 
-int IR_keyv_handler (_kernel_swi_regs *r, void *pw)
+/*************************************************************************/
+_kernel_oserror *IR_keyv_handler (_kernel_swi_regs *r, void *pw)
 {
   if (r->r[0] == 4)	/* Enable / flush drivers */
   {
+    int code;
+    
+    /* Read the code from the micro */
+    while ( (code = IR_READ) != IR_READ );
+
+    /* If the micro says go into standby and we're in standby or the micro says
+     * come out of standby and we are out of standby, set the current code to
+     * the code from the micro so it gets ignored by the callevery handler. 
+     */
+    if(code == (IN_STANDBY?STANDBY_CODE:ONLINE_CODE))
+      last_code = code; /* Ignore this code */
+    else
+      last_code = NULL_CODE; /* Act on the code in the next tick. */
+
+    /* The kernel did the up code for us */
+    done_key_up = TRUE;
     keyv_ok = 1 ;
-    last_code = NULL_CODE;
-#if 0			/* Eh? We shouldn't be getting off KeyV here */
-    if (on_keyv)
-    {
-      regs.r[0] = KeyV ;
-      regs.r[1] = (int) IR_keyv_entry ;
-      regs.r[2] = (int) private_word_pointer ;
-      _kernel_swi (OS_Release, &regs, &regs) ;
-      on_keyv = 0 ;
-    }
-#endif
   }
-  return (1) ; /* Pass on */
+  return NULL;
 }
 
+/*************************************************************************/
 void IR_service_handler (int service_number, _kernel_swi_regs *r, void *pw)
 {
   /*
@@ -463,7 +472,7 @@ void IR_service_handler (int service_number, _kernel_swi_regs *r, void *pw)
        callback_activeG = TRUE;
 
        regs.r[0] = (int) IR_callback_entry;
-       regs.r[1] = (int) private_word_pointer;
+       regs.r[1] = (int) pw;
        _kernel_swi(OS_AddCallBack, &regs, &regs);
     }
 
@@ -476,10 +485,10 @@ void IR_service_handler (int service_number, _kernel_swi_regs *r, void *pw)
 }
 
 
-int IR_callback_handler (_kernel_swi_regs *r, void *pw)
+_kernel_oserror *IR_callback_handler (_kernel_swi_regs *r, void *pw)
 {
 #ifdef DEBUG
-  fprintf(OUTFILE, "IR:STBState_Standby\n");
+ fprintf(OUTFILE, "IR:STBState_Standby\n");
 #endif
 
   if(callback_activeG == TRUE) /* paranoia never hurt anyone ;-) */
@@ -489,11 +498,46 @@ int IR_callback_handler (_kernel_swi_regs *r, void *pw)
      callback_activeG = FALSE;
   }
 
-  return (1);
+  return NULL;
 }
 
 
-int IR_callevery_handler (_kernel_swi_regs *r, void *pw)
+/*************************************************************************/
+void do_key_up(void)
+{
+  /* Mask off the toggle bit from the up code */
+  int my_last_code = last_code & ~TOGGLE_BIT;
+
+  if(done_key_up)
+    return;
+
+  /* Release last_code if it wasn't undefined. */
+  switch (my_last_code)
+  {
+  case NULL_CODE: /* This is no key. */
+    break;
+
+  case ONLINE_CODE & ~TOGGLE_BIT:
+    /* The standby key is different. */
+    break;
+
+  default:
+    if (IRmappings[my_last_code].type == KEY)
+    {
+      fake_key (IRmappings[my_last_code].action.key, KEYUP) ;
+
+      if (IRmappings[my_last_code].modifier)
+      {
+        fake_key (IRmappings[my_last_code].modifier, KEYUP) ;
+      }
+    }
+  }
+  done_key_up = TRUE;
+}
+
+
+/*************************************************************************/
+_kernel_oserror *IR_callevery_handler (_kernel_swi_regs *r, void *pw)
 {
   int code;
 #ifdef MOUSE
@@ -504,7 +548,6 @@ int IR_callevery_handler (_kernel_swi_regs *r, void *pw)
   while ( (code = IR_READ) != IR_READ );
 
   _kernel_swi (OS_ReadMonotonicTime, &regs, &regs);
-
 
 /* 11/8/97:CP:Standby multiple keypress fix
 
@@ -519,28 +562,18 @@ the key sequence xx xx xx 8C 8C 8C 8C 0C 0C 0C ):
                          |           |
                        stdby       stdby
 
+09/02/1999:NDT:Keypress in standby fix.
 
-if (code toggle bit set) and (last_code != Standby code (0C))
-{
-  standby just pressed; call STBState_Standby, set last_code to Standby code
-}
-
-if (code toggle bit set) and (last_code == Standby)
-{
-   standby still active; do nothing
-}
-
-if (code toggle bit clear) and (last_code == Standby)
-{
-  standby over - call STBState_Standby
-}
-
-
+The IR micro does not generate NULL keys when in standby, but it does pass
+other keys through.  We can't tell if we're in standby based only on the
+last key pressed.  Code 8C means go into standby.  Code 0C means come out
+of standby.  Think about the key sequence ...8C 8C 12 12 0C 0C...
 
 */
-  if( (code & ~TOGGLE_BIT) == 0xc)
+ 
+  /* We only do anything if the code changed. */
+  if ( code != last_code )
   {
-
 #ifdef DEBUG
     char dummy;
 
@@ -548,88 +581,54 @@ if (code toggle bit clear) and (last_code == Standby)
     gets(&dummy);
 #endif
 
-    if( (  (code & TOGGLE_BIT) && (last_code != STANDBY_CODE) ) ||
-        ( !(code & TOGGLE_BIT) && (last_code == STANDBY_CODE) ) )
+    /* Release the previous key */
+    do_key_up();
+    
+    /* Record the code for later */
+    last_code=code;
+    
+    /* Mask off the toggle bit */
+    code &= ~TOGGLE_BIT;
+    
+    switch (code)
     {
+    case NULL_CODE: /* A bit pointless really */
+      break;
 
+    case ONLINE_CODE & ~TOGGLE_BIT:
+      /* If it's the standby button, set up the callback */
 #ifdef DEBUG
-       printf("Standby SWI called\n");
-       gets(&dummy);
+      printf("Standby SWI called\n");
+      gets(&dummy);
 #endif
 
-   /* 16/7/97:CP:added goof-proofing around callback */
-       if(callback_activeG == FALSE)
-       {
-         /* no callback pending, so set one up */
-          callback_activeG = TRUE;
-
-          regs.r[0] = (int) IR_callback_entry;
-          regs.r[1] = (int) private_word_pointer;
-
-          _kernel_swi(OS_AddCallBack, &regs, &regs);
-       }
-
-    }
-
-    last_code = code;
-  }
-
-
-
-  else
-  {
-      /* Clear toggle bit */
-      code &= ~TOGGLE_BIT;
-
-      if (code != NULL_CODE)
+      /* 16/7/97:CP:added goof-proofing around callback */
+      if(callback_activeG == FALSE)
       {
-        switch (IRmappings[code].type)
-        {
-          case KEY:
-            if (code != last_code)
-            {
-              /* Release last_code if it wasn't undefined. */
-              if (IRmappings[last_code].type != UNDEFINED)
-              {
-                fake_key (IRmappings[last_code].action.key, KEYUP) ;
+        /* no callback pending, so set one up */
+         callback_activeG = TRUE;
 
-                if (IRmappings[last_code].modifier)
-                {
-                  fake_key (IRmappings[last_code].modifier, KEYUP) ;
-                }
-              }
+         regs.r[0] = (int) IR_callback_entry;
+         regs.r[1] = (int) pw;
 
-              if (IRmappings[code].modifier)
-              {
-                fake_key (IRmappings[code].modifier, KEYDOWN) ;
-              }
-
-              fake_key (IRmappings[code].action.key, KEYDOWN) ;
-
-              /* Only remember last codes that were keys (otherwise we could lose the last key pressed). */
-              last_code = code ;
-              last_time = regs.r[0] ;
-            }
-            break ;
-
-        } /* Switch */
-
+         _kernel_swi(OS_AddCallBack, &regs, &regs);
       }
-      else
+      break;
+
+    default: /* Any other key */
+      switch (IRmappings[code].type)
       {
-        if (IRmappings[last_code].type != UNDEFINED)
-        {
-         fake_key (IRmappings[last_code].action.key, KEYUP) ;
+        case KEY:
+          if (IRmappings[code].modifier)
+          {
+            fake_key (IRmappings[code].modifier, KEYDOWN) ;
+          }
 
-         if (IRmappings[last_code].modifier)
-         {
-           fake_key (IRmappings[last_code].modifier, KEYUP) ;
-         }
-        }
-        last_code = NULL_CODE;
-        last_time = -1 ;
+          fake_key (IRmappings[code].action.key, KEYDOWN) ;
+          done_key_up = FALSE;
       }
-  }
+    } /* Switch */
+  } /* If (code != last_code) */
 
 #ifdef MOUSE
   if ((e = _kernel_swi (Joystick_Read, &regs, &regs)) == NULL)
@@ -693,11 +692,13 @@ if (code toggle bit clear) and (last_code == Standby)
   }
 #endif
 
-  return 1 ;
+  return NULL;
 }
 
 
-_kernel_oserror *IR_cmd (char *arg_string, int argc, int cmd_no, void *pw)
+/*************************************************************************/
+_kernel_oserror *IR_cmd (const char *arg_string, int argc, int cmd_no,
+                         void *pw)
 {
   int rc5 = 0, i ;
 
@@ -715,7 +716,9 @@ _kernel_oserror *IR_cmd (char *arg_string, int argc, int cmd_no, void *pw)
           for (i=0 ; i < NUM_DEFAULTS ; i++)
             if (defaults[i].rc5 == rc5)
             {
-              printf ("Handset code %d maps to key 0x%x (0x%x)\n", defaults[i].handset, IRmappings[rc5].action.key, (int) IRmappings[rc5].modifier) ;
+              printf ("Handset code %d maps to key 0x%x (0x%x)\n",
+                      defaults[i].handset, IRmappings[rc5].action.key,
+                      (int) IRmappings[rc5].modifier) ;
               break;
             }
           break ;
@@ -724,7 +727,9 @@ _kernel_oserror *IR_cmd (char *arg_string, int argc, int cmd_no, void *pw)
           for (i=0 ; i < NUM_DEFAULTS ; i++)
             if (defaults[i].rc5 == rc5)
             {
-          printf ("Handset code %d maps to %s mouse button\n", defaults[i].handset, mouse_button_names[IRmappings[rc5].action.mouse_button]) ;
+          printf ("Handset code %d maps to %s mouse button\n",
+                  defaults[i].handset,
+                  mouse_button_names[IRmappings[rc5].action.mouse_button]) ;
              break;
             }
           break ;
@@ -733,7 +738,9 @@ _kernel_oserror *IR_cmd (char *arg_string, int argc, int cmd_no, void *pw)
           for (i=0 ; i < NUM_DEFAULTS ; i++)
             if (defaults[i].rc5 == rc5)
             {
-          printf ("Handset code %d maps to %sward mouse movement\n", defaults[i].handset, mouse_move_names[IRmappings[rc5].action.mouse_move]) ;
+          printf ("Handset code %d maps to %sward mouse movement\n",
+                  defaults[i].handset,
+                  mouse_move_names[IRmappings[rc5].action.mouse_move]) ;
              break;
             }
           break ;
@@ -744,12 +751,15 @@ _kernel_oserror *IR_cmd (char *arg_string, int argc, int cmd_no, void *pw)
 
   case MAP:
     {
-      char *first_arg = arg_string ;
+      const char *first_arg = arg_string ;
       char *second_arg ;
       char *third_arg ;
       char *fourth_arg ;
       char tmp[80] ;
       char tmp1[80] ;
+
+      /* We're about to remap the keyboard.  We better generate a key up event. */
+      do_key_up();
 
       second_arg = strchr (first_arg, ' ') + 1 ;
       if (second_arg)
@@ -793,8 +803,8 @@ _kernel_oserror *IR_cmd (char *arg_string, int argc, int cmd_no, void *pw)
         case 3:
           if (third_arg)
           {
-            strncpy (tmp, second_arg, (int) third_arg - (int) second_arg - 1) ;
-            tmp[(int) third_arg - (int) second_arg - 1] = '\0' ;
+            strncpy (tmp, second_arg, (int) third_arg - (int) second_arg - 1);
+            tmp[(int) third_arg - (int) second_arg - 1] = '\0';
             strcpy (tmp1, third_arg) ;
           }
           break ;
@@ -802,12 +812,12 @@ _kernel_oserror *IR_cmd (char *arg_string, int argc, int cmd_no, void *pw)
         case 4:
           if (third_arg)
           {
-            strncpy (tmp, second_arg, (int) third_arg - (int) second_arg - 1) ;
-            tmp[(int) third_arg - (int) second_arg - 1] = '\0' ;
+            strncpy (tmp, second_arg, (int) third_arg - (int) second_arg - 1);
+            tmp[(int) third_arg - (int) second_arg - 1] = '\0';
             if (fourth_arg)
             {
-              strncpy (tmp1, third_arg, (int) fourth_arg - (int) third_arg - 1) ;
-              tmp1[(int) fourth_arg - (int) third_arg - 1] = '\0' ;
+              strncpy (tmp1, third_arg, (int) fourth_arg - (int) third_arg - 1);
+              tmp1[(int) fourth_arg - (int) third_arg - 1] = '\0';
             }
           }
           break ;
@@ -866,7 +876,8 @@ _kernel_oserror *IR_cmd (char *arg_string, int argc, int cmd_no, void *pw)
         else
         {
           err.errnum = 0 ;
-          strcpy (err.errmess, "Syntax:\tIRmap <handset code> mousemove up|down|left|right") ;
+          strcpy (err.errmess, "Syntax:\tIRmap <handset code> "
+                  "mousemove up|down|left|right") ;
           return (&err) ;
         }
       }
@@ -884,7 +895,8 @@ _kernel_oserror *IR_cmd (char *arg_string, int argc, int cmd_no, void *pw)
         else
         {
           err.errnum = 0 ;
-          strcpy (err.errmess, "Syntax:\tIRmap <handset code> mousebutton select|menu|adjust") ;
+          strcpy (err.errmess, "Syntax:\tIRmap <handset code> "
+                  "mousebutton select|menu|adjust") ;
           return (&err) ;
         }
       }
@@ -892,7 +904,8 @@ _kernel_oserror *IR_cmd (char *arg_string, int argc, int cmd_no, void *pw)
       else if (strncmp (tmp, "cancel", 6) == 0 && argc == 2)
       {
 #ifdef DEBUG
-        printf("Used to map to 0x%x (0x%x)\n", IRmappings[rc5].action.key, IRmappings[rc5].modifier);
+        printf("Used to map to 0x%x (0x%x)\n", IRmappings[rc5].action.key,
+               IRmappings[rc5].modifier);
 #endif
         IRmappings[rc5].type = UNDEFINED ;
       }
@@ -906,10 +919,12 @@ _kernel_oserror *IR_cmd (char *arg_string, int argc, int cmd_no, void *pw)
     break;
 
   case RESET:
+
     default_mappings () ;
     break;
 
   case CLEAR:
+
     clear_mappings();
     break;
   }
@@ -925,6 +940,9 @@ void clear_mappings (void)
 {
   int i;
 
+  /* We're about to remap the keyboard.  We better generate a key up event. */
+  do_key_up();
+
   for (i = 0; i < IRMAPPINGS_SIZE; i++)
     IRmappings[i].type = UNDEFINED;
 }
@@ -932,6 +950,9 @@ void clear_mappings (void)
 void default_mappings (void)
 {
   int i;
+
+  /* We're about to remap the keyboard.  We better generate a key up event. */
+  do_key_up();
 
   /* Cursor keys act like function keys */
   regs.r[0] = 4;
@@ -1017,6 +1038,7 @@ void fake_mouse_move (MouseMove where)
 }
 #endif
 
+/*************************************************************************/
 void fake_key (int thing_pressed, KeyDir dir)
 {
   if (keyv_ok)

@@ -48,14 +48,15 @@ OBJS      = o.Debug o.Module o.IRiface
 #
 # Rule patterns
 #
-.c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} -o $@ $<
-.s.o:;      ${AS} ${AFLAGS} $< $@
+.c.o:;      ${CC} ${THROWBACK} ${CFLAGS} -o $@ $<
+.cmhg.o:;   ${CMHG} -p -o $@ $< h.$*
+.s.o:;      ${AS} ${THROWBACK} ${AFLAGS} $< $@
 
 #
 # build a relocatable module:
 #
 all: rm.IR
+	@echo ${COMPONENT}: relocatable module built
 
 #
 # RISC OS ROM build rules:
@@ -74,6 +75,7 @@ clean:
         ${WIPE} o.* ${WFLAGS}
         ${WIPE} rm.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
+        ${WIPE} h.iriface ${WFLAGS}
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
 
@@ -96,5 +98,7 @@ rom_link:
 rm.IR: ${OBJS} ${CLIB}
         ${LD} -o $@ -module ${OBJS} ${CLIB}
 
+o.module: h.iriface
+h.iriface: o.iriface ;@
 
 # Dynamic dependencies:
