@@ -11,7 +11,7 @@
 ;; 25-Mar-88    0.02    Rely on Wimp loading sprite (Switcher)
 ;; 25-Mar-88    0.03    Read values of dx,dy on mode change
 ;; 13-Apr-88            Implement Task Quit menu entry
-;; 21-Apr-88    0.04    Ensure that Switcher re-ialises on *RMTidy
+;; 21-Apr-88    0.04    Ensure that Switcher re-initialises on *RMTidy
 ;; 22-Apr-88    0.05    Respond to changes in a task's slot size by repainting
 ;; 22-Apr-88    0.06    Support hot keys (f1,shift-f4)
 ;; 17-May-88            Remove Cancel option from error window
@@ -168,6 +168,20 @@
 ;; 21-Jul-94    0.89    Fix bug MED-03056
 ;; 23-Aug-94    0.90    SMC: Fix for MED-00079, now looks up comand help/syntax in messages file
 ;; 28-Oct-94    0.91    SMC: Added directed comments to Messages file for message tokenisation.
+;; 23-May-95    0.96    JRC: Set access of written file to wr/r.
+;; 21-Jun-95    0.97    RCM: On Stork, shutdown will now switch hardware off instead of
+;;                      displaying shutdown/startup dbox.
+;; 22-Jun-95    0.98    RCM: Add 'Freeze' entry to iconbar menu - active only on Stork
+;;                      greyed out on other machines.
+;;  1-Aug-95    0.99    JRC: Fix MED-5439: divide SWI table size by 4.
+;;  7-Aug-95    1.00    RCM: 'setfreezeentry' was expecting Portable_ReadFeatures to return its
+;;                      flags in the wrong register.
+;;
+;;  9-Jul-96    1.02    mjs: fudge to fix bug in closesavedesk routine (call XOS_File, not OS_File
+;;                           to change attributes, and ignore any arror)
+;;
+;; 14-Jul-96    1.04    mjs: info RISC OS font is now 24 pt Homerton.Medium
+;;
 ;;------------------------------------------------------------------------------------
 
         GET     Version
@@ -175,7 +189,7 @@
                 GBLL    Swapping        ; Is it a swapping wimp?
 Swapping        SETL    {FALSE}
 
-                GBLL    SteppedMem         ; does the memory bar go up in steps or linear
+                GBLL    SteppedMem      ; does the memory bar go up in steps or linear
 SteppedMem       SETL    {TRUE}
 
                 GBLL    standalone      ; cope with not registering with ResourceFS
@@ -186,6 +200,15 @@ readareas       SETL    {TRUE}
 
                 GBLL    DynamicAreas    ; Can cope with app-dynamic areas
 DynamicAreas    SETL    {TRUE}
+
+                GBLL    SwitchOff       ;Perform switch off on shutdown iff hardware supports it
+SwitchOff       SETL    {TRUE}
+
+                GBLL    Freeze          ;Freeze entry on menu
+Freeze          SETL    {FALSE}
+
+                GBLL    WmFiddling      ;Attempts at speeding it up by WT
+WmFiddling      SETL    {TRUE}
 
 Module_BaseAddr
 
@@ -215,6 +238,7 @@ Module_BaseAddr
         GET     Hdr:UpCall
         GET     Hdr:MsgMenus
         GET     Hdr:DragASprit
+        GET     Hdr:Portable
         GET     Hdr:NDRDebug
 
         GBLL    hostvdu
@@ -417,8 +441,11 @@ mb_newtask      #       &80             ; *command to pass to Wimp_StartTask
 mb_taskname     #       40              ; Task '<taskname>'
 
 ram_menustart   #       0
-
+ [ Freeze
+m_iconbarmenu   #       m_headersize+mi_size* 9
+ |
 m_iconbarmenu   #       m_headersize+mi_size* 8
+ ]
 m_task          #       m_headersize+mi_size* 1
 m_newtask       #       m_headersize+mi_size* 1
 
@@ -721,7 +748,7 @@ Switcher_SWIdecode ROUT
         MyError NotRunning,LE
         Pull    "PC",VS                 ; return if not
 
-        CMP     R11,#(%10-%00)
+        CMP     R11,#(%10-%00)/4        ; remember to divide by 4 JRC 1st Aug 1995
         ADDCC   PC,PC,R11,LSL #2        ; handle the SWI if in a valid range
         B       %FT10
 00
@@ -1191,8 +1218,8 @@ refind_font
         BVS     %FT01
 
         ADR     R1,InfoBoxFont
-        MOVS    R2,#32*16
-        MOV     R3,#32*16
+        MOVS    R2,#24*16
+        MOV     R3,#24*16
         MOV     R4,#0                   ; locate the font at the current resolution
         MOV     R5,#0
         SWI     XFont_FindFont
@@ -1213,7 +1240,7 @@ refind_font
         Pull    "r0-r7,PC"
 
 InfoBoxFont
-        =      "Trinity.Medium",0
+        =      "Homerton.Medium",0
         ALIGN
 
 vduinput
@@ -1692,7 +1719,15 @@ repollwimp
         LDREQ   R14,lastshutdown        ; what sort was the previous shutdown?
         CMPEQ   R14,#0
         BICNE   R0,R0,#null_bit         ; need null events if task window open or previous shutdown was a failure
+
+ [ WmFiddling
+	LDR	R14, dragBar
+	CMP	r14, #0
+	ORREQ	R0,R0,#pollword_bit	;Disable pollwords if the window is shut
+        ORRNE   R0,R0,#pollword_enable
+ |
         ORR     R0,R0,#pollword_enable
+ ]
         wsaddr  R1,pollblock            ; must be at least 256 bytes
         MOV     R2,#0                   ; in case Wimp older than 2.53
         wsaddr  R3,pollword             ; if non-zero, give a poll word event
@@ -2806,6 +2841,10 @@ doshutdown
 ;
         TST     R0,#shutdownbit_NoRestartDialogue
         BNE     %FT10                   ; then exit the desktop having disabled the hourglass
+ [ SwitchOff
+        SWI     XPortable_ReadFeatures
+        BVC     %FT10                   ;VC, on Stork, so don't put up restart dbox cos we have software switch off
+ ]
 ;
         LDR     R0,h_shutdown
         SUB     sp,sp,#u_windowstate    ; get suitable buffer
@@ -2832,6 +2871,20 @@ doshutdown
         LDR     R0,shutdownflags        ; do I need to display the restart dialogue?
         TST     R0,#shutdownbit_NoRestartDialogue
         BNE     doexitbits
+ [ SwitchOff
+        SWI     XPortable_ReadFeatures
+        BVC     %FT31                   ;VC, its a portable
+        CLRV                            ;VS, not a portable, must clear V to suppress
+        B       %FT33                   ;    the 'SWI &42FC5 not known' error
+31
+        MOV     R0, #PortableBMUC_RemovePower   ;Throw the switch Egor
+        SWI     XPortable_CommandBMU            ;
+32
+        BVC     %BT32                   ;VC, command accepted so loop until power disappears
+        B       %BT31                   ;VS, switch off command gave an error!, try again
+                                ;RCM says: comment out above branch to get the error reported
+33
+ ]
 ;
         Pull    "PC"                    ; just loop to ensure redraw!
 
@@ -2959,19 +3012,24 @@ trytaskinit
         LDR     R14,=Message_SlotSize
         TEQ     R0,R14
         BEQ     task_newslot
+
         LDR     R14,=Message_TaskNameRq      ; someone wants to know the name
         TEQ     R0,R14
         BEQ     task_namerq
+
       [ Swapping
         LDR     R14,=Message_Swap
         TEQ     R0,R14
         BEQ     mes_swap
       ]
+
         LDR     R14,=Message_TaskCloseDown
         TEQ     R0,R14
         BEQ     task_closedown
+
         LDR     R14,=Message_TaskInitialise
         TEQ     R0,R14
+
         Pull    "PC",NE                         ; what?
 
 ; this code can also be reached from task_newslot, if the task had no memory
@@ -4048,6 +4106,10 @@ null_event      ROUT
         Pull    "PC"
 10
         LDR     R14,dragBar             ; finished the message passing phase
+ [ WmFiddling
+	CMP	R14, #0			; Window shut, so do nowt
+	Pull	"PC",EQ
+ ]
         CMP     R14,#-2                 ; at the end of a drag
         MOVEQ   R14,#-1
         STREQ   R14,dragBar
@@ -4087,7 +4149,7 @@ null_event      ROUT
         SWI     XOS_ReadMemMapInfo      ; R0 = page size, R1 = npages
         MUL     R0,cx0,R0
         [ SteppedMem
-; Steped memory bar rather than linear, see algorithm in doc.
+; Stepped memory bar rather than linear, see algorithm in doc.
         Push    "R2-R4"
         LDRB    R2,medusa_kernel
         CMP     R2,#0
@@ -4546,6 +4608,7 @@ pollword_event
         LDRB    R14,memoryupdated
         TEQ     R14,#0
         BEQ     %FT01
+
         [ DynamicAreas
         BL      calc_dynamicareas
         ]
@@ -4858,7 +4921,12 @@ notinfobox
         STR     R14,m_iconbarmenu+m_headersize+mi_iconflags+mi_size* mo_ic_task
         MOV     R14,#-1
         STR     R14,m_iconbarmenu+m_headersize+mi_submenu+mi_size* mo_ic_task
+ [ Freeze
+        BL      setfreezeentry
+        MOV     R14,#96 + 9*44 - 12     ; 1 extra menu entry (Info)
+ |
         MOV     R14,#96 + 8*44 - 12     ; 1 extra menu entry (Info)
+ ]
         STR     R14,[R1,#b_y]           ; fake mouse y-coord
         MOV     userblk,#-2             ; copied into [menutask]
         B       zapwidth
@@ -4892,6 +4960,9 @@ nottask1
         STR     R14,m_iconbarmenu+m_headersize+mi_iconflags+mi_size* mo_ic_task
         ADRL    R14,m_task
         STR     R14,m_iconbarmenu+m_headersize+mi_submenu+mi_size* mo_ic_task
+ [ Freeze
+        BL      setfreezeentry
+ ]
         ADRL    R0,mstr_task
         ADRLEL  R4,nullname
         ADDGT   R4,userblk,#icb_taskname
@@ -4965,6 +5036,19 @@ gomenu
         BL      refind_font
         Pull    "PC"
 
+ [ Freeze
+setfreezeentry
+        ENTRY   "R0, R1"
+        SWI     XPortable_ReadFeatures          ;Bitset returned in R1
+        MOVVS   R1,#0
+        TST     R1,#PortableFeature_Stop
+        LDR     R14,m_iconbarmenu+m_headersize+mi_iconflags+mi_size* mo_ic_freeze
+        ORREQ   R14,R14,#is_shaded
+        BICNE   R14,R14,#is_shaded
+        STR     R14,m_iconbarmenu+m_headersize+mi_iconflags+mi_size* mo_ic_freeze
+        EXITS
+ ]
+
 ;........................................................................
 
 ; In    R0 -> token to use
@@ -5035,6 +5119,10 @@ sel_iconbar
         BEQ     gotask
         TEQ     R14,#mo_ic_exit
         BEQ     goexit
+ [ Freeze
+        TEQ     R14,#mo_ic_freeze
+        BEQ     gofreeze
+ ]
         TEQ     R14,#mo_ic_shutdown
         BEQ     goshutdown
         TEQ     R14,#mo_ic_taskw
@@ -5191,6 +5279,21 @@ explicitsave
 
         Pull    "R1,PC"
 
+ [ Freeze
+;.............................................................................
+;
+; We don't check the machine type before issueing the 'Portable_Stop' SWI as
+; the menu entry should have been greyed out if the hardware can't do it.
+
+gofreeze
+        MOV     R1,#-1                  ; always remove menu tree for this
+        SWI     XWimp_CreateMenu
+
+        SWI     XPortable_Stop          ; freeze machine
+                                        ;VC, frozen then awakened OK
+                                        ;VS, failed, so report error
+        Pull    "PC"
+ ]
 ;........................................................................
 
 ; In    "<SaveDesk$File>" = auto-save file (if set)
@@ -5628,18 +5731,29 @@ str_K           DCB     "K",10,0
 ;       R0,V preserved if no error when closing
 
 closesavedesk
-        Push    "R0-R1,LR"
+        Push    "R0-R1,R5,LR"
 
         MOV     R0,#0
         LDRB    R1,savedesk_handle
         STRB    R0,savedesk_handle      ; write handle to 0
 
-        CMP     R1,#0                   ; clears V
-        SWINE   XOS_Find                ; close file if there was one
-        STRVS   R0,[sp]                 ; return error from close
-        Pull    "R0-R1,PC",VS
+        TEQ     R1,#0                   ; preserve V
+        Pull    "R0-R1,R5,PC",EQ        ; return if no file (keep old error)
 
-        Pull    "R0-R1,PC",,^           ; otherwise keep old error
+        SWI     XOS_Find                ; close file if there was one
+        STRVS   R0,[sp]                 ; return error from close
+        Pull    "R0-R1,R5,PC",VS
+
+        ;Set the file attributes to wr/r. JRC 22nd May 1995
+        MOV     R0, #4                  ; OSFile_WriteAttr
+        LDR     R1, mb_savedbox
+        MOV     R5, #&13                ; OSFile_AttrOwnerRead :OR: OSFile_AttrOwnerWrite :OR: OSFile_AttrWorldRead
+        SWI     XOS_File
+;;ignore error, since file may not exit (eg. went to temp scrap file) - not very satisfactory, really
+;;        STRVS   R0,[sp]                 ; return error from write attr
+;;        Pull    "R0-R1,R5,PC",VS
+
+        Pull    "R0-R1,R5,PC",,^        ; otherwise restore
 
 ;.............................................................................
 
@@ -5679,7 +5793,10 @@ mo_ic_shell     Item    M03
 mo_ic_taskw     Item    M04
 mo_ic_savestate Item    M05
 mo_ic_exit      Item    M06
-mo_ic_shutdown  Item    M07
+ [ Freeze
+mo_ic_freeze    Item    M07
+ ]
+mo_ic_shutdown  Item    M08
 
 m_task          Menu    T02
 mo_ts_quit      Item    M12
@@ -5733,11 +5850,11 @@ CopyMenus ENTRY "r1-r7"
 
        [ standalone
 resourcefsfiles
-        ResourceFile Sources.Messages, Resources.Switcher.Messages
+        ResourceFile Resources.UK.Messages, Resources.Switcher.Messages
        [ Swapping
-        ResourceFile Sources.SwpTemp,   Resources.Switcher.Templates
+        ResourceFile Resources.UK.SwpTemp,   Resources.Switcher.Templates
        |
-        ResourceFile Sources.Templates, Resources.Switcher.Templates ; AMcC 18-Oct-94 changed from Template3D
+        ResourceFile Resources.UK.Templates, Resources.Switcher.Templates ; AMcC 18-Oct-94 changed from Template3D
        ]
         DCD     0
       ]
@@ -5773,7 +5890,7 @@ found_an_area
 update_dynamicarea
         Push    "R1,lr"
         BL      find_dynamicarea
-        Pull    "R1,PC",EQ
+        Pull    "R1,PC",EQ		; Can't update a DA that doesn't exist!
         MOV     R0,#2                   ; get info
         SWI     XOS_DynamicArea
         LDR     R1,[R9,#icb_memsize]
@@ -5914,6 +6031,10 @@ service_dynamicarearenumber
 MyXWimp_Poll ENTRY "R0-R3"
         LDR     R14,dragBar
         CMP     R14,#0
+ [ WmFiddling
+	MOVLE	R2, #50				; Poll 0.5 secs if not dragging
+	MOVGT	R2, #10				; Poll 0.1 secs if we are dragging
+ ]
         BLE     %FT05
         SWI     XWimp_Poll
         STMIA   sp,{R0,R1}
@@ -5921,8 +6042,13 @@ MyXWimp_Poll ENTRY "R0-R3"
 05
         CLRV
         SWI     XOS_ReadMonotonicTime
+ [ WmFiddling
+	ADDVC	R2,R0,R2
+        LDR     R0,[SP]
+ |
         ADDVC   R2,R0,#10                       ; poll 0.1 secs
         LDR     R0,[SP]
+ ]
         BVS     %FT10
         SWI     XWimp_PollIdle
         STMIA   sp,{R0,R1}
