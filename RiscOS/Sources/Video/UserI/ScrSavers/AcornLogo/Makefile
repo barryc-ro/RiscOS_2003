@@ -54,7 +54,8 @@ FILES =\
  ${LDIR}.Res
 
 OBJS =\
-  o.acornlogo
+  o.acornlogo \
+  o.saver
 
 #
 # Rule patterns
