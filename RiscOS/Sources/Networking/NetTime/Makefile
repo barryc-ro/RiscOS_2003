@@ -63,7 +63,7 @@ COMPONENT = NetTime
 TARGET    = aof.NetTime
 TARGETSA  = rm.NetTime
 EXPORTS   = 
-OBJS      = mul64.o machine.o module.o header.o
+OBJS      = mul64.o machine.o module.o header.o nt_nvram.o
 
 #
 # Generic rules:
@@ -113,10 +113,6 @@ rom_link:
 
 #
 # Dynamic dependencies:
-o.module:	c.module
-o.module:	h.nettime
-o.module:	C:h.swis
-o.module:	C:h.kernel
 o.mul64: s.mul64
 o.machine:	c.machine
 o.machine:	TCPIPLibs:h.socklib
@@ -153,3 +149,13 @@ o.machine:	TCPIPLibs:h.netdb
 o.machine:	TCPIPLibs:sys.h.cdefs
 o.machine:	h.nettime
 o.machine:	C:h.swis
+o.machine:	h.nt_nvram
+o.module:	c.module
+o.module:	h.nettime
+o.module:	C:h.swis
+o.module:	C:h.kernel
+o.module:	h.nt_nvram
+o.nt_nvram:	c.nt_nvram
+o.nt_nvram:	C:h.kernel
+o.nt_nvram:	C:h.swis
+o.nt_nvram:	h.nt_nvram
