@@ -89,7 +89,7 @@ extern int errno;
 #  define SELF    "ARM Linker"
 #endif
 #ifndef IDFNSTR
-#  define IDFNSTR " Version 5.00f (Acorn Computers Ltd) <beta+ release>"
+#  define IDFNSTR " Version 5.16 <beta+ release>"
 #endif            /* NB - leading space is needed */
 #ifndef Module_Date
 #  define BUILDDATE __DATE__
@@ -386,6 +386,7 @@ static char mapflag;           /* Produce placement map of areas */
 static char xrefflag;          /* Print area xref */
 static char shl_flag;          /* generate APCS-3 shared library */
 static char reent_flag;        /* generate reentrant output */
+static char rescan_flag;       /* re-scan earlier libraries to satisfy unresolved references */
 #ifdef LINKING_ON_ACORN_RISC_OS
 static char ddeflag = 1;       /* always be DDE compatible for Acorn RISC OS host! */
 #else
@@ -5827,10 +5828,11 @@ static void ReportNewDefineds(void)
     }
 }
 
-static void ReportNewUndefineds(void)
+static int ReportNewUndefineds(int warn)
 {   struct hentry *h1;
     struct globsym *gs;
     gs_list *p;
+    int count = 0;
 
     for (h1 = firstglobsym;  h1 != NULL;  h1 = gs->next)
     {   gs = h1->h_un.globval;
@@ -5839,9 +5841,14 @@ static void ReportNewUndefineds(void)
         if (p == 0)
         {
             if (gs->symval.flags & SYM_WEAKAT)
-                msg(info_weakref(h1->name + 2));
+            {
+                if (warn) msg(info_weakref(h1->name + 2));
+            }
             else
-                msg(info_ref(h1->name + 2));
+            {
+                if (warn) msg(info_ref(h1->name + 2));
+                ++count;
+            }
             p = (gs_list *) malloc(sizeof(*p));
             p->next = notyetdef;
             p->sym = gs;
@@ -5849,6 +5856,8 @@ static void ReportNewUndefineds(void)
             notyetdef = p;
         }
     }
+
+    return count;
 }
 
 #ifdef TARGET_HAS_AOUT
@@ -6055,11 +6064,12 @@ fprintf(stderr, "stacked %s, size = %ld\n", diry->lib_entry, siz);
     }
 }
 
-static void load_alf_lib(struct fentry *fep)
+static int load_alf_lib(struct fentry *fep)
 {
     char **mnames, *mname;
     int32 *chunkmap;
     int has_old_alf_symt;
+    int count = 0;
 
     mnames = NULL;
     chunkmap = NULL;
@@ -6132,8 +6142,11 @@ fprintf(stderr, "stacked %s, size = %ld\n", mname, siz);
                 (*lastobj)->objbuffer = sectinram;
                 load1(*lastobj);
                 if (verboseflag >= 3) {
-                    ReportNewUndefineds();
+                    count += ReportNewUndefineds(1);
                     ReportNewDefineds();
+                }
+                else {
+                    count += ReportNewUndefineds(0);
                 }
                 again = 2;
             }
@@ -6144,12 +6157,14 @@ fprintf(stderr, "stacked %s, size = %ld\n", mname, siz);
     {   if (verboseflag) msg(info_loadlib(fep->fname));
         load_whole_alf_lib(fep);
     }
+    return count;
 }
 
 #endif /* TARGET_HAS_AOF */
 
-static void load_lib(struct fentry *fep)
+static int load_lib(struct fentry *fep)
 {   char *lock = lock_in_cache(fep->filebuffer);
+    int count = 0;
     mark_stack();
     setfile(fep);
     hashinit(&libsymtable, LIBSYMTABLESIZE, salloc);
@@ -6159,11 +6174,12 @@ static void load_lib(struct fentry *fep)
 #endif
     } else {
 #ifdef TARGET_HAS_AOF
-        load_alf_lib(fep);
+        count = load_alf_lib(fep);
 #endif
     }
     pop_stack();
     unlock_cache_block(lock);
+    return count;
 }
 
 static struct aentry *find_object_area(char *obj_area_name, char *err_context)
@@ -6503,6 +6519,8 @@ RW_base:        if (rw_baseflag) msg(fatal_multflag(ap));
                 data_base = getnum(*argv, fatal_baddatabase);
                 rw_baseflag = 1;
             }
+            else if (CiStrEQ(ap, "rescan"))
+                rescan_flag = 1;
             else /* -relocatable assumed */
                 relocflag = 1;
             continue;
@@ -6671,6 +6689,25 @@ skip_unused:
     if (f != stdout) fclose(f);
 }
 
+static void lib_scan(struct fentry *fep, struct fentry *end)
+{
+    struct fentry *head = fep, *first = NULL;
+    while (fep != end)
+    {
+      if (fep->type & LIB_MASK)
+      {
+        if (!first) first = fep;
+        if (load_lib(fep) && rescan_flag && first != fep)
+        {
+          msg(info_rescanall);
+          lib_scan(head, fep);
+          continue;
+        }
+      }
+      fep = fep->next;
+    }
+}
+
 int main(int argc, char **argv)
 {
     struct fentry *fep;
@@ -6816,7 +6853,7 @@ int main(int argc, char **argv)
         if (verboseflag) msg(info_loadobj(fep->fname));
         load1(*lastobj);
         if (verboseflag >= 2)
-        {   ReportNewUndefineds();
+        {   ReportNewUndefineds(1);
             ReportNewDefineds();
         }
     }
@@ -6837,9 +6874,7 @@ int main(int argc, char **argv)
         debugflag = 1;
 #endif
 
-    for (fep = clifilelist;  fep != NULL;  fep = fep->next)
-        if (fep->type & LIB_MASK)
-            load_lib(fep);
+    lib_scan(clifilelist, NULL);
 
     mark_area(first_area, AREA_FIRST, "-First");
     mark_area(last_area,  AREA_LAST,  "-Last");
