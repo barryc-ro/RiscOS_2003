@@ -60,7 +60,8 @@ OBJS      = \
  o.buffer\
  o.gui\
  o.error\
- o.handler
+ o.handler\
+ o.script
 
 OBJSZ     = oz.ModuleWrap \
  oz.Main\
@@ -68,7 +69,8 @@ OBJSZ     = oz.ModuleWrap \
  oz.buffer\
  oz.gui\
  oz.error\
- oz.handler
+ oz.handler\
+ oz.script
 
 EXPORTS   = 
 INSTALLDIR = ${INSTDIR}.${APPNAME}
