@@ -31,9 +31,14 @@ extern char *malloc();
 #include "swis.h"
 #endif
 
+#define TARGET_HAS_ELF
+
 #include "chunkfmt.h"
 #include "libflfmt.h"
 #include "aof.h"
+#ifdef TARGET_HAS_ELF
+#  include "elf.h"
+#endif
 #include "bytesex.h"
 #include "prgname.h"
 
@@ -83,9 +88,13 @@ extern char *malloc();
 
 #define LOC(p, n)    ((char *)(p) + (n))
 #define RUP(n)       (((n) + 3) & ~3)
+#define RUPL(n)      (((n) + 3L) & ~3L)
 
 #define hv(v)        (bytesex_hostval(v))        /* host value... */
 #define tv(v)        (bytesex_hostval(v))        /* target value... */
+
+#define hv16(v)      (bytesex_hostval16(v))      /* host value... */
+#define tv16(v)      (bytesex_hostval16(v))      /* target value... */
 
 #define LIB_TIME_SIZE     sizeof(lib_timestamp)
 #define LIB_VRSN_SIZE     sizeof(int32)
@@ -155,6 +164,27 @@ static int is_cf_magic(int32 magic)
     }
     return magic == cf_magic;
 }
+#ifdef TARGET_HAS_ELF
+static int is_elf_magic(unsigned char ei_data)
+{
+    bytesex_requirement reqt = bytesex_host();
+    int need_rev;
+
+    need_rev = (ei_data == ELFDATA2LSB && reqt == bytesex_WANT_BIG_ENDIAN ||
+                ei_data == ELFDATA2MSB && reqt == bytesex_WANT_LITTLE_ENDIAN);
+
+    if (cf_magic == 0)
+    {
+        /* We haven't seen any object files yet, so accept the ELF ordering */
+        bytesex_reverse(need_rev);
+        return is_cf_magic(hv(CF_MAGIC));
+    }
+    else
+    {
+        return (bytesex_reversing() == need_rev);
+    }
+}
+#endif
 
 #ifndef __STDC__
 static void memcpy(char *a, char *b, int n)
@@ -286,7 +316,7 @@ static void munge_filename(char *s)
 
 static void readlib(void)
 {   cf_header *cfh;
-    int32 size, maxchunks;
+    int32 maxchunks;
     int32 headsize, module_offset, module_size;
     FILE *fp;
     lib_direntry *diry, *diryend;
@@ -655,7 +685,7 @@ static void mk_lib(void)
             {
                 FILE *fp = fopen(mep->name, "rb");
                 mep->location = halloc ((int32)mep->size);
-             
+
                 /* was wf_load(mep->name, mep->location, mep->size); */
                 if (fp == NULL)
                     error("2Unable to open file %s.");
@@ -695,7 +725,108 @@ static void mk_lib(void)
             char *strt;
             lib_direntry *oe;
             int32 nsyms;
+#ifdef TARGET_HAS_ELF
+            Elf32_Ehdr *e = (Elf32_Ehdr *) mep->location;
+            Elf32_Shdr *hdrs;
+            Elf32_Shdr *strsec;
+            int32 nsecs;
+            int32 sy;
 
+            /* Must be 32-bit relocatable ARM ELF, appropriate endianness,
+             * large enough for at least 3 valid section headers,
+             */
+            if (mep->size <= (sizeof(Elf32_Ehdr)+3*sizeof(Elf32_Shdr)) ||
+                e->e_ident[EI_MAG0] != ELFMAG0  ||
+                e->e_ident[EI_MAG1] != ELFMAG1  ||
+                e->e_ident[EI_MAG2] != ELFMAG2  ||
+                e->e_ident[EI_MAG3] != ELFMAG3  ||
+                e->e_ident[EI_CLASS] != ELFCLASS32 ||
+                e->e_ident[EI_VERSION] != EV_CURRENT ||
+                !is_elf_magic(e->e_ident[EI_DATA]) ||
+                hv16(e->e_type) != ET_REL ||
+                hv16(e->e_machine) != EM_ARM ||
+                hv(e->e_shoff) == 0 ||
+                (nsecs = hv16(e->e_shnum)) < 3 ||
+                hv16(e->e_shentsize) < sizeof(Elf32_Shdr))
+            {
+                goto notelfsymt;
+            }
+
+            hdrs = (Elf32_Shdr *) (mep->location + hv(e->e_shoff));
+
+            /* This loop obliterates the section type field unless a completely
+             * value symbol table is found, to save time on the second loop
+             */
+            for (t_len = l = 0; l < nsecs; ++l) {
+              char *symbase;
+              int32 symname;
+              int32 symsize = hv(hdrs[l].sh_entsize);
+              if (hv(hdrs[l].sh_type) != SHT_SYMTAB) continue;
+              hdrs[l].sh_type = SHT_NULL;
+              strsec = hdrs + hv(hdrs[l].sh_link);
+              if (strsec == hdrs) continue; /* No string table! */
+              strt = mep->location + hv(strsec->sh_offset);
+              if (symsize < sizeof(Elf32_Sym) || (symsize & 3)) goto notelfsymt;
+              nsyms = hv(hdrs[l].sh_size) / symsize;
+              symbase = mep->location + hv(hdrs[l].sh_offset);
+              if (!nsyms || symbase == mep->location) continue;
+              hdrs[l].sh_type = tv(SHT_SYMTAB);
+
+              /* We don't need st_value, so we will zero it if we are excluding
+               * this symbol, and make it non-zero if we are including the symbol
+               * which will save time when we construct the OFL_SYMT entries.
+               * (We actually make it the rounded up string length!)
+               */
+              for (sy = 0; sy < nsyms; ++sy) {
+                Elf32_Sym *s = (Elf32_Sym *) (symbase + sy * symsize);
+                s->st_value = 0;
+                if (ELF32_ST_BIND(s->st_info) != STB_GLOBAL &&
+                    ELF32_ST_BIND(s->st_info) != STB_WEAK) continue;
+                if (hv16(s->st_shndx) == SHN_UNDEF) continue;
+                if ((symname = hv(s->st_name)) == 0) continue; /* No name! */
+                s->st_value = RUPL(strlen(strt + symname) + 1L);
+                t_len += s->st_value + sizeof(int32)*3;
+              }
+            }
+
+            symt_len += t_len;
+
+            if (t_len == 0)
+            {   error("1No exported symbols in %s.", mep->name);
+                goto nosymt;
+            }
+
+            if ((ofl_array[count].len = (size_t)t_len) != t_len)
+                error("2Symbol table (size %lu) too big in %s.",
+                    t_len, mep->name);
+
+            ofl_array[count].fragment = halloc((int32)t_len);
+            oe = (lib_direntry *) ofl_array[count++].fragment;
+            for (l = 0; l < nsecs; ++l) {
+              char *symbase;
+              int32 symsize;
+              if (hv(hdrs[l].sh_type) != SHT_SYMTAB) continue;
+              symsize = hv(hdrs[l].sh_entsize);
+              strsec = hdrs + hv(hdrs[l].sh_link);
+              strt = mep->location + hv(hdrs[hv(hdrs[l].sh_link)].sh_offset);
+              symbase = mep->location + hv(hdrs[l].sh_offset);
+              nsyms = hv(hdrs[l].sh_size) / symsize;
+
+              /* We rely on st_value being the symbol name length here */
+              for (sy = 0; sy < nsyms; ++sy) {
+                Elf32_Sym *s = (Elf32_Sym *) (symbase + sy * symsize);
+                if (!s->st_value) continue;
+                oe->lib_chunkidx = tv(idx);
+                oe->lib_datalength = tv(s->st_value);
+                oe->lib_entrylength = tv(s->st_value + sizeof(int32)*3);
+                strncpy(oe->lib_entry, strt + hv(s->st_name), (size_t) s->st_value);
+                oe = (lib_direntry *) ((char *)oe + (s->st_value + sizeof(int32)*3));
+              }
+            }
+            goto doneelfsymt;
+
+        notelfsymt:;
+#endif
             if (mep->size < sizeof(cf_header) ||
                 mcfh->cf_magic != cf_magic    ||
                 hv(mcfh->cf_numchunks) > hv(mcfh->cf_maxchunks) ||
@@ -750,6 +881,7 @@ static void mk_lib(void)
                 oe = (lib_direntry *) ((char *)oe + (l + sizeof(int32)*3));
             }
 nosymt:;
+doneelfsymt:;
         }
     }
 
@@ -958,7 +1090,7 @@ case 'q':
                 if (!*args)
                     error("1No path on -q qualifier.");
                 endp = skipword(args);
-                csd = strcpy(halloc(strlen(args) + 1), args);
+                csd = strcpy(halloc(strlen(args) + 1L), args);
                 args = " ";
                 break;
 #endif
@@ -978,7 +1110,7 @@ case 'v':
                     if(fread(s, size, 1, fp) != 1)
                         error("2Unable to read via file.");
                     else
-                    {            
+                    {
                         *(s + size) = 0;
                         parse_cmd(s);
                         args = " ";
