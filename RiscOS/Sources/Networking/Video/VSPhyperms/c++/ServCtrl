@@ -46,10 +46,8 @@ ServerList::Remove(int identifier)
   
   	while( (i < CurrentSize)&&(identifiers[i] != identifier) ) i++;
   
-  	if (i == CurrentSize){
-  		MakeError(VSP_UnknownObj);
-        	result = ErrorOccurred;
-  	}
+  	if (i == CurrentSize)
+  		result = MakeError(VSP_UnknownObj);
 
 	if (result != ErrorOccurred){
 	  	if (!( ((Server*)object[i])->stream_uses() ))
@@ -83,24 +81,22 @@ Server::setSocketError(int socket_result)
         if ((result != ErrorOccurred)&&(socket_result < 0)) {
                 switch (errno) {
                         default:
-                                MakeError(TCP_SocketError);
-                		result = ErrorOccurred;
+                                result = MakeError(TCP_SocketError);
+#ifdef DEBUGLIB                                
+                                Debug("tcp errno = %i", errno);
+#endif                                
                                 break;
                         case ECONNREFUSED:
-                                MakeError(TCP_ConnectionRefused);
-                		result = ErrorOccurred;
+                                result = MakeError(TCP_ConnectionRefused);
                                 break;
                         case ENOENT:
-                                MakeError(TCP_UnknownServer);
-                		result = ErrorOccurred;
+                                result = MakeError(TCP_UnknownServer);
                                 break;
                         case EINVAL:
-                                MakeError(TCP_BadPortSpecification);
-                		result = ErrorOccurred;
+                                result = MakeError(TCP_BadPortSpecification);
                                 break;
                         case ENOBUFS:
-                        	MakeError(TCP_NoBuffer);
-                		result = ErrorOccurred;
+                        	result = MakeError(TCP_NoBuffer);
                         	break;
                         case EWOULDBLOCK:
                         	result = NoError;
@@ -118,8 +114,7 @@ Server::Connect(char *server_name, char *service)
   // Create a TCP socket
   SocketDescriptor = Socket::creat();
   if (!SocketDescriptor.valid()) {
-    MakeError(TCP_SocketError);
-    return ErrorOccurred;
+    return MakeError(TCP_SocketError);
   }
   else {
     // OK - made the socket, now connect it to the remote end
@@ -132,9 +127,8 @@ Server::Connect(struct in_addr server_name, int service)
 {
   // Create a TCP socket
   SocketDescriptor = Socket::creat();
-  if (!SocketDescriptor.valid()) {
-    MakeError(TCP_SocketError);
-    return ErrorOccurred;
+  if (!SocketDescriptor.valid()){
+    return MakeError(TCP_SocketError);
   }
   else {
     // OK - made the socket, now connect it to the remote end
@@ -148,8 +142,7 @@ Server::Connect(char *server_name, int service)
   // Create a TCP socket
   SocketDescriptor = Socket::creat();
   if (!SocketDescriptor.valid()) {
-    MakeError(TCP_SocketError);
-    return ErrorOccurred;
+    return MakeError(TCP_SocketError);
   }
   else {
     // OK - made the socket, now connect it to the remote end
@@ -180,14 +173,10 @@ Server::send_assetlist_request(int select_flags, int start, int number)
   request.RFU[0] = request.RFU[1] = request.RFU[2] = request.RFU[3] = request.RFU[4] = 0x00;
 
   if (hton_structure(&request, map_AssetListRequest, AssetListRequest) == ErrorOccurred){
-  	MakeError(TCP_SendFail);
-  	return ErrorOccurred;
+  	return MakeError(TCP_SendFail);
   }
   
-  if (SendData((void*)&request, sizeof(AssetListRequest)) == ErrorOccurred)
-  	return ErrorOccurred;
-
-  return NoError;
+  return SendData((void*)&request, sizeof(AssetListRequest));
 }
 
 error_flag
@@ -198,58 +187,42 @@ Server::get_assetlist_response(int *number, AssetIDDescriptor *buffer, int *buff
   PacketHeader header;
   AssetListResponseHeader alr_header;
   int asset_count;
+  error_flag result = ErrorState();
+
+  if (result != ErrorOccurred)
+  	result = GetData(&header, sizeof(PacketHeader));
+  	
+  if ((result != ErrorOccurred)&&(ntoh_structure((void*)&header, map_PacketHeader, PacketHeader) == ErrorOccurred))
+  	result = MakeError(TCP_ReadFail);
   
-  if (ErrorExists())
-  	return ErrorOccurred;
+  if ((result != ErrorOccurred)&&(header.command_number != COMMAND_assetlist_response))
+    	result = MakeError(VSP_UnknownMessage);
+    	
+  if (result != ErrorOccurred)
+  	result = GetData(&alr_header, sizeof(AssetListResponseHeader));
 
-  if (GetData((void*)&header, sizeof(PacketHeader)) == ErrorOccurred)
-  	return ErrorOccurred;	//Null
+  if ((result != ErrorOccurred)&&(ntoh_structure(&alr_header, map_AssetListResponseHeader, AssetListResponseHeader) == ErrorOccurred))
+    	result = MakeError(TCP_SendFail);
 
-  if (header.command_number != COMMAND_assetlist_response) {
-    	MakeError(VSP_UnknownMessage);
-    	return ErrorOccurred;
-  }
+  if ((result != ErrorOccurred)&&(alr_header.certification_code != certification_code++))    
+  	result = MakeError(VSP_ServerCertError);
 
-  if (GetData((void*)&alr_header, sizeof(AssetListResponseHeader)) == ErrorOccurred)
-  	return ErrorOccurred;	//Null
-
-  if (ntoh_structure(&alr_header, map_AssetListResponseHeader, AssetListResponseHeader) == ErrorOccurred){
-    	MakeError(TCP_SendFail);
-  	return ErrorOccurred;
-  }
-
-  if (alr_header.certification_code != certification_code++){
-  	MakeError(VSP_ServerCertError);
-  	return ErrorOccurred;
-  }
-#ifdef DEBUGLIB  
-  Debug("number %i, assets %i, entries %i, cont %x, result %i", (*number), alr_header.total_number_of_assets, 
-  				alr_header.number_of_entries, alr_header.continuity_flag, alr_header.result);
-#endif  
   if ((*number) == 0) // if a request for the number of assets
   	(*number) = (int)alr_header.total_number_of_assets;
-  else {
-    	asset_count = 0;
-    	while ((asset_count < (*number))&&(asset_count < alr_header.number_of_entries)
-    		&&( (asset_count+1) * sizeof(AssetIDDescriptor) <= (*buffer_size)) ) {
-    		  
-   		if (GetData((void*)&(buffer[asset_count]), sizeof(AssetIDDescriptor)) == ErrorOccurred){
-   		  	if (ErrorNum() == TCP_TimeOutOnReceive){
-   		  		RemoveErr();
-   		  		break;
-   		  	}
-   		  	else
-   		  		return ErrorOccurred;	//Null
-  		}
-  		
+  else {   	
+    	// extract the data from the socket.
+    	result = GetData((void*)buffer, (int)(header.command_length - sizeof(AssetListResponseHeader)));
+
+	for (asset_count = 0; asset_count < ( (header.command_length - sizeof(AssetListResponseHeader))/sizeof(AssetIDDescriptor) ); asset_count++){
+ 		
   		if (ntoh_structure((void*)&(buffer[asset_count]), map_AssetIDDescriptor, AssetIDDescriptor) == ErrorOccurred){
   	  		MakeError(TCP_ReadFail);
   			return ErrorOccurred;
   		}
-  		/*
+		/* 		
     		AssetIDDescriptor *asset = &buffer[asset_count];
     		
-  		Debug("asset id (%i)", asset->asset_id); 
+  		Debug("asset id (%i)", asset->asset_id);
         	Debug("last update%8.8X%8.8X", (int)asset->time_of_last_update[8], (int)asset->time_of_last_update);     
         	Debug("registration %i", asset->registration);         
         	Debug("bitrate %i", asset->bit_rate);            
@@ -264,16 +237,15 @@ Server::get_assetlist_response(int *number, AssetIDDescriptor *buffer, int *buff
         	Debug("video type  %i", asset->video_type);    
         	Debug("video status  %i", asset->video_status);
 		*/
-  		asset_count++;
+  		(*buffer_size) -= sizeof(AssetIDDescriptor);
+ 		//asset_count++;
   	}// while
   	(*number) = asset_count;
-  	(*buffer_size) -= (asset_count)*sizeof(AssetIDDescriptor);
   }
-  if (alr_header.result != 0){
-    MakeError(VSP_ServerError);
-    return ErrorOccurred;
-  }
-  return NoError;
+  if (alr_header.result != 0)
+  	result = MakeError(VSP_ServerError);
+   		      	  
+  return result;
 }
 
 error_flag
@@ -290,14 +262,10 @@ Server::send_scenelist_request(int asset_id)
   request.RFU[0] = request.RFU[1] = request.RFU[2] = request.RFU[3] = request.RFU[4] = 0;
 
   if (hton_structure(&request, map_SceneListRequest, SceneListRequest) == ErrorOccurred){
-  	MakeError(TCP_SendFail);
-  	return ErrorOccurred;
+  	return MakeError(TCP_SendFail);
   }
   
-  if (SendData((void*)&request, sizeof(SceneListRequest)) == ErrorOccurred)
-  	return ErrorOccurred;
-
-  return NoError;
+  return SendData((void*)&request, sizeof(SceneListRequest));
 }
 
 error_flag
@@ -315,18 +283,15 @@ Server::get_scenelist_response(int *number, SceneInformationDescriptor *buffer, 
   	return ErrorOccurred;	//Null
 
   if (ntoh_structure(&header, map_SceneListHeader, SceneListHeader) == ErrorOccurred){
-    	MakeError(TCP_SendFail);
-  	return ErrorOccurred;
+    	return MakeError(TCP_SendFail);
   }
 
   if (header.command_number != COMMAND_scenelist_response) {
-    	MakeError(VSP_UnknownMessage);
-    	return ErrorOccurred;
+    	return MakeError(VSP_UnknownMessage);
   }
 
   if (header.certification_code != certification_code++){
-  	MakeError(VSP_ServerCertError);
-  	return ErrorOccurred;
+  	return MakeError(VSP_ServerCertError);
   }
   
   if ((*number) == 0)
@@ -340,8 +305,7 @@ Server::get_scenelist_response(int *number, SceneInformationDescriptor *buffer, 
   			return ErrorOccurred;	//Null
   		
   		if (ntoh_structure((void*)&(buffer[asset_count]), map_SceneInformationDescriptor, SceneInformationDescriptor) == ErrorOccurred){
-  	  		MakeError(TCP_ReadFail);
-  			return ErrorOccurred;
+  	  		return MakeError(TCP_ReadFail);
   		}
   		asset_count++;
   	}// while
@@ -359,8 +323,7 @@ Server::get_scenelist_response(int *number, SceneInformationDescriptor *buffer, 
           }
   }
   if (header.result != 0){
-    MakeError(VSP_ServerError);
-    return ErrorOccurred;
+    return MakeError(VSP_ServerError);
   }
   return NoError;
 }
@@ -398,23 +361,20 @@ Server::send_assetpresentation_request(int init_value, PlayElementRequest playli
   request.RFU[0] = request.RFU[1] = request.RFU[2] = request.RFU[3] = 0;
 
   if (hton_structure(&request, map_AssetPresentationRequest, AssetPresentationRequest) == ErrorOccurred) {
-         MakeError(TCP_SendFail);
-         return ErrorOccurred;
+         return MakeError(TCP_SendFail);
   }
 
   request.my_IP_address = (int)ipaddr.s_addr;		// my_IP_address of source object;
 
   for (i = 0; i < size; i++){
   	if (hton_structure(&(playlist[i]), map_PlayElementRequest, PlayElementRequest) == ErrorOccurred){
-  	  	MakeError(TCP_SendFail);
-  		return ErrorOccurred;
+  	  	return MakeError(TCP_SendFail);
   	}
   }  
         
   if ( 	(SendData(&request, sizeof(AssetPresentationRequest)) == ErrorOccurred) ||
   	(SendData(playlist, sizeof(PlayElementRequest)*size) == ErrorOccurred) ){// ||
-  	MakeError(TCP_SendFail);
-  	return ErrorOccurred;
+  	return MakeError(TCP_SendFail);
   }
 
   return NoError;
@@ -432,29 +392,30 @@ Server::get_assetpresentation_response(struct in_addr *ipaddr, ULINT *port, unsi
   if (GetData((void*)&header, sizeof(PacketHeader)) == ErrorOccurred)
   	return ErrorOccurred;	//Null
 
+  if (ntoh_structure(&header, map_PacketHeader, PacketHeader) == ErrorOccurred) {
+    	return MakeError(TCP_ReadFail);
+  }
+
   if (header.command_number != COMMAND_assetpres_response) {
-    	MakeError(VSP_UnknownMessage);
-    	return ErrorOccurred;
+    	return MakeError(VSP_UnknownMessage);
   }
     // certification code
   if (GetData((void*)&response, sizeof(AssetPresentationResponse)) == ErrorOccurred)
   	return ErrorOccurred;	//Null
 
   if (ntoh_structure(&response, map_AssetPresentationResponse, AssetPresentationResponse) == ErrorOccurred) {
-    	MakeError(TCP_ReadFail);
-  	return ErrorOccurred;
+    	return MakeError(TCP_ReadFail);
   }
 
   if (response.certification_code != certification_code++){
-  	MakeError(VSP_ServerCertError);
-  	return ErrorOccurred;
+  	return MakeError(VSP_ServerCertError);
   }
   
-  buffersize = (int) (response.command_length+4) - sizeof(AssetPresentationResponse);
+  buffersize = (int)(header.command_length) - sizeof(AssetPresentationResponse);
 
   if (buffersize != 0) {	// get scene information
    	if ( (buffer = new char[buffersize]) ==NULL)
-	    MakeError(VSP_Alloc);
+	    return MakeError(VSP_Alloc);
   	else {
 		if (GetData((void*)buffer, buffersize) == ErrorOccurred)
   			return ErrorOccurred;	//Null
@@ -479,8 +440,7 @@ Server::get_assetpresentation_response(struct in_addr *ipaddr, ULINT *port, unsi
   	(*stream_time) = (unsigned int)response.total_time;
   
   if (response.result != 0){
-    MakeError(VSP_ServerError);
-    return ErrorOccurred;
+    return MakeError(VSP_ServerError);
   }
 
   return NoError;
@@ -495,8 +455,7 @@ Server::send_playback_request(int state_id, ULINT MAX_storableBlock, ULONG AckSe
 #ifdef DEBUGLIB
 	Debug("invalid value in play request, %i-%i", MAX_storableBlock, AckSeq);
 #endif	    
-    MakeError(VSP_InvalidValue);
-    return ErrorOccurred;
+    return MakeError(VSP_InvalidValue);
   }
   
   request.interface_number = 0;
@@ -519,8 +478,7 @@ Server::send_playback_request(int state_id, ULINT MAX_storableBlock, ULONG AckSe
   request.RFU[0] = request.RFU[1] = request.RFU[2] = request.RFU[3] = 0;
 
   if (hton_structure((void*)&request, map_PlayBackRequest, PlayBackRequest) == ErrorOccurred){
-  	MakeError(TCP_SendFail);
-  	return ErrorOccurred;
+  	return MakeError(TCP_SendFail);
   }	
   
   if (SendData((void*)&request, sizeof(PlayBackRequest)) == ErrorOccurred)
@@ -532,28 +490,30 @@ Server::send_playback_request(int state_id, ULINT MAX_storableBlock, ULONG AckSe
 error_flag
 Server::get_playback_response(ULINT *result)
 {
+  error_flag  e_result = NoError;
   PlayBackResponse response;
   
   if (GetData((void*)&response, sizeof(PlayBackResponse)) == ErrorOccurred)
-  	return ErrorOccurred;	//Null
+  	e_result = ErrorOccurred;	//Null
 
-  if (ntoh_structure(&response, map_PlayBackResponse, PlayBackResponse) == ErrorOccurred) {
-    	MakeError(TCP_ReadFail);
-  	return ErrorOccurred;
+  if ((e_result != ErrorOccurred)&&(ntoh_structure(&response, map_PlayBackResponse, PlayBackResponse) == ErrorOccurred)) {
+    	e_result = MakeError(TCP_ReadFail);
   }
   
-  if (response.certification_code != certification_code++){
-  	MakeError(VSP_ServerCertError);
-  	return ErrorOccurred;
+  if ((e_result != ErrorOccurred)&&(response.certification_code != certification_code++)){
+  	e_result = MakeError(VSP_ServerCertError);
   }
     
-  if (response.result != 0){
+  if ((e_result != ErrorOccurred)&&(response.result != 0)){
     *result = response.result;
-    MakeError(VSP_ServerError);
-    return ErrorOccurred;
+    e_result = MakeError(VSP_ServerError);
   }
+  
+#ifdef DEBUGLIB
+	Debug("playback response %i, wait %i", response.result, response.wait);
+#endif 
 
-  return NoError;
+  return e_result;
 }
  
 //--------------------------------------------------------public methods---------------
@@ -589,7 +549,7 @@ Server::Server(char *server, char *port, int timeout):Error()
   timeout_period = timeout;
   
 #ifdef DEBUGLIB
-  Debug(" create server link");
+  Debug("create server link");
 #endif  
   if ( Connect(server, port) != ErrorOccurred ){			// connect to known port
     	 SocketDescriptor.getPeerPort(&connection_port);
@@ -597,11 +557,17 @@ Server::Server(char *server, char *port, int timeout):Error()
   		if (header.command_number == COMMAND_CPNN) {		// check packet type
   			if ( GetData((void*)&cpnn, sizeof(cpnn)) != ErrorOccurred ) {
   				SocketDescriptor.close();		// close known port
-  				if (cpnn.result != 0)
+  				if (cpnn.result != 0){
     					MakeError(VSP_ServerError);
-  				else
-  				if (Connect(server, (int)(cpnn.connection_port_number>>16)) == ErrorOccurred)
-  					SocketDescriptor.close();	// attempt to connect to given port
+    				}
+  				else{
+#ifdef DEBUGLIB  				  
+  					Debug("result %i, port %i", cpnn.result, ntohs((int)(cpnn.connection_port_number>>16)));
+#endif  					
+  					if (Connect(server, (int)(cpnn.connection_port_number>>16)) == ErrorOccurred){
+  						SocketDescriptor.close();	// attempt to connect to given port
+  					}
+  				}
  			}
  			else { // get CPNN
         		     SocketDescriptor.close();			// close on error
@@ -616,6 +582,7 @@ Server::Server(char *server, char *port, int timeout):Error()
         }
   }// connected to known port
   InitVar();
+  //SocketDescriptor.makeNonBlocking();
 }
 
 Server::~Server()
@@ -669,14 +636,14 @@ Server::Server(Server *server)
         }
   }// connected to known port
   InitVar();
+  //SocketDescriptor.makeNonBlocking();
 }
 
 error_flag
 Server::getSocket(Socket *s)
 {
     if (!SocketDescriptor.valid()) {
-        MakeError(TCP_SocketError);
-        return ErrorOccurred;
+        return MakeError(TCP_SocketError);
     }
     *s = SocketDescriptor;		// block copy
     return NoError;
@@ -687,26 +654,40 @@ error_flag
 Server::SendData(void *buffer, int size)
 {
   error_flag result = ErrorState();
- 
+
   unsigned int t1, t2;
-  int sent_size = 0;
-  
+  UBYTE *buf_ptr = (UBYTE*)buffer;
+  size_t remaining_data = size;
+ 	
   (void) _swix(OS_ReadMonotonicTime, _OUT(0), &t1);
-   
-   while ((sent_size = SocketDescriptor.write(buffer, size)) != size) {
-     	if (sent_size < 0){
-     		result = setSocketError(sent_size);
-     		break;
-     	}
-     		
-   	(void) _swix(OS_ReadMonotonicTime, _OUT(0), &t2);
-     	if (t2 > (t1 + timeout_period)){
-        	MakeError(TCP_SendFail);
-        	result = ErrorOccurred;
-        	break;
-     	}
-    }
-    
+  
+  do {	
+    	int data_read;
+  	
+	if (result == ErrorOccurred)
+		break;
+			
+  	(void) _swix(OS_ReadMonotonicTime, _OUT(0), &t2);
+    	  	
+    	data_read = SocketDescriptor.write(buf_ptr, remaining_data);
+    	  	
+    	if ( data_read > 0) {
+    		remaining_data -= data_read;
+    		buf_ptr += data_read;
+    	  	t1 = t2;
+    	}
+
+    	if (data_read < 0){
+    		result = setSocketError(data_read);
+    	}
+    	
+    	if (t2 > (t1 + timeout_period)){
+    	  	result = MakeError(TCP_TimeOutOnCommunication);
+    	}
+    	  	
+  } while (remaining_data > 0);
+
+
   return result;
 }
 
@@ -714,31 +695,41 @@ error_flag
 Server::GetData(void *buffer, int size)
 {
   error_flag result = ErrorState();
- 
-  unsigned int t1, t2;
-  int get_size = 0;
   
+  unsigned int t1, t2;
+  
+  UBYTE *buf_ptr = (UBYTE*)buffer;
+  size_t remaining_data = size;
+ 	
   (void) _swix(OS_ReadMonotonicTime, _OUT(0), &t1);
-   
-  while ((result != ErrorOccurred)&&
-  	((get_size = SocketDescriptor.read(buffer, size, MSG_PEEK)) != size)) {
-    
-   	result = setSocketError(get_size);
+  	
+  do {
+    	int data_read;
+    	
+  	if (result == ErrorOccurred)
+  		break;
+  		
+  	(void) _swix(OS_ReadMonotonicTime, _OUT(0), &t2);
+    	  	
+    	data_read = SocketDescriptor.read(buf_ptr, remaining_data);
+    	  	
+    	if ( data_read > 0) {
+    		remaining_data -= data_read;
+    		buf_ptr += data_read;
+    	  	t1 = t2;
+    	}
    		
-   	(void) _swix(OS_ReadMonotonicTime, _OUT(0), &t2);
-   	if (t2 > (t1 + timeout_period)){
-   		MakeError(TCP_TimeOutOnReceive);
-   		result = ErrorOccurred;
-   		break;
-   	}
-   }	
- 
-   if ((result != ErrorOccurred)&&(SocketDescriptor.read(buffer, size) != size)) {
-        MakeError(TCP_ReadFail);
-        result = ErrorOccurred;
-   }
-
-   return result;
+    	if (data_read < 0){
+    		result = setSocketError(data_read);
+    	}
+    	
+    	if (t2 > (t1 + timeout_period)){
+    	  	result = MakeError(TCP_TimeOutOnCommunication);
+    	}
+    	  	
+  }while (remaining_data > 0);
+  
+  return result;
 }
 
 #ifdef DEBUGLIB
@@ -746,15 +737,18 @@ int
 Server::ReadDataToDebug(void)
 {
   int data, size, size_total = 0;
-  
+  SocketDescriptor.makeNonBlocking();
+      
     while ( (size = SocketDescriptor.read(&data, sizeof(int))) == sizeof(int) ) {
     	size_total += size;
-    	Debug("data %8.8X", data);
+    	Debug("data %8.8X", ntohl(data) );
     }
+        
     if (size == -1)    
     	Debug("data errno %i", errno);
     	
-    return size_total;
+  SocketDescriptor.makeBlocking();
+  return size_total;
 } 
 #endif  
 
@@ -776,7 +770,6 @@ Server::inetevent(int *event, ULINT *result)
   StartEndNotification notify;
   
   *result = 0;
-  int buffer;
   
   if (PeekHeader(event) == ErrorOccurred){
     return NoError;	// no data
@@ -787,8 +780,7 @@ Server::inetevent(int *event, ULINT *result)
   		if (GetData(&notify, sizeof(StartEndNotification)) == ErrorOccurred)
     			return ErrorOccurred;
     		if (ntoh_structure(&notify, map_StartEndNotification, StartEndNotification) == ErrorOccurred){
-    			MakeError(TCP_ReadFail);
-    			return  ErrorOccurred;
+    			return MakeError(TCP_ReadFail);
     		}
     		*result = (int)notify.trans_block_num;
     	        break;
@@ -797,16 +789,38 @@ Server::inetevent(int *event, ULINT *result)
     			return ErrorOccurred;
     		break;
     	case COMMAND_assetend_response:
-#ifdef DEBUGLIB    	
-    		Debug("asset end response");
-#endif    		
+   		{
+   			AssetEndResponse response;
+   			if ((GetData((void*)&response, sizeof(AssetEndResponse)) == ErrorOccurred))
+   				return ErrorOccurred;
+			if ((ntoh_structure(&response, map_AssetEndResponse, AssetEndResponse) == ErrorOccurred)) {
+     				return MakeError(TCP_ReadFail);
+   			}
+   	
+   			if ((response.certification_code != certification_code++)){
+   				return MakeError(VSP_ServerCertError);
+   			}
+   			
+   			*result = response.result;
+#ifdef DEBUGLIB
+   			if (ErrorExists())
+				Debug("asset end result (%i)", response.result);
+   			else
+   				Debug("timeout on receiving asset end %i words in buffer", ReadDataToDebug());
+#endif   
+                }
     		break;
     	default:
 
 #ifdef DEBUGLIB    
     		Debug("TCP: inet ignore unknown command %2.2X\n", *event);
+    		ReadDataToDebug();
+#else
+		{
+  		int buffer;
+    			while (SocketDescriptor.read(&buffer, 4)==4);
+    		}
 #endif    		
-    		while (SocketDescriptor.read(&buffer, 4)==4);
     		break;
     		
   }
@@ -851,6 +865,7 @@ Server::SendNak(ULINT BlockStart, LINT DatagramStart, ULINT BlockEnd, LINT Datag
 	comms_flag = comms;		// communicated with server;
 	
   	int size = SocketDescriptor.write((void*)&nak, sizeof(NAK_Block));
+  		
   	if (size < 0){
 #ifdef DEBUGLIB  		  
   	  	Debug("error sending NAK %i", errno);
@@ -880,7 +895,6 @@ Server::GetAssetList(_kernel_swi_regs *regs)
   	    (get_assetlist_response(&(regs->r[4]), NULL, 0)== ErrorOccurred)) )
   		result = ErrorOccurred;		
   
-  
   if ((result != ErrorOccurred)&&(regs->r[5] == 0)){
     	regs->r[6] = regs->r[4] * sizeof(AssetIDDescriptor);
   }
@@ -890,8 +904,8 @@ Server::GetAssetList(_kernel_swi_regs *regs)
     	AssetIDDescriptor *buffer_offset = (AssetIDDescriptor*)regs->r[5];
     	
 	// this is the number of entries that can be read at once without overflow
-    	int number_entries = (int)((SocketDescriptor.getrecvspace()) - 
-    				(sizeof(PacketHeader)+sizeof(AssetListResponseHeader)))/sizeof(AssetIDDescriptor); 	
+    	int number_entries = (int)((SocketDescriptor.getTCPrecvspace()) - 
+    				(sizeof(PacketHeader)+sizeof(AssetListResponseHeader)))/sizeof(AssetIDDescriptor); 
     	
     	while ((result != ErrorOccurred)&&(regs->r[4] > 0)){
     	  
@@ -899,19 +913,20 @@ Server::GetAssetList(_kernel_swi_regs *regs)
     	  		number_entries = regs->r[4];
     	  		
   		expected_num_assets = number_entries;	// this is the number of assets that we expect to receive
-#ifdef DEBUGLIB  			
-  		Debug("from %i buffer %8.8X, size %i expected num %i", regs->r[3], buffer_offset, regs->r[6], expected_num_assets);
-#endif   		
-  		if ((result != ErrorOccurred)&&(( send_assetlist_request(regs->r[2], regs->r[3], expected_num_assets) == ErrorOccurred) ||
+
+ 		if ((result != ErrorOccurred)&&(( send_assetlist_request(regs->r[2], regs->r[3], expected_num_assets) == ErrorOccurred) ||
   	    		(get_assetlist_response(&expected_num_assets, buffer_offset, &(regs->r[6])) == ErrorOccurred)))
   			result = ErrorOccurred;
   		else {
   		  	regs->r[4] -= expected_num_assets;		// decrement request count
+  		  	if (regs->r[3] == 0)
+  		  		regs->r[3] = 1;
   		  	regs->r[3] += expected_num_assets;		// increment start position
   		  	buffer_offset += expected_num_assets;
   		}
+  				
 #ifdef DEBUGLIB  		
-  		Debug("read %i buffer %8.8X, size %i new start %i", expected_num_assets, buffer_offset, regs->r[6], regs->r[3]);
+  		Debug("Asset list: read %i size %i new start %i", expected_num_assets, regs->r[6], regs->r[3]);
 #endif
    		if (expected_num_assets < number_entries)
   			break;
@@ -946,29 +961,32 @@ error_flag
 Server::AssetPresentation(int init_value, PlayElementRequest playlist[], int size, unsigned int *stream_time, struct in_addr *ipaddr, 
 								ULINT *port, ULINT *dgram_size, ULINT *bitrate, int *fast_playback_ratio)
 {
-  if (ErrorExists()) {
-    return ErrorOccurred;
+  error_flag result = ErrorState();
+  
+  if (  (result != ErrorExists())
+  	&&(
+  	(send_assetpresentation_request(init_value, playlist, size, (*ipaddr), (*port)) == ErrorOccurred ) ||
+ 	(get_assetpresentation_response(ipaddr, port, stream_time, dgram_size, bitrate, fast_playback_ratio) == ErrorOccurred) 
+ 	) )
+     		result = ErrorOccurred;
+
+  
+  if (result != ErrorOccurred){
+  	SocketDescriptor.eventsOn();
+  	SocketDescriptor.makeNonBlocking();
   }
-
-  if (	(send_assetpresentation_request(init_value, playlist, size, (*ipaddr), (*port)) == ErrorOccurred ) ||
- 	(get_assetpresentation_response(ipaddr, port, stream_time, dgram_size, bitrate, fast_playback_ratio) == ErrorOccurred) )
-     return ErrorOccurred;
-
-  SocketDescriptor.eventsOn();
-  SocketDescriptor.makeNonBlocking();
-  return NoError;
+  
+  return result ;
 }
 
 error_flag
 Server::AssetEnd(int status, int endflag)
 {
    AssetEndRequest request;
-   AssetEndResponse response;
    
-   error_flag result = NoError;
-   unsigned int t1, t2;
+   error_flag result = ErrorState();
    
-   if (ErrorExists()){
+   if (result == ErrorOccurred){
      switch(ErrorNum()){
         case TCP_UnknownService:
         case TCP_BadPortSpecification:
@@ -977,17 +995,24 @@ Server::AssetEnd(int status, int endflag)
         case TCP_ConnectionRefused:
         case TCP_ReadFail:
         case TCP_SendFail:
-        case TCP_TimeOutOnReceive:
+        case TCP_TimeOutOnCommunication:
              return ErrorOccurred;
              
      	default:
   		RemoveErr();	// it doesn't matter now we are trying to get out
+  		result = NoError;
   		break;
      }
    }
-   
-   //SocketDescriptor.eventsOff();
-  
+
+#ifdef DEBUGLIB
+    int size_remaining = ReadDataToDebug();
+    if (size_remaining > 0) {
+    	Debug("Asset End %i remaining in socket", ReadDataToDebug());
+    	SocketDescriptor.makeNonBlocking();
+    }
+#endif    
+
    request.interface_number = 0;
    request.route_type = 0;
    request.command_number = COMMAND_assetend_request;
@@ -1001,54 +1026,10 @@ Server::AssetEnd(int status, int endflag)
    request.RFU[0] = request.RFU[1] = request.RFU[2] = request.RFU[3] = request.RFU[4] = 0;
 
    if ( hton_structure(&request, map_AssetEndRequest, AssetEndRequest) == ErrorOccurred) {
-     	MakeError(TCP_SendFail);
-     	return ErrorOccurred;
+     	return MakeError(TCP_SendFail);
    }
-   
-   	
+
    result = SendData((void*)&request, sizeof(AssetEndRequest));
   
-   if (result != ErrorOccurred){
-   	int command = 0;
-   	(void) _swix(OS_ReadMonotonicTime, _OUT(0), &t1);
-      	
-   	do {   // loop until we receive end request dialogue
-
-     		ULINT comms_result;
-     
-     		result = inetevent(&command, &comms_result);	// clear the queue this clears start end notifications
-
-   		(void) _swix(OS_ReadMonotonicTime, _OUT(0), &t2);
-   	
-     		if (t2 > (t1 + timeout_period)){
-#ifdef DEBUGLIB     	  
-   			Debug("timeout on receiving asset end");
-#endif
-     	  		MakeError(TCP_TimeOutOnReceive);
-     			return ErrorOccurred;
-     		} 	
-   	}
-   	while (command != COMMAND_assetend_response);
-   }
-   
-   if ((result != ErrorOccurred)&&(GetData((void*)&response, sizeof(AssetEndResponse)) == ErrorOccurred))
-   	result = ErrorOccurred;
-
-   	
-   if ((result != ErrorOccurred)&&(ntoh_structure(&response, map_AssetEndResponse, AssetEndResponse) == ErrorOccurred)) {
-     	MakeError(TCP_ReadFail);
-     	result = ErrorOccurred;
-   }
-   	
-   if ((result != ErrorOccurred)&&(response.certification_code != certification_code++)){
-   	MakeError(VSP_ServerCertError);
-   	return ErrorOccurred;
-   }
-#ifdef DEBUGLIB
-   if (result != ErrorOccurred)
-	Debug("asset end result (%i)", response.result);
-   else
-   	ErrorDump();
-#endif   
    return NoError;
 }

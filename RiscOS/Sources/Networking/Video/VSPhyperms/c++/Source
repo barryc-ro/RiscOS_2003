@@ -159,16 +159,14 @@ Source::Allocate(size_t max_blocks, size_t block_size, size_t initial_block_num,
   	
 	if (result != ErrorOccurred) {	
   		if (initial_block_num < 1){
-  		  	MakeError(VSP_InvalidValue);
-  		  	result = ErrorOccurred;
+  		  	result = MakeError(VSP_InvalidValue);
   		}
   		else {					// must be greater than one by specification;
   			//max_block_received = 
   			last_block_sent = max_completed_block = initial_block_num -1;
         	
         		if (datagram_size <= sizeof(struct udphdr)) {
-        		        MakeError(VSP_DatagramSizeError);
-        		        result = ErrorOccurred;
+        		        result = MakeError(VSP_DatagramSizeError);
         		}
  			else {	
    				mem_map = new SourceMemMap(max_blocks, block_size + sizeof(struct udphdr), datagram_size);
@@ -218,25 +216,21 @@ Source::setSocketError(int socket_result)
 {
     error_flag result = ErrorState();
         
-        if ((result != ErrorOccurred)&&(socket_result < 0)) {
-                switch (errno) {
-                        default:
-                                MakeError(TCP_SocketError);
-                                break;
-                        case ECONNREFUSED:
-                                MakeError(TCP_ConnectionRefused);
-                                break;
-                        case ENOENT:
-                                MakeError(TCP_UnknownServer);
-                                break;
-                        case EINVAL:
-                                MakeError(TCP_BadPortSpecification);
-                                break;
+    if ((result != ErrorOccurred)&&(socket_result < 0)) {
+           switch (errno) {
+                 default:
+                        result = MakeError(TCP_SocketError);
+                        break;
+                 case ECONNREFUSED:
+                        result = MakeError(TCP_ConnectionRefused);
+                        break;
+                 case ENOENT:
+                        result = MakeError(TCP_UnknownServer);
+                        break;
+                 case EINVAL:
+                        result = MakeError(TCP_BadPortSpecification);
+                        break;
                 }
-                result = ErrorOccurred;
-        }
-        else {
-                result = NoError;
         }
         return result;
 }
@@ -400,8 +394,7 @@ Source::getBlock(NECBlock **block, BitstreamBufferDescriptor **mpeg_buffer, int 
           	(*block)->num_buffers = 0;
           	(*block)->max_buffers = mb->dgrams_in_block;
           	if ((*block)->buffers[0].buffer_length < sizeof(NECBlockHeader)){
-          		MakeError(VSP_DatagramSizeError);
-			result = ErrorOccurred;
+          		result = MakeError(VSP_DatagramSizeError);
 		}
           	else
           	{
@@ -562,8 +555,7 @@ Source::getSocket(Socket *s)
         }
         else {
           	RemoveErr();		// remove the uninit error
-                MakeError(TCP_SocketError);
-                result = ErrorOccurred;
+                result = MakeError(TCP_SocketError);
         }
 
         return result;
@@ -799,7 +791,13 @@ SourceVOD::ReadDatagrams(callback_flag current_flags, callback_flag *flags, Serv
 	       							result = calculateMaxCompleteBlock();	// calculate most completed
 	       							result = calculatePosAckSequence(server, stats);
 							
-								if (nak_block <= max_completed_block+1)	nak_block = max_completed_block+1;
+								if (nak_block <= max_completed_block+1)	{
+								  	mb = mem_map->findExistingBlock(max_completed_block+1);
+									if (mb != NULL) {
+										mb->nak_timeout = 0;
+									  	nak_block = max_completed_block+1;
+									}
+								}
 													// stream live or full buffers
 								if ( max_completed_block == server->getMaxRequestedBlock() ){
 									(*flags) = (callback_flag)((*flags) | callback_fullblocks);
@@ -829,7 +827,10 @@ SourceVOD::ReadDatagrams(callback_flag current_flags, callback_flag *flags, Serv
 									&&(dgram->block_number > (max_completed_block + 1) )){
 									mb = mem_map->findExistingBlock(max_completed_block+1);
 									if (mb != NULL) {
-										mb->nak_timeout = 0;
+									  	if (nak_block != max_completed_block+1){
+									  	  	nak_block = max_completed_block+1;
+											mb->nak_timeout = 0;
+										}
 										result = calculatePosNAKSequence(server, stats);
 										(*flags) = (callback_flag)((*flags) | callback_nak);
 							                }	
@@ -856,8 +857,7 @@ SourceVOD::ReadDatagrams(callback_flag current_flags, callback_flag *flags, Serv
 #ifdef DEBUGLIB
                        	  		Debug("read errno = %i", errno);
 #endif                       	  	  	
-                                        MakeError(TCP_ReadFail);
-                                        result = ErrorOccurred;
+                                        result = MakeError(TCP_ReadFail);
                                 }
                         	result = mem_map->memFreeDatagram(dgram);
                         }
@@ -1000,8 +1000,7 @@ SourceLIVE::ReadDatagrams(callback_flag current_flags, callback_flag *flags, Ser
 #ifdef DEBUGLIB
                        	  		Debug("read errno = %i", errno);
 #endif                       	  	  	
-                                        MakeError(TCP_ReadFail);
-                                        result = ErrorOccurred;
+                                        result = MakeError(TCP_ReadFail);
                                 }
                         	result = mem_map->memFreeDatagram(dgram);
                         }
@@ -1011,10 +1010,93 @@ SourceLIVE::ReadDatagrams(callback_flag current_flags, callback_flag *flags, Ser
 }
 
 //---------------------------------------------------------------------- BroadCast specific --------------------
-SourceBroadCast::SourceBroadCast(const char *hostname, int source_recvspace, int netTimeOut)
+SourceMultiCast::SourceMultiCast(const char *hostname, int source_recvspace, int netTimeOut)
 {
-  netTimeOut = netTimeOut;
-  
+#ifdef DEBUGLIB
+  	Debug("creating multicast source+");
+    	// Initialisation completed successfully
+  	
+        sd = sd.creat(PF_INET, SOCK_DGRAM);
+       
+        struct ip_mreq mreq;
+	mreq.imr_interface.s_addr = INADDR_ANY;
+        if (inet_aton(hostname, &(mreq.imr_multiaddr)) ) {
+        	if (IN_MULTICAST(mreq.imr_multiaddr.s_addr)){
+          		if (setsockopt(sd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) < 0)
+          			Debug("error in set sock opt.");
+          	}
+          	else
+          		Debug("not a multicast address");
+        }
+        else
+        	Debug("error returned from name change");
+ 
+        //setSocketError(sd.joinMulti(hostname));
+        if (ErrorExists()) Debug("errno = %i", errno);
+        
+        //setsockopt(getSocket(), IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq));
+        //else Debug("Ok on join multi");
+          
+        sd.setrecvspace(source_recvspace);
+        sd.makeNonBlocking();
+ 	//setSocketError(sd.bind());
+        //setSocketError(sd.connect("230.1.1.10", "30000"));
+              
+        if(!ErrorExists()){
+          	Debug("reading datagram");
+        	char *data;
+        	sd.setDgramSize(12524);
+        	nak_block = sd.getDgramSize();
+
+        	in_addr address;
+        	inet_aton(hostname, &address);
+        	Debug("datagram size = %i, address %8.8X", nak_block, address);
+        	data = new char(nak_block);
+          
+        	if (data != NULL){
+        	  	Debug("reading socket");
+            		struct iovec iov[2];
+            		int size, *ptr;
+                
+            		iov[0].iov_len =  sizeof(MultiCastDatagram);
+                	iov[1].iov_len =  (unsigned int)(nak_block - sizeof(MultiCastDatagram)) ;
+                	
+                	iov[0].iov_base = data;
+                	iov[1].iov_base = data + sizeof(MultiCastDatagram);
+                	
+                	 unsigned int t1, t2;
+  				
+  			_swix(OS_ReadMonotonicTime, _OUT(0), &t1);
+  			
+  			t2 = t1;
+  			t1 += netTimeOut;
+  			size = -1;
+  			
+  			while (( t2 < t1 )&&(size <= 0)){
+	                	size = sd.read(iov,sizeof(iov)/sizeof(struct iovec));
+	                	_swix(OS_ReadMonotonicTime, _OUT(0), &t2);
+                	}
+                	Debug("read size = %i", size);
+                	if (size < 0){
+                		Debug("problem %i", errno);
+                		MakeError(TCP_TimeOutOnCommunication);
+                	}
+                	else {
+                		ptr = (int*)data;
+                		for (size = 0; size < sizeof(MultiCastDatagram)/4; size++)
+                			Debug("%8.8X", ptr[size]);
+                	}
+          }
+          delete data;
+        }
+        
+  	Debug("creating multicast source-");
+#else
+	hostname = hostname;
+	source_recvspace = source_recvspace;
+	netTimeOut = netTimeOut;  	
+#endif  	
+
   	stream_end_block = current_play_id = full_blocks = 0;
   	
    	mem_map = NULL;
@@ -1022,48 +1104,15 @@ SourceBroadCast::SourceBroadCast(const char *hostname, int source_recvspace, int
         nak_block = 0;
         nak_timeout = 0;
         most_significant_time = 0;
-  	
-  	
-    	// Initialisation completed successfully
-        sd = sd.creat(PF_INET, SOCK_DGRAM);
-        setSocketError(sd.bind());
-        
-        sd.setrecvspace(source_recvspace);
-        
-        setSocketError(sd.joinMulti(hostname));
-        
-        if(!ErrorExists()){
-          char *data;
-          mem_map->dgram_size = sd.getDgramSize();
-          data = new char(mem_map->dgram_size);
-          
-#ifdef DEBUGLIB                          
-          if (data != NULL){
-            struct iovec iov[2];
-            int size, *ptr;
-                
-            	iov[0].iov_len =  sizeof(MultiCastDatagram);
-                iov[1].iov_len =  (unsigned int)(mem_map->dgram_size - sizeof(MultiCastDatagram)) ;
-                
-                iov[0].iov_base = data;
-                iov[1].iov_base = data + sizeof(MultiCastDatagram);
-                size = sd.read(iov,sizeof(iov)/sizeof(struct iovec));
-                Debug("datagram size = %i", size);
-                ptr = (int*)data;
-                for (size = 0; size < sizeof(MultiCastDatagram)/4; size++)
-                	Debug("%8.8X", ptr[size]);
-          }
-#endif                	
-          delete data;
-        }
-#ifdef DEBUGLIB                          
-        else
-        	ErrorDump();
-#endif        
 }
 
+SourceMultiCast::~SourceMultiCast(void)
+{
+   	//sd.close();
+}
+ 
 error_flag 
-SourceBroadCast::calculatePosAckSequence(Server *server, Statistics *stats)
+SourceMultiCast::calculatePosAckSequence(Server *server, Statistics *stats)
 {
   server = server;
   stats = stats;
@@ -1072,7 +1121,7 @@ SourceBroadCast::calculatePosAckSequence(Server *server, Statistics *stats)
 }
 	//error_flag calculatePosNAKSequence(int *naks_sent, Server *server, int max_block);
 error_flag 
-SourceBroadCast::calculatePosNAKSequence(Server *server, Statistics *stats, int *naks)
+SourceMultiCast::calculatePosNAKSequence(Server *server, Statistics *stats, int *naks)
 {
   server = server;
   stats = stats;
@@ -1088,7 +1137,7 @@ SourceBroadCast::calculatePosNAKSequence(Server *server, Statistics *stats, int 
 //
 //
 error_flag
-SourceBroadCast::ReadDatagrams(callback_flag current_flags, callback_flag *flags, Server *server, Statistics *stats, int timeout)
+SourceMultiCast::ReadDatagrams(callback_flag current_flags, callback_flag *flags, Server *server, Statistics *stats, int timeout)
 {
   current_flags = current_flags;
   server = server;
@@ -1171,8 +1220,7 @@ SourceBroadCast::ReadDatagrams(callback_flag current_flags, callback_flag *flags
 #ifdef DEBUGLIB
                        	  		Debug("read errno = %i", errno);
 #endif                       	  	  	
-                                        MakeError(TCP_ReadFail);
-                                        result = ErrorOccurred;
+                                        result = MakeError(TCP_ReadFail);
                                 }
                         	result = mem_map->memFreeDatagram(dgram);
                         }
@@ -1199,8 +1247,7 @@ Source::getMiscInfo(misc_info_flags flags, void *ptr)
 	  	if (mb != NULL) {
   			memcpy((void*)&most_significant_block, (void*)mb->nec_block.buffers[0].buffer_ptr, sizeof(NECBlockHeader));
   			if (ntoh_structure((void*)&most_significant_block, map_NECBlockHeader, NECBlockHeader) == ErrorOccurred){
-  				MakeError(TCP_SendFail);
-  				result = ErrorOccurred;
+  				result = MakeError(TCP_SendFail);
   			}
   		}
 		ptr_misc_5_10->h_pixels = most_significant_block.image_width;
