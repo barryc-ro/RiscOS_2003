@@ -26,11 +26,13 @@ LD      = link
 RM      = remove
 WIPE    = -wipe
 CD	= dir
+CHMOD	= access
 
 AFLAGS = -depend !Depend -Stamp -quit -To $@ -From
-CFLAGS  = -c -depend !Depend ${INCLUDES} ${DFLAGS}
+CFLAGS  = -c -depend !Depend ${THROWBACK} ${INCLUDES} ${DFLAGS}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
+CHMODFLAGS = RW/R
 #DFLAGS  = -DDEBUG
 
 #
@@ -55,9 +57,9 @@ INCLUDES = -ITbox: -IC:
 #
 COMPONENT = Builder
 TARGET    = !RunImage
-APP	  = <Build$Dir>.!${COMPONENT}
+APP	  = ${INSTALL_DIR}.!${COMPONENT}
 
-OBJS      = o.main o.db o.msg o.env
+OBJS      = o.main o.db o.msg o.env o.file o.parse o.build
 
 
 #
@@ -77,10 +79,12 @@ clean:
         ${WIPE} ${TARGET} ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
-install:
+install: ${TARGET}
 	${MKDIR} ${APP}
 	${CP} ${TARGET} ${APP}.${TARGET} ${CPFLAGS}
 	${CP} Resources.* ${APP}.* ${CPFLAGS}
+	${CHMOD} ${APP} ${CHMODFLAGS}
+	${CHMOD} ${APP}.* ${CHMODFLAGS}
 	@echo ${COMPONENT}: installed
 #
 # Target 
@@ -109,6 +113,9 @@ o.main:	h.msg
 o.main:	C:h.kernel
 o.main:	h.env
 o.main:	C:h.kernel
+o.main:	h.file
+o.main:	h.parse
+o.main:	h.build
 o.db:	c.db
 o.msg:	c.msg
 o.msg:	C:h.kernel
@@ -125,3 +132,22 @@ o.env:	Tbox:h.wimp
 o.env:	h.constants
 o.env:	h.db
 o.env:	h.constants
+o.file:	c.file
+o.file:	C:h.kernel
+o.file:	C:h.swis
+o.parse:	c.parse
+o.parse:	h.constants
+o.parse:	h.db
+o.parse:	h.constants
+o.build:	c.build
+o.build:	C:h.kernel
+o.build:	Tbox:h.gadgets
+o.build:	Tbox:h.toolbox
+o.build:	Tbox:h.wimp
+o.build:	h.constants
+o.build:	h.db
+o.build:	h.constants
+o.build:	h.parse
+o.build:	h.file
+o.build:	h.msg
+o.build:	C:h.kernel
