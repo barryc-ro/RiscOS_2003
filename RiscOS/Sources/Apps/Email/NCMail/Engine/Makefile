@@ -174,16 +174,16 @@ FILES = \
 #
 
 OBJS = o.engcbf o.engdownld o.engfile o.enginit o.engevent \
-       o.engmanager o.engmsgs o.engparse o.engprocess o.engstr \
-       o.enguiapi o.enguser
+       o.engmanager o.engmsgs o.engparse o.engprocess o.engsend \
+       o.engstr o.enguiapi o.enguser
 
 OBJSD = od.engcbf od.engdownld od.engfile od.engevent \
         od.enginit od.engmanager od.engmsgs od.engparse od.engprocess \
-        od.engstr od.enguiapi od.enguser
+        od.engsend od.engstr od.enguiapi od.enguser
 
 OBJSZ=  oz.engcbf oz.engdownld oz.engfile oz.engevent \
         oz.enginit oz.engmanager oz.engmsgs oz.engparse oz.engprocess \
-        oz.engstr oz.enguiapi oz.enguser
+        oz.engsend oz.engstr oz.enguiapi oz.enguser
 
 
 
