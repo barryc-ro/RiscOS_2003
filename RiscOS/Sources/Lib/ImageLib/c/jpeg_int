@@ -1,0 +1,752 @@
+/*-------------------------------------------------------------------------------------------*/
+/* File:    c.jpeg                                                                           */
+/* Purpose: JPEG plotting component of the image library.                                    */
+/* Author:  Kevin Bracey                                                                     */
+/* History: 24-Apr-97: RML: Modified fast plot and save sprite routines to get around the    */
+/*                          SpriteExtend bug when directing vdu output to a 1 pixel high     */
+/*                          sprite.                                                          */
+/*          06-May-97: RML: Modified Render routine to take an x and y size to scale to,     */
+/*                          instead of a percentage.                                         */
+/*-------------------------------------------------------------------------------------------*/
+
+/*
+ * Copyright (c) 1996 Acorn RISC Technologies. All rights reserved.
+ */
+
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <setjmp.h>
+
+#include "swis.h"
+#include "wimplib.h"
+
+#include "imagetrans.h"
+#include "internal.h"
+#include "jpeg.h"
+#include "sprite.h"
+#include "jpeglib.h"
+#include "jerror.h"
+
+#undef GIVE_WARNINGS
+
+static int osver, log2bpp;
+
+static _kernel_oserror *LoadJPEG(Image *this, const char *data, int len, BBox *changed);
+static _kernel_oserror *EndLoadJPEG(Image *this, BBox *changed);
+static _kernel_oserror *Delete(Image *this);
+static _kernel_oserror *RenderJPEG(Image *this, int x, int y, int scale, int x_size, int y_size);
+/*static _kernel_oserror *ModeChange(Image *this);*/
+static _kernel_oserror *DumpToCache(Image *this, const char *filename, int *justuseorig);
+
+#define PutSprite 34
+#define PutSpriteScaled 52
+#define PutSpriteScaled_UseMask 0x08
+#define PutSpriteScaled_UsePalette 0x10
+#define PutSpriteScaled_WideTable 0x20
+#define PutSpriteScaled_Dithered 0x40
+#define GenerateTable_WideTable 0x10
+
+#define MODE(t,x,y) ((void *)(((t) << 27) | ((x) << 14) | ((y) << 1) | 1))
+
+typedef enum load_state
+{
+    NeedHeader, GotHeader,
+    NeedToStartPass,
+    ReadingScanlines,
+    FinishingPass,
+    InputComplete,
+    Finished
+} load_state;
+
+struct jpeg_loaddata;
+
+struct my_source
+{
+    struct jpeg_source_mgr pub;
+    struct jpeg_loaddata *load;
+    JOCTET *next_from_caller;
+    size_t available_from_caller;
+    size_t yet_to_skip;
+    JOCTET input_buffer[12000];
+};
+
+typedef struct jpeg_loaddata
+{
+    char log2bpp;
+    char greyscale;
+    int sprite_offset;
+    int spritewidth;
+    jmp_buf jmpbuf;
+    int library_active;
+    struct jpeg_decompress_struct cinfo;
+    struct jpeg_error_mgr j_err;
+    struct my_source source;
+    load_state state;
+    int final_pass;
+    int pass;
+    int line;
+    JSAMPARRAY buffer;
+    JSAMPARRAY colormap;
+#ifdef TRACE
+    FILE *trace;
+#endif
+} JPEGloaddata;
+
+#define jpegError imgtrnsError
+
+static void init_source(j_decompress_ptr cinfo)
+{
+}
+
+static boolean fill_input_buffer(j_decompress_ptr cinfo)
+{
+    return FALSE;
+}
+
+static void skip_input_data(j_decompress_ptr cinfo, long num_bytes)
+{
+    struct my_source *src = (struct my_source *) cinfo->src;
+
+    if (num_bytes <= 0)
+        return;
+
+    if (num_bytes < src->pub.bytes_in_buffer) {
+        src->pub.bytes_in_buffer -= (size_t) num_bytes;
+        src->pub.next_input_byte += num_bytes;
+        return;
+    }
+
+    src->yet_to_skip += (size_t) num_bytes - src->pub.bytes_in_buffer;
+    src->pub.bytes_in_buffer = 0;
+}
+
+static void term_source(j_decompress_ptr cinfo)
+{
+}
+
+static void fatal_error(j_common_ptr cinfo)
+{
+    JPEGloaddata *load = ((struct my_source *) ((j_decompress_ptr) cinfo)->src)->load;
+
+    /* Put the error message somewhere useful */
+    cinfo->err->format_message(cinfo, (char *) load->source.input_buffer);
+
+    jpeg_destroy(cinfo);
+
+    load->library_active = 0;
+
+    longjmp(load->jmpbuf, 1);
+}
+
+static void output_message(j_common_ptr cinfo)
+{
+    #ifdef GIVE_WARNINGS
+    _kernel_oserror err;
+
+    (*cinfo->err->format_message) (cinfo, err.errmess);
+    err.errnum = 1;
+    wimp_report_error(&err, 0, "LibJPEG");
+    #endif
+}
+
+int NewInternalJPEG(Image *im)
+{
+    JPEGloaddata *load;
+
+    if (osver==0)
+        _swix(OS_Byte, _INR(0,2)|_OUT(1), 129, 0, 255, &osver);
+
+    load=(JPEGloaddata *)(im->private_data=malloc(sizeof(JPEGloaddata)));
+
+    if (!load)
+        return -1;
+
+    im->Load=LoadJPEG;
+    im->DumpSprite=SpriteDumpSprite;
+    im->EndLoad=EndLoadJPEG;
+    im->Delete=Delete;
+    im->Render=RenderJPEG;
+    /*im->ModeChange=ModeChange;*/
+    im->LoadFromCache=0;
+    im->DumpToCache=DumpToCache;
+    im->StartExport=StartExportSprite;
+    im->Export=Export;
+    im->EndExport=EndExport;
+    im->BGCol=BGColSimple;
+    im->NeedRedraw=0;
+    im->RegisterFiller=0;
+
+    im->width=im->height=im->width_os=im->height_os=-1;
+    im->animated=0;
+
+    im->table=NULL;
+
+    memset(load, 0, sizeof *load);
+    memset(im->factors, 0, sizeof *im->factors);
+
+    load->cinfo.err = jpeg_std_error(&load->j_err);
+    load->cinfo.err->error_exit = fatal_error;
+    load->cinfo.err->output_message = output_message;
+
+    jpeg_create_decompress(&load->cinfo);
+
+    load->library_active = 1;
+
+    /* Set data source */
+    load->source.pub.init_source = init_source;
+    load->source.pub.fill_input_buffer = fill_input_buffer;
+    load->source.pub.skip_input_data = skip_input_data;
+    load->source.pub.resync_to_restart = jpeg_resync_to_restart; /* use default method */
+    load->source.pub.term_source = term_source;
+    load->source.pub.bytes_in_buffer = 0;
+    load->source.pub.next_input_byte = load->source.input_buffer;
+    load->source.load = load;
+    load->source.yet_to_skip = 0;
+    load->cinfo.src = &load->source.pub;
+    load->cinfo.mem->max_memory_to_use = 4000000;
+
+    #ifdef TRACE
+    {
+        char name[256];
+        sprintf(name, "ADFS::4.$.Trace.Lib.%p", im);
+        load->trace=fopen(name, "w");
+    }
+    #endif
+    return 0;
+}
+
+static _kernel_oserror *create_sprite(Image *this, JPEGloaddata *load)
+{
+    _kernel_oserror *e;
+    void *mode;
+    int size;
+
+    load->greyscale = load->cinfo.out_color_space == JCS_GRAYSCALE;
+
+    log2bpp = _swi(OS_ReadModeVariable, _INR(0,1)|_RETURN(2), -1, 9);
+    switch (log2bpp)
+    {
+        case 0:
+        case 1:
+        case 2:
+        case 3:
+            load->log2bpp = 3;
+            mode = (void *) 28;
+            break;
+        case 4:
+            if (load->greyscale)
+            {
+                mode = (void *) 28;
+                load->log2bpp = 3;
+            }
+            else
+            {
+                mode = MODE(5, 90, 90);
+                load->log2bpp = 4;
+            }
+            break;
+        default:
+            if (load->greyscale)
+            {
+                mode = (void *) 28;
+                load->log2bpp = 3;
+            }
+            else
+            {
+                mode = MODE(6, 90, 90);
+                load->log2bpp = 5;
+            }
+            break;
+    }
+
+    this->width = load->cinfo.image_width;
+    this->height = load->cinfo.image_height;
+
+    if (this->width_os==-1)
+        this->width_os=2*this->width; /*180*this->width/xres;*/
+    if (this->height_os==-1)
+        this->height_os=2*this->height; /*180*this->height/yres;*/
+
+    size = SpriteAreaSize(mode, this->width, this->height);
+    if (load->log2bpp <= 3)
+        size += 8 << (1 << log2bpp);
+
+    if (!flex_alloc((flex_ptr)&this->private_data2, size + SprExtendBonus))
+    {
+        return jpegError("Insufficient memory");
+    }
+
+    /* Create the sprite now */
+    this->private_data2[0] = size;
+    this->private_data2[2] = 16;
+    e=_swix(OS_SpriteOp, _INR(0,1), 256+9, this->private_data2);
+    if (e) return e;
+    e=_swix(OS_SpriteOp, _INR(0,6), 256+15, this->private_data2, "jpeg", 0,
+                                            this->width, this->height, mode);
+    if (e) return e;
+    if (load->log2bpp <= 3)
+    {
+        e=_swix(OS_SpriteOp, _INR(0,3), 256+37, this->private_data2, "jpeg",
+                                        load->log2bpp == 3 ? (1U<<31) + 1 : 1);
+        if (e) return e;
+
+        if (load->greyscale)
+        {
+            unsigned int i, c;
+
+            for (i=0; i < 256; i++)
+            {
+                c = (i << 24) | (i << 16) | (i << 8);
+                this->private_data2[15 + i * 2] =
+                this->private_data2[15 + i * 2 + 1] = c;
+            }
+        }
+        else if (log2bpp == load->log2bpp)
+        {
+            e = _swix(ColourTrans_ReadPalette, _INR(0,4), -1, -1,
+                                               this->private_data2 + 15, 8<<(1<<log2bpp), 2);
+            if (e) return e;
+        }
+    }
+
+    load->sprite_offset = 16 + this->private_data2[12];
+    load->spritewidth = ((this->width<<load->log2bpp)+31)/32 * 4;
+
+    load->buffer = (*load->cinfo.mem->alloc_sarray)
+                        ((j_common_ptr) &load->cinfo, JPOOL_IMAGE,
+                        this->width * (load->log2bpp >= 4 ? 3 : 1), 1);
+
+    //load->cinfo.do_block_smoothing = FALSE;
+
+    if (load->log2bpp == 3 && !load->greyscale || load->log2bpp < 3)
+    {
+        int i;
+
+        load->cinfo.quantize_colors = TRUE;
+        load->cinfo.actual_number_of_colors = 1 << (1 << load->log2bpp);
+        load->colormap = (*load->cinfo.mem->alloc_sarray)
+                        ((j_common_ptr) &load->cinfo, JPOOL_IMAGE,
+                        load->cinfo.actual_number_of_colors, 3);
+        load->cinfo.colormap = load->colormap;
+        for (i=0; i < load->cinfo.actual_number_of_colors; i++)
+        {
+            load->colormap[0][i] = (this->private_data2[15 + i * 2] & 0xff00) >> 8;
+            load->colormap[1][i] = (this->private_data2[15 + i * 2] & 0xff0000) >> 16;
+            load->colormap[2][i] = (this->private_data2[15 + i * 2] & 0xff000000) >> 24;
+        }
+    }
+
+    return NULL;
+}
+
+void process_data(Image *this, JPEGloaddata *load, BBox *changed)
+{
+    _kernel_oserror *e;
+    int result;
+
+    #ifdef TRACE
+    if (load->trace)
+        /*fprintf(load->trace, "%d\n", len);*/
+        fwrite(data, len, 1, load->trace);
+    #endif
+
+    switch (load->state)
+    {
+        case NeedHeader:
+            result = jpeg_read_header(&load->cinfo, TRUE);
+            if (result == JPEG_SUSPENDED)
+                break;
+            load->state = GotHeader;
+            /* Set parameters */
+            if (jpeg_has_multiple_scans(&load->cinfo))
+            {
+                load->cinfo.buffered_image = TRUE;
+#ifdef DIFFERENT_FINAL_PARAMS
+                /* Fast DCT up until the last pass */
+                load->cinfo.dct_method = JDCT_IFAST;
+#endif
+            }
+
+            if (load->cinfo.out_color_space != JCS_GRAYSCALE && load->cinfo.out_color_space != JCS_RGB)
+                load->cinfo.out_color_space = JCS_RGB;
+
+            e = create_sprite(this, load);
+            if (e)
+            {
+                strcpy((char *)load->source.input_buffer, e->errmess);
+                longjmp(load->jmpbuf,1);
+            }
+
+        case GotHeader:
+            if (jpeg_start_decompress(&load->cinfo) == FALSE)
+                break;
+
+          next_pass:
+            load->state = NeedToStartPass;
+            /* fall through */
+
+        case NeedToStartPass:
+
+            /* Fill up with data... */
+            if (load->cinfo.buffered_image)
+            {
+                do
+                {
+                    result = jpeg_consume_input(&load->cinfo);
+                } while (result != JPEG_SUSPENDED && result != JPEG_REACHED_EOI);
+
+#ifdef DIFFERENT_FINAL_PARAMS
+                if (jpeg_input_complete(&load->cinfo))
+                {
+                    load->cinfo.dct_method = JDCT_ISLOW;
+                    load->final_pass = TRUE;
+                }
+#endif
+
+                result = jpeg_start_output(&load->cinfo, load->cinfo.input_scan_number);
+                if (result == FALSE)
+                    break;
+            }
+
+            load->state = ReadingScanlines;
+            /* fall through */
+
+        case ReadingScanlines:
+            /* Fill up with data... */
+            if (load->cinfo.buffered_image)
+            {
+                do
+                {
+                    result = jpeg_consume_input(&load->cinfo);
+                } while (result != JPEG_SUSPENDED && result != JPEG_REACHED_EOI);
+
+                if (result == JPEG_REACHED_EOI &&
+                     load->cinfo.output_scan_number != load->cinfo.input_scan_number)
+                {
+                    /*
+                     * Ayup - we've got all the image data, and we're still pissing
+                     * around with an earlier pass! Abort, abort!
+                     */
+                     jpeg_finish_output(&load->cinfo);
+                     load->pass++;
+                     goto next_pass;
+                }
+            }
+
+            while (load->cinfo.output_scanline < load->cinfo.output_height)
+            {
+                JSAMPLE *buf;
+                unsigned char *row;
+                unsigned int x;
+
+                if (jpeg_read_scanlines(&load->cinfo, load->buffer, 1) == 0)
+                    break;
+
+ 	    	load->line = load->cinfo.output_scanline;
+
+                buf = load->buffer[0];
+                row = (unsigned char *) this->private_data2 +
+                                        load->sprite_offset +
+                                        load->spritewidth *
+                                        (load->cinfo.output_scanline - 1);
+
+                switch (load->log2bpp)
+                {
+                    case 5:
+                        for (x=this->width; x; x--)
+                        {
+                            *row++ = *buf++;
+                            *row++ = *buf++;
+                            *row++ = *buf++;
+                            *row++ = 0;
+                        }
+                        break;
+                    case 4:
+                        for (x=this->width; x; x--)
+                        {
+                            unsigned int r,g,b;
+                            r = *buf++ >> 3;
+                            g = *buf++ >> 3;
+                            b = *buf++ >> 3;
+                            *row++ = r | (g << 5);
+                            *row++ = (b << 2) | (g >> 3);
+                        }
+                        break;
+                    case 3:
+                        for (x=this->width; x; x--)
+                            *row++ = *buf++;
+                        break;
+                }
+            }
+
+            if (load->cinfo.output_scanline < load->cinfo.output_height)
+                break;
+
+            load->state = FinishingPass;
+
+        case FinishingPass:
+            if (load->cinfo.buffered_image)
+            {
+                result = jpeg_finish_output(&load->cinfo);
+                if (result == FALSE)
+                    break;
+
+#ifdef DIFFERENT_FINAL_PARAMS
+                if (load->final_pass)
+#else
+                if (jpeg_input_complete(&load->cinfo) &&
+                    load->cinfo.input_scan_number == load->cinfo.output_scan_number)
+#endif
+                    load->state = InputComplete;
+                    /* and fall through */
+                else
+                {
+                    load->pass++;
+                    load->line = 0;
+                    goto next_pass;
+                }
+            }
+            else
+                load->state = InputComplete;
+
+        case InputComplete:
+            result = jpeg_finish_decompress(&load->cinfo);
+            if (result == FALSE)
+                break;
+
+            load->state = Finished;
+            break;
+
+    }
+
+}
+
+static void read_data(struct my_source *src)
+{
+    int alreadyinbuf = src->pub.bytes_in_buffer;
+    int nbytes;
+
+    if (alreadyinbuf > 0)
+        memmove(src->input_buffer, src->pub.next_input_byte, alreadyinbuf);
+
+    src->pub.next_input_byte = src->input_buffer;
+
+    nbytes = sizeof src->input_buffer - alreadyinbuf;
+    if (nbytes > src->available_from_caller)
+        nbytes = src->available_from_caller;
+
+    memcpy(src->input_buffer + alreadyinbuf, src->next_from_caller, nbytes);
+    src->pub.bytes_in_buffer += nbytes;
+    src->next_from_caller += nbytes;
+    src->available_from_caller -= nbytes;
+
+    if (src->yet_to_skip > 0)
+    {
+        if (src->yet_to_skip > src->pub.bytes_in_buffer)
+        {
+            src->yet_to_skip -= src->pub.bytes_in_buffer;
+            src->pub.bytes_in_buffer = 0;
+        }
+        else
+        {
+            src->pub.next_input_byte += src->yet_to_skip;
+            src->pub.bytes_in_buffer -= src->yet_to_skip;
+            src->yet_to_skip = 0;
+        }
+    }
+}
+
+/*****************************/
+static _kernel_oserror *LoadJPEG(Image *this, const char *data, int len, BBox *changed)
+{
+    JPEGloaddata *load=(JPEGloaddata *) this->private_data;
+    int firstline, firstpass;
+
+    if (changed)
+        memset(changed, 0, sizeof(BBox));
+
+    if (len==0)
+        return NULL;
+
+    if (setjmp(load->jmpbuf))
+    {
+        return jpegError((char *) load->source.input_buffer);
+    }
+
+    load->source.next_from_caller = (JOCTET *) data;
+    load->source.available_from_caller = len;
+
+    firstline = load->line;
+    firstpass = load->pass;
+
+    while (load->source.available_from_caller)
+    {
+        read_data(&load->source);
+        process_data(this, load, changed);
+    }
+
+    if (changed && (load->line != firstline || load->pass != firstpass))
+    {
+        changed->xmax = this->width_os;
+
+        if (load->pass==firstpass || load->pass==firstpass+1 && load->line < firstline)
+        {
+            changed->ymin = (this->height - load->line) * 2;
+            changed->ymax = (this->height - firstline) * 2;
+        }
+        else
+        {
+            changed->ymin = 0;
+            changed->ymax = this->height * 2;
+        }
+    }
+
+    return NULL;
+}
+
+
+
+
+static _kernel_oserror *EndLoadJPEG(Image *this, BBox *changed)
+{
+    JPEGloaddata *load=(JPEGloaddata *)this->private_data;
+
+    if (changed)
+        memset(changed, 0, sizeof(BBox));
+
+    #ifdef TRACE
+    if (load->trace)
+        fclose(load->trace);
+    #endif
+
+    if (load->library_active)
+        jpeg_destroy_decompress(&load->cinfo);
+
+    free(this->private_data);
+    this->private_data = 0;
+
+    return NULL;
+}
+
+static _kernel_oserror *Delete(Image *this)
+{
+    free(this->private_data);
+
+    if (this->private_data2)
+        flex_free((flex_ptr) &this->private_data2);
+
+    free(this);
+
+    return NULL;
+}
+
+static _kernel_oserror *ModeChangeJPEG(Image *this)
+{
+    _kernel_oserror *e=0;
+    int bufsize;
+
+    e=_swix(OS_ReadModeVariable, _INR(0,1)|_OUT(2), -1, 9, &log2bpp);
+
+    /*don't need a table if going into 16 or 32bpp*/
+
+    if (log2bpp <= 3)
+    {
+        if (!e)
+        e=_swix(ColourTrans_GenerateTable, _INR(0,5)|_OUT(4), this->private_data2, "jpeg", -1, -1,
+                                                    0, 0, &bufsize);
+
+        if (!e)
+        {
+            free(this->table);
+            this->table=malloc(bufsize);
+            if (!this->table)
+                e=jpegError("Insufficient memory");
+        }
+
+        if (!e)
+        e=_swix(ColourTrans_GenerateTable, _INR(0,5), this->private_data2, "jpeg", -1, -1,
+                                                    this->table, 0);
+    }
+
+    if (!e)
+    e=_swix(Wimp_ReadPixTrans, _INR(0,2)|_INR(6,7), 256, this->private_data2, "jpeg",
+                                                    this->factors, 0);
+
+    if (!e)
+    {
+        this->factors[0]*=this->width_os;
+        this->factors[1]*=this->height_os;
+        this->factors[2]*=this->width*2;
+        this->factors[3]*=this->height*2;
+    }
+    return e;
+}
+
+
+static _kernel_oserror *RenderJPEG(Image *this, int x, int y, int scale, int x_size, int y_size)
+{
+    _kernel_oserror *e=NULL;
+    int fac[4];
+    int job = 0;
+
+    _swix(PDriver_CurrentJob, _OUT(0), &job);
+
+    if (this->modechanged || this->factors[0]==0 || job)
+    {
+        e = ModeChangeJPEG(this);
+        if (e) return e;
+        this->modechanged = 0;
+    }
+
+    memcpy(fac, this->factors, sizeof fac);
+
+    if ((x_size>0) && (y_size>0))
+    {
+        int xos, yos;
+
+        xos = 1 << _swi(OS_ReadModeVariable, _INR(0,1)|_RETURN(2), -1, 4);
+        yos = 1 << _swi(OS_ReadModeVariable, _INR(0,1)|_RETURN(2), -1, 5);
+
+        fac[0]=x_size;
+        fac[1]=y_size;
+        fac[2]=this->width*xos;
+        fac[3]=this->height*yos;
+    }
+    else if (scale != 100)
+    {
+        fac[0]*=scale;
+        fac[1]*=scale;
+        fac[2]*=100;
+        fac[3]*=100;
+    }
+
+    if (e) return e;
+
+    if (log2bpp <= 3 && this->table == NULL && fac[0] == fac[2] && fac[1] == fac[3] && !job)
+        e=_swix(OS_SpriteOp, _INR(0,5), 512+PutSprite,
+                                        this->private_data2,
+                                        this->private_data2+4,
+                                        x, y,
+                                        PutSpriteScaled_UseMask);
+    else
+        e=_swix(OS_SpriteOp, _INR(0,7), 512+PutSpriteScaled,
+                                        this->private_data2,
+                                        this->private_data2+4,
+                                        x, y,
+                                        osver >= 0xa5 ? PutSpriteScaled_UsePalette |
+                                                        PutSpriteScaled_UseMask
+                                                      : PutSpriteScaled_UseMask,
+                                        fac,
+                                        log2bpp <=3 ? this->table : 0);
+
+    return e;
+}
+
+static _kernel_oserror *DumpToCache(Image *this, const char *filename, int *justuseorig)
+{
+    *justuseorig=0;
+
+    return SpriteDumpSprite(this, filename, -1);
+}
+
