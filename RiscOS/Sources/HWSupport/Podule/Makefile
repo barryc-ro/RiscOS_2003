@@ -15,6 +15,7 @@
 # Paths
 #
 EXP_HDR = <export$dir>
+EXP_CHDR = <CExport$Dir>.h
 
 #
 # Generic options:
@@ -37,7 +38,8 @@ TOKENS   = Hdr:Tokens
 COMPONENT = Podule
 SOURCE    = s.GetAll
 TARGET    = rm.${MACHINE}.Podule
-EXPORTS   = ${EXP_HDR}.${COMPONENT}
+EXPORTS   = ${EXP_HDR}.${COMPONENT} \
+            ${EXP_CHDR}.${COMPONENT}
 
 MESSAGESMOD = rm.PoduleMsgs
 MESSAGES  = Resources.${LOCALE}.Messages
@@ -58,10 +60,18 @@ install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
-resources:
+resources: resources-${CMDHELP}
+        @echo ${COMPONENT}: resource files copied
+
+resources_common:
         ${MKDIR} ${RESDIR}.${COMPONENT}
         ${CP} ${MESSAGES} ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
-        @echo ${COMPONENT}: resource files copied
+
+resources-None: resources_common
+	@
+
+resources-: resources_common
+	print Resources.${LOCALE}.CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
 
 clean:
         ${RM} ${TARGET}
@@ -79,6 +89,9 @@ s.HelpTokens: ${TOKENS} HelpTexts
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
+
+${EXP_CHDR}.${COMPONENT}: h.${COMPONENT}
+        ${CP} h.${COMPONENT} $@ ${CPFLAGS}
 
 
 # 
@@ -116,64 +129,3 @@ version:
 
 
 # Dynamic dependencies:
-setversion: Time+Date
-rm.Falcon.Podule: Hdr:ListOpts
-rm.Falcon.Podule: Hdr:Macros
-rm.Falcon.Podule: Hdr:System
-rm.Falcon.Podule: Hdr:SWIs
-rm.Falcon.Podule: Hdr:CPU.Generic26
-rm.Falcon.Podule: Hdr:IO.GenericIO
-rm.Falcon.Podule: Hdr:RISCOS
-rm.Falcon.Podule: Hdr:Machine.<Machine>
-rm.Falcon.Podule: Hdr:IO.IOMDL
-rm.Falcon.Podule: Hdr:CMOS
-rm.Falcon.Podule: Hdr:ModHand
-rm.Falcon.Podule: Hdr:Debug
-rm.Falcon.Podule: Hdr:Podule
-rm.Falcon.Podule: Hdr:FSNumbers
-rm.Falcon.Podule: Hdr:HighFSI
-rm.Falcon.Podule: Hdr:NewErrors
-rm.Falcon.Podule: Hdr:Services
-rm.Falcon.Podule: Hdr:Tokens
-rm.Falcon.Podule: Hdr:Proc
-rm.Falcon.Podule: Hdr:Symbols
-rm.Falcon.Podule: Hdr:MsgTrans
-rm.Falcon.Podule: Hdr:PoduleReg
-rm.Falcon.Podule: Time+Date
-rm.Falcon.Podule: s.Module
-rm.Falcon.Podule: s.Interface
-rm.Falcon.Podule: s.Commands
-rm.Falcon.Podule: s.Errors
-rm.Falcon.Podule: s.ROMExtend
-rm.Falcon.Podule: HelpTexts
-rm.Falcon.Podule: s.MsgCode
-rm.Omega.Podule: Hdr:ListOpts
-rm.Omega.Podule: Hdr:Macros
-rm.Omega.Podule: Hdr:System
-rm.Omega.Podule: Hdr:SWIs
-rm.Omega.Podule: Hdr:CPU.Generic26
-rm.Omega.Podule: Hdr:IO.GenericIO
-rm.Omega.Podule: Hdr:RISCOS
-rm.Omega.Podule: Hdr:Machine.<Machine>
-rm.Omega.Podule: Hdr:IO.IOMDL
-rm.Omega.Podule: Hdr:CMOS
-rm.Omega.Podule: Hdr:ModHand
-rm.Omega.Podule: Hdr:Debug
-rm.Omega.Podule: Hdr:Podule
-rm.Omega.Podule: Hdr:FSNumbers
-rm.Omega.Podule: Hdr:HighFSI
-rm.Omega.Podule: Hdr:NewErrors
-rm.Omega.Podule: Hdr:Services
-rm.Omega.Podule: Hdr:Tokens
-rm.Omega.Podule: Hdr:Proc
-rm.Omega.Podule: Hdr:Symbols
-rm.Omega.Podule: Hdr:MsgTrans
-rm.Omega.Podule: Hdr:PoduleReg
-rm.Omega.Podule: Time+Date
-rm.Omega.Podule: s.Module
-rm.Omega.Podule: s.Interface
-rm.Omega.Podule: s.Commands
-rm.Omega.Podule: s.Errors
-rm.Omega.Podule: s.ROMExtend
-rm.Omega.Podule: HelpTexts
-rm.Omega.Podule: s.MsgCode
