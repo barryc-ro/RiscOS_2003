@@ -3373,11 +3373,48 @@ markscreeninvalid
 
 force_redraw_special
 
+        TEQ     R2, #0
+        BEQ     int_force_redraw_whole_border
+        
         CMP     R2,#1
+      [ IconiseButton
+        RSBGES  R14,R2,#8
+      |
         RSBGES  R14,R2,#7
+      ]
         MOVGE   R0,R2                           ; ignore all values except 1 to 7
         BLGE    int_force_redraw_border
 
+        B       ExitWimp
+
+int_force_redraw_whole_border
+; redraw all of border, including 1-pixel borders
+        MOV     R0, #borderrects
+        BL      loserects                       ; clear these lists
+        BL      losewindowrects                 ; - just in case
+        
+        ADD     R0, handle, #w_old_wax0
+        BL      oldvisibleportion               ; windowrects = visible rectangles of work area
+        LDR     R0, rlinks + borderrects
+        LDR     R1, rlinks + windowrects
+        STR     R0, rlinks + windowrects
+        STR     R1, rlinks + borderrects        ; store those safely away in borderrects
+        
+        BL      oldvisibleouterportion          ; windowrects = visible rectangles of whole window
+        
+        MOV     R0, #windowrects
+        MOV     R1, #borderrects
+        BL      subrects                        ; windowrects -= "borderrects"
+        
+        MOV     R1, #wf_inborder
+        BL      oldsubtract_children            ; subtract furniture windows from windowrects
+        
+        BL      markinvalidrects                ; add windowrects to invalid list
+        
+        MOV     R0, #borderrects
+        BL      loserects
+        BL      losewindowrects                 ; clear the lists again
+        
         B       ExitWimp
 
 ;..............................................................................
@@ -3393,9 +3430,28 @@ int_force_redraw_border  ENTRY
         LDR     R1,[handle,#w_old_flags]
         ASSERT  wf_icon1 = 1 :SHL: 24
         MOV     R14,#1 :SHL: 23
+      [ IconiseButton
+        TST     R1, #ws_open                    ; was the window open?
+        EXIT    EQ
+        TEQ     R0, #8
+        BNE     %FT01
+        TST     R1, R14, LSL #2                 ; was iconise enabled?
+        LDRNEB  R14, iconisebutton
+        TEQNE   R14, #0
+        EXIT    EQ
+        LDR     R14, [handle, #w_parent]
+        CMP     R14, #-1
+        EXIT    NE
+        B       %FT02
+        
+01      TST     R1, R14, LSL R0                 ; was this icon enabled?
+        EXIT    EQ
+02
+      |
         TST     R1,R14,LSL R0                   ; was this icon enabled?
         TSTNE   R1,#ws_open                     ; and was the window open?
         EXIT    EQ
+      ]
 
         ADD     R14,handle,#w_old_x0
         LDMIA   R14,{cx0,cy0,cx1,cy1}
@@ -5952,12 +6008,22 @@ int_flush_open  ROUT
         LDMEQIA R14,{x0,y0,x1,y1}
         ADDEQ   R14,handle,#w_wax0              ; check old work area coords
         LDMEQIA R14,{cx0,cy0,cx1,cy1}
+      [ TrueIcon3
+        TEQEQ   x0,cx0
+        TEQEQ   x1,cx1
+        TEQEQ   y1,cy1                  ; unless coords are the same
+        STR     PC,isborderok           ; we invalidate all border areas anyway
+        BNE     %FT02
+        TEQEQ   y0,cy0
+        BNE     %FT06                   ; special case: window being resized in vertical direction only
+      |
         TEQEQ   x0,cx0
         TEQEQ   y0,cy0
         TEQEQ   x1,cx1
         TEQEQ   y1,cy1                  ; unless all coords are the same
         STR     PC,isborderok           ; we invalidate all border areas anyway
         BNE     %FT02
+      ]
 
 ; get border rectangles, that were and still are valid and visible
 
@@ -6093,7 +6159,58 @@ int_flush_open  ROUT
         ADD     cx0,x0,R14
         SUB     cx1,x1,R14
         BL      subwindowrect                   ; this bit isn't valid!
+      [ TrueIcon3
+        B       %FT02
+
+
+06      
+; Special case: window is being resized in vertical direction only: see if we can prevent an unnecessary title bar redraw
+
+        LDR     R1, [handle, #w_flags]  ; R1 = new flag settings
+        LDR     R0, [handle, #w_old_flags]
+        EOR     R0, R1, R0              ; R0 = flags that have changed
+        ANDS    R0, R0, #wf_iconbits
+        BNE     %FT02                   ; furniture changing - cop out and invalidate everything
+        TEQ     R1, #wf_icon3
+        BEQ     %FT02                   ; no title bar, so no point in optimising it
+
+; get border rectangles, that were and still are valid and visible
+
+        BL      oldvisibleouterportion  ; get previously-visible outer portion
+        BL      subwindowrect           ; subtract work area (cx0..cy1 are still set up from above)
+        BL      visible_knockout        ; clip to still-visible outer portion
+
+      ; MOV     R0,#windowrects
+      ; MOV     R1,#oldinvalidrects     ; must also have been valid to begin with
+      ; BL      subrects                ; NOTE: there's no need to do this, since oldinvalidrects is a subset of invalidrects
+
+        MOV     R0,#windowrects
+        MOV     R1,#invalidrects        ; and still be valid at the end (NB: we haven't yet called invalidate_oldnew)
+        BL      subrects
+
+; reduce to border rectangles that are staying the same
+
+        ADD     R14, handle, #w_x0
+        LDMIA   R14, {cx0, cy0, cx1, cy1}
+        LDR     cy0, [handle, #w_way1]  ; cx0-cy1 = top row
+        MOV     R0, #windowrects
+        MOV     R1, #windowrects
+        BL      intrect                 ; don't optimise anything that isn't in the top row
+
+        LDR     R0, [handle, #w_flags]
+        TST     R0, #wf_icon4           ; if there's a toggle-size icon, it may have changed to reflect whether window is full-size or not
+        MOVNE   R0, #4
+        BLNE    calc_w_iconposn         ; x0-y1 = screen position of toggle box
+        Push    "x0, y0, x1, y1", NE
+        Pull    "cx0, cy0, cx1, cy1", NE
+        BLNE    subwindowrect
+      ]
 01
+
+
+; transfer the list to 'borderrects' - the list of rectangles to be re-validated in the border area (work area scrolled)
+
+02
 ;      [ debugopn
 ;        Debug   opn, "Border rectangles to re-validate:"
 ;        Push    "R0-R12, R14"
@@ -6101,10 +6218,7 @@ int_flush_open  ROUT
 ;        BL      listrects
 ;        Pull    "R0-R12, R14"
 ;      ]
-
-; transfer the list to 'borderrects' - the list of rectangles to be re-validated in the border area (work area scrolled)
-
-02      LDR     R0,rlinks+borderrects
+        LDR     R0,rlinks+borderrects
         LDR     R1,rlinks+windowrects
         STR     R0,rlinks+windowrects
         STR     R1,rlinks+borderrects           ; swap the lists!
@@ -6255,9 +6369,6 @@ hasfocus_changing  ENTRY  "R1,R2"
         AND     R2,R14,R1
         EOR     R14,R14,R1
         TST     R14,#ws_hasfocus
-;       LDRNEB  R14,[handle,#w_tbcol]           ; for compatibility, we mustn't optimize the case where the colours are the same,
-;       LDRNEB  R1,[handle,#w_tbcol2]           ; because some apps use this method to force a redraw of the title bar
-;       TEQNE   R14,R1
         TSTNE   R2,#wf_iconbits                 ; we can safely ignore this if window has no borders
 
         EXIT
@@ -7263,6 +7374,15 @@ int_redraw_window
         LDR     R1,[handle,#w_y1]
         SUB     R1,R1,#1                ; pointless really!
         SWI     XOS_SetECFOrigin
+
+      [ TrueIcon3
+;
+; set up true colours
+;
+        BL      setwindowcolours
+
+      ]
+
 ;
 ; go through appropriate rectangles, drawing the window outline
 ;
@@ -7293,7 +7413,6 @@ redrawoutlp
 ;
         Push    "R1"
 ;
-; set work area background colour and draw it
 ;
         ADD     R14,handle,#w_wax0
         LDMIA   R14,{x0,y0,x1,y1}
@@ -7315,7 +7434,11 @@ redrawoutlp
         LDRB    R14,[handle,#w_tfcol]
         TEQ     R14,#255
 	BNE	have_thin_border
+      [ TrueIcon3
+        LDR     R0, truetitlefg
+      |
 	MOV	R0,#7			; set black border in case toolsprites need it...
+      ]
 	BL	window_fg
         B       no_thin_border
 have_thin_border
@@ -7328,7 +7451,11 @@ have_thin_border
         SUB     y0,y0,R14
         ADD     y1,y1,R14
 
+      [ TrueIcon3
+        LDR     R0, truetitlefg         ; set title foreground colour
+      |
         LDRB    R0,[handle,#w_tfcol]    ; set title foreground colour
+      ]
         BL      window_fg
 
         BL      hollowrectangle
@@ -7336,6 +7463,20 @@ have_thin_border
       [ ChildWindows
 no_thin_border
       ]
+
+
+  [ TrueIcon3
+;
+; set title background colour
+;
+        LDR     R14, [handle, #w_flags]
+        TST     R14, #ws_hasfocus
+        LDREQ   R0, truetitlebg
+        LDRNE   R0, truetitlebg2
+        STR     R0, titlecolour         ; title backgraound, irrespective of input focus
+        BL      window_bg
+
+  |
 ;
 ; set title background colour and draw window border
 ;
@@ -7394,6 +7535,9 @@ redrawoutlp_done_tracing
       [ {FALSE}
         BLNE    setfontcolours
       ]
+
+  ]
+
 ;
 ; draw icons surrounding window
 ;
@@ -7407,7 +7551,20 @@ redrawoutlp_done_tracing
         BLNE    maketoollist            ; No then rebuild tool_list
         LDRNE   R4,tool_list
 01
-;
+      [ TrueIcon3
+        LDR     R14, titlecolour
+        LDR     R0, =&BBBBBB00
+        TEQ     R0, R14
+        LDREQ   R14, truetitlefg
+        TEQEQ   R14, #0                 ; unless both colours are standard,
+        
+        LDRNEB  R0, tinted_enable       ; turn on tinting for this window
+        STRNEB  R0, tinted_window
+        [ colourmoreborder
+        BLNE    forcetint_on            ; turn on tinting for this window
+        ]
+      ]
+
         TST     R3,#wf_icon1
         BEQ     %FT01                   ; no back icon
 ;
@@ -7444,7 +7601,7 @@ redrawoutlp_done_tracing
         LDR     R1,[handle,#w_titleflags]
         ;Icon always has a border & is filled
         ORR     R1, R1, #if_border :OR: if_filled
-
+      [ :LNOT: TrueIcon3
         TST     R1, #if_fancyfont
         ;First clear out the top byte.
         BICEQ   R1, R1, #&FF000000
@@ -7452,14 +7609,21 @@ redrawoutlp_done_tracing
         ORREQ   R1, R1, R2, LSL #ib_fcol
         LDREQB  R2, fontbackground
         ORREQ   R1, R1, R2, LSL #ib_bcol
+      ]
         Trace   fcol, "redrawoutlp: title flags faked to ", X, R1
 
+      [ TrueIcon3 :LAND: :LNOT: colourmoreborder
+        BL      forcetint_on
+      ]
         TEQ     R4,#0
         LDRNE   R2,[R4,#tool_tbarlcap]
         TEQNE   R2,#0                   ; plot using sprites?
         BLNE    dofunkytitlebar         ; yes, sir-re bob!
         ADDEQ   R2,handle,#w_title
         BLEQ    drawicon_system         ; take note of if_indirected etç.
+      [ TrueIcon3 :LAND: :LNOT: colourmoreborder
+        BL      forcetint_off
+      ]
 01
 
         TST     R3,#wf_icon4            ; toggle doofer icon thingi?
@@ -7522,7 +7686,7 @@ redrawoutlp_done_tracing
 	MOV	R2,#windowicon_iconise
 	BL	plot_windowglyph	; preserves flags
 	LDREQ	R1,=sysicon
-	ADREQ	R2,iconiseicon
+	ADREQL  R2,iconiseicon
 	BLEQ	drawicon_system		; preserves flags
       ]
 01      TST     R3,#wf_icon5
@@ -7639,17 +7803,28 @@ vscrollfits
         LDRNE   R14,[R0,#tool_vwelltcap]
         TEQNE   R14,#0                  ; plot using sprites?
         BL      getvscrollcoords
+      [ TrueIcon3 :LAND: colourmoreborder
+        BLNE    forcetint_off
+      ]
         BLNE    dofunkyvscroll          ; yes, so plot it ...
         BNE     %FT01                   ; and then ignore the rest of the code
 ;
         Push    "cx0,cy0,cx1,cy1"
+      [ TrueIcon3
+        LDR     R0, truescoutcolour
+      |
         LDRB    R0,[handle,#w_scouter]
+      ]
         BL      window_bg
         MOV     R1,#if_filled:OR:if_border
         BL      drawicon_system
         Pull    "x0,y0,x1,y1"
 ;
+      [ TrueIcon3
+        LDR     R0, truescincolour
+      |
         LDRB    R0,[handle,#w_scinner]
+      ]
         BL      window_bg
         MOV     R1,#if_filled:OR:if_border
         BL      drawicon_system
@@ -7657,7 +7832,11 @@ vscrollfits
         Pull    "R3-R4"
 
 novscroll
+      [ TrueIcon3
+        LDR     R0, titlecolour
+      |
         LDRB    R0,titlecolour
+      ]
         BL      window_bg
 ;
         MOV     R0,#iconposn_resize
@@ -7666,6 +7845,9 @@ novscroll
         TST     R3,#wf_icon6            ; resize box?
         BEQ     %FT00
 ;
+      [ TrueIcon3 :LAND: colourmoreborder
+        BL      forcetint_on
+      ]
         MOV     R2,#windowicon_resize
         BL      plot_windowglyph
         LDREQ   R1,=sysicon
@@ -7677,6 +7859,9 @@ novscroll
         TSTNE   R3,#wf_icon7
         BEQ     %FT01
 ;
+      [ TrueIcon3 :LAND: colourmoreborder
+        BL      forcetint_on
+      ]
         TEQ     R4,#0
         LDRNE   R2,[R4,#tool_blank]     ; blank splot type tool icon thingi?
         TEQNE   R2,#0
@@ -7797,17 +7982,28 @@ hscrollfits
         LDRNE   R14,[R0,#tool_hwelllcap]
         TEQNE   R14,#0                  ; plot using sprites?
         BL      gethscrollcoords        ; get the bounds of the two areas - including blobs etc...
+      [ TrueIcon3 :LAND: colourmoreborder
+        BLNE    forcetint_off
+      ]
         BLNE    dofunkyhscroll          ; and then plot using sprites
         BNE     nohscroll
 ;
         Push    "cx0,cy0,cx1,cy1"
+      [ TrueIcon3
+        LDR     R0, truescoutcolour
+      |
         LDRB    R0,[handle,#w_scouter]
+      ]
         BL      window_bg
         MOV     R1,#if_filled:OR:if_border
         BL      drawicon_system
         Pull    "x0,y0,x1,y1"
 ;
+      [ TrueIcon3
+        LDR     R0, truescincolour
+      |
         LDRB    R0,[handle,#w_scinner]
+      ]
         BL      window_bg
         MOV     R1,#if_filled:OR:if_border
         BL      drawicon_system
@@ -7816,6 +8012,13 @@ nohscroll
       [ Twitter
         BL      checktwitter
         BLNE    antitwitter
+      ]
+      [ TrueIcon3
+        [ colourmoreborder
+        BL      forcetint_off
+        ]
+        MOV     R14, #0
+        STRB    R14, tinted_window
       ]
 
 doneborder
@@ -7919,6 +8122,43 @@ blankicon       DCD     &0D
                 ALIGN
 
         LTORG
+
+
+      [ TrueIcon3
+;
+; Ensures window tool tinting is on, if appropriate for this window
+;
+forcetint_on ENTRY "R0,R2"
+        LDR     R2, tool_list
+        LDR     R2, [R2]
+        TEQ     R2, #0                  ; don't bother if there aren't any tools
+        EXITS   EQ
+        
+        LDRB    R0, tinted_window
+        LDRB    R14, tinted_tool
+        TEQ     R0, #0
+        TEQNE   R0, R14
+        STRNEB  R0, tinted_tool
+        BLNE    recache_tools_trans2    ; uses R2 as set up above (-> first sprite)
+        EXITS                           ; must preserve flags
+
+;
+; Ensures window tool tinting is off
+;
+forcetint_off ENTRY "R2"
+        LDR     R2, tool_list
+        LDR     R2, [R2]
+        TEQ     R2, #0                  ; don't bother if there aren't any tools
+        EXITS   EQ
+        
+        LDRB    R14, tinted_tool
+        TEQ     R14, #0
+        MOVNE   R14, #0
+        STRNEB  R14, tinted_tool
+        BLNE    recache_tools_trans2    ; uses R2 as set up above (-> first sprite)
+        EXITS                           ; must preserve flags
+
+      ]
 
 ;..............................................................................
 
@@ -8823,6 +9063,9 @@ getrectend
         LDRB    R0,[handle,#w_wbcol]
         TEQ     R0,#&FF                 ; &FF ==> don't clear background
         BEQ     noclrwbg
+      [ TrueIcon3
+        LDR     R0, trueworkbg
+      ]
         BL      window_bg
         [ windowsprite
         LDRB    R0,[handle,#w_wbcol]
@@ -8847,12 +9090,20 @@ noclrwbg
 	BNE	%FT01
 	CallFilter postrectfilter
 ;
-1       LDRB    R0,[handle,#w_wfcol]
+1       
+      [ TrueIcon3
+        LDR     R0, trueworkfg
+        BL      window_fg
+        LDR     R0, trueworkbg
+        BL      window_bg
+      |
+        LDRB    R0,[handle,#w_wfcol]
         BL      window_fg
         LDRB    R0,[handle,#w_wbcol]
         CMP     R0,#&FF			; important to clear V
         MOVEQ   R0,#0                   ; set up a sensible colour just in case
         BL      window_bg
+      ]
 ;
         MOV     R0,#-1                  ; return TRUE
         Pull    "PC"
