@@ -92,6 +92,7 @@ rm.SACron: Hdr:Debug
 rm.SACron: Version
 rm.SACron: s.error
 rm.SACron: s.main
+rm.SACron: s.swis
 rm.SACron: s.internat
 rm.SACron: s.commands
 rm.SACron: s.schedule
