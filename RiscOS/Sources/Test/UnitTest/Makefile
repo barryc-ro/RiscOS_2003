@@ -13,11 +13,12 @@
 # 1999-02-04    SBF		Added wipe rule to remove o${BUILD} on clean all
 # 1999-02-08    SBF		Modified to place crunched BASIC into "crunched" directory
 # 				instead of leaving the object files in the root.  Also
-#				creates directories at build time.
+#				creates directories at build time
 # 1999-02-12	NCE		Added Printer BASIC prog
 # 1999-02-16    SBF             Added LDFLAGS to allow addition of link tool flags
-# 1999-02-23    SBF             Removed Printer and GenLib targets (BASIC files now removed)
+# 1999-02-23    SBF             Removed Printer target (BASIC file now removed)
 # 1999-03-03    SBF             Added TCPIPLibs
+# 1999-03-08    SBF             Modified install phase to build targets (if necessary)
 
 
 #
@@ -134,7 +135,7 @@ clean_all: clean
         ${STRIP}
 	@echo ${COMPONENT}: cleaned all
 
-install:
+install: ${TARGET}
 	${MKDIR} ${APP}
 	${CP} ${TARGET} ${APP}.${TARGET} ${CPFLAGS}
 	${CP} Resources.* ${APP}.* ${CPFLAGS}
