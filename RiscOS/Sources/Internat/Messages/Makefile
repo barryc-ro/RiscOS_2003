@@ -32,12 +32,11 @@ WFLAGS  = ~cr~v
 #
 COMPONENT = Messages
 SOURCE    = s.Messages
-TARGET    = rm.Messages
-PROCESSDIR= Resources
-LDIR      = ${LOCALE}
-RESDIR    = <resource$dir>
+TARGET    = rm.${LOCALE}.${BUILD}.Messages
+PROCESSDIR= Processed.${LOCALE}.${BUILD}
+RESDIR    = Resources.${LOCALE}.${BUILD}
 UTILS     = Utils
-DATA      = Data
+DATA      = Data.${LOCALE}.${BUILD}
 # Note: RESDATA mustn't be in PROCESSDIR !!
 RESDATA   = ${DATA}.Data
 HELPTAGS  = ${DATA}.HelpTags
@@ -48,7 +47,8 @@ DICTMESS  = ${DATA}.DictMess
 DICTTOKENS= ${DATA}.DictTokens
 DICTIONARY= ${DATA}.Dictionary
 
-MINDICT   = ${DATA}.MinDict
+MINDICT   = Global.${LOCALE}.MinDict
+MINDICTT  = Global.${LOCALE}.MinDictT
 
 #
 # Utility programs:
@@ -66,7 +66,7 @@ SCANRES = ${UTILS}.ScanRes
 # Generic rules:
 #
 rom: ${TARGET}
-        @echo ${COMPONENT}: module built
+        @echo ${COMPONENT}: rom module built for Build: ${BUILD}
 
 export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
@@ -75,6 +75,9 @@ install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
+#
+# Clean: clean current build and locale, except dictionary and HelpTokens
+#
 clean:
         ${RM} ${TARGET}
         ${RM} ${RESDATA}
@@ -85,20 +88,13 @@ clean:
         @echo ${COMPONENT}: cleaned (Dictionary & HelpTokens not removed)
 
 #
-# Clean_all: removes Dictionary and HelpTokens and ${LOCALE}.*
+# Clean_all: totally clean all builds and locales
 #
 clean_all:
-        ${RM} ${TARGET}
-        ${RM} ${RESDATA}
-        ${RM} ${DATA}.Tokenised
-        ${RM} ${HELPTAGS}
-        ${RM} ${HELPMESS}
-        ${RM} ${HELPTOKENS}
-        ${RM} ${DICTTAGS}
-        ${RM} ${DICTMESS}
-        ${RM} ${DICTTOKENS}
-        ${RM} ${DICTIONARY}
+	${WIPE} Data.* ${WFLAGS}
+	${WIPE} rm.* ${WFLAGS}
         ${WIPE} Resources.* ${WFLAGS}
+	${WIPE} Processed.* ${WFLAGS}
         @echo ${COMPONENT}: all cleaned
 
 resources:
@@ -107,6 +103,8 @@ resources:
         @echo ${COMPONENT}: resource files copied
 
 ${TARGET}: ${SOURCE} ${DATA}.Tokenised
+	${MKDIR} ${DATA}
+	${MKDIR} rm.${BUILD}
         ${SCANRES} ${PROCESSDIR} ${RESDATA}
         set resdata ${RESDATA}
         ${AS} ${ASFLAGS} -To $@ -From ${SOURCE}
@@ -125,9 +123,9 @@ ${DATA}.Tokenised: ${DICTIONARY} ${HELPTOKENS} ${HELPTAGS}
 #
 # Copy Local Resources, then extract Help and Dictionary token tags
 #
-${HELPTAGS}:
-        @echo Copying ${LOCALE} Resources to Resources directory for tokenising ...
-        ${CP} ${LOCALE} Resources ${CPFLAGS}
+${HELPTAGS}: ${TAGEXT} dirs
+        @echo Copying Resources to Processed directory for tokenising ...
+        ${CP} Resources Processed ${CPFLAGS}
         ${TAGEXT} ${PROCESSDIR} ${DICTTAGS} ${HELPTAGS}
 
 #
@@ -140,9 +138,9 @@ ${HELPTOKENS}:
 #
 # Use minimum Dictionary tokens:
 #
-#${DICTIONARY}: ${DATA}.MinDict
-#        ${CP} ${DATA}.MinDict  ${DICTIONARY} ${CPFLAGS}
-#        ${CP} ${DATA}.MinDictT ${DICTTOKENS}  ${CPFLAGS}
+#${DICTIONARY}: ${MINDICT}
+#        ${CP} ${MINDICT}  ${DICTIONARY} ${CPFLAGS}
+#        ${CP} ${MINDICTT} ${DICTTOKENS} ${CPFLAGS}
 
 #
 # Use optimal Dictionary tokens:
@@ -156,20 +154,10 @@ ${TAGEXT}:
         ${MAKE}
         Up
 
+dirs:
+	${MKDIR} ${DATA}
+
 # Dynamic dependencies:
-rm.Morris2.Messages: Hdr:ListOpts
-rm.Morris2.Messages: Hdr:Macros
-rm.Morris2.Messages: Hdr:System
-rm.Morris2.Messages: Hdr:SWIs
-rm.Morris2.Messages: Hdr:CPU.Generic26
-rm.Morris2.Messages: Hdr:IO.GenericIO
-rm.Morris2.Messages: Hdr:RISCOS
-rm.Morris2.Messages: Hdr:ModHand
-rm.Morris2.Messages: Hdr:Services
-rm.Morris2.Messages: Hdr:Proc
-rm.Morris2.Messages: Hdr:ResourceFS
-rm.Morris2.Messages: Version
-rm.Morris2.Messages: Hdr:NDRDebug
 rm.Morris4.Messages: Hdr:ListOpts
 rm.Morris4.Messages: Hdr:Macros
 rm.Morris4.Messages: Hdr:System
@@ -183,29 +171,3 @@ rm.Morris4.Messages: Hdr:Proc
 rm.Morris4.Messages: Hdr:ResourceFS
 rm.Morris4.Messages: Version
 rm.Morris4.Messages: Hdr:NDRDebug
-rm.Messages: Hdr:ListOpts
-rm.Messages: Hdr:Macros
-rm.Messages: Hdr:System
-rm.Messages: Hdr:SWIs
-rm.Messages: Hdr:CPU.Generic26
-rm.Messages: Hdr:IO.GenericIO
-rm.Messages: Hdr:RISCOS
-rm.Messages: Hdr:ModHand
-rm.Messages: Hdr:Services
-rm.Messages: Hdr:Proc
-rm.Messages: Hdr:ResourceFS
-rm.Messages: Version
-rm.Messages: Hdr:NDRDebug
-rm.Omega4.Messages: Hdr:ListOpts
-rm.Omega4.Messages: Hdr:Macros
-rm.Omega4.Messages: Hdr:System
-rm.Omega4.Messages: Hdr:SWIs
-rm.Omega4.Messages: Hdr:CPU.Generic26
-rm.Omega4.Messages: Hdr:IO.GenericIO
-rm.Omega4.Messages: Hdr:RISCOS
-rm.Omega4.Messages: Hdr:ModHand
-rm.Omega4.Messages: Hdr:Services
-rm.Omega4.Messages: Hdr:Proc
-rm.Omega4.Messages: Hdr:ResourceFS
-rm.Omega4.Messages: Version
-rm.Omega4.Messages: Hdr:NDRDebug
