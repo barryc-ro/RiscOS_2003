@@ -6,6 +6,7 @@ LB  		= LibFile
 RM  		= Remove
 WIPE 		= -Wipe
 MKDIR 		= cdir
+STRIP		= stripdepnd
 
 LIBDIR 		= <Lib$Dir>
 CFLAGS 		= -c -depend !Depend -IC: -fah ${THROWBACK}
@@ -20,27 +21,29 @@ MEMCHECKLIB	= MemCheck:o.MC_M
 
 DFLAGS 		= -DDEBUGLIB
 
+DIRS		= o._dirs
+
 TARGET 		= CLI_App
 TARGETMC	= CLI_AppMC
 
-OBJS = \
- o.main \
+OBJS =\
+ o.main\
 
-OBJSMC = \
- oMC.main \
+OBJSMC =\
+ oMC.main\
 
-LIBS = \
- C:o.stubs \
- ${DEBUGLIB} \
- TCPIPLibs:o.socklib5 \
- TCPIPLibs:o.inetlib \
+LIBS =\
+ C:o.stubs\
+ ${DEBUGLIB}\
+ TCPIPLibs:o.socklib5\
+ TCPIPLibs:o.inetlib\
 
-LIBSMC = \
- C:o.stubs \
- ${DEBUGLIB}MCD \
- TCPIPLibs:o.socklib5 \
- TCPIPLibs:o.inetlib \
- ${MEMCHECKLIB} \
+LIBSMC =\
+ C:o.stubs\
+ ${DEBUGLIB}MCD\
+ TCPIPLibs:o.socklib5\
+ TCPIPLibs:o.inetlib\
+ ${MEMCHECKLIB}\
 
 .SUFFIXES:	.o .oMC .c
 .c.o:;		${CC} ${CFLAGS} ${DFLAGS} -o $@ $<
@@ -55,17 +58,18 @@ clean:
 	${RM}		${TARGETMC}
 	${WIPE}	o	${WIPEFLAGS}
 	${WIPE} oMC	${WIPEFLAGS}
+	${STRIP}
 
-o.dirs:
+${DIRS}:
 	${MKDIR} o
 	${MKDIR} oMC
-	create o.dirs
-	stamp  o.dirs
+	create ${DIRS}
+	stamp  ${DIRS}
 
-${TARGET}: ${OBJS} ${LIBS} o.dirs
+${TARGET}: ${OBJS} ${LIBS} ${DIRS}
 	${LD} ${LDFLAGS} -o $@ ${OBJS} ${LIBS}
 
-${TARGETMC}: ${OBJSMC} ${LIBSMC} o.dirs
+${TARGETMC}: ${OBJSMC} ${LIBSMC} ${DIRS}
 	${LD} ${LDFLAGS} -o $@ ${OBJSMC} ${LIBSMC}
 
 # Dynamic dependencies:

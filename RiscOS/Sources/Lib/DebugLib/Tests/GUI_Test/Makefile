@@ -32,6 +32,7 @@ LD		= link #${MemCheckLD} link
 RM		= remove
 SQUEEZE		= squeeze
 WIPE		= -wipe
+STRIP		= stripdepnd
 
 AFLAGS		= -depend !Depend -nocache -stamp -quit ${THROWBACK}
 CFLAGS		= -depend !Depend -ffah ${INCLUDES} -wp ${THROWBACK}
@@ -73,31 +74,31 @@ DEBUGLIB	= ${LIBDIR}.DebugLib.o.debuglib
 ERRORLIB	= ${LIBDIR}.ErrorLib.o.errorlib
 MEMCHECKLIB	= MemCheck:o.MC
 
-LIBSM = \
- ${MSGLIB}zm \
- ${WIMPLIB} \
- ${TOOLBOXLIB} \
- ${EVENTLIB}m \
- ${ERRORLIB}zm \
- ${MEMCHECKLIB} \
- ${DEBUGLIB}zm \
- TCPIPLibs:o.socklib5zm \
- TCPIPLibs:o.inetlibzm \
+LIBSM =\
+ ${MSGLIB}zm\
+ ${WIMPLIB}\
+ ${TOOLBOXLIB}\
+ ${EVENTLIB}m\
+ ${ERRORLIB}zm\
+ ${MEMCHECKLIB}\
+ ${DEBUGLIB}zm\
+ TCPIPLibs:o.socklib5zm\
+ TCPIPLibs:o.inetlibzm\
 
 
-LIBS = \
- ${MSGLIB} \
- ${WIMPLIB} \
- ${TOOLBOXLIB} \
- ${EVENTLIB} \
- ${ERRORLIB} \
- ${CLIB} \
- ${MEMCHECKLIB} \
- ${DEBUGLIB} \
- TCPIPLibs:o.socklib5 \
- TCPIPLibs:o.inetlib \
+LIBS =\
+ ${MSGLIB}\
+ ${WIMPLIB}\
+ ${TOOLBOXLIB}\
+ ${EVENTLIB}\
+ ${ERRORLIB}\
+ ${CLIB}\
+ ${MEMCHECKLIB}\
+ ${DEBUGLIB}\
+ TCPIPLibs:o.socklib5\
+ TCPIPLibs:o.inetlib\
 
-#LIBSD = \
+#LIBSD =\
 
 # -----------------------------------------------------------------------------
 # Include files (libraries and resources)
@@ -105,38 +106,40 @@ LIBS = \
 
 INCLUDES	= -Itbox:,C:
 
-FILES = \
- ${LDIR}.!Boot \
- ${LDIR}.!Run \
- ${LDIR}.!Sprites22 \
- ${LDIR}.Messages \
- ${LDIR}.Res \
+DIRS = o._dirs
+
+FILES =\
+ ${LDIR}.!Boot\
+ ${LDIR}.!Run\
+ ${LDIR}.!Sprites22\
+ ${LDIR}.Messages\
+ ${LDIR}.Res\
  ${TARGET}
 
 # Include these in the ROM module
-RESFILES = \
- ${LDIR}.!Sprites22 \
+RESFILES =\
+ ${LDIR}.!Sprites22\
 
 
 # -----------------------------------------------------------------------------
 # Include files (objects)
 #
 
-OBJS = \
- o.eventmgr \
- o.main \
- o.outputer \
+OBJS =\
+ o.eventmgr\
+ o.main\
+ o.outputer\
 
-OBJSZ = \
- oz.eventmgr \
- oz.main \
- oz.outputer \
+OBJSZ =\
+ oz.eventmgr\
+ oz.main\
+ oz.outputer\
 
-#OBJSZ = \
+#OBJSZ =\
 
-#OBJSD = \
+#OBJSD =\
 
-#OBJSDZ = \
+#OBJSDZ =\
 
 
 # -----------------------------------------------------------------------------
@@ -236,11 +239,11 @@ clean:
 	${WIPE} syms		${WFLAGS}
 	${RM}	s.AppName
 	${RM}	s.ModuleWrap
-	${RM}	o.dirs
+	${STRIP}
 	@echo
 	@echo ${COMPONENT}: Cleaned
 
-o.dirs:
+${DIRS}:
 	@${MKDIR} abs
 	@${MKDIR} aof
 	@${MKDIR} linked
@@ -253,8 +256,8 @@ o.dirs:
 	@${MKDIR} syms
 	@${MKDIR} Targets
 	@${MKDIR} Targets.!DebugTest
-	create o.dirs
-	stamp  o.dirs
+	create ${DIRS}
+	stamp  ${DIRS}
 
 
 # -----------------------------------------------------------------------------
@@ -296,24 +299,24 @@ s.AppName: ${LDIR}.Messages
 # Static dependencies
 #
 
-abs.!RI: ${OBJS} ${LIBS} o.dirs
+abs.!RI: ${OBJS} ${LIBS} ${DIRS}
 	@echo
 	${LD} -s syms.!RI -o $@ ${OBJS} ${LIBS}
 	${SQUEEZE} ${SQFLAGS} $@
 
-abs.!RI_D: ${OBJSD} ${LIBSD} o.dirs
+abs.!RI_D: ${OBJSD} ${LIBSD} ${DIRS}
 	@echo
 	${LD} -s syms.!RI_D -o $@ ${OBJSD} ${LIBSD}
 
-${MODULE}: oz.ModuleWrap ${OBJSZ} ${LIBSM} ${CLIB} o.dirs
+${MODULE}: oz.ModuleWrap ${OBJSZ} ${LIBSM} ${CLIB} ${DIRS}
 	@echo
 	${LD} -s syms.RAMMod -o $@ -module oz.ModuleWrap ${OBJSZ} ${LIBSM} ${CLIB}
 
-${ROM_MODULE}: oz.ModuleWrap ${OBJSZ} ${ROMCSTUBS} ${LIBSM} o.dirs
+${ROM_MODULE}: oz.ModuleWrap ${OBJSZ} ${ROMCSTUBS} ${LIBSM} ${DIRS}
 	@echo
 	${LD} -s syms.ROMMod -o $@ -aof oz.ModuleWrap ${OBJSZ} ${LIBSM} ${ROMCSTUBS}
 
-rm.!GUID: odz.ModuleWrap ${OBJSDZ} ${LIBSM} o.dirs
+rm.!GUID: odz.ModuleWrap ${OBJSDZ} ${LIBSM} ${DIRS}
 	@echo
 	${LD} -s syms.ROMDMod -o $@ -module oz.ModuleWrap ${OBJSDZ} ${LIBSM}
 

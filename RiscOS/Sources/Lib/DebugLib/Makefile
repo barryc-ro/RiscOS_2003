@@ -24,6 +24,7 @@ LD		= link
 LB		= libfile
 WIPE		= -wipe
 AOF2ALF		= aof.AOF2ALF
+STRIP		= stripdepnd
 
 CCFLAGS		= -c -depend !Depend -ffah $(INCLUDES) $(DFLAGS) $(THROWBACK)
 ASFLAGS		= -depend !Depend -Stamp -quit
@@ -58,6 +59,8 @@ TRACELIBZM	= libs.t_m_pl
 INCLUDES	= -Itbox:,C:
 DFLAGS		=
 #DFLAGS		= -g
+
+DIRS		= o._dirs
 
 # ------------------------------------------------------------------------------
 # Program specific options:
@@ -154,14 +157,14 @@ OBJSMCD =\
  oMCD.parse\
 
 LIBS = \
- $(PDEBUG) \
- $(TRACELIB) \
- $(REMOTEDBLIB) \
+ $(PDEBUG)\
+ $(TRACELIB)\
+ $(REMOTEDBLIB)\
 
 LIBSZ = \
- $(PDEBUGZM) \
- $(TRACELIBZM) \
- $(REMOTEDBLIB)zm \
+ $(PDEBUGZM)\
+ $(TRACELIBZM)\
+ $(REMOTEDBLIB)zm\
 
 # ------------------------------------------------------------------------------
 # Rule patterns
@@ -207,28 +210,29 @@ clean:
 	${RM} ${TARGETD}
 	${RM} ${TARGETMC}
 	${RM} ${TARGETMCD}
+	${STRIP}
 	@echo $(COMPONENT): cleaned
 
-export_hdrs: h.DebugLib dirs
+export_hdrs: h.DebugLib export_dirs
 	$(CP)	h.DebugLib	$(EXPORT_DIR).h.DebugLib 	$(CPFLAGS)
 	$(CP)   VersionNum      $(EXPORT_DIR).LibVersion 	$(CPFLAGS)
 	@echo * $(COMPONENT): export complete (hdrs)
 
-export_libs: $(TARGET) $(TARGETZ) dirs
+export_libs: $(TARGET) $(TARGETZ) export_dirs
 	$(CP)	$(TARGET)	$(EXPORT_DIR).o.$(TARGET)	$(CPFLAGS)
 	$(CP)	$(TARGETZ)	$(EXPORT_DIR).o.$(TARGETZ)	$(CPFLAGS)
 	@echo * $(COMPONENT): export complete (libs)
 
-o.dirs:
+${DIRS}:
 	$(MKDIR) o
 	${MKDIR} od
 	${MKDIR} oMC
 	${MKDIR} oMCD
 	$(MKDIR) oz
-	create o.dirs
-	stamp  o.dirs
+	create ${DIRS}
+	stamp  ${DIRS}
 
-dirs:
+export_dirs:
 	$(MKDIR) $(LIBDIR)
 	$(MKDIR) $(EXPORT_DIR)
 	$(MKDIR) $(EXPORT_DIR).h
@@ -238,27 +242,27 @@ dirs:
 # Final link
 #
 
-$(TARGET): $(OBJS) $(LIBS) o.dirs
+$(TARGET): $(OBJS) $(LIBS) ${DIRS}
 	$(LD) $(LNFLAGS) -o $(AOFFile) $(OBJS) $(LIBS)
         $(LB) $(LBFLAGS) $(TARGET) $(AOFFile)
         $(RM) $(AOFFile)
 
-$(TARGETZ): $(OBJSZ) $(LIBSZ) o.dirs
+$(TARGETZ): $(OBJSZ) $(LIBSZ) ${DIRS}
 	$(LD) $(LNFLAGS) -o $(AOFFileZ) $(OBJSZ) $(LIBSZ)
         $(LB) $(LBFLAGS) $(TARGETZ) $(AOFFileZ)
         $(RM) $(AOFFileZ)
 
-$(TARGETD): $(OBJSD) $(LIBS) o.dirs
+$(TARGETD): $(OBJSD) $(LIBS) ${DIRS}
 	$(LD) $(LNFLAGS) -o $(AOFFile) $(OBJSD) $(LIBS)
 	$(LB) $(LBFLAGS) $(TARGETD) $(AOFFile)
 	$(RM) $(AOFFile)
 
-$(TARGETMC): $(OBJSMC) $(LIBS) o.dirs
+$(TARGETMC): $(OBJSMC) $(LIBS) ${DIRS}
 	$(LD) $(LNFLAGS) -o $(AOFFile) $(OBJSMC) $(LIBS)
 	$(LB) $(LBFLAGS) $(TARGETMC) $(AOFFile)
 	$(RM) $(AOFFile)
 
-$(TARGETMCD): $(OBJSMCD) $(LIBS) o.dirs
+$(TARGETMCD): $(OBJSMCD) $(LIBS) ${DIRS}
 	$(LD) $(LNFLAGS) -o $(AOFFile) $(OBJSMCD) $(LIBS)
 	$(LB) $(LBFLAGS) $(TARGETMCD) $(AOFFile)
 	$(RM) $(AOFFile)

@@ -21,7 +21,8 @@ LD		= link #${MemCheckLD} link
 RM		= remove
 MODSQZ		= modsqz
 RESGEN		= resgen
-WIPE    	= -wipe
+WIPE		= -wipe
+STRIP		= stripdepnd
 
 AFLAGS		= -depend !Depend -Stamp -quit ${THROWBACK}
 CFLAGS		= -c -depend !Depend -zM -zps1 -ffah ${INCLUDES} ${THROWBACK} 
@@ -48,17 +49,17 @@ WRAPPER		= RISC_OSLib:s.ModuleWrap
 DEBUGLIB	= ${LIBDIR}.DebugLib.o.debuglibzm
 MEMCHECKLIB	= MemCheck:o.MC_M
 
-LIBS = \
- ${DEBUGLIB} \
- TCPIPLibs:o.socklib5 \
- TCPIPLibs:o.inetlib \
- ${MEMCHECKLIB} \
+LIBS =\
+ ${DEBUGLIB}\
+ TCPIPLibs:o.socklib5\
+ TCPIPLibs:o.inetlib\
+ ${MEMCHECKLIB}\
 
-LIBSD = \
- ${DEBUGLIB} \
- TCPIPLibs:o.socklib5 \
- TCPIPLibs:o.inetlib \
- ${MEMCHECKLIB} \
+LIBSD =\
+ ${DEBUGLIB}\
+ TCPIPLibs:o.socklib5\
+ TCPIPLibs:o.inetlib\
+ ${MEMCHECKLIB}\
 
 
 # ------------------------------------------------------------------------------
@@ -66,6 +67,8 @@ LIBSD = \
 #
 
 INCLUDES = -IC:
+
+DIRS = o._dirs
 
 
 # ------------------------------------------------------------------------------
@@ -78,14 +81,14 @@ TARGET_D	= aof.TestModD
 TARGETSA	= rm.TestMod
 TARGETSA_D	= rm.TestModD
 
-OBJS = \
- o.Header \
- o.Module \
+OBJS =\
+ o.Header\
+ o.Module\
  
 
-OBJSD = \
- o.Header \
- od.Module \
+OBJSD =\
+ o.Header\
+ od.Module\
 
 
 EXPORTS =
@@ -127,15 +130,15 @@ install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
-o.dirs:
+${DIRS}:
 	${MKDIR} o
 	${MKDIR} od
 	${MKDIR} rm
 	${MKDIR} linked
 	${MKDIR} aof
 	${MKDIR} map
-	create o.dirs
-	stamp o.dirs
+	create ${DIRS}
+	stamp ${DIRS}
 
 clean:
         ${WIPE} o ${WFLAGS}
@@ -144,6 +147,7 @@ clean:
         ${WIPE} linked ${WFLAGS}
         ${WIPE} map ${WFLAGS}
         ${WIPE} aof ${WFLAGS}
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 resources:
@@ -154,20 +158,20 @@ resources:
 # Stand-alone module
 #
 
-${TARGETSA}: ${OBJS} ${LIBS} ${CLIB} o.dirs
+${TARGETSA}: ${OBJS} ${LIBS} ${CLIB} ${DIRS}
         ${LD} -o $@ -module ${OBJS} ${LIBS} ${CLIB}
 
-${TARGETSA_D}: ${OBJSD} ${LIBSD} ${CLIB} o.dirs
+${TARGETSA_D}: ${OBJSD} ${LIBSD} ${CLIB} ${DIRS}
         ${LD} -o $@ -module ${OBJSD} ${LIBSD} ${CLIB}
 
 # ------------------------------------------------------------------------------
 # Final link for the ROM Image (re-linked at ROM Image build time)
 #
 
-${TARGET}: ${OBJS} ${LIBS} ${ROMCSTUBS} o.dirs
+${TARGET}: ${OBJS} ${LIBS} ${ROMCSTUBS} ${DIRS}
         ${LD} -o $@ -aof ${OBJS} ${LIBS} ${ROMCSTUBS}
 
-${TARGET_D}: ${OBJSD} ${LIBSD} ${ROMCSTUBS} o.dirs
+${TARGET_D}: ${OBJSD} ${LIBSD} ${ROMCSTUBS} ${DIRS}
         ${LD} -o $@ -aof ${OBJSD} ${LIBSD} ${ROMCSTUBS}
 
 # ------------------------------------------------------------------------------
