@@ -81,6 +81,25 @@ ${EXP_HDR}.PDriver: hdr.PDriver
         ${CP} hdr.PDriver $@ ${CPFLAGS}
 
 # Dynamic dependencies:
+rom.PDriver: hdr:ListOpts
+rom.PDriver: hdr:Macros
+rom.PDriver: hdr:System
+rom.PDriver: Hdr:SWIs
+rom.PDriver: Hdr:CPU.Generic26
+rom.PDriver: Hdr:IO.GenericIO
+rom.PDriver: Hdr:RISCOS
+rom.PDriver: hdr:Services
+rom.PDriver: hdr:FSNumbers
+rom.PDriver: hdr:ModHand
+rom.PDriver: hdr:NewErrors
+rom.PDriver: hdr:MsgTrans
+rom.PDriver: hdr:Proc
+rom.PDriver: hdr:HostFS
+rom.PDriver: hdr:NDRDebug
+rom.PDriver: hdr:DDVMacros
+rom.PDriver: hdr:ResourceFS
+rom.PDriver: Version
+rom.PDriver: s.MsgCode
 rm.PDriver: s.PDriver
 rm.PDriver: hdr:ListOpts
 rm.PDriver: hdr:Macros
@@ -101,22 +120,3 @@ rm.PDriver: hdr:DDVMacros
 rm.PDriver: hdr:ResourceFS
 rm.PDriver: Version
 rm.PDriver: s.MsgCode
-rom.PDriver: hdr:ListOpts
-rom.PDriver: hdr:Macros
-rom.PDriver: hdr:System
-rom.PDriver: Hdr:SWIs
-rom.PDriver: Hdr:CPU.Generic26
-rom.PDriver: Hdr:IO.GenericIO
-rom.PDriver: Hdr:RISCOS
-rom.PDriver: hdr:Services
-rom.PDriver: hdr:FSNumbers
-rom.PDriver: hdr:ModHand
-rom.PDriver: hdr:NewErrors
-rom.PDriver: hdr:MsgTrans
-rom.PDriver: hdr:Proc
-rom.PDriver: hdr:HostFS
-rom.PDriver: hdr:NDRDebug
-rom.PDriver: hdr:DDVMacros
-rom.PDriver: hdr:ResourceFS
-rom.PDriver: Version
-rom.PDriver: s.MsgCode

@@ -41,6 +41,7 @@
 ; 30-Sep-94 3.23 MJS change in hdr.PDriver; step version up to agree with SrcFiler
 ; 09-Jan-95 3.24 MJS fix PDriver_EnumerateDrivers (MED-04281)
 ; 20-Feb-95 3.25 MJS fix R9 corruption in several places
+; 07-May-97 3.26 JRC Added InUse and NoEsc error tokens.
 
                 GET     hdr:ListOpts
                 GET     hdr:Macros
@@ -55,7 +56,7 @@
                 GET     hdr:NDRDebug
                 GET     hdr:DDVMacros
                 GET     hdr:ResourceFS
-             
+
                 GET     Version
 
                 GBLL    debug
@@ -67,10 +68,11 @@ standalone      SETL    {FALSE}
  ]
 
 debug           SETL    false
-hostvdu         SETL    true
+hostvdu         SETL    false
 PrivMessages    SETS    ""                      ; no private messages
+debug_file	SETS	"<PDrvDebug>"
 
-ChangeJob       SETD    true                    ; job selection/creation.
+ChangeJob       SETD    false			; job selection/creation.
 ClearJob        SETD    false                   ; clearing of job handles
 CurrentJob      SETD    false                   ; returning the current job handle
 Enumerate       SETD    false                   ; enumerating the current jobs
@@ -80,12 +82,12 @@ Reset           SETD    false                   ; reseting the job list
 DeclareDriver   SETD    false                   ; declaring the printer
 RemoveDriver    SETD    false                   ; remove printer
 SelectDriver    SETD    false                   ; selecting a device
-ToCurrent       SETD    true                    ; redirect to current job
+ToCurrent       SETD    true			; redirect to current job
 SWI             SETD    false                   ; decoding of SWIs within the system
-xx              SETD    true                    ; misc stuff
-
+xx              SETD    false			; misc stuff
+fnt		SETD	true			; FontSWI
 calljobR10      SETD    false                   ; call job with handle in R10
-calldriverR10   SETD    false                    ; calling driver with handle in R10
+calldriverR10   SETD    true			; calling driver with handle in R10
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -107,6 +109,7 @@ current_printer         # 4                     ;  = current printer
 job_descriptions        # 4*256                 ;  = one word pointer for each of the 256 job handle
 old_job                 # 4                     ;  = previously selected job
 flags                   # 4                     ;  = global flags word
+error_buffer		# 256
 
 workspace_end           * :INDEX: @
 
@@ -122,7 +125,7 @@ f_CallBackPending       * 1:SHL:0               ; set => callback pending should
 ; Module header.
 ;
                 LEADR   Module_LoadAddr
-  
+
 module_start    & 0
                 & Initialisation -module_start                  ; init code
                 & Finalisation -module_start                    ; finalisation
@@ -188,11 +191,12 @@ SWITable        = "PDriver", 0
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
 ; Handle the despatch of SWIs within the module.
-;
 
 SWIHandler      ROUT
 
                 LDR     wp, [wp]                                ; -> workspace
+
+                Debug	ToCurrent, "PDriver SWI", r11, lr
 
                 CMP     r11, #(%90 -%80)/4
                 ADDCC   pc, pc, r11, LSL #2
@@ -228,11 +232,11 @@ SWIHandler      ROUT
                 B       MiscOpForDriver                         ; PDriver_MiscOpForDriver
                 B       PassToDriver                            ; PDriver_SetDriver
                 B       PassToCurrent                           ; PDriver_JPEGSWI
-90                                                
+90
                 ADR     r0, ErrorBlock_ModuleBadSWI
                 ADDR    r1, Title                               ; -> module title
                 B       LookupError                             ; -> r0 -> error block, V set
-                
+
                 MakeErrorBlock ModuleBadSWI
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -243,7 +247,7 @@ SWIHandler      ROUT
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
 ; Handle claiming of workspace and other stuff.
-;                              
+;
 
 Initialisation  ROUT
 
@@ -257,7 +261,7 @@ Initialisation  ROUT
                 LDR     r3, =workspace_end                      ; amount required
                 SWI     XOS_Module
                 Pull    "pc", VS                                ; return it it went wrong
-                                                                
+
                 STR     r2, [wp]
 10
                 MOV     wp, r2                                  ; -> workspace
@@ -307,7 +311,7 @@ callback        ROUT
 
                 MOV     r1, #Service_PDriverStarting
                 SWI     XOS_ServiceCall                         ; declare yourself now modules...
-                
+
                 Pull    "r1, pc",,^
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -341,7 +345,7 @@ Finalisation    ROUT
                 SWI     XOS_RemoveCallBack                      ; attempt to remove it
                 Pull    "r1-r3, pc", VS
 
-                BIC     r2, r2, #f_CallBackPending                                       
+                BIC     r2, r2, #f_CallBackPending
                 STR     r2, flags                               ; and then mark as removed
 10
                 ADR     r0, job_descriptions                    ; -> jobs descriptions list
@@ -391,7 +395,7 @@ Service         ROUT
         LDMFD   SP!, {R0, PC}^
         ]
 
-                
+
                 MOVS    pc, lr
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -423,7 +427,7 @@ ChangeJob       ROUT
 
                 Debuga  ChangeJob, "change job in:", r0,r1,r2,r3,r4,r5
                 Debug   ChangeJob, "",r6,r7,r8,r9
-        
+
                 CMP     r0, #255                                ; is the handle valid?
                 BLS     %00                                     ; yes...
 
@@ -440,16 +444,16 @@ ChangeJob       ROUT
                 Debug   ChangeJob, "current job is", r2
 
                 TEQ     r0, #0                                  ; selecting a new job?
-                BNE     %10                
+                BNE     %10
                 TEQ     r2, #0                                  ; are we changing from no job to no job?
                 BEQ     %50                                     ; return correctly
 
                 LDR     r2, [r3, r2, LSL #2]                    ; get printer handle of job
-                B       %40         
+                B       %40
 10
                 LDR     r2, [r3, r0, LSL #2]
                 TEQ     r2, #0                                  ; does the job have a printer?
-                BNE     %30       
+                BNE     %30
 
                 LDR     r2, current_printer                     ; get current device
                 TEQ     r2, #0                                  ; is there one?
@@ -467,8 +471,8 @@ ChangeJob       ROUT
 
                 LDR     r5, [r3, r4, LSL #2]
                 CMP     r2, r5                                  ; do we need to deselect the current one?
-                BEQ     %40           
-                              
+                BEQ     %40
+
                 Debug   ChangeJob, "deselecting old job!"
 
                 MOV     r4, r0
@@ -479,7 +483,7 @@ ChangeJob       ROUT
                 AND     r11, r11, #31                           ; mask out unwanted bits
                 BL      calldriverR10
                 Pull    "r2, r4, r11, wp"                       ; preserve them
-                BVS     %60                   
+                BVS     %60
 
                 MOV     r0, r4
 40
@@ -495,8 +499,8 @@ ChangeJob       ROUT
                 BL      calldriverR10                           ; call driver in R10
                 Pull    "r2, r10-r11, wp"
                 DebugE
-                BVC     %50                 
-                                
+                BVC     %50
+
                 Debug   ChangeJob, "selecting new job went wrong!"
                 DebugE  ChangeJob, "error return is"
 
@@ -508,7 +512,7 @@ ChangeJob       ROUT
                 STR     r0, current_job                         ; no longer an active job
                 BL      calldriverR10                           ; call driver and inform
                 Pull    "r0, wp, lr"
-                                   
+
                 TEQP    lr, #0                                  ; restore the flags
                 B       %60
 50
@@ -517,14 +521,14 @@ ChangeJob       ROUT
                 Debug   ChangeJob, "previous job handle is", r0
 60
                 Pull    "r1-r5, lr"
-               
+
                 Debuga  ChangeJob, "exiting with", r0,r1,r2,r3,r4,r5
                 Debug   ChangeJob, "",r6,r7,r8,r9
                 DebugE  ChangeJob, "and an error: "
 
                 ORRVS   pc, lr, #V_bit
                 MOVS    pc, lr                                  ; return, setup V if required.
-                                
+
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 
@@ -541,9 +545,9 @@ ChangeJob       ROUT
 ; Handle the clearing of a job within the system, called on EndJob or
 ; AbortJob.
 ;
-                                                 
+
 ClearJob        ROUT
-                       
+
                 Push    "R0, WP, LR"
 
                 MOVS    R10, R0                                 ; copy to r10
@@ -560,7 +564,7 @@ ClearJob        ROUT
                 Debug   ClearJob, "managed to call the device"
 
                 LDMIA   SP,{R0, WP}                             ; get a nice copy from the stack
-                            
+
                 LDR     R10, current_job
                 TEQ     R10, R0
                 MOV     R10, #0
@@ -571,7 +575,7 @@ ClearJob        ROUT
                 Pull    "R9"
 
                 Pull    "R0, WP, PC",,^
-                
+
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
 
@@ -587,7 +591,7 @@ ClearJob        ROUT
 ;
 ; Return the currently selected job.
 ;
-                                    
+
 CurrentJob      ROUT
 
                 LDR     r0, current_job                         ; = job handle to be returned
@@ -654,12 +658,12 @@ EnumerateJobs   ROUT
 ; scanning from the first (with r0 specified to be 0 on entry), until r0
 ; is returned to be zero.
 ;
-                          
+
 EnumDrivers     ROUT
 
                 TEQ     R0, #0                                  ; start from head of list?
                 ADREQ   R0, printer_list                        ; yes, so -> start
-        
+
                 TEQ     R0, #0                                  ; any more?
                 MOVEQ   R1, #-1
                 LDRNE   R0, [R0, #next_printer]
@@ -686,11 +690,11 @@ EnumDrivers     ROUT
 ; This code passes on the call to the specified printer driver or the currently
 ; active one.
 ;
-             
+
 PassToDriver    ROUT
 
                 Debug   PassToDriver, "Pass to driver SWI number", r11
-                             
+
                 LDR     r10, current_printer
                 B       calldriverR10
 
@@ -714,9 +718,15 @@ PassToDriver    ROUT
 ;
 
 PassToCurrent   ROUT
-                      
+
+		[	debug
+		TEQ	r11, #7
+		DebugIf	EQ, fnt, "PDriver_FontSWI", r8
+		]
+
                 Debug   ToCurrent, "PassToCurrentJob with handle of", r0
                 Debug   ToCurrent, "PassToCurrentJob SWI number", r11
+                Debug   ToCurrent, "PassToCurrentJob lr", lr
 
                 LDR     r10, current_job                        ; -> current job
                 B       calljobR10
@@ -762,7 +772,7 @@ PassToR0Job     ROUT
 ;
 ; Reset all jobs within the system.
 ;
-                                   
+
 Reset           ROUT
 
                 Push    "r1-r3, lr"
@@ -818,7 +828,7 @@ Reset           ROUT
 DeclareDriver  ROUT
 
                 Push    "r1-r4, r9-r10, lr"
-                                                                                 
+
                 Debug   DeclareDriver, "declaring with branch code at", r0
                 Debug   DeclareDriver, "workspace for call", r1
                 Debug   DeclareDriver, "unique printer id", r2
@@ -840,7 +850,7 @@ DeclareDriver  ROUT
 
                 TEQ     r0, #0                                  ; are we attempting undeclare a printer?
                 BEQ     %50                                     ; yes, so don't give uniqueness error.
-        
+
                 Debug   DeclareDriver, "Oh fiddle sticks we are not"
 
                 ADR     r0, ErrorBlock_PrintDuplicateNumber
@@ -851,7 +861,7 @@ DeclareDriver  ROUT
 
                 MOV     r10, r0
                 MOV     r4, r2
-                
+
                 MOV     r0, #ModHandReason_Claim
                 LDR     r3, =printer_end                        ; amount of workspace needed
                 SWI     XOS_Module
@@ -930,7 +940,7 @@ RemoveDriver    ROUT
 ; This code will select the current printer device to be used, or return the
 ; number of the one currently selected.
 ;
-                                                              
+
 SelectDriver    ROUT
 
                 Push    "r1-r2, lr"
@@ -942,7 +952,7 @@ SelectDriver    ROUT
 
                 TEQ     R0, R11                                 ; no change in device?
                 BEQ     %20
-        
+
                 CMP     R0, #-1                                 ; is device to be unset?
                 MOVEQ   R0, #0
                 STREQ   R0, current_printer
@@ -975,7 +985,7 @@ SelectDriver    ROUT
                 ORRVS   lr, lr, #V_bit                          ; ensure that the v bit copied across correctly
                 MOVS    pc, lr
 15
-                ADR     r0, ErrorBlock_PrintUnknownNumber       
+                ADR     r0, ErrorBlock_PrintUnknownNumber
                 BL      LookupSingle                            ; otherwise give an error
                 B       %20                                     ; jumping to the a suitable point to balance the stack
 
@@ -994,11 +1004,11 @@ SelectDriver    ROUT
 ;          R1..R7 as required by call.
 ;
 ;          IF PDriver_MiscOpForPrinter then r8 =id of device to direct call at.
-;                     
+;
 ;   Exit:  V set, R0 -> error block.
 ;          V clear; as specified by call.
 ;
-; MiscOp functions to be handled by printer driver, some are handled by 
+; MiscOp functions to be handled by printer driver, some are handled by
 ; the printer independent code and some are passed to the back end code.
 ;
 ; Two SWIs are supported by the PDriver module for this type of operation,
@@ -1058,13 +1068,13 @@ miscop_devicenotfound
 ;
 ; Pass call to the job specified in r10.
 ;
-                                        
+
 calljobR10      ROUT
-                                   
+
                 Debug   calljobR10, "calljobR10, job handle", r10
                 Debug   calljobR10, "calljobR10, swi number", r11
 
-                TEQ     r10, #0                        
+                TEQ     r10, #0
                 CMPNE   r10, #256                               ; is handle within suitable range?
                 BGE     %90                                     ; no, so bog off!
 
@@ -1092,18 +1102,19 @@ calljobR10      ROUT
 ; in:   r0.. = parameters
 ;       r10  = driver to call, 0 ignore call.
 ;       r11  = SWI number
-;       
+;
 ; out:  -
 ;
 ; Call the device specified in r10.
 ;
-                                   
+
 calldriverR10   ROUT
 
                 CLRV
 
                 Debug   calldriverR10, "calldriver handle", r10
                 Debug   calldriverR10, "calldriver SWI number", r11
+                Debug   calldriverR10, "calldriver lr", lr
 
                 TEQ     r10, #0                                 ; is there a current driver?
                 LDRNE   wp, [r10, #private_word]                ; -> workspace
@@ -1119,7 +1130,7 @@ nocurrentdriver
                 LTORG
 
                 GET     s.MsgCode
-              
+
               [ debug
                 InsertNDRDebugRoutines
               ]
