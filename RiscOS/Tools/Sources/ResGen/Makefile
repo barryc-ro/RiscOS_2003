@@ -11,7 +11,7 @@
 #
 # Paths
 #
-LIBDIR	= <Tools$Dir>
+LIBDIR	= ${INSTDIR}.Library
 
 MODGEN     = modgen
 RESGEN     = resgen
@@ -87,7 +87,7 @@ export: export_${PHASE}
 install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
-install_tool: ${COMPONENT}
+install: ${COMPONENT}
 	${MKDIR} ${LIBDIR}.Acorn.Docs
 	${MKDIR} ${LIBDIR}.Build.Docs
 	${CP} ${RESGEN} ${LIBDIR}.Acorn.${RESGEN} ${CPFLAGS}
