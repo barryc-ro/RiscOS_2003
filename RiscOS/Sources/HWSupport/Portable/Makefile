@@ -5,80 +5,21 @@
 # ***********************************
 # Date       Name         Description
 # ----       ----         -----------
-# 22-Sep-94  RCM          Created.
-# 06-Jan-95  AMcC         Added resources rule
+# 09-Mar-01  SNB          Recreated
 #
 
-#
-# Paths
-#
-EXP_HDR = <export$dir>
-
-#
-# Generic options:
-#
-MKDIR   = cdir
-AS      = aasm
-CP      = copy
-RM      = remove
-CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
-CPFLAGS = ~cfr~v
-
-#
-# Program specific options:
-#
 COMPONENT = Portable
-SOURCE    = s.GetAll
-TARGET    = rm.${COMPONENT}
-TARGETSA  = rm.${COMPONENT}SA
-EXPORTS   = ${EXP_HDR}.${COMPONENT}
-RDIR      = Resources
-LDIR      = ${RDIR}.${LOCALE}
+HEADER1   = Portable
+ROM_SOURCE = GetAll.s
+RESOURCEEXTRA = resources_lcd
 
-#
-# Export Paths for Messages module
-#
-RESDIR = <resource$dir>.Resources2.${COMPONENT}
+include StdTools
+include AAsmModule
 
-#
-# Generic rules:
-#
-rom: ${TARGET}
-        @echo ${COMPONENT}: rom module built
-
-export: ${EXPORTS}
-        @echo ${COMPONENT}: export complete
-
-install_rom: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom module installed
-
-resources:
-        ${MKDIR} ${RESDIR}
-        ${CP} ${LDIR}.Messages  ${RESDIR}.Messages  ${CPFLAGS}
-        ${CP} ${LDIR}.LCD       ${RESDIR}.LCD       ${CPFLAGS}
-        ${CP} ${LDIR}.SelectLCD ${RESDIR}.SelectLCD ${CPFLAGS}
-        @echo ${COMPONENT}: resource files copied to Messages module
-
-clean:
-        ${RM} ${TARGET}
-        ${RM} ${TARGETSA}
-        @echo ${COMPONENT}: cleaned
-
-${TARGET}: ${SOURCE}
-        ${AS} ${ASFLAGS} ${SOURCE}
-
-${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
-        ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
-
-#
-# Makes a stand-alone version with messages bound in
-#
-standalone: ${TARGETSA}
-        @echo ${COMPONENT}: standalone module built
-
-${TARGETSA}: s.StandAlone ${LDIR}.Messages
-        ${AS} ${ASFLAGS} s.StandAlone
+resources_lcd:
+        ${MKDIR} ${RESFSDIR}
+        ${CP} LocalRes:LCD       ${RESFSDIR}.LCD       ${CPFLAGS}
+        ${CP} LocalRes:SelectLCD ${RESFSDIR}.SelectLCD ${CPFLAGS}
+        @echo ${COMPONENT}: extra resource files copied to Messages module
 
 # Dynamic dependencies:
