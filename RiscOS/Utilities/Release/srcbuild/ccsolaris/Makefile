@@ -6,7 +6,7 @@ CLX=${CLXPATH}/clx.a
 
 CFLAGS=-DUNIX -c -g -I${CLXPATH} ${CFL}
 CC=gcc
-INSTALL=/usr/ucb/install
+INSTALL=install
 TOLOCAL=cp
 OBJALL=srcbuild.o riscos.o parse.o build.o
 
