@@ -52,7 +52,7 @@ clean:
 
 
 clean_all:	clean
-	Every.Every2	-c "@.!*.Sources @.!*.Output* @.!*.Makefile"	Wipe %0 ~cr~v
+	Every.Every2	-c "@.!*.Sources @.!*.Output* @.!*.Makefile @.!*.h"	Wipe %0 ~cr~v
 	Echo		Component $(COMPONENT): 'clean_all' finished.
 
 
