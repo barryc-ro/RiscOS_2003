@@ -31,6 +31,7 @@ WIPE    = -wipe
 CD	= dir
 DEFMOD  = DefMod
 AR	= LibFile
+STRIP   = stripdepnd
 
 AFLAGS = -depend !Depend -Stamp -quit
 CFLAGS  = -c -depend !Depend ${THROWBACK} -zM -ff ${INCLUDES} ${DFLAGS}
@@ -49,6 +50,12 @@ ROMSTUBS   = RISCOSLIB:o.romstubs
 ROMCSTUBS  = RISCOSLIB:o.romcstubs
 ABSSYM     = RISC_OSLib:o.AbsSym
 REMOTEDB   = <Lib$Dir>.debug.o.remotezm
+SOCKLIB	   = TCPIPLibs:o.socklibzm
+INETLIB	   = TCPIPLibs:o.inetlibzm
+UNIXLIB    = TCPIPLibs:o.unixlibzm
+LIBS       = <Lib$Dir>.tboxlibs.o.wimplib
+C++LIB     = <Lib$Dir>.c++lib.o.c++libz
+LIBSD      = <Lib$Dir>.DebugLib.o.debuglibzm
 #
 # Include files
 #
@@ -64,10 +71,10 @@ TARGET    = aof.${COMPONENT}
 .SUFFIXES:   .od
 
 OBJS      =	o.sys o.com o.data o.api o.atr o.t0_sm o.t1 o.chan o.irqs \
-	  	o.serial o.header 
+	  	o.serial o.header o.db
 
 DOBJS      =	od.sys od.com od.data od.api od.atr od.t0_sm od.t1 od.chan od.irqs \
-	  	od.serial od.header 
+	  	od.serial od.header od.db
 
 #
 # Rule patterns
@@ -113,6 +120,7 @@ clean:
         ${WIPE} od ${WFLAGS}
         ${WIPE} rm ${WFLAGS}
         ${RM} h.header
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 ${DIRS}:
@@ -146,8 +154,8 @@ rm.${COMPONENT}: ${OBJS} ${CLIB} ${DIRS}
         ${LD} -rmf -o $@ ${OBJS} ${CLIB}
         Access rm.${COMPONENT} RW/R
 
-rm.${COMPONENT}D: ${DOBJS} ${REMOTEDB} ${DIRS}
-        ${LD} -rmf -o $@ ${DOBJS} ${CLIB} ${REMOTEDB}
+rm.${COMPONENT}D: ${DOBJS} ${REMOTEDB} ${DIRS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB} 
+        ${LD} -rmf -o $@ ${DOBJS} ${CLIB} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB} 
         Access rm.${COMPONENT}D RW/R
 
 # dummy target
