@@ -56,7 +56,7 @@ INCLUDES = -IC:,<Lib$Dir>.
 COMPONENT = MemInfo
 TARGET    = aof.${COMPONENT}
 RMTARGET  = rm.${COMPONENT}
-EXPORTS   = ${EXP_C_H}.${COMPONENT}
+EXPORTS   = #${EXP_C_H}.${COMPONENT}
 
 OBJS      =	\
 o.module	\
@@ -123,8 +123,3 @@ ${EXP_C_H}.${COMPONENT}:	h.${COMPONENT}
 
 #
 # Dynamic dependencies:
-o.module:	c.module
-o.module:	C:h.swis
-o.module:	C:h.kernel
-o.module:	h.module
-o.module:	h.header
