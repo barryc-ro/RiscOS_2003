@@ -25,8 +25,8 @@ LD      = link
 RM      = remove
 WIPE    = -wipe
 
-AFLAGS = -depend !Depend -throwback -Stamp -quit
-CFLAGS  = -c -depend !Depend -throwback -zM ${INCLUDES} ${DFLAGS}
+AFLAGS = -depend !Depend -Stamp -quit
+CFLAGS  = -c -depend !Depend -zM ${INCLUDES} ${DFLAGS} -wp
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
@@ -39,14 +39,14 @@ RSTUBS    = RISCOSLIB:o.rstubs
 ROMSTUBS  = RISCOSLIB:o.romstubs
 ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.AbsSym
-INETLIB=InetInc:^.^.libs.inetlib.inetlibzm
-SOCKLIB=InetInc:^.^.libs.socklib.socklibzm
+INETLIB=TCPIPLibs:o.inetlibzm
+SOCKLIB=TCPIPLibs:o.socklibzm
 #
 # Include files
 #
-INCLUDES = -IC:,InetInc:
+INCLUDES = -IC:,TCPIPLibs:
 
-DFLAGS   =
+DFLAGS   = -DCOMPAT_INET4
 
 #
 # Program specific options:
@@ -120,32 +120,52 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 o.files:	c.files
 o.files:	C:h.kernel
 o.files:	h.files
+o.files:	c.files
+o.files:	C:h.kernel
+o.files:	h.files
 o.gopher:	c.gopher
 o.gopher:	C:h.kernel
 o.gopher:	C:h.swis
 o.gopher:	h.tcplibs
-o.gopher:	InetInc:sys.h.types
-o.gopher:	InetInc:sys.h.socket
-o.gopher:	InetInc:h.errno
+o.gopher:	TCPIPLibs:sys.h.types
+o.gopher:	TCPIPLibs:sys.h.cdefs
+o.gopher:	TCPIPLibs:machine.h.endian
+o.gopher:	TCPIPLibs:machine.h.ansi
+o.gopher:	TCPIPLibs:machine.h.types
+o.gopher:	TCPIPLibs:sys.h.socket
+o.gopher:	TCPIPLibs:sys.h.cdefs
+o.gopher:	TCPIPLibs:sys.h.errno
 o.gopher:	C:h.kernel
-o.gopher:	InetInc:net.h.if
-o.gopher:	InetInc:sys.h.mbuf
-o.gopher:	InetInc:net.h.if_arp
-o.gopher:	InetInc:sys.h.socket
-o.gopher:	InetInc:netinet.h.in
-o.gopher:	InetInc:sys.h.ioctl
-o.gopher:	InetInc:sys.h.ttychars
-o.gopher:	InetInc:sys.h.ttydev
-o.gopher:	InetInc:h.netdb
-o.gopher:	InetInc:netns.h.ns
-o.gopher:	InetInc:sys.h.time
-o.gopher:	InetInc:sys.h.time
-o.gopher:	h.socklib
-o.gopher:	InetInc:sys.h.types
-o.gopher:	InetInc:sys.h.socket
-o.gopher:	InetInc:sys.h.stat
-o.gopher:	InetInc:sys.h.time
-o.gopher:	InetInc:sys.h.uio
+o.gopher:	TCPIPLibs:net.h.if
+o.gopher:	TCPIPLibs:sys.h.socket
+o.gopher:	TCPIPLibs:sys.h.time
+o.gopher:	TCPIPLibs:sys.h.cdefs
+o.gopher:	TCPIPLibs:net.h.if_arp
+o.gopher:	TCPIPLibs:sys.h.socket
+o.gopher:	TCPIPLibs:netinet.h.in
+o.gopher:	TCPIPLibs:sys.h.ioctl
+o.gopher:	TCPIPLibs:sys.h.ttycom
+o.gopher:	TCPIPLibs:sys.h.ioccom
+o.gopher:	TCPIPLibs:sys.h.ioccom
+o.gopher:	TCPIPLibs:sys.h.filio
+o.gopher:	TCPIPLibs:sys.h.ioccom
+o.gopher:	TCPIPLibs:sys.h.sockio
+o.gopher:	TCPIPLibs:sys.h.ioccom
+o.gopher:	TCPIPLibs:sys.h.cdefs
+o.gopher:	TCPIPLibs:h.netdb
+o.gopher:	TCPIPLibs:sys.h.cdefs
+o.gopher:	TCPIPLibs:netns.h.ns
+o.gopher:	TCPIPLibs:sys.h.cdefs
+o.gopher:	TCPIPLibs:sys.h.time
+o.gopher:	TCPIPLibs:h.socklib
+o.gopher:	TCPIPLibs:sys.h.types
+o.gopher:	TCPIPLibs:sys.h.socket
+o.gopher:	TCPIPLibs:sys.h.stat
+o.gopher:	TCPIPLibs:sys.h.time
+o.gopher:	TCPIPLibs:sys.h.cdefs
+o.gopher:	TCPIPLibs:sys.h.time
+o.gopher:	TCPIPLibs:sys.h.uio
+o.gopher:	TCPIPLibs:sys.h.cdefs
 o.gopher:	C:h.kernel
 o.gopher:	h.status
 o.gopher:	h.gopherpub
