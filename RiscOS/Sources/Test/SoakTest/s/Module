@@ -54,15 +54,26 @@
 ; 10 Mar 97                     Get the date string correct in the module header ....
 ; 14 Mar 97 BAR   0.22          Add 640X480 VGAScreen mode switch.
 ; 09 Apr 97 BAR   0.23          Change to new Managed Access SW instead of NCRegistry SWI.
-
+; 06 Jun 97 BAR   0.24          Change to use my own smart card reading cde
+;                               and not to use the managed access code.
+; 09 Jun 97                     Final check and testing
+; 11 Jun 97                     Removed exccess code from usermode_donowt -
+;                               tks Tim. Change card checking logic, if no
+;                               card then end, if not idle - loop.
 
         LEADR   Module_LoadAddr
 
+;NCRegistry_Enquiry	        EQU	&04d382			; DEFINE SWI names ! REMOVE REMOVE
+;XNCRegistry_Enquiry	        EQU	&06D382			; DEFINE SWI names ! REMOVE REMOVE
+;NCAccessManager_Enquiry	        EQU	&04F000			; DEFINE SWI names ! REMOVE REMOVE
+;XNCAccessManager_Enquiry	EQU	&06F000			; DEFINE SWI names ! REMOVE REMOVE
 
-NCRegistry_Enquiry	        EQU	&4d382			; DEFINE SWI names ! REMOVE REMOVE
-XNCRegistry_Enquiry	        EQU	&6D382			; DEFINE SWI names ! REMOVE REMOVE
-NCAccessManager_Enquiry	        EQU	&4F000			; DEFINE SWI names ! REMOVE REMOVE
-XNCAccessManager_Enquiry	EQU	&6F000			; DEFINE SWI names ! REMOVE REMOVE
+SCInterface_Read	        EQU	&04d342
+SCInterface_Status	        EQU	&04d34a
+XSCInterface_Read	        EQU	&06d342
+XSCInterface_Status	        EQU	&06d34a
+
+
 
 TAB     *       9
 LF      *       10
@@ -129,7 +140,7 @@ Mod_Title
         =       "SoakTest", 0
 
 Mod_HelpStr
-        =       "SoakTest", TAB, "0.23 (09 Apr 97)", 0
+        =       "SoakTest", TAB, "0.24 (09 Jun 97)", 0
         ALIGN
 
 Mod_HC_Table
@@ -173,12 +184,13 @@ Mod_Init Entry
 	; Ethernet NC's won't pass looking for a server, thus won't see the smart card !
 	; So check for the smart card on init.
 	BL	CheckForSmartCard		; On an NC we use the smart card.
-;	DREG	r0,"exit check for smart card at init, r0 = ",cc
-;	DLINE	"garbige"
+;        DREG	r0,"exit check for smart card at init, r0 = ",cc
+;        DLINE	"garbige"
+
 	CMP	r0, #2				; is r0 = 2 ? : BootStrap Smart Card
-	BLEQ    BootstrapWPEntry
+	BEQ    BootstrapWPEntry
 	CMP	r0, #1				; is r0 = 1 ? : SoakTest Smart Card
-	BLEQ	SoakTestWPEntry
+	BEQ	SoakTestWPEntry
  ]
 
 
@@ -187,10 +199,10 @@ Mod_Init Entry
 
 ; nothing else to do here now
 
-;	DLINE	"Exiting #3 "
-;	DREG	r13,"R13 = ",cc
-;	DREG	r14,"R14 = ",cc
-;	DREG	r15,"R15 = ",cc
+;        DLINE	"Exiting #3 "
+;        DREG	r13,"R13 = ",cc
+;        DREG	r14,"R14 = ",cc
+;        DREG	r15,"R15 = ",cc
 
         CLRV
         EXIT
@@ -228,7 +240,7 @@ Mod_Service ROUT
 ; Check which service call and jump as reqd.
  [ SmartCardSupported
 	TEQ	r1, #Service_SmartCardRegistryCalled	; Was it a smart card registry call ?
-;	DLINE 	"Smart card - checking smc type ...."
+	DLINE 	"Smart card - checking smc type ...."
 	BLEQ	CheckForSmartCard			; Yes : Jump to smart card code.
  ]
  [ JoysticksSupported
@@ -240,14 +252,14 @@ Mod_Service ROUT
 	CMP	r0, #1					; is r0 = 1 ? : SoakTest Smart Card
 	BEQ	dosoaktest
 
-;	DLINE	"Exiting #1 "
-;	DREG	r13,"R13 = ",cc
-;	DREG	r14,"R14 = ",cc
-;	DREG	r15,"R15 = ",cc
+;        DLINE	"Exiting #1 "
+;        DREG	r13,"R13 = ",cc
+;        DREG	r14,"R14 = ",cc
+;        DREG	r15,"R15 = ",cc
 	EXIT
 
-;	DLINE	"Exiting module (aaa) "
-;	MOVNE	pc, lr					; Not a service call we want - exit
+;        DLINE	"Exiting module (aaa) "
+	MOVNE	pc, lr					; Not a service call we want - exit
 
 ; do soak test
 
@@ -259,10 +271,10 @@ dosoaktest
 
 dobootstrap
         BL      BootstrapWPEntry
-;	DLINE	"Exiting module ??? "
-;	DREG	r13,"R13 = ",cc
-;	DREG	r14,"R14 = ",cc
-;	DREG	r15,"R15 = ",cc
+;        DLINE	"Exiting module ??? "
+;        DREG	r13,"R13 = ",cc
+;        DREG	r14,"R14 = ",cc
+;        DREG	r15,"R15 = ",cc
 	EXIT
 
 ;
@@ -328,67 +340,180 @@ CheckForSmartCard	Entry
 ;	r0 = 1 => soak smart card detected => perform soak test.
 ;	r0 = 2 => plip smart card detected => perform bootstrap from parallel interface.
 ;
+; now reads a file and looks for ...
+; WOrd 0 = &00000000
+; Word 1 = &BEEFCAFE or &CAFEBEEF
+;
+; 1) wait for smartcard in
+; 2) read file "/4e43/20"
+; 3) wait for card status
+; 4) if status ok, check words are what we're expecting
+; 5) if they are, do soak testle when the
+; 6) else don't
+;
+SCrdFileName
+        =       "/4e43/20",0
+SoakTestTag       EQU &BEEFCAFE	                ; Soak Test tag
+PLIPTestTag       EQU &CAFEBEEF                 ; PLIP Test tag
+MSC_StatusIdle    EQU &00000000                 ; }
+MSC_StatusNoCard  EQU &00000001                 ; } Smart Card
+MSC_StatusBusy    EQU &00000002                 ; } status flags
+MSC_StatusError   EQU &00000003                 ; }
 
-;smcrd_source		*	2		; constant indicateing that the
-						; smart card was the source for the
-						; data.
-; with change to Managed access, there is only one source for the data so no
-; need to check where it came from. Code commented out ... jus in case needed.
-; 09 Apr 97 BAR.
+;        DLINE   "Waiting for smart card to be put in"
+waitcardin
+        MOV     r0,#-1                          ; set r0 to non-valid value
+        SWI     XSCInterface_Status             ; get smart card status
+;        DREG    r0,"SCInterface_Status rtn (1) "
+        CMP     r0,#MSC_StatusError             ; is status = SMC_StatusError
+        BEQ	smcrd_end		        ; error -exit.
+        BL      usermode_donothing              ; ensure call acks get turned on.
 
-1
-	=	"SOAK_ENABLE",0
-2
-	=	"PLIP_ENABLE",0
+        MOV     r1,#MSC_StatusNoCard
+;        DREG    r0,"r0 just before the compare(1) ........ "
+        CMP     r0,#MSC_StatusNoCard            ; is status = MSC_StatusNoCard
+        BEQ     smcrd_end                       ; jump to exit if no card                              "
+        CMP     r0,#MSC_StatusIdle              ; is status = MSC_StatusIdle
+        BNE     waitcardin                      ; loop back while not at idle AKA Busy
 
-; Note : Because we are asking for specific flags the registrary modeule
-; shifts the bits down to the LSB, therefore we are always looking at bit 0.
-; Not the bit specefied in the relevent documentation.
+;        DLINE   "Read the smart card"
+smcrd_read
+	LDR	wp, [r12]                       ; Get address of workspace and put in wp.
+;        DREG    wp,"Address of WP is "
+        MOV     r0,#1                           ; r0 needs to be 1
+        ADR     r1,SCrdFileName                 ; Get address of file name to pass to SWI
+        MOV     r2,#0                           ; r2 needs to be 0
+        MOV	r3,wp   		        ; r3 has Address of buffer
+        MOV     r4,#8                           ; r4 needs to be 8
+        MOV     r5,#0                           ; r5 needs to be 0
+        MOV     r6,#0                           ; r6 needs to be 0
+
+;        DREG    r0,"r0 = "
+;        DREG    r1,"r1 = "
+;        DREG    r2,"r2 = "
+;        DREG    r3,"r3 = "
+;        DREG    r4,"r4 = "
+;        DREG    r5,"r5 = "
+;        DREG    r6,"r6 = "
+
+        SWI     XSCInterface_Read               ; Ok, make te SWI call.
+					        ; V bit set (VS) if error
+	BVS	smcrd_end		        ; error -exit.
+
+;        DLINE   "Waiting for smart card to complete reading"
+waitnotbusy
+        SWI     XSCInterface_Status             ; get smart card status
+;        DREG    r0,"SCInterface_Status rtn (2) "
+        CMP     r0,#MSC_StatusError             ; is status = SMC_StatusError
+        BEQ	smcrd_end		        ; error -exit.
+        BL      usermode_donothing              ; ensure call acks get turned on.
+;        DREG    r0,"r0 just before the compare(2) ........ "
+        CMP     r0,#MSC_StatusBusy              ; is status = MSC_StatusBusy
+        BEQ     waitnotbusy                     ; loop back while busy.
+
+; Buffer 'wp' now has the file that we asked to read.
+; Ok, lets look for the system flags.
+; File format
+;          Soak Test    PLIP
+; word 0 = &00000000    &00000000
+; word 1 = &beefcafe    &cafebeef
+; So check word 0 = 0
 
 smcrd_checksoak
-	LDR	wp, [r12]                       ; Get address of workspace and put in wp.
-	ADR	r0,%BT1			        ; Address of tag to get data on
-	ADR	r1,wp                           ; Address of buffer (workspace)
-	MOV	r2,#Module_WorkspaceSize        ; Size of the buffer (workspace)
-	SWI	XNCAccessManager_Enquiry	; Make the SWi call
-					        ; V bit set (VS) if error
-	BVS	smcrd_end		        ; error -exit.
+;        DLINE   "checking the smart card ... for soak"
+;        DREG    r3, "r3 should still be wp addr ?"
+        ; r3 still has the address of the buffer 'wp'.
 
-	CMP	r0,#4			        ; Is length of data 4 bytes ?
-;	CMPEQ	r1,#smcrd_source	        ; Does the data cone from the smart card ?
-	BLNE	smcrd_checkplip		        ; Not right size, not from smart card check for plip
+        LDR     r0,[r3,#0]                      ; get first word into r0
+;        DREG    r0,"r0 should be 1st word (==0 ?) "
+        CMP     r0,#0                           ; is r0 = &00000000 ?
+;        DREG    r0,"Compared (1) r0 and r1 : r0= "
+;        DREG    r1,"                       : r1= "
+        BNE	smcrd_end		        ; No - exit.
 
-	ADR	r1,wp   		        ; Address of buffer
-	LDR	r0,[r1]			        ; get contents of buffer
-	AND	r0,r0,#1		        ; mask off all but bit 0
-	CMP	r0,#1			        ; is bit 0 = 1 ?
-	BLNE	smcrd_checkplip		        ; if <> 1, then check for plip
-	MOVEQ	r0,#1			        ; if == 1, then r0= 1 - soak flag
-	EXIT
+;        DLINE   "r0 == 0"
+        LDR     r0,[r3,#4]                      ; get next word from buffer
+;        DREG    r0,"r0 should be 2nd word (==&BEEFCAFE) ";
+        LDR     r1, =SoakTestTag                ; r1 gets the 'soak test' tag
+;        DREG    r1,"r1 has the soak tag "
+        CMP     r0,r1                           ; is r0 = r1 = 'soak test' tag ?
+;        DREG    r0,"Compared (2) r0 and r1 : r0= "
+;        DREG    r1,"                       : r1= "
+  	BNE	smcrd_checkplip		        ; Not right value for soak card, check for plip
+;        DLINE   "soak card found"
+	MOVEQ	r0,#1			        ; if r0==r1, then r0=1 - soak flag
+        EXIT				        ; exit from here
 
 smcrd_checkplip
-	ADR	r0,%BT2			        ; Address of tag to get data on
-	ADR	r1,wp   		        ; Address of buffer
-	MOV	r2,#Module_WorkspaceSize        ; Size of the buffer
-	SWI	XNCAccessManager_Enquiry	; Make the SWi call
-					        ; V bit set (VS) if error
-	BVS	smcrd_end		        ; error -exit.
-
-	CMP	r0,#4			        ; Is length of data 4 bytes ?
-;	CMPEQ	r1,#smcrd_source	        ; Does the data cone from the smart card ?
-	BLNE	smcrd_end		        ; Not right size, not from smart card - exit
-
-	ADR	r1,wp   		        ; Address of buffer
-	LDR	r0,[r1]			        ; get contents of buffer
-	AND	r0,r0,#1		        ; mask off all but bit 0
-	CMP	r0,#1			        ; is bit 0 = 1 ?
-	MOVNE	r0,#0                           ; if <> then r0 = 0 - don't do anything
-	MOVEQ	r0,#2			        ; if ==, then r0= 2 - plip flag
-	EXIT
+;        DLINE   "checking the smart card ... for plip"
+        LDR     r1, =PLIPTestTag                ; r1 gets the 'plip test' tag
+;        DREG    r1,"r1 has the plip tag "
+        CMP     r0,r1                           ; is r0 = r1 = 'plip test' tag ?
+;        DREG    r0,"Compared r0mand r1 : r0= "
+;        DREG    r1,"                   : r1= "
+  	BNE	smcrd_end		        ; Not right value for plip card, exit
+;        DLINE   "plip card found"
+	MOVEQ	r0,#2			        ; if r0==r1, then r0= 2 - plip flag
+        EXIT				        ; exit from here
 
 smcrd_end
+;        DLINE   "smart card checking routine - exiting"
+;        DLINE   "Smart Card End .... opps"
 	MOV	r0,#0			        ; don't do anything
 	EXIT				        ; exit from here
+
+
+; This callback handler simple defers the callback until later
+;
+defer_callback
+; *** tim says not needed ***        DLINE   "defer call back"
+; *** tim says not needed ***        SWI XOS_SetCallBack             ; Defer callback
+; *** tim says not needed ***        MOV r14, r12                    ; Register block
+; *** tim says not needed ***        LDMIA r14, {r0-r14}^            ; Loads USR r13,r14
+; *** tim says not needed ***        MOV r0, r0                      ; NOOP after accessing user
+; *** tim says not needed ***                                        ; registers before accessing banked
+; *** tim says not needed ***                                        ; register.
+; *** tim says not needed ***        LDR r14, [r14, #15*4]           ; Loads user PC into SVC r14
+; *** tim says not needed ***        DLINE   "Leaving call back"
+; *** tim says not needed ***        MOVS pc, r14                    ; Drop back to USR mode
+
+usermode_donothing ROUT
+
+        Entry   "r0-r1"
+; *** tim says not needed ***        Entry   "r0-r3"
+; *** tim says not needed ***;        Push "r0-r3, lr"
+;        DLINE   "usermode do nowt"
+; *** tim says not needed ***        SUB sp, sp, #&40                ; Make space on stack for reg dump
+; *** tim says not needed ***
+; *** tim says not needed ***        ; Update callback handler atomically in case an event occurs
+; *** tim says not needed ***        ; between reading the old handler and writing the new handler
+; *** tim says not needed ***        ;
+; *** tim says not needed ***        MOV r0, #CallBackHandler
+; *** tim says not needed ***        ADR r1, defer_callback
+; *** tim says not needed ***        MOV r2, sp                      ; R12 in defer_callback = reg ptr
+; *** tim says not needed ***        MOV r3, sp                      ; Reg save area on stack
+; *** tim says not needed ***        SWI XOS_ChangeEnvironment
+; *** tim says not needed ***;        DLINE   "pushing r1-r3"
+; *** tim says not needed ***        Push "r1-r3"                    ; Save old handler
+
+        ; Now execute a SWI in user mode to trigger callbacks
+        TEQP pc, #0                     ; To user mode
+        MOV r0, #0
+        MOV r1, #1
+        SWI XOS_Byte                    ; Read OS version
+        SWI XOS_EnterOS                 ; Back to SVC mode
+
+; *** tim says not needed ***        ; Restore old callback handler
+; *** tim says not needed ***        MOV r0, #CallBackHandler
+; *** tim says not needed ***;        DLINE   "pulling r1-r3"
+; *** tim says not needed ***        Pull "r1-r3"
+; *** tim says not needed ***        SWI XOS_ChangeEnvironment
+; *** tim says not needed ***
+; *** tim says not needed ***        ADD sp, sp, #&40
+;        DLINE   "Leaving user mode do nowt"
+        EXITS
+;        Pull "r0-r3, pc",,^
+
  ] ; end if smart card hardware support
 
  [ IncludeMPEGCode
@@ -417,10 +542,13 @@ SoakTest_Code
 	LDR	wp, [r12]
 
 SoakTestWPEntry Entry "r7-r11"
+;        DLINE   "SoakTestWPEntry Entry r7-r11"
 
 SoakTestInternalEntry
+;        DLINE   "SoakTestInternalEntry"
 
  [ MPEGandNonMPEG
+;        DLINE   "if MPEGandNonMPEG"
 	MOV	r3, #0						; Get podule header for podule 0
         ADR     r2, PoduleBuffer
 	SWI	XPodule_ReadHeader
@@ -435,10 +563,12 @@ SoakTestInternalEntry
  ]
 
  [ MPEGOnly
+;        DLINE   "if MPEGOnly"
 	B	SoakTestMPEG
  ]
 
  [ NonMPEGOnly
+;        DLINE   "if NonMPEGOnly"
 	B	SoakTestNonMPEG
  ]
 
@@ -512,6 +642,7 @@ SoakTestMPEG
 	SWI	XSTBState_Control
  ]
 
+;        DLINE   "11111111111111"
 	ADR	r1, VideoPacketDescriptor
 	MOV	r0, #0
 	STR	r0, [r1, #PacketDescriptor_Link]		; only one packet
@@ -825,11 +956,13 @@ SoakTestNonMPEG	ROUT
 	BVS	ScreenModeErrorTrap				; If error, then jump to error report code.
 
 ; Turn the screen cursor off.
+;        DLINE   "cursor offf"
 	ADR	r0, ScreenCursorOff				; r0 = addr of data to turn the cursor off
 	MOV	r1, #ScreenCursorOffEnd - ScreenCursorOff	; r1 = length of the data
 	SWI	XOS_WriteN					; execue the data !
 
 ; Make a note of the start time
+;        DLINE   "start time"
 	SWI	XOS_ReadMonotonicTime				; Get the TIME
 	MOV	r8, r0						; Temporary copy in r8
  [ UseNCFrontPanelLEDs
@@ -839,6 +972,7 @@ SoakTestNonMPEG	ROUT
 ; Now enter the main loop, escape is the only way out.
 
 10
+;        DLINE   "Enter main loop"
 	SWI	XOS_ReadEscapeState				; check for ESCAPE
 	BCS	%FT95						; and bomb out if we get it
 
@@ -861,12 +995,17 @@ SoakTestNonMPEG	ROUT
 	ADRNE	r6, SoakOddStruct				; Odd screen display
 
  [ UseNCFrontPanelLEDs
+;        DLINE   "ncfront pannel leds"
 	; See if 0.5 seconds are up, if so toggle the LED's
 	SWI	XOS_ReadMonotonicTime				; Get the TIME
+;        DLINE   "Time time according to ....."
 	CMP	r0, r9						; is r0 >= r9+50 (0.5 Secs)
+;        DLINE   "Compared the time"
 	ADDPL	r9, r0, #50					; r0 >= r9+50 then add on 0.5 seconds
+;        DLINE   "Lets go forth and toggle "
 	BLPL	tl_Toggle_LEDs					; r0 >= r9+50 then toggle LEDs
  |
+;        DLINE   "stbstate mousle"
 	[ UseSTBStateModule
 	AND	r0, r1, #1					; r0 = 0 or 1
 	ADD	r0, r0, #1					; r0 = 1 or 2
@@ -1052,7 +1191,7 @@ RestartBootstrap
 	TEQ	r1, #0				; is stream already open?
 	BNE	%FT05				; if so then skip this
 
-	DLINE	"Opening Parallel stream"
+;        DLINE	"Opening Parallel stream"
 
 ;	ADRL	r0, CloseDevices
 ;	SWI	XOS_CLI
@@ -1103,14 +1242,14 @@ PTHeaderStringEnd
 
 	BL	GetWord
 	MOV	r6, r0
-	DREG	r6, "Module length = &"
+;        DREG	r6, "Module length = &"
 
 	MOV	r0, #ModHandReason_Claim
 	MOV	r3, r6
 	SWI	XOS_Module
 	BVS	%FT90
 
-	DLINE	"Reading module data", cc
+;        DLINE	"Reading module data", cc
 
 	MOV	r8, r2				; r8 -> module block
 	MOV	r7, #0				; current offset in module block
@@ -1133,20 +1272,20 @@ PTHeaderStringEnd
 ; we've received all the data, now read the checksum
 
 	SWI	XOS_NewLine
-	DLINE	"Received all data, reading checksum"
+;        DLINE	"Received all data, reading checksum"
 
 	BL	GetWord
 	TEQ	r0, r5
 	BNE	%FT50				; [checksum incorrect]
 
-	DLINE	"Checksum correct, closing parallel stream"
+;        DLINE	"Checksum correct, closing parallel stream"
 ;	DREG	r1,"Closing handle ",cc
 
 	MOV	r0, #0				; r0 = 0 = close file
 						; r1 = handle to close
 	SWI	XOS_Find			; close parallel stream
 
-	DLINE	"Initialising module"
+;        DLINE	"Initialising module"
 
 	MOV	r0, #ModHandReason_AddArea
 	MOV	r1, r8
@@ -1154,23 +1293,23 @@ PTHeaderStringEnd
 	MOV	r1, #0				; indicate stream not open
 	BVS	%FT40				; [module failed to initialise]
 
-	DLINE	"Module initialised OK, looking for another one"
+;        DLINE	"Module initialised OK, looking for another one"
 	MOV	r8, #0				; indicate no block claimed from RMA
 	B	RestartBootstrap
 
 ; module returned error in init
 
 40
-	DLINE	"Module returned error '", cc
+;        DLINE	"Module returned error '", cc
 	ADD	r0, r0, #4
 	SWI	XOS_Write0
-	DLINE	"' from initialisation, restarting"
+;        DLINE	"' from initialisation, restarting"
 	B	RestartAfterError
 
 ; checksum was incorrect
 
 50
-	DLINE	"Checksum incorrect"
+;        DLINE	"Checksum incorrect"
 RestartAfterError
 	LDR	r13, StackPtr
 	TEQ	r8, #0				; if we have a block claimed from RMA
@@ -1183,22 +1322,22 @@ RestartAfterError
 	B	RestartBootstrap
 
 90
-	DLINE	"Failed to allocate RMA block for module"
+;        DLINE	"Failed to allocate RMA block for module"
 	B	RestartAfterError
 98
 	; An escape has been detected
-	DLINE	"Escape detected ......"
+;        DLINE	"Escape detected ......"
 	TEQ	r1,#0				; is stream already open?
 	BEQ	%FT99				; not open, don't close
 						; parallel open, close it
-	DLINE	"Parallel: was open, closing it"
+;        DLINE	"Parallel: was open, closing it"
 ;	DREG	r1,"Closing handle ",cc
 	MOV	r0, #0				; r0 = 0 = close file
 						; r1 = handle to close
 	SWI	XOS_Find			; close parallel stream
 99
 	; exit stage right with CS
-;	DLINE	"Exit stage right with CS set"
+;        DLINE	"Exit stage right with CS set"
 	EXIT
 
 
@@ -1230,7 +1369,7 @@ GetByte Entry "r2"
 	CMP	r0, r11				; have we timed out?
 	BMI	%BT10				; [no, so loop]
 
-	DLINE	"BGET timeout, restarting"
+;        DLINE	"BGET timeout, restarting"
 	B	RestartAfterError
 
 20
@@ -1240,11 +1379,11 @@ GetByte Entry "r2"
 	SWI	XOS_BGet
 	EXIT	VC
 
-	DLINE	"OS_BGet returned error, restarting"
+;        DLINE	"OS_BGet returned error, restarting"
 	B	RestartAfterError
 
 90
-	DLINE	"OS_Args EOF check returned error, restarting"
+;        DLINE	"OS_Args EOF check returned error, restarting"
 	B	RestartAfterError
 
 
