@@ -15,9 +15,15 @@ MKDIR   = cdir
 AS      = aasm
 CP      = copy
 RM      = remove
+WIPE    = -wipe
+STRIP   = stripdepnd
+
 CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
+ASFLAGS = -depend !Depend ${THROWBACK} -Stamp -quit -module -To $@ -From
 CPFLAGS = ~cfr~v
+WFLAGS  = ~CFR~V
+
+DIRS    = rm._dirs
 
 #
 # Program specific options:
@@ -40,20 +46,16 @@ install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
 clean:
-        ${RM} ${TARGET}
+        ${WIPE} rm ${WFLAGS}
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
-${TARGET}: ${SOURCE}
+${DIRS}:
+        @${MKDIR} rm
+        create ${DIRS}
+        stamp  ${DIRS}
+
+${TARGET}: ${SOURCE} ${DIRS}
         ${AS} ${ASFLAGS} ${SOURCE}
 
 # Dynamic dependencies:
-rm.GameModes2: Hdr:ListOpts
-rm.GameModes2: Hdr:Macros
-rm.GameModes2: Hdr:System
-rm.GameModes2: Hdr:SWIs
-rm.GameModes2: Hdr:CPU.Generic26
-rm.GameModes2: Hdr:IO.GenericIO
-rm.GameModes2: Hdr:RISCOS
-rm.GameModes2: Hdr:ModHand
-rm.GameModes2: Hdr:NdrDebug
-rm.GameModes2: Version
