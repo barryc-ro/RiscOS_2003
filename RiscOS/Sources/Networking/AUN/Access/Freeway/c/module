@@ -5,7 +5,15 @@
  *
  * Copyright (c) 1995 Acorn Computers Ltd., Cambridge, England
  *
- * :RCS Log discontinued:
+ * 96/12/02 - CE
+ * Added :	revised interface detection ; less optimised, but
+ *		should be more general purpose.
+ *		new SWI 'FreewaySerial' for serial support.
+ * 96/11/27 - CE
+ * Added :	support for clients registering a name for types
+ *
+ *
+ * $Log$
  *
  * Revision 1.21  96/04/07  09:52:15  kbracey
  * Fix to ignore address families other than AF_INET in read_ifs(), as the
@@ -146,6 +154,7 @@
 #include "sys/errno.h"
 #include "sys/dcistructs.h"
 
+
 #include "netinet/in.h"
 #include "net/if.h"
 
@@ -160,6 +169,7 @@ void fw_final(void);
 static int is_from_us(u_long src);
 
 static _kernel_oserror *FreewayStatus(_kernel_swi_regs *r);
+static _kernel_oserror *FreewaySerial(_kernel_swi_regs *r);
 static _kernel_oserror *init_msgs(char *filename, char *fd);
 static _kernel_oserror *fw_evenable(void);
 
@@ -167,6 +177,7 @@ static _kernel_oserror *fw_evenable(void);
  * declare global variables
  */
 struct fw fw = { 0 };
+struct serial_if serial_if = { 0 };
 u_long local_adr = 0;
 
 static void *module_wsp = 0;
@@ -179,7 +190,7 @@ static struct
 
 static char msg_fd[16] = { 0 };
 
-static struct eblk error_blocks[15] = {
+static struct eblk error_blocks[20] = {
     { 0, 0 },
     { 0x809f00, "FWType" },
     { 0x809f01, "FWOExt" },
@@ -195,13 +206,15 @@ static struct eblk error_blocks[15] = {
     { 0x809f0b, "FWNoInet" },
     { 0x809f0c, "FWStatusMsg" },
     { 0x809f0d, "FWInvalSWI" },
+    { 0x809f0e, "FWSNoInt" },
+    { 0x809f0f, "FWSBadParam" },
     };
 
 #ifdef OldCode
 static u_long auto_adr = 0;
 #endif
 
-#define MAXSWI 6
+#define MAXSWI 7
 
 struct swient
 {
@@ -214,6 +227,7 @@ static struct swient fw_ent[MAXSWI] = {
     ReadObject,
     EnumerateObjects,
     FreewayStatus,
+    FreewaySerial,
     0,
 };
 
@@ -426,37 +440,41 @@ static int read_ifs(void)
     struct ifconf ifc;
     struct ifreq ifreq, *ifr;
     struct sockaddr_in *sin = NULL;
-    int s, n;
+    int s, n, flags;
     u_long last_bcast;
 
     char etheradr[6];
     int retried = 0;
     u_char byte0, byte1, byte2;
 
-    extern struct in_addr inet_makeaddr(int net, int host);
+    /* extern struct in_addr inet_makeaddr(int net, int host); */
+
+    fw.fw_ifcnt = 0;	/* Reset count of interfaces, since we're about to
+    			 * re-enumerate them
+    			 */
 
     /*
      * Open a socket in order to read back the info from the drivers.
      * This is a UDP based application. If we can't open the socket
      * abort.
      */
-#ifdef DEBUG
-    Printf("IC> Opening socket....");
-#endif
+    #ifdef DEBUG
+      Printf("IC> Opening socket....");
+    #endif
 
     if( (s = socket(AF_INET, SOCK_DGRAM, 0)) < 0 )
     {
-#ifdef DEBUG
-	Printf("Failed - aborting\n");
-#endif
-	return -1;
+    #ifdef DEBUG
+      Printf("Failed - aborting\n");
+    #endif
+    return -1;
     }
 
-#ifdef DEBUG
-    Printf("Succeeded (temp socket=%d)\n",s);
-#endif/* DEBUG */
+    #ifdef DEBUG
+      Printf("Succeeded (temp socket=%d)\n",s);
+    #endif/* DEBUG */
 
-  again: /* UGHHH! */
+    again: /* UGHHH! - used for found an interface without an IP address */
 
     /*
      * Initialise things, including reading back the way that the
@@ -465,278 +483,233 @@ static int read_ifs(void)
     ifc.ifc_len = sizeof(buf);
     ifc.ifc_buf = buf;
 
-#ifdef DEBUG
-    Printf("IC> Reading Interface(s) config (SIOCGIFCONF)...");
-#endif
+    #ifdef DEBUG
+      Printf("IC> Reading Interface(s) config (SIOCGIFCONF)...");
+    #endif
 
     if( socketioctl(s, SIOCGIFCONF, (char *)&ifc) < 0 )
     {
-#ifdef DEBUG
+      #ifdef DEBUG
 	Printf("Failed - aborting\n");
-#endif
-	socketclose(s);
-	return -1;
+      #endif
+      socketclose(s);
+      return -1;
     }
 
-#ifdef DEBUG
-   Printf("Succeeded\n");
-#endif/* DEBUG */
+    #ifdef DEBUG
+      Printf("Succeeded\n");
+    #endif/* DEBUG */
 
     ifr = ifc.ifc_req;
 
-    /*
-     * Check here to eliminate devices we have already seen.
-     * We know if we have seen any by looking at the count.
+    /* 96/11/29 - CE
+     * Removed the 'skip over known usable interfaces guff'
+     * simply keep all interfaces in table, and mark those which are unusable
+     * as such ; need to take care in case order in chain changes (likely).
+     *
      */
-#ifdef DEBUG
-    Printf("IC> Checking for known usable interfaces...");
-#endif
-
-    if (fw.fw_ifcnt != 0)
-    {
-#ifdef DEBUG
-	Printf("Found some - skipping %d\n",fw.fw_ifcnt);
-#endif
-
-	last_bcast = fw.fw_ifbcast[(fw.fw_ifcnt)];
-
-	for( n = ifc.ifc_len / sizeof (struct ifreq); n > 0; n--, ifr++ )
-	{
-	    /*
-	     * loop around the known interfaces.
-	     */
-	    ifreq = *ifr;
-
-            /*
-             * KJB - fix to prevent each interface being marked twice until
-             * 4.4BSD Internet module (each interface also has an AF_LINK address)
-             */
-            if (((struct sockaddr *)&ifreq.ifr_addr)->sa_family != AF_INET)
-            {
-#ifdef DEBUG
-            Printf("not an AF_INET address - skipping\n");
-#endif
-                continue;
-            }
-
-	    /*
-	     * We are just checking for broadcast addresses here
-	     * since we know that if we cant do it, it doesnt
-	     * matter, and if we can then all we need to do is compare
-	     * against the last known broadcast address.
-	     */
-	    if( socketioctl(s, SIOCGIFBRDADDR, (char *)&ifreq) < 0 )
-		continue;
-	    else
-	    {
-		/*
-		 * Make the address usable.
-		 */
-		sin = (struct sockaddr_in *)&ifreq.ifr_addr;
-
-		/*
-		 * If this address matches the last known one,
-		 * move on to finding the new devices
-		 */
-		if (last_bcast == sin->sin_addr.s_addr)
-		{
-		    /*
-		     * Since we know this interface we can
-		     * skip it.
-		     */
-#ifdef DEBUG
-		    Printf("Found last known interface - evaluating rest\n");
-#endif/* DEBUG */
-
-		    ifr++;
-		    break;
-		}
-	    }
-	}
-    }
-#ifdef DEBUG
-    else
-	Printf("None known - evaluating rest\n");
-#endif
-
     if (ifr == NULL)
     {
-#ifdef DEBUG
+      #ifdef DEBUG
 	Printf("IC> Skipped all known interfaces - aborting\n");
-#endif
-	return fw.fw_ifcnt;
+      #endif
+      return fw.fw_ifcnt;
     }
 
     /*
      * Loop around the possible devices evaluating each one.
      */
-    for( n = ifc.ifc_len / sizeof (struct ifreq); n > 0; n--, ifr++ )
+    for (n = ifc.ifc_len / sizeof (struct ifreq); n > 0; n--, ifr++)
     {
-	ifreq = *ifr;
+       ifreq = *ifr;
 
-#ifdef DEBUG
-	Printf("IC> Evaluating found interface: ");
-#endif
+       #ifdef DEBUG
+ 	Printf("IC> Evaluating found interface: (%s) :",ifreq.ifr_name);
+       #endif
 
-        /*
-         * KJB - fix to prevent each interface being marked twice until
-         * 4.4BSD Internet module (each interface also has an AF_LINK address)
-         */
-        if (((struct sockaddr *)&ifreq.ifr_addr)->sa_family != AF_INET)
-        {
-#ifdef DEBUG
-            Printf("not an AF_INET address - skipping\n");
-#endif
-            continue;
-        }
+         /*
+          * KJB - fix to prevent each interface being marked twice until
+          * 4.4BSD Internet module (each interface also has an AF_LINK address)
+          */
+       if (((struct sockaddr *)&ifreq.ifr_addr)->sa_family != AF_INET)
+       {
+         #ifdef DEBUG
+           Printf("not an AF_INET address - skipping\n");
+         #endif
+         continue;
+       }
 
-	/*
-	 * Check to see if its the loop back device. We dont want this
-	 */
-	if( socketioctl(s, SIOCGIFFLAGS, (char *)&ifreq) < 0 ||
-	   ifreq.ifr_flags & IFF_LOOPBACK )
-	{
-#ifdef DEBUG
+       /*
+        * Check to see if its the loop back device. We dont want this
+        */
+       if ((socketioctl(s, SIOCGIFFLAGS, (char *)&ifreq) < 0) || (ifreq.ifr_flags & IFF_LOOPBACK))
+       {
+         #ifdef DEBUG
 	    Printf("loopback device - skipping\n");
-#endif
-	    continue;
-	}
+         #endif
+	  continue;
+       }
 
-	/*
-	 * The card also needs to be able to broadcast
-	 */
-	if( (ifreq.ifr_flags & (IFF_BROADCAST | IFF_UP ))
-	   != (IFF_BROADCAST | IFF_UP ) )
-	{
-#ifdef DEBUG
-	    Printf("device bcast or up failure (flags = %x)\n",
-		   ifreq.ifr_flags);
-#endif
-	    continue;
-	}
-
-	/*
-	 * Get the address of the interface
-	 */
-	if( socketioctl(s, SIOCGIFADDR, (char *)&ifreq) < 0 )
-	{
-#ifdef DEBUG
+       /*
+        * The interface needs to be able to broadcast, or to be a desired
+        * point to point link, in which case, we'll fudge 'broadcast'
+        */
+       flags = ifreq.ifr_flags;
+       /*
+        * Get the address of the interface
+        */
+      if (socketioctl(s, SIOCGIFADDR, (char *)&ifreq) < 0)
+      {
+	  #ifdef DEBUG
 	    Printf("cant get interface address - skipping\n");
-#endif
-	    continue;
-	}
+	  #endif
+	  continue;
+      }
 
-	/*
-	 * If we dont currently know the local address, set it to
-	 * the one we just found.
-	 */
-	if( local_adr == 0 )
-	{
-	    sin = (struct sockaddr_in *)&ifreq.ifr_addr;
-	    local_adr = sin->sin_addr.s_addr;
+      sin = (struct sockaddr_in *)&ifreq.ifr_addr;
 
-#ifdef DEBUG
-	    Printf("setting local_adr=%x...", sin->sin_addr.s_addr);
-#endif/* DEBUG */
+      /*
+       * If we dont currently know the local address, set it to
+       * the one we just found.
+       */
+      if (local_adr == 0)
+      {
+        local_adr = sin->sin_addr.s_addr;
+        #ifdef DEBUG
+          Printf("setting local_adr=%x...", local_adr);
+        #endif
+      }
 
-	}
+      sprintf(name, "%lx", sin->sin_addr.s_addr);
 
-#if 0
-	/*
-	 * I think this would give nicer output, but it is
-	 * much too close to freeze to do at the moment
-	 */
-	sprintf(name, "%s", inet_ntoa(sin->sin_addr));
-#else
-	sprintf(name, "%lx", sin->sin_addr.s_addr);
-#endif
+      #ifdef DEBUG
+        Printf("Storing interface info.\n");
+      #endif
+      setadrvar(fw.fw_ifcnt, name);
+      strncpy(&fw.fw_ifunit[fw.fw_ifcnt][0],ifreq.ifr_name,16);
+      fw.fw_ifaddrs[fw.fw_ifcnt] = sin->sin_addr.s_addr;
 
-	setadrvar(fw.fw_ifcnt, name);
-	fw.fw_ifaddrs[fw.fw_ifcnt] = sin->sin_addr.s_addr;
-
-	/*
-	 * Find out the broadcast address. If we cant get it then
-	 * we dont want this device so retry from the start skipping
-	 * this address.
-	 */
-	if( socketioctl(s, SIOCGIFBRDADDR, (char *)&ifreq) < 0 )
-	{
-#ifdef DEBUG
-	    Printf("Cant get broadcast address - unsetting local_addr\n");
-#endif
-	    local_adr = 0;
-	    continue;
-	}
-
-	/*
-	 * Keep account of this card since it meets the requirements.
-	 */
-#ifdef DEBUG
-	Printf("Storing interface info.\n");
-#endif
-	sin = (struct sockaddr_in *)&ifreq.ifr_addr;
-	fw.fw_ifbcast[(fw.fw_ifcnt)++] = sin->sin_addr.s_addr;
+      /*
+       * Find out the broadcast address. If we cant get it then
+       * check if it's a point to point interface.
+       */
+      if ((flags & IFF_BROADCAST) == IFF_BROADCAST)
+      {
+        if (socketioctl(s, SIOCGIFBRDADDR, (char *)&ifreq) < 0)
+	 {
+	   #ifdef DEBUG
+	     Printf("Cant get broadcast address - unsetting local_addr\n");
+	   #endif
+	   local_adr = 0;
+	   fw.fw_ifbcast[(fw.fw_ifcnt)] = INADDR_NONE;
+	 }
+	 else
+	 {
+	   /*
+	    * Keep account of this card since it meets the requirements.
+	    */
+	   sin = (struct sockaddr_in *)&ifreq.ifr_broadaddr;
+	   fw.fw_ifbcast[(fw.fw_ifcnt)] = sin->sin_addr.s_addr;
+	 }
+      }
+      else
+      if ((flags & IFF_POINTOPOINT) == IFF_POINTOPOINT)
+      {
+        if (serial_if.serial_if_request == 0)
+        {
+      	  #ifdef DEBUG
+      	    Printf("Serial support not requested - unsetting local_addr\n");
+      	  #endif
+      	  local_adr = 0;
+      	  fw.fw_ifbcast[(fw.fw_ifcnt)] = INADDR_NONE;
+      	}
+      	else
+      	if (socketioctl(s,SIOCGIFDSTADDR, (char *)&ifreq) < 0)
+      	{
+      	  #ifdef DEBUG
+      	    Printf("Unable to get destination address - unsetting local_addr\n");
+      	  #endif
+      	  local_adr = 0;
+      	  fw.fw_ifbcast[(fw.fw_ifcnt)] = INADDR_NONE;
+      	}
+      	else
+      	{
+      	  /*
+      	   * Keep account of this card since it meets the requirements, and
+      	   * we're requested to use this serial interface.
+      	   */
+      	  sin = (struct sockaddr_in *)&ifreq.ifr_dstaddr;
+      	  fw.fw_ifbcast[(fw.fw_ifcnt)] = sin->sin_addr.s_addr;
+      	}
+      }
+      if ((flags & IFF_UP) != IFF_UP)
+      {
+        #ifdef DEBUG
+      	  Printf("Interface is marked down - clearing broadaddr\n");
+      	#endif
+      	fw.fw_ifbcast[(fw.fw_ifcnt)] = INADDR_NONE;
+      }
+      fw.fw_ifcnt++;
     }
 
     /*
      * We havent found a valid interface. Make up an address etc.
      * and use that instead (if we can find an ether driver.
      */
-    if( fw.fw_ifcnt == 0 && !retried )
+    if (fw.fw_ifcnt == 0 && !retried)
     {
-#ifdef DEBUG
+      #ifdef DEBUG
 	Printf("IC> No usable devices found. Trying to make up an address\n");
-#endif
+      #endif
 
-	read_device_name(name, etheradr);
+      read_device_name(name, etheradr);
 
-#ifdef DEBUG
+      #ifdef DEBUG
 	Printf("IC> Try using name: %s...",name);
-#endif
+      #endif
 
-	if( name[0] != 0 )
+      if (name[0] != 0 )
+      {
+        int retc;
+        int irqstatus;
+
+        #ifdef DEBUG
+	   Printf("Making up ether address...");
+        #endif
+	byte0 = (u_char)etheradr[5];
+	byte1 = (u_char)etheradr[4];
+	byte2 = (u_char)name[1];
+        #ifdef DEBUG
+	  Printf("Address derived from: %d %d %d...", byte0, byte1, byte2);
+        #endif
+	sin = (struct sockaddr_in *)&ifreq.ifr_addr;
+
+	/* next line modified 25/7/94 gw */
+	sin->sin_addr = inet_makeaddr(1, (byte0 | byte1 << 8 | byte2 << 16));
+	sin->sin_family = AF_INET;
+
+	strncpy(ifreq.ifr_name, name, sizeof(ifreq.ifr_name));
+
+	irqstatus = ensure_irqs_off();
+	++setting_address;
+	restore_irqs(irqstatus);
+	retc = socketioctl(s, SIOCSIFADDR, (caddr_t)&ifreq);
+	irqstatus = ensure_irqs_off();
+	--setting_address;
+	restore_irqs(irqstatus);
+
+	if( retc >= 0 )
 	{
-	    int retc;
-	    int irqstatus;
-
-#ifdef DEBUG
-	    Printf("Making up ether address...");
-#endif
-	    byte0 = (u_char)etheradr[5];
-	    byte1 = (u_char)etheradr[4];
-	    byte2 = (u_char)name[1];
-#ifdef DEBUG
-	    Printf("Address derived from: %d %d %d...", byte0, byte1, byte2);
-#endif
-	    sin = (struct sockaddr_in *)&ifreq.ifr_addr;
-
-	    /* next line modified 25/7/94 gw */
-	    sin->sin_addr = inet_makeaddr(1, (byte0 | byte1 << 8 |
-					      byte2 << 16));
-	    sin->sin_family = AF_INET;
-
-	    strncpy(ifreq.ifr_name, name, sizeof(ifreq.ifr_name));
-
-	    irqstatus = ensure_irqs_off();
-	    ++setting_address;
-	    restore_irqs(irqstatus);
-	    retc = socketioctl(s, SIOCSIFADDR, (caddr_t)&ifreq);
-	    irqstatus = ensure_irqs_off();
-	    --setting_address;
-	    restore_irqs(irqstatus);
-
-	    if( retc >= 0 )
-	    {
-#ifdef DEBUG
-	        Printf("Seeing if this settup works.\n");
-#endif
-		retried = 1;
-		goto again;
-	    }
-#ifdef DEBUG
-	    Printf("Unable to setup address.\n");
-#endif
+          #ifdef DEBUG
+	    Printf("Seeing if this settup works.\n");
+          #endif
+          retried = 1;
+          goto again;
 	}
+        #ifdef DEBUG
+	  Printf("Unable to setup address.\n");
+        #endif
+      }
     }
 
     /*
@@ -744,55 +717,60 @@ static int read_ifs(void)
      */
     if( fw.fw_ifcnt > 0 )
     {
-	_kernel_swi_regs r;
-	_kernel_oserror *e;
-	struct address_q *q;
-	u_long ipadr;
+      _kernel_swi_regs r;
+      _kernel_oserror *e;
+      struct address_q *q;
+      u_long ipadr;
 
-#ifdef DEBUG
+      #ifdef DEBUG
 	Printf("IC> Found valid interface. Looking at Econet_EnumerateMap:");
-#endif/* DEBUG */
+      #endif/* DEBUG */
 
-	r.r[4] = 0;
-	for(;;)
+      r.r[4] = 0;
+      for(;;)
+      {
+        e = _kernel_swi(XOS_Bit | Econet_EnumerateMap,&r, &r);
+        #ifdef DEBUG
+	  Printf("r4 = %d",r.r[4]);
+        #endif/* DEBUG */
+	if (e || r.r[4] == -1)
 	{
-	    e = _kernel_swi(XOS_Bit | Econet_EnumerateMap,&r, &r);
-#ifdef DEBUG
-	    Printf("r4 = %d",r.r[4]);
-#endif/* DEBUG */
-	    if (e || r.r[4] == -1) {
-#ifdef DEBUG
-	        Printf("\n");
-#endif/* DEBUG */
-		break;
-		}
+        #ifdef DEBUG
+	  Printf("\n");
+        #endif/* DEBUG */
+	break;
+        }
 
-	    q = (struct address_q *)malloc(sizeof(struct address_q));
-	    if (!q) {
-#ifdef DEBUG
-		Printf("No more Found\n");
-#endif/* DEBUG */
-		break;
-		}
+        q = (struct address_q *)malloc(sizeof(struct address_q));
+	if (!q)
+	{
+          #ifdef DEBUG
+            Printf("No more Found\n");
+          #endif/* DEBUG */
+          break;
+        }
 
-	    ipadr = (u_long)r.r[3];
-#ifdef DEBUG
-	    Printf("Found: %s, adding. ",r.r[3]);
-#endif/* DEBUG */
-	    q->q_bcast.s_addr = ipadr | 0xffff0000;
-	    q->q_next = fw.fw_netadrs;
-	    fw.fw_netadrs = q;
-	}
+        ipadr = (u_long)r.r[3];
+      	#ifdef DEBUG
+      	  Printf("Found: %s, adding. ",r.r[3]);
+      	#endif/* DEBUG */
+      	q->q_bcast.s_addr = ipadr | 0xffff0000;
+        q->q_next = fw.fw_netadrs;
+        fw.fw_netadrs = q;
+      }
     }
 
     /*
      * Tidy up and return
      */
-#ifdef DEBUG
-    Printf("IC> Done\n");
-#endif/* DEBUG */
+    #ifdef DEBUG
+      Printf("IC> Done\n");
+    #endif/* DEBUG */
 
     socketclose(s);
+    #ifdef DEBUG
+      Printf("IC> fw struct at %x\n",&fw);
+    #endif
     return fw.fw_ifcnt;
 }
 
@@ -1335,6 +1313,9 @@ _kernel_oserror *fw_cli_handler(char *arg_string, int arg_count,
  * FWShow command. This lists all known access hosts and disks that
  * can be shared. -- Added in the definitions of DOMAIN_DISK and
  * DOMAIN_HOST (PWain).
+ *
+ * 96/12/03 - CE
+ * Have removed specific knowledge of types - now added by client.
  */
 
 /*ARGSUSED*/
@@ -1357,7 +1338,7 @@ static void fw_show(char *a, int b)
 	printf("No remote nets\n");
     else
     {
-	printf("net addresses:\n");
+	printf("Net addresses:\n");
 	for( q = fw.fw_netadrs; q; q = q->q_next )
 	    printf("%s\n", inet_ntoa(q->q_bcast));
     }
@@ -1366,28 +1347,37 @@ static void fw_show(char *a, int b)
     /*
      * Display information about Freeway types that are known.
      */
-    for( f = fw.fw_types; f; f = f->fw_next )
+    for (f = fw.fw_types; f; f = f->fw_next)
     {
-	if (f->fw_number == DOMAIN_DISK)
+	/* if (f->fw_number == DOMAIN_DISK)
 	     printf("Type %d: (Discs)\n", DOMAIN_DISK);
 	else if (f->fw_number == DOMAIN_HOST)
 	     printf("Type %d: (Hosts)\n", DOMAIN_HOST);
 	else if (f->fw_number == DOMAIN_PRINTER)
 	     printf("Type %d: (Printers)\n", DOMAIN_PRINTER);
 	else printf("Type %d:\n", f->fw_number);
+	*
+	* Old way of doing it... CE-27/11/96
+	*/
+	printf("Type %d: ", f->fw_number);
+	if (f->fw_name[0])
+	  printf("(%s)\n",f->fw_name);
+	else
+	  printf("\n");
 
-	for( rl = f->fw_remobj; rl; rl = rl->r_next )
+
+	for (rl = f->fw_remobj; rl; rl = rl->r_next)
 	{
 	    /*
 	     * If this entry isnt in use ignore it.
 	     */
-	    if( !rl->r_inuse )
+	    if (!rl->r_inuse)
 		continue;
 
 	    /*
 	     * Show entry. Local ones are prefixed with a "*"
 	     */
-	    if( rl->r_local )
+	    if (rl->r_local)
 		printf("   *Name=%-10s Holder=%s\n",
 		       rl->r_title, inet_ntoa(rl->r_ip));
 	    else
@@ -1395,7 +1385,7 @@ static void fw_show(char *a, int b)
 		       rl->r_title, inet_ntoa(rl->r_ip));
 	}
 
-	if( f->fw_next )
+	if (f->fw_next)
 	    printf("\n");
     }
 }
@@ -1473,6 +1463,7 @@ _kernel_oserror *fw_swi_handler(int swinum, _kernel_swi_regs *r, void *pw)
 	    case 2: Printf("FWS> Handling SWI: Freeway_Read\n"); break;
 	    case 3: Printf("FWS> Handling SWI: Freeway_Enumerate\n"); break;
 	    case 4: Printf("FWS> Handling SWI: Freeway_Status\n"); break;
+	    case 5: Printf("FWS> handling SWI: Freeway_Serial\n"); break;
 	    default: Printf("FWS> Handling SWI: %d\n", swinum); break;
 	    }
 #endif
@@ -1716,7 +1707,7 @@ static void rs_process_input(int format)
     int fromlen, r;
     char inbuf[1024];
 
-#ifdef DEBUG
+#ifdef DEBUGRPI
     Printf("RPI> Reading network activity (%s):-\n", format == 0 ? "unauth" :
 		"auth");
 #endif/* DEBUG */
@@ -1729,13 +1720,13 @@ static void rs_process_input(int format)
 		     (struct sockaddr *)(&from), &fromlen);
 
 	if( r < 0 || fromlen != sizeof(struct sockaddr_in) ) {
-#ifdef DEBUG
+#ifdef DEBUGRPI
 	    Printf("RPI: read failed. r=%d, errno=%d\n", r, errno);
 #endif/* DEBUG */
 	    break;
 	    }
 
-#ifdef DEBUG
+#ifdef DEBUGRPI
        Printf("RPI: read %d bytes from %x\n", r, from.sin_addr.s_addr);
 #endif/* DEBUG */
 
@@ -1751,7 +1742,7 @@ int fw_event_handler(int *r)
 {
     int s, format;
 
-#ifdef DEBUG
+#ifdef DEBUGEVENT
     Printf("FEH> r0=%s r1=%s ",
    	 r[0]==Internet_Event ? "Internet_Event" : "Other Event" ,
 	 r[1]==SocketIO ? "SIGIO" : "SIGOther");
@@ -1774,7 +1765,7 @@ int fw_event_handler(int *r)
 	else
 	    return (1);
 
-#ifdef DEBUG
+#ifdef DEBUGEVENT
 	Printf("Format=%s\n", format==0 ? "Unauth" : "Auth");
 #endif/* DEBUG */
 
@@ -1926,14 +1917,16 @@ void fw_service(int service_number, _kernel_swi_regs *r, void *pw)
 
       case Service_InternetStatus:
 #ifdef DEBUG
-	Printf("Service_InternetStatus: reason %d (setting_address = %d)\n",
-	       r->r[0], setting_address);
+	Printf("Service_InternetStatus: reason %d subreason %d (setting_address = %d)\n",
+	       r->r[0], r->r[2], setting_address);
 #endif
 
 	switch( r->r[0] )
 	{
 	  case InternetStatus_AddressChanged:
 	  case InternetStatus_NetMapChanged:
+	  case InternetStatus_InterfaceUpDown:
+	    serial_if.serial_if_action = r->r[2];
 	    /*
 	     * an internet interface has had its address
 	     * changed - shutdown and restart Freeway as
@@ -2021,6 +2014,63 @@ static _kernel_oserror *FreewayStatus(_kernel_swi_regs *r)
     }
 }
 
+
+/*
+ * FreewaySerial SWI handler added 96/12/02 - CE
+ * To provide support for use of serial interface
+ * for freeway/sharefs link
+ *
+ * In :	r0 : 0 => disable serial support
+ *           1 => enable serial support
+ *      r2 : pointer to unit name
+ *
+ */
+static _kernel_oserror *FreewaySerial(_kernel_swi_regs *r)
+{
+  int i;
+
+  #ifdef DEBUGSER
+    Printf("FWSer> reason %d",r->r[0]);
+    if (r->r[2])
+      Printf(" unit (%s)",r->r[2]);
+    else
+      Printf("\n");
+  #endif
+
+  switch(r->r[0])
+  {
+    case 0:	/* serial - remove serial support */
+      serial_if.serial_if_request = 0;
+      break;
+    case 1:	/* serial - add serial support */
+      serial_if.serial_if_request = 1;
+      break;
+
+    default:
+      return(fw_error(Err_FWSerParam));
+  }
+  if (r->r[2])
+  {
+    /* strncpy(serial_if.serial_if_name, (char *) r->r[2], 16); */
+    for (i=0; i < fw.fw_ifcnt; i++)
+    {
+      if (strcmp((char *) r->r[2], &fw.fw_ifunit[i][0]) == 0)
+      {
+        #ifdef DEBUGSER
+          Printf("\nMatched unit %s - restarting freeway\n\n",r->r[2]);
+        #endif
+        fw_final();
+        fw_prime();
+        fw_real_init();
+        break;
+      }
+    }
+  }
+  else
+    return(fw_error(Err_FWSerNoInt));
+
+  return(NULL);
+}
 /**********************************************************************/
 
 /* EOF module.c */

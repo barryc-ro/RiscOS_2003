@@ -5,23 +5,28 @@
  *
  * Copyright (c) 1995 Acorn Computers Ltd., Cambridge, England
  *
- * :RCS Log discontinued:
+ * 96/11/27 - CE
+ * added support for freeway clients supplying a descriptive name
+ * for the types they register (special case for printers, 'cause I
+ * don't think I'll get time to fix remote printer support, yet.
+ *
+ * $Log$
  * Revision 1.5  95/03/31  11:03:23  pwain
  * Added copious amounts of debug for Black testing.
- * 
+ *
  * Revision 1.4  95/03/05  16:05:16  kwelton
  * Tidied up scope and declarations of both functions and
  * variables; the module now compiles cleanly with -ffah.
- * 
+ *
  * Revision 1.3  95/02/13  17:01:01  pwain
  * Added in lots of debuging statements.
- * 
+ *
  * Revision 1.2  95/02/01  15:22:27  pwain
  * Added in a few more debug messages.
- * 
+ *
  * Revision 1.1  95/01/03  18:56:54  kwelton
  * Initial revision
- * 
+ *
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -128,6 +133,7 @@ static void send_fw_message(struct fwtype *f, u_long dest, short mtype,
     struct iovec msgvec[2];
     int i, nvec = 1;
 
+
 #ifdef DEBUG
     Printf("SFM> Sending message:");
     if( format )
@@ -176,6 +182,13 @@ static void send_fw_message(struct fwtype *f, u_long dest, short mtype,
 	{
 	    for( i = 0; i < fw.fw_ifcnt; i++ )
 	    {
+		if (fw.fw_ifbcast[i] == INADDR_NONE)
+      	        {
+      	      	  #ifdef DEBUG
+              	    Printf("SFM> Called with INADDR_NONE (%s)- skipping\n",fw.fw_ifunit[i]);
+      	      	  #endif
+		  continue;
+		}
 		sin.sin_addr.s_addr = fw.fw_ifbcast[i];
 		(void) sendmsg(format ? fw.fw_rssock1 : fw.fw_rssock, &msg, 0);
 	    }
@@ -185,7 +198,7 @@ static void send_fw_message(struct fwtype *f, u_long dest, short mtype,
 	    struct address_q *q;
 	    for( q = fw.fw_netadrs; q; q = q->q_next )
 	    {
-		if( q->q_bcast.s_addr )
+		if((q->q_bcast.s_addr) &&  ((q->q_bcast.s_addr) != INADDR_NONE))
 		{
 		    sin.sin_addr.s_addr = q->q_bcast.s_addr;
 		    (void)sendmsg(format ? fw.fw_rssock1 : fw.fw_rssock,
@@ -281,7 +294,7 @@ void process_message(u_long src, struct rs_msg *rsm, int len, int format)
     /* shut the compiler up */
     len = len;
 
-#ifdef DEBUG
+#ifdef DEBUGPM
     Printf("process message:");
 
     if( format )
@@ -347,7 +360,7 @@ void process_message(u_long src, struct rs_msg *rsm, int len, int format)
 	    authval = *(((u_int *)rsm) + 2);
 #endif
 
-#ifdef DEBUG
+#ifdef DEBUGPM
 	    Printf("sending refresh for authval %d\n",authval);
 #endif
 	    do_protocol(f, src, 0, REFRESH, 1, authval, 0);
@@ -733,26 +746,28 @@ void do_objects_on_callback(void)
 
 _kernel_oserror *RegisterType(_kernel_swi_regs *r)
 {
-    int type, newinterest, format, authval;
+    int    type, newinterest, format, authval ;
+    char   *name;
     struct fwtype *f;
     struct object_q *rq;
     struct authreq_q *a;
-    int error = 0;
+    int    error = 0;
 
 #ifdef DEBUG
-    _kernel_swi(OS_WriteI+4,(_kernel_swi_regs *)0,(_kernel_swi_regs *)0);
-    Printf("registertype flg %x type %x authval %x\n",
-	   r->r[0], r->r[1], r->r[2]);
+/*    _kernel_swi(OS_WriteI+4,(_kernel_swi_regs *)0,(_kernel_swi_regs *)0); */
+    Printf("registertype flg %x type %x authval %x name@ %s\n",
+	   r->r[0], r->r[1], r->r[2], r->r[3]);
 #endif
 
-    newinterest = (r->r[0] & 01) ? 0 : 1;
-    format = (r->r[0] & 02) ? 1 : 0;   /* format=0 for unauthenticated */
+    newinterest = (r->r[0] & (1<<0)) ? 0 : 1;
+    format = (r->r[0] & (1<<1)) ? 1 : 0;   /* format=0 for unauthenticated */
     type = r->r[1];
     authval = format==1 ? r->r[2] : 0;
+    name = (r->r[0] & (1<<2)) ? (char *)r->r[3] : (char *)NULL;	/* CE - 27/11/96 */
 
 #ifdef DEBUG
-    Printf("RT>> newinterest=%x format=%x type=%x authval=%x\n", 
-	newinterest,format,type,authval);
+    Printf("RT>> newinterest=%x format=%x type=%x authval=%x name=%x\n",
+	newinterest,format,type,authval,name);
 #endif
 
     for (f = fw.fw_types; f != 0; f = f->fw_next)
@@ -783,6 +798,10 @@ _kernel_oserror *RegisterType(_kernel_swi_regs *r)
 
 	memset((char *)f, 0, sizeof(struct fwtype));
 	f->fw_number = type;
+	if (name)
+	  strncpy(f->fw_name,name,16);	/* CE - 27/11/96 */
+	else if (type == DOMAIN_PRINTER)
+	  strncpy(f->fw_name,DOMAIN_PRINTER_N,16);
 	f->fw_validate = REFRESH_INTERVAL;
 	f->fw_next = fw.fw_types;
 	fw.fw_types = f;
@@ -1097,8 +1116,8 @@ _kernel_oserror *ReadObject(_kernel_swi_regs *r)
 
     auth = (r->r[0] & 01) ? 1 : 0;
     desclen = r->r[3];
-    /* 
-     * Is this correct? I think it should be r->r[1] (see 
+    /*
+     * Is this correct? I think it should be r->r[1] (see
      * ../ShareFS/ShareFS/internet.c in owner_logon() )
      * PWAIN 060295
      *
@@ -1178,7 +1197,7 @@ _kernel_oserror *EnumerateObjects(_kernel_swi_regs *r)
     {
 	r->r[7] = -1;
 	goto out;
-    
+
 }
     r->r[2] = strlen(rq->r_title) + 1;
     r->r[4] = rq->r_desclen;
