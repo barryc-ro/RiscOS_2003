@@ -23,6 +23,7 @@ CP      = copy
 LD      = link
 RM      = remove
 WIPE    = -wipe
+STRIP   = stripdepnd
 
 CFLAGS  = -depend !Depend ${INCLUDES} -c -zM -ffah ${DFLAGS} -DIR_CLIENT
 #DFLAGS  = -DDEBUG=3
@@ -85,6 +86,7 @@ clean:
 	${WIPE} linked.* ${WFLAGS}
 	${WIPE} map.* ${WFLAGS}
 	${RM} ${TARGET}
+	${STRIP}
 	@echo ${COMPONENT}: cleaned
 
 
