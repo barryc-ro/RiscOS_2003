@@ -22,21 +22,29 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "kernel.h"
 #include "swis.h"
 #include "xcb.h"
 #include "int_hndlr.h"
 
+#include "sys/types.h"
 #include "sys/dcistructs.h"
 #include "sys/errno.h"
 #include "sys/mbuf.h"
+#include "sys/socket.h"
 
+#include "net/if.h"
+#include "netinet/in.h"
 #include "netinet/if_ether.h"
 
+#include "enhdr.h"
 #include "e2module.h"
 #include "if_en.h"
 #include "parallel.h"
+#include "mbuf.h"
+#include "support.h"
 
 /* Update dcistructs.h if not new */
 #ifndef INQ_HW_MULTICAST
@@ -78,15 +86,14 @@ struct client
     static _kernel_oserror *(*cli_call)(int argc, char **argv);
 };
 
-extern unsigned char *en_addresses();
-extern int en_start();
-extern int en_transmit();
-extern int en_stats();
-extern int en_multicast();
+extern unsigned char *en_addresses(int);
+extern int en_transmit(_kernel_swi_regs *);
+extern int en_stats(_kernel_swi_regs *);
+static int en_multicast(_kernel_swi_regs *);
 extern int encnt;
-static int en_version(), en_setmtu(), en_getmtu();
-static int en_filter(), en_inquire();
-extern int callb_entry();
+static int en_version(_kernel_swi_regs *), en_setmtu(_kernel_swi_regs *);
+static int en_getmtu(_kernel_swi_regs *);
+static int en_filter(_kernel_swi_regs *), en_inquire(_kernel_swi_regs *);
 
 struct swient en_ent[] =
 {
@@ -117,10 +124,10 @@ struct
     char e_mess[16];
 } _en_errblk = { 0 };
 
-extern _kernel_oserror *en_error( int error, char *errortext );
+static _kernel_oserror *en_error( int error, char *errortext );
 extern int encnt;
 
-extern void callback(int (*f)(), void *pw);
+static void callback(void (*f)(void), void *pw);
 extern void set_receive_level(int unit, int addrlevel);
 
 extern struct en_softc *en_softc[];
@@ -367,7 +374,7 @@ static void send_frametypefree(u_int unit, u_int type, FilterSingleRef fs)
     r.r[3] = fs->fs_addrlevel;
     r.r[4] = fs->fs_errlevel;
 
-    (void)_kernel_swi(XOS_Bit | OS_ServiceCall, &r, &r);
+    (void)_kernel_swi(OS_ServiceCall, &r, &r);
 }
 
 /**********************************************************************/
@@ -961,7 +968,7 @@ static int en_multicast(_kernel_swi_regs *r)
             for ( set=0, c=0; c<filter->fs_multitablesize; c++ )
             {
                 /* Already done ? */
-                if ( !memcmp ( &filter->fs_multitable[c], r->r[3], 6 ) )
+                if ( !memcmp ( &filter->fs_multitable[c], (void *) r->r[3], 6 ) )
                     return 0;
             }
 
@@ -971,7 +978,7 @@ static int en_multicast(_kernel_swi_regs *r)
                 if ( !memcmp ( &filter->fs_multitable[c], zeroaddr, 6 ) )
                 {
                     memset ( &filter->fs_multitable[c], 0, 8 );
-                    memcpy ( &filter->fs_multitable[c], r->r[3], 6 );
+                    memcpy ( &filter->fs_multitable[c], (void *) r->r[3], 6 );
                     set=1;
                     break;
                 }
@@ -993,7 +1000,7 @@ static int en_multicast(_kernel_swi_regs *r)
             /* Doesn't matter if we are in multiall, still remove this entry for future reference */
             for ( c=0; c<filter->fs_multitablesize; c++ )
             {
-                if ( !memcmp ( &filter->fs_multitable[c], r->r[3], 6 ) )
+                if ( !memcmp ( &filter->fs_multitable[c], (void *) r->r[3], 6 ) )
                     memset ( &filter->fs_multitable[c], 0, 8 );
             }
             break;
@@ -1057,14 +1064,14 @@ static int en_setmtu(_kernel_swi_regs *r)
 
 /**********************************************************************/
 
-static void callback(int (*f)(), void *pw)
+static void callback(void (*f)(), void *pw)
 {
         _kernel_swi_regs r;
 
         r.r[0] = (int)f;
         r.r[1] = (int)pw;
 
-        (void)_kernel_swi(XOS_Bit | OS_AddCallBack, &r, &r);
+        (void)_kernel_swi(OS_AddCallBack, &r, &r);
 }
 
 /**********************************************************************/
@@ -1082,7 +1089,7 @@ void send_driverstatus(DibRef dib, int status)
     r.r[2] = status;
     r.r[3] = DCIVERSION;
 
-    (void)_kernel_swi(XOS_Bit | OS_ServiceCall, &r, &r);
+    (void)_kernel_swi(OS_ServiceCall, &r, &r);
 }
 
 /**********************************************************************/
@@ -1091,7 +1098,7 @@ void send_driverstatus(DibRef dib, int status)
  * callb_handler - handler for callback primed by initialisation
  * routine: send round DCIDriverStatus service call for all units
  */
-int callb_handler(void)
+_kernel_oserror *callb_handler(_kernel_swi_regs *r, void *pw)
 {
     int i;
     int s = splimp();
@@ -1101,11 +1108,7 @@ int callb_handler(void)
 
     splx(s);
 
-    /*
-     * finished - return a non-zero value so
-     * the cmhg veneers take the correct exit
-     */
-    return(1);
+    return NULL;
 }
 
 /**********************************************************************/
@@ -1113,7 +1116,7 @@ int callb_handler(void)
 /*
  * Module Initialisation code.
  */
-_kernel_oserror *en_initialise(char *cmd_tail, int pbase, void *pw)
+_kernel_oserror *en_initialise(const char *cmd_tail, int pbase, void *pw)
 {
     _kernel_oserror *e;
     int unit;
@@ -1215,7 +1218,7 @@ _kernel_oserror *en_initialise(char *cmd_tail, int pbase, void *pw)
 /*
  * Module Finalization code
  */
-_kernel_oserror *en_quit(void)
+_kernel_oserror *en_quit(int fatal, int podule, void *pw)
 {
     int i;
 
@@ -1290,7 +1293,7 @@ static void handle_managerstatus(_kernel_swi_regs *r)
 /**********************************************************************/
 
 /* Module Service Call handler */
-void en_sc_handler(int sn, _kernel_swi_regs *r)
+void en_sc_handler(int sn, _kernel_swi_regs *r, void *pw)
 {
     int i;
 
@@ -1429,7 +1432,7 @@ static _kernel_oserror *do_entest(int argc, char **argv)
 {
     int unit;
 
-    if( (unit = strtol(*argv, NULL, 10)) == 0 && **argv != '0' )
+    if( (unit = (int) strtol(*argv, NULL, 10)) == 0 && **argv != '0' )
     {
 	_en_errblk.e_num = 2;
 	sprintf(_en_errblk.e_mess, "EiTest: bad unit number '%s'", *argv);
@@ -1449,7 +1452,7 @@ static _kernel_oserror *do_entest(int argc, char **argv)
 
 /**********************************************************************/
 
-_kernel_oserror *en_cli_handler(char *arg_string, int arg_count,
+_kernel_oserror *en_cli_handler(const char *arg_string, int arg_count,
 				int cmd_no, void *pw)
 {
     struct client *callp;
@@ -1457,6 +1460,7 @@ _kernel_oserror *en_cli_handler(char *arg_string, int arg_count,
     char *margv[20];
     char *cp;
     char **argp = margv;
+    char arg_string_copy[256];
 
     if( cmd_no >= sizeof(en_cli_call) / sizeof(en_cli_call[0]) )
     {
@@ -1466,12 +1470,15 @@ _kernel_oserror *en_cli_handler(char *arg_string, int arg_count,
 	return((_kernel_oserror *)&_en_errblk);
     }
 
+    strncpy(arg_string_copy, arg_string, 255);
+    arg_string_copy[255] = 0;
+
     if( arg_count > 20 )
 	/* limit set by size of margv array */
 	arg_count = 20;
 
     margc = 0;
-    cp = arg_string;
+    cp = arg_string_copy;
     while (*cp && arg_count-- > 0)
     {
 	while (*cp == ' ' || *cp == '\t')

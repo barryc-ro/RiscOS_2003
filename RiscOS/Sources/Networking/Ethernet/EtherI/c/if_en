@@ -89,6 +89,10 @@
 static int max_txbuf = 100;
 #endif
 
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+
 #include "kernel.h"
 #include "swis.h"
 #include "delay.h"
@@ -104,7 +108,8 @@ static int max_txbuf = 100;
 
 #include "if_en.h"
 #include "e2module.h"
-
+#include "enhdr.h"
+#include "support.h"
 #include "dallas.h"
 
 //#include "parallel.h"
@@ -137,10 +142,20 @@ unsigned int parallel = 0;
 
 struct en_softc *en_softc[8];
 
-extern void en_io_out(), en_flush_out(), en_io_in();
-extern char *ether_sprintf();
+extern void en_io_out(u_char *src, volatile u_int *dst, int nbytes, u_int *bytebuf);
+extern void en_flush_output(volatile u_int *dst, u_int *bytebuf);
+extern void en_io_in(volatile u_int *src, void *dst, int nbytes);
+extern int xcb_add_ethernet_card(int unit, int slot);
+static int en_post(struct en_softc *en, int loopback_only);
+static int en_run_diags(struct en_softc *en, int loopback_only);
+static int lb3_failed(struct en_softc *en, NICRef nic);
+static int en_memtest(struct en_softc *en, int page, u_int *pattern);
+static int tx_mbufs(struct en_softc *en, struct mbuf *m0,
+		    u_char *edst, int type, u_char *esrc);
 
-extern int callproto();
+#ifdef BORDER
+extern void set_border(int);
+#endif
 
 #define ENCARD_ROM(slot)	(XCB_ADDRESS(FAST, slot))
 
@@ -156,15 +171,11 @@ char en_lasterr[64] = { 0 };
 int encnt = 0;
 char slotmap[8];
 static int en_slots[8];
-int en_irq_active = 0;
-int en_tx_active = 0;
+volatile int en_irq_active = 0;
+volatile int en_tx_active = 0;
 
 extern void *module_wsp;
 struct int_hndlr intr_routine;
-extern void en_log();
-extern int en_irq_entry();
-extern void enable_podule_irqs();
-extern void disable_podule_irqs();
 
 extern DibRef dibs[];
 
@@ -649,7 +660,7 @@ redo:
     if( fs )
 	callproto(dibs[unit], m0, fs->fs_handler, fs->fs_pwptr);
     else if( m0 )
-	FREEM(m0);
+	m_freem(m0);
 }
 
 /**********************************************************************/
@@ -788,7 +799,7 @@ static void tx_done(struct en_softc *en, NICRef nic)
     restore_irqs(s);
 
     /* start next transmit if one there */
-    if( (en->TxPending = txdesc) )
+    if( (en->TxPending = txdesc) != NULL )
 	start_tx(en, nic);
 
 }
@@ -1123,15 +1134,15 @@ void decl_xcb_interrupt(int slot, struct int_hndlr *hndlr, int prior, int intsta
     if( claimed != 0x091067 ) /* Only claim the vector once ! */
     {
 #ifdef USE_DEVICEVECTOR
-/*    _swix ( OS_ClaimDeviceVector, _IN(0)|_IN(1)|_IN(2)|_IN(3)|_IN(4), 13, en_irq_entry, module_wsp, easibase + EI_CTRLREG, 4 ); */
-    _swix ( OS_ClaimDeviceVector, _IN(0)|_IN(1)|_IN(2)|_IN(3)|_IN(4), 13, en_irq_entry, module_wsp, intstatus, MY_INTS );
+/*    _swix ( OS_ClaimDeviceVector, _INR(0,4), 13, en_irq_entry, module_wsp, easibase + EI_CTRLREG, 4 ); */
+    _swix ( OS_ClaimDeviceVector, _INR(0,4), 13, en_irq_entry, module_wsp, intstatus, MY_INTS );
 #else
 	intr_routine = *hndlr;
 	rin.r[0] = 2;
 	rin.r[1] = (int)en_irq_entry;
 	rin.r[2] = (int)module_wsp;
 
-	(void)_kernel_swi(XOS_Bit | OS_Claim, &rin, &rout);
+	(void)_kernel_swi(OS_Claim, &rin, &rout);
 #endif
 	claimed = 0x091067;
     }
@@ -1155,9 +1166,9 @@ void stats_init(struct en_softc *en)
      * now fill in struct st which describes
      * the stats. this interface supports.
      */
-    st.st_interface_type = ~0;
-    st.st_link_status = ~0;
-    st.st_link_polarity = ~0;
+    st.st_interface_type = (u_char) ~0;
+    st.st_link_status = (u_char) ~0;
+    st.st_link_polarity = (u_char) ~0;
     st.st_blank1 = 0;
     st.st_link_failures = 0;
     st.st_network_collisions = 0;
@@ -1269,7 +1280,7 @@ static void en_init_low(int slot, int irqs_on)
 	easibase=EASIBASE_SLOT0;
 #else
         /* Lookup easibase.  I dont see xcb.h supporting this.  This is only in RiscOS 3.5 and up */
-        if ( (_swix ( 0x4028D, _IN(0)|_IN(1)|_IN(2)|_IN(3), 1<<9, &easibase, 4, slot ))!=0 )
+        if ( (_swix ( Podule_ReadInfo, _IN(0)|_IN(1)|_IN(2)|_IN(3), 1<<9, &easibase, 4, slot ))!=0 )
             return;
 	/*
 	 * check for too many Ethernet (version I or II) cards.
@@ -1396,18 +1407,13 @@ static void en_init_low(int slot, int irqs_on)
 	flash_constants = (char *)easibase + (((128-16)*1024)<<2);
 
 	/* See if RiscOS will supply us with an ethernet address */
-	if ( (_swix ( Podule_ReadInfo, _IN(0)|_IN(1)|_IN(2)|_IN(3), (1<<27)|(1<<28), en->en_addr, 8, slot )) == 0 )
+	if ( (_swix ( Podule_ReadInfo, _INR(0,3), (1<<27)|(1<<28), en->en_addr, 8, slot )) == 0 )
 	{
+	    int temp;
 	    /* We got an address from the Podule Manager, we must byte swap it now */
-	    en->en_addr[6] = en->en_addr[0];
-	    en->en_addr[0] = en->en_addr[5];
-	    en->en_addr[5] = en->en_addr[6];
-	    en->en_addr[6] = en->en_addr[1];
-	    en->en_addr[1] = en->en_addr[4];
-	    en->en_addr[4] = en->en_addr[6];
-	    en->en_addr[6] = en->en_addr[2];
-	    en->en_addr[2] = en->en_addr[3];
-	    en->en_addr[3] = en->en_addr[6];
+	    temp = en->en_addr[0]; en->en_addr[0] = en->en_addr[5]; en->en_addr[5] = temp;
+	    temp = en->en_addr[1]; en->en_addr[1] = en->en_addr[4]; en->en_addr[4] = temp;
+	    temp = en->en_addr[2]; en->en_addr[2] = en->en_addr[3]; en->en_addr[3] = temp;
 	}
 	else
 	{
@@ -1415,16 +1421,11 @@ static void en_init_low(int slot, int irqs_on)
 
           if ( (err == NULL) && ((*(int *)&en->en_addr[0] != 0) || (*(int *)&en->en_addr[4] != 0) ))
           {
+            int temp;
 	    /* We got an address from the Kernel, we must byte swap it now */
-	    en->en_addr[6] = en->en_addr[0];
-	    en->en_addr[0] = en->en_addr[5];
-	    en->en_addr[5] = en->en_addr[6];
-	    en->en_addr[6] = en->en_addr[1];
-	    en->en_addr[1] = en->en_addr[4];
-	    en->en_addr[4] = en->en_addr[6];
-	    en->en_addr[6] = en->en_addr[2];
-	    en->en_addr[2] = en->en_addr[3];
-	    en->en_addr[3] = en->en_addr[6];
+	    temp = en->en_addr[0]; en->en_addr[0] = en->en_addr[5]; en->en_addr[5] = temp;
+	    temp = en->en_addr[1]; en->en_addr[1] = en->en_addr[4]; en->en_addr[4] = temp;
+	    temp = en->en_addr[2]; en->en_addr[2] = en->en_addr[3]; en->en_addr[3] = temp;
           }
           else
           {
@@ -1559,8 +1560,8 @@ static int en_post(struct en_softc *en, int loopback_only)
 	return(0);
 
     /* run the diagnostic tests */
-    if( !(retc = en_run_diags(en, loopback_only)) &&
-       !(en->en_flags & EN_RECOVERABLE_ERROR) )
+    retc = en_run_diags(en, loopback_only);
+    if( !retc && !(en->en_flags & EN_RECOVERABLE_ERROR) )
 	en->en_flags |= EN_FAULTY;
 
     /* pass the results to the statistics tests */
@@ -1657,7 +1658,7 @@ static u_char *calc_crc(u_char *data, int datalen)
     crc = ~0;
     for( i = 0; i < datalen; ++i )
     {
-	u_char next = *data++;
+	u_long next = *data++;
 	for( j = 0; j < NBBY; ++j )
 	{
 	    if( (next & 1) ^ (crc >> 31) )
@@ -1678,7 +1679,7 @@ static u_char *calc_crc(u_char *data, int datalen)
 
     for( i = 0; i < sizeof(crc); ++i)
     {
-	retc[i] = ~(swap & 0xff);
+	retc[i] = (u_char) ~swap;
 	swap >>= NBBY;
     }
 
@@ -1891,7 +1892,7 @@ static int en_run_diags(struct en_softc *en, int loopback_only)
     en_setup_diags(en, en->Chip, LOOPBACK1, 0);
     build_tpkt(en, &lback_data);
 
-    nic->rbcr0 = ~0;
+    nic->rbcr0 = (char) ~0;
     nic->command = START_DMA(DMA_READ);
 
     MICRODELAY(1);
@@ -1971,7 +1972,7 @@ static int en_memtest(struct en_softc *en, int page, u_int *pattern)
     /*
      * write the pattern into RAM
      */
-    nic->rbcr0 = ~0;
+    nic->rbcr0 = (u_char) ~0;
     nic->command = START_DMA(DMA_READ);
 
     MICRODELAY(1);
@@ -2355,7 +2356,7 @@ static int en_bringup(int unit)
 
 /**********************************************************************/
 
-en_init(void)
+void en_init(void)
 {
     int i;
     u_char buffer[16];
@@ -2381,14 +2382,14 @@ en_init(void)
     for( i = 0; i < XCB_SLOTS; ++i )
     {
 	en_slots[i] = 0;
-	slotmap[i] = -1;
+	slotmap[i] = (char) -1;
 
 	rin.r[3] = i;
-	if( (e =_kernel_swi(XOS_Bit | Podule_ReadID, &rin, &rout)) == NULL )
+	if( (e =_kernel_swi(Podule_ReadID, &rin, &rout)) == NULL )
 	{
 	    rin.r[2] = (int)buffer;
 	    rin.r[3] = i;
-	    e =_kernel_swi(XOS_Bit | Podule_ReadHeader, &rin, &rout);
+	    e =_kernel_swi(Podule_ReadHeader, &rin, &rout);
 
 	    id = buffer[3] | (buffer[4]<<8) | (buffer[5]<<16) | (buffer[6]<<24);
 
@@ -2422,14 +2423,14 @@ en_init(void)
     rin.r[2] = 4;
     rin.r[3] = 0;
     rin.r[4] = 1;
-    _kernel_swi(XOS_Bit | OS_SetVarVal, &rin, &rout);
+    _kernel_swi(OS_SetVarVal, &rin, &rout);
 
     rin.r[0] = (int)"Inet$EtherType";
     rin.r[1] = (int)"ei0";
     rin.r[2] = 3;
     rin.r[3] = 0;
     rin.r[4] = 0;
-    _kernel_swi(XOS_Bit | OS_SetVarVal, &rin, &rout);
+    _kernel_swi(OS_SetVarVal, &rin, &rout);
 }
 
 /**********************************************************************/
@@ -2440,8 +2441,8 @@ int en_transmit(_kernel_swi_regs *r)
     u_int unit = r->r[1];
     u_int type = r->r[2];
     struct mbuf *m, *m0 = (struct mbuf *)(r->r[3]);
-    char *edst = (char *)(r->r[4]);
-    char *esrc = (flags & TX_FAKESOURCE) ? (char *)r->r[5] : 0;
+    u_char *edst = (u_char *)(r->r[4]);
+    u_char *esrc = (flags & TX_FAKESOURCE) ? (u_char *)r->r[5] : 0;
     struct en_softc *en = en_softc[unit];
     int error = 0, s, i;
 
@@ -2514,7 +2515,7 @@ int en_transmit(_kernel_swi_regs *r)
 	    error = tx_mbufs(en, m, edst, type, esrc);
 
 	if( !(flags & TX_PROTOSDATA) )
-	    FREEM(m);
+	    m_freem(m);
     }
 
     /*
@@ -2542,7 +2543,7 @@ int en_transmit(_kernel_swi_regs *r)
 
 /**********************************************************************/
 
-int en_irq_handler(_kernel_swi_regs *r, void *pw)
+_kernel_oserror *en_irq_handler(_kernel_swi_regs *r, void *pw)
 {
     int i,s,s2;
     struct en_softc *en;
@@ -2556,14 +2557,14 @@ int en_irq_handler(_kernel_swi_regs *r, void *pw)
     if (en_irq_active)
     {
     	sprintf(en_lastlog,"Re-entering IRQ handler\n");
-    	return (1);
+    	return (NULL);
     }
 
     /* make sure this IRQ handler is not entered when in en_transmit() */
     if (en_tx_active)
     {
     	sprintf(en_lastlog,"IRQ handler entered during transmit\n");
-    	return (1);
+    	return (NULL);
     }
 
     /* set flag to indicate the IRQ handler has been entered */
@@ -2599,7 +2600,7 @@ int en_irq_handler(_kernel_swi_regs *r, void *pw)
     set_border(3);
 #endif
 
-    return (1);
+    return (NULL);
 }
 
 /**********************************************************************/
@@ -2630,7 +2631,7 @@ void en_final(void)
             rin.r[0] = 2;
             rin.r[1] = (int) en_irq_entry;
             rin.r[2] = (int) module_wsp;
-            e = _kernel_swi(XOS_Bit | OS_Release, &rin, &rout);
+            e = _kernel_swi(OS_Release, &rin, &rout);
 #endif
 	}
     }
@@ -2646,7 +2647,7 @@ void en_final(void)
         rin.r[0] = 2;
         rin.r[1] = (int) en_irq_entry;
         rin.r[2] = (int) module_wsp;
-        e = _kernel_swi(XOS_Bit | OS_Release, &rin, &rout);
+        e = _kernel_swi(OS_Release, &rin, &rout);
     }
 */
 }
@@ -2676,13 +2677,13 @@ void filter_multi ( FilterSingleRef filter )
     for ( c=0; c<filter->fs_multitablesize; c++ )
     {
         if ( memcmp ( &filter->fs_multitable[c], zeroaddr, 8 ) )
-            printf ( "%s", ether_sprintf ( &filter->fs_multitable[c] ) );
+            printf ( "%s", ether_sprintf ( filter->fs_multitable[c].address ) );
     }
 
     printf ( "\n" );
 }
 
-prenstats(int flag)
+int prenstats(int flag)
 {
     struct en_softc *en;
     int i, unit;
@@ -2704,7 +2705,7 @@ prenstats(int flag)
 	if ( (en->en_addr[0]==0)&&(en->en_addr[1]==0)&&(en->en_addr[2]==0)&&
 	     (en->en_addr[3]==0)&&(en->en_addr[4]==0)&&(en->en_addr[5]==0) )
 	{
-	    printf ( "ei%d 16-bit transfers COMPUTER COULD NOT SUPPLY AN ETHERNET ADDRESS\n" );
+	    printf ( "ei%d 16-bit transfers COMPUTER COULD NOT SUPPLY AN ETHERNET ADDRESS\n", unit );
 	}
 	else
 	{
@@ -2720,16 +2721,16 @@ prenstats(int flag)
 		break;
 
 	printf ( "     TX frames %10ld : TX errors %10ld : TX bytes %10ld\n     TX ints   %10ld\n",
-	 		en->en_stats.st_tx_frames,
-	        	en->en_stats.st_tx_general_errors,
-	        	en->en_stats.st_tx_bytes,
-	        	en->en_stats.st_tx_interrupts);
+	 		en->en_st_tx_frames,
+	        	en->en_st_tx_general_errors,
+	        	en->en_st_tx_bytes,
+	        	en->en_st_tx_interrupts);
 
 	printf ( "     RX frames %10ld : RX errors %10ld : RX bytes %10ld\n     RX ints   %10ld\n",
-	        	en->en_stats.st_rx_frames,
-	        	en->en_stats.st_rx_general_errors,
-	        	en->en_stats.st_rx_bytes,
-	        	en->en_stats.st_rx_interrupts);
+	        	en->en_st_rx_frames,
+	        	en->en_st_rx_general_errors,
+	        	en->en_st_rx_bytes,
+	        	en->en_st_rx_interrupts);
 
 	printf ( "     Frame types claimed:\n" );
 
@@ -3084,7 +3085,7 @@ static int tx_mbufs(struct en_softc *en, struct mbuf *m0,
 	 * write DMA, initialise remote DMA parameters, then load
 	 * the packet
 	 */
-	nic->rbcr0 = ~0;
+	nic->rbcr0 = (u_char) ~0;
 	nic->command = START_DMA(DMA_READ);
 
 	MICRODELAY(1);
@@ -3261,24 +3262,11 @@ out:
 }
 
 #ifdef BORDER
-int set_border(colour)
-int colour;
+#define VIDC ((volatile unsigned int *)0x03500000)
+
+void set_border(int colour)
 {
-    _kernel_oserror *e;
-    _kernel_swi_regs rin,rout;
-    char block[6];
-
-    block[0] = 0;
-    block[1] = 24;
-    block[2] = 0;
-    block[3] = 0;
-    block[4] = 0;
-
-    block[colour+2]=255;
-
-    rin.r[0] = 12;
-    rin.r[1] = (int) block;
-    e =_kernel_swi(XOS_Bit | OS_Word, &rin, &rout);
+    *VIDC = 0x40000000u | ((255 << (colour*8)) & 0x00FFFFFF);
 }
 #endif
 
