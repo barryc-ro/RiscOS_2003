@@ -271,7 +271,7 @@ typedef struct _VDFLOW {
         VDFLOWACK Ack;
         VDFLOWDELAY Delay;
         VDFLOWCDM Cdm;
-    } unnamed;			/* SJM: added a name here in case size matters */
+    } data;			/* SJM: added a name here in case size matters */
 } VDFLOW, * PVDFLOW;
 
 /*

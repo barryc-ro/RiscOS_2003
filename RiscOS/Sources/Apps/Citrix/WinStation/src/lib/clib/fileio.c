@@ -12,7 +12,7 @@
 #include <string.h>
 
 #include "../inc/clib.h"
-#include "fcntl.h"
+#include "fileio.h"
 
 int open(const char *filename, int mode)
 {

@@ -11,6 +11,12 @@
 *   Author: Marc Bloomfield (marcb)
 *
 *   $Log$
+*   Revision 1.1  1998/01/27 18:38:43  smiddle
+*   Lots more work on Thinwire, resulting in being able to (just) see the
+*   log on screen on the test server.
+*
+*   Version 0.03. Tagged as 'WinStation-0_03'
+*
 *  
 *     Rev 1.14   28 Apr 1997 14:57:28   kurtp
 *  I fixed a bug in this file, update, duh!
@@ -234,12 +240,8 @@ USHORT TWWindowsStart( PVD pVd, PTHINWIRECAPS pThinWireMode )
 
    //_asm int 3
    if ( uWidth && uHeight ) {
-#ifdef DOS
       (void) MouseSetScreenDimensions( uWidth, uHeight );
-      InitThinwire( uWidth, uHeight );
-#else
       InitThinwire( vColor, uWidth, uHeight );
-#endif
    }
 
 #ifdef DOS
@@ -335,12 +337,9 @@ void TWCmdInit( HWND hWnd, HDC hdc )
     TRACE(( TC_TW, TT_TW_PACKET+TT_TW_CONNECT,
             "TWCmdInit: Mode set to hRes(%d) vRes(%d)",
             hRes, vRes ));
-#ifdef DOS
+
     (void) MouseSetScreenDimensions( hRes, vRes );
-    InitThinwire( hRes, vRes );
-#else
     InitThinwire( vColor, hRes, vRes );
-#endif
 
     TRACE(( TC_TW, TT_TW_PACKET+TT_TW_CONNECT, "TWCmdInit: Exiting" ));
     TWCmdReturn( !rc ); // return to NewNTCommand or ResumeNTCommand

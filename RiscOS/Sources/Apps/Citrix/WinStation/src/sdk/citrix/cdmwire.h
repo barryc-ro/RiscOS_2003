@@ -34,7 +34,7 @@
  * problems to RISC architectures with alignment restrictions.
  */
 
-#pragma pack(1)
+// #pragma pack(1)
 
 /*
  * General structures and formats used by the wire protocol.
@@ -213,6 +213,8 @@ typedef struct _FINDSTRUCT {
     USHORT Attributes;     // File Attributes (SYSTEM, READONLY, etc.)
     UCHAR  NameSize;       // Size of the file name
 } FINDSTRUCT, *PFINDSTRUCT;
+
+#define sizeof_FINDSTRUCT	11
 
 /*
  * WINDOWS NT and WINDOWS 95 return both the 8.3 name, and
@@ -449,6 +451,8 @@ typedef struct _CDM_CREATE_REQUEST {
 } CDM_CREATE_REQUEST, *PCDM_CREATE_REQUEST;
 #define CDM_TYPE_CREATE 0
 
+#define sizeof_CDM_CREATE_REQUEST	14
+
 /*
  * Reply returned from file server after a CDM_CREATE_REQUEST was specified
  */
@@ -462,6 +466,7 @@ typedef struct _CDM_CREATE_REQUEST_REPLY {
 } CDM_CREATE_REQUEST_REPLY, *PCDM_CREATE_REQUEST_REPLY;
 #define CDM_TYPE_CREATE_REPLY 128
 
+#define sizeof_CDM_CREATE_REQUEST_REPLY	6
 
 /*
  * Open the given file specified by the full pathname from the root of
@@ -479,6 +484,8 @@ typedef struct _CDM_OPEN_REQUEST {
 } CDM_OPEN_REQUEST, *PCDM_OPEN_REQUEST;
 #define CDM_TYPE_OPEN CDM_TYPE_CREATE+1
 
+#define sizeof_CDM_OPEN_REQUEST	6
+
 /*
  * Reply from a CDM_OPEN_REQUEST
  */
@@ -492,6 +499,7 @@ typedef struct _CDM_OPEN_REQUEST_REPLY {
 } CDM_OPEN_REQUEST_REPLY, *PCDM_OPEN_REQUEST_REPLY;
 #define CDM_TYPE_OPEN_REPLY CDM_TYPE_CREATE_REPLY+1
 
+#define sizeof_CDM_OPEN_REQUEST_REPLY	6
 
 /*
  * Close the given file releasing the Context value.
@@ -535,6 +543,8 @@ typedef struct _CDM_READ_REQUEST {
 } CDM_READ_REQUEST, *PCDM_READ_REQUEST;
 #define CDM_TYPE_READ CDM_TYPE_CLOSE+1
 
+#define sizeof_CDM_READ_REQUEST	10
+
 /*
  * Reply from a CDM_READ_REQUEST
  *
@@ -571,6 +581,8 @@ typedef struct _CDM_WRITE_REQUEST {
 
 } CDM_WRITE_REQUEST, *PCDM_WRITE_REQUEST;
 #define CDM_TYPE_WRITE CDM_TYPE_READ+1
+
+#define sizeof_CDM_WRITE_REQUEST	10
 
 /*
  * Reply from a CDM_WRITE_REQUEST
@@ -646,6 +658,8 @@ typedef struct _CDM_FINDFIRST_REQUEST {
 } CDM_FINDFIRST_REQUEST, *PCDM_FINDFIRST_REQUEST;
 #define CDM_TYPE_FINDFIRST CDM_TYPE_WRITE+1
 
+#define sizeof_CDM_FINDFIRST_REQUEST	7
+
 /*
  * Reply from a CDM_FINDFIRST_REQUEST
  */
@@ -660,6 +674,8 @@ typedef struct _CDM_FINDFIRST_REQUEST_REPLY {
 
 } CDM_FINDFIRST_REQUEST_REPLY, *PCDM_FINDFIRST_REQUEST_REPLY;
 #define CDM_TYPE_FINDFIRST_REPLY CDM_TYPE_WRITE_REPLY+1
+
+#define sizeof_CDM_FINDFIRST_REQUEST_REPLY	9
 
 /*
  * Find the next file represented by the open FindFirst Context.
@@ -695,6 +711,8 @@ typedef struct _CDM_FINDNEXT_REQUEST {
 } CDM_FINDNEXT_REQUEST, *PCDM_FINDNEXT_REQUEST;
 #define CDM_TYPE_FINDNEXT CDM_TYPE_FINDFIRST+1
 
+#define sizeof_CDM_FINDNEXT_REQUEST	7
+
 /*
  * Reply from a CDM_FINDNEXT_REQUEST
  *
@@ -715,6 +733,8 @@ typedef struct _CDM_FINDNEXT_REQUEST_REPLY {
 
 } CDM_FINDNEXT_REQUEST_REPLY, *PCDM_FINDNEXT_REQUEST_REPLY;
 #define CDM_TYPE_FINDNEXT_REPLY CDM_TYPE_FINDFIRST_REPLY+1
+
+#define sizeof_CDM_FINDNEXT_REQUEST_REPLY	9
 
 /*
  * Close the given FindFirst Context, freeing its resources on the server.
@@ -768,6 +788,8 @@ typedef struct _CDM_GETATTR_REQUEST_REPLY {
 } CDM_GETATTR_REQUEST_REPLY, *PCDM_GETATTR_REQUEST_REPLY;
 #define CDM_TYPE_GETATTR_REPLY CDM_TYPE_FINDCLOSE_REPLY+1
 
+#define sizeof_CDM_GETAATR_REQUEST_REPLY	14
+
 /*
  * Set file attributes
  *
@@ -784,6 +806,8 @@ typedef struct _CDM_SETATTR_REQUEST {
 
 } CDM_SETATTR_REQUEST, *PCDM_SETATTR_REQUEST;
 #define CDM_TYPE_SETATTR CDM_TYPE_GETATTR+1
+
+#define sizeof_CDM_SETATTR_REQUEST	6
 
 /*
  * Reply from a CDM_SETATTR_REQUEST
@@ -825,6 +849,8 @@ typedef struct _CDM_GETDATETIME_REQUEST_REPLY {
 } CDM_GETDATETIME_REQUEST_REPLY, *PCDM_GETDATETIME_REQUEST_REPLY;
 #define CDM_TYPE_GETDATETIME_REPLY CDM_TYPE_SETATTR_REPLY+1
 
+#define sizeof_CDM_GETDATETIME_REQUEST_REPLY	10
+
 /*
  * Set file date and/or time
  *
@@ -855,6 +881,8 @@ typedef struct _CDM_SETDATETIME_REQUEST_REPLY {
 
 } CDM_SETDATETIME_REQUEST_REPLY, *PCDM_SETDATETIME_REQUEST_REPLY;
 #define CDM_TYPE_SETDATETIME_REPLY CDM_TYPE_GETDATETIME_REPLY+1
+
+#define sizeof_CDM_SETDATETIME_REQUEST_REPLY	6
 
 /*
  * Delete the given file name
@@ -892,6 +920,8 @@ typedef struct _CDM_RENAME_REQUEST {
 
 } CDM_RENAME_REQUEST, *PCDM_RENAME_REQUEST;
 #define CDM_TYPE_RENAME CDM_TYPE_DELETE+1
+
+#define sizeof_CDM_RENAME_REQUEST	6
 
 /*
  * Reply from a CDM_RENAME_REQUEST
@@ -988,6 +1018,7 @@ typedef struct _CDM_NOTIFYCACHE {
 } CDM_NOTIFYCACHE, *PCDM_NOTIFYCACHE;
 #define CDM_TYPE_NOTIFYCACHE_REPLY CDM_TYPE_DELETEDIR_REPLY+1
 
+#define sizeof_CDM_NOTIFYCACHE	6
 /*
  * Read from the file represented by context the amount of data at file offset
  * IF the timestamp on the file is later than the given one.
@@ -1005,6 +1036,8 @@ typedef struct _CDM_READCOND_REQUEST {
 
 } CDM_READCOND_REQUEST, *PCDM_READCOND_REQUEST;
 #define CDM_TYPE_READCOND CDM_TYPE_NOTIFYCACHE_REQUEST+1
+
+#define sizeof_CDM_READCOND_REQUEST	18
 
 /*
  * Reply from a CDM_READCOND_REQUEST
@@ -1040,6 +1073,7 @@ typedef struct _CDM_READCOND_REQUEST_REPLY {
 } CDM_READCOND_REQUEST_REPLY, *PCDM_READCOND_REQUEST_REPLY;
 #define CDM_TYPE_READCOND_REPLY CDM_TYPE_NOTIFYCACHE_REPLY+1
 
+#define sizeof_CDM_READCOND_REQUEST_REPLY	14
 
 /*
  * Handle a file lock request.
@@ -1060,6 +1094,8 @@ typedef struct _CDM_FILELOCK_REQUEST {
 } CDM_FILELOCK_REQUEST, *PCDM_FILELOCK_REQUEST;
 #define CDM_TYPE_FILELOCK CDM_TYPE_READCOND+1
 
+#define sizeof_CDM_FILELOCK_REQUEST	13
+
 /*
  * Reply from a CDM_FILELOCK_REQUEST
  */
@@ -1072,6 +1108,8 @@ typedef struct _CDM_FILELOCK_REQUEST_REPLY {
 
 } CDM_FILELOCK_REQUEST_REPLY, *PCDM_FILELOCK_REQUEST_REPLY;
 #define CDM_TYPE_FILELOCK_REPLY CDM_TYPE_READCOND_REPLY+1
+
+#define sizeof_CDM_FILELOCK_REQUEST_REPLY	16
 
 /*
  * Handle a file unlock request.
@@ -1100,6 +1138,7 @@ typedef struct _CDM_FILEUNLOCK_REQUEST_REPLY {
 } CDM_FILEUNLOCK_REQUEST_REPLY, *PCDM_FILEUNLOCK_REQUEST_REPLY;
 #define CDM_TYPE_FILEUNLOCK_REPLY CDM_TYPE_FILELOCK_REPLY+1
 
+#define sizeof_CDM_FILEUNLOCK_REQUEST_REPLY	6
 
 /*
  * Handle a change file size request.
@@ -1127,6 +1166,7 @@ typedef struct _CDM_FILECHANGESIZE_REPLY {
 } CDM_FILECHANGESIZE_REPLY, *PCDM_FILECHANGESIZE_REPLY;
 #define CDM_TYPE_FILECHANGESIZE_REPLY CDM_TYPE_FILEUNLOCK_REPLY+1
 
+#define sizeof_CDM_FILECHANGESIZE_REPLY	6
 
 /*
    This is a seek packet used to get the current file size from the DOS 3.x
@@ -1147,6 +1187,8 @@ typedef struct _CDM_SEEK_REQUEST {
 } CDM_SEEK_REQUEST, *PCDM_SEEK_REQUEST;
 #define CDM_TYPE_SEEK CDM_TYPE_FILECHANGESIZE+1
 
+#define sizeof_CDM_SEEK_REQUEST	9
+
 /*
  * Reply from a CDM_SEEK_REQUEST
  */
@@ -1161,6 +1203,7 @@ typedef struct _CDM_SEEK_REQUEST_REPLY {
 } CDM_SEEK_REQUEST_REPLY, *PCDM_SEEK_REQUEST_REPLY;
 #define CDM_TYPE_SEEK_REPLY CDM_TYPE_FILECHANGESIZE_REPLY+1
 
+#define sizeof_CDM_SEEK_REQUEST_REPLY	10
 
 /*
  * This is the volume information request call. The "DIR" command shows the
@@ -1181,6 +1224,9 @@ typedef struct _CDM_VOLUMEINFO_REQUEST {
 
 } CDM_VOLUMEINFO_REQUEST, *PCDM_VOLUMEINFO_REQUEST;
 #define CDM_TYPE_VOLUMEINFO CDM_TYPE_SEEK+1
+
+#define sizeof_CDM_VOLUMEINFO_REQUEST	6
+
 
 /*
  * Reply from a CDM_VOLUMEINFO_REQUEST
@@ -1320,6 +1366,8 @@ typedef struct _CDM_CONNECT_REQUEST_REPLY {
 
 #define CDM_TYPE_CONNECT_REPLY CDM_TYPE_VOLUMEINFO_REPLY+1
 
+#define sizeof_CDM_CONNECT_REQUEST_REPLY	10
+
 /*
  * Defines for connect reply version
  */
@@ -1363,6 +1411,8 @@ typedef struct _CDM_FINDFIRSTINDEX_REQUEST {
 } CDM_FINDFIRSTINDEX_REQUEST, *PCDM_FINDFIRSTINDEX_REQUEST;
 #define CDM_TYPE_FINDFIRSTINDEX CDM_TYPE_CONNECT+1
 
+#define sizeof_CDM_FINDFIRSTINDEX_REQUEST	9
+
 /*
  * Reply from a CDM_FINDFIRSTINDEX_REQUEST
  *
@@ -1397,7 +1447,7 @@ typedef struct _CDM_FINDFIRSTINDEX_REQUEST {
 
 #define CDM_MAX_PATH_LEN      255
 
-#pragma pack()
+//#pragma pack()
 
 #endif // _CDMWIRE_
 

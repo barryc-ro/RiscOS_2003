@@ -62,6 +62,8 @@ extern char *strupr(char *s);
 
 
 #define strcmpi(a,b) stricmp(a,b)
+#define memicmp(a,b,n) strncmp(a,b,n)
+
 #define lstrcpy(a,b) strcpy(a,b)
 #define lstrlen(a) strlen(a)
 #define wsprintf sprintf
@@ -74,18 +76,10 @@ extern void Delay(int t);
 #define     ERROR_DEFAULT           0xffff
 extern int LoadString( const char *base, int idResource, char *szBuffer, int cbBuffer );
 
-extern int mkdir(const char *name);
-
 #define GlobalAlloc(flags, size)	((HGLOBAL)malloc(size))
 #define GlobalFree(ptr)			(free((void *)(ptr)), (HGLOBAL)0)
 #define GlobalLock(ptr)			((void *)ptr)
 #define GlobalUnlock(ptr)		
-
-#define _open(a,b)	open(a,b)
-#define _close(a)	close(a)
-#define _read(a,b,c)	read(a,b,c)
-#define _write(a,b,c)	write(a,b,c)
-#define _lseek(a,b,c)	lseek(a,b,c)
 
 extern int read_word(void *a);
 extern void write_word(void *a, int b);

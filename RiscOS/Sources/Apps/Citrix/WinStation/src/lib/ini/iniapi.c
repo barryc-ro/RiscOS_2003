@@ -9,7 +9,12 @@
 *
 *   Author: Kurt Perry (4/08/1994)
 *
-*   $Log$
+*   iniapi.c,v
+*   Revision 1.1  1998/01/12 11:37:26  smiddle
+*   Newly added.#
+*
+*   Version 0.01. Not tagged
+*
 *  
 *     Rev 1.35   15 Apr 1997 18:52:26   TOMA
 *  autoput for remove source 4/12/97
@@ -35,7 +40,7 @@
 *************************************************************************/
 
 #include "windows.h"
-#include "fcntl.h"
+#include "fileio.h"
 
 /*  Get the standard C includes */
 #include <stdio.h>

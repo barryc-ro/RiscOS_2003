@@ -165,10 +165,16 @@ static int disconnect_handler(int event_code, ToolboxEvent *event, IdBlock *id_b
     NOT_USED(handle);
 }
 
+#ifdef DEBUG
+#define VERSION		Module_MajorVersion " [" __TIME__ ":" __DATE__ "]" Module_MinorVersion
+#else
+#define VERSION		Module_MajorVersion " (" Module_Date ") " Module_MinorVersion
+#endif
+
 static int proginfo_handler(int event_code, ToolboxEvent *event, IdBlock *id_block,
                          void *handle)
 {
-    LOGERR(proginfo_set_version(0, id_block->self_id, Module_MajorVersion " (" Module_Date ") " Module_MinorVersion ));
+    LOGERR(proginfo_set_version(0, id_block->self_id, VERSION));
     return 1;
     NOT_USED(event_code);
     NOT_USED(event);
@@ -331,10 +337,10 @@ static int log_init(void)
    LogClose();
    
    EMLogInfo.LogFlags   = (cli_remote_debug ? LOG_REMOTE : 0);
-#if 1
-   EMLogInfo.LogClass   = TC_UI;
+#if 0
+   EMLogInfo.LogClass   = TC_UI | TC_TW;
    EMLogInfo.LogEnable  = TT_ERROR;
-   EMLogInfo.LogTWEnable = 0;
+   EMLogInfo.LogTWEnable = TT_TW_res4;
 #else
    EMLogInfo.LogClass   = TC_ALL;
    EMLogInfo.LogEnable  = TT_ERROR;

@@ -824,7 +824,7 @@ EmulSetInformation( PWD pWd, PWDSETINFORMATION pWdSetInformation )
     BYTE       bLED;
     int rc = CLIENT_STATUS_SUCCESS;
 
-    TRACE(( TC_UI, TT_API4, "EmulSetInformation: %d", pWdSetInformation->WdInformationClass ));
+    DTRACE(( TC_UI, TT_API4, "EmulSetInformation: %d", pWdSetInformation->WdInformationClass ));
 
     pIca = (PWDICA) pWd->pPrivate;
 

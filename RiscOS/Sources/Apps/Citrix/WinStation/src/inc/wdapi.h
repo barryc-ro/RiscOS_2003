@@ -232,6 +232,8 @@ typedef struct _OPENVIRTUALCHANNEL {
     USHORT  Channel;
 } OPENVIRTUALCHANNEL, * POPENVIRTUALCHANNEL;
 
+#define sizeof_OPENVIRTUALCHANNEL 6
+
 /*
  *  Virtual i/o channel ids
  *  NOTE: don't change the order of this structure

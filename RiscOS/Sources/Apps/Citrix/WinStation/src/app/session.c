@@ -293,6 +293,17 @@ static int EMErrorPopup(Session sess, int iError)
    return(0);
 }
 
+// restore desktop (should work with mode numbers and selectors)
+static void restore_desktop(void)
+{
+    int mode;
+
+    LOGERR(_swix(OS_RestoreCursors, 0));
+
+    LOGERR(_swix(Wimp_ReadSysInfo, _IN(0)|_OUT(0), 1, &mode));
+    LOGERR(_swix(Wimp_SetMode, _IN(0), mode));
+}
+
 /*******************************************************************************
  *
  *  WFEngineStatusCallback - helper function
@@ -386,15 +397,7 @@ static void WFEngineStatusCallback( Session sess, int message )
     case CLIENT_STATUS_KILL_FOCUS:  // ignore these messages
 	sess->HaveFocus = TRUE;
 
-	// restore desktop (should work with mode numbers and selectors)
-	{
-	    int mode;
-
-	    LOGERR(_swix(OS_RestoreCursors, 0));
-
-	    LOGERR(_swix(Wimp_ReadSysInfo, _IN(0)|_OUT(0), 1, &mode));
-	    LOGERR(_swix(Wimp_SetMode, _IN(0), mode));
-	}
+	restore_desktop();
 	break;
 
     case CLIENT_STATUS_CONNECTING:
@@ -675,7 +678,7 @@ int session_poll(Session sess)
 {
     int rc;
     
-    TRACE((TC_UI, TT_API1, "session_poll: state %x connected %d focus %d continuepolling %d\n", gState, gState & WFES_CONNECTED, sess->HaveFocus, gbContinuePolling ));
+    DTRACE((TC_UI, TT_API1, "session_poll: state %x connected %d focus %d continuepolling %d\n", gState, gState & WFES_CONNECTED, sess->HaveFocus, gbContinuePolling ));
 
 //  if ( gState & WFES_CONNECTED )
 //	srvWFEngMessageLoop( sess->hWFE );
@@ -725,6 +728,9 @@ void session_close(Session sess)
     srvWFEngUnload( (PMINIDLL)NULL );  // Call the WFEngUnload API
 
     connect_close(sess);
+
+    if (!sess->HaveFocus)
+	restore_desktop();
 
     session_free(sess);
 }

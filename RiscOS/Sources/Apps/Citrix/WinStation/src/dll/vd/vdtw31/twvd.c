@@ -208,15 +208,8 @@ STATIC ULONG PrefHRes;
 STATIC ULONG PrefVRes;
 STATIC BOOL  vfFullScreen = FALSE;
 
-#if 1
-
 extern int vwScreen, vhScreen;
-extern int vSVGAmode;
-
-int        vSVGAPref = 0;
-int        vVariableRes = FALSE;
-
-#endif
+static BOOL vVariableRes = FALSE;
 
 extern HWND vhWnd;
 extern HDC  vhdc;
@@ -315,10 +308,6 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
     int rc;
     WDQUERYINFORMATION wdqi;
     OPENVIRTUALCHANNEL OpenVirtualChannel;
-#ifndef DOS
-    ULONG iScreenPercent;
-#endif
-
     char string[20];
  
     /*
@@ -353,94 +342,28 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
     pVdOpen->ChannelMask = (1L << VirtualThinWire);
  
     /*
-     *  Check for super VGA
+     *  Check preferred res
      */
-#if defined( DOS) || defined(RISCOS)
-    bGetPrivateProfileString( pVdOpen->pIniSection, INI_SVGACAPABILITY, DEFAULT_SVGACAP,
-                              string, sizeof(string) );
-    if (!stricmp(string, "Off")) {
-        vSVGAmode = 0;
-    }
-    else if (!stricmp(string, VARIABLE_SVGACAP)) {
-        PrefHRes = bGetPrivateProfileInt( pVdOpen->pIniSection,
-                                          INI_DESIREDHRES, DEF_DESIREDHRES );
+    PrefHRes = bGetPrivateProfileInt( pVdOpen->pIniSection,
+				      INI_DESIREDHRES, DEF_DESIREDHRES );
      
-        PrefVRes = bGetPrivateProfileInt( pVdOpen->pIniSection,
-                                          INI_DESIREDVRES, DEF_DESIREDVRES );
+    PrefVRes = bGetPrivateProfileInt( pVdOpen->pIniSection,
+				      INI_DESIREDVRES, DEF_DESIREDVRES );
      
- 
-        /*
-         *  Force to resonable values
-         */
-        PrefHRes = (PrefHRes == 0) ? DEF_DESIREDHRES : PrefHRes;
-        PrefVRes = (PrefVRes == 0) ? DEF_DESIREDVRES : PrefVRes;
+    /*
+     *  Force to resonable values
+     */
+    PrefHRes = (PrefHRes == 0) ? DEF_DESIREDHRES : PrefHRes;
+    PrefVRes = (PrefVRes == 0) ? DEF_DESIREDVRES : PrefVRes;
     
-        vVariableRes = TRUE;
-    }
-//    else {
-//        if ( rc = TWDetermineSVGA(pVd) )
-//            return( rc );
-//    }
- 
-    bGetPrivateProfileString( pVdOpen->pIniSection, INI_SVGAPREFERENCE, DEFAULT_SVGAPREF,
-                              string, sizeof(string) );
-    if (!stricmp(string, "Auto"))
-        vSVGAPref = 1;
-#endif
-    
-#if 0
-    // use Screen Percentage first
-    iScreenPercent = bGetPrivateProfileInt(pVdOpen->pIniSection,INI_SCREENPERCENT,0); 
+    vVariableRes = TRUE;
 
-    // validate the screen percentage
-    if((iScreenPercent > 100L) || (iScreenPercent <1L))
-       iScreenPercent = 0L;
-    
-    // if using screen percent, calculate based on local screen
-    if(iScreenPercent != 0) {
-       double xRes, yRes, xyPercent;
-#ifdef WIN32
-       RECT rWorkArea;
-#endif
-       
-       xyPercent = (double)iScreenPercent / (double)100;
-       xyPercent = sqrt(xyPercent);
-       xRes = (double)GetSystemMetrics(SM_CXSCREEN);
-       yRes = (double)GetSystemMetrics(SM_CYSCREEN);
-#ifdef WIN32
-       // Get the limits of the "work area".
-       if ( SystemParametersInfo( SPI_GETWORKAREA, sizeof(RECT), &rWorkArea, 0)) {
-          xRes = (double)rWorkArea.right - rWorkArea.left;
-          yRes = (double)rWorkArea.bottom - rWorkArea.top;
-          }
-#endif
-       xRes = xRes * xyPercent;
-       yRes = yRes * xyPercent;
-       
-       PrefHRes = (ULONG)xRes;
-       PrefVRes = (ULONG)yRes;
-
-       // adjust vertical resolution to include title bar
-       PrefVRes = PrefVRes - (GetSystemMetrics(SM_CYCAPTION)-1);
-       
-       }
-    else {
-      
-       PrefHRes = bGetPrivateProfileInt( pVdOpen->pIniSection,
-                                         INI_DESIREDHRES, DEF_DESIREDHRES );
-       PrefVRes = bGetPrivateProfileInt( pVdOpen->pIniSection,
-                                         INI_DESIREDVRES, DEF_DESIREDVRES );
-       }
-#endif
-    
-#if 0
     /*
      *  Force to resonable values (defined in wfengapi.h)
      */
     if ( (((USHORT)PrefHRes & 0xffff) == 0xffff) && 
          (((USHORT)PrefVRes & 0xffff) == 0xffff) ) {
-        PrefHRes = GetSystemMetrics( SM_CXSCREEN );
-        PrefVRes = GetSystemMetrics( SM_CYSCREEN );
+	GetModeSpec(&PrefHRes, &PrefVRes);
         vfFullScreen = TRUE;
     }
     else {
@@ -449,7 +372,6 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
         if((PrefVRes==0) || (PrefVRes > MAX_DESIREDVRES ))
             PrefVRes = DEF_DESIREDVRES;
     }
-#endif
     
     /*
      *  Get preferred color depth
@@ -473,6 +395,9 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
     vDimBitmapMin = bGetPrivateProfileLong( pVdOpen->pIniSection,
                                             INI_DIMMINBITMAP, 
                                             DEF_DIMMINBITMAP );
+
+    TRACE((TC_TW,TT_TW_CACHE, "VDTW: Cache on %d size %d BitmapMin %d", vDimCacheEnabled, vDimCacheSize, vDimBitmapMin));
+
     if ( vDimCacheEnabled ) {
 
         PCHAR pszTemp;
@@ -484,6 +409,8 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
                                   INI_DIMCACHEPATH, 
                                   DEF_DIMCACHEPATH,
                                   pszTemp, CCHMAXPATH );
+
+	TRACE((TC_TW,TT_TW_CACHE, "VDTW: Cache in '%s'", pszTemp));
 
         if ( strlen(pszTemp) ) {
 
@@ -567,12 +494,12 @@ DriverClose( PVD pVd, PDLLCLOSE pVdClose )
 {
    pVdClose;
 
-// TWDeallocCache(pVd);
+   TWDeallocCache(pVd);
    CacheHasBeenAllocated = FALSE;
 
-// TWWindowsStop(pVd);
+   TWWindowsStop(pVd);
 
-// ThinDestroyOnce();
+   ThinDestroyOnce();
 
    return( CLIENT_STATUS_SUCCESS );
 }
@@ -679,26 +606,10 @@ DriverInfo( PVD pVd, PDLLINFO pVdInfo )
     pPref->ResCapsOff     = (USHORT)((LPBYTE)&pPref->ResCaps - (LPBYTE)pPref);
 #if defined (DOS) || defined(RISCOS)
 
-    if ( vVariableRes == TRUE ) {
-        pPref->ResCaps.HRes   = (USHORT)PrefHRes;
-        pPref->ResCaps.VRes   = (USHORT)PrefVRes;
-        pCaps->ResCaps.HRes   = (USHORT)PrefHRes;
-        pCaps->ResCaps.VRes   = (USHORT)PrefVRes;
-    }
-    else {
-        pPref->ResCaps.HRes   = 640;
-        pPref->ResCaps.VRes   = 480;
-    
-        if (vSVGAmode) {
-            pVdData->ResCaps[0].HRes = 800;
-            pVdData->ResCaps[0].VRes = 600;
-            pCaps->ResCapsCnt = 2;
-            if (vSVGAPref) {
-                pPref->ResCaps.HRes = 800;
-                pPref->ResCaps.VRes = 600;
-            }
-        }
-    }
+    pPref->ResCaps.HRes   = (USHORT)PrefHRes;
+    pPref->ResCaps.VRes   = (USHORT)PrefVRes;
+    pCaps->ResCaps.HRes   = (USHORT)PrefHRes;
+    pCaps->ResCaps.VRes   = (USHORT)PrefVRes;
 
     pCaps->fColorCaps     |= CCAPS_8_BIT;
     pCaps->flGraphicsCaps |= GCAPS_SSB_1BYTE_PP;
@@ -712,54 +623,17 @@ DriverInfo( PVD pVd, PDLLINFO pVdInfo )
     /*
      *  Get max system resolution
      */
-    sysHRes = sysHResWorkArea = GetSystemMetrics( SM_CXSCREEN );
-    sysVRes = sysVResWorkArea = GetSystemMetrics( SM_CYSCREEN );
-
-#ifdef WIN32
-    if ( !vfFullScreen ) {
-        BOOL bResult;
-        RECT rWorkArea;
-
-
-        // Get the limits of the "work area".
-        bResult = SystemParametersInfo( SPI_GETWORKAREA, sizeof(RECT), &rWorkArea, 0);
-        if ( bResult) {
-           sysHResWorkArea = rWorkArea.right - rWorkArea.left;
-           sysVResWorkArea = rWorkArea.bottom - rWorkArea.top;
-        }
-    }
-#endif
-       
-  
-    /*
-     * Plugin window doesn't have to be constrained
-     */
-    if ( !(pInstanceData->hWndPlugin) ) {
-#ifdef WIN32
-        if ( !vfFullScreen ) {
-            sysVResWorkArea -= GetSystemMetrics( SM_CYCAPTION )-1;
-        }
-#endif
-       
-        /*
-         *  Too big? Then force fit it.
-         */
-        if ( PrefHRes > sysHResWorkArea ) {
-            PrefHRes = sysHResWorkArea;
-            fResViolation = TRUE;
-        }
-        if ( PrefVRes > sysVResWorkArea ) {
-            PrefVRes = sysVResWorkArea;
-            fResViolation = TRUE;
-        }
-    }
-
+    GetModeSpec(&sysHResWorkArea, &sysVResWorkArea);
+    sysHRes = sysHResWorkArea;
+    sysVRes = sysVResWorkArea;
+    
     /*
      *  Get client's preference
      */
     pPref->ResCaps.HRes   = (USHORT)PrefHRes;
     pPref->ResCaps.VRes   = (USHORT)PrefVRes;
 
+#if 0
     /*
      *  Get host encryption level 
      */
@@ -847,7 +721,9 @@ DriverInfo( PVD pVd, PDLLINFO pVdInfo )
 
         DeleteDC( hdc );
     }
-    else {
+    else
+#endif
+    {
 
         /*
          *  Gather up valid client modes

@@ -66,6 +66,8 @@
 
 #include "swis.h"
 
+#include "KeyWatch.h"
+
 /*=============================================================================
 ==   Local Functions Used
 =============================================================================*/
@@ -84,39 +86,7 @@ int  KbdCheckHotkey( unsigned char, int );
 ==   Local Data
 =============================================================================*/
 
-#ifndef KeyWatch_Register
-#define KeyWatch_Register               0x04e940
-#define KeyWatch_Deregister             0x04e941
-#define KeyWatch_Version                0x04e942
-#define KeyWatch_RegisterScan           0x04e943
-#define KeyWatch_DeregisterScan         0x04e944
-#define KeyWatch_Poll                   0x04e945
-#endif
-
-#define KeyWatch_Event_SCAN_CODE_VALID	(1<<0)
-#define KeyWatch_Event_KEY_CODE_VALID	(1<<1)
-#define KeyWatch_Event_KEY_GOING_UP	(1<<2)
-#define KeyWatch_Event_LAST_WAS_NUL	(1<<3)
-#define KeyWatch_Event_PS2_MULTI	(1<<4)
-
-#define KeyWatch_State_LEFT_SHIFT_DOWN	(1<<16)
-#define KeyWatch_State_RIGHT_SHIFT_DOWN	(1<<17)
-#define KeyWatch_State_LEFT_CTRL_DOWN	(1<<18)
-#define KeyWatch_State_RIGHT_CTRL_DOWN	(1<<19)
-#define KeyWatch_State_LEFT_ALT_DOWN	(1<<20)
-#define KeyWatch_State_RIGHT_ALT_DOWN	(1<<21)
-
-#define KeyWatch_RegisterScan_PS2	(1<<0)
-#define KeyWatch_RegisterScan_MESSAGE	(1<<1)
-#define KeyWatch_RegisterScan_MOUSE	(1<<2)
-#define KeyWatch_RegisterScan_BUFFER_CODES	(1<<3)
-#define KeyWatch_RegisterScan_SCAN_CODES	(1<<4)
-
-#define KeyWatch_Poll_HAD_OVERFLOW	(1<<0)
-
-#define KeyWatch_PS2KEY_UNUSED		0x00
-#define KeyWatch_PS2KEY_PRINT_SCREEN	0x81
-#define KeyWatch_PS2KEY_BREAK		0x82
+#define TASK_HANDLE 0
 
 typedef struct
 {
@@ -139,15 +109,15 @@ static void set_mode(void)
 {
     if ( CurrentKbdMode == Kbd_Closed )
     {
-	LOGERR(_swix(KeyWatch_DeregisterScan, _INR(0,1), 0, 0));
+	LOGERR(_swix(KeyWatch_DeregisterScan, _INR(0,1), 0, TASK_HANDLE));
     }
     else
     {
       // use task handle of 0 since it doesn't really matter
 	LOGERR(_swix(KeyWatch_RegisterScan, _INR(0,1),
-		    KeyWatch_RegisterScan_PS2 |
+		    KeyWatch_RegisterScan_PS2 | KeyWatch_RegisterScan_CONSUME_BUFFER |
 		    (CurrentKbdMode == Kbd_Ascii ? KeyWatch_RegisterScan_BUFFER_CODES : KeyWatch_RegisterScan_SCAN_CODES),
-		    0));
+		    TASK_HANDLE));
     }
 }
 
@@ -311,7 +281,7 @@ KbdSetMode( KBDCLASS KbdClass )
 int WFCAPI
 KbdReadAvail( int * pCountAvail )
 {
-    int entry_size, size_left;
+    int n_entries;
     
     // init return vaule
     * pCountAvail = 0;
@@ -322,13 +292,13 @@ KbdReadAvail( int * pCountAvail )
         return( CLIENT_ERROR_NOT_OPEN );
     }
 
-    LOGERR(_swix(KeyWatch_Poll, _INR(0,3) | _OUTR(3,4),
-	  0, 0, NULL, 0,
-	  &size_left, &entry_size));
+    LOGERR(_swix(KeyWatch_Poll, _INR(0,2) | _OUT(4),
+	  0, TASK_HANDLE, NULL,
+	  &n_entries));
 
-    *pCountAvail = (-size_left)/entry_size;
+    *pCountAvail = n_entries;
     
-    DTRACE((TC_KEY, TT_API1, "KbdReadAvail: size %d entry %d n %d", size_left, entry_size, *pCountAvail));
+    DTRACE((TC_KEY, TT_API1, "KbdReadAvail: n %d", *pCountAvail));
     
     return( CLIENT_STATUS_SUCCESS );
 }
@@ -368,8 +338,8 @@ static int convert_shift_state(int flags)
 int WFCAPI
 KbdReadChar( int * pChar, int *pShiftState )
 {
-    char buf[1 * sizeof(key_event)];
-    int flags, entry_size, size_left;
+    char buf[64];
+    int n_entries;
     int Hotkey;
     
     // make sure we are in Ascii mode
@@ -379,10 +349,13 @@ KbdReadChar( int * pChar, int *pShiftState )
     }
 
     // get next event
-    LOGERR(_swix(KeyWatch_Poll, _INR(0,3) | _OUT(0) | _OUT(2) | _OUT(4),
-	  0, 0, buf, sizeof(buf),
-	  &flags, &size_left, &entry_size));
+    LOGERR(_swix(KeyWatch_Poll, _INR(0,4) | _OUT(4),
+	  0, TASK_HANDLE, buf, sizeof(buf), 1,
+	  &n_entries));
 
+    if (n_entries == 1)
+	return CLIENT_STATUS_NO_DATA;
+    else
     {
 	const key_event *k = (const key_event *)buf;
 	int shift_state = convert_shift_state(k->flags);
@@ -425,8 +398,8 @@ KbdReadChar( int * pChar, int *pShiftState )
 int WFCAPI
 KbdReadScan( int * pScanCode, int * pShiftState )
 {
-    char buf[1 * sizeof(key_event)];
-    int flags, entry_size, size_left;
+    char buf[64];
+    int n_entries;
     int Hotkey;
     
     // make sure we are in Ascii mode
@@ -436,10 +409,13 @@ KbdReadScan( int * pScanCode, int * pShiftState )
     }
 
     // get next event
-    LOGERR(_swix(KeyWatch_Poll, _INR(0,3) | _OUT(0) | _OUT(2) | _OUT(4),
-	  0, 0, buf, sizeof(buf),
-	  &flags, &size_left, &entry_size));
+    LOGERR(_swix(KeyWatch_Poll, _INR(0,4) | _OUT(4),
+	  0, TASK_HANDLE, buf, sizeof(buf), 1,
+	  &n_entries));
 
+    if (n_entries == 1)
+	return CLIENT_STATUS_NO_DATA;
+    else
     {
 	const key_event *k = (const key_event *)buf;
 	int shift_state = convert_shift_state(k->flags);

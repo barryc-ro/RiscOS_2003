@@ -20,13 +20,13 @@ RMDIR=		rmdir
 # Flags
 
 CCFLAGS=	-c -fa -Fn ${INCLUDES} ${DFLAGS}
-ASFLAGS=	-Stamp -quit
+ASFLAGS=	-Stamp -quit -I${RISCOS_BUILD_EXPORT}/Hdr/Global -I${RISCOS_BUILD_EXPORT}/Hdr/Interface -I${RISCOS_BUILD_EXPORT}/Hdr/Interface2
 LIBFILEFLAGS=	-c
 CPFLAGS=	-p
 
 # ----------------------------------------------------------------------------------------------------
 
-DFLAGS=		-DRISCOS -DBETA=1 -DREMOTE_DEBUG
+DFLAGS=		-DRISCOS -DBETA=1 -DREMOTE_DEBUG -DCOMPAT_INET4
 INCLUDES=	-Isrc/sys_inc \
 		-Isrc/sdk \
 		-I${RISCOS_BUILD_EXPORT}/Lib/TCPIPLibs \
@@ -104,6 +104,8 @@ SRC=		${APPSRC} ${CITRIXLIBSRC} ${NRLIBSRC} ${TDLIBSRC} ${PDLIBSRC} ${WDLIBSRC} 
 .c.oz:;	$(CC) $< -o $@ -zM -DROM=1             $(CCFLAGS)
 
 .s.o:;	$(AS) $(ASFLAGS) -from $< -to $@
+
+.s.od:;	$(AS) $(ASFLAGS) -from $< -to $@ -Predefine "DEBUG SETL {TRUE}"
 
 # ----------------------------------------------------------------------------------------------------
 
@@ -488,6 +490,30 @@ VDTW31LIBOBJSD=	\
 		src/dll/vd/vdtw31/wfssbtru.od \
 		src/dll/vd/vdtw31/wfstrips.od \
 		src/dll/vd/vdtw31/winonly.od
+
+VDCDMLIBSRC=	src/dll/vd/vdcdm/cdmapi.c \
+		src/dll/vd/vdcdm/cdmserv.c \
+		src/dll/vd/vdcdm/cdmtrans.c \
+		src/dll/vd/vdcdm/context.c \
+		src/dll/vd/vdcdm/drive.c \
+		src/dll/vd/vdcdm/ringbuf.c \
+		src/dll/vd/vdcdm/vdcdm.c
+
+VDCDMLIBOBJS=	src/dll/vd/vdcdm/cdmapi.o \
+		src/dll/vd/vdcdm/cdmserv.o \
+		src/dll/vd/vdcdm/cdmtrans.o \
+		src/dll/vd/vdcdm/context.o \
+		src/dll/vd/vdcdm/drive.o \
+		src/dll/vd/vdcdm/ringbuf.o \
+		src/dll/vd/vdcdm/vdcdm.o
+
+VDCDMLIBOBJSD=	src/dll/vd/vdcdm/cdmapi.od \
+		src/dll/vd/vdcdm/cdmserv.od \
+		src/dll/vd/vdcdm/cdmtrans.od \
+		src/dll/vd/vdcdm/context.od \
+		src/dll/vd/vdcdm/drive.od \
+		src/dll/vd/vdcdm/ringbuf.od \
+		src/dll/vd/vdcdm/vdcdm.od
 
 VDLIBSRC=	${VDCOMMONLIBSRC} ${VDTW31LIBSRC}
 VDLIBOBJS=	${VDCOMMONLIBOBJS} ${VDTW31LIBOBJS}

@@ -5,6 +5,7 @@
  */
 
 #include "windows.h"
+#include "fileio.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -48,32 +49,13 @@
 #define TRANSPARENT_COLOUR	(-1)
 #define UNSET_COLOUR		(-2)
 
+#define UNSET_COLTRANS		((void *)-1)
+
 #define BRUSH_WIDTH		8
 #define BRUSH_HEIGHT		8
 
 #define RoundShort(a)		(((a) + 1) &~ 1)
 #define RoundLong(a)		(((a) + 3) &~ 3)
-
-#ifdef DEBUG
-static const char *objects[] =
-{
-    "<null>",
-    "pen",
-    "brush",
-    "dc",
-    "metadc",
-    "palette",
-    "font",
-    "bitmap",
-    "region",
-    "metafile",
-    "memdc",
-    "extpen",
-    "enhmetdc",
-    "enmetafile",
-    "cursor"
-};
-#endif
 
 /* ---------------------------------------------------------------------------------------------------- */
 
@@ -118,6 +100,13 @@ typedef union
     } b;
     int w;
 } ropalette;
+
+typedef struct
+{
+    char invert_P;
+    char invert_D;
+    char action;
+} action_info;
 
 /* ---------------------------------------------------------------------------------------------------- */
 
@@ -166,6 +155,9 @@ struct DC__
 	int width;		// in pixels
 	int height;
 
+	int line_length;	// in bytes
+	void *display_start;
+
 	int mode;		// mode number or descriptor for this mode
 	void *save_area;	// save area for switching output
 
@@ -177,7 +169,7 @@ struct DC__
 
 	    int brush_solid;	// colour number corresponding to solid brush (if any)
 	    
-	    int action;		// action corresponding to ROP2
+	    action_info action;	// action corresponding to ROP2
 	} local;
 
 	struct
@@ -277,13 +269,11 @@ struct GDIOBJ__
 #define cvtx(dc, x)	((x)*2)
 #define cvty(dc, y)	(((dc)->data.height - 1 - (y))*2)
 
-/* ---------------------------------------------------------------------------------------------------- */
+#ifdef DEBUG
+#define is_screen(dc)	(((dc) == screen_dc) ? " (screen)" : "")
+#endif
 
-static HGDIOBJ gdi_objects = NULL;
-static HGDIOBJ stock_objects[STOCK_LAST] = { 0 };
-static HDC current_dc = NULL;
-static HDC screen_dc = NULL;
-static HCURSOR screen_cursor = NULL;
+/* ---------------------------------------------------------------------------------------------------- */
 
 #define plotaction_WRITE	0
 #define plotaction_OR		1
@@ -293,26 +283,6 @@ static HCURSOR screen_cursor = NULL;
 #define plotaction_NOP		5
 #define plotaction_ANDNOT	6
 #define plotaction_ORNOT	7
-
-static char rop2_to_action[16] =
-{
-    plotaction_WRITE,	// R2_BLACK,
-    0xFF,		// R2_NOTMERGEPEN,
-    plotaction_ANDNOT,	// R2_MASKNOTPEN,
-    0xFF,		// R2_NOTCOPYPEN,
-    0xFF,		// R2_MASKPENNOT,
-    plotaction_INVERT,	// R2_NOT,
-    plotaction_XOR,	// R2_XORPEN,
-    0xFF,		// R2_NOTMASKPEN,
-    plotaction_AND,	// R2_MASKPEN,
-    0xFF,		// R2_NOTXORPEN,
-    plotaction_NOP,	// R2_NOP,
-    plotaction_ORNOT,	// R2_MERGENOTPEN,
-    plotaction_WRITE,	// R2_COPYPEN,
-    0xFF,		// R2_MERGEPENNOT,
-    plotaction_OR,	// R2_MERGEPEN,
-    plotaction_WRITE	// R2_WHITE
-};
 
 /* ---------------------------------------------------------------------------------------------------- */
 
@@ -349,8 +319,6 @@ coord system is origin at bottom-left
 
 #define REVERSE_WORD(p)	((p << 24) | ((p << 8) & 0x00FF0000) | ((p >> 8) & 0x0000FF00) | (0 /*p >> 24*/))
 
-#define is_screen(dc)	(((dc) == screen_dc) ? " (screen)" : "")
-
 //#define DISABLE_CURSOR "\23\1\0\0\0\0\0\0\0\0"
 //#define DISABLE_CURSOR	"\23\0\10\x20\0\0\0\0\0\0"
 #define DISABLE_CURSOR	"\5"
@@ -360,7 +328,6 @@ coord system is origin at bottom-left
 #define first_sprite(area)	((sprite_header *)((char *)(area) + (area)->sproff))
 #define sprite_data(sprite)	((char *)(sprite) + (sprite)->image)
 #define sprite_palette(sprite)	(ropalette *)((char *)(sprite) + sizeof(sprite_header))
-
 
 struct os_mode_selector
 {
@@ -373,17 +340,238 @@ struct os_mode_selector
 
 #define vduvar_XEig	4
 #define vduvar_YEig	5
+#define vduvar_LineLength	6
 #define vduvar_Log2BPP	9
 #define vduvar_XLimit	11
 #define vduvar_YLimit	12
+
+#define modevar_DisplayStart 149
+
+/* ---------------------------------------------------------------------------------------------------- */
+
+typedef struct
+{
+    int xSrc;
+    int ySrc;
+    int xDest;
+    int yDest;
+    int Width;
+    int Height;
+} bitblt_info;
+
+typedef struct
+{
+    /* set by line_ptr() */
+    unsigned *data;
+    int bpp;
+
+    /* set by line_init() */
+    const char *coltrans;
+    int ppw;			// pixels per word
+    unsigned mask;
+    unsigned solid_colour;
+
+    /* set by line_init() and updated across line */
+    unsigned *ptr;
+    int phase;			// original bit offset of bit 0 of word/word_out
+    unsigned word;	        // current word being read
+    unsigned word_out;		// current word to write
+} line_info;
+
+typedef unsigned (*pp_function)(unsigned d, unsigned s, unsigned p);
+
+/* rop3 defines */
+
+#define EPS_OFF		3	/* 0000000000000011	Offset within parse string */
+#define EPS_INDEX	0x1C	/* 0000000000011100	Parse string index */
+#define LogPar		0x20	/* 0000000000100000	(1 indicates implied NOT as Logop6) */
+/*#define LogOp1		   0000000011000000	Logical Operation #1 */
+/*#define LogOp2		   0000001100000000	Logical Operation #2 */
+/*#define LogOp3		   0000110000000000	Logical Operation #3 */
+/*#define LogOp4		   0011000000000000	Logical Operation #4 */
+/*#define LogOp5		   1100000000000000	Logical Operation #5 */
+#define EPS_INDEX_SHIFT	2
+
+#define LogOpShift	6
+#define LogOpCount	5
+
+#define OpSpec	0		  /* Special Operand as noted below */
+#define OpSrc 	1		  /* Operand is source field */
+#define OpDest	2		  /* Operand is destination field */
+#define OpPat 	3		  /* Operand is pattern field */
+
+#define OpRes	4
+#define OpOut   5
+#define OpDone	6		/* No more operands */
+
+#define OpMask	3
+
+#define LogNOT	0			/* NOT result */
+#define LogXOR	1			/* XOR result with next operand */
+#define LogOR	2			/* OR  result with next operand */
+#define LogAND	3			/* AND result with next operand */
+
+#define LogMask	3
+
+#define LogBIC	4			/* not used in protocol but can be used in code */
+#define LogMOV	5			/* not used in protocol but can be used in code */
+
+/* register definitions */
+
+#define rn_DEST		0
+#define rn_SRC		1
+#define rn_PAT		2
+#define rn_RESULT	3
+#define rn_SPECIAL	12
+#define rn_LR		14
+#define rn_PC		15
+
+#define rn_OUTPUT	0
+
+/* arm assembler defines */
+
+#define code_ALWAYS	0xE0000000
+
+#define code_AND	(0 << 21)
+#define code_EOR	(1 << 21)
+#define code_ORR	(0xC << 21)
+#define code_MOV	(0xD << 21)
+#define code_BIC	(0xE << 21)
+#define code_MVN	(0xF << 21)
+
+#define OP1(a)	((a) << 16)
+#define DST(a)	((a) << 12)
+#define OP2(a)	(a)
+
+/* some prebuilt instructions */
+
+#define code_MVN_output_result		(code_ALWAYS | code_MVN | DST(rn_OUTPUT) | OP2(rn_RESULT))
+#define code_MOV_output_result		(code_ALWAYS | code_MOV | DST(rn_OUTPUT) | OP2(rn_RESULT))
+#define code_MVN_result_result		(code_ALWAYS | code_MVN | DST(rn_RESULT) | OP2(rn_RESULT))
+#define code_MOV_special_result		(code_ALWAYS | code_MOV | DST(rn_SPECIAL) | OP2(rn_RESULT))
+#define code_MOV_pc_lr			(code_ALWAYS | code_MOV | DST(rn_PC) | OP2(rn_LR))
+
+/* ---------------------------------------------------------------------------------------------------- */
+
+
+static HGDIOBJ gdi_objects = NULL;
+static HGDIOBJ stock_objects[STOCK_LAST] = { 0 };
+static HDC current_dc = NULL;
+static HDC screen_dc = NULL;
+static HCURSOR screen_cursor = NULL;
+static unsigned code_array[32];		// max operands is 15*3 + 2
+
+/*
+ * Decompose ROP2 actions into simpler form.
+ * Invert Pattern can be done on colour set.
+ * Invert destination can be done by a pre-pass
+  
+R2_BLACK            0		0	CPY
+R2_NOTMERGEPEN      DPon	~P ~D	AND
+R2_MASKNOTPEN       DPna	~P  D	AND
+R2_NOTCOPYPEN       PN		~P	CPY
+R2_MASKPENNOT       PDna	 P  ~D  AND
+R2_NOT              Dn		    ~D  CPY
+R2_XORPEN           DPx		 P   D  XOR
+R2_NOTMASKPEN       DPan	~P  ~D  OR
+R2_MASKPEN          DPa		 P   D  AND
+R2_NOTXORPEN        DPxn	~P  ~D  XOR
+R2_NOP              D		     D  CPY
+R2_MERGENOTPEN      DPno	~P   D  OR
+R2_COPYPEN          P		 P	CPY
+R2_MERGEPENNOT      PDno	 P  ~D  OR
+R2_MERGEPEN         DPo		 P   D  OR
+R2_WHITE            1		1	CPY
+ */
+
+static action_info rop2_to_action[16] =
+{
+    { 0, 0, plotaction_WRITE },		// R2_BLACK,
+    { 1, 1, plotaction_AND },		// R2_NOTMERGEPEN, 
+    { 0, 0, plotaction_ANDNOT },	// R2_MASKNOTPEN,
+    { 1, 0, plotaction_WRITE },		// R2_NOTCOPYPEN,
+    { 0, 1, plotaction_AND },		// R2_MASKPENNOT,
+    { 0, 0, plotaction_INVERT },	// R2_NOT,
+    { 0, 0, plotaction_XOR },		// R2_XORPEN,
+    { 1, 1, plotaction_OR },		// R2_NOTMASKPEN,
+    { 0, 0, plotaction_AND },		// R2_MASKPEN,
+    { 1, 1, plotaction_XOR },		// R2_NOTXORPEN,
+    { 0, 0, plotaction_NOP },		// R2_NOP,
+    { 0, 0, plotaction_ORNOT },		// R2_MERGENOTPEN,
+    { 0, 0, plotaction_WRITE },		// R2_COPYPEN,
+    { 0, 1, plotaction_OR },		// R2_MERGEPENNOT,
+    { 0, 0, plotaction_OR },		// R2_MERGEPEN,
+    { 0, 0, plotaction_WRITE }		// R2_WHITE
+};
+
+static int ParseStrings[] =
+{
+    0x07AAA,		/* src,pat,dest,dest,dest,dest,dest,dest */
+    0x079E7,		/* src,pat,dest,src,pat,dest,src,pat */
+    0x06DB6,		/* src,dest,pat,src,dest,pat,src,dest */
+    0x0AAAA,		/* dest,dest,dest,dest,dest,dest,dest,dest */
+    0x0AAAA,		/* dest,dest,dest,dest,dest,dest,dest,dest */
+    0x04725,		/* src,spec,src,pat,spec,dest,src,src */
+    0x04739,		/* src,spec,src,pat,spec,pat,dest,src */
+    0x04639		/* src,spec,src,dest,spec,pat,dest,src */
+};
+
+#ifdef DEBUG
+
+static char *operand_name[] =
+{
+    "SPE",
+    "SRC",
+    "DST",
+    "PAT",
+    "RES",
+    "OUT",
+    "OVR"
+};
+
+static char *logop_name[] =
+{
+    "NOT",
+    "XOR",
+    "OR",
+    "AND",
+    "BIC",
+    "MOV"
+};
+
+static const char *objects[] =
+{
+    "<null>",
+    "pen",
+    "brush",
+    "dc",
+    "metadc",
+    "palette",
+    "font",
+    "bitmap",
+    "region",
+    "metafile",
+    "memdc",
+    "extpen",
+    "enhmetdc",
+    "enmetafile",
+    "cursor"
+};
+
+#endif
 
 /* ---------------------------------------------------------------------------------------------------- */
 
 static int vduval(int var)
 {
-    int val;
-    LOGERR(_swix(OS_ReadModeVariable, _INR(0,1) | _OUT(2), -1, var, &val));
-    return val;
+    int val[3];
+
+    val[0] = var;
+    val[1] = -1;
+
+    LOGERR(_swix(OS_ReadVduVariables, _INR(0,1), val, val + 2));
+
+    return val[2];
 }
 
 /*
@@ -687,6 +875,7 @@ static void fill_sprite(sprite_descr *descr, const void *bits, int in_line_lengt
     ASSERT((descr->bpp == 1), descr->bpp);
 }
 
+#if 0
 static void clear_sprite(sprite_descr *descr, int val)
 {
     sprite_header *sprite = first_sprite(descr->area);
@@ -706,6 +895,7 @@ static void set_sprite_palette(sprite_descr *descr, const ropalette *palette)
 	pal += 2;
     }
 }
+#endif
 
 /*
  * For this call the coordinates are already converted to OS coords, bottom left
@@ -912,6 +1102,16 @@ static void free_region(HRGN rgn)
     rgn->data.base = NULL;
 }
 
+// link into chain
+static void link_region(region_rect **head, region_rect **last, region_rect *n)
+{
+    if (*last)
+	(*last)->next = n;
+    else
+	(*head) = n;
+    (*last) = n;
+}
+
 /* ---------------------------------------------------------------------------------------------------- */
 
 static void unlink_object(HGDIOBJ to_unlink)
@@ -988,7 +1188,8 @@ static void free_object(HGDIOBJ obj)
     {
 	HDC dc = (HDC)obj;
 	free(dc->data.current.palette);
-	free(dc->data.current.brush_coltrans);
+	if (dc->data.current.brush_coltrans != UNSET_COLTRANS)
+	    free(dc->data.current.brush_coltrans);
 	free(dc->data.save_area);
 
 	DeleteObject(dc->data.bitmap_placeholder);
@@ -1102,8 +1303,11 @@ static void uncache_dc(HDC dc)
     dc->data.current.palette = NULL;
 
     // cached colour lookup tables
-    free(dc->data.current.brush_coltrans);
-    dc->data.current.brush_coltrans = NULL;
+    if (dc->data.current.brush_coltrans != UNSET_COLTRANS)
+    {
+	free(dc->data.current.brush_coltrans);
+	dc->data.current.brush_coltrans = UNSET_COLTRANS;
+    }
 
     // cached colour numbers
     dc->data.local.pen_col = UNSET_COLOUR;
@@ -1115,12 +1319,16 @@ static void uncache_dc(HDC dc)
 static void set_current_dc(HDC dc)
 {
     int log2bpp = vduval(vduvar_Log2BPP);
+
     // set values
     dc->data.planes = 1;
     dc->data.bpp = 1 << log2bpp;
     dc->data.mode = get_mode_number(log2bpp);
     dc->data.width = vduval(vduvar_XLimit) + 1;
     dc->data.height = vduval(vduvar_YLimit) + 1;
+
+    dc->data.line_length = vduval(vduvar_LineLength);
+    dc->data.display_start = (void *)vduval(modevar_DisplayStart);
 }
 
 static void set_current_dc_from_bitmap(HDC dc)
@@ -1155,7 +1363,7 @@ static int getcolournumber(HDC dc, COLORREF colref)
 	      &colour));
 	break;
 
-    case 255:			// my extension for transparent
+    case (NULL_COLOUR >> 24):	// my extension for transparent
 	colour = TRANSPARENT_COLOUR;
 	break;
 	
@@ -1328,6 +1536,24 @@ static void *get_colour_lookup_table(HDC dc, const sprite_descr *descr, int colo
     return table;
 }
 
+static void realize_brush(HDC dc)
+{
+    HBRUSH brush = dc->data.brush;
+
+    ASSERT(brush, 0);
+    
+    if (brush->data.solid)
+    {
+	if (dc->data.local.brush_solid == UNSET_COLOUR)
+	    dc->data.local.brush_solid = getcolournumber(dc, brush->data.colour);
+    }
+    else
+    {
+	if (dc->data.current.brush_coltrans == UNSET_COLTRANS)
+	    dc->data.current.brush_coltrans = get_colour_lookup_table(dc, &brush->data.sprite, brush->data.color_table_type);
+    }
+}
+
 static void set_clip_rect(HDC dc, const RECT *r)
 {
     if (r->top != dc->data.current.clip.top ||
@@ -1423,11 +1649,13 @@ BOOL MoveToEx(HDC dc, int x, int y, LPPOINT pPoint)
 BOOL LineTo(HDC dc, int x, int y)
 {
     region_rect *context;
+    int x0, y0, x1, y1;
 
     TRACE((TC_TW, TT_TW_res3, "LineTo: dc %p%s %dx%d", dc, is_screen(dc), x, y));
 
     switch_output(dc);
 
+    // realize the current pen colour
     if (dc->data.local.pen_col == UNSET_COLOUR)
     {
 	// get pen col to use bearing in mind overriding rop2 codes
@@ -1437,26 +1665,42 @@ BOOL LineTo(HDC dc, int x, int y)
 	    dc->data.local.pen_col = 0x00;
 	else
 	    dc->data.local.pen_col = getcolournumber(dc, dc->data.pen->data.colref);
+
+	// some tricky plot actions require inverting the foreground colour first
+	if (dc->data.local.pen_col == TRANSPARENT_COLOUR)
+	    ;
+	else if (dc->data.local.action.invert_P)
+	    dc->data.local.pen_col = (~dc->data.local.pen_col) & 0xff;
     }
     
     // don't need to set up bgcol as we aren't using any non solid pens
-    if (dc->data.local.pen_col != TRANSPARENT_COLOUR)
+    // update the current colour and action
+    if (dc->data.current.fg_col != dc->data.local.pen_col ||
+	dc->data.current.action != dc->data.local.action.action)
     {
-	if (dc->data.current.fg_col != dc->data.local.pen_col ||
-	    dc->data.current.action != dc->data.local.action)
-	{
-	    dc->data.current.fg_col = dc->data.local.pen_col;
-	    dc->data.current.action = dc->data.local.action;
+	dc->data.current.fg_col = dc->data.local.pen_col;
+	dc->data.current.action = dc->data.local.action.action;
+	
+	LOGERR(_swix(OS_SetColour, _INR(0,1), dc->data.current.action, dc->data.current.fg_col));
+    }
 
-	    LOGERR(_swix(OS_SetColour, _INR(0,1), dc->data.current.action, dc->data.current.fg_col));
+    x0 = cvtx(dc, dc->data.pen_pos.x);
+    y0 = cvty(dc, dc->data.pen_pos.y);
+    x1 = cvtx(dc, x);
+    y1 = cvty(dc, y);
+
+    context = 0;
+    while (set_clip(dc, &context))
+    {
+	// some tricky plot actions require inverting the destination before plotting
+	if (dc->data.local.action.invert_D)
+	{
+	    LOGERR(_swix(OS_Plot, _INR(0,2), 0+4, x0, y0));	// moveto
+	    LOGERR(_swix(OS_Plot, _INR(0,2), 0+6, x1, y1));	// invertto
 	}
 
-	context = 0;
-	while (set_clip(dc, &context))
-	{
-	    LOGERR(_swix(OS_Plot, _INR(0,2), 0+4, cvtx(dc, dc->data.pen_pos.x), cvty(dc, dc->data.pen_pos.y))); // moveto
-	    LOGERR(_swix(OS_Plot, _INR(0,2), 0+5, cvtx(dc, x), cvty(dc, y)));					// drawto
-	}
+	LOGERR(_swix(OS_Plot, _INR(0,2), 0+4, x0, y0)); // moveto
+	LOGERR(_swix(OS_Plot, _INR(0,2), 0+5, x1, y1)); // drawto
     }
 
     dc->data.pen_pos.x = x;
@@ -1465,15 +1709,7 @@ BOOL LineTo(HDC dc, int x, int y)
     return 1;
 }
 
-typedef struct
-{
-    int xSrc;
-    int ySrc;
-    int xDest;
-    int yDest;
-    int Width;
-    int Height;
-} bitblt_info;
+/* ---------------------------------------------------------------------------------------------------- */
 
 /*
  * Return either the original bitmap or one grabbed from the screen
@@ -1558,8 +1794,6 @@ static void plotbitmap(HDC dc, HBITMAP bitmap, const bitblt_info *info, int acti
     //save_sprite(&bitmap->data.sprite, "tile");
 }
 
-// need to add support for brush rotation in here
-
 static void tilebrush(HDC dc, const bitblt_info *info, int rop3)
 {
     HBRUSH brush;
@@ -1575,54 +1809,58 @@ static void tilebrush(HDC dc, const bitblt_info *info, int rop3)
 
     switch_output(dc);
 
+    realize_brush(dc);
+
     if (brush->data.solid)
     {
 	int rop2 = Rop3ToRop2[(rop3 >> 16) & 0xff];
-	int new_action = rop2_to_action[rop2 - 1];
+	action_info new_action = rop2_to_action[rop2 - 1];
 	int new_col;
+	int x0, y0, x1, y1;
 
-	ASSERT(new_action != 0xff, 0);
-	
 	if (rop2 == WHITENESS)
 	    new_col = 0xff;
 	else if (rop2 == BLACKNESS)
 	    new_col = 0x00;
 	else
-	{
-	    if (dc->data.local.brush_solid == UNSET_COLOUR)
-		dc->data.local.brush_solid = getcolournumber(dc, brush->data.colour);
 	    new_col = dc->data.local.brush_solid;
-	}
-    
+
+	// some tricky plot actions require inverting the foreground colour first
+	if (new_col == TRANSPARENT_COLOUR)
+	    ;
+	else if (new_action.invert_P)
+	    new_col = (~new_col) & 0xff;
+
+	// update currently set colour/action
 	if (dc->data.current.fg_col != new_col ||
-	    dc->data.current.action != new_action)
+	    dc->data.current.action != new_action.action)
 	{
 	    dc->data.current.fg_col = new_col;
-	    dc->data.current.action = new_action;
+	    dc->data.current.action = new_action.action;
 	    LOGERR(_swix(OS_SetColour, _INR(0,1), dc->data.current.action, dc->data.current.fg_col));
 	}
 	
-	TRACE((TC_TW, TT_TW_res4, "tilebrush: dc %p brush %p colour %d (%x) rop2 %d action %d", dc, brush, dc->data.current.fg_col, brush->data.colour, rop2, dc->data.current.action));
+	x0 = cvtx(dc, info->xDest);
+	y0 = cvty(dc, info->yDest + info->Height - 1);
+	x1 = cvtx(dc, info->xDest + info->Width);
+	y1 = cvty(dc, info->yDest - 1);
 
-	TRACE((TC_TW, TT_TW_res3, "tilebrush: solid  OS %d,%d %d,%d",
-	       cvtx(dc, info->xDest),
-	       cvty(dc, info->yDest + info->Height - 1),
-	       cvtx(dc, info->xDest + info->Width),
-	       cvty(dc, info->yDest - 1)
-	    ));
+	TRACE((TC_TW, TT_TW_res4, "tilebrush: dc %p brush %p colour %d (%x) rop2 %d action %d",
+	       dc, brush, dc->data.current.fg_col, brush->data.colour, rop2, dc->data.current.action));
+	TRACE((TC_TW, TT_TW_res3, "tilebrush: solid  OS %d,%d %d,%d", x0, y0, x1, y1));
 
 	context = NULL;
 	while (set__clip(dc, rgn, &context))
 	{
-	    LOGERR(_swix(OS_Plot, _INR(0,2), 0+4,
-			 cvtx(dc, info->xDest),
-			 cvty(dc, info->yDest + info->Height - 1)
-		));	// moveto
+	    // some tricky plot actions require inverting the destination before plotting
+	    if (new_action.invert_D)
+	    {
+		LOGERR(_swix(OS_Plot, _INR(0,2), 0+4, x0, y0));	// moveto
+		LOGERR(_swix(OS_Plot, _INR(0,2), 0+6, x1, y1));	// invertto
+	    }
 
-	    LOGERR(_swix(OS_Plot, _INR(0,2), 96+5,
-			 cvtx(dc, info->xDest + info->Width),
-			 cvty(dc, info->yDest - 1)
-		));	// fill
+	    LOGERR(_swix(OS_Plot, _INR(0,2), 0+4, x0, y0));	// moveto
+	    LOGERR(_swix(OS_Plot, _INR(0,2), 96+5, x1, y1));	// fillto
 	}
     }
     else
@@ -1636,14 +1874,10 @@ static void tilebrush(HDC dc, const bitblt_info *info, int rop3)
 
 	TRACE((TC_TW, TT_TW_res4, "tilebrush: dc %p brush %p org %d,%d", dc, brush, dc->data.brush_org.x, dc->data.brush_org.y));
 
-	reason = dc->data.current.brush_coltrans == NULL && brush->data.sprite.bpp == dc->data.bpp ? 34 + 512 : 52 + 512;
-	
 	//save_sprite(&brush->data.sprite, "tile");
 
-	// get and cache the colourtrans table
-	if (dc->data.current.brush_coltrans == NULL)
-	    dc->data.current.brush_coltrans = get_colour_lookup_table(dc, &brush->data.sprite, brush->data.color_table_type);
-    
+	reason = dc->data.current.brush_coltrans == NULL && brush->data.sprite.bpp == dc->data.bpp ? 34 + 512 : 52 + 512;
+	
 	context = NULL;
 	while (set__clip(dc, rgn, &context))
 	{
@@ -1676,6 +1910,422 @@ static void tilebrush(HDC dc, const bitblt_info *info, int rop3)
     }
 
     // delete region and reset clip
+    DeleteObject(rgn);
+}
+
+static void line_ptr(line_info *line, sprite_descr *sprite, int y)
+{
+    if (sprite->area)
+    {
+	sprite_header *hdr = first_sprite(sprite->area);
+
+	line->data = (unsigned *)sprite_data(hdr) + (hdr->width + 1) * y;
+	line->bpp = sprite->bpp;
+    }
+    else
+    {
+	line->data = NULL;
+	line->bpp = 0;
+    }
+}
+
+static void dc_line_ptr(line_info *line, HDC dc, int y)
+{
+    if (dc->gdi.tag == OBJ_DC)
+    {
+	line->data = (unsigned *)((char *)dc->data.display_start + y * dc->data.line_length);
+	line->bpp = dc->data.bpp;
+    }	
+    else if (dc->data.bitmap)
+    {
+	line_ptr(line, &dc->data.bitmap->data.sprite, y);
+    }
+    else
+    {
+	line->data = NULL;
+	line->bpp = dc->data.bpp;
+    }
+}
+
+static void line_init(line_info *line, const void *coltrans, int x)
+{
+    if (line->data)
+    {
+	line->ppw = 32 / line->bpp;
+	line->mask = (1 << line->bpp) - 1;
+	line->coltrans = (const char *)coltrans;
+
+	line->phase = (x & (line->ppw - 1)) * line->bpp;
+	line->ptr = line->data + (x * line->bpp / 32);
+
+	line->word_out = line->word = *(line->ptr);
+	line->word >>= line->phase;
+
+	if (line->phase == 0)
+	    line->word_out = 0;
+	else
+	    line->word_out &= ~(((unsigned) -1) << line->phase);
+
+	DTRACE((TC_TW, TT_TW_res4, "line_init: line %p x %4d: ppw %d mask %2x line start %p current %p phase %d word base %08x in %08x out %08x",
+	       line, x, line->ppw, line->mask, line->data, line->ptr, line->phase, *(line->ptr), line->word, line->word_out));
+    }
+    else
+    {
+	line->phase = 0;
+	line->word = 0;
+#ifdef DEBUG
+	{
+	    int i;
+	    for (i = 0; i < 32; i += line->bpp)
+		line->word |= line->solid_colour << i;
+	}
+#endif
+    }
+}
+
+static int pixel(line_info *line)
+{
+    int pixel;
+
+    if (line->data)
+    {
+	/* mask off bottom pixels */
+	pixel = line->word & line->mask;
+
+	/* increment phase and get new word of shift down existing word */
+	if ((line->phase += line->bpp) == 32)
+	{
+	    line->word = *(++line->ptr);
+	    line->phase = 0;
+	}
+	else
+	{
+	    line->word >>= line->bpp;
+	}
+
+	/* optionally lookup in colour table */
+	if (line->coltrans)
+	    pixel = line->coltrans[pixel];
+    }
+    else
+    {
+	pixel = line->solid_colour;
+    }
+    
+    DTRACE((TC_TW, TT_TW_res4, "pixel: line %p pixel %2x phase %2d word %8x", line, pixel, line->phase, line->word));
+
+    return pixel;
+
+}
+
+static void pixel_out(line_info *line, int pixel)
+{
+    line->word_out |= pixel << ((line->phase - line->bpp) & 31);
+
+    DTRACE((TC_TW, TT_TW_res4, "p_out:               pixel %2x phase %2d word %8x", pixel, line->phase, line->word_out));
+
+    if (line->phase == 0)
+    {
+	DTRACE((TC_TW, TT_TW_res4, "p_out: write %08x", line->word_out));
+
+	line->ptr[-1] = line->word_out;	// subtract 1 because we've just loaded a new word at this point
+	line->word_out = 0;
+    }
+}
+
+static void pixel_flush(line_info *line)
+{
+    if (line->phase != 0)
+    {
+	line->word_out |= line->word << line->phase;
+    
+	DTRACE((TC_TW, TT_TW_res4, "p_fls: write %08x", line->word_out));
+	
+	line->ptr[0] = line->word_out;
+    }
+}
+
+
+/*
+ * dest and operand2 are always the result register
+ *
+ * LogXOR EOR result, op1, result
+ * LogOR  ORR result, op1, result
+ * LogAND AND result, op1, result
+ * LogBIC BIC result, op1, result
+ */
+
+static unsigned construct_op(int logop, int op1, int op2)
+{
+    static unsigned logop_codes[] = { code_MVN, code_EOR, code_ORR, code_AND, code_BIC, code_MOV };
+    static unsigned operand_codes[] = { rn_SPECIAL, rn_SRC, rn_DEST, rn_PAT, rn_RESULT, rn_OUTPUT };
+    unsigned code;
+
+    if (logop == LogMOV || logop == LogNOT)
+	code = code_ALWAYS | logop_codes[logop] | DST(operand_codes[op1]) | OP2(operand_codes[op2]);
+    else
+	code = code_ALWAYS | logop_codes[logop] | DST(rn_RESULT) | OP1(operand_codes[op1]) | OP2(operand_codes[op2]);
+
+    return code;
+}
+
+/* get next operand from the parse string and decrement the shift
+ * factor.
+ * Check for underflow.
+ */
+
+static int get_operand(int *parse_string)
+{
+    int operand = (*parse_string >>= 2) & OpMask;
+
+    TRACE((TC_TW, TT_TW_res4, "get_operand: %s (%d)", operand_name[operand], operand));
+
+    return operand;
+}
+
+static pp_function rop3_function(int rop3)
+{
+#ifdef DEBUG
+    extern int ghLogHandle;
+#endif
+    int parse_string_index = (rop3 & EPS_INDEX) >> EPS_INDEX_SHIFT;
+    int parse_string = ParseStrings[parse_string_index];
+    BOOL invert = FALSE;
+    BOOL pushed_special = FALSE;
+    unsigned *code = code_array;
+
+    int logop_shift;
+    int current;
+    int n_operands;
+    int parse_shift;
+
+    /* calculate number of operands that will be used.
+     * It's 1 to start
+     * plus 1 for each non-invert operator
+     * plus an extra 2 if the parse_string has SPECIALS in it (strings 5-7)
+     */
+    n_operands = parse_string_index >= 5 ? 3 : 1;
+    for (logop_shift = LogOpShift; logop_shift < 16; logop_shift += 2)
+    {
+	int logop = (rop3 >> logop_shift) & LogMask;
+	if (logop != LogNOT)
+	    n_operands++;
+    }
+
+    /* initialise the parse_string and current operand */
+    parse_shift = (8 - (rop3 & EPS_OFF) - n_operands)*2;
+    parse_string >>= parse_shift;
+
+    current = parse_string & OpMask;
+    TRACE((TC_TW, TT_TW_res4, "get_operand: %s (%d)", operand_name[current], current));
+
+    for (logop_shift = LogOpShift; logop_shift < 16; logop_shift += 2)
+    {
+	int logop = (rop3 >> logop_shift) & LogMask;
+
+	TRACE((TC_TW, TT_TW_res4, "logop: %s (%d)", logop_name[logop], logop));
+
+	// if it is an invert then delay invert and just keep count for now
+	if (logop == LogNOT)
+	{
+	    invert = !invert;
+	}
+	else
+	{
+	    // get next operand
+	    int operand = get_operand(&parse_string);
+
+	    // if it is a special operand then either push or use special register
+	    if (operand == OpSpec)
+	    {
+		if (!pushed_special)
+		{
+		    *code++ = construct_op(LogMOV, OpSpec, current);
+
+		    TRACE((TC_TW, TT_TW_res4, "PUSH SPECIAL"));
+
+		    operand = get_operand(&parse_string);
+		}
+		else
+		{
+		    TRACE((TC_TW, TT_TW_res4, "PULL SPECIAL"));
+		}
+		    
+		pushed_special = !pushed_special;
+	    }
+
+	    // attempt to use too many operands
+	    if (operand == OpDone)
+	    {
+		TRACE((TC_TW, TT_TW_res4, "not enough operands"));
+		ASSERT(0, 0);
+		break;
+	    }
+	    
+	    // if invert then do explicit invert or use BIC if we can
+	    if (invert)
+	    {
+		TRACE((TC_TW, TT_TW_res4, "WRITE CODE INVERT"));
+		
+		if (logop == LogAND)
+		    *code++ = construct_op(LogBIC, operand, current);
+		else
+		{
+		    *code++ = construct_op(LogNOT, OpRes, current);
+		    *code++ = construct_op(logop, operand, OpRes);
+		}
+		
+		invert = FALSE;
+	    }
+	    else
+	    {    
+		TRACE((TC_TW, TT_TW_res4, "WRITE CODE"));
+		*code++ = construct_op(logop, operand, current);
+	    }
+
+	    current = OpRes;
+	}
+    }
+
+    // take into account parity bit
+    if (rop3 & LogPar)
+	invert = !invert;
+
+    // copy to output with possible inversion
+    *code++ = construct_op(invert ? LogNOT : LogMOV, OpOut, OpRes);
+
+    *code = code_MOV_pc_lr;	// note, no increment
+
+#ifdef DEBUG
+    if ( ghLogHandle != -1 )
+    {
+	unsigned c, *cp = code_array;
+	do
+	{
+	    char *s;
+	    char buf[12];
+	    int n;
+
+	    c = *cp;
+
+	    n = sprintf(buf, "%08x: ", c);
+	    write( ghLogHandle, buf, n );
+
+	    _swix(Debugger_Disassemble, _INR(0,1) | _OUTR(1,2), c, cp, &s, &n);
+	    write( ghLogHandle, s, n );
+
+	    write( ghLogHandle, "\n", 1 );
+
+	    cp++;
+	}
+	while (c != code_MOV_pc_lr);
+    }
+#endif
+
+    LOGERR(_swix(OS_SynchroniseCodeAreas, _INR(0,2), 1, code_array, code));
+    
+    return (pp_function)code_array;
+}
+
+
+static void complex_blt(HDC dcDest, HDC dcSrc, const bitblt_info *info, int rop3)
+{
+    HRGN rgn;
+    void *bitmap_coltrans;
+    region_rect *context;
+    pp_function fn;
+
+    // calculate a clip window for the intersection of the current and Dest regions
+    rgn = CreateRectRgn(info->xDest, info->yDest, info->xDest + info->Width, info->yDest + info->Height);
+    CombineRgn(rgn, dcDest->data.clip, rgn, RGN_AND);
+
+    switch_output(dcDest);
+    
+    /* get colour lookup for source (if bitmap), none if from screen */
+    if (dcSrc->data.bitmap)
+	bitmap_coltrans = get_colour_lookup_table(dcDest, &dcSrc->data.bitmap->data.sprite, dcSrc->data.bitmap->data.color_table_type);
+    else
+	bitmap_coltrans = NULL;
+
+    realize_brush(dcDest);
+
+    /* get the pixel processor function */
+    fn = rop3_function(rop3);
+
+    TRACE((TC_TW, TT_TW_res4, "complex_blt: destDC %p (bitmap %p) srcDC %p (bitmap %p coltrans %p) brush %p (coltrans %p) solid %d (%x)",
+	   dcDest, dcDest->data.bitmap, dcSrc, dcSrc->data.bitmap, bitmap_coltrans,
+	   dcDest->data.brush, dcDest->data.current.brush_coltrans,
+	   dcDest->data.brush ? dcDest->data.brush->data.solid : 0,
+	   dcDest->data.brush ? dcDest->data.local.brush_solid : 0));
+
+    /* enumerate the clip regions */
+    context = NULL;
+    while (set__clip(dcDest, rgn, &context))
+    {
+	int x, y, x0, y0, x1, y1; // these are all in dest dc space
+	int brush_phase_x, brush_phase_y;
+	int brush_phase_x0, brush_phase_y0;
+	
+	// use windows coords as they map to pixels
+	// not pixel 0,0 is top left of screen (ie screen base + 0)
+	x0 = context->rect.left;
+	x1 = context->rect.right;
+	y0 = context->rect.top;
+	y1 = context->rect.bottom;
+
+	// get starting phase of brush pixels
+	brush_phase_x0 = (context->rect.left + dcDest->data.brush_org.x) & (BRUSH_WIDTH - 1);
+	brush_phase_y0 = (context->rect.top + dcDest->data.brush_org.y) & (BRUSH_HEIGHT - 1);
+	
+	TRACE((TC_TW, TT_TW_res4, "complex_blt: %d,%d to %d,%d brush phase %d,%d", x0, y0, x1, y1, brush_phase_x0, brush_phase_y0));
+
+	/* enumerate the lines */
+	brush_phase_y = brush_phase_y0;
+	for (y = y0; y < y1; y++)
+	{
+	    line_info s_line, p_line, d_line;
+
+	    /* get line ptrs */
+	    dc_line_ptr(&d_line, dcDest, y);
+	    dc_line_ptr(&s_line, dcSrc, info->ySrc + (y - info->yDest));
+	    line_ptr(&p_line, &dcDest->data.brush->data.sprite, brush_phase_y);
+
+	    p_line.solid_colour = dcDest->data.local.brush_solid;
+	    p_line.bpp = dcDest->data.bpp;
+	    
+	    line_init(&d_line, NULL, x0);
+	    line_init(&s_line, bitmap_coltrans, info->xSrc + (x0 - info->xDest));
+	    line_init(&p_line, dcDest->data.current.brush_coltrans, brush_phase_x0);
+
+	    /* enumerate the pixels */
+	    brush_phase_x = brush_phase_x0;
+	    for (x = x0; x < x1; x++)
+	    {
+		int s, d, p, val;
+
+		d = pixel(&d_line);
+		s = pixel(&s_line);
+		p = pixel(&p_line);
+
+		val = fn(d, s, p);
+
+		pixel_out(&d_line, val);
+		
+		if (++brush_phase_x == BRUSH_WIDTH)
+		{
+		    brush_phase_x = 0;
+		    line_init(&p_line, dcDest->data.current.brush_coltrans, brush_phase_x);
+		}
+	    }
+
+	    pixel_flush(&d_line);
+	    
+	    if (++brush_phase_y == BRUSH_HEIGHT)
+		brush_phase_y = 0;
+	}
+    }
+
+    free(bitmap_coltrans);
     DeleteObject(rgn);
 }
 
@@ -1718,8 +2368,15 @@ BOOL BitBlt(HDC dcDest, int xDest, int yDest, int Width, int Height, HDC dcSrc, 
 	break;
 	
     default:
-	TRACE((TC_TW, TT_TW_res4, "BitBlt: unsupported rop3 %x", rop3));
+    {
+	TRACE((TC_TW, TT_TW_res4, "BitBlt: complicated rop3 %x", rop3));
 	ASSERT(0,rop3);
+
+	complex_blt(dcDest, dcSrc, &info, rop3);
+	break;
+    }
+
+#if 1
     case SRCCOPY:
 	bitmap = get_relevant_bitmap(dcSrc, &info, &delbitmap);
 	plotbitmap(dcDest, bitmap, &info, plotaction_WRITE);
@@ -1759,6 +2416,7 @@ BOOL BitBlt(HDC dcDest, int xDest, int yDest, int Width, int Height, HDC dcSrc, 
 	SelectObject(dcSrc, old_brush);
 	break;
     }
+#endif
     }    
     
     if (delbitmap)
@@ -1767,17 +2425,6 @@ BOOL BitBlt(HDC dcDest, int xDest, int yDest, int Width, int Height, HDC dcSrc, 
     TRACE((TC_TW, TT_TW_res4, "BitBlt: out"));
 
     return 1;
-}
-
-
-// link into chain
-static void link_region(region_rect **head, region_rect **last, region_rect *n)
-{
-    if (*last)
-	(*last)->next = n;
-    else
-	(*head) = n;
-    (*last) = n;
 }
 
 /*
@@ -2572,8 +3219,11 @@ LPVOID SelectObject(HDC dc, LPVOID oobj)
 	old_obj = dc->data.brush;
 	dc->data.brush = (HBRUSH)obj;
 
-	free(dc->data.current.brush_coltrans);
-	dc->data.current.brush_coltrans = NULL;
+	if (dc->data.current.brush_coltrans != UNSET_COLTRANS)
+	{
+	    free(dc->data.current.brush_coltrans);
+	    dc->data.current.brush_coltrans = UNSET_COLTRANS;
+	}
 
 	dc->data.local.brush_solid = UNSET_COLOUR;
 	break;
@@ -2672,11 +3322,7 @@ int SetROP2(HDC dc, int rop2)
 
     dc->data.rop2 = rop2;
     dc->data.local.action = rop2_to_action[(rop2 - 1) & 0x0F];
-
-    if (rop2 == BLACKNESS || rop2 == WHITENESS)
-	dc->data.local.pen_col = UNSET_COLOUR;
-
-    ASSERT((dc->data.local.action != 0xFF), rop2);
+    dc->data.local.pen_col = UNSET_COLOUR;
 
     return old;
 }
@@ -2754,10 +3400,6 @@ void RestoreScreen(void)
 }
 
 /* ---------------------------------------------------------------------------------------------------- */
-
-static void mouse_set_palette(void)
-{
-}
 
 /* realize the cursor on the screen */
 
@@ -2919,6 +3561,14 @@ void SetMode(int colorcaps, int xres, int yres)
     LOGERR(_swix(OS_WriteN, _INR(0,1), MOUSE_COLOURS, sizeof(MOUSE_COLOURS)-1));
 
     LOGERR(_swix(OS_RemoveCursors, 0));
+}
+
+void GetModeSpec(int *width, int *height)
+{
+    if (width)
+	*width = vduval(vduvar_XLimit) + 1;
+    if (height)
+	*height = vduval(vduvar_YLimit) + 1;
 }
 
 /* ---------------------------------------------------------------------------------------------------- */

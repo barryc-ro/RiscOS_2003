@@ -52,8 +52,8 @@
 *
 ******************************************************************************/
 
-#include "fcntl.h"
 #include "windows.h"
+#include "fileio.h"
 
 /*  Get the standard C includes */
 #include <stdarg.h>
