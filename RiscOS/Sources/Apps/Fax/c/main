@@ -1,0 +1,3636 @@
+/*****************************************************************************/
+/* File:    main.c                                                           */
+/* Purpose: Main file for !Fax application                                   */
+/* Owner:   Mark RISON                                                       */
+/* History: 1997-06-20  MGR   Created                                        */
+/*****************************************************************************/
+
+#include "fax/global.h"
+
+#include "main.h"
+//#include "fax.h"
+#include "mgrlib/ascii.h"
+#include "faxdebug.h"
+#include "mgrlib/bufman.h"
+#include "mgrlib.h"
+#include "mgrlib/misc.h"
+#include "mgrlib/ustimer.h"
+#include "mgrlib/report.h"
+#include "pdebug.h"
+#include "wmessages.h"
+//#include "modem.h"
+#include "tiff.h"
+#include "text2tiff.h"
+#include "tiffconv.h"
+
+#ifdef PROFILE
+#include "HierProf:HierProf.h"
+#endif
+
+#include "kernel.h"
+#include "swis.h"
+#include "wimp.h"
+#include "wimplib.h"
+#include "toolbox.h"
+#include "event.h"
+#include "proginfo.h"
+#include "iconbar.h"
+#include "quit.h"
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <time.h>
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// C_Constants
+
+#define Wimp_MFaxTx			0x50480
+#define Wimp_MFaxRx			0x50481
+#define Wimp_MFaxAbort			0x50482
+#define Wimp_MFaxRC			0x50483
+#define Wimp_MText2TIFFit		0x50484
+#define Wimp_MText2TIFFed		0x50485
+#define Wimp_MTIFFConvertit		0x50486
+#define Wimp_MTIFFConverted		0x50487
+#define FaxSupport_SetHandles		0x50480
+#define FaxSupport_GetPtrPollword	0x50481
+#define FaxSupport_Start		0x50482
+#define FaxSupport_GetInfo		0x50483
+#define FaxSupport_Acknowledge		0x50484
+#define FaxSupport_Abort		0x50485
+#define FaxSupport_FillInfo		0x50486
+
+//#define TIFFNEntries 17
+//#define TIFFNEntriesCCITT 16
+//#define TIFFNExtra 4                         // In words
+#define TIMESLICE 10                         // In cs (for when buffer full)
+#define BIGTIMESLICE 40                      // In cs (for when buffer empty)
+#define T2TTIMESLICE 10                      // In cs (for text to TIFF conversion)
+#define TCTIMESLICE 10                       // In cs (for TIFF conversion)
+#define SERIALBUFFERSIZE 7200                // In bytes
+
+///////////////////////////////////////////////////////////////////////////////
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// C_Typedefs
+
+typedef struct faxinfo {
+   int handle;             // File handle for input TIFF file [tx]
+   uint decword;           // decword for decode [tx]
+   int decinuse;           // decinuse for decode [tx]
+   int ptr;                // File pointer for start of strip in input TIFF file [tx]
+   int resnin;             // Packed resolution for input page [tx]
+   int resnout;            // Packed resolution for output page [tx]
+   int widthin;            // Width in for scaling (in pels) [tx]
+   int widthout;           // Width out for scaling (in pels) [tx]
+   int lengthin;           // Length in for scaling (in lines) [tx]
+   int lengthout;          // Length out for scaling (in lines) [tx]
+   int chopout;            // Chop length (in lines; in terms of input image lines) [tx]
+   int nlines;             // Number of input scan lines handled so far [tx]
+   int minscan;            // Minimum scan line time (in ms) [tx]
+   int scaleleftover;      // Leftover for vertical scaling algorithm [tx]
+   int scalecount;         // Scale count for vertical scaling algorithm [tx]
+                           // -1 if have finished previous input line and are poised to do next
+} FaxInfo;
+
+typedef struct state {
+#ifdef WDEBUG
+   int oldtimeins;
+   clock_t startstart;
+#endif
+   int port;               // Port number
+   int state;              // The state
+//   uint fileout;           // File handle for writing to modem
+//   uint filein;            // File handle for reading from modem
+//   uint bufferout;         // Buffer handle for writing to modem
+//   uint bufferin;          // Buffer handle for reading from modem
+   uint bufIDout;          // Buffer internal ID for writing to modem
+   uint bufIDin;           // Buffer internal ID for reading from modem
+#ifdef VDEBUG
+   uint t4fileout;         // File handle for writing to T.4 file
+#endif
+   FILE* tifffile;         // FILE pointer for TIFF file
+   long int tiffifdptr;    // File pointer of current page's IFD
+   int noctets;            // Number of input scan line octets [rx]
+                           // Number of output scan line octets [tx]
+   int ioctet;             // Index in output scan line octets (-1 means need to decode more) [tx]
+                           // -1 if have finished previous output line and are poised to do next
+   int rc;                 // Return code from input scan line decode [tx]
+   int nzero;              // Number of input consecutive zero bits (for EOL hunting)
+   int datarate;           // Data rate in bps
+   int page;               // The current page number
+   //@@ need to check whether int or uint -- aaarrgh!
+   int decword;            // The encoded word data across decoded lines (streaming)
+   int encword;            // The encoded word data across encoded lines (streaming)
+   int resn;               // Image resolution in packed hex format
+   int consecbadlines;     // Running number of consecutive bad lines [rx]
+   short int rtnbad;       // Permilage of bad lines causing a RTN request [rx]
+   short int rtnconsecbad; // Permilage of consecutive bad lines causing a RTN request [rx]
+   short int minTCF;       // Minimum length of TCF (in ms) [rx]
+   short int maxTCF;       // Maximum length of TCF (in ms) [rx]
+   int startpage;          // Start page [tx]
+   int endpage;            // End page (can be 0 for open-ended) [tx]
+   uint flags;             // Flags [tx/rx]
+   int kdata;              // Parameter K data for 2D MR coding [tx]
+   struct bits {
+      uint DLErecd : 1;       // Flag indicating <DLE> received (for DLEd data)
+      uint lastwasEOL : 1;    // Flag indicating last scan line contained just EOL
+      uint RTCrecd : 1;       // Flag indicating RTC received
+      uint is2DMR : 1;        // Flag indicating 2D MR coding
+      uint foundEOL : 1;      // Flag indicating have found EOL (for initial EOL hunt)
+      uint hunting : 1;       // Flag indicating we're hunting for 1D line
+      uint endian : 1;        // Flag holding input TIFF endianness
+      uint consecRTN : 2;     // Number of consecutive RTNs [tx/rx]
+   } bits;
+   TIFFInfo t, told;
+   FaxInfo f, fold;
+   char pathname[256];     // Pathname for files
+   byte encline[TIFFMaxReceivedSize]; // Encoded scan line (enough for 5 s at 14400 bps)
+   short int *refline;     // Pointer to reference raw line [tx and rx]
+   short int *currline;    // Pointer to current raw line [tx and rx]
+   short int *origcurrline; // Pointer to original current raw line (for T.4 decode error handling) [rx]
+   short int *srefline;    // Pointer to scaled reference raw line [tx]
+   short int *scurrline;   // Pointer to scaled current raw line [tx]
+   short int *oldrefline;  // Pointer to reference raw line for first line of previous page [tx]
+   short int rawline1[TIFFMaxRawSize]; // Decoded (raw) scan line buffer
+   short int rawline2[TIFFMaxRawSize]; // Decoded (raw) scan line buffer
+   short int rawline3[TIFFMaxRawSize]; // Decoded (raw) scan line buffer
+   short int rawline4[TIFFMaxRawSize]; // Decoded (raw) scan line buffer
+   short int rawline5[TIFFMaxRawSize]; // Decoded (raw) scan line buffer
+} State;
+
+#if TIFFMaxReceivedSize < TIFFMaxEncodedSize
+#error s->encline not big enough for tiff_encode_2dmmr () call
+#endif
+
+///////////////////////////////////////////////////////////////////////////////
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// C_Enumerations
+
+// States
+enum {
+   Getting_T4 = 1,
+   Getting_T30,
+   Sending_T30,
+   Sending_T4
+};
+
+// !Fax info/error codes
+#include "fax/RCcodes.h"
+
+// Facsimile (and HDLC) Control Fields
+// (reversed, ready for Tx, and as Rxed; b0 clear except for polling FCFs)
+#include "FCFs.h"
+
+///////////////////////////////////////////////////////////////////////////////
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// C_Regionals
+
+regional State state[NPORTS]; // All elements automatically initialised to zero
+regional WimpPollBlock  poll_block;
+regional MessagesFD     messages;
+regional IdBlock        id_block;
+
+#ifdef WDEBUG
+#include "RCtext.h"
+#endif
+regional const ReturnCode Info_Null_Poll = (ReturnCode) -1;
+
+regional void *ppollword = NULL;
+
+regional int text2tiffactive = FALSE;
+regional int tiffconvactive = FALSE;
+regional TIFFConvState tcs;
+
+///////////////////////////////////////////////////////////////////////////////
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// C_Interns
+
+intern void fax_kick_statemachine (State *const s, ReturnCode rc);
+intern void fax_send_rc (const int port, const ReturnCode rc, const int lastpage);
+intern void fax_send_rc_2int (const int port, const ReturnCode rc, const int lastpage
+                         , const int word1, const int word2);
+intern void fax_send_t2trc (const int rc);
+intern void fax_send_tcrc (const TIFFConvError rc
+                          , const int word1, const int word2);
+//intern ReturnCode fax_sanitycheck_ifd (TIFFInfo *t, int *word1, int *word2);
+intern int fax_get_packedresn (TIFFInfo *t);
+
+///////////////////////////////////////////////////////////////////////////////
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// C_Macros
+
+///////////////////////////////////////////////////////////////////////////////
+
+#ifdef WDEBUG
+
+intern void fax_show_nlinesandpercent (const int nlines, const int numer
+                                      , const int denom, const int port, const int force)
+{
+   static char nlinesmsg[10+1];
+   static clock_t t0 = 0, t;
+
+   t = clock ();
+
+   if (!force && t - t0 < 50) // Allow an update no more than every 50 cs
+      return;
+
+   t0 = t;
+
+   sprintf (nlinesmsg, "%i", nlines);
+   faxdebug_displayfield_set_value (DisplayField_Centred, port
+                                   , Cpt_Con_Lines, nlinesmsg);
+   sprintf (nlinesmsg, "%.1f %%", (double) numer * 100.0 / denom);
+   faxdebug_displayfield_set_value (DisplayField_Centred, port
+                                   , Cpt_Con_CB, nlinesmsg);
+}
+
+#endif
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// fax_open_tiff
+//
+// Attempt to open TIFF file for next page to be txed.
+//
+// The filename is printf ("%s.%i", dirpath, pagenumber).
+//
+// s->fold.handle should be 0 if just starting (i.e. called from message
+// handler) -- this enables the next page to be set as the start page,
+// and also results in a failure code being returned on page not found.
+//
+// There are two special non-failure return cases:
+//
+// - if in a closed-ended transmission next page is past end page
+//
+// - if in an open-ended transmission next page is not found (except if
+// just starting; see above)
+//
+// In both cases s->f.handle and s->t.ImageWidth are set to zero.
+// This allows normal termination to occur.
+// Setting s->f.handle to zero ensures proper file closing at normal termination.
+// Setting s->t.ImageWidth to zero will cause EOP to be sent by FaxSupport.
+//
+// Inputs:  s           (pointer to state structure)
+//
+// Outputs: s           (updated)
+//
+// Assumes: nothing
+//
+// Returns: non-zero if failed
+//
+///////////////////////////////////////////////////////////////////////////////
+
+intern int fax_open_tiff (State *s)
+{
+   long int ifdpos;
+   int endian;
+   int irc;
+   ReturnCode rc;
+   int nextpage;
+
+   // Work out next page number.
+   // There are three cases:
+   // Case 1: if just starting transmission, it's startpage
+   // Case 2: if starting the second page in a transmission, it's startpage + 1
+   // Case 3: otherwise it's last successfully sent page + 2 (current one is + 1)
+   if (s->fold.handle == 0)         // s->fold.handle is zero if just starting
+
+      nextpage = s->startpage;      // Case 1
+
+   else
+
+      nextpage = s->page            // s->page is zero if haven't sent a full page yet
+               ? s->page + 2        // Case 3
+               : s->startpage + 1;  // Case 2
+
+   // Exit gracefully if done last page in close-ended transmission
+   if (s->endpage                   // s->endpage is zero if open-ended transmission
+      && nextpage > s->endpage) {
+
+      PDebug_Printf ("EOP\n");
+      s->f.handle = 0;
+      s->t.ImageWidth = 0;
+      return OK;
+
+   }
+
+   // Construct pathname from leafname and page number.
+   sprintf (strrchr (s->pathname, '.') + 1 // There is always a '.' since we insert one at init
+           , "%i"
+           , nextpage);
+
+   // Attempt to open file
+   PDebug_Printf ("Trying to open %s.\n", s->pathname);
+   s->tifffile = tiff_open_read (s->pathname, &ifdpos, &endian);
+   if (!s->tifffile) {
+
+      PDebug_Printf ("File not found\n");
+
+      if (s->endpage || s->fold.handle == 0) {
+
+         // Complain if no file for non open-ended transmissions
+         // (or, special case, if first page not found)
+
+         faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                         , Cpt_Con_Status, "Page not found");
+         fax_send_rc (s->port, Error_Page_Not_Found, s->page);
+         return !OK;
+
+      } else {
+
+         // Exit gracefully if open-ended transmission
+         s->f.handle = 0;
+         s->t.ImageWidth = 0;
+         return OK;
+
+      }
+
+   } else {
+
+      s->bits.endian = endian;
+      faxdebug_vinfo (("Returned %p, endian is %i, ifdpos is %.8li\n"
+                     , s->tifffile, s->bits.endian, ifdpos));
+
+      // Attempt to read IFD
+      irc = tiff_read_ifd (s->tifffile, ifdpos, &s->t, s->bits.endian);
+      fclose (s->tifffile);
+      if (irc) {
+
+         // Complain if bad IFD
+         if (irc == TIFFError_Read_Error) {
+            faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                            , Cpt_Con_Status, "TIFF read error");
+            fax_send_rc_2int (s->port, Error_TIFF_Read_Error, s->page, 0, 0); // @@ Should de-magic-ify
+         } else if (irc == TIFFError_Bad_Count) {
+            faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                            , Cpt_Con_Status, "TIFF error");
+            fax_send_rc_2int (s->port, Error_TIFF_Bad_Count, s->page, 0, 0); // @@ Field and count?
+         } else {
+            faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                            , Cpt_Con_Status, "TIFF EEEEEK!");
+            fax_send_rc_2int (s->port, Error_TIFF_Read_Error, s->page, 1, 0); // @@ Should de-magic-ify
+         }
+         return !OK;
+
+      } else {
+
+         int word1, word2; // Error words for TIFF sanity check
+
+         faxdebug_vinfo (("Image is %u by %u, fillorder %u, resn %u/%ux%u/%u\n"
+            , s->t.ImageWidth, s->t.ImageLength, s->t.FillOrder
+            , s->t.XResolution.numerator, s->t.XResolution.denominator
+            , s->t.YResolution.numerator, s->t.YResolution.denominator
+            ));
+
+         // Check IW, BPS, C, PI, FO, counts, etc.
+         if (s->t.Compression != TIFFEncoding_T6) {
+            word1 = s->t.Compression;
+            word2 = 0;
+            rc = Error_TIFF_Bad_Compression;
+         } else {
+            rc = tiffconv_sanitycheck_ifd (&s->t, &word1, &word2);
+         }
+         faxdebug_vinfo (("Sanity check: %i\n", rc));
+         if (rc) {
+
+            // Complain...
+            faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                            , Cpt_Con_Status, "TIFF error");
+            fax_send_rc_2int (s->port, rc, s->page, word1, word2);
+            return !OK;
+
+         } else {
+
+            // Get packed resolution
+            s->f.resnin = fax_get_packedresn (&s->t);
+            faxdebug_vinfo (("Pass the following info to FaxSupport:\n"
+                           "resn %.2x, width %u, length %u\n"
+                           , s->f.resnin, s->t.ImageWidth, s->t.ImageLength));
+            s->f.handle = mgr_openin (s->pathname);
+faxdebug_vinfo (("OOOOOpening %i\n", s->f.handle));
+            s->f.ptr = s->t.StripOffsets;
+            s->rc = 0; // Make sure state machine not left in chopping mode
+            mgr_set_ptr (s->f.handle, s->f.ptr);
+
+         }
+
+      }
+
+   }
+
+   return OK;
+}
+
+
+/*
+ * Message handler
+ */
+
+
+intern int wimpmessage_handler (WimpMessage *message, void *handle)
+{
+#define CLAIM 1
+#define PASSON 0
+
+   switch(message->hdr.action_code) {
+
+      case Wimp_MQuit:
+         exit (EXIT_SUCCESS);
+         break;
+
+      case Wimp_MTIFFConvertit:
+      {
+         WimpFaxMessage *m = (WimpFaxMessage *) message;
+         int dummy;
+
+         if (tiffconvactive) {
+
+            fax_send_tcrc (TIFFConvError_Busy, 0, 0);
+
+         } else {
+
+            TIFFConvError rc;
+            int word1, word2;
+
+            rc = tiffconv_open (&tcs
+                               , m->data.tiffconv_it.pathnames
+                               , &m->data.tiffconv_it.pathnames
+                                    [strlen (m->data.tiffconv_it.pathnames) + 1]
+                               , m->data.tiffconv_it.coding, &word1, &word2);
+            if (rc)
+               fax_send_tcrc (rc, word1, word2);
+            else
+               tiffconvactive = TRUE;
+
+         }
+
+         m->hdr.your_ref = m->hdr.my_ref;
+         wimp_send_message (Wimp_EUserMessageAcknowledge, m, m->hdr.sender, NULL, &dummy);
+         return CLAIM;
+      }
+
+      case Wimp_MText2TIFFit:
+      {
+         WimpFaxMessage *m = (WimpFaxMessage *) message;
+         int dummy;
+
+         if (text2tiffactive) {
+
+            fax_send_t2trc (Text2TIFFError_Busy);
+
+         } else {
+
+            int rc;
+
+            rc = text2tiff_open (m->data.text2tiff_it.pathnames
+                                , &m->data.text2tiff_it.pathnames
+                                     [strlen (m->data.text2tiff_it.pathnames) + 1]
+                                , m->data.text2tiff_it.startline
+                                , m->data.text2tiff_it.numberoflines);
+            if (rc == 0)
+               text2tiffactive = TRUE;
+            else if (rc == TIFFError_Read_Error)
+               fax_send_t2trc (Text2TIFFError_Read_Error);
+            else
+               fax_send_t2trc (Text2TIFFError_Write_Error);
+
+         }
+
+         m->hdr.your_ref = m->hdr.my_ref;
+         wimp_send_message (Wimp_EUserMessageAcknowledge, m, m->hdr.sender, NULL, &dummy);
+         return CLAIM;
+      }
+
+      case Wimp_MFaxTx:
+      {
+         WimpFaxMessage *m = (WimpFaxMessage *) message;
+         int dummy;
+         if (m->data.fax_tx.port < 0 || m->data.fax_tx.port >= NPORTS) {
+
+            fax_send_rc (m->data.fax_tx.port, Error_Bad_Port_Number, 0);
+
+         } else {
+
+            State *s = &state[m->data.fax_tx.port];
+
+            if (s->state) {
+
+               fax_send_rc (s->port, Error_Port_In_Use, s->page);
+
+            } else {
+
+               byte nss[4];
+
+#ifdef WDEBUG
+               faxdebug_displayfield_set_value (DisplayField_Centred, m->data.fax_tx.port
+                                               , Cpt_Con_Status, "Sending CNG; waiting for DIS");
+               faxdebug_displayfield_set_value (DisplayField_Centred, m->data.fax_tx.port
+                                               , Cpt_Con_SID, "");
+               faxdebug_displayfield_set_value (DisplayField_Centred, m->data.fax_tx.port
+                                               , Cpt_Con_Page, "");
+               faxdebug_displayfield_set_value (DisplayField_Centred, m->data.fax_tx.port
+                                               , Cpt_Con_Lines, "");
+               faxdebug_displayfield_set_value (DisplayField_Centred, m->data.fax_tx.port
+                                               , Cpt_Con_CB, "");
+               faxdebug_displayfield_set_value (DisplayField_Centred, m->data.fax_tx.port
+                                               , Cpt_Con_MSLT, "");
+               faxdebug_displayfield_set_value (DisplayField_Centred, m->data.fax_tx.port
+                                               , Cpt_Con_Mod, "");
+               faxdebug_displayfield_set_value (DisplayField_Centred, m->data.fax_tx.port
+                                               , Cpt_Con_Rate, "");
+               faxdebug_displayfield_set_value (DisplayField_Centred, m->data.fax_tx.port
+                                               , Cpt_Con_Time, "");
+               faxdebug_displayfield_set_value (DisplayField_Centred, m->data.fax_tx.port
+                                               , Cpt_Con_Resn, "");
+               faxdebug_displayfield_set_value (DisplayField_Centred, m->data.fax_tx.port
+                                               , Cpt_Con_Fmt, "");
+               faxdebug_displayfield_set_value (DisplayField_Centred, m->data.fax_tx.port
+                                               , Cpt_Con_Size, "");
+               faxdebug_info (("Port %i flags %.8x handles %.8x %.8x %.8x %.8x\n"
+                             , m->data.fax_tx.port, m->data.fax_tx.flags, m->data.fax_tx.fileout
+                             , m->data.fax_tx.bufferout, m->data.fax_tx.filein, m->data.fax_tx.bufferin));
+#endif
+
+//               s->fileout = m->data.fax_tx.fileout;
+//               s->filein = m->data.fax_tx.filein;
+//               s->bufferout = m->data.fax_tx.bufferout;
+//               s->bufferin = m->data.fax_tx.bufferin;
+               s->page = 0;
+               s->startpage = m->data.fax_tx.startpage > 0 ? m->data.fax_tx.startpage : 1;
+               s->endpage = m->data.fax_tx.endpage > 0 ? m->data.fax_tx.endpage : 0;
+               s->flags = m->data.fax_tx.flags;
+               strcpy (s->pathname, m->data.fax_tx.dirpath);
+               strcat (s->pathname, "."); // Add on a dot to make leaf finder work
+
+               if (s->flags & FAX_FLAGS_DATASWITCHOVER) {
+
+                  nss[0] = 3;
+                  nss[1] = FAX_NSF_COUNTRYCODE;
+                  nss[2] = FAX_NSF_MANUFACTURERCODE;
+                  nss[3] = (byte) s->flags;
+
+               } else {
+
+                  nss[0] = 0;
+
+               }
+
+               _swix (FaxSupport_SetHandles, _INR (0, 4), m->data.fax_tx.port, m->data.fax_tx.fileout
+                     , m->data.fax_tx.bufferout, m->data.fax_tx.filein, m->data.fax_tx.bufferin);
+               s->bufIDout = buffermanager_get_internalID (m->data.fax_tx.bufferout);
+               s->bufIDin = buffermanager_get_internalID (m->data.fax_tx.bufferin);
+
+               s->fold.handle = 0; // This marks the start of transmission
+               if (fax_open_tiff (s) == 0 && s->f.handle != 0) { // OK, go!
+
+                  _swix (FaxSupport_Start, _INR (0, 6), s->port, 1
+                        , s->t.ImageWidth, s->t.ImageLength, s->f.resnin
+                        , nss, getenv ("Fax$SI"));
+                  s->state = Sending_T30;
+
+                  // Initialise pointers to reference and current lines, and ditto for scaled
+                  s->refline = s->rawline1;
+                  s->currline = s->rawline2;
+                  s->srefline = s->rawline3;
+                  s->scurrline = s->rawline4;
+                  s->oldrefline = s->rawline5;
+
+#ifdef WDEBUG
+                  s->oldtimeins = -2;
+                  s->startstart = clock ();
+#endif
+
+               }
+
+            }
+
+         }
+
+         m->hdr.your_ref = m->hdr.my_ref;
+         wimp_send_message (Wimp_EUserMessageAcknowledge, m, m->hdr.sender, NULL, &dummy);
+         return CLAIM;
+      }
+
+      case Wimp_MFaxRx:
+      {
+         WimpFaxMessage *m = (WimpFaxMessage *) message;
+         int dummy;
+
+         if (m->data.fax_rx.port < 0 || m->data.fax_rx.port >= NPORTS) {
+
+            fax_send_rc (m->data.fax_rx.port, Error_Bad_Port_Number, 0);
+
+         } else {
+
+            State *s = &state[m->data.fax_rx.port];
+
+            if (s->state) {
+
+               fax_send_rc (s->port, Error_Port_In_Use, s->page);
+
+            } else {
+
+               byte nsf[4];
+
+#ifdef WDEBUG
+               faxdebug_displayfield_set_value (DisplayField_Centred, m->data.fax_rx.port
+                                               , Cpt_Con_Status, "Sending CED");
+               faxdebug_displayfield_set_value (DisplayField_Centred, m->data.fax_rx.port
+                                               , Cpt_Con_SID, "");
+               faxdebug_displayfield_set_value (DisplayField_Centred, m->data.fax_rx.port
+                                               , Cpt_Con_Page, "");
+               faxdebug_displayfield_set_value (DisplayField_Centred, m->data.fax_rx.port
+                                               , Cpt_Con_Lines, "");
+               faxdebug_displayfield_set_value (DisplayField_Centred, m->data.fax_rx.port
+                                               , Cpt_Con_CB, "");
+               faxdebug_displayfield_set_value (DisplayField_Centred, m->data.fax_rx.port
+                                               , Cpt_Con_MSLT, "");
+               faxdebug_displayfield_set_value (DisplayField_Centred, m->data.fax_rx.port
+                                               , Cpt_Con_Mod, "");
+               faxdebug_displayfield_set_value (DisplayField_Centred, m->data.fax_rx.port
+                                               , Cpt_Con_Rate, "");
+               faxdebug_displayfield_set_value (DisplayField_Centred, m->data.fax_rx.port
+                                               , Cpt_Con_Time, "");
+               faxdebug_displayfield_set_value (DisplayField_Centred, m->data.fax_rx.port
+                                               , Cpt_Con_Resn, "");
+               faxdebug_displayfield_set_value (DisplayField_Centred, m->data.fax_rx.port
+                                               , Cpt_Con_Fmt, "");
+               faxdebug_displayfield_set_value (DisplayField_Centred, m->data.fax_rx.port
+                                               , Cpt_Con_Size, "");
+               faxdebug_info (("Port %i flags %.8x handles %.8x %.8x %.8x %.8x\n"
+                             , m->data.fax_rx.port, m->data.fax_rx.flags, m->data.fax_rx.fileout
+                             , m->data.fax_rx.bufferout, m->data.fax_rx.filein, m->data.fax_rx.bufferin));
+               s->oldtimeins = -2;
+               s->startstart = clock ();
+#endif
+
+//               s->fileout = m->data.fax_rx.fileout;
+//               s->filein = m->data.fax_rx.filein;
+//               s->bufferout = m->data.fax_rx.bufferout;
+//               s->bufferin = m->data.fax_rx.bufferin;
+               s->page = 0;
+               s->startpage = m->data.fax_tx.startpage > 0 ? m->data.fax_tx.startpage : 1;
+               s->flags = m->data.fax_rx.flags;
+               strcpy (s->pathname, m->data.fax_rx.dirpath);
+               strcat (s->pathname, "."); // Add on a dot to make leaf finder work
+
+               if (s->flags & FAX_FLAGS_DATASWITCHOVER) {
+
+                  nsf[0] = 3;
+                  nsf[1] = FAX_NSF_COUNTRYCODE;
+                  nsf[2] = FAX_NSF_MANUFACTURERCODE;
+                  nsf[3] = (byte) s->flags;
+
+               } else {
+
+                  nsf[0] = 0;
+
+               }
+
+               _swix (FaxSupport_SetHandles, _INR (0, 4), m->data.fax_rx.port, m->data.fax_rx.fileout
+                     , m->data.fax_rx.bufferout, m->data.fax_rx.filein, m->data.fax_rx.bufferin);
+               s->bufIDout = buffermanager_get_internalID (m->data.fax_rx.bufferout);
+               s->bufIDin = buffermanager_get_internalID (m->data.fax_rx.bufferin);
+
+               _swix (FaxSupport_Start, _INR (0, 6), m->data.fax_rx.port, 2
+                     , nsf, getenv ("Fax$SI")
+//                     , "\x0a""\x00\xce\xfa\x80\x80\x95\x80\x80\x80\x18" // not V.33/V.17
+//                     , "\x0a""\x00\x7e\xfa\x80\x80\x95\x80\x80\x80\x18" // not 2D MR
+//                     , "\x0a""\x00\xee\xf0\x80\x80\x95\x80\x80\x80\x18" // only A4xA4
+//                     , "\x0a""\x00\xee\xf8\x80\x80\x95\x80\x80\x80\x18" // only A4 width
+//                     , "\x04""\x00\xee\xfa\x00"                         // only baseline
+//                     , "\x0a""\x00\xee\xfa\x80\x80\x95\x80\x80\x80\x18" // everything!
+                     , "\x06""\x00\xee\xfa\x80\x80\x15"                   // not US paper
+                     , s->minTCF, s->maxTCF);
+               s->bits.consecRTN = 0;
+               s->state = Getting_T30;
+
+            }
+
+         }
+
+         m->hdr.your_ref = m->hdr.my_ref;
+         wimp_send_message (Wimp_EUserMessageAcknowledge, m, m->hdr.sender, NULL, &dummy);
+         return CLAIM;
+      }
+
+      case Wimp_MFaxAbort:
+      {
+         WimpFaxMessage *m = (WimpFaxMessage *) message;
+         int dummy;
+
+         if (m->data.fax_abort.port < 0 || m->data.fax_abort.port >= NPORTS) {
+
+            fax_send_rc (m->data.fax_abort.port, Error_Bad_Port_Number, 0);
+
+         } else {
+
+            State *s = &state[m->data.fax_abort.port];
+
+            faxdebug_displayfield_set_value (DisplayField_Centred, m->data.fax_abort.port
+                                            , Cpt_Con_Status, "Abort");
+            _swix (FaxSupport_Abort, _INR (0, 1), m->data.fax_abort.port, m->data.fax_abort.flags);
+            fax_kick_statemachine (s, Error_Aborted);
+
+         }
+
+         m->hdr.your_ref = m->hdr.my_ref;
+         wimp_send_message (Wimp_EUserMessageAcknowledge, m, m->hdr.sender, NULL, &dummy);
+         return CLAIM;
+      }
+
+   }
+
+   return PASSON;
+
+   USE (handle);
+}
+
+
+#if 0
+intern ReturnCode fax_sanitycheck_ifd (TIFFInfo *t, int *word1, int *word2)
+{
+   double xres;
+
+   // Do all the boring checks
+   if (t->ImageLength == ~0U || t->ImageLength == 0) {
+      *word1 = t->ImageLength;
+      *word2 = 0;
+      return Error_TIFF_Bad_ImageLength;
+   }
+
+   if (t->BitsPerSample != 1) {
+      *word1 = t->BitsPerSample;
+      *word2 = 0;
+      return Error_TIFF_Bad_BitsPerSample;
+   }
+
+   if (t->Compression != TIFFEncoding_T6) {
+      *word1 = t->Compression;
+      *word2 = 0;
+      return Error_TIFF_Bad_Compression; ///ccitt changed to 4 for 2D MMR
+   }
+
+   if (t->PhotometricInterpretation != 0) {
+      *word1 = t->PhotometricInterpretation;
+      *word2 = 0;
+      return Error_TIFF_Bad_PhotometricInterpretation;
+   }
+
+   if (t->FillOrder != 1 && t->FillOrder != 2) {
+      *word1 = t->FillOrder;
+      *word2 = 0;
+      return Error_TIFF_Bad_FillOrder;
+   }
+
+   if (t->StripOffsets == ~0U) {
+      *word1 = t->StripOffsets;
+      *word2 = 0;
+      return Error_TIFF_Bad_StripOffsets;
+   }
+
+   if (t->SamplesPerPixel != 1) {
+      *word1 = t->SamplesPerPixel;
+      *word2 = 0;
+      return Error_TIFF_Bad_SamplesPerPixel;
+   }
+
+   if (t->StripByteCounts == ~0U || t->StripByteCounts == 0) {
+      *word1 = t->StripByteCounts;
+      *word2 = 0;
+      return Error_TIFF_Bad_StripByteCounts;
+   }
+
+   if (t->XResolution.numerator == ~0U || t->XResolution.denominator == 0) {
+      *word1 = t->XResolution.numerator;
+      *word2 = t->XResolution.denominator;
+      return Error_TIFF_Bad_XResolution;
+   }
+
+   if (t->YResolution.numerator == ~0U || t->YResolution.denominator == 0) {
+      *word1 = t->YResolution.numerator;
+      *word2 = t->YResolution.denominator;
+      return Error_TIFF_Bad_YResolution;
+   }
+
+   if (t->T6Options != 0) {
+      *word1 = t->T6Options;
+      *word2 = 0;
+      return Error_TIFF_Bad_T6Options;
+   }
+
+   if (t->ResolutionUnit != 2 && t->ResolutionUnit != 3) {
+      *word1 = t->ResolutionUnit;
+      *word2 = 0;
+      return Error_TIFF_Bad_ResolutionUnit;
+   }
+
+   // Having established XResolution and ResolutionUnit were OK, check ImageWidth
+   xres = (double) t->XResolution.numerator / t->XResolution.denominator;
+   if (t->ResolutionUnit == 3) // Convert from pels/cm to dpi
+      xres *= 2.54;
+
+   if (xres > 250.0) {
+      if (t->ImageWidth != 3456 && t->ImageWidth != 4096 && t->ImageWidth != 4864) {
+         *word1 = t->ImageWidth;
+         *word2 = 0;
+         return Error_TIFF_Bad_ImageWidth;
+      }
+   } else {
+      if (t->ImageWidth != 1728 && t->ImageWidth != 2048 && t->ImageWidth != 2432) {
+         *word1 = t->ImageWidth;
+         *word2 = 0;
+         return Error_TIFF_Bad_ImageWidth;
+      }
+   }
+
+   // Looks OK!
+   return (ReturnCode) 0;
+}
+#endif
+
+
+intern int fax_get_packedresn (TIFFInfo *t)
+{
+   double xres, yres, yres15;
+
+   xres = (double) t->XResolution.numerator / t->XResolution.denominator;
+   yres = (double) t->YResolution.numerator / t->YResolution.denominator;
+
+   if (t->ResolutionUnit == 3) { // Convert from pels/cm to dpi
+      xres *= 2.54;
+      yres *= 2.54;
+   }
+
+   if (xres > 250.0) // If Xres > 250 dpi, this must be 400x400
+      return 0x44;
+
+   yres15 = yres * 1.5;
+
+   if (yres15 < xres) // If Yres * 1.5 < Xres, this must be 200x100
+      return 0x21;
+
+   if (yres15 > xres * 2.0) // If Yres * 1.5 > Xres * 2, this must be 200x400
+      return 0x24;
+
+   return 0x22; // Well, it must be 200x200 then!
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// fax_handle_dis
+//
+// Handle DIS and DCS block info.
+//
+// Apart from WDEBUG stuff, only CSI is of interest.
+//
+// @@ Describe I/O
+//
+///////////////////////////////////////////////////////////////////////////////
+
+intern void fax_handle_dis_dcs (State *s)
+{
+#ifdef WDEBUG
+   int ndcs;
+   char *dcs;
+#endif
+   char *csi;
+
+   _swix (FaxSupport_GetInfo, _INR (0, 1) | _OUT (2) | _OUT (5), s->port, 1
+         , &csi, &s->datarate);
+
+   if (*csi) {
+
+      faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                      , Cpt_Con_SID, csi);
+      fax_send_rc (s->port, Info_CSI, s->page);
+
+   }
+
+#ifdef WDEBUG
+   if (s->datarate) {
+      static char dataratestr[] = "1234567890 bps";
+      sprintf (dataratestr, "%i bps", s->datarate);
+      faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                      , Cpt_Con_Rate, dataratestr);
+   }
+
+{
+   static char sizestr[] = "A4xA4";
+
+   _swix (FaxSupport_GetInfo, _INR (0, 1) | _OUTR (3, 4), s->port, 2
+         , &ndcs, &dcs);
+
+   if (ndcs) {
+         switch ((dcs[1] & 0x3c) >> 2) {
+
+            case 0:
+            case 2:
+               faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                               , Cpt_Con_Mod, "V.27");
+               break;
+
+            case 1:
+            case 3:
+               faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                               , Cpt_Con_Mod, "V.29");
+               break;
+
+            case 4:
+            case 6:
+               faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                               , Cpt_Con_Mod, "V.33");
+               break;
+
+            case 8:
+            case 9:
+            case 10:
+            case 11:
+               faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                               , Cpt_Con_Mod, "V.17");
+               break;
+
+            default:
+               faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                               , Cpt_Con_Mod, "????");
+
+         }
+
+      if (dcs[1] & 0x80) {
+         faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                         , Cpt_Con_Fmt, "2D MR");
+      } else {
+         faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                         , Cpt_Con_Fmt, "1D MH");
+      }
+
+      if (dcs[1] & 0x40)
+         faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                         , Cpt_Con_Resn, "200x200");
+      else if (ndcs > 5 && dcs[5] & 0x01)
+         faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                         , Cpt_Con_Resn, "200x400");
+      else if (ndcs > 5 && dcs[5] & 0x04)
+         faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                         , Cpt_Con_Resn, "400x400");
+      else
+         faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                         , Cpt_Con_Resn, "200x100");
+
+      if ((dcs[2] & 0x03) == 0x02)
+         strcpy (sizestr, "A3x");
+      else if ((dcs[2] & 0x03) == 0x01)
+         strcpy (sizestr, "B4x");
+      else
+         strcpy (sizestr, "A4x");
+
+      if ((dcs[2] & 0x0c) == 0x08)
+         strcat (sizestr, "ul");
+      else if ((dcs[2] & 0x0c) == 0x04)
+         strcat (sizestr, "B4");
+      else if (ndcs > 9 && dcs[9] & 0x08)
+         strcat (sizestr, "Lt");
+      else if (ndcs > 9 && dcs[9] & 0x10)
+         strcat (sizestr, "Lg");
+      else
+         strcat (sizestr, "A4");
+      faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                      , Cpt_Con_Size, sizestr);
+
+      switch ((dcs[2] & 0x70) >> 4) {
+
+         case 0:
+            faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                            , Cpt_Con_MSLT, "20 ms");
+            break;
+
+         case 4:
+            faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                            , Cpt_Con_MSLT, "40 ms");
+            break;
+
+         case 2:
+            faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                            , Cpt_Con_MSLT, "10 ms");
+            break;
+
+         case 1:
+            faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                            , Cpt_Con_MSLT, "5 ms");
+            break;
+
+         case 7:
+            faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                            , Cpt_Con_MSLT, "0 ms");
+            break;
+
+         default:
+            faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                            , Cpt_Con_MSLT, "????");
+            break;
+
+      }
+   }
+}
+#endif
+
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// fax_handle_dis
+//
+// Handle DIS block info before T.4 transmission has been signalled.
+//
+// Apart from WDEBUG stuff, only CSI is of interest.
+//
+// @@ Describe I/O
+//
+///////////////////////////////////////////////////////////////////////////////
+
+intern void fax_handle_dis (State *s)
+{
+   int ndis;
+   char *csi, *dis;
+
+   _swix (FaxSupport_GetInfo, _INR (0, 1) | _OUTR (2, 5), s->port, 1
+         , &csi, &ndis, &dis, &s->datarate);
+
+   if (*csi) {
+
+      faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                      , Cpt_Con_SID, csi);
+      fax_send_rc (s->port, Info_CSI, s->page);
+
+   }
+
+#ifdef WDEBUG
+   if (ndis) {
+
+      static char sizestr[] = "A4xA4";
+      static char resnstr[] = "22,24,44,33,";
+
+      if ((dis[1] & 0x3c) == 0x00 << 2)
+         faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                         , Cpt_Con_Mod, "V.27 f");
+      else if ((dis[1] & 0x3c) == 0x01 << 2)
+         faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                         , Cpt_Con_Mod, "V.29");
+      else if ((dis[1] & 0x3c) == 0x02 << 2)
+         faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                         , Cpt_Con_Mod, "V.27");
+      else if ((dis[1] & 0x3c) == 0x03 << 2)
+         faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                         , Cpt_Con_Mod, "V.27,V.29");
+      else if ((dis[1] & 0x3c) == 0x07 << 2)
+         faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                         , Cpt_Con_Mod, "V.33");
+      else if ((dis[1] & 0x3c) == 0x0b << 2)
+         faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                         , Cpt_Con_Mod, "V.17");
+
+      if (dis[1] & 0x80) {
+         faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                         , Cpt_Con_Fmt, "2D MR");
+      } else {
+         faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                         , Cpt_Con_Fmt, "1D MH");
+      }
+
+      resnstr[0] = NUL;
+      if (dis[1] & 0x40)
+         strcat (resnstr, "22,");
+      if (ndis > 5 && dis[5] & 0x01)
+         strcat (resnstr, "24,");
+      if (ndis > 5 && dis[5] & 0x04)
+         strcat (resnstr, "44,");
+      if (ndis > 5 && dis[5] & 0x02)
+         strcat (resnstr, "33,");
+      if (strlen (resnstr))
+         resnstr[strlen (resnstr) - 1] = NUL;
+      else
+         strcpy (resnstr, "21");
+      faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                      , Cpt_Con_Resn, resnstr);
+
+      if ((dis[2] & 0x03) == 0x02 || (dis[2] & 0x03) == 0x03)
+         strcpy (sizestr, "A3x");
+      else if ((dis[2] & 0x03) == 0x01)
+         strcpy (sizestr, "B4x");
+      else
+         strcpy (sizestr, "A4x");
+
+      if ((dis[2] & 0x0c) == 0x08)
+         strcat (sizestr, "ul");
+      else if ((dis[2] & 0x0c) == 0x04)
+         strcat (sizestr, "B4");
+      else
+         strcat (sizestr, "A4");
+
+      if (ndis > 9 && dis[9] & 0x08)
+         strcat (sizestr, ",Lt");
+      else if (ndis > 9 && dis[9] & 0x10)
+         strcat (sizestr, ",Lg");
+      faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                      , Cpt_Con_Size, sizestr);
+
+      switch ((dis[2] & 0x70) >> 4) {
+
+         case 0:
+            faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                            , Cpt_Con_MSLT, "20/20 ms");
+            break;
+
+         case 4:
+            faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                            , Cpt_Con_MSLT, "40/40 ms");
+            break;
+
+         case 2:
+            faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                            , Cpt_Con_MSLT, "10/10 ms");
+            break;
+
+         case 1:
+            faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                            , Cpt_Con_MSLT, "5/5 ms");
+            break;
+
+         case 6:
+            faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                            , Cpt_Con_MSLT, "10/5 ms");
+            break;
+
+         case 3:
+            faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                            , Cpt_Con_MSLT, "20/10 ms");
+            break;
+
+         case 5:
+            faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                            , Cpt_Con_MSLT, "40/20 ms");
+            break;
+
+         case 7:
+            faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                            , Cpt_Con_MSLT, "0/0 ms");
+            break;
+
+      }
+
+   }
+#endif
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// fax_handle_dcs_intermediate
+//
+// Handle DCS block info before T.4 reception has been signalled.
+//
+// Apart from WDEBUG stuff, only TSI is of interest.
+//
+// @@ Describe I/O
+//
+///////////////////////////////////////////////////////////////////////////////
+
+intern void fax_handle_dcs_intermediate (State *s)
+{
+   int ndcs;
+   char *tsi, *dcs;
+
+   _swix (FaxSupport_GetInfo, _INR (0, 1) | _OUTR (2, 5), s->port, 2
+         , &tsi, &ndcs, &dcs, &s->datarate);
+
+   if (*tsi) {
+
+      faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                      , Cpt_Con_SID, tsi);
+      fax_send_rc (s->port, Info_TSI, s->page);
+
+   }
+
+#ifdef WDEBUG
+   if (s->datarate) {
+
+      static char dataratestr[] = "1234567890 bps";
+      sprintf (dataratestr, "%i bps", s->datarate);
+      faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                      , Cpt_Con_Rate, dataratestr);
+
+      if (ndcs) {
+
+         switch ((dcs[1] & 0x3c) >> 2) {
+
+            case 0:
+            case 2:
+               faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                               , Cpt_Con_Mod, "V.27");
+               break;
+
+            case 1:
+            case 3:
+               faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                               , Cpt_Con_Mod, "V.29");
+               break;
+
+            case 4:
+            case 6:
+               faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                               , Cpt_Con_Mod, "V.33");
+               break;
+
+            case 8:
+            case 9:
+            case 10:
+            case 11:
+               faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                               , Cpt_Con_Mod, "V.17");
+               break;
+
+            default:
+               faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                               , Cpt_Con_Mod, "????");
+
+         }
+
+      }
+
+   }
+
+   if (ndcs) {
+
+      static char sizestr[] = "A4xA4";
+
+      if (dcs[1] & 0x80) {
+         faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                         , Cpt_Con_Fmt, "2D MR");
+      } else {
+         faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                         , Cpt_Con_Fmt, "1D MH");
+      }
+
+      if (dcs[1] & 0x40)
+         faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                         , Cpt_Con_Resn, "200x200");
+      else if (ndcs > 5 && dcs[5] & 0x01)
+         faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                         , Cpt_Con_Resn, "200x400");
+      else if (ndcs > 5 && dcs[5] & 0x04)
+         faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                         , Cpt_Con_Resn, "400x400");
+      else
+         faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                         , Cpt_Con_Resn, "200x100");
+
+      if ((dcs[2] & 0x03) == 0x02)
+         strcpy (sizestr, "A3x");
+      else if ((dcs[2] & 0x03) == 0x01)
+         strcpy (sizestr, "B4x");
+      else
+         strcpy (sizestr, "A4x");
+
+      if ((dcs[2] & 0x0c) == 0x08)
+         strcat (sizestr, "ul");
+      else if ((dcs[2] & 0x0c) == 0x04)
+         strcat (sizestr, "B4");
+      else if (ndcs > 9 && dcs[9] & 0x08)
+         strcat (sizestr, "Lt");
+      else if (ndcs > 9 && dcs[9] & 0x10)
+         strcat (sizestr, "Lg");
+      else
+         strcat (sizestr, "A4");
+      faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                      , Cpt_Con_Size, sizestr);
+
+      switch ((dcs[2] & 0x70) >> 4) {
+
+         case 0:
+            faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                            , Cpt_Con_MSLT, "20 ms");
+            break;
+
+         case 4:
+            faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                            , Cpt_Con_MSLT, "40 ms");
+            break;
+
+         case 2:
+            faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                            , Cpt_Con_MSLT, "10 ms");
+            break;
+
+         case 1:
+            faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                            , Cpt_Con_MSLT, "5 ms");
+            break;
+
+         case 7:
+            faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                            , Cpt_Con_MSLT, "0 ms");
+            break;
+
+         default:
+            faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                            , Cpt_Con_MSLT, "????");
+            break;
+
+      }
+
+   }
+#endif
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// fax_handle_dcs_final
+//
+// Handle DCS block info when T.4 reception has been signalled.
+//
+// Apart from WDEBUG stuff, both TSI and DCS are of interest, as is fishyness.
+//
+// @@ Describe I/O
+//
+///////////////////////////////////////////////////////////////////////////////
+
+intern void fax_handle_dcs_final (State *s)
+{
+   int ndcs, fishy;
+   char *tsi, *dcs;
+
+   _swix (FaxSupport_GetInfo, _INR (0, 1) | _OUTR (2, 6), s->port, 2
+         , &tsi, &ndcs, &dcs, &s->datarate, &fishy);
+
+   if (*tsi) {
+
+      faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                      , Cpt_Con_SID, tsi);
+      fax_send_rc (s->port, Info_TSI, s->page);
+
+   }
+
+   if (fishy) {
+
+      faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                      , Cpt_Con_SID, "Fishy DCS");
+      fax_send_rc (s->port, Info_Fishy_DCS, s->page);
+
+   }
+
+#ifdef WDEBUG
+   if (s->datarate) {
+
+      static char dataratestr[] = "1234567890 bps";
+      sprintf (dataratestr, "%i bps", s->datarate);
+      faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                      , Cpt_Con_Rate, dataratestr);
+
+      if (ndcs) {
+
+         switch ((dcs[1] & 0x3c) >> 2) {
+
+            case 0:
+            case 2:
+               faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                               , Cpt_Con_Mod, "V.27");
+               break;
+
+            case 1:
+            case 3:
+               faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                               , Cpt_Con_Mod, "V.29");
+               break;
+
+            case 4:
+            case 6:
+               faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                               , Cpt_Con_Mod, "V.33");
+               break;
+
+            case 8:
+            case 9:
+            case 10:
+            case 11:
+               faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                               , Cpt_Con_Mod, "V.17");
+               break;
+
+            default:
+               faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                               , Cpt_Con_Mod, "????");
+
+         }
+
+      }
+   }
+#endif
+
+   if (ndcs) {
+
+#ifdef WDEBUG
+      static char sizestr[] = "A4xA4";
+
+      if (dcs[1] & 0x80) {
+         faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                         , Cpt_Con_Fmt, "2D MR");
+      } else {
+         faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                         , Cpt_Con_Fmt, "1D MH");
+      }
+
+      if (dcs[1] & 0x40)
+         faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                         , Cpt_Con_Resn, "200x200");
+      else if (ndcs > 5 && dcs[5] & 0x01)
+         faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                         , Cpt_Con_Resn, "200x400");
+      else if (ndcs > 5 && dcs[5] & 0x04)
+         faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                         , Cpt_Con_Resn, "400x400");
+      else
+         faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                         , Cpt_Con_Resn, "200x100");
+
+      if ((dcs[2] & 0x03) == 0x02)
+         strcpy (sizestr, "A3x");
+      else if ((dcs[2] & 0x03) == 0x01)
+         strcpy (sizestr, "B4x");
+      else
+         strcpy (sizestr, "A4x");
+
+      if ((dcs[2] & 0x0c) == 0x08)
+         strcat (sizestr, "ul");
+      else if ((dcs[2] & 0x0c) == 0x04)
+         strcat (sizestr, "B4");
+      else if (ndcs > 9 && dcs[9] & 0x08)
+         strcat (sizestr, "Lt");
+      else if (ndcs > 9 && dcs[9] & 0x10)
+         strcat (sizestr, "Lg");
+      else
+         strcat (sizestr, "A4");
+      faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                      , Cpt_Con_Size, sizestr);
+
+      switch ((dcs[2] & 0x70) >> 4) {
+
+         case 0:
+            faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                            , Cpt_Con_MSLT, "20 ms");
+            break;
+
+         case 4:
+            faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                            , Cpt_Con_MSLT, "40 ms");
+            break;
+
+         case 2:
+            faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                            , Cpt_Con_MSLT, "10 ms");
+            break;
+
+         case 1:
+            faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                            , Cpt_Con_MSLT, "5 ms");
+            break;
+
+         case 7:
+            faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                            , Cpt_Con_MSLT, "0 ms");
+            break;
+
+         default:
+            faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                            , Cpt_Con_MSLT, "????");
+            break;
+
+      }
+#endif
+
+      if (dcs[1] & 0x40)
+         s->resn = 0x22;
+      else if (ndcs > 5 && dcs[5] & 0x01)
+         s->resn = 0x24;
+      else if (ndcs > 5 && dcs[5] & 0x04)
+         s->resn = 0x44;
+      else
+         s->resn = 0x21;
+
+      if ((dcs[2] & 0x03) == 0x02)
+         s->t.ImageWidth = 2432;
+      else if ((dcs[2] & 0x03) == 0x01)
+         s->t.ImageWidth = 2048;
+      else
+         s->t.ImageWidth = 1728; // Treat the invalid 11 combination as A4 width
+      if (ndcs > 5 && dcs[5] & 0x04)
+         s->t.ImageWidth *= 2;
+
+      s->bits.is2DMR = dcs[1] & 0x80 ? TRUE : FALSE;
+   }
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// fax_close_tiff
+//
+// Close TIFF file, writing out header.
+//
+// Inputs:  s           (pointer to state structure)
+//
+// Outputs: s           (updated)
+//
+// Assumes: ???
+//
+// Returns: non-zero if stream error indicator set (presumably write error)
+//
+///////////////////////////////////////////////////////////////////////////////
+
+intern int fax_close_tiff (State *s)
+{
+   return tiff_close_write (&s->t, s->tifffile, s->tiffifdptr, s->encword);
+
+#if 0
+   int encwordpos, err;
+   uint encword;
+
+#ifdef VDEBUG
+   mgr_close (s->t4fileout);
+#endif
+
+///ccitt
+/*
+   // Squeeze out last bit of encoded data, if any (none for CCITT MH)
+   if (s->encword & 0xff) {
+      putc (s->encword >> 8, s->tifffile);
+      ++s->t.StripByteCounts;
+   }
+*/
+   // Add EOFB
+   encwordpos = s->encword & 0xff;
+   encword = (s->encword & 0xff00) << 16;
+   encword |= 0x00100100U >> encwordpos; // This will always fit because encwordpos is always < 8
+   encwordpos += 24;
+
+   // Squeeze out last bit of encoded data, if any, and EOFB
+   while (encwordpos > 0) {
+
+      putc (encword >> 24, s->tifffile);
+      encword <<= 8;
+      encwordpos -= 8;
+      ++s->t.StripByteCounts;
+
+   }
+
+   // Write out TIFF header
+   tiff_write_nentries (s->tifffile, s->tiffifdptr, TIFFNEntries);
+   tiff_write_entry (s->tifffile, TIFFTag_ImageWidth, TIFFType_LONG
+                    , 1, s->t.ImageWidth);
+   tiff_write_entry (s->tifffile, TIFFTag_ImageLength, TIFFType_LONG
+                    , 1, s->t.ImageLength);
+   tiff_write_entry (s->tifffile, TIFFTag_BitsPerSample, TIFFType_SHORT
+                    , 1, 1);
+   tiff_write_entry (s->tifffile, TIFFTag_Compression, TIFFType_SHORT
+                    , 1, 4); ///ccitt was 2
+   tiff_write_entry (s->tifffile, TIFFTag_PhotometricInterpretation, TIFFType_SHORT
+                    , 1, 0);
+   tiff_write_entry (s->tifffile, TIFFTag_FillOrder, TIFFType_SHORT
+                    , 1, 1);
+   tiff_write_entry (s->tifffile, TIFFTag_StripOffsets, TIFFType_LONG
+                    , 1, (unsigned int) s->tiffifdptr + 2 + TIFFNEntries * 12
+                       + 4 + TIFFNExtra * 4);
+   tiff_write_entry (s->tifffile, TIFFTag_SamplesPerPixel, TIFFType_SHORT
+                    , 1, 1);
+   tiff_write_entry (s->tifffile, TIFFTag_RowsPerStrip, TIFFType_LONG
+                    , 1, s->t.ImageLength);
+   tiff_write_entry (s->tifffile, TIFFTag_StripByteCounts, TIFFType_LONG
+                    , 1, s->t.StripByteCounts);
+   tiff_write_entry (s->tifffile, TIFFTag_XResolution, TIFFType_RATIONAL
+                    , 1, (unsigned int) s->tiffifdptr + 2 + TIFFNEntries * 12 + 4 + 0);
+   tiff_write_entry (s->tifffile, TIFFTag_YResolution, TIFFType_RATIONAL
+                    , 1, (unsigned int) s->tiffifdptr + 2 + TIFFNEntries * 12 + 4 + 8);
+   tiff_write_entry (s->tifffile, TIFFTag_T6Options, TIFFType_LONG
+                    , 1, 0); ///ccitt didn't have this one
+   tiff_write_entry (s->tifffile, TIFFTag_ResolutionUnit, TIFFType_SHORT
+                    , 1, 2);
+   tiff_write_entry (s->tifffile, TIFFTag_BadFaxLines, TIFFType_LONG
+                    , 1, s->t.BadFaxLines);
+   tiff_write_entry (s->tifffile, TIFFTag_CleanFaxData, TIFFType_SHORT //@@ BYTE?
+                    , 1, 1);
+   tiff_write_entry (s->tifffile, TIFFTag_ConsecutiveBadFaxLines, TIFFType_LONG
+                    , 1, s->t.ConsecutiveBadFaxLines);
+   // If multipage, set ptrnextIFD here
+   tiff_write_extra (s->tifffile, 0x00000000); // Pointer to next IFD
+   tiff_write_extra (s->tifffile, 102 * (s->resn & 0xf0) >> 4); // XResolution
+   tiff_write_extra (s->tifffile, 1);
+   tiff_write_extra (s->tifffile, 390 * (s->resn & 0x0f) / 4 + 1); // YResolution
+   tiff_write_extra (s->tifffile, 1);
+
+   // Close, checking for any errors
+   err = ferror (s->tifffile);
+   if (err)
+      fclose (s->tifffile);
+   else
+      err = fclose (s->tifffile);
+
+   return err;
+#endif
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// fax_send_rc
+//
+// Sends !Fax return code as Wimp message broadcast, asking FaxSupport for
+// any relevant info material.
+//
+// Inputs:  port        (port to which this return code applies)
+//          rc          (return code)
+//          lastpage    (last page sent/received)
+//
+// Outputs: nothing
+//
+// Assumes: nothing
+//
+// Returns: nothing
+//
+///////////////////////////////////////////////////////////////////////////////
+
+intern void fax_send_rc (const int port, const ReturnCode rc, const int lastpage)
+{
+   WimpFaxMessage m;
+   int n = 0; // Aaargh!
+   int dummy;
+
+   m.hdr.your_ref = 0;
+   m.hdr.action_code = Wimp_MFaxRC;
+   m.data.fax_rc.port = port;
+   m.data.fax_rc.rc = rc;
+   m.data.fax_rc.lastpage = lastpage;
+   _swix (FaxSupport_FillInfo, _INR (0, 3) | _OUT (0)
+         , rc != Error_Bad_Port_Number ? port : 0 // Else SWI fails!
+         , rc, m.data.fax_rc.info
+         , sizeof m.data.fax_rc.info, &n);
+   m.hdr.size = sizeof m.hdr + sizeof m.data.fax_rc - sizeof m.data.fax_rc.info + ((n + 3) & ~3);
+   wimp_send_message (Wimp_EUserMessage, &m, 0, 0, &dummy);
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// fax_send_rc_2int
+//
+// Sends !Fax return code as Wimp message broadcast, setting two info words.
+//
+// Inputs:  port        (port to which this return code applies)
+//          rc          (return code)
+//          lastpage    (last page sent/received)
+//          word1       (first info word)
+//          word2       (second info word)
+//
+// Outputs: nothing
+//
+// Assumes: nothing
+//
+// Returns: nothing
+//
+///////////////////////////////////////////////////////////////////////////////
+
+intern void fax_send_rc_2int (const int port, const ReturnCode rc, const int lastpage
+                         , const int word1, const int word2)
+{
+   WimpFaxMessage m;
+   int dummy;
+
+   m.hdr.your_ref = 0;
+   m.hdr.action_code = Wimp_MFaxRC;
+   m.data.fax_rc.port = port;
+   m.data.fax_rc.rc = rc;
+   m.data.fax_rc.lastpage = lastpage;
+   * ((int *) &m.data.fax_rc.info[0]) = word1;
+   * ((int *) &m.data.fax_rc.info[4]) = word2;
+   m.hdr.size = sizeof m.hdr + sizeof m.data.fax_rc - sizeof m.data.fax_rc.info + 8;
+   wimp_send_message (Wimp_EUserMessage, &m, 0, 0, &dummy);
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// fax_send_t2trc
+//
+// Sends !Text2TIFF return code as Wimp message broadcast.
+//
+// Inputs:  rc          (return code)
+//
+// Outputs: nothing
+//
+// Assumes: nothing
+//
+// Returns: nothing
+//
+///////////////////////////////////////////////////////////////////////////////
+
+intern void fax_send_t2trc (const int rc)
+{
+   WimpFaxMessage m;
+   int dummy;
+
+   m.hdr.size = 24;
+   m.hdr.your_ref = 0;
+   m.hdr.action_code = Wimp_MText2TIFFed;
+   m.data.text2tiff_ed.rc = rc;
+   wimp_send_message (Wimp_EUserMessage, &m, 0, 0, &dummy);
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// fax_send_tcrc
+//
+// Sends !TIFFConv return code as Wimp message broadcast.
+//
+// Suberror words are only sent if the first one is non-zero.
+//
+// Inputs:  rc          (return code)
+//          word1       (suberror word)
+//          word2       (suberror word)
+//
+// Outputs: nothing
+//
+// Assumes: nothing
+//
+// Returns: nothing
+//
+///////////////////////////////////////////////////////////////////////////////
+
+intern void fax_send_tcrc (const TIFFConvError rc
+                          , const int word1, const int word2)
+{
+   WimpFaxMessage m;
+   int dummy;
+
+   m.hdr.size = 24;
+   m.hdr.your_ref = 0;
+   m.hdr.action_code = Wimp_MTIFFConverted;
+   m.data.tiffconv_ed.rc = rc;
+   if (word1) {
+      m.hdr.size += 8;
+      m.data.tiffconv_ed.word1 = word1;
+      m.data.tiffconv_ed.word2 = word2;
+   }
+   wimp_send_message (Wimp_EUserMessage, &m, 0, 0, &dummy);
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// fax_disconnect_linetoolong
+//
+// Action if scan line is too long (more than MaxScanLineTime s).
+// Closes TIFF file, sends "Scan line too long" return code, and causes
+// state machine to terminate.
+//
+// Inputs:  s           (pointer to state structure)
+//
+// Outputs: s           (updated)
+//
+// Assumes: nothing
+//
+// Returns: nothing
+//
+///////////////////////////////////////////////////////////////////////////////
+
+intern void fax_disconnect_linetoolong (State *s)
+{
+   faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                   , Cpt_Con_Status, "Scan line too long");
+   fax_close_tiff (s);
+   fax_send_rc (s->port, Error_Scan_Line_Too_Long, s->page);
+   s->state = 0;
+#ifdef WDEBUG
+   s->oldtimeins = -1;
+#endif
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// fax_kick_gettingT30
+//
+// Operations for T.30 reception in state machine.
+//
+// Inputs:  s           (pointer to state structure)
+//          rc          (return code)
+//
+// Outputs: **describe**
+//
+// Assumes: ???
+//
+// Returns: nothing
+//
+///////////////////////////////////////////////////////////////////////////////
+
+intern void fax_kick_gettingT30 (State *const s, ReturnCode rc)
+{
+   // Codes below 0x200 are external.
+   if (rc < 0x200) {
+
+      fax_send_rc (s->port, rc, s->page);
+
+      // Codes below 0x100 are terminal.
+      if (rc < 0x100) {
+
+         s->state = 0;
+#ifdef WDEBUG
+         s->oldtimeins = -1;
+#endif
+
+      }
+
+      return;
+
+   }
+
+   // Got TSI, DCS or TCF?  Then handle block info.
+   if (rc == Info_Got_TSI || rc == Info_Got_DCS || rc == Info_Getting_TCF) {
+
+      fax_handle_dcs_intermediate (s);
+      return;
+
+   }
+
+   // Getting T.4?  Ooooh!
+   if (rc == Info_Getting_T4) {
+
+      uint mask;
+      int nentries, nextra;
+
+      // Construct pathname from leafname and page number.
+      sprintf (strrchr (s->pathname, '.') + 1 // There is always a '.' since we insert one at init
+              , "%i"
+              , s->page ? s->page + 1 : s->startpage);
+
+      // Open TIFF page for output, and create IFD
+      s->tifffile = tiff_open_write (s->pathname);
+      if (s->tifffile == NULL) {
+         fax_send_rc_2int (s->port, Error_TIFF_Write_Error, s->page, 0, 0); // @@ Should de-magic-ify
+         shutdown:
+         faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                         , Cpt_Con_Status, "TIFF write error");
+         s->state = 0;
+#ifdef WDEBUG
+         s->oldtimeins = -1;
+#endif
+         return;
+      }
+      tiff_get_ifdsize (TIFFEncoding_T6, &nentries, &nextra);
+      s->tiffifdptr = tiff_create_ifd (s->tifffile, 0x00000004, nentries, nextra);
+      if (s->tiffifdptr == 0) {
+         fax_send_rc_2int (s->port, Error_TIFF_Write_Error, s->page, 1, 0); // @@ Should de-magic-ify
+         fclose (s->tifffile);
+         remove (s->pathname);
+         goto shutdown;
+      }
+
+      // OK, we're in the game
+      s->page = s->page ? s->page + 1 : s->startpage;
+
+      // Enable null polls.
+      event_get_mask (&mask);
+      mask &= ~Wimp_Poll_NullMask;
+      event_set_mask (mask);
+
+      // Kick into T.4 action!
+      s->state = Getting_T4;
+      s->t.ImageLength = s->noctets = 0;
+      s->bits.DLErecd = s->bits.lastwasEOL = s->bits.RTCrecd
+                      = s->bits.foundEOL = s->bits.hunting = FALSE;
+      s->decword = s->encword = 0;
+      s->t.BadFaxLines = s->consecbadlines = s->t.ConsecutiveBadFaxLines = 0;
+      s->t.StripByteCounts = 0;
+      s->t.FillOrder = 1;
+      s->t.Compression = TIFFEncoding_T6;
+      s->t.CleanFaxData = 1;
+
+      // Pick up DCS details
+      fax_handle_dcs_final (s);
+      s->t.XResolution.numerator = 102 * (s->resn & 0xf0) >> 4;
+      s->t.XResolution.denominator = 1;
+      s->t.YResolution.numerator = 390 * (s->resn & 0x0f) / 4 + 1;
+      s->t.YResolution.denominator = 1;
+
+      // Initialise pointers to reference and current lines
+      s->refline = s->rawline1;
+      s->currline = s->rawline2;
+
+      // Initialise pointer to original current line pointer
+      s->origcurrline = NULL;
+
+      // Initialise reference line just in case first line is corrupted and
+      // needs to be regenerated, or image starts (incorrectly) with 2D line
+      s->refline[0] = s->t.ImageWidth;
+      s->refline[1] = 0; // 2D MR EOL guard
+
+#if defined(WDEBUG) || defined(VDEBUG)
+{
+      static char pagepath[] = "Mem:$.1234567890T";
+
+#ifdef VDEBUG
+   {
+      int i;
+      int ndcs;
+      char *dcs;
+      _swix (FaxSupport_GetInfo, _INR (0, 1) | _OUTR (3, 4), s->port, 2, &ndcs, &dcs);
+      sprintf (pagepath, "Mem:$.%iT", s->page);
+      s->t4fileout = mgr_openout (pagepath);
+      for (i = 0; i < 10; ++i) {
+         if (ndcs > i)
+            mgr_bput (s->t4fileout, dcs[i]);
+         else
+            mgr_bput (s->t4fileout, 0);
+      }
+   }
+#endif
+
+#ifdef WDEBUG
+      sprintf (pagepath, "%i", s->page);
+      faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                      , Cpt_Con_Page, pagepath);
+#endif
+
+}
+#endif
+
+      // Report receiving page.
+      fax_send_rc (s->port, Info_Receiving_Page, s->page);
+      return;
+
+   }
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// fax_kick_gettingT4
+//
+// Operations for T.4 reception in state machine.
+//
+// Inputs:  s           (pointer to state structure)
+//
+// Outputs: **describe**
+//
+// Assumes: ???
+//
+// Returns: nothing
+//
+///////////////////////////////////////////////////////////////////////////////
+
+intern void fax_kick_gettingT4 (State *const s, ReturnCode rc)
+{
+   char character;
+   int nused;
+
+   // Abort?
+   if (rc == Error_Aborted) {
+
+      fax_close_tiff (s);
+      fax_send_rc (s->port, rc, s->page); // @@ Could make it clear not aborted T.30
+      s->state = 0;
+#ifdef WDEBUG
+      s->oldtimeins = -1;
+#endif
+      return;
+
+   }
+
+   // Determine how many bytes are available, so as not to block on BGet
+#ifdef PROFILE
+   HierProf_Start ("OS_Args")
+#endif
+   nused = buffermanager_get_nused (s->bufIDin);
+#ifdef PROFILE
+   HierProf_Stop ()
+#endif
+
+   // Loop over available bytes
+   while (nused--) {
+
+#ifdef PROFILE
+      HierProf_Start ("OS_BGet")
+#endif
+      character = buffermanager_get_byte (s->bufIDin);
+#ifdef PROFILE
+      HierProf_Stop ()
+#endif
+
+      if (s->bits.DLErecd) {              // Previous char was a <DLE>
+
+         if (character == ETX) {          // <DLE><ETX> handling
+
+            // OK, end of page
+#ifdef WDEBUG
+            fax_show_nlinesandpercent (s->t.ImageLength, s->t.BadFaxLines
+                                      , s->t.ImageLength, s->port, TRUE);
+#endif
+            // Not necessary to reset s->bits.DLErecd since entry macro does this
+            // @@ Could disable null polls if no-one else using them @@
+            s->state = Getting_T30;
+
+            // Close TIFF, checking for write error
+            if (fax_close_tiff (s)) {
+
+               fax_send_rc_2int (s->port, Error_TIFF_Write_Error
+                                , s->page == s->startpage ? 0 : s->page - 1
+                                , 2, 0); // @@ Should de-magic-ify
+               faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                               , Cpt_Con_Status, "TIFF write error");
+               remove (s->pathname);
+               s->state = 0;
+#ifdef WDEBUG
+               s->oldtimeins = -1;
+#endif
+               return;
+
+            }
+
+            // Report received page.
+            fax_send_rc (s->port, Info_Received_Page, s->page);
+
+            // Decide on PMR and initiate post-message exchange
+            if (s->t.BadFaxLines * 1000 >= s->rtnbad * s->t.ImageLength
+               || s->t.ConsecutiveBadFaxLines * 1000 >= s->rtnconsecbad * s->t.ImageLength) {
+
+               if (++s->bits.consecRTN == 3) {
+
+                  faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                                  , Cpt_Con_Status, "Waiting for PMR; "
+                                                  "will send DCN");
+                  _swix (FaxSupport_Start, _INR (0, 2), s->port, 3, DCN);
+
+               } else {
+
+                  faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                                  , Cpt_Con_Status, "Waiting for PMR; "
+                                                  "will send RTN");
+                  _swix (FaxSupport_Start, _INR (0, 2), s->port, 3, RTN);
+
+               }
+
+            } else {
+
+               faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                               , Cpt_Con_Status, "Waiting for PMR; "
+                                               "will send MCF");
+               s->bits.consecRTN = 0;
+               _swix (FaxSupport_Start, _INR (0, 2), s->port, 3, MCF);
+
+            }
+
+            faxdebug_info (("Total lines %i, bad lines %i, max consec bad lines %i\n"
+                          , s->t.ImageLength, s->t.BadFaxLines, s->t.ConsecutiveBadFaxLines));
+            return;
+
+         }                                // <DLE><DLE> handling; drops through here
+
+         s->bits.DLErecd = FALSE;
+
+      } else if (character == DLE) {
+
+         s->bits.DLErecd = TRUE;
+         continue;
+
+      }
+
+      // OK, we have a character.
+      // Do something with it, as long as RTC hasn't been received.
+
+      if (!s->bits.RTCrecd) {
+
+         int nbits, eoldata;
+
+         eoldata = tiff_stream_in (character, s->encline, &s->noctets, &s->nzero);
+
+         if (eoldata == 0) {
+
+            // Not found EOL
+
+            // Make running check on scan line time
+            nbits = s->noctets * 8;
+
+            if (nbits > MaxScanLineTime * s->datarate) {
+
+               fax_disconnect_linetoolong (s);
+               return;
+
+            }
+
+         } else {
+
+            // Found EOL
+
+            // Make definitive check on scan line time
+            nbits = (s->decword & 0xff) + s->noctets * 8 - 8 + 8 - (eoldata & 0xff);
+
+            if (nbits > MaxScanLineTime * s->datarate) {
+
+               fax_disconnect_linetoolong (s);
+               return;
+
+            }
+
+            // Found RTC?
+            if (nbits <= 12 + s->bits.is2DMR) { // <= allows 1D EOLs for 2D MR RTCs
+
+               if (s->bits.lastwasEOL) {
+
+                  faxdebug_vinfo (("(found RTC!)\n"));
+                  s->bits.RTCrecd = TRUE;
+
+               } else {
+
+                  faxdebug_vinfo (("(found RTC?)\n"));
+                  s->bits.lastwasEOL = TRUE;
+
+               }
+
+            } else {
+
+               if (s->bits.lastwasEOL) {
+
+                  faxdebug_vinfo (("(no, not RTC!)\n")); //@@ Do something?
+                  s->bits.lastwasEOL = FALSE;
+
+               }
+
+               // Normal scan line.  Ignore it if it's the very first
+               // (because the first EOL marks the start of the message).
+
+               if (s->bits.foundEOL) {
+
+                  int rc, enclen;
+
+                  ++s->t.ImageLength;
+
+#ifdef VDEBUG
+               {
+                  int i;
+
+                  // Dump raw data to file
+                  for (i = 0; i < s->noctets - 1; ++i) {
+                     mgr_bput (s->t4fileout, s->encline[i]);
+                  }
+                  mgr_bput (s->t4fileout, 0x01); // EOL
+
+                  // Dump raw data to file, bis
+                  faxdebug_info (("Original encoded scan line: (%.4x) "
+                                 , s->decword));
+                  for (i = 0; i <= s->noctets - 1; ++i) {
+                     faxdebug_info (("%.2x ", s->encline[i]));
+                  }
+                  faxdebug_info (("(%.4x)\n", eoldata & 0xffff));
+               }
+#endif
+
+#if 0
+                  // Simulate corruption
+                  if ((float) rand () / RAND_MAX < 0.20F)
+                     s->encline[rand() * 20 / RAND_MAX] = 0xff;
+#endif
+
+#ifdef VDEBUG
+                  if (s->bits.is2DMR) {
+                     short int *decindexraw = s->refline;
+                     int bitstogo = s->t.ImageWidth;
+                     faxdebug_vinfo (("Reference scan line:"));
+                     do {
+                        faxdebug_vinfo ((" %hi", *decindexraw));
+                        if (*decindexraw <= 0 && decindexraw != s->refline) {
+                           faxdebug_error ("\nFATAL ERROR: ZERO/NEGATIVE RUN IN LINE!\n");
+                           exit (1);
+                        }
+                        bitstogo -= *decindexraw++;
+                     } while (bitstogo > 0);
+                     faxdebug_vinfo (("\n"));
+                     if (bitstogo != 0) {
+                        faxdebug_error ("FATAL ERROR: RAW LINE NOT RIGHT LENGTH!");
+                        exit (1);
+                     }
+                     if (*decindexraw != 0)
+                        faxdebug_error ("\nFATAL ERROR: NO GUARD IN LINE!\n");
+                  }
+#endif
+
+                  // Decode
+                  if (s->bits.is2DMR) {
+
+                     rc = tiff_decode_2dmr (s->encline, s->currline
+                                           , s->refline, s->bits.hunting
+                                           , s->decword, s->t.ImageWidth);
+                     s->bits.hunting = rc != 0;
+
+                  } else {
+
+                     rc = tiff_decode_1dmh (s->encline, s->currline
+                                           , s->decword, s->t.ImageWidth);
+
+                  }
+
+                  faxdebug_vinfo (("Decode return code: %i\n", rc));
+
+                  // Decode failed?
+                  if (rc != 0) {
+
+                     // Take copy of current line pointer,
+                     // and repoint it at reference line to regenerate the bad line
+                     s->origcurrline = s->currline;
+                     s->currline = s->refline;
+
+                     // Keep track of bad lines
+                     ++s->t.BadFaxLines;
+                     if (++s->consecbadlines > s->t.ConsecutiveBadFaxLines)
+                        s->t.ConsecutiveBadFaxLines = s->consecbadlines;
+                     faxdebug_error ("Decode ERROR!\n");
+                     faxdebug_info (("%i\n", rc));
+
+                  } else {
+
+#ifdef VDEBUG
+                     short int *decindexraw = s->currline;
+                     int bitstogo = s->t.ImageWidth;
+                     faxdebug_vinfo (("Raw scan line:"));
+                     do {
+                        faxdebug_vinfo ((" %hi", *decindexraw));
+                        if (*decindexraw <= 0 && decindexraw != s->currline) {
+                           faxdebug_error ("\nFATAL ERROR: ZERO/NEGATIVE RUN IN LINE!\n");
+                           exit (1);
+                        }
+                        bitstogo -= *decindexraw++;
+                     } while (bitstogo > 0);
+                     faxdebug_vinfo (("\n"));
+                     if (bitstogo != 0) {
+                        faxdebug_error ("FATAL ERROR: RAW LINE NOT RIGHT LENGTH!");
+                        exit (1);
+                     }
+#endif
+                     // That's the end of any run of bad lines
+                     s->consecbadlines = 0;
+                  }
+
+                  // Encode and save
+///ccitt                        enclen = tiff_encode_ccittmh (s->currline, s->encline
+///ccitt                                                     , s->t.ImageWidth);
+                  enclen = tiff_encode_2dmmr (s->currline, s->encline
+                                             , s->refline, &s->encword
+                                             , s->t.ImageWidth);
+                  fwrite (s->encline, 1, enclen, s->tifffile);
+                  s->t.StripByteCounts += enclen;
+
+                  // Was the current line redirected to the reference line?
+                  if (s->origcurrline) {
+
+                     // Restore pointer to current line
+                     s->currline = s->origcurrline;
+                     s->origcurrline = NULL;
+
+                  } else {
+
+                     // Swap reference and current line pointers
+                     short int *l;
+                     l = s->currline;
+                     s->currline = s->refline;
+                     s->refline = l;
+
+                  }
+
+#ifdef VDEBUG
+               {
+                  int i;
+                  byte octet;
+
+                  faxdebug_vinfo (("Reencoded line:"));
+                  for (i = 0; i < enclen; ++i) {
+                     octet = s->encline[i];
+                     faxdebug_vinfo ((" %.2x", octet));
+                  }
+                  faxdebug_vinfo (("(%.4x)\n", s->encword & 0xffff));
+               }
+#endif
+
+#ifdef WDEBUG
+                  if (s->t.ImageLength % 10 == 0)
+                     fax_show_nlinesandpercent (s->t.ImageLength, s->t.BadFaxLines
+                                               , s->t.ImageLength, s->port, FALSE);
+#endif
+
+               }
+
+               s->bits.foundEOL = TRUE;
+
+            }
+
+            // Reinitialise for next line
+            s->noctets = 0;
+            s->decword = eoldata & 0xffff;
+
+         }
+
+      }
+
+   }
+
+   return;                                // Done for now (need to collect more chars)
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// fax_kick_sendingT30
+//
+// Operations for T.30 transmission in state machine.
+//
+// Inputs:  s           (pointer to state structure)
+//          rc          (return code)
+//
+// Outputs: **describe**
+//
+// Assumes: ???
+//
+// Returns: nothing
+//
+///////////////////////////////////////////////////////////////////////////////
+
+intern void fax_kick_sendingT30 (State *const s, ReturnCode rc)
+{
+   int bitfield, wasRTN;
+
+   // Last successfully sent page counter is potentially modified
+   // on normal termination and T.4 transmission.
+   if (rc == Info_Normal_Termination // Occurs iff EOP followed by MCF or RTP
+      || rc == Info_Send_T4) {       // Occurs when about to send page
+
+      // Decide whether to modify last successfully sent page counter.
+      _swix (FaxSupport_GetInfo, _INR (0, 1) | _OUT (2), s->port, 5
+            , &bitfield);
+      wasRTN = bitfield & 0x01;
+      if (s->fold.handle != 0              // If not just starting transmission
+         && s->fold.handle != s->f.handle  // and new page
+         && !wasRTN) {                     // and not about to resend previous pagelet
+
+         // OK, we need to modify last successfully sent page counter.
+         // There are two cases:
+         // Case 1: if starting the second page in a transmission, last successfully
+         //         sent page is startpage
+         // Case 2: otherwise last successfully sent page is last successfully + 1
+         s->page = s->page                 // s->page is zero if haven't sent a full page yet
+                   ? s->page + 1           // Case 2
+                   : s->startpage;         // Case 1
+
+         if (s->flags & FAXTX_FLAGS_DELETEAFTERSEND) {
+
+            // Construct pathname from leafname and page number.
+            sprintf (strrchr (s->pathname, '.') + 1 // There is always a '.' since we insert one at init
+                    , "%i"
+                    , s->page);
+            faxdebug_vinfo (("OOOOClosing %i (delaftersend)\n", s->fold.handle));
+            mgr_close (s->fold.handle); // Last page succ sent is still open here; close it before remove
+            s->fold.handle = 0;
+            remove (s->pathname);
+
+         }
+
+      }
+
+   }
+
+   // Codes below 0x200 are external.
+   if (rc < 0x200) {
+
+      fax_send_rc (s->port, rc, s->page);
+
+      // Codes below 0x100 are terminal.
+      if (rc < 0x100) {
+
+         // Close any open input TIFF file
+         if (s->fold.handle) {
+            faxdebug_vinfo (("OOOOClosing %i (end old)\n", s->fold.handle));
+            mgr_close (s->fold.handle);
+         }
+         if (rc != Info_Normal_Termination && s->f.handle && s->f.handle != s->fold.handle) {
+            faxdebug_vinfo (("OOOOClosing %i (end new)\n", s->f.handle));
+            mgr_close (s->f.handle);
+         }
+         s->state = 0;
+#ifdef WDEBUG
+         s->oldtimeins = -1;
+#endif
+
+      }
+
+      return;
+
+   }
+
+   // Got NSF, CSI or DIS, or sending TSI?  Then handle DIS block info.
+   if (rc == Info_Got_NSF || rc == Info_Got_CSI || rc == Info_Got_DIS
+      || rc == Info_Sending_TSI) {
+
+      fax_handle_dis (s);
+      return;
+
+   }
+
+   // Sending DCS or TCF, or waiting for PreMC, or got CFR or FTT?  Handle DCS info.
+   if (rc == Info_Sending_DCS || rc == Info_Sending_TCF
+      || rc == Info_Waiting_Pre || rc == Info_Got_CFR || rc == Info_Got_FTT) {
+
+      fax_handle_dis_dcs (s);
+      return;
+
+   }
+
+   // Send T.4?  Ooooh!
+   if (rc == Info_Send_T4) {
+
+      uint mask;
+
+      // Enable null polls.
+      event_get_mask (&mask);
+      mask &= ~Wimp_Poll_NullMask;
+      event_set_mask (mask);
+
+      // Kick into T.4 action!
+      s->state = Sending_T4;
+      fax_handle_dis_dcs (s);
+
+      // Get phase D info (phase B info if just starting)
+      _swix (FaxSupport_GetInfo, _INR (0, 1) | _OUTR (2, 7), s->port, 5
+            , &bitfield, &s->f.lengthin, &s->f.resnout
+            , &s->f.widthout, &s->f.lengthout, &s->f.chopout);
+
+      // Decode the info in the bitfields, set s->f.widthin and initialise s->f.resnout
+      s->f.minscan = (bitfield & 0xff00) >> 8;
+      s->bits.is2DMR = (bitfield & 0x02) >> 1;
+      wasRTN = bitfield & 0x01;
+      s->f.widthin = s->t.ImageWidth;
+      s->kdata = s->f.resnout;
+
+      PDebug_Printf ("Have received %i for minscan; %i for wasRTN; %i for is2DMR; "
+                     "%.8x for bitfield; %i for lengthin; %.2x for resnout; "
+                     "%i for widthout; %i for lengthout; %i for chopout; "
+                     "ImageLength is %i.\n"
+                     , s->f.minscan, wasRTN, s->bits.is2DMR
+                     , bitfield, s->f.lengthin, s->f.resnout
+                     , s->f.widthout, s->f.lengthout, s->f.chopout
+                     , s->t.ImageLength);
+
+      PDebug_Printf ("So scaling from %i input lines to %i output lines, "
+                     "chopping after %i input lines.\n"
+                     , s->f.lengthin, s->f.lengthout, s->f.chopout);
+
+      // Post-MR was RTN?
+      if (wasRTN) {
+
+         // Yes...
+         ++s->bits.consecRTN;
+
+         // Close new file, if different (and non-zero!) handle
+         if (s->f.handle && s->f.handle != s->fold.handle) {
+            faxdebug_vinfo (("OOOOClosing %i (mid new)\n", s->f.handle));
+            mgr_close (s->f.handle);
+         }
+
+         // Revert to old file
+         s->t = s->told; //@@ should arrange for only s->f to have preservenda information
+         s->f = s->fold;
+         tifflo_scale_line (s->oldrefline, s->f.widthin, s->refline, s->f.widthin);
+         mgr_set_ptr (s->f.handle, s->f.ptr);
+
+      } else {
+
+         // We've broken any run of RTNs
+         s->bits.consecRTN = 0;
+
+         // Close old file, if different (and non-zero!) handle
+         if (s->fold.handle && s->f.handle != s->fold.handle) {
+            faxdebug_vinfo (("OOOOClosing %i (mid old)\n", s->fold.handle));
+            mgr_close (s->fold.handle);
+         }
+
+         // If starting new page, reset this and that
+         if (s->rc != Status_Chopped) {
+
+            s->f.decword = 0;
+            s->f.decinuse = 24;
+            s->f.nlines = 0;
+            s->f.scaleleftover = 0;
+            s->f.scalecount = -1;
+
+            // Initialise reference line for 2D MMR decode
+            s->refline[0] = s->f.widthin;
+            s->refline[1] = 0; // 2D MR EOL guard
+
+         }
+
+         // Copy current state into old
+         mgr_get_ptr (s->f.handle, &s->f.ptr);
+         tifflo_scale_line (s->refline, s->f.widthin, s->oldrefline, s->f.widthin);
+         s->told = s->t;
+         s->fold = s->f;
+
+      }
+
+      s->ioctet = -1;
+      s->encword = 0;
+      s->rc = 0;
+
+#ifdef WDEBUG
+{
+      static char pagepath[] = "Mem:$.1234567890T";
+      sprintf (pagepath, "%i", s->page ? s ->page + 1 : s->startpage);
+      faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                      , Cpt_Con_Page, pagepath);
+}
+#endif
+
+      // Report sending page.
+      fax_send_rc (s->port, Info_Sending_Page, s->page);
+      return;
+   }
+
+   return;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// fax_kick_sendingT4
+//
+// Operations for T.4 transmission in state machine.
+//
+// Inputs:  s           (pointer to state structure)
+//
+// Outputs: **describe**
+//
+// Assumes: ???
+//
+// Returns: nothing
+//
+///////////////////////////////////////////////////////////////////////////////
+
+intern void fax_kick_sendingT4 (State *const s, ReturnCode rc)
+{
+   int i, octet, nfree, encwordpos;
+   byte block[257]; // Should be at least big enough for squeeze, EOL and <DLE><ETX> (10 bytes)
+                    // Should preferably be 1 more than nice block size
+                    // (so that get that block size unless last char is a <DLE>)
+   int iblock;
+#ifdef VDEBUG
+   static int quicktimetest;
+#endif
+   clock_t starttime, endtime;
+
+   // Abort?
+   if (rc == Error_Aborted) {
+
+      mgr_close (s->f.handle);
+      fax_send_rc (s->port, rc, s->page); // @@ Could make it clear not aborted T.30
+      s->state = 0;
+#ifdef WDEBUG
+      s->oldtimeins = -1;
+#endif
+      return;
+
+   }
+
+#ifdef PROFILE
+   HierProf_Start ("clock");
+#endif
+   starttime = clock ();
+#ifdef PROFILE
+   HierProf_Stop ();
+#endif
+#ifdef TIMING
+   usstart (TIMINGSENDINGT4);
+#endif
+
+   faxdebug_vinfo (("Entering Sending_T4: s->rc = %i, s->f.scalecount = %i, "
+                   "s->ioctet = %i\n", s->rc, s->f.scalecount, s->ioctet));
+
+   // Loop around until a decode error occurs
+   while (s->rc == 0) {
+
+      // Decode next line if previous input line done
+      if (s->f.scalecount == -1) {
+
+//               faxdebug_vinfo (("han %i, IW %i, dword %.8x, dinuse %i\n"
+//                               ,s->f.handle, s->t.ImageWidth
+//                               , s->f.decword, s->f.decinuse));
+//ccitt               s->rc = tiff_decode_ccittmh (s->f.handle, s->rawline, s->t.ImageWidth
+//ccitt                                           , &s->f.decword, &s->f.decinuse);
+//               faxdebug_vinfo (("Entering 2D MMR decoder with decword %.8x and decinuse %i\n"
+//                              , s->f.decword, s->f.decinuse));
+         s->rc = tiff_decode_2dmmr (s->f.handle, s->currline, s->refline
+                                   , s->f.widthin, &s->f.decword, &s->f.decinuse);
+//               faxdebug_vinfo (("Exiting 2D MMR decoder with decword %.8x and decinuse %i "
+//                              "and file ptr at %.8x\n"
+//                              , s->f.decword, s->f.decinuse, (mgr_get_ptr (s->f.handle, &dild), dild)));
+
+      }
+
+            // On decode error, assume end of page and proceed to RTC
+            // @@ Do the EOL check when 2D MMR in place
+//@@ccittdothis
+      if (s->rc) {
+
+         faxdebug_vinfo (("2D MMR decode error %i; aborting\n", s->rc));
+         break;
+
+      }
+
+      // Set up vertical scaling if previous input line done
+      if (s->f.scalecount == -1) {
+
+         ++s->f.nlines;
+
+         s->f.scalecount = 0; // Mark as input line not done
+         s->f.scaleleftover += s->f.lengthout;
+
+#ifdef WDEBUG
+         if (s->f.nlines % 10 == 0)
+            fax_show_nlinesandpercent (s->f.nlines, s->f.nlines, s->t.ImageLength, s->port, FALSE);
+#endif
+
+//faxdebug_vinfo (("Line %i has repeat count %i\n", s->f.nlines, s->f.scaleleftover / s->f.lengthin));
+
+      }
+
+      // Loop for vertical scaling
+      for (; s->f.scalecount < s->f.scaleleftover / s->f.lengthin; ++s->f.scalecount) {
+
+         // (Re)encode raw line if previous output line done
+         if (s->ioctet == -1) {
+
+#ifdef VVDEBUG
+         {
+            short int *decindexraw = s->currline;
+            int bitstogo = s->f.widthin;
+
+            faxdebug_vinfo (("2D MMR raw scan line (%i of %i):"
+                            , s->f.nlines, s->t.ImageLength));
+            do {
+               faxdebug_vinfo ((" %hi", *decindexraw));
+               if (*decindexraw <= 0 && decindexraw != s->currline) {
+                  faxdebug_error ("\nFATAL ERROR: ZERO/NEGATIVE RUN IN LINE!\n");
+                  exit (1);
+               }
+               bitstogo -= *decindexraw++;
+            } while (bitstogo > 0);
+            faxdebug_vinfo (("\n"));
+            if (bitstogo != 0) {
+               faxdebug_error ("FATAL ERROR: RAW LINE NOT RIGHT LENGTH!");
+               exit (1);
+            }
+         }
+#endif
+
+#ifdef TIMING
+            usstart (TIMINGSCALING);
+#endif
+            // Scale widths (inefficient if more than one identical line due to vscale,
+            // but we don't expect that to happen too often...)
+            tifflo_scale_line (s->currline, s->f.widthin, s->scurrline, s->f.widthout);
+#ifdef TIMING
+            usstop (TIMINGSCALING);
+#endif
+
+#ifdef VVDEBUG
+         {
+            short int *decindexraw = s->scurrline;
+            int bitstogo = s->f.widthout;
+
+            faxdebug_vinfo (("2D MMR scaled raw scan line (%i of %i):"
+                            , s->f.nlines, s->t.ImageLength));
+            do {
+               faxdebug_vinfo ((" %hi", *decindexraw));
+               if (*decindexraw <= 0 && decindexraw != s->scurrline) {
+                  faxdebug_error ("\nFATAL ERROR: ZERO/NEGATIVE RUN IN LINE!\n");
+                  exit (1);
+               }
+               bitstogo -= *decindexraw++;
+            } while (bitstogo > 0);
+            faxdebug_vinfo (("\n"));
+            if (bitstogo != 0) {
+               faxdebug_error ("FATAL ERROR: RAW LINE NOT RIGHT LENGTH!");
+               exit (1);
+            }
+         }
+#endif
+
+            // OK, encode to chosen output coding
+            s->ioctet = 0; // Mark as output line not done
+            s->noctets = s->bits.is2DMR
+                         ? tiff_encode_2dmr (s->scurrline, s->srefline, s->encline
+                                          , &s->encword, s->f.minscan * s->datarate / 1000
+                                          , s->f.widthout, &s->kdata)
+                         : tiff_encode_1dmh (s->scurrline, s->encline
+                                          , &s->encword, s->f.minscan * s->datarate / 1000
+                                          , s->f.widthout);
+
+            // Swap reference and current scaled line pointers
+         {
+            short int *l;
+            l = s->scurrline;
+            s->scurrline = s->srefline;
+            s->srefline = l;
+         }
+
+#ifdef VDEBUG
+            nfree = buffermanager_get_nfree (s->bufIDout);
+            faxdebug_vinfo (("Delta is %i cs for nfree %i and noctets %i\n"
+                            , clock () - quicktimetest, nfree, s->noctets));
+            quicktimetest = clock ();
+#endif
+
+         }
+
+#ifdef TIMING
+         usstart (TIMINGDUMPINGTOMODEM);
+#endif
+
+         // Dump as many octets as possible into serial output file
+#ifdef PROFILE
+         HierProf_Start ("OS_Args")
+#endif
+         nfree = buffermanager_get_nfree (s->bufIDout);
+#ifdef PROFILE
+         HierProf_Stop ()
+#endif
+
+         faxdebug_vinfo (("Encoded to"));
+         iblock = 0;
+
+         while (s->ioctet < s->noctets && iblock < nfree - 1) {
+                                                      // (- 1 protects against DLE escape overflow)
+
+            faxdebug_vinfo ((" %.2x", s->encline[s->ioctet]));
+            octet = tifflo_reverse (s->encline[s->ioctet++]); // Reverse for modem consumption
+
+            block[iblock++] = octet;                  // Insert in block
+
+            if (octet == DLE)                         // DLE escaping?
+               block[iblock++] = octet;               // Reinsert in block
+
+            if (iblock >= sizeof block - 1) {         // Flush block if block nearly full or full
+                                                      // (- 1 protects against DLE escape overflow)
+
+#ifdef PROFILE
+               HierProf_Start ("OS_GBPB_flush")
+#endif
+               buffermanager_put_block (s->bufIDout, block, iblock);
+#ifdef PROFILE
+               HierProf_Stop ()
+#endif
+               nfree -= iblock;
+               iblock = 0;
+
+            }
+
+         }
+
+         if (iblock) {                                // Flush leftover in block
+
+#ifdef PROFILE
+            HierProf_Start ("OS_GBPB_squeeze")
+#endif
+            buffermanager_put_block (s->bufIDout, block, iblock);
+#ifdef PROFILE
+            HierProf_Stop ()
+#endif
+
+         }
+
+/* oldscheme
+         for (; nfree && s->ioctet < s->noctets; ++s->ioctet, --nfree) {
+
+//                  usclock_t st = usclock ();
+            octet = reverse[s->encline[s->ioctet]]; // Reverse for modem consumption
+            mgr_bput (s->fileout, octet);
+//                  if (nfree == 7199)
+//                     faxdebug_vinfo (("BPut: %u us\n", usclock () - st));
+            faxdebug_vinfo ((" %.2x", s->encline[s->ioctet]));
+
+            if (octet == DLE) {                     // DLE escaping
+
+               HierProf_Start ("OS_Args_DLE")
+               while ((_swix (OS_Args, _INR (0, 1) | _OUT (2), 2, s->fileout, &nfree)
+                      , nfree) == 0)
+                  ;                                 // Make sure there's space for the <DLE>
+               HierProf_Stop ()
+               mgr_bput (s->fileout, octet);
+
+            }
+
+         }
+*/
+
+         faxdebug_vinfo ((" [%.4x]\n", s->encword & 0xffff));
+#ifdef TIMING
+         usstop (TIMINGDUMPINGTOMODEM);
+#endif
+
+         // Break out if not all octets dumped (because buffer full)
+         if (s->ioctet < s->noctets) {
+#ifdef TIMING
+            usstop (TIMINGSENDINGT4);
+#endif
+            return;
+         }
+
+/*
+         // The NUL of life
+         if (nfree > SERIALBUFFERSIZE - 500) {
+
+            if (s->encword & 0xff) {
+               octet = reverse[(s->encword & 0xff00) >> 8];
+               mgr_bput (s->fileout, octet);
+               if (octet == DLE)
+                  mgr_bput (s->fileout, octet);
+            }
+            s->encword = 0;
+            mgr_bput (s->fileout, NUL);
+
+         }
+*/
+
+         // Break out if hit timeslice (be more generous if buffer more than half-empty)
+#ifdef PROFILE
+         HierProf_Start ("clock");
+#endif
+         endtime = clock ();
+#ifdef PROFILE
+         HierProf_Stop ();
+#endif
+         if (endtime - starttime >= (nfree > SERIALBUFFERSIZE / 2
+                                    ? BIGTIMESLICE : TIMESLICE)) {
+#ifdef TIMING
+            usstop (TIMINGSENDINGT4);
+#endif
+            return;
+         }
+
+         // OK, back for more...
+         s->ioctet = -1; // Mark as output line done
+
+      }
+
+      s->f.scaleleftover %= s->f.lengthin;
+      s->f.scalecount = -1; // Mark as input line done
+
+      // Swap reference and current line pointers
+   {
+      short int *l;
+      l = s->currline;
+      s->currline = s->refline;
+      s->refline = l;
+   }
+
+//faxdebug_vinfo (("and leftover is %i\n", s->f.scaleleftover));
+
+      // Have we hit a chop?
+      if (s->f.chopout != 0 && s->f.nlines % s->f.chopout == 0
+         && s->t.ImageLength - s->f.nlines >= PAGELENTOL * s->f.chopout / 1000) {
+
+         faxdebug_vinfo (("Hit pagelet limit; chopping\n"));
+         s->rc = Status_Chopped;
+         break;
+
+      }
+
+   }
+
+   // Wait until enough space for RTC and <DLE><ETX>
+   // (6 * 13 bits + one squeeze byte + 2 end-of-stream bytes);
+   // be paranoid and assume <DLE> escaping for all octets
+#ifdef PROFILE
+   HierProf_Start ("OS_Args_RTC")
+#endif
+   nfree = buffermanager_get_nfree (s->bufIDout);
+#ifdef PROFILE
+   HierProf_Stop ()
+#endif
+   if (nfree < 13 * 2) {
+#ifdef TIMING
+      usstop (TIMINGSENDINGT4);
+#endif
+      return;
+   }
+
+#ifdef PROFILE
+   HierProf_Start ("RTC")
+#endif
+#ifdef TIMING
+   usstart (TIMINGRTC);
+#endif
+#ifdef WDEBUG
+   fax_show_nlinesandpercent (s->f.nlines, s->f.nlines, s->t.ImageLength, s->port, TRUE);
+#endif
+   // Recreate encword
+   encwordpos = s->encword & 0xff; // encwordpos contains number of active bits in encword
+   s->encword &= 0xff00;
+   s->encword <<= 16;              // encword now left-justified
+
+   // Insert RTC
+   for (i = 0; i < 6; ++i) {
+
+      s->encword |= 1 << (20 - encwordpos);
+      s->encword |= s->bits.is2DMR << (19 - encwordpos);
+      encwordpos += 12;
+      encwordpos += s->bits.is2DMR;
+      while (encwordpos > 7) {
+
+         octet = tifflo_reverse ((s->encword >> 24) & 0xff);
+         buffermanager_put_byte (s->bufIDout, octet);
+         if (octet == DLE)
+            buffermanager_put_byte (s->bufIDout, octet);
+         s->encword <<= 8;
+         encwordpos -= 8;
+
+      }
+
+   }
+
+   if (encwordpos) {
+
+      octet = tifflo_reverse ((s->encword >> 24) & 0xff);
+      buffermanager_put_byte (s->bufIDout, octet);
+      if (octet == DLE)
+         buffermanager_put_byte (s->bufIDout, octet);
+//            faxdebug_vinfo (("Squeeze byte %.2x\n", (s->encword >> 24) & 0xff));
+
+   }
+
+   // Send unofficial info report
+   fax_send_rc (s->port, Info_Sent_Page, s->page);
+   faxdebug_displayfield_set_value (DisplayField_Centred, s->port
+                                   , Cpt_Con_Status, "Sent T.4");
+
+   // Put in <DLE><ETX> end-of-stream terminator
+   buffermanager_put_byte (s->bufIDout, DLE);
+   buffermanager_put_byte (s->bufIDout, ETX);
+
+#ifdef PROFILE
+   HierProf_Stop ()
+#endif
+#ifdef TIMING
+   usstop (TIMINGRTC);
+#endif
+   // Open next page, if not chopped
+   if (s->rc != Status_Chopped && fax_open_tiff (s)) {
+
+      s->state = 0;
+#ifdef TIMING
+      usstop (TIMINGSENDINGT4);
+#endif
+      return;
+
+   }
+
+   // Kick phase D off
+   _swix (FaxSupport_Start, _INR (0, 5), s->port, 5
+         , s->t.ImageWidth, s->t.ImageLength, s->f.resnin, s->bits.consecRTN);
+
+   s->state = Sending_T30;
+#ifdef TIMING
+   usstop (TIMINGSENDINGT4);
+#endif
+   return;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// fax_kick_text2tiff
+//
+// Kicks the text to TIFF converter.
+//
+// Inputs:  nothing
+//
+// Outputs: **describe**
+//
+// Assumes: ???
+//
+// Returns: nothing
+//
+///////////////////////////////////////////////////////////////////////////////
+
+intern void fax_kick_text2tiff (void)
+{
+   int rc;
+   clock_t t0 = clock ();
+
+   // Convert until timeslice hit
+   while ((rc = text2tiff_convert_line ()) == 0) {
+      if (clock () - t0 > T2TTIMESLICE)
+         return;
+   }
+
+   // Report back and go quiescent
+   fax_send_t2trc (rc);
+   text2tiffactive = FALSE;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// fax_kick_tiffconv
+//
+// Kicks the TIFF converter.
+//
+// Inputs:  nothing
+//
+// Outputs: **describe**
+//
+// Assumes: ???
+//
+// Returns: nothing
+//
+///////////////////////////////////////////////////////////////////////////////
+
+intern void fax_kick_tiffconv (void)
+{
+   int rc;
+   clock_t t0 = clock ();
+
+   // Convert until timeslice hit
+   while ((rc = tiffconv_convert_line (&tcs)) == 0) {
+      if (clock () - t0 > T2TTIMESLICE)
+         return;
+   }
+
+   // Shut down in an orderly fashion...
+   mgr_close (tcs.handlein);
+   rc = tiff_close_write (&tcs.tout, tcs.streamout, tcs.tiffifdptr, tcs.encword);
+
+   // Report back and go quiescent
+   if (rc)
+      fax_send_tcrc (TIFFConvError_Write_Error, TIFFConvSubError_Close_Write_Failed, 0);
+   else
+      fax_send_tcrc (TIFFConvError_None, 0, 0);
+   tiffconvactive = FALSE;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// fax_kick_statemachine
+//
+// Kicks a port's state machine.
+//
+// Inputs:  s           (pointer to state structure)
+//          rc          (return code causing kick)
+//
+// Outputs: **describe**
+//
+// Assumes: ???
+//
+// Returns: nothing
+//
+///////////////////////////////////////////////////////////////////////////////
+
+intern void fax_kick_statemachine (State *const s, ReturnCode rc)
+{
+   switch (s->state) {
+
+      case Getting_T30:
+
+         // When getting T.30, we're driven by poll word, not null poll.
+         if (rc != Info_Null_Poll)
+            fax_kick_gettingT30 (s, rc);
+         break;
+
+      case Getting_T4:
+
+         fax_kick_gettingT4 (s, rc);
+         break;
+
+      case Sending_T30:
+
+         // When sending T.30, we're driven by poll word, not null poll.
+         if (rc != Info_Null_Poll)
+            fax_kick_sendingT30 (s, rc);
+         break;
+
+      case Sending_T4:
+
+         fax_kick_sendingT4 (s, rc);
+         break;
+
+   }
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// fax_nullpoll_handler
+//
+// Handler for NullPoll Wimp event.  All the ports are given a kick.
+//
+// Inputs:  as per WimpEventHandler ()
+//
+// Outputs: as per WimpEventHandler ()
+//
+// Assumes: nothing
+//
+// Returns: as per WimpEventHandler ()
+//
+///////////////////////////////////////////////////////////////////////////////
+
+intern int fax_nullpoll_handler (int event_code, WimpPollBlock *event
+                                , IdBlock *id_block, void *handle)
+{
+   int port;
+
+   // Kick text to TIFF conversion if active
+   if (text2tiffactive)
+      fax_kick_text2tiff ();
+
+   // Kick TIFF conversion if active
+   if (tiffconvactive)
+      fax_kick_tiffconv ();
+
+   // Run through all the ports giving them a kick
+   for (port = 0; port < NPORTS; ++port) {
+
+      fax_kick_statemachine (&state[port], Info_Null_Poll);
+
+#ifdef WDEBUG
+      // Update the time, if active
+      if (state[port].oldtimeins != -1) {
+
+         int timeins;
+
+         timeins = (clock () - state[port].startstart) / CLOCKS_PER_SEC;
+         if (timeins != state[port].oldtimeins) {
+
+            char timestr[sizeof "00:00"];
+            sprintf (timestr, "%.2i:%.2i", (timeins / 60) % 60, timeins % 60);
+            faxdebug_displayfield_set_value (DisplayField_Centred, port
+                                            , Cpt_Con_Time, timestr);
+            state[port].oldtimeins = timeins;
+         }
+      }
+#endif
+
+   }
+   return CLAIM;
+
+   USE (handle);
+   USE (event);
+   USE (event_code);
+   USE (id_block);
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// fax_pollword_handler
+//
+// Handler for PollWordNonZero Wimp event.  The port(s) with active info
+// is identified, acknowledged, and kicked.
+//
+// Inputs:  as per WimpEventHandler ()
+//
+// Outputs: as per WimpEventHandler ()
+//
+// Assumes: "Version" token present in messages file.
+//
+// Returns: as per WimpEventHandler ()
+//
+///////////////////////////////////////////////////////////////////////////////
+
+intern int fax_pollword_handler (int event_code, WimpPollBlock *event
+                                , IdBlock *id_block, void *handle)
+{
+   ReturnCode rc;
+   int port;
+
+   for (port = 0; port < NPORTS; ++port) {
+
+      // Note it does not matter here if the compiler caches *ppollword for
+      // the duration of the for loop and so we miss an activation occurring
+      // during it: we'll just be recalled on the next event_poll.
+
+      if (* (int *) ppollword & (1 << port)) {
+
+         rc = * ((ReturnCode *) ppollword + port + 1);
+
+#ifdef WDEBUG
+      {
+         static char errmsg[sizeof "UNKNOWN (0x12345678)"];
+         int i;
+
+         for (i = 0; i < sizeof returncodes / sizeof returncodes[0]; ++i) {
+
+            if (returncodes[i].code == rc) {
+
+               faxdebug_displayfield_set_value (DisplayField_Centred, port
+                                               , Cpt_Con_Status, returncodes[i].message);
+               break;
+
+            }
+
+         }
+
+         if (i == sizeof returncodes / sizeof returncodes[0]) {
+
+            sprintf (errmsg, "UNKNOWN (0x%.8x)", rc);
+            faxdebug_displayfield_set_value (DisplayField_Centred, port
+                                            , Cpt_Con_Status, errmsg);
+
+         }
+      }
+#endif
+
+         _swix (FaxSupport_Acknowledge, _INR (0, 1), port, rc);
+         fax_kick_statemachine (&state[port], rc);
+
+      }
+
+   }
+
+   return CLAIM;
+
+   USE (handle);
+   USE (event);
+   USE (event_code);
+   USE (id_block);
+}
+
+
+#ifdef WDEBUG
+///////////////////////////////////////////////////////////////////////////////
+//
+// fax_proginfo_show
+//
+// Handler for ProgInfo_AboutToBeShown Toolbox event.  The version string to
+// be displayed is obtained from the messages file.
+//
+// Inputs:  as per ToolboxEventHandler ()
+//
+// Outputs: as per ToolboxEventHandler ()
+//
+// Assumes: "Version" token present in messages file.
+//
+// Returns: as per ToolboxEventHandler ()
+//
+///////////////////////////////////////////////////////////////////////////////
+
+intern int fax_proginfo_show (int event_code, ToolboxEvent *event
+                             , IdBlock *id_block, void  *handle)
+{
+   proginfo_set_version (0, id_block->self_id, mgr_messagetrans_lookup_token ("Version", &messages));
+
+   return CLAIM;
+
+   USE (handle);
+   USE (event);
+   USE (event_code);
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// fax_iconbar_show
+//
+// Handler for Iconbar_Clicked Toolbox event.  If Select is clicked, the window
+// for the local port is displayed; if Adjust, the window for the remote port.
+//
+// Inputs:  as per ToolboxEventHandler ()
+//
+// Outputs: as per ToolboxEventHandler ()
+//
+// Assumes: nothing
+//
+// Returns: as per ToolboxEventHandler ()
+//
+///////////////////////////////////////////////////////////////////////////////
+
+intern int fax_iconbar_show (int event_code, ToolboxEvent *event
+                            , IdBlock *id_block, void  *handle)
+{
+   if (((IconbarClickedEvent *) event)->hdr.flags & Iconbar_Clicked_Select)
+      faxdebug_toolbox_show_object (0, 0, Toolbox_ShowObject_Default, NULL
+                                   , id_block->self_id, id_block->self_component);
+   if (((IconbarClickedEvent *) event)->hdr.flags & Iconbar_Clicked_Adjust)
+      faxdebug_toolbox_show_object (0, 1, Toolbox_ShowObject_Default, NULL
+                                   , id_block->self_id, id_block->self_component);
+
+   return CLAIM;
+
+   USE (handle);
+   USE (event_code);
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// fax_quit_event
+//
+// Handler for Quit_Quit Toolbox event.  Exits!
+//
+// Inputs:  as per ToolboxEventHandler ()
+//
+// Outputs: as per ToolboxEventHandler ()
+//
+// Assumes: nothing
+//
+// Returns: as per ToolboxEventHandler ()
+//
+///////////////////////////////////////////////////////////////////////////////
+
+intern int fax_quit_event (int event_code, ToolboxEvent *event
+                          , IdBlock *id_block, void *handle)
+
+{
+   exit (EXIT_SUCCESS);
+
+   return CLAIM;
+
+   USE (event_code);
+   USE (event);
+   USE (id_block);
+   USE (handle);
+}
+#endif
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// fax_initialise
+//
+// Initialisation of the Toolbox and program static variables.
+// exit (EXIT_FAILURE) is called on any failure.
+//
+// Inputs:  nothing
+//
+// Outputs: nothing
+//
+// Assumes: nothing
+//
+// Returns: nothing
+//
+///////////////////////////////////////////////////////////////////////////////
+
+intern void fax_initialise (void)
+{
+
+   static const int wimpmessages [] = {
+      Wimp_MFaxTx,
+      Wimp_MFaxRx,
+      Wimp_MFaxAbort,
+      Wimp_MText2TIFFit,
+      Wimp_MTIFFConvertit,
+      0
+   };
+
+#ifdef WDEBUG
+   static const int toolboxevents [] = {
+      Quit_Quit,
+      ProgInfo_AboutToBeShown,
+      Iconbar_Clicked,
+      0
+   };
+#endif
+
+   _kernel_oserror *e;
+   int port;
+   uint mask;
+
+#ifdef DEBUG
+   // Initialise the debug bits
+   PDebug_XInit ();
+   PDebug_Printf ("!Fax has just entered the building...\n");
+   if (faxdebug_start ())
+      report_program_exit ("Fax", NULL, "faxdebug_start () failed");
+#endif
+
+#ifdef PROFILE
+   // Initialise the profiler
+   if (_swix (usTimer_Reset, 0)) {
+
+      // SWI failed; must be because usTimer module not present
+      report_info ("Fax", NULL, "usTimer module not loaded, so will only get centisecond profiling", 1);
+
+   } else {
+
+      // usTimer module present, so use its microsecond timer
+      HierProf_clock_t (*ustimer_read) (void *reference);
+      void *reference;
+      _swix (usTimer_GetAddress, _OUTR (0, 1), &reference, &ustimer_read);
+      HierProf_UseCustomClock (NULL, ustimer_read, NULL, 2000000, reference);
+
+   }
+
+//   HierProf_IgnoreFunctions ("tifflo_encode_*");
+   HierProf_IgnoreFunctions ("tifflo_reverse");
+   HierProf_ProfileAllFunctions ();
+   HierProf_OutputToFilenamef ("Mem:$.Profiled");
+#endif
+
+   // Initialise the state structs
+   for (port = 0; port < NPORTS; ++port) {
+
+#ifdef WDEBUG
+      state[port].oldtimeins = -1; // -1 means clock off
+#endif
+
+      state[port].port = port;
+      state[port].rtnbad = 50;       // By default, allow 5% bad lines
+      state[port].rtnconsecbad = 10; // and 1% consec bad lines
+      state[port].minTCF = 1340;     // By default, allow TCF to be between
+      state[port].maxTCF = 1660;     // 1340 and 1660 ms
+
+   }
+
+   // Obtain pointer to FaxSupport pollword and reset pollword
+   // (in case wasn't already reset, to prevent false immediate triggering).
+   if (_swix (FaxSupport_GetPtrPollword, _OUT (0), &ppollword) != NULL)
+      report_program_exit ("Fax", NULL, "FaxSupport module not loaded");
+   * (int *) ppollword = 0;
+
+   // Initialise the toolbox
+   e = toolbox_initialise (0, WimpVersion, (int *) wimpmessages
+#ifdef WDEBUG
+                          , (int *) toolboxevents
+#else
+                          , 0 // No toolbox events
+#endif
+                          , AppDir, &messages, &id_block, 0, 0, 0);
+   if (e) goto error_toolbox;
+   e = event_initialise (&id_block);
+   if (e) goto error_toolbox;
+   e = event_register_message_handler (Wimp_MQuit, wimpmessage_handler, 0);
+   if (e) goto error_toolbox;
+   e = event_register_message_handler (Wimp_MFaxTx, wimpmessage_handler, 0);
+   if (e) goto error_toolbox;
+   e = event_register_message_handler (Wimp_MFaxRx, wimpmessage_handler, 0);
+   if (e) goto error_toolbox;
+   e = event_register_message_handler (Wimp_MFaxAbort, wimpmessage_handler, 0);
+   if (e) goto error_toolbox;
+   e = event_register_message_handler (Wimp_MText2TIFFit, wimpmessage_handler, 0);
+   if (e) goto error_toolbox;
+   e = event_register_message_handler (Wimp_MTIFFConvertit, wimpmessage_handler, 0);
+   if (e) goto error_toolbox;
+   e = event_register_wimp_handler (-1, Wimp_EPollWordNonZero, fax_pollword_handler, 0);
+   if (e) goto error_toolbox;
+   e = event_register_wimp_handler (-1, Wimp_ENull, fax_nullpoll_handler, 0);
+   if (e) goto error_toolbox;
+
+#ifdef WDEBUG
+   e = event_register_toolbox_handler (-1, Quit_Quit, fax_quit_event, 0);
+   if (e) goto error_toolbox;
+   e = event_register_toolbox_handler (-1, ProgInfo_AboutToBeShown, fax_proginfo_show, 0);
+   if (e) goto error_toolbox;
+   e = event_register_toolbox_handler (-1, Iconbar_Clicked, fax_iconbar_show, 0);
+   if (e) goto error_toolbox;
+
+   // Initialise the debug window bits
+   for (port = 0; port < 2; ++port) {
+
+      ObjectId obj;
+      e = toolbox_create_object (0, "con", &obj);
+      if (e) goto error_toolbox;
+      faxdebug_set_ObjectId (port, obj);
+      faxdebug_displayfield_set_value (DisplayField_Centred, port, Cpt_Con_Port
+                                      , port != 0 ? "Local" : "Remote");
+      faxdebug_displayfield_set_value (DisplayField_Centred, port, Cpt_Con_Status, "");
+      faxdebug_displayfield_set_value (DisplayField_Centred, port, Cpt_Con_SID, "");
+      faxdebug_displayfield_set_value (DisplayField_Centred, port, Cpt_Con_Page, "");
+      faxdebug_displayfield_set_value (DisplayField_Centred, port, Cpt_Con_Lines, "");
+      faxdebug_displayfield_set_value (DisplayField_Centred, port, Cpt_Con_CB, "");
+      faxdebug_displayfield_set_value (DisplayField_Centred, port, Cpt_Con_MSLT, "");
+      faxdebug_displayfield_set_value (DisplayField_Centred, port, Cpt_Con_Mod, "");
+      faxdebug_displayfield_set_value (DisplayField_Centred, port, Cpt_Con_Rate, "");
+      faxdebug_displayfield_set_value (DisplayField_Centred, port, Cpt_Con_Time, "");
+      faxdebug_displayfield_set_value (DisplayField_Centred, port, Cpt_Con_Resn, "");
+      faxdebug_displayfield_set_value (DisplayField_Centred, port, Cpt_Con_Fmt, "");
+      faxdebug_displayfield_set_value (DisplayField_Centred, port, Cpt_Con_Size, "");
+
+   }
+
+   faxdebug_toolbox_show_object (0, 0, Toolbox_ShowObject_Default, NULL, 0, -1);
+#endif
+
+   // Set wimp poll mask to use pollwords and not return pointer events
+   e = event_get_mask (&mask);
+   if (e) goto error_toolbox;
+   mask |= Wimp_Poll_PollWord;
+   mask |= Wimp_Poll_PointerLeavingWindowMask;
+   mask |= Wimp_Poll_PointerEnteringWindowMask;
+   mask &= ~Wimp_Poll_NullMask; // @@ Inefficient, but who cares for the moment? @@
+   e = event_set_mask (mask);
+   if (e) goto error_toolbox;
+
+   return;
+
+   error_toolbox:
+
+   report_program_onerror_exit ("Fax", NULL, e);
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// fax_finalise
+//
+// Finalisation; normally called by atexit handler.
+//
+// Inputs:  nothing
+//
+// Outputs: nothing
+//
+// Assumes: nothing
+//
+// Returns: nothing
+//
+///////////////////////////////////////////////////////////////////////////////
+
+intern void fax_finalise (void)
+{
+#ifdef DEBUG
+   PDebug_Printf ("!Fax has just left the building...\n");
+   faxdebug_finish ();
+#endif
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// main
+//
+// Program entry point.  Causes initialisation and enters infinite event_poll
+// loop, kicking the state machine for each port on every poll.  The program
+// exits via exit () calls throughout the code.
+//
+// Inputs:  nothing
+//
+// Outputs: nothing
+//
+// Assumes: nothing
+//
+// Returns: nothing
+//
+///////////////////////////////////////////////////////////////////////////////
+
+int main (void)
+{
+#ifdef DEBUG
+   int longestlatency = 0;
+   clock_t pollstart, latency;
+#endif
+
+   int event_code;
+
+   atexit (fax_finalise);
+   fax_initialise ();
+
+   while (TRUE) {
+
+#ifdef DEBUG
+      pollstart = clock ();
+#endif
+
+      event_poll (&event_code, &poll_block, ppollword);
+
+#ifdef DEBUG
+      latency = clock () - pollstart;
+      if (latency > longestlatency) {
+         faxdebug_info (("Latency at %i cs has hit %i cs\n", clock (), latency));
+         longestlatency = latency;
+      }
+#endif
+
+   }
+
+   return OK; // Pacify compiler
+}

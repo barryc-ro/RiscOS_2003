@@ -1,0 +1,619 @@
+/*****************************************************************************/
+/* File:    text2tiff.c                                                      */
+/* Purpose: TIFF handling for !Fax application                               */
+/* Owner:   Mark RISON                                                       */
+/* History: 1997-08-14  MGR   Created                                        */
+/*****************************************************************************/
+
+#include "fax/global.h"
+
+#include "faxdebug.h"
+#include "mgrlib/usTimer.h"
+#include "pdebug.h"
+#include "text2tiff.h"
+#include "tiff.h"
+#include "mgrlib/misc.h"
+
+#include <stdio.h>
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// C_Constants
+
+//#define Text2TIFFNEntries 14         // 3 less than normal, because no fax tags
+//#define Text2TIFFNExtra 4            // In words
+
+#define CHARWID_PEL	18	// Character width
+#define FONTWID_BYTE	1	// Font width
+#define FONTPIXWID_PEL	2	// Font pixel width
+#define CHARLEN_PEL	16	// Character length
+#define CHARLM_PEL	1	// Character left and right margins, needed
+#define CHARRM_PEL	1	// because FONTWID_BYTE*8*FONTPIXWID_PEL != CHARWID_PEL
+#define PAGEWID_CHAR	80	// Page width in chars, excluding margins
+#define PAGELEN_CHAR	60	// Page length in chars, excluding margins
+#define PAGEWID_PEL	1728	// Total page width, including margins
+#define LMARGIN_PEL	144	// Left page margin
+#define TMARGIN_PEL	64	// Top page margin
+#define BMARGIN_PEL	48	// Bottom page margin
+
+// Maximum image width in pels:
+#define Text2TIFFMaxImageWid (PAGEWID_PEL)
+
+// Maximum raw size in hwords:
+// Text2TIFFMaxImageWid
+// + 1 for W0 at start
+// + 1 for 2D MR EOL guard at end
+#define Text2TIFFMaxRawSize (Text2TIFFMaxImageWid + 2)
+
+// Maximum encoded size in octets:
+// For 2D MR a pair of W1B1 in horizontal mode takes 12 bits (i.e. 6 bits per pel)
+// + 21 bits for W0 at start and B0 at end, and an extra horizontal mode token
+// + 13 bits for EOL
+// + 1 octet for squeeze byte
+#define Text2TIFFMaxEncodedSize ((Text2TIFFMaxImageWid * 6 + 21 + 13) / 8 + 1)
+
+///////////////////////////////////////////////////////////////////////////////
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// C_Typedefs
+
+///////////////////////////////////////////////////////////////////////////////
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// C_Interns
+
+intern int text2tiff_get_paddedline (void);
+intern enum TIFFError text2tiff_rasterise_line (void);
+intern void text2tiff_rasterise_row (const uchar c, const int row);
+intern enum TIFFError text2tiff_close (void);
+extern int tifflo_writeraw (int flags, int len);
+
+///////////////////////////////////////////////////////////////////////////////
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// C_Regionals
+
+regional FILE *streamin, *streamout;
+regional short int rawline1[Text2TIFFMaxRawSize], rawline2[Text2TIFFMaxRawSize];
+regional short int *currline, *refline;
+regional byte encline[Text2TIFFMaxEncodedSize];
+regional uchar textline[PAGEWID_CHAR];
+regional int flags;
+regional long int tiffifdptr;
+regional TIFFInfo t;
+regional int encword;
+regional int nextstartline, nlinesleft;
+
+///////////////////////////////////////////////////////////////////////////////
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// C_Enumerations
+
+///////////////////////////////////////////////////////////////////////////////
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// C_Macros
+
+///////////////////////////////////////////////////////////////////////////////
+
+
+#include "tifffont.c"
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// text2tiff_open
+//
+// Opens the text input file and the TIFF output file, writing a TIFF header,
+// followed by the top margin.
+//
+// Inputs:  pathnamein  (pathname of text input file to open)
+//          pathnameout (pathname of TIFF output file to open)
+//          startline   (start line to convert (1 is 1st line))
+//          numberoflines  (number of lines to convert)
+//
+// Outputs: nothing
+//
+// Assumes: nothing
+//
+// Returns: non-zero error code if failed --
+//             input file closed, any opened output file is closed and deleted
+//
+///////////////////////////////////////////////////////////////////////////////
+
+extern enum TIFFError text2tiff_open (const char *const pathnamein
+                                     , const char *const pathnameout
+                                     , int startline
+                                     , const int numberoflines)
+{
+   int enclen, written, i, eof, nentries, nextra;
+
+   // Open input text file
+   streamin = fopen (pathnamein, "r");
+   if (streamin == NULL)
+      return TIFFError_Read_Error;
+
+   // Go to start line
+   eof = FALSE;
+   if (startline < 1)
+      startline = 1;
+   for (i = 0; i < startline - 1 && !eof; ++i) { // - 1 because 1st line is line 1
+      eof = text2tiff_get_paddedline ();
+   }
+   if (eof) {
+      fclose (streamin);
+      return TIFFError_Read_Error;
+   }
+
+   // Open output TIFF file
+   streamout = tiff_open_write (pathnameout);
+   if (streamout == NULL) {
+      fclose (streamin);
+      return TIFFError_Write_Error;
+   }
+
+   // Create IFD
+   tiff_get_ifdsize (TIFFEncoding_T6_NoPageQuality, &nentries, &nextra);
+   tiffifdptr = tiff_create_ifd (streamout, 0x00000004, nentries, nextra);
+   if (tiffifdptr == 0) {
+      fclose (streamin);
+      fclose (streamout);
+      remove (pathnameout);
+      return TIFFError_Write_Error;
+   }
+
+   // Initialise this and that
+   t.ImageWidth = PAGEWID_PEL;
+   t.ImageLength = 0;
+   t.StripByteCounts = 0;
+   t.Compression = TIFFEncoding_T6_NoPageQuality;
+   t.FillOrder = 1;
+   t.XResolution.numerator = 204;
+   t.XResolution.denominator = 1;
+   t.YResolution.numerator = 98;
+   t.YResolution.denominator = 1;
+   if (numberoflines < 1 || numberoflines > PAGELEN_CHAR)
+      nlinesleft = PAGELEN_CHAR;
+   else
+      nlinesleft = numberoflines;
+   nextstartline = startline + nlinesleft;
+   encword = 0;
+   currline = rawline1;
+   refline = rawline2;
+   refline[0] = PAGEWID_PEL;
+   currline[0] = PAGEWID_PEL;
+
+   // Write top margin
+   for (i = 0; i < TMARGIN_PEL; ++i) {
+
+      // Encode
+      enclen = tiff_encode_2dmmr (currline, encline
+                                 , refline, &encword, PAGEWID_PEL);
+
+      // Write out
+      written = fwrite (encline, 1, enclen, streamout);
+
+      // Update TIFF info
+      t.StripByteCounts += written;
+      ++t.ImageLength;
+
+      // Abort if write failed
+      if (written != enclen) {
+         fclose (streamin);
+         fclose (streamout);
+         remove (pathnameout);
+         return TIFFError_Write_Error;
+      }
+
+   }
+
+   return TIFFError_None;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// text2tiff_convert_line
+//
+// Reads in and rasterises one line of text to the TIFF output file.
+//
+// Input and output streams are completed and closed if EOP, EOF or any error occurs.
+// (Read errors are counted as EOF, so only write errors can occur.)
+//
+// Inputs:  nothing
+//
+// Outputs: nothing
+//
+// Assumes: nothing
+//
+// Returns: n if hit EOP, where n is the number of the next line to convert
+//          Text2TIFFError_EOF if hit EOF
+//          Text2TIFFError_Write_Error if file write error
+//          0 otherwise
+//
+///////////////////////////////////////////////////////////////////////////////
+
+extern int text2tiff_convert_line (void)
+{
+   enum TIFFError te;
+   int ie;
+
+   ie = text2tiff_get_paddedline ();       // ie non-zero if hit EOF
+
+   if (ie == 0) {
+
+      te = text2tiff_rasterise_line ();    // te non-zero if failure
+
+      if (te) {
+
+         fclose (streamin);
+         fclose (streamout);
+         return Text2TIFFError_Write_Error;
+
+      }
+
+   }
+
+   if (--nlinesleft == 0) {                // Zero if EOP
+
+      if (ie == 0)
+
+         ie = text2tiff_get_paddedline (); // Try reading next line if not hit EOF
+
+   }
+
+   if (ie) {                               // Seem to be at EOF; close
+
+      te = text2tiff_close ();
+      if (te)
+         return Text2TIFFError_Write_Error;
+      else
+         return Text2TIFFError_EOF;
+
+   }
+
+   if (nlinesleft == 0) {                  // Seem to be at EOP; close
+
+      te = text2tiff_close ();
+      if (te)
+         return Text2TIFFError_Write_Error;
+      else
+         return nextstartline;
+
+   }
+
+   return 0;                               // Not finished...
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// text2tiff_get_paddedline
+//
+// Reads line from file, padded with SPCs; no NUL terminator.
+// Tabs are converted to SPCs up to the next eighth column (so tabs at
+// first column, ninth column, etc.).
+//
+// The line is \n- or EOF-terminated.  If the line won't fit,
+// it is truncated.  Read errors count as EOF.
+//
+// Inputs:  nothing
+//
+// Outputs: nothing
+//
+// Assumes: textline is at least PAGEWID_CHAR in size
+//
+// Returns: non-zero if EOF met at start of line (s undefined in this case)
+//
+///////////////////////////////////////////////////////////////////////////////
+
+intern int text2tiff_get_paddedline (void)
+{
+   int c = 0; // Pacify compiler
+   int i = 0;
+
+   // Copy up to PAGEWID_CHAR characters into s, stop at EOF or \n
+   while (i < PAGEWID_CHAR && (c = getc(streamin)) != EOF && c != '\n') {
+
+      if (c == '\t') {
+
+         int j = i / 8 * 8 + 8 - i; // Unix tabs
+//       int j = 4; // Moron tabs
+         while (j && i < PAGEWID_CHAR)
+            textline[j--, i++] = ' ';
+
+      } else
+
+         textline[i++] = c;
+
+   }
+
+   // Return immediately if EOF met at start of line
+   if (i == 0 && c == EOF)
+      return !OK;
+
+   // Pad text line if necessary
+   while (i < PAGEWID_CHAR)
+      textline[i++] = ' ';
+
+   // Hunt for \n if necessary
+   while (c != '\n' && c != EOF)
+      c = getc (streamin);
+
+   return OK;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// text2tiff_rasterise_line
+//
+// Rasterises one line of text to the TIFF output file.
+//
+// Inputs:  nothing
+//
+// Outputs: nothing
+//
+// Assumes: s is PAGEWID_CHAR long (no terminator)
+//
+// Returns: non-zero error code if failed -- output file left open
+//
+///////////////////////////////////////////////////////////////////////////////
+
+intern enum TIFFError text2tiff_rasterise_line (void)
+{
+   int row, col;
+   extern short int *decindexraw;
+   int enclen;
+   int written;
+
+   for (row = 0; row < CHARLEN_PEL; ++row) {
+
+      // Initialise
+      decindexraw = currline; // used by tifflo_writeraw
+      flags = -1;
+
+      // Write left margin
+      flags = tifflo_writeraw (flags, LMARGIN_PEL);
+      flags = tifflo_writeraw (flags, 0);
+
+      // Do each line character in turn
+      for (col = 0; col < PAGEWID_CHAR; ++col) {
+
+         text2tiff_rasterise_row (textline[col], row);
+
+      }
+
+      // Write right margin
+      flags = tifflo_writeraw (flags, PAGEWID_PEL - LMARGIN_PEL
+                      - CHARWID_PEL * PAGEWID_CHAR);
+
+      // Encode
+      enclen = tiff_encode_2dmmr (currline, encline
+                                 , refline, &encword, PAGEWID_PEL);
+
+      // Write out
+      written = fwrite (encline, 1, enclen, streamout);
+
+      // Update TIFF info
+      t.StripByteCounts += written;
+      ++t.ImageLength;
+
+      // Abort if write failed
+      if (written != enclen)
+         return TIFFError_Write_Error;
+
+      // Swap reference and current line pointers
+      SWAP (short int *, currline, refline);
+
+   }
+
+   return TIFFError_None;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// text2tiff_rasterise_row
+//
+// Rasterises one row of character c into raw run lengths.
+// c should be printable ASCII.
+//
+// Assumes starting in white run; exits in white run.
+//
+// Not very efficient!
+//
+// Inputs:  c           (character)
+//
+// Outputs: nothing
+//
+// Assumes: row from 0 to (CHARLEN_PEL - 1)
+//
+// Returns: nothing
+//
+///////////////////////////////////////////////////////////////////////////////
+
+intern void text2tiff_rasterise_row (const uchar c, const int row)
+
+{
+   byte pattern;
+   int mask;
+
+#if FONTWID_BYTE != 1
+#error FONTWID_BYTE is not 1 -- need to rewrite text2tiff_rasterise_row
+#endif
+
+   // Speed things up for the most common character...
+   if (c == ' ') {
+
+      flags = tifflo_writeraw (flags, CHARWID_PEL);
+      flags = tifflo_writeraw (flags, 0);
+      return;
+
+   }
+
+   flags = tifflo_writeraw (flags, CHARLM_PEL);
+   flags = tifflo_writeraw (flags, 0);
+
+   if (c < ' ' || c >= 127)
+      pattern = tifffont[127-' '][row]; // Use char 127 for unprintable ASCII
+   else
+      pattern = tifffont[c-' '][row];   // Note font starts at ' '
+
+   for (mask = 0x80; mask != 0; mask = mask >> 1) {
+
+      if (mask & pattern) {
+
+         flags = tifflo_writeraw (flags, 0);
+         flags = tifflo_writeraw (flags, FONTPIXWID_PEL);
+
+      } else {
+
+         flags = tifflo_writeraw (flags, FONTPIXWID_PEL);
+         flags = tifflo_writeraw (flags, 0);
+
+      }
+
+   }
+
+   flags = tifflo_writeraw (flags, CHARRM_PEL);
+   flags = tifflo_writeraw (flags, 0);
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+//
+// text2tiff_close
+//
+// Closes input text stream, and completes and closes output TIFF stream,
+// adding the bottom margin before doing so.
+//
+// Inputs:  nothing
+//
+// Outputs: nothing
+//
+// Assumes: nothing
+//
+// Returns: non-zero error code if failed -- input and output files closed
+//
+///////////////////////////////////////////////////////////////////////////////
+
+intern enum TIFFError text2tiff_close (void)
+{
+   int i, enclen;
+
+   refline[0] = PAGEWID_PEL;
+   currline[0] = PAGEWID_PEL;
+
+   // Write bottom margin
+   for (i = 0; i < BMARGIN_PEL; ++i) {
+
+      // Encode
+      enclen = tiff_encode_2dmmr (currline, encline
+                                 , refline, &encword, PAGEWID_PEL);
+
+      // Write out
+      fwrite (encline, 1, enclen, streamout);
+
+      // Update TIFF info
+      t.StripByteCounts += enclen;
+      ++t.ImageLength;
+
+   }
+
+   fclose (streamin);
+   return tiff_close_write (&t, streamout, tiffifdptr, encword)
+          ? TIFFError_Write_Error : TIFFError_None;
+
+#if 0
+   int encwordpos;
+   uint eencword; // Stupid naming due to clash with int encword...
+
+   // Add EOFB
+   encwordpos = encword & 0xff;
+   eencword = (encword & 0xff00) << 16;
+   eencword |= 0x00100100U >> encwordpos; // This will always fit because encwordpos is always < 8
+   encwordpos += 24;
+
+   // Squeeze out last bit of encoded data, if any, and EOFB
+   while (encwordpos > 0) {
+
+      if (putc (eencword >> 24, streamout) == EOF)
+         goto writeerror;
+      eencword <<= 8;
+      encwordpos -= 8;
+      ++t.StripByteCounts;
+
+   }
+
+   // Write out TIFF header
+   if (tiff_write_nentries (streamout, tiffifdptr, Text2TIFFNEntries))
+      goto writeerror;
+   if (tiff_write_entry (streamout, TIFFTag_ImageWidth, TIFFType_LONG, 1, t.ImageWidth))
+      goto writeerror;
+   if (tiff_write_entry (streamout, TIFFTag_ImageLength, TIFFType_LONG, 1, t.ImageLength))
+      goto writeerror;
+   if (tiff_write_entry (streamout, TIFFTag_BitsPerSample, TIFFType_SHORT, 1, 1))
+      goto writeerror;
+   if (tiff_write_entry (streamout, TIFFTag_Compression, TIFFType_SHORT, 1, 4))
+      goto writeerror;
+   if (tiff_write_entry (streamout, TIFFTag_PhotometricInterpretation, TIFFType_SHORT, 1, 0))
+      goto writeerror;
+   if (tiff_write_entry (streamout, TIFFTag_FillOrder, TIFFType_SHORT, 1, 1))
+      goto writeerror;
+   if (tiff_write_entry (streamout, TIFFTag_StripOffsets, TIFFType_LONG
+                        , 1, (unsigned int) tiffifdptr + 2 + Text2TIFFNEntries * 12
+                           + 4 + Text2TIFFNExtra * 4))
+      goto writeerror;
+   if (tiff_write_entry (streamout, TIFFTag_SamplesPerPixel, TIFFType_SHORT, 1, 1))
+      goto writeerror;
+   if (tiff_write_entry (streamout, TIFFTag_RowsPerStrip, TIFFType_LONG, 1, t.ImageLength))
+      goto writeerror;
+   if (tiff_write_entry (streamout, TIFFTag_StripByteCounts, TIFFType_LONG, 1, t.StripByteCounts))
+      goto writeerror;
+   if (tiff_write_entry (streamout, TIFFTag_XResolution, TIFFType_RATIONAL
+                        , 1, (unsigned int) tiffifdptr + 2 + Text2TIFFNEntries * 12
+                           + 4 + 0))
+      goto writeerror;
+   if (tiff_write_entry (streamout, TIFFTag_YResolution, TIFFType_RATIONAL
+                        , 1, (unsigned int) tiffifdptr + 2 + Text2TIFFNEntries * 12
+                           + 4 + 8))
+      goto writeerror;
+   if (tiff_write_entry (streamout, TIFFTag_T6Options, TIFFType_LONG, 1, 0))
+      goto writeerror;
+   if (tiff_write_entry (streamout, TIFFTag_ResolutionUnit, TIFFType_SHORT, 1, 2))
+      goto writeerror;
+
+   if (tiff_write_extra (streamout, 0x00000000))      // Pointer to next IFD
+      goto writeerror;
+
+   if (tiff_write_extra (streamout, 102 * 2))         // XResolution
+      goto writeerror;
+   if (tiff_write_extra (streamout, 1))
+      goto writeerror;
+   if (tiff_write_extra (streamout, 390 * 1 / 4 + 1)) // YResolution
+      goto writeerror;
+   if (tiff_write_extra (streamout, 1))
+      goto writeerror;
+
+   fclose (streamout);
+   fclose (streamin);
+   return TIFFError_None;
+
+   writeerror:
+
+   fclose (streamout);
+   fclose (streamin);
+   return TIFFError_Write_Error;
+#endif
+}
