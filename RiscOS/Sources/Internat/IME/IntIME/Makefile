@@ -37,6 +37,8 @@ RSTUBS     = RISCOSLIB:o.rstubs
 ROMSTUBS   = RISCOSLIB:o.romstubs
 ROMCSTUBS  = RISCOSLIB:o.romcstubs
 ABSSYM     = RISC_OSLib:o.AbsSym
+EXP_HDR    = <Export$Dir>
+EXP_C      = <CExport$Dir>.h
 
 #
 # Include files
@@ -48,6 +50,7 @@ INCLUDES = -IC:,C:Unicode
 COMPONENT = IntIME
 RESCOMPONENT = IME
 TARGET    = aof.${COMPONENT}
+EXPORTS   = ${EXP_HDR}.IME ${EXP_C}.IME
 
 OBJS =  o.CModuleHdr o.IntIME
 
@@ -124,6 +127,12 @@ rm.${COMPONENT}u: ${OBJS} ${CLIB}
 rm.${COMPONENT}: rm.${COMPONENT}u
         ${MODSQZ} rm.${COMPONENT}u $@
 
+${EXP_HDR}.IME: hdr.IME
+        ${CP} hdr.IME $@ ${CPFLAGS}
+
+${EXP_C}.IME: h.Public
+        ${CP} h.Public $@ ${CPFLAGS}
+
 #
 # Special rules
 #
@@ -132,8 +141,3 @@ o.IntIME: h.CModuleHdr
         
 #
 # Dynamic dependencies:
-o.IntIME:	c.IntIME
-o.IntIME:	C:h.kernel
-o.IntIME:	C:h.swis
-o.IntIME:	h.CModuleHdr
-o.IntIME:	h.IntIME

@@ -45,7 +45,7 @@ all: !RunImage JapanIME IntIME Dictionary
 clean:
        ${RM} Dictionary
        ${RM} JapanIME
-       ${RM} InternationalIME
+       ${RM} IntIME
        ${RM} !RunImage
        ${WIPE} o ${WFLAGS}
        @echo IMEtest: cleaned
