@@ -24,6 +24,7 @@ CPFLAGS = ~cfr~v
 #
 COMPONENT = NCFresco
 TARGET    = aof.${COMPONENT}
+TARGETU   = aof.${COMPONENT}u
 
 ABSSYM    = RISC_OSLib:o.AbsSym
 
@@ -73,7 +74,15 @@ export_hdrs:
 #
 # Final link for the ROM Image (using given base address)
 #
-rom_link: dirs
+rom_link: rom_link_${TYPE}
+        @echo ${COMPONENT}: rom module built
+
+rom_link_unicode: dirs
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGETU} ${ABSSYM}
+        ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: rom_link for Unicode complete
+
+rom_link_: dirs
         ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
