@@ -107,3 +107,30 @@ Resources.!RunImage: ${OBJS} ${EVENTLIB} ${TOOLBOXLIB} ${WIMPLIB} ${CLIB}
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
+o.main:	c.main
+o.main:	C:h.swis
+o.main:	C:h.kernel
+o.main:	tbox:h.toolbox
+o.main:	tbox:h.wimp
+o.main:	tbox:h.event
+o.main:	h.common
+o.main:	tbox:h.window
+o.main:	tbox:h.gadgets
+o.main:	tbox:h.wimplib
+o.main:	h.defines
+o.main:	h.filer
+o.common:	c.common
+o.common:	C:h.kernel
+o.common:	tbox:h.wimp
+o.common:	tbox:h.wimplib
+o.common:	tbox:h.toolbox
+o.common:	tbox:h.gadgets
+o.common:	C:h.swis
+o.common:	h.defines
+o.filer:	c.filer
+o.filer:	C:h.swis
+o.filer:	C:h.kernel
+o.filer:	tbox:h.toolbox
+o.filer:	tbox:h.wimp
+o.filer:	h.common
+o.filer:	h.defines
