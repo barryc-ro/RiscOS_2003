@@ -13,6 +13,8 @@
 # 1998-10-20	RDW	RAM module target added
 # 1998-10-20	RDW	resources now exports the HTML templates
 # 1998-11-02	RDW	Change over to Ben's cunning 2 level makefile
+# 1999-05-23	SNB	Added translate: target for dynamically building the
+#                       UI resources using the Translate tool.
 
 # ------------------------------------------------------------------------------
 # Paths
@@ -78,6 +80,10 @@ DDZFLAGS        = $(DZFLAGS) -fn
 all: 
 	@amu -f MainMake $(MFLAGS) TARGET=$(NORMAL_TARGET) EXT=o
 	@echo $(COMPONENT): build complete
+
+translate:
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=AvoidAMUBug
+        @echo $(COMPONENT): Translation phase complete.
 
 debug: 
 	@amu -f MainMake $(MFLAGS) TARGET=$(DEBUG_TARGET) EXT=od
