@@ -7,17 +7,18 @@ COMPONENT  = TTXTView
 APP        = !${COMPONENT}
 RDIR       = Resources
 LDIR       = ${RDIR}.${LOCALE}
-INSTDIR    = ${INSTDIR}.${APP}
+INSTDIR    = ${APP}
 
 # Generic options:
 #
-MKDIR   = cdir
-CC      = cc
-CP      = copy
-LD      = link
-RM      = remove
-SQUEEZE = squeeze
-WIPE    = -wipe
+#MKDIR   = cdir
+#CC      = cc
+#CP      = copy
+#LD      = link
+#RM      = remove
+#SQUEEZE = squeeze
+#WIPE    = -wipe
+include Makefiles:StdTools
 
 CFLAGS  = ${THROWBACK} -c -depend !Depend -fah -fussy ${INCLUDES} ${DFLAGS}
 CPFLAGS = ~cfr~v
@@ -89,6 +90,9 @@ clean:
         ${RM} o.config
         ${RM} o.keyboard
         ${RM} ${RDIR}.!RunImage
+        ${WIPE} ${WPREFLAGS} ${APP}.* ${WFLAGS}
+        ${RM}   ${APP}
+        ${STRIPDEPEND}
         @echo $(COMPONENT): cleaned
 
 #
@@ -100,10 +104,3 @@ ${RDIR}.!RunImage: ${OBJS} ${CLIB} ${WIMPLIB}
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
-o.utils:	c.utils
-o.utils:	h.utils
-o.main: c.main h.messages tbox:h.toolbox C:h.kernel tbox:h.wimp C:h.swis h.main h.stdbool tbox:h.wimp h.teletext h.stdbool C:h.kernel h.config C:h.kernel h.config tbox:h.wimplib
-o.messages: c.messages h.main h.stdbool tbox:h.wimp h.messages tbox:h.toolbox C:h.kernel C:h.swis tbox:h.toolbox C:h.swis tbox:h.wimplib h.stdbool
-o.teletext: c.teletext h.teletext h.stdbool C:h.kernel h.config C:h.kernel h.messages tbox:h.toolbox tbox:h.wimp C:h.swis h.keyboard h.stdbool C:h.kernel h.config h.config h.main h.stdbool tbox:h.wimp
-o.config: c.config h.main h.stdbool tbox:h.wimp h.config C:h.kernel h.messages tbox:h.toolbox C:h.swis
-o.keyboard: c.keyboard h.keyboard h.stdbool C:h.kernel h.config C:h.kernel C:h.swis h.stdbool
