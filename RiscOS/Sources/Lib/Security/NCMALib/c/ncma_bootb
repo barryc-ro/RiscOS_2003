@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <ctype.h>
 
 /* Library includes */
 #include "kernel.h"
@@ -420,5 +421,244 @@ int fetch_bootblock(sc_bootblock_data_struct* bootblock)
 
   return(0);
 }
+
+
+
+/* This routine displays the nvram image in a format similar to that
+    produced by the *dump RISC OS command (and hence to that shown in
+    section 4 of the spec)
+   As it displays the information in a series of 16 by 16 bytes blocks,
+    the total size of the area being displayed should be a multiple of
+    (16*16)=256 bytes. Behaviour for any other sized block is undefined.
+*/
+void display_bootblock_image(const char* const memory, const int size)
+{
+  unsigned int location = 0;
+  unsigned int location2 = 0;
+
+  dprintf(("", "display_bootblock_image(): Displaying bootblock area of size %d starting at %p\n", size, memory));
+
+  for (location=0; location < size; location+=(16*16))
+  {
+    dprintf(("", "\nAddress  : 00  01  02  03  04  05  06  07  08  09  0A  0B  0C  0D  0E  0F       ASCII data\n"));
+    for (location2=location; location2 < location+(16*16); location2+=16)
+    {
+      unsigned int loop=0;
+      dprintf(("", "%08X : ", location2));
+      for (loop = 0; loop < 16; loop++)
+      {
+        dprintf(("", "%03X ", *(memory+location2+loop)));
+      }
+      dprintf(("", "  "));
+      for (loop = 0; loop < 16; loop++)
+      {
+        /* Only display as characters if they are printable (i.e. in range 32 to 126). Otherwise print as a . */
+        if (isprint(*(memory+location2+loop)))
+        {
+          dprintf(("", "%c", *(memory+location2+loop)));
+        }
+        else
+        {
+          dprintf(("", "."));
+        }
+      }
+      dprintf(("", "\n"));
+    }
+  }
+}
+
+
+
+
+/*
+  This routine creates the bootblock from the data held in the internal structures.
+  Note that it creates the body data first, and then the header data, as the header
+   has to contain information about the size of the body data.
+  (This could e fixed by having a two-stage parser, but I cannot see the point of
+   this for this simple version of the program).
+  It returns a pointer to the resultant bootblock or NULL if the operation fails.
+*/
+char* create_bootblock(const sc_bootblock_data_struct* const bootblock)
+{
+  char header_data[36];  /* 28-byte header + 8 bit pre-bootblock header */
+  char trailer_data[12]; /* A 12 byte bootblock trailer */
+  unsigned int bootblock_body_count = 0; /* This stores where we are up to in the bootblock */
+  unsigned int loop = 0;
+  unsigned int loop2 = 0;
+  unsigned int l = 0;
+
+  char* body_data = (char*)rmalloc(SIZE_OF_BOOTBLOCK, "bootblock body area"); /* I *really* doubt a bootblock would ever be this big ;*) */
+  char* bootblock_data = (char*)rmalloc(SIZE_OF_BOOTBLOCK, "bootblock area"); /* I *really* doubt a bootblock would ever be this big ;*) */
+
+  if (!body_data)
+  {
+    dprintf(("", "create_bootblock(): Error allocating memory for bootblock.\n"));
+    return (NULL);
+  }
+
+  if (!bootblock_data)
+  {
+    dprintf(("", "create_bootblock(): Error allocating memory for bootblock.\n"));
+    return (NULL);
+  }
+  else
+  {
+    /* 0 initialise the data */
+    for (loop=0; loop<SIZE_OF_BOOTBLOCK; loop++)
+    {
+      bootblock_data[loop]=0x00;
+    }
+  }
+
+  for(l=0; l<MAX_TAG_CACHE; l++)
+  {
+    if(bootblock->tag_cache->tag[l].tag == NULL) break; /* no more tags */
+
+    if(bootblock->tag_cache->tag[l].bytes != 0) /* Tag has a value */
+    {
+      dprintf(("", "create_bootblock(): tag %d (%0x %s) has a value\n", l, bootblock->tag_cache->tag[l].nci_tag, bootblock->tag_cache->tag[l].tag));
+      switch (bootblock->tag_cache->tag[l].mapping)
+      {
+        case TagType_String: /* Tag is a string  */
+        case TagType_Proxy:  /* Proxy is a string  */
+        case TagType_Host:   /* Tag is a hostname / textual IP, just like a string  */
+        {
+          /* Write the tag number and tag value size */
+          write_big_word(body_data+bootblock_body_count, bootblock->tag_cache->tag[l].nci_tag);
+          bootblock_body_count+=4;
+          write_big_short(body_data+bootblock_body_count, strlen(bootblock->tag_cache->tag[l].val));
+          bootblock_body_count+=2;
+          /* Now write the actual string value into the bootblock data */
+          for (loop2=0; loop2 < strlen(bootblock->tag_cache->tag[l].val); loop2++)
+          {
+            body_data[bootblock_body_count+loop2] = bootblock->tag_cache->tag[l].val[loop2];
+          }
+          bootblock_body_count+=strlen(bootblock->tag_cache->tag[l].val);
+          dprintf(("", "create_bootblock(): tag %d has string value %s\n", l, bootblock->tag_cache->tag[l].val));
+        }
+        break;
+
+        case TagType_IP: /* Tag is an IP address */
+        {
+          /* The code below is horrible and hacky. Suggest you use inet_addr() or equivalent if you have a TCPIP library available. */
+          int loop2 = 0;
+          int nums[4];
+          int num_count = 0;
+          char num_store[4];
+          int isp_part_count = 0;
+          dprintf(("", "create_bootblock(): value for IP tag %s is %s\n", bootblock->tag_cache->tag[l].tag, bootblock->tag_cache->tag[l].val));
+          /* Attempt to split the string into four numbers */
+          do
+          {
+            if (bootblock->tag_cache->tag[l].val[loop2]=='.' || bootblock->tag_cache->tag[l].val[loop2]=='\0')
+            {
+              num_store[num_count]='\0'; /* Terminate the string. */
+              nums[isp_part_count++] = atoi(num_store);
+              dprintf(("", "create_bootblock(): Number isp_part_count is %s (%d)\n", num_store, nums[isp_part_count-1]));
+              num_count=0;
+            }
+            else
+            {
+              num_store[num_count++]=bootblock->tag_cache->tag[l].val[loop2];
+            }
+            loop2++;
+          }
+          while (bootblock->tag_cache->tag[l].val[loop2-1] != '\0'); /* Scan until end of string */
+
+          /* Ensure that there are four numbers, and if there are, write them */
+          if (isp_part_count < 3)
+          {
+            dprintf(("", "create_bootblock(): Error: IP address does not have three constituent numbers.\n"));
+          }
+          else
+          {
+            /* Write the tag number and tag value size */
+            write_big_word(body_data+bootblock_body_count, bootblock->tag_cache->tag[l].nci_tag);
+            bootblock_body_count+=4;
+            write_big_short(body_data+bootblock_body_count, 4);
+            bootblock_body_count+=2;
+            /* Now write the actual data */
+            body_data[bootblock_body_count++]=nums[0];
+            body_data[bootblock_body_count++]=nums[1];
+            body_data[bootblock_body_count++]=nums[2];
+            body_data[bootblock_body_count++]=nums[3];
+          }
+        }
+        break;
+
+        default:
+          dprintf(("", "create_bootblock(): Error: Tag type %d for tag %s is currently unsupported.\n", bootblock->tag_cache->tag[l].mapping, bootblock->tag_cache->tag[l].tag));
+
+      }
+    }
+  }
+
+  dprintf(("", "create_bootblock(): Bootblock successfully created. Size of bootblock is %d bytes. Adding header and footer.\n", bootblock_body_count));
+
+  /* Create the pre-bootblock header (spec 2.2.5) */
+  header_data[0] = 0x01;
+  header_data[1] = 0x00;
+  header_data[2] = 0x00;
+  header_data[3] = 0x00;
+  /* The next word needs to be in litle-endian format (spec 2.2.5 table) */
+  header_data[7] = ((bootblock_body_count+28) & 0xff000000)>>24;
+  header_data[6] = ((bootblock_body_count+28) & 0x00ff0000)>>16;
+  header_data[5] = ((bootblock_body_count+28) & 0x0000ff00)>>8;
+  header_data[4] = ((bootblock_body_count+28) & 0x000000ff);
+
+  /* Now create the bootblock header. (spec 3.1) */
+  header_data[8]  = 0x80; /* (All these are defined in spec 3.1 table) */
+  header_data[9]  = 0x00;
+  header_data[10] = 0x00;
+  header_data[11] = 0x04;
+  write_big_short(header_data+12, (bootblock_body_count+22));
+  header_data[14] = 0x80;
+  header_data[15] = 0x00;
+  header_data[16] = 0x00;
+  header_data[17] = 0x01;
+  write_big_short(header_data+18, (bootblock_body_count+16));
+  header_data[20] = 0x80;
+  header_data[21] = 0x00;
+  header_data[22] = 0x00;
+  header_data[23] = 0x03;
+  write_big_short(header_data+24, (bootblock_body_count+10));
+  header_data[26] = 0x00;
+  header_data[27] = 0x00;
+  header_data[28] = 0x00;
+  header_data[29] = 0x30;
+  header_data[30] = 0x00;
+  header_data[31] = 0x04;
+  header_data[32] = 0x2A;
+  header_data[33] = 0x00;
+  header_data[34] = 0x00;
+  header_data[35] = 0x00;
+
+  /* Generate the trailer (spec 3.3) */
+  trailer_data[0] = 0x00;
+  trailer_data[1] = 0x00;
+  trailer_data[2] = 0x00;
+  trailer_data[3] = 0x05;
+  trailer_data[4] = 0x00;
+  trailer_data[5] = 0x06;
+  trailer_data[6] = 0x62;
+  trailer_data[7] = 0x79;
+  trailer_data[8] = 0x20;
+  trailer_data[9] = 0x41;
+  trailer_data[10] = 0x6E;
+  trailer_data[11] = 0x74;
+
+  /* Now create the bootblock data (header+data+trailer) */
+  memcpy(bootblock_data, header_data, 36);
+  memcpy(bootblock_data+36, body_data, bootblock_body_count);
+  memcpy(bootblock_data+36+bootblock_body_count, trailer_data, 12);
+
+  if (body_data)
+  {
+    rmfree((unsigned char*)body_data);
+  }
+
+  return (bootblock_data);
+}
+
 
 
