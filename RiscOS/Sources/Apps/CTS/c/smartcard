@@ -669,7 +669,7 @@ static void cts_sc_release_vector(void)
                 SCEvent_handler, cts_sc_pollword);
 #else
         (void) _swix(OS_Release, _INR(0,2), Event_Vector,
-                cts_sc_pollword + 3, cts_sc_pollword);
+                cts_sc_pollword + SCEvent_QueueBytes, cts_sc_pollword);
 #endif
 }
 
@@ -686,14 +686,14 @@ _kernel_oserror *cts_sc_init_lowlevel(void **pollwordp)
         int              explen;
 #ifdef ROM
         /* RAM or ROM module - we don't need to do the code-copying shenanigans. */
-        cts_sc_pollword = rma_alloc(3 * sizeof(int));
+        cts_sc_pollword = rma_alloc(SCEvent_QueueBytes);
         if (cts_sc_pollword == NULL) {
                 dprintf(("", "Memory exhaustion!\n"));
                 raise(SIGTERM);
         }
         atexit(cts_sc_exit_lowlevel);
-        memset(cts_sc_pollword, '\0', 3 * sizeof(int));
-        *pollwordp = cts_sc_pollword + 1; /* Must watch the reason code field. */
+        memset(cts_sc_pollword, '\0', SCEvent_QueueBytes);
+        *pollwordp = cts_sc_pollword ; /* Must watch the number of entries in our event queue. */
 
         e = _swix(OS_Claim, _INR(0,2), Event_Vector, SCEvent_handler, cts_sc_pollword);
 #else
@@ -707,23 +707,23 @@ _kernel_oserror *cts_sc_init_lowlevel(void **pollwordp)
         const size_t event_handler_size = scevent_code_limit - scevent_code_base;
 
         dprintf(("cts_sc", "smartcard low level init: claim %#08x bytes of RMA\n",
-                3 * sizeof(int) + event_handler_size));
+                SCEvent_QueueBytes));
         dprintf(("cts_sc", "code start at %p; code end at %p\n",
                 scevent_code_base, scevent_code_limit));
 
-        cts_sc_pollword = rma_alloc(3 * sizeof(int) + event_handler_size);
+        cts_sc_pollword = rma_alloc(SCEvent_QueueBytes + event_handler_size);
         if (cts_sc_pollword == NULL) {
                 dprintf(("", "Memory exhaustion!\n"));
                 raise(SIGTERM);
         }
         atexit(cts_sc_exit_lowlevel);
-        memset(cts_sc_pollword, '\0', 3 * sizeof(int));
+        memset(cts_sc_pollword, '\0', SCEvent_QueueBytes);
         MemCheck_RegisterMiscBlock(scevent_code_base, event_handler_size);
-        memcpy(cts_sc_pollword + 3, scevent_code_base, event_handler_size);
+        memcpy(cts_sc_pollword + SCEvent_QueueBytes, scevent_code_base, event_handler_size);
         MemCheck_UnRegisterMiscBlock(scevent_code_base);
-        *pollwordp = cts_sc_pollword + 1; /* Must watch the reason code field. */
+        *pollwordp = cts_sc_pollword ; /* Must watch the number of entries in our event queue. */
 
-        e = _swix(OS_Claim, _INR(0,2), Event_Vector, cts_sc_pollword + 3, cts_sc_pollword);
+        e = _swix(OS_Claim, _INR(0,2), Event_Vector, cts_sc_pollword + SCEvent_QueueBytes, cts_sc_pollword);
 #endif
         if (e != NULL) return e;
         atexit(cts_sc_release_vector);
@@ -770,27 +770,34 @@ void cts_sc_pollword_handler(void)
 {
         ToolboxEvent e;
         int set_read_response_available = 1;
+        int i;
+        int card_handle;
+        int card_reason;
 
-        dprintf(("cts_sc", "pollword handler entered for card %d (need %d) (%d %d)\n",
-                cts_sc_pollword[0], actual_card_handle, cts_sc_pollword[1],
-                cts_sc_pollword[2]));
+        dprintf(("cts_sc", "pollword handler entered with %d events in queue\n", cts_sc_pollword[0]));
 
-        if (cts_sc_pollword[0] != actual_card_handle && cts_sc_pollword[0] != 0xFFFF) {
-                cts_sc_pollword[1] = 0;
-                return;
-        }
+        for (i=0; i<cts_sc_pollword[0]; i++)
+        {
+            card_handle=cts_sc_pollword[i*3+1];  /* Get card handle for this event */
+            card_reason=cts_sc_pollword[i*3+2];  /* Get reason code for this event */
+            dprintf(("cts_sc", "Event %d card %d (need %d) (reason %d, handle %d)\n",
+                    i, card_handle, actual_card_handle, card_reason, cts_sc_pollword[i*3+3]));
 
-        e.hdr.size = sizeof(ToolboxEventHeader);
-        e.hdr.reference_number = 0;
+            if (card_handle != actual_card_handle && card_handle != 0xFFFF) {
+                    continue;
+            }
 
-        dprintf(("cts_sc", "pollword non-zero reason code = %d\n", cts_sc_pollword[1]));
+            e.hdr.size = sizeof(ToolboxEventHeader);
+            e.hdr.reference_number = 0;
 
-        switch (cts_sc_pollword[1]) {
+            dprintf(("cts_sc", "Event reason code = %d\n", card_reason));
+
+            switch (card_reason) {
                 case SCI_EV_REMOVED:
                 case SCI_EV_REMOVED2:
                         cts_last_error.code = SCI_E_OUT;
                         e.hdr.event_code = event_SMARTCARD_REMOVED;
-                        e.hdr.flags = cts_sc_pollword[1] == SCI_EV_REMOVED ? 1 : 2;
+                        e.hdr.flags = card_reason == SCI_EV_REMOVED ? 1 : 2;
                         dprintf(("cts_sc", "Smartcard removed from slot %d\n", e.hdr.flags));
                         log_send_msg(log_SC_REMOVED, e.hdr.flags);
                 #ifdef ENABLE_SLOT1SHOPPING
@@ -799,7 +806,7 @@ void cts_sc_pollword_handler(void)
                 #endif
                         {
                           dprintf(("cts_sc", "Telling SCInterface about the removal\n"));
-                          _swix(SCInterface_Events, _IN(0)|_IN(2)|_IN(3), 1, actual_card_handle, cts_sc_pollword[1]);
+                          _swix(SCInterface_Events, _IN(0)|_IN(2)|_IN(3), 1, actual_card_handle, card_reason);
                         }
                 #endif
                         break;
@@ -812,7 +819,7 @@ void cts_sc_pollword_handler(void)
                 case SCI_EV_BADINSERT2:
                         cts_last_error.code = SCI_E_BADCARD;
                         e.hdr.event_code = event_SMARTCARD_BAD_OBJECT_INSERTED;
-                        e.hdr.flags = cts_sc_pollword[1] == SCI_EV_BADINSERT ? 1 : 2;
+                        e.hdr.flags = card_reason == SCI_EV_BADINSERT ? 1 : 2;
                         break;
                 case SCI_EV_ERROR:
                 case SCI_EV_ERROR2:
@@ -826,7 +833,7 @@ void cts_sc_pollword_handler(void)
                         set_read_response_available = 0;
                         cts_last_error.code = SCI_SUCCESS;
                         e.hdr.event_code = event_SMARTCARD_INSERTED;
-                        e.hdr.flags = cts_sc_pollword[1] == SCI_EV_INSERTED ? 1 : 2;
+                        e.hdr.flags = card_reason == SCI_EV_INSERTED ? 1 : 2;
                         dprintf(("cts_sc", "Smartcard inserted in slot %d\n", e.hdr.flags));
                         log_send_msg(log_SC_INSERTED, e.hdr.flags);
                         break;
@@ -834,22 +841,23 @@ void cts_sc_pollword_handler(void)
                 case SCI_EV_CMD_DONE2:
                         cts_last_error.code = SCI_SUCCESS;
                         e.hdr.event_code = event_SMARTCARD_COMMAND_DONE;
-                        e.hdr.flags = cts_sc_pollword[1] == SCI_EV_CMD_DONE ? 1 : 2;
+                        e.hdr.flags = card_reason == SCI_EV_CMD_DONE ? 1 : 2;
                         break;
                 default:
                         /* Unknown event - must ignore this */
                         break;
+            }
         }
 
         toolbox_raise_toolbox_event(0, NULL_ObjectId, NULL_ComponentId, &e);
 
         if (set_read_response_available) {
-                read_response_available = set_read_response_available;
+             read_response_available = set_read_response_available;
         }
 
         dprintf(("cts_sc", "read_response_available now = %d\n", read_response_available));
 
-        cts_sc_pollword[1] = 0;
+        cts_sc_pollword[0] = 0;         /* Reset number of entries in queue */
 }
 
 cts_sc_status cts_sc_send_sblock(
