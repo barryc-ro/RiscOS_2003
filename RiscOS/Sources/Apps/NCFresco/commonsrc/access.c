@@ -1507,8 +1507,11 @@ static void access_http_fetch_alarm(int at, void *h)
          *
          * pdh: me again, reinstated condition (it meant bits of 302 redirect
          * pages turned up in the main document) but rephrased it as rc != 3xx
-         */
-	int readable = d->ft_is_set && ((si.out.rc / 100) != 3);
+	 *
+	 * sjm: not readable if it is a authentication challenge to stop bits of challenge
+	 * pages getting inserted into the real page.
+	 */
+	int readable = d->ft_is_set && ((si.out.rc / 100) != 3) && si.out.rc != 401 && si.out.rc != 407;
 
         ACCDBG(("Calling progress function (st=%d data=%d/%d rd=%d ft=%d)\n",
                 si.out.status, si.out.data_so_far, si.out.data_size, readable,

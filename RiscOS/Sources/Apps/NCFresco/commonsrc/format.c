@@ -1511,6 +1511,7 @@ static void recurse_format_stream(antweb_doc *doc,
 
  */
 
+#if 0
 extern void rid_toplevel_format(antweb_doc *doc,
 				rid_header *rh,
 				rid_text_item *start_from,
@@ -1547,18 +1548,19 @@ extern void rid_toplevel_format(antweb_doc *doc,
 	FMTDBG(("\nDone sizing root stream:\n"));
 	/*dump_header(rh);*/
 
+	if (rh->stream.widest > fwidth)
+	{
+	    FMTDBG(("\n\nCASE WHERE AUTOFIT MIGHT DO SOMETHING BETTER\n\n\n"));
+/* 	    rh->stream.fwidth = rh->stream.widest; */
+ 	    fwidth = rh->stream.fwidth = rh->stream.width_info.minwidth;
+	}
+
 	FMTDBG(("Allocating widths to root stream\n"));
 	allocate_widths(doc, rh, &rh->stream, fwidth);
 	FMTDBG(("\nDone allocating widths to root stream: fwidth %d, width %d, widest %d\n",
 		rh->stream.fwidth, rh->stream.width, rh->stream.widest));
 	/*dump_header(rh);*/
 
-	if (rh->stream.widest > fwidth)
-	{
-	    FMTDBG(("\n\nCASE WHERE AUTOFIT MIGHT DO SOMETHING BETTER\n\n\n"));
-/* 	    rh->stream.fwidth = rh->stream.widest; */
- 	    rh->stream.fwidth = rh->stream.width_info.minwidth;
-	}
 
 	FMTDBG(("Formatting root stream with fwidth %d\n", rh->stream.fwidth));
 	recurse_format_stream(doc, rh, &rh->stream, 0);
@@ -1575,5 +1577,75 @@ extern void rid_toplevel_format(antweb_doc *doc,
 
     return;
 }
+#else
+extern void rid_toplevel_format(antweb_doc *doc,
+				rid_header *rh,
+				rid_text_item *start_from,
+				int fwidth,
+				int fheight)
+{
+    rid_text_stream *root_stream;
+
+    FMTDBG(("\n\n\n\n\n\nrid_toplevel_format(%p) entered\n\n", rh));
+
+
+    format_one_off_assertions();
+
+    ASSERT(rh != NULL);
+    ASSERT(doc != NULL);
+
+    /* And floating images. */
+
+    stomp_captions_until_working(rh);
+    format_precondition(rh);
+    root_stream = &rh->stream;
+
+    if (rh->stream.text_list == NULL)
+    {
+	FMTDBG(("Document empty\n"));
+	rh->stream.fwidth = fwidth;
+	rh->stream.width = 0;
+	rh->stream.widest = 0;
+	rh->stream.height = 0;
+    }
+    else
+    {
+	FMTDBG(("Sizing root stream\n"));
+	basic_size_stream(doc, rh, root_stream, 0);
+	FMTDBG(("\nDone sizing root stream: min %d, max %d\n", 
+		root_stream->width_info.minwidth,
+		root_stream->width_info.maxwidth));
+
+	/*dump_header(rh);*/
+
+	if (rh->stream.width_info.minwidth > fwidth)
+	{
+	    FMTDBG(("\n\nCASE WHERE AUTOFIT MIGHT DO SOMETHING BETTER\n\n\n"));
+	    fwidth = rh->stream.fwidth = rh->stream.width_info.minwidth;
+	}
+
+	FMTDBG(("Allocating widths to root stream\n"));
+	allocate_widths(doc, rh, &rh->stream, fwidth);
+
+	FMTDBG(("\nDone allocating widths to root stream: fwidth %d, width %d, widest %d\n",
+		rh->stream.fwidth, rh->stream.width, rh->stream.width_info.minwidth));
+	/*dump_header(rh);*/
+
+	FMTDBG(("Formatting root stream with fwidth %d\n", rh->stream.fwidth));
+	recurse_format_stream(doc, rh, &rh->stream, 0);
+	FMTDBG(("\nDone formatting root stream with fwidth %d:\n", rh->stream.fwidth));
+
+#if 0
+	dump_header(rh);
+#endif
+    }
+
+    FMTDBG(("rid_toplevel_format: finished\n"));
+
+    format_postcondition(rh);
+
+    return;
+}
+#endif
 
 /* eof format.c */
