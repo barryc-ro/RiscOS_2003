@@ -5,7 +5,7 @@
 # ***********************************
 # Date       Name   Description
 # ----       ----   -----------
-# 14-Mar-97   AB    FX playback
+# 17-Aug-98  SBF    NC on-screen keyboard
 #
 
 #
@@ -25,8 +25,9 @@ LD      = link
 RM      = remove
 WIPE    = -wipe
 
-AFLAGS = -depend !Depend -Stamp -quit
+AFLAGS  = -depend !Depend -Stamp -quit
 CFLAGS  = -c -depend !Depend -ff ${INCLUDES} ${DFLAGS}
+LDFLAGS =
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
@@ -84,6 +85,7 @@ RESAPP = <resource$dir>.Apps.${APPNAME}
 # build a relocatable module:
 #
 all: ${APP}
+        @echo ${COMPONENT}: built
 
 #
 # RISC OS ROM build rules:
@@ -116,7 +118,7 @@ resources:
         ${CP} ${RDIR}.!BootROM ${RESAPP}.!Boot ${CPFLAGS}
         ${CP} ${RDIR}.!RunROM ${RESAPP}.!Run ${CPFLAGS}
         ${CP} ${RDIR}.Messages ${RESAPP}.Messages ${CPFLAGS}
-        ${CP} ${RDIR}.res ${RESAPP}.res ${CPFLAGS}
+        ${CP} ${RDIR}.Res ${RESAPP}.Res ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 #
@@ -158,151 +160,3 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 #       ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-o.handlers:	c.handlers
-o.handlers:	C:h.kernel
-o.handlers:	tbox:h.wimp
-o.handlers:	tbox:h.toolbox
-o.handlers:	tbox:h.wimplib
-o.handlers:	h.handlers
-o.handlers:	tbox:h.toolbox
-o.handlers:	tbox:h.wimp
-o.handlers:	h.oskbutils
-o.handlers:	h.NCKeybd
-o.main:	c.main
-o.main:	tbox:h.wimp
-o.main:	tbox:h.toolbox
-o.main:	C:h.kernel
-o.main:	tbox:h.event
-o.main:	tbox:h.wimplib
-o.main:	tbox:h.window
-o.main:	tbox:h.gadgets
-o.main:	h.NCKeybd
-o.main:	h.windowops
-o.main:	h.NCKeybd
-o.main:	h.oskbutils
-o.main:	h.NCKeybd
-o.main:	h.handlers
-o.main:	tbox:h.toolbox
-o.main:	tbox:h.wimp
-o.oskbutils:	c.oskbutils
-o.oskbutils:	C:h.kernel
-o.oskbutils:	tbox:h.wimplib
-o.oskbutils:	tbox:h.wimp
-o.oskbutils:	C:h.swis
-o.oskbutils:	tbox:h.gadgets
-o.oskbutils:	tbox:h.toolbox
-o.oskbutils:	tbox:h.event
-o.oskbutils:	tbox:h.window
-o.oskbutils:	h.NCKeybd
-o.oskbutils:	h.windowops
-o.oskbutils:	h.NCKeybd
-o.oskbutils:	h.oskbutils
-o.oskbutils:	h.NCKeybd
-o.windowops:	c.windowops
-o.windowops:	C:h.kernel
-o.windowops:	C:h.swis
-o.windowops:	tbox:h.toolbox
-o.windowops:	tbox:h.wimp
-o.windowops:	tbox:h.wimp
-o.windowops:	tbox:h.wimplib
-o.windowops:	tbox:h.window
-o.windowops:	tbox:h.gadgets
-o.windowops:	h.NCKeybd
-o.windowops:	h.windowops
-o.windowops:	h.NCKeybd
-oz.ModuleWrap: s.ModuleWrap
-oz.ModuleWrap: s.AppName
-oz.ModuleWrap: Hdr:ListOpts
-oz.ModuleWrap: Hdr:Macros
-oz.ModuleWrap: Hdr:System
-oz.ModuleWrap: Hdr:SWIs
-oz.ModuleWrap: Hdr:CPU.Generic26
-oz.ModuleWrap: Hdr:IO.GenericIO
-oz.ModuleWrap: Hdr:RISCOS
-oz.ModuleWrap: Hdr:ModHand
-oz.ModuleWrap: Hdr:EnvNumbers
-oz.ModuleWrap: Hdr:Proc
-oz.ModuleWrap: Hdr:FSNumbers
-oz.ModuleWrap: Hdr:NewErrors
-oz.ModuleWrap: Hdr:Services
-oz.ModuleWrap: Hdr:ResourceFS
-oz.ModuleWrap: Hdr:MsgTrans
-oz.ModuleWrap: Hdr:Variables
-oz.ModuleWrap: Hdr:UpCall
-oz.ModuleWrap: s.ResFiles
-oz.handlers:	c.handlers
-oz.handlers:	C:h.kernel
-oz.handlers:	tbox:h.wimp
-oz.handlers:	tbox:h.toolbox
-oz.handlers:	tbox:h.wimplib
-oz.handlers:	h.handlers
-oz.handlers:	tbox:h.toolbox
-oz.handlers:	tbox:h.wimp
-oz.handlers:	h.oskbutils
-oz.handlers:	h.NCKeybd
-oz.main:	c.main
-oz.main:	tbox:h.wimp
-oz.main:	tbox:h.toolbox
-oz.main:	C:h.kernel
-oz.main:	tbox:h.event
-oz.main:	tbox:h.wimplib
-oz.main:	tbox:h.window
-oz.main:	tbox:h.gadgets
-oz.main:	h.NCKeybd
-oz.main:	h.windowops
-oz.main:	h.NCKeybd
-oz.main:	h.oskbutils
-oz.main:	h.NCKeybd
-oz.main:	h.handlers
-oz.main:	tbox:h.toolbox
-oz.main:	tbox:h.wimp
-oz.oskbutils:	c.oskbutils
-oz.oskbutils:	C:h.kernel
-oz.oskbutils:	tbox:h.wimplib
-oz.oskbutils:	tbox:h.wimp
-oz.oskbutils:	C:h.swis
-oz.oskbutils:	tbox:h.gadgets
-oz.oskbutils:	tbox:h.toolbox
-oz.oskbutils:	tbox:h.event
-oz.oskbutils:	tbox:h.window
-oz.oskbutils:	h.NCKeybd
-oz.oskbutils:	h.windowops
-oz.oskbutils:	h.NCKeybd
-oz.oskbutils:	h.oskbutils
-oz.oskbutils:	h.NCKeybd
-oz.oskbutils:	h.handlers
-oz.oskbutils:	tbox:h.toolbox
-oz.oskbutils:	tbox:h.wimp
-oz.oskbutils:	C:h.nvram
-oz.windowops:	c.windowops
-oz.windowops:	C:h.kernel
-oz.windowops:	C:h.swis
-oz.windowops:	tbox:h.toolbox
-oz.windowops:	tbox:h.wimp
-oz.windowops:	tbox:h.wimp
-oz.windowops:	tbox:h.wimplib
-oz.windowops:	tbox:h.window
-oz.windowops:	tbox:h.gadgets
-oz.windowops:	h.NCKeybd
-oz.windowops:	h.windowops
-oz.windowops:	h.NCKeybd
-oz.ModuleWra1: s.ModuleWrap
-oz.ModuleWra1: s.AppName
-oz.ModuleWra1: Hdr:ListOpts
-oz.ModuleWra1: Hdr:Macros
-oz.ModuleWra1: Hdr:System
-oz.ModuleWra1: Hdr:SWIs
-oz.ModuleWra1: Hdr:CPU.Generic26
-oz.ModuleWra1: Hdr:IO.GenericIO
-oz.ModuleWra1: Hdr:RISCOS
-oz.ModuleWra1: Hdr:ModHand
-oz.ModuleWra1: Hdr:EnvNumbers
-oz.ModuleWra1: Hdr:Proc
-oz.ModuleWra1: Hdr:FSNumbers
-oz.ModuleWra1: Hdr:NewErrors
-oz.ModuleWra1: Hdr:Services
-oz.ModuleWra1: Hdr:ResourceFS
-oz.ModuleWra1: Hdr:MsgTrans
-oz.ModuleWra1: Hdr:Variables
-oz.ModuleWra1: Hdr:UpCall
-oz.ModuleWra1: s.ResFiles
