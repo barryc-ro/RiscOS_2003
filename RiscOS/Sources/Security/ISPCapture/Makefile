@@ -44,14 +44,15 @@ INCLUDES= -IC: -ITCPIPLibs:
 #
 # use REMOTE_DEBUG to enable remote debugging
 # use ENABLE_DEBUGGING if you want to enable debugging!
+# use LOCAL_URL_PATHS to get pages from ispc: instead of ispcScr:
 
 # debugging
 
-ETHERNETDB  =   -DREMOTE_DEBUG -DENABLE_DEBUGGING
+ETHERNETDB  =   -DREMOTE_DEBUG -DENABLE_DEBUGGING -DLOCAL_URL_PATHS
 
-ZIPDB  =        -UREMOTE_DEBUG -DENABLE_DEBUGGING
+ZIPDB  =        -UREMOTE_DEBUG -DENABLE_DEBUGGING -DLOCAL_URL_PATHS
 
-NODB  =         -UREMOTE_DEBUG -UENABLE_DEBUGGING
+NODB  =         -UREMOTE_DEBUG -UENABLE_DEBUGGING -DLOCAL_URL_PATHS
 
 #
 # select one of these
@@ -105,7 +106,7 @@ NOTROMOBJS = o.resources ${DBUGLIB} ${BASEOBJS}
 
 RESDIR = <resource$dir>.Resources.${COMPONENT}
 
-NOTROMRESDEP = 
+NOTROMRESDEP = html.ISPC1 html.ISPC2 html.ISPC3 html.ISPC4
 
 ROMRESDEP = 
 
@@ -144,7 +145,7 @@ clean:
 
 resources:
         ${MKDIR} <resource$dir>.Resources
-        ${MKDIR} <resource$dir>.Resources.ISPC
+        ${MKDIR} <resource$dir>.Resources.ISPcapture
         
         @echo ${COMPONENT}: resource files copied
 
@@ -179,18 +180,6 @@ rom_link:
 
 
 # Dynamic dependencies:
-o.dynalloc:	c.dynalloc
-o.dynalloc:	C:h.kernel
-o.dynalloc:	C:h.swis
-o.dynalloc:	h.dynalloc
-o.dynalloc:	C:h.DBUG
-o.dynalloc:	h.kprintf
-o.kprintf:	c.kprintf
-o.kprintf:	C:h.kernel
-o.kprintf:	C:h.swis
-o.kprintf:	h.kprintf
-o.header:	cmhg.header
-o.header:	h.cmhg_defs
 o.module:	c.module
 o.module:	C:h.kernel
 o.module:	C:h.swis
@@ -199,6 +188,8 @@ o.module:	C:h.DBUG
 o.module:	h.dynalloc
 o.module:	h.ispc_ispc
 o.module:	h.ispc_cmds
+o.header:	cmhg.header
+o.header:	h.cmhg_defs
 o.ispc_cmds:	c.ispc_cmds
 o.ispc_cmds:	C:h.kernel
 o.ispc_cmds:	C:h.swis
@@ -209,21 +200,12 @@ o.ispc_cmds:	h.ispc_utils
 o.ispc_cmds:	h.kprintf
 o.ispc_cmds:	h.dynalloc
 o.ispc_cmds:	C:h.DBUG
-o.ispc_url:	c.ispc_url
-o.ispc_url:	C:h.kernel
-o.ispc_url:	C:h.swis
-o.ispc_url:	h.ispc_ispc
-o.ispc_url:	h.ispc_url
-o.ispc_url:	h.ispc_utils
-o.ispc_url:	C:h.DBUG
-o.ispc_utils:	c.ispc_utils
-o.ispc_utils:	C:h.kernel
-o.ispc_utils:	C:h.swis
-o.ispc_utils:	h.ispc_utils
-o.ispc_utils:	h.ispc_ispc
-o.ispc_utils:	h.ispc_url
-o.ispc_utils:	h.smcard
-o.ispc_utils:	C:h.DBUG
+o.dynalloc:	c.dynalloc
+o.dynalloc:	C:h.kernel
+o.dynalloc:	C:h.swis
+o.dynalloc:	h.dynalloc
+o.dynalloc:	C:h.DBUG
+o.dynalloc:	h.kprintf
 o.ispc_ispc:	c.ispc_ispc
 o.ispc_ispc:	C:h.kernel
 o.ispc_ispc:	C:h.swis
@@ -255,3 +237,22 @@ o.ispc_ispc:	h.ispc_url
 o.ispc_ispc:	h.ispc_utils
 o.ispc_ispc:	h.dynalloc
 o.ispc_ispc:	C:h.DBUG
+o.ispc_url:	c.ispc_url
+o.ispc_url:	C:h.kernel
+o.ispc_url:	C:h.swis
+o.ispc_url:	h.ispc_ispc
+o.ispc_url:	h.ispc_url
+o.ispc_url:	h.ispc_utils
+o.ispc_url:	C:h.DBUG
+o.kprintf:	c.kprintf
+o.kprintf:	C:h.kernel
+o.kprintf:	C:h.swis
+o.kprintf:	h.kprintf
+o.ispc_utils:	c.ispc_utils
+o.ispc_utils:	C:h.kernel
+o.ispc_utils:	C:h.swis
+o.ispc_utils:	h.ispc_utils
+o.ispc_utils:	h.ispc_ispc
+o.ispc_utils:	h.ispc_url
+o.ispc_utils:	h.smcard
+o.ispc_utils:	C:h.DBUG
