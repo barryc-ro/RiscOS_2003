@@ -13,6 +13,7 @@
 #include "ctstypes.h"
 #include "ctsbrowser.h"
 #include "ctsintern.h"
+#include "ctsutils.h"
 #include "smartcard.h"
 
 #include "SCTransport.h"
@@ -31,6 +32,9 @@ static int actual_card_handle;
 
 static int card_handle_valid = 0;
 
+/* Homer says calling the SWI call in SCTrans to get this information is flaky
+ * and can mess the module up completely - so we'll cache it here.
+ */
 static struct {
         cts_sc_sctrans_errors	code;
         _kernel_oserror 	error_block;
@@ -92,10 +96,10 @@ enum {
         cts_sc_handle_SLOT2 = -2
 };
 
-cts_sc_sctrans_errors cts_sc_get_last_error(_kernel_oserror *e)
+cts_sc_sctrans_errors cts_sc_get_last_error(_kernel_oserror **e)
 {
         if (e != NULL) {
-                *e = cts_last_error.error_block;
+                *e = &cts_last_error.error_block;
         }
 	return cts_last_error.code;
 }
@@ -135,15 +139,28 @@ cts_sc_status cts_sc_close(void)
         return cts_sc_status_COMPLETE;
 }
 
+/* APDU buffer on exit is identical to APDU buffer on entry, but is temporarily
+ * transformed back into the binary representation of the data for passing on
+ * to the SCTrans module
+ */
 cts_sc_status cts_sc_send_apdu(
 	const void *apdu,
 	size_t apdu_len)
 {
-        register const char *const apdu_header = apdu;
-        register const char *const apdu_data   = apdu_header + 4;
+        register char *const apdu_header = (void *) apdu;
+        register char *const apdu_data   = apdu_header + 4;
+        cts_sc_status res;
 
-        return cts_swix(SCTransport_IssueCommand, _INR(0,4), actual_card_handle,
+        apdu_len >>= 1;
+
+	(void) cts_utils_binary_decode(apdu_header, apdu_header, apdu_len);
+
+        res = cts_swix(SCTransport_IssueCommand, _INR(0,4), actual_card_handle,
         	apdu_header, apdu_len - (apdu_data - apdu_header), apdu_data, 0);
+
+	(void) cts_utils_binary_encode(apdu_header, apdu_header, apdu_len);
+
+	return res;
 }
 
 cts_sc_status cts_sc_read_data(
@@ -153,14 +170,26 @@ cts_sc_status cts_sc_read_data(
 	char *sw1sw2_response)
 {
         size_t temporary;
+        cts_sc_status res;
 
         if (data_size == NULL) {
                 data_size = &temporary;
         }
-        *data_size = buffer_length;
 
-        return cts_swix(SCTransport_ReadResponse, _INR(0,4), actual_card_handle,
+        *data_size = buffer_length >> 1;
+
+        res = cts_swix(SCTransport_ReadResponse, _INR(0,4), actual_card_handle,
         	buffer, buffer_length, data_size, sw1sw2_response);
+
+	if (res == cts_sc_status_COMPLETE) {
+	        if (buffer != NULL) {
+		        cts_utils_binary_encode(buffer, buffer, *data_size);
+	        }
+	}
+
+        *data_size <<= 1;
+
+        return res;
 }
 
 void cts_sc_atexit(void)
