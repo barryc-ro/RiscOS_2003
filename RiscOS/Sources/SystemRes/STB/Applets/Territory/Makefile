@@ -37,7 +37,7 @@ INRESDIR	= LocalUserIFRes:Resources
 INVSNFILE	= LocalUserIFRes:Version
 INCHOICEDIR	= LocalUserIFRes:Choices
 INPREDIR	= LocalUserIFRes:PreDesktop
-#INDESKDIR	= LocalUserIFRes:Desktop
+INDESKDIR	= LocalUserIFRes:Desktop
 
 #
 # Destination paths and filenames for files and directories to be installed to:
@@ -48,7 +48,7 @@ OUTVSNDIR	= $(INSTDIR).$(VERSN)
 OUTVSNFILE	= $(OUTVSNDIR).$(COMPONENT)
 OUTCHOICEDIR	= $(INSTDIR).$(CHOICES)
 OUTPREDIR	= $(INSTDIR).$(PRE)
-#OUTDESKDIR	= $(INSTDIR).$(DESK)
+OUTDESKDIR	= $(INSTDIR).$(DESK)
 
 #
 # Flags and translation macros:
@@ -104,6 +104,7 @@ install: translate dirs
 	$(CP) $(INAPPDIR).*      $(OUTAPPDIR).*       $(CPFLAGS)
 	$(CP) $(INRESDIR).*      $(OUTRESDIR).*       $(CPFLAGS)
 	$(CP) $(INPREDIR).*      $(OUTPREDIR).*       $(CPFLAGS)
+	$(CP) $(INDESKDIR).*     $(OUTDESKDIR).*      $(CPFLAGS)
 	$(CP) $(INCHOICEDIR).*   $(OUTCHOICEDIR).*    $(CPFLAGS)
 	$(CP) $(INVSNFILE)       $(OUTVSNFILE)        $(CPFLAGS)
 	Do $(AWK) -- "/.define.*CMHG.*/" VersionNum >>$(OUTVSNFILE)
@@ -119,5 +120,6 @@ dirs:
 	$(MKDIR) $(OUTVSNDIR)
 	$(MKDIR) $(OUTCHOICEDIR)
 	$(MKDIR) $(OUTPREDIR)
+	$(MKDIR) $(OUTDESKDIR)
 
 # Dynamic dependencies:
