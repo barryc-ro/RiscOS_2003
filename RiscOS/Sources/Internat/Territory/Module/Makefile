@@ -45,17 +45,22 @@ install_rom: ${TARGET}
 clean:
         ${WIPE} o ${WPFLAGS}
         ${WIPE} rm ${WPFLAGS}
+        ${WIPE} Resources.Combined ${WPFLAGS}
         @echo Territory modules: cleaned
 
-resources:
-        ${MKDIR} ${RESDIR}.${COMPONENT}
+Resources.Combined.${COMPONENT}: Resources.${COMPONENT}.Territory LocalRes:Messages
+	${MKDIR} Resources.Combined
 	TokenCheck Resources.${COMPONENT}.Territory
 	TokenCheck LocalRes:Messages
-        ${CP} Resources.${COMPONENT}.Territory ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
-	Print LocalRes:Messages { >> ${RESDIR}.${COMPONENT}.Messages }
+        ${CP} Resources.${COMPONENT}.Territory $@ ${CPFLAGS}
+	Print LocalRes:Messages { >> $@ }
+
+resources: Resources.Combined.${COMPONENT}
+        ${MKDIR} ${RESDIR}.${COMPONENT}
+        ${CP} Resources.Combined.${COMPONENT} ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
-${OBJECT}: ${SOURCE}
+${OBJECT}: ${SOURCE} Resources.Combined.${COMPONENT}
 	${MKDIR} o
         ${AS} ${ASFLAGS} ${SOURCE}
 
