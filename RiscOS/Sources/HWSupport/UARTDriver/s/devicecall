@@ -11,9 +11,18 @@
 ; call: handle_device_call
 ;
 
+;
+; DeviceFS will have ensured that V is clear on entry - so we don't need to
+; do that.   The return address is now stacked, and the CPSR too for the
+; duration of the call.
+;
+
 handle_device_call ROUT
 
-                BIC     lr, lr, #VFlag          ; clear V flag in link register
+                Push    lr
+                SavePSR lr
+                Push    lr
+                JumpAddress lr, device_call_exit, forward
 
                 CMP     r0, #(%20-%10)/4	; validate reason code
                 ADDCC   pc, pc, r0, LSL #2 	; despatch as required by reason code
@@ -22,21 +31,31 @@ handle_device_call ROUT
                 B       initialise              ; 0  initialise
                 B       finalise                ; 1  finalise
                 B       wakeup_TX               ; 2  wake up for TX
-                MOVS    pc, lr                  ; 3  wake up for RX
-                MOVS    pc, lr                  ; 4  sleep rx
-                MOVS    pc, lr                  ; 5  enumerate  directory
+                MOV     pc, lr                  ; 3  wake up for RX
+                MOV     pc, lr                  ; 4  sleep rx
+                MOV     pc, lr                  ; 5  enumerate  directory
                 B       create_TX_buffer        ; 6  create buffer for TX
                 B       create_RX_buffer        ; 7  create buffer for RX
                 B       threshold_halt          ; 8  halt
                 B       threshold_resume	; 9  resume
-                MOVS    pc, lr                  ; 10 end of data
+                MOV     pc, lr                  ; 10 end of data
                 B       stream_created		; 11 stream created
+                MOV     pc, lr
+                MOV     pc, lr
+                MOV     pc, lr                  ; 14 IOCtl
 20
+                Pull    lr
                 ADDR    r0, ErrorBlock_UART_BadDeviceReasonCode
-                DoError                   ; return error about naff reason code
+                Pull    lr
+                B       make_error
 
-		MakeErrorBlock UART_BadDeviceReasonCode
-                MOVS    pc, lr
+                MakeErrorBlock UART_BadDeviceReasonCode
+
+device_call_exit
+                Pull    lr
+                ORRVS   lr, lr, #V_bit
+                RestPSR lr,,f
+                Pull    pc
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
@@ -53,13 +72,13 @@ handle_device_call ROUT
 ; DeviceFS. It must store the relevant handles and setup the device.
 ;
 
-initialise      ENTRY  "r0"
+initialise      Entry  "r0"
 
                 TST     r3, #2_1                ; is it a RX or TX stream?
                 STREQ   r2, InputStreamHandle	; input handle passed in r2
                 STRNE   r2, OutputStreamHandle  ; output handle passed in r2
 
-                EXITS
+                EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -77,7 +96,7 @@ initialise      ENTRY  "r0"
 ; is re-opened.
 ;
 
-finalise        ENTRY	"r0-r4"
+finalise        Entry	"r0-r4"
 
                 MOV     lr, #-1
                 MOV     r1, #0
@@ -91,9 +110,9 @@ finalise        ENTRY	"r0-r4"
                 MOV     lr, #-1
                 LDR     r0, OutputStreamHandle
 
-                TEQ     r0, r2                  ; check for output stream
-                TEQNE   r2, #0                  ; or all streams to close - 0
-		EXITS	NE
+                CMP     r2, #0                  ; all streams? (clears V)
+                TEQNE   r0, r2                  ; or check for output stream
+                EXIT    NE
                 STR     r1, OutputStreamHandle  ; invalidate the output handle
 
 ; now establish a call back to link to buffer, as DeviceFS unlinks after this
@@ -102,8 +121,8 @@ finalise        ENTRY	"r0-r4"
 		ADDR	r0, buffer_link_device	; routine to call back
 		MOV	r1, r12			; workspace pointer
 		SWI	XOS_AddCallBack
-
-                EXITS
+                CLRV
+                EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -119,16 +138,18 @@ finalise        ENTRY	"r0-r4"
 ; This routine is called when data is ready to be transmitted. Data should start
 ; being passed to the device
 
-wakeup_TX       ENTRY
+wakeup_TX       Entry   "r7"
 
                 LDR     r11, UARTBaseAddress  		; r11 -> UART base
-                TEQP    pc, #SVC_mode + I_bit
+                SETPSR  SVC_mode+I_bit,r2,,r7
                 LDR     r2, UARTDeviceFlags
                 BIC     r2, r2, #1:SHL:SF_TXDormant	; TX buffer not dormant
                 STR     r2, UARTDeviceFlags
 
                 BL      update_DTRRTSTXI
-		EXITS
+                RestPSR r7,,cf
+
+                EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -156,7 +177,7 @@ wakeup_TX       ENTRY
 create_TX_buffer ROUT
                 CMP     r5, #-1
 		LDREQ	r5, OutputBufferHandle	; -1 if not already allocated
- 		MOVS	pc, lr
+ 		MOV	pc, lr
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -186,7 +207,7 @@ create_RX_buffer ROUT
 		LDREQ	r5, InputBufferHandle	; -1 if not already allocated
                 ORR     r3, r3, #BufferFlags_SendThresholdUpCalls
                 LDR     r6, UARTThreshold       ; modify the threshold value
-                MOVS    pc, lr
+                MOV     pc, lr
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -203,14 +224,14 @@ create_RX_buffer ROUT
 ; the specified threshold. Data receipt should be halted by asserting the
 ; RTS line and wait until resume point is called
 
-threshold_halt  ENTRY	"r2,r11"
+threshold_halt  Entry	"r2,r7,r11"
 
                 LDR     lr, InputStreamHandle  ; only interested on input stream
                 TEQ     lr, r2		       ; check handles
-                EXITS   NE		       ; exit if not input stream
+                EXIT    NE		       ; exit if not input stream
 
                 LDR     r11, UARTBaseAddress   ; r11 -> UART base
-                TEQP    PC, #SVC_mode + I_bit  ; disable IRQs
+                SETPSR  SVC_mode+I_bit,r2,,r7
                 LDR     r2, UARTDeviceFlags    ; r2 = UART device flags
                 ORR     r2, r2, #1:SHL:SF_Thresholded
 
@@ -223,7 +244,8 @@ threshold_halt  ENTRY	"r2,r11"
 
                 BL      update_DTRRTSTXI
 
-                EXITS
+                RestPSR r7,,cf
+                EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -239,14 +261,14 @@ threshold_halt  ENTRY	"r2,r11"
 ; This routine is called when the free space in the buffer has risen above the
 ; specified threshold.
 
-threshold_resume ENTRY	"r2, r11"
+threshold_resume Entry "r2, r7, r11"
 
                 LDR     lr, InputStreamHandle   ; interested on input stream
                 TEQ     lr, r2			; check handles
-                EXITS   NE			; exit if not input stream
+                EXIT    NE                      ; exit if not input stream
 
                 LDR     r11, UARTBaseAddress    ; r11 -> UART base
-                TEQP    PC, #SVC_mode + I_bit   ; disable IRQs
+                SETPSR  SVC_mode+I_bit,r2,,r7
                 LDR     r2, UARTDeviceFlags	; r2 = UART device flags
                 BIC     r2, r2, #1:SHL:SF_Thresholded
 
@@ -260,8 +282,8 @@ threshold_resume ENTRY	"r2, r11"
                 STREQB  lr, UARTXONXOFFChar	     ; store UART device flags
 10
                 BL      update_DTRRTSTXI
-
-                EXITS
+                RestPSR r7,,cf
+                EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -279,17 +301,14 @@ threshold_resume ENTRY	"r2, r11"
 ; to setup the device correctly and start transmission etc, etc...
 ;
 
-stream_created  ENTRY	"r0-r3"
+stream_created  Entry   "r0-r3"
                 LDR     r0, InputStreamHandle        ; is it the input stream?
                 TEQ     r0, r2
-		BNE	%10
-                STREQ   r3, InputBufferHandle        ; save buffer handle
-		B	%20
-10
                 STRNE   r3, OutputBufferHandle
-20
+                STREQ   r3, InputBufferHandle        ; save buffer handle
                 BLEQ    update_RTS         ; if opening input stream update RTS
-                EXITS
+                CLRV
+                EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -297,14 +316,14 @@ stream_created  ENTRY	"r0-r3"
 ;
 ; call: update_RTS
 ;
-update_RTS 	ENTRY   "r2, r11"
+update_RTS      Entry   "r2, r7, r11"
 
-                TEQP    pc, #SVC_mode + I_bit; update RTS call requires IRQs off
+                SETPSR  SVC_mode+I_bit,r2,,r7
                 LDR     r2, UARTDeviceFlags	; and r2 = UARTDeviceFlags
                 LDR     r11, UARTBaseAddress	; and r11 -> UART
                 BL      update_DTRRTSTXI
-
-                EXITS
+                RestPSR r7,,cf
+                EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -316,7 +335,7 @@ update_RTS 	ENTRY   "r2, r11"
 ;     r2  - UARTDeviceFlags
 ;
 
-update_DTRRTSTXI	ENTRY   "r0"
+update_DTRRTSTXI  Entry "r0"
 
                 LDRB    r0, UART_modem_control	; get status and control reg
 
@@ -375,16 +394,18 @@ enable_TXI
 
                 ORR     lr, lr, #IER_transmit_empty ; enable tx empty ints
                 STRB    lr, UART_interrupt_enable   ; store back in register
-                EXITS
+                CLRV
+                EXIT
 
 disable_TXI
                 LDRB    lr, UART_interrupt_enable
                 BIC     lr, lr, #IER_transmit_empty ; disable tx empty ints
                 STRB    lr, UART_interrupt_enable   ; store back in register
 
-                MOV     lr, #0               ; make sure we put no more in FIFO
+                ; V cleared, lr := 0
+                SUBS    lr, lr, lr           ; make sure we put no more in FIFO
                 STRB    lr, UARTTxByteCount  ; store in workspace variable
-                EXITS
+                EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -400,14 +421,15 @@ disable_TXI
 ; It is called when data enters the output buffer. It is used to kick the UART
 ; into transmitting data.
 
-buffer_wakeup   ENTRY	"r11, r2"
+buffer_wakeup   Entry   "r2, r7, r11"
                 LDR     r11, UARTBaseAddress        ; r11 -> UART base
-                TEQP    pc, #SVC_mode + I_bit
+                SETPSR  SVC_mode+I_bit,r2,,r7
                 LDR     r2, UARTDeviceFlags
                 BIC     r2, r2, #1:SHL:SF_TXDormant ; TX no longer dormant
                 STR     r2, UARTDeviceFlags
                 BL      update_DTRRTSTXI            ; enable TXI if appropriate
-		EXITS
+                RestPSR r7,,cf
+                EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -437,7 +459,7 @@ buffer_owner_change ROUT
 ; Register ourselves with the output buffer. This routine will be called by
 ; hardware_reset and via a callback setup in devicefs finalise.
 
-buffer_link_device ENTRY "r0-r4"
+buffer_link_device Entry "r0-r4"
 		LDR	r0, OutputBufferHandle
 		ADDR	r1, buffer_wakeup	; link to wakeup routine
 		ADDR	r2, buffer_owner_change	; link to ownwe change routine

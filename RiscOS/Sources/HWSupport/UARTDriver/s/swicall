@@ -27,7 +27,12 @@
 ; This call handles the SerialOp swi calls. It is called from the SWI dispatcher.
 ;
 swi_handle_serialop ROUT
+
+                Push    lr
+                SavePSR lr
                 BIC     lr, lr, #V_bit          ; ensure V clear on exit
+                Push    lr
+                JumpAddress lr, serialop_call_exit, forward
 
                 CMP     r0, #(%20-%10)/4	; validate reason code
                 ADDCC   pc, pc, r0, LSL #2      ; if the call is valid then issue
@@ -40,16 +45,22 @@ swi_handle_serialop ROUT
                 B       swi_read_byte		; 4, read byte
                 B       swi_set_baud		; 5, read/write receive baud rates, same values each time.
                 B       swi_set_baud		; 6, read/write transmit baud rates
-                MOVS    pc, lr                  ; 7, ignored
+                MOV     pc, lr                  ; 7, ignored
                 B       swi_handshake_extent	; 8, set handshake extent
                 B       swi_enumerate_speeds	; 9, enumerate baud rates
 20
+                Pull    lr
                 ADDR    r0, ErrorBlock_UART_BadReasonCode
-                DoError                                         ; return error about naff op code
+                Pull    lr
+                B       make_error
 
-		MakeErrorBlock UART_BadReasonCode
+                MakeErrorBlock UART_BadReasonCode
 
-		MOV	pc, lr
+serialop_call_exit
+                Pull    lr
+                ORRVS   lr, lr, #V_bit
+                RestPSR lr,,f
+                Pull    pc
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -85,7 +96,7 @@ swi_handle_get_buffers ROUT
 ; This allows the FIFO trigger value to be altered. The Trigger value is held
 ; as bits 6 and 7 in the UART_FIFO_control register.
 ;
-swi_handle_fifo_trigger ENTRY "r1-r3, r11"
+swi_handle_fifo_trigger Entry "r1-r3, r11"
 
                 LDR     r11, UARTBaseAddress                   		; r11 -> UART base
 
@@ -113,9 +124,10 @@ swi_handle_fifo_trigger ENTRY "r1-r3, r11"
 		AND	r2, r2, r3					; clear trigger bits
 		ORR	r2, r2, r1
 		STRB	r2, FIFOControl					; store back in soft copy
-                TEQP    pc, #SVC_mode + I_bit                           ; disable IRQs
+                SETPSR  SVC_mode+I_bit,r1,,r3                           ; disable IRQs
 		STRB	r2, UART_FIFO_control
-		EXITS
+                RestPSR r3,,cf
+		EXIT
 ; Read the trigger value and return it
 20
 		LDRB	r1, FIFOControl
@@ -132,7 +144,8 @@ swi_handle_fifo_trigger ENTRY "r1-r3, r11"
 		CMP	r1, #FCR_RX_trigger_14				; is it value 1
 		MOVEQ	r0, #14						; yes
 30
-                EXITS
+                CLRV
+                EXIT
 
 		MakeErrorBlock UART_BadTrigger
 
@@ -247,7 +260,7 @@ swi_handle_fifo_trigger ENTRY "r1-r3, r11"
 ;                               1       Trying to stop sending a break
 ;
 
-swi_change_status ENTRY   "r8-r11"
+swi_change_status Entry "r4, r8-r11"
 
                 LDR     r11, UARTBaseAddress                   		; r11 -> UART base
 
@@ -260,7 +273,8 @@ swi_change_status ENTRY   "r8-r11"
 ; b) if ModemStatus changes (and generates an IRQ) after we read it but before we update UARTDeviceFlags,
 ;    we'd be writing an old state into the flags
 
-                TEQP    pc, #SVC_mode + I_bit                           ; disable IRQs
+                SETPSR  SVC_mode + I_bit, r8,,r4                        ; disable IRQs
+                BIC     r4, r4, #V_bit
                 LDRB    r8, UART_modem_status				; load modem status register into r8
 
                 LDR     r10, UARTDeviceFlags                            ; get global UART state flags
@@ -284,13 +298,12 @@ swi_change_status ENTRY   "r8-r11"
                 MOV     r1, r10                                         ; r1 = Old UARTDeviceFlags
                 STR     r2, UARTDeviceFlags                             ; store serial device flags (new!)
 
-;		DREG	r2, "New flags : "
-
                 TEQ     r1, r2                                          ; any change ?
                 BLNE    hardware_set_FIFO                               ; if so, then update FIFO
                 BLNE    update_DTRRTSTXI
 
-                EXITS
+                RestPSR r4,,cf
+                EXIT
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -336,10 +349,10 @@ swi_change_status ENTRY   "r8-r11"
 ;                 b6, b31          ro       always 0, reserved for future expansion
 ;
 
-swi_data_format     ENTRY   "r9-r11"
+swi_data_format     Entry   "r4, r9-r11"
 
                 LDR     r11, UARTBaseAddress    ; r11 -> UART base
-                TEQP    pc,  #SVC_mode + I_bit	; disable IRQs round this
+                SETPSR  SVC_mode+I_bit,r10,,r4  ; disable IRQs round this
                 LDRB    r10, UART_line_control  ; UART line control register
 
 ; need to mangle bits 0,1 to convert to old format using an EXOR with 3 :
@@ -356,9 +369,10 @@ swi_data_format     ENTRY   "r9-r11"
                 ORR     r10, r10, r1
                 STRB    r10, UART_line_control
 10
+                RestPSR r4,,cf
                 MOV     r1, r9  			; copy read/old value into r1
 
-                EXITS
+                EXIT
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -379,10 +393,10 @@ swi_data_format     ENTRY   "r9-r11"
 ; The device can then handle things as required.
 ;
 
-swi_send_break  ENTRY   "r0-r3"
+swi_send_break  Entry   "r0-r3, r7"
 
 ; need to do a start break (break710)
-                TEQP    pc, #SVC_mode + I_bit                   ; disable IRQs round this bit
+                SETPSR  SVC_mode+I_bit,r2,,r7                  ; disable IRQs round this bit
 
                 LDR     r11, UARTBaseAddress           		; r11 -> UART base
                 MOV     r3, #0                                  ; stick a null in
@@ -397,8 +411,7 @@ swi_send_break  ENTRY   "r0-r3"
                 STR     r3, UARTDeviceFlags			; store back in UARTDeviceFlags
 
 ; do that timing thing
-                MOV     r2, pc
-                TEQP    pc, #SVC_mode                           ; enable IRQs
+                CLRPSR  I_bit,r0,,r3                            ; enable IRQs
 
                 SWI     XOS_ReadMonotonicTime                   ; r0 = monotonic time
                 ADD     r1, r1, r0                              ; r1 = destination time
@@ -407,13 +420,14 @@ swi_send_break  ENTRY   "r0-r3"
                 CMP     r0, r1                                  ; have we reached the required time?
                 BMI     %BT10                                   ; nope.  (NB: NOT BLT - these are clock numbers!)
 
-                TEQP    r2, #0                                  ; restore old IRQ state
+                RestPSR r3,,c                                   ; restore old IRQ state
 
 ; need to do a stop break
-                MOV     lr, pc
-                AND     lr, lr, #I_bit
-                EOR     lr, lr, #I_bit                  ; value to EOR with PC to toggle between IRQs off & entry state
-                TEQP    lr, pc                          ; disable IRQs first
+
+                ORR     lr, r7, #SVC_mode                       ; Holds the CPSR bits for I bit state on entry
+                MOV     r2, r3                                  ; Holds the CPSR bits for I bit disabled state
+
+                RestPSR r2,,c                                   ; disable IRQs first
 
                 LDR     r3, UARTDeviceFlags                     ; read contents of UARTDeviceFlags
                 ORR     r3, r3, #1:SHL:SF_StoppingBreak 	; indicate that we wish to stop break
@@ -433,8 +447,8 @@ swi_send_break  ENTRY   "r0-r3"
 30
                 TST     r3, #LSR_TX_shift_empty
                 BNE     %FT40                           	; transmitter has finished shifting, so clear break bit
-                TEQP    lr, pc                          	; restore IRQ state for a bit
-                TEQP    lr, pc                          	; then disable them again
+                RestPSR lr,,c                                   ; restore IRQ state for a bit
+                RestPSR r2,,c                                   ; then disable them again
                 B       %BT20
 
 40
@@ -450,10 +464,8 @@ swi_send_break  ENTRY   "r0-r3"
                 ORR     lr, lr, #IER_transmit_empty       	; enable transmit interrupts again
                 STRB    lr, UART_interrupt_enable		; store back in interrupt enable register
 
-		EXIT	VC
-                ADD     sp, sp, #4                              ; junk stacked r0
-                Pull    "r1,r2,r3, lr"
-                ORRS    pc, lr, #V_bit
+                STRVS   r0, [sp, #Proc_RegOffset]
+                EXIT
 50
                 Push    "lr"
                 BL      process_line_status_error
@@ -476,7 +488,7 @@ swi_send_break  ENTRY   "r0-r3"
 ;
 
 
-swi_send_byte	ENTRY   "r0-r2,r9"
+swi_send_byte   Entry   "r0-r2,r9"
 
                 LDR     r1, OutputBufferHandle
                 CMP     r1, #-1                         ; check if we have a serial output stream open
@@ -485,7 +497,7 @@ swi_send_byte	ENTRY   "r0-r2,r9"
                 MOV     r0, #open_write			; reason code for OSFind_OpenOut
                 ADR     r1, UARTfilename		; filename given in DeviceFS
                 SWI     XOS_Find			; open that file
-                STRVS   r0, [sp]
+                STRVS   r0, [sp, #Proc_RegOffset]
                 EXIT    VS
 
                 LDR     r1, OutputBufferHandle          ; now check buffer handle again
@@ -517,7 +529,7 @@ UARTfilename  = "UART:", 0
 ; remove a character from the input buffer
 ;
 
-swi_read_byte   ENTRY   "r0-r2,r9"
+swi_read_byte   Entry   "r0-r2,r9"
 
                 LDR     r1, InputBufferHandle
                 CMP     r1, #-1    ; if no serial input stream open, r1 = -1, so C=1
@@ -546,7 +558,7 @@ swi_read_byte   ENTRY   "r0-r2,r9"
 ; This call allows you to modify the serial receive baud rate.
 ;
 
-swi_set_baud    ENTRY	"r0,r2,r11"
+swi_set_baud    Entry   "r0,r2,r11"
 
                 LDRB    r2, UARTBaud	; r2 = current baud rate
                 CMP     r1, #0          ; if setting to zero
@@ -554,8 +566,8 @@ swi_set_baud    ENTRY	"r0,r2,r11"
                 CMP     r1, #-1         ; if reading
                 MOVEQ   r1, r2          ; then use old value from r2
 
-                TEQ     r1, r2          ; will the call invoke any change?
-                EXITS   EQ              ; no, so don't bother return now!
+                CMP     r1, r2          ; will the call invoke any change?
+                EXIT    EQ              ; no, so don't bother return now! (V clear!)
 
 ; now r1 contains the new value to set, r2 contains the old value
 
@@ -591,9 +603,9 @@ swi_set_baud    ENTRY	"r0,r2,r11"
                 STRB    r0, UART_line_control
 
                 PLP				; another wacky macro
-		MOV	r1, r2	; copy previous baud rate into r1 for exit
+                ADDS    r1, r2, #0              ; copy previous baud rate into r1 for exit (clear V)
 
-                EXITS
+                EXIT
 ; table used to convert the specified baud value into a clock divisor as used
 ; by the UART.
 
@@ -633,7 +645,7 @@ baud_divisors
 ; This routine will set the threshold value for the input buffer
 ;
 
-swi_handshake_extent ENTRY   "r0-r1"
+swi_handshake_extent Entry "r0-r1"
 
                 LDR     r3, UARTThreshold
                 CMP     r1, #-1                 ; are we just reading?
@@ -708,7 +720,7 @@ end_baud_rates
 ;
 ; Generate serial error event from line status
 ;
-process_line_status_error ENTRY "r1, r2"
+process_line_status_error Entry "r1, r2"
         	TST     r0, #LSR_data_ready      ; if there's a character
         	LDRNEB  r2, UART_data_word       ; read it and pass to event
  [ error_counting
@@ -737,7 +749,8 @@ process_line_status_error ENTRY "r1, r2"
         	ORRNE   r1, r1, #SerialError_Framing
         	BL      give_error
 
-        	EXITS
+                CLRV
+                EXIT
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -754,7 +767,9 @@ process_line_status_error ENTRY "r1, r2"
 ; parity error or DCD high
 ;
 
-give_error      ENTRY   "r0-r3"
+give_error      Entry   "r0-r3"
+
+                SavePSR r3
 
                 LDR     lr, UARTDeviceFlags
                 TST     lr, #1:SHL:SF_DCDHigh
@@ -762,10 +777,9 @@ give_error      ENTRY   "r0-r3"
                 TST     lr, #1:SHL:SF_DSRHigh
                 ORRNE   r1, r1, #SerialError_DSR
 
-                MOV     lr, pc
-                AND     lr, lr, #3
-                EOR     r3, lr, #SVC_mode       ; switch into SVC mode
-                TEQP    r3, pc
+                BIC     lr, r3, #2_1111
+                ORR     lr, lr, #SVC_mode
+                RestPSR lr,,c
                 NOP
 
                 Push    "lr"
@@ -773,10 +787,10 @@ give_error      ENTRY   "r0-r3"
                 SWI     XOS_GenerateEvent	; and then generate event
                 Pull    "lr"                    ; preserve SVC LR
 
-                TEQP    r3, pc                  ; restore original mode
+                RestPSR r3,,cf                  ; restore original mode
                 NOP
 
-                EXITS
+                EXIT
 
 ; ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
