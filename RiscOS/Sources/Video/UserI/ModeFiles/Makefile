@@ -68,4 +68,8 @@ ${TDIR}.MF: ${SOURCE} s.ModeFiles
         ${MKDIR} ${TDIR}
         ${AS} ${ASFLAGS} s.ModeFiles
 
+${TDIR}.MFSlave: ${SOURCE} s.Slave
+        ${MKDIR} ${TDIR}
+        ${AS} ${ASFLAGS} s.Slave
+
 # Dynamic dependencies:
