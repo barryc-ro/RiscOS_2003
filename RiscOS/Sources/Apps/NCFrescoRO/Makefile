@@ -32,7 +32,6 @@ SQFLAGS =
 #
 COMPONENT = NCFresco
 TARGET    = aof.${COMPONENT}
-TARGETU   = aof.${COMPONENT}u
 
 ABSSYM    = RISC_OSLib:o.c_abssym
 
@@ -137,7 +136,7 @@ install:
 	${TR} -i NCFrescoROTransRes:html.sslserv   -o ${INSTALLDIR}.html.sslserv   ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.ssltoken  -o ${INSTALLDIR}.html.ssltoken  ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.url       -o ${INSTALLDIR}.html.url       ${TRFLAGS}
-	${SQ} abs.!RunIma-${ITYPE}                  ${INSTALLDIR}.!RunImage      ${SQFLAGS}
+	${SQ} abs.!RunIm-${ITYPE}                     ${INSTALLDIR}.!RunImage      ${SQFLAGS}
 	Unset NCFrescoROTransRes$Path
 	Unset NCFrescoRORes$Path
         @echo ${COMPONENT}: resource files copied
@@ -154,18 +153,11 @@ export_hdrs:
 #
 # Final link for the ROM Image (using given base address)
 #
-rom_link: rom_link_${TYPE}
-        @echo ${COMPONENT}: rom module built
 
-rom_link_unicode: dirs
-        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGETU} ${ABSSYM}
+rom_link: dirs
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET}${TYPE} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom_link for Unicode complete
-
-rom_link_: dirs
-        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
-        ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom_link complete
+        @echo ${COMPONENT}: rom_link for ${ITYPE} build complete
 
 dirs:
 	${MKDIR} linked
