@@ -49,7 +49,9 @@ DFLAGS	 = -D${SYSTEM} -DCOMPAT_INET4 ${TRFLAGS} -UTIMEBOMBED
 TRFLAGS  = -UTML -UTRACE -UDEBUG_ON
 INCLUDES = -IC:,TCPIPLibs:
 
-SEDFLAGS = -e "s/MailServ/Connect/g" -e "s/InterTalk Server/Connect/g"
+SEDFLAGS = -e "s/MailServ/Connect/g"
+# Must not change app name for SU !Mail (and legal reasons)
+# -e "s/InterTalk Server/Connect/g"
 
 # This is the exit code which awk will use if it detects "Acorn" in
 # the provlist file.  It is used to fault builds to avoid "mistakes"...
