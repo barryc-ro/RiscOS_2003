@@ -116,7 +116,7 @@ ${RAMTARGET}: ${OBJS} ${CLIB}
         ${MKDIR} ${RAMTDIR}
         ${LD} -o $@ -module ${OBJS} ${CLIB}
 
-${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
+${EXP_HDR}.${COMPONENT}: export.h.${COMPONENT}
         ${CP} export.h.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
