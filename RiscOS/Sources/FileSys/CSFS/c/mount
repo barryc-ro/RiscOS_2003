@@ -19,7 +19,7 @@
 
 #include "h.etc"
 
-#include "h.allerrs"
+#include "h.csfserr"
 #include "h.consts"
 
 #include "h.flex"
@@ -44,7 +44,7 @@
 
 #define WRITECACHE  0x1
 #define NAMEADDRESS 0x2
-
+#define PORTADDRESS 0x4
 
 
 
@@ -126,64 +126,91 @@ static _kernel_oserror * mounts(int bits,
  char              nullstring[1];
  int               sbits;
  int               s;
+ int               port;
+ char            * p;
 
 
  err=NULL;
  nullstring[0]=0;
  if(!service) service=nullstring;
- if(!host && !(bits & NAMEADDRESS)) host=nullstring;
+ if(!host && !(bits & (NAMEADDRESS|PORTADDRESS))) host=nullstring;
  if(!path)    path=nullstring;
  if(!name)    name=nullstring;
  if(!user)    user=nullstring;
  if(!pass)    pass=nullstring;
 
 
- if(!strlen(service)) err=&mb_sfserr_MountService;
+ if(!strlen(service)) err=geterror(err_MountService);
  else
- if(!strlen(name))    err=&mb_sfserr_MountName;
+ if(!strlen(name))    err=geterror(err_MountName);
 
  if(!err) err=findservice(&servicen,&sbits,service);
  if(!err)
  {
-  if(!(bits & NAMEADDRESS) && !strlen(host) && (sbits & CSFS_NEEDSERVERNAME))
-                                          err=&mb_sfserr_MountHost;
+  if(!(bits & (NAMEADDRESS|PORTADDRESS)) && !strlen(host) 
+            && (sbits & CSFS_NEEDSERVERNAME)) err=geterror(err_MountHost);
   else
   if((!strlen(user) || !strlen(pass))
                    && (sbits & CSFS_NEEDUSERNAME))
-                                          err=&mb_sfserr_MountUser;
+                                          err=geterror(err_MountUser);
   else
   if(!strlen(path) && (sbits & CSFS_NEEDMOUNTPATH))
-                                          err=&mb_sfserr_MountPath;
+                                          err=geterror(err_MountPath);
 
+
+  if(bits & PORTADDRESS)
+  {
+   address=(unsigned long)(*((unsigned int *)host));
+   port=(int)(*(((unsigned int *)host))+1);
+   host=nullstring;
+  }
+  else
   if(bits & NAMEADDRESS) 
   {
    address=(unsigned long)host; 
    host=nullstring;
+   port=0;
   }
   else
   {
    if(strlen(host))
    {
-    if((xhost=gethostbyname(host))!=NULL)
+    p=strrchr(host,':');
+    if(p)
     {
-     memcpy((char*)&address,xhost->h_addr,4);
-     address=htonl(address);     /* put in correct byte order */
+     *p=0;
+     if(strrchr(host,':')) err=geterror(err_BadPort);
+     else
+     {
+      if(sscanf(p+1,"%d",&port)!=1) err=geterror(err_BadPort);
+     }
     }
-    else err=&mb_sfserr_NoResolve;
+    else port=0;
+
+    if(!err)
+    {
+     if((xhost=gethostbyname(host))!=NULL)
+     {
+      memcpy((char*)&address,xhost->h_addr,4);
+      address=htonl(address);     /* put in correct byte order */
+     }
+     else err=geterror(err_NoResolve);
+    }
    }
    else
    {
     address=0;
+    port=0;
    }
   }
 
 
   gethandle(name,&arcn);   /* don't trap error */
-  if(!err && arcn>=0) err=&mb_sfserr_MountName2;
+  if(!err && arcn>=0) err=geterror(err_MountName2);
   if(!err)
   {
    gethostpath(host,address,path,user,servicen,&arcn);
-   if(arcn>=0) err=&mb_sfserr_MountPath2;
+   if(arcn>=0) err=geterror(err_MountPath2);
   }
   if(!err) err=getarchandle(&arcn);
   if(!err)
@@ -196,6 +223,7 @@ static _kernel_oserror * mounts(int bits,
 
    arc[arcn].service=servicen;
    arc[arcn].address=address;
+   arc[arcn].port=port;
 
    if(bits & WRITECACHE)  arc[arcn].writecache=1;
 
@@ -268,7 +296,7 @@ _kernel_oserror * mount(char * args[],int argc)
   }
   else
   {
-   if(i>=(argc-1)) err=&mb_sfserr_MountMissing;
+   if(i>=(argc-1)) err=geterror(err_MountMissing);
    else
    if(args[i+1][0]!='-')
    {
@@ -302,7 +330,7 @@ _kernel_oserror * mount(char * args[],int argc)
     }
     else
     {
-     err=&mb_sfserr_BadMountParam;
+     err=geterror(err_BadMountParam);
     }
     i++;
    }
@@ -320,11 +348,13 @@ _kernel_oserror * mount(char * args[],int argc)
 
 /*
 
+
 CSFS_Mount (SWI &4E983) 
 
-Mounts a server directory as a local file system. The input parameters should be verified against the 
-service features mask. If any mandatory fields are missing, a suitable error should be generated. Any fields 
-not required by the transport service should be set to 0x0.
+Mounts a server directory as a local file system. The input parameters should
+be verified against the  service features mask. If any mandatory fields are
+missing, a suitable error should be generated. Any fields  not required by
+the transport service should be set to 0x0.
 
 
 On entry
@@ -332,18 +362,29 @@ On entry
                 Bit     Meaning when set
                 0       Files are write cached, not write through
                 1       R2 is a word containing IP address
-                2-31    Reserved (must be 0)
+                2       R2 is a pointer to a structure containing 
+                        host IP address and port number
+                3-31    Reserved (must be 0)
         R1 = Pointer to null terminated CSFS service name
         R2 = if Flags bit 1 clear
-                 Pointer to null terminated host name
+                 Pointer to null terminated host name including 
+                 optional port number.
              if Flags bit 1 set
                  Byte coded host IP address (AA.BB.CC.DD => 0xAABBCCDD)
+             if Flags bit 2 set
+                 Pointer to the following structure
+                 struct host
+                 {
+                   unsigned int addr;  byte coded IP address (as above) 
+                   unsigned int port;  port number (0 for default) 
+                 }
         R3 = Pointer to null terminated mount path
         R4 = Pointer to null terminated mount name
         R5 = Pointer to null terminated user name
         R6 = Pointer to null terminated password
 On exit
         All registers preserved
+
 
 
 */
@@ -354,6 +395,9 @@ _kernel_oserror * mountswi(_kernel_swi_regs * r)
 {
  _kernel_oserror * err;
 
+ if((r->r[2] & (PORTADDRESS|NAMEADDRESS))==(PORTADDRESS|NAMEADDRESS))
+                                             err=geterror(err_BadMountSwi);
+ else
  err=mounts(r->r[0],(char*)r->r[2],(char*)r->r[1],
                     (char*)r->r[3],(char*)r->r[4],
                     (char*)r->r[5],(char*)r->r[6]);
