@@ -72,7 +72,7 @@ WSSLIB    = C:ThirdParty.WSS.WSSLib.o.WSSLibZM
 .cmhg.o26:;   ${CMHG} ${CMHGFLAGS} -o $@ $< -26bit -DATPCS=0
 .cmhg.o26_6:; ${CMHG} ${CMHGFLAGS} -o $@ $< -26bit -DATPCS=0
 .cmhg.o26_fp:;${CMHG} ${CMHGFLAGS} -o $@ $< -26bit -DATPCS=0
-.cmhg.h:;   ${CMHG} ${CMHGFLAGS} -d $@ $<
+.cmhg.h:;   ${CMHG} ${CMHGFLAGS} -d $@ $< -DATPCS=0
 .a.o:;      ${CC} -E >s.$* $<
             /bin.asclean s.$*
             ${AS} ${ASFLAGS} ${ASFLAGS_LM_noFP} -o $@ s.$*
@@ -102,38 +102,45 @@ WSSLIB    = C:ThirdParty.WSS.WSSLib.o.WSSLibZM
 OBJSFP    = \
  o_fp.main o.metadata o.common o_fp.output o_fp.dct64 o_fp.dctfp \
  o_fp.dct36fp o.event o.fstream o.layer1 o.layer2 o_fp.layer3 o.plugin o.huffman \
- o.sound o.sound8 o.sound16 o_6.soundsh o.soundX o_fp.synthfp o.${CMHGNAME} \
- o.tabcalc o.miscasm o.id3v1 o.id3v2 o.fpasmfp o.vbr
+ o.sound o.sound8 o.sound16 o_6.soundsh o.SoundUser o.soundX o_fp.synthfp o.${CMHGNAME} \
+ o.tabcalc o.miscasm o.id3v1 o.id3v2 o.fpasmfp o.vbr \
+ o.tabcalc2 o.tabdct64 o.tables o.tables2 o.tables3 o.tabstate o.tabxmuls
+
 
 OBJS6     = \
  o.main o.metadata o.common o_6.output o_6.dct64 \
  o.event o.fstream o.layer1 o.layer2 o_6.layer3 o.plugin o.huffman \
- o.sound o.sound8 o.sound16 o_6.soundsh o.soundX ${CMHGOBJ} \
- o.tabcalc o.miscasm o.id3v1 o.id3v2 o_6.fpasm6 o.vbr
+ o.sound o.sound8 o.sound16 o.SoundUser o_6.soundsh o.soundX ${CMHGOBJ} \
+ o.tabcalc o.miscasm o.id3v1 o.id3v2 o_6.fpasm6 o.vbr \
+ o.tabcalc2 o.tabdct64 o.tables o.tables2 o.tables3 o.tabstate o.tabxmuls
 
 OBJS      = \
  o.main o.metadata o.common o.dct o.output o.dct64 o.dct36 \
  o.event o.fstream o.layer1 o.layer2 o.layer3 o.plugin o.huffman \
- o.sound o.sound8 o.sound16 o.soundsh o.soundX ${CMHGOBJ} \
- o.tabcalc o.miscasm o.id3v1 o.id3v2 o.fpasm o.synthasm o.vbr
+ o.sound o.sound8 o.sound16 o.SoundUser o.soundsh o.soundX ${CMHGOBJ} \
+ o.tabcalc o.miscasm o.id3v1 o.id3v2 o.fpasm o.synthasm o.vbr \
+ o.tabcalc2 o.tabdct64 o.tables o.tables2 o.tables3 o.tabstate o.tabxmuls
 
 OBJSFP26  = \
  o26_fp.main o26.metadata o26.common o26_fp.output o26_fp.dct64 o26_fp.dctfp \
  o26_fp.dct36fp o26.event o26.fstream o26.layer1 o26.layer2 o26_fp.layer3 o26.plugin o26.huffman \
- o26.sound o26.sound8 o26.sound16 o26_6.soundsh o26.soundX o26_fp.synthfp o26_fp.${CMHGNAME} \
- o26.tabcalc o26.miscasm o26.id3v1 o26.id3v2 o26.fpasmfp o26.vbr
+ o26.sound o26.sound8 o26.sound16 o26_6.soundsh o26.SoundUser o26.soundX o26_fp.synthfp o26_fp.${CMHGNAME} \
+ o26.tabcalc o26.miscasm o26.id3v1 o26.id3v2 o26.fpasmfp o26.vbr \
+ o26.tabcalc2 o26.tabdct64 o26.tables o26.tables2 o26.tables3 o26.tabstate o26.tabxmuls
 
 OBJS626   = \
  o26.main o26.metadata o26.common o26_6.output o26_6.dct64 \
  o26.event o26.fstream o26.layer1 o26.layer2 o26_6.layer3 o26.plugin o26.huffman \
- o26.sound o26.sound8 o26.sound16 o26_6.soundsh o26.soundX o26_6.${CMHGNAME} \
- o26.tabcalc o26.miscasm o26.id3v1 o26.id3v2 o26_6.fpasm6 o26.vbr
+ o26.sound o26.sound8 o26.sound16 o26_6.soundsh o26.SoundUser o26.soundX o26_6.${CMHGNAME} \
+ o26.tabcalc o26.miscasm o26.id3v1 o26.id3v2 o26_6.fpasm6 o26.vbr \
+ o26.tabcalc2 o26.tabdct64 o26.tables o26.tables2 o26.tables3 o26.tabstate o26.tabxmuls
 
 OBJS26    = \
  o26.main o26.metadata o26.common o26.dct o26.output o26.dct64 o26.dct36 \
  o26.event o26.fstream o26.layer1 o26.layer2 o26.layer3 o26.plugin o26.huffman \
- o26.sound o26.sound8 o26.sound16 o26.soundsh o26.soundX o26.${CMHGNAME} \
- o26.tabcalc o26.miscasm o26.id3v1 o26.id3v2 o26.fpasm o26.synthasm o26.vbr
+ o26.sound o26.sound8 o26.sound16 o26.soundsh o26.SoundUser o26.soundX o26.${CMHGNAME} \
+ o26.tabcalc o26.miscasm o26.id3v1 o26.id3v2 o26.fpasm o26.synthasm o26.vbr \
+ o26.tabcalc2 o26.tabdct64 o26.tables o26.tables2 o26.tables3 o26.tabstate o26.tabxmuls
 
 #
 # build a RAM shoutcast module
@@ -264,17 +271,17 @@ ${DIRS}:
         ${MKDIR} s
 	${TOUCH} $@
 
-o.main o.application: h.${CMHGNAME}
+o.main o.application o.soundX: h.${CMHGNAME}
 o.sound: tab.vutab
-o_6.main o_6.application: h.${CMHGNAME}
+o_6.main o_6.application o.soundX: h.${CMHGNAME}
 o_6.sound: tab.vutab
-o_fp.main o_fp.application: h.${CMHGNAME}
+o_fp.main o_fp.application o.soundX: h.${CMHGNAME}
 o_fp.sound: tab.vutab
-o26.main o26.application: h.${CMHGNAME}
+o26.main o26.application o26.soundX: h.${CMHGNAME}
 o26.sound: tab.vutab
-o26_6.main o26_6.application: h.${CMHGNAME}
+o26_6.main o26_6.application o26.soundX: h.${CMHGNAME}
 o26_6.sound: tab.vutab
-o26_fp.main o26_fp.application: h.${CMHGNAME}
+o26_fp.main o26_fp.application o26.soundX: h.${CMHGNAME}
 o26_fp.sound: tab.vutab
 
 tab.vutab: bin.vutab

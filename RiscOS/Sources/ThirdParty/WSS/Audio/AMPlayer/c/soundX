@@ -5,6 +5,7 @@
 #include "kernel.h"
 #include "common.h"
 #include "main.h"
+#include "amplayer.h"
 
 #ifndef NULL
 #define NULL (0)
@@ -20,38 +21,169 @@
 
 #define NAME_LEN 80
 
-static int sound_type;
-static char inst_name[NAME_LEN];
-static int instance;
+/* Service_Sound reason codes */
+#define Sound_L0Alive (0) /* SoundDMA */
+#define Sound_L0Dying (1)
+#define Sound_L1Alive (2) /* SoundChannels */
+#define Sound_L1Dying (3)
+#define Sound_L2Alive (4) /* SoundScheduler - we don't talk to this */
+#define Sound_L2Dying (5)
+#define Sound_L3Alive (6) /* SharedSound */
+#define Sound_L3Dying (7)
+
+STATIC char inst_name[NAME_LEN];
+STATIC int instance;
+STATIC int samplerate=0;
+STATIC int sound_active=0;
+STATIC sound_system sound_type;
+
+#if SOUND8
+#define MASK_8 (SOUNDMASK_8BIT)
+#else
+#define MASK_8 (0)
+#endif
+
+#if SOUND16
+#define MASK_16 (SOUNDMASK_16BIT)
+#else
+#define MASK_16 (0)
+#endif
+
+#if SOUNDSHARED
+#define MASK_SHARED (SOUNDMASK_SHAREDSOUND)
+#else
+#define MASK_SHARED (0)
+#endif
+
+#if SOUNDUSER
+#define MASK_USER (SOUNDMASK_USER)
+#else
+#define MASK_USER (0)
+#endif
+
+#define MASK (MASK_8 | MASK_16 | MASK_SHARED)
+
+
+/*************************************************** Gerph *********
+ Function:     SoundX_Service
+ Description:  Process the Sound service call to reinitialise parts
+               of our sound sub-system
+ Parameters:   reason = reason code from Service_Sound
+ Returns:      none
+ ******************************************************************/
+void SoundX_Service(int reason,void *pw)
+{
+  if ( sound_active &&
+       (reason==Sound_L0Alive && sound_type == sound_8) ||
+       (reason==Sound_L1Alive && sound_type == sound_16) ||
+       (reason==Sound_L3Alive && sound_type == sound_shared) )
+  {
+    /* It's one of ours, so we need to reinitialise the system - we do this
+       on a callback. It is only necessary to do so for Level 0 and 1
+       handlers, as Level 3 is already safely on a callback, but to make
+       things simpler, we use the callback for them all */
+    callback(call_soundX_reinit,pw);
+  }
+}
+
+/*************************************************** Gerph *********
+ Function:     SoundX_Reinit
+ Description:  Reinitialise the sound system to whatever state we need
+ Parameters:   r-> registers (not relevant)
+               pw = private word
+ Returns:      pointer to error (never, we're on a callback) or NULL
+ ******************************************************************/
+_kernel_oserror *SoundX_Reinit(_kernel_swi_regs *r, void *pw)
+{
+  SoundX_Init(pw);
+  SoundX_SetRate(samplerate);
+  return NULL;
+}
+
+int SoundX_AvailableSystems(void) {
+
+  int available;
+
+  available   = 0;
+#if (SOUNDUSER)
+  available  |= SOUNDMASK_USER;
+#endif
+#if (SOUNDSHARED)
+  available  |= (SoundShared_Available() ? SOUNDMASK_SHAREDSOUND : 0);
+#endif
+#if (SOUND16)
+  available  |= (Sound16_Available()     ? SOUNDMASK_16BIT       : 0);
+#endif
+#if (SOUND8)
+  available  |= (Sound8_Available()      ? SOUNDMASK_8BIT        : 0);
+#endif
+
+  return available;
+}
+
+_kernel_oserror *SoundX_SelectSystem(sound_system system) {
+
+  int available;
+
+  available = SoundX_AvailableSystems();
+  if (system == 0) {
+    /* Make our own choice */
+    if (available & MASK_SHARED) {
+      /* If SharedSound is available, then use that */
+      sound_type = sound_shared;
+    } else if (available & MASK_16) {
+      /* Otherwise we'd like 16 bit sound at least */
+      sound_type = sound_16;
+    } else if (available & MASK_8) {
+      /* But if we have to we can rough it with just 8 bits of audio glory */
+      sound_type = sound_8;
+    } else {
+      /* If all else fails, just whinge */
+      sound_type = sound_none;
+      return err(ERROR_BADSOUNDSYS,"Failed to find a sound system that is supported in this build!");
+    }
+  } else {
+#if (SOUNDUSER)
+    if (system == sound_user) { /* User always available */
+      sound_type = sound_user;
+    } else
+#endif
+#if (SOUNDSHARED)
+    if ((system == sound_shared) && (available & SOUNDMASK_SHAREDSOUND)) {
+      sound_type = sound_shared;
+    }
+    else
+#endif
+#if (SOUND16)
+    if ((system == sound_16) && (available & SOUNDMASK_16BIT)) {
+      sound_type = sound_16;
+    }
+    else
+#endif
+#if (SOUND8)
+    if ((system == sound_8) && (available & SOUNDMASK_8BIT)) {
+      sound_type = sound_8;
+    }
+    else
+#endif
+    return err(ERROR_BADSOUNDSYS, "Requested sound system not supported or present!");
+  }
+  if ((sound_type == sound_8) && (instance != 0))
+    return err(ERROR_BADSOUNDSYS,"AMPlayer cannot be multiply instantiated with 8 bit sound!");
+  if ((sound_type == sound_16) && (instance != 0))
+    return err(ERROR_BADSOUNDSYS,"AMPlayer cannot be multiply instantiated with (unshared) 16 bit sound!");
+
+  return NULL;
+}
 
 _kernel_oserror *SoundX_PreInit(int inst) {
 
   instance = inst;
 
-  sound_type = Sound_Available();
-  if (sound_type == -1)
-    return err(ERROR_BADSOUNDSYS,"Failed to find a sound system that is supported in this build!");
-#if (!SOUND8)
-  if (sound_type == 0)
-    return err(ERROR_BADSOUNDSYS,"8 bit sound unsupported in this build!");
-#endif
-#if (!SOUND16)
-  if (sound_type == 1)
-    return err(ERROR_BADSOUNDSYS,"16 bit sound unsupported in this build!");
-#endif
-#if (!SOUNDSHARED)
-  if (sound_type == 2)
-    return err(ERROR_BADSOUNDSYS,"Shared Sound unsupported in this build!");
-#endif
-#if (SOUNDSHARED)
-  if ((sound_type != 2) && (instance != 0))
-    return err(ERROR_BADSOUNDSYS,"AMPlayer can only be multiply instantiated if SharedSound is used!");
-#endif
-
   /* Default to having VU bars turned on - for now */
   svar._vuused = 1;
 
-  return NULL;
+  return SoundX_SelectSystem(sound_any);
 }
 
 _kernel_oserror *SoundX_Init(void *pw) {
@@ -61,8 +193,11 @@ _kernel_oserror *SoundX_Init(void *pw) {
   int found;
   void *ppw;
   _kernel_oserror *e;
+
+  sound_active=1;
+
 #if (SOUNDSHARED)
-  if (sound_type == 2) {
+  if (sound_type == sound_shared) {
     if (instance == 0) {
       strcpy(inst_name, "AMPlayer");
     } else {
@@ -90,21 +225,23 @@ _kernel_oserror *SoundX_Init(void *pw) {
 #endif
   switch (sound_type) {
 #if SOUND8
-    case 0:
-      /* 8 bit */
+    case sound_8:    /* 8 bit */
       return Sound8_Init(pw, &svar);
       break;
 #endif
 #if SOUND16
-      case 1:
-      /* 16 bit */
+    case sound_16:    /* 16 bit */
       return Sound16_Init(pw, &svar);
       break;
 #endif
 #if SOUNDSHARED
-    case 2:
-      /* SharedSound */
+    case sound_shared: /* SharedSound */
       return SoundShared_Init(pw, &svar, inst_name);
+      break;
+#endif
+#if SOUNDUSER
+    case sound_user: /* User */
+      return SoundUser_Init(pw, &svar);
       break;
 #endif
   }
@@ -113,23 +250,27 @@ _kernel_oserror *SoundX_Init(void *pw) {
 
 void SoundX_SetRate(int rate) {
 
+  samplerate = rate;
+
   switch (sound_type) {
 #if SOUND8
-    case 0:
-      /* 8 bit */
+    case sound_8:    /* 8 bit */
       Sound8_SetRate(rate, &svar);
       break;
 #endif
 #if SOUND16
-    case 1:
-      /* 16 bit */
+    case sound_16:    /* 16 bit */
       Sound16_SetRate(rate, &svar);
       break;
 #endif
 #if SOUNDSHARED
-    case 2:
-      /* SharedSound */
+    case sound_shared: /* SharedSound */
       SoundShared_SetRate(rate, &svar);
+      break;
+#endif
+#if SOUNDUSER
+    case sound_user: /* User */
+      SoundUser_SetRate(rate, &svar);
       break;
 #endif
   }
@@ -137,23 +278,29 @@ void SoundX_SetRate(int rate) {
 
 void SoundX_Final(void) {
 
+  sound_active=0;
+
   switch (sound_type) {
-    case 0:
 #if SOUND8
-      /* 8 bit */
-      Sound8_Final(&svar);
+    case sound_8:    /* 8 bit */
+      if (instance == 0)
+        Sound8_Final(&svar);
       break;
 #endif
 #if SOUND16
-    case 1:
-      /* 16 bit */
-      Sound16_Final(&svar);
+    case sound_16:    /* 16 bit */
+      if (instance == 0)
+        Sound16_Final(&svar);
       break;
 #endif
 #if SOUNDSHARED
-    case 2:
-      /* SharedSound */
+    case sound_shared: /* SharedSound */
       SoundShared_Final(&svar);
+      break;
+#endif
+#if SOUNDUSER
+    case sound_user: /* User */
+      SoundUser_Final(&svar);
       break;
 #endif
   }
