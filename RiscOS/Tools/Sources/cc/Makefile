@@ -28,6 +28,7 @@ LB      = libfile
 TOUCH   = create
 SQZ     = squeeze
 WIPE    = -wipe
+TIDYDESC= do perl Build:TidyDesc
 
 CCFLAGS = -c -depend !Depend -ffaho ${INCLUDES} ${DFLAGS} ${THROWBACK}
 ASFLAGS = -depend !Depend -Stamp -quit
