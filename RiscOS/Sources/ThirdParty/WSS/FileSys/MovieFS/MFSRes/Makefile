@@ -63,6 +63,7 @@ copy:
         CMF MovieFSRes:!Sprites22     !Sprites22
         CMF MovieFSRes:AVIMap         AVIMap
         CMF MovieFSRes:BarSprite      BarSprite
+        CMF MovieFSRes:Configure      Configure
         CMF MovieFSRes:RMFile         RMFile
         CMF MovieFSLocalRes:Templates Templates
         CMF MovieFSRes:!RunRAS        ^.!RASetup.!Run
