@@ -106,8 +106,8 @@ OBJS =\
  socket.o\
  socket1.o\
  whoami.o
-#svcprint.o
 #ip_fw.o\
+#svcprint.o\
 #tcp_debug.o
 
 #
