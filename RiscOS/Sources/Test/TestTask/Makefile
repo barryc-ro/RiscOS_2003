@@ -125,6 +125,8 @@ resources: ${TARGET}
         @echo ${COMPONENT}: all complete
 
 install: ${TARGET}
+	 ${MKDIR} ${RESDIR}
+	 ${CP} ${APP} ${RESDIR}.${APP} ${CPFLAGS}
          @echo ${COMPONENT}: installed
 
 dirs:
@@ -141,9 +143,7 @@ ${TARGET}: ${OBJS} dirs
 	${CP} ${TARGET} ${APP}.${TARGET} ${CPFLAGS}
 	Run b.PreTestSrc
 	${CP} Resources.* ${APP}.* ${CPFLAGS}
-	${MKDIR} ${RESDIR}
-	${CP} ${APP} ${RESDIR}.${APP} ${CPFLAGS}
-	@echo ${COMPONENT}: built & installed
+	@echo ${COMPONENT}: built
         
 
 # Dynamic dependencies:
