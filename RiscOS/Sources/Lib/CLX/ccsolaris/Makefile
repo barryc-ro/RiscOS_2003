@@ -6,7 +6,7 @@
 CFLAGS=-c -O2 -I. $(CFL)
 CC=gcc
 DERIVED= datenow.h
-OBJALL=bytesex.o chunkfls.o disass.o err.o fname.o prgname.o re.o ieeeflt.o \
+OBJALL=bytesex.o chunkfls.o disass.o elf.o err.o fname.o prgname.o re.o ieeeflt.o \
 dtos.o hash.o host.o host_scr.o scr_drv.o wholefls.o filestamp.o dem.o symdefs.o \
 pathmacro.o mapping.o disass16.o
 HSOURCE=aif.h disass.h libflfmt.h scr_drv.h aof.h bytesex.h err.h \
@@ -54,6 +54,9 @@ dem.o:	dem.h
 err.o:	err.c
 err.o:	err.h
 	$(CC) $(CFLAGS) $(CFLerr) err.c -o err.o
+elf.o:	elf.c
+elf.o:	elf.h
+	$(CC) $(CFLAGS) $(CFLelf) elf.c -o elf.o
 hash.o:	hash.c
 hash.o:	hash.h
 	$(CC) $(CFLAGS) $(CFLhash) hash.c -o hash.o
