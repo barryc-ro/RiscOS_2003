@@ -52,7 +52,7 @@ resources: resources_${TARGET}
 resources_:
         @echo Need a defined target!
 
-resources_NCFresco: resources_NCFresco_${RES} resources_base
+resources_NCFresco: resources_NCFresco_${RES} resources_NCFresco_base
         @echo ${COMPONENT}: all resource files copied
 
 resources_NCFresco_:
