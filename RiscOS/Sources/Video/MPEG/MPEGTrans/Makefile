@@ -16,13 +16,17 @@ EXP_HDR = <export$dir>
 #
 # Generic options:
 #
-MKDIR   = cdir
-AS      = aasm
+MKDIR   = mkdir -p
+AS      = objasm
+LD      = link
 CP      = copy
 RM      = remove
+WIPE    = -wipe
 CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module
+ASFLAGS = -ABSolute -depend !Depend ${THROWBACK} -o ${OBJECT}
+LDFLAGS = -bin -o ${TARGET}
 CPFLAGS = ~cfr~v
+WFLAGS  = ~cfr~v
 
 #
 # Program specific options:
@@ -30,6 +34,7 @@ CPFLAGS = ~cfr~v
 COMPONENT = MPEGTrans
 SOURCE    = Hdr.GetAll
 TARGET    = rm.MPEGTrans
+OBJECT    = o.MPEGTrans
 
 #
 # Generic rules:
@@ -51,10 +56,17 @@ install_rom: ${TARGET}
 
 clean:
         ${RM} ${TARGET}
+        ${WIPE} o ${WFLAGS}
         -stripdepnd
         @echo ${COMPONENT}: cleaned
 
-${TARGET}: ${SOURCE}
-        ${AS} ${ASFLAGS} -From ${SOURCE} -To $@
+${TARGET}: ${OBJECT}
+        ${LD} ${LDFLAGS} ${OBJECT}
+        SetType $@ Module
+        Access $@ rw/r
+
+${OBJECT}: ${SOURCE}
+        ${MKDIR} o
+        ${AS} ${ASFLAGS} ${SOURCE}
 
 # Dynamic dependencies:

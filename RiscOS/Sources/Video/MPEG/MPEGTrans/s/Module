@@ -102,9 +102,13 @@
 ;                                 MPEG2Video only used a program element handler for video, and we've never tested a multiple-video-channel program.
 ;                               * If you called SelectProgram for an OVS stream, decoding would cease until the next CloseStream. This was because it was
 ;                                 waiting for a Good Data Follows in the bitstream. This will have been broken since February 1998.
+; 04-Aug-00  BJGA 1.86          Converted to use objasm rather than aasm.
+;                               Bugfix: buffers were being discounted from the total of buffers in use too rapidly.
+;                               Stream timeout base value increased from 3 sec to 5 sec.
+;                               Added direct-call full-buffers interface and support for new-format bitstream buffers.
 ;
 
-        LEADR   Module_LoadAddr
+;       LEADR   Module_LoadAddr
 
 TAB     *       9
 LF      *       10
@@ -150,7 +154,7 @@ CountDiscontinuities SETL {TRUE} :LAND: DoPEH           ; count jumps in continu
 
                 GBLL    EOSDetect
 EOSDetect       SETL    {TRUE}                          ; detect end-of-stream / timeouts
-Timeout_Time    *       300                             ; centiseconds at full speed
+Timeout_Time    *       500                             ; centiseconds at full speed
 
                 GBLL    DebugNPT
 DebugNPT        SETL    {FALSE}                         ; print NPT debug to vdu
@@ -260,6 +264,7 @@ PEHPIDSize			*	:INDEX: @
 ; Control stream handle structure
 
                         ^       0
+CSH_ModuleWsPtr         #       4
 CSH_StreamFlags         #       4
 CSH_VideoStreamHandle   #       4
 CSH_AudioStreamHandle   #       4
@@ -600,6 +605,7 @@ Mod_Init Entry
                                         ; so Tutu can free it for me when I die
 05
         MOV     r12, r2
+        STR     r12, ControlStreamHandle+CSH_ModuleWsPtr
 
         Debug_Open "TransDebug"
 
@@ -620,7 +626,11 @@ Mod_Init Entry
       [ :LNOT: BuildAsMPEGControl
         MOV     r0, #2
         MOV     r1, #1
+      [ debug
+        ADRL    r2, Module_BaseAddr
+      |
         ADR     r2, Module_BaseAddr
+      ]
         MOV     r3, r12
         SWI     XMPEGControl_ControlOp  ; Let MPEGControl know we've initialised
       ]
@@ -1320,12 +1330,32 @@ GetSprite Entry "r1"
 ;
 ;       FullBuffers - Here's some more data
 ;
+
+; Direct access interface:
+; in:   r0 = flags
+;       r1 -> one or more linked bitstream buffers
+;       it is assumed that the bitstream buffer struct contains the control stream handle
+
+FullBuffers_DirectAccessWrapper
+        Push    "lr"
+        MOV     r2, r1
+        LDR     r1, [r2, #BufferDescriptor_CSH]
+        LDR     r12, [r1, #CSH_ModuleWsPtr]             ; needed for things like accessing FreePacketList
+        BL      int_full_buffers
+        TEQ     pc, pc
+        Pull    "pc", EQ                                ; 32-bit mode exit
+        Pull    "pc",, ^                                ; 26-bit mode: flag preservation safe in both APCS-R and APCS-32
+
+; SWI interface
 ; in:   r0 = flags
 ;       r1 = control stream handle
 ;       r2 -> one or more linked bitstream buffers
 
-FullBuffers Entry "r0-r5"
-        ADR     r1, ControlStreamHandle                 ; for now, since Keith isn't doing the open!
+FullBuffers
+;        TST     r0, #FullBuffersFlags_UsingNewBSBufFormat
+;        BEQ     Unsupported_FullBuffers_Call
+        ; drop through to...
+int_full_buffers Entry "r0-r5"
  [ Save1stPacket
 	LDR	r0, [r1, #CSH_SavedLength]
 	TEQ	r0, #0
@@ -1375,16 +1405,6 @@ FullBuffers Entry "r0-r5"
         Pull    "r0-r5"
 10
  ]
- [ EOSDetect
-        SCPSR   I_bit, 0, lr,, r3                       ; disable IRQs
-        LDR     r4, [r1, #CSH_BufferCount]
-        ADD     r4, r4, #1                              ; increment buffer count
-        STR     r4, [r1, #CSH_BufferCount]
-        LDR     r4, [r1, #CSH_EOSFlags]
-        TST     r4, #EOSFlags_TimedOut                  ; if we were in a timed-out state
-        BLNE    AddTimeoutTicker                        ; then we no longer should be
-        RestPSR r3,, c                                  ; restore IRQ state
- ]
         LDR     r0, [r1, #CSH_NotReadyBits]             ; if we haven't actually started playing yet, do nothing
         TEQ     r0, #0
         MOVNE   r5, #0                                  ; indicate no array element to increment
@@ -1427,7 +1447,21 @@ xdebug   SETL    {FALSE}
 	DReg	sp, " Stack pointer = "
  ]
 
-        MOV     r3, #1
+ [ EOSDetect
+        SCPSR   I_bit, 0, lr,, r3                       ; disable IRQs
+        LDR     r4, [r1, #CSH_BufferCount]
+        ADD     r4, r4, #1                              ; increment buffer count
+        STR     r4, [r1, #CSH_BufferCount]
+        LDR     r4, [r1, #CSH_EOSFlags]
+        TST     r4, #EOSFlags_TimedOut                  ; if we were in a timed-out state
+        BLNE    AddTimeoutTicker                        ; then we no longer should be
+        RestPSR r3,, c                                  ; restore IRQ state
+ ]
+
+        LDR     r3, [r2, #BufferDescriptor_Packets]
+        TST     r3, #BufferDescriptorFlags_NewFormat
+        MOVNE   r3, #1 :OR: BufferDescriptorFlags_NewFormat
+        MOVEQ   r3, #1
         STR     r3, [r2, #BufferDescriptor_Packets]     ; one user (us!)
 
         LDR     r3, [r2, #BufferDescriptor_Start]
@@ -1467,7 +1501,7 @@ xdebug   SETL    {FALSE}
 
         RestPSR r3,, c                  ; restore IRQ state
 
-        TEQ     lr, #0                  ; is the count now zero (if so then no active packets in buffer)
+        BICS    r3, lr, #BufferDescriptorFlags_NewFormat ; is the count now zero (if so then no active packets in buffer)
         BNE     %FT20                   ; [no, so don't free buffer]
 
 	DLine	"About to call free routine directly from FullBuffers"
@@ -1485,6 +1519,15 @@ xdebug   SETL    {FALSE}
         EXIT
 
 xdebug   SETL    {FALSE}
+
+;Unsupported_FullBuffers_Call
+;        ADR     r0, %FT00
+;        SETV
+;        MOV     pc, lr
+;00
+;        &       0
+;        =       "This version of MPEGTransport does not support old-format bitstream buffer descriptors", 0
+;        ALIGN
 
 ; **************************************************************************
 ;
@@ -1622,9 +1665,8 @@ SelectProgram Entry "r3,r4"
 	BL	ResetStream
 	Pull	"r0-r3"
 	PullEnv
-	mrs    ,r10, CPSR
-	TST     r10, #2_11100
-	MOVEQS  pc, lr          ; if running in 26-bit mode, preserve all flags, as before
+        TEQ     pc, pc
+	MOVNES  pc, lr          ; if running in 26-bit mode, preserve all flags, as before
 	CMP     r0, r0          ; else just ensure V is clear
 	MOV     pc, lr
 
@@ -1698,7 +1740,7 @@ FreePackets Entry "r0-r5, wp"
 
         RestPSR r3,, c                                  ; restore IRQ state
 
-        TEQ     lr, #0                                  ; if all buffer data has been used, then free buffer
+        BICS    r3, lr, #BufferDescriptorFlags_NewFormat ; if all buffer data has been used, then free buffer
         STREQ   lr, [r2, #BufferDescriptor_Link]        ; only free one buffer
         MOVEQ   r1, r2
         BLEQ    FreeBuffer
@@ -2062,11 +2104,15 @@ FreeBuffer Entry "r0-r3,r12"
 	LDR	r2, [r1, #BufferDescriptor_Length]
 	SCPSR   I_bit, 0, lr,, r3       ; IRQs off
 
-	ADR	lr, ControlStreamHandle
+        LDR     lr, [r1, #BufferDescriptor_Packets]
+        TST     lr, #BufferDescriptorFlags_NewFormat
+        LDRNE   lr, [r1, #BufferDescriptor_CSH]
+        ADREQ   lr, ControlStreamHandle
 	LDR	r0, [lr, #CSH_DataReturned]
 	ADD	r0, r0, r2
 	STR	r0, [lr, #CSH_DataReturned]
 	RestPSR r3,, c                  ; restore IRQ state
+	MOV     r3, lr                  ; r3 = control stream handle
 
         LDR     r2, [r1, #BufferDescriptor_FreeRoutine]
         TEQ     r2, #0          ; check for SWI interface
@@ -2106,12 +2152,11 @@ FreeBuffer Entry "r0-r3,r12"
 
  [ EOSDetect
 90
-        SCPSR   I_bit, 0, lr,, r3                       ; disable IRQs
-        ADR     lr, ControlStreamHandle
-        LDR     r0, [lr, #CSH_BufferCount]
+        SCPSR   I_bit, 0, lr,, r2                       ; disable IRQs
+        LDR     r0, [r3, #CSH_BufferCount]
         SUB     r0, r0, #1
-        STR     r0, [lr, #CSH_BufferCount]
-        RestPSR r3,, c                                  ; restore IRQ state
+        STR     r0, [r3, #CSH_BufferCount]
+        RestPSR r2,, c                                  ; restore IRQ state
         EXIT
  ]
 
@@ -3550,6 +3595,10 @@ Stats_Bitrate Entry "r0-r5"
 
         EXIT
 
+Stats_DirectFullBuffers ROUT
+        ADRL    r6, FullBuffers_DirectAccessWrapper
+        MOV     pc, lr
+
         LTORG
 
 ; The table containing all the statistics
@@ -3568,6 +3617,7 @@ StatsTable
  ]
         StatsTableEntry &000A, Stats_CSH, Code
         StatsTableEntry &000B, Stats_Bitrate, Code
+        StatsTableEntry &000C, Stats_DirectFullBuffers, Code
 	&	-1
 
 ; **************************************************************************
@@ -3916,7 +3966,7 @@ DecimalOutput Entry "r0-r2",16
 
 
  [ international
-CopyError ENTRY "r1-r7"
+CopyError Entry "r1-r7"
         BL      open_messagefile
         EXIT    VS
         ADR     r1, MessageFile_Block
@@ -3932,7 +3982,7 @@ message_filename
         DCB     "Resources:$.Resources.ARM600.Messages", 0
         ALIGN
 
-open_messagefile ENTRY "r0-r2"
+open_messagefile Entry "r0-r2"
         LDR     r0, MessageFile_Open
         CMP     r0, #0
         EXIT    NE
@@ -3946,7 +3996,7 @@ open_messagefile ENTRY "r0-r2"
         STR     r0, MessageFile_Open
         EXIT
 
-write_r0_message ENTRY "r0-r7"
+write_r0_message Entry "r0-r7"
         BL      open_messagefile
         STRVS   r0, [sp]
         EXIT    VS
@@ -3969,7 +4019,7 @@ write_r0_message ENTRY "r0-r7"
         SWI     XOS_NewLine
         EXIT
  |
-write_r0_message ENTRY "r0"
+write_r0_message Entry "r0"
         SWI     XOS_Write0
         STRVS   r0, [sp]
         EXIT
