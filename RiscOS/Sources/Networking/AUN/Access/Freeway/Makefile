@@ -56,16 +56,15 @@ C_ABSSYM  = RISCOSLIB:o.c_abssym
 SOCKLIBZM = TCPIPLibs:o.socklibzm
 INETLIBZM = TCPIPLibs:o.inetlibzm
 DEBUGLIB  = C:DebugLib.o.DebugLibZM
+ASMUTILS  = C:AsmUtils.o.AsmUtilsZM
 
 OBJS =\
  o.fwhdr\
- o.irqs\
  o.module\
  o.objects
 
 DBG_OBJS=\
  o.fwhdr\
- o.irqs\
  od.module\
  od.objects
 
@@ -115,16 +114,16 @@ clean_all: clean
         ${WIPE} o.* ${WFLAGS}
         @echo ${COMPONENT}: imported objects removed
 
-${ROM_MODULE}: ${OBJS} ${SOCKLIBZM} ${INETLIBZM} ${ROMCSTUBS}
+${ROM_MODULE}: ${OBJS} ${SOCKLIBZM} ${INETLIBZM} ${ROMCSTUBS} ${ASMUTILS}
         ${MKDIR} aof
-        ${LD} -o $@ -aof ${OBJS} ${SOCKLIBZM} ${INETLIBZM} ${ROMCSTUBS}
+        ${LD} -o $@ -aof ${OBJS} ${SOCKLIBZM} ${INETLIBZM} ${ROMCSTUBS} ${ASMUTILS}
 
-${RAM_MODULE}: ${OBJS} ${SOCKLIBZM} ${INETLIBZM} ${CLIB}
-        ${LD} -o $@ -rmf ${OBJS} ${SOCKLIBZM} ${INETLIBZM} ${CLIB} 
+${RAM_MODULE}: ${OBJS} ${SOCKLIBZM} ${INETLIBZM} ${CLIB} ${ASMUTILS}
+        ${LD} -o $@ -rmf ${OBJS} ${SOCKLIBZM} ${INETLIBZM} ${CLIB} ${ASMUTILS}
         ${SQZ} $@
 
-${DBG_MODULE}: ${DBG_OBJS} ${SOCKLIBZM} ${INETLIBZM} ${CLIB} ${DIRS} ${DEBUGLIB}
-        ${LD} -o $@ -rmf ${DBG_OBJS} ${DEBUGLIB} ${SOCKLIBZM} ${INETLIBZM} ${CLIB}
+${DBG_MODULE}: ${DBG_OBJS} ${SOCKLIBZM} ${INETLIBZM} ${CLIB} ${DIRS} ${DEBUGLIB} ${ASMUTILS}
+        ${LD} -o $@ -rmf ${DBG_OBJS} ${DEBUGLIB} ${SOCKLIBZM} ${INETLIBZM} ${CLIB} ${ASMUTILS}
         ${SQZ} $@
 
 # final link for ROM Image (using given base address)
