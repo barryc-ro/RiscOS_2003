@@ -26,7 +26,7 @@
 #include "driver.h"
 #include "veneers.h"
 #include "rcablast.h"
-
+#include "codetables.h"
 
 /*
  * Globals
@@ -58,24 +58,9 @@ static _kernel_oserror errors[]=
 #define NV_IRCableCode "IRCableCode"
 
 
-static code_table_t tv_tables[]=
-{
-    {0,0,0,0,0}
-};
+static unsigned char blast_data[100]= {1};          /* always 1 string */
 
-static code_table_t vcr_tables[]=
-{
-    {0,0,0,0,0}
-};
 
-static code_table_t cable_tables[]=
-{
-    {0,0,0,0,0}
-};
-
-#define TOTAL_TV_TABLES (sizeof(tv_tables)/sizeof(code_table_t))
-#define TOTAL_VCR_TABLES (sizeof(vcr_tables)/sizeof(code_table_t))
-#define TOTAL_CABLE_TABLES (sizeof(cable_tables)/sizeof(code_table_t))
 
 
 _kernel_oserror *driver_initialise(void *pw,unsigned int reason)
@@ -84,6 +69,7 @@ _kernel_oserror *driver_initialise(void *pw,unsigned int reason)
 
     NOT_USED(reason);
 
+    DEBUGFN(3,db_printf("RCABlast: initialise\n"));
     callbacks.notify_flags.bits.notify_on_comp_status_report=1;
 
     err = ir_initialise(&callbacks,pw);
@@ -98,6 +84,7 @@ _kernel_oserror *driver_finalise(void *pw)
     _kernel_oserror *err=NULL;
     NOT_USED(pw);
 
+    DEBUGFN(3,db_printf("RCABlast: finalise\n"));
     err = ir_finalise();
     if (!err)
     {
@@ -105,6 +92,55 @@ _kernel_oserror *driver_finalise(void *pw)
     return err;
 }
 
+/*
+    Make a block of data suitable for blasting:
+
+    1 <size in nibbles> <header> <data>
+
+    Returns the maximum length of the string, in bytes.
+*/
+
+static unsigned int make_blast_data(code_table_t *table, unsigned int command)
+{
+    unsigned int hs = (table->header_size+1)>>1;
+    unsigned int ds = (table->data_size+1)>>1;
+    unsigned char *header=(unsigned char *)(table->header);
+    unsigned char *data=(unsigned char *)(table->data);
+
+    blast_data[1] = table->header_size+table->data_size;
+    memcpy(&blast_data[2],header,hs);
+
+    if (table->header_size&1)
+    {
+        /*
+            Odd number of nibbles in the header... need to
+            shift the string along by a nibble.
+        */
+        unsigned char *src,*dest;
+        unsigned int loop;
+
+        src = &data[command*ds];            /* src  --> 1234 (start of command) */
+        dest = &blast_data[1+hs];           /* dest --> 56xx (last byte in header) */
+
+        for (loop = 0; loop < table->data_size; loop +=2)
+        {
+            *dest &=0xf0;                   /* dest --> 5xxx */
+            *dest |= (*src)>>4;             /* dest --> 51xx */
+            dest++;                         /* dest --> xxxx */
+            *dest = ((*src) & 0x0f) << 4;   /* dest --> 2xxx */
+            src++;                          /* src  --> 34xx */
+        }
+    }
+    else
+    {
+        /*
+            Even number of nibbles in header. Easy.
+        */
+        memcpy(&blast_data[2+hs],&data[command*ds],ds);
+    }
+
+    return hs+ds+2;
+}
 
 static _kernel_oserror *blast_to_tv(unsigned int tv_number,
                                     unsigned int code_number,
@@ -112,10 +148,23 @@ static _kernel_oserror *blast_to_tv(unsigned int tv_number,
 {
     _kernel_oserror *err=NULL;
     ir_blast_setup_t bs;
-
-    if (tv_number < TOTAL_TV_TABLES)
+    DEBUGFN(3,db_printf("RCABlast: blast_to_tv(%d,%d,%x)\n",tv_number,code_number,flags));
+    if (tv_number < total_tv_tables)
     {
+        DEBUGFN(3,db_printf("RCABlast: good tv_number\n"));
+
         bs.word = flags;
+        if (code_number < tv_tables[tv_number].num_commands)
+        {
+            DEBUGFN(3,db_printf("RCABlast: good code_number\n"));
+            ir_blast(blast_data,
+                     make_blast_data(&tv_tables[tv_number],code_number),
+                     bs);
+        }
+        else
+        {
+            err = &errors[RCAIRBlast_Error_CodeNumberOutOfRange];
+        }
     }
     else
     {
@@ -131,9 +180,19 @@ static _kernel_oserror *blast_to_vcr(unsigned int vcr_number,
 {
     _kernel_oserror *err=NULL;
     ir_blast_setup_t bs;
-    if (vcr_number < TOTAL_VCR_TABLES)
+    if (vcr_number < total_vcr_tables)
     {
         bs.word = flags;
+        if (code_number < vcr_tables[vcr_number].num_commands)
+        {
+            ir_blast(blast_data,
+                     make_blast_data(&vcr_tables[vcr_number],code_number),
+                     bs);
+        }
+        else
+        {
+            err = &errors[RCAIRBlast_Error_CodeNumberOutOfRange];
+        }
     }
     else
     {
@@ -149,9 +208,19 @@ static _kernel_oserror *blast_to_cable(unsigned int cable_number,
 {
     _kernel_oserror *err=NULL;
     ir_blast_setup_t bs;
-    if (cable_number < TOTAL_CABLE_TABLES)
+    if (cable_number < total_cable_tables)
     {
         bs.word = flags;
+        if (code_number < cable_tables[cable_number].num_commands)
+        {
+            ir_blast(blast_data,
+                     make_blast_data(&cable_tables[cable_number],code_number),
+                     bs);
+        }
+        else
+        {
+            err = &errors[RCAIRBlast_Error_CodeNumberOutOfRange];
+        }
     }
     else
     {
@@ -268,12 +337,15 @@ _kernel_oserror *swi_blast_to_cable(_kernel_swi_regs *r)
 
 
 void driver_accept_data_packet(unsigned int registry_number,
-                                unsigned char tag_number,
-                                unsigned char data[3])
+                               unsigned char tag_number,
+                               unsigned char data[3])
 {
     NOT_USED(registry_number);
     NOT_USED(tag_number);
     NOT_USED(data[0]);
+
+    DEBUGFN(3,db_printf("RCABlast: Got a data packet!\n"));
+
 
 }
 
@@ -287,7 +359,7 @@ void driver_accept_report_packet(unsigned char report_code,
     {
         if (data[0]&0x20)/* blast complete */
         {
-            DEBUGFN(3,db_printf("Blasting complete!\n"));
+            DEBUGFN(3,db_printf("RCABlast: Blasting complete\n"));
         }
     }
 }
