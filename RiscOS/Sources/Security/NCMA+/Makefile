@@ -29,6 +29,7 @@ WIPE    = -wipe
 CD	= dir
 DEFMOD  = DefMod
 AR	= LibFile
+THROWBACK = -Throwback
 
 
 ASFLAGS = -depend !Depend -Stamp -quit -module
@@ -41,18 +42,24 @@ INCLUDES= -IC:
 #
 # Different compile options - choose one
 #
+# use REMOTE_DEBUG to enable remote debugging
 # use ENABLE_DEBUGGING if you want to enable debugging!
 # use POINTLESS_BUTTONS if you want managed access to ignore the card going in and out and wait for the user
 #                       to click on various 'continue' buttons. Undefine this for any sane implementation
 # use AUTHENTICATE_SIGNATURES if you want managed access to be strict about signed contents
 # use SHOW_BOOTBLOCK_TRANSITIONS if you want really verbose debugging of what NCBootblock's doing with your data
+# use CHIMPANZEE_INTERFACE if you're a big American corporation and you need special hacks in Managed Access to accomodate
+# the fact that you bought 40,000 of the wrong type of smartcard
+# use DIALING_FROM_UK to frig numbers locally and tell the server to frig them for UK international access
 
 # no debugging
-CCFLAGS  = -c -Throwback -depend !Depend ${INCLUDES} -zM -DUSE_TINY -UENABLE_DEBUGGING -DPOINTLESS_BUTTONS -UAUTHENTICATE_SIGNATURES 
+CCFLAGS  = -c ${THROWBACK} -depend !Depend ${INCLUDES} -zM -UREMOTE_DEBUG -UENABLE_DEBUGGING -DPOINTLESS_BUTTONS -DUSE_TINY \
+		-DCHIMPANZEE_INTERFACE -UAUTHENTICATE_SIGNATURES 
 
 # debugging
-#CCFLAGS  = -c -Throwback -depend !Depend ${INCLUDES} -zM -DENABLE_DEBUGGING -DPOINTLESS_BUTTONS -UAUTHENTICATE_SIGNATURES \
-		-DSHOW_BOOTBLOCK_TRANSITIONS
+#CCFLAGS  = -c ${THROWBACK} -depend !Depend ${INCLUDES} -zM -DREMOTE_DEBUG -DENABLE_DEBUGGING -DCHIMPANZEE_INTERFACE \
+		-DPOINTLESS_BUTTONS -UAUTHENTICATE_SIGNATURES \
+		-DSHOW_BOOTBLOCK_TRANSITIONS -DDIALING_FROM_UK
 
 
 # Libraries
@@ -63,6 +70,7 @@ RSTUBS     = RISCOSLIB:o.rstubs
 ROMSTUBS   = RISCOSLIB:o.romstubs
 ROMCSTUBS  = RISCOSLIB:o.romcstubs
 ABSSYM     = RISC_OSLib:o.AbsSym
+DBUGLIB    = C:o.DBUGzm
 
 #SOCKLIB	   = InetInc:^.^.libs.socklib.socklibzm
 #INETLIB	   = InetInc:^.^.libs.inetlib.inetlibzm
@@ -84,15 +92,15 @@ COMPONENT = NCMA+
 TARGET    = aof.NCMA+
 TARGETSA  = rm.NCMA+
 EXPORTS   =
-BASEOBJS  = module.o header.o vectors.o DBUG.o ncma_cmds.o ncma_swis.o \
+BASEOBJS  = module.o header.o vectors.o ncma_cmds.o ncma_swis.o \
 	  dynalloc.o ncma_ncma.o machine.o ncma_url.o ncma_scard.o \
 	  ncma_utils.o ncma_dial.o kprintf.o ncma_smurf.o \
 	  ncma_cron.o ncma_exec.o ncma_atr.o ncma_bootb.o ncma_mime.o \
 	  ncma_tags.o ncma_nvram.o ncma_cache.o ncma_uid.o ncma_net.o \
-	  usermode.o ncma_time.o areacode.o ncma_auth.o
+	  usermode.o ncma_time.o areacode.o ncma_auth.o 
 
 ROMOBJS = oz.resources ${BASEOBJS}
-NOTROMOBJS = o.resources ${BASEOBJS}
+NOTROMOBJS = o.resources ${DBUGLIB} ${BASEOBJS}
 
 RESDIR = <resource$dir>.Resources.${COMPONENT}
 
@@ -144,8 +152,8 @@ resources:
 #
 # Executable target (static link)
 #
-${TARGETSA}: ${NOTROMOBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
-        ${LD} -o $@ -module ${NOTROMOBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
+${TARGETSA}: ${NOTROMOBJS} ${CLIB} ${DBUGLIB}
+        ${LD} -o $@ -module ${NOTROMOBJS} ${CLIB}
 
 #
 # Exported interface headers
@@ -172,3 +180,269 @@ rom_link:
 
 
 # Dynamic dependencies:
+o.module:	c.module
+o.module:	C:h.kernel
+o.module:	C:h.swis
+o.module:	h.module
+o.module:	C:h.DBUG
+o.module:	h.machine
+o.module:	h.vectors
+o.module:	h.ncma_cmds
+o.module:	h.ncma_swis
+o.module:	h.ncma_ncma
+o.module:	h.ncma_scard
+o.module:	h.ncma_dial
+o.module:	h.ncma_uid
+o.module:	h.smcard
+o.module:	h.ncma_ROM
+o.module:	h.smcard
+o.module:	h.dynalloc
+o.module:	C:h.DBUG
+o.header:	cmhg.header
+o.header:	h.cmhg_defs
+o.vectors:	c.vectors
+o.vectors:	C:h.kernel
+o.vectors:	C:h.swis
+o.vectors:	h.ncma_ncma
+o.vectors:	h.machine
+o.vectors:	h.vectors
+o.vectors:	h.module
+o.vectors:	C:h.DBUG
+o.vectors:	h.scinter
+o.ncma_cmds:	c.ncma_cmds
+o.ncma_cmds:	C:h.kernel
+o.ncma_cmds:	C:h.swis
+o.ncma_cmds:	h.ncma_cmds
+o.ncma_cmds:	h.ncma_ncma
+o.ncma_cmds:	h.ncma_utils
+o.ncma_cmds:	h.ncma_url
+o.ncma_cmds:	h.ncma_scard
+o.ncma_cmds:	h.ncma_cache
+o.ncma_cmds:	h.ncma_mime
+o.ncma_cmds:	h.machine
+o.ncma_cmds:	h.vectors
+o.ncma_cmds:	h.kprintf
+o.ncma_cmds:	C:h.DBUG
+o.ncma_swis:	c.ncma_swis
+o.ncma_swis:	C:h.kernel
+o.ncma_swis:	C:h.swis
+o.ncma_swis:	h.ncma_swis
+o.ncma_swis:	h.ncma_ncma
+o.ncma_swis:	h.ncma_scard
+o.ncma_swis:	h.ncma_cache
+o.ncma_swis:	h.dynalloc
+o.ncma_swis:	h.module
+o.ncma_swis:	C:h.DBUG
+o.dynalloc:	c.dynalloc
+o.dynalloc:	C:h.kernel
+o.dynalloc:	C:h.swis
+o.dynalloc:	h.dynalloc
+o.dynalloc:	C:h.DBUG
+o.ncma_ncma:	c.ncma_ncma
+o.ncma_ncma:	C:h.kernel
+o.ncma_ncma:	h.ncma_ncma
+o.ncma_ncma:	h.ncma_url
+o.ncma_ncma:	h.dynalloc
+o.ncma_ncma:	h.module
+o.ncma_ncma:	C:h.DBUG
+o.ncma_ncma:	C:h.kernel
+o.ncma_ncma:	C:h.swis
+o.ncma_ncma:	h.machine
+o.ncma_ncma:	h.vectors
+o.machine:	c.machine
+o.machine:	C:h.kernel
+o.machine:	C:h.swis
+o.machine:	h.machine
+o.machine:	h.module
+o.machine:	h.ncma_ncma
+o.machine:	h.ncma_scard
+o.machine:	h.ncma_url
+o.machine:	h.ncma_utils
+o.machine:	h.ncma_dial
+o.machine:	h.ncma_cron
+o.machine:	h.ncma_exec
+o.machine:	h.ncma_smurf
+o.machine:	h.ncma_atr
+o.machine:	h.ncma_cache
+o.machine:	h.ncma_bootb
+o.machine:	h.ncma_mime
+o.machine:	h.ncma_nvram
+o.machine:	h.ncma_net
+o.machine:	h.vectors
+o.machine:	C:h.DBUG
+o.ncma_url:	c.ncma_url
+o.ncma_url:	C:h.kernel
+o.ncma_url:	C:h.swis
+o.ncma_url:	h.ncma_ncma
+o.ncma_url:	h.ncma_url
+o.ncma_url:	h.ncma_scard
+o.ncma_url:	h.ncma_cache
+o.ncma_url:	h.ncma_tags
+o.ncma_url:	h.ncma_bootb
+o.ncma_url:	h.ncma_ROM
+o.ncma_url:	h.smcard
+o.ncma_url:	h.ncma_uid
+o.ncma_url:	h.smcard
+o.ncma_url:	h.ncma_ROM
+o.ncma_url:	h.ncma_nvram
+o.ncma_url:	h.smcard
+o.ncma_url:	h.dynalloc
+o.ncma_url:	C:h.DBUG
+o.ncma_scard:	c.ncma_scard
+o.ncma_scard:	C:h.kernel
+o.ncma_scard:	C:h.swis
+o.ncma_scard:	h.ncma_scard
+o.ncma_scard:	h.ncma_url
+o.ncma_scard:	h.ncma_utils
+o.ncma_scard:	h.dynalloc
+o.ncma_scard:	h.usermode
+o.ncma_scard:	C:h.kernel
+o.ncma_scard:	h.machine
+o.ncma_scard:	h.vectors
+o.ncma_scard:	C:h.DBUG
+o.ncma_scard:	h.kprintf
+o.ncma_utils:	c.ncma_utils
+o.ncma_utils:	C:h.kernel
+o.ncma_utils:	C:h.swis
+o.ncma_utils:	h.ncma_utils
+o.ncma_utils:	h.ncma_scard
+o.ncma_utils:	h.ncma_ncma
+o.ncma_utils:	h.ncma_cache
+o.ncma_utils:	h.ncma_tags
+o.ncma_utils:	h.ncma_bootb
+o.ncma_utils:	h.ncma_url
+o.ncma_utils:	h.ncma_smurf
+o.ncma_utils:	h.smcard
+o.ncma_utils:	C:h.DBUG
+o.ncma_dial:	c.ncma_dial
+o.ncma_dial:	C:h.kernel
+o.ncma_dial:	C:h.swis
+o.ncma_dial:	h.ncma_dial
+o.ncma_dial:	C:h.DBUG
+o.kprintf:	c.kprintf
+o.kprintf:	C:h.kernel
+o.kprintf:	C:h.swis
+o.kprintf:	h.kprintf
+o.ncma_smurf:	c.ncma_smurf
+o.ncma_smurf:	C:h.kernel
+o.ncma_smurf:	C:h.swis
+o.ncma_smurf:	h.ncma_smurf
+o.ncma_smurf:	h.ncma_scard
+o.ncma_smurf:	h.ncma_cache
+o.ncma_smurf:	C:h.DBUG
+o.ncma_cron:	c.ncma_cron
+o.ncma_cron:	C:h.kernel
+o.ncma_cron:	C:h.swis
+o.ncma_cron:	h.ncma_nvram
+o.ncma_cron:	h.ncma_smurf
+o.ncma_cron:	h.ncma_exec
+o.ncma_cron:	h.ncma_ncma
+o.ncma_cron:	h.ncma_dial
+o.ncma_cron:	h.ncma_cron
+o.ncma_cron:	C:h.DBUG
+o.ncma_exec:	c.ncma_exec
+o.ncma_exec:	C:h.kernel
+o.ncma_exec:	C:h.swis
+o.ncma_exec:	h.ncma_exec
+o.ncma_exec:	h.ncma_smurf
+o.ncma_exec:	C:h.DBUG
+o.ncma_atr:	c.ncma_atr
+o.ncma_atr:	C:h.kernel
+o.ncma_atr:	C:h.swis
+o.ncma_atr:	h.ncma_atr
+o.ncma_atr:	h.ncma_scard
+o.ncma_atr:	C:h.DBUG
+o.ncma_bootb:	c.ncma_bootb
+o.ncma_bootb:	C:h.kernel
+o.ncma_bootb:	C:h.swis
+o.ncma_bootb:	h.ncma_bootb
+o.ncma_bootb:	h.ncma_ROM
+o.ncma_bootb:	h.smcard
+o.ncma_bootb:	h.ncma_tags
+o.ncma_bootb:	h.ncma_scard
+o.ncma_bootb:	h.ncma_cache
+o.ncma_bootb:	h.ncma_url
+o.ncma_bootb:	h.ncma_uid
+o.ncma_bootb:	h.smcard
+o.ncma_bootb:	h.ncma_ROM
+o.ncma_bootb:	h.ncma_utils
+o.ncma_bootb:	h.ncma_nvram
+o.ncma_bootb:	h.ncma_auth
+o.ncma_bootb:	C:h.DBUG
+o.ncma_mime:	c.ncma_mime
+o.ncma_mime:	C:h.kernel
+o.ncma_mime:	C:h.swis
+o.ncma_mime:	h.machine
+o.ncma_mime:	h.dynalloc
+o.ncma_mime:	h.ncma_mime
+o.ncma_mime:	h.ncma_tags
+o.ncma_mime:	h.ncma_nvram
+o.ncma_mime:	h.ncma_utils
+o.ncma_mime:	h.ncma_bootb
+o.ncma_mime:	h.ncma_url
+o.ncma_mime:	h.ncma_cache
+o.ncma_mime:	h.ncma_scard
+o.ncma_mime:	h.ncma_net
+o.ncma_mime:	h.ncma_time
+o.ncma_mime:	h.ncma_auth
+o.ncma_mime:	h.smcard
+o.ncma_mime:	C:h.DBUG
+o.ncma_tags:	c.ncma_tags
+o.ncma_tags:	h.ncma_tags
+o.ncma_tags:	h.ncma_utils
+o.ncma_tags:	C:h.DBUG
+o.ncma_nvram:	c.ncma_nvram
+o.ncma_nvram:	C:h.kernel
+o.ncma_nvram:	C:h.swis
+o.ncma_nvram:	h.ncma_nvram
+o.ncma_nvram:	h.areacode
+o.ncma_nvram:	C:h.DBUG
+o.ncma_cache:	c.ncma_cache
+o.ncma_cache:	C:h.kernel
+o.ncma_cache:	C:h.swis
+o.ncma_cache:	h.smcard
+o.ncma_cache:	h.dynalloc
+o.ncma_cache:	h.ncma_cache
+o.ncma_cache:	h.ncma_utils
+o.ncma_cache:	h.ncma_tags
+o.ncma_cache:	h.ncma_bootb
+o.ncma_cache:	h.ncma_time
+o.ncma_cache:	h.kprintf
+o.ncma_cache:	C:h.DBUG
+o.ncma_uid:	c.ncma_uid
+o.ncma_uid:	h.smcard
+o.ncma_uid:	h.ncma_ROM
+o.ncma_uid:	h.smcard
+o.ncma_uid:	h.ncma_uid
+o.ncma_uid:	h.smcard
+o.ncma_uid:	h.ncma_ROM
+o.ncma_uid:	C:h.DBUG
+o.ncma_net:	c.ncma_net
+o.ncma_net:	C:h.kernel
+o.ncma_net:	C:h.swis
+o.ncma_net:	h.ncma_utils
+o.ncma_net:	h.ncma_scard
+o.ncma_net:	h.ncma_ncma
+o.ncma_net:	h.ncma_net
+o.ncma_net:	h.ncma_cache
+o.ncma_net:	h.ncma_tags
+o.ncma_net:	h.ncma_bootb
+o.ncma_net:	h.ncma_url
+o.ncma_net:	h.ncma_smurf
+o.ncma_net:	h.smcard
+o.ncma_net:	C:h.DBUG
+o.ncma_time:	c.ncma_time
+o.ncma_time:	C:h.kernel
+o.ncma_time:	C:h.swis
+o.ncma_time:	h.ncma_time
+o.ncma_time:	h.ncma_tags
+o.ncma_time:	h.ncma_utils
+o.ncma_time:	h.smcard
+o.ncma_time:	C:h.DBUG
+o.ncma_auth:	c.ncma_auth
+o.ncma_auth:	C:h.kernel
+o.ncma_auth:	C:h.swis
+o.ncma_auth:	h.ncma_auth
+o.ncma_auth:	h.ncma_ncma
+o.ncma_auth:	h.ncma_bootb
+o.ncma_auth:	C:h.DBUG

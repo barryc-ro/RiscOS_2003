@@ -88,6 +88,10 @@ char *state_string(NCMA_STATE state)
     "State_NCMANoCard",
     "State_NCMABadCard",
     "State_NCMAPin",
+#ifdef CHIMPANZEE_INTERFACE
+    "State_NCMADefaultPIN",
+    "State_NCMAApresPIN",
+#endif
     "State_NCMADiallingISP",
     "State_NCMABadPin",
     "State_NCMAShutdown",
@@ -216,6 +220,16 @@ NCMA_STATE machine(NCMA_TRANS trans)
 		if(smartcard_pin_protected()) {
 		    card_attempts = smartcard_blocked();
 		    if(card_attempts>0) {
+#ifdef CHIMPANZEE_INTERFACE
+       		      default_pin();
+       		      if(virgin_smartcard()) goto proceed_after_pin;
+       		      /* a virgin card doesn't generate any status calls on authentication, because NCBootblock has
+       		         already given up reading at this point, since it cannot construct a file sequence from the
+       		         empty index file. Virgin smartcards will always ship with PIN (0000), so we call default_pin
+       		         to set it for future operations, and then skip the bit of this state machine which expects a reply */
+       		      return(State_NCMADefaultPIN);
+#else
+
 		      DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: smartcard PIN protected (%d attempts) - fetching page\n", card_attempts);
 		      ncma_dbox_open(URL_PATH(pin.html));
 		      return(State_NCMAPin);
@@ -223,6 +237,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
 		        DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: smartcard is blocked\n");
 		        ncma_dbox_open(URL_PATH(unblock.html));
 		        return(State_NCMAUnblock);
+#endif
 		    }
 		}
 
@@ -233,10 +248,6 @@ NCMA_STATE machine(NCMA_TRANS trans)
                   return(State_NCMANoCard);
                 }
 
-
-		if(cache_smartcard()<0) {
-		    DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: smartcard content caching failed\n");
-		}
 		ncma_dbox_open(URL_PATH(connect.html));
 		return(State_NCMAConnect);
 
@@ -289,7 +300,41 @@ NCMA_STATE machine(NCMA_TRANS trans)
        		 return(State_NCMANoCard);
 
             case Trans_URLSmartcardAck:
+
+                 if(!smartcard_present()) {
+                     DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: pointless button clicked with no scard inserted - ignoring\n");
+                     return(State_NCMANoCard);
+                 }
+
+                 if(!smartcard_valid()) {
+		    DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: invalid smartcard - bailing\n");
+		    ncma_dbox_open(URL_PATH(invalid.html));
+		    return(State_NCMABadCard);
+		}
+
+		if(smartcard_pin_protected()) {
+		    card_attempts = smartcard_blocked();
+		    if(card_attempts>0) {
+#ifdef CHIMPANZEE_INTERFACE
+       		      default_pin();
+       		      if(virgin_smartcard()) goto proceed_after_pin; /* see top for explanation of this */
+       		      return(State_NCMADefaultPIN);
+#else
+
+		      DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: smartcard PIN protected (%d attempts) - fetching page\n", card_attempts);
+		      ncma_dbox_open(URL_PATH(pin.html));
+		      return(State_NCMAPin);
+		    } else {
+		        DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: smartcard is blocked\n");
+		        ncma_dbox_open(URL_PATH(unblock.html));
+		        return(State_NCMAUnblock);
 #endif
+		    }
+		}
+
+
+
+#else
 
 
 		if(!registry_status_changed(BB_STATUS_LOCKED)) {
@@ -306,6 +351,11 @@ NCMA_STATE machine(NCMA_TRANS trans)
 	    	if(registry_status_asserted(BB_STATUS_LOCKED)) { /* PIN protected */
 	    	    card_attempts = smartcard_blocked();
 	    	    if(card_attempts>0) {
+#ifdef CHIMPANZEE_INTERFACE
+       		      default_pin();
+       		      if(virgin_smartcard()) got proceed_after_pin; /* see top for explanation of this */
+       		      return(State_NCMADefaultPIN);
+#else
  		      DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: smartcard PIN protected (%d attempts) - fetching page\n", card_attempts);
 		      ncma_dbox_open(URL_PATH(pin.html));
 		      return(State_NCMAPin);
@@ -313,8 +363,10 @@ NCMA_STATE machine(NCMA_TRANS trans)
 		      DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: smartcard is blocked\n");
 		      ncma_dbox_open(URL_PATH(unblock.html));
 		      return(State_NCMAUnblock);
+#endif
 		    }
 		}
+
 
                 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Trans_Registry s=0x%x d=0x%x\n", registry_status, registry_delta);
                 if(bootblock_read_failed()) {
@@ -322,7 +374,7 @@ NCMA_STATE machine(NCMA_TRANS trans)
                      ncma_dbox_open(URL_PATH(damaged.html));
                      return(State_NCMABadCard);
                 }
-
+#endif
 
 		goto proceed_after_pin;
 
@@ -336,6 +388,60 @@ NCMA_STATE machine(NCMA_TRANS trans)
          } /* end state_ncmanocard */
          break;
 
+#ifdef CHIMPANZEE_INTERFACE
+/*********************************************************************************
+
+    STATE_NCMADEFAULTPIN
+
+ *********************************************************************************/
+    case State_NCMADefaultPIN:
+
+    	 switch(trans) {
+	     case Trans_AuthFail: /* default PIN failed */
+	          DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: authorization failure for default PIN (auth)\n");
+	          if(card_attempts-->0) {
+	            DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Bad PIN! %d attempts left\n", card_attempts);
+	     	    ncma_dbox_open(URL_PATH(pin.html));
+	     	    return(State_NCMAPin);
+	     	  } else {
+	     	    DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: card has become blocked\n");
+	     	    ncma_dbox_open(URL_PATH(unblock.html));
+	     	    return(State_NCMAUnblock);
+	     	  }
+	     	  break;
+
+    	     case Trans_Registry: /* test status of default PIN transaction */
+                 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Trans_Registry s=0x%x d=0x%x\n", registry_status, registry_delta);
+
+	     	  if(registry_status_asserted(BB_STATUS_LOCKED) || registry_status_asserted(BB_STATUS_AUTHFAIL)) { /* PIN was wrong */
+	     	      DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: default PIN failed (registry)\n");
+
+	              if(card_attempts-->0) {
+	                DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Bad PIN! %d attempts left\n", card_attempts);
+	     	        ncma_dbox_open(URL_PATH(pin.html));
+	     	        return(State_NCMAPin);
+	     	      } else {
+	     	        ncma_dbox_open(URL_PATH(unblock.html));
+	     	        return(State_NCMAUnblock);
+	     	      }
+	     	      break;
+
+
+	     	  }
+		  /* default PIN succeeded */
+	     	  if(registry_status_clear(BB_STATUS_LOCKED) && registry_status_clear(BB_STATUS_AUTHFAIL)) { /* PIN was right */
+	     	      DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: default PIN succeeeded\n");
+                      strncpy(old_chv_pin, chv_pin, chv_pin_size);
+                      old_chv_pin_size = chv_pin_size;
+
+		      goto proceed_after_pin;
+	     	      break;
+	          }
+
+
+    	 } /* end state_ncmadefaultpin */
+    	 break;
+#endif
 /*********************************************************************************
 
     STATE_NCMAPIN
@@ -344,10 +450,6 @@ NCMA_STATE machine(NCMA_TRANS trans)
     case State_NCMAPin:
 
     	 switch(trans) {
-
-	     case Trans_URLChangePIN: /* the user clicked on 'change pin' */
-	     	  ncma_dbox_open(URL_PATH(newpin.html));
-	     	  return(State_NCMANewPIN);
 
 	     case Trans_AuthFail: /* the user entered a pin, but it failed */
 	          DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: authorization failure (authfail)\n");
@@ -383,28 +485,42 @@ NCMA_STATE machine(NCMA_TRANS trans)
 
 	     	  if(registry_status_clear(BB_STATUS_LOCKED) && registry_status_clear(BB_STATUS_AUTHFAIL)) { /* PIN was right */
 	     	      DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: authorization successful\n");
-/*
-        	      if(cache_smartcard()<0) {
-        		 DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: smartcard content caching failed\n");
-        	      }
-
-        	      if(ncma_dial()<0) {
-        		 DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: dial initiation failed\n");
-        	      }
-        	      return(State_NCMADiallingISP);
-
-	     	  }
-*/
-                    strncpy(old_chv_pin, chv_pin, chv_pin_size);
-                    old_chv_pin_size = chv_pin_size;
-
-		    goto proceed_after_pin;
-	     	    break;
+                      strncpy(old_chv_pin, chv_pin, chv_pin_size);
+                      old_chv_pin_size = chv_pin_size;
+#ifdef CHIMPANZEE_INTERFACE
+       		      return(State_NCMAApresPIN);
+#else
+		      goto proceed_after_pin;
+	     	      break;
+#endif
 	          }
 
 
     	 } /* end state_ncmapin */
     	 break;
+
+#ifdef CHIMPANZEE_INTERFACE
+/*********************************************************************************
+
+    STATE_NCMAAPRESPIN wait for registry completion on bootblock read after user PIN entry
+
+ *********************************************************************************/
+    case State_NCMAApresPIN:
+
+         switch(trans) {
+
+             case Trans_Registry:
+                if(bootblock_read_succeeded()==0) { /* bootblock read ok, but not finished yet */
+                  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: not ready reading bootblock\n");
+                  return(State_NCMAApresPIN);
+                }
+
+		ncma_dbox_open(URL_PATH(connect.html));
+		return(State_NCMAConnect);
+	 }
+	 break;
+#endif
+
 
 /*********************************************************************************
 
@@ -431,6 +547,12 @@ NCMA_STATE machine(NCMA_TRANS trans)
     case State_NCMAConnect:
 
     	 switch(trans) {
+
+	     case Trans_URLChangePIN: /* the user clicked on 'change pin' */
+	     	  ncma_dbox_open(URL_PATH(newpin.html));
+	     	  return(State_NCMANewPIN);
+
+
 	 	case Trans_URLConnect:
 
 		     if(fetch_sc_bootblock()<0) {
@@ -545,16 +667,26 @@ NCMA_STATE machine(NCMA_TRANS trans)
     	     	  ncma_cron_kick(0); /* setup scheduled update */
     	     	  ncma_network_init(); /* set resolver variables */
 
-     	     	     if(ui_present()) {
-     	     	        DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: top level UI detected - fullbooting\n");
-      	     	        ncma_exec_fullboot();
-      	     	        ncma_url_open("file:/UI:index.html"); /* display top level menu */
-      	     	        return(State_NCMABooted);
-      	     	     } else {
+     	     	  if(ui_present()) {
+     	     	     if(ro_smurf_mounted) {
+ 	                 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Boot structure mounted\n");
+     	     	         DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: top level UI detected - fullbooting\n");
+      	     	         ncma_exec_fullboot();
+      	     	     }
+      	     	     ncma_url_open("file:/UI:index.html"); /* display top level menu */
+      	     	     return(State_NCMABooted);
+      	     	  } else {
+      	     	      if(ro_smurf_mounted) { /* got a boot filing system, ie not registration server */
+         	        DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Boot structure mounted\n");
       	     	        DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: no top level UI - prompting for download\n");
       	     	        ncma_dbox_open(URL_PATH(download.html));
       	     	        return(State_NCMADownload);
-      	     	     }
+      	     	      } else { /* no boot filing system, must be registration server */
+      	     	          ncma_url_user();
+      	     	      }
+      	     	  }
+
+
 
     	     	      return(State_NCMABooted);
  		      break;
@@ -571,6 +703,24 @@ NCMA_STATE machine(NCMA_TRANS trans)
 
     	     case Trans_MIMEOk:
     	     	  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: MIME reload successful\n");
+     	     	  if(ui_present()) {
+     	     	     DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: top level UI detected - fullbooting\n");
+      	     	     if(ro_smurf_mounted) ncma_exec_fullboot();
+      	     	     ncma_url_open("file:/UI:index.html"); /* display top level menu */
+      	     	     return(State_NCMABooted);
+      	     	  } else {
+      	     	      if(ro_smurf_mounted) { /* got a boot filing system, ie not registration server */
+      	     	        DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: no top level UI - prompting for download\n");
+      	     	        ncma_dbox_open(URL_PATH(download.html));
+      	     	        return(State_NCMADownload);
+      	     	      } else { /* no boot filing system, must be registration server */
+      	     	          ncma_url_user();
+      	     	      }
+      	     	  }
+
+
+
+
     	     	  return(State_NCMABooted);
 
     	     case Trans_MIMEBad:
@@ -715,29 +865,34 @@ NCMA_STATE machine(NCMA_TRANS trans)
 
     	 switch(trans) {
 
-	     case Trans_AuthFail:
+	     case Trans_AuthFail: /* failed setting PIN */ /* this shouldn't happen */
 	          DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: PIN change failure\n");
 	     	  ncma_dbox_open(URL_PATH(newpin.html));
 	     	  return(State_NCMANewPIN);
 
 	     	  break;
 
-	     case Trans_URLMismatch:
+	     case Trans_URLMismatch: /* the two PINs the user entered didn't match */
 	     	  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: fetching PIN mismatch page\n");
 	     	  ncma_dbox_open(URL_PATH(mismatch.html));
 	     	  return(State_NCMAMismatch);
 	     	  break;
 
-	     case Trans_URLLeavePIN:
-	     	  ncma_dbox_open(URL_PATH(pin.html));
-	     	  return(State_NCMAPin);
+	     case Trans_URLLeavePIN: /* a cancel on the change pin OSD */
+	     	  if(ui_present()) {
+	     	     ncma_url_open(TOPLEVEL_UI_URL);
+	     	     return(State_NCMABooted);
+	     	  } else {
+	     	    ncma_dbox_open(URL_PATH(connect.html));
+	     	    return(State_NCMAConnect);
+	     	  }
 	     	  break;
 
-    	     case Trans_Registry:
+    	     case Trans_Registry: /* PIN set status from registry */
                  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Trans_Registry s=0x%x d=0x%x\n", registry_status, registry_delta);
 
 	     	  if(registry_status_asserted(BB_STATUS_LOCKED) || registry_status_asserted(BB_STATUS_AUTHFAIL)) { /* PIN was wrong */
-	     	      DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: PIN change failed failed\n");
+	     	      DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: PIN change failed failed\n"); /* this shouldn't happen */
 	     	      ncma_dbox_open(URL_PATH(newpin.html));
 	     	      return(State_NCMANewPIN);
 	     	  }
