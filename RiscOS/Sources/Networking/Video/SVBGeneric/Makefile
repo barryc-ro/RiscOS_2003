@@ -263,7 +263,7 @@ rom_link: ${DIRS} ${ROM_MODULE}
 
 ${MSGSF}: LocalRes:Messages
 	TokenCheck LocalRes:Messages
-	resgen messages_file ${MSGSF}
+	resgen messages_file ${MSGSF} LocalRes:Messages Resources.VideoCtrl.${COMPONENT}.Messages
 
 ${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${LIBS} ${CLIB}
 	@echo
