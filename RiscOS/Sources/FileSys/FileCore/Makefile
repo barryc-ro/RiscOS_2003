@@ -21,7 +21,7 @@ AS      = aasm
 CP      = copy
 RM      = remove
 CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
+ASFLAGS = -throwback -depend !Depend -Stamp -quit -module -To $@ -From
 CPFLAGS = ~cfr~v
 
 #
@@ -98,6 +98,8 @@ rm.FileCore: Hdr:MultiFS
 rm.FileCore: Hdr:NewErrors
 rm.FileCore: Hdr:Territory
 rm.FileCore: s.DebugOpts
+rm.FileCore: Hdr:Debug
+rm.FileCore: Hdr:HostFS
 rm.FileCore: s.MyMacros
 rm.FileCore: s.Defns
 rm.FileCore: s.FileCore00
