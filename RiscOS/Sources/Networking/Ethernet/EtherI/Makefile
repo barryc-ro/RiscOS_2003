@@ -18,10 +18,12 @@ MODSQZ  = modsqz
 WIPE    = -wipe
 CD	= dir
 
+# MULTITABLESIZE : a single box isn't likely to be interested in receiving more than this number of multicast
+# channels simultaneously.  Setting this too high will incur unecessary overhead.  n/a if HASHED_MULTICAST.
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -ff -zps1 -Wp -zM -I${INCLUDES} -DINET ${OPTIONS} \
-	${DEBUG} -depend !Depend ${THROWBACK} -DHASHED_MULTICAST -DCOMPAT_INET4# -DSUPPORT_TRADITIONAL_MBUFS
+CFLAGS  = -c -ff -zps1 -Wp -zM -I${INCLUDES} -DINET ${OPTIONS} -DMULTITABLESIZE=8 \
+	${DEBUG} -depend !Depend ${THROWBACK} -DCOMPAT_INET4# -DSUPPORT_TRADITIONAL_MBUFS
 
 
 CPFLAGS = ~cfr~v
