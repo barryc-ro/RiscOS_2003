@@ -30,9 +30,9 @@ MCFLAGS=	-DMemCheck_MEMCHECK -zpc1 -fw
 
 # ----------------------------------------------------------------------------------------------------
 
-# -DINCL_ENUM -DINCL_MODEM -DINCL_SCRIPT -DINCL_PRINTER -DINCL_ASYNC -DINCL_TCPIP
+# -DINCL_ENUM -DINCL_MODEM -DINCL_SCRIPT -DINCL_PRINTER -DINCL_ASYNC -DINCL_TCPIP -DINCL_REDUCER -DINCL_AUDIO
 
-DFLAGS=		-DRISCOS -DBETA=1 -DREMOTE_DEBUG -DCOMPAT_INET4 -DVESA=0 -DINCL_PRINTER -DINCL_TCPIP -DINCL_REDUCER
+DFLAGS=		-DRISCOS -DBETA=1 -DREMOTE_DEBUG -DCOMPAT_INET4 -DVESA=0 -DINCL_PRINTER -DINCL_TCPIP -DINCL_AUDIO
 INCLUDES=	-Isrc/sys_inc \
 		-Isrc/sdk \
 		-Isrc/inc \
@@ -147,21 +147,28 @@ SRC=		${APPSRC} ${CITRIXLIBSRC} ${NRLIBSRC} ${TDLIBSRC} ${PDLIBSRC} ${WDLIBSRC} 
 
 .SUFFIXES:	.c .s .o .oz .od .or
 
-.c.o:;	$(CC) $< -o $@     -DROM=0             $(CCFLAGS)
+.c.o:	@echo Compiling $<
+	@$(CC) $< -o $@     -DROM=0             $(CCFLAGS)
 #.c.o:;	$(CC) $<     -E -C -DROM=0             $(CCFLAGS) > $@
 
-.c.od:;$(CC) $< -o $@     -DROM=0 -DDEBUG -Fn $(CCFLAGS)
+.c.od:  @echo Compiling $< for debug
+	$(CC) $< -o $@     -DROM=0 -DDEBUG -Fn $(CCFLAGS)
 #.c.od:;	$(CC) $< -o $@     -DROM=0 -DDEBUG -Fn $(CCFLAGS) ${MCFLAGS}
 
-.c.oz:;	$(CC) $< -o $@ -zM -DROM=1             $(CCFLAGS)
+.c.oz:  @echo Compiling $< for ROM
+	$(CC) $< -o $@ -zM -DROM=1             $(CCFLAGS)
 
-.s.o:;	$(AS) $(ASFLAGS) -from $< -to $@
+.s.o:	@echo Assembling $<
+	$(AS) $(ASFLAGS) -from $< -to $@
 
-.s.od:;	$(AS) $(ASFLAGS) -from $< -to $@ -Predefine "DEBUG SETL {TRUE}"
+.s.od:	@echo Assembling $< for debug
+	$(AS) $(ASFLAGS) -from $< -to $@ -Predefine "DEBUG SETL {TRUE}"
 
-.s.oz:;	$(AS) $(ASFLAGS) -from $< -to $@
+.s.oz:	@echo Assembling $< for ROM
+	$(AS) $(ASFLAGS) -from $< -to $@
 
-.s.or:;	$(AS) $(ASFLAGS) -from $< -to $@ -predefine "REMOVE_RAMLOAD_CHECK SETL {TRUE}"
+.s.or:	@echo Assembling $< for RAM module
+	$(AS) $(ASFLAGS) -from $< -to $@ -predefine "REMOVE_RAMLOAD_CHECK SETL {TRUE}"
 
 # ----------------------------------------------------------------------------------------------------
 
@@ -907,8 +914,7 @@ VDCAMLIBOBJSZ=	src/dll/vd/vdcam/common/camserv.oz \
 
 VDLIBSRC=	${VDCOMMONLIBSRC} ${VDTW31LIBSRC} ${VDCPMLIBSRC} ${VDSPLLIBSRC}
 VDLIBOBJS=	${VDCOMMONLIBOBJS} ${VDTW31LIBOBJS} ${VDCPMLIBOBJS} ${VDSPLLIBOBJS}
-VDLIBOBJSD=	${VDCOMMONLIBOBJSD} ${VDTW31LIBOBJSD} ${VDCPMLIBOBJSD} ${VDSPLLIBOBJSD}
-# ${VDCAMLIBOBJSD}
+VDLIBOBJSD=	${VDCOMMONLIBOBJSD} ${VDTW31LIBOBJSD} ${VDCPMLIBOBJSD} ${VDSPLLIBOBJSD} ${VDCAMLIBOBJSD}
 VDLIBOBJSZ=	${VDCOMMONLIBOBJSZ} ${VDTW31LIBOBJSZ} ${VDCPMLIBOBJSZ} ${VDSPLLIBOBJSZ}
 
 ${VDLIB}:	${VDLIBOBJS}

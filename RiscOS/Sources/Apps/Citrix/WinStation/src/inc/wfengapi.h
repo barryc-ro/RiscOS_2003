@@ -1804,6 +1804,8 @@ typedef CHAR MAXINILINE[ MAXINILINE_LENGTH+1 ];
 #define DEF_AUDHW_DRIVERNAME        "AUDCVTC.DLL"
 #elif defined(WIN32) && !defined (WINCE)
 #define DEF_AUDHW_DRIVERNAME        "AUDCVT.DLL"
+#elif defined(RISCOS)
+#define DEF_AUDHW_DRIVERNAME        "AUDCVT"
 #endif
 
 #if defined(DOS)

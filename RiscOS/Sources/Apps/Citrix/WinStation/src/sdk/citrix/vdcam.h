@@ -178,8 +178,7 @@ typedef struct _CAM_OPEN_REQUEST
     UCHAR       iCommand;       // set to CAM_COMMAND_OPEN
     DEVICE_ID   DeviceID;       // unique device identifier
 				// Citrix-assigned format ID
-    USHORT      FormatID_iFormat;
-    USHORT      FormatID_wSubFormat;
+    USHORT	FormatID[2];	// was FORMAT_ID FormatID
     UCHAR       Extra[4];       // format-specific extra information
 } CAM_OPEN_REQUEST, * PCAM_OPEN_REQUEST;
 
