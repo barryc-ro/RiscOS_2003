@@ -57,7 +57,7 @@ SOCKLIB		= TCPIPLibs:o.socklibzm
 
 DEPEND		= -depend !Depend
 DBGFLAGS        = -DTRACE
-DEFINES         = -D_rosmodule -DUSECMOS -DCOMPAT_INET4
+DEFINES         = -DUSECMOS -DCOMPAT_INET4
 CENV		= ${DEPEND} ${THROWBACK}
 
 ASFLAGS		= ${DEPEND} ${THROWBACK}
