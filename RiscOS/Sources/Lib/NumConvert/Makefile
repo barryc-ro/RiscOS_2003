@@ -32,7 +32,7 @@ LD		= link
 LB		= libfile
 WIPE		= -wipe
 
-CCFLAGS		= -c -depend !Depend -strict -ffah ${INCLUDES} ${DFLAGS}
+CCFLAGS		= -c -depend !Depend -strict -ffah ${INCLUDES} ${THROWBACK} ${DFLAGS}
 ASFLAGS		= -depend !Depend
 CPFLAGS		= ~clfnr~v
 LBFLAGS		= -c
@@ -64,8 +64,8 @@ DFLAGS		=
 #
 
 COMPONENT	= NumConvert
-TARGET		= numconv
-TARGETZ		= numconvzm
+TARGET		= NumConv
+TARGETZ		= NumConvzm
 EXPORTS		= ${EXP_HDR}.${COMPONENT}
 
 OBJS =\
@@ -73,21 +73,21 @@ OBJS =\
  
 
 OBJSZ =\
- z.numconvert
+ oz.numconvert
 
 
 HDRS =\
- h.numconvert
+ h.NumConvert
 
 
 # ------------------------------------------------------------------------------
 # Rule patterns
 #
 
-.SUFFIXES: .o .z .s .h .c
+.SUFFIXES: .o .oz .s .h .c
 .c.o:;     @echo
            ${CC} ${CCFLAGS} -o $@ $<
-.c.z:;     @echo
+.c.oz:;    @echo
            ${CC} ${CCFLAGS} -zm -o $@ $<
 .s.o:;     @echo
            ${AS} ${ASFLAGS} -o $@ $<
@@ -122,8 +122,8 @@ install_rom: ${TARGET}
 
 clean:
         @echo
-	${WIPE} o.* ${WFLAGS}
-	${WIPE} z.* ${WFLAGS}
+	${WIPE} o ${WFLAGS}
+	${WIPE} oz ${WFLAGS}
 	${RM} ${TARGET}
 	${RM} ${TARGET}d
 	${RM} ${TARGETZ}
@@ -135,7 +135,7 @@ clean:
 
 export_hdrs: ${HDRS} o.dirs
         @echo
-	${CP}	h.numconvert	${EXPORT_DIR}.h.numconvert	${CPFLAGS}
+	${CP}	h.NumConvert	${EXPORT_DIR}.h.NumConvert	${CPFLAGS}
 	@echo
 	@echo ${COMPONENT}: Export complete (hdrs)
 
@@ -143,13 +143,16 @@ export_libs: ${TARGET} ${TARGETZ} o.dirs
         @echo
 	${CP}	${TARGET}	${EXPORT_DIR}.o.${TARGET}	${CPFLAGS}
 	${CP}	${TARGETZ}	${EXPORT_DIR}.o.${TARGETZ}	${CPFLAGS}
+	${CP}	VersionNum	${EXPORT_DIR}.VersionNum	${CPFLAGS}
 	@echo
 	@echo ${COMPONENT}: Export complete (libs)
 
 o.locdirs:
         @echo
 	${MKDIR} o
-	${MKDIR} z
+	${MKDIR} oz
+	@create o.locdirs
+	@stamp  o.locdirs
 
 o.dirs:
         @echo
@@ -159,9 +162,6 @@ o.dirs:
 	${MKDIR} ${EXPORT_DIR}.o
 	@create o.dirs
 	@stamp  o.dirs
-	@create o.locdirs
-	@stamp  o.locdirs
-        
 
 # ------------------------------------------------------------------------------
 # Final link
