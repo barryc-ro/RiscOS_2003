@@ -50,7 +50,7 @@ INSECURELIBS= ${INETLIB} ${SOCKLIB}
 BASESECURELIBS=$(SSLDIR).o.libcrypto ${UNIXLIB} ${INSECURELIBS}
 SECURELIBS= $(SSLDIR).o.ssl ${BASESECURELIBS}
 SECUREXLIBS= $(SSLDIR).o.sslx ${BASESECURELIBS}
-PKCS11LIB=C:CryptoBox.o.cryptolibd
+PKCS11LIB=C:CryptoBox.o.cryptolib
 #
 # Include files
 #
@@ -63,7 +63,7 @@ COMPONENT = http
 TARGET    = aof.${COMPONENT}
 OBJS      = ModHead.o mimemap.o files.o file.o http.o module.o csfs.o certs.o layershttp.o
 SECUREOBJS= os.ModHead os.mimemap os.files os.file os.http os.module os.csfs os.certs os.predirect os.layershttp os.client
-PKCS11OBJS= op.ModHead op.mimemap op.files op.file op.http op.module op.csfs op.certs op.predirect op.layershttp op.client o.BORDERDBUG
+PKCS11OBJS= op.ModHead op.mimemap op.files op.file op.http op.module op.csfs op.certs op.predirect op.layershttp op.client
 
 PREPROOBJS= p.mimemap p.files p.file p.http p.module p.csfs p.certs p.predirect p.layershttp p.client
 
