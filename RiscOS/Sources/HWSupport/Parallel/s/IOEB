@@ -275,6 +275,8 @@ ioeb_created    ENTRY   "r0-r2"
 paper		=		"Paper", 0
 online		=		"OnLine", 0
 printer		=		"Printer", 0
+continue	=		"Continue",0
+cancel		=		"Cancel",0
 		ALIGN
 
 		[		false
@@ -317,22 +319,69 @@ make_error
 ; Now the real code: make an upcall on printer error, resuming if it's handled properly.
 
 ioeb_monitorTX	ROUT
-		LDR 		r1, =pp_stat
-		LDRB		r0, [r1]		; read status register byte
+		LDR 		r0, =pp_stat
+		LDRB		r0, [r0]		; read status register byte
 
-		TST		r0, #pp_stat_error	; pp_stat_error clear for any of pe, offline, other error
-		MOVNES		pc, lr			; All o k
-
-		;We've got an error, so what type is it?
-		Debug		j, "some sort of error"
 		ENTRY		"r1-r9"			; OS_UpCall needs up to r6, but we can corrupt up to r2
-		TST		r0, #pp_stat_pe		; out of paper?
+
+	; This tests for an error if it is detected looks at it for a test period to ensure it is stable
+	
+		TST		R0, #pp_stat_slct
+		MOVEQ		r1, #pp_stat_slct	; off-line?  set = online
+		BLEQ		test_NSet_loop		; if it is offline check that this is stable not noise
+		BEQ		off_line
+
+		TST		r0, #pp_stat_pe		; out of paper? set = no paper
+		MOVNE		r1, #pp_stat_pe	
+		BLNE		test_Set_loop		; check that it stays set for 1 micro sec.
 		BNE		paper_out
 
-		TST		r0, #pp_stat_slct	; off-line?
-		BEQ		off_line
-		B		not_working
+		TST		r0, #pp_stat_error	; pp_stat_error clear for any other error
+		MOVEQ		r1, #pp_stat_error	; set = no error
+		BLEQ		test_NSet_loop		; if it is an error check that this is stable not noise
+		BEQ		not_working
+		
+		EXIT
+		
+;+++++++++++++++++++++++++++++++++++++++++++++ test stable errors Start
+		
+	; ADD a wait loop and check that the error is stable
+	; r0 ppstat, r1 is the error
+	; r3 is the address of the ppstat this needs to be read on each loop
+	
+test_Set_loop	
+		Push 	"r2,r3,lr"
 
+		LDR 	r3, =pp_stat
+		LDR	r2, LoopFactor				; Get CPU speed rating
+		MOV	r2, r2, LSR #2
+20
+		LDRB	r0, [r3]				; read status register byte		
+		TST	R0,R1
+		BEQ	%FT25					; test to see if the ppstat clears
+                SUBS    r2, r2, #1
+                BNE     %BT20					; this leaves the loop on EQ
+		MOVS	R1, R1		;Set the NE condition,		stable error
+                Pull	"r2,r3 ,pc"	
+25
+		Pull	"r2,r3 ,pc"	;EQ condition is set	Not a stable error
+	
+test_NSet_loop	
+		Push 	"r2,r3,lr"
+
+		LDR 	r3, =pp_stat
+		LDR	r2, LoopFactor				; Get CPU speed rating
+		MOV	r2, r2, LSR #2
+20
+		LDRB	r0, [r3]				; read status register byte		
+		TST	R0,R1
+		BNE	%FT25					; this sets the condition to NE
+                SUBS    r2, r2, #1
+                BNE     %BT20					; this sets the returning condition to EQ
+25								; this is the error condition
+                Pull	"r2,r3,pc"
+
+;+++++++++++++++++++++++++++++++++++++++++++++ test stable errors END
 paper_out
 		Debug		j, "paper out"
 		MOV		r4, #0			;iteration count
@@ -368,6 +417,7 @@ do_lookup_and_upcall
 		BL		CloseMessages
 
 do_upcall	;Make the upcall
+
 		MOV		r0, #UpCall_MediaNotPresent
 		MOV		r1, #fsnumber_DeviceFS
 		MOV		r2, #-1			;message in r6 (not media type)
@@ -382,24 +432,18 @@ do_upcall	;Make the upcall
 		EXIT		VS
 
 		CMP		r0, #-1
-		BNE		not_cancel
+		BNE		not_cancel	;if this falls through it does not call exit with message	 
 
-cancel
-		Debug		j, "user cancelled operation"
-		MOV		r0, #UpCall_MediaSearchEnd
-		Debug		j, "OS_UpCall called", r0
-		SWI		XOS_UpCall
-		Debug		j, "OS_UpCall returned", r0
+		Debug		j, "SHOULD EXIT WITH MESSAGE"
+		ADRL		r6, cancel		;move the specific error "cancel"
+		BL		exit_with_message	; send exit message then exit
 		EXIT		VS
-
+		
 		;Try to report the error state as it is now, but make sure that some error
 		;is reported even if all conditions have been (coincidentally) cleared.
-		LDR 		r1, =pp_stat
-		LDRB		r0, [r1]		; read status register byte
-
-		TST		r0, #pp_stat_error	; pp_stat_error clear for any of pe, offline, other error
-		ADRNEL		r0, ErrorBlock_Parallel_OtherError
-		BNE		make_error		; doesn't seem to be an error any more!
+set_errorblock
+		LDR 		r0, =pp_stat
+		LDRB		r0, [r0]		; read status register byte
 
 		; now we've got an error, so what type is it?
 		TST		r0, #pp_stat_pe		; paper out?
@@ -420,20 +464,38 @@ make_error
 		ORRS		pc, lr, #V_bit
 		]
 
-not_cancel	TEQ		r0, #0
+not_cancel
+		[ {TRUE}
+
+		; New strategy. Just exit with continuing message and let the higher levels
+		; raise the error again if necessary. This should be cleaner and provides
+		; more feedback to the user.
+
+		ADRL		r6, continue		;move the specific error "continue"
+		BL		exit_with_message	; All o k
+		EXIT		VS			;This is the actual correct exit of this routine
+		EXITS
+
+		|
+
+		TEQ		r0, #0
 		DebugIf		NE, j, "never happens (intercepted vector should always have r0 == 0 or -1)", r0
 		EXITS		NE
 
 confirm
 		Debug		j, "user said it's ok now"
 		;checking that there is really media there now
-		LDR 		r1, =pp_stat
-		LDRB		r0, [r1]		; read status register byte
+		LDR 		r0, =pp_stat
+		LDRB		r0, [r0]		; read status register byte
 		TST		r0, #pp_stat_error	; pp_stat_error clear for any of pe, offline, other error
-		BNE		media_loaded		; All o k
+		BEQ		stillerr
+		ADRL		r6, continue		;move the specific error "continue"
+		BL		exit_with_message	; All o k
+		EXIT		VS			;This is the actual correct exit of this routine
+		EXITS
 
 		;Still got an error, so what type is it now?
-		TST		r0, #pp_stat_pe
+stillerr	TST		r0, #pp_stat_pe
 		ADRNEL		r6, paper		; paper out
 		BNE		media_missing
 
@@ -446,16 +508,42 @@ media_missing
 		Debug		j, "media still missing", r4
 		ADD		r4, r4, #1		;increment iteration count
 		B		do_lookup_and_upcall	;make upcall again
+		EXIT		VS
+		EXITS
+		]
+		]
 
-media_loaded
-		Debug		j, "media now present"
-		MOV		r0, #UpCall_MediaSearchEnd
+;++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+exit_with_message
+
+		ENTRY 		"R1-R6"
+		Debug		j, "exit with message"
+		
+		BL		OpenMessages
+		ADDVS		r6, r0, #4
+		BVS		send_exit		;if it went wrong, use the error as the message
+
+		ADRL		r0, MessagesWorkspace
+		MOV		r1, r6
+		ADRL		r2, localerrorblock
+		MOV		r3, #?localerrorblock
+		SWI		XMessageTrans_Lookup
+		MOVVC		r6, r2
+		ADDVS		r6, r0, #4
+				
+		BL		CloseMessages
+
+send_exit	; call the end media search call
+		
+		MOV		R1, R6
+		MOV		r0, #UpCall_MediaSearchEndMessage
 		Debug		j, "OS_UpCall called", r0
 		SWI		XOS_UpCall
 		Debug		j, "OS_UpCall returned", r0
 		EXIT		VS
 		EXITS
-		]
+		
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
@@ -581,9 +669,7 @@ ioeb_irqwrite   ROUT
 ; So now we should wait for PACK to go high, and then clear our interrupt
 
                 LDR     r1, =pp_stat
-		LDR	r0, LoopFactor				; Get CPU speed rating
-                MOV     r2, r0, LSR #2                          ; loop until PACK is high
-								; loop set from loop factor / 4
+		LDR	r2, LoopFactor				; Get CPU speed rating and loop until PACK is high
 10
                 LDRB    r0, [r1]
                 TST     r0, #pp_stat_ack
@@ -596,9 +682,7 @@ ioeb_irqwrite   ROUT
 
 15
         [ CheckBusyAfterAck
-		LDR	r0, LoopFactor				; Get CPU speed rating
-		MOV	r2, r0, LSR #2				; Scale rating to our needs
-
+		LDR	r2, LoopFactor				; Get CPU speed rating
 20
                 LDRB    r0, [r1]
                 TST     r0, #pp_stat_notbusy                    ; 0 => busy
