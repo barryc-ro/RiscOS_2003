@@ -58,6 +58,7 @@ install_rom: ${TARGET}
 clean:
         ${RM} ${TARGET}
         ${RM} ${TARGETSA}
+	${RM} ${TOKENISED}
         @echo ${COMPONENT}: cleaned
 
 rom: ${TARGET}
