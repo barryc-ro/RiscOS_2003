@@ -32,6 +32,7 @@
 #include <signal.h>
 #include <string.h>
 #include <inttypes.h>
+#include <math.h>
 #include "swis.h"
 extern const char *_clib_version(void);
 
@@ -77,7 +78,7 @@ typedef struct
   {
     size_t next;
     char name[12];
-    uint32_t wordsaross;
+    uint32_t wordsacross;
     uint32_t height;
     uint32_t firstbit;
     uint32_t lastbit;
@@ -87,44 +88,44 @@ typedef struct
   } sprite;
 } sprite_area_header_t;
 
-typedef struct RCS_object_list
+typedef struct RCS_object
 {
-  struct RCS_object_list *next;
-  uint16_t object_id;
-  uint32_t object_horizontal_position: 16;
-  uint32_t object_vertical_position: 16;
-  uint32_t foreground_pixel_code: 8;
-  uint32_t background_pixel_code: 8;
-  uint32_t object_type: 2;
-} RCS_object_list_t;
+  unsigned object_id: 16;
+  unsigned object_type: 2;
+  unsigned object_provider_flag: 2;
+  unsigned object_horizontal_position: 12;
+  unsigned object_vertical_position: 12;
+  unsigned foreground_pixel_code: 8;
+  unsigned background_pixel_code: 8;
+} RCS_object_t;
 
 typedef struct RCS
 {
   struct RCS *next;
-  uint32_t id: 8;
-  uint32_t CLUT_id: 8;
-  uint32_t version_number: 4;
-  uint32_t visible: 1; /* are we showing? */
-  uint32_t clut_updated: 1; /* so it needs redrawing if already open */
-  uint32_t new_objects: 1; /* so we don't have to free the object list each new PTS */
-  uint32_t depth: 2;
-  uint32_t width: 16;
-  uint32_t height: 16;
+  unsigned id: 8;
+  unsigned CLUT_id: 8;
+  unsigned version_number: 4;
+  unsigned visible: 1; /* are we showing? */
+  unsigned clut_updated: 1; /* so it needs redrawing if already open */
+  unsigned new_objects: 1; /* so we don't have to free the object list each new PTS */
+  unsigned depth: 2;
+  unsigned width: 16;
+  unsigned height: 16;
   sprite_area_header_t *sprite_area;
   size_t sprite_size; /* just the sprite image, not headers */
   int window_handle;
   uint32_t nobjects;
-  RCS_object_list_t *objects;
+  RCS_object_t *objects;
 } RCS_t;
 
 typedef struct CLUT
 {
   struct CLUT *next;
-  uint32_t id: 8;
-  uint32_t version_number: 4;
-  uint32_t palette4[4*2]; /* both flash states */
-  uint32_t palette16[16*2];
-  uint32_t palette256[256*2];
+  unsigned id: 8;
+  unsigned version_number: 4;
+  uint32_t palette4[4];
+  uint32_t palette16[16];
+  uint32_t palette256[256];
   uint32_t transtable4[4];
   uint32_t transtable16[16];
   uint32_t transtable256[256];
@@ -237,6 +238,38 @@ static const uint32_t static_DefaultPalette256[256] =
   0x80555500, 0x80558000, 0x80805500, 0x80808000
 };
 
+static const uint8_t static_MapTable2to2[4] =
+{
+  0x00, 0x55, 0xAA, 0xFF
+};
+
+static const uint8_t static_DefaultMapTable2to4[4] =
+{
+  0x00, 0x77, 0x88, 0xFF
+};
+
+#define static_DefaultMapTable2to8 static_DefaultMapTable2to4
+
+static const uint8_t static_MapTable4to2[16] =
+{
+  0x00, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55,
+  0xAA, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+};
+
+static const uint8_t static_MapTable4to4[16] =
+{
+  0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+  0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF
+};
+
+#define static_DefaultMapTable4to8 static_MapTable4to4
+
+static uint8_t static_MapTable8to2[256];
+static uint8_t static_MapTable8to4[256];
+static uint8_t static_MapTable8to8[256];
+
+#define MODE_8BPP_FULLPALETTE (const uint32_t[]) { 1, 640, 480, 3, -1, 0, 128, 3, 255, -1 }
+
 
 /*****************************************************************************
 * File scope Global variables
@@ -244,6 +277,8 @@ static const uint32_t static_DefaultPalette256[256] =
 static bool static_EventVClaimed = false;
 static int32_t static_XOrigin;
 static int32_t static_YOrigin;
+static uint32_t static_TransparentColour;
+static int static_ScreenDepth;
 static jmp_buf static_RestartBuf;
 static bool static_Restartable; /* whether static_RestartBuf is valid yet */
 static uint32_t static_VideoCtrlClientHandle;
@@ -271,6 +306,18 @@ static const uint8_t *static_DataStart;
 static size_t static_DataLength;
 static size_t static_PESLength;
 static uint8_t static_BitsInByte = 8;
+/* Currently decoding object */
+static uint32_t static_X, static_Y;
+static uint8_t static_MapTable2to4[4];
+static uint8_t static_MapTable2to8[4];
+static uint8_t static_MapTable4to8[16];
+
+static const uint8_t *static_MapTable[3][3] =
+{
+  static_MapTable2to2, static_MapTable2to4, static_MapTable2to8,
+  static_MapTable4to2, static_MapTable4to4, static_MapTable4to8,
+  static_MapTable8to2, static_MapTable8to4, static_MapTable8to8,
+};
 
 
 /*****************************************************************************
@@ -283,6 +330,7 @@ static bool DisplayErrorBox(bool fatal, bool serious);
 
 static WimpMessageHandler WimpMQuitHandler;
 static WimpMessageHandler WimpMTTextAndSubsOffHandler;
+static WimpEventHandler   WimpERedrawWindowHandler;
 
 static void ParseStream(void);
 static void FreeResources(PCS_t *PCS);
@@ -290,6 +338,10 @@ static void ParsePCS(size_t length);
 static void ParseRCS(size_t length);
 static void ParseCLUT(size_t length);
 static void ParseObject(size_t length);
+static size_t ParsePixelData(uint16_t object_id, size_t length,
+                             size_t linecount, bool keyed);
+static void ProcessPixels(uint16_t object_id, int depth, size_t count,
+                          size_t linecount, uint32_t pixel, bool keyed);
 static void DisplayPage(void);
 
 static void SkipToNextPESPacket(void);
@@ -348,20 +400,18 @@ _kernel_oserror *maintask_Main(char *argv[5])
   }
   signal(SIGINT, EscapeHandler);
   signal(SIGOSERROR, ErrorHandler);
-  
+
   /* Parse command line */
   sscanf(argv[1], "%8X", &static_VideoCtrlClientHandle);
   sscanf(argv[2], "%c%c%c", static_ISO639Lang, static_ISO639Lang + 1, static_ISO639Lang + 2);
   sscanf(argv[3], "%u", &static_HardOfHearing);
-  
+
   /* Start up Wimp task */
-  {
-    static int MessagesList[] = { Wimp_MTTextAndSubsOff, 0 };
-    const char *TaskName;
-    CHECK(mess_LookUp("MainTask", &TaskName, 0));
-    CHECK(wimp_initialise(WIMP_VERSION, (char *) TaskName, MessagesList, NULL, &global_TaskHandle));
-  }
-  
+  static int MessagesList[] = { Wimp_MTTextAndSubsOff, 0 };
+  const char *TaskName;
+  CHECK(mess_LookUp("MainTask", &TaskName, 0));
+  CHECK(wimp_initialise(WIMP_VERSION, (char *) TaskName, MessagesList, NULL, &global_TaskHandle));
+
   /* Successful acknowledge message must be sent from this task */
   {
     WimpMessage Message;
@@ -376,11 +426,11 @@ _kernel_oserror *maintask_Main(char *argv[5])
     OnAckMessage->videoctrl_client_handle = static_VideoCtrlClientHandle;
     CHECK(wimp_send_message(Wimp_EUserMessage, &Message, OtherTask, 0, NULL));
   }
-  
+
   /* Before we register any direct-call handlers into the module code, */
   /* register an atexit function to remove them all */
   atexit(maintask_RemoveHandlers);
-  
+
   /* Try to register our subtitle descriptor handler */
   /* To do this, we need the control stream handle; if we can't determine it (ie stream is not */
   /* yet open) then we need to sit on UpCallV, so that we can do it when the stream does open */
@@ -412,7 +462,7 @@ _kernel_oserror *maintask_Main(char *argv[5])
            static_ControlStreamHandle);
     }
   }
-  
+
   /* Claim VSync events */
   _swi(OS_Claim, _INR(0,2),
        EventV,
@@ -433,7 +483,7 @@ _kernel_oserror *maintask_Main(char *argv[5])
     }
   }
   static_EventVClaimed = true;
-  
+
   /* Initialise EventLib */
   CHECK(event_initialise(NULL));
   atexit((void(*)(void))event_finalise);
@@ -445,13 +495,14 @@ _kernel_oserror *maintask_Main(char *argv[5])
                        Wimp_Poll_PollWord));
   CHECK(event_register_message_handler(Wimp_MQuit, WimpMQuitHandler, 0));
   CHECK(event_register_message_handler(Wimp_MTTextAndSubsOff, WimpMTTextAndSubsOffHandler, 0));
-  
+  CHECK(event_register_wimp_handler(-1, Wimp_ERedrawWindow, WimpERedrawWindowHandler, 0));
+
   /* Locate the origin for subtitle coordinates */
   FindScreenOrigin();
-  
+
   /* Parse the stream */
   ParseStream();
-  
+
   return NULL;
 }
 
@@ -556,12 +607,12 @@ static bool DisplayErrorBox(bool fatal, bool serious)
   char TaskName[32] = "Error";
   MessagesFD WimpMessages;
   bool OurMessagesBroken = false;
-  
+
   if (e == NULL)
   {
     e = mess_GenerateError("err_UKError", 0, 0);
   }
-  
+
   /* First try to internationalise "Quit" and "Error" using the Wimp messages file */
   if (_swix(MessageTrans_OpenFile, _INR(0,2),
             &WimpMessages,
@@ -583,7 +634,7 @@ static bool DisplayErrorBox(bool fatal, bool serious)
     _swix(MessageTrans_CloseFile, _IN(0),
           &WimpMessages);
   }
-  
+
   /* If our own messages file works, get our task name */
   if (_swix(MessageTrans_Lookup, _INR(0,7),
             &global_MessageFD,
@@ -594,7 +645,7 @@ static bool DisplayErrorBox(bool fatal, bool serious)
   {
     OurMessagesBroken = true;
   }
-  
+
   /* Display an appropriate error box */
   return (1 != wimp_report_error(e,
       (fatal ? 0 : Wimp_ReportError_OK) | (OurMessagesBroken ? Wimp_ReportError_NoAppName : 0) | 1u<<8 | (serious ? 3u<<9 : 2u<<9),
@@ -659,6 +710,87 @@ static int WimpMTTextAndSubsOffHandler(WimpMessage *message, void *handle)
 }
 
 /*****************************************************************************
+* WimpERedrawWindowHandler
+*
+* Handles Wimp_ERedrawWindow for region windows
+*
+* Assumptions
+*  Only get redraw requests for regions belonging to DisplayPCS
+*
+* Inputs
+*  as type WimpEventHandler
+*
+* Outputs
+*  as type WimpEventHandler
+*
+* Returns
+*  as type WimpEventHandler
+*****************************************************************************/
+static int WimpERedrawWindowHandler(int event_code, WimpPollBlock *event,
+                                    IdBlock *id_block, void *handle)
+{
+  WimpRedrawWindowBlock *Redraw = (WimpRedrawWindowBlock *) &event->redraw_window_request;
+  IGNORE(event_code);
+  IGNORE(id_block);
+  IGNORE(handle);
+
+  for (RCS_t *RCS = static_DisplayPCS->RCSList; RCS; RCS = RCS->next)
+  {
+    if (RCS->window_handle == Redraw->window_handle)
+    {
+      int more;
+      CLUT_t *CLUT;
+      uint32_t *tt = NULL;
+
+      for (CLUT = static_DisplayPCS->CLUTList; CLUT; CLUT = CLUT->next)
+      {
+        if (CLUT->id == RCS->CLUT_id)
+        {
+          switch (RCS->depth)
+          {
+            case 1: tt = CLUT->transtable4; break;
+            case 2: tt = CLUT->transtable16; break;
+            case 3: tt = CLUT->transtable256; break;
+          }
+          #if 0
+         {
+          char name[256];
+          static int ttnum;
+          sprintf(name, "NFS:$.Public.tt%d", ttnum++);
+          _swix(OS_File, _INR(0,2)|_INR(4,5), 10, name, 0xFFD, tt, tt + (1 << (1 << RCS->depth)));
+         }
+          #endif
+          break;
+        }
+      }
+
+      CHECK(wimp_redraw_window(Redraw, &more));
+      while (more)
+      {
+        if (RCS->sprite_area && tt)
+        {
+          _swi(OS_SpriteOp, _INR(0,7),
+                            512+52,
+                            RCS->sprite_area,
+                            &RCS->sprite_area->sprite,
+                            Redraw->visible_area.xmin - Redraw->xscroll,
+                            -RCS->height * 2 + Redraw->visible_area.ymax - Redraw->yscroll,
+                            0x20, /* overwrite, no mask, wide translation table */
+                            0, /* scaling - need some */
+                            tt);
+        }
+        else
+          _swi(OS_WriteI + 16, 0); /* CLG */
+        CHECK(wimp_get_rectangle(Redraw, &more));
+      }
+      return 1;
+    }
+  }
+
+  return 0;
+}
+
+/*****************************************************************************
 * ParseStream
 *
 * Top-level parser
@@ -682,7 +814,7 @@ static void ParseStream(void)
     dprintf(("", "*** Restarting ***\n"));
   }
   static_Restartable = true;
-  
+
   FreeResources(static_PCS);
   FreeResources(static_PCS + 1);
   static_DecodePCSIndex = 0;
@@ -691,7 +823,7 @@ static void ParseStream(void)
   static_DecodePCS->displayed = true;
   static_DecodePCS->expired = true;
   static_DataPTSValid = false;
-  
+
   while (true)
   {
     uint8_t sync_byte;
@@ -780,10 +912,8 @@ static void FreeResources(PCS_t *PCS)
   while (RCS_ptr != NULL)
   {
     RCS_next = RCS_ptr->next;
-    if (RCS_ptr->sprite_area != NULL)
-    {
-      free(RCS_ptr->sprite_area);
-    }
+    free(RCS_ptr->sprite_area);
+    free(RCS_ptr->objects);
     if (RCS_ptr->window_handle != NULL)
     {
       wimp_delete_window((WimpDeleteWindowBlock *) &RCS_ptr->window_handle);
@@ -848,7 +978,7 @@ static void ParsePCS(size_t length)
           SkipBytes(length);
           return;
         }
-        
+
       case 1: /* acquisition point */
         if (static_DecodePCS->version_number != page_version_number || static_DecodePCS->PTS_known == false)
         {
@@ -859,7 +989,7 @@ static void ParsePCS(size_t length)
           SkipBytes(length);
           return;
         }
-        
+
       case 0: /* normal case */
         if (static_DecodePCS->PTS_known && static_DecodePCS->version_number != page_version_number)
         {
@@ -875,7 +1005,7 @@ static void ParsePCS(size_t length)
     static_DecodePCS->PTS.word.hi = static_DataPTS.word.hi;
     static_DecodePCS->PTS_known = true;
     {
-      mpeg_interval_t mpeg_time_out = { 0, 0 };
+      mpeg_interval_t mpeg_time_out = { 0 };
       mpeg_time_out.word.lo = 90000 * page_time_out;
       static_DecodePCS->expiry_time = mpegtime_AddInterval(static_DecodePCS->PTS, mpeg_time_out);
     }
@@ -918,6 +1048,7 @@ static void ParseRCS(size_t length)
   RCS_t *RCS = static_DecodePCS->RCSList;
   RCS_t *prevRCS = NULL;
   uint8_t region_id = GetByte();
+  RCS_object_t *object;
   length -= 1;
   dprintf(("Function", "ParseRCS\n"));
   while (RCS != NULL && RCS->id != region_id)
@@ -972,43 +1103,45 @@ static void ParseRCS(size_t length)
           return;
       }
     }
+
+    uint32_t sprite_width_in_words = ((RCS->width << RCS->depth) + 31) / 32;
+    RCS->sprite_size = 4 * sprite_width_in_words * RCS->height;
+    RCS->sprite_area = MyAlloc(sizeof(sprite_area_header_t) + RCS->sprite_size, fill_value);
+    RCS->sprite_area->size = sizeof(sprite_area_header_t) + RCS->sprite_size;
+    RCS->sprite_area->nsprites = 1;
+    RCS->sprite_area->firstsprite = offsetof(sprite_area_header_t, sprite);
+    RCS->sprite_area->freeword = RCS->sprite_area->size;
+    RCS->sprite_area->sprite.next = sizeof RCS->sprite_area->sprite + RCS->sprite_size;
+    memset(RCS->sprite_area->sprite.name, 0, sizeof RCS->sprite_area->sprite.name);
+    sprintf(RCS->sprite_area->sprite.name, "region%u", region_id);
+    RCS->sprite_area->sprite.wordsacross = sprite_width_in_words - 1;
+    RCS->sprite_area->sprite.height = RCS->height - 1;
+    RCS->sprite_area->sprite.firstbit = 0;
+    RCS->sprite_area->sprite.lastbit = ((RCS->width << RCS->depth) + 31) & 31;
+    RCS->sprite_area->sprite.image = sizeof RCS->sprite_area->sprite;
+    RCS->sprite_area->sprite.mask = sizeof RCS->sprite_area->sprite;
+    RCS->sprite_area->sprite.mode = 25 + RCS->depth;
+
+    WimpWindow window =
     {
-      uint32_t sprite_width_in_words = ((RCS->width << RCS->depth) + 31) / 32;
-      RCS->sprite_size = 4 * sprite_width_in_words * RCS->height;
-      RCS->sprite_area = MyAlloc(sizeof(sprite_area_header_t) + RCS->sprite_size, fill_value);
-      /* set up sprite area etc */
-    }
-    {
-      WimpWindow window =
+      .behind = -1,
+      .flags = WimpWindow_NewFormat,
+      .title_fg = 0xFF,
+      .work_bg = 0xFF,
+      .min_width = 1,
+      .min_height = 1,
+      .visible_area =
       {
-        { 0 },
-        0,
-        0,
-        -1,
-        WimpWindow_AutoRedraw /* not in final version */ | WimpWindow_NewFormat,
-        0xFF,
-        0,
-        0,
-        0, /* 0xFF in final version (transparent) */
-        0,
-        0,
-        0,
-        0,
-        { 0 },
-        0,
-        0,
-        0,
-        1,
-        1,
-        { 0 },
-        0
-      };
-      window.visible_area.xmax = RCS->width*2;
-      window.visible_area.ymax = RCS->height*2;
-      window.extent.ymin = -RCS->height*2;
-      window.extent.xmax = RCS->width*2;
-      CHECK(wimp_create_window(&window, &RCS->window_handle));
-    }
+        .xmax = RCS->width*2,
+        .ymax = RCS->height*2
+      },
+      .extent =
+      {
+        .ymin = -RCS->height*2,
+        .xmax = RCS->width*2
+      }
+    };
+    CHECK(wimp_create_window(&window, &RCS->window_handle));
   }
   else
   {
@@ -1054,10 +1187,169 @@ static void ParseRCS(size_t length)
   }
   RCS->clut_updated = false;
   RCS->new_objects = (length > 0);
-  
-  /* At this point, insert object list parser */
-  
+
+  /* Sort out some sort of hysteresis thingy here */
+  free(RCS->objects);
+  RCS->objects = MyAlloc(length/6 * sizeof RCS->objects[0], 0);
+  for (object = RCS->objects; length >= 6; object++)
+  {
+    object->object_id = GetHalfWord();
+    object->object_type = GetBits(2);
+    object->object_provider_flag = GetBits(2);
+    object->object_horizontal_position = GetBits(12);
+    GetBits(4);
+    object->object_vertical_position = GetBits(12);
+    length -= 6;
+    if (object->object_type == 1 || object->object_type == 2)
+    {
+      if (length < 2)
+        break;
+      object->foreground_pixel_code = GetByte();
+      object->background_pixel_code = GetByte();
+      length -= 2;
+    }
+  }
+  RCS->nobjects = object - RCS->objects;
+
   SkipBytes(length);
+}
+
+/*****************************************************************************
+* PatchUpTransparency
+*
+* Given a palette and a calculated translation table, change all the entries
+* in the translation table that need to be transparent.
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  n:       entries in palette
+*  palette: source palette
+*  tt:      translation table
+*
+* Outputs
+*  tt: updated
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+static void PatchUpTransparency(int n, const uint32_t *palette, void *tt)
+{
+  uint32_t tc = static_TransparentColour;
+
+  switch (static_ScreenDepth)
+  {
+    default:
+    {
+      uint8_t *tt8 = tt;
+      for (int i=0; i<n; i++)
+        if ((palette[i] & 0xFF) == 0xFF)
+          tt8[i] = tc;
+      break;
+    }
+    case 4:
+    {
+      uint16_t *tt16 = tt;
+      for (int i=0; i<n; i++)
+        if ((palette[i] & 0xFF) == 0xFF)
+          tt16[i] = tc;
+      break;
+    }
+    case 5:
+    {
+      uint32_t *tt32 = tt;
+      for (int i=0; i<n; i++)
+        if ((palette[i] & 0xFF) == 0xFF)
+          tt32[i] = tc;
+      break;
+    }
+  }
+}
+
+/*****************************************************************************
+* RecalcTransTables
+*
+* Recalculates the translation tables for a CLUT
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  CLUT: CLUT in question
+*  changed: bitfield denoting which to recalculate
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+static void RecalcTransTables(CLUT_t *CLUT, unsigned changed)
+{
+  if (changed & 2)
+  {
+    _swi(ColourTrans_GenerateTable, _INR(0,5),
+                                    26,
+                                    CLUT->palette4,
+                                    -1,
+                                    -1,
+                                    CLUT->transtable4,
+                                    0x10);
+    PatchUpTransparency(4, CLUT->palette4, CLUT->transtable4);
+  }
+  if (changed & 4)
+  {
+    _swi(ColourTrans_GenerateTable, _INR(0,5),
+                                    27,
+                                    CLUT->palette16,
+                                    -1,
+                                    -1,
+                                    CLUT->transtable16,
+                                    0x10);
+    PatchUpTransparency(16, CLUT->palette16, CLUT->transtable16);
+  }
+  if (changed & 8)
+  {
+    /* No, we can't say mode 28, as it will assume a 16-entry "brain-damaged" palette */
+    _swi(ColourTrans_GenerateTable, _INR(0,5),
+                                    MODE_8BPP_FULLPALETTE,
+                                    CLUT->palette256,
+                                    -1,
+                                    -1,
+                                    CLUT->transtable256,
+                                    0x10);
+    PatchUpTransparency(256, CLUT->palette256, CLUT->transtable256);
+  }
+}
+
+static uint32_t YCrCbToRGB(int Y, int Cr, int Cb)
+{
+    float R, G, B;
+    int32_t iR, iG, iB;
+
+    Y -= 16;
+    Cr -= 128;
+    Cb -= 128;
+
+    R = G = B = 1.16438356F * Y;
+    R += 1.59602679F * Cr;
+    G -= 0.812967647F * Cr;
+    G -= 0.391762290F * Cb;
+    B += 2.01723214F * Cb;
+
+    iR = (int32_t) lrintf(R);
+    iG = (int32_t) lrintf(G);
+    iB = (int32_t) lrintf(B);
+
+    /* This compiles better if we separate the two tests for each component -
+     * the compiler tries to get clever and puts optimising branches in that
+     * actually make it worse.
+     */
+    if (iR < 0)   iR = 0;   if (iG < 0)   iG = 0;   if (iB < 0)   iB = 0;
+    if (iR > 255) iR = 255; if (iG > 255) iG = 255; if (iB > 255) iB = 255;
+
+    return iB << 24 | iG << 16 | iR << 8;
 }
 
 /*****************************************************************************
@@ -1079,8 +1371,144 @@ static void ParseRCS(size_t length)
 *****************************************************************************/
 static void ParseCLUT(size_t length)
 {
+  RCS_t *RCS;
+  CLUT_t *CLUT;
+  uint8_t CLUT_id;
+  unsigned changed = 0;
+
   dprintf(("Function", "ParseCLUT\n"));
-  SkipBytes(length);
+  if (length < 2)
+    longjmp(static_RestartBuf, 1);
+
+  CLUT_id = GetByte();
+  dprintf(("ParseCLUT", "CLUT_id=%d\n", CLUT_id));
+
+  /* Find the CLUT if it's already defined */
+  for (CLUT = static_DecodePCS->CLUTList; CLUT; CLUT = CLUT->next)
+    if (CLUT->id == CLUT_id)
+      break;
+
+  /* If it's not already defined, set it to default */
+  if (!CLUT)
+  {
+    CLUT = MyAlloc(sizeof *CLUT, 0);
+    CLUT->id = CLUT_id;
+    memcpy(CLUT->palette4, static_DefaultPalette4, sizeof CLUT->palette4);
+    memcpy(CLUT->palette16, static_DefaultPalette16, sizeof CLUT->palette16);
+    memcpy(CLUT->palette256, static_DefaultPalette256, sizeof CLUT->palette256);
+    CLUT->next = static_DecodePCS->CLUTList;
+    static_DecodePCS->CLUTList = CLUT;
+    changed = 2 | 4 | 8; /* All TransTables need calculating */
+  }
+
+  CLUT->version_number = GetBits(4);
+  ByteAlign();
+
+  length -= 2;
+  while (length)
+  {
+    uint8_t CLUT_entry_id;
+    uint8_t Y, Cr, Cb, T;
+    uint32_t pal;
+    bool CLUT_flag_2, CLUT_flag_4, CLUT_flag_8, full_range_flag;
+    if (length < 2)
+      longjmp(static_RestartBuf, 1);
+    CLUT_entry_id = GetByte();
+    CLUT_flag_2 = GetBits(1);
+    CLUT_flag_4 = GetBits(1);
+    CLUT_flag_8 = GetBits(1);
+    GetBits(4);
+    full_range_flag = GetBits(1);
+    length -= 2;
+    if (length < (full_range_flag ? 4 : 2))
+      longjmp(static_RestartBuf, 1);
+    if (full_range_flag)
+    {
+      Y  = GetByte();
+      Cr = GetByte();
+      Cb = GetByte();
+      T  = GetByte();
+      length -= 4;
+    }
+    else
+    {
+      /* Not clear from spec what to do with lower bits. Just zeroing them seems
+       * to match what some test streams seem to do.
+       */
+      Y  = GetBits(6) << 2;
+      Cr = GetBits(4) << 4;
+      Cb = GetBits(4) << 4;
+      T  = GetBits(2) << 6;
+      length -= 2;
+    }
+    /* T ranges from [0..256] - we rescale to [0..255] */
+    if (Y == 0)
+      pal = 0x000000FF;
+    else
+      pal = YCrCbToRGB(Y, Cr, Cb) | (T <= 128 ? T : T-1);
+
+    dprintf(("ParseCLUT", "CLUT[%s%s%s%s] entry %d = (%3d,%3d,%3d,%3d) = %08X\n",
+                          full_range_flag ? "F" : " ",
+                          CLUT_flag_2 ? "2" : " ",
+                          CLUT_flag_4 ? "4" : " ",
+                          CLUT_flag_8 ? "8" : " ",
+                          CLUT_entry_id,
+                          Y, Cr, Cb, T, pal));
+
+    if (CLUT_flag_2 && CLUT_entry_id < 4 && CLUT->palette4[CLUT_entry_id] != pal)
+      CLUT->palette4[CLUT_entry_id] = pal, changed |= 2;
+
+    if (CLUT_flag_4 && CLUT_entry_id < 16 && CLUT->palette16[CLUT_entry_id] != pal)
+      CLUT->palette16[CLUT_entry_id] = pal, changed |= 4;
+
+    if (CLUT_flag_8 && CLUT->palette256[CLUT_entry_id] != pal)
+      CLUT->palette256[CLUT_entry_id] = pal, changed |= 8;
+  }
+  RecalcTransTables(CLUT, changed);
+
+  for (RCS = static_DisplayPCS->RCSList; RCS; RCS = RCS->next)
+  {
+    if (RCS->CLUT_id == CLUT_id)
+      RCS->clut_updated = true;
+  }
+}
+
+/*****************************************************************************
+* ResetMapTables
+*
+* Resets the Map Tables back to their default state, and fill in 256-entry
+* tables if not already done.
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  NONE
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+static void ResetMapTables()
+{
+  memcpy(static_MapTable2to4, static_DefaultMapTable2to4, sizeof static_MapTable2to4);
+  memcpy(static_MapTable2to8, static_DefaultMapTable2to8, sizeof static_MapTable2to8);
+  memcpy(static_MapTable4to8, static_DefaultMapTable4to8, sizeof static_MapTable4to8);
+
+  if (!static_MapTable8to2[3])
+  {
+    uint32_t n;
+    for (n=0; n<256; n++)
+    {
+      uint32_t p = (n & 0x80) ? 0xAA : 0x00;
+      if (n & 0x70) p |= 0x55;
+      static_MapTable8to2[n] = p;
+      static_MapTable8to4[n] = (n >> 4) | (n >> 4) << 4;
+      static_MapTable8to8[n] = n;
+    }
+  }
 }
 
 /*****************************************************************************
@@ -1102,8 +1530,426 @@ static void ParseCLUT(size_t length)
 *****************************************************************************/
 static void ParseObject(size_t length)
 {
+  RCS_t *RCS;
+  uint16_t object_id;
+  uint8_t object_coding_method;
+  bool non_modifying_colour_flag;
+  uint16_t top_field_data_block_length, bottom_field_data_block_length;
+  size_t processed_length;
+
   dprintf(("Function", "ParseObject\n"));
-  SkipBytes(length);
+  object_id = GetHalfWord();
+  /* object_version_number */ GetBits(4);
+  object_coding_method = GetBits(2);
+  non_modifying_colour_flag = GetBits(1);
+  ByteAlign();
+  length -= 3;
+
+  dprintf(("ParseObject", "object_id = %d, object_coding_method = %d\n",
+                          object_id, object_coding_method));
+
+  switch (object_coding_method)
+  {
+    case 0: /* coding of pixels */
+      if (length < 4)
+        goto malformed;
+      ResetMapTables();
+      top_field_data_block_length = GetHalfWord();
+      bottom_field_data_block_length = GetHalfWord();
+      length -= 4;
+
+      dprintf(("ParseObject", "top_field_data_block_length   =%d\n"
+                              "bottom_field_data_block_length=%d\n",
+                              top_field_data_block_length,
+                              bottom_field_data_block_length));
+
+      if (top_field_data_block_length > length) goto malformed;
+      static_X = static_Y = 0;
+      for (processed_length = 0; processed_length < top_field_data_block_length; )
+      {
+          processed_length += ParsePixelData(object_id,
+                                             top_field_data_block_length - processed_length,
+                                             bottom_field_data_block_length ? 1 : 2,
+                                             non_modifying_colour_flag);
+      }
+      dprintf(("ParseObject", "Processed %d from top\n", processed_length));
+      if (processed_length > top_field_data_block_length) goto malformed;
+      length -= processed_length;
+
+      if (bottom_field_data_block_length > length) goto malformed;
+      static_X = 0, static_Y = 1;
+      for (processed_length = 0; processed_length < bottom_field_data_block_length; )
+      {
+          processed_length += ParsePixelData(object_id,
+                                             bottom_field_data_block_length - processed_length,
+                                             1,
+                                             non_modifying_colour_flag);
+      }
+      dprintf(("ParseObject", "Processed %d from bottom\n", processed_length));
+      if (processed_length > bottom_field_data_block_length) goto malformed;
+      length -= processed_length;
+
+      /* If we're in any visible regions, get them redrawn. Shouldn't happen, but... */
+      for (RCS = static_DisplayPCS->RCSList; RCS; RCS = RCS->next)
+      {
+        int n;
+        if (!RCS->visible)
+          continue;
+
+        for (n = RCS->nobjects-1; n >= 0; n--)
+        {
+          if (RCS->objects[n].object_id == object_id)
+          {
+            wimp_force_redraw(RCS->window_handle, 0, -RCS->height * 2, RCS->width * 2, 0);
+            break;
+          }
+        }
+      }
+
+      /* Fall through */
+
+    default:
+      dprintf(("ParseObject", "remaining length=%d\n", length));
+      SkipBytes(length);
+      return;
+  }
+
+ malformed:
+  longjmp(static_RestartBuf, 1);
+}
+
+/*****************************************************************************
+* ParsePixelData
+*
+* Parses a Pixel-data sub-block
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  object_id: object_id
+*  length:    number of bytes remaining in segment
+*  linecount: number of rows we're filling in (1 or 2)
+*  keyed:     non_modifying_colour_flag for segment
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  number of bytes consumed
+*****************************************************************************/
+static size_t ParsePixelData(uint16_t object_id, size_t length, size_t linecount, bool keyed)
+{
+  int32_t pix;
+  size_t count, consumed;
+  uint8_t data_type;
+
+  dprintf(("Function", "ParsePixelData(length = %d)\n", length));
+
+  if (length < 1)
+    longjmp(static_RestartBuf, 1);
+
+  data_type = GetByte();
+  length--;
+  consumed = 0;
+  switch (data_type)
+    case 0x10: /* 2-bit/pixel code string */
+    {
+      dprintf(("ParsePixelData", "2bpp: "));
+      do
+      {
+        pix = GetBits(2);
+        consumed += 2;
+        count = 1;
+
+        if (pix == 0)
+        {
+          consumed += 1;
+          if (GetBits(1) == 1)
+          {
+            /* run length 3-10 */
+            count = GetBits(3) + 3;
+            pix = GetBits(2);
+            consumed += 5;
+          }
+          else
+          {
+            consumed += 1;
+            if (GetBits(1) == 0)
+            {
+              consumed += 2;
+              switch (GetBits(2))
+              {
+                case 0: /* end of string */
+                  count = 0;
+                  break;
+                case 1: /* two 0 pixels */
+                  count = 2;
+                  break;
+                case 2: /* run length 12-27 */
+                  count = GetBits(4) + 12;
+                  pix = GetBits(2);
+                  consumed += 6;
+                  break;
+                case 3: /* run length 29-284 */
+                  count = GetBits(8) + 29;
+                  pix = GetBits(2);
+                  consumed += 10;
+                  break;
+              }
+            }
+            else
+            {
+              /* one 0 pixel */
+            }
+          }
+        }
+        dprintf(("ParsePixelData", "[ %X] × %d  ", pix, count));
+        ProcessPixels(object_id, 1, count, linecount, pix, keyed);
+      } while (count != 0 && consumed < length * 8);
+      dprintf(("ParsePixelData", "\n"));
+      break;
+
+    case 0x11: /* 4-bit/pixel code string */
+      dprintf(("ParsePixelData", "4bpp: "));
+      do
+      {
+        pix = GetBits(4);
+        consumed += 4;
+        count = 1;
+
+        if (pix == 0)
+        {
+          consumed += 1;
+          if (GetBits(1) == 0)
+          {
+            count = GetBits(3);
+            consumed += 3;
+            if (count != 0)
+              count += 2; /* run length 3-9 of 0 pixels */
+            /* else end of string */
+          }
+          else
+          {
+            consumed += 1;
+            if (GetBits(1) == 0)
+            {
+              count = GetBits(2) + 4; /* run length 4-7 */
+              pix = GetBits(4);
+              consumed += 6;
+            }
+            else
+            {
+              consumed += 2;
+              switch (GetBits(2))
+              {
+                case 0: /* one 0 pixel */
+                  break;
+                case 1: /* two 0 pixels */
+                  count = 2;
+                  break;
+                case 2: /* run length 9-24 */
+                  count = GetBits(4) + 9;
+                  pix = GetBits(4);
+                  consumed += 8;
+                  break;
+                case 3: /* run length 25-280 */
+                  count = GetBits(8) + 25;
+                  pix = GetBits(4);
+                  consumed += 12;
+                  break;
+              }
+            }
+          }
+        }
+        dprintf(("ParsePixelData", "[ %X] × %d  ", pix, count));
+        ProcessPixels(object_id, 2, count, linecount, pix, keyed);
+      } while (count != 0 && consumed < length * 8);
+      dprintf(("ParsePixelData", "\n"));
+      break;
+
+    case 0x12: /* 8-bit/pixel code string */
+      dprintf(("ParsePixelData", "8bpp: "));
+      do
+      {
+        pix = GetBits(8);
+        consumed += 8;
+        count = 1;
+
+        if (pix == 0)
+        {
+          if (GetBits(1) == 0)
+          {
+            count = GetBits(7); /* run length 1-127 of 0 pixels, or end of string */
+            consumed += 8;
+          }
+          else
+          {
+            count = GetBits(7);
+            pix = GetBits(8);
+            consumed += 16;
+          }
+        }
+        dprintf(("ParsePixelData", "[ %X] × %d  ", pix, count));
+        ProcessPixels(object_id, 3, count, linecount, pix, keyed);
+      } while (count != 0 && consumed < length * 8);
+      dprintf(("ParsePixelData", "\n"));
+      break;
+
+    case 0x20: /* 2 to 4-bit map-table data */
+      dprintf(("ParsePixelData", "New 2 to 4-bit map-table\n"));
+      for (count = 0; count < 4; count++)
+      {
+        pix = GetBits(4);
+        static_MapTable2to4[count] = pix << 4 | pix;
+      }
+      consumed = 16;
+      break;
+
+    case 0x21: /* 2 to 8-bit map-table data */
+      dprintf(("ParsePixelData", "New 2 to 8-bit map-table\n"));
+      for (count = 0; count < 4; count++)
+        static_MapTable2to8[count] = GetByte();
+      consumed = 32;
+      break;
+
+    case 0x22: /* 4 to 8-bit map-table data */
+      dprintf(("ParsePixelData", "New 4 to 8-bit map-table\n"));
+      for (count = 0; count < 16; count++)
+        static_MapTable4to8[count] = GetByte();
+      consumed = 128;
+      break;
+
+    case 0xF0: /* end of object line code */
+      dprintf(("ParsePixelData", "End of line\n"));
+      static_X = 0;
+      static_Y += 2;
+      break;
+
+    default:
+      SkipBytes(length);
+      consumed = 8 * length;
+  }
+
+  ByteAlign();
+  consumed = (consumed + 7) / 8;
+
+  dprintf(("ParsePixelData", "consumed=%d\n", consumed));
+
+  if (consumed > length)
+    longjmp(static_RestartBuf, 1);
+
+  return 1 + consumed;
+}
+
+/*****************************************************************************
+* ProcessPixels
+*
+* Draws a received row of pixels for an object into all the necessary
+* regions.
+*
+* Assumptions
+*  NONE
+*
+* Inputs
+*  object_id: object_id
+*  depth:     depth of pixel string
+*  count:     number of pixels in row
+*  linecount: number of rows
+*  pixel:     value of pixel
+*  keyed:     non_modifying_colour_flag for segment
+*
+* Outputs
+*  NONE
+*
+* Returns
+*  NOTHING
+*****************************************************************************/
+static void ProcessPixels(uint16_t object_id, int depth, size_t count, size_t linecount, uint32_t pixel, bool keyed)
+{
+  uint32_t X = static_X, Y = static_Y;
+  const uint8_t **MapTable;
+  RCS_t *RCS;
+  RCS_object_t *object;
+  int n;
+
+  if (count == 0)
+    return;
+
+  if (pixel == 1 && keyed)
+  {
+    static_X = X + count;
+    return;
+  }
+
+  MapTable = static_MapTable[depth-1];
+
+  /* Loop over all regions */
+  for (RCS = static_DecodePCS->RCSList; RCS; RCS = RCS->next)
+  {
+    uint32_t fill;
+    depth = RCS->depth;
+    fill = MapTable[depth-1][pixel];
+    fill |= fill << 8;
+    fill |= fill << 16;
+
+    /* Loop over all objects in the region */
+    for (n = RCS->nobjects, object = RCS->objects; n; n--, object++)
+    {
+      /* Check for instances of this object */
+      if (object->object_id == object_id)
+      {
+        uint32_t x, y, x1;
+        uint32_t *p, *p1, lmask, rmask;
+
+        x = object->object_horizontal_position + X;
+        y = object->object_vertical_position + Y;
+        x1 = x + count;
+        /* Basic clipping check. All co-ordinates unsigned, which helps. */
+        if (x >= RCS->width)
+          continue;
+        if (x1 > RCS->width)
+          x1 = RCS->width;
+        x <<= depth;
+        x1 <<= depth;
+
+        /* Now do [1..linecount] lines */
+        do
+        {
+          /* Basic clipping check. All co-ordinates unsigned, which helps. */
+          if (y >= RCS->height)
+            break;
+
+          p = (uint32_t *) RCS->sprite_area + sizeof(sprite_area_header_t) / sizeof(uint32_t);
+          p += y * (RCS->sprite_area->sprite.wordsacross + 1);
+          p1 = p + (x1 >> 5);
+          p  = p + (x >> 5);
+          lmask = -(1 << (x & 31));
+          rmask = (1 << (x1 & 31)) - 1;
+          if (p == p1)
+          {
+            lmask &= rmask;
+            rmask = 0;
+          }
+          if (lmask != 0xFFFFFFFF)
+          {
+            *p = (*p &~ lmask) | (fill & lmask);
+            p++;
+          }
+          while (p < p1)
+            *p++ = fill;
+          if (rmask)
+          {
+            *p = (*p &~ rmask) | (fill & rmask);
+          }
+
+          y++;
+        } while (--linecount != 0);
+      }
+    }
+  }
+
+  static_X = X + count;
 }
 
 /*****************************************************************************
@@ -1152,15 +1998,34 @@ static void DisplayPage(void)
     }
     else if (region >= 0)
     {
-      WimpOpenWindowBlock openblock;
-      openblock.window_handle = RCS->window_handle;
-      openblock.visible_area.xmin = static_XOrigin + static_DisplayPCS->region[region].region_horizontal_address * 2;
-      openblock.visible_area.ymax = static_YOrigin - static_DisplayPCS->region[region].region_vertical_address * 2;
-      openblock.visible_area.xmax = openblock.visible_area.xmin + RCS->width * 2;
-      openblock.visible_area.ymin = openblock.visible_area.ymax - RCS->height * 2;
-      openblock.xscroll = openblock.yscroll = 0;
-      openblock.behind = -1;
+      WimpOpenWindowBlock openblock =
+      {
+          .window_handle = RCS->window_handle,
+          .visible_area =
+          {
+              .xmin = static_XOrigin + static_DisplayPCS->region[region].region_horizontal_address * 2,
+              .ymax = static_YOrigin - static_DisplayPCS->region[region].region_vertical_address * 2,
+              .xmax = openblock.visible_area.xmin + RCS->width * 2,
+              .ymin = openblock.visible_area.ymax - RCS->height * 2
+          },
+          .xscroll = 0,
+          .yscroll = 0,
+          .behind = -1
+      };
+      #if 0
+      if (RCS->sprite_area)
+      {
+        char name[256];
+        static int count;
+        sprintf(name, "NFS:$.Public.sprite%d", ++count);
+        _swix(OS_SpriteOp, _INR(0,2), 256+12, RCS->sprite_area, name);
+      }
+      #endif
       CHECK(wimp_open_window(&openblock));
+      if (RCS->visible && RCS->clut_updated)
+      {
+        CHECK(wimp_force_redraw(RCS->window_handle, 0, -RCS->height * 2, RCS->width * 2, 0));
+      }
       RCS->visible = true;
     }
     /* Reset a couple of flags in the RCS struct */
@@ -1388,7 +2253,7 @@ static bool NewPacket(void)
   static PacketDescriptor_t *WorkingPacket = (PacketDescriptor_t *) -1;
     /* ie initialise with magic value guaranteed not be be on the packet list */
   packet_FreeHead_USR(&static_PacketListHead, &static_PacketListTail, WorkingPacket);
-  
+
   while (true)
   {
     /* Check for data that should be decoded at this time */
@@ -1396,7 +2261,7 @@ static bool NewPacket(void)
     {
       /* Make an atomic copy of the head link, to cope with asynchronous update */
       WorkingPacket = static_PacketListHead;
-      
+
       if (WorkingPacket == NULL)
       {
         /* We usually get here because we've just freed the last packet on the list. */
@@ -1419,7 +2284,7 @@ static bool NewPacket(void)
         {
           exit(EXIT_SUCCESS);
         }
-        
+
         /* Unless the data on the list is for the next PTS and we haven't */
         /* displayed this one yet, return the next packet (if any) */
         if (static_DecodePCS->displayed ||
@@ -1459,11 +2324,11 @@ static bool NewPacket(void)
       }
     }
     while (false);
-    
+
     /* Check if it's time to display the page */
     if (static_DecodePCS->PTS_known && !static_DecodePCS->displayed)
     {
-      mpeg_time_t STC = { 0, 0 };
+      mpeg_time_t STC = { 0 };
       _swix(MPEGControl_ReadParameters, _INR(0,1)|_OUTR(1,2),
             3,
             static_ControlStreamHandle,
@@ -1475,7 +2340,7 @@ static bool NewPacket(void)
         DisplayPage();
       }
     }
-    
+
     /* Poll until something interesting happens */
     {
       int event_code;
@@ -1537,7 +2402,7 @@ static void RecalcPollword(void)
   /* Check for a time match (unless we've already established that the pollword is set!) */
   if (static_PollWord == false && static_DecodePCS->PTS_known && !static_DecodePCS->displayed)
   {
-    mpeg_time_t STC = { 0, 0 };
+    mpeg_time_t STC = { 0 };
     _swix(MPEGControl_ReadParameters, _INR(0,1)|_OUTR(1,2),
           3,
           static_ControlStreamHandle,
@@ -1652,17 +2517,23 @@ void maintask_RemoveHandlers(void)
 *****************************************************************************/
 static void FindScreenOrigin(void)
 {
-  uint32_t in_block[5] = { 4, 5, 11, 12, -1 };
-  uint32_t out_block[4];
+  uint32_t out_block[5];
   uint32_t width;
   uint32_t height;
   _swix(OS_ReadVduVariables, _INR(0,1),
-        in_block,
+        (const uint32_t[6]) { 4, 5, 11, 12, 9, -1 },
         out_block);
   width = out_block[2] << out_block[0];
   height = out_block[3] << out_block[1];
   static_XOrigin = (width / 2) - 720;
   static_YOrigin = (height / 2) + 576; /* doesn't matter that it's exclusive, because so are window tops */
+
+  switch (static_ScreenDepth = out_block[4])
+  {
+    default: static_TransparentColour = 1; break;
+    case 4: static_TransparentColour = 0x8000; break;
+    case 5: static_TransparentColour = 0xFF000000; break;
+  }
 }
 
 #pragma no_check_stack
@@ -1714,8 +2585,11 @@ void maintask_TearDown(uint32_t handle)
 *****************************************************************************/
 void maintask_ModeChange(void)
 {
+  CLUT_t *CLUT;
   FindScreenOrigin();
-  /* translation table stuff needs to go here */
+
+  for (CLUT = static_DisplayPCS->CLUTList; CLUT; CLUT = CLUT->next)
+    RecalcTransTables(CLUT, (unsigned) -1);
 }
 
 /*****************************************************************************
@@ -1807,7 +2681,7 @@ _kernel_oserror *maintask_DescriptorHandler(_kernel_swi_regs *r, void *pw)
       /* Give it an arbitrary non-null handle - we don't actually use it */
       r->r[0] = 1;
       break;
-      
+
     case DHReason_DataTransfer:
       /* Process the data */
       {
@@ -1848,7 +2722,7 @@ _kernel_oserror *maintask_DescriptorHandler(_kernel_swi_regs *r, void *pw)
                   break;
                 case 4:
                   Aspect = byte - (static_HardOfHearing ? 0x20 : 0x10);
-                  if (Aspect < 4u)
+                  if (Match && Aspect < 4u)
                   {
                     AspectVersion[Aspect].es_id = (uint32_t) r->r[4];
                   }
@@ -1888,7 +2762,7 @@ _kernel_oserror *maintask_DescriptorHandler(_kernel_swi_regs *r, void *pw)
         }
       }
       break;
-      
+
     case DHReason_CloseStream:
       /* Deregister ourselves */
       _swix(MPEGControl_DeregisterDescriptorHandler, _INR(0,4),
@@ -1911,7 +2785,7 @@ _kernel_oserror *maintask_DescriptorHandler(_kernel_swi_regs *r, void *pw)
       /* Free any packets we still have, and tell foreground to reset itself */
       BackgroundFlush(&static_MagicDescriptor_Reset);
       break;
-      
+
     case DHReason_ResetStream:
       /* Reset AspectVersion es_id, ready for next stream segment */
       for (Aspect = 0; Aspect < 4; Aspect++)
@@ -1932,7 +2806,7 @@ _kernel_oserror *maintask_DescriptorHandler(_kernel_swi_regs *r, void *pw)
       /* Free any packets we still have, and tell foreground to reset itself */
       BackgroundFlush(&static_MagicDescriptor_Reset);
       break;
-      
+
     case DHReason_EndOfTable:
       /* Decide which descriptor we should be working from */
       {
@@ -2018,7 +2892,7 @@ _kernel_oserror *maintask_DescriptorHandler(_kernel_swi_regs *r, void *pw)
         }
       }
       break;
-      
+
     default:
       /* ignore any unknown reason codes */
       break;
@@ -2053,7 +2927,7 @@ _kernel_oserror *maintask_ProgramElementHandler(_kernel_swi_regs *r, void *pw)
       /* Give it an arbitrary non-null handle - we don't actually use it */
       r->r[0] = 1;
       break;
-      
+
     case PEHReason_DataTransfer:
       /* Add the data to our list */
       {
@@ -2074,7 +2948,7 @@ _kernel_oserror *maintask_ProgramElementHandler(_kernel_swi_regs *r, void *pw)
         static_PacketListTail = packet;
       }
       break;
-      
+
     default:
       /* ignore any other reason codes */
       break;
@@ -2133,10 +3007,10 @@ static void BackgroundFlush(PacketDescriptor_t *magic_packet)
   {
     packet_FreeHead_SVC(&static_PacketListHead, NULL);
   }
-  
+
   /* Stick a single (magic) packet on the list */
   static_PacketListHead = static_PacketListTail = magic_packet;
-  
+
   /* Set the pollword */
   static_PollWord = true;
 }

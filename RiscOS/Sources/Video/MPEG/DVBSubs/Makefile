@@ -9,8 +9,8 @@
 
 COMPONENT = DVBSubtitles
 TARGET    = DVBSubs
-DIRS      = local_dirs
-CFLAGS    = -ffah -zM -Wp -JC:
+DIRS      = o._dirs
+CFLAGS    = -ffah -zM -Wp
 RAM_OBJS  = o.module ${OBJS}
 ROM_OBJS  = o.moduleROM ${OBJS}
 OBJS      =            o.basetask  o.global  o.maintask  o.mess o.modentry o.packet o.resmess o.modhdr
@@ -28,9 +28,10 @@ include Makefiles:ROMCModule
 .SUFFIXES: .do
 .c.do:; ${CC} ${CFLAGS} -DDEBUGLIB -o $@ $<
 
-local_dirs:
+o._dirs:
         ${MKDIR} do
         ${MKDIR} o
+        ${TOUCH} $@
 
 resources: Messages${CMDHELP}
         ${MKDIR} ${RESDIR}.${COMPONENT}
