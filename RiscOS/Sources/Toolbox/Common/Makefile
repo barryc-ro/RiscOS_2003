@@ -91,13 +91,14 @@ ${DEBUGLIB}: ${OBJ} ${DBG_OBJ}
 ${DEBUGLIBZM}: ${OBJZM} ${DBG_OBJZM}
    ${LIBFILE} ${LIBFILEFLAGS} ${OBJZM} ${DBG_OBJZM}
 
-clean:
+clean: dirs
 	${WIPE} o.* ${WFLAGS}
 	${WIPE} z.* ${WFLAGS}
 	${WIPE} ${DEBUGLIB} ${WFLAGS}
 	${WIPE} ${DEBUGLIBZM} ${WFLAGS}
 	${WIPE} ${TBOXLIB} ${WFLAGS}
 	${WIPE} ${TBOXLIBZM} ${WFLAGS}
+        ${CP} TboxMake  ${EXPORTS}.TboxMake ${CPFLAGS}
         @echo ${DEBUGLIB} and ${TBOXLIB}: cleaned
 
 export: export_${PHASE}
