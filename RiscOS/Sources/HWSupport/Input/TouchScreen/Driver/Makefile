@@ -15,7 +15,7 @@ EXP_HDR = <cexport$dir>
 # Generic options:
 #
 
-COMPONENT = touchscreen
+COMPONENT = TouchScreen
 CMHGNAME  = header
 
 #
@@ -108,7 +108,7 @@ clean:
 ${TARGET}: ${OBJS} ${RAMLIBS} ${DIRS}
 	${MKDIR} rm
         ${LD} -c++ -o $@ -rmf ${OBJS} ${RAMLIBS} 
-        $(MODSQZ) $@
+        #$(MODSQZ) $@
 
 #
 # ROM Target 
