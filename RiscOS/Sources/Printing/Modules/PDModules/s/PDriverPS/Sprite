@@ -664,7 +664,7 @@ sprite_putchunk
         ORR     R0,R0,#SpriteReason_PutSpriteScaled
         Push    "R6,R7"
         MOV     R6, #0                          ; No scaling
-        ADR     LR, colourtrans32K              ; We only want to pass a translation
+        ADRL    LR, colourtrans32K              ; We only want to pass a translation
         TEQ     LR, R7                          ; table through if it is our own
         MOVNE   R7, #0                          ; 32K greyscale one.  Zero it if not.
         SWI     XOS_SpriteOp
@@ -988,6 +988,9 @@ sprite_putchunk_allatonce
 ; Now we just have to output the hex data.
 
         [       PSSprRLEncode
+        LDRB    LR,joblevel2
+        CMP     LR,#0
+        BLNE    ascii85_begin
         MOV     LR,#0                           ;We're run-length encoding,
         STRB    LR,sprstringlen                 ;  so initialise byte counts.
         STR     LR,sprrepeatcount               ;NB 'sprlastbyte' irrelevant.
@@ -1007,7 +1010,7 @@ sprite_putchunk_allatonce_xloop
         CMP     R7,#0                           ;R7 could be a translation table, a palette or neither
         BEQ     sprite_putchunk_allatonce_pixval_lookup
         [ Medusa
-        ADR     LR, colourtrans32K              ;Is it our truecolour trans table?
+        ADRL    LR, colourtrans32K              ;Is it our truecolour trans table?
         TEQ     R7, LR                          ;If so, pixel value is a valid grey level
         BEQ     sprite_putchunk_allatonce_gotgrey
         ]
@@ -1192,6 +1195,7 @@ sprite_putchunk_colourloop
         CLRV
         LDR     R3,[R5]                         ;Get bounding box, then
         TST     R3,#&800000                     ;  output colour if it exists
+
         BLEQ    sprite_putplane
         PrPassError
 
@@ -1539,6 +1543,9 @@ sprite_maskchunk_analysisdone
 ; Now we just have to output the hex data.
 
         [       PSSprRLEncode
+        LDRB    LR,joblevel2
+        CMP     LR,#0
+        BLNE    ascii85_begin
         MOV     LR,#0                           ;We're run-length encoding,
         STRB    LR,sprstringlen                 ;  so initialise byte counts.
         STR     LR,sprrepeatcount               ;NB 'sprlastbyte' irrelevant.
@@ -1751,6 +1758,9 @@ sprite_putplane
 ; Now we just have to output the hex data.
 
         [       PSSprRLEncode
+        LDRB    LR,joblevel2
+        CMP     LR,#0
+        BLNE    ascii85_begin
         MOV     LR,#0                           ;We're run-length encoding,
         STRB    LR,sprstringlen                 ;  so initialise byte counts.
         STR     LR,sprrepeatcount               ;NB 'sprlastbyte' irrelevant.
@@ -1847,22 +1857,30 @@ sprite_putmaskbyte
         ORR     R9,R9,#&01000000                ;Set sentinel bit to output
                                                 ;  after 8 more data bits
         BL      sprite_outputbyte
-
         Pull    "R1,PC"
 
 ; Subroutine to terminate the run-length encoding of data, purging all
 ; data in buffers to the file. Preserves all registers.
 
 sprite_endoutput
-        Push    "R1,R4,LR"
-
+        Push    "R1,R4,R7,LR"
+        LDRB    LR,joblevel2
+        CMP     LR,#0
+        BEQ     sprite_endoutput_notL2
         MOV     R1,#&100                ;Start a fake new run of a non-byte
         BL      sprite_outputbyte       ;  value
-
+        LDRVCB  R4,sprstringlen         ;Then output any remaining string
+        BLVC    sprite_outputstring_L2
+        MOVVC   R7,#128                 ;Level2 RLE end-of-data
+        BLVC    ascii85_byteR7
+        BLVC    ascii85_end
+        Pull    "R1,R4,R7,PC"
+sprite_endoutput_notL2
+        MOV     R1,#&100                ;Start a fake new run of a non-byte
+        BL      sprite_outputbyte       ;  value
         LDRVCB  R4,sprstringlen         ;Then output any remaining string
         BLVC    sprite_outputstring
-
-        Pull    "R1,R4,PC"
+        Pull    "R1,R4,R7,PC"
 
 ; Subroutine to output the byte in R1 through the run-length encoding
 ; mechanism. The value in R1 is assumed to be a byte value and is never
@@ -1876,6 +1894,10 @@ sprite_endoutput
 sprite_outputbyte
         Push    "R1-R4,LR"
         PrError sprite_outputbyte_return
+
+       LDRB    R2,joblevel2
+       CMP     R2,#0
+       BNE     sprite_outputbyte_L2_pushdone
 
 ; Get current state of run-length encoding algorithm.
 
@@ -2030,6 +2052,109 @@ sprite_outputrun_return
         STRVS   R0,[R13]
         Pull    "R0,PC"
 
+
+;following RLE routines very similar to above, but use Level2 RLE style
+;and ASCII85 encoding, instead of hex
+
+
+sprite_outputbyte_L2
+        Push    "R1-R4,LR"        ;MUST match push in sprite_outputbyte
+        PrError sprite_outputbyte_L2_return
+
+sprite_outputbyte_L2_pushdone
+; Get current state of run-length encoding algorithm.
+
+        LDRB    R2,sprlastbyte                  ;Last byte encountered
+        LDRB    R4,sprstringlen                 ;Current length of string
+        LDR     R3,sprrepeatcount               ;Repeat count for this byte
+
+; Is this byte the same as the last one? If so, we just increment the repeat
+; count and return.
+
+        CMP     R1,R2
+        ADDEQ   R3,R3,#1
+        BEQ     sprite_outputbyte_L2_storeandreturn        ;NB V=0 if taken
+
+;distinct
+        ADD     LR,R3,R4
+        CMP     LR,#PSSprRLMaxStrL2     ;First condition
+        CMPLS   R3,#PSSprRLMinRunL2+1   ;Second condition
+        BLS     sprite_outputbyte_L2_extendandstartrun
+
+        BL      sprite_outputstring_L2
+        PrPassError
+
+        CMP     R3,#PSSprRLMinRunL2
+        BLO     sprite_outputbyte_L2_extendandstartrun
+        BL      sprite_outputrun_L2
+        B       sprite_outputbyte_L2_startrun
+
+sprite_outputbyte_L2_extendandstartrun
+        ADR     LR,sprstring
+        CMP     R3,#0
+sprite_outputbyte_L2_extendloop
+        STRNEB  R2,[LR,R4]
+        ADDNE   R4,R4,#1
+        SUBNES  R3,R3,#1
+        BNE     sprite_outputbyte_L2_extendloop    ;NB V=0 if not taken
+
+sprite_outputbyte_L2_startrun
+        MOVVC   R2,R1
+        MOVVC   R3,#1
+
+        STRVCB  R2,sprlastbyte                  ;Last byte encountered
+        STRVCB  R4,sprstringlen                 ;Current length of string
+sprite_outputbyte_L2_storeandreturn
+        STRVC   R3,sprrepeatcount               ;Repeat count for this byte
+
+        PrError
+sprite_outputbyte_L2_return
+        Pull    "R1-R4,PC"
+
+sprite_outputstring_L2
+        Push    "R0,R1,LR"
+        PrError sprite_outputstring_L2_return
+        CMP     R4,#0                           ;NB clears V
+        BEQ     sprite_outputstring_L2_return
+        SUB     R0,R4,#1    ;length byte = n-1
+        BL      ascii85_byte
+        BVS     sprite_outputstring_L2_return
+        ADR     R0,sprstring
+        MOV     R1,R4
+        BL      ascii85_block
+sprite_outputstring_L2_return
+        STRVS   R0,[R13]
+        MOV     R4,#0       ;required to mirror sprite_outputstring
+        Pull    "R0,R1,PC"
+
+sprite_outputrun_L2
+        Push    "R0,R1,R3,LR"
+        PrError sprite_outputrun_L2_return
+sprite_outputrun_L2_loop
+        MOV     R1,R3
+        CMP     R1,#128
+        MOVGT   R1,#128       ;max run 128
+        RSB     R0,R1,#256
+        ADD     R0,R0,#1      ;length byte for run = 257-n
+        BL      ascii85_byte
+        BVS     sprite_outputrun_L2_return
+        MOV     R0,R2
+        BL      ascii85_byte   ;value byte for run
+        BVS     sprite_outputrun_L2_return
+        SUBS    R3,R3,R1
+        BNE     sprite_outputrun_L2_loop
+        [       PSDebugEscapes
+        BLVC    readescapestate                 ;Check for ESCAPE, return
+        |
+        SWIVC   XOS_ReadEscapeState             ;Check for ESCAPE, return
+        ]
+        SETV    CS
+sprite_outputrun_L2_return
+        STRVS   R0,[R13]
+        Pull    "R0,R1,R3,PC"
+
+
+;end of RLE conditional stuff
         |
 
 ; Subroutine to output the high byte of R9, then clear this byte and set a
@@ -2088,7 +2213,7 @@ sprite_setcolour_translate
         LDRNE   R1,[LR,R1,LSL #1]       ;  palette entry (first 4 of the 8 bytes)
         BNE     sprite_setcolour_gotrgb
         [ Medusa
-        ADR     LR, colourtrans32K      ;Is it our truecolour translation table?
+        ADRL    LR, colourtrans32K      ;Is it our truecolour translation table?
         TEQ     LR, R7                  ;  If so, the translation has already been done
         MOVEQ   R1, R1, LSR #2          ;  when we plotted the chunk into the temporary
         BEQ     sprite_setcolour_grey   ;  sprite, so just expand this grey level to RGB
@@ -2168,7 +2293,7 @@ sprite_make32Ktable
         SUBS    R0, R0, #1
         BPL     %BT00
         
-        ADR     R7, colourtrans32K
+        ADRL    R7, colourtrans32K
         MOV     R1, R7
         ADR     R2, thirtytwok
         LDR     R2, [R2]
@@ -2187,7 +2312,7 @@ sprite_make32Ktable
 
 sprite_clear32Ktable
         Push    "R1,R4,LR"
-        ADR     R1, colourtrans32K
+        ADRL    R1, colourtrans32K
         MOV     R4, #0
         STR     R4, [R1, #4]
         Pull    "R1,R4,PC"
@@ -2198,7 +2323,7 @@ sprite_clear32Ktable
 
 sprite_free32Ktable
         Push    "R0-R2,LR"
-        ADR     R1, colourtrans32K
+        ADRL    R1, colourtrans32K
         LDR     R2, [R1, #4]
         TEQ     R2, #0
         Pull    "R0-R2,PC", EQ, ^
@@ -2240,6 +2365,11 @@ sprite_output32bpp
 
         BL      sprite_getspriteaddress         ; normalise R1 and R2
         PrPassError
+
+;we'll use ASCII85 encoding for Level 2, hex coding otherwise
+        LDRB    R5,joblevel2
+        CMP     R5,#0
+        BLNE    ascii85_begin
 
 ; Now get some essential info about the sprite
 
@@ -2356,49 +2486,86 @@ sprite_output32bpp_yloop
 ; comparisons
 
         BNE     sprite_output32bpp_masked_xloop
-        
-sprite_output32bpp_xloop
 
+        LDRB    R0,joblevel2
+        CMP     R0,#0
+        BEQ     sprite_output32bpp_xloop_L1
+
+sprite_output32bpp_xloop_L2
         LDR     R0, [R1], #4                    ; Get the next pixel
+        BL      ascii85_byte
+        Pull    "R3,R4,PC",VS
+        MOV     R0, R0, LSR #8
+        BL      ascii85_byte
+        Pull    "R3,R4,PC",VS
+        MOV     R0, R0, LSR #8
+        BL      ascii85_byte
+        Pull    "R3,R4,PC",VS
+        SUBS    R3, R3, #1                      ; Any more pixels to do?
+        BNE     sprite_output32bpp_xloop_L2
+        B       sprite_output32bpp_next_y
 
+sprite_output32bpp_xloop_L1
+        LDR     R0, [R1], #4                    ; Get the next pixel
         PrHex   R0,ThisDoesNotCorruptR0,FallThroughOnError              ; Output R
         MOV     R0, R0, LSR #8
         PrHex   R0,ThisDoesNotCorruptR0,FallThroughOnError              ; Output G
         MOV     R0, R0, LSR #8
         PrHex   R0,ThisDoesNotCorruptR0,FallThroughOnError              ; Output B
-
         ADD     R9, R9, #1                      ; Newline wanted?
         TST     R9, #2_11111                    ; do one every 32 pixels or so
         BNE     %FT02
         PrNewLn FallThroughOnError
 02
-
         SUBS    R3, R3, #1                      ; Any more pixels to do?
-        BNE     sprite_output32bpp_xloop
+        BNE     sprite_output32bpp_xloop_L1
         B       sprite_output32bpp_next_y
 
 sprite_output32bpp_masked_xloop
 
+        LDRB    R0,joblevel2
+        CMP     R0,#0
+        BEQ     sprite_output32bpp_masked_xloop_L1
+
+sprite_output32bpp_masked_xloop_L2
         MOVS    R4, R4, LSR #1                  ; Shift the mask bit into the C flag
         LDRCS   R0, [R1], #4                    ; If mask set, get the next pixel
         ADDCC   R1, R1, #4                      ; If mask clear, skip the next pixel and use
         MOVCC   R0, #FakeMaskColour             ;   the "background" colour (white)
+        BL      ascii85_byte
+        Pull    "R3,R4,PC",VS
+        MOV     R0, R0, LSR #8
+        BL      ascii85_byte
+        Pull    "R3,R4,PC",VS
+        MOV     R0, R0, LSR #8
+        BL      ascii85_byte
+        Pull    "R3,R4,PC",VS
+        ADD     R9, R9, #1                      ; move to the next mask bit
+        TST     R9, #2_11111                    ; new mask word needed?
+        LDREQ   R4, [R2], #4                    ; get next mask word if so
+        SUBS    R3, R3, #1                      ; Any more pixels to do?
+        BNE     sprite_output32bpp_masked_xloop_L2
+        B       sprite_output32bpp_next_y
 
+sprite_output32bpp_masked_xloop_L1
+        MOVS    R4, R4, LSR #1                  ; Shift the mask bit into the C flag
+        LDRCS   R0, [R1], #4                    ; If mask set, get the next pixel
+        ADDCC   R1, R1, #4                      ; If mask clear, skip the next pixel and use
+        MOVCC   R0, #FakeMaskColour             ;   the "background" colour (white)
         PrHex   R0,ThisDoesNotCorruptR0,FallThroughOnError              ; Output R
         MOV     R0, R0, LSR #8
         PrHex   R0,ThisDoesNotCorruptR0,FallThroughOnError              ; Output G
         MOV     R0, R0, LSR #8
         PrHex   R0,ThisDoesNotCorruptR0,FallThroughOnError              ; Output B
-
         ADD     R9, R9, #1                      ; move to the next mask bit
         TST     R9, #2_11111                    ; new mask word needed?
         LDREQ   R4, [R2], #4                    ; get next mask word if so
         BNE     %FT03
         PrNewLn FallThroughOnError              ; and do a newline too
 03
-
         SUBS    R3, R3, #1                      ; Any more pixels to do?
-        BNE     sprite_output32bpp_masked_xloop
+        BNE     sprite_output32bpp_masked_xloop_L1
+
 ; FALLTHRU
 
 sprite_output32bpp_next_y
@@ -2413,9 +2580,15 @@ sprite_output32bpp_next_y
         SUBS    R4, R4, #1                      ; more rows?
         BNE     sprite_output32bpp_yloop
 
-; All the data that colorimage is expecting has been output.  Terminate tidily with
-; a newline.
+; All the data that colorimage is expecting has been output.  Terminate tidily.
 
+        LDRB    R0,joblevel2
+        CMP     R0,#0
+        BEQ     sprite_output32bpp_end_L1
+        BL      ascii85_end
+        Pull    "PC"
+
+sprite_output32bpp_end_L1
         PrNewLn FallThroughOnError
 
         Debug   Medusa, "Leaving sprite_output32bpp"
@@ -2455,6 +2628,11 @@ sprite_output16bpp
 
         BL      sprite_getspriteaddress         ; normalise R1 and R2
         PrPassError
+
+;we'll use ASCII85 encoding for Level 2, hex coding otherwise
+        LDRB    R5,joblevel2
+        CMP     R5,#0
+        BLNE    ascii85_begin
 
 ; Now get some essential info about the sprite
 
@@ -2578,9 +2756,33 @@ sprite_output16bpp_yloop
 
 
         BNE     sprite_output16bpp_masked_xloop
-        
-sprite_output16bpp_xloop
 
+        LDRB    R7,joblevel2
+        CMP     R7,#0
+        BEQ     sprite_output16bpp_xloop_L1
+
+sprite_output16bpp_xloop_L2
+        AND     R7, R8, R0, LSL #3
+        ORR     R7, R7, R7, LSR #5
+        BL      ascii85_byteR7
+        Pull    "R3,R4,R5,R7,R8,PC",VS
+        AND     R7, R8, R0, LSR #2
+        ORR     R7, R7, R7, LSR #5
+        BL      ascii85_byteR7
+        Pull    "R3,R4,R5,R7,R8,PC",VS
+        AND     R7, R8, R0, LSR #7
+        ORR     R7, R7, R7, LSR #5
+        BL      ascii85_byteR7
+        Pull    "R3,R4,R5,R7,R8,PC",VS
+        TST     R9, #1                          ; Prepare next pixel
+        MOVEQ   R0, R0, LSR #16                 ; by shifting down
+        LDRNE   R0, [R1], #4                    ; or by loading
+        ADD     R9, R9, #1
+        SUBS    R3, R3, #1                      ; Any more pixels to do?
+        BNE     sprite_output16bpp_xloop_L2
+        B       sprite_output16bpp_next_y
+
+sprite_output16bpp_xloop_L1
         AND     R7, R8, R0, LSL #3
         ORR     R7, R7, R7, LSR #5
         PrHex   R7,,FallThroughOnError          ; Output R
@@ -2590,27 +2792,54 @@ sprite_output16bpp_xloop
         AND     R7, R8, R0, LSR #7
         ORR     R7, R7, R7, LSR #5
         PrHex   R7,,FallThroughOnError          ; Output B
-
         TST     R9, #1                          ; Prepare next pixel
         MOVEQ   R0, R0, LSR #16                 ; by shifting down
         LDRNE   R0, [R1], #4                    ; or by loading
-
         ADD     R9, R9, #1                      ; Newline wanted?
         TST     R9, #2_11111                    ; do one every 32 pixels or so
         BNE     %FT02
         PrNewLn FallThroughOnError
 02
-
         SUBS    R3, R3, #1                      ; Any more pixels to do?
-        BNE     sprite_output16bpp_xloop
+        BNE     sprite_output16bpp_xloop_L1
         B       sprite_output16bpp_next_y
 
 sprite_output16bpp_masked_xloop
 
+        LDRB    R7,joblevel2
+        CMP     R7,#0
+        BEQ     sprite_output16bpp_masked_xloop_L1
+
+sprite_output16bpp_masked_xloop_L2
         MOVS    R4, R4, LSR #1                  ; Shift the mask bit into the C flag
         MOVCS   R5, R0                          ; Use the pixel value if mask set
         MOVCC   R5, #FakeMaskColour             ; or white otherwise
+        AND     R7, R8, R5, LSL #3
+        ORR     R7, R7, R7, LSR #5
+        BL      ascii85_byteR7
+        Pull    "R3,R4,R5,R7,R8,PC",VS
+        AND     R7, R8, R5, LSR #2
+        ORR     R7, R7, R7, LSR #5
+        BL      ascii85_byteR7
+        Pull    "R3,R4,R5,R7,R8,PC",VS
+        AND     R7, R8, R5, LSR #7
+        ORR     R7, R7, R7, LSR #5
+        BL      ascii85_byteR7
+        Pull    "R3,R4,R5,R7,R8,PC",VS
+        TST     R9, #1                          ; Prepare next pixel
+        MOVEQ   R0, R0, LSR #16                 ; by shifting down
+        LDRNE   R0, [R1], #4                    ; or by loading
+        ADD     R9, R9, #1                      ; move to the next mask bit
+        TST     R9, #2_11111                    ; new mask word needed?
+        LDREQ   R4, [R2], #4                    ; get next mask word if so
+        SUBS    R3, R3, #1                      ; Any more pixels to do?
+        BNE     sprite_output16bpp_masked_xloop_L2
+        B       sprite_output16bpp_next_y
 
+sprite_output16bpp_masked_xloop_L1
+        MOVS    R4, R4, LSR #1                  ; Shift the mask bit into the C flag
+        MOVCS   R5, R0                          ; Use the pixel value if mask set
+        MOVCC   R5, #FakeMaskColour             ; or white otherwise
         AND     R7, R8, R5, LSL #3
         ORR     R7, R7, R7, LSR #5
         PrHex   R7,,FallThroughOnError          ; Output R
@@ -2620,20 +2849,17 @@ sprite_output16bpp_masked_xloop
         AND     R7, R8, R5, LSR #7
         ORR     R7, R7, R7, LSR #5
         PrHex   R7,,FallThroughOnError          ; Output B
-
         TST     R9, #1                          ; Prepare next pixel
         MOVEQ   R0, R0, LSR #16                 ; by shifting down
         LDRNE   R0, [R1], #4                    ; or by loading
-
         ADD     R9, R9, #1                      ; move to the next mask bit
         TST     R9, #2_11111                    ; new mask word needed?
         LDREQ   R4, [R2], #4                    ; get next mask word if so
         BNE     %FT03
         PrNewLn FallThroughOnError              ; and do a newline too
 03
-
         SUBS    R3, R3, #1                      ; Any more pixels to do?
-        BNE     sprite_output16bpp_masked_xloop
+        BNE     sprite_output16bpp_masked_xloop_L1
 ; FALLTHRU
 
 sprite_output16bpp_next_y
@@ -2648,9 +2874,15 @@ sprite_output16bpp_next_y
         SUBS    R4, R4, #1                      ; more rows?
         BNE     sprite_output16bpp_yloop
 
-; All the data that colorimage is expecting has been output.  Terminate tidily with
-; a newline.
+; All the data that colorimage is expecting has been output.  Terminate tidily.
 
+        LDRB    R0,joblevel2
+        CMP     R0,#0
+        BEQ     sprite_output16bpp_end_L1
+        BL      ascii85_end
+        Pull    "PC"
+
+sprite_output16bpp_end_L1
         PrNewLn FallThroughOnError
 
         Debug   Medusa, "Leaving sprite_output16bpp"
