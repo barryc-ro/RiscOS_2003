@@ -67,9 +67,11 @@ NCTARGETARCH = ${NODB}
 
 # OPTS flag in build options allows several options to be used :
 
-# EMAIL_URL lets it be known that we have an EMAIL_URL to fill in the smartcard
+# CCIJ10 enables the Funai3 card format, otherwise its the Acorn format
+# EMAIL_URL lets it be known that we have an EMAIL_URL to fill in the smartcard, it's only
+# relevant for Acorn format card.
 
-CCFLAGS = -c ${THROWBACK} -depend !Depend ${INCLUDES} -zM -DCOMPAT_INET4 ${OPTS} ${NCTARGETARCH} 
+CCFLAGS = -c ${THROWBACK} -depend !Depend -wp ${INCLUDES} -zM -DCOMPAT_INET4 ${OPTS} ${NCTARGETARCH} 
 
 
 
@@ -83,7 +85,7 @@ RSTUBS     = RISCOSLIB:o.rstubs
 ROMSTUBS   = RISCOSLIB:o.romstubs
 ROMCSTUBS  = RISCOSLIB:o.romcstubs
 ABSSYM     = RISC_OSLib:o.AbsSym
-DBUGLIB    = C:o.DBUGzm
+#DBUGLIB    = C:o.DBUGzm
 
 SOCKLIB	   = TCPIPLibs:o.socklibzm
 INETLIB	   = TCPIPLibs:o.inetlibzm
