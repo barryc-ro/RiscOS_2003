@@ -39,7 +39,7 @@ CPFLAGS = ~cfr~v
 WFLAGS  = ~c~vr
 CMHGFLAGS = -p ${DFLAGS} ${INCLUDES}
 
-DFLAGS  = -DUSE_TINY ${DEBUG}
+DFLAGS  = -DUSE_TINY ${DEBUG} ${OPTS}
 #
 # Libraries
 #
