@@ -14,7 +14,6 @@
 # Generic options:
 #
 MKDIR           = mkdir -p
-PL              = perl
 CP              = copy
 generate        = generate
 RM              = remove
@@ -22,28 +21,14 @@ WIPE            = wipe
 MODGEN          = modgen
 MODSQZ          = modsqz -f
 APPEND          = echo
-CHMOD		= attr $(CHMODFLAGS)
 CPFLAGS         = ~cfr~v
 WFLAGS          = ~cf~vr
-CHMODFLAGS	= +ow +or +wr -ww
 APPFLAGS        = { >> rm.Via }
-
-#
-# Translate phase:
-#
-TRANSLATE	= translate
-TRANSFLAGS	= $(THROWBACK) -marko "´´" -markc "ªª" -htmlo "êê" -htmlc "ëë"
-INTRANDIR       = Translate.<Machine>.<Locale>
-OUTTRANDIR      = Translated
-TRANSMAPPINGS   = $(INTRANDIR).Mappings
 
 #
 # Program specific options:
 #
-COMPONENT       = Choices<Locale>
-VERSIONVAR      = STBChoices$Version
-VERSION         = <STBChoices$Version>
-PLSCRIPT        = Build:GetVersion
+COMPONENT       = Choices$(Locale)
 
 #
 # Resources directories:
@@ -51,13 +36,14 @@ PLSCRIPT        = Build:GetVersion
 LOCALRES        = LocalUserIFRes:
 
 
-VIA             = Resources.<Machine>.<Locale>.ViaFile
-INDIR           = rm.$(MACHINE)
+INVIA           = Resources.General.$(Locale).ViaFile
+INDIR           = rm.$(UserIF)
 INMOD           = $(INDIR).$(COMPONENT)
 
 #
 # Output files and directories:
 #
+OUTVIA          = rm.Via
 OUTMOD          = $(INSTDIR).$(COMPONENT)
 
 #
@@ -82,7 +68,6 @@ install: generate dirs
 
 clean:
         ifthere rm then $(WIPE) rm $(WFLAGS)
-        ifthere $(OUTTRANDIR) then $(WIPE) $(OUTTRANDIR) $(WFLAGS)
         @echo $(COMPONENT): cleaned
 
 local_clean:
@@ -91,34 +76,18 @@ local_clean:
 dirs:
         $(MKDIR) $(INDIR)
         $(MKDIR) $(INSTDIR)
-        $(MKDIR) $(OUTTRANDIR)
 
-generate: translate versionvar dirs
+generate: dirs
+        @echo Creating the Via file...
+        $(CP) $(INVIA) $(OUTVIA) $(CPFLAGS)
+        $(APPEND) $(LOCALRES)Options !Boot.HTML.Setup.Options$(APPFLAGS)
         @echo Generating the ResourcesFS archive module...
-        @do $(MODGEN) $(INMOD) $(COMPONENT) $(COMPONENT) $(VERSION) -via $(VIA)
+        @do $(MODGEN) $(INMOD) $(COMPONENT) $(COMPONENT) 1.14 -via $(OUTVIA)
         @echo Squeezing the module...
         $(MODSQZ) $(INMOD)
-	$(CHMOD) $(INMOD)
         @echo Module generation complete.
 
 resources:
         @echo $(COMPONENT): resource files copied
-
-translate: dirs
-        $(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(INTRANDIR).Acknow     -o $(OUTTRANDIR).Acknow
-        $(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(INTRANDIR).BSD        -o $(OUTTRANDIR).BSD
-        $(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(INTRANDIR).ImageLib   -o $(OUTTRANDIR).ImageLib
-        $(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(INTRANDIR).Options    -o $(OUTTRANDIR).Options
-        $(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(INTRANDIR).Printing   -o $(OUTTRANDIR).Printing
-        $(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(INTRANDIR).Printing2  -o $(OUTTRANDIR).Printing2
-        $(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(INTRANDIR).Software   -o $(OUTTRANDIR).Software
-        $(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(INTRANDIR).Sounds     -o $(OUTTRANDIR).Sounds
-        $(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(INTRANDIR).SSL        -o $(OUTTRANDIR).SSL
-        $(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(INTRANDIR).StartUp    -o $(OUTTRANDIR).StartUp
-        $(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(INTRANDIR).Television -o $(OUTTRANDIR).Television
-        $(TRANSLATE) $(TRANSFLAGS) -m $(TRANSMAPPINGS) -i $(INTRANDIR).Text       -o $(OUTTRANDIR).Text
-
-versionvar:
-        ${PL} ${PLSCRIPT} ${VERSIONVAR}
 
 # Dynamic dependencies:
