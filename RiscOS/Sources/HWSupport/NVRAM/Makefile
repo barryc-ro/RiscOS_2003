@@ -86,7 +86,7 @@ clean:
 
 resources:
         ${MKDIR} ${RDIR}
-        ${CP} resources.<Machine>.Tags ${RDIR}.Tags ${CPFLAGS}
+        ${CP} resources.<System>.Tags ${RDIR}.Tags ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 #
