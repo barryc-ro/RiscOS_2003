@@ -34,11 +34,13 @@ LD	= link
 RM      = remove
 TOKENISE = tokenise
 WIPE    = -wipe
+STRIP   = stripdepnd
 
 ASFLAGS  = ${THROWBACK} -depend !Depend -Stamp -quit
 CCFLAGS  = ${THROWBACK} -c -depend !Depend ${INCLUDES} ${DFLAGS} -zM -ffah
 CPFLAGS  = ~cfr~v
 WFLAGS   = ~c~v
+DFLAGS   = -D${MACHINE}
 
 TOKENS   = Hdr:Tokens
 
@@ -46,19 +48,17 @@ TOKENS   = Hdr:Tokens
 # Libraries
 #
 CLIB      = CLIB:o.stubs
-TGRLIB    = CommonLib:o.commonlibm
+TGRLIB    = C:tgrlib.o.tgrlib
 RLIB      = RISCOSLIB:o.risc_oslib
 RSTUBS    = RISCOSLIB:o.rstubs
 ROMSTUBS  = RISCOSLIB:o.romstubs
 ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.c_AbsSym
 
-COMMONLIB = <CommonLib$Path>
-
 #
 # Include files
 #
-INCLUDES = -ICOMMONLIB:,C:
+INCLUDES = -IC:
 
 #
 # Export Paths for Messages module
@@ -77,7 +77,7 @@ OBJS = main.o \
 #
 .c.o:;      ${CC} ${CCFLAGS} -o $@ $<
 .s.o:;      ${AS} ${ASFLAGS} $< $@
-.cmhg.o:;    ${CMHG} -d @.h.module $< $@
+.cmhg.o:;    ${CMHG} -p -d @.h.module $< $@
 
 # Specific rules
 
@@ -87,7 +87,7 @@ messages.o: Res.UK.Messages
 swi.o: module.h
 
 module.h: cmhg.Hdr
-        cmhg -d @.h.module @.cmhg.Hdr -o @.o.Hdr 
+        cmhg -p -d @.h.module @.cmhg.Hdr -o @.o.Hdr 
         
 #
 # Generic rules:
@@ -108,13 +108,18 @@ resources:
         @echo ${COMPONENT}: resource files copied to Messages module
 
 clean:
+        ${RM} h.Module
         ${RM} ${TARGET}
+        ${RM} aof
         ${WIPE} o.* ${WFLAGS}
+        ${WIPE} linked.* ${WFLAGS}
+        ${RM} linked
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 ${MODULE}: ${OBJS} ${TGRLIB}
-        ${MKDIR} tm
-        ${LD} -rmf -o $@ ${OBJS} ${TGRLIB}
+        ${MKDIR} rm
+        ${LD} -rmf -o $@ ${OBJS} ${TGRLIB} ${CLIB}
 
 #
 # ROM target (re-linked at ROM Image build time)
