@@ -109,6 +109,9 @@ OnlyAcceptFirstPATandPMT SETL {FALSE}			; for use with a faint signal, since we 
                 GBLL    DebugNPT
 DebugNPT        SETL    {FALSE}                         ; print NPT debug to vdu
 
+                GBLL    DebugPID
+DebugPID        SETL    {FALSE}                         ; print PID debug to vdu
+
                 GBLL    debug
 debug           SETL    {FALSE}	                        ; this enables NdrDebug real-time debugging
 
@@ -233,6 +236,7 @@ CSH_TempAudioStream	#	4			; temporary decrementing copy of above
 CSH_LastResetStreamFlags #	4			; bits indicating what streams are active after last resetstream
  [ ParseOVSNPT
 CSH_NextResetStreamFlags #      4                       ; flag bits to use if/when there is an internal reset (good-data-follows or segment-transition)
+CSH_NextSpeedIndicator  #       4                       ; for holding the speed indicator for the next stream, if an internal reset is pending
  ]
  [ DoPEH
 CSH_ListOfPEHPIDs	#	4			; pointer to 1st PEHPID node for this stream
@@ -642,6 +646,8 @@ OpenStream Entry "r0-r2"
 	STR	lr, [r1, #CSH_LastResetStreamFlags]
  [ ParseOVSNPT
 	STR     lr, [r1, #CSH_NextResetStreamFlags]
+	MOV     lr, #1                                  ; start off playing data at normal speed
+	STR     lr, [r1, #CSH_NextSpeedIndicator]
  ]
 
         TST     r0, #StreamFlags_VideoPresent
@@ -856,13 +862,33 @@ Play    Entry "r0-r3"
 
 SetSpeed Entry "r0-r3"
         ADR     r1, ControlStreamHandle
+      [ ParseOVSNPT
+        LDR     lr, [r1, #CSH_NextResetStreamFlags]
+        TST     lr, #ResetStreamFlags_DeferReset                ; if a deferred reset is pending
+        STRNE   r2, [r1, #CSH_NextSpeedIndicator]               ; then store the speed indicator for future use
+        EXIT    NE                                              ; and exit
+      ]
+      [ DebugNPT
+        SWI     XOS_WriteS
+        =       "MPEGControl_SetSpeed: speed = ", 0
+        ALIGN
+        Push    "r0-r2"
+        SUB     sp, sp, #4
+        MOV     r0, r2
+        MOV     r1, sp
+        MOV     r2, #4
+        SWI     XOS_ConvertHex2
+        SWI     XOS_Write0
+        ADD     sp, sp, #4
+        Pull    "r0-r2"
+        SWI     XOS_NewLine
+      ]
 
         LDR     r3, [r1, #CSH_StreamFlags]
         TST     r3, #StreamFlags_VideoPresent
         BEQ     %FT10
 
         Push    "r1,r2"
-        MOV     r0, #0                          ; flags
         LDR     r1, [r1, #CSH_VideoStreamHandle]
         SWI     XMPEGVideo_SetSpeed
         Pull    "r1,r2"
@@ -872,7 +898,6 @@ SetSpeed Entry "r0-r3"
         TST     r3, #StreamFlags_AudioPresent
         BEQ     %FT20
 
-        MOV     r0, #0
         LDR     r1, [r1, #CSH_AudioStreamHandle]
         SWI     XMPEGAudio_SetSpeed
         STRVS   r0, [sp]
@@ -1196,7 +1221,7 @@ SelectProgram Entry "r3,r4"
 	BEQ	%FT60
 	Push	"r0-r2"
 	SWI	XDVBControl_ResetStream
-	MOV	r0, #2
+	MOV	r0, #PIDSlot_PAT
 	MOV	r1, #&00000047
 	LDR	r2, =&00FF1FFF		; re-enable PID 0
 	SWI	XDVBControl_MatchMask
@@ -1325,7 +1350,15 @@ ResetStream Entry "r0-r3"
         MOV     r3, #0                          ; only zero the following if it wasn't an internally-generated reset
 	STRB	r3, [r1, #CSH_NPTDescLength]	; no bytes in stored descriptor
 	STR	r3, [r1, #CSH_NPTCurrent]	; no current descriptor
+	MOV     lr, #1                          ; if there should be a subsequent internal reset, then continue playing at normal speed
+	STR     lr, [r1, #CSH_NextSpeedIndicator]
  ]
+      [ DebugNPT
+        SWI     XOS_WriteS
+        =       "*** NORMAL RESET ***", 0
+        ALIGN
+        SWI     XOS_NewLine
+      ]
         BL      int_reset_stream
         STR     r2, [sp, #2*4]
         STR     r3, [sp, #3*4]
@@ -1816,6 +1849,9 @@ ts_skip_to_next_packet
         B       ts_wait_for_sync
 
 ts_process_PID0 ROUT
+      [ DebugPID
+        DLINE   "Found PAT",cc
+      ]
         TST     r9, #TS_Payload_Present_Bit     ; ensure there is payload in this packet
         TSTNE   r9, #TS_PUSI_Bit                ; and the PSI payload starts in this packet
         BEQ     ts_skip_to_next_packet          ; if not both of these, then no PAT in this packet, so skip it
@@ -1882,6 +1918,9 @@ ts_process_PID0 ROUT
 
 
 ts_process_PMT_PID ROUT
+      [ DebugPID
+        DLINE "Found PMT",cc
+      ]
         TST     r9, #TS_Payload_Present_Bit     ; ensure there is payload in this packet
         TSTNE   r9, #TS_PUSI_Bit                ; and the PSI payload starts in this packet
         BEQ     ts_skip_to_next_packet          ; if not both of these, then no PAT in this packet, so skip it
@@ -2043,11 +2082,17 @@ ts_process_rest_of_PMT
         B       %BT10
 
 ts_process_audio_PID
+      [ DebugPID
+        DLINE "Found Audio PID",cc
+      ]
 ;        DREG    r8, "Entered ts_process_audio_PID, remaining packet length = "
         MOV     r5, #StreamFlags_AudioPresent           ; indicate audio data
         B       ts_process_vidoraud
 
 ts_process_video_PID
+      [ DebugPID
+        DLINE "Found Video PID",cc
+      ]
 ;        DREG    r8, "Entered ts_process_video_PID, remaining packet length = "
         MOV     r5, #StreamFlags_VideoPresent           ; indicate video data
 ts_process_vidoraud ROUT
@@ -2459,6 +2504,14 @@ ts_check_for_OVSNPT ROUT
         LDR     r5, [r1, #CSH_LastContentID]		; see what ContentID was last time
         TEQ     r5, r7                                  ; if it's changed then it's a GDF
         TSTNE   lr, #StreamFlags_ResetOnGoodDataFollows ;   and we may need to reset ourselves
+      [ DebugNPT
+        BEQ     %FT00
+        SWI     XOS_WriteS
+        =       "*** GOOD DATA FOLLOWS ***", 0
+        ALIGN
+        SWI     XOS_NewLine
+00
+      ]
         BNE     %FT39
         TEQ     r5, r7                                  ; if GDF
         TSTNE   lr, #StreamFlags_OVSNPTSkipping         ;   and we're skipping
@@ -2468,12 +2521,26 @@ ts_check_for_OVSNPT ROUT
         TEQ     r5, r7                                  ; unless it's the same, and we're not skipping and not in trick play mode
         TSTEQ   lr, #StreamFlags_OVSNPTSkipping :OR: StreamFlags_TrickPlayMode
         BNE     %FT40                                   ;   then jump
-        ; It's a segment transition
+        ; It's a segment transition, drop through...
+      [ DebugNPT
+        SWI     XOS_WriteS
+        =       "*** SEGMENT TRANSITION ***", 0
+        ALIGN
+        SWI     XOS_NewLine
+      ]
 39      ; Reset decoder
         Push    "r0, r2, r3"
         LDR     r0, [r1, #CSH_NextResetStreamFlags]
+        BIC     r0, r0, #ResetStreamFlags_DeferReset    ; flag that the deferred reset has now happened
+        STR     r0, [r1, #CSH_NextResetStreamFlags]
         ORR     r0, r0, #ResetStreamFlags_InternalReset ; don't worry about waiting for a(nother) GDF
         BL      int_reset_stream
+        TEQ     r5, r7                                  ; if it was a GDF (not a segment transition),
+        LDRNE   r2, [r1, #CSH_NextSpeedIndicator]       ;   get stored speed indicator
+        MOVNE   r0, #1                                  ;   and set stored speed indicator back to 1, ready for any subsequent internal resets
+        STRNE   r0, [r1, #CSH_NextSpeedIndicator]       ;
+        MOVNE   r0, #0                                  ;   use SetSpeed flags of 0
+        BLNE    SetSpeed                                ;   and execute the deferred SetSpeed call
         Pull    "r0, r2, r3"
         ; drop through...
 40
@@ -2833,6 +2900,11 @@ Stats_NPTDescriptor ROUT
 	B	StatsLoopReEntry		; now parse next tag
  ]
 
+Stats_CSH Entry
+        MOV     r6, r1
+        EXIT
+
+
 ; The table containing all the statistics
 
 StatsTable
@@ -2850,6 +2922,7 @@ StatsTable
  [ ParseOVSNPT
 	StatsTableEntry &0009, Stats_NPTDescriptor, Code
  ]
+        StatsTableEntry &000A, Stats_CSH, Code
 	&	-1
 
 ; **************************************************************************
