@@ -39,7 +39,7 @@ DBGTARGET = aif.CL9200
 GPATARGET = gpa.CL9200
 EXPORTS   = 
 
-OBJECTS   = o.Boot o.Interrupts o.Timers o.IIC o.NVMemory o.Video o.Matrix o.USB #o.MachineID \
+OBJECTS   = o.Boot o.Interrupts o.Timers o.IIC o.NVMemory o.Video o.Matrix o.USB o.Serial #o.MachineID \
            # o.SIB
 
 .s.o:;	${ARMASM} ${ARMASMFLAGS} $< $@
