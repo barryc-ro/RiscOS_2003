@@ -14,6 +14,6 @@ include StdTools
 include AAsmModule
 
 clean::
-	${WIPE} rm
+	${WIPE} rm ${WFLAGS}
 
 # Dynamic dependencies:

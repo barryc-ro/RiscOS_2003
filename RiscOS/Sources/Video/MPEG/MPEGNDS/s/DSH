@@ -140,8 +140,6 @@ DescriptorHandler_OpenStream Entry "R3-R11"
 	MOV	R1, R2
 	LDR	R4, [CL, #CL_OpenStream]
 	BL	Call_Veneer
-; BVS %FT00
-; DAWriteS "  DsH:Exit", LF
 	STRVC	R0, [SB, #SB_Handle]
 	; Return the SB pointer as our descriptor stream handle...
 	MOVVC	R0, SB
@@ -169,7 +167,7 @@ DescriptorHandler_OpenStream Entry "R3-R11"
 ; *   R13	= preserved
 ; *   R14	= corrupted
 ; *
-DescriptorHandler_DataTransfer Entry "R4-R7, R10-R11"
+DescriptorHandler_DataTransfer Entry "R4-R8, R10-R11"
 	; Arrange registers in the order we want them...
 	MOV	CL, R12			; CL (R11) = parent client block pointer
 	LDR	WS, [CL, #CL_WS]	; WS (R12) = MPEGNDS module workspace pointer
@@ -185,6 +183,7 @@ DescriptorHandler_DataTransfer Entry "R4-R7, R10-R11"
 	;   R5  = number of bytes remaining to copy from complete descriptor
 	;   R6  = byte position in DSH buffer where the private_data_bytes will start
 	;   R7  = value of byte to copy
+	;   R8  = pointer to the previous bitstream packet descriptor in the chain
 	;   R10 = stream block pointer (SB)
 	;   R11 = client block pointer (CL)
 	;   R12 = module workspace pointer (WS)
@@ -193,11 +192,13 @@ DescriptorHandler_DataTransfer Entry "R4-R7, R10-R11"
 	LDR	R4, [SB, #SB_DSH_BufPtr]
 	LDR	R5, [SB, #SB_DSH_Remain]
 	ADD	R6, SB, #SB_DSH_Buffer + 3
+	MOV	R8, #0
 	CMP	R5, #CA_SKIP
 	BEQ	%FT09
 00	; While there are any bitstream packet descriptors to process...
-;	DAWriteS "00", LF
-	TEQ	R3, #0
+	MOVS	R0, R8
+	BLNE	Call_Bitstream_FreeRoutine
+	MOVS	R8, R3
 	BEQ	%FT09
 	LDR	R0, [R3, #PacketDescriptor_Flags]
         LDR	R2, [R3, #PacketDescriptor_Length]
@@ -211,23 +212,10 @@ DescriptorHandler_DataTransfer Entry "R4-R7, R10-R11"
 	DAWriteS "Reset", LF
 	BL	Reset_DSH
 01	; While there are bytes in the bitstream packet to process...
-;	DAWriteS , LF
-;	DAWriteS "01"
 	CMP	R1, R2
 	BHS	%BT00
 	LDRB	R7, [R1], #1
 	SUBS	R14, R6, R4
-; Push "R0,R5,LR"
-; MOV R5,R14
-; DAWriteS " LR=&", 0
-; DAHex3 R5
-; DAWriteS ",R6=&", 0
-; DAHex3 R6
-; DAWriteS ",R4=&", 0
-; DAHex3 R4
-; DAWriteS , LF
-; Pull "R0,R5,LR"
-; CMP R14, #0
 	; Special-case processing for bytes before the private_data_bytes...
 	ADDHS	PC, PC, R14, LSL #2		; Byte: Remain:	Meaning:
 	B	%FT03				; 4+	4+	private_data_bytes
@@ -236,20 +224,17 @@ DescriptorHandler_DataTransfer Entry "R4-R7, R10-R11"
 	B	%FT08				; 1	2	CA_system_ID (least significant byte)
 						; 0	3	CA_system_ID (most significant byte)
 07	; Copy the byte into our output buffer and move onto the next one...
-;	DAWriteS "07", LF
 	STRB	R7, [R4], #1
 	SUBS	R5, R5, #1
 	BNE	%BT01
 	B	%FT09				; Early exit if we're out of bytes
 02	; We have both bytes of the PID (13 bits). Get them and register a PEH on it...
-;	DAWriteS "02", LF
 	LDRB	R14, [R4, #-1]
 	ORR	R14, R7, R14, LSL #8
 	BIC	R14, R14, #0xE000
 	STR	R14, [SB, #SB_ECMPID]
 	BL	Register_PEH			; Does nothing if already registered
 03	; Shove the byte in our DSH buffer and see if we have all of the private_data_bytes...
-;	DAWriteS "03", LF
 	STRB	R7, [R4], #1
 	SUBS	R5, R5, #1
 	BNE	%BT01
@@ -269,28 +254,20 @@ DescriptorHandler_DataTransfer Entry "R4-R7, R10-R11"
 	BL	Reset_DSH
 	B	%BT01
 08	; Compare the CA_system_ID against that which the client wants...
-;	DAWriteS "08", LF
 	LDRB	R14, [R4, #-1]
 	ADD	R4, R4, #1
 	LDR	R0, [CL, #CL_CASID]
 	SUB	R5, R5, #1
 	ORR	R14, R7, R14, LSL #8
-; Push "R0,R5-R6,LR"
-; MOV R5,R0
-; MOV R6,R14
-; DAWriteS " R0=&", 0
-; DAHex3 R5
-; DAWriteS ",LR=&", 0
-; DAHex3 R6
-; DAWriteS , LF
-; Pull "R0,R5-R6,LR"
 	TEQ	R0, R14
 	BEQ	%BT01
 	; No match, mark this descriptor for skipping and exit...
 	DAWriteS "Reject", LF
 	MOV	R5, #CA_SKIP
-09	; Write the DSH buffer values back into the stream block and exit...
-;	DAWriteS "09", LF
+09	; If there is a bitstream packet left to free, do it now...
+	MOVS	R0, R8
+	BLNE	Call_Bitstream_FreeRoutine
+	; Write the DSH buffer values back into the stream block and exit...
 	STR	R4, [SB, #SB_DSH_BufPtr]
 	STR	R5, [SB, #SB_DSH_Remain]
 	DAWriteS "  DsH:Done", LF
@@ -352,25 +329,6 @@ DescriptorHandler_CloseStream Entry "R3-R4, R10-R11"
 ; *   R14	= corrupted
 ; *
 DescriptorHandler_ResetStream Entry "R3-R5, R10-R11"
-;	; Arrange registers in the order we want them...
-;	MOV	CL, R12			; CL (R11) = parent client block pointer
-;	LDR	WS, [CL, #CL_WS]	; WS (R12) = MPEGNDS module workspace pointer
-;	MOV	SB, R2			; SB (R10) = stream block pointer
-;
-; SWI XOS_WriteS
-; DCB "DSH_Reset()", LF, 0
-; ALIGN
-;
-;	DAWriteS "DsH_Reset()", LF
-;	; Call the client's ResetStream handler function...
-;	MOV	R0, #0
-;	LDR	R1, [SB, #SB_Handle]
-;	LDR	R4, [CL, #CL_ResetStream]
-;	BL	Call_Veneer
-;	; Reset some of the buffers for this stream...
-;	MOVVC	R5, #CA_INIT
-;	BLVC	Reset_DSH
-;	; Exit (with possible error)...
 	EXIT
 
 
