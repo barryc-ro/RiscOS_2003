@@ -37,7 +37,8 @@
 
 /* Local functions */
 
-static int play_find_speed (const char * rate);
+static int               play_find_speed (const char * rate);
+static _kernel_oserror * play_set_speed  (client * list, const char * rate, unsigned int flags);
 
 /**************************************************************/
 /* play_play()                                                */
@@ -50,10 +51,7 @@ _kernel_oserror * play_play(_kernel_swi_regs * r)
 {
   _kernel_oserror * e    = NULL;
   client          * list = find_client(r->r[1]);
-  char            * rate;
   int               or1;
-  int               type, old_type;
-  bool              mpd_present, mpd_matters;
 
   dprintf(("", "play_play: Called for %08X\n", r->r[1]));
 
@@ -66,15 +64,56 @@ _kernel_oserror * play_play(_kernel_swi_regs * r)
 
   if (list->ctrl.protocol == 0)
   {
-    _kernel_oserror * e = make_error(vc_ERROR_NOT_SETUP_YET, 0);
+    e = make_error(vc_ERROR_NOT_SETUP_YET, 0);
     sprintf(strchr(e->errmess, '\0'), " (%08x)", r->r[1]);
 
     return e;
   }
 
+  /* Change playback characteristics */
+
+  e = play_alter_playback_characteristics(list, (const char *) r->r[3]);
+  if (e != NULL) return e;
+
+  /* Call the protocol module SWI */
+
+  or1     = r->r[1];
+  r->r[1] = list->ctrl.id;
+  e       = _kernel_swi(list->ctrl.protocol + VC_Protocol_Play, r, r);
+  r->r[1] = or1;
+
+  return e;
+}
+
+/**************************************************************/
+/* play_alter_playback_characteristics()                      */
+/*                                                            */
+/* Prime the MPEG software for a change in the existing       */
+/* stream.                                                    */
+/*                                                            */
+/* Parameters: Pointer to the client struct for the stream in */
+/*             question;                                      */
+/*                                                            */
+/*             Pointer to a string holding the new Scale /    */
+/*             Speed value that the stream will change to.    */
+/*                                                            */
+/* Assumes:    Pointers are non-NULL and valid, and the       */
+/*             client struct does represent a stream (so      */
+/*             Setup has occurred etc., lastplay is filled in */
+/*             even if we've not started playing yet).        */
+/**************************************************************/
+
+_kernel_oserror * play_alter_playback_characteristics(client * list, const char * r3)
+{
+  const char * rate;
+  int          type, old_type;
+  bool         mpd_present, mpd_matters;
+
+  dprintf(("", "play_alter_playback_characteristics: Called for %08X / '%s'\n", list, r3));
+
   /* Remember the last and record the new play mode */
 
-  rate = (char *) r->r[3];
+  rate = r3;
   if (rate == NULL) rate = "1";
 
   if      (!strcmp(rate, "1")) type = MPEGCtrl_MCRS_Trick_Play;
@@ -136,14 +175,12 @@ _kernel_oserror * play_play(_kernel_swi_regs * r)
 
     if (type == MPEGCtrl_MCRS_Trick_Freeze)
     {
-      _kernel_oserror * e = _swix(MPEGControl_SetSpeed,
-                                  _INR(0,2),
+      RetError(_swix(MPEGControl_SetSpeed,
+                     _INR(0,2),
 
-                                  0,
-                                  list->ctrlhand,
-                                  0);
-
-      if (e != NULL ) return e;
+                     0,
+                     list->ctrlhand,
+                     0));
     }
 
     /* Otherwise, life is more complicated... */
@@ -153,7 +190,7 @@ _kernel_oserror * play_play(_kernel_swi_regs * r)
       /* For entering any slow motion forwards play, and if we can do reduced */
       /* data rate slowmo forwards, then provided we're in a forwards play    */
       /* mode at or less than 1x normal speed (including pause) just set the  */
-      /* speed (deferred). Under any other circumstances, set speed and reset */
+      /* speed (deferred). Under any other circumstances, set speed & reset.  */
 
       if (
            mpd_present == true &&
@@ -174,19 +211,7 @@ _kernel_oserror * play_play(_kernel_swi_regs * r)
            )
          )
       {
-        modulefp_buf buf;
-        int          speed;
-
-        modulefp_enable(&buf);
-        speed = play_find_speed(rate);
-        modulefp_disable(&buf);
-
-        e = _swix(MPEGControl_SetSpeed,
-                  _INR(0,2),
-
-                  MPEGCtrl_MCSS_DeferIfSlower,
-                  list->ctrlhand,
-                  speed);
+        RetError(play_set_speed(list, rate, MPEGCtrl_MCSS_DeferIfSlower));
       }
 
       /* If we were (before possibly pausing) and are [going to] normal */
@@ -194,14 +219,12 @@ _kernel_oserror * play_play(_kernel_swi_regs * r)
 
       else if (type == old_type && type == MPEGCtrl_MCRS_Trick_Play)
       {
-        e = _swix(MPEGControl_SetSpeed,
-                  _INR(0,2),
+        RetError(_swix(MPEGControl_SetSpeed,
+                       _INR(0,2),
 
-                  0,
-                  list->ctrlhand,
-                  1);
-
-        if (e != NULL) return e;
+                       0,
+                       list->ctrlhand,
+                       1));
       }
 
       /* For any other transition, reset and set speed. The reset is deferred */
@@ -229,44 +252,52 @@ _kernel_oserror * play_play(_kernel_swi_regs * r)
 
         /* OK, reset the stream (deferred) */
 
-        e = _swix(MPEGControl_ResetStream,
-                  _INR(0,2),
+        RetError(_swix(MPEGControl_ResetStream,
+                       _INR(0,2),
 
-                  mpf,
-                  list->ctrlhand,
-                  type);
+                       mpf,
+                       list->ctrlhand,
+                       type));
 
-        if (e != NULL) return e;
+        /* If we reach here in slow motion forwards play, we should do a  */
+        /* set speed after the reset (this time, not deferred). Similarly */
+        /* for reverse play.                                              */
 
-        /* Set speed to 1 - just want simply trick play, nothing special */
+        if (
+             mpd_present == true &&
+             (
+               type == MPEGCtrl_MCRS_Trick_SRWD ||
+               type == MPEGCtrl_MCRS_Trick_SFWD
+             )
+           )
+        {
+          RetError(play_set_speed(list, rate, 0));
+        }
 
-        e = _swix(MPEGControl_SetSpeed,
-                  _INR(0,2),
+        /* Otherwise, set speed to 1 - just want simply trick play, nothing special */
 
-                  0,
-                  list->ctrlhand,
-                  1);
+        else
+        {
+          RetError(_swix(MPEGControl_SetSpeed,
+                         _INR(0,2),
 
-        if (e != NULL) return e;
+                         0,
+                         list->ctrlhand,
+                         1));
+        }
       }
     }
   }
 
-  /* Call the protocol module SWI */
-
-  or1     = r->r[1];
-  r->r[1] = list->ctrl.id;
-  e       = _kernel_swi(list->ctrl.protocol + VC_Protocol_Play, r, r);
-  r->r[1] = or1;
-
-  return e;
+  return NULL;
 }
 
 /**************************************************************/
 /* play_find_speed()                                          */
 /*                                                            */
 /* Given a string holding a decimal fraction, find the lowest */
-/* integer for 1/<that_fraction>.                             */
+/* integer for 1/<that_fraction>. If the string indicates a   */
+/* negative number the sign is ignored.                       */
 /*                                                            */
 /* Must only be used after modulefp_enable has been called.   */
 /*                                                            */
@@ -280,10 +311,42 @@ static int play_find_speed(const char * rate)
   double d = atof(rate);
   int    speed;
 
-  if (d == 0) d = 1;
+  if      (d < 0)  d = -d;
+  else if (d == 0) d = 1;
 
   speed = (int) floor(1 / d);
   if (speed > MPEGCtrl_MCSS_SlowestRate) speed = MPEGCtrl_MCSS_SlowestRate;
 
   return speed;
+}
+
+/**************************************************************/
+/* play_set_speed()                                           */
+/*                                                            */
+/* For specific (and convoluted) play mode changes, set the   */
+/* speed within MPEGDriver. Service function for play_play,   */
+/* see comments at the call points for more.                  */
+/*                                                            */
+/* Parameters: Pointer to client structure for this stream;   */
+/*                                                            */
+/*             Pointer to string describing play rate;        */
+/*                                                            */
+/*             Flags for R0 in MPEGControl_SetSpeed.          */
+/**************************************************************/
+
+static _kernel_oserror * play_set_speed(client * list, const char * rate, unsigned int flags)
+{
+  modulefp_buf buf;
+  int          speed;
+
+  modulefp_enable(&buf);
+  speed = play_find_speed(rate);
+  modulefp_disable(&buf);
+
+  return _swix(MPEGControl_SetSpeed,
+               _INR(0,2),
+
+               flags,
+               list->ctrlhand,
+               speed);
 }

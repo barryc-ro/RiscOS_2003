@@ -17,9 +17,11 @@
 #include <stdlib.h>
 #include <stdbool.h>
 
+#include <Global/RISCOS.h>
+#include <Global/Services.h>
+#include <Global/Upcall.h>
 #include <swis.h>
 #include <sys/errno.h>
-#include <Global/Services.h>
 
 #ifdef TRACE2
   #define TRACE
@@ -31,6 +33,7 @@
 
 #include "Enumerate.h"
 #include "MoreInfo.h"
+#include "MPEGCtrl.h"
 #include "Options.h"
 #include "Play.h"
 #include "Protocol.h"
@@ -104,11 +107,15 @@ static void * module_wsp                        = NULL;
 
 static bool   callback_pending_flag             = false;
 static bool   clibrary_realloc_routine_is_buggy = false;
+static bool   upcallv_claimed                   = false;
 
 /* Local functions */
 
-static void              module_check_os_version (void);
-static void              module_tear_down        (void);
+static void              module_check_os_version      (void);
+static void              module_tear_down             (void);
+
+static _kernel_oserror * module_claim_upcall_vector   (void);
+static _kernel_oserror * module_release_upcall_vector (void);
 
 /**************************************************************/
 /* module_check_os_version()                                  */
@@ -222,7 +229,10 @@ _kernel_oserror * module_init(CMHG_CONST char * cmd_fail, int podule_base, void 
      )
      callback_pending_flag = true;
 
-  return NULL;
+  /* Claim UpCallV to see MPEG UpCalls */
+
+  e = module_claim_upcall_vector();
+  return e;
 }
 
 /**************************************************************/
@@ -238,6 +248,8 @@ _kernel_oserror * module_kill(int fatal, int podule, void * pw)
   (void) fatal;
   (void) podule;
 
+  /* Ensure pending callbacks are cancelled */
+
   if (callback_pending_flag == true)
   {
     (void) _swix(OS_RemoveCallBack,
@@ -247,6 +259,12 @@ _kernel_oserror * module_kill(int fatal, int podule, void * pw)
 
     callback_pending_flag = false;
   }
+
+  /* Get rid of the UpCallV handler */
+
+  module_release_upcall_vector();
+
+  /* Shut down everything else */
 
   module_tear_down();
   protocol_free_protocols();
@@ -279,6 +297,61 @@ _kernel_oserror * module_kill(int fatal, int podule, void * pw)
 }
 
 /**************************************************************/
+/* module_claim_upcall_vector()                               */
+/*                                                            */
+/* Claims the UpCall vector for the purpose of receiving the  */
+/* MPEG UpCall. A locking flag ensures multiple calls are     */
+/* dealt with correctly.                                      */
+/**************************************************************/
+
+_kernel_oserror * module_claim_upcall_vector(void)
+{
+  if (!upcallv_claimed)
+  {
+    _kernel_oserror * e;
+
+    e = _swix(OS_Claim,
+              _INR(0,2),
+
+              UpCallV,
+              upcall_entry,
+              module_wsp);
+
+    if (e == NULL) upcallv_claimed = true;
+    return e;
+  }
+
+  return NULL;
+}
+
+/**************************************************************/
+/* module_release_upcall_vector()                             */
+/*                                                            */
+/* Releases the UpCall vector. A locking flag ensures         */
+/* multiple calls are dealt with correctly.                   */
+/**************************************************************/
+
+_kernel_oserror * module_release_upcall_vector(void)
+{
+  if (upcallv_claimed)
+  {
+    _kernel_oserror * e;
+
+    e = _swix(OS_Release,
+              _INR(0,2),
+
+              UpCallV,
+              upcall_entry,
+              module_wsp);
+
+    if (e == NULL) upcallv_claimed = false;
+    return e;
+  }
+
+  return NULL;
+}
+
+/**************************************************************/
 /* callback_handler()                                         */
 /*                                                            */
 /* Standard callback handler.                                 */
@@ -306,6 +379,49 @@ int callback_handler(_kernel_swi_regs * r, void * pw)
         Module_VersionNumber);
 
   return 1;
+}
+
+/**************************************************************/
+/* upcall_handler()                                           */
+/*                                                            */
+/* General UpCall handler.                                    */
+/*                                                            */
+/* Parameters: As normal for a CMHG generic veneer.           */
+/**************************************************************/
+
+_kernel_oserror * upcall_handler(_kernel_swi_regs * r, void * pw)
+{
+  (void) pw;
+  (void) r;
+
+  if (r->r[0] == UpCall_MPEG)
+  {
+    client * c = client_list;
+//    _kernel_oserror * e;
+//    session         * s;
+
+    dprintf(("", "upcall_handler: Got UpCall_MPEG, flags %08x, for handle %08x - reason code = %d\n",r->r[1],r->r[2],r->r[3]));
+
+    if (
+         r->r[3] == UpCall_MPEG_SubReason_EOS   ||
+         r->r[3] == UpCall_MPEG_SubReason_Reset ||
+         r->r[3] == UpCall_MPEG_SubReason_Speed
+       )
+    {
+      while (c)
+      {
+        if (c->havectrl && c->ctrlhand == r->r[2])
+        {
+          c->opts.play_status = (r->r[3] == UpCall_MPEG_SubReason_EOS) ? vc_play_status_eos : vc_play_status_streaming;
+          break;
+        }
+
+        c = c->next;
+      }
+    }
+  }
+
+  return NULL;
 }
 
 /**************************************************************/
