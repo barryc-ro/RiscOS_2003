@@ -56,7 +56,8 @@ int ro_fread(void *ptr, int size, int items, int fh)
     gpb.dataptr = ptr;
     gpb.nbytes = size * items;
 
-    _kernel_osgbpb(4, fh, &gpb);
+    if (_kernel_osgbpb(4, fh, &gpb) == _kernel_ERROR)
+	return -1;
 
     return (size * items) - gpb.nbytes;
 }
@@ -70,7 +71,8 @@ int ro_freadpos(void *ptr, int size, int items, int fh, int pos)
     gpb.nbytes = size * items;
     gpb.fileptr = pos;
 
-    _kernel_osgbpb(3, fh, &gpb);
+    if (_kernel_osgbpb(3, fh, &gpb) == _kernel_ERROR)
+	return -1;
 
     return (size * items) - gpb.nbytes;
 }

@@ -1413,6 +1413,10 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 			used = be_doc_key_SUBMIT;
 			redraw = TRUE;
 		    }
+		    else if (action == key_action_NEWLINE_SUBMIT_LAST)
+		    {
+			used = be_doc_key_STEP_ON;
+		    }
 		}
 		break;
 	    case key_action_DELETE_LEFT:

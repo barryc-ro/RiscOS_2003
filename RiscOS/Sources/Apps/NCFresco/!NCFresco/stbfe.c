@@ -2806,6 +2806,7 @@ static int get_input_encoding(void)
 }
 #endif
 
+#if UNICODE
 static int convert_key_latin1(int key)
 {
     static unsigned short keys[] =
@@ -2821,16 +2822,19 @@ static int convert_key_latin1(int key)
 
     return key;    
 }
+#endif
 
-BOOL fe_writeable_handle_keys(fe_view v, int key)
+int fe_writeable_handle_keys(fe_view v, int key)
 {
-    int used = FALSE;
+    int used = be_doc_key_NOT_USED;
+    int event = fevent_PASS_ON;
 
     if (v && v->displaying)
     {
+#if UNICODE
 	int k;
 	
-	/* Need to translate this keycode to UCS4 - unles a function key */
+	/* Need to translate this keycode to UCS4 - unless a function key */
 	if (key > 256 && key < 512)
 	    k = -key;
 	else
@@ -2838,25 +2842,44 @@ BOOL fe_writeable_handle_keys(fe_view v, int key)
 	
 	if (k != 0xFFFD)
 	    backend_doc_key(v->displaying, k, &used);
+#else
+	backend_doc_key(v->displaying, key, &used);
+#endif
     }
 
     STBDBG(("fe_writeable_handle_keys: v %p key %d used %d\n", v, key, used));
 
-    if (used == be_doc_key_SUBMIT && on_screen_kbd)
+    switch (used)
     {
-	fe_keyboard_close();
-    }
+    case be_doc_key_SUBMIT:
+	if (on_screen_kbd)
+	    fe_keyboard_close();
+	event = fevent_HANDLED;
+	break;
 
-    if (used == be_doc_key_FILLED)
-    {
-	/* special mode for offline pages - vanish after filling an item */
+    case be_doc_key_FILLED:
+	/* special mode for offline pages - vanish after filling an item
+	 * only generated from filling a NUMBERS field.
+	 */
 	if (keyboard_state == fe_keyboard_OFFLINE && on_screen_kbd)
 	    fe_keyboard_close();
 	
-	return fevent_HIGHLIGHT_FORWARD;
+	event = fevent_HIGHLIGHT_FORWARD;
+	break;
+
+    case be_doc_key_STEP_ON:
+	event = fevent_SCROLL_OR_CURSOR_DOWN;
+	break;
+
+    case be_doc_key_NOT_USED:
+	break;
+	
+    case be_doc_key_USED:
+	event = fevent_HANDLED;
+	break;
     }
 
-    return used ? 0 : -1;
+    return event;
 }
 
 /* ------------------------------------------------------------------------------------------- */

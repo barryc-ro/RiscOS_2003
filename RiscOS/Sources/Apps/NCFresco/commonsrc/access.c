@@ -1569,8 +1569,12 @@ static void access_http_fetch_alarm(int at, void *h)
 
 	httpft.in.handle = d->transport_handle;
 	os_swix(HTTP_SetFileType, (os_regset *) &httpft);
-
+	
         ACCDBG(("HTTP set filetype %d\n", httpft.out.ftype ));
+
+	/* call status again as the file handle may have changed */
+	si.in.handle = d->transport_handle;
+	ep = os_swix(HTTP_Status, (os_regset *) &si);
 
 	d->ftype = httpft.out.ftype;
 	d->ft_is_set = 1;
@@ -1727,6 +1731,12 @@ static void access_http_fetch_alarm(int at, void *h)
 		{
 		    d->data.http.date = (unsigned)HTParseTime(list->value);
 		}
+ 		else if (strcasecomp("PRAGMA", list->key) == 0)
+ 		{
+ 		    /* understand incoming pragmas */
+ 		    if (strcasecomp(list->value, "no-cache") == 0)
+ 			d->data.http.expires = 0;
+ 		}
 #if UNICODE
 		else if (strcasecomp("CONTENT-TYPE", list->key) == 0)
 		{

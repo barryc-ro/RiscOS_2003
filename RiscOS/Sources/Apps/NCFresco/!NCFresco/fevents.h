@@ -4,6 +4,11 @@
 
  */
 
+/* don't change these numbers in case un#defined values are still lurking */
+#define fevent_HANDLED			    0
+#define fevent_PASS_ON			    (-1)
+#define fevent_PROCESS_KEY		    (-2)
+
 /* add this to a frame event to make it apply to the whole window */
 #define fevent_WINDOW                       0x1000
 #define fevent_CLEAR_POPUPS		    0x0800

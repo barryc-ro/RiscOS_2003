@@ -3267,7 +3267,8 @@ static void antweb_doc_progress2(void *h, int status, int size, int so_far, int 
         doc->flags &= ~doc_flag_DISPLAYING;
     }
 
-    if (status == doc->lstatus && so_far == doc->lbytes)
+    /* SJM: add requirement on a parser having been found already */
+    if (status == doc->lstatus && so_far == doc->lbytes && doc->pd != NULL)
 	return;
 
     if (threaded)
@@ -3289,7 +3290,8 @@ static void antweb_doc_progress2(void *h, int status, int size, int so_far, int 
     {
 	int lastptr = doc->lbytes;
 
-	if (doc->lstatus != status_GETTING_BODY || lastptr == -1)
+	/* SJM: if we don't have a parser then we can't have parsed anything */
+	if (doc->lstatus != status_GETTING_BODY || lastptr == -1 || doc->pd == NULL)
 	    lastptr = 0;
 
 	PPDBG(("Data arriving; type = 0x%03x, file=%d, last had %d, now got %d\n",
@@ -3621,6 +3623,42 @@ static access_complete_flags antweb_doc_complete2(void *h, int status, char *cfi
 		alarm_set(alarm_timenow()+(doc->rh->refreshtime * 100), be_refresh_document, doc);
 	}
 
+ 	/* update cache with information from headers
+ 	 * Note that encoding has already been handled in startmeta()
+ 	 */
+ 	{
+ 	    rid_meta_item *m;	
+ 	    unsigned last_modified, expires, date;
+ 	    int encoding;
+ 
+ 	    access_get_header_info(doc->url, &date, &expires, &last_modified, &encoding);
+ 
+ 	    for (m = doc->rh->meta_list; m; m = m->next)
+ 	    {
+ 		char *key = m->httpequiv ? m->httpequiv : m->name;
+ 
+ 		if (strcasecomp(key, "LAST-MODIFIED") == 0)
+ 		{
+ 		    last_modified = (unsigned)HTParseTime(m->content);
+ 		}
+ 		else if (strcasecomp("EXPIRES", key) == 0)
+ 		{
+ 		    expires = (unsigned)HTParseTime(m->content);
+ 		}
+ 		else if (strcasecomp("PRAGMA", key) == 0)
+ 		{
+ 		    if (strcasecomp(m->content, "no-cache") == 0)
+ 			expires = 0;
+ 		}
+ 		else if (strcasecomp("DATE", key) == 0)
+ 		{
+ 		    date = (unsigned)HTParseTime(m->content);
+ 		}
+ 	    }
+ 
+ 	    access_set_header_info(doc->url, date, expires, last_modified, encoding);
+ 	}
+ 	
 	frontend_view_status(doc->parent, sb_status_FINISHED); 
 
 	r = access_CACHE;

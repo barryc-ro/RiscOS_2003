@@ -2446,6 +2446,12 @@ os_error *fe_internal_toggle_panel_args(const char *panel_name, const char *args
 	if (on_screen_kbd)
 	    fe_keyboard_close();
 
+	/* if the user didn't request the status bar open then we must
+           have opened it with the popup in which case we want to
+           close it again */
+	if (use_toolbox && tb_is_status_showing() && !fe_status_open(main_view))
+	    fe_status_state(main_view, FALSE);
+
 	return NULL;
     }
 

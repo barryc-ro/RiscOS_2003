@@ -503,8 +503,11 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 		STBDBG(("fe_move_highlight_xy: XY no view found\n"));
 		return;
 	    }
-#endif
 	    STBDBG(("fe_move_highlight_xy: XY view found with stretched start box\n"));
+#else
+	    STBDBG(("fe_move_highlight_xy: XY no view found\n"));
+	    return;
+#endif
 	}
 
 	/* convert coords into relative to that view */

@@ -49,6 +49,7 @@ extern void startbody (SGMLCTX * context, ELEMENT * element, VALUES * attributes
 {
     HTMLCTX *me = htmlctxof(context);
     rid_header *rh = me->rh;
+    VALUE *attr;
 
     generic_start (context, element, attributes);
 
@@ -105,11 +106,13 @@ extern void startbody (SGMLCTX * context, ELEMENT * element, VALUES * attributes
 	htmlriscos_colour( &attributes->value[HTML_BODY_ALINK], &rh->colours.alink);
     }
 
-    if (attributes->value[HTML_BODY_LEFTMARGIN].type == value_integer)
-	rh->margin.left = attributes->value[HTML_BODY_LEFTMARGIN].u.i;
-    if (attributes->value[HTML_BODY_TOPMARGIN].type == value_integer)
-	rh->margin.top = attributes->value[HTML_BODY_TOPMARGIN].u.i;
+    if ((attr = &attributes->value[HTML_BODY_LEFTMARGIN])->type == value_integer ||
+	(attr = &attributes->value[HTML_BODY_MARGINWIDTH])->type == value_integer)
+	rh->margin.left = attr->u.i;
 
+    if ((attr = &attributes->value[HTML_BODY_TOPMARGIN])->type == value_integer ||
+	(attr = &attributes->value[HTML_BODY_MARGINHEIGHT])->type == value_integer)
+	rh->margin.top = attr->u.i;
 
     /* This happens in startartbody() now, as that is called where
        this is meant to be called, and startbody() is called when the

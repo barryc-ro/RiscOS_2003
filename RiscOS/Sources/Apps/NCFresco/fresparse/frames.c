@@ -213,13 +213,32 @@ extern void startframeset (SGMLCTX * context, ELEMENT * element, VALUES * attrib
     }
 
     /* use the outermost frameset to set the background colour for the page */
-#ifdef STBWEB
     if (me->frameset == NULL)
     {
+	/* dispose of any tile or bg set up by a BODY command */
+	free(me->rh->tile.src);
+	me->rh->tile.src = NULL;
+
+	me->rh->bgt &= ~(rid_bgt_IMAGE | rid_bgt_COLOURS);
+
+#ifdef STBWEB
+	/* for NCFresco always default to black background and look for extra attributes */
 	me->rh->bgt |= rid_bgt_COLOURS;
-	me->rh->colours.back = 0; /* container->bordercolour; */
-    }
+
+	if ((attr = &attributes->value[HTML_FRAMESET_BGCOLOR])->type != value_none)
+	    htmlriscos_colour( attr, &me->rh->colours.back );
+	else
+	    me->rh->colours.back = 0;
+
+	if ((attr = &attributes->value[HTML_FRAMESET_BACKGROUND])->type != value_none)
+	{
+	    me->rh->bgt |= rid_bgt_IMAGE;
+
+	    free(me->rh->tile.src);
+	    me->rh->tile.src = stringdup(attr->u.s);
+	}
 #endif
+    }
 
     /* save last frameset for when we unstack */
     frameset->old_frameset = me->frameset;

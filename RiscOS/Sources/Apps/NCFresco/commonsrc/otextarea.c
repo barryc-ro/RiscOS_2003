@@ -46,7 +46,7 @@
 #define UTF8_seqlen(a) 1
 #endif
 
-#define TXTDBG(a) DBG(a)
+#define TXTDBG(a) 
 #define TXTDBGN(a)
 
 #ifndef BUILDERS

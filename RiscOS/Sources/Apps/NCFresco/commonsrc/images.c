@@ -878,14 +878,14 @@ static int image_thread_process(image i, int fh, int from, int to)
 
     while (from < to && i->tt->status == thread_ALIVE)
     {
-	int len;
+	int len, toread;
 
-	len = (to-from) > IMAGE_THREAD_BUFFER_SIZE ? IMAGE_THREAD_BUFFER_SIZE : (to-from);
+	toread = (to-from) > IMAGE_THREAD_BUFFER_SIZE ? IMAGE_THREAD_BUFFER_SIZE : (to-from);
 
-	IMGDBGN(("Reading %d bytes from file %d.\n", len, fh));
+	IMGDBGN(("Reading %d bytes from file %d.\n", toread, fh));
 
-	/* this should check the values more carefully */
-	if (ro_freadpos(buffer, 1, len, fh, from) == len)
+	len = ro_freadpos(buffer, 1, toread, fh, from);
+	if (len > 0)
 	{
 	    IMGDBGN(("Sending %d bytes to the image thread.\n", len));
 
@@ -900,8 +900,12 @@ static int image_thread_process(image i, int fh, int from, int to)
 	    thread_run(i->tt);
 	    MemCheck_UnRegisterMiscBlock(buffer);
 	}
-
-	from += len;
+#if DEBUG
+	if (len == -1)
+	    IMGDBG(("Error: %s\n", ro_ferror()));
+#endif
+	
+	from += toread;
     }
 
     /* only check this if the thread has died, we were reading from the start
