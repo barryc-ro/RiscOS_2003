@@ -80,6 +80,12 @@ Expr *errornode;
 static Expr *mkctor_r(TypeExpr *t, Expr *e);
 #endif
 
+/* Current function number argument being checked, so that we can tell */
+/* precisely which argument caused the hassle.  Saves coders having to */
+/* put newlines between each actual parameter to find out which param  */
+/* it was that caused the problem.                                     */
+static int chkargnum=-1;
+
 /* memo: re-insert check on fn returning fn!!!                         */
 /* AM aug-88: Allow expansion of offsetof to be compile-time constant. */
 /* BIG thing to do soon: get correct op in error message for things
@@ -1135,8 +1141,93 @@ case s_typespec:
     cc_warn(sem_warn_format_type, t, (int)bufp, buf);
 }
 
+/* SNB 26/10/98 - added this for _swi/_swix parameter count/type checking */
+static void fmtswixchk(int32 flags, ExprList *l)
+{
+    /* flavour=4 => _swi/_swix - see swis.h pragma - SNB 23/10/98 */
+    unsigned int32 r, rflags = (unsigned int32) flags;
+    int32 has_block = (rflags & (1<<11));
+    int32 reg_block = (rflags >> 12) & 15;
+    int32 out_reg = (rflags >> 16) & 15;
+    int32 nins = 0, nouts = 0, totregs = 0;
+    ExprList *ll = l;
+    char *warn=has_block?sem_warn_swi_lots_few_regs:sem_warn_swi_some_few_regs;
+
+    for (r=0; r<10; ++r)
+    {  if (rflags & (1U<<r)) ++nins;
+       if (rflags & ((1U<<31)>>r)) ++nouts;
+    }
+    if (rflags & (1<<21)) ++nouts;
+    if (has_block) ++nins;
+
+    for (r=0; r<10; ++r)
+    {  if (rflags & (1U<<r))
+       {  if (has_block && r == reg_block)
+          {   if (suppress & D_NOSWIXCHECK) ++xwarncount;
+              else cc_warn(sem_warn_swi_block_in_clash, r);
+          }
+          if (ll)
+          {   TypeExpr *t = princtype(typeofexpr(exprcar_(ll)));
+              if (sizeoftype(t) != sizeof(int))
+              {   if (suppress & D_NOSWIXCHECK) ++xwarncount;
+                  else cc_warn(sem_warn_swi_need_int_sized_params, t, r);
+              }
+              ll=cdr_(ll);
+          }
+          else
+          {   if (suppress & D_NOSWIXCHECK) ++xwarncount;
+              else cc_warn(warn, nins+nouts, totregs);
+              totregs=-1;
+              break;
+          }
+          ++totregs;
+       }
+    }
+
+    if (totregs != -1)
+    for (r=0; r<11; ++r)
+    {  if (rflags & ((1U<<31)>>r))
+       {  if (has_block && r != 0 && r == out_reg)
+          {   if (suppress & D_NOSWIXCHECK) ++xwarncount;
+              else cc_warn(sem_warn_swi_block_out_clash, r);
+          }
+          if (ll)
+          {   TypeExpr *t = princtype(typeofexpr(exprcar_(ll)));
+              if (h0_(t) != t_content)
+              {   if (suppress & D_NOSWIXCHECK) ++xwarncount;
+                  else cc_warn(sem_warn_swi_out_needs_ptr, t, r);
+              }
+              else
+              {   if (sizeoftype(t->typearg) != sizeof(int))
+                  {   if (suppress & D_NOSWIXCHECK) ++xwarncount;
+                      else  cc_warn(sem_warn_swi_need_pint_sized_params, t->typearg, r);
+                  }
+                  if (qualifiersoftype(t->typearg) & bitoftype_(s_const))
+                  {   if (suppress & D_NOSWIXCHECK) ++xwarncount;
+                      else cc_warn(sem_warn_swi_no_const_output, r);
+                  }
+              }
+              ll=cdr_(ll);
+              ++totregs;
+          }
+          else
+          {   if (suppress & D_NOSWIXCHECK) ++xwarncount;
+              else cc_warn(warn, nins+nouts, totregs);
+              break;
+          }
+       }
+    }
+
+    if (totregs != -1 && ll && !has_block)
+    {   for (;ll; ll = cdr_(ll)) ++totregs;
+        if (suppress & D_NOSWIXCHECK) ++xwarncount;
+        else cc_warn(warn, nins+nouts, totregs);
+    }
+}
+
 static bool fmtchk(String *fmt, ExprList *l, int32 flavour)
 {   /* flavour=1 => s/f/printf, flavour=2 => s/f/scanf - see stdio.h pragma */
+    /* flavour=4 => _swi/_swix - see swis.h pragma - SNB 23/10/98 */
     /* returns TRUE if no floating point will be used & printf case */
     StringSegList *z;
     int state = 0; int32 nformals = 0, nactuals = 0;
@@ -1253,6 +1344,22 @@ static bool fmtchk(String *fmt, ExprList *l, int32 flavour)
 static Expr *formatcheck(Expr *e, ExprList *l, FormTypeList *d, int32 flavour)
 {   Expr *fmt = 0;
     ExprList *ll = l;
+    if (flavour==4)  /* SNB 23/10/98: SWI number check only for flavour 4 */
+    {   if (l)
+        {   fmt = exprcar_(ll);
+            if (fmt && h0_(fmt)==s_integer)
+            { if (fmt->arg1.i&(1<<17))
+              {   if (suppress & D_NOSWIXCHECK) ++xwarncount;
+                  else cc_warn(sem_warn_swi_xbitset);
+              }
+              if (fmt->arg1.i&(0xFF000000))
+              {   if (suppress & D_NOSWIXCHECK) ++xwarncount;
+                  else cc_warn(sem_warn_swi_number_illegal);
+              }
+            }
+            fmt=0;
+        }
+    }
     for (; d && ll; d = d->ftcdr, ll = cdr_(ll)) fmt = exprcar_(ll);
     if (d == 0 && fmt != 0)
     {   for (;;)
@@ -1289,6 +1396,15 @@ static Expr *formatcheck(Expr *e, ExprList *l, FormTypeList *d, int32 flavour)
                         }
                     }
                     break;
+    case s_integer: if (flavour==4)
+/* Here we check that we have a _swi or _swix call where the "format"      */
+/* string is the mask of flags defining the input and output registers     */
+/* on the SWI call.                                                        */
+                    {   fmtswixchk(fmt->arg1.i, ll);
+                        break;
+                    }
+
+
 /*
  * The warning message generated here will arise only if the -fussy -ansi
  * switches are set and indicates that a printf/scanf has been given where
@@ -1298,10 +1414,12 @@ static Expr *formatcheck(Expr *e, ExprList *l, FormTypeList *d, int32 flavour)
  * conversions even in cases where store could have been saved by using
  * the integer-only version.
  */
-    default:        if (1<=flavour && flavour<=3 &&
+    default:        if (1<=flavour && flavour<=4 &&
                             (feature & (FEATURE_PCC|FEATURE_FUSSY)) ==
                                 FEATURE_FUSSY)
-                        cc_warn(sem_warn_uncheckable_format);
+                    {   if (suppress & D_NONCONSTFORMATWARN) ++xwarncount;
+                        else cc_warn(sem_warn_uncheckable_format);
+                    }
                     break;
             }
             break;
@@ -3317,7 +3435,9 @@ static Expr *mkfnap_1(Expr *e, ExprList *l, FormTypeList *d,
 {   /* Beware: this routine side-effects the structure of 'l'.          */
     /* @@@ This routine should also add default args.                   */
     ExprList *ll, *lq = 0;
-    for (ll = l; ll != 0; lq = ll, ll = cdr_(ll))
+    chkargnum=1;
+    (void) snb_dynamic_bind(chkargnum);
+    for (ll = l; ll != 0; lq = ll, ll = cdr_(ll), snb_dynamic_bind(++chkargnum))
     {   Expr *elt = exprcar_(ll);
         TypeExpr *formtype = 0;
         /* avoid other error messages due to wrong no of args. */
@@ -3417,8 +3537,10 @@ static Expr *mkfnap_1(Expr *e, ExprList *l, FormTypeList *d,
             cc_rerr(sem_rerr_wrong_no_args, e);
       }
     }
+    chkargnum=-1;
+    (void) snb_dynamic_bind(chkargnum);
     if (!curried && fntypeisvariadic(t) && typefnaux_(t).variad > 0)
-        /* ho-hum, lets see if there's an illegal printf/scanf! */
+        /* ho-hum, lets see if there's an illegal printf/scanf/_swi/_swix! */
         e = formatcheck(e, l, typefnargs_(t), typefnaux_(t).variad);
     return mk_expr2(s_fnap, typearg_(t), e, (Expr *)l);
 }
@@ -3531,7 +3653,7 @@ static Expr *pointercast(AEop op, Expr *e, TypeExpr *te, TypeExpr *tr,
          */
         else if (isvoidtype(te))
         {   /* illegal in C++, so (later optionally) warn in ANSI C.    */
-            if (!errq && !(suppress & D_CPP)) cc_ansi_warn(sem_warn_narrow_voidstar);
+            if (!errq && !(suppress & D_CPP) && cplusplus_flag) cc_ansi_warn(sem_warn_narrow_voidstar);
             err = 0;
         }
 #endif
@@ -3539,8 +3661,6 @@ static Expr *pointercast(AEop op, Expr *e, TypeExpr *te, TypeExpr *tr,
             err = 2;
         err |= errq;
     }
-#define sem_rerr_implicit_cast5 \
-        "$s: qualifier-losing implicit cast of pointer"
     if (err && !(suppress & D_IMPLICITCAST))
     {   if (err & 2)
             cc_pccwarn(sem_rerr_implicit_cast1, op);
