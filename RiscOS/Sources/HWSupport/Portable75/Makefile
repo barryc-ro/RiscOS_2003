@@ -1,81 +1,20 @@
-# Makefile for Portable (Morris based)
+# Makefile for Portable (7500FE based)
 #
 # ***********************************
 # ***    C h a n g e   L i s t    ***
 # ***********************************
 # Date       Name         Description
 # ----       ----         -----------
-# 13-Oct-99  KJB          Nicked.
+# 09-Mar-01  SNB          Recreated
 #
 
-#
-# Paths
-#
-EXP_HDR = <export$dir>
+COMPONENT  = Portable75
+TARGET     = Portable
+HEADER1    = Portable
+ROM_SOURCE = GetAll.s
+RESOURCES  = no
 
-#
-# Generic options:
-#
-MKDIR   = cdir
-AS      = aasm
-CP      = copy
-RM      = remove
-CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
-CPFLAGS = ~cfr~v
-
-#
-# Program specific options:
-#
-COMPONENT = Portable
-SOURCE    = s.GetAll
-TARGET    = rm.${COMPONENT}
-TARGETSA  = rm.${COMPONENT}SA
-EXPORTS   = ${EXP_HDR}.${COMPONENT}
-RDIR      = Resources
-LDIR      = ${RDIR}.${LOCALE}
-
-#
-# Export Paths for Messages module
-#
-RESDIR = <resource$dir>.Resources2.${COMPONENT}
-
-#
-# Generic rules:
-#
-rom: ${TARGET}
-        @echo ${COMPONENT}: rom module built
-
-export: ${EXPORTS}
-        @echo ${COMPONENT}: export complete
-
-install_rom: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom module installed
-
-resources:
-        @echo ${COMPONENT}: resource files copied to Messages module
-
-clean:
-        ${RM} ${TARGET}
-        ${RM} ${TARGETSA}
-        @echo ${COMPONENT}: cleaned
-
-${TARGET}: ${SOURCE}
-        ${MKDIR} rm
-        ${AS} ${ASFLAGS} ${SOURCE}
-
-${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
-        ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
-
-#
-# Makes a stand-alone version with messages bound in
-#
-standalone: ${TARGETSA}
-        ${MKDIR} rm
-        @echo ${COMPONENT}: standalone module built
-
-${TARGETSA}: s.StandAlone ${LDIR}.Messages
-        ${AS} ${ASFLAGS} s.StandAlone
+include StdTools
+include AAsmModule
 
 # Dynamic dependencies:
