@@ -33,19 +33,12 @@ TRANSLATE	= translate
 # Paths and filenames for files and directories within this component:
 #
 INRESDIR	= LocalUserIFRes:Applet
-INVSNFILE	= LocalUserIFRes:Version
-#INPREDIR	= LocalUserIFRes:PreDesktop
-#INDESKDIR	= LocalUserIFRes:Desktop
 
 #
 # Destination paths and filenames for files and directories to be installed to:
 #
 OUTRESDIR	= $(INSTDIR).$(RES)
-OUTVSNDIR	= $(INSTDIR).$(VERSN)
-OUTVSNFILE	= $(OUTVSNDIR).$(COMPONENT)
 OUTCHOICEDIR	= $(INSTDIR).$(CHOICES)
-#OUTPREDIR	= $(INSTDIR).$(PRE)
-#OUTDESKDIR	= $(INSTDIR).$(DESK)
 
 #
 # Flags and translation macros:
@@ -100,8 +93,6 @@ rom_link:
 #
 install: translate dirs
 	$(CP) $(INRESDIR).*    $(OUTRESDIR).*       $(CPFLAGS)
-	$(CP) $(INVSNFILE)     $(OUTVSNFILE)        $(CPFLAGS)
-	Do $(AWK) -- "/.define.*CMHG.*/" VersionNum >>$(OUTVSNFILE)
         $(CHMOD) $(INSTDIR)
 	@echo $(COMPONENT): installed to $(INSTDIR)
 
@@ -113,7 +104,6 @@ translate: dirs
 
 dirs:
 	$(MKDIR) $(OUTRESDIR)
-	$(MKDIR) $(OUTVSNDIR)
 	$(MKDIR) $(OUTCHOICEDIR)
 
 # Dynamic dependencies:
