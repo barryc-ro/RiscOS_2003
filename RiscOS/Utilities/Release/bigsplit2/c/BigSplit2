@@ -23,6 +23,8 @@ typedef unsigned int uint16;  /* Waste space, but a speed gain */
 #error Need to check types
 #endif
 
+static int have_hal;
+
 char *progname="(BigSplit)";
 /* CRC table to speed up CRC calculation */
 static uint16 crc_table[CRC_TABLE_SIZE];
@@ -132,11 +134,14 @@ static void put_word(struct file_info *finfo, uint32 word) {
 /* Write a module to the output file preceded by the length (if not the
  * kernel),
  */
-static void add_module(struct file_info *finfo, char *mod, int kernel, int unlinked) {
+static void add_module(struct file_info *finfo, char *mod, int kernel, int hal, int unlinked) {
   int c;
-  int modsize;
+  unsigned long modsize;
   uint16 wb_crc,wb_indx;
+  unsigned long start = finfo->fi_pos;
   FILE *in;
+
+  /*printf("add_module: %d %d %s\n", kernel, hal, mod);*/
 
   in=fopen(mod,"r");
   if(!in) {
@@ -149,12 +154,12 @@ static void add_module(struct file_info *finfo, char *mod, int kernel, int unlin
     exit(1);
   }
   modsize=4+(int)ftell(in);
-  if(!kernel&&!unlinked)
+  if(!kernel&&!hal&&!unlinked)
     put_word(finfo,(modsize+3)&~3);
   rewind(in);
   printf("Adding module at 0x%.8x: %s\n",finfo->fi_pos,mod);
   while((c=fgetc(in))!=EOF) {
-    if(kernel&&finfo->fi_pos>=modsize-8)
+    if(kernel && finfo->fi_pos-start >=modsize-8)
       break;
     if(finfo->fi_pos<IMAGESIZE_OFFSET+4&&finfo->fi_pos>=IMAGESIZE_OFFSET) {
       c=(finfo->fi_imagesize>>((finfo->fi_pos-IMAGESIZE_OFFSET)*8))&0xff;
@@ -182,6 +187,7 @@ static char *getline(FILE *f) {
     *p=0;
   p=malloc(len=1+strlen(buf));
   memcpy(p,buf,len);
+  /*printf("BS>%s\n", p);*/
   return p;
 }
 
@@ -203,6 +209,10 @@ static void read_splitfile(char *forbigsplit, struct module **modptr,
     printf("%s: Could not get mosfile\n",progname);
     exit(1);
   };
+  if (memcmp(name, "HAL:", 4) == 0) {
+      memmove(name, name + 4, strlen(name) - 4 + 1);
+      have_hal = 1;
+  }
   if(!(*image=getline(splitfile),*image)) {
     printf("%s: Could not get image\n",progname);
     exit(1);
@@ -244,15 +254,19 @@ static void read_splitfile(char *forbigsplit, struct module **modptr,
 
 static void write_modules(struct module *modlist, struct file_info *finfo,
                           int maxsize) {
-  int kernel=1;
+  int kernel=1, hal=0;
   struct module *tmp;
   int chain_terminated = 0;
+  int modno = 0;
 
   while(modlist) {
     if (modlist->fixed_pos) {
-      if (!chain_terminated) {
+      if (modno > 1 && !chain_terminated) {
         put_word(finfo,0); /* End module chain */
         chain_terminated = 1;
+      }
+      else if (modno == 1) /* Fixed position second component must be Kernel after HAL */ {
+        kernel = 1;
       }
       if (finfo->fi_pos>modlist->fixed_pos) {
         fprintf(stderr, "%s: component overlaps previous data\n", progname);
@@ -264,8 +278,18 @@ static void write_modules(struct module *modlist, struct file_info *finfo,
           put_word(finfo,0xffffffff); /* Pad with 0xff */
       }
     }
-    add_module(finfo,modlist->name,kernel,modlist->fixed_pos);
+    if (have_hal) {
+      if (modno == 0) {
+        kernel = 0; hal = 1;
+      }
+      else if (modno == 1) {
+        kernel = 1;
+      }
+    }
+    add_module(finfo,modlist->name,kernel,hal,modlist->fixed_pos);
     kernel=0;
+    hal=0;
+    modno++;
     /* Check for overflow after every module */
     if(finfo->fi_pos>maxsize) {
       fprintf(stderr,"%s: ROM image overflowed by %d bytes in %s\n",progname,
