@@ -310,6 +310,9 @@ OBJSZ=  oz.NCMailUI oz.Engine
 # Main rules
 #
 
+translate: $(UI) localdirs
+	@echo
+
 export: export_$(PHASE) $(UI) $(APPENGINE) localdirs
 
 export_hdrs: 
