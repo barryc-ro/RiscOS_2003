@@ -320,12 +320,12 @@ void multicaster_run(multicaster_object *mo)
                 double bits_expected;
 
                 packets_this_loop = packets_per_loop;
-                if (total_bit_deviation > ((double) bits_per_packet * 1.15))
+                if (total_bit_deviation - ((double) bits_per_packet * 1.15) > 0.0)
                 {
                     packets_this_loop--;
                     packet_correction_down--;
                 }
-                if (total_bit_deviation < (0.0 - ((double) bits_per_packet) * 1.15))
+                if (total_bit_deviation + ((double) bits_per_packet * 1.15) < 0.0)
                 {
                     packets_this_loop++;
                     packet_correction_up++;
@@ -376,7 +376,7 @@ void multicaster_run(multicaster_object *mo)
             /* Divide bits we actually transmitted by bits we really wanted to, giving
              * the fraction of bits transmitted in this sample period.
              */
-            sample_bit_ratio = sample_bits_sent / sample_bits_expected;
+            sample_bit_ratio = (double) sample_bits_sent / (double) sample_bits_expected;
 
             /* Get hold of a double holding the current sleep period */
             old_delay = (double) current_delay;
