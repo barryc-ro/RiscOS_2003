@@ -89,7 +89,8 @@ OBJS      = 	${OM}.Main 		\
 	 	${OM}.MPEG		\
 	 	${OM}.ROMChksum		\
 	 	${OM}.ID		\
-	 	${OM}.gen_ir
+	 	${OM}.gen_ir		\
+	 	${OM}.Flash		
 	 						
 	 			
 .SUFFIXES: .${OM}
