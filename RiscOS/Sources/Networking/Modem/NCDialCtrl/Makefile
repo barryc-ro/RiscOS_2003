@@ -25,6 +25,7 @@ CFLAGS  = -c -depend !Depend -zM -zps1 -Wp -ff ${INCLUDES} -DDONT_BUILD_RESOURCE
 CMHGFLAGS = ${DFLAGS}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
+STRIP   = stripdepnd
 Datatoaofflags = -d "" -l _len -dp -s -p
 
 #
@@ -36,13 +37,18 @@ RSTUBS	  = RISCOSLIB:o.rstubs
 ROMSTUBS  = RISCOSLIB:o.romstubs
 ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM	  = RISC_OSLib:o.AbsSym
+SOCKLIB	   = TCPIPLibs:o.socklib5zm
+INETLIB	   = TCPIPLibs:o.inetlibzm
+UNIXLIB    = TCPIPLibs:o.unixlibzm
+LIBS       = <Lib$Dir>.tboxlibs.o.wimplib
+C++LIB     = <Lib$Dir>.c++lib.o.c++libz
+LIBSD      = <Lib$Dir>.DebugLib.o.debuglibzm
 
 #
 # Include files
 #
 INCLUDES = -IC:,TCPIPLibs:
 
-LIBS	 = TCPIPLibs:o.inetlibzm
 
 
 #
@@ -100,6 +106,7 @@ clean:
 	${WIPE} linked ${WFLAGS}
 	${RM} h.cmhg_modem
 	${RM} ${TARGET}
+	${STRIP}
 	@echo ${COMPONENT}: cleaned
 
 resources:
@@ -119,13 +126,13 @@ ${TARGET}: ${OBJS} ${ROMCSTUBS}
 #
 rom_link:
 	${MKDIR} linked
-	${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
+	${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM} ${SOCKLIB} ${INETLIB} ${RLIB} ${UNIXLIB}
 	${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
 	@echo ${COMPONENT}: rom_link complete
 
 ${TARGETSA}: ${OBJS} ${CLIB}
-	${LD} -o $@ -module ${OBJS} ${LIBS} ${CLIB}
-#	${LD} -v -map -o $@ -module ${OBJS} ${LIBS} ${CLIB}
+	${LD} -o $@ -module ${OBJS} ${LIBS} ${CLIB} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB} ${UNIXLIB}
+#	${LD} -v -map -o $@ -module ${OBJS} ${LIBS} ${CLIB} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB} ${UNIXLIB}
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 #	${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
