@@ -14,7 +14,7 @@
 # 21-Aug-99  SNB    Restored derived headers now that our master copies 
 #                   are in CVS. Added use of OPTIONS=ALL to force all 
 #                   Machine and ImageSize headers to be exported.
-#
+# 24-Aug 99  SBF    Added export of C headers, and support for StripDepnd tool
 
 #
 # Paths
@@ -31,6 +31,7 @@ CP       = copy
 RM       = remove
 TOKENISE = tokenise
 HDR2H    = build:Hdr2H
+STRIP    = stripdepnd
 
 CFLAGS   = -c -depend !Depend ${THROWBACK} -IC:
 AFLAGS   = -depend !Depend ${THROWBACK} -stamp -quit
@@ -118,6 +119,7 @@ EXPORTS   = \
  ${HDIR}.Global.h.SWIs \
  ${HDIR}.Global.h.Upcall \
  ${HDIR}.Global.h.Tokens \
+ ${HDIR}.Global.h.IOCtl \
 
 #
 # Derived assembler header files
@@ -153,6 +155,8 @@ clean:
 	${RM} ${FILETYPES}
 	${RM} ${SWIS}
         @echo ${COMPONENT}: derived headers cleaned
+        ${STRIP}
+        @echo ${COMPONENT}: dynamic dependancies removed from makefile
 
 #
 # Special rule for exporting all ImageSize and Machine files.
@@ -245,6 +249,9 @@ ${HDIR}.Global.h.Sprite:     Hdr.Sprite ${HDR2H};         perl ${HDR2H} Hdr.Spri
 ${HDIR}.Global.h.Tokens:     Hdr.Tokens ${HDR2H};         perl ${HDR2H} Hdr.Tokens     $@
 ${HDIR}.Global.h.CMOS:       Hdr.CMOS ${HDR2H};           perl ${HDR2H} Hdr.CMOS       $@
 
+
+# C headers:
+${HDIR}.Global.h.IOCtl:      h.IOCtl;               ${CP} h.IOCtl                  $@ ${CPFLAGS}
 
 # Machine/hardware specific headers:
 ${HDRDIR}.Machine.<Machine>: hdr.Machine.<Machine>; ${CP} hdr.Machine.<Machine>    $@ ${CPFLAGS}
