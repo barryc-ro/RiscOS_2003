@@ -19,6 +19,9 @@ OBJASM  = ObjAsm ${THROWBACK} -depend !Depend -stamp -quit
 CMHG    = CMHG
 LINK    = Link 
 ZM      = -zM
+WIPE    = -wipe
+WFLAGS  = ~c~vr
+RM      = remove
 
 STUBS   = CLib:o.Stubs
 
@@ -32,9 +35,9 @@ ABSSYM = RISC_OSLib:o.abssym
 #
 # Program specific options:
 #
-#COMPONENT  = Set in Components/Installation file to 'rom' or 'Repeat'
-TARGET = aof.BootCmds
-RESDIR = <resource$dir>.Resources2.BootCmds
+COMPONENT = BootCmds
+TARGET    = aof.${COMPONENT}
+RESDIR    = <resource$dir>.Resources2.BootCmds
 
 OBJS = o.files o.header o.main o.Messages o.Repeat o.riscos
 
@@ -51,31 +54,27 @@ RESOURCES = o.Messages o.Repeat
 # Generic rules {used by top-level build}:
 #
 
-all: ${COMPONENT}; @
+all: rm.${COMPONENT}
 
 rom: ${TARGET}
         @echo BootCmds: rom module built
 
-Repeat: Resources.Repeat; @
-        @echo Repeat: programme built
-
 export: 
         @echo BootCmds: export complete
 
-install: install_${COMPONENT}; @
+install: install_${COMPONENT}
 
 install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.BootCmds ${CPFLAGS}
-        @echo BootCmds: rom module installed
-
-install_Repeat: Resources.Repeat
-        ${CP} Resources.Repeat ${INSTDIR}.Repeat ${CPFLAGS}
-        @echo Repeat: installed
+        @echo ${COMPONENT}: rom module installed
 
 clean:
-       -Destroy RM.BootCmds ${OBJS} ${OBJSD} ${TARGET} map.BootCmds linked.BootCmds \
-        o.repeatcmd Resources.Repeat
-        @echo BootCmds: cleaned
+        ${WIPE} o.* ${WFLAGS}
+	${WIPE} rm.* ${WFLAGS}
+        ${WIPE} linked.* ${WFLAGS}
+        ${WIPE} map.* ${WFLAGS}
+        ${RM} ${TARGET}
+        @echo ${COMPONENT}: cleaned
 
 resources:
         ${MKDIR} ${RESDIR}
@@ -96,18 +95,13 @@ rom_link:
               -map > map.BootCmds
         truncate map.BootCmds linked.BootCmds
         ${CP} linked.BootCmds ${LINKDIR}.BootCmds ${CPFLAGS}
-        @echo BootCmds: rom_link complete
+        @echo ${COMPONENT}: rom_link complete
 
 #
 # Extra {development} rules:
 #
 
 asms: ${ASMS}
-
-release: RM.BootCmds
-   %Copy RM.BootCmds Root:RM.JCoxhead.BootCmds ~CFLNRV
-   /RM:BootCmds
-   @Echo Made release
 
 #Internal targets
 RM.BootCmds: ${OBJS} ${OSLIB} ${STUBS}
@@ -147,63 +141,3 @@ debug.trace: h.hostfs
 .def.s:;     DefMod -s < $< > $@
 
 # Dynamic dependencies:
-o.files: asm.files
-o.files: OS:Hdr.Types
-o.main:	c.main
-o.main:	C:h.kernel
-o.main:	OS:h.econet
-o.main:	OS:h.types
-o.main:	OS:h.os
-o.main:	OS:h.macros
-o.main:	OS:h.messagetrans
-o.main:	OS:h.netfs
-o.main:	OS:h.fileswitch
-o.main:	OS:h.os
-o.main:	OS:h.osargs
-o.main:	OS:h.osbyte
-o.main:	OS:h.osfile
-o.main:	OS:h.osfscontrol
-o.main:	OS:h.osfind
-o.main:	OS:h.osgbpb
-o.main:	OS:h.osmodule
-o.main:	OS:h.resourcefs
-o.main:	OS:h.territory
-o.main:	h.riscos
-o.main:	h.jc_trace
-o.main:	h.files
-o.main:	h.main
-o.main:	C:h.kernel
-o.main:	h.lookup
-o.main:	h.resource
-o.main:	OS:h.wimp
-o.main:	OS:h.osspriteop
-o.main:	OS:h.font
-o.main:	h.run
-o.main:	OS:h.os
-o.repeatcmd:	c.repeatcmd
-o.repeatcmd:	C:h.kernel
-o.repeatcmd:	OS:h.os
-o.repeatcmd:	OS:h.types
-o.repeatcmd:	OS:h.osfile
-o.repeatcmd:	OS:h.fileswitch
-o.repeatcmd:	OS:h.osfscontrol
-o.repeatcmd:	OS:h.osgbpb
-o.repeatcmd:	OS:h.wimp
-o.repeatcmd:	OS:h.osspriteop
-o.repeatcmd:	OS:h.font
-o.repeatcmd:	OS:h.wimpspriteop
-o.riscos:	c.riscos
-o.riscos:	OS:h.messagetrans
-o.riscos:	OS:h.types
-o.riscos:	OS:h.os
-o.riscos:	OS:h.macros
-o.riscos:	OS:h.os
-o.riscos:	OS:h.territory
-o.riscos:	OS:h.wimp
-o.riscos:	OS:h.osspriteop
-o.riscos:	OS:h.font
-o.riscos:	h.m
-o.riscos:	h.realloc
-o.riscos:	C:h.trace
-o.riscos:	h.riscos
-o.riscos:	C:h.trace
