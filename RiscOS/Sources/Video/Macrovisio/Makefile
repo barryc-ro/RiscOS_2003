@@ -44,7 +44,8 @@ rom: ${ROMTARGET}
         @echo ${COMPONENT}: rom modules built
 
 clean:
-	${WIPE} rm.* ~CR~V
+	-${WIPE} rm.* ~CR~V
+	${RM} data.YUVTable
         @echo ${COMPONENT}: module cleaned
 
 export: ${EXPORTS}
