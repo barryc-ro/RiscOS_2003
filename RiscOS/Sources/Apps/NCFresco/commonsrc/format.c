@@ -1611,7 +1611,7 @@ static void recurse_format_stream(antweb_doc *doc,
 /* Never scale things to under this percentage */
 /* 576/640 = 0.9 = ideal ratio. go for less though! */
 #define MIN_SCALE	80
-#define SCALE_UNIT	10
+#define SCALE_UNIT	4
 
 /* Allow a bit of play to avoid a few pixels over becoming a lot of pixels under */
 #define AUTOFIT_THRESHOLD 32

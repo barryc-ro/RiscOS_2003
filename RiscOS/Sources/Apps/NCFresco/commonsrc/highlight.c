@@ -31,8 +31,8 @@
 #define render_colour_highlight_D	(0x00880000 | render_colour_RGB)
 #define render_colour_highlight_M	(0xffffff00 | render_colour_RGB)
 #else
-#define render_colour_highlight_L	plinth_col_B_L
-#define render_colour_highlight_D	plinth_col_B_D
+#define render_colour_highlight_L	plinth_col_B_M
+#define render_colour_highlight_D	plinth_col_B_L
 #define render_colour_highlight_M	(0xffffff00 | render_colour_RGB)
 #endif
 
@@ -175,11 +175,26 @@ static int hl_colours[] =
     render_colour_highlight_M
 };
 
+static int hl_colours_text[] =
+{
+    render_colour_highlight_L,
+    render_colour_highlight_D,
+    render_colour_highlight_M,
+    render_colour_highlight_M
+};
+
 static int get_colour(int i)
 {
     return config_display_highlight_style == highlight_style_SIMPLE || i >= sizeof(hl_colours)/sizeof(hl_colours[0]) ?
 	render_colour_HIGHLIGHT :
 	hl_colours[i];
+}
+
+static int get_colour_text(int i)
+{
+    return config_display_highlight_style == highlight_style_SIMPLE || i >= sizeof(hl_colours_text)/sizeof(hl_colours_text[0]) ?
+	render_colour_HIGHLIGHT :
+	hl_colours_text[i];
 }
 
 void highlight_render_outline(be_item ti, antweb_doc *doc, int hpos, int bline)
@@ -417,7 +432,7 @@ void highlight_draw_text_box(rid_text_item *ti, antweb_doc *doc, int b, int hpos
 
 	for (i = 0; i < n; i++)
 	{
-	    int col = get_colour(i);
+	    int col = get_colour_text(i);
 
 	    if (col != last_col)
 		render_set_colour(last_col = col, doc);

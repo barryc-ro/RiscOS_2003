@@ -531,7 +531,7 @@ static plugin first_helper(void)
 {
     plugin pp;
     for (pp = plugin_list; pp; pp = pp->next)
-	if ((pp->priv_flags & plugin_priv_HELPER) || (pp->opening_flags & plugin_opening_HELPER))
+	if ((pp->priv_flags & plugin_priv_HELPER)/*  || (pp->opening_flags & plugin_opening_HELPER) */)
 	    return pp;
     return NULL;
 }
@@ -542,7 +542,7 @@ static int helpers_open(void)
     int count = 0;
     for (pp = plugin_list; pp; pp = pp->next)
     {
-	if (((pp->priv_flags & plugin_priv_HELPER) || (pp->opening_flags & plugin_opening_HELPER)) &&
+	if (((pp->priv_flags & plugin_priv_HELPER)/* || (pp->opening_flags & plugin_opening_HELPER) */) &&
 	    pp->state == plugin_state_OPEN)
 	{
 	    count++;

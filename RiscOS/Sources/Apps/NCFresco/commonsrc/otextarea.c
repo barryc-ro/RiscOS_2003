@@ -165,6 +165,8 @@ static int get_offsets(rid_textarea_item *tai, int line, int *pthis_off, int *pn
 {
     int i, this_off, next_off, len;
     
+    TXTDBG(("get_offsets: tai%p line %d\n", tai, line));
+
     this_off = next_off = 0;
     
     for (i = 0; i <= line; i++)
@@ -183,6 +185,8 @@ static int get_offsets(rid_textarea_item *tai, int line, int *pthis_off, int *pn
     if (len > 0 && next_off > 0 && tai->text.data[next_off-1] == '\n')
 	len--;
     
+    TXTDBG(("get_offsets: returns this %d next %s len %d\n", this_off, next_off, len));
+
     return len;
 }
 
@@ -227,6 +231,8 @@ static void otextarea_copy_defaults(rid_textarea_item *tai)
 	memcpy(tai->text.data, tai->default_text.data, tai->default_text.used);
 	tai->text.used = tai->default_text.used;
 
+	TXTDBG(("default area: '%.*s'\n", tai->default_text.used, tai->default_text.data));
+	
 	flexmem_shift();
 
 	/* tidy this block now */
