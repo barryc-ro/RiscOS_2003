@@ -21,7 +21,7 @@ CFLAGS  = -depend !Depend ${INCLUDES} -c -zM -ffah ${DFLAGS} -DIR_CLIENT -DSWAP_
 #DFLAGS  = -DDEBUG=3
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
-INCLUDES= -IC: -IINetInc: -IINetInc:^.^.libs
+INCLUDES= -IC:
 
 #
 # Libraries
@@ -39,6 +39,14 @@ ABSSYM    = RISC_OSLib:o.AbsSym
 TARGET    = aof.${COMPONENT}
 OBJS      = module.o driver.o ir_api.o header.o veneers.o \
             cabtbls.o tvtbls.o vcrtbls.o codetables.o
+
+
+dirs:
+        ${MKDIR} o
+        ${MKDIR} aof
+        ${MKDIR} rm
+        ${MKDIR} linked
+        ${MKDIR} map
 
 #
 # Rule patterns
@@ -77,27 +85,26 @@ clean:
 #
 # Stand-alone module
 #
-rm.${COMPONENT}: ${OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
+rm.${COMPONENT}: ${OBJS} ${CLIB} ${SOCKLIB} ${INETLIB} dirs
 	${LD} -o $@ -module ${OBJS} ${CLIB} ${SOCKLIB} ${INETLIB}
 
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS} ${ROMCSTUBS}
-	${MKDIR} aof
-	${MKDIR} o
+${TARGET}: ${OBJS} ${ROMCSTUBS} dirs
 	${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
+
+
 
 #
 # Final link for the ROM Image (using given base address)
 #
 rom_link:
-	${MKDIR} linked
-	${MKDIR} map
 	${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
 	truncate map.${COMPONENT} linked.${COMPONENT}
 	${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
 	@echo ${COMPONENT}: rom_link complete
+
 
 
 
