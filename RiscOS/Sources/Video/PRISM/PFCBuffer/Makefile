@@ -32,7 +32,7 @@ RESDIR		= <resource$dir>.Resources2.PRISM
 # Generic options
 #
 
-MKDIR		= cdir
+MKDIR		= do mkdir -p
 CC		= cc
 CMHG		= cmhg
 CP		= copy
@@ -158,8 +158,8 @@ all: ${RAM_MODULE} ${DIRS}
 	@echo
 
 install: ${RAM_MODULE}
-	${MKDIR} ${INSTDIR}.310.Modules.PRISM
-	${CP} ${RAM_MODULE} ${INSTDIR}.310.Modules.PRISM.${COMPONENT}
+	${MKDIR} ${INSTDIR}
+	${CP} ${RAM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
 	@echo
 	@echo ${COMPONENT}: Module installed (Disc)
 	@echo
@@ -241,14 +241,14 @@ ${MSGSF}: LocalRes:Messages
 	TokenCheck LocalRes:Messages
 	resgen messages_file ${MSGSF} LocalRes:Messages Resources.PRISM.${COMPONENT}.Messages
 
-${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${LIBS} ${CLIB}
+${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${LIBS} ${CLIB} ${DIRS}
 	@echo
 	${MKDIR} rm
 	${LD} -o $@ -module ${RAM_OBJS} ${MSGSF} ${LIBS} ${CLIB}
 	${MODSQZ} $@
 	Access $@ RW/R
 
-${DBG_MODULE}: ${DBG_OBJS} ${MSGSF} ${LIBS} ${CLIB}
+${DBG_MODULE}: ${DBG_OBJS} ${MSGSF} ${LIBS} ${CLIB} ${DIRS}
 	@echo
 	${MKDIR} rm
 	${LD} -o $@ -module ${DBG_OBJS} ${MSGSF} ${LIBS} ${CLIB}
