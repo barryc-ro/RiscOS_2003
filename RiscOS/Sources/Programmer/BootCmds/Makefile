@@ -64,6 +64,10 @@ export:
 
 install: install_${COMPONENT}
 
+install_BootCmds: RM.BootCmds
+        ${CP} RM.BootCmds ${INSTDIR}.BootCmds ${CPFLAGS}
+        @echo ${COMPONENT}: ram module installed
+
 install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.BootCmds ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
