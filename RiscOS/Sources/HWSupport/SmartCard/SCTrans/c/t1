@@ -132,7 +132,8 @@ t1_ProcessByte(BYTE ch)
     debug_printf(db, "t1_ReadResponse(), Received block correctly\n");
     RXPckt.total_len += RXPckt.LEN;
     RXPckt.data_start += RXPckt.LEN;
-    t1_DecodeBlk();		// equal (ie: valid blk rec'd) so decode blk
+    return t1_DecodeBlk();	// Decode the block and return the error code
+                                //  (bug fix: error codes were discarded before v0.41)
   } else {			// not equal so construct and send an R-Blk
     debug_printf(db, "t1_ReadResponse(), Received block, check sum error\n");
 
@@ -167,7 +168,7 @@ On Entry - slot           card slot number
            exp_len        expected length (Le) of response if required. 0 otherwise.
            t1_extended
 
-On Exit:                  Returns pointer to error block or 0 for success
+On Exit:   Returns pointer to error block or 0 for success
 
 
 The data_len may be greater than IFSC (Interface Field Size for Card) in which case
@@ -432,10 +433,17 @@ Chaining_Sequence(int datalength)
 
 
 /**************************************************************************/
-void
-t1_DecodeBlk(void)
-/**************************************************************************/
+/*   Decode a Block for Slot 1
+     -------------------------
+
+Returns error code on exit (added in v0.42).
+
+*/
+
+int t1_DecodeBlk(void)
 {
+  int err=SCI_SUCCESS;
+
   //printf("Entering t1_DecodeBlk()\n");
   if ((RXPckt.PCB & 0x80) == 0x00) {	// is it an I-Blk?
     Process_IBlk();
@@ -443,9 +451,10 @@ t1_DecodeBlk(void)
     if ((RXPckt.PCB & 0x40) == 0x40) {
       Process_SBlk();
     } else {
-      Process_RBlk();		// not I-Blk or R-Blk so must be an S-Blk
+      err=Process_RBlk();		// not I-Block or S-Block so must be an R-Block
     }
   }
+  return err;                           /* Return error code to caller - added in v0.42 */
 }
 
 /*************************************************************************/
@@ -550,12 +559,12 @@ SendRBlock(int seq_no, BYTE type)
 
 /*****************************************************************************
 
-     Process Received Block
-     ----------------------
+     Process Received R-Block
+     ------------------------
 
-If response to I-Blk with chaining - need to send another I-Blk
+If R-block is reporting an error re-send the last command.
 
-If it is response to chaining - need to construct another I-Blk to send
+If it is a response to I-Blk with chaining - send the next I-Block
 
 */
 
@@ -563,40 +572,40 @@ If it is response to chaining - need to construct another I-Blk to send
 int
 Process_RBlk(void)
 {
-  int err;
-
-
   debug_printf(db, "Entering Process_RBlk()\n");
 
   LRC_Len = 3;			// NAD, PCB and LEN
 
-  if (Command.chaining == true) {	// check if response to chaining
-    // need to send another I_Blk
-    #ifdef FUNAI_TWINSLOT
-      com_SendAck(); /* Ack the last response first! */
-      g_uc_state = UC_IDLE; /** Finito, can get insert/remove events now **/
-    #endif
-    return SendIBlock();
-  } else {
-    if ((RXPckt.PCB > 80 && RXPckt.PCB < 90) ||
-    	(RXPckt.PCB > 90))
-    {	// is the R-Blk an error?
-      debug_printf(db, "ERROR seen in RBlk. PCB=&%02X Retry=%d\n",RXPckt.PCB,Retry);
-      #ifdef FUNAI_TWINSLOT
-        com_SendAck(); /* Ack the last response first! */
-        g_uc_state = UC_IDLE; /** Finito, can get insert/remove events now **/
-      #endif
-      if (Retry < 3)
-      {
+#ifdef FUNAI_TWINSLOT
+  com_SendAck(); /* Ack the last response first! */
+  g_uc_state = UC_IDLE; /** Finito, can get insert/remove events now **/
+#endif
+
+  if ((RXPckt.PCB > 0x80 && RXPckt.PCB != 0x90))  	/* is the R-Blk an error? */
+  {
+    debug_printf(db, "ERROR seen in RBlk. PCB=&%02X Retry=%d\n",RXPckt.PCB,Retry);
+    if (Retry < 3)
+    {
 	Retry++;		// increment retry counter
 	// no need to copy info into Command structure as still in there from
 	// when sent the first time
-	err = SendBlk(&Command);	// resend the blk
-	return err;
-      } else {
-	return SCI_FAIL;	// respond with error
-      }
-    } else {			// R-Blk not an error
+        if (Command.chaining)
+        {
+	  Command.data_start -= Command.LEN; /* Rewind, so that we re-send the last block again */
+          Command.len_sent   -= Command.LEN;
+        }
+	return SendBlk(&Command);	// resend the blk
+    } else {
+      RETERR(SCI_E_INVAL);              /* Return error code */
+    }
+  }
+  else
+  {			                   // R-Blk not an error
+    if (Command.chaining == true) {        // check if response to chaining
+      return SendIBlock();                 // Send the next I_Blk in the chain
+    }
+    else
+    {
       return SCI_SUCCESS;	// not an error so return success
     }
   }
@@ -713,15 +722,8 @@ SendBlk(T1_PCKT * command)
   for (i = 0; i < len; i++)
     blk[i + 3] = command->DATA[i + command->data_start];
   blk[len + 3] = command->TCK;
-  pms_debug("  Sent> %s", pms_convert_hex(blk, len+4));
-/*
-  printf("Sending block: ");
-  for (i = 0; i < len + 4; i++) {
-     printf("%02X ", blk[i]);
-  }
-  printf("\n");
-*/
-  // DS
+  pms_debug("  Sent> %s", pms_convert_hex(blk, len+4)); /* Convert block to hex string for debug */
+
   /* bug fix - apirozek - added if statement */
   if ( command->chaining)
   {
