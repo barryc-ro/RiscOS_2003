@@ -21,7 +21,7 @@ RESFSDIR   = Resources.URL.${COMPONENT}
 #
 # Export Paths for Messages module
 #
-RESDIR = <resource$dir>.Resources2.${COMPONENT}
+RESDIR = <resource$dir>.Resources2.URL
 
 #
 # Generic options:
@@ -115,8 +115,8 @@ install_rom: ${ROM_MODULE}
 
 resources: Resources.${LOCALE}.Messages
         ${MKDIR} ${RESDIR}
-        ${MKDIR} ${RESDIR}.URL
-        ${CP} Resources.${LOCALE}.* ${RESDIR}.URL.* ${CPFLAGS}
+        ${MKDIR} ${RESDIR}.${COMPONENT}
+        ${CP} Resources.${LOCALE}.* ${RESDIR}.${COMPONENT}.* ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied to Messages module
 
 clean:
