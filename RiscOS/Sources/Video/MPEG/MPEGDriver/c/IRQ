@@ -203,6 +203,15 @@ Date		Who	Change
 #include "Types.h"
 #include "WSS.h"
 
+#include "Debug.h"
+#if Debugging==1
+#include "DWrite.h"
+#include "ReEntDebug.h"
+/* The following CLib functions aren't defined in any header files! */
+void _memcpy (void *dest, void *source, int n);
+void _memset (void *dest, int w, int n);
+#endif
+
 /*****************/
 /* Private types */
 /*****************/
@@ -282,6 +291,11 @@ static void static_ProcessCCData (unsigned int handler, unsigned int flags, cons
 /* Public variables */
 /********************/
 
+#if Debugging==1 && DebugProfiling==1
+unsigned int IRQ_IRQCount [profileirq_LIMIT];
+unsigned int IRQ_IRQTime [profileirq_LIMIT];
+#endif
+
 /*********************/
 /* Private variables */
 /*********************/
@@ -292,6 +306,16 @@ static char Deferred_VID_TIS;
 static bool Deferred_VID_DCF_LB_Pending;
 static char Deferred_VID_DCF_LB;
 static int DisplayFrameHackyScanOffset; /* in units of macroblock row pairs */
+#if Debugging==1
+#if DebugProfiling==1
+static unsigned int IRQStartTime;
+static unsigned int Working_IRQCount [profileirq_LIMIT];
+static unsigned int Working_IRQTime [profileirq_LIMIT];
+#endif
+#if DebugReentrancy==1
+static unsigned int IrqStackDepthOnEntry;
+#endif
+#endif
 
 /*********************/
 /* Private constants */
@@ -398,6 +422,18 @@ static const fixed upscaling_lut [vsf_LIMIT] =
   0x40000
 };
 
+/*******************************************************/
+/* Nasty hacky macros - only active in profiling builds */
+/*******************************************************/
+
+#if Debugging==1 && DebugProfiling==1
+#define START_IRQ(TLA) IRQStartTime=Clk_GetHiResTime();
+#define END_IRQ(TLA) Working_IRQCount[profileirq_##TLA]++; Working_IRQTime[profileirq_##TLA]+=(Clk_GetHiResTime()-IRQStartTime)/2;
+#else
+#define START_IRQ(TLA)
+#define END_IRQ(TLA)
+#endif
+
 /********************/
 /* Public functions */
 /********************/
@@ -411,9 +447,40 @@ Purpose:	Video IRQ entry point
 void IRQ_HandleVideoIRQ (void)
 {
   static unsigned int video_ints; /* must be static because the coroutine only takes a copy of the address on entry */
-//  static bool threaded = false;
-//  if (threaded) _swix (OS_CallAVector, _INR(0,2)|_IN(4)|_IN(9), 0, 24, 0xff00, 2, 0x23); /* set border red if re-entered */
-//  threaded = true;
+#if Debugging==1 && DebugReentrancy==1
+  static unsigned int threaded = 0;
+//static int counter=100;
+//if (counter-- == 0)
+//{
+//  ReEntDebug_OutputDebug (1);
+//  _swix (OS_CallAVector, _INR(0,2)|_IN(4)|_IN(9), 0, 24, 0xff00, 2, 0x23); /* set border red if re-entered */
+//}
+  if (threaded > 0)
+  {
+    int *ptr = *(int **) 0x108;
+    unsigned int IrqStackDepthWhenReEntered = 0;
+    while (ptr != NULL)
+    {
+      IrqStackDepthWhenReEntered++;
+      ptr = (int *) *ptr;
+    }
+    ReEntDebug_OutputDebug (IrqStackDepthWhenReEntered - IrqStackDepthOnEntry);
+    * (volatile unsigned char *) (IOC + IOCIRQMSKA) &= ~(1<<7);
+    _swix (OS_CallAVector, _INR(0,2)|_IN(4)|_IN(9), 0, 24, 0xff00, 2, 0x23); /* set border red if re-entered */
+  }
+  else
+  {
+    int *ptr = *(int **) 0x108;
+    IrqStackDepthOnEntry = 0;
+    while (ptr != NULL)
+    {
+      IrqStackDepthOnEntry++;
+      ptr = (int *) *ptr;
+    }
+    * (volatile unsigned char *) (IOC + IOCIRQMSKA) |= 1<<7;
+  }
+  threaded++;
+#endif
   do
   {
     video_ints = VID_ITS;
@@ -428,25 +495,80 @@ void IRQ_HandleVideoIRQ (void)
       /* interrupt handler should be called for each iteration of the loop.  */
       while ((video_ints & (VIDEO_INT_SCH | VIDEO_INT_BBF | VIDEO_INT_VSB | VIDEO_INT_VST | VIDEO_INT_PSD | VIDEO_INT_PID | VIDEO_INT_HFF)) != 0)
       {
-        if (video_ints & VIDEO_INT_SCH) static_INT_SCH (&video_ints);
-        else if (video_ints & VIDEO_INT_BBF) static_INT_BBF (&video_ints);
-        else if (video_ints & VIDEO_INT_VSB) static_INT_VS (false, &video_ints);
-        else if (video_ints & VIDEO_INT_VST) static_INT_VS (true, &video_ints);
-        else if (video_ints & VIDEO_INT_PSD) static_INT_PSD (&video_ints);
-        else if (video_ints & VIDEO_INT_PID) static_INT_PID (&video_ints);
-        else if (video_ints & VIDEO_INT_HFF) static_INT_HFF (&video_ints);
+        if (video_ints & VIDEO_INT_SCH)
+        {
+          START_IRQ(SCH);
+          static_INT_SCH (&video_ints);
+          END_IRQ(SCH);
+        }
+        else if (video_ints & VIDEO_INT_BBF)
+        {
+          START_IRQ(BBF);
+          static_INT_BBF (&video_ints);
+          END_IRQ(BBF);
+        }
+        else if (video_ints & VIDEO_INT_VSB)
+        {
+          START_IRQ(VSB);
+          static_INT_VS (false, &video_ints);
+          END_IRQ(VSB);
+        }
+        else if (video_ints & VIDEO_INT_VST)
+        {
+          START_IRQ(VST);
+          static_INT_VS (true, &video_ints);
+          END_IRQ(VST);
+        }
+        else if (video_ints & VIDEO_INT_PSD)
+        {
+          START_IRQ(PSD);
+          static_INT_PSD (&video_ints);
+          END_IRQ(PSD);
+        }
+        else if (video_ints & VIDEO_INT_PID)
+        {
+          START_IRQ(PID);
+          static_INT_PID (&video_ints);
+          END_IRQ(PID);
+        }
+        else if (video_ints & VIDEO_INT_HFF)
+        {
+          START_IRQ(HFF);
+          static_INT_HFF (&video_ints);
+          END_IRQ(HFF);
+        }
 //        dprintf (("IRQ", "IRQ_HandleVideoIRQ: video_ints = %06X\n", video_ints));
       }
       /* Now deal with the other interrupts. */
 /*    if (video_ints & VIDEO_INT_BFF) static_INT_BFF ();*/
 /*    if (video_ints & VIDEO_INT_HFE) static_INT_HFE ();*/
-      if (video_ints & VIDEO_INT_BBE) static_INT_BBE ();
-      if (video_ints & VIDEO_INT_PER) static_INT_PER ();
+      if (video_ints & VIDEO_INT_BBE)
+      {
+        START_IRQ(BBE);
+        static_INT_BBE ();
+        END_IRQ(BBE);
+      }
+      if (video_ints & VIDEO_INT_PER)
+      {
+        START_IRQ(PER);
+        static_INT_PER ();
+        END_IRQ(PER);
+      }
 /*    if (video_ints & VIDEO_INT_WFE) static_INT_WFE ();*/
 /*    if (video_ints & VIDEO_INT_RFF) static_INT_RFF ();*/
 /*    if (video_ints & VIDEO_INT_BMI) static_INT_BMI ();*/
-      if (video_ints & VIDEO_INT_SER) static_INT_SER ();
-      if (video_ints & VIDEO_INT_PDE) static_INT_PDE ();
+      if (video_ints & VIDEO_INT_SER)
+      {
+        START_IRQ(SER);
+        static_INT_SER ();
+        END_IRQ(SER);
+      }
+      if (video_ints & VIDEO_INT_PDE)
+      {
+        START_IRQ(PDE);
+        static_INT_PDE ();
+        END_IRQ(PDE);
+      }
 /*    if (video_ints & VIDEO_INT_ABE) static_INT_ABE ();*/
 /*    if (video_ints & VIDEO_INT_WFN) static_INT_WFN ();*/
 /*    if (video_ints & VIDEO_INT_RFN) static_INT_RFN ();*/
@@ -460,7 +582,11 @@ void IRQ_HandleVideoIRQ (void)
   /* triggered, but already serviced within an interrupt handler (having been */
   /* detected by using reads from VID_STA rather than VID_ITS). */
   while (video_ints != 0);
-//  threaded = false;
+#if Debugging==1 && DebugReentrancy==1
+  _kernel_irqs_off(); /* in case they've been enabled! */
+  threaded--;
+  * (volatile unsigned char *) (IOC + IOCIRQMSKA) &= ~(1<<7);
+#endif
 }
 
 /******	IRQ_HandleAudioIRQ() ***********************************************
@@ -480,17 +606,47 @@ void IRQ_HandleAudioIRQ (void)
     
     if (audio_ints != 0)  /* quick reject if no audio interrupts */
     {
-      if (audio_ints & AUDIO_INT_CSS) static_INT_CSS ();
-      if (audio_ints & AUDIO_INT_VHR) static_INT_VHR ();
-      if (audio_ints & AUDIO_INT_VPR) static_INT_VPR ();
-      if (audio_ints & AUDIO_INT_CRC) static_INT_CRC ();
+      if (audio_ints & AUDIO_INT_CSS)
+      {
+        START_IRQ(CSS);
+        static_INT_CSS ();
+        END_IRQ(CSS);
+      }
+      if (audio_ints & AUDIO_INT_VHR)
+      {
+        START_IRQ(VHR);
+        static_INT_VHR ();
+        END_IRQ(VHR);
+      }
+      if (audio_ints & AUDIO_INT_VPR)
+      {
+        START_IRQ(VPR);
+        static_INT_VPR ();
+        END_IRQ(VPR);
+      }
+      if (audio_ints & AUDIO_INT_CRC)
+      {
+        START_IRQ(CRC);
+        static_INT_CRC ();
+        END_IRQ(CRC);
+      }
 /*    if (audio_ints & AUDIO_INT_ADF) static_INT_ADF ();*/
-      if (audio_ints & AUDIO_INT_POU) static_INT_POU ();
+      if (audio_ints & AUDIO_INT_POU)
+      {
+        START_IRQ(POU);
+        static_INT_POU ();
+        END_IRQ(POU);
+      }
 /*    if (audio_ints & AUDIO_INT_SFC) static_INT_SFC ();*/
 /*    if (audio_ints & AUDIO_INT_DCH) static_INT_DCH ();*/
 /*    if (audio_ints & AUDIO_INT_IFT) static_INT_IFT ();*/
 /*    if (audio_ints & AUDIO_INT_IFF) static_INT_IFF ();*/
-      if (audio_ints & AUDIO_INT_FNP) static_INT_FNP ();
+      if (audio_ints & AUDIO_INT_FNP)
+      {
+        START_IRQ(FNP);
+        static_INT_FNP ();
+        END_IRQ(FNP);
+      }
     }
   }
   /* Only exit when we're satisfied that we're not about to raise another IRQ. */
@@ -571,6 +727,13 @@ _kernel_oserror *IRQ_EnableVideoPrefillIRQs (void)
   }
   if (!e)
   {
+#if Debugging==1 && DebugReentrancy==1
+    e = _swix (OS_ClaimDeviceVector, _INR(0,2), IOMDr_FIQDowngrade_DevNo, fiq_downgrade_handler, Module_PrivateWord);
+  }
+  if (!e)
+  {
+#endif
+    
     /* Enable nINT4 in IOMD */
     if (irqs_were_enabled) _kernel_irqs_off ();
     * (volatile unsigned char *) (IOC + IOCIRQMSKB) |= IOMDr_MPEGVideo_IRQ_bit;
@@ -627,6 +790,9 @@ void IRQ_DisableVideoIRQs (void)
   /* Release 3520 video IRQs */
   _swix (OS_ReleaseDeviceVector, _INR(0,2), IOMDr_MPEGVideo_DevNo /* aka 12, aka IRQRQB bit 4, aka nINT4 */,
     sti3520l_video_irq_handler, Module_PrivateWord);
+#if Debugging==1 && DebugReentrancy==1
+  _swix (OS_ReleaseDeviceVector, _INR(0,2), IOMDr_FIQDowngrade_DevNo, fiq_downgrade_handler, Module_PrivateWord);
+#endif
   
   /* Remove the CallAfter, in case it hasn't already been removed or gone off */
   _swix (OS_RemoveTickerEvent, _INR(0,1), video_prefill_stiff_detected, Module_PrivateWord);
@@ -736,6 +902,70 @@ void IRQ_UpdateMuteState (void)
   {
     AUD_MUT = 0;
   }
+}
+
+#if Debugging==1 && DebugProfiling==1
+/******	IRQ_ProfileInit() **************************************************
+
+Purpose:	Initialises IRQ profiling
+
+***************************************************************************/
+
+void IRQ_ProfileInit (void)
+{
+  _memset (IRQ_IRQCount, 0, profileirq_LIMIT * 4);
+  _memset (IRQ_IRQTime, 0, profileirq_LIMIT * 4);
+  _memset (Working_IRQCount, 0, profileirq_LIMIT * 4);
+  _memset (Working_IRQTime, 0, profileirq_LIMIT * 4);
+}
+#endif
+
+/******	IRQ_ProfileCallEvery() *********************************************
+
+Purpose:	IRQ profiling CallEvery handler
+Notes:		Entered in SVC mode with IRQs disabled
+
+***************************************************************************/
+
+_kernel_oserror *IRQ_ProfileCallEvery(_kernel_swi_regs *r, void *pw)
+{
+  IGNORE(r);
+  IGNORE(pw);
+#if Debugging==1 && DebugProfiling==1
+  _memcpy (IRQ_IRQCount, Working_IRQCount, profileirq_LIMIT * 4);
+  _memcpy (IRQ_IRQTime, Working_IRQTime, profileirq_LIMIT * 4);
+  _memset (Working_IRQCount, 0, profileirq_LIMIT * 4);
+  _memset (Working_IRQTime, 0, profileirq_LIMIT * 4);
+#endif
+  return NULL;
+}
+
+/******	IRQ_HandleFIQDowngrade() *******************************************
+
+Purpose:	FIQ-downgrade IRQ entry point
+
+***************************************************************************/
+
+_kernel_oserror *IRQ_HandleFIQDowngrade (_kernel_swi_regs *r, void *pw)
+{
+#if Debugging==1 && DebugReentrancy==1
+  int *ptr = *(int **) 0x108;
+  unsigned int IrqStackDepthWhenReEntered = 0;
+  IGNORE(r);
+  IGNORE(pw);
+  while (ptr != NULL)
+  {
+    IrqStackDepthWhenReEntered++;
+    ptr = (int *) *ptr;
+  }
+  DWrite_Write0("FiqDowngrade: ");
+  ReEntDebug_OutputDebug (IrqStackDepthWhenReEntered - IrqStackDepthOnEntry);
+  * (volatile unsigned char *) (IOC + IOCIRQMSKA) &= ~(1<<7);
+#else
+  IGNORE(r);
+  IGNORE(pw);
+#endif
+  return NULL;
 }
 
 
@@ -2260,7 +2490,7 @@ static void static_ProcessVideoDiviComUserData (unsigned char dataLength, unsign
 {
   IGNORE(extDataType);
   dprintf (("IRQ", "ProcessVideoDiviComUserData\n"));
-  if (dataType == 0x09 || dataType == 0x0A)
+  if ((dataType == 0x09 || dataType == 0x0A) && (dataLength == 2 || dataLength == 4))
   {
     /* Closed captioning data! */
     char *buffer = (dataType == 0x09) ? Stream.decode_frames->CC_odd_data : Stream.decode_frames->CC_even_data;
@@ -2825,7 +3055,10 @@ static void static_RemoveFrameFromList (frame_t *removed_frame, bool D_list)
       return; /* should never happen if I get the rest of the code right! */
     }
     if (previous == NULL) Stream.decode_frames = removed_frame->decode_link;
-    else previous->decode_link = removed_frame->decode_link;
+    else
+    {
+      previous->decode_link = removed_frame->decode_link;
+    }
     removed_frame->decode_link = NULL;
     removed_frame->on_decode_list = false;
 #ifdef DEBUGLIB

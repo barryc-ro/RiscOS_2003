@@ -32,11 +32,11 @@ WIPE    = wipe
 
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
-CFLAGS   = -depend !Depend ${THROWBACK} ${INCLUDES} -c -ffah -zM
-SFLAGS   = -depend !Depend ${THROWBACK} ${INCLUDES} -s -DDEBUGLIB
+CFLAGS   = -depend !Depend ${THROWBACK} ${INCLUDES} -c -ffah -zM -zps1
+SFLAGS   = -depend !Depend ${THROWBACK} ${INCLUDES} -s -ffah -zM -zps1 -DDEBUGLIB
 PFLAGS   = -depend !Depend ${THROWBACK} ${INCLUDES} -c -E -C -DDEBUGLIB
-INCLUDES = -IC:
 OFLAGS   = -depend !Depend ${THROWBACK}
+INCLUDES = -IC:
 CMHGFLAGS= -p ${THROWBACK}
 
 #
@@ -48,7 +48,7 @@ C_ABSSYM = RISC_OSLib:o.c_abssym
 LIBSD    = <Lib$Dir>.DebugLib.o.debuglibzm TCPIPLibs:o.socklib5zm TCPIPLibs:o.inetlibzm
 UNIXLIB  = TCPIPLibs:o.UnixLibzm
 
-RAMOBJS  =  o.Audio  o.CLI o.Clk o.Co o.DivRem64 o.Fixed  o.IRQ  o.Mess o.MiscAsm o.ModHdr2  o.Module    o.ResMess  o.Service  o.STi3520L  o.Stuffing  o.Video  o.WSS o.ModHdr
+RAMOBJS  =  o.Audio  o.CLI o.Clk o.Co o.DivRem64 o.Fixed  o.IRQ  o.Mess o.MiscAsm o.ModHdr2  o.Module    o.ResMess  o.Service  o.STi3520L  o.Stuffing  o.Video  o.WSS o.ModHdr o.DWrite o.ReEntDebug o.TrapVect
 ROMOBJS  =  o.Audio  o.CLI o.Clk o.Co o.DivRem64 o.Fixed  o.IRQ  o.Mess o.MiscAsm o.ModHdr2  o.ModuleROM            o.Service  o.STi3520L  o.Stuffing  o.Video  o.WSS o.ModHdr
 SOBJS    =  s.Audio  s.CLI                                s.IRQ  s.Mess                      s.Module               s.Service  s.STi3520L  s.Stuffing  s.Video  s.WSS o.ModHdr
 IOBJS    =  i.Audio  i.CLI                                i.IRQ  i.Mess                      i.Module               i.Service  i.STi3520L  i.Stuffing  i.Video  i.WSS o.ModHdr
@@ -59,13 +59,14 @@ DOOBJS   = do.Audio do.CLI o.Clk o.Co o.DivRem64 o.Fixed do.IRQ do.Mess o.MiscAs
 #
 # Rule patterns
 #
-.SUFFIXES: .do .i .inst .io
+.SUFFIXES: .do .i .inst .io .hdr .h
 .c.o:;          ${CC} ${CFLAGS} -o $@ $<
 .s.o:;          ${AS} ${OFLAGS} -o $@ $<
 .c.s:;          ${CC} ${SFLAGS} -o $@ $<
 .c.i:;          ${CC} ${PFLAGS} $< > $@
 .inst.io:;      ${CC} ${CFLAGS} -C++ -W -DDEBUGLIB -o $@ $<
 .c.do:;         ${CC} ${CFLAGS} -DDEBUGLIB -o $@ $<
+.hdr.h:;        perl Build:Hdr2H $< $@
 
 #
 # Main rules:
@@ -108,33 +109,34 @@ clean:
         ifthere rm       then ${WIPE} rm       ${WFLAGS}
         ifthere i        then ${WIPE} i        ${WFLAGS}
         ifthere o        then ${WIPE} o        ${WFLAGS}
+        ${RM} h.Debug
         ${RM} h.Registers
         ${RM} h.ModHdr
         stripdepnd
         @echo ${COMPONENT}: Cleaned
 
-asm: ${SOBJS} o h.Registers
+asm: ${SOBJS} o h.Debug h.Registers
         @echo ${COMPONENT}: Assembler listings generated
 
-prepro: inst ${IOBJS} i o h.Registers
+prepro: inst ${IOBJS} i o h.Debug h.Registers
         @echo ${COMPONENT}: Preprocessing complete
 
 mccabe: irm ${IOOBJS} io o messages-${CMDHELP} ${LIBSD} ${CLIB} ${UNIXLIB}
         ${LD} -o irm.${COMPONENT} -rmf ${IOOBJS} ${LIBSD} ${CLIB} ${UNIXLIB}
         @echo ${COMPONENT}: Instrumented module built (RAM)
 
-debug: drm ${DOOBJS} do o h.Registers messages-${CMDHELP} ${LIBSD} ${CLIB}
+debug: drm ${DOOBJS} do o h.Debug h.Registers messages-${CMDHELP} ${LIBSD} ${CLIB}
         ${LD} -o drm.${COMPONENT} -rmf ${DOOBJS} ${LIBSD} ${CLIB}
         ${ATTR} -files +or +ow +wr -ww $@
         ${RM} Messages
         @echo ${COMPONENT}: Debug module built (RAM)
 
-${RAM_MODULE}: rm ${RAMOBJS} o h.Registers messages-${CMDHELP} ${CLIB}
+${RAM_MODULE}: rm ${RAMOBJS} o h.Debug h.Registers messages-${CMDHELP} ${CLIB}
         ${LD} -o $@ -rmf ${RAMOBJS} ${CLIB}
         ${ATTR} -files +or +ow +wr -ww $@
         ${RM} Messages
 
-${ROM_MODULE}: aof ${ROMOBJS} o h.Registers ${ROMCSTUBS}
+${ROM_MODULE}: aof ${ROMOBJS} o h.Debug h.Registers ${ROMCSTUBS}
         ${LD} -o $@ -aof ${ROMOBJS} ${ROMCSTUBS}
 
 rom_link:
