@@ -112,7 +112,7 @@ rom_link: dirs
         @echo ${COMPONENT}: rom_link complete
 
 o.data:
-	resgen Messages o.data -via Resources.viafile
+	resgen Messages o.data -via LocalRes:viafile
 
 ${TARGET}: ${OBJS} local_dirs
 	${LD} -aof -o $@ ${OBJS}
