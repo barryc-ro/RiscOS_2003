@@ -345,8 +345,14 @@ SourceMemMap::blockReset(void)
   
   for (size_t i=0;i<max_blocks; i++){
 	MemBlock *mb = macro_getBlock(i);
-       	if ((mb!=NULL)&&(mb->inuse)&&(!mb->mpeg_owned))
-       		   freeBlock_background(mb);
+	_kernel_irqs_off();
+       	if ((mb!=NULL)&&(mb->inuse)&&(!mb->mpeg_owned)){
+                mb->deleted_block = 1;	// ensure that it will not be used
+        	_kernel_irqs_on();
+       		freeBlock_background(mb);
+       	}
+        else
+        	_kernel_irqs_on();
   }
   return result;
 }
@@ -369,6 +375,7 @@ SourceMemMap::freeBlock_background(MemBlock *mb)
                mb->completed = 0;
                mb->inuse = 0;
                mb->to_be_freed = 0;
+  	       mb->deleted_block = 0;
         }
        return result;
 }
@@ -485,7 +492,7 @@ SourceMemMap::findBlock(ULONG id, size_t *block_num)
         for (n = 0; n < max_blocks; n++) {	// find existing
                MemBlock *mb = macro_getBlock(n);
                if (mb->inuse != 0 && mb->block_id == id) {
-                        if (block_num != 0) {
+                        if (block_num != 0 && !mb->deleted_block) {
                                 *block_num = n;
                         }
                         result = mb;
@@ -496,7 +503,6 @@ SourceMemMap::findBlock(ULONG id, size_t *block_num)
        if (result == NULL){
        		//else allocate a block
         	size_t i;
-       		_kernel_irqs_off();
         	for (i = 0; i < max_blocks; i++) {
         	        MemBlock *mb = macro_getBlock(i);
         	        if (!mb->inuse) {
@@ -516,12 +522,14 @@ SourceMemMap::findBlock(ULONG id, size_t *block_num)
         	                break;
         	        }
         	}
-       		_kernel_irqs_on();	// claiming a resource
 
         	if (i == max_blocks) {	// we should never ask for blocks we cannot find
         	        MakeError(VSP_Alloc);
         	}
        }
+       if (result != NULL && result->deleted_block)
+       		result = NULL;
+       	
        return result;	// error occurred
 }
 
@@ -531,7 +539,7 @@ MemBlock *SourceMemMap::findExistingBlock(ULONG id, size_t *block_num)
     
        for (size_t n = 0; n < max_blocks; n++) {
                MemBlock *mb = macro_getBlock(n);
-               if (mb->inuse != 0 && mb->block_id == id) {
+               if (mb->inuse != 0 && mb->deleted_block == 0 && mb->block_id == id) {
                         if (block_num != 0) {
                                 *block_num = n;
                         }
@@ -553,31 +561,37 @@ SourceMemMap::findOrReplaceBlock(ULONG id, ULONG *last_block_sent, ULONG *most_c
         for (n = 0; n < max_blocks; n++) {	// find existing
                mb = macro_getBlock(n);
                
-               if (mb->inuse){
+               if (mb->inuse){	// can we find that block,
                  	if (mb->block_id == id) {
-                        	return mb;
+                 		if (mb->deleted_block) // to be deleted you cannot use it
+                 			return NULL;
+                 		else 
+                        		return mb;
                		}
                }
                else
                		not_in_use = mb;	// note a block not in use, thinking ahead
                		
-               if ((mb->block_id < min_block_num)&&(!(mb->mpeg_owned)))    // clean up, catches blocks waiting for deletion
+               if ((mb->block_id < min_block_num) && (!(mb->deleted_block)) && (!(mb->mpeg_owned)))   // clean up, catches blocks waiting for deletion
                		min_block_num = mb->block_id;	
         }
        	
-        _kernel_irqs_off();
 	if ( not_in_use == NULL ){ // if there are no freeblocks
+	
+        	_kernel_irqs_off();	// claiming a resource
   		mb = findExistingBlock(min_block_num);				// delete an old one
-  		
-  		while (mb->mpeg_owned && (min_block_num < (*most_complete)) ){
+  		while (mb != NULL && mb->mpeg_owned && (min_block_num < (*most_complete)) ){
   		  	mb = findExistingBlock(++min_block_num);		// delete an old one
   		}
+  		if (mb != NULL)
+  			mb->deleted_block = 1;
+        	_kernel_irqs_on();	// claiming a resource  		
   		
   		++stats->deleted_blocks;
   	  	
   		if (mb != NULL)
   			freeBlock_background(mb);
-  			
+  		
   	  	if ((*last_block_sent) < min_block_num){
   	  		(*last_block_sent) = min_block_num;
   	  		if ((*last_block_sent) > (*most_complete))
@@ -599,6 +613,5 @@ SourceMemMap::findOrReplaceBlock(ULONG id, ULONG *last_block_sent, ULONG *most_c
                 mb->deleted_block = 0;
                 mb->dgrams_in_block = 0;
         }
-        _kernel_irqs_on();	// claiming a resource
         return mb;
 }
