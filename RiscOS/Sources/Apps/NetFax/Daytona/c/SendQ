@@ -103,14 +103,13 @@ static void hardcopy_new_document(Document document);
 static void hardcopy_pages_complete(Document document, unsigned int loPage, unsigned int hiPage);
 static void hardcopy_document_complete(Document document);
 static void unable_to_deliver(Document document);
-static void show_ContactName(Document document);
 #endif
 
-
+#if SUPPORT_UI
+static void show_ContactName(Document document);
 static void show_SendRoute(Document document);
 static void show_Sending(Document document);
 
-#if SUPPORT_UI
 static void Log_RxConnectingError(messageDataBlock *messageData);
 static void Log_RxConnectedError(messageDataBlock *messageData);
 #endif
@@ -199,6 +198,9 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
         case LX_SQ_NEW_PAGE:
         case LX_SQ_PAGE_COMPLETE:
         case LX_SQ_DOCUMENT_COMPLETE:
+#if SUPPORT_CHECK_HWM
+        case SQ_SQ_CHECK_HWM:
+#endif
 			{
 				rx_States nextstate = rx_state;
 
@@ -341,18 +343,18 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 										strcpy(scan_document->AddressRecord.DirectPhoneNumber,   messageData->data.lx_sq_new_document.number);
 
                                         /* no address book so look up number in mini address book */
-                                        					if(TFax_NAN(scan_document->CapturedPhoneNumber))
-                                                                                 {
-										  scan_document->Cancelled=TRUE;
-										  nextstate = rxIDLE;   
-                                                                                 }  
-                                                                                else
-                                                                                 {
-										  if (TFax_addr_lookup(messageData->data.lx_sq_new_document.number))
-										   scan_document->AddressRecord.DeviceClass = DeviceClass_Daytona;
-										  else
-										   scan_document->AddressRecord.DeviceClass = DeviceClass_Fax;
-                                                                                 }
+                                        if (TFax_NAN(scan_document->CapturedPhoneNumber))
+                                        {
+										    scan_document->Cancelled=TRUE;
+										    nextstate = rxIDLE;   
+                                        }
+                                        else
+                                        {
+									   	    if (TFax_addr_lookup(messageData->data.lx_sq_new_document.number))
+									   	        scan_document->AddressRecord.DeviceClass = DeviceClass_Daytona;
+									   	    else
+									   	        scan_document->AddressRecord.DeviceClass = DeviceClass_Fax;
+                                        }
 										/* tell Screen a scan has started, captured number may be useful for debugging */
 										StateKicker_SendMessage(Screen_StateMachine, SQ_SC_NEW_DOCUMENT, &sendMessage);
 										sendMessage->data.sq_sc_new_document.pid = scan_document->ProcessId;
@@ -377,6 +379,21 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 #else
                                 /* don't look at RetryCount cos this is a scanning error */ 
                                 Fax_ReportError(LOCAL_ERROR, "Title_RX_SQ_ERROR", messageData, scan_document->Directory, scan_document->SendCount);
+#endif
+#if 1 /*PAN-00895*/
+                                if (messageData->data.error.code == code_RxCancelled)
+                                {
+                                    /* scan cancelled at the local fax machine (usually means user pressed STOP on fax) */
+                                    scan_document->Cancelled = TRUE;
+#if NEW_CANCEL_CODE
+                                    /* if this is a streaming scan/send, TRY aborting the send */ 
+                                    if ((scan_document->SendState != SendIDLE) && (scan_document->SendState != SendCOMPLETE))
+                                    {
+                                        /* some attempt is being made to send this, either connecting, mime-encoding/mime-encoded or sending */
+                                        StateKicker_SendMessage(RemXfer_StateMachine, SQ_RX_ABORT_OUTGOING, NULL);  /* abort if possible */
+                                    }                                    
+#endif
+                                }
 #endif
 								break;
 
@@ -405,7 +422,28 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 									}
 								}
 								break;
-					
+#if SUPPORT_CHECK_HWM
+                            /* large pages take a long time to scan - watermarks may have been passed long before LX_SQ_PAGE_COMPLETE is received */
+						    case SQ_SQ_CHECK_HWM:
+						        {
+						            if (scan_document)
+						            {
+                                        switch (HWM_Check())				/* returns 1/2/3 OK/Trigger-send/Abort-Rx */
+                                        {
+						                    case 3:
+#if SUPPORT_SLOWDOWN
+                                            case 4:
+                                                StateKicker_SendMessage(LocXfer_StateMachine, SQ_LX_SLOW_INCOMING, NULL);
+		    									/* drop into... */
+#endif
+						                    case 2:
+						                        scan_document->RequestTx = 1;		/* requesting */
+						                        break;
+						                }
+						            }
+						        }
+						        break;
+#endif
 							case LX_SQ_PAGE_COMPLETE:
 								{
 					                messageDataBlock *sendMessage;
@@ -470,7 +508,7 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 /* end of scanning */
 #endif
 #if SCANNING
-#if SUPPORT_EMAIL
+#if SUPPORT_ADDRESSBOOK
 /* scanning - address book search */
 		case AD_SQ_NOTFOUND:
         case AD_SQ_CANCEL:
@@ -2150,7 +2188,7 @@ static unsigned int UniqueDocNo(void)
 {
 	static unsigned int doc_num = 0;	/* not a valid document number */
 
-#if 0 /*SUPPORT_EMAIL*/
+#if SUPPORT_EMAIL
     static unsigned int saver = 0;
 
     /* on first call, retrieve value from EEPROM */
@@ -2940,6 +2978,14 @@ extern void SendQ_TickerHandler(void)
         while (StateKicker_Deliver() > 1)
     	    /* null statement */;
     }
+
+#if SUPPORT_CHECK_HWM
+    StateKicker_SendMessage(SendQ_MessageHandler, SQ_SQ_CHECK_HWM, NULL);
+
+    /* deliver the queued messages */
+    while (StateKicker_Deliver() > 1)
+  	    /* null statement */;
+#endif
 }
 
 

@@ -118,30 +118,84 @@ extern int HWM_MailSend_Extra(int extra_reservation)
     int disc_used, disc_size;
 
     read_disc_size(&disc_size, &disc_used);
-    LogFileIF_show_decimal_uint_int(REPORT, "HWM_MailSend_Extra: disc_size", disc_size, "disc_used", disc_used);
     LogFileIF_show_decimal_int(REPORT, "HWM_MailSend_Extra: extra_reservation", extra_reservation);
+    LogFileIF_show_decimal_uint_int(REPORT, "disc_size", disc_size, "disc_used", disc_used);
+    LogFileIF_show_decimal_uint_int(REPORT, "mailsend using", mailsend.using, "reserving", mailsend.reserving); 
 
     /* can we fit this in, leaving the minimum of margins? */
     if ((disc_size - disc_used - mailsend.reserving - extra_reservation) < 51200)
+    {
+        LogFileIF_show(REPORT, "fail (test 1)");
         return(1);  /* no - fail */
+    }
 
     /* yes, so if it's within the reserved minimum allocation (ie the space needed for the largest page), allow it */
     if ((mailsend.using + mailsend.reserving + extra_reservation) <= mailsend.minimum_requirement)
+    {
+        LogFileIF_show(REPORT, "pass (test 2)");
         return(0);  /* OK */    /* within minimum allocation, which may exceed 50% of memory */
+    }
 
     /* trying to use more than the reserved minimum, which is allowed as long as we */
     /* don't use more than 50% of memory */
     if (2*(mailsend.using + mailsend.reserving + extra_reservation) > disc_size)
+    {
+        LogFileIF_show(REPORT, "fail (test 3)");
         return(1);  /*fail*/    /* would exceed 50% of memory unnecessarily */
+    }
 
-    /* leave at least 200k for the page scan */
+    /* leave at least 200k for the page scan (modest size pages so far) */
     if ((disc_size - disc_used - mailsend.reserving - extra_reservation) < 204800)
+    {
+        LogFileIF_show(REPORT, "fail (test 4)");
         return(1);  /* fail */
+    }
 
+#if 1
+    /* for big pages */
+    /* HWM_Check() uses a margin 'ensure' of  2 * mailscan.largest_page */
+    if ((disc_size - disc_used - mailsend.reserving - extra_reservation) < ((2 * mailscan.largest_page) + 51200)   )
+    {
+        LogFileIF_show(REPORT, "fail (test 5)");
+        return(1);  /* fail */
+    } 
+#endif
+
+    LogFileIF_show(REPORT, "pass (all tests)");
     return(0);
 }
 
 
+struct
+{
+    int using;                  /* } current requirement is using + reserving */
+    int reserving;              /* }                                          */
+} mailreceive = { 0, 0 };
+
+
+/* Used by email decoder to inform HWM system how much space it is currently */
+/* using and to confirm its space reservation requirements */
+/* Any space used or reserved should have been approved by an earlier */
+/* HWM_MailRx_Extra call */
+extern void HWM_MailRx_Usage(int using, int reserving)
+{
+    mailreceive.using     = using;
+    mailreceive.reserving = reserving;
+}
+
+extern int  HWM_MailRx_Extra(int extra_reservation)
+{
+    int disc_used, disc_size;
+
+    read_disc_size(&disc_size, &disc_used);
+
+    if ((disc_size - disc_used - mailreceive.reserving - extra_reservation) < 204800)
+    {
+        return(1);  /* fail */
+    }
+
+    return(0);
+}
 
 /*
  * High Water Mark Check
@@ -163,26 +217,38 @@ extern int HWM_Check(void)
     int disc_used, disc_size;
 
     read_disc_size(&disc_size, &disc_used);
-
+    LogFileIF_show(REPORT, "HWM_Check()");
+    LogFileIF_show_decimal_uint_int(REPORT, "disc_size", disc_size, "disc_used", disc_used);
+    LogFileIF_show_decimal_uint_int(REPORT, "mailsend using", mailsend.using, "reserving", mailsend.reserving); 
+    
     /* check for disc full, based on amount used, amount reserved and a margin */
     {
         /* currently only mailsend reserves space, if we add reservation schemes for other purposes, factor the values to hwm_reserved below */
         /* we use mailsend.using in calculations where it really is mail orientied, and hwm_using in places where other reservation values may go */
         int hwm_reserved = 0;
-        int ensure   = 2 * mailscan.largest_page;
-
+        int ensure   = 2 * mailscan.largest_page;   /* guess that the next page received is less   */
+                                                    /* than twice the size of any page seen so far */
 #if SUPPORT_EMAIL
+#if 1   /*PAN-01734*/
+        hwm_reserved += max(mailsend.reserving, mailsend.minimum_requirement - mailsend.using); /* may be high, if entity file or mailfile is being created in the background */
+#else
+/*>>>need to factor in minimum requirements*/
         hwm_reserved += mailsend.reserving; /* may be high, if entity file or mailfile is being created in the background */
+#endif
 #endif
                   /* += other.reserving (in the future) */
 
         if ((disc_size - disc_used - hwm_reserved) < ensure)
+        {
+            LogFileIF_show(REPORT, "Abort Rx! (test 1)");
             return(3);    /*ABORT now*/
+        }
     }
 
     /* check for start streaming trigger level */
     {
         int mail_requ = 0;  /* suitable value for NO email support */
+        int margin    = 0; 
         int trigger   = 0;
         int hwm_using = 0;
         int docu_used = 0;
@@ -202,8 +268,12 @@ extern int HWM_Check(void)
 #endif
                /* += other.using (in the future) */
 
-#if 0
-        margin = 2 * mailscan.largest_page; /* should this be three */
+#if SUPPORT_EMAIL
+#if 1   /*PAN-01734*/
+        /* the value for ensure above guesses that the space needed for the next page is less than twice the size of any page seen so far */
+        /* margin triggers streaming when room for around two pages (ie assumes two pages fit in a space three times the largest page seen so far) */
+        margin = 3 * mailscan.largest_page; /* should this be four */
+#endif
 #endif
 
 
@@ -213,6 +283,9 @@ extern int HWM_Check(void)
 
 #if SUPPORT_EMAIL
         trigger = min((2*(disc_size - mail_requ))/3, disc_size/2);
+#if 1   /*PAN-01734*/
+        trigger = min(trigger, (disc_size - mail_requ - margin));   /* for large pages trigger streaming when room to scan at least one more page */
+#endif
 #else
         trigger = disc_size/2;  /* optimisation, above expression simplifies to this when mail_requ is 0 */
 #endif
@@ -232,15 +305,20 @@ extern int HWM_Check(void)
 #if SUPPORT_SLOWDOWN
         slowdown = trigger + 102400;
         if (docu_used >= slowdown)
+        {
+            LogFileIF_show(REPORT, "Slow Rx (test 2)");
             return(4);  /* try to slow the sender */
+        }
 #endif
 
         if (docu_used >= trigger)
+        {
+            LogFileIF_show(REPORT, "Stream Rx/Tx (test 3)");
             return(2);  /* start streaming */
+        }
     }
 
-
-
+    LogFileIF_show(REPORT, "pass (all tests)");
     return(1);  /*OK*/
 }
 
