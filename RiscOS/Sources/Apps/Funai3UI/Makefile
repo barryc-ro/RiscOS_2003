@@ -76,6 +76,7 @@ dirs:
         $(MKDIR) $(RESRES).NCFresco
         $(MKDIR) $(RESRES).NCFrescoA
         $(MKDIR) $(RESRES).ScrSaver
+        $(MKDIR) $(RESRES).WinFrameRO
         IfThere Resources.$(USERIF).$(LOCALE).$(APP) Then \
           $(CP) Resources.$(USERIF).$(LOCALE).$(APP) $(RESAPP) T~V~CFQR
         $(CP) Resources.$(USERIF).UK.$(APP) $(RESAPP) T~V~CFQR
@@ -142,9 +143,11 @@ resources: translate dirs
         IfThere LocalUserIFRes:!Boot.HTML-Modem Then $(CP) LocalUserIFRes:!Boot.HTML-Modem $(RESAPP).HTML-Modem $(CPFLAGS)
         IfThere LocalUserIFRes:NCFresco Then $(CP) LocalUserIFRes:NCFresco $(RESRES).NCFresco $(CPFLAGS)
         IfThere LocalUserIFRes:NCFrescoA Then $(CP) LocalUserIFRes:NCFrescoA $(RESRES).NCFrescoA $(CPFLAGS)
+        $(CP) Resources.$(USERIF).UK.!Boot.Utils $(RESAPP).Utils $(CPFLAGS)
         $(CP) LocalUserIFRes:!Boot.Utils $(RESAPP).Utils $(CPFLAGS)
         $(CP) LocalUserIFRes:NVRAM.Tags $(RESRES).NVRAM.Tags $(CPFLAGS)
         $(CP) LocalUserIFRes:Wimp.Sprites $(RESRES).Wimp.Sprites $(CPFLAGS)
+        IfThere LocalUserIFRes:WinFrameRO Then $(CP) LocalUserIFRes:WinFrameRO $(RESRES).ICAClient $(CPFLAGS)
         @echo $(COMPONENT): resource files copied
         
 # Dynamic dependencies:
