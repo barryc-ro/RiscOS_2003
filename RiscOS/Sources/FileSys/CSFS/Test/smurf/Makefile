@@ -50,7 +50,6 @@ APPLICATION = ${COMPONENT}
 OBJS      =	\
 o.main		\
 o.error		\
-o.console
 
 #
 # Rule patterns
@@ -82,12 +81,6 @@ ${APPLICATION}: ${OBJS} ${CLIB} ${INETLIB}
 
 #
 # Dynamic dependencies:
-o.console:	c.console
-o.console:	C:h.kernel
-o.console:	C:h.swis
-o.error:	c.error
-o.error:	C:h.kernel
-o.error:	h.constants
 o.main:	c.main
 o.main:	C:h.kernel
 o.main:	C:h.swis
@@ -104,4 +97,3 @@ o.main:	h.constants
 o.main:	h.csfs
 o.main:	h.error
 o.main:	C:h.kernel
-o.main:	h.console
