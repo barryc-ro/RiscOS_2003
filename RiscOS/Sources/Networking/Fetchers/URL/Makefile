@@ -91,11 +91,12 @@ MSGSF=o.msgs
 # Rule patterns
 #
 .c.o:;	  ${CC} ${CFLAGS} ${ROMFLAGS} -o $@ $<
-.cmhg.o:; ${CMHG} -o $@ $< -d $*.h
-
+.cmhg.o:; ${CMHG} -o $@ $< -p -d $*.h
 
 URLHdr.h: URLHdr.o
        @|
+
+protocol.o: URLHdr.h
 
 #
 # Main rules:
