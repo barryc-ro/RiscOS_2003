@@ -1,16 +1,13 @@
-VPATH = @ <Support$Dir>
 
-CC     = cc410 -D__swi -IOS:,Support: -fafh -wp
+CC     = cc -ITCPIPLibs:,C:,C:RMVersion -fafh -wp -DCOMPAT_INET4
 LINK   = Link
 
-LIBS  = OSLib:o.OSLib CLib:o.ANSILib
+LIBS  = C:RMVersion.o.RMVersion TCPIPLibs:o.socklib CLib:o.Stubs
 
-OBJS = o.main o.x o.socket
+OBJS = o.main
 
 BootVars: ${OBJS}
    ${LINK} -output BootVars ${OBJS} ${LIBS}
-
-o.main: h.socket
 
 #General rules
 .SUFFIXES:      .cmhg .h .c .debug .o .oSA .Resources .s .asm .i .def
@@ -32,27 +29,3 @@ o.main: h.socket
 
 #------------------------------------------------------------------------
 # Dynamic dependencies:
-o.x:	<Support$Dir>.c.x
-o.x:	OS:h.kernel
-o.x:	OS:h.macros
-o.x:	OS:h.os
-o.x:	OS:h.types
-o.x:	<Support$Dir>.h.x
-o.main:	c.main
-o.main:	OS:h.swis
-o.main:	OS:h.kernel
-o.main:	h.socket
-o.main:	OS:h.types
-o.main:	OS:h.os
-o.main:	Support:h.x
-o.main:	OS:h.econet
-o.main:	OS:h.netfs
-o.main:	OS:h.macros
-o.main:	OS:h.os
-o.main:	OS:h.osbyte
-o.main:	OS:h.osfscontrol
-o.main:	OS:h.osmodule
-o.main:	OS:h.wimpreadsysinfo
-o.main:	OS:h.wimp
-o.main:	OS:h.osspriteop
-o.main:	OS:h.font

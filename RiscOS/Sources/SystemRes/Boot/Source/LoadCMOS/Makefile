@@ -8,13 +8,11 @@
 # 27th Oct 1994  JC         Created.
 #
 
-VPATH = @ <Support$Dir>
-
 #
 # Generic options:
 #
-MKDIR   = cdir
-CC      = cc -ISupport: -IOS: -fach -wp
+MKDIR   = mkdir -p
+CC      = cc -ffach -wp
 CP      = copy
 CPFLAGS = ~cfr~v
 OBJASM  = ObjAsm ${THROWBACK} -depend !Depend -stamp -quit
@@ -24,7 +22,6 @@ LINK    = Link
 #
 # Libraries:
 #
-OSLIB  = OSLib:OSLib.o
 
 #
 # Program specific options:
@@ -32,9 +29,9 @@ OSLIB  = OSLib:OSLib.o
 COMPONENT = LoadCMOS
 TARGET    = aof.LoadCMOS
 
-OBJS = o.main o.x
+OBJS = o.main
 
-ASMS = s.main s.x
+ASMS = s.main
 
 #
 # Generic rules {used by top-level build}:
@@ -65,36 +62,14 @@ release: LoadCMOS
    @Echo Made release
 
 #Internal targets
-LoadCMOS: ${OBJS} ${OSLIB} CLib:o.Stubs
-   ${LINK} -output LoadCMOS ${OBJS} ${OSLIB} CLib:o.Stubs
+LoadCMOS: ${OBJS} CLib:o.Stubs
+   ${LINK} -output LoadCMOS ${OBJS} CLib:o.Stubs
    Access LoadCMOS WR/R
 
 #General rules
 .SUFFIXES: .cmhg .c .debug .o .s
 
 .c.o:
-   ${CC} ${THROWBACK} -depend !Depend -c -ff $<
-
-.c.debug:
-   ${CC} ${THROWBACK} -depend !Depend -c -DTRACE=1 -o $@ $<
-
-.cmhg.o:
-   ${CMHG} $< $@
-
-.c.s:
-   ${CC} ${THROWBACK} -depend !Depend -s -ff $<
+   ${CC} ${THROWBACK} ${CFLAGS} -depend !Depend -c -ff $<
 
 # Dynamic dependencies:
-o.x:	<Support$Dir>.c.x
-o.x:	OS:h.kernel
-o.x:	OS:h.os
-o.x:	OS:h.types
-o.x:	<Support$Dir>.h.x
-o.main:	c.main
-o.main:	OS:h.os
-o.main:	OS:h.types
-o.main:	OS:h.osbyte
-o.main:	OS:h.osfile
-o.main:	OS:h.osfind
-o.main:	OS:h.osgbpb
-o.main:	Support:h.x
