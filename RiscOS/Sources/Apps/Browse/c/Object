@@ -77,7 +77,7 @@ _kernel_oserror * object_new_object(browser_data * b, HStream * t)
   /* If this isn't an Object token, do nothing (well, */
   /* complain about it in TRACE builds).              */
 
-  if (!t || t->tagno != TAG_OBJECT)
+  if (!t || !ISOBJECT(t))
   {
     #ifdef TRACE
 
@@ -195,19 +195,165 @@ _kernel_oserror * object_new_object(browser_data * b, HStream * t)
         }
       }
     }
-
-    b->odata[b->nobjects - 1].isplugin = 1;
-
-    return NULL;
   }
 
   /* Deal with external objects */
 
-  else
-  {
-    data = HtmlOBJECTclassid(t);
+  else data = HtmlOBJECTclassid(t);
 
-    if (data && *data) b->odata[b->nobjects - 1].isplugin = 1;
+  if (data && *data)
+  {
+    int cannot_handle = 0;
+
+    /* Well OK, this looks like a Plug-In. But can we handle it? */
+    /* First, check for Active-X.                                */
+
+    if (!strncmp(data, "clsid:", 6)) cannot_handle = 1;
+
+    /* Otherwise, check a Plug-In exists to handle the data type */
+
+    else
+    {
+      const char * ext = strrchr(data, '.');
+
+      /* Can't handle it if there's no extension */
+
+      if (!ext) cannot_handle = 1;
+      else
+      {
+        int filetype;
+
+        /* Can't handle it if we don't have a Mime map entry for it */
+
+        if (mimemap_extension_to_riscos(ext, &filetype)) cannot_handle = 1;
+        else
+        {
+          char             var[32];
+          _kernel_swi_regs r;
+
+          /* Final check is to see if there's an Alias$@PlugInType_xxx variable */
+
+          sprintf(var, "Alias$@PlugInType_%03X", filetype);
+
+          r.r[0] = (int) var;
+          r.r[1] = (int) NULL;
+          r.r[2] = -1;
+          r.r[3] = 0;
+          r.r[4] = 0;
+
+          /* *Not* _swix, we want the R2 value of 0 for 'unset'... */
+
+          _kernel_swi(OS_ReadVarVal, &r, &r);
+
+          if (!r.r[2]) cannot_handle = 1;
+        }
+      }
+    }
+
+    /* If we can handle it, flag this as a Plug-In */
+
+    if (!cannot_handle) b->odata[b->nobjects - 1].isplugin = 1;
+
+    /* Otherwise, use the alternative HTML stream here */
+
+    else
+    {
+      int          depth, line, chunk;
+      token_path * path = NULL;
+
+      // For now - security blanket...
+
+      /* Can't do anything if the next token has been preprocessed [somehow] */
+
+      if (t->next && t->next->flags == HFlags_DealtWithToken)
+      {
+        #ifdef TRACE
+
+          erb.errnum = Utils_Error_Custom_Normal;
+
+          StrNCpy0(erb.errmess,
+                   "Can't replace this object tag as later tokens have already been preprocessed, in object_new_object");
+
+          show_error_ret(&erb);
+
+        #else
+
+          t = t;
+
+        #endif
+      }
+      else
+      {
+        /* What line was the token in? */
+
+        depth = tokenutils_line_range(b,
+                                      t,
+                                      &line,
+                                      &chunk,
+                                      NULL,
+                                      NULL,
+                                      &path);
+
+        if (line >= 0)
+        {
+          /* If the line was found and we have a depth, the line */
+          /* is in a table - find the base parent line of the    */
+          /* table, so we can reformat it.                       */
+
+          if (depth) line = path[depth - 1].line;
+        }
+
+        if (path) free(path);
+
+        /* Right, only have to reformat if the token was in the */
+        /* line list.                                           */
+
+        if (line >= 0) reformat_format_from(b, line - 1, 0, -1);
+
+        /* We now know that the object is no longer in any line */
+        /* list, so it's safe to preprocess the alternate HTML  */
+        /* stream and place that under the token.               */
+
+        t->flags |= HFlags_IgnoreObject;
+
+        /* Discard the new object */
+
+        b->nobjects --;
+
+        memory_set_chunk_size(b,
+                              NULL,
+                              CK_OBJB,
+                              (b->nobjects + 1) * sizeof(object_info));
+
+        if (HtmlOBJECTstream(t))
+        {
+
+// Eeek! Recursive calls back to this routine!
+//
+//            HStream * alt = HtmlOBJECTstream(t);
+//
+//            /* Preprocess the stream */
+//
+//            // Of course, this probably breaks forms if extra form fields
+//            // are present as part of an ongoing FORM tag.
+//
+//            while (alt)
+//            {
+//              fetch_preprocess_token(b, alt);
+//
+//              alt = alt->next;
+//            }
+//
+          /* Move it into the main token list */
+
+          HtmlReplaceOBJECT(t);
+
+          /* That's it; any subsequent reformatting takes care of the rest */
+
+          return NULL;
+        }
+      }
+    }
   }
 
   /* If this is a Plug-In, and we're supposed to launch them */
@@ -264,11 +410,20 @@ _kernel_oserror * object_discard(browser_data * b)
          b->odata[i].plugin_task_handle
        )
     {
-      e = plugin_send_plugin_close(b,
-                                   b->odata[i].plugin_instance_handle,
-                                   b->odata[i].plugin_task_handle);
+      unsigned int instance;
+
+      e = plugin_obtain_instance(b, b->odata[i].token, &instance);
+
+      if (!e)
+      {
+        e = plugin_send_close(instance,
+                              b->odata[i].plugin_task_handle,
+                              b->odata[i].plugin_instance_handle);
+      }
     }
   }
+
+  plugin_flush_instance_entries(b);
 
   /* Only set 'e' from the queue flush if the above call didn't */
   /* generate an error.                                         */
@@ -311,11 +466,11 @@ static int object_get_token_object(browser_data * b, HStream * t)
   /* If this isn't an Object token, do nothing (well, */
   /* complain about it in TRACE builds).              */
 
-  if (!t || t->tagno != TAG_OBJECT)
+  if (!t || !ISOBJECT(t))
   {
     #ifdef TRACE
 
-      if (t->tagno != TAG_OBJECT)
+      if (!ISOBJECT(t))
       {
         erb.errnum = Utils_Error_Custom_Normal;
 
@@ -676,6 +831,8 @@ int object_set_token_object_position(browser_data * b, HStream * t, int x, int y
                 && b->odata[object].plugin_task_handle
               )
       {
+        unsigned int instance;
+
         if (x < 0)
         {
           /* Object position is invalid */
@@ -701,10 +858,13 @@ int object_set_token_object_position(browser_data * b, HStream * t, int x, int y
           if (tl & (1u<<30)) Printf("object_set_token_object_positon: Moving Plug-In\n");
         #endif
 
-        show_error_ret(plugin_send_original_reshape(b,
-                                                    b->odata[object].plugin_instance_handle,
-                                                    b->odata[object].plugin_task_handle,
-                                                    &position));
+        if (!plugin_obtain_instance(b, b->odata[object].token, &instance))
+        {
+          show_error_ret(plugin_send_original_reshape(instance,
+                                                      b->odata[object].plugin_task_handle,
+                                                      b->odata[object].plugin_instance_handle,
+                                                      &position));
+        }
       }
     }
   }
@@ -926,10 +1086,7 @@ static _kernel_oserror * object_set_object_plugin(browser_data * b, int object, 
 /* a given Object (referenced by token).         */
 /*                                               */
 /* Parameters: Pointer to a browser_data struct  */
-/*             relevant to the Object - usually  */
-/*             set as the browser instance       */
-/*             handle for the Plug-In, so cast   */
-/*             as an int;                        */
+/*             relevant to the Object;           */
 /*                                               */
 /*             Pointer to the token representing */
 /*             the Object (usually have to       */
@@ -943,10 +1100,8 @@ static _kernel_oserror * object_set_object_plugin(browser_data * b, int object, 
 /* Assumes:    Either pointer may be NULL.       */
 /*************************************************/
 
-_kernel_oserror * object_set_token_object_plugin(unsigned int browser_instance, HStream * t, unsigned int plugin_instance, unsigned int plugin_task)
+_kernel_oserror * object_set_token_object_plugin(browser_data * b, HStream * t, unsigned int plugin_instance, unsigned int plugin_task)
 {
-  browser_data * b = (browser_data *) browser_instance;
-
   return object_set_object_plugin(b,
                                   object_get_token_object(b, t),
                                   plugin_instance,
