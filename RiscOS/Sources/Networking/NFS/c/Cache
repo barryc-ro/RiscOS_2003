@@ -4,9 +4,7 @@ Purpose : Handling of NFS caches
 
 Functions :  attrcache_hash
 	     lookupcache_hash
-	     update_attrcache_at
 	     update_attrcache
-	     cancel_lookupcache_at
 	     cancel_lookupcache
 	     cancel_lookupcache_by_fhandle
 	     cancel_lookupcache_by_mount_point
@@ -17,7 +15,6 @@ Functions :  attrcache_hash
 	     cancel_all_caches_by_mount_point
 	     nfs_getattr
 	     nfs_setattr
-	     update_lookupcache_at
 	     update_lookupcache
 	     nfs_lookup_basic
 	     nfs_lookup
@@ -48,6 +45,8 @@ Date	Who    Comments
 6/2/96   KJB    Merged NFS and STBNFS
 9/2/96   DNW    change the variables concerned to 53
 18/4/99  SNB    added nfs_internal_dirplus_update for enumdir callback
+                which improves the attribute cache hitrate to well over 90%
+03/06/01 SNB    redesigned the cache, ~15% performance improvement
 ****************************************************************************/
 
 #ifndef __NFS_H
@@ -59,12 +58,57 @@ extern unsigned int NetAccessCountG;
 #endif
 
 
-/* static struct timeval TIMEOUT = { 25, 0 };  */
 #include "TimeOut.h"
-
 #include "nfsrw.h"
 
 #include <sys/time.h>
+
+
+/********* cache operation overview ***************************************
+
+There are 2 caches implemented in this file....one for the basic file
+information, a second for the attributes for the files ('lookup' and 'attr'
+caches).  Both are hash tables using a number of buckets holding doubly
+linked lists of entries.  Each entry itself comes from pre-allocated arrays
+of structures for speed.
+
+Entries are stored under a specific, almost unique 'hash' value made up from
+the mount point and  file ID.  This specifies in whih bucket the data is
+to be stored.
+
+Each item stored in an active chain is doubly-linked to its neighbours.
+Each item stored in the free chain is singly linked to the next free block.
+Each item not in the free chain is also doubly-linked through an age
+chain.  The hash table holds pointers to both ends so that the oldest
+entry can be expired, and updated entries can be promoted to the front of
+the list.
+
+
+SNB's other thoughts on the cache at of June 4th 2001:
+
+Should attribute entries inserted by the nfs_internal_dirplus_update
+routine be automatically moved to the front of the age list if they
+already exist on the age list.  If we are only doing a directory search,
+then we aren't actually interested in the attributes of anything that
+doesn't match the entry we are looking for.
+
+Soft-links are a disaster - we should have a cache of them too.
+
+Should the hash_val be stored in with the entry?  It would remove the
+need for cache_which_bucket.  Alternatively, the hashtable could contain
+a pointer to the function that generates the hash value optimally for
+a given entry.
+
+Many update operations (nfs_rmdir, nfs_remove) flush data from the cache
+unnecessarily.  If the NFS server gives us the new directory attributes
+and the previous attributes match what is cached, we should simply update
+the directory attributes - not throw everything known about that directory
+away.
+
+
+***************************************************************************/
+
+
 
 /*
         (old comment about 23:)
@@ -79,87 +123,594 @@ extern unsigned int NetAccessCountG;
         built, it doesn't seem unreasonable to add 5K to its memory
         usage (besides, this much memory is saved by using the
         latest compiler and the -ff and -zps1 compile options).
+
+        SNB:
+        I increased this to 128 as it is no longer the modulo value
+        for bucket choice, but a cap on the number of entries we can
+        hold in the hash table at once.  It costs 180+172 bytes per
+        entry, so 128 represents ~48K
 */
 
 /* Default values  */
 
-#define DefaultCacheSize 53  /* Was 50,  was 23 */
-
+#define DefaultCacheSize   (128)  /* Was 53, was 50,  was 23 */
 static int AttrCacheSize     = DefaultCacheSize;
 static int LookupCacheSize   = DefaultCacheSize;
 
+
+/*
+
+So we can use some generic routines, we use a union to represent the hash table types.
+We allocate "extra" buckets, so we have handy anchors for the free list and the age
+list pointers.  Note that it is guaranteed safe to cast a cache_entry* to the appropriate
+entry type point (e.g. attrcache_entry* or lookupcache_entry*).  NO checking is available
+for this though - but it is a necessary to permit code sharing between the hash tables.
+In reality, you should not need to cast - the only API that permits the implicit cast is
+alloc_new_hashtable_entry - which SHOULD only be called from alloc_new_lookupcache_entry
+and alloc_new_attrcache_entry anyway.
+
+Note that since the pointers are unions of pointers, you have to be careful to dereference
+the right one to maintain your type-safety (or not, depending on how you view it)
+
+
+
+Number of buckets - compile time constant.  Note that this number should be chosen
+carefully, taking into account the hashing algorithm being used and the fact that
+particularly the lookup cache is going to be hashing ONLY ASCII character filenames.
+
+*/
+#define NumBuckets         (53)
+#define FreeListBucket     (NumBuckets)
+#define UseListBucketHead  (FreeListBucket+1)
+#define UseListBucketTail  (FreeListBucket+2)
+#define AllocBucketTotal   (FreeListBucket+3)
+#define UnknownBucket      (-1)
+
+
+typedef struct attrcache_entry attrcache_entry;
+typedef struct lookupcache_entry lookupcache_entry;
+typedef struct cache_entry cache_entry;
+
+typedef union {
+        cache_entry *generic;
+        attrcache_entry *attr;
+        lookupcache_entry *lookup;
+} cache_entry_pointer;
+
+
+struct cache_entry
+{
+        cache_entry_pointer next;
+        cache_entry_pointer prev;
+        cache_entry_pointer age_newer;
+        cache_entry_pointer age_older;
+        MountPoint *mount_point;
+        clock_t out_of_date_time;
+        RO_nfs_fh3 fhandle;
+};
+
+
 struct attrcache_entry
 {
-        MountPoint *mount_point;
-        RO_nfs_fh3 fhandle;
-        clock_t out_of_date_time;
+        cache_entry entry;
         fattr3 nattr;
 };
 
-
 struct lookupcache_entry
 {
-        MountPoint *mount_point;
+        cache_entry entry;
         RO_nfs_fh3 dir;
         char *nfs_name;
-        clock_t out_of_date_time;
-        RO_nfs_fh3 fhandle;
 };
+
+
+/* These are the pointers to the array of structures that hold the cached data. */
 
 static struct attrcache_entry   *attrcache;
 static struct lookupcache_entry *lookupcache;
 
+typedef struct hashtable {
+        cache_entry_pointer bucket[AllocBucketTotal];
+} hashtable;
 
-int get_cache_size(void)
+
+static hashtable attr_hash_table;
+static hashtable lookup_hash_table;
+
+static void empty_hash_table(hashtable *h)
 {
-return(AttrCacheSize);
+  int i;
+
+  for (i = 0; i < AllocBucketTotal; ++i) h->bucket[i].generic = NULL;
 }
+
 
 void free_cache(void)
 {
-free(lookupcache);
-free(attrcache);
+  free(lookupcache);
+  free(attrcache);
+  empty_hash_table(&attr_hash_table);
+  empty_hash_table(&lookup_hash_table);
+}
+
+int get_cache_size(void)
+{
+  return(AttrCacheSize);
 }
 
 
-/* Call this function if you want to set the size of the cache  */
+
+/********* set_cache_size **************************************************
+
+Purpose : Sets the number of entries in each cache.
+
+Inputs : size         the number of entries to permit.
+
+Returns : an error block pointer if the memory allocation failed.
+
+This function allocates the arrays of structures for the cache.  The hash
+table itself is static.  All the entries are added to the free list.
+
+If size was 0 on entry, the value remains unchanged (used to initialise the
+cache).
+
+****************************************************************************/
+
 _kernel_oserror *set_cache_size( int size)
 {
 
-free_cache();
+  free_cache();
 
-if (size !=0)
-	AttrCacheSize  =  LookupCacheSize  = size;
+  if (size !=0)
+    AttrCacheSize  =  LookupCacheSize  = size;
 
-attrcache   = calloc ( AttrCacheSize,    sizeof ( struct attrcache_entry ));
-lookupcache = calloc ( LookupCacheSize , sizeof ( struct lookupcache_entry ) );
+  attrcache   = calloc ( AttrCacheSize,    sizeof ( struct attrcache_entry ));
+  lookupcache = calloc ( LookupCacheSize , sizeof ( struct lookupcache_entry ) );
 
+  dprintf(("cache_1", "set_cache_sizes: attrcache => %d (* %d ==> %#x)\n", AttrCacheSize, sizeof(attrcache_entry),
+    AttrCacheSize * sizeof(attrcache_entry)));
+  dprintf(("cache_1", "set_cache_sizes: lookupcache => %d (* %d ==> %#x)\n", LookupCacheSize, sizeof(lookupcache_entry),
+    LookupCacheSize * sizeof(lookupcache_entry)));
 
-if (lookupcache == NULL || attrcache == NULL )
-	{
-	free_cache();
-	return( mb_malloc_failed);
-	}
+  if (lookupcache == NULL || attrcache == NULL)
+  {
+    free_cache();
+    return( mb_malloc_failed);
+  }
 
-return(NULL);
+  if (AttrCacheSize != 0)
+  {
+    for (size = 0; size < AttrCacheSize; ++size)
+    {
+      attrcache[ size ].entry.next.attr = &attrcache[ size + 1 ];
+      attrcache[ size ].entry.mount_point = NULL;
+
+      lookupcache[ size ].entry.next.lookup = &lookupcache[ size + 1 ];
+      lookupcache[ size ].entry.mount_point = NULL;
+    }
+
+    attrcache[ size - 1 ].entry.next.attr = NULL;
+    lookupcache[ size -  1 ].entry.next.lookup = NULL;
+
+    attr_hash_table.bucket[FreeListBucket].attr = attrcache;
+    lookup_hash_table.bucket[FreeListBucket].lookup = lookupcache;
+  }
+
+  return(NULL);
+}
+
+/********* cache_delink_chain **********************************************
+
+Purpose : De-links the cache entry from a bucket
+
+Inputs : ce           ptr to the cache entry
+         head_pointer ptr to the bucket's head pointer
+
+Returns : ce.
+          The next and prev fields are set to NULL.  The previous item's next
+          pointer is pointed at our next item, and vice versa.  The head
+          pointer is updated if our prev pointer was NULL (ie. we were first
+          on the list)
+
+****************************************************************************/
+
+static cache_entry *cache_delink_chain(cache_entry *ce, cache_entry **head_pointer)
+{
+  cache_entry *prev, *next;
+
+  prev = ce->prev.generic;
+  if (prev) {
+    /* previous node points to our next node */
+    prev->next.generic = ce->next.generic;
+  }
+  else if (head_pointer) {
+    /* head_pointer must have pointed to us (if it exists) */
+    *head_pointer = ce->next.generic;
+  }
+
+  next = ce->next.generic;
+  if (next) {
+    /* next node points to our previous node */
+    next->prev.generic = ce->prev.generic;
+  }
+
+  ce->next.generic = ce->prev.generic = NULL;
+
+  return ce;
 }
 
 
+/********* cache_delink_age_list *******************************************
+
+Purpose : De-links the cache entry from the age chain
+
+Inputs : ce           ptr to the cache entry
+         h            ptr to the hash table
+
+Returns : ce.
+          The object is delinked from the age chain and its next/prev ptrs
+          are reset to NULL.  The hash table's head and tail pointers are
+          reset, if necessary.  The previous and next objects on the list
+          are joined if necessary.
+
+****************************************************************************/
+
+static cache_entry *cache_delink_age_list(cache_entry *ce, hashtable *h)
+{
+  cache_entry *prev, *next;
+
+  /* BucketHead is the new entry addition end, Tail is the oldest entry */
+  prev = ce->age_newer.generic;
+  if (prev) {
+    prev->age_older.generic = ce->age_older.generic;
+  }
+  else {
+    /* this was the youngest entry - change the head pointer */
+    h->bucket[UseListBucketHead].generic = ce->age_older.generic;
+  }
+
+  next = ce->age_older.generic;
+  if (next) {
+    next->age_newer.generic = ce->age_newer.generic;
+  }
+  else {
+    h->bucket[UseListBucketTail].generic = ce->age_newer.generic;
+  }
+
+  ce->age_older.generic = ce->age_newer.generic = NULL;
+
+  return ce;
+}
+
+/********* cache_add_to_chain **********************************************
+
+Purpose : Links the cache entry to a bucket
+
+Inputs : ce           ptr to the cache entry
+         h            ptr to the hash table holding ce
+
+Returns : ce.
+          ce has been moved to the newest end of the age chain.
+
+****************************************************************************/
+
+static cache_entry *cache_make_newest(cache_entry *ce, hashtable *h)
+{
+  ce->age_newer.generic = NULL;
+  ce->age_older.generic = h->bucket[UseListBucketHead].generic;
+  if (ce->age_older.generic) {
+    ce->age_older.generic->age_newer.generic = ce;
+  }
+  if (h->bucket[UseListBucketTail].generic == NULL) {
+    h->bucket[UseListBucketTail].generic = ce;
+  }
+
+  return ce;
+}
+
+/********* cache_add_to_chain **********************************************
+
+Purpose : Links the cache entry to a bucket
+
+Inputs : ce           ptr to the cache entry
+         head_pointer ptr to the bucket's head pointer
+
+Returns : ce.
+          The next and prev fields of ce are filled in, the prev field of
+          the previous head entry is pointed at ce.  the head pointer is
+          updated to point to ce.
+
+****************************************************************************/
+
+static cache_entry *cache_add_to_chain(cache_entry *ce, cache_entry **head_pointer)
+{
+  ce->next.generic = *head_pointer;
+  ce->prev.generic = NULL;
+  *head_pointer = ce;
+  if (ce->next.generic != NULL) {
+    ce->next.generic->prev.generic = ce;
+  }
+
+  return ce;
+}
 
 
+/********* cache_which_bucket **********************************************
+
+Purpose : Finds the bucket number holding the specified entry
+
+Inputs : h            ptr to the hash table
+         ce           ptr to the cache entry
+
+Returns : the bucket containing 'ce' - or UnknownBucket if it does not
+          appear in any (this is a fatal error!)
+
+****************************************************************************/
+
+static int cache_which_bucket(hashtable *h, cache_entry *ce)
+{
+  int i;
+
+  for (i = 0; i < NumBuckets; ++i)
+  {
+    cache_entry *he;
+    for (he = h->bucket[i].generic; he; he = he->next.generic) {
+      if (h->bucket[i].generic == ce) return i;
+    }
+  }
+
+  /* Error if we get here */
+  dprintf(("", "cache_which_bucket: dead - did not find entry %p\n", ce));
+  return UnknownBucket;
+}
 
 
-/********* cache operation overview ***************************************
+/********* cache_transfer_multiple_to_free_list ****************************
 
-There are 2 caches implemented in this file....one for the basic file
-informaton, the other for the attributes for the files ('lookup' and 'attr'
-caches).  Both are simple predefined arrays of suitable structures.
+Purpose : Transfers expired cache entries to the free list
 
-Entries are stored under a specific, almost unique 'hash' value made up from
-the mount point and  file ID.  This specifies where in the array to store the
-data.
+Inputs :  h            ptr to the hash table
+          now          the time now
+          force_one    non-zero to force at least entry to be expired
 
-***************************************************************************/
+Returns : void.
+          All expired entries have been transferred to the free list.
+          If 'force_one' was non-zero, at least one entry will have
+          been transferred even if it has not expired.
+
+          The freed structures have been put on the free list.
+
+****************************************************************************/
+
+static void cache_transfer_multiple_to_free_list(hashtable *h, clock_t now, int force_one)
+{
+  cache_entry *ce;
+
+  while ((ce = h->bucket[UseListBucketTail].generic) != NULL && (force_one || now > ce->out_of_date_time)) {
+    dprintf(("cache_3", "expiring hash table entry (%p)\n", h->bucket[UseListBucketTail].generic));
+    ce = cache_delink_chain(cache_delink_age_list(ce, h), &h->bucket[cache_which_bucket(h, ce)].generic);
+    cache_add_to_chain(ce, &h->bucket[FreeListBucket].generic);
+    force_one = 0;
+  }
+}
+
+
+/********* alloc_new_hashtable_entry ***************************************
+
+Purpose : Allocates an entry in a hashtable
+
+Inputs : h            ptr to the hash table
+         hash_val     the identity of the chain to look in
+
+Returns : a pointer to a new cache_entry for holding the file's
+          information.
+
+This routine can never fail.  The returned object IS linked to the active
+bucket and in the age list too.  If there are no objects on the free chain,
+this routine expires one (or more) from the age listd.
+
+****************************************************************************/
+
+static void *alloc_new_hashtable_entry(hashtable *h, int hash_val)
+{
+  cache_entry *ce;
+  const clock_t now = clock();
+
+  if (h->bucket[FreeListBucket].generic == NULL)
+  {
+    /* No free structures, throw away as many as possible and at least 1 */
+    cache_transfer_multiple_to_free_list(h, now, 1);
+  }
+
+  dprintf(("cache_3", "obtaining item from free list (%p)\n", h->bucket[FreeListBucket].generic));
+  ce = cache_delink_chain(h->bucket[FreeListBucket].generic, &h->bucket[FreeListBucket].generic);
+
+  /* Stop this entry being immediately expired */
+  ce->out_of_date_time = now + out_of_date_time;
+
+  /* Attach our new entry to the bucket */
+  ce = cache_add_to_chain(ce, &h->bucket[hash_val].generic);
+
+  /* And add it to the head of the age expiry list and fix up the lists */
+  return cache_make_newest(ce, h);
+}
+
+/********* alloc_new_attrentry *********************************************
+
+Purpose : Allocates an entry in the attr cache for a file
+
+Inputs : hash_val     the identity of the chain to look in
+
+Returns : a pointer to a new attrcache_entry for holding the file's
+          information
+
+This routine can never fail.
+The returned object IS linked to the active bucket and in the age list too.
+
+****************************************************************************/
+
+static attrcache_entry *alloc_new_attrentry(int hash_val)
+{
+  attrcache_entry *entry;
+
+  dprintf(("cache_3", "alloc_new_attrentry in bucket %d\n", hash_val));
+
+  entry = alloc_new_hashtable_entry(&attr_hash_table, hash_val);
+
+  dprintf(("cache_3", "alloc_new_attrentry in bucket %d: returning object number %d\n", hash_val, entry ? (entry - attrcache) : -1));
+
+  return entry;
+}
+
+/********* alloc_new_lookupentry *******************************************
+
+Purpose : Allocates an entry in the lookup cache for a file
+
+Inputs : filename     ptr to name of the object being sought
+         hash_val     the identity of the chain to look in
+
+Returns : a pointer to a new lookupcache_entry for holding the file's
+          information; or NULL on malloc failure (for the filename copy).
+
+This routine will always return a non-NULL result except on a memory
+exhaustion.  The nfs_name field is the only field filled in by this
+function.
+
+The returned object IS linked to the active bucket and in the age list too.
+
+****************************************************************************/
+
+static lookupcache_entry *alloc_new_lookupentry(char *nfs_name, int hash_val)
+{
+  size_t name_length = strlen(nfs_name) + 1;
+  char *new_name = malloc(name_length);
+
+  dprintf(("cache_2", "alloc_new_lookupentry (%s) (bucket %d)\n", nfs_name, hash_val));
+
+  if (new_name != NULL)
+  {
+    lookupcache_entry *entry = alloc_new_hashtable_entry(&lookup_hash_table, hash_val);
+    if (entry->nfs_name != NULL)
+    {
+            /* The entry was obviously victimised - free up its string */
+            free(entry->nfs_name);
+    }
+    entry->nfs_name = memcpy(new_name, nfs_name, name_length);
+    return entry;
+  }
+  else
+  {
+    return NULL;
+  }
+}
+
+/********* attrcache_locate_entry ******************************************
+
+Purpose : Searches the attr cache for the specified file.
+
+Inputs : mount_point  ptr to the mount point information
+         fhandle      ptr to an nfs file handle
+         hash_val     the identity of the chain to look in
+
+Returns : a pointer to a attrcache_entry holding matching details, or NULL.
+
+This routine will discard an out-of-date entry and return NULL - even on a
+match.
+
+Perhaps this routine should have a way of indicating that the data was there
+but was out-of-date?
+
+****************************************************************************/
+
+static attrcache_entry *attrcache_locate_entry(MountPoint *mount_point, RO_nfs_fh3 *fhandle, int hash_val)
+{
+        attrcache_entry *entry;
+
+        for (entry = attr_hash_table.bucket[hash_val].attr; entry; entry = entry->entry.next.attr)
+        {
+                if ( entry->entry.mount_point == mount_point && 0 == fh3cmp(&entry->entry.fhandle, fhandle))
+                {
+                        if ( entry->entry.out_of_date_time < clock() )
+                        {
+                                /* Found the entry, but it had expired - move it to the free list */
+                                cache_entry *ce = &entry->entry;
+                                cache_delink_age_list(ce, &attr_hash_table);
+                                cache_delink_chain(ce, &attr_hash_table.bucket[hash_val].generic);
+                                cache_add_to_chain(ce, &attr_hash_table.bucket[FreeListBucket].generic);
+                                ce->mount_point = NULL;
+                                entry = NULL;
+                        }
+                        break;
+                }
+        }
+
+        dprintf(("cache_3", "attrcache_locate_entry returning %p (%d)\n", entry, entry?(entry - attrcache) : -1));
+        return entry;
+}
+
+
+/********* lookupcache_locate_entry ****************************************
+
+Purpose : Searches the lookup cache for the specified file.
+
+Inputs : mount_point  ptr to the mount point information
+         dir          ptr to an nfs file handle of a directory
+         filename     ptr to name of the object being sought
+         hash_val     the identity of the chain to look in
+
+Returns : a pointer to a lookupcache_entry holding matching details, or NULL.
+
+This routine will discard an out-of-date entry and return NULL - even on a
+match.
+
+Perhaps this routine should have a way of indicating that the data was there
+but was out-of-date?
+
+****************************************************************************/
+
+static lookupcache_entry *lookupcache_locate_entry(MountPoint *mount_point, RO_nfs_fh3 *dir, char *filename, int hash_val)
+{
+        lookupcache_entry *entry;
+        size_t filename_length = strlen(filename);
+
+        dprintf(("cache_3", "lookupcache_locate_entry (bucket %d) (%s)\n", hash_val, filename));
+
+        for (entry = lookup_hash_table.bucket[hash_val].lookup; entry; entry = entry->entry.next.lookup)
+        {
+                if ( entry->entry.mount_point == mount_point &&
+                     0 == fh3cmp(&entry->dir, dir) &&
+                     0 == memcmp(entry->nfs_name, filename, filename_length) )
+                {
+                        /* At least the stem of the filename matched - now check for a RISC OS suffix */
+                        if (entry->nfs_name[filename_length+0] != '\0')
+                        {
+                                if (entry->nfs_name[filename_length+0] != FileChar_TypedNamePrefix ||
+                                    !isxdigit( entry->nfs_name[filename_length+1] ) ||
+                                    !isxdigit( entry->nfs_name[filename_length+2] ) ||
+                                    !isxdigit( entry->nfs_name[filename_length+3] ) ||
+                                    entry->nfs_name[filename_length+4] != '\0')
+                                    continue;
+                        }
+
+                        if ( entry->entry.out_of_date_time < clock() )
+                        {
+                                /* Found the entry, but it had expired - move it to the free list */
+                                cache_entry *ce = &entry->entry;
+                                cache_delink_age_list(ce, &lookup_hash_table);
+                                cache_delink_chain(ce, &lookup_hash_table.bucket[hash_val].generic);
+                                cache_add_to_chain(ce, &lookup_hash_table.bucket[FreeListBucket].generic);
+                                free(entry->nfs_name), entry->nfs_name = NULL;
+                                ce->mount_point = NULL;
+                                entry = NULL;
+                        }
+                        break;
+                }
+        }
+
+        dprintf(("cache_3", "lookupcache_locate_entry returning %p (%d)\n", entry, entry?(entry - lookupcache) : -1));
+
+        return entry;
+}
 
 
 
@@ -171,8 +722,11 @@ Inputs : mount_point  ptr to the mount point information
          fhandle      ptr to an nfs file handle
 
 Returns : a hash value based on the _value_ of the mount point pointer &
-	  fhandle, modulo (sizeof(cache)) (so it can't drop off the end of
-	  the table !)
+          fhandle, modulo (number of buckets)
+
+NOTE   : This routine only identifies the chain in which data for the fhandle
+         should be stored - callers must then search the appropriate list for
+         the matching entry if they want it (even to delete it).
 
 ****************************************************************************/
 
@@ -192,7 +746,7 @@ static int attrcache_hash(MountPoint *mount_point, RO_nfs_fh3 *fhandle)
                 hash_val = (hash_val << 1) ^ (hash_val >> 31) ^ fhandle->fh3.data.data_val[i];
         }
 
-        return (int)(hash_val % AttrCacheSize);
+        return (int)(hash_val % NumBuckets); /* (int)(hash_val % AttrCacheSize); */
 } /* endfunction attrcache_hash */
 
 
@@ -207,8 +761,12 @@ Inputs : mount_point  ptr to the mount point information
          nfs_name     ptr to the nfs name string of the file
 
 Returns : a hash value based on the _address_ of the mount point, the
-	  directory where the file is, and the name string, modulo
-	  (sizeof(cache)) (so it can't drop off the end of the table !)
+          directory where the file is, and the name string, modulo
+          (number of buckets)
+
+NOTE   : This routine only identifies the chain in which data for the fhandle
+         should be stored - callers must then search the appropriate list for
+         the matching entry if they want it (even to delete it).
 
 ****************************************************************************/
 
@@ -233,128 +791,250 @@ static int lookupcache_hash(MountPoint *mount_point, RO_nfs_fh3 *dir, char *nfs_
                 hash_val = ((hash_val << 1) | (hash_val >> 31)) + nfs_name[i];
         }
 
-	dprintf(("cache_4", "%p,%p,>>%s<< --> (L%02d)\n", mount_point, dir, nfs_name, (hash_val % LookupCacheSize)));
-
-        return (int)(hash_val % LookupCacheSize);
+        return (int)(hash_val % NumBuckets); /* (int)(hash_val % LookupCacheSize); */
 }  /* endfunction lookupcache_hash */
 
 
 
 
-/********* update_attrcache_at **********************************************
+/********* update_attrcache_entry *******************************************
 
 Purpose : Actually update the values held at a specified position in the
-	  attribute cache
+          attribute cache
 
 Inputs :  mount_point  ptr to the mount point details
-       	  fhandle      handle of the file to be put into the cache
-       	  hash_val     hash value for the entry
-       	  nattr	       attributes of the file
+          fhandle      handle of the file to be put into the cache
+          entry        pointer to the entry data structure
+          nattr        attributes of the file
 
-Returns : void.
-	  Overwrites the cache entry in global array attrcache[hash_val]
+Returns : entry.
+          Overwrites the data in the specified cache entry.
 
 ****************************************************************************/
 
-static void update_attrcache_at(MountPoint *mount_point,RO_nfs_fh3 *fhandle, int hash_val, fattr3 *nattr)
+static attrcache_entry *update_attrcache_entry(MountPoint *mount_point,RO_nfs_fh3 *fhandle, attrcache_entry *entry, fattr3 *nattr)
 {
-        dprintf(("cache_2", "update_attrcache_at (A%2d)\n", hash_val));
-        attrcache[ hash_val ].mount_point = mount_point;
-        fh3cpy(&attrcache[ hash_val ].fhandle, fhandle);
-        attrcache[ hash_val ].out_of_date_time = clock() + out_of_date_time;
-        attrcache[ hash_val ].nattr = *nattr;
-} /* endfunction update_attrcache_at */
+        entry->entry.mount_point = mount_point;
+        entry->nattr = *nattr;
+        fh3cpy(&entry->entry.fhandle, fhandle);
+        entry->entry.out_of_date_time = clock() + out_of_date_time;
+
+        (void) cache_make_newest(cache_delink_age_list(&entry->entry, &attr_hash_table), &attr_hash_table);
+
+        return entry;
+} /* endfunction update_attrcache_entry */
 
 
 /********* update_attrcache *************************************************
 
-Purpose : Update the values held at a specified position in the attribute
-	  cache.  Generates the hash value, and passes it onto
-	  update_attrcache_at.
+Purpose : Update the cached attribute values held for the specified file.  Existing
+          entries are updated, non-existent entries are created.
 
 Inputs :  mount_point  ptr to the mount point details
-       	  fhandle      handle of the file to be put into the cache
-       	  nattr	       attributes of the file
+          fhandle      handle of the file to be put into the cache
+          nattr        attributes of the file
+
+Returns : the address of the cache entry data structure.
+
+****************************************************************************/
+
+static attrcache_entry *update_attrcache(MountPoint *mount_point,RO_nfs_fh3 *fhandle, fattr3 *nattr)
+{
+        const int hash_val  = attrcache_hash(mount_point, fhandle);
+        attrcache_entry *entry = attrcache_locate_entry(mount_point, fhandle, hash_val);
+
+        if (entry == NULL)
+        {
+                /* We need a new structure - rip one out of the free pool and prepend it
+                 * to the active bucket - we prepend because in all likelihood, we are
+                 * probably going to be accessing this entry again soon.
+                 */
+                entry = alloc_new_attrentry(hash_val);
+        }
+        else
+        {
+                /* make it the newest entry in the age chain */
+                cache_make_newest(cache_delink_age_list(&entry->entry, &attr_hash_table), &attr_hash_table);
+        }
+
+        dprintf(("cache_2", "update_attrcache (bucket %2d)\n", hash_val));
+        return update_attrcache_entry(mount_point, fhandle, entry, nattr);
+} /* endfunction update_attrcache */
+
+
+/********* cancel_attr_cache_entry *****************************************
+
+Purpose : Frees a single entry in the attribute cache
+
+Inputs : entry     the entry to be freed
+         hash_val  which chain the item is in (or UnknownBucket if not known)
 
 Returns : void.
-	  Doesn't do a lot itself, really ...
+          returns entry to the free list.
+
+****************************************************************************/
+static void cancel_attr_cache_entry( attrcache_entry *entry, int hash_val)
+{
+        if (hash_val == UnknownBucket)
+        {
+                hash_val = attrcache_hash( entry->entry.mount_point, &entry->entry.fhandle );
+        }
+
+        cache_delink_age_list(&entry->entry, &attr_hash_table);
+        cache_delink_chain(&entry->entry, &attr_hash_table.bucket[hash_val].generic);
+        cache_add_to_chain(&entry->entry, &attr_hash_table.bucket[FreeListBucket].generic);
+        entry->entry.mount_point = NULL;
+} /* endfunction cancel_attrcache_entry */
+
+
+/********* update_lookupcache_entry ****************************************
+
+Purpose : Actually update the values held at a specified position in the
+          lookup cache.
+
+Inputs :  mount_point  ptr to the mount point details
+          dir          ptr to handle of directory holding file to be entered
+          entry        the entry in the hash table to update
+          fhandle      ptr to handle of file
+
+Returns : entry.
+          Overwrites the cache entry data with the specified information.
 
 ****************************************************************************/
 
-static void update_attrcache( MountPoint *mount_point, RO_nfs_fh3 *fhandle, fattr3 *nattr)
+static lookupcache_entry *update_lookupcache_entry( MountPoint *mount_point, RO_nfs_fh3 *dir,
+                                   lookupcache_entry *entry, RO_nfs_fh3 *fhandle)
 {
-        update_attrcache_at( mount_point, fhandle, attrcache_hash( mount_point, fhandle ), nattr );
-}   /* endfunction update_attrcache */
+        if ( entry )
+        {
+                dprintf(("cache_2", "update_lookupcache_entry (%s)\n", entry->nfs_name));
+                entry->entry.mount_point = mount_point;
+                fh3cpy(&entry->dir, dir);
+                fh3cpy(&entry->entry.fhandle, fhandle);
+                entry->entry.out_of_date_time = clock() + out_of_date_time;
+                (void) cache_make_newest(cache_delink_age_list(&entry->entry, &lookup_hash_table), &lookup_hash_table);
+        }
+
+        return entry;
+}   /* endfunction update_lookupcache_entry */
 
 
-/********* cancel_lookup_cache_at *******************************************
+/********* update_lookupcache **********************************************
 
-Purpose : Clears a single entry in the lookup cache
+Purpose : Update the values held at a specified position in the
+          lookup cache.
 
-Inputs : hashval   position in array to clear
+Inputs :  mount_point  ptr to the mount point details
+          dir          ptr to handle of directory holding file to be entered
+          nfs_name     ptr to name string of file to be put into the cache
+          fhandle      ptr to handle of file
+
+Returns : address of the cache entry data structure.
+
+****************************************************************************/
+
+static lookupcache_entry *update_lookupcache( MountPoint *mount_point, RO_nfs_fh3 *dir, char *nfs_name, RO_nfs_fh3 *fhandle)
+{
+        const int hash_val = lookupcache_hash(mount_point, dir, nfs_name);
+        lookupcache_entry *entry = lookupcache_locate_entry(mount_point, dir, nfs_name, hash_val);
+
+        if (entry == NULL)
+        {
+                /* We need a new structure - rip one out of the free pool and prepend it
+                 * to the active bucket - we prepend because in all likelihood, we are
+                 * probably going to be accessing this entry again soon.
+                 */
+                entry = alloc_new_lookupentry(nfs_name, hash_val);
+                /* Note - this may return NULL, but only on complete memory exhaustion
+                 * Also note that update_lookupcache_entry copes with entry == NULL.
+                 */
+        }
+
+        dprintf(("cache_2", "update_lookupcache (bucket %2d) entry %p\n", hash_val, entry));
+        return update_lookupcache_entry(mount_point, dir, entry, fhandle);
+} /* endfunction update_lookupcache */
+
+
+
+
+/********* cancel_lookup_cache_entry ***************************************
+
+Purpose : Frees a single entry in the lookup cache
+
+Inputs : entry     the entry to be freed
+         hashval   which chain the item is in (or UnknownBucket if not known)
 
 Returns : void
-	  frees memory and sets values to 0 at specified entry in global
-	  array lookupcache
+          returns entry to the free list, and frees up memory for the filename.
 
 ****************************************************************************/
-
-static void cancel_lookupcache_at( int hashval )
+static void cancel_lookup_cache_entry( lookupcache_entry *entry, int hash_val)
 {
-        dprintf(("cache_2", "cancel_lookupcache_at (L%02d)\n", hashval));
-        lookupcache[ hashval ].mount_point = NULL;
-        if ( lookupcache[ hashval ].nfs_name )
+        if (hash_val == UnknownBucket)
         {
-                free( lookupcache[ hashval ].nfs_name );
-                lookupcache[ hashval ].nfs_name = NULL;
+                hash_val = lookupcache_hash(entry->entry.mount_point, &entry->dir, entry->nfs_name);
         }
-} /* endfunction cancel_lookupcache_at */
+
+        cache_delink_age_list(&entry->entry, &lookup_hash_table);
+        cache_delink_chain(&entry->entry, &lookup_hash_table.bucket[hash_val].generic);
+        cache_add_to_chain(&entry->entry, &lookup_hash_table.bucket[FreeListBucket].generic);
+        free(entry->nfs_name), entry->nfs_name = NULL;
+        entry->entry.mount_point = NULL;
+}
 
 
 /********* cancel_lookup_cache **********************************************
 
 Purpose : Clears a single entry in the lookup cache by calling
-	  cancel_lookup_cache_at.
+          cancel_lookupcache_entry.
 
 Inputs : mount_point  ptr to mount point information
-       	 dir	      nfs file handle of directory holding file
-       	 nfs_name     nfs name of the object to clear
+         dir          nfs file handle of directory holding file
+         nfs_name     nfs name of the object to clear
 
-Returns : void (doesn't do a lot itself !)
+Returns : void.
 
 ****************************************************************************/
 
-static void cancel_lookupcache( MountPoint *mount_point, RO_nfs_fh3 *dir, char *nfs_name )
+static void cancel_lookup_cache( MountPoint *mount_point, RO_nfs_fh3 *dir, char *nfs_name )
 {
-        cancel_lookupcache_at( lookupcache_hash( mount_point, dir, nfs_name ));
-} /* endfunction cancel_lookupcache */
+        int hash_val = lookupcache_hash( mount_point, dir, nfs_name );
+        lookupcache_entry *entry = lookupcache_locate_entry( mount_point, dir, nfs_name, hash_val );
+        if (entry)
+        {
+                cancel_lookup_cache_entry(entry, hash_val);
+        }
+} /* endfunction cancel_lookup_cache */
 
 
 /********* cancel_lookup_cache_by_fhandle ***********************************
 
 Purpose : Clears the lookup cache entry associated with a file handle.  It
-	  does a simple linear search of the cache entries to find the right
-	  one to clear.
+          does a simple linear search of the cache entries to find the right
+          one to clear.
 
 Inputs :  fhandle  filehandle of entry to clear
 
 Returns : void
-	  if there is an entry in global array lookupcache with a matching
-	  filehandle, then it is cleared.
+          if there is an entry in the lookup cache matching the file handle,
+          it is returned tothe free list.
 
 ****************************************************************************/
 
-static void cancel_lookupcache_by_fhandle( RO_nfs_fh3 *fhandle )
+static void cancel_lookup_cache_by_fhandle( RO_nfs_fh3 *fhandle )
 {
+        lookupcache_entry *entry;
         int i;
 
-        for ( i = 0;
-                i < LookupCacheSize;
-                i++ )
+        for ( i = 0; i < NumBuckets; ++i )
         {
-                if ( fh3cmp( &lookupcache[ i ].fhandle, fhandle ) == 0 )
+                for (entry = lookup_hash_table.bucket[i].lookup; entry; entry = entry->entry.next.lookup)
                 {
-                        cancel_lookupcache_at( i );
+                        if ( fh3cmp( &entry->entry.fhandle, fhandle ) == 0 )
+                        {
+                                cancel_lookup_cache_entry(entry, i);
+                                return;
+                        }
                 }
         }
 } /* endfunction cancel_lookupcache_by_fhandle */
@@ -363,19 +1043,19 @@ static void cancel_lookupcache_by_fhandle( RO_nfs_fh3 *fhandle )
 
 /********* cancel_lookup_cache_by_mount_point ******************************
 
-Purpose : Clears the lookup cache entry associated with a mount point value.
-	  It  does a simple linear search of the cache entries to find the
-	  right one to clear.
+Purpose : Clears the lookup cache entries associated with a mount point value.
+          It does a simple linear search of the cache entries to find the
+          right ones to clear.
 
 Inputs :  mount_point  ptr to mount point of entry to clear
 
 Returns : void
-	  if there is an entry in global array lookupcache with a matching
-	  mount point ptr, then it is cleared.
+          All hash table entries with a matching mount_point are returned to
+          the free list.
 
 ****************************************************************************/
 
-static void cancel_lookupcache_by_mount_point( MountPoint *mount_point )
+static void cancel_lookup_cache_by_mount_point( MountPoint *mount_point )
 {
         int i;
 
@@ -383,50 +1063,28 @@ static void cancel_lookupcache_by_mount_point( MountPoint *mount_point )
                 i < LookupCacheSize;
                 i++ )
         {
-                if ( lookupcache[ i ].mount_point == mount_point )
+                if ( lookupcache[ i ].entry.mount_point == mount_point )
                 {
-                        cancel_lookupcache_at( i );
+                        cancel_lookup_cache_entry(&lookupcache[ i ], UnknownBucket);
                 }
         }
-} /* endfunction cancel_lookupcache_by_mount_point */
-
-
-
-/********* cancel_attr_cache_at *******************************************
-
-Purpose : Clears a single entry in the attribute cache
-
-Inputs : hashval   position in array to clear
-
-Returns : void
-	  frees memory and sets values to 0 at specified entry in global
-	  array attrcache
-
-****************************************************************************/
-
-static void cancel_attrcache_at( int hashval )
-{
-        dprintf(("cache_2", "cancel_attrcache_at (A%02d)\n", hashval));
-        attrcache[ hashval ].mount_point = NULL;
-} /* endfunction cancel_attrcache_at */
-
+} /* endfunction cancel_lookup_cache_by_mount_point */
 
 
 /********* cancel_attr_cache_by_fhandle *************************************
 
 Purpose : Clears the attribute cache entry associated with a file handle.  It
-	  does a simple linear search of the cache entries to find the right
-	  one to clear.
+          does a simple linear search of the cache entries to find the right
+          one to clear.
 
 Inputs :  fhandle  filehandle of entry to clear
 
 Returns : void
-	  if there is an entry in global array attrcache with a matching
-	  filehandle, then it is cleared.
+          returns any matching attribute cache entry to the free pool.
 
 ****************************************************************************/
 
-static void cancel_attrcache_by_fhandle( RO_nfs_fh3 *fhandle )
+static void cancel_attr_cache_by_fhandle( RO_nfs_fh3 *fhandle )
 {
         int i;
 
@@ -434,42 +1092,42 @@ static void cancel_attrcache_by_fhandle( RO_nfs_fh3 *fhandle )
                 i < AttrCacheSize;
                 i++ )
         {
-                if ( fh3cmp( &attrcache[ i ].fhandle, fhandle) == 0 )
+                if ( attrcache[ i ].entry.mount_point && fh3cmp( &attrcache[ i ].entry.fhandle, fhandle) == 0 )
                 {
-                        cancel_attrcache_at( i );
+                        cancel_attr_cache_entry( &attrcache[i], UnknownBucket );
+                        break;
                 }
         }
-} /* endfunction cancel_attrcache_by_fhandle */
+} /* endfunction cancel_attr_cache_by_fhandle */
 
 
 /********* cancel_attr_cache_by_mount_point ******************************
 
 Purpose : Clears the attr cache entry associated with a mount point value.
-	  It  does a simple linear search of the cache entries to find the
-	  right one to clear.
+          It  does a simple linear search of the cache entries to find the
+          right ones to clear.
 
 Inputs :  mount_point  ptr to mount point of entry to clear
 
 Returns : void
-	  if there is an entry in global array attrcache with a matching
-	  mount point ptr, then it is cleared.
+          return all matching attribute cache entries to the free pool.
 
 ****************************************************************************/
 
-static void cancel_attrcache_by_mount_point( MountPoint *mount_point )
+static void cancel_attr_cache_by_mount_point( MountPoint *mount_point )
 {
         int i;
 
         for ( i = 0;
                 i < AttrCacheSize;
-                i++ )
+                ++i )
         {
-                if ( attrcache[ i ].mount_point == mount_point )
+                if ( attrcache[ i ].entry.mount_point == mount_point )
                 {
-                        cancel_attrcache_at( i );
+                        cancel_attr_cache_entry( &attrcache[ i ], UnknownBucket );
                 }
         }
-} /* endfunction cancel_attrcache_by_mount_point */
+} /* endfunction cancel_attr_cache_by_mount_point */
 
 
 /********* cancel_all_caches_by_fhandle ***********************************
@@ -486,8 +1144,8 @@ Returns : void  Doesn't do a lot really, just calls other functions !
 
 void cancel_all_caches_by_fhandle( RO_nfs_fh3 *fhandle )
 {
-        cancel_lookupcache_by_fhandle( fhandle );
-        cancel_attrcache_by_fhandle( fhandle );
+        cancel_lookup_cache_by_fhandle( fhandle );
+        cancel_attr_cache_by_fhandle( fhandle );
 } /* endfunction cancel_all_caches_by_fhandle */
 
 
@@ -506,8 +1164,8 @@ Returns : void  Doesn't do a lot really, just calls other functions !
 
 void cancel_all_caches_by_mount_point( MountPoint *mount_point )
 {
-        cancel_lookupcache_by_mount_point( mount_point );
-        cancel_attrcache_by_mount_point( mount_point );
+        cancel_lookup_cache_by_mount_point( mount_point );
+        cancel_attr_cache_by_mount_point( mount_point );
 } /* endfunction cancel_all_caches_by_mount_point */
 
 
@@ -535,20 +1193,18 @@ _kernel_oserror *nfs_getattr( fattr3 **nattr, MountPoint *mount_point, RO_nfs_fh
         static GETATTR3res *getattr_res = NULL;
         GETATTR3args args;
         unused_client *nfs_client;
+        attrcache_entry *entry;
 
         /*
                 Check if cache entry is present, then check if it is too old to be useful.
                 If all is OK use the cached entry, otherwise obtain the value from the server.
         */
 
-        if ( attrcache[ hash_val ].mount_point == mount_point &&
-             fh3cmp( &attrcache[ hash_val ].fhandle, fhandle) == 0 &&
-             attrcache[ hash_val ].out_of_date_time > clock() )
+        entry = attrcache_locate_entry(mount_point, fhandle, hash_val);
+        if (entry != NULL)
         {
                 cache_hits++;
-
-                *nattr = &attrcache[ hash_val ].nattr;
-
+                *nattr = &entry->nattr;
                 return NULL;
         }
         cache_misses++;
@@ -580,9 +1236,9 @@ _kernel_oserror *nfs_getattr( fattr3 **nattr, MountPoint *mount_point, RO_nfs_fh
                 return err;
         }
 
-        update_attrcache_at( mount_point, fhandle, hash_val, &getattr_res->GETATTR3res_u.resok.obj_attributes );
-
-        *nattr = &attrcache[ hash_val ].nattr;
+        entry = alloc_new_attrentry( hash_val );
+        update_attrcache_entry( mount_point, fhandle, entry, &getattr_res->GETATTR3res_u.resok.obj_attributes );
+        *nattr = &entry->nattr;
 
         return NULL;
 }   /* endfunction nfs_getattr */
@@ -592,17 +1248,16 @@ _kernel_oserror *nfs_getattr( fattr3 **nattr, MountPoint *mount_point, RO_nfs_fh
 /********* nfs_setattr ******************************************************
 
 Purpose : Sets attributes for given file.  This routine alters the attributes
-	  of the file on the network, and updates the attribute cache.
-	  Flushes all caches if data is found to be stale (NFS3ERR_STALE).
+          of the file on the network, and updates the attribute cache.
+          Flushes all caches if data is found to be stale (NFS3ERR_STALE).
 
 Inputs : nattrres     ptr to ptr, somewhere to store result
-       	 mount_point  ptr to mount point info
-       	 fhandle      handle of file to get attributes for
-       	 nattr	      ptr to attribute information
+         mount_point  ptr to mount point info
+         fhandle      handle of file to get attributes for
+         nattr        ptr to attribute information
 
 Returns : NULL if OK, ptr to error if not (eg not found)
-	  If successful, nattrres holds the attribute information for the
-	  file?
+          If successful, nattrres holds the attribute information for the file
 
 ****************************************************************************/
 
@@ -655,7 +1310,12 @@ _kernel_oserror *nfs_setattr( fattr3 **nattrres, MountPoint *mount_point, RO_nfs
         */
         if (sres->SETATTR3res_u.resok.obj_wcc.after.attributes_follow)
         {
-                update_attrcache( mount_point, fhandle, &sres->SETATTR3res_u.resok.obj_wcc.after.post_op_attr_u.attributes );
+                attrcache_entry *entry;
+
+                entry = update_attrcache( mount_point, fhandle, &sres->SETATTR3res_u.resok.obj_wcc.after.post_op_attr_u.attributes );
+                /* In theory it would be possible to store &entry->nattr here, but remember that the cache is not guaranteed
+                 * to survive for as long as the result of this call is required.
+                 */
                 *nattrres = &sres->SETATTR3res_u.resok.obj_wcc.after.post_op_attr_u.attributes;
         }
         else
@@ -670,60 +1330,6 @@ _kernel_oserror *nfs_setattr( fattr3 **nattrres, MountPoint *mount_point, RO_nfs
 }   /* endfunction nfs_setattr */
 
 
-
-/********* update_lookupcache_at *******************************************
-
-Purpose : Actually update the values held at a specified position in the
-	  lookup cache.  routine explicitly cancels the appropriate entry
-	  first.
-
-Inputs :  mount_point  ptr to the mount point details
-       	  dir	       ptr to handle of directory to be entered
-       	  nfs_name     ptr to name string of file to be put into the cache
-       	  hash_val     hash value for the entry
-       	  fhandle      ptr to handle of file
-
-Returns : void.
-	  Overwrites the cache entry in global array lookupcache[hash_val]
-
-****************************************************************************/
-
-static void update_lookupcache_at( MountPoint *mount_point, RO_nfs_fh3 *dir,
-                                   char *nfs_name, int hashval, RO_nfs_fh3 *fhandle)
-{
-        cancel_lookupcache_at( hashval );
-        dprintf(("cache_2", "update_lookupcache_at (L%2d) >>%s<<\n", hashval, nfs_name));
-        lookupcache[ hashval ].nfs_name = malloc( strlen( nfs_name ) + 1 );
-        if ( lookupcache[ hashval ].nfs_name )
-        {
-                strcpy( lookupcache[ hashval ].nfs_name, nfs_name );
-                lookupcache[ hashval ].mount_point = mount_point;
-                fh3cpy(&lookupcache[ hashval ].dir, dir);
-                fh3cpy(&lookupcache[ hashval ].fhandle, fhandle);
-                lookupcache[ hashval ].out_of_date_time = clock() + out_of_date_time;
-        }
-}   /* endfunction update_lookupcache_at */
-
-
-
-/********* update_lookupcache **********************************************
-
-Purpose : Update the values held at a specified position in the
-	  lookup cache, generating hashvalue on the way.
-
-Inputs :  mount_point  ptr to the mount point details
-       	  dir	       ptr to handle of directory to be entered
-       	  nfs_name     ptr to name string of file to be put into the cache
-       	  fhandle      ptr to handle of file
-
-Returns : void.  Doesn't change anything directly
-
-****************************************************************************/
-
-static void update_lookupcache( MountPoint *mount_point, RO_nfs_fh3 *dir, char *nfs_name, RO_nfs_fh3 *fhandle)
-{
-        update_lookupcache_at( mount_point, dir, nfs_name, lookupcache_hash( mount_point, dir, nfs_name ), fhandle );
-}   /* endfunction update_lookupcache */
 
 
 /********* nfs_lookup_basic *************************************************
@@ -756,17 +1362,17 @@ static _kernel_oserror *nfs_lookup_basic( RO_nfs_fh3 *fhandle, fattr3 **nattr,
         static LOOKUP3res *dres = NULL;
         int hashval = lookupcache_hash( mount_point, dir, filename );
         unused_client *nfs_client;
+        lookupcache_entry *entry;
 
-        dprintf(("cache_3", "nfs_lookup_basic (Lval=%02d) >>%s<< (MP=%p)\n", hashval, filename, mount_point));
+        dprintf(("cache_3", "nfs_lookup_basic (bucket %02d) >>%s<< (MP=%p)\n", hashval, filename, mount_point));
 
-        if ( lookupcache[ hashval ].mount_point == mount_point &&
-                fh3cmp( &lookupcache[ hashval ].dir, dir) == 0 &&
-                strcmp( lookupcache[ hashval ].nfs_name, filename ) == 0 &&
-                lookupcache[ hashval ].out_of_date_time > clock() )
+        entry = lookupcache_locate_entry(mount_point, dir, filename, hashval);
+
+        if (entry != NULL)
         {
                 dprintf(("cache_3", "Cache hit (%s)\n", filename));
                 cache_hits++;
-                fh3cpy(fhandle, &lookupcache[ hashval ].fhandle);
+                fh3cpy(fhandle, &entry->entry.fhandle);
 
                 err = nfs_getattr( nattr, mount_point, fhandle );
 
@@ -779,12 +1385,7 @@ static _kernel_oserror *nfs_lookup_basic( RO_nfs_fh3 *fhandle, fattr3 **nattr,
                 */
         }
         cache_misses++;
-        dprintf(("cache_3", "Cache miss - match flags: MP(%d);DirFH(%d);FN(%d);Fresh(%d) (MPhash %p .. MPthis %p)\n",
-                lookupcache[ hashval ].mount_point == mount_point,
-                fh3cmp( &lookupcache[ hashval ].dir, dir) == 0,
-                strcmp( lookupcache[ hashval ].nfs_name, filename ) == 0,
-                lookupcache[ hashval ].out_of_date_time > clock(),
-                lookupcache[ hashval ].mount_point, mount_point));
+        dprintf(("cache_3", "Cache miss (%s)\n", filename));
 
         dargs.what.dir = dir->fh3;
         dargs.what.name = filename;
@@ -811,7 +1412,10 @@ static _kernel_oserror *nfs_lookup_basic( RO_nfs_fh3 *fhandle, fattr3 **nattr,
         {
                 if ( err == mb_nfserr_noent )
                 {
-                        cancel_lookupcache_at( hashval );
+                        if ( entry )
+                        {
+                                cancel_lookup_cache_entry( entry, hashval );
+                        }
                 }
                 else if ( err == mb_nfserr_stale )
                 {
@@ -825,7 +1429,8 @@ static _kernel_oserror *nfs_lookup_basic( RO_nfs_fh3 *fhandle, fattr3 **nattr,
 
         if ( dres->LOOKUP3res_u.resok.obj_attributes.attributes_follow )
         {
-                update_lookupcache_at( mount_point, dir, filename, hashval, fhandle );
+                entry = alloc_new_lookupentry( filename, hashval );
+                update_lookupcache_entry( mount_point, dir, entry, fhandle );
                 *nattr = &dres->LOOKUP3res_u.resok.obj_attributes.post_op_attr_u.attributes;
                 update_attrcache( mount_point, fhandle, *nattr );
         }
@@ -845,7 +1450,8 @@ static _kernel_oserror *nfs_lookup_basic( RO_nfs_fh3 *fhandle, fattr3 **nattr,
                 }
                 else
                 {
-                        update_lookupcache_at( mount_point, dir, filename, hashval, fhandle );
+                        entry = alloc_new_lookupentry( filename, hashval );
+                        update_lookupcache_entry( mount_point, dir, entry, fhandle );
                 }
         }
 
@@ -1546,7 +2152,7 @@ _kernel_oserror *nfs_create
                 update_attrcache( mount_point, dir, &cres->CREATE3res_u.resok.dir_wcc.after.post_op_attr_u.attributes );
         }
         else
-                cancel_attrcache_by_fhandle( dir );
+                cancel_attr_cache_by_fhandle( dir );
 
         return NULL;
 }  /* endfunction nfs_create */
@@ -1604,12 +2210,15 @@ _kernel_oserror *nfs_remove
         }
         else if ( !err )
         {
-                cancel_lookupcache( mount_point, dir, filename );
+                cancel_lookup_cache( mount_point, dir, filename );
 
                 /*
                         Date last modified will change.
                 */
-                cancel_attrcache_by_fhandle( dir );
+                /*
+                        SNB: but does the NFSv3 response not include the updated attributes anyway?
+                 */
+                cancel_attr_cache_by_fhandle( dir );
         }
 
         return err;
@@ -1679,13 +2288,13 @@ _kernel_oserror *nfs_rename
         }
         else if ( !err )
         {
-                cancel_lookupcache( mount_point, from_dir, from_filename );
+                cancel_lookup_cache( mount_point, from_dir, from_filename );
 
                 /*
                         Dates last modified will change.
                 */
-                cancel_attrcache_by_fhandle( from_dir );
-                cancel_attrcache_by_fhandle( to_dir );
+                cancel_attr_cache_by_fhandle( from_dir );
+                cancel_attr_cache_by_fhandle( to_dir );
         }
 
         return err;
@@ -1778,7 +2387,7 @@ _kernel_oserror *nfs_mkdir
                 update_attrcache( mount_point, dir, &cres->MKDIR3res_u.resok.dir_wcc.after.post_op_attr_u.attributes );
         }
         else
-                cancel_attrcache_by_fhandle( dir );
+                cancel_attr_cache_by_fhandle( dir );
 
         return NULL;
 }  /* endfunction nfs_mkdir */
@@ -1835,12 +2444,12 @@ _kernel_oserror *nfs_rmdir
         }
         else if ( !err )
         {
-                cancel_lookupcache( mount_point, dir, filename );
+                cancel_lookup_cache( mount_point, dir, filename );
 
                 /*
                         Date last modified will change.
                 */
-                cancel_attrcache_by_fhandle( dir );
+                cancel_attr_cache_by_fhandle( dir );
         }
 
         return err;
