@@ -11,7 +11,7 @@
 #
 # Paths
 #
-EXP_HDR = <export$dir>
+EXP_HDR = <CExport$Dir>.h
 
 #
 # Generic options:
@@ -117,7 +117,7 @@ ${RAMTARGET}: ${OBJS} ${CLIB}
         ${LD} -o $@ -module ${OBJS} ${CLIB}
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
-        ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
+        ${CP} export.h.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
 o.module:	c.module
