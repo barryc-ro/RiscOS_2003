@@ -140,6 +140,7 @@ OBJS =\
  o.ctsui\
  o.ctsutils\
  o.plugclient\
+ o.scevent\
  o.smartcard\
  o.statetable\
  o.st_aux\
@@ -160,6 +161,7 @@ OBJSZ =\
  oz.ctsui\
  oz.ctsutils\
  oz.plugclient\
+ o.scevent\
  oz.smartcard\
  oz.statetable\
  oz.st_aux\
@@ -180,6 +182,7 @@ OBJSD =\
  od.ctsui\
  od.ctsutils\
  od.plugclient\
+ o.scevent\
  od.smartcard\
  od.statetable\
  od.st_aux\
