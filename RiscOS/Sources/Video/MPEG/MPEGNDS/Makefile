@@ -1,11 +1,11 @@
-# Makefile for FlashVsn
+# Makefile for MPEGNDS
 #
 # ************************************
 # ***     C h a n g e   L i s t    ***
 # ************************************
 # Date         Name        Description
 # ----         ----        -----------
-# 24-Jan-2002  SAR         Created.
+# 05-Mar-2002  SAR         Created.
 #
 
 COMPONENT = MPEGNDS
