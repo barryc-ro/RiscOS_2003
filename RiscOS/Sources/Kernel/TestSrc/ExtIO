@@ -4,7 +4,7 @@
 ;
 ; External interface for RISC OS ROM.
 ; provides entry points to send byte- and word- and string-sized objects
-; and to receive byte- and word-sized objects   
+; and to receive byte- and word-sized objects
 ;
 ; A minimal set of opcodes should be used (ideally, only B, LDR and ADDS)
 ; so that a processor test may be validly included in the internal test
@@ -28,6 +28,7 @@
 ;				running from the 2nd ROM bank, conditioned on
 ;				CanLiveOnROMCard. Needed because 2nd ROM bank
 ;				isn't ghosted on the A23 line like the 1st bank.
+; 04-May-99     KJB             Modified to cope with >8M ROMs.
 ;------------------------------------------------------------------------
 
 
@@ -35,7 +36,8 @@
 
 ;
 ; The test adapter senses an access to the ROM with address line A23 high.
-; Current (8M addressing space) ROMs only use address lines A2 to A22,
+;
+; 8M addressing space ROMs only use address lines A2 to A22,
 ; so if A23 is asserted it will be ignored (the ROMS are aliased
 ; into 16M of space). With no test adapter, the aliased ROM location will
 ; be read and may be recognised. The test adapter may selectively disable
@@ -43,16 +45,18 @@
 ; should be dependent on the previous ROM read operation, and will
 ; therefore be predictably not equal to the data read when the ROMs are
 ; aliased.
-; The assumption that A23 is unused may be invalidated by a later issue
-; of the PCB. Machines using larger ROMs than 8Mbytes will require explicit
-; decoding or a new communication scheme.
+;
+; On a system with >8M of ROM, A23 is now meaningful, and there is no
+; aliasing of the ROM image. In this case, we read a fixed location at the
+; end of the ROM that always contains zero - if it reads as non-zero, the
+; test adapter is signalling.
 ;
 
 
 ;
-; This section determines whether the test interface adapter exists, and 
-; what variety is fitted (dumb, display or external)      
-; 3 read operations are performed (a WS operation): if all of these 
+; This section determines whether the test interface adapter exists, and
+; what variety is fitted (dumb, display or external)
+; 3 read operations are performed (a WS operation): if all of these
 ; find a ROM alias then no adapter is fitted.
 ;
 ; If an adapter responds, then a RD operation is performed - 4 strobes then
@@ -81,8 +85,27 @@ ts_GetCommand  ROUT
         ROUT
 
 ;
-; Load up the registers for the test interface communication -
+; Load up the registers for the test interface communication.
 ;
+
+; If the ROM is >8M, we will use the fixed zero word in the ROM trailer.
+; If not, we use the old scheme (in case someone is using an old ROM joiner
+; that doesn't write the correct trailer.) Because the ROM is >8M, the
+; trailer will be at an address with A23 set, as desired.
+;
+; KJB - note I haven't kept the purity of the minimal instruction set -
+; I feel that it is unlikely that there ever will be a processor test,
+; and if there is, then this won't be the only place where the purity
+; has been broken...
+
+        ASSERT  ts_Alias_bits = 8*1024*1024
+
+        MOV     r0,#0
+        LDR     r1,[r0, #ts_ROMSIZE]    ; size of ROM in bank 0
+        CMP     r1,#8*1024*1024
+        SUBHI   r2,r1,#20               ; zero word is at end-20
+        BHI     %42
+
 ; Point r2 at a word which contains 0 in 0-8MB physical space.
 ; Note that this code doesn't cope with the case where it can't find a zero
 ; word anywhere in the whole ROM. I don't think that this is a problem.
@@ -95,6 +118,7 @@ ts_GetCommand  ROUT
 	BNE	%01
 
 	ADD	r2, r2, #ts_Alias_bits	; point to zero word in ghost
+42
 	MOV	r1, #-1			; expected below
 04
         ; do an RD operation (four strobes) to ensure interface cleared
@@ -164,7 +188,7 @@ ts_GetCommand  ROUT
         ADDS    r5,r5,r5                ; loop until 5 bits are read
         BCC     %10
 
-        ADDS    r5,r4,r4                ; copy bits 7..3 to r5, bits 5..1 
+        ADDS    r5,r4,r4                ; copy bits 7..3 to r5, bits 5..1
 
         ADDS    r4,r0,r0                ; and read the last 3 bits to r4
 11      LDR     r3,[r2]                 ; read a bit of the byte
@@ -179,7 +203,7 @@ ts_GetCommand  ROUT
 ; Pass the option bits (r4) to the function identified by r5.
 ;
 
-        ADDS    r5,r5,r5                ; index * 2 -> index * 4 
+        ADDS    r5,r5,r5                ; index * 2 -> index * 4
         LDR     r3,%12                  ; pc-relative ptr to command_table
         ADD     pc,pc,r0
 12
@@ -187,14 +211,14 @@ ts_GetCommand  ROUT
         ADDS    r3,pc,r3                ; absolute pointer to command table
         ADDS    r3,r3,r5
 
-13      LDR     r3,[r3]                 ; get table entry 
+13      LDR     r3,[r3]                 ; get table entry
 14      ADD     pc,pc,r3                ; (offset from command_table)
 
         &       0                       ; necessary padding : pc must point
                                         ; to command table when r3 is added.
 
 ;
-; This is the table of offsets to all the built-in functions. 
+; This is the table of offsets to all the built-in functions.
 ; The top 5 bits of the command are used to index, so there are
 ; 32 possible entries, mostly illegal.
 ; Decoding of the function modifier bits is performed by multiple
@@ -226,7 +250,7 @@ ts_CRindex
 	DCD	(ts_read_cpr15l    - ts_command_table)
 	DCD	(ts_read_cpr15h    - ts_command_table)
 
-        ; pad the table out to 31 entries 
+        ; pad the table out to 31 entries
         ; (leave space for display vector)
 
 OldOpt  SETA    {OPT}
@@ -415,17 +439,17 @@ ts_Putdata      ROUT
 ;
 ;               - Send the text (nul-terminated, at r4) to the display
 ;
-; Interface registers need to be set up : this function is called from test 
+; Interface registers need to be set up : this function is called from test
 ; code rather than external interface code.
 ;
-; The display is assumed to be a standard 16 character LCD module using 
+; The display is assumed to be a standard 16 character LCD module using
 ; the Hitachi HD44780 display controller.
 ; The 16-digit module uses a single 44780. This is an abnormal use of the
 ; controller, and requires it to be set to two-line mode, with the first
 ; 8 displayed characters on the first 'line', and the second 8 on the
 ; second 'line'. Characters sent to the second line must be written at
 ; character position 40 +. In order to permit different modules to be
-; fitted to later adapters, it is suggested that the first 7 characters 
+; fitted to later adapters, it is suggested that the first 7 characters
 ; be treated as a 'title' line, and the second 8 as a 'comment' line.
 ; A space should always be placed at the end of the title line to
 ; split the display fields, unless there is no 'comment' line.
@@ -437,7 +461,7 @@ ts_Putdata      ROUT
 ; The bits in a transmitted byte are assigned as :
 ;
 ;       bit 0   -       D4  }   4-bit mode data bus
-;           1   -       D5  }  
+;           1   -       D5  }
 ;           2   -       D6  }
 ;           3   -       D7  }
 ;
@@ -446,14 +470,14 @@ ts_Putdata      ROUT
 ;           5   -           }   Unassigned
 ;           6   -           }
 ;
-;           7   -       CPEN    Interface control :     0 for enable, 
+;           7   -       CPEN    Interface control :     0 for enable,
 ;                                                       1 for disable
 ;
-; For each message sent, the display is first initialised, using the 
-; following sequence (each byte is sent as 2 bytes, high nibble first, 
+; For each message sent, the display is first initialised, using the
+; following sequence (each byte is sent as 2 bytes, high nibble first,
 ; with RS clear in bit 4 of each byte)
 ; After each byte, an RD operation is performed : this is used by the
-; interface hardware to strobe the data into the display. 
+; interface hardware to strobe the data into the display.
 ;
 ;
 ; The message addressed by r4 is then sent (data mode : RS set in each byte)
@@ -787,7 +811,7 @@ ts_send_text_byte       ROUT
 
 ;
 ; Character is normal text : write it to the LCD.
-; The shift loop is used to generate the inter-byte delay normally 
+; The shift loop is used to generate the inter-byte delay normally
 ; provided by  ts_recover_time. Always make sure this is long enough.
 ;
 
@@ -887,7 +911,7 @@ ts_send_cbit_upper
         LDR     r5,%70                  ; bitcount mask for 4 data bits
         ADD     pc,pc,r0                ; and 4 interface control bits
 70
-        &       (((1 :SHL: 4) + 1) :SHL: 24)   
+        &       (((1 :SHL: 4) + 1) :SHL: 24)
 
 ts_send_text_lower
         LDR     r3,%71
@@ -993,8 +1017,8 @@ ts_send_cbit_lower
 
 ;
 ; Wait for about 1 seconds worth of LCD operation delays to
-; permit the operator to read the text. 
-; Use of the interface's monitor allows this delay to be increased 
+; permit the operator to read the text.
+; Use of the interface's monitor allows this delay to be increased
 ; or decreased externally.
 ;
 
@@ -1038,7 +1062,7 @@ ts_SendEnd      ROUT
 10
         &       (1 :SHL: 24)
         LDR     r3,%11
-        ADD     pc,pc,r0 
+        ADD     pc,pc,r0
 11
         &       ts_recover_time         ; wait before sending data bits
 12      ADDS    r3,r3,r3                ; for byte timing.
