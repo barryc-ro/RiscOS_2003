@@ -1,6 +1,17 @@
+/* Changes
+   0.12  TC Correct bugs in 8Meg recognition
+         TC Return Power status in R1 from Flash_Status
+         TC Add support for 12Meg and 16Meg cards
+
+*/
+
+//#ifdef DEBUG
+#include <stdio.h>
+//#endif
 #include <stdlib.h>
 #include "kernel.h"
 #include "swis.h"
+#include "time.h"
 
 #include "module.h"
 #include "flashprog.h"
@@ -13,15 +24,27 @@ ERROR_STRUCT(LOCKED, "Device is busy");
 ERROR_STRUCT(BADHARD, "Bad hardware");
 
 /* Addressing stuff */
-#define DEFUALT_PODULE	1
+#define DEFUALT_PODULE	0		/* Hack for testing when softloaded */
 #define EASI_SPACE	0x88000000U
 
 #define ROM_OFFSET	0
 #define POWER_OFFSET	0x400000
+#define ENABLE_OFFSET	0x400004 /* also defined as power_control->program */
+#define PROGCTRL_OFFSET	0x400008
+#define VOLTINFO_OFFSET	0x40000C
 #define FLASH_OFFSET	0x800000
 #define SLEDGE_OFFSET	0xC00000
 
+#define TWELVE_VOLTS	1
+#define FIVE_VOLTS	2
+#define PAGE1	4
+#define PAGE0	0
+#define SETPAGE1	power_control->program = (programcopy & 3) | PAGE1
+#define SETPAGE0	power_control->program = (programcopy & 3) | PAGE0
+
 #define MEG		(1024*1024)
+#define MEG2MASK		(2*MEG-1)
+#define MEG8MASK		(8*MEG-1)
 
 /* Return values */
 #define RET_DONE	0		/* Completed OK */
@@ -30,7 +53,11 @@ ERROR_STRUCT(BADHARD, "Bad hardware");
 
 /* IDs */
 #define MAN_INTEL	0x0089
+#define MAN_SHARP	0x00B0
+#define	DEV_28F016Su	0x6688
 #define	DEV_28F016Sx	0x66A0
+
+#define	PROG_VOLTAGE	((dev) == DEV_28F016Su ? FIVE_VOLTS : TWELVE_VOLTS)
 
 /* 28F008SA-compatible commands (16bit-wide, replicated to 32bits) */
 #define WRITE_WORD	0x40404040
@@ -44,6 +71,9 @@ ERROR_STRUCT(BADHARD, "Bad hardware");
 #define ERASE_CONFIRM	0x00D000D0
 #define LOAD_PB		0x00E000E0
 #define WRITE_PB	0x000C000C
+#define ABORT	0x00800080
+#define ERASE_SUSPEND	0x00B000B0
+#define ERASE_RESUME	0x00D000D0
 
 /* IDs (accessible after READ_ID but not during WSM operation) */
 #define MAN_ADDR	0
@@ -62,6 +92,14 @@ ERROR_STRUCT(BADHARD, "Bad hardware");
 #define GSR_QUEUE_FULL	0x00080008
 #define GSR_PB_AVAIL	0x00040004
 
+/* Do we recognise this flash? */
+#define RECOGNISE(man,dev)					\
+	((((man) == MAN_INTEL) || ((man) == MAN_SHARP)) &&	\
+	 (((dev) == DEV_28F016Sx) || ((dev) == DEV_28F016Su)))
+#define CHECKMANDEV(man,dev) \
+	(((man & 0xffff) == (man >> 16)) && \
+	((dev & 0xffff) == (dev >> 16)) && \
+	(man != READ_ID) || (dev != READ_ID))
 
 /*
  * Types
@@ -82,6 +120,7 @@ typedef struct
     volatile unsigned int all_signals;
   } signals;
   volatile unsigned int program;
+  volatile unsigned int powerstatus;
 } power_control_t;
 
 
@@ -90,9 +129,10 @@ typedef struct
  */
 static volatile power_control_t *power_control;
 static int man=0, dev=0, size=0, blocksize=0, writesize=0, width, widthmask;
-static int pending=0;
+static int pending=0,pending1=0,pcopy=0,pcopy1=0;
 static unsigned int easi_base;
 static volatile unsigned int *flash;
+static int programcopy=0;
 
 
 /*
@@ -100,13 +140,18 @@ static volatile unsigned int *flash;
  */
 void power_up(void)
 {
+  clock_t done;
   power_control->power = 1;
   power_control->signals.all_signals = 7;
+
+  /* Delay for >50ms to give Vcc time to settle */
+  done = clock() + 1 + (int) (CLOCKS_PER_SEC * 50e-3);
+  while (clock() < done);
 }
 
 void power_down(void)
 {
-  power_control->program = 0;
+  power_control->program = programcopy = 0;
   power_control->signals.all_signals = 0;
   power_control->power = 0;
 }
@@ -122,7 +167,7 @@ _kernel_oserror *flash_initialise( void *pw, int podule_base )
           1<<9, &easi_base, sizeof(easi_base), podule_base);
   }
   power_control = (void *) (easi_base + POWER_OFFSET);
-  
+
   return NULL;
 }
 
@@ -130,7 +175,6 @@ extern void flash_finalise( void *pw )
 {
   power_down();
 }
-
 
 /*
  * SWI Flash_Info
@@ -153,7 +197,7 @@ extern void flash_finalise( void *pw )
 _kernel_oserror *flash_info( _kernel_swi_regs *r )
 {
   /* Can't do anything if WSM is in operation */
-  if (pending)
+  if (pending | pending1)
     return ERROR(LOCKED);
 
   power_up();
@@ -161,51 +205,96 @@ _kernel_oserror *flash_info( _kernel_swi_regs *r )
   flash = (void *) (easi_base + FLASH_OFFSET);
   r->r[0] = (int) flash;
 
-  *flash = READ_ID;			/* Get ID stuff */
-  man = flash[MAN_ADDR];
-  dev = flash[DEV_ADDR];
+  *flash = READ_ID;man = flash[MAN_ADDR];dev = flash[DEV_ADDR];
 
+  DEBUGFN(printf("Checking first half man=%x dev=%x\n",man,dev));
   /* See if same in both 16-bit halves, ie 32-bit wide pair of 16-bit devices */
   /* and ensure we're not just reading back the latched value we just wrote */
-  if (((man & 0xffff) == (man >> 16)) && ((dev & 0xffff) == (dev >> 16)) &&
-      (man != READ_ID) || (dev != READ_ID))
+  if (CHECKMANDEV(man,dev))
   {
-    r->r[6] = width = 4;
-    widthmask = 0xffffffff;
-    r->r[1] = (man &= 0xffff);
-    r->r[2] = (dev &= 0xffff);
+    r->r[6] = width = 4;widthmask = 0xffffffff;r->r[1] = (man &= 0xffff);r->r[2] = (dev &= 0xffff);
 
-    if ((man == MAN_INTEL) && (dev == DEV_28F016Sx))
+    if (RECOGNISE(man,dev))
     {
       r->r[4] = blocksize = 128*1024;	/* Each device in pair = 64Kbytes */
       r->r[5] = writesize = 512;	/* pagebuffer=256 bytes * 2 devices */
-  
+
       /* If IDs also appear at 4M, then its a ghost and only 4M is fitted */
-      if ((flash[MEG+MAN_ADDR] == ((MAN_INTEL<<16) | MAN_INTEL)) &&
-          (flash[MEG+DEV_ADDR] == ((DEV_28F016Sx<<16) | DEV_28F016Sx)))
+      if (((flash[MEG+MAN_ADDR] & 0xffff) == man) && ((flash[MEG+DEV_ADDR] & 0xffff) == dev))
       {
+        DEBUGFN(printf("Ghost found\n"));
+
         *flash = READ_ARRAY;		/* Restore normality */
         r->r[3] = size = 4*MEG;
       }
-      else
+      else /*not Ghost*/
       {
         int man2, dev2;
         *flash = READ_ARRAY;		/* Restore normality on 1st bank */
-        
+
         /* Look again for IDs at 4Meg to see two pairs of chips are fitted */
-        flash[MEG] = READ_ID;		/* Get ID stuff */
-        man2 = flash[MEG+MAN_ADDR];
-        dev2 = flash[MEG+DEV_ADDR];
-        flash[MEG] = READ_ARRAY;	/* Restore normality on 2nd bank */
-      
-        if (((man2 & 0xffff) == (man2 >> 16)) &&
-            ((dev2 & 0xffff) == (dev2 >> 16)) &&
-            ((man2 & 0xffff) == MAN_INTEL) &&
-            ((dev2 & 0xffff) == DEV_28F016Sx))
-          r->r[3] = size = 8*MEG;
-        else
-          r->r[3] = size = 4*MEG;
-      }
+        flash[MEG] = READ_ID;man2 = flash[MEG+MAN_ADDR];dev2 = flash[MEG+DEV_ADDR];flash[MEG] = READ_ARRAY;
+
+        DEBUGFN(printf("Checking other half man=%x dev=%x\n",man2,dev2));
+
+        if (CHECKMANDEV(man2,dev2))
+        {
+          man2 &= 0xffff;dev2 &= 0xffff;
+          if (RECOGNISE(man2,dev2))
+          {
+           /* Go through ringmarole again for the other page... */
+           SETPAGE1;*flash = READ_ID;man2 = flash[MAN_ADDR];dev2 = flash[DEV_ADDR];
+
+           DEBUGFN(printf("Checking upper first half man=%x dev=%x\n",man2,dev2));
+
+           if (CHECKMANDEV(man2,dev2))
+           {
+            man2 &= 0xffff;dev2 &= 0xffff;
+            if (RECOGNISE(man2,dev2))
+            {
+             if (((flash[MEG+MAN_ADDR] & 0xffff) == man2) && ((flash[MEG+DEV_ADDR] & 0xffff) == dev2))
+             {
+              DEBUGFN(printf("Upper Ghost found\n"));
+
+              *flash = READ_ARRAY;SETPAGE0;
+              r->r[3] = size = 8*MEG;
+             }
+             else /*not Upper Ghost*/
+             {
+              *flash = READ_ARRAY;
+              flash[MEG] = READ_ID;man2 = flash[MEG+MAN_ADDR];dev2 = flash[MEG+DEV_ADDR];flash[MEG] = READ_ARRAY;SETPAGE0;
+
+              DEBUGFN(printf("Checking upper other half man=%x dev=%x\n",man2,dev2));
+
+              if (CHECKMANDEV(man2,dev2))
+              {
+               if RECOGNISE(man2,dev2)
+                r->r[3] = size = 16*MEG;
+               else
+                r->r[3] = size = 12*MEG;
+              }
+              else
+               r->r[3] = size = 12*MEG;
+             }
+            }
+            else /*Failed to recognise lower other half*/
+            {
+             SETPAGE0;
+             r->r[3] = size = 8*MEG;
+            }
+           }
+           else /*Failed to check lower other half*/
+           {
+            SETPAGE0;
+            r->r[3] = size = 8*MEG;
+           }
+          } /*Hopefully page 0 restored by here...*/
+          else /*Failed to recognise upper half*/
+           r->r[3] = size = 4*MEG;
+        }
+        else /*Failed to check upper half*/
+         r->r[3] = size = 4*MEG;
+      } /*End not Ghost*/
     }
     else	/* Dunno about this device */
     {
@@ -214,14 +303,14 @@ _kernel_oserror *flash_info( _kernel_swi_regs *r )
   }
   else		/* Maybe its a 16bit device */
   {
-    *flash = READ_ARRAY;		/* Try to restore normality */    
+    *flash = READ_ARRAY;		/* Try to restore normality */
     flash = (void *) (easi_base + SLEDGE_OFFSET);
     *flash = READ_ID;			/* Get ID stuff */
     man = flash[MAN_ADDR] & 0xffff;
     dev = flash[DEV_ADDR] & 0xffff;
     *flash = READ_ARRAY;		/* Restore normality */
 
-    if ((man == MAN_INTEL) && (dev == DEV_28F016Sx))
+    if (RECOGNISE(man,dev))
     {
       r->r[1] = man;
       r->r[2] = dev;
@@ -261,20 +350,32 @@ _kernel_oserror *flash_info( _kernel_swi_regs *r )
  */
 _kernel_oserror *flash_read( _kernel_swi_regs *r )
 {
-  volatile unsigned int *src = flash + (r->r[1] / width);
+  int offset = r->r[1] / width;
+  volatile unsigned int *src;
   unsigned int *dst = (unsigned int *) r->r[0];
   unsigned int len = (width - 1 + r->r[2]) / width;
-  
+
+
+  src = flash + (offset & MEG2MASK);
+
   /* Only know about this kind of flash */
-  if ((man != MAN_INTEL) || (dev != DEV_28F016Sx))
+  if (!RECOGNISE(man,dev))
     return ERROR(BADTYPES);
 
   /* Can't do anything if WSM is in operation */
-  if (pending)
+  if (pending | pending1)
     return ERROR(LOCKED);
+
+  if (offset >= (2*MEG))
+  {
+   DEBUGFN(printf("setting page 1\n"));
+   SETPAGE1;
+  }
 
   while (len--)
     *(dst++) = *(src++);
+
+  if (offset >= (2*MEG)) SETPAGE0;
 
   r->r[0] = RET_DONE;
   return NULL;
@@ -292,26 +393,23 @@ _kernel_oserror *flash_read( _kernel_swi_regs *r )
  *   OUT
  *     r0:  RET_PENDING
  */
-_kernel_oserror *flash_erase( _kernel_swi_regs *r )
+_kernel_oserror *erase(int page)
 {
-  /* Only know about this kind of flash */
-  if ((man != MAN_INTEL) || (dev != DEV_28F016Sx))
-    return ERROR(BADTYPES);
-    
-  /* Can't do anything if WSM is in operation */
-  /* Actually, we probably could but it makes things simpler if we don't */
-  if (pending)
-    return ERROR(LOCKED);
+
+ if (size > page)
+ {
+  if (page>0) SETPAGE1;
 
   *flash = READ_ESR;
   if (flash[BSR_ADDR] & BSR_QUEUE_FULL)
   {
     /* This should never happen if !pending */
     *flash = READ_ARRAY;		/* Try to Restore normality */
+    if (page>0) SETPAGE0;
     return ERROR(LOCKED);
   }
-  
-  if (size > (4*MEG))
+
+  if (size > (page+(4*MEG)))
   {
     flash[MEG] = READ_ESR;
     if (flash[MEG+BSR_ADDR] & BSR_QUEUE_FULL & widthmask)
@@ -319,11 +417,15 @@ _kernel_oserror *flash_erase( _kernel_swi_regs *r )
       /* This should never happen if !pending */
       *flash = READ_ARRAY;		/* Try to restore normality */
       flash[MEG] = READ_ARRAY;
+      if (page>0) SETPAGE0;
       return ERROR(LOCKED);
     }
   }
-  
-  power_control->program = 1;
+  if (page>0)
+   power_control->program = programcopy = PROG_VOLTAGE | PAGE1;
+  else
+   power_control->program = programcopy = PROG_VOLTAGE | PAGE0;
+
   *flash = ERASE_ALL;
   *flash = ERASE_CONFIRM;
   if (size > (4*MEG))
@@ -331,12 +433,33 @@ _kernel_oserror *flash_erase( _kernel_swi_regs *r )
     flash[MEG] = ERASE_ALL;
     flash[MEG] = ERASE_CONFIRM;
   }
-  
+ }
+ if (page>0) SETPAGE0;
+ return NULL;
+}
+
+_kernel_oserror *flash_erase( _kernel_swi_regs *r )
+{
+  _kernel_oserror *oserror;
+  /* Only know about this kind of flash */
+  if (!RECOGNISE(man,dev))
+    return ERROR(BADTYPES);
+
+  /* Can't do anything if WSM is in operation */
+  /* Actually, we probably could but it makes things simpler if we don't */
+  if (pending | pending1)
+    return ERROR(LOCKED);
+
+  oserror = erase(0);
+  if (oserror != NULL) return oserror;
+  oserror = erase(8*MEG);
+  if (oserror != NULL) return oserror;
+
   pending = 1;
+  if (size>8*MEG) pending1 = 1;
   r->r[0] = RET_PENDING;
   return NULL;
 }
-
 
 /*
  * SWI Flash_Write
@@ -360,9 +483,11 @@ _kernel_oserror *flash_erase( _kernel_swi_regs *r )
  */
 _kernel_oserror *flash_write( _kernel_swi_regs *r )
 {
-  volatile unsigned int *block = flash + ((r->r[1] & ~(blocksize-1)) / width);
-  volatile unsigned int *chip = flash + (((r->r[1] / 4) < MEG) ? 0 : MEG);
-  volatile unsigned int *dst = flash + (r->r[1] / width);
+  int offset = r->r[1] / width;
+  int chipoffset = r->r[1] & MEG8MASK;
+  volatile unsigned int *block;
+  volatile unsigned int *chip;
+  volatile unsigned int *dst;
   unsigned int *src = (unsigned int *) r->r[0];
   unsigned int len = r->r[2] / width;		/* Number of words to write */
   unsigned int pb_offset = r->r[1] & (writesize-1);
@@ -370,44 +495,87 @@ _kernel_oserror *flash_write( _kernel_swi_regs *r )
   /* Length to write in half-words, replicated in both 16-bits of 32bit word */
   unsigned int i, lenpattern = (len - 1) + ((len - 1)<<16);
 
+  block = flash + ((chipoffset & ~(blocksize-1)) / width);
+  chip = flash + (((chipoffset / 4) < MEG) ? 0 : MEG);
+  dst = flash + (offset & MEG2MASK);
+
   /* Only know about this kind of flash */
-  if ((man != MAN_INTEL) || (dev != DEV_28F016Sx))
+  if (!RECOGNISE(man,dev))
     return ERROR(BADTYPES);
 
   if (len>writesize/width)
     return ERROR(BADPARAMS);
-  
-  if (pending)
+
+  if (offset >= (2*MEG))
   {
-    /* Check if still busy (erasing) */
-    if (flash[BSR_ADDR] & BSR_QUEUE_FULL & widthmask)
-    {
-      r->r[0] = RET_BUSY;
-      return NULL;
-    }
+   SETPAGE1;
 
-    if (size > (4*MEG))
-      if (flash[MEG+BSR_ADDR] & BSR_QUEUE_FULL & widthmask)
-      {
-        r->r[0] = RET_BUSY;
-        return NULL;
-      }
-      
-    pending = 0;
-    
-    /* Check last operation completed successfully */
-    if ((flash[GSR_ADDR] & GSR_DOS_ERROR & widthmask) ||
-        ((size > (4*MEG)) && (flash[MEG+GSR_ADDR] & GSR_DOS_ERROR & widthmask)))
-    {
-      power_control->program = 0;
-      return ERROR(BADHARD);
-    }
+   if (pending1)
+   {
+     /* Check if still busy (erasing) */
+     if (flash[BSR_ADDR] & BSR_QUEUE_FULL & widthmask)
+     {
+       SETPAGE0;
+       r->r[0] = RET_BUSY;
+       return NULL;
+     }
 
-    /* Clear prior status bits */
-    *flash = CLEAR_SR;
-    flash[MEG] = CLEAR_SR;
+     if (size > (12*MEG))
+       if (flash[MEG+BSR_ADDR] & BSR_QUEUE_FULL & widthmask)
+       {
+         SETPAGE0;
+         r->r[0] = RET_BUSY;
+         return NULL;
+       }
+
+     pending1 = 0;
+
+     /* Check last operation completed successfully */
+     if ((flash[GSR_ADDR] & GSR_DOS_ERROR & widthmask) ||
+         ((size > (12*MEG)) && (flash[MEG+GSR_ADDR] & GSR_DOS_ERROR & widthmask)))
+     {
+       power_control->program = programcopy = 0;
+       return ERROR(BADHARD);
+     }
+
+     /* Clear prior status bits */
+     *flash = CLEAR_SR;
+     if (size > (12*MEG)) flash[MEG] = CLEAR_SR;
+   }
   }
+  else
+  {
+   if (pending)
+   {
+     /* Check if still busy (erasing) */
+     if (flash[BSR_ADDR] & BSR_QUEUE_FULL & widthmask)
+     {
+       r->r[0] = RET_BUSY;
+       return NULL;
+     }
 
+     if (size > (4*MEG))
+       if (flash[MEG+BSR_ADDR] & BSR_QUEUE_FULL & widthmask)
+       {
+         r->r[0] = RET_BUSY;
+         return NULL;
+       }
+
+      pending = 0;
+
+     /* Check last operation completed successfully */
+     if ((flash[GSR_ADDR] & GSR_DOS_ERROR & widthmask) ||
+         ((size > (4*MEG)) && (flash[MEG+GSR_ADDR] & GSR_DOS_ERROR & widthmask)))
+     {
+       power_control->program = programcopy = 0;
+       return ERROR(BADHARD);
+     }
+
+     /* Clear prior status bits */
+     *flash = CLEAR_SR;
+     if (size > (4*MEG)) flash[MEG] = CLEAR_SR;
+   }
+  }
   /* OK, start the write */
   *chip = READ_ESR;
 
@@ -418,9 +586,10 @@ _kernel_oserror *flash_write( _kernel_swi_regs *r )
   {
     DEBUGFN(printf("Busy! BSR=%x, GSR=%x\n",
                    block[BSR_ADDR] & widthmask, block[GSR_ADDR] & widthmask));
+    if (offset >= (2*MEG)) SETPAGE0;
     r->r[0] = RET_BUSY;
     return NULL;
-  }    
+  }
 
 #ifdef DEBUG
   printf("\nWrite: offset=%x, len=%x\n", r->r[1], r->r[2]);
@@ -433,7 +602,10 @@ _kernel_oserror *flash_write( _kernel_swi_regs *r )
   printf("pb offset=%x\n", pb_offset);
 #endif
 
-  power_control->program = 1;
+  if (offset >= (2*MEG))
+   power_control->program = programcopy = PROG_VOLTAGE | PAGE1;
+  else
+   power_control->program = programcopy = PROG_VOLTAGE | PAGE0;
 
   /* Write length followed by data to page buffer */
   *block = LOAD_PB;
@@ -461,16 +633,21 @@ _kernel_oserror *flash_write( _kernel_swi_regs *r )
                    chip[BSR_ADDR] & widthmask, chip[GSR_ADDR] & widthmask));
   }
 
-  power_control->program = 0;
+  if (offset >= (2*MEG))
+   power_control->program = programcopy = PAGE1;
+  else
+   power_control->program = programcopy = PAGE0;
 
   /* Check for failure */
   if (chip[GSR_ADDR] & GSR_DOS_ERROR)
   {
+    if (offset >= (2*MEG)) SETPAGE0;
     return ERROR(BADHARD);
   }
-  
+
   *chip = CLEAR_SR;			/* Restore normality */
 
+  if (offset >= (2*MEG)) SETPAGE0;
   r->r[0] = RET_DONE;
   return NULL;
 }
@@ -486,13 +663,17 @@ _kernel_oserror *flash_write( _kernel_swi_regs *r )
  *   OUT
  *     r0:  RET_DONE, RET_PENDING or RET_BUSY
  */
-_kernel_oserror *flash_status( _kernel_swi_regs *r )
+
+/* This version does one part with the latch in a single state */
+
+_kernel_oserror *status ( _kernel_swi_regs *r, int size,int *pending)
 {
+
   /* Only know about this kind of flash */
-  if ((man != MAN_INTEL) || (dev != DEV_28F016Sx))
+  if (!RECOGNISE(man,dev))
     return ERROR(BADTYPES);
-  
-  if (!pending)
+
+  if (!*pending)
   {
     r->r[0] = RET_DONE;
     return NULL;
@@ -536,14 +717,14 @@ _kernel_oserror *flash_status( _kernel_swi_regs *r )
 #if 0	/* See above */
     flash[MEG] = READ_ESR;
 #endif
-    if ((flash[MEG+GSR_ADDR] & GSR_WSMS_READY & widthmask) != 
+    if ((flash[MEG+GSR_ADDR] & GSR_WSMS_READY & widthmask) !=
         (GSR_WSMS_READY & widthmask))
     {
       r->r[0] = RET_PENDING;
       return NULL;
     }
   }
-  
+
   if ((flash[GSR_ADDR] & GSR_DOS_ERROR & widthmask) ||
       ((size > (4*MEG)) && (flash[MEG+GSR_ADDR] & GSR_DOS_ERROR & widthmask)))
   {
@@ -553,21 +734,58 @@ _kernel_oserror *flash_status( _kernel_swi_regs *r )
     flash[MEG] = CLEAR_SR;
     flash[MEG] = READ_ARRAY;
 #endif
-    pending = 0;		/* So Flash_Release doesn't fail */
-    power_control->program = 0;
+    *pending = 0;		/* So Flash_Release doesn't fail */
     return ERROR(BADHARD);
   }
 
   DEBUGFN(printf("BSR=%x, GSR=%x\n",
                  flash[BSR_ADDR] & widthmask, flash[GSR_ADDR] & widthmask));
-  
-  power_control->program = 0;
-  *flash = CLEAR_SR;
-  flash[MEG] = CLEAR_SR;
 
-  pending = 0;
+  *flash = CLEAR_SR;
+  if (size>4*MEG) flash[MEG] = CLEAR_SR;  /*TC - didn't like the unconditional version of this before*/
+
+  *pending = 0;
   r->r[0] = RET_DONE;
-  return NULL;  
+  return NULL;
+}
+
+_kernel_oserror *flash_status( _kernel_swi_regs *r )
+{
+  _kernel_oserror *oserror;
+  int r0copy;
+
+  /* Now return Power status in R1 */
+
+  r->r[1] = power_control->powerstatus;
+
+  if (size > (8*MEG))
+  {
+    SETPAGE1;
+    oserror = status(r,size - 8*MEG,&pending1);
+    SETPAGE0;
+    if (oserror != NULL)
+    {
+     status(r,8*MEG,&pending); /*Just to clear stuff if possible*/
+     pending = 0; /*Forced by the upper half*/
+     power_control->program = programcopy = 0;
+     return oserror;
+    }
+    else
+    {
+     r0copy = r->r[0];
+     oserror = status(r,8*MEG,&pending);
+     if ((r->r[0] == RET_DONE) && (r0copy |=RET_DONE)) r->r[0] = r0copy;
+     if (oserror != NULL) pending1 = 0; /*Forced by the lower half*/
+     if (!(pending | pending1)) power_control->program = programcopy = 0;
+     return oserror;
+    }
+  }
+  else
+  {
+    oserror = status(r,size,&pending);
+    if (!pending) power_control->program = programcopy = 0;
+    return oserror;
+  }
 }
 
 /*
@@ -583,12 +801,160 @@ _kernel_oserror *flash_status( _kernel_swi_regs *r )
 _kernel_oserror *flash_release( _kernel_swi_regs *r )
 {
   /* Shouldn't power-down if WSM is in operation */
-  if (pending)
+  if (pending | pending1)
     return ERROR(LOCKED);
 
-  man = dev = size = blocksize = pending = 0;
+  man = dev = size = blocksize = 0;
   power_down();
 
   return NULL;
 }
 
+/*
+ * SWI Flash_EraseSuspend
+ *
+ * Suspend Erase operation
+ * Only call this if the last operation was an Erase or EraseResume
+ *
+ *   IN
+ *
+ *   OUT
+ */
+
+void erasesuspend(int page)
+{
+ if (size > page)
+ {
+  if (page>0) SETPAGE1;
+  *flash = ERASE_SUSPEND;
+
+  if (size > (page+(4*MEG)))
+  {
+   flash[MEG] = ERASE_SUSPEND;
+  }
+  if (page>0) SETPAGE0;
+ }
+}
+
+_kernel_oserror *flash_erasesuspend( _kernel_swi_regs *r )
+{
+ /* Should find that status is pending */
+ /* I'm not too bothered if it isn't... */
+
+ if (!RECOGNISE(man,dev)) return ERROR(BADTYPES);
+ if (pending) erasesuspend(0);
+ if (pending1) erasesuspend(8*MEG);
+
+ pcopy = pending;pcopy1 = pending1;
+ pending1 = pending = 0;
+ return NULL;
+}
+
+/*
+ * SWI Flash_EraseResume
+ *
+ * Resume Erase operation
+ * Only call this if the last operation was an EraseSuspend
+ *
+ *   IN
+ *
+ *   OUT
+ */
+
+void eraseresume(int page)
+{
+ if (size > page)
+ {
+  if (page>0) SETPAGE1;
+  *flash = ERASE_RESUME;
+
+  if (size > (page+(4*MEG)))
+  {
+   flash[MEG] = ERASE_RESUME;
+  }
+  if (page>0) SETPAGE0;
+ }
+}
+
+_kernel_oserror *flash_eraseresume( _kernel_swi_regs *r )
+{
+ /* Assumes Flash_EraseSuspend called before */
+
+ if (!RECOGNISE(man,dev)) return ERROR(BADTYPES);
+ if (pcopy) eraseresume(0);
+ if (pcopy1) eraseresume(8*MEG);
+
+ pending = pcopy;pending1 = pcopy1;
+ pcopy1 = pcopy = 0;
+ return NULL;
+}
+
+/*
+ * SWI Flash_Abort
+ *
+ * Abort the current operation
+ * Internal flags indicating WSM in operation are cleared
+ *
+ *   IN
+ *
+ *   OUT
+ */
+
+void flashabort(int page)
+{
+ if (size > page)
+ {
+  if (page>0) SETPAGE1;
+  *flash = ABORT;
+
+  if (size > (page+(4*MEG)))
+  {
+   flash[MEG] = ABORT;
+  }
+  if (page>0) SETPAGE0;
+ }
+}
+
+_kernel_oserror *flash_abort( _kernel_swi_regs *r )
+{
+
+ if (!RECOGNISE(man,dev)) return ERROR(BADTYPES);
+ flashabort(0);
+ flashabort(8*MEG);
+
+ pending1 = pending = 0;
+ return NULL;
+}
+
+/*
+ * SWI Flash_PowerControl
+ *
+ * Control the programming control register
+ * Be careful about using this, especially if WSM in operation
+ *
+ *   IN
+ *    r0: 1=>Power on Vpp,0=>Power off Vpp
+ *
+ *   OUT
+ *    results from Flash_Status call
+ */
+
+_kernel_oserror *flash_powercontrol( _kernel_swi_regs *r )
+{
+ clock_t done;
+ if (!RECOGNISE(man,dev)) return ERROR(BADTYPES);
+ if (r->r[0] & 1) 
+ {
+  power_control->program = programcopy = (programcopy & 0xFFFFFFFC) | PROG_VOLTAGE;
+ }
+ else
+ {
+  power_control->program = programcopy = (programcopy & 0xFFFFFFFC);
+ }
+  /* Delay for >5ms to give Vpp time to settle */
+  done = clock() + 1 + (int) (CLOCKS_PER_SEC * 5e-3);
+  while (clock() < done);
+ r->r[1] = power_control->powerstatus;
+ r->r[0] = (pending | pending1) ? RET_PENDING : RET_DONE;
+ return NULL;
+}
