@@ -214,6 +214,7 @@ static int use_configured_info( int s, char *ifname, ip_data *ip )
 {
     	if (ip->static_flag) {
      		if ( set_ipaddr(s, ifname, (struct in_addr *) &ip->client_ip) != 0 ) {
+                        const int ac = read_address_count();
 	    		write_tag_msg_nl("IFRUsingSt");
 
             		SetVarVal( SYSVAR_INET_BOOTFILE, ip->boot_mount);
@@ -222,7 +223,10 @@ static int use_configured_info( int s, char *ifname, ip_data *ip )
 	    		ifrconfig_set_var(SYSVAR_INET_BOOTSERVER, ip->server_ip);
 	    		ifrconfig_set_var(SYSVAR_INET_GATEWAY, ip->gateway_ip);
 	    		ifrconfig_set_var(SYSVAR_INET_RESOLVERS, ip->dns_ip);
-	    		ifrconfig_set_var(SYSVAR_INET_ADDR_1, ip->addr1_ip);
+	    		if (ac>0) ifrconfig_set_var(SYSVAR_INET_ADDR_1, ip->addr1_ip);
+	    		if (ac>1) ifrconfig_set_var(SYSVAR_INET_ADDR_2, ip->addr2_ip);
+	    		if (ac>2) ifrconfig_set_var(SYSVAR_INET_ADDR_3, ip->addr3_ip);
+	    		if (ac>3) ifrconfig_set_var(SYSVAR_INET_ADDR_4, ip->addr4_ip);
 	    		ifrconfig_set_var(SYSVAR_INET_ETHERIPMASK, ip->netmask_ip);
             		return 1;
                 }
@@ -236,6 +240,57 @@ static int use_configured_info( int s, char *ifname, ip_data *ip )
         }
 
     	return 0;
+}
+
+
+static int GetIPVar(struct in_addr *in, const char *env)
+{
+        struct in_addr i;
+        const char *val = getenv(env);
+
+        if (val != NULL && inet_aton(val, &i)) {
+                *in = i;
+                return 1;
+        }
+        return 0;
+}
+
+/*
+ *  This function examines the private data returned by the boot server (if any)
+ *  to determine whether we are required to write the dynamically discovered
+ *  data into the NVRAM and switch to static booting for future boot attempts.
+ */
+static void check_switch_to_static_boot(ip_data *ip)
+{
+        const int ac = read_address_count();
+        const char *env = getenv(SYSVAR_INET_PRIVATEDATA);
+        const char *subptr;
+
+        if (env == NULL) return;
+        subptr = strstr(env, "static");
+        if (subptr == NULL) return;
+        if (subptr != env && subptr[-1] != ',') return;
+        if (subptr[6] != '\0' && subptr[6] != ',') return;
+
+        /* Write new data to CMOS and set next boot to use static data */
+        ReadIPData(ip);
+        ip->client_ip = ipaddr.sin_addr;
+	(void) GetIPVar(&ip->server_ip, SYSVAR_INET_BOOTSERVER);
+	(void) GetIPVar(&ip->gateway_ip, SYSVAR_INET_GATEWAY);
+	(void) GetIPVar(&ip->dns_ip, SYSVAR_INET_RESOLVERS);
+	if (ac>0) (void) GetIPVar(&ip->addr1_ip, SYSVAR_INET_ADDR_1);
+	if (ac>1) (void) GetIPVar(&ip->addr2_ip, SYSVAR_INET_ADDR_2);
+	if (ac>2) (void) GetIPVar(&ip->addr3_ip, SYSVAR_INET_ADDR_3);
+	if (ac>3) (void) GetIPVar(&ip->addr4_ip, SYSVAR_INET_ADDR_4);
+	if (GetIPVar(&ip->netmask_ip, SYSVAR_INET_ETHERIPMASK)) {
+	        GetMask(&ip->netmask_ip, (int *) &ip->netmask);
+	}
+	env = getenv(SYSVAR_INET_BOOTFILE);
+	if (env != NULL) {
+	        strncpy(ip->boot_mount, env, cmos_BOOT_MOUNT_SZ);
+	}
+        ip->static_flag = 1;
+        WriteIPData(ip);
 }
 #endif
 
@@ -265,7 +320,7 @@ int ifrconfig(int s, char *ifname)
 		for (retries = 0; retries < MAX_TRIES; ++retries) {
             		write_tag_msg_nl("IFRSrchBS");
 	            	(void) strncpy(ifr.ifr_name, ifname, sizeof (ifr.ifr_name));
-	            	if (socketioctl(s, SIOCGWHOIAMRB, (caddr_t)&ifr) < 0) {
+	            	if (socketioctl(s, SIOCGWHOIAMB, (caddr_t)&ifr) < 0) {
 	                	newline();
         	        	write_tag_msg_nl("IFRNoBS");
                 		continue;
@@ -283,7 +338,7 @@ int ifrconfig(int s, char *ifname)
         }
 #endif
 
-        strncpy(ifr.ifr_name, ifname, sizeof (ifr.ifr_name));
+        (void) strncpy(ifr.ifr_name, ifname, sizeof (ifr.ifr_name));
         if (socketioctl(s, SIOCGIFADDR, (caddr_t)&ifr) < 0) {
             	newline();
             	write_tag_msg_nl("IFRNoRNA");
@@ -291,8 +346,11 @@ int ifrconfig(int s, char *ifname)
         }
 
         ipaddr.sin_addr = ((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr;
+
+#ifdef TRACE
 	write_tag_msg("IFRMNAIs");
         printf(": %s\n", inet_ntoa(ipaddr.sin_addr));
+#endif
 
         /* Try to set the default route if necessary. */
         if (ifrconfig_set_default_route(s) == 0) {
@@ -304,19 +362,12 @@ int ifrconfig(int s, char *ifname)
             	write_tag_msg_nl("IFRNDNM");
         }
 
-	if (!ip.static_flag && !ip.dynamic_flag) {
-	        /* Write new data to CMOS and set next boot to use static data */
-	        ReadIPData(&ip);
-	        ip.client_ip = ipaddr.sin_addr;
-	        ip.static_flag = 1;
-	        WriteIPData(&ip);
-	}
-
-
 #ifdef GET_NETMASK_VIA_ICMP
         /* Gets netmask via ICMP (no longer required).
          */
+#  ifdef TRACE
 	write_tag_msg_nl("IFRSrchNM");
+#  endif
         (void) socketioctl(s, SIOCGWHOIAMM, (caddr_t)&ifr);
         strncpy(ifr.ifr_name, ifname, sizeof (ifr.ifr_name));
         if (socketioctl(s, SIOCGIFNETMASK, (caddr_t)&ifr) < 0) {
@@ -324,8 +375,16 @@ int ifrconfig(int s, char *ifname)
             	return (0);
         }
         netmask.sin_addr = ((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr;
+#  ifdef TRACE
 	write_tag_msg("IFRNMIs");
         printf(": %s\n", inet_ntoa(netmask.sin_addr));
+#  endif
+#endif
+
+#ifdef USECMOS
+	if (ip.static_flag == 0) {
+		check_switch_to_static_boot(&ip);
+	}
 #endif
 
         return 1;
