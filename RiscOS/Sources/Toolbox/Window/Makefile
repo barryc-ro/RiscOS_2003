@@ -41,12 +41,13 @@ RM      = remove
 WIPE    = -wipe
 CD      = dir
 MAKE    = amu
+TOUCH   = create
 
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
 AFLAGS   = -depend !Depend -Stamp -quit -CloseExec
-CFLAGS   = -c -depend !Depend ${INCLUDES} -zM -ffah -zps1 ${DFLAGS}
+CFLAGS   = -c -depend !Depend ${INCLUDES} -zM -ffah -Wc -zps1 ${DFLAGS}
 DFLAGS   = -D${SYSTEM}
 ROMFLAGS = -DROM
 INCLUDES = -IC:tboxlibint.,C:tboxlibs,C:
@@ -59,8 +60,8 @@ CLIB      = CLIB:o.stubs
 RLIB      = RISCOSLIB:o.risc_oslib
 ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.c_abssym
-TBOXLIB   = <Lib$Dir>.tboxlibint.o.tboxlibm
-WIMPLIB   = <Lib$Dir>.tboxlibs.o.wimplib
+TBOXLIB   = C:tboxlibint.o.tboxlibm
+WIMPLIB   = C:tboxlibs.o.wimplib
 
 OBJS =\
  o.ModNoDbg\
@@ -178,13 +179,13 @@ RESF=o.msgs
 # Main rules:
 #
 #
-all: ${RAM_MODULE}
+all: ${RAM_MODULE} o._dirs
         @echo ${COMPONENT}: Module built (RAM)
 
-rom: ${ROM_MODULE}
+rom: ${ROM_MODULE} o._dirs
         @echo ${COMPONENT}: Module built (ROM)
 
-install_rom: ${ROM_MODULE}
+install_rom: ${ROM_MODULE} o._dirs
         ${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: Module installed (ROM)
 
@@ -220,6 +221,9 @@ ${WIMPLIB}:
         ${MAKE} @.wimplib
         back
 
+o._dirs:
+	${MKDIR} o
+	${TOUCH} $@
 
 ${RESF}: LocalRes:Messages
 	resgen messages_file ${RESF} LocalRes:Messages Resources.${COMPONENT}.Messages
