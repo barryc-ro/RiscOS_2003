@@ -41,12 +41,12 @@ LDIR       = ${RDIR}.${LOCALE}
 
 
 # Global Header Files required 
-GLOBAL_HDR_FILES = sys_def.h acu_pro.h acu_mem.h acu_def.h \
-                   mt_pro.h mt_codef.h mt_hwdef.h mt_hwpro.h \
-                   mt_copro.h as_pro.h pp_def.h pp_mem.h \
-                   wl_pro.h wl_def.h wl_mem.h mt_coext.h eeprom.h \
-                   mod_def.h v34_rate.h par_def.h vcv_cpro.h vcv_mem.h \
-                   fab.h resp_cod.h dsp_cod.h ptt.h ee_def.h
+GLOBAL_HDRS = sys_def.h acu_pro.h acu_mem.h acu_def.h       \
+     mt_pro.h mt_codef.h mt_hwdef.h mt_hwpro.h              \
+     mt_copro.h as_pro.h pp_def.h pp_mem.h                  \
+     wl_pro.h wl_def.h wl_mem.h mt_coext.h eeprom.h         \
+     mod_def.h v34_rate.h par_def.h vcv_cpro.h vcv_mem.h    \
+     resp_cod.h ptt.h ee_def.h
 
 # Platform I/O
 IOP_V = ac00ptt.o ptt00cfg.o dte.o acu.o dte_drv.o linelink.o lineasyn.o \
@@ -55,7 +55,10 @@ IOP_V = ac00ptt.o ptt00cfg.o dte.o acu.o dte_drv.o linelink.o lineasyn.o \
      faxhdlc.o faxdata.o faxlink.o faxdat.o \
      riscosasm.o voc_ctls.o \
      musket.o linev8.o modulehdr.o riscos.o \
-     ringint.o callerid.o dsppatch.o patch_l.o vcepatch.o pwronptc.o 
+     linev80.o dte_v80.o print.o \
+     ringint.o callerid.o dsppatch.o powerons.o \
+     trnpatch.o compatch.o datpatch.o vcepatch.o \
+     pkttrace.o
 
 
 
@@ -78,7 +81,7 @@ TARGET_OBJS_P_V = $(PPSTUB) $(AUTOSYNC_STUB) $(IOP_V)
 
 # Local Flags
 #DFLAGS  = -3/32bit
-DFLAGS  = -DPODULEBASED #-DDEBUG -DAPP
+DFLAGS  = -DPODULEBASED #-DDEBUG #-DAPP
 CFLAGS  = -depend !Depend -zps -zM -c -li -I. -Iio -Iv42 -Imt_ctls1 $(DFLAGS) $(C_DBG_FLAGS)
 #CFLAGS  = -zps1 -c -li -I. -Iio -Iv42 -Imt_ctls1 $(DFLAGS) $(C_DBG_FLAGS)
 AFLAGS  = -LI $(A_DBG_FLAGS)
@@ -145,21 +148,23 @@ rom_link:
 #
 #    Musket w/ Cirrus Cutlass I data pump for EMULATOR No wireless code
 #
-${TARGET}:    $(GLOBAL_HDR_FILES) $(TARGET_OBJS_P_V) $(STARTUP) $(PAR_OBJ) linktop
+${TARGET}:    $(GLOBAL_HDRS) $(TARGET_OBJS_P_V) $(STARTUP) $(PAR_OBJ) linktop
 	    $(MKDIR) o
 	    ${MKDIR} rm
-            amu -f acumf/arm hdrs acucore !etc !v25bis !wireless !voice fax !voiceview
+            amu -f acumf/arm hdrs acucore !etc !v25bis !wireless voice fax !voiceview
             amu -f faxmf/arm hdrs fx1
             amu -f v42mf/arm hdrs v42code btlzcode etcstub m10stub cl5code
             amu -f mtmf/arm hdrs cutlass_1
+	    amu -f vcmf/arm hdrs voice
+	    amu -f v80mf/arm v80
             $(LD) -rmf -o $@ $(LFLAGS) $(LB)
-	    $(MODSQZ) $@
+	    |$(MODSQZ) $@
 
 
 
 linktop:;         @echo Making it
 
-hdrs: $(GLOBAL_HDR_FILES)
+hdrs: $(GLOBAL_HDRS)
 
 
 #
@@ -209,53 +214,8 @@ modulehdr.h:  io/modulehdr.cmhg
 
 
 # Dynamic dependencies:
-o.vcvhdlc:	IO.c.vcvhdlc
-o.vcvhdlc:	h.sys_def
-o.vcvhdlc:	IO.h.iohw_equ
-o.vcvhdlc:	IO.h.lineequ
-o.vcvhdlc:	h.vcv_def
-o.vcvhdlc:	IO.h.vcvedf
-o.vcvhdlc:	IO.h.linelink
-o.vcvhdlc:	h.local
-o.vcvhdlc:	mt_ctls1.h.dsp_drv
-o.vcvlink:	IO.c.vcvlink
-o.vcvlink:	h.sys_def
-o.vcvlink:	IO.h.iohw_equ
-o.vcvlink:	IO.h.lineequ
-o.vcvlink:	h.vcv_def
-o.vcvlink:	IO.h.vcvedf
-o.vcvlink:	h.local
-o.vcvlink:	h.icd_msgs
-o.vcvlink:	mt_ctls1.h.dsp_drv
-o.vcvlink:	h.mt_codef
-o.vcvlink:	IO.h.linelink
-o.vcvdat:	IO.c.vcvdat
-o.vcvdat:	h.sys_def
-o.vcvdat:	h.vcv_def
 o.pkttrace:	IO.c.pkttrace
 o.pkttrace:	h.icd_msgs
-o.ringint:	IO.c.ringint
-o.ringint:	h.sys_def
-o.ringint:	h.acu_def
-o.ringint:	IO.h.callerid
-o.ringint:	h.ptt
-o.callerid:	IO.c.callerid
-o.callerid:	IO.h.callerid
-o.callerid:	h.sys_def
-o.callerid:	h.acu_def
-o.callerid:	IO.h.iohw_equ
-o.callerid:	mt_ctls1.h.mt_macro
-o.dsppatch:	IO.c.dsppatch
-o.dsppatch:	h.sys_def
-o.dsppatch:	h.mt_pro
-o.dsppatch:	mt_ctls1.h.cp_dsp
-o.dsppatch:	h.fab
-o.dsppatch:	h.dsp_cod
-o.dsppatch:	mt_ctls1.h.mt_macro
-o.dsppatch:	h.mt_codef
-o.patch_l:	IO.c.patch_l
-o.vcepatch:	IO.c.vcepatch
-o.pwronptc:	IO.c.pwronptc
 o.pp00stb:	PP.c.pp00stb
 o.pp00stb:	h.sys_def
 o.as_stub:	AS.c.as_stub
@@ -268,6 +228,13 @@ o.ac00ptt:	h.mt_pro
 o.ac00ptt:	h.acu_pro
 o.ac00ptt:	h.ee_def
 o.ac00ptt:	h.ptt
+o.ac00ptt:	h.icd_msgs
+o.ac00ptt:	h.bldflags
+o.ac00ptt:	h.homolig1
+o.ac00ptt:	h.hmg_mem1
+o.ac00ptt:	h.mt_def
+o.ac00ptt:	ACU.h.ac00intl
+o.ac00ptt:	ACU.c.ac00intl
 o.ptt00cfg:	ACU.c.ptt00cfg
 o.ptt00cfg:	h.sys_def
 o.ptt00cfg:	h.acu_def
@@ -275,6 +242,7 @@ o.ptt00cfg:	h.acu_mem
 o.ptt00cfg:	h.mt_pro
 o.ptt00cfg:	h.ee_def
 o.ptt00cfg:	h.ptt
+o.ptt00cfg:	h.homolig1
 o.dte:	IO.c.dte
 o.dte:	h.sys_def
 o.dte:	IO.h.acuiomem
@@ -294,6 +262,8 @@ o.acu:	h.acu_def
 o.acu:	IO.h.dte_drv
 o.acu:	h.acu_mem
 o.acu:	IO.h.dteequ
+o.acu:	h.homolig1
+o.acu:	h.ptt
 o.acu:	mt_ctls1.h.dsp_drv
 o.dte_drv:	IO.c.dte_drv
 o.dte_drv:	h.mod_def
@@ -303,6 +273,7 @@ o.dte_drv:	IO.h.dteequ
 o.dte_drv:	h.acu_def
 o.dte_drv:	h.acu_mem
 o.dte_drv:	IO.h.acuiomem
+o.dte_drv:	v80.h.v80_mem
 o.linelink:	IO.c.linelink
 o.linelink:	h.sys_def
 o.linelink:	IO.h.iohw_equ
@@ -315,6 +286,8 @@ o.linelink:	h.mt_coext
 o.linelink:	mt_ctls1.h.cp_dsp
 o.linelink:	mt_ctls1.h.mt_v8v34
 o.linelink:	h.sys_def
+o.linelink:	IO.h.linev80
+o.linelink:	v42.edf.dce_line
 o.lineasyn:	IO.c.lineasyn
 o.lineasyn:	h.sys_def
 o.lineasyn:	IO.h.lineequ
@@ -334,6 +307,7 @@ o.linematc:	h.local
 o.linematc:	mt_ctls1.h.cp_dsp
 o.linematc:	h.mt_codef
 o.linematc:	mt_ctls1.h.mt_macro
+o.linematc:	IO.h.linev80
 o.linedat:	IO.c.linedat
 o.linedat:	h.sys_def
 o.linedat:	IO.h.lineequ
@@ -429,15 +403,16 @@ o.voc_ctls:	h.dv_def
 o.voc_ctls:	h.dv_mem
 o.voc_ctls:	h.dv_pro
 o.voc_ctls:	Voice.^.io.h.linepro
-o.voc_ctls:	h.dsp_cod
 o.voc_ctls:	h.vce_def
 o.voc_ctls:	Voice.^.mt_ctls1.h.cp_dsp
 o.voc_ctls:	Voice.^.mt_ctls1.h.mt_macro
 o.voc_ctls:	h.vce_cpro
-o.voc_ctls:	Voice.h.vc00mem
+o.voc_ctls:	h.vce_mem
 o.voc_ctls:	Voice.h.voc_icd
 o.voc_ctls:	Voice.h.func_mac
-o.voc_ctls:	h.fab
+o.voc_ctls:	h.ptt
+o.voc_ctls:	Voice.^.mt_ctls1.h.dsppatch
+o.voc_ctls:	h.bldflags
 o.musket:	MT_Ctls1.c.musket
 o.musket:	h.mod_def
 o.musket:	H.SYS_DEF
@@ -450,14 +425,15 @@ o.musket:	H.MT_COEXT
 o.musket:	MT_Ctls1.h.mt_macro
 o.musket:	io.h.dte_drv
 o.musket:	h.tracemac
+o.musket:	h.bldflags
 o.musket:	h.resp_cod
 o.musket:	h.mod_def
-o.musket:	h.fab
-o.musket:	h.dsp_cod
 o.musket:	h.acu_pro
 o.musket:	io.h.lineequ
 o.musket:	MT_Ctls1.h.mt_gpio
 o.musket:	h.ee_def
+o.musket:	h.homolig1
+o.musket:	h.hmg_mem1
 o.musket:	MT_Ctls1.h.mt_voice
 o.musket:	MT_Ctls1.h.dsp_drv
 o.musket:	h.riscos
@@ -487,4 +463,57 @@ o.riscos:	h.ee_def
 o.riscos:	h.riscos
 o.riscos:	C:h.swis
 o.riscos:	IO.h.tracemac
-o.riscos:	h.modulehdr
+o.riscos:	IO.h.modulehdr
+o.linev80:	IO.c.linev80
+o.linev80:	h.sys_def
+o.linev80:	IO.h.iohw_equ
+o.linev80:	IO.h.lineequ
+o.linev80:	IO.h.lineedf
+o.linev80:	IO.h.linelink
+o.linev80:	mt_ctls1.h.dsp_drv
+o.linev80:	mt_ctls1.h.mt_macro
+o.linev80:	h.mt_codef
+o.linev80:	h.mt_coext
+o.linev80:	mt_ctls1.h.cp_dsp
+o.linev80:	mt_ctls1.h.mt_v8v34
+o.linev80:	h.sys_def
+o.linev80:	IO.h.linev80
+o.dte_v80:	IO.c.dte_v80
+o.dte_v80:	h.sys_def
+o.dte_v80:	IO.h.acuiomem
+o.dte_v80:	h.acu_def
+o.dte_v80:	h.acu_mem
+o.dte_v80:	IO.h.dteequ
+o.dte_v80:	v42.edf.dte
+o.dte_v80:	h.v80_pro
+o.print:	IO.c.print
+o.print:	h.sys_def
+o.ringint:	IO.c.ringint
+o.ringint:	h.sys_def
+o.ringint:	h.acu_def
+o.ringint:	IO.h.callerid
+o.ringint:	h.acu_mem
+o.ringint:	h.ptt
+o.ringint:	h.homolig1
+o.ringint:	h.hmg_mem1
+o.callerid:	IO.c.callerid
+o.callerid:	IO.h.callerid
+o.callerid:	h.sys_def
+o.callerid:	h.acu_def
+o.callerid:	IO.h.iohw_equ
+o.callerid:	mt_ctls1.h.mt_macro
+o.dsppatch:	MT_Ctls1.c.dsppatch
+o.dsppatch:	h.sys_def
+o.dsppatch:	h.mt_pro
+o.dsppatch:	MT_Ctls1.h.cp_dsp
+o.dsppatch:	MT_Ctls1.h.dsp_drv
+o.dsppatch:	MT_Ctls1.h.mt_macro
+o.dsppatch:	h.mt_codef
+o.dsppatch:	h.mt_coext
+o.dsppatch:	MT_Ctls1.h.dsppatch
+o.dsppatch:	h.bldflags
+o.powerons:	MT_Ctls1.c.powerons
+o.trnpatch:	MT_Ctls1.c.trnpatch
+o.compatch:	MT_Ctls1.c.compatch
+o.datpatch:	MT_Ctls1.c.datpatch
+o.vcepatch:	MT_Ctls1.c.vcepatch

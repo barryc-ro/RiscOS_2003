@@ -1,17 +1,14 @@
+  ac00cmdt.o
  ac00mstr.o
+  ac00cmat.o
+  ac00ptt.o
   ac00sys0.o
   ac00sys1.o
   ac00mem.o
   ac00que.o
-  ac00cmat.o
-  ac00cmdt.o
-  ac00id.o
-  ac00idat.o
+   ac00idat.o
   ac00orat.o
-  ac00pr.o
-  ac00or.o
   ac00v24.o
-  ac00an.o
   ac00pra1.o
   ac00lib1.o
   ac00lib2.o
@@ -22,10 +19,10 @@
   ac00tsrm.o
   ac00onat.o
   ac00rt.o
-  ac00hn.o
   ac00hnat.o
   ac00lib3.o
-  ac00ts.o
+  acu_tabs.o
+  acuv8v80.o
   ac00lib4.o
    ac00cman.o
   ac00cmav.o
@@ -46,20 +43,22 @@
   pr00mem.o
   pr00lib.o
   pr00at.o
-  fp00stub.o
-  ll00stub.o
+   ll00stub.o
   ds00stub.o
   ds00mem.o
   ac00as.o
- 
+
  ac00estb.o
  
  v25_stub.o
  
  wl00stub.o
  
- ac00vstb.o
-
+ ac00vc1.o
+  ac00vc2.o
+  ac00cmvc.o
+  ac00cmv1.o
+ 
  ac00fx1.o
   ac00fx2.o
   ac00cmfx.o
@@ -146,11 +145,22 @@ mt00if10.o
  audio_if.o
  mt00vv10.o
  mt_voice.o
- v80stub.o
+ 
+vc00mn.o
+ vc00mem.o
+ vc00lib.o
+ vc00if.o
+ vc00ex.o
+ vc00prlb.o
+ vc00cmd.o
+ spkr_phn.o
+ voc_ctls.o
+ dv02cd10.o
+ v80_mn.o
+  v80_mem.o
  
  pp00stb.o
   as_stub.o
-  ac00ptt.o
   ptt00cfg.o
   dte.o
   acu.o
@@ -176,12 +186,16 @@ mt00if10.o
   ringint.o
   callerid.o
   dsppatch.o
-  patch_l.o
+  powerons.o
+  linev80.o
+  dte_v80.o
+  print.o
+ trnpatch.o
+  compatch.o
+  datpatch.o
   vcepatch.o
-  pwronptc.o
 
 riscos.o
 riscosasm.o
-voc_ctls.o
 modulehdr.o
-
+#pkttrace.o

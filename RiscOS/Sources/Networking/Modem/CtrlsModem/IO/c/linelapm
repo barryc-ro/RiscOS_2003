@@ -46,9 +46,18 @@
 /*** from file lapm_int.c ***/
 extern ubyte *lapm_rx(void);
 extern ubyte *lapm_tx(void);
+extern void line_write_exit(ubyte,ubyte,ubyte);
 
 extern ubyte wait_for_new_frame;
-ubyte rjm1 = 0;
+#ifdef DEBUG_PORT
+extern void PrintMsg(char *);
+#endif
+
+#ifdef BUILD_DLM
+extern void PrintLapm(ubyte Type, ubyte *Error, ubyte *Len, ubyte *Data);
+#endif
+
+void enable_int(void);
 /*****************************************************************************
 /
 /    Procedure:  lapm_tx_int
@@ -80,6 +89,8 @@ ubyte rjm1 = 0;
 void lapm_tx_int(void)
 {
 /*mrm62796*/
+	ubyte status;       /* status byte of data area semaphore to write */
+	ubyte data_count;   /* number of tx data bytes */
    ubyte length,*temp;
    ubyte tx_data_status = 0;
    ubyte tx_status_reg;
@@ -87,6 +98,17 @@ void lapm_tx_int(void)
    /* If "spoofed" TX IE is false, the obey */
 	if (dce_tx_enabled == FALSE)
 		return;
+
+   /* if TX_UNDERRUN indicated from the DSP */
+   if ((tx_char_count) && (dce_tx_resumed == TRUE))
+   {
+      /* set packet length and status */
+      status = TX_IDLE;
+      data_count = 0xFF;
+      line_write_exit(status,data_count,1);
+      dce_tx_resumed = FALSE;
+      return;
+   }
 
    if (tx_char_count != 0)
    {
@@ -106,6 +128,10 @@ void lapm_tx_int(void)
 		line_hdlc_waiting_CRC_sent = FALSE;
 
       /* Get next tx packet from lapm */
+#ifdef BUILD_DLM
+		PrintLapm(1, (ubyte*)&lapm_tx_packet_ptr->error, (ubyte*)&lapm_tx_packet_ptr->count, (ubyte*)&lapm_tx_packet_ptr->data);
+#endif
+       enable_int();
 	   lapm_tx_packet_ptr = (LAPM_PACKET_TYPE *)lapm_tx();
 
       /*    If a valid packet, set up the buffer */
@@ -119,7 +145,6 @@ void lapm_tx_int(void)
 	   {
          /* Else no more packets to send */
          dce_tx_enabled = FALSE;
-rjm1 = 0;
 	      return;
 	   }
    }
@@ -192,15 +217,55 @@ void lapm_rx_int(void)
 {
    ubyte length_and_status,*temp ;
 
+   if (dce_status_semaphore == TX_UNDERRUN)
+   {
+
+#ifdef DEBUG_PORT
+   	PrintMsg( "TxUr" );
+#endif
+	   line_bg_error_flags = 1;
+
+     /* reset the semaphore */
+     /* dce_status_semaphore = 0; */
+
+	   /* dce_tx_interrupt_expected = FALSE; */
+
+      /* always force the DSP to enter TX_IDLE state */
+      dce_tx_resumed = TRUE;
+
+      /* indicate mid-frame tx underrun to the DTE I/O */
+      /* dce_tx_underrun = TRUE; */
+
+      /* clear the DSP semaphores */
+      length_and_status = 0;
+      dspdrv_WriteCram(DSP_CP_DATA_LENGTH, &length_and_status, 1);
+      dspdrv_WriteCram(DSP_CP_DATA_STATUS, &length_and_status, 1);
+
+      /* clear the semaphore values */
+      dce_length_semaphore = 0;
+      dce_status_semaphore = 0;
+
+      /* RETURN IMMEDIATELY, THERE IS NO DATA, STATUS ONLY */
+      return;
+   }
+
+
    /* If rx overrun, set flag */
    if (dce_status_semaphore == RX_OVERRUN)
    {
+#ifdef DEBUG_PORT
+   	PrintMsg( "RxOr" );
+#endif
 	 line_bg_error_flags = 1;
    }
+
 
   /* If abort received, reset to receive new packet and return */
    if (dce_status_semaphore == RX_HDLC_ABORT)
    {
+#ifdef DEBUG_PORT
+   	PrintMsg( "RxAb" );
+#endif
 	 rx_char_count = 0;
 
 	 if ( lapm_rx_packet_ptr )
@@ -281,6 +346,9 @@ void lapm_rx_int(void)
 				/* Check to see if CRC error rx'd */
 				if (dce_status_semaphore == EOF_CRC_BAD)
 				{
+#ifdef DEBUG_PORT
+   				PrintMsg( "RxBc" );
+#endif
 					line_bg_error_flags = 1;
 				}
 
@@ -292,6 +360,11 @@ void lapm_rx_int(void)
 				}
 
 				/* Get next rx packet from V42 */
+
+#ifdef BUILD_DLM
+				PrintLapm(0, (ubyte*)&lapm_rx_packet_ptr->error, (ubyte*)&lapm_rx_packet_ptr->count, (ubyte*)&lapm_rx_packet_ptr->data);
+#endif
+       enable_int();
 				lapm_rx_packet_ptr = (LAPM_PACKET_TYPE *)lapm_rx();
 
 				/* If a new packet is ready, set up it's pointers */
@@ -302,7 +375,6 @@ void lapm_rx_int(void)
 					lapm_rx_packet_ptr->count = 0;
 					lapm_rx_data_ptr = lapm_rx_packet_ptr->data;
 				}
-
 			} /* end if EOF */
 
 	   } /* end lapm_rx_packet_ptr != NULL */
@@ -313,14 +385,23 @@ void lapm_rx_int(void)
 			{
              /* OK to put next I/C data into buffer */
             wait_for_new_frame = FALSE;
+				line_bg_error_flags = 0;
          }
          else
          {
             /* Need to wait until the EOF before putting data into new frame */
+            if (wait_for_new_frame != TRUE)
+            {
+#ifdef DEBUG_PORT
+		   		PrintMsg( "RxBf" );
+#endif
+            }
+
+
             wait_for_new_frame = TRUE;
+				line_bg_error_flags = 1;
          }
 
-			line_bg_error_flags = 1;
 			length_and_status = 0;
 			dspdrv_WriteCram(DSP_CP_DATA_LENGTH, &length_and_status, 1);
 			dspdrv_WriteCram(DSP_CP_DATA_STATUS, &length_and_status, 1);

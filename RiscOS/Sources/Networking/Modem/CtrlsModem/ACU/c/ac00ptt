@@ -44,10 +44,20 @@
 #include "acu_pro.h"
 #include "ee_def.h"
 #include "ptt.h"
+#include "icd_msgs.h"
+#include "bldflags.h"
+#include "homolig1.h"
+#include "hmg_mem1.h"
+
+extern ubyte dsp_response_data[];
+extern ubyte dsp_cp_packet;
 extern ubyte read_dsp_xmit_status_reg(void);
+extern ubyte Read_signal_level(void);
 extern ubyte voice_dist_ring_active;
 extern void  send_pkt_to_dsp(void);
 
+void BlackListInit(void);
+ubyte BlackListInProgress(void);
 void BlackListInsert(void);
 void UpdateBlackListDelayTimer(void);
 void InitiateDelayTimer(void);
@@ -55,17 +65,23 @@ void InitToneModeDetection(void);
 void ast_NC(ubyte *);
 void InitiateToneATaps(void);
 void InitiateDTMFLevel(void);
-void InitiateTransmitLevel(void);
-void InitiateCountryDependSReg(void);
+void InitiateTransmitLevel(ubyte for_dtmf_txlevel);
+void InitiateCountryDependSReg(ubyte);
 void CountryDependSRegRangeCheck(ubyte);
 void SetPulseRelay(uword);
 void SetOnHookRelay(ubyte);
 ubyte LineCurrent(void);
 void SetVORelay(ubyte);
+uword get_dsp_address(ubyte);
+
 /*mrm83196*/
 /*variable for redial the same number*/
 ubyte match_number = 0;
+uword dsp_address;
 
+extern ubyte MinimumDelayTimer;
+extern const uword PTT_DialToneTimeOut[];
+extern const uword PTT_HookFlash[];
 extern ubyte CountryInfo;
 extern ubyte BlackNoEntry;
 extern ubyte AvailableCell;
@@ -76,25 +92,110 @@ extern ubyte ToneStatus;
 extern ubyte DigitCode;
 extern ubyte black_size;
 extern ubyte ErrorCode;
+extern ubyte BlackListDialed;
 extern ubyte TmpPhoneCell[30];
 extern ubyte *TmpDialPtr;
 extern int OnTime;
 extern int OffTime;
-extern BlackList BlackLst[12];
-extern ToneModeEntry Tone[3];
-extern country_black_list_table PTTBlackLst[7];
-extern country_tone_table PTT_Tone[7];
-extern country_ring_table PTT_Ring[7];
-extern country_filter_taps PTT_Taps[7];
-extern country_DTMF_Level PTT_DTMF_Level[7];
-extern country_transmit_level PTT_TransmitLevel[7];
-extern country_depend_S_registers PTT_SReg[7];
-extern country_Nominal_RingBack_Cadence PTT_RingBack[7];
+extern BlackList BlackLst[BLACKLIST_MAX_CELL_NUM];
+extern ToneModeEntry Tone[NoOfTonesPerCountry];
+extern country_black_list_table PTTBlackLst[];
+extern country_tone_table PTT_Tone[];
+extern country_ring_table PTT_Ring[];
+extern country_filter_taps PTT_Taps[];
+extern country_DTMF_Level PTT_DTMF_Level[];
+extern country_transmit_level PTT_TransmitLevel[];
+extern country_depend_S_registers PTT_SReg[];
+extern country_Nominal_RingBack_Cadence PTT_RingBack[];
 extern const uword S91_PTT_TransmitLevel[18];
-extern country_Make_Break_Time PTT_MakeBreak_Time[7];
+extern country_Make_Break_Time PTT_MakeBreak_Time[];
+extern Cntry_List_Tag  cntry_list[];
+extern country_dbmthr PTT_dbmthr[];
+extern Country_Valid_dbmthr_Level PTT_dbmthr_Level[];
+//extern uword tempp1;
+extern ubyte busy_count[4];
 
-extern uword tempp1;
-extern ubyte busy_count;
+/* MH120397 insert new function: ath1_problem ... */
+#include "mt_def.h"
+
+#if INTERNATIONAL_CODE == 1
+extern ubyte ath1_timer;
+extern ubyte ath1_activate ;
+ubyte Tone_signal_level_lo;
+extern ubyte old_st_crnt_boost1;
+extern ubyte st_crnt_boost1;
+uword msec2_count;
+uword msec3_count;
+extern struct Homg_var1_Tag homg_var1;
+#endif
+
+#define	 DBMADJUST	5
+#ifndef __riscos
+#define  GPCR0          0xffc210   /* config reg, 0 input, 1 output */
+#define  GPR0           0xffc204   /* if as output,value reg */
+#define  HOOK_MASK		0x0080
+#endif
+
+/****************************************************************************
+/
+/    Routine: Black List Init
+/
+/    Author : CIRRUS LOGIC
+/
+/    Creation Date: 11/09/97
+/
+/    Description : This Routine is called to reset the blacklist mechanism
+/
+/    Users: AC00MSTR.C
+/
+/
+****************************************************************************/
+void BlackListInit(void)
+{
+	int	i;
+
+	for (i = 0; i < BLACKLIST_MAX_CELL_NUM; i++) {
+		BlackLst[i].status = NULL;
+	}
+	BlackListDialed = FALSE;
+   MinimumDelayTimer = 0;
+}
+
+
+/****************************************************************************
+/
+/    Routine: Black List In Progres ?
+/
+/    Author : CIRRUS LOGIC
+/
+/    Creation Date: 11/09/97
+/
+/    Description : This Routine is called check if blacklist is in progress
+/
+/    Users: sleep.c
+/
+/
+****************************************************************************/
+ubyte BlackListInProgress(void)
+{
+	ubyte i, BLStatus;
+
+	BLStatus = FALSE;
+	for (i = 0; i < BLACKLIST_MAX_CELL_NUM; i++) {
+#if 1
+      outchar(BlackLst[i].status);
+#endif
+		if (BlackLst[i].status != NULL)
+			BLStatus = TRUE;
+	}
+
+   if(MinimumDelayTimer)
+      BLStatus = TRUE;
+
+	return(BLStatus);
+}
+
+
 /****************************************************************************
 /
 /    Routine: Black List Insert
@@ -109,150 +210,162 @@ extern ubyte busy_count;
 /
 /
 ****************************************************************************/
-void BlackListInsert(void){
+void BlackListInsert(void)
+{
 
-   ubyte ix, ix1;
-   TmpDialPtr = acu_dial_string_ptr;
+	ubyte ix, ix1;
+	TmpDialPtr = acu_dial_string_ptr;
 
-/*Clear TmpPhoneCell to stroed the current call number*/
+	BlackListDialed = TRUE;
 	ErrorCode = 0;
-	if (CountryInfo == USA){
+// just for Scandinavian countries.
+	if((country_area_code1 == Finland_a_code1) ||
+//		(country_area_code1 == Norway_a_code1) ||
+		(country_area_code1 == Sweden_a_code1) ||
+		(country_area_code1 == Denmark_a_code1))
+	{
 		return;
-		}
+	}
 
-   for ( ix = 0; ix < 36; ix++) {
-      TmpPhoneCell[ix] = NULL;
-	   }
+	if (country_area_code1 == USA) {
+		return;
+	}
 
-/*Get the phone number from the command buffer*/
+#if INTERNATIONAL_CODE == 1
+	if(homg_var1.disable_blacklist > 0)
+		return;
+#endif
 
-   DigitCode = *TmpDialPtr;
-   if (DigitCode == 's' || DigitCode == 'S')
+   if (MinimumDelayTimer) {
+		ErrorCode = DelayedCall;
+	   BlackListDialed = FALSE;
+      return;
+   }
+	for ( ix = 0; ix < 36; ix++) {
+		TmpPhoneCell[ix] = NULL;
+	}
+
+	/*Get the phone number from the command buffer*/
+
+	DigitCode = *TmpDialPtr;
+	if (DigitCode == 's' || DigitCode == 'S')
 		return;  /* Get the phone number after fetched from the NVRAM */
 
-   for (ix = 0;(DigitCode = *TmpDialPtr) != NULL; TmpDialPtr++) {
+	for (ix = 0; (DigitCode = *TmpDialPtr) != NULL; TmpDialPtr++) {
 		switch (DigitCode) {
-         case '0':
-         case '1':
-         case '2':
-         case '3':
-         case '4':
-         case '5':
-         case '6':
-         case '7':
-         case '8':
-         case '9':
-				TmpPhoneCell[ix] = DigitCode;
-            ix++;
-            break;
-         default:
-            break;
-   	   }
+		case '0':
+		case '1':
+		case '2':
+		case '3':
+		case '4':
+		case '5':
+		case '6':
+		case '7':
+		case '8':
+		case '9':
+			TmpPhoneCell[ix] = DigitCode;
+			ix++;
+			break;
+		default:
+			break;
 		}
+	}
 
-/* Check if the number already in the Black_List*/
-/* black_size: black list size defined in the ac00mem.h -- temporarily*/
-/*             This constant eventually will go to international PTT definition*/
+#if INTERNATIONAL_CODE == 1
+	if (country_area_code1 == German) {
+		/* MH120397 reset ath1 - timer ... */
+//			ath1_timer_reset();
+		/* this change ath1 ... */
 
-/* AvailableCell equals to 255 after comparison means all the phone cell has been occupied*/
+		AvailableCell = 0;
+		if (BlackLst[AvailableCell].status != NULL) {
+			ErrorCode = DelayedCall;
+		}
+		return;
+	}
+#endif
 
-	AvailableCell = 255;
 
-   black_size = PTTBlackLst[CountryInfo].MaxPhoneCell;  /* Maximum phone number can be in the black list */
+	AvailableCell = 255;    // assume all cells are taken up
+	black_size = PTTBlackLst[CountryInfo].MaxPhoneCell;
 
-	for (ix = 0; ix < black_size; ix++) {
+	for (ix = 0; ix < black_size; ix++) {  // loop thru all cells
 
-      if (BlackLst[ix].status != NULL) {
+		if (BlackLst[ix].status != NULL) {
 
 			/* Compare the current phone number with the number in the current cell*/
 			for ( ix1 = 0; ix1 < 30; ix1++) {
 				if ( TmpPhoneCell[ix1] != BlackLst[ix].PhoneCell[ix1]) {
 					match_number = 0;
 					break;
-					}
 				}
-
-
-/*mrm83196*/
-/*variable for redial the same number*/
+			}
 
 			if (ix1 == 30)
-			  	match_number = 1;
+				match_number = 1;
 
-			if (CountryInfo == German)
+			if (country_area_code1 == German)
 				ix1 = 30;
 
-			/* If ix1 equals to 30 that means the two number are the same */
+			if (ix1 == 30) {  // check if dialed num matches one in current cell
 
-			if (ix1 == 30)
-			{
+				if ((BlackLst[ix].status == RedListNo) && (BlackLst[ix].DelayTimer == 0)) {
 
-				if (BlackLst[ix].DelayTimer == 0)
-				{
 					BlackLst[ix].RetryTimes++;
 
-               if (BlackLst[ix].RetryTimes == PTTBlackLst[CountryInfo].MaxRetry)
-					{
-            		BlackLst[ix].status = BlackListNo;
-                  BlackLst[ix].DelayTimer = PTTBlackLst[CountryInfo].CycleTime;
+#if 1
+			   outchar(0x77);
+			   outchar(0x77);
+			   outchar(0x77);
+			   outchar(0x77);
+			   outchar(0x77);
+			   outchar(0x77);
+			   outchar(0x77);
+			   outchar(0x77);
+			   outchar(0x77);
+			   outchar(0x77);
+			   outchar(BlackLst[ix].RetryTimes);
+			   outchar(0x78);
+#endif
+ 					if (BlackLst[ix].RetryTimes == PTTBlackLst[CountryInfo].MaxRetry) {
+						BlackLst[ix].status = BlackListNo;
+						BlackLst[ix].DelayTimer = PTTBlackLst[CountryInfo].CycleTime;
 						AvailableCell = 255;
 						ErrorCode = DelayedCall;
-					}
-					else
-					{
+					} else					 {
 						AvailableCell = ix;  /* For BlackListDelete purpose */
-            		BlackLst[ix].status = RedListNo;
+						BlackLst[ix].status = RedListNo;
 					}
-				}
-				else
-				{
+				} else				 {
 					ErrorCode = DelayedCall;
 				}
 
-          	break;
-        	}
-      }
-      else
-		{ /* BlackLst[ix].status == NULL */
-
-			if(match_number == 0)
-					AvailableCell = ix;
-
-			/* No Phone number in this cell or being deleted by BlackListDelete*/
-			/* This entry available for storing the new telephone number */
-      }
-
-    }
-
-
-
-/*mrm83196*/
-/*did not store the next new number in the proper array*/
-
-/* ix equates to black_size means this is a new phone number*/
-
- /*  if ( ix == black_size) */
-
-		if ( (AvailableCell != 255) && (match_number == 0) )
-		{
-	      BlackLst[AvailableCell].RetryTimes = 0;
-   	   BlackLst[AvailableCell].status = RedListNo;
-	      BlackLst[AvailableCell].DelayTimer = 0;
-	      for ( ix = 0; ix < 30; ix++)
-			{
-   	     BlackLst[AvailableCell].PhoneCell[ix] = TmpPhoneCell[ix];
+				break;
 			}
-		}
-		else
-		{
-			if(AvailableCell == 255)
-				ErrorCode = DelayedCall;
-		}
+		} else		 { /* BlackLst[ix].status == NULL */
 
-/*mrm83196*/
-/*variable for redial the same number*/
+			if (match_number == 0)
+				AvailableCell = ix;
 
-		match_number = 0;
+		}
+	}
+
+   // Search process complete, see if we need to store the current number
+
+	if ( (AvailableCell != 255) && (match_number == 0) ) {
+		BlackLst[AvailableCell].RetryTimes = 0;
+		BlackLst[AvailableCell].status = RedListNo;
+		BlackLst[AvailableCell].DelayTimer = 0;
+		BlackLst[AvailableCell].RedListTimer = PTTBlackLst[CountryInfo].CycleTime;
+		for ( ix = 0; ix < 30; ix++) {
+			BlackLst[AvailableCell].PhoneCell[ix] = TmpPhoneCell[ix];
+		}
+	} else		 {
+		if (AvailableCell == 255)
+			ErrorCode = DelayedCall;
+	}
+
+	match_number = 0;                   // needed ???
 
 }
 
@@ -273,30 +386,52 @@ void BlackListInsert(void){
 ****************************************************************************/
 void UpdateBlackListDelayTimer(void)
 {
-   ubyte ix;
-	if (CountryInfo == USA)return;
-   black_size = PTTBlackLst[CountryInfo].MaxPhoneCell;
-	for (ix = 0; ix < black_size; ix++)
-	{
-		if (BlackLst[ix].status != 0)
-		{
-			if (BlackLst[ix].DelayTimer != 0 && BlackLst[ix].DelayTimer != 65535)
-			{
+	ubyte ix;
+	if (country_area_code1 == USA)
+		return;
+
+   if (MinimumDelayTimer)
+      MinimumDelayTimer--;
+
+	black_size = PTTBlackLst[CountryInfo].MaxPhoneCell;
+	for (ix = 0; ix < black_size; ix++) {
+
+      // Update DelayTimer
+
+		if ((BlackLst[ix].status != NULL) && (BlackLst[ix].DelayTimer != 65535)) {
+			if (BlackLst[ix].DelayTimer != 0) {
 				BlackLst[ix].DelayTimer--;
+#if 1
+			   outchar(0x88);
+			   outchar(BlackLst[ix].DelayTimer);
+			   outchar(0x89);
+#endif
+         }
+		}
+
+		if(country_area_code1 != Norway_a_code1)	 // fix #6
+		{
+			if ((BlackLst[ix].status == BlackListNo) && (BlackLst[ix].DelayTimer == 0)) {
+				BlackLst[ix].RetryTimes = 0;
+				BlackLst[ix].status = 0;
+				BlackListDialed = FALSE;
 			}
 
-		}
-/*mrm83196*/
-/*clear the status if timeout*/
+      // Update RedListTimer in parallel
 
-		if ((BlackLst[ix].status == 2) && (BlackLst[ix].DelayTimer == 0))
-		{
-	      BlackLst[ix].RetryTimes = 0;
-			BlackLst[ix].status = 0;
-		}
+			if ((BlackLst[ix].status == RedListNo) && (BlackLst[ix].RedListTimer != 0)
+         	  && (BlackLst[ix].RedListTimer != 65535)) {
+				BlackLst[ix].RedListTimer--;
+				if (BlackLst[ix].RedListTimer == 0) {
+					BlackLst[ix].RetryTimes = 0;
+					BlackLst[ix].status = 0;
+				}
+			}
+		} // fix #6
 
 	}
 }
+
 
 /****************************************************************************
 /
@@ -314,13 +449,16 @@ void UpdateBlackListDelayTimer(void)
 /
 /
 ****************************************************************************/
-void BlackListDelete(void) {
+void BlackListDelete(void)
+{
 
-	 if (CountryInfo == USA)
+	if (country_area_code1 == USA)
 		return;
 
-    BlackLst[AvailableCell].status = 0;
-	}
+	BlackLst[AvailableCell].status = 0;
+	BlackLst[AvailableCell].RetryTimes = 0;
+	BlackListDialed = FALSE;
+}
 
 
 
@@ -341,13 +479,41 @@ void BlackListDelete(void) {
 /
 /
 ****************************************************************************/
-void InitiateDelayTimer(void) {
-	if (CountryInfo == 0)return;
-	if (BlackLst[AvailableCell].status == RedListNo) {
-        BlackLst[AvailableCell].DelayTimer = PTTBlackLst[CountryInfo].DelayTimer[BlackLst[AvailableCell].RetryTimes];
+void InitiateDelayTimer(void)
+{
+	if (country_area_code1 == USA)
+		return;
+
+	if (BlackListDialed == FALSE)
+		return;
+
+   if (MinimumDelayTimer == 0) // donot init if already running
+      MinimumDelayTimer = PTTBlackLst[CountryInfo].DelayTimer[0];
+
+	if (country_area_code1 == German) {
+		AvailableCell = 0;
+		if (BlackLst[AvailableCell].status == NULL) {
+			BlackLst[AvailableCell].status = BlackListNo;
+			BlackLst[AvailableCell].DelayTimer = PTTBlackLst[CountryInfo].CycleTime;
 		}
+		return;
 	}
 
+	if (country_area_code1 == UK) {
+	   if (BlackLst[AvailableCell].status == RedListNo) {
+		   BlackLst[AvailableCell].DelayTimer = PTTBlackLst[CountryInfo].DelayTimer[0];
+
+			outchar(0xAA);
+			outchar(BlackLst[AvailableCell].DelayTimer);
+			outchar(0xAA);
+ 	   }
+		return;
+   }
+
+	if (BlackLst[AvailableCell].status == RedListNo) {
+		BlackLst[AvailableCell].DelayTimer = PTTBlackLst[CountryInfo].DelayTimer[BlackLst[AvailableCell].RetryTimes];
+	}
+}
 
 /****************************************************************************
 /
@@ -367,42 +533,31 @@ void InitiateDelayTimer(void) {
 /
 ****************************************************************************/
 
-void InitToneModeDetection(void) {
-   Tone[0].status  = 1;                /* Look for Tone-A on condition */
-   Tone[0].tonetype= PTT_Tone[CountryInfo].dial.tonetype;
-	Tone[0].ontime= 0;
-	Tone[0].offtime= 0;
-   Tone[0].ontimemax  = PTT_Tone[CountryInfo].dial.ontimemax;
-   Tone[0].ontimemin  = PTT_Tone[CountryInfo].dial.ontimemin;
-   Tone[0].offtimemax = PTT_Tone[CountryInfo].dial.offtimemax;
-   Tone[0].offtimemin = PTT_Tone[CountryInfo].dial.offtimemin;
-   Tone[0].tonecode = PTT_Tone[CountryInfo].dial.tonecode;
+void InitToneModeDetection(void)
+{
+   ubyte ii;
 
-	Tone[1].status  = 1;
-   Tone[1].tonetype= PTT_Tone[CountryInfo].busy.tonetype;
-	Tone[1].ontime= 0;
-	Tone[1].offtime= 0;
-   Tone[1].ontimemax  = PTT_Tone[CountryInfo].busy.ontimemax;
-   Tone[1].ontimemin  = PTT_Tone[CountryInfo].busy.ontimemin;
-   Tone[1].offtimemax = PTT_Tone[CountryInfo].busy.offtimemax;
-   Tone[1].offtimemin = PTT_Tone[CountryInfo].busy.offtimemin;
-   Tone[1].tonecode = PTT_Tone[CountryInfo].busy.tonecode;
+   for(ii=0; ii < NoOfTonesPerCountry; ii++)
+   {
+    Tone[ii].status  = 1;                /* Look for Tone-A on condition */
+    Tone[ii].tonetype= PTT_Tone[CountryInfo]._tonex[ii].tonetype;
+    Tone[ii].ontime= 0;
+    Tone[ii].offtime= 0;
+    Tone[ii].ontimemax  = PTT_Tone[CountryInfo]._tonex[ii].ontimemax;
+    Tone[ii].ontimemin  = PTT_Tone[CountryInfo]._tonex[ii].ontimemin;
+    Tone[ii].offtimemax = PTT_Tone[CountryInfo]._tonex[ii].offtimemax;
+    Tone[ii].offtimemin = PTT_Tone[CountryInfo]._tonex[ii].offtimemin;
+    Tone[ii].tonecode = PTT_Tone[CountryInfo]._tonex[ii].tonecode;
+   }
 
-	Tone[2].status  = 1;
-   Tone[2].tonetype= PTT_Tone[CountryInfo].ringback.tonetype;
-	Tone[2].ontime= 0;
-	Tone[2].offtime= 0;
-   Tone[2].ontimemax  = PTT_Tone[CountryInfo].ringback.ontimemax;
-   Tone[2].ontimemin  = PTT_Tone[CountryInfo].ringback.ontimemin;
-   Tone[2].offtimemax = PTT_Tone[CountryInfo].ringback.offtimemax;
-   Tone[2].offtimemin = PTT_Tone[CountryInfo].ringback.offtimemin;
-   Tone[2].tonecode = PTT_Tone[CountryInfo].ringback.tonecode;
 	OnTime = PTT_RingBack[CountryInfo].OnTime;
 	OffTime = PTT_RingBack[CountryInfo].OffTime;
    ToneResult = 0;
-	busy_count = 0;
+	for(ii=0; ii<4; ii++)
+    	busy_count[ii] = 0;
    ToneModeSwitch = 1;                 /* Start Tone Mode detection */
-	}
+Tone_signal_level_lo = 0;		/* initialize level detection */
+}
 
 
 
@@ -428,127 +583,266 @@ extern  ubyte  tembuf[4];
 extern  void   output_info(ubyte *,ubyte);
 void   d2_to_a2(uword val, ubyte buf[]);
 
-void ToneModeDetection(void) {
+void ToneModeDetection(void)
+{
+  ubyte Tone_Thr;
+  ubyte *string;
 
 	ubyte ix, false_cond, false_cond1;
 
 	ToneStatus = read_dsp_xmit_status_reg();
+   ToneResult = UNDETERMINED;
 
-	for (ix = 0; ix < 3; ix++)	{
-		if (Tone[ix].status == 1) { /* Look for tone A on */
-			if (ToneStatus & 0x01) {
+//          	    	string = (ubyte *)"####";
+//					output_info(string,VERBOSE_FORM);  	/* before and after */
+//                   string = d_to_a(ix);
+//					output_info(string,ToneStatus);  	/* before and after */
+   for (ix = 0; ix < NoOfTonesPerCountry; ix++)
+   {
+		if (Tone[ix].status == 1)
+      { /* Look for tone A on */
+			if (ToneStatus & 0x01)
+         {
 
 				/* Look for tone A on, and tone A IS on */
 
 				Tone[ix].ontime++;
-				if (Tone[ix].tonetype == 1){
+				if (Tone[ix].tonetype == 1)
+            {
 						/* This is a continuous tone */
 						/* Comparing the max and min of ontime */
-					if (Tone[ix].ontime >= Tone[ix].ontimemin)	{
-						ToneResult = Tone[ix].tonecode;
-						}
-					}
-				else {
-					/* Do nothing */
+					if (Tone[ix].ontime >= Tone[ix].ontimemin)
+               {
+					   if(country_area_code1 != USA)
+					   {
+					     Tone_signal_level_lo = Read_signal_level();
+					     Tone_signal_level_lo += DBMADJUST;
+					     Tone_Thr = PTT_dbmthr_Level[CountryInfo].dial_thr;
+					      if(Tone_Thr >= Tone_signal_level_lo)
+					      {
+					        ToneResult = Tone[ix].tonecode;
+					      }
+					   }
+					   else
+					   {
+					     ToneResult = Tone[ix].tonecode;
+					   }
+
 					}
 				}
-			else {
-				/* Look for tone A on, but tone A IS off */
-				Tone[ix].status = 0;  /* Change to look for tone A off*/
-				Tone[ix].offtime = 0; /* Initiate tone offtime */
-
+				else
+            {
+					/* Do nothing */
 				}
 			}
-		else {
+			else
+         {
+				/* Look for tone A on, but tone A IS off */
+				Tone[ix].status = 0;  /* Change to look for tone A off*/
+				Tone[ix].offtime = 1; /* Initiate tone offtime */
+
+			}
+		}
+		else
+      {
 			/* Look for tone A off */
 
-			if ((ToneStatus & 0x01) == 0) {
+			if ((ToneStatus & 0x01) == 0)
+         {
 
 				/* Look for tone A off, and tone A IS off */
 				Tone[ix].offtime ++;
-				}
-			else {
+			}
+			else
+         {
 
 				/* Look for tone A off, but tone A IS on */
 				false_cond =  0; /* Glitch exist within Tone A on if it is TRUE*/
 				false_cond1 = 0;
-				tempp1 = 0;
+//				tempp1 = 0;
 				Tone[ix].status = 1;
 
 		/* De-glitch during the Ring back period*/
-				if (ix == 2) {
-					if (Tone[ix].offtime < 55 && Tone[ix].offtime > 15) {/*UK ring back has 200ms off time*/
-						Tone[ix].ontime += Tone[ix].offtime;
-						Tone[ix].offtime = 0;
-						false_cond = TRUE; /* Calling Tone exist with cadence ON */
-						}
-
-					if (Tone[ix].offtime > OffTime) {
-						tempp1 = Tone[ix].offtime - OffTime;
-						Tone[ix].offtime = OffTime;
-
-						if ((OnTime - Tone[ix].ontime) > 5) {
-							Tone[ix].ontime += tempp1;
-							false_cond1 = TRUE; /* add to next on time */
-							}
-						}
-					}
+//				if (ix == 2)
+//            {
+//					if (Tone[ix].offtime < 55 && Tone[ix].offtime > 15)
+//               {/*UK ring back has 200ms off time*/
+//						Tone[ix].ontime += Tone[ix].offtime;
+//						Tone[ix].offtime = 0;
+//						false_cond = TRUE; /* Calling Tone exist with cadence ON */
+//					}
+//
+//					if (Tone[ix].offtime > OffTime)
+//               {
+//						tempp1 = Tone[ix].offtime - OffTime;
+//						Tone[ix].offtime = OffTime;
+//
+//						if ((OnTime - Tone[ix].ontime) > 5)
+//                  {
+//							Tone[ix].ontime += tempp1;
+//							false_cond1 = TRUE; /* add to next on time */
+//						}
+//					}
+//				}
 		/* End of ring back De-glitch function*/
 				/* Reporting the Cadence for debugging purpose*/
-				if ((voice_dist_ring_active == 0xC7)  && (false_cond == 0)) {
-					if ( ix == 2 || ix == 1) {
+				if ((voice_dist_ring_active == 0xC7)  && (false_cond == 0))
+//				if ((voice_dist_ring_active == 0x04)  && (false_cond == 0))
+            {
+					if ( /*ix == 2 || ix == 1  ix == jjjj_tmp1 */ ix == 1 )
+               {
+              //     string = & (tembuf[0]);
+
+          	    	string = (ubyte *)"^^^";
+//                   string = d_to_a(ix);
+						output_info(string,VERBOSE_FORM);  	/* before and after */
+//						output_info(string,STORED_NUM);
+//						output_info(string,NUMERIC_FORM);  /* CR LF after --- */
+
 	            	d2_to_a2(Tone[ix].ontime,tembuf);
    	         	strcpy((char *)cidbuf,"CADENCE_ON=");
       	      	strcat((char *)cidbuf,(char *)tembuf);
-						output_info(cidbuf,VERBOSE_FORM);  /* CR, LF before and after */
+						output_info(cidbuf,NUMERIC_FORM);
 
 		            d2_to_a2(Tone[ix].offtime,tembuf);
    		         strcpy((char *)cidbuf,"CADENCE_OF=");
       		      strcat((char *)cidbuf,(char *)tembuf);
          	   	output_info(cidbuf,NUMERIC_FORM);  /* CR, LF after */
-						}
-					}
 
-				if (Tone[ix].tonetype == 2 && false_cond == 0) {	/* Two segments tone, make decision here*/
-					if (Tone[ix].ontime >= Tone[ix].ontimemin)	{
-						if (Tone[ix].ontime <= Tone[ix].ontimemax) {
-							if (Tone[ix].offtime >= Tone[ix].offtimemin) {
-								if (Tone[ix].offtime <= Tone[ix].offtimemax) {
-									if (ix == 1) {
-										if (busy_count){
-											ToneResult = Tone[ix].tonecode;
-											}
-										else {
-											busy_count++;
-											}
-										}
-									else {
-										ToneResult = Tone[ix].tonecode;
-										}
-									}
-								}
-							}
-						}
-					}
-				if (CountryInfo == Italy){
-					if (ToneResult == 1) {
-						ToneModeSwitch = ToneModeIdle;
-						break;
-						}
-					}
-
-				if (false_cond == 0) {
-					if (false_cond1 == TRUE) {
-						Tone[ix].ontime = 0;
-						}
-					else {
-						Tone[ix].ontime = tempp1; /* New on time*/
-						}
 					}
 				}
+
+				if (Tone[ix].tonetype == 2 && false_cond == 0)
+	         {	/* Two segments tone, make decision here*/
+					if( (Tone[ix].ontime >= Tone[ix].ontimemin)
+						 && (Tone[ix].ontime <= Tone[ix].ontimemax)
+						 && (Tone[ix].offtime >= Tone[ix].offtimemin)
+						 && (Tone[ix].offtime <= Tone[ix].offtimemax)
+                 )
+    	         {
+			 			if ((ix >= 1) && (ix <= 4))
+                  {
+			 				if (busy_count[ix-1])
+				         {
+							  if(country_area_code1 != USA)
+							  {
+		          		     Tone_signal_level_lo = Read_signal_level();
+							     Tone_signal_level_lo += DBMADJUST;
+
+
+							    if(ix == 1)
+							    {
+								Tone_Thr = PTT_dbmthr_Level[CountryInfo].busy1_thr;
+								if(Tone_Thr >= Tone_signal_level_lo)
+			 					ToneResult = Tone[ix].tonecode;
+							    }
+
+							    if(ix == 2)
+							    {
+								Tone_Thr = PTT_dbmthr_Level[CountryInfo].busy2_thr;
+								if(Tone_Thr >= Tone_signal_level_lo)
+					 			ToneResult = Tone[ix].tonecode;
+							    }
+
+							    if(ix == 3)
+							    {
+								Tone_Thr = PTT_dbmthr_Level[CountryInfo].conj1_thr;
+								if(Tone_Thr >= Tone_signal_level_lo)
+					 			ToneResult = Tone[ix].tonecode;
+							    }
+							    if(ix == 4)
+							    {
+								Tone_Thr = PTT_dbmthr_Level[CountryInfo].conj2_thr;
+								if(Tone_Thr >= Tone_signal_level_lo)
+					 			ToneResult = Tone[ix].tonecode;
+							    }
+
+							  }
+							  else
+							  {
+				 			    ToneResult = Tone[ix].tonecode;
+							  }
+//                          		string = (ubyte *)"R++";
+//   					            output_info(string,STORED_NUM);  /* CR, LF before */
+//                           string = d_to_a(ix);
+//					            output_info(string,STORED_NUM);  /* CR, LF before */
+//
+//            	            d2_to_a2(Tone[ix].ontime,tembuf);
+//   	                     strcpy((char *)cidbuf,"CADENCE_ON=");
+//                  	      strcat((char *)cidbuf,(char *)tembuf);
+//				            	output_info(cidbuf,STORED_NUM);  /* CR, LF before */
+//
+//            		         d2_to_a2(Tone[ix].offtime,tembuf);
+//   		                  strcpy((char *)cidbuf,"CADENCE_OF=");
+//                  		   strcat((char *)cidbuf,(char *)tembuf);
+//                     	   output_info(cidbuf,STORED_NUM);  /* CR, LF after */
+//
+////                           string = d_to_a(busy_count[ix-1]);
+//                           string = d_to_a(ToneResult);
+//            				output_info(string,STORED_NUM);  /* CR, LF before */
+
+                                 Tone[ix].ontime = 1;
+                                 break;
+										}
+										else
+		                                {
+											busy_count[ix-1]++;
+										}
+
+                         /*  		string = (ubyte *)"R+";	 */
+   					       /*     output_info(string,STORED_NUM); */ /* CR, LF before */
+
+									}
+									else
+          			                {
+
+#if 0
+							  if(ix > 4)
+							  {
+								Tone_Thr = PTT_dbmthr_Level[CountryInfo].rinbk_thr;
+								if(Tone_Thr >= Tone_signal_level_lo)
+								ToneResult = Tone[ix].tonecode;
+							   }
+#endif
+								ToneResult = Tone[ix].tonecode;
+						}
+
+					}
+               else
+               {
+                 if ((ix >= 1) && (ix <= 4))
+                    busy_count[ix-1] = 0;
+               }
+
+				}
+
+//				if (country_area_code1 == Italy)
+//	            {
+//					if (ToneResult == 1)
+//    	           {
+//						ToneModeSwitch = ToneModeIdle;
+//						break;
+//					}
+//				}
+
+//				if (false_cond == 0)
+//            {
+//					if (false_cond1 == TRUE)
+//               {
+//						Tone[ix].ontime = 0;
+//					}
+//					else
+//               {
+//						Tone[ix].ontime = tempp1; /* New on time*/
+//					}
+//				}
+            Tone[ix].ontime = 1;
+
 			}
 		}
 	}
+}
+
 
 
 /****************************************************************************
@@ -612,18 +906,28 @@ void ToneModeStateSwitch(void) {
 /
 *******************************************************************************/
 
-void ast_NC(ubyte *param_ptr) {
-	if (Default_Country == 0xFF) {	/* Only when Default_Country == 0xFF*/
-		if (*param_ptr > MAX_COUNTRY_CODE) {
+void ast_NC(ubyte *param_ptr)
+{
+	if (Default_Country == 0xFF)
+	{	/* Only when Default_Country == 0xFF*/
+		if (*param_ptr > MAX_COUNTRY_CODE)
+		{
    	   error_occurred = TRUE;
-			}
-		else {
+		}
+		else
+		{
 			CountryInfo = *param_ptr;
-			InitiateCountryDependSReg();
+			country_area_code1 = cntry_list[CountryInfo].cntry_areacode2;
+			InitiateCountryDependSReg(0);
+			if(country_area_code1 == Denmark_a_code1)
+			   length_of_dialtone = 200;       /* Length of dialtone needed to be detected */
+			else
+			   length_of_dialtone = 100;       /* Length of dialtone needed to be detected */
 /*			acu_load_defaults(AT_Z_COMMAND);*/
 			}
 		}
-	else {
+	else
+	{
    	   error_occurred = TRUE;
 		}
 	}
@@ -706,15 +1010,30 @@ void d2_to_a2(uword val, ubyte buf[])
 void InitiateToneATaps(void) {
 	ubyte *temp;
 	ONE_WORD ab[7];
+/*    uword dsp_address; */
 
-	if (CountryInfo == USA)
-		return ;
+#ifdef DEBUG_PORT
+   	PrintMsg( "InitiateToneATaps");
+#endif
+
+#if (DSP_SERIES == 700)
+   /*  programming taps not working yet */
+   return;
+#endif
+
+//	if (country_area_code1 == USA)
+//		return;
+
+
    current_command [0] = 0x0d;
   	current_command [1] = 0x00;
   	current_command [2] = 0x04;
    current_command [3] = 0x00;
-   current_command [4] = 0x4d;
-	current_command [5] = 0x00;
+
+   dsp_address = get_dsp_address(24);
+   current_command [4] = (ubyte)(dsp_address & 0x00FF);
+   current_command [5] = (dsp_address >> 8);
+
    current_command [6]  = 0xdf;
    current_command [7]  = 0xdf;
 	temp = (ubyte *)(COM_RAM);
@@ -722,7 +1041,6 @@ void InitiateToneATaps(void) {
   	ack_or_response = 0;
    send_pkt_to_dsp();
 
-	if ((CountryInfo == Japan) || (CountryInfo == UK)/* || (CountryInfo == USA)*/){
 
 		ab[0].w = PTT_Taps[CountryInfo].b12;
 		ab[1].w = PTT_Taps[CountryInfo].b11;
@@ -736,8 +1054,11 @@ void InitiateToneATaps(void) {
 	  	current_command [2] = 0x10;
 	   current_command [3] = 0x00;
 /* Tone A Taps CommRAM location*/
-	   current_command [4] = 0xD8;
-  		current_command [5] = 0x01;
+
+   dsp_address = get_dsp_address(48);
+   current_command [4] = (ubyte)(dsp_address & 0x00FF);
+   current_command [5] = (dsp_address >> 8);
+
 	   current_command [6]  = ab[0].b.b0; /* b12 */
 	   current_command [7]  = ab[0].b.b1;
 		current_command [8]  = ab[1].b.b0; /* b11 */
@@ -764,9 +1085,12 @@ void InitiateToneATaps(void) {
 	   current_command [1] = 0x00;
 	  	current_command [2] = 0x08;
 	   current_command [3] = 0x00;
-/* Tone A Taps CommRAM location*/
-	   current_command [4] = 0xDF;
-   	current_command [5] = 0x01;
+
+       /* Tone A Taps CommRAM location*/
+       dsp_address += 7;
+       current_command [4] = (ubyte)(dsp_address & 0x00FF);
+       current_command [5] = (dsp_address >> 8);
+
 	   current_command [6]  =ab[0].b.b0; /* b20 */
 	   current_command [7]  =ab[0].b.b1;
 	   current_command [8]  =ab[1].b.b0;	/* a22 */
@@ -777,8 +1101,43 @@ void InitiateToneATaps(void) {
 		*temp = 0x0c0;
 		ack_or_response = 0;
 	   send_pkt_to_dsp();
-		}
 	}
+
+/***********************************************************/
+/* In file ac00ptt.c Initialize Filter threshold			  */
+/***********************************************************/
+void InitiateThresoldLevel(void)
+{
+   ubyte     *temp;
+   ONE_WORD  ThrsoldLvl[2];
+
+#ifdef DEBUG_PORT
+   	PrintMsg( "InitiateThresoldLevel");
+#endif
+
+/* MH021098 Put the correct value in the Threshold varriables */
+	ThrsoldLvl[0].w = PTT_dbmthr[CountryInfo].dbmonthr;
+	ThrsoldLvl[1].w = PTT_dbmthr[CountryInfo].dbmoffthr;
+
+		current_command [0] = 0x0d;
+	  	current_command [1] = 0x00;
+	  	current_command [2] = 0x06;
+		current_command [3] = 0x00;
+	   	dsp_address = get_dsp_address(25);
+	   	current_command [4] = (ubyte)(dsp_address & 0x00FF);
+   		current_command [5] = (dsp_address >> 8);
+/*		current_command [4] = 0x92;
+		current_command [5] = 0x00; */
+		current_command [6] = ThrsoldLvl[0].b.b0;
+		current_command [7] = ThrsoldLvl[0].b.b1;
+		current_command [8] = ThrsoldLvl[1].b.b0;
+		current_command [9] = ThrsoldLvl[1].b.b1;
+
+		temp = (ubyte *)(COM_RAM);
+		*temp = 0x0c0;
+		ack_or_response = 0;
+		send_pkt_to_dsp();
+}
 
 /*******************************************************************************
 /
@@ -808,25 +1167,25 @@ void InitiateToneATaps(void) {
 /
 *******************************************************************************/
 
-void InitiateDTMFLevel(void){
-	ubyte *temp;
+void InitiateDTMFLevel(void)
+{
+   ubyte *temp;
+
+#ifdef DEBUG_PORT
+   	PrintMsg( "InitiateDTMFLevel");
+#endif
+
    current_command [0] = 0x88;
-  	current_command [1] = 0x00;
-  	current_command [2] = 0x02;
+   current_command [1] = 0x00;
+   current_command [2] = 0x02;
    current_command [3] = 0x00;
    current_command [4] = PTT_DTMF_Level[CountryInfo].DTMF_Level.level1;
-	current_command [5] = PTT_DTMF_Level[CountryInfo].DTMF_Level.level2;
-	temp = (ubyte *)(COM_RAM);
+   current_command [5] = PTT_DTMF_Level[CountryInfo].DTMF_Level.level2;
+   temp = (ubyte *)(COM_RAM);
 
-/*MRM12796*/
-/*donot need to set ack if sending packets*/
-/*
-	*temp = 0x0c0;
-*/
-  	ack_or_response = 0;
+   ack_or_response = 0;
    send_pkt_to_dsp();
-	}
-
+}
 
 /*******************************************************************************
 /
@@ -856,56 +1215,56 @@ void InitiateDTMFLevel(void){
 /
 *******************************************************************************/
 
-void InitiateTransmitLevel(void) {
-	ubyte *temp,s91Lvl;
-	ONE_WORD FaxLvl, DataLvl;
+void InitiateTransmitLevel(ubyte for_dtmf_txlevel)
+{
+   ONE_WORD  TxLvl;
 
-/*	if (CountryInfo == USA)	return;*/
+   /*  use the same S91_PTT_TransmitLevel table for
+       data and fax, but index s91 for data and s92 for fax */
+   current_command[0] = PACKET_MODEM_SET_TX_LEVEL;
+   current_command[1] = 0;
+   current_command[2] = 4;
+   current_command[3] = 0;
 
-	if (fax_class != 1 && fax_class != 0) return;
+   if (fax_class == 1)
+   {
+      TxLvl.w = S91_PTT_TransmitLevel[s[92]];
+   	  current_command[4] = TxLvl.b.b0;
+	  current_command[5] = TxLvl.b.b1;
+      #ifdef DEBUG_PORT
+      PrintOutChars("InitiateTransmitLevel for fax: ");
+      outhex(TxLvl.b.b0);
+	  outchar(' ');
+      outhex(TxLvl.b.b1);
+      outchar(0x0D);
+      outchar(0x0A);
+      #endif
+   }
+   else if (fax_class == 0)
+   {
+      if((for_dtmf_txlevel == 1) /* && (CUSTOMER35 == TRUE) */)
+     	 TxLvl.w = S91_PTT_TransmitLevel[(PTT_SReg[CountryInfo].S91.DefaultValue)];  // value to be fine tuned. Goaded by AIWA.
+	  else
+     	 TxLvl.w = S91_PTT_TransmitLevel[s[91]];
 
-	s91Lvl = s[91];
-	if (s91Lvl < PTT_SReg[CountryInfo].S91.min)
-		s91Lvl = PTT_SReg[CountryInfo].S91.min;
+      current_command[4] = TxLvl.b.b0;
+      current_command[5] = TxLvl.b.b1;
 
-	if (s91Lvl > PTT_SReg[CountryInfo].S91.max)
-		s91Lvl = PTT_SReg[CountryInfo].S91.max;
+      #ifdef DEBUG_PORT
+      PrintOutChars( "InitiateTransmitLevel for data: ");
+      outhex(TxLvl.b.b0);
+	  outchar(' ');
+      outhex(TxLvl.b.b1);
+      outchar(0x0D);
+      outchar(0x0A);
+      #endif
+  }
+   else
+      return;
 
-	DataLvl.w = S91_PTT_TransmitLevel[s[91]];
-	FaxLvl.w = S91_PTT_TransmitLevel[s[91]];
-
-/*
-	if (CountryInfo == Japan){
-		DataLvl.w = S91_PTT_TransmitLevel[s[91]];
-		FaxLvl.w = S91_PTT_TransmitLevel[s[91]];
-		}
-	else {
-		DataLvl.w = PTT_TransmitLevel[CountryInfo].Data_Level;
-		FaxLvl.w = PTT_TransmitLevel[CountryInfo].Fax_Level;
-		}
-*/
-
-	current_command [0] = 0x0C;
-  	current_command [1] = 0x00;
-  	current_command [2] = 0x06;
-   current_command [3] = 0x00;
-   current_command [4] = 0x5F;
-   current_command [5] = 0x16;
-   current_command [6] = 0x00;
-   current_command [7] = 0x00;
-	if (fax_class) {
-   	current_command [8] = FaxLvl.b.b0;
-	   current_command [9] = FaxLvl.b.b1;
-		}
-	else {
-   	current_command [8] = DataLvl.b.b0;
-	   current_command [9] = DataLvl.b.b1;
- 		}
-	temp = (ubyte *)(COM_RAM);
-	*temp = 0x0c0;
-  	ack_or_response = 0;
+   ack_or_response = 0;
    send_pkt_to_dsp();
-	}
+}
 
 /*******************************************************************************
 /
@@ -935,7 +1294,7 @@ void InitiateTransmitLevel(void) {
 /
 *******************************************************************************/
 
-void InitiateCountryDependSReg(void) {
+void InitiateCountryDependSReg(ubyte type) {
 	ubyte dummy;
 	dummy=0;
 
@@ -948,8 +1307,13 @@ void InitiateCountryDependSReg(void) {
 	(PTT_SReg[CountryInfo].S22.DefaultValue!=0)?s[22]=PTT_SReg[CountryInfo].S22.DefaultValue:dummy++;
 	(PTT_SReg[CountryInfo].S23.DefaultValue!=0)?s[23]=PTT_SReg[CountryInfo].S23.DefaultValue:dummy++;
 	(PTT_SReg[CountryInfo].S27.DefaultValue!=0)?s[27]=PTT_SReg[CountryInfo].S27.DefaultValue:dummy++;
-	(PTT_SReg[CountryInfo].S31.DefaultValue!=0)?s[31]=PTT_SReg[CountryInfo].S31.DefaultValue:dummy++;
-	(PTT_SReg[CountryInfo].S91.DefaultValue!=0)?s[91]=PTT_SReg[CountryInfo].S91.DefaultValue:dummy++;
+	(PTT_SReg[CountryInfo].S30.DefaultValue!=0)?s[30]=PTT_SReg[CountryInfo].S30.DefaultValue:dummy++;
+
+    if (type == 0)
+	{
+	   (PTT_SReg[CountryInfo].S91.DefaultValue!=0)?s[91]=PTT_SReg[CountryInfo].S91.DefaultValue:dummy++;
+	   (PTT_SReg[CountryInfo].S91.DefaultValue!=0)?s[92]=PTT_SReg[CountryInfo].S91.DefaultValue:dummy++;
+	}
 
    switch (sr22.uk_hook) {
      	case 0:
@@ -969,6 +1333,8 @@ void InitiateCountryDependSReg(void) {
    		 break_time = PTT_MakeBreak_Time[CountryInfo].P1_break_time/2;
 			 break;
 	   }
+	   dialtone_wait_limit = PTT_DialToneTimeOut[CountryInfo];
+	   flash_time = PTT_HookFlash[CountryInfo];
 	}
 
 /*******************************************************************************
@@ -999,10 +1365,12 @@ void InitiateCountryDependSReg(void) {
 /
 *******************************************************************************/
 
-void CountryDependSRegRangeCheck(ubyte number) {
+void CountryDependSRegRangeCheck(ubyte number)
+{
 	ubyte max, min;
 
-	switch (current_register) {
+	switch (current_register)
+	{
 		case 0:
 			max = PTT_SReg[CountryInfo].S0.max;
 			min = PTT_SReg[CountryInfo].S0.min;
@@ -1031,20 +1399,47 @@ void CountryDependSRegRangeCheck(ubyte number) {
 			max = PTT_SReg[CountryInfo].S91.max;
 			min = PTT_SReg[CountryInfo].S91.min;
 			break;
+		case 92:  /* Use 91 table */
+			max = PTT_SReg[CountryInfo].S91.max;
+			min = PTT_SReg[CountryInfo].S91.min;
+			break;
+
 		}
-	if (number >= min && number <= max) {
+	if (number >= min && number <= max)
+	{
 		s[current_register] = number;
 		}
-	else {
-		if (number < min)	{
+	else
+	{
+		if (number < min)
+		{
 			s[current_register] = min;
 			}
-		else {
+		else
+		{
 			s[current_register] = max;
 			}
 		}
+
+	if((country_area_code1 == Denmark_a_code1) ||
+		(country_area_code1 == Finland_a_code1))
+	{
+		if((current_register == 0) && (number == 1))
+			s[current_register] = 0;
 	}
 
+
+// block out values in the range for sreg0
+	if((homg_var1.Forced_sreg0_max1 > 0) && (current_register == 0))
+	{
+		if((number >= homg_var1.Forced_sreg0_min1) &&
+			(number <= homg_var1.Forced_sreg0_max1))
+		{
+         error_occurred = TRUE;
+			s[current_register] = 0;
+		}
+	}
+}
 
 /*******************************************************************************
 /
@@ -1075,9 +1470,13 @@ void CountryDependSRegRangeCheck(ubyte number) {
 *******************************************************************************/
 
 void SetPulseRelay(uword status) {
-#ifndef __riscos
 	uword *gpio;
 
+#if INTERNATIONAL_CODE == 1
+/*	if (country_area_code1 != USA) */
+	return;	/* MH092397 */
+#endif
+#ifndef __riscos
 	gpio = (uword *) GPCR1 ;
 	*gpio = PULSE_DIAL_MASK | 0x0002 ; /* config Pulse dial bit as output */
 
@@ -1122,13 +1521,8 @@ void SetPulseRelay(uword status) {
 /	Reason:
 /
 *******************************************************************************/
-#ifndef __riscos
-#define  GPCR0          0xffc210   /* config reg, 0 input, 1 output */
-#define  GPR0           0xffc204   /* if as output,value reg */
-#define  HOOK_MASK		0x0080
-#endif
-
-void SetOnHookRelay(ubyte status) {
+void SetOnHookRelay(ubyte status)
+{
 #ifdef __riscos
         set_hook_relay(status);
 #else
@@ -1145,8 +1539,7 @@ void SetOnHookRelay(ubyte status) {
 		*gpio = HOOK_MASK | 0x0008;
 		}
 #endif
-	}
-
+}
 
 /*******************************************************************************
 /
@@ -1179,10 +1572,10 @@ void SetOnHookRelay(ubyte status) {
 #define  LPOHD_RELAY_MASK		0x8000
 
 ubyte LineCurrent(void){
-    #ifdef __riscos
-    return 1;
-    #else
-	uword *gpio, temp1;
+#ifdef __riscos
+        return 1;
+#else
+	uword *gpio;
 
 	gpio = (uword *)GPCR0 ;
 	*gpio = LPOHD_MASK | 0x0800 ; /* config LPOHD bit as input */
@@ -1195,13 +1588,13 @@ ubyte LineCurrent(void){
 	else {
 		return 1;
 		}
-    #endif
+#endif
 	}
 
 #define VORELAY_MASK 	0x1000
 
 void SetVORelay(ubyte status) {
-    #ifndef __riscos
+#ifndef __riscos
 	uword *gpio;
 
 	gpio = (uword *)GPCR0 ;
@@ -1214,5 +1607,230 @@ void SetVORelay(ubyte status) {
 	else {
 		*gpio = VORELAY_MASK | 0x0100;
 		}
-    #endif
+#endif
 	}
+
+uword get_dsp_address(ubyte lower_var_offset)
+{
+/*   uword dsp_address; */
+
+#if (DSP_SERIES == 700)
+   current_command[0] = PACKET_MODEM_GET_ADDRESS;
+   current_command[1] = 0;
+   current_command[2] = 3;
+   current_command[3] = 0;
+   current_command[4] = lower_var_offset;
+   current_command[5] = 0;
+   current_command[6] = 0;  /* P1 sublink */
+   current_command[7] = 0;
+
+   dsp_cp_packet = PACKET_DP_ADDRESS_LOC;
+   ack_or_response = 1;   /* RESPONSE */
+   send_pkt_to_dsp ();
+
+   dsp_address  = ((uword)dsp_response_data[1] << 8);
+   dsp_address |= dsp_response_data[0];
+
+#else
+   switch (lower_var_offset)
+   {
+      case (48):
+         dsp_address = 0x01D8;
+         break;
+
+      case (24):
+         dsp_address = 0x004D;
+         break;
+
+      case (25):
+         dsp_address = 0x0092;
+         break;
+
+      default:
+         #ifdef DEBUG_PORT
+         PrintMsg("FATAL - invalid variable offset selected");
+         #endif
+         break;
+   }
+#endif
+   return (dsp_address);
+}
+#include "ac00intl.h"
+#include "ac00intl.c"
+
+
+
+/*******************************************************************************
+/
+/	Routine: shunt_ath1_task()
+/
+/	Author : Cirrus Logic
+/
+/	Creation Date: 02/18/98
+/
+/	Description: This routine handles shunt relay and ath1 hangup
+/
+/	Input Parameters: None
+/
+/	Output Parameters: none
+/
+/	Global Variables Changed:  st_crnt_boost1
+/
+/	Users:
+/
+/	-------------------------------------------------------------
+/	-			Modifications			    -
+/	-------------------------------------------------------------
+/
+/	Author & Date:	Cirrus Logic
+/	Description:
+/	Reason:
+/
+*******************************************************************************/
+#if INTERNATIONAL_CODE == 1
+void shunt_ath1_task()
+{
+	ubyte *string;  //debug2
+	if(hook == FALSE)
+	{
+     	if((st_crnt_boost1 != 0) && (msec2_count == 0))
+      {
+	      switch (st_crnt_boost1)
+    	   {
+			   case SHUNT_AT_D_T:
+           	case SHUNT_AT_D_ONLY:
+				case SHUNT_ATH1_START:
+//				case SHUNT_NORWAY_DIAL_TONE_FOUND1:
+				case SHUNT_AFTER_FLASH_BEGINS:
+				  	if(st_crnt_boost1 == SHUNT_AT_D_T)
+				  	{
+				  		st_crnt_boost1 = SHUNT_ATDT_DELAY1_DONE;  ///
+				  	}
+				  	else if (st_crnt_boost1 == SHUNT_ATH1_START)
+				  	{
+				  		st_crnt_boost1 = SHUNT_ATH1_DONE;		  ///
+				  	}
+				  	else if(st_crnt_boost1 == SHUNT_AT_D_ONLY)
+				  	{
+				  		st_crnt_boost1 = SHUNT_DELAY1_DONE;
+				  	}
+//				  	else if(st_crnt_boost1 == SHUNT_AT_D_ONLY)
+//				  	{
+//				  		st_crnt_boost1 = SHUNT_NORWAY_DIAL_TONE_FOUND2;
+//				  	}
+				  	else // SHUNT_AFTER_FLASH_BEGINS
+				  	{
+				  		if(sr14.pulse == 1)
+				  		{
+				  		// restore st_crnt_boost1 and continue pulse dialing.
+	     		  		 	st_crnt_boost1 = old_st_crnt_boost1;
+				  		}
+				  		else
+				  		{
+				  			st_crnt_boost1 = SHUNT_AFTER_FLASH_ENDS;
+				  		}
+				  	}
+
+//				  	string = (ubyte *)"B1";	  // debug1
+//				    output_info(string,(ubyte)sr14.verbose_form); // debug1
+					break;
+
+				case SHUNT_WAIT_DELAY2:
+						st_crnt_boost1 = SHUNT_DELAY2_DONE;
+//						string = (ubyte *)"B2";	  // debug1
+//				    	output_info(string,(ubyte)sr14.verbose_form); // debug1
+					break;
+
+				case SHUNT_END_OF_STRING:
+						st_crnt_boost1 = SHUNT_DELAY3_DONE;
+//						string = (ubyte *)"B3";	  // debug1
+//			    		output_info(string,(ubyte)sr14.verbose_form); // debug1
+					break;
+
+				default:
+					break;
+			} //end of switch
+		}// if((st_crnt_boost1 != 0) && (msec2_count == 0))
+
+
+/* check if need to toggle relay or hangup */
+		if(st_crnt_boost1 == SHUNT_DELAY1_DONE)
+	  	{
+			set_shunt_relay(ACTIVATE);
+			st_crnt_boost1 = SHUNT_WAIT_FOR_DIGIT;
+//			string = (ubyte *)"C1";	  // debug1
+//		    output_info(string,(ubyte)sr14.verbose_form); // debug1
+	  	}
+		else if((st_crnt_boost1 == SHUNT_DELAY3_DONE)    ||
+			  (st_crnt_boost1 == SHUNT_ATDT_DELAY1_DONE) ||
+			  (st_crnt_boost1 == SHUNT_ATH1_DONE)        ||
+//			  (st_crnt_boost1 == SHUNT_NORWAY_DIAL_TONE_FOUND2)   ||
+			  (st_crnt_boost1 == SHUNT_AFTER_FLASH_ENDS))
+	  	{
+			set_shunt_relay(ACTIVATE);
+		 	st_crnt_boost1 = 0;
+//			string = (ubyte *)"C2";	  // debug1
+//			output_info(string,(ubyte)sr14.verbose_form); // debug1
+	    }
+
+
+		if((ath1_activate == TRUE) && (ath1_timer == 0))
+		{
+			ath1_activate = FALSE;
+		    set_loc_line_relay(OFF);
+    	    set_safe1_en_relay(ACTIVATE);
+		    build_event(E_HANGUP,NONE);
+		}
+	}
+}
+#endif
+
+
+
+
+#if INTERNATIONAL_CODE == 1
+ubyte CheckStoredNumZ0123(ubyte Znum)
+{
+	ubyte eeprom_error1;
+	ubyte *string;
+	uword address;
+	ubyte tmpf_z0123;
+	ubyte i;
+
+
+   if (Znum >= 4)
+	{
+      error_occurred = TRUE;
+		return(0xf0);
+	}
+   tmpf_z0123 = 0;
+	i = Znum;
+
+
+      address = TELE_NUMBER_0_ADD + (TELE_NUMBER_SIZE * i);
+
+      /* Use the temp array for storeage */
+      string = (ubyte *)&temp_array[0];
+
+      /* Get stored number from the eeprom */
+      eeprom_error1 = modem_read_data(address,TELE_NUMBER_SIZE,string);
+
+      /* If no EEPROM read error, continue */
+      if (!eeprom_error1)
+      {
+         /* Force EndOfString char */
+         temp_array[TELE_NUMBER_SIZE] = '\0';
+
+         /* Echo the number to the Terminal */
+//         output_info(string,STORED_NUM); //
+
+			if(str_len((ubyte *)&temp_array[0]) > 0)
+				tmpf_z0123 |= (1 << i);
+		}
+		else
+	      error_occurred = TRUE;
+
+	return(tmpf_z0123);
+}
+#endif
+

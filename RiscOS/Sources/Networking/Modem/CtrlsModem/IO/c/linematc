@@ -48,6 +48,10 @@
 /* Will be changed later */
 #include "mt_codef.h"
 #include "mt_macro.h"
+#include "linev80.h"
+
+extern ubyte V80_tx_frm_spacing_complete;
+extern ubyte V80_wait_DCE_empty;
 
 /***************** external procedures used locally *************************/
 
@@ -118,6 +122,10 @@ extern ubyte ack_or_response;
 ****************************************************************************/
 void line_from_clear(void)
 {
+   ubyte buffer_type;
+
+   extern ubyte dce_flag_count;
+
 	line_disable_interrupts();
 
 /*  Reset buffer mechanisms */
@@ -128,6 +136,19 @@ void line_from_clear(void)
 /*  If any rx data was suspended release it because the buffer is empty */
 	if ( dce_rx_suspended )
 		dce_rx_resume();
+
+/* BRG */
+/* if v80 SAM flush dsp too */
+   if ( v80_sam )
+   {
+      buffer_type = 1;   /* Clear RX buffer */
+      LOAD_MODEM_CLEAR_DATA_BUFFER
+      ack_or_response = ACK;
+      send_pkt_to_dsp();
+
+   }
+
+   dce_flag_count = 0;
 
 	line_enable_interrupts();
 }
@@ -197,6 +218,7 @@ ubyte line_from_char(void)
 {
 	ubyte c;
 
+
 	line_disable_interrupts();
 
 
@@ -263,9 +285,47 @@ void line_to_clear(void)
 /*   Reset tx break mechanisms */
 	dce_tx_break_pending = FALSE;
 
+/* RJM100896 */
+/* V.80 support */
+	v80_frame_count = 0;
+
 	line_enable_interrupts();
 }
 
+/* RJM100796 */
+/* V.80 support */
+/**************************************************************************
+/
+/    Routine:        line_to_num
+/
+/    Author :        RSA
+/
+/    Creation Date:  09/05/96
+/
+/    Description:    This routine will return the number of characters
+/                    contained in the line transmit buffer
+/
+/    Input Parameters: None
+/
+/    Output Parameters: (uword) # of chars in tx buffer
+/
+/    Global Variables Changed:  None
+/
+/    Users:
+/
+/    -------------------------------------------------------------
+/    -              Modifications                -
+/    -------------------------------------------------------------
+/
+/    Author & Date: RSA
+/    Description:
+/    Reason:
+/
+***********************************************************************/
+uword line_to_num(void)
+{
+   return(dce_tx_count);
+}
 
 /******************************************************************************
 /
@@ -335,9 +395,12 @@ void line_to_char(ubyte out_char)
 	line_disable_interrupts();
 
 /*   If buffer has no data and a tx int is not expected will need to kickstart */
-	if (!dce_tx_count && !dce_tx_interrupt_expected)
+
+/* RJM100796 */
+/* V.80 support */
+	if (!dce_tx_count && !dce_tx_interrupt_expected && !v80_sam )
 	{
-		need_to_kickstart = TRUE;
+			need_to_kickstart = TRUE;
 	}
 
 /*   If there's room in the buffer, stuff and bump, else ignore char */
@@ -351,6 +414,16 @@ void line_to_char(ubyte out_char)
 			dce_tx_insert = 0;
 	}
 
+/* RJM100796 */
+/* V.80 support */
+	/* In V.80 mode, we want to "batch" up some data
+      before we start to TX, thus no DSP FIFO underruns
+      occur. Also, do NOT ping DSP if we're already
+      transmitting - its BUSY!!!
+	*/
+	if( v80_sam && (dce_tx_count >= 64) && !dce_tx_interrupt_expected )
+		need_to_kickstart = TRUE;
+
 	if (need_to_kickstart)
 	{
 		dspdrv_ping_cram_intr();
@@ -360,6 +433,177 @@ void line_to_char(ubyte out_char)
   line_enable_interrupts();
 
 } /* procedure */
+
+/******************************************************************************
+/
+/    Routine: line_to_block
+/
+/    Author: RSA
+/
+/    Creation Date: October 7, 1996
+/
+/    Description:   This routine take all bytes in supplied buffer
+/                   and stick them into the DCE_TX_BUFFER[].
+/
+/    Input Parameters: ubyte * - character buffer to be transmitted
+/                      ubyte   - number of bytes in buffer
+/
+/    Output Parameters: None
+/
+/    Global Variables Changed:  dce_tx_buffer, dce_tx_insert, dce_tx_count,
+/                        dce_tx_interrupt_expected
+/
+/    Users:
+/
+/    *************************************************************
+/    *              Modifications                *
+/    *************************************************************
+/
+/    Author & Date: RSA
+/    Description:
+/
+******************************************************************************/
+void line_to_block(ubyte *array, ubyte count)
+{
+	ubyte i;
+	ubyte tflag = FALSE;
+	ubyte need_to_kickstart = FALSE;
+
+#if 0
+   for(i=0;i<count;i++)
+   {
+      outchar( *(array+i) );
+   }
+#endif
+
+	line_disable_interrupts();
+
+   if ((v80_sam == TRUE) && (current_sub_mode == FRAMED_SUB_MODE))
+   {
+       if (dce_tx_count >= 64)
+       {
+           need_to_kickstart = TRUE;
+
+           if (!dce_tx_interrupt_expected && !v80_frame_count)
+           {
+               v80_pframe_count=1;
+           }
+       }
+
+       if(count >= 2)
+       {
+		    /* If buffer contains <EM><FLAG> */
+           if (((array[0] == 0x19) || ( array[0] == 0x99 )) && ((array[1] == 0xB1) || ( array[1] == 0xB2 )))
+           {
+               need_to_kickstart = TRUE;
+               v80_pframe_count = 0;
+
+               if( array[1] == 0xB1 )
+               {
+                   v80_frame_count++;
+               }
+           }
+       }
+   }
+   else if((v80_sam == TRUE) && (current_sub_mode == TRANSPARENT_SUB_MODE))
+   {
+       if( count > 2 )
+       {
+	        /* If buffer contains <EM><MARK> */
+           if ((array[0] == 0x19) && (array[1] == 0xB0))
+           {
+               need_to_kickstart = TRUE;
+               tflag = TRUE;
+           }
+       }
+
+       if (dce_tx_count >= 64)
+       {
+           need_to_kickstart = TRUE;
+           tflag = TRUE;
+       }
+   }
+
+   /* If there's room in the buffer, stuff and bump, else ignore char */
+   if (tflag != TRUE)
+   {
+      for (i=0; i<count; i++)
+      {
+   	   if (dce_tx_count < DCE_BUFFER_SIZE)
+   	   {
+   		   dce_tx_buffer[dce_tx_insert++] = array[i];
+
+   		   dce_tx_count++ ;
+
+   		   /* reset buffer ptr ? */
+   		   if (dce_tx_insert == DCE_BUFFER_SIZE)
+   			   dce_tx_insert = 0;
+   	   }
+          else
+          {
+              PrintMsg( "---dce_tx_buf full!!!---" );
+          }
+      }
+   }
+
+   /* the line tx isr starts a timer when the flag ending frame is sent to com ram.
+    * the v80 background monitors the timer, setting v80_tx_frm_spacing_complete
+    * true when the timer expires. wake up the dsp for tx data when
+    * the timer has expired.
+   */
+
+	if (need_to_kickstart && !dce_tx_interrupt_expected && V80_tx_frm_spacing_complete )
+	{
+		dspdrv_ping_cram_intr();
+		dce_tx_interrupt_expected =TRUE;
+      V80_tx_frm_spacing_complete = FALSE;
+	}
+
+   line_enable_interrupts();
+} /* procedure */
+
+
+
+
+
+/******************************************************************************
+/
+/    Routine: v80_purge_line
+/
+/    Author: RSA
+/
+/    Creation Date: December 19, 1996
+/
+/    Description:   This routine kickstarts the dsp to remove data from dce tx buf
+/
+/    Output Parameters: None
+/
+/    Global Variables Changed:  V80_wait_DCE_empty,
+/                               dce_tx_interrupt_expected,
+/                               v80_tx_frm_spacing_complete
+/
+/    Users:
+/
+/    *************************************************************
+/    *              Modifications                *
+/    *************************************************************
+/
+/    Author & Date: RSA
+/    Description:
+/
+*****************************************************************************/
+
+void v80_purge_line(void)
+{
+outchar('^');
+      V80_wait_DCE_empty = TRUE;
+      if (dce_tx_interrupt_expected == FALSE )
+      {
+   		dspdrv_ping_cram_intr();
+		   dce_tx_interrupt_expected = TRUE;
+         V80_tx_frm_spacing_complete = FALSE;
+      }
+}
 
 /******************************************************************************
 /
@@ -575,6 +819,18 @@ void line_timer(void)
 		line_enable_interrupts();
 	}
 
+/* RJM100796 */
+/* V.80 support */
+   /* This V.80 waiting timer allows the DSP to flush out the
+      remaining received data before disabling hunt mode and
+      sending back the <EM><ERR> sequence */
+   if (hunt_end_wait_timer)
+   {
+      if (--hunt_end_wait_timer == 0)
+      {
+         hunt_mode_en = FALSE;
+      }
+   }
 } /* procedure */
 
 
@@ -865,6 +1121,8 @@ void spd_match_rx_int(void)
 	dspdrv_WriteCram(DSP_CP_DATA_STATUS, &dce_status_semaphore, 1);
 
 } /* procedure */
+
+
 
 
 
