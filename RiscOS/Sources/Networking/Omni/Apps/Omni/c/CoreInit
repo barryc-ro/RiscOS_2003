@@ -14,32 +14,60 @@
  * Copyright 1994,1995 by ANT Limited
  */
 
-#include "Hdrs.h"
-#include "kernel.h"
-#include "Desk/Screen.h"            	/* Getting screen size info, etc   */
-#include "Desk/SWI.h"              	/* Low level OS calls              */
-#include "Desk/ColourTran.h"
-#include "Desk/Resource.h"          	/* Handles finding resource files  */
-#include "Desk/Sound.h"          	/* */
-#include "Desk/Sprite.h"
-#include "Expert.h"
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
-extern void close(void);		/* atexit() handler */
-extern void serviceomni(int num);
+#include <kernel.h>
+#include <swis.h>
+
+#include <Global/Services.h>
+
+#include <Desk/ColourTran.h>
+#include <Desk/Event.h>
+#include <Desk/EventMsg.h>
+#include <Desk/Error.h>
+#include <Desk/File.h>
+#include <Desk/Handler.h>
+#include <Desk/Hourglass.h>
+#include <Desk/LinkList.h>
+#include <Desk/Menu.h>
+#include <Desk/Msgs.h>
+#include <Desk/Resource.h>
+#include <Desk/Screen.h>
+#include <Desk/Sound.h>
+#include <Desk/Sprite.h>
+#include <Desk/Template.h>
+#include <Desk/Window.h>
+
+#include <DebugLib/DebugLib.h>
+
+#include "Core.h"
+#include "CoreInit.h"
+#include "Defs.h"
+#include "Events.h"
+#include "Expert.h"
+#include "Filer.h"
+#include "Heap.h"
+#include "Mount.h"
+#include "Omni.h"
+#include "OmniClient.h"
+#include "Redraw.h"
+
 extern int *resource_spritearea = NULL;	/* Private sprite pool */
 extern Desk_window_handle wind_message = NULL;
 
 extern char *developed = "\n Developed by ANT Limited <sales@ant.co.uk> \n";
 
 #define wimp_VERSION	310		/* Min version of Wimp required to run */
-#define _OS_FSControl	0x000029
 
 
 #ifdef app_TIMED
 
 /*  Set up a private sprite pool for application sprites.
  */
-static Desk_bool SpriteArea(void)
+static bool SpriteArea(void)
 {
   int		poolsize;
   char		temp[64];
@@ -48,19 +76,19 @@ static Desk_bool SpriteArea(void)
   if ((poolsize = Desk_File_Size(temp)) == 0)
   {
     Desk_Msgs_Report(1, "coreinit.nosprite");
-    return(Desk_FALSE);
+    return false;
   }
   poolsize+=4;
   if ((resource_spritearea = (int *) heap_alloc(poolsize+4)) == NULL)
   {
     Desk_Error_OutOfMemory(Desk_FALSE, "private sprite area");
-    return(Desk_FALSE);
+    return false;
   }
   resource_spritearea[0] = poolsize;
   resource_spritearea[2] = 16;
   Desk_Sprite_InitArea((sprite_area) resource_spritearea);
   Desk_Sprite_Load((sprite_area) resource_spritearea, temp);
-  return(Desk_TRUE);
+  return true;
 }
 
 
@@ -115,11 +143,11 @@ extern Desk_bool MessageWindow(Desk_event_pollblock *event, void *reference)
 /*  Check for valid system clock
  *  for prerelease timebomb 'feature'
  */
-static Desk_bool CheckClock(void)
+static bool CheckClock(void)
 {
   struct tm 	*timeptr;
   time_t    	thetime;
-  Desk_bool      	ok = Desk_TRUE;
+  bool      	ok = true;
 #ifdef app_DELETE
   char      	*app_path = app_IMAGE;
 #else
@@ -127,43 +155,51 @@ static Desk_bool CheckClock(void)
   void *reference;
 #endif
 
-  TRACE("coreinit.CheckClock\n");
-  Risc_Time(&thetime);
-  timeptr = localtime(&thetime);
-  if (timeptr == NULL) ok = Desk_FALSE;
-  /* Months start from 0, eg, August == 7 */
-  if ((timeptr->tm_year != 95) || (timeptr->tm_mon > 4)) ok = Desk_FALSE;
+  dprintf (("", "coreinit.CheckClock\n"));
 
-  /* Invalid system clock - this application must die ! */
-  if (!ok)
+  Desk_Error2_Try
+  {
+    Risc_Time(&thetime);
+    timeptr = localtime(&thetime);
+    if (timeptr == NULL) ok = false;
+    /* Months start from 0, eg, August == 7 */
+    if ((timeptr->tm_year != 95) || (timeptr->tm_mon > 4)) ok = false;
+
+    /* Invalid system clock - this application must die ! */
+    if (!ok)
+    {
+#ifdef app_DELETE
+      /* Try and delete application runimage */
+      _swi (OS_FSControl, _INR (0, 3), OS_FSControl_Wipe, app_path, 0, 3)
+      Desk_Error_ReportFatal(1, "*** Beta-Release timed out *** Please request a newer version.");
+#else
+      if (Desk_Template_Find("message") != NULL)
+      {
+        /* Set up private sprite pool for application sprites */
+        if (SpriteArea())
+        {
+          MessageWindow(event, reference);
+          ok = (wind_message);
+          if (ok) Desk_EventMsg_Claim(Desk_message_MODECHANGE, Desk_event_ANY, MessageWindow, NULL);
+        }
+      }
+#endif
+    }
+  }
+  Desk_Error2_Catch
   {
 #ifdef app_DELETE
-    /* Try and delete application runimage */
-    if (Desk_SWI(4,0,_OS_FSControl, 27, (int) app_path, 0, 3) == NULL)
-    {
-      Desk_Error_ReportFatal(1, "*** Beta-Release timed out *** Please request a newer version.");
-    }
-    else
-    {
-      /* Give a bogus error message */
-      Desk_Msgs_ReportFatal(1, "coreinit.nowrite");
-    }
-#else
-    if (!Desk_Template_Find("message")) return(Desk_FALSE);
-    /* Set up private sprite pool for application sprites */
-    if (!SpriteArea()) return(Desk_FALSE);
-    MessageWindow(event, reference);
-    ok = (wind_message);
-    if (ok) Desk_EventMsg_Claim(Desk_message_MODECHANGE, Desk_event_ANY, MessageWindow, NULL);
+    /* Give a bogus error message */
+    Desk_Msgs_ReportFatal(1, "coreinit.nowrite");
 #endif
+    ok = false;
   }
+  Desk_Error2_EndCatch
 
   return ok;
 }
 #endif
 
-
-#define _OS_ServiceCall                0x000030
 
 /*  Initialise templates and messages system from country configuration.
  */
@@ -173,14 +209,15 @@ extern void InitResources(char *path)
   char       country[16];
   int        country_num;
 
-  TRACE("coreinit.InitResources\n");
+  dprintf (("", "coreinit.InitResources\n"));
 
   /* Read in country number */
   country_num = _kernel_osbyte(240, 0, 255) & 255;
 
   /* Set up a service call to translate the number to a text name */
-  Desk_SWI(6,6, _OS_ServiceCall, 0,0x43,2,country_num,(int) country,15,
-    NULL, &type, NULL, NULL, NULL, &len);
+  Desk_Error2_CheckOS (_swix (OS_ServiceCall, _INR (0, 5) | _OUT (1) | _OUT (5),
+                              0, Service_International, 2, country_num, country, 15,
+                              &type, &len));
   if (type == 0)
   {
     char temp[96];
@@ -203,7 +240,7 @@ extern void InitResources(char *path)
     Desk_Error_Report(0, "Unknown country code, using 'UK'");
     sprintf(path, "<%s$Dir>.%s", app_DIR, "Resources.UK.");
   }
-  TRACE1("coreinit.InitResources: %s\n", path);
+  dprintf (("", "coreinit.InitResources: %s\n", path));
 }
 
 
@@ -221,7 +258,7 @@ extern void InitVars(void)
   wind_mounttmp = NULL;
   wind_mountinfo = NULL;
   wind_mountdom = NULL;
-  all_done = Desk_FALSE;
+  all_done = 0;
   wind_filer.w = NULL;
   Desk_LinkList_Init(&wind_filer.anchor);
   wind_filer.nitems = 0;
@@ -241,8 +278,8 @@ extern void InitVars(void)
   clientwindow = NULL;
   select_item = 0;
   select_wind = NULL;
-  select_transient = Desk_FALSE;
-  all_predone = Desk_FALSE;
+  select_transient = false;
+  all_predone = false;
   Desk_LinkList_Init(&redraw_anchor);
 }
 
@@ -259,18 +296,18 @@ extern void ConfigRead()
   prog_config.display = display_LARGE;
   prog_config.expert = Desk_FALSE;
   prog_config.autolocate = Desk_FALSE;
-  TRACE1("ConfigRead: %x\n", (int) s);
+  dprintf (("", "ConfigRead: %x\n", (int) s));
   if (!s) return;
   if ((p = strchr(s, 's')) != NULL)
   {
     n = atoi((char *) p+1);
-    TRACE2("ConfigRead: sort '%s' %d\n", p, n);
+    dprintf (("", "ConfigRead: sort '%s' %d\n", p, n));
     if ((n >= sort_NONE) && (n <= sort_PROTOCOL)) prog_config.sort = n;
   }
   if ((p = strchr(s, 'd')) != NULL)
   {
     n = atoi((char *) p+1);
-    TRACE2("ConfigRead: display '%s' %d\n", p, n);
+    dprintf (("", "ConfigRead: display '%s' %d\n", p, n));
     if ((n >= display_LARGE) && (n <= display_FULL)) prog_config.display = n;
   }
 #ifdef EXPERT
@@ -292,11 +329,9 @@ extern void ConfigWrite()
 }
 
 
-#define Wimp_ReadSysInfo	0x0400F2
-
 /*  Initialise - application initialisation
  */
-extern Desk_bool coreinit(void)
+extern bool coreinit(void)
 {
   char          appname[64];
   char          menudescription[260];
@@ -311,7 +346,7 @@ extern Desk_bool coreinit(void)
   char		*err = NULL;
   int		active;
 
-  TRACE("coreinit.Entry:\n");
+  dprintf (("", "coreinit.Entry:\n"));
   Desk_Hourglass_Start(5);
 
   /* Initialise heap management.
@@ -321,28 +356,29 @@ extern Desk_bool coreinit(void)
 
   /* Check we are really in the desktop.
    */
-  Desk_SWI(1,1, Wimp_ReadSysInfo, 0, &active);
+  _swi (Wimp_ReadSysInfo, _IN (0) | _OUT (0), 0, &active);
   if (active <= 0)
   {
     Desk_Hourglass_Off();
-    return(Desk_FALSE);
+    return false;
   }
-  Desk_SWI(1,1, Wimp_ReadSysInfo, 3, &active);
+
+  _swi (Wimp_ReadSysInfo, _IN (0) | _OUT (0), 3, &active);
   if (active == 0)
   {
     Desk_Hourglass_Off();
-    return(Desk_FALSE);
+    return false;
   }
 
   /* Initialise the Wimp and Event Manager (as a RO3 task).
    * The task name shown on the task display and error reports is set from
    * the string "app_DIR" set as a #define.
    */
-  TRACE2("coreinit.init1: %s %d\n", app_DIR, wimp_VERSION);
+  dprintf (("", "coreinit.init1: %s %d\n", app_DIR, wimp_VERSION));
   Desk_Event_Initialise3(app_DIR"Client", wimp_VERSION, msg_block);
   Desk_EventMsg_Initialise();
   taskhandle = Desk_Event_taskhandle;
-  all_hasrun = Desk_TRUE;
+  all_hasrun = true;
 
   /* Tell Resource (and thereby Template, Msgs, etc) where our resource
    * directory is: "<Mail$Path>".Resources.Country
@@ -351,7 +387,7 @@ extern Desk_bool coreinit(void)
 
   /* Load and cache the messages. Find out the application name.
    */
-  TRACE("coreinit.messages:\n");
+  dprintf (("", "coreinit.messages:\n"));
   Desk_Msgs_LoadFile("Messages");
   Desk_Msgs_Lookup("app.name:OmniClient", appname, 63);
 
@@ -367,7 +403,7 @@ extern Desk_bool coreinit(void)
    * NOTE that the new Desk_Handler_ModeChange should also ensure that outline
    * fonts will work if we change between lo-res and hi-res screen modes.
    */
-  TRACE("coreinit.claim:\n");
+  dprintf (("", "coreinit.claim:\n"));
   Desk_EventMsg_Claim(Desk_message_MODECHANGE, Desk_event_ANY, Desk_Handler_ModeChange, NULL);
   Desk_EventMsg_Claim(Desk_message_MODECHANGE, Desk_event_ANY, MountModeChange, NULL);
 
@@ -458,7 +494,7 @@ extern Desk_bool coreinit(void)
   if (!CheckClock())
   {
     Desk_Hourglass_Off();
-    return(Desk_FALSE);
+    return false;
   }
 #endif
 
@@ -481,9 +517,9 @@ extern Desk_bool coreinit(void)
   /*Desk_event_pollword = &pollword;*/
 
   /* Re-build Mounts table, for icons on iconbar */
-  Desk_SWI(2,0, SWI_BASE+0, 0, 1);
+  _swi (Omni_EnumerateMounts, _INR (0, 1), 0, 1);
 
   /* Initialisation OK */
   Desk_Hourglass_Off();
-  return(Desk_TRUE);
+  return true;
 }

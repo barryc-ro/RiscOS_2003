@@ -51,7 +51,7 @@ MEMCHECK_TARGET	= Omnimc
 HIERPROF_TARGET	= Omnihp
 DEBUG_TARGET	= Omnid
 
-HDR = h.header
+HDR = h.OmniClient
 
 A_DEBUG_ON	= "-pd \"DEBUG SETL {TRUE}\""
 A_DEBUG_OFF	= "-pd \"DEBUG SETL {FALSE}\""

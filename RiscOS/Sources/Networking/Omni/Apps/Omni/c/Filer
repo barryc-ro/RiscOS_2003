@@ -14,12 +14,44 @@
  * Copyright 1994,1995 by ANT Limited
  */
 
-#include "Hdrs.h"
-#include "netdb.h"
-#include "ModuleWrap.h"
-#include "DebugLib/DebugLib.h"
+#include <stdbool.h>
+#include <stdlib.h>
+#include <string.h>
 
+#include <kernel.h>
+#include <swis.h>
+
+#include <netdb.h>
+
+#include <Global/Services.h>
+
+#include <Desk/Error2.h>
+#include <Desk/WimpSWIs.h>
+
+#include <DebugLib/DebugLib.h>
+#include <MemCheck/MemCheck.h>
+
+#include "Client.h"
+#include "CoreInit.h"
+#include "Defs.h"
+#include "ExtLib.h"
+#include "FileType.h"
+#include "Filer.h"
+#include "Heap.h"
+#include "MakeError.h"
+#include "Mount.h"
+#include "Omni.h"
 #include "OmniClient.h"
+#include "Print.h"
+#include "PrintFS.h"
+#include "Time.h"
+
+enum
+{
+  OSModule_Enter = 2,
+  OSModule_Claim = 6,
+  OSModule_Free  = 7
+};
 
 extern int        	taskhandle = 0;			/* Wimp task handle */
 extern int      	wind_info = NULL;		/* Window handle */
@@ -39,49 +71,21 @@ extern config_record    prog_config = {0,0,Desk_FALSE};	/* Program configuration
 extern Desk_linklist_header	print_anchor = {NULL, NULL};	/* List of print job records */
 extern Desk_linklist_header	plist_anchor = {NULL, NULL};	/* List of print list records */
 
-extern Desk_bool		all_done = Desk_FALSE;		/* Exit task */
+extern int		all_done = 0;		/* Exit task */
 extern int      	icon_dragtype = 0;		/* Type of drag operation */
 extern int 		Image__RO_Base;			/* To get at our module base */
 extern _kernel_oserror  omni_errblk = {0, ""};          /* Global error block */
 extern int		pollword = pollword_NONE;	/* Poll word non-zero */
 extern int		pollword_r0 = -1;		/* Poll word non-zero parameter */
 extern char		*pollword_str = NULL;		/* Poll word string */
-/* extern Desk_bool		all_restart = Desk_TRUE; */		/* Desk_TRUE if we are just RMLoading */
-extern Desk_bool 		all_hasrun = Desk_FALSE;		/* Desk_TRUE if we have been running task */
-
-#ifdef DEBUG
-extern FILE 		*omniout = NULL;		/* Debug trace file handle */
-
-/*  Initialise debug spool files.
- */
-static Desk_bool debuginit(void)
-{
-  char filebuf[256];
-
-  sprintf(filebuf, "<%s$Dir>.!TRACE", app_DIR);
-  if ((omniout = fopen(filebuf, "w")) == NULL) return(Desk_FALSE);
-  return(Desk_TRUE);
-}
-
-
-/*  Finalise debug spool files.
- */
-static void debugclose(void)
-{
-  if (omniout != NULL) fclose(omniout);
-}
-#else
-#define debuginit()	((void) 0)
-#define debugclose()	((void) 0)
-#endif
-
+/* extern bool		all_restart = true; */		/* true if we are just RMLoading */
+extern bool 		all_hasrun = false;		/* true if we have been running task */
 
 /*  Clear out mlist struct from RMA.
  */
 extern void mlist_clean(void)
 {
   mlist_record *mr = (mlist_record *) mlist_anchor.next;
-  TRACE("mlist_clean: enter\n");
   while (mr)
   {
     mlist_record *mr_tmp = (mlist_record *) mr->header.next;
@@ -89,7 +93,6 @@ extern void mlist_clean(void)
     mr = mr_tmp;
   }
   Desk_LinkList_Init(&mlist_anchor);
-  TRACE("mlist_clean: exit\n");
 }
 
 
@@ -98,7 +101,6 @@ extern void mlist_clean(void)
 extern void print_clean(void)
 {
   print_record *mr = (print_record *) print_anchor.next;
-  TRACE("print_clean: enter\n");
   while (mr)
   {
     print_record *mr_tmp = (print_record *) mr->header.next;
@@ -106,7 +108,6 @@ extern void print_clean(void)
     mr = mr_tmp;
   }
   Desk_LinkList_Init(&print_anchor);
-  TRACE("print_clean: exit\n");
 }
 
 
@@ -115,7 +116,6 @@ extern void print_clean(void)
 extern void plist_clean(void)
 {
   plist_record *mr = (plist_record *) plist_anchor.next;
-  TRACE("plist_clean: enter\n");
   while (mr)
   {
     plist_record *mr_tmp = (plist_record *) mr->header.next;
@@ -123,7 +123,6 @@ extern void plist_clean(void)
     mr = mr_tmp;
   }
   Desk_LinkList_Init(&plist_anchor);
-  TRACE("plist_clean: exit\n");
 }
 
 
@@ -132,7 +131,6 @@ extern void plist_clean(void)
 extern void client_clean(void)
 {
   client_record *mr = (client_record *) client_anchor.next;
-  TRACE("client_clean: enter\n");
   while (mr)
   {
     client_record *mr_tmp = (client_record *) mr->header.next;
@@ -140,7 +138,6 @@ extern void client_clean(void)
     mr = mr_tmp;
   }
   Desk_LinkList_Init(&client_anchor);
-  TRACE("client_clean: exit\n");
 }
 
 
@@ -148,12 +145,10 @@ extern void client_clean(void)
  */
 static void removetask(void)
 {
-  TRACE1("removetask: %x\n", taskhandle);
   if (taskhandle > 0) Desk_Wimp_CloseDown(taskhandle);
   taskhandle = 0;
   mlist_clean();
   plist_clean();
-  TRACE("removetask: completed\n");
 }
 
 
@@ -161,22 +156,24 @@ static void removetask(void)
  */
 extern void serviceomni(int num)
 {
-  _kernel_swi_regs r;
-
-  TRACE1("serviceomni: %d\n", num);
-  r.r[0] = num;
-  r.r[1] = Service_OmniAction;
-  _kernel_swi(XOS_Bit | OS_ServiceCall, &r, &r);
-  TRACE("serviceomni: completed\n");
+  _swix (OS_ServiceCall, _INR (0, 1), num, Service_OmniAction);
 }
 
 
 /*  This is the finalisation code
  */
-_kernel_oserror *fs_finalise(int fatal, int podule, void *pw)
+_kernel_oserror *fs_finalise(int fatal, int podule, void *private_word)
 {
-  TRACE("fs_finalise:\n");
+  UNUSED (fatal);
+  UNUSED (podule);
+  UNUSED (private_word);
+
+  /* BAL: This does not make sense.  !<anything> will be <= 1 (it's a logical, not a bitwise not).
+   * I _think_ this is supposed to do something like only issue ServiceOmni if the whole module is
+   * being killed, and not just the filer.
+   */
   if (!all_done <= 1) serviceomni(1);
+
   removetask();
   print_clean();
   client_clean();
@@ -184,12 +181,27 @@ _kernel_oserror *fs_finalise(int fatal, int podule, void *pw)
   FS_Remove();
   SetVar_Code(-1, NULL);
   CloseErrors();
-  TRACE("fs_finalise: completed\n");
-  /* debugclose(); */
+
+  MemCheck_OutputBlocksInfo ();
+  MemCheck_Finalise ();
 
   debug_terminate ();
 
+  return NULL;
 }
+
+
+#ifdef MemCheck_MEMCHECK
+
+static int  memcheck_vprintf (void *        reference,
+                              const char *  format,
+                              va_list       args)
+{
+    dvprintf (("", format, args));
+    return 0;
+}
+
+#endif
 
 
 /*  This is the initialisation code
@@ -204,8 +216,21 @@ _kernel_oserror *fs_initialise(const char *cmd_tail, int podule_base, void *priv
 
   debug_initialise ("", "Omni", NULL);
   debug_set_options (0, 0, 0);
-  debug_output_device (TML_OUTPUT);
-  debug_initialise_trace (TML_OUTPUT, "");
+  debug_output_device (FILE_OUTPUT);
+  debug_initialise_trace (FILE_OUTPUT, "memcheck*");
+
+  MemCheck_InitNoDebug ();
+  MemCheck_RedirectToFunction (memcheck_vprintf, 0);
+  MemCheck_SetStoreMallocFunctions (1);
+  MemCheck_InterceptSCLStringFunctions();
+  MemCheck_SetQuitting (0, 0);
+  MemCheck_SetAccessQuitting (0, 0);
+  /* Don't output blocks on every diagnostic.  A lot of diagnostics
+   * are produced because of MemCheck faulting accesses to externally
+   * supplied mbuf data structures. There are too many instances of
+   * these to make it feasible to register them all as misc blocks.
+   */
+  MemCheck_SetAutoOutputBlocksInfo (0);
 
   Desk_Error2_Init_JumpSig();
 
@@ -218,27 +243,23 @@ _kernel_oserror *fs_initialise(const char *cmd_tail, int podule_base, void *priv
     InitVars();
 
     RMAFREE(pollword_str);
-    /* debuginit(); */
+
     err = FS_Declare(private_word);
     if (err)
     {
-      debugclose();
       return(err);
     }
 
-    /*atexit(fs_finalise);*/
     /* Delay the service call via callback because we aren't yet registered as a module,
      * so Omni_SWI calls will fail.
      */
-    #if 0
     serviceomni_delay(0);
-    #endif
     SetVar_Code(1, &taskhandle);
     InitErrors();
   }
   Desk_Error2_Catch
   {
-    err = Desk_Error2_ConvertToOS2();
+      err = Desk_Error2_ConvertToOS2();
   }
   Desk_Error2_EndCatch
 
@@ -248,7 +269,6 @@ _kernel_oserror *fs_initialise(const char *cmd_tail, int podule_base, void *priv
 
 /* Service call handler
  */
-/*#ifdef TRACESERVICE*/
 #ifdef DEBUG
 static struct
 {
@@ -256,75 +276,78 @@ static struct
   char *name;
 } svcs[] =
 {
-  {0x00,"Serviced"},
-  {0x04,"UKCommand"},
-  {0x06,"Error"},
-  {0x07,"UKByte"},
-  {0x08,"UKWord"},
-  {0x09,"Help"},
-  {0x0b,"ReleaseFIQ"},
-  {0x0c,"ClaimFIQ"},
-  {0x11,"Memory"},
-  {0x12,"StartUpFS"},
-  {0x27,"Reset"},
-  {0x28,"UKConfig"},
-  {0x29,"UKStatus"},
-  {0x2a,"NewApplication"},
-  {0x40,"FSRedclare"},
-  {0x41,"Print"},
-  {0x42,"LookupFileType"},
-  {0x43,"International"},
-  {0x44,"Keyhandler"},
-  {0x45,"PreReset"},
-  {0x46,"ModeChange"},
-  {0x47,"ClaimFIQinBackground"},
-  {0x48,"ReAllocatePorts"},
-  {0x49,"StartWimp"},
-  {0x4a,"StartedWimp"},
-  {0x4b,"StartFiler"},
-  {0x4c,"StartedFiler"},
-  {0x4d,"PreModeChange"},
-  {0x4e,"MemoryMoved"},
-  {0x4f,"FilerDying"},
-  {0x50,"ModeExtension"},
-  {0x51,"ModeTranslation"},
-  {0x52,"MouseTrap"},
-  {0x53,"WimpCloseDown"},
-  {0x54,"Sound"},
-  {0x55,"NetFS"},
-  {0x56,"EconetDying"},
-  {0x57,"WimpReportError"},
-  {0x60,"ResourceFSStarting"},
-  {-1,"Something else"}
+  {0x00, "Serviced"},
+  {0x04, "UKCommand"},
+  {0x06, "Error"},
+  {0x07, "UKByte"},
+  {0x08, "UKWord"},
+  {0x09, "Help"},
+  {0x0b, "ReleaseFIQ"},
+  {0x0c, "ClaimFIQ"},
+  {0x11, "Memory"},
+  {0x12, "StartUpFS"},
+  {0x27, "Reset"},
+  {0x28, "UKConfig"},
+  {0x29, "UKStatus"},
+  {0x2a, "NewApplication"},
+  {0x40, "FSRedclare"},
+  {0x41, "Print"},
+  {0x42, "LookupFileType"},
+  {0x43, "International"},
+  {0x44, "Keyhandler"},
+  {0x45, "PreReset"},
+  {0x46, "ModeChange"},
+  {0x47, "ClaimFIQinBackground"},
+  {0x48, "ReAllocatePorts"},
+  {0x49, "StartWimp"},
+  {0x4a, "StartedWimp"},
+  {0x4b, "StartFiler"},
+  {0x4c, "StartedFiler"},
+  {0x4d, "PreModeChange"},
+  {0x4e, "MemoryMoved"},
+  {0x4f, "FilerDying"},
+  {0x50, "ModeExtension"},
+  {0x51, "ModeTranslation"},
+  {0x52, "MouseTrap"},
+  {0x53, "WimpCloseDown"},
+  {0x54, "Sound"},
+  {0x55, "NetFS"},
+  {0x56, "EconetDying"},
+  {0x57, "WimpReportError"},
+  {0x60, "ResourceFSStarting"},
+  {-1,   "Something else"}
 };
 #endif
-/*#endif */
 
 void fs_service(int service_number, _kernel_swi_regs *r, void *private_word)
 {
-/* #ifdef TRACESERVICE */
-#ifdef DEBUG
-  int i;
+  MemCheck_RegisterMiscBlock_Ptr (r);
 
-  for (i=0; svcs[i].svc >= 0; i++) if (svcs[i].svc == service_number) break;
-  dprintf(("", "Service_%s (%#x)%x,%x,%x,%x,%x,%x,%x,%x,%x,%x\n", svcs[i].name,
-        service_number, r->r[0],r->r[1],r->r[2],r->r[3],r->r[4],r->r[5],r->r[6],r->r[7],
-        r->r[8],r->r[9]));
-#endif
-/* #endif */
-  /* TRACE1("service: %x\n", service_number); */
+  #ifdef DEBUG
+  {
+    int i;
+
+    for (i=0; svcs[i].svc >= 0; i++) if (svcs[i].svc == service_number) break;
+    dprintf(("", "Service_%s (%#x)%x,%x,%x,%x,%x,%x,%x,%x,%x,%x\n", svcs[i].name,
+          service_number, r->r[0],r->r[1],r->r[2],r->r[3],r->r[4],r->r[5],r->r[6],r->r[7],
+          r->r[8],r->r[9]));
+  }
+  #endif
+
+  /* dprintf (("", "service: %x\n", service_number)); */
   switch (service_number)
   {
     case Service_Memory:
       /* keep application workspace (r2 holds CAO pointer) */
       if (r->r[2] == (int) Image__RO_Base) r->r[1] = 0;
       break;
+
     case Service_StartFiler:
       /* We use StartFiler/StartedFiler *not* StartWimp/StartedWimp because we are
        * a desktop filer, not just any old task, and we want to wait for the RISC OS
        * Filer task to startup first.
        */
-      TRACE1("Service_StartFiler task %d\n", taskhandle);
+      dprintf (("", "Service_StartFiler task %d\n", taskhandle));
       if (taskhandle == 0)
       {
         taskhandle = -1; 		/* attempting start flag */
@@ -332,104 +355,108 @@ void fs_service(int service_number, _kernel_swi_regs *r, void *private_word)
         r->r[1] = 0;
       }
       break;
+
     case Service_StartedFiler:
-      TRACE1("Service_StartedFiler %d\n", taskhandle);
+      dprintf (("", "Service_StartedFiler %d\n", taskhandle));
       if (taskhandle == -1) taskhandle = 0;
       break;
+
     case Service_Reset:
-    case Service_ShutdownComplete:
+    case Service_ShutDownComplete:
       /* We have problems with soft-resets: If we've previously run on this
        * soft reset (RO3.1), then mark as never wanting to startup again.
        */
       if (!all_hasrun) taskhandle = 0;
         else taskhandle = -2;
       break;
+
     case Service_FilerDying:
-      TRACE1("Service_FilerDying %d\n", taskhandle);
+      dprintf (("", "Service_FilerDying %d\n", taskhandle));
       removetask();
       break;
+
     case Service_FSRedeclare:
       FS_Declare(private_word);
       break;
-    /* Handle other service calls here */
   }
+
+  MemCheck_UnRegisterMiscBlock (r);
 }
 
-
-#define OS_FSControl		0x000029
-#define _Wimp_StartTask		0x0400de
-#define Wimp_ReadSysInfo	0x0400F2
 
 /* User Command processor
  */
 _kernel_oserror *fs_command(const char *arg_string, int argc, int cmd_no, void *private_word)
 {
-  _kernel_swi_regs rr;
-  _kernel_swi_regs *r = &rr;
   int currentslot, nextslot, freepool;
 
-  argc = argc;
-  private_word = private_word;
-
-  dprintf (("", "fs_command\n"));
+  UNUSED (argc);
+  UNUSED (private_word);
 
   /* Switch between the commands */
   switch (cmd_no)
   {
-    case 0:			/* Desktop_<app_DIR> */
-      TRACE2("Desktop_OmniClient called handle %d hasrun %d\n", taskhandle, all_hasrun);
-      TRACE1("Desktop_OmniClient called args '%s'\n", arg_string);
+    case CMD_Desktop_OmniClient:			/* Desktop_<app_DIR> */
+      dprintf (("", "Desktop_OmniClient called handle %d hasrun %d\n", taskhandle, all_hasrun));
+      dprintf (("", "Desktop_OmniClient called args '%s'\n", arg_string));
       if (taskhandle > 0)
       {
-        if (argc > 1) MountCLI(arg_string, Desk_FALSE);
+        if (argc > 1) MountCLI(arg_string, false);
         return(NULL);
       }
       if (!all_hasrun)
       {
         int active;
-        Desk_bool start = Desk_TRUE;
+        bool start = false;
 
         /* Check we are really in the desktop.
          */
-        TRACE("OMNI running for first time - checking Desktop running\n");
-        Desk_SWI(1,1, Wimp_ReadSysInfo, 0, &active);
-        if (active <= 0) start = Desk_FALSE;
-        Desk_SWI(1,1, Wimp_ReadSysInfo, 3, &active);
-        if (active == 0) start = Desk_FALSE;
+        dprintf (("", "OMNI running for first time - checking Desktop running\n"));
+
+        /* Check number of active tasks */
+        if (_swix (Wimp_ReadSysInfo, _IN (0) | _OUT (0), 0, &active) == NULL)
+        {
+          /* Then check command/desktop state */
+          if (active > 0 && _swix (Wimp_ReadSysInfo, _IN (0) | _OUT (0), 3, &active) == NULL)
+          {
+            if (active == 1)
+            {
+              start = true;
+            }
+          }
+        }
         if (!start)
         {
           /* Preserve command line string, because we'll start later */
-          if (argc > 1) MountCLI(arg_string, Desk_FALSE);
+          if (argc > 1) MountCLI(arg_string, false);
           return(NULL);
         }
 
-        TRACE("OMNI running for first time - calling Desktop_OmniClient\n");
+        dprintf (("", "OMNI running for first time - calling Desktop_OmniClient\n"));
         currentslot = 32*1024;
         nextslot = -1;
         Desk_Wimp_SlotSize(&currentslot, &nextslot, &freepool);
-        r->r[0] = OSModule_Enter;
-        r->r[1] = (int) app_DIR"Client";
-        r->r[2] = (int) arg_string;
-        return(_kernel_swi(XOS_Bit | OS_Module, r, r));
+        return (_swix (OS_Module, _INR (0, 2), OSModule_Enter, app_DIR"Client", arg_string));
       }
       else
       {
-        TRACE("OMNI running for nth time\n");
+        dprintf (("", "OMNI running for nth time\n"));
         return(MakeError(err_RESTART));
       }
       break;
-    case 1:			/* OmniMount */
-      MountCLI(arg_string, Desk_FALSE);
+
+    case CMD_OmniMount:			/* OmniMount */
+      MountCLI(arg_string, false);
       return(NULL);
       break;
-    case 2:			/* OmniLoadMounts */
+
+    case CMD_OmniLoadMounts:			/* OmniLoadMounts */
       if (MountLoadFile(arg_string)) return(NULL);
       return(MakeError(err_BADMOUNTS));
       break;
-    case 3:			/* OmniPrint */
-      r->r[0] = 14;
-      r->r[1] = (int) fsname;
-      return(_kernel_swi(XOS_Bit | OS_FSControl, r, r));
+
+    case CMD_OmniPrint:			/* OmniPrint */
+      return (_swix (OS_FSControl, _INR (0, 1), OS_FSControl_SelectFilingSystem, fsname));
       break;
 
     default:
@@ -438,7 +465,7 @@ _kernel_oserror *fs_command(const char *arg_string, int argc, int cmd_no, void *
 }
 
 
-/* Desk_SWI omni_base+0 "Omni_EnumerateMounts"
+/* SWI omni_base+0 "Omni_EnumerateMounts"
  *	On entry, R0 = 0, for all client types
  *	             = client_id, for a single client
  *                R1 = 0, for servers/mounts
@@ -460,7 +487,7 @@ _kernel_oserror *fs_command(const char *arg_string, int argc, int cmd_no, void *
  */
 static _kernel_oserror *EnumerateMounts(_kernel_swi_regs *r)
 {
-  TRACE2("EnumerateMounts: %x %x\n", r->r[0], r->r[1]);
+  dprintf (("", "EnumerateMounts: %x %x\n", r->r[0], r->r[1]));
   /* If task isn't running, then we shouldn't do anything */
   if ((taskhandle <= 0) || (r->r[1] > 2)) return(NULL);
   if (r->r[1] == 0) pollword |= pollword_ENUMERATENET;
@@ -472,8 +499,8 @@ static _kernel_oserror *EnumerateMounts(_kernel_swi_regs *r)
 }
 
 
-/* Desk_SWI omni_base+1 "Omni_RegisterClient"
- *	On entry, R0 = client_id, (Desk_SWI xxxx_OmniOp)
+/* SWI omni_base+1 "Omni_RegisterClient"
+ *	On entry, R0 = client_id, (SWI xxxx_OmniOp)
  *	          R1 = client flags word;
  *	               	      bit 0 = 1, Client supports network filing system
  *	                            = 0, No filing system support
@@ -518,7 +545,7 @@ static _kernel_oserror *EnumerateMounts(_kernel_swi_regs *r)
  * 	OmniOp 7). eg, LAN Manager. The flags word can also register a
  * 	single ASCII character (eg, '.' or '/') which is used to
  * 	separate filename and file extension in the filing system. This
- * 	separator is used by the Omni_Convert Desk_SWI calls.
+ * 	separator is used by the Omni_Convert SWI calls.
  *
  *	Bit 5 of the flags word is set for filing systems (typically those
  *	written before OmniClient) that have no concept of a user-supplied
@@ -547,7 +574,7 @@ static _kernel_oserror *EnumerateMounts(_kernel_swi_regs *r)
  * 	sprite name, which must exist in the Wimp sprite pool as
  * 	'sprite', along with the small version 'sprite' postfix 's'. The
  * 	unique name for the client sprites (suggest the ASCII hex of
- * 	the xxxx_MiscOp Desk_SWI number) must be no more than 6 characters
+ * 	the xxxx_MiscOp SWI number) must be no more than 6 characters
  * 	long. Static string. If normal and small size versions of these
  * 	sprites exist with postfix '_22' then these hi-resolution sprites
  * 	will be used in square pixel modes.
@@ -578,8 +605,18 @@ static _kernel_oserror *EnumerateMounts(_kernel_swi_regs *r)
  */
 static _kernel_oserror *RegisterClient(_kernel_swi_regs *r)
 {
-  client_record *cr = ClientCreate(r);
-  TRACE("RegisterClient:\n");
+  client_record *cr;
+
+  MemCheck_RegisterMiscBlock_String ((char *) r->r[2]);
+  MemCheck_RegisterMiscBlock_String ((char *) r->r[3]);
+  MemCheck_RegisterMiscBlock_String ((char *) r->r[4]);
+  MemCheck_RegisterMiscBlock_String ((char *) r->r[6]);
+  cr = ClientCreate(r);
+  MemCheck_UnRegisterMiscBlock ((char *) r->r[2]);
+  MemCheck_UnRegisterMiscBlock ((char *) r->r[3]);
+  MemCheck_UnRegisterMiscBlock ((char *) r->r[4]);
+  MemCheck_UnRegisterMiscBlock ((char *) r->r[6]);
+  dprintf (("", "RegisterClient:\n"));
   if (cr != NULL)
   {
     pollword |= pollword_REGISTER;
@@ -590,19 +627,19 @@ static _kernel_oserror *RegisterClient(_kernel_swi_regs *r)
 }
 
 
-/* Desk_SWI omni_base+2 "Omni_DeregisterClient"
+/* SWI omni_base+2 "Omni_DeregisterClient"
  *	On entry, R0 = client_id
  *      On exit,  R0 = 0, if deregistration successful
  *                   = not 0, if deregistration failed (error ptr)
  *	All other registers preserved on exit
  *
- *      This SWI is the companion call to Desk_SWI Omni_RegisterClient, and
+ *      This SWI is the companion call to SWI Omni_RegisterClient, and
  *      releases the client from the Omni filer.
  */
 static _kernel_oserror *DeregisterClient(_kernel_swi_regs *r)
 {
   client_record *cr = ClientFind(r->r[0], NULL, -1, NULL);
-  TRACE("DeregisterClient:\n");
+  dprintf (("", "DeregisterClient:\n"));
   if (cr == NULL) return(MakeError(err_NOTREGISTERED));
   ClientDelete(cr);
   pollword |= pollword_DEREGISTER;
@@ -614,7 +651,7 @@ static _kernel_oserror *DeregisterClient(_kernel_swi_regs *r)
 }
 
 
-/* Desk_SWI omni_base+3 "Omni_MessageLookup"
+/* SWI omni_base+3 "Omni_MessageLookup"
  *  	On entry, R0 = message_id, (see table)
  *	          R1 = parameter string (if required)
  *      On exit,  R0 = error_blk, pointer to error block;
@@ -633,12 +670,12 @@ static _kernel_oserror *DeregisterClient(_kernel_swi_regs *r)
  */
 static _kernel_oserror *MessageLookup(_kernel_swi_regs *r)
 {
-  TRACE2("MessageLookup: %x %x\n", r->r[0], r->r[1]);
+  dprintf (("", "MessageLookup: %x %x\n", r->r[0], r->r[1]));
   return(OmniError(r->r[0], (char *) r->r[1]));
 }
 
 
-/* Desk_SWI omni_base+4 "Omni_ConvertClientToAcorn"
+/* SWI omni_base+4 "Omni_ConvertClientToAcorn"
  *	On entry, R0 = client_id
  *		  R1 = ptr to client-format filename (including extension)
  *		  R2 = ptr to buffer for Acorn-format filename
@@ -650,7 +687,7 @@ static _kernel_oserror *MessageLookup(_kernel_swi_regs *r)
  *	translations by using a user-configurable mappings file. The format
  *	of this file and the flags R3 parameter are described in another
  *	document. [File_SpecN]
- *	Note that this mapping Desk_SWI deals with mappings for multiple
+ *	Note that this mapping SWI deals with mappings for multiple
  *	client types (not just DOS 8+3 format, for example), hence the need
  *	to pass in the calling client_id in R0.
  */
@@ -658,7 +695,7 @@ static _kernel_oserror *ConvertClientToAcorn(_kernel_swi_regs *r)
 {
   client_record *cr = NULL;
 
-  TRACE("ConvertClientToAcorn:\n");
+  dprintf (("", "ConvertClientToAcorn:\n"));
   if ((cr = ClientFind(r->r[0], NULL, -1, NULL)) == NULL)
     return(MakeError(err_NOTREGISTERED));
   r->r[0] = FileType_ConvertToType(cr->client_id, (char *) r->r[1], (char *) r->r[2],
@@ -667,7 +704,7 @@ static _kernel_oserror *ConvertClientToAcorn(_kernel_swi_regs *r)
 }
 
 
-/* Desk_SWI omni_base+5 "Omni_ConvertAcornToClient"
+/* SWI omni_base+5 "Omni_ConvertAcornToClient"
  *	On entry, R0 = client_id
  *		  R1 = ptr to acorn-format filename
  *		  R2 = ptr to buffer for client-format filename
@@ -680,14 +717,14 @@ static _kernel_oserror *ConvertClientToAcorn(_kernel_swi_regs *r)
  *	translations by using a user-configurable mappings file. The format
  *	of this file and the flags R3 parameter are described in another
  *	document. [File_SpecN]
- *	Note that this mapping Desk_SWI deals with mappings for multiple
+ *	Note that this mapping SWI deals with mappings for multiple
  *	client types (not just DOS 8+3 format, for example), hence the need
  *	to pass in the calling client_id in R0.
  */
 static _kernel_oserror *ConvertAcornToClient(_kernel_swi_regs *r)
 {
   client_record *cr = NULL;
-  TRACE("ConvertAcornToClient:\n");
+  dprintf (("", "ConvertAcornToClient:\n"));
 
   if ((cr = ClientFind(r->r[0], NULL, -1, NULL)) == NULL)
     return(MakeError(err_NOTREGISTERED));
@@ -697,7 +734,7 @@ static _kernel_oserror *ConvertAcornToClient(_kernel_swi_regs *r)
 }
 
 
-/* Desk_SWI omni_base+6 "Omni_ConvertTime"
+/* SWI omni_base+6 "Omni_ConvertTime"
  *	On entry, R0 = time formats;
  *		       bits 0..3 = source format
  *		       bits 4..7 = destination format;
@@ -720,11 +757,11 @@ static _kernel_oserror *ConvertTime(_kernel_swi_regs *r)
   int src, dst;
   int time[9];
 
-  TRACE("ConvertTime:\n");
+  dprintf (("", "ConvertTime:\n"));
 
   src = r->r[0] & 0x0F;
   dst = (r->r[0] & 0xF0) >> 4;
-  TRACE1("ConvertTime: src %d\n", src);
+  dprintf (("", "ConvertTime: src %d\n", src));
   switch (src)
   {
     case 0:
@@ -744,7 +781,7 @@ static _kernel_oserror *ConvertTime(_kernel_swi_regs *r)
   }
   time[7] = -1;
   time[8] = -1;
-  TRACE1("ConvertTime: dst %d\n", dst);
+  dprintf (("", "ConvertTime: dst %d\n", dst));
   switch (dst)
   {
     case 0:
@@ -762,12 +799,12 @@ static _kernel_oserror *ConvertTime(_kernel_swi_regs *r)
       return(MakeError(err_BADTIME));
       break;
   }
-  TRACE("ConvertTime: exit\n");
+  dprintf (("", "ConvertTime: exit\n"));
   return(NULL);
 }
 
 
-/* Desk_SWI omni_base+7 "Omni_Printers"
+/* SWI omni_base+7 "Omni_Printers"
  *     	On entry, R0 = reason code;
  *                        0 = list protocols supporting printers
  *                        1 = list protocol (FS names) supporting printers
@@ -789,10 +826,10 @@ static _kernel_oserror *ConvertTime(_kernel_swi_regs *r)
  *      done as a 2-stage process to ensure that a large-enough buffer
  *      exists for the result string.
  *
- *      The Desk_SWI is firstly called with R3=NULL,R4=-1, and the call returns
+ *      The SWI is firstly called with R3=NULL,R4=-1, and the call returns
  *      with R4 containing the total size of buffer required (including
  *      terminator). The buffer is allocated by the caller, and then the
- *      Desk_SWI is called the second time, with the new R3/R4.
+ *      SWI is called the second time, with the new R3/R4.
  *      If no items are available, then R4=0 is returned.
  *
  *      If R0 = 0, then the menu string contains the available protocol
@@ -826,7 +863,7 @@ static _kernel_oserror *Printers(_kernel_swi_regs *r)
 {
   _kernel_oserror *err = NULL;
 
-  TRACE1("Printers: %x\n", r->r[0]);
+  dprintf (("", "Printers: %x\n", r->r[0]));
   switch (r->r[0])
   {
     case 0:
@@ -855,7 +892,7 @@ static _kernel_oserror *Printers(_kernel_swi_regs *r)
 }
 
 
-/* Desk_SWI omni_base+8 "Omni_CreateJob"
+/* SWI omni_base+8 "Omni_CreateJob"
  * 	On entry, R0 = ptr to protocol name
  * 	          R1 = ptr to server name
  * 	          R2 = ptr to printer name
@@ -870,14 +907,14 @@ static _kernel_oserror *Printers(_kernel_swi_regs *r)
  *      Submit a new job for network printing. Returns a unique 'print_id'
  *      word, or a pointer to an error block.
  *
- *      The protocol name (R0) is the name as provided by Desk_SWI Omni_Printers
+ *      The protocol name (R0) is the name as provided by SWI Omni_Printers
  *      (and registered as the 'client name'). eg, "Sun NFS". The user name,
  *      password and options string are optional, and may be NULL pointers.
  *
  *      Some printing protocols require that the total size of the job is
  *      known before printing starts. If this is the case, they should be
  *      registered with OmniClient as requiring this. When a client
- *      program calls Desk_SWI Omni_PrinterInfo, reason code 2, it can determine
+ *      program calls SWI Omni_PrinterInfo, reason code 2, it can determine
  *      whether a password field is required for this protocol, and whether
  *      the total size of the print job is required.
  */
@@ -885,14 +922,14 @@ static _kernel_oserror *CreateJob(_kernel_swi_regs *r)
 {
   print_record *pr = NULL;
 
-  TRACE("CreateJob:\n");
+  dprintf (("", "CreateJob:\n"));
   if ((pr = PrintCreate(r)) == NULL) return((_kernel_oserror *) r->r[0]);
   r->r[0] = pr->print_id;
   return(NULL);
 }
 
 
-/* Desk_SWI omni_base+9 "Omni_SendJob"
+/* SWI omni_base+9 "Omni_SendJob"
  * 	On entry, R0 = print_id
  * 		  R1 = ptr to data block to send
  * 		  R2 = size of data block to send
@@ -908,20 +945,21 @@ static _kernel_oserror *SendJob(_kernel_swi_regs *r)
   _kernel_oserror *err = NULL;
   client_record *cr = NULL;
 
-  TRACE("SendJob:\n");
+  dprintf (("", "SendJob:\n"));
   if ((pr = PrintFind(r->r[0], -1, -1, -1)) == NULL) return(MakeError(err_BADPRINT));
   if ((cr = ClientFind(pr->client_id, NULL, -1, NULL)) == NULL)
     return(MakeError(err_NOTREGISTERED));
   /* Make call onto client */
-  err = (_kernel_oserror *) Desk_SWI(4,4, pr->client_id, 11,pr->pjob_id,r->r[1],r->r[2],
-    NULL,NULL,NULL,&r->r[2]);
+  err = _swix (pr->client_id, _INR (0, 3) | _OUT (3),
+               11, pr->pjob_id, r->r[1], r->r[2],
+               &r->r[2]);
   if (!err) returnOK();
   r->r[0] = (int) err;
   return(err);
 }
 
 
-/* Desk_SWI omni_base+10 "Omni_EndJob"
+/* SWI omni_base+10 "Omni_EndJob"
  * 	On entry, R0 = print_id
  * 	All registers preserved on exit
  *
@@ -933,12 +971,12 @@ static _kernel_oserror *EndJob(_kernel_swi_regs *r)
   _kernel_oserror *err = NULL;
   client_record *cr = NULL;
 
-  TRACE("EndJob:\n");
+  dprintf (("", "EndJob:\n"));
   if ((pr = PrintFind(r->r[0], -1, -1, -1)) == NULL) return(MakeError(err_BADPRINT));
   if ((cr = ClientFind(pr->client_id, NULL, -1, NULL)) == NULL)
     return(MakeError(err_NOTREGISTERED));
   /* Make call onto client */
-  err = (_kernel_oserror *) Desk_SWI(2,0, pr->client_id, 12,pr->pjob_id);
+  err = _swix(pr->client_id, _INR (0, 1), 12, pr->pjob_id);
   /* Mark as complete */
   if (!err)
   {
@@ -951,7 +989,7 @@ static _kernel_oserror *EndJob(_kernel_swi_regs *r)
 }
 
 
-/* Desk_SWI omni_base+11 "Omni_AbortJob"
+/* SWI omni_base+11 "Omni_AbortJob"
  * 	On entry, R0 = print_id, or
  * 		     = 0, to abort all jobs
  * 	All registers preserved on exit
@@ -964,14 +1002,22 @@ static _kernel_oserror *AbortJob(_kernel_swi_regs *r)
   _kernel_oserror *err = NULL;
   client_record *cr = NULL;
 
-  TRACE("AbortJob:\n");
+  dprintf (("", "AbortJob:\n"));
   if (r->r[0] == 0)
   {
     /* Abort all print jobs */
     cr = (client_record *) client_anchor.next;
     while (cr != NULL)
     {
-      if (PrintFind(-1, -1, cr->client_id, -1) != NULL) Desk_SWI(2,0, cr->client_id, 13,0);
+      if (PrintFind(-1, -1, cr->client_id, -1) != NULL)
+      {
+        /* Don't stop if an error occurs, but remember the first one */
+        _kernel_oserror *temp_err = _swix(cr->client_id, _INR (0, 1), 13, 0);
+        if (temp_err != NULL && err == NULL)
+        {
+          err = temp_err;
+        }
+      }
       cr = (client_record *) cr->header.next;
     }
     /* Free print job records */
@@ -991,7 +1037,7 @@ static _kernel_oserror *AbortJob(_kernel_swi_regs *r)
     if ((cr = ClientFind(pr->client_id, NULL, -1, NULL)) == NULL)
       return(MakeError(err_NOTREGISTERED));
     /* Make call onto client */
-    err = (_kernel_oserror *) Desk_SWI(2,0, pr->client_id, 13,pr->pjob_id);
+    err = _swix(pr->client_id, _INR (0, 1), 13, pr->pjob_id);
     /* Delete from list */
     if (!err)
     {
@@ -1005,7 +1051,7 @@ static _kernel_oserror *AbortJob(_kernel_swi_regs *r)
 }
 
 
-/* Desk_SWI omni_base+12 "Omni_JobStatus"
+/* SWI omni_base+12 "Omni_JobStatus"
  * 	On entry, R0 = print_id
  * 	On exit,  R1 = local job status word (see below)
  * 		  R2 = local job # bytes sent
@@ -1035,20 +1081,23 @@ static _kernel_oserror *JobStatus(_kernel_swi_regs *r)
   _kernel_oserror *err = NULL;
   client_record *cr = NULL;
 
-  TRACE("JobStatus:\n");
+  dprintf (("", "JobStatus:\n"));
   if ((pr = PrintFind(r->r[0], -1, -1, -1)) == NULL) return(MakeError(err_BADPRINT));
   if ((cr = ClientFind(pr->client_id, NULL, -1, NULL)) == NULL)
     return(MakeError(err_NOTREGISTERED));
+
   /* Make call onto client */
-  err = (_kernel_oserror *) Desk_SWI(2,7, pr->client_id, 14,pr->pjob_id,
-    NULL,&r->r[1],&r->r[2],&r->r[3],&r->r[4],&r->r[5],&r->r[6]);
+  err = _swix (pr->client_id, _INR (0, 1) | _OUTR (1, 6),
+               14,pr->pjob_id,
+               &r->r[1], &r->r[2], &r->r[3], &r->r[4], &r->r[5], &r->r[6]);
+
   if (!err) returnOK();
   r->r[0] = (int) err;
   return(err);
 }
 
 
-/* Desk_SWI omni_base+13 "Omni_ClearJob"
+/* SWI omni_base+13 "Omni_ClearJob"
  *	On entry, R0 = print_id, or
  *		     = 0, to clear all inactive jobs
  *	All registers preserved on exit
@@ -1067,7 +1116,7 @@ static _kernel_oserror *ClearJob(_kernel_swi_regs *r)
   client_record *cr = NULL;
   int lstatus, rstatus;
 
-  TRACE("ClearJob:\n");
+  dprintf (("", "ClearJob:\n"));
   if (r->r[0] == 0)
   {
     /* Free inactive print job records */
@@ -1077,12 +1126,13 @@ static _kernel_oserror *ClearJob(_kernel_swi_regs *r)
       print_record *pr_tmp = (print_record *) pr->header.next;
 
       /* Call OmniOp, 14 (Get Print Job Info) */
-      err = (_kernel_oserror *) Desk_SWI(2,5, pr->client_id, 14,pr->pjob_id,
-        NULL,&lstatus,NULL,NULL,&rstatus);
+      err = _swix (pr->client_id, _INR (0, 1) | _OUT (1) | _OUT (4),
+                   14, pr->pjob_id,
+                   &lstatus, &rstatus);
       if ((!err) && ((pflagSET(lstatus, print_COMPLETE)) || (pflagSET(lstatus, print_ERROR))))
       {
         /* Make call onto client */
-        err = (_kernel_oserror *) Desk_SWI(2,0, pr->client_id, 15,pr->pjob_id);
+        err = _swix (pr->client_id, _INR (0, 1), 15, pr->pjob_id);
         if (!err) PrintClear(pr);
       }
       pr = pr_tmp;
@@ -1096,17 +1146,18 @@ static _kernel_oserror *ClearJob(_kernel_swi_regs *r)
       return(MakeError(err_NOTREGISTERED));
 
     /* Call OmniOp, 14 (Get Print Job Info) */
-    err = (_kernel_oserror *) Desk_SWI(2,5, pr->client_id, 14,pr->pjob_id,
-      NULL,&lstatus,NULL,NULL,&rstatus);
-    TRACE1("ClearJob: jobinfo = %x\n", (int) err);
-    TRACE1("ClearJob: %x\n", lstatus);
-    TRACE2("ClearJob: %x %x\n", pflagSET(lstatus, print_COMPLETE),
-      pflagSET(lstatus, print_ERROR));
+    err = _swix (pr->client_id, _INR (0, 1) | _OUT(1) | _OUT (4),
+                 14, pr->pjob_id,
+                 &lstatus, &rstatus);
+    dprintf (("", "ClearJob: jobinfo = %x\n", (int) err));
+    dprintf (("", "ClearJob: %x\n", lstatus));
+    dprintf (("", "ClearJob: %x %x\n", pflagSET(lstatus, print_COMPLETE),
+      pflagSET(lstatus, print_ERROR)));
     if ((!err) && ((pflagSET(lstatus, print_COMPLETE)) || (pflagSET(lstatus, print_ERROR))))
     {
       /* Make call onto client */
-      err = (_kernel_oserror *) Desk_SWI(2,0, pr->client_id, 15,pr->pjob_id);
-      TRACE1("ClearJob: clearclient = %x\n", (int) err);
+      err = _swix (pr->client_id, _INR (0, 1), 15, pr->pjob_id);
+      dprintf (("", "ClearJob: clearclient = %x\n", (int) err));
       if (!err) PrintClear(pr);
     }
   }
@@ -1116,7 +1167,7 @@ static _kernel_oserror *ClearJob(_kernel_swi_regs *r)
 }
 
 
-/* Desk_SWI omni_base+14 "Omni_PrinterInfo"
+/* SWI omni_base+14 "Omni_PrinterInfo"
  *      On entry, R0 = ptr to name of protocol for printer
  *                R1 = ptr to name of server
  *                R2 = ptr to name of printer
@@ -1151,7 +1202,7 @@ static _kernel_oserror *PrinterInfo(_kernel_swi_regs *r)
   client_record *cr = NULL;
   plist_record *pr = NULL;
 
-  TRACE("PrinterInfo:\n");
+  dprintf (("", "PrinterInfo:\n"));
   cr = ClientFind(-1, (char *) r->r[0], -1, NULL);
   if (!cr) cr = ClientFind(-1, NULL, -1, (char *) r->r[0]);
   if (!cr) return(MakeError(err_NOTREGISTERED));
@@ -1163,7 +1214,7 @@ static _kernel_oserror *PrinterInfo(_kernel_swi_regs *r)
 }
 
 
-/* Desk_SWI omni_base+15 "Omni_EnumerateJobs"
+/* SWI omni_base+15 "Omni_EnumerateJobs"
  *	On entry, R1 = ptr to buffer for job list (word aligned)
  *	          R2 = size of buffer (words * 4)
  *	          R3 = 0, start enumerating jobs
@@ -1178,7 +1229,7 @@ static _kernel_oserror *PrinterInfo(_kernel_swi_regs *r)
  *	the supplied buffer, until the buffer is full or the enumeration is
  *	complete. This allows printer managment applications to gain access
  *	to print_id handles of jobs even if they were started using the
- *	OmniPrint filing system, or by another application using Desk_SWI
+ *	OmniPrint filing system, or by another application using SWI
  *	Omni_CreateJob.
  *
  *	If R3 is not 0 on exit, then the enumeration is not complete
@@ -1188,13 +1239,13 @@ static _kernel_oserror *PrinterInfo(_kernel_swi_regs *r)
  */
 static _kernel_oserror *EnumerateJobs(_kernel_swi_regs *r)
 {
-  TRACE("EnumerateJobs:\n");
+  dprintf (("", "EnumerateJobs:\n"));
   r->r[3] = (int) PrintListJobs((print_record *) r->r[3], (int **) &r->r[1], r->r[2]);
   return(NULL);
 }
 
 
-/* Desk_SWI omni_base+16 "Omni_NameLookup"
+/* SWI omni_base+16 "Omni_NameLookup"
  *      On entry, R0 = reason code;
  *                      0 = get internet host by name
  *                      1 = get internet service by name/protocol
@@ -1216,7 +1267,7 @@ static _kernel_oserror *EnumerateJobs(_kernel_swi_regs *r)
  */
 static _kernel_oserror *NameLookup(_kernel_swi_regs *r)
 {
-  TRACE("NameLookup:\n");
+  dprintf (("", "NameLookup:\n"));
   switch (r->r[0])
   {
     case 0:
@@ -1233,79 +1284,110 @@ static _kernel_oserror *NameLookup(_kernel_swi_regs *r)
 }
 
 
-/*  User Desk_SWI call handler.
+/*  User SWI call handler.
  */
 _kernel_oserror *fs_swi(int swi_no, _kernel_swi_regs *r, void *private_word)
 {
-  TRACE1("fs_swi: %d\n", swi_no);
+  _kernel_oserror *  e = NULL;
+
+  UNUSED (private_word);
+
+  MemCheck_RegisterMiscBlock_Ptr (r);
+  dprintf (("", "fs_swi: %d\n", swi_no));
+
   switch (swi_no)
   {
-    case 0: /* Omni_EnumerateMounts */
-      return(EnumerateMounts(r));
+    case Omni_EnumerateMounts - Omni_00:
+      e = EnumerateMounts(r);
       break;
-    case 1: /* Omni_RegisterClient */
-      return(RegisterClient(r));
+
+    case Omni_RegisterClient - Omni_00:
+      e = RegisterClient(r);
       break;
-    case 2: /* Omni_DeregisterClient */
-      return(DeregisterClient(r));
+
+    case Omni_DeregisterClient - Omni_00:
+      e = DeregisterClient(r);
       break;
-    case 3: /* Omni_MessageLookup */
-      return(MessageLookup(r));
+
+    case Omni_MessageLookup - Omni_00:
+      e = MessageLookup(r);
       break;
-    case 4: /* Omni_ConvertClientToAcorn */
-      return(ConvertClientToAcorn(r));
+
+    case Omni_ConvertClientToAcorn - Omni_00:
+      e = ConvertClientToAcorn(r);
       break;
-    case 5: /* Omni_ConvertAcornToClient */
-      return(ConvertAcornToClient(r));
+
+    case Omni_ConvertAcornToClient - Omni_00:
+      e = ConvertAcornToClient(r);
       break;
-    case 6: /* Omni_ConvertTime */
-      return(ConvertTime(r));
+
+    case Omni_ConvertTime - Omni_00:
+      e = ConvertTime(r);
       break;
-    case 7: /* Omni_Printers */
-      return(Printers(r));
+
+    case Omni_Printers - Omni_00:
+      e = Printers(r);
       break;
-    case 8: /* Omni_CreateJob */
-      return(CreateJob(r));
+
+    case Omni_CreateJob - Omni_00:
+      e = CreateJob(r);
       break;
-    case 9: /* Omni_SendJob */
-      return(SendJob(r));
+
+    case Omni_SendJob - Omni_00:
+      e = SendJob(r);
       break;
-    case 10: /* Omni_EndJob */
-      return(EndJob(r));
+
+    case Omni_EndJob - Omni_00:
+      e = EndJob(r);
       break;
-    case 11: /* Omni_AbortJob */
-      return(AbortJob(r));
+
+    case Omni_AbortJob - Omni_00:
+      e = AbortJob(r);
       break;
-    case 12: /* Omni_JobStatus */
-      return(JobStatus(r));
+
+    case Omni_JobStatus - Omni_00:
+      e = JobStatus(r);
       break;
-    case 13: /* Omni_ClearJob */
-      return(ClearJob(r));
+
+    case Omni_ClearJob - Omni_00:
+      e = ClearJob(r);
       break;
-    case 14: /* Omni_PrinterInfo */
-      return(PrinterInfo(r));
+
+    case Omni_PrinterInfo - Omni_00:
+      e = PrinterInfo(r);
       break;
-    case 15: /* Omni_EnumerateJobs */
-      return(EnumerateJobs(r));
+
+    case Omni_EnumerateJobs - Omni_00:
+      e = EnumerateJobs(r);
       break;
-    case 16: /* Omni_NameLookup */
-      return(NameLookup(r));
+
+    case Omni_NameLookup - Omni_00:
+      e = NameLookup(r);
       break;
-    case 17: /* Omni_TraceFile */
-#ifdef DEBUG
+
+    case Omni_TraceFile - Omni_00:
+      /* 2000-03-04: BAL
+       * Not sure what to do about this - investigate if protocol modules
+       * actually use this.
+       */
+      #if 0
+      #ifdef DEBUG
       r->r[0] = (int) omniout;
-#else
+      #else
       r->r[0] = 0;
-#endif
+      #endif
+      #endif
+
+      r->r[0] = 0;
       break;
 
     default:
-      omni_errblk.errnum = 0x1e6;
-      strcpy(omni_errblk.errmess, "Bad Desk_SWI call");
-      return(&omni_errblk);
+      e = error_BAD_SWI;
       break;
   }
 
+  MemCheck_UnRegisterMiscBlock (r);
+
   /* Return with no error */
-  return(NULL);
+  return(e);
 }
