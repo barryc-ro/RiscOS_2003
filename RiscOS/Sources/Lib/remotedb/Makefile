@@ -71,7 +71,7 @@ OBJZM    = z.${COMPONENT}
 #
 # Build
 #
-all: ${COMPONENT} ${COMPONENTZM} ${LCOMPONENT} ${LCOMPONENTZM} local_dirs
+all: ${COMPONENT} ${COMPONENTZM} ${LCOMPONENT} ${LCOMPONENTZM} o.dirs
         @echo ${COMPONENT}: all complete
 
 ${COMPONENT}: ${OBJ}
@@ -86,13 +86,15 @@ ${LCOMPONENT}: ${OBJ}
 ${LCOMPONENTZM}: ${OBJZM}
 	${LIBFILE} -o ${LCOMPONENTZM} -c ${OBJZM}
 
-local_dirs:
+o.dirs:
         ${MKDIR} o
         ${MKDIR} z
+	create o.dirs
+	stamp  o.dirs
 
 clean:
-	${WIPE} o.${COMPONENT} ${WFLAGS}
-	${WIPE} z.${COMPONENT} ${WFLAGS}
+	${WIPE} o ${WFLAGS}
+	${WIPE} z ${WFLAGS}
 	${WIPE} ${COMPONENT} ${WFLAGS}
 	${WIPE} ${COMPONENTZM} ${WFLAGS}
 	${WIPE} ${LCOMPONENT} ${WFLAGS}
@@ -107,7 +109,7 @@ export_hdrs:
         ${CP} h.${COMPONENT} ${DEBUGLIB}.h.${COMPONENT}   ${CPFLAGS}
         @echo ${COMPONENT}: export complete (hdrs)
 
-export_libs: ${COMPONENT} ${COMPONENTZM} ${LCOMPONENT} ${LCOMPONENTZM} local_dirs
+export_libs: ${COMPONENT} ${COMPONENTZM} ${LCOMPONENT} ${LCOMPONENTZM} o.dirs
 	${MKDIR} ${DEBUGLIB}
 	${MKDIR} ${DEBUGLIB}.o
         ${CP} ${COMPONENT}   ${DEBUGLIB}.o.${COMPONENT}   ${CPFLAGS}
