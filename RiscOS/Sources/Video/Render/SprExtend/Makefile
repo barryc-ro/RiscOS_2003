@@ -38,8 +38,9 @@ SED     = Sed
 #   change the SETL of 'debug' in sources.SprExtend.
 
 ASFLAGS  = -depend !Depend -Stamp -quit -module
-OBJFLAGS = -depend !Depend -Stamp -quit
+OBJFLAGS = -depend !Depend -APCS 3/32bit/nofp -Stamp -quit
 CFLAGS   = -depend !Depend ${INCLUDES} ${DFLAGS}
+TFLAGS   = -APCS 3/32bit/nofp
 DFLAGS   = -DRISCOS -DASMHUFF
 #DFLAGS   = -DRISCOS -DASMHUFF -DDEBUG
 CPFLAGS  = ~cfr~v
@@ -78,9 +79,10 @@ CFSI-JPEG  = data.CFSIjpeg
 #
 # Rule patterns
 #
-.SUFFIXES: .o .c .sources
+.SUFFIXES: .o .oh .c .sources
 
-.c.o:;       ${CC} -c ${CFLAGS} -o $@ $<
+.c.o:;       ${CC} -c ${CFLAGS} ${TFLAGS} -o $@ $<
+.c.oh:;      ${CC} -c ${CFLAGS} -o $@ $<
 .sources.o:; ${OBJASM} ${OBJFLAGS} -from $< -to $@
 
 #
@@ -118,6 +120,7 @@ clean:
         ${RM} ${MAKEJHDR}
         ${RM} ${CFSI-JPEG}
         ${WIPE} o.* ${WFLAGS}
+        ${WIPE} oh.* ${WFLAGS}
         ${WIPE} s.* ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
@@ -141,7 +144,7 @@ ${EXP_HDR}.SprExtend: hdr.SprExtend
 # Generate the SFILES
 #
 s.putscaled: c.putscaled
-        ${CC} -s ${CFLAGS} -ff -zps1 -DEMBED c.putscaled
+        ${CC} -s ${CFLAGS} ${TFLAGS} -ff -zps1 -DEMBED c.putscaled
         @echo ${COMPONENT}: making s.putscaled aasm compatible
         ${SED} s/__rt_sdiv/|__rt_sdiv|/g < s.putscaled > s.temp
         ${SED} s/_swix/|_swix|/g < s.temp > s.putscaled
@@ -155,14 +158,14 @@ s.stdpalette: ${GENPALETTE}
 s.jhdr: ${MAKEJHDR}
         ${MAKEJHDR} > s.jhdr
 
-${GENPALETTE}: o.genpalette ${CLIB}
-        ${LINK} -o $@ o.genpalette ${CLIB}
+${GENPALETTE}: oh.genpalette ${CLIB}
+        ${LINK} -o $@ oh.genpalette ${CLIB}
 
-${GENYUVTABS}: o.genyuvtabs ${CLIB}
-        ${LINK} -o $@ o.genyuvtabs ${CLIB}
+${GENYUVTABS}: oh.genyuvtabs ${CLIB}
+        ${LINK} -o $@ oh.genyuvtabs ${CLIB}
 
-${MAKEJHDR}: o.makejhdr ${CLIB}
-        ${LINK} -o $@ o.makejhdr ${CLIB}
+${MAKEJHDR}: oh.makejhdr ${CLIB}
+        ${LINK} -o $@ oh.makejhdr ${CLIB}
 #
 # For ChangeFSI:
 #
@@ -172,7 +175,7 @@ ${CFSI-JPEG}: Sources.cfsi-jpeg s.jhdr s.rojpeg s.stdpalette
 
 # needed for the ChangeFSI inclusion:
 s.rojpeg: c.rojpeg
-        ${CC} -s ${CFLAGS} -ff -zps1 -DEMBED -DCFSI c.rojpeg
+        ${CC} -s ${CFLAGS} ${TFLAGS} -ff -zps1 -DEMBED -DCFSI c.rojpeg
         ${SED} s/__rt_sdiv/|__rt_sdiv|/g < s.rojpeg > s.temp
         ${CP} s.temp s.rojpeg ${CPFLAGS}
 #        Run w.ZapS-ROJ
