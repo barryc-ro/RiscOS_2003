@@ -10,11 +10,11 @@
 COMPONENT = PFCClock
 TARGET    = PFCClock
 DIRS      = local_dirs
-CFLAGS    = -ffah -zM -Wpe -zps1
+CFLAGS    = -ffah -zM -Wpe -zps1 ${DEFINES}
 RAM_OBJS  = o.module ${OBJS}
 ROM_OBJS  = o.moduleROM ${OBJS}
-OBJS      =            o.clock  o.decoder  o.event  o.global o.int64  o.llist  o.mess o.resmess o.time o.modhdr
-DBG_OBJS  = do.module do.clock do.decoder do.event do.global o.int64 do.llist do.mess o.resmess o.time o.modhdr
+OBJS      =            o.clock  o.decoder  o.event  o.global  o.llist  o.mess o.resmess o.time o.modhdr
+DBG_OBJS  = do.module do.clock do.decoder do.event do.global do.llist do.mess o.resmess o.time o.modhdr
 LIBDIR    = <Lib$Dir>
 LIBS      = C:MPEG.o.MPEG
 DBG_LIBS  = ${LIBS} ${LIBDIR}.DebugLib.o.debuglibzm TCPIPLibs:o.socklib5zm TCPIPLibs:o.inetlibzm

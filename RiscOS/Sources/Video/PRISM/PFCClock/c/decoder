@@ -112,17 +112,11 @@ _kernel_oserror *decoder_Register(uint32_t flags, prism_id_t decoder_id, stream_
   decoder_t decoder =
   {
     .preferred_sync_master = flags & 1,
-//0,0,
-//.session_active = false,.sync_master = false,
     .decoder_id            = decoder_id,
     .decoder_handle        = decoder_handle,
     .function_table        = function_table,
     .latency               = latency
-//,.pre_buffer = 0,.first_ts = 0
-//,0,0
   };
-//decoder.session_active = decoder.sync_master = false;
-//decoder.pre_buffer = decoder.first_ts = 0;
   
   if (llist_AddSorted(&clock->decoder_list, &decoder, CompareDecoders))
   {
@@ -280,8 +274,7 @@ _kernel_oserror *decoder_BeginSession(uint32_t flags, prism_id_t decoder_id, str
       if (!irqs_were_off) _kernel_irqs_on();
       int64_t stc = time_ReadMonotonicTime();
       stc = time_Transform(&stc, &clock->STC_ref_mono, &clock->STC_ref, clock->current_STC_speed);
-      int64_t pre_buffer_64 = { decoder->pre_buffer };
-      decoder->first_ts = ADD64(stc, pre_buffer_64);
+      decoder->first_ts = stc + decoder->pre_buffer;
     }
     else
     {
@@ -289,13 +282,12 @@ _kernel_oserror *decoder_BeginSession(uint32_t flags, prism_id_t decoder_id, str
       {
         int64_t stc = time_ReadMonotonicTime();
         stc = time_Transform(&stc, &clock->STC_ref_mono, &clock->STC_ref, clock->current_STC_speed);
-        int64_t pre_buffer_64 = { decoder->pre_buffer };
-        decoder->first_ts = ADD64(stc, pre_buffer_64);
+        decoder->first_ts = stc + decoder->pre_buffer;
         /* We don't actually want to start at a negative time, so adjust STC if this was negative */
-        if (LT64(decoder->first_ts, (const int64_t) { 0 }))
+        if (decoder->first_ts < 0)
         {
           /* The small -ve number must be subtracted from (ie absolute value added to) all references to STC values */
-          clock->STC_ref = SUB64(clock->STC_ref, decoder->first_ts);
+          clock->STC_ref = clock->STC_ref - decoder->first_ts;
           llist_step_t step;
           llist_StartWalk(&step, &clock->decoder_list, false); /* could simplify this since we know irqs are off */
           while (step.data != NULL)
@@ -303,20 +295,19 @@ _kernel_oserror *decoder_BeginSession(uint32_t flags, prism_id_t decoder_id, str
             decoder_t *other_decoder = (decoder_t *) step.data;
             if (other_decoder->session_active)
             {
-              other_decoder->first_ts = SUB64(other_decoder->first_ts, decoder->first_ts);
+              other_decoder->first_ts = other_decoder->first_ts - decoder->first_ts;
             }
             llist_NextStep(&step, false);
           }
-          event_CorrectTimes(clock, NEG64(decoder->first_ts));
-          decoder->first_ts = (const int64_t) { 0 };
+          event_CorrectTimes(clock, - decoder->first_ts);
+          decoder->first_ts = 0;
         }
       }
       else
       {
         clock->STC_ref_mono = time_ReadMonotonicTime();
-        int64_t pre_buffer_64 = { decoder->pre_buffer };
-        clock->STC_ref = NEG64(pre_buffer_64);
-        decoder->first_ts = (const int64_t) { 0 };
+        clock->STC_ref = - (int64_t) decoder->pre_buffer;
+        decoder->first_ts = 0;
         clock->tentative_time_established = true;
       }
       if (!irqs_were_off) _kernel_irqs_on();
@@ -330,12 +321,11 @@ _kernel_oserror *decoder_BeginSession(uint32_t flags, prism_id_t decoder_id, str
       stc = time_Transform(&stc, &clock->STC_ref_mono, &clock->STC_ref, clock->current_STC_speed);
       decoder->first_ts = time_Extend(*first_ts, stc);
       /* If there is insufficient time before we are due to start, move the monotonic reference later to give us more time */
-      int64_t time_remaining = SUB64(decoder->first_ts, stc);
-      int64_t pre_buffer_64 = { decoder->pre_buffer };
-      if (LT64(time_remaining, pre_buffer_64))
+      int64_t time_remaining = decoder->first_ts - stc;
+      if (time_remaining < decoder->pre_buffer)
       {
-        clock->STC_ref_mono = SUB64(clock->STC_ref_mono, time_remaining);
-        clock->STC_ref_mono = ADD64(clock->STC_ref_mono, pre_buffer_64);
+        clock->STC_ref_mono = clock->STC_ref_mono - time_remaining;
+        clock->STC_ref_mono = clock->STC_ref_mono + decoder->pre_buffer;
       }
       if (clock->time_locked)
       {
@@ -351,10 +341,9 @@ _kernel_oserror *decoder_BeginSession(uint32_t flags, prism_id_t decoder_id, str
         int64_t stc = time_Transform(&monotime, &clock->STC_ref_mono, &clock->STC_ref, clock->current_STC_speed);
         clock->STC_ref_mono = monotime;
         decoder->first_ts = time_Extend(*first_ts, stc);
-        int64_t pre_buffer_64 = { decoder->pre_buffer };
-        clock->STC_ref = SUB64(decoder->first_ts, pre_buffer_64);
+        clock->STC_ref = decoder->first_ts - decoder->pre_buffer;
         /* We now have a true timestamp, so the tentative ones can be corrected */
-        int64_t correction = SUB64(clock->STC_ref, stc);
+        int64_t correction = clock->STC_ref - stc;
         llist_step_t step;
         llist_StartWalk(&step, &clock->decoder_list, false); /* could simplify this since we know irqs are off */
         while (step.data != NULL)
@@ -362,7 +351,7 @@ _kernel_oserror *decoder_BeginSession(uint32_t flags, prism_id_t decoder_id, str
           decoder_t *other_decoder = (decoder_t *) step.data;
           if (other_decoder->session_active)
           {
-            other_decoder->first_ts = ADD64(other_decoder->first_ts, correction);
+            other_decoder->first_ts = other_decoder->first_ts + correction;
           }
           llist_NextStep(&step, false);
         }
@@ -373,8 +362,7 @@ _kernel_oserror *decoder_BeginSession(uint32_t flags, prism_id_t decoder_id, str
         clock->STC_ref_mono = time_ReadMonotonicTime();
         ((uint32_t *) &decoder->first_ts)[0] = first_ts->word.lo;
         ((uint32_t *) &decoder->first_ts)[1] = first_ts->word.hi; /* no sign extension in this case */
-        int64_t pre_buffer_64 = { decoder->pre_buffer };
-        clock->STC_ref = SUB64(decoder->first_ts, pre_buffer_64);
+        clock->STC_ref = decoder->first_ts - decoder->pre_buffer;
       }
       clock->time_established = true;
     }
@@ -388,21 +376,18 @@ _kernel_oserror *decoder_BeginSession(uint32_t flags, prism_id_t decoder_id, str
   {
     if (clock->time_lock_pending)
     {
-      if (LT64(decoder->first_ts, clock->time_lock_time))
+      if (decoder->first_ts < clock->time_lock_time)
       {
         event_Clear(clock, 0, 0, (uint32_t) clock, (_kernel_oserror *(*)(uint32_t, uint32_t)) clock_TimeLock, 0);
         clock->time_lock_time = decoder->first_ts;
-        event_Set(clock, 0, 0, (uint32_t) clock, (_kernel_oserror *(*)(uint32_t, uint32_t)) clock_TimeLock, 0, (const int64_t) { 0 }, clock->time_lock_time);
-//printf("lock advanced  ");
+        event_Set(clock, 0, 0, (uint32_t) clock, (_kernel_oserror *(*)(uint32_t, uint32_t)) clock_TimeLock, 0, 0, clock->time_lock_time);
       }
-//else printf("lock not advanced  ");
     }
     else
     {
       clock->time_lock_time = decoder->first_ts;
-      event_Set(clock, 0, 0, (uint32_t) clock, (_kernel_oserror *(*)(uint32_t, uint32_t)) clock_TimeLock, 0, (const int64_t) { 0 }, clock->time_lock_time);
+      event_Set(clock, 0, 0, (uint32_t) clock, (_kernel_oserror *(*)(uint32_t, uint32_t)) clock_TimeLock, 0, 0, clock->time_lock_time);
       clock->time_lock_pending = true;
-//printf("lock set  ");
     }
   }
   
@@ -541,9 +526,7 @@ _kernel_oserror *decoder_SetEvent(uint32_t flags, prism_id_t decoder_id, uint32_
   {
     event_time = time_ReadMonotonicTime();
     event_time = time_Transform(&event_time, &clock->STC_ref_mono, &clock->STC_ref, clock->current_STC_speed);
-//printf("time when event set = %016llX", event_time);
-//_swix(256+11, 0);_swix(256+13, 0);
-    event_time = ADD64(event_time, (int64_t) { *(uint32_t *) when });
+    event_time = event_time + *(uint32_t *) when;
   }
   else
   {
@@ -554,7 +537,7 @@ _kernel_oserror *decoder_SetEvent(uint32_t flags, prism_id_t decoder_id, uint32_
     event_time = decoder->first_ts;
   }
   
-  event_Set(clock, flags, decoder_id, event_handle, event, when, (int64_t) { decoder->latency * (90000ll / 1000ll) }, event_time);
+  event_Set(clock, flags, decoder_id, event_handle, event, when, decoder->latency * (90000ll / 1000ll), event_time);
   
   llist_AbortWalk(&step);
   
