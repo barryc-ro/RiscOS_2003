@@ -149,18 +149,31 @@ Source::calculatePosAckSequence(InternetObject *server, Statistics *stats, ULINT
 	   		  	if (Debug(debug_ack)) Debug("send ack %i-(%i,%i)", max_completed_block, MAX_block_request, server->getMaxRequestedBlock());
 #endif	   		  	
                			MAX_block_request = server->getMaxRequestedBlock();
+               			ULINT last_completed_block = prior_max_request;	// the largest block number completed ignoring incomplete blocks.
                			MemBlock *mb;
                			unsigned int systime;
 				_swix(OS_ReadMonotonicTime, _OUT(0), &systime);
-            			for (ULINT i = 1; (i+prior_max_request) <= MAX_block_request; i++){
+
+				while (last_completed_block > max_completed_block){
+				  	mb = mem_map->findExistingBlock(last_completed_block);
+				  	
+				  	if ((mb != NULL)&&(mb->completed)) break;
+				  	
+				  	--last_completed_block;
+				}
+#ifdef DEBUGLIB               			
+	   		  	if (Debug(debug_ack)) Debug("lcb[%i] timeout = %i", last_completed_block, timeout);
+#endif	   		  	
+              			for (ULINT i = 1; (i+last_completed_block) <= MAX_block_request; i++){
              				mb = mem_map->findBlock(prior_max_request+i);
                				if ((mb == NULL)||(mem_map->ErrorExists())){
               				  	mem_map->RemoveErr();
                				}
                				else
                				{
-               					mb->nak_timeout = (unsigned int)(systime + nak_timeout + (i-1)*50);
-               					mb->special_play_id = (unsigned int)get_current_play_id(); // Avoid deleting block in calculatePosNAKSequence before we even block NAK
+               					mb->nak_timeout = (unsigned int)(systime + timeout + (i-1)*block_time);
+               					mb->special_play_id = (unsigned int)get_current_play_id(); 
+               					// Avoid deleting block in calculatePosNAKSequence before we even block NAK
                				}
                			}
                			prior_max_request = MAX_block_request;
@@ -191,9 +204,7 @@ Source::calculatePosNAKSequence(InternetObject *server, Statistics *stats, size_
   
 	// if we can find the block and its timeout is set to zero or amnesty is over.
 	if ( (mb==NULL)||(systime+5 < mb->nak_timeout) ){
-	  	if (mb == NULL)
-	  		(*timeout) = nak_timeout;
-	  	else
+	  	if (mb != NULL)
 	  		(*timeout) = mb->nak_timeout - systime;
         	local_naks = -1;
        	}
@@ -205,11 +216,15 @@ Source::calculatePosNAKSequence(InternetObject *server, Statistics *stats, size_
         	if ((++mb->resends) > Acceptable_NAKS){
 #ifdef DEBUGLIB        	  
         	  	if (Debug(debug_naks)) Debug("deleting block [%i]", mb->block_id);
+        	  	//getMiscInfo(type_debug, NULL);
 #endif        	  	
         		mb->deleted_block = 1;
         		mb->completed = 1;	// assign completed block
 			mb->pending_nak = 0;
-			mb->to_be_freed = 1;
+			if (mb->block_id == last_block_sent +1){
+			  	++last_block_sent;
+				mb->to_be_freed = 1;
+			}
 								
 			++(stats->deleted_blocks);
 			result = calculateMaxCompleteBlock();	// calculate most completed
@@ -222,7 +237,10 @@ Source::calculatePosNAKSequence(InternetObject *server, Statistics *stats, size_
 		  	  	mb->deleted_block = 1;
         			mb->completed = 1;			// assign completed block
 				mb->pending_nak = 0;
-				mb->to_be_freed = 1;
+				if (mb->block_id == last_block_sent +1){
+			  		++last_block_sent;
+					mb->to_be_freed = 1;
+				}
 					
 				++(stats->deleted_blocks);
 #ifdef DEBUGLIB        	  
@@ -276,7 +294,8 @@ Source::calculatePosNAKSequence(InternetObject *server, Statistics *stats, size_
                 }
 			
         }
-        (*naks) += local_naks;
+        
+        if (naks != NULL) (*naks) += local_naks;
         	
         return result;
 }
@@ -309,7 +328,7 @@ Source::Source(Source& live)
   max_completed_block = last_block_sent = prior_max_request;
   most_significant_time = live.get_most_significant_time();
   nak_timeout = live.get_nakTimeout();
-  current_play_id = 0;		// this is the trickplay flag this changes with each new trickplay
+  current_play_id = live.get_current_play_id();		// this is the trickplay flag this changes with each new trickplay
   start_end_block = 0;
   deleted_blocks = 0;
   
@@ -534,8 +553,11 @@ Source::setNewPlayState(ULONG *request_num, size_t *max_complete, play_mode mode
         result = getBlockStatus(0, 0, &freebuf);
      	if (freebuf > NEC_databurstval)
    		freebuf = NEC_databurstval;
+   		
+   	if (result != ErrorOccurred)
+   		result = calculateMaxCompleteBlock();
 	
-	(*max_complete) = (int)(max_completed_block = last_block_sent = prior_max_request + 1);
+	(*max_complete) = (int)(last_block_sent = max_completed_block = prior_max_request);
 		
 	(*request_num) = (int)(max_completed_block + freebuf);
    	
@@ -545,11 +567,17 @@ Source::setNewPlayState(ULONG *request_num, size_t *max_complete, play_mode mode
 		_swix(OS_ReadMonotonicTime, _OUT(0), &systime);		
 		for (i = 1; (max_completed_block+i) <= (*request_num); i++){
 			mb = mem_map->findBlock(max_completed_block+i);
-			if (mb != NULL)
-				mb->nak_timeout = (unsigned int)(systime + timeout+ (i-1)*nak_timeout);
+			if (mb != NULL){
+				mb->nak_timeout = (unsigned int)(systime + timeout + (i-1)*block_time);
+				mb->special_play_id = (unsigned int)get_current_play_id(); 
+			}
 		}
 	}
-  		 	
+#ifdef DEBUGLIB
+	if (Debug(debug_blockerrors))
+		Debug("new play state mx_complete = %i", (*max_complete));
+	getMiscInfo(type_debug, NULL);
+#endif	 	
      return result;
 }
 
@@ -626,6 +654,12 @@ Source::getBlock(NECBlock **block, BitstreamBufferDescriptor **mpeg_buffer, int 
                 }
                 (*scene) = ((NECBlockHeader*)(*block)->buffers[0].buffer_ptr)->scene_number;	// in network order, no problem
            	(*playid) = mb->special_play_id;
+#ifdef DEBUGLIB           	
+	if (Debug(debug_time))
+		if (mb != NULL)
+			Debug("b[%i] t=%i p_id = %i", 
+			 mb->block_id, ntohl(((NECBlockHeader*)(*block)->buffers[0].buffer_ptr)->playback_time), (mb->special_play_id >> 24));
+#endif
            	(*block)->buffers[0].buffer_ptr    +=  sizeof(NECBlockHeader);
   		(*block)->buffers[0].buffer_length -=  sizeof(NECBlockHeader);
   		
@@ -638,7 +672,8 @@ Source::getBlock(NECBlock **block, BitstreamBufferDescriptor **mpeg_buffer, int 
 	}
         else
                 *block = 0;
-               
+                
+/*           
 #ifdef DEBUGLIB
 	if (Debug(debug_blockerrors)) {
 		if (mb == NULL)
@@ -647,7 +682,7 @@ Source::getBlock(NECBlock **block, BitstreamBufferDescriptor **mpeg_buffer, int 
 			Debug("gb [%i]", mb->block_id);
 	}
 #endif		
-
+*/
      return result;    
 }
 
@@ -715,18 +750,10 @@ Source::calculate_freeBlocks(InternetObject *server, callback_flag *callback_pen
 error_flag
 Source::foregroundExecute(InternetObject *server, Statistics *stats, ULINT *timeout)
 {
-    size_t naks = 0;
-    size_t freeblocks = 0;
-    	
-    if (!ErrorExists()){
+   if (!ErrorExists()){
       	calculateMaxCompleteBlock();
-       	if (!ErrorExists()) calculatePosNAKSequence(server, stats, &naks, timeout);
         if (!ErrorExists()) calculatePosAckSequence(server, stats, (*timeout));
-        
-       	if ((naks != 0)&&(naks != -1)){
-       	  	(*timeout) = nak_timeout;
-       	}
-    
+       	if (!ErrorExists()) calculatePosNAKSequence(server, stats, NULL, timeout);       
     }	
     return ErrorState();
 }
@@ -808,7 +835,7 @@ Source::ReadDatagrams(callback_flag *flags, Statistics *stats, ULINT *timeout)
                 	  	ntoh_structure(dgram, map_NECDatagram, NECDatagram);
 #ifdef DEBUGLIB       	       							  
      	       			if (Debug(debug_blockerrors))
-     	       				Debug("dgram  [%i], %ib", dgram->block_number, size);
+     	       				Debug("dgram  [%i], %ib, play_id %i", dgram->block_number, size, dgram->playback_classification_id);
 #endif       	       							  		
                 	  	
                			if ( (dgram->dgram_seq < mem_map->dgramsPerBlock())
@@ -883,14 +910,17 @@ Source::ReadDatagrams(callback_flag *flags, Statistics *stats, ULINT *timeout)
        							  		Debug("block [%i] deleted by server", mb->block_id);
 #endif       	       							  		
 								mb->deleted_block = 1;
-								mb->to_be_freed = 1;
+								if (mb->block_id == last_block_sent +1){
+			  						++last_block_sent;
+									mb->to_be_freed = 1;
+				                                }
 							  	++(stats->deleted_blocks);
 						        }
 #ifdef DEBUGLIB
 							else
 							{
        							  	if (Debug(debug_blockerrors))
-       							  		Debug("block [%i] completed", mb->block_id);
+       							  		Debug("-------- blk [%i] complete", mb->block_id);
        							}
 #endif      	       							  		
 						}
