@@ -82,6 +82,7 @@ OBJS      = o.handlers o.main o.oskbutils o.oskbime o.windowops
 OBJSZ     = oz.handlers oz.main oz.oskbutils oz.oskbime oz.windowops oz.ModuleWrap
 OBJSZRAM  = oz.handlers oz.main oz.oskbutils oz.oskbime oz.windowops oz.ModuleWra1
 EXPORTS   = 
+INSTALLDIR = <Install$Dir>.${APPNAME}
 
 .SUFFIXES: .oz
 
@@ -160,6 +161,19 @@ resources:
        -${CP} LocalUserIFRes:Sprites ${RESAPP}.Sprites ${CPFLAGS}
        -${CP} LocalUserIFRes:TVSprs ${RESAPP}.TVSprs ${CPFLAGS}
 	${CP} LocalUserIFRes:Res ${RESAPP}.Res ${CPFLAGS}
+	@echo ${COMPONENT}: resource files copied
+	@echo
+
+install: ${APP}
+	${MKDIR} ${INSTALLDIR}
+	${CP} LocalUserIFRes:!BootROM ${INSTALLDIR}.!Boot ${CPFLAGS}
+	${CP} LocalUserIFRes:!Run ${INSTALLDIR}.!Run ${CPFLAGS}
+	${CP} LocalUserIFRes:Messages ${INSTALLDIR}.Messages ${CPFLAGS}
+       -${CP} LocalUserIFRes:Graphics ${INSTALLDIR}.Sprites ${CPFLAGS}
+       -${CP} LocalUserIFRes:Sprites ${INSTALLDIR}.Sprites ${CPFLAGS}
+       -${CP} LocalUserIFRes:TVSprs ${INSTALLDIR}.TVSprs ${CPFLAGS}
+	${CP} LocalUserIFRes:Res ${INSTALLDIR}.Res ${CPFLAGS}
+	${CP} ${APP} ${INSTALLDIR}.!RunImage ${CPFLAGS}
 	@echo ${COMPONENT}: resource files copied
 	@echo
 
