@@ -126,7 +126,6 @@ LIBS = \
  $(C++LIB)\
  $(CLIB)\
 
-#these are not complete
 LIBSM = \
  $(NBLIB)zm\
  $(ERRORLIB)zm\
@@ -139,7 +138,7 @@ LIBSM = \
  $(ACORNSMTP)\
  $(ELIB)zm\
  $(EXTRALIBS)\
- $(C++LIB)\
+ $(C++LIB)z\
 
 
 LIBSD = \
