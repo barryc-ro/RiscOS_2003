@@ -56,7 +56,8 @@ clean:
 
 resources:
         ${MKDIR} ${RESDIR}
-        ${CP} Resources.${LOCALE}.Messages ${RESDIR}.Messages ${CPFLAGS}
+	TokenCheck LocalRes:Messages
+        ${CP} LocalRes:Messages ${RESDIR}.Messages ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 ${TARGET}: ${SOURCE}
@@ -66,6 +67,7 @@ ${EXP_HDR}.Draw: hdr.Draw
         ${CP} hdr.Draw $@ ${CPFLAGS}
 
 # Dynamic dependencies:
+rm.DrawMod: VersionASM
 rm.DrawMod: Version
 rm.DrawMod: hdr:ListOpts
 rm.DrawMod: hdr:Macros
