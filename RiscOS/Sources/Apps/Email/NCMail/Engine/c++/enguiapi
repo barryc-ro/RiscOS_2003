@@ -67,9 +67,9 @@ extern "C" eng_rcode eng_disconnect(void)
   else if (state & DISCONNECT)
     return ENG_ALREADYDISCONNECTING;
 
-  else if ((state == IDLE) || (state & (PROCESSPOP | PROCESSSMTP)))
+  else if ((state == IDLE) || ((state & (PROCESSPOP | PROCESSSMTP)) && (!(state & TIMEOUT))))
   {
-    PreDisconnect(true);
+    DisconnectLine();
     return ENG_RUNNING;
   }
 
@@ -146,11 +146,20 @@ extern "C" eng_rcode eng_get_mailbox_list(MessageDescriptor **msg)
         delete msgptr->elibobj;
         msgptr->elibobj = 0;
       }
-      SetFilename(msgptr->ID, false);
-      UnlockFile(msgfilename);
       retrievestate.msg = 0;
     }
 
+    /*
+    ** Following code commented out because it's not much use!
+    ** It was meant to be used by the UI to check status of
+    ** messages on Inbox and modify the HTML just prior to
+    ** displaying, but it appears that the bulk of the memory
+    ** is taken by the browser, so messages which are shown as
+    ** downloaded could be removed by CacheFS between NCMail
+    ** compiling the Inbox and the browser displaying it.
+    */
+
+#ifdef gorilla
     /* check that files are still downloaded */
     dprintf(("Eng", "About to check that files are actually downloaded\n"));
     msgptr = ourmboxin->list;
@@ -158,11 +167,18 @@ extern "C" eng_rcode eng_get_mailbox_list(MessageDescriptor **msg)
     {
       SetFilename(msgptr->ID, false);
       if (FileExists(msgfilename))
+      {
+/*         dprintf(("Eng", "Message %d is downloaded\n",msgptr->ID)); */
         msgptr->flags |= DOWNLOADED;
+      }
       else
+      {
+/*         dprintf(("Eng", "Message %d is not downloaded\n",msgptr->ID)); */
         msgptr->flags &= ~DOWNLOADED;
+      }
       msgptr = msgptr->next;
     }
+#endif
 
     *msg = ourmboxin->list;
     return (ourmboxin->flags & MBOXINCOMPLETE) ? ENG_MBOXINCOMPLETE : ENG_COMPLETED;
@@ -210,12 +226,10 @@ extern "C" eng_rcode eng_get_message(uint32 msg_id, void *handle, eng_cbf_getmsg
   ** Otherwise user will be asked to confirm connection.
   */
 
-  StopTimeoutCount();
   SetFilename(msg_id, false);
   if ((retrievestate.msg->flags & DOWNLOADED) && (FileExists(msgfilename)))
   {
     dprintf(("Eng", "File is already downloaded\n"));
-    LockFile(msgfilename);
     retrievestate.context = readytoparse;
   }
 
@@ -232,6 +246,7 @@ extern "C" eng_rcode eng_get_message(uint32 msg_id, void *handle, eng_cbf_getmsg
     retrievestate.msg->flags &= ~DOWNLOADED;
     if (online)
     {
+      ActivatePOP();
       if (popstatus == acctconnected)
         retrievestate.context = readytoretrieve;
       else
@@ -260,27 +275,27 @@ extern "C" eng_rcode eng_create_message(uint32 msg_id, void *handle, eng_cbf_get
   if (state & (CREATE | REPLY))
     return ENG_CREATING;
 
-  SetFilename(msg_id, true);
-  LockFile(msgfilename);
+/*   SetFilename(msg_id, true); */
+/*   LockFile(msgfilename); */
 
   if ((createstate.msg = NewDescriptor(0, ourmboxout)) == 0)
   {
     /* not enough memory for new message */
-    UnlockFile(msgfilename);
+/*     UnlockFile(msgfilename); */
     return ENG_NOMEMORY;
   }
 
   if ((createstate.msg->fromreal = malloc(strlen(realname) + 1)) == 0)
   {
     /* not enough memory for new message */
-    UnlockFile(msgfilename);
+/*     UnlockFile(msgfilename); */
     return ENG_NOMEMORY;
   }
 
   if ((createstate.msg->fromaddr = malloc(strlen(emailaddr) + 1)) == 0)
   {
     /* not enough memory for new message */
-    UnlockFile(msgfilename);
+/*     UnlockFile(msgfilename); */
     return ENG_NOMEMORY;
   }
 
@@ -335,8 +350,7 @@ extern "C" eng_rcode eng_send_message(uint32 msg_id, char *bodyfile, void *handl
   callbacklist.sendfunc = func;
   callbacklist.sendhandle = handle;
   state |= SEND;
-  SetFilename(msg_id, true);
-  LockFile(msgfilename);
+  
   sendstate.msg = FindDescriptor(msg_id, ourmboxout);
   sendstate.bodyname = bodyfile;
   if (sendstate.msg->forward_list)
@@ -413,7 +427,7 @@ extern "C" eng_rcode eng_mark_for_deletion(uint32 number, uint32 *message_list)
   markstate.current = 0;
   markstate.context = readytomark;
   markstate.ret.code = ENG_COMPLETED;
-  deletepending = false;
+  expungepending = false;
   state |= MARKDELETE;
   dprintf(("Eng", "About to mark %d messages for deletion\n",number));
 
@@ -477,13 +491,13 @@ extern "C" eng_rcode eng_email_active(bool status)
       }
       msgptr = msgptr->next;
     }
-/*     LockFile("<NCMailStore$Dir>.<NCMail$User>"); */
-/*     LockFile("<NCMailStore$Dir>.<NCMail$User>.*"); */
+    LockFile("<NCMailStore$Dir>.<NCMail$User>");
+    LockFile("<NCMailStore$Dir>.<NCMail$User>.*");
   }
   else
   {
-/*     UnlockFile("<NCMailStore$Dir>.<NCMail$User>"); */
-/*     UnlockFile("<NCMailStore$Dir>.<NCMail$User>.*"); */
+    UnlockFile("<NCMailStore$Dir>.<NCMail$User>");
+    UnlockFile("<NCMailStore$Dir>.<NCMail$User>.*");
   }
 
   if (online)
@@ -496,9 +510,10 @@ extern "C" eng_rcode eng_email_active(bool status)
     {
       /* disconnect from mail server in case user drops line
          while outside email client */
+      popactive = false;
       StopTimeoutCount();
       StopReconnectCount();
-      PreDisconnect(false);
+      DisconnectServer();
     }
   }
   else if (sendpending)
@@ -570,7 +585,7 @@ extern "C" void eng_null_events(bool yes)
 }
 
 
-extern "C" eng_rcode eng_mem_available(uint32 *free)
+extern "C" eng_rcode eng_mem_available(int32 *free)
 {
 
   if (!cachefs)
@@ -582,15 +597,14 @@ extern "C" eng_rcode eng_mem_available(uint32 *free)
   regs.r[0] = 5;
   regs.r[1] = -1;
   _kernel_swi(OS_DynamicArea,&regs,&regs);
-  dprintf(("Eng", "Free memory is %dK\n",regs.r[2] / 1024));
-  *free = regs.r[2];
+  *free = regs.r[2] - 0x200000;
+  dprintf(("Eng", "Free memory is %dK\n",*free / 1024));
 
   return ENG_COMPLETED;
 
 }
 
 
-#ifdef gorilla
 extern "C" eng_rcode eng_clear_memory(uint32 bestguess)
 {
 
@@ -610,7 +624,9 @@ extern "C" eng_rcode eng_clear_memory(uint32 bestguess)
   else
   {
     MessageDescriptor *msgptr = ourmboxin->list, *lastptr;
-    uint32 released;
+    int32 released;
+    int32 size = (int32) bestguess;
+
     eng_mem_available(&released);
 
     /* find last message in list */
@@ -621,22 +637,40 @@ extern "C" eng_rcode eng_clear_memory(uint32 bestguess)
       msgptr = msgptr->next;
     }
 
-    while ((released < bestguess) && (lastptr))
+    /*
+    ** Go through message list from last message backwards
+    ** to see if enough memory can be released by removing messages.
+    */
+    while ((released < size) && (lastptr))
     {
-      if (lastptr->flags & DOWNLOADED)
+      if ((lastptr->flags & DOWNLOADED) && (!(lastptr->flags & NEW)))
       {
         SetFilename(lastptr->ID, false);
         released += GetFileLength(msgfilename);
-        UnlockFile(msgfilename);
-        remove(msgfilename);
-        lastptr->flags &= ~DOWNLOADED;
-        dprintf(("Eng", "Removing message %d to make more room\n",lastptr->ID));
       }
       lastptr = lastptr->last;
     }
 
-    return ((lastptr == 0) ? ENG_NOMEMORY : ENG_COMPLETED);
+    if (released >= size)
+    {
+      /* enough memory available so remove message files */
+      msgptr = (lastptr == 0) ? ourmboxin->list : lastptr->next;
+
+      while (msgptr)
+      {
+        if ((msgptr->flags & DOWNLOADED) && (!(msgptr->flags & NEW)))
+        {
+          SetFilename(msgptr->ID, false);
+          UnlockFile(msgfilename);
+          remove(msgfilename);
+          msgptr->flags &= ~DOWNLOADED;
+          dprintf(("Eng", "Removing message %d to make more room\n",msgptr->ID));
+        }
+        msgptr = msgptr->next;
+      }
+    }        
+
+    return ((released >= size) ? ENG_COMPLETED : ENG_NOMEMORY);
   }
 
 }
-#endif

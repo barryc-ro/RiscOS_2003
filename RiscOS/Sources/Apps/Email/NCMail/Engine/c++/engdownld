@@ -1,6 +1,10 @@
 /*
 ** Email Client
 ** Download Mail
+**
+** This file contains routines to download headers for parsing,
+** download messages when doing a mailbox process,
+** and retrieve single messages when requested by the user to read.
 */
 
 #include "Email/Common/list.h"
@@ -39,10 +43,19 @@ void StartMessageDownload(void)
   downloadstate.msg = ourmboxin->list;
   downloadstate.context = readytodownload;
   downloadstate.ret.code = ENG_COMPLETED;
+
   state |= DOWNLOADMSG;
 
 }
 
+
+/*
+** FinishHeaders() is called when all the headers have been
+** downloaded and parsed. The UI is given the go-ahead to
+** display the Inbox.
+** If the Email client is active and a disconnect is not pending,
+** downloading of messages is kicked off.
+*/
 
 void FinishHeaders(void)
 {
@@ -65,7 +78,7 @@ void FinishHeaders(void)
 #endif
 
   if (disconnectpending)
-    PreDisconnect(true);
+    DisconnectLine();
 
   else if (emailactive)
   {
@@ -79,15 +92,23 @@ void FinishHeaders(void)
   {
     /* disconnect from mail server in case user drops line
        while outside email client */
+    popactive = false;
     StopTimeoutCount();
     StopReconnectCount();
-    PreDisconnect(false);
+    DisconnectServer();
   }
 
 }
 
 
-void DownloadFailure(MessageDescriptor *msg, uint32 size, bool headers)
+/*
+** DownloadFailure() is called by either DoDownloadHeader or
+** DoDownloadMessage if a download has failed. First time round,
+** the message's ERROR flag is set. Second time round this is
+** detected and the download is abandoned for this message.
+*/
+
+void DownloadFailure(MessageDescriptor *msg, bool headers)
 {
 
   SetFilename(msg->ID, headers);
@@ -107,45 +128,26 @@ void DownloadFailure(MessageDescriptor *msg, uint32 size, bool headers)
   }
   else
   {
-    if (downloadstate.ret.code == ENG_NOMEMORY)
-    {
-      /************************************
-      *** ATTENTION
-      ************************************/
-      /*
-      ** We must do domething sensible here, but clearing
-      ** memory is not really an option because all we will be
-      ** doing is replacing some downloaded messages with others.
-      ** We should really halt the download, but it may be that
-      ** this is a big message and we could still download
-      ** several smaller ones that follow.
-      ** So... we'll do nothing for the moment and return to
-      ** the problem later.
-      **
-      ** Perhaps if we're downloading headers we could try to clear
-      ** some files out in case this is a repeat processing
-      ** of the mailbox.
-      */
-    }
-
     /* try to download once more*/
     msg->flags |= ERROR;
-/*     dprintf(("Eng", "Setting error flag and trying again\n")); */
   }
 }
 
 
-void DLReady(bool b, void *h)
-{
+/*
+** DoDownloadHeader downloads message headers ready for parsing
+** under control of the DOWNLOADHDR state. The function is entered
+** during null events under one of the following contexts:
+**   idle
+**   readytodownload
+**   downloadfailure
+**   downloaddone
+**
+** The process cycles through the mesage list until all messages
+** have been done.
+*/
 
-  NB_UNUSED(b);
-  NB_UNUSED(h);
-  downloadstate.context = readytodownload;
-
-}
-
-
-void DownloadHeader(void)
+void DoDownloadHeader(void)
 {
 
   ELib_rcode code;
@@ -156,7 +158,13 @@ void DownloadHeader(void)
 
     case readytodownload :
 
-      dprintf(("Eng", "download context = readytodownload msg %d\n",msg->ID));
+      /*
+      ** Ready to download the next header.
+      ** If the message pointer is zero it's the end of the list.
+      ** If disconnectpending is set, download is interrupted.
+      */
+      
+      dprintf(("Eng", "download context = readytodownload hdr %d\n",msg->ID));
       if ((!msg) || (disconnectpending))
       {
         /* all headers now downloaded */
@@ -177,9 +185,9 @@ void DownloadHeader(void)
         if (msg->flags & NEWLYCREATED)
         {
           SetFilename(msg->ID, true);
-/*           dprintf(("Eng", "About to get headers for message %d\n",msg->ID)); */
           downloadstate.hdrsobj = new MBoxOpCB_gethdrs_file((MBoxCBHandlerFn) MBoxCallback, msgfilename, code, 0);
           downloadstate.context = idle;
+
           code = msg->mboxobj->GetHeaders(downloadstate.hdrsobj);
           if (code < 0)
           {
@@ -202,21 +210,26 @@ void DownloadHeader(void)
 
     case downloadfailure :
 
-      dprintf(("Eng", "download context = downloadfailure msg %d\n",msg->ID));
       /*
       ** Header download or parse has failed.
       ** If this is the second failure, DownloadFailure() will
       ** cause it to be skipped, otherwise we try to get it again.
-      ** The amount of memory to clear in the event of a
-      ** memory failure has been set at 8K. This is a guess.
       */
+
+      dprintf(("Eng", "download context = downloadfailure msg %d\n",msg->ID));
       downloadstate.context = readytodownload;
       RemoveObj((MBoxOpCB**) &downloadstate.hdrsobj);
-      DownloadFailure(msg, 0x2000, true);
+      DownloadFailure(msg, true);
 
       break;
 
     case downloaddone :
+
+      /*
+      ** Download successfully completed for this header.
+      ** Delete the callback object and send the header for parsing.
+      ** Meanwhile start fetching the next header.
+      */
 
       dprintf(("Eng", "download context = downloaddone msg %d\n",msg->ID));
       RemoveObj((MBoxOpCB**) &downloadstate.hdrsobj);
@@ -244,19 +257,46 @@ void DownloadHeader(void)
 }
 
 
-void DownloadMessage(void)
+/*
+** DoDownloadMessage() downloads messages into CacheFS under the
+** control of the DOWNLOADMSG state.
+** It checks the available free memory (which is adjusted so that
+** there is always at least 2Mb of unused space) and only downloads
+** messages that will fit into that space, unless this is not the
+** first processing of the mailbox (see below).
+** On the first pass it only downloads messages up to the configured
+** threshhold size, and if there is still memory remaining it makes
+** a second pass to see if any larger messages can be downloaded.
+**
+** If this is the second or subsequent processing of the mailbox,
+** any new messages are given precedence over old ones, so if
+** necessary old messages are cleared out of memory to make way
+** for the new ones.
+**
+** The function is entered during null events under one of the
+** following contexts:
+**   idle
+**   readytodownload
+**   downloadfailure
+*/
+
+
+void DoDownloadMessage(void)
 {
 
   ELib_rcode code;
   MessageDescriptor *msg = downloadstate.msg;
+  int32 freemem;
+
+  eng_mem_available(&freemem);
 
   switch (downloadstate.context)
   {
 
     case readytodownload :
 
-      dprintf(("Eng", "context = readytodownload\n"));
-      if(!msg)
+      dprintf(("Eng", "context = readytodownload msg %d\n",msg->ID));
+      if ((!msg) || ((freemem <= 0) && (!reprocess)))
       {
 
         if ((skipped) && (!secondtimeround))
@@ -270,18 +310,30 @@ void DownloadMessage(void)
         /* all messages now downloaded */
         dprintf(("Eng", "All messages downloaded\n"));
         state &= ~DOWNLOADMSG;
-        if (deletepending)
+        reprocess = true;
+
+        /* unset NEW flag for all messages in list */
+        msg = ourmboxin->list;
+        while (msg)
         {
-          deletepending = false;
+          msg->flags &= ~NEW;
+          msg = msg->next;
+        }
+
+        if (expungepending)
+        {
+          expungepending = false;
           state |= (MARKDELETE + PROCESSPOP);
           dprintf(("Eng", "About to expunge\n"));
           popprocessstate.context = readytoconnect;
           markstate.context = idle;
         }
+
         else if (!(state & RETRIEVEMSG))
         {
-          UnlockFile("NCMailStore:*");
-          StartTimeoutCount();
+          /* only reset countdown timers if a retrieve is not
+             happeining at the same time */
+          DeactivatePOP();
           StartReconnectCount();
         }
         downloadstate.ret.code = ENG_COMPLETED;
@@ -296,7 +348,7 @@ void DownloadMessage(void)
         state &= ~DOWNLOADMSG;
         downloadstate.ret.code = ENG_COMPLETED;
         (*callbacklist.promptfunc)(&downloadstate.ret, ourmboxin->list, online, callbacklist.prompthandle);
-        PreDisconnect(true);
+        DisconnectLine();
       }
 
       else if (msg->flags & (DOWNLOADED | DOWNLOADING))
@@ -319,9 +371,28 @@ void DownloadMessage(void)
 
         else
         {
-          uint32 temp;
-          eng_mem_available(&temp);
-          if ((temp >= (downloadstate.size + 2048)) && ((ourmboxin->maxsize >= downloadstate.size) || (secondtimeround)))
+          bool ok = true;
+
+          if ((downloadstate.size > ourmboxin->maxsize) && (!secondtimeround))
+          {
+            dprintf(("Eng", "Skipping this message - too bleedin' big\n"));
+            /* set flag so we know some have been skipped */
+            skipped = true;
+            ok = false;
+          }
+
+          else if (freemem < (int32) downloadstate.size)
+          {
+            /* if message is new clear memory if possible */
+            ok = false;
+            if ((msg->flags & NEW) && (reprocess))
+            {
+              if (eng_clear_memory(downloadstate.size) != ENG_NOMEMORY)
+                ok = true;
+            }
+          }
+
+          if (ok)
           {
             msg->flags |= DOWNLOADING;
             SetFilename(msg->ID, false);
@@ -339,9 +410,8 @@ void DownloadMessage(void)
 
           else
           {
-            dprintf(("Eng", "Skipping this message - too big\n"));
-            /* set flag so we know some have been skipped */
-            skipped = true;
+            if (secondtimeround)
+              msg->flags &= ~NEW;
             downloadstate.msg = msg->next;
             downloadstate.context = readytodownload;
           }
@@ -357,13 +427,19 @@ void DownloadMessage(void)
       RemoveObj((MBoxOpCB**) &downloadstate.msgobj);
       downloadstate.context = readytodownload;
       msg->flags &= ~(DOWNLOADED + DOWNLOADING);
-      DownloadFailure(msg, downloadstate.size, false);
+      DownloadFailure(msg, false);
 
       break;
 
   }
 }
 
+
+/*
+** ConfirmConnect() is called as a callback from the UI when
+** the Engine has requested confirmation from the user to
+** reconnect if a message on the server is requested while offline.
+*/
 
 void ConfirmConnect(bool conf, void *h)
 {
@@ -373,6 +449,7 @@ void ConfirmConnect(bool conf, void *h)
   {
     /* user has confirmed connection */
     dprintf(("Eng", "User has confirmed connection\n"));
+    ActivatePOP();
     ConnectToISP();
   }
 
@@ -387,6 +464,29 @@ void ConfirmConnect(bool conf, void *h)
 
 }
 
+
+/*
+** DoRetrieve() retrieves a single message when the user requests
+** to read a message that is on the server, under the control of the
+** RETRIEVEMSG state.
+** The function is entered during null events under one of the
+** following contexts:
+**   idle
+**   reqconnect
+**   readytoconnect
+**   connectfailure
+**   readytoretrieve
+**   retrievefailure
+**   downloadpending
+**   readytoparse
+**   parsing
+**   parsedone
+**   readytowrite
+**   writing
+**   writedone
+**   writefailure
+**   finished
+*/
 
 void DoRetrieve(void)
 {
@@ -414,6 +514,13 @@ void DoRetrieve(void)
 
       break;
 
+    case connectfailure :
+
+      /* POP has already been deactivated in DoPOPProcess() */
+      state &= ~RETRIEVEMSG;
+      (*callbacklist.statusfunc)(&statusret, callbacklist.statushandle, 0);
+      break;
+
     case readytoretrieve :
     {
       uint32 size;
@@ -431,14 +538,17 @@ void DoRetrieve(void)
 
       else
       {
-        uint32 temp;
-        eng_mem_available(&temp);
-        if (temp < (size + 2048))
+        int32 freemem;
+        eng_mem_available(&freemem);
+        if (freemem < (int32) size)
         {
-          dprintf(("Eng", "Can't retrieve message - too bleedin' big\n"));
-          retrievestate.context = retrievefailure;
-          retrievestate.ret.rc = ELIB_EMALLOCFAILED;
-          return;
+          if (eng_clear_memory(size) == ENG_NOMEMORY)
+          {
+            dprintf(("Eng", "Can't retrieve message - no space left\n"));
+            retrievestate.context = retrievefailure;
+            retrievestate.ret.rc = ELIB_EMALLOCFAILED;
+            return;
+          }
         }
         msg->flags |= DOWNLOADING;
         SetFilename(msg->ID, false);
@@ -461,7 +571,8 @@ void DoRetrieve(void)
       dprintf(("Eng", "context = retrievefailure\n"));
       state &= ~RETRIEVEMSG;
       msg->flags &= ~(DOWNLOADED + DOWNLOADING);
-      StartTimeoutCount();
+      if ((!(state & DOWNLOADMSG)) && (!expungepending))
+        DeactivatePOP();
       switch (retrievestate.ret.rc)
       {
         case ELIB_EMALLOCFAILED :
@@ -498,8 +609,6 @@ void DoRetrieve(void)
 
       dprintf(("Eng", "context = readytoparse\n"));
       RemoveObj((MBoxOpCB**) &retrievestate.msgobj);
-      if (!(state & DOWNLOADMSG))
-        StartTimeoutCount();
       StartParseMessage();
 
       break;
@@ -579,16 +688,8 @@ void DoRetrieve(void)
       if (disconnectpending)
       {
         dprintf(("Eng", "A disconnect is pending\n"));
-        PreDisconnect(true);
+        DisconnectLine();
       }
-
-#ifdef gorilla
-      else
-      {
-        secondtimeround = false;
-        StartMessageDownload();
-      }
-#endif
 
       break;
   }
