@@ -9,6 +9,12 @@
 * Copyright (c) 1993-4 Citrix Systems, Inc.
 *
 *  $Log$
+*  Revision 1.2  1998/01/27 18:38:48  smiddle
+*  Lots more work on Thinwire, resulting in being able to (just) see the
+*  log on screen on the test server.
+*
+*  Version 0.03. Tagged as 'WinStation-0_03'
+*
 *  Revision 1.1  1998/01/19 19:12:48  smiddle
 *  Added loads of new files (the thinwire, modem, script and ne drivers).
 *  Discovered I was working around the non-ansi bitfield packing in totally
