@@ -91,7 +91,10 @@ resources_NCFresco_base:
 	${CP} NCFrescoRORes:fontmap/txt 	${RESRES}.fontmap/txt ${CPFLAGS}
 	${GETVERS} NCFrescoRORes:Welcome ${RESRES}.Welcome VersionNum
 	${TR} -i NCFrescoROTransRes:html.badurl    -o ${RESRES}.html.badurl    ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.favmove   -o ${RESRES}.html.favmove   ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.favrename -o ${RESRES}.html.favrename ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favs      -o ${RESRES}.html.favs      ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.favscatr  -o ${RESRES}.html.favscatr  ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favscats  -o ${RESRES}.html.favscats  ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favsd     -o ${RESRES}.html.favsd     ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.hista     -o ${RESRES}.html.hista     ${TRFLAGS}
@@ -138,7 +141,10 @@ install_NCFresco:
 	${CP} NCFrescoRORes:fontmap/txt  	${INSTALLDIR}.fontmap/txt ${CPFLAGS}
 	${GETVERS} NCFrescoRORes:Welcome ${INSTALLDIR}.Welcome VersionNum
 	${TR} -i NCFrescoROTransRes:html.badurl    -o ${INSTALLDIR}.html.badurl    ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.favmove   -o ${INSTALLDIR}.html.favmove   ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.favrename -o ${INSTALLDIR}.html.favrename ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favs      -o ${INSTALLDIR}.html.favs      ${TRFLAGS}
+	${TR} -i NCFrescoROTransRes:html.favscatr  -o ${INSTALLDIR}.html.favscatr  ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favscats  -o ${INSTALLDIR}.html.favscats  ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.favsd     -o ${INSTALLDIR}.html.favsd     ${TRFLAGS}
 	${TR} -i NCFrescoROTransRes:html.hista     -o ${INSTALLDIR}.html.hista     ${TRFLAGS}
@@ -169,6 +175,7 @@ install_WebFTP:
 export: export_${TARGET}
 
 export_NCFresco: export_NCFresco_${PHASE}
+        @echo ${COMPONENT}: export complete
 
 export_NCFresco_libs:
         @echo ${COMPONENT}: export complete(libs)
