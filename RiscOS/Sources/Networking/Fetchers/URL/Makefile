@@ -14,6 +14,7 @@
 COMPONENT  = URL
 ROM_MODULE = aof.${COMPONENT}
 RAM_MODULE = rm.${COMPONENT}
+DBG_MODULE = rm.${COMPONENT}-tr
 
 
 RESFSDIR   = Resources.URL.${COMPONENT}
@@ -39,7 +40,7 @@ CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
 CFLAGS	 = -c -depend !Depend ${INCLUDES} -zM -Wp -ffah -zps1 ${DFLAGS}
-DFLAGS	 = -D${SYSTEM} -DCOMPAT_INET4 -UTML -UTRACE
+DFLAGS	 = -D${SYSTEM} -DCOMPAT_INET4 -UTML -UDIRECTSWI
 ROMFLAGS = -DROM
 INCLUDES = -ITCPIPLibs:,C:
 
@@ -54,6 +55,7 @@ ABSSYM	  = RISC_OSLib:o.abssym
 TCPIPLIBS = TCPIPLibs:o.inetlibzm TCPIPLIBS:o.socklibzm
 
 OBJS =\
+ o.directswi\
  o.enumerate\
  o.generic\
  o.geturl\
@@ -70,6 +72,7 @@ OBJS =\
  o.URLHdr
 
 RAM_OBJS =\
+ o.directswi\
  o.enumerate\
  o.generic\
  o.geturl\
@@ -85,12 +88,35 @@ RAM_OBJS =\
  o.utils\
  o.URLHdr
 
+DBG_OBJS =\
+ o.directswi\
+ od.enumerate\
+ od.generic\
+ od.geturl\
+ od.moduleRAM\
+ od.parseurl\
+ od.protocol\
+ od.proxy\
+ od.readdata\
+ od.register\
+ od.status\
+ od.stop\
+ od.svcprint\
+ od.utils\
+ o.URLHdr
+
 MSGSF=o.msgs
+
+DBGFLAGS=-DTRACE -DUSE_SYSLOG
 
 #
 # Rule patterns
 #
+.SUFFIXES: .c .s .o .od .i .oi .inst
 .c.o:;	  ${CC} ${CFLAGS} ${ROMFLAGS} -o $@ $<
+.c.i:;    ${CC} ${CFLAGS} ${ROMFLAGS} -C -E $< >$@
+.s.o:;	  objasm -depend !Depend -throwback -o $@ $<
+.c.od:;	  ${CC} ${CFLAGS} ${ROMFLAGS} ${DBGFLAGS} -o $@ $<
 .cmhg.o:; ${CMHG} -o $@ $< -p -d $*.h
 
 URLHdr.h: URLHdr.o
@@ -102,10 +128,19 @@ protocol.o: URLHdr.h
 # Main rules:
 #
 #
-all: ${RAM_MODULE}
+all: ${RAM_MODULE} localdirs
 	@echo ${COMPONENT}: Module built (RAM)
 
-rom: ${ROM_MODULE}
+install: ${RAM_MODULE}
+	${MKDIR} ${INSTDIR}.310.Modules.Networking
+	${MKDIR} ${INSTDIR}.310.Modules.Networking.URL
+        ${CP} ${RAM_MODULE} ${INSTDIR}.310.Modules.Networking.URL.${COMPONENT}
+	@echo ${COMPONENT}: Module installed (Disc)
+
+ramtrace: ${DBG_MODULE}
+	@echo ${COMPONENT}: Module built (RAM - trace)
+
+rom: ${ROM_MODULE} localdirs
 	@echo ${COMPONENT}: Module built (ROM)
 
 install_rom: ${ROM_MODULE}
@@ -118,39 +153,57 @@ resources: Resources.${LOCALE}.Messages
 	${CP} Resources.${LOCALE}.* ${RESDIR}.${COMPONENT}.* ${CPFLAGS}
 	@echo ${COMPONENT}: resource files copied to Messages module
 
+localdirs:
+	${MKDIR} o
+	${MKDIR} od
+	${MKDIR} i
+	${MKDIR} oi
+	${MKDIR} inst
+	${MKDIR} linked
+	${MKDIR} map
+	${MKDIR} aof
+	${mkdir} rm
+
 clean:
-	${WIPE} o.* ${WFLAGS}
+	${WIPE} o ${WFLAGS}
+	${WIPE} od ${WFLAGS}
+	${WIPE} i ${WFLAGS}
+	${WIPE} oi ${WFLAGS}
+	${WIPE} inst ${WFLAGS}
+	${WIPE} linked ${WFLAGS}
+	${WIPE} map ${WFLAGS}
 	${WIPE} aof ${WFLAGS}
 	${WIPE} rm ${WFLAGS}
 	${WIPE} h.${COMPONENT}Hdr ${WFLAGS}
-	${WIPE} linked ${WFLAGS}
-	${WIPE} map ${WFLAGS}
 	@echo ${COMPONENT}: cleaned
 
 ${ROM_MODULE}: ${OBJS} ${ROMCSTUBS}
-	${MKDIR} aof
 	${LD} -o $@ -aof ${OBJS} ${TCPIPLIBS} ${ROMCSTUBS}
 
 # final link for ROM Image (using given base address)
 rom_link:
-	${MKDIR} linked
-	${MKDIR} map
 	${LD} -o linked.${COMPONENT} -bin -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM} \
 	      -map > map.${COMPONENT}
 	truncate map.${COMPONENT} linked.${COMPONENT}
 	${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
 	@echo ${COMPONENT}: rom_link complete
 
-${MSGSF}: @.Resources.${LOCALE}.Messages
-	resgen messages_file ${MSGSF} Resources.${LOCALE}.Messages ${RESFSDIR}.Messages
+${MSGSF}: @.Resources.${LOCALE}.Messages Resources.${LOCALE}.ResList 
+	resgen messages_file ${MSGSF} -via Resources.${LOCALE}.ResList
 
 ${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB}
-	${mkdir} rm
 	${LD} -o $@ -module ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB}
+	Access $@ RW/R
+
+${DBG_MODULE}: ${DBG_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB}
+	${LD} -o $@ -module ${DBG_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB} c:o.syslog
 	Access $@ RW/R
 
 o.moduleRAM: module.c
 	$(CC) ${CFLAGS} -o $@ module.c
+
+od.moduleRAM: module.c
+	$(CC) ${CFLAGS} ${DBGFLAGS} -o $@ module.c
 
 
 #---------------------------------------------------------------------------
