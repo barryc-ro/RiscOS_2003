@@ -17,6 +17,7 @@
 #			'clean' rule now cleans, and an 'o.dirs' rule is
 #			used to correctly recreate o, oz, etc. Some
 #			aesthetic formatting changes done in passing.
+# 29-Oct-98	ADH	-DFUNAI3_POLL removed from DFLAGS.
 
 # -----------------------------------------------------------------------------
 # Paths
@@ -65,7 +66,7 @@ LIBS     = ${CLIB} tbox:o.toolboxlib tbox:o.eventlib tbox:o.wimplib
 LIBSZ    = ${ROMCSTUBS} tbox:o.toolboxlib tbox:o.eventlibm tbox:o.wimplib
 LIBSZRAM = ${RLIB} ${CLIB} tbox:o.toolboxlib tbox:o.eventlibm tbox:o.wimplib
 
-DFLAGS   = -DFUNAI3 -DFUNAI3_POLL
+DFLAGS   = -DFUNAI3
 
 # -----------------------------------------------------------------------------
 # Program specific options
