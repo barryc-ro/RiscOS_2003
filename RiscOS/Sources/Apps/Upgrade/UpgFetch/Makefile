@@ -69,6 +69,7 @@ o.Global	\
 o.kill		\
 o.main		\
 o.ui		\
+o.URLUtils	\
 o.Utils
 
 #

@@ -31,6 +31,7 @@
 #include <tboxlibs/window.h>
 #include <tboxlibs/gadgets.h>
 
+#include "Dirs.h"
 #include "Errors.h"
 #include "FromROSLib.h"
 #include "Global.h"
@@ -1672,15 +1673,11 @@ void utils_get_unique_name(char * buffer, int buffer_size)
 
   memset(buffer, 0, buffer_size);
 
-  /* Where's Scrap? (This is used by utils_find_archive too...) */
-
-  #define Save_ScrapPath "<Wimp$ScrapDir>."
-
   /* Write '<Wimp$ScrapDir>.' (or whatever is defined above) to */
   /* the buffer - +9 is 8 letters for the leafname (see code    */
   /* below) plus 1 for a terminator.                            */
 
-  if (strlen(Save_ScrapPath) + 9 <= buffer_size) strcpy(buffer, Save_ScrapPath);
+  if (strlen(Utils_ScrapPath) + 9 <= buffer_size) strcpy(buffer, Utils_ScrapPath);
   else return;
 
   /* Append with a unique 8 letter leafname */
@@ -1689,7 +1686,7 @@ void utils_get_unique_name(char * buffer, int buffer_size)
 
   do
   {
-    sprintf(leaf, "UFT%05x", filecount++);
+    sprintf(leaf, Utils_UDPrefix "%05x", filecount++);
 
     /* Can we find the file? */
 
@@ -1721,110 +1718,316 @@ void utils_get_unique_name(char * buffer, int buffer_size)
 }
 
 /**************************************************************/
-/* utils_find_archive()                                       */
+/* utils_unlock_files()                                       */
 /*                                                            */
-/* Assuming the naming strategy of utils_get_unique_name,     */
-/* run through directories looking for UID files matching     */
-/* the given UID. UID files are written with utils_write_uid. */
+/* Go down the given path, setting permissions to "WR/" or,   */
+/* if 'lock' is true, "LR/".                                  */
 /*                                                            */
-/* Needs a buffer for pathname construction, just as in       */
-/* utils_get_unique_name. On exit, if an archive has been     */
-/* found, the buffer will hold the path of the archive.       */
+/* Parameters: Pathname of the top level directory to look    */
+/*             inside;                                        */
 /*                                                            */
-/* Parameters: Pointer to the buffer;                         */
+/*             NULL for outer level call, else a pathname for */
+/*             inner recursion during directory scanning;     */
 /*                                                            */
-/*             Size of the buffer;                            */
+/*             true to, in fact, lock, rather than unlock.    */
 /*                                                            */
-/*             Leaf name used for UID files including         */
-/*             preceeding ".";                                */
-/*                                                            */
-/*             UID to find.                                   */
-/*                                                            */
-/* Returns:    true if found, else false for not found or any */
-/*             internal error.                                */
+/* Returns:    EXIT_SUCCESS or EXIT_FAILURE as appropriate.   */
 /**************************************************************/
 
-bool utils_find_archive(char * buffer, int buffer_size, const char * uid_leaf,  unsigned int uid)
+int utils_unlock_files(const char * top_path, const char * current, bool lock)
 {
-  int            filecount = 0;
-  int            type;
-  unsigned int   len, ulen;
-  char         * leaf;
-  char         * uleaf;
+  /* Note the restrictions that using this static buffer places on the */
+  /* order we rely on calling ourselves recursively with respect to    */
+  /* directory contents.                                               */
 
-  if (!buffer || buffer_size < 2) return false;
+  _kernel_oserror * e;
+  static char       path[MAXNAMLEN * 2 + 1];
 
-  /* Clear the buffer first */
+  if (current == NULL) current = top_path;
 
-  memset(buffer, 0, buffer_size);
+  /* Set permissions */
 
-  /* We pick up Save_ScrapPath from utils_get_unique_name */
+  e = _swix(OS_File,
+            _INR(0,1) | _IN(5),
 
-  if (strlen(Save_ScrapPath) + 9 <= buffer_size) strcpy(buffer, Save_ScrapPath);
-  else return false;
+            4,              /* Set attributes */
+            current,
+            lock ? 11 : 3); /* Bits 0 and 1 set -> "WR/"; bit 3 set -> "LR/" */
 
-  /* Append with a unique 8 letter leafname */
+  if (e != NULL) return EXIT_FAILURE;
 
-  ulen  = strlen(uid_leaf);
-  len   = strlen(buffer);
-  leaf  = buffer + len;
-  uleaf = buffer + len + 8;
-
-  if (len + 8 + ulen >= buffer_size) return false; /* Make sure we can append the UID leaf later */
-
-  do
+  if (dirs_is_dir(current))
   {
-    sprintf(leaf, "UFT%05x", filecount++);
+    DIR           * dir;
+    struct dirent * entry;
+    unsigned int    len;
 
-    /* Can we find the file? */
+    /* This is a directory; open it and dive in */
 
-    if (
-         _swix(OS_File,
-               _INR(0,1) | _OUT(0),
+    dir = dirs_open_dir(current);
 
-               17, /* Read catalogue info for object */
-               buffer,
-
-               &type)
-
-         != NULL
-       )
-       return false;
-
-    if (type == 2) /* 2 -> Directory */
+    if (dir == NULL)
     {
-      FILE          * f;
-      unsigned int    read;
-      unsigned char   buf[4];
+      return EXIT_FAILURE;
+    }
 
-      /* Build the UID filename */
+    /* Write the basic path to the static buffer and remember */
+    /* the length of it.                                      */
 
-      strcpy(uleaf, uid_leaf);
+    StrNCpy0(path, current);
+    len = strlen(path);
 
-      /* Open it, read the UID and compare */
+    /* Go round all entries */
 
-      f = fopen(buffer, "rb");
+    while ((entry = dirs_read_dir(dir)) != NULL)
+    {
+      /* Will the full pathname of this item fit in the buffer? */
 
-      if (f != NULL)
+      if (len + 2 + strlen(entry->d_name) > sizeof(path))
       {
-        read = fread(buf, 1, 4, f);
-        fclose(f);
+        /* No - bail out */
 
-        if (read == 4 && ((buf[0]) | (buf[1] << 8) | (buf[2] << 16) | (buf[3]<<24)) == uid)
-        {
-          sprintf(leaf, "UFT%05x", filecount - 1);
-          return true;
-        }
+        return EXIT_FAILURE;
+      }
+      else
+      {
+        /* Yes - write the leaf in */
+
+        path[len] = '.';
+        strcpy(path + len + 1, entry->d_name);
+
+        if (utils_unlock_files(top_path, path, lock) == EXIT_FAILURE) return EXIT_FAILURE;
       }
     }
 
-    /* Keep going until we run out of files */
+    dirs_close_dir(dir);
   }
-  while (filecount <= MaximumUniqueNames);
 
-  /* Finished */
+  return EXIT_SUCCESS;
+}
 
-  return false;
+/**************************************************************/
+/* utils_count_contents()                                     */
+/*                                                            */
+/* Count the number of items in the given path excluding the  */
+/* named top-level item (be it file or directory), and return */
+/* the total object size in bytes (directories are considered */
+/* to be zero bytes long).                                    */
+/*                                                            */
+/* Parameters: Pathname of the top level directory to look    */
+/*             inside;                                        */
+/*                                                            */
+/*             NULL for outer level call, else a pathname for */
+/*             inner recursion during directory scanning;     */
+/*                                                            */
+/*             Pointer to an unsigned int to take the number  */
+/*             of items;                                      */
+/*                                                            */
+/*             Pointer to an unsigned int to take the total   */
+/*             size of the file items.                        */
+/*                                                            */
+/* Returns:    EXIT_SUCCESS or EXIT_FAILURE as appropriate.   */
+/*                                                            */
+/* Assumes:    Either of the integer pointers may be NULL if  */
+/*             you aren't interested in that quantity.        */
+/**************************************************************/
+
+int utils_count_contents(const char * top_path, const char * current, unsigned int * items, unsigned int * size)
+{
+  /* Note the restrictions that using this static buffer places on the */
+  /* order we rely on calling ourselves recursively with respect to    */
+  /* directory contents.                                               */
+
+  _kernel_oserror * e;
+  static char       path[MAXNAMLEN * 2 + 1];
+  unsigned int      local_items;
+  unsigned int      local_size;
+  unsigned int      item_size, item_type;
+
+  if (current == NULL) current = top_path;
+  if (items   == NULL) items   = &local_items;
+  if (size    == NULL) size    = &local_size;
+
+  if (current == top_path)
+  {
+    dprintf(("Diag", "utils_count_contents: Called with '%s'\n", top_path));
+    *items = *size = 0;
+  }
+  else
+  {
+    (*items)++;
+
+    e = _swix(OS_File,
+              _INR(0,1) | _OUT(0) | _OUT(4),
+
+              17,          /* Read catalogue info */
+              current,
+
+              &item_type,  /* 0: Not found, 1: File, 2: Dir, 3: Image dir */
+              &item_size);
+
+    if (e != NULL || item_type == 0) return EXIT_FAILURE;
+    else if (item_type != 2) (*size) += item_size;
+  }
+
+  if (dirs_is_dir(current))
+  {
+    DIR           * dir;
+    struct dirent * entry;
+    unsigned int    len;
+
+    /* This is a directory; open it and dive in */
+
+    dir = dirs_open_dir(current);
+
+    if (dir == NULL)
+    {
+      return EXIT_FAILURE;
+    }
+
+    /* Write the basic path to the static buffer and remember */
+    /* the length of it.                                      */
+
+    StrNCpy0(path, current);
+    len = strlen(path);
+
+    /* Go round all entries */
+
+    while ((entry = dirs_read_dir(dir)) != NULL)
+    {
+      /* Will the full pathname of this item fit in the buffer? */
+
+      if (len + 2 + strlen(entry->d_name) > sizeof(path))
+      {
+        /* No - bail out */
+
+        return EXIT_FAILURE;
+      }
+      else
+      {
+        /* Yes - write the leafname in */
+
+        path[len] = '.';
+        strcpy(path + len + 1, entry->d_name);
+
+        if (
+             utils_count_contents(top_path,
+                                  path,
+                                  items,
+                                  size)
+
+             == EXIT_FAILURE
+           )
+           return EXIT_FAILURE;
+      }
+    }
+
+    dirs_close_dir(dir);
+  }
+
+  return EXIT_SUCCESS;
+}
+
+/**************************************************************/
+/* utils_read_word()                                          */
+/*                                                            */
+/* Read a 32-bit word from a file, ordered LSB to MSB.        */
+/*                                                            */
+/* Parameters: RISC OS file handle;                           */
+/*                                                            */
+/*             Pointer to unsigned int updated with the value */
+/*             read from the file if there is no returned     */
+/*             error (else untouched).                        */
+/**************************************************************/
+
+_kernel_oserror * utils_read_word(unsigned int h, unsigned int * word)
+{
+  unsigned int      v, b;
+  _kernel_oserror * e = _swix(OS_BGet,
+                              _IN(1) | _OUT(0),
+
+                              h,
+
+                              &v);
+
+  if (e == NULL)
+  {
+    e = _swix(OS_BGet,
+              _IN(1) | _OUT(0),
+
+              h,
+
+              &b);
+  }
+
+  if (e == NULL)
+  {
+    v |= (b << 8);
+    e = _swix(OS_BGet,
+              _IN(1) | _OUT(0),
+
+              h,
+
+              &b);
+  }
+
+  if (e == NULL)
+  {
+    v |= (b << 16);
+    e = _swix(OS_BGet,
+              _IN(1) | _OUT(0),
+
+              h,
+
+              &b);
+  }
+
+  if (e == NULL)
+  {
+    v |= (b << 24);
+    if (word != NULL) *word = v;
+  }
+
+  return e;
+}
+
+/**************************************************************/
+/* utils_write_word()                                         */
+/*                                                            */
+/* Write a 32-bit word to a file, LSB to MSB.                 */
+/*                                                            */
+/* Parameters: RISC OS file handle;                           */
+/*                                                            */
+/*             Word to write.                                 */
+/**************************************************************/
+
+_kernel_oserror * utils_write_word(unsigned int h, unsigned int word)
+{
+  _kernel_oserror * e = _swix(OS_BPut,
+                              _INR(0,1),
+
+                              (word & 0xff),
+                              h);
+
+  if (e == NULL) e = _swix(OS_BPut,
+                           _INR(0,1),
+
+                           (word & 0xff00) >> 8,
+                           h);
+
+  if (e == NULL) e = _swix(OS_BPut,
+                           _INR(0,1),
+
+                           (word & 0xff0000) >> 16,
+                           h);
+
+  if (e == NULL) e = _swix(OS_BPut,
+                           _INR(0,1),
+
+                           (word & 0xff000000) >> 24,
+                           h);
+
+  return e;
 }
 
 /**************************************************************/
@@ -1837,10 +2040,15 @@ bool utils_find_archive(char * buffer, int buffer_size, const char * uid_leaf,  
 /*             true to write a 'real' file, false to write a  */
 /*             dummy file;                                    */
 /*                                                            */
-/*             UID, used if the above is true.                */
+/*             UID, used if the above is true;                */
+/*                                                            */
+/*             Number of items including directories in the   */
+/*             data the UID relates to;                       */
+/*                                                            */
+/*             Total data size excluding directories.         */
 /**************************************************************/
 
-_kernel_oserror * utils_write_uid(const char * name, bool real, unsigned int uid)
+_kernel_oserror * utils_write_uid(const char * name, bool real, unsigned int uid, unsigned int items, unsigned int size)
 {
   unsigned int      h;
   _kernel_oserror * e = _swix(OS_Find,
@@ -1859,29 +2067,9 @@ _kernel_oserror * utils_write_uid(const char * name, bool real, unsigned int uid
 
   if (real)
   {
-    e = _swix(OS_BPut,
-              _INR(0,1),
-
-              (uid & 0xff),
-              h);
-
-    if (e == NULL) e = _swix(OS_BPut,
-                             _INR(0,1),
-
-                             (uid & 0xff00) >> 8,
-                             h);
-
-    if (e == NULL) e = _swix(OS_BPut,
-                             _INR(0,1),
-
-                             (uid & 0xff0000) >> 16,
-                             h);
-
-    if (e == NULL) e = _swix(OS_BPut,
-                             _INR(0,1),
-
-                             (uid & 0xff000000) >> 24,
-                             h);
+    e                = utils_write_word(h, uid);
+    if (e == NULL) e = utils_write_word(h, items);
+    if (e == NULL) e = utils_write_word(h, size);
   }
   else
   {
