@@ -112,10 +112,3 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 #       ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-o.veneers: s.veneers
-o.errors: s.errors
-o.main:	c.main
-o.main:	C:h.kernel
-o.main:	C:h.swis
-o.main:	tbox:h.wimp
-o.main:	tbox:h.wimplib

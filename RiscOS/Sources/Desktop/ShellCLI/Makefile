@@ -61,19 +61,3 @@ ${EXP_HDR}.Shell: hdr.Shell
         ${CP} hdr.Shell $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-rm.ShellCLI: hdr:ListOpts
-rm.ShellCLI: hdr:Macros
-rm.ShellCLI: hdr:System
-rm.ShellCLI: Hdr:SWIs
-rm.ShellCLI: Hdr:CPU.Generic26
-rm.ShellCLI: Hdr:IO.GenericIO
-rm.ShellCLI: Hdr:RISCOS
-rm.ShellCLI: hdr:ModHand
-rm.ShellCLI: hdr:Wimp
-rm.ShellCLI: hdr:EnvNumbers
-rm.ShellCLI: hdr:Services
-rm.ShellCLI: hdr:FSNumbers
-rm.ShellCLI: hdr:NewErrors
-rm.ShellCLI: hdr:MsgTrans
-rm.ShellCLI: hdr:Proc
-rm.ShellCLI: Version

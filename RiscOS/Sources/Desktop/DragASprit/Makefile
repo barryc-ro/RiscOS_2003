@@ -56,26 +56,3 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-rm.DragASprit: Hdr:ListOpts
-rm.DragASprit: Hdr:Macros
-rm.DragASprit: Hdr:System
-rm.DragASprit: Hdr:SWIs
-rm.DragASprit: Hdr:CPU.Generic26
-rm.DragASprit: Hdr:IO.GenericIO
-rm.DragASprit: Hdr:RISCOS
-rm.DragASprit: Hdr:ModHand
-rm.DragASprit: Hdr:Services
-rm.DragASprit: Hdr:Proc
-rm.DragASprit: Hdr:Sprite
-rm.DragASprit: Hdr:WimpSpace
-rm.DragASprit: Hdr:Wimp
-rm.DragASprit: Hdr:VduExt
-rm.DragASprit: Hdr:FSNumbers
-rm.DragASprit: Hdr:NewErrors
-rm.DragASprit: Hdr:DragASprit
-rm.DragASprit: Hdr:MsgTrans
-rm.DragASprit: Hdr:ColourTran
-rm.DragASprit: s.DebugOpts
-rm.DragASprit: s.Support
-rm.DragASprit: s.StartUp
-rm.DragASprit: s.Drag

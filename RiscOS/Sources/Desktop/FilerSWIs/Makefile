@@ -47,20 +47,3 @@ ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}
 
 # Dynamic dependencies:
-rm.FilerSWIs: Hdr:ListOpts
-rm.FilerSWIs: Hdr:Macros
-rm.FilerSWIs: Hdr:System
-rm.FilerSWIs: Hdr:SWIs
-rm.FilerSWIs: Hdr:CPU.Generic26
-rm.FilerSWIs: Hdr:IO.GenericIO
-rm.FilerSWIs: Hdr:RISCOS
-rm.FilerSWIs: Hdr:FSNumbers
-rm.FilerSWIs: Hdr:NewErrors
-rm.FilerSWIs: Hdr:ModHand
-rm.FilerSWIs: Hdr:Wimp
-rm.FilerSWIs: Hdr:WimpSpace
-rm.FilerSWIs: Hdr:Messages
-rm.FilerSWIs: Hdr:Proc
-rm.FilerSWIs: Hdr:FilerAct
-rm.FilerSWIs: Hdr:MsgTrans
-rm.FilerSWIs: Version
