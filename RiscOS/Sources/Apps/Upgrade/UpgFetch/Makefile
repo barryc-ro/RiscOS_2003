@@ -95,14 +95,13 @@ resources: ${TARGET}
         @echo ${COMPONENT}: all complete
         
 
-install:   ${TARGET}
+install: ${TARGET}
 	${MKDIR} ${APP}
         ${CP} ${TARGET} ${APP}.${COMPONENT} ${CPFLAGS}
-        ${CP} Resources.* ${APP}.* ${CPFLAGS}
+        ${CP} Resources.$(USERIF).$(LOCALE).* ${APP}.* ${CPFLAGS}
         @echo ${COMPONENT}: all complete
         
         
-
 clean:
         ${WIPE} o.*        ${WFLAGS}
         ${WIPE} aof.*      ${WFLAGS}
