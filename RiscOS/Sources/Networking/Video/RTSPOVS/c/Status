@@ -481,9 +481,21 @@ static bool status_proceed_sending(session * s, bool * repeat)
 
   /* We're sending a command out */
 
-  dprintf(("", "status_proceed_sending: Sending (%d of %d done so far)...\n", s->reqptr, s->reqlen));
+  dprintf(("", "status_proceed_sending: Sending (%d of %d done so far) to socket %d...\n", s->reqptr, s->reqlen, s->sd));
 
   /* printf("\nSend:\n---\n%s\n--- for %p\n",s->full_request,s); */
+
+// Hmm - should be doing a GETSO call before socketread/socketwrite, otherwise
+//       you can end up with a less meaningful error.
+
+//
+//{
+//int so;
+//sent=sizeof(int);
+//dprintf(("", "GETSOcall: %d\n", getsockopt(s->sd, SOL_SOCKET, SO_ERROR, &so, &sent)));
+//dprintf(("", "GETSO: %d\n",so));
+//}
+//
 
   sent = socketwrite(s->sd,
                      s->full_request + s->reqptr,
@@ -641,97 +653,100 @@ static bool status_proceed_receiving(session * s, bool * repeat)
 
       s->last = now;
 
-      /* Force a terminator at the end - we're expecting no binary data so */
-      /* this ensures correct termination and makes life easier later      */
-
-      s->data[s->data_len] = '\0'; /* Correct as data_len is always 1 byte behind actual allocation */
-      dprintf(("", "status_proceed_receving: Receive complete with %d bytes -\n'%s'\n", s->data_len, s->data));
-
-      /* printf("\nReceive:\n===\n%s\n=== for %p\n",s->data,s); */
-
-      /* We've received the response now */
-
-      s->reported_state |= VC_Status_ResponseReceived;
-
-      /* Parse the response and move to the appropriate state */
-
-      consumed = headers_parse_response(s);
-
-      if (consumed < 0)
+      if (s->data_len != 0)
       {
-        s->state = protostate_ERROR_MEM;
-      }
-      else
-      {
-        rtsp_header * h = headers_find_header(s->headers,
-                                              Headers_HeaderName_Connection);
+        /* Force a terminator at the end - we're expecting no binary data so */
+        /* this ensures correct termination and makes life easier later      */
 
+        s->data[s->data_len] = '\0'; /* Correct as data_len is always 1 byte behind actual allocation */
+        dprintf(("", "status_proceed_receving: Receive complete with %d bytes -\n'%s'\n", s->data_len, s->data));
 
-        s->reported_state |= VC_Status_MoreInformationAvailable;
+        /* printf("\nReceive:\n===\n%s\n=== for %p\n",s->data,s); */
 
-        /* Did we get Connection: close? */
+        /* We've received the response now */
 
-        if (h != NULL && !Strcmp_ci(h->value, Headers_HeaderValue_Connection))
+        s->reported_state |= VC_Status_ResponseReceived;
+
+        /* Parse the response and move to the appropriate state */
+
+        consumed = headers_parse_response(s);
+
+        if (consumed < 0)
         {
-          /* Yes. Close our socket */
+          s->state = protostate_ERROR_MEM;
+        }
+        else
+        {
+          s->reported_state |= VC_Status_MoreInformationAvailable;
 
-          dprintf(("", "status_proceed_receving: Connection: close detected, closing this end\n"));
+          /* We always close the socket */
 
           close_socket(&s->sd);
-        }
 
-        /* If we've not got a server session, try to find one from this response. */
-        /* Don't bother with this if we're a child though because if we need a    */
-        /* session we'll be using the parent's.                                   */
+          /* If we've not got a server session, try to find one from this response. */
+          /* Don't bother with this if we're a child though because if we need a    */
+          /* session we'll be using the parent's.                                   */
 
-        if (s->server_session == NULL && s->parent == NULL)
-        {
-          char * store;
-
-          h = headers_find_header(s->headers,
-                                  Headers_HeaderName_Session);
-
-          if (h != NULL)
+          if (s->server_session == NULL && s->parent == NULL)
           {
-            s->server_timeout = Session_Timeout_Default;
+            rtsp_header * h;
+            char        * store;
 
-            /* Find the session ID. It'll be terminated by ';' or end of string */
+            h = headers_find_header(s->headers,
+                                    Headers_HeaderName_Session);
 
-            store = strchr(h->value, ';');
-            if (store != NULL) *store = '\0';
-
-            s->server_session = Strdup(h->value);
-
-            /* Find "timeout" then "=" */
-
-            if (store != NULL)
+            if (h != NULL)
             {
-              *store = ';';
+              s->server_timeout = Session_Timeout_Default;
 
-              store = strstr(h->value, Headers_HeaderValue_Session);
+              /* Find the session ID. It'll be terminated by ';' or end of string */
+
+              store = strchr(h->value, ';');
+              if (store != NULL) *store = '\0';
+
+              s->server_session = Strdup(h->value);
+
+              /* Find "timeout" then "=" */
 
               if (store != NULL)
               {
-                while (*store != '\0' && *store != '=') store++;
-                if (*store == '=') store++;
-                while (*store != '\0' && *store <= ' ') store++;
+                *store = ';';
 
-                s->server_timeout = atoi(store);
-                if (s->server_timeout == 0) s->server_timeout = Session_Timeout_Default;
+                store = strstr(h->value, Headers_HeaderValue_Session);
+
+                if (store != NULL)
+                {
+                  while (*store != '\0' && *store != '=') store++;
+                  if (*store == '=') store++;
+                  while (*store != '\0' && *store <= ' ') store++;
+
+                  s->server_timeout = atoi(store);
+                  if (s->server_timeout == 0) s->server_timeout = Session_Timeout_Default;
+                }
               }
+
+              /* Ensure the timeout is in centiseconds, but keep half the value */
+              /* to avoid having to say "server_timeout / 2" for the inter-ping */
+              /* delay elsewhere.                                               */
+
+              s->server_timeout *= 50;
+
+              dprintf(("", "status_proceed_receving: New session '%s', timeout %d\n", s->server_session ? s->server_session : "<out of memory>", s->server_timeout));
             }
-
-            /* Ensure the timeout is in centiseconds, but keep half the value */
-            /* to avoid having to say "server_timeout / 2" for the inter-ping */
-            /* delay elsewhere.                                               */
-
-            s->server_timeout *= 50;
-
-            dprintf(("", "status_proceed_receving: New session '%s', timeout %d\n", s->server_session ? s->server_session : "<out of memory>", s->server_timeout));
           }
         }
 
         s->state = protostate_COMPLETED;
+      }
+      else /* 'if (s->data_len > 0)' */
+      {
+        /* We've received an empty respose */
+
+        s->reported_state |= VC_Status_ResponseReceived;
+
+        close_socket(&s->sd);
+
+        s->state = protostate_ERROR_READ;
       }
 
       *repeat = true;
@@ -814,6 +829,8 @@ static bool status_proceed_pumping(session * s, bool * repeat)
 static bool status_proceed_completed(session * s, bool * repeat)
 {
   dprintf(("", "status_proceed_completed: Completed.\n"));
+
+  s->state = protostate_INITIAL;
 
   if (s->destruct)
   {
