@@ -53,6 +53,7 @@ LIBS = ${NET5LIBS} ${C++LIB} C:o.Stubs
 
 COMPONENT = Calibrate
 TARGET    = Calibrate
+APP       = Calibrate
 
 OBJS = o.main o.on_screen o.graphics
 
@@ -62,6 +63,7 @@ OBJS = o.main o.on_screen o.graphics
 # Export Paths for Messages module
 #
 
+RESAPP = <resource$dir>.Apps.${APP}
 
 
 # -----------------------------------------------------------------------------
@@ -90,6 +92,10 @@ all: ${TARGET}
 clean:
 	${RM} ${TARGET}
 	${WIPE} o.* ${WFLAGS}
+
+resources: ${TARGET}
+        ${CP} ${TARGET} ${RESAPP} ${CPFLAGS}
+        @echo ${COMPONENT}: resources installed
 
 
 ${TARGET}: ${OBJS} ${LIBS}
