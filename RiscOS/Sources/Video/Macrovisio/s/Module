@@ -33,11 +33,16 @@
 ;                                Fixed to build non STB3 variants...
 ; 02-Feb-99  BJGA 0.21          Sets modulator & boost bits in TDA-1 according to PAL/NTSC and CTRL0 bits from IOMD_CLINES.
 ;                                Handles Service_Standby (switches in and out of Standby video path).
-; 03-Mar-1999 NDT 0.22          Reworked standby code to use the parameter and the TVOn system variable instead of bits in
+; 03-Mar-99  NDT  0.22          Reworked standby code to use the parameter and the TVOn system variable instead of bits in
 ;                                IOMD_CLINES.
-; 10-Mar-1999 NDT 0.23          Added adjustment to RCV2E when in normal mode - RCV2N.
-; 10-Mar-1999 NDT 0.24          Palette set to black in macrovision mode.  Pointer colours now initialised.
-; 22-Mar-1999 NDT 0.25          We can now configure burst inversion (BINV) using a system variable.
+; 10-Mar-99  NDT  0.23          Added adjustment to RCV2E when in normal mode - RCV2N.
+; 10-Mar-99  NDT  0.24          Palette set to black in macrovision mode.  Pointer colours now initialised.
+; 22-Mar-99  NDT  0.25          We can now configure burst inversion (BINV) using a system variable.
+; 07-Apr-99  BJGA 0.25-4.5.2.1  Added NTSC line 21 (closed captions) support.
+; 14-Apr-99  TMD  0.25-4.5.2.2  Added code for fast switching in/out of Macrovision video path, for closed-caption support.
+; 19-Apr-99  BJGA 0.25-4.5.2.3  Now builds cleanly when Machine=Peregrine (using Hdr:MPEG2Card instead of Hdr:MPEG2bCard).
+; 20-Apr-99  BJGA 0.25-4.5.2.4  Now ensures that control codes are always sent in pairs on odd fields
+;
 
 	LEADR	Module_LoadAddr
 
@@ -76,18 +81,39 @@ $label
 	MEND
  ]
 
+ [ Captions
+; Structure of a caption / extended data FIFO
+FIFOlength      *       55              ; FIFO length, in bytes  (4+4+1+55=64)
+                                        ; The FIFO can hold 0 to (FIFOlength-1) bytes at a time, so FIFOlength
+                                        ; must be odd to ensure complete byte pairs are always entered
+                ^       0
+FIFO_ReadPtr    #       4               ; index into FIFO to read from
+FIFO_WritePtr   #       4               ; index into FIFO to write to
+                #       1               ; unused
+FIFO_Buffer     #       FIFOlength
+FIFO_Size       #       0
+
+                GBLL    BigFIFOs        ; set true if FIFO_Size > 1024 bytes
+BigFIFOs        SETL    {FALSE}
+ ]
+
 		^	0, wp
 
 IICDataBlockPtr #	4		; debugging to store address of last compacted data block used
 PaletteVClaimed	#	4		; 0 => PaletteV not claimed, 1 => PaletteV claimed
+ [ Captions
+EventVState	#	4		; vsync event handler state (0 => EventV not claimed)
+ |
 EventVClaimed	#	4		; 0 => EventV not claimed, 1 => EventV claimed
+ ]
 PaletteVCallbackRequested #	4	; non-zero => we have an outstanding callback to set the default colours
 EventVCallbackRequested #	4	; non-zero => we have an outstanding callback to vary the AGC level
 
 VSyncCount	#	4		; number of vsyncs till next modulation
 AGCModulationPosition # 4		; position in table for next thing to do
 
-MacroType	#	4		; 0 for normal video path, 1 for macrovision no anti-taping, 2 for anti-taping
+MacroType	#	4		; 0 for normal video path, 1 for macrovision no anti-taping,
+					; 2 for anti-taping, 3 for fast-switched CC mode (like 1 but no PaletteV intervention)
 TVStandard	#	4		; 0 for PAL, 1 for NTSC
 
  [ ProvideSWI
@@ -105,6 +131,33 @@ SAA7183IICMap	#	128		; copy of the 128 sub-address registers in the SAA7183
  [ international
 MessageFile_Block #	16
 MessageFile_Open  #	4
+ ]
+
+ [ Captions
+RCV2IICBlk	#	4
+ControlCode1    #       1
+ControlCode2    #       1
+ControlCodeState #      1               ; 0 = normal
+                                        ; 1 = received first byte of a control code
+                                        ; 2 = received second byte of a control code
+                                        ; 3 = received matching repeated first byte
+        AlignSpace
+
+IICBusyFlag     #       4
+
+        MACRO
+$label  MyIIC_Control $con
+$label
+        MOV$con lr, #1
+        STR$con lr, IICBusyFlag
+        SWI$con XIIC_Control
+        MOV$con lr, #0
+        STR$con lr, IICBusyFlag
+        MEND
+
+                #       FIFO_Size - ((:INDEX:@) :AND: (FIFO_Size-1))
+CaptionFIFO     #       FIFO_Size
+ExtDataFIFO     #       FIFO_Size
  ]
 
 Module_WorkspaceSize * :INDEX: @
@@ -146,6 +199,16 @@ AGCBitShift_AGCFB	*	9
 AGCBitMask_AGCFB	*	1 :SHL: AGCBitShift_AGCFB
 AGCBitShift_Fields	*	16
 
+ [ Captions
+; State flags for vsync event handler
+
+EventVState_AntiTaping  *       1 :SHL: 0    ; anti-taping mode is engaged
+EventVState_Captioning  *       1 :SHL: 1    ; line 21 encoding is enabled
+EventVState_Modulate    *       1 :SHL: 2    ; next callback should modulate AGC registers
+EventVState_CaptionWaiting *    1 :SHL: 3    ; next callback should transmit caption data if possible
+EventVState_ExtDataWaiting *    1 :SHL: 4    ; next callback should transmit extended data if possible
+ ]
+
 ; **************** Module code starts here **********************
 
 Module_BaseAddr
@@ -185,6 +248,10 @@ Mod_HC_Table	*	Module_BaseAddr		; no star commands
 Mod_SWITable
 	=	"Macrovision", 0
 	=	"SetState", 0
+ [ Captions
+	=       "LoadCaptions", 0
+	=	"CaptionControl", 0
+ ]
 	=	0
 	ALIGN
  ]
@@ -213,7 +280,11 @@ Mod_Init Entry
 
         MOV     r0, #0
         STR     r0, PaletteVClaimed
+      [ Captions
+	STR	r0, EventVState
+      |
 	STR	r0, EventVClaimed
+      ]
 	STR	r0, PaletteVCallbackRequested
 	STR	r0, EventVCallbackRequested
 	STRB	r0, SAA7183IICData	; zero sub-address
@@ -225,6 +296,31 @@ Mod_Init Entry
 	ADR	r0, RMEnsureInterlaceString
 	SWI	XOS_CLI
 	EXIT	VS
+ ]
+
+ [ Captions
+        STR     r0, IICBusyFlag
+        STRB    r0, ControlCodeState
+
+	MOV	r0, #&70	; IIC offset of RCV2 registers in 7183
+	STRB	r0, RCV2IICBlk + 0
+
+        MOV     r0, #FIFO_Buffer
+      [ BigFIFOs
+        ADRL    r14, CaptionFIFO + FIFO_ReadPtr
+        STR     r0, [r14]
+        ADRL    r14, CaptionFIFO + FIFO_WritePtr
+        STR     r0, [r14]
+        ADRL    r14, ExtDataFIFO + FIFO_ReadPtr
+        STR     r0, [r14]
+        ADRL    r14, ExtDataFIFO + FIFO_WritePtr
+        STR     r0, [r14]
+      |
+        STR     r0, CaptionFIFO + FIFO_ReadPtr
+        STR     r0, CaptionFIFO + FIFO_WritePtr
+        STR     r0, ExtDataFIFO + FIFO_ReadPtr
+        STR     r0, ExtDataFIFO + FIFO_WritePtr
+      ]
  ]
 
  [ ReadVarsForRCV2Timing
@@ -269,6 +365,27 @@ Mod_Init Entry
 	SWI	XOS_SetVarVal
 	ADD	sp, sp, #4		; junk stack frame
 20
+   [ :DEF: RCV2SN
+	ADR	r0, MacroVarRCV2SNName
+	MOV	r1, #0			; no buffer
+	MOV	r2, #-1			; -ve length checking for existence of variable
+	MOV	r3, #0			; context pointer
+	MOV	r4, #0			; not expanded
+	SWI	XOS_ReadVarVal
+	TEQ	r2, #0
+	BMI	%FT30			; [variable exists]
+
+	ADR	r0, MacroVarRCV2SNName
+	LDR	r1, =RCV2SN
+	Push	"r1"
+	MOV	r1, sp
+	MOV	r2, #4			; length of value
+	MOV	r3, #0			; context pointer
+	MOV	r4, #1			; 4-byte integer
+	SWI	XOS_SetVarVal
+	ADD	sp, sp, #4		; junk stack frame
+30
+   ]
    [ :DEF: RCV2EN
 	ADR	r0, MacroVarRCV2ENName
 	MOV	r1, #0			; no buffer
@@ -277,7 +394,7 @@ Mod_Init Entry
 	MOV	r4, #0			; not expanded
 	SWI	XOS_ReadVarVal
 	TEQ	r2, #0
-	BMI	%FT30			; [variable exists]
+	BMI	%FT40			; [variable exists]
 
 	ADR	r0, MacroVarRCV2ENName
 	LDR	r1, =RCV2EN
@@ -288,7 +405,7 @@ Mod_Init Entry
 	MOV	r4, #1			; 4-byte integer
 	SWI	XOS_SetVarVal
 	ADD	sp, sp, #4		; junk stack frame
-30
+40
    ]
  ]
 
@@ -326,13 +443,101 @@ Mod_Init Entry
  [ ReadVarsForRCV2Timing
 MacroVarRCV2SName
 	=	"Macrovision$$RCV2S", 0
+	ALIGN
 MacroVarRCV2EName
 	=	"Macrovision$$RCV2E", 0
+	ALIGN
+   [ :DEF: RCV2SN
+MacroVarRCV2SNName
+	=	"Macrovision$$RCV2SN", 0
+	ALIGN
+   ]
    [ :DEF: RCV2EN
 MacroVarRCV2ENName
 	=	"Macrovision$$RCV2EN", 0
-   ]
 	ALIGN
+   ]
+
+; Setup IIC map values for RCV2S, RCV2E from Macrovision variables
+; in:	-
+; out:	r0 = RCV2S, r1 = RCV2E, possibly adjusted by RCV2SN/RCV2EN
+;       r2-r4 corrupted
+
+ProcessRCV2Vars Entry "r0,r1"
+	ADR	r0, MacroVarRCV2SName
+	MOV	r1, sp
+	MOV	r2, #4
+	MOV	r3, #0
+	MOV	r4, #0
+	SWI	XOS_ReadVarVal
+	LDRVS	r0, =RCV2S
+	STRVS	r0, [sp]
+
+	ADR	r0, MacroVarRCV2EName
+	ADD	r1, sp, #4
+	MOV	r2, #4
+	MOV	r3, #0
+	MOV	r4, #0
+	SWI	XOS_ReadVarVal
+	LDRVS	r0, =RCV2E
+	STRVS	r0, [sp, #4]
+
+   [ :DEF: RCV2SN
+	LDR	r2, MacroType		; Reload macrovision type
+	CMP	r2, #0			; Check for normal mode.
+	BNE	%FT10			; If it's not normal don't adjust
+
+	SUB	sp, sp, #4		; Save space on the stack
+
+	ADR	r0, MacroVarRCV2SNName
+	MOV	r1, sp
+	MOV	r2, #4
+	MOV	r3, #0
+	MOV	r4, #0
+	SWI	XOS_ReadVarVal
+	LDRVC	r2, [sp]		; Get the variable value
+	LDRVS	r2, =RCV2SN		; Get the default on error
+
+	ADD	sp, sp, #4		; Junk the space on the stack
+	LDR	r0, [sp, #0]		; add r2 value onto stacked r0 value
+	ADD	r0, r0, r2
+	STR	r0, [sp, #0]
+10
+   ]
+   [ :DEF: RCV2EN
+	LDR	r2, MacroType		; Reload macrovision type
+	CMP	r2, #0			; Check for normal mode.
+	BNE	%FT20			; If it's not normal don't adjust
+
+	SUB	sp, sp, #4		; Save space on the stack
+
+	ADR	r0, MacroVarRCV2ENName
+	MOV	r1, sp
+	MOV	r2, #4
+	MOV	r3, #0
+	MOV	r4, #0
+	SWI	XOS_ReadVarVal
+	LDRVC	r2, [sp]		; Get the variable value
+	LDRVS	r2, =RCV2EN		; Get the default on error
+
+	ADD	sp, sp, #4		; Junk the space on the stack
+	LDR	r1, [sp, #4]		; add r2 value onto stacked r1 value
+	ADD	r1, r1, r2
+	STR	r1, [sp, #4]
+20
+   ]
+	LDMIA	sp, {r0, r1}		; get values, but leave on stack for exit
+	AND	r3, r0, #&FF		; bits 0..7 of RCV2S
+	STRB	r3, SAA7183IICMap + &70
+	AND	r3, r1, #&FF
+	STRB	r3, SAA7183IICMap + &71
+	AND	r3, r1, #&700
+	MOV	r3, r3, LSR #4
+	AND	r0, r0, #&700
+	ORR	r3, r3, r0, LSR #8
+	STRB	r3, SAA7183IICMap + &72
+	EXIT
+
  ]
 
  [ BINV_Var
@@ -480,7 +685,9 @@ Mod_Service ROUT
 
 svc_ModeChanging Entry "r0,r1"
         BL      ReleasePaletteV
+      [ :LNOT: Captions
 	BL	ReleaseEventV
+      ]
 	BL	RemoveCallbacks
 
  [ ProvideSWI
@@ -569,7 +776,51 @@ ReleasePaletteV Entry "r0-r2"
         STR     r0, PaletteVClaimed
         EXITS
 
+      [ Captions
+; ClaimReleaseEventV - claims or releases EventV as appropriate to the new MacroType and TVStandard
+;
+; On entry:
+;   R0 = new MacroType
+;   R1 = new TVStandard
+
+ClaimReleaseEventV Entry "r0-r2"
+        ; Build new EventVState word
+        MOV     r2, #0
+        TEQ     r0, #2                          ; if anti-taping and either video standard,
+        ORREQ   r2, r2, #EventVState_AntiTaping ; then set anti-taping bit
+        TEQ     r0, #1
+        TEQNE   r0, #2                          ; if any of the macrovision video path modes
+	TEQNE	r0, #3
+        TEQEQ   r1, #1                          ; and NTSC
+        ORREQ   r2, r2, #EventVState_Captioning ; then set captioning bit
+
+        LDR     r0, EventVState                 ; get the old value
+        STR     r2, EventVState                 ; store the new value
+
+        TST     r2, #EventVState_AntiTaping :OR: EventVState_Captioning
+        BNE     %FT50
+
+	; Both states are now off - if either one of them used to be on, release EventV
+	TST     r0, #EventVState_AntiTaping :OR: EventVState_Captioning
+	BLNE    ReleaseEventV
+	EXITS
+
+50      ; Initialise anti-taping if it's being enabled
+        BIC     r1, r2, r0                      ; r1 = bits being turned on
+        TST     r1, #EventVState_AntiTaping
+	ADRNEL	r14, AGCModulationTableStart
+	STRNE	r14, AGCModulationPosition
+	MOVNE	r14, #1
+	STRNE	r14, VSyncCount                 ; start going thru table next vsync
+
+        ; One or both states is now on - if neither of them used to be, claim EventV
+        TST     r0, #EventVState_AntiTaping :OR: EventVState_Captioning
+        BLEQ    ClaimEventV
+        EXITS
+      ]
+
 ClaimEventV Entry "r0-r2"
+      [ :LNOT: Captions
         LDR     r0, EventVClaimed
         TEQ     r0, #0
         EXITS   NE
@@ -579,6 +830,7 @@ ClaimEventV Entry "r0-r2"
 
 	MOV	r0, #1
 	STR	r0, VSyncCount		; start going thru table next vsync
+      ]
 
 	MOV	r0, #EventV
 	ADR	r1, MyEventV
@@ -590,14 +842,18 @@ ClaimEventV Entry "r0-r2"
 	MOV	r1, #4
 	SWI	XOS_Byte		; enable vsync event
 
+      [ :LNOT: Captions
         MOV     r0, #1
         STR     r0, EventVClaimed
+      ]
         EXITS
 
 ReleaseEventV Entry "r0-r2"
+      [ :LNOT: Captions
         LDR     r0, EventVClaimed
         TEQ     r0, #0
         EXITS   EQ
+      ]
 
 	MOV	r0, #13
 	MOV	r1, #4
@@ -608,13 +864,147 @@ ReleaseEventV Entry "r0-r2"
 	MOV	r2, wp
 	SWI	XOS_Release
 
+      [ :LNOT: Captions
         MOV     r0, #0
         STR     r0, EventVClaimed
+      ]
         EXITS
 
-MyEventV Entry "r0-r2"
+MyEventV Entry "r0-r4"
 	TEQ	r0, #Event_VSync
 	EXIT	NE
+      [ Captions
+        LDR     r2, EventVState
+        BIC     r2, r2, #EventVState_Modulate :OR: EventVState_CaptionWaiting :OR: EventVState_ExtDataWaiting
+
+        LDR     r0, EventVCallbackRequested
+        TEQ     r0, #0                          ; don't do any anti-taping stuff if we're still waiting for the last callback
+        ANDEQ   r14, r2, #EventVState_AntiTaping
+        TEQEQ   r14, #EventVState_AntiTaping
+        LDR     r0, VSyncCount
+        SUBEQS  r0, r0, #1                      ; if anti-taping, decrement vsync count
+        STR     r0, VSyncCount
+        ORREQ   r2, r2, #EventVState_Modulate   ; only modulate if anti-taping and count has reached zero
+
+        TST     r2, #EventVState_Captioning     ; if not captioning,
+        LDRNE   r14, IICBusyFlag                ; or foreground is already doing an IIC_Control,
+        TEQNE   r14, #1
+        BEQ     %FT10                           ; don't bother checking FIFOs
+
+      [ BigFIFOs
+        ADRL    r14, CaptionFIFO + FIFO_ReadPtr
+        LDR     r0, [r14]
+        ADRL    r14, CaptionFIFO + FIFO_WritePtr
+        LDR     r1, [r14]
+      |
+        LDR     r0, CaptionFIFO + FIFO_ReadPtr
+        LDR     r1, CaptionFIFO + FIFO_WritePtr
+      ]
+        TEQ     r0, r1                          ; NE => there is data in the FIFO
+        ADREQL  r14, SAA7183IICMap + &67
+        LDREQB  r0, [r14], #1
+        TEQEQ   r0, #&80
+        LDREQB  r0, [r14]
+        TEQEQ   r0, #&80                        ; now also NE if we need to send terminating nulls
+        ORRNE   r2, r2, #EventVState_CaptionWaiting
+
+      [ BigFIFOs
+        ADRL    r14, ExtDataFIFO + FIFO_ReadPtr
+        LDR     r0, [r14]
+        ADRL    r14, ExtDataFIFO + FIFO_WritePtr
+        LDR     r1, [r14]
+      |
+        LDR     r0, ExtDataFIFO + FIFO_ReadPtr
+        LDR     r1, ExtDataFIFO + FIFO_WritePtr
+      ]
+        TEQ     r0, r1                          ; NE => there is data in the FIFO
+        ADREQL  r14, SAA7183IICMap + &69
+        LDREQB  r0, [r14], #1
+        TEQEQ   r0, #&80
+        LDREQB  r0, [r14]
+        TEQEQ   r0, #&80                        ; now also NE if we need to send terminating nulls
+        ORRNE   r2, r2, #EventVState_ExtDataWaiting
+
+10      STR     r2, EventVState
+        TST     r2, #EventVState_Modulate :OR: EventVState_CaptionWaiting :OR: EventVState_ExtDataWaiting
+        EXIT    EQ                              ; don't bother with switching to SVC mode if nothing to do
+
+        MOV     r3, r2
+        MOV     r4, pc
+        ORR     r0, r4, #SVC_mode               ; switch to SVC_mode, so we can save lr_svc
+        TEQP    r0, #0
+        NOP
+        Push    "lr"
+
+        TST     r3, #EventVState_Modulate
+        MOVNE   r0, #1
+        STRNE   r0, EventVCallbackRequested
+        ADRNE   r0, EventVCallback
+        MOVNE   r1, wp
+        SWINE   XOS_AddCallBack
+
+        TST     r3, #EventVState_CaptionWaiting :OR: EventVState_ExtDataWaiting
+        SUB     sp, sp, #4
+        MOVNE   r0, #IICDevice_SAA7183 :OR: 1   ; read from device
+        MOVNE   r1, sp
+        MOVNE   r2, #4
+        SWINE   XIIC_Control
+        Pull    "r2"                            ; r2 now contains SAA7183 status byte in bits 0-7
+
+      [ {FALSE}                                 ; debug code
+        Push    "r0,r1"
+        ADR     r0, printdebug
+        AND     r1, r3, #&FF
+        ORR     r1, r1, r2, LSL #8
+        TST     r3, #EventVState_CaptionWaiting :OR: EventVState_ExtDataWaiting
+        SWINE   XOS_AddCallBack
+        Pull    "r0,r1"
+      ]
+
+        TST     r3, #EventVState_CaptionWaiting ; if caption data waiting
+        TSTNE   r2, #1 :SHL: 4                  ; and previous caption bytes have been encoded by SAA7183
+        BLNE    SendCaptionBytes
+
+        TST     r3, #EventVState_ExtDataWaiting ; if extended data waiting
+        TSTNE   r2, #1 :SHL: 3                  ; and previous extended data bytes have been encoded by SAA7183
+        BLNE    SendExtDataBytes
+
+        Pull    "lr"
+        TEQP    r4, #0                          ; restore old mode
+        NOP
+        EXITS
+
+      [ {FALSE}
+printdebug
+        Entry
+        TST     r12, #EventVState_CaptionWaiting
+        BEQ     %FT01
+        DLINE   "CC Wt   ", cc
+        B       %FT02
+01
+        DLINE   "        ", cc
+02      TST     r12, #EventVState_ExtDataWaiting
+        BEQ     %FT01
+        DLINE   "EDS Wt  ", cc
+        B       %FT02
+01
+        DLINE   "        ", cc
+02      TST     r12, #1:SHL:12
+        BEQ     %FT01
+        DLINE   "CC CTS  ", cc
+        B       %FT02
+01
+        DLINE   "        ", cc
+02      TST     r12, #1:SHL:11
+        BEQ     %FT01
+        DLINE   "EDS CTS "
+        B       %FT02
+01
+        DLINE   "        "
+02
+        EXITS
+      ]
+      |
 	LDR	r0, EventVCallbackRequested
 	TEQ	r0, #0
 	EXIT	NE
@@ -643,6 +1033,7 @@ MyEventV Entry "r0-r2"
 	MOV	r0, #1
 	STR	r0, EventVCallbackRequested
 	EXIT
+      ]
 
 ; Remove any outstanding PaletteV or EventV callbacks
 ; Assumes that noone is trying to generate any more of them!
@@ -652,6 +1043,8 @@ RemoveCallbacks Entry "r0-r2"
 	TEQ	r0, #0
 	BEQ	%FT10
 
+        MOV     r0, #0
+        STR     r0, PaletteVCallbackRequested
 	ADR	r0, ReallySetDefaultColours
 	MOV	r1, wp
 	SWI	XOS_RemoveCallBack
@@ -660,6 +1053,8 @@ RemoveCallbacks Entry "r0-r2"
 	TEQ	r0, #0
 	BEQ	%FT20
 
+        MOV     r0, #0
+        STR     r0, EventVCallbackRequested
 	ADR	r0, EventVCallback
 	MOV	r1, wp
 	SWI	XOS_RemoveCallBack
@@ -742,7 +1137,11 @@ ModulateBits Entry "r0-r3"
 	MOV	r0, #IICDevice_SAA7183
 	ADR	r1, TempModulationBlock
 	MOV	r2, #2				; send sub-address + 1 data byte
+      [ Captions
+        MyIIC_Control
+      |
 	SWI	XIIC_Control
+      ]
 	EXITS					; exit restoring IRQ status
 
 ; ******************************************************************************************************
@@ -1008,6 +1407,7 @@ ReallySetDefaultColours Entry "r0,r1"
 
 	LDR	r0, MacroType
 	CMP	r0, #0			; if not in a macro mode any more, just quit
+	CMPNE	r0, #3			; this mode also doesn't affect palette
 	EXIT	EQ
 
 	MOV	r0, #0
@@ -1152,7 +1552,11 @@ SelectVideoPath Entry "r0-r4"
 	MOV	r0, #IICDevice_SAA7183
 	ADR	r1, SAA7183OutputsOffData
 	MOV	r2, #SAA7183OutputsOffDataEnd - SAA7183OutputsOffData
+      [ Captions
+        MyIIC_Control
+      |
 	SWI	XIIC_Control
+      ]
 	STRVS	r0, [sp]
 	EXIT
 20
@@ -1169,67 +1573,13 @@ SelectVideoPath Entry "r0-r4"
 	ADDNE	r0, r0, #2		; add table offset for NTSC
 	ADRL	lr, IICDataBlocks
 	LDR	r0, [lr, r0, LSL #2]
-	ADD	r0, r0, lr	; point at data block for this type of mode
+	ADD	r0, r0, lr		; point at data block for this type of mode
 	STR	r0, IICDataBlockPtr
 	BL	SetupIICBlock
 
  [ ReadVarsForRCV2Timing
 ; Overwrite values in block from RCV2S and RCV2E variables
-
-	SUB	sp, sp, #8		; make room for both values
-
-	ADRL	r0, MacroVarRCV2SName
-	MOV	r1, sp
-	MOV	r2, #4
-	MOV	r3, #0
-	MOV	r4, #0
-	SWI	XOS_ReadVarVal
-	LDRVS	r0, =RCV2S
-	STRVS	r0, [sp]
-
-	ADRL	r0, MacroVarRCV2EName
-	ADD	r1, sp, #4
-	MOV	r2, #4
-	MOV	r3, #0
-	MOV	r4, #0
-	SWI	XOS_ReadVarVal
-	LDRVS	r0, =RCV2E
-	STRVS	r0, [sp, #4]
-
-   [ :DEF: RCV2EN
-	LDR	r2, MacroType		; Reload macrovision type
-	CMP	r2, #0			; Check for normal mode.
-	MOVNE	r2, #0			; If it's normal set adjustment to 0
-	BNE	%FT30			; Don't bother reading the variable.
-
-	SUB	sp, sp, #4		; Save space on the stack
-
-	ADRL	r0, MacroVarRCV2ENName
-	MOV	r1, sp
-	MOV	r2, #4
-	MOV	r3, #0
-	MOV	r4, #0
-	SWI	XOS_ReadVarVal
-	LDRVC	r2, [sp]		; Get the variable value
-	LDRVS	r2, =RCV2EN		; Get the default on error
-
-	ADD	sp, sp, #4		; Junk the space on the stack
-30
-   ]
-	Pull	"r0, r1"		; get RCV2S, RCV2E values
-   [ :DEF: RCV2EN
-	ADD	r1, r1, r2		; Adjust RCV2E if not in macrovision mode
-   ]
-	AND	r3, r0, #&FF		; bits 0..7 of RCV2S
-	STRB	r3, SAA7183IICMap + &70
-	AND	r3, r1, #&FF
-	STRB	r3, SAA7183IICMap + &71
-	AND	r3, r1, #&700
-	MOV	r3, r3, LSR #4
-	AND	r0, r0, #&700
-	ORR	r3, r3, r0, LSR #8
-	STRB	r3, SAA7183IICMap + &72
-
+	BL	ProcessRCV2Vars		; also returns values in r0, r1, but we're not interested
  ]
 
  [ MacroRGB_Off
@@ -1268,9 +1618,14 @@ SelectVideoPath Entry "r0-r4"
 
 	BL	TransmitSAA7183Data	; send all data to SAA7183
 
+      [ Captions
+        LDMIA   sp, {$Proc_RegList}     ; restore registers to state on entry
+        BL      ClaimReleaseEventV
+      |
 	LDR	r0, MacroType
 	TEQ	r0, #2			; are we anti-taping
 	BLEQ	ClaimEventV		; if so, then start modulation
+      ]
 90
 	STRVS	r0, [sp]
 	EXIT
@@ -1301,7 +1656,11 @@ Program_TDAs
         MOV     r0, #IICDevice_TDA8540
         MOV     r1, sp                  ; r2 still set up from entry
         MOV	r2, #TDA8540_Data_Size
+      [ Captions
+        MyIIC_Control
+      |
         SWI     XIIC_Control
+      ]
         ADD     sp, sp, #4              ; skip pushed block
         EXIT    VS
 
@@ -1310,7 +1669,11 @@ Program_TDAs
 	MOV	r0, #IICDevice_TDA8540_2
 	ADD     r1, r3, #TDA8540_Data_Size*3
 	MOV     r2, #TDA8540_Data_Size
+      [ Captions
+        MyIIC_Control
+      |
 	SWI	XIIC_Control
+     ]
  ]
         EXIT
 
@@ -1648,6 +2011,38 @@ NextSectionStart SETA {PC}-Module_BaseAddr
 	=	&1F, &7C, &F0, &21	; subcarrier frequency
 	MEND
 
+ [ Captions
+        MACRO
+        PAL_67_6F
+	Section	&67, (&70-&67)
+	=	&00, &00, &00, &00	; no captioning or extended data
+	=	(SRCV1<<6) :OR: (TRCV2<<5) :OR: (ORCV1<<4) :OR: (PRCV1<<3) :OR: (CBLF<<2) :OR: (ORCV2<<1) :OR: PRCV2
+	=	&54			; HTRIG
+	=	&02			; VTRIG??
+	=	(SBLBN<<7) :OR: (PHRES<<4) :OR: FLC
+	=	&00			; no line 21 encoding or teletext or closed caption or extended data
+        MEND
+
+        MACRO
+        NTSC_67_6F
+	Section	&67, (&70-&67)
+	=	&80, &80, &80, &80	; output odd-parity zeroes by default
+	=	(SRCV1<<6) :OR: (TRCV2<<5) :OR: (ORCV1<<4) :OR: (PRCV1<<3) :OR: (CBLF<<2) :OR: (ORCV2<<1) :OR: PRCV2
+	=	&54			; HTRIG
+	=	&02			; VTRIG??
+	=	(SBLBN<<7) :OR: (PHRES<<4) :OR: FLC
+	=	&D1			; both types of line 21 encoding but no teletext
+        MEND
+
+        MACRO
+        Common_70_7C
+        Section &70, (&73-&70)
+	=	RCV2S :AND: &FF
+	=	RCV2E :AND: &FF
+	=	((RCV2E :AND: &700) :SHR: 4) :OR: ((RCV2S :AND: &700) :SHR: 8)
+	SectionZero	&73, (&7D-&73)	; zero from &73 to &7C: no TTX stuff
+        MEND
+ |
 	MACRO
 	Common_67_7C
 	Section	&67, (&73-&67)
@@ -1662,6 +2057,7 @@ NextSectionStart SETA {PC}-Module_BaseAddr
 	=	((RCV2E :AND: &700) :SHR: 4) :OR: ((RCV2S :AND: &700) :SHR: 8)
 	SectionZero	&73, (&7D-&73)	; zero from &73 to &7C: no TTX stuff
 	MEND
+ ]
 
 	MACRO
 	Normal_7D_7F
@@ -1749,7 +2145,12 @@ SAA7183MacroPAL0IICData
 	PAL_5A_5C
 	NormalPAL_5D_61
 	PAL_62_66
+ [ Captions
+	PAL_67_6F
+	Common_70_7C
+ |
 	Common_67_7C
+ ]
 	Normal_7D_7F
 	SectionEnd
 
@@ -1761,7 +2162,12 @@ SAA7183MacroNTSC0IICData
 	NTSC_5A_5C
 	NormalNTSC_5D_61
 	NTSC_62_66
+ [ Captions
+	NTSC_67_6F
+	Common_70_7C
+ |
 	Common_67_7C
+ ]
 	Normal_7D_7F
 	SectionEnd
 
@@ -1773,7 +2179,12 @@ SAA7183MacroPAL1IICData
 	PAL_5A_5C
 	AntiTapingPAL_5D_61
 	PAL_62_66
+ [ Captions
+	PAL_67_6F
+	Common_70_7C
+ |
 	Common_67_7C
+ ]
 	AntiTaping_7D_7F
 	SectionEnd
 
@@ -1785,7 +2196,12 @@ SAA7183MacroNTSC1IICData
 	NTSC_5A_5C
 	AntiTapingNTSC_5D_61
 	NTSC_62_66
+ [ Captions
+	NTSC_67_6F
+	Common_70_7C
+ |
 	Common_67_7C
+ ]
 	AntiTaping_7D_7F
 	SectionEnd
 
@@ -1855,7 +2271,11 @@ TransmitSAA7183Data Entry "r0-r2"
 	MOV	r0, #IICDevice_SAA7183
 	ADR	r1, SAA7183IICData
 	MOV	r2, #128+1		; one byte for sub-address + 128 bytes of data
+      [ Captions
+        MyIIC_Control
+      |
 	SWI	XIIC_Control
+      ]
 	STRVS	r0, [sp]
 	EXIT
 
@@ -1918,12 +2338,18 @@ YUVTable
 
 Mod_SWIHandler ROUT
         LDR     r12, [wp]
-        CMP     r11, #MacrovisionSWICheckValue - MacrovisionSWI_Base
+;        CMP     r11, #MacrovisionSWICheckValue - MacrovisionSWI_Base
+	CMP	r11, #(%FT10-%FT00) :SHR: 2
         ADDCC   pc, pc, r11, LSL #2
         B       NoSuchSWI
 00
 	B	SetState	; set state, to take effect from next mode change
-	ASSERT  {PC}-%00 = (MacrovisionSWICheckValue-MacrovisionSWI_Base) :SHL: 2
+ [ Captions
+        B       LoadCaptions    ; add caption data to queue
+	B	CaptionControl	; enable/disable captions
+ ]
+10
+;	ASSERT  {PC}-%00 = (MacrovisionSWICheckValue-MacrovisionSWI_Base) :SHL: 2
 
 NoSuchSWI
         ADRL    r0, NoSuchSWIError
@@ -1950,6 +2376,381 @@ SetState Entry
 	STR	r2, PendingTVStandard
 	EXIT
 
+ ]
+
+ [ Captions
+; *****************************************************************************
+;
+;	CaptionControl - SWI to enable/disable closed caption code
+;
+; in:	r0 = flags
+;	      bit 0 set => enable closed-caption mode
+;	      bit 0 clear => disable closed-caption mode
+;
+; out:  All registers preserved
+
+CaptionControl Entry "r0-r4, r9"
+; Eventually check OK to change first
+
+	TST	r0, #1 :SHL: 0	; enabling it
+	MOVNE	r3, #3		; then set MacroType to 3
+	MOVEQ	r3, #0		; else 0
+	LDR	r1, MacroType	; old value
+	EOR	r2, r1, #3	; EOR 3 should equal new value
+	TEQ	r2, r3		; if different
+	EXIT	NE		; then just ignore call
+
+	TEQ	r3, #0		; if not switching to normal mode
+	STRNE	r3, MacroType	; then update MacroType, and
+	BNE	%FT20		; skip this
+
+; Now remove any existing captions before we switch away from the SAA7183 video path
+
+	MOV	r4, pc
+	ORR	r1, r4, #I_bit
+	TEQP	r1, #0		; disable IRQs to prevent anyone else calling LoadCaptions
+
+        MOV     r0, #6                                          ; odd fields, calculate parity bits, flush buffer
+        ADR     r1, EraseCaptions_OddField_Start
+        MOV     r2, #EraseCaptions_OddField_End-EraseCaptions_OddField_Start
+	BL	LoadCaptions					; clear captions channels 1 and 2
+
+        MOV     r0, #7                                          ; even fields, calculate parity bits, flush buffer
+        ADR     r1, EraseCaptions_EvenField_Start
+        MOV     r2, #EraseCaptions_EvenField_End-EraseCaptions_EvenField_Start
+        BL	LoadCaptions					; clear captions channels 3 and 4
+
+	STR	r3, MacroType	; store new type, *before* we reenable IRQs, so if zero, it stops anyone
+				; getting in with more CC data.
+	TEQP	r4, #0		; restore IRQ state
+
+; Now hang around until the SAA7183 has output &80, &80 on CC data (ie sent all our stuff) before we switch to
+; the analog NTSC output without CC.
+
+	MOV	r0, #19
+	SWI	XOS_Byte	; wait for vsync to allow the LoadCaption commands to have taken effect
+
+10
+	ADRL	r14, SAA7183IICMap + &67	; &67..&6A are the bytes to check
+	LDRB	r0, [r14], #1
+	TEQ	r0, #&80
+	LDREQB	r0, [r14], #1
+	TEQEQ	r0, #&80
+	LDREQB	r0, [r14], #1
+	TEQEQ	r0, #&80
+	LDREQB	r0, [r14], #1
+	TEQEQ	r0, #&80
+	BNE	%BT10
+20
+
+	LDR	r0, MacroType
+	TEQ	r0, #3
+	MOVEQ	r0, #1		; 0 -> 0, 3 -> 1, as far as switches are concerned
+	LDR	r1, TVStandard
+	BL	Program_TDAs
+
+; now patch palette to make ED3 control transparency (assumes 16bpp)
+
+	LDR	r0, MacroType
+	TEQ	r0, #0
+	ADREQ	r0, NormalEDPalette
+	ADRNE	r0, MacroEDPalette
+	BL	PatchEDPalette		; (bits 4..7 are the ED values)
+
+; now update RCV2 registers from system variables
+
+	BL	ProcessRCV2Vars		; updates SAA7183IICMap and returns values in r0,r1
+	AND	r3, r0, #&FF		; bits 0..7 of RCV2S
+	STRB	r3, RCV2IICBlk + 1
+	AND	r3, r1, #&FF
+	STRB	r3, RCV2IICBlk + 2
+	AND	r3, r1, #&700
+	MOV	r3, r3, LSR #4
+	AND	r0, r0, #&700
+	ORR	r3, r3, r0, LSR #8
+	STRB	r3, RCV2IICBlk + 3
+
+	MOV	r0, #IICDevice_SAA7183
+	ADR	r1, RCV2IICBlk
+	MOV	r2, #4		; one byte for sub-address + 3 bytes of data
+        MyIIC_Control
+
+	LDR	r0, MacroType
+	LDR	r1, TVStandard
+	BL	ClaimReleaseEventV
+	EXIT
+
+EraseCaptions_OddField_Start
+        =       &14, &2C, &14, &2C              ; Erase Displayed Memory, captions channel 1
+        =       &1C, &2C, &1C, &2C              ; Erase Displayed Memory, captions channel 2
+;        =       &14, &2E, &14, &2E              ; Erase Nondisplayed Memory, captions channel 1
+;        =       &1C, &2E, &1C, &2E              ; Erase Nondisplayed Memory, captions channel 2
+EraseCaptions_OddField_End
+
+EraseCaptions_EvenField_Start
+        =       &15, &2C, &15, &2C              ; Erase Displayed Memory, captions channel 3
+        =       &1D, &2C, &1D, &2C              ; Erase Displayed Memory, captions channel 4
+;        =       &15, &2E, &15, &2E              ; Erase Nondisplayed Memory, captions channel 3
+;        =       &1D, &2E, &1D, &2E              ; Erase Nondisplayed Memory, captions channel 4
+EraseCaptions_EvenField_End
+
+NormalEDPalette
+; Normal mode ED palette: bit 15 of pixel value turns on ED0
+	=	0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1
+
+MacroEDPalette
+; Macro mode ED palette: bit 15 of pixel value turns off ED3; when bit 15 low, then bits 12-14 determine colour
+;	=	8, 9, 10, 11, 12, 13, 14, 15, 0, 0, 0, 0, 0, 0, 0, 0
+; Eventually we might want no solid colours at all?, ie
+	=	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+
+; PatchEDPalette - set up 16bpp palette entries to make bit 15 of the pixel value map to a particular
+;  value of the ED bits
+;
+; in: 	r0 -> array of ED bit entries
+; out:	r0-r4, r9 corrupted
+;
+
+PatchEDPalette Entry "r5", 128		; allocate 128 bytes for 16 entries * 2 flash states * 4 bytes
+	MOV	r5, r0			; save value in r5
+	MOV	r0, #0			; no list of colours, just start with 0
+	MOV	r1, #16			; 16 palette entries to read
+	ORR	r1, r1, #16 << 24	; read both flash states
+	MOV	r2, sp			; read into stack block
+	MOV	r3, #0			; intermingle 2nd flash state with 1st
+	MOV	r4, #7			; bulk read PaletteV call
+	MOV	r9, #PaletteV
+	SWI	XOS_CallAVector
+
+	MOV	r2, sp			; point at entries
+
+	MOV	r0, #16			; 16 entries
+10
+	LDRB	r1, [r5], #1
+	MOV	r1, r1, LSL #4		; move up to bits 4..7
+	STRB	r1, [r2], #4		; write value to 1st flash state
+	STRB	r1, [r2], #4		; and to 2nd flash state
+	SUBS	r0, r0, #1
+	BNE	%BT10
+
+	MOV	r0, #0			; no list of colours, just start with 0
+	MOV	r1, #16			; 16 palette entries to write
+	ORR	r1, r1, #16 << 24	; write both flash states
+	MOV	r2, sp			; write into stack block
+	MOV	r4, #8			; bulk write PaletteV call
+	MOV	r9, #PaletteV
+	SWI	XOS_CallAVector
+	EXITS
+
+; *****************************************************************************
+;
+;	LoadCaptions - SWI to add data to the queue waiting to be passed to the SAA7183
+;
+; in:	r0 = flags
+;             bit 0 set => extended data, rather than closed captions
+;             bit 1 set => calculate parity bits for the data
+;             bit 2 set => flush the FIFO first
+;	r1 -> data bytes
+;	r2 = number of bytes pointed to by R1
+;
+; out:	All registers preserved
+
+LoadCaptions
+        Entry   "r0-r4"
+	LDR	r3, MacroType
+	TEQ	r3, #0
+	EXITS	EQ			; exit doing nothing if normal mode
+        TST     r0, #1 :SHL: 0          ; select FIFO
+        ADREQ   r3, CaptionFIFO
+        ADRNE   r3, ExtDataFIFO
+        TST     r0, #1 :SHL: 2          ; flush FIFO?
+        LDRNE   lr, [r3, #FIFO_WritePtr]
+        STRNE   lr, [r3, #FIFO_ReadPtr]
+01      SUBS    r2, r2, #1
+        EXITS   MI
+        LDRB    r4, [r1], #1
+        TST     r0, #1 :SHL: 1
+        BLNE    SetParity
+        TST     r0, #1 :SHL: 0          ; ensure that control codes are always doubled, but only on odd fields
+        BLEQ    WriteToFIFO_WithCheckForControlCode
+        BLNE    WriteToFIFO
+        B       %BT01
+
+; SetParity - sets byte in r4 to odd parity
+SetParity
+ [ {TRUE} ; more efficient code TMD 14-Apr-99
+	Entry
+	EOR	r14, r4, r4, LSR #4	; combine bits 4 apart
+	EOR	r14, r14, r14, LSR #2	; combine bits 2 apart
+	EOR	r14, r14, r14, LSR #1	; combine bits 1 apart
+	TST	r14, #1
+	EOREQ	r4, r4, #&80		; if even parity then correct it
+	EXITS
+ |
+        Entry   "r0-r2"
+        MOV     r0, #7          ; loop counter
+        MOV     r1, #0          ; set bits so far
+        MOV     r2, r4
+01      MOVS    r2, r2, ROR #1  ; shift bit 0 into bit 31
+        ADDMI   r1, r1, #1
+        SUBS    r0, r0, #1
+        BNE     %BT01
+        TST     r1, #1          ; odd or even number encountered so far?
+        ORREQ   r4, r4, #&80
+        BICNE   r4, r4, #&80
+        EXITS
+ ]
+
+; WriteToFIFO_WithCheckForControlCode - may also insert extra data if needed to keep control codes in pairs
+; in:   r3 -> FIFO
+;       r4 = byte to write
+; out:  registers preserved
+WriteToFIFO_WithCheckForControlCode
+        Entry
+        LDRB    r14, ControlCodeState
+        MOVS    r14, r14, LSR #1        ; C = r14 bit 0,  Z set if r14 was 0 or 1
+        BHI     %FT03                   ; branch if C set and Z clear (ie r14 was 3)
+        BNE     %FT02                   ; if r14 was 2
+        BCS     %FT01                   ; if r14 was 1
+                                        ; else r14 was 0
+00      AND     r14, r4, #&70
+        TEQ     r14, #&10               ; check if first byte of a control code (&10-&1F, ignoring parity)
+        STREQB  r4, ControlCode1        ; if the start of a control code, wait for the second byte
+        BLNE    WriteToFIFO             ; else just put it in the FIFO now
+        MOVEQ   r14, #1
+        MOVNE   r14, #0
+        STRB    r14, ControlCodeState   ; update control code state appropriately
+        EXITS
+
+01      STRB    r4, ControlCode2
+        LDRB    r4, ControlCode1
+        BL      WriteToFIFO
+        LDRB    r4, ControlCode2
+        BL      WriteToFIFO             ; write both bytes now, in any case
+        TST     r4, #&60                ; check if a valid second byte (&20-&7F, ignoring parity)
+        LDRNEB  r4, ControlCode1
+        BLNE    WriteToFIFO
+        LDRNEB  r4, ControlCode2        ; if we recognised the control code format, send the repetition immediately
+        BLNE    WriteToFIFO             ; else make no assumptions about repetition of codes (to allow for future changes to the CC standard)
+        MOVNE   r14, #2
+        MOVEQ   r14, #0
+        STRB    r14, ControlCodeState   ; update control code state appropriately
+        EXITS
+
+02      LDRB    r14, ControlCode1
+        TEQ     r4, r14                 ; an exact repetition?
+        BNE     %BT00                   ; if not, act as though control code state was 0 instead
+        MOV     r14, #3
+        STRB    r14, ControlCodeState   ; else just update control code state (we've already put this byte in the FIFO)
+        EXITS
+
+03      LDRB    r14, ControlCode2
+        TEQ     r4, r14                 ; an exact repetition?
+        BNE     %BT01                   ; if not, act as though control code state was 1 instead
+        MOV     r14, #0
+        STRB    r14, ControlCodeState   ; else just update control code state (we've already put this byte in the FIFO)
+        EXITS
+
+; WriteToFIFO - writes a single byte to a FIFO
+; in:   r3 -> FIFO
+;       r4 = byte to write
+; out:  registers preserved
+;       no action is taken if overflow occurs
+WriteToFIFO
+        Entry   "r0-r2"
+        ; Get FIFO read/write indices
+        LDR     r0, [r3, #FIFO_ReadPtr]
+        LDR     r1, [r3, #FIFO_WritePtr]
+        ; Calculate next write index
+        ADD     r2, r1, #1
+        TEQ     r2, #FIFO_Buffer + FIFOlength
+        MOVEQ   r2, #FIFO_Buffer
+        ; If buffer has overrun, exit
+        TEQ     r2, r0
+        EXITS   EQ
+        ; There is space in the buffer, so write byte
+        STRB    r4, [r3, r1]
+        STR     r2, [r3, #FIFO_WritePtr]
+        EXITS
+
+; ReadFromFIFO - reads a single byte from a FIFO
+; in:   r3 -> FIFO
+; out:  r4 = byte from FIFO
+;       r3 preserved
+;       &80 is returned in r1 if underflow occurs
+ReadFromFIFO
+        Entry   "r0,r1"
+        ; Get FIFO read/write indices
+        LDR     r0, [r3, #FIFO_ReadPtr]
+        LDR     r1, [r3, #FIFO_WritePtr]
+        ; If buffer has underrun, return &80 (odd-parity null)
+        TEQ     r0, r1
+        MOVEQ   r4, #&80
+        EXITS   EQ
+        ; Read byte
+        LDRB    r4, [r3, r0]
+        ; Update read pointer
+        ADD     r0, r0, #1
+        TEQ     r0, #FIFO_Buffer + FIFOlength
+        MOVEQ   r0, #FIFO_Buffer
+        STR     r0, [r3, #FIFO_ReadPtr]
+        EXITS
+
+; SendCaptionBytes - called from EventV to send a captions byte pair to SAA7183
+; in:   no parameters
+; out:  all registers preserved
+SendCaptionBytes
+        Entry   "r0-r5"
+        ; Read 2 bytes from FIFO
+        ADR     r3, CaptionFIFO
+        BL      ReadFromFIFO
+        MOV     r5, r4
+        BL      ReadFromFIFO
+        ; r5 = first byte, r4 = second byte
+        ; Construct IIC_Control block on stack
+        MOV     r0, #&67
+        ORR     r0, r0, r5, LSL #8
+        ORR     r0, r0, r4, LSL #16
+        Push    "r0"
+        MOV     r0, #IICDevice_SAA7183
+        MOV     r1, sp
+        MOV     r2, #3
+        SWI     XIIC_Control
+        ADD     sp, sp, #4
+        EXITS   VS
+        ; Update soft copy of SAA7183 registers
+        ADRL    r14, SAA7183IICMap + &67
+        STRB    r5, [r14], #1
+        STRB    r4, [r14]
+        EXITS
+
+; SendExtDataBytes - called from EventV to send an extended data byte pair to SAA7183
+; in:   no parameters
+; out:  all registers preserved
+SendExtDataBytes
+        Entry   "r0-r5"
+        ; Read 2 bytes from FIFO
+        ADR     r3, ExtDataFIFO
+        BL      ReadFromFIFO
+        MOV     r5, r4
+        BL      ReadFromFIFO
+        ; r5 = first byte, r4 = second byte
+        ; Construct IIC_Control block on stack
+        MOV     r0, #&69
+        ORR     r0, r0, r5, LSL #8
+        ORR     r0, r0, r4, LSL #16
+        Push    "r0"
+        MOV     r0, #IICDevice_SAA7183
+        MOV     r1, sp
+        MOV     r2, #3
+        SWI     XIIC_Control
+        ADD     sp, sp, #4
+        EXITS   VS
+        ; Update soft copy of SAA7183 registers
+        ADRL    r14, SAA7183IICMap + &69
+        STRB    r5, [r14], #1
+        STRB    r4, [r14]
+        EXITS
  ]
 
 ; *****************************************************************************
