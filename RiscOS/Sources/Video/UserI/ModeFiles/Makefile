@@ -42,6 +42,11 @@ install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
+install: 
+        ${MKDIR} ${INSTDIR}
+        ${CP} LocalRes:<UserIF> ${INSTDIR} ${CPFLAGS}
+        @echo ${COMPONENT}: module installed
+
 clean:
         ${WIPE} ${TDIR} ${WFLAGS}
         @echo ${COMPONENT}: cleaned
