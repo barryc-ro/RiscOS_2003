@@ -6,13 +6,16 @@
 //      18-10-01 Version 1.0 s corby
 //      initial revision of firmware for A231 AC3 dongle DSL project generated from Sky+
 //
+//      19-10-01 Version 1.1 s corby
+//      addition of PWM for VCXO implementation on param 0x08
+//
 //*****************************************************************************************
 
 #include "macros.inc"
 
 // code revision
 #define VERSION_ADDRESS         0x600
-#define	VERSION                 {0x4132,0x3331,0x7631,0x2e30 } // A231v1.0
+#define	VERSION                 {0x4132,0x3331,0x7631,0x2e31 } // A231v1.0
 
 // ROM code subroutines and return addresses
 #define exe_kernel_entry        0xE0042
@@ -42,6 +45,7 @@
 #define off_inta                0x271E
 #define dfifo_entry             0x271F
 #define user_buf_ptr            0x2720
+#define timer_entry             0x272E
 #define avs_flags               0x2759
 #define scr_ms                  0x2763
 #define last_frame_size         0x276B
@@ -96,13 +100,14 @@
 // MAX_REQ_SIZE is the number of words requested of the host - it
 // must not exceed FIFO_SIZE or overflow will occur
 //#define MAX_REQ_SIZE            FIFO_SIZE
-#define MAX_REQ_SIZE            64
+#define MAX_REQ_SIZE            128
 // TRGT_SIZE is the size of the entire input buffer - 4 words to
 // accomodate residue left in the DFIFO between requests, and - 1
 // to eliminate potential wrapping condition.  MPEG only.
 #define IBUF_SIZE               1862
-//#define TRGT_SIZE               IBUF_SIZE - 5
-#define TRGT_SIZE               (IBUF_SIZE - 5) - MAX_REQ_SIZE
+#define MAX_FRAME_SIZE          906
+#define TRGT_SIZE               IBUF_SIZE - MAX_REQ_SIZE - 1
+//#define TRGT_SIZE               (MAX_FRAME_SIZE)
 
 // PCM_BUF_SIZE is the size of the output buffer.  Target is - 5
 // words for the same reason as TRGT_SIZE
@@ -151,6 +156,8 @@
 #define SPDIF_44KHZ             0x00000
 #define SPDIF_32KHZ             0x30000
 
+#define VCXO_PIN                1
+
 FORWARD D3_TO_SRG;
 FORWARD INCA7_INCA7;
 
@@ -197,15 +204,17 @@ DATA    d5_pkt          {0};                //                  "
 DATA    a0_pkt          {0};                //                  "
 DATA    i0_pkt          {0};                //                  "
 DATA    m0_pkt          {0};                //                  "
-
-DATA    d3_dfifo        {0};
-DATA    d4_dfifo        {0};
-DATA    a0_dfifo        {0};
-DATA    m0_dfifo        {0};
-
-DATA    predictedWrPntr {0};                //
-DATA    last_rate       {0};                // current sample rate
-DATA    pktLength       {0};
+DATA    d3_dfifo        {0};                //                  "
+DATA    d4_dfifo        {0};                //                  "
+DATA    a0_dfifo        {0};                //                  "
+DATA    m0_dfifo        {0};                //                  "
+DATA    predictedWrPntr {0};                // 
+DATA    last_rate       {0};                // used for determining sample rate changes
+DATA    pktLength       {0};                // used by input packet parser
+DATA    timerLoInterval {0};                // variables required for VCXO driver
+DATA    timerHiInterval {0};
+DATA    VCXOclocks    2 {0};
+DATA    VCXO_Upd        {0};
 
 DATA Osc_Cfs {              // Ftone = 206 Hz
          -0.999636,         // a1/2, Fs=48 kHz
@@ -219,7 +228,7 @@ DATA Osc_Cfs {              // Ftone = 206 Hz
 DATA Osc_State  2       {0x70000};          // Oscillator state.
 
 DATA    Param_List
-        { 8,                                // Number of extensions supported.
+        { 9,                                // Number of extensions supported.
           #Operation_Reg,                   // Pointer to the extension 0 buffer.
           3,                                // Number of !bytes! in the buffer.
           #null,                            // Update flag for operation register.
@@ -243,7 +252,11 @@ DATA    Param_List
           #null,                            // PTS tolerance update flag
           #Dgain_Reg,                       // Pointer to decoder volume register.
           3,                                // Number of !bytes! in the buffer.
-          #Dgain_Upd};                      // Decoder volume update flag.
+          #Dgain_Upd,                       // update flag
+          #VCXOclocks,
+          6,
+          #VCXO_Upd
+        };                      // Decoder volume update flag.
 
 SUBROUTINE Restart;
 SUBROUTINE MPEG_exec_dummy;
@@ -261,6 +274,7 @@ SUBROUTINE AC3_Bkp_ISR;
 SUBROUTINE Post_Shell;
 SUBROUTINE myFramePatch;
 SUBROUTINE endOfCode;
+SUBROUTINE Timer_ISR;
 
 ORG;
 SUBROUTINE Restart {
@@ -506,8 +520,9 @@ no_pes;
     move    d3,(off_inta);
     move_m  (#Intb_ISR,(off_intb));             // Load pointer to serial b service routine.
     move_m  (#vfifo_header_ISR,(dfifo_entry));
-//    move_m  (#vfifo_done_ISR,(phi_entry));
+    move_m  (#Timer_ISR,(timer_entry));         // Load pointer to timer service routine.
     move    #1,ie;                              // Interrupts back on.
+	setb	#11,imr;                            // Enable timer interrupts.
     rts_2;
      move_m( #Post_Shell,(postproc_ptr));       // Enable post-processing.
 }
@@ -646,12 +661,11 @@ inject_end:
     move    #0,ie;                              // 
     move    a6,(predictedWrPntr);               // 
 // at this point we have consumed the entire intput packet // enable this coide 
-#if 1
-// enable this code to activate multiple consecutive IRQs
     move    (bip),d3;                           // 
     dec     d3;                                 // 
-    move    (req_cntr),d4;                      // 
-    cmpz    d4;                                 // 
+    dble    end_clear_bip;                      // 
+     move   (req_cntr),d4;                      // 
+     cmpz   d4;                                 // 
     dble    end_clear_bip;                      // 
      move   #MAX_REQ_SIZE,i0;                   // 
      move   a6,a0;                              // 
@@ -667,7 +681,6 @@ inject_end:
     db      end_Vfifo_done;                     // 
      move   a0,(predictedWrPntr);               // 
      clrb   #0,gpio;                            // 
-#endif
 end_clear_bip:
     move    #0,d3;                              // 
 end_Vfifo_done:
@@ -918,35 +931,62 @@ skipDataReq:
     and     d5,d4;                              // more data or notifying the host of a repeated frame
     dbeq    no_IRQ;                             // if not then quit out without triggering an IRQ
      move   #MAX_REQ,d4;                        // number of bursts to go in d4
-     nop;
-    move    d4,(bip);
-// clear FIFO here (NULL flush bytes may reside in base of FIFO)
+     nop;                                       // 
+    move    d4,(bip);                           // 
     rpt     #4;                                 // Clear the fifo.
-    move    dfifo,d3;
-// signify to FIFO ISR that we are looking for sync byte
+    move    dfifo,d3;                           // 
     move_m  (#in_buf,(in_buf_ptr));             // point to beginning next packet
     move_m  (#vfifo_header_ISR,(dfifo_entry));  // Load pointer to fifo service routine.
-// setup packet arrival interrupt
-    move    #in_buf+FIFO_SIZE,d3;
+    move    #in_buf+FIFO_SIZE,d3;               // 
     move    d3,bkp3;                            // set eop at end of virtual FIFO
-// go signal interrupt...
     clrb    #0,gpio;                            // Send interrupt, active low.
 no_IRQ:
     move    #1,ie;                              // re enable interrupts
-    pop     mode;
-    rts;
-
+    pop     mode;                               // 
+// update PWM timer here
+    move    (VCXO_Upd),d4;                      // 
+    cmpz    d4;                                 // 
+    dbne    no_VCXO_update;                     // 
+     move   #1,d4;                              // 
+     move   d4,(VCXO_Upd);                      // 
+    move    (VCXOclocks),d4;                    // 
+    move    d4,(timerLoInterval);               // 
+    move    (VCXOclocks+1),d4;                  // 
+    move    d4,(timerHiInterval);               // 
+    setb    #VCXO_PIN,gpio;                     // 
+    move    d4,timer;                           // 
+no_VCXO_update:
+    rts;                                        // 
 }
 
 SUBROUTINE myFramePatch {
-    move    #TRGT_SIZE,d4;
-    move    (curr_frame_size),d2;
-    move    d2,(myFrameSize);
-    rts_2;
-     sub    d2,d4;
-     move   d4,(curr_frame_size);
+    move    #TRGT_SIZE,d4;                      // 
+    move    (curr_frame_size),d2;               // 
+    move    d2,(myFrameSize);                   // 
+    rts_2;                                      // 
+     sub    d2,d4;                              // 
+     move   d4,(curr_frame_size);               // 
+}
+
+SUBROUTINE Timer_ISR 
+{
+    tstb    #VCXO_PIN,gpio;                     // 
+    dbeq    loToHi;                             // 
+     move   (timerLoInterval),d4;               // 
+     move   (timerHiInterval),d3;               // 
+    move    d3,timer;                           // 
+    clrb    #VCXO_PIN,gpio;                     // 
+    move    (d3_reg),d3;                        // 
+    rti_1;                                      // 
+     move   (d4_reg),d4;                        // 
+loToHi:
+    move    d4,timer;                           // 
+    setb    #VCXO_PIN,gpio;                     // 
+    move    (d3_reg),d3;                        // 
+    rti_1;                                      // 
+     move   (d4_reg),d4;                        // 
 }
 
 SUBROUTINE endOfCode {
-    nop;
+    nop;                                        // marker
 }
