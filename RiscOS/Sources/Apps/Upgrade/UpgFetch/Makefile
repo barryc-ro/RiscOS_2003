@@ -23,13 +23,14 @@ CHMOD	= access
 STRIP   = -stripdepnd
 
 AFLAGS     = -depend !Depend ${THROWBACK} -Stamp -quit
-CFLAGS     = -c -Wa -depend !Depend ${THROWBACK} -ff ${INCLUDES} ${OPTS}
+CFLAGS     = -c -Wpc -depend !Depend ${THROWBACK} -ff ${INCLUDES} -DUSE_CHECKURL ${OPTS}
 CMHGFLAGS  = -p ${DFLAGS} ${THROWBACK} ${INCLUDES}
 CPFLAGS    = ~cfr~v
 WFLAGS     = ~c~vr
 CHMODFLAGS = RW/R
+LFLAGS     =
 
-DFLAGS  =  ${DEBUG}
+DFLAGS  = ${DEBUG}
 #
 # Libraries
 #
@@ -45,9 +46,9 @@ REMOTEDB   = <Lib$Dir>.debug.o.remotezm
 EVENTLIB   = Tbox:o.eventlib
 LIBSD      = <Lib$Dir>.DebugLib.o.debuglibzm
 TOOLBOXLIB = Tbox:o.toolboxlib
-WIMPLIB	   = Tbox:o.wimplib
+WIMPLIB    = Tbox:o.wimplib
 TCPIPLIB   = <Lib$Dir>.TCPIPLibs.o.*
-ZLIB 	   = <Lib$Dir>.zlib.o.zlib
+ZLIB       = <Lib$Dir>.zlib.o.zlib
 
 #
 # Include files
@@ -58,22 +59,23 @@ INCLUDES = -Itbox:,C:,TCPIPLibs:
 #
 COMPONENT = UpgFetch
 TARGET    = aof.UpgFetch
-APP	  = !${COMPONENT}
+APP       = !${COMPONENT}
 
-OBJS      =	\
+OBJS = 		\
+o.crc32		\
+o.Errors	\
+o.FromROSLib	\
+o.Global	\
+o.kill		\
 o.main		\
 o.ui		\
-o.kill		\
-o.messages   	\
-o.DBUG          \
-o.crc32		\
-
+o.Utils
 
 #
 # Rule patterns
 #
 .c.o:;      ${CC}   ${CFLAGS} -o $@ $<
-.cw.o:;	    ${CC}   ${CFLAGS} -o $@ $<
+.cw.o:;     ${CC}   ${CFLAGS} -o $@ $<
 .s.o:;      ${AS}   ${AFLAGS} $< $@
 
 
@@ -99,15 +101,15 @@ resources: ${TARGET}
         ${CP} UpgFetchRes:* ${RESDIR}.^.Apps.${APP}.* ${CPFLAGS}
         UnSet UpgFetchRes$path
         @echo ${COMPONENT}: all complete
-        
+
 
 install: ${TARGET}
 	${MKDIR} ${APP}
         ${CP} ${TARGET} ${APP}.${COMPONENT} ${CPFLAGS}
         ${CP} Resources.$(USERIF).$(LOCALE).* ${APP}.* ${CPFLAGS}
         @echo ${COMPONENT}: all complete
-        
-        
+
+
 clean:
         ${WIPE} o.*        ${WFLAGS}
         ${WIPE} aof.*      ${WFLAGS}
@@ -132,7 +134,7 @@ dirs:
 # ROM target (re-linked at ROM Image build time)
 #
 ${TARGET}: ${OBJS} dirs
-        ${LD} -o $@ ${OBJS} ${CLIB} ${EVENTLIB} ${TOOLBOXLIB} ${WIMPLIB} ${LIBSD} ${ZLIB} ${TCPIPLIB} ${SOCKLIB} ${INETLIB} ${RLIB}
+        ${LD} ${LFLAGS} -o $@ ${OBJS} ${CLIB} ${EVENTLIB} ${TOOLBOXLIB} ${WIMPLIB} ${LIBSD} ${ZLIB} ${TCPIPLIB} ${SOCKLIB} ${INETLIB} ${RLIB}
 
 
 #
