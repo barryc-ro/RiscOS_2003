@@ -5,81 +5,48 @@
 # ***********************************
 # Date       Name         Description
 # ----       ----         -----------
-# 25-May-94  AMcC         Created.
-# 21-Nov-00  SBF          Added StripDepnd support.
-#
-
-#
-# Generic options:
-#
-MKDIR   = cdir
-AS      = objasm
-CP      = copy
-LD      = link
-RM      = remove
-WIPE    = -wipe
-STRIP   = -stripdepnd
-ASFLAGS = -depend !Depend ${THROWBACK} -PD "Territory SETS \"${COMPONENT}\"" -o $@
-LDFLAGS = -bin -o $@
-CPFLAGS = ~cfr~v
-WPFLAGS = ~cfr~v
+# 21-Mar-01  SNB          Recreated.
 
 #
 # Program specific options:
 #
-SOURCE    = s.Territory
-OBJECT    = o.${COMPONENT}
-TARGET    = rm.${COMPONENT}
+COMPONENT ?= UK
+TARGET    ?= ${COMPONENT}
 
-# BBE Rules
-BBETYPE   = local
-bbe-local: bbe-generic-resources-get-alias
-  BBE_Export_Dir s
-  BBE_Export_Dir Resources.${COMPONENT}
-  BBE_Export_File VersionNum
-  BBE_Export_File VersionASM
-  BBE_Export_File Makefile
-  ${STRIP} -v ${BBEDIR}.Makefile
+ROM_SOURCE = Territory.s
+ASFLAGS = -PD "Territory SETS \"${TARGET}\""
+
+RESOURCES   = -private
+PRIVATEMSGS = -private
+
+#
+# Generic options:
+#
+include StdTools
+include AAsmModule
 
 #
 # Generic rules:
 #
-rom: ${TARGET}
-        @echo ${COMPONENT}: rom module built
+clean::
+        ${WIPE} rm ${WFLAGS}
+        @${ECHO} ${COMPONENT}: extra directories cleaned
 
-export:
-        @echo ${COMPONENT}: export complete
+${MERGEDMSGS}: Resources.${TARGET}.Territory LocalRes:Messages
+        ${MKDIR} ${MERGEDMDIR}
+        ${CP} Resources.${TARGET}.Territory $@ ${CPFLAGS}
+        ${CAT} LocalRes:Messages { >> $@ }
 
-install_rom: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom module installed
+resources: ${MERGEDMSGS}
+        ${MKDIR} ${RESFSDIR}
+        ${CP} ${MERGEDMSGS} ${RESFSDIR}.Messages ${CPFLAGS}
+        @${ECHO} ${COMPONENT}: resources copied to Messages module
 
-clean:
-        ${WIPE} o ${WPFLAGS}
-        ${WIPE} rm ${WPFLAGS}
-        ${WIPE} Resources.Combined ${WPFLAGS}
-        ${STRIP}
-        @echo Territory modules: cleaned
+# BBE Rules
+BBETYPE   = local
+bbe-local: bbe-generic-resources-get-alias
+  BBE_Export_File_In_Dir ${MERGEDMDIR} ${TARGET}
+  BBE_Export_File VersionNum
 
-Resources.Combined.${COMPONENT}: Resources.${COMPONENT}.Territory LocalRes:Messages
-	${MKDIR} Resources.Combined
-	TokenCheck Resources.${COMPONENT}.Territory
-	TokenCheck LocalRes:Messages
-        ${CP} Resources.${COMPONENT}.Territory $@ ${CPFLAGS}
-	Print LocalRes:Messages { >> $@ }
-
-resources: Resources.Combined.${COMPONENT}
-        ${MKDIR} ${RESDIR}.${COMPONENT}
-        ${CP} Resources.Combined.${COMPONENT} ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
-        @echo ${COMPONENT}: resource files copied
-
-${OBJECT}: ${SOURCE} Resources.Combined.${COMPONENT}
-	${MKDIR} o
-        ${AS} ${ASFLAGS} ${SOURCE}
-
-${TARGET}: ${OBJECT}
-	${MKDIR} rm
-	${LD} ${LDFLAGS} ${OBJECT}
-	SetType ${TARGET} &FFA
 
 # Dynamic dependencies:
