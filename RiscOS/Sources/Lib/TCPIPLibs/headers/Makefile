@@ -170,6 +170,7 @@ export_hdrs: ${HDRS} dirs
         ${CP} rpcsvc     TCPIPLibs:rpcsvc          ${CPFLAGS}
         ${CP} sys        TCPIPLibs:sys             ${CPFLAGS}
 	-${CP} TCPIPLibs:sys.h.ioctl_comp TCPIPLibs:sys.h.ioctl_compat ${CPFLAGS}
+	-${CP} TCPIPLibs:sys.h.ttydefault TCPIPLibs:sys.h.ttydefaults ${CPFLAGS}
         @echo ${COMPONENT}: export complete (hdrs)
 
 dirs:
