@@ -1,445 +1,670 @@
-/*
- * module.c
- *
- * RISC OS environmental dependencies
- *
- */
-#include "socklib.h"
-#include "inetlib.h"
-
+/**************************************************************/
+/* File:    module.c                                          */
+/*          (C) 2000 Pace Micro Technology PLC                */
+/*          All rights reserved                               */
+/*                                                            */
+/* Purpose: The UDPV module gets given data as it arrives by  */
+/*          the Internet module. It puts this into a single   */
+/*          large rolling internal buffer and passes          */
+/*          pointers to the chunks of data to MPEGControl,    */
+/*          which later calls back to release those chunks.   */
+/*                                                            */
+/* Author:  Andrew Hodgkinson.                                */
+/*                                                            */
+/* History: 27-Mar-2000 (ADH): Standard comment header added. */
+/**************************************************************/
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
 #include <ctype.h>
+
 #include <kernel.h>
 #include <swis.h>
-#include <string.h>
 
-#include "sys/filio.h"
-#include "sys/mbuf.h"
+#include <socklib.h>
+#include <inetlib.h>
+#include <sys/filio.h>
+#include <sys/mbuf.h>
+
+#include "bufs.h"
+#include "global.h"
+#include "mbuf.h"
+#include "UDPVHdr.h"
 
 #include "module.h"
-#include "mbuffn.h"
-#include "bufs.h"
 
-#define VIDEO_PORT      0x801a
+/* Default port number to use in absence of any other instructions */
 
-#define IDLE            0
-#define PLAYING         1
+#define VIDEO_PORT       0x801a
 
-#define SO_RECV_BUF_SIZE   64*1024
-#define MPEG_BUF_POOL_SIZE 850*376
+/* These are our internal states */
 
-#define TickerV         28
+#define IDLE             0
+#define PLAYING          1
 
-void *module_wsp = 0;
-int v_state = IDLE;
+/* The above are mapped to the following for UDPV_StreamStatus */
 
-static int discards = 0;
-static int oversized = 0;
-static int undersized = 0;
-static int empty_failures = 0;
-static unsigned int bytes_received = 0;
-static unsigned int datagrams_received = 0;
-static int sequence_lost = 0;
-static int sequence_lostm = 0;
-static int sequence_lostt = 0;
-static int sequence_OOS = 0;
-static int sequence_OOSm = 0;
-static int sequence_OOSt = 0;
-static int reentered = 0;
-static volatile int reentrancy_flag;
+#define PLAY_INPROGRESS  0
+#define PLAY_TERMINATED  1
 
-int default_video_port = 0;
-int video_port = 0;
-int bs_bufsize = 0;
-int n_bs_buffers = 0;
-int bs_minbufs = 0;
-int bs_bufpool;
-int bs_bytes_sent = 0;
+/* Receive buffer size for the video data socket */
 
-static int skipcount = 0;
-static unsigned int sequence_expected;
+#define SO_RECV_BUF_SIZE 64*1024
 
-extern int bs_minbufs_check;
+/* Main buffer size */
 
-int mpeg_handle, vsock, vssock;
-int do_debug = 0;
+#define BUFFER_SIZE (524288u)
 
-struct bs_buffer *bs_current_buf;
-int bs_current_residue;
+/* If we don't have the MPEGControl_FullBuffers SWI number already... */
 
-extern _kernel_oserror *calleverytick(void);
-extern struct bs_buffer *get_empty_buffer(void);
+#ifndef MPEGControl_FullBuffers
+  #define MPEGControl_FullBuffers 0x492c1
+#endif
 
-_kernel_oserror *udpv_init(char *cmd_tail, int pbase, void *pw);
-_kernel_oserror *udpv_cli_handler(char *arg_string, int arg_count, int cmd_no, void *pw);
-void udpv_show(int argc , char **argv );
-_kernel_oserror *udpv_swi_handler(int swinum, _kernel_swi_regs *r, void *pw);
-int do_getsock(int port, int inputsocket);
-int udpv_startofplay(_kernel_swi_regs *r);
-int udpv_endofplay(_kernel_swi_regs *r);
-int udpv_empty_buf(_kernel_swi_regs *r);
-int udpv_nullswi(_kernel_swi_regs *r);
-int udpv_rxdirect(_kernel_swi_regs *r);
-int udpv_getstatus(_kernel_swi_regs *r);
-void init_session(int handle, int skipsize);
-void close_session(void );
-int vs_process_input(int a, int b, char *ack_src, int ack_unit, int ack_swi, int ack_buf);
-int send_full_buf(int b, int flag);
-int read_sysvar(char *var, char *buf, int buflen);
+/* Local variables */
 
-struct swient {
-    int (*swi_call)();      /* swi handler */
+#ifdef TRACE
+  static int          sequence_lost  = 0;
+  static int          sequence_lostm = 0;
+  static int          sequence_lostt = 0;
+  static int          sequence_OOS   = 0;
+  static int          sequence_OOSm  = 0;
+  static int          sequence_OOSt  = 0;
+  static unsigned int sequence_expected;
+#endif
+
+static void         * module_wsp         = 0;
+
+static int            v_state            = IDLE;
+static int            vsock              = -1;
+static int            default_video_port = 0;
+static int            video_port         = 0;
+static bool           mbuf_session_alive = false;
+
+static int            skipcount          = 0;
+
+static unsigned int   bytes_received     = 0;
+static unsigned int   datagrams_received = 0;
+
+/* Local functions */
+
+static void udpv_atexit       (void);
+static void udpv_show         (void);
+
+static int  udpv_startofplay  (_kernel_swi_regs *r);
+static int  udpv_endofplay    (_kernel_swi_regs *r);
+static int  udpv_emptybuffer  (_kernel_swi_regs *r);
+static int  udpv_nullswi      (_kernel_swi_regs *r);
+static int  udpv_rxdirect     (_kernel_swi_regs *r);
+static int  udpv_streamstatus (_kernel_swi_regs *r);
+
+static int  read_sysvar       (char *var, char *buf, int buflen);
+
+static int  do_getsock        (int port, int inputsocket);
+static void init_session      (int handle, int skipsize);
+static void close_session     (void);
+
+static int  vs_process_input  (int a, int b, char * ack_src, int ack_unit, int ack_swi, int ack_buf);
+
+/* SWI dispatch table */
+
+struct swient
+{
+  int (*swi_call)();
 };
 
 #define MAXSWI 31
 
-struct swient udpv_ent[MAXSWI] = {
-    udpv_nullswi,
-    udpv_nullswi,
-    udpv_nullswi,
-    udpv_nullswi,
-    udpv_nullswi,
-    udpv_nullswi,
-    udpv_nullswi,
-    udpv_empty_buf,
-    udpv_nullswi,
-    udpv_endofplay,
-    udpv_startofplay,
-    udpv_nullswi,
-    udpv_nullswi,
-    udpv_nullswi,
-    udpv_nullswi,
-    udpv_nullswi,
-    udpv_getstatus,
-    udpv_nullswi,
-    udpv_nullswi,
-    udpv_nullswi,
-    udpv_nullswi,
-    udpv_nullswi,
-    udpv_nullswi,
-    udpv_nullswi,
-    udpv_nullswi,
-    udpv_nullswi,
-    udpv_nullswi,
-    udpv_nullswi,
-    udpv_nullswi,
-    udpv_rxdirect,
-    0,
+struct swient udpv_ent[MAXSWI] =
+{
+  udpv_nullswi,
+  udpv_nullswi,
+  udpv_nullswi,
+  udpv_nullswi,
+  udpv_nullswi,
+  udpv_nullswi,
+  udpv_nullswi,
+  udpv_emptybuffer,
+  udpv_nullswi,
+  udpv_endofplay,
+  udpv_startofplay,
+  udpv_nullswi,
+  udpv_nullswi,
+  udpv_nullswi,
+  udpv_nullswi,
+  udpv_nullswi,
+  udpv_streamstatus,
+  udpv_nullswi,
+  udpv_nullswi,
+  udpv_nullswi,
+  udpv_nullswi,
+  udpv_nullswi,
+  udpv_nullswi,
+  udpv_nullswi,
+  udpv_nullswi,
+  udpv_nullswi,
+  udpv_nullswi,
+  udpv_nullswi,
+  udpv_nullswi,
+  udpv_rxdirect,        /* Trailing ',' ensures rest is filled with zeros */
 };
 
-#define UdpV_RxDirect 0x4001d
+/* Star command dispatch table */
 
-struct client {
-        int (*cli_call)();      /* cli handler */
+struct client
+{
+  static int (*cli_call)();
 };
 
-#define MAXCLIENT 2
+#define MAXCLIENT 1
 
-struct client udpv_cli_call[MAXCLIENT] = {
-    (int (*)())udpv_show
+struct client udpv_cli_call[MAXCLIENT] =
+{
+  (int (*)())udpv_show, /* Trailing ',' ensures rest is filled with zeros */
 };
 
+/**************************************************************/
+/* udpv_init()                                                */
+/*                                                            */
+/* Standard module initialisation code.                       */
+/**************************************************************/
 
-_kernel_oserror *udpv_init(char *cmd_tail, int pbase, void *pw)
+_kernel_oserror *udpv_init(const char *cmd_tail, int podule_base, void *pw)
 {
-    char buf[32];
+  _kernel_oserror * e;
+  char              buf[32];
 
-    module_wsp = pw;
-    if (!mb_present())
-        return ((_kernel_oserror *)0);
-    (void) mb_entryinit();
+  module_wsp = pw;
+  atexit(udpv_atexit);
 
-    if (read_sysvar("MPEG$UDPport", buf, sizeof(buf)) != 0)
-        default_video_port = atoi(buf);
-    else
-        default_video_port = VIDEO_PORT;
+  if (!mbuf_present()) return NULL;
 
-    if (read_sysvar("MPEG$UDPdsize", buf, sizeof(buf)) != 0)
-        bs_bufsize = atoi(buf);
-    else
-        bs_bufsize = 8192;
+  e = mbuf_opensession();
+  if (e != NULL) return e;
+  else mbuf_session_alive = true;
 
-    if (read_sysvar("UDP$Debug", buf, sizeof(buf)) != 0)
-        do_debug = 1;
+  /* Work out which port to use for incoming video data */
 
-    if (read_sysvar("MPEG$BufPool", buf, sizeof(buf)) != 0)
-    {
-      bs_bufpool = atoi(buf);
-      if (bs_bufpool < bs_bufsize)
-      {
-        bs_bufpool = MPEG_BUF_POOL_SIZE; /* Guess at minimum sensible value */
-      }
-    }
-    else
-    {
-      bs_bufpool = MPEG_BUF_POOL_SIZE;
-    }
-
-    n_bs_buffers = (bs_bufpool) / bs_bufsize;
-
-    if (read_sysvar("MPEG$MinBufs", buf, sizeof(buf)) != 0)
-    {
-        bs_minbufs = atoi(buf);
-    }
-    else
-    {
-        bs_minbufs = 0;
-    }
-
-    init_bs_buffers();
-    vsock = -1;
-    return ((_kernel_oserror *)0);
-}
-
-
-_kernel_oserror *udpv_cli_handler(char *arg_string, int arg_count, int cmd_no, void *pw)
-{
-    struct client *callp;
-    int margc;
-    char *margv[10];
-    char *cp;
-    char **argp = margv;
-
-    margc = 0;
-    cp = arg_string;
-    while (*cp && (arg_count-- > 0) && (margc < 10))
-    {
-        while (isspace(*cp))
-        {
-            cp++;
-        }
-        if (*cp == '\0' || iscntrl(*cp))
-            break;
-        *argp++ = cp;
-        margc++;
-        while (*cp != '\0' && !iscntrl(*cp) && !isspace(*cp))
-        {
-            cp++;
-        }
-        if (*cp == '\0' || iscntrl(*cp))
-            break;
-        *cp++ = '\0';
-    }
-    *argp++ = 0;
-    callp = &udpv_cli_call[cmd_no];
-    (void)(*(callp->cli_call))(margc, margv);
-    return ((_kernel_oserror *)0);
-}
-
-void udpv_show(int argc, char **argv)
-{
-    int temp_int, temp_fract;
-
-    printf("videoport=%d (%x)  lastport=%d  skipcount=%d  reentry=%d\n",
-               default_video_port, default_video_port, video_port, skipcount, reentered);
-    printf("bs_bufpool: %5dKB n_buffers: %-5d bufsize: %3dKB bs_minbufs: %d (%d frames)\n",
-               bs_bufpool/1024, n_bs_buffers, bs_bufsize/1024, bs_minbufs, bs_minbufs_check);
-    printf("bs_discards: %-12d emptyfailures: %-12d\n", discards, empty_failures);
-    if (datagrams_received > 0)
-    {
-      temp_int = bytes_received/datagrams_received;
-      temp_fract = ((bytes_received%datagrams_received)*100)/datagrams_received;
-      printf("Datagrams: %d  oversize: %d  undersize: %d  PDU avg: %6d.%-2d\n",
-              datagrams_received, oversized, undersized, temp_int, temp_fract);
-    }
-
-    if (do_debug && (skipcount == 4))
-    {
-      printf("Sequence information:\n");
-      if (sequence_OOS > 0)
-      {
-        temp_int = sequence_OOSt/sequence_OOS;
-        temp_fract = ((sequence_OOSt%sequence_OOS)*100)/sequence_OOS;
-        printf("              OOSes: %-d  (%d)   max: %-d   avg: %3d.%-2d\n",
-               sequence_OOS, sequence_OOSt, -sequence_OOSm, temp_int, temp_fract);
-      }
-      if (sequence_lost > 0)
-      {
-        temp_int = sequence_lostt/sequence_lost;
-        temp_fract = ((sequence_lostt%sequence_lost)*100)/sequence_lost;
-        printf("              Losses: %-d  (%d)   max: %-d   avg: %3d.%-2d\n",
-               sequence_lost, sequence_lostt, sequence_lostm, temp_int, temp_fract);
-      }
-    }
-
-    if (do_debug)
-    {
-      printf("bs_current_buf=%p, bs_current_residue=%d\n",
-               bs_current_buf, bs_current_residue);
-    }
-    print_bufs();
-}
-
-_kernel_oserror *udpv_swi_handler(int swinum, _kernel_swi_regs *r, void *pw)
-{
-    struct swient *callp;
-
-    callp = &udpv_ent[swinum];
-    return ((_kernel_oserror *)(*(callp->swi_call))(r));
-}
-
-int do_getsock(int port, int inputsocket)
-{
-    struct sockaddr_in addr;
-    int arg, sock, on = 1;
-
-    if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
-        return (-1);
-    arg = UdpV_RxDirect;
-    if (socketioctl(sock, FIONBIO, &on) < 0 || socketioctl(sock, FIORXDIR, &arg) < 0)
-    {
-        socketclose (sock);
-        return (-1);
-    }
-    arg = (SO_RECV_BUF_SIZE);
-    if (setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &on, sizeof (on)) < 0 ||
-        setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &arg, sizeof (arg)) < 0)
-    {
-        socketclose(sock);
-        return (-1);
-    }
-    if (inputsocket)
-    {
-        addr.sin_family      = AF_INET;
-        addr.sin_addr.s_addr = htonl(INADDR_ANY);
-        addr.sin_port        = htons((u_short)port);
-        if (bind(sock, (struct sockaddr *)&addr, sizeof (addr)) < 0)
-        {
-            socketclose(sock);
-            return (-1);
-        }
-    }
-    return (sock);
-}
-
-int udpv_startofplay(_kernel_swi_regs *r)
-{
-    int port = r->r[2];
-
-    sequence_expected = 0;
-    sequence_OOS = 0;
-    sequence_OOSm = 0;
-    sequence_OOSt = 0;
-    sequence_lost = 0;
-    sequence_lostm = 0;
-    sequence_lostt = 0;
-    discards = 0;
-    oversized = 0;
-    undersized = 0;
-    empty_failures = 0;
-    bytes_received = 0;
-    datagrams_received = 0;
-
-    if (port == 0)
-        port = default_video_port;
-
-    if (do_debug)
-        printf("        Get socket for port %d\n", port);
-    if (port != video_port && vsock != -1)
-    {
-        socketclose(vsock);
-        vsock = -1;
-    }
-    if (vsock == -1)
-    {
-        vsock = do_getsock(port, 1);
-        if (do_debug && vsock < 0)
-            printf("          Socket open failed!\n");
-    }
-    if (vsock >= 0)
-    {
-        video_port = port;
-        init_mpeg_buffers();
-        init_session(r->r[3], r->r[4]);
-    }
-    return (0);
-}
-
-int udpv_endofplay(_kernel_swi_regs *r)
-{
-    close_session();
-    return (0);
-}
-
-int udpv_empty_buf(_kernel_swi_regs *r)
-{
-    if (r->r[2] != 0)
-        return_empty_buf((struct bs_buffer *)r->r[2],1);
-    r->r[2] = 0;
-    return (0);
-}
-
-int udpv_nullswi(_kernel_swi_regs *r)
-{
-    return (0);
-}
-
-int udpv_rxdirect(_kernel_swi_regs *r)
-{
-  int s = ensure_irqs_on();
-  if (reentrancy_flag != 0)
+  if (read_sysvar("MPEG$UDPport", buf, sizeof(buf)) != 0)
   {
-    reentered++;
+    default_video_port = atoi(buf);
   }
   else
   {
-    reentrancy_flag++;
+    default_video_port = VIDEO_PORT;
   }
-    if (r->r[0] == vsock)
-        vs_process_input(r->r[1], r->r[2], (char *)(r->r[3]), r->r[4], r->r[5], r->r[6]);
-    restore_irqs(s);
-    reentrancy_flag = 0;
-    return (0);
+
+  /*
+   * MPEG$UDPSize is deprecated now there's just one rolling buffer and
+   * UDP$Debug is only appropriate for TRACE builds. Nice to see
+   * consistent naming going on here, too. Well done, people.
+   */
+
+  #ifdef TRACE
+    if (read_sysvar("UDP$Debug",      buf, sizeof(buf)) != 0) do_debug = 1;
+    if (read_sysvar("UDP$TraceLevel", buf, sizeof(buf)) != 0) tl       = atoi(buf);
+  #endif
+
+  /*
+   * In addition, MPEG$BufPool and MPEG$MinBufs are deprecated. They
+   * are replaced by MPEG$BufSize which is the single large buffer
+   * size, in bytes.
+   */
+
+  if (read_sysvar("MPEG$BufSize", buf, sizeof(buf)) != 0)
+  {
+    bs_bufsize = atoi(buf);
+  }
+  else
+  {
+    bs_bufsize = BUFFER_SIZE;
+  }
+
+  bufs_allocate_main_buffer();
+  vsock = -1;
+
+  return NULL;
 }
 
-int udpv_getstatus(_kernel_swi_regs *r)
+/**************************************************************/
+/* udpv_atexit()                                              */
+/*                                                            */
+/* atexit() handler for the module. Note that this is only    */
+/* correctly called if the module is built with CMHG 5.30 or  */
+/* later.                                                     */
+/**************************************************************/
+
+static void udpv_atexit(void)
 {
-    bs_bytes_sent += send_buffers();
-    r->r[0] = (v_state == PLAYING) ? PLAY_INPROGRESS : PLAY_TERMINATED;
-    r->r[1] = 0;
-    r->r[2] = 0;
-    r->r[3] = 0;
-    return (0);
+  #if CMHG_VERSION < 530
+    #error You need CMHG 5.30 or later to build UDPV.
+  #endif
+
+  if (v_state            != IDLE)  close_session();
+  if (vsock              != -1)    socketclose(vsock), vsock = -1;
+  if (mbuf_session_alive != false) mbuf_closesession();
+
+  bufs_free_main_buffer();
 }
 
-void init_session(int handle, int skipsize)
+/**************************************************************/
+/* udpv_cli_handler()                                         */
+/*                                                            */
+/* Standard module command handler.                           */
+/**************************************************************/
+
+_kernel_oserror *udpv_cli_handler(const char *arg_string, int argc, int cmd_no, void *pw)
 {
-    mpeg_handle = handle;
-    v_state = PLAYING;
-    skipcount = skipsize;
+  struct client * callp;
+
+  (void) arg_string;
+  (void) argc;
+  (void) pw;
+
+  callp   = &udpv_cli_call[cmd_no];
+  (void)(*(callp->cli_call))(NULL);
+
+  return NULL;
 }
 
-void close_session(void)
+/**************************************************************/
+/* udpv_show()                                                */
+/*                                                            */
+/* Handle *StrmInfo.                                          */
+/**************************************************************/
+
+static void udpv_show(void)
 {
-    v_state = IDLE;
+  int temp_int, temp_fract;
+
+  printf("Video port: &%08X = %-12u Last port:  &%08X = %u\n",
+         default_video_port,
+         default_video_port,
+         video_port,
+         video_port);
+
+  printf("Buffer:     &%08X = %-12u Overruns:   &%08X = %u\n",
+         BUFFER_SIZE,
+         BUFFER_SIZE,
+         overruns,
+         overruns);
+
+  if (datagrams_received > 0)
+  {
+    temp_int   = bytes_received / datagrams_received;
+    temp_fract = ((bytes_received % datagrams_received) * 100) / datagrams_received;
+
+    printf("Datagrams:  &%08X = %u (PDU average %d.%02d bytes)\n",
+           datagrams_received,
+           datagrams_received,
+           temp_int,
+           temp_fract);
+  }
 }
 
-int vs_process_input(int a, int b, char *ack_src, int ack_unit, int ack_swi, int ack_buf)
+/**************************************************************/
+/* udpv_cli_handler()                                         */
+/*                                                            */
+/* Standard module SWI handler.                               */
+/**************************************************************/
+
+_kernel_oserror *udpv_swi_handler(int swi_offset, _kernel_swi_regs *r, void *pw)
 {
-    struct mbuf *m0, *m1;
-    int mlen;
-    static char *bptr;
+  struct swient * callp;
 
-    m0 = (struct mbuf *)a;
-    m1 = (struct mbuf *)ack_buf;
+  callp = &udpv_ent[swi_offset];
+  return ((_kernel_oserror *)(*(callp->swi_call))(r));
+}
 
-    if (m0 != NULL)
+/**************************************************************/
+/* udpv_startofplay()                                         */
+/*                                                            */
+/* Handle SWI UDPV_StartOfPlay.                               */
+/*                                                            */
+/* Parameters: Pointer to a register block - R2 holds the     */
+/*             port number or 0 for default, R3 holds the     */
+/*             MPEG stream handle (from MPEGControl), and R4  */
+/*             holds an amount of data to chop off the front  */
+/*             of each packet (if any).                       */
+/**************************************************************/
+
+static int udpv_startofplay(_kernel_swi_regs *r)
+{
+  int port = r->r[2];
+
+  bytes_received     = 0;
+  datagrams_received = 0;
+
+  if (port == 0) port = default_video_port;
+
+  #ifdef TRACE
+    sequence_expected = 0;
+    sequence_OOS      = 0;
+    sequence_OOSm     = 0;
+    sequence_OOSt     = 0;
+    sequence_lost     = 0;
+    sequence_lostm    = 0;
+    sequence_lostt    = 0;
+    if (do_debug) printf("Get socket for port %d\n", port);
+  #endif
+
+  /* If the port we're asked for isn't the port we're using */
+  /* now (if any), close the existing socket.               */
+
+  if (port != video_port && vsock != -1)
+  {
+    socketclose(vsock);
+    vsock = -1;
+  }
+
+  /* Open the requested socket */
+
+  if (vsock == -1)
+  {
+    vsock = do_getsock(port, 1);
+
+    #ifdef TRACE
+      if (do_debug && vsock < 0) printf("Socket open failed!\n");
+    #endif
+  }
+
+  /* If that worked, mark this new port as our working one and */
+  /* initialise the buffers and session.                       */
+
+  if (vsock >= 0)
+  {
+    video_port = port;
+    bufs_allocate_main_buffer(); /* This resets offset pointers and can resize the buffer - see bufs.c */
+    init_session(r->r[3], r->r[4]);
+  }
+
+  return 0;
+}
+
+/**************************************************************/
+/* udpv_endendofplay()                                        */
+/*                                                            */
+/* Handle SWI UDPV_EndOfPlay.                                 */
+/*                                                            */
+/* Parameters: Pointer to a register block, contents ignored. */
+/**************************************************************/
+
+static int udpv_endofplay(_kernel_swi_regs *r)
+{
+  (void) r;
+
+  close_session();
+
+  return 0;
+}
+
+/**************************************************************/
+/* udpv_emptybuffer()                                         */
+/*                                                            */
+/* Handle SWI UDPV_EmptyBuffer.                               */
+/*                                                            */
+/* Parameters: Pointer to a register block, where R2 on entry */
+/*             points to the 'buffer' (actually a chunk of    */
+/*             data allocated with our one main buffer) to    */
+/*             free, and on exit is set to zero.              */
+/**************************************************************/
+
+static int udpv_emptybuffer(_kernel_swi_regs *r)
+{
+  if (r->r[2] != 0) bufs_release_bs_buffer((bs_buffer *) r->r[2]);
+  r->r[2] = 0;
+
+  return 0;
+}
+
+/**************************************************************/
+/* udpv_nullswi()                                             */
+/*                                                            */
+/* Handle a null UDPV SWI.                                    */
+/*                                                            */
+/* Parameters: Pointer to a register block, contents ignored. */
+/**************************************************************/
+
+static int udpv_nullswi(_kernel_swi_regs *r)
+{
+  (void) r;
+
+  return 0;
+}
+
+/**************************************************************/
+/* udpv_rxdirect()                                            */
+/*                                                            */
+/* Handle UDPV_RxDirect. This is the "back door" interface    */
+/* called by the Internet module and is the point where the   */
+/* data pumping is all driven. It's set up through a          */
+/* socketioctl call in do_getsock.                            */
+/*                                                            */
+/* Parameters: Pointer to a register block; R0 holds socket   */
+/*             number, the others are documented in the code  */
+/*             below. R6 is basically a speed hack for ARM 2  */
+/*             machines allowing total bypass of the stack    */
+/*             for responses - in our case we just free the   */
+/*             mbuf chain we're given with m_freem().         */
+/**************************************************************/
+
+static int udpv_rxdirect(_kernel_swi_regs *r)
+{
+  if (r->r[0] == vsock) vs_process_input(r->r[1],            /* Received data as mbuf */
+                                         r->r[2],            /* struct sock_addr holding the source address [unused] */
+                                         (char *) (r->r[3]), /* Pointer to the MAC address the source as a 6-byte structure [unused] */
+                                         r->r[4],            /* DCI unit number of the interface the packet was received upon [unused] */
+                                         r->r[5],            /* Number of the transmit SWI in the DCI driver that received the packet [unused] */
+                                         r->r[6]);           /* May be an mbuf (chain) setup to contain an AUN acknowledgement packet (we discard it) */
+
+  return 0;
+}
+
+/**************************************************************/
+/* udpv_streamstatus()                                        */
+/*                                                            */
+/* Handle SWI UDPV_StreamStatus.                              */
+/*                                                            */
+/* Parameters: Pointer to a register block with R0 holding 1  */
+/*             if playing else 0 on exit, and R1 through R3   */
+/*             all set to zero on exit.                       */
+/**************************************************************/
+
+static int udpv_streamstatus (_kernel_swi_regs *r)
+{
+  r->r[0] = (v_state == PLAYING) ? PLAY_INPROGRESS : PLAY_TERMINATED;
+  r->r[1] = 0;
+  r->r[2] = 0;
+  r->r[3] = 0;
+
+  return 0;
+}
+
+/**************************************************************/
+/* read_sysvar()                                              */
+/*                                                            */
+/* Read a given system variable's value as a string into a    */
+/* given buffer.                                              */
+/*                                                            */
+/* Parameters: Pointer to variable name;                      */
+/*                                                            */
+/*             Pointer to buffer to take value;               */
+/*                                                            */
+/*             Length of buffer.                              */
+/*                                                            */
+/* Returns:    0 for failure, 1 for success.                  */
+/**************************************************************/
+
+static int read_sysvar(char *var, char *buf, int buflen)
+{
+  _kernel_swi_regs   r;
+  _kernel_oserror  * e;
+
+  r.r[0] = (int)var;
+  r.r[1] = (int)buf;
+  r.r[2] = buflen;
+  r.r[3] = 0;
+  r.r[4] = 3; /* Ask OS to convert varable to string for us */
+
+  e = _kernel_swi(OS_ReadVarVal, &r, &r);
+
+  if (e || r.r[2] == 0) return (0);
+  buf[r.r[2]] = 0;
+  return (1);
+}
+
+/**************************************************************/
+/* do_getsock()                                               */
+/*                                                            */
+/* Try to open the listening socket for video data.           */
+/*                                                            */
+/* Parameters: Port number to read on;                        */
+/*                                                            */
+/*             0 to just create it but leave it unbound, else */
+/*             also bind the socket.                          */
+/*                                                            */
+/* Returns:    Input socket number or -1 for failuer.         */
+/**************************************************************/
+
+static int do_getsock(int port, int inputsocket)
+{
+  struct sockaddr_in addr;
+  int                arg, sock, on;
+
+  /* Create the socket */
+
+  if ((sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0) return -1;
+
+  /* Set it up to be non-blocking and direct RX with our data */
+  /* processing SWI. Currently, in fact, the SWI *must* be    */
+  /* Econet_RxDirect = &4001D, and the argument just has to   */
+  /* be non-zero, but we can pretend the interface is more    */
+  /* sane at least...                                         */
+
+  on  = 1;
+  arg = UDPV_RxDirect;
+
+  if (
+       socketioctl(sock, FIONBIO,  &on)  < 0 ||
+       socketioctl(sock, FIORXDIR, &arg) < 0
+     )
+  {
+    socketclose(sock);
+    return -1;
+  }
+
+  /* Set the receive buffer size to SO_RECV_BUF_SIZE */
+
+  arg = (SO_RECV_BUF_SIZE);
+
+  if (setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &arg, sizeof (arg)) < 0)
+  {
+    socketclose(sock);
+    return -1;
+  }
+
+  /* If required, bind it */
+
+  if (inputsocket != 0)
+  {
+    addr.sin_family      = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_port        = htons((u_short)port);
+
+    if (bind(sock, (struct sockaddr *)&addr, sizeof (addr)) < 0)
     {
-      /* Replacement for block of Keith's code:    *
-       * use MBuf manager supplied routines rather *
-       * than walking mbuf chains manually & using *
-       * CLib memcpy - the mbuf manager is likely  *
-       * to be more optimal.                       *
-       */
-      mlen = (*mbctl.count_bytes)(&mbctl, m0);
-      /* Introduced the following block of code to support OptiVision sequenced UDP *
-       * on 12-13 Nov 98 to try to assist TMD in tracking down the MPEG replay      *
-       * jitter problem that's apparent.                                            *
-       */
-      if ((mlen > skipcount) && (skipcount > 0))
-      {
+      socketclose(sock);
+      return -1;
+    }
+  }
+
+  /* Finished */
+
+  return sock;
+}
+
+/**************************************************************/
+/* init_session()                                             */
+/*                                                            */
+/* Set some internal flags to initialise a session, including */
+/* setting state to "PLAYING".                                */
+/*                                                            */
+/* Parameters: MPEGControl stream handle;                     */
+/*                                                            */
+/*             Amount of data to automatically throw away off */
+/*             the front of any received packets (normally    */
+/*             zero).                                         */
+/**************************************************************/
+
+static void init_session(int handle, int skipsize)
+{
+  mpeg_handle = handle;
+  v_state     = PLAYING;
+  skipcount   = skipsize;
+}
+
+/**************************************************************/
+/* close_session()                                            */
+/*                                                            */
+/* Set state back to "IDLE".                                  */
+/**************************************************************/
+
+static void close_session(void)
+{
+  v_state = IDLE;
+}
+
+/**************************************************************/
+/* vs_process_input()                                         */
+/*                                                            */
+/* Called from the UDPV_RxDirect SWI handler. Process input   */
+/* data in the given mbuf.                                    */
+/*                                                            */
+/* Parameters: Pointer to mbuf to look at;                    */
+/*                                                            */
+/*             b, ack_src, ack_unit and ack_swi are ignored;  */
+/*                                                            */
+/*             Pointer to another mbuf which has m_freem()    */
+/*             called on it after handling the first mbuf.    */
+/**************************************************************/
+
+static int vs_process_input(int a, int b, char * ack_src, int ack_unit, int ack_swi, int ack_buf)
+{
+  struct mbuf * m0, * m1;
+  int           mlen;
+
+  /* m1 is an old interface and we need to free the chain that (might) point */
+  /* to before exitting. On exit if we leave m0 untouched it'll get passed   */
+  /* to the socket in the usual fashion; or engineer it so it's zero length  */
+  /* to get the Internet module to free the associated chain without passing */
+  /* it on. The TRIM macro does the latter for us.                           */
+
+  m0 = (struct mbuf *) a;
+  m1 = (struct mbuf *) ack_buf;
+
+  if (m0 != NULL)
+  {
+    /*
+     * Replacement for block of Keith's code:
+     * use MBuf manager supplied routines rather
+     * than walking mbuf chains manually & using
+     * CLib memcpy - the mbuf manager is likely
+     * to be more optimal.
+     */
+
+    mlen = (*mbctl.count_bytes)(&mbctl, m0);
+
+    if ((mlen > skipcount) && (skipcount > 0))
+    {
+      #ifdef TRACE
+
+        /* An attempt to support OptiVision sequenced UDP from round about
+         * 12 Nov 1998. Just debugging really, so wrapped in #ifdef TRACE
+         * these days.
+         */
+
         if (skipcount == 4) /* Special case of a 4-byte sequence number */
         {
           u_long raw_sequence, sequence;
@@ -460,8 +685,7 @@ int vs_process_input(int a, int b, char *ack_src, int ack_unit, int ack_swi, int
 
           if (do_debug && difference != 0)
           {
-            printf("Expected: %x off by: %d\n",
-                     sequence_expected, difference);
+            printf("Expected %x, off by %d\n", sequence_expected, difference);
           }
 
           if (difference < 0)
@@ -490,128 +714,70 @@ int vs_process_input(int a, int b, char *ack_src, int ack_unit, int ack_swi, int
           }
         }
         else
-        {
-          TRIM(m0, skipcount, NULL); /* throw away unwanted bytes */
-          mlen =- skipcount;
-        }
-      }
 
-      if (mlen > bs_bufsize)
+      #endif
+
+      /* Throw away unwanted data from the front of the buffer before proceeding. */
+      /* The skipcount value comes from R4 in UDPV_StartOfPlay.                   */
+
       {
-        oversized++;
+        TRIM(m0, skipcount, NULL);
+        mlen =- skipcount;
       }
-      else if (mlen < bs_bufsize)
+    }
+
+    /* Keep a count of data received - this is typically pretty useful */
+    /* in debug and non-debug builds.                                  */
+
+    bytes_received += mlen;
+    datagrams_received++;
+
+    /* If we have any data [left], send it all to the buffer (if possible) */
+
+    if (mlen > 0)
+    {
+      bs_buffer * bsb = bufs_claim_bs_buffer(mlen + sizeof(bs_buffer));
+
+      if (bsb == NULL)
       {
-        undersized++;
+        /* Erk, overrun - drop this buffer */
+
+        (void) TRIM(m0, M_COPYALL, NULL);
       }
-      bytes_received += mlen;
-      datagrams_received++;
-      while (mlen > 0)
+      else
       {
-        while (mlen > bs_current_residue)
-        {
-          if (bs_current_buf != NULL)
-          {
-             /* remove residue bytes from mbuf chain, copy to bptr,
-              *  and update mbuf chain to reflect the removal of these.
-              */
-            (void) TRIM(m0, bs_current_residue, bptr);
-            bs_current_buf->bs_len += bs_current_residue;
-            mlen -= bs_current_residue;
-            save_full_buf(bs_current_buf, 0);
-          }
+        /* We'll put the actual data straight after the structure */
 
-          bs_current_buf = get_empty_buffer();
-          if (bs_current_buf == 0)
-          {
-            discards++;
-            bs_current_residue = 0;
-            break; /* Fall out of inner while loop */
-          }
-          bs_current_residue = bs_bufsize;
-          bs_current_buf->bs_len = 0;
-          bs_current_buf->bs_handle = 0;
-          bs_current_buf->bs_flags = FREE_BUFFER_SWI;
-          bptr = bs_current_buf->bs_data;
+        char * bptr = ((char *) bsb) + sizeof(bs_buffer);
 
-          /* When we fall out of this loop, we've either exhausted the buffer pool,
-           * or there are less than bs_current_residue bytes left in the mbuf chain.
-           */
-        }
-        if (bs_current_residue == 0)
-        {
-          break; /* Fall out of outer while loop */
-        }
+        bsb->bs_next    = NULL;             /* We don't use this, the MPEG software does.       */
+        bsb->bs_handle  = 0;                /* If zero, flags = SWI to call...                  */
+        bsb->bs_flags   = UDPV_EmptyBuffer; /* ...so call UDPV_EmptyBuffer please.              */
+        bsb->bs_packets = 0;                /* Must be zero on entry to MPEGControl_FullBuffers */
+        bsb->bs_data    = bptr;
+        bsb->bs_offset  = bsb->bs_data;
+        bsb->bs_len     = mlen;             /* We rely on this being intact at all times.       */
 
-        /* remove remaining mlen bytes from mbuf chain, copy to bptr,
-         * and update mbuf chain to reflect the removal of these.
-         */
+        /* Copy the data into our buffer */
+
         (void) TRIM(m0, mlen, bptr);
 
-        /*
-         * 07-Feb-2000 (ADH): Code used to read as follows:
-         *
-         *   bs_current_buf->bs_len += mlen;
-         *   bptr += mlen;
-         *   bs_current_residue -= mlen;
-         *   mlen = 0;
-         *   /(STAR) catch case where this exactly fills the bs_buffer (STAR)/
-         *   if (bs_current_residue == 0)
-         *   {
-         *     save_full_buf(bs_current_buf, 0);
-         *     bs_current_buf = NULL;
-         *   }
-         *
-         * Now modified to send out all buffers, even if not full, because the
-         * module beforehand would hold on to the last fragment of data it got.
-         * This hid things like "end of stream" markers in MPEG data and so-on.
-         * Possible side effect: Buffer overflow if the MPEG software decides
-         * to hold on to a group of our buffers for some reason, as we're no
-         * longer always collating data into 8K chunks for it.
-         */
+        /* Sent it to the MPEG software */
 
-        if (bs_current_buf != NULL)
-        {
-          bs_current_buf->bs_len += mlen;
-          bptr += mlen;
+        _swix(MPEGControl_FullBuffers,
+              _INR(0,2),
 
-          save_full_buf(bs_current_buf, 0);
-          bs_current_buf = NULL;
-        }
-
-        bs_current_residue -= mlen;
-        mlen = 0;
-      }
-      bs_bytes_sent += send_buffers(); /* Send any buffers we've queued */
-      if (mlen != 0) /* Suggests bs_buf exhaustion has occurred */
-      {
-        empty_failures++;
-        (void) TRIM(m0, M_COPYALL, NULL); /* Force this buf to be empty */
+              0,
+              mpeg_handle,
+              bsb);
       }
     }
+  }
 
-    if (m1) /* Tidy up the KSR back door approach to the stack */
-    {
-        m_freem(m1);
-    }
-    return(0);
-}
+  if (m1 != NULL) /* Tidy up the KSR back door approach to the stack */
+  {
+    m_freem(m1);
+  }
 
-
-
-int read_sysvar(char *var, char *buf, int buflen)
-{
-    _kernel_swi_regs r;
-    _kernel_oserror *e;
-
-    r.r[0] = (int)var;
-    r.r[1] = (int)buf;
-    r.r[2] = buflen;
-    r.r[3] = 0;
-    r.r[4] = 3; /* Ask OS to convert varable to string for us */
-    e = _kernel_swi(XOS_Bit | OS_ReadVarVal, &r, &r);
-    if (e || r.r[2] == 0)
-        return (0);
-    buf[r.r[2]] = 0;
-    return (1);
+  return 0;
 }

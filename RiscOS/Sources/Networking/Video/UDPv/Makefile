@@ -1,4 +1,4 @@
-# Makefile for UDPv
+# Makefile for UDPV
 #
 # ***********************************
 # ***    C h a n g e   L i s t    ***
@@ -29,8 +29,8 @@ WIPE    = -wipe
 CD	= dir
 TOUCH   = create
 
-COMPONENT = UDPv
-CMHGNAME  = UdpVHdr
+COMPONENT = UDPV
+CMHGNAME  = UDPVHdr
 
 EXPORTS = ${EXP_HDR}.h.${COMPONENT}
 
@@ -83,6 +83,7 @@ OBJS      =\
  o.bufs\
  o.module\
  o.mbuf\
+ o.global\
  o.irqs\
  $(CMHGOBJ)
 
@@ -96,7 +97,7 @@ OBJS      =\
 
 
 #
-# build a UDPv module
+# build a UDPV module
 #
 all: ${TARGET}
         @echo ${COMPONENT}: all complete
@@ -155,8 +156,17 @@ ${EXPORTS}: h.${CMHGNAME} ${DIRS}
 	${AWK} -- "/.define UDPV\_00/,/endif/" h.${CMHGNAME} { > $@ }
 	SetType $@ Text
 
+#
+# Specialised static dependencies
+#
 
-o.module: VersionNum
+o.module: UDPVHdr.h
+
+o.UDPVHdr h.UDPVHdr: VersionNum
+
+#
+# Dirs rule for building from clean
+#
 
 ${DIRS}:
 	${MKDIR} o
