@@ -29,7 +29,7 @@ WIPE    = -wipe
 DEFMOD  = DefMod
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -zM -zps1 -ffah ${INCLUDES} ${DFLAGS} ${THROWBACK} -DNDEBUG
+CFLAGS  = -c -depend !Depend -zM -zps1 -ffah ${INCLUDES} ${DFLAGS} ${THROWBACK}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
@@ -44,6 +44,8 @@ RSTUBS    = RISCOSLIB:o.rstubs
 ROMSTUBS  = RISCOSLIB:o.romstubs
 ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.AbsSym
+#REMOTEDB  = <Lib$Dir>.debug.o.remotezm
+REMOTEDB  =
 #
 # Include files
 #
@@ -144,8 +146,8 @@ resources:
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${ROMOBJS} ${ROMCSTUBS} 
-        ${LD} -o $@ -aof ${ROMOBJS} ${ROMCSTUBS}
+${TARGET}: ${ROMOBJS} ${ROMCSTUBS} ${REMOTEDB}
+        ${LD} -o $@ -aof ${ROMOBJS} ${ROMCSTUBS} ${REMOTEDB}
 #
 # Final link for the ROM Image (using given base address)
 #
@@ -155,10 +157,49 @@ rom_link:
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-rm.${COMPONENT}: ${OBJS} ${CLIB}
-        ${LD} -o $@ -module ${OBJS} ${CLIB}
+rm.${COMPONENT}: ${OBJS} ${CLIB} ${REMOTEDB}
+        ${LD} -o $@ -module ${OBJS} ${CLIB} ${REMOTEDB}
 
 # Dynamic dependencies:
+o.resources: s.resources
+o.resources: hdr:ListOpts
+o.resources: hdr:Macros
+o.resources: hdr:System
+o.resources: Hdr:SWIs
+o.resources: Hdr:CPU.Generic26
+o.resources: Hdr:IO.GenericIO
+o.resources: Hdr:RISCOS
+o.resources: hdr:ModHand
+o.resources: hdr:MsgTrans
+o.resources: hdr:ResourceFS
+o.resources: hdr:Proc
+o.resources: hdr.CVars
+o.main:	c.main
+o.main:	C:h.swis
+o.main:	C:h.kernel
+o.main:	OS:h.os
+o.main:	OS:h.types
+o.main:	OS:h.resourcefs
+o.main:	h.modhdr
+o.main:	h.msgs
+o.main:	h.resources
+o.main:	h.utils
+o.main:	h.fw
+o.main:	h.filewatch
+o.main:	C:debug.h.remote
+oz.resources: s.resources
+oz.resources: hdr:ListOpts
+oz.resources: hdr:Macros
+oz.resources: hdr:System
+oz.resources: Hdr:SWIs
+oz.resources: Hdr:CPU.Generic26
+oz.resources: Hdr:IO.GenericIO
+oz.resources: Hdr:RISCOS
+oz.resources: hdr:ModHand
+oz.resources: hdr:MsgTrans
+oz.resources: hdr:ResourceFS
+oz.resources: hdr:Proc
+oz.resources: hdr.CVars
 o.msgs:	c.msgs
 o.msgs:	C:h.swis
 o.msgs:	C:h.kernel
@@ -190,7 +231,6 @@ o.handlers:	c.handlers
 o.handlers:	OS:h.osfind
 o.handlers:	OS:h.types
 o.handlers:	OS:h.os
-o.handlers:	OS:h.fileswitch
 o.handlers:	OS:h.osfscontrol
 o.handlers:	h.fw
 o.handlers:	h.filewatch
@@ -203,35 +243,20 @@ o.interest:	C:h.kernel
 o.interest:	OS:h.osfscontrol
 o.interest:	OS:h.types
 o.interest:	OS:h.os
-o.interest:	OS:h.fileswitch
 o.interest:	h.fw
 o.interest:	h.filewatch
 o.interest:	h.msgs
 o.interest:	h.utils
 o.interest:	h.main
-o.resources: s.resources
-o.resources: hdr:ListOpts
-o.resources: hdr:Macros
-o.resources: hdr:System
-o.resources: Hdr:SWIs
-o.resources: Hdr:CPU.Generic26
-o.resources: Hdr:IO.GenericIO
-o.resources: Hdr:RISCOS
-o.resources: hdr:ModHand
-o.resources: hdr:MsgTrans
-o.resources: hdr:ResourceFS
-o.resources: hdr:Proc
-o.resources: hdr.CVars
-o.main:	c.main
-o.main:	C:h.swis
-o.main:	C:h.kernel
-o.main:	OS:h.os
-o.main:	OS:h.types
-o.main:	OS:h.resourcefs
-o.main:	OS:h.fileswitch
-o.main:	h.modhdr
-o.main:	h.msgs
-o.main:	h.resources
-o.main:	h.utils
-o.main:	h.fw
-o.main:	h.filewatch
+oz.main:	c.main
+oz.main:	C:h.swis
+oz.main:	C:h.kernel
+oz.main:	OS:h.os
+oz.main:	OS:h.types
+oz.main:	OS:h.resourcefs
+oz.main:	h.modhdr
+oz.main:	h.msgs
+oz.main:	h.resources
+oz.main:	h.utils
+oz.main:	h.fw
+oz.main:	h.filewatch
