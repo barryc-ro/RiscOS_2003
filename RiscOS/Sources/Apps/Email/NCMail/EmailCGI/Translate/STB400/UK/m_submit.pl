@@ -37,81 +37,98 @@ if (get_public_path())
 {
   $accounts_file = $public_path."/NCMail/Users";
 
-  read_accounts_file($accounts_file);
-
-  if (get_user_number_and_command_type())
+  if (read_accounts_file($accounts_file))
   {
-    if ($command_type eq "delete")
+    if (get_user_number_and_command_type())
     {
-      # Make sure there is always a default record
-      if ($flags[$user] == 1)
+      if ($command_type eq "delete")
       {
-        if ($user == 0)
+        # Make sure there is always a default record
+        if ($flags[$user] == 1)
         {
-          $flags[1] = 1;
+          if ($user == 0)
+          {
+            $flags[1] = 1;
+          }
+          else
+          {
+            $flags[0] = 1;
+          }
         }
-        else
-        {
-          $flags[0] = 1;
-        }
+
+        # Check there is more than one record in the file?  Don't allow last one to be deleted?
+
+        write_accounts_file($accounts_file, 0);
+
+        output_header_html($header_html);
+        output_buttons();
+        output_main_html();
       }
 
-      # Check there is more than one record in the file?  Don't allow last one to be deleted?
+      if ($command_type eq "modify")
+      {
+        $record_number = $user;
 
-      write_accounts_file($accounts_file, 0);
+        change_array_details();
+        write_accounts_file($accounts_file, 1);
 
-      output_header_html($header_html);
-      output_buttons();
-      output_main_html();
+        output_header_html($header_html);
+        output_buttons();
+        output_main_html();
+      }
+
+      if ($command_type eq "create")
+      {
+        # **** Point to the next free account number
+        $record_number = $number_of_records;
+        $number_of_records += 1;
+
+        change_array_details();
+        write_accounts_file($accounts_file, 1);
+
+        output_header_html($header_html);
+        output_buttons();
+        output_main_html();
+      }
+
+      if ($command_type eq "block")
+      {
+        $record_number = $user;
+
+        write_accounts_file($accounts_file, 2);
+
+        output_header_html($header_html);
+        output_buttons();
+        output_main_html();
+      }
+
+      if ($command_type eq "unblock")
+      {
+        $record_number = $user;
+
+        write_accounts_file($accounts_file, 3);
+
+        output_header_html($header_html);
+        output_buttons();
+        output_main_html();
+      }
+
+      if ($command_type eq "deletefile")
+      {
+        $record_number = $user;
+
+        delete_accounts_file($accounts_file);
+
+        output_header_html($header_html);
+        output_buttons();
+        output_main_html();
+      }
     }
-
-    if ($command_type eq "modify")
-    {
-      $record_number = $user;
-
-      change_array_details();
-      write_accounts_file($accounts_file, 1);
-
-      output_header_html($header_html);
-      output_buttons();
-      output_main_html();
-    }
-
-    if ($command_type eq "create")
-    {
-      # **** Point to the next free account number
-      $record_number = $number_of_records;
-      $number_of_records += 1;
-
-      change_array_details();
-      write_accounts_file($accounts_file, 1);
-
-      output_header_html($header_html);
-      output_buttons();
-      output_main_html();
-    }
-
-    if ($command_type eq "block")
-    {
-      $record_number = $user;
-
-      write_accounts_file($accounts_file, 2);
-
-      output_header_html($header_html);
-      output_buttons();
-      output_main_html();
-    }
-
-    if ($command_type eq "unblock")
-    {
-      $record_number = $user;
-
-      write_accounts_file($accounts_file, 3);
-
-      output_header_html($header_html);
-      output_buttons();
-      output_main_html();
-    }
+  }
+  else
+  {
+    output_header_html($header_html);
+    output_buttons(1);
   }
 }
 else
@@ -130,8 +147,8 @@ sub read_accounts_file
 
   if (!open(FILE,$file))
   {
-      print("Error opening $file : $!\n");
-      return;
+      # print("Error opening $file : $!\n");
+      return 0;
   }
 
   $number_of_records = 0;
@@ -214,6 +231,8 @@ sub read_accounts_file
     if ($localpophostnames[$i] eq "" or $localpophostnames[$i] eq "-") { $localpophostnames[$i] = $global_pop_hostname; }
     if ($localsmtphostnames[$i] eq "" or $localsmtphostnames[$i] eq "-") { $localsmtphostnames[$i] = $global_smtp_hostname; }
   }
+
+  return 1;
 }
 
 
@@ -277,6 +296,13 @@ sub write_accounts_file
   close (FILE);
 }
 
+
+# delete the new accounts file
+#
+sub delete_accounts_file($accounts_file)
+{
+  unlink $accounts_file;
+}
 
 # modify the arrays with the new details
 #
@@ -427,6 +453,11 @@ sub output_main_html
   {
     print "<FONT FACE=ncoffline SIZE=êêglobal_fontsize_xlgëë>êêm_submit_unblocksuccessëë</FONT>\n";
   }
+
+  if ($command_type eq "deletefile")
+  {
+    print "<FONT FACE=ncoffline SIZE=êêglobal_fontsize_xlgëë>êêm_submit_deletefilesuccessëë</FONT>\n";
+  }
 }
 
 
@@ -440,14 +471,24 @@ sub output_buttons
   print "  <TR>";
   print "    <TD WIDTH=\"100%\" ALIGN=CENTER>";
   print "      <FONT FACE=ncoffline SIZE=êêglobal_fontsize_lgëë>";
-  print "      <FORM METHOD=\"GET\" ACTION=\"accounts.pl\" Target=\"_top\">";
-  print "        <INPUT TYPE=HIDDEN NAME=\"path\" VALUE=\"".$public_path."\">";
-  print "        <INPUT TYPE=SUBMIT VALUE=\"êêm_submit_b_accountsëë\" BORDERIMAGE=\"icontype:buttmid_bord\" SELIMAGE=\"icontype:buttmid_sel\" WIDTH=110 HEIGHT=40>";
+
+  if ($command_type eq "block" or $command_type eq "unblock" or $command_type eq "deletefile")
+  {
+    print "      <FORM METHOD=\"GET\" ACTION=\"ncint:openpage?name=home\" Target=\"_top\">";
+    print "        <INPUT TYPE=HIDDEN NAME=\"path\" VALUE=\"".$public_path."\">";
+    print "        <INPUT TYPE=SUBMIT VALUE=\"êêm_submit_b_okëë\" BORDERIMAGE=\"icontype:buttmid_bord\" SELIMAGE=\"icontype:buttmid_sel\" WIDTH=110 HEIGHT=40>";
+  }
+  else
+  {
+    print "      <FORM METHOD=\"GET\" ACTION=\"accounts.pl\" Target=\"_top\">";
+    print "        <INPUT TYPE=HIDDEN NAME=\"path\" VALUE=\"".$public_path."\">";
+    print "        <INPUT TYPE=SUBMIT VALUE=\"êêm_submit_b_accountsëë\" BORDERIMAGE=\"icontype:buttmid_bord\" SELIMAGE=\"icontype:buttmid_sel\" WIDTH=110 HEIGHT=40>";
+  }
+
   print "      </FORM>";
   print "    </TD>";
   print "  </TR>";
   print "</TABLE>";
-
 }
 
 # get_user_number_and_command_type
@@ -470,7 +511,7 @@ sub get_user_number_and_command_type
   {
     ($action_type,$passed_in) = split(/=/,$item,2);
 
-    if ($action_type eq "delete" or $action_type eq "modify" or $action_type eq "create" or $action_type eq "block" or $action_type eq "unblock")
+    if ($action_type eq "delete" or $action_type eq "modify" or $action_type eq "create" or $action_type eq "block" or $action_type eq "unblock" or $action_type eq "deletefile")
     {
       $command_type = $action_type;
     }

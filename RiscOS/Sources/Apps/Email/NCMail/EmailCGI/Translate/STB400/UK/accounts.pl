@@ -279,25 +279,26 @@ sub output_buttons
   print "<TABLE WIDTH=\"100%\" ALIGN=CENTER BORDER=0 CELLSPACING=0>";
   print "  <TR>";
 
+  print "    <TD ALIGN=CENTER>";
+  print "      <FONT FACE=ncoffline SIZE=global_fontsize_lg‘‘>";
+  print "      <FORM METHOD=\"GET\" ACTION=\"javascript:return_to_usersel()\" TARGET=\"_top\">";
+  print "        <INPUT TYPE=SUBMIT VALUE=\"accounts_b_inbox‘‘\" BORDERIMAGE=\"icontype:buttmid_bord\" SELIMAGE=\"icontype:buttmid_sel\" WIDTH=110 HEIGHT=40>";
+  print "      </FORM>";
+  print "      </FONT>";
+  print "    </TD>";
+
   if ($number_of_buttons == 2)
   {
     print "    <TD ALIGN=CENTER>";
     print "      <FONT FACE=ncoffline SIZE=global_fontsize_lg‘‘>";
-    print "      <FORM METHOD=\"GET\" ACTION=\"javascript:return_to_usersel()\" TARGET=\"_top\">";
-    print "        <INPUT TYPE=SUBMIT VALUE=\"accounts_b_inbox‘‘\" BORDERIMAGE=\"icontype:buttmid_bord\" SELIMAGE=\"icontype:buttmid_sel\" WIDTH=110 HEIGHT=40>";
+    print "      <FORM METHOD=\"GET\" ACTION=\"create.pl\" TARGET=\"_top\">";
+    print "        <INPUT TYPE=HIDDEN NAME=\"path\" VALUE=".$public_path.">";
+    print "        <INPUT TYPE=SUBMIT VALUE=\"accounts_b_create‘‘\" BORDERIMAGE=\"icontype:buttmid_bord\" SELIMAGE=\"icontype:buttmid_sel\" WIDTH=110 HEIGHT=40>";
     print "      </FORM>";
     print "      </FONT>";
-    print "    </TD>";
+  print "    </TD>";
   }
 
-  print "    <TD ALIGN=CENTER>";
-  print "      <FONT FACE=ncoffline SIZE=global_fontsize_lg‘‘>";
-  print "      <FORM METHOD=\"GET\" ACTION=\"create.pl\" TARGET=\"_top\">";
-  print "        <INPUT TYPE=HIDDEN NAME=\"path\" VALUE=".$public_path.">";
-  print "        <INPUT TYPE=SUBMIT VALUE=\"accounts_b_create‘‘\" BORDERIMAGE=\"icontype:buttmid_bord\" SELIMAGE=\"icontype:buttmid_sel\" WIDTH=110 HEIGHT=40>";
-  print "      </FORM>";
-  print "      </FONT>";
-  print "    </TD>";
   print "  </TR>";
   print "</TR>";
   print "</TABLE>";
