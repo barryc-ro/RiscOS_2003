@@ -189,10 +189,10 @@ ${MSGSF}: Resources.${LOCALE}.Messages Resources.${LOCALE}.File Resources.${LOCA
 
 ${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB}
 	${mkdir} rm
-        ${LD} -o $@ -module ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB}
+        ${LD} -o $@ -module -Map -xref ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB}
         Access $@ RW/R
 
-${DBG_MODULE}: ${DBG_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB} ${DEBLIBS}
+${DBG_MODULE}: ${DBG_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB}
 	${mkdir} rm
 	${LD} -o $@ -module ${DBG_OBJS} ${MSGSF} ${TCPIPLIBS} ${CLIB} ${DEBLIBS}
 	Access $@ RW/R
