@@ -1,26 +1,34 @@
 
-; AMBControl - takes care of application memory management (for Wimp)
-
-;Nov 95 - Started by mjs
+; > s.main 
 
 ;;; Initialisation
 ;
 AMBControl_Init
         Push    "R0-R4,R12,LR"
 
+;claim main workspace
         LDR     R3,=AMBmaxwork
         BL      ClaimSysHeapNode
-;;;        BVS     err_cantclaim - this should not happen
+;;;     BVS     err_cantclaim - this should not happen
 
 ;don't store ws pointer till end of initialise - service routines must
 ;know when initialise is not yet complete
 ;
         MOV     R12,R2      
 
-;block for handle array
+;zero-init workspace
+        MOV     R1,#0
+        LDR     R3,=AMBmaxwork
+        ADD     R3,R3,R2
+00
+        STR     R1,[R2],#4
+        CMP     R2,R3
+        BLO     %BT00        
+
+;claim block for handle array
         MOV     R3,#(AMBInitialMaxNodes:SHL:2)
         BL      ClaimSysHeapNode
-;;;        BVS     err_cantclaim
+;;;     BVS     err_cantclaim
         STR     R2,AMBNodeHandles
 
 ;put all handles on free list (entry 0 is used as hdr of free list)
@@ -35,7 +43,7 @@ AMBControl_Init
         MOV     R0,#0       ; = end of list
         STR     R0,[R2]
 
-;block for PhysBin array
+;claim block for PhysBin array
         LDR     R3,=MaxCamEntry
         LDR     R3,[R3]
         ADD     R3,R3,#1                   ;no. of RAM pages extant
@@ -43,7 +51,7 @@ AMBControl_Init
         STR     R3,AMBPhysBinEntries
         MOV     R3,R3,LSL #2               ;1 word per entry
         BL      ClaimSysHeapNode
-;;;        BVS     err_cantclaim
+;;;     BVS     err_cantclaim
         STR     R2,AMBPhysBin
 
 ;init PhysBin
@@ -63,22 +71,21 @@ AMBControl_Init
         SUBS    R4,R4,#1
         BNE     %BT03
 
-; init anchor node stuff etc.
-        MOV     R0,#0
-        STR     R0,AMBNtasks
-        STR     R0,AMBMappedInNode
+;init any other workspace that shouldn't init as 0
         ADR     R1,AMBAnchorNode
-        MOV     R3,R1
-        STR     R0,[R1],#4  ; node id = 0 for ank node (not a real node!)
-        STR     R0,[R1],#4  ; handle = 0
-        STR     R3,[R1],#4  ; prev (starts -> ank node)
-        STR     R3,[R1],#4  ; next (starts -> ank node)
-        STR     R0,[R1],#4  ; Npages
-        STR     R0,[R1],#4  ; startaddr
-        STR     R0,[R1],#4  ; PPL
-
+        STR     R1,[R1,#AMBNode_prev]  ;anchor prev initially -> anchor (empty list)
+        STR     R1,[R1,#AMBNode_next]  ;anchor next initially -> anchor (empty list)
+  [ AMB_LazyMapIn
+    ;only allowed for StrongARM (abort fix up  = nightmare for ARM 6,7, who gives a damn for ARM8)
+    ;
+        ARM_read_ID R1
+        AND     R1,R1,#&F000
+        CMP     R1,#&A000
+        MOVNE   R1,#AMBFlag_LazyMapIn_disable
+        STRNE   R1,AMBFlags
+  ]
         MOV     R0,#AMBControl_ws
-        STR     R12,[R0]           ;now initialisation is complete
+        STR     R12,[R0]               ;now initialisation is complete
 
         Pull    "R0-R4,R12,PC"
 
@@ -105,13 +112,69 @@ reasons0
         B       growshrink   ;2
         B       mapslot      ;3
         B       readinfo     ;4
+  [ AMB_LazyMapIn
+        B       laziness     ;5
+  |
         B       reserved     ;5
+  ]
         B       reserved     ;6
         B       reserved     ;7
         B       mjs_info     ;8 - system reason code, dumps info to buffer
 reasons1
         ADR     R0,err_badreason
         B       SLVK_SetV
+
+
+  [ AMB_LazyMapIn
+;
+;entry: R0=5 (reason),R1=1 for lazy on, 0 for lazy off, -1 to read lazy only
+;exit: R1=new lazy value, after any restrictions of platform applied
+;
+;action: if reading only, if lazy disabled, or if new state = current, do nothing
+;        if state is changing, map out any current node, change state, map in any current node
+;
+laziness ROUT
+       Push    "R2-R3,LR"
+       CMP     R1,#-1
+       BEQ     %FT20
+       LDR     R2,AMBFlags                      ;R2 := current flags
+       TST     R2,#AMBFlag_LazyMapIn_disable    ;disable is permanent
+       BNE     %FT20
+       CMP     R1,#0
+       MOV     R1,R2
+       ORREQ   R1,R1,#AMBFlag_LazyMapIn_suspend
+       BICNE   R1,R1,#AMBFlag_LazyMapIn_suspend ;R1 := new flags
+       EOR     R3,R1,R2
+       TST     R3,#AMBFlag_LazyMapIn_suspend    ;is suspend status changing?
+       BEQ     %FT20
+       LDR     R3,AMBMappedInNode
+       CMP     R3,#0
+       BEQ     %FT10
+       Push    "R0-R3"
+       MOV     R0,#3
+       MOV     R1,#-1
+       LDR     R2,[R3,#AMBNode_handle]
+       SWI     XOS_AMBControl                   ;map out current node
+       Pull    "R0-R3"
+10
+       STR     R1,AMBFlags
+       CMP     R3,#0
+       BEQ     %FT20
+       Push    "R0-R3"
+       MOV     R0,#3
+       MOV     R1,#0
+       LDR     R2,[R3,#AMBNode_handle]
+       SWI     XOS_AMBControl                   ;map in current node
+       Pull    "R0-R3"
+20
+       LDR     R1,AMBFlags
+       TST     R1,#AMBFlag_LazyMapIn_disable :OR: AMBFlag_LazyMapIn_suspend
+       MOVEQ   R1,#1
+       MOVNE   R1,#0
+       Pull    "R2-R3,LR"
+       B       SLVK
+;
+  ] ;AMB_LazyMapIn
 
 
 ;entry: R0=8 (reason),R1 -> buffer (say 4k for up to 255 tasks)
@@ -156,11 +219,6 @@ reserved
        B       SLVK_SetV
 
 ;;; errors (sod internationalisation)
-
-;;;err_cantclaim
-;;;        DCD     0
-;;;        DCB     "AMBControl failed to claim workspace",0
-;;;        ALIGN
 
 err_badreason
         DCD     0

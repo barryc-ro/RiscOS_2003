@@ -1888,7 +1888,14 @@ ScreenModeSWI ENTRY
         ASSERT  ScreenModeReason_ReturnMode = 1
         ASSERT  ScreenModeReason_EnumerateModes = 2
         ASSERT  ScreenModeReason_SelectMonitorType = 3
+  [ ChocolateScreen
+        ASSERT  ScreenModeReason_ChocolateControl = 4
+        ASSERT  ScreenModeReason_ChocolateUpdate = 5
+        ASSERT  ScreenModeReason_ChocolateForceUpdate = 6
+        ASSERT  ScreenModeReason_Limit = 7
+  |
         ASSERT  ScreenModeReason_Limit = 4
+  ]
 
 ScreenModeSub
         CMP     r0, #ScreenModeReason_Limit
@@ -1898,6 +1905,11 @@ ScreenModeSub
         B       ScreenMode_ReturnMode
         B       ScreenMode_EnumerateModes
         B       ScreenMode_SelectMonitorType
+  [ ChocolateScreen
+        B       ScreenMode_ChocolateControl
+        B       ScreenMode_ChocolateUpdate
+        B       ScreenMode_ChocolateForceUpdate
+  ]
 
 ; unknown OS_ScreenMode reason code
 
@@ -2018,5 +2030,173 @@ ScreenMode_SelectMonitorType ENTRY "r0"
         STR     r1, [WsPtr, #CurrentMonitorType]        ; update current value
         EXIT
 
- ]
+;**************************************************************************
+;
+  [ ChocolateScreen
+
+; ScreenMode_ChocolateControl - control chocolate flavour screen (cached and
+;                               section mapped when enabled - only allowed for
+;                               StrongARM (vsync cleaner assumes StrongARM)
+;   r0 = reason code (4)
+;   r1 = cached screen control flags
+;          bit  0     set to suspend cached screen for this mode
+;          bit  1     set to suspend all screen cleaning (foreground and VSync)
+;          bits 2..30 reserved for future expansion (must be 0)
+;          bit  31    must be 0 when setting flags
+;        or r1 = -1 to read current flags
+;   r2 = sets VSync cache cleaner laziness (to be used when not suspended)
+;        1 means VSync cleans on the 1st vsync after 'screen needs clean' is triggered and not reset by foreground
+;        2 means VSync cleans on 2nd vsync
+;        3 means VSync cleans on 3rd vsync
+;        or r2 = -1 to read current vsync control value
+;        other values reserved (undefined behaviour)
+; exit: r1 = current value of cached screen control flags (either for r1=-1 on entry,
+;            or value actually invoked given any restrictions for current platform)
+;       r2 = current value for VSync cleaner control (similar considerations to r1 exit)
+;
+ScreenMode_ChocolateControl ROUT
+        Push    "r3-r5,LR"
+        MOV     LR,#0
+        LDR     r4,[LR,#ARMA_Cleaner_status] ;r4 = ARMA_Cleaner status word throughout
+        TST     r4,#ACS_SCdisable            ;set means permanent chocolate disable (not a StrongARM)
+        BNE     %FT50
+        CMP     r1,#0
+        BLT     %FT20
+        TST     r1,#1
+        BEQ     %FT10
+;deal with suspending cached screen
+        ORR     r1,r1,#2                     ;all screen cleaning will be suspended, of necessity
+        TST     r4,#ACS_Scacheflag
+        BEQ     %FT20                        ;cached screen already suspended
+        BL      Screen_makevanilla           ;uncaches screen, suspends vsync cleaner
+        MOV     LR,#0
+        LDR     r4,[LR,#ARMA_Cleaner_status] ;pick up new status after makevanilla
+        B       %FT20
+10
+;deal with restoring cached screen
+        TST     r4,#ACS_Scacheflag
+        BNE     %FT12                        ;screen already cached
+        BL      Screen_makechocolate         ;caches screen, restarts vsync cleaner
+        MOV     LR,#0
+        LDR     r4,[LR,#ARMA_Cleaner_status] ;pick up new status after makechocolate
+12
+;deal with suspending or resuming all screen cleaning
+        MOV     r3,PC
+        ORR     r4,r3,#I_bit
+        TEQP    r4,#0                        ;disable IRQs to update ARMA_Cleaner_Status
+        LDR     r4,[LR,#ARMA_Cleaner_status]
+        TST     r1,#2
+        ORRNE   r4,r4,#ACS_SCsuspend
+        BICEQ   r4,r4,#ACS_SCsuspend
+        STR     r4,[LR,#ARMA_Cleaner_status]
+        ARMA_read_MMUdomain r5,EQ
+        BICEQ   r5,r5,#&C
+        ARMA_write_MMUdomain r5,EQ           ;mark domain 1 to fault if we are resuming screen cleaning
+        TEQP    r3,#0                        ;restore IRQ status
+20
+;deal with VSync screen cleaner laziness setting
+        CMP     r2,#0
+        BLT     %FT50
+        CMP     r2,#1
+        MOVLO   r2,#1
+        CMP     r2,#3
+        MOVHI   r2,#3
+        MOV     r3,PC
+        ORR     r4,r3,#I_bit
+        TEQP    r4,#0                        ;disable IRQs to update ARMA_Cleaner_Status
+        LDR     r4,[LR,#ARMA_Cleaner_status]
+        BIC     r4,r4,#ACS_VSClazy_MASK
+        ORR     r4,r4,r2,LSL #ACS_VSClazy_SHIFT
+        STR     r4,[LR,#ARMA_Cleaner_status]
+        TEQP    r3,#0                        ;restore IRQ status
+50
+;read current status
+        MOV     r1,#0
+        TST     r4,#ACS_SCdisable
+        ORRNE   r1,r1,#3
+        TST     r4,#ACS_Scacheflag
+        ORREQ   r1,r1,#1
+        TST     r4,#ACS_SCsuspend
+        ORRNE   r1,r1,#2
+        AND     r2,r4,#ACS_VSClazy_MASK
+        MOV     r2,r2,LSR #ACS_VSClazy_SHIFT
+        Pull    "r3-r5,PC"
+
+; ScreenMode_ChocolateUpdate
+;
+; r0 = 5 (reason code)
+;
+; ensure cache is up to date wrt the screen immediately, if necessary and not suspended
+;
+;
+ScreenMode_ChocolateUpdate
+        Push    "r1-r4,LR"
+        MOV     r1,#0
+        B       int_ScreenMode_ChocolateUpdate
+
+; ScreenMode_ChocolateForceUpdate
+;
+; r0 = 6 (reason code)
+;
+; force cache to be up to date wrt the screen immediately, if necessary, regardless of SC suspend
+;
+;
+ScreenMode_ChocolateForceUpdate
+        Push    "r1-r4,LR"
+        MOV     r1,#1
+;
+;internal entry: r1=1 to force update even if suspended, else r1=0
+;
+int_ScreenMode_ChocolateUpdate ROUT
+        MOV     LR,#0
+        MOV     r3,PC
+        ORR     r4,r3,#I_bit
+        TEQP    r4,#0                                   ;disable IRQs in case we update ARMA_Cleaner_status
+        LDR     r4,[LR,#ARMA_Cleaner_status]
+        TST     r4,#ACS_SCdisable                       ;only update if SC not disabled (may be forced when suspended)
+        BNE     %FT50
+        TST     r4,#ACS_Scacheflag                      ;do not update if screen currently uncached
+        BEQ     %FT50
+        TST     r4,#ACS_SCsuspend
+        TSTNE   r1,#1
+        BNE     %FT06                                   ;update if SC suspended but forced
+        TST     r4,#ACS_SCsuspend
+        BNE     %FT50                                   ;no update if SC suspended and not forced
+        TST     r4,#ACS_VSCcountdown_MASK               ;also no update if SC not suspended but no VSC is pending
+        BEQ     %FT50
+06
+        EOR     r4,r4,#ACS_SCflipflop                   ;next screen cleaner area
+        ORR     r4,r4,#ACS_SCsemaphore
+        STR     r4,[LR,#ARMA_Cleaner_status]            ;update status
+        AND     r2,r4,#ACS_SCflipflop                   ;extract SC flipflop bit
+        LDR     r1,=ARMA_ScreenCleaners_address
+        ADD     r1,r1,r2,LSR #(ACS_SCflipflop_SHIFT-14) ;start address for clean (LSR -14 since 16k area size)
+        ADD     r2,r1,#16*1024                          ;end address (exclusive, 16k cache size)
+        TEQP    r3,#0                                   ;restore IRQs during clean
+10
+        LDR     r4,[r1],#32                             ;read next cleaner line into data cache (triggers 8-word line fill)
+        LDR     r4,[r1],#32
+        LDR     r4,[r1],#32
+        LDR     r4,[r1],#32
+        CMP     r1,r2
+        BLO     %BT10                                   ;until done
+;write buffer can be allowed to drain on its own (this is not a code- or remap- critical clean)
+        MOV     r3,PC
+        ORR     r4,r3,#I_bit
+        TEQP    r4,#0                           ;disable IRQs to mess with ARMA_Cleaner status and MMUdomain
+        ARMA_read_MMUdomain r4
+        BIC     r4,r4,#&C
+        ARMA_write_MMUdomain r4                 ;reset screen (domain 1) to fault
+        LDR     r4,[LR,#ARMA_Cleaner_status]
+        BIC     r4,r4,#ACS_SCsemaphore:OR:ACS_VSCcountdown_MASK
+        STR     r4,[LR,#ARMA_Cleaner_status]
+50
+        TEQP    r3,#0                           ;restore IRQ status
+        Pull    "r1-r4,PC"
+
+ ] ;ChocolateScreen
+
+
+ ] ;ModeSelectors
+
         END

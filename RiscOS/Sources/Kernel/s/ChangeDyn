@@ -2769,7 +2769,17 @@ CheckForNewArea ROUT
 
         MOV     r5, #0
         LDR     r5, [r5, #Page_Size]            ; r5 = page size throughout
+  [ ChocolateScreen
+        MOV     r12,#ARMA_Cleaner_status
+        LDR     r12,[r12]
+        TST     r12,#ACS_SCdisable
+        CMPEQ   r0, #ChangeDyn_Screen
+        MOVEQ   r12, #&100000
+        SUBEQ   r12, r12, #1                    ; r12 = section mask (1Mb) if screen, and SC enabled
+        SUBNE   r12, r5, #1                     ; else r12 = page mask
+  |
         SUB     r12, r5, #1                     ; r12 = page mask
+  ]
         ADD     r1, r1, r12
         BICS    r1, r1, r12
         BEQ     IssueServiceMemoryMoved         ; zero pages! (r0 = area number, r1 = size change (0))
@@ -2822,7 +2832,17 @@ AreaShrink
         MOV     r1, lr                          ; move smaller amount
  ]
         BL      GenNotAllMovedError
+  [ ChocolateScreen
+        MOV     lr, #ARMA_Cleaner_status
+        LDR     lr, [lr]
+        TST     lr, #ACS_SCdisable
+        CMPEQ   r0, #ChangeDyn_Screen
+        MOVEQ   lr, #&100000
+        SUBEQ   lr, lr, #1
+        SUBNE   lr, r5, #1
+  |
         SUB     lr, r5, #1                      ; lr = pagesize mask
+  ]
         BICS    r1, r1, lr                      ; a pagesize multiple
         BEQ     IssueServiceMemoryMoved
 15
@@ -2969,7 +2989,17 @@ AreaGrow
 
 61
         BL      GenNotAllMovedError
+  [ ChocolateScreen
+        MOV     lr, #ARMA_Cleaner_status
+        LDR     lr, [lr]
+        TST     lr, #ACS_SCdisable
+        CMPEQ   r0, #ChangeDyn_Screen
+        MOVEQ   lr, #&100000
+        SUBEQ   lr, lr, #1
+        SUBNE   lr, r5, #1
+  |
         SUB     lr, r5, #1                      ; lr = pagesize mask
+  ]
         BICS    r1, r1, lr                      ; a pagesize multiple
         BEQ     IssueServiceMemoryMoved
         MOV     r3, r1
@@ -3039,6 +3069,12 @@ AreaGrow
         Pull    "r10"
         BVS     ChangeDynError
 
+  [ ChocolateScreen
+        LDR     lr, [r12,#DANode_Number]
+        CMP     lr,#ChangeDyn_Screen
+        BLEQ    Screen_makevanilla
+  ]
+
 ; now split up grow into bite-size chunks, and call DoTheGrow to do each one
 
         Push    "r3"                            ; save original total amount
@@ -3097,6 +3133,10 @@ AreaGrow
 
         MOV     r1, r3
         LDR     r0, [r12, #DANode_Number]       ; reload dynamic area number
+  [ ChocolateScreen
+        CMP     r0, #ChangeDyn_Screen
+        BLEQ    Screen_makechocolate            ; do nefarious stuff once new size fully established
+  ]
         B       IssueServiceMemoryMoved
 
 95
@@ -3777,6 +3817,9 @@ CheckAppSpace ENTRY "r0-r3"
 
         SWI     XOS_UpCall
         CMP     r0, #UpCall_Claimed             ; if upcall claimed
+    [  ChocolateAMB
+        BLEQ    Do_AMB_MakeSparse
+    ]
         EXIT    EQ                              ; then OK to move memory, so exit (V=0 from CMP)
 
         ADR     r0, ErrorBlock_ChDynamCAO
@@ -3798,7 +3841,20 @@ CheckAppSpace ENTRY "r0-r3"
         ADREQ   r0, ErrorBlock_AplWSpaceInUse   ; if service claimed, then return error
         BEQ     %BT10
         CLRV                                    ; else OK
+    [  ChocolateAMB
+        BL      Do_AMB_MakeSparse
+    ]
         EXIT
+
+    [ ChocolateAMB
+Do_AMB_MakeSparse ROUT
+        Push    "r0,lr"
+        MOVS    r0,r10
+        RSBMI   r0,r0,#0
+        BL      AMB_MakeUnsparse  ;shrinking AppSpace, so make sure unsparse over area of shrink
+        Pull    "r0,pc",,^
+    ] ;ChocolateAMB
+
 
  ]
         MakeErrorBlock AplWSpaceInUse
@@ -4428,7 +4484,16 @@ PreShrink_Screen ENTRY   "R0-R2,R4-R5"
         ;the current amount needed by the vdu drivers, if it doesn't we
         ;reduce R3 to be the most we can spare (in whole pages)
 
+  [ ChocolateScreen
+        MOV     R2, #ARMA_Cleaner_status
+        LDR     R2, [R2]
+        TST     R2, #ACS_SCdisable              ;section granularity if SC not disabled
+        MOVEQ   R2, #&100000
+        SUBEQ   R2, R2, #1                      ;make a section (1Mb) mask
+        SUBNE   R2, R5, #1                      ;make a page mask
+  |
         SUB     R2, R5, #1                      ;make a page mask
+  ]
 
         LDR     R5, [R12, #ScreenSize]          ;get current minimum size
 
@@ -4438,6 +4503,9 @@ PreShrink_Screen ENTRY   "R0-R2,R4-R5"
         BICS    R3, R3, R2                      ;...round down to multiple of page size
         BEQ     %FT10                           ;don't shuffle screen data if resultant
                                                 ;shrink is 0 bytes/0 pages
+  [ ChocolateScreen
+        BL      Screen_makevanilla
+  ]
         SWI     XOS_RemoveCursors
         MOV     R5, PC
         TEQP    PC, #SVC_mode+I_bit             ;disable interrupts
@@ -4458,10 +4526,110 @@ PreShrink_Screen ENTRY   "R0-R2,R4-R5"
 
 PostShrink_Screen ENTRY
         SWI     XOS_RestoreCursors
+  [ ChocolateScreen
+        BL Screen_makechocolate
+  ]
         CLRV                                    ;ok, so I'm paranoid...
         EXIT
 
 ; ************************************************************************
+
+   [ ChocolateScreen
+
+      LTORG
+      ALIGN
+
+;action: make lower screen mapping (the one normally used) crazy chocolate flavour by
+;        being section mapped, domain 1 and cacheable, then mark domain 1 to fault
+;        and resume screen cleaning
+;
+Screen_makechocolate ROUT
+        Push    "r0-r8,LR"
+        MOV     r1,#0
+        LDR     r0,[r1,#ARMA_Cleaner_status]
+        TST     r0,#ACS_SCdisable
+        BNE     %FT99                        ;chocolate flavour is off the menu if SC disabled
+        MOV     r0,#2
+        MOV     r1,#ChangeDyn_Screen
+        SWI     XOS_DynamicArea
+        BVS     %FT99
+        SUB     r0,r3,r2                     ;base of lower of the two mappings
+        MOVS    r1,r2                        ;size
+        BEQ     %FT99
+        MOV     r2,#L2PT
+        ADD     r2,r2,r0,LSR #10             ;r2 -> 1st L2PT entry for screen
+        LDR     r3,[r2]
+        MOV     r3,r3,LSR #20
+        MOV     r3,r3,LSL #20                ;r3 := physical address of base of screen (will be 1Mb aligned)
+        ORR     r3,r3,#&C00                  ;access permissions (r/w,r/w)
+        ORR     r3,r3,#&03E                  ;domain 1, cacheable, bufferable, section
+        LDR     r2,=L1PT
+        ADD     r2,r2,r0,LSR #18             ;r2 -> 1st L1PT entry for screen
+01
+        STR     r3,[r2],#4
+        ADD     r3,r3,#&100000
+        SUBS    r1,r1,#&100000
+        BGT     %BT01
+        ARMA_read_MMUdomain r0
+        BIC     r0,r0,#&C
+        ARMA_write_MMUdomain r0              ;mark domain 1 to fault
+        MOV     r0,#&c0000001
+        SWI     XOS_MMUControl               ;flush caches and TLBs (caches,ITLB flush redundant, but there you go)
+        MOV     r0,#0
+        LDR     r1,[r0,#ARMA_Cleaner_status]
+        BIC     r1,r1,#ACS_SCsuspend
+        ORR     r1,r1,#ACS_Scacheflag
+        STR     r1,[r0,#ARMA_Cleaner_status]
+99
+        Pull    "r0-r8,PC"
+
+;action: make lower screen mapping vanilla flavour by suspending screen cleaning, then setting page mapped,
+;        uncacheable and domain 0
+;
+Screen_makevanilla ROUT
+        Push    "r0-r8,LR"
+        MOV     r0,pc
+        ORR     r1,r0,#I_bit
+        TEQP    r1,#0                        ;disable IRQs
+        MOV     r1,#0
+        LDR     r2,[r1,#ARMA_Cleaner_status]
+        ORR     r2,r2,#ACS_SCsuspend
+        BIC     r2,r2,#ACS_VSCcountdown_MASK
+        BIC     r2,r2,#ACS_Scacheflag
+        STR     r2,[r1,#ARMA_Cleaner_status]
+        TEQP    r0,#0                        ;restore IRQs
+        TST     r2,#&80000000
+        BNE     %FT99                        ;assume already vanilla if SC disabled
+        MOV     r0,#2
+        MOV     r1,#ChangeDyn_Screen
+        SWI     XOS_DynamicArea
+        BVS     %FT99
+        SUB     r0,r3,r2                     ;base of lower of the two mappings
+        MOVS    r1,r2                        ;size
+        BEQ     %FT99
+        MOV     r3,#L2PT
+        ADD     r4,r3,r0,LSR #10             ;L2PT of base (L2PT stuff will still be set up, though unused)
+        ADD     r5,r3,r4,LSR #10
+        AND     r4,r5,#3                     ;remember 1k offset into L2PT page itself, for later
+        BIC     r5,r5,#&3                    ;L2PT of L2PT of base
+        LDR     r6,[r5]
+        MOV     r6,r6,LSR #12
+        MOV     r6,r6,LSL #12                ;physical address of L2PT of base, except for offset
+        ORR     r6,r6,r4,LSL #10             ;and now including offset
+        ORR     r6,r6,#&11                   ;for vanilla L1PT entry - is domain 0, page
+        LDR     r7,=L1PT
+        ADD     r7,r7,r0,LSR #18             ;r7 -> 1st L1PT entry for screen
+01
+        STR     r6,[r7],#4
+        ADD     r6,r6,#&400                  ;next L2PT physical address (1k per 1Mb of mapping)
+        SUBS    r1,r1,#&100000
+        BGT     %BT01
+        MOV     r0,#&c0000001
+        SWI     XOS_MMUControl               ;flush caches and TLBs (Icache,ITLB flush redundant, but there you go)
+99
+        Pull    "r0-r8,PC"
+
+   ] ;ChocolateScreen
 
  ]
 

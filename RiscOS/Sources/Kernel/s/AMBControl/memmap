@@ -1,25 +1,224 @@
 ; > s.memmap
 
 ; low level memory mapping
-
-; **************************************************************************************
 ;
-
-;convert page number in $reg to L2PT entry (physical address+protection bits),
+; ----------------------------------------------------------------------------------
+;
+;convert page number in $pnum to L2PT entry (physical address+protection bits),
 ;using PhysBin table for speed
 ;
-;entry: lr -> PhysBin table, r11 = protection bits
-;exit:  r12 corrupted
+;entry: $ptable -> PhysBin table, $pbits = protection bits
+;exit:  $temp corrupted
 ;
         MACRO
-        PageNumToL2PT $reg
-        BIC     r12,$reg,#(3:SHL:(AMBPhysBinShift-2)) ;word alignment for PhysBin lookup
-        LDR     r12,[lr,r12,LSR #(AMBPhysBinShift-2)] ;start physical address of bin
-        AND     $reg,$reg,#AMBPhysBinMask             ;no. pages into bin
-        ADD     $reg,r12,$reg,LSL #Log2PageSize    ;physical address of page
-        ORR     $reg,$reg,r11                      ;munge in protection bits
+        PageNumToL2PT $pnum,$ptable,$pbits,$temp
+        BIC     $temp,$pnum,#(3:SHL:(AMBPhysBinShift-2))       ;word alignment for PhysBin lookup
+        LDR     $temp,[$ptable,$temp,LSR #(AMBPhysBinShift-2)] ;start physical address of bin
+        AND     $pnum,$pnum,#AMBPhysBinMask                    ;no. pages into bin
+        ADD     $pnum,$temp,$pnum,LSL #Log2PageSize            ;physical address of page
+        ORR     $pnum,$pnum,$pbits                             ;munge in protection bits
         MEND
 
+; ----------------------------------------------------------------------------------
+;
+;clean+flush a virtual range of StrongARM data cache
+;
+;addr0 = start of range (inclusive)
+;addr1 = end of range (exclusive)
+;
+;exit: addr0 updated to end of range ( = addr1)
+;
+    [ SAcleanflushbroken
+        MACRO
+        AMB_ARMAcleanflushrange $addr0,$addr1
+01
+        ARMA_clean_DCentry $addr0
+        ARMA_flush_DCentry $addr0
+        ADD     $addr0,$addr0,#32
+        ARMA_clean_DCentry $addr0
+        ARMA_flush_DCentry $addr0
+        ADD     $addr0,$addr0,#32
+        ARMA_clean_DCentry $addr0
+        ARMA_flush_DCentry $addr0
+        ADD     $addr0,$addr0,#32
+        ARMA_clean_DCentry $addr0
+        ARMA_flush_DCentry $addr0
+        ADD     $addr0,$addr0,#32
+        CMP     $addr0,$addr1
+        BLO     %BT01
+        MEND
+    |
+        MACRO
+        AMB_ARMAcleanflushrange $addr0,$addr1
+01
+        ARMA_cleanflush_DCentry $addr0 ;when are bleedin' Digital going to restore this?
+        ADD     $addr0,$addr0,#32
+        ARMA_cleanflush_DCentry $addr0
+        ADD     $addr0,$addr0,#32
+        ARMA_cleanflush_DCentry $addr0
+        ADD     $addr0,$addr0,#32
+        ARMA_cleanflush_DCentry $addr0
+        ADD     $addr0,$addr0,#32
+        CMP     $addr0,$addr1
+        BLO     %BT01
+        MEND
+    ]
+
+  [ AMB_LazyMapIn
+
+; ----------------------------------------------------------------------------------
+;
+;AMB_LazyFixUp
+;
+; ** StrongARM only **
+;
+; Routine to be used in abort handlers (in abort32 mode), that checks to see if abort
+; is expected, and fixes things up if so, ready to restart instruction.
+;
+; Fix up consists of mapping in affected page, and updating AMBMappedInRegister. This
+; may seem like a lot of work, but remember that the L2PT and CAM updates for each page are
+; needed anyway in non-lazy scheme, so there is really only a housekeeping overhead.
+;
+; There is no cache clean/flush consideration here, since the map is a map in from Nowhere.
+; TLB flush consideration is left to main abort handler code - in fact there may not
+; be a TLB flush consideration either, if StrongARM TLB can be assumed not to cache an
+; entry which is a translation fault.
+;
+; entry: r0 = aborting address (data address for data abort, instruction address
+;        for prefetch abort), r1-r7 trashable, no stack
+; exit:  r0 = non-zero if abort was expected and fixed up, zero if not
+;
+AMB_LazyFixUp ROUT
+        MOV     r7,r12
+        MOV     r12,#AMBControl_ws
+        LDR     r12,[r12]
+        CMP     r12,#0
+        BEQ     %FT20
+        SUBS    r0,r0,#ApplicationStart
+        BMI     %FT20
+        MOV     r0,r0,LSR #Log2PageSize                  ;adress now in terms of pages from ApplicationStart
+        LDR     r1,AMBMappedInNode 
+        CMP     r1,#0
+        BEQ     %FT20
+        LDR     r2,[r1,#AMBNode_Npages]
+        CMP     r2,r0
+        BLS     %FT20
+;
+;need not check MappedInRegister first, since if abort has happened in range of current
+;AppSpace, then the page can be assumed to be mapped out
+;
+        ADD     r1,r1,#AMBNode_pages
+        ADD     r1,r1,r0,LSL #2                          ;r1 -> page involved, in node page list
+        LDR     r2,AMBPhysBin
+        MOV     r3,#&FF0
+        ORR     r3,r3,#&E                                ;&FFE = L2PT protection bits for ordinary page
+        LDR     r4,[r1]
+        MOV     r6,r4
+        PageNumToL2PT r4,r2,r3,r5
+;
+;here, r6 = page number of page involved, r4 = new L2PT entry value to map in page
+;
+        LDR     r2,AMBMappedInNpages                     ;for convenience, update bitmap etc. here...
+        ADD     r2,r2,#1
+        STR     r2,AMBMappedInNpages
+        ADR     r2,AMBMappedInRegister
+        ADD     r2,r2,r0,LSR #5-2                        ;r2 -> bitmap word affected
+        BIC     r2,r2,#3
+        AND     r3,r0,#31
+        MOV     r5,#1
+        MOV     r5,r5,LSL r3                             ;mask for bit affected in bitmap word
+        LDR     r3,[r2]
+        ORR     r3,r3,r5
+        STR     r3,[r2]
+
+        ADD     r0,r0,#ApplicationStart:SHR:Log2PageSize ;address now in terms of pages from 0
+        MOV     r5,#L2PT
+        STR     r4,[r5,r0,LSL #2]                        ;update L2PT
+        ARMA_drain_WB                                    ;since L2PT for AppSpace is bufferable
+
+        MOV     r5,#0
+        LDR     r5,[r5,#CamEntriesPointer]
+        ADD     r5,r5,r6,LSL #3                          ;r5 -> CAM entry affected
+        MOV     r0,r0,LSL #Log2PageSize                  ;address is now ordinary again, and must be non-zero
+        MOV     r1,#0                                    ;0 = AP for ordinary page
+        STMIA   r5,{r0,r1}                               ;update CAM entry
+        MOV     r12,r7
+        MOV     pc,lr                                    ;r0 is non-zero
+20
+        MOV     r0,#0
+        MOV     r12,r7
+        MOV     pc,lr
+
+  ] ;AMB_LazyMapIn
+
+  [ {FALSE} ;debug :LAND: debugAMB
+
+; ----------------------------------------------------------------------------------
+;
+;AMB_ConsistencyCheck
+;
+; entry: r0 = arbitrary tag (identifies caller in trace)
+;
+AMB_ConsistencyCheck ROUT
+        Push    "r0-r12,lr"
+        MOV     r12,#AMBControl_ws
+        LDR     r12,[r12]
+        CMP     r12,#0
+        BEQ     %FT90
+        LDR     r1,AMBMappedInNpages
+        LDR     r2,AMBMappedInNode
+        CMP     r2,#0
+        MOVEQ   r3,#0
+        LDRNE   r3,[r2,#AMBNode_Npages]
+        MOV     r4,#0
+        MOV     r5,#0
+        Push    "r3"
+        ADD     r3,r3,#1
+        ADR     r6,AMBMappedInRegister
+        LDR     r7,[r6],#4
+        MOV     r8,#1
+10
+        SUBS    r3,r3,#1
+        BEQ     %FT20
+        TST     r7,r8
+        ADDNE   r4,r4,#1
+        MOVS    r8,r8,LSL #1
+        LDREQ   r7,[r6],#4
+        MOVEQ   r8,#1
+        B       %BT10
+20
+        LDR     r3,[sp]
+        ADD     r3,r3,#1
+        MOV     r6,#L2PT
+        ADD     r6,r6,#ApplicationStart:SHR:(Log2PageSize-2)
+30
+        SUBS    r3,r3,#1
+        BEQ     %FT40
+        LDR     r7,[r6],#4
+        CMP     r7,#0
+        ADDNE   r5,r5,#1
+        B       %BT30
+40
+        Pull    "r3"
+        CMP     r1,r4
+        CMPEQ   r1,r5
+        BEQ     %FT90
+        CMP     r2,#0
+        MOVEQ   r4,#-1
+        MOVEQ   r5,#-1
+
+  Debug AMB,"AMB_ConsistencyCheck **OOPS**, tag = ",r0
+  Debug AMB,"  MappedInNode, Npages = ",r2,r3
+  Debug AMB,"  MappedInNpages value,found in bitmap,found in L2PT = r1,r4,r5
+
+90
+        Pull    "r0-r12,pc"
+
+
+  ] ;debug :LAND: debugAMB
+
+; ----------------------------------------------------------------------------------
+;
 ;AMB_movepagesin_L2PT
 ;
 ;updates L2PT for new logical page positions, does not update CAM
@@ -40,16 +239,16 @@ AMB_movepagesin_L2PT ROUT
         CMP     r8,#8
         BLT     %FT20
 10
-        LDMIA   r10!,{r0-r7}   ;next 8 page numbers
-        PageNumToL2PT r0
-        PageNumToL2PT r1
-        PageNumToL2PT r2
-        PageNumToL2PT r3
-        PageNumToL2PT r4
-        PageNumToL2PT r5
-        PageNumToL2PT r6
-        PageNumToL2PT r7
-        STMIA   r9!,{r0-r7}    ;write 8 L2PT entries
+        LDMIA   r10!,{r0-r7}         ;next 8 page numbers
+        PageNumToL2PT r0,lr,r11,r12
+        PageNumToL2PT r1,lr,r11,r12
+        PageNumToL2PT r2,lr,r11,r12
+        PageNumToL2PT r3,lr,r11,r12
+        PageNumToL2PT r4,lr,r11,r12
+        PageNumToL2PT r5,lr,r11,r12
+        PageNumToL2PT r6,lr,r11,r12
+        PageNumToL2PT r7,lr,r11,r12
+        STMIA   r9!,{r0-r7}          ;write 8 L2PT entries
         SUB     r8,r8,#8
         CMP     r8,#8
         BGE     %BT10
@@ -58,7 +257,7 @@ AMB_movepagesin_L2PT ROUT
         BEQ     %FT35
 30
         LDR     r0,[r10],#4
-        PageNumToL2PT r0
+        PageNumToL2PT r0,lr,r11,r12
         STR     r0,[r9],#4
         SUBS    r8,r8,#1
         BNE     %BT30
@@ -69,6 +268,8 @@ AMB_movepagesin_L2PT ROUT
         ARMA_drain_WB EQ         ;because L2PT area for AppSpace will be bufferable
         Pull    "r0-r10,r12,pc"
 
+; ----------------------------------------------------------------------------------
+;
 ;update CAM entry for page number in $reg
 ;
 ;entry: r11 -> CAM, r9 = logical addr of page, lr = PPL of page
@@ -80,6 +281,8 @@ AMB_movepagesin_L2PT ROUT
         STMIA   $reg,{r9,lr}            ;store logical addr,PPL
         MEND
 
+; ----------------------------------------------------------------------------------
+;
 ;AMB_movepagesin_CAM
 ;
 ;updates CAM, does not update L2PT
@@ -133,7 +336,8 @@ AMB_movepagesin_CAM ROUT
         BNE     %BT30
         Pull    "r0-r11,pc"
 
-
+; ----------------------------------------------------------------------------------
+;
 ;AMB_movepagesout_CAM
 ;
 ;updates CAM, does not update L2PT
@@ -176,7 +380,8 @@ AMB_movepagesout_CAM ROUT
         BNE     %BT30
         Pull    "r0-r11,pc"
 
-
+; ----------------------------------------------------------------------------------
+;
 ;AMB_movepagesout_L2PT
 ;
 ;updates L2PT for old logical page positions, does not update CAM
@@ -221,6 +426,8 @@ AMB_movepagesout_L2PT ROUT
         ARMA_drain_WB EQ         ;because L2PT area for AppSpace will be bufferable
         Pull    "r0-r8,pc"
 
+; ----------------------------------------------------------------------------------
+
   [ ARM810support
     ;Previously supported ARMs all tolerate cache (clean and) flush _after_
     ;remapping - ARMs 6,7 because there is no clean, StrongARM because the cache
@@ -248,8 +455,9 @@ AMB_cachecleanflush_ifARM810
 
   ] ;ARM810support
 
-;**************************************************************************
-; AMB_SetMemMapEntries:
+; ----------------------------------------------------------------------------------
+;
+; AMB_SetMemMapEntries: 
 ;
 ; entry:
 ;   R3 =  no. of pages
@@ -257,10 +465,9 @@ AMB_cachecleanflush_ifARM810
 ;   R5 =  start logical address of mapping (-1 means 'out of the way')
 ;   R6 =  PPL ('page protection level') for mapping
 ;
-; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-
 AMB_SetMemMapEntries ROUT
-        Push    "r0-r4,r7-r11,lr"
+
+        Push    "r0-r4,r7-r11,lr"  
 
         MOVS    r8,r3
         BEQ     AMB_smme_exit
@@ -312,107 +519,10 @@ AMB_smme_mapin
         MOV     r3,r5
         BL      AMB_movepagesin_L2PT
         BL      AMB_movepagesin_CAM
+
 ;don't need to flush cache at end of mapin (already coherent, since
-;nothing mapped in before), but do need to flush TLB (eg. TLB will cache
+;nothing mapped in before), but do need to flush TLBs (eg. TLBs will cache
 ;access denial for app space after mapout)
-        B       AMB_smme_TLBflush
-
-;all pages destined for same new logical page 'nowhere'
-AMB_smme_mapout
-  [ ARM810support
-        BL      AMB_cachecleanflush_ifARM810
-  ]
-        LDR     r3,=DuffEntry
-        BL      AMB_movepagesout_L2PT
-        BL      AMB_movepagesout_CAM
-
-;(clean and) flush cache(s) appropriately, then flush TLB(s)
-AMB_smme_cachecleanflush
-        ARM_read_ID r0
-        AND     r0,r0,#&F000
-  [ ARM810support
-        CMP     r0,#&8000      ;cache clean/flush done before remapping if ARM810
-        ARM8_flush_TLB EQ
-        Pull    "r0-r4,r7-r11, pc",EQ
-  ]
-        CMP     r0,#&A000
-        ARM67_flush_cache NE
-        ARM67_flush_TLB NE
-        Pull    "r0-r4,r7-r11, pc",NE
-
-;we have a StrongARM then
-;
-;here, r4 = old logical addr. of 1st page, r8 = no. of pages
-;
-;StrongARM lets us clean data cache (DC) after remapping, because it writes back by
-;physical address.
-;
-        MOV     r0,r4                      ;r0 := start address for clean/flush
-        ADD     r1,r0,r8,LSL #Log2PageSize ;r1 := end address for clean/flush (exclusive)
-
-;Cleaning a sufficiently small space by range will be quicker, because of the fixed
-;memory reading cost for a full DC clean. A sufficiently large space will be better handled
-;by full clean, because of the huge number of clean/flush line instructions for the range
-;case. We use a threshold to switch between the two schemes. The value of the threshold
-;depends on memory speed, core speed etc. but is not particularly critical.
-
-        SUB     r2,r1,r0
-        CMP     r2,#AMB_ARMA_CleanRange_thresh
-        BLO     AMB_smme_StrongARM_flushrange
-
-        MOV     r2,#ARMA_Cleaner_flipflop
-        LDR     r1,[r2]
-        EOR     r1,r1,#16*1024
-        STR     r1,[r2]
-        ARMA_clean_DC r1,r2,r3     ;effectively, fully clean/flush wrt non-interrupt stuff
-        ARMA_drain_WB
-        ARMA_flush_IC WithoutNOPs  ;do *not* flush DC - may be interrupt stuff in it
-        MOV     r0,r0              ;NOPs to ensure 4 instructions after IC flush before return
-        MOV     r0,r0
-        ARMA_flush_TLBs
-        Pull    "r0-r4,r7-r11, pc"
-
-AMB_smme_StrongARM_flushrange
-
-  [ SAcleanflushbroken                  ; ARMA_cleanflush_DCentry instruction seems to be ineffective.
-01
-        ARMA_clean_DCentry r0
-        ARMA_flush_DCentry r0
-        ADD     r0,r0,#32
-        ARMA_clean_DCentry r0
-        ARMA_flush_DCentry r0
-        ADD     r0,r0,#32
-        ARMA_clean_DCentry r0
-        ARMA_flush_DCentry r0
-        ADD     r0,r0,#32
-        ARMA_clean_DCentry r0
-        ARMA_flush_DCentry r0
-        ADD     r0,r0,#32
-        CMP     r0,r1
-        BLO     %BT01                   ;loop to clean DC over logical range
-  |
-01
-        ARMA_cleanflush_DCentry r0
-        ADD     r0,r0,#32
-        ARMA_cleanflush_DCentry r0
-        ADD     r0,r0,#32
-        ARMA_cleanflush_DCentry r0
-        ADD     r0,r0,#32
-        ARMA_cleanflush_DCentry r0
-        ADD     r0,r0,#32
-        CMP     r0,r1
-        BLO     %BT01                   ;loop to clean DC over logical range
-  ]
-
-        ARMA_drain_WB
-        ARMA_flush_IC WithoutNOPs
-        MOV     r0,r0                   ;NOPs to ensure 4 instructions after IC flush before return
-        MOV     r0,r0
-        ARMA_flush_TLBs
-
-        Pull    "r0-r4,r7-r11, pc"
-
-AMB_smme_TLBflush
   [ ARM810support
     ;there is a general macro, should have used this before anyway
         ARM_flush_TLB r0
@@ -423,11 +533,268 @@ AMB_smme_TLBflush
         ARM67_flush_TLB NE
         ARMA_flush_TLBs EQ
   ]
+        Pull    "r0-r4,r7-r11, pc"
+
+;all pages destined for same new logical page 'nowhere'
+AMB_smme_mapout
+  [ ARM810support
+        BL      AMB_cachecleanflush_ifARM810
+  ]
+        LDR     r3,=DuffEntry
+        BL      AMB_movepagesout_L2PT
+        BL      AMB_movepagesout_CAM
+
+AMB_smme_cachecleanflush
+        BL      AMB_cachecleanflush
+
 AMB_smme_exit
         Pull    "r0-r4,r7-r11, pc"
 
+; ----------------------------------------------------------------------------------
+;
+; AMB_cachecleanflush
+;
+; entry:
+;   r4 = old logical addr. of 1st page affected by clean/flush
+;   r8 = no. of pages affected
+;
+; action: (clean and) flush cache(s) appropriately, then flush TLB(s)
+;
+; exit: trashes r0-r4,r7-r11 (assumed protected by client)
+;
+AMB_cachecleanflush
+        ARM_read_ID r0
+        AND     r0,r0,#&F000
+  [ ARM810support
+        CMP     r0,#&8000      ;cache clean/flush done before remapping if ARM810
+        ARM8_flush_TLB EQ
+        MOVEQ   pc,lr
+  ]
+        CMP     r0,#&A000
+        ARM67_flush_cache NE
+        ARM67_flush_TLB NE
+        MOVNE   pc,lr
 
-; ************************************************************************
+;we have a StrongARM then
+;
+;StrongARM lets us clean data cache (DC) after remapping, because it writes back by
+;physical address.
+;
+        MOV     r0,r4                      ;r0 := start address for clean/flush
+        ADD     r1,r0,r8,LSL #Log2PageSize ;r1 := end address for clean/flush (exclusive)
+
+  [ ChocolateScreen
+;quick check - if screen cleaner has pending clean required, then we might as well choose
+;to do a full clean (forget the threshold check below), since this will save screen cleaner work
+;(we're only reading here, so interrupts not a problem)
+
+        MOV     r2,#ARMA_Cleaner_status
+        LDR     r2,[r2]
+        TST     r2,#ACS_VSCcountdown_MASK
+        BNE     AMB_ccf_StrongARM_flushwhole  ;if countdown not zero, screen clean work pending
+  ]
+
+        SUB     r2,r1,r0
+        CMP     r2,#AMB_ARMA_CleanRange_thresh
+        BLO     AMB_ccf_StrongARM_flushrange
+
+AMB_ccf_StrongARM_flushwhole
+        MOV     r1,pc
+        ORR     r2,r1,#I_bit
+        TEQP    r2,#0                          ;disable IRQs to mess with ARMA_Cleaner_status
+        MOV     r2,#0
+        LDR     r3,[r2,#ARMA_Cleaner_status]
+        ORR     r3,r3,#ACS_NSCsemaphore        ;set semaphore for non-screen clean
+        STR     r3,[r2,#ARMA_Cleaner_status]   ;update status
+        TEQP    r1,#0                          ;restore IRQ state
+        LDR     r1,[r2,#ARMA_Cleaner_flipflop]
+        EOR     r1,r1,#16*1024
+        STR     r1,[r2,#ARMA_Cleaner_flipflop]
+        ARMA_clean_DC r1,r2,r3                 ;effectively, fully clean/flush wrt non-interrupt stuff
+        ARMA_drain_WB
+        ARMA_flush_IC WithoutNOPs              ;do *not* flush DC - may be interrupt stuff in it
+        ARMA_flush_TLBs                        ;even if paranoid, at least 4 instructions follow IC flush before return
+        MOV     r1,pc
+        ORR     r2,r1,#I_bit
+        TEQP    r2,#0                          ;disable IRQs to mess with ARMA_Cleaner_status and MMUdomain
+        MOV     r2,#0
+        LDR     r3,[r2,#ARMA_Cleaner_status]
+        BIC     r3,r3,#ACS_NSCsemaphore:OR:ACS_VSCcountdown_MASK ;clear semaphore and any pending VSC
+        STR     r3,[r2,#ARMA_Cleaner_status]
+  [ ChocolateScreen
+        TST     r3,#ACS_SCdisable:OR:ACS_SCsuspend
+        ARMA_read_MMUdomain r3,EQ
+        BICEQ   r3,r3,#&C
+        ARMA_write_MMUdomain r3,EQ             ;if SC not disabled or suspended, reset screen (domain 1) to fault
+  ]
+        TEQP    r1,#0                          ;restore IRQ state
+        MOV     pc,lr
+
+AMB_ccf_StrongARM_flushrange
+
+        AMB_ARMAcleanflushrange r0,r1
+        ARMA_drain_WB
+        ARMA_flush_IC WithoutNOPs
+        MOV     r0,r0                   ;NOPs to ensure 4 instructions after IC flush before return
+        MOV     r0,r0
+        ARMA_flush_TLBs
+
+        MOV     pc,lr
+
+
+  [ AMB_LazyMapIn
+
+; ----------------------------------------------------------------------------------
+;
+; AMB_SetMemMapEntries_SparseMapOut:
+;
+; ** StrongARM only **
+;
+; entry:
+;   R3  =  no. of pages currently mapped in (0=none)
+;   R4  -> list of page entries (1 word per entry, giving page no.)
+;   R5  -> bitmap of pages mapped in (1 bit per page in whole page list)
+;   R6  =  total no. of pages in slot
+;
+AMB_SetMemMapEntries_SparseMapOut ROUT
+
+ [ {FALSE} ;debug :LAND: debugAMB
+   Push "r0,lr"
+   MOV  r0,#1
+   BL   AMB_ConsistencyCheck
+   Pull "r0,lr"
+ ]
+        CMP     r3,#0
+        MOVEQ   pc,lr
+        Push    "r0-r11,lr"
+
+        MOV     r10,r4                            ;ptr to page list
+        MOV     r7,#0
+        LDR     r7,[r7,#CamEntriesPointer]        ;r7 -> CAM
+        LDR     lr,=L2PT                          ;lr -> L2PT
+        MOV     r9,#AP_Duff                       ;permissions for DuffEntry
+        LDR     r1,=DuffEntry                     ;means Nowhere, in CAM
+        MOV     r4,#ApplicationStart              ;log. address of first page
+        MOV     r2,#0                             ;r2 is zero during sparse map out
+
+;if the number of pages mapped in is small enough, we'll do a clean/flush of data
+;cache as we go (potentially much cheaper than full clean/flush)
+;(Arguably we could check for pending VSync cleans if ChocolateScreen, and always
+;choose to do full clean if so. Currently considered best to go for the saving always
+;here, with our own - possibly smaller - threshold.)
+
+        CMP     r3,#AMB_ARMA_CleanSparseRange_thresh:SHR:Log2PageSize
+        MOVLO   r6,#0                             ;r6 := 0 if we are to clean/flush as we go
+        B       %FT10
+
+;skip next 32 pages then continue
+06
+        ADD     r10,r10,#32*4                     
+        ADD     r4,r4,#32*PageSize
+
+;find the sparsely mapped pages, map them out, and do DC clean/flush as we go if enabled
+10
+        MOV     r8,#1                             ;initial bitmap mask for new bitmap word
+        LDR     r11,[r5],#4                       ;next word of bitmap
+        CMP     r11,#0                            ;if next 32 bits of bitmap clear, skip
+        BEQ     %BT06                             ;skip loop must terminate if r3 > 0
+12
+        TST     r11,r8                            ;page is currently mapped in if bit set
+        BEQ     %FT16
+        LDR     r0,[r10]                          ;page no.
+        ADD     r0,r7,r0,LSL #3                   ;r0 -> CAM entry for page
+        STMIA   r0,{r1,r9}                        ;CAM entry for page set to DuffEntry,AP_Duff
+        STR     r2,[lr,r4,LSR #(Log2PageSize-2)]  ;L2PT entry for page set to 0 (means translation fault)
+        CMP     r6,#0
+        BNE     %FT14                             ;check for DC clean/flush as we go
+        ADD     r0,r4,#PageSize                   ;one page to clean/flush
+        AMB_ARMAcleanflushrange r4,r0             ;clean/flush DC wrt this page
+        SUB     r4,r4,#PageSize                   ;restore r4
+        ARMA_flush_DTLBentry r4                   ;flush DTLB wrt this page
+14
+        SUBS    r3,r3,#1
+        STREQ   r2,[r5,#-4]                       ;make sure we clear last word of bitmap, and...
+        BEQ     %FT20                             ;done
+16
+        ADD     r10,r10,#4                        ;next page no.
+        ADD     r4,r4,#PageSize                   ;next logical address
+        MOVS    r8,r8,LSL #1                      ;if 32 bits processed...
+        BNE     %BT12
+        STR     r2,[r5,#-4]                       ;zero word of bitmap we've just traversed (r2 is 0)
+        B       %BT10
+
+;if DC clean/flush as we go, then now all we have to do is drain WB, flush IC and ITLB, and exit
+20
+        CMP     r6,#0
+        BNE     %FT40
+
+        ARMA_drain_WB
+        ARMA_flush_IC WithoutNOPs
+        NOP
+        NOP
+        ARMA_flush_ITLB
+        Pull    "r0-r11,pc"
+
+;do full cache,TLB clean flush and exit
+40
+        MOV     r4,#ApplicationStart             ;old logical address
+        MOV     r8,r6                            ;no. of pages
+        BL      AMB_cachecleanflush
+        Pull    "r0-r11, pc"
+
+
+; ----------------------------------------------------------------------------------
+;
+; AMB_MakeUnsparse
+;
+; entry: r0 = size of area (at top of current slot) to ensure is not sparsely mapped
+;
+; action: walk over space involved, to force abort handler fix up to map in any
+;         pages not already there
+;
+AMB_MakeUnsparse ROUT
+        Push    "r0-r2,r12,lr"
+;  Debug AMB,"AMB_MakeUnsparse r0",r0
+        ADD     r0,r0,#PageSize
+        SUB     r0,r0,#1
+        MOVS    r0,r0,LSR #Log2PageSize
+        BEQ     %FT20
+        MOV     r12,#AMBControl_ws
+        LDR     r12,[r12]
+        CMP     r12,#0
+        BEQ     %FT20
+        LDR     r1,AMBMappedInNode
+        CMP     r1,#0
+        BEQ     %FT20
+        LDR     r2,AMBFlags
+        TST     r2,#AMBFlag_LazyMapIn_disable :OR: AMBFlag_LazyMapIn_suspend
+        BNE     %FT20
+  [ AMB_ChocTrace
+        LDR     r2,AMBNmakeunsparse
+        ADD     r2,r2,#1
+        STR     r2,AMBNmakeunsparse
+  ] 
+        LDR     r2,[r1,#AMBNode_Npages]
+; Debug AMB,"AMB_MakeUnsparse pages Npages ",r0,r2
+        CMP     r0,r2
+        MOVHI   r0,r2
+        SUB     lr,r2,r0
+        MOV     lr,lr,LSL #Log2PageSize
+        ADD     lr,lr,#ApplicationStart
+;  Debug AMB,"AMB_MakeUnsparse MappedInNode addr pages ",r1,lr,r0
+10
+        LDR     r2,[lr]                ;tends to wash data cache a bit, but this should be called rarely
+        ADD     lr,lr,#PageSize
+        SUBS    r0,r0,#1
+        BNE     %BT10
+20
+        Pull    "r0-r2,r12,pc"
+
+
+  ] ;AMB_LazyMapIn
+
+; ----------------------------------------------------------------------------------
+;
 ; AMB_FindMemMapEntries
 ;
 ; finds page numbers for pages currently at given logical start address,
@@ -442,8 +809,6 @@ AMB_smme_exit
 ; exit:
 ;   buffer at R4 filled in with page numbers
 ;
-; ************************************************************************
-
 AMB_FindMemMapEntries ROUT
 
         Push    "r0-r11,lr"
@@ -487,6 +852,8 @@ AMB_FindMemMapEntries ROUT
         BNE     %BT30
         Pull    "r0-r11,pc"
 
+; ----------------------------------------------------------------------------------
+;
 ;AMB_r11topagenum
 ;entry:
 ;     r0,r1,r2 = lowest addr,highest addr +1,first page no.
