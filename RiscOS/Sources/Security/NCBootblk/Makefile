@@ -85,7 +85,8 @@ OBJS      = module.o header.o reg_swis.o reg_events.o enum_ddi.o \
 	reg_scbb.o reg_cmds.o reg_status.o reg_utils.o \
 	machine.o DBUG.o dynalloc.o reg_auth.o reg_index.o \
 	asm_utils.o reg_files.o\
-	BORDERDBUG.o kprintf.o
+	BORDERDBUG.o kprintf.o \
+	reg_sign.o reg_tags.o
 
 #
 # Generic rules:
