@@ -27,8 +27,9 @@ WIPE    = -wipe
 STRIP   = stripdepnd
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -zM ${INCLUDES} ${THROWBACK} ${DFLAGS} -wpc
+CFLAGS  = -c -depend !Depend -ffah -zM ${INCLUDES} ${THROWBACK} ${DFLAGS} -wpc
 CPFLAGS = ~cfr~v
+CMHGFLAGS = -depend !Depend -p ${THROWBACK}
 WFLAGS  = ~c~v
 
 #
@@ -47,6 +48,8 @@ SOCKLIB=TCPIPLibs:o.socklibzm
 #
 INCLUDES = -IC:,TCPIPLibs:
 
+DIRS      = o._dirs
+
 DFLAGS   = -DCOMPAT_INET4
 
 #
@@ -61,7 +64,8 @@ EXPORTS   = h.gopherpub
 # Rule patterns
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} ${THROWBACK} -p -o $@ $<
+.cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $<
+.cmhg.h:;   ${CMHG} ${CMHGFLAGS} -d $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
 
 #
@@ -84,13 +88,23 @@ install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
 clean:
-        ${WIPE} o.* ${WFLAGS}
-        ${WIPE} rm.* ${WFLAGS}
-        ${WIPE} linked.* ${WFLAGS}
-        ${WIPE} map.* ${WFLAGS}
-        ${RM} ${TARGET}
+        ${WIPE} aof ${WFLAGS}
+        ${WIPE} o ${WFLAGS}
+        ${WIPE} rm ${WFLAGS}
+        ${WIPE} linked ${WFLAGS}
+        ${WIPE} map ${WFLAGS}
+        ${RM} h.ModHead
         ${STRIP}
         @echo ${COMPONENT}: cleaned
+
+${DIRS}:
+        @${MKDIR} aof
+        @${MKDIR} linked
+        @${MKDIR} map
+        @${MKDIR} o
+        @${MKDIR} rm
+        create ${DIRS}
+        stamp  ${DIRS}
 
 resources:
 #        ${MKDIR} ${RESDIR}.${COMPONENT}
@@ -100,7 +114,7 @@ resources:
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS} ${ROMCSTUBS} ${INETLIB} ${SOCKLIB}
+${TARGET}: ${OBJS} ${ROMCSTUBS} ${INETLIB} ${SOCKLIB} ${DIRS}
         ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS} ${INETLIB} ${SOCKLIB}
 
 #
@@ -112,10 +126,14 @@ rom_link:
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-rm.${COMPONENT}: ${OBJS} ${CLIB} ${INETLIB} ${SOCKLIB}
+rm.${COMPONENT}: ${OBJS} ${CLIB} ${INETLIB} ${SOCKLIB} ${DIRS}
         ${LD} -o $@ -module ${OBJS} ${CLIB} ${INETLIB} ${SOCKLIB}
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
+
+# Static dependencies
+
+o.gopher: h.ModHead
 
 # Dynamic dependencies:
