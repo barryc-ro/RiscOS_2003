@@ -8,7 +8,7 @@ RM=             remove
 WFLAGS=         fr~c~v
 WIPE=           -wipe
 
-CFLAGS=		-W -I$(INCLUDES) -c ${THROWBACK} -depend !Depend
+CFLAGS=		-pcc -I$(INCLUDES) -c ${THROWBACK} -depend !Depend
 
 OBJS=		o.${TARGET}
 
