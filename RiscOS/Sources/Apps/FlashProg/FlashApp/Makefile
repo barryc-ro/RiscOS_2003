@@ -20,6 +20,8 @@ RM       = remove
 SCANRES  = scanres
 WIPE     = -wipe
 MAKE     = amu
+SQUISH	 = squish
+SQFLAGS  = -nolist
 
 CFLAGS = -c -depend !Depend -IC:
 ASFLAGS = -depend !Depend -Stamp -quit -module
@@ -33,7 +35,7 @@ WFLAGS  = ~cr~v
 COMPONENT   = FlashApp
 TARGET      = rm.FlashApp
 MODULE_HELP = "FlashApp"
-MODULE_VER  = 0.11
+MODULE_VER  = 0.12
 SOURCE      = s.Messages
 RDIR        = Resources
 LDIR        = ${RDIR}.${LOCALE}
@@ -59,8 +61,11 @@ clean:
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
 
-${TARGET}: List
+${TARGET}: ${RDIR}.!RunImage List
         ${MODGEN} ${TARGET} ${COMPONENT} ${MODULE_HELP} ${MODULE_VER} -via List
 	${MODSQZ} ${TARGET}
 
+${RDIR}.!RunImage: Sources.!RunImage
+	${SQUISH} ${SQFLAGS} -from Sources.!RunImage -to $@
+	
 # Dynamic dependencies:
