@@ -62,6 +62,7 @@ rm.IICTest: Hdr:CPU.Generic26
 rm.IICTest: Hdr:IO.GenericIO
 rm.IICTest: Hdr:RISCOS
 rm.IICTest: Hdr:Machine.<Machine>
+rm.IICTest: Hdr:Machine.Machine
 rm.IICTest: Hdr:ImageSize.<ImageSize>
 rm.IICTest: Hdr:CPU.ARM600
 rm.IICTest: Hdr:IO.IOMDL

@@ -18,12 +18,13 @@
 
 PhysChecksum	*	(((CheckSumCMOS + &30) :MOD: &F0) + &10)
 
-PollMax		*	&f	; Number of times to poll for an Ack
+PollMax		*	45	; Number of times to poll for an Ack
 
 ; Device addresses
 RTCAddress	* &a0
   [	E2ROMSupport
 E2ROMAddress	* &a8
+E2ROMAddress2K  * &e0
   ]
 
 ; *****************************************************************************
@@ -402,6 +403,10 @@ Write	ROUT
 	Push	"R0-R4, R14"
 	BL	MangleCMOSAddress
 	Pull	"R0-R4, PC", CS		; if invalid, then exit
+  [ E2ROMSupport
+        CMP     r2, #&10
+        Pull    "R0-R4, PC", CC         ; don't write to OTP section
+  ]
 
 	MOV	R2, R0
 	MOV	R3, R1
@@ -568,11 +573,15 @@ GetI2CAddress ROUT
 	|
 	LDRB	R1, RTCFlag
 	]
-	TEQ	R1, #1
-	MOVEQ	R1, #RTCAddress
-	MOVNE	R1, #E2ROMAddress
+	TEQ	R1, #0
+	MOVNE	R1, #RTCAddress
+	[ :LNOT: :DEF: TestHarness
+	LDREQB  R1, [R1, #NVRamBase]
+	|
+	LDREQB  R1, NVBase
+	]
 
-	MOVS	R14, R0, LSR #8		; put top two bits of physical address into device address
+	MOVS	R14, R0, LSR #8		; put top bits of physical address into device address
 	ORRNE	R1, R1, R14, LSL #1
 	ANDNE	R0, R0, #&FF		; and use address within 256 byte block
 
@@ -587,12 +596,12 @@ GetI2CAddress ROUT
 ;
 ;	Doesn't check if address is larger than the amount of NVRam installed
 ;
-; in:	R0 = logical address (&00..&EF, &100..)
+; in:	R0 = logical address (&00...)
 ;
-; out:	C=0 => valid logical address (ie not &F0..&FF)
-;	 R0 = physical address (&40..&FF,&10..&3F,&100..)
+; out:	C=0 => valid logical address
+;	 R0 = physical address (&40..&FF,&00..&3F,&100..)
 ;
-;	C=1 => invalid logical address (ie &F0..&FF)
+;	C=1 => invalid logical address
 ;	 R0 preserved
 ;
 
@@ -613,7 +622,12 @@ MangleCMOSAddress
 	BICCSS	PC, R14, #C_bit		;    valid (no mungeing)
 
 	CMP	R0, #&F0		; if < &100 && >= &f0 then
+        [ E2ROMSupport
+        SUBCS   R0, R0, #&F0            ;    map &F0->&FF to &00->0F for OTP section
+        BICCSS  PC, R14, #C_bit
+        |
 	ORRCSS	PC, R14, #C_bit		;    invalid
+        ]
 
 	ADD	R0, R0, #&40		; now in range &40..&13F
 	CMP	R0, #&100
@@ -624,8 +638,11 @@ MangleCMOSAddress
 ;
 ;	ValChecksum - test to see if the CMOS checksum is OK
 ;
-;       This routine performs MangleCMOSAddress inherently, and
-;       assumes the checksum is the last logical location.
+;       This routine performs MangleCMOSAddress inherently.
+;
+;       The checksum does not include physical locations &00->&0F, even
+;       if they are OTP section (as this is usually used for a unique id
+;       which will be different for every machine).
 ;
 ; in:	none
 ;
@@ -699,9 +716,9 @@ ValChecksum	ENTRY "R1-R4"
 	BL	ClockData
 	BL	Stop
 
-	TEQ	R2, R4			; either go back for bytes 10 - 3f
+	TEQ	R2, R4			; either finish up completely
 	BNE	%FT40
-	MOV	R2, #&10		; or finish up completely.
+	MOV	R2, #&10		; or go back for bytes 10 - 3E.
    [ E2ROMSupport
 	MOV	R0, R2
 	BL	GetI2CAddress
@@ -932,7 +949,15 @@ InitCMOSCache	ENTRY "r0-r4"
 	STRB	R4, RTCFlag
 	]
 
+; Have we got a 2K E² ?
+        MOV     r1, #E2ROMAddress2K
+	MOV	r0, #(E2ROMAddress2K+14)
+	BL	DummyAccess
+	MOVVC	R4, #8
+	BVC	%FT5
+
 ; Have we got a 1K E² ?
+        MOV     r1, #E2ROMAddress
 	MOV	r0, #(E2ROMAddress+6)
 	BL	DummyAccess
 	MOVVC	R4, #4
@@ -948,12 +973,15 @@ InitCMOSCache	ENTRY "r0-r4"
 	MOV	r0, #(E2ROMAddress)
 	BL	DummyAccess
 	MOVVC	R4, #1
+	MOVVS   R1, #RTCAddress
 
 5
 	; Set the NVRam count
 	[ :LNOT: :DEF: TestHarness
+	STRB    R1, [R2, #NVRamBase]
 	STRB	R4, [R2, #NVRamSize]
 	|
+	STRB    R1, NVBase
 	STRB	R4, NVSize
 	]
 
@@ -965,7 +993,7 @@ InitCMOSCache	ENTRY "r0-r4"
 	]
 
 	; Initialise the cache
-	MOV	R0, #&10
+	MOV	R0, #&10                ; we don't cache &00->&0F, even if they are OTP section
 	BL	GetI2CAddress		; convert to device address and offset
 	MOV	R2, R0			; save the offset
     |
