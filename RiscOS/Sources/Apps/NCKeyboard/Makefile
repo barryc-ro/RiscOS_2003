@@ -49,7 +49,7 @@ WIPE    = -wipe
 STRIP   = stripdepnd
 
 AFLAGS  = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -ff ${INCLUDES} ${BUILDFLAGS} ${THROWBACK}
+CFLAGS  = -c -depend !Depend -ffah ${INCLUDES} ${BUILDFLAGS} ${THROWBACK}
 LDFLAGS =
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~vr
