@@ -43,6 +43,7 @@
 #include "Global.h"
 #include "MiscDefs.h"
 #include "ModeInfo.h"
+#include "Overlay.h"
 #include "RMA.h"
 #include "Utils.h"
 
@@ -54,8 +55,6 @@
 #define PlugIn_ParamsName_ID     "id"
 #define PlugIn_ParamsName_Data   "data"
 #define PlugIn_ParamsName_Border "border"
-
-/* Local structures */
 
 typedef struct plugin_file_entry
 {
@@ -104,13 +103,15 @@ static plugin_instance * instances = NULL;
 /* Local functions */
 
 static plugin_instance * plugin_new_instance        (void);
-static void              plugin_delete_instance     (int handle);
+static void              plugin_delete_instance     (plugin_instance * i);
 static plugin_instance * plugin_find_instance       (int handle);
 
 static _kernel_oserror * plugin_new_file_entry      (plugin_instance * i);
 static void              plugin_delete_file_entry   (plugin_instance * i, plugin_file_entry * en);
 static void              plugin_delete_file_entries (plugin_instance * i);
 static _kernel_oserror * plugin_read_params_file    (plugin_instance * i, const char * filename);
+
+static _kernel_oserror * plugin_make_initialised    (WimpMessage * m, BBox * at, unsigned int * newh);
 
 static int               plugin_redraw_window       (int eventcode, WimpPollBlock * b, IdBlock * idb, void * handle);
 static int               plugin_reopen_window       (int eventcode, WimpPollBlock * b, IdBlock * idb, void * handle);
@@ -164,6 +165,20 @@ static plugin_instance * plugin_new_instance(void)
 }
 
 /**************************************************************/
+/* plugin_delete_stand_alone()                                */
+/*                                                            */
+/* Delete a stand alone plug-in instance created with         */
+/* plugin_make_stand_alone.                                   */
+/*                                                            */
+/* Parameters: Stand-alone plug-in's instance handle.         */
+/**************************************************************/
+
+void plugin_delete_stand_alone(unsigned int handle)
+{
+  plugin_delete_instance(plugin_find_instance(handle));
+}
+
+/**************************************************************/
 /* plugin_delete_instance()                                   */
 /*                                                            */
 /* Delete a plugin_instance from the list along with any      */
@@ -172,9 +187,11 @@ static plugin_instance * plugin_new_instance(void)
 /* Parameters: Instance handle for item to delete.            */
 /**************************************************************/
 
-static void plugin_delete_instance(int handle)
+static void plugin_delete_instance(plugin_instance * i)
 {
-  plugin_instance * i = plugin_find_instance(handle);
+  #ifdef TRACE
+    if (tl & (1u<<30)) dprintf(("", "plugin_delete_instance: Called for %p\n", i));
+  #endif
 
   if (i == NULL) return;
 
@@ -319,7 +336,6 @@ static void plugin_delete_file_entry(plugin_instance * i, plugin_file_entry * en
     rma_release(NULL, (void *) en);
 
   #endif
-
 
   return;
 }
@@ -613,6 +629,28 @@ const char * plugin_return_string(WimpMessage * m, string_value * sv)
 }
 
 /**************************************************************/
+/* plugin_make_stand_alone_instance()                         */
+/*                                                            */
+/* Make a stand-alone plug-in instance.                       */
+/*                                                            */
+/* Parameters: Pointer to a BBox holding coords to open the   */
+/*             item at (screen coords, OS units);             */
+/*                                                            */
+/*             Pointer to an unsigned int to take the stand-  */
+/*             alone plugin-instance handle, so that          */
+/*             plugin_delete_instance can later be called.    */
+/*                                                            */
+/* Assumes:    Both pointers are non-NULL and valid.          */
+/**************************************************************/
+
+_kernel_oserror * plugin_make_stand_alone(BBox * at, unsigned int * newh)
+{
+  *newh = NULL;
+
+  return plugin_make_initialised(NULL, at, newh);
+}
+
+/**************************************************************/
 /* plugin_got_open()                                          */
 /*                                                            */
 /* Handle reception of a Message_PlugIn_Open.                 */
@@ -623,25 +661,61 @@ const char * plugin_return_string(WimpMessage * m, string_value * sv)
 
 _kernel_oserror * plugin_got_open(WimpMessage * m)
 {
+  return plugin_make_initialised(m, NULL, NULL);
+}
+
+/**************************************************************/
+/* plugin_make_initialised()                                  */
+/*                                                            */
+/* Make a plug-in instance based on a Message_PlugIn_Open or  */
+/* as a stand-alone item.                                     */
+/*                                                            */
+/* Parameters: Pointer to a Wimp_Message struct relevant to   */
+/*             the message, or NULL for a stand-alone item;   */
+/*                                                            */
+/*             NULL for a conventional plug-in, or pointer to */
+/*             a BBox holding coords to open stand-alone item */
+/*             at (screen coords, OS units).                  */
+/*                                                            */
+/*             Optional pointer to unsigned into take new     */
+/*             item's instance handle.                        */
+/**************************************************************/
+
+static _kernel_oserror * plugin_make_initialised(WimpMessage * m, BBox * at, unsigned int * newh)
+{
   _kernel_oserror         * e;
   WimpGetWindowStateBlock   state;
   WimpMessage               response;
-  ObjectId                  new;
+  ObjectId                  newo;
   int                       plugin_instance_handle;
   plugin_instance         * i;
-  MPlugIn_Open            * open    = (MPlugIn_Open    *) &m->data;
+  MPlugIn_Open            * open;
   MPlugIn_Opening         * opening = (MPlugIn_Opening *) &response.data;
 
   #ifdef TRACE
-    if (tl & (1u<<30)) dprintf(("", "plugin_got_open: Called\n"));
+    if (tl & (1u<<30)) dprintf(("", "plugin_make_initialised: Called for %p, %p\n", m, at));
   #endif
+
+  if (m == NULL && at == NULL) return NULL;
+
+  if (m == NULL) open = NULL;
+  else           open = (MPlugIn_Open *) &m->data;
+
+  if (open != NULL && open->file_type != PlugIn_LaunchKey)
+  {
+    #ifdef TRACE
+      if (tl & (1u<<30)) dprintf(("", "plugin_make_initialised: Filetype %03X doesn't match launch key %03X\n", open->file_type, PlugIn_LaunchKey));
+    #endif
+
+    return NULL;
+  }
 
   i = plugin_new_instance();
 
   if (i == NULL)
   {
     #ifdef TRACE
-      if (tl & (1u<<30)) dprintf(("", "plugin_got_open: Out of memory\n"));
+      if (tl & (1u<<30)) dprintf(("", "plugin_make_initialised: Out of memory\n"));
     #endif
 
     return make_no_memory_error(0);
@@ -650,11 +724,16 @@ _kernel_oserror * plugin_got_open(WimpMessage * m)
   /* Currently, instance handles just point back to the plugin_instance structure */
 
   plugin_instance_handle = (int) i;
-  i->parent_task_handle  = m->hdr.sender;
+  if (newh != NULL) *newh = plugin_instance_handle;
 
-  /* Read the parameters file */
+  /* If not stand-alone, record the parent task and read the parameters file */
 
-  e = plugin_read_params_file(i, plugin_return_string(m, &open->file_name));
+  if (open != NULL && m != NULL)
+  {
+    i->parent_task_handle = m->hdr.sender;
+    e = plugin_read_params_file(i, plugin_return_string(m, &open->file_name));
+  }
+  else e = NULL;
 
   if (e == NULL)
   {
@@ -662,40 +741,43 @@ _kernel_oserror * plugin_got_open(WimpMessage * m)
 
     e = toolbox_create_object(0,
                               "Video",
-                              &new);
+                              &newo);
   }
 
   if (e == NULL)
   {
-    e = event_register_wimp_handler(new,
+    e = event_register_wimp_handler(newo,
                                     Wimp_ERedrawWindow,
                                     plugin_redraw_window,
                                     (void *) plugin_instance_handle);
   }
 
-  /* Flag this was successful register our OpenWindow event filter */
+  /* Flag this was successful register our OpenWindow event filter, if not stand-alone */
 
   if (e == NULL)
   {
     i->redraw_handler = 1;
 
-    e = filter_add_filter();
+    if (open != NULL) e = filter_add_filter();
   }
 
   /* Now other general bits of information */
 
   if (e == NULL)
   {
-    i->filter_done = 1;
+    if (open != NULL)
+    {
+      i->filter_done = 1;
 
-    i->browser_instance_handle = open->browser_instance_handle;
-    i->parent_window_handle    = open->parent_window_handle;
-    i->window_id               = new;
+      i->browser_instance_handle = open->browser_instance_handle;
+      i->parent_window_handle    = open->parent_window_handle;
+    }
 
-    e = window_get_wimp_handle(0, new, &i->window_handle);
+    i->window_id = newo;
+    e = window_get_wimp_handle(0, newo, &i->window_handle);
   }
 
-  if (e == NULL)
+  if (e == NULL && open != NULL)
   {
     state.window_handle = open->parent_window_handle;
     e = wimp_get_window_state(&state);
@@ -704,49 +786,67 @@ _kernel_oserror * plugin_got_open(WimpMessage * m)
   if (e != NULL)
   {
     #ifdef TRACE
-      if (tl & (1u<<30)) dprintf(("", "plugin_got_open: General error - '%s'\n", e->errmess));
+      if (tl & (1u<<30)) dprintf(("", "plugin_make_initialised: General error - '%s'\n", e->errmess));
     #endif
 
-    plugin_delete_instance(i->plugin_instance_handle);
+    plugin_delete_instance(i);
     return e;
   }
 
-  i->position = open->parent_area;
-  coords_box_toscreen(&i->position, (WimpRedrawWindowBlock *) &state);
+  if (open != NULL)
+  {
+    i->position = open->parent_area;
+    coords_box_toscreen(&i->position, (WimpRedrawWindowBlock *) &state);
+  }
+  else
+  {
+    i->position = *at;
+  }
 
   e = plugin_move_window(i);
 
   if (e != NULL)
   {
     #ifdef TRACE
-      if (tl & (1u<<30)) dprintf(("", "plugin_got_open: Error from plugin_move_window - '%s'\n", e->errmess));
+      if (tl & (1u<<30)) dprintf(("", "plugin_make_initialised: Error from plugin_move_window - '%s'\n", e->errmess));
     #endif
 
-    plugin_delete_instance(i->plugin_instance_handle);
+    plugin_delete_instance(i);
     return e;
   }
 
-  /* Respond with Message_PlugIn_Opening */
+  if (open != NULL)
+  {
+    /* Respond with Message_PlugIn_Opening */
 
-  response.hdr.size                = sizeof(MPlugIn_Opening);
-  response.hdr.your_ref            = m->hdr.my_ref;
-  response.hdr.action_code         = Message_PlugIn_Opening;
+    response.hdr.size                = sizeof(MPlugIn_Opening);
+    response.hdr.your_ref            = m->hdr.my_ref;
+    response.hdr.action_code         = Message_PlugIn_Opening;
 
-  opening->flags                   = MPlugIn_Opening_ActionBeyondStop;
-  opening->browser_instance_handle = i->browser_instance_handle;
-  opening->plugin_instance_handle  = plugin_instance_handle;
-  opening->parent_window_handle    = i->parent_window_handle;
-  opening->parent_area             = i->position;
+    opening->flags                   = MPlugIn_Opening_ActionBeyondStop;
+    opening->browser_instance_handle = i->browser_instance_handle;
+    opening->plugin_instance_handle  = plugin_instance_handle;
+    opening->parent_window_handle    = i->parent_window_handle;
+    opening->parent_area             = i->position;
 
-  #ifdef TRACE
-    if (tl & (1u<<30)) dprintf(("", "plugin_got_open: Exitting through wimp_send_message, sending handle %p\n", i));
-  #endif
+    #ifdef TRACE
+      if (tl & (1u<<30)) dprintf(("", "plugin_make_initialised: Exitting through wimp_send_message, sending handle %p\n", i));
+    #endif
 
-  return wimp_send_message(Wimp_EUserMessage,
-                           &response,
-                           m->hdr.sender,
-                           0,
-                           NULL);
+    return wimp_send_message(Wimp_EUserMessage,
+                             &response,
+                             m->hdr.sender,
+                             0,
+                             NULL);
+  }
+  else
+  {
+    #ifdef TRACE
+      if (tl & (1u<<30)) dprintf(("", "plugin_make_initialised: Stand-alone creation successful, exitting for handle %p\n", i));
+    #endif
+
+    return NULL;
+  }
 }
 
 /**************************************************************/
@@ -784,7 +884,7 @@ _kernel_oserror * plugin_got_close(WimpMessage * m)
 
   /* The handle is good */
 
-  plugin_delete_instance(close->plugin_instance_handle);
+  plugin_delete_instance(i);
 
   /* Respond with Message_PlugIn_Closed */
 
@@ -1005,19 +1105,15 @@ static int plugin_redraw_window(int eventcode, WimpPollBlock * b, IdBlock * idb,
 
       bbc_vdu(BBC_ClearGraph);
 
-      /* Alternatively, but possibly slower and certainly bigger code:
-       *
-       * bbc_rectanglefill(r.redraw_area.xmin,
-       *                   r.redraw_area.ymin,
-       *                   r.redraw_area.xmax - r.redraw_area.xmin - 1,
-       *                   r.redraw_area.ymax - r.redraw_area.ymin - 1);
-       */
-
       ChkError(wimp_get_rectangle(&r, &more));
 
     }
     while (more);
   }
+
+  /* Stand-alone items: Poll the overlay system */
+
+  if (i->parent_window_handle == 0) overlay_poll(0, NULL, NULL, NULL);
 
   return 1;
 }
@@ -1058,7 +1154,8 @@ static int plugin_reopen_window(int eventcode, WimpPollBlock * b, IdBlock * idb,
 /*                                                            */
 /* Move a plug-in window to the location currenly specified   */
 /* by the "position" BBox and parent window handle in the     */
-/* given plugin_instance structure.                           */
+/* given plugin_instance structure. If the parent window      */
+/* handle is zero, the item is opened with no parent.         */
 /*                                                            */
 /* Parameters: Pointer to a plugin_instance struct relevant   */
 /*             to the plug-in window to move.                 */
@@ -1079,14 +1176,33 @@ static _kernel_oserror * plugin_move_window(plugin_instance * i)
   show.parent_window_handle = i->parent_window_handle;
   show.alignment_flags      = 0;
 
-  RetError(toolbox_show_object(Toolbox_ShowObject_AsSubWindow,
-                               i->window_id,
-                               Toolbox_ShowObject_FullSpec,
-                               &show,
-                               NULL_ObjectId,
-                               NULL_ComponentId));
+  if (i->parent_window_handle != 0)
+  {
+    RetError(toolbox_show_object(Toolbox_ShowObject_AsSubWindow,
+                                 i->window_id,
+                                 Toolbox_ShowObject_FullSpec,
+                                 &show,
+                                 NULL_ObjectId,
+                                 NULL_ComponentId));
 
-  return plugin_move_video(i);
+    return plugin_move_video(i);
+  }
+  else
+  {
+    RetError(toolbox_show_object(0,
+                                 i->window_id,
+                                 Toolbox_ShowObject_FullSpec,
+                                 &show,
+                                 NULL_ObjectId,
+                                 NULL_ComponentId));
+
+    return wimp_set_caret_position(i->window_handle,
+                                     -1,
+                                     0,
+                                     0,
+                                     -1,
+                                     -1);
+  }
 }
 
 /**************************************************************/
@@ -1184,7 +1300,7 @@ void plugin_shutdown(void)
 
   while (instances != NULL)
   {
-    plugin_delete_instance(instances->plugin_instance_handle);
+    plugin_delete_instance(instances);
   }
 
   /* Finished */

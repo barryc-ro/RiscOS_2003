@@ -32,29 +32,47 @@
 #include "FromROSLib.h"
 #include "Global.h"
 #include "Limit.h"
+#include "ModeInfo.h"
+#include "PlugIn.h"
 #include "Utils.h"
 
 #include "Overlay.h"
 
-/* Local options */
+/* Possible missing external definitions */
 
-#define Overlay_FontName        "Homerton.Medium"
+#ifndef ModeFiles_SafeArea
+  #define ModeFiles_SafeArea 0x4D481
+#endif
+
+#define ModeFiles_SafeArea_MagicWord 0x45444957 /* "WIDE" */
+
+/* Local options. Font Y size is worked out automatically from pixel */
+/* aspect ratio - "(X size * [aspect as 16.16 fixed point]) >> 16".  */
+
+#define Overlay_FontName        "Homerton.Bold"
 #define Overlay_FontX           288
-#define Overlay_FontY           288
-#define Overlay_IconIndirection "F7A"
+#define Overlay_FontColour      0xffffff00
+#define Overlay_GapSize         6400
 
 /* Flags definitions for the overlay structure */
 
 #define Overlay_Deleted (1u<<0)
 #define Overlay_Drawn   (1u<<1)
 
+/* Magic number is half way between the maximum and minimum aspect ratios */
+/* that ModeFiles' "ModeFiles.s" records, at the time of writing, for     */
+/* STB 400 - namely &0E38E for NTSC and &16C17 for PAL anamorphic.        */
+
+#define Overlay_UseWideSpritesLimit 0x127D2
+
 /* Local variables */
 
 static bool            polling      = false;
 static bool            font_claimed = false;
 
-static unsigned int    screen_w;
-static unsigned int    screen_h;
+static BBox            safe;
+static unsigned int    aspect;
+static unsigned int    screen_w, screen_h;
 static unsigned int    font_handle;
 
 static overlay       * overlays[oa__end];
@@ -62,9 +80,8 @@ static overlay       * overlays[oa__end];
 /* Local functions */
 
 static void              overlay_free_item   (overlay * current);
-
-static _kernel_oserror * overlay_draw_item   (overlay * current);
-static _kernel_oserror * overlay_undraw_item (overlay * current);
+static _kernel_oserror * overlay_draw_item   (overlay * current, bool undraw);
+static _kernel_oserror * overlay_plot_sprite (const char * name, int x, int y);
 
 /**************************************************************/
 /* overlay_add()                                              */
@@ -92,18 +109,29 @@ static _kernel_oserror * overlay_undraw_item (overlay * current);
 /*             is updated to point to the new item, or NULL   */
 /*             if memory runs out (an error will be           */
 /*             returned in this event anyway) - may be NULL   */
-/*             on entry if you're not interested.             */
+/*             on entry if you're not interested, and bear in */
+/*             mind that timed items can get deleted under    */
+/*             you;                                           */
+/*                                                            */
+/*             A handle to associate with this item; you can  */
+/*             use this number to detete all overlays under   */
+/*             the same handle, which is up to the caller to  */
+/*             keep unique (or not, as required).             */
 /**************************************************************/
 
 _kernel_oserror * overlay_add(const char * sprite, const char * text, overlay_alignment align,
-                              unsigned int duration, overlay * ret)
+                              unsigned int duration, overlay ** ret, unsigned int handle)
 {
   overlay * new = calloc(1, sizeof(overlay));
+
+  if (ret != NULL) *ret = NULL;
 
   if (new == NULL)      return make_no_memory_error(4);
   if (align >= oa__end) return NULL;
 
   /* Fill in the new structure */
+
+  new->handle = handle;
 
   if (text != NULL)
   {
@@ -117,6 +145,8 @@ _kernel_oserror * overlay_add(const char * sprite, const char * text, overlay_al
     if (new->sprite == NULL) return make_no_memory_error(4);
   }
 
+  if (ret != NULL) *ret = new;
+
   new->align    = align;
   new->duration = duration;
 
@@ -129,6 +159,40 @@ _kernel_oserror * overlay_add(const char * sprite, const char * text, overlay_al
 
   if (overlays[align])
   {
+    /* Since we've an existant item, must ensure it's undrawn, provided */
+    /* the sprite and/or text differ                                    */
+
+    if (
+         !
+         (
+           (
+             overlays[align]->text != NULL &&
+             new->text             != NULL &&
+             !strncmp(new->text, overlays[align]->text, strlen(overlays[align]->text))
+           )
+           ||
+           (
+             overlays[align]->text == NULL &&
+             new->text             == NULL
+           )
+         )
+         ||
+         !
+         (
+           (
+             overlays[align]->sprite != NULL &&
+             new->sprite             != NULL &&
+             !strcmp(new->sprite, overlays[align]->sprite)
+           )
+           ||
+           (
+             overlays[align]->sprite == NULL &&
+             new->sprite             == NULL
+           )
+         )
+       )
+       overlay_draw_item(overlays[align], true);
+
     overlays[align]->prev = new;
     new->next             = overlays[align];
 
@@ -160,13 +224,67 @@ _kernel_oserror * overlay_add(const char * sprite, const char * text, overlay_al
 /* item is just marked for deletion and the poll routine gets */
 /* rid of it shortly afterwards.                              */
 /*                                                            */
-/* Parameters: Pointer to the item to remove.                 */
+/* Parameters: Pointer to the item to remove, may be NULL     */
+/*             (see below);                                   */
+/*                                                            */
+/*             If the pointer is NULL, handle of item(s) to   */
+/*             remove instead.                                */
 /**************************************************************/
 
-_kernel_oserror * overlay_remove(overlay * item)
+_kernel_oserror * overlay_remove(overlay * item, unsigned int handle)
 {
-  item->flags |= Overlay_Deleted;
+  if (item != NULL)
+  {
+    item->flags |= Overlay_Deleted;
+  }
+  else
+  {
+    unsigned int   i;
+    overlay      * current;
+
+    for (i = 0; i < oa__end; i++)
+    {
+      current = overlays[i];
+
+      while (current)
+      {
+        if (current->handle == handle)
+        {
+          current->flags |= Overlay_Deleted;
+        }
+
+        current = current->next;
+      }
+    }
+  }
+
   return NULL;
+}
+
+/**************************************************************/
+/* overlay_hide()                                             */
+/*                                                            */
+/* Calls overlay_draw_item to undraw every item at the top of */
+/* the pile of overlays in each of the overlay positions. Use */
+/* overlay_poll to restore stuff later. Intended to be used   */
+/* for temporarily removing overlays as e.g. the safe area is */
+/* being changed.                                             */
+/**************************************************************/
+
+void overlay_hide(void)
+{
+  unsigned int i;
+
+  for (i = 0; i < oa__end; i++)
+  {
+    if (overlays[i] != NULL)
+    {
+      overlay_draw_item(overlays[i], true);
+      overlays[i]->flags &= ~Overlay_Drawn;
+    }
+  }
+
+  return;
 }
 
 /**************************************************************/
@@ -209,7 +327,7 @@ int overlay_poll(int eventcode, WimpPollBlock * b, IdBlock * idb, void * handle)
 
         if (undraw)
         {
-          ChkError(overlay_undraw_item(current));
+          ChkError(overlay_draw_item(current, true));
           undraw = false;
         }
 
@@ -222,7 +340,7 @@ int overlay_poll(int eventcode, WimpPollBlock * b, IdBlock * idb, void * handle)
       }
       else if ((current->flags & Overlay_Drawn) == 0)
       {
-        ChkError(overlay_draw_item(current));
+        ChkError(overlay_draw_item(current, false));
         current = NULL;
       }
       else break;
@@ -270,33 +388,167 @@ static void overlay_free_item(overlay * current)
 /**************************************************************/
 /* overlay_initialise()                                       */
 /*                                                            */
-/* Initialise the overlay system.                             */
+/* Initialise the entire overlay system.                      */
 /**************************************************************/
 
 void overlay_initialise(void)
 {
   unsigned int i;
 
+  #ifdef TRACE
+    if (tl && (1u<<6)) dprintf(("", "overlay_initialise: Called\n"));
+  #endif
+
   for (i = 0; i < oa__end; i++)
   {
     overlays[i] = NULL;
   }
 
-  screen_w = (bbc_modevar(-1, BBC_XWindLimit) + 1) << bbc_modevar(-1, BBC_XEigFactor);
-  screen_h = (bbc_modevar(-1, BBC_YWindLimit) + 1) << bbc_modevar(-1, BBC_YEigFactor);
+  overlay_recheck_graphics();
+}
 
-  ChkError(_swix(Font_FindFont,
-                 _INR(1,5) | _OUT(0),
+/**************************************************************/
+/* overlay_recheck_graphics()                                 */
+/*                                                            */
+/* Recheck graphics details after initialisation, e.g. due to */
+/* mode change or safe area change. Handles clearing and      */
+/* redrawing overlays in passing.                             */
+/**************************************************************/
 
-                 Overlay_FontName,
-                 Overlay_FontX,
-                 Overlay_FontY,
-                 0,
-                 0,
+void overlay_recheck_graphics(void)
+{
+  unsigned int new_aspect;
+  unsigned int new_screen_w;
+  unsigned int new_screen_h;
+  BBox         new_safe;
+  bool         changed = false, redraw = false;
 
-                 &font_handle));
+  /* Read the screen size */
 
-  font_claimed = true;
+  new_screen_w = (bbc_modevar(-1, BBC_XWindLimit) + 1) << bbc_modevar(-1, BBC_XEigFactor);
+  new_screen_h = (bbc_modevar(-1, BBC_YWindLimit) + 1) << bbc_modevar(-1, BBC_YEigFactor);
+
+  /* Read the safe area */
+
+  if (
+       _swix(ModeFiles_SafeArea,
+             _IN(0) | _OUTR(0,4),
+
+             ModeFiles_SafeArea_MagicWord,
+
+             &new_safe.xmin,
+             &new_safe.ymin,
+             &new_safe.xmax,
+             &new_safe.ymax,
+             &new_aspect)
+
+       != NULL
+     )
+  {
+    /* If there was an error, assume simple defaults */
+
+    new_aspect    = 0x10000;
+    new_safe.xmin = 0;
+    new_safe.ymin = 0;
+    new_safe.xmax = screen_w;
+    new_safe.ymax = screen_h;
+  }
+
+  /* Did anything change? */
+
+  if (
+       new_aspect    != aspect    ||
+       new_screen_w  != screen_w  ||
+       new_screen_h  != screen_h  ||
+       new_safe.xmin != safe.xmin ||
+       new_safe.ymin != safe.ymin ||
+       new_safe.xmax != safe.xmax ||
+       new_safe.ymax != safe.ymax
+     )
+     changed = true;
+
+  /* If stuff changed, we need to undraw overlays and redraw them later */
+
+  if (changed && font_claimed)
+  {
+    redraw = true;
+    overlay_hide();
+  }
+
+  /* If the aspect ratio changed or we've not got a font handle yet, */
+  /* grab a font appropriate for the [new] aspect ratio.             */
+
+  if (!font_claimed || aspect != new_aspect)
+  {
+    if (font_claimed)
+    {
+      _swix(Font_LoseFont,
+            _IN(0),
+
+            font_handle);
+
+      font_claimed = false;
+    }
+
+    ChkError(_swix(Font_FindFont,
+                   _INR(1,5) | _OUT(0),
+
+                   Overlay_FontName,
+                   Overlay_FontX,
+                   (Overlay_FontX * new_aspect) >> 16,
+                   0,
+                   0,
+
+                   &font_handle));
+
+    font_claimed = true;
+  }
+
+  /* Store the new details */
+
+  aspect   = new_aspect;
+  screen_w = new_screen_w;
+  screen_h = new_screen_h;
+  safe     = new_safe;
+
+  /* If we undrew the overlays, redraw them */
+
+  if (redraw) overlay_poll(0, NULL, NULL, NULL);
+
+  /* Finished */
+
+  return;
+}
+
+/**************************************************************/
+/* overlay_open_window()                                      */
+/*                                                            */
+/* Once initialised, call to open a window covering the whole */
+/* screen. Redraw etc. is handled by using a stand-alone      */
+/* plug-in instance.                                          */
+/*                                                            */
+/* Parameters: Pointer to unsigned int to take plug-in        */
+/*             instance handle of new item. Must not be NULL. */
+/*             Caller is responsible for calling              */
+/*             plugin_delete_stand_alone.                     */
+/**************************************************************/
+
+_kernel_oserror * overlay_open_window(unsigned int * newh)
+{
+  BBox at;
+
+  #ifdef TRACE
+    if (tl && (1u<<6)) dprintf(("", "overlay_open_window: Called\n"));
+  #endif
+
+  *newh = NULL;
+
+  at.xmin = 0;
+  at.ymin = 0;
+  at.xmax = screen_w;
+  at.ymax = screen_h;
+
+  return plugin_make_stand_alone(&at, newh);
 }
 
 /**************************************************************/
@@ -311,6 +563,10 @@ void overlay_shutdown(void)
 {
   unsigned int i;
 
+  #ifdef TRACE
+    if (tl && (1u<<6)) dprintf(("", "overlay_shutdown: Called\n"));
+  #endif
+
   for (i = 0; i < oa__end; i++)
   {
     while (overlays[i]) overlay_free_item(overlays[i]);
@@ -322,10 +578,15 @@ void overlay_shutdown(void)
     polling = false;
   }
 
-  if (font_claimed == false) _swix(Font_LoseFont,
-                                   _IN(0),
+  if (font_claimed == true)
+  {
+    _swix(Font_LoseFont,
+          _IN(0),
 
-                                   font_handle);
+          font_handle);
+
+    font_claimed = false;
+  }
 }
 
 /**************************************************************/
@@ -336,36 +597,48 @@ void overlay_shutdown(void)
 /* Parameters: Pointer to the item to redraw                  */
 /**************************************************************/
 
-static _kernel_oserror * overlay_draw_item(overlay * current)
+static _kernel_oserror * overlay_draw_item(overlay * current, bool undraw)
 {
-  char              buffer [sizeof(Overlay_IconIndirection) - 1 + sizeof(";S") - 1 + Limits_OS_SpriteName];
-  bool              undraw = false;
-  int               sw, sh;
-  unsigned int      sx, sy;
-  unsigned int      tw, th;
-  unsigned int      tx, ty;
+  /* We don't use unsigned stuff here, as items bigger than the screen can */
+  /* cause negative numbers to fly around.                                 */
+
+  int  dw, dh;
+  int  sw, sh;
+  int  sx, sy;
+  int  tw, th;
+  int  tx, ty;
+  int  tb, to;
+  int  xo, yo;
+
+  char sprite[Limits_OS_SpriteName];
+
+  if (current == NULL || font_claimed == false) return NULL;
 
   /* See if we've a blanking item and undraw the first non-blanking */
   /* item under it if so; check also if we've no item at all!       */
 
-  while (
-          current                 &&
-          current->text == NULL   &&
-          current->sprite == NULL
-        )
+  if (!undraw)
   {
-    undraw  = true;
-    current = current->next;
+    while (
+            current                 &&
+            current->text   == NULL &&
+            current->sprite == NULL
+          )
+    {
+      undraw  = true;
+      current = current->next;
+    }
+
+    if (current == NULL) return NULL;
+    if (undraw)          return overlay_draw_item(current, true);
   }
 
-  if (current == NULL) return NULL;
-  if (undraw) return overlay_undraw_item(current);
-
   dprintf(("",
-           "Draw item '%s', '%s' at %d\n",
+           "Draw item '%s', '%s' at %d, undraw: %s\n",
            current->text   ? current->text   : "<NULL>",
            current->sprite ? current->sprite : "<NULL>",
-           current->align));
+           current->align,
+           undraw ? "yes" : "no"));
 
   current->flags |= Overlay_Drawn;
 
@@ -375,185 +648,421 @@ static _kernel_oserror * overlay_draw_item(overlay * current)
 
   if (current->sprite != NULL)
   {
-    RetError(read_sprite_size(current->sprite, &sw, &sh));
+    if (aspect > Overlay_UseWideSpritesLimit)
+    {
+      sprintf(sprite, "a_");
+    }
+    else *sprite = '\0';
+
+    strncat(sprite, current->sprite, sizeof(sprite) - strlen(sprite) - 1);
+    sprite[sizeof(sprite) - 1] = '\0';
+
+    RetError(read_sprite_size(sprite, &sw, &sh));
   }
+
+  convert_pair_to_points(sw,                    sh,                    &sw, &sh);
+  convert_pair_to_points(safe.xmax - safe.xmin, safe.ymax - safe.ymin, &dw, &dh);
 
   /* Work out the text size */
 
-  tw = th = 0;
+  tw = th = to = tb = 0;
 
-(void) ty;
-(void) tx;
-(void) sy;
-(void) sx;
-(void) buffer;
+  if (current->text != NULL)
+  {
+    int buffer[9];
 
+    buffer[0] = buffer[1] = buffer[2] = buffer[3] = 0;
+    buffer[4] = -1; /* Split character, or -1 for none */
 
-return NULL;
+    RetError(_swix(Font_ScanString,
+                   _INR(0,5) | _IN(7),
 
-//  if (current->text != NULL)
-//  {
-//    RetError(_swix(Font_ScanString,
-//                   _INR(0,7),
-//
-//                   font_handle,
-//                   current->text,
-//
-//  }
-//
-//
-//  /* Work out the bounding box for each of the nine positions. Each icon */
-//  /* gets a ninth of the screen area. This is mostly for text purposes   */
-//  /* as the Wimp will happily plot sprites outside of the bounding box.  */
-//
-//  switch (current->align)
-//  {
-//    default:
-//    case oa_top_left:
-//    {
-//      icon.bbox.xmin = 0;
-//      icon.bbox.ymin = screen_h - height;
-//      icon.bbox.xmax = screen_w / 3;
-//      icon.bbox.ymax = screen_h - 1;
-//    }
-//    break;
-//
-//    case oa_top_centre:
-//    {
-//      icon.bbox.xmin = (screen_w / 2) - (screen_w / 6);
-//      icon.bbox.ymin = screen_h       - height;
-//      icon.bbox.xmax = (screen_w / 2) + (screen_w / 6);
-//      icon.bbox.ymax = screen_h       - 1;
-//
-//      icon.flags |= WimpIcon_HCentred;
-//    }
-//    break;
-//
-//    case oa_top_right:
-//    {
-//      icon.bbox.xmin = screen_w - (screen_w / 3);
-//      icon.bbox.ymin = screen_h - height;
-//      icon.bbox.xmax = screen_w - 1;
-//      icon.bbox.ymax = screen_h - 1;
-//
-//      icon.flags |= WimpIcon_RJustified;
-//    }
-//    break;
-//
-//    case oa_middle_left:
-//    {
-//      icon.bbox.xmin = 0;
-//      icon.bbox.ymin = (screen_h / 2) - (screen_h / 6);
-//      icon.bbox.xmax = (screen_w / 3);
-//      icon.bbox.ymax = (screen_h / 2) + (screen_h / 6);
-//    }
-//    break;
-//
-//    case oa_middle_centre:
-//    {
-//      icon.bbox.xmin = (screen_w / 2) - (screen_w / 6);
-//      icon.bbox.ymin = (screen_h / 2) - (screen_h / 6);
-//      icon.bbox.xmax = (screen_w / 2) + (screen_w / 6);
-//      icon.bbox.ymax = (screen_h / 2) + (screen_h / 6);
-//
-//      icon.flags |= WimpIcon_HCentred;
-//    }
-//    break;
-//
-//    case oa_middle_right:
-//    {
-//      icon.bbox.xmin = screen_w - (screen_w / 3);
-//      icon.bbox.ymin = (screen_h / 2) - (screen_h / 6);
-//      icon.bbox.xmax = (screen_w - 1);
-//      icon.bbox.ymax = (screen_h / 2) + (screen_h / 6);
-//
-//      icon.flags |= WimpIcon_RJustified;
-//    }
-//    break;
-//
-//    case oa_bottom_left:
-//    {
-//      icon.bbox.xmin = 0;
-//      icon.bbox.ymin = 0;
-//      icon.bbox.xmax = screen_w / 3;
-//      icon.bbox.ymax = screen_h / 3;
-//    }
-//    break;
-//
-//    case oa_bottom_centre:
-//    {
-//      icon.bbox.xmin = (screen_w / 2) - (screen_w / 6);
-//      icon.bbox.ymin = 0;
-//      icon.bbox.xmax = (screen_w / 2) + (screen_w / 6);
-//      icon.bbox.ymax = (screen_h / 3);
-//
-//      icon.flags |= WimpIcon_HCentred;
-//    }
-//    break;
-//
-//    case oa_bottom_right:
-//    {
-//      icon.bbox.xmin = screen_w - (screen_w / 3);
-//      icon.bbox.ymin = 0;
-//      icon.bbox.xmax = screen_w - 1;
-//      icon.bbox.ymax = screen_h / 3;
-//
-//      icon.flags |= WimpIcon_RJustified;
-//    }
-//    break;
-//  }
-//
-//  /* Font stuff */
-//
-//  icon.flags |= WimpIcon_AntiAliased;
-//  icon.flags |= font_handle * WimpIcon_FontHandle;
-//
-//  /* Now the main icon data */
-//
-//  if (current->sprite != NULL)
-//  {
-//    sprintf(buffer, "%s%s", Overlay_IconIndirection, ";S");
-//    strncat(buffer, current->sprite, Limits_OS_SpriteName);
-//
-//    buffer[sizeof(buffer) - 1] = '\0';
-//  }
-//  else
-//  {
-//    strcpy(buffer, Overlay_IconIndirection);
-//  }
-//
-//  icon.data.ist.buffer      = current->text ? current->text : "";
-//  icon.data.ist.validation  = buffer;
-//  icon.data.ist.buffer_size = strlen(icon.data.ist.buffer);
-//
-//  return _swix(Wimp_PlotIcon,
-//               _IN(1) | _INR(4,5),
-//
-//               &icon,
-//               0,
-//               0);
+                   font_handle,
+                   current->text,
+                   FM_GivenLength | FM_GivenBuffer | FM_Kern | FM_GivenHandle | FM_ReturnBBox,
+                   0x7fffffff,
+                   0x7fffffff,
+                   buffer,
+                   strlen(current->text)));
+
+    tw = buffer[7] - buffer[5];
+    th = buffer[8] - buffer[6];
+    to = buffer[5];
+    tb = -buffer[6];
+  }
+
+  /* Work out X and Y coordinates */
+
+  switch (current->align)
+  {
+    default:
+    case oa_top_left:
+    {
+      sx = 0;
+      sy = dh - sh - (th > sh ? (th - sh) / 2 : 0);
+      tx = sw + Overlay_GapSize;
+      ty = sy + (sh > th ? (sh - th) / 2 : 0);
+    }
+    break;
+
+    case oa_top_centre:
+    {
+      sx = (dw - sw) / 2;
+      sy = dh - sh;
+      tx = (dw - tw) / 2;
+      ty = dh - sh - th - Overlay_GapSize;
+    }
+    break;
+
+    case oa_top_right:
+    {
+      sx = dw - sw;
+      sy = dh - sh - (th > sh ? (th - sh) / 2 : 0);
+      tx = dw - tw - sw - Overlay_GapSize;
+      ty = sy + (sh > th ? (sh - th) / 2 : 0);
+    }
+    break;
+
+    case oa_middle_left:
+    {
+      sx = 0;
+      sy = (dh - sh) / 2;
+      tx = sw + Overlay_GapSize;
+      ty = (dh - th) / 2;
+    }
+    break;
+
+    case oa_middle_centre:
+    {
+      sx = (dw - sw) / 2;
+      sy = (dh - sh - th) / 2 + th;
+      tx = (dw - tw) / 2;
+      ty = sy - th - Overlay_GapSize;
+    }
+    break;
+
+    case oa_middle_right:
+    {
+      sx = dw - sw;
+      sy = (dh - sh) / 2;
+      tx = sx - tw - Overlay_GapSize;
+      ty = (dh - th) / 2;
+    }
+    break;
+
+    case oa_bottom_left:
+    {
+      sx = 0;
+      sy = th > sh ? (th - sh) / 2 : 0;
+      tx = sw + Overlay_GapSize;
+      ty = sh > th ? (sh - th) / 2 : 0;
+    }
+    break;
+
+    case oa_bottom_centre:
+    {
+      sx = (dw - sw) / 2;
+      sy = 0;
+      tx = (dw - tw) / 2;
+      ty = sh + Overlay_GapSize;
+    }
+    break;
+
+    case oa_bottom_right:
+    {
+      sx = dw - sw;
+      sy = th > sh ? (th - sh) / 2 : 0;
+      tx = dw - tw - sw - Overlay_GapSize;
+      ty = sh > th ? (sh - th) / 2 : 0;
+    }
+    break;
+  }
+
+  /* Account for safe area offsets */
+
+  convert_pair_to_points(safe.xmin, safe.ymin, &xo, &yo);
+
+  tx += xo;
+  ty += yo;
+  sx += xo;
+  sy += yo;
+
+  /* Now [un]draw stuff */
+
+  if (!undraw)
+  {
+    /* Draw bounding boxes in debug builds */
+
+    #ifdef TRACE
+
+      {
+        ltx, lty, ltw, lth;
+        lsx, lsy, lsw, lsh;
+
+        convert_pair_to_os(tx, ty, &ltx, &lty);
+        convert_pair_to_os(tw, th, &ltw, &lth);
+        convert_pair_to_os(sx, sy, &lsx, &lsy);
+        convert_pair_to_os(sw, sh, &lsw, &lsh);
+
+        _swix(ColourTrans_SetGCOL,
+              _IN(0) | _INR(3,4),
+
+              0xffff0000,
+              0,
+              0);
+
+        bbc_rectangle(ltx, lty, ltw - 1, lth - 1);
+
+        _swix(ColourTrans_SetGCOL,
+              _IN(0) | _INR(3,4),
+
+              0xff00ff00,
+              0,
+              0);
+
+        bbc_rectangle(lsx, lsy, lsw - 1, lsh - 1);
+      }
+
+    #endif
+
+    /* Plot the text */
+
+    if (current->text != NULL)
+    {
+      RetError(_swix(ColourTrans_SetFontColours,
+                     _INR(0,3),
+
+                     font_handle,
+                     0,
+                     Overlay_FontColour,
+                     0));
+
+      RetError(_swix(Font_Paint,
+                     _INR(0,4) | _IN(7),
+
+                     font_handle,
+                     current->text,
+                     FM_GivenHandle | FM_GivenLength | FM_Kern,
+                     tx - to,
+                     ty + tb,
+                     strlen(current->text)
+                     ));
+    }
+
+    /* Plot the sprite */
+
+    if (current->sprite != NULL)
+    {
+      int lsx, lsy;
+
+      convert_pair_to_os(sx, sy, &lsx, &lsy);
+
+      RetError(overlay_plot_sprite(sprite, lsx, lsy));
+    }
+  }
+  else
+  {
+    /* Undraw the item */
+
+    int ltx, lty, ltw, lth;
+    int lsx, lsy, lsw, lsh;
+
+    convert_pair_to_os(tx, ty, &ltx, &lty);
+    convert_pair_to_os(tw, th, &ltw, &lth);
+    convert_pair_to_os(sx, sy, &lsx, &lsy);
+    convert_pair_to_os(sw, sh, &lsw, &lsh);
+
+    ltx -= 8;
+    lty -= 8;
+    lth += 16;
+    ltw += 16;
+
+    _swix(OS_SetColour,
+          _INR(0,1),
+
+          0,
+          modeinfo_return_transparent_gcol());
+
+    bbc_rectanglefill(ltx, lty, ltw - 1, lth - 1);
+    bbc_rectanglefill(lsx, lsy, lsw - 1, lsh - 1);
+  }
+
+  return NULL;
 }
 
 /**************************************************************/
-/* overlay_undraw_item()                                      */
+/* overlay_plot_sprite()                                      */
 /*                                                            */
-/* "Undraw" the given overlay item - clear the screen space   */
-/* it occupied. The undrawn item is not freed in case the     */
-/* caller needs to do more with it, so the caller is          */
-/* responsible for calling overlay_free_item later.           */
+/* Plot the sprite in the given overlay item at the given     */
+/* coordinates. Assumes the sprite is plottable.              */
 /*                                                            */
-/* Parameters: Pointer to the item to redraw                  */
+/* Parameters: Sprite name;                                   */
+/*                                                            */
+/*             X coordinate (OS units);                       */
+/*                                                            */
+/*             Y coordinate (OS units).                       */
 /**************************************************************/
 
-static _kernel_oserror * overlay_undraw_item(overlay * current)
+static _kernel_oserror * overlay_plot_sprite(const char * name, int x, int y)
 {
-  if (current == NULL) return NULL;
+  _kernel_oserror * e;
 
-  dprintf(("",
-           "Undraw item '%s', '%s' at %d\n",
-           current->text   ? current->text   : "<NULL>",
-           current->sprite ? current->sprite : "<NULL>",
-           current->align));
+  int             * address;
+  unsigned char   * translation = NULL;
 
-  return NULL;
+  unsigned int      flags;
+  unsigned int      type, sprite_type;
+  unsigned int      size, log2bpp, mask;
+
+  unsigned int      sca [4];
+  unsigned char     trp [256];
+
+  /* Get the address of the sprite. */
+
+  e = _swix(OS_SpriteOp,
+            _INR(0,2) | _OUT(2),
+
+            256 + 24,
+            sprite_block,
+            name,
+
+            &address);
+
+  if (e != NULL) return e;
+
+  /* Work out the number of colours as log2bpp */
+
+  e = _swix(OS_SpriteOp,
+            _INR(0,2) | _OUTR(5,6),
+
+            512 + 40,
+            sprite_block,
+            address,
+
+            &mask,
+            &type);
+
+  if (e != NULL) return e;
+
+  sprite_type = (type & 0xf8000000) >> 27;
+
+  /* If the lower bit is set, this is either a mode number, or new type word */
+  /* - bit 27-31 hold the sprite type in the latter case; if these are all   */
+  /* zero, it's a mode number. Delightful interface.                         */
+
+  if ((type & (1u<<0)) != 0 && sprite_type != 0)
+  {
+    switch (sprite_type)
+    {
+      case 1:
+      case 2:
+      case 3:
+      case 4:
+      case 5:
+      case 6: log2bpp = sprite_type - 1; break;
+
+      default: return NULL;
+    }
+  }
+
+  /* OK, the above test failed so 'type' holds a mode number or selector */
+
+  else
+  {
+    unsigned int colours;
+
+    e = _swix(OS_ReadModeVariable,
+              _INR(0,1) | _OUT(2),
+
+              type,
+              3,
+
+              &colours);
+
+    if (e != NULL) return e;
+
+    switch (colours)
+    {
+      case 1:     log2bpp = 0; break;
+      case 3:     log2bpp = 1; break;
+      case 15:    log2bpp = 2; break;
+      case 63:
+      case 255:   log2bpp = 3; break;
+      case 65535: log2bpp = 4; break;
+
+      default:    log2bpp = 5; break;
+    }
+  }
+
+  /* Scaling details */
+
+  e = _swix(Wimp_ReadPixTrans,
+            _INR(0,2) | _INR(6,7),
+
+            512,
+            sprite_block,
+            address,
+            sca,
+            trp);
+
+  if (e != NULL) return e;
+
+  /* Work out the colour translation stuff for >= 8bpp */
+
+  if (log2bpp > 2)
+  {
+    flags = (1u<<0) || (1u<<1) ; /* Sprite address in R1; use current palette (rather than default) if sprite doesn't have one */
+
+    e = _swix(ColourTrans_SelectTable,
+              _INR(0,5) | _OUT(4),
+
+              sprite_block,
+              address,
+              -1,
+              -1,
+              0,
+              flags,
+
+              &size);
+
+    if (e != NULL) return e;
+
+    translation = malloc(size);
+    if (translation == NULL) return make_no_memory_error(5);
+
+    e = _swix(ColourTrans_SelectTable,
+              _INR(0,5),
+
+              sprite_block,
+              address,
+              -1,
+              -1,
+              translation,
+              flags);
+
+    if (e != NULL)
+    {
+      free(translation);
+      return e;
+    }
+  }
+  else translation = trp;
+
+  /* Plot the sprite */
+
+  e = _swix(OS_SpriteOp,
+            _INR(0,7),
+
+            564,
+            sprite_block,
+            address,
+            x,
+            y,
+            mask == 0 ? 0 : 8, /* Plot mode 0 = overwrite, 8 = use mask */
+            sca,
+            translation);
+
+  if (log2bpp > 2) free(translation);
+
+  return e;
 }

@@ -11,9 +11,6 @@
 # 03-Apr-2000	ADH	Created from Browse Makefile.
 # 28-Apr-2000	ADH	Significant alterations and extensions to support
 #			ROM and RAM module builds, and applications.
-# 05-May-2000	SAR	Added the XCP macro in place of -${CP} and changed the
-#			WIPE macro to use 'x wipe' rather than -wipe as a short-
-#			term fix to make this component build in ROM builds.
 
 # -----------------------------------------------------------------------------
 # Program specific options
@@ -56,7 +53,8 @@ XCP		= x copy
 LD		= link
 RM		= remove
 SQUEEZE		= squeeze
-WIPE		= x wipe
+WIPE		= -wipe
+XWIPE		= x wipe
 AWK		= do awk
 
 AFLAGS		= ${THROWBACK} -depend !Depend -nocache -stamp -quit
@@ -102,6 +100,7 @@ RENDERLIB	= tbox:o.renderlib
 INETLIB		= TCPIPLibs:o.inetlib
 SOCKLIB		= TCPIPLibs:o.socklib
 DEBUGLIB	= <Lib$Dir>.Debuglib.o.debuglib
+ASMUTILS	= <Lib$Dir>.AsmUtils.o.AsmUtilszm
 
 # Application build libraries
 
@@ -140,7 +139,8 @@ LIBSZ = \
  ${WIMPLIB} \
  ${RENDERLIB} \
  ${INETLIB}zm \
- ${SOCKLIB}zm
+ ${SOCKLIB}zm \
+ ${ASMUTILS}
 
 # Module debug build libraries
 
@@ -153,7 +153,8 @@ LIBSDZ = \
  ${RENDERLIB} \
  ${DEBUGLIB}zm \
  ${INETLIB}zm \
- ${SOCKLIB}zm
+ ${SOCKLIB}zm \
+ ${ASMUTILS}
 
 
 # -----------------------------------------------------------------------------
@@ -190,6 +191,8 @@ OBJSPP = \
  opp.Main		\
  opp.ModeInfo		\
  opp.Overlay		\
+ opp.Parameters		\
+ opp.Play		\
  opp.PlugIn		\
  opp.Protocols		\
  opp.RMA		\
@@ -207,6 +210,8 @@ OBJSPPD = \
  oppd.Main		\
  oppd.ModeInfo		\
  oppd.Overlay		\
+ oppd.Parameters	\
+ oppd.Play		\
  oppd.PlugIn		\
  oppd.Protocols		\
  oppd.RMA		\
@@ -226,6 +231,8 @@ OBJSPPRZ = \
  opprz.Main		\
  opprz.ModeInfo		\
  opprz.Overlay		\
+ opprz.Parameters	\
+ opprz.Play		\
  opprz.PlugIn		\
  opprz.Protocols	\
  opprz.RMA		\
@@ -244,6 +251,8 @@ OBJSPPRDZ = \
  opprdz.Main		\
  opprdz.ModeInfo	\
  opprdz.Overlay		\
+ opprdz.Parameters	\
+ opprdz.Play		\
  opprdz.PlugIn		\
  opprdz.Protocols	\
  opprdz.RMA		\
@@ -265,6 +274,8 @@ OBJSPPZ = \
  oppz.Main		\
  oppz.ModeInfo		\
  oppz.Overlay		\
+ oppz.Parameters	\
+ oppz.Play		\
  oppz.PlugIn		\
  oppz.Protocols		\
  oppz.RMA		\
@@ -340,7 +351,7 @@ install_common: ${FILES}
 	${XCP} ${LDIR}.Sprites22		${INSTDIR}.Sprites22		${CPFLAGS}n
 	${XCP} ${LDIR}.Sprites23		${INSTDIR}.Sprites23		${CPFLAGS}n
 	${XCP} ${LDIR}.About			${INSTDIR}.About		${CPFLAGS}n
-	${WIPE} ${INSTDIR}.About.CVS	${WFLAGS}
+	${XWIPE} ${INSTDIR}.About.CVS	${WFLAGS}
 
 install: install_common
 	${CP} ${TARGET}				${INSTDIR}.!RunImage		${CPFLAGS}~n
@@ -391,22 +402,22 @@ resources:
 	${AWK} -f ${ADDTOMESSAGES} ${VERSIONNUM} >> ${RESDIR}.Messages
 	${CP} ${LDIR}.Res		${RESDIR}.Res		${CPFLAGS}
 	${CP} ${LDIR}.About		${RESDIR}.About		${CPFLAGS}
-	${WIPE} ${RESDIR}.About.CVS	${WFLAGS}
+	${XWIPE} ${RESDIR}.About.CVS	${WFLAGS}
 	@echo
 	@echo ${COMPONENT}: Resource files copied to Messages module
 
 clean:
-	${WIPE}	rm		${WFLAGS}
-	${WIPE}	abs		${WFLAGS}
-	${WIPE}	aof		${WFLAGS}
-	${WIPE}	linked		${WFLAGS}
-	${WIPE}	o		${WFLAGS}
-	${WIPE}	oz		${WFLAGS}
-	${WIPE}	opp		${WFLAGS}
-	${WIPE}	oppd		${WFLAGS}
-	${WIPE}	oppz		${WFLAGS}
-	${WIPE}	opprz		${WFLAGS}
-	${WIPE}	opprdz		${WFLAGS}
+	${XWIPE}	rm		${WFLAGS}
+	${XWIPE}	abs		${WFLAGS}
+	${XWIPE}	aof		${WFLAGS}
+	${XWIPE}	linked		${WFLAGS}
+	${XWIPE}	o		${WFLAGS}
+	${XWIPE}	oz		${WFLAGS}
+	${XWIPE}	opp		${WFLAGS}
+	${XWIPE}	oppd		${WFLAGS}
+	${XWIPE}	oppz		${WFLAGS}
+	${XWIPE}	opprz		${WFLAGS}
+	${XWIPE}	opprdz		${WFLAGS}
 	${RM}	s.AppName
 	${RM}	s.ModuleWrap
 	${RM}	${DIRS}
@@ -415,8 +426,8 @@ clean:
 
 clean_all: clean
 	@echo
-	${WIPE}	syms		${WFLAGS}
-	${WIPE}	Targets		${WFLAGS}
+	${XWIPE}	syms		${WFLAGS}
+	${XWIPE}	Targets		${WFLAGS}
 	@echo
 	@echo ${COMPONENT}: Cleaned all
 
