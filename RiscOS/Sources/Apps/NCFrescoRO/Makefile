@@ -52,7 +52,7 @@ resources:
 	${CP} ${SRCCOMMON}.SetScrap    ${RESRES}.SetScrap ${CPFLAGS}
 	${CP} ${SRCCOMMON}.MimeMap     ${RESRES}.MimeMap  ${CPFLAGS}
 	${CP} ${SRCLOCALE}.Config      ${RESRES}.Config   ${CPFLAGS}
-	${CP} ${SRCLOCALE}.Messages    ${RESRES}.Message  ${CPFLAGS}
+	${CP} ${SRCLOCALE}.Messages    ${RESRES}.Messages ${CPFLAGS}
 	${CP} ${SRCLOCALE}.Res         ${RESRES}.Res      ${CPFLAGS}
 	${CP} ${SRCLOCALE}.SpritesROM  ${RESRES}.Sprites ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
