@@ -11,7 +11,7 @@
 #
 # Component specific options:
 #
-COMPONENT  = TextGadget
+COMPONENT  = JavaGadget
 ROM_MODULE = aof.${COMPONENT}
 
 #
@@ -29,8 +29,8 @@ ASM	= objasm
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 
-CFLAGS   = -c -depend !Depend ${INCLUDES} -zM -ffah -zps1
-INCLUDES = -Itbox:,C:
+CFLAGS   = -c -depend !Depend ${INCLUDES} -zM -ffa -zps1
+INCLUDES = -I<Lib$Dir>.tboxlibs.,C:
 
 #
 # Libraries
@@ -40,8 +40,8 @@ CLIB      = CLIB:o.stubs
 RLIB      = RISCOSLIB:o.risc_oslib
 ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.c_abssym
-TBOXLIB   = tbox:o.toolboxlib
-WIMPLIB   = tbox:o.wimplib
+TBOXLIB   = <Lib$Dir>.tboxlibs.o.toolboxlib
+WIMPLIB   = <Lib$Dir>.tboxlibs.o.wimplib
 
 OBJS =\
 	o.Modhdr \
@@ -90,7 +90,7 @@ clean:
 
 ${ROM_MODULE}: ${OBJS} ${TBOXLIB} $(WIMPLIB) ${ROMCSTUBS}
         ${MKDIR} aof
-        ${LD} -o $@ -aof -via objs ${TBOXLIB} $(WIMPLIB) ${ROMCSTUBS}
+        ${LD} -o $@ -aof ${OBJS} ${TBOXLIB} $(WIMPLIB) ${ROMCSTUBS}
 
 # final link for ROM Image (using given base address)
 rom_link:
@@ -108,11 +108,11 @@ o.TextGadget:	c.TextGadget
 o.TextGadget:	C:h.string
 o.TextGadget:	C:h.kernel
 o.TextGadget:	C:h.swis
-o.TextGadget:	tbox:h.toolbox
-o.TextGadget:	tbox:h.wimp
-o.TextGadget:	tbox:h.window
-o.TextGadget:	tbox:h.gadgets
-o.TextGadget:	tbox:h.wimplib
+o.TextGadget:	<Lib$Dir>.tboxlibs.h.toolbox
+o.TextGadget:	<Lib$Dir>.tboxlibs.h.wimp
+o.TextGadget:	<Lib$Dir>.tboxlibs.h.window
+o.TextGadget:	<Lib$Dir>.tboxlibs.h.gadgets
+o.TextGadget:	<Lib$Dir>.tboxlibs.h.wimplib
 o.TextGadget:	h.TextGadgets
 o.TextGadget:	h.myswis
 o.TextGadget:	h.glib
@@ -134,21 +134,21 @@ o.TextGadget:	h.ScrollbarP
 o.TextGadget:	h.modmem
 o.TextGadget:	h.Scrollbar
 o.TextGadget:	h.riscos_utils
-o.TextGadget:	tbox:h.toolbox
+o.TextGadget:	<Lib$Dir>.tboxlibs.h.toolbox
 o.TextGadget:	h.modmem
 o.TextArea:	c.TextArea
 o.TextArea:	C:h.kernel
 o.TextArea:	C:h.swis
-o.TextArea:	tbox:h.toolbox
-o.TextArea:	tbox:h.wimp
-o.TextArea:	tbox:h.window
-o.TextArea:	tbox:h.gadgets
-o.TextArea:	tbox:h.wimplib
+o.TextArea:	<Lib$Dir>.tboxlibs.h.toolbox
+o.TextArea:	<Lib$Dir>.tboxlibs.h.wimp
+o.TextArea:	<Lib$Dir>.tboxlibs.h.window
+o.TextArea:	<Lib$Dir>.tboxlibs.h.gadgets
+o.TextArea:	<Lib$Dir>.tboxlibs.h.wimplib
 o.TextArea:	h.glib
 o.TextArea:	C:h.kernel
 o.TextArea:	h.string32
 o.TextArea:	h.riscos_utils
-o.TextArea:	tbox:h.toolbox
+o.TextArea:	<Lib$Dir>.tboxlibs.h.toolbox
 o.TextArea:	h.TextGadgets
 o.TextArea:	h.TextArea
 o.TextArea:	h.TextAreaP
@@ -168,16 +168,16 @@ o.TextArea:	h.utils
 o.ScrollList:	c.ScrollList
 o.ScrollList:	C:h.kernel
 o.ScrollList:	C:h.swis
-o.ScrollList:	tbox:h.toolbox
-o.ScrollList:	tbox:h.wimp
-o.ScrollList:	tbox:h.window
-o.ScrollList:	tbox:h.gadgets
-o.ScrollList:	tbox:h.wimplib
+o.ScrollList:	<Lib$Dir>.tboxlibs.h.toolbox
+o.ScrollList:	<Lib$Dir>.tboxlibs.h.wimp
+o.ScrollList:	<Lib$Dir>.tboxlibs.h.window
+o.ScrollList:	<Lib$Dir>.tboxlibs.h.gadgets
+o.ScrollList:	<Lib$Dir>.tboxlibs.h.wimplib
 o.ScrollList:	h.glib
 o.ScrollList:	C:h.kernel
 o.ScrollList:	h.string32
 o.ScrollList:	h.riscos_utils
-o.ScrollList:	tbox:h.toolbox
+o.ScrollList:	<Lib$Dir>.tboxlibs.h.toolbox
 o.ScrollList:	h.Font
 o.ScrollList:	h.TextGadgets
 o.ScrollList:	h.ScrollList
@@ -193,16 +193,16 @@ o.ScrollList:	h.utils
 o.Scrollbar:	c.Scrollbar
 o.Scrollbar:	C:h.kernel
 o.Scrollbar:	C:h.swis
-o.Scrollbar:	tbox:h.toolbox
-o.Scrollbar:	tbox:h.wimp
-o.Scrollbar:	tbox:h.window
-o.Scrollbar:	tbox:h.gadgets
-o.Scrollbar:	tbox:h.wimplib
+o.Scrollbar:	<Lib$Dir>.tboxlibs.h.toolbox
+o.Scrollbar:	<Lib$Dir>.tboxlibs.h.wimp
+o.Scrollbar:	<Lib$Dir>.tboxlibs.h.window
+o.Scrollbar:	<Lib$Dir>.tboxlibs.h.gadgets
+o.Scrollbar:	<Lib$Dir>.tboxlibs.h.wimplib
 o.Scrollbar:	h.glib
 o.Scrollbar:	C:h.kernel
 o.Scrollbar:	h.string32
 o.Scrollbar:	h.riscos_utils
-o.Scrollbar:	tbox:h.toolbox
+o.Scrollbar:	<Lib$Dir>.tboxlibs.h.toolbox
 o.Scrollbar:	h.TextGadgets
 o.Scrollbar:	h.Scrollbar
 o.Scrollbar:	h.ScrollbarP
@@ -214,13 +214,13 @@ o.Scrollbar:	h.Utils
 o.riscos_uti:	c.riscos_uti
 o.riscos_uti:	C:h.kernel
 o.riscos_uti:	C:h.swis
-o.riscos_uti:	tbox:h.wimp
-o.riscos_uti:	tbox:h.wimplib
-o.riscos_uti:	tbox:h.toolbox
-o.riscos_uti:	tbox:h.window
-o.riscos_uti:	tbox:h.gadgets
+o.riscos_uti:	<Lib$Dir>.tboxlibs.h.wimp
+o.riscos_uti:	<Lib$Dir>.tboxlibs.h.wimplib
+o.riscos_uti:	<Lib$Dir>.tboxlibs.h.toolbox
+o.riscos_uti:	<Lib$Dir>.tboxlibs.h.window
+o.riscos_uti:	<Lib$Dir>.tboxlibs.h.gadgets
 o.riscos_uti:	h.riscos_utils
-o.riscos_uti:	tbox:h.toolbox
+o.riscos_uti:	<Lib$Dir>.tboxlibs.h.toolbox
 o.TextMan:	c.TextMan
 o.TextMan:	C:h.kernel
 o.TextMan:	C:h.swis
@@ -238,27 +238,27 @@ o.glib:	C:h.kernel
 o.glib:	C:h.swis
 o.glib:	h.glib
 o.glib:	C:h.kernel
-o.glib:	tbox:h.wimp
-o.glib:	tbox:h.toolbox
-o.glib:	tbox:h.window
-o.glib:	tbox:h.gadgets
+o.glib:	<Lib$Dir>.tboxlibs.h.wimp
+o.glib:	<Lib$Dir>.tboxlibs.h.toolbox
+o.glib:	<Lib$Dir>.tboxlibs.h.window
+o.glib:	<Lib$Dir>.tboxlibs.h.gadgets
 o.glib:	h.glibP
-o.glib:	tbox:h.toolbox
-o.glib:	tbox:h.window
-o.glib:	tbox:h.wimplib
+o.glib:	<Lib$Dir>.tboxlibs.h.toolbox
+o.glib:	<Lib$Dir>.tboxlibs.h.window
+o.glib:	<Lib$Dir>.tboxlibs.h.wimplib
 o.glib3:	c.glib3
 o.glib3:	C:h.kernel
 o.glib3:	C:h.swis
 o.glib3:	h.glib
 o.glib3:	C:h.kernel
-o.glib3:	tbox:h.wimp
-o.glib3:	tbox:h.toolbox
-o.glib3:	tbox:h.window
-o.glib3:	tbox:h.gadgets
+o.glib3:	<Lib$Dir>.tboxlibs.h.wimp
+o.glib3:	<Lib$Dir>.tboxlibs.h.toolbox
+o.glib3:	<Lib$Dir>.tboxlibs.h.window
+o.glib3:	<Lib$Dir>.tboxlibs.h.gadgets
 o.glib3:	h.glibP
-o.glib3:	tbox:h.toolbox
-o.glib3:	tbox:h.window
-o.glib3:	tbox:h.wimplib
+o.glib3:	<Lib$Dir>.tboxlibs.h.toolbox
+o.glib3:	<Lib$Dir>.tboxlibs.h.window
+o.glib3:	<Lib$Dir>.tboxlibs.h.wimplib
 o.rmensure:	c.rmensure
 o.rmensure:	C:h.kernel
 o.rmensure:	C:h.swis
