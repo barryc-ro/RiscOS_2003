@@ -21,6 +21,13 @@
 /*	<default>	0						*/
 /*	<flags>		None						*/
 /*									*/
+/*                                                                      */
+/* Strings can be included in the default field by putting them in      */
+/* quotes. The escape character to put in a quote is / i.e //  and  /"  */
+/* Strings will be truncated if longer than 256 characters or the tag   */
+/* length. Only tags that are byte aligned and are a whole number of    */
+/* bytes long can have string defaults                                  */
+/*                                                                      */
 /* <flags> may be one or both of P (protected) and L (locked) where	*/
 /* protected means not changed on NV-RAM reset and locked means cannot	*/
 /* be changed by the caller. Optional fields may be left empty or may	*/
@@ -29,6 +36,7 @@
 /* ExampleLocation0:&80							*/
 /* Example2:123,,,&FF							*/
 /* Example3:&34,2,2,&03,P						*/
+/* Admin:&48,0,400,"Contact name: /"Sideshow/" Bob // Crusty the Clown" */
 
 #include <stddef.h>
 #include <stdlib.h>
@@ -39,31 +47,17 @@
 
 #include "../../VersionNum"
 
+#include "../../nvram.h"
+
 
 #define FALSE			0
 #define TRUE			(!FALSE)
 
 #define LINELEN			128
 
-#define DEFAULT_START_BIT	0
-#define DEFAULT_LENGTH		8
-#define DEFAULT_VALUE		0
-#define DEFAULT_FLAGS		0
-
-#define SEPARATOR		','
-#define INDIRECT_START		'<'
-#define INDIRECT_END		'>'
-
-#define FLAGS_LOCKED		(1<<0)
-#define FLAGS_PROTECTED		(1<<1)
-
 /* NV-RAM size in bits. */
 #define NVRAM_BYTE_SIZE		16384
 #define NVRAM_SIZE		(NVRAM_BYTE_SIZE*8)
-
-typedef struct _location {
-	int location, start_bit, length, value, flags;
-} location;
 
 typedef struct _bit {
 	char *tag;
@@ -87,6 +81,8 @@ char *ctag;
 bit *bits;
 indirect *indirects=NULL;
 
+char defaultString[DEFAULT_STRING_MAXLEN+1];
+
 /* Prototypes */
 void check_tag(char *tag);
 
@@ -97,7 +93,7 @@ void warning(char *in,char *fmt, ...)
 	va_start(ap, fmt);
 	vsprintf(msg, fmt, ap);
 	va_end(ap);
-	
+
 	if (ctag==NULL)
 		printf("Error in %s at line %d: %s\n",in,cline,msg);
 	else
@@ -111,7 +107,7 @@ void error(char *in,char *fmt, ...)
 	va_start(ap, fmt);
 	vsprintf(msg, fmt, ap);
 	va_end(ap);
-	
+
 	if (ctag==NULL)
 		printf("Fatal error in %s at line %d: %s\n",in,cline,msg);
 	else
@@ -190,7 +186,7 @@ get_value(char **ppd, int default_value)
 	return value;
 }
 
-int get_default_value(char **ppd, int default_value)
+int get_default_value(char **ppd, int default_value, int value_size, int value_start)
 {
 	char *pd = skip_spaces(*ppd);
 	if (*pd == INDIRECT_START)
@@ -198,7 +194,7 @@ int get_default_value(char **ppd, int default_value)
 		indirect *ind;
 		char *to=++pd;
 		char *toend;
-		
+
 		while (*pd !=INDIRECT_END && *pd>' ')
 			pd++;
 		toend=pd;
@@ -209,7 +205,7 @@ int get_default_value(char **ppd, int default_value)
 		}
 		else
 			pd++;
-		
+
 		pd = skip_spaces(pd);
 		if ((*pd != '\0') && (*pd != SEPARATOR))
 		{
@@ -222,12 +218,12 @@ int get_default_value(char **ppd, int default_value)
 		/* We can't set any 'real' default value, but the actual
 		   value will be checked when the indirected tag is
 		   checked */
-		
+
 		ind=malloc(sizeof(indirect));
 		if (!ind)
 			error("default value",
 			      "failed to allocate memory");
-		
+
 		ind->next=indirects; indirects=ind;
 		ind->tag=strdup(ctag);
 		ind->to=malloc(toend-to+1);
@@ -237,9 +233,90 @@ int get_default_value(char **ppd, int default_value)
 		memcpy(ind->to,to,toend-to);
 		ind->to[toend-to]='\0';
 		check_tag(ind->to);
-		
+
 		*ppd = skip_past(pd, SEPARATOR);
 		return default_value;
+	}
+	else if(*pd == STRING_START)
+	{
+                /* pointer to the static workspace allocated to store the string                */
+                char *defaultSpace = defaultString;
+
+                /* move from quote to first char of string and remember this value              */
+                char *stringStart = ++pd;
+
+                /* max size of string (whichever is smaller out of buffer limit / length of tag */
+                int max_size = (value_size/8 > DEFAULT_STRING_MAXLEN) ? DEFAULT_STRING_MAXLEN : value_size/8;
+
+                int length = 0;
+
+                while (*pd>'\0' && *pd!=STRING_END )
+                {
+                        if( *pd==STRING_ESCAPE )
+                                pd+=2;
+                        else
+                                pd+=1;
+                        length++;
+                }
+
+                if( *pd == STRING_END && (value_size % 8 == 0) && (value_start == 0) )
+                {
+                        /* work out how much to copy */
+                        char *stringEnd=(pd-stringStart > max_size) ? stringStart+max_size : pd;
+
+                        if(length > max_size)
+                        {
+                                if( max_size == DEFAULT_STRING_MAXLEN)
+                                {
+                                        warning("default string value","string longer than static buffer");
+                                }
+                                else
+                                {
+                                        warning("default string value","string longer than tag length");
+                                }
+                        }
+
+                        while( stringStart < stringEnd )
+                        {
+                                if( *stringStart == STRING_ESCAPE )
+                                {
+                                        /* if we get the escape character then blindly copy next char   */
+                                        /* need to add one to stringEnd if more string is available     */
+                                        /* i.e if stringEnd != pd                                       */
+                                        stringStart++;
+                                        if( stringEnd < pd )
+                                        {
+                                                stringEnd++;
+                                        }
+                                }
+                                *defaultSpace++ = *stringStart++;
+                        }
+
+                        /* terminate - we have reserved an extra byte for this purpose*/
+                        *defaultSpace = '\0';
+
+                        printf("default string value for '%s' = %s\n",ctag, defaultString);
+                }
+                else
+                {
+                        if( *pd != STRING_END)
+                        {
+                                warning("default string value","terminating symbol not found");
+                        }
+                        if( value_size % 8 !=0)
+                        {
+                                warning("default string value","tag length not a whole number of bytes");
+                        }
+                        if( value_start !=0)
+                        {
+                                warning("default string value","non byte aligned tag");
+                        }
+                        /* skip past the quote and seperator so GetFlags doesn't think 'result' is a string pointer  */
+                }
+                pd = skip_past(pd, SEPARATOR);
+                *ppd = pd;
+
+                return 0;
 	}
 	else
 	  return get_value(ppd,default_value);
@@ -258,12 +335,12 @@ get_flags(char *pd, int default_flags)
 		{
 		case 'L':
 		case 'l':
-			flags |= FLAGS_LOCKED;
+			flags |= LOCATION_FLAGS_LOCKED;
 			break;
 
 		case 'P':
 		case 'p':
-			flags |= FLAGS_PROTECTED;
+			flags |= LOCATION_FLAGS_PROTECTED;
 			break;
 
 		default:
@@ -293,7 +370,7 @@ parse_description(char *pd, location *ploc)
 	ploc->location = get_value(&pd, -1);
 	ploc->start_bit = get_value(&pd, DEFAULT_START_BIT);
 	ploc->length = get_value(&pd, DEFAULT_LENGTH);
-	ploc->value = get_default_value(&pd, DEFAULT_VALUE);
+	ploc->value = get_default_value(&pd, DEFAULT_VALUE, ploc->length, ploc->start_bit);
 	ploc->flags = get_flags(pd, DEFAULT_FLAGS);
 }
 

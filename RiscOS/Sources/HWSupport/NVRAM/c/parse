@@ -1,11 +1,17 @@
 /* > parse.c */
 
+#include <stdlib.h>
 #include <ctype.h>
 
 #include "nvram.h"
+#include "parse.h"
 
 #include "trace.h"
 
+/* need one extra byte for termination, although this will not be copied - even if */
+/* the length of the default string == DEFAULT_STRING_MAXLEN                    */
+//char defaultString[DEFAULT_STRING_MAXLEN+1];
+char *defaultString;
 
 static int
 IsSpace(char c)
@@ -84,6 +90,10 @@ GetValue(char **ppd, int default_value)
                default_value = the value to assign when nothing is given
                                as a default value
                value_size = the size of the value we're writing into
+               flags -> int flags so we can indicate strings
+               getDefault = whether or not bother getting a default value
+                            if FALSE then it is sufficient just to skip past
+                            the default value
  Returns:      value read
  NOTE:         JRF: I know this isn't a particularly wonderful way
                     of doing things, but I don't want to have to
@@ -96,9 +106,22 @@ GetValue(char **ppd, int default_value)
                sequence could be included, as could strings and any
                other data sequences. Simialrly it would allow larger
                than 4 byte fields to be defaulted by a tag.
- ******************************************************************/
+ Further comments (RJC/rcathera)
+                flags and getDefault added to support default strings
+                and indirection to a string. I don't really like what
+                I've had to do, but it works and I've only made
+                notable changes to this, parse_description and the
+                Full/Lock Reset functions. My suggestion for
+                improving things is to make type location hold
+                start_byte,start_bit,length,flags but not value
+                Then the Reset code should be seperated from code
+                which is used during normal reads and writes.
+                The main problem with this is the code which skips
+                over the default field in the tags file. It might be
+                worth considering making this the final field.
+                ******************************************************************/
 static unsigned int
-GetDefaultValue(char **ppd, int default_value, int value_size)
+GetDefaultValue(char **ppd, int default_value, int value_size, int* flags, int getDefault)
 {
 	unsigned int result=default_value;
 	char *pd = SkipSpaces(*ppd);
@@ -109,34 +132,171 @@ GetDefaultValue(char **ppd, int default_value, int value_size)
 		char *name=++pd;
 		while (*pd>=' ' && *pd!=INDIRECT_END)
 			pd++;
-		if (*pd==INDIRECT_END)
+		if (*pd==INDIRECT_END && getDefault)
 		{
-			int length;
-			/* valid NVRAM tag indirection */
-			*pd++='\0'; /* terminate there */
-			if (nvram_read(name,&result,sizeof result,&length) ||
-			    length<=0)
-			{
-				result=default_value;
-				TRACE( "GetDefaultValue: bad NVRAM value, using default, err= %i\n" ); //_ err );
-			}
-			else
-			{
-				if (length*8 < value_size)
-				{
-					result=default_value;
-					TRACE( "GetDefaultValue: default indirection size is > value size, ignoring\n" );
-				}
-			}
-			*pd++=INDIRECT_END; /* put it back - icky */
+                        int recurseResult;
+                        location recurseLoc;
+                        char *descbuf = (char *)malloc( TMPBUF_SIZE );
 
-			pd = SkipSpaces(pd);
-			if ((*pd != '\0') && (*pd != SEPARATOR))
-				result = default_value;
-			*ppd = SkipPast(pd, SEPARATOR);
+			/* valid NVRAM tag indirection */
+                        *pd='\0'; /* terminate there */
+
+                        /* no memory */
+                        if ( descbuf == NULL ) return default_value;
+
+                        /* get either a value or a pointer to the string */
+                        recurseResult = (int) GetLocation(name, descbuf, &recurseLoc, 1);
+                        if( recurseResult )
+                        {
+                                /* check that we can store the whole of the tag we've jumped to in the current tag */
+                                if( recurseLoc.length <= value_size )
+                                {
+                                        /* We currently have the default value in recurseLoc - this is no use   */
+                                        /* we want the value that is actually stored in the (protected) NVRAM   */
+                                        /* since this will be programmed by the manufacturer (not set by the    */
+                                        /* tags file).                                                          */
+
+                                        /* if it's a pointer value then modify the flags to reflect this        */
+                                        /* use nvram_get to read the value  */
+
+                                        int buffer_size;
+                                        if( recurseLoc.flags & LOCATION_FLAGS_POINTER )
+                                        {
+                                                /* find out the size of the buffer */
+                                                nvram_get( name, 0, 0, &buffer_size);
+
+                                                /* allocate a buffer */
+
+                                                if( defaultString != NULL )
+                                                {
+                                                        free( defaultString );
+                                                }
+
+                                                defaultString = (char *)malloc( buffer_size );
+                                                if (defaultString == NULL)
+                                                {
+                                                        TRACE("GetDefaultValue: unable to claim buffer for indirect string");
+                                                        result = default_value;
+                                                }
+                                                else
+                                                {
+                                                        nvram_get( name, defaultString, buffer_size, &buffer_size );
+                                                        result = (unsigned int) defaultString;
+                                                        *flags |= LOCATION_FLAGS_POINTER;
+                                                }
+                                        }
+                                        else
+                                        {
+                                                nvram_get( name, &result, 0, &buffer_size);
+                                        }
+                                }
+                                else
+                                {
+                                        TRACE( "GetDefaultValue: The indirected tag is smaller then the source tag. Ignoring indirection\n");
+                                        result = default_value;
+                                }
+                        }
+                        else
+                        {
+                                TRACE( "GetDefaultValue: failed to lookup the indirected tag '%s'\n" _ name);
+                                result = default_value;
+                        }
+                        free(descbuf);
+
+			*pd++=INDIRECT_END; /* put it back - icky */
 		}
+                *ppd = SkipPast(pd, SEPARATOR);
 	}
-	else
+        else if (*pd == STRING_START)
+        {
+                /* default is a string                                                          */
+                /* loc->value will be used as a pointer to a string                             */
+                /* loc->flags will have a bit that indicates this - for internal use            */
+
+                /* null strings can be included by setting the default value to a               */
+                /* suitable string terminating value like 0 or 13  or with ""                   */
+                /* to include a quote (") symbol use escape character i.e /"                    */
+                /* e.g news_username:&100,,,"Jack /"The Hack/" McVitie"                         */
+                /* I'm fairly sure the name above is wrong but it's only an example and I       */
+                /* didn't know the bloke personally                                             */
+
+                /* pointer to the workspace allocated to store the string                       */
+                char *defaultSpace;
+
+                /* move from quote to first char of string and remember this value              */
+                char *stringStart = ++pd;
+
+                /* max size of string (whichever is smaller out of buffer limit / length of tag */
+                int max_size = value_size / 8; //(value_size/8 > DEFAULT_STRING_MAXLEN) ? DEFAULT_STRING_MAXLEN : value_size/8;
+
+                TRACE("GetDefaultValue: DefaultString");
+
+                while (*pd>'\0' && *pd!=STRING_END )
+                {
+                        if( *pd==STRING_ESCAPE )
+                                pd+=2;
+                        else
+                                pd+=1;
+                }
+
+                if( getDefault )
+                {
+                        if( *pd == STRING_END && (value_size % 8 == 0) )
+                        {
+                                /* allocate some space for the string inc an extra byte for a zero terminator   */
+                                /* this includes space for the escape character which are not really needed     */
+                                defaultString = (char *)malloc( pd - stringStart + 2);
+                                defaultSpace = defaultString;
+
+                                /* if no memory was avilable then return the default value */
+                                if (defaultString != NULL)
+                                {
+                                        /* work out how much to copy */
+                                        char *stringEnd = (pd-stringStart > max_size) ? stringStart+max_size : pd;
+
+                                        while( stringStart < stringEnd )
+                                        {
+                                                if( *stringStart == STRING_ESCAPE )
+                                                {
+                                                        /* if we get the escape character then blindly copy next char   */
+                                                        /* need to add one to stringEnd if more string is available     */
+                                                        /* i.e if stringEnd != pd                                       */
+                                                        stringStart++;
+                                                        if( stringEnd < pd )
+                                                        {
+                                                                stringEnd++;
+                                                        }
+                                                }
+                                                *defaultSpace++ = *stringStart++;
+                                        }
+
+                                        /* terminate - we have reserved an extra byte for this purpose*/
+                                        *defaultSpace = '\0';
+
+                                        TRACE( " =  '%s'\n" _ defaultString);
+
+                                        /* set flag to indicate we have returned a pointer */
+                                        *flags |= LOCATION_FLAGS_POINTER;
+                                        result = (int) defaultString;
+                                }
+                                else
+                                {
+                                        TRACE(" has been ignored - no memory available\n");
+                                }
+                        }
+                        else
+                        {
+                                TRACE(" has been ignored - mistake in tag\n");
+                        }
+                }
+                else
+                {
+                        TRACE(" has been ignored - getDefault=FALSE\n");
+                }
+                pd = SkipPast(pd, SEPARATOR);
+                *ppd=pd;
+        }
+        else
 		result=GetValue(ppd,default_value);
 
 	TRACE( "GetDefaultValue: now pointing to '%s' got %i\n" _ *ppd _ result);
@@ -144,9 +304,8 @@ GetDefaultValue(char **ppd, int default_value, int value_size)
 }
 
 static int
-GetFlags(char *pd, int default_flags)
+GetFlags(char *pd, int flags)
 {
-	int flags = 0;
 	pd = SkipSpaces(pd);
 
 	TRACE( "GetFlags: parsing '%s'\n" _ pd );
@@ -169,7 +328,7 @@ GetFlags(char *pd, int default_flags)
 		default:
 			if (IsSpace(*pd)) break;
 
-			return (*pd != '\0') ? default_flags : flags;
+                        return (*pd != '\0') ? DEFAULT_FLAGS : flags;
 		}
 		pd++;
 	}
@@ -177,17 +336,20 @@ GetFlags(char *pd, int default_flags)
 }
 
 int
-parse_description(char *pd, location *ploc, int nvram_limit)
+parse_description(char *pd, location *ploc, int nvram_limit, int getDefault)
 {
+        int flags = DEFAULT_FLAGS;
+
 	TRACE( "parse_description: parsing '%s'\n" _ pd );
 
 	/* Get values for all fields, providing defaults for missing or	*/
 	/* broken fields.						*/
+
 	ploc->location = GetValue(&pd, -1);
 	ploc->start_bit = GetValue(&pd, DEFAULT_START_BIT);
 	ploc->length = GetValue(&pd, DEFAULT_LENGTH);
-	ploc->value = GetDefaultValue(&pd, DEFAULT_VALUE, ploc->length);
-	ploc->flags = GetFlags(pd, DEFAULT_FLAGS);
+        ploc->value = GetDefaultValue(&pd, DEFAULT_VALUE, ploc->length, &flags, getDefault);
+	ploc->flags = GetFlags(pd, flags);
 
 	TRACE( "location = &%03X, start_bit = %d, length = %d, value = %d, flags = %d\n" _ \
 		ploc->location _ ploc->start_bit _ ploc->length _ ploc->value _ ploc->flags );

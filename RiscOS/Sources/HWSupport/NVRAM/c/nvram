@@ -37,6 +37,7 @@ ERROR_STRUCT( NOMEM, "NoMem" );
 ERROR_STRUCT( NOTAG, "NoTag" );
 ERROR_STRUCT( LOCKED, "Locked");
 ERROR_STRUCT( READBUF, "ReadBuf");
+ERROR_STRUCT( NEEDBUF, "NeedBuf");
 ERROR_STRUCT( NOTBYTE, "NotByte");
 
 static char *pCache = NULL;
@@ -265,10 +266,36 @@ FullReset( char *pold, char *pnew, location *ploc )
 		/* Protected so copy old contents into new contents. */
 		CopyBuffer( pold, pnew, ploc->location, ploc->start_bit, ploc->length, NVRAM_FLAGS_WRITECACHE );
 	} else {
-		/* Otherwise set default value (only possible for locations with length <= 32). */
-		if ( ploc->length <= 32 )
+
+                /* Otherwise set default value (only possible for locations with length <= 32), or strings */
+                if ( ploc->flags & LOCATION_FLAGS_POINTER )
+                {
+                        TRACE( "FullReset: setting default string for location &%03X\n" _ ploc->location );
+                        if ( (ploc->start_bit == 0) && (ploc->length % 8 == 0) )
+                        {
+                                int  copied  = 0;
+                                char *source = defaultString;
+                                char *dest   = pnew + ploc->location;
+                                while( *source != '\0')
+                                {
+                                        /* this loop terminates before it copies the /0 byte    */
+                                        *dest++ = *source++;
+                                        copied++;
+                                }
+
+                                /* now zero the rest of the field */
+                                memset( dest, 0, (ploc->length / 8) - copied );
+
+                                /* finally free the memory we allocated earlier */
+                                free( defaultString );
+                                defaultString = NULL;
+                        }
+                        else
+                                TRACE("FullReset: tried to give a non-byte aligned tag a string default\n");
+                }
+		else if ( ploc->length <= 32 )
 		{
-			TRACE( "FullReset: setting default value for location &%03X\n" _ ploc->location );
+			TRACE( "LockedReset: setting default value for location &%03X\n" _ ploc->location );
 
 			WriteValue( pnew, ploc->value, ploc->location, ploc->start_bit, ploc->length, NVRAM_FLAGS_WRITECACHE );
 		}
@@ -281,8 +308,36 @@ LockedReset( char *pold, char *pnew, location *ploc )
 {
 	if ( ploc->flags & LOCATION_FLAGS_LOCKED )
 	{
-		/* Set default value (only possible for locations with length <= 32). */
-		if ( ploc->length <= 32 )
+                TRACE( "LockedReset: entered\n" );
+                /* LockedReset resets everything that is locked and thus shouldn't be changed but doesn't alter */
+                /* the settings that the user is allowed to change */
+                /* Set default value (only possible for locations with length <= 32). or strings */
+                if ( ploc->flags & LOCATION_FLAGS_POINTER )
+                {
+                        TRACE( "LockedReset: setting default string for location &%03X\n" _ ploc->location );
+                        if ( (ploc->start_bit == 0) && (ploc->length % 8 == 0) )
+                        {
+                                int  copied  = 0;
+                                char *source = defaultString;
+                                char *dest   = pnew + ploc->location;
+                                while( *source != '\0')
+                                {
+                                        /* this loop terminates before it copies the /0 byte    */
+                                        *dest++ = *source++;
+                                        copied++;
+                                }
+
+                                /* now zero the rest of the field */
+                                memset( dest, 0, (ploc->length / 8) - copied );
+
+                                /* finally free the memory we allocated earlier */
+                                free( defaultString );
+                                defaultString = NULL;
+                        }
+                        else
+                                TRACE("LockedReset: tried to give a non-byte aligned tag a string default\n");
+                }
+                else if ( ploc->length <= 32 )
 		{
 			TRACE( "LockedReset: setting locked value for location &%03X\n" _ ploc->location );
 
@@ -296,13 +351,13 @@ LockedReset( char *pold, char *pnew, location *ploc )
 
 
 
-static int
-GetLocation( char *ptag, char *pdesc, location *ploc )
+int
+GetLocation( char *ptag, char *pdesc, location *ploc, int getDefault )
 {
 	TRACE( "GetLocation: looking up tag '%s'\n" _ ptag );
 
 	/* Lookup tag and parse description into location 'ploc'. */
-        return ( msgfile_lookup( &tags, ptag, pdesc, TMPBUF_SIZE, NULL) != NULL ) ? parse_description( pdesc, ploc, nvram_size ) : 0;
+        return ( msgfile_lookup( &tags, ptag, pdesc, TMPBUF_SIZE, NULL) != NULL ) ? parse_description( pdesc, ploc, nvram_size, getDefault ) : 0;
 }
 
 
@@ -326,7 +381,7 @@ IterateTags( char *pold, char *pnew, void (*function)(char *, char *, location *
 
                         err = msgfile_enumerate( &tags, "*", tagbuf, TMPBUF_SIZE, &index );
 			if ( (err != NULL) || (index == 0) ) break;
-			if ( GetLocation(tagbuf, descbuf, &loc) )
+			if ( GetLocation(tagbuf, descbuf, &loc, TRUE) )
 				(*function)( pold, pnew, &loc );
 		}
 		free( tagbuf );
@@ -443,7 +498,7 @@ nvram_get( char *tag, void *buffer, int bufferlen, int *size )
 	char *descbuf = (char *)malloc( TMPBUF_SIZE );
 	if ( descbuf == NULL ) return ERROR( NOMEM );
 
-	if ( GetLocation(tag, descbuf, &loc) )
+	if ( GetLocation(tag, descbuf, &loc, FALSE) )
 	{
 		int req_bufsz = (loc.length + loc.start_bit + 7) / 8;
 
@@ -469,7 +524,7 @@ nvram_get( char *tag, void *buffer, int bufferlen, int *size )
 				}
 				else
                                 {
-                                        e = ERROR (READBUF);
+                                        e = ERROR (NEEDBUF);
                                 }
 			}
 			else
@@ -517,7 +572,7 @@ nvram_set( char *tag, void *buffer, int bufferlen)
 
 	if ( descbuf == NULL ) return ERROR( NOMEM );
 
-	if ( GetLocation( tag, descbuf, &loc) )
+	if ( GetLocation( tag, descbuf, &loc, FALSE) )
 	{
 		if ( loc.flags & LOCATION_FLAGS_LOCKED )
 		{
@@ -572,7 +627,7 @@ nvram_lookup( char *ptag, unsigned int *startbyte, unsigned int *startbit, unsig
         char *descbuf = (char *)malloc( TMPBUF_SIZE );
         if ( descbuf == NULL ) return ERROR (NOMEM);
 
-        if ( GetLocation( ptag, descbuf, &loc) )
+        if ( GetLocation( ptag, descbuf, &loc, TRUE) )
         {
                 *startbyte = loc.location;
                 *startbit  = loc.start_bit;
@@ -605,7 +660,7 @@ nvram_getbytes( char *tag, void *buffer, int bufferlen, int offset, int *size )
         char *descbuf = (char *)malloc( TMPBUF_SIZE );
         if ( descbuf == NULL ) return ERROR( NOMEM );
 
-        if ( GetLocation(tag, descbuf, &loc) )
+        if ( GetLocation(tag, descbuf, &loc, FALSE) )
         {
                 if (loc.start_bit == 0)
                 {
@@ -657,7 +712,7 @@ nvram_setbytes( char *tag, void *buffer, int bufferlen, int offset )
         char *descbuf = (char *)malloc( TMPBUF_SIZE );
         if ( descbuf == NULL ) return ERROR( NOMEM );
 
-        if ( GetLocation( tag, descbuf, &loc) )
+        if ( GetLocation( tag, descbuf, &loc, FALSE) )
         {
                 if ( loc.flags & LOCATION_FLAGS_LOCKED )
                 {
