@@ -7,7 +7,10 @@
 ; >>>>>>>>>
 
 DirBufferName
-	= "FileCore Dir Buffer",0
+	= "DirBuffer:%0 Dir Buffer",0
+	ALIGN
+
+MapArea = "MapArea:%0 Map (Drive %1)",0
 	ALIGN
 
 InitEntry ROUT          ; NO REENTRANCY CHECK NEEDED
@@ -112,43 +115,6 @@ InitEntry ROUT          ; NO REENTRANCY CHECK NEEDED
         BVS     %FT95
         Pull    "R0-R2"
         
- [ BigDir
- 	ASSERT	BigDirMinSize>=NewDirSize
- 	ASSERT	BigDirMinSize>=OldDirSize
- 	; have to create a dynamic area.  call it 'FileCore DirBuffer'
- 	Push	"R0-R8"
- 	MOV	R0, #0			; create
- 	MOV	R1, #-1			; don't care about the number
- 	MOV	R2, #BigDirMinSize	; initial size of area
- 	STR	R2, DirBufferSize	; store the size
- 	MOV	R3, #-1			; don't care about the base
- 	MOV	R4, #1+(1<<7)		; USR mode can't write, and not draggable
- 	MOV	R5, #BigDirMaxSize	; max size of area
- 	MOV	R6, #0			; no handler
- 	MOV	R7, #0			; no workspace for handler
- 	ADR	R8, DirBufferName	; name for dir buffer
- 	SWI	XOS_DynamicArea		; try to create the area
- [ Debug1
- 	DebugError "Dynamic area creation:"
- ]
- 	BVC	%FT01
- 	ADD	SP, SP, #9*4
- 	MOV	R9, R0
-        MOV     R0, #ModHandReason_Free
-        MOV     R2, SB
-        SWI     XOS_Module          ;Free workspace
-       	MOV	R0, R9
-       	BL	SetVOnR0
- 	B	%FT95
-01
- [ Debug1
- 	DREG	R1, "DirBufferArea: "
- 	DREG	R3, "DirBufferPtr : "
- ]
- 	STR     R1, DirBufferArea
- 	STR     R3, DirBufferPtr
- 	Pull	"R0-R8"
- ]
 
         ; Attach main workspace to private word
         STR     SB, [R11]
@@ -254,26 +220,39 @@ InitEntry ROUT          ; NO REENTRANCY CHECK NEEDED
         ADD     R0, R0, #ChainRootSz
         SUBS    R1, R1, #1
         BNE     %BT08
-
+ 
         LDMIA   R9, {R0-R2,R4}
         ASSERT  ParentPrivate=ParentBase+4
         ASSERT  Floppies=ParentPrivate+4
         ASSERT  Winnies=Floppies+1
         ASSERT  Drive=Winnies+1
         ASSERT  StartUpOptions=Drive+1
+ 
+ [ DynamicMaps
+ 
+ 	; with dynamic free space maps, we ignore WinnieSizes.  The maps
+ 	; are only allocated as and when they're needed.
+ 
+        ADD     LR, SB, #:INDEX:ParentBase
+        EOR     R4, R4, #4 :SHL: 16     ;convert configured drive to internal drive numbering
+        STMIA   LR, {R1,R2,R4}
+
+ |
         ASSERT  WinnieSizes=StartUpOptions+1
         ADD     LR, SB, #:INDEX:ParentBase
         EOR     R4, R4, #4 :SHL: 16     ;convert configured drive to internal drive numbering
         STMIA   LR, {R1,R2,R4,R6}
- [ Debug1
+   [ Debug1
         DREG    R6, "Winnie sizes:"
- ]
+   ]
         ; Set floppy sizes to sizes needed for extant E format floppies
         LDR     LR, =(SzNewFloppyFs/256) * &01010101
         MOV     R2, R7, ASL #3  ; Floppies*8
         RSB     R2, R2, #32     ; 32 - Floppies*8
         MOV     LR, LR, LSR R2  ; Ensures top bytes which correspond to non-existing drives get zeroed
         STR     LR, FloppySizes
+
+ ] ; DynamicMaps
 
         ASSERT  Create_Size = 5*4
         LDMIA   R0, {R0,R2,R4,R5,LR}    ;copy FS descriptor block from parent
@@ -335,6 +314,12 @@ InitEntry ROUT          ; NO REENTRANCY CHECK NEEDED
         STRB    LR, [R4, #DrvFlags]
         STRB    LR, [R4, #LockCount]
         STR     LR, [R4,#ChangedSeqNum]
+        
+ [ DynamicMaps
+ 	STR	LR, [R4, #DrvsFsMapAddr]
+ 	STR	LR, [R4, #DrvsFsMapFlags]
+ 	STR	LR, [R4, #DrvsFsMapSize]
+ ]
 
         ; Save R2 and R3 over need for them
         Push    "R2, R3"
@@ -346,6 +331,82 @@ InitEntry ROUT          ; NO REENTRANCY CHECK NEEDED
         CMP     R2, LR
         MOVHS   r2, #0
         BHS     %FT15
+        
+ [ DynamicMaps
+ 
+ 	; if we're using dynamic areas for the free space maps, then the
+ 	; map for each configured drive is created as a dynamic area, with
+ 	; a maximum size of 4096K
+ 	
+ 	SUB	SP, SP, #256+4
+ 	
+ 	Push	"R2-R5"
+ 	
+ 	ADRL	R0, MapArea
+ 	
+ 	EOR	LR, R2, #4
+ 	ADD	LR, LR, #'0'
+ 	STR	LR, [SP, #256+4*4]
+	ADD	R2, SP, #4*4
+	MOV	R3, #256
+	LDR	R4, FS_Title
+	ADD	R5, SP, #256+4*4
+	BL	message_lookup_to_buffer02	; do the message lookup
+ 	Pull	"R2-R5"
+ 	
+ 	; now null terminated string at SP (or V set)
+ 	
+;	BVC	%FT14			; if no error, then message block is OK
+;	
+;	MOV	LR, SP
+;	ADRL	R3, MapAreaDefault
+;13
+;	LDRB	r0, [r3], #1
+;	TEQS	r0, #0
+;	STRNEB	r0, [lr], #1
+;	BNE	%BT13
+;	
+;	; now insert the drive number
+;	EOR	r3, r2, #4
+;	ADD	r3, r3, #'0'
+;	STRB	r3, [lr], #1
+;	STRB	r0, [lr], #1		; and the terminator
+	
+14
+ [ Debug1
+ 	DSTRING	sp, "Dynamic name: "
+ ]
+
+ 	Push	"R1,R2,R4-R8"
+ 	
+ 	MOV	R0, #0			; create
+ 	MOV	R1, #-1			; don't care about the number
+ 	MOV	R2, #0			; initial size of area
+ 	MOV	R3, #-1			; don't care about the base
+ 	MOV	R4, #1+(1<<7)		; USR mode can't write, and not draggable
+ 	MOV	R5, #FsMapMaxSize	; max size of area
+ 	MOV	R6, #0			; no handler
+ 	MOV	R7, #0			; no workspace for handler
+	ADD	R8, SP, #7*4		; name pointer
+
+	BL	OnlyXOS_DynamicArea	; do the dynamic area thing
+	MOVVC	R0, R1			; dynamic area number
+	MOVVS	R0, #0
+ 	Pull	"R1,R2,R4-R8"
+
+	ADD	SP, SP, #256+4
+ [ Debug1
+ 	DREG	R3, "Dynamic area base: "
+ 	DREG	R0, "Dynamic area num : "
+ ]
+	STR	R3, [R4, #DrvsFsMapAddr]; store the dynamic area base ptr
+	STR	R0, [R4, #DrvsFsMapArea]; area number
+	MOV	R0, #0			; 
+	STR	R0, [R4, #DrvsFsMapSize]; allocated size
+
+15
+	Pull	"R2,R3"
+ |
 
         ; Get size byte, skip allocation if size is 0
         ASSERT  FloppySizes = WinnieSizes+4
@@ -356,14 +417,14 @@ InitEntry ROUT          ; NO REENTRANCY CHECK NEEDED
 
         ; Claim the block, mapping fails to no block
         MOV     R0, #ModHandReason_Claim
- [ Debug1
+   [ Debug1
         DREG    R3, "Claiming map block of size "
- ]
+   ]
         BL      OnlyXOS_Module
         MOVVS   R2, #0
- [ Debug1
+   [ Debug1
         DebugError "Claim error on maps:"
- ]
+   ]
 
 15
         ; Save the block's address, restore R2 and R3 and set Winnie/Floppy Size to 0 if no block
@@ -375,6 +436,8 @@ InitEntry ROUT          ; NO REENTRANCY CHECK NEEDED
         ; If stored a 0, set Winnie/FloppySize to 0
         sbaddr  LR, WinnieSizes,EQ
         STREQB  R0, [LR,R2]
+        
+ ] ; DynamicMaps
 
 20
         ; Map allocation done for this drive
@@ -385,7 +448,63 @@ InitEntry ROUT          ; NO REENTRANCY CHECK NEEDED
         ADD     R2, R2, #1
         CMPS    R2, #8
         BLO     %BT10
-
+ 
+ ; here we allocate the dir buffer
+ 
+ [ BigDir
+ 	ASSERT	BigDirMinSize>=NewDirSize
+ 	ASSERT	BigDirMinSize>=OldDirSize
+ 	; have to create a dynamic area.  call it 'FileCore DirBuffer'
+ 	Push	"R0-R8"
+ 	
+ 	MOV	R0, #0
+ 	STR	R0, DirBufferPtr
+ 	STR	R0, DirBufferArea
+ 	
+ 	SUB	SP, SP, #256		; buffer for message lookup
+ 	
+ 	ADRL	R0, DirBufferName	; get the message ptr
+ 	MOV	R2, SP
+ 	MOV	R3, #256
+ 	LDR	R4, FS_Title		; name of filing system
+ 	BL	message_lookup_to_buffer01	; do the message lookup
+ 	BVC	%FT01
+ 	
+ 	ADD	SP, SP, #256
+ 	STR	R0, [SP]
+ 	Pull	"R0-R8"
+ 	B	%FT85
+01
+ 	
+ 	MOV	R0, #0			; create
+ 	MOV	R1, #-1			; don't care about the number
+ 	MOV	R2, #BigDirMinSize	; initial size of area
+ 	STR	R2, DirBufferSize	; store the size
+ 	MOV	R3, #-1			; don't care about the base
+ 	MOV	R4, #1+(1<<7)		; USR mode can't write, and not draggable
+ 	MOV	R5, #BigDirMaxSize	; max size of area
+ 	MOV	R6, #0			; no handler
+ 	MOV	R7, #0			; no workspace for handler
+ 	MOV	R8, SP			; name for dir buffer
+ 	BL	OnlyXOS_DynamicArea	; try to create the area
+ 	ADD	SP, SP, #256		; free buffer
+ [ Debug1
+ 	DebugError "Dynamic area creation:"
+ ]
+ 	BVC	%FT01
+ 	STR	R0, [SP]
+ 	Pull	"R0-R8"
+ 	B	%FT85
+01
+ [ Debug1
+	DREG	R1, "DirBufferArea: "
+	DREG	R3, "DirBufferPtr : "
+ ]
+	STR     R1, DirBufferArea
+	STR     R3, DirBufferPtr
+	Pull	"R0-R8"
+ ]
+ 	
         ; Set up DefectSpace
         SUB     R3, R3, SB
         STR     R3, DefectSpace
@@ -465,6 +584,14 @@ DieEntry
         MOV     R0, #ModHandReason_Delete
         SWI     XOS_Module
 
+ [ BigDir
+	; free the dynamic area for the dir buffer
+	MOV	R0, #1
+	LDR	R1, DirBufferArea
+	TEQS	R1, #0
+	BLNE	OnlyXOS_DynamicArea 	
+ ]
+
  [ NewFs
   [ Version >= 205
         MOV     R4, #8          ; return all map spaces
@@ -474,10 +601,17 @@ DieEntry
         B       %FT94
 93
         DrvRecPtr  R2,R4
+  [ DynamicMaps
+  	MOV	R0, #1
+  	LDR	R1, [R2, #DrvsFsMapArea]
+  	TEQS	R1, #0
+  	BLNE	OnlyXOS_DynamicArea	; ditch the dynamic area
+  |
         LDR     R2, [R2,#DrvsFsMap]
         BICS    R2, R2, #HiFsBits
         MOVNE   R0, #ModHandReason_Free
         BLNE    OnlyXOS_Module  ;ignore errors
+  ]
 94
         SUBS    R4, R4, #1
         BPL     %BT93
@@ -485,15 +619,6 @@ DieEntry
 
         BL      FileCoreExit
 
- [ BigDir
-	; free the dynamic area for the dir buffer
-	MOV	R0, #1
-	LDR	R1, DirBufferArea
-	SWI	XOS_DynamicArea 	
- 
-DieEntry_DynamicFail
-	ORRVS	R9, R0, #ExternalErrorBit
- ]
         ; Release message file
         LDR     R0, message_file_open
         TEQ     R0, #0
