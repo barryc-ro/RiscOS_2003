@@ -109,7 +109,7 @@ o.soundfile: Documents.def.soundfile
 #
 # RISC OS ROM build rules:
 #
-rom: ${TARGET}
+rom: ${TARGET} local_dirs
         @echo ${COMPONENT}: rom module built
 
 export: export_${PHASE}
@@ -148,6 +148,11 @@ resources:
 	TokenCheck LocalRes:Messages
         ${CP} LocalRes:Messages  ${RESDIR}.Messages ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
+
+local_dirs:
+        ${MKDIR} o
+        ${MKDIR} oz
+  
 
 #
 # ROM target (re-linked at ROM Image build time)
