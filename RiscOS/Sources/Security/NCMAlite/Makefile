@@ -63,45 +63,21 @@ INCLUDES= -IC:
 # use USE_NETINIT to invoke the NetInit module instead of bringing the network stuff up ourself
 # use SILENT_HUP to ignore the line dropping out from under us, otherwise return to the 'Connect' screen
 # use VERIFY_URL to check the home URL before sending it to the browser and generating an error if it seems bogus
-# use SC_SWAPPING if you want to enable the smartcard swapping extensions used in th Funai 2 project.
 
 # Override any options by setting the OPTS in the Build options
 
 # debugging
 
-ETHERNETDB  =   -DREMOTE_DEBUG -DENABLE_DEBUGGING -DCHIMPANZEE_INTERFACE \
-		-DPOINTLESS_BUTTONS -UDEFEAT_BROWSER_LIMIT \
-		-DSHOW_BOOTBLOCK_TRANSITIONS \
-		-DLIMIT_RUNAWAY_UIDS -UHIDEOUS_PROXY_HACK -UNVRAM_DEBUG \
-		-DETHERNET -DSEND_SERIALID_LENGTH \
-		-DENABLE_HTTP_PROXY -DENABLE_HTTPS_PROXY \
-		-DISP_CAPTURE -UTRAP_PPP_TIMEOUTS -UUSE_NETINIT \
-		-DSILENT_HUP -UVERIFY_URL ${TYPE}
 
-ZIPDB  =        -UREMOTE_DEBUG -DENABLE_DEBUGGING -DCHIMPANZEE_INTERFACE \
-		-DPOINTLESS_BUTTONS -UDEFEAT_BROWSER_LIMIT \
-		-DSHOW_BOOTBLOCK_TRANSITIONS  \
-		-DLIMIT_RUNAWAY_UIDS -UHIDEOUS_PROXY_HACK -UNVRAM_DEBUG \
-		-UETHERNET -DSEND_SERIALID_LENGTH \
-		-DENABLE_HTTP_PROXY -DENABLE_HTTPS_PROXY \
-		-DISP_CAPTURE -UTRAP_PPP_TIMEOUTS -UUSE_NETINIT \
-		-DSILENT_HUP -UVERIFY_URL ${TYPE}
-
-NODB  =         -UREMOTE_DEBUG -UENABLE_DEBUGGING -DCHIMPANZEE_INTERFACE \
+NODB  =         -UREMOTE_DEBUG -DCHIMPANZEE_INTERFACE \
 		-UPOINTLESS_BUTTONS -UAUTHENTICATE_SIGNATURES -UDEFEAT_BROWSER_LIMIT \
 		-USHOW_BOOTBLOCK_TRANSITIONS  \
 		-DLIMIT_RUNAWAY_UIDS -UHIDEOUS_PROXY_HACK -UNVRAM_DEBUG \
-		-UETHERNET -DSEND_SERIALID_LENGTH \
+		-DSEND_SERIALID_LENGTH \
 		-DENABLE_HTTP_PROXY -DENABLE_HTTPS_PROXY \
 		-DISP_CAPTURE -UTRAP_PPP_TIMEOUTS -UUSE_NETINIT \
 		-DSILENT_HUP -UVERIFY_URL ${TYPE}
 
-#
-# select one of these
-#
-
-#NCTARGETARCH = ${ETHERNETDB}
-#NCTARGETARCH = ${ZIPDB}
 NCTARGETARCH = ${NODB}
 
 CCFLAGS = -c ${THROWBACK} -depend !Depend ${INCLUDES} -zM ${NCTARGETARCH} ${OPTS}
@@ -112,13 +88,17 @@ CCFLAGS = -c ${THROWBACK} -depend !Depend ${INCLUDES} -zM ${NCTARGETARCH} ${OPTS
 
 # Libraries
 #
+LIBDIR		= <Lib$Dir>
 CLIB       = CLIB:o.stubs
 RLIB       = RISCOSLIB:o.risc_oslib
 RSTUBS     = RISCOSLIB:o.rstubs
 ROMSTUBS   = RISCOSLIB:o.romstubs
 ROMCSTUBS  = RISCOSLIB:o.romcstubs
-ABSSYM     = RISC_OSLib:o.AbsSym
-DBUGLIB	   =
+ABSSYM     = RISC_OSLib:o.c_AbsSym
+SOCKLIB	   = TCPIPLibs:o.socklib5 
+INETLIB	   = TCPIPLibs:o.inetlib
+LIBS       = <Lib$Dir>.tboxlibs.o.wimplib
+
 
 #
 # Rule patterns
@@ -141,12 +121,12 @@ EXPORTS   =
 BASEOBJS  = module.o header.o vectors.o ncma_cmds.o ncma_swis.o \
 	  dynalloc.o ncma_ncma.o machine.o ncma_url.o ncma_scard.o \
 	  ncma_utils.o ncma_dial.o kprintf.o  \
-	  ncma_bootb.o  \
+	  ncma_bootb.o task.o \
 	  ncma_tags.o  ncma_cache.o ncma_uid.o ncma_net.o \
-	  usermode.o areacode.o ncma_fx.o
+	  usermode.o areacode.o dbugzm.o ncma_fx.o
 
 ROMOBJS = oz.resources ${BASEOBJS}
-NOTROMOBJS = oz.resources ${DBUGLIB} ${BASEOBJS}
+NOTROMOBJS = oz.resources ${BASEOBJS}
 
 RESDIR = <resource$dir>.Resources.${COMPONENT}
 
@@ -196,8 +176,8 @@ resources:
 #
 # Executable target (static link)
 #
-${TARGETSA}: ${NOTROMOBJS} ${CLIB} ${DBUGLIB}
-        ${LD} -o $@ -module ${NOTROMOBJS} ${CLIB}
+${TARGETSA}: ${NOTROMOBJS} ${CLIB} ${LIBS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB}
+        ${LD} -o $@ -module ${NOTROMOBJS} ${CLIB} ${LIBS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB}
 
 #
 # Exported interface headers
@@ -206,8 +186,8 @@ ${TARGETSA}: ${NOTROMOBJS} ${CLIB} ${DBUGLIB}
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${ROMOBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB}
-        ${LD} -o $@ -aof ${ROMOBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB}
+${TARGET}: ${ROMOBJS} ${ROMCSTUBS} ${LIBS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB}
+        ${LD} -o $@ -aof ${ROMOBJS} ${ROMCSTUBS} ${LIBS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB}
 
 
 #
