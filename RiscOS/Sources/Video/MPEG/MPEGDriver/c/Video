@@ -306,6 +306,39 @@ static _kernel_oserror *static_SpeedChange (uint32_t flags, stream_handle_t deco
 {
   IGNORE (flags);
   IGNORE (decoder_handle);
+  
+  bool irqs_were_enabled = !_kernel_irqs_disabled();
+  if (irqs_were_enabled) _kernel_irqs_off();
+  
+  int speed = 0x10000;
+  _swix(PFCClock_StreamInfo, _INR(0,2), pfcclock_STREAM_INFO_STC_SPEED, Stream.clock_handle, &speed);
+  if (speed > 0) speed = 0x10000 / speed; /* good enough accuracy for the dividers we use */
+  
+  /* Coming out of pause requires a little trickery */
+  if (Stream.video.speed_indicator == 0 && speed != 0)
+  {
+    Stream.fields_till_next_AU = (Stream.fields_till_next_AU & 1) + (2 * speed); /* maintain odd/evenness */
+  }
+  /* Reduce hysteresis where possible */
+  else if (Stream.video.speed_indicator != 0 && Stream.fields_till_next_AU > 3)
+  {
+    Stream.fields_till_next_AU = (((Stream.fields_till_next_AU >> 1) * speed / Stream.video.speed_indicator) << 1) | (Stream.fields_till_next_AU & 1);
+    if (Stream.fields_till_next_AU < 3) Stream.fields_till_next_AU += 2;
+  }
+  Stream.video.speed_indicator = speed;
+  
+  if (irqs_were_enabled) _kernel_irqs_on();
+  
+  /* Warning: OS_UpCall enables interrupts */
+  _swix(OS_UpCall, _INR(0,4), UpCall_MPEG, 0, Stream.csh, UpCallMPEG_SpeedChange, Stream.video.speed_indicator);
+  
+  /* Ideally, this upcall should be generated for audio-only streams too, but the SpeedChange event */
+  /* is only delivered to the audio decoder protocol module, not the top-level PRISM module (ie AudGeneric.c) */
+  /* so this will have to wait until the generic StreamInfoChanging mechanism is written. */
+  /* This shouldn't be too much of a problem for anyone, since they've been managing without */
+  /* pause/slowmo working at all for audio-only streams up to now. */
+  /* BJGA 19-Aug-2002 */
+  
   return NULL;
 }
 
@@ -376,9 +409,6 @@ _kernel_oserror *Video_SWIOpenStream (stream_flags_t *flags, control_stream_hand
   static_CompleteScalingTypeParameters (true);
   
 #ifdef GENERIC
-#ifdef BODGEOVS
-  Module_UseGenericAudio = (Module_DongleFitted && Stream.s_flags.ovs_npt_descriptors==false);
-#endif
   if (Module_UseGenericAudio)
   {
     /* Start up the sync system */
@@ -669,13 +699,9 @@ _kernel_oserror *Video_SWICloseStream (unsigned int flags, mpeg_stream_handle_t 
     /* If an internal reset was pending, stop it */
     _swix (OS_RemoveCallBack, _INR(0,1), video_reset_callback, Module_PrivateWord);
     
-    /* Stop playing the old stream, only playing out the old data if we were playing at normal speed */
+    /* Stop playing the old stream */
     Stream.vid_flags.internal_reset = false;
-#ifdef BODGEOVS
     static_VideoStop (false);
-#else
-    static_VideoStop (Stream.video.speed_indicator == 1 && Stream.video.state == stream_open && !Stream.rs_flags.trick_play_mode);
-#endif
     
 #ifdef GENERIC
     if (Module_UseGenericAudio)
@@ -774,58 +800,63 @@ _kernel_oserror *Video_SWISetSpeed (unsigned int flags, mpeg_stream_handle_t vsh
   DWrite_Write0("Video_SWISetSpeed ");
 #endif
   e = static_CheckHandle (vsh);
-#ifdef BODGEOVS
-  IGNORE(flags);
-  IGNORE(speed);
-#else
-  bool irqs_were_enabled = !_kernel_irqs_disabled ();
-  bool issue_the_upcall = false;
   
-  if (!e)
+#ifdef GENERIC
+  if (Module_UseGenericAudio)
   {
-    if (irqs_were_enabled) _kernel_irqs_off ();
+    e = _swix(PFCClock_SpeedChange, _INR(0,2), 0, Stream.clock_handle, speed ? 0x10000 / speed : 0);
+  }
+  else
+#endif
+  {
+    bool irqs_were_enabled = !_kernel_irqs_disabled ();
+    bool issue_the_upcall = false;
     
-    /* Coming out of pause requires a little trickery */
-    if (Stream.video.speed_indicator == 0 && speed != 0)
+    if (!e)
     {
-      Stream.fields_till_next_AU = (Stream.fields_till_next_AU & 1) + (2 * speed); /* maintain odd/evenness */
-      Stream.reference_STC = Clk_ReadRawSTC (); /* make it as though STC hasn't incremented since we went into pause */
-    }
-    if (speed == Stream.video.speed_indicator)
-    {
-      /* No change - do nothing */
-    }
-    else if ((flags & SetSpeedFlags_DeferSetSpeed) == 0 || !Stream.rs_flags.audio_present)
-    {
-      /* If defer flag is clear, or if there's no audio, then change speed immediately */
-      Stream.vid_flags.going_faster = Stream.vid_flags.going_slower = false; /* in case a deferred SetSpeed is still pending */
-      Stream.video.speed_indicator = speed;
-      issue_the_upcall = true;
-    }
-    else if ((speed < Stream.video.deferred_speed_indicator && speed != 0) || Stream.video.deferred_speed_indicator == 0)
-    {
-      /* Moving to a faster speed - wait for audio buffer to exceed prefill level */
-      Stream.vid_flags.going_faster = true;
-      Stream.vid_flags.going_slower = false;
-    }
-    else
-    {
-      /* Moving to a slower speed - wait for audio buffer to fall below prefill level */
-      Stream.vid_flags.going_slower = true;
-      Stream.vid_flags.going_faster = false;
-    }
-    /* When the buffer reaches the required condition, this is the speed that should be asserted */
-    Stream.video.deferred_speed_indicator = speed;
-    
-    if (irqs_were_enabled) _kernel_irqs_on ();
-    
-    if (issue_the_upcall)
-    {
-      /* OS_UpCall enables interrupts */
-      _swix (OS_UpCall, _INR(0,4), UpCall_MPEG, 0, Stream.csh, UpCallMPEG_SpeedChange, Stream.video.speed_indicator);
+      if (irqs_were_enabled) _kernel_irqs_off ();
+      
+      /* Coming out of pause requires a little trickery */
+      if (Stream.video.speed_indicator == 0 && speed != 0)
+      {
+        Stream.fields_till_next_AU = (Stream.fields_till_next_AU & 1) + (2 * speed); /* maintain odd/evenness */
+        Stream.reference_STC = Clk_ReadRawSTC (); /* make it as though STC hasn't incremented since we went into pause */
+      }
+      if (speed == Stream.video.speed_indicator)
+      {
+        /* No change - do nothing */
+      }
+      else if ((flags & SetSpeedFlags_DeferSetSpeed) == 0 || !Stream.rs_flags.audio_present)
+      {
+        /* If defer flag is clear, or if there's no audio, then change speed immediately */
+        Stream.vid_flags.going_faster = Stream.vid_flags.going_slower = false; /* in case a deferred SetSpeed is still pending */
+        Stream.video.speed_indicator = speed;
+        issue_the_upcall = true;
+      }
+      else if ((speed < Stream.video.deferred_speed_indicator && speed != 0) || Stream.video.deferred_speed_indicator == 0)
+      {
+        /* Moving to a faster speed - wait for audio buffer to exceed prefill level */
+        Stream.vid_flags.going_faster = true;
+        Stream.vid_flags.going_slower = false;
+      }
+      else
+      {
+        /* Moving to a slower speed - wait for audio buffer to fall below prefill level */
+        Stream.vid_flags.going_slower = true;
+        Stream.vid_flags.going_faster = false;
+      }
+      /* When the buffer reaches the required condition, this is the speed that should be asserted */
+      Stream.video.deferred_speed_indicator = speed;
+      
+      if (irqs_were_enabled) _kernel_irqs_on ();
+      
+      if (issue_the_upcall)
+      {
+        /* OS_UpCall enables interrupts */
+        _swix (OS_UpCall, _INR(0,4), UpCall_MPEG, 0, Stream.csh, UpCallMPEG_SpeedChange, Stream.video.speed_indicator);
+      }
     }
   }
-#endif
   return e;
 }
 
