@@ -3,6 +3,7 @@
 #include "Desk.Error2.h"
 #include "Desk.WimpSWIs.h"
 #include "Desk.Coord.h"
+#include "Desk.KernelSWIs.h"
 
 //#include "^.Desk.Filter2.h"
 #include "^.Desk.Window2.h"
@@ -19,11 +20,7 @@
 #include "PtrV.h"
 #include "DrawHL.h"
 
-#if 0
-#include "TaskModule.TaskModule.h"
-#else
-#define TaskModule_SendMessage 0x4d300
-#endif
+#define	TaskModule_SendMessage	0x4d300
 
 #include "CMHGHead.h"
 
@@ -45,6 +42,9 @@ static	Desk_bool	keydown_left	= Desk_bool_FALSE;
 static	Desk_bool	keydown_right	= Desk_bool_FALSE;
 static	Desk_bool	keydown_up	= Desk_bool_FALSE;
 static	Desk_bool	keydown_down	= Desk_bool_FALSE;
+
+static	Desk_bool	keydown_detected_from_keyv	= Desk_bool_FALSE;
+	// So we know whether to ignore InsV key insertions.
 
 /*
 Note that the frame rate will effect how fast the pointer-emulated mouse
@@ -205,6 +205,12 @@ int	Pointer_PtrV_handler( _kernel_swi_regs* r, void* pw)
 #define KEY_BUFFER_UP		0x8f
 #define KEY_BUFFER_DOWN		0x8e
 
+#define KEY_BUFFER_TOGGLE	0x0e	// Scroll lock.
+#define KEY_IRH_BUFFER_TOGGLE	0xc3	// IR handset 'Stop'.
+#define KEY_IRH_BUFFER_SELECT	0x0d	// IR handset 'Ok'.
+#define KEY_IRH_BUFFER_MENU	0xc1	// IR handset 'Menu'.
+
+
 // These are internal key numbers, as used by OS_Byte 121, Basic's INKEY(-x) etc. See PRMs 1-849
 #define	KEY_INTERNAL_DOWN	41
 #define	KEY_INTERNAL_UP		57
@@ -234,6 +240,12 @@ int	Pointer_KeyV_handler( _kernel_swi_regs* r, void* pw)
 			if ( r->r[1]==KEY_KEYV_LEFT)	{ keydown_left	= (r->r[0]==2) ? Desk_bool_TRUE : Desk_bool_FALSE; /*return 0;*/	}
 			if ( r->r[1]==KEY_KEYV_UP)	{ keydown_up	= (r->r[0]==2) ? Desk_bool_TRUE : Desk_bool_FALSE; /*return 0;*/	}
 			if ( r->r[1]==KEY_KEYV_DOWN)	{ keydown_down	= (r->r[0]==2) ? Desk_bool_TRUE : Desk_bool_FALSE; /*return 0;*/	}
+			
+			if ( r->r[1]==KEY_KEYV_RIGHT || r->r[1]==KEY_KEYV_LEFT || r->r[1]==KEY_KEYV_UP || r->r[1]==KEY_KEYV_DOWN)	{
+				keydown_detected_from_keyv = (r->r[0]==2) ? Desk_bool_TRUE : Desk_bool_FALSE;
+					// So we know that keydown is from detection of a KeyV, rather than insertion into
+					// keyboard buffer.
+				}
 			}
 		
 		else if ( IconHigh_globals.currentemulation == IconHigh_newemulation_default_HIGHLIGHTING)	{
@@ -355,18 +367,22 @@ void	HighlightKeyPressHandler( int key, void* pw)
 	// can cause lots of key events to be delivered to us well after the key has
 	// been released, causing all sorts of confusion.
 	
+	// Exception to this is made if the key wasn't detected from KeyV. If so, it
+	// will have come from the InsV on the keyboard buffer, so from the IRHandset,
+	// in which case KeyDown() will always return FALSE. 
+	
 	if ( 0)	;
 	
-	else if ( key==KEY_BUFFER_LEFT	 && KeyDown( KEY_INTERNAL_LEFT))
+	else if ( key==KEY_BUFFER_LEFT	&& (!keydown_detected_from_keyv) || KeyDown( KEY_INTERNAL_LEFT))
 		MoveHighlight( &pos, iconhigh_direction_LEFT, pw);
 	
-	else if ( key==KEY_BUFFER_RIGHT && KeyDown( KEY_INTERNAL_RIGHT))
+	else if ( key==KEY_BUFFER_RIGHT	&& (!keydown_detected_from_keyv) || KeyDown( KEY_INTERNAL_RIGHT))
 		MoveHighlight( &pos, iconhigh_direction_RIGHT, pw);
 	
-	else if ( key==KEY_BUFFER_DOWN  && KeyDown( KEY_INTERNAL_DOWN))
+	else if ( key==KEY_BUFFER_DOWN  && (!keydown_detected_from_keyv) || KeyDown( KEY_INTERNAL_DOWN))
 		MoveHighlight( &pos, iconhigh_direction_DOWN, pw);
 	
-	else if ( key==KEY_BUFFER_UP    && KeyDown( KEY_INTERNAL_UP))
+	else if ( key==KEY_BUFFER_UP    && (!keydown_detected_from_keyv) || KeyDown( KEY_INTERNAL_UP))
 		MoveHighlight( &pos, iconhigh_direction_UP, pw);
 	
 	SetMousePos( pos.x, pos.y);
@@ -377,12 +393,95 @@ void	HighlightKeyPressHandler( int key, void* pw)
 
 static int	global_lastkey = 0;
 
+
+
+
+
+_kernel_oserror*	CancelIRKeyDown_handler( _kernel_swi_regs* r, void* pw)
+	{
+	keydown_left	= Desk_bool_FALSE;
+	keydown_right	= Desk_bool_FALSE;
+	keydown_up	= Desk_bool_FALSE;
+	keydown_down	= Desk_bool_FALSE;
+	return NULL;
+	Desk_UNUSED( r);
+	Desk_UNUSED( pw);
+	}
+
+
 _kernel_oserror*	HighlightInsV2_handler( _kernel_swi_regs* r, void* pw)
 	{
 	Desk_Debug_Printf( Desk_error_PLACE "HighlightInsV2_handler called - lastkey is %i\n", global_lastkey);
 	
-	if ( global_lastkey && IconHigh_globals.currentemulation==IconHigh_newemulation_default_HIGHLIGHTING)
-		HighlightKeyPressHandler( global_lastkey, pw);
+	if ( !global_lastkey)	{
+		Desk_Debug_Printf( Desk_error_PLACE "HighlightInsV2_handler, global key=0\n");
+		return NULL;
+		}
+	
+	if	(
+		   global_lastkey==KEY_BUFFER_LEFT
+		|| global_lastkey==KEY_BUFFER_RIGHT
+		|| global_lastkey==KEY_BUFFER_UP
+		|| global_lastkey==KEY_BUFFER_DOWN
+		)
+		{
+		if ( IconHigh_globals.currentemulation==IconHigh_newemulation_default_HIGHLIGHTING)
+			HighlightKeyPressHandler( global_lastkey, pw);
+		
+		else if ( IconHigh_globals.currentemulation==IconHigh_newemulation_default_POINTER)	{
+			
+			if ( !keydown_detected_from_keyv)	{	// Only interested in mouse movements via kbd buffer if none detected from KeyV
+				/*
+				keydown_left	= Desk_bool_FALSE;
+				keydown_right	= Desk_bool_FALSE;
+				keydown_up	= Desk_bool_FALSE;
+				keydown_down	= Desk_bool_FALSE;
+				*/
+				// Set a callback to cancel this keydown after a delay.
+				if ( keydown_left || keydown_right || keydown_up || keydown_down)
+					_swix( OS_RemoveTickerEvent, _INR(0,1), CancelIRKeyDown, pw);
+					/*
+					Remove the canceler, so that keydown is cancelled after this press, rather than the last one.
+					*/
+				
+				// We cancel the keypress after a delay which is calculated from the auto-repeat freq.
+				// This is so the key is treated as being down for as small a time as possible but long enough
+				// to be treated as down permanently while auto-repeat is happening.
+				// using delay+1 isn't ok, seems that the IRHandlset doesn't deliver keys fast enough...?
+				
+					{
+					int	autorepeat_delay = Desk_OS_Byte_ReadCMOS( 13);
+					_swix( OS_CallAfter, _INR(0,2), autorepeat_delay+10, CancelIRKeyDown, pw);
+					}
+				
+				if ( global_lastkey==KEY_BUFFER_LEFT)	keydown_left	= Desk_bool_TRUE;
+				if ( global_lastkey==KEY_BUFFER_RIGHT)	keydown_right	= Desk_bool_TRUE;
+				if ( global_lastkey==KEY_BUFFER_UP)	keydown_up	= Desk_bool_TRUE;
+				if ( global_lastkey==KEY_BUFFER_DOWN)	keydown_down	= Desk_bool_TRUE;
+				}
+			}
+		}
+	
+	else if ( global_lastkey==KEY_BUFFER_TOGGLE || global_lastkey==KEY_IRH_BUFFER_TOGGLE)	{
+		if ( IconHigh_globals.currentemulation==IconHigh_newemulation_default_NONE)	{
+			EmulationStartAuto( NULL, pw);
+			}
+		else	EmulationPointerStop( pw);
+		}
+	
+	else if ( IconHigh_globals.currentemulation!=IconHigh_newemulation_default_NONE)	{
+		
+		int	insertkeyv = 0;
+		
+		if ( global_lastkey==KEY_IRH_BUFFER_SELECT)	insertkeyv = KEY_KEYV_MOUSE_SELECT;
+		if ( global_lastkey==KEY_IRH_BUFFER_MENU)	insertkeyv = KEY_KEYV_MOUSE_MENU;
+		
+		if ( insertkeyv)	{
+			// Fake mouse press/release.
+			_swix( OS_CallAVector, _INR(0,1)|_IN(9), 2, insertkeyv, 0x13);
+			_swix( OS_CallAVector, _INR(0,1)|_IN(9), 1, insertkeyv, 0x13);
+			}
+		}
 	
 	global_lastkey = 0;
 	return NULL;
@@ -402,19 +501,30 @@ void	IgnoreNextKbd( void)
 int	HighlightInsV_handler( _kernel_swi_regs* r, void* pw)
 	{
 	if ( r->r[1]==0)	{	//	kbd buffer
-		if ( ignore_next_key)	{
+		Desk_bool	ignore = Desk_bool_TRUE;
+		
+		if ( r->r[0]==KEY_BUFFER_TOGGLE || r->r[0]==KEY_IRH_BUFFER_TOGGLE)	ignore = Desk_bool_FALSE;
+		
+		else if ( IconHigh_globals.currentemulation==IconHigh_newemulation_default_NONE)	;
+		
+		else if ( ignore_next_key)	{
 			ignore_next_key = Desk_bool_FALSE;
 			return 1;
 			}
-		if (	   r->r[0]==KEY_BUFFER_LEFT
+		
+		else if (  r->r[0]==KEY_BUFFER_LEFT
 			|| r->r[0]==KEY_BUFFER_RIGHT
 			|| r->r[0]==KEY_BUFFER_UP
 			|| r->r[0]==KEY_BUFFER_DOWN
+			|| r->r[0]==KEY_IRH_BUFFER_SELECT
+			|| r->r[0]==KEY_IRH_BUFFER_MENU
 			)
-			{
+			ignore = Desk_bool_FALSE;
+		
+		if ( !ignore)	{
 			global_lastkey = r->r[0];
 			_swix( OS_AddCallBack, _INR(0,1), HighlightInsV2, pw);
-			return 0;
+			return 0;	// Intercept the InsV, so prevent the insertion from taking place.
 			}
 		}
 	
@@ -678,7 +788,7 @@ void	EmulationPointerStart( IconHigh_emulationtype emulation, void* pw)
 		~((1<<Desk_event_PTRLEAVE) | (1<<Desk_event_PTRENTER))
 		);
 	
-	_swix( OS_Claim, _INR(0,2), 0x14, HighlightInsV, pw);
+	//_swix( OS_Claim, _INR(0,2), 0x14, HighlightInsV, pw);	// This handler is now always registered.
 	//_swix( OS_Claim, _INR(0,2), 0x14, Desk_ModHand_Handler, highlightinsvhandle);
 	
 	/*
@@ -785,8 +895,12 @@ void	EmulationPointerStop( void* pw)
 	
 	_swix( OS_Release, _INR(0,2), 0x13, Pointer_KeyV, pw);
 	
-	_swix( OS_Release, _INR(0,2), 0x14, HighlightInsV, pw);
+	//_swix( OS_Release, _INR(0,2), 0x14, HighlightInsV, pw);	// This handler is now always registered.
 	//_swix( OS_Release, _INR(0,2), 0x14, Desk_ModHand_Handler, highlightinsvhandle);
+	
+	// This is to clean up any callafter handlers for cancelling IRHandset cursor presses.
+	_swix( OS_RemoveTickerEvent, _INR(0,1), CancelIRKeyDown, pw);
+	
 	
 	_swix( OS_RemoveCallBack, _INR(0,1), HighlighCheck, pw);
 	_swix( OS_RemoveCallBack, _INR(0,1), HighlightInsV2, pw);
@@ -801,4 +915,15 @@ void	EmulationPointerStop( void* pw)
 	}
 
 
+
+void	Emulation_Init( void* pw)
+	{
+	_swix( OS_Claim, _INR(0,2), 0x14, HighlightInsV, pw);
+	}
+
+
+void	Emulation_Final( void* pw)
+	{
+	_swix( OS_Release, _INR(0,2), 0x14, HighlightInsV, pw);
+	}
 
