@@ -67,8 +67,7 @@ resources:
 #
 ${TARGET}: o.fpe
         ${MKDIR} rm.${MACHINE}
-        ${LD} -bin -o $@ o.fpe
-        SetType $@ &FFA
+        ${LD} -rmf -o $@ o.fpe
 
 o.fpe: s.fpemedusa
         ${AS} -I Hdr:t.^ ${ASFLAGS} -APCS 3/32bit -CPU ARM7M s.fpemedusa $@
@@ -77,8 +76,7 @@ o.fpe: s.fpemedusa
 #
 #${TARGET}: o.fpe400
 #        ${MKDIR} rm.${MACHINE}
-#        ${LD} -bin -o $@ o.fpe400
-#        SetType $@ &FFA
+#        ${LD} -rmf -o $@ o.fpe400
 #
 #o.fpe400: s.fpe400
 #        ${AS} -I Hdr:t.^ ${ASFLAGS} -APCS 3/26bit s.fpe400 $@
@@ -87,35 +85,3 @@ ${EXP_HDR}.FPEmulator: hdr.FPEmulator
         ${CP} hdr.FPEmulator $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-o.fpe: s.fpemedusa
-o.fpe: ^.coresrc.s.main
-o.fpe: ^.coresrc.^.coresrc.s.defaults
-o.fpe: ^.coresrc.^.vensrc.riscos.options
-o.fpe: Hdr:t.^.ListOpts
-o.fpe: Hdr:t.^.Macros
-o.fpe: Hdr:t.^.Services
-o.fpe: Hdr:t.^.ModHand
-o.fpe: Hdr:t.^.EnvNumbers
-o.fpe: ^.coresrc.^.vensrc.riscos.FPEMacros
-o.fpe: ^.coresrc.^.vensrc.riscos.^.^.VersionASM
-o.fpe: Hdr:t.^.SWIs
-o.fpe: Hdr:t.^.RISCOS
-o.fpe: ^.coresrc.^.coresrc.s.regnames
-o.fpe: ^.coresrc.^.coresrc.s.armdefs
-o.fpe: ^.coresrc.^.coresrc.s.fpadefs
-o.fpe: ^.coresrc.^.coresrc.s.wsdefs
-o.fpe: ^.coresrc.^.coresrc.^.vensrc.riscos.ctxtws
-o.fpe: ^.coresrc.^.coresrc.^.vensrc.riscos.globalws
-o.fpe: ^.coresrc.^.vensrc.riscos.start
-o.fpe: ^.coresrc.^.coresrc.s.toplevel
-o.fpe: ^.coresrc.^.coresrc.^.coresrc.s.macros
-o.fpe: ^.coresrc.^.coresrc.^.coresrc.s.fpaundef
-o.fpe: ^.coresrc.^.coresrc.^.coresrc.s.fpeundef
-o.fpe: ^.coresrc.^.coresrc.^.coresrc.s.ldst
-o.fpe: ^.coresrc.^.coresrc.^.coresrc.s.rounding
-o.fpe: ^.coresrc.^.coresrc.^.coresrc.s.nans
-o.fpe: ^.coresrc.^.coresrc.^.coresrc.s.arith
-o.fpe: ^.coresrc.^.coresrc.^.coresrc.s.transhw
-o.fpe: ^.coresrc.^.coresrc.^.coresrc.s.transsw
-o.fpe: ^.coresrc.^.coresrc.^.coresrc.s.interf
-o.fpe: ^.coresrc.^.vensrc.riscos.end
