@@ -189,10 +189,10 @@ install_rom: ${ROM_MODULE}
 	${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
 	@echo ${COMPONENT}: Module installed (ROM)
 
-resources: Resources.${LOCALE}.Messages
+resources: LocalRes:Messages
 	${MKDIR} ${RESDIR}
 	${MKDIR} ${RESDIR}.${COMPONENT}
-	${CP} Resources.${LOCALE}.* ${RESDIR}.${COMPONENT}.* ${CPFLAGS}
+	${CP} LocalRes:* ${RESDIR}.${COMPONENT}.* ${CPFLAGS}
 	@echo ${COMPONENT}: resource files copied to Messages module
 
 clean:
@@ -211,15 +211,12 @@ ${ROM_MODULE}: ${OBJS} ${ROMCSTUBS}
 # final link for ROM Image (using given base address)
 rom_link:
 	${MKDIR} linked
-	${MKDIR} map
-	${LD} -o linked.${COMPONENT} -bin -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM} \
-	      -map > map.${COMPONENT}
-	truncate map.${COMPONENT} linked.${COMPONENT}
+	${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROM_MODULE} ${ABSSYM}
 	${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
 	@echo ${COMPONENT}: rom_link complete
 
-${MSGSF}: @.Resources.${LOCALE}.Messages
-	resgen messages_file ${MSGSF} Resources.${LOCALE}.Messages ${RESFSDIR}.Messages
+${MSGSF}: LocalRes:Messages
+	resgen messages_file ${MSGSF} LocalRes:Messages ${RESFSDIR}.Messages
 
 ${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${TCPIPLIBS} ${ZLIB} ${CLIB}
 	${mkdir} rm
