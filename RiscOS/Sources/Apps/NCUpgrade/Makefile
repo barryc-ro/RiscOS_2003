@@ -20,10 +20,10 @@ EXP_C_H = <Cexport$dir>.h
 # Program specific options
 #
 
-COMPONENT	= Upgrade
-APP		= !Upgrade
-MODULE		= rm.!Upgrade
-ROM_MODULE	= aof.Upgrade
+COMPONENT	= NCUpgrade
+APP		= !NCUpgrade
+MODULE		= rm.!NCUpgrade
+ROM_MODULE	= aof.NCUpgrade
 LDIR		= Resources.${LOCALE}
 EXPORTS		= ${EXP_C_H}.${COMPONENT}
 
@@ -100,8 +100,6 @@ LIBSM = \
  ${EVENTLIB}m \
  ${TOOLACTIONLIB} \
  ${ZLIB}.o.zlibzm \
- ${SOCKLIB} \
- ${INETLIB} \
  ${MEMCHECKLIB} \
 
 
@@ -287,8 +285,7 @@ resources:
 	${MKDIR} ${RESAPP}
 	${MKDIR} ${RESDIR}.User
 	${CP} ${LDIR}.ROM.!Run		${RESAPP}.!Run		${CPFLAGS}
-	${CP} ${LDIR}.ROM.!Boot		${RESAPP}.!Boot		${CPFLAGS}
-	${CP} ${LDIR}.!Sprites		${RESAPP}.!Sprites	${CPFLAGS}
+	${CP} ${LDIR}.!Sprites		${RESDIR}.!Sprites	${CPFLAGS}
 	${CP} ${LDIR}.Messages		${RESDIR}.Messages	${CPFLAGS}
 	${CP} ${LDIR}.Res		${RESDIR}.Res		${CPFLAGS}
 	@echo
@@ -306,7 +303,6 @@ clean:
 	${WIPE}	odz		${WFLAGS}
 	${WIPE}	rm		${WFLAGS}
 	${WIPE} syms		${WFLAGS}
-	${RM}	s.AppName
 	${RM}	s.ModuleWrap
 	${RM}	o.dirs
 	@echo
@@ -324,7 +320,7 @@ o.dirs:
 	@${MKDIR} rm
 	@${MKDIR} syms
 	@${MKDIR} Targets
-	@${MKDIR} Targets.!Upgrade
+	@${MKDIR} Targets.${APP}
 	create o.dirs
 	stamp  o.dirs
 
@@ -360,8 +356,8 @@ oz.ModuleWrap: s.ModuleWrap s.AppName ${RESFILES}
 s.ModuleWrap: ${WRAPPER}
 	${CP} ${WRAPPER} $@ ${CPFLAGS}
 
-s.AppName: ${LDIR}.Messages
-	awk -f awk.AppName ${LDIR}.Messages > $@
+#s.AppName: ${LDIR}.Messages
+#	awk -f awk.AppName ${LDIR}.Messages > $@
 
 
 # -----------------------------------------------------------------------------
@@ -392,247 +388,3 @@ rm.!GUID: odz.ModuleWrap ${OBJSDZ} ${LIBSM} o.dirs
 
 # -----------------------------------------------------------------------------
 # Dynamic dependencies:
-oz.ModuleWrap: s.ModuleWrap
-oz.ModuleWrap: s.AppName
-oz.ModuleWrap: Hdr:ListOpts
-oz.ModuleWrap: Hdr:Macros
-oz.ModuleWrap: Hdr:System
-oz.ModuleWrap: Hdr:SWIs
-oz.ModuleWrap: Hdr:CPU.Generic26
-oz.ModuleWrap: Hdr:IO.GenericIO
-oz.ModuleWrap: Hdr:RISCOS
-oz.ModuleWrap: Hdr:ModHand
-oz.ModuleWrap: Hdr:EnvNumbers
-oz.ModuleWrap: Hdr:Proc
-oz.ModuleWrap: Hdr:FSNumbers
-oz.ModuleWrap: Hdr:NewErrors
-oz.ModuleWrap: Hdr:Services
-oz.ModuleWrap: Hdr:ResourceFS
-oz.ModuleWrap: Hdr:MsgTrans
-oz.ModuleWrap: Hdr:Variables
-oz.ModuleWrap: Hdr:UpCall
-oz.ModuleWrap: s.ResFiles
-oz.main:	c.main
-oz.main:	C:h.swis
-oz.main:	C:h.kernel
-oz.main:	C:h.kernel
-oz.main:	tbox:h.event
-oz.main:	tbox:h.wimp
-oz.main:	tbox:h.toolbox
-oz.main:	C:debuglib.h.DebugLib
-oz.main:	h.ui
-oz.main:	h.errors
-oz.main:	h.main
-oz.main:	C:h.kernel
-oz.main:	h.ui
-oz.main:	tbox:h.toolbox
-oz.main:	h.nvram
-oz.main:	h.dial
-oz.main:	h.ppp
-oz.main:	h.ftp
-oz.main:	h.progrmng
-oz.main:	<Lib$Dir>.zlib.h.zlib
-oz.main:	<Lib$Dir>.zlib.h.zconf
-oz.strings:	c.strings
-oz.strings:	h.strings
-oz.ui_main:	c.ui_main
-oz.ui_main:	h.ui_include
-oz.ui_main:	C:h.swis
-oz.ui_main:	C:h.kernel
-oz.ui_main:	h.dial
-oz.ui_main:	h.ui_tbox
-oz.ui_main:	tbox:h.event
-oz.ui_main:	tbox:h.wimp
-oz.ui_main:	tbox:h.toolbox
-oz.ui_main:	tbox:h.toolbox
-oz.ui_main:	tbox:h.window
-oz.ui_main:	tbox:h.gadgets
-oz.ui_main:	tbox:h.gadgets
-oz.ui_main:	tbox:h.menu
-oz.ui_main:	tbox:h.proginfo
-oz.ui_main:	tbox:h.iconbar
-oz.ui_main:	tbox:h.quit
-oz.ui_main:	tbox:h.wimplib
-oz.ui_main:	C:msglib.h.MsgLib
-oz.ui_main:	C:debuglib.h.DebugLib
-oz.ui_main:	h.ui_menu
-oz.ui_main:	h.ui_misc
-oz.ui_main:	h.ui_main
-oz.ui_main:	h.ui_types
-oz.ui_main:	h.strings
-oz.ui_main:	h.ui_globals
-oz.ui_menu:	c.ui_menu
-oz.ui_menu:	h.ui_include
-oz.ui_menu:	C:h.swis
-oz.ui_menu:	C:h.kernel
-oz.ui_menu:	h.ui_tbox
-oz.ui_menu:	tbox:h.event
-oz.ui_menu:	tbox:h.wimp
-oz.ui_menu:	tbox:h.toolbox
-oz.ui_menu:	tbox:h.toolbox
-oz.ui_menu:	tbox:h.window
-oz.ui_menu:	tbox:h.gadgets
-oz.ui_menu:	tbox:h.gadgets
-oz.ui_menu:	tbox:h.menu
-oz.ui_menu:	tbox:h.proginfo
-oz.ui_menu:	tbox:h.iconbar
-oz.ui_menu:	tbox:h.quit
-oz.ui_menu:	tbox:h.wimplib
-oz.ui_menu:	C:msglib.h.MsgLib
-oz.ui_menu:	C:debuglib.h.DebugLib
-oz.ui_menu:	h.ui_menu
-oz.ui_menu:	h.ui_globals
-oz.ui_misc:	c.ui_misc
-oz.ui_misc:	h.ui_include
-oz.ui_misc:	C:h.swis
-oz.ui_misc:	C:h.kernel
-oz.ui_misc:	h.ui_tbox
-oz.ui_misc:	tbox:h.event
-oz.ui_misc:	tbox:h.wimp
-oz.ui_misc:	tbox:h.toolbox
-oz.ui_misc:	tbox:h.toolbox
-oz.ui_misc:	tbox:h.window
-oz.ui_misc:	tbox:h.gadgets
-oz.ui_misc:	tbox:h.gadgets
-oz.ui_misc:	tbox:h.menu
-oz.ui_misc:	tbox:h.proginfo
-oz.ui_misc:	tbox:h.iconbar
-oz.ui_misc:	tbox:h.quit
-oz.ui_misc:	tbox:h.wimplib
-oz.ui_misc:	C:msglib.h.MsgLib
-oz.ui_misc:	C:debuglib.h.DebugLib
-oz.ui_misc:	h.ui_misc
-oz.dial:	c.dial
-oz.dial:	C:h.kernel
-oz.dial:	C:h.swis
-oz.dial:	h.ui
-oz.dial:	h.errors
-oz.dial:	h.main
-oz.dial:	C:h.kernel
-oz.dial:	h.ui
-oz.dial:	tbox:h.toolbox
-oz.dial:	tbox:h.wimp
-oz.dial:	h.dial
-oz.dial:	C:h.dialler
-oz.error:	c.error
-oz.error:	C:h.swis
-oz.error:	C:h.kernel
-oz.error:	C:h.signal
-oz.error:	C:h.kernel
-oz.error:	h.ui
-oz.error:	h.errors
-oz.error:	h.main
-oz.error:	C:h.kernel
-oz.error:	h.ui
-oz.error:	tbox:h.toolbox
-oz.error:	tbox:h.wimp
-oz.error:	<Lib$Dir>.zlib.h.zlib
-oz.error:	<Lib$Dir>.zlib.h.zconf
-oz.error:	h.ftp
-oz.error:	h.progrmng
-oz.error:	<Lib$Dir>.zlib.h.zlib
-oz.error:	h.ppp
-oz.error:	h.dial
-oz.error:	h.flash
-oz.flashstubs:	c.flashstubs
-oz.flashstubs:	C:h.kernel
-oz.flashstubs:	h.ui
-oz.flashstubs:	h.flashstubs
-oz.flashstubs:	C:h.kernel
-oz.flashstubs:	h.main
-oz.flashstubs:	C:h.kernel
-oz.flashstubs:	h.ui
-oz.flashstubs:	tbox:h.toolbox
-oz.flashstubs:	tbox:h.wimp
-oz.ftp:	c.ftp
-oz.ftp:	C:h.kernel
-oz.ftp:	h.ui
-oz.ftp:	h.main
-oz.ftp:	C:h.kernel
-oz.ftp:	h.ui
-oz.ftp:	tbox:h.toolbox
-oz.ftp:	tbox:h.wimp
-oz.ftp:	h.errors
-oz.ftp:	h.ftp
-oz.ftp:	h.progrmng
-oz.ftp:	<Lib$Dir>.zlib.h.zlib
-oz.ftp:	<Lib$Dir>.zlib.h.zconf
-oz.ftp:	<Lib$Dir>.zlib.h.zlib
-oz.ftp:	h.ppp
-oz.nvram:	c.nvram
-oz.nvram:	C:h.kernel
-oz.nvram:	h.ui
-oz.nvram:	h.errors
-oz.nvram:	h.main
-oz.nvram:	C:h.kernel
-oz.nvram:	h.ui
-oz.nvram:	tbox:h.toolbox
-oz.nvram:	tbox:h.wimp
-oz.nvram:	h.nvram
-oz.nvram:	TCPIPLibs:h.inetlib
-oz.nvram:	TCPIPLibs:sys.h.types
-oz.nvram:	TCPIPLibs:sys.h.cdefs
-oz.nvram:	TCPIPLibs:machine.h.endian
-oz.nvram:	TCPIPLibs:machine.h.ansi
-oz.nvram:	TCPIPLibs:machine.h.types
-oz.nvram:	TCPIPLibs:netinet.h.in
-oz.ppp:	c.ppp
-oz.ppp:	C:h.kernel
-oz.ppp:	C:h.swis
-oz.ppp:	h.ppp
-oz.ppp:	TCPIPLibs:sys.h.types
-oz.ppp:	TCPIPLibs:sys.h.cdefs
-oz.ppp:	TCPIPLibs:machine.h.endian
-oz.ppp:	TCPIPLibs:machine.h.ansi
-oz.ppp:	TCPIPLibs:machine.h.types
-oz.ppp:	TCPIPLibs:sys.h.dcistructs
-oz.ppp:	C:h.errno
-oz.ppp:	TCPIPLibs:sys.h.socket
-oz.ppp:	TCPIPLibs:sys.h.cdefs
-oz.ppp:	TCPIPLibs:sys.h.ioctl
-oz.ppp:	TCPIPLibs:sys.h.ttycom
-oz.ppp:	TCPIPLibs:sys.h.ioccom
-oz.ppp:	TCPIPLibs:sys.h.ioccom
-oz.ppp:	TCPIPLibs:sys.h.filio
-oz.ppp:	TCPIPLibs:sys.h.ioccom
-oz.ppp:	TCPIPLibs:sys.h.sockio
-oz.ppp:	TCPIPLibs:sys.h.ioccom
-oz.ppp:	TCPIPLibs:sys.h.cdefs
-oz.ppp:	TCPIPLibs:net.h.if
-oz.ppp:	TCPIPLibs:sys.h.socket
-oz.ppp:	TCPIPLibs:sys.h.time
-oz.ppp:	TCPIPLibs:sys.h.cdefs
-oz.ppp:	TCPIPLibs:net.h.if_arp
-oz.ppp:	TCPIPLibs:sys.h.socket
-oz.ppp:	TCPIPLibs:h.socklib
-oz.ppp:	TCPIPLibs:sys.h.types
-oz.ppp:	TCPIPLibs:sys.h.socket
-oz.ppp:	TCPIPLibs:sys.h.stat
-oz.ppp:	TCPIPLibs:sys.h.time
-oz.ppp:	TCPIPLibs:sys.h.cdefs
-oz.ppp:	TCPIPLibs:sys.h.time
-oz.ppp:	TCPIPLibs:sys.h.uio
-oz.ppp:	TCPIPLibs:sys.h.cdefs
-oz.ppp:	C:h.kernel
-oz.ppp:	h.ui
-oz.ppp:	h.errors
-oz.ppp:	h.main
-oz.ppp:	C:h.kernel
-oz.ppp:	h.ui
-oz.ppp:	tbox:h.toolbox
-oz.ppp:	tbox:h.wimp
-oz.progrmng:	c.progrmng
-oz.progrmng:	h.main
-oz.progrmng:	C:h.kernel
-oz.progrmng:	h.ui
-oz.progrmng:	tbox:h.toolbox
-oz.progrmng:	tbox:h.wimp
-oz.progrmng:	h.ftp
-oz.progrmng:	C:h.kernel
-oz.progrmng:	h.errors
-oz.progrmng:	h.progrmng
-oz.progrmng:	<Lib$Dir>.zlib.h.zlib
-oz.progrmng:	<Lib$Dir>.zlib.h.zconf
-oz.progrmng:	<Lib$Dir>.zlib.h.zlib
-oz.progrmng:	C:h.swis
-oz.progrmng:	h.flash
