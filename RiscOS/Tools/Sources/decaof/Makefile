@@ -5,69 +5,36 @@
 # ***********************************
 # Date       Name         Description
 # ----       ----         -----------
-# 09-Sep-98  SNB          Created.
+# 01-Mar-01  SNB          Created
 #
 
 #
 # Paths
 #
-LIBDIR  = ${INSTDIR}.Library.Acorn
-INSTAPP = ${INSTDIR}.Apps.!DecAOF
+COMPONENT = decaof
+TARGET    = decaof
 
-#
-# Generic options:
-#
-include Makefiles:StdTools
-
-CCFLAGS = -c -depend !Depend -ffah ${INCLUDES} ${DFLAGS} ${THROWBACK}
-ASFLAGS = -depend !Depend -Stamp -quit
-LBFLAGS = -c
-SQZFLAGS= -f
-
-#
-# Libraries
-#
-include Makefiles:AppLibs
-
+CFLAGS    = -Wpc -ffah -IC:CLX
+CDEFINES  = -DEXECUTE_ON_RISCOS
 DIRS      = o._dirs
 
-#
-# Include files
-#
-INCLUDES  = -IC:CLX -IC:
-DFLAGS    = -DEXECUTE_ON_RISCOS
+INSTAPP   = ${INSTDIR}.Apps.!DecAOF
+LIBDIR    = ${INSTDIR}.Library.Acorn
 
 #
 # Program specific options:
 #
-COMPONENT  = decaof
-TARGET     = ${COMPONENT}
-SOURCE     = 
-EXPORTS    = 
+OBJS       = decaof.o decasd.o
+LIBS       = ${CLXLIB} ${CLIB}
 
-OBJS= o.decaof o.decasd
-OBJSI= i.decaof i.decasd
-OBJSINST= oi.decaof oi.decasd oi.instlib
-
-HDRS=h.decasd 
-
-LIBS= ${CLXLIB} ${CLIB}
+include Makefiles:StdTools
+include Makefiles:AppLibs
+include Makefiles:AppStdRule
 
 #
-# Rule patterns
+# build a the library:
 #
-.SUFFIXES: .o .oi .s .c .c++ .i .cmhg .inst
-.c.o:;     ${CC} ${CCFLAGS} -o $@ $<
-.s.o:;     ${AS} ${ASFLAGS} -o $@ $<
-.cmhg.o:;  ${CM} ${CMFLAGS} -o $@ $<
-.cmhg.h:;  ${CM} ${CMFLAGS} -d $@ $<
-.c.i:;     ${CC} ${CCFLAGS} -c -C -E $< >> $@
-.inst.oi:; ${CC} ${CCFLAGS} -o $@ $<
-
-#
-# build the target:
-#
-all:	${TARGET}
+all:    ${TARGET}
 
 #
 # RISC OS ROM build rules:
@@ -79,12 +46,30 @@ export: export_${PHASE}
 
 install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
+        
+install_tool: ${TARGET}
+	${MKDIR} ${LIBDIR}.Docs
+	${CP} ${TARGET} ${LIBDIR}.${TARGET} ${CPFLAGS}
+	@echo ${COMPONENT}: tool installed in library
+
+install: install_resources install_tool
+	@echo ${COMPONENT}: install complete
+
+install_resources:
+	${MKDIR} ${INSTAPP}
+	${CP} LocalRes:!Boot ${INSTAPP}.!Boot ${CPFLAGS}
+	${CP} LocalRes:!Run ${INSTAPP}.!Run ${CPFLAGS}
+	${CP} LocalRes:!Help ${INSTAPP}.!Help ${CPFLAGS}
+	${CP} LocalRes:!Sprites ${INSTAPP}.!Sprites ${CPFLAGS}
+	${CP} LocalRes:!Sprites22 ${INSTAPP}.!Sprites22 ${CPFLAGS}
+	${CP} LocalRes:Messages ${INSTAPP}.Messages ${CPFLAGS}
+	${CP} LocalRes:Templates ${INSTAPP}.Templates ${CPFLAGS}
+	${CC} -C++ -E >${INSTAPP}.Desc LocalRes:Desc
+	${TIDYDESC}  ${INSTAPP}.Desc ${INSTAPP}.Desc
+	@echo ${COMPONENT}: FrontEnd app install in '${INSTAPP}'
 
 clean:
         ${WIPE} o ${WFLAGS}
-        ${WIPE} oi ${WFLAGS}
-        ${WIPE} i ${WFLAGS}
-        ${WIPE} inst ${WFLAGS}
         ${RM} ${COMPONENT}
         @echo ${COMPONENT}: cleaned
 
@@ -94,45 +79,16 @@ export_hdrs:
 export_libs: 
         @echo ${COMPONENT}: export complete (libs)
 
-install_tool: ${TARGET}
-	${CP} ${TARGET} ${LIBDIR}.${TARGET} ${CPFLAGS}
-        @echo ${COMPONENT}: installed in library
-
-install: install_tool install_dirs
-	${CP} LocalRes:!Boot ${INSTAPP}.!Boot ${CPFLAGS}
-	${CP} LocalRes:!Run ${INSTAPP}.!Run ${CPFLAGS}
-	${CP} LocalRes:!Help ${INSTAPP}.!Help ${CPFLAGS}
-	${CP} LocalRes:!Sprites ${INSTAPP}.!Sprites ${CPFLAGS}
-	${CP} LocalRes:!Sprites22 ${INSTAPP}.!Sprites22 ${CPFLAGS}
-	${CP} LocalRes:Messages ${INSTAPP}.Messages ${CPFLAGS}
-	${CP} LocalRes:Templates ${INSTAPP}.Templates ${CPFLAGS}
-	${CC} -C++ -E >${INSTAPP}.Desc LocalRes:Desc
-	@echo ${COMPONENT}: FrontEnd app install in '${INSTAPP}'
-
-install_dirs:
-	${MKDIR} ${LIBDIR}
-	${MKDIR} ${INSTAPP}
-
 ${DIRS}:
 	${MKDIR} o
-	${MKDIR} oi
-	${MKDIR} i
-	${MKDIR} inst
 	${TOUCH} $@
-
-preprocess: ${OBJSI} ${DIRS}
-	@echo ${COMPONENT}: preprocess build complete
-
-instrument: ${OBJSINST} inst.instlib ${DIRS}
-	${LD} ${LDFLAGS} -o ${COMPONENT}i ${OBJSINST} inst.instlib ${STUBS}
-	@echo ${COMPONENT}: instrument build complete
-
 
 #
 # Final link
 #
-${TARGET}: ${OBJS} ${LIBS} ${HDRS} ${DIRS}
+${TARGET}: ${OBJS} ${LIBS} ${DIRS}
         ${LD} ${LDFLAGS} -o ${COMPONENT} ${OBJS} ${LIBS}
-	${SQZ} ${SQZFLAGS} $@
+        ${SQZ} ${SQZFLAGS} $@
+        ${CHMOD} a+rx $@
 
 # Dynamic dependencies:
