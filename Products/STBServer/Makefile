@@ -8,8 +8,8 @@
 # Makefile for extracting and building all the server-side software
 # for the TFTP baseline support.
 
-all: scripts modgen modsqz mtftpd 
-	(cd ${TARDIR}; tar cf dist-server.tar blconf blbuild blswinst S94mtftpd mtftpd.conf modgen modsqz mtftpd)
+all: scripts modgen modsqz mtftpd unmodsqz
+	(cd ${TARDIR}; tar cf dist-server.tar blconf blbuild blswinst S94mtftpd mtftpd.conf modgen modsqz mtftpd unmodsqz)
 	compress ${TARDIR}/dist-server.tar
 	cp ${TARDIR}/dist-server.tar.Z dist-server-tar.Z
 	@echo All done
@@ -28,6 +28,10 @@ modgen resgen: clx
 modsqz: clx
 	(cd RiscOS/Tools/Sources/modsqz/ports/solaris; ./mklinks; make)
 	cp RiscOS/Tools/Sources/modsqz/ports/solaris/modsqz ${TARDIR}/modsqz
+
+unmodsqz: clx
+	(cd RiscOS/Tools/Sources/unmodsqz/ports/solaris; ./mklinks; make)
+	cp RiscOS/Tools/Sources/modsqz/ports/solaris/unmodsqz ${TARDIR}/unmodsqz
 
 mtftpd:
 	(cd RiscOS/Sources/Networking/TFTPserver/ports/solaris; ./mklinks; make ARCH=${ARCH})
