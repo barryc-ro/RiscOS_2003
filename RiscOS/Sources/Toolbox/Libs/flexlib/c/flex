@@ -46,7 +46,9 @@
 #include "h.flex"
 #include "h.swiextra"
 
+/* 'Big' magic number for specifying that there is no free space in the flex heap */
 #define NO_COMPACTION_NEEDED 0x7fffffff
+/* Auto compaction will only take place if this amount of free space or more is in the flex heap */
 #define AUTO_COMPACT_SIZE    (32*1024)
 
 #ifdef TRACE
@@ -411,17 +413,9 @@ int flex_compact(void)
   
   if (flex_to_compact != NO_COMPACTION_NEEDED)
   {
-//  p = (flex__rec*)(((char*)flex__base) + flex_to_compact);
-//  target = p;                                                         /* Target points to first free */
-    
-    p = (flex__rec*)flex__base;
-    while(p->anchor)
-    {
-      p = (flex__rec*) (((char*) (p + 1)) + roundup(p->size));
-    }
-    
-    target = p;
-    
+    p = (flex__rec*)(((char*)flex__base) + flex_to_compact);
+    target = p;                                                         /* Target points to first free */
+
     while((char *)p < flex__freep)                                  /* While still inside flex heap */
     {
       #ifdef TRACE
@@ -551,6 +545,7 @@ BOOL flex_midextend(flex_ptr anchor, int at, int by)
       by >= 0) flex_compact();
 
   p = ((flex__rec*) *anchor) - 1;
+
   if (p->anchor != anchor)
   {
     #ifdef TRACE
@@ -558,6 +553,7 @@ BOOL flex_midextend(flex_ptr anchor, int at, int by)
     #endif
     flex__fail(1);
   }
+
   if (at > p->size)
   {
     #ifdef TRACE
@@ -565,6 +561,7 @@ BOOL flex_midextend(flex_ptr anchor, int at, int by)
     #endif
     flex__fail(2);
   }
+
   if (by < 0 && (-by) > at)
   {
     #ifdef TRACE
@@ -572,65 +569,66 @@ BOOL flex_midextend(flex_ptr anchor, int at, int by)
     #endif
     flex__fail(3);
   }
-  if (by == 0) {
-    /* do nothing */
-  } else if (by > 0) { /* extend */
 
-    int growth = roundup(p->size + by) - roundup(p->size);
-    /* Amount by which the block will actually grow. */
+  if (by == 0) 
+  {
+    /* size to change by is zero so do nothing */
+  } 
+  else
+  {
+    if (by > 0) 
+    { /* extend */
+      int growth = roundup(p->size + by) - roundup(p->size);
+      /* Amount by which the block will actually grow. */
 
-    if (! flex__ensure(growth))
-    {
-      return FALSE;
+      if (!flex__ensure(growth))
+      {
+        /* Cannot get extra memory required */
+        return FALSE;
+      }
+
+      next = (flex__rec*) (((char*) (p + 1)) + roundup(p->size));
+      /* The move has to happen in two parts because the moving
+      of objects above is word-aligned, while the extension within
+      the object may not be. */
+  
+      flex__reanchor(next, growth);
+  
+      memmove(((char*) next) + roundup(growth), next, flex__freep - (char*) next);
+  
+      flex__freep += growth;
+  
+      memmove(((char*) (p + 1)) + at + by, ((char*) (p + 1)) + at, p->size - at);
+      p->size += by;
+
+      /* If using deferred compaction and the offset to the first free block is above the item being extended */
+      if (flex_to_compact != NO_COMPACTION_NEEDED &&
+          (flex__base + flex_to_compact) > (char*)p) flex_to_compact += growth;
     }
-
-    next = (flex__rec*) (((char*) (p + 1)) + roundup(p->size));
-    /* The move has to happen in two parts because the moving
-    of objects above is word-aligned, while the extension within
-    the object may not be. */
-
-    flex__reanchor(next, growth);
-
-    memmove(
-      ((char*) next) + roundup(growth),
-      next,
-      flex__freep - (char*) next);
-
-    flex__freep += growth;
-
-    memmove(
-      ((char*) (p + 1)) + at + by,
-      ((char*) (p + 1)) + at,
-      p->size - at);
-    p->size += by;
-
-  } else { /* The block shrinks. */
-    int shrinkage;
-
-    next = (flex__rec*) (((char*) (p + 1)) + roundup(p->size));
-
-    by = -by; /* a positive value now */
-    shrinkage = roundup(p->size) - roundup(p->size - by);
-      /* a positive value */
-
-    memmove(
-      ((char*) (p + 1)) + at - by,
-      ((char*) (p + 1)) + at,
-      p->size - at);
-    p->size -= by;
-
-    flex__reanchor(next, - shrinkage);
-
-    memmove(
-      ((char*) next) - shrinkage,
-      next,
-      flex__freep - (char*) next);
-
-    flex__freep -= shrinkage;
-
-    flex__give();
-
-  };
+    else
+    { /* The block shrinks. */
+      int shrinkage;
+  
+      next = (flex__rec*) (((char*) (p + 1)) + roundup(p->size));
+  
+      by = -by; /* a positive value now */
+      shrinkage = roundup(p->size) - roundup(p->size - by); /* a positive value */
+  
+      memmove(((char*) (p + 1)) + at - by, ((char*) (p + 1)) + at, p->size - at);
+      p->size -= by;
+  
+      flex__reanchor(next, -shrinkage);
+  
+      memmove(((char*) next) - shrinkage, next, flex__freep - (char*) next);
+  
+      flex__freep -= shrinkage;
+  
+      flex__give();
+      
+      if (flex_to_compact != NO_COMPACTION_NEEDED &&
+          ((char*)flex__base + flex_to_compact) > (char*)p) flex_to_compact -= shrinkage;
+    }
+  }
   
   return TRUE;
 }
@@ -675,14 +673,21 @@ int flex_reanchor(flex_ptr to_anchor, flex_ptr from_anchor)
 /* stack checking off */
 #pragma -s1
 
+/*************************************************/
+/* flex_budge()                                  */
+/*                                               */
+/* Called when underlying system asks us to move */
+/* all flex store up (if n +ve) or down by n     */
+/* bytes. If you succeed, put the store          */
+/* allocated in *a and return the size. size >=  */
+/* roundup(n) on successful exit, and will be a  */
+/* multiple of four. If you fail, return what we */
+/* can.  If n is -ve, no result is required:     */
+/* success is assumed.                           */
+/* Significant stack saving done 13-12-89 -- IDJ */
+/*************************************************/
+
 static int flex_budge(int n, void **a)
-/* The underlying system asks us to move all flex store up (if n +ve) or
-down by n bytes. If you succeed, put the store allocated in *a and return
-the size. size >= roundup(n) on successful exit, and will be a multiple of
-four. If you fail, return what we can.
-If n is -ve, no result is required: success is assumed.
-Significant stack saving done 13-12-89  -- IDJ
-*/
 {
   #ifdef TRACE
     if (debugfileptr) fprintf(debugfileptr, "flex_budge called\n");
@@ -691,12 +696,16 @@ Significant stack saving done 13-12-89  -- IDJ
   if (flex_needscompaction && flex_to_compact) flex_compact();
   
   /* no need to check flex initialised */
-#ifdef LIB_DEBUGGING
-  { _kernel_swi_regs r;
-    r.r[0] = 0x07;
-    _kernel_swi(OS_WriteC, &r, &r);
-  }
-#endif
+
+  #ifdef LIB_DEBUGGING
+    { 
+      _kernel_swi_regs r;
+      
+      /* Beep */
+      r.r[0] = 0x07;
+      _kernel_swi(OS_WriteC, &r, &r);
+    }
+  #endif
 
   if (n >= 0) /* all moving up */
   {
@@ -706,63 +715,63 @@ Significant stack saving done 13-12-89  -- IDJ
     /* try to satisfy the request */
     if (more > 0)   /* ie we have to increase slot */
     {
-        char *prev = flex__lim;
-        flex__lim += more;
+      char *prev = flex__lim;
+      flex__lim += more;
 
-#if 0
+      #if 0
         flex__wimpslot(&flex__lim);
-#endif
+      #endif
 
-        /* in-line implementation (of flex__wimpslot)  */
-        /*  to reduce stack requirements -- IDJ        */
+      /* in-line implementation (of flex__wimpslot)  */
+      /*  to reduce stack requirements -- IDJ        */
+      {
+        int slot = ((int) flex__lim);
+        _kernel_swi_regs r;
+        _kernel_oserror  *err;
+        int memlim, appspace, oldmemlim;
+
+        if (slot != -1) slot -= 0x8000;
+
+        /* read memory limit value */
+        r.r[0] = 0;
+        r.r[1] = 0;
+        r.r[2] = 0;
+        err = _kernel_swi(OS_ChangeEnvironment, &r, &r);
+        oldmemlim = memlim = r.r[1];
+
+        /* read appspace value */
+        r.r[0] = 14;  /* Application space */
+        r.r[1] = 0;
+        r.r[2] = 0;
+        err = _kernel_swi(OS_ChangeEnvironment, &r, &r);
+        appspace = r.r[1];
+
+        /* set memory limit before slot size change ... */
+        if(appspace > memlim)
         {
-           int slot = ((int) flex__lim);
-           _kernel_swi_regs r;
-           _kernel_oserror  *err;
-           int memlim, appspace, oldmemlim;
-
-           if (slot != -1) slot -= 0x8000;
-
-           /* read memory limit value */
            r.r[0] = 0;
-           r.r[1] = 0;
+           r.r[1] = appspace;
            r.r[2] = 0;
            err = _kernel_swi(OS_ChangeEnvironment, &r, &r);
-           oldmemlim = memlim = r.r[1];
-
-           /* read appspace value */
-           r.r[0] = 14;  /* Application space */
-           r.r[1] = 0;
-           r.r[2] = 0;
-           err = _kernel_swi(OS_ChangeEnvironment, &r, &r);
-           appspace = r.r[1];
-
-           /* set memory limit before slot size change ... */
-           if(appspace > memlim)
-           {
-              r.r[0] = 0;
-              r.r[1] = appspace;
-              r.r[2] = 0;
-              err = _kernel_swi(OS_ChangeEnvironment, &r, &r);
-           }
-
-           /* set wimpslot size */
-           r.r[0] = slot;
-           r.r[1] = -1;
-           err =_kernel_swi(Wimp_SlotSize, &r, &r);
-           slot = r.r[0];
-
-           flex__lim = (char*) slot + 0x8000;
-
-           /* .... and set memory limit back again */
-           if (appspace > memlim)
-           {
-              r.r[0] = 0;
-              r.r[1] = oldmemlim;
-              r.r[2] = 0;
-              err = _kernel_swi(OS_ChangeEnvironment, &r, &r);
-           }
         }
+
+        /* set wimpslot size */
+        r.r[0] = slot;
+        r.r[1] = -1;
+        err =_kernel_swi(Wimp_SlotSize, &r, &r);
+        slot = r.r[0];
+
+        flex__lim = (char*) slot + 0x8000;
+
+        /* .... and set memory limit back again */
+        if (appspace > memlim)
+        {
+          r.r[0] = 0;
+          r.r[1] = oldmemlim;
+          r.r[2] = 0;
+          err = _kernel_swi(OS_ChangeEnvironment, &r, &r);
+        }
+      }
 
         /* if we couldn't satisfy it, still give back what we can, */
         /* _kernel_alloc may be able to use it!!!!!                */
@@ -770,40 +779,36 @@ Significant stack saving done 13-12-89  -- IDJ
             roundupn = flex__lim - flex__freep; /*all we got*/
     }
 
-    /*flex__reanchor((flex__rec*) flex__base, roundupn);*/
+    
     {
-         flex__rec *p = (flex__rec*)flex__base;
-         while (1) {
-              if ((int) p >= (int) flex__freep) break;
-              *(p->anchor) = ((char*) (p + 1)) + roundupn;
-              p = (flex__rec*) (((char*) (p + 1)) + roundup(p->size));
-         };
-     }
-     memmove(
-            flex__base + roundupn,
-            flex__base,
-            flex__freep - flex__base);
-     *a = flex__base;
-     flex__base += roundupn;
-     flex__freep += roundupn;
-     return(roundupn);
-
-  } else { /* all moving down */
-    int roundupn = roundup(-n); /* a +ve value */
-
-    /*flex__reanchor((flex__rec*) flex__base, -roundupn);*/
-    {
-         flex__rec *p = (flex__rec*)flex__base;
-         while (1) {
-              if ((int) p >= (int) flex__freep) break;
-              *(p->anchor) = ((char*) (p + 1)) + roundupn;
-              p = (flex__rec*) (((char*) (p + 1)) + roundup(p->size));
-         };
+      flex__rec *p = (flex__rec*)flex__base;
+      while (1) 
+      {
+        if ((int) p >= (int) flex__freep) break;
+        *(p->anchor) = ((char*) (p + 1)) + roundupn;
+        p = (flex__rec*) (((char*) (p + 1)) + roundup(p->size));
+      }
     }
-    memmove(
-      flex__base - roundupn,
-      flex__base,
-      flex__freep - flex__base);
+    
+    memmove(flex__base + roundupn, flex__base, flex__freep - flex__base);
+    *a = flex__base;
+    flex__base += roundupn;
+    flex__freep += roundupn;
+    return(roundupn);
+  }
+  else
+  { /* all moving down */
+    int roundupn = roundup(-n); /* a +ve value */
+    {
+      flex__rec *p = (flex__rec*)flex__base;
+      while (1)
+      {
+        if ((int) p >= (int) flex__freep) break;
+        *(p->anchor) = ((char*) (p + 1)) + roundupn;
+        p = (flex__rec*) (((char*) (p + 1)) + roundup(p->size));
+      }
+    }
+    memmove(flex__base - roundupn, flex__base, flex__freep - flex__base);
     flex__base -= roundupn;
     flex__freep -= roundupn;
   };
