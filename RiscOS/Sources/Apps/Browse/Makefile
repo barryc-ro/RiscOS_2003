@@ -113,6 +113,7 @@ EVENTLIB	= tbox:o.eventlib
 TOOLBOXLIB	= tbox:o.toolboxlib
 WIMPLIB		= tbox:o.wimplib
 INETLIB		= TCPIPLibs:o.inetlib
+UNICODELIB      = C:Unicode.o.ucodelib
 
 LIBSM = \
  ${HTMLLIB}zm \
@@ -124,7 +125,8 @@ LIBSM = \
  ${INETLIB}zm \
  ${IMAGELIB}zm \
  ${PNGLIBZ} \
- ${ZLIB}zm
+ ${ZLIB}zm \
+ ${UNICODELIB}z
 
 LIBS = \
  ${CLIB} \
@@ -137,7 +139,8 @@ LIBS = \
  ${INETLIB} \
  ${IMAGELIB} \
  ${PNGLIB} \
- ${ZLIB}
+ ${ZLIB} \
+ ${UNICODELIB}
 
 LIBSD = \
  ${CLIB} \
@@ -150,7 +153,8 @@ LIBSD = \
  ${INETLIB} \
  ${IMAGELIB} \
  ${PNGLIB} \
- ${ZLIB}
+ ${ZLIB} \
+ ${UNICODELIB}d
 
 
 # -----------------------------------------------------------------------------
@@ -693,7 +697,6 @@ install_common: ${FILES}
 	${CP} ${LDIR}.Messages			${INSTDIR}.Messages		${CPFLAGS}n
 	${CP} ${LDIR}.Res			${INSTDIR}.Res			${CPFLAGS}n
 	${CP} ${LDIR}.Sprites			${INSTDIR}.Sprites		${CPFLAGS}n
-	${CP} HTMLLib:Resources.Encodings	${INSTDIR}.Encodings		${CPFLAGS}n
 	${MKDIR} ${INSTDIR}.User
 	-${CP} ${LDIR}.User.Hotlist		${INSTDIR}.User.Hotlist		${CPFLAGS}n
 
