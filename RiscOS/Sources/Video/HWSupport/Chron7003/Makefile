@@ -32,7 +32,7 @@ WFLAGS  = ~cfr~v
 # Program specific options:
 #
 COMPONENT = Chron7003
-SOURCE    = s.Chrontel
+SOURCE    = s.GetAll
 OBJECT    = o.Chrontel
 TARGET    = rm.Chrontel
 EXPORTS   = 
