@@ -69,10 +69,10 @@ COMPAT=		-DCOMPAT_INET4
 
 CFLAGS=		-ffah -zM -I${INCLUDES} -DINET -DCOMPAT_INET4 ${DEBUG}\
 		-zps1 -Wp -Ws -depend !Depend -c ${THROWBACK} \
-		-D${SYSTEM} ${EXTRACCFLAGS}
+		${EXTRACCFLAGS}
 C++FLAGS=	-ffa -zM -I${INCLUDES} -DINET -DCOMPAT_INET4 ${DEBUG}\
 		-zps1 -Wp -depend !Depend -c ${THROWBACK} \
-		-D${SYSTEM} ${EXTRAC++FLAGS}
+		${EXTRAC++FLAGS}
 
 
 CMHGFLAGS = -p -IC: -d h.header ${THROWBACK}
