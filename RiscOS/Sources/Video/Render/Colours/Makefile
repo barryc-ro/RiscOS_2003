@@ -82,6 +82,9 @@ Palettes.8desktop: MkTables.maketables rm.Colours
         MkTables.dosqueeze
         
 # Dynamic dependencies:
+MkTables.o.maketables:	MkTables.c.maketables
+MkTables.o.maketables:	C:h.swis
+MkTables.o.maketables:	C:h.kernel
 rm.Colours: s.Header
 rm.Colours: hdr:ListOpts
 rm.Colours: hdr:Macros
@@ -123,6 +126,3 @@ rm.Colours: s.DevicePal
 rm.Colours: s.DevicePal2
 rm.Colours: s.Enhanced
 rm.Colours: s.Tables32K
-MkTables.o.maketables:	MkTables.c.maketables
-MkTables.o.maketables:	C:h.swis
-MkTables.o.maketables:	C:h.kernel

@@ -105,3 +105,5 @@ rm.Fonts: s.Font_BasFP
 rm.Fonts: s.Funcache
 rm.Fonts: s.Fonts04
 rm.Fonts: s.Encoding
+rm.Fonts: s.Blending
+rm.Fonts: hdr:ITable
