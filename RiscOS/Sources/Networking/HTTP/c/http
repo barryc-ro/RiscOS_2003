@@ -41,6 +41,7 @@
  *		 SSL connection.
  * SJM 27-Feb-98 Removed sendv() use in send request and send request headers as they fail to work
  *		 (When using ssl) with the lotus domino server.
+ * SJM 02-Mar-98 Split off the PROXY_REDIRECT code to its own file. Changed MimeMap Module numbers.
  */
 
 #include <errno.h>
@@ -602,6 +603,53 @@ void fprintf_and_flush(FILE *file, char *format, ...)
   va_end(list);
 
   fflush(file);
+}
+#endif
+
+#if DEBUG
+static void dump(FILE *out, char *data, int size)
+{
+    int i;
+    for (i = 0; i < size; i++)
+    {
+	fdebugf(out, "%02x ", data[i]);
+	if ((i & 15) == 15)
+	    fdebugf(out, "\n");
+    }
+
+    if ((i & 15) != 0)
+	fdebugf(out, "\n");
+}
+#endif
+
+#if DEBUG && !defined(NO_SECURE)
+static long bio_dump_cb(BIO *bio, int cmd, char *argp, int argi, long argl, long ret)
+{
+    FILE *out = log_file;
+    if (cmd == (BIO_CB_READ|BIO_CB_RETURN))
+    {
+	fdebugf(out,"read from %08X [%08lX] (%d bytes => %ld (0x%X))\n",
+		bio,argp,argi,ret,ret);
+	if (ret > 0)
+	    dump(out,argp,ret);
+	return(ret);
+    }
+    else if (cmd == (BIO_CB_WRITE|BIO_CB_RETURN))
+    {
+	fdebugf(out,"write to %08X [%08lX] (%d bytes => %ld (0x%X))\n",
+		bio,argp,argi,ret,ret);
+	if (ret > 0)
+	    dump(out,argp,ret);
+	return(ret);
+    }
+    else if (cmd == (BIO_CB_CTRL|BIO_CB_RETURN))
+	return ret;
+    return ret == 0 ? 1 : ret;
+}
+
+static void bio_debug_open(SSL *s)
+{
+    BIO_set_callback((BIO *)SSL_get_rbio(s), bio_dump_cb);
 }
 #endif
 
@@ -1425,7 +1473,7 @@ _kernel_oserror *http_set_file_type(http_connection *c, int *ftptr)
 		 */
 
 		/* SWI XMimeMap_Translate */
-		_swix( 0xBCD00, _INR(0,2)|_OUT(3), mmmtype_MIME, hi->value,
+		_swix( 0x50B00, _INR(0,2)|_OUT(3), mmmtype_MIME, hi->value,
 		                                   mmmtype_RISCOS, &ft );
 #endif
                 /* pdh: remember to un-blat */
@@ -2066,209 +2114,6 @@ static _kernel_oserror *http_destroy( http_connection *c, int error )
     }
     return make_error( error );
 }
-
-
-#if PROXY_REDIRECT && !defined(NO_SECURE)
-
-#define HTTPS_PORT	443
-
-/*
- * Note modifies location!
- */
-
-static void get_address(char *location, struct sockaddr_in *sa)
-{
-    char *p;
-    struct hostent *hp;
-
-    sa->sin_family = AF_INET;
-    
-    if ( (p=strchr(location, ':')) != 0)
-    {
-	char *portstr;
-	int i;
-
-	portstr = p+1;
-
-	if ( (i=atoi(portstr)) != 0)
-	    sa->sin_port = htons((short)i);
-	    
-	*p = 0;
-    }
-
-    hp = gethostbyname(location);
-    if (hp)
-	memcpy(&sa->sin_addr, hp->h_addr, hp->h_length);
-    
-    fdebugf( log_file, "get address: '%s' host=0x%08lx, port=0x%04x (%d)\n",
-	     location,
-	     sa->sin_addr.s_addr,
-	     sa->sin_port, htons(sa->sin_port));
-}
-
-static _kernel_oserror *get_address_var(const char *var, struct sockaddr_in *sa)
-{
-    char *location = getenv(var);
-
-    memset(sa, 0, sizeof(*sa));
-
-    if (location == NULL || location[0] == 0)
-    {
-	fdebugf (log_file, "get_address: '%s' not set\n", var);
-	return NULL;
-    }
-
-    if ((location = strdup(location)) == NULL)
-        return make_error(err_NO_MEMORY);
-
-    get_address(location, sa);
-    
-    free(location);
-  
-    return NULL;
-}
-
-static _kernel_oserror *check_proxy_redirect(struct sockaddr_in *sa, int *pflags, char **object)
-{
-    struct sockaddr_in proxy, proxy_s;
-    _kernel_oserror *e;
-
-    if ((*pflags & http_open_flags_SECURE) == 0)
-	return NULL;
-
-    if ((e = get_address_var("HTTP$Proxy", &proxy)) != NULL)
-	return e;
-
-    /* If proxy not equal to the host then ignore
-     * This covers the situations where
-       1) the proxy var is not set
-       2) a different proxy is being used
-       3) no proxy is being used
-     */
-    if (proxy.sin_addr.s_addr != sa->sin_addr.s_addr || proxy.sin_port != sa->sin_port)
-    {
-	fdebugf( log_file, "check_proxy_redirect: proxy doesn't match\n" );
-	return NULL;
-    }
-
-    if ((e = get_address_var("HTTPS$Proxy", &proxy_s)) != NULL)
-	return e;
-
-    /* If SSL proxy not set then try and parse request string to bypass proxy altogether */
-    if (proxy_s.sin_addr.s_addr == 0 || proxy_s.sin_port == 0)
-    {
-	char *s, *path, *host;
-
-	fdebugf( log_file, "check_proxy_redirect: SSL proxy not specified - go direct\n" );
-
-	/* URL is https://host[:port]/path
-	 * We have already weeded out http: so it is safe to assume the above format
-	 * resolves the host and port and put in proxy_s, and put the new path back in object
-	 */
-
-	/* set host pointer. If not found then use original request */
-	s = strstr(*object, "//");
-	if (s == NULL)
-	    return NULL;
-	host = s + 2;
-
-	/* find start of path and allocate new path string, cope with
-           unterminated case for safety */
-	s = strchr(host, '/');
-	if (s)
-	{
-	    path = strdup(s);
-	    *s = 0;
-	}
-	else
-	{
-	    path = strdup("/");
-	}
-
-	/* init the proxy to HTTPS port */
-	memset(&proxy_s, 0, sizeof(proxy_s));
-	proxy_s.sin_port = htons((short)HTTPS_PORT);
-
-	/* resolve the host name (still in *object) */
-	get_address(host, &proxy_s);
-	if (proxy_s.sin_addr.s_addr == 0)
-	{
-	    fdebugf( log_file, "check_proxy_redirect: can't resolve host '%s'\n", host );
-	    return make_error(err_NO_SUCH_HOST);
-	}
-
-	/* replace the object ptr */
-	free(*object);
-	*object = path;
-	
-	/* not proxying to ensure tunnel flag disabled */
-	*pflags &= ~http_open_flags_TUNNEL;
-
-	fdebugf( log_file, "check_proxy_redirect: going direct to host '%s' path '%s'\n", host, path );
-    }
-    else
-    {
-	*pflags |= http_open_flags_TUNNEL;
-    }
-
-    /* Otherwise override the proxy information and set tunnelling */
-    *sa = proxy_s;
-
-    fdebugf( log_file, "check_proxy_redirect: to host=0x%08lx, port=0x%04x (%d)\n",
-	     sa->sin_addr.s_addr,
-	     sa->sin_port, htons(sa->sin_port));
-
-    return NULL;
-}
-#endif
-
-#if DEBUG
-static void dump(FILE *out, char *data, int size)
-{
-    int i;
-    for (i = 0; i < size; i++)
-    {
-	fdebugf(out, "%02x ", data[i]);
-	if ((i & 15) == 15)
-	    fdebugf(out, "\n");
-    }
-
-    if ((i & 15) != 0)
-	fdebugf(out, "\n");
-}
-#endif
-
-#if DEBUG && !defined(NO_SECURE)
-
-static long bio_dump_cb(BIO *bio, int cmd, char *argp, int argi, long argl, long ret)
-{
-    FILE *out = log_file;
-    if (cmd == (BIO_CB_READ|BIO_CB_RETURN))
-    {
-	fdebugf(out,"read from %08X [%08lX] (%d bytes => %ld (0x%X))\n",
-		bio,argp,argi,ret,ret);
-	if (ret > 0)
-	    dump(out,argp,ret);
-	return(ret);
-    }
-    else if (cmd == (BIO_CB_WRITE|BIO_CB_RETURN))
-    {
-	fdebugf(out,"write to %08X [%08lX] (%d bytes => %ld (0x%X))\n",
-		bio,argp,argi,ret,ret);
-	if (ret > 0)
-	    dump(out,argp,ret);
-	return(ret);
-    }
-    else if (cmd == (BIO_CB_CTRL|BIO_CB_RETURN))
-	return ret;
-    return ret == 0 ? 1 : ret;
-}
-
-static void bio_debug_open(SSL *s)
-{
-    BIO_set_callback((BIO *)SSL_get_rbio(s), bio_dump_cb);
-}
-#endif
 
         /*===================*
          *   SWI HTTP_Open   *
@@ -3243,7 +3088,7 @@ static _kernel_oserror *http_maptoriscos(http_maptoriscos_args *args)
 {
 #if USE_MIMEMAPMOD
     /* SWI XMimeMap_Translate */
-    return _swix( 0xBCD00, _INR(0,2)|_OUT(3), mmmtype_MIME, args->in.extn,
+    return _swix( 0x50B00, _INR(0,2)|_OUT(3), mmmtype_MIME, args->in.extn,
 		  mmmtype_RISCOS, &arg->out.ft );
 #else
     args->out.ft = mime_map_to_riscos(args->in.extn);
@@ -3257,7 +3102,7 @@ static _kernel_oserror *http_mapfromriscos(http_mapfromriscos_args *args)
     static char result[128];
 
     /* SWI XMimeMap_Translate */
-    return _swix( 0xBCD00, _INR(0,3)|_OUT(3), mmmtype_RISCOS, args->in.ft,
+    return _swix( 0x50B00, _INR(0,3)|_OUT(3), mmmtype_RISCOS, args->in.ft,
 		  mmmtype_MIME, result,
 		  &arg->out.extn );
 #else
@@ -3686,7 +3531,11 @@ char* http_getline(http_connection *c, int readResponse)
     }
 
 #if EXTEND_BUFFER
-    /* need to loop to ensure that all the data is read from the internet module */
+    /* need to loop to ensure that all the data is read from the internet module
+     * It only loops if the input buffer is full after reading a batch of data so
+     * it can check if there is still data waiting to be read after we've extended
+     * the input buffer.     
+     */
     for (;;)
 #endif
     {
