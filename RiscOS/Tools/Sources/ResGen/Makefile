@@ -54,7 +54,7 @@ CLXLIB    = C:CLX.o.clxlib
 # Include files
 #
 INCLUDES  = -IC: -IC:CLX
-DFLAGS    = -DDDE -DDEBUGGING=0
+DFLAGS    =
 
 #
 # Program specific options:
@@ -115,8 +115,8 @@ export_libs:
         @echo ${COMPONENT}: export complete (libs)
 
 
-${MODGEN}: modgen.o veneers.o ${CLIB}
-	${LD} ${LDFLAGS} -o $@ modgen.o veneers.o ${CLIB}
+${MODGEN}: modgen.o ${CLXLIB} ${CLIB}
+	${LD} ${LDFLAGS} -o $@ modgen.o ${CLXLIB} ${CLIB}
 	${SQUEEZE} ${SQZFLAGS} $@
 
 ${RESGEN}: resgen.o rveneers.o ${CLIB}
