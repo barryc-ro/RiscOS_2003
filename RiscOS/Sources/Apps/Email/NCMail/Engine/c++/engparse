@@ -34,6 +34,8 @@
 #include "enginit.h"
 #include "engprocess.h"
 
+static char scrapf1[] = "<Wimp$ScrapDir>.TempBody";
+static char scrapf2[] = "<Wimp$ScrapDir>.TempMime";
 
 eng_rcode FinishParseMessage(MessageDescriptor *msgptr);
 
@@ -49,7 +51,7 @@ eng_rcode GetHeader(char **dest, headers *hdrs, ELIB_HDR_TYPE type)
   if (h)
   {
     code = h->GetBodyLen(len);
-    dprintf(("Eng", "Got BodyLen, len=%d, code=%d\n",len,code));
+/*     dprintf(("Eng", "Got BodyLen, len=%d, code=%d\n",len,code)); */
     if (code < 0)
       return (eng_rcode) code;
     else if (!len)
@@ -63,7 +65,7 @@ eng_rcode GetHeader(char **dest, headers *hdrs, ELIB_HDR_TYPE type)
     }
   
     code = h->GetUnfoldedNoCommentsBody(ptr, len);
-    dprintf(("Eng", "Got Body, len=%d, code=%d\n",len,code));
+/*     dprintf(("Eng", "Got Body, len=%d, code=%d\n",len,code)); */
     if (code < 0)
       return (eng_rcode) code;
 
@@ -209,6 +211,7 @@ void FinishParseHeader(void)
   headers *hdrs = state.download.ent->GetHdrs();
   from *h = (from *) hdrs->FindHdr(ELIB_HDR_FROM);
 
+  state.download.rc = ENG_COMPLETED;
   if (!h)
     state.download.substate = downloadfailure;
   else
@@ -217,7 +220,10 @@ void FinishParseHeader(void)
     if (len)
     {
       if ((msg->fromreal = malloc(len + 1)) == 0)
+      {
+        state.download.rc = ENG_NOSPACEFORMSG;
         state.download.substate = downloadfailure;
+      }
       else
       {
         code = (eng_rcode) h->GetRealName(msg->fromreal, len);
@@ -232,7 +238,10 @@ void FinishParseHeader(void)
     else if (len)
     {
       if ((msg->fromaddr = malloc(len + 1)) == 0)
+      {
+        state.download.rc = ENG_NOSPACEFORMSG;
         state.download.substate = downloadfailure;
+      }
       else
       {
         code = (eng_rcode) h->GetAddress(msg->fromaddr, len);
@@ -265,7 +274,7 @@ void FinishParseHeader(void)
   {
     state.download.msg = msg->next;
     state.download.substate = readytodownload;
-    msg->flags &= ~NEWLYCREATED;
+    msg->flags &= ~(NEWLYCREATED + ERROR);
   }
 
 }
@@ -323,7 +332,8 @@ eng_rcode ParseMime(MIMEentity *ent, MessageDescriptor *msgptr)
 
     headers *hdrs = ent->GetHdrs();
     e->ent = (entity *) ent;
-    code = GetHeader(&e->typestr, hdrs, ELIB_HDR_CONTENT_TYPE);
+    if ((code = GetHeader(&e->typestr, hdrs, ELIB_HDR_CONTENT_TYPE)) == ENG_NOSPACEFORMSG)
+      return code;
 
     dprintf(("Eng", "Number of entities in message = %d\n",msgptr->entity_num));
     /*
@@ -333,7 +343,10 @@ eng_rcode ParseMime(MIMEentity *ent, MessageDescriptor *msgptr)
 
     if (!msgptr->charset)
     {
-/*     code = GetHeader(&e->charset, hdrs, ELIB_HDR_CHARSET); */
+#ifdef gorilla
+      if ((code = GetHeader(&e->charset, hdrs, ELIB_HDR_CHARSET) == ENG_NOSPACEFORMSG)
+        return code;
+#endif
       if (e->charset)
         msgptr->charset = e->charset;
     }
@@ -345,6 +358,7 @@ eng_rcode ParseMime(MIMEentity *ent, MessageDescriptor *msgptr)
       case ELIB_CT_TEXT :
       case ELIB_CT_MESSAGE :
 
+        dprintf(("Eng", "Setting entity flags to OK\n"));
         e->flags |= ENTITY_OK;
         break;
 
@@ -352,11 +366,13 @@ eng_rcode ParseMime(MIMEentity *ent, MessageDescriptor *msgptr)
       case ELIB_CT_MODEL :
       case ELIB_CT_UNKNOWN :
 
+        dprintf(("Eng", "Setting entity flags to BEST\n"));
         e->flags |= ENTITY_BEST;
         break;
 
       default :
 
+        dprintf(("Eng", "Setting entity flags to NOT_OK\n"));
         e->flags |= ENTITY_NOT_OK;
         break;
     }
@@ -385,8 +401,13 @@ void StartParseMessage(void)
     file = SetFilename(state.retrieve.msg->ID, false);
     len = GetFileLength(file);
     state.retrieve.rfc = new rfc822msg(true, file, 0, len, true);
-    state.retrieve.substate = parsing;
-    dprintf(("Eng", "About to parse message %d\n",state.retrieve.msg->ID));
+    if (!state.retrieve.rfc)
+      state.retrieve.substate = downloadfailure;
+    else
+    {
+      state.retrieve.substate = parsing;
+      dprintf(("Eng", "About to parse message %d\n",state.retrieve.msg->ID));
+    }
   }
 }
 
@@ -430,29 +451,29 @@ void FinishParseMessage(void)
   msg->elibobj = state.retrieve.rfc;
 
   /* get remaining headers */
-  if ((code = GetHeader(&msg->to, hdrs, ELIB_HDR_TO)) < 0)
+  if ((code = GetHeader(&msg->to, hdrs, ELIB_HDR_TO)) == ENG_NOSPACEFORMSG)
     state.retrieve.rc = code;
-  else
+  else if (code >= 0)
     dprintf(("Eng", "To = %s\n",msg->to));
 
-#ifdef gorilla
-  /* to be added when CC and charset are handled by Elib */
-  if ((code = GetHeader(&msg->cc, hdrs, ELIB_HDR_CC)) < 0)
+  if ((code = GetHeader(&msg->cc, hdrs, ELIB_HDR_CC)) == ENG_NOSPACEFORMSG)
   {
     state.retrieve.rc = code;
   }
-  else
+  else if (code >= 0)
     dprintf(("Eng", "CC = %s\n",msg->cc));
 
-  if ((code = GetHeader(&msg->charset, hdrs, ELIB_HDR_CHARSET)) < 0)
+#ifdef gorilla
+  /* to be added when charset is handled by Elib */
+  if ((code = GetHeader(&msg->charset, hdrs, ELIB_HDR_CHARSET)) == ENG_NOSPACEFORMSG)
     state.retrieve.rc = code;
-  else
+  else if (code >= 0)
     dprintf(("Eng", "charset = %s\n",msg->charset));
 #endif
 
-  if ((code = GetHeader(&msg->datestr, hdrs, ELIB_HDR_DATE)) < 0)
+  if ((code = GetHeader(&msg->datestr, hdrs, ELIB_HDR_DATE)) == ENG_NOSPACEFORMSG)
     state.retrieve.rc = code;
-  else
+  else if (code >= 0)
     dprintf(("Eng", "Date = %s\n",msg->datestr));
 
   if (ent == NULL)
@@ -494,14 +515,20 @@ void WriteOutSlice(void)
 {
 
   clock_t t = clock();
+  ELib_rcode code;
 
-  ELib_rcode code = state.retrieve.msgbody->WriteOut(state.retrieve.context, t + 25, state.retrieve.file);
   dprintf(("Eng", "Entering WriteOutSlice\n"));
+  if (state.retrieve.enc == 0)
+    code = state.retrieve.msgbody->WriteOut(state.retrieve.context, t + 25, state.retrieve.file);
+  else
+    code = state.retrieve.msgbody->RemoveEncoding(state.retrieve.context, t + 25, "", state.retrieve.file, 0x1000);
+
   if (code < 0)
   {
     /* error has occurred during writing out */
     dprintf(("Eng", "Error while writing out body\n"));
     state.retrieve.substate = writefailure;
+    state.retrieve.ent->flags = ENTITY_NOT_OK;
   }
   else if (code != ELIB_RUNNING)
   {
@@ -534,8 +561,73 @@ void StartRetrieve(void)
   {
     state.retrieve.file = fopen(state.retrieve.ent->fname, "w");
     state.retrieve.msgbody = state.retrieve.ent->ent->GetBody();
+    state.retrieve.ent->ent->GetEncoding(state.retrieve.enc);
+    dprintf(("Eng", "Encoding for entity = %d\n",state.retrieve.enc));
     state.retrieve.substate = writing;
   }
+
+}
+
+
+void AssembleMessage(MessageDescriptor *msg)
+{
+  
+  ELib_rcode code;
+
+  MIMEtext *ent = new MIMEtext(true, scrapf2, 0, 0, ELIB_CT_TEXT_PLAIN, true);
+  if (!ent)
+  {
+    state.send.substate = parsefailure;
+    return;
+  }
+
+  code = ent->ReplaceBody(state.send.msgbody);
+  if (code < 0)
+  {
+    state.send.substate = parsefailure;
+    return;
+  }
+
+  to tohdr(false, 0, 0, 0, true);
+  subject *subhdr = new subject(false, 0, 0, 0, true);
+  from fromhdr(false, 0, 0, 0, true);
+
+  tohdr.SetAddress(msg->to);
+  fromhdr.SetRealName(realname);
+  fromhdr.SetAddress(emailaddr);
+
+  rfc822msg *rfc = new rfc822msg(true, 0, 0, 0, true);
+  if (!rfc)
+  {
+    state.send.substate = parsefailure;
+    return;
+  }
+
+  headers *hdrs = rfc->GetHdrs();
+  code = rfc->SetTo(tohdr);
+  if (code >= 0)
+    code = rfc->SetFrom(fromhdr);
+  if (code < 0)
+  {
+    state.send.substate = parsefailure;
+    return;
+  }
+
+  code = subhdr->SetBody(msg->subject);
+  if (code >= 0)
+    code = hdrs->AddHdr(*subhdr);
+  if (code < 0)
+  {
+    delete subhdr;
+    state.send.substate = parsefailure;
+    return;
+  }
+
+  state.send.file = fopen(SetFilename(msg->ID, true), "w");
+  dprintf(("Eng", "File handle for writing out is %d\n",state.send.file));
+  *rfc += *ent;
+  state.send.rfc = rfc;
+  state.send.substate = readytowrite;
 
 }
 
@@ -547,7 +639,7 @@ void DoCreateMessage(void)
   {
     case readytocreate :
 
-      dprintf(("Eng", "Substate is readytocreate\n"));
+      dprintf(("Eng", "Create substate is readytocreate\n"));
       if (state.state & CREATE)
       {
         state.state &= ~CREATE;
@@ -567,6 +659,7 @@ void DoCreateMessage(void)
 
     case readytoparse :
 
+      dprintf(("Eng", "Create substate is readytoparse\n"));
       break;
   }
 
@@ -582,77 +675,68 @@ void DoSend(void)
   switch (state.send.substate)
   {
     case readytoparse :
-    {
-      rfc822msg *rfc = new rfc822msg(true, 0, 0, 0, true);
-      headers *hdrs = rfc->GetHdrs();
-      int len = GetFileLength(state.send.fname);
-      MIMEtext *ent = new MIMEtext(true, state.send.fname, 0, 0, ELIB_CT_TEXT_PLAIN, true);
-      char *file = SetFilename(msg->ID, true);
-      FILE *f = fopen(file, "w");
-      to tohdr(false, 0, 0, 0, true);
-      subject* subhdr = new subject(false, 0, 0, 0, true);
-      from fromhdr(false, 0, 0, 0, true);
-      char *ptr;
 
-      dprintf(("Eng", "Body is in file %s\n",state.send.fname));
-      dprintf(("", "New RFC822 created at 0x%x, headers at 0x%x\n",rfc,hdrs));
-dprintf(("", "About to parse new message body in file %s\n",state.send.fname));
+      dprintf(("Eng", "Send substate is readytoparse\n"));
       if ((code = new_context(&state.send.context)) < 0)
       {
         /* error setting up context */
        dprintf(("Eng", "Error setting up context, code=%d\n",code));
+       state.send.substate = parsefailure;
       }
       else
       {
-        clock_t t = clock();
-/*         code = tohdr.SetAddress("awrigley@acorn.com"); */
-/*         dprintf(("Eng", "To SetAddress, rc=%d\n",code)); */
-/*         code = tohdr.SetRealName(""); */
-/*         dprintf(("Eng", "To SetRealName, rc=%d\n",code)); */
-        code = fromhdr.SetAddress(emailaddr);
-        dprintf(("Eng", "From SetAddress, rc=%d\n",code));
-        code = fromhdr.SetRealName(realname);
-        dprintf(("Eng", "From SetRealName, rc=%d\n",code));
-/*         code = rfc->SetTo(tohdr); */
-/*         dprintf(("Eng", "SetTo, rc=%d\n",code)); */
-        code = rfc->SetFrom(fromhdr);
-        dprintf(("Eng", "SetFrom, rc=%d\n",code));
-
-        code = tohdr.SetBody("awrigley@acorn.com");
-        dprintf(("Eng", "To SetBody, rc=%d\n",code));
-        dprintf(("Eng", "To SetBody, rc=%d\n",code));
-/*         code = hdrs->AddHdr(tohdr); */
-        code = rfc->SetTo(tohdr);
-        dprintf(("Eng", "Adding to header, rc=%d\n",code));
-        code = subhdr->SetBody(msg->subject);
-        dprintf(("Eng", "Subject SetBody, rc=%d\n",code));
-        code = hdrs->AddHdr(*subhdr);
-        if (code < ELIB_RUNNING)
-          delete subhdr;
-        dprintf(("Eng", "Adding subject header, rc=%d\n",code));
-
-/*         *rfc += *ent; */
-
-        GetHeader(&ptr, hdrs, ELIB_HDR_TO);
-        dprintf(("Eng", "To header = %s\n",ptr));
-        free(ptr);
-/*         GetHeader(&ptr, hdrs, ELIB_HDR_FROM); */
-/*         dprintf(("Eng", "From header = %s\n",ptr)); */
-/*         free(ptr); */
-        GetHeader(&ptr, hdrs, ELIB_HDR_SUBJECT);
-        dprintf(("Eng", "Subject header = %s\n",ptr));
-        free(ptr);
-
-        code = ent->WriteOut(state.send.context, t + 500, f);
-        dprintf(("Eng", "Writing out file\n"));
-        fclose(f);
-        LockFile(SetFilename(msg->ID, true));
-
-        SendMessage();
+        uint32 len = GetFileLength(state.send.bodyname);
+        state.send.msgbody = new body(true, state.send.bodyname, 0, len, ELIB_TE_NONE, true);
+        state.send.substate = readytoencode;
       }
-      state.state &= ~SEND;
+
       break;
-    }
+
+    case parsefailure :
+      
+      /* creation of new message has failed */
+      dprintf(("Eng", "Send substate is parsefailure\n"));
+      break;
+      
+    case readytoencode :
+
+      dprintf(("Eng", "Send substate is readytoencode\n"));
+      code = state.send.msgbody->ApplyEncoding(state.send.context, clock() + 25, ELIB_TE_7BIT, scrapf1, 0x1000);
+      if (code < 0)
+        state.send.substate = parsefailure;
+      else if (code != ELIB_RUNNING)
+        state.send.substate = encoded;
+
+      break;
+
+    case encoded :
+
+      dprintf(("Eng", "Send substate is encoded\n"));
+      AssembleMessage(msg);
+      break;
+
+    case readytowrite :
+
+      dprintf(("Eng", "Send substate is readytowrite\n"));
+      code = state.send.rfc->WriteOut(state.send.context, clock() + 25, state.send.file);
+      dprintf(("Eng", "Writing out file\n"));
+      if (code < 0)
+        state.send.substate = parsefailure;
+      else if (code != ELIB_RUNNING)
+        state.send.substate = writedone;
+
+    case writedone :
+
+      dprintf(("Eng", "Send substate is writedone\n"));
+      fclose(state.send.file);
+      LockFile(SetFilename(msg->ID, true));
+      remove(scrapf2);
+  
+      state.state &= ~SEND;
+      SendMessage();
+      dprintf(("Eng", "Removing scrapfile %ssuccessfully\n",(remove(scrapf1)) ? "un" : ""));
+
+      break;
   }
 
 }

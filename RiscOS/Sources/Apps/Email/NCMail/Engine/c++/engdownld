@@ -72,6 +72,48 @@ void FinishHeaders(void)
 }
 
 
+void DownloadFailure(MessageDescriptor *msg, uint32 size, bool headers)
+{
+
+  char *file = SetFilename(msg->ID, headers);
+  UnlockFile(file);
+  remove(file);
+  if (msg->flags & ERROR)
+  {
+    /*
+    ** Must be second time around so we've obviously
+    ** already failed once.
+    ** In that case ignore this message and move on to next.
+    */
+    if (headers)
+      ourmboxin->flags |= MBOXINCOMPLETE;
+    state.download.msg = msg->next;
+  }
+  else
+  {
+    if (state.download.rc == ENG_NOSPACEFORMSG)
+    {
+      /*
+      ** There has been a malloc failure so try to free memory
+      ** by removing old message files.
+      ** How much should we clear?
+      ** Value set to 8K at present but this is a guess.
+      */
+
+      if (!ClearMemory(size))
+      {
+        /* attempt to clear memory has failed -
+           what do we do now? */
+      }
+    }
+
+    /* try to download once more*/
+    msg->flags |= ERROR;
+    state.download.substate = readytodownload;
+  }
+}
+
+
 void DLReady(bool b)
 {
   state.download.substate = readytodownload;
@@ -136,25 +178,13 @@ void DownloadHeader(void)
     case downloadfailure :
 
       dprintf(("Eng", "substate = downloadfailure\n"));
-      /* header download or parse has failed - 
-         for the moment we'll just go on to the next */
-      RemoveObj((MBoxOpCB**) &state.download.hdrsobj);
-      file = SetFilename(msg->ID, true);
-      UnlockFile(file);
-      remove(file);
-      msg->flags |= ERROR;
-      ourmboxin->flags |= MBOXINCOMPLETE;
-      state.download.msg = msg->next;
-      state.download.substate = readytodownload;
-      
       /*
-      ** We need to decide what to do at this point - 
-      ** do we try again, and if so how many times,
-      ** or do we junk the descriptor and ignore the message?
-      **
-      ** Message is still marked as NEWLYCREATED, so we could
-      ** just go round the loop again.
+      ** Header download or parse has failed.
+      ** If this is the second failure, skip this message.
+      ** Otherwise try to get it again.
       */
+      RemoveObj((MBoxOpCB**) &state.download.hdrsobj);
+      DownloadFailure(msg, 0x2000, true);
 
       break;
 
@@ -196,6 +226,13 @@ void DownloadMessage(void)
       dprintf(("Eng", "substate = readytodownload\n"));
       if(!msg)
       {
+        /*
+        ** Need to check the flag to see if any have been
+        ** skipped because of size.
+        ** If so, see if we still have memory and go back to
+        ** download them.
+        */
+        
         /* all messages now downloaded */
         dprintf(("Eng", "All messages downloaded\n"));
         state.state &= ~DOWNLOADMSG;
@@ -221,29 +258,37 @@ void DownloadMessage(void)
 
       else
       {
-        uint32 size;
-
-        code = msg->mboxobj->GetSize(size);
-        dprintf(("Eng", "Message size=%d\n",size));
+        code = msg->mboxobj->GetLength(state.download.size);
+        dprintf(("Eng", "Message size=%d\n",state.download.size));
         if (code < 0)
         {
           /* some kind of error in gettingsize */
           dprintf(("Eng", "Error returned from GetSize method\n"));
           state.download.substate = downloadfailure;
         }
-        else if (ourmboxin->maxsize >= size)
+        else
         {
-          msg->flags |= DOWNLOADING;
-          file = SetFilename(msg->ID, false);
-          state.download.substate = idle;
-
-          state.download.msgobj = new MBoxOpCB_getmsg_file((MBoxCBHandlerFn) eng_mbox_cbfunc, file, code, (void *) DOWNLOADMSG);
-          code = msg->mboxobj->GetMessage(state.download.msgobj);
-          if (code < 0)
+          if (ourmboxin->maxsize >= state.download.size)
           {
-            /* an error of some sort - skip this message */
-            state.download.substate = downloadfailure;
-            state.download.rc = (eng_rcode) code;
+            msg->flags |= DOWNLOADING;
+            file = SetFilename(msg->ID, false);
+            state.download.substate = idle;
+
+            state.download.msgobj = new MBoxOpCB_getmsg_file((MBoxCBHandlerFn) eng_mbox_cbfunc, file, code, (void *) DOWNLOADMSG);
+            code = msg->mboxobj->GetMessage(state.download.msgobj);
+            if (code < 0)
+            {
+              /* an error of some sort - skip this message */
+              state.download.substate = downloadfailure;
+              state.download.rc = (eng_rcode) code;
+            }
+          }
+          else
+          {
+            dprintf(("Eng", "Skipping this message - too big\n"));
+            /* set a flag here so we know some have been skipped */
+            state.download.msg = msg->next;
+            state.download.substate = readytodownload;
           }
         }
       }
@@ -253,20 +298,10 @@ void DownloadMessage(void)
     case downloadfailure :
 
       dprintf(("Eng", "substate = downloadfailure, rc = %d\n",state.download.rc));
-      /* message download or parse has failed - 
-         for the moment we'll just go on to the next */
+      /* message download or parse has failed */
       RemoveObj((MBoxOpCB**) &state.download.msgobj);
       msg->flags &= ~(DOWNLOADED + DOWNLOADING);
-      file = SetFilename(msg->ID, false);
-      UnlockFile(file);
-      remove(file);
-      state.download.msg = msg->next;
-      state.download.substate = readytodownload;
-
-      /*
-      ** We need to decide what to do at this point - 
-      ** do we try again, and if so how many times?
-      */
+      DownloadFailure(msg, state.download.size, false);
 
       break;
 
@@ -297,7 +332,7 @@ void DoRetrieve(void)
       uint32 size;
 
       dprintf(("Eng", "substate = readytoretrieve\n"));
-      code = msg->mboxobj->GetSize(size);
+      code = msg->mboxobj->GetLength(size);
       dprintf(("Eng", "Message size=%d\n",size));
       if (code < 0)
       {
