@@ -112,6 +112,10 @@ OBJSIO =\
 
 EXPORTS =
 
+BBETYPE = passfilter
+bbe-passfilter: bbe-generic
+  BBE_Export_Dir Resources.${USERIF}
+
 # ------------------------------------------------------------------------------
 # Rule patterns
 #
