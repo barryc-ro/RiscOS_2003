@@ -46,11 +46,12 @@ UNIXLIB   = TCPIPLibs:o.unixlibzm
 LIBS      = <Lib$Dir>.tboxlibs.o.wimplib
 C++LIB    = <Lib$Dir>.c++lib.o.c++libz
 LIBSD     = <Lib$Dir>.DebugLib.o.debuglibzm
+ASMUTILS  = C:AsmUtils.o.AsmUtilsZM
 
 #
 # Include files
 #
-INCLUDES = -IC:
+INCLUDES = -IC: -IC:AsmUtils
 
 # DFLAGS should be NULL for any non-debugging release
 DFLAGS    =
@@ -73,7 +74,6 @@ OBJS      =	\
  o.header	\
  o.misc 	\
  o.module	\
- o.usermode	\
  o.prime
 
 #
@@ -119,7 +119,7 @@ resources:
 # ROM target (re-linked at ROM Image build time)
 #
 ${TARGET}: ${OBJS} ${ROMCSTUBS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB}
-        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB}
+        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB} ${ASMUTILS}
 
 #
 # Final link for the ROM Image (using given base address)
@@ -131,7 +131,7 @@ rom_link:
         @echo ${COMPONENT}: rom_link complete
 
 rm.PPrimer: ${OBJS} ${CLIB} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB}
-        ${LD} -o $@ -module ${OBJS} ${CLIB} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB}
+        ${LD} -o $@ -module ${OBJS} ${CLIB} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB} ${ASMUTILS}
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
