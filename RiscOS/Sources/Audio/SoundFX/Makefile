@@ -114,7 +114,7 @@ clean:
 resources: ${SOUNDS}
         ${MKDIR} ${RESDIR}
         ${MKDIR} ${RESSOUDIR}
-        ${CP} ${RDIR}.EventMap          ${RESDIR}.EventMap      ${CPFLAGS}
+        ${CP} ${RDIR}.EventMap          ${RESSOUDIR}.EventMap   ${CPFLAGS}
         ${CP} ${SDIR}.connect           ${RESSOUDIR}.connect    ${CPFLAGS}
         ${CP} ${SDIR}.disconnect        ${RESSOUDIR}.disconnect ${CPFLAGS}
         ${CP} ${SDIR}.go~back           ${RESSOUDIR}.go~back    ${CPFLAGS}
