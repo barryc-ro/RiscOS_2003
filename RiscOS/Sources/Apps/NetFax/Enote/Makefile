@@ -77,10 +77,10 @@ TOOLBOXLIB      = tbox:o.toolboxlib
 WIMPLIB         = tbox:o.wimplib
 TEXTGADGETLIB	= tbox:o.textgadget
 
-UILIB		= ${LIBDIR}.Netfax.UILib.o.UILib
+UILIB		= ${LIBDIR}.NetFax.UILib.o.UILib
 MSGLIB		= ${LIBDIR}.MsgLib.o.MsgLib
-FLASHLIB	= ${LIBDIR}.Netfax.FlashLib.o.FlashLib
-FLASHLIB_T	= ${LIBDIR}.Netfax.FlashLib.o.FlashLib_t
+FLASHLIB	= ${LIBDIR}.NetFax.FlashLib.o.FlashLib
+FLASHLIB_T	= ${LIBDIR}.NetFax.FlashLib.o.FlashLib_t
 DEBUGLIB	= ${LIBDIR}.DebugLib.o.debuglib
 
 LIBS = \
@@ -95,7 +95,7 @@ LIBS = \
 
 
 LIBSM = \
- ${FLASHLIB} \
+ ${FLASHLIB}z \
  ${UILIB}zm \
  ${MSGLIB}zm \
  ${TEXTGADGETLIB} \
