@@ -33,7 +33,10 @@ int open(const char *filename, int mode)
             break;
     }
 
-    LOGERR(_swix(OS_Find, _IN(0)|_IN(1)|_OUT(0), flags, filename, &fhandle));
+    if (LOGERR(_swix(OS_Find, _IN(0)|_IN(1)|_OUT(0), flags, filename, &fhandle)) != NULL)
+    {
+	TRACE((TC_ALL, TT_ERROR, "filename: '%s'", filename));
+    }
 
     return fhandle > 0 ? fhandle : -1;
 }
@@ -179,7 +182,7 @@ int _findnext(long handle, struct _finddata_t *info)
 			 &nread,
 			 &fc->index)) != NULL)
 	{
-	    TRACE((TC_CLIB, TT_API1, "_findnext: return -1"));
+	    TRACE((TC_ALL, TT_ERROR, "_findnext: dir '%s' return -1", fc->dir));
 	    
 	    return -1;
 	}

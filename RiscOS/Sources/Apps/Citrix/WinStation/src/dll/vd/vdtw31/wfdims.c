@@ -72,6 +72,8 @@
 #include "../../../inc/wdapi.h"
 #include "../../../inc/clib.h"
 
+#include "swis.h"
+
 #define WS	"#"
 #define WS8	WS WS WS WS  WS WS WS WS
 
@@ -251,6 +253,10 @@ OpenCacheFileHandle( ULONG sigH, ULONG sigL, int oflag )
     struct _finddata_t FileInfo;
     long hFind;
     int hFile;
+
+    /* SJM: protect against protocol errors */
+    if ( !vpszDimCachePath )
+	return DIM_FILE_NOT_FOUND;
 
     /*
      *  Is DIM file open, if so is it the one we are looking for?
@@ -483,6 +489,10 @@ FindCacheFileName( ULONG sigH, ULONG sigL, PULONG pcbFileSize )
      */
     *pcbFileSize = (ULONG) 0;
 
+    /* SJM: protect against protocol errors */
+    if ( !vpszDimCachePath )
+	return DIM_FILE_NOT_FOUND;
+
     /*
      *  Generate FAT filename
      */
@@ -686,6 +696,10 @@ CreateCacheFileHandle( ULONG sigH, ULONG sigL )
 
     struct _finddata_t FileInfo;
     long hFind;
+
+    /* SJM: protect against protocol errors */
+    if ( !vpszDimCachePath )
+	return DIM_FILE_NOT_FOUND;
 
     /*
      *  Find first match
@@ -1879,7 +1893,15 @@ twGetDiskFreeSpace()
     return  freespace;
     
 #elif defined(RISCOS)
-   return 10*1024*1024;
+
+    int len = strlen(vpszDimCachePath);
+    int size;
+
+    vpszDimCachePath[len-1] = '\0';
+    LOGERR(_swix(OS_FSControl, _INR(0,1) | _OUT(2), 49, vpszDimCachePath, &size));
+    vpszDimCachePath[len-1] = '.';
+
+    return size;
     
 #elif defined(WIN32)
    ULONG freespace;

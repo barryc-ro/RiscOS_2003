@@ -71,23 +71,6 @@ typedef struct _OVERRIDELIST
 
 #define OVERRIDE_COUNT	1
 
-static OVERRIDELIST g_pOverrides[OVERRIDE_COUNT] = {
-#if 0
-    { INI_USERNAME,       g_szUserName     },
-                    { INI_DOMAIN,         g_szDomain       },
-                    { INI_PASSWORD,       g_szPassword     },
-                    { INI_INITIALPROGRAM, g_szCmdLine      },
-                    { INI_WORKDIRECTORY,  g_szWorkDir      },
-                    { INI_ENCRYPTIONDLL,  szEncryptionDLL },
-                    { INI_CLIENTTYPE,     szClientType},
-                    { INI_ENCRYPTIONLEVELSESSION, g_szEncryptionDLL},
-                    { INI_DESIREDHRES,    g_szHRes         },
-                    { INI_DESIREDVRES,    g_szVRes         },
-                    { INI_SCREENPERCENT,  g_szScreenPercent},
-#endif
-                    { NULL,               NULL,            }
-                  };
-
 static icaclient_session	global_session = NULL;
        CLIENTNAME gszClientName = { 0 };			// this must be global as cfgini.c uses it
 static BOOL bPDError=FALSE;
@@ -107,6 +90,7 @@ extern FILEPATH gszLoadDllFileName;        // name of last DLL loaded
 /* --------------------------------------------------------------------------------------------- */
 
 static void session__close(icaclient_session sess);
+static void free_elements(arg_element **pargs);
 
 /* --------------------------------------------------------------------------------------------- */
 
@@ -468,28 +452,53 @@ static int EMEngOpen(icaclient_session sess)
 static int EMEngLoadwinframe_session(icaclient_session sess)
 {
     INT rc = CLIENT_STATUS_SUCCESS;
-    CFGINIOVERRIDE pOverrides[OVERRIDE_COUNT];
-    int            i, j;
+    CFGINIOVERRIDE *pOverrides;
+    int i;
+    arg_element *a;
+    int count;
+    BOOL had_address;
+    char *password = NULL;
 
     /*
      * Set up our command line override structure key and value pointers.
      */
     
-    //g_pOverrides[6].pszValue = szEncryptionDLL;
-    //g_pOverrides[7].pszValue = INTERNET_CLIENT;
-    strcpy(sess->szClientType, INTERNET_CLIENT);
+    count = 0;
+    for (a = sess->arg_list; a; a = a->next)
+	count++;
 
-    for ( i = 0, j = 0; g_pOverrides[i].pszKey; i++ ) {
-	if ( *g_pOverrides[i].pszValue ) {
-	    pOverrides[j].pszValue = g_pOverrides[i].pszValue;
-	    pOverrides[j++].pszKey = g_pOverrides[i].pszKey;
-	    TRACE(( TC_WENG, TT_L1,
-		    "WFEngx.Exe EMEngLoadwinframe_session: Override key(%s) value(%s)",
-		    g_pOverrides[i].pszKey,  g_pOverrides[i].pszValue ));
+    pOverrides = calloc(count + 1, sizeof(*pOverrides));
+    
+    had_address = FALSE;
+    for (a = sess->arg_list, i = 0; a; a = a->next, i++)
+    {
+	char *name = a->name;
+	char *value = a->value;
+	
+	if (strcmpi(name, "PASSCLEAR") == 0)
+	{
+	    int len = strlen(value);
+	    char *work;
+
+	    work = strdup(value);
+	    password = malloc(len + 16);
+		
+	    EncryptToAscii(work, len, password, len + 16);
+
+	    name = INI_PASSWORD;
+	    value = password;
+
+	    free(work);
 	}
+
+	pOverrides[i].pszKey = name;
+	pOverrides[i].pszValue = value;
     }
-    pOverrides[j].pszValue = NULL;
-    pOverrides[j].pszKey   = NULL;
+    
+    pOverrides[i].pszKey = NULL;
+    pOverrides[i].pszValue = NULL;
+
+    strcpy(sess->szClientType, INTERNET_CLIENT);
     
     rc = CfgIniLoad( sess->hWFE,
 		     sess->gszServerLabel,
@@ -499,6 +508,9 @@ static int EMEngLoadwinframe_session(icaclient_session sess)
 		     NULL,                     // MODEM file
 		     gszWfclientIni);
 
+    free(pOverrides);
+    free(password);
+    
     return(rc);
 }
 
@@ -515,7 +527,9 @@ static void session_free(icaclient_session sess)
 
     if (sess->tempICAFile)
 	remove(sess->gszICAFile);
-   
+
+    free_elements(&sess->arg_list);
+    
     free(sess->gszICAFile);
     free(sess);
 }
@@ -554,8 +568,6 @@ static int session__open(icaclient_session sess)
     else
 	lstrcpy(gszClientName, pEnvVar);
 
-    // start the connect status dialog 
-    connect_open(sess);
     connect_status(sess, client_to_ids(CLIENT_STATUS_LOADING_STACK));
 
     rc = srvWFEngLoad( NULL, NULL );  // Call the WFEngLoad API
@@ -636,6 +648,8 @@ static void session__close(icaclient_session sess)
     connect_close(sess);
 }
 
+/* --------------------------------------------------------------------------------------------- */
+
 static char *extract_and_expand(const char *in, int len)
 {
     char *out, *o;
@@ -644,6 +658,9 @@ static char *extract_and_expand(const char *in, int len)
     
     if (len == -1)
 	len = strlen(in);
+
+    if (len == 0)
+	return NULL;
 
     if ((out = malloc(len + 1)) == NULL)
 	return NULL;
@@ -672,39 +689,98 @@ static char *extract_and_expand(const char *in, int len)
     return out;
 }
 
+static void add_element(arg_element **pargs, char *name, char *value)
+{
+    arg_element *el = calloc(sizeof(*el), 1);
+
+    el->name = name;
+    el->value = value;
+
+    el->next = *pargs;
+    *pargs = el;
+
+    TRACE((TC_UI, TT_API1, "add_element: '%s' = '%s'", name, value));
+}
+
+static void free_elements(arg_element **pargs)
+{
+    while (*pargs)
+    {
+	arg_element *a = *pargs;
+
+	*pargs = a->next;
+
+	free(a->name);
+	free(a->value);
+	free(a);
+    }
+}
+
+static void parse_args(arg_element **pargs, const char *s)
+{
+    do
+    {
+	const char *start = s + 1;
+	const char *equals = strchr(start, '=');
+	const char *end = strchr(start, '&');
+	
+	char *name, *value;
+	    
+	/* only use equals if within the start - end gap */
+	if (end && equals > end)
+	    equals = NULL;
+	    
+	name = extract_and_expand(start, equals ? equals - start : end ? end - start : -1);
+	value = equals ? extract_and_expand(equals + 1, end ? end - (equals + 1) : -1) : NULL;
+
+	/* this call takes over the name and value strings so they don't need freeing */
+	add_element(pargs, name, value);
+	
+	s = end;
+    }
+    while (s);
+}
+
+/* --------------------------------------------------------------------------------------------- */
+
 icaclient_session session_open_url(const char *url, const char *bfile)
 {
     icaclient_session sess;
-    char *host = NULL;
-    char *path = NULL;
-    char *args1 = NULL, *args2 = NULL;
+    char *description = NULL;
     const char *s;
-    int rc;
+    arg_element *arg_list = NULL;
 
     TRACE((TC_UI, TT_API1, "session_open_url: '%s'", url));
 
-    /* get host name */
+    /* get host name (server name) */
     s = url + 4;
     if (s[0] == '/' && s[1] == '/')
     {
 	const char *start = s+2;
 	const char *end = strchr(start, '/');
-	host = extract_and_expand(start, end ? end - start : -1);
+	char *host = extract_and_expand(start, end ? end - start : -1);
+
+	add_element(&arg_list, strdup(INI_ADDRESS), host);
+
 	s = end;
     }
 
-    /* get path */
+    /* get server description */
     if (s && s[0] == '/' && s[1] > ' ')
     {
 	const char *start = s+1;
 	const char *end = strchr(start, '?');
-	path = extract_and_expand(start, end ? end - start : -1);
+
+	description = extract_and_expand(start, end ? end - start : -1);
+
 	s = end;
     }
     
     /* get args from query section of URL */
     if (s && s[0] == '?' && s[1] > ' ')
-	args1 = extract_and_expand(s+1, -1);
+    {
+	parse_args(&arg_list, s);
+    }
 
     /* get args from POST file */
     if (bfile)
@@ -719,7 +795,12 @@ icaclient_session session_open_url(const char *url, const char *bfile)
 	    len = (int)ftell(f);
 	    if ((s = malloc(len+1)) != NULL)
 	    {
-		args2 = extract_and_expand(s, len);
+		/* read in post data and teeerminate */
+		fread(s, len, 1, f);
+		s[len] = 0;
+
+		parse_args(&arg_list, s);
+
 		free(s);
 	    }
 	    
@@ -727,40 +808,39 @@ icaclient_session session_open_url(const char *url, const char *bfile)
 	}
     }
 
-    TRACE((TC_UI, TT_API1, "session_open_url: host '%s' path '%s' args1 '%s' args2 '%s'",
-	   strsafe(host), strsafe(path), strsafe(args1), strsafe(args2)));
+    TRACE((TC_UI, TT_API1, "session_open_url: description '%s'", strsafe(description)));
 
     sess = NULL;
-    if (host)
+    if (description == NULL)
     {
-	char name[L_tmpnam];
-	FILE *f;
+	arg_element *a;
+	char *host;
 
-	global_session = sess = calloc(sizeof(struct icaclient_session_), 1);
-	sess->HaveFocus = TRUE;
-
-	strncpy(sess->gszServerLabel, host, sizeof(sess->gszServerLabel));
-
-	if ((f = fopen(tmpnam(name), "wb")) != NULL)
-	{
-	    fprintf(f, "[%s]\n", host);
-	    fprintf(f, "Address=%s\n", host);
-
-	    fprintf(f, "[ApplicationServers]\n");
-	    fprintf(f, "%s=\n", host);
-
-	    fclose(f);
-
-	    sess->gszICAFile = strdup(name);
-	    sess->tempICAFile = TRUE;
-	}
+	/* find the host name if the description isn't available */
+	host = NULL;
+	for (a = arg_list; a; a = a->next)
+	    if (strcmpi(a->name, INI_ADDRESS) == 0)
+		host = a->value;
 	
-	if ((rc = session__open(sess)) != CLIENT_STATUS_SUCCESS)
+	if (host)
+	    sess = session_open_server(host);
+    }
+    else
+    {
+	global_session = sess = calloc(sizeof(struct icaclient_session_), 1);
+	if (sess)
 	{
-	    session_abort(sess, rc);
-	    sess = NULL;
+	    sess->HaveFocus = TRUE;
+	    strncpy(sess->gszServerLabel, description, sizeof(sess->gszServerLabel));
 	}
-    }    
+    }
+
+    if (sess)
+	sess->arg_list = arg_list;
+    else
+	free_elements(&sess->arg_list);
+    
+    free(description);
 
     return sess;
 }
@@ -768,7 +848,6 @@ icaclient_session session_open_url(const char *url, const char *bfile)
 icaclient_session session_open_server(const char *host)
 {
     icaclient_session sess = NULL;
-    int rc;
     if (host)
     {
 	char name[L_tmpnam];
@@ -789,12 +868,6 @@ icaclient_session session_open_server(const char *host)
 
 	    sess->gszICAFile = strdup(name);
 	    sess->tempICAFile = TRUE;
-	}
-	
-	if ((rc = session__open(sess)) != CLIENT_STATUS_SUCCESS)
-	{
-	    session_abort(sess, rc);
-	    sess = NULL;
 	}
     }
     
@@ -855,19 +928,12 @@ icaclient_session session_open(const char *ica_file, int delete_after)
 	return NULL;
     }
 
-    if ((rc = session__open(sess)) != CLIENT_STATUS_SUCCESS)
-    {
-	session_abort(sess, rc);
-	sess = NULL;
-    }
-
     return sess;
 }
 
 icaclient_session session_open_appsrv(const char *description)
 {
     icaclient_session sess;
-    int rc;
 
     TRACE((TC_UI, TT_API1, "session_open_appsrv: '%s'", description));
 
@@ -878,13 +944,18 @@ icaclient_session session_open_appsrv(const char *description)
     
     strncpy(sess->gszServerLabel, description, sizeof(sess->gszServerLabel));
 
+    return sess;
+}
+
+int session_connect(icaclient_session sess)
+{
+    int rc;
     if ((rc = session__open(sess)) != CLIENT_STATUS_SUCCESS)
     {
 	session_abort(sess, rc);
-	sess = NULL;
+	return FALSE;
     }
-
-    return sess;
+    return TRUE;
 }
 
 int session_poll(icaclient_session sess)
@@ -950,6 +1021,10 @@ void session_run(const char *file, int file_is_url, const char *bfile)
     else
 	sess = session_open(file, FALSE);
 
+    if (sess)
+	if (!session_connect(sess))
+	    return;
+    
     TRACE((TC_UI, TT_API1, "session_run: entering poll"));
 
     while (sess->HaveFocus && !sess->Connected)

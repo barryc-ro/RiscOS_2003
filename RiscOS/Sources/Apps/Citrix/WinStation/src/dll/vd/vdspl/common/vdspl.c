@@ -15,6 +15,20 @@
 *    of Windows printers into WinFrame.
 *
 * $Log$
+* Revision 1.1  1998/03/10 16:20:53  smiddle
+* Redid the !Run files to allow command line options to be configured externally.
+* Added cpm and spl virtual drivers - two versions of the printer spooling mechanism.
+* Not properly tested but client still works if ClientPrinter is enabled. Doesn't work if
+* ClientPrinter1.5 is enabled though.
+* Made Module list in session.c dependant on #defines set in the Makefile.
+* Split off exported defines into winframe.h which is exported to WinFrameRO and thence to
+* the Export directory.
+* Added a Message control interface to main.c. Not complete or tested.
+* Added a loop forever option (CLI) for Xemplar.
+* Added support for an ica: pseudo-URL scheme. ANT protocol only at the moment.
+*
+* Version 0.14. Tagged as 'WinStation-0_14'
+*
 * Revision 1.1  1997/11/27 16:57:04  smiddle
 * Initial revision
 *
@@ -94,7 +108,7 @@ static int MaxWindowSize = 1024;
 static int WindowSize    =  512;
 USHORT VirtualCpm = (USHORT)-1;
 
-static char gcDefaultQueueName[128];
+char gcDefaultQueueName[128];
 
 // See inc\wdapi.h and dll\wd\wdica30\wdica.c
 // These are returned when we register our hook
@@ -146,11 +160,9 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
                        DEF_CPMWINDOWSIZE
 		       );
 
-#ifdef DOS
-#else
    //
    // Under windows the user can set a queue name to print to
-   //
+   // Under RISCOS use this for driver override
    bGetPrivateProfileString(
        pVdOpen->pIniSection,
        INI_CPMQUEUE,
@@ -158,9 +170,8 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
        gcDefaultQueueName,
        sizeof(gcDefaultQueueName)
        );
-#endif
 
-   TRACE(( TC_CPM, TT_API1, "VDCPM: MaxWindowSize %d, WindowSize %d",MaxWindowSize,WindowSize));
+   TRACE(( TC_CPM, TT_API1, "VDCPM: MaxWindowSize %d, WindowSize %d, Queue '%s'",MaxWindowSize,WindowSize,gcDefaultQueueName));
 
    /*
     *  Initialize to zero

@@ -35,8 +35,8 @@
 #include "../common/cpmstr.h"
 
 
-#define MAX_PRINTER_PORTS  8
-#define COM_PORTS_START    4
+#define MAX_PRINTER_PORTS  1
+//#define COM_PORTS_START    4
 
 
 /*=============================================================================
@@ -69,7 +69,8 @@ typedef struct _PORTENTRY {
  */
 
 static PORTENTRY Ports[8] = {
-       { "LPT1:", 0, 0, FALSE, 0 },
+       { "printer:", 0, 0, FALSE, 0 }
+#if 0
        { "LPT2:", 0, 0, FALSE, 0 },
        { "LPT3:", 0, 0, FALSE, 0 },
        { "LPT4:", 0, 0, FALSE, 0 },
@@ -78,6 +79,7 @@ static PORTENTRY Ports[8] = {
        { "COM2", 0, 0, FALSE, 0 },
        { "COM3", 0, 0, FALSE, 0 },
        { "COM4", 0, 0, FALSE, 0 }
+#endif
    };
 
 
@@ -129,7 +131,7 @@ LptOpen( int Port )
    /*
     * Open the printer
     */
-   if ((hPrinter = open("printer:", O_WRONLY)) == -1)
+   if ((hPrinter = open(Ports[Port].Name, O_WRONLY)) == -1)
    {
        return CLIENT_ERROR_PORT_NOT_AVAILABLE;
    }

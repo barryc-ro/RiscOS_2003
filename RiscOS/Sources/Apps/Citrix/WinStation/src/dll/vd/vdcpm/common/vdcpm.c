@@ -10,6 +10,20 @@
 *  Author:  JohnR 05/06/94
 *
 * $Log$
+* Revision 1.1  1998/03/10 16:20:43  smiddle
+* Redid the !Run files to allow command line options to be configured externally.
+* Added cpm and spl virtual drivers - two versions of the printer spooling mechanism.
+* Not properly tested but client still works if ClientPrinter is enabled. Doesn't work if
+* ClientPrinter1.5 is enabled though.
+* Made Module list in session.c dependant on #defines set in the Makefile.
+* Split off exported defines into winframe.h which is exported to WinFrameRO and thence to
+* the Export directory.
+* Added a Message control interface to main.c. Not complete or tested.
+* Added a loop forever option (CLI) for Xemplar.
+* Added support for an ica: pseudo-URL scheme. ANT protocol only at the moment.
+*
+* Version 0.14. Tagged as 'WinStation-0_14'
+*
 *  
 *     Rev 1.8   15 Apr 1997 18:04:30   TOMA
 *  autoput for remove source 4/12/97
@@ -224,7 +238,8 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
 
     TRACE(( TC_CPM, TT_API1, "VDCPM: MaxWindowSize %d",MaxWindowSize));
 
-    ComMask = 1;
+    LptMask = 1;
+    ComMask = 0;
     
     /*
      *  Initialize to zero
@@ -238,11 +253,11 @@ DriverOpen( PVD pVd, PVDOPEN pVdOpen )
     wdqi.pWdInformation = &OpenVirtualChannel;
     wdqi.WdInformationLength = sizeof_OPENVIRTUALCHANNEL;
 
-    OpenVirtualChannel.pVCName = VIRTUAL_COM1;
+    OpenVirtualChannel.pVCName = VIRTUAL_LPT1;
     rc = WdCall( pVd, WD__QUERYINFORMATION, &wdqi );
     Channel = OpenVirtualChannel.Channel;
 
-    VirtualCOM1 = Channel;
+    VirtualLPT1 = Channel;
     CpmHookLpt( pVd, Channel, MaxWindowSize, MaxWindowSize );
     pVdOpen->ChannelMask |= ( 1L << Channel );
    

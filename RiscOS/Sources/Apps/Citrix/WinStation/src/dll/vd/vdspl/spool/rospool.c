@@ -356,6 +356,15 @@ CpmPollPrinter(
  *
  ****************************************************************************/
 
+#define DEFAULT_STRING "WFCDefault"
+
+/* Imported from app/main.c */
+extern char *printer_name;
+extern char *printer_type;
+
+/* Imported from vdspl.c */
+extern char gcDefaultQueueName[128];
+
 USHORT
 CpmEnumPrinter(
     USHORT    Index,
@@ -365,7 +374,7 @@ CpmEnumPrinter(
     PUSHORT   pReturnSize
     )
 {
-    char *name, *ptr;
+    char *ptr;
     PENUMSTRUCT p;
     int size;
 
@@ -380,28 +389,43 @@ CpmEnumPrinter(
 	return CPM_MAKE_STATUS( CPM_ERROR_NOTFOUND, CPM_DOSERROR_NOFILES);
 
     /* if no driver configured*/
-    if (_swix(PDriver_Info, _OUT(4), &name))
+    if (printer_name == NULL)
 	return CPM_MAKE_STATUS( CPM_ERROR_NOTFOUND, CPM_DOSERROR_NOFILES);
 
-    size = sizeof_ENUMSTRUCT + strlen(name);
+    /* get size needed */
+    size = sizeof_ENUMSTRUCT + (strlen(printer_name) + 1) + sizeof(DEFAULT_STRING);
+
     /* check space in output buffer */
     if (size > MaxBytes)
         return CPM_MAKE_STATUS( CPM_ERROR_INVALID, CPM_DOSERROR_BADLENGTH );
 
+    p = (PENUMSTRUCT)pBuf;
     memset(p, 0, sizeof_ENUMSTRUCT);
     ptr = (char *)p + sizeof_ENUMSTRUCT;
 
-    if (name)
+    if (printer_name)
     {
-	p->NameSize = strlen(name);		// Size of the printer name following this header
-	memcpy(ptr, name, p->NameSize);
+	p->NameSize = strlen(printer_name) + 1;		// Size of the printer name following this header
+	memcpy(ptr, printer_name, p->NameSize);
 	ptr += p->NameSize;
     }
+
+    if (printer_type || gcDefaultQueueName[0])
+    {
+	const char *s = gcDefaultQueueName[0] ? gcDefaultQueueName : printer_type;
+	p->DriverSize = strlen(s) + 1;			// Size of the driver name following this header
+	memcpy(ptr, s, p->DriverSize);
+	ptr += p->DriverSize;
+    }
+    
+    /* add comment to say this is the default printer */
+    p->CommentSize = sizeof(DEFAULT_STRING);
+    memcpy(ptr, DEFAULT_STRING, p->CommentSize);
+    ptr += p->CommentSize;
 
 #if 0
     p->DriverSize;     // Size of the driver name following the printer name
     p->PortSize;       // Size of the port name following the driver name
-    p->CommentSize;    // Size of the comment field following the port name
     p->Flags;          // Flags
     p->ExtraSize;      // Size of extra information if supplied following Comment
 #endif

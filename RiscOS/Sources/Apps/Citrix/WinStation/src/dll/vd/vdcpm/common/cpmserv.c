@@ -64,6 +64,9 @@
  * We can service host requests for status update to allow applications and
  * spoolers to set printer modes on the parallel port.
  *
+ * SJM: Note that the 'pBuf' passed in is *not* word-aligned. For efficiency
+ * each function willdeal with this as it sees fit. Structures that only contain
+ * byte wide values are OK. Others need copying out before accessing.
  */
 
 /*
@@ -688,6 +691,7 @@ CpmSrvClose(
 {
 
     POPENCONTEXT p;
+    CPM_CLOSE_REQUEST close;
     PCPM_CLOSE_REQUEST r;
     USHORT Result = CPM_ERROR_NONE;
 
@@ -706,7 +710,8 @@ CpmSrvClose(
     /*
      * Get a pointer to our specific header
      */
-    r = (PCPM_CLOSE_REQUEST)pBuf;
+    memcpy(&close, pBuf, sizeof( CPM_CLOSE_REQUEST ));
+    r = &close;
 
     /*
      * Check for any internal bugs, such as wrong order of
@@ -868,9 +873,13 @@ CpmSrvWrite(
         WriteSize = rs->WriteSize;
     }
     else {
+	CPM_WRITE2_REQUEST wr2;
+
         ASSERT( rs->h_type == CPM_TYPE_WRITE2, rs->h_type );
-        pWriteBuf = (PCHAR)( pBuf + sizeof( CPM_WRITE2_REQUEST ) );
-        WriteSize = ((PCPM_WRITE2_REQUEST)rs)->WriteSize;
+
+	pWriteBuf = (PCHAR)( pBuf + sizeof( CPM_WRITE2_REQUEST ) );
+	memcpy(&wr2, pBuf, sizeof( CPM_WRITE2_REQUEST ));
+        WriteSize = wr2.WriteSize;
     }
 
     p = OpenPorts[Channel];
@@ -1011,6 +1020,7 @@ CpmSrvConnect(
     USHORT Size
     )
 {
+    CPM_CONNECT_REQUEST req;
     PCPM_CONNECT_REQUEST rs;
 
     TRACE(( TC_CPM, TT_API1, "CPM: Got Connect request"));
@@ -1030,7 +1040,8 @@ CpmSrvConnect(
     /*
      * Get a pointer to our specific header
      */
-    rs = (PCPM_CONNECT_REQUEST)pBuf;
+    memcpy(&req, pBuf, sizeof_CPM_CONNECT_REQUEST);
+    rs = &req;
 
     /*
      * Right now we do not do anything with the version

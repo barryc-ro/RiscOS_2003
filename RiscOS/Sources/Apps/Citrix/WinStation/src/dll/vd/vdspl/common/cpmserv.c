@@ -115,8 +115,8 @@ static USHORT CpmWrite( PUCHAR pBuffer, USHORT Length ); //
 /*
  * External references
  */
-//static USHORT SplICAWrite( PUCHAR, UCHAR, USHORT );
-//static USHORT SplICAWindowOpen( UCHAR, USHORT );
+USHORT SplICAWrite( PUCHAR, UCHAR, USHORT );
+USHORT SplICAWindowOpen( UCHAR, USHORT );
 extern USHORT VirtualCpm;
 
 
@@ -280,6 +280,8 @@ SplWireDataReceive(
 
     RetSize = (CpmSrvDispatchTable[Offset])( Channel, pBuf, Size );
 
+    TRACE((TC_CPM, TT_API1, "CPMSERV: dispatch return"));
+
     // Look for definition/packing errors in the protocol
     ASSERT( RetSize == Size, 0 );
 
@@ -368,6 +370,7 @@ CpmSrvClosePrinter(
 {
 
     POPENCONTEXT p;
+    CPM_CLOSEPRINTER_REQUEST close;
     PCPM_CLOSEPRINTER_REQUEST r;
     CPM_CLOSEPRINTER_REQUEST_REPLY rep;
     USHORT Result;
@@ -386,7 +389,8 @@ CpmSrvClosePrinter(
     /*
      * Get a pointer to our specific header
      */
-    r = (PCPM_CLOSEPRINTER_REQUEST)pBuf;
+    memcpy(&close, pBuf, sizeof( CPM_CLOSEPRINTER_REQUEST ));
+    r = &close;
 
     /*
      * Check for any internal bugs, such as wrong order of
@@ -476,6 +480,7 @@ CpmSrvConnect(
     USHORT Size
     )
 {
+    CPM_CONNECT2_REQUEST connect;
     PCPM_CONNECT2_REQUEST rs;
 
     TRACE(( TC_CPM, TT_API1, "CPM: Got Connect request"));
@@ -495,7 +500,8 @@ CpmSrvConnect(
     /*
      * Get a pointer to our specific header
      */
-    rs = (PCPM_CONNECT2_REQUEST)pBuf;
+    memcpy(&connect, pBuf, sizeof_CPM_CONNECT2_REQUEST);
+    rs = &connect;
 
     TRACE(( TC_CPM, TT_API1, "CPM: Host Versions Low %d, High %d", rs->VersionLow,rs->VersionHigh));
 
@@ -756,6 +762,7 @@ CpmSrvGetPrinter(
 {
     USHORT Result;
     ULONG Status;
+    CPM_GETPRINTER_REQUEST get;
     PCPM_GETPRINTER_REQUEST r;
     CPM_GETPRINTER_REQUEST_REPLY rep;
     POPENCONTEXT p;
@@ -777,7 +784,8 @@ CpmSrvGetPrinter(
     /*
      * Get a pointer to our specific header
      */
-    r = (PCPM_GETPRINTER_REQUEST)pBuf;
+    memcpy(&get, pBuf, sizeof_CPM_GETPRINTER_REQUEST);
+    r = &get;
 
     ASSERT( r->h_type == CPM_TYPE_GETPRINTER, 0 );
 
@@ -852,11 +860,14 @@ CpmSrvEnumPrinter(
     USHORT Size
     )
 {
+    CPM_ENUMPRINTER_REQUEST request;
     PCPM_ENUMPRINTER_REQUEST r;
     CPM_ENUMPRINTER_REQUEST_REPLY rep;
     USHORT TotalSize, Count, RetVal;
     PCHAR  prep;
     PCHAR  p;
+
+    TRACE((TC_CPM, TT_API1, "EnumPrinter: in"));
 
     /*
      * These new requests can only operate over
@@ -878,8 +889,10 @@ CpmSrvEnumPrinter(
     /*
      * Get a pointer to our specific header
      */
-    r = (PCPM_ENUMPRINTER_REQUEST)pBuf;
+    memcpy(&request, pBuf, sizeof_CPM_ENUMPRINTER_REQUEST);
+    r = &request;
 
+    TRACE((TC_CPM, TT_API1, "EnumPrinter: index %d datasize %d", r->Index, r->DataSize));
     ASSERT( r->h_type == CPM_TYPE_ENUMPRINTER, 0 );
 
     /*
@@ -1201,6 +1214,7 @@ CpmSrvWritePrinter(
     USHORT Result;
     POPENCONTEXT p;
     PCHAR  pWriteBuf;
+    CPM_WRITEPRINTER_REQUEST request;
     PCPM_WRITEPRINTER_REQUEST r;
     CPM_WRITEPRINTER_REQUEST_REPLY rep;
     USHORT AmountWrote = 0;
@@ -1220,7 +1234,8 @@ CpmSrvWritePrinter(
     /*
      * Get a pointer to our specific header
      */
-    r = (PCPM_WRITEPRINTER_REQUEST)pBuf;
+    memcpy(&request, pBuf, sizeof_CPM_WRITEPRINTER_REQUEST);
+    r = &request;
 
     ASSERT( (r->h_type == CPM_TYPE_WRITEPRINTER), 0 );
 

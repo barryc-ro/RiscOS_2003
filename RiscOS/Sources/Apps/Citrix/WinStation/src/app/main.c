@@ -39,6 +39,8 @@
 #include "../inc/debug.h"
 #include "../dll/vd/vdtw31/twh2cinc.h"
 
+#include "vdu.h"
+
 /* --------------------------------------------------------------------------------------------- */
 
 //typedef _kernel_oserror os_error;
@@ -96,6 +98,26 @@ typedef union {
 
 /* --------------------------------------------------------------------------------------------- */
 
+/* Printer protocol */
+
+#define	message_PSPrinterQuery	0x8014C
+#define message_PSPrinterAck	0x8014D
+#define message_PSPrinterNotPS	0x80151
+
+typedef struct
+{
+    char *buffer_address;
+    int buffer_size;
+} printer_message_ps_query;
+
+/* --------------------------------------------------------------------------------------------- */
+
+#define connection_OPENED		0
+#define connection_PRINTINFO_RECEIVED	1
+#define connection_SPLASH_REMOVED	2
+
+/* --------------------------------------------------------------------------------------------- */
+
 static MessagesFD message_block;    /* declare a message block for use with toolbox initialise */
 static IdBlock event_id_block;      /* declare an event block for use with toolbox initialise  */
 
@@ -113,6 +135,9 @@ static int ToolBox_EventList[] =
 
 static int Wimp_MessageList[] =
 {
+    message_PSPrinterQuery,
+    message_PSPrinterNotPS,
+    message_PSPrinterAck,
     message_ICACLIENT_CONTROL,
     wimp_MOPENURL,
     MESSAGE_URI_MPROCESS,
@@ -144,6 +169,14 @@ static int quitting = 0;
 
 static ObjectId disconnect_id = NULL_ObjectId;
 
+static int printinfo_dialogue_in_progress = FALSE;
+
+/* --------------------------------------------------------------------------------------------- */
+
+/* Exported to vd/vdspl/spool/rospool.c */
+char *printer_name = NULL;
+char *printer_type = NULL;
+
 /* --------------------------------------------------------------------------------------------- */
 
 /* cli set values */
@@ -166,6 +199,15 @@ static int cli_loop = FALSE;
 static void splash_close(void);
 static void splash_force_top(void);
 static BOOL splash_check_close(void);
+
+static void printinfo_deregister(void);
+static void printinfo_request(void);
+
+/* --------------------------------------------------------------------------------------------- */
+
+/* External references */
+
+extern void KbdClose(void);
 
 /* --------------------------------------------------------------------------------------------- */
 
@@ -235,6 +277,31 @@ static void kill_current_session(void)
 	session_close(s);
     }
 }
+
+static void connection_state(int new_state)
+{
+    switch (new_state)
+    {
+    case connection_OPENED:
+	connect_open(current_session);
+	printinfo_request();
+	break;
+
+    case connection_SPLASH_REMOVED:
+	if (current_session && !printinfo_dialogue_in_progress)
+	    if (!session_connect(current_session))
+		current_session = NULL;
+	break;
+
+    case connection_PRINTINFO_RECEIVED:
+	if (current_session && !splash_timer)
+	    if (!session_connect(current_session))
+		current_session = NULL;
+	break;
+    }
+}
+
+/* --------------------------------------------------------------------------------------------- */
 
 static void control_ack(WimpMessage *message, icaclient_session session_handle, int error)
 {
@@ -441,7 +508,9 @@ static int null_handler(int event_code, WimpPollBlock *event, IdBlock *id_block,
 
     if (splash_timer)
     {
-	if (!splash_check_close())
+	if (splash_check_close())
+	    connection_state(connection_SPLASH_REMOVED);
+	else
 	    splash_force_top();
     }
     
@@ -517,16 +586,11 @@ static int dataload_handler(WimpMessage *message, void *handle)
 	err_fatal(wimp_send_message(Wimp_EUserMessage, &reply,
 				    message->hdr.sender, 0, NULL));
 
-	/* wait for splash screen to close */
-	while (!splash_check_close())
-	    ;
-
-	current_session = session_open(msg->leaf_name, FALSE);
-
-	/* delete file if reference matches */
-	if (scrap_ref == message->hdr.your_ref)
-	    remove(msg->leaf_name);
-
+	current_session = session_open(msg->leaf_name, scrap_ref == message->hdr.your_ref);
+	
+	if (current_session)
+	    connection_state(connection_OPENED);
+	
 	return 1;
     }
 
@@ -558,12 +622,11 @@ static int dataopen_handler(WimpMessage *message, void *handle)
 	    return 0;
 	}
 
-	/* wait for splash screen to close */
-	while (!splash_check_close())
-	    ;
-
 	current_session = session_open(msg->path_name, FALSE);
 
+	if (current_session)
+	    connection_state(connection_OPENED);
+	
 	return 1;
     }
     return 0;
@@ -613,12 +676,11 @@ static int openurl_handler(WimpMessage *message, void *handle)
 	    return 0;
 	}
 
-	/* wait for splash screen to close */
-	while (!splash_check_close())
-	    ;
-
 	current_session = session_open_url(url, bfile);
 
+	if (current_session)
+	    connection_state(connection_OPENED);
+	
 	return 1;
     }
     return 0;
@@ -658,11 +720,10 @@ static int openuri_handler(WimpMessage *message, void *handle)
 
 	    if (!e)
 	    {
-		/* wait for splash screen to close */
-		while (!splash_check_close())
-		    ;
-
 		current_session = session_open_url(url, NULL);
+
+		if (current_session)
+		    connection_state(connection_OPENED);
 	    }
 	    
 	    free(url);
@@ -700,10 +761,6 @@ static int control_handler(WimpMessage *message, void *handle)
 	    return 1;
 	}
 
-	/* wait for splash screen to close */
-	while (!splash_check_close())
-	    ;
-
 	/* start the open */
 	switch (control->flags & icaclient_connect_DATA_MASK)
 	{
@@ -718,6 +775,9 @@ static int control_handler(WimpMessage *message, void *handle)
 	    break;
 	}
 
+	if (current_session)
+	    connection_state(connection_OPENED);
+	
 	/* report the status */
 	control_ack(message, current_session, current_session == NULL ? icaclient_ERROR_CONNECTION_FAILED : 0);
 	break;
@@ -758,8 +818,6 @@ static int control_handler(WimpMessage *message, void *handle)
     
     case icaclient_CONTROL_QUIT:
     {
-	icaclient_message_control_quit *control = (icaclient_message_control_quit *)&message->data;
-	
 	if (current_session != NULL)
 	{
 	    control_ack(message, NULL, icaclient_ERROR_CONNECTION_OPEN);
@@ -774,6 +832,129 @@ static int control_handler(WimpMessage *message, void *handle)
 
     return 1;
     NOT_USED(handle);
+}
+
+/* --------------------------------------------------------------------------------------------- */
+
+static char *printinfo_name(void)
+{
+    char *name;
+    if (_swix(PDriver_Info, _OUT(4), &name) == NULL)
+	return strdup(name);
+    return NULL;
+}
+
+static int printer_handler(WimpMessage *message, void *handle)
+{
+    switch (message->hdr.action_code)
+    {
+    case message_PSPrinterAck:
+    {
+	printer_message_ps_query *query = (printer_message_ps_query *)&message->data;
+	
+	TRACE((TC_UI, TT_API1, "PSPrinterAck: buffer %p size %d", query->buffer_address, query->buffer_size));
+
+	if (query->buffer_address == NULL)
+	{
+	    query->buffer_address = rma_alloc(query->buffer_size);
+
+	    message->hdr.action_code = message_PSPrinterQuery;
+	    message->hdr.your_ref = message->hdr.my_ref;
+	    LOGERR(wimp_send_message(Wimp_EUserMessageRecorded, message, 0, NULL, 0));
+	}
+	else
+	{
+	    const char *s = query->buffer_address;
+
+	    printer_name = strdup(s);
+	    printer_type = strdup(s + strlen(s) + 1);
+
+	    TRACE((TC_UI, TT_API1, "PSPrinterAck: name '%s' type '%s'", printer_name, printer_type));
+
+	    rma_free(query->buffer_address);
+
+	    printinfo_deregister();
+	}
+	break;
+    }
+    
+    case message_PSPrinterNotPS:
+	TRACE((TC_UI, TT_API1, "PSPrinterNotPS:"));
+
+	printer_name = printinfo_name();
+	printinfo_deregister();
+	break;
+    }
+    
+    return 1;
+}
+
+static int printer_ack_handler(int event_code, WimpPollBlock *event, IdBlock *id_block, void *handle)
+{
+    TRACE((TC_UI, TT_API1, "printer_ack_handler: action %d", event->user_message_acknowledge.hdr.action_code));
+
+    if (event->user_message_acknowledge.hdr.action_code == message_PSPrinterQuery)
+    {
+	printer_message_ps_query *query = (printer_message_ps_query *)&event->user_message_acknowledge.data;
+
+	printer_name = printinfo_name();
+
+	if (query->buffer_address)
+	    rma_free(query->buffer_address);
+
+	printinfo_deregister();
+	return 1;
+    }
+    return 0;
+    NOT_USED(event_code);
+    NOT_USED(id_block);
+    NOT_USED(handle);
+}
+
+static void printinfo_deregister(void)
+{
+    err_fatal(event_deregister_message_handler(message_PSPrinterNotPS, printer_handler, NULL));
+    err_fatal(event_deregister_message_handler(message_PSPrinterAck, printer_handler, NULL));
+    err_fatal(event_deregister_wimp_handler(0, Wimp_EUserMessageAcknowledge, printer_ack_handler, NULL));
+
+    printinfo_dialogue_in_progress = FALSE;
+    
+    connection_state(connection_PRINTINFO_RECEIVED);
+}
+
+static void printinfo_register(void)
+{
+    err_fatal(event_register_message_handler(message_PSPrinterNotPS, printer_handler, NULL));
+    err_fatal(event_register_message_handler(message_PSPrinterAck, printer_handler, NULL));
+    err_fatal(event_register_wimp_handler(0, Wimp_EUserMessageAcknowledge, printer_ack_handler, NULL));
+
+    printinfo_dialogue_in_progress = TRUE;
+}
+
+static void printinfo_request(void)
+{
+    WimpMessage msg;
+    printer_message_ps_query *query;
+
+    TRACE((TC_UI, TT_API1, "printinfo_request:"));
+
+    /* free cached info */
+    free(printer_name);
+    free(printer_type);
+    printer_name = printer_type = NULL;
+    
+    /* send query message */
+    msg.hdr.size = sizeof(msg.hdr) + sizeof(*query);
+    msg.hdr.action_code = message_PSPrinterQuery;
+    msg.hdr.your_ref = 0;
+
+    query = (printer_message_ps_query *)&msg.data;
+    query->buffer_address = 0;
+    query->buffer_size = 0;
+    LOGERR(wimp_send_message(Wimp_EUserMessageRecorded, &msg, 0, NULL, 0));
+    
+    /* register handlers */
+    printinfo_register();
 }
 
 /* --------------------------------------------------------------------------------------------- */
@@ -947,7 +1128,7 @@ static void splash_close(void)
 
     if (splash_id != NULL_ObjectId)
     {
-	event_deregister_wimp_handler(Wimp_ERedrawWindow, splash_id, splash_redraw_handler, NULL);
+	event_deregister_wimp_handler(splash_id, Wimp_ERedrawWindow, splash_redraw_handler, NULL);
     
 	LOGERR(toolbox_hide_object(0, splash_id));
 	LOGERR(toolbox_delete_object(0, splash_id));
@@ -994,9 +1175,9 @@ static int log_init(void)
    if (cli_file_debug)
        EMLogInfo.LogFlags |= LOG_FILE;
 
-#if 0
-   EMLogInfo.LogClass   = LOG_CLASS | TC_CPM | TC_TW | TC_CLIB;
-   EMLogInfo.LogEnable  = TT_ERROR;
+#if 1
+   EMLogInfo.LogClass    = LOG_CLASS | TC_UI;
+   EMLogInfo.LogEnable   = TT_ERROR;
    EMLogInfo.LogTWEnable = TT_TW_DIM | TT_TW_CACHE;
 #else
    EMLogInfo.LogClass   = TC_ALL;

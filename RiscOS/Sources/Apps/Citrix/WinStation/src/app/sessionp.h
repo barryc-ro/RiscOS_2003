@@ -10,6 +10,16 @@
 #ifndef __sessionp_h
 # define __sessionp_h
 
+typedef struct arg_element arg_element;
+
+struct arg_element
+{
+    arg_element *next;
+
+    char *name;
+    char *value;
+};
+
 struct icaclient_session_
 {
     DESCRIPTION gszServerLabel;
@@ -27,12 +37,9 @@ struct icaclient_session_
     int Connected;
 
     ObjectId connect_d;		// connection dialogue box
+
+    arg_element *arg_list;
 };
-
-
-extern void connect_open(icaclient_session sess);
-extern void connect_status(icaclient_session sess, int state);
-extern void connect_close(icaclient_session sess);
 
 #endif
 

@@ -67,7 +67,7 @@
 #include "../../inc/clib.h"
 #include "../../inc/logapi.h"
 
-#include "kernel.h"
+#include "swis.h"
 
 #if defined(REMOTE_DEBUG) && defined(DEBUG)
 #include "debug/remote.h"
@@ -265,8 +265,6 @@ LogPrintf( ULONG LogClass, ULONG LogEnable, PCHAR pFormat, ... )
 void WFCAPI
 LogVPrintf( ULONG LogClass, ULONG LogEnable, PCHAR pFormat, PVOID arg_marker)
 {
-   char t[5];
-
 #define LOCALBUFSIZE 1024
    char Buffer[LOCALBUFSIZE];     // BUGBUG - should make this bullet proof!!!
    char * pBuf = Buffer;          // (ie. Don't try to put more chars in Buffer than
@@ -281,6 +279,18 @@ LogVPrintf( ULONG LogClass, ULONG LogEnable, PCHAR pFormat, PVOID arg_marker)
 
    {
 
+#if 0
+       int size_left;
+       char t[5];
+
+       t[0] = 3;
+       _swix(OS_Word, _INR(0,1), 14, t);
+       _swix(Territory_ConvertDateAndTime, _INR(0,4) | OUT(2),
+	     -1, t, pBuf, LOCALBUFSIZE, "%24:%MI:%SE.%CS ",
+	     &size_left);
+
+       pBuf += LOCALBUFSIZE - size_left - 1;
+#else
 #define MS_PER_SECS   (CLOCKS_PER_SEC)        // 100L
 #define MS_PER_MINS   (MS_PER_SECS*60L)       // 100L*60L
 #define MS_PER_HOURS  (MS_PER_MINS*60L)       // 100L*60L*60L
@@ -301,6 +311,7 @@ LogVPrintf( ULONG LogClass, ULONG LogEnable, PCHAR pFormat, PVOID arg_marker)
    pBuf += sprintf( pBuf, "%02u:%02u:%02u ", (USHORT) Mins,
                                              (USHORT) Secs,
                                              (USHORT) Cs);
+#endif
    }
 
    pBuf += vsprintf( pBuf, pFormat, arg_marker );
