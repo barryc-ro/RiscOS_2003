@@ -26,10 +26,9 @@ LD      = link
 RM      = remove
 WIPE    = -wipe
 DESTROY = destroy
-IGNORE  = IgnoreErr
+#IGNORE  = IgnoreErr
 
 AFLAGS  = -depend !Depend -Stamp -quit
-# DFLAGS  = -DDEBUG
 CFLAGS  = -c -depend !Depend -zM -zps1 -ff ${INCLUDES} ${DFLAGS}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
@@ -43,11 +42,22 @@ RSTUBS    = RISCOSLIB:o.rstubs
 ROMSTUBS  = RISCOSLIB:o.romstubs
 ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.AbsSym
+DEBUGLIB  = <Lib$Dir>.DebugLib.o.debuglibzm
+
+#
+# DebugLib support :- comment out for production.
+#
+#DFLAGS  = -fn -DDEBUGLIB
+#LIBSD = \
+ ${DEBUGLIB} \
+ TCPIPLibs:o.socklib5 \
+ TCPIPLibs:o.unixlib \
+ TCPIPLibs:o.inetlib \
 
 #
 # Include files
 #
-INCLUDES = -IC:
+INCLUDES = -IC:,<Lib$Dir>.
 
 
 #
@@ -63,7 +73,7 @@ EXPORTS   =
 # Rule patterns
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} -o $@ $<
+.cmhg.o:;   ${CMHG} -p -o $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
 
 #
@@ -101,8 +111,8 @@ resources:
 #
 # Stand-alone module
 #
-${TARGETSA}: ${OBJS} ${CLIB}
-        ${LD} -o $@ -module ${OBJS} ${CLIB}
+${TARGETSA}: ${OBJS} ${CLIB} ${LIBSD}
+        ${LD} -o $@ -module ${OBJS} ${CLIB} ${LIBSD}
 
 #
 # ROM target (re-linked at ROM Image build time)
@@ -135,3 +145,4 @@ o.flashprog:	C:h.time
 o.flashprog:	h.module
 o.flashprog:	h.flashprog
 o.flashprog:	h.error
+o.flashprog:	<Lib$Dir>.DebugLib.h.DebugLib
