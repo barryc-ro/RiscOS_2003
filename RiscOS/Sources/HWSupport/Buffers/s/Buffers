@@ -157,9 +157,17 @@ $label          Call    $base, $routine
 ; IntOff saves the PSR in the register provided and disables interrupts
                 MACRO
 $label          IntOff  $reg
-$label          MOV     $reg, pc                ; save PSR in $reg
-                TST     $reg, #I_bit            ; if interrupts on (bit clear)
+$label          SavePSR $reg                    ; save PSR in $reg
+        [ No32bitCode
+                TST     $reg, #I_bit            ; if interrupts on (bit clear) (26-bit version)
                 TEQEQP  $reg, #I_bit            ; then disable them
+        |
+                TST     $reg, #I32_bit          ; if interrupts on (bit clear) (32-bit version)
+                ORREQ   $reg, $reg, #I32_bit
+                msr EQ, CPSR_c, $reg            ; disable interrupts if necessary
+                BICEQ   $reg, $reg, #I32_bit    ; clear I32 bit again if was clear originally
+        ]
+
                 MEND
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -261,6 +269,10 @@ ModuleStart     & 0                     ; not application
                 & swijump-ModuleStart
                 & switable-ModuleStart
                 & 0                     ; no special decoding
+                & 0                     ; no international messages file
+        [ :LNOT: No32bitCode
+                & Module_Flags-ModuleStart
+        ]
 
 title           = "BufferManager",0
 help            = "Buffer Manager",9,"$Module_MajorVersion ($Module_Date.)"
@@ -292,6 +304,11 @@ resource_file   = "Resources:$.Resources.Buffers.Messages", 0
               ]
 
                 ALIGN
+
+        [ :LNOT: No32bitCode
+Module_Flags
+                DCD     1       ; 32-bit compatible
+        ]
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -365,7 +382,9 @@ ClaimVectors    ENTRY
                 SWIVC   XOS_Claim
                 EXIT
 
-ReleaseVectors  ENTRY   "r0"
+ReleaseVectors  ENTRY   "r0,r8"
+                MVNVS   r8, #&80000000
+                MOVVC   r8, #0
                 MOV     r0, #INSV               ; release remove vector
                 ADRL    r1, InsVHandler
                 MOV     r2, wp
@@ -378,7 +397,8 @@ ReleaseVectors  ENTRY   "r0"
                 MOV     r0, #CNPV               ; release count/purge vector
                 ADRL    r1, CnpVHandler
                 SWI     XOS_Release             ; ignore any error
-                EXITS                           ; preserve flags (esp. V)
+                ADDS    r8, r8, #1              ; restore V to entry state
+                EXIT                            ; preserves V flag
 
 ; This call back is granted to allow modules to issue SWIs to the module.  During the init
 ; of the module it has not been linked into the module chain so I then issue a callback
@@ -393,7 +413,7 @@ CallBackRoutine ENTRY   "r1"                    ; issue the service call
 
                 MOV     r1, #Service_BufferStarting
                 SWI     XOS_ServiceCall
-                EXITS
+                EXIT
 
                 LTORG
 
@@ -548,7 +568,7 @@ service         ROUT
  [ standalonemessages
                 TEQNE   r1, #Service_ResourceFSStarting
  ]
-                MOVNES  pc, lr
+                MOVNE   pc, lr
 
 serviceentry    LDR     wp, [wp]
 
@@ -561,11 +581,11 @@ serviceentry    LDR     wp, [wp]
                 ADR     r0, resourcefsfiles
                 MOV     lr, pc
                 MOV     pc, r2
-                Pull    "r0-r3,pc",,^
+                Pull    "r0-r3,pc"
 10
  ]
                 TEQ     r1, #Service_Reset      ; the one we want?
-                MOVNES  pc, lr                  ; no, so return
+                MOVNE   pc, lr                  ; no, so return
 
                 Push    "r0-r3, lr"
 
@@ -574,7 +594,7 @@ serviceentry    LDR     wp, [wp]
                 MOV     r2, #&FF
                 SWI     XOS_Byte
                 TEQ     r1, #0
-                Pull    "r0-r3, pc",NE,^        ; if hard reset, do nothing
+                Pull    "r0-r3, pc",NE          ; if hard reset, do nothing
 
                 Debug   service, "service: soft reset occured"
 
@@ -606,7 +626,7 @@ serviceentry    LDR     wp, [wp]
 
                 Debug   service, "service: all tidied, can return"
 
-                Pull    "r0-r3, pc",,^
+                Pull    "r0-r3, pc"
 
                 GBLS    conditionalgetbodge
  [ standalonemessages
@@ -666,7 +686,7 @@ swijump         ROUT
  [ international
                 B       MakeErrorWithModuleName
  |
-                ORRS    pc, lr, #V_bit
+                RETURNVS
  ]
 
                 MakeErrorBlock BufferManager_BadSWI
@@ -730,7 +750,7 @@ b_Create        ENTRY   "r0-r4"
                 MOV     r2, r1
                 SWI     XOS_Module              ; attempt to release if failed to register
                 PullEnv                         ; preserve r0 around the free.
-                ORRS    pc, lr, #V_bit
+                RETURNVS
 
 BufferTooSmall
                 ADR     r0, ErrorBlock_BufferManager_BufferTooSmall
@@ -904,7 +924,7 @@ b_Register      ENTRY   "r0-r3"
 
 ; and drop thru to ...
 
-defaultHANDLER  BICS    pc, lr, #V_bit          ; return V clear
+defaultHANDLER  RETURNVC                        ; return V clear
 
 60
         ; We have been unable to find a suitable gap within the buffer list,
@@ -982,15 +1002,15 @@ b_Deregister    ENTRY   "r0"
                 MOV     r0, #-1                 ; scrap handle
                 STR     r0, [r11, #buffer_Handle]
 
-                EXITS                           ; (r14 on entry has V clear)
+                EXIT                            ; (V must be clear because of that BVS above)
 
 99
         ; Return an error from the device, this involves unstacking the
-        ; registers and returning home.
+        ; registers and returning home.  V must be set when jumping here
         ;
                 ADD     sp, sp, #4              ; skip r0 in return frame
-                Pull    "lr"                    ; and return, r0 intact!
-                ORRS    pc, lr, #V_bit
+                Pull    "lr"                    ; and return V set, r0 intact!
+                RETURNVS
 
                 LTORG
 
@@ -1025,8 +1045,7 @@ b_ModifyFlags   ENTRY
                 BL      findbuffer
                 BVS     %FT99
 
-                MOV     lr, pc
-                TEQP    pc, #SVC_mode + I_bit           ; disable IRQs to do atomic update of flags
+                PHPSEI  lr, r10                         ; disable IRQs to do atomic update of flags
 
                 LDR     r10, [r11, #buffer_Flags]       ; only allow user to modify bottom 8 bits
                 AND     r2, r10, r2
@@ -1034,15 +1053,15 @@ b_ModifyFlags   ENTRY
                 MOV     r1, r10                         ; r1  = old value
                 STR     r2, [r11, #buffer_Flags]
 
-                TEQP    lr, #0                          ; restore old IRQ status
+                PLP     lr                              ; restore old IRQ status
 
                 Debug   modflags, "modifyflags: old, new:", r1, r2
 
-                EXITS
+                EXIT                                    ; V must be clear to get here
 
 99
                 PullEnv
-                ORRS    pc, lr, #V_bit
+                RETURNVS                                ; V must be set anyway to get here
 
                 LTORG
 
@@ -1115,16 +1134,16 @@ b_Link          ENTRY   "r0-r2"
                 BIC     r0, r0, #b_ThresholdExceeded    ; indicate space >= threshold
                 STR     r0, [r11, #buffer_Flags]
 
-                MOV     r0, #0                  ; zap the two index points
+                SUBS    r0, r0, r0                      ; zap the two index points (R0=0, V cleared)
                 STR     r0, [r11, #buffer_InsertIndex]
                 STR     r0, [r11, #buffer_RemoveIndex]
 
-                EXITS
+                EXIT
 
 99
                 STR     r0, [sp]
                 PullEnv
-                ORRS    pc, lr, #V_bit          ; ensure V set on exit
+                RETURNVS
 
         ; default handler if r2 =0 on entry.
         ;
@@ -1177,18 +1196,18 @@ b_UnLink        ENTRY   "r0-r2"
                 BIC     r0, r0, #b_ThresholdExceeded    ; indicate space >= threshold
                 STR     r0, [r11, #buffer_Flags]
 
-                MOV     r0, #0                  ; zap the two index points
+                SUBS    r0, r0, r0                      ; zap the two index points (R0=0, clears V)
                 STR     r0, [r11, #buffer_InsertIndex]
                 STR     r0, [r11, #buffer_RemoveIndex]
 
-                EXITS
+                EXIT
 
 ; come here when error, because buffer not found
 
 99
                 STR     r0, [sp]
                 PullEnv
-                ORRS    pc, lr, #V_bit
+                RETURNVS
 
                 LTORG
 
@@ -1241,11 +1260,12 @@ b_GetInfo       ENTRY
 
                 Debug   getinfo, "getinfo: flags, start, end, insert, remove, free, chars:", r0,r1,r2,r3,r4,r5,r6
 
-                EXITS
+                CLRV
+                EXIT
 
 99
                 PullEnv                         ; V and r0 set by call above.
-                ORRS    pc, lr, #V_bit
+                RETURNVS
 
                 LTORG
 
@@ -1266,9 +1286,11 @@ b_GetInfo       ENTRY
 ; This call can be used to read/modify the threshold value being used.
 ;
 
-b_Threshold     ENTRY   "r4-r7"
+b_Threshold     Entry   "r4-r8"
 
                 Debug   threshold, "threshold: buffer handle, threshold:", r0, r1
+
+                SavePSR r8
 
                 BL      findbuffer
                 BVS     %FT99
@@ -1279,9 +1301,12 @@ b_Threshold     ENTRY   "r4-r7"
 
                 LDRNE   r4, [r11, #buffer_Flags]        ; if setting value
                 TSTNE   r4, #b_SendThresholdUpCalls     ; and threshold upcalls enabled
-                MOVEQ   r1, lr                          ; put old value in r1
-                EXITS   EQ                              ; then check for threshold crossing else exit now
+                BNE     %FT05
+                MOV     r1, lr                          ; put old value in r1
+                RestPSR r8,,f
+                EXIT    EQ                              ; then check for threshold crossing else exit now
 
+05
                 ASSERT  buffer_InsertIndex = buffer_Size +4
                 ASSERT  buffer_RemoveIndex = buffer_Size +8
                 ADD     r5, r11, #buffer_Size
@@ -1299,18 +1324,20 @@ b_Threshold     ENTRY   "r4-r7"
 
                 TST     r4, #b_ThresholdExceeded        ; if threshold not already exceeded
                 BLEQ    SendFillingUpCall               ; then send filling upcall (this updates flags)
-                Pull    "r1, r4-r7,pc",,^               ; then exit
+                CLRV
+                Pull    "r1, r4-r8,pc"                  ; then exit
 
 ; free space >= threshold, ie buffer emptying
 
 10
                 TST     r4, #b_ThresholdExceeded        ; if threshold currently exceeded
                 BLNE    SendEmptyingUpCall              ; then send emptying upcall (this updates flags)
-                Pull    "r1, r4-r7,pc",,^
+                CLRV
+                Pull    "r1, r4-r8,pc"
 
 99
-                Pull    "r4-r7, lr"
-                ORRS    pc, lr, #V_bit
+                Pull    "r4-r8, lr"
+                RETURNVS
 
                 LTORG
 
@@ -1428,8 +1455,21 @@ ServiceRoutine  ROUT
 
 InsVHandler
         Push    "r11,lr"
+  [ :LNOT: No32bitCode
+        mrs    ,r11, CPSR
+        Push    "r11"
+  ]
         BL      findbufferR1            ; find buffer (r11 -> buffer block)
+  [ :LNOT: No32bitCode
+        Pull    "r11"
+        BVC     %FT10
+        msr    ,CPSR_cf, r11
+        Pull    "r11,pc"
+10
+        msr    ,CPSR_cf, r11
+  |
         Pull    "r11,pc",VS,^           ; pass on call if not ours
+  ]
 
         Debug   insv,"InsV called"
 
@@ -1496,7 +1536,7 @@ s_InsertByte    ROUT                            ; r11 and return address already
         LDR     r0, [r11, #buffer_Handle]
         Call    r11, buffer_WakeUpCode
 30
-        TEQP    r9, #0                          ; restore old PSR
+        RestPSR r9                              ; restore old PSR
         CLC                                     ; set C => successful insert
         Pull    "r0,r1,r4-r9,r11,pc"
 
@@ -1505,8 +1545,12 @@ s_InsertByte    ROUT                            ; r11 and return address already
         TST     r4, #b_GenerateInputFull        ; if not generating input full events
         BEQ     %FT50                           ; then skip
 
+        ASSERT (IRQ_mode :AND: :NOT: SVC_mode) = 0
+        ASSERT (FIQ_mode :AND: :NOT: SVC_mode) = 0
+        ASSERT (USR_mode :AND: :NOT: SVC_mode) = 0
+        SavePSR r6
         ORR     r6, r9, #SVC_mode
-        TEQP    r6, #0                          ; restore old IRQ state, set SVC mode
+        RestPSR r6,,c                           ; set SVC mode
         NOP
 
         Push    "lr"                            ; save SVC_lr
@@ -1515,7 +1559,7 @@ s_InsertByte    ROUT                            ; r11 and return address already
         SWI     XOS_GenerateEvent               ; r2 = character that failed
         Pull    "lr"                            ; restore SVC_lr
 50
-        TEQP    r9, #0                          ; restore old mode/IRQs
+        RestPSR r9                              ; restore old mode/IRQs
         SEC                                     ; set C => insert failed
         Pull    "r0,r1,r4-r9,r11,pc"
 
@@ -1622,8 +1666,12 @@ s_InsertBlock                                   ; r11 and return address already
         TST     r4, #b_GenerateInputFull        ; if not generating input full events
         BEQ     %FT85                           ; then skip
 
+        ASSERT (IRQ_mode :AND: :NOT: SVC_mode) = 0
+        ASSERT (FIQ_mode :AND: :NOT: SVC_mode) = 0
+        ASSERT (USR_mode :AND: :NOT: SVC_mode) = 0
+        SavePSR r6
         ORR     r6, r9, #SVC_mode
-        TEQP    r6, #0                          ; restore old IRQ state, set SVC mode
+        RestPSR r6,,c                           ; set SVC mode
         NOP
 
         Push    "lr"                            ; save SVC_lr
@@ -1632,7 +1680,7 @@ s_InsertBlock                                   ; r11 and return address already
         SWI     XOS_GenerateEvent               ; r2->data left, r3=no. bytes left
         Pull    "lr"                            ; restore SVC_lr
 85
-        TEQP    r9, #0                          ; restore old CPU mode/IRQs
+        RestPSR r9                              ; restore old CPU mode/IRQs
         CMP     r3, #1                          ; C=0 if all done, otherwise C=1
 
         Pull    "r0,r1,r4-r9,r11,pc"
@@ -1677,10 +1725,23 @@ s_InsertBlock                                   ; r11 and return address already
 ; as removed.
 ;
 
-ExamineHandler
+ExamineHandler ROUT
         Push    "r11,lr"
+  [ :LNOT: No32bitCode
+        mrs    ,r11, CPSR
+        Push    "r11"
+  ]
         BL      findbufferR1            ; find buffer (r11 -> buffer block)
+  [ :LNOT: No32bitCode
+        Pull    "r11"
+        BVC     %FT10
+        msr    ,CPSR_cf, r11
+        Pull    "r11,pc"
+10
+        msr    ,CPSR_cf, r11
+  |
         Pull    "r11,pc",VS,^           ; pass on call if not ours
+  ]
 
         TST     r1, #1:SHL:31
         ADREQ   lr, RemVClaim           ; if byte examine then set up stack so that the result
@@ -1694,12 +1755,25 @@ RemVClaim
         MOVCC   r0, r2                  ; if succeeded then return byte in r0 as well as r2
         Pull    "pc"                    ; claim vector call
 
-RemVHandler
+RemVHandler ROUT
         BVS     ExamineHandler
 
         Push    "r11,lr"
+  [ :LNOT: No32bitCode
+        mrs    ,r11, CPSR
+        Push    "r11"
+  ]
         BL      findbufferR1            ; find buffer (r11 -> buffer block)
+  [ :LNOT: No32bitCode
+        Pull    "r11"
+        BVC     %FT10
+        msr    ,CPSR_cf, r11
+        Pull    "r11,pc"
+10
+        msr    ,CPSR_cf, r11
+  |
         Pull    "r11,pc",VS,^           ; pass on call if not ours
+  ]
 
         Debug   remv,"RemV called"
 
@@ -1773,9 +1847,12 @@ RemExByteCommon
         TST     r4, #b_GenerateOutputEmpty      ; if buffer empty events disabled
         BEQ     %FT30                           ; then skip
 
-        MOV     r6, pc
-        ORR     r6, r6, #SVC_mode
-        TEQP    r6, #0                          ; set SVC mode
+        ASSERT (IRQ_mode :AND: :NOT: SVC_mode) = 0
+        ASSERT (FIQ_mode :AND: :NOT: SVC_mode) = 0
+        ASSERT (USR_mode :AND: :NOT: SVC_mode) = 0
+        SavePSR r6
+        ORR     r6, r10, #SVC_mode
+        RestPSR r6,,c                           ; set SVC mode
         NOP
 
         Push    "lr"                            ; save SVC_lr
@@ -1784,7 +1861,7 @@ RemExByteCommon
         SWI     XOS_GenerateEvent
         Pull    "lr"                            ; restore SVC_lr
 30
-        TEQP    r10, #0                         ; restore old CPU mode/IRQ state
+        RestPSR r10                             ; restore old CPU mode/IRQ state
         CLC                                     ; C=0 => remove successful
         Pull    "r1,r4-r11,pc"
 
@@ -1794,7 +1871,7 @@ RemExByteCommon
         BICEQ   r4, r4, #b_NotDormant
         STREQ   r4, [r11, #buffer_Flags]        ; then mark as dormant
 
-        TEQP    r10, #0                         ; restore old CPU mode/IRQ state
+        RestPSR r10                             ; restore old CPU mode/IRQ state
         SEC                                     ; C=1 => remove failed
         Pull    "r1,r4-r11,pc"
 
@@ -1885,9 +1962,12 @@ RemExBlockCommon
         TST     r4, #b_GenerateOutputEmpty      ; if output empty events disabled
         BEQ     %FT80                           ; then exit
 
-        MOV     r6, pc
-        ORR     r6, r6, #SVC_mode
-        TEQP    r6, #0                          ; set SVC mode
+        ASSERT (IRQ_mode :AND: :NOT: SVC_mode) = 0
+        ASSERT (FIQ_mode :AND: :NOT: SVC_mode) = 0
+        ASSERT (USR_mode :AND: :NOT: SVC_mode) = 0
+        SavePSR r6
+        ORR     r6, r10, #SVC_mode
+        RestPSR r6,,c                           ; set SVC mode
         NOP
 
         Push    "lr"                            ; save SVC_lr
@@ -1901,7 +1981,7 @@ RemExBlockCommon
         BICHS   r4, r4, #b_NotDormant
         STRHS   r4, [r11, #buffer_Flags]        ; then mark as dormant
 90
-        TEQP    r10, #0                         ; restore old CPU mode/IRQ state
+        RestPSR r10                             ; restore old CPU mode/IRQ state
         CMP     r3, #1                          ; C=0 if all done, otherwise C=1
         Pull    "r0,r1,r4-r11,pc"
 
@@ -1972,15 +2052,21 @@ CnpVClaim
                 MOV     r2, r2, LSR #8          ; r2 = upper 24 bits of count
                 Pull    "pc"
 
-CnpVHandler
+CnpVHandler     ROUT
                 Push    "r10,r11,lr"
-                MOV     r10, pc                 ; save PSR
+                SavePSR r10                     ; save PSR
                 BL      findbufferR1            ; find buffer (r11 -> buffer block)
+        [ No32bitCode
                 Pull    "r10,r11,pc",VS,^       ; pass on call if not ours
-
+        |
+                BVC     %FT10
+                RestPSR r10
+                Pull    "r10,r11,pc"
+10
+        ]
                 Debug   cnpv,"CnpV called"
 
-                TEQP    r10, #0                 ; restore PSR (need original V and C)
+                RestPSR r10                     ; restore PSR (need original V and C)
                 Pull    "r10"                   ; and r10
                 ADRVC   lr, CnpVClaim           ; if free/used space then set up stack to munge output on return
                 STRVC   lr, [sp, #4]
@@ -2084,7 +2170,7 @@ s_PurgeBuffer   ROUT                            ; r11 and return address already
         STR	r4, [r11, #buffer_Flags]        ; then mark as dormant
  ]
 
-        TEQP    r6, #0                          ; restore old IRQ state
+        RestPSR r6                              ; restore old IRQ state
         Pull    "r4-r6,r11,pc"
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -2146,8 +2232,11 @@ s_NextBlock                                     ; r11 and return address already
         TST     r4, #b_GenerateOutputEmpty      ; if output empty events disabled
         BEQ     %FT20                           ;   then exit
 
+        ASSERT (IRQ_mode :AND: :NOT: SVC_mode) = 0
+        ASSERT (FIQ_mode :AND: :NOT: SVC_mode) = 0
+        ASSERT (USR_mode :AND: :NOT: SVC_mode) = 0
         ORR     r6, r9, #SVC_mode
-        TEQP    r6, #0                          ; restore old IRQ state, set SVC mode
+        RestPSR r6                              ; restore old IRQ state, set SVC mode
         NOP
 
         Push    "lr"                            ; save SVC_lr
@@ -2156,7 +2245,7 @@ s_NextBlock                                     ; r11 and return address already
         SWI     XOS_GenerateEvent
         Pull    "lr"                            ; restore SVC_lr
 20
-        TEQP    r9, #0                          ; restore old CPU mode/IRQ state
+        RestPSR r9                              ; restore old CPU mode/IRQ state
         RSBS    r4, r3, #0                      ; C=1 if no block to return, otherwise C=0
         Pull    "r4-r9,r11,pc"
 
@@ -2175,16 +2264,16 @@ SendFillingUpCall ENTRY "r0-r3, r9"
                 STR     r4, [r11, #buffer_Flags]
                 MOV     r0, #UpCall_BufferFilling
                 LDR     r1, [r11, #buffer_Handle]
+                SavePSR r3
+                WritePSRc I_bit :OR: SVC_mode, r2
                 MOV     r2, #0                  ; indicate filling in r2 as well as in r0
-                MOV     r3, pc
-                TEQP    pc, #SVC_mode + I_bit
                 MOV     r9, #UpCallV
                 Push    "lr"
                 SWI     XOS_CallAVector         ; issue UpCall
                 Pull    "lr"
-                TEQP    r3, #0
+                RestPSR r3
                 NOP
-                EXITS
+                EXIT
 
 
 
@@ -2203,15 +2292,15 @@ SendEmptyingUpCall ENTRY "r0-r3, r9"
                 MOV     r0, #UpCall_BufferEmptying
                 LDR     r1, [r11, #buffer_Handle]
                 MOV     r2, #-1                 ; indicate emptying in r2 as well as in r0
-                MOV     r3, pc
-                TEQP    pc, #SVC_mode + I_bit
+                SavePSR r3
+                WritePSRc I_bit :OR: SVC_mode, r9
                 MOV     r9, #UpCallV
                 Push    "lr"
                 SWI     XOS_CallAVector         ; issue UpCall
                 Pull    "lr"
-                TEQP    r3, #0
+                RestPSR r3
                 NOP
-                EXITS
+                EXIT
 
 
 
@@ -2255,6 +2344,10 @@ findbuffer      ROUT
 ;
 findbufferR1    ROUT
                 Push    "r1, r10, lr"
+        [ :LNOT: No32bitCode
+                mrs    ,r10, CPSR               ; obtain CPSR
+                STR     r10, [sp, #-4]!         ; stack it
+        ]
                 BIC     r1, r1, #1:SHL:31       ; r1  = true buffer handle
 
                 LDR     r11, BufferBlockAt      ; r11 -> buffer block
@@ -2266,10 +2359,20 @@ findbufferR1    ROUT
                 TEQHS   r1, lr                  ; check for equality
                 BHI     %BT10                   ; only loop if CS from SUBS and NE from TEQ
 
+        [ :LNOT: No32bitCode
+                LDR     r10, [sp], #4
+                BICCS   r10, r10, #V_bit        ; knock out V bit
+                ORRCC   r10, r10, #V_bit
+                SUBCS   r11, r11, #buffer_SIZE  ; Matched, so correct for overshoot
+                msr    ,CPSR_f, r10
+
+                Pull    "r1, r10, pc"
+        |
                 Pull    "r1, r10, lr"
                 ORRCCS  pc, lr, #V_bit          ; Return VS if not found
                 SUB     r11, r11, #buffer_SIZE  ; Matched, so correct for overshoot
                 BICS    pc, lr, #V_bit          ; And exit VC with r11 -> buffer
+        ]
 
                 LTORG
 
@@ -2294,7 +2397,7 @@ OpenMessages    ROUT
 
                 LDR     r3, Flags
                 TST     r3, #f_WeHaveMessages                   ; do we have an open messages block?
-                Pull    "r0-r3, pc", NE, ^                      ; yes, so don't bother again
+                Pull    "r0-r3, pc", NE                         ; yes, so don't bother again
 
                 ADR     r0, MessagesWorkspace
                 ADRL    r1, resource_file                       ; -> path to be opened
@@ -2304,7 +2407,7 @@ OpenMessages    ROUT
                 ORRVC   r3, r3, #f_WeHaveMessages
                 STRVC   r3, Flags                               ; assuming it worked mark as having messages
 
-                Pull    "r0-r3, pc",,^                          ; returning VC, VS from XSWI!
+                Pull    "r0-r3, pc"                             ; returning VC, VS from XSWI!
 
 
 ; Attempt to close the messages file.
@@ -2315,7 +2418,7 @@ CloseMessages   ROUT
 
                 LDR     r0, Flags
                 TST     r0, #f_WeHaveMessages                   ; do we have any messages?
-                Pull    "r0, pc", EQ, ^                         ; and return if not!
+                Pull    "r0, pc", EQ                            ; and return if not!
 
                 ADR     r0, MessagesWorkspace
                 SWI     XMessageTrans_CloseFile                 ; yes, so close the file
@@ -2323,7 +2426,7 @@ CloseMessages   ROUT
                 BICVC   r0, r0, #f_WeHaveMessages
                 STRVC   r0, Flags                               ; mark as we don't have them
 
-                Pull    "r0, pc",,^
+                Pull    "r0, pc"
 
 
 ; Generate an error based on the error token given.  Does not assume that
@@ -2343,7 +2446,7 @@ MakeErrorEntry
                 LDR     r1, Flags
                 TST     r1, #f_WeHaveMessages
                 PullEnv EQ
-                ORREQS  pc, lr, #V_bit                          ; if still not open then return with V set
+                RETURNVS EQ                                     ; if still not open then return with V set
 
                 ADR     r1, MessagesWorkspace                   ; -> message control block
                 MOV     r2, #0
@@ -2355,6 +2458,7 @@ MakeErrorEntry
 
                 BL      CloseMessages                           ; attempt to close the doofer
 
+                SETV
                 EXIT                                            ; return, r0 -> block, V set
 
               ]
