@@ -1,3 +1,28 @@
+# Makefile for EngMenu
+#
+# ***********************************
+# ***    C h a n g e   L i s t    ***
+# ***********************************
+# Date       Name         Description
+# ----       ----         -----------
+#  AR	   4/2/2000   included resources target
+
+#
+# Program specific options:
+#
+
+COMPONENT = EngMenu
+APP	  = !EngMenu
+RDIR      = Resources.STB400
+#${USERIF}
+LDIR	  = EngMenuRes:
+TARGET    = ${RDIR}.!RunImage
+D_TARGET  = ${RDIR}.!RunImaDB
+I_TARGET  = ${RDIR}.!RunImagI
+
+# Resources paths
+#
+RESAPP = <resource$dir>.${USERIF}.Apps.${APP}
 #
 # Generic options:
 #
@@ -33,12 +58,6 @@ DLIBS  = <LIB$Dir>.DebugLib.o.debuglib TCPIPLibs:o.socklib TCPIPLibs:o.inetlib
 #
 INCLUDES =  -ICLIB:,TCPIPLibs:
 
-# Program specific options:
-#
-COMPONENT = EngMenu
-TARGET    = !EngMenu.!RunImage
-D_TARGET  = !EngMenu.!RunImaDB
-I_TARGET  = !EngMenu.!RunImagI
 
 OBJS     = 	\
 o.main 		\
@@ -84,8 +103,8 @@ io.menu
 
 .c++.o:;    ${C++} ${CFLAGS} ${DFLAGS} -o $@ $<
 .c.o:;      ${CC} ${CFLAGS} ${DFLAGS} -o $@ $<
-.c++.d_o:;    ${C++} ${CFLAGS} ${DFLAGS} -o $@ $<
-.c.d_o:;      ${CC} ${CFLAGS} ${DFLAGS} -o $@ $<
+.c++.d_o:;  ${C++} ${CFLAGS} ${DFLAGS} -o $@ $<
+.c.d_o:;    ${CC} ${CFLAGS} ${DFLAGS} -o $@ $<
 .cmhg.o:;   ${CMHG} -o $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
 .c++.i:;    ${C++} ${CFLAGS} ${DFLAGS} -c -C -E $< >> $@
@@ -96,12 +115,15 @@ io.menu
 # Build
 #
 all: ${TARGET} dirs
+	access ${TARGET} RW/r
         @echo ${COMPONENT}: all complete
 
 d_all: ${D_TARGET} dirs
+	access ${D_TARGET} RW/r
         @echo ${COMPONENT}: all complete
         
 instrument: ${I_TARGET} dirs
+	access ${I_TARGET} RW/r
 	@echo ${COMPONENT}: instrument build complete
 	
 preprocess: ${OBJSI} dirs
@@ -113,16 +135,39 @@ dirs:
         ${MKDIR} i
         ${MKDIR} io
         ${MKDIR} inst
+        ${MKDIR} ${RESAPP}
+        
+resources: ${TARGET} dirs
+	set EngMenuRes$Path Resources.${USERIF}.${LOCALE}., Resources.${USERIF}.UK.
+        ${CP} ${RDIR}.!Run      ${RESAPP}.!Run ${CPFLAGS}
+        access ${RESAPP}.!Run WR/r
+        ${CP} ${RDIR}.Pace	${RESAPP}.Pace ${CPFLAGS}
+        access ${RESAPP}.Pace WR/r
+        ${CP} ${LDIR}Messages   ${RESAPP}.Messages ${CPFLAGS}
+        access ${RESAPP}.Messages WR/r
+        ${CP} ${LDIR}Config     ${RESAPP}.Config ${CPFLAGS}
+        access ${RESAPP}.Config WR/r
+        ${CP} ${RDIR}.!RunImage ${RESAPP}.!RunImage ${CPFLAGS}
+        access ${RESAPP}.!RunImage WR/r
+        access ${RESAPP} /r
+        unset EngMenuRes$Path
+        @echo ${COMPONENT}: resource files copied to Messages module
 
 clean:
+        ${WIPE} ${TARGET} ${WFLAGS}
+        ${WIPE} ${d_TARGET} ${WFLAGS}
+        ${WIPE} ${I_TARGET} ${WFLAGS}
         ${WIPE} o ${WFLAGS}
         ${WIPE} d_o ${WFLAGS}
         ${WIPE} i ${WFLAGS}
         ${WIPE} io ${WFLAGS}
         ${WIPE} inst ${WFLAGS}
-        ${WIPE} ${TARGET} ${WFLAGS}
-        ${WIPE} ${d_TARGET} ${WFLAGS}
-        ${WIPE} ${I_TARGET} ${WFLAGS}
+        ${WIPE} ${RESAPP}.!Run ${WFLAGS}
+        ${WIPE} ${RESAPP}.Pace ${WFLAGS}
+        ${WIPE} ${RESAPP}.!RunImage ${WFLAGS}
+        ${WIPE} ${RESAPP}.Messages ${WFLAGS}
+        ${WIPE} ${RESAPP}.Config ${WFLAGS}
+        ${WIPE} ${RESAPP} ${WFLAGS}	
         @echo ${COMPONENT}: cleaned
         
 #
