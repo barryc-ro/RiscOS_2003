@@ -6,6 +6,7 @@
 # Date       Name         Description
 # ----       ----         -----------
 # 25-May-94  AMcC         Created.
+# 21-Nov-00  SBF          Added StripDepnd support.
 #
 
 #
@@ -17,6 +18,7 @@ CP      = copy
 LD      = link
 RM      = remove
 WIPE    = -wipe
+STRIP   = -stripdepnd
 ASFLAGS = -depend !Depend ${THROWBACK} -PD "Territory SETS \"${COMPONENT}\"" -o $@
 LDFLAGS = -bin -o $@
 CPFLAGS = ~cfr~v
@@ -46,6 +48,7 @@ clean:
         ${WIPE} o ${WPFLAGS}
         ${WIPE} rm ${WPFLAGS}
         ${WIPE} Resources.Combined ${WPFLAGS}
+        ${STRIP}
         @echo Territory modules: cleaned
 
 Resources.Combined.${COMPONENT}: Resources.${COMPONENT}.Territory LocalRes:Messages
