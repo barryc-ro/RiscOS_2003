@@ -37,7 +37,6 @@ INETLIB   = TCPIPLibs:o.inetlibzm
 SOCKLIB   = TCPIPLibs:o.socklibzm
 UNIXLIB   = TCPIPLibs:o.unixlibzm
 
-
 #
 # Program specific options:
 #
@@ -59,6 +58,9 @@ BLOCKDRIVERS=	-DBLOCKDRIVERS
 
 TINYSTUBS=	#-DTINYSTUBS
 STUBS=		C:o.Stubs
+
+ROMCSTUBS=      RISC_OSLib:o.romcstubs
+ABSSYM=         RISC_OSLib:o.AbsSym
 
 DEBUG=		#-DDEBUG
 
@@ -144,7 +146,6 @@ o.ppphdr:	cmhg.ppphdr
 
 
 # Dynamic dependencies:
-o.ppphdr:	cmhg.ppphdr
 o.if_ppp:	c.if_ppp
 o.if_ppp:	TCPIPLibs:sys.h.dcistructs
 o.if_ppp:	h.ppp
@@ -380,3 +381,4 @@ o.mbuf:	TCPIPLibs:sys.h.socket
 o.mbuf:	TCPIPLibs:netinet.h.in
 o.mbuf:	TCPIPLibs:netinet.h.if_ether
 o.mbuf:	h.mbuf
+o.ppphdr:	cmhg.ppphdr
