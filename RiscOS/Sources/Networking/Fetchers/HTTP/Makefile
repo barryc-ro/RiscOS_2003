@@ -38,6 +38,7 @@ WIPE	= -wipe
 
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
+MCFLAGS = -C -E
 
 CFLAGS	 = -c -depend !Depend ${INCLUDES} -zM -Wp -ffah -zps1 ${DFLAGS}
 DFLAGS	 = -D${SYSTEM} -DCOMPAT_INET4 -DCOOKIE -DCOMPRESSION -UTML
@@ -105,6 +106,29 @@ RAM_OBJS =\
  o.writedata\
  o.HTTPHdr
 
+MCCABE_OBJS =\
+ i.config\
+ i.connect\
+ i.connpool\
+ i.cookie\
+ i.dates\
+ i.decompress\
+ i.dns\
+ i.generic\
+ i.header\
+ i.hosttrack\
+ i.module\
+ i.protocol\
+ i.readdata\
+ i.security\
+ i.ses_ctrl\
+ i.start\
+ i.status\
+ i.stop\
+ i.URLclient\
+ i.utils\
+ i.writedata
+
 
 DBG_OBJS =\
  od.config\
@@ -135,11 +159,12 @@ MSGSF=o.msgs
 #
 # Rule patterns
 #
-.SUFFIXES: .o .od .c
+.SUFFIXES: .o .od .i .c
 
 .c.o:;	  ${CC} ${CFLAGS} ${ROMFLAGS} -o $@ $<
 .c.od:;	  ${CC} ${CFLAGS} ${ROMFLAGS} ${DEBFLAGS} -o $@ $<
-.cmhg.o:; ${CMHG} -o $@ $< -d $*.h
+.c.i:;    ${CC} ${MCFLAGS} ${CFLAGS} ${ROMFLAGS} >$@ $<
+.cmhg.o:; ${CMHG} -o $@ $< -p -d $*.h
 
 HTTPHdr.h: HTTPHdr.o
 	  @|
@@ -156,6 +181,9 @@ ramtrace: ${DBG_MODULE}
 
 rom: ${ROM_MODULE}
 	@echo ${COMPONENT}: Module built (ROM)
+
+mccabe: ${MCCABE_OBJS}
+	@echo ${COMPONENT}: McCabe sources build (Disc)
 
 install_rom: ${ROM_MODULE}
 	${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
