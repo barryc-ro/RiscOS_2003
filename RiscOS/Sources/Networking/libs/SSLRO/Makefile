@@ -33,11 +33,16 @@ COMPONENT = SSLRO
 
 # RISC OS ROM build rules:
 #
-export:
+export: export_${PHASE}
+
+export_libs:
+	@echo ${COMPONENT}: export complete(libs)
+
+export_hdrs:
 	${mkdir} ${SSLDIR}
         ${CP} h ${SSLDIR}.h ${CPFLAGS}
         ${CP} o ${SSLDIR}.o ${CPFLAGS}
-        @echo ${COMPONENT}: export complete
+        @echo ${COMPONENT}: export complete(hdrs)
 
 clean:
         @echo ${COMPONENT}: cleaned
