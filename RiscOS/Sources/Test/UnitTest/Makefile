@@ -138,7 +138,7 @@ install:
 	${CP} ${TARGET} ${APP}.${TARGET} ${CPFLAGS}
 	${CP} Resources.* ${APP}.* ${CPFLAGS}
 	${CP} ${CRUNCHED}.TestCard ${APP}.TestCard ${CPFLAGS}
-	${CP} ${CRUNCHED}.Gen_Lib ${APP}.Gen_Lib ${CPFLAGS}
+	${CP} ${CRUNCHED}.Gen_lib ${APP}.Gen_lib ${CPFLAGS}
 	@echo ${COMPONENT}: installed
 
 dirs:
@@ -155,7 +155,7 @@ ${TARGET}: ${OBJS} dirs
         ${LD} ${LDFLAGS} -o $@ ${OBJS} ${CLIB}
         @echo ${COMPONENT}: link stage complete
         ${CRUNCH} ${BFLAGS} @.b.TestCard @.${CRUNCHED}.TestCard
-        ${CRUNCH} ${BFLAGS} @.b.Gen_Lib @.${CRUNCHED}.Gen_Lib
+        ${CRUNCH} ${BFLAGS} @.b.Gen_lib @.${CRUNCHED}.Gen_lib
 
 
 # Dynamic dependencies:
