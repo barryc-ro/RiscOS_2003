@@ -110,10 +110,10 @@ o.filechange o.handlers o.interest o.main oz.main: h.${CMHGNAME}
 #
 # RISC OS ROM build rules:
 #
-rom: ${TARGET} local_dirs
+rom: ${TARGET}
         @echo ${COMPONENT}: rom module built
 
-export: export_${PHASE}
+export: export_${PHASE} local_dirs 
 
 export_hdrs: h.filewatch hdr.filewatch
         ${CP} h.filewatch ${EXP_HDR}.h.filewatch ${CPFLAGS}
@@ -124,11 +124,11 @@ export_libs: o.filewatch
         ${CP} o.filewatch ${EXP_HDR}.o.filewatch ${CPFLAGS}
         @echo ${COMPONENT}: export complete (libs)
 
-install_rom: ${TARGET} local_dirs
+install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
-install: rm.${COMPONENT} local_dirs
+install: rm.${COMPONENT}
         @echo ${COMPONENT}: installed
 
 clean:
