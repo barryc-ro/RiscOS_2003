@@ -29,14 +29,17 @@
 #include "parse.h"
 #include "macros.h"
 #include "md.h"
+#include "readmk.h"
+#include "utility.h"
 
 /* A hash table containing the names of Makefiles already included
- * The associated value is the filename.
+ * The associated value is the filename.  This is used to track
+ * self-including makefiles.
  */
 static HashTable inc_tab;
 
 /* A hash table containing the names of the nodes in the tree.
- * The associated values are Node pointers
+ * The associated values are Node structure pointers.
  */
 static HashTable node_tab;
 
@@ -57,6 +60,51 @@ static Node *nodep, **nodeq;
  * .nodes should be written.
  */
 static Node *dotnodep, **dotnodeq;
+
+/* macro_origin_str is the string table oorresponding to the macro_origin enum in parse.h
+ * Do not change these names just because you feel like it - they are used as the return
+ * values for the origin() function and must be these strings exactly.
+ *
+ * MUST KEEP THIS UP TO DATE WITH THE ENUMS.
+ */
+static char *macro_origin_str[] = {
+  "undefined",
+  "default",
+  "environment",
+  "environment override",
+  "file",
+  "command line",
+  "override",
+  "automatic",
+};
+
+/* This is the ranking list - highest to lowest priority.  This ordering is the default
+ * rank.
+ */
+static const macro_origin default_org_rank[] = {
+  org_override,
+  org_command_line,
+  org_environment_override,
+  org_file,
+  org_environment,
+  org_automatic,
+  org_default,
+  org_undefined
+};
+/* This is the ranking list - highest to lowest priority.  This ordering was that effectively
+ * employed by amu 5.00.
+ */
+static const macro_origin amu_5_00_org_rank[] = {
+  org_override,
+  org_file,
+  org_command_line,
+  org_automatic,
+  org_default,
+  org_environment_override,
+  org_environment,
+  org_undefined
+};
+static const macro_origin *org_rank;
 
 
 /* This access function is used to obtain the list of all the nodes in the parse tree */
@@ -93,12 +141,21 @@ static Node *add_dot_node_to_list(Node *n)
  */
 static char *include_resolve_name(char *name)
 {
-  char filename[CMDLEN];
+  const size_t name_len = strlen(name) + 1;
+  size_t filename_len = FILENAME_MAX;
+  char *filename = safe_malloc(filename_len + name_len);
+
   include_search_path *i;
 
   for (i = &include_dirs; i; i = i->next) {
-    strcpy(filename, i->path);
-    strcat(filename, name);
+    const size_t path_len = strlen(i->txt);
+    if (path_len > filename_len) {
+      free(filename);
+      filename_len = path_len;
+      filename = safe_malloc(filename_len + name_len);
+    }
+    memcpy(filename, i->txt, path_len);
+    memcpy(filename + path_len, name, name_len);
     if (wf_filesize(filename) != -1) break;
   }
 
@@ -106,10 +163,12 @@ static char *include_resolve_name(char *name)
     strcpy(filename, name);
   }
 
-  return Strdup(filename);
+  return safe_realloc(filename, strlen(filename) + 1);
 }
 
-/* Open a new makefile (root makefile or an included one) and prepare it for parsing */
+/* Open a new makefile (root makefile or an included one) and prepare it for parsing
+ * It takes a copy of the name.
+ */
 void push_include(char *name, const bool reporting_errors)
 {
   HashId h;
@@ -153,61 +212,76 @@ void push_include(char *name, const bool reporting_errors)
   }
 }
 
-/* The associated value for entries in the macro table (tag_tab) */
-static MacroVar *make_macro_var(bool strong, bool expanded, char *text)
+/* Return the origin of a variable - for debugging or the origin function */
+char *get_origin(char *cp)
 {
-  MacroVar *mv = safe_malloc(sizeof(*mv));
-
-  mv->expanded = expanded;
-  mv->strong = strong;
-  mv->value = text;
-
-  return mv;
+  return macro_origin_str[lookup_macro(cp)->origin];
 }
 
+/* Returns true if the rank of o1 is equal or higher than that of o2 */
+static bool is_origin_higher_priority(macro_origin o1, macro_origin o2)
+{
+  int rank1 = -1, rank2 = -1;
+  const macro_origin *org;
+
+  for (org = org_rank; rank1 == -1 || rank2 == -1; ++org) {
+    if (*org == o1) rank1 = org - org_rank;
+    if (*org == o2) rank2 = org - org_rank;
+  }
+
+  return (rank1 <= rank2);
+}
 
 /* Enter a macro into the macro table - unless the definition is prevented by an earlier
- * definition that takes priority.  If 'strong' is true, the definition is always made.
- * If 'expanded' is true, then the macro value has already been expanded.  This information
- * is required so that += definitions can determine whether the extra value needs to be
- * macroised before being appended or not.  'overriding' is true if the makefile wants
- * to define a macro and override the CLI and environment variable precedence and force
- * the definition.
+ * definition that takes priority.  The definition will not be made unless 'org' outranks the
+ * existing definition of the variable.  If a variable does not exist, its rank is org_undefined
+ * (the lowest rank) and so is always permitted.
  */
-void define_macro(char *name, char *value, bool strong, bool expanded, bool overriding)
+void define_macro(char *name, const char *value, bool expanded, macro_origin org)
 {
   HashId h;
   int existed;
+  MacroVar *mv;
 
   existed = !hash_enter(tag_tab, name, &h);
-  if (!strong) {
-    /* We weren't trying a strong definition (ie. a CLI definition), so prefer
-     * to not knock out existing entries, and prefer to read the environment if
-     * USE_GETENV if set (amu -e).
+  mv = existed ? hash_value(tag_tab, h) : safe_malloc(sizeof(*mv));
+
+  if (existed) {
+    /* If we are running with -e and the existing variable came from the environment, bump its
+     * priority up to environment override.  This strategy for late changes in rank for variables taken
+     * from the environment is based on empirical testing with GNU make's origin function.
      */
-    if (existed && !overriding) {
-      /* We are attempting a non-strong definition - was the existing definition
-       * strong?  if so, we prefer the existing definition unless temporary_override
-       * was set (by the GNU-make override directive).
-       */
-      MacroVar *mv = hash_value(tag_tab, h);
-      if (mv->strong) {
-        /* Prevent the re-definition! */
-        amu_debug(DEBUGGING2, "REDEFINE **BLOCKED**: %s = %s", name, value);
-        return;
-      }
+    if (mv->origin == org_environment && amu_flags & amuflag_ENVIRONMENT_OVERRIDE) {
+      mv->origin = org_environment_override;
     }
-    else if (amu_flags & USE_GETENV) {
-      char *env_value = getenv(name);
-      if (env_value) value = env_value;
+
+    /* Is the new value high enough priority? */
+    if (!is_origin_higher_priority(org, mv->origin)) {
+      amu_debug(DEBUGGING2, "REDEFINE: **BLOCKED** %s is pri '%s', this def was pri '%s' ",
+        name, macro_origin_str[mv->origin], macro_origin_str[org]);
+      return;
     }
+
+    free(mv->value);
   }
-  hash_assoc(tag_tab, h, make_macro_var(strong, expanded, Strdup(value)));
-  amu_debug(DEBUGGING2, "DEFINE: %s = %s%s", name, value, strong ? " **FUTURE REDEFINITIONS BLOCKED":"");
+  else {
+    hash_assoc(tag_tab, h, mv);
+  }
+
+  mv->expanded = expanded;
+  mv->origin = org;
+  mv->value = Strdup(value);
+
+  amu_debug(DEBUGGING2, "DEFINE: %s with pri '%s' as %s", name, macro_origin_str[org], value);
 }
 
+
 /* Look up a macro in the macro table (tag_tab).  If it isn't found, try looking in the
- * environment, and if we find it there, put it into the macro table.
+ * environment, and put it into the macro table.  If we still haven't found it, create it
+ * as an empty definition with a rank of org_undefined so future definitions will set it,
+ * but we can guarantee a non-NULL return from this function.  NOTE that it also means we
+ * don't continually look up the same (non-existant) environment variables, so we get
+ * consistency and better performance.
  */
 MacroVar *lookup_macro(char *name)
 {
@@ -215,19 +289,15 @@ MacroVar *lookup_macro(char *name)
 
   if (!hash_lookup(tag_tab, name, &h))
   {
-    char *env = getenv(name);
-
-    amu_debug(DEBUGGING2, "INVOKE (undef): %s", name);
-    if (env) {
-      /* Enter this environment variable into the macro table, marking it as
-       * indelible if we are using environment override.
-       */
-      define_macro(name, env, amu_flags & USE_GETENV & strong_definitions, true, false);
-    }
+    /* Enter this environment variable into the macro table, marking it as
+     * indelible if we are using environment override.
+     */
+    const char *const env = getenv(name);
+    define_macro(name, env ? env : "", true, env ? org_environment : org_undefined);
 
     if (!hash_lookup(tag_tab, name, &h)) {
-      /* Still not defined */
-      return NULL;
+      /* Still not defined?  Internal mistake.  Goodbye! */
+      amu_err_fail("internal inconsistency error in macro table");
     }
   }
 
@@ -240,22 +310,20 @@ MacroVar *lookup_macro(char *name)
  */
 static void accumulate_dirname(char *s)
 {
-  int l;
+  char *e;
   HashId h;
 
-  l = strlen(s);
-  for(;;)
-  {
-    if (l == 0) break;
-    --l;
-    if (s[l] == dir_sep) break;
+  if ((e = strrchr(s, dir_sep)) == NULL) {
+    s = strchr(s, '\0');
   }
-  s[l] = 0;
-  if (hash_enter(dir_tab, s, &h))
-  { if (n_dirs >= MAXDIRS)
-      amu_err_fail("too many directories (> %u)", MAXDIRS);
-    dirs[n_dirs++] = strcpy(malloc(l+1), s);
+  else {
+    *e = '\0';
   }
+
+  if (hash_enter(dir_tab, s, &h)) {
+    dirs = sl_new_prepend(dirs, s);
+  }
+  if (e) *e = dir_sep;
 }
 
 /* Find the Node representing 's' and return it.  If there is no such node, create it. */
@@ -293,11 +361,19 @@ Node *find_node(char *s)
   return n;
 }
 
+static Link *make_link(Link *tail, Node *n)
+{
+  Link *lk = safe_malloc(sizeof(*lk));
+
+  lk->node = n;
+  lk->link= tail;
+
+  return lk;
+}
+
 /* Add a dependecy for 'target' on 'src'. */
 void make_depend(Node *target, Node *src)
 {
-  Link *link;
-
   if ((src->flags & IS_COLONCOLON) &&
       (target->depends_on != NULL) &&
       (target->flags & HAS_CLONES) == 0)
@@ -311,11 +387,8 @@ void make_depend(Node *target, Node *src)
   }
   else
   {
-    link = safe_malloc(sizeof(*link));
-    link->node = src;
-    link->link = target->depends_on;
-    target->depends_on = link;
     src->flags |= IS_DEPENDED_ON;
+    target->depends_on = make_link(target->depends_on, src);
   }
 }
 
@@ -336,6 +409,53 @@ Node *n;
   make_depend(n, clone);
   n->flags |= HAS_CLONES;
   return clone;
+}
+
+/* Determine whether the string pointed to by cp is a known directive, and return its enum code if so */
+static Directive amu_decode_directive(char *cp)
+{
+  static const struct {
+    char *text;
+    Directive d;
+  } directives[] = {
+    { ".INCLUDE"   , directive_include },
+    { "INCLUDE"    , directive_include },
+    { ".-INCLUDE"  , directive_include_no_error },
+    { "-INCLUDE"   , directive_include_no_error },
+    { "OVERRIDE"   , directive_override },
+    { NULL         , not_a_directive }
+  }, *d;
+
+  for (d = directives; d->text; ++d) {
+    if (hash_cistrcmp(cp, d->text) == 0) break;
+  }
+
+  return d->d;
+}
+
+/* Determine whether the string pointed to by cp is a known conditional keyword, and return its
+ * enum code if so
+ */
+static Conditional amu_decode_conditional(char *cp)
+{
+  static const struct {
+    char *text;
+    Conditional c;
+  } conditionals[] = {
+    { "ifeq"     , cond_ifeq },
+    { "ifneq"    , cond_ifneq },
+    { "ifdef"    , cond_ifdef },
+    { "ifndef"   , cond_ifndef },
+    { "else"     , cond_else },
+    { "endif"    , cond_endif },
+    { NULL       , not_a_conditional }
+  }, *c;
+
+  for (c = conditionals; c->text; ++c) {
+    if (hash_cistrcmp(cp, c->text) == 0) break;
+  }
+
+  return c->c;
 }
 
 /* We have had enough of the top Makefile - get rid of it.
@@ -359,8 +479,10 @@ static void pop_makefile(void)
 /* Move on to the next line in the Makefile.  This function handles the state of reaching the
  * end of a makefile and returning to the one which included it.  Reaching the end of the top-level
  * makefile is a persistent EOF condition, flagged by setting in.state.l to NULL.
+ *
+ * This function must NOT be called directly, only via set_next_line() please.
  */
-static void set_next_line(void)
+static void do_set_next_line(void)
 {
   if (in.idx < 0) {
     /* Persistent EOF condition */
@@ -375,7 +497,7 @@ static void set_next_line(void)
     if (!in.state.l) {
       /* The Makefile was empty, pop it and try again */
       pop_makefile();
-      set_next_line();
+      do_set_next_line();
     }
   }
   else {
@@ -385,9 +507,177 @@ static void set_next_line(void)
     if (!in.state.l) {
       /* but we've reached the end of the file, pop it, return to previous */
       pop_makefile();
-      set_next_line();
+      do_set_next_line();
     }
   }
+}
+
+/* This function handles the processing of 'else' conditional statements.
+ * Return value as for set_next_line_check_cond().
+ */
+static bool parse_process_else(ConditionalMode m)
+{
+  switch (m) {
+    case condmode_waiting_for_else:
+      /* We've found the else clause of the 'if' statement we were looking for - */
+      in.cond[in.cond_idx] = condmode_executing_else_branch;
+      break;
+
+    case condmode_executing_if_branch:
+      /* We've found the else clause which terminates the text-if-true part of the cond */
+      in.cond[in.cond_idx] = condmode_waiting_for_endif;
+      break;
+
+    case condmode_waiting_for_endif:
+      /* Looks like we were waiting for an endif, so ignore this clause */
+      break;
+
+    default:
+      amu_err_fail("'else' unexpected");
+      break;
+  }
+
+  return false;
+}
+
+/* This function handles the processing of 'endif' conditional statements.
+ * Return value as for set_next_line_check_cond().
+ */
+static bool parse_process_endif(ConditionalMode m)
+{
+    if (m == condmode_executing) {
+      amu_err_fail("'endif' unexpected");
+    }
+    else {
+      /* End of conditional - pop it */
+      --in.cond_idx;
+    }
+
+    return false;
+}
+
+/* Evaluate the condition in the light of 'c'.
+ * Return true if the condition was met, false otherwise.
+ */
+static bool eval_condition(Conditional c, Line *l)
+{
+  if (c == cond_ifdef || c == cond_ifndef) {
+    /* cond_ifdef is true if macro exists and has non-empty value, false otherwise,
+     * cond_ifndef is (not conf_ifdef).  Note sneaky use of XOR to flip the result.
+     */
+    return (*(lookup_macro(l->firstpart->data))->value == '\0' ^ (c == cond_ifdef));
+  }
+  else {
+    /* need to parse arg one and arg two, expand both, then compare */
+    bool strings_match;
+    char *after_args;
+    LinePart *lp = make_conditional_args(l->firstpart->data, &after_args);
+
+    /* Some validation of the arguments ... */
+    if (lp->next == NULL || lp->next->next != NULL) {
+      amu_err_fail("syntax error: too few/too many arguments to condition: 2 are required");
+    }
+    if (*after_args) {
+      amu_err_fail("syntax error: extra characters after condition arguments");
+    }
+
+    (void) macroise_free(&lp->data, true);
+    (void) macroise_free(&lp->next->data, true);
+
+    strings_match = (strcmp(lp->data, lp->next->data) == 0);
+    deallocate_linepart_list(lp);
+
+    return (c == cond_ifneq) ^ strings_match;
+  }
+
+  return true;
+}
+
+/* This function examines a newly read line and determines whether it should be skipped or not
+ * It returns true if the line should be passed on through the parser, false if it should be
+ * swallowed without trace.
+ */
+static bool set_next_line_check_cond(void)
+{
+  char *eos, *sol, *comment, temp;
+  Conditional c;
+  ConditionalMode m;
+  bool executing;
+
+  /* Skip to first non-whitespace character or end-of-line */
+  for (eos = in.state.l->firstpart->data; isspace(*eos); ++eos) ;;
+  /* Skip to first whitespace character or end-of-line */
+  for (sol = eos; *eos && !isspace(*eos); ++eos) ;;
+
+  temp = *eos;
+  *eos = '\0';
+  c = amu_decode_conditional(sol);
+  *eos = temp;
+
+  /* Determine whether we are currently executing commands or not */
+  m = (in.cond_idx < 0) ? condmode_executing : in.cond[in.cond_idx];
+
+  /* Check the current condition and return true or false depending on our current state */
+  executing = (m == condmode_executing ||
+               m == condmode_executing_if_branch ||
+               m == condmode_executing_else_branch);
+
+  if (c == not_a_conditional) {
+    /* then our state is unchanged */
+    return executing;
+  }
+
+  /* Here, we know that we have a statement involved in a conditional.  We need to check whether
+   * we are currently executing, what terminators we are looking for etc. (if any!)
+   *
+   * We MUST return false after this point to force the looping to continue to read the
+   * next line and not let it through to the parser.
+   */
+
+  /* Get rid of any comments so we can validate no extra rubbish on the lines */
+  comment = strchr(sol, '#');
+  if (comment) *comment = '\0';
+
+  if (c == cond_else) {
+    return parse_process_else(m);
+  }
+
+  if (c == cond_endif) {
+    return parse_process_endif(m);
+  }
+
+  if (in.cond_idx + 1 == CONDDEPTH) {
+    amu_err_fail("conditionals nested too deeply (max depth is %i)", CONDDEPTH);
+  }
+
+  /* So, it must be the start of a new conditional block */
+  if (!executing) {
+    /* We weren't currently executing these commands, so just push another
+     * flag to wait for endifs to the stack.
+     */
+    in.cond[++in.cond_idx] = condmode_waiting_for_endif;
+  }
+  else {
+    /* Skip along to find the parameters then - we need to evaluate this conditional */
+    while (isspace(*eos)) ++eos;
+    /* Ditch the entire line contents up to here - we know what they were */
+    strip_trailing_whitespace(memmove(in.state.l->firstpart->data, eos, strlen(eos) + 1));
+
+    executing = eval_condition(c, in.state.l);
+    in.cond[++in.cond_idx] = executing ? condmode_executing_if_branch : condmode_waiting_for_else;
+  }
+
+  return false;
+}
+
+/* This is the routine that clients should call - it takes care of the skipping of switched
+ * out parts of conditionals.
+ */
+static void set_next_line(void)
+{
+  do {
+    do_set_next_line();
+  } while (in.state.l && !set_next_line_check_cond());
 }
 
 /* Like a std::string::iterator.  A character iterator for cp over *plp.
@@ -435,10 +725,7 @@ static void amu_parse_includes(Line *l, bool generate_errors)
 
   resplit_line(l, rlr_words);
   for (lp = l->firstpart; lp; lp = lp->next) {
-    include_file *inew = safe_malloc(sizeof(*inew));
-    inew->next = includes;
-    inew->txt = lp->data;
-    includes = inew;
+    includes = sl_new_prepend(includes, lp->data);
   }
 
   while (includes) {
@@ -449,42 +736,21 @@ static void amu_parse_includes(Line *l, bool generate_errors)
   }
 }
 
-
-/* Determine whether the string pointed to by cp is a known directive, and return its enum code if so */
-static Directive amu_decode_directive(char *cp)
-{
-  static const struct {
-    char *text;
-    Directive d;
-  } directives[] = {
-    { ".INCLUDE"   , directive_include },
-    { "INCLUDE"    , directive_include },
-    { ".-INCLUDE"  , directive_include_no_error },
-    { "-INCLUDE"   , directive_include_no_error },
-    { "OVERRIDE"   , directive_override },
-    { NULL, not_a_directive }
-  }, *d;
-
-  for (d = directives; d->text; ++d) {
-    if (hash_cistrcmp(cp, d->text) == 0) break;
-  }
-
-  return d->d;
-}
-
 /* This function is passed a string buffer of a complete line (*pcp) in a Makefile and asked to
  * identify its type: blank line, macro definition, dependency, command or directive.
- * Comments must have been removed.  cp must not be NULL.  It fills in first_interesting_character
+ * Comments must have been removed.  *pcp must not be NULL.  It fills in first_interesting_character
  * with the first interesting character on the line:
  *   blank -> unused (f_i_c char* is corrupted though)
  *   macro_definition -> first character of assignment token (*pcp = first character of macro name)
- *   dependency -> first character of assignee
+ *   dependency -> first character of ':' or '::' assignee
  *   command -> first character of command
  *   directive -> first parameter of directive (*dp = directive found)
  *
  * On exit, *dp contains the directive type or not_a_directive if no directive was found.  This permits
  * a return value of linetype_macro_definition with *dp containing directive_override to control the
  * macro assignment rules.
+ *
+ * This routine WILL free *pcp and replace it with a newly malloced block if it sees fit.
  */
 static LineType identify_line_type(char **pcp, char **first_interesting_character, Directive *dp)
 {
@@ -512,7 +778,7 @@ static LineType identify_line_type(char **pcp, char **first_interesting_characte
         /* Macro assignment */
         if (cp == *pcp) {
           /* This is the first character!! */
-          amu_err_fail("invalid macro definition");
+          amu_err_fail("attempt to define a macro with no name");
         }
         result = linetype_macro_definition;
         if (strchr(":?.+", last_ch)) {
@@ -520,24 +786,40 @@ static LineType identify_line_type(char **pcp, char **first_interesting_characte
         }
         break;
       }
-      else if (*cp == '$') {
-        /* Must be a dependency declaration - nothing else is permitted */
-        result = linetype_dependency;
-        break;
+      else if (*cp == '$' && (cp[1] == '(' || cp[1] == '{')) {
+        /* Buggerit - we need to expand this because it's permitted to be a dependency + command
+         * all combined.  Note that we *can* reallocate *pcp and reset everything up carefully.
+         */
+        const size_t prefix_len = cp - *pcp;
+
+        *pcp = macroise_this(*pcp, cp);
+        cp = (first_non_ws = *pcp) + prefix_len;
+        /* We must *continue* here, because we need to re-interpret this (*cp) character
+         * last_ch will be correct, and we have remembered to reset first_non_ws, *pcp and cp.
+         */
+        continue;
       }
       else if (*cp == ':') {
         if (cp[1] == '=') {
           /* Macro assignment - let this character go, we'll see the = on the next iteration */
         }
+        else if (!(amu_flags & amuflag_UNIX_NAMES) && (
+          (cp[1] == ':' && cp[2] && !isspace(cp[2]) && cp[2] != ';') ||
+          (cp[1] != ':' && cp[1] && !isspace(cp[1]) && cp[1] != ';'))) {
+          /* Take a chance on this being a RISC OS pathname (unless we saw .UNIXNAMES) and
+           * either ::<not EOS, not whitespace, not semicolon> or
+           *        :<not colon, not EOS, not whitespace, not semicolon>
+           */
+        }
         else {
-          /* Must be a dependency declaration */
+          /* Must be a dependency declaration - note we have no demacroise the dependees yet */
           result = linetype_dependency;
           break;
         }
       }
       else if (isspace(*cp) && !isspace(last_ch)) {
         /* Found a whitespace character immediately after some non-whitespace chars (ie. end of a string)
-         * Look for a directive
+         * Look for a directive or a conditional.
          */
         last_ch = *cp;
         *cp = '\0';
@@ -553,8 +835,8 @@ static LineType identify_line_type(char **pcp, char **first_interesting_characte
             break;
           }
 
-          /* Reset lp->data to point to the start of the macro definition or other parameter */
-          *pcp = cp;
+          /* Obliterate the directive, and shift the rest of the buffer down */
+          cp = memmove(*pcp, cp, strlen(cp) + 1);
 
           if (*dp == directive_override) {
             /* We don't want the recursive call to clobber *dp, so we pass a dummy Directive */
@@ -563,6 +845,8 @@ static LineType identify_line_type(char **pcp, char **first_interesting_characte
             if (result != linetype_macro_definition) {
               amu_err_fail("invalid override directive");
             }
+
+            cp = *first_interesting_character;
           }
           else {
             result = linetype_directive;
@@ -619,14 +903,15 @@ static void process_macro_definition(Line *l, char *op, bool overriding)
    * 'l->firstpart->data' points to the name of the macro.
    * overriding is true if the 'override' keyword was present.
    */
-  enum assign_type {
-    assign_colonequals,
-    assign_equals,
-    assign_noop
-  } assign_op;
-  char actual_op = *op;
+  const macro_origin org = overriding ? org_override : org_file;
+  const char actual_op = *op;
   char *name = l->firstpart->data;
+  char *const old_ptr = l->firstpart->data;
+  bool execute_assign;
+  void *free_me = NULL;
+
   MacroVar *mv;
+  bool expanded;
 
   /* Terminate the macro name, strip trailing spaces from it - so we can look it up */
   if (*op != '=') *op++ = '\0';
@@ -636,39 +921,44 @@ static void process_macro_definition(Line *l, char *op, bool overriding)
   strip_trailing_whitespace(op);
   l->firstpart->data = strip_leading_whitespace(op);
 
+  /* Look up the existing value of the macro.  Note that this will *create* the macro if it
+   * doesn't exist (either from the environment, or as the "undefined macro with empty value",
+   * so we can rely on it succeeding.
+   */
+  mv = lookup_macro(name);
+  expanded = mv->expanded;
+  execute_assign = true;
+
   switch (actual_op) {
     default:
-      assign_op = assign_equals;
       break;
-    case '.': /* Backward compatibility for old amu only */
+    case '.': /* Backward compatibility for very old amu only */
     case '?':
-      assign_op = lookup_macro(name) ? assign_noop : assign_equals;
+      execute_assign = (mv->origin == org_undefined);
       break;
     case ':':
-      assign_op = assign_colonequals;
-      macroise(l->firstpart, &l->firstpart);
+      macroise(&l->firstpart->data, false);
+      expanded = true;
       break;
     case '+':
-      mv = lookup_macro(name);
-      if (mv) {
-        size_t exp_len;
-        if (mv->expanded) {
-          macroise(l->firstpart, &l->firstpart);
-        }
-        exp_len = strlen(l->firstpart->data) + 2 /* space separator and zero terminator */;
-        l->firstpart->data = strcat(strcat(Strdup_spare(mv->value, exp_len), " "), l->firstpart->data);
-        assign_op = mv->expanded ? assign_colonequals : assign_equals;
+      if (mv->origin == org_undefined || mv->expanded) {
+        macroise(&l->firstpart->data, false);
+        expanded = true;
       }
-      else {
-        assign_op = assign_equals;
+      if (mv->origin != org_undefined) {
+        const size_t exp_len = strlen(l->firstpart->data) + 2 /* space separator and zero terminator */;
+        l->firstpart->data = strcat(strcat(Strdup_spare(mv->value, exp_len), " "), l->firstpart->data);
+        free_me = l->firstpart->data;
       }
       break;
   }
 
-  if (assign_op != assign_noop) {
-    amu_debug(DEBUGGING2, "Macro assignment '%s' to '%s', type '%c'", name, l->firstpart->data, actual_op);
-    define_macro(name, l->firstpart->data, false, assign_op == assign_colonequals, overriding);
+  if (execute_assign) {
+    define_macro(name, l->firstpart->data, expanded, org);
   }
+
+  l->firstpart->data = old_ptr;
+  free(free_me);
 }
 
 /* Look for and delete comments after offering them to the magic string checker */
@@ -698,15 +988,10 @@ static void process_comment(Line *l)
 /* Add the given command to the list to execute, but filter out blank lines */
 static void add_command(char *text, Cmd **next, Cmd ***nextp)
 {
-  char *text_of_command = strip_leading_whitespace(text);
-  const size_t length = strlen(text_of_command) + 1;
-  Cmd *c;
+  char *const text_of_command = strip_leading_whitespace(text);
 
-  if (length > 1) {
-    c = *next = safe_malloc(sizeof(**next) + length);
-    *nextp = &((*next)->next);
-    memcpy(c->txt, text_of_command, length);
-    c->next = NULL;
+  if (*text_of_command) {
+    *nextp = sl_new_append(next, text_of_command);
   }
 }
 
@@ -726,7 +1011,7 @@ static Node *process_special_target(char *target, LinePart *dependencies)
     n = find_node(target);
   }
   else if (hash_cistrcmp(target, ".UNIXNAMES") == 0) {
-    amu_flags |= UNIX_NAMES;
+    amu_flags |= amuflag_UNIX_NAMES;
   }
   else if (hash_cistrcmp(target, ".DEFAULT") == 0) {
     default_rule = n = find_node(target);
@@ -777,11 +1062,10 @@ static Node *process_special_target(char *target, LinePart *dependencies)
   return n;
 }
 
-
-static void process_dependency(Line *l)
+static void process_dependency(Line *l, char *colon)
 {
   /* Before exiting, this routine *MUST* make sure it has called set_next_line() appropriately.
-   * The act of calling this function is deferred by build_graph() for dependency lines explicitly
+   * The act of calling that function is deferred by build_graph() for dependency lines explicitly
    * because this routine needs to read the subsequent command lines until a non-command line is
    * found.  When this routine exits, in.state.l will be pointing at the next line to process
    * already,
@@ -790,86 +1074,58 @@ static void process_dependency(Line *l)
   LinePart *targets = NULL;
   LinePart *dependencies = NULL;
   LinePart *lp;
+  Line *tl;
   Cmd *cmds = NULL, **next_cmd = &cmds;
+  char *dependees;
+  char *cp;
 
-  /* On entry, line l has already been completely macroised, so can be parsed straight */
-  char *colon = l->firstpart->data;
-  char *semicolon;
-  char *dependees = NULL;
-
-  strip_trailing_whitespace(colon);
-
-  /* Find the : or :: - this is complicated for RISC OS, because pathnames are quite capable
-   * of containing either match string, so we have to search carefully for the match string
-   * followed by whitespace, end of string or semi-colon.
-   */
-  while (!dependees) {
-    colon = strchr(colon, ':');
-    if (!colon) {
-      amu_err_fail("Unrecognised line - missing ':' or '::' ?");
-    }
-
-    if (colon[1] == ':') {
-      double_colon = true;
-      ++colon;
-    }
-
-    if (colon[1] == ';' || !colon[1]) {
-      colon[-double_colon] = '\0';
-      dependees = colon + 1;
-    }
-    else if (isspace(colon[1])) {
-      colon[-double_colon] = '\0';
-      dependees = strip_leading_whitespace(colon + 1);
-    }
-    else {
-      double_colon = false;
-      ++colon;
-    }
-  }
-  /* Exit condition for loop above: dependees points to dependee list string (or ';' or '\0') */
-
+  *colon++ = '\0';
   /* Now, l->firstpart->data is the purely whitespace separated target list */
   resplit_line(l, rlr_words);
+  /* Targets is never duplicated - remember that! But nothing else will change l->firstpart */
   targets = l->firstpart;
 
-  /* Convert the dependees into a list of LinePart objects.  After this three way if, dependees
-   * is NULL if there is no command specified, or a pointer to the first line command otherwise.
-   */
+  double_colon = (*colon == ':');
+  if (double_colon) ++colon;
+  dependees = Strdup(strip_leading_whitespace(strip_trailing_whitespace(colon)));
+  /* Above expression ensures that dependees points to dependee list string (or ';' or '\0') */
 
-  if (dependees[0] == ';') {
-    /* No dependees - the first command follows */
-    dependees = strip_leading_whitespace(dependees + 1);
+  /* Now we need to carefully macro expand 'colon' until we hit end of line or a semicolon */
+  for (cp = dependees; *cp != ';' && *cp != '\0';) {
+    if (*cp == '$' && (cp[1] == '(' || cp[1] == '{')) {
+      const size_t prefix_len = cp - dependees;
+      dependees = macroise_this(dependees, cp);
+      cp = dependees + prefix_len;
+    }
+    else {
+      ++cp;
+    }
   }
-  else if (dependees[0] == '\0') {
-    /* No dependees - get the the first command follows */
-    dependees = NULL;
+
+  /* Mark off the initial command if we have one (cp points to it, or NULL if there's no command) */
+  if (*cp == ';') {
+    /* Terminate dependees, add the command to the command list */
+    *cp++ = '\0';
+    /* Store command (note: will not do it if the command is only whitespace) */
+    add_command(cp, next_cmd, &next_cmd);
+    (void) strip_trailing_whitespace(dependees);
   }
   else {
-    /* Dependencies did exist, split them up to enter them */
-    l = clone_line_no_lineparts(l);
-    make_new_line_part(l->nextpart, l->lineno)->data = dependees;
-
-    /* Look for a '<semi-colon> <whitespace>' terminator */
-    for (semicolon = dependees, dependees = NULL; semicolon;) {
-      semicolon = strchr(semicolon, ';');
-      if (semicolon) {
-        ++semicolon;
-        if (isspace(*semicolon)) {
-          semicolon[-1] = '\0';
-          dependees = strip_leading_whitespace(semicolon);
-          break;
-        }
-      }
-    }
-
-    resplit_line(l, rlr_words);
-    dependencies = l->firstpart;
+    cp = NULL;
   }
 
-  if (dependees) {
-    /* This is the first command to be stored - store it then allow set_next_line to run */
-    add_command(dependees, next_cmd, &next_cmd);
+  if (*dependees) {
+    /* There were some dependees - split them up nicely. */
+    tl = alloc_line();
+    lp = append_new_line_part(tl);
+    lp->data = dependees;
+    resplit_line(tl, rlr_words);
+    dependencies = tl->firstpart;
+  }
+  else {
+    /* There were not any dependees */
+    dependencies = NULL;
+    tl = NULL;
   }
 
   /* Read commands */
@@ -884,10 +1140,8 @@ static void process_dependency(Line *l)
       break;
     }
 
-    /* We know we are a command, so flatten everything out properly */
+    /* We know we are a command, so flatten everything out properly - DO NOT MACROISE YET */
     sanitise_line(in.state.l, slr_flatten_leading_spaces);
-    macroise(in.state.l->firstpart, &in.state.l->firstpart);
-    sanitise_line(in.state.l, slr_flatten);
     add_command(in.state.l->firstpart->data, next_cmd, &next_cmd);
   }
 
@@ -936,8 +1190,15 @@ static void process_dependency(Line *l)
       }
     }
   }
+
+  if (tl) deallocate_line(tl);
 }
 
+/* This is the main routine for parsing the makefile descriptions.  It reads the data structures
+ * line by line (set_next_line() will retrieve the next line of data, handling sub-makefiles and
+ * the like all transparently) and determines their semantics and dispatches the lines to the
+ * appropriate handler routines.
+ */
 void build_graph(void)
 {
   LinePart *lp;
@@ -977,13 +1238,12 @@ void build_graph(void)
         set_next_line();
         break;
       case linetype_dependency:
-        macroise(lp, &in.state.l->firstpart);
-        process_dependency(in.state.l);
+        process_dependency(in.state.l, cp);
         /* no set_next_line() - process_dependency will have already done that! */
         break;
       case linetype_directive:
         in.state.l->firstpart->data = cp;
-        macroise(lp, &in.state.l->firstpart);
+        macroise(&in.state.l->firstpart->data, true);
         process_directive(in.state.l, d);
         set_next_line();
         break;
@@ -1009,14 +1269,12 @@ void expand_vpath(void)
     LinePart *lp = make_new_line_part(l->nextpart, -1);
     MacroVar *mv = hash_value(tag_tab, h);
 
-    lp->data = mv->value;
     if (!mv->expanded) {
-      macroise(lp, &lp);
-      mv->expanded = true;
-      mv->value = Strdup(lp->data);
+      lp->data = mv->value;
+      macroise(&lp->data, true);
     }
     else {
-      lp->data = Strdup(lp->data);
+      lp->data = Strdup(mv->value);
     }
     resplit_line(l, rlr_words);
 
@@ -1024,10 +1282,8 @@ void expand_vpath(void)
     for (lp = l->firstpart; lp; lp = lp->next) {
       fname_parse(lp->data, fname_suffixes, &un);
       fname_unparse(&un, FNAME_AS_NAME, buf, NAMELEN);
-      if (n_vpaths >= MAXVPATHS)
-        amu_err_fail("too many VPATH elements (> %u)", MAXVPATHS);
-      vpaths[n_vpaths++] = s = Strdup_spare(buf, 1);
-      s = strchr(s, '\0');
+      vpaths = sl_new_prepend(vpaths, buf);
+      s = strchr(vpaths->txt, '\0');
       *s++ = un.pathsep;
       *s = '\0';
     }
@@ -1042,7 +1298,6 @@ void make_default_suffixes(void)
   /* Create the default suffix list from fname_suffixes */
   char *slist, *s;
   int n;
-  Link *l;
   char buf[NAMELEN];
   suffixes = find_node(".SUFFIXES");
   slist = fname_suffixes;
@@ -1055,22 +1310,25 @@ void make_default_suffixes(void)
     n = s - slist;
     strncpy(buf+1, slist, n);
     buf[n+1] = 0;
-    l = (Link *) malloc(sizeof(Link));
-    l->node = find_node(buf);
-    l->link = suffixes->depends_on;
-    suffixes->depends_on = l;
+    suffixes->depends_on = make_link(suffixes->depends_on, find_node(buf));
     slist = s;
   }
 }
 
 void parse_initialise(void)
 {
-  inc_tab = hash_cinew(TAGTABSZ);
   node_tab = hash_cinew(NODETABSZ);
-  dir_tab = hash_cinew(MAXDIRS);
+  inc_tab = hash_cinew(TAGTABSZ);
+  dir_tab = hash_cinew(TAGTABSZ);
   tag_tab = hash_cinew(TAGTABSZ);
   nodep = NULL;
   nodeq = &nodep;
   dotnodep = NULL;
   dotnodeq = &dotnodep;
+  org_rank = default_org_rank;
+}
+
+void parse_reinstate_amu_5_00_org_rank(void)
+{
+  org_rank = amu_5_00_org_rank;
 }

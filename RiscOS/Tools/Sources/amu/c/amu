@@ -42,6 +42,8 @@
 #include "amu.h"
 #include "md.h"
 #include "parse.h"
+#include "macros.h"
+#include "utility.h"
 #include "VersionNum"
 
 #define  VERSION          Module_FullVersion
@@ -51,7 +53,9 @@
 /* give up if too many time-stamp errors */
 #define  ERRORLIMIT      15
 
-#define  TOUCH_CMD       "Stamp"
+/* the commands to use for existing targets or non-existing targets when just touching files */
+#define  TOUCH_E_CMD     "Stamp"
+#define  TOUCH_NE_CMD    "Create"
 
 #ifdef __STDC__
 #  define safe_tolower(ch) tolower(ch)
@@ -64,15 +68,14 @@
 char amu[] = SELFNAME;
 int amu_flags;
 const int dir_sep = '.';
-int  n_dirs, n_vpaths;
-char **dirs, **vpaths;
 Node *suffixes;
 Node *default_rule, *init_rule, *done_rule, *failed_rule;
 char *vpathbuf;
-int strong_definitions = ~0;
+VpathList *vpaths = NULL;
+DirList *dirs = NULL;
 char *fname_suffixes = "aof o s c c++ f p l h x bas pas cmhg";
 include_search_path include_dirs = { NULL, { 0 } };
-Makefile_Stack in = { -1 };
+Makefile_Stack in = { -1, -1 };
 
 
 /* Local variables for this file */
@@ -155,13 +158,13 @@ static void add_include_path(const char *path)
       i = *next_include_dir = malloc(prefix_len + sizeof(**next_include_dir));
       next_include_dir = &i->next;
       i->next = NULL;
-      memcpy(i->path, path, prefix_len);
-      end_of_path = i->path + prefix_len - 1;
+      memcpy(i->txt, path, prefix_len);
+      end_of_path = i->txt + prefix_len - 1;
       if (*end_of_path != ':' && *end_of_path != '.') {
         *++end_of_path = '.';
       }
       end_of_path[1] = '\0';
-      amu_debug(DEBUGGING, "added directory '%s' to the search path", i->path);
+      amu_debug(DEBUGGING, "added directory '%s' to the search path", i->txt);
     }
     path += prefix_len;
     if (*path) {
@@ -298,18 +301,15 @@ case '?': { Link *l = target_node->depends_on;
   return ebufbase;
 }
 
-static void copy_cmds(rule_node, target_node)
-Node *rule_node, *target_node;
-{ Cmd *cmdp = NULL, *cmdq = NULL, *cmd = rule_node->cmds;
-  while (cmd != NULL)
-  { char *cmdtxt = expand(cmd->txt, target_node, 1);
-    Cmd *c = malloc(sizeof(struct Cmd) + strlen(cmdtxt));
-    strcpy(c->txt, cmdtxt);
-    c->next = NULL;
-    if (cmdq == NULL) cmdp = c; else cmdq->next = c;
-    cmdq = c;
-    cmd = cmd->next;
+static void copy_cmds(Node *rule_node, Node *target_node)
+{
+  Cmd *cmdp = NULL, **cmdq = &cmdp, *cmd;
+
+  for (cmd = rule_node->cmds; cmd; cmd = cmd->next) {
+    cmdq = sl_new_append(cmdq, expand(cmd->txt, target_node, 1));
   }
+
+  *cmdq = NULL;
   target_node->cmds = cmdp;
 }
 
@@ -333,17 +333,17 @@ char *s;
   return 0;
 }
 
-static TimeStamp get_filestamp(name, vpath)
-char *name;
-int vpath;
-{ TimeStamp ts;
-  if (vpath)
-  { if (n_vpaths > 0)
-    { int j, len = strlen(name);
+static TimeStamp get_filestamp(char *name, int vpath)
+{
+  TimeStamp ts;
+  if (vpath) {
+    if (vpaths) {
+      int len = strlen(name);
+      VpathList *j;
       char *s = vpathbuf;
       ts = FILESTAMP_NEVER;
-      for (j = 0;  j < n_vpaths;  ++j)
-      { strcpy(s, vpaths[j]);
+      for (j = vpaths;  j; j = j->next) {
+        strcpy(s, j->txt);
         if ((strlen(s) + len) >= NAMELEN)
           amu_err_fail("name too long: %s%s\n", s, name);
         strcat(s, name);
@@ -403,14 +403,14 @@ Node *node;
   }
 }
 
-static int out_of_date(Node *n, TimeStamp t)
+static bool out_of_date(Node *n, TimeStamp t)
 {
   Link *l;
 
   for (l = n->depends_on;  l != NULL;  l = l->link)
     n->flags |= (l->node->flags & CMDS_FAILED);
 
-  if (n->flags & (CMDS_FAILED|HAS_CLONES)) return FALSE;
+  if (n->flags & (CMDS_FAILED|HAS_CLONES)) return false;
 
   /* .PHONY targets are always out-of-date */
   for (l = find_node(".PHONY")->depends_on; l != NULL;  l = l->link) {
@@ -419,7 +419,7 @@ static int out_of_date(Node *n, TimeStamp t)
       if (amu_flags & STATE_REASONS) {
         fprintf(stderr, "%s is a phony target\n", n->name);
       }
-      return TRUE;
+      return true;
     }
   }
 
@@ -427,7 +427,7 @@ static int out_of_date(Node *n, TimeStamp t)
   { if (n->flags & IS_DEPENDED_ON &&
         (amu_flags & STATE_REASONS))
       fprintf(stderr, "%s does not yet exist\n", n->name);
-    return TRUE;
+    return true;
   }
 
   for (l = n->depends_on;  l != NULL;  l = l->link)
@@ -437,10 +437,10 @@ static int out_of_date(Node *n, TimeStamp t)
     {
         if (amu_flags & STATE_REASONS)
 fprintf(stderr, "%s is out of date w.r.t. %s\n", n->name, l->node->name);
-        return TRUE;
+        return true;
     }
   }
-  return FALSE;
+  return false;
 }
 
 static TimeStamp newest_source_time(target)
@@ -495,6 +495,13 @@ static int execute(Cmd *cmd, Node *node)
     if (node->flags & PHONY) {
       return 0;
     }
+    else if (amuflag_TOUCHING) {
+      /* Simplest to simply recall this procedure with a non-NULL cmd */
+      Cmd c;
+      c.next = NULL;
+      c.txt[0] = '\0';
+      return execute(&c, node);
+    }
     else {
       amu_err_report("Don't know how to make '%s'", node->name);
       return -1;
@@ -506,29 +513,49 @@ static int execute(Cmd *cmd, Node *node)
 
   while (cmd != NULL) {
     int flags = amu_flags;
-    char *cmdtxt = cmd->txt;
+    char *cmdtxt = Strdup(cmd->txt), *newtxt;
 
-    for (;;++cmdtxt) {
+    amu_debug(DEBUGGING4, "Pre-expansion:  Executing '%s'", cmdtxt);
+
+    (void) macroise_free(&cmdtxt, true);
+
+    amu_debug(DEBUGGING4, "Post-expansion: Executing '%s'", cmdtxt);
+
+    for (newtxt = cmdtxt;;++cmdtxt) {
       if (*cmdtxt == '@') flags |= SILENT;
       else if (*cmdtxt == '-') flags |= IGNORE_RC;
+      else if (*cmdtxt == '+') flags &= ~amuflag_TOUCHING;
       else break;
     }
 
     /* Be careful - don't want to not show actions when in no-execute mode */
     if (amu_flags & NO_ACTION) flags &= ~SILENT;
 
-    /* N.B. '?' MUST be first or it won't get expanded */
-    cmdtxt = expand(cmdtxt, node, 0);
-    if (strlen(cmdtxt) > CMDLENLIM && !dde_extended_cmdline())
-    {
-      putc('\n', stderr);
-      amu_err_fail("command too long (must be shorter than %d chars)\n%s\n\n",
-               CMDLENLIM, cmdtxt);
+    if (flags & amuflag_TOUCHING) {
+      /* We must re-evaluate whether the file exists because previous + commands may
+       * have created it.
+       */
+      const bool exists = (filestamp_get(node->name) != FILESTAMP_NEVER);
+      char *touch_cmd =  exists ? TOUCH_E_CMD : TOUCH_NE_CMD;
+
+      free(newtxt);
+      cmdtxt = newtxt = safe_malloc(strlen(touch_cmd) + 1 + strlen(node->name) + 1);
+      sprintf(cmdtxt, "%s %s", touch_cmd, node->name);
     }
+    else {
+      /* N.B. '?' MUST be first or it won't get expanded */
+      cmdtxt = expand(cmdtxt, node, 0);
+      if (strlen(cmdtxt) > CMDLENLIM && !dde_extended_cmdline())
+      {
+        putc('\n', stderr);
+        amu_err_fail("command too long (must be shorter than %d chars)\n%s\n\n", CMDLENLIM, cmdtxt);
+      }
+    }
+
     if (!(flags & SILENT)) fprintf(stderr, "%s\n", cmdtxt);
     if (out)
     { fprintf(out, "%s\n", cmdtxt);
-      amu_flags |= CMDS_OUTPUT;
+      amu_flags |= state_CMDS_OUTPUT;
     }
     else if (!(flags & NO_ACTION))
     { int rc;
@@ -552,6 +579,7 @@ static int execute(Cmd *cmd, Node *node)
       if (rc != 0 && !(flags& IGNORE_RC)) return rc;
       md_end_cmd();
     }
+    free(newtxt);
     cmd = cmd->next;
   }
   return 0;
@@ -572,14 +600,7 @@ static void process_node(Node *n, char *const target)
   }
   if (out_of_date(n, n->time))
   {
-    if (amu_flags & TOUCHING)
-    { int buf[NAMELEN/sizeof(int)+4];
-      Cmd *cmd = (Cmd *)buf;
-      sprintf(cmd->txt, "%s %s", TOUCH_CMD, n->name);
-      cmd->next = NULL;
-      execute(cmd, n);
-    }
-    else if (!(n->flags & CMDS_EXECUTED))
+    if (!(n->flags & CMDS_EXECUTED))
     {
       if (execute(n->cmds, n) != 0)
       { n->flags |= CMDS_FAILED;
@@ -607,30 +628,30 @@ static void process_node(Node *n, char *const target)
   n->flags |= PROCESSED;
 }
 
-static int is_a_cycle_from(Node *n)
+static bool is_a_cycle_from(Node *n)
 {
-  int cyclic;
+  bool cyclic;
   Link *l;
 
   if (n->flags & MARKED)
   {
     amu_err_report("*** WARNING: cycle in dependency graph ***\n  to %s", n->name);
-    cyclic = TRUE;
-    amu_flags |= HAS_CYCLES;
+    cyclic = true;
+    amu_flags |= state_HAS_CYCLES;
   }
-  else cyclic = FALSE;
+  else cyclic = false;
 
   if (!(n->flags & VISITED))
   { n->flags |= VISITED + MARKED;
     for (l = n->depends_on;  l != NULL;  l = l->link)
         if (is_a_cycle_from(l->node)) {
-            cyclic = TRUE;
+            cyclic = true;
             n->flags |= PROCESSED;
         }
     if (cyclic)
         fprintf(stderr, "from %s\n", n->name);
     if (cyclic && !(n->flags & MARKED))
-    {   cyclic = FALSE;
+    {   cyclic = false;
         amu_err_report("*** end of cycle ***\n");
     }
   }
@@ -664,21 +685,22 @@ static int process_target(char *target, int rc, Node *n)
  * if an error has occurred, or .DONE if no error occurred or there was no .FAILED
  * target.
  */
-static int process_graph(int ntargets, char *targets[])
+static int process_graph(TargetList *targets)
 {
-  int t, rc = 0;
+  int rc = 0;
 
   if (init_rule) {
     rc = process_target(init_rule->name, rc, get_dot_node_list());
   }
 
-  for (t = 0; t < ntargets; ++t) {
-    rc = process_target(targets[t], rc, get_node_list());
+  while (targets) {
+    rc = process_target(targets->txt, rc, get_node_list());
+    targets = targets->next;
   }
 
   rc = end_process_graph(rc);
 
-  if (amu_flags & HAS_CYCLES) {
+  if (amu_flags & state_HAS_CYCLES) {
     amu_err_report("*** There are cyclic dependencies in 'makefile' ***");
     amu_err_report("***    which have been broken arbitrarily.      ***\n");
   }
@@ -734,7 +756,7 @@ char *dir, *file;
   return (*file == dir_sep);
 }
 
-static void get_time_stamps_in(char *dir, int vpath)
+static void get_time_stamps_in(char *dir, bool vpath)
 {
   Node *node;
   char *file;
@@ -749,7 +771,7 @@ static void get_time_stamps_in(char *dir, int vpath)
     if (dir == NULL || vpath || dir_match(dir, file)) {
       node->time = ts = get_filestamp(file, vpath);
       if (ts == 0) {
-        if (vpath == 0) {
+        if (vpath == false) {
           amu_err_report("failed to read time stamp for '%s'", file);
           ++nerrors;
         }
@@ -769,18 +791,20 @@ static void get_time_stamps_in(char *dir, int vpath)
 
 static void get_time_stamps(void)
 {
-  int j, null_dir;
+  DirList *dl;
+  VpathList *vp;
 
   /* Getting time stamps is more efficient if all references to the same */
   /* directory are bunched. Ergo, we do an inefficient sort on the fly.  */
-  nerrors = null_dir = 0;
-  for (j = 0;  j < n_dirs && nerrors <= ERRORLIMIT;  ++j)
-  { char *dir = dirs[j];
-    if (*dir == 0) null_dir = 1; else get_time_stamps_in(dir, 0);
+  nerrors = 0;
+
+  for (dl = dirs; dl && nerrors <= ERRORLIMIT; dl = dl->next) {
+    get_time_stamps_in(*dl->txt ? dl->txt : NULL, false);
   }
-  if (nerrors <= ERRORLIMIT && null_dir) get_time_stamps_in((char *)NULL, 0);
-  for (j = 0;  j < n_vpaths && nerrors <= ERRORLIMIT;  ++j)
-    get_time_stamps_in(vpaths[j], 1);
+
+  for (vp = vpaths; vp && nerrors <= ERRORLIMIT;  vp = vp->next) {
+    get_time_stamps_in(vp->txt, true);
+  }
 }
 
 static void handle_escape(int signo)
@@ -794,11 +818,10 @@ static void initialise(void)
   signal(SIGINT, handle_escape);
   (void) host_init();
   err_init(amu);
-  n_dirs = n_vpaths = 0;
   amu_flags = 0;
   nerrors = 0;
-  dirs = (char **) malloc(MAXDIRS * sizeof(char *));
-  vpaths = (char **) malloc(MAXVPATHS * sizeof(char *));
+  dirs = NULL;
+  vpaths = NULL;
   now = filestamp_now();
   if (now == FILESTAMP_NEVER) amu_err_fail("can't read the current time");
   suffixes = default_rule = init_rule = failed_rule = done_rule = NULL;
@@ -839,8 +862,8 @@ static void give_help()
     "-i Ignore return codes from commands (equivalent to .IGNORE).\n"
     "-k On encountering a bad return code, don't give up, but continue with\n"
     "   each branch of the makefile that doesn't depend on the failing command.\n"
-    "-n Don't execute any commands - just show on the screen what commands\n"
-    "   would be executed, giving a reason for wanting to execute each one.\n"
+    "-n Don't execute any commands - just show what commands would be executed,\n"
+    "   giving a reason for wanting to execute each one.\n"
     "-D Show on the screen the reasons for executing commands as they are executed.\n"
     "-o commandfile\n"
     "   Don't execute commands to make the target[s] up to date - write them to\n"
@@ -860,7 +883,7 @@ static void give_help()
       VERSION,
       DATE,
       amu,
-      TOUCH_CMD,
+      TOUCH_E_CMD,
       amu,
       amu,
       amu);
@@ -874,9 +897,10 @@ char *argv[];
   char *in_file  = "Makefile",
        *out_file = NULL;
   char *arg, *s;
-  int j, ntargets;
+  int j;
   char buf[NAMELEN];
-  char *targets[MAXTARGETS];
+  TargetList *targets = NULL;
+  TargetList **tail_target = &targets;
 
   initialise();
 
@@ -889,7 +913,6 @@ char *argv[];
       give_help();
   }
 
-  ntargets = 0;
   for (j = 1;  j < argc;  ++j)
   { arg = argv[j];
     if (*arg == '-')
@@ -900,7 +923,8 @@ char *argv[];
       }
       else if (arg[1] == 'E')
       {
-        strong_definitions = 0;          /* Prevent any new strong definitions */
+        /* Emulate amu 5.00 macro precedences */
+        parse_reinstate_amu_5_00_org_rank();
       }
       else if (arg[1] == 'I')
       {
@@ -941,7 +965,7 @@ case 'd':
           dde_prefix_used();
           break;
 case 'e':
-          amu_flags |= USE_GETENV;
+          amu_flags |= amuflag_ENVIRONMENT_OVERRIDE;
           break;
 case 'f':
           if (arg[2] == 0) {
@@ -977,7 +1001,7 @@ case 's':
           amu_flags |= SILENT;
           break;
 case 't':
-          amu_flags |= TOUCHING;
+          amu_flags |= amuflag_TOUCHING;
           break;
 default:  amu_err_report("unrecognised option '%s'", arg);
           break;
@@ -999,11 +1023,11 @@ default:  amu_err_report("unrecognised option '%s'", arg);
         }
         *s++ = '\0';
         while (isspace(*s)) ++s;
-        define_macro(arg, s, strong_definitions, true, false);
+        define_macro(arg, s, false, org_command_line);
       }
       else
-      { arg = real_file_name(arg, buf, NAMELEN);
-        targets[ntargets++] = Strdup(arg);
+      {
+        tail_target = sl_new_append(tail_target, real_file_name(arg, buf, NAMELEN));
       }
     }
   }
@@ -1016,7 +1040,7 @@ default:  amu_err_report("unrecognised option '%s'", arg);
 
   s = NULL;
   if (argc > 1) s = strstr(_kernel_command_string(), argv[1]);
-  if (s != NULL) define_macro("MFLAGS", s, 0, true, false);
+  if (s != NULL) define_macro("MFLAGS", s, true, org_environment);
 
   make_default_suffixes();
   build_graph();
@@ -1038,16 +1062,16 @@ default:  amu_err_report("unrecognised option '%s'", arg);
     }                                                         /* NO Return */
   }
 
-  if (ntargets == 0) {
+  if (!targets) {
     Node *first_node = get_node_list();
     if (first_node != NULL) {
-      targets[ntargets++] = Strdup(first_node->name);
+      tail_target = sl_new_append(tail_target, first_node->name);
     }
   }
 
   mark_phony_targets(get_node_list());
   make_suffix_list();
-  j = process_graph(ntargets, targets);
+  j = process_graph(targets);
   md_merge(in.state.mf);
   md_delete();
   if ((amu_flags & (SILENT|NO_ACTION)) == (SILENT|NO_ACTION)) return j;
@@ -1058,7 +1082,7 @@ default:  amu_err_report("unrecognised option '%s'", arg);
       amu_err_fail("(disk full? map full? map too fragmented?)");
     }                                                         /* NO Return */
 
-    if (amu_flags & CMDS_OUTPUT)
+    if (amu_flags & state_CMDS_OUTPUT)
     { if (_kernel_hostos() == _kernel_ARTHUR)
       {
 fprintf(stderr, "\n*** Don't forget to *OBEY or *EXEC '%s' ***\n\n", out_file);

@@ -19,7 +19,7 @@ INSTAPP = ${INSTDIR}.Apps.!AMU
 
 CINCLUDES  = -IC: -I${CLXDIR}
 CDEFINES   = -DDDE
-CFLAGS     = -Wc -ffahn
+CFLAGS     = -Wc -ffah
 
 #
 # Generic options:
@@ -36,7 +36,7 @@ DIRS=o._dirs
 COMPONENT  = amu
 TARGET     = amu
 
-OBJS       = amu.o md.o macros.o parse.o readmk.o functions.o
+OBJS       = amu.o md.o macros.o parse.o readmk.o functions.o patterns.o utility.o
 LIBS       = ${CLXLIB} ${CLIB}
 
 #
@@ -101,8 +101,9 @@ ${TARGET}: ${OBJS} ${LIBS} ${DIRS}
 
 # Static dependencies:
 
-amu.o: md.c
-
+# These are the confidence tests - all three makefiles should report that all tests passed.
+# If they fail, use "run @.amu -f test.assigntest -n" (or whatever file contained the failed
+# test and look at the output.
 tests: ${TARGET}
         @echo Assignment tests ...
         @run @.${TARGET} -f test.assigntest
@@ -110,5 +111,7 @@ tests: ${TARGET}
         @run @.${TARGET} -f test.substest
         @echo Function tests ...
         @run @.${TARGET} -f test.functest
+        @echo Conditionals tests ...
+        @run @.${TARGET} -f test.condtest
 
 # Dynamic dependencies:
