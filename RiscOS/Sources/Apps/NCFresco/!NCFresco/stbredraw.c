@@ -699,6 +699,11 @@ extern wimp_box on_screen_kbd_pos;
 
 int frontend_view_ensure_visable(fe_view v, int x, int top, int bottom)
 {
+    return frontend_view_ensure_visable_full(v, x, x, top, bottom);
+}
+
+int frontend_view_ensure_visable_full(fe_view v, int left, int right, int top, int bottom)
+{
     wimp_wstate state;
     int w, h;
     int mh;
@@ -706,7 +711,7 @@ int frontend_view_ensure_visable(fe_view v, int x, int top, int bottom)
     int need_to_set_dims = 0;
     int bbh, sbh;
 
-    STBDBGN(("ensure_visible: v %p x %d y %d-%d\n", v, x, top, bottom));
+    STBDBGN(("ensure_visible: v %p x %d-%d y %d-%d\n", v, left, right, top, bottom));
     
     if (!v || v->magic != ANTWEB_VIEW_MAGIC)
 	return 1;
@@ -789,19 +794,19 @@ int frontend_view_ensure_visable(fe_view v, int x, int top, int bottom)
 	STBDBGN(("ensure_visible: force on bottom\n"));
     }
 
-    if ((x != -1) && (x < state.o.x + v->margin.x0))
+    if ((left != -1) && (left < state.o.x + v->margin.x0))
     {
 	/* It is off the left, put it at the left edge */
-	state.o.x = x - v->margin.x0;
+	state.o.x = left - v->margin.x0;
 	need_to_reopen = 1;
 
 	STBDBGN(("ensure_visible: off left\n"));
     }
 
-    if ((x != -1) && (x > state.o.x + w + v->margin.x1))
+    if ((right != -1) && (right > state.o.x + w + v->margin.x1))
     {
 	/* It is off the right, put it at the right */
-	state.o.x = x - w - v->margin.x1;
+	state.o.x = right - w - v->margin.x1;
 	need_to_reopen = 1;
 
 	STBDBGN(("ensure_visible: off right\n"));

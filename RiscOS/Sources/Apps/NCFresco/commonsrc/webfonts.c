@@ -357,45 +357,44 @@ int webfont_tty_width(int w, int in_chars)
     return result;
 }
 
+static os_error *declare_one_of_sizes(const webfont *item)
+{
+    int size;
+    os_error *ep;
+
+    for (size = 0;
+	 size < WEBFONT_SIZES;
+	 size++, item += (1 << WEBFONT_SIZE_SHIFT))
+    {
+	if (item->handle > 0)
+	    return (os_error *)_swix(PDriver_DeclareFont, _INR(0,2), item->handle, 0, 0);
+    }
+
+    return NULL;
+}
+
 os_error *webfont_declare_printer_fonts(void)
 {
-    os_regset r;
     os_error *ep = NULL;
     webfont *item;
-    int i;
-
-    r.r[1] = 0;
-    r.r[2] = 0;
+    int i, size;
 
     /* declare standard fonts */
-    for(i = 0 ; ep == NULL && i < WEBFONT_FLAG_COUNT; i++)
+    for (i = 0; ep == NULL && i < WEBFONT_FLAG_COUNT; i++)
     {
-	item = webfonts + (i << WEBFONT_FLAG_SHIFT);
-
-	if (item->handle > 0)
-	{
-	    r.r[0] = item->handle;
-	    ep = os_swix(PDriver_DeclareFont, &r);
-	}
+	ep = declare_one_of_sizes(webfonts + (i << WEBFONT_FLAG_SHIFT));
     }
 
     /* declare special fonts */
-    for (i = 0; i < WEBFONT_SPECIAL_COUNT && ep == NULL; i++)
+    if (!ep) for (i = 0; i < WEBFONT_SPECIAL_COUNT && ep == NULL; i++)
     {
-	item = webfonts + WEBFONT_FLAG_SPECIAL + (i << WEBFONT_SPECIAL_TYPE_SHIFT);
-
-	if (item->handle > 0)
-	{
-	    r.r[0] = item->handle;
-	    ep = os_swix(PDriver_DeclareFont, &r);
-	}
+	ep = declare_one_of_sizes(webfonts + WEBFONT_FLAG_SPECIAL + (i << WEBFONT_SPECIAL_TYPE_SHIFT));
     }
 
     /* terminate */
     if (ep == NULL)
     {
-	r.r[0] = 0;
-	ep = os_swix(PDriver_DeclareFont, &r);
+	ep = (os_error *)_swix(PDriver_DeclareFont, _INR(0,2), 0, 0, 0);
     }
 
     return ep;

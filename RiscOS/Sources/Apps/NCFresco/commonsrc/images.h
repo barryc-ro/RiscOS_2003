@@ -131,4 +131,7 @@ extern BOOL image_type_test(int ft);
 /* forcibly set the expiry time of an image to 0 so that it will be refetched */
 extern os_error *image_expire(image i);
 
+/* force the cached version (for tiles and animations) and translation tables to be refetched */
+extern void image_uncache_info(image i);
+
 #endif /* __images_h */

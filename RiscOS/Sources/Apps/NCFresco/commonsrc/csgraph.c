@@ -44,13 +44,13 @@ static void found_connection (pcp_cell the_cells, int start, int end)
     while (the_cells[j].dad > 0) j = the_cells[j].dad - 1;
 
     /* path compression making all ancestors point at the root */
-    while (the_cells[start].dad > 0) 
+    while (the_cells[start].dad > 0)
     {
 	t = start;
 	start = the_cells[start].dad - 1;
 	the_cells[t].dad = i + 1;
     }
-    while (the_cells[end].dad > 0) 
+    while (the_cells[end].dad > 0)
     {
 	t = end;
 	end = the_cells[end].dad - 1;
@@ -72,7 +72,7 @@ static void found_connection (pcp_cell the_cells, int start, int end)
 	    the_cells[j].dad = i + 1;
 	}
     }
-	    
+
 }
 
 
@@ -133,7 +133,7 @@ extern int find_connected_components (rid_table_item *table, unsigned int col_fl
     {
 	pcp_cell cell = the_cells+x;
 	pcp_group group = cell->first_end;
-	
+
 	if (cell->flags & col_flags)
 	{
 	    found_connection (the_cells, x, x+1);
@@ -241,6 +241,7 @@ extern int csg_find_abs_floaters(rid_table_item *table, BOOL horiz)
 #endif
 }
 
+#ifndef FRESCO
 extern void csg_examine(pcp_cell the_cells, const int max)
 {
 #if DEBUG && 0
@@ -255,6 +256,7 @@ extern void csg_examine(pcp_cell the_cells, const int max)
     }
 #endif
 }
+#endif
 
 
 /*****************************************************************************/

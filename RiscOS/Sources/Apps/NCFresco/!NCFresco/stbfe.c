@@ -205,10 +205,6 @@ int debug_level;
 /* Used to point to a block in the RMA for a long URL */
 static char *fe_stored_url = NULL;
 
-#if 0
-static char *fe_pending_url = NULL;
-static char *fe_pending_bfile = NULL;
-#endif
 static int fe_pending_key = 0;
 
 fe_view main_view = 0;
@@ -248,8 +244,10 @@ static int *keywatch_pollword = 0;		/* address of keywatch module pollword */
 static int keywatch_last_key_val = 0;		/* value read from pollword on last wimp key event */
 static BOOL keywatch_from_handset = TRUE;	/* was last key press from a handset - initialise to true in case mouse used first */
 
-os_error pending_error = { 0 };
+os_error pending_error = { -1, "" };
 static char *pending_error_retry = NULL;
+
+int fe_pending_event = 0;
 
 /* ----------------------------------------------------------------------------------------------------- */
 
@@ -1059,6 +1057,12 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 	STBDBG(("frontend_view_visit: linedrop reset to default %d\n", def_linedrop));
     }
 
+    /* if not transient page then ensure codec toolbar removed */
+    if (!v->open_transient)
+    {
+	tb_codec_kill();
+    }
+    
     /* check for special page instructions - but only on top page  */
     if (v->parent == NULL)
     {
@@ -1110,6 +1114,9 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 
 	if (!v->open_transient)
 	    fe_status_mode(v, mode, toolbar_state);
+	else
+	    /* ensure mode is set so that keys are passed through OK */
+	    v->browser_mode = mode;
     }
     else
     {
@@ -1602,7 +1609,7 @@ static int fe_transient_set_size(fe_view v)
     }
 
     case fe_position_FULLSCREEN:
-	v->box = screen_box;
+ 	v->box = screen_box;
 	if (config_display_control_top)
 	    v->margin.y1 -= tb_status_height();
 	else
@@ -2064,8 +2071,6 @@ int frontend_can_handle_file_type(int ft)
     s = getenv(buffer);
     if (s && *s)
         return TRUE;
-
-/*  fe_report_error(msgs_lookup("nold")); */
 
     return FALSE;
 }
@@ -3004,15 +3009,15 @@ os_error *fe_status_toggle(fe_view v)
     }
     else
     {
-	v = frameutils_find_top(v);
+	v = fe_find_top_nopopup(v);
 
-	/* get rid of all the popups */
-	while (v->next)
-	    fe_dispose_view(v->next);
-	
 	/* changed so that when the user toggles state it always results in a change */
 	user_status_open = !tb_is_status_showing();
 
+	/* get rid of all the popups */
+	if (!user_status_open) while (v->next)
+	    fe_dispose_view(v->next);
+	
 	if (use_toolbox)
 	    e = fe_status_state(v, user_status_open);
 	else
@@ -4475,20 +4480,19 @@ static void fe_url_bounce(wimp_msgstr *msg)
 		mm_free(s);
 	    }
 	}
-#if 0
-	/* check for internal helper    */
-	else if (strcasecomp(scheme, "mailto") == 0 && can_do_mailto())
-	{
-	    frontend_complain(fe_open_mailto(path));
-	}
-#endif
 	else
 	{    /* give error  */
 	    char tag[32], *s;
 	    sprintf(tag, "noscheme_%s:", scheme);
 	    s = msgs_lookup(tag);
 	    if (s && s[0])
-		fe_report_error(s);
+	    {
+		os_error e;
+		e.errnum = 0;
+		strncpysafe(e.errmess, s, sizeof(e.errmess));
+
+		frontend_complain(&e);
+	    }
 	    else
 		frontend_complain(makeerrorf(ERR_UNSUPORTED_SCHEME, scheme ? scheme : msgs_lookup("none")));
 	}
@@ -4797,6 +4801,8 @@ static void re_read_config(int flags)
 	auth_dispose();
 
 	plugin_list_dispose();
+
+	fe_internal_flush();
     }
 
     if ((flags & ncfresco_loaddata_CONFIG) &&
@@ -4907,7 +4913,7 @@ static void fe_handle_service_message(wimp_msgstr *msg)
 
 static void check_error(void)
 {
-    if (pending_error.errnum)
+    if (pending_error.errnum != -1)
     {
 	char *buf = mm_malloc(ERROR_BUFSIZE);
 	int n;
@@ -4925,7 +4931,7 @@ static void check_error(void)
 	frontend_open_url(buf, NULL, TARGET_ERROR, 0, 0);
 
 	/* clear error flag */
-	pending_error.errnum = 0;
+	pending_error.errnum = -1;
 	mm_free(buf);
     }
 
@@ -4979,6 +4985,12 @@ void fe_event_process(void)
         }
     }
 
+    if (fe_pending_event)
+    {
+	fevent_handler(fe_pending_event, main_view);
+	fe_pending_event = 0;
+    }
+    
     /* do the standard poll loop    */
     if (fast_poll)
     {
@@ -5081,7 +5093,7 @@ void fe_event_process(void)
 	    if (!v)
 		v = main_view;
 
-	    STBDBG(( "\nkey: view %p '%s' key %x handset %d\n", v, v && v->name ? v->name : "", e.data.key.chcode, keywatch_from_handset));
+	    STBDBG(( "\nkey: view %p '%s' key %x handset %d offline %d browser mode %d\n", v, v && v->name ? v->name : "", e.data.key.chcode, keywatch_from_handset, keyboard_state, v->browser_mode));
 	    
 	    fe_key_handler(v, &e, use_toolbox,
 			   keyboard_state == fe_keyboard_OFFLINE ? fe_browser_mode_DESKTOP :
@@ -5115,12 +5127,13 @@ void fe_event_process(void)
 			fe_frame_link_clear_all(v);
                 }
             }
+#if 0
 	    /* if status bar then remove the highlight from it */
 	    else if (e.data.c.w == tb_status_w())
 	    {
 		tb_status_highlight(FALSE);
 	    }
-
+#endif
 	    break;
         }
 
@@ -5166,7 +5179,7 @@ void fe_event_process(void)
 		}
 	    }
 	    else if (e.data.c.w == tb_status_w() && pointer_mode == pointermode_OFF)
-		tb_status_highlight(TRUE);		
+		tb_status_highlight(FALSE);		
             break;
         }
 
@@ -5322,6 +5335,10 @@ void fe_event_process(void)
 		if (use_toolbox)
 		    tb_status_set_message(status_type_HELP, NULL);
 		break;
+
+	    case MESSAGE_ERROR_BROADCAST:
+		check_error();
+		break;
 	    }
 	    break;
 
@@ -5334,7 +5351,9 @@ void fe_event_process(void)
             break;
     }
 
-    check_error();
+    /* only check error here if we are not waiting for the bounce */
+    if (config_mode_errors == mode_errors_OWN)
+	check_error();
 
     dbgpoll();
     mm_poll();
@@ -5376,8 +5395,8 @@ static void handler(int signal)
        msgs_lookup("fatal1:%s has suffered a fatal internal error (type=%i) and must exit immediately"),
        program_title,
        signal);
-/*   wimp_reporterror(&er, (wimp_errflags)0, program_title);    */
-   fe_report_error(er.errmess);
+
+   frontend_fatal_error(&er);
 }
 
 static void signal_init(void)
@@ -5507,6 +5526,8 @@ static int message_codes[] =
     wimp_MOPENURL,
     wimp_MNCFRESCO,
 
+    MESSAGE_ERROR_BROADCAST,
+    
     wimp_MMODECHANGE,
     wimp_PALETTECHANGE,
     wimp_MSERVICE,
@@ -5577,8 +5598,7 @@ static BOOL fe_initialise(void)
 #endif
     atexit(&fe_tidyup);
 
-/*     gbf_flags &= ~(GBF_FVPR); */
-    gbf_flags |= GBF_TRANSLATE_UNDEF_CHARS; /* this needs to not be defined to build a japanese version */
+/*  gbf_flags &= ~GBF_TRANSLATE_UNDEF_CHARS; this needs to not be defined to build a japanese version */
 
     if ((s = getenv("NCFresco$GBF")) != NULL)
 	gbf_flags = (int)strtoul(s, NULL, 10);
@@ -5712,7 +5732,7 @@ static BOOL fe_initialise(void)
 
 /* ------------------------------------------------------------------------------------------- */
 
-#if STBWEB_ROM
+#if STBWEB_ROM || 1
 int __root_stack_size = 64*1024;
 /* extern int disable_stack_extension; */
 #endif

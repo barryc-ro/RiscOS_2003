@@ -66,6 +66,8 @@ extern int file_type(const char *fname);
 extern int file_last_modified(const char *fname);
 int set_file_type(const char *fname, int ft);
 extern int path_is_directory(const char *path);
+extern char *get_file_type_name(int ftype);
+extern char *get_plugin_type_name(int ftype);
 
 char *reduce_file_name(char *fname, char *temp, char *pathname);
 

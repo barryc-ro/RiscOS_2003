@@ -2859,7 +2859,12 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	break;
 #endif
     case value_pcunit:
-	if ( ceil(attr->u.f) > 0 )
+	if ( ceil(attr->u.f) > 99 )
+	{
+	    FMTDBG(("start_tdth: cell %%age is > 99, ignoring it entirely\n"));
+	    cell->userwidth.type = value_none;
+	}
+	else if ( ceil(attr->u.f) > 0 )
 	{
 	    FMTDBG(("start_tdth: taking %%age value %d from %g\n", (int)ceil(attr->u.f), attr->u.f));
 	    cell->flags |= rid_cf_PERCENT;
@@ -3316,7 +3321,7 @@ extern void finishtd (SGMLCTX * context, ELEMENT * element)
   */
 
 
-#ifndef FRESCO
+#if 0
 /*static*/ extern void rid_size_table( rid_header *rh, rid_table_item *table, rid_fmt_info *parfmt );
 
 static void dummy_table_min(rid_header *rh, rid_text_stream *stream, rid_text_item *item, rid_fmt_info *parfmt)

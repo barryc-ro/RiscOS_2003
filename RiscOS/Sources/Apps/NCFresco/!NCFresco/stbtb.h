@@ -72,6 +72,7 @@ extern void tb_open_url(void);
 extern void tb_open_url_and_close(void);
 
 extern void tb_codec_state_change(int state, int opening, int closing);
+extern void tb_codec_kill(void);
 
 /* menu control */
 extern int tb_menu_showing(void);

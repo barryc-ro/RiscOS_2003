@@ -671,6 +671,9 @@ extern char *strdup_gstrans(const char *input)
     os_error *e;
     char *output;
 
+    if (input == NULL)
+	return NULL;
+    
     output = mm_malloc(GSTRANS_BUFSIZE);
 
     r.r[0] = (int)input;
@@ -787,7 +790,10 @@ int nvram_write(const char *tag, int new_val)
 void sound_event(sound_event_t event_num)
 {
     if (config_sound_fx && event_num != snd_NONE)
+    {
+	DBG(("sound_event: %x\n", event_num));
 	_swix(SoundFX_Play, _INR(0,1), 0, event_num);
+    }
 }
 
 #endif
@@ -799,6 +805,7 @@ void sound_event(sound_event_t event_num)
 #define osword_Mouse        0x15
 #define Mouse_SetPosition   3   /* signed 16bit - X, Y - mouse position */
 
+#ifndef FRESCO
 void pointer_set_position(int x, int y)
 {
     char block[5];
@@ -809,6 +816,7 @@ void pointer_set_position(int x, int y)
     block[4] = (y >> 8) & 0xff;
     _kernel_osword(osword_Mouse, (int *)block);
 }
+#endif
 
 static char tmpnam_buf[L_tmpnam] = "";
 static char count = 0;
@@ -842,6 +850,7 @@ char *rs_tmpnam(char *s)
  * No-op (but returns error) if used on earlier wimps.
  */
 
+#if 0
 os_error *wimp_set_wind_flags( wimp_w w, wimp_wflags bic, wimp_wflags eor )
 {
     wimp_wstate ws;
@@ -860,6 +869,7 @@ os_error *wimp_set_wind_flags( wimp_w w, wimp_wflags bic, wimp_wflags eor )
 
     return (os_error*)_kernel_swi( 0x600C5, &r, &r );   /* XWimp_OpenWindow */
 }
+#endif
 
 /*****************************************************************************/
 
@@ -887,6 +897,28 @@ void mmfclose(FILE *f)
     mm_free(buf_to_free);
 }
 
+
+/*****************************************************************************/
+
+#define PLUGIN_NAME_FMT		"PlugIn$Type_%03x"
+#define FILETYPE_NAME_FMT	"File$Type_%03x"
+
+char *get_file_type_name(int ftype)
+{
+    char buf[sizeof(FILETYPE_NAME_FMT)];
+    sprintf(buf, FILETYPE_NAME_FMT, ftype & 0xfff);
+    return getenv(buf);
+}
+
+char *get_plugin_type_name(int ftype)
+{
+    char buf[sizeof(PLUGIN_NAME_FMT)], *s;
+    sprintf(buf, PLUGIN_NAME_FMT, ftype & 0xfff);
+    s = getenv(buf);
+    if (!s)
+	s = get_file_type_name(ftype);
+    return s;
+}
 
 /*****************************************************************************/
 

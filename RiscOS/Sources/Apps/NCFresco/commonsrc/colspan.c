@@ -31,6 +31,7 @@ static const char * WIDTH_NAMES[N_COLSPAN_WIDTHS] = WIDTH_NAMES_ARRAY;
 
 /*****************************************************************************/
 
+#ifndef FRESCO
 static void generate_constraints_summary(rid_table_item *table,
 					 BOOL horiz,
 					 constraints_summary *ptr)
@@ -72,6 +73,7 @@ static void generate_constraints_summary(rid_table_item *table,
 	    ptr->unused += 1;
     }
 }
+#endif
 
 /*****************************************************************************
 
@@ -88,6 +90,7 @@ static void generate_constraints_summary(rid_table_item *table,
 
 /*****************************************************************************/
 
+#if !defined(FRESCO) || DEBUG
 static void print_colspan_flags(unsigned int flags)
 {
     static struct { unsigned int f; char *n; }
@@ -128,6 +131,7 @@ static void print_colspan_flags(unsigned int flags)
 
     FMTDBG(("\n"));
 }
+#endif
 
 /* trace the cells and their chains of groups */
 
@@ -502,7 +506,6 @@ extern void colspan_column_and_eql_double(rid_table_item *table,
 	}
     }
 }
-
 
 extern void colspan_column_and_eql_scale(rid_table_item *table,
 					 BOOL horiz,
@@ -1283,6 +1286,7 @@ static BOOL notch(rid_table_item *table,
 
  */
 
+#ifndef FRESCO
 static int proportional_slop_share(rid_table_item *table,
 				   BOOL horiz,
 				   width_array_e min_slot,
@@ -1526,20 +1530,80 @@ static int attempt_meet_rel_max(rid_table_item *table, BOOL horiz, int slop, con
 {
     return slop;
 }
+#endif
+
+/*****************************************************************************
+
+  pdh: share out space according to width[A] - width[B], B=WIDTH_ZERO is a
+  special value meaning just use width[A]       */
+
+static int sharing_pass( pcp_cell the_cells, int max,
+                         width_array_e A, width_array_e B, int slop )
+{
+    int total_excess = 0;
+    int x;
+    int left = slop;
+    int my_excess, want, make_me_max;
+
+/*    FMTDBG(("sharing_pass(%s-%s) slop=%d:\n", WIDTH_NAMES[A], WIDTH_NAMES[B],
+            slop));
+	    */
+    for (x = 0; x < max; x++)
+        if ( (the_cells[x].flags & (colspan_flag_ABSOLUTE | colspan_flag_PERCENT)) == 0 )
+        {
+            my_excess =   the_cells[x].width[A]
+	                - ( (B==WIDTH_ZERO) ? 0 : the_cells[x].width[B] );
+            if ( my_excess > 0 )
+                total_excess += my_excess;
+	}
+    FMTDBG(("  total_excess=%d\n", total_excess));
+
+    if ( total_excess == 0 )
+        return slop;
+
+    for (x = 0; left > 0 && x < max; x++)
+	if ( (the_cells[x].flags & (colspan_flag_ABSOLUTE | colspan_flag_PERCENT)) == 0 )
+	{
+	    my_excess = the_cells[x].width[A]
+	                - ( (B==WIDTH_ZERO) ? 0 : the_cells[x].width[B] );
+	    want = (slop * my_excess) / total_excess;
+	    make_me_max = the_cells[x].width[A]
+	                            - the_cells[x].width[ACTUAL];
+
+            FMTDBG(("  col %d: my_xs=%d, want=%d, makemax=%d: ", x, my_excess, want, make_me_max ));
+
+            if ( make_me_max < 0 )
+                make_me_max = 0;
+
+            if ( B != WIDTH_ZERO && want > make_me_max )
+                want = make_me_max;
+
+            if ( my_excess > 0 )
+            {
+                the_cells[x].width[ACTUAL] += want;
+    	        left -= want;
+    	        FMTDBG(("adding %d, left now %d\n",want,left));
+    	    }
+    	    else
+    	        FMTDBG(("leaving alone\n"));
+	}
+
+    return left;
+}
 
 /*****************************************************************************
 
   'slop' pixels MUST be shared out into the columns. We prefer to
   always do this in unconstrained columns. If there are no such
   columns, some other choice of where to put the space is
-  required. Today: round robin blunt distribution.
+  required.
 
-  pdh: frobbed slightly to share space according to MAX-MIN, not
-  according to MAX. This should ensure that all columns are
-  formatted to maxwidth if this is possible. Once all columns are
-  at maxwidth, the extra pixels are still shared out round robin.
-
-  pdh: frobbed again to account for MAX<MIN case (why does this happen?)
+  pdh: three sharing passes now
+    (1) share out according to RAW_MAX-RAW_MIN  (sorts out simple cases)
+    (2) share out according to ABS_MAX-ABS_MIN  (sorts out colspan>1 cases)
+    (3) share out according to ABS_MAX
+  The final pass sorts out cases where there's quite simply too much space,
+  eg. <table width=100%>[contents not very wide]
 
     */
 
@@ -1562,78 +1626,13 @@ static void share_raw_abs_pct(rid_table_item *table, BOOL horiz, int slop)
 
     if (any_uncons)
     {
-	int total_excess = 0;
-	int left = slop;
-	int my_excess;
-
-	for (x = 0; x < max; x++)
-	    if ( (the_cells[x].flags & (colspan_flag_ABSOLUTE | colspan_flag_PERCENT)) == 0 )
-	    {
-		my_excess =   the_cells[x].width[RAW_MAX]
-		            - the_cells[x].width[RAW_MIN];
-                if ( my_excess > 0 )
-                    total_excess += my_excess;
-	    }
-
-        FMTDBG(("share_raw_abs_pct: total_excess=%d\n", total_excess));
-
-	if (total_excess > 0)
-	{
-	    for (x = 0; left > 0 && x < max; x++)
-		if ( (the_cells[x].flags & (colspan_flag_ABSOLUTE | colspan_flag_PERCENT)) == 0 )
-		{
-		    const int my_excess = the_cells[x].width[RAW_MAX]
-		                          - the_cells[x].width[RAW_MIN];
-		    const int want = (slop * my_excess) / total_excess;
-
-                    if ( my_excess > 0 )
-                    {
-    		        the_cells[x].width[ACTUAL] += want;
-    		        left -= want;
-
-                        FMTDBG(("share_raw_abs_pct: col %d: my_xs=%d, want=%d, left now %d\n", x, my_excess, want, left ));
-    		    }
-		}
-
-	    slop = left;
-	}
-
+	    slop = sharing_pass( the_cells, max, RAW_MAX, RAW_MIN, slop );
+	ASSERT( slop >= 0 );
+	if ( slop )
+	    slop = sharing_pass( the_cells, max, ABS_MAX, ABS_MIN, slop );
         ASSERT( slop >= 0 );
-
-	if ( slop > 0 )
-	{
-	    /* pdh: all at max now but still some slop, share it out again;
-	     * this time, according to max.
-	     */
-
-	    total_excess = 0;
-
-    	    for (x = 0; x < max; x++)
-	        if ( (the_cells[x].flags
-	                & (colspan_flag_ABSOLUTE | colspan_flag_PERCENT)) == 0 )
-	        {
-		    total_excess += the_cells[x].width[RAW_MAX];
-	        }
-
-            FMTDBG(("share_raw_abs_pct: total_max=%d\n", total_excess));
-
-	    if (total_excess > 0)
-	    {
-	        for (x = 0; left > 0 && x < max; x++)
-		    if ( (the_cells[x].flags & (colspan_flag_ABSOLUTE | colspan_flag_PERCENT)) == 0 )
-		    {
-		        const int my_excess = the_cells[x].width[RAW_MAX];
-		        const int want = (slop * my_excess) / total_excess;
-
-    		        the_cells[x].width[ACTUAL] += want;
-    		        left -= want;
-
-                        FMTDBG(("share_raw_abs_pct: col %d: my_max=%d, want=%d, left now %d\n", x, my_excess, want, left ));
-    		    }
-
-	        slop = left;
-	    }
-	}
+        if ( slop )
+            slop = sharing_pass( the_cells, max, ABS_MAX, WIDTH_ZERO, slop );
     }
 
     ASSERT( slop >= 0 );
@@ -1660,6 +1659,7 @@ static void share_raw_abs_pct(rid_table_item *table, BOOL horiz, int slop)
 
   */
 
+#ifndef FRESCO
 static void most_constraints_then_share_fairly(rid_table_item *table,
 					       int best,
 					       int fwidth,
@@ -1759,6 +1759,7 @@ static void most_constraints_then_share_fairly(rid_table_item *table,
 
     return;
 }
+#endif
 
 /*****************************************************************************/
 
@@ -1897,12 +1898,15 @@ static void reflect_into_table(rid_table_item *table, BOOL horiz)
 
   */
 
+#ifndef FRESCO
 extern void format_position_table_cells(rid_table_item *table)
 {
 }
+#endif
 
 /*****************************************************************************/
 
+#ifndef FRESCO
 static width_array_e choose_best_slot(rid_table_item *table,
 				      BOOL horiz,
 				      int fwidth)
@@ -1932,6 +1936,7 @@ static width_array_e choose_best_slot(rid_table_item *table,
 
     return best;
 }
+#endif
 
 /*****************************************************************************
 

@@ -145,7 +145,12 @@ extern void startmeta (SGMLCTX * context, ELEMENT * element, VALUES * attributes
 
 extern void startlink (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 {
+    HTMLCTX *me = htmlctxof(context);
+
     starta (context, element, attributes);
+
+    /* SJM: stop the rest of the document getting linked... */
+    me->aref = NULL;
 }
 
 #if 0

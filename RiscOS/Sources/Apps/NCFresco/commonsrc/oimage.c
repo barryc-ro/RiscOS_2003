@@ -216,7 +216,7 @@ void oimage_size_image(const char *alt, const rid_stdunits *req_ww, const rid_st
 
     	    height = (req_hh->type == value_absunit)
     	                 ? (int)(req_hh->u.f * scale_value / 100 )
-    	                 : (int)((double)width * scale_value/100 / aspect);
+    	                 : (int)((double)width /* * scale_value/100 */ / aspect);
     	}
     }
     else

@@ -1264,7 +1264,8 @@ static void be_update_image_info(be_doc doc)
     }
 
     /* pdh: why was this removed? */
-    if ( doc->im_fetching == 0 && doc->ah == 0 && doc->ph == 0 )
+    if ( doc->im_fetching == 0 && doc->ah == 0 && doc->ph == 0
+         && gbf_active(GBF_FVPR) )
         fvpr_progress_stream_flush( &doc->rh->stream );
 }
 
@@ -1995,6 +1996,7 @@ extern os_error *antweb_trigger_fetching(antweb_doc *doc)
     return NULL;
 }
 
+#if 0
 static int antweb_formater_tidy_line( rid_header *rh, rid_pos_item *new, int width, int display_width)
 {
     int spare;
@@ -2071,8 +2073,10 @@ static int antweb_formater_tidy_line( rid_header *rh, rid_pos_item *new, int wid
 
     return (new->max_up + new->max_down);
 }
+#endif
 
 
+#if 0
 static int be_margin_proc (rid_text_stream *stream, rid_text_item *item)
 {
         return item == NULL ? 0 :
@@ -2925,6 +2929,7 @@ static void stomp_contained_widths(rid_text_stream *st)
     FMTDBG(("stomp_contained_widths() finished\n"));
 }
 #endif
+#endif
 
 static void be_formater_loop(antweb_doc *doc, rid_header *rh, rid_text_item *ti, int scale_value)
 {
@@ -2936,25 +2941,31 @@ static void be_formater_loop(antweb_doc *doc, rid_header *rh, rid_text_item *ti,
 
         FMTDBG(("be_formater_loop(%p, %p, %d) - sizing\n", rh, ti, scale_value));
 
+#if 0
         fmt.margin_proc = &be_margin_proc;
         fmt.tidy_proc = &dummy_tidy_proc;
         fmt.table_proc = &dummy_table_proc;
         fmt.text_data = rh->texts.data;
+#endif
 
+#if 0
         /* Then get min|max widths for tables */
 	if ( ! gbf_active(GBF_NEW_FORMATTER) )
 	    rid_size_stream(rh, st, &fmt, 0, ti);
-
+#endif
         /* Do the actual format */
 
         FMTDBG(("be_formater_loop - building\n"));
 
+#if 0
 	if ( gbf_active(GBF_NEW_FORMATTER) )
+#endif
 	{
 	    fe_view_dimensions fvd;
 	    frontend_view_get_dimensions(doc->parent, &fvd);
 	    rid_toplevel_format(doc, rh, NULL, rh->stream.fwidth, fvd.layout_height);
 	}
+#if 0
 	else
 	{
 	    fmt.margin_proc = &be_margin_proc;
@@ -2965,6 +2976,7 @@ static void be_formater_loop(antweb_doc *doc, rid_header *rh, rid_text_item *ti,
 
 	    be_formater_loop_core(rh, st, ti, &fmt, rid_fmt_BUILD_POS);
 	}
+#endif
 
         FMTDBG(("be_formater_loop done\n"));
 
@@ -2973,7 +2985,6 @@ static void be_formater_loop(antweb_doc *doc, rid_header *rh, rid_text_item *ti,
         dump_header(rh);
 #endif
 }
-
 
 static os_error *antweb_document_format_no_fvpr(antweb_doc *doc, int user_width)
 {
@@ -3041,7 +3052,8 @@ os_error *antweb_document_format(antweb_doc *doc, int user_width)
 {
     antweb_document_format_no_fvpr( doc, user_width );
     /* pdh: always returns NULL (sigh) */
-    fvpr_progress_stream( &doc->rh->stream );
+    if ( gbf_active(GBF_FVPR) )
+        fvpr_progress_stream( &doc->rh->stream );
     return NULL;
 }
 
@@ -3153,7 +3165,8 @@ void be_document_reformat_tail(antweb_doc *doc, rid_text_item *oti, int user_wid
 
     be_formater_loop(doc, doc->rh, ti, doc->scale_value);
 
-    fvpr_progress_stream(&doc->rh->stream);
+    if ( gbf_active(GBF_FVPR) )
+        fvpr_progress_stream(&doc->rh->stream);
 
     FMTDBG(("be_formater_loop() done\n"));
 
@@ -3405,7 +3418,10 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
 	break;
 
     default:
-	be_update_image_info(doc);
+	/* SJM: moved to end of function as otherwise when last image
+           comes in the fvpr flush happens before the fvpr checking in
+           the function below and the screen isn't updated */
+/* 	be_update_image_info(doc); */
 	break;
     }
 
@@ -3413,6 +3429,10 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
           || doc->parent == NULL )
     {
 	be_update_image_size(doc, i);
+
+	/* SJM: moved from top of function */
+	if (status != image_cb_status_UPDATE_ANIM)
+	    be_update_image_info(doc);
 	return;
     }
 
@@ -3425,6 +3445,9 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
     {
 	DICDBG(("Image change quit early\n"));
 
+	/* SJM: moved from top of function */
+	if (status != image_cb_status_UPDATE_ANIM)
+	    be_update_image_info(doc);
 	return;
     }
 
@@ -3551,7 +3574,8 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
 	antweb_document_format_no_fvpr(doc, doc->rh->stream.fwidth);
 
         /* pdh: added this */
-        if ( fvpr_progress_stream( &doc->rh->stream ) )
+        if ( gbf_active(GBF_FVPR)
+             && fvpr_progress_stream( &doc->rh->stream ) )
         {
             changed = 7;
             fvprstatus = 1;
@@ -3883,6 +3907,10 @@ void antweb_doc_image_change(void *h, void *i, int status, wimp_box *box_update)
 	rid_free_pos(clonedposlist);
 
     DICDBG(("Image change finished\n"));
+
+    /* SJM: moved from top of function */
+    if (status != image_cb_status_UPDATE_ANIM)
+	be_update_image_info(doc);
 }
 
 static void be_view_visit(antweb_doc *doc)
@@ -4158,7 +4186,7 @@ static void progress_parse_and_format(antweb_doc *doc, int fh, int lastptr, int 
     ooi = osi ? osi->last_option : NULL;
 
     PPDBG(("progress_parse_and_format: doc%p fh %d lastptr %d so_far %d\n", doc, fh, lastptr, so_far));
-    PPDBG(("progress_parse_and_format: old text %p form %p select %o object %p\n", oti, ofi, osi, ooi));
+    PPDBG(("progress_parse_and_format: old text %p form %p select %p object %p\n", oti, ofi, osi, ooi));
 
     if (fh)
     {
@@ -4459,20 +4487,13 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
 #ifndef BUILDERS
 	frontend_view_visit(doc->parent, NULL, url,
 			    status == status_BAD_FILE_TYPE ?
-			    (char *)makeerror(ERR_UNSUPORTED_SCHEME) :
-			    (char *)makeerrorf(ERR_CANT_GET_URL, strsafe(url), cfile));
+			    (char *)makeerror(ERR_UNSUPORTED_SCHEME) :			/* cannot display the web page */
+			    (char *)makeerrorf(ERR_CANT_GET_URL, strsafe(url), cfile));	/* cannot find the web page */
 #endif
 
 	backend_dispose_doc(doc);
 	return 0;
     }
-
-    /* pdh: @@@@ FIXME
-     * This doesn't belong here (there may be images arriving) but I can't
-     * see some pages without it!
-     */
-    if (doc->rh && doc->im_fetching == 0)
-        fvpr_progress_stream_flush( &doc->rh->stream );
 
     doc->cfile = strdup(cfile);
     if (doc->url == NULL)
@@ -4496,14 +4517,20 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
 	doc->ph = NULL; 
 #endif
 	
+	/* pdh: @@@@ FIXME
+	 * This doesn't belong here (there may be images arriving) but I can't
+	 * see some pages without it!
+	 * sjm: moved here rather than outside this 'if' so that entire document
+	 * has definitely been parsed.
+	 */
+	if (doc->rh && doc->im_fetching == 0 && gbf_active(GBF_FVPR))
+	    fvpr_progress_stream_flush( &doc->rh->stream );
+
 	if ((doc->rh->bgt & rid_bgt_IMAGE) && (doc->rh->tile.im == NULL))
 	{
 	    BENDBG(( "Calling fetch_bg from doc_complete\n" ));
 	    be_doc_fetch_bg(doc);
 	}
-
-	/* SJM: temporary hack to try and see pages... */
-/* 	fvpr_progress_stream_flush(&doc->rh->stream); */
 
 	if ((doc->flags & doc_flag_DISPLAYING) == 0)
 	{
@@ -4654,7 +4681,8 @@ os_error *backend_doc_abort(be_doc doc)
 	}
     }
 
-    fvpr_progress_stream_flush( &doc->rh->stream );
+    if ( gbf_active(GBF_FVPR) )
+        fvpr_progress_stream_flush( &doc->rh->stream );
 
     if (doc->flags & doc_flag_INCOMPLETE)
 	frontend_view_status(doc->parent, sb_status_ABORTED);
@@ -4701,7 +4729,7 @@ int antweb_doc_abort_all(int level)
  		    doc->ph = NULL;
  		}
 
-		if (doc->rh)
+		if (doc->rh && gbf_active(GBF_FVPR) )
 		    fvpr_progress_stream_flush( &doc->rh->stream );
 
 		frontend_view_status(doc->parent, sb_status_ABORTED);
@@ -5105,6 +5133,7 @@ void backend_doc_reformat(be_doc doc)
 }
 #endif
 
+#ifndef FRESCO
 void backend_doc_set_scaling(be_doc doc, int scale_value)
 {
     if (doc && (doc->scale_value != scale_value) )
@@ -5119,6 +5148,7 @@ void backend_doc_set_scaling(be_doc doc, int scale_value)
 	antweb_default_caret(doc, FALSE);
     }
 }
+#endif
 
 #ifndef BUILDERS
 
@@ -5287,6 +5317,7 @@ extern be_item backend_locate_id(be_doc doc, const char *id)
     return NULL;
 }
 
+#ifdef STBWEB
 extern int backend_doc_encoding(be_doc doc, int encoding)
 {
     int old_encoding;
@@ -5305,6 +5336,32 @@ extern int backend_doc_encoding(be_doc doc, int encoding)
     }
 
     return old_encoding;
+}
+#endif
+
+void antweb_uncache_image_info(antweb_doc *doc)
+{
+    rid_text_item *ti;
+    rid_header *rh = doc->rh;
+#ifndef BUILDERS
+    if (!rh)
+	return;
+
+    for (ti = rh->stream.text_list; ti; ti = rid_scanfr(ti))
+    {
+	if (object_table[ti->tag].imh != NULL)
+	{
+	    image i;
+		
+	    i = (image) (object_table[ti->tag].imh)(ti, doc, object_image_HANDLE);
+
+	    image_uncache_info(i);
+	}
+    }
+
+    if (rh->tile.im)
+	image_uncache_info(rh->tile.im);
+#endif
 }
 
 /* eof backend.c */

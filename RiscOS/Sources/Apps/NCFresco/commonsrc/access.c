@@ -3329,6 +3329,13 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 		mm_free(new_url);
 		mm_free(buffer);
 	    }
+	    else
+		ep = makeerror( ERR_USED_HELPER );
+
+	    ACCDBG(("access_url: mailto: config '%s' gstransed '%s'\n",
+		    config_proxy_mailto ? config_proxy_mailto : "<null>",
+		    proxy ? proxy : "<null>"));
+	    
 	    mm_free(proxy);
 	}
 #if INTERNAL_URLS
@@ -3638,7 +3645,9 @@ BOOL access_is_scheme_supported(const char *scheme)
 	    return TRUE;
     }
 
-    if (strcasecomp(scheme, "mailto") == 0 && config_proxy_mailto_on && config_proxy_mailto)
+    if (strcasecomp(scheme, "mailto") == 0 &&
+	config_proxy_mailto_on &&
+	gstrans_not_null(config_proxy_mailto))
 	return TRUE;
 
 #if INTERNAL_URLS

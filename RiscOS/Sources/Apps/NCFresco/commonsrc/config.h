@@ -136,6 +136,8 @@ struct config_str
     int mode_cursor_toolbar;
     int mode_platform;
     int mode_mouse_adjust;
+    int mode_mouse_menu;
+    int mode_errors;
 
     int cookie_enable;
     int cookie_uptodate;
@@ -273,6 +275,13 @@ extern struct config_str config_array;
 #define config_mode_cursor_toolbar (config_array.mode_cursor_toolbar)
 #define config_mode_platform (config_array.mode_platform)
 #define config_mode_mouse_adjust (config_array.mode_mouse_adjust)
+#define config_mode_mouse_menu (config_array.mode_mouse_menu)
+
+#define mode_errors_WIMP	0
+#define mode_errors_OWN		1
+#define mode_errors_MESSAGE	2
+
+#define config_mode_errors (config_array.mode_errors)
 
 #define config_cookie_enable (config_array.cookie_enable)
 #define config_cookie_uptodate (config_array.cookie_uptodate)

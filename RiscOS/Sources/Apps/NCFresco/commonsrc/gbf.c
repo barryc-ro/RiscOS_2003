@@ -18,6 +18,7 @@ int gbf_flags =	( GBF_TABLES_UNEXPECTED * 1	) +
 		( GBF_GUESS_ELEMENTS * 0	) +
 		( GBF_GUESS_ATTRIBUTES * 1	) +
 		( GBF_GUESS_ENUMERATIONS * 1	) +
+		( GBF_TRANSLATE_UNDEF_CHARS * 1 ) +
 		( GBF_NEW_FORMATTER * 1		) +
 		( GBF_AUTOFIT * 1		) +
 		( GBF_NETSCAPE_OVERLAPS * 0	) +
@@ -34,6 +35,7 @@ int gbf_flags =	( GBF_TABLES_UNEXPECTED * 1	) +
 		( GBF_GUESS_ELEMENTS * 0	) +
 		( GBF_GUESS_ATTRIBUTES * 1	) +
 		( GBF_GUESS_ENUMERATIONS * 1	) +
+		( GBF_TRANSLATE_UNDEF_CHARS * 0 ) +
 		( GBF_NEW_FORMATTER * 1		) +
 		( GBF_AUTOFIT * 0		) +
 		( GBF_NETSCAPE_OVERLAPS * 0	) +
@@ -44,13 +46,14 @@ int gbf_flags =	( GBF_TABLES_UNEXPECTED * 1	) +
 		( GBF_SI1_PCT * 1		)
 ;
 
-#elif defined(FRESCO)
+#elif defined(FRESCO) && !defined(PRODUCTION)
 /* Desktop fresco: no fvpr, no autofit */
 int gbf_flags =	( GBF_TABLES_UNEXPECTED * 1	) +
 		( GBF_FVPR * 0			) +
 		( GBF_GUESS_ELEMENTS * 0	) +
 		( GBF_GUESS_ATTRIBUTES * 1	) +
 		( GBF_GUESS_ENUMERATIONS * 1	) +
+		( GBF_TRANSLATE_UNDEF_CHARS * 0 ) +
 		( GBF_NEW_FORMATTER * 1		) +
 		( GBF_AUTOFIT * 0		) +
 		( GBF_NETSCAPE_OVERLAPS * 0	) +
@@ -59,20 +62,17 @@ int gbf_flags =	( GBF_TABLES_UNEXPECTED * 1	) +
 		( GBF_LOW_MEMORY * 0		) +
 		( GBF_ANTI_TWITTER * 0		) + 
 		( GBF_SI1_PCT * 1		)
-;
 
 #endif /* Build variant switch */
 
 /*****************************************************************************/
 
-#if defined(STBWEB) || defined(BUILDERS)
+#if ! ( defined(FRESCO) && defined(PRODUCTION) )
 
 extern int gbf_active(int gbf)
 {
     return gbf_flags & gbf;
 }
-
-#endif
 
 /*****************************************************************************/
 
@@ -98,4 +98,13 @@ extern void gbf_init(void)
     }
 }
 
+#endif /* Whether want runtime gbf_action() facilities */
+
+/*****************************************************************************/
+
 /* eof */
+
+
+
+
+

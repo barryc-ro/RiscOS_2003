@@ -23,6 +23,7 @@ void ro_fclose(int fh)
     _kernel_osfind(0, (char*) fh);
 }
 
+#ifndef FRESCO
 int ro_fwrite(void *ptr, int size, int items, int fh)
 {
     _kernel_osgbpb_block gpb;
@@ -59,6 +60,7 @@ int ro_fread(void *ptr, int size, int items, int fh)
 
     return (size * items) - gpb.nbytes;
 }
+#endif
 
 int ro_freadpos(void *ptr, int size, int items, int fh, int pos)
 {
@@ -73,16 +75,19 @@ int ro_freadpos(void *ptr, int size, int items, int fh, int pos)
     return (size * items) - gpb.nbytes;
 }
 
+#ifndef FRESCO
 int ro_ensure_size(int fh, int size)
 {
     return _kernel_osargs(3, fh, size);
 }
+#endif
 
 int ro_get_extent(int fh)
 {
     return _kernel_osargs(2, fh, 0);
 }
 
+#if !defined(FRESCO) || DEBUG
 char *ro_ferror(void)
 {
     _kernel_oserror *e = _kernel_last_oserror();
@@ -92,5 +97,6 @@ char *ro_ferror(void)
 #endif
     return e ? e->errmess : "";
 }
+#endif
 
 /* eof files.c */

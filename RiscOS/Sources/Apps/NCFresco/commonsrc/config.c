@@ -211,6 +211,8 @@ config_item citems[] = {
 { config_BOOL, "mode.cursor.toolbar", 	(void *)offsetof(struct config_str, mode_cursor_toolbar),	"Move cursor to toolbar", (void *)1  },
 { config_INT, "mode.platform", 	(void *)offsetof(struct config_str, mode_platform),	"Platform type", (void *)0  },
 { config_INT, "mode.mouse.adjust", 	(void *)offsetof(struct config_str, mode_mouse_adjust),	"Adjust click action", (void *)0  },
+{ config_INT, "mode.mouse.menu", 	(void *)offsetof(struct config_str, mode_mouse_menu),	"Menu click action", (void *)0  },
+{ config_INT, "mode.errors", 	(void *)offsetof(struct config_str, mode_errors),	"Action on errors", (void *)0  },
 { config_INT,  "history.length",	(void *)offsetof(struct config_str, history_length),	"The number of pages in the per-view history list",	(void *) 50 },
 { config_INT,  "history.global.length",	(void *)offsetof(struct config_str, history_global_length),	"The number of unique pages in the global history list",	(void *) 250 },
 { config_BOOL, "history.persist",       (void *)offsetof(struct config_str, history_persist),   "Should the history list be kept across closedowns?", (void*) 0 },

@@ -3,6 +3,14 @@
 
 #include "sgmlparser.h"
 
+#ifndef WHITESPACE_BEFORE_COMMENT_START
+#define WHITESPACE_BEFORE_COMMENT_START !defined(STBWEB)
+#endif
+
+#ifndef CORRECT_SGML_COMMENTS
+#define CORRECT_SGML_COMMENTS !defined(STBWEB)
+#endif
+
 /*****************************************************************************
 
   When we are sending a text file through the parser, we don't want to
@@ -303,7 +311,11 @@ extern void state_comment_wait_dash_2_0 (SGMLCTX *context, char input)
 {
 	if ( input =='-' )
 	{
+#if CORRECT_SGML_COMMENTS
 	    context->state = state_comment_maybe /* state_comment_wait_close */;
+#else
+	    context->state = state_comment_wait_close;
+#endif
 	}
 	else if ( input == '>' )
         {   do_got_element (context); }
@@ -360,7 +372,7 @@ extern void state_comment_pre_initial (SGMLCTX *context, char input)
 /* <! */
 extern void state_comment_maybe (SGMLCTX *context, char input)
 {
-#ifndef STBWEB
+#if WHITESPACE_BEFORE_COMMENT_START
     if ( is_whitespace (input) )
 	{ ; }
 	else

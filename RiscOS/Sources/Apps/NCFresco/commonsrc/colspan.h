@@ -72,24 +72,24 @@
   Constants for indexing into widths array
 
 
-RAW_MAX	
+RAW_MAX
 
-width beyond which we are adding empty space 
+width beyond which we are adding empty space
 
-RAW_MIN	
+RAW_MIN
 
-minimum rendering width (longest word, etc) 
+minimum rendering width (longest word, etc)
 
-ABS_MIN	
+ABS_MIN
 
 ditto unless made bigger by an abs width constraint
 
-PCT_MIN	
+PCT_MIN
 
 actual percentage constraint in % (default 0), or (in a later pass)
 min width if both abs and %age constraints are obeyed
 
-REL_MIN	
+REL_MIN
 
 relative constraint (default 1), or (in a later pass) min width if
 abs, %age *and* relative constraints are all obeyed
@@ -141,7 +141,7 @@ zero. Do not re-order these without sorting everything else out.
 typedef enum
 {
     FIRST_MIN = 0,
-	
+
     RAW_MIN = FIRST_MIN,
     ABS_MIN,
     PCT_MIN,
@@ -168,7 +168,8 @@ typedef enum
 
     /* This section are pseudo types and DO NOT exist in the arrays. */
 
-    CS_STOP
+    CS_STOP,
+    WIDTH_ZERO
 
 } width_array_e;
 
@@ -184,7 +185,7 @@ typedef enum
 	  "REL_MAX", \
 	  "PCT_RAW", \
 	  "ACTUAL ", \
-	  } 
+	  }
 
 #define	  PCT_MIN_DEFAULT	0
 #define   REL_MIN_DEFAULT	1
@@ -298,7 +299,7 @@ extern int colspan_halve(rid_table_item *table, width_array_e slot, BOOL horiz);
 extern int colspan_scale(rid_table_item *table, width_array_e slot, BOOL horiz, double scale);
 extern void colspan_bump_upwards(rid_table_item *table, width_array_e slot, BOOL horiz, int spare);
 extern void colspan_bump_downwards(rid_table_item *table, width_array_e slot, BOOL horiz, int spare);
-extern void colspan_copy_only_if_uninit(rid_table_item *table, 
+extern void colspan_copy_only_if_uninit(rid_table_item *table,
 					width_array_e old,
 					width_array_e new,
 					BOOL horiz);
@@ -308,67 +309,67 @@ extern void colspan_copy_only_if_uninit(rid_table_item *table,
 
 extern void colspan_column_init_from_leftmost(rid_table_item *table, width_array_e slot, BOOL horiz);
 
-extern void colspan_column_and_eql_set(rid_table_item *table, 
-				       BOOL horiz, 
+extern void colspan_column_and_eql_set(rid_table_item *table,
+				       BOOL horiz,
 				       width_array_e slot,
 				       unsigned int ANT,
 				       unsigned int EQL,
 				       int SET);
 
-extern void colspan_column_and_eql_copy(rid_table_item *table, 
-					BOOL horiz, 
+extern void colspan_column_and_eql_copy(rid_table_item *table,
+					BOOL horiz,
 					width_array_e slot,
 					unsigned int ANT,
 					unsigned int EQL,
 					width_array_e slot_from);
 
-extern void colspan_column_and_eql_lt_copy(rid_table_item *table, 
-					   BOOL horiz, 
+extern void colspan_column_and_eql_lt_copy(rid_table_item *table,
+					   BOOL horiz,
 					   width_array_e slot,
 					   unsigned int ANT,
 					   unsigned int EQL,
 					   width_array_e slot_from);
 
 extern void colspan_column_and_eql_upwards(rid_table_item *table,
-					   BOOL horiz, 
+					   BOOL horiz,
 					   width_array_e slot,
 					   unsigned int AND,
 					   unsigned int EQL,
 					   int to_share);
 
 extern void colspan_column_and_eql_downwards(rid_table_item *table,
-					     BOOL horiz, 
+					     BOOL horiz,
 					     width_array_e slot,
 					     unsigned int AND,
 					     unsigned int EQL,
 					     int to_share);
 
 extern void colspan_column_and_eql_halve(rid_table_item *table,
-					     BOOL horiz, 
+					     BOOL horiz,
 					     width_array_e slot,
 					     unsigned int AND,
 					     unsigned int EQL);
 
 extern void colspan_column_and_eql_double(rid_table_item *table,
-					     BOOL horiz, 
+					     BOOL horiz,
 					     width_array_e slot,
 					     unsigned int AND,
 					     unsigned int EQL);
 
 extern void colspan_column_and_eql_scale(rid_table_item *table,
-					 BOOL horiz, 
+					 BOOL horiz,
 					 width_array_e slot,
 					 unsigned int AND,
 					 unsigned int EQL,
 					 double scale);
 
 extern int colspan_sum_columns(rid_table_item *table,
-				BOOL horiz, 
+				BOOL horiz,
 				width_array_e slot);
 
 
-extern void colspan_column_and_eql_bitset(rid_table_item *table, 
-					BOOL horiz, 
+extern void colspan_column_and_eql_bitset(rid_table_item *table,
+					BOOL horiz,
 					width_array_e slot,
 					unsigned int AND,
 					unsigned int EQL,
@@ -377,48 +378,48 @@ extern void colspan_column_and_eql_bitset(rid_table_item *table,
 
 /*****************************************************************************/
 
-extern void colspan_all_and_eql_bitclr(rid_table_item *table, 
-					BOOL horiz, 
+extern void colspan_all_and_eql_bitclr(rid_table_item *table,
+					BOOL horiz,
 					width_array_e slot,
 					unsigned int AND,
 					unsigned int EQL,
 					unsigned int CLR);
 
-extern void colspan_all_and_eql_lt_copy(rid_table_item *table, 
-					BOOL horiz, 
+extern void colspan_all_and_eql_lt_copy(rid_table_item *table,
+					BOOL horiz,
 					width_array_e slot,
 					unsigned int ANT,
 					unsigned int EQL,
 					width_array_e slot_from);
 
-extern void colspan_all_and_eql_copy(rid_table_item *table, 
-				     BOOL horiz, 
+extern void colspan_all_and_eql_copy(rid_table_item *table,
+				     BOOL horiz,
 				     width_array_e slot,
 				     unsigned int ANT,
 				     unsigned int EQL,
 				     width_array_e slot_from);
 
 extern void colspan_all_and_eql_set(rid_table_item *table,
-				    BOOL horiz, 
+				    BOOL horiz,
 				    width_array_e slot,
 				    unsigned int AND,
 				    unsigned int EQL,
 				    int SET);
 
 extern void colspan_all_and_eql_halve(rid_table_item *table,
-				      BOOL horiz, 
+				      BOOL horiz,
 				      width_array_e slot,
 				      unsigned int AND,
 				      unsigned int EQL);
 
 extern void colspan_all_and_eql_double(rid_table_item *table,
-				       BOOL horiz, 
+				       BOOL horiz,
 				       width_array_e slot,
 				       unsigned int AND,
 				       unsigned int EQL);
 
 extern void colspan_all_and_eql_scale(rid_table_item *table,
-				      BOOL horiz, 
+				      BOOL horiz,
 				      width_array_e slot,
 				      unsigned int AND,
 				      unsigned int EQL,
@@ -428,9 +429,9 @@ extern void colspan_all_and_eql_scale(rid_table_item *table,
 
  from csgraph.c (added PCP 11/5/97) */
 
-extern int find_connected_components (rid_table_item *table, 
-				      unsigned int col_flags, 
-				      unsigned int grp_flags, 
+extern int find_connected_components (rid_table_item *table,
+				      unsigned int col_flags,
+				      unsigned int grp_flags,
 				      BOOL horiz);
 
 extern BOOL same_connected_component (pcp_cell the_cells, int i, int j);

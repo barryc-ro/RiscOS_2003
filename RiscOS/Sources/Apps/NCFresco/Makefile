@@ -95,7 +95,7 @@ COMM_OBJS=	Serial.o access.o auth.o backend.o bittabs.o config.o \
 		unwind.o url.o util.o version.o webfonts.o \
 		cookie.o cache2.o cache3.o stream.o debug.o usrtrc.o \
 		tablesize.o oobject.o objects.o plugin.o pluginfile.o \
-		files.o fvpr.o remote.o coalesce.o keyhl.o \
+		files.o remote.o keyhl.o \
 		buildtime.o format.o colspan.o loformat.o cs2.o \
 		highlight.o frameutils.o csgraph.o rdebug.o
 
@@ -190,7 +190,7 @@ FRESCO_CFLAGS=  $(FRESCO_CFLAGS_DBG)
 FRESCO_VPATH=	../!Fresco
 FRESCO_OBJS=	configgui.o fontmenu.o frontend.o guibits.o guidata.o \
 		guimenu.o hotlist.o picker.o savedoc.o statusbar.o \
-		listfonts2.o history.o rlib_alloc.o event2.o \
+		listfonts2.o history.o rlib_alloc.o event2.o ole.o \
 		$(SGML_OBJS) $(HTML_OBJS) $(COMM_OBJS)
 FRESCO_LIBS=    ../webimage/webimage ../memlib/memlib
 
@@ -781,6 +781,7 @@ NCFRESCO_VPATH=			../!NCFresco
 NCFRESCO_BASE_OBJS=		clipboard.o stbfe.o stbhist.o stbhots.o stbkeys.o stbmap.o \
 				stbevent.o stbmenu.o stbopen.o stbredraw.o stbstatus.o stbtb.o stbutils.o \
 				alarm.o sutil.o ncreg.o internal.o flex.o heap.o da.o stblinks.o stbcodec.o \
+				fvpr.o \
 				$(SGML_OBJS) $(HTML_OBJS) $(COMM_OBJS)
 
 

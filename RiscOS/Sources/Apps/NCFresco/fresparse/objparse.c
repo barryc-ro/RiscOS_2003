@@ -174,6 +174,15 @@ static rid_flag add_to_object(rid_object_item *obj, const VALUE *standby, const 
     rid_flag flag;
 
     obj->standby = valuestringdup(standby);
+#ifndef BUILDERS
+    /* if no standbyu message given then use the file type name */
+    if (obj->standby == NULL)
+    {
+	char *s = get_plugin_type_name(obj->classid_ftype != -1 ? obj->classid_ftype : obj->data_ftype);
+	if (s)
+	    obj->standby = strdup(s);
+    }
+#endif
     obj->name = valuestringdup(name);
 
     obj->userwidth = *width;

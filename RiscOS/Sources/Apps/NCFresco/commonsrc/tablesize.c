@@ -415,6 +415,7 @@ static void done_table_sizing(rid_table_item *table)
 
  */
 
+#if 0
 static void size_child_items(rid_header *rh, rid_table_item *table, rid_fmt_info *parfmt)
 {
     const int cellsx = table->cells.x;
@@ -796,6 +797,7 @@ extern void rid_size_table( rid_header *rh, rid_table_item *table, rid_fmt_info 
 
     return;
 }
+#endif
 
 /*****************************************************************************/
 
@@ -834,10 +836,10 @@ static void rid_table_set_stream_widths(rid_table_item *table)
 	cell->stream.fwidth = table->cumminabs[x + cell->span.x] - table->cumminabs[x];
 #if DEBUG && 0
 	fprintf(stderr, "%2d %2d = %3d, table->cumminabs[x=%2d + cell->span.x=%2d]=%3d - table->cumminabs[%2d]=%3d;\n",
-	       x, y, cell->stream.fwidth, 
-	       x, cell->span.x, 
-	       table->cumminabs[x + cell->span.x], 
-	       x, 
+	       x, y, cell->stream.fwidth,
+	       x, cell->span.x,
+	       table->cumminabs[x + cell->span.x],
+	       x,
 	       table->cumminabs[x] );
 #endif
 	/* DAF: 970315: hunting -ve fwidth */
@@ -1787,6 +1789,7 @@ static void rid_table_place_cols(rid_text_stream *stream,
 /* Chooses widths and then heights */
 /* Sets xoff and yoff for items */
 
+#if 0
 extern void rid_table_share_width(rid_header *rh, rid_text_stream *stream, rid_text_item *orig_item, rid_fmt_info *parfmt)
 {
     rid_table_item *table = ((rid_text_item_table *)orig_item)->table;
@@ -1947,6 +1950,7 @@ extern void rid_table_share_width(rid_header *rh, rid_text_stream *stream, rid_t
 
     TABDBG(("Finished sharing widths\n"));
 }
+#endif
 
 /*****************************************************************************/
 

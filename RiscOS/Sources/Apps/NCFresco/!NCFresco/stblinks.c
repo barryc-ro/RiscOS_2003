@@ -568,9 +568,12 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 	new_v = fe_locate_view_by_position(&v->box, flags);
 
 	/* if no new frame then try moving to toolbar */
-	if (!new_v)
+	/* 20Jun: can't do this if it is a transient popup that is centered*/
+	if (!new_v && !(v->open_transient &&
+	    (v->transient_position == fe_position_CENTERED_WITH_COORDS ||
+	     v->transient_position == fe_position_CENTERED)))
 	{
-	    if ((flags & be_link_VERT) && move_to_toolbar(flags))
+	    if (/* (flags & be_link_VERT) &&  */move_to_toolbar(flags))
 		return;
 	}
 
@@ -643,10 +646,15 @@ static void fe__move_highlight_xy(fe_view v, wimp_box *box, int flags)
 	}
 
 	/* try moving to toolbar */
-	if (move_to_toolbar(flags))
+	if (!(v->open_transient &&
+	    (v->transient_position == fe_position_CENTERED_WITH_COORDS ||
+	     v->transient_position == fe_position_CENTERED)))
 	{
-/* 	    v->current_link = NULL; */
-	    return;
+	    if (move_to_toolbar(flags))
+	    {
+/*		v->current_link = NULL; */
+		return;
+	    }
 	}
 
 	if (v->displaying && v->scrolling != fe_scrolling_NO)

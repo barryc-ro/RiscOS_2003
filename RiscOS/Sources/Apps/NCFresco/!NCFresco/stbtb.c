@@ -1064,7 +1064,7 @@ BOOL tb_status_unstack(void)
     STBDBG(("tb_status_unstack(): in bar_list %p return_bar %d\n", bar_list, bar_list ? bar_list->return_bar : 99));
 
     /* see if we can do anything */
-    if (!bar_list || bar_list->return_bar == BAR_CANT)
+    if (!bar_list || bar_list->return_bar == BAR_CANT || !tb_is_status_showing())
 	return FALSE;
 
     sound_event(snd_TOOLBAR_HIDE_SUB);
@@ -1096,7 +1096,7 @@ void tb_status_unstack_all(BOOL leave_bar_up)
 {
     tb_bar_dispose();
     if (leave_bar_up)
-	tb_status_new(NULL, BAR_MAIN);
+	tb_status_new(NULL, config_display_control_initial);
 }
 
 void tb_status_new(fe_view v, int bar_num)
@@ -1144,19 +1144,17 @@ void tb_status_new(fe_view v, int bar_num)
     STBDBG(("tb_status_new(): out\n"));
 }
 
-BOOL tb_status_highlight(BOOL gain)
+BOOL tb_status_highlight(BOOL take_focus)
 {
     tb_bar_info *tbi = bar_list;
 
-    STBDBG(("tb_status_highlight: bar %p gain %d\n", tbi, gain));
+    STBDBG(("tb_status_highlight: bar %p take_focus %d\n", tbi, take_focus));
 
     if (tbi)
     {
 	/* took out the havefocus() check as it meant coming off the keyboard didn't work */
 	/* put it back as it's needed to stop the highlight always
            ending up on down arrow when changing toolbars */
-	if (gain)
-	{
 	    int active = get_active(tbi);
 
 	    STBDBG(("tb_status_highlight: active %d\n", active));
@@ -1172,9 +1170,10 @@ BOOL tb_status_highlight(BOOL gain)
 	    else if (!havefocus(tbi))
 	    {
 		tb_bar_set_highlight(tbi, bar_names[tbi->num].initial_component, FALSE);
-		setfocus(tbi->object_handle);
+
+		if (take_focus)
+		    setfocus(tbi->object_handle);
 	    }
-	}
 	return TRUE;
     }
     return FALSE;
@@ -1754,6 +1753,13 @@ void tb_status_show(int small_only)
     {
         o.behind = (wimp_w)-1;
         frontend_complain((os_error *)_swix(Toolbox_ShowObject, _INR(0,5), 0, bar_list->object_handle, 1, &o.box, 0, 0));/* tb_block[4], tb_block[5]));*/
+
+	/* when opening the full toolbar set the highlight to it automatically */
+	if (status_state == status_OPEN && bar_names[bar_list->num].open_component != -1)
+	{
+	    tb_bar_set_highlight(bar_list, bar_names[bar_list->num].open_component, FALSE);
+	    setfocus(bar_list->object_handle);
+	}	
     }
 }
 
@@ -1773,6 +1779,13 @@ void tb_status_hide(int only_if_small)
 	if (focus)
 	    return_highlight(NULL, bar_list, 0);
 
+	/* if not the main bar then dispose of it and recreate the main bar (but don't open!) */
+	if (bar_list->num != config_display_control_initial)
+	{
+	    tb_bar_dispose();
+	    tb_bar_init(config_display_control_initial);
+	}
+	
 	/* if we are closing big toolbar and still spinning then reopen ickle status bar */
 	if (turn_ctr != -1 && !only_if_small)
 	    tb_status_show(TRUE);
@@ -2348,8 +2361,15 @@ static int codec_component[] =
     fevent_CODEC_RECORD
 };
 
+static int codecs_open = 0;
+
 void tb_codec_state_change(int state, BOOL opening, BOOL closing)
 {
+    if (opening)
+	codecs_open++;
+    if (closing)
+	codecs_open--;
+
     if (opening && (bar_list == NULL || bar_list->num != BAR_CODEC))
 	tb_status_new(NULL, BAR_CODEC);
 
@@ -2360,8 +2380,17 @@ void tb_codec_state_change(int state, BOOL opening, BOOL closing)
 	for (i = 0; i < sizeof(codec_component)/sizeof(codec_component[0]); i++)
 	    setstate(bar_list->object_handle, codec_component[i], state == i);
 
-	if (closing)
+	if (closing && codecs_open == 0)
 	    tb_status_unstack();
+    }
+}
+
+void tb_codec_kill(void)
+{
+    if (bar_list && bar_list->num == BAR_CODEC)
+    {
+	codecs_open = 0;
+	tb_status_unstack();
     }
 }
 

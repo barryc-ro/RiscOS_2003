@@ -1336,28 +1336,38 @@ os_error *image_tidyup(void)
 
 /* ------------------------------------------------------------------------- */
 
+/*
+ * This function is for the use of the formatting code when it has determined that
+ * the scaling needs to change and thus the background needs to be rescaled.
+ */
+
+void image_uncache_info(image i)
+{
+    free_pt(i);
+    free_area(&i->cache_area);
+
+    if (i->frames > 1)
+    {
+	i->cache_frame = -1;
+	i->cur_frame = -1;
+	i->cache_mask = 0;
+
+	flexmem_noshift();
+	strncpy(i->sname, ((sprite_header *) (i->our_area + 1))->name, 12);
+	flexmem_shift();
+    }
+
+    /* pdh: depth may have changed */
+    i->table_type = pixtrans_UNKNOWN;
+}
+
 void image_palette_change(void)
 {
     image i;
 
     for (i=image_list; i != NULL; i = i->next)
     {
-	free_pt(i);
-	free_area(&i->cache_area);
-
-	if (i->frames > 1)
-	{
-	    i->cache_frame = -1;
-	    i->cur_frame = -1;
-	    i->cache_mask = 0;
-
-	    flexmem_noshift();
-	    strncpy(i->sname, ((sprite_header *) (i->our_area + 1))->name, 12);
-	    flexmem_shift();
-	}
-
-	/* pdh: depth may have changed */
-	i->table_type = pixtrans_UNKNOWN;
+	image_uncache_info(i);
     }
 }
 

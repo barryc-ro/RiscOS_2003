@@ -46,6 +46,7 @@
 #include "fvpr.h"
 #include "indent.h"
 #include "webfonts.h"
+#include "interface.h"
 
 #ifdef PLOTCHECK
 #include "rectplot.h"
@@ -436,6 +437,15 @@ static int largest_implied_table_width(rid_table_item *table,
 		const int z = (100 * q ) / a;
 		if (z > widest)
 		    widest = z;
+		if (gbf_active(GBF_SI1_PCT))
+		{
+		    const int F = (a * SI1_PCT_WIDTH) / 100;
+		    if (z > F)
+		    {
+			FMTDBG(("largest_implied_table_width: SI1_PCT triggered on column %d\n", x));
+			table->flags |= 0;
+		    }
+		}
 		FMTDBGN(("q %d, a %d, z %d, widest %d\n", q,a,z,widest));
 	    }
 	    else
@@ -1619,7 +1629,7 @@ extern void rid_toplevel_format(antweb_doc *doc,
 		 * happen until the next poll) */
 		frontend_view_redraw( doc->parent, NULL );
 #endif
-		
+
 		FMTDBG(("st%p: RESIZING: minwidth %d > fwidth %d, autofit to %d%%\n",
                         root_stream, rh->stream.width_info.minwidth, fwidth,
                         doc->scale_value ));
@@ -1631,6 +1641,9 @@ extern void rid_toplevel_format(antweb_doc *doc,
 			root_stream,
 			root_stream->width_info.minwidth,
 			root_stream->width_info.maxwidth));
+
+		/* ensure that bg and animations are cached at the right size */
+		antweb_uncache_image_info( doc );
 	    }
 	}
 

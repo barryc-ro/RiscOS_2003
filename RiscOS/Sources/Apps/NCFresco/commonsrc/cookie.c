@@ -105,15 +105,15 @@ static unsigned long get_time(void)
 
     if (ttp == NULL)
 	return t;
-    
+
 /*     CKIDBG(("cookie: dst %d\n", ttp->tm_isdst)); */
 
 /*     if (!ttp->tm_isdst) */
 /* 	return t; */
-	
+
     tt = *ttp;
     tt.tm_isdst = 0;
-    
+
     return (unsigned long) mktime(&tt);
 }
 
@@ -147,7 +147,7 @@ static void cookie_free(cookie_item *c)
     if (c)
     {
 	CKIDBG(("cookie: freeing 0x%p expiry=%lx %s=%s\n", c, c->expires, c->name, c->value));
-	
+
 	mm_free(c->name);
         mm_free(c->value);
         mm_free(c->path);
@@ -178,7 +178,7 @@ static void cookie_check_expiry_domain(cookie_domain *d, unsigned long now, BOOL
     cookie_item *oldest_c = NULL, *oldest_last = NULL;
 
     CKIDBG(("cookie: check expiry now=%lx domain=%s n=%d\n", now, d->domain, d->cookie_count));
-    
+
     c = d->cookie_list;
     last = NULL;
     while (c)
@@ -200,7 +200,7 @@ static void cookie_check_expiry_domain(cookie_domain *d, unsigned long now, BOOL
 
 	    last = c;
 	}
-	
+
         c = next;
     }
 
@@ -218,7 +218,7 @@ static void cookie_check_expiry(unsigned long now)
     cookie_domain *d;
 
     CKIDBG(("cookie: check expiry\n"));
-    
+
     for (d = domain_list; d; d = d->next)
         cookie_check_expiry_domain(d, now, FALSE);
 }
@@ -267,7 +267,7 @@ static BOOL tail_compare(const char *subdomain, const char *domain)
     if (domain[0] != '.')
 	if (subdomain[start-1] != '.')	/* Not really a subdomain just a name prefix */
 	    return FALSE;
-    
+
     return strcasecomp(&subdomain[start], domain) == 0;
 }
 
@@ -324,7 +324,7 @@ static BOOL get_domain_and_path(char *domain_in, const char *path_in, const char
         return TRUE;
     }
 #endif
-    
+
     url_parse((char *)url, &scheme, &netloc, &path, &params, &query, &frag);
 
     if (netloc == NULL)
@@ -333,10 +333,10 @@ static BOOL get_domain_and_path(char *domain_in, const char *path_in, const char
 	url_free_parts(scheme, netloc, path, params, query, frag);
 	return FALSE;
     }
-    
+
     /* strip off the port number from the domain */
     url_port = strip_port_from_domain(netloc);
-    
+
     /* if we have a domain possed in */
     if (domain_in)
     {
@@ -348,7 +348,7 @@ static BOOL get_domain_and_path(char *domain_in, const char *path_in, const char
 	port = strip_port_from_domain(domain_in);
 
 	/* if the cookie domain has no port specified then match otherwise only if the ports are the same */
-        if ((port == PORT_UNSPECIFIED || port == url_port) && 
+        if ((port == PORT_UNSPECIFIED || port == url_port) &&
 	    !tail_compare(netloc, domain_in))
         {
             CKIDBG(( "cookie: attempt to set cookie for wrong domain\n  domain '%s'\n  cookie '%s'\n", netloc, domain_in));
@@ -372,6 +372,7 @@ static BOOL get_domain_and_path(char *domain_in, const char *path_in, const char
         if (dots == 0 || (dots == 1 && match_strings(top_level, special_domains) == -1))
         {
             CKIDBG(( "cookie: too high level domain '%s' %d dots\n", domain_in, dots));
+	    url_free_parts(scheme, netloc, path, params, query, frag);
             return FALSE;
         }
 
@@ -427,7 +428,7 @@ static void cookie_add(char *name, char *value, char *domain, char *path, unsign
     CKIDBG(("cookie: add name '%s' value '%s' domain '%s' path '%s' expires %x secure %d\n",
         strsafe(name), strsafe(value), strsafe(domain), strsafe(path), (int)expires, secure));
     CKIDBG(("cookie: current time %lx\n", time_now));
-    
+
     d = find_domain(domain, port);
 
     if (d)
@@ -658,7 +659,7 @@ http_header_item *cookie_add_headers(http_header_item *hlist, const char *url, i
     unsigned long time_now = get_time();
     BOOL quote_strings = FALSE;
     int port;
-    
+
     CKIDBG(( "cookie: get cookies for '%s'\n", url));
 
     /* free last used cookie value */
@@ -675,7 +676,7 @@ http_header_item *cookie_add_headers(http_header_item *hlist, const char *url, i
         path = strdup("/");
 
     port = strip_port_from_domain(netloc);
-    
+
     len_netloc = strlen(netloc);
     len_path = strlen(path);
 
@@ -683,7 +684,7 @@ http_header_item *cookie_add_headers(http_header_item *hlist, const char *url, i
     {
         int start;
 	cookie_item *last_c;
-	
+
         /* check host */
 	if (d->port == PORT_ANY ||
 	    d->port == port ||
@@ -720,10 +721,10 @@ http_header_item *cookie_add_headers(http_header_item *hlist, const char *url, i
 		c = last_c ? last_c : d->cookie_list;
 		if (c == NULL)
 		    break;
-		
+
                 continue;
 	    }
-	    	    
+
             /* check path - didn't use to be case-sensitive! */
             if (strncmp(c->path, path, strlen(c->path)) != 0)
             {
@@ -750,7 +751,7 @@ http_header_item *cookie_add_headers(http_header_item *hlist, const char *url, i
 	    }
 	    else
 		quote = "";
-	    
+
             if (cookie_http_header.value)
                 cookie_http_header.value = mm_realloc(cookie_http_header.value, cookie_len + len + 1);
             else
@@ -776,6 +777,7 @@ http_header_item *cookie_add_headers(http_header_item *hlist, const char *url, i
 
 /* ---------------------------------------------------------------------------------------------------- */
 
+#ifndef FRESCO
 void cookie_dispose_all(void)
 {
     cookie_domain *d = domain_list;
@@ -792,6 +794,7 @@ void cookie_dispose_all(void)
     }
     domain_list = NULL;
 }
+#endif
 
 /* ---------------------------------------------------------------------------------------------------- */
 
@@ -825,13 +828,13 @@ static void cookie_read_line(char *buf)
     /* The flags word, capital means set lower case means clear */
     s = strtok(NULL, SEPARATORS);
     secure = strchr(s, 'S') != NULL;
-	
+
     s = strtok(NULL, SEPARATORS);
     expires = strtoul(s, NULL, 16);
 
     s = strtok(NULL, SEPARATORS);
     used = strtoul(s, NULL, 16);
-       
+
     cookie_add(name, value, domain, path, expires, secure, used, port);
 }
 
@@ -845,18 +848,18 @@ static void cookie_read_line(char *buf)
 void cookie_write_file(const char *file_name)
 {
     FILE *f;
-    
+
     CKIDBG(( "cookie: write '%s'\n", file_name));
 
     if (!gstrans_not_null(file_name))
 	return;
-    
+
     f = mmfopen(file_name, "w");
     if (f)
     {
         cookie_domain *d;
         cookie_item *c;
-	
+
         time_t now = get_time();
 	struct tm *gmtt = gmtime(&now);
 
@@ -894,7 +897,7 @@ void cookie_write_file(const char *file_name)
 			break;
 		    }
 
-		    fprintf(f, "\t%s\t%c\t%08lx\t%08lx\n", 
+		    fprintf(f, "\t%s\t%c\t%08lx\t%08lx\n",
 			    c->path,
 			    c->flags & cookie_SECURE ? 'S' : 's',
 			    c->expires, c->used);
@@ -942,7 +945,7 @@ void cookie_read_file(const char *file_name)
 
     if (file_type(file_name) == -1)
 	return;
-    
+
     f = mmfopen(file_name, "r");
     if (f)
     {
@@ -978,7 +981,7 @@ void cookie_read_file(const char *file_name)
 	    case 2:
 		cookie_read_line(buf);
 		break;
-	    }	    
+	    }
         }
         while (!feof(f));
 

@@ -100,7 +100,7 @@ static BOOL be_item_onscreen(be_doc doc, be_item ti, const wimp_box *bounds, int
         (box.x0 >= bounds->x0 && box.x0 < bounds->x1))
         )
         return TRUE;
-#else
+#elif 0
     if (flags & be_link_BACK)
     {
 	/* if moving highlight backwards (up) then item is onscreen if top line is on screen */
@@ -113,6 +113,25 @@ static BOOL be_item_onscreen(be_doc doc, be_item ti, const wimp_box *bounds, int
 	if (box.y1 > bounds->y0 && box.y1 <= bounds->y1)
             return TRUE;
     }
+#elif 0
+    /* changed to this variety to make it easier to get onto images that are larger than the screen */
+    if (box.y0 < bounds->y0 && box.y1 > bounds->y1)
+    {
+	/* see if link encompasses screen */
+	return TRUE;
+    }
+    else if (flags & be_link_BACK)
+    {
+	if (box.y0 >= bounds->y0 && box.y0 < bounds->y1)
+	    return TRUE;
+    }
+    else
+    {
+	if (box.y1 > bounds->y0 && box.y1 <= bounds->y1)
+	    return TRUE;
+    }
+#else
+    return box.y0 < bounds->y1 && box.y1 >= bounds->y0;
 #endif
     return FALSE;
 }
@@ -313,6 +332,7 @@ static antweb_selection_descr *antweb_highlight_scan_xy(be_doc doc, const antweb
 {
     antweb_selection_descr *link;
     rid_aref_item *start_aref;
+    rid_text_item *start_link;
 
     /* loop storage for main link finding */
     int min_dist = INT_MAX, min_secdist = INT_MAX;
@@ -329,8 +349,9 @@ static antweb_selection_descr *antweb_highlight_scan_xy(be_doc doc, const antweb
 
     /* see if there is an aref we mustn't match */
     start_aref = (flags & be_link_INCLUDE_CURRENT) == 0 && initial && initial->tag == doc_selection_tag_AREF ? initial->data.aref : NULL;
+    start_link = (flags & be_link_INCLUDE_CURRENT) == 0 && initial && initial->tag == doc_selection_tag_TEXT ? initial->data.text.item : NULL;
 
-    LNKDBGN(("antweb_highlight_scan_xy: start_aref %p\n", start_aref));
+    LNKDBGN(("antweb_highlight_scan_xy: start_aref %p start_link %p\n", start_aref, start_link));
 
     /* go through all the elements looking for the minimum distance */
     for (i = 0, link = doc->selection_list.list; i < doc->selection_list.count; i++, link++)
@@ -348,20 +369,38 @@ static antweb_selection_descr *antweb_highlight_scan_xy(be_doc doc, const antweb
  		LNKDBGN(("                        : same aref\n"));
 		continue;
 	    }
+
+	    /* if it is an imagemap/form element it could be the same item without being the same link */
+	    if (start_link != NULL && link->item.data.text.item == start_link)
+	    {
+ 		LNKDBGN(("                        : same item\n"));
+		continue;
+	    }
+
 	}
 
 	/* check and see if this item is visible */
-	if (flags & be_link_BACK)
+#if 1
+	on_screen = link->bbox.y0 < bounds->y1 && link->bbox.y1 >= bounds->y0;
+#else
+	if (link->bbox.y0 < bounds->y0 && link->bbox.y1 > bounds->y1)
 	{
+	    /* see if link encompasses screen */
+	    on_screen = TRUE;
+	}
+	else if (flags & be_link_BACK)
+	{
+	    /* see if bottom line is visible */
 	    if (link->bbox.y0 >= bounds->y0 && link->bbox.y0 < bounds->y1)
 		on_screen = TRUE;
 	}
 	else
 	{
+	    /* see if top line is visible */
 	    if (link->bbox.y1 > bounds->y0 && link->bbox.y1 <= bounds->y1)
 		on_screen = TRUE;
 	}
-
+#endif
 	/* if not visible then continue on to next immediately */
 	if (!on_screen)
 	{
@@ -799,7 +838,9 @@ be_item backend_highlight_link_xy(be_doc doc, be_item item, const wimp_box *box,
  	    if ((flags & be_link_DONT_FORCE_ON) == 0)
 	    {
 #if USE_MARGINS
-		frontend_view_ensure_visable(doc->parent, x + doc->margin.x0, y + ti->max_up + doc->margin.y1, y - ti->max_down + doc->margin.y1);
+		frontend_view_ensure_visable_full(doc->parent,
+						  x + doc->margin.x0, x + doc->margin.x0 + ti->width,
+						  y + ti->max_up + doc->margin.y1, y - ti->max_down + doc->margin.y1);
 #else
 		frontend_view_ensure_visable(doc->parent, x, y + ti->max_up, y - ti->max_down);
 #endif

@@ -67,6 +67,7 @@ os_error *frontend_open_url(char *url, fe_view parent, char *windowname, char *b
  * the view where possible.  The function makes no allowances for
  * other windows on top. */
 int frontend_view_ensure_visable(fe_view v, int x, int top, int bottom);
+int frontend_view_ensure_visable_full(fe_view v, int left, int right, int top, int bottom);
 
 /* Force the redraw for the view.  If bb is NULL redraw the whole lot.
  * The view is assumed to have the origin at the top left corner. */
@@ -276,7 +277,7 @@ extern void frontend_pointer_set_position(fe_view v, int x, int y);
 /* Called from memory handler. Frontend should free up any memory that
  * it doesn't really need and return 1 if it freed anything, 0 otherwise
  */
-    
+
 extern int frontend_memory_panic(void);
 
 /***************************************************************************/
@@ -420,6 +421,7 @@ int backend_render_rectangle(wimp_redrawstr *r, void *h, int update);
  * saveas() or xfersend(). */
 extern BOOL backend_doc_saver_text(char *fname, void *doc);
 extern BOOL backend_doc_saver_draw(char *fname, void *doc);
+extern BOOL backend_doc_saver_headers(char *fname, void *doc);
 
 extern BOOL backend_image_saver_sprite(char *fname, void *imh);
 

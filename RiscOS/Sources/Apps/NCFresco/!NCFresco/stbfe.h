@@ -20,6 +20,8 @@ extern os_error pending_error;
 
 extern int use_anti_twitter;
 
+extern int fe_pending_event;
+
 #define TASK_MAGIC	0x4B534154
 
 #define DBOX_SIZE_X	800
@@ -28,6 +30,8 @@ extern int use_anti_twitter;
 #define IconHigh_GetDirection		0x4E701
 #define IconHigh_Start			0x4E702
 #define IconHigh_Stop			0x4E703
+
+#define MESSAGE_ERROR_BROADCAST		0x200000
 
 extern void fe_pointer_mode_update(pointermode_t mode);
 extern void fe_set_pointer(int item_flags);
@@ -176,6 +180,7 @@ extern fe_passwd fe_current_passwd;
 extern BOOL fe_passwd_abort(void);
 extern void fe_internal_deleting_view(fe_view v);
 extern os_error *fe_internal_toggle_panel(const char *panel_name);
+extern void fe_internal_flush(void);
 
 /* from stbredraw.c*/
 

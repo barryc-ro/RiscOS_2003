@@ -420,7 +420,7 @@ static char *cache_lookup(char *url, int check_expire)
     {
 	if (check_expire)
 	{
-	    if ((cc->header.expires < cc->header.date) || (cc->header.expires <= time(NULL)))
+	    if ((cc->header.expires <= cc->header.date) || (cc->header.expires <= time(NULL)))
 		return NULL;
 	}
 
@@ -1053,13 +1053,13 @@ static void filewatcher_poll(int called_at, void *handle)
     {
         char *buf_end;
 
-	ACCDBG(("filewatcher_poll: calling\n"));
+	ACCDBGN(("filewatcher_poll: calling\n"));
 
         e = (os_error *) _swix(FileWatch_Poll, _INR(0,3) | _OUT(2)|_OUT(4),
             0, filewatcher_handle, buffer, sizeof(buffer),
             &buf_end, &file_count);
 
-	ACCDBG(("filewatcher_poll: returned e %p buf_end %p file_count %d\n", e, buf_end, file_count));
+	ACCDBGN(("filewatcher_poll: returned e %p buf_end %p file_count %d\n", e, buf_end, file_count));
 
         if (!e)
         {

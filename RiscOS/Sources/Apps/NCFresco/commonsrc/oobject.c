@@ -193,7 +193,8 @@ void oobject_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
     rid_object_item *obj = tio->object;
     wimp_box bbox;
     int bw;
-    BOOL do_alt = FALSE, do_plinth = TRUE;
+    BOOL do_plinth = TRUE;
+    char *alt;
 
     if (gbf_active(GBF_FVPR) && (ti->flag & rid_flag_FVPR) == 0)
 	return;
@@ -233,7 +234,7 @@ void oobject_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 	}
 	else
 	{
-	    do_alt = TRUE;
+	    alt = obj->standby;
 	}
 	break;
 
@@ -244,11 +245,16 @@ void oobject_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 	break;
 
     case rid_object_type_PLUGIN:
-	do_alt = TRUE;
+    case rid_object_type_UNKNOWN:
+	/* use standby text or mime type for the alt text */
+	alt = obj->standby;
+	if (!alt)
+	    alt = obj->classid_mime_type;
+	if (!alt)
+	    alt = obj->data_mime_type;
+
 	do_plinth = ti->width != 0;
 	break;
-
-    case rid_object_type_UNKNOWN:
 	break;
     }
 
@@ -256,8 +262,11 @@ void oobject_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 	render_plinth(render_colour_BACK, render_plinth_NOFILL | render_plinth_DOUBLE,
 		  bbox.x0, bbox.y0, bbox.x1 - bbox.x0, bbox.y1 - bbox.y0, doc);
 
-    if (do_alt)
-	oimage_render_text(ti, doc, fs, &bbox, obj->standby);
+    OBJDBG(("oobject_redraw: alt text '%s' (standby '%s' mimes '%s'/'%s')\n",
+	    strsafe(alt), strsafe(obj->standby), strsafe(obj->classid_mime_type), strsafe(obj->data_mime_type)));
+    
+    if (alt)
+	oimage_render_text(ti, doc, fs, &bbox, alt);
 #endif /* BUILDERS */
 }
 

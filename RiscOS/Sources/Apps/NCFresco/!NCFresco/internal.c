@@ -1497,10 +1497,12 @@ static int internal_action_reload(const char *query, const char *bfile, const ch
 {
     fe_view v = get_source_view(query, TRUE);
 
-    if (v)
+    if (v == main_view)
+	fe_pending_event = fevent_RELOAD;
+    else
 	fevent_handler(fevent_RELOAD, v);
 
-    return fe_internal_url_HELPER;
+    return fe_internal_url_NO_ACTION;
     NOT_USED(bfile);
     NOT_USED(referer);
     NOT_USED(file);
@@ -1514,10 +1516,7 @@ static int internal_action_favoritesadd(const char *query, const char *bfile, co
     if (v)
 	fevent_handler(fevent_HOTLIST_ADD, v);
 
-    /* FIXME: add to messages file */
-/*     fe_report_error("Site added to favorites list"); */
-
-    return fe_internal_url_HELPER;
+    return fe_internal_url_NO_ACTION;
     NOT_USED(bfile);
     NOT_USED(referer);
     NOT_USED(file);
@@ -1531,10 +1530,7 @@ static int internal_action_favoritesremove(const char *query, const char *bfile,
     if (v)
 	fevent_handler(fevent_HOTLIST_REMOVE, v);
 
-    /* FIXME: add to messages file */
-/*     fe_report_error("Site removed from favorites list"); */
-
-    return fe_internal_url_HELPER;
+    return fe_internal_url_NO_ACTION;
     NOT_USED(bfile);
     NOT_USED(referer);
     NOT_USED(file);
@@ -1981,9 +1977,14 @@ void fe_internal_deleting_view(fe_view v)
     else if (strcasecomp(v->name, TARGET_ERROR) == 0 ||
 	     strncmp(v->name, TARGET_DBOX, sizeof(TARGET_DBOX)-1) == 0)
     {
-	/* mvoe highlight to default spot on toolbar (down arrow) */
- 	if (pointer_mode == pointermode_OFF && tb_is_status_showing())
-	    tb_status_highlight(TRUE);
+	/* move highlight to default spot on toolbar (down arrow) */
+ 	if (pointer_mode == pointermode_OFF)
+	{
+	    if (tb_is_status_showing())
+		tb_status_highlight(TRUE);
+	    else
+		fe_ensure_highlight(v->prev, 0);
+	}
     }
 }
 
@@ -2012,7 +2013,12 @@ os_error *fe_internal_toggle_panel(const char *panel_name)
     else if (fe_popup_open())
 	sound_event(snd_WARN_BAD_KEY);
     else
+    {
+	if (!tb_is_status_showing())
+	    tb_status_show(FALSE);
+	    
 	e = frontend_open_url(url, NULL, target, NULL, fe_open_url_NO_CACHE);
+    }
 
     return e;
 }
@@ -2071,6 +2077,23 @@ os_error *fe_offline_page(fe_view v)
 {
     return frontend_open_url("ncint:openpage?name=offline", v, NULL, NULL, fe_open_url_NO_REFERER);
 }
+
+/* ------------------------------------------------------------------------------------------- */
+
+/* Dispose of saved strings. This is to allow better garbage
+ * collection and for user privacy. */
+
+void fe_internal_flush(void)
+{
+    mm_free(loadurl_last);
+    loadurl_last = NULL;
+
+    mm_free(find__string);
+    find__string = NULL;
+
+    find__backwards = find__casesense = FALSE;
+}
+
 
 /* ------------------------------------------------------------------------------------------- */
 

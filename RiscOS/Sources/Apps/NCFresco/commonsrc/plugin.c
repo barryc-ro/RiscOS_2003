@@ -615,7 +615,10 @@ int plugin_send_close(plugin pp)
     if (pp == NULL)
 	pp = helper_list;
 
-    if (pp == NULL)
+    /* only send close if it is actually open - this stops the problem
+       with the toolbar closing killing off the sound that is just
+       starting up */
+    if (pp == NULL || pp->state != plugin_state_OPEN)
 	return 0;
     
     OBJDBG(("plugin: send close %p state %d\n", pp, pp->state));
@@ -1372,9 +1375,13 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 	    if (closed->flags & plugin_closed_ERROR_MSG)
 		frontend_complain((os_error *)&closed->errnum);
 
-	    frontend_view_status(pp->doc ? pp->doc->parent : pp->helper.parent, sb_status_PLUGIN, pp,
+    	    frontend_view_status(pp->doc ? pp->doc->parent : pp->helper.parent, sb_status_PLUGIN, pp,
 				 FALSE, pp->play_state,
-				 0, pp->opening_flags & plugin_opening_HELPER);
+				 0, (pp->opening_flags & plugin_opening_HELPER));
+
+	    /* if this is a helper then after this it ceases to exist as far as we are concerned */
+	    if (pp->opening_flags & plugin_opening_HELPER)
+		plugin_destroy(pp);
 	    break;
 	}
 

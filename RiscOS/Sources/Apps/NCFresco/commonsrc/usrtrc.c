@@ -4,8 +4,11 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <time.h>
+
 #include "version.h"
 
+extern char *fresco_time;
+extern char *fresco_date;
 
 static int emit = 0;
 
@@ -19,6 +22,9 @@ extern void init_usrtrc(void)
 	time_t t;
 	time(&t);
 	usrtrc("\n\n"PROGRAM_NAME" started at %s\n\n", ctime(&t));
+#ifndef BUILDERS
+	usrtrc("built %s %s\n", fresco_time, fresco_date);
+#endif
     }
 }
 

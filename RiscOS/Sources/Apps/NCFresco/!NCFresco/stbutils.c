@@ -666,6 +666,7 @@ void feutils_resize_window(wimp_w *w, const wimp_box *margin, const wimp_box *bo
     wimp_box box = *box_in;
     int new_width, new_height;
     wimp_box ex;
+    int dw, dh;
 
     wimp_get_wind_state(*w, &state);
 
@@ -684,12 +685,25 @@ void feutils_resize_window(wimp_w *w, const wimp_box *margin, const wimp_box *bo
         box_in->x0, box_in->y0, box_in->x1, box_in->y1,
         new_width, new_height));
 
+    dw = doc_width + margin->x0 - margin->x1;
+    dh = doc_height + margin->y0 - margin->y1;
+#if 1
+    ex.x0 = - margin->x0;
+    ex.x1 = (new_width > dw ? new_width : dw) - margin->x0;
+    ex.y1 = - margin->y1;
+    ex.y0 = - (new_height > dh ? new_height : dh) - margin->y1;
+#else
     ex.x0 = - margin->x0;
     ex.x1 = (new_width > doc_width ? new_width : doc_width) - margin->x1;
     ex.y1 = - margin->y1;
     ex.y0 = - (new_height > doc_height ? new_height : doc_height) - margin->y0;
-
+#endif
+    
+#if 1
+/*   if (new_width > dw || new_height > dh) */
+#else
     if (new_width > doc_width || new_height > doc_height)
+#endif
     {
         wimp_redrawstr r;
         r.w = *w;
@@ -946,60 +960,6 @@ os_error *fe_file_to_url(char *file, char **url_out)
 
 /* ----------------------------------------------------------------------------------------------------- */
 
-#if 0
-void fe_open_temp_file(fe_view v, fe_temp_file_builder fn, void *handle, const char *name)
-{
-    FILE *f;
-    char *s;
-    BOOL success;
-
-    s = strdup(backend_temp_file_name());
-    f = mmfopen(s, "w");
-    if (!f)
-    {
-	if (mm_can_we_recover(FALSE))
-	{
-	    f = mmfopen(s, "w");
-	}
-
-	if (!f)
-	{
-	    mm_free(s);
-	    fe_report_error("Can't create temporary file");
-	    return;
-	}
-    }
-
-    success = frontend_complain(fn(f, handle)) == NULL;
-
-    mmfclose(f);
-
-    if (success)
-    {
-        char url[32];
-
-        set_file_type(s, FILETYPE_HTML);
-#if 0
-        sprintf(url, PROGRAM_NAME"internal:temp%08p", v);
-#else
-        sprintf(url, PROGRAM_NAME"internal:%s", name);
-#endif
-/*        fe_file_to_url(s, &url);*/
-        backend_temp_file_register(url, s);
-
-        /* open it*/
-        frontend_open_url(url, v, NULL, 0, fe_open_url_NO_HISTORY | fe_open_url_FROM_HISTORY);
-/*        mm_free(url);*/
-    }
-    else
-        remove(s);
-
-    mm_free(s);
-}
-#endif
-
-/* ----------------------------------------------------------------------------------------------------- */
-
 char *extract_value(const char *s, const char *tag)
 {
     char *tagpos, *terminator;
@@ -1041,14 +1001,11 @@ char *extract_value(const char *s, const char *tag)
 
 void frontend_fatal_error(os_error *e)
 {
-#if 1
     if (e && (e->errnum &~ 0xff000000) != 0x288)
-#else
-    if (e)
-#endif
     {
         os_error er;
         er.errnum = e->errnum;
+
         sprintf(er.errmess,
                 msgs_lookup("fatal2:%s has suffered a fatal internal error (%s) and must exit immediately"),
                 program_title,
@@ -1058,11 +1015,8 @@ void frontend_fatal_error(os_error *e)
         usrtrc("fatal %x '%s'\n", e->errnum, e->errmess);
         usrtrc("by '%s' from '%s'\n", caller(1), caller(2));
 #endif
-#if 1
+
 	wimp_reporterror(e, wimp_EOK, PROGRAM_NAME);
-#else
-	fe_report_error(er.errmess);
-#endif
         exit(0);
     }
 }
@@ -1076,22 +1030,35 @@ os_error *frontend_complain(os_error *e)
         usrtrc("by '%s' from '%s' from '%s'\n", caller(1), caller(2), caller(3));
 #endif
 
-#if 1
-	pending_error = *e;
+	switch (config_mode_errors)
+	{
+	case mode_errors_WIMP:
+	    if ((e->errnum &~ 0xff000000) != 0x288)
+		wimp_reporterror(e, wimp_EOK, PROGRAM_NAME);
+	    break;
 
-	/* send the error service call so that the error reporter knows what happened */
-	_swix(OS_ServiceCall, _INR(1,4), 0x400C0, e, 0, PROGRAM_TITLE);	/* Service_ErrorStarting */
-#else
+	case mode_errors_OWN:
+	    pending_error = *e;
 
-#if 1
-        if ((e->errnum &~ 0xff000000) != 0x288)
-#endif
-#if 1
-	    wimp_reporterror(e, wimp_EOK, PROGRAM_NAME);
-#else
-            fe_report_error(e->errmess);
-#endif
-#endif
+	    /* send the error service call so that the error reporter knows what happened */
+	    _swix(OS_ServiceCall, _INR(1,4), 0x400C0, e, 0, PROGRAM_TITLE);	/* Service_ErrorStarting */
+	    break;
+
+	case mode_errors_MESSAGE:
+	{
+	    wimp_msgstr msg;
+
+	    pending_error = *e;
+
+	    msg.hdr.size = 28;
+	    msg.hdr.your_ref = 0;
+	    msg.hdr.action = MESSAGE_ERROR_BROADCAST;
+	    msg.data.words[0] = e->errnum;
+	    msg.data.words[1] = (int)&pending_error;
+	    wimp_sendmessage(wimp_ESENDWANTACK, &msg, 0);
+	    break;
+	}
+	}
     }
     return e;
 }

@@ -589,6 +589,14 @@ static key_list platform_riscos_keys[] =
     { akbd_Sh + akbd_Ctl + akbd_Fn+6, fevent_CODEC_RECORD },
     { akbd_Sh + akbd_Ctl + akbd_Fn+7, fevent_CODEC_MUTE },
 
+    { akbd_Ctl + akbd_Fn+3, fevent_SOUND_TOGGLE },
+    { akbd_Ctl + akbd_Fn+4, fevent_TOOLBAR_FAVS },
+    { akbd_Ctl + akbd_Fn+5, fevent_HOTLIST_ADD+fevent_WINDOW },
+    { akbd_Ctl + akbd_Fn+6, fevent_SEARCH_PAGE+fevent_WINDOW },
+    { akbd_Ctl + akbd_Fn+7, fevent_TOOLBAR_DETAILS },
+    { akbd_Ctl + akbd_Fn+8, fevent_SEND_URL+fevent_WINDOW },
+    { akbd_Ctl + akbd_Fn+9, fevent_OPEN_URL+fevent_WINDOW },
+
     { 0 }
 };
 
