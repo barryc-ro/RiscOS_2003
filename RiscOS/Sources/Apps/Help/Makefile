@@ -30,8 +30,9 @@ MKDIR   = cdir
 AS      = aasm
 CP      = copy
 RM      = remove
-SQUISH    = squish
+SQUISH  = squish
 WIPE    = -wipe
+STRIP   = stripdepnd
 
 AFLAGS  = ${THROWBACK} -depend !Depend -nocache -stamp -quit -module
 CPFLAGS = ~cfr~v
@@ -40,11 +41,11 @@ WFLAGS  = ~c~v
 
 FILES =\
  ${RDIR}.!Boot \
- ${LDIR}.!Help \
- ${LDIR}.!Run \
+ LocalRes:!Help \
+ LocalRes:!Run \
  ${RDIR}.!RunImage \
- ${LDIR}.Messages \
- ${LDIR}.Templates 
+ LocalRes:Messages \
+ LocalRes:Templates 
 
 # Resources to be included in the ROM module (not in Messages module}
 RESFILES =\
@@ -59,15 +60,15 @@ all: ${FILES}
 rom: ${ROM_MODULE}
         @echo ${COMPONENT}: Module built (ROM}
 
-install: ${FILES}
+install: ${FILES} resources-BAS
         ${MKDIR} ${INSTDIR}.${APP}
         |
         ${CP} ${RDIR}.!Boot      ${INSTDIR}.${APP}.!Boot     ${CPFLAGS}
-        ${CP} ${LDIR}.!Help      ${INSTDIR}.${APP}.!Help     ${CPFLAGS}
-        ${CP} ${LDIR}.!Run       ${INSTDIR}.${APP}.!Run      ${CPFLAGS}
+        ${CP} LocalRes:!Help     ${INSTDIR}.${APP}.!Help     ${CPFLAGS}
+        ${CP} LocalRes:!Run      ${INSTDIR}.${APP}.!Run      ${CPFLAGS}
         ${CP} ${RDIR}.!RunImage  ${INSTDIR}.${APP}.!RunImage ${CPFLAGS}
-        ${CP} ${LDIR}.Messages   ${INSTDIR}.${APP}.Messages  ${CPFLAGS}
-        ${CP} ${LDIR}.Templates  ${INSTDIR}.${APP}.Templates ${CPFLAGS}
+        ${CP} LocalRes:Messages  ${INSTDIR}.${APP}.Messages  ${CPFLAGS}
+        ${CP} LocalRes:Templates ${INSTDIR}.${APP}.Templates ${CPFLAGS}
         |
         Access ${INSTDIR}.${APP}.* lr/r
         |
@@ -81,12 +82,12 @@ resources: ${LDIR}.ROM.!RunLink
         ${MKDIR} ${RESAPP}
         ${MKDIR} ${RESDIR}
         |
-        ${CP} ${LDIR}.!Help         ${RESAPP}.!Help     ${CPFLAGS}
-        ${CP} ${LDIR}.ROM.!Run      ${RESAPP}.!Run      ${CPFLAGS}
+        ${CP} LocalRes:!Help         ${RESAPP}.!Help     ${CPFLAGS}
+        ${CP} LocalRes:ROM.!Run      ${RESAPP}.!Run      ${CPFLAGS}
         |
-        ${CP} ${LDIR}.ROM.!RunLink  ${RESDIR}.!RunLink  ${CPFLAGS}
-        ${CP} ${LDIR}.Messages      ${RESDIR}.Messages  ${CPFLAGS}
-        ${CP} ${LDIR}.Templates     ${RESDIR}.Templates ${CPFLAGS}
+        ${CP} ${LDIR}.ROM.!RunLink   ${RESDIR}.!RunLink  ${CPFLAGS}
+        ${CP} LocalRes:Messages      ${RESDIR}.Messages  ${CPFLAGS}
+        ${CP} LocalRes:Templates     ${RESDIR}.Templates ${CPFLAGS}
         |
         @echo ${COMPONENT}: resource files copied to Messages module
 
@@ -96,6 +97,7 @@ clean:
         ${RM} ${LDIR}.ROM.!RunLink
         ${RM} s.Version
         ${WIPE} crunched.* ${WFLAGS}
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 #
@@ -105,8 +107,8 @@ clean:
 ${ROM_MODULE}: s.Main s.Version ${RESFILES}
         ${AS} ${AFLAGS} -from s.Main -to $@
 
-s.Version: ${LDIR}.Messages
-        awk -f awk.Version ${LDIR}.Messages > $@
+s.Version: LocalRes:Messages
+        awk -f awk.Version LocalRes:Messages > $@
 
 ${RDIR}.!RunImage: crunched.!RunImage
         ${SQUISH} ${SQFLAGS} -from crunched.!RunImage -to $@
@@ -119,17 +121,3 @@ ${LDIR}.ROM.!RunLink: bas.!RunLink
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
-rm.Help: s.AppName
-rm.Help: Hdr:ListOpts
-rm.Help: Hdr:Macros
-rm.Help: Hdr:System
-rm.Help: Hdr:SWIs
-rm.Help: Hdr:CPU.Generic26
-rm.Help: Hdr:IO.GenericIO
-rm.Help: Hdr:RISCOS
-rm.Help: Hdr:ModHand
-rm.Help: Hdr:Services
-rm.Help: Hdr:Proc
-rm.Help: Hdr:ResourceFS
-rm.Help: s.Version
-rm.Help: s.ResFiles
