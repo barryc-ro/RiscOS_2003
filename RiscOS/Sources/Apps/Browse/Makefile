@@ -229,6 +229,7 @@ OBJS = \
 OBJSZ = \
  oz.Authorise		\
  oz.Browser		\
+ oz.Choices		\
  oz.Cookies		\
  oz.DragBox		\
  oz.Encoding		\
@@ -324,6 +325,7 @@ OBJSD = \
 OBJSDZ = \
  odz.Authorise		\
  odz.Browser		\
+ odz.Choices		\
  odz.Cookies		\
  odz.DragBox		\
  odz.Encoding		\
@@ -372,6 +374,7 @@ OBJSDZ = \
 OBJS_SURF = \
  o_surf.Authorise	\
  o_surf.Browser		\
+ o_surf.Choices		\
  o_surf.Cookies		\
  o_surf.DragBox		\
  o_surf.Encoding	\
@@ -417,6 +420,7 @@ OBJS_SURF = \
 OBJSD_SURF = \
  od_surf.Authorise	\
  od_surf.Browser	\
+ od_surf.Choices	\
  od_surf.Cookies	\
  od_surf.DragBox	\
  od_surf.Encoding	\
@@ -464,6 +468,7 @@ OBJSD_SURF = \
 OBJS_ITALK = \
  o_italk.Authorise	\
  o_italk.Browser	\
+ o_italk.Choices	\
  o_italk.Cookies	\
  o_italk.DragBox	\
  o_italk.Encoding	\
@@ -510,6 +515,7 @@ OBJS_ITALK = \
 OBJSD_ITALK = \
  od_italk.Authorise	\
  od_italk.Browser	\
+ od_italk.Choices	\
  od_italk.Cookies	\
  od_italk.DragBox	\
  od_italk.Encoding	\
