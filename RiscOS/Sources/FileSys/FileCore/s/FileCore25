@@ -51,6 +51,16 @@ FindDirCommon
         BL      DiscMustBeFileCore      ;(R3->V,R0)
         BVS     %FT95
  ]
+ 
+ [ BigDir
+ 	BL	TestBigDir		; is it a big dir
+ 	BNE	%FT01			; no, it's small
+ 	MOV	R4, #0			; if it's a big dir, set r4 to 0 here to indicate that it's a variable size
+ 	MOV	R9, #BigDirTailSize	; size of big dir's tail
+ 	B	%FT02			; skip the new/old dir test
+01
+	; small dir
+ ]
         ; Determine dir type (old/new) and set parameters in R4(size) and R9(DirLastMark)
         BL      TestDir    ;(R3->LR,Z)
         MOVEQ   R4, #NewDirSize
@@ -59,18 +69,61 @@ FindDirCommon
         MOVNE   R9, #-OldDirLastMark
 
         ; Set up R5(start) and R6(end) for DirBuffer
+ [ BigDir
+02
+ 	; if the dir is big then the value of r4 is 0, and r6 is the same
+ 	; as r5
+ 	LDR	R5, DirBufferPtr
+ |
         sbaddr  R5, DirBuffer
+ ]
         ADD     R6, R4, R5
 
- [ Debug6
+ [ Debug6 :LAND: :LNOT: BigDir		; if BigDir then values not valid yet
         DREG    R5, "DirBuffer start, end:",cc
         DREG    R6, ","
  ]
+ 
+ [ Debug6 :LAND: BigDir
+ 	CMP	r4, #0
+ 	BNE	%FT01
+ 	
+ 	DREG	R5, "DirBuffer start (end not known yet):"
+ 	
+ 	B	%FT02
+01
+        DREG    R5, "DirBuffer start, end:",cc
+        DREG    R6, ","
+02
+ ]
 
+ [ BigDir
+ 	; If BufDir matches, then if it's a big dir, set up r6
+ 	LDR	LR, [SB,#:INDEX:BufDir]
+ 	CMPS	R3,LR
+ 	
+ 	BNE	%FT03		; dir doesn't match
+
+ 	; check for big dir
+ 	CMP	r4, #0		; r4 is 0 if it's a big dir as we don't know the size, yet
+ 	BNE	%FT90		; r4 is not 0, so we know it's a small dir - nothing else to do
+ 	
+ 	LDR	LR, [r5,#BigDirSize]
+ 	ADD	R6, R5, LR
+ 	
+ [ Debug6
+ 	DREG	R6, "DirBuffer end:"
+ ]
+ 
+ 	B	%FT90		; dir is in DirBuffer
+ 	
+03	; no match
+ |
         ; If BufDir matches then no further work to do
         LDR     LR, [SB,#:INDEX:BufDir]
         CMPS    R3, LR
         BEQ     %FT90           ;V=0
+ ]
 
         ; Different operation on find/get dir
         MOVS    R10,R10
@@ -106,6 +159,18 @@ FindDirCommon
         SUB     R7, R8, R0      ;size cached dir
         SUB     R2, R7, R9      ;size cached dir excluding tail
         BL      BlockMove       ;(R0,R1,R2)
+        
+ [ BigDir
+ 	; R4 needs set up
+ 	CMP	R4, #0
+ 	BNE	%FT01
+ 	LDR	r4, [R5, #BigDirSize]	; size of the big dir...
+ 	ADD	R6, R5, R4
+  [ Debug6
+  	DREG	r4, "From cached big dir, size is:"
+  ]
+01
+ ]
 
         ; FILL MIDDLE WITH ZEROES
         ADD     R0, R1, R2
@@ -136,9 +201,88 @@ FindDirCommon
         MOV     R8, R5          ;save dir buffer ptr
 
  [ Debug6
+  [ BigDir
+  	CMP	R4, #0
+  	BEQ	%FT01
+  ]
         DREG    R5, "Going to read dir to start, end:",cc
         DREG    R6, ","
+  [ BigDir
+01
+  ]
  ]
+ 
+  [ BigDir
+  	; if it's big dir, then things get a lil' harder
+  	
+  	CMP	R4, #0
+  	BNE	%FT70
+  	
+  	MOV	R4, #NewDirSize		; get the first 2048 bytes
+
+	ADD	r6,r4,r5		; end  	
+  
+  [ Debug6
+  	DREG	r5, "Going to read first part of dir to start, end:",cc
+  	DREG	r6, ","
+  ]
+  	; it's a big dir.  method is to read the first 2048 bytes,
+  	; then read the rest
+  	
+        MOV     R1, #ReadSecsOp ;ALLOW ESCAPE AND TIMEOUT
+        MOV     R2, R3
+        MOV     R3, R5
+        MOV	R5, #0		;start from the beginning
+        BL      GenIndDiscOp    ;(R1-R4->R0,R3-R5,V)
+        BVS     %FT95
+        
+        ; have first part of dir in DirBuf
+
+ 	; now check a few things 
+ 	
+ 	MOV	R5, R8
+ 	BL	SanityCheckBigDirHeader		; (R5->R0,V)
+ 	BVS	%FT95				; broken dir!
+ 	
+ [ DebugX
+ 	DLINE	"Dir was OK"
+ ]
+ 	
+ 	; now we can try reading the rest
+ 	
+ 	LDR	r4, [r5,#BigDirSize]		; size of dir
+
+	LDR	LR, DirBufferSize		; check the current size of DirBuf
+	CMP	R4, LR
+	BLS	%FT66				; dir buf is too small
+	
+ 	BL	TryGrowDirBuf			; (R4->R0,V)
+ 	BVS	%FT95				; couldn't grow it
+ 	
+66
+ 	
+ 	MOV	r5, #NewDirSize			; start offset
+ 	SUBS	r4, r4, r5			; amount of data to read
+ 	
+  	
+ 	BEQ	%FT67				; nothing more to read
+ 
+ [ Debug6
+ 	DREG	r5, "Going to read remainder of dir to start, end:",cc
+ 	DREG	r6, ","
+ ]
+
+	BL	GenIndDiscOp			; read the rest of dir
+
+67
+        MOV     R5, R8
+        MOV     R3, R7          ;restore dir disc add  	
+        LDR	r4, [r5, #BigDirSize]
+        ADD	r6, r5, r4
+
+	B	%FT80
+70
+  ]
 
         MOV     R1, #ReadSecsOp ;ALLOW ESCAPE AND TIMEOUT
         MOV     R2, R3
@@ -148,11 +292,19 @@ FindDirCommon
         MOV     R5, R8
         MOV     R3, R7          ;restore dir disc add
 
+ [ BigDir
+80
+ ]
+
  [ Debug6
         DREG    R5, "After read DirBuffer start, end:",cc
         DREG    R6, ","
  ]
 
+ [ BigDir
+ 	BL	TestBigDir
+ 	BEQ	%FT85
+ ]
         BL      TestDir              ;(R3->LR,Z)
         BEQ     %FT85                   ;if new format
         BL      TestDirCheckByte        ;(R3,R5,R6->LR,Z)
@@ -261,7 +413,12 @@ SanityCheckDirCache ROUT
         TEQS    R11,R1
         BEQ     %FT20
         LDR     r3, [R11,#CacheDir]
+ [ BigDir
+ 	BL	TestBigDir
+        BLNE    TestDir    ;(R3->LR,Z)
+ |
         BL      TestDir    ;(R3->LR,Z)
+ ]
         ADD     r5, r11, #CacheBody
         LDR     r6, [r11, #CacheNext]
         ADD     r6, r6, SB
@@ -325,6 +482,25 @@ TryCacheDirBuf ROUT
  [ FileCache
         BL      LockDirCache
  ]
+ [ BigDir
+ 	BL	TestBigDir
+ 	BNE	%FT05
+ 	
+ 	LDR	R4, [R5, #BigDirSize]
+ 	ADD	R6, R4, R5
+ 	MOV	R9, #BigDirTailSize
+ 	B	%FT06
+ 	
+05	; here if not a big dir
+        BL      TestDir      ;(R3->LR,Z)
+        MOVEQ   R4, #NewDirSize
+        MOVEQ   R9, #-NewDirLastMark
+        MOVNE   R4, #OldDirSize
+        MOVNE   R9, #-OldDirLastMark
+        LDR 	R5, DirBufferPtr
+        ADD     R6, R4, R5
+06
+ |
         BL      TestDir      ;(R3->LR,Z)
         MOVEQ   R4, #NewDirSize
         MOVEQ   R9, #-NewDirLastMark
@@ -332,6 +508,7 @@ TryCacheDirBuf ROUT
         MOVNE   R9, #-OldDirLastMark
         sbaddr  R5, DirBuffer
         ADD     R6, R4, R5
+ ]
  [ DebugC
         BL      CheckDir        ;(R3,R5,R6->R0,V)
         BVC     %FT01           ;don't cache bad dirs
@@ -341,12 +518,41 @@ TryCacheDirBuf ROUT
  ]
         BL      CheckDirCache
                          ;FIND END OF DIR CONTENTS, SO SIZE NEEDED KNOWN
+ [ BigDir
+ 	BL	TestBigDir
+ 	BNE	%FT07
+ 	
+ 	; big dir
+ 	
+ 	LDR	R8, [R5, #BigDirNameLen]
+ 	ADD	R8, R8, #3+BigDirHeaderSize	; header, name and tail
+ 	BIC	R8, R8, #3
+ 	LDR	LR, [R5, #BigDirEntries]
+ 	ASSERT	BigDirEntrySize=32
+ 	ADD	R8, R8, LR, LSL #5
+ 	LDR	LR, [R5, #BigDirNamesSize]
+ 	ADD	R8, R8, LR			; size for dir body
+ 	ADD	R4, R8, R9
+ 	B	%FT08
+ 	
+07
+	; not big dir
         BL      EndDirEntries   ;(R3,R5,R6->R0)
         SUB     R8, R0, R5      ;size for dir body
         ADD     R4, R8, R9      ;add size for dir tail
         ANDS    LR, R4, #3      ;ensure length is whole number of words
         RSBNE   LR, LR, #4
         ADDNE   R4, R4, LR
+	
+08
+ |
+        BL      EndDirEntries   ;(R3,R5,R6->R0)
+        SUB     R8, R0, R5      ;size for dir body
+        ADD     R4, R8, R9      ;add size for dir tail
+        ANDS    LR, R4, #3      ;ensure length is whole number of words
+        RSBNE   LR, LR, #4
+        ADDNE   R4, R4, LR
+ ]
         ADD     R4, R4, #CacheBody;add cache overhead
         Push    "R8,R9"
                          ;LOOK FOR SMALLEST SPACE BIG ENOUGH
@@ -546,7 +752,13 @@ TryCacheDirBuf ROUT
         Pull    "R8,R9"
         MOV     R0, R5
         ADD     R1, R11,#CacheBody
+ [ BigDir
+ 	BL	TestBigDir		; is it a big dir
+ 	MOVEQ	R2, R8
+ 	ADDNE	R2, R8, #1
+ |
         ADD     R2, R8, #1              ;copy dir body and terminating zero
+ ]
         BL      BlockMove               ;(R0,R1,R2)
 
         SUB     R0, R6, R9              ;copy dir tail to cache
@@ -971,6 +1183,15 @@ FormDirCheckByte ROUT
 
 TestDirCheckByte
         Push    "R0-R2,R5,R7,LR"
+ [ BigDir
+ 	BL	TestBigDir
+ 	BNE	%FT01
+ 	
+ 	; it's a big dir - call TestBigDirCheckByte
+ 	BL	TestBigDirCheckByte
+ 	B	%FT95
+01
+ ]
         BL      EndDirEntries                   ;(R3,R5,R6->R0)
         BL      TestDir                         ;(R3->LR,Z)
         ADDEQ   R7, R6, #NewDirLastMark+1       ;dir tail
@@ -1012,6 +1233,9 @@ TestDirCheckByte
         TEQS    R2, LR
         MOV     LR, R2
 
+ [ BigDir
+95
+ ]
         Pull    "R0-R2,R5,R7,PC"
 
 

@@ -144,6 +144,33 @@ MyOsFile ROUT
         BL      TermStart       ;backtrack to start of last term (R0,R1->R1)
         ASSERT  OldDirEntrySz<=32
         ASSERT  NewDirEntrySz<=32
+ [ BigDir
+ 	BL	TestBigDir
+ 	BNE	%FT30
+ 
+ 	TEQS	R2,#0
+ 	Push	"R4, R6, R7"
+ 	MOVEQ	R4, R1
+ 	TEQNE	R4, #0
+ 	LDRNE	R6, [R4, #BigDirObNameLen]
+ 	MOVEQ	R6, #BigDirMaxNameLen
+ 	BLNE	GetBigDirName
+ 	MOVNE	R4, LR
+ 	B	%FT40
+ 	
+30
+        TEQS    R2, #0          ;Z=1 <=> not found
+
+        Push    "R4,R6,R7"      ;save name for *OPT 1
+        MOVEQ   R4, R1
+        MOV     R6, #NameLen
+40
+        sbaddr  R7, Opt1Buffer
+        BL      PutMaskedString ;(R3,R4,R6,R7)
+        MOV     LR, #0
+        STRB    LR, [R7]
+        Pull    "R4,R6,R7"
+ |
         TEQS    R2, #0          ;Z=1 <=> not found
 
         Push    "R4,R6,R7"      ;save name for *OPT 1
@@ -154,10 +181,17 @@ MyOsFile ROUT
         MOV     LR, #0
         STRB    LR, [R7]
         Pull    "R4,R6,R7"
+ ]
 
         Pull    "LR"
+ [ BigDir
+ 	ASSERT	NewDirEntrySz<=32
+ 	ASSERT	BigDirEntrySize<=32
+ 	SUB	SP, SP, #32
+ |
         ASSERT  NewDirEntrySz<=28
         SUB     SP, SP, #28     ;space for copy of dir entry for delete
+ ]
 
 OsFileJump
         MOV     R0, PC
@@ -201,7 +235,11 @@ OsFileBack2
         MOV     R5, R10
         MOV     R0, #0
 80
+ [ BigDir
+        ADD     SP, SP, #32-4   ;reclaim space for copy of dir entry
+ |
         ADD     SP, SP, #28-4   ;reclaim space for copy of dir entry
+ ]
 85
         ADD     SP, SP, #4
 95
@@ -237,6 +275,10 @@ DoOsFileCreate
 ; entry
 ;  R3 dir
 ;  R4 -> dir entry
+
+ [ BigDir
+; if big dir, R5->dir
+ ]
 
 ; exit NCZ preserved, IF error V set, R0 error
 ; Any buffers on file discarded if not open.
@@ -343,7 +385,13 @@ DoOsFileDelete
         BL      GetDir          ;(R3->R0,R5,R6,V)
         Pull    "R3"
         BVS     %FT99
+ [ BigDir
+ 	BL	TestBigDir
+ 	LDREQ	LR, [R5, #BigDirEntries]
+ 	LDRNEB	LR, [R5, #DirFirstEntry]
+ |
         LDRB    LR, [R5,#DirFirstEntry]
+ ]
         TEQS    LR, #0
         MOVNE   R0, #DirNotEmptyErr
         BNE     %FT95
@@ -353,14 +401,28 @@ DoOsFileDelete
 10
         MOV     R0, R4          ;make copy of dir entry
         MOV     R1, SP          ;space has already been reserved
+ [ BigDir
+        ASSERT  NewDirEntrySz>=OldDirEntrySz
+        ASSERT	BigDirEntrySize>=NewDirEntrySz
+        MOV     R2, #BigDirEntrySize
+ | 
         ASSERT  NewDirEntrySz>=OldDirEntrySz
         MOV     R2, #NewDirEntrySz
+ ]
         BL      BlockMove       ;(R0-R2)
 
         BL      BeforeAlterFsMap ;(R3->R0,V)
         BLVC    RemoveDirEntry  ;(R3-R5->R0,V)
         BLVC    WriteDirThenFsMap ;(->R0,V)
         MOV     R4, SP          ;-> copy of dir entry
+ [ BigDir
+ 	BVS	%FT90
+ 	; should try to shrink the dir (with potential returning of space too)
+ 	BL	TestBigDir	;(R3->LR,Z)
+	BLEQ	CanBigDirShrink	;(R3,R5->Z)
+	BLEQ	ShrinkBigDir	;(R3,R5)
+90
+ ]
         BL      UnlockMap
         B       %FT99
 95
@@ -396,6 +458,36 @@ DoOsFileCreateDir ROUT
         B       %FT99
 
 05
+ [ BigDir
+ 	BL	TestBigDir
+ 	BNE	%FT90		; not big dir
+ 	
+ ; it's a big dir
+ 	BL	IsBigDirFull		; (R1,R3,R5,R6->R0,V)
+ 	BLVS	GrowBigDir		; try to grow the directory
+ 	BVS	%FT99			; don't yet know how to grow big dirs!
+ 	BL	BeforeAlterFsMap	; (R3->R0,V)
+ 	BVS	%FT99		
+ 	MOV	R10, #NewDirSize	; minimum size of a big dir is NewDirSize
+ 	BL	ClaimFreeSpace		; (R3,R10->R0,R2,V)
+ 	BVS	%FT95			; couldn't claim free space
+ 	BL	TryCacheDirBuf		; (R3) we'll create dir in the dir buffer
+ 	Push	"R1-R4"
+ 	MOV	R0, R5
+ 	MOV	R1, R10
+ 	BL	ZeroRam			; (R0,R1)  zero contents of dir
+ 	ADD	R6, R5, R1		; -> buf end
+ 	BL	WriteBigDirNames	; write big dir names
+	BL	WriteParent		; (R3,R5,R6)
+	LDR	R1, [SP]
+	BL	WriteBigDirName		;
+	STR	R10, [R5, #BigDirSize]
+	BL	TestDirCheckByte
+	STRB	LR, [R6, #BigDirCheckByte]
+ 	B	%FT92
+ 	
+90
+ ]
         BL      IsDirFull       ;(R3,R5,R6->R0,V)
         BLVC    BeforeAlterFsMap;(R3->R0,V)
         BVS     %FT99
@@ -424,6 +516,9 @@ DoOsFileCreateDir ROUT
         BL      TestDirCheckByte;(R3,R5,R6->LR)
         STRB    LR, [R6,#DirCheckByte]
 
+ [ BigDir
+92
+ ]
         MOV     R1, #WriteSecsOp
         MOV     R3, R5
         MOV     R4, R10
@@ -454,7 +549,7 @@ DoOsFileLoad ROUT
         BL      ReadIndDiscAdd          ;(R3,R4->LR)
         MOV     R2, LR
         Push    "R8"
-        BL      OpenCheck               ;(R3,R4->R0,R8,R9,Z)
+        BL      OpenCheck               ;(R3,R4,R5->R0,R8,R9,Z)
         Pull    "R8"
         LDRNE   LR, [R9, #FcbExtHandle]
         TEQNES  LR, #0
@@ -512,13 +607,30 @@ SaveCreate ROUT
  ]
         SUB     R10,R10,R9      ;convert end to length
         BNE     %FT10           ;object of this name already exists
+ [ BigDir
+ 	BL	TestBigDir	;test if it's a bigdir
+ 	BNE	%FT01
+	BL	IsBigDirFull	;(R1,R3,R5->R0,V)
+	BVC	%FT02		;dir has space
+	BL	GrowBigDir	;try to grow the directory
+	B	%FT02
+01
+	BL	IsDirFull	;(R3,R5,R6->R0,V)
+02
+ |
         BL      IsDirFull       ;(R3,R5,R6->R0,V)
+ ]
         BLVC    BeforeAlterFsMap      ;(R3)
         BVS     %FT99
         B       %FT20
 10
 ;file already exists check various restrictions
         MOVCS   R0, #TypesErr    ;cant create file if dir of same name exists
+ [ DebugX
+ 	BCC	%FT01
+ 	DLINE	"it's a dir, or so I'm told!"
+01
+ ]
         BLCS    SetV
         BCS     %FT99
         BL      LockedOrOpen    ;refuse to overwrite open files
@@ -929,7 +1041,13 @@ CriticalWriteDir ROUT
         BLNE    ClearV
         BNE     %FT95           ;already ensured
         LDR     R3, CritBufDir
+ [ BigDir
+ 	LDR	R5, DirBufferPtr
+ 	BL	TestBigDir
+ 	BEQ	%FT99
+ |
         sbaddr  R5, DirBuffer
+ ]
         BL      TestDir      ;(R3->LR,Z)
         MOVEQ   R9, #NewDirSize
         MOVNE   R9, #OldDirSize
@@ -971,6 +1089,9 @@ CriticalWriteDir ROUT
         BL      TestDirCheckByte;(R3,R5,R6->LR)
         STRB    LR, [R6,#DirCheckByte]
 
+ [ BigDir
+90	; big dir code re-joins here
+ ]
         MOV     R1, #WriteSecsOp:OR: Atomic
         MOV     R2, R3          ;disc add
         MOV     R3, R5          ;RAM add
@@ -982,6 +1103,40 @@ CriticalWriteDir ROUT
         STR     R0, CritResult
         BL      ExitCritical
 
+ [ BigDir
+99
+ 	; code for big dirs is different
+ 	LDR	R9, [R5, #BigDirSize]
+ 	ADD	R6, R5, R9
+ 	BL	IncDirSeqNum	; increment the master sequence numbers
+ 	BL	QuickCheckDir   ; (R3,R5,R6->R0,V)
+ 	BVS	%BT95		;don't write out corrupt dirs
+ 	
+; to make disc scavenging easier, repeat entries (but not name heap data)
+; at dir end.  unlike new format, this format stores a copy of ALL entries
+
+	BL	GetDirFirstEntry;(R3,R5->R4)
+	MOV	R0, R4		; source for move
+	LDR	R2, [R5, #BigDirEntries]
+	ASSERT	BigDirEntrySize=32
+	MOV	R2, R2, LSL #5	;length for move
+	SUB	R1, R6, R2
+	SUBS	R1, R1, #BigDirTailSize	; dest for move
+	BLNE	BlockMove	;
+	
+; now clear out any garbage in middle of dir
+	LDR	R2, [R5, #BigDirEntries]
+	ADD	R0, R0, R2, LSL #5	; word after entries
+	LDR	R2, [R5, #BigDirNamesSize] ; size of name space
+	ADD	R0, R0, R2
+	SUB	R1, R1, R0		; length to zero
+	BL	ZeroRam		; and it's zero'd
+	
+	BL	TestBigDirCheckByte
+	STRB	LR, [R6, #BigDirCheckByte]
+	
+	B	%BT90		; re-join main thread
+ ]
 
 ; -------------------------
 ; CriticalWriteDirThenFsMap

@@ -521,7 +521,11 @@ CsdText         =       CsdChar,0
         TEQEQS  LR, #"&"
         BEQ     %BT42
 
+ [ BigDir
+ 	BL	GetDirFirstEntry
+ |
         ADD     R4, R5, #DirFirstEntry
+ ]
         MOV     R7, R1          ;save term ptr
 
 ;if this is not last term it must be dir
@@ -529,8 +533,21 @@ CsdText         =       CsdChar,0
         Push    "R0,R1,R2"
         TEQS    R0, #DelimChar
         MOVEQ   R2, #MustBeDir  ;If not last term only accept dirs     *A*
+ [ BigDir
+ 	BL	TestBigDir
+ 	BNE	%FT01
+ 	
+ 	ADDS	R1, R7, #0
+ 	BL	LookUpBigDir
+ 	B	%FT02
+01
+	ADDS	R1, R7, #0
+	BL	LookUp
+02
+ |
         ADDS    R1, R7, #0      ;restore term start ptr and C=0
         BL      LookUp
+ ]
         Pull    "R0,R1,R2"
 
         MOVCS   R0, #NotFoundErr
@@ -558,6 +575,9 @@ CsdText         =       CsdChar,0
         BNE     %FT65           ;want dir itself
 
 ; want parent dir
+ [ DebugX
+ 	DLINE	"want parent dir"
+ ]
         TEQS    R4, #0
         BNE     %FT75           ;have already got parent
         BL      DiscAddToRec    ;(R3->LR)
@@ -573,6 +593,18 @@ CsdText         =       CsdChar,0
         BVS     %FT95
         ADD     R4, R5, #DirFirstEntry
 63
+ [ BigDir
+ 	BL	TestBigDir		;(R3->Z)
+ 	BNE	%FT02
+ 	BL	BigDirFinished		;(R4,R5->Z)
+	BEQ	%FT75
+	BL	ReadIndDiscAdd
+	TEQS	LR, R7			; check if OK
+	BEQ	%FT75			; match
+	ADD	R4, R4, #BigDirEntrySize
+	
+ 	B	%BT63
+02
         LDRB    LR, [R4]
         CMPS    LR, #" "
         BLCS    ReadIndDiscAdd          ;(R3,R4->LR)
@@ -581,6 +613,16 @@ CsdText         =       CsdChar,0
         ADDHI   R4, R4, #NewDirEntrySz  ;HI <=> ~Z AND C
         BHI     %BT63                   ;if mismatch loop if more entries
         B       %FT75
+ |
+        LDRB    LR, [R4]
+        CMPS    LR, #" "
+        BLCS    ReadIndDiscAdd          ;(R3,R4->LR)
+        TEQS    LR, R7                  ;preserves C
+        ASSERT  NewDirEntrySz=OldDirEntrySz
+        ADDHI   R4, R4, #NewDirEntrySz  ;HI <=> ~Z AND C
+        BHI     %BT63                   ;if mismatch loop if more entries
+        B       %FT75
+ ]
 
 65
 ; want the dir itself
@@ -640,12 +682,25 @@ Bit7Disc                                ;Only new format discs can have bit 7
 ; entry: R3=disc address of dir,  R6 -> byte after dir
 ; exit:  R3=disc address of parent
 
+ [ BigDir
+; if it's a big dir, then r5->dir
+ ]
+
 ToParent ROUT
  [ Debug6
         DREG    R3, " ", cc
         DLINE   " dir / parent dir "
  ]
         Push    "R0,LR"
+ 
+ [ BigDir
+ 	BL	TestBigDir
+ 	ANDEQ	LR, R3, #DiscBits
+ 	LDREQ	R3, [R5,#BigDirParent]
+ 	ORREQ	R3, R3, LR
+ 	BEQ	%FT90
+ ]
+        
         BL      TestDir      ;(R3->LR,Z)
         AND     R3, R3, #DiscBits ;remember disc num bits
         ADDEQ   R0, R6, #NewDirParent
@@ -659,6 +714,7 @@ ToParent ROUT
         BL      Read3           ;load disc address of parent non aligned
         ORR     R3, R3, LR, LSL #8
  ]
+90
  [ Debug6
         DREG    R3, " "
  ]
@@ -1168,6 +1224,135 @@ LookUp  ROUT
  ]
         Pull    "R5-R7,PC"
 
+ [ BigDir
+; =========
+; BigLexEqv
+; =========
+
+; compare wild card spec term with name (usually in dir)
+
+; entry:
+;  R1 -> term, terminated by control codes ,delete ,space or delimiter
+;  R4 -> name
+
+;  R5 =  bit mask for name chars
+;  R6 =  length of name
+
+; exit:
+;  name < wild spec   C=0, Z=0, V=0
+;  name = wild spec   C=1, Z=1, V=0
+;  name > wild spec   C=1, Z=0, V=0
+
+BigLexEqv
+ [ Debug6  :LAND: {FALSE}
+        mess    ,"wild     name     mask - enter BigLexEqv",NL
+        wrhex   R1
+        wrhex   R4
+        wrhex   R5
+ ]
+
+        Push    "R0,R1,R4,R6-R11,LR"
+
+ [ Version >= 205
+        ; NULL name is equivalent to "" (for root object on a disc)
+        TEQ     R4, #0
+        baddr   R4, anull, EQ
+ ]
+
+        ADD     R6, R4, R6		;Max Name end ptr
+
+        MOV     R7, #0                  ;wild backtrack ptr, R8 will be name backtrack
+        MOV     R10,#0                  ;clear # used flag
+
+        SUB     R1, R1, #1
+10
+        BL      NextChar
+        MOVCS   R0, #0           ;replace terminators by 0, for name<wild check
+        CMPS    R0, #MultiWildChar
+        BEQ     %FT30
+        BL      %FT50           ;R9=next name char
+        Internat_CaseConvertLoad LR,Upper
+        Internat_UpperCase  R0,LR
+        CMPS    R0, #OneWildChar ;match ?
+        MOVEQ   R10,#-1         ;note if # used
+        CMPNES  R0, R9          ;match ?
+        BEQ     %BT10           ;loop on match
+        MOV     R4, R8          ;back track name
+        MOVS    R1, R7          ;back track wild, and test if * used
+        BNE     %FT30           ;if it was restart from backtrack
+20
+; not match, but was name < wild
+
+; if wild cards force name < wild to continue dir search
+
+        RSBS    LR, R7, #1      ; * used => C=0
+        RSBCSS  LR, R10,#1      ; # used => C=0
+        CMPCSS  R9, R0
+ [ Debug6 :LAND: {FALSE}
+        mess    LO,"name<wild",NL
+        mess    HI,"name>wild",NL
+ ]
+        Pull    "R0,R1,R4,R6-R11,PC"
+
+30
+        MOV     R7, R1          ;Wild backtrack ptr -> wild card
+        BL      NextChar        ;Next wild
+        MOVCS   R0, #0          ;replace terminators by 0, for wild<name check
+        CMPS    R0, #MultiWildChar
+        BEQ     %BT30           ;deal with **
+        Internat_CaseConvertLoad LR,Upper
+        Internat_UpperCase  R0,LR
+40
+        BL      %FT50           ;R9=next name char
+        CMPS    R0, #OneWildChar ;match ?
+        MOVEQ   R10,#-1         ;note if # used
+        CMPNES  R0, R9          ;match ?
+        BNE     %BT40
+        MOV     R8, R4          ;name backtrack ptr -> char after match
+        B       %BT10           ;loop
+
+50
+;get name char
+        LDRB    R9, [R4],#1
+        AND     R9, R9, R5      ;maybe mask out bit 7
+        Internat_CaseConvertLoad R11,Upper
+        Internat_UpperCase  R9,R11
+        CMPS    R9, #" "+1      ;name terminated by control code ?
+        MOVLO   R9, #0          ;replace terminators by 0, for wild<name check
+        CMPHS   R6, R4          ;name terminated by length ?
+        MOVHSS  PC, LR          ;name not terminated
+        MOVLO	R9, #0		;terminator of 0 if name terminated
+        
+;name terminated, has wildcard ?
+        CMPS    R0, #DelimChar
+        BLNE    ThisChar
+        BCS     %FT60           ;match
+
+	LDR	lr, [sp, #2*4]
+	SUB	lr, r4, lr
+	CMP	lr, #BigDirMaxNameLen
+	BLO	%BT20		;mismatch if not reached max name length
+	
+        ; Check if Truncate is configured
+        LDRB    lr, Flags
+        TST     lr, #TruncateNames
+        BNE     %BT20           ;mismatch if barf on truncate names
+
+        ; Now check if wildcard has terminated based on length
+        LDR     lr, [sp, #1*4]  ; R1 in
+        SUB     lr, r1, lr
+        CMP     lr, #BigDirMaxNameLen
+        BLO     %BT20           ; finished short of BigDirMaxNameLen
+
+        ; Drop through to match situation
+60
+        CMPS    R0, R0          ;set equal C=1,Z=1
+ [ Debug6 :LAND: {FALSE}
+        mess    ,"name=wild",NL
+ ]
+        Pull    "R0,R1,R4,R6-R11,PC"
+
+ ]
 
 ; ======
 ; LexEqv
@@ -1178,6 +1363,7 @@ LookUp  ROUT
 ; entry:
 ;  R1 -> term, terminated by control codes ,delete ,space or delimiter
 ;  R4 -> name
+
 ;  R5 =  bit mask for name chars
 
 ; exit:
@@ -1186,7 +1372,7 @@ LookUp  ROUT
 ;  name > wild spec   C=1, Z=0, V=0
 
 LexEqv
- [ Debug6 :LAND: {FALSE}
+ [ Debug6  :LAND: {FALSE}
         mess    ,"wild     name     mask - enter LexEqv",NL
         wrhex   R1
         wrhex   R4
@@ -1202,6 +1388,7 @@ LexEqv
  ]
 
         ADD     R6, R4, #NameLen        ;Max Name end ptr
+
         MOV     R7, #0                  ;wild backtrack ptr, R8 will be name backtrack
         MOV     R10,#0                  ;clear # used flag
 
@@ -1304,6 +1491,10 @@ LexEqv
 
 ReadLoad ROUT
         Push    "R0,LR"
+ [ BigDir
+ 	BL	TestBigDir
+ 	BEQ	%FT10
+ ]
         TEQS    R4, #0
  [ Version >= 205
         ; For root object set load for type of disc
@@ -1324,6 +1515,23 @@ ReadLoad ROUT
  ]
         Pull    "R0,PC",,^
 
+ [ BigDir
+10
+        TEQS    R4, #0
+        ; For root object set load for type of disc
+        ; Use EOR in case types extend in the future
+        BLEQ    DiscAddToRec
+        LDREQ   LR, [LR, #DiscType]
+        MOV     LR, LR, LSL #8
+        EOREQ   LR, LR, #&ff000000
+        EOREQ   LR, LR, #&00f00000
+        LDRNE	LR, [R4, #BigDirLoad]
+ [ Debug6
+        DREG    LR, " ", cc
+        DLINE   "= load add"
+ ]
+        Pull    "R0,PC",,^
+ ]
 
 ; ========
 ; ReadExec
@@ -1337,6 +1545,10 @@ ReadLoad ROUT
 
 ReadExec ROUT
         Push    "R0,LR"
+ [ BigDir
+ 	BL	TestBigDir
+ 	BEQ	%FT10
+ ]
         TEQS    R4, #0
         MOVEQ   LR, #0
         ADDNE   R0, R4, #DirExec
@@ -1347,6 +1559,17 @@ ReadExec ROUT
  ]
         Pull    "R0,PC",,^
 
+ [ BigDir
+10
+        TEQS    R4, #0
+        MOVEQ   LR, #0
+	LDRNE	LR, [R4, #BigDirExec]
+  [ Debug6
+        DREG    LR, " ", cc
+        DLINE   "= exec add"
+  ]
+        Pull    "R0,PC",,^
+ ]
 
 ; =======
 ; ReadLen
@@ -1363,16 +1586,60 @@ ReadLen
         Push    "R0,LR"
  [ Version >= 205
         ; For most cases read length from dir
-        TEQS    R4, #0
-        ADDNE   R0, R4, #DirLen
-        BLNE    ReadWord
-  [ Debug6
+  [ BigDir
+  	; check if is big dirs
+  	BL	TestBigDir
+  	BNE	%FT05
+  	; big dirs
+  	
+  	TEQS	R4, #0
+  	LDREQ	LR, [LR, #RootDirSize]
+  	LDRNE	LR, [R4, #BigDirLen]
+   [ Debug6
         BEQ     %FT01
         DREG    LR, " ", cc
         DLINE   "= file len"
 01
-  ]
+   ]
         Pull    "R0,PC",NE,^
+
+	; big dir, but root object.  read root length from disc record  	
+  	BL	DiscAddToRec	;(R3->LR)
+  	LDR	LR, [LR, #RootDirSize]
+  [ Debug6
+  	DREG	LR, " ",cc
+  	DLINE	"= file len"
+  ]
+  	Pull	"R0,PC",,^
+  	
+05
+	; not big dirs
+        TEQS    R4, #0
+        ADDNE   R0, R4, #DirLen
+        BLNE    ReadWord
+   [ Debug6
+        BEQ     %FT01
+        DREG    LR, " ", cc
+        DLINE   "= file len"
+01
+   ]
+        Pull    "R0,PC",NE,^
+        
+        
+  |
+  
+  
+        TEQS    R4, #0
+        ADDNE   R0, R4, #DirLen
+        BLNE    ReadWord
+   [ Debug6
+        BEQ     %FT01
+        DREG    LR, " ", cc
+        DLINE   "= file len"
+01
+   ]
+        Pull    "R0,PC",NE,^
+  ]
 
         ; For root object need special processing
         BL      DiscAddToRec
@@ -1435,10 +1702,25 @@ ReadIndDiscAdd
 
  ]
  [ NewFs
+  [ BigDir
+  	BL	TestBigDir
+  	BNE	%FT01
+  	
+  	LDR	LR, [R4, #BigDirIndDiscAdd]
+  	
+  	B	%FT02
+01
         BL      TestMap                 ;(R3->Z)
         ADD     R0, R4, #DirIndDiscAdd
         BL      Read3
         MOVNE   LR, LR, LSL #8
+02
+  |
+        BL      TestMap                 ;(R3->Z)
+        ADD     R0, R4, #DirIndDiscAdd
+        BL      Read3
+        MOVNE   LR, LR, LSL #8
+  ]
  |
         ADD     R0, R4, #DirIndDiscAdd-1
         BL      ReadWord
@@ -1486,6 +1768,11 @@ ReadIntAtts ROUT
  |
         MOVEQ   LR, #DirBit :OR: IntLockedBit
         Pull    "R0-R1,PC",EQ,^
+ ]
+ [ BigDir
+ 	BL	TestBigDir
+ 	LDREQB	LR, [R4, #BigDirAtts]
+ 	BEQ	%FT20
  ]
         BL      TestDir              ;EQ <=> New format
         LDREQB  LR, [R4,#NewDirAtts]
@@ -1576,6 +1863,10 @@ WriteLoad ROUT
         DREG    R4, " "
  ]
         Push    "R0-R1,LR"
+ [ BigDir
+ 	BL	TestBigDir		;(R3->Z)
+ 	BEQ	%FT10
+ ]
  [ Version >= 205
         BL      ReadLoad                ;(R3,R4->LR)
  |
@@ -1588,6 +1879,14 @@ WriteLoad ROUT
         BLNE    WriteWord
         Pull    "R0-R1,PC",,^
 
+ [ BigDir
+10
+ 	BL	ReadLoad		;(R3,R4->LR)
+ 	TEQS	R0,LR			;nothing to do if changed
+ 	BLNE	InvalidateBufDir
+ 	STRNE	R0, [R4, #BigDirLoad]
+ 	Pull	"R0-R1,PC",,^
+ ]
 
 ; =========
 ; WriteExec
@@ -1604,6 +1903,10 @@ WriteExec ROUT
         DREG    R4, " "
  ]
         Push    "R0-R1,LR"
+ [ BigDir
+ 	BL	TestBigDir
+ 	BEQ	%FT10
+ ]
         BL      ReadExec                ;(R4->LR)
         TEQS    R0,LR                   ;nothing to do if unchanged
         BLNE    InvalidateBufDir
@@ -1612,6 +1915,14 @@ WriteExec ROUT
         BLNE    WriteWord
         Pull    "R0-R1,PC",,^
 
+ [ BigDir
+10
+        BL      ReadExec                ;(R4->LR)
+        TEQS    R0,LR                   ;nothing to do if unchanged
+        BLNE    InvalidateBufDir
+	STRNE	R0, [R4, #BigDirExec]
+	Pull    "R0-R1,PC",,^	
+ ]
 
 ; ========
 ; WriteLen
@@ -1628,6 +1939,10 @@ WriteLen ROUT
         DREG    R4, " "
  ]
         Push    "R0-R1,LR"
+ [ BigDir
+ 	BL	TestBigDir
+ 	BEQ	%FT10
+ ]
         BL      ReadLen                 ;(R4->LR)
         TEQS    R0,LR                   ;nothing to do if unchanged
         BLNE    InvalidateBufDir
@@ -1636,6 +1951,14 @@ WriteLen ROUT
         BLNE    WriteWord
         Pull    "R0-R1,PC",,^
 
+ [ BigDir
+10
+        BL      ReadLen                 ;(R4->LR)
+        TEQS    R0,LR                   ;nothing to do if unchanged
+        BLNE    InvalidateBufDir
+	STRNE	R0, [R4, #BigDirLen]
+        Pull    "R0-R1,PC",,^
+ ]
 
 ; ===============
 ; WriteIndDiscAdd
@@ -1646,6 +1969,10 @@ WriteLen ROUT
 ; entry:
 ;  R0=disc address
 ;  R4->dir entry
+
+ [ BigDir
+;  R5->dir start (only if dir is big)
+ ]
 
 WriteIndDiscAdd ROUT
  [ Debug6
@@ -1659,6 +1986,13 @@ WriteIndDiscAdd ROUT
         BEQ     %FT95
         BL      InvalidateBufDir
         BIC     R1,R0,#DiscBits
+ [ BigDir
+ 	BL	TestBigDir
+ 	STREQ	R1, [R4, #BigDirIndDiscAdd]
+ 	BLEQ	GetBigDirName		;(R4,R5->LR)
+ 	STREQ	R4, [LR, #-BigDirHeapObName+BigDirHeapIndDiscAdd]
+ 	BEQ	%FT95
+ ]
  [ NewFs
         BL      TestMap                 ;(R3->Z)
         MOVNE   R1,R1,LSR #8
@@ -1716,6 +2050,11 @@ WriteIntAtts ROUT
         Pull    "R0-R2,R4,PC",EQ,^      ;no change
 SetAttsCommon
         BL      InvalidateBufDir
+ [ BigDir
+ 	BL	TestBigDir
+	STREQB	R0, [R4,#BigDirAtts]	; write atts
+        Pull	"R0-R2,R4,PC",EQ,^
+ ]
         BL      TestDir
         STREQB  R0, [R4,#NewDirAtts]
 ;fall through rest if new format (EQ)
@@ -1732,7 +2071,6 @@ SetAttsCommon
         SUBNES  R1, R1, #1              ;loop until done
         BNE     %BT10
         Pull    "R0-R2,R4,PC",,^
-
 
 ; ==========
 ; SetIntAtts
@@ -1759,6 +2097,9 @@ SetIntAtts ROUT
 
 ; entry
 ;  R3 parent disc address
+ [ BigDir
+; if dir is big, then R5->dir start
+ ]
 ;  R6 -> dir end
 
 WriteParent
@@ -1768,6 +2109,11 @@ WriteParent
         DLINE   " WriteParent"
  ]
         Push    "R0,R1,LR"
+ [ BigDir
+ 	BL	TestBigDir
+ 	STREQ	R3, [R5, #BigDirParent]
+ 	Pull	"R0,R1,PC",EQ,^
+ ]
         BL      TestDir      ;(R3->LR,Z)
         ADDEQ   R0, R6, #NewDirParent
         ADDNE   R0, R6, #OldDirParent
@@ -1843,6 +2189,7 @@ HugoNick
  = "Hugo"
  = "Nick"
 
+
 ; ========
 ; CheckDir
 ; ========
@@ -1863,6 +2210,14 @@ CheckDir ROUT
         Push    "R0,R1,R10,R11,LR"
         MOV     R10,#1
 CheckDirCommon
+ [ BigDir
+ 	BL	TestBigDir		; is it a big directory?
+ 	BNE	%FT01
+ 	BL	CheckBigDir		;(R3,R5,R6,R10->R0,V)
+ 	MOVVC	R0,#0
+ 	B	%FT95
+01	; not a big dir
+ ]
         ADD     R0, R5, #StartName      ;Check start string
         BL      ReadWord                ;(R0->LR)
         baddr   R1, HugoNick    
@@ -1966,13 +2321,34 @@ QuickCheckDir ROUT
 ;  R5 -> dir start
 ;  R6 -> dir end
 
+ [ BigDir
+; R3 - dir ind disc add
+ ]
+
 IncDirSeqNum
+ [ BigDir
+        Push    "LR"
+        BL	TestBigDir
+        BEQ	%FT01
+        BL      InvalidateBufDir
+        BL      NextDirSeqNum           ;(R5->LR)
+        STRB    LR,[R5,#StartMasSeq]
+        STRB    LR,[R6,#EndMasSeq]
+        Pull    "PC",,^
+01
+        BL      InvalidateBufDir
+        BL      NextDirSeqNum           ;(R5->LR)
+        STRB    LR,[R5,#BigDirStartMasSeq]
+        STRB    LR,[R6,#BigDirEndMasSeq]
+        Pull    "PC",,^
+ |
         Push    "LR"
         BL      InvalidateBufDir
         BL      NextDirSeqNum           ;(R5->LR)
         STRB    LR,[R5,#StartMasSeq]
         STRB    LR,[R6,#EndMasSeq]
         Pull    "PC",,^
+ ]
 
 
 ; ============
@@ -2007,6 +2383,9 @@ IncObjSeqNum
 
 NextDirSeqNum
         Push    "R0,LR"
+ [ BigDir
+ 	ASSERT	BigDirStartMasSeq=StartMasSeq
+ ]
         LDRB    LR,[R5,#StartMasSeq]    ;get old master sequence number
         ADD     LR,LR,#1                ;increment in bcd
         CMPS    LR,#&9A
@@ -2060,6 +2439,11 @@ IsDirFull ROUT
 ; ASSUMES DIR IS NOT FULL can check this with IsDirFull
 
 ; entry:
+
+ [ BigDir
+;  R1 IF DIR IS BIG, R1->term
+ ]
+
 ;  R3 ind disc address
 ;  R4 -> entry
 ;  R5 -> dir start
@@ -2068,6 +2452,11 @@ IsDirFull ROUT
 MakeDirSpace ROUT
  [ NewDirEntrySz=OldDirEntrySz
         Push    "R0-R2,LR"
+ [ BigDir
+        BL	TestBigDir
+        BLEQ	MakeBigDirSpace	;different code for when a big dir.  may corrupt R0-R2
+        Pull	"R0-R2,PC",EQ,^
+ ]
         SUBS    R0, R4, #NewDirEntrySz
 10                              ;search for end of entries
         LDRB    LR, [R0,#NewDirEntrySz] !
