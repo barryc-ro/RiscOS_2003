@@ -1,11 +1,11 @@
-# Makefile for modgen ONLY
+# Makefile for modgen and resgen ONLY
 #
 # ***********************************
 # ***    C h a n g e   L i s t    ***
 # ***********************************
 # Date       Name         Description
 # ----       ----         -----------
-# 02-Jul-99  SNB          Created
+# 11-Oct-99  SNB          Created
 #
 
 #
@@ -45,10 +45,11 @@ INCLUDES = -I${CLXPATH}
 #
 # Program specific options:
 #
-TARGET    = ${COMPONENT}
+TARGET1   = ${COMPONENT}
+TARGET2   = resgen
 
 OBJS      = modgen.o
-
+OBJS2     = resgen.o
 
 #
 # Rule patterns
@@ -60,20 +61,25 @@ OBJS      = modgen.o
 #
 # Target 
 #
-${TARGET}: ${OBJS} ${CLX} ${CLIB}
+all: ${TARGET1} ${TARGET2}
+	@echo ${TARGET1} ${TARGET2}: all complete
+
+${TARGET1}: ${OBJS} ${CLX} ${CLIB}
 	${LD} -o $@ ${LDFLAGS} ${OBJS} ${CLX} ${CLIB}
 
-all: ${TARGET}
-	@echo ${COMPONENT}: all complete
+${TARGET2}: ${OBJS2} ${CLX} ${CLIB}
+	${LD} -o $@ ${LDFLAGS} ${OBJS2} ${CLX} ${CLIB}
 
 clean:
 	${WIPE} ${WFLAGS} *.o
-	${RM} ${TARGET}
-	@echo ${COMPONENT}: cleaned
+	${RM} ${TARGET1}
+	${RM} ${TARGET2}
+	@echo ${TARGET1} ${TARGET2}: cleaned
 
 realclean: clean
 	${RM} modgen.c
+	${RM} resgen.c
 	${RM} VersionNum
-	@echo ${COMPONENT}: cleaned softlinks too
+	@echo ${TARGET1} ${TARGET2}: cleaned softlinks too
 
 # Dynamic dependencies:

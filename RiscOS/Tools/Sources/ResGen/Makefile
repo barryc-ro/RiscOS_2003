@@ -87,7 +87,7 @@ export: export_${PHASE}
 install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
 
-install_tool: ${TARGET}
+install_tool: ${COMPONENT}
 	${MKDIR} ${LIBDIR}.Acorn.Docs
 	${MKDIR} ${LIBDIR}.Build.Docs
 	${CP} ${RESGEN} ${LIBDIR}.Acorn.${RESGEN} ${CPFLAGS}
@@ -119,8 +119,8 @@ ${MODGEN}: modgen.o ${CLXLIB} ${CLIB}
 	${LD} ${LDFLAGS} -o $@ modgen.o ${CLXLIB} ${CLIB}
 	${SQUEEZE} ${SQZFLAGS} $@
 
-${RESGEN}: resgen.o rveneers.o ${CLIB}
-	${LD} ${LDFLAGS} -o $@ resgen.o rveneers.o ${CLIB}
+${RESGEN}: resgen.o ${CLXLIB} ${CLIB}
+	${LD} ${LDFLAGS} -o $@ resgen.o ${CLXLIB} ${CLIB}
 	${SQUEEZE} ${SQZFLAGS} $@
 
 ${BINAOF}: binaof.o

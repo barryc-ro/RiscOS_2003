@@ -40,7 +40,7 @@
 #  define int32 size_t
 #endif
 
-/* These header files are supplied by CLX */
+/* These header files are supplied by the CLX library */
 #include "host.h"
 #include "bytesex.h"
 #include "wholefls.h"
@@ -57,11 +57,14 @@
 static const char *program;
 
 typedef struct ResFile {
-    struct ResFile *next;
-    char *infile;
-    char *resfile;
+        struct ResFile *next;
+        char *infile;
+        char *resfile;
 } ResFile;
 
+/* Allocate memory dynamically, but never return if the allocation fails.
+ * On exit, requested memory has been allocated
+ */
 static void *check_malloc(size_t n)
 {
         void *b = malloc(n);
@@ -74,15 +77,6 @@ static void *check_malloc(size_t n)
         return b;
 }
 
-
-static void modgen_check_args(int argc)
-{
-        if (argc < 5) {
-                fprintf(stderr, "Syntax: %s <filename> <Module Name> <Module Help> <Module Version> "
-                        "{ <Binary file> <Resource file> | -via <viafile> }\n", program);
-                exit(EXIT_FAILURE);
-        }
-}
 
 enum constants {
         XResourceFS_RegisterFiles       = 0x61b40ul,
@@ -100,7 +94,7 @@ enum constants {
 #define  PUSH_LR      0x092D4000u
 #define  PULL_PC      0x08BD8000u
 #define  ADD_R0_PC    0x028F0000u
-#define  MOV_A1_A1    0xE1A00000u /* MOV R0, R0 */
+#define  MOV_A1_A1    0xE1A00000u /* MOV R0, R0 is the magic constant for service call handlers */
 #define  MOV(rd,rs)  (0x01A00000u|((rd)<<12)|((rs)))
 #define  SERVICESTM   0xE92D400Fu
 #define  SERVICELDM   0xE8FD800Fu
@@ -199,6 +193,7 @@ static const module_header template_header = {
 
 };
 
+
 enum {
         arg_PROGRAM,
         arg_OUTFILE,
@@ -210,6 +205,28 @@ enum {
         arg_MINUSVIA = arg_BINFILE,
         arg_VIAFILE
 };
+
+static struct {
+        const char *remove_file;
+        FILE *close_file;
+
+} actions_atexit = {
+        NULL,
+        NULL
+};
+
+static void callback_atexit(void)
+{
+        /* Close and delete the output fie unless the entire creation operation
+         * was successful (before a successful exit, pointers are reset to NULL)
+         */
+        if (actions_atexit.close_file != NULL) {
+                fclose(actions_atexit.close_file);
+        }
+        if (actions_atexit.remove_file != NULL) {
+                remove(actions_atexit.remove_file);
+        }
+}
 
 static void init_sex(void)
 {
@@ -224,7 +241,11 @@ static void init_sex(void)
         bytesex_reverse(gross_ugly_hack.c[0] != 1);
 }
 
-
+/* Construct the standard format module help string.  This is the help string, padded
+ * by tab characters to 16 characters (tab stops every 8 characters), followed by the
+ * module version number x.yz, followed by the date as (dd mmm yyyy), and then any
+ * extra version information
+ */
 static char *modgen_format_module_help(const char *helpstring, const char *version)
 {
         size_t helplen = strlen(helpstring);
@@ -244,13 +265,17 @@ static char *modgen_format_module_help(const char *helpstring, const char *versi
                 strcat(help, datestr);
         }
         else {
-                fprintf(stderr, "Unable to format date string for module help string\n");
+                fprintf(stderr, "%s: Unable to format date string for module help string\n", program);
                 exit(EXIT_FAILURE);
         }
 
         return help;
 }
 
+/* Reverse an array of int32 (c specified in *bytes*)
+ * Does nothing if running on little-endian machines,
+ * otherwise all words in array are byte-reversed.
+ */
 static void reverse_header(void *mh, size_t c)
 {
         int32 *p = mh;
@@ -259,6 +284,12 @@ static void reverse_header(void *mh, size_t c)
                 *p = bytesex_hostval(*p);
                 ++p;
         }
+}
+
+static void modgen_write_word(FILE *f, int32 w)
+{
+        w = bytesex_hostval(w);
+        fwrite(&w, sizeof(w), 1, f);
 }
 
 static void modgen_write_module_header(FILE *f, module_header *mh, size_t headerlength)
@@ -274,7 +305,7 @@ static void modgen_die_missing_filename(const char *binary)
         exit(EXIT_FAILURE);
 }
 
-static void modgen_die_generic_close_file(FILE *f, const char *outfile, const char *fmt, ...)
+static void modgen_die_generic_close_file(const char *fmt, ...)
 {
         va_list ap;
 
@@ -282,12 +313,7 @@ static void modgen_die_generic_close_file(FILE *f, const char *outfile, const ch
         va_start(ap, fmt);
         vfprintf(stderr, fmt, ap);
         va_end(ap);
-        if (f) {
-                fclose(f);
-        }
-        if (outfile) {
-                remove(outfile);
-        }
+        fputc('\n', stderr);
         exit(EXIT_FAILURE);
 }
 
@@ -316,25 +342,37 @@ static size_t modgen_derive_filetype(const char *filename)
         return 0xFFF;
 }
 
-static void modgen_time_t_to_riscos(TimeStamp ts, size_t *load, size_t *exec)
+static void modgen_time_t_to_riscos(TimeStamp ts, int32 *load, int32 *exec)
 {
-        (void) ts;
-        *load = (*load & ~0xFF) | 0;
-        *exec = 0;
+        /* convert a time_t (seconds from 1 Jan 1970 00:00:00 UTC) to a RISC OS
+         * date/time stamp (centiseconds from 1 Jan 1900 00:00:00 UTC)
+         * The "load address" attribute used by RISCOS is equal to 0xFFFtttdd, where
+         * ttt is a 12-bit file type and dd is bits 32..39 of the time stamp. This is
+         * defined as the number of centiseconds since 01-Jan-1900.
+         *
+         * DOS and UNIX deal (in the main) with time as the number of seconds since
+         * 01-Jan-1970, which is to be RISCOS time 0x33 6E99 6A00.  Hence the conversion
+         * is relatively simple.   RISCOS time = 336E996A00h + 100*UNIX time
+         */
+        int32 t_hi, t_lo;
+
+        t_hi = 0x336E99 + (ts >> 16) * 100;
+        t_lo = 0x6A00 + (ts & 0xFFFF) * 100;
+
+        *load = (*load & ~0xFF) | ((t_hi + (t_lo >> 16)) >> 16);
+        *exec = (t_hi << 16) + t_lo;
 }
 #endif
 
-static void modgen_copy_file_information(FILE *f, int32 length, char *filename,
-        const char *resfile, const char *out)
+static void modgen_copy_file_information(FILE *f, int32 length, char *filename, const char *resfile)
 {
         typedef struct {
-                size_t  next;
-                size_t  load;
-                size_t  exec;
-                size_t  size;
-                size_t  attr;
+                int32   next;
+                int32   load;
+                int32   exec;
+                int32   size;
+                int32   attr;
         } resourcefs_header;
-        int32 w;
         resourcefs_header h;
         const size_t namelen = strlen(resfile);
 
@@ -342,16 +380,15 @@ static void modgen_copy_file_information(FILE *f, int32 length, char *filename,
         _kernel_oserror *e = _swix(OS_File, _INR(0,1)|_OUTR(2,5), 5, filename,
                 &h.load, &h.exec, &h.size, &h.attr);
         if (e) {
-                modgen_die_generic_close_file(f, out, "%s\n", e->errmess);
+                modgen_die_generic_close_file("%s\n", e->errmess);
         }
 #else
         TimeStamp ts;
 
         h.attr = 3;
         h.size = length;
-        h.load = 0xFFF00000;
         h.exec = 0;
-        h.load |= (modgen_derive_filetype(filename) << 8);
+        h.load = 0xFFF00000 | (modgen_derive_filetype(filename) << 8);
         ts = filestamp_get(filename);
         if (ts != -1) {
                 modgen_time_t_to_riscos(ts, &h.load, &h.exec);
@@ -361,9 +398,7 @@ static void modgen_copy_file_information(FILE *f, int32 length, char *filename,
         if (bytesex_reversing()) reverse_header(&h, sizeof(h));
         fwrite(&h, 1, sizeof(h), f);
         align_fputs(resfile, namelen, f);
-        length += 4;
-        w = bytesex_hostval(length);
-        fwrite(&w, 1, sizeof(w), f);
+        modgen_write_word(f, length + 4);
 }
 
 static ResFile **modgen_add_file(ResFile **pres, const char *load, const char *resfile)
@@ -464,21 +499,56 @@ static void modgen_banner(void)
         }
 }
 
+static void modgen_newline(void)
+{
+        fputc('\n', stderr);
+}
+
+static void modgen_usage(void)
+{
+        fputs("Syntax: ", stderr);
+        fputs(program, stderr);
+        fputs(" <filename> <module title> <module help> <version> "
+                "[<local file> <ResourceFS name> | -via <viafile>]\n", stderr);
+}
+
+static void modgen_help(void)
+{
+        modgen_banner();
+        modgen_newline();
+        modgen_usage();
+        fputs("\nOptions:\n\n"
+                "-help          Display this information\n"
+                "-w<options>    Suppress warnings:\n"
+                "               -wa     Suppress zero length file warning\n\n",
+                stderr);
+}
+
+static void modgen_check_args(int argc)
+{
+        if (argc < 5) {
+                modgen_banner();
+                modgen_newline();
+                modgen_usage();
+                exit(EXIT_FAILURE);
+        }
+}
+
 int main(int argc, char *argv[])
 {
-        const char *outfile = argv[arg_OUTFILE], *helpstring;
+        const char *outfile, *helpstring;
         module_header *header;
         size_t header_length;
         int opt;
         ResFile *res = NULL, **pres = &res;
         FILE *f;
-        int32 w;
         int warnings = 0;
 
         host_init();
         program = strrchr(argv[0], host_dir_sep_char());
         program = program ? program+1 : argv[0];
         init_sex();
+        atexit(callback_atexit);
 
         for (opt = arg_PROGRAM + 1; opt < argc; ++opt) {
                 const char *arg = argv[opt];
@@ -486,7 +556,7 @@ int main(int argc, char *argv[])
                 ++argv;
                 --argc;
                 if (strcmp(arg, "help") == 0) {
-                        modgen_banner();
+                        modgen_help();
                         exit(EXIT_SUCCESS);
                 }
                 else if (tolower(*arg) == 'w') {
@@ -514,6 +584,7 @@ int main(int argc, char *argv[])
         }
 
         modgen_check_args(argc);
+        outfile = argv[arg_OUTFILE];
 
         helpstring = modgen_format_module_help(argv[arg_MODHELP], argv[arg_MODVERS]);
 
@@ -549,6 +620,9 @@ int main(int argc, char *argv[])
                 exit(EXIT_FAILURE);
         }
 
+        actions_atexit.close_file = f;
+        actions_atexit.remove_file = outfile;
+
         header_length = sizeof(*header) + strlen(helpstring) + 1 + strlen(argv[arg_MODNAME]) + 1;
         header_length = (header_length + 3) & ~3;
 
@@ -574,8 +648,7 @@ int main(int argc, char *argv[])
                 void *filebuf;
 
                 if (infile_length == -1) {
-                        modgen_die_generic_close_file(f, outfile, "Unable to read length of file '%s'",
-                                res->infile);
+                        modgen_die_generic_close_file("Unable to read length of '%s'", res->infile);
                 }
                 if (infile_length == 0) {
                         if (!(warnings & warn_ZERO_LENGTH_FILES)) {
@@ -583,7 +656,7 @@ int main(int argc, char *argv[])
                         }
                 }
 
-                modgen_copy_file_information(f, infile_length, res->infile, res->resfile, outfile);
+                modgen_copy_file_information(f, infile_length, res->infile, res->resfile);
 
                 /* avoid malloc(0) because that exhibits implementation dependent behaviour */
                 filebuf = malloc(infile_length ? infile_length : 1);
@@ -591,7 +664,7 @@ int main(int argc, char *argv[])
                         /* Probably too big - copy by parts */
                         FILE *in = fopen(res->infile, "rb");
                         if (in == NULL) {
-                                modgen_die_generic_close_file(f, outfile, "Unable to open file '%s'",
+                                modgen_die_generic_close_file("Unable to open file '%s'",
                                         res->infile);
                         }
                         else {
@@ -601,14 +674,16 @@ int main(int argc, char *argv[])
                                         size_t count = fread(buffer, 1, sizeof(buffer), in);
                                         if (count > 0) {
                                                 fwrite(buffer, 1, count, f);
+                                                continue;
                                         }
+                                        break;
                                 }
                                 fclose(in);
                         }
                 }
                 else {
                         if (wf_load(res->infile, filebuf, infile_length) == -1) {
-                                modgen_die_generic_close_file(f, outfile, "Unable to load file '%s'",
+                                modgen_die_generic_close_file("Unable to load file '%s'",
                                         res->infile);
                         }
                         else {
@@ -623,11 +698,13 @@ int main(int argc, char *argv[])
                 }
         }
 
-        w = bytesex_hostval(0);
-        fwrite(&w, 1, sizeof(w), f);
+        modgen_write_word(f, 0);
         if (fclose(f) == EOF) {
-                modgen_die_generic_close_file(f, outfile, "Unable to write output file %s", outfile);
+                modgen_die_generic_close_file("Unable to write output file %s", outfile);
         }
+
+        actions_atexit.remove_file = NULL;
+        actions_atexit.close_file = NULL;
 
 #ifdef __riscos
         _swix(OS_File, _INR(0,2), 18, outfile, FileType_Module);
