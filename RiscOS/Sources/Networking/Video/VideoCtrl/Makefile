@@ -291,6 +291,8 @@ ${DBG_MODULE}: ${DBG_OBJS} ${MSGSF} ${LIBS} ${CLIB}
 # Specialised static dependencies
 #
 
+o.VCHdr h.VCHdr: VersionNum
+
 o.Module oSL.Module oSLd.Module: VCHdr.h
 
 o.Protocol oSL.Protocol oSLd.Protocol: VCHdr.h
