@@ -44,14 +44,16 @@ SOCKLIB   = TCPIPLibs:o.socklibzm
 UNIXLIB   = TCPIPLibs:o.unixlibzm
 INETLIB_NORM=TCPIPLibs:o.inetlib
 SOCKLIB_NORM=TCPIPLibs:o.socklib
-#REMOTEDB  = <Lib$Dir>.debug.o.remotezm
-REMOTEDB  = 
+REMOTEDB  = <Lib$Dir>.debug.o.remotezm
+#REMOTEDB  = 
 #
 # Include files
 #
 
 INCLUDES  = -IC:,TCPIPLibs:,<Lib$Dir>.
 
+# enable malloc debugging using the following define.
+#-DDEBUG_MALLOC
 DFLAGS = -DVERBOSEDEBUG=0 -DRISCOS -DPROG_IDENT="\"NCBrowser\"" -DCOMPAT_INET4 -DFTP_PUT -DCSFS ${FTP_DB} ${FTP_REMOTE_DB} -DCMHG_FINALISE=1
 
 #
@@ -59,7 +61,7 @@ DFLAGS = -DVERBOSEDEBUG=0 -DRISCOS -DPROG_IDENT="\"NCBrowser\"" -DCOMPAT_INET4 -
 #
 COMPONENT = webftp
 TARGET    = aof.${COMPONENT}
-OBJS      =  webftp.o q.o files.o header.o support.o misc.o dirparse.o
+OBJS      =  webftp.o q.o files.o header.o support.o misc.o db.o dirparse.o 
 EXPORTS   = h.webftp
 
 #
@@ -362,6 +364,63 @@ o.misc:	h.pads
 o.misc:	h.privwebftp
 o.misc:	h.autofns
 o.misc:	h.csfs
+o.db:	c.db
+o.db:	h.all
+o.db:	h.tcplibs
+o.db:	TCPIPLibs:sys.h.types
+o.db:	TCPIPLibs:sys.h.cdefs
+o.db:	TCPIPLibs:machine.h.endian
+o.db:	TCPIPLibs:machine.h.ansi
+o.db:	TCPIPLibs:machine.h.types
+o.db:	TCPIPLibs:sys.h.socket
+o.db:	TCPIPLibs:sys.h.cdefs
+o.db:	TCPIPLibs:sys.h.errno
+o.db:	C:h.kernel
+o.db:	TCPIPLibs:net.h.if
+o.db:	TCPIPLibs:sys.h.socket
+o.db:	TCPIPLibs:sys.h.time
+o.db:	TCPIPLibs:sys.h.cdefs
+o.db:	TCPIPLibs:net.h.if_arp
+o.db:	TCPIPLibs:sys.h.socket
+o.db:	TCPIPLibs:netinet.h.in
+o.db:	TCPIPLibs:sys.h.ioctl
+o.db:	TCPIPLibs:sys.h.ttycom
+o.db:	TCPIPLibs:sys.h.ioccom
+o.db:	TCPIPLibs:sys.h.ioccom
+o.db:	TCPIPLibs:sys.h.filio
+o.db:	TCPIPLibs:sys.h.ioccom
+o.db:	TCPIPLibs:sys.h.sockio
+o.db:	TCPIPLibs:sys.h.ioccom
+o.db:	TCPIPLibs:sys.h.cdefs
+o.db:	TCPIPLibs:h.netdb
+o.db:	TCPIPLibs:sys.h.cdefs
+o.db:	TCPIPLibs:netns.h.ns
+o.db:	TCPIPLibs:sys.h.cdefs
+o.db:	TCPIPLibs:sys.h.time
+o.db:	TCPIPLibs:h.socklib
+o.db:	TCPIPLibs:sys.h.types
+o.db:	TCPIPLibs:sys.h.socket
+o.db:	TCPIPLibs:sys.h.stat
+o.db:	TCPIPLibs:sys.h.time
+o.db:	TCPIPLibs:sys.h.cdefs
+o.db:	TCPIPLibs:sys.h.time
+o.db:	TCPIPLibs:sys.h.uio
+o.db:	TCPIPLibs:sys.h.cdefs
+o.db:	C:h.kernel
+o.db:	TCPIPLibs:h.inetlib
+o.db:	TCPIPLibs:sys.h.types
+o.db:	TCPIPLibs:netinet.h.in
+o.db:	TCPIPLibs:netinet.h.tcp_timer
+o.db:	C:h.kernel
+o.db:	C:h.swis
+o.db:	h.files
+o.db:	h.q
+o.db:	h.status
+o.db:	h.webftp
+o.db:	h.pads
+o.db:	h.privwebftp
+o.db:	h.autofns
+o.db:	h.csfs
 o.dirparse:	c.dirparse
 o.dirparse:	h.all
 o.dirparse:	h.tcplibs
