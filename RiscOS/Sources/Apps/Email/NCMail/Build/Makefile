@@ -10,6 +10,7 @@
 # ====          ====    ===========
 # 1998-09-22    RDW     Created
 # 1998-09-28	RDW	LIBS completed for module build
+# 1998-10-08	RDW	NETLINKLIB added
 
 # ------------------------------------------------------------------------------
 # Paths
@@ -94,6 +95,7 @@ ACORNPOP3	= $(EXP_C_O).AcornPOP3
 ACORNSMTP	= $(EXP_C_O).AcornSMTP
 ELIB		= $(LIBDIR).Email.EmailLib.o.EmailLib
 MBOXLIB		= $(LIBDIR).Email.Mailbox.o.Mailbox
+NETLINKLIB	= $(LIBDIR).Email.NetLink.o.NetLink
 SOCKLIB		= $(LIBDIR).TCPIPLibs.o.socklib5
 DEBUGLIB	= $(LIBDIR).DebugLib.o.debuglib
 INETLIB		= $(LIBDIR).TCPIPLibs.o.inetlib
@@ -112,6 +114,7 @@ LIBS = \
  $(TOOLBOXLIB)\
  $(EVENTLIB)\
  $(MBOXLIB)\
+ $(NETLINKLIB)\
  $(ACORNPOP3)\
  $(ACORNSMTP)\
  $(ELIB)\
@@ -127,6 +130,7 @@ LIBSM = \
  $(TOOLBOXLIB)\
  $(EVENTLIB)m\
  $(MBOXLIB)zm\
+ $(NETLINKLIB)zm\
  $(ACORNPOP3)\
  $(ACORNSMTP)\
  $(ELIB)zm\
@@ -145,6 +149,7 @@ LIBSD = \
  $(TOOLBOXLIB)\
  $(EVENTLIB)\
  $(MBOXLIB)d\
+ $(NETLINKLIB)\
  $(ACORNPOP3)\
  $(ACORNSMTP)\
  $(ELIB)\
@@ -278,7 +283,7 @@ install_rom: $(ROM_MODULE)
         @echo
         @echo $(COMPONENT): Module installed (ROM)
 
-resources: 	$(APPENGINE) $(UI) o.dirs
+resources: 	$(UI) $(APPENGINE) o.dirs
 	@echo $(RESDIR)
         $(MKDIR) $(RESDIR)
         $(MKDIR) $(RESAPP)
