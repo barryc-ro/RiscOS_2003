@@ -263,7 +263,8 @@ EXPORTS   = ${MODWRAP} \
 ANSI_OBJS =\
  o.alloc o.armprof o.armsys o.clib o.ctype o.error o.fpprintf \
  o.kernel o.locale o.math o.memcpset o.overmgr o.printf o.scanf \
- o.signal o.sort o.stdio o.stdlib o.string o.swiv o.time o.fenv
+ o.signal o.sort o.stdio o.stdlib o.string o.swiv o.time o.fenv \
+ o.longlong
 
 RM_OBJS =\
  rm_o.k_modbody \
@@ -275,6 +276,7 @@ RM_OBJS =\
  rm_o.error \
  rm_o.fpprintf \
  rm_o.locale \
+ rm_o.longlong \
  rm_o.math \
  rm_o.memcpset \
  rm_o.printf \
@@ -548,17 +550,41 @@ lib.risc_oslib: ${RLIB_OBJS}
 lib.riscoslibm: ${RLIB_MOD_OBJS}
         ${LIBFILE} ${LIBFLAGS} $@ ${RLIB_MOD_OBJS}
 
-lib.stubs: clib.s.cl_stub_r
+o.cl_stub_r: clib.s.cl_stub_r
         ${OBJASM} ${ALFLAGS} -from clib.s.cl_stub_r -to $@
 
-lib.rstubs: rlib.s.rl_stub_r
+o.cl_stub2_r: clib.s.cl_stub2_r
+        ${OBJASM} ${ALFLAGS} -from clib.s.cl_stub2_r -to $@
+
+o.k_stub2_r: kernel.s.k_stub2_r
+        ${OBJASM} ${ALFLAGS} -from kernel.s.k_stub2_r -to $@
+
+o_rl.rl_stub_r: rlib.s.rl_stub_r
         ${OBJASM} ${ALFLAGS} -from rlib.s.rl_stub_r -to $@
 
-lib.romcstubs: clib.s.cl_stub_rm
-        ${OBJASM} ${AFLAGS} -from clib.s.cl_stub_rm -to $@
+rm_o.cl_stub_rm: clib.s.cl_stub_rm
+        ${OBJASM} ${ALFLAGS} -from clib.s.cl_stub_rm -to $@
 
-lib.romstubs: rlib.s.rl_stub_rm
-        ${OBJASM} ${AFLAGS} -from rlib.s.rl_stub_rm -to $@
+rm_o.cl_stub2_rm: clib.s.cl_stub2_rm
+        ${OBJASM} ${ALFLAGS} -from clib.s.cl_stub2_rm -to $@
+
+rm_o.k_stub2_rm: kernel.s.k_stub2_rm
+        ${OBJASM} ${ALFLAGS} -from kernel.s.k_stub2_rm -to $@
+
+rm_o_rl.rl_stub_rm: rlib.s.rl_stub_rm
+        ${OBJASM} ${ALFLAGS} -from rlib.s.rl_stub_rm -to $@
+
+lib.stubs: o.cl_stub_r o.k_stub2_r o.cl_stub2_r
+        ${LIBFILE} ${LIBFLAGS} $@ o.cl_stub_r o.k_stub2_r o.cl_stub2_r
+
+lib.rstubs: o_rl.rl_stub_r o.k_stub2_r o.cl_stub2_r
+        ${LIBFILE} ${LIBFLAGS} $@ o_rl.rl_stub_r o.k_stub2_r o.cl_stub2_r
+
+lib.romcstubs: rm_o.cl_stub_rm rm_o.k_stub2_rm rm_o.cl_stub2_rm
+        ${LIBFILE} ${LIBFLAGS} $@ rm_o.cl_stub_rm rm_o.k_stub2_rm rm_o.cl_stub2_rm
+
+lib.romstubs: rm_o_rl.rl_stub_rm rm_o.k_stub2_rm rm_o.cl_stub2_rm
+        ${LIBFILE} ${LIBFLAGS} $@ rm_o_rl.rl_stub_rm rm_o.k_stub2_rm rm_o.cl_stub2_rm
 
 lib.romastubs: rlib.s.rl_stub_a
         ${OBJASM} ${AFLAGS} -from rlib.s.rl_stub_a -to $@
