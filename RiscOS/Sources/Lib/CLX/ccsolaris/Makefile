@@ -14,9 +14,9 @@ ovrflfmt.h set_host.h aout.h chunkfls.h fname.h prgname.h asdfmt.h \
 chunkfmt.h host_scr.h re.h ieeeflt.h filestamp.h dem.h symdefs.h pathmacro.h \
 mapping.h elf.h
 
-CFLhost= -I${RISCOS_CLIB_HDRS}
-CFLpathmacro= -Dkernelheader=\"${RISCOS_CLIB_HDRS}/kernel.h\"
-CFLfilestamp= -I${RISCOS_CLIB_HDRS}
+CFLhost= -I${RISCOS_CLIB_HDRS} -I-
+CFLpathmacro= -I${RISCOS_CLIB_HDRS} -I-
+CFLfilestamp= -I${RISCOS_CLIB_HDRS} -I-
 
 noarg: clx.a
 	@echo "Made clx.a (the default target)"
@@ -95,8 +95,8 @@ clx.a: $(DERIVED)
 	@echo "Library file clx.a made"
 
 install: clx.a
-	cp -p clx.a ${CLXPATH}
-	cp -p *.h ${CLXPATH}
+	install -m 644 clx.a ${CLXPATH}
+	install -m 644 *.h ${CLXPATH}
 	rm ${CLXPATH}/datenow.h
 	@echo "Installed clx.a"
 
