@@ -30,6 +30,7 @@ AFLAGS = -depend !Depend -Stamp -quit
 CFLAGS  = -W -c -depend !Depend -zM -zps1 -throwback -pcc -fn ${INCLUDES} ${DFLAGS} -DCOMPAT_INET4
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
+CMHGFLAGS = -depend !Depend -p
 #LDFLAGS = -map -v
 
 #
@@ -45,10 +46,11 @@ INETLIB=TCPIPLibs:o.inetlibzm
 SOCKLIB=TCPIPLibs:o.socklibzm
 UNIXLIB=TCPIPLibs:o.unixlibzm
 DESKLIB=libs.desklib.DeskLib_rm
+ASMUTILS  = C:AsmUtils.o.AsmUtilsZM
 #
 # Include files
 #
-INCLUDES = -IC:,TCPIPLibs:
+INCLUDES = -IC:,TCPIPLibs:,C:AsmUtils
 
 DFLAGS   = -Darm -DROM=1
 
@@ -60,12 +62,12 @@ TARGET    = aof.${COMPONENT}
 OBJS      = res_query.o Events.o \
 	    Cache.o ExtLib.o Hosts.o Resolver.o \
 	    res_comp.o res_init.o res_mkquer.o  \
-	    StrCaseCmp.o Stubs.o SWI.o
+	    StrCaseCmp.o SWI.o
 DEBOBJS   = od.res_query od.Events \
 	    od.Cache o.ExtLib od.Hosts o.Resolver \
 	    od.res_comp od.res_init od.res_mkquer  \
 	    od.StrCaseCmp Stubs.o od.SWI
-LIBS      = ${DESKLIB} ${INETLIB} ${SOCKLIB} ${UNIXLIB}
+LIBS      = ${DESKLIB} ${INETLIB} ${SOCKLIB} ${UNIXLIB} ${ASMUTILS}
 EXPORTS   =
 
 #
@@ -73,7 +75,7 @@ EXPORTS   =
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
 .c.od:;      ${CC} ${CFLAGS} -DDEBUG -o $@ $<
-.cmhg.o:;   ${CMHG} -o $@ $<
+.cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
 
 #
