@@ -1,73 +1,26 @@
-# Makefile for SharedSnd
+# Makefile for SharedSound
 #
+# ***********************************
+# ***    C h a n g e   L i s t    ***
+# ***********************************
+# When          Who     What
+# ----          ---     ----
+# 28-Jun-2001   BJGA    Created
 
-#
-# Paths
-#
-EXP_HDR = <export$dir>
-#
-# Generic options:
-#
-MKDIR   = cdir
-AS      = aasm
-CP      = copy
-RM      = remove
-WIPE    = -wipe
-CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
-CPFLAGS = ~cfr~v
-WFLAGS  = ~cfr~v
-
-#
-# Program specific options:
-#
 COMPONENT = SSound
-TARGET    = ${COMPONENT}
-SOURCE    = Source
-SL        = ${SOURCE}.o
-SSLIB     = ${SL}.Drivers ${SL}.Handler ${SL}.Linear ${SL}.Memory ${SL}.Module \
-            ${SL}.SampleRate ${SL}.SWIS ${SL}.Vars ${SL}.Volume
-BASICFILES= o.Debug o.Drivers o.Handler o.Linear o.Memory o.Module o.SampleRate o.SWIS \
-            o.Vars o.Volume o.SharedSoun o.GetVers
+TARGET    = SSound
+OBJS      = Gets.o
 
-#.o.c:
-#	 set tokenisefile $*
-#	 utils.detoken1; BASIC
-
-.c.o:
-	 set tokenisefile $*
-	 utils.token1; BASIC
-
-#
-# Generic rules:
-#
-rom: ${TARGET} 
-        @echo ${COMPONENT}: rom module built
-
-export: ${EXPORTS}
-        @echo ${COMPONENT}: export complete
-
-install_rom: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom module installed
-
-install: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: installed
+include Makefiles:StdTools
+include Makefiles:StdRules
+include Makefiles:ROMCModule
+include Makefiles:RAMCModule
 
 clean:
-        ${RM} ${TARGET}
-        ${WIPE} o.* ~cv
+        ${RM} o.Gets
+        ${WIPE} aof ${WFLAGS}
+        ${WIPE} rm ${WFLAGS}
+        ${WIPE} linked ${WFLAGS}
         @echo ${COMPONENT}: cleaned
-
-resources:
-        @echo ${COMPONENT}: resource files copied
-
-${TARGET}: ${BASICFILES}
-        Set MakeSSnd$Dir @
-        Run o.SharedSoun
-
-import: Debug.c Drivers.c Handler.c Linear.c Memory.c Module.c SampleRate.c SWIS.c Vars.c Volume.c SharedSoun.c
-	echo made text files
 
 # Dynamic dependencies:
