@@ -5430,7 +5430,7 @@ calc_w_status2
 ; quick check - if window is not open, clear 'top' bit and set bhandle to -1
 ;
         LDR     R0,[handle,#w_flags]
-        MOV     R4,#nullptr
+        MOV     R4,#nullptr                     ; initialise R4 to -1 in any case
 
         TST     R0,#ws_open
         BICEQ   R0,R0,#ws_top
@@ -5444,6 +5444,92 @@ calc_w_status2
         ORR     R0,R0,#ws_top
 
         MOV     R3,R1                           ; hold 'ignore' flags in R3
+
+      [ true
+        ; Scan the windows above us in our own stack; we only want to ignore our *own* panes.
+        ; bhandle needs to be either the window in front of us, or the first non-pane, depending upon R3.
+        ; Backwards in the list sense is higher in the window-stacking sense.
+        LDR     R1, [handle, #w_active_link + ll_backwards]
+lookw1
+        LDR     R2, [R1, #ll_backwards]
+        CMP     R2, #nullptr                    ; have we reached the front of our stack?
+        BEQ     lookw2
+
+        LDR     R14, [R1, #w_flags - w_active_link]
+        TST     R14, R3                         ; EQ => this window matches our criteria for bhandle
+        CMPEQ   R4, #nullptr                    ; have we already determined bhandle?
+        SUBEQ   R4, R1, #w_active_link          ; no, so remember bhandle
+        Rel     R4, R4, EQ
+        
+        TST     R14, #wf_isapane                ; we don't want to consider our own panes as stopping us from being on top
+        MOVNE   R1, R2
+        BNE     lookw1
+lookw2
+        ; Now we have set up R4, and R1 links the first non-pane window in front of us.
+        ; We're now ready to recurse up the window tree!
+        Push    "R4, handle"
+        MOV     handle, R0
+        BL      calcw_checkwindow
+        Pull    "R4, handle"
+
+calcw3
+        STR     R0, [handle, #w_flags]
+        STR     R4, [handle, #w_bhandle]
+        TST     R0, #ws_open
+
+        Pull    "R0,PC"
+
+calcw_checkwindow
+; Entry: R0 = window flags of original window
+;        R1 -> active link in higher window (may actually -> list header if we've reached the front of a stack)
+;        x0-y1 = bounding box of original window
+;        handle = window flags of original window, or those of its direct ancestor in this stack
+; Exit:  R0 has ws_top cleared if R1 window (or any window above it) overlapped original window
+        ENTRY
+        LDR     R2, [R1, #ll_backwards]
+        CMP     R2, #nullptr                    ; are we pointing at the list header?
+        BEQ     %FT20
+10
+        Push    "handle"
+        SUB     handle, R1, #w_active_link
+        BL      checkclip                       ; LT => intersection
+        Pull    "handle"
+        
+        BICLT   R0, R0, #ws_top                 ; if we've found an overlapping window, clear "uncovered" bit
+        MOVGE   R1, R2                          ; otherwise try the next window up
+        BLGE    calcw_checkwindow
+        EXIT
+
+20      ; R1 is pointing at the list header, we need to consider the next-highest window stack
+        LDR     R1, [R1, #ll_forwards]          ; get first window in stack
+        LDR     R1, [R1, #w_parent - w_active_link]
+        CMP     R1, #nullptr
+        EXIT    EQ                              ; if this was top-level stack, leave bit set and exit (we're uncovered!)
+
+        LDR     R14, [R1, #w_flags]
+        TST     R14, #ws_open
+        BICEQ   R0, R0, #ws_top                 ; if parent is closed, children cannot be seen, so clear bit and exit
+        EXIT    EQ
+
+        TST     handle, #wf_inborder
+        ADDNE   R2, R1, #w_x0
+        ADDEQ   R2, R1, #w_wax0
+        LDMIA   R2, {cx0, cy0, cx1, cy1}        ; cx0-cy1 now hold rectangle that original window is clippped to by new ancestor
+
+        CMP     x0, cx0
+        CMPGE   y0, cy0
+        CMPGE   cx1, x1
+        CMPGE   cy1, y1                         ; GE => original window isn't clipped by new ancestor
+        BICLT   R0, R0, #ws_top
+        EXIT    LT                              ; if clipped, clear bit and exit
+
+        MOV     handle, R14                     ; remember the flags for this direct ancestor
+        LDR     R1, [R1, #w_active_link + ll_backwards]
+        BL      calcw_checkwindow               ; and try the new ancestor's higher siblings
+        EXIT
+
+      |
+        ; Old code that doesn't concern itself with aunts, great-aunts etc., nor clipping by ancestors
         LDR     R2,[handle,#w_active_link+ll_backwards]
 lookw1
         LDR     R1,[R2,#ll_backwards]
@@ -5478,6 +5564,8 @@ calcw3
         TST     R0,#ws_open
 
         Pull    "R0,PC"
+      ]
+
       |
 
         Push    "R0,LR"

@@ -500,6 +500,15 @@ repollwimp
         CMP     R2,#0
         BGT     returnmessage
 ;
+      [ MultiClose
+        LDR     R2, nextwindowtoiconise
+        TEQ     R2, #0
+        BLNE    iconisenextwindow
+        LDR     R2, headpointer         ; are there any outstanding messages now?
+        CMP     R2, #0
+        BGT     returnmessage
+      ]
+;
         MOV     R14,#0
         STR     R14,sender              ; all Wimp messages from now on
         STR     R14,hotkeyptr           ; reset this if no more messages
@@ -2873,9 +2882,6 @@ wicon_move
         B       trykeys
 
 wicon_toggle
-	[ BounceClose
-	STR	R2,mousebuttons		; Horrible hack so adjust-toggle still works properly
-	]
         MOV     R1,#wf_isapane          ; we want to ignore panes
         BL      go_get_window_state     ; 2nd entry point - uses R1
         LDR     R14,[handle,#w_flags]
@@ -2985,7 +2991,11 @@ wicon_toggle
 ;
         BL      calc_w_status           ; ensure bhandle up-to-date
 
+      [ BounceClose
+        LDR     R2,pending_buttons      ; Horrible hack so adjust works even with release buttons
+      |
         LDR     R2,mousebuttons         ; bhandle depends on adjust button
+      ]
 
 openwindow_checkbuttons
         TST     R2,#button_right        ; if adjust used, open at same level,
@@ -3044,9 +3054,36 @@ openwindow
 
       [ IconiseButton
 wicon_iconise
-	Push	"r0-r4"
-	MOV     r1, #0                  ; NOT a shift+click on close icon
-	B	%FT20
+        Push	"r0-r4"
+      [ MultiClose
+        TST     R2, #button_right       ; Ctrl-Alt-*Adjust* isn't special
+        MOVNE   R1, #0                  ; flag as due to iconise button
+        BNE     %FT20
+
+        MOV     R0, #121
+        MOV     R1, #&81                ; Scan keyboard for Ctrl key
+        SWI     XOS_Byte
+        MOV     R4, R1
+        MOV     R1, #&82                ; Scan keyboard for Alt key
+        SWI     XOS_Byte
+        TEQ     R4, #&FF
+        TEQEQ   R1, #&FF
+        MOVNE   R1, #0                  ; flag as due to iconise button
+        BNE     %FT20
+
+        ; Iconise all top-level windows that have close buttons (except hotkey windows)
+        LDR     handle, activewinds + lh_forwards
+        SUB     R0, handle, #w_active_link
+        Rel     R0, R0
+        STR     R0, nextwindowtoiconise
+        BL      iconisenextwindow
+        Pull    "R0-R4"
+        B       trykeys
+
+      |
+        MOV     R1, #0                  ; NOT a shift+click on close icon
+        B	%FT20
+      ]
       ]
 
 wicon_quit
@@ -3063,6 +3100,53 @@ wicon_quit
         Pull    "r0-r4",NE
         BNE     not_alt
 
+      [ MultiClose
+        MOV     R0, #121
+        MOV     R1, #&81                ; Scan keyboard for Ctrl key
+        SWI     XOS_Byte
+        MOV     R4, R1
+        MOV     R1, #&82                ; Scan keyboard for Alt key
+        SWI     XOS_Byte
+        TEQ     R4, #&FF
+        TEQEQ   R1, #&FF
+        BNE     %FT66
+
+      [ BounceClose
+        LDR     R2, pending_buttons
+        STR     R2, mousebuttons        ; The usual Horrible Hack
+      ]
+        ; Close all windows at this level that have close buttons (except hotkey windows)
+        LDR     handle, [handle, #w_parent]
+        CMP     handle, #nullptr
+        LDREQ   handle, activewinds + lh_backwards
+        LDRNE   handle, [handle, #w_children + lh_backwards]
+01      LDR     R0, [handle, #ll_backwards]
+        CMP     R0, #nullptr
+        BEQ     %FT02
+        LDR     R14, [handle, #w_flags - w_active_link]
+        TST     R14, #wf_icon2
+        ANDNE   R14, R14, #wf_grabkeys
+        TEQNE   R14, #wf_grabkeys
+        MOVEQ   handle, R0
+        BEQ     %BT01
+        ; Found such a window; send close request message
+        Push    "R0"
+        SUB     handle, handle, #w_active_link
+        SUB     sp, sp, #4
+        Rel     R2, handle
+        STR     R2, [sp]
+        MOV     R0, #Close_Window_Request
+        MOV     R1, sp
+        BL      int_sendmessage_fromwimp
+        ADD     sp, sp, #4
+        Pull    "handle"
+        B       %BT01
+02        
+        Pull    "R0-R4"
+        B       trykeys
+66
+      ]
+
         MOV     R0,#121                 ; Scan keyboard for shift key
         MOV     R1,#&80
         SWI     XOS_Byte
@@ -3078,33 +3162,139 @@ wicon_quit
         Pull    "r0-r4",NE
         BNE     trykeys
         ]
-        
-        [ Version >= 393 :LAND: IconiseButton
 20
+      [ MultiClose
+        LDR     r2, mousexpos
+        LDR     r4, mouseypos
+      ]
+        BL      sendiconisemessages
+        Pull    "r0-r4"
+        B       trykeys
+
+not_alt
+        [ StickyMenus
+;        LDR     R0,[handle,#w_taskhandle]
+;        CMP     R0,#-1
+;        BNE     %FT05
+        LDR     R14,menuSP
+        CMP     R14,#-4
+        BEQ     %FT05                           ; no menu open
+
+        LDR     R14,menuhandles
+        Abs     R14,R14
+        TEQ     handle,R14
+
+        BNE     %FT02
+        BL      menusdeleted
+        MOVVC   R0,#-4
+        BLVC    closemenus
+        B       nothing                         ; swallow it.
+02
+        LDR     R14,menuSP
+        ADD     R14,R14,#4
+        ADR     R0,menuhandles
+03
+        LDR     R1,[R0,R14]
+        Abs     R1,R1
+        TEQ     R1,handle
+        BEQ     %FT04
+        SUBS    R14,R14,#4
+        BGE     %BT03
+        B       %FT05
+04
+        SUB     R0,R14,#4
+        BL      closemenus              ; close down to one above
+        B       nothing
+05
+        ]
+	[ BounceClose
+	STR	R2,mousebuttons		; Horrible hack so apps can tell that adjust was pressed
+	]
+        STR     R3,[userblk]
+        MOV     R0,#Close_Window_Request
+        B       ExitPoll
+
+      [ MultiClose
+iconisenextwindow
+        ENTRY   "R0-R4,handle"
+        LDR     handle, nextwindowtoiconise
+        BL      checkhandle             ; make sure it's still valid
+        MOV     R0, PC
+        TST     R0, #V_bit
+        LDREQ   R14, [handle, #w_flags]
+        ANDEQ   R0, R14, #ws_open
+        CMPEQ   R0, #ws_open            ; and open
+        ADDEQ   handle, handle, #w_active_link
+        LDRNE   handle, activewinds + lh_forwards ; if not, restart from top
+01
+        LDR     R0, [handle, #ll_forwards]
+        CMP     R0, #nullptr             ; have we reached the header?
+        MOVEQ   R0, #0
+        STREQ   R0, nextwindowtoiconise
+        EXIT    EQ                       ; stop if we have
+        LDR     R14, [handle, #w_flags - w_active_link]
+        TST     R14, #wf_backwindow
+        MOVNE   R0, #0
+        STRNE   R0, nextwindowtoiconise
+        EXIT    NE                       ; don't re-iconise already-iconised windows!
+        TST     R14, #wf_icon2
+        ANDNE   R14, R14, #wf_grabkeys
+        TEQNE   R14, #wf_grabkeys
+        MOVEQ   handle, R0
+        BEQ     %BT01
+        ; Found a suitable window; work out suitable entry conditions for sendiconisemessages
+        Push    "R0"
+        SUB     handle, handle, #w_active_link
+        MOV     R0, #iconposn_iconise
+        BL      calc_w_iconposn          ; x0-y1 = button bbox
+        ADD     R2, x0, x1
+        ADD     R4, y0, y1
+        MOV     R2, R2, LSR#1
+        MOV     R4, R4, LSR#1
+        MOV     R1, #0
+        Rel     R3, handle
+        BL      sendiconisemessages
+        ; Now store the next window to process (if any)
+        Pull    "handle"
+        LDR     R0, [handle, #ll_forwards]
+        CMP     R0, #nullptr
+        MOVEQ   R0, #0
+        SUBNE   R0, handle, #w_active_link
+        Rel     R0, R0, NE
+        STR     R0, nextwindowtoiconise
+        EXIT
+      ]
+
+sendiconisemessages
+; Entry: R1 = &FF => caused by click on close icon; R1 = 0 => caused by click on iconise icon
+;        R3 = relative window handle to send
+; and if MultiClose enabled,
+;        R2 = mouse x
+;        R4 = mouse y
+        ENTRY
+
+        [ Version >= 393 :LAND: IconiseButton
         ; Send a Message_IconizeAt (RML)
-        Push    "r0-r4"
+        Push    "r3"
         SUB     sp, sp, #48
 
         CMP     r1, #&FF                 ; If a Shift+Click on close
         MOVEQ   r0, #1                   ; then bit 0 of flags is set
         MOVNE   r0, #0
-        STR     r0, [sp, #36]
+        STR     r0, [sp, #ms_data+16]
         
         MOV     r1, sp
-        [ true
+      [ MultiClose
+        STR     r2, [r1, #ms_data+8]
+        SUB     r4, r4, #32+17
+        STR     r4, [r1, #ms_data+12]
+      |
         LDR     r0, mousexpos
         STR     r0, [r1,#ms_data+8]
         LDR     r0, mouseypos
         SUB     r0, r0, #(32+17)
         STR     r0, [r1,#ms_data+12]
-        |
-        SWI     Wimp_GetPointerInfo        
-        LDR     r0, [r1]
-        STR     r0, [r1, #28]            ; x co-ord
-        LDR     r0, [r1, #4]
-        SUB     r0, r0, #(32+17)
-        STR     r0, [r1, #32]            ; y co-ord
-        ]
+      ]
         MOV     r0, #40
         STR     r0, [r1,#ms_size]        ; size
         MOV     r0, #0
@@ -3114,7 +3304,11 @@ wicon_quit
         STR     r3, [r1, #ms_data+0]     ; window handle
         
         ; Work out task handle
+      [ MultiClose
+        LDR     R2, [handle, #w_taskhandle]
+      |
         LDR     r2, taskhandle           
+      ]
         LDR     r4, [wsptr, r2]          ; add in version bits (if alive)
         TST     r4, #task_unused
         LDREQ   r4, [r4, #task_flagword]
@@ -3127,9 +3321,7 @@ wicon_quit
         BL      int_sendmessage_fromwimp
         
         ADD     sp, sp, #48
-        Pull    "r0-r4"
-        |
-20
+        Pull    "r3"
         ]
                                                 ; Shift-quit, send message_Iconize.
         MOV     R14,#ms_data+8+20       ; size of block (Window,Task,20 byte from title ).
@@ -3138,7 +3330,14 @@ wicon_quit
         MOV     R1,sp
         STR     R3,[R1,#ms_data]
 
+      [ MultiClose
+        LDR     R2, [handle, #w_taskhandle]
+        LDR     R14, [handle, #w_titleflags]
+        TST     R14, #if_indirected
+        Task    "R2", NE, "Iconise: reading indirected title string"
+      |
         LDR     R2,taskhandle
+      ]
         LDR     R14,[wsptr,R2]          ; add in version bits (if alive)
         TST     R14,#task_unused
         LDREQ   R14,[R14,#task_flagword]
@@ -3184,51 +3383,7 @@ wicon_quit
         BL      int_sendmessage_fromwimp
         ADD     sp,sp,#(ms_data+8+20)     ; correct stack
 
-       Pull     "r0-r4"
-       B        trykeys
-
-not_alt
-        [ StickyMenus
-;        LDR     R0,[handle,#w_taskhandle]
-;        CMP     R0,#-1
-;        BNE     %FT05
-        LDR     R14,menuSP
-        CMP     R14,#-4
-        BEQ     %FT05                           ; no menu open
-
-        LDR     R14,menuhandles
-        Abs     R14,R14
-        TEQ     handle,R14
-
-        BNE     %FT02
-        BL      menusdeleted
-        MOVVC   R0,#-4
-        BLVC    closemenus
-        B       nothing                         ; swallow it.
-02
-        LDR     R14,menuSP
-        ADD     R14,R14,#4
-        ADR     R0,menuhandles
-03
-        LDR     R1,[R0,R14]
-        Abs     R1,R1
-        TEQ     R1,handle
-        BEQ     %FT04
-        SUBS    R14,R14,#4
-        BGE     %BT03
-        B       %FT05
-04
-        SUB     R0,R14,#4
-        BL      closemenus              ; close down to one above
-        B       nothing
-05
-        ]
-	[ BounceClose
-	STR	R2,mousebuttons		; Horrible hack so apps can tell that adjust was pressed
-	]
-        STR     R3,[userblk]
-        MOV     R0,#Close_Window_Request
-        B       ExitPoll
+        EXIT
 
 wicon_scup
         TST     R2,#button_right
