@@ -19,7 +19,7 @@ RM	= remove
 WIPE	= -wipe
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -zM -zps1 -Wp -ff ${INCLUDES} -DDONT_BUILD_RESOURCES -DSTRING_SCRIPT ${DFLAGS}
+CFLAGS  = -c -depend !Depend -zM -zps1 -Wp -ff ${INCLUDES} -DDONT_BUILD_RESOURCES -DSTRING_SCRIPT ${DFLAGS} ${DEVICE}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 Datatoaofflags = -d "" -l _len -dp -s -p
