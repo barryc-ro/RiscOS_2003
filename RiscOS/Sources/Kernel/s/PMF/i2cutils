@@ -25,9 +25,6 @@
 
 PhysChecksum	*	(((CheckSumCMOS + &30) :MOD: &F0) + &10)
 
-PollMax		*	150	; Number of times to poll for an Ack (increase if you clock faster - need to
-                                ; allow 5ms for write cycle).
-
 ; Device addresses
 RTCAddress		*	&a0     ; traditional RTC / 240 byte CMOS
 E2ROMAddress		*	&a8     ; 24C08 device - 512 byte or 1K
@@ -37,18 +34,6 @@ E2ROMAddress4K          *       &a4     ; 24C32 device - 4K (top 1K protectable)
 E2ROMAddress8K          *       &a2     ; 24C64 device - 8K (top 2K protectable)
 E2ROMAddress16K         *       &a8     ; 24C128 device - 16K
 E2ROMAddress32K         *       &a6     ; 24CS256 device - 32K (top 2K possibly OTP)
-
-; Choose a lower limit on the number of ticks per clock phase based on the
-; MaxI2Cspeed variable defined in Hdr:Machine.<Machine>
-  [ MaxI2Cspeed >= 1000
-I2Cticks        *       1
-  |
-  [ MaxI2Cspeed >= 400
-I2Cticks        *       3
-  |
-I2Cticks        *       10
-  ]
-  ]
 
 
 ; *****************************************************************************
@@ -85,439 +70,14 @@ BCDToHex ROUT
 	SUB	R0, R0, R14, LSL #1		; R0 := R0 - x*6 = x*10
 	Pull	"PC"
 
-; *****************************************************************************
-;
-;	SetC1C0 - Set clock and data lines to values in R1 and R0 respectively
-;
-; out:	ATPCS
-;
-
-SetC1C0 ROUT
-        Push    "R9,R14"
- [ HAL
-        AddressHAL
-        MOV     R2, R1
-        MOV     R1, R0
-        MOV     R0, #0
-        CallHAL HAL_IICSetLines
- |
-	ADD	R0, R0, R1, LSL #1	; R0 := C0 + C1*2
-
-	MOV	R2, #0				; prepare to index soft copy
-	LDRB	R1, [R2, #IOCControlSoftCopy]	; read soft copy
-	BIC	R1, R1, #&03			; clear clock and data
-	ORR	R0, R1, R0			; put in new clock and data
-	ORR	R0, R0, #&C0			; make sure two test bits are
-						; always set to 1 !
-	STRB	R0, [R2, #IOCControlSoftCopy]	; store back to soft copy
-
-	MOV	R2, #IOC
-	STRB	R0, [R2, #IOCControl]
- ]
-
-      [ E2ROMSupport
-        MOV	R0, #0
-        LDRB	R0, [R0, #NVRamSpeed]
-        TEQ     R0, #0
-        MOVEQ   R0, #10                         ; default value if speed not checked yet
-      |
-        MOV     R0, #10                         ; default to slowest value if we have E2ROMSupport is false
-      ]
-	BL	DoMicroDelay
-
-        Pull    "R9,PC"
 
 ; *****************************************************************************
-;
-;	ReadC1C0 - Read clock and data lines to  R1 and R0 respectively
-;
-; out:	R0, R1 updated - otherwise ATPCS
-;
 
-ReadC1C0 ROUT
- [ HAL
-        Push    "sb,lr"
-        AddressHAL
-        CallHAL HAL_IICReadLines
-        Pull    "sb,pc"
- |
-        MOV     a3, #IOC
-        LDRB    a1, [a3, #IOCControl]
-        MOV     a2, a1, LSR #1
-        AND     a1, a1, #1
-        AND     a2, a2, #1
-        MOV     pc, lr
- ]
-
-; *****************************************************************************
-;
-;	DoMicroDelay - Delay for >= R0/2 microseconds
-;
-; in:	R0 = time delay in 1/2 microsecond units
-;	R2 -> IOC
-;	On ARM600, we may or may not be in a 32-bit mode
-;
-; out:	R0,R1 corrupted
-;
-
-DoMicroDelay ROUT
-  [ HAL
-        Push    "a3,a4,sb,ip,lr"
-        AddressHAL
-        MOVS    a1, a1, LSR #1
-        ADC     a1, a1, #0
-        CallHAL HAL_CounterDelay
-        Pull    "a3,a4,sb,ip,pc"
-  |
+HTBS9   ROUT
         Push    R14
-	STRB	R0, [R2, #Timer0LR]	; copy counter into output latch
-	LDRB	R1, [R2, #Timer0CL]	; R1 := low output latch
-10
-	STRB	R0, [R2, #Timer0LR]	; copy counter into output latch
-	LDRB	R14, [R2, #Timer0CL]	; R14 := low output latch
-	TEQ	R14, R1			; unchanged ?
-	BEQ	%BT10			; then loop
-	MOV	R1, R14			; copy anyway
-	SUBS	R0, R0, #1		; decrement count
-	BNE	%BT10			; loop if not finished
-
-	Pull	PC
-  ]
-
-	LTORG
-
-; *****************************************************************************
-;
-;	ClockData - Clock a bit of data down the IIC bus
-;
-; in:	R0 = data bit
-;
-; out:	All registers preserved, including PSR
-;
-
-ClockData ROUT
- [ No26bitCode
-	Push	"R0-R3,R4,R5,R12,R14"
-        MRS     R4,CPSR
- |
-	Push	"R0-R3,R5,R12,R14"
- ]
-        MOV     R5, R0
-
-	MOV	R1, #0			; Clock lo
-	BL	SetC1C0
-
- [ No26bitCode
-        ORR     R1,R4,#I32_bit
-        MSR     CPSR_c,R1
- |
-; Disable interrupts to ensure clock hi with data hi is only transient
-; This allows BMU to detect idle condition by polling
-
-	MOV	R1,PC
-	ORR	R1,R1,#I_bit
-	TEQP	PC,R1
- ]
-        MOV     R0, R5
-	MOV	R1, #1			; Clock hi
-	BL	SetC1C0
-
-; Delay here must be >= 4.0 microsecs
-
-        MOV     R0, R5
-	MOV	R1, #0			; Clock lo
-	BL	SetC1C0
-
- [ No26bitCode
-        MSR     CPSR_cf,R4              ; Restore interrupts
-        Pull    "R0-R3,R4,R5,R12,PC"
- |
-	Pull	"R0-R3,R5,R12,PC",,^
- ]
-
-ClockData0 ROUT				; Clock a zero bit
-	Push	"R0, R14"
-	MOV	R0, #0
-	BL	ClockData               ; preserves PSR
-	Pull	"R0, PC"
-
-; *****************************************************************************
-;
-;	Start - Send the Start signal
-;
-; out:	All registers preserved, including PSR
-;
-
-Start	ROUT
- [ No26bitCode
-	Push	"R0-R3,R4,R12,R14"
-        MRS     R4, CPSR
- |
-	Push	"R0-R3,R12,R14"
- ]
-
-	MOV	R0, #1			; clock HI, data HI
-	MOV	R1, #1
-	BL	SetC1C0
-
-; Delay here must be >= 4.7 microsecs (1.3 for fast device)
-
-	MOV	R0, #0			; clock HI, data LO
-	MOV	R1, #1
-	BL	SetC1C0
-
-; Hold start condition for BMU
-        LDR	R0, =ZeroPage
-        LDRB	R0, [R0, #NVRamSpeed]
-
-    	CMP 	R0, #10
-	MOVGE	R2, #IOC
-        MOVGE   R0, #10
-	BLGE	DoMicroDelay
-
-; Delay here must be >= 4.0 microsecs (0.6 for fast device)
-
-	MOV	R0, #0			; clock LO, data LO
-	MOV	R1, #0
-	BL	SetC1C0
-
- [ No26bitCode
-        MSR     CPSR_f, R4
-	Pull	"R0-R3,R4,R12,PC"
- |
-	Pull	"R0-R3,R12,PC"
- ]
-
-; *****************************************************************************
-;
-;	Acknowledge - Check acknowledge after transmitting a byte
-;
-; out:	All registers preserved
-;	V=0 => acknowledge received
-;	V=1 => no acknowledge received
-;
-
-Acknowledge ROUT
-	Push	"R0-R3,R12,R14"
-
-	MOV	R0, #1			; clock LO, data HI
-	MOV	R1, #0
-	BL	SetC1C0
-
- [ {TRUE}
-; Disable interrupts to ensure clock hi with data hi is only transient
-; This allows BMU to detect idle condition by polling
-
-        MRS     R1,CPSR
-        Push    "R1"
-        ORR     R1,R1,#I32_bit
-        MSR     CPSR_c,R1
- ]
-	MOV	R0, #1			; clock HI, data HI
-	MOV	R1, #1
-	BL	SetC1C0
-
-; Delay here must be >= 4.0 microsecs (0.6 for fast device)
-
-        BL      ReadC1C0
-        MOV     R2, R0
-
-	MOV	R0, #0
-	MOV	R1, #0			; clock lo
-	BL	SetC1C0
-
- [ {TRUE}
-	Pull	"R1"
-	MSR     CPSR_c,R1
- ]
-
-	TST	R2, #1			; should be LO for correct acknowledge
-        MRS     R2, CPSR
-	BICEQ	R2, R2, #V_bit		; clear V if correct acknowledge
-	ORRNE	R2, R2, #V_bit		; set V if no acknowledge
-        MSR     CPSR_f, R2
-
-	Pull	"R0-R3,R12,PC"
-
-; *****************************************************************************
-;
-;	Stop - Send the Stop signal
-;
-; out:	All registers preserved, including PSR
-;
-
-Stop	ROUT
- [ No26bitCode
-	Push	"R0-R3,R4,R12,R14"
-        MRS     R4, CPSR
- |
-	Push	"R0-R3,R12,R14"
- ]
-
-	MOV	R0, #0			; clock HI, data LO
-	MOV	R1, #1
-	BL	SetC1C0
-
-; Delay here must be >= 4.0 microsecs (0.6 for fast device)
-
-	MOV	R0, #1			; clock HI, data HI
-	MOV	R1, #1
-	BL	SetC1C0
-
- [ No26bitCode
-        MSR     CPSR_f, R2
-	Pull	"R0-R3,R4,R12,PC"
- |
-	Pull	"R0-R3,R12,PC",,^
- ]
-
-; *****************************************************************************
-;
-;	TXByte - Transmit a byte
-;
-; in:	R0 = byte to be transmitted
-;
-; out:	All registers preserved, including PSR
-;
-
-TXByte	ROUT
- [ No26bitCode
-	Push	"R0-R3,R14"
-        MRS     R3, CPSR
- |
-	Push	"R0-R2,R14"
- ]
-	MOV	R1, #&80		; 2^7 the bit mask
-	MOV	R2, R0			; byte goes into R2
-10
-	ANDS	R0, R2, R1		; zero if bit is zero
-	MOVNE	R0, #1
-	BL	ClockData		; send the bit
-	MOVS	R1, R1, LSR #1
-	BNE	%BT10
- [ No26bitCode
-        MSR     CPSR_f, R3
-	Pull	"R0-R3,PC"
- |
-	Pull	"R0-R2,PC",,^
- ]
-
-; *****************************************************************************
-;
-;	StartTXPollAck - Transmit start and a byte and poll for acknowledge
-;
-;	This is intended for devices with a slow internal write cycle which
-;	don't ack until the write cycle is finished ( eg ATMEL AT24C01A/x )
-;
-; in:	R0 = byte to be transmitted
-;
-; out:	All registers preserved, including PSR
-;
-
-StartTXPollAck	ROUT
- [ No26bitCode
-	Push	"R1,R3,R14"
-        MRS     R3, CPSR
- |
-	Push	"R1,R14"
- ]
-	MOV	R1, #0
-10
-	INC	R1
-	CMP	R1, #PollMax
-	Pull	"R1,pc", EQ
-
-	BL	Start
-	BL	TXByte
-	BL	Acknowledge
-	BVS	%BT10
- [	{FALSE}
-	BREG	R1, "i2c tries:"
- ]
- [ No26bitCode
-        MSR     CPSR_f, R3
-	Pull	"R1,R3,PC"
- |
-	Pull	"R1,pc",,^
- ]
-
-; *****************************************************************************
-;
-;	RXByte - Receive a byte
-;
-; out:	R0 = byte received
-;	All other registers preserved, including PSR
-;
-
-RXByte	ROUT
- [ No26bitCode
-	Push	"R1-R6,R12,R14"
-        MRS     R5, CPSR
- |
-	Push	"R1-R4, R6, R12, R14"
- ]
-	MOV	R6, #0			; byte:=0
-	MOV	R4, #7
-
-	MOV	R0, #1			; clock LO, data HI
-	MOV	R1, #0
-	BL	SetC1C0
-10
- [ {TRUE}
-; Disable interrupts to ensure clock hi with data hi is only transient
-; This allows BMU to detect idle condition by polling
-
-        MRS     R1,CPSR
-        Push    "R1"
-        ORR     R1,R1,#I32_bit
-        MSR     CPSR_c,R1
- ]
-	MOV	R0, #1			; pulse clock HI
-	MOV	R1, #1
-	BL	SetC1C0
-
-        BL      ReadC1C0
-        ADD     R6, R0, R6, LSL #1      ; byte:=byte*2+ SDA
-
-	MOV	R0, #1			; return clock LO
-	MOV	R1, #0
-	BL	SetC1C0
-
- [ {TRUE}
-	Pull	"R1"
-	MSR     CPSR_c,R1
- ]
-	SUBS	R4, R4, #1
-	BCS	%BT10
-
-	MOV	R0, R6			; return the result in R0
- [ No26bitCode
-        MSR     CPSR_f, R5
-	Pull	"R1-R6, R12, PC"
- |
-	Pull	"R1-R4, R6, R12, PC",,^
- ]
-
-; *****************************************************************************
-
-HTBTA	ROUT
-	Push	R14
-	BL	HexToBCD
-	BL	TXAck
-	Pull	PC
-
-TXAck	ROUT
-	Push	R14
-	BL	TXByte
-	BL	Acknowledge
-	Pull	PC
-
-CD0RBTH ROUT
-	Push	R14
-	BL	ClockData0
-	BL	RXByte
-	BL	BCDToHex
-	Pull	PC
+        BL      HexToBCD
+        STRB    R0, [R9], #1
+        Pull    PC
 
 ; *****************************************************************************
 ;
@@ -596,23 +156,27 @@ Write
 15
 
   [ HAL
-    	Push	"R12,sb"
+    	Push	"R2,R12,sb"
     	AddressHAL
-    	MOV 	R12, R2
     	CallHAL	HAL_NVMemoryType
     	AND 	R0, R0, #NVMemoryFlag_Provision
     	TEQ 	R0, #NVMemoryFlag_None
 
     	; If there's no NVmemory, all we have is the internal cache.
-    	Pull 	"R12,sb", EQ
+    	Pull 	"R2,R12,sb", EQ
 	Pull	"R0-R4,PC", EQ
 
     	TEQ 	R0, #NVMemoryFlag_HAL
     	BNE 	%FT20	    	    	; Go and do IIC stuff.
 
     	; Make the HAL call - we have to write the data into a buffer.
+        Pull    "R0"
     	Push	"R3"
-    	MOV 	R0, R12
+    	MOV 	R1, sp
+    	MOV 	R2, #1
+    	CallHAL	HAL_NVMemoryWrite
+        STR     R4, [sp]
+        MOV     R0, #PhysChecksum
     	MOV 	R1, sp
     	MOV 	R2, #1
     	CallHAL	HAL_NVMemoryWrite
@@ -632,20 +196,21 @@ Write
 	MOV	R1, #RTCAddress
  ]
 
-	MOV	R0, R1			; device address for write
-	BL	StartTXPollAck
 
-        TST     R1, #&100               ; 2-byte address?
-        MOVNE   R0, R2, LSR #8          ; offset (MSB)
-        BLNE    TXAck
+        AND     R0, R1, #&FF            ; device address for write
+        ORR     R0, R0, #1:SHL:29       ; retry
+        TST     R1, #&100               ; NE if two byte offset
+        SUB     R13, R13, #4
+        MOV     R14, R13
+        MOVNE   R1, R2, LSR #8
+        STRNEB  R1, [R14], #1           ; offset (MSB)
+        STRB    R2, [R14], #1           ; offset (LSB)
+        STRB    R3, [R14], #1           ; data
+        MOV     R1, R13
+        SUB     R2, R14, R13
+        BL      IIC_Op
+        ADD     R13, R13, #4
 
-	AND	R0, R2, #&FF		; offset (LSB)
-	BL	TXAck
-
-	MOV	R0, R3			; data
-	BL	TXAck
-
-	BL	Stop
 	[ ChecksumCMOS
 	TST	R4, #&1000000		; loop again to write new checksum
 	MOV	R3, R4
@@ -866,31 +431,45 @@ WriteSubBlock ROUT
 	MOV	R1, #RTCAddress
   ]
 
-	MOV	R2, R0			; save the offset
-	MOV	R0, R1			; device address for write
-	BL	StartTXPollAck
-
+        MOV     R2, R0                  ; save the offset
+        SUB     R13, R13, #12*2+4
+        MOV     R14, R13
         TST     R1, #&100               ; 2-byte address?
-        MOVNE   R0, R2, LSR #8          ; offset (MSB)
-        BLNE    TXAck
+        MOVNE   R0, R2, LSR #8
+        STRNEB  R0, [R14], #1           ; offset (MSB)
+        STRB    R2, [R14], #1           ; offset (LSB)
 
-	AND	R0, R2, #&FF		; offset (LSB)
-	BL	TXAck
+        SUB     R14, R14, R13
+        STR     R14, [R13, #12]         ; transfer 1 length
 
-        Pull    "R0-R2"
+        AND     R14, R1, #&FF
+        ORR     R0, R14, #1:SHL:29      ; (retry)
+        STR     R0, [R13, #4]           ; transfer 1 address
+        ORR     R14, R14, #1:SHL:31     ; (no repeated start)
+        STR     R14, [R13, #16]         ; transfer 2 address
+        STR     R13, [R13, #8]          ; transfer 1 data
+
+        ADD     R14, R13, #12*2+4
+        LDMIA   R14, {R0-R2}
         SUB     R5, R3, R0              ; R5 = bytes being written
         ADD     R0, R0, R5              ; update return R0
         SUB     R2, R2, R5              ; update return R2
-        Push    "R0,R2"
+        STMIB   R14, {R0,R2}
+
+        STR     R1, [R13, #20]          ; transfer 2 data
+        STR     R5, [R13, #24]          ; transfer 2 length
+        ADD     R0, R13, #4
+        MOV     R1, #2
+        BL      IIC_OpV
+
+        LDR     R1, [R13, #20]          ; recover data pointer
+        ADD     R13, R13, #12*2+4+4
 20
         LDRB    R0, [R1], #1
-        ADD     R6, R6, R0              ; update checksum counter
-        BL      TXAck
         SUBS    R5, R5, #1
+        ADD     R6, R6, R0              ; update checksum counter
         BNE     %BT20
                                         ; V clear
-	BL	Stop                    ; preserves flags
-
         MOV     R4, R6
 
 	Pull	"R0,R2,R3,R5,R6,PC"
@@ -987,31 +566,27 @@ Read
 	MOV	R1, #RTCAddress
   ]
 
-	MOV	R2, R0			; save the offset
-	MOV	R0, R1			; device address for write
-	BL	StartTXPollAck
-
-        TST     R1, #&100               ; 2-byte address?
-        MOVNE   R0, R2, LSR #8          ; offset (MSB)
-        BLNE    TXAck
-
-	AND	R0, R2, #&FF		; offset (LSB)
-	BL	TXAck
-
-	BL	Start
-
-	ADD	R0, R1, #1		; device address for read
-	BL	TXAck
-
-	BL	RXByte			; returned in R0
-	MOV	R2, R0			; copy to R2 for now
-
-	MOV	R0, #1
-	BL	ClockData
-
-	BL	Stop
-
-	MOV	R0, R2			; return the result
+        SUB     R13, R13, #2*12+4
+        MOV     R14, R13
+        TST     R1, #&100
+        MOVNE   R2, R0, LSR #8
+        STRNEB  R2, [R14], #1           ; offset (MSB)
+        STRB    R0, [R14], #1           ; offset (LSB)
+        SUB     R14, R14, R13
+        STR     R13, [R13, #8]          ; transfer 1 data
+        STR     R14, [R13, #12]         ; transfer 1 length
+        AND     R14, R1, #&FF
+        ORR     R2, R14, #1:SHL:29      ; retry
+        STR     R2, [R13, #4]           ; transfer 1 address
+        ORR     R14, R14, #1            ; device address for read
+        STR     R14, [R13, #16]         ; transfer 2 address
+        ADD     R14, R13, #3
+        STR     R14, [R13, #20]         ; transfer 2 data
+        MOV     R14, #1
+        STR     R14, [R13, #24]         ; transfer 2 length
+        BL      IIC_OpV
+        LDRB    R0, [R13, #3]
+        ADD     R13, R13, #2*12+4
 
 	Pull	"R1,R2,PC"
 
@@ -1165,37 +740,43 @@ ReadSubBlock ROUT
 	MOV	R1, #RTCAddress
   ]
 
-	MOV	R2, R0			; save the offset
-	MOV	R0, R1			; device address for write
-	BL	StartTXPollAck
 
+        MOV     R2, R0                  ; save the offset
+        SUB     R13, R13, #12*2+4
+        MOV     R14, R13
         TST     R1, #&100               ; 2-byte address?
-        MOVNE   R0, R2, LSR #8          ; offset (MSB)
-        BLNE    TXAck
+        MOVNE   R0, R2, LSR #8
+        STRNEB  R0, [R14], #1           ; offset (MSB)
+        STRB    R2, [R14], #1           ; offset (LSB)
 
-	AND	R0, R2, #&FF		; offset (LSB)
-	BL	TXAck
+        SUB     R14, R14, R13
+        STR     R14, [R13, #12]         ; transfer 1 length
 
-	BL	Start
+        AND     R14, R1, #&FF
+        ORR     R0, R14, #1:SHL:29      ; retry
+        STR     R0, [R13, #4]           ; transfer 1 address
+        ORR     R14, R14, #1            ; device address for read
+        STR     R14, [R13, #16]         ; transfer 2 address
+        STR     R13, [R13, #8]          ; transfer 1 data
 
-	ADD	R0, R1, #1		; device address for read
-	BL	TXAck
-
-        Pull    "R0-R2"
+        ADD     R14, R13, #12*2+4
+        LDMIA   R14, {R0-R2}
         SUB     R5, R3, R0              ; R5 = bytes being read
         ADD     R0, R0, R5              ; update return R0
         SUB     R2, R2, R5              ; update return R2
-        Push    "R0,R2"
-20
-        BL      RXByte
-        STRB    R0, [R1], #1
-        SUBS    R5, R5, #1
-        MOVNE   R0, #0                  ; not done - ACK byte
-	MOVEQ   R0, #1                  ; done - no ACK
-	BL	ClockData
-        BNE     %BT20
-                                        ; V will be clear
-	BL	Stop
+        STMIB   R14, {R0,R2}
+
+        STR     R1, [R13, #20]          ; transfer 2 data
+        STR     R5, [R13, #24]          ; transfer 2 length
+        ADD     R0, R13, #4
+        MOV     R1, #2
+        BL      IIC_OpV
+
+        LDR     R1, [R13, #20]          ; recover data pointer
+        ADD     R1, R1, R5
+        ADD     R13, R13, #12*2+4+4
+
+        CLRV
 
 	Pull	"R0,R2,R3-R5,PC"
 
@@ -1297,43 +878,94 @@ ChecksumSubBlock ROUT
 15
         Push    "R0-R2"
         ADD     R0, R0, R4              ; R0 = physical address
+  [ HAL
+        ADD     R3, R3, R4
+    	Push	"sb"
+    	MOV 	R5, R0	    	    	; save address
+    	AddressHAL
+    	Push	"R1-R3,R12"
+    	CallHAL	HAL_NVMemoryType
+    	Pull	"R1-R3,R12"
+    	AND 	R0, R0, #NVMemoryFlag_Provision
+    	TEQ 	R0, #NVMemoryFlag_None
+
+        SUB     R14, R3, R5
+        LDMIB   R13, {R0-R2}
+        ADD     R0, R0, R14
+        MOV     R4, R1
+        SUB     R2, R2, R14
+        STMIB   R13, {R0-R2}
+
+    	; If there's no NVmemory, tough - we just return.
+    	Pull 	"sb", EQ
+	Pull	"R0-R5,PC", EQ
+
+    	TEQ 	R0, #NVMemoryFlag_HAL
+    	MOV 	R0, R5	    	    	; restore address
+    	BNE 	%FT17	    	    	; do IIC things.
+
+        Push    "R6"
+        MOV     R4, #0
+        MOV     R6, R3
+        SUB     R13, R13, #4
+16
+        MOV     R0, R5
+        MOV     R1, sp
+        MOV     R2, #1
+        CallHAL HAL_NVMemoryRead
+        LDRB    R14, [R13]
+        ADD     R4, R4, R14
+        ADD     R5, R5, #1
+        TEQ     R5, R6
+        BNE     %BT16
+        ADD     R13, R13, #4
+        Pull    "R6,sb"
+        Pull    "R0-R2"
+        ADD     R1,R1,R4
+        Pull    "R3-R5,PC"
+17
+  ]
   [	E2ROMSupport
 	BL	GetI2CAddress		; convert to device address and offset
   |
 	MOV	R1, #RTCAddress
   ]
 
-	MOV	R2, R0			; save the offset
-	MOV	R0, R1			; device address for write
-	BL	StartTXPollAck
-
+        MOV     R2, R0                  ; save the offset
+        SUB     R13, R13, #12*2+4
+        MOV     R14, R13
         TST     R1, #&100               ; 2-byte address?
-        MOVNE   R0, R2, LSR #8          ; offset (MSB)
-        BLNE    TXAck
+        MOVNE   R0, R2, LSR #8
+        STRNEB  R0, [R14], #1           ; offset (MSB)
+        STRB    R2, [R14], #1           ; offset (LSB)
 
-	AND	R0, R2, #&FF		; offset (LSB)
-	BL	TXAck
+        SUB     R14, R14, R13
+        STR     R14, [R13, #12]         ; transfer 1 length
 
-	BL	Start
+        AND     R14, R1, #&FF
+        ORR     R0, R14, #1:SHL:29      ; retry
+        STR     R0, [R13, #4]           ; transfer 1 address
+        ORR     R14, R14, #1            ; device address for read
+        ORR     R14, R14, #1:SHL:30     ; checksum only please
+        STR     R14, [R13, #16]         ; transfer 2 address
+        STR     R13, [R13, #8]          ; transfer 1 data
 
-	ADD	R0, R1, #1		; device address for read
-	BL	TXAck
-
-        Pull    "R0-R2"
+        ADD     R14, R13, #12*2+4
+        LDMIA   R14, {R0-R2}
         SUB     R5, R3, R0              ; R5 = bytes being read
         ADD     R0, R0, R5              ; update return R0
         SUB     R2, R2, R5              ; update return R2
-        Push    "R0,R2"
-20
-        BL      RXByte
-        ADD     R1, R1, R0
-        SUBS    R5, R5, #1
-        MOVNE   R0, #0                  ; not done - ACK byte
-	MOVEQ   R0, #1                  ; done - no ACK
-	BL	ClockData
-        BNE     %BT20
+        STMIB   R14, {R0,R2}
+        MOV     R4, R1                  ; remember checksum
 
-	BL	Stop
+        STR     R5, [R13, #24]          ; transfer 2 length
+        ADD     R0, R13, #4
+        MOV     R1, #2
+        BL      IIC_OpV
+
+        LDR     R1, [R13, #20]          ; read back checksum
+        ADD     R1, R1, R4              ; update checksum
+        ADD     R13, R13, #12*2+4+4
 
 	Pull	"R0,R2,R3-R5,PC"
 
@@ -1526,7 +1158,7 @@ MakeChecksum	ROUT
 ;
 
 SetTime ROUT
-	Push	"R4, R14"		; save registers
+	Push	"R4, R9, R14"		; save registers
 
  [ E2ROMSupport
 	MOV	R14, #0
@@ -1539,7 +1171,7 @@ SetTime ROUT
 
         BL      RegToRealTime
 
-        Pull    "R4, PC"
+        Pull    "R4, R9, PC"
  ]
 20
 ; write year to CMOS RAM
@@ -1558,54 +1190,68 @@ SetTime ROUT
 	Pull	"R1",EQ			; [no, then skip]
 	BEQ	%FT30
 
-	MOV	R0, #&01		; start at address 1
+	Pull	"R1"
+
+        SUB     R13, R13, #8
+        MOV     R9, R13
+        MOV     R0, #&01                ; offset 1
+        STRB    R0, [R9], #1
+        MOV     R0, R8                  ; centiseconds
+        BL      HTBS9
+        MOV     R0, R7                  ; seconds
+        BL      HTBS9
+        MOV     R0, R1                  ; minutes
+        BL      HTBS9
+        MOV     R0, R4                  ; hours
+        BL      HTBS9
+        Push    "R0-R2"
     [	E2ROMSupport
+	MOV	R0, #&01		; start at address 1
 	BL	GetI2CAddress		; convert to device address and offset
 	MOV	R0, R1			; write address
     |
 	MOV	R0, #RTCAddress
     ]
-	Pull	"R1"
-	BL	StartTXPollAck
-	MOV	R0, #&01		; offset 1
-	BL	TXAck
-	MOV	R0, R8			; centiseconds
-	BL	HTBTA
-	MOV	R0, R7			; seconds
-	BL	HTBTA
-	MOV	R0, R1			; minutes
-	BL	HTBTA
-	MOV	R0, R4			; hours
-	BL	HTBTA
-	BL	Stop
+        ORR     R0, R0, #1:SHL:29       ; retry
+        MOV     R1, R13
+        SUB     R2, R9, R13
+        BL      IIC_Op
+        Pull    "R0-R2"
+        ADD     R13, R13, #8
 
 30
 	CMP	R2, #-1			; are we writing date ?
 	BEQ	%FT40			; [no, then skip]
 
-	MOV	R0, #&05		; start at address 5
+        SUB     R13, R13, #8
+        MOV     R9, R13
+        MOV     R0, #&05                ; offset 5
+        STRB    R0, [R9], #1
+        MOV     R0, R2                  ; day of month
+        BL      HexToBCD
+        ORR     R0, R0, R5, LSL #6      ; year in bits 6,7; day in bits 0..5
+        STRB    R0, [R9], #1
+        MOV     R0, R3                  ; months
+        BL      HTBS9
+        Push    "R0-R2"
     [	E2ROMSupport
+	MOV	R0, #&05		; start at address 5
 	BL	GetI2CAddress		; convert to device address and offset
 	MOV	R0, R1			; write address
     |
 	MOV	R0, #RTCAddress
     ]
-	BL	StartTXPollAck
-	MOV	R0, #&05		; offset 5
-	BL	TXAck
-	MOV	R0, R2			; day of month
-	BL	HexToBCD
-	ORR	R0, R0, R5, LSL #6	; year in bits 6,7; day in bits 0..5
-	BL	TXAck
-	MOV	R0, R3			; months
-	BL	HTBTA
-	BL	Stop
+        ORR     R0, R0, #1:SHL:29       ; retry
+        MOV     R1, R13
+        SUB     R2, R9, R13
+        BL      IIC_Op
+        Pull    "R0-R2"
 
 40
 	MOV	R0, R4			; put hours back in R0
 	BL	RTCToRealTime
 
-	Pull	"R4, PC"
+	Pull	"R4, R9, PC"
 
 ; *****************************************************************************
 ;
@@ -1625,46 +1271,52 @@ SetTime ROUT
 
 ReadTime ROUT
 	Push	"R4, R14"
-
-	MOV	R0, #&01		; start at address 1
+        SUB     R13, R13, #12*2+8
     [	E2ROMSupport
+	MOV	R0, #&01		; start at address 1
 	BL	GetI2CAddress		; convert to device address and offset
 	MOV	R0, R1			; write address
     |
 	MOV	R0, #RTCAddress
     ]
-	BL	StartTXPollAck
-	MOV	R0, #&01		; offset 1
-	BL	TXAck
-	BL	Start
-    [	E2ROMSupport
-	ADD	R0, R1, #1		; read address
-    |
-	MOV	R0, #(RTCAddress+1)	; read address
-    ]
-	BL	TXAck
-	BL	RXByte
-	BL	BCDToHex
-	MOV	R8, R0			; centiseconds
-	BL	CD0RBTH
-	MOV	R7, R0			; seconds
-	BL	CD0RBTH
-	MOV	R1, R0			; minutes
-	BL	CD0RBTH
-	MOV	R4, R0			; hours
-	BL	ClockData0
-	BL	RXByte
-	AND	R0, R0, #&3F		; day of month (clear year bits)
-	BL	BCDToHex
-	MOV	R2, R0
-	BL	ClockData0
-	BL	RXByte
-	AND	R0, R0, #&1F		; month (clear day of week bits)
-	BL	BCDToHex
-	MOV	R3, R0
-	MOV	R0, #1
-	BL	ClockData
-	BL	Stop
+        ORR     R14, R0, #1:SHL:29      ; retry
+        STR     R14, [R13, #8]          ; transfer 1 address
+        ADD     R0, R0, #1
+        STR     R0, [R13, #20]          ; transfer 2 address
+        MOV     R0, #&01                ; offset 1
+        STRB    R0, [R13, #0]
+        STR     R13, [R13, #12]         ; transfer 1 data
+        STR     R0, [R13, #16]          ; transfer 1 length
+        ADD     R0, R13, #1
+        STR     R0, [R13, #24]          ; transfer 2 data
+        MOV     R0, #6
+        STR     R0, [R13, #28]          ; transfer 2 length
+
+        ADD     R0, R13, #8
+        MOV     R1, #2
+        BL      IIC_OpV
+
+        LDRB    R0, [R13, #1]
+        BL      BCDToHex
+        MOV     R8, R0                  ; centiseconds
+        LDRB    R0, [R13, #2]
+        BL      BCDToHex
+        MOV     R7, R0                  ; seconds
+        LDRB    R0, [R13, #3]
+        BL      BCDToHex
+        MOV     R1, R0                  ; minutes
+        LDRB    R0, [R13, #4]
+        BL      BCDToHex
+        MOV     R4, R0                  ; hours
+        LDRB    R0, [R13, #5]
+        AND     R0, R0, #&3F            ; day of month (clear year bits)
+        BL      BCDToHex
+        MOV     R2, R0
+        LDRB    R0, [R13, #6]
+        AND     R0, R0, #&1F            ; month (clear day of week bits)
+        BL      BCDToHex
+        MOV     R3, R0
+        ADD     R13, R13, #12*2+8
 
 	MOV	R0, #YearCMOS
 	BL	Read
@@ -1840,6 +1492,7 @@ InitCMOSCache_NoCMOS
         STRB    R1, [R2, #NVRamSize]
         STRB    R1, [R2, #NVRamWriteSize]
     	MOV 	R0, #0	    	; Exit failure
+        STRB    R0, [R2, #RTCFitted]
     	EXIT
 
 5
@@ -1873,84 +1526,58 @@ InitCMOSCache_NoCMOS
 	MOV	R4, #&100		; stop at address &100
 	LDR	R3, =CMOSRAMCache
     ]
+
+        ; Note - R4 MUST be &100 to prevent crossover between 256-byte pages
+        ; (for devices with multiple addresses)
 09
-	BL	Start
 
-	MOV	R0, R1			; write address
-	BL	TXAck
 
+        SUB     R13, R13, #2*12+4
+        AND     R0, R1, #&FF
+        STR     R0, [R13, #4]           ; transfer 1 address
+        ADD     R0, R0, #1              ; read address
+        STR     R0, [R13, #16]          ; transfer 2 address
         TST     R1, #&100               ; 2-byte address?
-        MOVNE   R0, R2, LSR #8          ; memory word address (MSB)
-        BLNE    TXAck
+        MOV     R14, R13
+        MOVNE   R0, R2, LSR #8
+        STRNEB  R0, [R14], #1           ; memory word address (MSB)
+        STRB    R2, [R14], #1           ; memory word address (LSB)
+        STR     R13, [R13, #8]          ; transfer 1 data
+        SUB     R14, R14, R13
+        STR     R14, [R13, #12]         ; transfer 1 length
+        ADD     R14, R3, R2
+        STR     R14, [R13, #20]         ; transfer 2 data
+        SUB     R14, R4, R2
+        STR     R14, [R13, #24]         ; transfer 2 length
 
-	AND	R0, R2, #&FF		; memory word address (LSB)
-	BL	TXAck
+        ADD     R0, R13, #4
+        MOV     R1, #2
+        BL      IIC_OpV
 
-	BL	Start
-
-	ORR	R0, R1, #1		; read address
-	BL	TXAck
-
-10
-	BL	RXByte			; returned in R0
-	STRB	R0, [R3, R2]
-	ADD	R2, R2, #1		; increment R2 to phys. address
-	CMP	R2, R4			; stop when we hit end address
-	BGE	%FT20
-
-	TST	R2, #&FF		; still in same 256 byte block?
-	MOVNE	R0, #0			; yes => not done .. ACK that byte
-	MOVEQ	R0, #1			; no => finish off reading block
-	BL	ClockData
-	BNE	%BT10			; yes => continue reading
-
-   [ E2ROMSupport
-	BL	Stop
-	MOV	R0, R2			; in next 256 byte block so get device + address
-	BL	GetI2CAddress
-	B	%BT09			; and start next block
-   ]
-20
-	MOV	R0, #1			; finish off reading block
-	BL	ClockData
-	BL	Stop
-
-   [ E2ROMSupport
-        TEQ     R4, #&100               ; have we reached the end?
-    	MOV 	R0, #1	    	    	; ensure exit success
-        EXIT    EQ                      ; exit if so
-
-        MOV     R0, R4                  ; start next block from R4
-        MOV     R4, #&100               ; stop at &100
-        BL      GetI2CAddress           ; convert to device address and offset
-        MOV     R2, R0                  ; save the offset
-        B       %BT09                   ; and go round again
-   |
-	EXIT
-   ]
+        ADD     R13, R13, #2*12+4
+        MOV     R0, #1
+        EXIT
 
    [ E2ROMSupport
 ReadOTPArea Entry
-	BL	Start
-	MOV	r0, #E2ROMAddress2K_OTP
-	BL	TXAck
-	MOV	r0, #0				; OTP memory word address
-	BL	TXAck
-	BL	Start
-	MOV	r0, #E2ROMAddress2K_OTP + 1	; switch to read
-	BL	TXAck
-	MOV	r2, #0
-10
-	BL	RXByte
-	STRB	r0, [r3, r2]
-	ADD	r2, r2, #1
-	TEQ	r2, #16
-	MOVNE	r0, #0				; not done, so clock zero
-	MOVEQ	r0, #1
-	BL	ClockData
-	BNE	%BT10
-	BL	Stop
-	EXIT
+        SUB     R13, R13, #2*12+4
+        MOV     R0, #0
+        STRB    R0, [R13, #0]           ; offset 0
+        MOV     R0, #E2ROMAddress2K_OTP
+        STR     R0, [R13, #4]           ; transfer 1 address
+        STR     R13, [R13, #8]          ; transfer 1 data
+        MOV     R0, #1
+        STR     R0, [R13, #12]          ; transfer 1 length
+        MOV     R0, #E2ROMAddress2K_OTP + 1
+        STR     R0, [R13, #16]          ; transfer 2 address
+        STR     R3, [R13, #20]          ; transfer 2 data
+        MOV     R0, #16
+        STR     R0, [R13, #24]          ; transfer 2 length
+        ADD     R0, R13, #4
+        MOV     R1, #2
+        BL      IIC_OpV
+        ADD     R13, R13, #2*12+4
+        EXIT
    ]
 
 ; *****************************************************************************
@@ -1967,11 +1594,12 @@ ReadOTPArea Entry
 ; Have we got an RTC ? do a read from location 0 to find out
 
   [ E2ROMSupport
-DummyAccess	Entry
+DummyAccess	Entry "R1,R2"
 
-	BL	Start
-	BL	TXAck			; do write and set V if no ack
-	BL	Stop			; Doesn't change the PSR
+        MOV     R1, #0
+        MOV     R2, #0
+        BL      IIC_Op
+
 	EXIT				; Exit with V set appropriately
   ]
 
