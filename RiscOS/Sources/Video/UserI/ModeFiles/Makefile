@@ -10,6 +10,11 @@
 #
 
 #
+# Paths
+#
+EXP_HDR = <export$dir>2
+
+#
 # Generic options:
 #
 MKDIR   = mkdir -p
@@ -35,6 +40,7 @@ TARGET    = ${TDIR}.MF${TYPE}
 OBJECT    = ${ODIR}.MF${TYPE}
 RDIR      = ${RESDIR}.Monitors
 OPTS      = -PreDefine "SA_flag SETS \"${STANDALONE}\"" -PreDefine "Machine SETS \"${MACHINE}\""
+EXPORTS   = ${EXP_HDR}.ModeFiles
 #
 # Generic rules:
 #
@@ -95,4 +101,7 @@ ${TDIR}.MFSlave: ${SOURCE} s.Slave
         SetType $@ Module
         Access $@ rw/r
 
+${EXP_HDR}.ModeFiles: hdr.ModeFiles
+        ${CP} hdr.ModeFiles $@ ${CPFLAGS}
+        
 # Dynamic dependencies:
