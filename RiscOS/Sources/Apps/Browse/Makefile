@@ -215,6 +215,7 @@ OBJS = \
  o.Protocols		\
  o.Redraw		\
  o.Reformat		\
+ o.RMA			\
  o.Save			\
  o.SaveFile		\
  o.SaveObject		\
@@ -265,6 +266,7 @@ OBJSZ = \
  oz.Protocols		\
  oz.Redraw		\
  oz.Reformat		\
+ oz.RMA			\
  oz.Save		\
  oz.SaveFile		\
  oz.SaveObject		\
@@ -315,6 +317,7 @@ OBJSD = \
  od.Protocols		\
  od.Redraw		\
  od.Reformat		\
+ od.RMA			\
  od.Save		\
  od.SaveFile		\
  od.SaveObject		\
@@ -367,6 +370,7 @@ OBJSDZ = \
  odz.Protocols		\
  odz.Redraw		\
  odz.Reformat		\
+ odz.RMA		\
  odz.Save		\
  odz.SaveFile		\
  odz.SaveObject		\
@@ -418,6 +422,7 @@ OBJS_SURF = \
  o_surf.Protocols	\
  o_surf.Redraw		\
  o_surf.Reformat	\
+ o_surf.RMA		\
  o_surf.Save		\
  o_surf.SaveFile	\
  o_surf.SaveObject	\
@@ -467,6 +472,7 @@ OBJSD_SURF = \
  od_surf.Protocols	\
  od_surf.Redraw		\
  od_surf.Reformat	\
+ od_surf.RMA		\
  od_surf.Save		\
  od_surf.SaveFile	\
  od_surf.SaveObject	\
@@ -519,6 +525,7 @@ OBJS_ITALK = \
  o_italk.Protocols	\
  o_italk.Redraw		\
  o_italk.Reformat	\
+ o_italk.RMA		\
  o_italk.Save		\
  o_italk.SaveFile	\
  o_italk.SaveObject	\
@@ -569,6 +576,7 @@ OBJSD_ITALK = \
  od_italk.Protocols	\
  od_italk.Redraw	\
  od_italk.Reformat	\
+ od_italk.RMA		\
  od_italk.Save		\
  od_italk.SaveFile	\
  od_italk.SaveObject	\

@@ -54,6 +54,7 @@
 #include "Mouse.h"
 #include "PlugIn.h"
 #include "Protocols.h"
+#include "RMA.h"
 #include "Save.h"
 #include "URLutils.h"
 #include "Windows.h"
@@ -93,8 +94,8 @@ static void              load_choices        (void);
   static void            self_test           (void);
 #endif
 
-static void              catch_errors        (int signum);
 static void              termination         (void);
+static void              catch_errors        (int signum);
 
 /* Make sure the stack starts at a reasonable size to prevent frequent */
 /* stack extensions - this is a directive to the C run time system and */
@@ -523,13 +524,7 @@ static _kernel_oserror * open_messages_file(int which)
 
   /* Claim RMA for the control block and pathname */
 
-  e = _swix(OS_Module,
-            _IN(0) | _IN(3) | _OUT(2),
-
-            6,
-            sizeof(MessagesFD) + strlen(path) + 1,
-
-            &control);
+  e = rma_claim(NULL, sizeof(MessagesFD) + strlen(path) + 1, (void *) &control);
 
   if (e)
   {
@@ -574,11 +569,7 @@ static _kernel_oserror * open_messages_file(int which)
 
 open_messages_file_no_memory:
 
-  if (control) _swix(OS_Module,
-                     _IN(0) | _IN(2),
-
-                     7,
-                     control);
+  if (control) rma_release(NULL, control);
 
   if (path) free(path);
 
@@ -615,11 +606,7 @@ static void close_messages_file(void * control)
   /* Release the claimed RMA space holding the */
   /* control block and messages file name.     */
 
-  _swix(OS_Module,
-        _IN(0) | _IN(2),
-
-        7,
-        control);
+  rma_release(NULL, control);
 }
 
 /*************************************************/
@@ -1292,35 +1279,6 @@ static void load_choices(void)
 #endif
 
 /*************************************************/
-/* catch_errors()                                */
-/*                                               */
-/* Catch OS errors and report them with the      */
-/* opportunity to continue or quit (done inside  */
-/* main itself).                                 */
-/*                                               */
-/* Parameters: The signal number (ignored).      */
-/*************************************************/
-
-#pragma no_check_stack
-
-static void catch_errors(int signum)
-{
-  /* Store the error locally */
-
-  erb = *_kernel_last_oserror();
-
-  /* Go back to main to report the error */
-
-  longjmp(env, Main_FromCatchErrors);
-
-  /* Just in case... */
-
-  exit(EXIT_FAILURE);
-}
-
-#pragma check_stack
-
-/*************************************************/
 /* termination()                                 */
 /*                                               */
 /* Called by registration through the atexit     */
@@ -1354,6 +1312,7 @@ void termination(void)
 
   fm_shutdown();
   plugin_shutdown();
+  rma_shutdown();
 }
 
 /*************************************************/
@@ -1385,46 +1344,7 @@ int main(int argc, char * argv[])
     MemCheck_SetAutoOutputBlocksInfo(0);
   #endif
 
-  #ifndef TRACE
-
-    /* Prevent postmortems; instead, report errors in a standard window. */
-    /* If backtraces are needed, use the debugger...                     */
-    /*                                                                   */
-    /* If compiling a version for the debugger, ensure TRACE is defined  */
-    /* or the code is commented out. The code below can mess up the      */
-    /* debugger as default handlers are not beng used, and trying to     */
-    /* install them tramples on the debugger's environment setup.        */
-
-    {
-      int loop, ret1, ret2, ret3;
-
-      /* Loop over the undefined instruction, prefetch abort, data abort */
-      /* and address exception handlers, resetting them to the RISC OS   */
-      /* defaults. The RISC OS default handlers raise a standard RISC OS */
-      /* error, having filled in the *ShowRegs register dump. (See PRM   */
-      /* volume 1 page 315 onwards).                                     */
-
-      for (loop = 1; loop <= 4; loop ++)
-      {
-        _swix(OS_ReadDefaultHandler,
-              _IN(0) | _OUTR(1,3),
-
-              loop,
-              &ret1,
-              &ret2,
-              &ret3);
-
-        _swix(OS_ChangeEnvironment,
-              _INR(0,3),
-
-              loop,
-              ret1,
-              ret2,
-              ret3);
-      }
-    }
-
-  #else
+  #ifdef TRACE
 
     /* Non-debug builds have a WimpSlot close to the actual startup */
     /* requirements. Debug builds have a huge slotsize because of   */
@@ -1646,7 +1566,66 @@ int main(int argc, char * argv[])
 
   if (setjmp(env) == Main_FromCatchErrors)
   {
+    char         * tok = NULL;
+    char           pc[16];
+    unsigned int * regdump;
+    unsigned int * os_regdump;
+
     print_abort_print();
+
+    /* Sort out the register dump */
+
+    _swix(OS_ChangeEnvironment,
+          _INR(0,3) | _OUT(3),
+
+          7, /* Call back */
+          0,
+          0,
+          0,
+
+          &regdump); /* Where the C library put the registers */
+
+    _swix(OS_ChangeEnvironment,
+          _INR(0,3) | _OUT(1),
+
+          13, /* Exception registers */
+          0,
+          0,
+          0,
+
+          &os_regdump); /* Where *ShowRegs gets them from */
+
+    /* Copy the C register dump into the OS space */
+
+    if (regdump && os_regdump) memcpy(os_regdump, regdump, 4 * 16);
+
+    /* Store a more sensible error in the error block 'erb' where possible. */
+
+    switch (erb.errnum)
+    {
+      case 0x80000000: tok = "EZeros0"; break;
+      case 0x80000001: tok = "EZeros1"; break;
+      case 0x80000002: tok = "EZeros2"; break;
+      case 0x80000003: tok = "EZeros3"; break;
+      case 0x80000005: tok = "EZeros5"; break;
+    }
+
+    if (tok)
+    {
+      char * error;
+
+      /* If we know the PC, put this in the message */
+
+      if (!regdump) sprintf(pc, "&deaddead");
+      else          sprintf(pc, "&%08X", os_regdump[15] &~ 0xfc000003);
+
+      error = lookup_token(tok, 0, pc);
+
+      /* If the message token wasn't found, use the OS error, */
+      /* otherwise copy the new one into the error block.     */
+
+      if (strcmp(error, "!")) StrNCpy0(erb.errmess, error);
+    }
 
     /* Need to reinstall the signal handlers since the run-time */
     /* system will have removed them 'for your saftey and       */
@@ -1713,4 +1692,39 @@ int main(int argc, char * argv[])
   /* This will call the termination() function in passing */
 
   exit(EXIT_SUCCESS);
+}
+
+/*************************************************/
+/* catch_errors()                                */
+/*                                               */
+/* Catch OS errors and report them with the      */
+/* opportunity to continue or quit (done inside  */
+/* main itself).                                 */
+/*                                               */
+/* This is the last function in the file since   */
+/* it plays around with stack checking, and you  */
+/* can't read the previous state. If this was in */
+/* the middle of the source and someone wrote a  */
+/* #pragma above it, endless confusion could     */
+/* otherwise arise as to why the instruction had */
+/* no effect on some of the functions here...    */
+/*                                               */
+/* Parameters: The signal number (ignored).      */
+/*************************************************/
+
+#pragma no_check_stack
+
+static void catch_errors(int signum)
+{
+  /* Store the error locally */
+
+  erb = *_kernel_last_oserror();
+
+  /* Go back to main to report the error */
+
+  longjmp(env, Main_FromCatchErrors);
+
+  /* Just in case... */
+
+  exit(EXIT_FAILURE);
 }
