@@ -23,7 +23,7 @@ INCLUDES= -IC: -ITCPIPLibs:
 
 #AFLAGS  = -depend !Depend -Stamp -quit -To $@ -From
 AFLAGS  = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -Wp ${INCLUDES} -DSYS${SYSTEM}=1 -DMACH${MACHINE}=1 ${DFLAGS} ${EXT_FLAGS}
+CFLAGS  = -c -depend !Depend -Wp ${INCLUDES} -DSYS${SYSTEM}=1 -DMACH${MACHINE}=1 ${DFLAGS} -DCOMPAT_INET4 ${EXT_FLAGS}
 #LDFLAGS =
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
@@ -137,7 +137,9 @@ ${TARGET}: ${OBJS} dirs
         squeeze $@
 	${MKDIR} ${APP}
 	${CP} ${TARGET} ${APP}.${TARGET} ${CPFLAGS}
+	Run b.PreTestSrc
 	${CP} Resources.* ${APP}.* ${CPFLAGS}
+	${CP} PreTest ${APP}.* ${CPFLAGS} 
 	${MKDIR} ${RESDIR}
 	${CP} ${APP} ${RESDIR}.${APP} ${CPFLAGS}
 	@echo ${COMPONENT}: built & installed

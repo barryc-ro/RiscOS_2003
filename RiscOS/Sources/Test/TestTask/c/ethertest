@@ -7,12 +7,16 @@
 #include <sys/errno.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
+#include <net/route.h>
+#include <net/if.h>
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
 #include <netinet/ip.h>
 #include <netinet/ip_icmp.h>
 #include <netinet/udp.h>
+#include <netinet/if_ether.h>
 #include <arpa/inet.h>
+#include <arpa/nameser.h>
 #include <netdb.h>
 #include <socklib.h>
 #include <inetlib.h>
@@ -28,6 +32,7 @@
 #include <swis.h>
 #include <setjmp.h>
 #include <sys/dcistructs.h>
+#include <sys/errno.h>
 #include "debug.h"
 #include "swis.h"
 #include "timer.h"
@@ -188,10 +193,91 @@ int xmit(char *address)
         return 1;
 }
 
+#define SYSVAR_INET_GATEWAY	"Inet$Gateway"
+
+
+/*
+ * ifrconfig_set_default_route
+ *
+ * - takes as parameter an open socket id
+ * - reads the system variable Inet$Gateway (string a.b.c.d)
+ * - converts the var string to u_long inet address
+ * - establishes that address as the default route
+ *
+*/
+
+
+int ifrconfig_set_default_route(void)
+{
+    char *gwvar;
+    unsigned long gateway_adr;
+    struct in_addr gw_in;
+
+    /* If variable is not set then return success. */
+    gwvar = getenv(SYSVAR_INET_GATEWAY);
+    if (gwvar == NULL || gwvar[0] == '\0') return (1);
+
+    if (inet_aton(gwvar, &gw_in) == 0 || gw_in.s_addr == INADDR_ANY)
+        return (0);
+    gateway_adr = gw_in.s_addr;
+
+    {
+        static int rtm_seq;
+        int routes;
+        struct {
+    	    struct rt_msghdr	hdr;
+    	    struct nsockaddr_in	dst;
+    	    struct nsockaddr_in	gway;
+    	    struct nsockaddr_in	mask;
+        } rtmsg;
+
+        if ((routes = socket(PF_ROUTE, SOCK_RAW, AF_INET)) < 0) {
+            return 0;
+        }
+
+        memset(&rtmsg, 0, sizeof(rtmsg));
+        rtmsg.hdr.rtm_type = RTM_ADD;
+        rtmsg.hdr.rtm_flags = RTF_UP | RTF_GATEWAY;
+        rtmsg.hdr.rtm_version = RTM_VERSION;
+        rtmsg.hdr.rtm_seq = ++rtm_seq;
+        rtmsg.hdr.rtm_addrs = RTA_DST | RTA_GATEWAY | RTA_NETMASK;
+        rtmsg.dst.sin_len = sizeof(rtmsg.dst);
+        rtmsg.dst.sin_family = AF_INET;
+        rtmsg.gway.sin_len = sizeof(rtmsg.gway);
+        rtmsg.gway.sin_family = AF_INET;
+        rtmsg.gway.sin_addr.s_addr = gateway_adr;
+        rtmsg.mask.sin_len = sizeof(rtmsg.dst);
+        rtmsg.mask.sin_family = AF_INET;
+
+        rtmsg.hdr.rtm_msglen = sizeof(rtmsg);
+        if (socketwrite(routes, &rtmsg, sizeof(rtmsg)) < 0) {
+            #ifdef TRACE
+            module_printf(stderr, "Set default route FAILED: %d %s\n", errno, _inet_err());
+            #endif
+            socketclose(routes);
+            return (0);
+        }
+
+        socketclose(routes);
+        return 1;
+    }
+}
+
+
+void DHCPinit(void)
+{
+  _kernel_oscli("DHCPExecute -e -b ei0");
+  ifrconfig_set_default_route();
+}
+
+
+
 int ethertest(char *data)
 {
   if(!probe())
     return 0;   //initial probe failed so abort
+
+  DHCPinit();
 
   if(!xmit(data))
     return 0;
