@@ -207,13 +207,15 @@ install: install_${OPTIONS}
 	@echo
 
 install_STB: ram
+	Set NCKeyboardUserIFRes$Path Resources.${UserIF}.${Locale}.,Resources.${UserIF}.UK.
         ${MKDIR} ${INSTRES}
-	${CP} LocalUserIFRes:!BootRAM       ${INSTDIR}.!Boot        ${CPFLAGS}
-	${CP} LocalUserIFRes:!RunRAM        ${INSTDIR}.!Run         ${CPFLAGS}
+	${CP} NCKeyboardUserIFRes:!BootRAM  ${INSTDIR}.!Boot        ${CPFLAGS}
+	${CP} NCKeyboardUserIFRes:!RunRAM   ${INSTDIR}.!Run         ${CPFLAGS}
+	${CP} NCKeyboardUserIFRes:CopyLocal ${INSTDIR}.CopyLocal    ${CPFLAGS}
 	${CP} rm.${COMPONENT}               ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        ${CP} LocalUserIFRes:Messages       ${INSTRES}.Messages     ${CPFLAGS}
-        ${CP} LocalUserIFRes:Res            ${INSTRES}.Res          ${CPFLAGS}
-        ${CP} LocalUserIFRes:Sprites        ${INSTRES}.Sprites      ${CPFLAGS}
+        ${CP} NCKeyboardUserIFRes:Messages  ${INSTRES}.Messages     ${CPFLAGS}
+        ${CP} NCKeyboardUserIFRes:Res       ${INSTRES}.Res          ${CPFLAGS}
+        ${CP} NCKeyboardUserIFRes:Sprites   ${INSTRES}.Sprites      ${CPFLAGS}
 	${CP} <Lib$Dir>.LocaleRes.LocaleRes ${INSTDIR}.LocaleRes    ${CPFLAGS}
 
 install_: ${APP}
