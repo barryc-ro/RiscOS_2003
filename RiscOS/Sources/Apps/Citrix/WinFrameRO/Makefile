@@ -7,7 +7,7 @@
 EXP_HDR = <CExport$Dir>
 RESAPP = <Resource$Dir>.Apps.!ICAClient
 RESRES = <Resource$Dir>.Resources.ICAClient
-SRC = Resources.${Locale}
+SRC = LocalRes:
 #
 # Generic options:
 #
