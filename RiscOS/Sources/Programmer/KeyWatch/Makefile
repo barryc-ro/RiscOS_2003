@@ -122,3 +122,9 @@ o.KeyWatch:	C:h.swis
 o.KeyWatch:	<Lib$Dir>.tboxlibs.h.wimp
 o.KeyWatch:	h.KeyWatchHd
 o.KeyWatch:	VersionNum
+o.KeyWatch:	c.KeyWatch
+o.KeyWatch:	C:h.kernel
+o.KeyWatch:	C:h.swis
+o.KeyWatch:	<Lib$Dir>.tboxlibs.h.wimp
+o.KeyWatch:	h.KeyWatchHd
+o.KeyWatch:	VersionNum

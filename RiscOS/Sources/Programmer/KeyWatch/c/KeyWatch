@@ -19,8 +19,6 @@
 
 #define KW                     Module_Title
 
-#define KW_ERR_BAD_SWI			0x1E6 /* same as system error */
-
 #define KW_ERR_BASE			KeyWatch_00
 #define KW_ERR_TABLE_FULL		(KW_ERR_BASE + 0)
 #define KW_ERR_BAD_POLLWORD		(KW_ERR_BASE + 1)
@@ -56,6 +54,7 @@
 #define KeyWatch_Event_KEY_CODE_VALID	(1<<1)
 #define KeyWatch_Event_KEY_GOING_UP	(1<<2)
 #define KeyWatch_Event_LAST_WAS_NUL	(1<<3)
+#define KeyWatch_Event_PS2_MULTI	(1<<4)
 
 #define KeyWatch_State_LEFT_SHIFT_DOWN	(1<<16)
 #define KeyWatch_State_RIGHT_SHIFT_DOWN	(1<<17)
@@ -67,12 +66,13 @@
 #define KeyWatch_RegisterScan_PS2	(1<<0)
 #define KeyWatch_RegisterScan_MESSAGE	(1<<1)
 #define KeyWatch_RegisterScan_MOUSE	(1<<2)
+#define KeyWatch_RegisterScan_BUFFER_CODES	(1<<3)
+#define KeyWatch_RegisterScan_SCAN_CODES	(1<<4)
 
 #define KeyWatch_Poll_HAD_OVERFLOW	(1<<0)
 
-#define KeyWatch_PS2KEY_UNUSED		0x00
-#define KeyWatch_PS2KEY_PRINT_SCREEN	0x81
-#define KeyWatch_PS2KEY_BREAK		0x82
+#define KeyWatch_PS2KEY_PRINT_SCREEN	0x01
+#define KeyWatch_PS2KEY_BREAK		0x02
 
 #define NULL_TASK	(-1)
 #define NULL_KEY	(-1)
@@ -117,7 +117,6 @@ static int scan_overflows = 0;				/* number of overflows since last poll */
 
 static char *errors[] =
 {
-    "KeyWatch: Unknown SWI",
     "Cannot register keywatch - table full",
     "Cannot deregister keywatch - bad pollword handle",
     "KeyWatch: can't exit as tasks are registered",
@@ -127,10 +126,30 @@ static char *errors[] =
 
 #define E(a) (0x80 | (a))
 
+#if 1
+/* This is the PC-XT scan code set */
+static char internal_to_ps2_code[128] =
+{
+    0x01, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F, 0x40, 0x41,				/* Esc - F7 */
+    0x42, 0x43, 0x44, 0x57, 0x58, 0x01, 0x46, 0x02,				/* F8 - Break */
+    0x29, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,				/* ` - 7 */
+    0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, E(0x52),				/* 8 - INSERT */
+    E(0x47), E(0x49), 0x45, E(0x35), 0x37, 0x2B, 0x0F, 0x10,			/* Home - Q */
+    0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,				/* W - O */
+    0x19, 0x1A, 0x1B, 0x2B, E(0x53), E(0x4F), E(0x51), 0x47,			/* P - 7 */
+    0x48, 0x49, 0x4A, 0x1D, 0x1E, 0x1F, 0x20, 0x21,				/* 8 - F */
+    0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x1C,				/* G - ENTER */
+    0x4B, 0x4C, 0x4D, 0X4E, 0x2A, 0x00, 0x2C, 0x2D,				/* 4 - X */
+    0x2E, 0x2F, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35,				/* C - / */
+    0x36, E(0x48), 0x4F, 0x50, 0x51, 0x3A, 0x38, 0x39,				/* Shift R - SPACE */
+    E(0x38), E(0x1D), E(0x4B), E(0x50), E(0x4D), 0x52, 0x53, E(0x1C)		/* Alt R - Enter */
+};
+#else
+/* This is the AT-02 scan code set */
 static char internal_to_ps2_code[128] =
 {
     0x76, 0x05, 0x06, 0x04, 0x0C, 0x03, 0x0B, 0x83,				/* Esc - F7 */
-    0x0A, 0x01, 0x09, 0x78, 0x07, E(0x01), 0x7E, E(0x02),			/* F8 - Break: two secial codes */
+    0x0A, 0x01, 0x09, 0x78, 0x07, 0x01, 0x7E, 0x02,				/* F8 - Break */
     0x0E, 0x16, 0x1E, 0x26, 0x25, 0x2E, 0x36, 0x3D,				/* ` - 7 */
     0x3E, 0x46, 0x45, 0x4E, 0x55, 0x66, 0x0D, E(0x70),				/* 8 - INSERT */
     E(0x6C), E(0x7D), 0x77, E(0x4A), 0x7C, 0x5D, 0x0D, 0x15,			/* Home - Q */
@@ -143,6 +162,7 @@ static char internal_to_ps2_code[128] =
     0x59, E(0x75), 0x69, 0x72, 0x7A, 0x58, 0x11, 0x29,				/* Shift R - SPACE */
     E(0x11), E(0x14), E(0x6B), E(0x72), E(0x74), 0x70, 0x71, E(0x5A)		/* Alt R - Enter */
 };
+#endif
 
 /* ---------------------------------------------------------------------------------------------------- */
 
@@ -150,15 +170,8 @@ static _kernel_oserror global_error;
 
 static _kernel_oserror *makeerror(int errnum)
 {
-    int index;
-
-    if (errnum == KW_ERR_BAD_SWI)
-	index = 0;
-    else
-	index = errnum - KW_ERR_BASE + 1;
-	
     global_error.errnum = errnum;
-    strcpy(global_error.errmess, errors[index]);
+    strcpy(global_error.errmess, errors[errnum - KW_ERR_BASE]);
 
     return &global_error;
 }
@@ -351,17 +364,44 @@ static void key_transition(int updown, int internal_code)
     if (internal_code < 0x70 ||
 	(scan_flags & KeyWatch_RegisterScan_MOUSE))
     {
+	int flags;
+
+	/* get base flags */
+	flags = KeyWatch_Event_SCAN_CODE_VALID;
+	if (updown == EventV_Key_Up)
+	    flags |= KeyWatch_Event_KEY_GOING_UP;
+
+	/* translate internal scan code if necessary */
 	if (scan_flags & KeyWatch_RegisterScan_PS2)
 	{
+	    /* two special case keys need another flag set - must do before code conversion! */
+	    if (internal_code == 0x0D || internal_code == 0x0F)
+		flags |= KeyWatch_Event_PS2_MULTI;
+
 	    internal_code = internal_to_ps2_code[internal_code & 0x7F]; /* mask bits to ensure safe lookup */
+
+	    /* if unused then ignore entirely */
 	    if (internal_code == 0)
 		return;
 	}
 	
-	add_entry(KeyWatch_Event_SCAN_CODE_VALID | (updown == EventV_Key_Up ? KeyWatch_Event_KEY_GOING_UP : 0),
-		  internal_code, NULL_KEY);
+	if (scan_flags & KeyWatch_RegisterScan_SCAN_CODES)
+	{
+	    if (scan_flags & KeyWatch_RegisterScan_PS2)
+	    {
+		if (internal_code & 0x80)
+		    add_entry(flags, 0xE0, NULL_KEY);
+
+		add_entry(flags, (internal_code &~ 0x80) | (updown == EventV_Key_Up ? 0x80 : 0), NULL_KEY);
+	    }
+	    else
+	    {
+		add_entry(flags, internal_code, NULL_KEY);
+	    }
+	}
     }
 
+    /* update the last key down */
     if (updown == EventV_Key_Down)
 	scan_last_down = internal_code;
 }
@@ -392,7 +432,8 @@ int eventv_veneer_handler(_kernel_swi_regs *r, void *pw)
 	break; 
 
     case EventV_Input:
-	if (r->r[1] == Buffer_Keyboard)
+	if (r->r[1] == Buffer_Keyboard && 
+	    (scan_flags & KeyWatch_RegisterScan_BUFFER_CODES))
 	{
 	    /* process key */
 	    key_input(r->r[2]);
@@ -467,24 +508,33 @@ static _kernel_oserror *kw_swi_poll(int *pflags, int task, key_event **pbuf, int
     {
 	key_event *buf = *pbuf;
 	int buf_size = *pbuf_size;
-	    
-	while (scan_key_tail != scan_key_head && buf_size >= sizeof(key_event))
-	{
-	    /* write out buffer entry */
-	    *buf++ = scan_key_table[scan_key_tail];
-	    buf_size -= sizeof(key_event);
 
-	    /* wrap around to the start of the table */
-	    if (++scan_key_tail == KEY_TABLE_SIZE)
-		scan_key_tail = 0;
+	if (buf == NULL)
+	{
+	    buf_size -= ((scan_key_head < scan_key_tail ? KEY_TABLE_SIZE : 0) + (scan_key_head - scan_key_tail)) * sizeof(key_event);
+	}
+	else
+	{
+	    while (scan_key_tail != scan_key_head && buf_size >= sizeof(key_event))
+	    {
+		/* write out buffer entry */
+		*buf++ = scan_key_table[scan_key_tail];
+		buf_size -= sizeof(key_event);
+
+		/* wrap around to the start of the table */
+		if (++scan_key_tail == KEY_TABLE_SIZE)
+		    scan_key_tail = 0;
+	    }
+
+	    *pbuf = buf;
 	}
 
-	*pbuf = buf;
 	*pbuf_size = buf_size;
 	*entry_size = sizeof(key_event);
-
 	*pflags = scan_overflows ? KeyWatch_Poll_HAD_OVERFLOW : 0;
-	scan_overflows = 0;
+
+	if (buf)
+	    scan_overflows = 0;
     }
     return e;
 }
@@ -493,7 +543,7 @@ static _kernel_oserror *kw_swi_poll(int *pflags, int task, key_event **pbuf, int
 
 _kernel_oserror *kw_swi_handler(int swi_no, _kernel_swi_regs *r, void *private_word)
 {
-    _kernel_oserror *e = NULL;
+    _kernel_oserror *e = error_BAD_SWI;
 
     switch (swi_no)
     {
@@ -509,6 +559,7 @@ _kernel_oserror *kw_swi_handler(int swi_no, _kernel_swi_regs *r, void *private_w
 	r->r[0] = FEATURES;
 	r->r[1] = Module_VersionNumber;		/* from CMHG */
 	r->r[2] = (int)Module_MinorVersion;	/* from VersionNum */
+	e = NULL;
 	break;
 
     case KeyWatch_RegisterScan - KeyWatch_00:
@@ -521,10 +572,6 @@ _kernel_oserror *kw_swi_handler(int swi_no, _kernel_swi_regs *r, void *private_w
 
     case KeyWatch_Poll - KeyWatch_00:
 	e = kw_swi_poll(&r->r[0], r->r[1], (key_event **)&r->r[2], &r->r[3], &r->r[4]);
-	break;
-	
-    default:
-	e = makeerror(KW_ERR_BAD_SWI);
 	break;
     }
 
