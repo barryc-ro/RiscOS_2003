@@ -67,7 +67,7 @@ IOP_V = ac00ptt.o ptt00cfg.o dte.o acu.o dte_drv.o linelink.o lineasyn.o \
      linev80.o dte_v80.o print.o \
      ringint.o callerid.o dsppatch.o powerons.o \
      trnpatch.o compatch.o datpatch.o vcepatch.o \
-     pkttrace.o
+     # pkttrace.o
 
 
 
