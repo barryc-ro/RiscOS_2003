@@ -26,7 +26,7 @@ RM      = remove
 WIPE    = -wipe
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -zM -zps1 -ff ${INCLUDES} ${DFLAGS}
+CFLAGS  = -c -depend !Depend -zM -zps1 -ff ${INCLUDES} ${DFLAGS} -wp
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 #
@@ -38,14 +38,16 @@ RSTUBS    = RISCOSLIB:o.rstubs
 ROMSTUBS  = RISCOSLIB:o.romstubs
 ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.AbsSym
-INETLIB=InetInc:^.^.libs.inetlib.inetlibzm
-SOCKLIB=InetInc:^.^.libs.socklib.socklibzm
+INETLIB   = <Lib$Dir>.InetLib.o.inetlibzm
+SOCKLIB   = <Lib$Dir>.InetLib.o.socklibzm
+UNIXLIB   = <Lib$Dir>.InetLib.o.unixlibzm
 #
 # Include files
 #
-INCLUDES = -IInetInc:,InetInc:^.^.libs.inetlib,InetInc:^.^.libs.socklib,InetInc:^.^.libs.unixlib,C:
 
-DFLAGS = -DVERBOSEDEBUG=0 -DRISCOS -DDEBUG=0 -DPROG_IDENT="\"NCFresco\""
+INCLUDES  = -IC:,<Lib$Dir>.InetLib
+
+DFLAGS = -DVERBOSEDEBUG=0 -DRISCOS -DDEBUG=0 -DPROG_IDENT="\"NCBrowser\""
 
 #
 # Program specific options:
@@ -122,23 +124,50 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 # Dynamic dependencies:
 o.webftp:	c.webftp
 o.webftp:	h.all
-o.webftp:	InetInc:h.errno
+o.webftp:	h.tcplibs
+o.webftp:	<Lib$Dir>.InetLib.sys.h.types
+o.webftp:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.webftp:	<Lib$Dir>.InetLib.machine.h.endian
+o.webftp:	<Lib$Dir>.InetLib.machine.h.ansi
+o.webftp:	<Lib$Dir>.InetLib.machine.h.types
+o.webftp:	<Lib$Dir>.InetLib.sys.h.socket
+o.webftp:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.webftp:	<Lib$Dir>.InetLib.sys.h.errno
 o.webftp:	C:h.kernel
-o.webftp:	h.inetlib
-o.webftp:	InetInc:sys.h.types
-o.webftp:	InetInc:netinet.h.in
-o.webftp:	h.socklib
-o.webftp:	InetInc:sys.h.types
-o.webftp:	InetInc:sys.h.socket
-o.webftp:	InetInc:sys.h.stat
-o.webftp:	InetInc:sys.h.time
-o.webftp:	InetInc:sys.h.uio
+o.webftp:	<Lib$Dir>.InetLib.net.h.if
+o.webftp:	<Lib$Dir>.InetLib.sys.h.socket
+o.webftp:	<Lib$Dir>.InetLib.sys.h.time
+o.webftp:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.webftp:	<Lib$Dir>.InetLib.net.h.if_arp
+o.webftp:	<Lib$Dir>.InetLib.sys.h.socket
+o.webftp:	<Lib$Dir>.InetLib.netinet.h.in
+o.webftp:	<Lib$Dir>.InetLib.sys.h.ioctl
+o.webftp:	<Lib$Dir>.InetLib.sys.h.ttycom
+o.webftp:	<Lib$Dir>.InetLib.sys.h.ioccom
+o.webftp:	<Lib$Dir>.InetLib.sys.h.ioccom
+o.webftp:	<Lib$Dir>.InetLib.sys.h.filio
+o.webftp:	<Lib$Dir>.InetLib.sys.h.ioccom
+o.webftp:	<Lib$Dir>.InetLib.sys.h.sockio
+o.webftp:	<Lib$Dir>.InetLib.sys.h.ioccom
+o.webftp:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.webftp:	<Lib$Dir>.InetLib.h.netdb
+o.webftp:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.webftp:	<Lib$Dir>.InetLib.netns.h.ns
+o.webftp:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.webftp:	<Lib$Dir>.InetLib.sys.h.time
+o.webftp:	<Lib$Dir>.InetLib.h.socklib
+o.webftp:	<Lib$Dir>.InetLib.sys.h.types
+o.webftp:	<Lib$Dir>.InetLib.sys.h.socket
+o.webftp:	<Lib$Dir>.InetLib.sys.h.stat
+o.webftp:	<Lib$Dir>.InetLib.sys.h.time
+o.webftp:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.webftp:	<Lib$Dir>.InetLib.sys.h.time
+o.webftp:	<Lib$Dir>.InetLib.sys.h.uio
+o.webftp:	<Lib$Dir>.InetLib.sys.h.cdefs
 o.webftp:	C:h.kernel
-o.webftp:	InetInc:sys.h.ioctl
-o.webftp:	InetInc:sys.h.ttychars
-o.webftp:	InetInc:sys.h.ttydev
-o.webftp:	InetInc:h.netdb
-o.webftp:	h.unixlib
+o.webftp:	<Lib$Dir>.InetLib.h.inetlib
+o.webftp:	<Lib$Dir>.InetLib.sys.h.types
+o.webftp:	<Lib$Dir>.InetLib.netinet.h.in
 o.webftp:	C:h.kernel
 o.webftp:	C:h.swis
 o.webftp:	h.files
@@ -150,23 +179,50 @@ o.webftp:	h.privwebftp
 o.webftp:	h.autofns
 o.q:	c.q
 o.q:	h.all
-o.q:	InetInc:h.errno
+o.q:	h.tcplibs
+o.q:	<Lib$Dir>.InetLib.sys.h.types
+o.q:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.q:	<Lib$Dir>.InetLib.machine.h.endian
+o.q:	<Lib$Dir>.InetLib.machine.h.ansi
+o.q:	<Lib$Dir>.InetLib.machine.h.types
+o.q:	<Lib$Dir>.InetLib.sys.h.socket
+o.q:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.q:	<Lib$Dir>.InetLib.sys.h.errno
 o.q:	C:h.kernel
-o.q:	h.inetlib
-o.q:	InetInc:sys.h.types
-o.q:	InetInc:netinet.h.in
-o.q:	h.socklib
-o.q:	InetInc:sys.h.types
-o.q:	InetInc:sys.h.socket
-o.q:	InetInc:sys.h.stat
-o.q:	InetInc:sys.h.time
-o.q:	InetInc:sys.h.uio
+o.q:	<Lib$Dir>.InetLib.net.h.if
+o.q:	<Lib$Dir>.InetLib.sys.h.socket
+o.q:	<Lib$Dir>.InetLib.sys.h.time
+o.q:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.q:	<Lib$Dir>.InetLib.net.h.if_arp
+o.q:	<Lib$Dir>.InetLib.sys.h.socket
+o.q:	<Lib$Dir>.InetLib.netinet.h.in
+o.q:	<Lib$Dir>.InetLib.sys.h.ioctl
+o.q:	<Lib$Dir>.InetLib.sys.h.ttycom
+o.q:	<Lib$Dir>.InetLib.sys.h.ioccom
+o.q:	<Lib$Dir>.InetLib.sys.h.ioccom
+o.q:	<Lib$Dir>.InetLib.sys.h.filio
+o.q:	<Lib$Dir>.InetLib.sys.h.ioccom
+o.q:	<Lib$Dir>.InetLib.sys.h.sockio
+o.q:	<Lib$Dir>.InetLib.sys.h.ioccom
+o.q:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.q:	<Lib$Dir>.InetLib.h.netdb
+o.q:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.q:	<Lib$Dir>.InetLib.netns.h.ns
+o.q:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.q:	<Lib$Dir>.InetLib.sys.h.time
+o.q:	<Lib$Dir>.InetLib.h.socklib
+o.q:	<Lib$Dir>.InetLib.sys.h.types
+o.q:	<Lib$Dir>.InetLib.sys.h.socket
+o.q:	<Lib$Dir>.InetLib.sys.h.stat
+o.q:	<Lib$Dir>.InetLib.sys.h.time
+o.q:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.q:	<Lib$Dir>.InetLib.sys.h.time
+o.q:	<Lib$Dir>.InetLib.sys.h.uio
+o.q:	<Lib$Dir>.InetLib.sys.h.cdefs
 o.q:	C:h.kernel
-o.q:	InetInc:sys.h.ioctl
-o.q:	InetInc:sys.h.ttychars
-o.q:	InetInc:sys.h.ttydev
-o.q:	InetInc:h.netdb
-o.q:	h.unixlib
+o.q:	<Lib$Dir>.InetLib.h.inetlib
+o.q:	<Lib$Dir>.InetLib.sys.h.types
+o.q:	<Lib$Dir>.InetLib.netinet.h.in
 o.q:	C:h.kernel
 o.q:	C:h.swis
 o.q:	h.files
@@ -177,19 +233,50 @@ o.q:	h.pads
 o.q:	h.privwebftp
 o.q:	h.autofns
 o.files:	c.files
-o.files:	h.inetlib
-o.files:	InetInc:sys.h.types
-o.files:	InetInc:netinet.h.in
-o.files:	h.socklib
-o.files:	InetInc:sys.h.types
-o.files:	InetInc:sys.h.socket
-o.files:	InetInc:sys.h.stat
-o.files:	InetInc:sys.h.time
-o.files:	InetInc:sys.h.time
-o.files:	InetInc:sys.h.uio
+o.files:	h.tcplibs
+o.files:	<Lib$Dir>.InetLib.sys.h.types
+o.files:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.files:	<Lib$Dir>.InetLib.machine.h.endian
+o.files:	<Lib$Dir>.InetLib.machine.h.ansi
+o.files:	<Lib$Dir>.InetLib.machine.h.types
+o.files:	<Lib$Dir>.InetLib.sys.h.socket
+o.files:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.files:	<Lib$Dir>.InetLib.sys.h.errno
 o.files:	C:h.kernel
-o.files:	InetInc:h.netdb
-o.files:	h.unixlib
+o.files:	<Lib$Dir>.InetLib.net.h.if
+o.files:	<Lib$Dir>.InetLib.sys.h.socket
+o.files:	<Lib$Dir>.InetLib.sys.h.time
+o.files:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.files:	<Lib$Dir>.InetLib.net.h.if_arp
+o.files:	<Lib$Dir>.InetLib.sys.h.socket
+o.files:	<Lib$Dir>.InetLib.netinet.h.in
+o.files:	<Lib$Dir>.InetLib.sys.h.ioctl
+o.files:	<Lib$Dir>.InetLib.sys.h.ttycom
+o.files:	<Lib$Dir>.InetLib.sys.h.ioccom
+o.files:	<Lib$Dir>.InetLib.sys.h.ioccom
+o.files:	<Lib$Dir>.InetLib.sys.h.filio
+o.files:	<Lib$Dir>.InetLib.sys.h.ioccom
+o.files:	<Lib$Dir>.InetLib.sys.h.sockio
+o.files:	<Lib$Dir>.InetLib.sys.h.ioccom
+o.files:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.files:	<Lib$Dir>.InetLib.h.netdb
+o.files:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.files:	<Lib$Dir>.InetLib.netns.h.ns
+o.files:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.files:	<Lib$Dir>.InetLib.sys.h.time
+o.files:	<Lib$Dir>.InetLib.h.socklib
+o.files:	<Lib$Dir>.InetLib.sys.h.types
+o.files:	<Lib$Dir>.InetLib.sys.h.socket
+o.files:	<Lib$Dir>.InetLib.sys.h.stat
+o.files:	<Lib$Dir>.InetLib.sys.h.time
+o.files:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.files:	<Lib$Dir>.InetLib.sys.h.time
+o.files:	<Lib$Dir>.InetLib.sys.h.uio
+o.files:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.files:	C:h.kernel
+o.files:	<Lib$Dir>.InetLib.h.inetlib
+o.files:	<Lib$Dir>.InetLib.sys.h.types
+o.files:	<Lib$Dir>.InetLib.netinet.h.in
 o.files:	C:h.kernel
 o.files:	C:h.swis
 o.files:	h.files
@@ -200,27 +287,54 @@ o.files:	h.pads
 o.files:	h.privwebftp
 o.files:	h.autofns
 o.support: s.support
-o.support: hdr.SwiNames
-o.support: hdr.RegNames
+o.support: hdr.swinames
+o.support: hdr.regnames
 o.misc:	c.misc
 o.misc:	h.all
-o.misc:	InetInc:h.errno
+o.misc:	h.tcplibs
+o.misc:	<Lib$Dir>.InetLib.sys.h.types
+o.misc:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.misc:	<Lib$Dir>.InetLib.machine.h.endian
+o.misc:	<Lib$Dir>.InetLib.machine.h.ansi
+o.misc:	<Lib$Dir>.InetLib.machine.h.types
+o.misc:	<Lib$Dir>.InetLib.sys.h.socket
+o.misc:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.misc:	<Lib$Dir>.InetLib.sys.h.errno
 o.misc:	C:h.kernel
-o.misc:	h.inetlib
-o.misc:	InetInc:sys.h.types
-o.misc:	InetInc:netinet.h.in
-o.misc:	h.socklib
-o.misc:	InetInc:sys.h.types
-o.misc:	InetInc:sys.h.socket
-o.misc:	InetInc:sys.h.stat
-o.misc:	InetInc:sys.h.time
-o.misc:	InetInc:sys.h.uio
+o.misc:	<Lib$Dir>.InetLib.net.h.if
+o.misc:	<Lib$Dir>.InetLib.sys.h.socket
+o.misc:	<Lib$Dir>.InetLib.sys.h.time
+o.misc:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.misc:	<Lib$Dir>.InetLib.net.h.if_arp
+o.misc:	<Lib$Dir>.InetLib.sys.h.socket
+o.misc:	<Lib$Dir>.InetLib.netinet.h.in
+o.misc:	<Lib$Dir>.InetLib.sys.h.ioctl
+o.misc:	<Lib$Dir>.InetLib.sys.h.ttycom
+o.misc:	<Lib$Dir>.InetLib.sys.h.ioccom
+o.misc:	<Lib$Dir>.InetLib.sys.h.ioccom
+o.misc:	<Lib$Dir>.InetLib.sys.h.filio
+o.misc:	<Lib$Dir>.InetLib.sys.h.ioccom
+o.misc:	<Lib$Dir>.InetLib.sys.h.sockio
+o.misc:	<Lib$Dir>.InetLib.sys.h.ioccom
+o.misc:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.misc:	<Lib$Dir>.InetLib.h.netdb
+o.misc:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.misc:	<Lib$Dir>.InetLib.netns.h.ns
+o.misc:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.misc:	<Lib$Dir>.InetLib.sys.h.time
+o.misc:	<Lib$Dir>.InetLib.h.socklib
+o.misc:	<Lib$Dir>.InetLib.sys.h.types
+o.misc:	<Lib$Dir>.InetLib.sys.h.socket
+o.misc:	<Lib$Dir>.InetLib.sys.h.stat
+o.misc:	<Lib$Dir>.InetLib.sys.h.time
+o.misc:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.misc:	<Lib$Dir>.InetLib.sys.h.time
+o.misc:	<Lib$Dir>.InetLib.sys.h.uio
+o.misc:	<Lib$Dir>.InetLib.sys.h.cdefs
 o.misc:	C:h.kernel
-o.misc:	InetInc:sys.h.ioctl
-o.misc:	InetInc:sys.h.ttychars
-o.misc:	InetInc:sys.h.ttydev
-o.misc:	InetInc:h.netdb
-o.misc:	h.unixlib
+o.misc:	<Lib$Dir>.InetLib.h.inetlib
+o.misc:	<Lib$Dir>.InetLib.sys.h.types
+o.misc:	<Lib$Dir>.InetLib.netinet.h.in
 o.misc:	C:h.kernel
 o.misc:	C:h.swis
 o.misc:	h.files
@@ -232,23 +346,50 @@ o.misc:	h.privwebftp
 o.misc:	h.autofns
 o.dirparse:	c.dirparse
 o.dirparse:	h.all
-o.dirparse:	InetInc:h.errno
+o.dirparse:	h.tcplibs
+o.dirparse:	<Lib$Dir>.InetLib.sys.h.types
+o.dirparse:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.dirparse:	<Lib$Dir>.InetLib.machine.h.endian
+o.dirparse:	<Lib$Dir>.InetLib.machine.h.ansi
+o.dirparse:	<Lib$Dir>.InetLib.machine.h.types
+o.dirparse:	<Lib$Dir>.InetLib.sys.h.socket
+o.dirparse:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.dirparse:	<Lib$Dir>.InetLib.sys.h.errno
 o.dirparse:	C:h.kernel
-o.dirparse:	h.inetlib
-o.dirparse:	InetInc:sys.h.types
-o.dirparse:	InetInc:netinet.h.in
-o.dirparse:	h.socklib
-o.dirparse:	InetInc:sys.h.types
-o.dirparse:	InetInc:sys.h.socket
-o.dirparse:	InetInc:sys.h.stat
-o.dirparse:	InetInc:sys.h.time
-o.dirparse:	InetInc:sys.h.uio
+o.dirparse:	<Lib$Dir>.InetLib.net.h.if
+o.dirparse:	<Lib$Dir>.InetLib.sys.h.socket
+o.dirparse:	<Lib$Dir>.InetLib.sys.h.time
+o.dirparse:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.dirparse:	<Lib$Dir>.InetLib.net.h.if_arp
+o.dirparse:	<Lib$Dir>.InetLib.sys.h.socket
+o.dirparse:	<Lib$Dir>.InetLib.netinet.h.in
+o.dirparse:	<Lib$Dir>.InetLib.sys.h.ioctl
+o.dirparse:	<Lib$Dir>.InetLib.sys.h.ttycom
+o.dirparse:	<Lib$Dir>.InetLib.sys.h.ioccom
+o.dirparse:	<Lib$Dir>.InetLib.sys.h.ioccom
+o.dirparse:	<Lib$Dir>.InetLib.sys.h.filio
+o.dirparse:	<Lib$Dir>.InetLib.sys.h.ioccom
+o.dirparse:	<Lib$Dir>.InetLib.sys.h.sockio
+o.dirparse:	<Lib$Dir>.InetLib.sys.h.ioccom
+o.dirparse:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.dirparse:	<Lib$Dir>.InetLib.h.netdb
+o.dirparse:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.dirparse:	<Lib$Dir>.InetLib.netns.h.ns
+o.dirparse:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.dirparse:	<Lib$Dir>.InetLib.sys.h.time
+o.dirparse:	<Lib$Dir>.InetLib.h.socklib
+o.dirparse:	<Lib$Dir>.InetLib.sys.h.types
+o.dirparse:	<Lib$Dir>.InetLib.sys.h.socket
+o.dirparse:	<Lib$Dir>.InetLib.sys.h.stat
+o.dirparse:	<Lib$Dir>.InetLib.sys.h.time
+o.dirparse:	<Lib$Dir>.InetLib.sys.h.cdefs
+o.dirparse:	<Lib$Dir>.InetLib.sys.h.time
+o.dirparse:	<Lib$Dir>.InetLib.sys.h.uio
+o.dirparse:	<Lib$Dir>.InetLib.sys.h.cdefs
 o.dirparse:	C:h.kernel
-o.dirparse:	InetInc:sys.h.ioctl
-o.dirparse:	InetInc:sys.h.ttychars
-o.dirparse:	InetInc:sys.h.ttydev
-o.dirparse:	InetInc:h.netdb
-o.dirparse:	h.unixlib
+o.dirparse:	<Lib$Dir>.InetLib.h.inetlib
+o.dirparse:	<Lib$Dir>.InetLib.sys.h.types
+o.dirparse:	<Lib$Dir>.InetLib.netinet.h.in
 o.dirparse:	C:h.kernel
 o.dirparse:	C:h.swis
 o.dirparse:	h.files
