@@ -1,7 +1,6 @@
 #include <stdlib.h>
 #include "kernel.h"
 #include "swis.h"
-#include "time.h"
 
 #include "module.h"
 #include "flashprog.h"
@@ -14,7 +13,7 @@ ERROR_STRUCT(LOCKED, "Device is busy");
 ERROR_STRUCT(BADHARD, "Bad hardware");
 
 /* Addressing stuff */
-#define DEFUALT_PODULE	0		/* Hack for testing when softloaded */
+#define DEFUALT_PODULE	1
 #define EASI_SPACE	0x88000000U
 
 #define ROM_OFFSET	0
@@ -31,8 +30,6 @@ ERROR_STRUCT(BADHARD, "Bad hardware");
 
 /* IDs */
 #define MAN_INTEL	0x0089
-#define MAN_SHARP	0x00B0
-#define	DEV_28F016Su	0x6688
 #define	DEV_28F016Sx	0x66A0
 
 /* 28F008SA-compatible commands (16bit-wide, replicated to 32bits) */
@@ -64,11 +61,6 @@ ERROR_STRUCT(BADHARD, "Bad hardware");
 #define GSR_DOS_ERROR	0x00200020
 #define GSR_QUEUE_FULL	0x00080008
 #define GSR_PB_AVAIL	0x00040004
-
-/* Do we recognise this flash? */
-#define RECOGNISE(man,dev)					\
-	((((man) == MAN_INTEL) || ((man) == MAN_SHARP)) &&	\
-	 (((dev) == DEV_28F016Sx) || ((dev) == DEV_28F016Su)))
 
 
 /*
@@ -108,13 +100,8 @@ static volatile unsigned int *flash;
  */
 void power_up(void)
 {
-  clock_t done;
   power_control->power = 1;
   power_control->signals.all_signals = 7;
-
-  /* Delay for >50ms to give Vcc time to settle */
-  done = clock() + 1 + (int) (CLOCKS_PER_SEC * 50e-3);
-  while (clock() < done);
 }
 
 void power_down(void)
@@ -135,7 +122,7 @@ _kernel_oserror *flash_initialise( void *pw, int podule_base )
           1<<9, &easi_base, sizeof(easi_base), podule_base);
   }
   power_control = (void *) (easi_base + POWER_OFFSET);
-
+  
   return NULL;
 }
 
@@ -188,13 +175,14 @@ _kernel_oserror *flash_info( _kernel_swi_regs *r )
     r->r[1] = (man &= 0xffff);
     r->r[2] = (dev &= 0xffff);
 
-    if (RECOGNISE(man,dev))
+    if ((man == MAN_INTEL) && (dev == DEV_28F016Sx))
     {
       r->r[4] = blocksize = 128*1024;	/* Each device in pair = 64Kbytes */
       r->r[5] = writesize = 512;	/* pagebuffer=256 bytes * 2 devices */
-
+  
       /* If IDs also appear at 4M, then its a ghost and only 4M is fitted */
-      if ((flash[MEG+MAN_ADDR] == man) && (flash[MEG+DEV_ADDR] == dev))
+      if ((flash[MEG+MAN_ADDR] == ((MAN_INTEL<<16) | MAN_INTEL)) &&
+          (flash[MEG+DEV_ADDR] == ((DEV_28F016Sx<<16) | DEV_28F016Sx)))
       {
         *flash = READ_ARRAY;		/* Restore normality */
         r->r[3] = size = 4*MEG;
@@ -203,16 +191,17 @@ _kernel_oserror *flash_info( _kernel_swi_regs *r )
       {
         int man2, dev2;
         *flash = READ_ARRAY;		/* Restore normality on 1st bank */
-
+        
         /* Look again for IDs at 4Meg to see two pairs of chips are fitted */
         flash[MEG] = READ_ID;		/* Get ID stuff */
         man2 = flash[MEG+MAN_ADDR];
         dev2 = flash[MEG+DEV_ADDR];
         flash[MEG] = READ_ARRAY;	/* Restore normality on 2nd bank */
-
+      
         if (((man2 & 0xffff) == (man2 >> 16)) &&
             ((dev2 & 0xffff) == (dev2 >> 16)) &&
-            RECOGNISE(man2,dev2))
+            ((man2 & 0xffff) == MAN_INTEL) &&
+            ((dev2 & 0xffff) == DEV_28F016Sx))
           r->r[3] = size = 8*MEG;
         else
           r->r[3] = size = 4*MEG;
@@ -225,14 +214,14 @@ _kernel_oserror *flash_info( _kernel_swi_regs *r )
   }
   else		/* Maybe its a 16bit device */
   {
-    *flash = READ_ARRAY;		/* Try to restore normality */
+    *flash = READ_ARRAY;		/* Try to restore normality */    
     flash = (void *) (easi_base + SLEDGE_OFFSET);
     *flash = READ_ID;			/* Get ID stuff */
     man = flash[MAN_ADDR] & 0xffff;
     dev = flash[DEV_ADDR] & 0xffff;
     *flash = READ_ARRAY;		/* Restore normality */
 
-    if (RECOGNISE(man,dev))
+    if ((man == MAN_INTEL) && (dev == DEV_28F016Sx))
     {
       r->r[1] = man;
       r->r[2] = dev;
@@ -275,9 +264,9 @@ _kernel_oserror *flash_read( _kernel_swi_regs *r )
   volatile unsigned int *src = flash + (r->r[1] / width);
   unsigned int *dst = (unsigned int *) r->r[0];
   unsigned int len = (width - 1 + r->r[2]) / width;
-
+  
   /* Only know about this kind of flash */
-  if (!RECOGNISE(man,dev))
+  if ((man != MAN_INTEL) || (dev != DEV_28F016Sx))
     return ERROR(BADTYPES);
 
   /* Can't do anything if WSM is in operation */
@@ -306,9 +295,9 @@ _kernel_oserror *flash_read( _kernel_swi_regs *r )
 _kernel_oserror *flash_erase( _kernel_swi_regs *r )
 {
   /* Only know about this kind of flash */
-  if (!RECOGNISE(man,dev))
+  if ((man != MAN_INTEL) || (dev != DEV_28F016Sx))
     return ERROR(BADTYPES);
-
+    
   /* Can't do anything if WSM is in operation */
   /* Actually, we probably could but it makes things simpler if we don't */
   if (pending)
@@ -321,7 +310,7 @@ _kernel_oserror *flash_erase( _kernel_swi_regs *r )
     *flash = READ_ARRAY;		/* Try to Restore normality */
     return ERROR(LOCKED);
   }
-
+  
   if (size > (4*MEG))
   {
     flash[MEG] = READ_ESR;
@@ -333,7 +322,7 @@ _kernel_oserror *flash_erase( _kernel_swi_regs *r )
       return ERROR(LOCKED);
     }
   }
-
+  
   power_control->program = 1;
   *flash = ERASE_ALL;
   *flash = ERASE_CONFIRM;
@@ -342,7 +331,7 @@ _kernel_oserror *flash_erase( _kernel_swi_regs *r )
     flash[MEG] = ERASE_ALL;
     flash[MEG] = ERASE_CONFIRM;
   }
-
+  
   pending = 1;
   r->r[0] = RET_PENDING;
   return NULL;
@@ -382,12 +371,12 @@ _kernel_oserror *flash_write( _kernel_swi_regs *r )
   unsigned int i, lenpattern = (len - 1) + ((len - 1)<<16);
 
   /* Only know about this kind of flash */
-  if (!RECOGNISE(man,dev))
+  if ((man != MAN_INTEL) || (dev != DEV_28F016Sx))
     return ERROR(BADTYPES);
 
   if (len>writesize/width)
     return ERROR(BADPARAMS);
-
+  
   if (pending)
   {
     /* Check if still busy (erasing) */
@@ -403,9 +392,9 @@ _kernel_oserror *flash_write( _kernel_swi_regs *r )
         r->r[0] = RET_BUSY;
         return NULL;
       }
-
+      
     pending = 0;
-
+    
     /* Check last operation completed successfully */
     if ((flash[GSR_ADDR] & GSR_DOS_ERROR & widthmask) ||
         ((size > (4*MEG)) && (flash[MEG+GSR_ADDR] & GSR_DOS_ERROR & widthmask)))
@@ -431,7 +420,7 @@ _kernel_oserror *flash_write( _kernel_swi_regs *r )
                    block[BSR_ADDR] & widthmask, block[GSR_ADDR] & widthmask));
     r->r[0] = RET_BUSY;
     return NULL;
-  }
+  }    
 
 #ifdef DEBUG
   printf("\nWrite: offset=%x, len=%x\n", r->r[1], r->r[2]);
@@ -479,7 +468,7 @@ _kernel_oserror *flash_write( _kernel_swi_regs *r )
   {
     return ERROR(BADHARD);
   }
-
+  
   *chip = CLEAR_SR;			/* Restore normality */
 
   r->r[0] = RET_DONE;
@@ -500,9 +489,9 @@ _kernel_oserror *flash_write( _kernel_swi_regs *r )
 _kernel_oserror *flash_status( _kernel_swi_regs *r )
 {
   /* Only know about this kind of flash */
-  if (!RECOGNISE(man,dev))
+  if ((man != MAN_INTEL) || (dev != DEV_28F016Sx))
     return ERROR(BADTYPES);
-
+  
   if (!pending)
   {
     r->r[0] = RET_DONE;
@@ -547,14 +536,14 @@ _kernel_oserror *flash_status( _kernel_swi_regs *r )
 #if 0	/* See above */
     flash[MEG] = READ_ESR;
 #endif
-    if ((flash[MEG+GSR_ADDR] & GSR_WSMS_READY & widthmask) !=
+    if ((flash[MEG+GSR_ADDR] & GSR_WSMS_READY & widthmask) != 
         (GSR_WSMS_READY & widthmask))
     {
       r->r[0] = RET_PENDING;
       return NULL;
     }
   }
-
+  
   if ((flash[GSR_ADDR] & GSR_DOS_ERROR & widthmask) ||
       ((size > (4*MEG)) && (flash[MEG+GSR_ADDR] & GSR_DOS_ERROR & widthmask)))
   {
@@ -571,14 +560,14 @@ _kernel_oserror *flash_status( _kernel_swi_regs *r )
 
   DEBUGFN(printf("BSR=%x, GSR=%x\n",
                  flash[BSR_ADDR] & widthmask, flash[GSR_ADDR] & widthmask));
-
+  
   power_control->program = 0;
   *flash = CLEAR_SR;
   flash[MEG] = CLEAR_SR;
 
   pending = 0;
   r->r[0] = RET_DONE;
-  return NULL;
+  return NULL;  
 }
 
 /*
