@@ -1,120 +1,101 @@
-# Makefile for Squeeze
+# Makefile for squeeze & xpand
 #
 # ***********************************
 # ***    C h a n g e   L i s t    ***
 # ***********************************
 # Date       Name         Description
 # ----       ----         -----------
-# 10-Feb-99  SNB          Created.
+# 01-Mar-01  SNB          Created
 #
 
-LIBDIR	= ${INSTDIR}.Library.Acorn
-INSTAPP    = ${INSTDIR}.Apps.!Squeeze
-
-# Generic options:
 #
-MKDIR   = mkdir -p
-AS      = objasm
-CP      = copy
-CC      = cc
-CM      = cmhg
-RM      = remove
-LD      = link
-LB      = libfile
-TOUCH   = create
-WIPE    = -wipe
-SQUEEZE = squeeze
-
-CCFLAGS = -c -depend !Depend -ffah ${INCLUDES} ${DFLAGS} ${THROWBACK}
-ASFLAGS = -depend !Depend -Stamp -quit ${THROWBACK}
-CPFLAGS = ~cfr~v
-LBFLAGS = -c
-WFLAGS  = ~CFR~V
-
+# Paths
 #
-# Libraries
-#
-CLIB      = CLIB:o.stubs
-RLIB      = RISCOSLIB:o.risc_oslib
-RSTUBS    = RISCOSLIB:o.rstubs
-ROMSTUBS  = RISCOSLIB:o.romstubs
-ROMCSTUBS = RISCOSLIB:o.romcstubs
-ABSSYM    = RISC_OSLib:o.AbsSym
-CLXLIB    = C:CLX.o.clxlib
+COMPONENT = squeeze
+TARGET    = squeeze
+TARGET2   = xpand
 
-ODIR      = o._dirs
+CFLAGS    = -Wpc -ffah -IC:CLX -DDDE -DDEBUGGING=0
+DIRS      = o._dirs
 
-#
-# Include files
-#
-INCLUDES  = -IC: -IC:CLX
-DFLAGS    = -DDDE -DDEBUGGING=0
+INSTAPP   = ${INSTDIR}.Apps.!Squeeze
+LIBDIR    = ${INSTDIR}.Library.Acorn
 
 #
 # Program specific options:
 #
-COMPONENT  = squeeze/xpand
-TARGET     = ${COMPONENT}
-SOURCE     = 
-EXPORTS    = 
+OBJS       = squeeze.o unsqueeze.o unsqrm.o
+XPANDOBJS  = xpand.o asmcall.o
+LIBS       = ${CLXLIB} ${CLIB}
 
-SQZOBJS    = squeeze.o unsqueeze.o unsqrm.o ${LIBS}
-XPANDOBJS  = xpand.o asmcall.o ${LIBS}
-
-LIBS=	${CLXLIB} ${CLIB}
+include Makefiles:StdTools
+include Makefiles:AppLibs
+include Makefiles:AppStdRule
 
 #
-# Rule patterns
+# build a the library:
 #
-.c.o:;     ${CC} ${CCFLAGS} -o $@ $<
-.s.o:;     ${AS} ${ASFLAGS} -o $@ $<
+all:    ${TARGET} ${TARGET2}
 
 #
-# Main target
+# RISC OS ROM build rules:
 #
-all: xpand squeeze
-	@echo ${COMPONENT}: all built
+rom: ${TARGET} ${TARGET2}
+        @echo ${COMPONENT}: rom module built
 
-squeeze: ${SQZOBJS} ${ODIR}
-	${LD} -o $@ ${SQZOBJS}
-	squeeze $@
+export: export_${PHASE}
 
-xpand: ${XPANDOBJS} ${ODIR}
-	${LD} -o $@ ${XPANDOBJS}
-	squeeze $@
+install_rom: ${TARGET} ${TARGET2}
+        @echo ${COMPONENT}: rom module installed
+        
+install_tool: ${TARGET} ${TARGET2}
+	${MKDIR} ${LIBDIR}.Docs
+	${CP} ${TARGET} ${LIBDIR}.${TARGET} ${CPFLAGS}
+	${CP} ${TARGET2} ${LIBDIR}.${TARGET2} ${CPFLAGS}
+	@echo ${COMPONENT}: tool installed in library
 
-xpand.o: squeeze.h
+install: install_resources install_tool
+	@echo ${COMPONENT}: install complete
 
-clean:
-	${RM} squeeze
-	${RM} xpand
-	${WIPE} o ${WFLAGS}
-	@echo ${COMPONENT}: cleaned
-
-${ODIR}:
-	${MKDIR} o
-	${TOUCH} $@
-
-install_tool: all
-	${CP} squeeze ${LIBDIR}.squeeze ${CPFLAGS}
-	${CP} xpand ${LIBDIR}.xpand ${CPFLAGS}
-	@echo ${COMPONENT}: tool and docs installed in library
-
-install: install_tool install_dirs
+install_resources:
+	${MKDIR} ${INSTAPP}
 	${CP} LocalRes:!Boot ${INSTAPP}.!Boot ${CPFLAGS}
 	${CP} LocalRes:!Run ${INSTAPP}.!Run ${CPFLAGS}
 	${CP} LocalRes:!Help ${INSTAPP}.!Help ${CPFLAGS}
-	${CP} LocalRes:!Setup ${INSTAPP}.!Setup ${CPFLAGS}
 	${CP} LocalRes:!Sprites ${INSTAPP}.!Sprites ${CPFLAGS}
 	${CP} LocalRes:!Sprites22 ${INSTAPP}.!Sprites22 ${CPFLAGS}
 	${CP} LocalRes:Messages ${INSTAPP}.Messages ${CPFLAGS}
 	${CP} LocalRes:Templates ${INSTAPP}.Templates ${CPFLAGS}
 	${CC} -C++ -E >${INSTAPP}.Desc LocalRes:Desc
+	${TIDYDESC}  ${INSTAPP}.Desc ${INSTAPP}.Desc
 	@echo ${COMPONENT}: FrontEnd app install in '${INSTAPP}'
 
-install_dirs:
-	${MKDIR} ${INSTAPP}
-	${MKDIR} ${INSTAPP}
-	${MKDIR} ${LIBDIR}.Docs
+clean:
+        ${WIPE} o ${WFLAGS}
+        ${RM} ${COMPONENT}
+        @echo ${COMPONENT}: cleaned
+
+export_hdrs: 
+	@echo ${COMPONENT}: export complete (hdrs)
+
+export_libs: 
+        @echo ${COMPONENT}: export complete (libs)
+
+${DIRS}:
+	${MKDIR} o
+	${TOUCH} $@
+
+#
+# Final link
+#
+${TARGET}: ${OBJS} ${LIBS} ${DIRS}
+        ${LD} ${LDFLAGS} -o ${COMPONENT} ${OBJS} ${LIBS}
+        ${SQZ} ${SQZFLAGS} $@
+        ${CHMOD} a+rx $@
+
+${TARGET2}: ${XPANDOBJS} ${LIBS} ${DIRS}
+        ${LD} ${LDFLAGS} -o ${COMPONENT} ${OBJS} ${LIBS}
+        ${SQZ} ${SQZFLAGS} $@
+        ${CHMOD} a+rx $@
 
 # Dynamic dependencies:
