@@ -6,6 +6,7 @@
 # Date       Name         Description
 # ----       ----         -----------
 # 02-Oct-98  KJB          Created
+# 08-Oct-98  KJB          Added Squeeze and Messages rules
 
 #
 # Generic options:
@@ -75,9 +76,6 @@ VJEOBJS = \
 # of the above: cnv5tb, kansuuji, vjetb, vjetb1, vjetb2, vjetb3, vjetb4 and wstrtb
 # do not seem to be linked in to the module
 
-.SUFFIXES:   .ofd 
-.SUFFIXES:   .ord
-
 #
 # Rule patterns
 #
@@ -108,6 +106,8 @@ install_rom: ${TARGET} o.dirs
 
 resources:
         ${MKDIR} ${RESDIR}.${COMPONENT}
+        TokenCheck LocalRes:Messages
+        ${CP} LocalRes:Messages    ${RESDIR}.${COMPONENT}.Messages   ${CPFLAGS}
         ${CP} Resources.Dictionary ${RESDIR}.${COMPONENT}.Dictionary ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
