@@ -103,3 +103,12 @@ Resources.!RunImage: ${OBJS} ${EVENTLIB} ${TOOLBOXLIB} ${WIMPLIB} ${CLIB}
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
+o.smearset:	c.smearset
+o.smearset:	C:h.swis
+o.smearset:	C:h.kernel
+o.smearset:	tbox:h.toolbox
+o.smearset:	tbox:h.wimp
+o.smearset:	tbox:h.event
+o.smearset:	tbox:h.window
+o.smearset:	tbox:h.gadgets
+o.smearset:	tbox:h.wimplib
