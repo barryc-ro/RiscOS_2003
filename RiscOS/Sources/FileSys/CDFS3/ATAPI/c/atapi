@@ -11,14 +11,35 @@
  * IRQ status register and IDE flag bit (IOMD)
  */
 
+#if Phoebe
+
+static volatile unsigned int *IRQstatus = (unsigned int *) 0x03200310; /* new IOMD2 register */
+#define IDE_INT_BIT(Interface) BIT(Interface+3)
+
+#else
+
 static volatile char *IRQstatus = (char *) 0x3200020;
 #define  IDE_IRQ_BIT  BIT(1)
 
+#endif
 
 /*
- * About ADFS_LockUnlockIDE - used to claim Motherboard IDE bus on
- *  RISC PCs
+ * About ADFS_IDEDeviceInfo - used to get info about possible presence/absence
+ * of ATA & ATAPI deviced
  */
+
+ #define DEVICE_NONE  0
+ #define DEVICE_ATA   1
+ #define DEVICE_ATAPI 2
+
+/*
+ * About ADFS_LockUnlockIDE - used to claim Motherboard IDE bus(es) on
+ *  RISC PCs (Medusae & Phoebes)
+ */
+
+#ifndef ADFS_IDEDeviceInfo
+#define ADFS_IDEDeviceInfo 0x40253
+#endif
 
 #define  DRIVER_IN_USE    0x108a0   /* error number */
 #define  TO_IDELOCK           100   /* timeout in csecs for bus claim */
@@ -131,7 +152,7 @@ static volatile char * tfaltstatus;
 #define  MAX_STR    40
 static char str[MAX_STR + 1];   /* allows for terminator */
 
-char * str_from (char *s, int n)
+static char * str_from (char *s, int n)
 {
     char *t;
 
@@ -303,7 +324,7 @@ static int await_not_BSY ()
 
 #if !WATCH
 
-static int await_INTRQ ()
+static int await_INTRQ (unsigned int mask)
 {
     char irqstatus;
     char status;
@@ -318,7 +339,7 @@ static int await_INTRQ ()
             {
             case 0:
                 irqstatus = *IRQstatus;
-                if (!(irqstatus & IDE_IRQ_BIT))
+                if (!(irqstatus & mask))
                     continue;
 
                 status = *tfstatus;  /* to clear INTRQ */
@@ -326,7 +347,7 @@ static int await_INTRQ ()
 
             case 1:
                 irqstatus = *IRQstatus;
-                if ((irqstatus & IDE_IRQ_BIT))
+                if ((irqstatus & mask))
                     continue;
                 phase = 2;
 
@@ -353,7 +374,7 @@ DEBUG debug_output (T_PACKET, "  Timed out during %s\n", state);
 
 #else
 
-static int await_INTRQ ()
+static int await_INTRQ (unsigned int mask)
 {
     int phase = 0;
     int i, k;
@@ -375,7 +396,7 @@ static int await_INTRQ ()
                  * First, watch the interface until INTRQ is asserted.
                  */
             case 0:
-                intrq = *IRQstatus & IDE_IRQ_BIT;
+                intrq = *IRQstatus & mask;
                 status = *tfaltstatus;
 
                 watch_for_change (i + k)  /* no ; because it's a macro ... */
@@ -383,7 +404,7 @@ static int await_INTRQ ()
                 if (intrq == 0)
                     continue;
 
-                intrq = *IRQstatus & IDE_IRQ_BIT;
+                intrq = *IRQstatus & mask;
                 status = *tfstatus;    /* this read should deassert INTRQ */
                 i++;
 
@@ -396,7 +417,7 @@ static int await_INTRQ ()
                  * Now watch the interface until INTRQ is deasserted.
                  */
             case 1:
-                intrq = *IRQstatus & IDE_IRQ_BIT;
+                intrq = *IRQstatus & mask;
                 status = *tfaltstatus;
 
                 watch_for_change (i + k)  /* no ; because it's a macro ... */
@@ -411,7 +432,7 @@ static int await_INTRQ ()
                  * Now watch the interface until the BSY flag is clear.
                  */
             case 2:
-                intrq = *IRQstatus & IDE_IRQ_BIT;
+                intrq = *IRQstatus & mask;
                 status = *tfaltstatus;
 
                 watch_for_change (i + k)  /* no ; because it's a macro ... */
@@ -428,7 +449,7 @@ static int await_INTRQ ()
 
                     for (; i < endi; i++)
                     {
-                        intrq = *IRQstatus & IDE_IRQ_BIT;
+                        intrq = *IRQstatus & mask;
                         status = *tfaltstatus;
 
                         watch_for_change (i + k)  /* no ; ... */
@@ -570,7 +591,11 @@ debug_output (T_PACKET, "  buff = %x, len = %d, transfer = %s\n",
     if (drive->noIRQafterCMD)
         status = await_not_BSY ();
     else
-        status = await_INTRQ ();
+#if Phoebe
+        status = await_INTRQ (IDE_INT_BIT(drive->interface));
+#else
+        status = await_INTRQ (IDE_IRQ_BIT);
+#endif
     if (status < 0)
         return msgs_make_error (ERR_TIMEOUT + PROG_ERR, "post-command");
 
@@ -592,7 +617,11 @@ debug_output (T_PACKET, "  buff = %x, len = %d, transfer = %s\n",
         set_time_out (drive->dib.timeout);
 
         /* wait for device ready to transfer data (or command complete) */
-        status = await_INTRQ ();
+#if Phoebe
+        status = await_INTRQ (IDE_INT_BIT(drive->interface));
+#else
+        status = await_INTRQ (IDE_IRQ_BIT);
+#endif
 
 /*        DEBUG debug_output (T_PACKET, "  After IRQ\n");*/
 
@@ -1004,7 +1033,7 @@ DEBUG debug_output (T_ERROR,
  * Claim exclusive use of the hardware interface.
  *
  * At present, this function assumes that the interface is that controlled
- *  by ADFS, and so calls ADFS_LockUnlockIDE.
+ *  by ADFS, and so calls ADFS_LockIDE.
  *
  * The call may time out, in which case a suitable error is returned.
  */
@@ -1023,7 +1052,7 @@ DEBUG debug_output (T_LOCK, "atapi_lock_bus: ");
 
     while (TRUE)
     {
-        Error *err = _swix (ADFS_LockIDE, I0, TRUE);
+        Error *err = _swix (ADFS_LockIDE, I0, TRUE & (drive->interface << 1));
 
         if (err == 0)
             break;
@@ -1061,7 +1090,7 @@ static void atapi_unlock_bus (DrivePtr drive)
 {
 DEBUG debug_output (T_LOCK, "atapi_unlock_bus\n");
 
-    _swix (ADFS_LockIDE, I0, FALSE);
+    _swix (ADFS_LockIDE, I0, FALSE & (drive->interface << 1));
 
     return;
 }
@@ -1249,7 +1278,6 @@ DEBUG debug_output (T_ERROR,
     return err;
 }
 
-
 /*
  * This function is called during initialisation as part of the process of
  *  identifying which devices are ATAPI and which are not.
@@ -1278,7 +1306,7 @@ DEBUG debug_output (T_ERROR,
  *  is swapped around.
  */
 
-static int atapi_identify_device (char code, char *buff, Bool swap)
+static int atapi_identify_device (DrivePtr drive, char code, char *buff, Bool swap)
 {
     int status;
     int i;
@@ -1297,7 +1325,11 @@ static int atapi_identify_device (char code, char *buff, Bool swap)
 #endif
 
     *tfcommand = code;
-    status = await_INTRQ ();
+#if Phoebe
+    status = await_INTRQ (IDE_INT_BIT(drive->interface));
+#else
+    status = await_INTRQ (IDE_IRQ_BIT);
+#endif
     if (status < 0)   /* timed out during command phase */
     {
 
@@ -1334,6 +1366,12 @@ DEBUG debug_output (T_IDENTDET,
         IdentifyDevicePtr p = (IdentifyDevicePtr) buff;
         char t;
 
+#if Phoebe
+
+    IGNORE(swap);
+
+#else
+
         if (swap)
         {
             for (i = 0; i < MAX_MODEL_ID; i += 2)
@@ -1350,6 +1388,7 @@ DEBUG debug_output (T_IDENTDET,
                 p->firmware[i+1] = t;
             }
         }
+#endif
 
 DEBUG debug_output (T_IDENTDET,
       "ATA%s Identify Device command completed successfully for %s",
@@ -1362,7 +1401,6 @@ DEBUG debug_output (T_IDENTDET, " (%s)\n",
 
     return 0;
 }
-
 
 /*
  * This is called as soon as a device has been identified, and a DriveRec
@@ -1621,6 +1659,13 @@ Bool atapi_exists (DrivePtr drive, IdentifyDevicePtr buff)
     char *commregs = drive->commregs;
     char *ctrlregs = drive->ctrlregs;
     Bool isatapi = FALSE;
+#if Phoebe
+    int device_type;
+    int i;
+    char tmp;
+    _kernel_oserror *e;
+    IdentifyDevicePtr buffer;
+#endif
 
     /* initialise addresses of task file registers */
     tfdata = (volatile unsigned int *) (commregs + COMMREG_DATA);
@@ -1633,11 +1678,65 @@ Bool atapi_exists (DrivePtr drive, IdentifyDevicePtr buff)
     tfcommand = (volatile char *) (commregs + COMMREG_COMMAND);
     tfaltstatus = (volatile char *) (ctrlregs + CTRLREG_ALTSTATUS);
 
-
     /*
      * Determine if this device exists and is an ATAPI device.
      */
 
+#if Phoebe
+
+    e = _swix (ADFS_IDEDeviceInfo, I0|I1|O1|O3, 0, (drive->interface << 1) | drive->device, &device_type, &buffer);
+
+DEBUG debug_output (T_IDENTDET, "Device %d (%d, %d) is type %d (data @%08p)\n",
+      (drive->interface << 1) | drive->device,
+      drive->interface, drive->device, device_type, buffer);
+
+    if (e)
+    {
+DEBUG debug_output (T_IDENTDET, "Error in identifying device %d\n",
+      (drive->interface << 1) | drive->device);
+    }
+    else if (device_type == DEVICE_NONE)
+    {
+DEBUG debug_output (T_IDENTDET, "Device %d is non existant or timed out\n",
+      (drive->interface << 1) | drive->device);
+    }
+    else if (device_type == DEVICE_ATA)
+    {
+DEBUG debug_output (T_IDENTDET, "Device %d is ATA - probably a disc drive\n",
+      (drive->interface << 1) | drive->device);
+    }
+    else
+    {
+DEBUG debug_output (T_IDENTDET, "Device %d is ATAPI - probably a CD-ROM\n",
+      (drive->interface << 1) | drive->device);
+      /* ATAPI - copy ATAPI identify info */
+
+      memcpy (buff, buffer, sizeof (IdentifyDeviceRec));
+
+      /* swap bytes aroun */
+
+      for (i = 0; i < MAX_MODEL_ID; i += 2)
+      {
+          tmp = buffer->model[i];
+          buffer->model[i] = buffer->model[i+1];
+          buffer->model[i+1] = tmp;
+      }
+
+      for (i = 0; i < MAX_FIRMWARE_REV; i += 2)
+      {
+          tmp = buffer->firmware[i];
+          buffer->firmware[i] = buffer->firmware[i+1];
+          buffer->firmware[i+1] = tmp;
+      }
+
+      isatapi = TRUE;
+    }
+
+    err = atapi_lock_bus (drive);
+
+    if (err) return FALSE;
+
+#else
     /* lock the bus */
     err = atapi_lock_bus (drive);
     if (err)    /* must have timed out */
@@ -1693,7 +1792,7 @@ DEBUG debug_output (T_IDENTDET,
       "Pre-identification signature = %02x %02x\n",
       *tfcounthigh, *tfcountlow);
 
-    status = atapi_identify_device (ATA_IDENTIFY_DEVICE,
+    status = atapi_identify_device (drive, ATA_IDENTIFY_DEVICE,
                                     (char *) buff, TRUE);
 
     if (status == 0)          /* ATA identify successful */
@@ -1721,7 +1820,6 @@ DEBUG debug_output (T_IDENTDET,
       drive->device);
 
     }
-
     else                      /* ATA identify aborted */
     {
         /*
@@ -1738,7 +1836,7 @@ DEBUG debug_output (T_IDENTDET,
       "Post-ATA-identification signature = %02x %02x\n",
       *tfcounthigh, *tfcountlow);
 
-        status = atapi_identify_device (ATAPI_IDENTIFY_DEVICE,
+        status = atapi_identify_device (drive, ATAPI_IDENTIFY_DEVICE,
                                         (char *) buff, TRUE);
 
         if (status == 0)          /* ATAPI identify successful */
@@ -1777,7 +1875,7 @@ DEBUG debug_output (T_IDENTDET,
 
         }
     }
-
+#endif
 
     if (isatapi)
     {
@@ -1895,7 +1993,7 @@ Error * atapi_ata_execute
             }
 
             if (status >= 0)
-                status = atapi_identify_device (ATAPI_IDENTIFY_DEVICE,
+                status = atapi_identify_device (drive, ATAPI_IDENTIFY_DEVICE,
                                                                buff, FALSE);
 
             switch (status)
