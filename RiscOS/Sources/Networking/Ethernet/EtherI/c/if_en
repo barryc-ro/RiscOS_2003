@@ -201,6 +201,14 @@ static int pdrops = 0;
 
 static struct stats st = { 0 };
 
+#ifdef FILTER_IP_ADDR
+static unsigned int st_short_mbufs = 0;
+static unsigned int st_contiguous_mbuf_rqst_ok = 0;
+static unsigned int st_contiguous_mbuf_rqst_failures = 0;
+static unsigned int st_mbuf_alignment_failures = 0;
+static unsigned int st_en_io_in_errors = 0;
+#endif
+
 /**********************************************************************/
 
 static void nulldev(u_char c)
@@ -328,6 +336,7 @@ void en_read(struct en_softc *en, NICRef nic)
     struct mbuf *pd;
 #ifdef FILTER_IP_ADDR
     int ip_hdr_captured = 0;
+    int first_pass = 1;
 #endif
 
     /*
@@ -567,6 +576,27 @@ void en_read(struct en_softc *en, NICRef nic)
 	    fs = NULL;
 	    goto unwanted;
 	}
+
+#ifdef FILTER_IP_ADDR
+        if (m->m_next->m_len < (IP_HDR_LEN + 8))
+        {
+            st_short_mbufs++;
+
+            /* IP_HDR_LEN + 8: 8 for safety to avoid calling en_io_in() with 0, AND to allow
+               for some adjustment with buffer alignment. */
+            if ((m->m_next = PULLUP((m->m_next),(IP_HDR_LEN + 8))) == 0)
+            {
+                 st_contiguous_mbuf_rqst_failures++;
+                 fs = NULL;
+                 goto unwanted; /* we tried */
+            }
+            else
+            {
+                 st_contiguous_mbuf_rqst_ok++;
+            }
+        }
+#endif
+
 	/*
 	 * run down the mbufs, filling them in
 	 */
@@ -583,60 +613,43 @@ void en_read(struct en_softc *en, NICRef nic)
         nic->rbcr1 = datalen >> 8;
         nic->command = START_DMA(DMA_READ);
 
-#ifdef FILTER_IP_ADDR
-        if ((type == 0x0800) && fs)
-        {
-            if ((fs->fs_addrlevel == ADDRLVL_MULTICAST) && (!fs->fs_multiall))
-            {
-                 char *p = mtod(m->m_next,char *);
-                 char *dst_address;
-
-                 en_io_in(port,p,IP_HDR_LEN);
-                 ip_hdr_captured = 1;
-                 dst_address = p + 16;
-
-                 if (IS_MULTICAST_IP(dst_address))
-                 {
-                     int j;
-                     int found = 0;
-
-                     for (j = 0; j < fs->fs_multitablesize; j++)
-                     {
-                          if ((memcmp(&fs->fs_multitable[j].ip_address, (void *)dst_address,4)) == 0)
-                          {
-                               found = 1;
-                               break;
-                          }
-                     }
-
-                     if (!found)
-                     {
-                         nic->command = START_DMA(DMA_ABORT);
-                         nulldev(*port);
-                         en->en_st_unwanted_frames++;
-                         fs = NULL;
-                         goto unwanted;
-                     }
-                 }
-            }
-        }
-#endif
-
 	for( pd = m->m_next; pd; pd = pd->m_next )
 	{
 redo:
-	    /* If this is not the last mbuf and it is of odd length then align it */
-	    if ( (pd->m_next!=0) && ((pd->m_len&3)||(pd->m_off&3)) )
-	    {
-	        /* The best way is to extend the mbuf by 1 byte since mbufs are usually aligned so
-	           we stand a good chance of succeeding (I do not rely on (MINILEN&1)==0), and it means there is
-	           less (theoretical) chance that we will need another ALLOC at the end */
-	        while ( pd->m_off&3 )
-	            pd->m_off++;
+            /* Align the offset */
+            while (pd->m_off & 3)
+            {
+                   pd->m_off++;
 
-	        while ( pd->m_len&3 )
-	            pd->m_len--;
-	    }
+                   /* Incrementing the offset has to result in a shortening of the length */
+                   if (pd->m_len > 0)
+                       pd->m_len--;
+                   else
+                   {
+                       /* Shouldn't happen, but better to be safe ... */
+                       st_mbuf_alignment_failures++;
+                       fs = NULL;
+                       goto unwanted; /* we tried */
+                   }
+            }
+
+            /* Ensure m_len is a multiple of 2, preferably a multiple of 4, for all but the last block */
+            if (pd->m_next != 0)
+            {
+                while ((pd->m_len % 2 != 0) && (pd->m_len > 4))
+                        pd->m_len--;
+
+                if ((pd->m_len % 4 != 0) && (pd->m_len > 4))
+                     pd->m_len -=2;
+            }
+
+            /* Check we haven't broken anything */
+            if ((pd->m_off + pd->m_len) > (pd->m_inioff + pd->m_inilen))
+            {
+                 st_mbuf_alignment_failures++;
+                 fs = NULL;
+                 goto unwanted; /* we tried */
+            }
 
 	    /* If is the last mbuf, and we have the wrong number of bytes, then do some adjustment */
 	    if ( (pd->m_next==0) && (pd->m_len!=datalen) )
@@ -652,6 +665,8 @@ redo:
 
   	            if ( pd->m_next==0 )
   	            {
+  	                bytes_left = datalen;
+
   	                /* Drop this last DMA.  Maybe aborting it is better ? I dont like aborting, it's more risky */
   	                for ( ; bytes_left; bytes_left-=2 )
   	                    nulldev (*port);
@@ -669,15 +684,78 @@ redo:
 	    pd->m_type = MT_DATA;
 
 #ifdef FILTER_IP_ADDR
+            if (((type == 0x0800) && fs) && (first_pass == 1))
+            {
+                first_pass = 0;
+
+                if ((fs->fs_addrlevel == ADDRLVL_MULTICAST) && (!fs->fs_multiall))
+                {
+                     char *p = mtod(pd,char *);
+                     char *dst_address;
+
+                     en_io_in(port,p,IP_HDR_LEN);
+                     ip_hdr_captured = 1;
+                     dst_address = p + 16;
+
+                     if (IS_MULTICAST_IP(dst_address))
+                     {
+                         int j;
+                         int found = 0;
+
+                         for (j = 0; j < fs->fs_multitablesize; j++)
+                         {
+                              if ((memcmp(&fs->fs_multitable[j].ip_address, (void *)dst_address,4)) == 0)
+                              {
+                                   found = 1;
+                                   break;
+                              }
+                         }
+
+                         if (!found)
+                         {
+                             nic->command = START_DMA(DMA_ABORT);
+                             nulldev(*port);
+                             en->en_st_unwanted_frames++;
+                             fs = NULL;
+                             goto unwanted;
+                         }
+                     }
+                }
+            }
+#endif
+
+
+
+#ifdef FILTER_IP_ADDR
             if (ip_hdr_captured)
             {
-                en_io_in(port, mtod(pd, char *) + IP_HDR_LEN, pd->m_len - IP_HDR_LEN);
-                ip_hdr_captured = 0;  /* carry on as normal */
+                if (pd->m_len - IP_HDR_LEN > 0)
+                {
+                    en_io_in(port, mtod(pd, char *) + IP_HDR_LEN, pd->m_len - IP_HDR_LEN);
+                    ip_hdr_captured = 0;  /* carry on as normal */
+                }
+                else
+                {
+                    st_en_io_in_errors++;
+                    fs = NULL;
+                    goto unwanted; /* discard and recover */
+                }
             }
             else
 #endif
 	    {
-	        en_io_in(port, mtod(pd, char *), pd->m_len);
+	        if (pd->m_len > 0)
+	        {
+	            en_io_in(port, mtod(pd, char *), pd->m_len);
+	        }
+	        else
+	        {
+#ifdef FILTER_IP_ADDR
+	            st_en_io_in_errors++;
+#endif
+	            fs = NULL;
+	            goto unwanted; /* discard and recover */
+	        }
 	    }
 
 	    datalen -= pd->m_len;
@@ -2920,6 +2998,14 @@ int prenstats(int flag)
 	        	en->en_st_rx_interrupts);
 
 	printf ( "   Excess collisions: %u\n\n", (unsigned) en->en_st_excess_collisions);
+
+#ifdef FILTER_IP_ADDR
+        printf ( "   Short MBufs: %u\n", (unsigned)st_short_mbufs);
+        printf ( "   Contiguous MBuf rqsts ok: %u\n", (unsigned)st_contiguous_mbuf_rqst_ok);
+        printf ( "   Contiguous MBuf rqsts failed: %u\n", (unsigned)st_contiguous_mbuf_rqst_failures);
+        printf ( "   MBuf alignment failures: %u\n", (unsigned)st_mbuf_alignment_failures);
+        printf ( "   en_io_in errors: %u\n\n", (unsigned)st_en_io_in_errors);
+#endif
 
 	printf ( "   Frame types claimed:\n" );
 
