@@ -36,7 +36,7 @@ ABSSYM    = RISC_OSLib:o.AbsSym
 #
 # Include files
 #
-INCLUDES = -IC:
+INCLUDES = -I<Lib$Dir>.tboxlibs. -IC:
 
 LIBS     =
 
@@ -53,14 +53,17 @@ EXPORTS   =
 #
 # Rule patterns
 #
+SUFFIXES=   .cmhg
+
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} -o $@ $<
+.cmhg.o:;   ${CMHG} -p -o $@ $<
+.cmhg.h:;   ${CMHG} -p -d $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
 
 #
 # build a relocatable module:
 #
-all: rm.KeyWatch
+all: rm.KeyWatch h.KeyWatchHd
 
 #
 # RISC OS ROM build rules:
@@ -81,6 +84,7 @@ clean:
         ${WIPE} linked.* ${WFLAGS}
         ${WIPE} map.* ${WFLAGS}
         ${RM} ${TARGET}
+        ${RM} h.KeyWatchHd
         @echo ${COMPONENT}: cleaned
 
 resources:
@@ -115,3 +119,6 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 o.KeyWatch:	c.KeyWatch
 o.KeyWatch:	C:h.kernel
 o.KeyWatch:	C:h.swis
+o.KeyWatch:	<Lib$Dir>.tboxlibs.h.wimp
+o.KeyWatch:	h.KeyWatchHd
+o.KeyWatch:	VersionNum
