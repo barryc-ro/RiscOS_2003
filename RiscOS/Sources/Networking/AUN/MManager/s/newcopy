@@ -1,0 +1,1277 @@
+        ;; newcopy.s - Fast ARM Assembler Block Copier
+        ;; (C) ANT Limited 1994. All rights reserved.
+
+        ;; 24-11-94     Added some stats gathering in debug mode
+        
+        GET     mmhdr.s
+
+        AREA    block_copier, CODE
+
+        EXPORT  bcopy
+
+
+
+src     RN      0
+dest    RN      1
+count   RN      2
+d0      RN      3       ;\_
+temp    RN      3       ;/
+d1      RN      4
+d2      RN      5
+d3      RN      6
+d4      RN      7
+d5      RN      8
+d6      RN      9
+d7      RN      10
+d8      RN      11
+;ws      RN      12
+;sp      RN      13
+;lr      RN      14
+;pc      RN      15
+
+; Purpose:
+;
+; Copy potentially overlapping and non-aligned blocks of data from one
+; area of memory to another. The sizes of the blocks will vary. The minimum
+; overhead for whatever block size is supplied is the goal. The compromise
+; is to attempt to provide low overheads for the given number of bytes
+; to copy.
+;
+; In real use, we have to cater for the following sensibly:
+;
+; 0 bytes
+; very small byte count (eg 6 or 16)
+; most of a 128 byte mbuf (eg 32 or 96)
+; precisely one 128 byte mbuf (assume nice alignments as well?) chains of these!
+; most of a 1536 byte mbuf
+; more than 1536 bytes - unsafe data - unknown limit - most tradeoff points
+; passed by the time we get beyond a couple of K, until the size starts
+; reaching 100s of K, where it starts becoming worth wanting to control
+; the cachability of different regions of memory for maximum efficiency (or
+; having seperate I and D caches!).
+;
+; We wish to behave efficiently with systems that lack a cache, and
+; with the 4 word and 8 word cache line sizes of ARM3/6 and ARM7.
+;
+; No thought has been given to MEMC1 style quad-word alignment optimisations
+; for instructions, not for the cache line alignment of instructions for
+; systems with a cache (ARM3 implies both, so maybe doubly worth it?).
+;
+; No registers are preserved.
+;
+; src < dest {&& (dest - src) <= count} then copy down
+; src = dest then no operation
+; src > dest then copy up
+;
+; (src - dest) > 0 && (dest - src) <= count
+; (dest - src) < 0 && (dest - src) <= count
+;
+
+        ;; The location of these header files tends to vary,
+        ;; although they are nearly always located under a
+        ;; 'hdr' type directory. Case is important if they
+        ;; are being accessed over NFS.
+
+;       GET     /riscos/ashdr/ListOpts
+;       GET     /riscos/ashdr/Macros
+;       GET     /riscos/ashdr/System
+;       GET     /riscos/ashdr/Debug
+
+
+    MACRO
+    MYDLINE $a, $b, $c
+;    DLINE   $a, $b, $c
+    MEND
+
+        MACRO
+        regs
+; DREG src, "Src = ", cc
+; DREG dest, ", Dest = ", cc
+; DREG count, ", Count = "
+        MEND
+
+
+;
+; Need to preserve r10 and r11 to meet APCS requirements nicely.
+; Should really go and factor this in to all callers of bcopy,
+; but for now it is present here.
+;
+
+
+bcopy    ROUT
+
+ [ {TRUE} ; {FALSE}
+        STMFD   sp!, {r10, r11, lr}
+        BL      copy_
+        LDMFD   sp!, {r10, r11, pc}^
+copy_   ROUT
+ ]
+
+
+    [ DEBUG
+
+        MOV     d0, pc                          ; get flags to restore to
+        IRQSOFF d1
+        SADD    d1, d2, BCOPY_CALLS
+        SADD64  d1, d2, BCOPY_BYTES, count
+        TEQP    d0, #0
+    ]
+
+
+        ; ? < count < ?
+
+        CMP     count, # 0                      ; -ve counts not allowed and +ve
+        MOVLES  pc, lr                          ; of this size is daft
+        SUBS    temp, src, dest                 ; or no copy required
+        MOVEQS  pc, lr                          ; temp has odd meaning if take branch
+        BLT     copy_down                       ; maybe an awkward overlapping copy?
+
+        ; 0 < count < ?
+
+        CMP     count, # 4
+        BGE     up_ge4
+
+        ; 0 < count < 4
+
+        CMP     count, # 2
+
+        LDRGTB  temp, [src ], #1
+        STRGTB  temp, [dest], #1
+        LDRGEB  temp, [src ], #1
+        STRGEB  temp, [dest], #1
+        LDRALB  temp, [src ], #1
+        STRALB  temp, [dest], #1
+
+ [ DEBUG
+        IRQSOFF d0
+        SADD    d0, d1, UP_LT_4
+ ]
+
+        MOVS    pc, lr
+
+up_ge4
+        ; 4 <= count <  ?
+
+        CMP     count, # 16                     ; worth bringing other optimisations
+        BGE     big_up                          ; into play if big enough
+
+        ; 4 <= count < 16
+
+        ; co-align test, so independent of data alignment
+
+        TST     temp, # 3                       ; difference between ptrs
+        TSTEQ   src, #3
+        TSTEQ   dest, #3
+        BNE     small_up_worst                  ; not worth messing about
+
+        ; word aligned and less than 16 bytes. "We know a song about that..."
+
+ [ DEBUG
+        CDIRQS  d0
+        SADD    d0, d1, UP_LT_16_ALIGNED
+        CRIRQS  d0
+ ]
+
+        TST     count, # 8
+        LDMNEIA src!,  {d1-d2}
+        STMNEIA dest!, {d1-d2}
+
+        TST     count, # 4
+        LDRNE   temp, [src ], #4
+        STRNE   temp, [dest], #4
+
+        TST     count, # 2
+        LDRNEB  temp, [src ], #1
+        STRNEB  temp, [dest], #1
+        LDRNEB  temp, [src ], #1
+        STRNEB  temp, [dest], #1
+
+        TST     count, # 1
+        LDRNEB  temp, [src ], #1
+        STRNEB  temp, [dest], #1
+
+        MOVS    pc, lr
+
+
+small_up_worst ROUT
+
+        ; don't know about alignment, so have to use byte operations,
+        ; so have he fixed overhead of the LDR and ADD, and then the
+        ; code becomes optimal (not always easy to achieve).
+
+ [ DEBUG
+        CDIRQS  d0
+        SADD    d0, d1, SMALL_UP_WORST
+        CRIRQS  d0
+ ]
+
+        ; 0 < count < 16
+
+        LDR     temp, [pc, count, LSL #2]
+        ADD     pc, pc, temp
+99
+        DCD     %f00 - %b99 -4         ; could be reused!
+        DCD     %f01 - %b99 -4
+        DCD     %f02 - %b99 -4
+        DCD     %f03 - %b99 -4
+        DCD     %f04 - %b99 -4
+        DCD     %f05 - %b99 -4
+        DCD     %f06 - %b99 -4
+        DCD     %f07 - %b99 -4
+        DCD     %f08 - %b99 -4
+        DCD     %f09 - %b99 -4
+        DCD     %f10 - %b99 -4
+        DCD     %f11 - %b99 -4
+        DCD     %f12 - %b99 -4
+        DCD     %f13 - %b99 -4
+        DCD     %f14 - %b99 -4
+        DCD     %f15 - %b99 -4
+
+15      LDRB    temp, [src ], # 1
+        STRB    temp, [dest], # 1
+14      LDRB    temp, [src ], # 1
+        STRB    temp, [dest], # 1
+13      LDRB    temp, [src ], # 1
+        STRB    temp, [dest], # 1
+12      LDRB    temp, [src ], # 1
+        STRB    temp, [dest], # 1
+11      LDRB    temp, [src ], # 1
+        STRB    temp, [dest], # 1
+10      LDRB    temp, [src ], # 1
+        STRB    temp, [dest], # 1
+09      LDRB    temp, [src ], # 1
+        STRB    temp, [dest], # 1
+08      LDRB    temp, [src ], # 1
+        STRB    temp, [dest], # 1
+07      LDRB    temp, [src ], # 1
+        STRB    temp, [dest], # 1
+06      LDRB    temp, [src ], # 1
+        STRB    temp, [dest], # 1
+05      LDRB    temp, [src ], # 1
+        STRB    temp, [dest], # 1
+04      LDRB    temp, [src ], # 1
+        STRB    temp, [dest], # 1
+03      LDRB    temp, [src ], # 1
+        STRB    temp, [dest], # 1
+02      LDRB    temp, [src ], # 1
+        STRB    temp, [dest], # 1
+01      LDRB    temp, [src ], # 1
+        STRB    temp, [dest], # 1
+
+00       MOVS    pc, lr
+
+
+big_up  ROUT
+
+        ; 16 <= count < ?
+
+        TST     src, #3                         ; anticipate chains of 128 byte
+        TSTEQ   dest, #3                        ; aligned mbufs due to the
+        TEQEQ   count, # 128                    ; underlying allocation/layout
+        BNE     %f10                            ; not the quick case
+
+        ; go all out for this case - corresponds to a whole small mbuf
+
+ [ DEBUG
+        CDIRQS  d0
+        SADD    d0, d1, UP_128
+        CRIRQS  d0
+ ]
+
+        LDMIA   src!,  {d1-d8}                  ; no pratting about
+        STMIA   dest!, {d1-d8}
+        LDMIA   src!,  {d1-d8}
+        STMIA   dest!, {d1-d8}
+        LDMIA   src!,  {d1-d8}
+        STMIA   dest!, {d1-d8}
+        LDMIA   src!,  {d1-d8}
+        STMIA   dest!, {d1-d8}
+
+        MOVS    pc, lr                          ; done
+
+        ; more typical copying actions
+10
+        ; 16 < count < ?
+
+        TST     temp, # 3                       ; co-alignment possible?
+        BNE     stagger_up                      ; no - use shifting copier
+
+        ANDS    temp, src, # 3
+        BEQ     %f00                            ; already aligned
+
+        CMP     temp, # 2                       ; align, need 1, 2 or 3 bytes
+        RSB     temp, temp, #4
+        SUB     count, count, temp              ; not forgetting to update count
+
+        LDRLTB  temp, [src ], #1
+        STRLTB  temp, [dest], #1
+        LDRLEB  temp, [src ], #1
+        STRLEB  temp, [dest], #1
+        LDRALB  temp, [src ], #1
+        STRALB  temp, [dest], #1
+
+        ; alignment now ensured
+00
+        CMP     count, # 128
+        BGE     large_up                        ; aligned as well
+
+        ; 13 < count < 128
+        ; Take advantage of known range and binary chop on block sizes
+
+        ; fall through
+
+up_binary_chop ROUT
+
+ [ DEBUG
+        CDIRQS  d0
+        SADD    d0, d1, UP_BINARY_CHOP
+        CRIRQS  d0
+ ]
+
+        ; 0 <= count < 128 (== 0 ideally already spotted)
+
+        ; CAUTION - IT IS ASSUMED THAT ONLY BITS TO WHICH A RESPONSE EXISTS
+        ; ARE TESTED BY THE BINARY COPIERS - THUS CALLERS NEED TO NOT PERFORM
+        ; SOME SUBTRACTIONS.
+
+        TST     count, # 64+32+16
+        BEQ     %f00
+
+        TST     count, # 64
+        LDMNEIA src!,  {d1-d8}
+        STMNEIA dest!, {d1-d8}
+        LDMNEIA src!,  {d1-d8}
+        STMNEIA dest!, {d1-d8}
+
+        TST     count, # 32
+        LDMNEIA src!,  {d1-d8}
+        STMNEIA dest!, {d1-d8}
+
+        TST     count, # 16
+        LDMNEIA src!,  {d1-d4}
+        STMNEIA dest!, {d1-d4}
+00
+        TST     count, # 8+4+2+1
+        MOVEQS  pc, lr
+
+        TST     count, # 8
+        LDMNEIA src!,  {d1-d2}
+        STMNEIA dest!, {d1-d2}
+
+        TST     count, # 4
+        LDRNE   temp, [src ], #4
+        STRNE   temp, [dest], #4
+
+        TST     count, # 2
+        LDRNEB  temp, [src ], #1
+        STRNEB  temp, [dest], #1
+        LDRNEB  temp, [src ], #1
+        STRNEB  temp, [dest], #1
+
+        TST     count, # 1
+        LDRNEB  temp, [src ], #1
+        STRNEB  temp, [dest], #1
+
+        MOVS    pc, lr
+
+;-----------------------------------------------------------------------------
+
+; src and dest are both word (4 byte) aligned, count >= 128 bytes
+; wish to achieve alignment with any cache that might be around.
+; if the writeback buffer is also around, we are particularly
+; happy to ignore destination alignment. If not, then there isn't much we
+; can do, and cache line loading is pretty hardwired.
+
+; unroll the main loop a reasonable amount so that the branch overhead on
+; ARM2 and ARM250 is less than 10% of the actual work performed.
+; (Guessed at, rather than cycle counted)
+
+large_up ROUT
+
+ [ DEBUG
+        CDIRQS  d0
+        SADD    d0, d1, LARGE_UP
+        CRIRQS  d0
+ ]
+
+        ANDS    temp, src, # 4 + 8 + 16
+        BEQ     %f00
+        RSB     temp, temp, #32
+        SUB     count, count, temp
+
+        ; align upwards. Must perform in order to handle carries. This WILL
+        ; generate carries.
+
+        TST     src, # 4                        ; get 2 word alignment
+        LDRNE   temp, [src ], #4
+        STRNE   temp, [dest], #4
+
+        TST     src, # 8                        ; get 4 word alignment
+        LDMNEIA src!,  {d1-d2}                  ; this is ARM3, ARM6 cache line size
+        STMNEIA dest!, {d1-d2}
+
+        TST     src, # 16                       ; get 8 word alignment
+        LDMNEIA src!,  {d1-d4}                  ; this is ARM7 cache line size
+        STMNEIA dest!, {d1-d4}
+
+        ; count >= 100 (100 = 128 - (4+8+16))
+00
+        ; count > 0, src at least ARM7 cache line aligned
+
+        SUBS    count, count, # 256
+        BLT     %f01
+
+        LDMIA   src!,  {d1-d8}
+        STMIA   dest!, {d1-d8}
+        LDMIA   src!,  {d1-d8}
+        STMIA   dest!, {d1-d8}
+        LDMIA   src!,  {d1-d8}
+        STMIA   dest!, {d1-d8}
+        LDMIA   src!,  {d1-d8}
+        STMIA   dest!, {d1-d8}
+        LDMIA   src!,  {d1-d8}
+        STMIA   dest!, {d1-d8}
+        LDMIA   src!,  {d1-d8}
+        STMIA   dest!, {d1-d8}
+        LDMIA   src!,  {d1-d8}
+        STMIA   dest!, {d1-d8}
+        LDMIA   src!,  {d1-d8}
+        STMIA   dest!, {d1-d8}
+
+        BNE     %b00
+        MOVS    pc, lr
+01
+        ; -256 <= count < 0
+
+        ADDS    count, count, # 256
+
+        ; 0 <= count < 256
+
+        MOVEQS  pc, lr
+        TST     count, # 128
+        BEQ     up_binary_chop
+
+        LDMIA   src!,  {d1-d8}
+        STMIA   dest!, {d1-d8}
+        LDMIA   src!,  {d1-d8}
+        STMIA   dest!, {d1-d8}
+        LDMIA   src!,  {d1-d8}
+        STMIA   dest!, {d1-d8}
+        LDMIA   src!,  {d1-d8}
+        STMIA   dest!, {d1-d8}
+
+        SUBS    count, count, # 128
+        BNE     up_binary_chop
+
+        MOVS    pc, lr
+
+;-----------------------------------------------------------------------------
+
+; Perform a copy from addresses that are not co-aligned. Try and get the
+; source data at least word aligned and let the writeback buffer (if any)
+; handle smoothing out the write performance/granularity. We don't know
+; the current alignment of the src pointer, yet.
+
+
+stagger_up ROUT
+
+ [ DEBUG
+        CDIRQS  d0
+        SADD    d0, d1, STAGGER_UP
+        CRIRQS  d0
+ ]
+        ; 16 < count < ?
+
+        ANDS    temp, src, # 3
+        BEQ     %f00                            ; already aligned
+
+        CMP     temp, # 2                       ; align, need 1, 2 or 3 bytes
+        RSB     temp, temp, #4
+        SUB     count, count, temp              ; not forgetting to update count
+
+        LDRLTB  temp, [src ], #1
+        STRLTB  temp, [dest], #1
+        LDRLEB  temp, [src ], #1
+        STRLEB  temp, [dest], #1
+        LDRALB  temp, [src ], #1
+        STRALB  temp, [dest], #1
+
+00      ; 13 < count < ? and source pointer is word aligned.
+
+        ANDS    temp, dest, # 3
+        CMP     temp, #2
+        BLT     %f10                            ; dest 1 byte beyond source
+        BGT     %f20                            ; dest 3 bytes beyond source
+
+        LDR     temp, [src ], #4
+        STRB    temp, [dest], #1
+        MOV     temp, temp, LSR #8
+        STRB    temp, [dest], #1
+        MOV     temp, temp, LSR #8              ; now have in hand data
+
+        SUB     count, count, #4                ; in hand accounted for here
+
+02      CMP     count, # 8*4
+        BLT     %f01
+
+        LDMIA   src!,  {d1-d8}
+        ORR     temp, temp, d1, LSL # 16
+        MOV     d1, d1, LSR # 16
+        ORR     d1, d1, d2, LSL # 16
+        MOV     d2, d2, LSR # 16
+        ORR     d2, d2, d3, LSL # 16
+        MOV     d3, d3, LSR # 16
+        ORR     d3, d3, d4, LSL # 16
+        MOV     d4, d4, LSR # 16
+        ORR     d4, d4, d5, LSL # 16
+        MOV     d5, d5, LSR # 16
+        ORR     d5, d5, d6, LSL # 16
+        MOV     d6, d6, LSR # 16
+        ORR     d6, d6, d7, LSL # 16
+        MOV     d7, d7, LSR # 16
+        ORR     d7, d7, d8, LSL # 16
+        STMIA   dest!, {temp, d1-d7}
+        MOV     temp, d8, LSR # 16              ; new 2 bytes in hand
+
+        SUB     count, count, # 8*4
+        B       %b02
+
+        ; 0 <= count < 32               (32 = 8 * 4 = LDM lump)
+
+01      CMP     count, # 4*4
+        BLT     %f03
+
+        LDMIA   src!,  {d1-d4}
+        ORR     temp, temp, d1, LSL # 16
+        MOV     d1, d1, LSR # 16
+        ORR     d1, d1, d2, LSL # 16
+        MOV     d2, d2, LSR # 16
+        ORR     d2, d2, d3, LSL # 16
+        MOV     d3, d3, LSR # 16
+        ORR     d3, d3, d4, LSL # 16
+        STMIA   dest!, {temp, d1-d3}
+        MOV     temp, d4, LSR # 16              ; new 2 bytes in hand
+
+        SUB     count, count, # 4*4
+
+03      ; 0 <= count < 16                       ; and 2 bytes in hand
+
+        STRB    temp, [dest], #1                ; count already adjusted for
+        MOV     temp, temp, LSR # 8             ; this in-hand data, so needs
+        STRB    temp, [dest], #1                ; flushing before this branch:
+
+        B       small_up_worst                   ; finish itty bitty fashiom
+
+
+
+; dest is offset by 1 byte
+
+10      LDR     temp, [src ], #4
+        STRB    temp, [dest], #1
+        MOV     temp, temp, LSR #8
+        STRB    temp, [dest], #1
+        MOV     temp, temp, LSR #8
+        STRB    temp, [dest], #1
+        MOV     temp, temp, LSR #8              ; 1 byte in hand
+
+        SUB     count, count, #4
+
+11      CMP     count, # 8*4
+        BLT     %f12
+
+        LDMIA   src!, {d1-d8}
+        ORR     temp, temp, d1, LSL #8
+        MOV     d1, d1, LSR #24
+        ORR     d1, d1, d2, LSL #8
+        MOV     d2, d2, LSR # 24
+        ORR     d2, d2, d3, LSL #8
+        MOV     d3, d3, LSR # 24
+        ORR     d3, d3, d4, LSL #8
+        MOV     d4, d4, LSR # 24
+        ORR     d4, d4, d5, LSL #8
+        MOV     d5, d5, LSR # 24
+        ORR     d5, d5, d6, LSL #8
+        MOV     d6, d6, LSR # 24
+        ORR     d6, d6, d7, LSL #8
+        MOV     d7, d7, LSR # 24
+        ORR     d7, d7, d8, LSL #8
+        STMIA   dest!, {temp, d1-d7}
+        MOV     temp, d8, LSR # 24                ; 1 byte in hand
+
+        SUB     count, count, # 8*4
+        B       %b11
+
+12      CMP     count, # 4*4
+        BLT     %f13
+
+        LDMIA   src!,  {d1-d4}
+        ORR     temp, temp, d1, LSL #8
+        MOV     d1, d1, LSR #24
+        ORR     d1, d1, d2, LSL #8
+        MOV     d2, d2, LSR # 24
+        ORR     d2, d2, d3, LSL #8
+        MOV     d3, d3, LSR # 24
+        ORR     d3, d3, d4, LSL #8
+        STMIA   dest!, {temp, d1-d3}
+        MOV     temp, d4, LSR # 24              ; new 1 bytes in hand
+
+        SUB     count, count, # 4*4
+
+13      ; 0 <= count < 16                       ; and 1 bytes in hand
+
+        STRB    temp, [dest], #1                ; count already adjusted for
+        B       small_up_worst
+
+
+; dest is offset by 3 bytes
+
+20      LDR     temp, [src ], #4
+        STRB    temp, [dest], #1
+        MOV     temp, temp, LSR #8              ; 3 bytes in hand
+
+        SUB     count, count, #4
+
+21      CMP     count, # 8*4
+        BLT     %f22
+
+        LDMIA   src!, {d1-d8}
+        ORR     temp, temp, d1, LSL #24
+        MOV     d1, d1, LSR #8
+        ORR     d1, d1, d2, LSL #24
+        MOV     d2, d2, LSR # 8
+        ORR     d2, d2, d3, LSL #24
+        MOV     d3, d3, LSR # 8
+        ORR     d3, d3, d4, LSL #24
+        MOV     d4, d4, LSR # 8
+        ORR     d4, d4, d5, LSL #24
+        MOV     d5, d5, LSR # 8
+        ORR     d5, d5, d6, LSL #24
+        MOV     d6, d6, LSR # 8
+        ORR     d6, d6, d7, LSL #24
+        MOV     d7, d7, LSR # 8
+        ORR     d7, d7, d8, LSL #24
+        STMIA   dest!, {temp, d1-d7}
+        MOV     temp, d8, LSR # 8                 ; 3 bytes in hand
+
+        SUB     count, count, # 8*4
+        B       %b21
+
+22      CMP     count, # 4*4
+        BLT     %f23
+
+        LDMIA   src!,  {d1-d4}
+        ORR     temp, temp, d1, LSL #24
+        MOV     d1, d1, LSR #8
+        ORR     d1, d1, d2, LSL #24
+        MOV     d2, d2, LSR # 8
+        ORR     d2, d2, d3, LSL #24
+        MOV     d3, d3, LSR # 8
+        ORR     d3, d3, d4, LSL #24
+        STMIA   dest!, {temp, d1-d3}
+        MOV     temp, d4, LSR # 8               ; new 3 bytes in hand
+
+        SUB     count, count, # 4*4
+
+23      ; 0 <= count < 16                       ; and 3 bytes in hand
+
+        STRB    temp, [dest], #1
+        MOV     temp, temp, LSR #8
+        STRB    temp, [dest], #1
+        MOV     temp, temp, LSR #8
+        STRB    temp, [dest], #1                ; count already adjusted for
+        B       small_up_worst
+
+
+;
+;
+;
+;           ÚÄÄÄÄÄ¿                      ÚÄÄÄÄÄ¿
+;  DOWN     ³     ³                      ³     ³     UP
+;           ³     ³                      ³     ³
+;           ³     ³                      ³     ³
+; ÚÄÄÄÄÄ¿   ³     ³                      ³     ³   ÚÄÄÄÄÄ¿
+; ³     ³   ³     ³                      ³     ³   ³     ³
+; ³     ³   ³     ³                      ³     ³   ³     ³
+; ³     ³   DESTÄÄÙ                      SRCÄÄÄÙ   ³     ³
+; ³     ³                                          ³     ³
+; ³     ³  SRC-DEST<0                   SRC-DEST>0 ³     ³
+; ³     ³  DEST-SRC>0                   DEST-SRC<0 ³     ³
+; ³     ³                                          ³     ³
+; SRCÄÄÄÙ                                          DESTÄÄÙ
+;
+
+
+copy_down  ROUT
+
+        ; 0 < count < ?
+
+        ADD     src, src, count
+        ADD     dest, dest, count
+
+        CMP     count, # 4
+        BGE     down_ge4
+
+        ; 0 < count < 4
+
+        CMP     count, # 2
+
+        LDRGTB  temp, [src , #-1]!
+        STRGTB  temp, [dest, #-1]!
+        LDRGEB  temp, [src , #-1]!
+        STRGEB  temp, [dest, #-1]!
+        LDRALB  temp, [src , #-1]!
+        STRALB  temp, [dest, #-1]!
+
+ [ DEBUG
+        IRQSOFF d0
+        SADD    d0, d1, DOWN_LT_4
+ ]
+        MOVS    pc, lr
+
+down_ge4
+        ; 4 <= count <  ?
+
+        CMP     count, # 16                     ; worth bringing other optimisations
+        BGE     big_down                        ; into play if big enough
+
+        ; 4 <= count < 16
+
+        ; co-align test, so independent of data alignment
+
+        TST     temp, # 3                       ; difference between ptrs
+        TSTEQ   src, #3
+        TSTEQ   dest, #3
+        BNE     small_down_worst                ; not worth messing about
+
+        ; word aligned and less than 16 bytes. "We know a song about that..."
+
+        TST     count, # 8
+        LDMNEDB src!,  {d1-d2}
+        STMNEDB dest!, {d1-d2}
+
+        TST     count, # 4
+        LDRNE   temp, [src , #-4]!
+        STRNE   temp, [dest, #-4]!
+
+        TST     count, # 2
+        LDRNEB  temp, [src , #-1]!
+        STRNEB  temp, [dest, #-1]!
+        LDRNEB  temp, [src , #-1]!
+        STRNEB  temp, [dest, #-1]!
+
+        TST     count, # 1
+        LDRNEB  temp, [src , #-1]!
+        STRNEB  temp, [dest, #-1]!
+
+ [ DEBUG
+        IRQSOFF d0
+        SADD    d0, d1, DOWN_LT_16_ALIGNED
+ ]
+
+        MOVS    pc, lr
+
+
+small_down_worst ROUT
+
+ [ DEBUG
+        CDIRQS  d0
+        SADD    d0, d1, SMALL_DOWN_WORST
+        CRIRQS  d0
+ ]
+
+        ; don't know about alignment, so have to use byte operations,
+        ; so have he fixed overhead of the LDR and ADD, and then the
+        ; code becomes optimal (not always easy to achieve).
+
+        ; 0 < count < 16
+
+        LDR     temp, [pc, count, LSL #2]
+        ADD     pc, pc, temp
+99
+        DCD     %f00 - %b99 -4         ; could be reused!
+        DCD     %f01 - %b99 -4
+        DCD     %f02 - %b99 -4
+        DCD     %f03 - %b99 -4
+        DCD     %f04 - %b99 -4
+        DCD     %f05 - %b99 -4
+        DCD     %f06 - %b99 -4
+        DCD     %f07 - %b99 -4
+        DCD     %f08 - %b99 -4
+        DCD     %f09 - %b99 -4
+        DCD     %f10 - %b99 -4
+        DCD     %f11 - %b99 -4
+        DCD     %f12 - %b99 -4
+        DCD     %f13 - %b99 -4
+        DCD     %f14 - %b99 -4
+        DCD     %f15 - %b99 -4
+
+15      LDRB    temp, [src , #-1]!
+        STRB    temp, [dest, #-1]!
+14      LDRB    temp, [src , #-1]!
+        STRB    temp, [dest, #-1]!
+13      LDRB    temp, [src , #-1]!
+        STRB    temp, [dest, #-1]!
+12      LDRB    temp, [src , #-1]!
+        STRB    temp, [dest, #-1]!
+11      LDRB    temp, [src , #-1]!
+        STRB    temp, [dest, #-1]!
+10      LDRB    temp, [src , #-1]!
+        STRB    temp, [dest, #-1]!
+09      LDRB    temp, [src , #-1]!
+        STRB    temp, [dest, #-1]!
+08      LDRB    temp, [src , #-1]!
+        STRB    temp, [dest, #-1]!
+07      LDRB    temp, [src , #-1]!
+        STRB    temp, [dest, #-1]!
+06      LDRB    temp, [src , #-1]!
+        STRB    temp, [dest, #-1]!
+05      LDRB    temp, [src , #-1]!
+        STRB    temp, [dest, #-1]!
+04      LDRB    temp, [src , #-1]!
+        STRB    temp, [dest, #-1]!
+03      LDRB    temp, [src , #-1]!
+        STRB    temp, [dest, #-1]!
+02      LDRB    temp, [src , #-1]!
+        STRB    temp, [dest, #-1]!
+01      LDRB    temp, [src , #-1]!
+        STRB    temp, [dest, #-1]!
+
+00      MOVS    pc, lr
+
+
+big_down ROUT
+
+        ; 16 <= count < ?
+
+        TST     src, #3                         ; anticipate chains of 128 byte
+        TSTEQ   dest, #3                        ; aligned mbufs due to the
+        TEQEQ   count, # 128                    ; underlying allocation/layout
+        BNE     %f10                            ; not the quick case
+
+        ; go all out for this case - corresponds to a whole small mbuf
+
+        LDMDB   src!,  {d1-d8}                  ; no pratting about
+        STMDB   dest!, {d1-d8}
+        LDMDB   src!,  {d1-d8}
+        STMDB   dest!, {d1-d8}
+        LDMDB   src!,  {d1-d8}
+        STMDB   dest!, {d1-d8}
+        LDMDB   src!,  {d1-d8}
+        STMDB   dest!, {d1-d8}
+
+ [ DEBUG
+        IRQSOFF d0
+        SADD    d0, d1, DOWN_128
+ ]
+
+        MOVS    pc, lr                          ; done
+
+        ; more typical copying actions
+10
+        ; 16 < count < ?
+
+        TST     temp, # 3                       ; co-alignment possible?
+        BNE     stagger_down                    ; no - use shifting copier
+
+        ANDS    temp, src, # 3
+        BEQ     %f00                            ; already aligned
+
+        CMP     temp, # 2                       ; align, need 1, 2 or 3 bytes
+        SUB     count, count, temp              ; not forgetting to update count
+
+        LDRGTB  temp, [src , #-1]!
+        STRGTB  temp, [dest, #-1]!
+        LDRGEB  temp, [src , #-1]!
+        STRGEB  temp, [dest, #-1]!
+        LDRALB  temp, [src , #-1]!
+        STRALB  temp, [dest, #-1]!
+
+        ; alignment now ensured
+00
+        CMP     count, # 128
+        BGE     large_down                      ; aligned as well
+
+        ; 13 < count < 128
+        ; Take advantage of known range and binary chop on block sizes
+
+        ; fall through
+
+down_binary_chop ROUT
+
+ [ DEBUG
+        CDIRQS  d0
+        SADD    d0, d1, DOWN_BINARY_CHOP
+        CRIRQS  d0
+ ]
+
+        ; 0 <= count < 128 (== 0 ideally already spotted)
+
+        ; CAUTION - IT IS ASSUMED THAT ONLY BITS TO WHICH A RESPONSE EXISTS
+        ; ARE TESTED BY THE BINARY COPIERS - THUS CALLERS NEED TO NOT PERFORM
+        ; SOME SUBTRACTIONS.
+
+        TST     count, # 64+32+16
+        BEQ     %f00
+
+        TST     count, # 64
+        LDMNEDB src!,  {d1-d8}
+        STMNEDB dest!, {d1-d8}
+        LDMNEDB src!,  {d1-d8}
+        STMNEDB dest!, {d1-d8}
+
+        TST     count, # 32
+        LDMNEDB src!,  {d1-d8}
+        STMNEDB dest!, {d1-d8}
+
+        TST     count, # 16
+        LDMNEDB src!,  {d1-d4}
+        STMNEDB dest!, {d1-d4}
+00
+        TST     count, # 8+4+2+1
+        MOVEQS  pc, lr
+
+        TST     count, # 8
+        LDMNEDB src!,  {d1-d2}
+        STMNEDB dest!, {d1-d2}
+
+        TST     count, # 4
+        LDRNE   temp, [src , #-4]!
+        STRNE   temp, [dest, #-4]!
+
+        TST     count, # 2
+        LDRNEB  temp, [src , #-1]!
+        STRNEB  temp, [dest, #-1]!
+        LDRNEB  temp, [src , #-1]!
+        STRNEB  temp, [dest, #-1]!
+
+        TST     count, # 1
+        LDRNEB  temp, [src , #-1]!
+        STRNEB  temp, [dest, #-1]!
+
+        MOVS    pc, lr
+
+;-----------------------------------------------------------------------------
+
+; src and dest are both word (4 byte) aligned, count >= 128 bytes
+; wish to achieve alignment with any cache that might be around.
+; if the writeback buffer is also around, we are particularly
+; happy to ignore destination alignment. If not, then there isn't much we
+; can do, and cache line loading is pretty hardwired.
+
+; unroll the main loop a reasonable amount so that the branch overhead on
+; ARM2 and ARM250 is less than 10% of the actual work performed.
+; (Guessed at, rather than cycle counted)
+
+large_down ROUT
+
+ [ DEBUG
+        CDIRQS  d0
+        SADD    d0, d1, LARGE_DOWN
+        CRIRQS  d0
+ ]
+
+        ANDS    temp, src, # 4 + 8 + 16
+        BEQ     %f00
+        SUB     count, count, temp
+
+        ; align dowwards. This must/cannot generate a carry
+
+        TST     src, # 4                        ; get 2 word alignment
+        LDRNE   temp, [src , #-4]!
+        STRNE   temp, [dest, #-4]!
+
+        TST     src, # 8                        ; get 4 word alignment
+        LDMNEDB src!,  {d1-d2}                  ; this is ARM3, ARM6 cache line size
+        STMNEDB dest!, {d1-d2}
+
+        TST     src, # 16                       ; get 8 word alignment
+        LDMNEDB src!,  {d1-d4}                  ; this is ARM7 cache line size
+        STMNEDB dest!, {d1-d4}
+
+        ; count >= 100 (100 = 128 - (4+8+16))
+00
+       ; count > 0, src at least ARM7 cache line aligned
+
+        SUBS    count, count, # 256
+        BLT     %f01
+
+        LDMDB   src!,  {d1-d8}
+        STMDB   dest!, {d1-d8}
+        LDMDB   src!,  {d1-d8}
+        STMDB   dest!, {d1-d8}
+        LDMDB   src!,  {d1-d8}
+        STMDB   dest!, {d1-d8}
+        LDMDB   src!,  {d1-d8}
+        STMDB   dest!, {d1-d8}
+        LDMDB   src!,  {d1-d8}
+        STMDB   dest!, {d1-d8}
+        LDMDB   src!,  {d1-d8}
+        STMDB   dest!, {d1-d8}
+        LDMDB   src!,  {d1-d8}
+        STMDB   dest!, {d1-d8}
+        LDMDB   src!,  {d1-d8}
+        STMDB   dest!, {d1-d8}
+
+        BNE     %b00
+        MOVS    pc, lr
+01
+        ; -256 <= count < 0
+
+        ADDS    count, count, # 256
+
+        ; 0 <= count < 256
+
+        MOVEQS  pc, lr
+        TST     count, # 128
+        BEQ     down_binary_chop
+
+        LDMDB   src!,  {d1-d8}
+        STMDB   dest!, {d1-d8}
+        LDMDB   src!,  {d1-d8}
+        STMDB   dest!, {d1-d8}
+        LDMDB   src!,  {d1-d8}
+        STMDB   dest!, {d1-d8}
+        LDMDB   src!,  {d1-d8}
+        STMDB   dest!, {d1-d8}
+
+        SUBS    count, count, # 128
+        BNE     down_binary_chop
+
+        MOVS    pc, lr
+
+
+;-----------------------------------------------------------------------------
+
+; Perform a copy from addresses that are not co-aligned. Try and get the
+; source data at least word aligned and let the writeback buffer (if any)
+; handle smoothing out the write performance/granularity. We don't know
+; the current alignment of the src pointer, yet.
+
+
+stagger_down ROUT
+
+ [ DEBUG
+        CDIRQS  d0
+        SADD    d0, d1, STAGGER_DOWN
+        CRIRQS  d0
+ ]
+
+        ; 16 < count < ?
+
+        ANDS    temp, src, # 3
+        BEQ     %f00                            ; already aligned
+
+        CMP     temp, # 2                       ; align, need 1, 2 or 3 bytes
+        SUB     count, count, temp              ; not forgetting to update count
+
+        LDRGTB  temp, [src , #-1]!
+        STRGTB  temp, [dest, #-1]!
+        LDRGEB  temp, [src , #-1]!
+        STRGEB  temp, [dest, #-1]!
+        LDRALB  temp, [src , #-1]!
+        STRALB  temp, [dest, #-1]!
+
+00      ; 13 < count < ? and source pointer is word aligned.
+
+        ANDS    temp, dest, # 3
+        CMP     temp, #2
+        BLT     %f10                            ; dest 3 bytes below source
+        BGT     %f20                            ; dest 1 byte below source
+
+; dest is 2 bytes below source.
+
+        LDR     d8, [src , #-4]!
+        MOV     d8, d8, ROR #24
+        STRB    d8, [dest, #-1]!
+        MOV     d8, d8, ROR #24
+        STRB    d8, [dest, #-1]!                ; and 2 bytes at top of word
+
+        MOV     d8, d8, LSR #16                 ; need unused bottom 16 bits as
+        MOV     d8, d8, LSL #16                 ; zero so ORR works as want it to.
+
+        SUB     count, count, #4                ; in hand accounted for here
+
+        ; 9 < count < ?
+
+02      CMP     count, # 8*4
+        BLT     %f01
+
+        LDMDB   src!,  {d0-d7}
+        ORR     d8, d8, d7, LSR #16
+        MOV     d7, d7, LSL #16
+        ORR     d7, d7, d6, LSR #16
+        MOV     d6, d6, LSL #16
+        ORR     d6, d6, d5, LSR #16
+        MOV     d5, d5, LSL #16
+        ORR     d5, d5, d4, LSR #16
+        MOV     d4, d4, LSL #16
+        ORR     d4, d4, d3, LSR #16
+        MOV     d3, d3, LSL #16
+        ORR     d3, d3, d2, LSR #16
+        MOV     d2, d2, LSL #16
+        ORR     d2, d2, d1, LSR #16
+        MOV     d1, d1, LSL #16
+        ORR     d1, d1, d0, LSR #16
+        STMDB   dest!, {d1-d8}
+        MOV     d8, d0, LSL #16                 ; 2 bytes in hand back again
+
+        SUB     count, count, #8*4
+        B       %b02
+
+01      CMP     count, # 16
+        BLT     %f03
+
+        LDMDB   src!,  {d4-d7}
+        ORR     d8, d8, d7, LSR #16
+        MOV     d7, d7, LSL #16
+        ORR     d7, d7, d6, LSR #16
+        MOV     d6, d6, LSL #16
+        ORR     d6, d6, d5, LSR #16
+        MOV     d5, d5, LSL #16
+        ORR     d5, d5, d4, LSR #16
+        STMDB   dest!, {d5-d8}
+        MOV     d8, d4, LSL #16                 ; 2 bytes in hand back again
+
+        SUB     count, count, #4*4
+
+03      MOV     d8, d8, ROR #24
+        STRB    d8, [dest, #-1]!
+        MOV     d8, d8, ROR #24
+        STRB    d8, [dest, #-1]!                ; count already reflected for these
+
+        B       small_down_worst
+
+
+
+; dest 3 bytes below source
+
+10      LDR     d8, [src , #-4]!
+        MOV     d8, d8, ROR #24                 ; 3210 => 2103
+        STRB    d8, [dest, #-1]!
+
+        BIC     d8, d8 , #255                   ; need unused bottom 8 bits 0'd
+        SUB     count, count, #4                ; in hand accounted for here
+
+        ; 9 < count < ?
+
+12      CMP     count, # 8*4
+        BLT     %f11
+
+        LDMDB   src!,  {d0-d7}
+        ORR     d8, d8, d7, LSR #24             ; add another byte
+        MOV     d7, d7, LSL #8                  ; discard that byte, leaving 3
+        ORR     d7, d7, d6, LSR #24             ; add another byte, etc
+        MOV     d6, d6, LSL #8
+        ORR     d6, d6, d5, LSR #24
+        MOV     d5, d5, LSL #8
+        ORR     d5, d5, d4, LSR #24
+        MOV     d4, d4, LSL #8
+        ORR     d4, d4, d3, LSR #24
+        MOV     d3, d3, LSL #8
+        ORR     d3, d3, d2, LSR #24
+        MOV     d2, d2, LSL #8
+        ORR     d2, d2, d1, LSR #24
+        MOV     d1, d1, LSL #8
+        ORR     d1, d1, d0, LSR #24
+        STMDB   dest!, {d1-d8}
+        MOV     d8, d0, LSL #8                  ; 3 bytes in hand back again
+
+        SUB     count, count, #8*4
+        B       %b12
+
+11      CMP     count, # 16
+        BLT     %f13
+
+        LDMDB   src!,  {d4-d7}
+        ORR     d8, d8, d7, LSR #24
+        MOV     d7, d7, LSL #8
+        ORR     d7, d7, d6, LSR #24
+        MOV     d6, d6, LSL #8
+        ORR     d6, d6, d5, LSR #24
+        MOV     d5, d5, LSL #8
+        ORR     d5, d5, d4, LSR #24
+        STMDB   dest!, {d5-d8}
+        MOV     d8, d4, LSL #8                  ; 3 bytes in hand back again
+
+        SUB     count, count, #4*4
+
+13      MOV     d8, d8, ROR #24
+        STRB    d8, [dest, #-1]!
+        MOV     d8, d8, ROR #24
+        STRB    d8, [dest, #-1]!
+        MOV     d8, d8, ROR #24
+        STRB    d8, [dest, #-1]!                ; count already reflected for these
+
+        B       small_down_worst
+
+
+
+
+
+; dest 1 byte below source
+
+20      LDR     d8, [src , #-4]!
+        MOV     d8, d8, ROR #24
+        STRB    d8, [dest, #-1]!
+        MOV     d8, d8, ROR #24
+        STRB    d8, [dest, #-1]!
+        MOV     d8, d8, ROR #24
+        STRB    d8, [dest, #-1]!
+
+        AND     d8, d8, #255 :SHL:  24          ; keep top 8 bits only
+
+        SUB     count, count, #4                ; in hand accounted for here
+
+        ; 9 < count < ?
+
+22      CMP     count, # 8*4
+        BLT     %f21
+
+        LDMDB   src!,  {d0-d7}
+        ORR     d8, d8, d7, LSR #8
+        MOV     d7, d7, LSL #24
+        ORR     d7, d7, d6, LSR #8
+        MOV     d6, d6, LSL #24
+        ORR     d6, d6, d5, LSR #8
+        MOV     d5, d5, LSL #24
+        ORR     d5, d5, d4, LSR #8
+        MOV     d4, d4, LSL #24
+        ORR     d4, d4, d3, LSR #8
+        MOV     d3, d3, LSL #24
+        ORR     d3, d3, d2, LSR #8
+        MOV     d2, d2, LSL #24
+        ORR     d2, d2, d1, LSR #8
+        MOV     d1, d1, LSL #24
+        ORR     d1, d1, d0, LSR #8
+        STMDB   dest!, {d1-d8}
+        MOV     d8, d0, LSL #24                 ; 1 byte in hand back again
+
+        SUB     count, count, #8*4
+        B       %b22
+
+21      CMP     count, # 4*4
+        BLT     %f23
+
+        LDMDB   src!,  {d4-d7}
+        ORR     d8, d8, d7, LSR #8
+        MOV     d7, d7, LSL #24
+        ORR     d7, d7, d6, LSR #8
+        MOV     d6, d6, LSL #24
+        ORR     d6, d6, d5, LSR #8
+        MOV     d5, d5, LSL #24
+        ORR     d5, d5, d4, LSR #8
+        STMDB   dest!, {d5-d8}
+        MOV     d8, d4, LSL #24                 ; 3 bytes in hand back again
+
+        SUB     count, count, #4*4
+
+23      MOV     d8, d8, ROR #24
+        STRB    d8, [dest, #-1]!
+
+        B       small_down_worst
+
+        InsertDebugRoutines
+
+        END
+
+
