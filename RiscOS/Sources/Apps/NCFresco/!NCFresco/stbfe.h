@@ -68,7 +68,7 @@ extern os_error *fe_print(fe_view v, int size);
 extern const char *fe_printer_name(void);
 
 extern int fe_abort_fetch_possible(fe_view v);
-extern os_error *fe_abort_fetch(fe_view v);
+extern os_error *fe_abort_fetch(fe_view v, BOOL quiet);
 
 extern int fe_doc_flag_state(fe_view v, int flags);
 extern os_error *fe_doc_flag_toggle(fe_view v, int flags);

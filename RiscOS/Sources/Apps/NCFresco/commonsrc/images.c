@@ -447,8 +447,8 @@ static void image_put_bytes(char *buf, int buf_len, void *h)
 
     if ( (i->put_offset + buf_len)  > i->our_area->size)
     {
-	usrtrc( "Too much image data: %x + %x > %x\n",
-		i->put_offset, buf_len, i->our_area->size);
+	usrtrc( "i%p: Too much image data: %x + %x > %x\n",
+		i, i->put_offset, buf_len, i->our_area->size);
     }
     else
     {

@@ -2804,28 +2804,32 @@ int fe_abort_fetch_possible(fe_view v)
 
 static os_error *fe__abort_fetch(fe_view v, void *handle)
 {
+    BOOL quiet = (BOOL)handle;
     os_error *e = NULL;
     if (v->fetching)
     {
 	backend_dispose_doc(v->fetching);
 	v->fetching = NULL;
 
-	frontend_view_status(v, sb_status_ABORTED);
+	if (!quiet)
+	    frontend_view_status(v, sb_status_ABORTED);
     }
     else if (v->displaying)
     {
         e = backend_doc_abort(v->displaying);
 
-	frontend_view_status(v, sb_status_ABORTED);
+	if (!quiet)
+	    frontend_view_status(v, sb_status_ABORTED);
     }
     return e;
     handle = handle;
 }
 
-os_error *fe_abort_fetch(fe_view v)
+os_error *fe_abort_fetch(fe_view v, BOOL quiet)
 {
-    sound_event(snd_ABORT);
-    return iterate_frames(v, fe__abort_fetch, NULL);
+    if (!quiet)
+	sound_event(snd_ABORT);
+    return iterate_frames(v, fe__abort_fetch, (void *)quiet);
 }
 
 /* ------------------------------------------------------------------------------------------- */
