@@ -1,50 +1,13 @@
-;->s.Interface
-
-
-
-r0      RN      0
-r1      RN      1
-r2      RN      2
-r3      RN      3
-r4      RN      4
-r5      RN      5
-r6      RN      6
-r7      RN      7
-r8      RN      8
-r9      RN      9
-r10     RN     10
-r11     RN     11
-r12     RN     12
-r13     RN     13
-r14     RN     14
-r15     RN     15
-
-a1      RN      0
-a2      RN      1
-a3      RN      2
-a4      RN      3
-
-v1      RN      4
-v2      RN      5
-v3      RN      6
-v4      RN      7
-v5      RN      8
-v6      RN      9
-
-sl      RN     10
-fp      RN     11
-ip      RN     12
-sp      RN     13
-lr      RN     14
-pc      RN     15
-
-C_bit   *       1 :SHL: 29
-V_bit   *       1 :SHL: 28
-
+; s.Interface
 
         IMPORT  |Image$$RO$$Base|
         IMPORT  |_Lib$Reloc$Off$DP|
 
+        GET   Hdr:ListOpts
+        GET   Hdr:Macros
+        GET   Hdr:System
+        GET   Hdr:Machine.<Machine>
+        GET   Hdr:APCS.<APCS>
 
         IMPORT  x_find
         IMPORT  x_findp
@@ -59,8 +22,6 @@ V_bit   *       1 :SHL: 28
         IMPORT  x_bput
         IMPORT  x_bputp
 
-
-
         EXPORT  v_find
         EXPORT  v_findp
         EXPORT  v_args
@@ -73,8 +34,6 @@ V_bit   *       1 :SHL: 28
         EXPORT  v_fscp
         EXPORT  v_bput
         EXPORT  v_bputp
-
-
 
 
         AREA    FSEntry_Interfaces,REL,CODE,READONLY
@@ -148,9 +107,13 @@ fsentry_common
         ; Store the input registers onto the stack
 
 
-        STMFD   sp!, {r8}
+        STMFD   sp!, {r8, pc}
         STMFD   sp!, {r0-r7, sl, fp, ip, lr}
 
+        [ :LNOT: No32bitCode
+        MRS     lr, CPSR
+        STR     lr, [sp, #13*4]         ; blat over the pc stored above R8
+        ]
 
         MOV     sl, sp, LSR #20
         MOV     sl, sl, LSL #20         ; SP_LWM
@@ -182,38 +145,43 @@ fsentry_common
         ; r0==1        continue
         ; r0==other    call back
 
-        CMP     r0,#0
-        BEQ     vector_claim
         CMP     r0,#1
-        BEQ     vector_continue
-
-
         LDMFD   sp!, {r0-r7, sl, fp, ip, lr}
-        LDR     r8,  [sp,#4]
-
+        ADDLS   sp, sp, #4           ; LS = CC or EQ; junk stacked veneer #
+        BCC     vector_claim
+        BEQ     vector_continue
 
         STMFD   sp!, {r10-r12, r14}
 
-        MOV     r12, sp
-        STMFD   sp!, {r15}
-        LDMIA   r12, {r10-r12,r15}
+        Push    "pc"
+        LDMIB   sp, {r10-r12,r15}
 
-        MOV     r0, r0
-        MOV     r0, r0
+        MOV     r0, r0               ; StrongARMs'll come here (push+8)
 
 
-        ; returned from vector, start post processing 
+        ; returned from vector, start post processing
 
         LDMFD   sp!, {r10-r12,r14}
 
+        [ {FALSE}
+        ; A lot of ballsing around seems to go on here.  You might have
+        ; thought the original author was constructing a 26-bit return
+        ; address in LR to be movsed into R14 or LDM^ed into PC.  Wrong!
+        ; it simply uses the value to TEQP against, so all this shit can go.
+
         BIC     lr,  lr, #&FC000003  ; get PSW bits into lr
         MOV     r8,  pc
-        AND     r8,  r8, #&FC000003  ;
+        AND     r8,  r8, #&FC000003
         ORR     lr,  lr, r8          ;
+        ]
 
+        [ :LNOT: No32bitCode
+        MRS     lr, CPSR
+        |
+        MOV     lr, pc
+        ]
 
-
-        LDMFD   sp!, {r8}
+        LDR     r8, [sp], #8         ; trash stored CPSR - no longer needed
         ADD     r8,  r8,  #(4 + %B10 - %F20)
 
 
@@ -251,32 +219,42 @@ fsentry_common
 
         ; set flags bits from lr
 
+        [ :LNOT: No32bitCode
+        MSR     CPSR_f, lr
+        |
         TEQP    lr,  #0
         MOV     r0,  r0
+        ]
 
-        LDMFD   sp!, {r8}
-        LDMFD   sp!, {pc}
+        LDMFD   sp!, {r8, pc}
 
 
+; in both these cases, the stack holds:  PSR (PC or CPSR), R8, claim PC
 
 vector_continue
-        LDMFD   sp!, {r0-r7, sl, fp, ip, lr}
+        LDR     r8, [sp], #4     ; restore stacked CPSR
+        [ :LNOT: No32bitCode
+        MSR      CPSR_f, r8
+        |
+        TEQP     r8, #0
+        NOP
+        ]
         LDMFD   sp!, {r8}
-        LDMFD   sp!, {r8}
-        MOVS    pc,  lr
+        MOV     pc,  lr          ; pass on call.
 
 
 vector_claim
-        LDMFD   sp!, {r0-r7, sl, fp, ip, lr}
+        ; set flags bits from lr - (ie. restore caller's flags)
 
-        ; set flags bits from lr
-
+        [ :LNOT: No32bitCode
+        LDR     lr, [sp], #4     ; unstack CPSR
+        MSR     CPSR_f, lr
+        |
         TEQP    lr,  #0
         MOV     r0,  r0
-
-        LDMFD   sp!, {r8}
-        LDMFD   sp!, {r8}
-        LDMFD   sp!, {pc}
+        ADD     sp, sp, #4       ; junk veneer number and stacked CPSR
+        ]
+        LDMFD   sp!, {r8, pc}
 
 
 
