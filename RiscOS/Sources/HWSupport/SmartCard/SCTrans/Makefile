@@ -3,20 +3,20 @@
 # ***********************************
 # ***    C h a n g e   L i s t    ***
 # ***********************************
-# Date       Name         Description
-# ----       ----         -----------
-# 23-May-96  RWB 	  New for SCTransport
-# 25-Jul-96  RWB	  Changed install rules
-# 11-Sep-96  RWB	  Corrected a major flaw in ROM build
-# 07 May 1997 RWB	  Now supports remote debug library
+# Date       Name     Description
+# ----       ----     -----------
+# 23-May-96   RWB     New for SCTransport
+# 25-Jul-96   RWB     Changed install rules
+# 11-Sep-96   RWB     Corrected a major flaw in ROM build
+# 07 May 1997 RWB     Now supports remote debug library
+# 25 May 1999 AJP     Define T1_MICRO to build for the later T=1 micro.
 
-#
+
 # Paths
 #
 EXP_HDR = <export$dir>.^.Interface2
 EXP_C_H = <Cexport$dir>.h
 EXP_C_O = <Cexport$dir>.o
-
 #
 # Generic options:
 #
@@ -37,8 +37,7 @@ CFLAGS  = -c -depend !Depend ${THROWBACK} -zM -ff ${INCLUDES} ${DFLAGS}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~vr
 CMHGFLAGS = -p ${DFLAGS} ${INCLUDES}
-
-DFLAGS = -DUSE_TINY ${DEBUG}
+DFLAGS = -DUSE_TINY
 #
 # Libraries
 #
@@ -48,7 +47,7 @@ RSTUBS     = RISCOSLIB:o.rstubs
 ROMSTUBS   = RISCOSLIB:o.romstubs
 ROMCSTUBS  = RISCOSLIB:o.romcstubs
 ABSSYM     = RISC_OSLib:o.AbsSym
-REMOTEDB   = <Lib$Dir>.debug.o.remotezm
+REMOTEDB   = <Lib$Dir>.debug.remotezm
 #
 # Include files
 #
@@ -62,10 +61,10 @@ TARGET    = aof.${COMPONENT}
 .SUFFIXES:   .od
 
 OBJS      =	o.sys o.com o.data o.api o.atr o.t0_sm o.t1 o.chan o.irqs \
-	  	o.serial o.header 
+	  	o.serial o.header <Lib$Dir>.debug.remotezm
 
 DOBJS      =	od.sys od.com od.data od.api od.atr od.t0_sm od.t1 od.chan od.irqs \
-	  	od.serial od.header 
+	  	od.serial od.header <Lib$Dir>.debug.remotezm
 
 #
 # Rule patterns
@@ -77,6 +76,7 @@ DOBJS      =	od.sys od.com od.data od.api od.atr od.t0_sm od.t1 od.chan od.irqs 
 .cmhg.od:;  ${CMHG} ${CMHGFLAGS} -o $@ $< h.$* -DREMOTE_DEBUG
 .s.od:;     ${AS} ${AFLAGS} $< $@
 
+#
 #
 # build a relocatable module:
 #
@@ -124,8 +124,7 @@ ${TARGET}: ${OBJS} ${ROMCSTUBS} dirs
 # Final link for the ROM Image (using given base address)
 #
 rom_link:
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 #

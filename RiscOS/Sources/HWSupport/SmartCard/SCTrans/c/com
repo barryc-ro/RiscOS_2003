@@ -34,6 +34,7 @@
 
 
 static char serial_config[] = "devices#baud9600;data8;stop1;noparity;nohandshake";
+//static char serial_config[] = "devices#baud9600;data8;stop1;noparity;rts";
 
 #define SERIAL_PORT   "serial1"
 #define COM_RESET_PULSE	(1)	/* centi-seconds */
@@ -42,16 +43,14 @@ extern int iInputStream;
 extern int iOutputStream;
 extern int flags;
 
-/*
- * open serial port streams and set ModemStatus to its initial value
+/*****************************************************************************
+  open serial port streams and set ModemStatus to its initial value
  */
-int
-com_Init(void)
+int com_Init(void)
 {
   char strConfig[80];
 
   com_Close();
-
   sprintf(strConfig,"%s;size300;thres32:$.%s",serial_config,SERIAL_PORT);
   iInputStream  = serial_open_stream(strConfig,SERIAL_INPUT);
   sprintf(strConfig,"%s;size256;thres32:$.%s",serial_config,SERIAL_PORT);
@@ -59,7 +58,6 @@ com_Init(void)
 
   if (!iInputStream || !iOutputStream)
   {
-    debug_printf(db,"(7)    failed to open stream");
     serial_close_stream(iInputStream);
     serial_close_stream(iOutputStream);
     return (FALSE);
@@ -70,8 +68,8 @@ com_Init(void)
   return (TRUE);
 }
 
-/*
- * toggle DTR for 10ms to perform a reset.
+/*****************************************************************************
+  toggle DTR for 10ms to perform a reset.
  */
 int
 com_SetResetInd(void)
@@ -79,7 +77,6 @@ com_SetResetInd(void)
   ioctl_t ioctl_block;
   serial_ctrl_t ctrl;
 
-  debug_printf(db,"(7) resetting card");
   CLEAR_FLAG(flags,flag_dsr_state);
 
   /* read control lines */
@@ -106,111 +103,160 @@ com_SetResetInd(void)
   return (SCI_SUCCESS);
 }
 
-/*
- * read bytes into buffer
+/*****************************************************************************
+  read bytes into buffer
  */
-int
-com_ReadBytes(BYTE *data, int len)
+int com_ReadBytes(BYTE *data, int len)
 {
+#ifdef REMOTE_DEBUG_COM
+  debug_printf(db,"PROC * com_ReadBytes");
+#endif
   return (serial_read_stream(iInputStream, (char*)data, len));
 }
 
-/*
- * transmit bytes
+#ifdef T1_MICRO
+/*****************************************************************************
+  transmit bytes for the T=1 micro
  */
-int
-com_SendBytes(BYTE *data, int len)
+int com_SendBytes(BYTE *data, int len)
 {
   ioctl_t ioctl_block;
   serial_ctrl_t ctrl;
-  int pause = 0;
 
+#ifdef REMOTE_DEBUG_COM
+  debug_printf(db,"PROC * com_SendBytes: len: %d\n", len);
+#endif
   ioctl_block.reason = IOCTL_CTRL_LINES;
-  ioctl_block.read = 1;
+  ioctl_block.group  = 0;
+  ioctl_block.read  = 1;
+  ioctl_block.write = 0;
+  serial_ioctl(iOutputStream,&ioctl_block);
 
-  while (len--) {
-    /*
-     * wait for CTS to be set and check that card is still in
-     */
-    if (serial_write_byte(iOutputStream,*data) != 1) {
-      debug_printf(db,"(7) Failed to write char");
+  if (serial_write_byte(iOutputStream,*data) != 1)
+    return (SCI_E_OUT);
+  data++;
+  len--;
+
+  do
+  {
+    ioctl_block.reason =IOCTL_CTRL_LINES;
+    ioctl_block.group  =0;
+    ioctl_block.read   =1;
+    ioctl_block.write  =0;
+    ctrl.data = serial_ioctl(iOutputStream,&ioctl_block);
+    if (!ctrl.bits.dsr)
+      goto exit_gracefully;
+  } while ( ctrl.bits.cts ==1);
+
+  while ( len--)
+  {
+    do
+    {
+      ioctl_block.reason =IOCTL_CTRL_LINES;
+      ioctl_block.group  =0;
+      ioctl_block.read   =1;
+      ioctl_block.write  =0;
+      ctrl.data = serial_ioctl(iOutputStream,&ioctl_block);
+      if (!ctrl.bits.dsr)
+        goto exit_gracefully;
+    } while ( ctrl.bits.cts ==0);
+
+    if (serial_write_byte(iOutputStream,*data) != 1)
       return (SCI_E_OUT);
-    }
 
-    switch (pause) {
-      case 0:
-	/* wait for CTS to go high and check card in */
-        do {
-          ctrl.data = serial_ioctl(iOutputStream,&ioctl_block);
-          if (!ctrl.bits.dsr) {
-            goto exit_gracefully;
-          }
-        } while (!ctrl.bits.cts);
-	pause = 1;
-	break;
+    do
+    {
+      ioctl_block.reason =IOCTL_CTRL_LINES;
+      ioctl_block.group  =0;
+      ioctl_block.read   =1;
+      ioctl_block.write  =0;
+      ctrl.data = serial_ioctl(iOutputStream,&ioctl_block);
+      if (!ctrl.bits.dsr)
+        goto exit_gracefully;
+    } while ( ctrl.bits.cts ==1);
 
-      case 1:
-	/* wait for CTS to go low and check card in */
-        do {
-          ctrl.data = serial_ioctl(iOutputStream,&ioctl_block);
-          if (!ctrl.bits.dsr) {
-            goto exit_gracefully;
-          }
-        } while (ctrl.bits.cts);
-	pause = 2;
-	break;
-
-      case 2:
-	/* wait for CTS to go high and check card in */
-        do {
-          ctrl.data = serial_ioctl(iOutputStream,&ioctl_block);
-          if (!ctrl.bits.dsr) {
-            goto exit_gracefully;
-          }
-        } while (!ctrl.bits.cts);
-
-	/* wait for CTS to go low and check card in */
-        do {
-          ctrl.data = serial_ioctl(iOutputStream,&ioctl_block);
-          if (!ctrl.bits.dsr) {
-            goto exit_gracefully;
-          }
-        } while (ctrl.bits.cts);
-	pause = 2;
-	break;
-    }
-    /* 
-     * replacing delay routine with new funky code
-     * sys_Delay(1);
-     */
-    data++;
+    data ++;
   }
   sys_StartWaitTimer((sci_State==S_S_OPENING ) ? ATR_INIT_WAIT : WorkWaitTime);
 
+#ifdef REMOTE_DEBUG_COM
+  debug_printf(db,"com_SendBytes: EXIT\n");
+#endif
+
   return (SCI_SUCCESS);
-  
+
 exit_gracefully:
+#ifdef REMOTE_DEBUG_COM
+  debug_printf(db,"com_SendBytes: card out\n");
+#endif
   ctrl.bits.rts = 0;
   ioctl_block.write = 1;
   ioctl_block.data = ctrl.data;
   serial_ioctl(iOutputStream,&ioctl_block);
   return (SCI_E_OUT);
 }
-
-/*
- *
+#else
+/*****************************************************************************
+ * transmit bytes for the T=0 micro
  */
-void
-com_FlushComms(void)
+int com_SendBytes(BYTE *data, int len)
 {
+  ioctl_t ioctl_block;
+  serial_ctrl_t ctrl;
+
+  ioctl_block.reason = IOCTL_CTRL_LINES;
+  ioctl_block.read = 1;
+
+  while (len--)
+  {
+    /*
+     * wait for CTS to be set and check that card is still in
+     */
+    do
+    {
+      ioctl_block.data = ctrl.data;
+      ctrl.data = serial_ioctl(iOutputStream,&ioctl_block);
+      if (!ctrl.bits.dsr)
+      {
+        ctrl.bits.rts = 0;
+        ioctl_block.write = 1;
+        ioctl_block.data = ctrl.data;
+        serial_ioctl(iOutputStream,&ioctl_block);
+        return (SCI_E_OUT);
+      }
+    } while (!ctrl.bits.cts);
+
+    sys_Delay(1);
+    /*
+     * transmit byte
+     */
+    if (serial_write_byte(iOutputStream,*data) != 1)
+    {
+      //debug_printf(db,"(7) Failed to write char");
+      return (SCI_E_OUT);
+    }
+
+    data++;
+  }
+  sys_StartWaitTimer((sci_State==S_S_OPENING ) ? ATR_INIT_WAIT : WorkWaitTime);
+
+  return (SCI_SUCCESS);
+}
+#endif
+
+/*****************************************************************************/
+void com_FlushComms(void)
+{
+#ifdef REMOTE_DEBUG_COM
+  debug_printf(db,"PROC * com_FlushComms");
+#endif
   while(serial_read_byte(iInputStream)!=-1) ;
 }
 
-/*
- * look for the presence of DSR
+/*****************************************************************************
+  look for the presence of DSR
  */
-BOOL
-com_CardIn(void)
+BOOL com_CardIn(void)
 {
   ioctl_t ioctl_block;
   serial_ctrl_t ctrl;
@@ -227,11 +273,10 @@ com_CardIn(void)
   return (FALSE);
 }
 
-/*
- * close down streams.
+/*****************************************************************************
+  close down streams.
  */
-void
-com_Close(void)
+void com_Close(void)
 {
   if (iInputStream)  serial_close_stream(iInputStream);
   if (iOutputStream) serial_close_stream(iOutputStream);
