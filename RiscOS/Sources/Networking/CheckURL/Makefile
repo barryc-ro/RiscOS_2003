@@ -187,7 +187,7 @@ install_rom: ${ROM_MODULE}
 	@echo
 	@echo ${COMPONENT}: Module installed (ROM)
 
-resources: LocalRes:Messages LocalRes:ResList
+resources: LocalRes:Messages
 	@echo
 	${MKDIR} ${RESDIR}
 	TokenCheck LocalRes:Messages
@@ -236,9 +236,9 @@ ${EXPORTS}: h.${CMHG_HDR} h.CheckURL
 	${CP} h.CheckURL $@ ${CPFLAGS}
 	Do ${AWK} -- "/.define ${SWI_PREFIX}\_00/,/endif/" h.${CMHG_HDR} >>$@
 
-${MSGSF}: LocalRes:Messages LocalRes:ResList
+${MSGSF}: LocalRes:Messages
 	TokenCheck LocalRes:Messages
-	resgen messages_file ${MSGSF} -via LocalRes:ResList
+	resgen messages_file ${MSGSF}
 
 ${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${LIBS} ${CLIB}
 	@echo
