@@ -11,6 +11,8 @@
 COMPONENT     = IIC
 ROM_SOURCE    = s.IICMod
 
+HEADER1       = IIC
+
 include StdTools
 include AAsmModule
 
