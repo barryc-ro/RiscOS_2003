@@ -48,6 +48,9 @@ install_RCMM:
 	${CP} ${LOCALRES}.Choices.RCMM        ${INSTAPP}.Choices        ${CPFLAGS}
 	${CP} ${LOCALRES}.PreDesktop.RCMM     ${INSTAPP}.PreDesktop.400 ${CPFLAGS}
 
+install_ARMovie:
+        ${CP} ${LOCALRES}.PreDesktop.ARMovie  ${INSTAPP}.PreDesktop     ${CPFLAGS}
+
 dirs_Core:
 	${MKDIR} ${INSTAPP}.Choices
 	${MKDIR} ${INSTAPP}.Desktop
@@ -77,6 +80,9 @@ dirs_RCMM:
 	${MKDIR} ${INSTAPP}.Choices
 	${MKDIR} ${INSTAPP}.PreDesktop.400
 
+dirs_ARMovie:
+        ${NOP}
+
 translate_Core:
 	${TRANSLATE} ${TRANSFLAGS} -m ${TRANSMAP} -i ${TRANSRES}.Applet.!Run          -o ${INSTAPP}.!Run
 
@@ -94,5 +100,8 @@ translate_USB:
 
 translate_RCMM:
 	${NOP}
+
+translate_ARMovie:
+        ${NOP}
 
 # Dynamic dependencies:
