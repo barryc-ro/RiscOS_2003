@@ -204,6 +204,7 @@ static void fe_menu_redo_window(wimp_redrawstr *rr, fe_menu mh, int update)
 
 #if 1
 	/* draw the selection box - inefficient */
+	if (mh->highlight >= 0 && mh->highlight < mh->n)
 	{
 	    int hh = - mh->highlight * line_space;
 	    render_plinth_from_list(0, config_colour_list[render_colour_list_TEXT_HIGHLIGHT], render_plinth_NOFILL,

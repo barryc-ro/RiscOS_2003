@@ -726,7 +726,7 @@ static BOOL perform_element_open(SGMLCTX *context, ELEMENT *element, VALUES *val
     {
 	if ( values->value[HTML_A_HREF].type == value_none )
 	{
-	    nests = TRUE;
+	    nests = FALSE;
 	}
 
 	if (nests)

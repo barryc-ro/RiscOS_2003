@@ -354,7 +354,7 @@ void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
 	}
 	else
 	{
-#ifdef STBWEB
+#if 1 /* def STBWEB */
 	    int whichfont = ti->st.wf_index;
 	    struct webfont *wf;
 

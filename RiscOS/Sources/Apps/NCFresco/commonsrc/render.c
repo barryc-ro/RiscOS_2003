@@ -630,7 +630,7 @@ int render_caret_colour(be_doc doc, int back, int cursor)
 
 int render_text(be_doc doc, const char *text, int x, int y)
 {
-    int flags = font_OSCOORDS;
+    int flags = 0; /* font_OSCOORDS; */
     rid_header *rh = doc->rh;
 
     if (text == NULL || *text == 0)
@@ -655,7 +655,7 @@ int render_text(be_doc doc, const char *text, int x, int y)
     }
 #endif
 
-    font_paint((char *)text, flags, x, y);
+    font_paint((char *)text, flags, x*400, y*400);
 
     return TRUE;
 }

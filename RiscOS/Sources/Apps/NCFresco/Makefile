@@ -843,7 +843,7 @@ NCFRESCO_REL_OBJS=		$(NCFRESCO_BASE_OBJS) rlib_alloc.o
 
 NCFRESCO_ANT_LIBS=		../webimage/webimage1
 
-NCFRESCO_BUILD_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1ff.o \
+NCFRESCO_BUILD_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1da.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/CLib/stubs.o \
 				../RISC_OSLib/risc_oslib \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/inetlib.o \
@@ -916,6 +916,7 @@ NCFRESCO_BUILD_ROM_EXPORT:
 		find Resources/Common/UK $(FINDOPTIONS) -exec $(CP) $(CPOPTIONS) {} $(RISCOS_BUILD_RESOURCES)/Common/UK/ \;
 		find Resources/RCA/UK $(FINDOPTIONS) -exec $(CP) $(CPOPTIONS) {} $(RISCOS_BUILD_RESOURCES)/RCA/UK/ \;
 		find Resources/NC2/UK $(FINDOPTIONS) -exec $(CP) $(CPOPTIONS) {} $(RISCOS_BUILD_RESOURCES)/NC2/UK/ \;
+		find Resources/CM/UK $(FINDOPTIONS) -exec $(CP) $(CPOPTIONS) {} $(RISCOS_BUILD_RESOURCES)/Peregrine2/UK/ \;
 		$(CP) $(CPOPTIONS) aof/ncfresco				$(RISCOS_BUILD_OBJECTS)
 		$(CP) $(CPOPTIONS) commonsrc/plugin.h			$(RISCOS_BUILD_HEADERS)/plugin
 

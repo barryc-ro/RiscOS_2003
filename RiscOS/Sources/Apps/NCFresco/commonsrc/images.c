@@ -1033,10 +1033,16 @@ static void image_set_error(image i)
 {
     IMGDBG(("im%p: in set_error\n", i));
     i->flags |= (image_flag_ERROR | image_flag_CHANGED);
-    i->flags &= ~image_flag_RENDERABLE;
+    i->flags &= ~image_flag_RENDERABLE | image_flag_REALTHING;
 
     set_default_image(i, SPRITE_NAME_ERROR, FALSE);
     free_pt(i);
+
+    if (i->cfile)
+    {
+	mm_free(i->cfile);
+	i->cfile = NULL;
+    }
 }
 
 static void image_issue_callbacks(image i, int changed, wimp_box *box)
@@ -1589,6 +1595,7 @@ os_error *image_find(char *url, char *ref, int flags, image_callback cb, void *h
 
     if (i)
     {
+	IMGDBG(("im%p: inc use %d Asked to find image '%s'\n", i, i->use_count, url));
 	i->use_count++;
 	if ((flags & image_find_flag_DEFER) == 0 &&
 	    (i->flags & image_flag_DEFERRED) != 0 )
@@ -1598,7 +1605,7 @@ os_error *image_find(char *url, char *ref, int flags, image_callback cb, void *h
     }
     else
     {
-	IMGDBG(("Making new image\n"));
+	IMGDBG(("im%p: Making new image\n", i));
 
 	i = image_alloc(sizeof(*i));
 	if (!i)
@@ -1950,7 +1957,7 @@ os_error *image_loose(image i, image_callback cb, void *h)
 	return makeerror(ERR_BAD_IMAGE_HANDLE);
     }
 
-    IMGDBG(("Loose image called: '%s', use count %d\n", i->url ? i->url : "", i->use_count));
+    IMGDBG(("im%p: Loose image called: '%s', use count %d\n", i, i->url ? i->url : "", i->use_count));
 
     link = &(i->cblist);
     cbs = i->cblist;
@@ -2003,7 +2010,7 @@ os_error *image_loose(image i, image_callback cb, void *h)
 	    }
 	    else
 	    {
-		IMGDBG(("Unkeeping the file\n"));
+		IMGDBG(("im%p: Unkeeping the file %s\n", i, i->url));
 
 		access_unkeep(i->url);
 	    }
@@ -2179,7 +2186,7 @@ os_error *image_flush(image i, int flags)
 	}
 	else
 	{
-	    IMGDBG(("Unkeeping the file\n"));
+	    IMGDBG(("im%p: Unkeeping the file: '%s'\n", i, i->url));
 
 	    access_unkeep(i->url);
 	}
@@ -2194,7 +2201,7 @@ os_error *image_flush(image i, int flags)
 
     /* pdh: moved this outside the above if */
     i->flags |= image_flag_TO_RELOAD | image_flag_WAITING;
-    i->flags &= ~image_flag_RENDERABLE;
+    i->flags &= ~(image_flag_RENDERABLE | image_flag_REALTHING);
 
     /* If we already have the image then dispose of it */
     /* SJM: add or ->data_area so that JPEGs can be reloaded */
@@ -3779,7 +3786,7 @@ int image_average_colour(image i)
 
     IMGDBG(("Calculating average colour\n"));
 
-    if (i == NULL || i->magic != IMAGE_MAGIC || i->plotter != plotter_SPRITE)
+    if (i == NULL || i->magic != IMAGE_MAGIC || i->plotter != plotter_SPRITE || (i->flags & image_flag_RENDERABLE) == 0)
 	return (int) config_colours[render_colour_BACK].word;
 
     flexmem_noshift();
