@@ -43,6 +43,7 @@ RSTUBS    = RISCOSLIB:o.rstubs
 ROMSTUBS  = RISCOSLIB:o.romstubs
 ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.AbsSym
+CPPLIB    = C:C++Lib.o.c++libz
 
 #
 # Include files
@@ -118,7 +119,7 @@ dirs:
 # Final link for the ROM Image (using given base address)
 #
 rom_link: dirs
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} {CPPLIB} ${ABSSYM} > map.${COMPONENT}
         truncate map.${COMPONENT} linked.${COMPONENT}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
