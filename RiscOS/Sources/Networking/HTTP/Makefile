@@ -35,6 +35,8 @@ CMHGFLAGS = -p ${DFLAGS} ${INCLUDES} ${THROWBACK}
 #
 # Libraries
 #
+LIBDIR		= <Lib$Dir>
+
 CLIB      = CLIB:o.stubs
 RLIB      = RISCOSLIB:o.risc_oslib
 RSTUBS    = RISCOSLIB:o.rstubs
@@ -45,7 +47,7 @@ INETLIB   = C:TCPIPLibs.o.inetlibzm
 SOCKLIB   = C:TCPIPLibs.o.socklibzm
 UNIXLIB   = C:TCPIPLibs.o.unixlibzm
 SSLDIR    = C:SSLeay
-REMOTEDB  = C:debug.o.lremotezm
+DEBUGLIB  = ${LIBDIR}.DebugLib.o.DebugLibzm
 
 INSECURELIBS= ${INETLIB} ${SOCKLIB}
 BASESECURELIBS=$(SSLDIR).o.libcrypto ${UNIXLIB} ${INSECURELIBS}
@@ -170,24 +172,24 @@ rom_link: ${DIRS}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
-rm.${COMPONENT}mod: ${OBJS} ${REMOTEDB} ${CLIB} ${INSECURELIBS} ${DIRS}
-        ${LD} -o $@ -module ${OBJS} ${REMOTEDB} ${CLIB} ${INSECURELIBS}
+rm.${COMPONENT}mod: ${OBJS} ${DEBUGLIB} ${CLIB} ${INSECURELIBS} ${DIRS}
+        ${LD} -o $@ -module ${OBJS} ${DEBUGLIB} ${CLIB} ${INSECURELIBS}
         Access $@ RW/R
 
-rm.${COMPONENT}smod: ${SECUREOBJS} ${REMOTEDB} ${CLIB} ${SECURELIBS} ${DIRS}
-        ${LD} -o $@ -module ${SECUREOBJS} ${REMOTEDB} ${CLIB} ${SECURELIBS}
+rm.${COMPONENT}smod: ${SECUREOBJS} ${DEBUGLIB} ${CLIB} ${SECURELIBS} ${DIRS}
+        ${LD} -o $@ -module ${SECUREOBJS} ${DEBUGLIB} ${CLIB} ${SECURELIBS}
         Access $@ RW/R
 
-rm.${COMPONENT}sxmod: ${SECUREOBJS} ${REMOTEDB} ${CLIB} ${SECUREXLIBS} ${DIRS}
-        ${LD} -o $@ -module ${SECUREOBJS} ${REMOTEDB} ${CLIB} ${SECUREXLIBS}
+rm.${COMPONENT}sxmod: ${SECUREOBJS} ${DEBUGLIB} ${CLIB} ${SECUREXLIBS} ${DIRS}
+        ${LD} -o $@ -module ${SECUREOBJS} ${DEBUGLIB} ${CLIB} ${SECUREXLIBS}
         Access $@ RW/R
 
-rm.${COMPONENT}spmod: ${PKCS11OBJS} ${REMOTEDB} ${CLIB} ${PKCS11LIB} ${SECURELIBS} ${DIRS}
-        ${LD} -o $@ -module ${PKCS11OBJS} ${REMOTEDB} ${CLIB} ${PKCS11LIB} ${SECURELIBS}
+rm.${COMPONENT}spmod: ${PKCS11OBJS} ${DEBUGLIB} ${CLIB} ${PKCS11LIB} ${SECURELIBS} ${DIRS}
+        ${LD} -o $@ -module ${PKCS11OBJS} ${DEBUGLIB} ${CLIB} ${PKCS11LIB} ${SECURELIBS}
         Access $@ RW/R
 
-rm.${COMPONENT}spxmod: ${PKCS11OBJS} ${REMOTEDB} ${CLIB} ${PKCS11LIB} ${SECUREXLIBS} ${DIRS}
-        ${LD} -o $@ -module ${PKCS11OBJS} ${REMOTEDB} ${CLIB} ${PKCS11LIB} ${SECUREXLIBS}
+rm.${COMPONENT}spxmod: ${PKCS11OBJS} ${DEBUGLIB} ${CLIB} ${PKCS11LIB} ${SECUREXLIBS} ${DIRS}
+        ${LD} -o $@ -module ${PKCS11OBJS} ${DEBUGLIB} ${CLIB} ${PKCS11LIB} ${SECUREXLIBS}
         Access $@ RW/R
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
