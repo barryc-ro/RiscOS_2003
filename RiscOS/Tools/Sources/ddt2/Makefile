@@ -183,8 +183,12 @@ FILES = \
 OBJSDDT2 = \
  opp.BEManager		\
  opp.BEMenu		\
+ opp.Breakpoint		\
  opp.DBEDemo		\
+ opp.DynaMenu		\
  opp.Errors		\
+ opp.EventMenu		\
+ opp.File		\
  opp.FromROSLib		\
  opp.Global		\
  opp.Handlers		\
@@ -197,7 +201,9 @@ OBJSDDT2 = \
  opp.NewProject		\
  opp.Projects		\
  opp.RMA		\
+ opp.ServMenu		\
  opp.TGUtils		\
+ opp.UpCallMenu		\
  opp.Utils		\
  opp.Windows		\
  o.ROSLib
@@ -205,8 +211,12 @@ OBJSDDT2 = \
 OBJSDDT2D = \
  oppd.BEManager		\
  oppd.BEMenu		\
+ oppd.Breakpoint	\
  oppd.DBEDemo		\
+ oppd.DynaMenu		\
  oppd.Errors		\
+ oppd.EventMenu		\
+ oppd.File		\
  oppd.FromROSLib	\
  oppd.Global		\
  oppd.Handlers		\
@@ -219,7 +229,9 @@ OBJSDDT2D = \
  oppd.NewProject	\
  oppd.Projects		\
  oppd.RMA		\
+ oppd.ServMenu		\
  oppd.TGUtils		\
+ oppd.UpCallMenu	\
  oppd.Utils		\
  oppd.Windows		\
  o.ROSLib
@@ -229,8 +241,12 @@ OBJSDDT2D = \
 OBJSDDT2RZ = \
  opprz.BEManager	\
  opprz.BEMenu		\
+ opprz.Breakpoint	\
  opprz.DBEDemo		\
+ opprz.DynaMenu		\
  opprz.Errors		\
+ opprz.EventMenu	\
+ opprz.File		\
  opprz.FromROSLib	\
  opprz.Global		\
  opprz.Handlers		\
@@ -243,7 +259,9 @@ OBJSDDT2RZ = \
  opprz.NewProject	\
  opprz.Projects		\
  opprz.RMA		\
+ opprz.ServMenu		\
  opprz.TGUtils		\
+ opprz.UpCallMenu	\
  opprz.Utils		\
  opprz.Windows		\
  o.ROSLib
@@ -251,8 +269,12 @@ OBJSDDT2RZ = \
 OBJSDDT2RDZ = \
  opprdz.BEManager	\
  opprdz.BEMenu		\
+ opprdz.Breakpoint	\
  opprdz.DBEDemo		\
+ opprdz.DynaMenu	\
  opprdz.Errors		\
+ opprdz.EventMenu	\
+ opprdz.File		\
  opprdz.FromROSLib	\
  opprdz.Global		\
  opprdz.Handlers	\
@@ -265,7 +287,9 @@ OBJSDDT2RDZ = \
  opprdz.NewProject	\
  opprdz.Projects	\
  opprdz.RMA		\
+ opprdz.ServMenu	\
  opprdz.TGUtils		\
+ opprdz.UpCallMenu	\
  opprdz.Utils		\
  opprdz.Windows		\
  o.ROSLib
@@ -276,8 +300,12 @@ OBJSDDT2RDZ = \
 OBJSDDT2Z = \
  oppz.BEManager		\
  oppz.BEMenu		\
+ oppz.Breakpoint	\
  oppz.DBEDemo		\
+ oppz.DynaMenu		\
  oppz.Errors		\
+ oppz.EventMenu		\
+ oppz.File		\
  oppz.FromROSLib	\
  oppz.Global		\
  oppz.Handlers		\
@@ -290,7 +318,9 @@ OBJSDDT2Z = \
  oppz.NewProject	\
  oppz.Projects		\
  oppz.RMA		\
+ oppz.ServMenu		\
  oppz.TGUtils		\
+ oppz.UpCallMenu	\
  oppz.Utils		\
  oppz.Windows		\
  o.ROSLib
@@ -360,8 +390,8 @@ install_common: ${FILES}
 	${CP} ${LDIR}.Sprites			${INSTDIR}.Sprites		${CPFLAGS}n
 	${XCP} ${LDIR}.Sprites22		${INSTDIR}.Sprites22		${CPFLAGS}n
 	${XCP} ${LDIR}.Sprites23		${INSTDIR}.Sprites23		${CPFLAGS}n
-	${XCP} ${LDIR}.About			${INSTDIR}.About		${CPFLAGS}n
-	${XWIPE} ${INSTDIR}.About.CVS	${WFLAGS}
+	${CP} ${LDIR}.UpCalls			${INSTDIR}.UpCalls		${CPFLAGS}n
+	${CP} ${LDIR}.Services			${INSTDIR}.Services		${CPFLAGS}n
 
 install: install_common
 	${CP} ${TARGET}				${INSTDIR}.!RunImage		${CPFLAGS}~n
@@ -378,6 +408,9 @@ installd: install_common
 	@echo
 	@echo ${COMPONENT}: Debug application installed to ${INSTDIR}
 	@echo
+	@Echo DDT + ViewFinder crash avoidance:
+	If "<ViewFinder$Enable>" = "1" Then SetType ${INSTDIR}.!RunImage Absolute
+	@Echo
 
 install_ram: install_common
 	${CP} ${TARGET}				${INSTDIR}.${APP}		${CPFLAGS}~n
@@ -404,7 +437,6 @@ install_rom: ${ROM_MODULE}
 resources:
 	${MKDIR} ${RESDIR}
 	${MKDIR} ${RESAPP}
-	${MKDIR} ${RESDIR}.About
 	${CP} ${LDIR}.ROM.!Boot		${RESAPP}.!Boot		${CPFLAGS}
 	${CP} ${LDIR}.ROM.!Run		${RESAPP}.!Run		${CPFLAGS}
 	${CP} ${LDIR}.!Sprites		${RESAPP}.!Sprites	${CPFLAGS}
@@ -416,8 +448,8 @@ resources:
 	${CP} ${LDIR}.Messages		${RESDIR}.Messages	${CPFLAGS}
 	${AWK} -f ${ADDTOMESSAGES} ${VERSIONNUM} >> ${RESDIR}.Messages
 	${CP} ${LDIR}.Res		${RESDIR}.Res		${CPFLAGS}
-	${CP} ${LDIR}.About		${RESDIR}.About		${CPFLAGS}
-	${XWIPE} ${RESDIR}.About.CVS	${WFLAGS}
+	${CP} ${LDIR}.UpCalls		${RESDIR}.UpCalls	${CPFLAGS}
+	${CP} ${LDIR}.Services		${RESDIR}.Services	${CPFLAGS}
 	@echo
 	@echo ${COMPONENT}: Resource files copied to Messages module
 	@echo

@@ -12,17 +12,23 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <stdbool.h>
 
 #include <kernel.h>
 
 #include <tboxlibs/event.h>
 #include <tboxlibs/toolbox.h>
+#include <tboxlibs/gadgets.h>
 
 #include "BEMenu.h"
 #include "Errors.h"
+#include "EventMenu.h"
 #include "Global.h"
 #include "ListMenu.h"
 #include "MainMenu.h"
+#include "ServMenu.h"
+#include "UpCallMenu.h"
+#include "Utils.h"
 
 #include "Menus.h"
 
@@ -39,7 +45,9 @@ typedef struct menu_handler
   int                   e_hidden;
   ToolboxEventHandler * hidden;
 
-} menu_handler;
+  ToolboxEventHandler * deleted; /* This is called for Toolbox_ObjectDeleted, registered for */
+                                 /* your specific menu ID. It goes via. a generic handler to */
+} menu_handler;                  /* do the event deregistration for you.                     */
 
 /* Local variables */
 
@@ -48,18 +56,23 @@ typedef struct menu_handler
 /* NULL if the generic ToBeShown and Hidden handlers are enough.  */
 
 static menu_handler menu_handlers[] = {
-                                        { MainMenu_EToBeShown, mainmenu_to_be_shown, MainMenu_ESelection, mainmenu_selection, MainMenu_EHidden, NULL },
-                                        { BEMenu_EToBeShown,   bemenu_to_be_shown,   BEMenu_ESelection,   bemenu_selection,   BEMenu_EHidden,   NULL },
-                                        { ListMenu_EToBeShown, listmenu_to_be_shown, 0,                   NULL,               ListMenu_EHidden, NULL },
-                                        { 0,                   NULL,                 0,                   NULL,               0,                NULL }
+                                        { MainMenu_EToBeShown,   mainmenu_to_be_shown,   MainMenu_ESelection,   mainmenu_selection,   MainMenu_EHidden,   NULL, NULL               },
+                                        { BEMenu_EToBeShown,     bemenu_to_be_shown,     BEMenu_ESelection,     bemenu_selection,     BEMenu_EHidden,     NULL, NULL               },
+                                        { ListMenu_EToBeShown,   listmenu_to_be_shown,   0,                     NULL,                 ListMenu_EHidden,   NULL, NULL               },
+                                        { EventMenu_EToBeShown,  eventmenu_to_be_shown,  EventMenu_ESelection,  eventmenu_selection,  EventMenu_EHidden,  NULL, NULL               },
+                                        { ServMenu_EToBeShown,   servmenu_to_be_shown,   ServMenu_ESelection,   servmenu_selection,   ServMenu_EHidden,   NULL, servmenu_deleted   },
+                                        { UpCallMenu_EToBeShown, upcallmenu_to_be_shown, UpCallMenu_ESelection, upcallmenu_selection, UpCallMenu_EHidden, NULL, upcallmenu_deleted },
+                                        { 0,                     NULL,                   0,                     NULL,                 0,                  NULL, NULL               }
                                       };
 
 /* Local functions */
 
 static menu_handler * menus_find_handler        (menu_handler * hdl);
+//static unsigned int   menus_find_handler_index  (menu_handler * hdl);
 
 static int            menus_generic_to_be_shown (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
 static int            menus_generic_hidden      (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
+static int            menus_generic_deleted     (int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle);
 
 /**************************************************************/
 /* menus_find_handler()                                       */
@@ -101,6 +114,48 @@ static menu_handler * menus_find_handler(menu_handler * hdl)
 
   return NULL;
 }
+
+///**************************************************************/
+///* menus_find_handler_index()                                 */
+///*                                                            */
+///* Return the array index of the given menu_handler entry.    */
+///* Returns &FFFFFFFF if not found... (Cough).                 */
+///*                                                            */
+///* Parameters: Pointer to the menu_handler structure to find. */
+///*                                                            */
+///* Returns:    Array index of the item, or &FFFFFFFF if not   */
+///*             found.                                         */
+///**************************************************************/
+//
+//static unsigned int menus_find_handler_index(menu_handler * hdl)
+//{
+//  unsigned int i = 0;
+//
+//  dprintf(("Menu", "menus_find_handler_index: Called for &%08X\n", (unsigned int) hdl));
+//
+//  if (hdl == NULL)
+//  {
+//    dprintf(("Menu", "menus_find_handler_index: NULL items are not allowed\n"));
+//
+//    return 0xffffffff;
+//  }
+//
+//  while (menu_handlers[i].to_be_shown != 0)
+//  {
+//    if (&menu_handlers[i] == hdl)
+//    {
+//      dprintf(("Menu", "menus_find_handler_index: Successful, returning %d\n", i));
+//
+//      return i;
+//    }
+//
+//    i++;
+//  }
+//
+//  dprintf(("Menu", "menus_find_handler_index: Did not find item\n"));
+//
+//  return 0xffffffff;
+//}
 
 /**************************************************************/
 /* menus_register_primary_handlers()                          */
@@ -177,7 +232,6 @@ static int menus_generic_to_be_shown(int eventcode, ToolboxEvent * event, IdBloc
   dprintf(("Menu", "menus_generic_to_be_shown: Called for &%08X\n", (unsigned int) hdl));
 
   if (menus_find_handler(hdl) == NULL) ChkError(errors_frontend_error(fee_invalid_parameters,
-                                                                      1,
                                                                       "menus_generic_to_be_shown"));
 
   if (hdl->selection != NULL)
@@ -222,11 +276,22 @@ static int menus_generic_hidden(int eventcode, ToolboxEvent * event, IdBlock * i
   dprintf(("Menu", "menus_generic_hidden: Called for &%08X\n", (unsigned int) hdl));
 
   if (menus_find_handler(hdl) == NULL) ChkError(errors_frontend_error(fee_invalid_parameters,
-                                                                      1,
                                                                       "menus_generic_hidden"));
   /* Deregister all object-specific handlers */
 
   ChkError(event_deregister_toolbox_handlers_for_object(idb->self_id));
+
+  /* Register a Deleted handler if required */
+
+  if (hdl->deleted != NULL)
+  {
+    dprintf(("Menu", "menus_generic_hidden: Installing Toolbox_ObjectDeleted handler\n"));
+
+    ChkError(event_register_toolbox_handler(idb->self_id,
+                                            Toolbox_ObjectDeleted,
+                                            menus_generic_deleted,
+                                            (void *) hdl));
+  }
 
   /* If there is one, exit through the custom Hidden handler */
 
@@ -234,6 +299,45 @@ static int menus_generic_hidden(int eventcode, ToolboxEvent * event, IdBlock * i
 
   if (hdl->hidden != NULL) return (hdl->hidden)(eventcode, event, idb, handle);
   else                     return 0;
+}
+
+/**************************************************************/
+/* menus_generic_deleted()                                    */
+/*                                                            */
+/* Called when a specific menu is deleted, if required;       */
+/* optionally registered in menus_generic_hidden.             */
+/*                                                            */
+/* Parameters are as standard for a Toolbox event handler.    */
+/* 'handle' should point to an initialised menu_handler       */
+/* structure.                                                 */
+/**************************************************************/
+
+static int menus_generic_deleted(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
+{
+  menu_handler * hdl = (menu_handler *) handle;
+
+  dprintf(("Menu", "menus_generic_deleted: Called for &%08X\n", (unsigned int) hdl));
+
+  /* Sanity checks */
+
+  if (menus_find_handler(hdl) == NULL || hdl->deleted == NULL)
+  {
+    ChkError(errors_frontend_error(fee_invalid_parameters,
+                                   "menus_generic_deleted"));
+  }
+
+  /* Clear the semaphore, remove the handler */
+
+  ChkError(event_deregister_toolbox_handler(idb->self_id,
+                                            Toolbox_ObjectDeleted,
+                                            menus_generic_deleted,
+                                            handle));
+
+  /* Exit via. the custom handler */
+
+  dprintf(("Menu", "menus_generic_deleted: Successful, exitting via custom handler\n"));
+
+  return (hdl->deleted)(eventcode, event, idb, handle);
 }
 
 /**************************************************************/
@@ -267,7 +371,6 @@ static int menus_generic_hidden(int eventcode, ToolboxEvent * event, IdBlock * i
 _kernel_oserror * menus_get_description(ObjectId o, ComponentId c, menus_entry * entry)
 {
   if (entry == NULL) return errors_frontend_error(fee_invalid_parameters,
-                                                  1,
                                                   "menus_get_description");
 
   /* First, the mostly static basic template. */
@@ -361,7 +464,6 @@ _kernel_oserror * menus_get_description(ObjectId o, ComponentId c, menus_entry *
 _kernel_oserror * menus_set_description(ObjectId o, ComponentId c, menus_entry * entry)
 {
   if (entry == NULL) return errors_frontend_error(fee_invalid_parameters,
-                                                  1,
                                                   "menus_set_description");
 
   RetError(menu_set_click_event(0,
@@ -399,5 +501,301 @@ _kernel_oserror * menus_set_description(ObjectId o, ComponentId c, menus_entry *
                          o,
                          c,
                          entry->tick));
+  return NULL;
+}
+
+/**************************************************************/
+/* menus_common_selection()                                   */
+/*                                                            */
+/* After the generic Selection event handler has been called, */
+/* a menu handler may have custom code. This custom code may  */
+/* be able to make use of this function, which provides a     */
+/* common service for menus of the "popup next to something   */
+/* else" variety (but where a StringSet isn't appropriate).   */
+/*                                                            */
+/* Parameters: Pointer to the IdBlock from the Selection      */
+/*             event - must have a parent ID in it;           */
+/*                                                            */
+/*             Pointer to a component ID holding the ID of    */
+/*             the ticked entry in the menu, updated with the */
+/*             new ID on exit (e.g. so that the old ticked    */
+/*             item can be unticked);                         */
+/*                                                            */
+/*             Optional component ID of a writeable field     */
+/*             that the selected menu entry's text will be    */
+/*             written into, and the input focus given to if  */
+/*             the parent already has focus;                  */
+/*                                                            */
+/*             Optional component ID of a display field that  */
+/*             the selected menu entry's text will be written */
+/*             into (this can be in addition to or instead of */
+/*             the writeable field listed above);             */
+/*                                                            */
+/*             Optional component ID of a radio button that   */
+/*             will be set to selected.                       */
+/*                                                            */
+/* Assumes:    Remember that to say "none" for a component ID */
+/*             you MUST use NULL_ComponentId, NOT zero. They  */
+/*             are not the same thing.                        */
+/**************************************************************/
+
+_kernel_oserror * menus_common_selection(IdBlock     * idb,       ComponentId * ticked,
+                                         ComponentId   writeable, ComponentId   display, ComponentId radio)
+{
+  dprintf(("Menu", "menus_common_selection: Called\n"));
+
+  /* Sanity checks */
+
+  if (
+       ticked         == NULL          ||
+       idb            == NULL          ||
+       idb->parent_id != NULL_ObjectId
+     )
+  {
+    /* This stuff only gets done if the ticked item has changed... */
+
+    if (idb->self_component != *ticked)
+    {
+      char entrytext[Limits_Menu_Item];
+
+      /* Untick the old, tick the new */
+
+      if (*ticked != NULL_ComponentId) RetError(menu_set_tick(0,
+                                                idb->self_id,
+                                                *ticked,
+                                                0));
+
+      *ticked = idb->self_component;
+
+      RetError(menu_set_tick(0,
+                             idb->self_id,
+                             *ticked,
+                             1));
+
+      /* Read the entry text... */
+
+      RetError(menu_get_entry_text(0,
+                                   idb->self_id,
+                                   idb->self_component,
+                                   entrytext,
+                                   sizeof(entrytext),
+                                   0));
+
+      entrytext[sizeof(entrytext) - 1] = '\0';
+
+      /* ...and write it into the parent dialogue box */
+
+      if (writeable != NULL_ComponentId)
+      {
+        RetError(utils_set_writeable_field(idb->parent_id,
+                                           writeable,
+                                           entrytext,
+                                           sizeof(entrytext)));
+      }
+
+      if (display != NULL_ComponentId)
+      {
+        RetError(utils_set_display_field(idb->parent_id,
+                                         display,
+                                         entrytext,
+                                         sizeof(entrytext)));
+      }
+    }
+
+    /* This stuff gets done whether or not the ticked item has changed... */
+
+    if (radio != NULL_ComponentId)
+    {
+      /* Select a radio button, if requested to do so */
+
+      RetError(radiobutton_set_state(0,
+                                     idb->parent_id,
+                                     radio,
+                                     1));
+    }
+
+    if (writeable != NULL_ComponentId)
+    {
+      /* If the input focus is in this window, move it to the writeable */
+
+      RetError(utils_place_focus(idb->parent_id,
+                                 writeable));
+    }
+  }
+  else
+  {
+    dprintf(("Menu", "menus_common_selection: Invalid parameters, exitting\n"));
+
+    RetError(errors_frontend_error(fee_invalid_parameters,
+                                   "menus_common_to_be_shown"));
+  }
+
+  dprintf(("Menu", "menus_common_selection: Successful\n"));
+
+  return 0;
+}
+
+/**************************************************************/
+/* menus_common_set_tick()                                    */
+/*                                                            */
+/* Common handler code for StringSet-like arrangements; see   */
+/* also menus_common_selection. This function unticks the old */
+/* item and ticks a new one, based on a given display or      */
+/* writeable field contents. Designed to be called from       */
+/* ToBeShown event handlers.                                  */
+/*                                                            */
+/* Parameters: ID block giving a self and parent ID;          */
+/*                                                            */
+/*             Pointer to a component ID holding the ID of    */
+/*             the old ticked item (if any), updated on exit  */
+/*             with the ID of the new ticked item (if any);   */
+/*                                                            */
+/*             Optional component ID of a display field to    */
+/*             read text from in the parent;                  */
+/*                                                            */
+/*             Optional component ID of a writeable field to  */
+/*             read text from in the parent;                  */
+/*                                                            */
+/*             Maximum length of text for either of the above */
+/*             including NUL terminator;                      */
+/*                                                            */
+/*             Component ID of the first item in the menu;    */
+/*                                                            */
+/*             Component ID of the last item in the menu.     */
+/*                                                            */
+/* Assumes:    You must give either a display or writeable    */
+/*             field component ID. Use NULL_ComponentId, and  */
+/*             NOT zero, for "none".                          */
+/**************************************************************/
+
+_kernel_oserror * menus_common_set_tick(IdBlock     * idb,       ComponentId * ticked,
+                                        ComponentId   writeable, ComponentId   display, size_t maxlen,
+                                        ComponentId   first,     ComponentId   last)
+{
+  _kernel_oserror * e;
+  char            * displayed;
+  char              entrytext[Limits_Menu_Item];
+  ComponentId       read;
+
+  dprintf(("Menu", "menus_common_set_tick: Called for &%08X\n", (int) idb->self_id));
+
+  /* Sanity checks */
+
+  if (
+       idb    == NULL             ||
+       ticked == NULL             ||
+       first  == NULL_ComponentId ||
+       last   == NULL_ComponentId ||
+       (
+         writeable == NULL_ComponentId &&
+         display   == NULL_ComponentId
+       )
+       || idb->parent_id == NULL_ObjectId
+     )
+  {
+    dprintf(("Menu", "menus_common_set_tick: Invalid parameters\n"));
+
+    return errors_frontend_error(fee_invalid_parameters,
+                                 "menus_common_set_tick");
+
+  }
+
+  /* Buffer to read into */
+
+  displayed = malloc(maxlen);
+
+  if (displayed == NULL)
+  {
+    dprintf(("Menu", "menus_common_set_tick: Out of memory\n"));
+
+    return errors_frontend_error(fee_out_of_memory,
+                                 "menus_common_set_tick");
+
+  }
+
+  /* Read what's been written into the parent dialogue box */
+
+  if (writeable != NULL_ComponentId)
+  {
+    e = writablefield_get_value(0,
+                                idb->parent_id,
+                                writeable,
+                                displayed,
+                                maxlen,
+                                NULL);
+  }
+  else
+  {
+    e = displayfield_get_value(0,
+                               idb->parent_id,
+                               display,
+                               displayed,
+                               maxlen,
+                               NULL);
+  }
+
+  #define Menus_RetError(e) if ((e) != NULL)   \
+                            {                  \
+                              free(displayed); \
+                              return (e);      \
+                            }
+
+  Menus_RetError(e);
+
+  displayed[maxlen - 1] = '\0';
+
+  /* ...ick; compare with all menu entries, first unticking */
+  /* anything we have on record as being ticked.            */
+
+  if (*ticked != NULL_ComponentId)
+  {
+    e = menu_set_tick(0,
+                      idb->self_id,
+                      *ticked,
+                      0);
+
+    *ticked = NULL_ComponentId;
+  }
+
+  Menus_RetError(e);
+
+  for (read = first; read <= last; read++)
+  {
+    e = menu_get_entry_text(0,
+                            idb->self_id,
+                            read,
+                            entrytext,
+                            sizeof(entrytext),
+                            NULL);
+
+    Menus_RetError(e);
+
+    entrytext[sizeof(entrytext) - 1] = '\0';
+
+    /* If there's a match, tick that entry */
+
+    if (!strcmp(displayed, entrytext))
+    {
+      e = menu_set_tick(0,
+                        idb->self_id,
+                        read,
+                        1);
+
+      Menus_RetError(e);
+
+      *ticked = read;
+
+      break;
+    }
+  }
+
+  /* Finished */
+
+  free(displayed);
+
+  #undef Menus_RetError
+
+  dprintf(("Menu", "menus_common_set_tick: Successful\n"));
+
   return NULL;
 }
