@@ -1,125 +1,61 @@
-# File:    Makefile
-# Purpose: Makefile for C++ command
-# Author:  Ben Laughton
+# Makefile for !C++ / c++ wrapper tool
 #
-# History:
+# ***********************************
+# ***    C h a n g e   L i s t    ***
+# ***********************************
+# Date       Name         Description
+# ----       ----         -----------
+# 01-Mar-01  SNB          Created
 #
-# 1998-08-23: BAL	 Created
-# 09-Nov-99   NB         Added install phase for FrontEnd res.
+
 #
-
-
-
-
-
-# ------------------------------------------------------------------------------
 # Paths
 #
+COMPONENT = C++
+TARGET    = c++
 
-LIBDIR		= <Lib$Dir>
-EXP_DIR		= <Build$Dir>.Library
-LIBDIR	= ${INSTDIR}.Library.Acorn
-INSTAPP    = ${INSTDIR}.Apps.!C++
+CFLAGS    = -Wpc -ffah
+DIRS      = o._dirs
 
+INSTAPP   = ${INSTDIR}.Apps.!C++
+LIBDIR    = ${INSTDIR}.Library.Acorn
 
-
-
-# ------------------------------------------------------------------------------
-# Generic options
 #
-
-MKDIR		= mkdir -p
-AS		= objasm
-CP		= copy
-CC		= cc
-RM		= remove
-LD		= link
-WIPE		= -wipe
-SQZ		= squeeze
-
-CCFLAGS		= -c -depend !Depend -ffah -strict\
-		  -I$(INCLUDES) $(DFLAGS) $(THROWBACK) $(CCEXTRA)
-ASFLAGS		= -depend !Depend -Stamp -quit
-CPFLAGS		= ~clfnr~v
-LBFLAGS		= -c
-WFLAGS		= ~CF~V
-LDFLAGS		= -c++
-SQZFLAGS	= -f
-
-
-
-
-# -----------------------------------------------------------------------------
-# Libraries
+# Program specific options:
 #
+OBJS       = args.o cplusplus.o
+LIBS       = ${CLIB}
 
-CLIB		= CLib:o.stubs
+include Makefiles:StdTools
+include Makefiles:AppLibs
+include Makefiles:AppStdRule
 
-LIBS =\
- $(CLIB)
-
-
-
-
-# ------------------------------------------------------------------------------
-# Include files
 #
-
-INCLUDES	= C:
-
-
-
-
-# ------------------------------------------------------------------------------
-# Program specific options
+# build a the library:
 #
+all:    ${TARGET}
 
-COMPONENT	= C++
-TARGET		= c++
-#EXPORTS		= $(EXP_HDR).$(COMPONENT)
-
-OBJS =\
- o.args\
- o.cplusplus\
-
-
-
-
-# ------------------------------------------------------------------------------
-# Rule patterns
 #
-
-.SUFFIXES: .o .c
-.c.o:;		$(CC)  $(CCFLAGS)  -o $@ $<
-
-
-
-
-# ------------------------------------------------------------------------------
-# Build rules
+# RISC OS ROM build rules:
 #
+rom: ${TARGET}
+        @echo ${COMPONENT}: rom module built
 
-all:	$(TARGET)
-        @echo $(COMPONENT): build complete
+export: export_${PHASE}
 
-export: $(TARGET)
-	$(CP)	$(TARGET)	$(EXP_DIR).$(TARGET)		$(CPFLAGS)
-        @echo $(COMPONENT): export complete
-
-clean:
-	$(WIPE) o $(WFLAGS)
-	$(RM) $(TARGET)
-	@echo $(COMPONENT): cleaned
-
-$(TARGET): $(OBJS) $(LIBS) local_dirs
-	$(LD) $(LDFLAGS) -o $@ $(OBJS) $(LIBS)
-	${SQZ} ${SQZFLAGS} $@
-
+install_rom: ${TARGET}
+        @echo ${COMPONENT}: rom module installed
+        
 install_tool: ${TARGET}
+	${MKDIR} ${LIBDIR}.Docs
 	${CP} ${TARGET} ${LIBDIR}.${TARGET} ${CPFLAGS}
-	@echo ${COMPONENT}: tool and docs installed in library
+	@echo ${COMPONENT}: tool installed in library
 
-install: install_tool install_dirs
+install: install_resources install_tool
+	@echo ${COMPONENT}: install complete
+
+install_resources:
+	${MKDIR} ${INSTAPP}
 	${CP} LocalRes:!Boot ${INSTAPP}.!Boot ${CPFLAGS}
 	${CP} LocalRes:!Run ${INSTAPP}.!Run ${CPFLAGS}
 	${CP} LocalRes:!Help ${INSTAPP}.!Help ${CPFLAGS}
@@ -128,16 +64,30 @@ install: install_tool install_dirs
 	${CP} LocalRes:Messages ${INSTAPP}.Messages ${CPFLAGS}
 	${CP} LocalRes:Templates ${INSTAPP}.Templates ${CPFLAGS}
 	${CC} -C++ -E >${INSTAPP}.Desc LocalRes:Desc
+	${TIDYDESC}  ${INSTAPP}.Desc ${INSTAPP}.Desc
 	@echo ${COMPONENT}: FrontEnd app install in '${INSTAPP}'
 
-install_dirs:
-	${MKDIR} ${INSTAPP}
-	${MKDIR} ${INSTAPP}
-	${MKDIR} ${LIBDIR}.Docs
+clean:
+        ${WIPE} o ${WFLAGS}
+        ${RM} ${COMPONENT}
+        @echo ${COMPONENT}: cleaned
 
-local_dirs:
-	$(MKDIR) o
+export_hdrs: 
+	@echo ${COMPONENT}: export complete (hdrs)
 
+export_libs: 
+        @echo ${COMPONENT}: export complete (libs)
 
-# ------------------------------------------------------------------------------
+${DIRS}:
+	${MKDIR} o
+	${TOUCH} $@
+
+#
+# Final link
+#
+${TARGET}: ${OBJS} ${LIBS} ${DIRS}
+        ${LD} ${LDFLAGS} -o ${COMPONENT} ${OBJS} ${LIBS}
+        ${SQZ} ${SQZFLAGS} $@
+        ${CHMOD} a+rx $@
+
 # Dynamic dependencies:
