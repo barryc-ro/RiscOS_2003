@@ -5,67 +5,16 @@
 # ***********************************
 # Date       Name         Description
 # ----       ----         -----------
-# 10-Mar-95  JRH          Created.
-#
-
-#
-# Paths
-#
-EXP_HDR = <export$dir>
-
-#
-# Generic options:
-#
-MKDIR   = cdir
-WIPE    = -wipe
-AS      = objasm 
-CP      = copy
-RM      = remove
-CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module
-CPFLAGS = ~cfr~v
-WFLAGS  = fr~c~v
+# 07-Mar-01  SNB          Rereated.
 
 #
 # Program specific options:
 #
-COMPONENT = CMOSreset
-SOURCE    = s.Module
-OBJECT    = o.Module
-TARGET    = rm.${MACHINE}.${COMPONENT}
+COMPONENT  = CMOSreset
+ROM_SOURCE = Module.s
+RESOURCES  = no
 
-#
-# Generic rules:
-#
-rom: ${TARGET}
-        @echo ${COMPONENT}: rom module built
-
-install_rom: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom module installed
-
-clean:
-        ${WIPE} rm.* ${WFLAGS}
-        ${WIPE} o ${WFLAGS}
-        @echo ${COMPONENT}: cleaned
-
-${TARGET}: ${OBJECT}
-        cdir rm.${MACHINE}
-        link -o $@ -bin -base 0 ${OBJECT}
-        settype $@ Module
-
-${OBJECT}:
-	${MKDIR} o
-        ${AS} ${ASFLAGS} -From ${SOURCE} -To $@
-
-${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
-        ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
-
-#
-# Extra Development rules:
-#
-install: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: ${TARGET} installed
+include StdTools
+include AAsmModule
 
 # Dynamic dependencies:
