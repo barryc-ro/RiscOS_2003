@@ -1,3 +1,5 @@
+COMPONENT=cmhg
+
 # Note CLXPATH should be set in the environment
 #CLXPATH=/usr/local/riscos/clx
 CLX=${CLXPATH}/clx.a
@@ -13,8 +15,8 @@ DERIVED_SRC=veneers.o veneers32.o
 EXTDIR1=${CLXPATH}
 EXTLIB1=${CLX}
 
-all: cmhg
-	@echo "Made cmhg (the default target)"
+all: ${COMPONENT}
+	@echo "Made ${COMPONENT} (the default target)"
 
 # Dependencies
 
@@ -32,28 +34,28 @@ gen32.h gen32.c: veneers32.o
 
 cmhg.o: gen26.h gen32.h
 
-cmhg: $(DERIVED_SRC)
-cmhg: $(DERIVED)
-cmhg: $(OBJALL)
-cmhg: $(EXTLIB1)
-	$(CC) -o cmhg $(OBJALL) $(EXTLIB1)
-	@echo "Made cmhg"
+${COMPONENT}: $(DERIVED_SRC)
+${COMPONENT}: $(DERIVED)
+${COMPONENT}: $(OBJALL)
+${COMPONENT}: $(EXTLIB1)
+	$(CC) -o ${COMPONENT} $(OBJALL) $(EXTLIB1)
+	@echo "Made ${COMPONENT}"
 
 clean:
 	-rm ${OBJALL}
-	-rm cmhg
+	-rm ${COMPONENT}
 	-rm $(DERIVED)
 	-rm $(DERIVED_SRC)
-	@echo cleaned cmhg
+	@echo cleaned ${COMPONENT}
 
 realclean: clean
 	-find . -type l -print | xargs rm
-	@echo cleaned cmhg links
+	@echo cleaned ${COMPONENT} links
 
 links:
 	./mklinks
-	@echo made cmhg links
+	@echo made ${COMPONENT} links
 
-install: cmhg
-	cp -p cmhg ${RISCOS_BUILD_TOOLS}
-	@echo "Installed cmhg"
+install: ${COMPONENT}
+	install ${COMPONENT} ${RISCOS_BUILD_TOOLS}
+	@echo "Installed ${COMPONENT}"
