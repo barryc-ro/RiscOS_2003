@@ -49,6 +49,8 @@
 ; 07-Nov-97  TMD  1.57		(Conditionally) nobble video packet lengths to zero
 ; 14-Nov-97  TMD  1.58		Allow bit 3 of ResetStream flags to pass through to video/audio
 ; 11-Feb-98  TMD  1.59		Issue Service_MPEGControlStarting on init
+; 19-Feb-98  TMD  1.60		(Conditionally) parse OVS NPTReferenceDescriptor to spot transitions
+; 20-Feb-98  TMD  1.61		Invalidate stream-type PEH PIDs on SelectProgram call
 ;
 
         LEADR   Module_LoadAddr
@@ -78,6 +80,9 @@ CoroutineStackCopied SETL {TRUE}			; into a static block
 
 		GBLL	NobbleVideoPacketLengths	; set video packet lengths to zero, cos they're wrong anyway on OVS
 NobbleVideoPacketLengths SETL {FALSE}			; easier to do it in MPEG2Video module instead
+
+		GBLL	ParseOVSNPT
+ParseOVSNPT	SETL	{TRUE}
 
  [ :LNOT: CoroutineStackCopied
 TransportStack          *       &01C00800               ; 3/4 way down normal SVC stack
@@ -212,6 +217,20 @@ DataCountArraySize      *       100                     ; allow for 100 periods 
 CSH_DataCounts          #       DataCountArraySize * 4  ; one word per minute
  ]
 
+ [ ParseOVSNPT
+CSH_NPTDescLength	#	1
+CSH_NPTDescMaxLen	*	18			; we can store maximum of 18 bytes of descriptor (not including len)
+CSH_NPTContentID	#	1			; bit 7 if postDiscontinuityIndicator (unused)
+							; bits 6..0 are the content ID (incremented for each command)
+CSH_NPTSTCRef		#	5			; 1st 7 bits reserved, last 33 are STC_Reference
+CSH_NPTNPTRef		#	8			; 1st 31 bits reserved, last 33 are NPT_Reference
+CSH_NPTScaleNum		#	2
+CSH_NPTScaleDen		#	2
+			AlignSpace
+
+CSH_LastContentID	#	4			; last value in ContentID field, or -1 if none
+ ]
+
 CSHSize                 *       @
 
 
@@ -294,7 +313,7 @@ Mod_Title
         =       "MPEGControl", 0
 
 Mod_HelpStr
-        =       "MPEGControl", TAB, "1.59 (11 Feb 1998) (MPEG 2 Transport layer version)", 0
+        =       "MPEGControl", TAB, "1.61 (20 Feb 1998) (MPEG 2 Transport layer version)", 0
         ALIGN
 
 Mod_SWITable
@@ -609,6 +628,9 @@ OpenStream Entry "r0-r2"
 	STR	r0, [r1, #CSH_CoroutineStackCopy]	; no block allocated yet
 	STR	r0, [r1, #CSH_CoroutineStackBlockSize]	; no space in it
  ]
+ [ ParseOVSNPT
+	STRB	r0, [r1, #CSH_NPTDescLength]		; no bytes in stored descriptor
+ ]
         MOV     r0, #-1
 	STR	r0, [r1, #CSH_CurrentProgram]		; just choose 1st program for now
         STR     r0, [r1, #CSH_PMT_PID]                  ; PID for Program Map Table is unknown until we get a PAT on PID 0
@@ -616,6 +638,9 @@ OpenStream Entry "r0-r2"
         STR     r0, [r1, #CSH_Audio_PID]                ; PID for audio is unknown until we get a PMT
  [ SkipToCorrectTrickMode
 	STR	r0, [r1, #CSH_LastTrickModeControl]	; indicate normal play
+ ]
+ [ ParseOVSNPT
+	STR	r0, [r1, #CSH_LastContentID]		; no content ID fields yet
  ]
 
 	MOV	lr, #1
@@ -1024,13 +1049,27 @@ SelectProgram Entry "r3,r4"
 	STR	lr, [r1, #CSH_Audio_PID]
 
  [ DoPEH
-	! 0, "SelectProgram should really invalidate all PEHPID_PIDs that aren't absolute"
+	Push	"r0,r2"
+	LDR	r2, [r1, #CSH_ListOfPEHPIDs]
+10
+	TEQ	r2, #0				; no more PEHPIDs?
+	BEQ	%FT30				; then skip
+	LDR	lr, [r2, #PEHPID_PEH]		; get PEH for PEHPID
+	LDR	r0, [lr, #PEH_Flags]		; first check that this PEH uses stream_type
+	TST	r0, #PEHFlags_StreamIdentifiedByPID ; (bit must be clear)
+	MOVEQ	lr, #-1				; uses stream_type, so invalidate this PID
+	STREQ	lr, [r2, #PEHPID_PID]
+20
+	LDR	r2, [r2, #PEHPID_Link]		; move to next PEHPID
+	B	%BT10				; and loop
+30
+	Pull	"r0,r2"
  ]
 
 	Push	"r0-r3"
 	LDR	r0, [r1, #CSH_StreamFlags]
 	TST	r0, #StreamFlags_DVB
-	BEQ	%FT10
+	BEQ	%FT60
 	Push	"r0-r2"
 	SWI	XDVBControl_ResetStream
 	MOV	r0, #2
@@ -1038,7 +1077,7 @@ SelectProgram Entry "r3,r4"
 	LDR	r2, =&00FF1FFF		; re-enable PID 0
 	SWI	XDVBControl_MatchMask
 	Pull	"r0-r2"
-10
+60
 	AND	r0, r0, #StreamFlags_VideoPresent :OR: StreamFlags_AudioPresent
 	BL	ResetStream
 	Pull	"r0-r3"
@@ -1128,6 +1167,11 @@ ResetStream Entry "r0-r3"
 	STRNE	r2, [r1, #CSH_TrickModeControl]			; then save new mode
 	ORRNE	r3, r3, #StreamFlags_SkipUntilCorrectMode	; and set bit in stream flags so we discard
 	BICEQ	r3, r3, #StreamFlags_SkipUntilCorrectMode	; else clear bit so we don't discard any more
+	STRNE	r3, [r1, #CSH_StreamFlags]
+ ]
+ [ ParseOVSNPT
+	TST	r3, #StreamFlags_OVSNPTDescriptors		; if we're supporting OVS NPT descriptors
+	ORRNE	r3, r3, #StreamFlags_OVSNPTSkipping		; then discard data until we see contentID change
 	STRNE	r3, [r1, #CSH_StreamFlags]
  ]
 
@@ -1546,14 +1590,15 @@ ts_wait_for_sync_loop
         TEQ     r5, lr
         BEQ     ts_process_video_PID
 
+        LDR     lr, [r1, #CSH_Audio_PID]
+        TEQ     r5, lr
+        BEQ     ts_process_audio_PID
+
         TEQ     r5, #0
         BEQ     ts_process_PID0
         LDR     lr, [r1, #CSH_PMT_PID]
         TEQ     r5, lr
         BEQ     ts_process_PMT_PID
-        LDR     lr, [r1, #CSH_Audio_PID]
-        TEQ     r5, lr
-        BEQ     ts_process_audio_PID
 
 ; this packet was not used, so increment the count of discarded data
 
@@ -1672,9 +1717,15 @@ ts_process_PMT_PID ROUT
         SUB     r5, r5, #9+4                    ; reduce count by all the bytes since section length, + 4 for CRC on end
 
         ORR     r10, r7, r9, LSL #8             ; program_info_length
-        SUB     r5, r5, r10                     ; reduce count for length of descriptors
+        SUBS    r5, r5, r10                     ; reduce count for length of descriptors
+	BCC	ts_skip_to_next_packet		; bogus descriptors length
+ [ ParseOVSNPT
+	LDR	lr, [r1, #CSH_StreamFlags]
+	TST	lr, #StreamFlags_OVSNPTDescriptors
+	BNE	ts_check_for_OVSNPT
+ ]
         BL      ts_skipbytes
-
+ts_process_rest_of_PMT
 	LDR	lr, [r1, #CSH_CurrentVideoStream] ; copy currents to temps
 	STR	lr, [r1, #CSH_TempVideoStream]
 	LDR	lr, [r1, #CSH_CurrentAudioStream]
@@ -1842,6 +1893,13 @@ ts_vidaudpacketcontinue
 	BNE	ts_free_packet_and_skip			; else free packet descriptor and skip packet
 30
  ]
+
+ [ ParseOVSNPT
+	LDR	lr, [r1, #CSH_StreamFlags]		; check if we're skipping
+	TST	lr, #StreamFlags_OVSNPTSkipping
+	BNE	ts_free_packet_and_skip			; if so, free packet descriptor and skip packet
+ ]
+
         CMP     r8, #0                                  ; negative length packet?
         BLT     ts_free_packet_and_skip			; then free packet descriptor and skip packet
         ADD     r7, r3, r8                              ; end of transport packet (if it was all in this buffer)
@@ -2081,6 +2139,65 @@ ts_gottwozeros
         BNE     ts_getnextstartcodeloop                 ; not zero or one, so look for 1st zero again
         BL      ts_getbytedec                           ; get start code reason
         EXIT
+
+ [ ParseOVSNPT
+
+NPTDescriptorTag	*	&17
+
+ts_check_for_OVSNPT ROUT
+	CMP	r10, #1
+	BCC	ts_process_rest_of_PMT			; no descriptor bytes left, so do rest of PMT
+	BEQ	ts_skip_to_next_packet			; only 1 byte left, but need tag and length!
+	BL	ts_getbytedec				; get descriptor tag
+	MOV	r9, r7
+	BL	ts_getbytedec				; get descriptor length
+	SUB	r10, r10, #2				; adjust for tag + length bytes
+	CMP	r7, r10					; if descriptor length > descriptors length
+	CMPLS	r7, r8					; or descriptor length > rest of packet length
+	BHI	ts_skip_to_next_packet			; then bogus
+	SUB	r10, r10, r7				; remaining bytes of descriptors
+	TEQ	r9, #NPTDescriptorTag
+	BEQ	%FT10					; found NPT descriptor
+05
+	Push	"r10"
+	MOV	r10, r7
+	BL	ts_skipbytes				; skip the whole (or rest) of this descriptor
+	Pull	"r10"
+	B	ts_check_for_OVSNPT			; and try again
+
+10
+	Push	"r5"
+	MOV	r5, r7					; length of this descriptor
+	CMP	r7, #CSH_NPTDescMaxLen			; maximum amount we can store
+	MOVHI	r5, #CSH_NPTDescMaxLen			; amount we will store
+	SUB	r7, r7, r5				; amount we won't store
+	Push	"r7"
+	ADD	r9, r1, #CSH_NPTDescLength		; point at length field
+	STRB	r5, [r9], #1				; indicate amount stored
+20
+	SUBS	r5, r5, #1				; if no more bytes to store
+	BCC	%FT30					; then exit
+	BL	ts_getbytedec				; else get another
+	STRB	r7, [r9], #1				; and store in block
+	B	%BT20					; then loop
+
+30
+	LDRB	r7, [r1, #CSH_NPTContentID]		; get new contentID
+	AND	r7, r7, #&7F				; only bottom 7 bits are the contentID
+	LDR	lr, [r1, #CSH_StreamFlags]
+	TST	lr, #StreamFlags_OVSNPTSkipping		; are we looking for a change right now
+	BEQ	%FT40					; no then skip
+	LDR	r5, [r1, #CSH_LastContentID]		; see what it was last time
+	TEQ	r5, r7					; have we changed?
+	BICNE	lr, lr, #StreamFlags_OVSNPTSkipping	; if so then clear skipping bit from flags
+	STRNE	lr, [r1, #CSH_StreamFlags]		; and store back
+40
+	STR	r7, [r1, #CSH_LastContentID]		; always store new contentID as last
+	Pull	"r7"
+	Pull	"r5"					; wrong order to do in one go
+	B	%BT05					; skip any part of the descriptor we couldn't store
+
+ ]
 
 ; **************************************************************************
 ;
@@ -2510,6 +2627,10 @@ CtrlInfo_Code Entry
 	SWINE	XOS_NewLine
  ]
 
+ [ ParseOVSNPT
+	LDR	r0, [r1, #CSH_LastContentID]
+	DREG	r0, "Last contentID = "
+ ]
  [ DoPEH
 	DLINE	"Program Element Handlers:", cc
 	LDR	r0, GlobalPEHList
