@@ -96,13 +96,21 @@ install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
+local_dirs:
+	${MKDIR} o
+	${MKDIR} od
+	${MKDIR} rm
+	${MKDIR} linked
+	${MKDIR} aof
+	${MKDIR} map
+
 clean:
-        ${WIPE} o.* ${WFLAGS}
-        ${WIPE} od.* ${WFLAGS}
-        ${WIPE} rm.* ${WFLAGS}
-        ${WIPE} linked.* ${WFLAGS}
-        ${WIPE} map.* ${WFLAGS}
-        ${RM} ${TARGET}
+        ${WIPE} o ${WFLAGS}
+        ${WIPE} od ${WFLAGS}
+        ${WIPE} rm ${WFLAGS}
+        ${WIPE} linked ${WFLAGS}
+        ${WIPE} map ${WFLAGS}
+        ${WIPE} aof ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 resources:
@@ -112,18 +120,18 @@ resources:
 #
 # Stand-alone module
 #
-${TARGETSA}: ${OBJS} ${CLIB}
+${TARGETSA}: ${OBJS} ${CLIB} local_dirs
         ${LD} -o $@ -module ${OBJS} ${CLIB}
 
-${TARGETSA_D}: ${OBJS_D} ${CLIB}
+${TARGETSA_D}: ${OBJS_D} ${CLIB} local_dirs
         ${LD} -o $@ -module ${OBJS_D} ${CLIB}
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS} ${ROMCSTUBS}
+${TARGET}: ${OBJS} ${ROMCSTUBS} local_dirs
         ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
 
-${TARGET_D}: ${OBJS_D} ${ROMCSTUBS}
+${TARGET_D}: ${OBJS_D} ${ROMCSTUBS} local_dirs
         ${LD} -o $@ -aof ${OBJS_D} ${ROMCSTUBS}
 
 #
