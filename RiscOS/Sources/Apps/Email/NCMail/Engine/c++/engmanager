@@ -1,6 +1,6 @@
 /*
 ** Email Engine
-** Interface to UI
+** General Manager
 */
 
 #include "kernel.h"
@@ -11,22 +11,21 @@
 #include "limits.h"
 
 #include "DebugLib/DebugLib.h"
-/* #include "NBLib/NBLib.h" */
+#include "NBLib/NBLib.h"
 
 
 #include "engtypes.h"
 #include "engmanager.h"
-#include "engfile.h"
 #include "enginit.h"
 #include "engcbf.h"
-#include "engstr.h"
 #include "engevent.h"
 #include "enguiapi.h"
 #include "enguser.h"
 #include "engtimers.h"
 #include "engconnect.h"
+#include "engprocess.h"
 
-MailboxDescriptor *ourmboxin, *ourmboxout, *transmbox;
+MailboxDescriptor *popmbox, *smtpmbox, *transmbox, *creatembox;
 
 bool emailactive, expungepending = false;
 uint32 popstatus;
@@ -44,6 +43,7 @@ CreateState createstate;
 MarkState markstate;
 
 eng_return statusret;
+ProcessStatus *popstat;
 
 static bool wrapped = false;
 
@@ -51,6 +51,10 @@ static uint32 entID;
 static uint32 nextID = 1;  /* Number to allocate to next message ID.
                               Wrap around to one after 99999999
                               to allow filenames of "M" + 8 chars */
+
+#define Message_NCMailNotify 0x820cf; /* change this when we know
+                                         what it should be */
+
 
 bool SetupState(void)
 {
@@ -66,28 +70,35 @@ bool SetupState(void)
   retrievestate.msg = 0;
   smtpprocessstate.attempts = 0;
 
-  if ((ourmboxin = (MailboxDescriptor *) malloc(sizeof(MailboxDescriptor))) == 0)
+  if ((popmbox = (MailboxDescriptor *) malloc(sizeof(MailboxDescriptor))) == 0)
     return false;
-  if ((ourmboxout = (MailboxDescriptor *) malloc(sizeof(MailboxDescriptor))) == 0)
+
+  if ((smtpmbox = (MailboxDescriptor *) malloc(sizeof(MailboxDescriptor))) == 0)
     return false;
+
   if ((transmbox = (MailboxDescriptor *) malloc(sizeof(MailboxDescriptor))) == 0)
     return false;
 
-  ourmboxin->total = 0;
-  ourmboxin->read = 0;
-  ourmboxin->answered = 0;
-  ourmboxin->list = 0;
-  ourmboxin->flags = DOWNLOADINCOMPLETE;
-  ourmboxout->total = 0;
-  ourmboxout->read = 0;
-  ourmboxout->answered = 0;
-  ourmboxout->list = 0;
-  ourmboxout->flags = 0;
+  if ((creatembox = (MailboxDescriptor *) malloc(sizeof(MailboxDescriptor))) == 0)
+    return false;
+
+  popmbox->total = 0;
+  popmbox->read = 0;
+  popmbox->answered = 0;
+  popmbox->list = 0;
+  popmbox->flags = DOWNLOADINCOMPLETE;
+  smtpmbox->total = 0;
+  smtpmbox->list = 0;
+  smtpmbox->flags = 0;
   transmbox->total = 0;
   transmbox->list = 0;
+  creatembox->total = 0;
+  creatembox->list = 0;
 
   ReadTimerValues();
-
+  if ((popstat = (ProcessStatus *) malloc(sizeof(ProcessStatus))) == 0)
+    return false;
+  
   return true;
 
 }
@@ -361,16 +372,15 @@ void DeactivatePOP(void)
   else
   {
     popactive = false;
-    StartTimeoutCount();
+    if (online)
+      StartTimeoutCount();
   }
 }
 
 
-void RemoveMessage(void)
+void RemoveMessage(MessageDescriptor *msgptr)
 {
   
-  MessageDescriptor *msgptr = retrievestate.msg;
-
   if (msgptr)
   {
     /*
@@ -385,7 +395,6 @@ void RemoveMessage(void)
       delete msgptr->elibobj;
       msgptr->elibobj = 0;
     }
-    retrievestate.msg = 0;
   }
 }
 
@@ -417,12 +426,12 @@ eng_rcode ClearMemory(uint32 required, bool flag)
   if (!cachefs)
     return ENG_NOCACHEFS;
 
-  else if (!ourmboxin->list)
+  else if (!popmbox->list)
     return ENG_NOMEMORY;
 
   else
   {
-    MessageDescriptor *msgptr = ourmboxin->list, *lastptr;
+    MessageDescriptor *msgptr = popmbox->list, *lastptr;
     int32 released = FreeMem();
     int32 size = (int32) required;
 
@@ -442,7 +451,7 @@ eng_rcode ClearMemory(uint32 required, bool flag)
       if ((lastptr->flags & DOWNLOADED) && (!(lastptr->flags & NEW)))
       {
         SetFilename(lastptr->ID, false);
-        released += GetFileLength(msgfilename);
+        released += nb_file_get_size(1, msgfilename, 0);
       }
       lastptr = lastptr->last;
     }
@@ -450,7 +459,7 @@ eng_rcode ClearMemory(uint32 required, bool flag)
     if (released >= size)
     {
       /* enough memory available so remove message files */
-      msgptr = (lastptr == 0) ? ourmboxin->list : lastptr->next;
+      msgptr = (lastptr == 0) ? popmbox->list : lastptr->next;
 
       while (msgptr)
       {
@@ -470,4 +479,134 @@ eng_rcode ClearMemory(uint32 required, bool flag)
 
     return ((released >= size) ? ENG_COMPLETED : ENG_NOMEMORY);
   }
+}
+
+
+char *GetSysVar(char *var, bool copy)
+{
+
+  char *ptr;
+
+  regs.r[0] = (int) var;
+  regs.r[1] = 0;
+  regs.r[2] = -1;
+  regs.r[3] = 0;
+  regs.r[4] = 0;
+  _kernel_swi(OS_ReadVarVal,&regs,&regs);
+  if (regs.r[2] == 0)
+    return 0;
+  else if (!copy)
+  {
+    /*
+    ** we are only detecting presence of variable, not copying it.
+    ** Just return any non-zero value.
+    */
+    return var;
+  }
+
+  regs.r[2] = -regs.r[2];
+  if ((ptr = malloc(regs.r[2])) == 0)
+    return 0;
+  regs.r[0] = (int) var;
+  regs.r[1] = (int) ptr;
+  regs.r[3] = 0;
+  regs.r[4] = 0;
+  _kernel_swi(OS_ReadVarVal,&regs,&regs);
+  ptr[regs.r[2]] = 0;
+
+  return ptr;
+
+}
+
+
+/*
+** SetFilename() sets the filename to be used to store a message.
+** The name is "NCMailStore:M" plus the message ID.
+** If the boolean t is set, a "t" is appended to the name
+** as this is a temporary file (e.g. to store headers).
+*/
+
+void SetFilename(uint32 id, bool t)
+{
+
+  /*
+  ** NOTE: 32 bytes have been malloc'd for this filename.
+  ** If the pathname is extended, the malloc (in enginit.c)
+  ** must be increased.
+  */
+  sprintf(msgfilename, "NCMailStore:M%d%s\0", id, (t) ? "t" : "");
+
+}
+
+
+void SetAttribs(char *f, char *attr)
+{
+
+  if (!nb_file_exists(1, f, 0, 0))
+  {
+    regs.r[0] = 24;
+    regs.r[1] = (int) f;
+    regs.r[2] = (int) attr;
+    _kernel_swi(OS_FSControl,&regs,&regs);
+  }
+
+}
+
+
+void UnlockFile(char *f)
+{
+  
+  SetAttribs(f, "WR");
+
+}
+
+
+void LockFile(char *f)
+{
+  
+  SetAttribs(f, "LWR");
+
+}
+
+
+#ifdef ALAN
+void MakeFilePublic(char *f)
+{
+  
+  SetAttribs(f, "WR/wr");
+
+}
+#endif
+
+
+/*
+** NotifyBrowser() broadcasts a message to indicate whether there
+** is new mail or not when the Email client is not active.
+** It sets newmail to the value passed (allowing the function to
+** be used to initialise newmail as well).
+*/
+
+void NotifyBrowser(uint32 n)
+{
+  NCMessage ncmsg;
+      
+  dprintf(("Eng", "Notifying %d new messages to the browser\n",n));
+  ncmsg.size = sizeof(NCMessage);
+  ncmsg.my_ref = 0;
+  ncmsg.action_code = Message_NCMailNotify;
+  ncmsg.flags = 0;
+
+  if (n)
+  {
+    ncmsg.statusflags = 1;  /* flags word - bit 0 means new mail */
+    ncmsg.newmsgs = n;        
+  }
+  else
+    ncmsg.statusflags = 0;
+
+  regs.r[0] = 17;
+  regs.r[1] = (int) &ncmsg;
+  regs.r[2] = 0;
+  _kernel_swi(Wimp_SendMessage,&regs,&regs);
+
 }
