@@ -58,7 +58,8 @@ StartFSystem    ENTRY   "r0-r3"
                 LDR     r2, =fs_control -module_start           ;  = offset of block from module base
                 MOV     r3, wp                                  ; -> workspace
                 SWI     XOS_FSControl
-                EXITS
+                CLRV
+                EXIT
 
                 LTORG
 
@@ -87,7 +88,7 @@ fs_badop
  [ international
                 B       MakeErrorWithFS_name                    ; "Bad operation on filing system devices:"
  |
-                ORRS    pc, lr, #V_bit
+                RETURNVS
  ]
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -105,7 +106,8 @@ RemoveFSystem   ENTRY   "r0-r1"
                 MOV     r0, #FSControl_RemoveFS
                 ADRL    r1, fs_name                             ; -> fs name to be removed
                 SWI     XOS_FSControl
-                EXITS
+                CLRV
+                EXIT
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -133,7 +135,8 @@ IssueUpCall     ENTRY   "r0-r9"
                 ADR     r1, null
                 MOV     r0, #UpCall_ModifyingFile
                 SWI     XOS_UpCall                              ; ignore any errors
-                EXITS
+                CLRV
+                EXIT
 
 null            = 0                                             ; no string so whole structure marked invalid!
                 ALIGN
@@ -260,7 +263,7 @@ fs_open         ROUT
 		Debug	fs, "fs file info word ", r0
 		]
 
-                Pull    "r0-pr, pc",VC,^                        ; return as the file object has been created OK
+                Pull    "r0-pr, pc",VC                          ; return as the file object has been created OK
 90
                 Debug   open, "failing to open, returning error"
 
@@ -269,7 +272,7 @@ fs_open         ROUT
 
                 ADD     sp, sp, #4
                 Pull    "r1-pr, lr"
-                ORRS    pc, lr, #V_bit
+                RETURNVS
 
 
 80
@@ -278,8 +281,8 @@ fs_open         ROUT
                 TEQ     fr, #0
                 BLNE    removefileblock
                 Pull    "r0-pr, lr"
-                MOV     r1, #0
-                MOVS    pc, lr                                  ; remove file node and return duff handle
+                SUBS    r1, r1, r1                              ; R1=0 means file not opened.  Clears V.
+                RETURN                                          ; remove file node and return duff handle
 
 
 ; attempt to create a stream for input, this involves creating any buffers required and
@@ -328,8 +331,9 @@ open_input
                 MOV     r1, pr
                 MOV     r0, #DeviceCall_Initialise
                 BL      CallDevice                              ; attempt to call the device
-                STRVC   r2, [fr, #file_InternalHandle]
-                BLVC    make_buffer                             ; make a usable buffer (if needed)
+                BVS     %90
+                STR     r2, [fr, #file_InternalHandle]
+                BL      make_buffer                             ; make a usable buffer (if needed)
                 BVS     %90                                     ; if failed then return error
 
                 MOV     r1, fr                                  ; setup the new handle as required
@@ -390,8 +394,9 @@ open_output
                 MOV     r1, pr
                 MOV     r0, #DeviceCall_Initialise
                 BL      CallDevice                              ; call the device
-                STRVC   r2, [fr, #file_InternalHandle]
-                BLVC    make_buffer                             ; make a usable buffer (if needed)
+                BVS     %90
+                STR     r2, [fr, #file_InternalHandle]
+                BL      make_buffer                             ; make a usable buffer (if needed)
                 BVS     %90                                     ; if that fails then attempt to create the buffer
 
                 MOV     r1, fr                                  ; setup the new handle as required
@@ -418,8 +423,8 @@ make_buffer     ROUT
                 Push    "r3, lr"
 
                 LDR     r0, [dr, #device_Flags]
-                TST     r0, #df_BufferedDevice                  ; is it a buffered device?
-                Pull    "r3, pc", EQ, ^                         ; no, so we cannot even consider creating a buffer
+                CMP     r0, #df_BufferedDevice                  ; is it a buffered device?  (If Z set, V cleared)
+                Pull    "r3, pc", EQ                            ; no, so we cannot even consider creating a buffer
 
                 Debug   open, "device must be buffered"
 
@@ -526,7 +531,7 @@ make_buffer     ROUT
 ; wake up code, this is called when some data is inserted into a dormant TX buffer.
 ; after calling device, r0 = 0 if the device wishes to remain dormant, otherwise preserved
 
-wakeup          ENTRY   "r0-r3"
+wakeup          EntryS  "r0-r3"
                 LDR     r2, [r8, #file_InternalHandle]          ; if device being opened or closed
                 TEQ     r2, #0
                 EXITS   EQ                                      ; then ignore
@@ -546,10 +551,12 @@ wakeup          ENTRY   "r0-r3"
 ; wake up code, this is called when some data is inserted into a dormant RX buffer.
 wakeup_rx	ENTRY	"r0-r2"
 
-		MOV	r2, pc
-		ORR	r0, r2, #SVC_mode
-		TEQP	r0, #0
-		NOP
+                ASSERT (IRQ_mode :AND: :NOT: SVC_mode) = 0
+
+                SavePSR r2
+                ORR     r0, r2, #SVC_mode
+                RestPSR r0,,c                           ; set SVC mode
+                NOP
 
 		Push	"lr"
 		MOV	r0, #UpCall_DeviceRxDataPresent
@@ -557,10 +564,10 @@ wakeup_rx	ENTRY	"r0-r2"
 		SWI	XOS_UpCall
 		Pull	"lr"
 
-		TEQP	r2, #0
+                RestPSR r2,,cf
 		NOP
 
-		EXITS
+		EXIT
  ]
 ; detach code, this is called when someone tries to deregister the buffer, or link it some other device
 
@@ -568,9 +575,9 @@ detach          ENTRY   "r0-r2"
                 MOV     r1, #Service_DeviceFSCloseRequest
                 LDR     r2, [r8, #file_FSwitchHandle]           ; get file handle
                 SWI     XOS_ServiceCall
-                TEQ     r1, #Service_Serviced                   ; if someone responded
+                CMP     r1, #Service_Serviced                   ; if someone responded (then Z set, V cleared)
                 PullEnv
-                BICEQS  pc, lr, #V_bit                          ; then exit VC
+                MOVEQ   pc, lr
                 ADRL    r0, ErrorBlock_DeviceFS_CannotDetach    ; else return error
                 DoError
 
@@ -710,22 +717,23 @@ fs_get          ENTRY   "r0-r2, fr,pr"
 
                 BL      %FT80                                   ; SleepRX - ignore error returned
 
+                CLC                                             ; ensure C and V clear on return
                 PullEnv
-                BICS    pc, lr, #C_bit+ V_bit                   ; ensure C clear on return
+                MOV     pc, lr
 30
                 STR     r0, [sp, #CallerR0]                     ; ensure error pointer on return frame valid
 
                 BL      %FT80                                   ; SleepRX - ignore error returned
 
                 PullEnv
-                ORRS    pc, lr, #V_bit                          ; return the error
+                RETURNVS                                        ; return the error
 
 40
                 BL      %FT80
 
                 PullEnv
-                ORR     lr, lr, #C_bit                          ; CS return - EOF encountered
-                BICS    pc, lr, #V_bit
+                SEC                                             ; C set, V clear - EOF encountered
+                MOV     pc, lr
 
 
 80              ; SleepRX - corrupts r0, r1 and r2
@@ -783,14 +791,13 @@ fs_put		ENTRY	"r0-r2, fr, r9"
 		BIC	r0, r0, #&CF
 		Debug	fs, "ESC_Status", r0
 
+		MOV	r1, #0                  ; ready for OS_ChangeEnvironment
 		;Check SWI version of escape flag
 		SWI	XOS_ReadEscapeState
-		MOV	r0, #:NOT: C_bit
-		BIC	r0, pc, r0
+                ADC     r0, r1, #0
 		Debug	fs, "ReadEscapeState", r0
 
 		MOV	r0, #9 ;escape
-		MOV	r1, #0
 		MOV	r2, #0
 		MOV	r3, #0
 		SWI	XOS_ChangeEnvironment
@@ -860,8 +867,7 @@ fs_put		ENTRY	"r0-r2, fr, r9"
 		CLRV
 99		STRVS	r0, [sp]
 		PullEnv
-		BICVCS	pc, lr, #V_bit
-		ORRS	pc, lr, #V_bit
+                MOV     pc, lr
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
@@ -885,8 +891,8 @@ fs_args         ROUT
 1
                 Debug   args, "fs_args called with reason code", r0
 
-                TEQ     r0, #fsargs_SetEXT                      ; ignore SetEXT
-                MOVEQS  pc, lr
+                CMP     r0, #fsargs_SetEXT                      ; ignore SetEXT
+                MOVEQ   pc, lr
 
                 TEQ     r0, #fsargs_SetPTR
                 TEQNE   r0, #fsargs_EnsureSize
@@ -895,8 +901,8 @@ fs_args         ROUT
 
                 TEQ     r0, #fsargs_ReadPTR
                 TEQNE   r0, #fsargs_ReadSize
-                MOVEQ   r2, #0			; return 0
-                MOVEQS  pc, lr
+                SUBEQS  r2, r2, r2              ; return 0, Z still set, clear V
+                MOVEQ   pc, lr
 
                 TEQ	r0, #fsargs_ReadEXT
 		BEQ	args_ext
@@ -923,11 +929,12 @@ args_ioctl	ROUT
 		LDR	r0, [r2, #0]			; load ioctl reason codes and flags
 		BIC	r0, r0, #&ff00ffff
 		TEQ	r0, #&00ff0000
-		BLEQ	ioctl_miscop
-		BLEQ	%10				; only V flag corrupted so OK
+                BNE     %FT05
+		BL	ioctl_miscop
+		B	%10				; only V flag corrupted so OK
 
 ; catch remaining cases and pass into device driver
-
+05
                 MOV     fr, r1                     	; -> file record
 		LDR	pr, [fr, #file_Parent]
 
@@ -939,10 +946,7 @@ args_ioctl	ROUT
 
 10
                 STRVS   r0, [sp]
-                PullEnv VS
-                ORRVSS  pc, lr, #V_bit
-
-		EXIT
+                EXIT
 
 
 ; deal with non-device specific ioctls
@@ -959,11 +963,11 @@ ioctl_miscop	ROUT
                 ADDCC   pc, pc, r0, LSL #2 		; despatch
 		B	%20
 10
-		MOVS	pc, lr				; 0 nothing
+		MOV	pc, lr				; 0 nothing
 		B	ioctl_miscop_nonblock		; 1 set non-blocking I/O
 20
                 PullEnv
-                BICEQS  pc, lr, #V_bit                  ; then exit VC
+                MOVEQ   pc, lr                          ; V must be clear to get here
 		ADRL	r0, ErrorBlock_DeviceFS_BadIOCtlReasonCode
                 DoError
 
@@ -993,7 +997,8 @@ ioctl_miscop_nonblock
 		MOVEQ	r0, #0				; non-blocking I/O disabled
 		STR	r0, [r2, #4]			; store result in ioctl block
 20
-		MOVS	pc, lr
+                CLRV
+		MOV	pc, lr
 
 
 ; handle checking of the file extent
@@ -1019,11 +1024,8 @@ args_ext	ENTRY	"r0-r1,r3-r6, fr"
                 SWI     XBuffer_GetInfo
  ]
                 STRVS   r0, [sp]
-                PullEnv VS
-                ORRVSS  pc, lr, #V_bit
-
  [ :LNOT: FastBufferMan
-                MOV	r6, r2
+                MOVVC   r6, r2
  ]
 		EXIT
 5
@@ -1036,11 +1038,8 @@ args_ext	ENTRY	"r0-r1,r3-r6, fr"
                 SWI     XBuffer_GetInfo
  ]
                 STRVS   r0, [sp]
-                PullEnv VS
-                ORRVSS  pc, lr, #V_bit
-
  [ :LNOT: FastBufferMan
-                MOV	r6, r2
+                MOVVC	r6, r2
  ]
 		EXIT
 
@@ -1091,8 +1090,7 @@ args_eof        ENTRY   "r0,r1,r3-r6, fr"
 
 05
                 STRVS   r0, [sp]
-                PullEnv VS
-                ORRVSS  pc, lr, #V_bit
+                EXIT    VS
 
  [ FastBufferMan
                 TEQ     r2, #0                                  ; any chars in buffer?
@@ -1126,7 +1124,8 @@ args_eof        ENTRY   "r0,r1,r3-r6, fr"
  ]
                 MOVEQ   r2, #-1                                 ; no data, indicate EOF
                 MOVNE   r2, #0                                  ; otherwise indicate not EOF
-                EXITS
+                CLRV
+                EXIT
 
 
 ; flush a stream.  Wait for the stream to empty, calling OS_ReadEscape state to allow
@@ -1136,29 +1135,29 @@ args_eof        ENTRY   "r0,r1,r3-r6, fr"
 args_flush      ENTRY   "r1-r3,fr"
 
 		Debug	flush, "Entered Flush"
+                ADDS    fr, r1, #0                              ; clear V!
                 LDR     r0, [r1, #file_Flags]
                 TST     r0, #ff_FileForTX                       ; is the file an output object
-                EXITS   EQ                                      ; no, so return now
-                MOV     fr, r1
+                EXIT    EQ                                      ; no, so return now
 10
                 BL      checkeof                                ; CS = exit loop until EOF or Escape pressed
 		DebugIf CS, flush, "Exited  Flush EOF"
-                EXITS	CS					; normal exit eof found
-
-                BLVC    checkescape				; VS = exit not always enabled
-                BLVC	checkfileTXOK				; VS = exit Monitor TX for errors call 12.
+                EXIT    CS                                      ; normal exit eof found
+                EXIT    VS
+                BL      checkescape                             ; VS = exit not always enabled
+                EXIT    VS
+                BL      checkfileTXOK                           ; VS = exit Monitor TX for errors call 12.
 
 		DebugE  flush, "Exited  Flush forced exit"
-                PullEnv VS
-                ORRVSS  pc, lr, #V_bit                          ; return the error (if one)
+                EXIT    VS                                      ; return the error (if one)
                 B       %BT10                                   ; if C clear then still no end of data
 
 ; get load and exec address of a stream and return them back to the caller.
 ;
 
 args_loadexec   MOV     r2, #0
-                MOV     r3, #0
-                MOVS    pc, lr
+                SUBS    r3, r3, r3                              ; R3=0, clears V
+                MOV     pc, lr
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -1272,7 +1271,8 @@ removefileblock ENTRY   "r0-r5, dr, pr"                         ; attempt to zap
 
                 LDR     fr, =&DEADDEAD                          ; invalidate the file record pointer
 
-                EXITS
+                CLRV
+                EXIT
 
 ; external error
 
@@ -1281,7 +1281,8 @@ removefileblock ENTRY   "r0-r5, dr, pr"                         ; attempt to zap
 
                 STR     r0, [sp]                                ; return an error to the outside world
                 PullEnv
-                ORRS    pc, lr, #V_bit
+                SETV
+                MOV     pc, lr
 
                 LTORG
 
@@ -1303,14 +1304,14 @@ fs_file         ROUT
                 Debug   file, "fs_file called with reason code", r0
                 Debug   fs, "fs_file ", r0
 
-                TEQ     r0, #fsfile_WriteInfo
-                TEQNE   r0, #fsfile_WriteLoad
-                TEQNE   r0, #fsfile_WriteExec
-                TEQNE   r0, #fsfile_WriteAttr
-                TEQNE   r0, #fsfile_Create
-                MOVEQS  pc, lr                                  ; ignore all these
+                CMP     r0, #fsfile_WriteInfo
+                CMPNE   r0, #fsfile_WriteLoad
+                CMPNE   r0, #fsfile_WriteExec
+                CMPNE   r0, #fsfile_WriteAttr
+                CMPNE   r0, #fsfile_Create
+                MOVEQ   pc, lr                                  ; ignore all these
 
-                TEQ     r0, #fsfile_ReadInfo                    ; read info on a file?
+                CMP     r0, #fsfile_ReadInfo                    ; read info on a file?
                 BNE     fs_badop                                ; no, then can't do any others, so error
 
 ; fsfile_ReadInfo
@@ -1360,7 +1361,8 @@ fs_func         ROUT
                 TEQNE   r0, #fsfunc_FileInfo
                 BEQ     fs_badop
 
-                MOVS    pc, lr                                  ; others such as boot, shutdown are ignored
+                CLRV
+                MOV     pc, lr                                  ; others such as boot, shutdown are ignored
 
 
 ; Directory enumeration, this is quite a complex operation.  Firstly
@@ -1404,8 +1406,8 @@ fs_func         ROUT
 
 file_enumdir    ENTRY   "r0-r2, r5-r7, dr, pr"
 
-                TEQ     r3, #0                                  ; if asking for none
-                EXITS   EQ                                      ; then return straight away
+                CMP     r3, #0                                  ; if asking for none
+                EXIT    EQ                                      ; then return straight away
 
                 MOV     r2, r1                                  ; -> path to enumerate
                 MOV     r1, #0                                  ; and broadcast it to all devices
@@ -1588,8 +1590,8 @@ file_enumdir    ENTRY   "r0-r2, r5-r7, dr, pr"
                 MOVLE   r7, #-1                                 ; then return with -1 in r4
 90
                 MOV     r4, r7                                  ; return index of next item
-                MOV     r3, lr                                  ; number of items returned
-                EXITS                                           ; and then return quickly
+                ADDS    r3, lr, #0                              ; number of items returned (V cleared!)
+                EXIT                                            ; and then return quickly
 
 ; in:   R1 -> wildcarded pathname
 ; out:  R1 -> pathname, with "$." removed
@@ -1700,7 +1702,8 @@ gbpb_get        ENTRY   "r0-r3, fr, r9, pr"
                 LDR     r2, [fr, #file_InternalHandle]
                 BL      CallDevice                              ; call the device
 
-                EXITS                                           ; yippee it all worked
+                CLRV
+                EXIT                                            ; yippee it all worked
 
 ; (external) error
 
@@ -1718,7 +1721,8 @@ gbpb_get        ENTRY   "r0-r3, fr, r9, pr"
                 BL      CallDevice                              ; hold on device, sleep for a little while
 
                 PullEnv
-                ORRS    pc, lr, #V_bit                          ; return the error
+                SETV
+                MOV     pc, lr                                  ; return the error
 
 
 ; Give a huge lump of data to the device.
@@ -1735,13 +1739,12 @@ gbpb_put        ENTRY   "r0-r3, fr, r9"
 		Debug		fs, "ESC_Status", r0
 
 		;Check SWI version of escape flag
+		MOV		r1, #0
 		SWI		XOS_ReadEscapeState
-		MOV		r0, #:NOT: C_bit
-		BIC		r0, pc, r0
+                ADC             r0, r1, #0
 		Debug		fs, "ReadEscapeState", r0
 
 		MOV		r0, #9 ;escape
-		MOV		r1, #0
 		MOV		r2, #0
 		MOV		r3, #0
 		SWI		XOS_ChangeEnvironment
@@ -1773,13 +1776,15 @@ gbpb_put        ENTRY   "r0-r3, fr, r9"
 		Debug	fs, "fsgbpb_put", r3
                 BL      checkescape
 		DebugIf	VS, fs, "detected escape---purging output buffer"
-		BLVS	purgeoutputbuffer
+                BVS     %90
+		BL	purgeoutputbuffer
 		BVS	%90
 
                 BL      checkfileTXOK
-		BLVS	purgeoutputbuffer			; if an error then purge output buffer
-                BVS     %90
-
+                BVC     %01
+		BL	purgeoutputbuffer			; if an error then purge output buffer
+                B       %90
+01
  [ FastBufferMan
                 MOV	r0, #BufferReason_InsertBlock
                 CallBuffMan					; r2,r3 already set up
@@ -1798,7 +1803,7 @@ gbpb_put        ENTRY   "r0-r3, fr, r9"
 02
                 LDR     r4, [sp, #CallerR3]                     ; How many did we ask for?
                 SUB     r4, r4, r3                              ; how many we transferred
-                ADD     r0, sp, #CallerR2
+                ADDS    r0, sp, #CallerR2                       ; clears V
                 STMIA   r0, {r2-r3}                             ; write the data to the return frame
 
 		[	debug
@@ -1807,9 +1812,9 @@ gbpb_put        ENTRY   "r0-r3, fr, r9"
 		MOV	r0, sp
 		Debug	fs, "gbpb no error---exit sp", r0
 		Pull	r0
-		MOVS	pc, lr
+		MOV	pc, lr
 		|
-                EXITS                                           ; and then restore stack pointer
+                EXIT                                            ; and then restore stack pointer
 		]
 
 ; (external) error
@@ -1828,7 +1833,8 @@ gbpb_put        ENTRY   "r0-r3, fr, r9"
 		Debug	fs, "gbpb error---exit sp", r0
 		Pull	r0
 		]
-                ORRS    pc, lr, #V_bit                          ; return the error
+                SETV
+                MOV     pc, lr                                  ; return the error
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
@@ -1837,7 +1843,7 @@ gbpb_put        ENTRY   "r0-r3, fr, r9"
 
  [ FastBufferMan
 
-purgeoutputbuffer ENTRY "r0"
+purgeoutputbuffer EntryS "r0"
 ; in:   r1 = buffer managers private buffer id
 ; out:  all registers preserved
                 MOV     r0, #BufferReason_PurgeBuffer
@@ -1846,7 +1852,7 @@ purgeoutputbuffer ENTRY "r0"
 
  |
 
-purgeoutputbuffer ENTRY "r0-r2,r9"
+purgeoutputbuffer EntryS "r0-r2,r9"
 ; in:   r1 = buffer handle
 ; out:  all registers preserved
                 MOV     r9, #CNPV
@@ -1895,14 +1901,14 @@ findobject      ENTRY   "r1,r6,r7"
                 BL      skipdollar
 
                 LDRB    r0, [r1]                                ; are we matching the root directory?
-                TEQ     r0, #0
+                CMP     r0, #0                                  ; clears V for safety
                 BEQ     %FT30                                   ; [filename is "$"]
 
                 LDR     dr, DevicesAt                           ; -> start of devices list
 00
                 TEQ     dr, #0                                  ; end of the devices chain yet?
                 MOVEQ   r0, #object_nothing
-                EXITS   EQ                                      ; yes, so return that object not found
+                EXIT    EQ                                      ; yes, so return that object not found
 
                 LDR     r0, [dr, #device_DeviceName]            ; -> start of filename to be checked against
                 MOV     r2, #0                                  ;  = index's into the filenames
@@ -1954,7 +1960,7 @@ findobject      ENTRY   "r1,r6,r7"
                 TEQ     r7, #0
                 ORRNE   r5, r5, #write_attribute
 
-                EXITS
+                EXIT
 
 ; perform info on "$"
 
@@ -1966,7 +1972,7 @@ findobject      ENTRY   "r1,r6,r7"
                 MOV     r5, #read_attribute+ write_attribute
                 MOV     dr, #0
                 MOV     pr, #0                                  ; setup parent and device records
-                EXITS                                           ; and return because "$" is a special case
+                EXIT                                            ; and return because "$" is a special case
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -1986,6 +1992,7 @@ findobject      ENTRY   "r1,r6,r7"
 HandleSpecial   ENTRY   "r0-r6"
 
                 BL      DecodeSpecial
+                STRVS   r0, [sp]
                 BVS     %90                                     ; finished decoding because it went really wrong!
 
                 LDR     r5, =&DEADDEAD
@@ -2001,16 +2008,11 @@ HandleSpecial   ENTRY   "r0-r6"
                 STR     r0, [fr, #file_BufferHandle]
 10
                 LDR     r0, [pr, #parent_Validation]
-                TEQ     r0, #0                                  ; do I need to pass the decoded block?
+                CMP     r0, #0                                  ; do I need to pass the decoded block? (clears V)
                 LDREQ   r6, [sp, #CallerR6]                     ; no, so -> original version
                 STR     r6, [fr, #file_UserSpecialData]
-
-                PullEnv
-                BICS    pc, lr, #V_bit                          ; ensure that the V bit is clear
 90
-                STR     r0, [sp]
-                PullEnv
-                ORRS    pc, lr, #V_bit                          ; return with r0 -> error block, V set.
+                EXIT                                            ; V bit is set/clear as required by here
 
 
 ; decoding validation string for internal commands.
