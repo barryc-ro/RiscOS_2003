@@ -31,6 +31,7 @@ checkescape     ENTRY
                 EXIT    CC                                      ; or if no escape
  ]
 
+		Debug	fs, "escape read in DeviceFS!"
                 Push    "r1,r2"
                 MOV     r0, #&7E                                ; acknowledge escape
                 SWI     XOS_Byte
@@ -64,18 +65,22 @@ StartFSystem    ENTRY   "r0-r3"
 ; control block used by the module to register itself with FileSwitch as a suitable
 ; filing system.
 
-fs_control      & fs_name -module_start                         ; -> fs name, eg: ADFS
-                & fs_banner -module_start                       ; -> fs startup banner, eg. Acorn ADFS
-                & fs_open -module_start                         ; -> fs open
-                & fs_get -module_start                          ; -> fs get bytes
-                & fs_put -module_start                          ; -> fs put bytes
-                & fs_args -module_start                         ; -> fs args
-                & fs_close -module_start                        ; -> fs close
-                & fs_file -module_start                         ; -> fs file
-fs_infoword     & fsinfo_special+ fsinfo_flushnotify+ fsinfo_dontusesave+ fsinfo_extrainfo+ fsnumber_DeviceFS
-                & fs_func -module_start                         ; -> fs func
-                & fs_gbpb -module_start                         ; -> gbpb routine
-		& fsextra_IOCtl
+fs_control	&		fs_name -module_start		; -> fs name, eg: ADFS
+		&		fs_banner -module_start		; -> fs startup banner, eg. Acorn ADFS
+		&		fs_open -module_start		; -> fs open
+		&		fs_get -module_start		; -> fs get bytes
+		&		fs_put -module_start		; -> fs put bytes
+		&		fs_args -module_start		; -> fs args
+		&		fs_close -module_start		; -> fs close
+		&		fs_file -module_start		; -> fs file
+fs_infoword	&		fsinfo_special+ fsinfo_flushnotify+ fsinfo_dontusesave+ fsinfo_extrainfo+ fsnumber_DeviceFS
+		&		fs_func -module_start		; -> fs func
+		[		false
+		=		0
+		|
+		&		fs_gbpb -module_start           ; -> gbpb routine
+		]
+		&		fsextra_IOCtl
 
 fs_badop
                 ADR     r0, ErrorBlock_DeviceFS_BadOp
@@ -160,6 +165,7 @@ null            = 0                                             ; no string so w
 fs_open         ROUT
 
                 Debug   open, "fsopen reason", r0
+                Debug   fs, "fs_open ", r0
 
                 TEQ     r0, #fsopen_ReadOnly
                 TEQNE   r0, #fsopen_Update
@@ -245,6 +251,14 @@ fs_open         ROUT
                 LDR     r3, [fr, #file_FSwitchHandle]
                 LDR     r4, [fr, #file_InternalHandle]
                 SWI     XOS_UpCall
+
+		[	false
+		; Tell FileSwitch that this is not a buffered device, so it doesn't call fs_gbpb.
+		LDR	r0, [sp]
+		BIC	r0, r0, #1 :SHL: 28
+		STR	r0, [sp]
+		Debug	fs, "fs file info word ", r0
+		]
 
                 Pull    "r0-pr, pc",VC,^                        ; return as the file object has been created OK
 90
@@ -636,6 +650,8 @@ RequestCloseStreams
 
 fs_get          ENTRY   "r0-r2, fr,pr"
 
+		Debug	fs, "fs_get"
+
                 MOV     fr, r1                                  ; -> file record
                 LDR     pr, [fr, #file_Parent]
 
@@ -722,7 +738,6 @@ fs_get          ENTRY   "r0-r2, fr,pr"
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-;
 ; In
 ;  fr
 ; Out
@@ -737,12 +752,15 @@ checkfileTXOK   ALTENTRY
                 LDR     r1, [fr, #file_Parent]
                 LDR     r2, [r1, #parent_Flags]
                 TST     r2, #ParentFlag_MonitorTransfers
-                LDRNE   r2, [fr, #file_InternalHandle]
-                BLNE    CallDevice                              ; ensure wake for calling
-                STRVS   r0, [sp]
+		DebugIf	NE, fs, "monitor calls supported"
+		DebugIf	EQ, fs, "monitor calls not supported"
+		EXIT	EQ
+
+                LDR	r2, [fr, #file_InternalHandle]
+                BL	CallDevice		;ensure wake for calling
+		STRVS   r0, [sp]		;logic changed to be independent of flags on entry
+						;JRC Tue 29th April 1997
                 EXIT
-
-
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
@@ -751,68 +769,98 @@ checkfileTXOK   ALTENTRY
 ; Put a byte to a device, this involves the following.  Inserting some
 ; data into a buffer (if applicable), writing the RXTX word with this
 ; piece of data and then waking the device up.
-;
 
-fs_put          ENTRY   "r0-r2, fr, r9"
+fs_put		ENTRY	"r0-r2, fr, r9"
 
-                MOV     fr, r1                                  ; -> file record
+		Debug	fs, "fs_put"
 
-                LDR     r1, [fr, #file_BufferHandle]
-                CMP     r1, #-1                                 ; is the object buffered?
- [ FastBufferMan
-                MOVNE   r2, r0                                  ; need byte in r2
-                LDRNE   r1, [fr, #file_BufferPrivId]            ; get buffer managers private buffer id
- |
-                MOVNE   r9, #INSV                               ; saves an extra label
+ [ debug
+		Push	"r0-r3"
+
+		;Check page 0 escape flag
+                MOV	r0, #0
+                LDRB	r0, [r0, #ESC_Status]
+		BIC	r0, r0, #&CF
+		Debug	fs, "ESC_Status", r0
+
+		;Check SWI version of escape flag
+		SWI	XOS_ReadEscapeState
+		MOV	r0, #:NOT: C_bit
+		BIC	r0, pc, r0
+		Debug	fs, "ReadEscapeState", r0
+
+		MOV	r0, #9 ;escape
+		MOV	r1, #0
+		MOV	r2, #0
+		MOV	r3, #0
+		SWI	XOS_ChangeEnvironment
+		Debug	fs, "esc handler", r1
+
+		MOV	r0, #10 ;event
+		MOV	r1, #0
+		MOV	r2, #0
+		MOV	r3, #0
+		SWI	XOS_ChangeEnvironment
+		Debug	fs, "event handler", r1
+
+		Pull	"r0-r3"
  ]
-                BNE     %FT11
-                B       %FT01
+
+		MOV	fr, r1					; -> file record
+
+		LDR	r1, [fr, #file_BufferHandle]
+		CMP	r1, #-1					; is the object buffered?
+ [ FastBufferMan
+		MOVNE	r2, r0					; need byte in r2
+		LDRNE	r1, [fr, #file_BufferPrivId]		; get buffer managers private buffer id
+ |
+		MOVNE	r9, #INSV				; saves an extra label
+ ]
+		BNE	%10
+
+		; Non-buffered device
 00
-                BL      checkfileTXOK
-                BVS     %FT30
-01
-                BL      checkescape                             ; is an escape pending?
-                BVS     %FT30
+		BL	checkescape				; is an escape pending?
+		BVS	%99
 
-                LDR     r1, [fr, #file_RXTXWord]
-                CMP     r1, #-1                                 ; is the RX/TX word free yet?
-                BNE     %BT00                                   ; no, so loop again
+		BL	checkfileTXOK
+		BVS	%99
 
-                STR     r0, [fr, #file_RXTXWord]                ; yes, so write the word in now
+		LDR	r1, [fr, #file_RXTXWord]
+		CMP	r1, #-1					; is the RX/TX word free yet?
+		BNE	%00					; no, so loop again
 
-                MOV     r0, #DeviceCall_WakeUpTX
-                LDR     r1, [fr, #file_Parent]
-                LDR     r2, [fr, #file_InternalHandle]
-                BL      CallDevice                              ; wake up for transmit now
-                BVS     %FT30
+		STR	r0, [fr, #file_RXTXWord]		; yes, so write the word in now
 
-                B       %FT20
+		MOV	r0, #DeviceCall_WakeUpTX
+		LDR	r1, [fr, #file_Parent]
+		LDR	r2, [fr, #file_InternalHandle]
+		BL	CallDevice				; wake up for transmit now
+		B	%99
+
+		; Buffered device
 10
-                BL      checkfileTXOK
-                BVS     %30
-11
-                BL      checkescape                             ; is an escape pending
-                BLVS    purgeoutputbuffer                       ; if so then purge output buffer
+		BL	checkescape				; is an escape pending
+		BLVS	purgeoutputbuffer			; if so then purge output buffer
+		BVS	%99
+
+		BL	checkfileTXOK
+		BVS	%99
+
  [ FastBufferMan
-                MOVVC   r0, #BufferReason_InsertByte
-                CallBuffMan VC                                  ; r1,r2 already set up
+		MOV	r0, #BufferReason_InsertByte
+		CallBuffMan					; r1,r2 already set up
  |
-                SWIVC   XOS_CallAVector
+		SWI	XOS_CallAVector
  ]
-                BVS     %30                                     ; return any errors that may occur
-                BCS     %10                                     ; keep looping until inserted
-20
-                PullEnv
-                BICS    pc, lr, #V_bit                          ; it all worked OK
-30
-                STR     r0, [sp]
-                PullEnv
-                ORRS    pc, lr, #V_bit
+		BVS	%99					; return any errors that may occur
+		BCS	%10					; keep looping until inserted
 
-; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-
-
-
+		CLRV
+99		STRVS	r0, [sp]
+		PullEnv
+		BICVCS	pc, lr, #V_bit
+		ORRS	pc, lr, #V_bit
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ;
@@ -823,6 +871,9 @@ fs_put          ENTRY   "r0-r2, fr, r9"
 ;
 
 fs_args         ROUT
+
+		Debug	fs, "fs_args", r0
+
 		CMP	r3, #3
 		BNE	%1
 		Push	"r0-r1"
@@ -1119,6 +1170,7 @@ args_loadexec   MOV     r2, #0
 fs_close        ENTRY   "dr, pr"
 
                 Debug   close,"Closing file"
+                Debug   fs, "fs_close"
 
                 MOV     fr, r1                                  ; fr is the file handle to be used
                 BL      removefileblock                         ; and then remove the block associated with it
@@ -1243,6 +1295,7 @@ removefileblock ENTRY   "r0-r5, dr, pr"                         ; attempt to zap
 fs_file         ROUT
 
                 Debug   file, "fs_file called with reason code", r0
+                Debug   fs, "fs_file ", r0
 
                 TEQ     r0, #fsfile_WriteInfo
                 TEQNE   r0, #fsfile_WriteLoad
@@ -1277,6 +1330,7 @@ fs_file         ROUT
 fs_func         ROUT
 
                 Debug   func, "fs_func called with reason code", r0
+                Debug   fs, "fs_func ", r0
 
                 TEQ     r0, #fsfunc_ReadDirEntries              ; if directory enumeration then allow
                 TEQNE   r0, #fsfunc_ReadDirEntriesInfo
@@ -1561,6 +1615,13 @@ skipdollar      ENTRY
 fs_gbpb         ROUT
 
                 Debug   gbpb, "fs_gbpb called with reason code", r0
+                Debug   fs, "fs_gbpb ", r0
+		[	debug
+		Push	r0
+		MOV	r0, sp
+		Debug	fs, "entry sp", r0
+		Pull	r0
+		]
 
                 TEQ     r0, #2
                 TEQNE   r0, #4                                  ; is the operation valid?
@@ -1658,6 +1719,38 @@ gbpb_get        ENTRY   "r0-r3, fr, r9, pr"
 
 gbpb_put        ENTRY   "r0-r3, fr, r9"
 
+		[		false
+		Push		"r0-r3"
+
+		;Check page 0 escape flag
+                MOV		r0, #0
+                LDRB		r0, [r0, #ESC_Status]
+		BIC		r0, r0, #&CF
+		Debug		fs, "ESC_Status", r0
+
+		;Check SWI version of escape flag
+		SWI		XOS_ReadEscapeState
+		MOV		r0, #:NOT: C_bit
+		BIC		r0, pc, r0
+		Debug		fs, "ReadEscapeState", r0
+
+		MOV		r0, #9 ;escape
+		MOV		r1, #0
+		MOV		r2, #0
+		MOV		r3, #0
+		SWI		XOS_ChangeEnvironment
+		Debug		fs, "esc handler", r1
+
+		MOV		r0, #10 ;event
+		MOV		r1, #0
+		MOV		r2, #0
+		MOV		r3, #0
+		SWI		XOS_ChangeEnvironment
+		Debug		fs, "event handler", r1
+
+		Pull		"r0-r3"
+		]
+
                 MOV     fr, r1
 
 		LDR	r4, [fr, #file_Flags]
@@ -1669,17 +1762,22 @@ gbpb_put        ENTRY   "r0-r3, fr, r9"
                 ORR     r1, r1, #1:SHL:31                       ; it is a block insert
                 MOV     r9, #INSV
  ]
+		;Loop till data written
 00
-                BL      checkfileTXOK
-                BVS     %FT90
-01
+		Debug	fs, "fsgbpb_put", r3
                 BL      checkescape
-                BLVS    purgeoutputbuffer
+		DebugIf	VS, fs, "detected escape---purging output buffer"
+		BLVS	purgeoutputbuffer
+		BVS	%90
+
+                BL      checkfileTXOK
+                BVS     %90
+
  [ FastBufferMan
-                MOVVC   r0, #BufferReason_InsertBlock
-                CallBuffMan VC                                  ; r2,r3 already set up
+                MOV	r0, #BufferReason_InsertBlock
+                CallBuffMan					; r2,r3 already set up
  |
-                SWIVC   XOS_CallAVector                         ; attempt to write the block to the device
+                SWI	XOS_CallAVector                         ; attempt to write the block to the device
  ]
                 BVS     %90
 
@@ -1688,13 +1786,24 @@ gbpb_put        ENTRY   "r0-r3, fr, r9"
 
                 TEQ     r3, #0                                  ; all written yet?
                 BNE     %00
+		Debug	fs, "fsgbpb_put done"
 
 02
                 LDR     r4, [sp, #CallerR3]                     ; How many did we ask for?
                 SUB     r4, r4, r3                              ; how many we transferred
                 ADD     r0, sp, #CallerR2
                 STMIA   r0, {r2-r3}                             ; write the data to the return frame
+
+		[	debug
+		PullEnv
+		Push	r0
+		MOV	r0, sp
+		Debug	fs, "gbpb no error---exit sp", r0
+		Pull	r0
+		MOVS	pc, lr
+		|
                 EXITS                                           ; and then restore stack pointer
+		]
 
 ; (external) error
 
@@ -1706,6 +1815,12 @@ gbpb_put        ENTRY   "r0-r3, fr, r9"
 
                 STR     r0, [sp]
                 PullEnv
+		[	debug
+		Push	r0
+		MOV	r0, sp
+		Debug	fs, "gbpb error---exit sp", r0
+		Pull	r0
+		]
                 ORRS    pc, lr, #V_bit                          ; return the error
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
