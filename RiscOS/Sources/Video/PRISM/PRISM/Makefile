@@ -53,11 +53,11 @@ CPFLAGS		= ~cfr~v
 WFLAGS		= ~c~v
 
 AFLAGS		= -depend !Depend -throwback
-CFLAGS		= -c -throwback -depend !Depend ${INCLUDES} -zM -Wpc -ffah -zps1 ${DFLAGS}
+CFLAGS		= -c -throwback -depend !Depend ${INCLUDES} -zM -Wpce -ffah -zps1 ${DFLAGS}
 DFLAGS		= -D${SYSTEM} -DCOMPAT_INET4 -UDIRECTSWI
 ROMFLAGS	= -DROM
 RAMFLAGS	= -UROM
-INCLUDES	= -ITCPIPLibs:,C: -JC:
+INCLUDES	= -ITCPIPLibs:,C:
 
 DIRS		= o._dirs_
 
