@@ -1,168 +1,10 @@
-/*******************************************************************************
-********************************************************************************
-*
-*      File        :   $RCSfile$
-*
-*      Description :   BLADE Audio DSP firmware
-*
-*      Author      :   $Author$
-*
-*      Status      :   $State$
-*
-*      History     :   $Log$
-*      History     :   Revision 1.10  2001/08/31 11:10:55Z  corby_s
-*      History     :   mod to frame patch to fix infinate audio clip wrapping problem
-*      History     :   disable interrupts around buffer mods in post-processing
-*      History     :   Revision 1.9  2001/07/27 14:08:03Z  corby_s
-*      History     :   sample rate changes handled in firmware
-*      History     :   always enable host interrupts on a decode command
-*      History     :   SPDIF channel stat info from operation register
-*      History     :   Revision 1.8  2001/07/19 13:50:08Z  corby_s
-*      History     :   allow host to specify underflow watermark
-*      History     :   Revision 1.7  2001/07/12 11:09:49Z  corby_s
-*      History     :   CFG functionality embedded in operation register to remove the need for CFG on channel change causing phase bug on DAC
-*      History     :   Revision 1.6  2001/06/21 15:15:36Z  corby_s
-*      History     :   fixed bug in tone generation scaling
-*      History     :   Revision 1.5  2001/06/11 16:51:14Z  corby_s
-*      History     :   report repeat status in host read
-*      History     :   errors reported only in PP IRQ (underflow may not be valid in consecutive IRQ)
-*      History     :   Revision 1.4  2001/05/31 14:01:29Z  corby_s
-*      History     :   force read of 4 words from FIFO on startup to ensure no odd byte left behind
-*      History     :   as this can lead to white noise being generated when playing PCM
-*      History     :   Revision 1.3  2001/05/25 13:52:35Z  corby_s
-*      History     :   fix problems with glitching on startup by halving time in parallel host ISR
-*      History     :   Revision 1.2  2001/05/24 14:33:59Z  corby_s
-*      History     :   fix for clipping signals on loud streams
-*      History     :   always trigger IRQ to execute host ISR
-*      History     :   Revision 1.1 2001/05/15 11:51:35
-*      History     :   Initial revision
-*
-*      Copyright   :   Pace Micro Technology 2000 (c)
-*
-*      The copyright in this material is owned by Pace Microtechnology PLC
-*      ("Pace"). This material is regarded as a highly confidential trade
-*      secret of Pace. It may not be reproduced, used, sold or in any other
-*      way exploited or transferred to any third party without the prior
-*      written permission of Pace.
-*
-********************************************************************************
-********************************************************************************/
-
 //*****************************************************************************************
 //
 //      Pacemain.asm
-//      Shell for Pace BSkyB STB.
+//      Shell for A231 AC3 dongle
 //
-//
-//      6-1-00  Started KHH, this version uses Zoran API with PARAM extensions.
-//
-//
-//      10-19-00 Version 0.95,  Almost done with alpha development.
-//                  includes error/sample rate interrupts to host.
-//
-//      10-19-00 Version 0.96,  Now takes sample rate info for G.729 and tones
-//                  from PLLCFG command, not bitstream.
-//
-//      10-19-00 Version 0.97,  Fixed bug causing Lo tone generation to run on 
-//                  after being diabled.
-//
-//      01-25-01 Version 0.9C,  Improvements in tolerance of req_cntr going negative
-//                  and PTS skipping.
-//      01-27-01 Version 0.9D,  Finalized PTS tolerance patch, Fixed L/R channel
-//                  swap on SPDIF Tx PCM output.
-//
-//      02-10-01 Version 0.9G,  Reconstructed 0.9F from 0.9D.
-//
-//      02-13-01 Version 0.9H,  Patched the MPEG lo-bit rate lip-sync problem.
-//
-//      02-23-01 Version 0.9J,  Fixed 'stuttering' associated with PTS tolerance/lip-sync
-//                  patches.  Added compile time option for new error reporting.
-//
-//      02-27-01 Version 0.9K,  Finalized error reporting changes, fixed sampling frequency
-//                  from being zeroed in timer ISR.
-//
-//      02-28-01 Version 0.9L,  Fixed several 'interrupt off' situations, added PCM fixes for
-//                  channel swapping, g729 mixing, added test of GPIO0 before
-//                  changing requests in timer interupt.
-//
-//      03-09-01 Version 0.9M, * Change the loop count for layer 1 in SoftMute_proc to 4 
-//                  instead of 12 for layer 2.
-//                  * if layer 1, force the data request amount to be six time the
-//                  current frame size.
-//                  * Move 'G729_input_flag' from 'InitAll' to Start
-//                  * Turn on AV sync on the fly
-//
-//      03-14-01 Version 0.9N, Incorporated and optimized breakpoint patches for low bit rates
-//                  and AV sync in Layer I streams.
-//      03-16-01 Version 0.9O, changed AVS_mask to avs_flags
-//      03-22-01 Version 0.9P, add extra nops in timer int to improve handling of 
-//                  Woolworth clip
-//
-//      18-04-01 Version Eval0002
-//               timer interrupt removed.  Requests to host are made from post processing
-//               PHI interrupt parses temporary buffer until and makes further requests 
-//               until no more data can be sent from the host
-//               low bitrate fix implemented to fool sync function
-//
-//      04-19-01 Version Eval0003
-//               Optimized program and fixed SPDIF L/R sync for MPEG&AC3 and PCM.
-//               optimised request mechanism to eliminate redundant request for data
-//               (ie host sends 0 to hregin when buffer empty instead of DSP detecting
-//               an empty burst)
-//
-//      05-09-01 Version Eval0004
-//               req_cntr increased to accomodate new IBUF_SIZE which has been corrected
-//               for problems associated with very high bit rate MPEG streams
-//               G729 code removed for optimisation
-//               USER_exec (PCM) re-written to take advantage of new request mechanism
-//               bip variable added to protect post-processing if previous req in progress
-//               pace.inc and 38601a2.inc integrated into pacemain.asm file
-//
-//      05-15-01 Version Eval0005
-//               residual bytes in FIFO now picked up at beginning of PHIsr.  This fixes
-//               an unrecoverable intermitant problem with buffer overflow
-//
-//      05-24-01 Version Eval0006
-//               DSP generates an IRQ always during PP regardless of whether necassary
-//               this is to act as a catalyst for the host ISR and may be removed later
-//               fix for clipping on output when gain used on FS stream but attenuated by
-//               global PCM output to DAC
-//
-//      05-25-01 Version Eval0007
-//               MAX_REQ_SIZE halved to 256 bytes to reduce time spent parsing PES header
-//               and reduce effect on interrupted thread.  Fixes glitch on playback start
-//
-//      05-32-01 Version Eval0008
-//               force clear of 4 words from FIFO in init to fix odd byte residue on PCM
-//
-//      06-11-01 Version Eval0009
-//               report repeat flag in host read
-//               errors reported only once in PP IRQ (underflow not valid in consec. IRQs)
-//
-//      21-06-01 Version 1.0
-//               fix bug in tone generation where samples not shifted correctly
-//
-//      12-07-01 Version 1.1
-//               PES enable and SPDIF enable moved to op register to remove the need for
-//               a seperate CFG command on channel change which results in phase error on
-//               analogue outputs.
-//
-//      18-07-01 Version 1.2
-//               bespoke underflow check implemented.  Allows host to modify low watermark
-//               on MPEG stream as ROM implementation can cause problems with some streams
-//               the new underflow check replaces the repeat bit in the host read register
-//
-//      25-07-01 Version 1.3
-//               implement PLL sample rate changes to move responsibility from the host in
-//               order to optimise the time taken to change to a new frequency.  MPEG allow
-//               variable sample rates (32,44.1,48KHz), AC3 and PCM are always 48KHz
-//               IRQs always enabled on a "play" command (MPG,AC3 or USR) to get data ASAP
-//               setup SPDIF channel status flag based on PCM/compressed audio bit op reg
-//
-//
-//      31-08-01 Version 1.4
-//               modification to frame patch to fix ignored underflow condition in Sync
-//               disable interrupts around critical buffer pointer mods in post processing
+//      18-10-01 Version 1.0 s corby
+//      initial revision of firmware for A231 AC3 dongle DSL project generated from Sky+
 //
 //*****************************************************************************************
 
@@ -170,7 +12,7 @@
 
 // code revision
 #define VERSION_ADDRESS         0x600
-#define	VERSION                 {0x7061,0x6365,0x7631,0x2e34 } // pacev1.4
+#define	VERSION                 {0x4132,0x3331,0x7631,0x2e30 } // A231v1.0
 
 // ROM code subroutines and return addresses
 #define exe_kernel_entry        0xE0042
@@ -254,7 +96,7 @@
 // MAX_REQ_SIZE is the number of words requested of the host - it
 // must not exceed FIFO_SIZE or overflow will occur
 //#define MAX_REQ_SIZE            FIFO_SIZE
-#define MAX_REQ_SIZE            128
+#define MAX_REQ_SIZE            64
 // TRGT_SIZE is the size of the entire input buffer - 4 words to
 // accomodate residue left in the DFIFO between requests, and - 1
 // to eliminate potential wrapping condition.  MPEG only.
@@ -347,20 +189,23 @@ DATA    myFrameSize     {0};                // store real MPEG frame size here
 DATA    d2_bkp          {0};                // register protection for breakpoint ISR
 DATA    d3_bkp          {0};                //                  "
 DATA    d4_bkp          {0};                //                  "
+DATA    stat_bkp        {0};                // status register will go in here
+DATA    returnAddrBkp   {0};                // store return address for breakpoint handler
 DATA    d3_pkt          {0};                // register protection for virtual FIFO
 DATA    d4_pkt          {0};                //                  "
 DATA    d5_pkt          {0};                //                  "
-DATA    d3_hdr          {0};
-DATA    d4_hdr          {0};
 DATA    a0_pkt          {0};                //                  "
 DATA    i0_pkt          {0};                //                  "
 DATA    m0_pkt          {0};                //                  "
+
+DATA    d3_dfifo        {0};
+DATA    d4_dfifo        {0};
+DATA    a0_dfifo        {0};
+DATA    m0_dfifo        {0};
+
 DATA    predictedWrPntr {0};                //
-DATA    watermark       {500};              // MPEG low water mark level default 500 words
-DATA    underflow       {0};                // bespoke underflow flag 
 DATA    last_rate       {0};                // current sample rate
 DATA    pktLength       {0};
-DATA    pktWordCount    {0};
 
 DATA Osc_Cfs {              // Ftone = 206 Hz
          -0.999636,         // a1/2, Fs=48 kHz
@@ -378,7 +223,7 @@ DATA    Param_List
           #Operation_Reg,                   // Pointer to the extension 0 buffer.
           3,                                // Number of !bytes! in the buffer.
           #null,                            // Update flag for operation register.
-          #watermark,                       // pointer to low water mark level
+          #null,                            // pointer to low water mark level
           3,                                // number of bytes...
           #null,                            // update flag for low water mark level
           #Tone_Volume,                     // Pointer to extension 2 buffer.
@@ -407,8 +252,10 @@ SUBROUTINE USER_exec;
 SUBROUTINE PCMinject;
 SUBROUTINE Init_all;
 SUBROUTINE Intb_ISR;
-SUBROUTINE vfifo_header_ISR;
+SUBROUTINE vfifo_header_ISR;                // header, dummy and payload hang on dfifo ISR
+SUBROUTINE vfifo_dummy_ISR;
 SUBROUTINE vfifo_payload_ISR;
+SUBROUTINE vfifo_done;                      // done hangs off breakpoint handler
 SUBROUTINE MPG_Bkp_ISR;
 SUBROUTINE AC3_Bkp_ISR;
 SUBROUTINE Post_Shell;
@@ -450,16 +297,9 @@ SUBROUTINE MPEG_exec_dummy {
      move   #IBUF_SIZE,d2;                      // compensate for
     add     d2,d5;                              // wrapping buffer
 noadd_mod:
-    move    #TRGT_SIZE,d2;                      // target buffer level
-    move    (watermark),d3;                     // get user watermark level
-    move    ie,d4;                              // use d4 for underflow bit
-    cmp     d3,d5;                              // check if we are starved
-    dbgt    no_uflow;                           //
-     sub     d5,d2,d5;                          // subtract occupied words
-     move    d5,(req_cntr);                     // how many bytes are required
-    setb    #UNDERFLOW_BIT,d4;                  // set underflow bit
-no_uflow:
-    move    d4,(underflow);                     //
+    move    #TRGT_SIZE,d2;
+    sub     d5,d2,d5;                           // subtract occupied words
+    move    d5,(req_cntr);                      // how many bytes are required
     move    (STREAM_sr),d2;                     // Get sample rate
     move    (last_rate),d5;                     // get the previous sample rate
     move    d2,(last_rate);                     // always store last rate
@@ -505,7 +345,8 @@ SUBROUTINE AC3_exec_dummy {
     move    (process_status),d0;                // test init flag
     cmpi    #INIT,d0;                           // is it INIT ?
     dbne    #AC3_exec;                          // no, decode next block of samples
-     move_m  (#DISP_NOP,(initproc_ptr));        // no special initialisation
+     move_m (#AC3_Bkp_ISR,(bkp_entry));         // Set up 1st set of breakpoint handlers
+    move_m  (#DISP_NOP,(initproc_ptr));         // no special initialisation
 // Initialization:
     jsrq    #AC3_exec;                          // Initialize AC3 decoder.  
     rpt     #4;                                 // Interrupts off.
@@ -620,11 +461,12 @@ SUBROUTINE PCMinject
 
 SUBROUTINE Init_all
 {
+    setb    #2,bcr;                             // enable data breakpoint
+    setb    #3,bcr;                             // on write...
     move    ie,(bip);                           // clear burst in progress variable
     move    a6,(predictedWrPntr);               // initialise predicted input write pointer
 // Initialize data requests:
     setb    #0,gpio;                            // Clear any unserviced data requests.
-    move_m( #0,hregout);                        // Clear the flag bits.
 // Modify code:
     move    (Operation_Reg),d2;                 // Get the operation register.
     setb    #IRQ_ENABLE,d2;                     // enable IRQs
@@ -664,6 +506,7 @@ no_pes;
     move    d3,(off_inta);
     move_m  (#Intb_ISR,(off_intb));             // Load pointer to serial b service routine.
     move_m  (#vfifo_header_ISR,(dfifo_entry));
+//    move_m  (#vfifo_done_ISR,(phi_entry));
     move    #1,ie;                              // Interrupts back on.
     rts_2;
      move_m( #Post_Shell,(postproc_ptr));       // Enable post-processing.
@@ -701,7 +544,6 @@ EXPORT INCA7_INCA7:                             // self modifying code
     move    (d3_reg),d3;                        // Restore d3
 }
 
-
 #define SYNC_BYTE 0x42000
 SUBROUTINE vfifo_header_ISR
 {
@@ -717,17 +559,18 @@ SUBROUTINE vfifo_header_ISR
     move    d4,d3;                              // 
     andi    #0xff000,d3;                        // find SYNC
     cmpi    #SYNC_BYTE,d3;                      // 
-    dbne    error;                              // or quit out with error
+    dbne    exit;                               // or quit out with error
      andi   #0x00ff0,d4;                        // 
      lshi   #-4,d4;                             // 
     move    d4,(pktLength);                     // 
-    move    d4,(pktWordCount);                  // 
+    move    #in_buf,d3;                         // 
+    add     d3,d4;                              // calculate and set breakpoint
+    move    d4,bkp3;                            // on write to last word of pkt
+    move    #in_buf,d3;                         // 
+    move    d3,(in_buf_ptr);                    // 
     db      exit;                               // 
      move   #vfifo_payload_ISR,d4;              // 
      move   d4,(dfifo_entry);                   // setup ISR for data aquisition
-error:
-    move    #0,d3;                              // for 0x27 - allow further requests
-    move    d3,(bip);                           // clear bip flag
 exit:
     move    (d3_reg),d3;                        //
     move    (d4_reg),d4;                        //
@@ -739,41 +582,52 @@ exit:
 SUBROUTINE vfifo_payload_ISR
 {
     push    mode;                               // Save mode register.
+    move    a0,(a0_dfifo);
+    move    m0,(m0_dfifo);
+    move    d3,(d3_dfifo);                      // require independant d3 & d4 protect
+    move    d4,(d4_dfifo);
     clrb    #0,mode;                            // Set shift direction.
     move    #0,ds;                              // Defeat auto shift modes.
-    move    a0,(a0_pkt);                        // <-+
-    move    m0,(m0_pkt);                        //   | protect registers
-    move    d3,(d3_pkt);
-    move    d4,(d4_pkt);
-    move    d5,(d5_pkt);                        // <-+
     move    dffcnt,d3;                          // Get the fifo count.
     lshi    #-17,d3;                            // Shift count down to LSB position.
-    pop     mode;                               // 
+    pop     mode;                               //
     dbeq    exit;                               // If empty, exit.
-     move   d3,d5;                              // 
      move   (in_buf_ptr),a0;                    // Get input buffer pointer.
-    dec     d3  #0,m0;                          //
+     dec    d3  #0,m0;                          //
 data_loop:
-    dbgt    data_loop;                          //
-     dec    d3  dfifo,d4;                       //
-     cmpz   d3  d4,(a0)+;                       //
+    dbgt    data_loop;                          // effectively an interrupt enable will
+     dec    d3  dfifo,d4;                       // occur here on the last byte written
+     cmpz   d3  d4,(a0)+;                       // as the breakpoint IRQ is non maskable
     move    a0,(in_buf_ptr);                    // Save the pointer.
-    move    (pktWordCount),d4;                  // update word countdown
-    sub     d5,d4;                              // 
-    move    d4,(pktWordCount);                  // 
-    dbgt    exit;                               // <------ return here if no packet yet ------>
-     move   #in_buf,a0;                         // at start of payload data
-     move   (pktLength),d5;                     // 
-    move    #vfifo_header_ISR,d4;               // 
-    move    d4,(dfifo_entry);                   // setup ISR for header scan..
-    move    i0,(i0_pkt);                        // protect i0
-    setb    #0,gpio;                            // packet arrived .. clear request
+exit:
+    move    (a0_dfifo),a0;                      //
+    move    (m0_dfifo),m0;                      //
+    move    (d3_dfifo),d3;                      //
+    move    (d4_dfifo),d4;                      //
+    rti_1;                                      //
+     clrb   #12,imr;                            // Re-enable dfifo interrupts. 
+}
+
+SUBROUTINE vfifo_done
+{
+    setb    #0,gpio;                            // 
+    move    i0,(i0_pkt);                        // 
+    move    a0,(a0_pkt);                        // 
+    move    m0,(m0_pkt);                        // 
+    move    d3,(d3_pkt);                        // 
+    move    d4,(d4_pkt);                        // 
+    move    d5,(d5_pkt);                        // 
+    setb    #12,imr;                            // 
+    move    #vfifo_header_ISR,d3;               // 
+    move    d3,(dfifo_entry);                   // 
+    move    #in_buf,a0;                         // 
+    move    (pktLength),d5;                     // 
     cmpz    d5  #0,m0;                          // 
-inject_loop:                                    // 
-    dbeq    inject_end;                         // 
+inject_loop:
+    dble    inject_end;                         // 
      move   (nwa_input_flag),d4;                // 
      move   (a0)+,d3;                           // 
-    rpt     #4;                                 // disable interrupts
+    rpt     #4;                                 // 
     move    #0,ie;                              // 
     andi    #0xFFFF0,d3;                        // 
     move    #dfifo_int_a_rti,i0;                // 
@@ -783,35 +637,75 @@ inject_loop:                                    //
     db      (off_inta);                         // 
      move   #0,ds;                              // 
      clrb   #0,mode;                            // 
-dfifo_int_a_rti:                                // 
+dfifo_int_a_rti:
     db      inject_loop;                        // 
      nop;                                       // 
      dec    d5;                                 // 
-inject_end:                                     // 
-    move    (i0_pkt),i0;                        // unprotect i0
-    move    a6,(predictedWrPntr);               // store "real" write pointer
-// cleanup registers
-    move    #0,d3;                              // allow further requests
-    move    d3,(bip);                           // clear bip flag
-// any xtra words that enter now are flushing words .. trash them
-    move    #1000,d3;
-    move    d3,(pktWordCount);
-exit:
-    move    (m0_pkt),m0;
-    move    (a0_pkt),a0;
-    move    (d3_pkt),d3;
-    move    (d4_pkt),d4;
-    move    (d5_pkt),d5;
-    rti_1;                                      //
-     clrb   #12,imr;                            // Re-enable dfifo interrupts. 
+inject_end:
+    rpt     #4;                                 // 
+    move    #0,ie;                              // 
+    move    a6,(predictedWrPntr);               // 
+// at this point we have consumed the entire intput packet // enable this coide 
+#if 1
+// enable this code to activate multiple consecutive IRQs
+    move    (bip),d3;                           // 
+    dec     d3;                                 // 
+    move    (req_cntr),d4;                      // 
+    cmpz    d4;                                 // 
+    dble    end_clear_bip;                      // 
+     move   #MAX_REQ_SIZE,i0;                   // 
+     move   a6,a0;                              // 
+    move    m6,m0;                              // 
+    move    (pktLength),d5;                     // 
+    cmpi    #MAX_REQ_SIZE,d5;                   // 
+    dblt    end_clear_bip;                      // 
+     move   (a0)+i;                             // 
+     move   #in_buf+FIFO_SIZE,d4;               // 
+    move    d4,bkp3;                            // 
+    rpt     #4;                                 // 
+    move    dfifo,d4;                           // 
+    db      end_Vfifo_done;                     // 
+     move   a0,(predictedWrPntr);               // 
+     clrb   #0,gpio;                            // 
+#endif
+end_clear_bip:
+    move    #0,d3;                              // 
+end_Vfifo_done:
+    move    d3,(bip);                           // 
+    move    (a0_pkt),a0;                        // 
+    move    (i0_pkt),i0;                        // 
+    move    (m0_pkt),m0;                        // 
+    move    (d3_pkt),d3;                        // 
+    move    (d4_pkt),d4;                        // 
+    move    (d5_pkt),d5;                        // 
+    rti_1;                                      // 
+     clrb    #12,imr;                           // 
+}
+
+SUBROUTINE AC3_Bkp_ISR
+{
+    tstb    #2,bsr;                             // <-+
+    dbeq    exit;                               //   |
+     move   d3,(d3_bkp);                        //   |
+     nop;                                       //   |
+    clrb   #2,bsr;                              //   |
+    jmp     vfifo_done;                         //   |
+exit:                                           // <-+
+    rti;
 }
 
 SUBROUTINE MPG_Bkp_ISR
 {
-    move    d3,(d3_bkp);
+    tstb    #2,bsr;                             // <-+
+    dbeq    skip_vfifo_done;                    //   |
+     move   d3,(d3_bkp);                        //   |
+     nop;                                       //   |
+    clrb   #2,bsr;                              //   |
+    jmp     vfifo_done;                         //   |
+skip_vfifo_done:                                // <-+
     move    (sp)+,z;                            // z = status
     move    (sp)+,d3;                           // d3 = return address
-    cmpi    #Sync_wait_out_init+1,d3;
+    cmpi    #Sync_wait_out_init+1,d3;           // 
     dbeq    Patch1;                             // Patch1 stops Sync subroutine from waiting
     move    d2,(d2_bkp);                        // for output buffer to cycle to its origin
     cmpi    #MPEG_check_dmph+1,d3;              // before proceeding (Keeps STC from drifting).
@@ -831,8 +725,8 @@ Nested_bkp_exit:
     move    z,status;                           // Restore status.
     move    #1,ie;                              // Enable interrupts.
 _no_ie:
-    setb	#0,bct1;                            // VF4 Reset breakpoint1 counter.
-    setb	#0,bct2;                            // VF4 Reset breakpoint2 counter.
+    setb    #0,bct1;                            // VF4 Reset breakpoint1 counter.
+    setb    #0,bct2;                            // VF4 Reset breakpoint2 counter.
     rts_2;                                      // Common exit point.
      move    (d2_bkp),d2;                       // Restore registers.
      move    (d3_bkp),d3;
@@ -1002,16 +896,12 @@ End_Tone_Insertion:
      move   (STREAM_sr),d2;                     // Get sample rate
      lshi   #SR_SHIFT,d2;                       // Shift into upper nibble.
     andi    #SR_MASK,d2;                        // Isolate the error bit
-    move    d2,(hregout_stat);                  // Save hregout data for PHISR
-    move    (underflow),d5;                     // Get the underflow bit
-    or      d5,d2;                              // report back to host
     move    (STATUS_STAT),d5;                   // Get current status
     lshi    #STATUS_SHIFT,d5;                   // Shift sample rate code into position.
     andi    #STATUS_MASK,d5;                    // mask off sample rate
     or      d2,d5;                              // Add sample rate code to the hregout data.
     move    (Operation_Reg),d3;                 // its safe to request more data then
     tstb    #IRQ_ENABLE,d3;                     // is the FIFO enabled
-
     dbeq    no_IRQ;                             // no .. skip FIFO request and clear bip count
      move   (req_cntr),d4;                      // Get the request count.
      cmpz   d4;                                 // greater than 0
@@ -1028,22 +918,18 @@ skipDataReq:
     and     d5,d4;                              // more data or notifying the host of a repeated frame
     dbeq    no_IRQ;                             // if not then quit out without triggering an IRQ
      move   #MAX_REQ,d4;                        // number of bursts to go in d4
-     move   d5,hregout;                         // Set flags for host regardless (ignored if no ISR)
+     nop;
     move    d4,(bip);
-
 // clear FIFO here (NULL flush bytes may reside in base of FIFO)
     rpt     #4;                                 // Clear the fifo.
     move    dfifo,d3;
 // signify to FIFO ISR that we are looking for sync byte
     move_m  (#in_buf,(in_buf_ptr));             // point to beginning next packet
     move_m  (#vfifo_header_ISR,(dfifo_entry));  // Load pointer to fifo service routine.
+// setup packet arrival interrupt
+    move    #in_buf+FIFO_SIZE,d3;
+    move    d3,bkp3;                            // set eop at end of virtual FIFO
 // go signal interrupt...
-
-    move    #in_buf,a0;
-    move    #0,d3;
-    rpt     #FIFO_SIZE;
-     move   d3,(a0)+;
-
     clrb    #0,gpio;                            // Send interrupt, active low.
 no_IRQ:
     move    #1,ie;                              // re enable interrupts
