@@ -56,7 +56,7 @@ DIRS      = o._dirs
 # Include files
 #
 INCLUDES  = -IC:CLX -IC: -Iriscos
-DFLAGS    = 
+DFLAGS    = -DEXECUTE_ON_RISCOS
 
 #
 # Program specific options:
