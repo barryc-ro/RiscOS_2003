@@ -152,6 +152,9 @@ export: export_${PHASE}
 clean:
         @echo ${COMPONENT}: no cleaning required
 
+export_libs:
+        @echo ${COMPONENT}: export complete (libs)
+
 export_hdrs: ${HDRS} dirs
         ${CP} arpa       TCPIPLibs:arpa            ${CPFLAGS}
         ${CP} h          TCPIPLibs:h               ${CPFLAGS}
@@ -166,9 +169,6 @@ export_hdrs: ${HDRS} dirs
         ${CP} rpcsvc     TCPIPLibs:rpcsvc          ${CPFLAGS}
         ${CP} sys        TCPIPLibs:sys             ${CPFLAGS}
         @echo ${COMPONENT}: export complete (hdrs)
-
-export_libs:
-        @echo ${COMPONENT}: export complete (libs)
 
 dirs:
         ${MKDIR} ${LIBDIR}
