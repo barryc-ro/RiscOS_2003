@@ -99,6 +99,17 @@
 ; 07-Nov-97  TMD  2.36		Enable trick play support
 ; 10-Nov-97  TMD  2.37		Fix CheckErrorStatus so it saves lr_svc around the SWI call.
 ; 10-Nov-97  TMD  2.38		Remove TrickPlay stuff so above fix can be tested.
+; 11-Nov-97  TMD  2.39		Put TrickPlay back in again.
+; 11-Nov-97  TMD  2.40		Use correct TrickPlay code!
+; 14-Nov-97  TMD  2.41		Only enable trick play fixes when trick play mode is indicated, and structure flags enable them.
+; 14-Nov-97  TMD  2.42		Don't check for incomplete PES packet if not doing trickplay packet length fix
+; 20-Nov-97  TMD  2.43		Fix setting of TrickPlay variable in VideoResetStream.
+; 20-Nov-97  TMD  2.44		(Conditionally) only do underrun fix on odd fields.
+; 20-Nov-97  TMD  2.45		(Conditionally) freeze field if stopping the decoder to prevent underruns.
+; 21-Nov-97  TMD  2.46		Zero TrickStopFreeze on ResetStream as well as OpenStream
+; 08-Jan-98  TMD  2.47		Attempt to cope with QSIF images (well at least don't scale horiz to fill screen)
+; 16-Jan-98  TMD  2.48		(Conditionally) attempt to fix audio squawk problem.
+; 16-Jan-98  TMD  2.49		Fix bug in system buffer parsing of MPEG2 PES packet, revealed by above fix.
 ;
 
 	LEADR	Module_LoadAddr
@@ -162,17 +173,26 @@ RegDebug SETL	{TRUE}			; allow L64002 register access thru *-commands
 	GBLL	NobbleL64002VideoPacketLengths ; set video packet lengths to zero as written to L64002
 NobbleL64002VideoPacketLengths SETL {FALSE}
 
+	GBLL	FudgeZeroLengthPackets	; whether to always fudge zero length packets
+FudgeZeroLengthPackets SETL {FALSE}	; only do it during trick play
+
 	GBLL	TrickPlaySupport
-TrickPlaySupport SETL {FALSE}
+TrickPlaySupport SETL {TRUE}		; enable checking for conditional support for trick play
 
-	GBLL	StopStartTrickPlay	; on BeginActiveVideo IRQ, check video buffer
-StopStartTrickPlay SETL {TRUE} :LAND: TrickPlaySupport ; has at least VBV size amount in it, otherwise stop decoder
+	GBLL	UnderrunFixOnlyOnOddFields
+UnderrunFixOnlyOnOddFields SETL {TRUE}	; try this cos we only want to do freeze field on odd fields too
 
-	GBLL	FudgeZeroLengthPackets	; Fudge zero-length packets by waiting until length is known
-FudgeZeroLengthPackets SETL {TRUE} :LAND: TrickPlaySupport	; required for OVS trick play
+	GBLL	FreezeFieldOnTrickStop
+FreezeFieldOnTrickStop	SETL	{TRUE}	; freeze field at the same time as stopping the decoder for underrun fix
 
-	GBLL	NobbleInputVideoPacketLengths	; pretend all inputted video packets have zero length
-NobbleInputVideoPacketLengths SETL {TRUE} :LAND: TrickPlaySupport
+	GBLL	FudgeQSIF
+FudgeQSIF SETL	{TRUE}			; if image is SIF or lower resolution, scale to 2 x xres horizontally
+
+	GBLL	AudioSquawkFix1		; attempt to fix audio squawk problem by padding video packet headers to a
+AudioSquawkFix1 SETL {TRUE}		; multiple of 8 bytes.
+
+	GBLL	AudioSquawkFix2		; attempt to fix audio squawk problem by padding audio packet headers to a
+AudioSquawkFix2 SETL {FALSE}		; multiple of 8 bytes.
 
 ; Structure of a PTS list entry
 
@@ -308,6 +328,9 @@ VideoMaxPTSDifference	#	4	; worst positive difference between PTS and SCR
 LastVideoPTSErrorSign	#	4	; SGN(last PTS-SCR) ie 0,-1 or 1; we only skip or repeat if 2 contiguous errors of same sign
 PendingFreezeState	#	4	; 1 => should be frozen, 0 => should be unfrozen
 FreezeUpdate		#	4	; 1 => freeze state has been updated
+ [ FreezeFieldOnTrickStop
+TrickStopFreeze		#	4	; additional freeze flag for trick play, OR'd with PendingFreezeState
+ ]
 FirstItemReceived	#	4	; 0 => not received anything since last reset, 1 => sequence, 2 => picture
  [ CountUnderruns
 VideoChannelUnderruns	#	4	; number of video channel underruns
@@ -445,9 +468,10 @@ SavedPacketPTS		#	8	; PTS on 1st packet
   ]
  ]
 
- [ StopStartTrickPlay
+ [ TrickPlaySupport
 TrickStops		#	4	; number of times code stopped the decoder
 TrickStarts		#	4	; number of times code started the decoder
+TrickPlayMode		#	4	; NZ => we're doing Oracle-style trick play
  ]
 
 ; Large blocks
@@ -518,7 +542,7 @@ Mod_Title
 	=	"MPEG2Video", 0
 
 Mod_HelpStr
-	=	"MPEG2Video", TAB, "2.38 (10 Nov 1997)", 0
+	=	"MPEG2Video", TAB, "2.49 (16 Jan 1998)", 0
 	ALIGN
 
 Mod_SWITable
@@ -939,9 +963,10 @@ VideoOpenStream Entry "r1,r2, r11"
 	STR	r1, SyncMode					; don't enable sync on I frames until an appropriate ResetStream
 	STR	r1, AnchorFIFOOverruns
  ]
- [ StopStartTrickPlay
+ [ TrickPlaySupport
 	STR	r1, TrickStops
 	STR	r1, TrickStarts
+	STR	r1, TrickPlayMode				; indicate not doing trick play
  ]
  [ CountVideoPackets
 	STR	r1, SyncMode					; normal syncing until a reset stream
@@ -1273,23 +1298,35 @@ VideoFullPackets Entry "r0,r11"
 	STRLE	r1, [r0]
  ]
 
-	LDR	r0, [lr, #PacketDescriptor_Flags]	; there are no more sections in the indeterminate length packet, so clear the bit
-	BIC	r0, r0, #PacketDescriptorFlags_FullLengthUnknown
+	LDR	r0, [lr, #PacketDescriptor_Flags]	; there are no more sections in the indeterminate length packet,
+	BIC	r0, r0, #PacketDescriptorFlags_FullLengthUnknown ;  so clear the bit
 	STR	r0, [lr, #PacketDescriptor_Flags]
 	MOV	r0, #0
 	STR	r0, UnknownLengthPacket			; and clear the pointer to it
 	Pull	"r0,r1"
 20
- [ NobbleInputVideoPacketLengths
-	ORR	r0, r0, #PacketDescriptorFlags_FullLengthUnknown	; pretend was unknown length
-	STR	r0, [r2, #PacketDescriptor_Flags]
+ [ TrickPlaySupport
+	LDR	lr, TrickPlayMode
+	TEQ	lr, #0
+	LDRNE	lr, VideoStructureFlags
+	TSTNE	lr, #VideoStructureFlags_TrickPlayPacketLengthFix
+	ORRNE	r0, r0, #PacketDescriptorFlags_FullLengthUnknown	; pretend was unknown length
+	STRNE	r0, [r2, #PacketDescriptor_Flags]
  ]
 	TST	r0, #PacketDescriptorFlags_FullLengthUnknown ; is the new packet of unknown length
- [ FudgeZeroLengthPackets
-	STRNE	r2, UnknownLengthPacket			; if so, then set up pointer to it
- ]
 	MOVNE	r0, #0
-	STRNE	r0, [r2, #PacketDescriptor_FullLength]  ; and zero its full length
+	STRNE	r0, [r2, #PacketDescriptor_FullLength]  ; if so, then zero its full length
+ [ TrickPlaySupport
+
+; lr is set above to either zero (if TrickPlayMode=0), or to VideoStructureFlags, so it's OK to just test if the
+; packet length bit is set, since it definitely won't be if we're not doing trick play
+
+	TSTNE	lr, #VideoStructureFlags_TrickPlayPacketLengthFix
+ ]
+ [ FudgeZeroLengthPackets :LOR: TrickPlaySupport
+	STRNE	r2, UnknownLengthPacket			; set up pointer to unknown length packet, if doing trick play or always
+							;  fudging
+ ]
 30
 	LDR	r0, UnknownLengthPacket			; if we are working out the length
 	TEQ	r0, #0
@@ -1675,9 +1712,16 @@ VideoResetStream Entry "r0-r2, r11"
 	BL	AudioReleaseInterruptVectors
 	BL	CommonReleaseInterruptVectors
 
+ [ TrickPlaySupport
+	TST	r0, #ResetStreamFlags_TrickPlayMode
+	MOVEQ	r2, #0
+	MOVNE	r2, #1
+	STR	r2, TrickPlayMode
+ ]
+
  [ AllowSyncOnIFrames :LOR: CountVideoPackets
 	MOV	r2, #0					; assume we're not going to enable I-Frame syncing
-	TST	r0, #StreamFlags_AudioPresent
+	TST	r0, #ResetStreamFlags_AudioPresent
 	BNE	%FT08					; [audio present, so don't use I-frame syncing]
 	LDR	lr, VideoStructureFlags
 	TST	lr, #VideoStructureFlags_IFrameSyncWhenNoAudio
@@ -1749,6 +1793,9 @@ VideoReset Entry "r0"
 	STR	r0, VidRecErrors
 	STR	r0, ContextErrors
 	STR	r0, VLCErrors
+ [ FreezeFieldOnTrickStop
+	STR	r0, TrickStopFreeze
+ ]
  [ SaveAPacket
 	STR	r0, SavedPacketLength				; throw away any saved packet
  ]
@@ -2761,44 +2808,58 @@ BeginVerticalBlank Entry
  ]
 	EXIT
 
-; Begin Active Video interrupt
-; r0-r3 can be junked
-
-BeginActiveVideo Entry "r4,r5,r8"
- [ StopStartTrickPlay
-
-; might want to condition this on trick play mode somehow
+ [ TrickPlaySupport
+	MACRO
+	DoUnderrunFix
+        LDR	r0, TrickPlayMode
+	TEQ	r0, #0				; if not doing trick play
+	LDRNE	r0, VideoStructureFlags
+	TSTNE	r0, #VideoStructureFlags_TrickPlayUnderrunFix ; or underrun fix not enabled
+	BEQ	%FT09				; then skip this stuff
 
 	LDR	r0, VideoPreFilling
 	TEQ	r0, #0
 	BNE	%FT09				; [prefilling, so don't start decoder]
-  [ {TRUE}
-	ReadReg	r0, Status0			; check if video still requesting
-	TST	r0, #L64002_Status0_VideoChannelReady
-	MVN	r1, #IR_DecodeStatus
-	MVNEQ	r0, r1				; if enough, start decoder
-	ADREQ	r2, TrickStarts
-	MOVNE	r0, #0				; if not, stop it
-	ADRNE	r2, TrickStops
-  |
-	BL	VideoGetBufferFullness
+
+	LDR	r0, VideoStreamClosing
+	CMP	r0, #1				; if shutting down then we'd better restart decoder
+	BCS	%FT04				; so that buffers can empty, so set C=1
+
+	BL	VideoGetBufferFullness		; else check if we have enough data in video channel
 ;	LDR	r0, VideoVBVSize
-	LDR	r0, =200*1024
+	LDR	r0, =VideoPreFillSize
 	CMP	r2, r0
+04
 	MVN	r1, #IR_DecodeStatus
 	MVNCS	r0, r1				; if enough, start decoder
 	ADRCS	r2, TrickStarts
+	MOVCS	r3, #0				; unfreeze field
 	MOVCC	r0, #0				; if not, stop it
 	ADRCC	r2, TrickStops
-  ]
+	MOVCC	r3, #1				; freeze field
 	BL	UpdateIR
 
 	LDR	lr, [r2]
 	ADD	lr, lr, #1			; increment either TrickStops or TrickStarts
 	STR	lr, [r2]
 
+  [ FreezeFieldOnTrickStop
+	STR	r3, TrickStopFreeze
+	MOV	r0, #1
+	STR	r0, FreezeUpdate
+  ]
 09
- ] ; StopStartTrickPlay
+	MEND
+ ] ; TrickPlaySupport
+
+; Begin Active Video interrupt
+; r0-r3 can be junked
+
+BeginActiveVideo Entry "r4,r5,r8"
+
+ [ TrickPlaySupport :LAND: :LNOT: UnderrunFixOnlyOnOddFields
+	DoUnderrunFix
+ ]
 
  [ PerformFieldInversion
 	LDR	r0, FieldInversionState		; 2 => freeze, 1 => unfreeze, 0 => do nowt
@@ -2830,6 +2891,9 @@ BeginActiveVideo Entry "r4,r5,r8"
 	TST	r0, #1				; check if an odd field
 	EXIT	NE				; [it's not, so exit]
 
+ [ TrickPlaySupport :LAND: UnderrunFixOnlyOnOddFields
+	DoUnderrunFix
+ ]
 ; now check for pending freeze update
 
 	LDR	r1, FreezeUpdate
@@ -2837,6 +2901,10 @@ BeginActiveVideo Entry "r4,r5,r8"
 	BEQ	%FT07
 	LDR	r1, PendingFreezeState
 	TEQ	r1, #0				; if 0 then unfrozen, so write 0
+  [ FreezeFieldOnTrickStop
+	LDREQ	r1, TrickStopFreeze
+	TEQEQ	r1, #0
+  ]
 	MOVNE	r1, #DisplayMode0_FreezeField	; else frozen, so write FreezeField bit to 1
 	WriteRegI r1, DisplayMode0, lr
 	MOV	r1, #0
@@ -3087,6 +3155,10 @@ SetupScreenMode Entry "r2-r5"
 						; else just SIF
 	WriteRegI r3, DisplayMode1, lr
 
+ [ FudgeQSIF
+	MOVLS	r3, r0, LSL #1			; if SIF or less, use width = 2 x xres
+	BLS	%FT05
+ ]
 	MOV	r3, #704
 	BL	GetHCF
 	MOV	r4, r3				; save HCF of (xres, 704)
@@ -3098,7 +3170,7 @@ SetupScreenMode Entry "r2-r5"
 	MOVHI	r3, #720
 	MOVLS	r3, #704
 	STR	r3, CurrentOutputWidth
-
+05
 	MOV	r4, r0, LSL #8			; r4 = xres*256
 	DivRem	r5, r4, r3, lr			; r5 = xres*256/outputwidth, r4 = remainder
 	TEQ	r4, #0				; if remainder non-zero
@@ -3360,10 +3432,10 @@ UnderrunExit
 	DoDRAMGetByte UnderrunExit		; get header length
 	TST	r7, #&80
 	BEQ	%FT65				; no PTS or DTS
-	DoDRAMGetByte UnderrunExit		; get 1st byte of PTS
 	SUB	r5, r5, #5			; adjust header length to account for PTS we're about to extract
 	Push	"r5, r7"			; save remaining header length + a slot for saving r7 later
-	BL	GetClockReference
+	BL	DRAMGetByte			; get 1st byte of PTS
+	BLVC	GetClockReference
 	Pull	"r5, r7", VS			; if we underrun, flatten stack
 	BVS	UnderrunExit			; and exit indicating underrun
 
@@ -4419,8 +4491,14 @@ VideoSendNewPacketIfNecessary Entry "r1-r5, r11"
 	TST	r1, #PacketDescriptorFlags_MPEGStart	; is it start of an MPEG packet?
 	EXIT	EQ					; [no, so no packet header required, exit EQ => try to send data]
 
- [ FudgeZeroLengthPackets
+ [ FudgeZeroLengthPackets :LOR: TrickPlaySupport
 	TST	r1, #PacketDescriptorFlags_FullLengthUnknown	; is it a packet of indeterminate length?
+  [ :LNOT: FudgeZeroLengthPackets			; if we're not fudging them all, check we're in correct mode
+	LDRNE	r3, TrickPlayMode
+	TEQNE	r3, #0					; need to be in TrickPlayMode
+	LDRNE	r3, VideoStructureFlags
+	TSTNE	r3, #VideoStructureFlags_TrickPlayPacketLengthFix ; and with packet length fixing enabled
+  ]
 	EXIT	NE					; [yes, so we must wait for length to be determined, exit NE => wait]
  ]
 
@@ -4432,6 +4510,57 @@ VideoSendNewPacketIfNecessary Entry "r1-r5, r11"
 ; we need to create a FIQ slot containing the data to send for the packet header
 ; rather than allocating a new RMA block, we can reuse the 16 bytes in the packet header allocated for the PTS and DTS (yuk!)
 
+ [ AudioSquawkFix1
+
+; Bug 4-20 on the L64002 bug sheet describes something similar sounding to the audio squawk problem, albeit with
+; serial input of data. It claims it only happens if the PES packet header is not a multiple of 8 bytes.
+; So try padding video packets to a multiple of 8 bytes.
+; Unfortunately MPEG 1 system stream format packet header stuffing bytes get discarded in the holding register and don't
+; make it into the system buffer, so we have to use MPEG 2 PES packet header instead.
+; This takes the form: 00 00 01 E0 lenhi lenlo flags1(80) flags2(00 if no PTS or 80 if PTS) hdrlen
+; followed by hdrlen bytes of flags and stuffing (not looked at by L64002)
+; in our case we set hdrlen to 7 then add either (5 PTS + 2 FF) or 7 FF
+
+	MOV	lr, #&FFFFFF07
+	STR	lr, [r0, #PacketDescriptor_PTS+8]
+	MOV	lr, #&FFFFFFFF
+	STR	lr, [r0, #PacketDescriptor_PTS+12]
+	MOV	lr, #&00800000				; flags1 byte is 80, flags2 byte is 00 for no PTS
+	TST	r1, #PacketDescriptorFlags_PTSValid
+	STREQ	lr, [r0, #PacketDescriptor_PTS+4]	; no PTS
+	BEQ	%FT30
+
+	ADD	r4, r0, #PacketDescriptor_PTS
+	LDMIA	r4, {r4, r5}				; r4 = bits 31..0 of PTS; r5 = bit 32 of PTS
+	ORR	lr, lr, #&80000000			; if PTS then set flags2 byte to 80
+	STR	lr, [r0, #PacketDescriptor_PTS+4]	; store it *after* reading real PTS
+
+	MOV	lr, r4, LSR #29				; lr = bits 31..29 in bits 2..0
+	ORR	lr, lr, r5, LSL #3			; lr = bits 32..29 in bits 3..0
+	ORR	lr, lr, #&21				; OR in 2 in top nibble indicating PTS, and force bit 0 to 1 (marker)
+	STRB	lr, [r0, #PacketDescriptor_PTS+9]	; store in packet header block
+	MOV	lr, r4, LSR #22				; lr = bits 29..22 in bits 7..0
+	STRB	lr, [r0, #PacketDescriptor_PTS+10]	; (only stores bottom 8 bits)
+	MOV	lr, r4, LSR #14				; lr = bits 21..14 in bits 7..0
+	ORR	lr, lr, #1				; force bit 0 to 1 (marker)
+	STRB	lr, [r0, #PacketDescriptor_PTS+11]
+	MOV	lr, r4, LSR #7				; lr = bits 14..7 in bits 7..0
+	STRB	lr, [r0, #PacketDescriptor_PTS+12]
+	MOV	lr, r4, LSL #1				; lr = bits 6..0 in bits 7..1
+	ORR	lr, lr, #1
+	STRB	lr, [r0, #PacketDescriptor_PTS+13]
+
+	MOV	r5, pc
+	ORR	lr, r5, #I_bit
+	TEQP	lr, #0
+	LDR	lr, VideoPTSInCount			; increment count of PTS's coming in
+	ADD	lr, lr, #1
+	STR	lr, VideoPTSInCount
+	TEQP	r5, #0
+
+30
+	MOV	r5, #16					; now padded to 16 bytes whether PTS or not
+ |
 	TST	r1, #PacketDescriptorFlags_PTSValid
 	MOVEQ	lr, #&0F				; termination for no PTS
 	STREQB	lr, [r0, #PacketDescriptor_PTS+6]
@@ -4466,6 +4595,7 @@ VideoSendNewPacketIfNecessary Entry "r1-r5, r11"
 
 	MOV	r5, #11
 30
+ ]
 	LDR	lr, =&E0010000
 	STR	lr, [r0, #PacketDescriptor_PTS+0]	; video packet start code
 
@@ -4667,7 +4797,7 @@ VideoInfo_Code Entry "r8"
 
 30
  ]
- [ StopStartTrickPlay
+ [ TrickPlaySupport
 	LDR	r0, TrickStops
 	DREG	r0, "Trick stops = "
 	LDR	r0, TrickStarts
@@ -5775,6 +5905,45 @@ AudioSendNewPacketIfNecessary Entry "r1-r5, r11"
 	STR	lr, AudioPTSInCount
 	TEQP	r3, #0
 30
+ [ AudioSquawkFix2
+
+; Bug 4-20 on the L64002 bug sheet describes something similar sounding to the audio squawk problem, albeit with
+; serial input of data. It claims it only happens if the PES packet header is not a multiple of 8 bytes.
+; So try padding audio packets to 8 bytes if no PTS or 16 bytes if there is a PTS.
+
+	ADDEQ	r4, r4, #2				; add on two for FF 0F bytes if no PTS
+	ADDNE	r4, r4, #10				; add on ten for 5 padding + 5 PTS
+	MOV	r3, r4, LSR #8
+	BL	AudioWaitAndSendByte			; send hi byte of length
+	AND	r3, r4, #&FF
+	BL	AudioWaitAndSendByte			; send lo byte of length
+	MOV	r3, #&FF				; always send at least one byte of padding
+	BL	AudioWaitAndSendByte
+	MOVEQ	r3, #&0F				; no PTS, so send terminating code
+	BEQ	%FT50
+
+	BL	AudioWaitAndSendByte			; send 4 more padding bytes before PTS (r3 = &FF)
+	BL	AudioWaitAndSendByte
+	BL	AudioWaitAndSendByte
+	BL	AudioWaitAndSendByte
+
+	LDR	r4, [r0, #PacketDescriptor_PTS]		; get bits 31..0 of PTS
+	LDR	r5, [r0, #PacketDescriptor_PTS+4]	; get bit 32 of PTS
+	MOV	r3, r4, LSR #29				; r3 = bits 31..29 in bits 2..0
+	ORR	r3, r3, r5, LSL #3			; r3 = bits 32..29 in bits 3..0
+	ORR	r3, r3, #&21				; OR in 2 in top nibble indicating PTS, and force bit 0 to 1 (marker)
+	BL	AudioWaitAndSendByte
+	MOV	r3, r4, LSR #22				; r3 = bits 29..22 in bits 7..0
+	BL	AudioWaitAndSendByte			; (only stores bottom 8 bits)
+	MOV	r3, r4, LSR #14				; r3 = bits 21..14 in bits 7..0
+	ORR	r3, r3, #1				; force bit 0 to 1 (marker)
+	BL	AudioWaitAndSendByte
+	MOV	r3, r4, LSR #7				; r3 = bits 14..7 in bits 7..0
+	BL	AudioWaitAndSendByte
+	MOV	r3, r4, LSL #1				; r3 = bits 6..0 in bits 7..1
+	ORR	r3, r3, #1
+50
+ |
 	ADDEQ	r4, r4, #1				; add on one for 0F byte if no PTS
 	ADDNE	r4, r4, #5				; add on five for PTS
 	MOV	r3, r4, LSR #8
@@ -5800,6 +5969,7 @@ AudioSendNewPacketIfNecessary Entry "r1-r5, r11"
 	MOV	r3, r4, LSL #1				; r3 = bits 6..0 in bits 7..1
 	ORR	r3, r3, #1
 50
+ ]
 	BL	AudioWaitAndSendByte
 	BIC	r1, r1, #PacketDescriptorFlags_MPEGStart ; clear MPEG start bit, so if run out of buffer part way thru,
 	STR	r1, [r0, #PacketDescriptor_Flags]	; we don't send hdr again
