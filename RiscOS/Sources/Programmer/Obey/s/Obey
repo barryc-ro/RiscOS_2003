@@ -32,6 +32,8 @@
 ;;                      Fix syntax of *Obey command - there *must*not* be
 ;;                              any space between the -c and the -v
 ;;                      Fix BuffOflow tag to BufOFlo
+;; 24-Jan-95    0.34    OM SPECIAL VERSION: -m flag allows caching from a block of memory
+;;                      instead of a file.
 ;;----------------------------------------------------------------------------
 
 Module_BaseAddr
@@ -117,7 +119,7 @@ Obey_Help       DCB     "*Obey executes a file of *commands, "
                 DCB     ".  Prefixing the filename with -v causes each line to be "
                 DCB     "echoed before execution, -c causes the file to be cached and executed from memory"
                 DCB     13, 10
-Obey_Syntax     DCB     "Syntax: *Obey [[-v][-c] [<filename> [<parameters>]]]",0
+Obey_Syntax     DCB     "Syntax: *Obey [[-v][-c][-m] [<filename> [<parameters>]]]",0
  |
 Messages_File   DCB     "Resources:Resources.Obey.Messages",0
 Obey_Help       DCB     "HOBYOBY", 0
@@ -143,6 +145,7 @@ wk_fl_useexit   *       1:SHL:1 ; Set <=> OS_Exit has been used to finish a comm
 wk_fl_verbose   *       1:SHL:2 ; Set <=> verbose flag specified
 wk_fl_cache     *       1:SHL:3 ; Set <=> cache flag set
 wk_fl_ResFS     *       1:SHL:4 ; Set <=> cache block is in resourceFS
+wk_fl_memory    *       1:SHL:5 ; Set <=> cache "file" from memory into RMA
 wk_private      #       4       ; Back pointer to private word
 wk_handle       #       4
 wk_oldquitR1    #       4
@@ -1002,6 +1005,7 @@ decode_commands ROUT
         LowerCase R2,LR                 ; convert to suitable character
         TEQ     R2,#"c"
         TEQNE   R2,#"v"                 ; cache of verbose?
+        TEQNE   R2,#"m"                 ; or memory-based?
         BNE     %80
 
         LDR     lr, [r11, #wk_flags]
@@ -1009,6 +1013,8 @@ decode_commands ROUT
         ORREQ   lr, lr, #wk_fl_cache
         TEQ     R2,#"v"
         ORREQ   lr, lr, #wk_fl_verbose
+        TEQ     R2,#"m"
+        ORREQ   lr, lr, #wk_fl_memory
         STR     lr, [r11, #wk_flags]
 
         ADD     R0,R0,#2                ; skip to next command sequence
@@ -1030,6 +1036,8 @@ decode_commands ROUT
 ; r1 -> filename to be opened/loaded, r11 -> record for object.
 ;
 ; if wk_fl_cache set in wk_flags then file is cached, else simply opened
+; if wk_fl_memory set in wk_flags, then the "filename" is really the address of
+;    a 0-terminated block of memory.  This is cached into a block of RMA.
 ;
 ; This routine will try and open the file if the cache block is =0, otherwise
 ; =-1 then it will attempt to create a block of RMA and then read it in.
@@ -1038,6 +1046,10 @@ decode_commands ROUT
 open_file ROUT
 
         Push    "R1-R6,LR"
+
+        LDR     r0,  [r11, #wk_flags]   ; Was the command -m address
+        TST     r0, #wk_fl_memory
+        BNE     cache_memory
 
         MOV     R0,#OSFind_ReadFile
         SWI     XOS_Find                ; r1 -> filename so attempt to open
@@ -1069,6 +1081,37 @@ not_resourcefs
 ret_no_err
         STR     r6,[r11,#wk_handle]
         CLRV
+        Pull    "R1-R6,PC"
+
+cache_memory
+        ; R1 -> start of numeric string giving address of "file"
+        MOV     R0, #10
+        ORR     R0, R0, #1:SHL:31
+        SWI     OS_ReadUnsigned
+        Pull    "R1-R6,PC",VS
+        ; Now R2 is the address of the "file", so count it (assume 0 termination)
+        MOV     LR, R2                  ; pointer
+00
+        LDRB    R1, [LR], #1
+        TEQ     R1, #0                  ; terminator reached?
+        BNE     %BT00
+        SUB     LR, LR, #1              ; Don't count the null
+
+        MOV     R4, R2                  ; keep original pointer handy
+        SUB     R3, LR, R2              ; get length
+        MOV     r0, #ModHandReason_Claim
+        SWI     XOS_Module
+        Pull    "R1-R6,PC",VS           ; can't continue if no RMA
+
+        ; Now copy the data across.  Remember to store the address of the cache block
+        STR     r3, [r11, #wk_ext]
+        STR     r2, [r11, #wk_cacheblock]
+01
+        LDRB    lr, [r4], #1
+        TEQ     lr, #0
+        STRNEB  lr, [r2], #1
+        BNE     %BT01
+
         Pull    "R1-R6,PC"
 
 cache_file
