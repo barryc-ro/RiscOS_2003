@@ -24,10 +24,11 @@ CP      = copy
 LD      = link
 RM      = remove
 WIPE    = -wipe
+SQUEEZE = squeeze
 CD	= dir
 
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend ${INCLUDES} ${DFLAGS} -Throwback
+CFLAGS  = -c -Wp -depend !Depend ${INCLUDES} ${DFLAGS} -Throwback
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
 #DFLAGS  = -DDEBUG
@@ -91,6 +92,7 @@ resources:
 #
 ${TARGETSA}: ${OBJS} ${CLIB}
         ${LD} ${LDFLAGS} -o $@ ${OBJS} ${CLIB}
+        ${SQUEEZE} $@
 
 
 # Dynamic dependencies:
