@@ -105,7 +105,7 @@ genhdrs: util.c.genhdrs
         ${LD} -o genhdrs o.genhdrs ${CLIB}
 
 ccacorn.c.peeppat: arm.peeppat peepgen
-        peepgen arm.peeppat ccacorn.c.peeppat
+        peepgen -d arm.peeppat_d arm.peeppat ccacorn.c.peeppat
 
 peepgen: util.c.peepgen mip.h.jopcode arm.h.mcdpriv
         ${CC} -c -o o.peepgen util.c.peepgen -Imip -Iarm
@@ -129,6 +129,7 @@ clean:
         ${RM} peepgen
         ${RM} ccacorn.c.headers
         ${RM} ccacorn.c.peeppat
+        ${RM} arm.peeppat_d
         ${RM} ccacorn.h.errors
         @echo ${COMPONENT}: cleaned
 
