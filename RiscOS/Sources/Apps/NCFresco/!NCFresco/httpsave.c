@@ -68,7 +68,7 @@ static void hs_dispose(httpsave_t *ph)
 	    access_abort(h->access_h);
 
 	if (h->temp_f)
-	    fclose(h->temp_f);
+	    mmfclose(h->temp_f);
 
 	if (h->temp_file)
 	{
@@ -93,7 +93,7 @@ static void hs_fetch_complete(httpsave_t h, const char *cfile)
     h->temp_file = strdup(rs_tmpnam(NULL));
 
     /* read file in */
-    f = fopen(cfile, "r");
+    f = mmfopen(cfile, "r");
     if (!f)
 	return;
 
@@ -104,7 +104,7 @@ static void hs_fetch_complete(httpsave_t h, const char *cfile)
     fseek(f, 0, SEEK_SET);
     fread(cfile_buf, cfile_size, 1, f);
 
-    fclose(f);
+    mmfclose(f);
     
     /* process it into sections */
     s = strtok(cfile_buf, "=");
@@ -124,11 +124,11 @@ static void hs_fetch_complete(httpsave_t h, const char *cfile)
 	/* if recognised then process the section */
 	if (tag < choicesfile_N_TAGS)
 	{
-	    if ((h->temp_f = fopen(h->temp_file, "w")) != NULL)
+	    if ((h->temp_f = mmfopen(h->temp_file, "w")) != NULL)
 	    {
 		url_escape_to_file(data, h->temp_f);
 
-		fclose(h->temp_f);
+		mmfclose(h->temp_f);
 		h->temp_f = 0;
 
 		if (!h->callback_fetched(h, tag, h->temp_file, h->callback_handle))
@@ -202,7 +202,7 @@ httpsave_t httpsave_open(httpsave_sent_fn fn, void *handle)
     h->callback_handle = handle;
 
     h->temp_file = strdup(rs_tmpnam(NULL));
-    h->temp_f = fopen(h->temp_file, "w");
+    h->temp_f = mmfopen(h->temp_file, "w");
 
     h->fetch = FALSE;
     
@@ -249,13 +249,13 @@ BOOL httpsave_add_file(httpsave_t h, int tag, const char *file_name)
 
     fputc('=', h->temp_f);
 
-    if ((f = fopen(file_name, "r")) == NULL)
+    if ((f = mmfopen(file_name, "r")) == NULL)
 	return FALSE;
     
     /* write out the data, escaped */
     success = url_escape_file_to_file(f, h->temp_f);
 
-    fclose(f);
+    mmfclose(f);
     
     if (success)
 	h->file_mask |= (1<<tag);
@@ -276,7 +276,7 @@ os_error *httpsave_close_and_send(httpsave_t h)
 
     if (h->temp_f)
     {
-	fclose(h->temp_f);
+	mmfclose(h->temp_f);
 	h->temp_f = NULL;
     }
 

@@ -94,7 +94,7 @@ static os_error *scrapfile_init(void)
 	strcpy(bufleaf, "./cachedump");
 
 ACCDBGN(( "Dumped cache file is '%s'\n", buffer));
-	fh = fopen(buffer, "r");
+	fh = mmfopen(buffer, "r");
 
 	if (fh)
 	{
@@ -128,7 +128,7 @@ ACCDBGN(( "Cache insert, file '%s' is URL '%s'\n", newname, p+1));
 		}
 	    }
 
-	    fclose(fh);
+	    mmfclose(fh);
 	}
 	*bufleaf = 0;
     }
@@ -463,7 +463,7 @@ static void cache_dump(void)
     FILE *fh;
     int i;
 
-    fh = fopen(scrapfile_from_leaf("/cachedump"), "w");
+    fh = mmfopen(scrapfile_from_leaf("/cachedump"), "w");
     if (fh)
     {
 	for (i=0; i < cache_size; i++)
@@ -479,7 +479,7 @@ static void cache_dump(void)
 	    }
 	}
 
-	fclose(fh);
+	mmfclose(fh);
     }
     else
     {
@@ -556,7 +556,7 @@ ACCDBGN(( "Missed\n"));
 	return FALSE;
     }
 
-    f = fopen(cfile, "r");
+    f = mmfopen(cfile, "r");
 
     if (f == NULL)
     {
@@ -564,7 +564,7 @@ ACCDBGN(( "Hit but not there\n"));
 	return FALSE;
     }
 
-    fclose(f);
+    mmfclose(f);
 ACCDBGN(( "Hit\n"));
     return TRUE;
 }

@@ -18,6 +18,8 @@ extern wimp_box on_screen_kbd_pos;
 
 extern os_error pending_error;
 
+extern int use_anti_twitter;
+
 #define TASK_MAGIC	0x4B534154
 
 #define DBOX_SIZE_X	800

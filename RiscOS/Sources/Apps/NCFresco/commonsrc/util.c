@@ -48,7 +48,7 @@ static int suffix_or_mime_to_file_type(const char *suffix, const char *mime)
     char line[MAX_LINE];
     int ft = -1;
 
-    mf = fopen(MAPPING_FILE, "r");
+    mf = mmfopen(MAPPING_FILE, "r");
 
     if (mf == NULL)
 	return ft;
@@ -137,7 +137,7 @@ static int suffix_or_mime_to_file_type(const char *suffix, const char *mime)
 	}
     }
 
-    fclose(mf);
+    mmfclose(mf);
 
     return ft;
 }
@@ -813,10 +813,10 @@ char *rs_tmpnam(char *s)
 	    s = tmpnam_buf;
 
 	sprintf(s, "<Wimp$ScrapDir>.%08x", sig);
-	f = fopen(s, "w");
+	f = mmfopen(s, "w");
 	if (f)
 	{
-	    fclose(f);
+	    mmfclose(f);
 	    present = TRUE;
 	}
     }
@@ -848,6 +848,35 @@ os_error *wimp_set_wind_flags( wimp_w w, wimp_wflags bic, wimp_wflags eor )
 
     return (os_error*)_kernel_swi( 0x600C5, &r, &r );   /* XWimp_OpenWindow */
 }
+
+/*****************************************************************************/
+
+/*
+ * The shared c library allocates its own buffers using malloc() for files.
+ * If this allocation fails then it just bombs out.
+ * These wrappers for fopen and fclose use setvbuf() to allocate our own buffer
+ * and rely on knowledge of clib to be able to free this file afterwards.
+ */
+
+FILE *mmfopen(const char *file, const char *mode)
+{
+    FILE *f = fopen(file, mode);
+#if 0
+    if (f)
+	setvbuf(f, mm_malloc(BUFSIZ), _IOFBF, BUFSIZ);
+#endif
+    return f;
+}
+
+void mmfclose(FILE *f)
+{
+#if 0
+    if (f && (f->__flag & _IOSBF) == 0) /* flag to say system buffer in use */
+	mm_free(f->__base);
+#endif
+    fclose(f);
+}
+
 
 /*****************************************************************************/
 

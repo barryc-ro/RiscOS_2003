@@ -34,6 +34,10 @@
 #define RID_FREE_DEBUG 0
 #endif
 
+#ifndef ITERATIVE_PANIC
+#define ITERATIVE_PANIC 0
+#endif
+
 /*****************************************************************************
 
   We now do a lot of freeing and allocating of rid_pos_item chains. To speed
@@ -862,6 +866,19 @@ extern int memzone_init(memzone *mz, int flags)
 
     mz->alloced = (flags & MEMZONE_CHUNKS) ? MEMZONE_CHUNK_SIZE : 16;
 
+#if ITERATIVE_PANIC
+    do
+    {
+	ok = flex_alloc((flex_ptr) &(mz->data), mz->alloced);
+
+	if (ok)
+	    break;
+    }
+    while (mm_can_we_recover(FALSE));
+
+    if (!ok)
+	mz->alloced = 0;
+#else
     ok = flex_alloc((flex_ptr) &(mz->data), mz->alloced);
 
     if (!ok)
@@ -871,7 +888,7 @@ extern int memzone_init(memzone *mz, int flags)
 	if (!ok)
 	    mz->alloced = 0;
     }
-
+#endif
     return ok;
 }
 
@@ -895,6 +912,23 @@ extern int memzone_alloc(memzone *mz, int size)
 
 	mz->alloced += need;
 
+#if ITERATIVE_PANIC
+	do
+	{
+	    ok = flex_extend((flex_ptr) &(mz->data), mz->alloced);
+
+	    if (ok)
+		break;
+	}
+	while (mm_can_we_recover(FALSE));
+
+	if (!ok)
+	{
+	    mz->alloced = oldsize;
+
+	    return -1;
+	}
+#else
 	ok = flex_extend((flex_ptr) &(mz->data), mz->alloced);
 
 	/* SJM: try and recover if extend fails */
@@ -907,6 +941,7 @@ extern int memzone_alloc(memzone *mz, int size)
 
 	    return -1;
 	}
+#endif
     }
 
     rval = mz->used;

@@ -97,7 +97,7 @@ COMM_OBJS=	Serial.o access.o auth.o backend.o bittabs.o config.o \
 		tablesize.o oobject.o objects.o plugin.o pluginfile.o \
 		files.o fvpr.o remote.o coalesce.o keyhl.o \
 		buildtime.o format.o colspan.o loformat.o cs2.o \
-		highlight.o frameutils.o csgraph.o rdebug.o
+		highlight.o frameutils.o csgraph.o event2.o rdebug.o
 
 BASE_VPATH=	..:../commonsrc:../fresparse:../parser
 BASE_INCS=	-I.. -I../commonsrc -I../fresparse -I../parser
@@ -183,7 +183,7 @@ FRESCO_INCS=	-I../\!Fresco
 # Don't forget the -Fn above
 FRESCO_CFLAGS_COMMON = -DFRESCO $(FRESCO_INCS) -DSGML_REPORTING=0 -DOLD_COMMENTS=0 -DUSE_MARGINS=1 -DMEMLIB=1 -DFRAMES=1
 FRESCO_CFLAGS_REL=	-DDEVELOPMENT=0 $(FRESCO_CFLAGS_COMMON)
-FRESCO_CFLAGS_DBG=	-DDEVELOPMENT=1 $(FRESCO_CFLAGS_COMMON)
+FRESCO_CFLAGS_DBG=	-DDEVELOPMENT=1 $(FRESCO_CFLAGS_COMMON) -DMEMWATCH=4
 
 FRESCO_CFLAGS=  $(FRESCO_CFLAGS_DBG)
 
@@ -225,7 +225,7 @@ BUILDERS_OBJS=	tables.o memwatch.o myassert.o bldrs.o debug.o rid.o \
 		oobject.o objects.o usrtrc.o textplot.o rectplot.o \
 		coalesce.o fvpr.o gbf.o format.o keyhl.o colspan.o \
 		loformat.o cs2.o oscaff.o \
-		csgraph.o 
+		csgraph.o
 BUILDERS_LIBS=
 
 CHECKERS_CFLAGS=-DCHECKER -DBUILDERS -DNO_PTRS $(BUILDERS_INCS) -DDEVELOPMENT=2 -DSGML_REPORTING=1
@@ -236,7 +236,7 @@ CHECKERS_OBJS=	tables.o memwatch.o myassert.o debug.o rid.o \
 		oobject.o objects.o usrtrc.o textplot.o rectplot.o \
 		coalesce.o fvpr.o gbf.o format.o keyhl.o colspan.o \
 		loformat.o cs2.o oscaff.o \
-		csgraph.o 
+		csgraph.o
 CHECKERS_LIBS=
 
 HTMLCHECK_INCS=	-I../stdalone
@@ -747,7 +747,7 @@ NCFRESCO_BASE_CFLAGS=		-wp -DSTBWEB -DSTBWEB_BUILD -DOLD_COMMENTS=0 -DUSE_MARGIN
 
 # several alternative flag sets
 NCFRESCO_PRODUCTION_CFLAGS=	$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -DSGML_REPORTING=0 -DNDEBUG
-NCFRESCO_DEBUG_CFLAGS=		$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=2 -Fn -DSGML_REPORTING=1 -DREMOTE_DEBUG -DTrace_TRACE
+NCFRESCO_DEBUG_CFLAGS=		$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=2 -Fn -DSGML_REPORTING=1 -DREMOTE_DEBUG
 NCFRESCO_MEMCHECK_CFLAGS=	$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=0 -Fn -DSGML_REPORTING=1 -zpc1 -DMemCheck_MEMCHECK -fw -g
 NCFRESCO_HIERPROF_CFLAGS=	$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -Fn -DSGML_REPORTING=0 -DNDEBUG -DHierProf_PROFILE
 
@@ -756,7 +756,7 @@ NCFRESCO_ANT_CFLAGS=		$(NCFRESCO_PRODUCTION_CFLAGS) -DRISCOS -fa -DSTBWEB_ROM=0 
 				$(BASE_INCS) $(NCFRESCO_BUILD_INCS)
 
 
-NCFRESCO_BUILD_CFLAGS=		$(NCFRESCO_PRODUCTION_CFLAGS) -DRISCOS -fa -Fn -DSTBWEB_ROM=0 \
+NCFRESCO_BUILD_CFLAGS=		$(NCFRESCO_DEBUG_CFLAGS) -DRISCOS -fa -Fn -DSTBWEB_ROM=0 \
 				$(BASE_INCS) $(NCFRESCO_BUILD_INCS)
 
 NCFRESCO_ROM_CFLAGS=		$(NCFRESCO_PRODUCTION_CFLAGS) -DRISCOS -fa -zM -zps1 -DSTBWEB_ROM=1 \
@@ -771,7 +771,7 @@ NCFRESCO_ROM_ASFLAGS=		$(NCFRESCO_BUILD_ASFLAGS)
 NCFRESCO_RAM_ASFLAGS=		$(NCFRESCO_BUILD_ASFLAGS) -predefine \"REMOVE_RAMLOAD_CHECK SETL {TRUE}\"
 
 NCFRESCO_ANT_LDFLAGS=
-NCFRESCO_BUILD_LDFLAGS=		
+NCFRESCO_BUILD_LDFLAGS=
 NCFRESCO_ROM_LDFLAGS=
 NCFRESCO_RAM_LDFLAGS=
 
@@ -796,13 +796,13 @@ NCFRESCO_BUILD_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1ff.o \
 				../RISC_OSLib/risc_oslib \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/inetlib.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/socklib.o \
-				$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlib.o \
+				$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlibd.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/debug/remote.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/Trace/T_PL.o
 
 #				$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/risc_oslib.o \
 
-NCFRESCO_ROM_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1.o \
+NCFRESCO_ROM_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1da.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/romcstubs.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/inetlibzm.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/socklibzm.o \

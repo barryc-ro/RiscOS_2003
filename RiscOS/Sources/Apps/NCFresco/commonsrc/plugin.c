@@ -1072,7 +1072,7 @@ plugin plugin_new(struct rid_object_item *obj, be_doc doc, be_item ti)
 
     pp->parameter_file = strdup(rs_tmpnam(NULL));
 
-    f = fopen(pp->parameter_file, "wb");
+    f = mmfopen(pp->parameter_file, "wb");
     if (!f)
     {
 	mm_free(pp->parameter_file);
@@ -1081,7 +1081,7 @@ plugin plugin_new(struct rid_object_item *obj, be_doc doc, be_item ti)
     }
     
     plugin_write_parameter_file(f, obj, doc ? BASE(doc) : NULL);
-    fclose(f);
+    mmfclose(f);
 
     file_lock(pp->parameter_file, TRUE);
 

@@ -93,7 +93,7 @@ extern os_error *dir2html(char *path, char *filename, int flags)
     fprintf(stderr, "Reading directory %s into file %s\n", buffer, filename);
 #endif
 
-    fh = fopen(filename, "w");
+    fh = mmfopen(filename, "w");
     if (fh)
     {
 /* 	char lbuffer[256]; */
@@ -234,7 +234,7 @@ extern os_error *dir2html(char *path, char *filename, int flags)
 	}
 	fprintf(fh, "</pre></body>\r\n");
 
-	fclose(fh);
+	mmfclose(fh);
 
 	set_file_type(filename, FILETYPE_HTML);
 

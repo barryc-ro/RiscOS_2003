@@ -56,8 +56,8 @@ static int debug_cmd_handler(int argc, char *argv[], void *handle)
 #endif /* STBWEB */
 	    else if (strcasecomp(argv[1], "flex") == 0)
 	    {
-#if MEMLIB
-		DBG(("flex: free %p slot %p usage %dK\n", flexptr__free, flexptr__slot, (flexptr__slot - flexptr__base)/1024));
+#if MEMLIB && defined(STBWEB)
+ 		MemFlex_Dump(NULL);
 #endif /* MEMLIB */
 		handled = 1;
 	    }

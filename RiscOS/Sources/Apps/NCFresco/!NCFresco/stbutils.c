@@ -30,7 +30,7 @@
 #include "stbutils.h"
 #include "stbfe.h"
 
-static BOOL use_anti_twitter = FALSE;
+BOOL use_anti_twitter = FALSE;
 static BOOL done_init = FALSE;
 
 int frontend_dx, frontend_dy;
@@ -953,12 +953,12 @@ void fe_open_temp_file(fe_view v, fe_temp_file_builder fn, void *handle, const c
     BOOL success;
 
     s = strdup(backend_temp_file_name());
-    f = fopen(s, "w");
+    f = mmfopen(s, "w");
     if (!f)
     {
 	if (mm_can_we_recover(FALSE))
 	{
-	    f = fopen(s, "w");
+	    f = mmfopen(s, "w");
 	}
 
 	if (!f)
@@ -971,7 +971,7 @@ void fe_open_temp_file(fe_view v, fe_temp_file_builder fn, void *handle, const c
 
     success = frontend_complain(fn(f, handle)) == NULL;
 
-    fclose(f);
+    mmfclose(f);
 
     if (success)
     {

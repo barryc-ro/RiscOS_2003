@@ -27,6 +27,10 @@
 #include "flexwrap.h"
 #include "gbf.h"
 
+#ifndef ITERATIVE_PANIC
+#define ITERATIVE_PANIC 0
+#endif
+
 #if MEMLIB
 
 #ifdef STBWEB_BUILD
@@ -128,14 +132,24 @@ extern void mm_poll(void)
     /* bring stash back to full size */
     if (emergency_memory == NULL)
     {
-	flex_alloc(&emergency_memory, EMERGENCY_MEMORY_STASH);
+	(void)flex_alloc(&emergency_memory, EMERGENCY_MEMORY_STASH);
+	DBG(("mm_poll: allocate stash %d\n", EMERGENCY_MEMORY_STASH));
     }
     else
     {
 	int size = flex_size(&emergency_memory);
 	if (size < EMERGENCY_MEMORY_STASH)
-	    if (flex_extend(&emergency_memory, EMERGENCY_MEMORY_STASH))
-		gbf_flags &= ~GBF_LOW_MEMORY;
+	{
+	    if (flex_extend(&emergency_memory, EMERGENCY_MEMORY_UNIT))
+	    {
+		size += EMERGENCY_MEMORY_UNIT;
+
+		DBG(("mm_poll: reallocate stash to %d\n", size));
+
+		if (size >= EMERGENCY_MEMORY_STASH)
+		    gbf_flags &= ~GBF_LOW_MEMORY;
+	    }
+	}
     }
 }
 
@@ -146,16 +160,28 @@ extern int mm_can_we_recover(int abort)
     if (image_memory_panic())
 	r = 1;			/* recovered through discarding images */
 
-    if (r == 0 && antweb_doc_abort_all())
-	r = 2;			/* recovered through abort transfers */
+    if (r == 0 && frontend_memory_panic())
+	r = 4;			/* recovered from frontend */
 
     if (r == 0 && emergency_memory)
     {
 	int size = flex_size(&emergency_memory);
-	if (size && flex_extend(&emergency_memory, size - EMERGENCY_MEMORY_UNIT))
-	    r = 3;
+	if (size)
+	{
+	    if (flex_extend(&emergency_memory, size - EMERGENCY_MEMORY_UNIT))
+		r = 2;
+	    else
+	    {
+		DBG(("mm_can_we_recover: emergency shrink failed!!!\n"));
+	    }
+	}
     }
     
+    if (r == 0 && antweb_doc_abort_all())
+	r = 3;			/* recovered through abort transfers */
+
+    DBG(("mm_can_we_recover: r %d abort %d\n", r, abort));
+
     if (r == 0)			/* if can't recover any memory */
     {
 	if (abort)
@@ -171,8 +197,9 @@ extern int mm_can_we_recover(int abort)
     panicerr.errnum = 0;
 
 /*    wimp_reporterror(&panicerr, (wimp_errflags) (1<<4), program_name); */
+#ifndef STBWEB
     frontend_complain(&panicerr);
-
+#endif
     return r;
 }
 

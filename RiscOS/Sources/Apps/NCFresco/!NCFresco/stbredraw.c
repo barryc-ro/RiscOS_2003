@@ -354,10 +354,13 @@ int frontend_view_update(fe_view v, wimp_box *bb, fe_rectangle_fn fn, void *h, i
     r.w = v->w;
     r.box = *bb;
 
-    /* expand redraw box to allow for anti-twittering*/
-    /* the wimp will clip this to the window*/
-    r.box.y0 -= REDRAW_OVERLAP;
-    r.box.y1 += REDRAW_OVERLAP;
+    if (use_anti_twitter)
+    {
+	/* expand redraw box to allow for anti-twittering*/
+	/* the wimp will clip this to the window*/
+	r.box.y0 -= REDRAW_OVERLAP;
+	r.box.y1 += REDRAW_OVERLAP;
+    }
 
     frontend_fatal_error(wimp_update_wind(&r, &more));
 

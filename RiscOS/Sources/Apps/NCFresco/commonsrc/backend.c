@@ -179,6 +179,11 @@ int antweb_get_edges(const rid_text_item *ti, int *left, int *right)
     if (ti->line)
     {
 	leftend = ti->line->left_margin;
+#if 1
+        /* pdh: left_margin includes any floaters these days */
+        rightend = ti->line->floats ? ti->line->floats->right_margin
+                                    : ti->line->st->fwidth;
+#else
 	rightend = ti->line->st->fwidth;
 
         if (ti->line->floats)
@@ -198,6 +203,7 @@ int antweb_get_edges(const rid_text_item *ti, int *left, int *right)
 	    if (most > 0)
 		rightend = most;
         }
+#endif
     }
 
     if (left)
@@ -1815,7 +1821,7 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 	    dest = strrchr(fname, 'x');
 	    if (dest)
 		*dest = 'y';
-	    f = fopen(fname, "w");
+	    f = mmfopen(fname, "w");
 
 	    for (fis = form->kids; fis; fis = fis->next)
 	    {
@@ -1837,7 +1843,10 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 
 			    strcpy(buf3, strsafe(iis->name));
 
-			    strcat(buf3, ".x");
+			    /* pdh: duplicate NS3's behaviour with missing
+			     * names
+			     */
+			    strcat( buf3, (*buf3) ? ".x" : "x" );
 			    sprintf(buf2, "%d", iis->data.image.x);
 			    antweb_write_query(f, buf3, buf2, &first);
 
@@ -1886,10 +1895,10 @@ void antweb_submit_form(antweb_doc *doc, rid_form_item *form, int right)
 		}
 	    }
 
-#if 0
-	    fputc('\n', f);
-#endif
-	    fclose(f);
+	    /* SJM: It appears that some scripts expect the POST data to be CRLF terminated */
+	    fputs("\r\n", f);
+
+	    mmfclose(f);
 
 	    dest = url_join(BASE(doc), form->action);
 
@@ -4137,7 +4146,10 @@ static void be_doc_fetch_bg(antweb_doc *doc)
 
     url = url_join(BASE(doc), doc->rh->tile.src);
 
-    image_find(url, BASE(doc), (doc->flags & doc_flag_FROM_HISTORY ? 0 : image_find_flag_CHECK_EXPIRE) | image_find_flag_URGENT | image_flag_NO_BLOCKS,
+    image_find(url, BASE(doc),
+	       (doc->flags & doc_flag_FROM_HISTORY ? 0 : image_find_flag_CHECK_EXPIRE) |
+	       image_find_flag_URGENT | image_flag_NO_BLOCKS |
+	       (gbf_active(GBF_LOW_MEMORY) ? image_find_flag_DEFER : 0),
 	       &antweb_doc_background_change, doc, render_get_colour(render_colour_BACK, doc),
 	       (image*) &(doc->rh->tile.im));
 
@@ -4854,13 +4866,13 @@ BOOL backend_doc_saver_text(char *fname, void *h)
     be_doc doc = (be_doc) h;
     FILE *f;
 
-    f = fopen(fname, "w");
+    f = mmfopen(fname, "w");
     if (f == NULL)
 	return FALSE;
 
     stream_write_as_text(doc->rh, &(doc->rh->stream), f);
 
-    fclose(f);
+    mmfclose(f);
 
     frontend_saver_last_name(fname);
 

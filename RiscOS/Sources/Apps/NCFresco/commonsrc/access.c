@@ -2693,6 +2693,7 @@ static os_error *access_new_internal(char *url, const char *path, const char *qu
 }
 #endif
 
+#if 0
 static void write_buf(char *buffer, const char *path, const char *params, const char *query)
 {
     if (path)
@@ -2712,6 +2713,7 @@ static void write_buf(char *buffer, const char *path, const char *params, const 
 	strcat(buffer, query);
     }
 }
+#endif
 
 os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile, char *referer,
 		     access_progress_fn progress, access_complete_fn complete,
@@ -2868,7 +2870,7 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 
 		/* if still not file found then return error */
 		if (obj_type == 0)
-		    ep = makeerror(ERR_CANT_READ_FILE);
+		    ep = makeerrorf(ERR_CANT_READ_FILE, url);
 		
 #ifndef STBWEB
                 /* pdh: Desktop Fresco wanted this, I don't know whether
@@ -2941,7 +2943,7 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 		char *new_url;	/* SJM removed auto array */
 		FILE *fh;
 
-		fh = fopen(cfile, "r");
+		fh = mmfopen(cfile, "r");
 		if (fh && (new_url = xfgets(fh)) != NULL)
 		{
 		    d = mm_calloc(1, sizeof(*d));
@@ -2964,11 +2966,11 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 		}
 		else
 		{
-		    ep = makeerror(ERR_CANT_READ_FILE);
+		    ep = makeerrorf(ERR_CANT_READ_FILE, url);
 		}
 
 		if (fh)
-		    fclose(fh);
+		    mmfclose(fh);
 	    }
 	    else if (ft != FILETYPE_HTML && ft != FILETYPE_GOPHER && ft != FILETYPE_TEXT && !image_type_test(ft))
 	    {
@@ -3055,7 +3057,7 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 	    }
 	    else
 	    {
-		char *buffer = url_unparse(NULL, NULL, path, params, query, NULL);
+		char *buffer = url_unparse(NULL, NULL, path ? path : "/", params, query, NULL);
 		ep = access_new_http(url, flags, ofile, bfile, referer, progress, complete, h, result, netloc, buffer);
 		mm_free(buffer);
 	    }
@@ -3074,7 +3076,7 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 	    }
 	    else
 	    {
-		char *buffer = url_unparse(NULL, NULL, path, params, query, NULL);
+		char *buffer = url_unparse(NULL, NULL, path ? path : "/", params, query, NULL);
 		ep = access_new_http(url, flags, ofile, bfile, referer, progress, complete, h, result, netloc, buffer);
 		mm_free(buffer);
 	    }
@@ -3097,18 +3099,18 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 
 		    cfile = strdup(ofile ? ofile : cache->scrapfile_name());
 
-		    fh = fopen(cfile, "w");
+		    fh = mmfopen(cfile, "w");
 		    if (fh == NULL)
 		    {
 			*result = 0;
-			ep = makeerror(ERR_CANT_READ_FILE);
+			ep = makeerrorf(ERR_CANT_READ_FILE, url);
 		    }
 		    else
 		    {
 			access_complete_flags fl;
 
 			fprintf(fh, "<h1>Searchable Gopher Index</h1><isindex>\n");
-			fclose(fh);
+			mmfclose(fh);
 
 			set_file_type(cfile, FILETYPE_HTML);
 

@@ -60,12 +60,15 @@
 #include "unwind.h"
 
 #include "files.h"
-#include "gbf.h"
 
 /* ------------------------------------------------------------------------- */
 
 #ifndef NEW_WEBIMAGE
 #define NEW_WEBIMAGE	2
+#endif
+
+#ifndef ITERATIVE_PANIC
+#define ITERATIVE_PANIC 0
 #endif
 
 #ifdef STBWEB_BUILD
@@ -1570,7 +1573,7 @@ os_error *image_find(char *url, char *ref, int flags, image_callback cb, void *h
 	i->url = strdup(url);
 	i->hash = hash;
 	i->flags = image_flag_WAITING;
-	if ((flags & image_find_flag_DEFER) || !gbf_active(GBF_LOW_MEMORY))
+	if (flags & image_find_flag_DEFER)
 	    i->flags |= image_flag_DEFERRED;
 
 	set_default_image(i, (flags & image_find_flag_DEFER) ? SPRITE_NAME_DEFERRED : SPRITE_NAME_UNKNOWN, TRUE);
@@ -2340,7 +2343,7 @@ os_error *image_info(image i, int *width, int *height, int *bpp, image_flags *fl
 {
     os_error *ep = NULL;
     sprite_header *sph;
-    int ex, ey, l2bpp;
+    int ex = 0, ey = 0, l2bpp = 0;
     /*int lbit;*/
 
     IMGDBG(("image_info: im%p\n", i));

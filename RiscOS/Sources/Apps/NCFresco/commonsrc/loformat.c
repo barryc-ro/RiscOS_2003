@@ -237,10 +237,12 @@ static void no_text_line(RID_FMT_STATE *fmt)
     fmt->x_text_pos = 0;
 }
 
+#if 0
 static void no_float_line(RID_FMT_STATE *fmt)
 {
     fmt->float_line = NULL;
 }
+#endif
 
 static void no_unbreakable(RID_FMT_STATE *fmt)
 {
@@ -261,10 +263,9 @@ static void no_unbreakable(RID_FMT_STATE *fmt)
   words present, hence there is no need for per-pos x_text_item
   values, and they don't feature in this calculation. */
 
-static BOOL floating_item_fits(RID_FMT_STATE *fmt)
+static BOOL floating_item_fits( RID_FMT_STATE *fmt, rid_pos_item *line,
+                                rid_text_item *fltr )
 {
-    rid_text_item *fltr = fmt->next_item;
-    rid_pos_item *line = fmt->float_line;
     rid_floats_link *floater = line->floats;
     const int LM = line->left_margin;
     const int RM = floater->right_margin;
@@ -274,13 +275,15 @@ static BOOL floating_item_fits(RID_FMT_STATE *fmt)
     const int have_fltrs = FLOATERS_THIS_LINE(line);
     BOOL fits = (RM - LM - MW) >= 0;
 
-    ASSERT(fmt->next_item != NULL);
-    ASSERT(fmt->float_line != NULL);
-    ASSERT(fmt->float_line->floats != NULL);
-    ASSERT(fmt->float_line->first == NULL);
+    ASSERT(line != NULL);
+    ASSERT(line->floats != NULL);
+    ASSERT(fltr != NULL);
+/*     ASSERT(fmt->float_line != NULL); */
+/*     ASSERT(fmt->float_line->floats != NULL); */
+/*     ASSERT(fmt->float_line->first == NULL); */
     ASSERT(line->left_margin != NOTINIT);
 
-    FMTDBGN(("floating_item_fits: %s: LM/RM %d/%d, FW %d, MW %d, txt %d, fltrs %d\n",
+    FMTDBG(("floating_item_fits: %s: LM/RM %d/%d, FW %d, MW %d, txt %d, fltrs %d\n",
 	     fits ? "FITS" : "DOESN'T FIT", LM, RM, FW, MW, have_text, have_fltrs));
 
     if (fits)
@@ -322,33 +325,52 @@ static BOOL floating_item_fits(RID_FMT_STATE *fmt)
   the margin information from the preceeding text/float line, or
   zeroes if no information available (ie sensible default margins).  */
 
+#if 0
 static void pickup_float_line(RID_FMT_STATE *fmt)
 {
     rid_pos_item *pi = new_pos_item(fmt);
+    rid_text_item *ti = fmt->next_item;
 
     ASSERT(fmt->float_line == NULL);
 
+    FMTDBG(("pi%p: new float_line\n",pi));
+
     fmt->float_line = pi;
 
+#if 1
+    if ( ti )
+    {
+        pi->left_margin = ti->st.indent * INDENT_UNIT;
+        pi->floats->right_margin = fmt->format_width
+                                    - ( (ti->flag & rid_flag_RINDENT)
+                                         ? (INDENT_UNIT*INDENT_WIDTH) : 0 );
+    }
+    else
+    {
+        pi->left_margin = 0;
+        pi->floats->right_margin = fmt->format_width;
+    }
+#else
     /* Not quite right - closing a line will forget the right indent it had */
     if (pi->prev == NULL || pi->prev->floats == NULL)
     {
 	FMTDBGN(("pickup_float_line: no prev so default margin information\n"));
-	pi->left_margin = 0;
+	pi->left_margin = pi->prev ? pi->prev->left_margin : 0;
 	pi->floats->right_margin = fmt->format_width;
     }
     else
     {
-#if 0
-	pi->left_margin = pi->prev->left_margin;
-	pi->floats->right_margin = pi->prev->floats->right_margin;
-#else
-	pi->left_margin = 0;
-	pi->floats->right_margin = fmt->format_width;
-#endif
+        pi->left_margin = pi->prev->floats->left
+                                ? pi->prev->floats->left->entry_margin
+                                : pi->prev->left_margin;
+        pi->floats->right_margin = pi->prev->floats->right
+                                ? pi->prev->floats->right->entry_margin
+                                : pi->prev->floats->right_margin;
+
 	FMTDBGN(("pickup_float_line: inherit margins %d/%d\n",
 		 pi->left_margin, pi->floats->right_margin));
     }
+#endif
 }
 
 /*****************************************************************************
@@ -442,7 +464,6 @@ static void advance_float_line(RID_FMT_STATE *fmt)
 	    finp = &((*finp)->next);
 	    carried_over++;
 	}
-
     }
 
     /* Set the right margin according to the items present on it */
@@ -474,6 +495,7 @@ static void advance_float_line(RID_FMT_STATE *fmt)
     rid_pos_item_connect(fmt->stream, new);
 
 }
+#endif
 
 /*****************************************************************************/
 
@@ -503,11 +525,10 @@ static void attach_float_at_end(rid_float_item **flp, rid_float_item *fi)
   currently known float line. Append it to the L/R list and update
   information (margins especially) accordingly.  */
 
-static void position_floating_item(RID_FMT_STATE *fmt)
+static void position_floating_item( RID_FMT_STATE *fmt, rid_pos_item *pi,
+                                    rid_text_item *ti )
 {
-    rid_text_item *ti = fmt->next_item;
     const BOOL leftwards = (ti->flag & rid_flag_LEFTWARDS) != 0;
-    rid_pos_item *pi = fmt->float_line;
     rid_float_item *fi = mm_calloc(1, sizeof(*fi));
     rid_floats_link *fl = pi->floats;
     const int width = ti->width;
@@ -532,6 +553,9 @@ static void position_floating_item(RID_FMT_STATE *fmt)
     {
 	fi->entry_margin = pi->left_margin;
 	pi->left_margin += width;               /* hmm */
+
+	fmt->x_text_pos = pi->left_margin;
+
 	attach_float_at_end(&fl->left, fi);
     }
     else
@@ -541,12 +565,80 @@ static void position_floating_item(RID_FMT_STATE *fmt)
 	attach_float_at_end(&fl->right, fi);
     }
 
-    FMTDBGN(("position_floating_item: now got LM %d, RM %d\n",
+    FMTDBG(("ti%p: position_floating_item: em=%d w=%d now got LM %d, RM %d\n",
+             ti, fi->entry_margin, width,
 	     pi->left_margin, fl->right_margin ));
 
+#if DEBUG
+    /* pdh: crossing the margins is only allowed if there's only this floater
+     * on the line
+     */
+    if ( ( fl->right_margin - pi->left_margin ) < 0 )
+    {
+        if ( leftwards )
+        {
+            ASSERT( fl->left == fi );
+            ASSERT( fl->right == NULL );
+        }
+        else
+        {
+            ASSERT( fl->right == fi );
+            ASSERT( fl->left == NULL );
+        }
+    }
+#endif
+
+#if 0
     /* This shouldn't have caused us to cross the margins! */
     ASSERT( (fl->right_margin - pi->left_margin) >= 0 );
+#endif
 }
+
+
+/*****************************************************************************
+
+  If we've got any pending floaters, try and attach them to the current
+  line.  */
+
+void attach_new_floaters( RID_FMT_STATE *fmt, rid_pos_item *pi )
+{
+    rid_text_item *ti = fmt->first_pending_floater;
+
+    while ( ti )
+    {
+        if ( floating_item_fits( fmt, pi, ti )
+             || !FLOATERS_THIS_LINE(pi) )
+        {
+            position_floating_item( fmt, pi, ti );
+
+            if ( ti->flag & rid_flag_LEFTWARDS )
+                fmt->pending_left_floaters--;
+            else
+                fmt->pending_right_floaters--;
+
+            if ( ti == fmt->last_pending_floater )
+            {
+                fmt->last_pending_floater = NULL;
+                fmt->first_pending_floater = NULL;
+                return;
+            }
+        }
+        else
+        {
+            /* doesn't fit */
+            fmt->first_pending_floater = ti;
+            return;
+        }
+
+        /* just fitted one, but there's more: find 'em */
+        do {
+            ti = ti->next;
+        } while ( ti && !FLOATING_ITEM(ti) );
+
+        ASSERT( ti != NULL );
+    }
+}
+
 
 /*****************************************************************************
 
@@ -557,15 +649,16 @@ static void position_floating_item(RID_FMT_STATE *fmt)
 static void create_new_text_line(RID_FMT_STATE *fmt)
 {
     ASSERT(fmt->text_line == NULL);
-    ASSERT(fmt->unbreakable_start != NULL);
+    ASSERT(fmt->unbreakable_start != NULL || fmt->first_pending_floater != NULL );
 
-    if (fmt->float_line == NULL)
+/*     if (fmt->float_line == NULL) */
     {
 	/* Create at end, no margin info */
 	rid_pos_item *new = new_pos_item(fmt);
 	fmt->text_line = new;
 	FMTDBGN(("create_new_text_line: Created a new line\n"));
     }
+#if 0
     else
     {
 	/* Pickup existing floating line and its margin info. Advance
@@ -577,7 +670,139 @@ static void create_new_text_line(RID_FMT_STATE *fmt)
 	FMTDBG(("create_new_text_line: caught up with fmt->float %p\n",
 	        fmt->text_line ));
     }
+#endif
 }
+
+/*****************************************************************************
+
+  How much left margin have we got "trapped" behind left floaters...?  */
+
+static int excess_left_margin_due_to_floaters( const rid_pos_item *pi )
+{
+    int excess = 0;
+    int shouldbe = 0;
+    rid_floats_link *fl = pi->floats;
+    rid_float_item *fi;
+
+    if ( !fl )
+        return 0;
+    fi = fl->left;
+
+    while ( fi )
+    {
+        excess += ( fi->entry_margin - shouldbe );
+        shouldbe = fi->entry_margin + fi->ti->width;
+        fi = fi->next;
+    }
+    return excess;
+}
+
+/*****************************************************************************
+
+  ... right floaters?  */
+
+static int excess_right_margin_due_to_floaters( const RID_FMT_STATE *fmt,
+                                                const rid_pos_item *pi )
+{
+    int excess = 0;
+    int shouldbe = fmt->format_width;
+    rid_floats_link *fl = pi->floats;
+    rid_float_item *fi;
+
+    if ( !fl )
+        return 0;
+    fi = fl->right;
+
+    while ( fi )
+    {
+        if ( shouldbe != fi->entry_margin )
+            FMTDBG(("ermdf: shouldbe=%d entry_margin=%d\n", shouldbe,
+                    fi->entry_margin));
+
+        excess += ( shouldbe - fi->entry_margin );
+        shouldbe = fi->entry_margin - fi->ti->width;
+        fi = fi->next;
+    }
+    return excess;
+}
+
+/*****************************************************************************
+
+  Margin due to left floaters...   */
+
+static int left_float_margin( const rid_pos_item *pi )
+{
+    int margin = 0;
+
+    if ( pi->floats )
+    {
+        rid_float_item *fi = pi->floats->left;
+
+        while ( fi )
+        {
+            margin = fi->entry_margin + fi->ti->width;
+            fi = fi->next;
+        }
+    }
+    return margin;
+}
+
+/*****************************************************************************
+
+  ... right floaters   */
+
+static int right_float_margin( const RID_FMT_STATE *fmt,
+                               const rid_pos_item *pi )
+{
+    int margin = fmt->format_width;
+
+    if ( pi->floats )
+    {
+        rid_float_item *fi = pi->floats->right;
+
+        while ( fi )
+        {
+            margin = fi->entry_margin - fi->ti->width;
+            fi = fi->next;
+        }
+    }
+    return margin;
+}
+
+/*****************************************************************************
+
+  Set the margins on this line from the given text item
+  (repeated often enough to warrant its own routine)    */
+
+static void set_margins_from_item( const RID_FMT_STATE *fmt, rid_pos_item *pi,
+                                   const rid_text_item *ti )
+{
+    while ( ti && FLOATING_ITEM(ti) )
+        ti = ti->next;
+
+    if ( ti )
+    {
+#if DEBUG
+        if ( ti->tag == rid_tag_TEXT )
+        {
+            rid_text_item_text *tit = (rid_text_item_text*)ti;
+            char *text = fmt->rh->texts.data + tit->data_off;
+            FMTDBG(("set_margins_from_item: text «%s»\n",text));
+        }
+#endif
+
+        pi->left_margin = ti->st.indent * INDENT_UNIT;
+        pi->floats->right_margin = fmt->format_width
+                                    - ( (ti->flag & rid_flag_RINDENT)
+                                         ? (INDENT_UNIT*INDENT_WIDTH) : 0 );
+    }
+    else
+    {
+        pi->left_margin = 0;
+        pi->floats->right_margin = fmt->format_width;
+    }
+}
+
 
 /*****************************************************************************
 
@@ -586,25 +811,57 @@ static void create_new_text_line(RID_FMT_STATE *fmt)
 
 static void set_text_margin_info(RID_FMT_STATE *fmt)
 {
-    const int lindent = fmt->unbreakable_start->st.indent * INDENT_UNIT;
-    const int rindent = (fmt->unbreakable_start->flag & rid_flag_RINDENT)
-                            ? (INDENT_UNIT * INDENT_WIDTH) : 0;
+    rid_pos_item *pi = fmt->text_line;
+    int emdf;
+    int floatmargin;
+    int rindent;
 
-    ASSERT(fmt->text_line != NULL);
-    ASSERT(fmt->text_line->left_margin == NOTINIT);
+    ASSERT(pi != NULL);
+/*     ASSERT(fmt->text_line->left_margin == NOTINIT); */
 
     /* Doesn't account for INDENT_SIZE */
-    fmt->text_line->left_margin = lindent;
-    fmt->text_line->floats->right_margin = fmt->format_width - rindent;
+    set_margins_from_item( fmt, pi, fmt->unbreakable_start );
+
+    /* pdh: At this point, pi->left_margin is the amount of margin we want
+     * for text_item reasons (lists, blockquote)
+     */
+
+    emdf = excess_left_margin_due_to_floaters(pi);
+    floatmargin = left_float_margin(pi);
+
+    FMTDBG(("pi%p: LEFT: text_item margin=%d, emdf=%d, float margin=%d,", pi,
+            pi->left_margin, emdf, floatmargin ));
+
+    pi->left_margin -= emdf;
+    if ( pi->left_margin < 0 )
+        pi->left_margin = 0;
+
+    pi->left_margin += floatmargin;
+
+    FMTDBG((" result %d\n", pi->left_margin));
+
+    emdf = excess_right_margin_due_to_floaters(fmt, pi);
+    floatmargin = right_float_margin(fmt, pi);
+    rindent = fmt->format_width - pi->floats->right_margin;
+
+    FMTDBG(("pi%p: RIGHT: text_item indent=%d, emdf=%d, float margin=%d,", pi,
+            rindent, emdf, floatmargin ));
+
+    rindent -= emdf;
+    if ( rindent < 0 )
+        rindent = 0;
+
+    pi->floats->right_margin = floatmargin - rindent;
+
+    FMTDBG((" result %d\n", pi->floats->right_margin));
 
     /* Should be before start adding to this line */
-    fmt->x_text_pos = lindent;
+    fmt->x_text_pos = pi->left_margin;
 
-    FMTDBGN(("set_text_margin_info: LM %d, RM %d, XP %d, LI %d, RI %d\n",
-	     fmt->text_line->left_margin,
-	     fmt->text_line->floats->right_margin,
+    FMTDBGN(("set_text_margin_info: LM %d, RM %d, XP %d, RI %d\n",
+	     pi->left_margin,
+	     pi->floats->right_margin,
 	     fmt->x_text_pos,
-	     lindent,
 	     rindent));
 }
 
@@ -737,11 +994,12 @@ static void fracture_float_line(RID_FMT_STATE *fmt)
     rid_pos_item *text = fmt->text_line;
     rid_pos_item *later = text->next;
     rid_pos_item *new = mm_calloc(1, sizeof(*new));
+/*     rid_text_item *ti; */
 
     ASSERT(text != NULL);
     ASSERT(fmt->stream->pos_list != NULL);
     ASSERT(fmt->stream->pos_last != NULL);
-    ASSERT(fmt->float_line != text);
+/*     ASSERT(fmt->float_line != text); */
 
     /* Link into chain */
     new->prev = text;
@@ -761,13 +1019,23 @@ static void fracture_float_line(RID_FMT_STATE *fmt)
 	fmt->stream->pos_last = new;
     }
 
-    /* pdh: Margin values will be updated in fracture_copy_*
+    /* pdh: Margin values will be overwritten in fracture_copy_*, but only
+     * on sides with floaters on. These margins are only used for adding
+     * further floaters. The margins used for nonfloating items will be
+     * determined when the first ubs is added to the line.
      */
 
     new->st = fmt->stream;
-    new->left_margin = 0;
     new->floats = mm_calloc(1, sizeof(*new->floats));
-    new->floats->right_margin = fmt->format_width;
+
+/*     ti = fmt->unbreakable_start ? fmt->unbreakable_start */
+/*                                 : fmt->next_item; */
+/*  */
+/*     FMTDBG(("fracture_float_line: ubs=%p (a %d), ni=%p (a %d)\n", */
+/*             fmt->unbreakable_start, fmt->unbreakable_start ? fmt->unbreakable_start->tag : -1, */
+/*             fmt->next_item, fmt->next_item ? fmt->next_item->tag : -1 )); */
+
+    set_margins_from_item( fmt, new, fmt->unbreakable_start );
 
     FMTDBGN(("pi%p: ffl: floats=%p\n", new, new->floats ));
 
@@ -809,7 +1077,23 @@ static void fracture_copy_left(RID_FMT_STATE *fmt)
 
     ASSERT(finp != &new->floats->left);
 
+#if 0
+    /* pdh: At this point, new->left_margin is the amount of margin we want
+     * for text_item reasons (lists, blockquote)
+     */
+
+    FMTDBG(("pi%p: text_item margin=%d, emdf=%d, float margin=%d,", new,
+            new->left_margin, excess_margin_due_to_floaters(new),
+            last->entry_margin + last->ti->width ));
+
+    new->left_margin -= excess_margin_due_to_floaters( new );
+    if ( new->left_margin < 0 )
+        new->left_margin = 0;
+#endif
+
     new->left_margin = last->entry_margin + last->ti->width;
+
+/*     FMTDBG((" result %d\n", new->left_margin)); */
 
     FMTDBGN(("fracture_copy_left: carried over %d items\n", carried_over));
 }
@@ -886,7 +1170,7 @@ static void consider_fracturing_float_line(RID_FMT_STATE *fmt)
     BOOL l_fracture = FALSE;
     BOOL r_fracture = FALSE;
 
-    FMTDBGN(("consider_fracturing_float_line: this_height %d\n", this_height));
+    FMTDBG(("consider_fracturing_float_line: this_height %d\n", this_height));
 
     if (this_height == 0)
     {
@@ -902,7 +1186,7 @@ static void consider_fracturing_float_line(RID_FMT_STATE *fmt)
 
 	pi->max_up = this_height;
 
-	FMTDBGN(("consider_fracturing_float_line: this_height NOW %d\n", this_height));
+	FMTDBG(("consider_fracturing_float_line: this_height NOW %d\n", this_height));
     }
 
     /* Scan all floating items of this line and see if there are any
@@ -913,14 +1197,14 @@ static void consider_fracturing_float_line(RID_FMT_STATE *fmt)
        bottom of its last line. */
     for (fi = pi->floats->left; fi != NULL; fi = fi->next)
     {
-	FMTDBGN(("consider_fracturing_float_line: left height %d lowered by %d\n", fi->height_left, this_height));
+	FMTDBG(("consider_fracturing_float_line: left height %d lowered by %d\n", fi->height_left, this_height));
 	fi->height_left -= this_height;
 	l_fracture |= (fi->height_left > 0);
     }
 
     for (fi = pi->floats->right; fi != NULL; fi = fi->next)
     {
-	FMTDBGN(("consider_fracturing_float_line: right height %d lowered by %d\n", fi->height_left, this_height));
+	FMTDBG(("consider_fracturing_float_line: right height %d lowered by %d\n", fi->height_left, this_height));
 	fi->height_left -= this_height;
 	r_fracture |= (fi->height_left > 0);
     }
@@ -1005,8 +1289,12 @@ static void close_down_current_line(RID_FMT_STATE *fmt)
     pi->max_down = max_down;
 
     /* Might want to fracture a strip here */
-    if ( FLOATERS_THIS_LINE(fmt->text_line) )
+    if ( FLOATERS_THIS_LINE(fmt->text_line)
+         || fmt->first_pending_floater )
+    {
+        FMTDBG(("cdcl: has floaters, calling cffl\n"));
 	consider_fracturing_float_line(fmt);
+    }
 
     /* fracturing may change these */
     fmt->y_text_pos -= pi->max_up + pi->max_down;
@@ -1019,11 +1307,13 @@ static void close_down_current_line(RID_FMT_STATE *fmt)
     if (pi->next != NULL)
     {
 	FMTDBGN(("close_down_current_line: got float line to use now\n"));
+#if 0
 	if (pi->next == fmt->float_line)
 	{
 	    FMTDBG(("close_down_current_line: have caught float line %p up - no float line now\n", fmt->float_line));
 	    no_float_line(fmt);
 	}
+#endif
 	no_text_line(fmt);
 	fmt->text_line = pi->next;
 	fmt->x_text_pos = fmt->text_line->left_margin;
@@ -1095,7 +1385,12 @@ static void append_unbreakable_sequence(RID_FMT_STATE *fmt)
 	{
 	    /* Floaters should have been attached during the scan that
                yielded the last item in the ubs. */
-	    ASSERT(ti->line != NULL);
+
+            /* pdh: no longer true, floaters may stay pending for quite a
+             * while
+             */
+
+/* 	    ASSERT(ti->line != NULL); */
 	}
 	ti = rid_scanf(ti);
     }
@@ -1121,7 +1416,7 @@ static void append_unbreakable_sequence(RID_FMT_STATE *fmt)
     /* If we must be followed by a break, ensure it now */
     if ( MUST_BREAK(fmt->unbreakable_stop) )
     {
-	FMTDBGN(("append_unbreakable_sequence: forcing BREAK\n"));
+	FMTDBG(("append_unbreakable_sequence: forcing BREAK\n"));
 	no_unbreakable(fmt);
 	close_down_current_line(fmt);
     }
@@ -1173,11 +1468,18 @@ static void deal_with_unbreakable_sequence(RID_FMT_STATE *fmt)
 		if ( fmt->text_line == NULL )
 		    create_new_text_line(fmt);
 
-		if ( no_text_margin_info(fmt) )
+                if ( fmt->text_line->first == NULL
+                     || no_text_margin_info( fmt ) )
+                {
 		    set_text_margin_info(fmt);
+		    attach_new_floaters( fmt, fmt->text_line );
+		}
 
 		if ( text_margin_indent_clash(fmt) || ! (usf = unbreakable_sequence_fits(fmt)) )
+                {
+                    FMTDBG(("deal_with_unbreakable_sequence: calling closedown\n"));
 		    close_down_current_line(fmt);
+		}
 		else
 		    break;
 	    }
@@ -1188,6 +1490,8 @@ static void deal_with_unbreakable_sequence(RID_FMT_STATE *fmt)
 
 	append_unbreakable_sequence(fmt);
     }
+    FMTDBGN(("deal_with_unbreakable_sequence: out, ubs=%p\n",
+            fmt->unbreakable_start));
 }
 
 /*****************************************************************************
@@ -1252,6 +1556,22 @@ static void next_nonfloating_item(RID_FMT_STATE *fmt)
 
 static void next_floating_item(RID_FMT_STATE *fmt)
 {
+#if 1
+    rid_text_item *ti = fmt->next_item;
+
+    FMTDBG(("ti%p: pending floater, width=%d\n", ti, ti->width ));
+
+    /* der neue floater: don't even think about placing it until we sign
+     * off the current line.
+     */
+    if ( !fmt->first_pending_floater )
+        fmt->first_pending_floater = ti;
+    fmt->last_pending_floater = ti;
+    if ( ti->flag & rid_flag_LEFTWARDS )
+        fmt->pending_left_floaters++;
+    if ( ti->flag & rid_flag_RIGHTWARDS )
+        fmt->pending_right_floaters++;
+#else
     /* Find initial place to think about placing floating item */
     if (fmt->float_line == NULL)
 	pickup_float_line(fmt);
@@ -1261,35 +1581,87 @@ static void next_floating_item(RID_FMT_STATE *fmt)
        being a floating line. */
     ASSERT(fmt->float_line->first == NULL);
 
-    FMTDBG(("nfi: 1: float_line=%p\n", fmt->float_line));
-
     /* We might not be able to fit the floating item within the
        available space, or minwidth formatting might wish to force us
        to not fit the item. Advance until we can fit it. A lone
        floating item will always fit, whatever the fwidth. */
 
-    /* Better than spinning! */
+    /* pdh: not true! fwidth should always be the user's required format
+     * width; it's altogether possible that an item doesn't fit in this,
+     * but fwidth should not be changed in this situation
+     */
 
+#if 0
     ASSERT(fmt->next_item->width <= fmt->format_width);
+#endif
 
-    while  ( ! floating_item_fits(fmt) )
-	advance_float_line(fmt);
+    if ( fmt->next_item->width > fmt->format_width )
+    {
+        /* won't fit, so clear all floaters and bung it in */
+        while ( FLOATERS_THIS_LINE( fmt->float_line ) )
+            advance_float_line(fmt);
 
-    FMTDBG(("nfi: 2: float_line=%p\n", fmt->float_line));
+        position_floating_item(fmt);
+        advance_float_line(fmt);
+    }
+    else
+    {
+        /* will fit eventually, just clear enough floaters */
+        while  ( ! floating_item_fits(fmt) )
+        {
+            FMTDBG(("ti%p: floater doesn't fit, advancing line\n",
+                    fmt->next_item));
+            advance_float_line(fmt);
+        }
 
-    position_floating_item(fmt);
-
-    FMTDBG(("nfi: 3: float_line=%p\n", fmt->float_line));
+        position_floating_item(fmt);
+    }
+#endif
 }
 
 /*****************************************************************************
-
-  THIS FUNCTION NEEDS WRITING!
 
  */
 
 static void perform_clearing(RID_FMT_STATE *fmt)
 {
+    BOOL left, right;
+
+    left  = (fmt->next_item->flag & rid_flag_LEFTWARDS)  != 0;
+    right = (fmt->next_item->flag & rid_flag_RIGHTWARDS) != 0;
+
+/*     FMTDBGN(("perform_clearing( %s%s), tl=%p, fl=%p\n", */
+/*              left ? "LEFT " : "", right ? "RIGHT " : "", */
+/*              fmt->text_line, fmt->float_line )); */
+
+    while ( fmt->text_line
+             && (    (left &&  (fmt->text_line->floats->left
+                                || fmt->pending_left_floaters) )
+                  || (right && (fmt->text_line->floats->right
+                                || fmt->pending_right_floaters) ) ) )
+    {
+        /* Get rid of any word we've got lying around -- this can only happen
+         * the first time round the loop
+         */
+        if (fmt->unbreakable_start != NULL)
+            deal_with_unbreakable_sequence(fmt);
+
+	if ( fmt->text_line->first == NULL
+             || no_text_margin_info(fmt) )
+	{
+	    set_text_margin_info(fmt);
+	    attach_new_floaters(fmt, fmt->text_line);
+	}
+
+        FMTDBG(("perform_clearing: calling closedown\n"));
+
+	close_down_current_line(fmt);
+
+	if ( !fmt->text_line
+	     && (    (left  && fmt->pending_left_floaters)
+	          || (right && fmt->pending_right_floaters) ) )
+	    create_new_text_line( fmt );
+    }
 }
 
 /*****************************************************************************/
@@ -1300,9 +1672,9 @@ static void formatting_start(RID_FMT_STATE *fmt)
 
     rid_text_item *ti;
 
-    FMTDBG(("formatting_start: format_width %d, stream->fwidth %d, stream->widest %d, minwidth %d, maxwidth %d\n", 
+    FMTDBG(("formatting_start: format_width %d, stream->fwidth %d, stream->widest %d, minwidth %d, maxwidth %d\n",
 	    fmt->format_width, fmt->stream->fwidth, fmt->stream->widest,
-	    fmt->stream->width_info.minwidth, fmt->stream->width_info.maxwidth)); 
+	    fmt->stream->width_info.minwidth, fmt->stream->width_info.maxwidth));
 
     /* Pick up the stream we are formatting */
     fmt->next_item = fmt->stream->text_list;
@@ -1313,7 +1685,7 @@ static void formatting_start(RID_FMT_STATE *fmt)
     /* Nothing in hand to start with */
     no_unbreakable(fmt);
     no_text_line(fmt);
-    no_float_line(fmt);
+/*     no_float_line(fmt); */
 
     /* Initialise bits and pieces */
     fmt->format_width = fmt->stream->fwidth;
@@ -1418,20 +1790,36 @@ static void formatting_stop(RID_FMT_STATE *fmt)
 
     if (fmt->text_line != NULL)
     {
-	FMTDBGN(("formatting_stop: closing down current line\n"));
+	FMTDBG(("formatting_stop: closing down current line\n"));
 	close_down_current_line(fmt);
     }
 
-    while (fmt->text_line != NULL)
+    while ( fmt->text_line != NULL
+             || fmt->pending_left_floaters || fmt->pending_right_floaters )
     {
 	FMTDBGN(("formatting_stop: close line to get past floaters\n"));
+
+	if ( !fmt->text_line )
+	    create_new_text_line( fmt );
+
+        if ( fmt->text_line->first == NULL
+             || no_text_margin_info( fmt ) )
+        {
+	    set_text_margin_info(fmt);
+	    attach_new_floaters( fmt, fmt->text_line );
+	}
+
+	attach_new_floaters( fmt, fmt->text_line );
+
 	close_down_current_line(fmt);
     }
 
+#if 0
     if ( fmt->float_line )
     {
         FMTDBG(("** fmt->float_line = %p in formatting_stop (?)\n", fmt->float_line ));
     }
+#endif
 
     /* Then force a last pos item to give the stream a final height
        and so that we can do certain grubby list following things that

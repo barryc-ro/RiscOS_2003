@@ -851,7 +851,7 @@ void cookie_write_file(const char *file_name)
     if (!gstrans_not_null(file_name))
 	return;
     
-    f = fopen(file_name, "w");
+    f = mmfopen(file_name, "w");
     if (f)
     {
         cookie_domain *d;
@@ -926,7 +926,7 @@ void cookie_write_file(const char *file_name)
             }
         }
 
-        fclose(f);
+        mmfclose(f);
     }
 
     CKIDBG(( "cookie: write close\n"));
@@ -943,7 +943,7 @@ void cookie_read_file(const char *file_name)
     if (file_type(file_name) == -1)
 	return;
     
-    f = fopen(file_name, "r");
+    f = mmfopen(file_name, "r");
     if (f)
     {
         char *buf = mm_malloc(BUF_SIZE);
@@ -983,7 +983,7 @@ void cookie_read_file(const char *file_name)
         while (!feof(f));
 
         mm_free(buf);
-        fclose(f);
+        mmfclose(f);
     }
 
     CKIDBG(( "cookie: read close\n"));

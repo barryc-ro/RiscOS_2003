@@ -133,7 +133,7 @@ void *heapda_realloc(void *oldptr, unsigned int size_request)
 
 	    adjust = old_da_size - da_size;
 	    DynamicArea_Realloc(heap__da, &adjust);
-	    da_size += adjust;
+	    da_size -= adjust;
 	    
 	    STBDBG(("heapda_realloc: failed (heap %d da %d)\n", heap__size, da_size));
 

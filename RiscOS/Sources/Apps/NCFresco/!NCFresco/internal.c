@@ -932,6 +932,10 @@ static os_error *fe_mem_dump_write_file(FILE *f)
     fprintf(f, "<H2><A NAME='image'>Image heap</A></H2><PRE>");
     heap__dump(f);
 
+    fprintf(f, "<H2><A NAME='image'>Flex memory</A></H2><PRE>");
+#if DEBUG
+    MemFlex_Dump(f);
+#endif
     fprintf(f, "</PRE>");
 
     return NULL;
@@ -1033,7 +1037,7 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
     }
     else
     {
-	FILE *f = fopen(file, "w");
+	FILE *f = mmfopen(file, "w");
 	os_error *e = NULL;
 
 	if (strcasecomp(panel_name, "displayoptions") == 0)
@@ -1162,7 +1166,7 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	    e = fe_error_write_file(f, query);
 	}
 
-	fclose(f);
+	mmfclose(f);
 
 	if (!e)
 	{

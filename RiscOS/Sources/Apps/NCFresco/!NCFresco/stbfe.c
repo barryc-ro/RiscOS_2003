@@ -472,13 +472,13 @@ int movepointer(void)
 static void fe_type_file(fe_view v, const char *file_name)
 {
     FILE *f;
-    if ((f = fopen(file_name, "r")) != NULL)
+    if ((f = mmfopen(file_name, "r")) != NULL)
     {
         os_error *e = NULL;
         int used = TRUE;
         while (!e && !feof(f) && used)
             e = backend_doc_key(v->displaying, fgetc(f), &used);
-        fclose(f);
+        mmfclose(f);
     }
 }
 
@@ -2030,6 +2030,13 @@ int frontend_can_handle_file_type(int ft)
 /*  fe_report_error(msgs_lookup("nold")); */
 
     return FALSE;
+}
+
+/* ------------------------------------------------------------------------------------------- */
+
+int frontend_memory_panic(void)
+{
+    return 0;
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -4836,6 +4843,15 @@ static void check_error(void)
 }
 
 /* ------------------------------------------------------------------------------------------- */
+
+extern void *my_kernel_alloc(unsigned int size);
+
+static void setup_allocs(void)
+{
+    _kernel_register_allocs(my_kernel_alloc, free);
+}
+
+/* ------------------------------------------------------------------------------------------- */
 /* Main event process loop  */
 /* ------------------------------------------------------------------------------------------- */
 
@@ -5220,6 +5236,18 @@ void fe_event_process(void)
 
     dbgpoll();
     mm_poll();
+
+#if DEBUG
+    {
+	extern int stack_extensions;
+	static int old_stack_extensions = 0;
+	if (old_stack_extensions != stack_extensions)
+	{
+	    DBG(("stack_extensions: %d\n", stack_extensions));
+	    old_stack_extensions = stack_extensions;
+	}
+    }
+#endif
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -5566,17 +5594,19 @@ static BOOL fe_initialise(void)
 /* ------------------------------------------------------------------------------------------- */
 
 #if STBWEB_ROM
-int __root_stack_size = 64*1024;
-extern int disable_stack_extension;
+int __root_stack_size  =64*1024;
+/* extern int disable_stack_extension; */
 #endif
 
 int main(int argc, char **argv)
 {
     int init_ok;
 
-#if STBWEB_ROM
-    disable_stack_extension = 1;
-#endif
+    setup_allocs();
+    
+/* #if STBWEB_ROM */
+/*     disable_stack_extension = 1; */
+/* #endif */
 
 #ifdef HierProf_PROFILE
     HierProf_ProfileAllFunctions();
@@ -5586,11 +5616,13 @@ int main(int argc, char **argv)
     setbuf(stderr, NULL);   /* no caching   */
 
     MemCheck_Init();
+#if 0
     MemCheck_RegisterArgs(argc, argv);
     MemCheck_InterceptSCLStringFunctions();
     MemCheck_SetAutoOutputBlocksInfo(FALSE);
     MemCheck_RegisterMiscBlock(0, 0); /* stop memcpy(x, 0, 0) from giving an error */
-    MemCheck_SetStoreMallocFunctions(TRUE);
+#endif
+    MemCheck_SetStoreMallocFunctions(FALSE);
     MemCheck_SetChecking(0,0);
 
 #ifdef Trace_TRACE

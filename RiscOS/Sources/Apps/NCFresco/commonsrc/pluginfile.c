@@ -76,7 +76,7 @@ void plugin_list_write_file(void)
 /*     if (ensure_modem_line() != NULL) */
 /* 	return; */
     
-    f = fopen(config_plugin_file, "w");
+    f = mmfopen(config_plugin_file, "w");
     if (f)
     {
 	plugin_list_info *info;
@@ -90,7 +90,7 @@ void plugin_list_write_file(void)
 
 	    fprintf(f, "%03x\t%c\n", info->info.file_type, info->info.flags & plugin_info_flag_DISABLED ? 'D' : 'd');
 	}
-	fclose(f);
+	mmfclose(f);
     }
 }
 
@@ -103,7 +103,7 @@ void plugin_list_read_file(void)
     if (file_type(config_plugin_file) == -1)
 	return;
     
-    f = fopen(config_plugin_file, "r");
+    f = mmfopen(config_plugin_file, "r");
     if (f)
     {
 	char buffer[256];
@@ -155,7 +155,7 @@ void plugin_list_read_file(void)
 	}
 	while (!feof(f));
 
-	fclose(f);
+	mmfclose(f);
     }
 }
 

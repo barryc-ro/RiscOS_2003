@@ -426,7 +426,7 @@ os_error *auth_write_realms(char *fname, auth_passwd_store pws)
     if (!gstrans_not_null(fname))
 	return NULL;
 
-    fh = fopen(fname, "w");
+    fh = mmfopen(fname, "w");
 
     if (fh == NULL)
 	return makeerror(ERR_CANT_OPEN_AUTH_FILE);
@@ -479,7 +479,7 @@ os_error *auth_write_realms(char *fname, auth_passwd_store pws)
 	    mm_free(escp);
     }
 
-    fclose(fh);
+    mmfclose(fh);
 
     return NULL;
 }
@@ -494,7 +494,7 @@ os_error *auth_load_file(char *fname)
     if (file_type(fname) == -1)
 	return NULL;
 
-    fh = fopen(fname, "r");
+    fh = mmfopen(fname, "r");
 
     if (fh == NULL)
 	return makeerror(ERR_CANT_OPEN_AUTH_FILE);
@@ -540,7 +540,7 @@ os_error *auth_load_file(char *fname)
 	}
     }
 
-    fclose(fh);
+    mmfclose(fh);
 
     return NULL;
 }
@@ -557,7 +557,7 @@ static int auth_read_allow_file(char *fname, allow_item **head)
     if (file_type(fname) == -1)
 	return 0;
 
-    f = fopen(fname, "r");
+    f = mmfopen(fname, "r");
 
     if (f == NULL)
 	return 0;
@@ -590,7 +590,7 @@ static int auth_read_allow_file(char *fname, allow_item **head)
 	}
     }
 
-    fclose(f);
+    mmfclose(f);
     
     return 1;
 }

@@ -343,7 +343,7 @@ static rid_header *parse_some_file(char *fname, char *url, int ft)
 	return 0;
     }
     
-    fp = fopen(fname, "r");
+    fp = mmfopen(fname, "r");
     if (fp == 0)
     {
 	usrtrc( "Can't open file\n");
@@ -364,7 +364,7 @@ static rid_header *parse_some_file(char *fname, char *url, int ft)
 
     mm_free(buffer);
     
-    fclose(fp);
+    mmfclose(fp);
 
     rh = ppd->close(h, fname);
 

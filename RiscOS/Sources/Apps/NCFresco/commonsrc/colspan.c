@@ -1961,7 +1961,8 @@ extern void colspan_share_extra_space (rid_table_item *table,
 	    {
 		user_width = ceil(table->userwidth.u.f);
 
-		/* pdh: clip this if necessary */
+		/* pdh: clip this if necessary
+		 */
 		if ( gbf_active( GBF_AUTOFIT )
 		     && user_width > fwidth )
 		{

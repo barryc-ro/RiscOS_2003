@@ -237,7 +237,7 @@ image oimage_fetch_image(antweb_doc *doc, const char *src, BOOL need_size)
     int ffl;
     image imh;
 
-    ffl = (doc->flags & doc_flag_DEFER_IMAGES) ? image_find_flag_DEFER : 0;
+    ffl = (doc->flags & doc_flag_DEFER_IMAGES) || gbf_active(GBF_LOW_MEMORY) ? image_find_flag_DEFER : 0;
     if ((doc->flags & doc_flag_FROM_HISTORY) == 0)
 	ffl |= image_find_flag_CHECK_EXPIRE;
     if (need_size)

@@ -273,6 +273,12 @@ extern int frontend_internal_url(const char *path, const char *query, const char
 
 extern void frontend_pointer_set_position(fe_view v, int x, int y);
 
+/* Called from memory handler. Frontend should free up any memory that
+ * it doesn't really need and return 1 if it freed anything, 0 otherwise
+ */
+    
+extern int frontend_memory_panic(void);
+
 /***************************************************************************/
 /* Functions for talking to the back end */
 

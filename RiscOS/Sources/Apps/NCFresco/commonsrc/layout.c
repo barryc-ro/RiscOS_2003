@@ -322,10 +322,7 @@ static int be_frame_layout_1(const rid_frame *frameset, const wimp_box *bbox, fe
 
                 /* copy information from the rid to fe structure */
                 info->name = f->name;
-#ifdef STBWEB
-                /* pdh: in Fresco we have widgets, not scrollbars */
                 info->scrolling = f->scrolling;
-#endif
                 info->noresize = f->noresize;
 
                 info->box.x0 = bb.x0;

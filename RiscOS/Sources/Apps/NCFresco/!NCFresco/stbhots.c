@@ -437,11 +437,11 @@ static os_error *hotlist__changed_message(void)
 BOOL hotlist_read(const char *file)
 {
     FILE *f;
-    f = fopen(file, "r");
+    f = mmfopen(file, "r");
     if (f)
     {
 	hotlist__read(f);
-	fclose(f);
+	mmfclose(f);
 
 	hotlist__trim_length();
 	hotlist__sort();
@@ -455,11 +455,11 @@ BOOL hotlist_read(const char *file)
 BOOL hotlist_write(const char *file)
 {
     FILE *f;
-    f = fopen(file, "w");
+    f = mmfopen(file, "w");
     if (f)
     {
 	hotlist__write(f);
-	fclose(f);
+	mmfclose(f);
     }
 
     hotlist_changed = FALSE;

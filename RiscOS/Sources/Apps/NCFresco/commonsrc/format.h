@@ -56,15 +56,19 @@ typedef struct RID_FMT_STATE
     rid_text_item *	unbreakable_stop;
     rid_text_item *	last_last_unbreakable; /* Cleared each line */
     /* Per floating line(s) region */
-    rid_pos_item *	float_line;
-    
+/*     rid_pos_item *	float_line; */
+
+    rid_text_item*      first_pending_floater;
+    rid_text_item*      last_pending_floater;
+    int                 pending_left_floaters;
+    int                 pending_right_floaters;
 } RID_FMT_STATE;
 
 /*****************************************************************************/
 
 extern void rid_toplevel_format(antweb_doc *doc,
-				rid_header *rh, 
-				rid_text_item *start_from, 
+				rid_header *rh,
+				rid_text_item *start_from,
 				int fwidth,
 				int fheight);
 

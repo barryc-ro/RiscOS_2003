@@ -303,4 +303,9 @@ os_error *wimp_set_wind_flags( wimp_w w, wimp_wflags bic, wimp_wflags eor );
 extern char *xfgets(FILE *in);
 extern void fskipline(FILE *in);
 
+/* stdio wrappers that allocate a buffer using mm_malloc.c */
+
+extern FILE *mmfopen(const char *file, const char *mode);
+extern void mmfclose(FILE *f);
+
 /* eof util.h */

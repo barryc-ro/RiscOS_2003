@@ -706,7 +706,7 @@ static void cache_dump_dir_read(int dir)
     time_t now = time(NULL);
 
     sprintf(scrap_leaf_ptr, "%02d./cachedump", dir);
-    fh = fopen(scrapname, "r");
+    fh = mmfopen(scrapname, "r");
 
     ACCDBG(("Reading cache dump %s\n", scrapname ));
 
@@ -815,7 +815,7 @@ static void cache_dump_dir_read(int dir)
             }
         }
 
-	fclose(fh);
+	mmfclose(fh);
     }
 }
 
@@ -833,7 +833,7 @@ static void cache_dump_dir_write(int dir)
         return;
 
     sprintf(scrap_leaf_ptr, "%02d./cachedump", dir);
-    fh = fopen(scrapname, "w");
+    fh = mmfopen(scrapname, "w");
     if (fh)
     {
         int i;
@@ -871,7 +871,7 @@ static void cache_dump_dir_write(int dir)
 	    }
 	}
 
-	fclose(fh);
+	mmfclose(fh);
     }
     else
     {

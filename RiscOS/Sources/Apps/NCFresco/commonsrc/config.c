@@ -491,7 +491,7 @@ void config_read_file_by_name(const char *file_name)
     int i;
     FILE *fh;
 
-    fh = fopen(file_name, "r");
+    fh = mmfopen(file_name, "r");
 
     if (fh == NULL)
     {
@@ -569,7 +569,7 @@ void config_read_file_by_name(const char *file_name)
 	}
     }
 
-    fclose(fh);
+    mmfclose(fh);
 
     config_has_been_changed = 0;
 }
@@ -619,7 +619,7 @@ extern void config_write_file_by_name(const char *file_name)
     char *p;
     int x;
 
-    fh = fopen(file_name, "w");
+    fh = mmfopen(file_name, "w");
 
     if (fh == NULL)
     {
@@ -654,7 +654,7 @@ extern void config_write_file_by_name(const char *file_name)
 	}
     }
 
-    fclose(fh);
+    mmfclose(fh);
 
     config_has_been_changed = 0;
 }

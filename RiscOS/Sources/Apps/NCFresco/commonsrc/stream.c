@@ -309,7 +309,6 @@ BOOL stream_find_item_location(be_item ti, int *xx, int *yy)
     rid_pos_item *pi = ti->line;
     rid_text_item *ti2;
     int hpos;
-    rid_text_item *float_l, *float_r;
     int found = FALSE;
 
     /* Until we are formatted the item has no location */
@@ -318,47 +317,40 @@ BOOL stream_find_item_location(be_item ti, int *xx, int *yy)
 
     hpos=pi->left_margin;
 
-    float_l = float_r = NULL;
-
     if (pi->floats)
     {
+	rid_float_item *fi;
+
 	LOCATEDBG((stderr, "Have floats\n"));
 
-	if (pi->floats->left)
-	{
-	    LOCATEDBG((stderr, "Left float: left->ti=%p, left->pi=%p\n",
-		    pi->floats->left->ti, pi->floats->left->pi));
+        for ( fi = pi->floats->left; fi; fi = fi->next )
+        {
+            if ( ti == fi->ti )
+            {
+                hpos = fi->entry_margin;
+                found = TRUE;
+                break;
+            }
+        }
 
-	    float_l = pi->floats->left->ti;
-	    /* pdh: not with the new formatter it doesn't
-	    hpos += float_l->width;
-	     */
-	}
-	if (pi->floats->right)
-	{
-	    LOCATEDBG((stderr, "Right float: right->ti=%p, right->pi=%p\n",
-		    pi->floats->right->ti, pi->floats->right->pi));
+        if ( !found )
+            for ( fi = pi->floats->right; fi; fi = fi->next )
+            {
+                if ( ti == fi->ti )
+                {
+                    hpos = fi->entry_margin - ti->width;
+                    found = TRUE;
+                }
+            }
 
-	    float_r = pi->floats->right->ti;
-	}
+        if ( found )
+                *yy = pi->top - ti->max_up;
     }
 
-    *yy = pi->top - pi->max_up;
+    if ( !found )
+    {
+        *yy = pi->top - pi->max_up;
 
-    if (ti == float_l)
-    {
-	hpos = 0;
-	*yy = pi->top - ti->max_up;
-	found = TRUE;
-    }
-    else if (ti == float_r)
-    {
-	hpos = pi->st->fwidth - ti->width;
-	*yy = pi->top - ti->max_up;
-	found = TRUE;
-    }
-    else
-    {
 	for (ti2 = pi->first;
 	     ti2 && ti2 != pi->next->first;
 	     ti2 = rid_scanf(ti2) )
