@@ -53,30 +53,3 @@ ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}
 
 # Dynamic dependencies:
-rm.NetFiler: Version
-rm.NetFiler: Hdr:ListOpts
-rm.NetFiler: Hdr:Macros
-rm.NetFiler: Hdr:System
-rm.NetFiler: Hdr:SWIs
-rm.NetFiler: Hdr:CPU.Generic26
-rm.NetFiler: Hdr:IO.GenericIO
-rm.NetFiler: Hdr:RISCOS
-rm.NetFiler: Hdr:CMOS
-rm.NetFiler: Hdr:ModHand
-rm.NetFiler: Hdr:FSNumbers
-rm.NetFiler: Hdr:HighFSI
-rm.NetFiler: Hdr:NewErrors
-rm.NetFiler: Hdr:PublicWS
-rm.NetFiler: Hdr:Wimp
-rm.NetFiler: Hdr:WimpSpace
-rm.NetFiler: Hdr:Messages
-rm.NetFiler: Hdr:Sprite
-rm.NetFiler: Hdr:VduExt
-rm.NetFiler: Hdr:Econet
-rm.NetFiler: Hdr:Proc
-rm.NetFiler: Hdr:Services
-rm.NetFiler: Hdr:Variables
-rm.NetFiler: Hdr:MsgTrans
-rm.NetFiler: Hdr:MsgMenus
-rm.NetFiler: Hdr:ResourceFS
-rm.NetFiler: Hdr:NDRDebug

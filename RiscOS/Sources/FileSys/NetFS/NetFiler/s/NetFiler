@@ -89,14 +89,21 @@
 ;;                      G-RO-5199 - moves caret to end in writable icon
 ;; 15-Jan-94 NK 0.72    Made station number (in full info display) separate icon
 ;;                      so that fancy font desktops look tidier.
+;; 29-May-97 RL 0.76    Allow file saves to root directory by dragging onto
+;;                      iconbar icon.
+;; 15-Jan-98 RL 0.77    Issues Message_FilerDevicePath if files are dragged onto
+;;                      it's icon.
 ;;----------------------------------------------------------------------------
 
 Module_BaseAddr
-        GET     Version
+        GET     VersionASM
+	GBLA	Version
+Version	SETA	Module_Version
 
         GET     Hdr:ListOpts
         GET     Hdr:Macros
         GET     Hdr:System
+	GET	Hdr:Machine.<Machine>
         GET     Hdr:CMOS
         GET     Hdr:ModHand
         GET     Hdr:FSNumbers
@@ -137,6 +144,9 @@ logontask2      SETL    False
 
                 GBLL    enablecache     ; Call enable cache after fs list.
 enablecache     SETL    True            ; Set to true to make L4FS version.
+
+                GBLL    DragsToIconBar  ; RML: Are drags from save boxes/filer windows 
+DragsToIconBar  SETL    {TRUE}          ;      to our icon allowed?
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
@@ -392,7 +402,10 @@ m_fsmenu_width  #       4               ; for adjusting variable menu width
 
        AlignSpace       64
 
-userdata        #       &100            ; NB &138 are used for logon dbox
+userdata_size   *       &200
+userdata        #       userdata_size            ; NB &138 are used for logon dbox
+
+filenamebuffer  #       &100
 
 stackbot        #       &300
 stacktop        #       0
@@ -439,7 +452,12 @@ NetFiler_WorkspaceSize *  :INDEX: @
 NetFiler_HelpString
         DCB     "NetFiler"
         DCB     TAB
-        DCB     "$VString ($Date)", 0
+        DCB     "$Module_MajorVersion ($Module_Date)"
+      [ Module_MinorVersion <> ""
+        =       " $Module_MinorVersion"
+      ]
+        DCB     0
+
 
  [ International_Help=0
 Desktop_NetFiler_Help
@@ -471,6 +489,12 @@ MessagesList    DCD     Message_SaveDesktop
                 DCD     Message_HelpRequest
                 DCD     Message_MenuWarning
                 DCD     Message_Notify
+
+                [ DragsToIconBar
+                DCD     Message_DataSave
+                DCD     Message_DataLoad
+                ]
+
                 DCD     0
       ]
 
@@ -508,8 +532,48 @@ ErrorBlock_CantStartNetFiler
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
+NetFiler_ServiceTable
+        DCD     0
+        DCD     NetFiler_ServiceMain - Module_BaseAddr
+
+        DCD     Service_Reset                   ; Must be ascending order
+        DCD     Service_ModeChange
+        DCD     Service_StartFiler
+        DCD     Service_StartedFiler
+        DCD     Service_FilerDying
+        DCD     Service_NetFS
+      [ Version >= 40
+        DCD     Service_MessageFileClosed
+      ]
+ [ :DEF:Include_Messages
+      [ Version >= 48
+        DCD     Service_ResourceFSStarting
+      ]
+ ]
+        DCD     0
+
+        DCD     NetFiler_ServiceTable - Module_BaseAddr
+
 NetFiler_Service ROUT
 
+        MOV     r0, r0
+        TEQ     r1, #Service_Reset
+      [ Version >= 40
+        TEQNE   r1, #Service_MessageFileClosed
+      ]
+ [ :DEF:Include_Messages
+      [ Version >= 48
+        TEQNE   r1, #Service_ResourceFSStarting
+      ]
+ ]
+        TEQNE   r1, #Service_FilerDying
+        TEQNE   r1, #Service_StartFiler
+        TEQNE   r1, #Service_StartedFiler
+        TEQNE   r1, #Service_ModeChange
+        TEQNE   r1, #Service_NetFS
+        MOVNES  pc, lr
+
+NetFiler_ServiceMain
         TEQ     r1, #Service_Reset
         BEQ     NetFiler_Service_Reset
 
@@ -541,9 +605,9 @@ NetFiler_Service ROUT
         TEQ     r1, #Service_ModeChange
         BEQ     NetFiler_Service_ModeChange
 
-        TEQ     r1, #Service_NetFS
+        ;TEQ     r1, #Service_NetFS
       [ Version >= 29
-        MOVNE   pc, lr
+        ;MOVNE   pc, lr
 
         Push    "lr"
         SETPSR  I_bit, r14
@@ -552,7 +616,8 @@ NetFiler_Service ROUT
         STR     r14, recacheflag
         Pull    "pc",,^
       |
-        STREQ   r1, recacheflag
+        ;STREQ   r1, recacheflag
+        STR     r1, recacheflag
         MOV     pc, lr
       ]
 
@@ -4277,6 +4342,16 @@ event_user_message ENTRY
         BEQ     SaveDesktop
       ]
 
+      [ DragsToIconBar
+        LDR     r14, =Message_DataSave
+        CMP     r0, r14
+        BEQ     message_datasave
+
+        LDR     r14, =Message_DataLoad
+        CMP     r0, r14
+        BEQ     message_dataload
+      ]
+
       [ givehelp
         LDR     r14, =Message_HelpRequest
         CMP     r0, r14
@@ -4294,6 +4369,9 @@ event_user_message ENTRY
         EXIT
 
         LTORG
+
+
+
 
 ;............................................................................
 
@@ -4662,6 +4740,176 @@ ReportError ENTRY "r2,r4,r5"
         SWI     Wimp_ReportError
         ADD     sp, sp, #NetFiler_MaxBannerSize
         EXIT
+
+
+ [ DragsToIconBar
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; message_datasave
+;
+; handles the datasave message for when a user drags a file onto an iconbar icon
+; to save.
+;
+; In: r1 -> wimp event structure
+;
+; Out : registers may be corrupted - going back to wimp poll.
+
+message_datasave 
+
+        MOV     r5, r1                   ; Stick r1 into r5 for later
+
+        ; Copy the name specified in the message to the filenamebuffer
+        Push    "r1"
+        ADR     r1, filenamebuffer
+        ADD     r2, r5, #44
+        BL      strcpy
+        Pull    "r1"
+        
+        ; Make up a filename
+        LDR     r4, [r1, #24]            ; icon handle
+        BL      matchiconbar             ; returns r2 -> fs block
+        ADD     r1, r5, #44 
+        BL      GetPathName              ; Put pathname in message block data field
+        MOV     r2, #256                 ; maximum length for append_dotdefaultpath
+        BL      append_dotdefaultpath    ; add '.<ADFSFiler$DefaultPath>' (if it exists)
+        MOV     r0, #46
+        STRB    r0, [r1], #1             ; add a '.'
+        ADR     r2, filenamebuffer
+        BL      strcpy_advance           ; add the filename specified by the datasave message
+
+        ; send a DataSaveAck message specifying the new pathname
+        MOV     r1, r5                   ; stick wimp event structure pointer back in r1
+        MOV     r0, #256
+        STR     r0, [r1]
+        LDR     r0, [r1, #8]
+        STR     r0, [r1, #12]            ; Your ref.
+        MOV     r0, #Message_DataSaveAck
+        STR     r0, [r1, #16]            ; Message action
+        LDR     r2, [r1, #4]             ; task handle of sender (to send back to)
+        MOV     r0, #17                  ; event code
+        SWI     Wimp_SendMessage
+
+        Pull    "pc"
+
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; message_dataload
+;
+; handles dataload messages
+;
+; In: r1 -> wimp event structure
+;
+; Out : registers may be corrupted - going back to wimp poll.
+
+message_dataload
+
+        LDR     r4, [r1, #24]            ; icon handle (for opening viewer)
+
+; Check why we've got this message
+
+        LDR     r0, [r1, #12]
+        CMP     r0, #0                   ; we only send a DataLoadAck if the DataLoad
+        BNE     %FT10                    ; was in reply to a DataSaveAck
+
+; Case 1: Message is because user has tried to copy a selection of files to an
+; icon bar device, so send a Message_FilerDevicePath.
+
+        LDR     r6, [r1, #4]                 ; task handle of sender (to send back to)
+        MOV     r5, r1                       ; store message block pointer in r5
+ 
+        MOV     r0, #256
+        STR     r0, [r1]                     ; Length of message
+        MOV     r0, #0
+        STR     r0, [r1, #12]                ; Your ref.
+        LDR     r0, =Message_FilerDevicePath ; Message action
+        STR     r0, [r1, #16]                ; Message action
+
+        BL      matchiconbar                 ; returns r2 -> fs block
+        BNE     %FT50                        ; Can't find
+        ADD     r1, r5, #20
+        BL      GetPathName                  ; Put pathname in message block data field
+        MOV     r2, #256                     ; maximum size we'll allow for media name + default path
+        BL      append_dotdefaultpath        ; Append NetFiler$DefaultPath
+
+        MOV     r1, r5                       ; location of message data
+        MOV     r2, r6                       ; task handle of sender (to send back to)
+        MOV     r0, #17                      ; event code
+        SWI     XWimp_SendMessage            ; send the message 
+        B       %FT20
+
+; Case 2: Message is part of a save protocol, because user has saved a file
+; to an icon bar device, so send the Message_DataLoadAck.      
+10
+        LDR     r0, [r1, #8]
+        STR     r0, [r1, #12]            ; Your ref.
+        MOV     r0, #Message_DataLoadAck
+        STR     r0, [r1, #16]            ; Message action
+        LDR     r2, [r1, #4]             ; task handle of sender (to send back to)
+        MOV     r0, #17                  ; event code
+        SWI     Wimp_SendMessage
+
+; Open the directory viewer of the dir we're copying/saving to.
+20
+        BL      matchiconbar             ; returns r2 -> fs block
+        BNE     %FT50
+        BL      GetPathName
+        MOV     r2, #256                     ; maximum size we'll allow for media name + default path
+        BL      append_dotdefaultpath
+        BL      fileropendir
+        
+50        
+        Pull    "pc"
+
+
+netfiler_defaultpath DCB "NetFiler$DefaultPath",0
+
+; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; append_dotdefaultpath
+; 
+; Read value of NetFiler$DefaultPath and append it to the path in r1
+; (ie. does string1 becomes string1.value)
+; 
+; In: r1 -> destination buffer
+;     r2 -> size of buffer
+;
+; Out: r0 = corrupted
+;      r1 -> next free byte in buffer
+;      r2 = corrupted.
+;      All other regs preserved.
+
+append_dotdefaultpath ENTRY "r3-r7"
+
+        MOV     r7, r1
+        MOV     r6, r2
+
+        ADR     r0, netfiler_defaultpath
+        MOV     r2, #-1
+        MOV     r3, #0
+        MOV     r4, #0
+        SWI     XOS_ReadVarVal
+        CMP     r2, #0
+        EXIT    EQ                       ; exit if variable doesn't exist
+        
+        MVN     r0, r2
+        ADD     r0, r0, #1
+        CMP     r0, r6
+        EXIT    GT                       ; exit if buffer not big enough
+
+        ADR     r0, netfiler_defaultpath
+        ADD     r1, r7, #1
+        MOV     r2, #256
+        MOV     r3, #0
+        MOV     r4, #0
+        SWI     XOS_ReadVarVal           ; Put variable into buffer, leaving room for '.'
+
+        ADD     r1, r1, r2
+        MOV     r0, #46
+        STRB    r0, [r7]                 ; Put '.' before variable's value
+        MOV     r0, #0
+        STRB    r0, [r1]                 ; Put NULL at end of whole string.
+        
+        EXIT        
+ ]
+
 
 ; +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
