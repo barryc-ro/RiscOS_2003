@@ -4,7 +4,7 @@
 #
 #	FILE:		Makefile
 #	AUTHOR:		Richard D. Warren
-#	VERSION:	0.14 for RISC OS
+#	VERSION:	0.15 for RISC OS
 #
 #	OVERVIEW
 #	========
@@ -34,191 +34,78 @@
 #					quotedprintable added to OBJS, HDRS, OBSSZ, OBJSD
 #					-zps1 removed from module build so library will work in
 #					module wrapped application
+#	24/10/98	0.15		better MemCheck build support added.  MemCheck output is
+#					EmailLibMC
+#					Makefile system changed over to Ben's cunning
+#					2 level makefile
 
-#
-# Paths
-#
-EXP_HDR		= <export$dir>
-LIBDIR		= <Lib$Dir>
-EXPORT_PDIR     = <Lib$Dir>.Email
-EXPORT_DIR	= ${EXPORT_PDIR}.EmailLib
 
-#
-# Generic options:
-#
-MKDIR   = cdir
-AS      = objasm -tb
-CC      = cc
-C++     = c++
-CMHG    = cmhg
-CP      = copy
-LD      = link
-RM      = remove
-MODSQZ  = modsqz
-WIPE    = -wipe
-CD	= dir
-LIBFILE = libfile
-#MemCheckCC	= MemCheck.CC
 
-CPFLAGS = ~cfr~v
-WFLAGS = ~c~v
+# ------------------------------------------------------------------------------
+# Generic options
+#
 
-#
-# Include files
-#
-INCLUDES=	C:,<Lib$Dir>.C++Lib
+RM		= remove
 
+
+# ------------------------------------------------------------------------------
+# Program specific options
 #
-# Program specific options:
-#
+
 COMPONENT	= EmailLib
-TARGET		= EmailLib
-TARGETD		= EmailLibd
-TARGETZ		= EmailLibzm
-
-# app or module definitions
-
-
-# You may want to link with TinyStubs. if you do, set LD to tlink and
-# uncomment this TINYSTUBS, and comment out the STUBS
-
-TINYSTUBS=	#-DTINYSTUBS
-STUBS=		C:o.Stubs
-
-ROMCSTUBS=      RISC_OSLib:o.romcstubs
-ABSSYM=         RISC_OSLib:o.AbsSym
-
-C++LIB=		C:o.c++lib 
-
-#DEBUG=		#-DMEMCHECK #-DDEBUGLIB
-
-CFLAGS=		-ffah -I${INCLUDES} ${DEBUG}\
-		-Wp -depend !Depend -c ${THROWBACK} ${TINYSTUBS}
-
-C++FLAGS=	-ffa -I${INCLUDES} ${DEBUG}\
-		-Wp -depend !Depend -c ${THROWBACK} ${TINYSTUBS}		
-
-ASMFLAGS=       
-
-HDRS=		h.822parser body.h bodymulti.h contentT.h contentTE.h date.h elibbase.h entity.h \
-		from.h header.h headers.h messageid.h MIMEentity.h MIMEimage.h MIMEmultip.h mimevers.h \
-		parameter.h replyto.h resentdate.h rfc822msg.h to.h XNFdevice.h XNFdevicec.h \
-		XNFfaxnum.h XNFfaxpage.h XNFmsgclas.h XNFphoneno.h XNFserial.h XNFsoftrev.h Xorganiz.h \
-		subject.h base64.h ELib.h ELib_priv.h MIMEtext.h ELib_OS.h XNFrtnrcpt.h \
-		@.qautils.h.list @.qautils.h.olist @.qautils.h.indxlist mailbox.h cc.h quotedprintable.h
-
-OBJS=		o.822parser body.o bodymulti.o contentT.o contentTE.o date.o elibbase.o entity.o \
-		from.o header.o headers.o messageid.o MIMEentity.o MIMEimage.o MIMEmultip.o mimevers.o \
-		parameter.o replyto.o resentdate.o rfc822msg.o to.o XNFdevice.o XNFdevicec.o \
-		XNFfaxnum.o XNFfaxpage.o XNFmsgclas.o XNFphoneno.o XNFserial.o XNFsoftrev.o Xorganiz.o \
-		subject.o base64.o ELib.o ELib_priv.o MIMEtext.o ELib_OS.o XNFrtnrcpt.o mailbox.o cc.o \
-		quotedprintable.o
-
-OBJSZ=		z.822parser z.body z.bodymulti z.contentT z.contentTE z.date z.elibbase z.entity \
-		z.from z.header z.headers z.messageid z.MIMEentity z.MIMEimage z.MIMEmultip z.mimevers \
-		z.parameter z.replyto z.resentdate z.rfc822msg z.to z.XNFdevice z.XNFdevicec \
-		z.XNFfaxnum z.XNFfaxpage z.XNFmsgclas z.XNFphoneno z.XNFserial z.XNFsoftrev z.Xorganiz \
-		z.subject z.base64 z.ELib z.ELib_priv z.MIMEtext z.ELib_OS z.XNFrtnrcpt z.mailbox z.cc \
-		z.quotedprintable
-
-OBJSD =		od.822parser od.body od.bodymulti od.contentT od.contentTE od.date od.elibbase \
-		od.entity od.from od.header od.headers od.messageid od.MIMEentity od.MIMEimage \
-		od.MIMEmultip od.mimevers od.parameter od.replyto od.resentdate od.rfc822msg \
-		od.to od.XNFdevice od.XNFdevicec od.XNFfaxnum od.XNFfaxpage od.XNFmsgclas \
-		od.XNFphoneno od.XNFserial od.XNFsoftrev od.Xorganiz od.subject od.base64 od.ELib \
-		od.ELib_priv od.MIMEtext od.ELib_OS od.XNFrtnrcpt od.mailbox od.cc \
-		od.quotedprintable
-
-QAOBJS=		@.qautils.o.list @.qautils.o.olist @.qautils.o.indxlist
-
-QAOBJSZ=	@.qautils.z.list @.qautils.z.olist @.qautils.z.indxlist
+NORMAL_TARGET	= $(COMPONENT)
+MEMCHECK_TARGET	= $(COMPONENT)MC
+HIERPROF_TARGET	= $(COMPONENT)HP
+MODULE_TARGET	= $(COMPONENT)zm
+DEBUG_TARGET	= $(COMPONENT)d
 
 
+
+# ------------------------------------------------------------------------------
+# Build rules
 #
-# Rule patterns
-#
-.SUFFIXES:	.o .od .z .s .c .c++
-.c.o:;		$(MemCheckCC) $(CC) $(CFLAGS) -o $@ $<
-.c.od:;		$(MemCheckCC) $(CC) $(CFLAGS) -g -fn -o $@ $<
-.c.z:;		$(MemCheckCC) $(CC) $(CFLAGS) -zm -o $@ $<
-.c++.o:;	$(MemCheckCC) $(C++) $(C++FLAGS) -o $@ $<
-.c++.od:;	$(MemCheckCC) $(C++) $(C++FLAGS) +g -fn -o $@ $<
-.c++.z:;	$(MemCheckCC) $(C++) $(C++FLAGS) -zm -o $@ $<
-.s.o:;		$(AS) ${ASMFLAGS} -o $@ $<
 
-all: 		library
-        	@echo ${COMPONENT}: all complete
-        	
-library:	${TARGET} ${TARGETZ}
-		@echo ${COMPONENT}: library complete
+all:
+	@amu -f MainMake $(MFLAGS) TARGET=$(NORMAL_TARGET) EXT=o
+	@echo $(COMPONENT): build complete
 
-debug: 		export_hdrs ${TARGETD}
-		${CP}	${TARGETD}	${EXPORT_DIR}.o.${TARGETD}	${CPFLAGS}
-		@echo ${COMPONENT}: debug build complete
-		
-clean:		cleanqautils
-		$(WIPE) ${TARGET}	$(WFLAGS)
-		$(WIPE) ${TARGETZ}	$(WFLAGS)
-		$(WIPE) ${TARGETD}	$(WFLAGS)
-		$(WIPE) o.*		$(WFLAGS)
-		$(WIPE) od.*		$(WFLAGS)
-		$(WIPE) z.*		$(WFLAGS)
-		$(RM)   o
-		$(RM)   od
-		$(RM)   z
-		@echo $(COMPONENT): cleaned out
+debug:
+	@amu -f MainMake $(MFLAGS) TARGET=$(DEBUG_TARGET) EXT=od
+	@echo $(COMPONENT): debug build complete
 
-export: export_${PHASE}
+preprocess:
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=i
+	@echo $(COMPONENT): preprocessing complete
 
-export_hdrs: ${HDRS} dirs
-	${CP}	h.*		${EXPORT_DIR}.h.*		${CPFLAGS}
-	${CP}	qautils.h.*	${EXPORT_DIR}.qautils.h.*	${CPFLAGS}
-	@echo ${COMPONENT}: export complete (hdrs)
+export: export_$(PHASE)
 
-export_libs: ${TARGET} ${TARGETZ} dirs
-	${CP}	${TARGET}	${EXPORT_DIR}.o.${TARGET}	${CPFLAGS}
-	${CP}	${TARGETZ}	${EXPORT_DIR}.o.${TARGETZ}	${CPFLAGS}
-	@echo ${COMPONENT}: export complete (libs)
+export_hdrs:
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=AvoidAMUBug
+	@echo $(COMPONENT): export complete (hdrs)
 
-local_dirs:
-	${MKDIR} o
-	${MKDIR} od
-	${MKDIR} z
-
-dirs:
-	${MKDIR} ${LIBDIR}
-	${MKDIR} ${EXPORT_PDIR}
-	${MKDIR} ${EXPORT_DIR}
-	${MKDIR} ${EXPORT_DIR}.h
-	${MKDIR} ${EXPORT_DIR}.o
-	${MKDIR} ${EXPORT_DIR}.qautils
-	${MKDIR} ${EXPORT_DIR}.qautils.h
-
-
-#
-# Target 
-#
-${TARGET}:	$(OBJS) qautils local_dirs
-		$(LIBFILE) -c -o $(TARGET) $(OBJS) $(QAOBJS)
-
-${TARGETZ}:	$(OBJSZ) qautils local_dirs
-		$(LIBFILE) -c -o $(TARGETZ) $(OBJSZ) $(QAOBJSZ)
-
-${TARGETD}:	${OBJSD} qautils local_dirs
-		$(LIBFILE) -c -o $(TARGETD) $(OBJSD) $(QAOBJS)
-
-#
-# Some rules that need explicitly declaring
-#
-qautils:
-        Dir qautils
-        Amu
-        Up
-        
-cleanqautils:
-        Dir qautils
-	Amu -f Makefile clean
-	Up
+export_libs:
+	@amu -f MainMake $(MFLAGS) TARGET=$(NORMAL_TARGET) EXT=o
+	@amu -f MainMake $(MFLAGS) TARGET=$(MODULE_TARGET) EXT=z
+	@echo $(COMPONENT): export complete (libs)
 	
-# Dynamic dependencies:
-
+export_libsMC:
+	@amu -f MainMake $(MFLAGS) MemCheckCC=MemCheck.CC TARGET=$(MEMCHECK_TARGET) EXT=oMC
+	@echo $(COMPONENT): export complete (MemCheck libs)
+	
+export_libsHP:
+	@amu -f MainMake $(MFLAGS) TARGET=$(HIERPROF_TARGET) EXT=oHP
+	@echo $(COMPONENT): export complete (HierProf libs)
+	
+clean:
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=o
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=oMC
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=oHP
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=od
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=i
+	@amu -f MainMake $(MFLAGS) TARGET=AvoidAMUBug EXT=z
+	@$(RM) $(NORMAL_TARGET)
+	@$(RM) $(MEMCHECK_TARGET)
+	@$(RM) $(HIERPROF_TARGET)
+	@$(RM) $(MODULE_TARGET)
+	@$(RM) $(DEBUG_TARGET)
+	@echo $(COMPONENT): cleaned
