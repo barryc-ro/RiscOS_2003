@@ -1,58 +1,71 @@
-/* -*-C-*-
- *
- * $Header$
- * $Source$
- *
- * Copyright(c) 1994 Acorn Computers Ltd., Cambridge, England
- *
- * $Log$
- * Revision 1.3  95/03/31  12:04:43  kwelton
- * Added some debugs to sowakeup().
- * 
- * Revision 1.2  94/12/14  16:00:17  kwelton
- * The DCI 4 version of the Net module cedes ownership of the mbuf chain
- * passed to it via rsignal in sorxdirect() to the appropriate device
- * driver, so it is no longer the reponsibility of this module to free
- * the chain.
- * 
- * Revision 1.1  94/12/02  11:47:50  kwelton
- * Initial revision
- * 
- */
 /*
- * Copyright (c) 1983, 1986 Regents of the University of California.
- * All rights reserved.
+ * Copyright (c) 1982, 1986, 1988, 1990, 1993
+ *	The Regents of the University of California.  All rights reserved.
  *
- * Redistribution and use in source and binary forms are permitted
- * provided that the above copyright notice and this paragraph are
- * duplicated in all such forms and that any documentation,
- * advertising materials, and other materials related to such
- * distribution and use acknowledge that the software was developed
- * by the University of California, Berkeley.  The name of the
- * University may not be used to endorse or promote products derived
- * from this software without specific prior written permission.
- * THIS SOFTWARE IS PROVIDED ``AS IS'' AND WITHOUT ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED
- * WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ * 3. All advertising materials mentioning features or use of this software
+ *    must display the following acknowledgement:
+ *	This product includes software developed by the University of
+ *	California, Berkeley and its contributors.
+ * 4. Neither the name of the University nor the names of its contributors
+ *    may be used to endorse or promote products derived from this software
+ *    without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
  *
  */
-#include "sys/param.h"
-#include "sys/systm.h"
-#include "sys/dir.h"
-#include "sys/file.h"
-#include "sys/buf.h"
-#include "sys/user.h"
-#include "sys/proc.h"
-#include "sys/mbuf.h"
-#include "sys/protosw.h"
-#include "sys/socket.h"
-#include "sys/socketvar.h"
+
+#include <string.h>
+
+#include <sys/param.h>
+#include <sys/systm.h>
+#include <sys/proc.h>
+#include <sys/file.h>
+#include <sys/buf.h>
+#include <sys/malloc.h>
+#include <sys/mbuf.h>
+#include <sys/protosw.h>
+#include <sys/stat.h>
+#include <sys/socket.h>
+#include <sys/socketvar.h>
+#include <sys/signalvar.h>
 
 #include "debug.h"
+#include "module.h"
+
+#ifdef SOCKBUF_DEBUG
+void sbcheck(struct sockbuf *);
+#endif
 
 /*
  * Primitive routines for operating on sockets and socket buffers
  */
+
+/* strings for sleep message: */
+char	netio[] = "netio";
+char	netcon[] = "netcon";
+char	netcls[] = "netcls";
+
+u_long	sb_max = SB_MAX;		/* patchable */
+
+static	u_long sb_efficiency = 8;	/* parameter for sbreserve() */
 
 /*
  * Procedures to manipulate state flags of socket
@@ -84,36 +97,35 @@
  * cause software-interrupt process scheduling.
  */
 
+void
 soisconnecting(so)
 	register struct socket *so;
 {
 
 	so->so_state &= ~(SS_ISCONNECTED|SS_ISDISCONNECTING);
 	so->so_state |= SS_ISCONNECTING;
-	wakeup((caddr_t)&so->so_timeo);
 }
 
+void
 soisconnected(so)
 	register struct socket *so;
 {
 	register struct socket *head = so->so_head;
 
-	if (head) {
-		if (soqremque(so, 0) == 0) {
-			panic("soisconnected");
-			return;
-		}
+	so->so_state &= ~(SS_ISCONNECTING|SS_ISDISCONNECTING|SS_ISCONFIRMING);
+	so->so_state |= SS_ISCONNECTED;
+	if (head && soqremque(so, 0)) {
 		soqinsque(head, so, 1);
 		sorwakeup(head);
 		wakeup((caddr_t)&head->so_timeo);
+	} else {
+		wakeup((caddr_t)&so->so_timeo);
+		sorwakeup(so);
+		sowwakeup(so);
 	}
-	so->so_state &= ~(SS_ISCONNECTING|SS_ISDISCONNECTING);
-	so->so_state |= SS_ISCONNECTED;
-	wakeup((caddr_t)&so->so_timeo);
-	sorwakeup(so);
-	sowwakeup(so);
 }
 
+void
 soisdisconnecting(so)
 	register struct socket *so;
 {
@@ -125,6 +137,7 @@ soisdisconnecting(so)
 	sorwakeup(so);
 }
 
+void
 soisdisconnected(so)
 	register struct socket *so;
 {
@@ -142,74 +155,71 @@ soisdisconnected(so)
  * connection is possible (subject to space constraints, etc.)
  * then we allocate a new structure, propoerly linked into the
  * data structure of the original socket, and return this.
+ * Connstatus may be 0, or SO_ISCONFIRMING, or SO_ISCONNECTED.
+ *
+ * Currently, sonewconn() is defined as sonewconn1() in socketvar.h
+ * to catch calls that are missing the (new) second parameter.
  */
 struct socket *
-sonewconn(head)
+sonewconn1(head, connstatus)
 	register struct socket *head;
+	int connstatus;
 {
 	register struct socket *so;
-	register struct mbuf *m;
+	int soqueue = connstatus ? 1 : 0;
 
 	if (head->so_qlen + head->so_q0len > 3 * head->so_qlimit / 2)
-		goto bad;
-#ifdef OldCode
-	m = m_getclr(M_DONTWAIT, MT_SOCKET);
-	if (m == NULL)
-		goto bad;
-#else
-	if( (m = ALLOC_C(MINCONTIG, NULL)) == NULL )
-	{
-#ifdef DEBUG
-	    if( DODEBUG(DBGMMAN) )
-		Printf("sonewconn: ALLOC_C failed\n");
-#endif
-	    goto bad;
-	}
-
-	m->m_type = MT_SOCKET;
-#endif
-	so = mtod(m, struct socket *);
+		return ((struct socket *)0);
+	MALLOC(so, struct socket *, sizeof(*so), M_SOCKET, M_DONTWAIT);
+	if (so == NULL)
+		return ((struct socket *)0);
+	bzero((caddr_t)so, sizeof(*so));
 	so->so_type = head->so_type;
 	so->so_options = head->so_options &~ SO_ACCEPTCONN;
 	so->so_linger = head->so_linger;
 	so->so_state = head->so_state | SS_NOFDREF;
 	so->so_proto = head->so_proto;
 	so->so_timeo = head->so_timeo;
-	so->so_pgrp = head->so_pgrp;
-	(void) soreserve(so, head->so_snd.sb_hiwat, head->so_snd.sb_hiwat);
-	soqinsque(head, so, 0);
+	so->so_pgid = head->so_pgid;
+	(void) soreserve(so, head->so_snd.sb_hiwat, head->so_rcv.sb_hiwat);
+	soqinsque(head, so, soqueue);
 	if ((*so->so_proto->pr_usrreq)(so, PRU_ATTACH,
 	    (struct mbuf *)0, (struct mbuf *)0, (struct mbuf *)0)) {
-		(void) soqremque(so, 0);
-#ifdef OldCode
-		(void) m_free(m);
-#else
-		FREE(m);
-#endif
-		goto bad;
+		(void) soqremque(so, soqueue);
+		(void) free((caddr_t)so, M_SOCKET);
+		return ((struct socket *)0);
+	}
+	if (connstatus) {
+		sorwakeup(head);
+		wakeup((caddr_t)&head->so_timeo);
+		so->so_state |= connstatus;
 	}
 	return (so);
-bad:
-	return ((struct socket *)0);
 }
 
+void
 soqinsque(head, so, q)
 	register struct socket *head, *so;
 	int q;
 {
 
+	register struct socket **prev;
 	so->so_head = head;
 	if (q == 0) {
 		head->so_q0len++;
-		so->so_q0 = head->so_q0;
-		head->so_q0 = so;
+		so->so_q0 = 0;
+		for (prev = &(head->so_q0); *prev; )
+			prev = &((*prev)->so_q0);
 	} else {
 		head->so_qlen++;
-		so->so_q = head->so_q;
-		head->so_q = so;
+		so->so_q = 0;
+		for (prev = &(head->so_q); *prev; )
+			prev = &((*prev)->so_q);
 	}
+	*prev = so;
 }
 
+int
 soqremque(so, q)
 	register struct socket *so;
 	int q;
@@ -222,7 +232,7 @@ soqremque(so, q)
 		next = q ? prev->so_q : prev->so_q0;
 		if (next == so)
 			break;
-		if (next == head)
+		if (next == 0)
 			return (0);
 		prev = next;
 	}
@@ -248,6 +258,7 @@ soqremque(so, q)
  * Data queued for reading in the socket may yet be read.
  */
 
+void
 socantsendmore(so)
 	struct socket *so;
 {
@@ -256,6 +267,7 @@ socantsendmore(so)
 	sowwakeup(so);
 }
 
+void
 socantrcvmore(so)
 	struct socket *so;
 {
@@ -265,65 +277,53 @@ socantrcvmore(so)
 }
 
 /*
- * Socket select/wakeup routines.
+ * Wait for data to arrive at/drain from a socket buffer.
  */
-
-/*
- * Queue a process for a select on a socket buffer.
- */
-sbselqueue(sb)
+int
+sbwait(sb, noblock)
 	struct sockbuf *sb;
+	int noblock;
 {
-	register struct proc *p;
 
-	if ((p = sb->sb_sel) && p->p_wchan == (caddr_t)&selwait)
-		sb->sb_flags |= SB_COLL;
-	else
-		sb->sb_sel = u.u_procp;
+	sb->sb_flags |= SB_WAIT;
+	return (tsleep((caddr_t)&sb->sb_cc,
+	    (sb->sb_flags & SB_NOINTR) ? PSOCK : PSOCK | PCATCH, netio,
+	    sb->sb_timeo, noblock));
 }
 
 /*
- * Wait for data to arrive at/drain from a socket buffer.
+ * Lock a sockbuf already known to be locked;
+ * return any error returned from sleep (EINTR).
  */
-int sbwait(sb)
-	struct sockbuf *sb;
+int
+sb_lock(sb)
+	register struct sockbuf *sb;
 {
-	int r;
+	int error;
 
-	sb->sb_flags |= SB_WAIT;
-	r = sleep((caddr_t)&sb->sb_cc, PZERO+1);
-	if (r != 0)
-		sb->sb_flags &= ~SB_WAIT;
-	return (r);
+	while (sb->sb_flags & SB_LOCK) {
+		sb->sb_flags |= SB_WANT;
+		error = tsleep((caddr_t)&sb->sb_flags,
+		    (sb->sb_flags & SB_NOINTR) ? PSOCK : PSOCK|PCATCH,
+		    netio, 0, 0);
+		if (error)
+			return (error);
+	}
+	sb->sb_flags |= SB_LOCK;
+	return (0);
 }
 
 /*
  * Wakeup processes waiting on a socket buffer.
- */
-sbwakeup(sb)
-	register struct sockbuf *sb;
-{
-	if (sb->sb_sel) {
-		selwakeup(sb->sb_sel, sb->sb_flags & SB_COLL);
-		sb->sb_sel = 0;
-		sb->sb_flags &= ~SB_COLL;
-	}
-	if (sb->sb_flags & SB_WAIT) {
-		sb->sb_flags &= ~SB_WAIT;
-		wakeup((caddr_t)&sb->sb_cc);
-	}
-}
-
-/*
- * Wakeup socket readers and writers.
  * Do asynchronous notification via SIGIO
  * if the socket has the SS_ASYNC flag set.
  */
+void
 sowakeup(so, sb)
 	register struct socket *so;
-	struct sockbuf *sb;
+	register struct sockbuf *sb;
 {
-	register struct proc *p;
+	struct proc *p;
 
 #ifdef DEBUG
 	/*
@@ -331,31 +331,41 @@ sowakeup(so, sb)
 	 *
 	 * HACK HACK HACK
 	 *
-	 * pgrp is coded as socket descriptor + 1: use
+	 * pgid is coded as socket descriptor + 1: use
 	 * this feature in the debug output
 	 */
 	if( DODEBUG(DBGSOCKIP) )
 	    Printf("so%cwakeup: socket %d\n",
 		   (sb == &(so->so_snd)) ? 'w' : 'r',
-		   ((so->so_pgrp < 0) ? -(so->so_pgrp) : so->so_pgrp) - 1);
+		   ((so->so_pgid < 0) ? -(so->so_pgid) : so->so_pgid) - 1);
 #endif
 
-	sbwakeup(sb);
+	selwakeup(&sb->sb_sel);
+	sb->sb_flags &= ~SB_SEL;
+	if (sb->sb_flags & SB_WAIT) {
+		sb->sb_flags &= ~SB_WAIT;
+		wakeup((caddr_t)&sb->sb_cc);
+	}
+	/*
+	 * Under RISC OS, it is important not to send "signals" for sockets
+	 * with no socket number
+	 */
 	if (so->so_state & SS_ASYNC) {
 #ifdef DEBUG
-		if( DODEBUG(DBGSOCKIP) )
+		if (DODEBUG(DBGSOCKIP))
 		    Printf("sowakeup: %csignal\n",
-			   (so->so_pgrp < 0) ? 'g' : 'p');
+			   (so->so_pgid < 0) ? 'g' : 'p');
 #endif
 
-		if (so->so_pgrp < 0)
-			gsignal(-so->so_pgrp, SIGIO);
-		else if (so->so_pgrp > 0 && (p = pfind(so->so_pgrp)) != 0)
+		if (so->so_pgid < 0)
+			gsignal(-so->so_pgid, SIGIO);
+		else if (so->so_pgid > 0 && (p = pfind(so->so_pgid)) != 0)
 			psignal(p, SIGIO);
 	}
 }
 
-int sorxdirect(so, m, sa, laddr, esrc, unit, swinum)
+int
+sorxdirect(so, m, sa, laddr, esrc, unit, swinum)
 	struct socket *so;
 	struct mbuf *m;
 	struct sockaddr *sa;
@@ -364,15 +374,20 @@ int sorxdirect(so, m, sa, laddr, esrc, unit, swinum)
 	int unit, swinum;
 {
 	register struct proc *p;
+#ifdef QuickMNSAcks
 	struct mbuf *udp_setup_ack();
+#endif
 	struct mbuf *n = 0;
 
 	if (so && so->so_state & SS_RXDIRECT) {
-		if (so->so_pgrp > 0 && (p = pfind(so->so_pgrp)) != 0) {
+		if (so->so_pgid > 0 && (p = pfind(so->so_pgid)) != 0) {
+#ifdef QuickMNSAcks
 			if (esrc && m->m_len > 8)
 			    n = udp_setup_ack(m, sa, laddr);
-			rsignal(p, (int)m, (int)sa, (int)esrc,
-				unit, swinum, (int)n);
+#else
+			esrc = 0;
+#endif
+			rsignal(p, m, sa, esrc, unit, swinum, n);
 
 			/*
 			 * 941207 KWelton
@@ -410,7 +425,7 @@ int sorxdirect(so, m, sa, laddr, esrc, unit, swinum)
  *
  * Data stored in a socket buffer is maintained as a list of records.
  * Each record is a list of mbufs chained together with the m_next
- * field.  Records are chained together with the m_act field. The upper
+ * field.  Records are chained together with the m_nextpkt field. The upper
  * level routine soreceive() expects the following conventions to be
  * observed when placing information in the receive buffer:
  *
@@ -431,29 +446,57 @@ int sorxdirect(so, m, sa, laddr, esrc, unit, swinum)
  * should be released by calling sbrelease() when the socket is destroyed.
  */
 
+int
 soreserve(so, sndcc, rcvcc)
 	register struct socket *so;
 	u_long sndcc, rcvcc;
 {
-	(void) sbreserve(&so->so_snd, sndcc);
-	(void) sbreserve(&so->so_rcv, rcvcc);
+
+	if (sbreserve(&so->so_snd, sndcc) == 0)
+		goto bad;
+	if (sbreserve(&so->so_rcv, rcvcc) == 0)
+		goto bad2;
+	if (so->so_rcv.sb_lowat == 0)
+		so->so_rcv.sb_lowat = 1;
+	if (so->so_snd.sb_lowat == 0)
+#ifdef __riscos
+		so->so_snd.sb_lowat = 1024;
+#else
+		so->so_snd.sb_lowat = MCLBYTES;
+#endif
+	if (so->so_snd.sb_lowat > so->so_snd.sb_hiwat)
+		so->so_snd.sb_lowat = so->so_snd.sb_hiwat;
 	return (0);
+bad2:
+	sbrelease(&so->so_snd);
+bad:
+	return (ENOBUFS);
 }
 
 /*
- * Allot mbufs to a sockbuf (void in RISC OS).
+ * Allot mbufs to a sockbuf.
+ * Attempt to scale mbmax so that mbcnt doesn't become limiting
+ * if buffering efficiency is near the normal case.
  */
+int
 sbreserve(sb, cc)
 	struct sockbuf *sb;
 	u_long cc;
 {
-	sb->sb_hiwat = sb->sb_mbmax = cc;
+
+	if (cc > sb_max)
+		return (0);
+	sb->sb_hiwat = cc;
+	sb->sb_mbmax = min(cc * sb_efficiency, sb_max);
+	if (sb->sb_lowat > sb->sb_hiwat)
+		sb->sb_lowat = sb->sb_hiwat;
 	return (1);
 }
 
 /*
- * Free mbufs held by a socket, and "reserved" mbuf space.
+ * Free mbufs held by a socket, and reserved mbuf space.
  */
+void
 sbrelease(sb)
 	struct sockbuf *sb;
 {
@@ -467,9 +510,9 @@ sbrelease(sb)
  * data from an mbuf queue.
  *
  * The routines sbappend() or sbappendrecord() are normally called to
- * append new mbufs to a socket buffer [, after checking that adequate
+ * append new mbufs to a socket buffer, after checking that adequate
  * space is available, comparing the function sbspace() with the amount
- * of data to be added (NOT RISC OS)].	sbappendrecord() differs from sbappend() in
+ * of data to be added.	sbappendrecord() differs from sbappend() in
  * that data supplied is treated as the beginning of a new record.
  * To place a sender's address, optional access rights, and data in a
  * socket receive buffer, sbappendaddr() should be used.  To place
@@ -477,7 +520,7 @@ sbrelease(sb)
  * should be used.  In either case, the new data begins a new record.
  * Note that unlike sbappend() and sbappendrecord(), these routines check
  * for the caller that there will be enough space to store the data.
- * Each fails if [ there is not enough space, or if] it cannot find mbufs
+ * Each fails if there is not enough space, or if it cannot find mbufs
  * to store additional information in.
  *
  * Reliable protocols may use the socket send buffer to hold data
@@ -493,6 +536,7 @@ sbrelease(sb)
  * the mbuf chain is recorded in sb.  Empty mbufs are
  * discarded and mbufs are compacted where possible.
  */
+void
 sbappend(sb, m)
 	struct sockbuf *sb;
 	struct mbuf *m;
@@ -501,19 +545,54 @@ sbappend(sb, m)
 
 	if (m == 0)
 		return;
-	if (n = sb->sb_mb) {
-		while (n->m_list)
-			n = n->m_list;
-		while (n->m_next)
-			n = n->m_next;
+	n = sb->sb_mb;
+	if (n) {
+		while (n->m_nextpkt)
+			n = n->m_nextpkt;
+		do {
+			if (n->m_flags & M_EOR) {
+				sbappendrecord(sb, m); /* XXXXXX!!!! */
+				return;
+			}
+		} while (n->m_next && (n = n->m_next));
 	}
 	sbcompress(sb, m, n);
+#ifdef SOCKBUF_DEBUG
+	sbcheck(sb);
+#endif
 }
+
+#ifdef SOCKBUF_DEBUG
+void
+sbcheck(sb)
+	register struct sockbuf *sb;
+{
+	register struct mbuf *m;
+	register int len = 0, mbcnt = 0;
+
+	for (m = sb->sb_mb; m; m = m->m_next) {
+		len += m->m_len;
+		mbcnt += m->m_inilen;
+#ifndef __riscos
+		if (m->m_flags & M_EXT)
+			mbcnt += m->m_ext.ext_size;
+#endif
+		if (m->m_nextpkt)
+			panic("sbcheck nextpkt");
+	}
+	if (len != sb->sb_cc || mbcnt != sb->sb_mbcnt) {
+		Printf("cc %d != %d || mbcnt %d != %d\n", len, sb->sb_cc,
+		    mbcnt, sb->sb_mbcnt);
+		panic("sbcheck");
+	}
+}
+#endif
 
 /*
  * As above, except the mbuf chain
  * begins a new record.
  */
+void
 sbappendrecord(sb, m0)
 	register struct sockbuf *sb;
 	register struct mbuf *m0;
@@ -522,113 +601,180 @@ sbappendrecord(sb, m0)
 
 	if (m0 == 0)
 		return;
-	if (m = sb->sb_mb)
-		while (m->m_list)
-			m = m->m_list;
+	m = sb->sb_mb;
+	if (m)
+		while (m->m_nextpkt)
+			m = m->m_nextpkt;
 	/*
 	 * Put the first mbuf on the queue.
 	 * Note this permits zero length records.
 	 */
 	sballoc(sb, m0);
 	if (m)
-		m->m_list = m0;
+		m->m_nextpkt = m0;
 	else
 		sb->sb_mb = m0;
 	m = m0->m_next;
 	m0->m_next = 0;
+	if (m && (m0->m_flags & M_EOR)) {
+		m0->m_flags &= ~M_EOR;
+		m->m_flags |= M_EOR;
+	}
 	sbcompress(sb, m, m0);
+#ifdef SOCKBUF_DEBUG
+	sbcheck(sb);
+#endif
 }
 
+#ifndef __riscos /* Not used anywhere! */
 /*
- * Append address and data, and optionally, rights
- * to the receive queue of a socket.  Return 0 if
- * insufficient mbufs.
+ * As above except that OOB data
+ * is inserted at the beginning of the sockbuf,
+ * but after any other OOB data.
  */
-sbappendaddr(sb, asa, m0, rights0)
+void
+sbinsertoob(sb, m0)
+	register struct sockbuf *sb;
+	register struct mbuf *m0;
+{
+	register struct mbuf *m;
+	register struct mbuf **mp;
+
+	if (m0 == 0)
+		return;
+	for (mp = &sb->sb_mb; *mp ; mp = &((*mp)->m_nextpkt)) {
+	    m = *mp;
+	    again:
+		switch (m->m_type) {
+
+		case MT_OOBDATA:
+			continue;		/* WANT next train */
+
+		case MT_CONTROL:
+			m = m->m_next;
+			if (m)
+				goto again;	/* inspect THIS train further */
+		}
+		break;
+	}
+	/*
+	 * Put the first mbuf on the queue.
+	 * Note this permits zero length records.
+	 */
+	sballoc(sb, m0);
+	m0->m_nextpkt = *mp;
+	*mp = m0;
+	m = m0->m_next;
+	m0->m_next = 0;
+	if (m && (m0->m_flags & M_EOR)) {
+		m0->m_flags &= ~M_EOR;
+		m->m_flags |= M_EOR;
+	}
+	sbcompress(sb, m, m0);
+}
+#endif
+
+/*
+ * Append address and data, and optionally, control (ancillary) data
+ * to the receive queue of a socket.  If present,
+ * m0 must include a packet header with total length.
+ * Returns 0 if no space in sockbuf or insufficient mbufs.
+ */
+int
+sbappendaddr(sb, asa, m0, control)
 	register struct sockbuf *sb;
 	struct sockaddr *asa;
-	struct mbuf *rights0, *m0;
+	struct mbuf *m0, *control;
 {
 	register struct mbuf *m, *n;
+	int space = asa->sa_len;
 
-#ifdef OldCode
-	MGET(m, M_DONTWAIT, MT_SONAME);
-	if (m == 0)
+if (m0 && (m0->m_flags & M_PKTHDR) == 0) {
+panic("sbappendaddr");
+return (0);
+}
+	if (m0)
+		space += m0->m_pkthdr.len;
+	for (n = control; n; n = n->m_next) {
+		space += n->m_len;
+		if (n->m_next == 0)	/* keep pointer to last control buf */
+			break;
+	}
+	if (space > sbspace(sb))
 		return (0);
-#else
-	if( (m = ALLOC_S(MINCONTIG, NULL)) == NULL )
-	{
+	if (asa->sa_len > MINCONTIG)
+		return (0);
+	MGET(m, M_DONTWAIT, MT_SONAME);
+	if (m == 0) {
 #ifdef DEBUG
-	    if( DODEBUG(DBGMMAN) )
-		Printf("sbappendaddr: ALLOC_S failed\n");
+		if (DODEBUG(DBGMMAN))
+			Printf("sbappendaddr: ALLOC_S failed\n");
 #endif
-	    return(0);
+		return (0);
 	}
-	m->m_type = MT_SONAME;
-#endif
-	*mtod(m, struct sockaddr *) = *asa;
-	m->m_len = sizeof (*asa);
-	if (rights0 && rights0->m_len) {
-#ifdef OldCode
-		m->m_next = m_copy(rights0, 0, rights0->m_len);
-		if (m->m_next == 0) {
-			m_freem(m);
-			return (0);
-		}
+	m->m_len = asa->sa_len;
+	bcopy((caddr_t)asa, mtod(m, caddr_t), asa->sa_len);
+	if (n)
+		n->m_next = m0;		/* concatenate data to control */
+	else
+		control = m0;
+	m->m_next = control;
+#ifdef SOCKBUF_DEBUG
+        Printf("sballocing: sb=%x, sb->sb_cc=%d, sb->sb_mbcnt=%d\n", sb, sb->sb_cc, sb->sb_mbcnt);
+	for (n = m; n; n = n->m_next) {
+	        Printf("sballocing: adding n=%x, n->m_len=%d, n->m_inilen=%d\n", n, n->m_len, n->m_inilen);
+		sballoc(sb, n);
+	}
+        Printf("sballoced:  sb=%x, sb->sb_cc=%d, sb->sb_mbcnt=%d\n", sb, sb->sb_cc, sb->sb_mbcnt);
 #else
-		if( (m->m_next = COPY_P(rights0, 0, rights0->m_len)) == NULL )
-		{
-#ifdef DEBUG
-		    if( DODEBUG(DBGMMAN) )
-			Printf("sbappendaddr: COPY failed\n");
+	for (n = m; n; n = n->m_next)
+		sballoc(sb, n);
 #endif
-		    FREEM(m);
-		    return(0);
-		}
-#endif
-		sballoc(sb, m->m_next);
-	}
-	sballoc(sb, m);
-	if (n = sb->sb_mb) {
-		while (n->m_list)
-			n = n->m_list;
-		n->m_list = m;
+	n = sb->sb_mb;
+	if (n) {
+		while (n->m_nextpkt)
+			n = n->m_nextpkt;
+		n->m_nextpkt = m;
 	} else
 		sb->sb_mb = m;
-	if (m->m_next)
-		m = m->m_next;
-	if (m0)
-		sbcompress(sb, m0, m);
+#ifdef SOCKBUF_DEBUG
+	sbcheck(sb);
+#endif
 	return (1);
 }
 
-sbappendrights(sb, m0, rights)
+int
+sbappendcontrol(sb, m0, control)
 	struct sockbuf *sb;
-	struct mbuf *rights, *m0;
+	struct mbuf *control, *m0;
 {
 	register struct mbuf *m, *n;
+	int space = 0;
 
-	if (rights == 0) {
-		panic("sbappendrights");
+	if (control == 0) {
+		panic("sbappendcontrol");
 		return (0);
 	}
-#ifdef OldCode
-	m = m_copy(rights, 0, rights->m_len);
-	if (m == 0)
+	for (m = control; ; m = m->m_next) {
+		space += m->m_len;
+		if (m->m_next == 0)
+			break;
+	}
+	n = m;			/* save pointer to last control buffer */
+	for (m = m0; m; m = m->m_next)
+		space += m->m_len;
+	if (space > sbspace(sb))
 		return (0);
-#else
-	if( (m = COPY_P(rights, 0, rights->m_len)) == NULL )
-	    return(0);
-#endif
-	sballoc(sb, m);
-	if (n = sb->sb_mb) {
-		while (n->m_list)
-			n = n->m_list;
-		n->m_list = m;
+	n->m_next = m0;			/* concatenate data to control */
+	for (m = control; m; m = m->m_next)
+		sballoc(sb, m);
+	n = sb->sb_mb;
+	if (n) {
+		while (n->m_nextpkt)
+			n = n->m_nextpkt;
+		n->m_nextpkt = control;
 	} else
-		sb->sb_mb = m;
-	if (m0)
-		sbcompress(sb, m0, m);
+		sb->sb_mb = control;
 	return (1);
 }
 
@@ -637,48 +783,48 @@ sbappendrights(sb, m0, rights)
  * buffer sb following mbuf n.	If n
  * is null, the buffer is presumed empty.
  */
+void
 sbcompress(sb, m, n)
 	register struct sockbuf *sb;
 	register struct mbuf *m, *n;
 {
+	register int eor = 0;
+	register struct mbuf *o;
 
 	while (m) {
-		if (m->m_len == 0) {
-#ifdef OldCode
-			m = m_free(m);
-#else
-			struct mbuf *m0 = m;
-			m = m0->m_next;
-			FREE(m0);
-#endif
+		eor |= m->m_flags & M_EOR;
+		if (m->m_len == 0 &&
+		    (eor == 0 ||
+		     (((o = m->m_next) || (o = n)) &&
+		      o->m_type == m->m_type))) {
+			m = m_freen(m);
 			continue;
 		}
-		if (n && n->m_off <= MAXOFF(n) && m->m_off <= MAXOFF(n) &&
-		    (n->m_off + n->m_len + m->m_len) <= MAXOFF(n) &&
+		if (n && (n->m_flags & M_EOR) == 0 &&
+		    (n->m_off + n->m_len + m->m_len) < MAXOFF(n) &&
 		    n->m_type == m->m_type) {
 			bcopy(mtod(m, caddr_t), mtod(n, caddr_t) + n->m_len,
 			    (unsigned)m->m_len);
 			n->m_len += m->m_len;
 			sb->sb_cc += m->m_len;
-#ifdef OldCode
-			m = m_free(m);
-#else
-		        {
-			    struct mbuf *m0 = m;
-			    m = m0->m_next;
-			    FREE(m0);
-			}
-#endif
+			m = m_freen(m);
 			continue;
 		}
-		sballoc(sb, m);
 		if (n)
 			n->m_next = m;
 		else
 			sb->sb_mb = m;
+		sballoc(sb, m);
 		n = m;
+		m->m_flags &= ~M_EOR;
 		m = m->m_next;
 		n->m_next = 0;
+	}
+	if (eor) {
+		if (n)
+			n->m_flags |= eor;
+		else
+			printf("semi-panic: sbcompress\n");
 	}
 }
 
@@ -686,6 +832,7 @@ sbcompress(sb, m, n)
  * Free all mbufs in a sockbuf.
  * Check that all resources are reclaimed.
  */
+void
 sbflush(sb)
 	register struct sockbuf *sb;
 {
@@ -696,13 +843,14 @@ sbflush(sb)
 	}
 	while (sb->sb_mbcnt)
 		sbdrop(sb, (int)sb->sb_cc);
-	if (sb->sb_cc || sb->sb_mbcnt || sb->sb_mb)
+	if (sb->sb_cc || sb->sb_mb)
 		panic("sbflush 2");
 }
 
 /*
  * Drop data from (the front of) a sockbuf.
  */
+void
 sbdrop(sb, len)
 	register struct sockbuf *sb;
 	register int len;
@@ -710,7 +858,7 @@ sbdrop(sb, len)
 	register struct mbuf *m, *mn;
 	struct mbuf *next;
 
-	next = (m = sb->sb_mb) ? m->m_list : 0;
+	next = (m = sb->sb_mb) ? m->m_nextpkt : 0;
 	while (len > 0) {
 		if (m == 0) {
 			if (next == 0) {
@@ -718,7 +866,7 @@ sbdrop(sb, len)
 				return;
 			}
 			m = next;
-			next = m->m_list;
+			next = m->m_nextpkt;
 			continue;
 		}
 		if (m->m_len > len) {
@@ -739,7 +887,7 @@ sbdrop(sb, len)
 	}
 	if (m) {
 		sb->sb_mb = m;
-		m->m_list = next;
+		m->m_nextpkt = next;
 	} else
 		sb->sb_mb = next;
 }
@@ -748,6 +896,7 @@ sbdrop(sb, len)
  * Drop a record off the front of a sockbuf
  * and move the next record to the front.
  */
+void
 sbdroprecord(sb)
 	register struct sockbuf *sb;
 {
@@ -755,12 +904,11 @@ sbdroprecord(sb)
 
 	m = sb->sb_mb;
 	if (m) {
-		sb->sb_mb = m->m_list;
+		sb->sb_mb = m->m_nextpkt;
 		do {
 			sbfree(sb, m);
 			MFREE(m, mn);
-		} while (m = mn);
+			m = mn;
+		} while (m);
 	}
 }
-
-/* EOF socket1.c */

@@ -1,108 +1,180 @@
-/* -*-C-*-
- *
- * $Header$
- * $Source$
- *
+/*
  * Copyright(c) 1994 Acorn Computers Ltd., Cambridge, England
  *
  * support external device driver module.
  *
- * $Log$
- * Revision 1.5  95/03/31  11:51:52  kwelton
- * Added some more debug messages.
- * 
- * Revision 1.4  95/02/28  19:00:01  kwelton
- * if_module_ioctl() now "tunnels" error messages back to its caller.
- * 
- * Revision 1.3  95/01/03  14:11:20  kwelton
- * The name of the Transmit SWI has been changed to DCI4Transmit.
- * 
- * Revision 1.2  94/12/19  10:52:53  kwelton
- * if_module_ioctl() checks IFF_RUNNING within the case for SIOCSIFFLAGS
- * to prevent claim_frames being called twice (once implicitly from
- * SIFADDR, as well as an explicit call to SIFFLAGS).
- * 
- * Revision 1.1  94/12/02  10:59:23  kwelton
- * Initial revision
- * 
  */
 #include "kernel.h"
 #include "swis.h"
 
-#include "sys/param.h"
-#include "sys/systm.h"
-#include "sys/socket.h"
-#include "sys/socketvar.h"
-#include "sys/protosw.h"
-#include "sys/errno.h"
-#include "sys/dir.h"
-#include "sys/ioctl.h"
-#include "sys/user.h"
-#include "sys/mbuf.h"
-#include "sys/dcistructs.h"
+#include <sys/param.h>
+#include <sys/systm.h>
+#include <sys/kernel.h>
+#include <sys/malloc.h>
+#include <sys/mbuf.h>
+#include <sys/protosw.h>
+#include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <sys/errno.h>
+#include <sys/syslog.h>
 
-#include "net/if.h"
-#include "net/af.h"
-#include "net/netisr.h"
+#ifndef __riscos
+#include <machine/cpu.h>
+#endif
 
-#include "netinet/in.h"
-#include "netinet/in_systm.h"
-#include "netinet/in_var.h"
-#include "netinet/ip.h"
-#include "netinet/if_ether.h"
+#include <net/if.h>
+#include <net/netisr.h>
+#include <net/route.h>
+#include <net/if_llc.h>
+#include <net/if_dl.h>
+#include <net/if_types.h>
 
+#ifdef INET
+#include <netinet/in.h>
+#include <netinet/in_systm.h>
+#include <netinet/in_var.h>
+#endif
+#include <netinet/if_ether.h>
+
+#ifdef NS
+#include <netns/ns.h>
+#include <netns/ns_if.h>
+#endif
+
+#ifdef ISO
+#include <netiso/argo_debug.h>
+#include <netiso/iso.h>
+#include <netiso/iso_var.h>
+#include <netiso/iso_snpac.h>
+#endif
+
+#ifdef LLC
+#include <netccitt/dll.h>
+#include <netccitt/llc_var.h>
+#endif
+
+#if defined(LLC) && defined(CCITT)
+extern struct ifqueue pkintrq;
+#endif
+
+#include <sys/dcistructs.h>
 #include "module.h"
 #include "svcdebug.h"
 #include "debug.h"
 
+u_char	etherbroadcastaddr[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+#define senderr(e) { error = (e); goto bad;}
+
 /**********************************************************************/
 
-int if_module_output(struct ifnet *ifp, struct mbuf *m0, struct sockaddr *dst)
+int
+if_module_output(ifp, m0, dst, rt0)
+    register struct ifnet *ifp;
+    struct mbuf *m0;
+    struct sockaddr *dst;
+    struct rtentry *rt0;
 {
-    int swinum = XOS_Bit | (ifp->if_swibase + DCI4Transmit);
-    _kernel_swi_regs r;
-    _kernel_oserror *e;
-    int type, off, usetrailers;
-    char edst[6], *destp;
-    struct in_addr idst;
-    struct mbuf *m = m0;
-    struct ether_header *eh;
-    int error = 0;
-
-    /*
-     * check that driver is still present.  this is quite probably
-     * paranoia, as there should be no way to get to this routine
-     * if the driver module has been killed, but it is better to
-     * be safe than sorry
-     */
-    if( ifp->if_flags & IFF_NODRIVER )
-    {
-	error = ENXIO;
-	goto fail;
-    }
-
-    if ((ifp->if_flags & (IFF_UP|IFF_RUNNING)) != (IFF_UP|IFF_RUNNING))
-    {
-	error = ENETDOWN;
-	goto fail;
-    }
-
-    switch (dst->sa_family)
-    {
-      case AF_INET:
-	idst = ((struct sockaddr_in *)dst)->sin_addr;
-	if (!arpresolve(ifp, m, &idst, edst, &usetrailers))
-	{
-#ifdef DEBUG
-	    if( DODEBUG(DBGOUTPUT) )
-		Printf("imo: waiting for ARP resolution\n");
+	int swinum = ifp->if_swibase + DCI4Transmit;
+	_kernel_oserror *e;
+	int type, off;
+	u_char edst[6];
+	struct mbuf *m = m0;
+	register struct rtentry *rt;
+	struct mbuf *mcopy = (struct mbuf *)0;
+	register struct ether_header *eh;
+	int error = 0;
+	struct arpcom *ac = (struct arpcom *)ifp;
+#ifdef FLASHY_SCROLLLOCK
+	static struct timeval lastflash;
+	struct timeval flashdiff;
 #endif
-	    return (0);				/* if not yet resolved */
+
+#ifdef DEBUG
+	    if( DODEBUG((1 << 16)) )
+	    {
+		int i = 0;
+		struct mbuf *m1;
+
+                Printf("if_module_output(ifp=%x,m0=%x,dst=%x,rt0=%x) dst->sa_family=%d, len=%d\n", ifp, m0, dst, rt0, dst->sa_family, m->m_pkthdr.len);
+		Printf("\021\003if_module_output Packet Dump:\n");
+
+		for( m1 = m0; m1; m1 = m1->m_next )
+		{
+		    int j;
+		    u_char *cptr = mtod(m1, u_char *);
+
+		    for( j = 0; j < m1->m_len; ++j )
+		    {
+			Printf("%02x", *cptr++);
+
+			if( !(++i % 32) )
+			    Printf("\n");
+			else if( !(i % 4) )
+			    Printf("  ");
+		    }
+		}
+
+		if( (i % 32) )
+		    Printf("\021\007\n");
+	    Printf("\021\07\n");
+	    }
+#endif
+	/*
+	 * check that driver is still present.  this is quite probably
+	 * paranoia, as there should be no way to get to this routine
+	 * if the driver module has been killed, but it is better to
+	 * be safe than sorry
+	 */
+	if (ifp->if_flags & IFF_NODRIVER)
+		senderr(ENXIO);
+
+	if ((ifp->if_flags & (IFF_UP|IFF_RUNNING)) != (IFF_UP|IFF_RUNNING))
+		senderr(ENETDOWN);
+
+	ifp->if_lastchange = time;
+	if (rt = rt0) {
+		if ((rt->rt_flags & RTF_UP) == 0) {
+			if (rt0 = rt = rtalloc1(dst, 1, 0UL))
+				rt->rt_refcnt--;
+			else
+				senderr(EHOSTUNREACH);
+		}
+		if (rt->rt_flags & RTF_GATEWAY) {
+			if (rt->rt_gwroute == 0)
+				goto lookup;
+			if (((rt = rt->rt_gwroute)->rt_flags & RTF_UP) == 0) {
+				rtfree(rt); rt = rt0;
+			lookup: rt->rt_gwroute = rtalloc1(rt->rt_gateway, 1,
+							  0UL);
+				if ((rt = rt->rt_gwroute) == 0)
+					senderr(EHOSTUNREACH);
+			}
+		}
+		if (rt->rt_flags & RTF_REJECT)
+			if (rt->rt_rmx.rmx_expire == 0 ||
+			    time.tv_sec < rt->rt_rmx.rmx_expire)
+				senderr(rt == rt0 ? EHOSTDOWN : EHOSTUNREACH);
 	}
 
-	off = ntohs((u_short)mtod(m, struct ip *)->ip_len) - m->m_len;
+	switch (dst->sa_family) {
 
-	if( usetrailers && off > 0 && (off & 0x1ff) == 0 &&
+#ifdef INET
+	case AF_INET:
+		if (!arpresolve(ac, rt, m, dst, edst, rt0)) {
+#ifdef DEBUG
+	    		if( DODEBUG(DBGOUTPUT) )
+				Printf("imo: waiting for ARP resolution\n");
+#endif
+			return (0);	/* if not yet resolved */
+	        }
+		/* If broadcasting on a simplex interface, loopback a copy */
+		if ((m->m_flags & M_BCAST) && (ifp->if_flags & IFF_SIMPLEX))
+			mcopy = m_copy(m, 0, (int)M_COPYALL);
+		off = m->m_pkthdr.len - m->m_len;
+		type = ETHERTYPE_IP;
+		break;
+
+/*	if( usetrailers && off > 0 && (off & 0x1ff) == 0 &&
 	   m->m_off >= MINOFF(m) + 2 * sizeof(u_short) )
 	{
 	    type = ETHERTYPE_TRAIL + (off >> 9);
@@ -116,20 +188,127 @@ int if_module_output(struct ifnet *ifp, struct mbuf *m0, struct sockaddr *dst)
 	type = ETHERTYPE_IP;
 	off = 0;
 	destp = edst;
-	goto gottype;
+	goto gottype;*/
+#endif
+#ifdef NS
+	case AF_NS:
+		type = ETHERTYPE_NS;
+ 		bcopy((caddr_t)&(((struct sockaddr_ns *)dst)->sns_addr.x_host),
+		    (caddr_t)edst, sizeof (edst));
+		if (!bcmp((caddr_t)edst, (caddr_t)&ns_thishost, sizeof(edst)))
+			return (looutput(ifp, m, dst, rt));
+		/* If broadcasting on a simplex interface, loopback a copy */
+		if ((m->m_flags & M_BCAST) && (ifp->if_flags & IFF_SIMPLEX))
+			mcopy = m_copy(m, 0, (int)M_COPYALL);
+		break;
+#endif
+#ifdef	ISO
+	case AF_ISO: {
+		int	snpalen;
+		struct	llc *l;
+		register struct sockaddr_dl *sdl;
 
-      case AF_UNSPEC:
-	eh = (struct ether_header *)dst->sa_data;
-	memcpy ((caddr_t)edst, (caddr_t)eh->ether_dhost, sizeof (edst));
-	destp = edst;
-	type = eh->ether_type;
-	goto gottype;
+		if (rt && (sdl = (struct sockaddr_dl *)rt->rt_gateway) &&
+		    sdl->sdl_family == AF_LINK && sdl->sdl_alen > 0) {
+			bcopy(LLADDR(sdl), (caddr_t)edst, sizeof(edst));
+		} else if (error =
+			    iso_snparesolve(ifp, (struct sockaddr_iso *)dst,
+					    (char *)edst, &snpalen))
+			goto bad; /* Not Resolved */
+		/* If broadcasting on a simplex interface, loopback a copy */
+		if (*edst & 1)
+			m->m_flags |= (M_BCAST|M_MCAST);
+		if ((m->m_flags & M_BCAST) && (ifp->if_flags & IFF_SIMPLEX) &&
+		    (mcopy = m_copy(m, 0, (int)M_COPYALL))) {
+			M_PREPEND(mcopy, sizeof (*eh), M_DONTWAIT);
+			if (mcopy) {
+				eh = mtod(mcopy, struct ether_header *);
+				bcopy((caddr_t)edst,
+				      (caddr_t)eh->ether_dhost, sizeof (edst));
+				bcopy((caddr_t)ac->ac_enaddr,
+				      (caddr_t)eh->ether_shost, sizeof (edst));
+			}
+		}
+		M_PREPEND(m, 3, M_DONTWAIT);
+		if (m == NULL)
+			return (0);
+		type = m->m_pkthdr.len;
+		l = mtod(m, struct llc *);
+		l->llc_dsap = l->llc_ssap = LLC_ISO_LSAP;
+		l->llc_control = LLC_UI;
+		len += 3;
+		IFDEBUG(D_ETHER)
+			int i;
+			printf("unoutput: sending pkt to: ");
+			for (i=0; i<6; i++)
+				printf("%x ", edst[i] & 0xff);
+			printf("\n");
+		ENDDEBUG
+		} break;
+#endif /* ISO */
+#ifdef	LLC
+/*	case AF_NSAP: */
+	case AF_CCITT: {
+		register struct sockaddr_dl *sdl =
+			(struct sockaddr_dl *) rt -> rt_gateway;
 
-      default:
-	error = EAFNOSUPPORT;
-	goto fail;
-    }
+		if (sdl && sdl->sdl_family == AF_LINK
+		    && sdl->sdl_alen > 0) {
+			bcopy(LLADDR(sdl), (char *)edst,
+				sizeof(edst));
+		} else goto bad; /* Not a link interface ? Funny ... */
+		if ((ifp->if_flags & IFF_SIMPLEX) && (*edst & 1) &&
+		    (mcopy = m_copy(m, 0, (int)M_COPYALL))) {
+			M_PREPEND(mcopy, sizeof (*eh), M_DONTWAIT);
+			if (mcopy) {
+				eh = mtod(mcopy, struct ether_header *);
+				bcopy((caddr_t)edst,
+				      (caddr_t)eh->ether_dhost, sizeof (edst));
+				bcopy((caddr_t)ac->ac_enaddr,
+				      (caddr_t)eh->ether_shost, sizeof (edst));
+			}
+		}
+		type = m->m_pkthdr.len;
+#ifdef LLC_DEBUG
+		{
+			int i;
+			register struct llc *l = mtod(m, struct llc *);
 
+			printf("ether_output: sending LLC2 pkt to: ");
+			for (i=0; i<6; i++)
+				printf("%x ", edst[i] & 0xff);
+			printf(" len 0x%x dsap 0x%x ssap 0x%x control 0x%x\n",
+			       type & 0xff, l->llc_dsap & 0xff, l->llc_ssap &0xff,
+			       l->llc_control & 0xff);
+
+		}
+#endif /* LLC_DEBUG */
+		} break;
+#endif /* LLC */
+
+	case AF_UNSPEC:
+		eh = (struct ether_header *)dst->sa_data;
+		(void)memcpy(edst, eh->ether_dhost, sizeof (edst));
+		type = eh->ether_type;
+		break;
+
+	default:
+#ifdef DEBUG
+		Printf("%s%d: can't handle af%d\n", ifp->if_name, ifp->if_unit,
+			dst->sa_family);
+#endif
+		senderr(EAFNOSUPPORT);
+	}
+
+
+	if (mcopy) {
+#ifdef DEBUG
+                Printf("Copying via loopback: mcopy=%x\n", mcopy);
+#endif
+		(void) looutput(ifp, mcopy, dst, rt);
+	}
+
+#ifdef NotYet
   gottrailertype:
     /*
      * Packet to be sent as trailer: move first packet
@@ -144,6 +323,7 @@ int if_module_output(struct ifnet *ifp, struct mbuf *m0, struct sockaddr *dst)
     m0 = m;
 
   gottype:
+#endif
 #ifdef DEBUG
     if( DODEBUG(DBGOUTPUT) )
     {
@@ -163,7 +343,8 @@ int if_module_output(struct ifnet *ifp, struct mbuf *m0, struct sockaddr *dst)
 #endif
 
     /* TRACE */
-    if( 0 )
+#ifdef DEBUG
+    if (DODEBUG(DBGOUTPUT))
     {
 	struct mbuf *m1;
 
@@ -172,43 +353,70 @@ int if_module_output(struct ifnet *ifp, struct mbuf *m0, struct sockaddr *dst)
 	    Printf("%x(%d, %d)-->", m1, m1->m_type, m1->m_len);
 	Printf("(NULL)\021\007\n");
     }
+#endif
+    {
+        struct mbuf *m1;
+
+        for (m1=m; m1; m1=m1->m_nextpkt) {
+            ifp->if_opackets++;
+            ifp->if_obytes+=m1->m_pkthdr.len;
+            if (m1->m_flags & (M_BCAST|M_MCAST))
+                ifp->if_omcasts++;
+        }
+    }
+
+#ifdef FLASHY_SCROLLLOCK
+    flashdiff = ifp->if_lastchange;
+    timevalsub(&flashdiff, &lastflash);
+    if (flashdiff.tv_sec != 0)
+        flashdiff.tv_usec = 1024*1024;
+
+    if (flashdiff.tv_usec > 49152) /* If last flashed > ~1/20 second ago */
+    {
+        lastflash = ifp->if_lastchange;
+    	_swix(OS_Byte, _INR(0,2), 202, 2, 255);  /* Toggle scrolllock state */
+    	_swix(OS_Byte, _IN(0),    118);          /* Reflect status in LEDs  */
+    	_swix(OS_Byte, _INR(0,2), 202, 2, 255);  /* Toggle scrolllock state */
+    }
+#endif
 
     /*
      * set parameters for Transmit - use default MAC address,
      * and the driver assumes ownership of the data
-     */
-    r.r[0] = TX_OWNSOURCE | TX_DRIVERSDATA;
-    r.r[1] = ifp->if_unit;
-    r.r[2] = (int)type;
-    r.r[3] = (int)m0;
-    r.r[4] = (int)destp;
-
-    /*
+     *
      * XXX
      *
      * the only possible error the driver can return is
      * lack of output buffers, return an appropriate error
      */
-    if( (e = _kernel_swi(swinum, &r, &r)) != NULL )
+    if( (e = _swix(swinum, _INR(0,4), TX_OWNSOURCE | TX_DRIVERSDATA,
+                                      ifp->if_unit, type, m, edst)) != NULL ) {
 	error = ENOBUFS;
+	ifp->if_oerrors++;
+    }
 
+#ifdef FLASHY_SCROLLLOCK
+    if (flashdiff.tv_usec > 49152)
+    	_swix(OS_Byte, _IN(0), 118); /* Reflect status in LEDs */
+#endif
+
+#ifdef DEBUG
+    if (DODEBUG(DBGOUTPUT))
+        Printf("imo: done output, error=%d\n", error);
+#endif
     return(error);
 
-  fail:
+bad:
     /*
      * under DCI 4, m0 may be the head of a list of mbuf
      * chains, make sure each chain is correctly freed.
      */
-    while( m0 )
+    while (m0)
     {
 	m = m0;
 	m0 = m0->m_list;
 
-#ifdef OldCode
 	m_freem(m);
-#else
-	FREEM(m);
-#endif
     }
 
     return (error);
@@ -221,6 +429,7 @@ int if_module_ioctl(struct ifnet *ifp, int cmd, char *data)
     _kernel_swi_regs r;
     _kernel_oserror *e = NULL;
     struct ifaddr *ifa = (struct ifaddr *)data;
+    struct ifreq *ifr = (struct ifreq *)data;
     int s = splimp();
 
     r.r[0] = ifp->if_unit;
@@ -228,6 +437,10 @@ int if_module_ioctl(struct ifnet *ifp, int cmd, char *data)
     switch (cmd)
     {
       case SIOCSIFADDR:
+#ifdef DEBUG
+        if (DODEBUG(DBGOUTPUT))
+            Printf("if_module_ioctl(SIOCSIFADDR)\n");
+#endif
 	/*
 	 * as well as setting the interface address, this
 	 * call should also start the interface running
@@ -242,8 +455,12 @@ int if_module_ioctl(struct ifnet *ifp, int cmd, char *data)
 		ifp->if_flags |= (IFF_UP | IFF_RUNNING);
 	}
 
+#ifdef BSD43Code
 	((struct arpcom *)ifp)->ac_ipaddr = IA_SIN(ifa)->sin_addr;
 	arpwhohas((struct arpcom *)ifp, &IA_SIN(ifa)->sin_addr);
+#else
+        arp_ifinit((struct arpcom *)ifp, ifa);
+#endif
 
 	break;
 
@@ -277,6 +494,13 @@ int if_module_ioctl(struct ifnet *ifp, int cmd, char *data)
 
 	break;
 
+	case SIOCSIFMTU:
+		e = _swix(ifp->if_swibase + DCI4SetNetworkMTU, _INR(0,2),
+                          0, ifp->if_unit, ifr->ifr_metric);
+                if (e == NULL)
+			ifp->if_mtu=ifr->ifr_metric;
+		break;
+
       default:
 	break;
     }
@@ -308,7 +532,7 @@ int if_module_ioctl(struct ifnet *ifp, int cmd, char *data)
  * if_module_null - do nothing, and return no error
  * (equivalent to nulldev() in BSD Unix).
  */
-int if_module_null(void)
+int if_module_null(struct ifnet *ifp, int cmd, caddr_t data)
 {
     return(0);
 }
@@ -319,105 +543,45 @@ int if_module_null(void)
  * if_module_none - do nothing, and return ENXIO
  * (equivalent to nodev() in BSD Unix).
  */
-int if_module_none(void)
+int if_module_none(struct ifnet *ifp, struct mbuf *m0, struct sockaddr *dst, struct rtentry *rt)
 {
+    struct mbuf *m;
+
+    /*
+     * under DCI 4, m0 may be the head of a list of mbuf
+     * chains, make sure each chain is correctly freed.
+     */
+    while (m0)
+    {
+        m = m0;
+        m0 = m0->m_list;
+
+        m_freem(m);
+    }
+
     return(ENXIO);
 }
 
 /**********************************************************************/
 
-int if_callb(void)
+
+/*
+ * Convert Ethernet address to printable (loggable) representation.
+ */
+static char digits[] = "0123456789abcdef";
+char *
+ether_sprintf(ap)
+	register u_char *ap;
 {
-    struct ifnet *ifp;
-    struct mbuf *m;
-    u_int type;
-    int s, srcsupplied;
-    u_char ethersrc[6];
+	register i;
+	static char etherbuf[18];
+	register char *cp = etherbuf;
 
-    /*
-     * loop, dequeueing all received packets
-     */
-    for(;;)
-    {
-	s = splhi();
-	IF_DEQUEUE(&ipintrq, m);
-	splx(s);
-
-	if( m == 0 )
-	    return(1);
-
-	ifp = *(mtod(m, struct ifnet **));
-	if( ifp == (struct ifnet *)0xffffffff || ifp == 0 )
-	{
-#ifdef OldCode
-	    m_freem(m);
-#else
-	    FREEM(m);
-#endif
-
-#ifdef OldCode
-	    goto next;
-#else
-	    continue;
-#endif
+	for (i = 0; i < 6; i++) {
+		*cp++ = digits[*ap >> 4];
+		*cp++ = digits[*ap++ & 0xf];
+		*cp++ = ':';
 	}
-
-#ifdef DEBUG
-	if( DODEBUG(DBGINPUT) )
-	    Printf("if_callb: mbuf chain %x from i/f %s%d\n",
-		   m, ifp->if_name, ifp->if_unit);
-#endif
-
-	if (ifp->if_flags & IFF_SRCSUPPLIED)
-	{
-	    srcsupplied = 1;
-	    memcpy(ethersrc, mtod(m, char *) + 4, 6);
-	}
-	else
-	    srcsupplied = 0;
-
-	/*
-	 * XXX
-	 *
-	 * this is singularly unpleasant!
-	 */
-	type = (u_short)m->m_len;
-	m->m_len = sizeof(ifp);
-
-	switch (type)
-	{
-	  case ETHERTYPE_IP:
-	    IF_ADJ(m);
-	    if( m )
-		ipintr(ifp, m, srcsupplied ? ethersrc : (u_char *)0);
-#ifdef DEBUG
-	    else if( DODEBUG(DBGINPUT) )
-		Printf("if_callb: chain IF_ADJ'ed to NULL!\n");
-#endif
-	    break;
-
-	  case ETHERTYPE_ARP:
-	    arpinput((struct arpcom *)ifp, m);
-	    break;
-
-	  case ETHERTYPE_REVARP:
-	    revarpinput((struct arpcom *)ifp, m);
-	    break;
-
-	  default:
-#ifdef OldCode
-	    m_freem(m);
-#else
-	    FREEM(m);
-#endif
-	    break;
-	}
-    }
-#ifdef OldCode
-    goto next;
-#endif
+	*--cp = 0;
+	return (etherbuf);
 }
-
-/**********************************************************************/
-
-/* EOF if_module.c */

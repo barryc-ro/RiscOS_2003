@@ -1,70 +1,91 @@
-/* -*-C-*-
- *
- * $Header$
- * $Source$
- *
- * Copyright(c) 1994 Acorn Computers Ltd., Cambridge, England
- *
- * $Log$
- * Revision 1.1  94/12/02  11:24:02  kwelton
- * Initial revision
- * 
- */
 /*
- * Copyright (c) 1983, 1986 Regents of the University of California.
- * All rights reserved.
+ * Copyright (c) 1982, 1986, 1988, 1990, 1993
+ *	The Regents of the University of California.  All rights reserved.
  *
- * Redistribution and use in source and binary forms are permitted
- * provided that the above copyright notice and this paragraph are
- * duplicated in all such forms and that any documentation,
- * advertising materials, and other materials related to such
- * distribution and use acknowledge that the software was developed
- * by the University of California, Berkeley.  The name of the
- * University may not be used to endorse or promote products derived
- * from this software without specific prior written permission.
- * THIS SOFTWARE IS PROVIDED ``AS IS'' AND WITHOUT ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED
- * WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ * 3. All advertising materials mentioning features or use of this software
+ *    must display the following acknowledgement:
+ *	This product includes software developed by the University of
+ *	California, Berkeley and its contributors.
+ * 4. Neither the name of the University nor the names of its contributors
+ *    may be used to endorse or promote products derived from this software
+ *    without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
  *
  */
-#include "sys/param.h"
-#include "sys/systm.h"
-#include "sys/mbuf.h"
-#include "sys/socket.h"
-#include "sys/socketvar.h"
-#include "sys/protosw.h"
-#include "sys/errno.h"
 
-#include "net/if.h"
-#include "net/route.h"
+#ifndef TUBA_INCLUDE
+#include <sys/param.h>
+#include <sys/systm.h>
+#include <sys/malloc.h>
+#include <sys/mbuf.h>
+#include <sys/socket.h>
+#include <sys/socketvar.h>
+#include <sys/protosw.h>
+#include <sys/errno.h>
+#include <sys/queue.h>
 
-#include "netinet/in.h"
-#include "netinet/in_pcb.h"
-#include "netinet/in_systm.h"
-#include "netinet/ip.h"
-#include "netinet/ip_var.h"
-#include "netinet/tcp.h"
-#include "netinet/tcp_fsm.h"
-#include "netinet/tcp_seq.h"
-#include "netinet/tcp_timer.h"
-#include "netinet/tcp_var.h"
-#include "netinet/tcpip.h"
+#include <net/if.h>
+#include <net/route.h>
+
+#include <netinet/in.h>
+#include <netinet/in_systm.h>
+#include <netinet/ip.h>
+#include <netinet/in_pcb.h>
+#include <netinet/ip_var.h>
+#include <netinet/tcp.h>
+#include <netinet/tcp_fsm.h>
+#include <netinet/tcp_seq.h>
+#include <netinet/tcp_timer.h>
+#include <netinet/tcp_var.h>
+#include <netinet/tcpip.h>
+
+#include "debug.h"
+#include "module.h"
 
 int	tcp_keepidle = TCPTV_KEEP_IDLE;
 int	tcp_keepintvl = TCPTV_KEEPINTVL;
-int	tcp_maxidle = 0;
+static int	always_keepalive = 0;
+int	tcp_keepcnt = TCPTV_KEEPCNT;
+	/* max idle probes */
+int	tcp_maxpersistidle = TCPTV_KEEP_IDLE;
+	/* max idle time in persist */
+int	tcp_maxidle;
+#else /* TUBA_INCLUDE */
+
+static	int tcp_maxpersistidle;
+#endif /* TUBA_INCLUDE */
+
+extern int rand(void);
 
 /*
  * Fast timeout routine for processing delayed acks
  */
+void
 tcp_fasttimo()
 {
 	register struct inpcb *inp;
 	register struct tcpcb *tp;
 
-	inp = tcb.inp_next;
-	if (inp)
-	for (; inp != &tcb; inp = inp->inp_next)
+	for (inp = tcb.lh_first; inp != NULL; inp = inp->inp_list.le_next) {
 		if ((tp = (struct tcpcb *)inp->inp_ppcb) &&
 		    (tp->t_flags & TF_DELACK)) {
 			tp->t_flags &= ~TF_DELACK;
@@ -72,6 +93,7 @@ tcp_fasttimo()
 			tcpstat.tcps_delack++;
 			(void) tcp_output(tp);
 		}
+        }
 }
 
 /*
@@ -79,35 +101,52 @@ tcp_fasttimo()
  * Updates the timers in all active tcb's and
  * causes finite state machine actions if timers expire.
  */
+void
 tcp_slowtimo()
 {
 	register struct inpcb *ip, *ipnxt;
 	register struct tcpcb *tp;
 	register int i;
 
-	tcp_maxidle = TCPTV_KEEPCNT * tcp_keepintvl;
+	tcp_maxidle = tcp_keepcnt * tcp_keepintvl;
+
+	ip = tcb.lh_first;
+	if (ip == NULL) {
+		return;
+	}
 	/*
 	 * Search through tcb's and update active timers.
 	 */
-	ip = tcb.inp_next;
-	if (ip == 0) {
-		return;
-	}
-	for (; ip != &tcb; ip = ipnxt) {
-		ipnxt = ip->inp_next;
+	for (; ip != NULL; ip = ipnxt) {
+		ipnxt = ip->inp_list.le_next;
 		tp = intotcpcb(ip);
-		if (tp == 0)
+		if (tp == 0 || tp->t_state == TCPS_LISTEN)
 			continue;
 		for (i = 0; i < TCPT_NTIMERS; i++) {
-			if (tp->t_timer[i] && --tp->t_timer[i] == 0) {
-				(void) tcp_usrreq(tp->t_inpcb->inp_socket,
+#ifdef TCPTDEBUG
+			if (tp->t_timer[i])
+			{
+			    printf("Timer %d = %d  ", i, --tp->t_timer[i]);
+			    {
+			        if (tp->t_timer[i]==0)
+				if (tcp_usrreq(tp->t_inpcb->inp_socket,
 				    PRU_SLOWTIMO, (struct mbuf *)0,
-				    (struct mbuf *)i, (struct mbuf *)0);
-				if (ipnxt->inp_prev != ip)
+				    (struct mbuf *)i, (struct mbuf *)0) == NULL)
+					goto tpgone;
+			    }
+			}
+			printf("\n");
+#else
+			if (tp->t_timer[i] && --tp->t_timer[i] == 0) {
+				if (tcp_usrreq(tp->t_inpcb->inp_socket,
+				    PRU_SLOWTIMO, (struct mbuf *)0,
+				    (struct mbuf *)i, (struct mbuf *)0) == NULL)
 					goto tpgone;
 			}
+#endif
 		}
 		tp->t_idle++;
+		tp->t_duration++;
 		if (tp->t_rtt)
 			tp->t_rtt++;
 tpgone:
@@ -116,13 +155,16 @@ tpgone:
 	tcp_iss += TCP_ISSINCR/PR_SLOWHZ;		/* increment iss */
 #ifdef TCP_COMPAT_42
 	if ((int)tcp_iss < 0)
-		tcp_iss = 0;				/* XXX */
+		tcp_iss = TCP_ISSINCR;			/* XXX */
 #endif
+	tcp_now++;					/* for timestamps */
 }
+#ifndef TUBA_INCLUDE
 
 /*
  * Cancel all timers for TCP tp.
  */
+void
 tcp_canceltimers(tp)
 	struct tcpcb *tp;
 {
@@ -134,6 +176,8 @@ tcp_canceltimers(tp)
 
 int	tcp_backoff[TCP_MAXRXTSHIFT + 1] =
     { 1, 2, 4, 8, 16, 32, 64, 64, 64, 64, 64, 64, 64 };
+
+static int tcp_totbackoff = 511;	/* sum of tcp_backoff[] */
 
 /*
  * TCP timer processing.
@@ -170,14 +214,24 @@ tcp_timers(tp, timer)
 		if (++tp->t_rxtshift > TCP_MAXRXTSHIFT) {
 			tp->t_rxtshift = TCP_MAXRXTSHIFT;
 			tcpstat.tcps_timeoutdrop++;
-			tp = tcp_drop(tp, ETIMEDOUT);
+			tp = tcp_drop(tp, tp->t_softerror ?
+			    tp->t_softerror : ETIMEDOUT);
 			break;
 		}
 		tcpstat.tcps_rexmttimeo++;
-		rexmt = ((tp->t_srtt >> 2) + tp->t_rttvar) >> 1;
-		rexmt *= tcp_backoff[tp->t_rxtshift];
-		TCPT_RANGESET(tp->t_rxtcur, rexmt, TCPTV_MIN, TCPTV_REXMTMAX);
+#ifdef TCPTDEBUG
+                printf("tp->t_srtt=%d, tp->t_rttvar=%d, tp->t_rxtshift=%d, TCP_REXMTVAL(tp)=%d\n", tp->t_srtt, tp->t_rttvar, tp->t_rxtshift, TCP_REXMTVAL(tp));
+#endif
+		rexmt = TCP_REXMTVAL(tp) * tcp_backoff[tp->t_rxtshift];
+#ifdef TCPTDEBUG
+                printf("tp->t_rxtcur was %d\n", tp->t_rxtcur);
+#endif
+		TCPT_RANGESET(tp->t_rxtcur, rexmt,
+		    tp->t_rttmin, TCPTV_REXMTMAX);
 		tp->t_timer[TCPT_REXMT] = tp->t_rxtcur;
+#ifdef TCPTDEBUG
+                printf("Resetting TCPT_REXMT to %d (rexmt=%d)\n", tp->t_rxtcur, rexmt);
+#endif
 		/*
 		 * If losing, let the lower level know and try for
 		 * a better route.  Also, if we backed off this far,
@@ -187,13 +241,15 @@ tcp_timers(tp, timer)
 		 * retransmit times until then.
 		 */
 		if (tp->t_rxtshift > TCP_MAXRXTSHIFT / 4) {
-#if BSD>=43
 			in_losing(tp->t_inpcb);
-#endif
-			tp->t_rttvar += (tp->t_srtt >> 2);
+			tp->t_rttvar += (tp->t_srtt >> TCP_RTT_SHIFT);
 			tp->t_srtt = 0;
 		}
 		tp->snd_nxt = tp->snd_una;
+		/*
+		 * Force a segment to be sent.
+		 */
+		tp->t_flags |= TF_ACKNOW;
 		/*
 		 * If timing a segment in this window, stop the timer.
 		 */
@@ -223,11 +279,12 @@ tcp_timers(tp, timer)
 		 * to go below this.)
 		 */
 		{
-		u_int win = MIN(tp->snd_wnd, tp->snd_cwnd) / 2 / tp->t_maxseg;
+		u_int win = min(tp->snd_wnd, tp->snd_cwnd) / 2 / tp->t_maxseg;
 		if (win < 2)
 			win = 2;
 		tp->snd_cwnd = tp->t_maxseg;
 		tp->snd_ssthresh = win * tp->t_maxseg;
+		tp->t_dupacks = 0;
 		}
 		(void) tcp_output(tp);
 		break;
@@ -238,6 +295,25 @@ tcp_timers(tp, timer)
 	 */
 	case TCPT_PERSIST:
 		tcpstat.tcps_persisttimeo++;
+		/*
+		 * Hack: if the peer is dead/unreachable, we do not
+		 * time out if the window is closed.  After a full
+		 * backoff, drop the connection if the idle time
+		 * (no responses to probes) reaches the maximum
+		 * backoff that we would use if retransmitting.
+		 */
+		if (tp->t_rxtshift == TCP_MAXRXTSHIFT) {
+			u_long maxidle = TCP_REXMTVAL(tp);
+			if (maxidle < tp->t_rttmin)
+				maxidle = tp->t_rttmin;
+			maxidle *= tcp_totbackoff;
+			if (tp->t_idle >= tcp_maxpersistidle ||
+			    tp->t_idle >= maxidle) {
+				tcpstat.tcps_persistdrop++;
+				tp = tcp_drop(tp, ETIMEDOUT);
+				break;
+			}
+		}
 		tcp_setpersist(tp);
 		tp->t_force = 1;
 		(void) tcp_output(tp);
@@ -252,9 +328,10 @@ tcp_timers(tp, timer)
 		tcpstat.tcps_keeptimeo++;
 		if (tp->t_state < TCPS_ESTABLISHED)
 			goto dropit;
-		if (tp->t_inpcb->inp_socket->so_options & SO_KEEPALIVE &&
+		if ((always_keepalive ||
+		    tp->t_inpcb->inp_socket->so_options & SO_KEEPALIVE) &&
 		    tp->t_state <= TCPS_CLOSE_WAIT) {
-			if (tp->t_idle >= tcp_keepidle + tcp_maxidle)
+			if (tp->t_idle + 1 >= tcp_keepidle + tcp_maxidle)
 				goto dropit;
 			/*
 			 * Send a packet designed to force a response
@@ -269,15 +346,19 @@ tcp_timers(tp, timer)
 			 * correspondent TCP to respond.
 			 */
 			tcpstat.tcps_keepprobe++;
+#ifdef DEBUG
+			if (DODEBUG(DBGTCP))
+			    Printf("\021\03tcp_timers: probe\021\07\n");
+#endif
 #ifdef TCP_COMPAT_42
 			/*
 			 * The keepalive packet must have nonzero length
 			 * to get a 4.2 host to respond.
 			 */
-			tcp_respond(tp, tp->t_template,
+			tcp_respond(tp, tp->t_template, (struct mbuf *)NULL,
 			    tp->rcv_nxt - 1, tp->snd_una - 1, 0);
 #else
-			tcp_respond(tp, tp->t_template,
+			tcp_respond(tp, tp->t_template, (struct mbuf *)NULL,
 			    tp->rcv_nxt, tp->snd_una - 1, 0);
 #endif
 			tp->t_timer[TCPT_KEEP] = tcp_keepintvl;
@@ -285,11 +366,14 @@ tcp_timers(tp, timer)
 			tp->t_timer[TCPT_KEEP] = tcp_keepidle;
 		break;
 	dropit:
+#ifdef DEBUG
+		if (DODEBUG(DBGTCP))
+		    Printf("\021\01tcp_timers: dropit\021\07\n");
+#endif
 		tcpstat.tcps_keepdrops++;
 		tp = tcp_drop(tp, ETIMEDOUT);
 		break;
 	}
 	return (tp);
 }
-
-/* EOF tcp_timer.c */
+#endif /* TUBA_INCLUDE */
