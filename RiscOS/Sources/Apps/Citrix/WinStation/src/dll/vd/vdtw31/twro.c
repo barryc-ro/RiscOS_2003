@@ -987,6 +987,7 @@ static void set_sprite_palette(sprite_descr *descr, const ropalette *palette)
 }
 #endif
 
+#if 0
 /*
  * For this call the coordinates are already converted to OS coords, bottom left
  * seems to have a problem sometimes in 16 colour mode???
@@ -1017,6 +1018,7 @@ static void fill_sprite_from_screen(sprite_descr *descr, int x, int y)
 
     descr->empty = FALSE;
 }
+#endif
 
 /*
  * Copy betwen ropalette and PALETTEENTRY
@@ -1677,7 +1679,7 @@ static void realize_brush(HDC dc)
 
 		    /* convert the brush to the current mode and palette and adjust its rotation */
 		    for (x = (int)-dc->data.brush_org.x; x < BRUSH_WIDTH; x += BRUSH_WIDTH)
-			for (y = (int)dc->data.brush_org.y; y > -BRUSH_HEIGHT; y -= BRUSH_HEIGHT)
+			for (y = BRUSH_HEIGHT - (int)dc->data.brush_org.y; y > -BRUSH_HEIGHT; y -= BRUSH_HEIGHT)
 			    LOGERR(_swix(OS_SpriteOp, _INR(0,7),
 					 coltrans == NULL && brush->data.sprite.bpp == dc->data.bpp ? 34 + 512 : 52 + 512,
 					 sprite_in->area, first_sprite(sprite_in->area),
@@ -1688,6 +1690,9 @@ static void realize_brush(HDC dc)
 		    restore_output(restore);
 
 		    sprite_out->empty = FALSE;
+
+		    //save_sprite(sprite_in, "b1");
+		    //save_sprite(sprite_out, "b2");
 		}    
 	    }	    
 
@@ -1783,6 +1788,35 @@ static BOOL set_clip(HDC dc, region_rect **context)
 
 /* ---------------------------------------------------------------------------------------------------- */
 
+static void copysinglerectangle(HDC dc, const RECT *final, int dx, int dy)
+{
+    LOGERR(_swix(OS_Plot, _INR(0,2), 0+4,
+		 cvtx(dc, final->left - dx),
+		 cvty(dc, final->bottom - 1 - dy)));
+    
+    LOGERR(_swix(OS_Plot, _INR(0,2), 0+4,
+		 cvtx(dc, final->right - 1 - dx),
+		 cvty(dc, final->top - dy)));
+    
+    LOGERR(_swix(OS_Plot, _INR(0,2), 7+184,
+		 cvtx(dc, final->left),
+		 cvty(dc, final->bottom - 1)));
+}
+
+static void set_colour(HDC dc, int new_col, int new_action)
+{
+    // update currently set colour/action
+    if (dc->data.current.fg_col != new_col ||
+	dc->data.current.action != new_action)
+    {
+	dc->data.current.fg_col = new_col;
+	dc->data.current.action = new_action;
+	LOGERR(_swix(OS_SetColour, _INR(0,1), dc->data.current.action, dc->data.current.fg_col));
+    }
+}
+
+/* ---------------------------------------------------------------------------------------------------- */
+
 BOOL MoveToEx(HDC dc, int x, int y, LPPOINT pPoint)
 {
     TRACE((TC_TW, TT_TW_res3, "MoveToEx: dc %p%s %dx%d", dc, is_screen(dc), x, y));
@@ -1821,15 +1855,8 @@ BOOL LineTo(HDC dc, int x, int y)
     }
     
     // don't need to set up bgcol as we aren't using any non solid pens
-    // update the current colour and action
-    if (dc->data.current.fg_col != dc->data.local.pen_col ||
-	dc->data.current.action != dc->data.local.action.action)
-    {
-	dc->data.current.fg_col = dc->data.local.pen_col;
-	dc->data.current.action = dc->data.local.action.action;
-	
-	LOGERR(_swix(OS_SetColour, _INR(0,1), dc->data.current.action, dc->data.current.fg_col));
-    }
+
+    set_colour(dc, dc->data.local.pen_col, dc->data.local.action.action);
 
     x0 = cvtx(dc, dc->data.pen_pos.x);
     y0 = cvty(dc, dc->data.pen_pos.y);
@@ -1870,28 +1897,35 @@ static void rop3_use(int rop3, BOOL *uses_source, BOOL *uses_pattern)
 	*uses_source = (a % 5) != 0 || (b % 5) != 0;
 }
 
+/* In the RISC OS implementation of copyrectangle the areas outside
+ * the clipping rectangle aren't copied. So we need to enumerate the
+ * clipping areas but without actually setting clipping.
+ */
+
 static void copyrectangle(HDC dc, const bitblt_info *info)
 {
-    region_rect *context;
+    int dx = info->xDest - info->xSrc;
+    int dy = info->yDest - info->ySrc;
+    region_rect *r;
     
-    TRACE((TC_TW, TT_TW_res1, "copyrectangle:"));
+    TRACE((TC_TW, TT_TW_res1, "copyrectangle: delta %d,%d", dx, dy));
 
     switch_output(dc);
+    set_clip_full(dc);
 
-    context = NULL;
-    while (set_clip(dc, &context))
+    if (dc->data.clip)
     {
-	LOGERR(_swix(OS_Plot, _INR(0,2), 0+4,
-		     cvtx(dc, info->xSrc),
-		     cvty(dc, info->ySrc + info->Height - 1)));
-
-	LOGERR(_swix(OS_Plot, _INR(0,2), 0+4,
-		     cvtx(dc, info->xSrc + info->Width - 1),
-		     cvty(dc, info->ySrc)));
-		     
-	LOGERR(_swix(OS_Plot, _INR(0,2), 7+184,
-		     cvtx(dc, info->xDest),
-		     cvty(dc, info->yDest + info->Height - 1)));
+	for (r = dc->data.clip->data.base; r; r = r->next)
+	    copysinglerectangle(dc, &r->rect, dx, dy);
+    }
+    else
+    {
+	RECT rect;
+	rect.left = info->xDest;
+	rect.right = info->xDest + info->Width;
+	rect.top = info->yDest;
+	rect.bottom = info->yDest + info->Height;
+	copysinglerectangle(dc, &rect, dx, dy);
     }
 }
 
@@ -1938,7 +1972,7 @@ static void plotbitmap(HDC dc, HBITMAP bitmap, const bitblt_info *info, int acti
     free(coltrans);
 }
 
-static void tilesolidbrush(HDC dc, const bitblt_info *info, int rop3)
+static BOOL tilesolidbrush(HDC dc, const bitblt_info *info, int rop3)
 {
     HBRUSH brush;
     region_rect *context;
@@ -1949,10 +1983,13 @@ static void tilesolidbrush(HDC dc, const bitblt_info *info, int rop3)
     brush = dc->data.brush;
     ASSERT(brush, 0);
 
-    switch_output(dc);
-
     rop2 = Rop3ToRop2[(rop3 >> 16) & 0xff];
     new_action = rop2_to_action[rop2 - 1];
+
+    if (new_action.invert_D)
+	return FALSE;
+    
+    switch_output(dc);
 
     switch (rop2)
     {
@@ -1981,15 +2018,6 @@ static void tilesolidbrush(HDC dc, const bitblt_info *info, int rop3)
     else if (new_action.invert_P)
 	new_col = (~new_col) & 0xff;
 
-    // update currently set colour/action
-    if (dc->data.current.fg_col != new_col ||
-	dc->data.current.action != new_action.action)
-    {
-	dc->data.current.fg_col = new_col;
-	dc->data.current.action = new_action.action;
-	LOGERR(_swix(OS_SetColour, _INR(0,1), dc->data.current.action, dc->data.current.fg_col));
-    }
-	
     x0 = cvtx(dc, info->xDest);
     y0 = cvty(dc, info->yDest + info->Height - 1);
     x1 = cvtx(dc, info->xDest + info->Width);
@@ -2005,13 +2033,19 @@ static void tilesolidbrush(HDC dc, const bitblt_info *info, int rop3)
 	// some tricky plot actions require inverting the destination before plotting
 	if (new_action.invert_D)
 	{
+	    set_colour(dc, new_col, plotaction_INVERT);
+	
 	    LOGERR(_swix(OS_Plot, _INR(0,2), 0+4, x0, y0));	// moveto
-	    LOGERR(_swix(OS_Plot, _INR(0,2), 0+6, x1, y1));	// invertto
+	    LOGERR(_swix(OS_Plot, _INR(0,2), 96+5, x1, y1));	// fillto
 	}
 
+	set_colour(dc, new_col, new_action.action);
+	
 	LOGERR(_swix(OS_Plot, _INR(0,2), 0+4, x0, y0));		// moveto
 	LOGERR(_swix(OS_Plot, _INR(0,2), 96+5, x1, y1));	// fillto
     }
+
+    return TRUE;
 }
 
 static BOOL tilebitmapbrush(HDC dc, const bitblt_info *info, int rop3)
@@ -2258,7 +2292,10 @@ static int rop3_function(unsigned *code, int rop3)
 
     // take into account parity bit
     if (rop3 & LogPar)
+    {
+	TRACE((TC_TW, TT_TW_res4, "logop: NOT"));
 	invert = !invert;
+    }
 
     // copy to output with possible inversion
     *code++ = construct_op(invert ? LogNOT : LogMOV, OpOut, current);
@@ -2685,9 +2722,9 @@ static void bitblt_generic(HDC dcDest, HDC dcSrc, bitblt_info *info, int rop3)
 		    {
 			p = *pptr++;
 
-			if (++brush_phase_x == (BRUSH_WIDTH-1))
+			if (++brush_phase_x == BRUSH_WIDTH)
 			{
-			    brush_phase_x0 = 0;
+			    brush_phase_x = 0;
 			    pptr = (char *)p_line.data;
 			}
 		    }
@@ -2872,11 +2909,22 @@ static void bitblt_same_context_8(HDC dc, bitblt_info *info, int rop3)
 		{
 		    p = *pp;
 
-		    brush_phase_x = (brush_phase_x + x_dir) & (BRUSH_WIDTH-1);
-		    if (brush_phase_x == (x_dir == 1 ? 0 : BRUSH_WIDTH-1))
-			pp = (char *)p_line.data + brush_phase_x0;
+		    if (x_dir > 0)
+		    {
+			if (++brush_phase_x == BRUSH_WIDTH)
+			{
+			    brush_phase_x = 0;
+			    pp = (char *)p_line.data;
+			}
+		    }
 		    else
-			pp += x_dir;
+		    {
+			if (--brush_phase_x == -1)
+			{
+			    brush_phase_x = BRUSH_WIDTH-1;
+			    pp = (char *)p_line.data + (BRUSH_WIDTH-1);
+			}
+		    }
 		}
 
 		*dp = fn(*dp, *sp, p);
@@ -3166,18 +3214,19 @@ BOOL BitBlt(HDC dcDest, int xDest, int yDest, int Width, int Height, HDC dcSrc, 
     
     if (!use_source)
     {
+	BOOL done;
+	
 	if (!use_pattern || dcDest->data.brush->data.solid)
-	{
-	    tilesolidbrush(dcDest, &info, (int)rop3);
-	}
-	else if (!tilebitmapbrush(dcDest, &info, (int)rop3))
-	{
+	    done = tilesolidbrush(dcDest, &info, (int)rop3);
+	else
+	    done = tilebitmapbrush(dcDest, &info, (int)rop3);
+
+	if (!done)
 	    bitblt_nosource(dcDest, &info, (int)rop3); // bitmap pattern and dest
-	}
     }
     else if (dcSrc == dcDest)
     {
-	switch ((int)rop3)
+	switch (rop3)
 	{
 	case SRCCOPY:
 	    copyrectangle(dcDest, &info);
@@ -3743,8 +3792,32 @@ int GetDIBits(HDC dc, HBITMAP bitmap, UINT start, UINT num, LPVOID bits, LPBITMA
 
 int GetRgnBox(HRGN rgn, LPRECT rect)
 {
+    region_rect *r;
+    RECT rr;
+
     TRACE((TC_TW, TT_TW_res4, "GetRgnBox: rgn %p", rgn));
-    return 1;
+
+    r = rgn->data.base;
+    rr = r->rect;
+    for (r = r->next; r; r = r->next)
+    {
+	if (rr.top > r->rect.top)
+	    rr.top = r->rect.top;
+
+	if (rr.left > r->rect.left)
+	    rr.left = r->rect.left;
+
+	if (rr.bottom < r->rect.bottom)
+	    rr.bottom = r->rect.bottom;
+
+	if (rr.right < r->rect.right)
+	    rr.right = r->rect.right;
+    }
+
+    if (rect)
+	*rect = rr;
+
+    return SIMPLEREGION;
 }
 
 HGDIOBJ GetStockObject(int type)
@@ -4153,6 +4226,15 @@ BOOL SetBrushOrgEx(HDC dc, int x, int y, LPPOINT pt)
 
     if (pt)
 	*pt = dc->data.brush_org;
+    
+#if REALIZE_BRUSH
+    /* free cached brush if origin has changed */
+    if (dc->data.brush_org.x != x || dc->data.brush_org.y != y)
+    {
+	free_sprite(&dc->data.realized.brush);
+	dc->data.realized.brush_realized = FALSE;
+    }
+#endif
     
     dc->data.brush_org.x = x;
     dc->data.brush_org.y = y;
