@@ -650,21 +650,29 @@ static void session__close(icaclient_session sess)
 
 /* --------------------------------------------------------------------------------------------- */
 
+#define GSTRANS_BUFSIZE	1024
+
 static char *extract_and_expand(const char *in, int len)
 {
-    char *out, *o;
+    char *out, *o, *translated;
     const char *s;
-    int i;
+    int i, n, flags;
     
+    TRACE((TC_UI, TT_API4, "extract_and_expand: %p %d", in, len));
+
     if (len == -1)
 	len = strlen(in);
 
     if (len == 0)
 	return NULL;
 
+    TRACE((TC_UI, TT_API4, "extract_and_expand: '%.*s'", len, in));
+
+    /* unescaped length will never be greater than input length */
     if ((out = malloc(len + 1)) == NULL)
 	return NULL;
 
+    /* unescape string to 'out' */
     o = out;
     s = in;
     for (i = 0; i < len; i++)
@@ -684,10 +692,42 @@ static char *extract_and_expand(const char *in, int len)
 	    *o++ = c;
 	}
     }
-    *o = 0;
+    *o++ = 0;
     
-    return out;
+    TRACE((TC_UI, TT_API1, "extract_and_expand: out '%s'", out));
+
+    /* allocate buffer for GSTrans */
+    translated = calloc(GSTRANS_BUFSIZE, 1);
+
+    if (_swix(OS_GSTrans, _INR(0,2) | _OUT(2) | _OUT(_FLAGS),
+	      out, translated, GSTRANS_BUFSIZE | (1<<30) | (1U<<31),	/* don't convert |<nn>, don't strip double quotes */
+		 &n, &flags) != NULL ||
+	n == GSTRANS_BUFSIZE ||
+	(flags & _C) != 0)
+    {
+	/* on error or overflow then return original 'out' string */
+	free(translated);
+	return realloc(out, o - out);
+    }
+
+    TRACE((TC_UI, TT_API1, "extract_and_expand: translated '%s' n %d", translated, n));
+
+    free(out);
+    
+    /* ensure termination and trim string */
+    translated[n] = 0;
+    translated = realloc(translated, n+1);
+
+    TRACE((TC_UI, TT_API1, "extract_and_expand: translated '%s' n %d", translated, n));
+
+    return translated;
 }
+
+/*
+ * If this function changes from putting the last element on the head of the list then
+ *  open_url's fresco patch needs changing
+ *  something needs to take account of the duplication of Address fields that can occur.
+ */
 
 static void add_element(arg_element **pargs, char *name, char *value)
 {
@@ -749,6 +789,7 @@ icaclient_session session_open_url(const char *url, const char *bfile)
     char *description = NULL;
     const char *s;
     arg_element *arg_list = NULL;
+    BOOL unterminated_host = FALSE;
 
     TRACE((TC_UI, TT_API1, "session_open_url: '%s'", url));
 
@@ -757,11 +798,23 @@ icaclient_session session_open_url(const char *url, const char *bfile)
     if (s[0] == '/' && s[1] == '/')
     {
 	const char *start = s+2;
-	const char *end = strchr(start, '/');
-	char *host = extract_and_expand(start, end ? end - start : -1);
+	const char *query = strchr(start, '?');
+	const char *slash = strchr(start, '/');
+	const char *end;
+	char *host;
+
+	if (query && query < slash)
+	{
+	    end = query;
+	    unterminated_host = TRUE;
+	}
+	else
+	    end = slash;
+
+	host = extract_and_expand(start, end ? end - start : -1);
 
 	add_element(&arg_list, strdup(INI_ADDRESS), host);
-
+	
 	s = end;
     }
 
@@ -780,6 +833,15 @@ icaclient_session session_open_url(const char *url, const char *bfile)
     if (s && s[0] == '?' && s[1] > ' ')
     {
 	parse_args(&arg_list, s);
+
+	/* patch up the case where Fresco puts a slash on the end of the URL if the host name wasn't terminated */
+	if (unterminated_host && arg_list)
+	{
+	    char *last = arg_list->value ? arg_list->value : arg_list->name;
+	    int len = strlen(last);
+	    if (last[len-1] == '/')
+		last[len-1] = '\0';
+	}
     }
 
     /* get args from POST file */
