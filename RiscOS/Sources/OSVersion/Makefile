@@ -42,7 +42,7 @@ OBJS = o.ModHead
 #
 # Rule patterns
 #
-.s.o:;      ${AS} ${AFLAGS} $< $@ -Predefine "Date SETS \"${DATE}\"" -Predefine "Version SETS \"${VERSION}\"" -Predefine "Name SETS \"${NAME}\"" -Predefine "Build SETS \"${BUILDNAME}\"" 
+.s.o:;      ${AS} ${AFLAGS} $< $@ -pd "Date SETS \"${DATE}\"" -pd "Version SETS \"${VERSION}\"" -pd "Name SETS \"${NAME}\"" -pd "Build SETS \"${BUILDNAME}\"" 
 
 #
 # Generic rules:
@@ -76,15 +76,3 @@ dummy:
 	@
 
 # Dynamic dependencies:
-o.ModHead: s.ModHead
-o.ModHead: Hdr:ListOpts
-o.ModHead: Hdr:Macros
-o.ModHead: Hdr:System
-o.ModHead: Hdr:SWIs
-o.ModHead: Hdr:CPU.Generic26
-o.ModHead: Hdr:IO.GenericIO
-o.ModHead: Hdr:RISCOS
-o.ModHead: Hdr:ModHand
-o.ModHead: Hdr:Machine.<Machine>
-o.ModHead: Hdr:Machine.Machine
-o.ModHead: Hdr:Proc
