@@ -36,7 +36,7 @@ DIRS=o._dirs
 COMPONENT  = amu
 TARGET     = amu
 
-OBJS       = amu.o md.o macros.o parse.o readmk.o functions.o patterns.o utility.o
+OBJS       = amu.o md.o macros.o parse.o readmk.o functions.o patterns.o utility.o execute.o
 LIBS       = ${CLXLIB} ${CLIB}
 
 #
