@@ -93,7 +93,9 @@ resources: ${APPTARGET}
         ${CP} ${APPTARGET}                     ${RESDIR}.ScrSaver.!RunImage  ${CPFLAGS}
         ${CP} Resources.${LOCALE}.!Run         ${RESDIR}.ScrSaver.!Run       ${CPFLAGS}
         ${CP} Resources.${LOCALE}.Templates    ${RESDIR}.ScrSaver.Templates  ${CPFLAGS}
-        ${SHRINK} Resources.${LOCALE}.Sprites  ${RESDIR}.ScrSaver.Sprites
+        Set SpriteFile Resources.${LOCALE}.Sprites
+        IfThere Resources.${LOCALE}.${SYSTEM}.Sprites Then Set SpriteFile Resources.${LOCALE}.${SYSTEM}.Sprites
+        ${SHRINK} <SpriteFile>  ${RESDIR}.ScrSaver.Sprites
         @echo ${COMPONENT}: resource files copied
 
 #
@@ -124,6 +126,9 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 #       ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
+o.module:	c.module
+o.module:	C:h.kernel
+o.module:	h.module
 o.app:	c.app
 o.app:	C:h.swis
 o.app:	C:h.kernel
@@ -144,6 +149,4 @@ o.app:	C:h.bbc
 o.app:	C:h.colourtran
 o.app:	C:h.font
 o.app:	C:h.drawmod
-o.module:	c.module
-o.module:	C:h.kernel
-o.module:	h.module
+o.app:	C:h.werr
