@@ -7,7 +7,7 @@
 #
 # Makefile for Freeway module
 #
-# $Log$
+# :RCS Log discontinued:
 # Revision 1.2  95/01/09  13:43:39  kwelton
 # Now use system versions of "kernel.h" and "swis.h", "_swis.h" no longer
 # exists - remade dependencies.
