@@ -58,7 +58,7 @@ install: ${TARGET}
         @echo ${COMPONENT}: disc module installed
 
 clean:
-        ${WIPE} rm.* ${WPFLAGS}
+        -${WIPE} rm.* ${WPFLAGS}
         ${RM} Sprites.Soak.Frame0
         ${RM} Sprites.Test.Frame0
         ${RM} Sprites.Soak.32bpp
@@ -113,7 +113,6 @@ rm.SoakTest: Hdr:MPEGVideo
 rm.SoakTest: Hdr:MPEGAudio
 rm.SoakTest: Hdr:MPEGCard
 rm.SoakTest: s.Module
-rm.SoakTest: <Src$Dir>.OS_Core.Kernel.TestSrc.ToggleLED
 rm.Falcon.SoakTest: Hdr.<MACHINE>.GetAll_MS
 rm.Falcon.SoakTest: Hdr:ListOpts
 rm.Falcon.SoakTest: Hdr:Macros
@@ -142,7 +141,6 @@ rm.Falcon.SoakTest: Hdr:MPEGAudio
 rm.Falcon.SoakTest: Hdr:MPEGCard
 rm.Falcon.SoakTest: Hdr:STBState
 rm.Falcon.SoakTest: s.Module
-rm.Falcon.SoakTest: <Src$Dir>.OS_Core.Kernel.TestSrc.ToggleLED
 rm.Omega.SoakTest: Hdr.<MACHINE>.GetAll_MS
 rm.Omega.SoakTest: Hdr:ListOpts
 rm.Omega.SoakTest: Hdr:Macros
@@ -166,4 +164,4 @@ rm.Omega.SoakTest: Hdr:PoduleReg
 rm.Omega.SoakTest: Hdr:HighFSI
 rm.Omega.SoakTest: Hdr:Sprite
 rm.Omega.SoakTest: s.Module
-rm.Omega.SoakTest: <Src$Dir>.OS_Core.Kernel.TestSrc.ToggleLED
+rm.Omega.SoakTest: <Src$Dir>.Kernel.TestSrc.ToggleLED
