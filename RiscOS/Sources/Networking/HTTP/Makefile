@@ -66,7 +66,7 @@ EXPORTS   = h.httppub
 # Rule patterns
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $< -DNO_SECURE
-.c.os:;     ${CC} ${CFLAGS} -o $@ $<
+.c.os:;     ${CC} ${CFLAGS} -o $@ $< -DVERIFY_MD
 .cmhg.o:;   ${CMHG} -o $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
 
@@ -112,8 +112,8 @@ resources:
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS} ${ROMCSTUBS} ${INSECURELIBS}
-        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS} ${INSECURELIBS}
+${TARGET}: ${SECUREOBJS} ${ROMCSTUBS} ${SECURELIBS}
+        ${LD} -o $@ -aof ${SECUREOBJS} ${ROMCSTUBS} ${SECURELIBS}
 
 #
 # Final link for the ROM Image (using given base address)
@@ -137,9 +137,71 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 os.mimemap:	c.mimemap
 os.mimemap:	C:h.kernel
 os.mimemap:	h.mimemap
+os.mimemap:	c.mimemap
+os.mimemap:	C:h.kernel
+os.mimemap:	h.mimemap
 os.files:	c.files
 os.files:	C:h.kernel
 os.files:	h.files
+o.mimemap:	c.mimemap
+o.mimemap:	C:h.kernel
+o.mimemap:	h.mimemap
+o.mimemap:	c.mimemap
+o.mimemap:	C:h.kernel
+o.mimemap:	h.mimemap
+o.files:	c.files
+o.files:	C:h.kernel
+o.files:	h.files
+o.http:	c.http
+o.http:	C:h.kernel
+o.http:	C:h.swis
+o.http:	h.tcplibs
+o.http:	TCPIPLibs:sys.h.types
+o.http:	TCPIPLibs:sys.h.cdefs
+o.http:	TCPIPLibs:machine.h.endian
+o.http:	TCPIPLibs:machine.h.ansi
+o.http:	TCPIPLibs:machine.h.types
+o.http:	TCPIPLibs:sys.h.socket
+o.http:	TCPIPLibs:sys.h.cdefs
+o.http:	TCPIPLibs:sys.h.errno
+o.http:	C:h.kernel
+o.http:	TCPIPLibs:net.h.if
+o.http:	TCPIPLibs:sys.h.socket
+o.http:	TCPIPLibs:sys.h.time
+o.http:	TCPIPLibs:sys.h.cdefs
+o.http:	TCPIPLibs:net.h.if_arp
+o.http:	TCPIPLibs:sys.h.socket
+o.http:	TCPIPLibs:netinet.h.in
+o.http:	TCPIPLibs:sys.h.ioctl
+o.http:	TCPIPLibs:sys.h.ttycom
+o.http:	TCPIPLibs:sys.h.ioccom
+o.http:	TCPIPLibs:sys.h.ioccom
+o.http:	TCPIPLibs:sys.h.filio
+o.http:	TCPIPLibs:sys.h.ioccom
+o.http:	TCPIPLibs:sys.h.sockio
+o.http:	TCPIPLibs:sys.h.ioccom
+o.http:	TCPIPLibs:sys.h.cdefs
+o.http:	TCPIPLibs:h.netdb
+o.http:	TCPIPLibs:sys.h.cdefs
+o.http:	TCPIPLibs:netns.h.ns
+o.http:	TCPIPLibs:sys.h.cdefs
+o.http:	TCPIPLibs:sys.h.time
+o.http:	TCPIPLibs:h.socklib
+o.http:	TCPIPLibs:sys.h.types
+o.http:	TCPIPLibs:sys.h.socket
+o.http:	TCPIPLibs:sys.h.stat
+o.http:	TCPIPLibs:sys.h.time
+o.http:	TCPIPLibs:sys.h.cdefs
+o.http:	TCPIPLibs:sys.h.time
+o.http:	TCPIPLibs:sys.h.uio
+o.http:	TCPIPLibs:sys.h.cdefs
+o.http:	C:h.kernel
+o.http:	h.status
+o.http:	h.httppub
+o.http:	h.pads
+o.http:	h.http
+o.http:	h.files
+o.http:	h.mimemap
 os.http:	c.http
 os.http:	C:h.kernel
 os.http:	C:h.swis
@@ -185,12 +247,18 @@ os.http:	TCPIPLibs:sys.h.uio
 os.http:	TCPIPLibs:sys.h.cdefs
 os.http:	C:h.kernel
 os.http:	h.status
-os.http:	<Lib$Dir>.SSL.h.ssl
-os.http:	<Lib$Dir>.SSL.h.x509
-os.http:	<Lib$Dir>.SSL.h.stack
+os.http:	<Lib$Dir>.SSL.h.objects
 os.http:	<Lib$Dir>.SSL.h.asn1
 os.http:	<Lib$Dir>.SSL.h.bn
 os.http:	<Lib$Dir>.SSL.h.stack
+os.http:	<Lib$Dir>.SSL.h.pem
+os.http:	<Lib$Dir>.SSL.h.rsa
+os.http:	<Lib$Dir>.SSL.h.bn
+os.http:	<Lib$Dir>.SSL.h.dsa
+os.http:	<Lib$Dir>.SSL.h.bn
+os.http:	<Lib$Dir>.SSL.h.x509
+os.http:	<Lib$Dir>.SSL.h.stack
+os.http:	<Lib$Dir>.SSL.h.asn1
 os.http:	<Lib$Dir>.SSL.h.envelope
 os.http:	<Lib$Dir>.SSL.h.md2
 os.http:	<Lib$Dir>.SSL.h.md5
@@ -200,10 +268,85 @@ os.http:	<Lib$Dir>.SSL.h.rc4
 os.http:	<Lib$Dir>.SSL.h.rc2
 os.http:	<Lib$Dir>.SSL.h.idea
 os.http:	<Lib$Dir>.SSL.h.rsa
+os.http:	<Lib$Dir>.SSL.h.dsa
+os.http:	<Lib$Dir>.SSL.h.dh
+os.http:	<Lib$Dir>.SSL.h.envelope
+os.http:	<Lib$Dir>.SSL.h.ssl
+os.http:	h.httppub
+os.http:	h.pads
+os.http:	h.http
+os.http:	h.files
+os.http:	h.mimemap
+os.http:	c.http
+os.http:	C:h.kernel
+os.http:	C:h.swis
+os.http:	h.tcplibs
+os.http:	TCPIPLibs:sys.h.types
+os.http:	TCPIPLibs:sys.h.cdefs
+os.http:	TCPIPLibs:machine.h.endian
+os.http:	TCPIPLibs:machine.h.ansi
+os.http:	TCPIPLibs:machine.h.types
+os.http:	TCPIPLibs:sys.h.socket
+os.http:	TCPIPLibs:sys.h.cdefs
+os.http:	TCPIPLibs:sys.h.errno
+os.http:	C:h.kernel
+os.http:	TCPIPLibs:net.h.if
+os.http:	TCPIPLibs:sys.h.socket
+os.http:	TCPIPLibs:sys.h.time
+os.http:	TCPIPLibs:sys.h.cdefs
+os.http:	TCPIPLibs:net.h.if_arp
+os.http:	TCPIPLibs:sys.h.socket
+os.http:	TCPIPLibs:netinet.h.in
+os.http:	TCPIPLibs:sys.h.ioctl
+os.http:	TCPIPLibs:sys.h.ttycom
+os.http:	TCPIPLibs:sys.h.ioccom
+os.http:	TCPIPLibs:sys.h.ioccom
+os.http:	TCPIPLibs:sys.h.filio
+os.http:	TCPIPLibs:sys.h.ioccom
+os.http:	TCPIPLibs:sys.h.sockio
+os.http:	TCPIPLibs:sys.h.ioccom
+os.http:	TCPIPLibs:sys.h.cdefs
+os.http:	TCPIPLibs:h.netdb
+os.http:	TCPIPLibs:sys.h.cdefs
+os.http:	TCPIPLibs:netns.h.ns
+os.http:	TCPIPLibs:sys.h.cdefs
+os.http:	TCPIPLibs:sys.h.time
+os.http:	TCPIPLibs:h.socklib
+os.http:	TCPIPLibs:sys.h.types
+os.http:	TCPIPLibs:sys.h.socket
+os.http:	TCPIPLibs:sys.h.stat
+os.http:	TCPIPLibs:sys.h.time
+os.http:	TCPIPLibs:sys.h.cdefs
+os.http:	TCPIPLibs:sys.h.time
+os.http:	TCPIPLibs:sys.h.uio
+os.http:	TCPIPLibs:sys.h.cdefs
+os.http:	C:h.kernel
+os.http:	h.status
+os.http:	<Lib$Dir>.SSL.h.objects
+os.http:	<Lib$Dir>.SSL.h.asn1
+os.http:	<Lib$Dir>.SSL.h.bn
+os.http:	<Lib$Dir>.SSL.h.stack
+os.http:	<Lib$Dir>.SSL.h.pem
+os.http:	<Lib$Dir>.SSL.h.rsa
 os.http:	<Lib$Dir>.SSL.h.bn
 os.http:	<Lib$Dir>.SSL.h.dsa
 os.http:	<Lib$Dir>.SSL.h.bn
+os.http:	<Lib$Dir>.SSL.h.x509
+os.http:	<Lib$Dir>.SSL.h.stack
+os.http:	<Lib$Dir>.SSL.h.asn1
+os.http:	<Lib$Dir>.SSL.h.envelope
+os.http:	<Lib$Dir>.SSL.h.md2
+os.http:	<Lib$Dir>.SSL.h.md5
+os.http:	<Lib$Dir>.SSL.h.sha
+os.http:	<Lib$Dir>.SSL.h.des
+os.http:	<Lib$Dir>.SSL.h.rc4
+os.http:	<Lib$Dir>.SSL.h.rc2
+os.http:	<Lib$Dir>.SSL.h.idea
+os.http:	<Lib$Dir>.SSL.h.rsa
+os.http:	<Lib$Dir>.SSL.h.dsa
 os.http:	<Lib$Dir>.SSL.h.dh
+os.http:	<Lib$Dir>.SSL.h.envelope
+os.http:	<Lib$Dir>.SSL.h.ssl
 os.http:	h.httppub
 os.http:	h.pads
 os.http:	h.http
