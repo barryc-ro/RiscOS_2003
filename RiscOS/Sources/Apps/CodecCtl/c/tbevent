@@ -18,23 +18,15 @@
 #include "types.h"
 #include "tbevent.h"
 
-
-static _kernel_oserror err = {0, "Error in event handling"};
-
-static _kernel_oserror *make_error (void)
-{
-    return &err;
-} 
+static _kernel_oserror err_memory = {0, "Not enough memory"};
 
 static ToolboxEventHandlerItem *tbevent__handlers[256];
-
 static ToolboxEventHandlerItem *tbevent__all_handlers = 0;
-
+static ToolboxEventHandlerItem *next_handler;
 
 static int hash (int word)
 {
     /* hashing algorithm: add ascending bytes, with carry, and use lower byte as result */
-
     int temp =  (word&0xff) + 
                 ((word>>8)&0xff) +
                 ((word>>16)&0xff) +
@@ -43,11 +35,13 @@ static int hash (int word)
     return ((temp&0xff) + ((temp>>8)&0xff)) & 0xff;
 }
 
-#define handler_matches(h, object_id, event_code, handler, handle)   h->object_id == (object_id)\
-                                                                 && h->event_code == (event_code)\
-                                                                 && h->handler == (handler)\
-                                                                 && h->handle == (handle)
-
+#define handler_matches(h, object_id, event_code, handler, handle) \
+   ( \
+      (h)->object_id  == (object_id) && \
+      (h)->event_code == (event_code) && \
+      (h)->handler    == (handler) && \
+      (h)->handle     == (handle) \
+   )
 
 /* ------------------------------------ dispatching toolbox events -------------------------------- */
 
@@ -70,34 +64,39 @@ static int toolbox_event_matches (int event_code, ToolboxEventHandlerItem *h, Id
 }
 
 static _kernel_oserror *call_toolbox_handlers (ToolboxEventHandlerItem *handlers,
-      WimpPollBlock *poll_block, IdBlock *id_block, int *claimed)
+      WimpPollBlock *poll_block, IdBlock *id_block, int *claimed_out)
 {
     ToolboxEvent *toolbox_event = (ToolboxEvent *)&poll_block->words;
-    int c;
-    ToolboxEventHandlerItem *h, *next;
+    int c, claimed;
+    ToolboxEventHandlerItem *h;
 
-    for (h = handlers; h != NULL; h = next)
+    claimed = FALSE;
+    for (h = handlers; h != NULL; h = next_handler)
     {
-        next = h->next; /*prevent use when freed*/
+        next_handler = h->next; /*prevent use when freed*/
 
-        if (toolbox_event_matches (toolbox_event->hdr.event_code, h, id_block) && h->handler != NULL)
+        if (toolbox_event_matches (toolbox_event->hdr.event_code, h, id_block) &&
+              h->handler != NULL)
         {
             /* call the handler */
             TRACE2 ("calling toolbox event handler\n");
             c = h->handler (toolbox_event->hdr.event_code, toolbox_event, id_block, h->handle);
-            TRACE2 ("called toolbox event handler %d\n" _ c);
+            TRACE2 ("handler claimed? %s\n" _ c? "TRUE": "FALSE");
+
             if (c)
             {
-                *claimed = 1;
-                return NULL;
+                claimed = TRUE;
+                break;
             }
         }
     }
 
-    *claimed = 0;
+    next_handler = NULL; /*so it can't match when deregistering from outside
+          this function JRC 1 Jul 1997*/
+
+    *claimed_out = claimed;
     return NULL;
 }
-
 
 extern _kernel_oserror *tbevent_dispatch (WimpPollBlock *poll_block, IdBlock *id_block)
 {
@@ -144,14 +143,16 @@ _kernel_oserror *tbevent_register_toolbox_handler (int object_id, int event_code
      * start looking down the linked list which hangs off the array element for this toolbox event
      */
 
-    elem = hash(event_code);
  
     TRACE2 ("tbevent_register Event %x @ element %d\n" _ event_code _ elem);
 
     if (event_code == -1)
         h =  tbevent__all_handlers;
-    else          
+    else
+    {
+        elem = hash(event_code);
         h = tbevent__handlers[elem];
+    }
 
     while (h != NULL)
     {
@@ -174,7 +175,7 @@ _kernel_oserror *tbevent_register_toolbox_handler (int object_id, int event_code
      */
 
     if ((new_h = m_MALLOC (sizeof(ToolboxEventHandlerItem))) == NULL)
-        return make_error ();
+        return &err_memory;
 
     new_h->object_id  = object_id;
     new_h->event_code = event_code;
@@ -213,7 +214,6 @@ _kernel_oserror *tbevent_deregister_toolbox_handler (int object_id, int event_co
      * start looking down the linked list which hangs off the array element for this event
      */
 
-    elem = hash(event_code);
   
     /* IDJ: bug-fix after product release
        was looking in wrong list, so couldn't ever delete a handler!
@@ -226,6 +226,7 @@ _kernel_oserror *tbevent_deregister_toolbox_handler (int object_id, int event_co
     }
     else
     {          
+        elem = hash(event_code);
         h = prev_h = tbevent__handlers[elem];
         listhead   = &tbevent__handlers[elem];
     }
@@ -233,7 +234,7 @@ _kernel_oserror *tbevent_deregister_toolbox_handler (int object_id, int event_co
     while (h != NULL)
     {
         /*
-         * see if there's a handler, which matches.
+         * see if there's a handler which matches.
          */
 
         if (handler_matches (h, object_id, event_code, handler, handle))
@@ -252,6 +253,11 @@ _kernel_oserror *tbevent_deregister_toolbox_handler (int object_id, int event_co
             *listhead = h->next;
         else
             prev_h->next = h->next;
+
+        /*We might be in a dispatch loop, being called from a callback. If
+            so, make sure that the one next in the loop is not the one we are
+            just about to delete. JRC 1 Jul 1997*/
+        if (next_handler == h) next_handler = h->next;
 
         m_FREE (h, sizeof *h);
     }

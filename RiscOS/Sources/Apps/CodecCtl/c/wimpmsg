@@ -19,7 +19,8 @@
 #include "wimpmsg.h"
 
 
-static _kernel_oserror err = {0, "Error in event handling"};
+static _kernel_oserror err_event = {0, "Error in event handling"},
+      err_memory = {0, "Not enough memory"};
 
 #if TRACE
 /*------------------------------------------------------------------------*/
@@ -41,28 +42,18 @@ static char *Function_Name (WimpMessageHandler *fn)
 }
 #endif
 
-
-static _kernel_oserror *make_error(void)
-{
-    return &err;
-}
-
 static WimpMessageHandlerItem  *wimpmsg__handlers = 0;   /* the list of all wimp message handlers */
 
+static WimpMessageHandlerItem  *next_handler;   /* the next message handler */
 
 /* ----------------------------------- dispatching a wimp message ----------------------------------- */
 
-
-static int wimpmsg_message_matches (WimpMessageHandlerItem *h, WimpPollBlock *poll_block)
+static BOOL wimpmsg_message_matches (WimpMessageHandlerItem *h, WimpPollBlock *poll_block)
 {
     int msg_no = poll_block->user_message.hdr.action_code;
 
-    if (h->msg_no == -1 || h->msg_no == msg_no)
-        return 1;
-
-    return 0;
+    return h->msg_no == -1 || h->msg_no == msg_no;
 }
-
 
 extern _kernel_oserror *wimpmsg_dispatch (WimpPollBlock *poll_block, IdBlock *id_block)
 {
@@ -72,14 +63,14 @@ extern _kernel_oserror *wimpmsg_dispatch (WimpPollBlock *poll_block, IdBlock *id
      * message.
      */
 
-    WimpMessageHandlerItem *h, *next;
+    WimpMessageHandlerItem *h;
     int c;
-    
+
     NOT_USED (id_block);
-    
-    for (h = wimpmsg__handlers; h != NULL; h = next)
+
+    for (h = wimpmsg__handlers; h != NULL; h = next_handler)
     {
-       next = h->next; /*avoid use when freed*/
+       next_handler = h->next; /*avoid use when freed*/
        
        if (wimpmsg_message_matches (h, poll_block) && h->handler != NULL)
        {
@@ -87,11 +78,14 @@ extern _kernel_oserror *wimpmsg_dispatch (WimpPollBlock *poll_block, IdBlock *id
            TRACE2 ("calling Wimp message handler h 0x%X, h->handler 0x%X\n" _ h _ h->handler);
            TRACE2 ("fn %s\n" _ Function_Name (h->handler));
            c = h->handler (&poll_block->user_message, h->handle);
-           TRACE2 ("called Wimp message handler %d\n" _ c);
-           if (c) return NULL;
+           TRACE2 ("handler claimed? %s\n" _ c? "TRUE": "FALSE");
+           if (c) break;
        }
     }
-     
+
+    next_handler = NULL; /*so it can't match when deregistering from outside
+        this function JRC 1 Jul 1997*/
+
     return NULL;
 }
 
@@ -113,7 +107,7 @@ _kernel_oserror *wimpmsg_register_message_handler (int msg_no, WimpMessageHandle
      * create a new element and link it into the list.
      */
     if ((new_h = m_MALLOC (sizeof(WimpMessageHandlerItem))) == NULL)
-        return make_error ();
+        return &err_memory;
 
     new_h->msg_no     = msg_no;
     new_h->handler    = handler;
@@ -139,11 +133,17 @@ _kernel_oserror *wimpmsg_deregister_message_handler (int msg_no, WimpMessageHand
          /*found---delete it!*/
          hh = *h; /*prevent use when freed*/
 
+         /*We might be in a dispatch loop, being called from a callback. If
+            so, make sure that the one next in the loop is not the one we are
+            just about to delete. JRC 1 Jul 1997*/
+         if (next_handler == hh)
+            next_handler = hh->next;
+
          *h = hh->next;
          m_FREE (hh, sizeof *hh);
     
          return NULL;
       }
 
-   return make_error ();
+   return &err_event;
 }

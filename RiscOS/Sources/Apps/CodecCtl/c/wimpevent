@@ -19,19 +19,13 @@
 #include "wimpevent.h"
 
 
-static _kernel_oserror err = {0, "Error in event handling"};
-
-static _kernel_oserror *make_error (void)
-{
-    return &err;
-}
-
+static _kernel_oserror err_memory = {0, "Not enough memory"};
 
 #define MAX_WIMP_HANDLER 20
 
-
 static WimpEventHandlerItem    *wimpevent__handlers[MAX_WIMP_HANDLER+1];
 static WimpEventHandlerItem    *wimpevent__all_handlers = 0;
+static WimpEventHandlerItem    *next_handler;
 
 
 #define handler_matches(h, object_id, event_code, handler, handle)   h->object_id == (object_id)\
@@ -63,14 +57,15 @@ static int wimp_event_matches (int event_code, WimpEventHandlerItem *h, IdBlock 
 }
 
 static _kernel_oserror *call_wimp_event_handlers (int event_code, WimpEventHandlerItem *handlers,
-      WimpPollBlock *poll_block, IdBlock *id_block, int *claimed)
+      WimpPollBlock *poll_block, IdBlock *id_block, int *claimed_out)
 {
-   int c;
-   WimpEventHandlerItem *h, *next;
+   int c, claimed;
+   WimpEventHandlerItem *h;
 
-   for (h = handlers; h != NULL; h = next)
+   claimed = FALSE;
+   for (h = handlers; h != NULL; h = next_handler)
    {
-      next = h->next; /*prevent use when freed*/
+      next_handler = h->next; /*prevent use when freed*/
       
       if (wimp_event_matches (event_code, h, id_block) && h->handler != NULL)
       {
@@ -85,13 +80,16 @@ static _kernel_oserror *call_wimp_event_handlers (int event_code, WimpEventHandl
 
          if (c)
          {
-            *claimed = 1;
-            return NULL;
+            claimed = TRUE;
+            break;
          }
       }
    }
 
-   *claimed = 0;
+   next_handler = NULL; /*so it can't match when deregistering from outside
+        this function JRC 1 Jul 1997*/
+
+   *claimed_out = claimed;
    return NULL;
 }
 
@@ -105,12 +103,10 @@ extern _kernel_oserror *wimpevent_dispatch (int event_code, WimpPollBlock *poll_
      * the event.
      */
 
-    int elem = event_code;
+    int elem;
     int claimed = 0;
 
-    if (event_code >= MAX_WIMP_HANDLER)
-        elem = MAX_WIMP_HANDLER-1;
-                  
+    elem = MIN (event_code, MAX_WIMP_HANDLER);
     call_wimp_event_handlers (event_code, wimpevent__handlers[elem], poll_block, id_block, &claimed);
 
     if (claimed)
@@ -137,16 +133,13 @@ _kernel_oserror *wimpevent_register_wimp_handler (int object_id, int event_code,
      * Any events > 19 are just handled by a default case.
      */
 
-    if (event_code <= MAX_WIMP_HANDLER-1)
-        elem = event_code;
-    else
-        elem = MAX_WIMP_HANDLER;
-
     if (event_code == -1)
-        h =  wimpevent__all_handlers;
-    else          
-        h = wimpevent__handlers[elem];
-
+        h = wimpevent__all_handlers;
+    else
+    {
+        elem = MIN (event_code, MAX_WIMP_HANDLER);
+        h = wimpevent__handlers [elem];
+    }
 
     while (h != NULL)
     {
@@ -166,7 +159,7 @@ _kernel_oserror *wimpevent_register_wimp_handler (int object_id, int event_code,
      */
 
     if ((new_h = m_MALLOC (sizeof(WimpEventHandlerItem))) == NULL)
-        return make_error ();
+        return &err_memory;
 
     new_h->object_id  = object_id;
     new_h->event_code = event_code;
@@ -200,16 +193,9 @@ _kernel_oserror *wimpevent_deregister_wimp_handler (int object_id, int event_cod
     /*
      * see if handler registered, and if so delete it.
      */
-  
     /*
      * start looking down the linked list which hangs off the array element for this event
      */
-
-    if (event_code <= MAX_WIMP_HANDLER-1)
-        elem = event_code;
-    else
-        elem = MAX_WIMP_HANDLER;
-                         
     if (event_code == -1)
     {
         h = prev_h = wimpevent__all_handlers;
@@ -217,16 +203,14 @@ _kernel_oserror *wimpevent_deregister_wimp_handler (int object_id, int event_cod
     }
     else
     {
+        elem = MIN (event_code, MAX_WIMP_HANDLER);
         h = prev_h = wimpevent__handlers[elem];
         listhead = &wimpevent__handlers[elem];
     }
 
     while (h != NULL)
     {
-        /*
-         * see if there's a handler, which matches.
-         */
-
+        /*see if there's a handler which matches*/
         if (handler_matches (h, object_id, event_code, handler, handle))
             break;
         
@@ -234,11 +218,7 @@ _kernel_oserror *wimpevent_deregister_wimp_handler (int object_id, int event_cod
         h = h->next;
     }
 
-
-    /*
-     * delete the handler from the list
-     */
-
+    /*delete the handler from the list*/
     if (h != NULL)
     {
         if (h == *listhead)
@@ -246,8 +226,13 @@ _kernel_oserror *wimpevent_deregister_wimp_handler (int object_id, int event_cod
         else
             prev_h->next = h->next;
 
+        /*We might be in a dispatch loop, being called from a callback. If
+            so, make sure that the one next in the loop is not the one we are
+            just about to delete. JRC 1 Jul 1997*/
+        if (next_handler == h) next_handler = h->next;
+
         m_FREE (h, sizeof *h);
     }
-  
+
     return NULL;  
 }
