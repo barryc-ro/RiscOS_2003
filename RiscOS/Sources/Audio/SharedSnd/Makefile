@@ -28,7 +28,7 @@ SL        = ${SOURCE}.o
 SSLIB     = ${SL}.Drivers ${SL}.Handler ${SL}.Linear ${SL}.Memory ${SL}.Module \
             ${SL}.SampleRate ${SL}.SWIS ${SL}.Vars ${SL}.Volume
 BASICFILES= o.Debug o.Drivers o.Handler o.Linear o.Memory o.Module o.SampleRate o.SWIS \
-            o.Vars o.Volume o.SharedSoun
+            o.Vars o.Volume o.SharedSoun o.GetVers
 
 #.o.c:
 #	 set tokenisefile $*
@@ -50,6 +50,10 @@ export: ${EXPORTS}
 install_rom: ${TARGET}
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
+
+install: ${TARGET}
+        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: installed
 
 clean:
         ${RM} ${TARGET}
