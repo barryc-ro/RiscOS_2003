@@ -49,18 +49,10 @@ clean:
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
 
-resources: resources-${CMDHELP}
-        @echo ${COMPONENT}: resource files copied
-
-resources_common:
+resources:
         ${MKDIR} ${RESDIR}.${COMPONENT}
         ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
-
-resources-None: resources_common
-	@
-
-resources-: resources_common
-	print Resources.${LOCALE}.CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
+        @echo ${COMPONENT}: resource files copied
 
 ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}
@@ -101,9 +93,5 @@ rm.FilterMgr: s.ModHead
 rm.FilterMgr: s.SWIs
 rm.FilterMgr: s.MsgTrans
 rm.FilterMgr: s.PreFilter
-rm.FilterMgr: s.RectFilter
-rm.FilterMgr: s.PoRtFilter
-rm.FilterMgr: s.PoIcFilter
-rm.FilterMgr: s.CopyFilter
 rm.FilterMgr: s.PostFilter
 rm.FilterMgr: s.Tail
