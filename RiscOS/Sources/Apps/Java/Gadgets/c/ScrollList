@@ -2,9 +2,20 @@
  * Purpose: Scrolling list gadget for textgadgets module
  *
  * Revision History
- * piers    01/08/96 Created
- * piers    23/12/96 Added in MemCheck thingies
- * piers    06/01/97 Recoded to use a nested window so scrollbar is nicer
+ * piers    01/08/1996 Created
+ * piers    23/12/1996 Added in MemCheck thingies
+ * piers    06/01/1997 Recoded to use a nested window so scrollbar is nicer
+ * SNB      18/06/1998 (Stewart Brodie) See comments within code.
+ * ADH      24/03/1999 These history entries now use a four digit year
+ *                     field. Added SNB entry above. Title BG colour in
+ *                     window_template now 2. SELECT click on an unselected
+ *                     item deselects all others in the gadget first. Works
+ *                     out vertical scroll bar and window frame size to
+ *                     ensure it correctly fits gadget BBox. Can ask the
+ *                     select/deselect/delete routines to send a Selection
+ *                     event just before exitting now. Can also ask the
+ *                     select/deselect routines to operate on all items
+ *                     rather than just one (Select All, Clear Selection).
  */
 
 #include <stdio.h>
@@ -27,6 +38,7 @@
 #include "ScrollList.h"
 #include "ScrollLisP.h"
 #include "ScrollLisS.h"
+#include "Sizes.h"
 #include "debug.h"
 #include "ModHdr.h"
 #include "utils.h"
@@ -40,6 +52,8 @@
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 
 static int my_icons[2] = {0, -1};
+
+static unsigned int vscroll_width = SCROLLBAR_SIZE;
 
 static PrivateScrollList **scrolllist_list = NULL;
 
@@ -78,7 +92,7 @@ static const WindowTemplate window_template =
         WimpWindow_NewFormat | WimpWindow_VScroll,
         			// flags
         7,			// title_fg
-        0,			// title_bg
+        2,			// title_bg
         7,			// work_fg
         0xff,			// work_bg
         3,			// scroll_outer
@@ -333,11 +347,24 @@ static void _set_extent(const PrivateScrollList *sdata)
 
 static _kernel_oserror *_show(PrivateScrollList *sdata)
 {
-    WindowShowObjectBlock	show_block;
+    WindowShowObjectBlock show_block;
+    unsigned int          dx = sizes_x_scale();
+    unsigned int          dy = sizes_y_scale();
 
     work_to_screen_handle(&show_block.visible_area, &sdata->box,
     				sdata->parent_window);
-    show_block.visible_area.xmax -= SCROLLBAR_SIZE;
+
+    /* Adjust show block for scrollbars and window outline */
+
+    sizes_tool_sizes(NULL, &vscroll_width, NULL);
+    vscroll_width -= dx;
+
+    show_block.visible_area.xmin += dx;
+    show_block.visible_area.ymin += dy;
+    show_block.visible_area.xmax -= (dx + vscroll_width);
+    show_block.visible_area.ymax -= dy;
+
+    /* Fill in the rest */
 
     show_block.xscroll = show_block.yscroll = 0;
     show_block.behind = -1;
@@ -629,14 +656,35 @@ static _kernel_oserror *_add_item(PrivateScrollList *sdata,
     _show(sdata);
 
 //    scrolllist_update(sdata, sdata->box.xmin, sdata->box.ymin,
-//    		sdata->box.xmax - SCROLLBAR_SIZE, sdata->box.ymax);
+//    		sdata->box.xmax - vscroll_width, sdata->box.ymax);
     window_force_redraw(0, sdata->object_id, &redraw_box);
 
     return NULL;
 }
 
+static _kernel_oserror *_send_selection_event(const PrivateScrollList *sdata,
+                                              unsigned int flags, int item)
+{
+    ScrollListSelectionEvent event;
+
+    event.hdr.size             = sizeof(ScrollListSelectionEvent);
+    event.hdr.reference_number = 0;
+    event.hdr.event_code       = sdata->event;
+    event.hdr.flags            = 0;
+
+    event.item  = item;
+    event.flags = flags;
+
+    toolbox_raise_toolbox_event(0,
+                                sdata->parent_id,
+                                sdata->component_id,
+                                (ToolboxEvent *) &event);
+
+    return NULL;
+}
+
 static _kernel_oserror *_delete_items(PrivateScrollList *sdata,
-				int start, int end)
+				unsigned int flags, int start, int end)
 {
     unsigned int	i, j;
 
@@ -679,21 +727,26 @@ static _kernel_oserror *_delete_items(PrivateScrollList *sdata,
     _show(sdata);
 
 //    scrolllist_update(sdata, sdata->box.xmin, sdata->box.ymin,
-//    		sdata->box.xmax - SCROLLBAR_SIZE, sdata->box.ymax);
+//    		sdata->box.xmax - vscroll_width, sdata->box.ymax);
     window_force_redraw(0, sdata->object_id, &redraw_box);
 
-    return NULL;
+    if (flags & ScrollList_SelectionChangingMethod_SendEvent)
+        return _send_selection_event(sdata, 0, -1);
+    else
+        return NULL;
 }
 
 #define SELECT_SELECT	0
 #define SELECT_DESELECT	1
 #define SELECT_TOGGLE	2
+#define SELECT_ONLYONE	3
 
-static _kernel_oserror *_select_item(const PrivateScrollList *sdata, int index,
-					unsigned int selected)
+static _kernel_oserror *_select_item(const PrivateScrollList *sdata, unsigned int flags,
+					int index, unsigned int selected)
 {
     BBox		box;
     unsigned int	item_height;
+    int			item_start, item_end;
 
     if ((index < 0) || (index >= sdata->no_entries))
         return &bad_index;
@@ -702,10 +755,19 @@ static _kernel_oserror *_select_item(const PrivateScrollList *sdata, int index,
     box.xmin = 0;
     box.xmax = 0xfff;
 
-    if (!(sdata->state & ScrollList_MultipleSelections))
+    /*
+     * If we're only supposed to select one thing or the list doesn't
+     * allow multiple selections, deselect everything to start with.
+     */
+
+    if (
+         selected == SELECT_ONLYONE ||
+         !(sdata->state & ScrollList_MultipleSelections)
+       )
     {
-        // Deselect all
         int i;
+
+        selected = SELECT_SELECT;
 
         for (i = 0; i < sdata->no_entries; i++)
         {
@@ -724,19 +786,62 @@ static _kernel_oserror *_select_item(const PrivateScrollList *sdata, int index,
         }
     }
 
-    if (selected == SELECT_SELECT)
-        sdata->entries[index].flags |= FLAGS_SELECTED;
-    else if (selected == SELECT_DESELECT)
-        sdata->entries[index].flags &= ~FLAGS_SELECTED;
-    else // SELECT_TOGGLE
-        sdata->entries[index].flags ^= FLAGS_SELECTED;
+    /* Do we want to operate on all items, or just one? */
 
-    box.ymin = -(index + 1) * item_height;
-    box.ymax = -index * item_height;
+    if (flags & ScrollList_SelectionChangingMethod_OnAll)
+    {
+        item_start = 0;
+        item_end   = sdata->no_entries;
+    }
+    else item_start = index, item_end = index + 1;
 
-    window_force_redraw(0, sdata->object_id, &box);
+    /* Do the selection / deselection / toggling */
 
-    return NULL;
+    for ( index = item_start; index < item_end; index++)
+    {
+        unsigned int old_flags = sdata->entries[index].flags;
+
+        if (selected == SELECT_SELECT)
+            sdata->entries[index].flags |= FLAGS_SELECTED;
+        else if (selected == SELECT_DESELECT)
+            sdata->entries[index].flags &= ~FLAGS_SELECTED;
+        else /* SELECT_TOGGLE */
+            sdata->entries[index].flags ^= FLAGS_SELECTED;
+
+        /* Only redraw if we changed the flags */
+
+        if (old_flags != sdata->entries[index].flags)
+        {
+            box.ymin = -(index + 1) * item_height;
+            box.ymax = -index * item_height;
+
+            window_force_redraw(0, sdata->object_id, &box);
+        }
+    }
+
+    /* Send an event now we've finished? */
+
+    if (flags & ScrollList_SelectionChangingMethod_SendEvent)
+    {
+        unsigned int event_flags = 0;
+
+        /*
+         * ScrollList.h says we'll send an item number of 0 if
+         * selecting all items.
+         */
+
+        if (flags & ScrollList_SelectionChangingMethod_OnAll) index = 0;
+
+        /* Did we select or deselect items? */
+
+        if (sdata->entries[index].flags & FLAGS_SELECTED)
+            event_flags |= ScrollList_Selection_Flags_Set;
+
+        /* Exit by sending the event */
+
+        return _send_selection_event(sdata, event_flags, index);
+    }
+    else return NULL;
 }
 
 static _kernel_oserror *_set_font(PrivateScrollList *sdata,
@@ -769,7 +874,7 @@ static _kernel_oserror *_set_font(PrivateScrollList *sdata,
     }
 
     scrolllist_update(sdata, sdata->box.xmin, sdata->box.ymin,
-    		sdata->box.xmax - SCROLLBAR_SIZE, sdata->box.ymax);
+    		sdata->box.xmax - vscroll_width, sdata->box.ymax);
 
     return NULL;
 }
@@ -880,15 +985,15 @@ _kernel_oserror *scrolllist_method(PrivateScrollList *sdata,
             break;
 
         case ScrollList_DeleteItems:
-            e = _delete_items(sdata, regs->r[4], regs->r[5]);
+            e = _delete_items(sdata, regs->r[0], regs->r[4], regs->r[5]);
             break;
 
         case ScrollList_SelectItem:
-            e = _select_item(sdata, regs->r[4], SELECT_SELECT);
+            e = _select_item(sdata, regs->r[0], regs->r[4], SELECT_SELECT);
             break;
 
         case ScrollList_DeselectItem:
-            e = _select_item(sdata, regs->r[4], SELECT_DESELECT);
+            e = _select_item(sdata, regs->r[0], regs->r[4], SELECT_DESELECT);
             break;
 
         case ScrollList_GetSelected:
@@ -903,7 +1008,7 @@ _kernel_oserror *scrolllist_method(PrivateScrollList *sdata,
             // R4 = foreground col, R5 = background col
             e = _set_colour(sdata, regs->r[0], regs->r[4], regs->r[5]);
             scrolllist_update(sdata, sdata->box.xmin, sdata->box.ymin,
-    		sdata->box.xmax - SCROLLBAR_SIZE, sdata->box.ymax);
+    		sdata->box.xmax - vscroll_width, sdata->box.ymax);
             break;
 
         case ScrollList_GetColour:
@@ -919,6 +1024,10 @@ _kernel_oserror *scrolllist_method(PrivateScrollList *sdata,
         case ScrollList_GetItemText:
             e = _get_item_text(sdata, (char*)regs->r[4], regs->r[5],
             			regs->r[6], &(regs->r[5]));
+            break;
+
+        case ScrollList_CountItems:
+            regs->r[0] = sdata->no_entries;
             break;
 
         default:
@@ -997,7 +1106,7 @@ _kernel_oserror *scrolllist_plot(ScrollList *sdata)
 
     // Plot fake scrollbar (black)
     colourtrans_set_gcol(0 /* black */, 1<<7, 0);
-    x = MAX(box.xmax - SCROLLBAR_SIZE, box.xmin);
+    x = MAX(box.xmax - vscroll_width, box.xmin);
     os_plot(PLOT_MOVE, x, box.ymin);
     os_plot(PLOT_RECTANGLE_FILL | PLOT_BACK, box.xmax, box.ymax);
 
@@ -1130,7 +1239,8 @@ static _kernel_oserror *scrolllist_mclick(const PrivateScrollList *sdata,
     _kernel_oserror		*e;
     WimpGetWindowStateBlock	state;
     int				mouse_x, mouse_y;
-    ScrollListSelectionEvent	event;
+    int                         event_item;
+    unsigned int                event_flags;
     unsigned int		item_height;
 
     if (click->buttons == 2)
@@ -1159,48 +1269,41 @@ static _kernel_oserror *scrolllist_mclick(const PrivateScrollList *sdata,
 
     _get_item_size(sdata, NULL, &item_height, NULL);
 
-    event.item = -mouse_y / item_height;
+    event_item = -mouse_y / item_height;
 
     if (click->buttons >= 256)
     {
         if ((click->buttons / 256) & (1<<0))
         {
-            _select_item(sdata, event.item, SELECT_TOGGLE);
+            _select_item(sdata, 0, event_item, SELECT_TOGGLE);
         }
         else if ((click->buttons / 256) & (1<<2))
         {
-            if (!(sdata->entries[event.item].flags & FLAGS_SELECTED))
-                _select_item(sdata, event.item, SELECT_SELECT);
+            if (!(sdata->entries[event_item].flags & FLAGS_SELECTED))
+                _select_item(sdata, 0, event_item, SELECT_ONLYONE);
         }
     }
 
     // Send event -
     /* SNB: 19980518: changed condition to >= to stop "extra item" events. */
 
-    if (event.item >= sdata->no_entries)
+    if (event_item >= sdata->no_entries)
         return NULL;
 
-    event.hdr.size = sizeof(ScrollListSelectionEvent);
-    event.hdr.reference_number = 0;
-    event.hdr.event_code = sdata->event;
-    event.hdr.flags = 0;
-    event.flags = 0;
+    event_flags = 0;
 
     if (click->buttons < 16)
     {
         // double click
-        event.flags |= ScrollList_Selection_Flags_DoubleClick;
+        event_flags |= ScrollList_Selection_Flags_DoubleClick;
     }
 
     /* SNB: 19980618: added flagging of adjust clicks */
     if (click->buttons & (1 | 256)) {
-            event.flags |= ScrollList_Selection_Flags_AdjustClick;
+            event_flags |= ScrollList_Selection_Flags_AdjustClick;
     }
 
-    toolbox_raise_toolbox_event(0, sdata->parent_id, sdata->component_id,
-    			(ToolboxEvent *) &event);
-
-    return NULL;
+    return _send_selection_event(sdata, event_flags, event_item);
 }
 
 #ifdef MemCheck_MEMCHECK

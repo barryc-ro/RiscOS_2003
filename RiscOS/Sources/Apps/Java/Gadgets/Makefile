@@ -91,6 +91,7 @@ OBJS =\
 	o.glib \
 	o.glib3 \
 	o.rmensure \
+	o.Sizes \
 	o.string32
 
 RAM_OBJS =\
@@ -112,6 +113,7 @@ RAM_OBJS =\
 	o.glib \
 	o.glib3 \
 	o.rmensure \
+	o.Sizes \
 	o.string32
 
 
