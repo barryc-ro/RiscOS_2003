@@ -53,7 +53,8 @@ clean:
 
 resources: Palettes.8desktop
         ${MKDIR} ${RESDIR}.${COMPONENT}
-        ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.${COMPONENT}.Messages ${CPFLAGS}
+	TokenCheck LocalRes:Messages
+        ${CP} LocalRes:Messages  ${RESDIR}.${COMPONENT}.Messages ${CPFLAGS}
         ${CP} Palettes ${RESDIR}.${COMPONENT}.Palettes ${CPFLAGS}
         ${CP} Tables   ${RESDIR}.${COMPONENT}.Tables   ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
