@@ -44,6 +44,8 @@ OBJASM  = objasm
 RM      = remove
 WIPE    = -wipe
 
+DIFF    = gnu.diff -df >null:
+
 AFLAGS  = -depend !Depend -Stamp -quit
 CFLAGS  = -c -depend !Depend ${INCLUDES} -DDDE -fK
 CPFLAGS = ~cfr~v
@@ -502,6 +504,13 @@ derived.swis: s.makehswis h.swisheader
 ${EXP_HDR}.SharedCLib: hdr.SharedCLib
         ${CP} hdr.SharedCLib $@ ${CPFLAGS}
 
+
+# The swis.h header is only copied if the file differs from an existing
+# exported header.  This prevents needless recompilations
+CLIB:h.swis: derived.swis
+        -${DIFF} $@ derived.swis
+        If "<Sys$ReturnCode>" <> 0 Then ${CP} derived.swis $@ ${CPFLAGS}
+
 # Headers:
 CLIB:h.assert: clib.h.assert  ;   ${CP} clib.h.assert $@ ${CPFLAGS}
 CLIB:h.ctype: clib.h.ctype;       ${CP} clib.h.ctype $@ ${CPFLAGS}
@@ -522,7 +531,6 @@ CLIB:h.stdint: clib.h.stdint;     ${CP} clib.h.stdint $@ ${CPFLAGS}
 CLIB:h.stdio: clib.h.stdio;       ${CP} clib.h.stdio $@ ${CPFLAGS}
 CLIB:h.stdlib: clib.h.stdlib;     ${CP} clib.h.stdlib $@ ${CPFLAGS}
 CLIB:h.string: clib.h.string;     ${CP} clib.h.string $@ ${CPFLAGS}
-CLIB:h.swis: derived.swis;        ${CP} derived.swis $@ ${CPFLAGS}
 CLIB:h.time: clib.h.time;         ${CP} clib.h.time $@ ${CPFLAGS}
 CLIB:h.varargs: clib.h.varargs;   ${CP} clib.h.varargs $@ ${CPFLAGS}
 
@@ -660,6 +668,10 @@ o_rl.poll: rlib.s.poll
         ${CP} rlib.s.defs rlib.s.asmdefs ${CPFLAGS}
         ${OBJASM} rlib.s.poll o_rl.poll ${AFLAGS}
 
+o_rl.bastxt: rlib.s.bastxt
+        ${CP} rlib.s.defs rlib.s.asmdefs ${CPFLAGS}
+        ${OBJASM} rlib.s.bastxt o_rl.bastxt ${AFLAGS}
+
 m_o_rl.swi: rlib.s.swi
         ${CP} rlib.s.defs rlib.s.asmdefs ${CPFLAGS}
         ${OBJASM} rlib.s.swi m_o_rl.swi ${AFLAGS}
@@ -668,6 +680,10 @@ m_o_rl.poll: rlib.s.poll
         ${CP} rlib.s.defs rlib.s.asmdefs ${CPFLAGS}
         ${OBJASM} rlib.s.poll m_o_rl.poll ${AFLAGS}
 
+m_o_rl.bastxt: rlib.s.baxtxt
+        ${CP} rlib.s.defs rlib.s.asmdefs ${CPFLAGS}
+        ${OBJASM} rlib.s.bastxt m_o_rl.bastxt ${AFLAGS}
+
 rm_o_rl.swi: rlib.s.swi
         ${CP} rlib.s.rom_defs rlib.s.asmdefs ${CPFLAGS}
         ${OBJASM} rlib.s.swi rm_o_rl.swi ${AFLAGS} -APCS 3/26bit ${OPTIONS}
@@ -675,6 +691,10 @@ rm_o_rl.swi: rlib.s.swi
 rm_o_rl.poll: rlib.s.poll
         ${CP} rlib.s.rom_defs rlib.s.asmdefs ${CPFLAGS}
         ${OBJASM} rlib.s.poll rm_o_rl.poll ${AFLAGS} -APCS 3/26bit ${OPTIONS}
+
+rm_o_rl.bastxt: rlib.s.bastxt
+        ${CP} rlib.s.rom_defs rlib.s.asmdefs ${CPFLAGS}
+        ${OBJASM} rlib.s.bastxt rm_o_rl.bastxt ${AFLAGS} -APCS 3/26bit ${OPTIONS}
 
 #
 # trace separated out to allow defining of TRACE
