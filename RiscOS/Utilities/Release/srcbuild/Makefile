@@ -7,6 +7,7 @@
 # ----        ----         -----------
 # 19 Aug 1997 RWB 	   new srcbuild
 # 05 Sep 1997 RWB          added install
+# 30 Apr 1999 DSC          Made to install into new library structure.
 #
 
 #
@@ -70,7 +71,7 @@ clean:
         @echo ${COMPONENT}: cleaned
 
 install: ${TARGET}
-	${CP} ${TARGET} <Build$Dir>.Library.${COMPONENT} ${CPFLAGS}
+	${CP} ${TARGET} <Build$Dir>.Library.Build.${COMPONENT} ${CPFLAGS}
 	@echo ${COMPONENT}: installed
 
 #
