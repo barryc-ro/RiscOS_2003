@@ -108,7 +108,7 @@ NOTROMOBJS = o.resources ${DBUGLIB} ${BASEOBJS}
 
 RESDIR = <resource$dir>.Resources.${COMPONENT}
 HTMLDIR = <resource$dir>.!Boot.HTML
-LDIR = Resources.${LOCALE}.${USERIF}
+LDIR = LocalRes:${USERIF}
 
 NOTROMRESDEP = html.ISPC1 html.ISPC2 html.ISPC3 html.ISPC4
 
@@ -144,7 +144,6 @@ clean:
         ${WIPE} aof.* ${WFLAGS}
         ${WIPE} rm.* ${WFLAGS}
         ${WIPE} linked.* ${WFLAGS}
-        ${WIPE} map.* ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 resources:
@@ -178,97 +177,10 @@ ${TARGET}: ${ROMOBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB}
 #
 rom_link:
         ${MKDIR} linked
-        ${MKDIR} map
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
+        ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete
 
 
 
 # Dynamic dependencies:
-o.module:	c.module
-o.module:	C:h.kernel
-o.module:	C:h.swis
-o.module:	h.module
-o.module:	h.DBUG
-o.module:	h.dynalloc
-o.module:	h.ispc_ispc
-o.module:	h.ispc_cmds
-o.header:	cmhg.header
-o.header:	h.cmhg_defs
-o.ispc_cmds:	c.ispc_cmds
-o.ispc_cmds:	C:h.kernel
-o.ispc_cmds:	C:h.swis
-o.ispc_cmds:	h.ispc_cmds
-o.ispc_cmds:	h.ispc_ispc
-o.ispc_cmds:	h.ispc_url
-o.ispc_cmds:	h.ispc_utils
-o.ispc_cmds:	h.kprintf
-o.ispc_cmds:	h.dynalloc
-o.ispc_cmds:	h.ispc_file
-o.ispc_cmds:	h.DBUG
-o.dynalloc:	c.dynalloc
-o.dynalloc:	C:h.kernel
-o.dynalloc:	C:h.swis
-o.dynalloc:	h.dynalloc
-o.dynalloc:	h.DBUG
-o.dynalloc:	h.kprintf
-o.ispc_ispc:	c.ispc_ispc
-o.ispc_ispc:	C:h.kernel
-o.ispc_ispc:	C:h.swis
-o.ispc_ispc:	TCPIPLibs:h.socklib
-o.ispc_ispc:	TCPIPLibs:sys.h.types
-o.ispc_ispc:	TCPIPLibs:sys.h.cdefs
-o.ispc_ispc:	TCPIPLibs:machine.h.endian
-o.ispc_ispc:	TCPIPLibs:machine.h.ansi
-o.ispc_ispc:	TCPIPLibs:machine.h.types
-o.ispc_ispc:	TCPIPLibs:sys.h.socket
-o.ispc_ispc:	TCPIPLibs:sys.h.cdefs
-o.ispc_ispc:	TCPIPLibs:sys.h.stat
-o.ispc_ispc:	TCPIPLibs:sys.h.time
-o.ispc_ispc:	TCPIPLibs:sys.h.cdefs
-o.ispc_ispc:	TCPIPLibs:sys.h.cdefs
-o.ispc_ispc:	TCPIPLibs:sys.h.time
-o.ispc_ispc:	TCPIPLibs:sys.h.uio
-o.ispc_ispc:	TCPIPLibs:sys.h.cdefs
-o.ispc_ispc:	C:h.kernel
-o.ispc_ispc:	TCPIPLibs:h.inetlib
-o.ispc_ispc:	TCPIPLibs:sys.h.types
-o.ispc_ispc:	TCPIPLibs:netinet.h.in
-o.ispc_ispc:	TCPIPLibs:h.netdb
-o.ispc_ispc:	TCPIPLibs:sys.h.cdefs
-o.ispc_ispc:	h.smcard
-o.ispc_ispc:	h.ispc_cache
-o.ispc_ispc:	h.ispc_ispc
-o.ispc_ispc:	h.ispc_url
-o.ispc_ispc:	h.ispc_utils
-o.ispc_ispc:	h.dynalloc
-o.ispc_ispc:	h.DBUG
-o.ispc_url:	c.ispc_url
-o.ispc_url:	C:h.kernel
-o.ispc_url:	C:h.swis
-o.ispc_url:	h.ispc_ispc
-o.ispc_url:	h.ispc_url
-o.ispc_url:	h.ispc_utils
-o.ispc_url:	h.DBUG
-o.kprintf:	c.kprintf
-o.kprintf:	C:h.kernel
-o.kprintf:	C:h.swis
-o.kprintf:	h.kprintf
-o.ispc_utils:	c.ispc_utils
-o.ispc_utils:	C:h.kernel
-o.ispc_utils:	C:h.swis
-o.ispc_utils:	h.ispc_utils
-o.ispc_utils:	h.ispc_ispc
-o.ispc_utils:	h.ispc_url
-o.ispc_utils:	h.smcard
-o.ispc_utils:	h.DBUG
-o.ispc_file:	c.ispc_file
-o.ispc_file:	C:h.kernel
-o.ispc_file:	C:h.swis
-o.ispc_file:	h.dynalloc
-o.ispc_file:	h.ispc_file
-o.ispc_file:	h.ispc_cache
-o.ispc_file:	h.ispc_utils
-o.ispc_file:	h.DBUG
