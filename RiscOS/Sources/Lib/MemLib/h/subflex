@@ -27,5 +27,6 @@ os_error *SubFlex_Free( subflex_ptr anchor, flex_ptr master );
 
 int       SubFlex_Size( subflex_ptr anchor, flex_ptr master );
 
+int SubFlex_Reanchor( subflex_ptr anchor, flex_ptr master );
 
 #endif
