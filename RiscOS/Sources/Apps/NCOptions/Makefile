@@ -30,6 +30,10 @@ COMPONENT	= NCOptions
 ROM_AOF_FILE	= @.!ROM_AOF.Output_M
 RAM_MODULE	= @.!Module.Output_M
 
+#
+# Tools:
+#
+MKDIR           = do mkdir -p
 
 all:
 	Echo	Component $(COMPONENT): AMU target required.
@@ -79,6 +83,7 @@ install: install_ram
 
 
 install_ram:	ram_module
+        $(MKDIR)        $(INSTDIR)
 	Copy		$(RAM_MODULE) $(INSTDIR).$(COMPONENT) ~cfr~v
 	Echo		Component $(COMPONENT): 'install_ram' finished.
 
