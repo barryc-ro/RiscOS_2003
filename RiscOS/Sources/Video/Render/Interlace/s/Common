@@ -75,6 +75,10 @@
 ; 11-Sep-96  TMD  0.48		Also check for STB2_MPEG2 product type on MPEG 2 variant.
 ; 22-Jun-98  TMD  0.49		Check VectorsClaimed on Service_ValidateAddress.
 ; 05-Aug-99  KJB  0.53		Added service call table.
+; 20-Sep-99  KJB  0.55          Revised Kernel interactions - kernel now initially sets
+;                               interlaced mode flag, and we pick up on it. Saves Service_ModeExtension
+;                               hackery. Also rejigs phase on Service_ScreenRestored, in case the
+;                               syncs got shut down while screen blanked.
 
                 GBLL    FixHWScroll
 FixHWScroll     SETL    {TRUE}         ; does work now!
@@ -131,14 +135,9 @@ PageTableLogAddr #	4		; logical address of same
 ScreenPhysAddr	#	4		; physical address of screen
 DynAreaNumber	#	4		; area number of our area
 ShrinkOK	#	4		; NZ => shrink OK
- [ UseModeDescriptors
 FindModeStructure #	12		; 3 words of crap
 FindModeOtherOffset #	4		; offset to OtherStuff
 FindModeOtherStuff #	OtherIndex_RecordSize ; static OtherStuff created from mode parameters
- |
-VIDCListCopy	#	VIDCListSize	; copy of VIDC list, adjusted by corresponding HorizOffset command
-HorizOffsets	#	nummodes*4	; horizontal offsets for each of our modes
- ]
 
  [ PhaseDetectBit <> 0
 LastPhase               #       1       ; for field-to-field checks
@@ -194,9 +193,6 @@ Mod_HC_Table
  [ PhaseDetectBit <> 0
         Command InterlaceLog,   0, 0
  ]
- [ :LNOT: UseModeDescriptors
-	Command HorizOffset,	2, 2
- ]
         =       0                       ; terminate table
 
 InterlaceSwap_Help
@@ -212,14 +208,7 @@ InterlaceLog_Syntax
         ALIGN
  ]
 
- [ :LNOT: UseModeDescriptors
-HorizOffset_Help
-	=	"*HorizOffset sets a horizontal offset for an interlaced screen modes", CR
-HorizOffset_Syntax
-	=	"Syntax: *HorizOffset <mode> <offset>", 0
-	ALIGN
- ]
- [ :LNOT: UseModeDescriptors :LOR: TryToDoModeNumbers
+ [ TryToDoModeNumbers
 	OutputModeInfo
  |
 	GBLA	maxyres
@@ -253,15 +242,6 @@ Mod_Init Entry "r7, r8"
         STR     r0, VectorsClaimed
  [ UseInitialCallBack
 	STR	r0, CallBackRequested
- ]
-
- [ :LNOT: UseModeDescriptors
-	ADR	r1, HorizOffsets
-	MOV	r2, #?HorizOffsets
-07
-	STR	r0, [r1], #4		; zero out the horizontal offsets
-	SUBS	r2, r2, #4
-	BNE	%BT07
  ]
 
  [ PhaseDetectBit <> 0
@@ -615,7 +595,9 @@ CantDieError
         ASSERT  Service_ModeChange < Service_ModeExtension
         ASSERT  Service_ModeExtension < Service_ValidateAddress
         ASSERT  Service_ValidateAddress < Service_SwitchingOutputToSprite
-        ASSERT  Service_SwitchingOutputToSprite < Service_ModeChanging
+        ASSERT  Service_SwitchingOutputToSprite < Service_ScreenRestored
+        ASSERT  Service_ScreenRestored <Service_ModeChanging
+
 Mod_ServiceTable
         DCD     0
         DCD     Mod_ServiceEntry - Module_BaseAddr
@@ -626,19 +608,27 @@ Mod_ServiceTable
  [ FixHWScroll
         DCD     Service_SwitchingOutputToSprite
  ]
+ [ PhaseDetectBit = 0
+        DCD     Service_ScreenRestored
+ ]
         DCD     Service_ModeChanging
         DCD     0
 
         DCD     Mod_ServiceTable - Module_BaseAddr
 Mod_Service ROUT
         MOV     r0, r0
+  [ TryToDoModeNumbers
         TEQ     r1, #Service_ModeExtension
+  ]
         TEQNE   r1, #Service_ModeChange
         TEQNE   r1, #Service_Reset
         TEQNE   r1, #Service_ModeChanging
         TEQNE   r1, #Service_ValidateAddress
  [ FixHWScroll
         TEQNE   r1, #Service_SwitchingOutputToSprite
+ ]
+ [ PhaseDetectBit = 0
+        TEQNE   r1, #Service_ScreenRestored
  ]
         MOVNES  pc, lr
 
@@ -662,13 +652,18 @@ Mod_ServiceEntry
         BEQ     svc_SwitchingOutputToSprite
  ]
 
+ [ PhaseDetectBit = 0
+        TEQ     r1, #Service_ScreenRestored
+        BEQ     svc_ScreenRestored
+ ]
+
+
 ; In the new implementation, the interlaced modes are monitor description file modes,
 ; so the ScreenModes module claims the service.
 ;
 ; However, for backwards compatibility, we provide the numbered modes by translating the mode number
 ; into a mode descriptor and re-issuing the service.
 
- [ UseModeDescriptors
   [ TryToDoModeNumbers
 svc_ModeExtension Entry "r0"
 	CMP	r2, #&100
@@ -688,89 +683,15 @@ svc_ModeExtension Entry "r0"
 	SWI	XOS_ServiceCall
 	EXIT					; whether or not it's claimed, we exit, having made r2->mode descriptor
 						; if claimed, r1 will have be set to 0, and r3->VIDClist, r4 probably 0 (wslist)
-  |
-svc_ModeExtension MOV pc, lr			; don't do anything, cos it doesn't work yet
   ]
- |
-svc_ModeExtension Entry "r0,r5"
-	BL	FindMode
-	EXIT	EQ				; if not one of ours, exit
 
-	LDMIB	r0, {r3, r4, r5}		; skip mode number, get offsets from r0 to VIDCList and WSList + other stuff
-	ADD	r3, r3, r0
-	ADD	r4, r4, r0
-	ADD	r5, r5, r0
-	LDR	r5, [r5, #OtherIndex_ModeIndex]
-	MOV	r5, r5, LSL #2
-	ADD	r5, r5, #:INDEX: HorizOffsets
-	LDR	r5, [wp, r5]			; get appropriate horiz offset
-
-	ADR	r0, VIDCListCopy
-	MOV	lr, #VIDCListSize-4
-10
-	LDR	r1, [r3, lr]			; copy VIDC list into workspace block
-	STR	r1, [r0, lr]
-	SUBS	lr, lr, #4
-	BCS	%BT10
-
-	Push	"r2,r4,r6,r7"
-	ADD	r1, r0, #VIDCListIndex_HSW
-	LDMIA	r1, {r1,r2,r3,r4,r6,r7}		; load hsw,hbp,hb1,hdis,hb2,hfp
-
-	CMP	r5, #0
-	BLT	%FT50				; [move to left]
-
-; it's a move to the right
-
-	CMP	r5, r6				; is offset <= right border
-	SUBLS	r6, r6, r5			; if so then reduce right border
-	ADDLS	r3, r3, r5			; and increase left border
-	BLS	%FT90				; and we're done
-
-	SUB	r5, r5, r6			; else do as much as we can from border
-	ADD	r3, r3, r6			; which we put onto left border
-	MOV	r6, #0				; no right border left
-
-	CMP	r5, r7				; is remaining offset <= front porch
-	SUBLS	r7, r7, r5			; if so then reduce front porch
-	ADDLS	r2, r2, r5			; and increase back porch
-	BLS	%FT90				; and we're done
-
-	SUB	r5, r5, r7			; else do as much as we can from front porch
-	ADD	r2, r2, r7			; which we put onto back porch
-	MOV	r7, #0				; no back porch left
-
-	CMP	r5, r1				; is remaining offset <= sync width
-	MOVHI	r5, r1				; if more then tough
-	SUB	r1, r1, r5			; if so then reduce sync width (dodgy!)
-	ADD	r2, r2, r5			; and put it in back porch
-	B	%FT90				; and we're done
-
-; it's a move to the left
-
-50
-	RSB	r5, r5, #0			; make offset +ve
-	CMP	r5, r3				; is offset <= left border
-	SUBLS	r3, r3, r5			; if so then reduce left border
-	ADDLS	r6, r6, r5			; and increase right border
-	BLS	%FT90				; and we're done
-
-	SUB	r5, r5, r3			; else do as much as we can from border
-	ADD	r6, r6, r3			; which we put onto right border
-	MOV	r3, #0				; no left border left
-
-	CMP	r5, r2				; is remaining offset <= back porch
-	MOVHI	r5, r2				; if not then most we can do is back porch
-	SUB	r2, r2, r5			; if so then reduce back porch
-	ADD	r7, r7, r5			; and increase front porch
-90
-	ADD	r5, r0, #VIDCListIndex_HSW
-	STMIA	r5, {r1,r2,r3,r4,r6,r7}		; store updated values
-	Pull	"r2,r4,r6,r7"
-	MOV	r3, r0				; point r3 at copy
-        MOV     r1, #0
-	EXIT
- ] ; UseModeDescriptors
+  [ PhaseDetectBit = 0
+svc_ScreenRestored
+        Entry
+        ;MOV     r14, #&C0000000
+        ;STR     r14, Phase
+        EXITS
+  ]
 
 svc_ModeChange  Entry "r0-r2"
 	BL	FindMode
@@ -803,11 +724,6 @@ svc_ModeChange  Entry "r0-r2"
 
         VDWS    r0
 
- [ :LNOT: UseModeDescriptors
-	LDR	r1, [r2, #OtherIndex_PalIndex]	; no need to mess around with palette now
-        STR     r1, [r0, #PalIndex]
-        SWI     XOS_WriteI + 20
- ]
 	BL	ModifyVars
 
         LDR     r1, DummyScreenStart
@@ -830,7 +746,6 @@ svc_ModeChange  Entry "r0-r2"
         EXITS
 
 ModifyVars Entry "r2"
- [ UseModeDescriptors
 	SWI	XOS_RemoveCursors		; remove flashing cursor while we mess about
 
 	LDR	r1, [r2, #OtherIndex_LineLength]
@@ -843,14 +758,11 @@ ModifyVars Entry "r2"
 	STMIA	r2, {r1, lr}
 	BL	AddressCursors			; recompute CursorAddr, InputCursorAddr
 	SWI	XOS_RestoreCursors
- ]
 
         LDR     r1, [r0, #ModeFlags]
         ORR     r1, r1, #Flag_HardScrollDisabled :OR: Flag_InterlacedMode
         STR     r1, [r0, #ModeFlags]
- [ UseModeDescriptors
 	STR	r1, [r0, #DisplayModeFlags]
- ]
 
         LDR     r1, [r0, #VduStatus]
         ORR     r1, r1, #Windowing
@@ -859,7 +771,6 @@ ModifyVars Entry "r2"
 
         LTORG
 
- [ UseModeDescriptors
 AddressCursors Entry "r0-r4,r12"
 	VDWS	r12
 	LDR	lr, [r12, #CursorFlags]
@@ -885,7 +796,6 @@ AddressR0R1 ROUT
 	ADD	r2, r2, r0, LSL r3		; add in X component
 	MLA	r2, r4, r1, r2			; add in Y * RowLength
 	MOV	pc, lr
- ]
 
  [ FixHWScroll
 svc_SwitchingOutputToSprite Entry "r0-r2"
@@ -895,7 +805,7 @@ svc_SwitchingOutputToSprite Entry "r0-r2"
 
         VDWS    r0
         TEQ     r4, #0                  ; are we switching to screen?
-  [ UseModeDescriptors
+
 ; On switching back to the screen, the kernel restores the variable LineLength to the
 ; value returned from ReadModeVariable, ie the number of bytes on one line, not the enormous
 ; skip we require. This would not normally be a problem, since we get Service_SwitchingOutputToSprite
@@ -919,7 +829,7 @@ svc_SwitchingOutputToSprite Entry "r0-r2"
 	STRNE	lr, [r0, r1]			; make cursorstartoffset >= cursorendoffset
 	LDR	r1, =SavedCursorStartOffset
 	STRNE	lr, [r0, r1] 			; so no cursor flashing will occur
-  ]
+
         EXIT    NE                      ; no, then exit
 
 	LDR	r2, OtherStuffPtr
@@ -964,48 +874,23 @@ svc_ValidateAddress Entry "r0"
 
         LTORG
 
- [ UseModeDescriptors
-; Check whether mode in r2 is interlaced - we do this by issuing Service_ModeExtension and if this
-; returns a VIDC list with the new video parameter on the end, then it is.
+; Check current is interlaced - we do this by looking at the mode flags. Note that this only works
+; if we look at the "current" mode - other modes we can't actually tell...
 ; If so, we then need to create a fake structure for this mode - in practice only the 'OtherInfo'
 ; part gets used but we keep the same structure for simplicity.
 
-; Unfortunately Service_ModeExtension needs the video bandwidth and video DRAM size to be passed in,
-; Service_ModeChange (where we're called from) doesn't give us this information
-; for the time being make it up and assume there isn't both a non-interlaced *and* interlaced form of a mode
-; in the same file.
-
-; in:	r2 = mode
-;	r3 = monitor type
 ; out:	r0 -> structure
 
 FindMode Entry "r1-r5"
-	MOV	r1, #Service_ModeExtension
-	LDR	r4, =160000000		; 160E6 bytes/sec
-	MOV	r5, #2048*1024		; 2MB video ram
-	SWI	XOS_ServiceCall
-	TEQ	r1, #0
-	BNE	%FT90 			; [unclaimed, so don't think it's interlaced]
-
-	LDR	lr, [r3, #VIDCListIndex_Type]
-	TEQ	lr, #3			; if not type 3, forget it
-	BNE	%FT90
-
-	ADD	lr, r3, #VIDCListIndex_VideoControlParameters
-10
-	LDR	r0, [lr], #8
-	CMP	r0, #-1
-	BEQ	%FT90			; didn't find our entry
-
-	TEQ	r0, #VideoControlParametersIndex_Interlaced
-	BNE	%BT10			; if not ours then we've already skipped value, so loop
-	LDR	r0, [lr, #-4]		; read value
-	TEQ	r0, #1			; if not 1
-	BNE	%FT90			; then not interlaced
+        MOV     r0, #-1
+        MOV     r1, #VduExt_ModeFlags
+        SWI     XOS_ReadModeVariable
+        TST     r2, #Flag_InterlacedMode
+        BEQ     %FT90
 
 ; we have an interlaced screen mode!
 
-	MOV	r0, r2			; r0 = mode
+	MOV	r0, #-1
 	MOV	r1, #VduExt_Log2BPP
 	SWI	XOS_ReadModeVariable
 	Push	"r2"			; save pixdepth
@@ -1050,21 +935,6 @@ FindMode Entry "r1-r5"
 	TEQ	r0, r0			; set EQ indicating not found
 	EXIT
 
- |
-; Check whether mode number in r2 matches one of our modes
-; If it does, then exits NE, and r0 -> structure for that mode, else exits EQ, r0 corrupted
-
-FindMode Entry
-	ADRL	r0, ModeListTable
-10
-	LDR	lr, [r0], #16			; get mode number
-	CMP	lr, #-1
-	EXIT	EQ
-	TEQ	r2, lr
-	BNE	%BT10
-	SUBS	r0, r0, #16			; point r0 back at entry, and set NE
-	EXIT
- ]
 
 ; SetupMemoryMap - setup L1 and L2 pages for current screensize
 ; in:	r2 -> OtherStuff
@@ -1449,60 +1319,6 @@ InterlaceCallBack Entry "r0-r2"
 	EXITS
  ]
 
- [ :LNOT: UseModeDescriptors		; don't support this in new world
-HorizOffset_Code Entry
-	LDR	wp, [r12]
-
-	MOV	r1, r0
-	MOV	r0, #10 :OR: (1:SHL:31) ; insist on space or ctrl char terminator, base 10
-        SWI     XOS_ReadUnsigned
-        EXIT    VS
-
-	BL	FindMode
-	BEQ	%FT90			; mode not found
-
-	Push	"r0"
-10
-	LDRB	r0, [r1]
-	TEQ	r0, #" "		; skip spaces
-	ADDEQ	r1, r1, #1
-	BEQ	%BT10
-
-	TEQ	r0, #"-"
-	ADDEQ	r1, r1, #1
-	MOVEQ	r6, #1
-	MOVNE	r6, #0
-
-	MOV	r0, #10 :OR: (1:SHL:31)
-	SWI	XOS_ReadUnsigned
-	STRVS	r0, [sp]
-	Pull	"r0"
-	EXIT	VS
-
-	TEQ	r6, #0
-	RSBNE	r2, r2, #0
-
-	LDMIB	r0, {r3-r5}		; get offsets to VIDC list, WS list, other list
-	ADD	r3, r3, r0
-
-	ADD	r5, r5, r0
-	LDR	r5, [r5, #OtherIndex_ModeIndex]
-	MOV	r5, r5, LSL #2
-	ADD	r5, r5, #:INDEX: HorizOffsets	; r5 = offset in wp to store
-	STR	r2, [wp, r5]
-	CLRV
-	EXIT
-
-90
-	ADR	r0, UnknownModeError
-	SETV
-	EXIT
-
-UnknownModeError
-	&	1
-	=	"Unknown interlaced screen mode", 0
-	ALIGN
- ]
 
 InterlaceSwap_Code Entry
         LDR     wp, [r12]
