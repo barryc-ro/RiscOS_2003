@@ -120,9 +120,6 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
 o.files:	c.files
 o.files:	C:h.kernel
 o.files:	h.files
-o.files:	c.files
-o.files:	C:h.kernel
-o.files:	h.files
 o.gopher:	c.gopher
 o.gopher:	C:h.kernel
 o.gopher:	C:h.swis
