@@ -50,7 +50,7 @@ OSLIB      = OSLIB:o.OSLib
 #
 # Include files
 #
-INCLUDES = -IC:,<Lib$Dir>.,TCPIPLibs:
+INCLUDES = -IC:,TCPIPLibs:
 
 # Program specific options:
 #
@@ -121,18 +121,6 @@ ${EXP_C_H}.${COMPONENT}:	h.${COMPONENT}
 
 #
 # Dynamic dependencies:
-o.md5:	c.md5
-o.md5:	TCPIPLibs:sys.h.types
-o.md5:	TCPIPLibs:sys.h.cdefs
-o.md5:	TCPIPLibs:machine.h.endian
-o.md5:	TCPIPLibs:machine.h.ansi
-o.md5:	TCPIPLibs:machine.h.types
-o.md5:	TCPIPLibs:netinet.h.in
-o.md5:	h.md5
-o.des:	c.des
-o.des:	h.module
-o.des:	h.des
-o.des:	h.destbl
 o.module:	c.module
 o.module:	C:h.kernel
 o.module:	C:h.swis
@@ -141,3 +129,15 @@ o.module:	h.cipher
 o.module:	h.header
 o.module:	h.des
 o.module:	h.md5
+o.des:	c.des
+o.des:	h.module
+o.des:	h.des
+o.des:	h.destbl
+o.md5:	c.md5
+o.md5:	TCPIPLibs:sys.h.types
+o.md5:	TCPIPLibs:sys.h.cdefs
+o.md5:	TCPIPLibs:machine.h.endian
+o.md5:	TCPIPLibs:machine.h.ansi
+o.md5:	TCPIPLibs:machine.h.types
+o.md5:	TCPIPLibs:netinet.h.in
+o.md5:	h.md5
