@@ -56,7 +56,7 @@
 ; 08-Jun-00  BJGA 0.54          Bugfix: previous version data aborted on ResetStream
 ;
 
-        LEADR   Module_LoadAddr
+;       LEADR   Module_LoadAddr
 
 TAB     *       9
 LF      *       10
@@ -86,7 +86,7 @@ SupportMPEG2PS	SETL	{TRUE}				; support decoding of MPEG-2 Program Streams
 
                 GBLL    EOSDetect
 EOSDetect       SETL    {TRUE}                          ; detect end-of-stream / timeouts
-Timeout_Time    *       300                             ; centiseconds at full speed
+Timeout_Time    *       500                             ; centiseconds at full speed
 
                 GBLL    DebugEOS
 DebugEOS        SETL    {FALSE}                         ; print EOS debug to vdu
@@ -128,6 +128,7 @@ PES_Optional_DTS_Present	*	&40		; DTS field present
 ; Control stream handle structure
 
                         ^       0
+CSH_ModuleWsPtr         #       4
 CSH_StreamFlags         #       4
 CSH_VideoStreamHandle   #       4
 CSH_AudioStreamHandle   #       4
@@ -359,6 +360,7 @@ Mod_Init Entry
                                         ; so Tutu can free it for me when I die
 05
         MOV     r12, r2
+        STR     r12, ControlStreamHandle+CSH_ModuleWsPtr
 
         Debug_Open "SystmDebug"
 
@@ -922,22 +924,32 @@ GetSprite Entry "r1"
 ;
 ;       FullBuffers - Here's some more data
 ;
+
+; Direct access interface:
+; in:   r0 = flags
+;       r1 -> one or more linked bitstream buffers
+;       it is assumed that the bitstream buffer struct contains the control stream handle
+
+FullBuffers_DirectAccessWrapper
+        Push    "lr"
+        MOV     r2, r1
+        LDR     r1, [r2, #BufferDescriptor_CSH]
+        LDR     r12, [r1, #CSH_ModuleWsPtr]             ; needed for things like accessing FreePacketList
+        BL      int_full_buffers
+        TEQ     pc, pc
+        Pull    "pc", EQ                                ; 32-bit mode exit
+        Pull    "pc",, ^                                ; 26-bit mode: flag preservation safe in both APCS-R and APCS-32
+
+; SWI interface
 ; in:   r0 = flags
 ;       r1 = control stream handle
 ;       r2 -> one or more linked bitstream buffers
 
-FullBuffers Entry "r0-r5"
-        ADR     r1, ControlStreamHandle                 ; for now, since Keith isn't doing the open!
- [ EOSDetect
-        SCPSR   I_bit, 0, lr,, r3                       ; disable IRQs
-        LDR     r4, [r1, #CSH_BufferCount]
-        ADD     r4, r4, #1                              ; increment buffer count
-        STR     r4, [r1, #CSH_BufferCount]
-        LDR     r4, [r1, #CSH_EOSFlags]
-        TST     r4, #EOSFlags_TimedOut                  ; if we were in a timed-out state
-        BLNE    AddTimeoutTicker                        ; then we no longer should be
-        RestPSR r3,, c                                  ; restore IRQ state
- ]
+FullBuffers
+;        TST     r0, #FullBuffersFlags_UsingNewBSBufFormat
+;        BEQ     Unsupported_FullBuffers_Call
+        ; drop through to...
+int_full_buffers Entry "r0-r5"
         LDR     r0, [r1, #CSH_NotReadyBits]             ; if we haven't actually started playing yet, do nothing
         TEQ     r0, #0
         MOVNE   r5, #0                                  ; indicate no array element to increment
@@ -979,7 +991,21 @@ xdebug   SETL    {FALSE}
 
 xdebug   SETL    {FALSE}
 
-        MOV     r3, #1
+ [ EOSDetect
+        SCPSR   I_bit, 0, lr,, r3                       ; disable IRQs
+        LDR     r4, [r1, #CSH_BufferCount]
+        ADD     r4, r4, #1                              ; increment buffer count
+        STR     r4, [r1, #CSH_BufferCount]
+        LDR     r4, [r1, #CSH_EOSFlags]
+        TST     r4, #EOSFlags_TimedOut                  ; if we were in a timed-out state
+        BLNE    AddTimeoutTicker                        ; then we no longer should be
+        RestPSR r3,, c                                  ; restore IRQ state
+ ]
+
+        LDR     r3, [r2, #BufferDescriptor_Packets]
+        TST     r3, #BufferDescriptorFlags_NewFormat
+        MOVNE   r3, #1 :OR: BufferDescriptorFlags_NewFormat
+        MOVEQ   r3, #1
         STR     r3, [r2, #BufferDescriptor_Packets]     ; one user (us!)
 
         LDR     r3, [r2, #BufferDescriptor_Start]
@@ -1013,7 +1039,7 @@ xdebug   SETL    {FALSE}
 
         RestPSR r3,, c                  ; restore IRQ state
 
-        TEQ     lr, #0                  ; is the count now zero (if so then no active packets in buffer)
+        BICS    r3, lr, #BufferDescriptorFlags_NewFormat ; is the count now zero (if so then no active packets in buffer)
         BNE     %FT20                   ; [no, so don't free buffer]
 
         Push    "r1"
@@ -1026,6 +1052,15 @@ xdebug   SETL    {FALSE}
         BNE     %BT10                   ; and if more buffers, loop
         CLRV
         EXIT
+
+;Unsupported_FullBuffers_Call
+;        ADR     r0, %FT00
+;        SETV
+;        MOV     pc, lr
+;00
+;        &       0
+;        =       "This version of MPEGSystem does not support old-format bitstream buffer descriptors", 0
+;        ALIGN
 
 ; **************************************************************************
 ;
@@ -1153,7 +1188,7 @@ FreePackets Entry "r0-r5, wp"
 
         RestPSR r3,, c                                  ; restore IRQ state
 
-        TEQ     lr, #0                                  ; if all buffer data has been used, then free buffer
+        BICS    r3, lr, #BufferDescriptorFlags_NewFormat ; if all buffer data has been used, then free buffer
         STREQ   lr, [r2, #BufferDescriptor_Link]        ; only free one buffer
         MOVEQ   r1, r2
         BLEQ    FreeBuffer
@@ -1246,12 +1281,16 @@ FreeBuffer Entry "r0-r2,r12"
         SCPSR   I_bit, 0, lr,, r3       ; IRQs off
 	Push	r3
 
-	ADR	lr, ControlStreamHandle
+        LDR     lr, [r1, #BufferDescriptor_Packets]
+        TST     lr, #BufferDescriptorFlags_NewFormat
+        LDRNE   lr, [r1, #BufferDescriptor_CSH]
+        ADREQ   lr, ControlStreamHandle
 	LDR	r0, [lr, #CSH_DataReturned]
 	ADD	r0, r0, r2
 	STR	r0, [lr, #CSH_DataReturned]
 	Pull	r3
 	RestPSR r3,, c                  ; restore IRQ state
+	MOV     r3, lr                  ; r3 = control stream handle
 
         LDR     r2, [r1, #BufferDescriptor_FreeRoutine]
         TEQ     r2, #0          ; check for SWI interface
@@ -1292,12 +1331,11 @@ FreeBuffer Entry "r0-r2,r12"
 
  [ EOSDetect
 90
-        SCPSR   I_bit, 0, lr,, r3                       ; disable IRQs
-        ADR     lr, ControlStreamHandle
-        LDR     r0, [lr, #CSH_BufferCount]
+        SCPSR   I_bit, 0, lr,, r2                       ; disable IRQs
+        LDR     r0, [r3, #CSH_BufferCount]
         SUB     r0, r0, #1
-        STR     r0, [lr, #CSH_BufferCount]
-        RestPSR r3,, c                                  ; restore IRQ state
+        STR     r0, [r3, #CSH_BufferCount]
+        RestPSR r2,, c                                  ; restore IRQ state
         EXIT
  ]
 
@@ -2123,6 +2161,10 @@ Stats_CSH Entry
         MOV     r6, r1
         EXIT
 
+Stats_DirectFullBuffers ROUT
+        ADRL    r6, FullBuffers_DirectAccessWrapper
+        MOV     pc, lr
+
 ; The table containing all the statistics
 
 StatsTable
@@ -2138,6 +2180,7 @@ StatsTable
  ]
 	StatsTableEntry &0006, CSH_DataReturned
         StatsTableEntry &000A, Stats_CSH, Code
+        StatsTableEntry &000C, Stats_DirectFullBuffers, Code
 	&	-1
 
 ; **************************************************************************
@@ -2262,7 +2305,7 @@ DecimalOutput Entry "r0-r2",16
 
 
  [ international
-CopyError ENTRY "r1-r7"
+CopyError Entry "r1-r7"
         BL      open_messagefile
         EXIT    VS
         ADR     r1, MessageFile_Block
@@ -2278,7 +2321,7 @@ message_filename
         DCB     "Resources:$.Resources.ARM600.Messages", 0
         ALIGN
 
-open_messagefile ENTRY "r0-r2"
+open_messagefile Entry "r0-r2"
         LDR     r0, MessageFile_Open
         CMP     r0, #0
         EXIT    NE
@@ -2292,7 +2335,7 @@ open_messagefile ENTRY "r0-r2"
         STR     r0, MessageFile_Open
         EXIT
 
-write_r0_message ENTRY "r0-r7"
+write_r0_message Entry "r0-r7"
         BL      open_messagefile
         STRVS   r0, [sp]
         EXIT    VS
@@ -2315,7 +2358,7 @@ write_r0_message ENTRY "r0-r7"
         SWI     XOS_NewLine
         EXIT
  |
-write_r0_message ENTRY "r0"
+write_r0_message Entry "r0"
         SWI     XOS_Write0
         STRVS   r0, [sp]
         EXIT

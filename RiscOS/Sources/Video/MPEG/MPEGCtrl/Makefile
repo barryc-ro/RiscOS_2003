@@ -21,13 +21,17 @@ EXP_HDR = <export$dir>
 #
 # Generic options:
 #
-MKDIR   = cdir
-AS      = aasm
+MKDIR   = mkdir -p
+AS      = objasm
+LD      = link
 CP      = copy
 RM      = remove
+WIPE    = -wipe
 CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module
+ASFLAGS = -ABSolute -depend !Depend ${THROWBACK} -o $@
+LDFLAGS = -bin -o $@
 CPFLAGS = ~cfr~v
+WFLAGS  = ~cfr~v
 
 #
 # Program specific options:
@@ -35,6 +39,7 @@ CPFLAGS = ~cfr~v
 COMPONENT = MPEGSystem
 SOURCE    = Hdr.GetAll
 TARGET    = rm.MPEGSystem
+OBJECT    = o.MPEGSystem
 
 #
 # Generic rules:
@@ -59,21 +64,31 @@ install: ${TARGET} Doc.MPEGPlayer
 
 clean:
         ${RM} ${TARGET}
-        -wipe rm.SysOnly ~cfr~v
+        ${WIPE} o ${WFLAGS}
+        ${WIPE} rm.SysOnly ${WFLAGS}
         -stripdepnd
         @echo ${COMPONENT}: cleaned
 
-${TARGET}: ${SOURCE}
-        ${AS} ${ASFLAGS} -From ${SOURCE} -To $@
+${TARGET}: ${OBJECT}
+        ${LD} ${LDFLAGS} ${OBJECT}
+        SetType $@ Module
+        Access $@ rw/r
+
+${OBJECT}: ${SOURCE}
+        ${MKDIR} o
+        ${AS} ${ASFLAGS} ${SOURCE}
 
 sysonly: rm.SysOnly.MPEGSystem
 	@echo System-stream only version of MPEGSystem built
 
-rm.SysOnly.MPEGSystem: ${SOURCE} Hdr.SysOnly
+rm.SysOnly.MPEGSystem: o.SysOnly.MPEGSystem
         ${MKDIR} rm.SysOnly
-	${AS} ${ASFLAGS} -From Hdr.SysOnly -To $@
+        ${LD} ${LDFLAGS} o.SysOnly.MPEGSystem
+        SetType $@ Module
+        Access $@ rw/r
 
-${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
-        ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
+o.SysOnly.MPEGSystem: ${SOURCE} Hdr.SysOnly
+        ${MKDIR} o.SysOnly
+        ${AS} ${ASFLAGS} Hdr.SysOnly
 
 # Dynamic dependencies:
