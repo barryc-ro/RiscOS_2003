@@ -13,8 +13,7 @@
 
 COMPONENT = EngMenu
 APP	  = !EngMenu
-RDIR      = Resources.STB400
-#${USERIF}
+RDIR      = Resources.${USERIF}
 LDIR	  = EngMenuRes:
 TARGET    = ${RDIR}.!RunImage
 D_TARGET  = ${RDIR}.!RunImaDB
