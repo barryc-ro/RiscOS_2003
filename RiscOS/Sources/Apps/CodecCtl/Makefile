@@ -42,8 +42,8 @@ LIBSZ    = ${ROMCSTUBS} tbox:o.toolboxlib tbox:o.eventlibm tbox:o.wimplib
 LIBSZRAM = ${CLIB} tbox:o.toolboxlib tbox:o.eventlibm tbox:o.wimplib
 
 # Swap these lines to choose which version to make.
-DFLAGS   = -DDEBUG=1 -throwback
-DFLAGS   =
+#DFLAGS   = -DDEBUG=1 -throwback
+#DFLAGS   =
 
 #
 # Program specific options:
