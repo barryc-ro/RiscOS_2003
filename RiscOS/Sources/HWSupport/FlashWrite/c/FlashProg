@@ -1,0 +1,1083 @@
+/* FlashProg.c */
+
+/* ANSI includes */
+#include <stdlib.h>
+#include <stdio.h>
+
+/* Risc OS includes */
+#include "kernel.h"
+#include "swis.h"
+
+/* Other libraries */
+#include "DebugLib/debuglib.h"
+
+/* Local includes */
+#include "module.h"
+#include "flashprog.h"
+#include "error.h"
+
+#undef  GIDEON
+#define FUNAI2
+
+#ifdef GIDEON
+  #define SA   /* Define the chip as an SA type chip */
+  #define ROM0 /* Define the chip as residing at ROM space 0 */
+  #define ROM_BASE      0x03800000u /* Address of the base of ROM bank 0 */
+  #define IMAGE_SIZE    0x00100000u /* Size of flash image (in words) */   /* [4MBytes] */
+  #define PB_NO_WORDS          128u /* Number of words that fit in page buffer */
+  #define NUM_DEVICES            1u /* Number of paired 32bit devices */
+#endif
+
+#ifdef FUNAI2
+  #define S5   /* Define the chip as an S5 type chip */
+  #define ROM1 /* Define the chip as residing at ROM space 1 */
+  #define ROM_BASE      0x81000000u /* Address of ROM bank 2 in the copy of physical space*/
+  #define IMAGE_SIZE    0x00200000u /* Size of flash image (in words) */   /* [8MBytes] */
+  #define PB_NO_WORDS           16u /* Number of words that fit in page buffer */
+  #define NUM_DEVICES            2u /* Number of paired 32bit devices */
+#endif
+
+/*********/
+/* Sizes */
+
+#define BLOCK_NO_WORDS  0x00008000u /* Size of a block (in words)  [32Kwords] */
+#define PBS_PER_BLOCK   (BLOCK_NO_WORDS / PB_NO_WORDS) /* Number of page buffer writes
+                                                          needed for each block of flash */
+#define NUM_BLOCKS      (IMAGE_SIZE / BLOCK_NO_WORDS)  /* Number of blocks in a device */
+
+
+/*************/
+/* Addresses */
+
+#ifdef ROM0
+  #define ROMCONTROL	0x03200080u /* Address of the 7500(FE) ROMCR0 register */
+#endif
+
+#ifdef ROM1
+  #define ROMCONTROL	0x03200084u /* Address of the 7500(FE) ROMCR1 register */
+#endif
+
+#define IOLINES_ADDRESS 0x0320000cu /* Address of the 7500(FE) IOLINES register */
+
+
+/******************/
+/* Offsets for SA */
+
+#define BSR_OFFSET      0x00000001u /* Offset from block base */
+#define GSR_OFFSET      0x00000002u /* Offset from flash base */
+/* CSR is available at any address after many commands */
+
+#define MANUFACTURER_ID_OFFSET  0x000000000u /* Offset from flash base */
+#define DEVICE_ID_OFFSET        0x000000001u /* Offset from flash base */
+
+
+/******************/
+/* Offsets for S5 */
+
+#define S5_BSR_OFFSET   0x00000002u /* Offset from block base */
+/* XSR is available at any address after a write to buffer command */
+/* SR is available at any address after many commands */
+
+#define S5_QUERY_OFFSET         0x00000055u /* Offset from flash base */
+#define S5_QUERY_STRING_OFFSET  0x00000010u /* Offset from flash base */
+
+
+/****************/
+/* Masks for SA */
+
+#define GSR_1_MASK      0x00020002u
+#define GSR_2_MASK	0x00040004u
+#define GSR_5_MASK      0x00200020u
+
+#define BSR_3_MASK      0x00080008u
+#define BSR_5_MASK	0x00200020u
+#define BSR_7_MASK	0x00800080u
+
+#define CSR_4_MASK	0x00100010u
+#define CSR_5_MASK	0x00200020u
+#define CSR_7_MASK      0x00800080u
+
+
+/****************/
+/* Masks for S5 */
+
+#define S5_SR_1_MASK    0x00020002u
+#define S5_SR_3_MASK    0x00080008u
+#define S5_SR_4_MASK    0x00100010u
+#define S5_SR_5_MASK    0x00200020u
+#define S5_SR_7_MASK    0x00800080u
+
+#define S5_XSR_7_MASK   0x00800080u
+
+#define S5_BSR_0_MASK   0x00010001u
+
+
+/********************************************************/
+/* 28F160S5 commands (16bit-wide, replicated to 32bits) */
+
+#define S5_FULLCHIP_ERASE        0x00300030u
+#define S5_ERASE_CONFIRM         0x00D000D0u
+#define S5_ERASE_BLOCK           0x00200020u
+#define S5_WRITE_TO_BUFFER       0x00E800E8u
+#define S5_BUFFER_WRITE_CONFIRM  0x00D000D0u
+#define S5_WRITE_WORD            0x00400040u
+#define S5_QUERY                 0x00980098u
+#define S5_CLEAR_STATUS_REG      0x00500050u
+
+
+/*******************************************************************/
+/* 28F008SA-compatible commands (16bit-wide, replicated to 32bits) */
+
+#define WRITE_WORD	0x40404040u
+#define READ_ID		0x00900090u
+#define READ_ARRAY	0x00FF00FFu
+#define ERASE_BLOCK     0x20202020u
+#define READ_CSR        0x00700070u
+
+
+/***********************************************************/
+/* 28F016SA/SV commands (16bit-wide, replicated to 32bits) */
+
+#define CLEAR_SR	0x50505050u
+#define READ_ESR	0x00710071u
+#define ERASE_ALL	0x00A700A7u
+#define ERASE_CONFIRM	0x00D000D0u
+#define LOAD_PB		0xE0E0E0E0u
+#define WRITE_PB	0x0C0C0C0Cu
+
+
+/********************/
+/* Type definitions */
+
+typedef unsigned int volatile * address_t;
+
+
+/***********/
+/* Globals */
+
+static address_t chip_address = (address_t) ROM_BASE;
+
+
+/**********/
+/* Macros */
+
+#define flash_write_command(address, command) (*(address_t) address) = (unsigned int) command
+
+
+/**********************/
+/* Assembler routines */
+
+extern void irqs_off (void);
+extern void irqs_on (void);
+extern void led_on (void *);
+extern void write_enable (void *);
+extern void write_disable (void *);
+extern void reset (void);
+
+
+/*****************************/
+/* Local function prototypes */
+
+static int flash_write_word (address_t, unsigned int);
+static int flash_write_block (address_t, unsigned int *);
+static int flash_erase_block (address_t);
+static int flash_erase_all (address_t);
+static void vpp_on (int);
+static int flash_write_pagebuffer (address_t, address_t, unsigned int *);
+static address_t flash_chip_base (address_t);
+
+
+/*********************/
+/* Init and finalise */
+
+_kernel_oserror *flash_initialise (void *pw, int podule_base)
+{
+  /* Nothing to do here */
+
+  /* Auto-detect SA/S5 ? */
+
+  return NULL;
+
+  NOT_USED (pw); NOT_USED (podule_base);
+}
+
+
+_kernel_oserror *flash_finalise (void *pw)
+{
+  /* Nothing to do here */
+  return NULL;
+
+  NOT_USED (pw);
+}
+
+
+/****************/
+/* SWI handlers */
+
+
+/* Flash_WordWrite SWI */
+_kernel_oserror *flash_swi_writeword (_kernel_swi_regs *r)
+{
+  int er;
+  address_t location;
+
+  /* Disable ROM caching */
+  /* Disable IRQs */
+  irqs_off ();
+  /* Enable writes to ROM */
+  write_enable ((void *)ROMCONTROL);
+  /* Turn on programming voltage */
+  vpp_on (1);
+
+  /* Take word byte-offset and turn it into word-offset. */
+  location = chip_address + (r->r[0] / sizeof (unsigned int));
+
+  er = flash_write_word (location, (unsigned int) r->r[1]);
+  printf ("write_word = %d\n", er);
+
+  /* Return flash to read array mode */
+  flash_write_command (flash_chip_base (location), READ_ARRAY);
+
+  /* Enable ROM caching */
+  /* Enable IRQs */
+  irqs_on ();
+  /* Disable writes to ROM */
+  write_disable ((void *)ROMCONTROL);
+  /* Turn off programming voltage */
+  vpp_on (0);
+
+  if (er)
+    r->r[0] = (int)"    Word write failed";
+  else
+    r->r[0] = NULL;
+
+  return NULL;
+}
+
+
+/* Flash_EraseBlock SWI */
+_kernel_oserror *flash_swi_eraseblock (_kernel_swi_regs *r)
+{
+  int er;
+  address_t location;
+
+  /* Disable ROM caching */
+  /* Disable IRQs */
+  irqs_off ();
+  /* Enable writes to ROM */
+  write_enable ((void *)ROMCONTROL);
+  /* Turn on programming voltage */
+  vpp_on (1);
+
+  /* Take byte offset and turn it into word offset */
+  location = chip_address + (r->r[0] / sizeof (unsigned int));
+
+  er = flash_erase_block (location);
+  dprintf (("", "erase_block = %d\n", er));
+
+  if (er)
+    r->r[0] = (int)"    Erase block failed";
+  else
+    r->r[0] = NULL;
+
+  /* Return flash to read array mode */
+  flash_write_command (flash_chip_base (location), READ_ARRAY);
+
+  /* Enable ROM caching */
+  /* Enable IRQs */
+  irqs_on ();
+  /* Disable writes to ROM */
+  write_disable ((void *)ROMCONTROL);
+  /* Turn off programming voltage */
+  vpp_on (0);
+
+  return NULL;
+}
+
+
+/* Flash_EraseFlash SWI */
+_kernel_oserror *flash_swi_eraseflash (_kernel_swi_regs *r)
+{
+  int er;
+  int i;
+  address_t location;
+
+  /* Disable ROM caching */
+  /* Disable IRQs */
+  irqs_off ();
+  /* Enable writes to ROM */
+  write_enable ((void *)ROMCONTROL);
+  /* Turn on programming voltage */
+  vpp_on (1);
+
+  er = flash_erase_all (chip_address);
+
+  if (er)
+    r->r[0] = (int)"    Erase flash failed";
+  else
+    r->r[0] = NULL;
+
+  location = chip_address;
+
+  for (i = 0; i < NUM_DEVICES; i++)
+  {
+    /* Return flash to read array mode */
+    flash_write_command (flash_chip_base (location), READ_ARRAY);
+
+    location += (IMAGE_SIZE / NUM_DEVICES);
+  }
+
+  /* Enable ROM caching */
+  /* Enable IRQs */
+  irqs_on ();
+  /* Disable writes to ROM */
+  write_disable ((void *)ROMCONTROL);
+  /* Turn off programming voltage */
+  vpp_on (0);
+
+  return NULL;
+}
+
+
+/* Flash_FlashWrite SWI */
+_kernel_oserror *flash_swi_writeflash (_kernel_swi_regs *r)
+{
+  int er = 0;
+  int i;
+  address_t block_address, location;
+
+  unsigned int *words;  /* Pointer to the image data to write to flash */
+  unsigned int *block_data;
+
+  words = (unsigned int *) r->r[0];
+
+  /* Disable ROM caching */
+  /* Disable IRQs */
+  irqs_off ();
+  /* Enable writes to ROM */
+  write_enable ((void *)ROMCONTROL);
+  /* Turn on programming voltage */
+  vpp_on (1);
+
+  er = flash_erase_all (chip_address);
+  if (er)
+  {
+    /* oops */
+    r->r[0] = (int)"    Error erasing flash";
+  }
+  else
+  {
+    block_address = chip_address; /* Start at the base of the chip */
+    block_data = words;
+
+    /* NUM_BLOCKS "blocks" of flash */
+    for (i = 0; i < NUM_BLOCKS; i++)
+    {
+      er = flash_write_block (block_address, block_data);
+      if (er)
+      {
+        /* oops */
+        r->r[0] = (int)"    Error writing block";
+        break;
+      }
+
+      block_address += BLOCK_NO_WORDS;
+      block_data += BLOCK_NO_WORDS;
+    }
+  }
+
+  location = chip_address;
+
+  for (i = 0; i < NUM_DEVICES; i++)
+  {
+    /* Return flash to read array mode */
+    flash_write_command (flash_chip_base (location), READ_ARRAY);
+
+    location += (IMAGE_SIZE / NUM_DEVICES);
+  }
+
+  /* Enable ROM caching */
+  /* Enable IRQs */
+  irqs_on ();
+  /* Disable writes to ROM */
+  write_disable ((void *)ROMCONTROL);
+
+  return NULL;
+}
+
+
+/* Flash_WriteBuffer SWI */
+_kernel_oserror *flash_swi_writebuffer (_kernel_swi_regs *r)
+{
+  int er = 0;
+  unsigned int block_offset, pb_offset;
+
+  unsigned int *words;  /* Pointer to the image data to write to flash */
+
+  /* Take the block byte-offset and turn it into word-offset. */
+  block_offset = r->r[0] / sizeof (unsigned int);
+
+  /* Take pb byte-offset and turn it into word-offset. */
+  pb_offset = r->r[1] / sizeof (unsigned int);
+
+  words = (unsigned int *) r->r[2];
+
+  /* Disable ROM caching */
+  /* Disable IRQs */
+  irqs_off ();
+  /* Enable writes to ROM */
+  write_enable ((void *)ROMCONTROL);
+  /* Turn on programming voltage */
+  vpp_on (1);
+
+
+  er = flash_write_pagebuffer (chip_address + block_offset,
+                               chip_address + pb_offset, words);
+
+  if (er)
+  {
+    /* oops */
+    r->r[0] = (int)"    Error writing buffer";
+  }
+
+  /* Return flash to read array mode */
+  flash_write_command (flash_chip_base (chip_address + block_offset), READ_ARRAY);
+
+  /* Enable ROM caching */
+  /* Enable IRQs */
+  irqs_on ();
+  /* Disable writes to ROM */
+  write_disable ((void *)ROMCONTROL);
+  /* Turn off programming voltage */
+  vpp_on (0);
+
+  return NULL;
+}
+
+
+/* Flash_WriteBlock SWI */
+_kernel_oserror *flash_swi_writeblock (_kernel_swi_regs *r)
+{
+  int er = 0;
+  unsigned int block_offset;
+
+  unsigned int *words;  /* Pointer to the image data to write to flash */
+
+  /* Take the block byte-offset and turn it into word-offset. */
+  block_offset = r->r[0] / sizeof (unsigned int);
+
+  words = (unsigned int *) r->r[1];
+
+  /* Disable ROM caching */
+  /* Disable IRQs */
+  irqs_off ();
+  /* Enable writes to ROM */
+  write_enable ((void *)ROMCONTROL);
+  /* Turn on programming voltage */
+  vpp_on (1);
+
+
+  er = flash_write_block (chip_address + block_offset, words);
+
+  if (er)
+  {
+    /* oops */
+    r->r[0] = (int)"    Error writing block";
+  }
+
+  /* Return flash to read array mode */
+  flash_write_command (flash_chip_base (chip_address + block_offset), READ_ARRAY);
+
+  /* Enable ROM caching */
+  /* Enable IRQs */
+  irqs_on ();
+  /* Disable writes to ROM */
+  write_disable ((void *)ROMCONTROL);
+  /* Turn off programming voltage */
+  vpp_on (0);
+
+  return NULL;
+}
+
+
+
+
+/**********************/
+/* Internal functions */
+
+
+#ifdef SA
+
+/* Function to read the SA Common Status Register */
+static unsigned int flash_read_csr (char bit)
+{
+  unsigned int mask;
+
+  switch (bit)
+  {
+    case 4:
+      mask = CSR_4_MASK;
+      break;
+
+    case 5:
+      mask = CSR_5_MASK;
+      break;
+
+    case 7:
+    default:
+      mask = CSR_7_MASK;
+      break;
+  }
+
+  return (*chip_address & mask);
+}
+
+
+/* Function to read the SA Block Status Register */
+static unsigned int flash_read_bsr (address_t block_base, char bit)
+{
+  unsigned int mask;
+
+  switch (bit)
+  {
+    case 3:
+      mask = BSR_3_MASK;
+      break;
+
+    case 5:
+      mask = BSR_5_MASK;
+      break;
+
+    case 7:
+    default:
+      mask = BSR_7_MASK;
+      break;
+  }
+
+  return (*(address_t) block_base + BSR_OFFSET) & mask;
+}
+
+
+/* Function to read the SA Global Status Register */
+static unsigned int flash_read_gsr (char bit)
+{
+  unsigned int mask;
+
+  switch (bit)
+  {
+    case 1:
+      mask = GSR_1_MASK;
+      break;
+
+    case 2:
+      mask = GSR_2_MASK;
+      break;
+
+    case 5:
+    default:
+      mask = GSR_5_MASK;
+      break;
+  }
+
+  return (*(address_t) chip_address + GSR_OFFSET) & mask;
+}
+
+#endif
+
+#ifdef S5
+
+/* Function to read the S5 Status Register */
+static unsigned int flash_read_s5_sr (address_t location, char bit)
+{
+  unsigned int mask;
+  address_t chip_base;
+
+  switch (bit)
+  {
+    case 1:
+      mask = S5_SR_1_MASK;
+      break;
+
+    case 3:
+      mask = S5_SR_3_MASK;
+      break;
+
+    case 4:
+      mask = S5_SR_4_MASK;
+      break;
+
+    case 5:
+      mask = S5_SR_5_MASK;
+      break;
+
+    default:
+    case 7:
+      mask = S5_SR_7_MASK;
+  }
+
+  chip_base = flash_chip_base (location);
+
+  return (*chip_base & mask);
+}
+
+
+/* Function to read the S5 Extended Status Register */
+static unsigned int flash_read_s5_xsr (address_t location, char bit)
+{
+  unsigned int mask;
+  address_t chip_base;
+
+  switch (bit)
+  {
+    default:
+    case 7:
+      mask = S5_XSR_7_MASK;
+  }
+
+  chip_base = flash_chip_base (location);
+
+  return (*chip_base & mask);
+}
+
+
+/* Function to read the S5 Block Status Register */
+static unsigned int flash_read_s5_bsr (address_t block_base, char bit)
+{
+   unsigned int mask;
+
+  switch (bit)
+  {
+    default:
+    case 0:
+      mask = S5_BSR_0_MASK;
+  }
+
+  return (*(address_t) block_base + S5_BSR_OFFSET) & mask;
+}
+
+#endif
+
+
+static address_t flash_chip_base (address_t location)
+{
+  address_t chip_base;
+  unsigned int i_location;
+
+  if (NUM_DEVICES > 1)
+  {
+    int device_num;
+
+    i_location = (unsigned int) location;
+
+    device_num = (i_location - ROM_BASE) / (IMAGE_SIZE / NUM_DEVICES);
+
+    chip_base = (address_t) (ROM_BASE + (device_num * IMAGE_SIZE / NUM_DEVICES));
+  }
+  else
+    chip_base = (address_t) ROM_BASE;
+
+  return chip_base;
+}
+
+
+static void vpp_on (int on)
+{
+  address_t iolines = (address_t) IOLINES_ADDRESS;
+  unsigned int value;
+
+  value = *iolines;
+  if (on == 1)
+    value &= (~4);
+  else
+    value |= 4;
+  *iolines = value;
+}
+
+
+/* Function to write a page buffer's worth of data to flash */
+static int flash_write_pagebuffer (address_t block_base, address_t pb_base,
+                                   unsigned int *words)
+{
+  int er = 0;
+  int i;
+  unsigned int *page_buffer = words;
+  address_t position;
+
+#ifdef SA
+
+  /* "Read Extended Status Registers" command */
+  flash_write_command (pb_base, READ_ESR);
+
+  /* Poll GSR until GSR.2 = 1 (page buffer available). */
+  while (flash_read_gsr (2) != GSR_2_MASK);
+
+  /* Check GSR.1 for Page Buffer status */
+  if (flash_read_gsr (1) != 0)
+  {
+    /* Page buffer is busy, return with the error flag true */
+    return 1;
+  }
+
+  /* "Sequential load to page buffer" command */
+  flash_write_command (pb_base, LOAD_PB);
+
+  /* Send low byte of number of words to write (Replicated to 32 bits) */
+  flash_write_command (pb_base, ((((PB_NO_WORDS & 0x00FF) - 1) << 16)
+                                + ((PB_NO_WORDS & 0x00FF) - 1));
+
+  /* Send high byte of number of words to write (Replicated to 32 bits) */
+  flash_write_command (pb_base, ((((PB_NO_WORDS & 0xFF00) - 1) << 16)
+                                + ((PB_NO_WORDS & 0xFF00) - 1));
+
+  position = pb_base;
+
+  /* Write data to buffer */
+  for (i = 0; i < PB_NO_WORDS; i++)
+  {
+    flash_write_command (position, page_buffer[i]);
+
+    position++;
+  }
+
+  /* "Read Extended Status Registers" command */
+  flash_write_command (pb_base, READ_ESR);
+
+  /* Poll BSR until BSR.3 of target address = 0 (queue available) */
+  while (flash_read_bsr (block_base, 3) != 0);
+
+  /* "Write page buffer to flash" command */
+  flash_write_command (pb_base, WRITE_PB);
+
+  /* Send low byte of number of words to write (Replicated to 32 bits) */
+  flash_write_command (pb_base, ((((PB_NO_WORDS & 0x00FF) - 1) << 16)
+                                + ((PB_NO_WORDS & 0x00FF) - 1));
+
+  /* Send high byte of number of words to write (Replicated to 32 bits) */
+  flash_write_command (pb_base, ((((PB_NO_WORDS & 0xFF00) - 1) << 16)
+                                + ((PB_NO_WORDS & 0xFF00) - 1));
+
+  /* "Read Extended Status Registers" command */
+  flash_write_command (pb_base, READ_ESR);
+
+  /* Poll BSR until BSR.7 of target address = 1 (block ready). */
+  while (flash_read_bsr (block_base, 7) != BSR_7_MASK);
+
+  if (flash_read_bsr (block_base, 5) != 0)
+  {
+    /* Error in write, return with the error flag true */
+    er = 1;
+  }
+
+  /* "Clear Status register" command */
+  flash_write_command (pb_base, CLEAR_SR);
+
+#else /* S5 */
+
+  /* set buffer timeout.... ? */
+
+  /* Issue write to buffer command */
+  flash_write_command (block_base, S5_WRITE_TO_BUFFER);
+
+  /* Poll XSR.7 for readiness */
+  while (flash_read_s5_xsr (block_base, 7) != S5_XSR_7_MASK);
+
+  /* Write word count (is the -1 correct?) */
+  flash_write_command (block_base, (PB_NO_WORDS - 1) | ((PB_NO_WORDS - 1) << 16));
+
+#if 0
+  /* Write data to buffer */
+  flash_write_command (pb_base, page_buffer[0]);
+
+  for (i = 1; i < PB_NO_WORDS; i++)
+  {
+    flash_write_command (chip_address, page_buffer[i]);
+  }
+
+#else
+  position = pb_base;
+
+  /* Write data to buffer */
+  for (i = 0; i < PB_NO_WORDS; i++)
+  {
+    flash_write_command (position, page_buffer[i]);
+
+    position++;
+  }
+#endif
+
+  /* Buffer write to flash confirm command */
+  flash_write_command (block_base, S5_BUFFER_WRITE_CONFIRM);
+
+  /* Poll for completion (SR.7) */
+  while (flash_read_s5_sr (block_base, 7) != S5_SR_7_MASK);
+
+  /* Check for voltage range error (SR.3) */
+  if (flash_read_s5_sr (block_base, 3) != 0)
+  {
+    printf ("writebuffer: Voltage Range Error\n");
+    er = 1;
+  }
+
+  /* Check for device protect error (SR.1) */
+  if (flash_read_s5_sr (block_base, 1) != 0)
+  {
+    printf ("writebuffer: Device Protect Error\n");
+    er = 1;
+  }
+
+  /* Check for programming error (SR.4) */
+  if (flash_read_s5_sr (block_base, 4) != 0)
+  {
+    printf ("writebuffer: Programming Error\n");
+    er = 1;
+  }
+
+  if (er == 1)
+  {
+    /* Clear status register command */
+    flash_write_command (block_base, S5_CLEAR_STATUS_REG);
+  }
+
+#endif
+
+  return er;
+}
+
+
+/* Function to write a "block" of data to flash */
+static int flash_write_block (address_t block_base, unsigned int *block_data)
+{
+  int er = 0;
+  int  count;
+  address_t pb_address;
+
+  pb_address = block_base;
+
+  /* Do a page buffer sized section PBS_PER_BOCK times, to write whole block */
+  for (count = 0; count < PBS_PER_BLOCK; count++)
+  {
+    er = flash_write_pagebuffer (block_base, pb_address, block_data);
+    if (er)
+      break;
+
+    pb_address += PB_NO_WORDS;
+    block_data += PB_NO_WORDS;
+  }
+
+  return er;
+}
+
+
+/* Function to write a 32bit word to flash */
+static int flash_write_word (address_t address, unsigned int data)
+{
+  int er = 0;
+
+#ifdef SA
+
+  /* "32 bit word write" command */
+  flash_write_command (address, WRITE_WORD);
+
+  /* Write 32 bit word to flash */
+  flash_write_command (address, data);
+
+  /* Poll CSR until CSR.7 = 1 (WSM ready) */
+  while (flash_read_csr (7) != CSR_7_MASK);
+
+  /* Check CSR.4 for write failure */
+  if (flash_read_csr (4))
+  {
+    /* Bit set, therefore write failed.  Set error flag */
+    er = 1;
+  }
+
+  /* "Clear Status register" command */
+  flash_write_command (address, CLEAR_SR);
+
+#else /* S5 */
+
+  /* "32 bit word write" command */
+  flash_write_command (address, S5_WRITE_WORD);
+
+  /* Write 32 bit word to flash */
+  flash_write_command (address, data);
+
+  /* Poll for completion (SR.7) */
+  while (flash_read_s5_sr (address, 7) != S5_SR_7_MASK);
+
+  /* Check for voltage range error (SR.3) */
+  if (flash_read_s5_sr (address, 3) != 0)
+  {
+    printf ("WriteWord: Voltage Range Error\n");
+    er = 1;
+  }
+
+  /* Check for device protect error (SR.1) */
+  if (flash_read_s5_sr (address, 1) != 0)
+  {
+    printf ("WriteWord: Device Protect Error\n");
+    er = 1;
+  }
+
+  /* Check for programming error (SR.4) */
+  if (flash_read_s5_sr (address, 4) != 0)
+  {
+    printf ("WriteWord: Programming Error\n");
+    er = 1;
+  }
+
+  if (er == 1)
+  {
+    /* Clear status register command */
+    flash_write_command (address, S5_CLEAR_STATUS_REG);
+  }
+
+#endif
+
+  return er;
+}
+
+
+/* Function to erase a "block" of flash */
+static int flash_erase_block (address_t block_base)
+{
+  int er = 0;
+
+#ifdef SA
+
+  /* "Single block erase" command */
+  flash_write_command (block_base, ERASE_BLOCK);
+
+  /* Confirm erase command */
+  flash_write_command (block_base, ERASE_CONFIRM);
+
+  /* Poll CSR until CSR.7 = 1 (WSM ready). */
+  while (flash_read_csr (7) != CSR_7_MASK);
+
+  /* Check CSR.5 for erase error */
+  if (flash_read_csr (5))
+  {
+    /* Error in erase, set error flag true */
+    er = 1;
+  }
+
+#else /* S5 */
+
+  /* "Single block erase" command */
+  flash_write_command (block_base, S5_ERASE_BLOCK);
+
+  /* Confirm erase command */
+  flash_write_command (block_base, S5_ERASE_CONFIRM);
+
+  /* Poll for completion (SR.7) */
+  while (flash_read_s5_sr (block_base, 7) != S5_SR_7_MASK);
+
+  /* Check SR.5 for erase error */
+  if (flash_read_s5_sr (block_base, 5) != 0)
+    er = 1;
+
+#endif
+
+  return er;
+}
+
+
+/* Function to erase the whole flash */
+static int flash_erase_all (address_t flash_base)
+{
+  int er = 0;
+
+#ifdef SA
+
+  /* "Read Extended Status Registers" command */
+  flash_write_command (flash_base, READ_ESR);
+
+  /* Poll BSR until BSR.3 of target address = 0 (queue available) */
+  while (flash_read_bsr (flash_base, 3) != 0);
+
+  /* "Erase all unlocked blocks" command */
+  flash_write_command (flash_base, ERASE_ALL);
+
+  /* Confirm erase */
+  flash_write_command (flash_base, ERASE_CONFIRM);
+
+  /* Check GSR.5 for erase error */
+  if (flash_read_gsr (5) != 0)
+  {
+    /* Error in erase, set error flag true */
+    er = 1;
+  }
+
+#else /* S5 */
+
+  int i;
+
+  for (i = 0; i < NUM_DEVICES; i++)
+  {
+    /* Full chip erase command */
+    flash_write_command (flash_base, S5_FULLCHIP_ERASE);
+
+    /* Confirm erase command */
+    flash_write_command (flash_base, S5_ERASE_CONFIRM);
+
+    /* Poll for completion (SR.7) */
+    while (flash_read_s5_sr (flash_base, 7) != S5_SR_7_MASK);
+
+    /* Check SR.5 for erase error */
+    if (flash_read_s5_sr (flash_base, 5) != 0)
+      er = 1;
+
+    if (er)
+      break;
+
+    flash_base += (IMAGE_SIZE / NUM_DEVICES);
+  }
+
+#endif
+
+  return er;
+}
+
+
+static void flash_identify (void)
+{
+  unsigned int query[3];
+  address_t position;
+
+  /* Read query command */
+  flash_write_command ((address_t)(chip_address + S5_QUERY_OFFSET), S5_QUERY);
+
+  position = chip_address + S5_QUERY_STRING_OFFSET;
+
+  /* Read the query string */
+  query[0] = *(position++);
+  query[1] = *(position++);
+  query[1] = *position;
+
+  if (query[0] == 'Q' && query[1] == 'R' && query[2] == 'Y')
+  {
+    /* Device is CFI compliant */
+
+    /* Read device size ? */
+    /* Read write buffer size ? */
+    /* Read timeout values ? */
+  }
+  else
+  {
+    unsigned int manu_id, device_id;
+
+    /* Intelligent identifier command */
+    flash_write_command (chip_address, READ_ID);
+
+    /* Read manufacturer id */
+    position = chip_address + MANUFACTURER_ID_OFFSET;
+    manu_id = *position;
+
+    /* Read device id */
+    position = chip_address + DEVICE_ID_OFFSET;
+    device_id = *position;
+  }
+
+  /* Return flash to read array mode */
+  flash_write_command (chip_address, READ_ARRAY);
+}
