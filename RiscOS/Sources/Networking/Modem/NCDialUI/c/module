@@ -4,11 +4,12 @@
 #include <string.h>
 #include <stddef.h>
 
-#include "cmhg_modem.h"
+#include "HeaderMod.h"
 #include "defs.h"
 #include "kernel.h"
 #include "swis.h"
 #include "wimp.h"
+#include "Debuglib/Debuglib.h"
 
 #ifndef TRUE
 #define FALSE 0
@@ -21,23 +22,68 @@
 #define CANCELVAR "Alias$URLOpen_NCDialUI_Cancel"
 #define CANCELTXT "NCDialUI_Cancel %*0"
 
-extern int NCDialUI_callback_entry  (_kernel_swi_regs *r, void *pw);
-extern int NCDialUI_callafter_entry (_kernel_swi_regs *r, void *pw);
-extern int NCDialUI_upcall_entry    (_kernel_swi_regs *r, void *pw);
+#define DIALLER_DBOX	"__dbox_dialler"
 
 #ifndef DONT_BUILD_RESOURCES
 extern void *resources_base(void);
 #endif
 
+
+#ifdef DEBUGLIB
+  /* Define the output device type */
+  debug_device DebugOutputDevice = FILE_OUTPUT;
+#endif /*  DEBUGLIB */
+
+
+/* Define the dialler_status strings */
+char *dialler_status_string(int status)
+{
+  switch (status)
+  {
+    case 0x00:
+      return ("NCDialler_IPDown");
+    case 0x04:
+      return ("NCDialler_IPUp");
+    case 0x81:
+      return ("NCDialler_NoDial");
+    case 0x82:
+      return ("NCDialler_Busy");
+    case 0x83:
+      return ("NCDialler_NoCarrier");
+    case 0x84:
+      return ("NCDialler_NoServer");
+    case 0x85:
+      return ("NCDialler_Timeout");
+    case 0x86:
+      return ("NCDialler_Error");
+    case 0x90:
+      return ("NCDialler_Starting");
+    case 0x91:
+      return ("NCDialler_Dialling");
+    case 0x92:
+      return ("NCDialler_Connecting");
+    case 0x93:
+      return ("NCDialler_Connected");
+    case 0x94:
+      return ("NCDialler_ReDial");
+    default:
+      return ("NCDialler: Unrecognised service call.");
+  }
+  return ("NCDialler: Unrecognised service call.");
+}
+
+
+
 extern void osmodfree(char *);
 extern char *osmodget(int);
-extern void callback(int (*irq_entry)(), void *);
+extern void callback(void (*irq_entry)(), void *);
 extern void callafter(int, int (*irq_entry)(), void *);
 extern void removeticker(int (*irq_entry)(), void *);
 extern int  monotonic_time(void);
 extern void oscli(char *);
 
 extern BOOL CreateFiles(void);
+extern void DynamicScreen(configline *);
 
 #define vdu4() _swix(0x104, 0)
 #define os_removecursors()  _swix(OS_RemoveCursors, 0)
@@ -48,7 +94,11 @@ extern BOOL CreateFiles(void);
 #define Service_ShutdownComplete   0x80
 #define Service_NCDialUIStatus     0xA8
 #define Service_DiallerStatus      0xB4
- 
+
+#define MAX_DEBUG 64
+
+char *debug_line[MAX_DEBUG];
+
 #define int16 short
 #define int32 long
 
@@ -57,6 +107,7 @@ typedef void (*P_FSStartingFN)(void *r0);
 extern configline *anchor;
 
 BOOL active    = FALSE;
+BOOL wedialled = FALSE;
 BOOL busy_mask = FALSE;
 BOOL silent    = TRUE;
 
@@ -100,11 +151,13 @@ char *stristr (char *s, char *t)
   return(0);
 }
 
-int NCDialUI_callback_handler (_kernel_swi_regs *r, void *pw)
+_kernel_oserror *NCDialUI_callback_handler (_kernel_swi_regs *r, void *pw)
 {
+  dprintf(("", "NCDialUI_callback_handler()\n"));
+
   if (pw != pwp)
-    return(1);
-    
+    return NULL;
+
   switch(dialplease)
   {
   case CALLBACK_BADCARD:
@@ -113,15 +166,16 @@ int NCDialUI_callback_handler (_kernel_swi_regs *r, void *pw)
     break;
 
   }
-  return(1);
+  return NULL;
 }
 
-int NCDialUI_callafter_handler (_kernel_swi_regs *r, void *pw)
+_kernel_oserror *NCDialUI_callafter_handler (_kernel_swi_regs *r, void *pw)
 {
+  dprintf(("", "NCDialUI_callafter_handler()\n"));
   if (pw == pwp)
     callback(NCDialUI_callback_entry, pw);
 
-  return(1);
+  return NULL;
 }
 
 /* undo URL translation of '+' for ' ' in place */
@@ -143,7 +197,7 @@ char *UnEscape(char *i)
 
   len = strlen(i);
   plus_to_space(i, len);
- 
+
   while (len)
   {
     if (*i++ == '%')
@@ -165,24 +219,39 @@ char *UnEscape(char *i)
 
 /* Standard module routines */
 
-_kernel_oserror *NCDialUI_cmd (char *arg_string, int argc, int cmd_no, void *pw)
+_kernel_oserror *NCDialUI_cmd (const char *arg_string, int argc, int cmd_no, void *pw)
 {
+  dprintf(("", "NCDialUI_cmd()\n"));
   switch (cmd_no)
   {
   case CMD_NCDialUI_Silent:
     {
+      dprintf(("", "NCDialUI_cmd(): CMD_NCDialUI_Silent received.\n"));
       silent = (atoi(arg_string) != 0);
       _swix(NCDial_Silent, _IN(0), silent);
+
+      if (silent == 0)
+      {
+        int loop;
+
+        for (loop = 0; loop < MAX_DEBUG; loop++)
+        {
+          if (debug_line[loop] == NULL)
+            debug_line[loop] = calloc(80, 1);
+        }
+      }
     }
     break;
 
   case CMD_NCDialUI_Start:
+    dprintf(("", "NCDialUI_cmd(): CMD_NCDialUI_Start received\n"));
     if (!active)
     {
       busy_mask = (atoi(arg_string) & 1);
       if (CreateFiles())
       {
         active = TRUE;
+        wedialled  = TRUE;
         last_reason = -1;
         _swix(NCDial_Dial, 0);
       }
@@ -190,32 +259,142 @@ _kernel_oserror *NCDialUI_cmd (char *arg_string, int argc, int cmd_no, void *pw)
     break;
 
   case CMD_NCDialUI_Cancel:
+    dprintf(("", "NCDialUI_cmd(): CMD_NCDialUI_Cancel received. Sending Service_NCDialUIStatus with last_reason of %d\n", last_reason));
     _swix(OS_ServiceCall, _INR(1, 2), Service_NCDialUIStatus, last_reason);
+#if FALSE
+    {
+      message_block mb;
+      url_indirect *url = (url_indirect *) mb.data.bytes;
+
+      memset(&mb, '\0', sizeof(message_block));
+      mb.header.size   = 256;
+      mb.header.action = 0x4AF80;
+
+      url->url.offset  = sizeof(url_indirect) + 8;
+      strcpy(&mb.data.bytes[url->url.offset], "ncfrescointernal:cancel");
+      _swix(TaskModule_SendMessage, _INR(0, 5), 18, &mb, 0, 0, 0, 0);
+    }
+#endif
     break;
   }
   return (NULL);
 }
 
+
+
+
 _kernel_oserror *NCDialUI_swis(int swi_no, _kernel_swi_regs *r, void *pw)
 {
+  dprintf(("", "NCDialUI_swis()\n"));
   switch (swi_no)
   {
   case (NCDialUI_Silent - NCDialUI_00):
     {
+      int loop;
+      dprintf(("", "NCDialUI_swis(): NCDialUI_Silent received\n"));
+
       silent = r->r[0];
       _swix(NCDial_Silent, _IN(0), silent);
+
+      if (silent == 0)
+      {
+        for (loop = 0; loop < MAX_DEBUG; loop++)
+        {
+          if (debug_line[loop] == NULL)
+            debug_line[loop] = calloc(80, 1);
+        }
+      }
+#if FALSE
+/* Stew says keep the buffer! */
+      else
+      {
+        for (loop = 0; loop < MAX_DEBUG; loop++)
+        {
+          if (debug_line[loop])
+          {
+            free(debug_line[loop]);
+            debug_line[loop] = NULL;
+          }
+        }
+      }
+#endif
     }
     break;
 
   case (NCDialUI_Start - NCDialUI_00):
+    dprintf(("", "NCDialUI_swis(): NCDialUI_Start received\n"));
     if (!active)
     {
       busy_mask = (r->r[0] & 1);
       if (CreateFiles())
       {
         active = TRUE;
+        wedialled  = TRUE;
         last_reason = -1;
         _swix(NCDial_Dial, 0);
+      }
+    }
+    break;
+
+  case (NCDialUI_Debug - NCDialUI_00):
+    {
+      int loop;
+      dprintf(("", "NCDialUI_swis(): NCDialUI_Debug received\n"));
+
+      if (r->r[0] == 0)
+      {
+        char *temp = debug_line[0];
+
+        for (loop = 0; loop < MAX_DEBUG - 1; loop++)
+          debug_line[loop] = debug_line[loop + 1];
+        debug_line[MAX_DEBUG - 1] = temp;
+
+        if (debug_line[MAX_DEBUG - 1])
+        {
+          strncpy(debug_line[MAX_DEBUG - 1], (char *) r->r[1], 80);
+          debug_line[MAX_DEBUG - 1][79] = '\0';
+        }
+      }
+      else if (r->r[0] == 1)
+      {
+        if (strcmp(getenv("Wimp$State"), "desktop") == 0)
+        {
+          FILE *out;
+
+          if (out = fopen("<Wimp$ScrapDir>.DiallerUI.HTML.Dump", "w"), out)
+          {
+            fprintf(out, "<HTML>\n<HEAD>\n<TITLE>Dialler Debug</TITLE>\n</HEAD>\n<BODY BGCOLOR=\"#000000\" text=\"#8a8a8a\">\n<center><h1>Dialler Debug</h1></center>\n<pre>\n");
+            for (loop = 0; loop < MAX_DEBUG; loop++)
+            {
+              if (debug_line[loop] && *debug_line[loop])
+                fprintf(out, "%s\n", debug_line[loop]);
+            }
+            fprintf(out, "</pre>\n<center><h2>End of Dialler Debug</h2></center>\n</BODY>\n</HTML>\n");
+            fclose(out);
+            _swix(OS_File, _INR(0, 2), 18, "<Wimp$ScrapDir>.DiallerUI.HTML.Dump", 0xFAF);
+            {
+              message_block mb;
+              url_indirect *url = (url_indirect *) mb.data.bytes;
+
+              memset(&mb, '\0', sizeof(message_block));
+              mb.header.size   = 256;
+              mb.header.action = 0x4AF80;
+
+              url->url.offset  = sizeof(url_indirect) + 8;
+              strcpy(&mb.data.bytes[url->url.offset], "file:/<Wimp$ScrapDir>/DiallerUI/HTML/Dump");
+              _swix(TaskModule_SendMessage, _INR(0, 5), 18, &mb, 0, 0, 0, 0);
+            }
+          }
+        }
+        else
+        {
+          vdu4();
+          for (loop = 0; loop < MAX_DEBUG; loop++)
+          {
+            if (debug_line[loop])
+              fprintf(stderr, "%s\n", debug_line[loop]);
+          }
+        }
       }
     }
     break;
@@ -223,9 +402,15 @@ _kernel_oserror *NCDialUI_swis(int swi_no, _kernel_swi_regs *r, void *pw)
   return(NULL);
 }
 
+
+
+
 _kernel_oserror *NCDialUI_modfinal (int fatal, int podule, void *pw)
 {
   configline *temp;
+  int loop;
+
+  dprintf(("", "NCDialUI_modfinal()\n"));
 
 #ifndef DONT_BUILD_RESOURCES
   _swix(ResourceFS_DeregisterFiles, _IN(0), resources_base());
@@ -237,60 +422,117 @@ _kernel_oserror *NCDialUI_modfinal (int fatal, int podule, void *pw)
     free(anchor);
     anchor = temp;
   }
-  return(NULL);
-}
-
-_kernel_oserror *NCDialUI_service(int service, _kernel_swi_regs *r, void *pw)
-{
-  switch (service)
+  for (loop = 0; loop < MAX_DEBUG; loop++)
   {
-
-#ifndef DONT_BUILD_RESOURCES
-  case Service_ResourceFSStarting:
-    ((P_FSStartingFN)(r->r[2]))(resources_base());
-    break;
-#endif
-
-  case Service_DiallerStatus:
-    if (active && r->r[2] != last_reason)
-    {
-      configline *temp = anchor;
-
-      if ((r->r[2] & 0xF0) == 0x80 || r->r[2] < 8)
-        active = FALSE;
-
-      if (r->r[2] == 4)
-        _swix(OS_ServiceCall, _INR(1, 2), Service_NCDialUIStatus, 4);
-
-      last_reason = r->r[2];
-      
-      while (temp)
-      {
-        if (temp->reason == r->r[2] && !(temp->flags.flags.mask && busy_mask))
-        {
-          message_block mb;
-    
-          memset (&mb, '\0', sizeof(message_block));
-          mb.header.size   = 256;
-          mb.header.action = 0x4AF80;
-          strcpy(mb.data.bytes, temp->url);
-          _swix(TaskModule_SendMessage, _INR(0, 5), 18, &mb, 0, 0, 0, 0);
-          break;
-        }
-        else
-        {
-          temp = (configline *) temp->next;
-        }
-      }
-    }
-    break;
+    if (debug_line[loop])
+      free(debug_line[loop]);
   }
   return(NULL);
 }
 
-_kernel_oserror *NCDialUI_modinit (char *cmd_tail, int podule_base, void *pw)
+
+
+void NCDialUI_service(int service, _kernel_swi_regs *r, void *pw)
 {
+  dprintf(("", "NCDialUI_service()\n"));
+
+  switch (service)
+  {
+#ifndef DONT_BUILD_RESOURCES
+  case Service_ResourceFSStarting:
+    dprintf(("", "NCDialUI_service(): Service_ResourceFSStarting\n"));
+    ((P_FSStartingFN)(r->r[2]))(resources_base());
+    break;
+#endif
+
+#ifndef IGNORE_SHUTDOWN_COMPLETE
+  case Service_ShutdownComplete:
+    dprintf(("", "NCDialUI_service(): Service_ShutdownComplete\n"));
+    active = FALSE;
+    break;
+#endif /* IGNORE_SHUTDOWN_COMPLETE */
+
+  case Service_DiallerStatus:
+    dprintf(("", "NCDialUI_service(): Service_DiallerStatus\n"));
+    if (!silent)
+    {
+      char buffer[80];
+      sprintf(buffer, "DiallerStatus %02X", r->r[2]);
+      fprintf(stderr, "%s\n", buffer);
+      _swix(NCDialUI_Debug, _INR(0, 1), 0, buffer);
+    }
+    dprintf(("", "NCDialUI_service(): Service_DiallerStatus r->r[2]=%02X (%s)\n", r->r[2], dialler_status_string(r->r[2])));
+    if (active || wedialled)
+    {
+      configline *temp;
+
+      if (r->r[2] == 4)
+        _swix(OS_ServiceCall, _INR(1, 2), Service_NCDialUIStatus, 4);
+
+      for (temp = anchor; temp != NULL; temp = (configline *) temp->next)
+      {
+        if (temp->reason == r->r[2])
+        {
+          if ((r->r[2] == last_reason && !temp->flags.flags.nodup)
+              || (temp->flags.flags.mask && busy_mask))
+            break;
+
+          if (active && !temp->flags.flags.nobox)
+          {
+            message_block mb;
+            url_indirect *url = (url_indirect *) mb.data.bytes;
+
+            if (temp->flags.flags.dynamic)
+              DynamicScreen(temp);
+
+            memset(&mb, '\0', sizeof(message_block));
+            mb.header.size   = 256;
+            mb.header.action = 0x4AF80;
+
+            url->url.offset  = sizeof(url_indirect) + sizeof(DIALLER_DBOX);
+            strcpy(&mb.data.bytes[url->url.offset], temp->url);
+            if (temp->flags.flags.osd)
+            {
+              url->target.offset = sizeof(url_indirect) + 0;
+              strcpy(&mb.data.bytes[url->target.offset], DIALLER_DBOX);
+            }
+             dprintf(("", "NCDialUI_service(): Service_DiallerStatus: Attempting to open URL %s\n", temp->url));
+            _swix(TaskModule_SendMessage, _INR(0, 5), 18, &mb, 0, 0, 0, 0);
+          }
+          if (temp->flags.flags.noise)
+          {
+            if (active || (wedialled && temp->reason == NCDialler_IPDown))
+            {
+              _swix(SoundFX_Play, _INR(0, 1), 0, 0x20000 + temp->flags.flags.noise);
+              if (!active)
+                wedialled = FALSE;
+            }
+          }
+          break;
+        }
+      }
+      if ((r->r[2] & 0xF0) == 0x80 || r->r[2] < 8)
+        active = FALSE;
+
+      dprintf(("", "NCDialUI_service(): Service_DiallerStatus: Setting last_reason to %d\n", r->r[2]));
+      last_reason = r->r[2];
+    }
+    break;
+  }
+}
+
+
+
+_kernel_oserror *NCDialUI_modinit (const char *cmd_tail, int podule_base, void *pw)
+{
+  int loop;
+
   pwp = pw;
+
+  debug_initialise ("NCDialUI", "izipfs:$.NCDialUI", "");
+  debug_atexit ();
+  debug_output_device (DebugOutputDevice);   /* Output debug info via pdebug */
+
 
 #ifndef DONT_BUILD_RESOURCES
   _swix(ResourceFS_RegisterFiles, _IN(0), resources_base());
@@ -300,6 +542,9 @@ _kernel_oserror *NCDialUI_modinit (char *cmd_tail, int podule_base, void *pw)
                     STARTTXT, strlen(STARTTXT), 0);
   _swix(OS_SetVarVal, _INR(0, 2) | _IN(4), CANCELVAR,
                     CANCELTXT, strlen(CANCELTXT), 0);
+
+  for (loop = 0; loop < MAX_DEBUG; loop++)
+    debug_line[loop] = NULL;
 
   return(NULL);
 }
