@@ -75,7 +75,7 @@ all: rm.${COMPONENT} o.dirs
 rom: ${TARGET} o.dirs
         @echo ${COMPONENT}: rom module built
 
-export: ${EXPORTS} o.dirs
+export export_hdrs: ${EXPORTS} o.dirs
         @echo ${COMPONENT}: export complete
 
 install: rm.${COMPONENT} o.dirs
