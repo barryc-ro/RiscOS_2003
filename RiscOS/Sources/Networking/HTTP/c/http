@@ -18,7 +18,8 @@
  * pdh 12-Mar-97 Frob prefix-fetch stuff to work round bug in WebSitePro/1.1f
  * RWB 16 Apr 97 CSFS bits.
  * AJS 22-Apr-97 Made some mods to http_verifymessagedigest
- * AJS 28-Spr-97 Added http_converttopem certificate munger
+ * AJS 28-Apr-97 Added http_converttopem certificate munger
+ * AJS 08-May-97 More mods to http_verifymessagedigest
  */
 
 #include <errno.h>
@@ -41,6 +42,7 @@
 #include "objects.h"		/* for NID */
 #include "pem.h"		/* for PEM_ */
 #include "err.h"
+#include "rsa.h"
 
 
 #include "ssl.h"
@@ -3714,7 +3716,7 @@ VerifyMessageDigest
    int    : digest type
    char * : digest received
    int    : digest received length
-   char * : ptr to DER encoded public key
+   char * : ptr to DER encoded public key / ptr to DER encoded public key certificate (depends on flags)
    char * : filename of X509 certificate in PEM, or DER, or ptr to X509 DER certificate in RAM (depends on flags)
    int    : RAM X509 DER certificate length or 0 (depends on flags)
 
@@ -3744,6 +3746,12 @@ key is then used to verify the message digest.
 If no certificate is given then the public key given is used to verify
 the message digest.
 
+A given X509 certificate may be PEM or DER encoded - in the latter case
+it may reside in RAM or on disc
+
+The root public key may be PEM or DER encoded - in the latter case it may be just a plain RSA public key or an x.509 certificate
+containing an RSA public key.
+
 The routine will return success or an error code giving at what point
 the failure to verify occurred. This will be one of
    Input values bad in some way
@@ -3764,14 +3772,17 @@ static _kernel_oserror *http_verifymessagedigest(http_verifymessagedigest_args *
 #else
     _kernel_oserror *e = NULL;
     EVP_PKEY *pkey = NULL;
+    RSA *rsa = NULL;
     int rc = http_vmd_rc_BAD_INPUT;
-    unsigned char *certificate_ptr;
-    unsigned char **certificate_ptr_ptr;
+    unsigned char *certificate_ptr, *pubkey_ptr;
+    unsigned char **certificate_ptr_ptr, **pubkey_ptr_ptr;
+    unsigned char *rsa_buff;
+    unsigned int rsa_bytes;
 
     fdebugf(log_file, "HTTP_VerifyMessageDigest:\n  flags %08x\n  key '%s'\n  cert '%s'\n  message @ 0x%p/%d\n  digest @ 0x%p/%d\n",
 	    r->in.flags,
-	    r->in.public_key ? r->in.public_key : "",
-	    r->in.certificate ? r->in.certificate : "",
+	    r->in.public_key ? r->in.public_key : "<none>",
+	    r->in.certificate ? r->in.certificate : "<none>",
 	    r->in.message_data, r->in.message_data_len,
 	    r->in.digest_data, r->in.digest_data_len);
 
@@ -3789,30 +3800,64 @@ static _kernel_oserror *http_verifymessagedigest(http_verifymessagedigest_args *
 	FILE *f;
 	if ((f = fopen(r->in.public_key, "rb")) != NULL)
 	{
-	    X509 *xcert;
+	    if(r->in.flags & http_vmd_flag_RAW_PKEY) { /* root file is raw (ie DER) RSA public key */
+	      fdebugf(log_file, "reading raw DER public key from file\n");
+	      if((rsa_buff = (unsigned char *)malloc(512))==NULL) {
+	          fdebugf(log_file, "couldn't get new RSA buffer\n");
+	          fclose(f);
+	          r->out.rc = http_vmd_rc_NO_FREE_RSA;
+	          return NULL;
+	      }
 
-	    /* extract X509 certificate from file */
-	    if (r->in.flags & http_vmd_flag_KEY_DER)
-	    {
-		xcert = d2i_X509_fp(f, NULL);
-	    }
-	    else
-	    {
-		xcert = PEM_read_X509(f, NULL, 0); /* specify default callback function - could be awkward if it was called */
-	    }
+	      rsa_bytes = fread(rsa_buff, 1, 512, f);
 
-	    fclose(f);
+	      fclose(f);
 
-	    fdebugf(log_file, "key cert @ 0x%p\n", xcert);
+	      pubkey_ptr = rsa_buff;
+	      pubkey_ptr_ptr = &pubkey_ptr;
 
-	    if (xcert)
-	    {
-		pkey = X509_extract_key(xcert);
+	      if((rsa = d2i_RSAPublicKey(NULL, pubkey_ptr_ptr, rsa_bytes))==NULL) {
+	          fdebugf(log_file, "couldn't unpack RSA public key\n");
+	          r->out.rc = http_vmd_rc_BAD_RSA;
+	          return NULL;
+	      }
 
-		fdebugf(log_file, "key @ 0x%p\n", pkey);
+	      if((pkey = EVP_PKEY_new())==NULL) {
+	          fdebugf(log_file, "couldn't get new EVP_PKEY buffer\n");
+	          r->out.rc = http_vmd_rc_NO_FREE_EVP;
+	          return NULL;
+	      }
 
-		X509_free(xcert);
-	    }
+	      pkey->type = EVP_PKEY_RSA;
+	      pkey->pkey.rsa = rsa;
+
+	    } else { /* root file is a certificate (PEM or DER) */
+
+	      X509 *xcert;
+
+	      /* extract X509 certificate from file */
+	      if (r->in.flags & http_vmd_flag_KEY_DER)
+	      {
+		  xcert = d2i_X509_fp(f, NULL);
+	      }
+	      else
+	      {
+		  xcert = PEM_read_X509(f, NULL, 0); /* specify default callback function - could be awkward if it was called */
+	      }
+
+	      fclose(f);
+
+	      fdebugf(log_file, "key cert @ 0x%p\n", xcert);
+
+	      if (xcert)
+	      {
+		  pkey = X509_extract_key(xcert);
+
+		  fdebugf(log_file, "key @ 0x%p\n", pkey);
+
+		  X509_free(xcert);
+	      }
+	  }
 	}
     }
 
@@ -3869,12 +3914,14 @@ static _kernel_oserror *http_verifymessagedigest(http_verifymessagedigest_args *
 
 		    fdebugf(log_file, "new key @ 0x%p\n", pkey);
 
-		    if (!pkey)
+		    if (!pkey) {
+		        fdebugf(log_file, "new cert has no key! Reverting to old one.\n");
 			rc = http_vmd_rc_BAD_CERT;
+		    }
 		}
 		else
 		{
-		    fdebugf(log_file, "new cert failed to verify\n");
+		    fdebugf(log_file, "new cert failed to verify, reverting to old key\n");
 		    rc = http_vmd_rc_BAD_CERT;
 		}
 
@@ -3908,6 +3955,8 @@ static _kernel_oserror *http_verifymessagedigest(http_verifymessagedigest_args *
 	/* free any key we have open */
 	EVP_PKEY_free(pkey);
     }
+
+    if(rsa) RSA_free(rsa);
 
     r->out.rc = rc;
 
