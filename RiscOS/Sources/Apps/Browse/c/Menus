@@ -24,11 +24,13 @@
 #include "svcprint.h"
 #include "Global.h"
 #include "FromROSLib.h"
+#include "MiscDefs.h"
 #include "Utils.h"
 
 #include "Browser.h"
 #include "Fetch.h"    /* (For ISLINK macro) */
 #include "Frames.h"
+#include "History.h"
 #include "Images.h"
 #include "Object.h"
 #include "Reformat.h"
@@ -45,11 +47,13 @@ static HStream      * main_menu_opened_over = NULL;
 
 /* Static function prototypes */
 
-static void menus_toggle_bars   (IdBlock * idb);
-static void menus_toggle_look   (IdBlock * idb);
+static void menus_toggle_bars       (IdBlock * idb);
+static void menus_toggle_look       (IdBlock * idb);
 
-static void menus_choices_bars  (IdBlock * idb);
-static void menus_choices_other (IdBlock * idb);
+static void menus_choices_bars      (IdBlock * idb);
+static void menus_choices_other     (IdBlock * idb);
+
+static void menus_history_selection (IdBlock * idb);
 
 /*************************************************/
 /* menus_item_selected()                         */
@@ -94,6 +98,11 @@ int menus_item_selected(int eventcode, ToolboxEvent * event, IdBlock * idb, void
     break;
 
     case ChoicesSave: ChkError(save_save_choices(NULL));
+    break;
+
+    case HistoryEmptyLocal:
+    case HistoryEmptyGlobal: menus_history_selection(idb);
+    break;
 
     default: return 0;
   }
@@ -287,13 +296,13 @@ int menus_show_navigate(int eventcode, ToolboxEvent * event, IdBlock * idb, void
   /* Can only go back if we're not at the start of the history */
   /* and there's a history to go into.                         */
 
-  if (!b->hnum || b->hpos == 1) menu_set_fade(0, idb->self_id, NavigateBack,    1);
-  else                          menu_set_fade(0, idb->self_id, NavigateBack,    0);
+  if (!history_can_go_backwards(b)) menu_set_fade(0, idb->self_id, NavigateBack,    1);
+  else                              menu_set_fade(0, idb->self_id, NavigateBack,    0);
 
   /* Can only go forward if we're in the history somewhere */
 
-  if (!b->hpos)                 menu_set_fade(0, idb->self_id, NavigateForward, 1);
-  else                          menu_set_fade(0, idb->self_id, NavigateForward, 0);
+  if (!history_can_go_forwards(b))  menu_set_fade(0, idb->self_id, NavigateForward, 1);
+  else                              menu_set_fade(0, idb->self_id, NavigateForward, 0);
 
   /* Only need to load images if delayed image loading is set  */
   /* in the local browser flags, or plain backgrounds are set. */
@@ -374,7 +383,11 @@ int menus_show_export(int eventcode, ToolboxEvent * event, IdBlock * idb, void *
            over->tagno == TAG_INPUT &&
            HtmlINPUTtype(over) == inputtype_IMAGE
          )
-         || object_token_is_image(b, over)
+         ||
+         (
+           ISOBJECT(over) &&
+           object_token_is_image(b, over)
+         )
        )
      )
      menu_set_fade(0, idb->self_id, ExportPicture, 1);
@@ -457,6 +470,46 @@ int menus_show_main(int eventcode, ToolboxEvent * event, IdBlock * idb, void * h
 
   main_menu_browser     = b;
   main_menu_opened_over = browser_get_pointer_token(b, &info, NULL, NULL);
+
+  return 1;
+}
+
+/*************************************************/
+/* menus_show_history()                          */
+/*                                               */
+/* Called before the History menu is displayed.  */
+/*                                               */
+/* Parameters are as standard for a Toolbox      */
+/* event handler.                                */
+/*************************************************/
+
+int menus_show_history(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
+{
+  browser_data * b;
+
+  ChkError(toolbox_get_client_handle(0, idb->ancestor_id, (void *) &b));
+
+  if (!is_known_browser(b) || history_empty(b))
+  {
+    menu_set_fade(0, idb->self_id, HistorySaveLocal,  1);
+    menu_set_fade(0, idb->self_id, HistoryEmptyLocal, 1);
+  }
+  else
+  {
+    menu_set_fade(0, idb->self_id, HistorySaveLocal,  0);
+    menu_set_fade(0, idb->self_id, HistoryEmptyLocal, 0);
+  }
+
+  if (history_empty(NULL))
+  {
+    menu_set_fade(0, idb->self_id, HistorySaveGlobal,  1);
+    menu_set_fade(0, idb->self_id, HistoryEmptyGlobal, 1);
+  }
+  else
+  {
+    menu_set_fade(0, idb->self_id, HistorySaveGlobal,  0);
+    menu_set_fade(0, idb->self_id, HistoryEmptyGlobal, 0);
+  }
 
   return 1;
 }
@@ -805,6 +858,53 @@ static void menus_choices_other(IdBlock * idb)
   #ifdef TRACE
     if (tl & (1u<<4)) Printf("menus_choices_other: Successful\n");
   #endif
+}
+
+/*************************************************/
+/* menus_history_selection()                     */
+/*                                               */
+/* Called when one of the History menu items     */
+/* is selected.                                  */
+/*                                               */
+/* Parameters: Pointer to an ID block, as given  */
+/*             by the Toolbox when it raises an  */
+/*             event.                            */
+/*************************************************/
+
+static void menus_history_selection(IdBlock * idb)
+{
+  browser_data * b;
+
+  if (toolbox_get_client_handle(0, idb->ancestor_id, (void *) &b)) b = NULL;
+  if (!is_known_browser(b)) b = NULL;
+
+  switch (idb->self_component)
+  {
+    // Not really that useful? Amount of memory tied up in local
+    // histories is typically pretty small.
+
+    case HistoryEmptyLocal:
+    {
+      if (!b) return;
+
+      history_remove(b, NULL);
+
+      toolbars_set_all_button_states();
+    }
+    break;
+
+    // Yikes! Perhaps we should have some confirmation here...
+
+    case HistoryEmptyGlobal:
+    {
+      history_limit(0);
+
+      toolbars_set_all_button_states();
+    }
+    break;
+  }
+
+  return;
 }
 
 /*************************************************/

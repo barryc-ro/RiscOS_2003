@@ -701,17 +701,12 @@ int tables_width_table(int toplevel, browser_data * b, table_stream * p, int ava
             if (minw > mins[cellnumber]) mins[cellnumber] = minw;
             if (maxw > maxs[cellnumber]) maxs[cellnumber] = maxw;
 
-            /* Deal with idiots who specify 'TD WIDTH="2000"'. Though quite *why* */
-            /* I should lower the code to this level isn't entirely clear.        */
+            /* Deal with garbage like 'TD WIDTH="2000"' - if a cell */
+            /* wants to be wider than the table can be, ignore the  */
+            /* width specifier completely and go with the values    */
+            /* determined by the reformatter call.                  */
 
-            if (width > 0)
-            {
-              /* OK, if the maximum width the cell requires is less than half of what the cell asks */
-              /* for, then ignore the cell and use the reformatter values. Reformatter rocks, yay,  */
-              /* etc. Wobbly as it is, it still beats the average Web Master hands down...          */
-
-              if (maxw * 2 < width) maxs[cellnumber] = maxw, mins[cellnumber] = minw;
-            }
+            if (width > available_width) maxs[cellnumber] = maxw, mins[cellnumber] = minw;
 
             /* Deal with rowspans */
 
@@ -893,6 +888,9 @@ int tables_width_table(int toplevel, browser_data * b, table_stream * p, int ava
 
   if (have_percents)
   {
+    int total_percents = 0;
+    int none_specified = 0;
+
     R        = p->List;
     rowcount = 0;
 
@@ -902,12 +900,46 @@ int tables_width_table(int toplevel, browser_data * b, table_stream * p, int ava
 
       while (D && D->ColOffs < p->ColSpan)
       {
-        switch(D->Tag)
+        /* First count up all of the % specifiers and */
+        /* count how many cells specify nothing       */
+
+        switch (D->Tag)
         {
           case TagTableData:
           case TagTableHead:
           {
-            if (TD_HAS_WIDTH(D) && TD_WIDTH_UNITS(D) == UNITS_PERCENT)
+            if (TD_HAS_WIDTH(D))
+            {
+              if (TD_WIDTH_UNITS(D) == UNITS_PERCENT) total_percents += TD_WIDTH(D);
+            }
+            else none_specified ++;
+          }
+        }
+
+        D = D->Next;
+      }
+
+      /* We'll use the percent count to scale down % specifiers if the total */
+      /* is > 100, as otherwise tables can force themselves to be wider than */
+      /* the display width regardless of that width!                         */
+      /*                                                                     */
+      /* We'll use the count of cells with no width specifiers to imply a    */
+      /* percent specifier equal to the (100 - percentage total) / number of */
+      /* cells without a specifier. This way, tables which want to, say, do  */
+      /* a 30% / 70% bar graph, can specify the left cell as 30% width but   */
+      /* leave the right cell alone. There are tables out there that do      */
+      /* this, hence the extra code (04/11/97).                              */
+
+      D = R->List;
+
+      while (D && D->ColOffs < p->ColSpan)
+      {
+        switch (D->Tag)
+        {
+          case TagTableData:
+          case TagTableHead:
+          {
+            if (!TD_HAS_WIDTH(D) || TD_WIDTH_UNITS(D) == UNITS_PERCENT)
             {
               int min_p_w;
               int max_p_w;
@@ -915,8 +947,42 @@ int tables_width_table(int toplevel, browser_data * b, table_stream * p, int ava
 
               if (cellnumber < cellmax)
               {
-                min_p_w = (remain_min * TD_WIDTH(D)) / 100;
-                max_p_w = (remain_max * TD_WIDTH(D)) / 100;
+                int width_to_use;
+
+                /* Work out what width we should actually use (see earlier comments for more). */
+                /* First, the case where the row total of % specifiers exceeds 100%.           */
+
+                if (total_percents > 100)
+                {
+                  /* If we've no width specifier, there's no room left - give it zero */
+
+                  if (!TD_HAS_WIDTH(D)) width_to_use = 0;
+
+                  /* Otherwise use the cell specified width, scaled down so the row */
+                  /* total doesn't exceed 100%.                                     */
+
+                  else width_to_use = (TD_WIDTH(D) * 100) / total_percents;
+                }
+
+                /* Now the case where the row total <= 100%. */
+
+                else
+                {
+                  /* If a width is specified, use it */
+
+                  if (TD_HAS_WIDTH(D)) width_to_use = TD_WIDTH(D);
+
+                  /* If no width is used, use a fraction of whatever is left over */
+                  /* in percentage terms after all of the specifying cells have   */
+                  /* been counted.                                                */
+
+                  else width_to_use = (100 - total_percents) / none_specified;
+                }
+
+                /* Now churn the relevant numbers through the cell width arrays */
+
+                min_p_w = (remain_min * width_to_use) / 100;
+                max_p_w = (remain_max * width_to_use) / 100;
 
                 #ifdef TRACE
                   if (tl & (1u<<20)) Printf("min_p_w, max_p_w: %d, %d\n", min_p_w, max_p_w);
@@ -1538,6 +1604,7 @@ int tables_height_table(int toplevel, browser_data * b, table_stream * p, reform
   table_row      * R;
   table_headdata * D;
   int              I, C;
+  int              scale_height  = 0;
   int              cellcount     = 0;
   int              cellmax       = p->ColSpan * p->RowSpan;
   int              cellspacingos = p->cellspacing * 2; /* 1 'web pixel' = 2 OS units */
@@ -1562,6 +1629,37 @@ int tables_height_table(int toplevel, browser_data * b, table_stream * p, reform
 
   Row = 0;
   R   = p->List;
+
+//  /* Deal with specific table heights - we may need */
+//  /* to scale everything up to these afterwards.    */
+//
+//  if (TABLE_HAS_HEIGHT(p))
+//  {
+//    int height = 0, dy;
+//
+//    switch (TABLE_HEIGHT_UNITS(p))
+//    {
+//      default:
+//      case UNITS_PIXELS:
+//      {
+//        convert_to_points(wimpt_dy(), &dy);
+//        height = TABLE_HEIGHT(p) * dy;
+//      }
+//      break;
+//
+//      case UNITS_PERCENT:
+//      {
+//        convert_to_points(redraw_display_height(b, NULL), &height);
+//
+//        height = (TABLE_HEIGHT(p) * height) / 100;
+//      }
+//      break;
+//    }
+//
+//    scale_height = height;
+//  }
+
+  /* Now find the height of all of the cells */
 
   while (R && cellcount < cellmax && Row < p->RowSpan)
   {

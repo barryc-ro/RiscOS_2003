@@ -41,6 +41,7 @@
 #include "Forms.h"
 #include "Frames.h"
 #include "Handlers.h"
+#include "History.h"
 #include "Images.h"
 #include "Main.h"
 #include "Memory.h"
@@ -139,14 +140,14 @@ static void windows_check_reformat(browser_data * b, BBox * size, int old_width)
 
 int windows_new_browser(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handle)
 {
-  if (handle) ChkError(windows_create_browser((char *) handle, NULL, NULL, NULL, 0));
+  if (handle) ChkError(windows_create_browser((char *) handle, NULL, NULL, NULL, Windows_CreateBrowser_Normal));
   else
   {
     char home[Limits_URL];
 
     urlutils_create_home_url(home, sizeof(home));
 
-    ChkError(windows_create_browser(home, NULL, NULL, NULL, 0));
+    ChkError(windows_create_browser(home, NULL, NULL, NULL, Windows_CreateBrowser_Normal));
   }
 
   return 1;
@@ -206,15 +207,12 @@ int windows_shut_browser(int eventcode, ToolboxEvent * event, IdBlock * idb, voi
 /*             shift over a function call        */
 /*             boundary (i.e. not flex!);        */
 /*                                               */
-/*             1 if the inital page fetch, if    */
-/*             any, should be directed to a file */
-/*             (via. a save dialogue) else 0 -   */
-/*             i.e., the inital value of the     */
-/*             save_link flag.                   */
+/*             Save type value - see definitions */
+/*             in Windows.h.                     */
 /*************************************************/
 
-_kernel_oserror * windows_create_browser(char * url, browser_data * real_parent,
-                                         BBox * size, char * name, int save_link)
+_kernel_oserror * windows_create_browser(const char * url, browser_data * real_parent,
+                                         BBox * size, const char * name, int save_type)
 {
   ObjectId          o;
   browser_data    * b;
@@ -270,7 +268,7 @@ _kernel_oserror * windows_create_browser(char * url, browser_data * real_parent,
 
     b->cell = cell;
 
-    if (save_link)
+    if (save_type != Windows_CreateBrowser_Normal)
     {
       /* If the browser is created just to save an object, */
       /* build a 'mini' browser for just that.             */
@@ -427,7 +425,9 @@ _kernel_oserror * windows_create_browser(char * url, browser_data * real_parent,
     b->background_image = -1;
     b->full_screen      = !real_parent ? choices.full_screen : 0;
     b->full_size        = 0;
-    b->save_link        = save_link;
+
+    if (save_type != Windows_CreateBrowser_Normal) b->save_link = 1;
+    else                                           b->save_link = 0;
 
     /* Register some browser-specific Wimp event handlers */
 
@@ -750,9 +750,9 @@ _kernel_oserror * windows_create_browser(char * url, browser_data * real_parent,
     if (!size) b->small_size.visible_area.xmin = b->small_size.visible_area.ymin = -1;
     else       b->small_size.visible_area      = *size;
 
-    /* This call will fill in small_size depending on the above code */
+    /* This call will fill in small_size depending on the above. */
 
-    windows_show_browser(b);
+    if (save_type != Windows_CreateBrowser_ForPlugIn || choices.see_fetches) windows_show_browser(b);
 
     /* Ensure the URL bar is up to date, and set the fetch status to BS_START. */
 
@@ -912,7 +912,7 @@ int windows_open_browser(int eventcode, WimpPollBlock * b, IdBlock * idb, browse
     if ((s.flags & WimpWindow_Toggled) != 0)
     {
       WimpGetWindowOutlineBlock o;
-      int                       shift,cmos;
+      int                       shift, ctrl, cmos;
 
       /* First check if Shift is pressed; the 'shift' variable will hold  */
       /* 255 if pressed or 0 if not. This is because the full size window */
@@ -925,6 +925,17 @@ int windows_open_browser(int eventcode, WimpPollBlock * b, IdBlock * idb, browse
             128,
 
             &shift);
+
+      /* Similarly check for Control being held down. We'll only increase */
+      /* the vertical size if this is the case.                           */
+
+      _swix(OS_Byte,
+            _INR(0,1) | _OUT(1),
+
+            121,
+            129,
+
+            &ctrl);
 
       /* Check CMOS RAM byte 28, bit 4 - if set, pretend Shift was pressed */
 
@@ -972,11 +983,24 @@ int windows_open_browser(int eventcode, WimpPollBlock * b, IdBlock * idb, browse
         handle->small_size.behind       = find_behind(b->open_window_request.window_handle);
 
         /* Set the poll block contents to open the window in the right place. */
-        /* Notice if Shift is held down and don't cover icon bar if it is.    */
+        /* Notice if Shift is held down and don't cover icon bar, and if Ctrl */
+        /* is held down we leave the X positions alone.                       */
 
-        b->open_window_request.visible_area.xmin = 2;
+        if (!ctrl)
+        {
+          b->open_window_request.visible_area.xmin = 2;
+          b->open_window_request.visible_area.xmax = w.xmax - w.xmin + 2;
+        }
+        else
+        {
+          b->open_window_request.visible_area.xmin = s.visible_area.xmin;
+          b->open_window_request.visible_area.xmax = s.visible_area.xmax;
+
+          w.xmin = s.visible_area.xmin;
+          w.xmax = s.visible_area.xmax;
+        }
+
         b->open_window_request.visible_area.ymin = s.visible_area.ymin - o.outline.ymin + (shift ? 128 : 0);
-        b->open_window_request.visible_area.xmax = w.xmax - w.xmin + 2;
         b->open_window_request.visible_area.ymax = w.ymax - w.ymin + (s.visible_area.ymin - o.outline.ymin);
 
         /* Is adjust being pressed? If so, want to open at the same place */
@@ -1654,6 +1678,10 @@ void windows_close_browser(browser_data * handle)
 
   if (handle->extradata) flex_free((flex_ptr) &handle->extradata);
 
+  /* Remove any History references */
+
+  history_remove(handle, NULL);
+
   /* Get rid of images and Objects */
 
   ChkError(image_discard(handle));
@@ -1687,8 +1715,7 @@ void windows_close_browser(browser_data * handle)
   /* Ensure all memory chunks are freed */
 
   #ifdef TRACE
-    if (tl & (1u<<12)) Printf("windows_close_browser: Chunk CK_HIST\n"
-                          "                             CK_FURL\n"
+    if (tl & (1u<<12)) Printf("windows_close_browser: Chunk CK_FURL\n"
                           "                             CK_DURL\n"
                           "                             CK_CHIL\n"
                           "                             CK_NAME\n"
@@ -1699,7 +1726,6 @@ void windows_close_browser(browser_data * handle)
                           "                             CK_STAT set to 0\n");
   #endif
 
-  ChkError(memory_set_chunk_size(handle, NULL, CK_HIST, 0));
   ChkError(memory_set_chunk_size(handle, NULL, CK_FURL, 0));
   ChkError(memory_set_chunk_size(handle, NULL, CK_DURL, 0));
   ChkError(memory_set_chunk_size(handle, NULL, CK_CHIL, 0));

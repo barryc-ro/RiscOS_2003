@@ -34,7 +34,8 @@
 #include "Encoding.h"
 #include "Fetch.h" /* (Which itself includes URLstat.h) */
 #include "Filetypes.h"
-#include "Save.h"  /* (For Save_ScrapFile only)         */
+#include "History.h"
+#include "Save.h" /* (For Save_ScrapFile only)*/
 #include "URLutils.h"
 #include "URLveneer.h"
 
@@ -584,8 +585,8 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
 {
   _kernel_oserror * e = NULL;
   int               r = 0;
-  char              ref_url[Limits_URL];
   urlstat         * up;
+  char              ref_url[Limits_URL];
 
   #ifdef TRACE
     if (tl & (1u<<6)) Printf("html_get_next_token: Called\n");
@@ -1002,7 +1003,7 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
     memcpy(((char *) (*source)) + oldsize, fetch_buffer, r);
   }
 
-  /* If we're not authorising the transfer and data has been fetched... */
+  /* If we're not authorising the transfer and data has been fetched, proceed normally */
 
   if (!authorising && up->fetched)
   {
@@ -1402,19 +1403,9 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
 
             realm = authorise_read_realm(redirect);
 
-            /* Ditch any document data got so far, we don't need it now */
-            /* (it only contains e.g. header information).              */
-
-            if (source)
-            {
-              flex_free((flex_ptr) source);
-              *source = NULL;
-            }
-
-            up->fetched = 0;
-
             /* If we've already tried this, then the authorisation failed, */
-            /* so give an appropriate error.                               */
+            /* so display whatever authorisation failure page the server   */
+            /* sent with the 401 response.                                 */
 
             if (up->authorised >= 2)
             {
@@ -1429,6 +1420,17 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
 
               return &erb;
             }
+
+            /* Ditch any document data got so far, we don't need it now */
+            /* (it only contains e.g. header information).              */
+
+            if (source)
+            {
+              flex_free((flex_ptr) source);
+              *source = NULL;
+            }
+
+            up->fetched = 0;
 
             /* Stop the URL module trying to get anything else, and set */
             /* the flag to say we're authorising this fetch.            */
@@ -1464,7 +1466,7 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
             else
             {
               char     prompt[Limits_AuthPrompt];
-              int      f;
+              int      f, is_ftp;
               ObjectId dbox;
 
               /* Ensure the authorisation dialogue is created and event handlers */
@@ -1473,47 +1475,75 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
               e = authorise_create_dialogue((void *) b, &dbox);
               if (e) return e;
 
+              /* Is this an FTP fetch? */
+
+              if (!strncmp(browser_fetch_url(b), FTPmethod, strlen(FTPmethod))) is_ftp = 1;
+              else                                                              is_ftp = 0;
+
               /* -4 corrects for %s being replaced by host / realm strings, plus */
               /* a terminator at the end of the whole lot.                       */
 
               f = strlen(realm) + strlen(host); /* (But no terminators needed for these, so no '+ 1's) */
-              lookup_token("Authorise:Please enter a user name and a password for %%s at %%s",0,0);
+
+              if (!is_ftp) lookup_token("Authorise:Please enter a user name and a password for %%s at %%s.",0,0);
+              else         lookup_token("AuthorFTP:Please enter a password for %%s.",0,0);
+
               f += ((signed int) strlen(tokens)) - 4 + 1; /* Minus 4 for two lots of '%s', plus 1 for terminator */
 
               /* If the string is too big for the prompt or null, put a */
               /* simple version in instead.                             */
 
-              if (f < 0 || f > sizeof(prompt))
+              if (f <= 0 || f > sizeof(prompt))
               {
-                lookup_token("AuthorShr:Please enter a user name and a password.",0,0);
+                if (is_ftp) lookup_token("AuthorFSh:Please enter a password.",0,0);
+                else        lookup_token("AuthorShr:Please enter a user name and a password.",0,0);
+
                 e = button_set_value(0, dbox, AuthPrompt, tokens);
               }
               else
               {
-                sprintf(prompt, tokens, realm, host);
+                if (is_ftp) sprintf(prompt, tokens, host);
+                else        sprintf(prompt, tokens, realm, host);
+
                 e = button_set_value(0, dbox, AuthPrompt, prompt);
               }
 
               if (e) return e;
 
-              /* Empty the user name and password writables */
+              /* Show the dialogue */
 
-              e = writablefield_set_value(0, dbox, AuthUserWrit, "");
+              RetError(toolbox_show_object(Toolbox_ShowObject_AsMenu,
+                                           dbox,
+                                           Toolbox_ShowObject_Centre,
+                                           NULL,
+                                           b->self_id,
+                                           -1));
+
+              /* If using FTP, put the user name in the writable field */
+              /* and grey it out. Else just empty the field.           */
+
+              if (is_ftp)
+              {
+                /* Let errors happen silently here */
+
+                writablefield_set_value(0,
+                                        dbox,
+                                        AuthUserWrit,
+                                        realm);
+
+                set_gadget_state(dbox, AuthUserWrit, 1);
+              }
+              else e = writablefield_set_value(0, dbox, AuthUserWrit, "");
+
               if (e) return e;
 
-              e = writablefield_set_value(0, dbox, AuthPassWrit, "");
-              if (e) return e;
+              /* Empty the password writable */
 
-              /* Show the dialogue and set the authorising flag */
+              RetError(writablefield_set_value(0, dbox, AuthPassWrit, ""));
 
-              e = toolbox_show_object(Toolbox_ShowObject_AsMenu,
-                                      dbox,
-                                      Toolbox_ShowObject_Centre,
-                                      NULL,
-                                      b->self_id,
-                                      -1);
-              if (e) return e;
-              else menusrc = Menu_Authorise, authorising = 1;
+              /*set the authorising flag */
+
+              menusrc = Menu_Authorise, authorising = 1;
             }
           }
           break;
@@ -1522,7 +1552,7 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
           /* is parseable and let this drop through to the ordinary  */
           /* URL handling code.                                      */
 
-          default: parseable = 1; /* ...so no 'break' */
+          default: parseable = TYPE_HTMLFILE; /* ...so no 'break' */
 
           /* An ordinary URL. */
 
@@ -1584,8 +1614,8 @@ _kernel_oserror * html_get_next_token(browser_data * b, unsigned int handle, int
 
               up->fetched = 0;
 
-              if (b->hnum && b->hpos != 1) redirect = Internal_URL ForExternalHImage; /* Have a 'Go back' link */
-              else                         redirect = Internal_URL ForExternalNImage; /* No 'Go back' link     */
+              if (history_can_go_backwards(b)) redirect = Internal_URL ForExternalHImage; /* Have a 'Go back' link */
+              else                             redirect = Internal_URL ForExternalNImage; /* No 'Go back' link     */
 
               /* Start a fetch on the new URL */
 

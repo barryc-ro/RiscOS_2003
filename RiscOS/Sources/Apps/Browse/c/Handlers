@@ -38,6 +38,7 @@
 #include "Browser.h"
 #include "ChoiceDefs.h"
 #include "Choices.h"
+#include "CSIM.h"
 #include "Fetch.h" /* (For ISOBJECT macro) */
 #include "FetchPage.h"
 #include "Filetypes.h"
@@ -555,6 +556,38 @@ int handle_keys(int eventcode, WimpPollBlock * block, IdBlock * idb, void * hand
           }
           break;
 
+          case akbd_TabK + akbd_Ctl:
+          {
+            // Want to have history path completion here...
+          }
+          break;
+
+          case akbd_TabK + akbd_Sh:
+          {
+            char url[Limits_URLBarWrit];
+            int  changed;
+
+            /* Read whatever is in the URL bar writable */
+
+            *url = 0;
+            ChkError(writablefield_get_value(0, i, URLBarWrit, url, sizeof(url), NULL));
+            url[sizeof(url) - 1] = 0; /* (Ensure termination) */
+
+            /* Cycle the protocol specifier (adding one in if not already present) */
+
+            changed = urlutils_cycle_protocol(url, sizeof(url));
+
+            if (changed)
+            {
+              /* Update the URL writable */
+
+              writablefield_set_value(0, i, URLBarWrit, url);
+            }
+
+            key = 0;
+          }
+          break;
+
           case 0x00d:
           {
             char url[Limits_URLBarWrit];
@@ -616,7 +649,7 @@ int handle_keys(int eventcode, WimpPollBlock * block, IdBlock * idb, void * hand
               #endif
             }
 
-            return 1;
+            key = 0;
           }
           break;
         }
@@ -777,10 +810,21 @@ int handle_keys_from_browser(int eventcode, WimpPollBlock * block, IdBlock * idb
         /* If an item is selected and at least partially visible, */
         /* act as if it were clicked upon with Select             */
 
+        // Optimise this? Lose the check for IMG, and rely on
+        // HTMLLib returning valid information?
+
         if (
-             (ancestor->selected->style & IMG)       &&
-             (ancestor->selected->type & TYPE_ISMAP) &&
-             !ancestor->in_image_map
+             (
+               (
+                 (ancestor->selected->style & IMG)       &&
+                 (ancestor->selected->type & TYPE_ISMAP)
+               )
+               ||
+               (
+                 ancestor->selected->type & TYPE_ISCLIENTMAP
+               )
+             )
+             && !ancestor->in_image_map
            )
         {
           /* For image maps, if not already selected, start keyboard */
@@ -1189,17 +1233,13 @@ int handle_link_clicks(int eventcode, WimpPollBlock * b, IdBlock * idb, browser_
              )
            )
          )
-      {
-        history_record_global(p->anchor);
-        browser_flash_token(handle, p);
-        used = 1;
-      }
+         browser_flash_token(handle, p);
 
       /* If shift and control are not held down, and we have a link, follow the link */
 
       if (!shift && !ctrl)
       {
-        if (p->anchor)
+        if (p->anchor || (p->type & TYPE_ISCLIENTMAP)) /* An anchor or client-side map */
         {
           int ignore = 0;
 
@@ -1212,12 +1252,47 @@ int handle_link_clicks(int eventcode, WimpPollBlock * b, IdBlock * idb, browser_
 
           if (!ignore)
           {
-            /* Image maps */
+            /* Client-side image maps */
 
-            if ((p->style & IMG) && (p->type & TYPE_ISMAP))
+            if (p->type & TYPE_ISCLIENTMAP)
             {
-              char           coords[64];
-              browser_data * targetted;
+              char * url;
+              char * target;
+              char * alt;
+
+              /* Find out which pixel we clicked on */
+
+              ChkError(image_return_click_offset(handle, p, &i, &ox, &oy));
+
+              csim_return_info(handle,
+                               p,
+                               ox,
+                               oy,
+                               &url,
+                               &target,
+                               &alt);
+
+              if (url && *url)
+              {
+                ChkError(fetchpage_fetch_targetted(handle,
+                                                   url,
+                                                   target,
+                                                   NULL,
+                                                   adj));
+
+                used = 1;
+              }
+            }
+
+            /* Server-side image maps */
+
+            if (
+                 !used            &&
+                 (p->style & IMG) &&
+                 (p->type & TYPE_ISMAP)
+               )
+            {
+              char coords[64];
 
               if (eventcode < 0)
               {
@@ -1236,34 +1311,11 @@ int handle_link_clicks(int eventcode, WimpPollBlock * b, IdBlock * idb, browser_
 
                 sprintf(coords, "?%d,%d", ox, oy);
 
-                history_record_global(p->anchor);
-                targetted = frames_find_target(handle, p->target);
-
-                if (targetted || choices.full_screen)
-                {
-                  /* If a named target was found, open in that. Otherwise we must */
-                  /* be running full screen, so can't open a new window; in this  */
-                  /* case, open in the ancestor.                                  */
-
-                  ChkError(fetchpage_new_add(targetted ? targetted : ancestor,
-                                             p->anchor,
-                                             1,
-                                             1,
-                                             coords,
-                                             adj));
-                }
-                else
-                {
-                  /* If we've reached here, a named target wasn't found but the */
-                  /* browser isn't running full screen either, so open a new    */
-                  /* window with the name specified in the link.                */
-
-                  ChkError(windows_create_browser(p->anchor,
-                                                  NULL,
-                                                  NULL,
-                                                  p->target,
-                                                  0));
-                }
+                ChkError(fetchpage_fetch_targetted(handle,
+                                                   p->anchor,
+                                                   p->target,
+                                                   coords,
+                                                   adj));
               }
 
               used = 1;
@@ -1271,54 +1323,15 @@ int handle_link_clicks(int eventcode, WimpPollBlock * b, IdBlock * idb, browser_
 
             /* Otherwise, a simple link */
 
-            else
+            if (!used)
             {
-              if (!adj)
-              {
-                browser_data * targetted;
+              /* Note that running full screen will cause non-targetted links */
 
-                history_record_global(p->anchor);
-                targetted = frames_find_target(handle, p->target);
-
-                /* Don't want to ever open a new window if configured */
-                /* to run full screen.                                */
-
-                if (targetted || choices.full_screen)
-                {
-                  /* If a named target was found, open in that. Otherwise we must */
-                  /* be running full screen, so can't open a new window; in this  */
-                  /* case, open in the ancestor.                                  */
-
-                  ChkError(fetchpage_new(targetted ? targetted : ancestor,
-                                         p->anchor,
-                                         1,
-                                         1));
-                }
-                else
-                {
-                  /* If we've reached here, a named target wasn't found but the */
-                  /* browser isn't running full screen either, so open a new    */
-                  /* window with the name specified in the link.                */
-
-                  ChkError(windows_create_browser(p->anchor,
-                                                  NULL,
-                                                  NULL,
-                                                  p->target,
-                                                  0));
-                }
-              }
-
-              /* Yes, this 'else' would mean that even if running     */
-              /* full screen, an Adjust click would open a new window */
-              /* but note the controls.ignore_adjust choices option,  */
-              /* which disables the use of adjust and can be used in  */
-              /* conjunction with the full screen option.             */
-
-              else ChkError(windows_create_browser(p->anchor,
-                            NULL,
-                            NULL,
-                            NULL,
-                            0));
+              ChkError(fetchpage_fetch_targetted(handle,
+                                                 p->anchor,
+                                                 p->target,
+                                                 NULL,
+                                                 adj));
 
               used = 1;
             }
@@ -1368,7 +1381,7 @@ int handle_link_clicks(int eventcode, WimpPollBlock * b, IdBlock * idb, browser_
                                                  NULL,
                                                  NULL,
                                                  NULL,
-                                                 1));
+                                                 Windows_CreateBrowser_SaveToFile));
 
             used = 1;
           }
@@ -1741,7 +1754,16 @@ int handle_home(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handl
   urlutils_create_home_url(home, sizeof(home));
 
   if (from_menu || controls.ignore_adjust || !adjust()) ChkError(fetchpage_new(b, home, 1, 1));
-  else                                                  ChkError(windows_create_browser(home, NULL, NULL, NULL, 0));
+  else
+  {
+    ChkError(windows_create_browser(home,
+                                    NULL,
+                                    NULL,
+                                    NULL,
+                                    Windows_CreateBrowser_Normal));
+
+    ChkError(browser_inherit(b, last_browser));
+  }
 
   /* Grey / ungrey buttons, as the state may change as */
   /* a result of being selected.                       */
@@ -1827,6 +1849,10 @@ int handle_stop(int eventcode, ToolboxEvent * event, IdBlock * idb, void * handl
   }
   else frames_abort_fetching(utils_ancestor(b), 1, 1);
 
+  /* Clear the flag saying this is a History based fetch */
+
+  b->from_history = 0;
+
   /* Cancel local client pull */
 
   meta_cancel_refresh(b);
@@ -1909,7 +1935,16 @@ int handle_reload(int eventcode, ToolboxEvent * event, IdBlock * idb, void * han
 
     /* Otherwise, just fetch the URL in a new window. */
 
-    else ChkError(windows_create_browser(b->urlddata, NULL, NULL, NULL, 0));
+    else
+    {
+      ChkError(windows_create_browser(b->urlddata,
+                                      NULL,
+                                      NULL,
+                                      NULL,
+                                      Windows_CreateBrowser_Normal));
+
+      ChkError(browser_inherit(b, last_browser));
+    }
   }
   else
   {
@@ -1925,7 +1960,16 @@ int handle_reload(int eventcode, ToolboxEvent * event, IdBlock * idb, void * han
     if (*url)
     {
       if (!new_view) ChkError(fetchpage_new(b, url, 1, 1));
-      else           ChkError(windows_create_browser(url, NULL, NULL, NULL, 0));
+      else
+      {
+        ChkError(windows_create_browser(url,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        Windows_CreateBrowser_Normal));
+
+        ChkError(browser_inherit(b, last_browser));
+      }
     }
   }
 
@@ -2043,8 +2087,17 @@ int handle_view_hotlist(int eventcode, ToolboxEvent * event, IdBlock * idb, void
 
     /* Finally, fetch the required hotlist */
 
-    if (adjust() && !from_menu && !controls.ignore_adjust) ChkError(windows_create_browser(path, NULL, NULL, NULL, 0));
-    else                                                   ChkError(fetchpage_new(b, path, 1, 1));
+    if (adjust() && !from_menu && !controls.ignore_adjust)
+    {
+      ChkError(windows_create_browser(path,
+                                      NULL,
+                                      NULL,
+                                      NULL,
+                                      Windows_CreateBrowser_Normal));
+
+      ChkError(browser_inherit(b, last_browser));
+    }
+    else ChkError(fetchpage_new(b, path, 1, 1));
 
   #endif
 
@@ -2108,7 +2161,10 @@ int handle_add_hotlist(int eventcode, ToolboxEvent * event, IdBlock * idb, void 
 
       /* If required, save the hotlist */
 
-      if (choices.save_hotlist == Choices_SaveHotlist_Always) show_error_ret(hotlist_save(lookup_choice("HotlistPath:Browse:User.Hotlist",0,0)));
+      if (choices.save_hotlist == Choices_SaveHotlist_Always)
+      {
+        show_error_ret(hotlist_save(lookup_choice("HotlistPath:Browse:User.Hotlist",0,0)));
+      }
     }
 
   #else

@@ -184,6 +184,7 @@ OBJS = \
  o.Browser		\
  o.Choices		\
  o.Cookies		\
+ o.CSIM			\
  o.DragBox		\
  o.Encoding		\
  o.Fetch		\
@@ -235,6 +236,7 @@ OBJSZ = \
  oz.Browser		\
  oz.Choices		\
  oz.Cookies		\
+ oz.CSIM		\
  oz.DragBox		\
  oz.Encoding		\
  oz.Fetch		\
@@ -286,6 +288,7 @@ OBJSD = \
  od.Browser		\
  od.Choices		\
  od.Cookies		\
+ od.CSIM		\
  od.DragBox		\
  od.Encoding		\
  od.Fetch		\
@@ -339,6 +342,7 @@ OBJSDZ = \
  odz.Browser		\
  odz.Choices		\
  odz.Cookies		\
+ odz.CSIM		\
  odz.DragBox		\
  odz.Encoding		\
  odz.Fetch		\
@@ -392,6 +396,7 @@ OBJS_SURF = \
  o_surf.Browser		\
  o_surf.Choices		\
  o_surf.Cookies		\
+ o_surf.CSIM		\
  o_surf.DragBox		\
  o_surf.Encoding	\
  o_surf.Fetch		\
@@ -442,6 +447,7 @@ OBJSD_SURF = \
  od_surf.Browser	\
  od_surf.Choices	\
  od_surf.Cookies	\
+ od_surf.CSIM		\
  od_surf.DragBox	\
  od_surf.Encoding	\
  od_surf.Fetch		\
@@ -494,6 +500,7 @@ OBJS_ITALK = \
  o_italk.Browser	\
  o_italk.Choices	\
  o_italk.Cookies	\
+ o_italk.CSIM		\
  o_italk.DragBox	\
  o_italk.Encoding	\
  o_italk.Fetch		\
@@ -545,6 +552,7 @@ OBJSD_ITALK = \
  od_italk.Browser	\
  od_italk.Choices	\
  od_italk.Cookies	\
+ od_italk.CSIM		\
  od_italk.DragBox	\
  od_italk.Encoding	\
  od_italk.Fetch		\

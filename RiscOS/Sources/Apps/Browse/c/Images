@@ -48,6 +48,7 @@
 #include "PrintStyle.h"
 #include "Redraw.h"
 #include "Reformat.h"
+#include "Save.h"
 #include "TokenUtils.h"
 #include "Toolbars.h"
 #include "URLveneer.h"
@@ -66,6 +67,8 @@ static void              image_refetch                (browser_data * b, int ima
 
 static _kernel_oserror * image_update_area            (browser_data * b, int x, int y, BBox * ubox, int image, int redraw);
 static _kernel_oserror * image_update_image           (browser_data * b, int image, BBox * box);
+
+static _kernel_oserror * image_register_filler        (int xref);
 
 static int               image_data_offset            (browser_data * b, int image);
 static int               image_count_fetches          (browser_data * b);
@@ -794,10 +797,11 @@ _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * 
     for (i = 0; i < nimages; i++)
     {
       if (
-           idata[i].alloc                               && /* The image has data allocated for it                 */
-           !strcmp(url, ddata + image_data_offset(b,i)) && /* This holds a URL which matches that passed in       */
-           idata[i].xref < 0                            && /* The image doesn't cross reference things itself     */
-           idata[i].background == !!background             /* We're not trying to make a b/g an f/g or vice versa */
+           idata[i].alloc                                            && /* The image has data allocated for it                 */
+           !strcmp(url, ddata + image_data_offset(b,i))              && /* This holds a URL which matches that passed in       */
+           idata[i].xref < 0                                         && /* The image doesn't cross reference things itself     */
+           idata[i].background == !!background                       && /* We're not trying to make a b/g an f/g or vice versa */
+           idata[i].owner->background_colour == b->background_colour    /* Background colours match in the two owner browsers  */
          )
       {
         xref = i;       /* If all of the above are satisfied, cross reference */
@@ -894,6 +898,7 @@ _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * 
   idata[nimages].xref       = xref;
 
   idata[nimages].background = !!background;
+  idata[nimages].hadfiller  = 0;
 
   /* Set the 'delayed' flag if it's not a background image and */
   /* images are flagged as not being shown right now, or if it */
@@ -1585,7 +1590,26 @@ static void image_delete_image_entry(int image)
         if (idata[i].xref == image) Printf("JUST DELETED IMAGE %d WHICH WAS XREF'D AND SHOULDN'T HAVE BEEN\n");
       #endif
 
+      /* Did this cross reference an image which will have changed number? */
+
       if (idata[i].xref > image) idata[i].xref--;
+
+      /* Did this have a filler function registered for it? */
+
+      if (idata[i].hadfiller)
+      {
+        /* If so, then provided the filler function is still available, */
+        /* reregister with the new image number.                        */
+
+        if (!idata[i].istore->RegisterFiller)
+        {
+          idata[i].hadfiller = 0;
+        }
+        else
+        {
+          show_error_ret(image_register_filler(i));
+        }
+      }
     }
   }
 
@@ -1676,10 +1700,35 @@ _kernel_oserror * image_discard(browser_data * b)
       idata[xref].canredraw  = idata[i].canredraw;
       idata[xref].priority   = idata[i].priority;
 
-      /* If this is a background image for the cross referencer, */
-      /* must update the browser_data 'background_image' field.  */
+      /* Did the image we're transferring a new owner to have */
+      /* RegisterFiller called for it, with the old owner?    */
 
-      if (i == idata[i].owner->background_image) idata[i].owner->background_image = xref;
+      if (idata[xref].hadfiller)
+      {
+        /* If an image became a background, ImageLib may have withdrawn the */
+        /* RegisterFiller function...                                       */
+
+        if (!idata[xref].istore->RegisterFiller)
+        {
+          idata[xref].hadfiller = 0;
+        }
+        else
+        {
+          /* Recall the RegisterFiller function with the new owner details */
+
+          show_error_ret(image_register_filler(xref));
+        }
+      }
+
+      /* If this is a background image for the cross referencer... */
+
+      if (i == idata[i].owner->background_image)
+      {
+        /* Update the browser_data 'background_image' field to point to the */
+        /* new cross reference image number.                                */
+
+        idata[i].owner->background_image = xref;
+      }
 
       /* If the cross referencee was being fetched, may need to */
       /* claim fetch nulls in the cross referencer to finish    */
@@ -2220,36 +2269,9 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
     }
   }
 
-  if (idata[image].istore->RegisterFiller)
+  if (idata[image].istore -> RegisterFiller && !idata[image].hadfiller)
   {
-    #ifdef STRICT_PARSER
-
-      {
-        _kernel_oserror * e;
-
-        /* Report any errors as Continue-only in strict parser mode */
-
-        e = idata[image].istore -> RegisterFiller(idata[image].istore,
-                                                  (FillerFunction *) image_fill_background,
-                                                  b,
-                                                  (int *) image);
-
-        if (e)
-        {
-          e->errnum = Utils_Error_Custom_Message;
-          show_error_ret(e);
-        }
-      }
-
-    #else
-
-      /* If not in Strict mode, ignore any errors */
-
-      idata[image].istore -> RegisterFiller(idata[image].istore,
-                                            (FillerFunction *) image_fill_background,
-                                            b,
-                                            (int *) image);
-    #endif
+    show_error_ret(image_register_filler(image));
   }
 
   /* When the image library gets some data for an image it will fill */
@@ -2331,7 +2353,7 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
     if (i == image || idata[i].xref == image)
     {
       int          l, x, y;
-      int          chunk, o, depth, noplot = 0;
+      int          chunk, depth, noplot = 0;
       token_path * path = NULL;
       HStream    * tp;
       BBox         ibox;
@@ -2409,14 +2431,6 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
           /* If the image size was obtained without error, */
           /* correct its X and Y coordinates appropriately */
 
-          o = 0;
-
-          if (ISOBJECT(tp))         o = HtmlOBJECTborder(tp);
-          else if (tp->style & IMG) o = tp->maxlen * 2;
-
-          x += o;
-          y += ibox.ymin + o;
-
           if (!idata[i].hadfirst)
           {
             idata[i].hadfirst = 1;
@@ -2434,155 +2448,6 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
                                                       1);
 
             else reformat_format_from(idata[i].owner, l - 1, 0, i);
-
-  // Haven't solved the cross referencing problem yet. What seems to happen
-  // is that the function gets called when the actual image comes in, then
-  // gets called separately with the cross references set up. So by that time,
-  // the fact that the cross referenced images weren't sized either is not
-  // known to the function and unless you've forced a reformat first time
-  // round it'll go pear shaped later.
-
-  //          {
-  //            int width, old_h, old_y, old_b, top, bot;
-  //
-  //            /* Optimisation and complication... For images which lie alone on */
-  //            /* a single line, don't have to reformat. Can just shift the page */
-  //            /* below down, and redraw the line with the image in.             */
-  //            /*                                                                */
-  //            /* Later it should be possible to carry out a reformat between    */
-  //            /* the image and the next line break point, but for now this at   */
-  //            /* least gets rid of a few reformats.                             */
-  //            /*                                                                */
-  //            /* This is complicated somewhat by cross referencing. That is, if */
-  //            /* several image tags refer to the same piece of data, normally   */
-  //            /* the reformatter is called and so resizes them all in passing   */
-  //            /* (see comments on the reformatter call below). This won't       */
-  //            /* happen in the optimised case, so must to a scan right down the */
-  //            /* line list until either all occurrences have been found or the  */
-  //            /* reformatter gets called for some reason.                       */
-  //
-  //            if (b->ldata[l].n == 1)
-  //            {
-  //              Printf("Optimised page yshift for new, previously unsized image on line %d\n",l);
-  //
-  //              width  = ibox.xmax - ibox.xmin;
-  //              convert_to_points(width, &width);
-  //              b->cdata[chunk].w = width;
-  //
-  //              top = ibox.ymax;
-  //              bot = ibox.ymin;
-  //
-  //              if (top & 3) top += 4 - (top & 3);
-  //              if (bot & 3) bot += 4 - (bot & 3);
-  //
-  //              old_h = b->ldata[l].h;
-  //              old_y = b->ldata[l].y;
-  //              old_b = b->ldata[l].b;
-  //
-  //              /* lp->h - lp->b equates to the height of the line in OS units minus */
-  //              /* the y offset of the font baseline from the bottom of the line. If */
-  //              /* 'top' is greater than this the line needs to grow vertically.     */
-  //
-  //              if (top > (b->ldata[l].h - b->ldata[l].b))
-  //              {
-  //                int d;
-  //
-  //                d = top - (b->ldata[l].h - b->ldata[l].b);
-  //                b->ldata[l].h += d;
-  //                b->ldata[l].y -= d;
-  //              }
-  //
-  //              /* Similarly, if bot is greater than the offset of the baseline from */
-  //              /* the bottom of the line, account for the extra offset.             */
-  //
-  //              if (bot > b->ldata[l].b)
-  //              {
-  //                int d;
-  //
-  //                d = bot - b->ldata[l].b;
-  //
-  //                b->ldata[l].h += d;
-  //                b->ldata[l].b += d; /* Was lp->b = bot; */
-  //                b->ldata[l].y -= d;
-  //              }
-  //
-  //              if (
-  //                   b->ldata[l].h != old_h ||
-  //                   b->ldata[l].y != old_y ||
-  //                   b->ldata[l].b != old_b
-  //                 )
-  //              {
-  //                int move;
-  //
-  //                move = b->ldata[l].h - old_h;
-  //
-  //                if (move)
-  //                {
-  //                  e = reformat_shift_vertically(b, l + 1, b->nlines + 1, -move);
-  //                  if (e) return e;
-  //                }
-  //              }
-  //
-  //              /* If using complex backdrops, want to keep them in sync, so need */
-  //              /* to refresh the whole area below the line just altered. Else,   */
-  //              /* just redraw the line.                                          */
-  //
-  //              if (b->background_image != -1)
-  //              {
-  //                /* Redraw everything below the line */
-  //
-  //                int top;
-  //
-  //                if (b->ldata[l].y + b->ldata[l].h > old_y + old_h) top = b->ldata[l].y + b->ldata[l].h;
-  //                else                                               top = old_y + old_h;
-  //
-  //                browser_update_bottom(b, top);
-  //              }
-  //              else
-  //              {
-  //                /* Redraw just the line that's changed */
-  //
-  //                WimpGetWindowStateBlock state;
-  //                int                     top, bottom;
-  //
-  //                /* Work out the top and bottom points to redraw from, depending */
-  //                /* on how the line moved and/or resized due to the above code.  */
-  //
-  //                if (b->ldata[l].y < old_y) bottom = b->ldata[l].y;
-  //                else                       bottom = old_y;
-  //
-  //                if (b->ldata[l].y + b->ldata[l].h > old_y + old_h) top = b->ldata[l].y + b->ldata[l].h;
-  //                else                                               top = old_y + old_h;
-  //
-  //                state.window_handle = b->window_handle;
-  //                e = wimp_get_window_state(&state);
-  //                if (e) return e;
-  //
-  //                coords_box_toworkarea(&state.visible_area, (WimpRedrawWindowBlock *) &state);
-  //
-  //                return wimp_force_redraw(state.window_handle,
-  //                                         state.visible_area.xmin,
-  //                                         bottom,
-  //                                         state.visible_area.xmax,
-  //                                         top);
-  //              }
-  //
-  //              /* Closure of long 'if' checking if there was just one chunk on this */
-  //              /* line - if so don't need to call the reformatter, can just shuffle */
-  //              /* lines below (being very careful over the redraw...). The code     */
-  //              /* above executes in this case. Else, reformat from this point.      */
-  //            }
-  //            else
-  //            {
-  //              /* Where several image tags in the document source refer to the same */
-  //              /* actual piece of image data, this reformat call will ensure that   */
-  //              /* they are all correctly sized and positioned. This is because it   */
-  //              /* will always be called on the first of any such images and thus    */
-  //              /* must go through all subsequent occurrences in passing.            */
-  //
-  //              return (reformat_format_from(b, l - 1, 0, i));
-  //            }
-  //          }
           }
 
           /* Otherwise, work out what region to redraw (may only require */
@@ -2656,7 +2521,7 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
                               0);
           }
 
-         /* Closure of 'if (!reformat_get_image_size(idata[i].owner, tp, &ibox))' */
+        /* Closure of 'if (!reformat_get_image_size(idata[i].owner, tp, &ibox))' */
         }
 
       /* Closure of 'if (noplot)' - code immediately above is */
@@ -2749,12 +2614,65 @@ int image_animate_images(int eventcode, WimpPollBlock * block, IdBlock * idb, br
 }
 
 /*************************************************/
+/* image_register_filler()                       */
+/*                                               */
+/* Registers the given image and it's owning     */
+/* browser with ImageLib. Must be called for     */
+/* cross referencing images only.                */
+/*                                               */
+/* Parameters: The image number to register.     */
+/*************************************************/
+
+static _kernel_oserror * image_register_filler(int xref)
+{
+  #ifdef STRICT_PARSER
+
+    {
+      _kernel_oserror * e;
+
+      /* Report any errors as Continue-only in strict parser mode */
+
+      e = idata[xref].istore -> RegisterFiller(idata[xref].istore,
+                                               (FillerFunction *) image_fill_background,
+                                               idata[xref].owner,
+                                               (int *) xref);
+
+      if (e)
+      {
+        e->errnum = Utils_Error_Custom_Message;
+        return e;
+      }
+    }
+
+  #else
+
+    /* If not in Strict mode, don't report errors */
+
+    idata[xref].istore -> RegisterFiller(idata[xref].istore,
+                                         (FillerFunction *) image_fill_background,
+                                         idata[xref].owner,
+                                         (int *) xref);
+  #endif
+
+  idata[xref].hadfiller = 1;
+
+  return NULL;
+}
+
+/*************************************************/
 /* image_fill_background()                       */
 /*                                               */
 /* Called as a FillerFunction for ImageLib,      */
 /* this redraws the background image. Output     */
 /* will probably have been redirected by         */
 /* ImageLib at this point.                       */
+/*                                               */
+/* The way the function is registered should     */
+/* leave void * handle pointing to the browser   */
+/* who's background will be redrawn, with int *  */
+/* i actually being an int (not an int *)        */
+/* holding the image number for which the        */
+/* function was registered in the first place.   */
 /*************************************************/
 
 _kernel_oserror * image_fill_background(void * handle, int * i)
@@ -2768,6 +2686,10 @@ _kernel_oserror * image_fill_background(void * handle, int * i)
   int                       bimage;
   int                       x, y, xorigin, yorigin;
   int                       w, h;
+
+  #ifdef TRACE
+    if (tl & (1u<<15)) Printf("image_fill_background: Called with %p, %d\n", handle, i);
+  #endif
 
   state.window_handle = b->window_handle;
   e = wimp_get_window_state(&state);
@@ -2785,6 +2707,14 @@ _kernel_oserror * image_fill_background(void * handle, int * i)
   if (image_redrawing >= -1) image = image_redrawing;
   else                       image = ximage;
 
+  #ifdef TRACE
+    if (tl & (1u<<15))
+    {
+      Printf("image_fill_background: Decided to use %p, %d\n", b, image);
+      Printf("image_fill_background: Image w, h = %d, %d\n",idata[image].currw,idata[image].currh);
+    }
+  #endif
+
   /* Can't plot a background image if there's no such image or */
   /* it's not fully fetched.                                   */
 
@@ -2794,6 +2724,14 @@ _kernel_oserror * image_fill_background(void * handle, int * i)
     if (idata[bimage].xref >= 0) bimage = idata[bimage].xref;
   }
   else bimage = -1, noplot = 1;
+
+  #ifdef TRACE
+    if (tl & (1u<<15))
+    {
+      if (bimage >= 0) Printf("image_fill_background: Background image = %d\n",bimage);
+      else             Printf("image_fill_background: No background image\n");
+    }
+  #endif
 
   if (
        !noplot &&
@@ -2862,7 +2800,13 @@ _kernel_oserror * image_fill_background(void * handle, int * i)
          !printstyle_show_all()
        )
      )
-     return NULL;
+  {
+    #ifdef TRACE
+      if (tl & (1u<<15)) Printf("image_fill_background: No background image to plot, so successful (exitting)\n");
+    #endif
+
+    return NULL;
+  }
 
   /* Find the scale for the background plotting; if the foreground */
   /* image is scaled, then plotting the background at 1:1 will     */
@@ -2888,6 +2832,10 @@ _kernel_oserror * image_fill_background(void * handle, int * i)
     float tempx,  tempy;
     float tempw,  temph;
     int   htop;
+
+    #ifdef TRACE
+      if (tl & (1u<<15)) Printf("image_fill_background: Plotting scaled background\n");
+    #endif
 
     tempx = (float) idata[ximage].istore->width_os, tempy = (float) idata[ximage].istore->height_os;
     tempw = (float) idata[image].currw,             temph = (float) idata[image].currh;
@@ -2936,11 +2884,11 @@ _kernel_oserror * image_fill_background(void * handle, int * i)
       for (x = redraw.xmin; x <= redraw.xmax; x += w)
       {
         e = (idata[bimage].istore -> Render(idata[bimage].istore,
-                                           x,
-                                           y,
-                                           100,
-                                           w,
-                                           h));
+                                            x,
+                                            y,
+                                            100,
+                                            w,
+                                            h));
         if (e) break;
       }
 
@@ -2953,6 +2901,10 @@ _kernel_oserror * image_fill_background(void * handle, int * i)
   {
     BBox redraw;
     int  htop;
+
+    #ifdef TRACE
+      if (tl & (1u<<15)) Printf("image_fill_background: Plotting unscaled background\n");
+    #endif
 
     w = (idata[bimage].istore->width_os)  & ~(wimpt_dx() - 1);
     h = (idata[bimage].istore->height_os) & ~(wimpt_dy() - 1);
@@ -2984,11 +2936,11 @@ _kernel_oserror * image_fill_background(void * handle, int * i)
       for (x = redraw.xmin; x <= redraw.xmax; x += w)
       {
         e = (idata[bimage].istore -> Render(idata[bimage].istore,
-                                           x,
-                                           y,
-                                           100,
-                                           -1,
-                                           -1));
+                                            x,
+                                            y,
+                                            100,
+                                            -1,
+                                            -1));
         if (e) break;
       }
 
@@ -2997,6 +2949,10 @@ _kernel_oserror * image_fill_background(void * handle, int * i)
 
     idata[bimage].istore -> ModeChange(idata[bimage].istore);
   }
+
+  #ifdef TRACE
+    if (tl & (1u<<15)) Printf("image_fill_background: Successful\n");
+  #endif
 
   return e;
 }
@@ -4323,6 +4279,10 @@ int image_token_can_be_saved_as_sprite(browser_data * b, HStream * image)
 _kernel_oserror * image_export_sprite(char * path, browser_data * b, HStream * image)
 {
   int i;
+
+  if (!path || !*path) return NULL;
+
+  save_record_path(path);
 
   /* Find the image number */
 
