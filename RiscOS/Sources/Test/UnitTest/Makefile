@@ -1,5 +1,12 @@
-# Makefile for StoredInfo
+# Skeleton OBJASM/C Makefile for application
 #
+# *****************************************
+# ***       C h a n g e   L i s t       ***
+# *****************************************
+# Date       	Name         	Description
+# ----       	----         	-----------
+# 17 Sep 1997	RWB		Created
+
 
 #
 # Paths
@@ -10,6 +17,7 @@ EXP_HDR = <export$dir>
 # Generic options:
 #
 MKDIR   = cdir
+#AS      = aasm
 AS      = objasm
 CC      = cc
 CMHG    = cmhg
@@ -17,273 +25,246 @@ CP      = copy
 LD      = link
 RM      = remove
 WIPE    = -wipe
+CD	= dir
 
+#AFLAGS = -depend !Depend -Stamp -quit -To $@ -From
 AFLAGS = -depend !Depend -Stamp -quit
-CFLAGS  = -c -depend !Depend -zM -zps1 -ff ${INCLUDES} -D${SYSTEM}=1 ${DFLAGS}
+CFLAGS  = -c -depend !Depend ${INCLUDES} -DSYS${SYSTEM}=1 -DMACH${MACHINE}=1 ${DFLAGS}
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
+DFLAGS  = ${DEBUG}
 
 #
 # Libraries
 #
-CLIB      = CLIB:o.stubs
-RLIB      = RISCOSLIB:o.risc_oslib
-RSTUBS    = RISCOSLIB:o.rstubs
-ROMSTUBS  = RISCOSLIB:o.romstubs
-ROMCSTUBS = RISCOSLIB:o.romcstubs
-ABSSYM    = RISC_OSLib:o.AbsSym
-
+CLIB       = CLIB:o.stubs
+RLIB       = RISCOSLIB:o.risc_oslib
+RSTUBS     = RISCOSLIB:o.rstubs
+ROMSTUBS   = RISCOSLIB:o.romstubs
+ROMCSTUBS  = RISCOSLIB:o.romcstubs
+ABSSYM     = RISC_OSLib:o.AbsSym
+EVENTLIB   = Tbox:o.eventlib
+TOOLBOXLIB = Tbox:o.toolboxlib
+WIMPLIB	   = Tbox:o.wimplib
 #
 # Include files
 #
-INCLUDES = -IC:
+INCLUDES = -ITbox: -IC:
 
-DFLAGS   =
 
-#
 # Program specific options:
 #
 COMPONENT = UnitTest
-TARGET    = aof.${COMPONENT}
-RAMTARGET = rm.${COMPONENT}
-OBJS      = header.o module.o storedinfo.o veneer.o \
-            Display.o DRAMTest.o FaultCodes.o InputTest.o \
-            Modem.o Msgs.o NVRAMTest.o ROMCheck.o \
-            SCardTest.o Sound.o Support.o System.o UserDiag.o \
-            CPUType.o IOControl.o MemSrcNCOS.o ROMChksum.o usermode.o
-EXPORTS   = 
+TARGET    = !RunImage
+APP	  = !${COMPONENT}
+OM        = o${BUILD}
+
+BASEOBJS  = ${OM}.Display ${OM}.DRAMTest ${OM}.InputTest \
+            ${OM}.Modem ${OM}.Msgs ${OM}.NVRAMTest ${OM}.ROMCheck \
+            ${OM}.Sound ${OM}.Support ${OM}.System ${OM}.UserDiag \
+            ${OM}.CPUType ${OM}.IOControl ${OM}.MemSrcNCOS \
+            ${OM}.ROMChksum 
+Module    = ${OM}.header ${OM}.module ${OM}.usermode ${OM}.UnitTest 
+Applic    = ${OM}.AppMain 
+BOCA      = ${BASEOBJS} ${Module} ${OM}.FaultCodes ${OM}.SCardTest ${OM}.storedinfo ${OM}.veneer
+Morris2   = ${BASEOBJS} ${Applic} ${OM}.FlashCheck ${OM}.Serial ${OM}.bufman ${OM}.serial_lib
+
+OBJS      = ${Morris2}
+
+.SUFFIXES: .${OM}
 
 #
 # Rule patterns
 #
-.c.o:;      ${CC} ${CFLAGS} -o $@ $<
-.cmhg.o:;   ${CMHG} -o $@ $<
-.s.o:;      ${AS} ${AFLAGS} $< $@
+.c.${OM}:;      ${CC} ${CFLAGS} -o $@ $<
+.cmhg.${OM}:;   ${CMHG} -o $@ $<
+.s.${OM}:;      ${AS}   ${AFLAGS} $< $@
 
 #
-# build a relocatable module:
+# Build
 #
-all: ${RAMTARGET}
-
-#
-# RISC OS ROM build rules:
-#
-rom: ${TARGET}
-        @echo ${COMPONENT}: rom module built
-
-export: ${EXPORTS}
-        @echo ${COMPONENT}: export complete
-
-install_rom: ${TARGET}
-        ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom module installed
+all: ${TARGET}
+        @echo ${COMPONENT}: all complete
 
 clean:
         ${WIPE} o.* ${WFLAGS}
-        ${WIPE} linked.* ${WFLAGS}
-        ${WIPE} map.* ${WFLAGS}
-        ${RM} ${TARGET}
-        ${RM} ${RAMTARGET}
+        ${WIPE} ${TARGET} ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
-resources:
-        @echo ${COMPONENT}: resource files copied
-
+install:
+	${MKDIR} ${APP}
+	${CP} ${TARGET} ${APP}.${TARGET} ${CPFLAGS}
+	${CP} Resources.* ${APP}.* ${CPFLAGS}
+	@echo ${COMPONENT}: installed
 #
-# ROM target (re-linked at ROM Image build time)
+# Target 
 #
-${TARGET}: ${OBJS} ${ROMCSTUBS}
-        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS}
-
+${TARGET}: ${OBJS}  
+        ${LD} -o $@ ${OBJS} ${CLIB} 
+#${EVENTLIB} 
+#${TOOLBOXLIB} 
+#${WIMPLIB}
 #
-# Final link for the ROM Image (using given base address)
-#
-rom_link:
-        ${LD} -o linked.${COMPONENT} -map -bin -base ${ADDRESS} ${TARGET} ${ABSSYM} > map.${COMPONENT}
-        truncate map.${COMPONENT} linked.${COMPONENT}
-        ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: rom_link complete
-
-${RAMTARGET}: ${OBJS} ${CLIB}
-        ${LD} -o $@ -module ${OBJS} ${CLIB}
-
-${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
-#        ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
-
-# Dynamic deo.module:	c.module
 # Dynamic dependencies:
-o.veneer: s.veneer
-o.veneer: Hdr:ListOpts
-o.veneer: Hdr:Macros
-o.veneer: Hdr:System
-o.veneer: Hdr:SWIs
-o.veneer: Hdr:CPU.Generic26
-o.veneer: Hdr:IO.GenericIO
-o.veneer: Hdr:RISCOS
-o.veneer: Hdr:ModHand
-o.Display:	c.Display
-o.Display:	C:h.kernel
-o.Display:	C:h.swis
-o.Display:	h.module
-o.Display:	h.display
-o.Display:	h.msgs
-o.Display:	h.support
-o.DRAMTest:	c.DRAMTest
-o.DRAMTest:	C:h.kernel
-o.DRAMTest:	C:h.swis
-o.DRAMTest:	h.dramtest
-o.DRAMTest:	h.display
-o.DRAMTest:	h.support
-o.DRAMTest:	h.msgs
-o.DRAMTest:	h.MemSrcNCOS
-o.InputTest:	c.InputTest
-o.InputTest:	C:h.kernel
-o.InputTest:	C:h.swis
-o.InputTest:	h.module
-o.InputTest:	h.InputTest
-o.InputTest:	h.display
-o.InputTest:	h.support
-o.InputTest:	h.msgs
-o.Modem:	c.Modem
-o.Modem:	C:h.kernel
-o.Modem:	C:h.swis
-o.Modem:	h.module
-o.Modem:	h.Modem
-o.Modem:	h.display
-o.Modem:	h.support
-o.Modem:	h.Msgs
-o.Msgs:	c.Msgs
-o.ROMCheck:	c.ROMCheck
-o.ROMCheck:	C:h.kernel
-o.ROMCheck:	C:h.swis
-o.ROMCheck:	h.ROMCheck
-o.ROMCheck:	h.display
-o.ROMCheck:	h.support
-o.SCardTest:	c.SCardTest
-o.SCardTest:	C:h.kernel
-o.SCardTest:	C:h.swis
-o.SCardTest:	h.module
-o.SCardTest:	h.SCardTest
-o.SCardTest:	h.display
-o.SCardTest:	h.support
-o.SCardTest:	h.usermode
-o.SCardTest:	C:h.kernel
-o.SCardTest:	C:h.scinter
-o.SCardTest:	h.Msgs
-o.Sound:	c.Sound
-o.Sound:	C:h.kernel
-o.Sound:	C:h.swis
-o.Sound:	h.sound
-o.Sound:	h.display
-o.Sound:	h.support
-o.Sound:	h.msgs
-o.Support:	c.Support
-o.Support:	C:h.kernel
-o.Support:	C:h.swis
-o.Support:	h.module
-o.Support:	h.support
-o.Support:	C:h.led
-o.Support:	h.display
-o.Support:	h.Msgs
-o.System:	c.System
-o.System:	C:h.kernel
-o.System:	C:h.swis
-o.System:	h.system
-o.System:	h.display
-o.System:	h.support
-o.System:	h.msgs
-o.System:	h.CPUType
-o.System:	h.IOControl
-o.UserDiag:	c.UserDiag
-o.UserDiag:	C:h.kernel
-o.UserDiag:	C:h.swis
-o.UserDiag:	C:h.Standby
-o.UserDiag:	h.module
-o.UserDiag:	h.UserDiag
-o.UserDiag:	h.display
-o.UserDiag:	h.support
-o.UserDiag:	h.ROMCheck
-o.UserDiag:	h.DRAMTest
-o.UserDiag:	h.NVRAMTest
-o.UserDiag:	h.FaultCodes
-o.UserDiag:	h.system
-o.UserDiag:	h.Modem
-o.UserDiag:	h.InputTest
-o.UserDiag:	h.Sound
-o.UserDiag:	h.SCardTest
-o.UserDiag:	h.msgs
-o.CPUType: s.CPUType
-o.CPUType: Hdr:ListOpts
-o.CPUType: Hdr:Macros
-o.CPUType: Hdr:MEMM.ARM600
-o.IOControl: s.IOControl
-o.IOControl: Hdr:ListOpts
-o.IOControl: Hdr:Macros
-o.IOControl: Hdr:System
-o.IOControl: Hdr:SWIs
-o.IOControl: Hdr:CPU.Generic26
-o.IOControl: Hdr:IO.GenericIO
-o.IOControl: Hdr:RISCOS
-o.IOControl: Hdr:Machine.<Machine>
-o.IOControl: Hdr:Machine.Machine
-o.IOControl: Hdr:IO.IOMDL
-o.MemSrcNCOS: s.MemSrcNCOS
-o.MemSrcNCOS: Hdr:ListOpts
-o.MemSrcNCOS: Hdr:Macros
-o.MemSrcNCOS: Hdr:System
-o.MemSrcNCOS: Hdr:SWIs
-o.MemSrcNCOS: Hdr:CPU.Generic26
-o.MemSrcNCOS: Hdr:IO.GenericIO
-o.MemSrcNCOS: Hdr:RISCOS
-o.ROMChksum: s.ROMChksum
-o.ROMChksum: Hdr:ListOpts
-o.ROMChksum: Hdr:Macros
-o.ROMChksum: Hdr:System
-o.ROMChksum: Hdr:SWIs
-o.ROMChksum: Hdr:CPU.Generic26
-o.ROMChksum: Hdr:IO.GenericIO
-o.ROMChksum: Hdr:RISCOS
-o.ROMChksum: Hdr:Machine.<Machine>
-o.ROMChksum: Hdr:Machine.Machine
-o.ROMChksum: Hdr:IO.IOMDL
-o.usermode: s.usermode
-o.usermode: Hdr:ListOpts
-o.usermode: Hdr:Macros
-o.usermode: Hdr:System
-o.usermode: Hdr:SWIs
-o.usermode: Hdr:CPU.Generic26
-o.usermode: Hdr:IO.GenericIO
-o.usermode: Hdr:RISCOS
-o.usermode: Hdr:EnvNumbers
-o.module:	c.module
-o.module:	C:h.kernel
-o.module:	C:h.swis
-o.module:	h.module
-o.module:	h.storedinfo
-o.module:	h.UserDiag
-o.module:	h.Support
-o.storedinfo:	c.storedinfo
-o.storedinfo:	C:h.kernel
-o.storedinfo:	C:h.swis
-o.storedinfo:	C:h.nvram
-o.storedinfo:	C:h.standby
-o.storedinfo:	h.module
-o.storedinfo:	h.storedinfo
-o.storedinfo:	h.veneer
-o.storedinfo:	h.error
-o.FaultCodes:	c.FaultCodes
-o.FaultCodes:	C:h.kernel
-o.FaultCodes:	C:h.swis
-o.FaultCodes:	h.FaultCodes
-o.FaultCodes:	h.display
-o.FaultCodes:	h.support
-o.FaultCodes:	h.storedinfo
-o.FaultCodes:	C:h.nvram
-o.FaultCodes:	h.msgs
-o.NVRAMTest:	c.NVRAMTest
-o.NVRAMTest:	C:h.kernel
-o.NVRAMTest:	C:h.swis
-o.NVRAMTest:	h.nvramtest
-o.NVRAMTest:	h.display
-o.NVRAMTest:	h.support
-o.NVRAMTest:	h.storedinfo
+oMorris2.CPUType: s.CPUType
+oMorris2.CPUType: Hdr:ListOpts
+oMorris2.CPUType: Hdr:Macros
+oMorris2.CPUType: Hdr:MEMM.ARM600
+oMorris2.IOControl: s.IOControl
+oMorris2.IOControl: Hdr:ListOpts
+oMorris2.IOControl: Hdr:Macros
+oMorris2.IOControl: Hdr:System
+oMorris2.IOControl: Hdr:SWIs
+oMorris2.IOControl: Hdr:CPU.Generic26
+oMorris2.IOControl: Hdr:IO.GenericIO
+oMorris2.IOControl: Hdr:RISCOS
+oMorris2.IOControl: Hdr:Machine.<Machine>
+oMorris2.IOControl: Hdr:IO.IOMDL
+oMorris2.ROMChksum: s.ROMChksum
+oMorris2.ROMChksum: Hdr:ListOpts
+oMorris2.ROMChksum: Hdr:Macros
+oMorris2.ROMChksum: Hdr:System
+oMorris2.ROMChksum: Hdr:SWIs
+oMorris2.ROMChksum: Hdr:CPU.Generic26
+oMorris2.ROMChksum: Hdr:IO.GenericIO
+oMorris2.ROMChksum: Hdr:RISCOS
+oMorris2.ROMChksum: Hdr:Machine.<Machine>
+oMorris2.ROMChksum: Hdr:IO.IOMDL
+oMorris2.Serial:	c.Serial
+oMorris2.Serial:	C:h.kernel
+oMorris2.Serial:	C:h.swis
+oMorris2.Serial:	h.serial_lib
+oMorris2.Serial:	C:h.kernel
+oMorris2.Serial:	h.Serial
+oMorris2.Serial:	h.DebugLib
+oMorris2.bufman: s.bufman
+oMorris2.bufman: h.CVars
+oMorris2.bufman: h.SWINames
+oMorris2.serial_lib:	c.serial_lib
+oMorris2.serial_lib:	C:h.kernel
+oMorris2.serial_lib:	C:h.swis
+oMorris2.serial_lib:	h.serial_lib
+oMorris2.serial_lib:	C:h.kernel
+oMorris2.MemSrcNCOS: s.MemSrcNCOS
+oMorris2.MemSrcNCOS: Hdr:ListOpts
+oMorris2.MemSrcNCOS: Hdr:Macros
+oMorris2.MemSrcNCOS: Hdr:System
+oMorris2.MemSrcNCOS: Hdr:SWIs
+oMorris2.MemSrcNCOS: Hdr:CPU.Generic26
+oMorris2.MemSrcNCOS: Hdr:IO.GenericIO
+oMorris2.MemSrcNCOS: Hdr:RISCOS
+oMorris2.DRAMTest:	c.DRAMTest
+oMorris2.DRAMTest:	C:h.kernel
+oMorris2.DRAMTest:	C:h.swis
+oMorris2.DRAMTest:	h.support
+oMorris2.DRAMTest:	h.module
+oMorris2.DRAMTest:	h.dramtest
+oMorris2.DRAMTest:	h.display
+oMorris2.DRAMTest:	h.msgs
+oMorris2.DRAMTest:	h.MemSrcNCOS
+oMorris2.InputTest:	c.InputTest
+oMorris2.InputTest:	C:h.kernel
+oMorris2.InputTest:	C:h.swis
+oMorris2.InputTest:	h.support
+oMorris2.InputTest:	h.module
+oMorris2.InputTest:	h.InputTest
+oMorris2.InputTest:	h.display
+oMorris2.InputTest:	h.msgs
+oMorris2.InputTest:	h.usermode
+oMorris2.InputTest:	C:h.kernel
+oMorris2.Modem:	c.Modem
+oMorris2.Modem:	C:h.kernel
+oMorris2.Modem:	C:h.swis
+oMorris2.Modem:	h.support
+oMorris2.Modem:	h.module
+oMorris2.Modem:	h.Modem
+oMorris2.Modem:	h.display
+oMorris2.Modem:	h.Msgs
+oMorris2.Modem:	h.Dialler
+oMorris2.Modem:	h.Serial
+oMorris2.Modem:	h.types
+oMorris2.Modem:	h.bufman
+oMorris2.Modem:	h.types
+oMorris2.Modem:	h.daytonahw
+oMorris2.Modem:	C:h.kernel
+oMorris2.Modem:	h.diallerb
+oMorris2.Msgs:	c.Msgs
+oMorris2.Msgs:	h.support
+oMorris2.NVRAMTest:	c.NVRAMTest
+oMorris2.NVRAMTest:	C:h.kernel
+oMorris2.NVRAMTest:	C:h.swis
+oMorris2.NVRAMTest:	h.support
+oMorris2.NVRAMTest:	h.nvramtest
+oMorris2.NVRAMTest:	h.display
+oMorris2.ROMCheck:	c.ROMCheck
+oMorris2.ROMCheck:	C:h.kernel
+oMorris2.ROMCheck:	C:h.swis
+oMorris2.ROMCheck:	h.support
+oMorris2.ROMCheck:	h.ROMCheck
+oMorris2.ROMCheck:	h.display
+oMorris2.Sound:	c.Sound
+oMorris2.Sound:	C:h.kernel
+oMorris2.Sound:	C:h.swis
+oMorris2.Sound:	h.support
+oMorris2.Sound:	h.sound
+oMorris2.Sound:	h.display
+oMorris2.Sound:	h.msgs
+oMorris2.Support:	c.Support
+oMorris2.Support:	C:h.kernel
+oMorris2.Support:	C:h.swis
+oMorris2.Support:	h.module
+oMorris2.Support:	h.support
+oMorris2.Support:	C:h.led
+oMorris2.Support:	h.display
+oMorris2.Support:	h.Msgs
+oMorris2.Support:	h.usermode
+oMorris2.Support:	C:h.kernel
+oMorris2.Support:	C:h.string
+oMorris2.Support:	h.daytonahw
+oMorris2.Support:	C:h.kernel
+oMorris2.System:	c.System
+oMorris2.System:	C:h.kernel
+oMorris2.System:	C:h.swis
+oMorris2.System:	h.support
+oMorris2.System:	h.system
+oMorris2.System:	h.display
+oMorris2.System:	h.msgs
+oMorris2.System:	h.CPUType
+oMorris2.System:	h.IOControl
+oMorris2.AppMain:	c.AppMain
+oMorris2.AppMain:	C:h.kernel
+oMorris2.AppMain:	C:h.swis
+oMorris2.AppMain:	h.Support
+oMorris2.AppMain:	h.UserDiag
+oMorris2.Display:	c.Display
+oMorris2.Display:	C:h.kernel
+oMorris2.Display:	C:h.swis
+oMorris2.Display:	h.support
+oMorris2.Display:	h.module
+oMorris2.Display:	h.display
+oMorris2.Display:	h.msgs
+oMorris2.UserDiag:	c.UserDiag
+oMorris2.UserDiag:	C:h.kernel
+oMorris2.UserDiag:	C:h.swis
+oMorris2.UserDiag:	h.support
+oMorris2.UserDiag:	C:h.Standby
+oMorris2.UserDiag:	h.module
+oMorris2.UserDiag:	h.UserDiag
+oMorris2.UserDiag:	h.display
+oMorris2.UserDiag:	h.ROMCheck
+oMorris2.UserDiag:	h.DRAMTest
+oMorris2.UserDiag:	h.NVRAMTest
+oMorris2.UserDiag:	h.system
+oMorris2.UserDiag:	h.Modem
+oMorris2.UserDiag:	h.InputTest
+oMorris2.UserDiag:	h.Sound
+oMorris2.UserDiag:	h.msgs
+oMorris2.UserDiag:	h.FlashCheck
+oMorris2.UserDiag:	h.usermode
+oMorris2.UserDiag:	C:h.kernel
+oMorris2.FlashCheck:	c.FlashCheck
+oMorris2.FlashCheck:	C:h.kernel
+oMorris2.FlashCheck:	C:h.swis
+oMorris2.FlashCheck:	h.support
+oMorris2.FlashCheck:	h.FlashCheck
+oMorris2.FlashCheck:	h.display
