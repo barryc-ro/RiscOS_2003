@@ -71,6 +71,13 @@ OBJS      = ${OM}.Main ${OM}.support
 all: ${TARGET}
         @echo ${COMPONENT}: all complete
 
+#Not really a ROM Build but its built in the ROM phase
+#to fit into a ROM build.  The application is copied to ResourceFS in the
+#install so that it can be included in the ROM.
+
+rom: ${TARGET}
+        @echo ${COMPONENT}: all complete
+
 clean:
         ${WIPE}	o.*		${WFLAGS}
         @echo ${COMPONENT}: cleaned
