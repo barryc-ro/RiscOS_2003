@@ -188,6 +188,7 @@ rom_link:
 # Static dependencies
 #
 
-o.Header: h.Header
+o.Module: h.Header
+o.Filter: h.Header
 
 # Dynamic dependencies:
