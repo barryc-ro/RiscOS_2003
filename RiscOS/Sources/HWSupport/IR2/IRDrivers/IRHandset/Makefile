@@ -20,7 +20,7 @@ LD      = link
 RM      = remove
 WIPE    = -wipe
 
-CFLAGS  = -depend !Depend ${INCLUDES} -c -zM -ffah ${DFLAGS} -DIR_CLIENT
+CFLAGS  = -depend !Depend ${INCLUDES} -c -zM -ffa ${DFLAGS} -DIR_CLIENT
 #DFLAGS  = -DDEBUG=3
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
@@ -118,6 +118,7 @@ o.handset:	h.utils
 o.handset:	h.ir_api
 o.handset:	h.handset
 o.handset:	h.veneers
+o.handset:	h.module
 o.ir_api:	c.ir_api
 o.ir_api:	C:h.kernel
 o.ir_api:	C:h.swis
