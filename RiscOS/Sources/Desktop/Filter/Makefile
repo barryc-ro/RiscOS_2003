@@ -101,5 +101,8 @@ rm.FilterMgr: s.ModHead
 rm.FilterMgr: s.SWIs
 rm.FilterMgr: s.MsgTrans
 rm.FilterMgr: s.PreFilter
+rm.FilterMgr: s.RectFilter
+rm.FilterMgr: s.PoRtFilter
+rm.FilterMgr: s.CopyFilter
 rm.FilterMgr: s.PostFilter
 rm.FilterMgr: s.Tail
