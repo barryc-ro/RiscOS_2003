@@ -32,6 +32,7 @@ WIPE    = -wipe
 CD	= dir
 DEFMOD  = DefMod
 AR	= LibFile
+STRIP   = stripdepnd
 
 AFLAGS = -depend !Depend -Stamp -quit
 CFLAGS  = -c -depend !Depend ${THROWBACK} -zM -ff ${INCLUDES} ${DFLAGS}
@@ -39,7 +40,8 @@ CPFLAGS = ~cfr~v
 WFLAGS  = ~c~vr
 CMHGFLAGS = -p  ${DFLAGS} ${INCLUDES}
 
-DFLAGS  = -DUSE_TINY ${DEBUG} ${OPTS}
+DFLAGS  = -DUSE_TINY ${DEBUGLIB} ${OPTS}
+
 #
 # Libraries
 #
@@ -50,6 +52,11 @@ ROMSTUBS   = RISCOSLIB:o.romstubs
 ROMCSTUBS  = RISCOSLIB:o.romcstubs
 ABSSYM     = RISC_OSLib:o.AbsSym
 REMOTEDB   = <Lib$Dir>.debug.o.remotezm
+DEBUG_LIBS = <Lib$Dir>.DebugLib.o.DebugLibzm
+SOCKLIB    = TCPIPLibs:o.socklibzm
+INETLIB    = TCPIPLibs:o.inetlibzm
+UNIXLIB    = TCPIPLibs:o.unixlibzm
+
 #
 # Include files
 #
@@ -96,8 +103,8 @@ od.header
 .cmhg.h:;   ${CMHG} ${CMHGFLAGS} -d $@ $<
 .cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
-.c.od:;     ${CC} ${CFLAGS} -o $@ $< -DREMOTE_DEBUG
-.cmhg.od:;  ${CMHG} ${CMHGFLAGS} -o $@ $< -d h.$* -DREMOTE_DEBUG
+.c.od:;     ${CC} ${CFLAGS} -o $@ $<
+.cmhg.od:;  ${CMHG} ${CMHGFLAGS} -o $@ $< -d h.$* 
 .s.od:;     ${AS} ${AFLAGS} $< $@
 
 #
@@ -128,6 +135,7 @@ clean:
         ${WIPE} aof ${WFLAGS}
         ${RM} ${TARGET}
 	${RM} h.header
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 dirs:
@@ -156,8 +164,8 @@ rm.${COMPONENT}: ${OBJS} dirs header.h
         ${LD} -rmf -o $@ ${OBJS} ${CLIB}
         Access rm.${COMPONENT} RW/R
 
-rm.${COMPONENT}D: ${DOBJS} ${REMOTEDB} dirs header.h
-        ${LD} -rmf -o $@ ${DOBJS} ${CLIB} ${REMOTEDB}
+rm.${COMPONENT}D: ${DOBJS} ${DEBUG_LIBS} ${SOCKLIB} ${INETLIB} dirs header.h
+        ${LD} -rmf -o $@ ${DOBJS} ${CLIB} ${DEBUG_LIBS} ${SOCKLIB} ${INETLIB}
         Access rm.${COMPONENT}D RW/R
 
 ${EXP_C_H}.${COMPONENT}:	h.${COMPONENT}
