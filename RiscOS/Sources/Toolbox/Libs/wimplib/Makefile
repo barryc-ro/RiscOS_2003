@@ -2,12 +2,12 @@
 
 
 # Toolflags:
-CCflags = -c -depend !Depend -throwback -IC:
+CCflags = -c -depend !Depend -IC:
 FLEXflags = -c
-C++flags = -c -depend !Depend -throwback -IC:
-Pascalflags = -c -depend !Depend -throwback -IP:
+C++flags = -c -depend !Depend -IC:
+Pascalflags = -c -depend !Depend -IP:
 Linkflags = -c++ -o $@
-ObjAsmflags = -depend !Depend -ThrowBack -Stamp -quit -CloseExec
+ObjAsmflags = -depend !Depend -Stamp -quit -CloseExec
 CMHGflags = 
 LibFileflags = -c -o $@
 Squeezeflags = -o $@
