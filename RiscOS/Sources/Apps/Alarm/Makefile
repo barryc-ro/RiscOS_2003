@@ -15,7 +15,9 @@ COMPONENT  = Alarm
 APP        = !${COMPONENT}
 ROM_MODULE = rm.${COMPONENT}
 RDIR       = Resources
-LDIR       = ${RDIR}.${LOCALE}
+LDIR       = LocalRes:
+
+MSGS       = Resources.GenMessage
 
 #
 # Export Paths for Messages module
@@ -40,13 +42,13 @@ WFLAGS  = ~c~v
 
 FILES =\
  ${RDIR}.!Boot \
- ${LDIR}.!Help \
+ ${LDIR}!Help \
  ${RDIR}.!Run \
  ${RDIR}.!RunImage \
  ${RDIR}.Alarms \
  ${RDIR}.Code \
- ${LDIR}.Messages \
- ${LDIR}.Templates 
+ ${MSGS} \
+ ${LDIR}Templates 
 
 # Resources to be included in the ROM module (not in Messages module}
 RESFILES =\
@@ -66,13 +68,13 @@ install: ${FILES}
         ${MKDIR} ${INSTDIR}.${APP}
         |
         ${CP} ${RDIR}.!Boot      ${INSTDIR}.${APP}.!Boot     ${CPFLAGS}
-        ${CP} ${LDIR}.!Help      ${INSTDIR}.${APP}.!Help     ${CPFLAGS}
+        ${CP} ${LDIR}!Help       ${INSTDIR}.${APP}.!Help     ${CPFLAGS}
         ${CP} ${RDIR}.!Run       ${INSTDIR}.${APP}.!Run      ${CPFLAGS}
         ${CP} ${RDIR}.!RunImage  ${INSTDIR}.${APP}.!RunImage ${CPFLAGS}
         ${CP} ${RDIR}.Alarms     ${INSTDIR}.${APP}.Alarms    ${CPFLAGS}
         ${CP} ${RDIR}.Code       ${INSTDIR}.${APP}.Code      ${CPFLAGS}
-        ${CP} ${LDIR}.Messages   ${INSTDIR}.${APP}.Messages  ${CPFLAGS}
-        ${CP} ${LDIR}.Template3D ${INSTDIR}.${APP}.Templates ${CPFLAGS}
+        ${CP} ${MSGS}            ${INSTDIR}.${APP}.Messages  ${CPFLAGS}
+        ${CP} ${LDIR}Template3D  ${INSTDIR}.${APP}.Templates ${CPFLAGS}
         |
         Access ${INSTDIR}.${APP}.* lr/r
         Access ${INSTDIR}.${APP}.Alarms wr/r
@@ -83,26 +85,27 @@ install_rom: ${ROM_MODULE}
         ${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: Module installed {ROM}
 
-resources: ${LDIR}.!RunLink ${RDIR}.Code
+resources: ${RDIR}.!RunLink ${MSGS} ${RDIR}.Code
         ${MKDIR} ${RESAPP}
         ${MKDIR} ${RESDIR}
         |
         ${CP} ${RDIR}.!Boot      ${RESAPP}.!Boot     ${CPFLAGS}
-        ${CP} ${LDIR}.!Help      ${RESAPP}.!Help     ${CPFLAGS}
+        ${CP} ${LDIR}!Help       ${RESAPP}.!Help     ${CPFLAGS}
         ${CP} ${RDIR}.ROM.!Run   ${RESAPP}.!Run      ${CPFLAGS}
         |
-        ${CP} ${LDIR}.!RunLink   ${RESDIR}.!RunLink  ${CPFLAGS}
+        ${CP} ${RDIR}.!RunLink   ${RESDIR}.!RunLink  ${CPFLAGS}
         ${CP} ${RDIR}.Code       ${RESDIR}.Code      ${CPFLAGS}
-        ${CP} ${LDIR}.Messages   ${RESDIR}.Messages  ${CPFLAGS}
-        ${CP} ${LDIR}.Template3D ${RESDIR}.Templates ${CPFLAGS}
+        ${CP} ${MSGS}            ${RESDIR}.Messages  ${CPFLAGS}
+        ${CP} ${LDIR}Template3D  ${RESDIR}.Templates ${CPFLAGS}
         |
         @echo ${COMPONENT}: resource files copied to Messages module
 
 clean:
         ${RM} ${ROM_MODULE}
         ${RM} ${RDIR}.!RunImage
+        ${RM} ${RDIR}.!RunLink
         ${RM} ${RDIR}.Code
-        ${RM} s.Version
+        ${RM} ${MSGS}
         ${WIPE} crunched.* ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
@@ -116,11 +119,11 @@ ResVsn:
 # Static dependencies:
 #
 
-${ROM_MODULE}: s.Main s.Version ${RESFILES}
+${ROM_MODULE}: s.Main ${MSGS} ${RESFILES}
         ${AS} ${AFLAGS} -from s.Main -to $@
 
-s.Version: ${LDIR}.Messages
-        awk -f awk.Version ${LDIR}.Messages > $@
+${MSGS}: LocalRes:Messages VersionASM
+        awk -f awk.Version LocalRes:Messages > $@
 
 ${RDIR}.!RunImage: crunched.!RunImage
         ${SQUISH} ${SQFLAGS} -from crunched.!RunImage -to $@
@@ -128,7 +131,7 @@ ${RDIR}.!RunImage: crunched.!RunImage
 crunched.!RunImage: bas.!RunImage
         crunch.!RunImage; BASIC
 
-${LDIR}.!RunLink: bas.!RunLink
+${RDIR}.!RunLink: bas.!RunLink
         ${SQUISH} ${SQFLAGS} -from bas.!RunLink -to $@
 
 # Note! name of output file (Resources.Code) is in AlarmSrc
@@ -137,17 +140,3 @@ ${RDIR}.Code: bas.AlarmSrc
 
 #---------------------------------------------------------------------------
 # Dynamic dependencies:
-rm.Alarm: s.AppName
-rm.Alarm: Hdr:ListOpts
-rm.Alarm: Hdr:Macros
-rm.Alarm: Hdr:System
-rm.Alarm: Hdr:SWIs
-rm.Alarm: Hdr:CPU.Generic26
-rm.Alarm: Hdr:IO.GenericIO
-rm.Alarm: Hdr:RISCOS
-rm.Alarm: Hdr:ModHand
-rm.Alarm: Hdr:Services
-rm.Alarm: Hdr:Proc
-rm.Alarm: Hdr:ResourceFS
-rm.Alarm: s.Version
-rm.Alarm: s.ResFiles
