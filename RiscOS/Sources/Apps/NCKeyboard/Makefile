@@ -64,10 +64,10 @@ RSTUBS    = RISCOSLIB:o.rstubs
 ROMSTUBS  = RISCOSLIB:o.romstubs
 ROMCSTUBS = RISCOSLIB:o.romcstubs
 ABSSYM    = RISC_OSLib:o.AbsSym
-SOCKLIB   = TCPIPLibs:o.socklibzm
-INETLIB   = TCPIPLibs:o.inetlibzm
-UNIXLIB   = TCPIPLibs:o.unixlibzm
-LIBSD     = <Lib$Dir>.DebugLib.o.debuglibzm
+SOCKLIB   = TCPIPLibs:o.socklib
+INETLIB   = TCPIPLibs:o.inetlib
+UNIXLIB   = TCPIPLibs:o.unixlib
+DBGLIB    = <Lib$Dir>.DebugLib.o.debuglib
 
 # -----------------------------------------------------------------------------
 # Include files
@@ -75,10 +75,13 @@ LIBSD     = <Lib$Dir>.DebugLib.o.debuglibzm
 
 INCLUDES = -Itbox:,C:
 
+DIRS = o._dirs
+
 LIBS      = ${CLIB} tbox:o.toolboxlib tbox:o.eventlib tbox:o.wimplib
+LIBSD     = ${CLIB} tbox:o.toolboxlib tbox:o.eventlib tbox:o.wimplib ${DBGLIB} ${INETLIB} ${SOCKLIB}
 LIBSZ     = ${ROMCSTUBS} tbox:o.toolboxlib tbox:o.eventlibm tbox:o.wimplib
 LIBSZRAM  = ${RLIB} ${CLIB} tbox:o.toolboxlib tbox:o.eventlibm tbox:o.wimplib
-LIBSZRAMD = ${RLIB} ${CLIB} tbox:o.toolboxlib tbox:o.eventlibm tbox:o.wimplib ${LIBSD} ${UNIXLIB} ${INETLIB} ${SOCKLIB}
+LIBSZRAMD = ${RLIB} ${CLIB} tbox:o.toolboxlib tbox:o.eventlibm tbox:o.wimplib ${DBGLIB}zm ${INETLIB}zm ${SOCKLIB}zm
 
 DFLAGS   = -DDEBUGLIB
 
@@ -91,9 +94,10 @@ APPNAME   = !NCKeybd
 TARGET    = aof.NCKeyboard
 APP       = abs.!RunImage
 OBJS      = o.handlers o.main o.oskbutils o.oskbime o.windowops
+OBJSD     = od.handlers od.main od.oskbutils od.oskbime od.windowops
 OBJSZ     = oz.handlers oz.main oz.oskbutils oz.oskbime oz.windowops oz.ModuleWrap
 OBJSZRAM  = oz.handlers oz.main oz.oskbutils oz.oskbime oz.windowops oz.ModuleWra1
-OBJSZRAMD = od.handlers od.main od.oskbutils od.oskbime od.windowops oz.ModuleWra1
+OBJSZRAMD = ozd.handlers ozd.main ozd.oskbutils ozd.oskbime ozd.windowops oz.ModuleWra1
 EXPORTS   = 
 INSTALLDIR = <Install$Dir>.${APPNAME}
 WRAPPER   = RISC_OSLib:s.ModuleWrap
@@ -103,7 +107,7 @@ NORMAL_TARGET = ${COMPONENT}
 DEBUG_TARGET  = ${COMPONENT}d
 MODULE_TARGET = ${COMPONENT}zm
 
-.SUFFIXES: .oz .od
+.SUFFIXES: .oz .od .ozd
 
 # -----------------------------------------------------------------------------
 # Export Paths for Messages module
@@ -118,6 +122,7 @@ RESAPP = <resource$dir>.Apps.${APPNAME}
 .c.o:;      ${CC} ${CFLAGS} -o $@ $<
 .c.od:;     ${CC} ${CFLAGS} ${DFLAGS} -o $@ $<
 .c.oz:;     ${CC} ${CFLAGS} -zM -zps1 -o $@ $<
+.c.ozd:;    ${CC} ${CFLAGS} -zM -zps1 ${DFLAGS} -o $@ $<
 .cmhg.o:;   ${CMHG} -o $@ $<
 .s.o:;      ${AS} ${AFLAGS} $< $@
 
@@ -151,6 +156,10 @@ install_rom: ${TARGET}
 	@echo ${COMPONENT}: rom module installed
 	@echo
 
+debug: ${APP}d
+	@echo ${COMPONENT}: Debug application built
+	@echo
+
 ram: rm.${COMPONENT}
 	@echo ${COMPONENT}: soft-load module installed
 	@echo
@@ -162,6 +171,7 @@ ram_debug: rm.${COMPONENT}d
 clean:
 	${WIPE} o ${WFLAGS}
 	${WIPE} oz ${WFLAGS}
+	${WIPE} ozd ${WFLAGS}
 	${WIPE} od ${WFLAGS}
 	${WIPE} rm ${WFLAGS}
 	${WIPE} aof ${WFLAGS}
@@ -174,16 +184,17 @@ clean:
 	@echo
 	@echo ${COMPONENT}: cleaned
 
-o.dirs:
+${DIRS}:
 	@${MKDIR} o
 	@${MKDIR} od
 	@${MKDIR} oz
+	@${MKDIR} ozd
 	@${MKDIR} rm
 	@${MKDIR} aof
 	@${MKDIR} abs
 	@${MKDIR} linked
-	create o.dirs
-	stamp  o.dirs
+	create ${DIRS}
+	stamp  ${DIRS}
 
 resources:
 	${MKDIR} ${RESAPP}
@@ -236,19 +247,22 @@ install_: ${APP}
 # Static dependencies
 #
 
-${APP}: ${OBJS} ${LIBS} o.dirs
+${APP}: ${OBJS} ${LIBS} ${DIRS}
 	${LD} ${LDFLAGS} -o $@ ${OBJS} ${LIBS}
 
-rm.${COMPONENT}: ${OBJSZRAM} ${LIBSZRAM} o.dirs
+${APP}d: ${OBJSD} ${LIBSD} ${DIRS}
+	${LD} ${LDFLAGS} -o $@ ${OBJSD} ${LIBSD}
+
+rm.${COMPONENT}: ${OBJSZRAM} ${LIBSZRAM} ${DIRS}
 	${LD} ${LDFLAGS} -o $@ -module ${OBJSZRAM} ${LIBSZRAM}
 
-rm.${COMPONENT}d: ${OBJSZRAMD} ${LIBSZRAMD} o.dirs
+rm.${COMPONENT}d: ${OBJSZRAMD} ${LIBSZRAMD} ${DIRS}
 	${LD} ${LDFLAGS} -o $@ -module ${OBJSZRAMD} ${LIBSZRAMD}
 
-oz.ModuleWrap: s.ModuleWrap s.AppName o.dirs
+oz.ModuleWrap: s.ModuleWrap s.AppName ${DIRS}
 	${AS} ${AFLAGS} s.ModuleWrap $@
 
-oz.ModuleWra1: s.ModuleWrap s.AppName o.dirs
+oz.ModuleWra1: s.ModuleWrap s.AppName ${DIRS}
 	${AS} ${AFLAGS} -predefine "REMOVE_RAMLOAD_CHECK SETA 1" s.ModuleWrap $@
 
 s.ModuleWrap: ${WRAPPER}
@@ -258,7 +272,7 @@ s.ModuleWrap: ${WRAPPER}
 # ROM target (re-linked at ROM Image build time)
 #
 
-${TARGET}: ${OBJSZ} ${ROMCSTUBS} ${LIBSZ} o.dirs
+${TARGET}: ${OBJSZ} ${ROMCSTUBS} ${LIBSZ} ${DIRS}
 	${LD} -o $@ -aof ${OBJSZ} ${LIBSZ}
 
 # -----------------------------------------------------------------------------
