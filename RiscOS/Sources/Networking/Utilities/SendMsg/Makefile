@@ -10,8 +10,8 @@
 COMPONENT = SendMessage
 TARGET    = SendMsg
 OBJS      = ModHdr.o Module.o Message.o MsgRes.o
-LIBS      = TCPIPLibs:o.inetlibzm TCPIPLIBS:o.socklibzm TCPIPLIBS:o.unixlib
-DIRS      = local_dirs
+LIBS      = TCPIPLibs:o.inetlibzm TCPIPLIBS:o.socklib5zm TCPIPLIBS:o.unixlib
+DIRS      = o._dirs
 CFLAGS    = -ffah -Wp -zM -iC:,TCPIPLibs:
 
 include Makefiles:StdTools
@@ -30,9 +30,10 @@ MsgRes.o: LocalUserIFRes:Messages
 	TokenCheck LocalUserIFRes:Messages
 	resgen messages_file o.MsgRes LocalUserIFRes:Messages Resources.${COMPONENT}.Messages
 
-local_dirs:
+o._dirs:
         ${MKDIR} o
         ${MKDIR} h
+        ${TOUCH} o._dirs
 
 clean:
         ${RM} h.ModHdr

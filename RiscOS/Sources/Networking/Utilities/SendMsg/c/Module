@@ -59,8 +59,8 @@ _kernel_oserror *Module_Init(const char *cmd_tail, int podule_base, void *pw)
     if (err) (void) _swix(ResourceFS_DeregisterFiles, _IN(0), messages_file());
   #endif
 
-  dest_buf = malloc(dest_sz);
-  if (dest_buf == NULL) DO_TIDY_ERR( make_error(sm_ERROR_NO_MEM, 0) );
+  host_buf = malloc(dest_sz);
+  if (host_buf == NULL) DO_TIDY_ERR( make_error(sm_ERROR_NO_MEM, 0) );
 
 err_exit:
   return err;
@@ -78,7 +78,7 @@ _kernel_oserror *Module_Final(int fatal, int podule, void *pw)
   IGNORE (podule);
   IGNORE (pw);
 
-  if (dest_buf) free(dest_buf);
+  if (host_buf) free(host_buf);
 
   messages_file_close();
 
@@ -109,8 +109,10 @@ static _kernel_oserror *SendMessage(unsigned short protocol, char *host, char *p
   int                 sock     = -1;
   unsigned short      port_num = htons(atoi(port_str));
   struct servent     *service;
-  struct sockaddr_in  server;
+  struct sockaddr_in  server = { 0 };
+  struct linger       ling;
   struct hostent     *hp;
+  char                b;
 
   /* If the port is a name string, map it to the port number */
   if (port_num == 0)
@@ -131,7 +133,19 @@ static _kernel_oserror *SendMessage(unsigned short protocol, char *host, char *p
   else
     sock = socket(AF_INET, SOCK_STREAM, 0);
   if (sock < 0) DO_TIDY_ERR(&_inet_error);
+
+  /* We don't want multitasking in TaskWindows to suspend if the socket blocks */
   (void) socketioctl(sock, FIOSLEEPTW, &one);
+
+  /* If the close is called before the connection is completed, linger will not
+   * actually work hence the reason why we do the read.
+   */
+  ling.l_onoff  = 1;
+  ling.l_linger = 0;
+  if (setsockopt(sock, SOL_SOCKET, SO_LINGER, &ling, sizeof ling) < 0)
+  {
+    DO_TIDY_ERR(&_inet_error);
+  }
 
   /* Connect socket using specified host name */
   server.sin_family = AF_INET;
@@ -139,12 +153,31 @@ static _kernel_oserror *SendMessage(unsigned short protocol, char *host, char *p
   if (hp == 0) DO_MSG_ERR(sm_ERROR_BAD_HOST);
 
   /* Copy the host's IP address into our structure */
-  bcopy(hp->h_addr, &server.sin_addr, hp->h_length);
+  memcpy(&server.sin_addr, hp->h_addr, hp->h_length);
   server.sin_port = port_num;
+  server.sin_len  = sizeof server;
 
-  /* Connect, write the message, close the stream and exit */
-  if (connect(sock, (struct sockaddr*)&server, sizeof(server)) < 0) DO_TIDY_ERR(&_inet_error);
-  if (socketwrite(sock, message, strlen(message)) < 0)              DO_TIDY_ERR(&_inet_error);
+  /* Connect, write the message */
+  if (sendto(sock, message, strlen(message), MSG_EOF, (struct sockaddr *)&server, server.sin_len) < 0)
+  {
+    DO_TIDY_ERR(&_inet_error);
+  }
+
+  /* We don't want to read anything, but we want to sync and not close before the
+   * connection is established.
+   */
+  if(socketread(sock, &b, sizeof b) < 0)
+  {
+    DO_TIDY_ERR(&_inet_error);
+  }
+
+  /* Close the stream and exit */
+  if (socketclose(sock) < 0)
+  {
+    sock = -1;
+    DO_TIDY_ERR(&_inet_error);
+  }
+  sock = -1;
 
 err_exit:
   if (sock >= 0) (void) socketclose(sock);
@@ -188,7 +221,7 @@ static _kernel_oserror *SendMessage_Code(const char *arg_string)
   {
     unsigned int  udp;
     unsigned int  tcp;
-    char          *destination;
+    char          *host;
     unsigned int  quiet;
     char          *message;
     char          data[1024];
@@ -212,30 +245,30 @@ static _kernel_oserror *SendMessage_Code(const char *arg_string)
   if (safe_strlen(param.message) == 0) DO_MSG_ERR(sm_ERROR_NO_MSG);
 
   /* Set defaults if the parameter was not specified */
-  if (param.destination == NULL)
+  if (param.host == NULL)
   {
     str = getenv(SM_DESTVAR);
     if (str)
     {
-      strcpy(dest_buf, str);
-      param.destination = dest_buf;
+      strcpy(host_buf, str);
+      param.host = host_buf;
     }
   }
-  if (safe_strlen(param.destination) == 0) DO_MSG_ERR(sm_ERROR_NO_DEST);
+  if (safe_strlen(param.host) == 0) DO_MSG_ERR(sm_ERROR_NO_DEST);
 
   /* Override the default protocol (if the necessary switch was specified) */
   if (param.udp) protocol = UDP;
   if (param.tcp) protocol = TCP; /* TCP takes priority if both specified */
 
   /* Extract the port string from the hostname (or address) */
-  str = strchr(param.destination, ':');
+  str = strchr(param.host, ':');
   if (str) *str++ = '\0';
   if (safe_strlen(str) == 0) DO_MSG_ERR(sm_ERROR_NO_PORT);
 
 #ifdef DEBUG
-  printf("protocol    '%d' (udp=0, tcp=1)\n", protocol);
-  printf("destination '%s' port name '%s'\n", param.destination, str);
-  printf("message     '%s'\n", param.message);
+  printf("protocol '%d' (udp=0, tcp=1)\n", protocol);
+  printf("host     '%s' port name '%s'\n", param.host, str);
+  printf("message  '%s'\n", param.message);
   if (param.quiet)
     printf("quiet mode\n");
   else
@@ -243,7 +276,7 @@ static _kernel_oserror *SendMessage_Code(const char *arg_string)
 #endif
 
   /* Send the message */
-  TIDY_ERR( SendMessage(protocol, param.destination, str, param.message) );
+  TIDY_ERR( SendMessage(protocol, param.host, str, param.message) );
 
 err_exit:
   if (param.quiet != 0) err = NULL;
