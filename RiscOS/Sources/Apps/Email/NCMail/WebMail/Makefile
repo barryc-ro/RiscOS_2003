@@ -48,7 +48,7 @@ RESAPP          = <Resource$Dir>.Apps.$(APP)
 # Generic options
 #
 
-MKDIR           = cdir
+MKDIR           = do mkdir -p
 AS              = objasm
 CC              = $(MemCheckCC) cc
 C++             = $(MemCheckCC) c++
@@ -97,7 +97,7 @@ export_libs:
 	@echo $(COMPONENT): export complete (libs)
 	
 export_libsMC:
-	@amu -f MainMake $(MFLAGS) $(MAKECMDGOALS) MemCheckCC=MemCheck.CC TARGET=$(MEMCHECK_TARGET) EXT=oMC
+	@amu -f MainMake $(MFLAGS) $(MAKECMDGOALS) TARGET=$(MEMCHECK_TARGET) EXT=oMC
 	@echo $(COMPONENT): export complete (MemCheck libs)
 	
 export_libsHP:
@@ -126,7 +126,7 @@ installd:
         @echo $(COMPONENT): $(TARGET) (Debug) installed
 
 installMC:
-	@amu -f MainMake $(MFLAGS) $(MAKECMDGOALS) MemCheckCC=MemCheck.CC TARGET=$(MEMCHECK_TARGET) EXT=oMC
+	@amu -f MainMake $(MFLAGS) $(MAKECMDGOALS) TARGET=$(MEMCHECK_TARGET) EXT=oMC
         @echo
         @echo $(COMPONENT): $(TARGET) (MemCheck) installed
 
