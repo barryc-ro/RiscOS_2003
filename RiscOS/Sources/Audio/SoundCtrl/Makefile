@@ -36,8 +36,8 @@ RM      = remove
 TOKENISE = tokenise
 WIPE    = -wipe
 
-ASFLAGS  = -depend !Depend -Stamp -quit
-CCFLAGS  = -c -depend !Depend ${INCLUDES} ${DFLAGS} -zM -ffah
+ASFLAGS  = -depend !Depend ${THROWBACK} -Stamp -quit
+CCFLAGS  = -c -depend !Depend ${INCLUDES} ${THROWBACK} ${DFLAGS} -zM -fah
 CPFLAGS  = ~cfr~v
 WFLAGS   = ~c~v
 
@@ -64,16 +64,17 @@ INCLUDES = -ICommonLib:,C:
 #
 RESDIR = <resource$dir>.Resources.${TITLE}
 
-OBJS = Hdr.o\
+ROM_OBJS = Hdr.o\
  base.o\
  delay.o\
  dmatfr.o\
  globals.o\
  irq.o\
  main.o\
- messages.o\
  ss.o\
  swi.o
+
+RAM_OBJS = ${ROM_OBJS} messages.o
 
 #
 # Rule patterns
@@ -91,8 +92,6 @@ messages.o: Res.UK.Messages
 
 module.h: cmhg.Hdr
         cmhg -d @.h.module @.cmhg.Hdr -o @.o.Hdr 
-        
-
 #
 # Generic rules:
 #
@@ -125,15 +124,14 @@ local_dirs:
         ${MKDIR} aof
         ${MKDIR} linked
 
-${MODULE}: ${OBJS} ${CLIB} ${TGRLIB} local_dirs
-        ${LD} -rmf -o $@ ${OBJS} ${TGRLIB}
-
+${MODULE}: ${RAM_OBJS} ${CLIB} ${TGRLIB} local_dirs
+        ${LD} -rmf -o $@ ${RAM_OBJS} ${TGRLIB}
 
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS} local_dirs
-        ${LD} -o $@ -aof ${OBJS} ${TGRLIB}
+${TARGET}: ${ROM_OBJS} local_dirs
+        ${LD} -o $@ -aof ${ROM_OBJS} ${TGRLIB}
 
 #
 # Final link for the ROM Image (using given base address)
@@ -200,10 +198,19 @@ o.main:	h.globals
 o.main:	h.SoundCtrl
 o.main:	h.errors
 o.main:	h.ss
+o.main:	C:h.kernel
 o.main:	h.irq
-o.main:	h.delay
 o.ss:	c.ss
+o.ss:	CommonLib:h.defines
+o.ss:	C:h.kernel
+o.ss:	CommonLib:h.debug
+o.ss:	CommonLib:h.msgs
+o.ss:	C:h.kernel
+o.ss:	h.module
+o.ss:	h.errors
 o.ss:	h.ss
+o.ss:	C:h.kernel
+o.ss:	h.delay
 o.swi:	c.swi
 o.swi:	C:h.kernel
 o.swi:	C:h.swis
@@ -216,6 +223,7 @@ o.swi:	CommonLib:h.msgs
 o.swi:	C:h.kernel
 o.swi:	h.SoundCtrl
 o.swi:	h.SS
+o.swi:	C:h.kernel
 o.swi:	h.module
 o.swi:	h.errors
 o.swi:	h.globals
