@@ -50,8 +50,20 @@ void tidy_memory(void)
     bootblock_copy = NULL;
   }
 }
-#endif // SC_SWAPPING
+#endif /* SC_SWAPPING */
 
+
+#ifdef EMAIL_CLIENT
+/* The code below maintans a state of whether the email client was called offline or online, or null. */
+typedef enum
+{
+  email_state_none,
+  email_state_offline,
+  email_state_online
+} EMAIL_CLIENT_STATE;
+
+EMAIL_CLIENT_STATE uiemail_client_state = email_state_none;
+#endif /* EMAIL_CLIENT */
 
 
 char *trans_string(NCMA_TRANS trans)
@@ -116,6 +128,12 @@ char *trans_string(NCMA_TRANS trans)
      "Trans_NCMADialUI_Start",
      "Trans_WrongISPCard",
 #endif /* SC_SWAPPING */
+#ifdef EMAIL_CLIENT
+    "Trans_NCMAEnterEmailSelectUserOffline",
+    "Trans_NCMAEnterEmailSelectUserOnline",
+    "Trans_NCMAEmailSelectUserAck",
+    "Trans_NCMAEmailSelectUserNak",
+#endif /* EMAIL_CLIENT */
      "Trans_HangUp"
   };
 
@@ -155,6 +173,9 @@ char *state_string(NCMA_STATE state)
     "State_NCMALogout",
     "State_NCMAWrongISPCard",
 #endif /* SC_SWAPPING */
+#ifdef EMAIL_CLIENT
+    "State_NCMAEmailSelectUser",
+#endif /* EMAIL_CLIENT */
     "State_Cron"
   };
 
@@ -169,27 +190,27 @@ NCMA_STATE PreConnect_in_NCMA_Connect()
   DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: PreConnect_in_NCMA_Connect() called\n");
 
 #ifdef SC_SWAPPING
-/* Check that sc_bootblock returns that the cards are the same. */
-                   {
-                     int temp_return_value = fetch_sc_bootblock(1);
-		     if(temp_return_value == -1)
-		     {
-		         DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: couldn't read sc bootblock\n");
-                         return(State_NCMAConnect);
-		     }
-		     if(temp_return_value == -2)
-		     {
-		         DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: smartcard is not the same one as at start of session.\n");
-                         ncma_dbox_open(URL_PATH(correct.html));
-                         return(State_NCMAWrongISPCard);
-		     }
-                   }
+  /* Check that sc_bootblock returns that the cards are the same. */
+  {
+    int temp_return_value = fetch_sc_bootblock(1);
+    if(temp_return_value == -1)
+    {
+      DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: couldn't read sc bootblock\n");
+      return(State_NCMAConnect);
+    }
+    if(temp_return_value == -2)
+    {
+      DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: smartcard is not the same one as at start of session.\n");
+      ncma_dbox_open(URL_PATH(correct.html));
+      return(State_NCMAWrongISPCard);
+    }
+  }
 #else
-		     if(fetch_sc_bootblock(1)<0)
-		     {
-		         DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: couldn't read sc bootblock\n");
-                         return(State_NCMAConnect);
-		     }
+  if(fetch_sc_bootblock(1)<0)
+  {
+    DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: couldn't read sc bootblock\n");
+    return(State_NCMAConnect);
+  }
 #endif /* SC_SWAPPING */
 
   if(virgin_smartcard()) {
@@ -934,12 +955,46 @@ NCMA_STATE machine(NCMA_TRANS trans)
 	     	  ncma_dbox_open(URL_PATH(newpin.html));
 	     	  return(State_NCMANewPIN);
 
-             case Trans_PreConnect: /* byild tag cache without connecting, to allow ISPCapture to display current sc values */
+             case Trans_PreConnect: /* build tag cache without connecting, to allow ISPCapture to display current sc values */
                   return(PreConnect_in_NCMA_Connect());
-
+#ifndef EMAIL_CLIENT
 	     case Trans_URLConnect:
                   return (URLConnect_in_NCMA_Connect());
+#else
+             /* Eventually this transition will do nothing as it will be
+                 replaced by the online and offline transitions below if the
+                 email client is enabled. For the moment is it left in as the
+                 email client is not calling the correct transitions. */
+	     case Trans_URLConnect:
+	     {
+/*
+	          NCMA_STATE new_state;
+	          new_state = URLConnect_in_NCMA_Connect();
+                  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: URLConnect_in_NCMA_Connect() returned state %s\n", state_string(new_state));
+*/
+                  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Calling the email client user selection.\n");
+                  uiemail_client_state = email_state_online;
+      		  ncma_url_open("ncmail:/?page=UserSel&button=Start&mode=connect");
+                  return (State_NCMAEmailSelectUser);
+	     }
 
+             case Trans_NCMAEnterEmailSelectUserOffline:
+             {
+                  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Calling the email client user selection (connect mode).\n");
+                  uiemail_client_state = email_state_offline;
+      		  ncma_url_open("ncmail:/?page=UserSel&button=Start&mode=connect");
+                  return (State_NCMAEmailSelectUser);
+	     }
+
+             case Trans_NCMAEnterEmailSelectUserOnline:
+             {
+                  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Calling the email client user selection (email mode).\n");
+                  uiemail_client_state = email_state_online;
+      		  ncma_url_open("ncmail:/?page=UserSel&button=Start&mode=email");
+                  return (State_NCMAEmailSelectUser);
+	     }
+
+#endif /* EMAIL_CLIENT */
 
 #ifdef SC_SWAPPING
              /* The transition below copes with the explicit disconnect
@@ -1371,6 +1426,124 @@ NCMA_STATE machine(NCMA_TRANS trans)
 
 
 
+
+#ifdef EMAIL_CLIENT
+/*********************************************************************************
+
+    State_NCMAEmailSelectUser
+
+ *********************************************************************************/
+    case State_NCMAEmailSelectUser:
+
+    	 switch(trans)
+         {
+           case Trans_PreConnect:
+             /* The email client has requested the smartcard tag cache to be built. */
+             DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Trans_PreConnect recieved\n");
+             if(fetch_sc_bootblock(1)<0)
+             {
+               DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: couldn't read sc bootblock\n");
+             }
+             if(build_ram_cache()<0)
+             {
+               DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: preconnect, couldn't build RAM cache\n");
+             }
+             return (State_NCMAEmailSelectUser);
+             break;
+
+           case Trans_NCMAEmailSelectUserAck:
+             DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Trans_NCMAEmailSelectUserAck recieved\n");
+             if (uiemail_client_state == email_state_offline)
+             {
+               /* The code below fetches the URL out of NCMA's cache and
+                   appends it into NCMail's starting string. It assumes that
+                   the cache has already been built and that the URL exists;
+                   these are valid assumptions as the email client has to
+                   have built the cache before getting this far. */
+               char* url_buff_ptr = NULL;        /* This stores the URL string to be returned (NULL if none found) */
+               char* ncmail_entry_string = NULL; /* This stores the whole NCMail entry string */
+               int url_size = 0;                 /* The size of the URL string in the cache. */
+               DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Trans_NCMAEmailSelectUserAck (email client state is offline)\n");
+               DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Get the size of the home URL using my own cache_enquiry() routine.\n");
+               url_size = cache_enquiry("URL_INIT", NULL, 0);
+               if (url_size < 0)
+               {
+                 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Error in cache_enquiry() #1\n");
+               }
+               /* Allocate the memory for the buffer */
+               url_buff_ptr = malloc(url_size+1);
+               if (!url_buff_ptr)
+               {
+                 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Error : Could not Allocate memory for URL string.\n");
+               }
+               /* Get the url string */
+               url_size = cache_enquiry("URL_INIT", url_buff_ptr, url_size+1);
+               if (url_size < 0)
+               {
+                 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Error in cache_enquiry() #2\n");
+               }
+               DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: URL in cache is : %s\n", url_buff_ptr);
+               /* Concatentate home URL onto the string below from cache (exiton). */
+               ncmail_entry_string = malloc(150+strlen(url_buff_ptr)); /* 150 is a guesstimate */
+               if (!ncmail_entry_string)
+               {
+                  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Error : Could not Allocate memory for NCMail entry string.\n");
+               }
+               strcpy (ncmail_entry_string, "ncmail:/?page=Enter&button=Enter&exiton=");
+               strcat (ncmail_entry_string, url_buff_ptr);
+               strcat (ncmail_entry_string, "&exitoff=ncint:current");
+               DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Open URL with string of %s\n", ncmail_entry_string);
+               ncma_url_open(ncmail_entry_string);
+//     	       ncma_url_open("ncmail:/?page=Enter&button=Enter&exiton=http://www.acorn.com/&exitoff=ncint:current");
+               free (url_buff_ptr);
+               free (ncmail_entry_string);
+             }
+
+             if (uiemail_client_state == email_state_online)
+             {
+               DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Trans_NCMAEmailSelectUserAck (email client state is online)\n");
+               DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Dialling (by calling URLConnect_in_NCMA_Connect()).\n");
+               URLConnect_in_NCMA_Connect();
+             }
+
+             if (uiemail_client_state == email_state_none)
+             {
+               DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Blarghh!!!! Unrecognised email client state!\n");
+             }
+             return (State_NCMAEmailSelectUser);
+             break;
+
+           case Trans_NCMAEmailSelectUserNak:
+             DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Trans_NCMAEmailSelectUserNak recieved\n");
+             if (uiemail_client_state == email_state_offline)
+             {
+               DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Trans_NCMAEmailSelectUserAck (email client state is offline)\n");
+               DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Moving to State_NCMAConnect.\n");
+               uiemail_client_state = email_state_none;
+	       ncma_url_open(URL_PATH(connect.html));
+               return(State_NCMAConnect);
+             }
+             if (uiemail_client_state == email_state_online)
+             {
+               DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Trans_NCMAEmailSelectUserAck (email client state is online)\n");
+               DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Moving to State_NCMAConnect.\n");
+               uiemail_client_state = email_state_none;
+	       ncma_url_open(URL_PATH(connect.html));
+               return(State_NCMAConnect);
+             }
+             if (uiemail_client_state == email_state_none)
+             {
+               DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Blarghh!!!! Unrecognised email client state!\n");
+               DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Moving to State_NCMAConnect.\n");
+               uiemail_client_state = email_state_none;
+	       ncma_url_open(URL_PATH(connect.html));
+               return(State_NCMAConnect);
+             }
+             return (State_NCMAEmailSelectUser);
+             break;
+    	 }
+    	 break;
+#endif /* EMAIL_CLIENT */
 
 #ifdef SC_SWAPPING
 /*********************************************************************************
