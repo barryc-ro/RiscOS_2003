@@ -28,20 +28,12 @@ RESDIR          = ${RESDIR}.${COMPONENT}
 RESAPP          = <Resource$Dir>.Apps.${APP}
 
 # -----------------------------------------------------------------------------
-# MemCheck bits
-#
-
-MEMCHECK_CC = 
-#MEMCHECK_CC = MemCheck.CC
-MEMCHECK_FLAGS = 
-
-# -----------------------------------------------------------------------------
 # Generic options
 #
 
 MKDIR		= cdir
 AS		= objasm
-CC		= ${MEMCHECK_CC} cc
+CC		= ${MemCheckCC} cc
 CMHG		= cmhg
 CP		= copy
 LD		= link
@@ -64,9 +56,7 @@ WFLAGS		= ~cf~vr
 # These are for the standard Desktop build (plus debug)
 
 DFLAGS		= 
-#DFLAGS 		= -DMEMCHECK
 DDFLAGS		= -fn -DDEBUGLIB -DTEST
-#DDFLAGS		= -DMEMCHECK -fn -DDEBUGLIB -DTEST
 DZFLAGS		= 
 DDZFLAGS	= ${DZFLAGS} -fn
 
@@ -86,7 +76,6 @@ WRAPPER		= RISC_OSLib:s.ModuleWrap
 EVENTLIB	= tbox:o.eventlib
 TOOLBOXLIB	= tbox:o.toolboxlib
 WIMPLIB		= tbox:o.wimplib
-TEXTGADGETLIB	= tbox:o.textgadget
 
 UILIB		= ${LIBDIR}.Netfax.UILib.o.UILib
 MSGLIB		= ${LIBDIR}.MsgLib.o.MsgLib
@@ -94,13 +83,12 @@ FLASHLIB	= ${LIBDIR}.Netfax.FlashLib.o.FlashLib
 FLASHLIB_T	= ${LIBDIR}.Netfax.FlashLib.o.FlashLib_t
 DEBUGLIB	= ${LIBDIR}.DebugLib.o.debuglib
 NUMCONVERTLIB   = ${LIBDIR}.NumConvert.o.numconv
-MEMCHECK_LIB	= MemCheck:o.MC
+
 
 LIBSM = \
  ${FLASHLIB} \
  ${UILIB}zm \
  ${MSGLIB}zm \
- ${TEXTGADGETLIB} \
  ${WIMPLIB} \
  ${TOOLBOXLIB} \
  ${EVENTLIB}m \
@@ -111,17 +99,11 @@ LIBS = \
  ${FLASHLIB} \
  ${UILIB} \
  ${MSGLIB} \
- ${TEXTGADGETLIB} \
  ${WIMPLIB} \
  ${TOOLBOXLIB} \
  ${EVENTLIB} \
  ${CLIB} \
  ${NUMCONVERTLIB} \
-# ${MEMCHECK_LIB} \
-# ${DEBUGLIB} \
-# TCPIPLibs:o.socklib5 \
-# TCPIPLibs:o.unixlib \
-# TCPIPLibs:o.inetlib \
 
 
 
@@ -136,10 +118,8 @@ LIBSD = \
  ${CLIB} \
  ${DEBUGLIB} \
  TCPIPLibs:o.socklib5 \
- TCPIPLibs:o.unixlib \
  TCPIPLibs:o.inetlib \
  ${NUMCONVERTLIB} \
-# ${MEMCHECK_LIB} \
 
 
 # -----------------------------------------------------------------------------
@@ -232,22 +212,22 @@ OBJSD = \
 .c.o:;		@echo
 		@echo Compiling $<
 		@echo ${DFLAGS}
-		@${CC} ${CFLAGS} ${DFLAGS}        -c -o $@ $<
+		@${CC} ${CFLAGS} ${DFLAGS} ${EXTRAFLAGS} -c -o $@ $<
 
 .c.oz:;		@echo
 		@echo Compiling $<
 		@echo ${DZFLAGS}
-		@${CC} ${CFLAGS} ${DZFLAGS}       -c -zM -zps1 -DROM -o $@ $<
+		@${CC} ${CFLAGS} ${DZFLAGS} ${EXTRAFLAGS} -c -zM -zps1 -DROM -o $@ $<
 
 .c.od:;		@echo
 		@echo Compiling $<
 		@echo ${DDFLAGS}
-		@${CC} ${CFLAGS} ${DDFLAGS}       -c -o $@ $<
+		@${CC} ${CFLAGS} ${DDFLAGS} ${EXTRAFLAGS} -c -o $@ $<
 
 .c.odz:;	@echo
 		@echo Compiling $<
 		@echo ${DDZFLAGS}
-		@${CC} ${CFLAGS} ${DDZFLAGS}      -c -zM -zps1 -DROM -o $@ $<
+		@${CC} ${CFLAGS} ${DDZFLAGS} ${EXTRAFLAGS} -c -zM -zps1 -DROM -o $@ $<
 
 .s.o:;		@echo
 		@echo Assembling $<
@@ -380,26 +360,26 @@ s.AppName: ${LDIR}.Messages
 # Static dependencies
 #
 
-abs.!RI: ${OBJS} ${LIBS} o.dirs
+abs.!RI: ${OBJS} ${EXTRALIBS} ${LIBS} o.dirs
 	@echo
-	${LD} -s syms.!RI -o $@ ${OBJS} ${LIBS}
+	${LD} -s syms.!RI -o $@ ${OBJS} ${LIBS} ${EXTRALIBS}
 	${SQUEEZE} ${SQFLAGS} $@
 
-abs.!RI_D: ${OBJSD} ${LIBSD} o.dirs
+abs.!RI_D: ${OBJSD} ${EXTRALIBS} ${LIBSD} o.dirs
 	@echo
-	${LD} -s syms.!RI_D -o $@ ${OBJSD} ${LIBSD}
+	${LD} -s syms.!RI_D -o $@ ${OBJSD} ${LIBSD} ${EXTRALIBS}
 
-${MODULE}: oz.ModuleWrap ${OBJSZ} ${LIBSM} ${CLIB} o.dirs
+${MODULE}: oz.ModuleWrap ${OBJSZ} ${LIBSM} ${EXTRALIBS} ${CLIB} o.dirs
 	@echo
-	${LD} -s syms.RAMMod -o $@ -module oz.ModuleWrap ${OBJSZ} ${LIBSM} ${CLIB}
+	${LD} -s syms.RAMMod -o $@ -module oz.ModuleWrap ${OBJSZ} ${LIBSM} ${EXTRALIBS} ${CLIB}
 
-${ROM_MODULE}: oz.ModuleWrap ${OBJSZ} ${ROMCSTUBS} ${LIBSM} o.dirs
+${ROM_MODULE}: oz.ModuleWrap ${OBJSZ} ${ROMCSTUBS} ${LIBSM} ${EXTRALIBS} o.dirs
 	@echo
-	${LD} -s syms.ROMMod -o $@ -aof oz.ModuleWrap ${OBJSZ} ${LIBSM} ${ROMCSTUBS}
+	${LD} -s syms.ROMMod -o $@ -aof oz.ModuleWrap ${OBJSZ} ${LIBSM} ${EXTRALIBS} ${ROMCSTUBS}
 
-rm.!DayAddD: odz.ModuleWrap ${OBJSDZ} ${LIBSM} o.dirs
+rm.!DayAddD: odz.ModuleWrap ${OBJSDZ} ${LIBSM} ${EXTRALIBS} o.dirs
 	@echo
-	${LD} -s syms.ROMDMod -o $@ -module oz.ModuleWrap ${OBJSDZ} ${LIBSM}
+	${LD} -s syms.ROMDMod -o $@ -module oz.ModuleWrap ${OBJSDZ} ${LIBSM} ${EXTRALIBS}
 
 
 # -----------------------------------------------------------------------------
