@@ -10,8 +10,8 @@
 
 all: scripts modgen modsqz mtftpd 
 	(cd ${TARDIR}; tar cf dist-server.tar blconf blbuild blswinst S94mtftpd mtftpd.conf modgen modsqz mtftpd)
-	gzip ${TARDIR}/dist-server.tar
-	cp ${TARDIR}/dist-server.tar.gz dist-server-tar.gz
+	compress ${TARDIR}/dist-server.tar
+	cp ${TARDIR}/dist-server.tar.Z dist-server-tar.Z
 	@echo All done
 
 scripts:
