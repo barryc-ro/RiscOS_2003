@@ -31,8 +31,10 @@
 #include "Frames.h"
 #include "History.h"
 #include "LineOne.h"
+#include "Multiuser.h"
 #include "Protocols.h"
 #include "Save.h"
+#include "Windows.h"
 #include "URLutils.h"
 
 #include "JavaScript.h"
@@ -47,6 +49,8 @@
   #define BRANCH_CALLBACK_GC_MASK  0
   #define BRANCH_CALLBACK_LED_MASK 63
 
+  #undef  ATTEMPT_JS_POLL
+
   /* Static function prototypes */
 
   static JSBool PR_CALLBACK   javascript_watchdog           (JSContext * cx, JSScript * script);
@@ -57,13 +61,20 @@
   static unsigned int        watchdog_counter;
   static unsigned int        watchdog_start;
   static unsigned int        watchdog_leds;
+
   static browser_data      * script_browser = NULL;
   static javascript_source   script_source  = JavaScript_Source_Unknown;
   static char              * script_write_p = NULL;
   static int                 script_write_l = 0;
+
   static int                 source_set     = 0;
   static int                 doc_write_used = 0;
   static int                 proceed        = 0;
+
+  static browser_data      * pending_b      = NULL;
+  static char              * pending_url    = NULL;
+  static int                 pending_record = 0;
+  static int                 pending_stop   = 0;
 
 #endif
 
@@ -180,7 +191,9 @@ _kernel_oserror * javascript_href_onclick(browser_data * b, HStream * t, int * i
 
 _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int record, char * url, char * target)
 {
-  browser_data * targetted = b;
+  _kernel_oserror * e;
+  browser_data    * targetted = b;
+  int               free_it   = 0;
 
   #ifdef TRACE
     if (tl & (1u<<24)) Printf("javascript_window_open: Called for %p with '%s' and target '%s'\n",b,url,target);
@@ -241,14 +254,18 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
     if (!r_url) r_url = browser_current_url(ancestor);
     if (!r_url) r_url = browser_fetch_url(ancestor);
 
-    url = HtmlRelativiseURL(r_url, url, targetted->stream);
+    url = urlutils_relativise_url(r_url, url);
 
     #ifdef TRACE
       if (tl & (1u<<24)) Printf("javascript_window_open: Relativised URL is '%s'\n",url);
     #endif
   }
 
-  return fetchpage_new(targetted, url, record, 0);
+  e = fetchpage_new(targetted, url, record, 0);
+
+  if (free_it) free(url);
+
+  return e;
 }
 
 #ifdef JAVASCRIPT
@@ -291,8 +308,11 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
 
   static JSBool PR_CALLBACK javascript_watchdog(JSContext * cx, JSScript * script)
   {
-    int now;
-    int esc;
+    unsigned int now;
+
+    #ifndef ATTEMPT_JS_POLL
+      int esc;
+    #endif
 
     if (
          _swix(OS_ReadMonotonicTime,
@@ -302,18 +322,94 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
        )
        return JS_FALSE;
 
-    /* Deal with hourglass LEDs */
+    #ifndef ATTEMPT_JS_POLL
 
-    if (!((now - watchdog_start) & BRANCH_CALLBACK_LED_MASK))
-    {
-      _swix(Hourglass_LEDs,
-            _INR(0,1),
+      /* Deal with hourglass LEDs */
 
-            3,
-            watchdog_leds);
+      if (!((now - watchdog_start) & BRANCH_CALLBACK_LED_MASK))
+      {
+        _swix(Hourglass_LEDs,
+              _INR(0,1),
 
-      watchdog_leds ^= 3;
-    }
+              3,
+              watchdog_leds);
+
+        watchdog_leds ^= 3;
+      }
+
+    #else
+
+      /* Polling. This doesn't really work properly - it is definitely */
+      /* not suitable for release builds - but if there's a very heavy */
+      /* JS processing task to do, rebuild with this switched on and   */
+      /* you can at least let things progress in the background.       */
+
+      #define BRANCH_CALLBACK_POLL_MASK 7
+
+      if (!((now - watchdog_start) & BRANCH_CALLBACK_POLL_MASK))
+      {
+        WimpPollBlock block;
+        IdBlock       id;
+        int           reason;
+
+        if (
+             !wimp_poll(0x1003830,
+                        &block,
+                        NULL,
+                        &reason)
+           )
+        {
+          if (reason != Wimp_ENull)
+          {
+            id.self_id            = last_browser->self_id;
+            id.self_component     = NULL_ComponentId;
+            id.parent_id          = NULL_ObjectId;
+            id.parent_component   = NULL_ComponentId;
+            id.ancestor_id        = NULL_ObjectId;
+            id.ancestor_component = NULL_ComponentId;
+          }
+
+          switch (reason)
+          {
+            case Wimp_ERedrawWindow:
+            {
+              windows_redraw_browser(Wimp_ERedrawWindow,
+                                     &block,
+                                     &id,
+                                     last_browser);
+            }
+            break;
+
+            case Wimp_EOpenWindow:
+            {
+              windows_open_browser(Wimp_EOpenWindow,
+                                   &block,
+                                   &id,
+                                   last_browser);
+            }
+            break;
+
+            case Wimp_EKeyPressed:
+            {
+              wimp_process_key(block.key_pressed.key_code);
+            }
+            break;
+
+            case Wimp_EUserMessage:
+            case Wimp_EUserMessageRecorded:
+            {
+              if (block.user_message.hdr.action_code == Wimp_MQuit)
+              {
+                multiuser_logout();
+                exit(EXIT_SUCCESS);
+              }
+            }
+            break;
+          }
+        }
+      }
+
+    #endif
 
     /* Handle periodic garbage collection */
 
@@ -322,88 +418,92 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
       JS_MaybeGC(cx);
     }
 
-    /* Check Escape */
+    #ifndef ATTEMPT_JS_POLL
 
-    if (!_swix(OS_Byte,
-               _INR(0, 1) | _OUT(1),
+      /* Check Escape */
 
-               121, /* Key scan reason code */
-               112, /* Key code for Escape  */
+      if (!_swix(OS_Byte,
+                 _INR(0, 1) | _OUT(1),
 
-               &esc))
-    {
-      if (esc != 255)
+                 121, /* Key scan reason code */
+                 112, /* Key code for Escape  */
+
+                 &esc))
       {
-        erb.errnum = Utils_Error_Custom_Message;
+        if (esc != 255)
+        {
+          erb.errnum = Utils_Error_Custom_Message;
 
-        StrNCpy0(erb.errmess,
-                 lookup_token("JSEsc:Escape (script aborted)",
-                              0,
-                              0));
+          StrNCpy0(erb.errmess,
+                   lookup_token("JSEsc:Escape (script aborted)",
+                                0,
+                                0));
 
-        show_error_cont(&erb);
+          show_error_cont(&erb);
 
-        return JS_FALSE;
+          return JS_FALSE;
+        }
       }
-    }
 
-    if (choices.js_watchdog)
-    {
-      /* Watchdog - if the script has taken more than a certain */
-      /* length of time, ask if we should stop it.              */
-
-      if (now - watchdog_start > choices.js_timeout)
+      if (choices.js_watchdog)
       {
-        /* Build the query message */
+        /* Watchdog - if the script has taken more than a certain */
+        /* length of time, ask if we should stop it.              */
 
-        erb.errnum = Utils_Error_Custom_Message;
+        if (now - watchdog_start > choices.js_timeout)
+        {
+          /* Build the query message */
 
-        StrNCpy0(erb.errmess,
-                 lookup_token("JSLock:Lengthy JavaScript script is still running. Continue?",
-                              0,
-                              0));
+          erb.errnum = Utils_Error_Custom_Message;
 
-        /* Turn off the hourglass */
+          StrNCpy0(erb.errmess,
+                   lookup_token("JSLock:Lengthy JavaScript script is still running. Continue?",
+                                0,
+                                0));
 
-        _swix(Hourglass_Off, 0);
+          /* Turn off the hourglass */
 
-        /* If the user didn't select 'Continue', */
-        /* stop the script.                      */
+          _swix(Hourglass_Off, 0);
 
-        if (
-             show_error_ask(&erb,
-                            "JSErr1:Continue,Stop")
-             != 3
-           )
-           return JS_FALSE;
+          /* If the user didn't select 'Continue', */
+          /* stop the script.                      */
 
-        /* Turn the hourglass back on, since we're continuing */
-        /* with the script.                                   */
+          if (
+               show_error_ask(&erb,
+                              "JSErr1:Continue,Stop")
+               != 3
+             )
+             return JS_FALSE;
 
-        _swix(Hourglass_Start,
-              _IN(0),
+          /* Turn the hourglass back on, since we're continuing */
+          /* with the script.                                   */
 
-              1);
+          _swix(Hourglass_Start,
+                _IN(0),
 
-        _swix(Hourglass_LEDs,
-              _INR(0,1),
+                1);
 
-              3,
-              watchdog_leds);
+          _swix(Hourglass_LEDs,
+                _INR(0,1),
 
-        /* Don't forget to reset the counter :-) */
+                3,
+                watchdog_leds);
 
-        watchdog_counter = 0;
+          /* Don't forget to reset the counter :-) */
 
-        if (
-             _swix(OS_ReadMonotonicTime,
-                   _OUT(0),
+          watchdog_counter = 0;
 
-                   &watchdog_start)
-           )
-           watchdog_start = now;
+          if (
+               _swix(OS_ReadMonotonicTime,
+                     _OUT(0),
+
+                     &watchdog_start)
+             )
+             watchdog_start = now;
+        }
       }
-    }
+
+    #endif
 
     /* Increment the counter */
 
@@ -591,12 +691,27 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
     mask = (mask | Wimp_Poll_SaveFPRegs);
     RetError(event_set_mask(mask));
 
-    /* Initialise the JavaScript system */
+    #ifdef TRACE
+      if (tl & (1u<<24)) Printf("javascript_configure_environment: Successful\n");
+    #endif
 
+    return NULL;
+  }
+
+  /*************************************************/
+  /* javascript_startup()                          */
+  /*                                               */
+  /* Having made sure the environment is set up    */
+  /* with javascript_configure_environment, call   */
+  /* this function to bring up the interpreter.    */
+  /*************************************************/
+
+  _kernel_oserror * javascript_startup(void)
+  {
     jsr = JS_Init(JavaScript_HeapBeforeAutoGC /* See JavaScript.h */);
 
     #ifdef TRACE
-      if (tl & (1u<<24)) Printf("javascript_configure_environment: Obtained run-time structure %p\n", jsr);
+      if (tl & (1u<<24)) Printf("javascript_startup: Obtained run-time structure %p\n", jsr);
     #endif
 
     if (!jsr)
@@ -611,8 +726,57 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
       return &erb;
     }
 
+    return NULL;
+  }
+
+  /*************************************************/
+  /* javascript_shutdown()                         */
+  /*                                               */
+  /* Shut down the JavaScript engine. Will throw   */
+  /* an error if it believes the engine is still   */
+  /* in use...                                     */
+  /*************************************************/
+
+  _kernel_oserror * javascript_shutdown(void)
+  {
     #ifdef TRACE
-      if (tl & (1u<<24)) Printf("javascript_configure_environment: Successful\n");
+      if (tl & (1u<<24)) Printf("javascript_shutdown: Called\n");
+    #endif
+
+    if (!jsr)
+    {
+      #ifdef TRACE
+
+        erb.errnum = Utils_Error_Custom_Fatal;
+
+        StrNCpy0(erb.errmess,
+                 "JavaScript engine is not active in javascript_shutdown()");
+
+        show_error_ret(&erb);
+
+      #endif
+
+      return NULL;
+    }
+
+    if (last_browser)
+    {
+      erb.errnum = Utils_Error_Custom_Fatal;
+
+      StrNCpy0(erb.errmess,
+               lookup_token("JSActv:JavaScript interpreter still in use",
+                            0,
+                            0));
+
+      return &erb;
+    }
+
+    JS_Finish(jsr);
+
+    jsr = NULL;
+
+    #ifdef TRACE
+      if (tl & (1u<<24)) Printf("javascript_shutdown: Successful\n");
     #endif
 
     return NULL;
@@ -625,6 +789,9 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
   /* interpreter context and initialise the        */
   /* various JS client-side objects within it; or  */
   /* inherit the context from the given parent.    */
+  /*                                               */
+  /* If a browser window already has a context,    */
+  /* the function just exits.                      */
   /*                                               */
   /* Sets up also the branch callback (watchdog)   */
   /* and error reporting functions.                */
@@ -642,26 +809,10 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
     #ifdef TRACE
       if (tl & (1u<<24)) Printf("javascript_gain_context: Called for browser %p, parent %p\n",b,parent);
     #endif
-//Printf("JGC called for %p (Ancestor? %s)\n",b,!b->ancestor ? "yes" : "no"); // (Yes, '!b->ancestor' is correct)
 
     /* Does the browser already have a context? */
 
-    if (b->bcx)
-    {
-      #ifdef TRACE
-
-        erb.errnum = Utils_Error_Custom_Normal;
-
-        sprintf(erb.errmess,
-                "Browser 0x%08x already has a JSI context in javascript_gain_context()",
-                (int) b);
-
-        show_error_ret(&erb);
-
-      #endif
-
-      return NULL;
-    }
+    if (b->bcx) return NULL;
 
     /* If we have a parent, inherit the context */
 
@@ -738,7 +889,8 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
   /*                                               */
   /* Get rid of a JavaScript interpreter context   */
   /* for a given browser. If the context was       */
-  /* inherited, it is NOT destroyed.               */
+  /* inherited, it is NOT destroyed, though any    */
+  /* objects local to it are still thrown away.    */
   /*                                               */
   /* Parameters: Pointer to a browser_Data struct  */
   /*             with a valid JSI context.         */
@@ -761,20 +913,21 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
 
     javascript_destroy_window(b);
 
+    JS_GC(b->bcx);
+
     if (is_known_browser(b->bcx_inherited))
     {
       #ifdef TRACE
-        if (tl & (1u<<24)) Printf("javascript_lose_context: Browser %p has an inherited context, which was not destroyed (exitting)\n", b);
+        if (tl & (1u<<24)) Printf("javascript_lose_context: Browser %p has an inherited context; only destroying objects\n", b);
       #endif
-
-      return NULL;
     }
+    else
+    {
+      JS_DestroyContext(b->bcx);
 
-    JS_GC(b->bcx);
-    JS_DestroyContext(b->bcx);
-
-    b->bcx           = NULL;
-    b->bcx_inherited = NULL;
+      b->bcx           = NULL;
+      b->bcx_inherited = NULL;
+    }
 
     #ifdef TRACE
       if (tl & (1u<<24)) Printf("javascript_lose_context: Successful\n");
@@ -853,7 +1006,7 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
         erb.errnum = Utils_Error_Custom_Normal;
 
         sprintf(erb.errmess,
-                "Browser %p does not have an JSI context",
+                "Browser %p does not have a JSI context",
                 b);
 
         show_error_ret(&erb);
@@ -1055,14 +1208,18 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
 
                      &watchdog_start));
 
-      _swix(Hourglass_On, 0);
+      #ifndef ATTEMPT_JS_POLL
+        _swix(Hourglass_On, 0);
+      #endif
 
       ok = JS_ExecuteScript(b->bcx,
                             b->window_object,
                             jss,
                             &result);
 
-      _swix(Hourglass_Off, 0);
+      #ifndef ATTEMPT_JS_POLL
+        _swix(Hourglass_Off, 0);
+      #endif
 
       /* Throw away the bytecode */
 
@@ -1187,6 +1344,22 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
       if (tl & (1u<<24)) Printf("javascript_script_callback: Called\n");
     #endif
 
+    /* Is this JavaScript? */
+
+    if (
+         script_element->name &&
+         utils_strncasecmp(script_element->name,
+                           JavaScript_Language_Name,
+                           sizeof(JavaScript_Language_Name) - 1)
+       )
+    {
+      #ifdef TRACE
+        if (tl & (1u<<24)) Printf("javascript_script_callback: Unknown language '%s'\n", script_element->name);
+      #endif
+
+      return NULL;
+    }
+
     /* Get the script details */
 
     si = script_element->text;
@@ -1284,14 +1457,18 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
 
            &watchdog_start);
 
-      _swix(Hourglass_On, 0);
+      #ifndef ATTEMPT_JS_POLL
+        _swix(Hourglass_On, 0);
+      #endif
 
       ok = JS_ExecuteScript(b->bcx,
                             b->window_object,
                             jss,
                             &result);
 
-      _swix(Hourglass_Off, 0);
+      #ifndef ATTEMPT_JS_POLL
+        _swix(Hourglass_Off, 0);
+      #endif
 
       /* Throw away the bytecode */
 
@@ -1494,6 +1671,149 @@ _kernel_oserror * javascript_window_open(browser_data * b, int must_find, int re
   int javascript_fetch_should_proceed(void)
   {
     return proceed;
+  }
+
+  /*************************************************/
+  /* javascript_set_pending_fetch()                */
+  /*                                               */
+  /* If, say, in the middle of the script callback */
+  /* function, a URL needs to be visited (e.g.     */
+  /* 'window.location.href="..."' is done in a     */
+  /* script), use this function instead of just    */
+  /* calling fetchpage_new (which won't work due   */
+  /* to fetcher threading issues). Later on,       */
+  /* javascript_fetch_is_pending will be called to */
+  /* see if the fetch should be stopped and        */
+  /* restarted at the recorded location.           */
+  /*                                               */
+  /* At the time of creation, this function's      */
+  /* parameters list mirros exactly those for      */
+  /* fetchpage_new. To cancel a pending fetch,     */
+  /* however, call with a NULL browser_data        */
+  /* struct pointer.                               */
+  /*                                               */
+  /* Parameters: Pointer to a browser_data struct  */
+  /*             to which the new URL refers;      */
+  /*                                               */
+  /*             Pointer to the new URL string (a  */
+  /*             copy is taken, so any space       */
+  /*             allocated for this by the caller  */
+  /*             may be safely disposed of         */
+  /*             afterwards);                      */
+  /*                                               */
+  /*             1 to record the previous URL in   */
+  /*             the history list, else 0;         */
+  /*                                               */
+  /*             1 to stop other page fetches in   */
+  /*             any other frames related to this  */
+  /*             document, 0 to only stop those in */
+  /*             this frame.                       */
+  /*************************************************/
+
+  void javascript_set_pending_fetch(browser_data * b, const char * url, int record, int stop)
+  {
+    if (!b || !url || !*url) return;
+
+    pending_b      = b;
+    pending_record = record;
+    pending_stop   = stop;
+
+    /* Need to take a copy of the URL */
+
+    free(pending_url);
+    pending_url = malloc(strlen(url) + 1);
+
+    /* If allocation fails, cancel the pending fetch quietly */
+    /* - otherwise, just copy the URL over.                  */
+
+    if (!pending_url)
+    {
+      pending_b      = NULL;
+      pending_record = 0;
+      pending_stop   = 0;
+    }
+    else
+    {
+      strcpy(pending_url, url);
+    }
+
+    return;
+  }
+
+  /*************************************************/
+  /* javascript_fetch_is_pending()                 */
+  /*                                               */
+  /* See if javascript_set_pending_fetch has been  */
+  /* used to record a fetch that needs to be done  */
+  /* as soon as possible.                          */
+  /*                                               */
+  /* Use javascript_do_pending_fetch to start the  */
+  /* new fetch, if this function says there is one */
+  /* waiting.                                      */
+  /*                                               */
+  /* Parameters: Pointer to a browser_data struct  */
+  /*             to check against the one          */
+  /*             recorded for the pending fetch.   */
+  /*                                               */
+  /* Returns:    1 if a there is indeed a new      */
+  /*             fetch to start, else 0.           */
+  /*************************************************/
+
+  int javascript_fetch_is_pending(browser_data * b)
+  {
+    if (pending_b && pending_b == b) return 1;
+
+    return 0;
+  }
+
+  /*************************************************/
+  /* javascript_do_pending_fetch()                 */
+  /*                                               */
+  /* If javascript_fetch_is_pending says there is  */
+  /* a fetch to be done, use this function to      */
+  /* start it.                                     */
+  /*                                               */
+  /* Parameters: Pointer to a browser_data struct  */
+  /*             to check against the one          */
+  /*             recorded for the pending fetch.   */
+  /*************************************************/
+
+  _kernel_oserror * javascript_do_pending_fetch(browser_data * b)
+  {
+    _kernel_oserror * e;
+
+    #ifdef TRACE
+
+      if (!b || b != pending_b)
+      {
+        erb.errnum = Utils_Error_Custom_Normal;
+
+        sprintf(erb.errmess,
+                "Browser %p has no fetch pending in javascript_do_pending_fetch",
+                b);
+
+        return &erb;
+      }
+
+    #else
+
+      if (!b || b != pending_b) return NULL;
+
+    #endif
+
+    e = fetchpage_new(pending_b,
+                      pending_url,
+                      pending_record,
+                      pending_stop);
+
+    free(pending_url);
+
+    pending_b      = 0;
+    pending_record = 0;
+    pending_stop   = 0;
+    pending_url    = NULL;
+
+    return e;
   }
 
   /*************************************************/

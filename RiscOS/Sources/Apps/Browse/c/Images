@@ -66,10 +66,14 @@
 
 static _kernel_oserror * image_load_chunk             (browser_data * b, int image, char * buffer, int bytes);
 static void              image_remove_data            (browser_data * b, int image);
-static void              image_remove_all_data        (browser_data * b, int image);
+static void              image_remove_all_data        (int image);
 static void              image_delay                  (browser_data * b, int image);
 static void              image_abandon                (browser_data * b, int image);
+static void              image_prepare                (browser_data * b, HStream * token, int image, int background);
 static void              image_delete_image_entry     (int image);
+static void              image_destroy                (int image);
+static void              image_post_deletion_clearup  (void);
+static int               image_gc_oldest              (browser_data * b);
 static void              image_refetch                (browser_data * b, int image, int priority, int redraw);
 
 static _kernel_oserror * image_update_area            (browser_data * b, int x, int y, BBox * ubox, int image, int redraw);
@@ -77,7 +81,7 @@ static _kernel_oserror * image_update_image           (browser_data * b, int ima
 
 static _kernel_oserror * image_register_filler        (int xref);
 
-static int               image_data_offset            (browser_data * b, int image);
+static int               image_data_offset            (int image);
 static int               image_count_fetches          (browser_data * b);
 
 static int               image_get_token_image_xref   (browser_data * b, HStream * token);
@@ -92,13 +96,13 @@ static int               image_can_be_saved_as_sprite (browser_data * b, int i);
 
 /* Locals */
 
-static image_info * idata       = NULL;
-static char       * ddata       = NULL;
-static int          nimages     = 0;
-static int          lastimage   = 0;
-static int          animhandler = 0;
-
-static char       * unique_name = NULL;
+static image_info   * idata       = NULL; /* Flex block for image_info structures (referenced as an array) */
+static char         * ddata       = NULL; /* Flex block for in-transit fetch data, URLs, etc.              */
+static int            nimages     = 0;    /* Current number of image_info structures in idata array        */
+static int            lastimage   = 0;    /* Used to work out what image_process_null should handle next   */
+static int            animhandler = 0;    /* Flag so code knows when to (de)register GIF animation handler */
+static unsigned int   unique_id   = 1;    /* IDs start at 1 and rise thereafter                            */
+static char         * unique_name = NULL; /* Temporary pathname, nothing to do with unique_id!             */
 
 /* For animated images, the filler function for the background of a   */
 /* transparent image will get called only for the main image with the */
@@ -115,6 +119,7 @@ static browser_data * browser_redrawing = NULL;
 #undef  TRACE_FETCH_STORE
 #define FAST_TOKEN_REFERENCE
 #define FAST_TOKEN_REFERENCE_SHIFT 12
+#undef  ALL_FAST
 
 // Unimplemented functions:
 
@@ -430,7 +435,7 @@ static void image_remove_data(browser_data * b, int image)
     /* down and shrink the block, if this isn't   */
     /* the last image (i.e. p != oldsize).        */
 
-    p = image_data_offset(b,image) + idata[image].alloc;
+    p = image_data_offset(image) + idata[image].alloc;
 
     if (p != oldsize) memmove(ddata + p - remove, ddata + p, oldsize - p);
 
@@ -460,14 +465,11 @@ static void image_remove_data(browser_data * b, int image)
 /* Discards the fetched image data associated    */
 /* with an image, including URL information.     */
 /*                                               */
-/* Parameters: Pointer to a browser_data struct  */
-/*             relevant to the image;            */
-/*                                               */
-/*             The image number, from 0 to       */
+/* Parameters: The image number, from 0 to       */
 /*             nimages - 1.                      */
 /*************************************************/
 
-static void image_remove_all_data(browser_data * b, int image)
+static void image_remove_all_data(int image)
 {
   int p, oldsize, remove;
 
@@ -490,7 +492,7 @@ static void image_remove_all_data(browser_data * b, int image)
     /* down and shrink the block, if this isn't   */
     /* the last image                             */
 
-    p = image_data_offset(b, image);
+    p = image_data_offset(image);
 
     if (oldsize - p - remove) memmove(ddata + p, ddata + p + remove, oldsize - p - remove);
 
@@ -722,7 +724,7 @@ void image_abort_fetches(browser_data * b)
 
           /* Redraw the item */
 
-          browser_update_token(b, idata[i].token, 0, 0);
+          if (idata[i].token) browser_update_token(b, idata[i].token, 0, 0);
         }
       }
     }
@@ -732,6 +734,79 @@ void image_abort_fetches(browser_data * b)
   /* status bar is up to date                               */
 
   toolbars_cancel_status(b, Toolbars_Status_GetPics);
+}
+
+/*************************************************/
+/* image_prepare()                               */
+/*                                               */
+/* Ensure various flags in an image are set up   */
+/* as required by the token the image            */
+/* represents. Will update the token to hold     */
+/* the image number if FAST_TOKEN_REFERENCE is   */
+/* defined.                                      */
+/*                                               */
+/* Originally part of image_new_image; made into */
+/* a new function as it was needed more than     */
+/* once.                                         */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the image;            */
+/*                                               */
+/*             Pointer to the token the image    */
+/*             represents (NULL if none);        */
+/*                                               */
+/*             The image number;                 */
+/*                                               */
+/*             1 if this is a background image   */
+/*             (fast processing), else 0.        */
+/*************************************************/
+
+static void image_prepare(browser_data * b, HStream * token, int image, int background)
+{
+  /* If the image is not a background one, need to update the */
+  /* width and height fields according to any details in the  */
+  /* HTML source.                                             */
+
+  if (!background)
+  {
+    /* Need to flag if the HTML gives us an absolute size */
+
+    if (
+         token                                      &&
+         OBJECT_HAS_WIDTH   (token)                 &&
+         OBJECT_HAS_HEIGHT  (token)                 &&
+         OBJECT_WIDTH_UNITS (token) == UNITS_PIXELS &&
+         OBJECT_HEIGHT_UNITS(token) == UNITS_PIXELS
+       )
+       idata[image].fixedsize = 1, idata[image].canredraw = 1;
+
+    else
+    {
+      /* If reformats aren't immediate, image_update_image may ask for */
+      /* one and then if canredraw is set, will start updating the     */
+      /* image. This is invalid unless the reformat has definitely     */
+      /* occurred (a full size image plots inside a default size       */
+      /* placeholder...). However, if reformats happen straight away,  */
+      /* we'll always be able to redraw.                               */
+
+      if (!choices.refo_wait) idata[image].canredraw = 1;
+      else                    idata[image].canredraw = 0;
+    }
+
+    idata[image].currw = idata[image].currh = -1;
+  }
+
+  /* Store the image number in the token */
+
+  #ifdef FAST_TOKEN_REFERENCE
+
+    if (token)
+    {
+      token->flags &= (1 << FAST_TOKEN_REFERENCE_SHIFT) - 1;
+      token->flags |= ((image + 1) << FAST_TOKEN_REFERENCE_SHIFT);
+    }
+
+  #endif
 }
 
 /*************************************************/
@@ -762,13 +837,23 @@ void image_abort_fetches(browser_data * b)
 /*             in with the relevant image number */
 /*             and the image will again be       */
 /*             turned into a sprite for fast     */
-/*             plotting.                         */
+/*             plotting;                         */
+/*                                               */
+/*             Pointer to an int, in which an    */
+/*             opaque value by which the image   */
+/*             may be later referenced is        */
+/*             returned - useful for garbage     */
+/*             collection if you've no token     */
+/*             to associate with this image (may */
+/*             be NULL).                         */
 /*************************************************/
 
-_kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * token, int background)
+_kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * token, int background, int * handle)
 {
-  int       size, ok, ulen, xref;
-  HStream * tp;
+  int size, ok, ulen;
+  int xref;
+  int use_xref   = 0;
+  int tried_once = 0;
 
   #ifdef TRACE
     if (tl & (1u<<15)) Printf("image_new_image: Called\n");
@@ -779,7 +864,6 @@ _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * 
   if (!url) url = ""; /* Point to *something*, even if it is blank */
 
   xref = -1;
-  tp   = token;
 
   /* Need to make sure we don't already have an image with this URL */
   /* if there are already some images present.                      */
@@ -836,7 +920,7 @@ _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * 
              idata[i].alloc                                            &&  /* The image has data allocated for it                 */
              idata[i].xref < 0                                         &&  /* The image doesn't cross reference things itself     */
              idata[i].background == !!background                       &&  /* We're not trying to make a b/g an f/g or vice versa */
-             !strcmp(url, ddata + image_data_offset(b,i))              &&  /* This holds a URL which matches that passed in       */
+             !strcmp(url, ddata + image_data_offset(i))                &&  /* This holds a URL which matches that passed in       */
              (
                !background ||                                              /* This isn't a background image, or...                */
                (
@@ -862,34 +946,97 @@ _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * 
 
   size = ulen;
 
-  /* Allocate space for the image_info structure */
+  /* Are we cross-referencing an image which is ready for garbage */
+  /* collection? If so, we can just claim this one.               */
 
-  if (idata)
+  if (xref >= 0)
   {
-    int oldsize;
+    if (!idata[xref].from_js && !idata[xref].token)
+    {
+      /* Set the token and owner */
 
-    oldsize = flex_size  ((flex_ptr) &idata);
-    ok      = flex_extend((flex_ptr) &idata, oldsize + sizeof(image_info));
+      idata[xref].token     = token;
+      idata[xref].owner     = b;
+      idata[xref].last_used = time(NULL);
+
+      /* Handle background images */
+
+      if (background == 2) b->background_image = xref;
+
+      /* Ensure any required flags are updated */
+
+      image_prepare(b, token, xref, background);
+
+      /* Flag to any of the code we're about to jump to that the */
+      /* xref image number should be used, not 'nimages - 1'     */
+
+      use_xref = 1;
+
+      /* Jump past all the image setup and cross referencing */
+      /* code to carry on with whatever remains for this     */
+      /* image.                                              */
+
+      goto image_new_image_reclaimed_image_jump_point;
+    }
   }
-  else ok   = flex_alloc ((flex_ptr) &idata, sizeof(image_info));
 
-  /* Allocate space for the image data */
+  /* For each of the following allocations, try twice. If the first */
+  /* attempt fails, garbage collect all images and try again.       */
 
-  if (ok)
+  tried_once = 0;
+
+  do
   {
-    if (ddata)
+    /* Allocate space for the image_info structure */
+
+    if (idata)
     {
       int oldsize;
 
-      #ifdef TRACE
-        flexcount += sizeof(image_info);
-        if (tl & (1u<<14)) Printf("**   flexcount: %d\n",flexcount);
-      #endif
-
-      oldsize = flex_size  ((flex_ptr) &ddata);
-      ok      = flex_extend((flex_ptr) &ddata, oldsize + size);
+      oldsize = flex_size  ((flex_ptr) &idata);
+      ok      = flex_extend((flex_ptr) &idata, oldsize + sizeof(image_info));
     }
-    else ok   = flex_alloc ((flex_ptr) &ddata, size);
+    else ok   = flex_alloc ((flex_ptr) &idata, sizeof(image_info));
+
+    if (!ok && !tried_once)
+    {
+      tried_once = 1;
+      image_gc(NULL, 0, 0);
+    }
+    else break;
+  }
+  while (!ok);
+
+  if (ok)
+  {
+    tried_once = 0;
+
+    do
+    {
+      /* Allocate space for the image data */
+
+      if (ddata)
+      {
+        int oldsize;
+
+        #ifdef TRACE
+          flexcount += sizeof(image_info);
+          if (tl & (1u<<14)) Printf("**   flexcount: %d\n",flexcount);
+        #endif
+
+        oldsize = flex_size  ((flex_ptr) &ddata);
+        ok      = flex_extend((flex_ptr) &ddata, oldsize + size);
+      }
+      else ok   = flex_alloc ((flex_ptr) &ddata, size);
+
+      if (!ok && !tried_once)
+      {
+        tried_once = 1;
+        image_gc(NULL, 0, 0);
+      }
+      else break;
+    }
+    while (!ok);
   }
 
   /* Throw back an error if out of memory */
@@ -924,7 +1071,8 @@ _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * 
   idata[nimages].ualloc     = ulen;
   idata[nimages].isize      = 0;
 
-  idata[nimages].token      = tp;
+  idata[nimages].token      = token;
+  idata[nimages].last_used  = time(NULL);
   idata[nimages].xref       = xref;
 
   idata[nimages].background = !!background;
@@ -954,61 +1102,30 @@ _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * 
 
   if (ulen)
   {
-    strcpy(ddata + image_data_offset(b, nimages), url);
+    strcpy(ddata + image_data_offset(nimages), url);
 
-    idata[nimages].istore = NewImage(NULL, background ? IMAGE_FAST : 0);
+    #ifdef ALL_FAST
+      idata[nimages].istore = NewImage(NULL, IMAGE_FAST);
+    #else
+      idata[nimages].istore = NewImage(NULL, background ? IMAGE_FAST : 0);
+    #endif
   }
 
-  // This works, but you've then got to alter the dataoffset fields
-  // of higher images whenever you remove any data from one lower in
-  // the flex block. That's not implemented yet, and the speed penalty
-  // of this may offset the gains in image_data_offset.
-  //
-  // if (!nimages) idata[nimages].dataoffset = 0;
-  // else idata[nimages].dataoffset = idata[nimages - 1].dataoffset + idata[nimages - 1].alloc;
+  /* Make sure width and height info etc. is correct according */
+  /* to the given HStream.                                     */
 
-  /* If the image is not a background one, need to update the */
-  /* width and height fields according to any details in the  */
-  /* HTML source.                                             */
+  image_prepare(b, token, nimages, background);
 
-  if (!background)
-  {
-    /* Need to flag if the HTML gives us an absolute size */
+  /* Unique ID is never decremented... */
 
-    if (
-         OBJECT_HAS_WIDTH   (token)                 &&
-         OBJECT_HAS_HEIGHT  (token)                 &&
-         OBJECT_WIDTH_UNITS (token) == UNITS_PIXELS &&
-         OBJECT_HEIGHT_UNITS(token) == UNITS_PIXELS
-       )
-       idata[nimages].fixedsize = 1, idata[nimages].canredraw = 1;
+  idata[nimages].unique_id = unique_id ++;
+  if (handle) *handle = idata[nimages].unique_id;
 
-    else
-    {
-      /* If reformats aren't immediate, image_update_image may ask for */
-      /* one and then if canredraw is set, will start updating the     */
-      /* image. This is invalid unless the reformat has definitely     */
-      /* occurred (a full size image plots inside a default size       */
-      /* placeholder...). However, if reformats happen straight away,  */
-      /* we'll always be able to redraw.                               */
-
-      if (!choices.refo_wait) idata[nimages].canredraw = 1;
-      else                    idata[nimages].canredraw = 0;
-    }
-
-    idata[nimages].currw = idata[nimages].currh = -1;
-  }
+  /* ...whereas nimages is, when images get discarded. */
 
   nimages++;
 
-  /* Store the image number */
-
-  #ifdef FAST_TOKEN_REFERENCE
-
-    token->flags &= (1 << FAST_TOKEN_REFERENCE_SHIFT) - 1;
-    token->flags |= (nimages << FAST_TOKEN_REFERENCE_SHIFT);
-
-  #endif
+image_new_image_reclaimed_image_jump_point:
 
   if (!ulen)
   {
@@ -1016,7 +1133,7 @@ _kernel_oserror * image_new_image(browser_data * b, const char * url, HStream * 
     /* on it to make sure any required reformats etc. (e.g. because a width or height */
     /* but not both was specified in the HTML) are carried out.                       */
 
-    image_update_image(b, nimages - 1, NULL);
+    image_update_image(b, use_xref ? xref : nimages - 1, NULL);
   }
 
   /* Reflect any change of status */
@@ -1087,7 +1204,7 @@ _kernel_oserror * image_process_null(browser_data * b)
       {
         const char * referer = browser_current_url(b);
 
-        e = html_get(ddata + image_data_offset(b,image), /* Document to fetch                */
+        e = html_get(ddata + image_data_offset(image),   /* Document to fetch                */
                      NULL,                               /* Pointer to any extra data        */
                      (int *) &idata[image].handle,       /* Place to return the fetch handle */
                      URL_Method_http_GET,                /* Fetch method                     */
@@ -1274,7 +1391,7 @@ _kernel_oserror * image_process_null(browser_data * b)
 
         if (idata[image].isize)
         {
-          int p = image_data_offset(b, image) + idata[image].ualloc;
+          int p = image_data_offset(image) + idata[image].ualloc;
 
           /* Complain if the flex allocation fails, else copy the data across */
 
@@ -1336,7 +1453,7 @@ _kernel_oserror * image_process_null(browser_data * b)
                                 &tptr,
                                 &waiting,
                                 &store,
-                                ddata + image_data_offset(b, image),
+                                ddata + image_data_offset(image),
                                 1);
 
         if (e)
@@ -1444,7 +1561,7 @@ _kernel_oserror * image_process_null(browser_data * b)
 
           /* p points to the first byte after the data used by this image */
 
-          p = image_data_offset(b, image) + idata[image].alloc;
+          p = image_data_offset(image) + idata[image].alloc;
 
           /* Move all data from p up to the end of the block (as was, hence */
           /* oldsize) along the block by size bytes, effectively creating   */
@@ -1581,9 +1698,16 @@ _kernel_oserror * image_process_null(browser_data * b)
 /* adjusted appropriately.                       */
 /*                                               */
 /* The idata flex block is not shrunk; this is   */
-/* expected to be done externally, to avoid      */
+/* expected to be ,one externally, to avoid      */
 /* possibly freeing many small blocks            */
 /* consecutively (which can be slow with flex).  */
+/* E.g. see image_post_deletion_clearup.         */
+/*                                               */
+/* NOTE. Since this removes items from the idata */
+/* array, if you're calling during a for() loop  */
+/* scanning that array, count *backwards* from   */
+/* nimages - 1 to 0. Otherwise, clearly, things  */
+/* will go horribly wrong.                       */
 /*                                               */
 /* Parameters: Image number to remove.           */
 /*************************************************/
@@ -1608,7 +1732,7 @@ static void image_delete_image_entry(int image)
     for (i = image; i < nimages; i++)
     {
       #ifdef TRACE
-        if (idata[i].xref == image) Printf("JUST DELETED IMAGE %d WHICH WAS XREF'D AND SHOULDN'T HAVE BEEN\n");
+        if (idata[i].xref == image) Printf("JUST DELETED IMAGE %d WHICH WAS XREF'D AND SHOULDN'T HAVE BEEN\n", i);
       #endif
 
       /* Did this cross reference an image which will have changed number? */
@@ -1619,8 +1743,11 @@ static void image_delete_image_entry(int image)
 
       #ifdef FAST_TOKEN_REFERENCE
 
-        idata[i].token->flags &= (1 << FAST_TOKEN_REFERENCE_SHIFT) - 1;
-        idata[i].token->flags |= ((i + 1) << FAST_TOKEN_REFERENCE_SHIFT);
+        if (idata[i].token)
+        {
+          idata[i].token->flags &= (1 << FAST_TOKEN_REFERENCE_SHIFT) - 1;
+          idata[i].token->flags |= ((i + 1) << FAST_TOKEN_REFERENCE_SHIFT);
+        }
 
       #endif
 
@@ -1669,7 +1796,7 @@ static void image_delete_image_entry(int image)
 
 _kernel_oserror * image_discard(browser_data * b)
 {
-  int newsize, i, xref;
+  int i, xref;
 
   #ifdef TRACE
     if (tl & (1u<<15)) Printf("\nimage_discard: Called for %p\n\n", b);
@@ -1692,7 +1819,10 @@ _kernel_oserror * image_discard(browser_data * b)
     }
   #endif
 
-  for (i = nimages - 1; i >= 0; i--) /* Going backwards helps out flex */
+  /* Must go backwards because we can delete items from the array */
+  /* during the loop itself                                       */
+
+  for (i = nimages - 1; i >= 0; i--)
   {
     xref = idata[i].xref;
 
@@ -1716,6 +1846,7 @@ _kernel_oserror * image_discard(browser_data * b)
       idata[xref].y          = idata[i].y;
 
       idata[xref].token      = idata[i].token;
+      idata[xref].last_used  = idata[i].last_used;
 
       idata[xref].currw      = idata[i].currw;
       idata[xref].currh      = idata[i].currh;
@@ -1734,8 +1865,11 @@ _kernel_oserror * image_discard(browser_data * b)
 
       #ifdef FAST_TOKEN_REFERENCE
 
-        idata[xref].token->flags &= (1 << FAST_TOKEN_REFERENCE_SHIFT) - 1;
-        idata[xref].token->flags |= ((xref + 1) << FAST_TOKEN_REFERENCE_SHIFT);
+        if (idata[xref].token)
+        {
+          idata[xref].token->flags &= (1 << FAST_TOKEN_REFERENCE_SHIFT) - 1;
+          idata[xref].token->flags |= ((xref + 1) << FAST_TOKEN_REFERENCE_SHIFT);
+        }
 
       #endif
 
@@ -1785,7 +1919,10 @@ _kernel_oserror * image_discard(browser_data * b)
         if (tl & (1u<<15)) Printf("image_discard: Deleting entry owned by %p that cross references image %d\n", idata[i].owner, idata[i].xref);
       #endif
 
-      image_remove_all_data(idata[i].owner, i);
+      image_remove_all_data(i);
+
+      /* Safe because we're counting through the array backwards */
+
       image_delete_image_entry(i);
     }
   }
@@ -1799,52 +1936,142 @@ _kernel_oserror * image_discard(browser_data * b)
   #endif
 
   /* Now delete any remaining images owned by the given browser */
+  /* - count backwards as we might remove items from the idata  */
+  /* array during the loop.                                     */
 
-  for (i = nimages - 1; i >= 0; i--) /* Going backwards helps out flex */
+  for (i = nimages - 1; i >= 0; i--)
   {
     if (idata[i].owner == b)
     {
-      /* If the image was being fetched, close that session */
-
-      if (idata[i].handle)
-      {
-        html_close(idata[i].handle);
-        idata[i].handle = 0;
-      }
-
       if (idata[i].istore)
       {
-        #ifdef STRICT_PARSER
+        /* Mark the image as suitable for garbage collection */
 
-          /* Report any errors as Continue-only in strict parser mode */
+        idata[i].token = NULL;
 
-          _kernel_oserror * e;
-
-          e = idata[i].istore -> Delete(idata[i].istore);
-
-          if (e)
-          {
-            e->errnum = Utils_Error_Custom_Message;
-            show_error_ret(e);
-          }
-
-        #else
-
-          /* If not in Strict mode, ignore any errors */
-
-          idata[i].istore -> Delete(idata[i].istore);
-
+        #ifdef TRACE
+          if (tl & (1u<<15)) Printf("\nimage_discard: Image %d marked for GC but not deleted\n", i);
         #endif
       }
+      else
+      {
+        image_remove_all_data(i);
+        image_delete_image_entry(i);
 
-      image_remove_all_data(b, i);
-      image_delete_image_entry(i);
+        #ifdef TRACE
+          if (tl & (1u<<15)) Printf("\nimage_discard: Image %d deleted\n", i);
+        #endif
+      }
     }
   }
+
+  _swix(Hourglass_Off, 0);
 
   #ifdef TRACE
     if (tl & (1u<<15)) Printf("\nimage_discard: Second pass complete, there are now %d images\n\n", nimages);
   #endif
+
+  image_post_deletion_clearup();
+
+  #ifdef TRACE
+    if (tl & (1u<<15)) Printf("image_discard: Successful\n\n");
+  #endif
+
+  return NULL;
+}
+
+/*************************************************/
+/* image_destroy()                               */
+/*                                               */
+/* image_discard gets rid of cross referencing   */
+/* images and transfers ownership of items that  */
+/* are owned by the given browser but cross      */
+/* referenced by another to that other. It does  */
+/* not delete actual, non-cross-referencing      */
+/* images owned by the given browser though, but */
+/* instead marks them as suitable for later      */
+/* garbage collection.                           */
+/*                                               */
+/* image_delete_image_entry is used to remove an */
+/* item from the idata array but does not deal   */
+/* with ImageLib data or ongoing fetches.        */
+/*                                               */
+/* To actually kill an image off completely, use */
+/* this function. It's called by the garbage     */
+/* collector image_gc and used to be part of     */
+/* image_discard before the image garbage        */
+/* collection system existed.                    */
+/*                                               */
+/* Be careful what you delete (!) and remember   */
+/* to call image_post_deletion_clearup when all  */
+/* the images you want to get rid of have been   */
+/* removed by this function.                     */
+/*                                               */
+/* NB - this calls image_delete_image_entry, so  */
+/* the same restrictions on scanning through     */
+/* the idata array as for that function apply.   */
+/*                                               */
+/* Parameters: Number of the image to remove.    */
+/*************************************************/
+
+static void image_destroy(int image)
+{
+  /* If the image was being fetched, close that session */
+
+  if (idata[image].handle)
+  {
+    html_close(idata[image].handle);
+    idata[image].handle = 0;
+  }
+
+  if (idata[image].istore)
+  {
+    #ifdef STRICT_PARSER
+
+      /* Report any errors as Continue-only in strict parser mode */
+
+      _kernel_oserror * e;
+
+      e = idata[image].istore -> Delete(idata[image].istore);
+
+      if (e)
+      {
+        e->errnum = Utils_Error_Custom_Message;
+        show_error_ret(e);
+      }
+
+    #else
+
+      /* If not in Strict mode, ignore any errors */
+
+      idata[image].istore -> Delete(idata[image].istore);
+
+    #endif
+  }
+
+  image_remove_all_data(image);
+  image_delete_image_entry(image);
+
+  #ifdef TRACE
+    if (tl & (1u<<15)) Printf("\nimage_destroy: Image %d deleted\n", image);
+  #endif
+}
+
+/*************************************************/
+/* image_post_deletion_clearup()                 */
+/*                                               */
+/* After deleting a set of images or image_info  */
+/* structures which had no associated data in    */
+/* ImageLib, call this to tidy up - deregister   */
+/* the animation handler, resize the idata flex  */
+/* block, etc.                                   */
+/*************************************************/
+
+static void image_post_deletion_clearup(void)
+{
+  int newsize, i;
+
+  _swix(Hourglass_Start, _IN(0), 1);
 
   /* If there is an animation handler present, but no animated */
   /* images remain, remove that handler.                       */
@@ -1854,7 +2081,7 @@ _kernel_oserror * image_discard(browser_data * b)
     int found = 0;
 
     #ifdef TRACE
-      if (tl & (1u<<15)) Printf("image_discard: There is an animation handler present; checking to see if it can be removed\n");
+      if (tl & (1u<<15)) Printf("image_post_deletion_clearup: There is an animation handler present; checking to see if it can be removed\n");
     #endif
 
     for (i = 0; i < nimages; i++)
@@ -1869,7 +2096,7 @@ _kernel_oserror * image_discard(browser_data * b)
     if (!found)
     {
       #ifdef TRACE
-        if (tl & (1u<<15)) Printf("image_discard: Removing animation handler\n\n");
+        if (tl & (1u<<15)) Printf("image_post_deletion_clearup: Removing animation handler\n\n");
       #endif
 
       deregister_null_claimant(Wimp_ENull, (WimpEventHandler *) image_animate_images, NULL);
@@ -1880,7 +2107,7 @@ _kernel_oserror * image_discard(browser_data * b)
 
       else
       {
-        if (tl & (1u<<15)) Printf("image_discard: The handler is still required\n\n");
+        if (tl & (1u<<15)) Printf("image_post_deletion_clearup: The handler is still required\n\n");
       }
 
     #endif
@@ -1907,17 +2134,15 @@ _kernel_oserror * image_discard(browser_data * b)
     else         flex_free((flex_ptr) &idata);
   }
 
-  _swix(Hourglass_Off, 0);
-
   #ifdef FAST_TOKEN_REFERENCE
     #ifdef TRACE
 
       {
         for (i = 0; i < nimages; i ++)
         {
-          if ((idata[i].token->flags >> FAST_TOKEN_REFERENCE_SHIFT) - 1 != i)
+          if (idata[i].token && (idata[i].token->flags >> FAST_TOKEN_REFERENCE_SHIFT) - 1 != i)
           {
-            Printf("image_discard: \0211Image %d is referenced incorrectly by its token\0217 - correcting...\n", i);
+            Printf("image_post_deletion_clearup: \0211Image %d is referenced incorrectly by its token\0217 - correcting...\n", i);
 
             idata[i].token->flags &= (1 << FAST_TOKEN_REFERENCE_SHIFT) - 1;
             idata[i].token->flags |= ((i + 1) << FAST_TOKEN_REFERENCE_SHIFT);
@@ -1928,9 +2153,291 @@ _kernel_oserror * image_discard(browser_data * b)
     #endif
   #endif
 
+  _swix(Hourglass_Off, 0);
+
+  return;
+}
+
+/*************************************************/
+/* image_gc()                                    */
+/*                                               */
+/* Garbage collect unused images.                */
+/*                                               */
+/* If removing only one specific image (see      */
+/* parameters list), image_post_deletion_clearup */
+/* is NOT called - it is assumed that the caller */
+/* of this function may want to remove several   */
+/* images and it would be very inefficient to    */
+/* clear up after each one. So, if a specific    */
+/* unique ID is given for image removal, the     */
+/* caller must remember to invoke                */
+/* image_post_deletion_clearup.                  */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the images to collect */
+/*             or NULL to remove any images      */
+/*             regardless of owner;              */
+/*                                               */
+/*             Unique ID of a specific image to  */
+/*             remove - 0 to remove all images   */
+/*             regardless of ID;                 */
+/*                                               */
+/*             If removing images regardless of  */
+/*             unique ID (0 is passed above),    */
+/*             images with the 'from_js' flag    */
+/*             set are still not removed unless  */
+/*             a non-zero value is passed here.  */
+/*************************************************/
+
+_kernel_oserror * image_gc(browser_data * b, unsigned int uid, int remove_js_too)
+{
+  int i;
+  int clearup = 0;
+
+  /* UID is zero; remove all pending images */
+
+  if (uid == 0)
+  {
+    /* Count backwards as we may remove idata array items */
+    /* during the loop's execution                        */
+
+    for (i = nimages - 1; i >= 0; i --)
+    {
+      if (
+           (!b || idata[i].owner == b)          &&
+           (remove_js_too || !idata[i].from_js) &&
+           !idata[i].token
+         )
+      {
+        image_destroy(i);
+        clearup = 1;
+      }
+    }
+
+    if (clearup) image_post_deletion_clearup();
+  }
+
+  /* Find the given unique ID */
+
+  else
+  {
+    int i;
+    int found = -1;
+
+    for (i = 0; i < nimages; i ++)
+    {
+      if (idata[i].unique_id == uid)
+      {
+        found = i;
+        break;
+      }
+    }
+
+    if (found >= 0)
+    {
+      /* Found it - check it's not in use still! */
+
+      #ifdef TRACE
+
+        if (idata[found].token)
+        {
+          erb.errnum = Utils_Error_Custom_Normal;
+
+          StrNCpy0(erb.errmess, "Unique ID given to image_gc() refers to an image with a non-NULL token field!");
+
+          return &erb;
+        }
+
+      #else
+
+        if (idata[found].token) return NULL;
+
+      #endif
+
+      /* OK, get rid of the item */
+
+      image_destroy(found);
+      clearup = 1;
+    }
+
+    #ifdef TRACE
+
+      else
+      {
+        erb.errnum = Utils_Error_Custom_Normal;
+
+        StrNCpy0(erb.errmess, "Unique ID not recognised in image_gc()");
+
+        return &erb;
+      }
+
+    #endif
+  }
+
+  return NULL;
+}
+
+/*************************************************/
+/* image_gc_js()                                 */
+/*                                               */
+/* Garbage collect unused images with the        */
+/* 'from_js' flag set.                           */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the images to collect */
+/*             or NULL to remove any images      */
+/*             regardless of owner.              */
+/*************************************************/
+
+_kernel_oserror * image_gc_js(browser_data * b)
+{
+  // "Placeholder" function...
+
+  return NULL;
+}
+
+/*************************************************/
+/* image_gc_oldest()                             */
+/*                                               */
+/* Remove the oldest image which is pending      */
+/* garbage collection owned by a given browser.  */
+/*                                               */
+/* Calls image_gc with a specific image unique   */
+/* ID, therefore image_post_deletion_clearup is  */
+/* not called - the caller of this function must */
+/* remember to do that.                          */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             relevant to the image to remove.  */
+/*                                               */
+/* Returns:    1 if an item was removed, else 0. */
+/*************************************************/
+
+static int image_gc_oldest(browser_data * b)
+{
+  int    i;
+  int    found  = -1;
+  time_t oldest = time(NULL);
+
   #ifdef TRACE
-    if (tl & (1u<<15)) Printf("image_discard: Successful\n\n");
+    if (tl & (1u<<15)) Printf("image_gc_oldest: Called for %p\n",b);
   #endif
+
+  /* Look for the oldest item */
+
+  for (i = 0; i < nimages; i ++)
+  {
+    if (
+         idata[i].owner == b &&
+         !idata[i].token     &&
+         !idata[i].from_js
+       )
+    {
+      if (difftime(idata[i].last_used, oldest) < 0)
+      {
+        oldest = idata[i].last_used;
+        found  = i;
+      }
+    }
+  }
+
+  /* If we got one, remove it */
+
+  #ifdef TRACE
+    if (tl & (1u<<15))
+    {
+      if (found >= 0) Printf("image_gc_oldest: Oldest is %d\n", found);
+      else            Printf("image_gc_oldest: No appropriate image found\n");
+    }
+  #endif
+
+  if (found >= 0) image_gc(b, idata[found].unique_id, 0);
+
+  /* Say whether or not one was removed */
+
+  #ifdef TRACE
+    if (tl & (1u<<15)) Printf("image_gc_oldest: Successful\n");
+  #endif
+
+  return found >= 0 ? 1 : 0;
+}
+
+/*************************************************/
+/* image_maybe_gc()                              */
+/*                                               */
+/* Possibly garbage collect unused images for    */
+/* the given browser.                            */
+/*                                               */
+/* Parameters: Pointer to a browser_data struct  */
+/*             who's images may be garbage       */
+/*             collected.                        */
+/*************************************************/
+
+_kernel_oserror * image_maybe_gc(browser_data * b)
+{
+  int gc;
+  int any = 0;
+
+  _swix(Hourglass_On, 0);
+
+  /* Keep going until we don't need to GC anymore... */
+
+  do
+  {
+    gc = 0;
+
+    /* Deal with the free RAM constraint */
+
+    if (choices.free_ram_limit > 0)
+    {
+      unsigned int free;
+
+      if (
+           !_swix(Wimp_SlotSize,
+                  _INR(0,1) | _OUT(2),
+
+                  -1,
+                  -1,
+
+                  &free)
+         )
+      {
+        if (free < choices.free_ram_limit) gc = 1;
+      }
+    }
+
+    /* Deal with the unused images constraint */
+
+    if (choices.unused_image_limit > 0)
+    {
+      int i;
+      int unused = 0;
+
+      for (i = 0; i < nimages; i ++)
+      {
+        if (
+             idata[i].owner == b &&
+             !idata[i].token     &&
+             !idata[i].from_js
+           )
+           unused ++;
+      }
+
+      if (unused > choices.unused_image_limit) gc = 1;
+    }
+    else if (choices.unused_image_limit == 0) gc = 1;
+
+    /* If required, get rid of the oldest image */
+
+    if (gc) any = 1, gc = image_gc_oldest(b);
+  }
+  while (gc);
+
+  /* Clear up after deletions, if there were any */
+
+  if (any) image_post_deletion_clearup();
+
+  _swix(Hourglass_Off, 0);
 
   return NULL;
 }
@@ -1997,7 +2504,11 @@ static void image_refetch(browser_data * b, int image, int priority, int redraw)
 
     if (!idata[image].istore && idata[image].xref == -1)
     {
-      idata[image].istore = NewImage(NULL, image == b->background_image ? IMAGE_FAST : 0);
+      #ifdef ALL_FAST
+        idata[image].istore = NewImage(NULL, IMAGE_FAST);
+      #else
+        idata[image].istore = NewImage(NULL, image == b->background_image ? IMAGE_FAST : 0);
+      #endif
     }
 
     /* Now handle the fetching */
@@ -2484,7 +2995,9 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
       /* relating to the token which relates to this  */
       /* image (!) can be found.                      */
 
-      l = tokenutils_find_ancestor_line(idata[i].owner, idata[i].token);
+      if (idata[i].token) l = tokenutils_find_ancestor_line(idata[i].owner, idata[i].token);
+      else                l = -1;
+
       if (l < 0) noplot = 1;
 
       /* May not be redrawing the image, but might still want to */
@@ -2502,7 +3015,7 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
             /* Ignore errors, this isn't vital */
 
             imghistory_record((const char **) &ddata,
-                              image_data_offset(idata[i].owner, i),
+                              image_data_offset(i),
                               idata[i].istore->width_os,
                               idata[i].istore->height_os);
           }
@@ -2533,6 +3046,7 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
         tp = idata[i].token;
 
         if (
+             tp &&
              !reformat_get_image_size(idata[i].owner,
                                       tp,
                                       &ibox)
@@ -2561,7 +3075,7 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
                 /* Ignore errors, this isn't vital */
 
                 imghistory_record((const char **) &ddata,
-                                  image_data_offset(idata[i].owner, i),
+                                  image_data_offset(i),
                                   idata[i].istore->width_os,
                                   idata[i].istore->height_os);
               }
@@ -2678,7 +3192,7 @@ static _kernel_oserror * image_update_image(browser_data * b, int image, BBox * 
                               0);
           }
 
-        /* Closure of 'if (!reformat_get_image_size(...))' */
+        /* Closure of 'if (tp && !reformat_get_image_size(...))' */
         }
 
       /* Closure of 'if (noplot)' - code immediately above is */
@@ -2879,7 +3393,7 @@ _kernel_oserror * image_fill_background(void * handle, int * i)
   /* The image may exist in a table, and we should check what */
   /* background colour to draw if this is the case.           */
 
-  if (idata[image].token->parent)
+  if (idata[image].token && idata[image].token->parent)
   {
     table_headdata * head  = idata[image].token->parent;
     table_row      * row   = NULL;
@@ -3265,14 +3779,18 @@ _kernel_oserror * image_redraw(browser_data * b, WimpRedrawWindowBlock * r, HStr
     /* If an image, the ALT text wants to be from the actual image, not one */
     /* that might be being cross referenced.                                */
 
-    tp   = (ISOBJECT(tp)) ? token                 : idata[actual].token;
-    text = (ISOBJECT(tp)) ? HtmlOBJECTstandby(tp) : tp->text;
+    tp = (ISOBJECT(tp)) ? token : idata[actual].token;
 
-    redraw_draw_placeholder(b,
-                            r,
-                            &box,
-                            tp,
-                            text);
+    if (tp)
+    {
+      text = (ISOBJECT(tp)) ? HtmlOBJECTstandby(tp) : tp->text;
+
+      redraw_draw_placeholder(b,
+                              r,
+                              &box,
+                              tp,
+                              text);
+    }
   }
 
   #ifdef TRACE
@@ -3529,28 +4047,28 @@ _kernel_oserror * image_mode_change(void)
 /* Returns the offset into the ddata block of    */
 /* the data associated with a given image.       */
 /*                                               */
-/* Parameters: Pointer to a browser_data struct  */
-/*             relevant to the image in          */
-/*             question;                         */
-/*                                               */
-/*             An image number, from 0 to        */
+/* Parameters: An image number, from 0 to        */
 /*             nimages - 1.                      */
 /*                                               */
 /* Returns:    Pointer to the data associated    */
 /*             with that image (as a char *).    */
 /*************************************************/
 
-static int image_data_offset(browser_data * b, int image)
+static int image_data_offset(int image)
 {
   int i, count = 0;
 
   #ifdef TRACE
-    if (tl & (1u<<15)) Printf("image_data_offset: Called for image %d, and exitting\n",image);
+    if (tl & (1u<<15)) Printf("image_data_offset: Called for image %d\n",image);
   #endif
 
   if (image <= 0) return 0; /* Image 0's data offset will be zero... */
 
   for (i = 0; i < image; count += idata[i].alloc, i++);
+
+  #ifdef TRACE
+    if (tl & (1u<<15)) Printf("image_data_offset: Successful\n");
+  #endif
 
   return count;
 }
@@ -4284,13 +4802,21 @@ static _kernel_oserror * image_get_image_size(browser_data * b, int image, BBox 
 
   /* Work out the available width / height */
 
-  if (!tp->parent)
+  if (!tp || !tp->parent)
   {
     awidth  = redraw_display_width (b, NULL);
     aheight = redraw_display_height(b, NULL);
 
-    subtract = redraw_left_gap (b, b->cell, tp) +
-               redraw_right_gap(b, b->cell, tp);
+    if (tp)
+    {
+      subtract = redraw_left_gap (b, b->cell, tp) +
+                 redraw_right_gap(b, b->cell, tp);
+    }
+    else
+    {
+      subtract = redraw_left_margin (b, b->cell) +
+                 redraw_right_margin(b, b->cell);
+    }
   }
   else
   {
@@ -4331,7 +4857,7 @@ static _kernel_oserror * image_get_image_size(browser_data * b, int image, BBox 
   if (real_width <= 0 && real_height <= 0)
   {
     imghistory_return_size((const char **) &ddata,
-                           image_data_offset(idata[actual].owner, actual),
+                           image_data_offset(actual),
                            &real_width,
                            &real_height);
   }
@@ -4339,7 +4865,7 @@ static _kernel_oserror * image_get_image_size(browser_data * b, int image, BBox 
   /* The image may have a specific width and height given in */
   /* the HTML.                                               */
 
-  if (tp->tagno != TAG_INPUT)
+  if (tp && tp->tagno != TAG_INPUT)
   {
     /* The OBJECT macros work for IMGs as well as OBJECTs */
 
@@ -4442,7 +4968,14 @@ image_get_image_size_placeholder:
 
     if (image >= 0) tp = idata[image].token;
 
-    text = (ISOBJECT(tp)) ? HtmlOBJECTstandby(tp) : tp->text;
+    if (tp)
+    {
+      text = (ISOBJECT(tp)) ? HtmlOBJECTstandby(tp) : tp->text;
+    }
+    else
+    {
+      text = NULL;
+    }
 
     reformat_get_placeholder_size(b, tp, text, box);
   }
@@ -4765,7 +5298,7 @@ void image_get_background_image_url(browser_data * b, char * buffer, int size)
 
   /* Find the offset of the URL in the 'ddata' block */
 
-  offset = image_data_offset(b, image);
+  offset = image_data_offset(image);
 
   /* Lock flex */
 
@@ -5103,7 +5636,7 @@ _kernel_oserror * image_export_original(char * path, browser_data * b, HStream *
 
   /* Must have image data... */
 
-  offset = image_data_offset(b, i);
+  offset = image_data_offset(i);
 
   if (!ddata[offset])
   {

@@ -33,6 +33,7 @@
 #include "Utils.h"
 
 #include "Browser.h"
+#include "Fetch.h"
 #include "FetchPage.h"
 #include "Filetypes.h"
 #include "Frames.h"
@@ -434,6 +435,16 @@
     switch (slot)
     {
       case URL_HREF:
+      {
+        url->href = JSVAL_TO_STRING(*vp);
+
+// Is this to get a GC root (or whatever) to keep the property
+// from being garbage collected?
+//
+//        href = JS_GetStringBytes(url->href);
+//        free_href = JS_FALSE;
+      }
+      break;
 
       case URL_PROTOCOL:
       case URL_HOST:
@@ -541,6 +552,13 @@
 
     slot = JSVAL_TO_INT(id);
 
+    /* Get the underlying URL structure */
+
+    url = JS_GetPrivate(cx, obj);
+
+    if (!url)              return JS_TRUE;
+    if (!url->url_decoder) return JS_TRUE;
+
     /* Setting these properties should not cause a fetch. */
 
     if (slot < 0 || slot == URL_TARGET) return jsurl_set_property(cx, obj, id, vp);
@@ -558,18 +576,35 @@
     if (slot == URL_HREF || slot == URL_PROTOCOL)
     {
       url_description * desc;
+      const char      * base;
+      char            * new_url;
 
-      /* Make sure the URL is absolute and sanity-check its protocol. */
+      /* Get the new value and current base / fetch URL */
 
       url_string = JS_GetStringBytes(JSVAL_TO_STRING(*vp));
-      desc       = urlutils_return_description(url_string);
 
+      if (fetch_fetching(url->url_decoder)) base = browser_fetch_url(url->url_decoder);
+      else                                  base = NULL;
+
+      if (!base) base = browser_base_url(url->url_decoder);
+      if (!base) base = url_string;
+
+      /* If we can get a description, the URL (even if only a relative */
+      /* item) is sensible                                             */
+
+      desc = urlutils_return_description(url_string);
       if (!desc) return JS_FALSE;
-
       urlutils_free_description(desc);
 
-      str = JS_NewStringCopyZ(cx, url_string);
+      /* Relativise the URL to the base and copy it into 'str' */
+
+      new_url = urlutils_relativise_url(base, url_string);
+
+      str = JS_NewStringCopyZ(cx, new_url ? new_url : url_string);
+      free(new_url);
       if (!str) return JS_FALSE;
+
+      /* Set the value */
 
       val = STRING_TO_JSVAL(str);
       vp  = &val;
@@ -591,27 +626,17 @@
 
     if (!jsurl_set_property(cx, obj, id, vp)) return JS_FALSE;
 
-    url = JS_GetPrivate(cx, obj);
-
-    if (!url)              return JS_TRUE;
-    if (!url->url_decoder) return JS_TRUE;
-
     if (url->href) url_string = JS_GetStringBytes(url->href);
     else           url_string = "";
 
-    /* Fetch the URL */
+    /* Record the fetch that needs to start as soon as possible */
 
-    {
-      _kernel_oserror * e = fetchpage_new(url->url_decoder,
-                                          url_string,
-                                          (replace == JS_TRUE ? 1 : 0),
-                                          1);
-      if (e)
-      {
-        show_error_ret(e);
-        return JS_FALSE;
-      }
-    }
+    javascript_set_pending_fetch(url->url_decoder,
+                                 url_string,
+                                 (replace == JS_TRUE ? 1 : 0),
+                                 1);
+
+    /* Finished */
 
     return JS_TRUE;
   }

@@ -35,7 +35,7 @@
 #			NL, hash, NL; end on hash, space, hyphen.
 # 1997-08-28	ADH	Added Argonet build. Not much to do in the Makefile
 #			but needs the appropriate TaskObey files.
-# 1998-30-04	ADH	Added JavaScript build support, including BASEFLAGS
+# 1998-04-30	ADH	Added JavaScript build support, including BASEFLAGS
 #			in the compile-time options.
 # 1998-07-02	ADH	Prior to 2.06 intermediate checkin, took out
 #			-DJAVASCRIPT from DFLAGS and added comment about
@@ -50,12 +50,20 @@
 #			overwrites the current exported Surfboard, Desktop
 #			or whatever build, you still probably want to keep
 #			the previous symbols table.
-# 1998-31-07	ADH	The above is insufficient; a link is still tried
+# 1998-07-31	ADH	The above is insufficient; a link is still tried
 #			with MemLib, NSPRLib and JSLib even though they
 #			may ultimately not be included. So these must be
 #			built at all times. In addition, note that
 #			USE_MALLOC_REPLACEMENT is now defined in the
 #			BASEFLAGS (i.e. defined for every build).
+# 1998-09-10	ADH	Cleared up the whole MemLib issue through NSPRLib.
+#			JS_USING_MEMLIB local option in Main.c controls
+#			whether or not MemLib is ever used. The NSPRLib
+#			based redefinition of malloc() etc. on a global
+#			basis by adding "-DUSE_NSPRLIB_ALLOC_REGISTRATION"
+#			has NOT been done by default here. Added also
+#			lines to wipe CVS control files from exported
+#			"About" directories (WFLAGS used at last!).
 
 # -----------------------------------------------------------------------------
 # Program specific options
@@ -105,9 +113,9 @@ WFLAGS		= ~cf~vr
 # ROM build (plus debug), the Surfboard RAM build (plus debug), and the
 # Intertalk build (plus debug).
 
-#BASEFLAGS	= -DCOMPAT_INET4 -DUSE_MALLOC_REPLACEMENT -DRISCOS -DNSPR20
-#BASEFLAGS	= -DCOMPAT_INET4 -DRISCOS -DNSPR20 -DUNIFONT
 BASEFLAGS	= -DCOMPAT_INET4 -DRISCOS -DNSPR20
+#BASEFLAGS	= -DCOMPAT_INET4 -DRISCOS -DNSPR20 -DUSE_NSPRLIB_ALLOC_REGISTRATIONS
+#BASEFLAGS	= -DCOMPAT_INET4 -DRISCOS -DNSPR20 -DUNIFONT
 
 # Note JSUFFIX *must* be defined on the command line.
 
@@ -864,6 +872,7 @@ install: install_common
 	${CP} ${LDIR}.!Boot		${INSTDIR}.!Boot	${CPFLAGS}~n
 	${CP} ${LDIR}.!Run		${INSTDIR}.!Run		${CPFLAGS}~n
 	-${CP} ${LDIR}.About		${INSTDIR}.About	${CPFLAGS}~n
+	${WIPE} ${INSTDIR}.About.CVS	${WFLAGS}
 	-Access ${INSTDIR}.*		wr/r
 	-Access ${INSTDIR}.User.*	wr/r
 	-Access ${INSTDIR}.About.*	wr/r
@@ -874,6 +883,7 @@ installd: install_common
 	${CP} ${LDIR}.!Boot		${INSTDIR}.!Boot	${CPFLAGS}~n
 	${CP} ${LDIR}.!RunD		${INSTDIR}.!Run		${CPFLAGS}~n
 	-${CP} ${LDIR}.About		${INSTDIR}.About	${CPFLAGS}~n
+	${WIPE} ${INSTDIR}.About.CVS	${WFLAGS}
 	@echo
 	@echo ${COMPONENT}: Debug application installed ${INSTDIR}
 
@@ -881,6 +891,7 @@ installj: install_common
 	${CP} ${LDIR}.!BootJ		${INSTDIR}.!Boot	${CPFLAGS}~n
 	${CP} ${LDIR}.!RunJ		${INSTDIR}.!Run		${CPFLAGS}~n
 	${CP} ${LDIR}.AboutJ		${INSTDIR}.About	${CPFLAGS}~n
+	${WIPE} ${INSTDIR}.About.CVS	${WFLAGS}
 	-Access ${INSTDIR}.*		wr/r
 	-Access ${INSTDIR}.User.*	wr/r
 	-Access ${INSTDIR}.About.*	wr/r
