@@ -81,6 +81,13 @@ static void eol_sm(sgml_chopper_state *st, UCHARACTER c, int *line)
 
 #if UNICODE
 
+/*
+ * s1 = chop_state
+ * s2 = eol state
+ * s3 = was last non-space char ideographic
+ * s4 = was last char nobreaking
+ */
+
 typedef enum
 {
     UNDECIDED,			/* first three as old state machine */
@@ -140,14 +147,15 @@ extern void sgml_fmt_word_chopper(SGMLCTX *context, USTRING input)
 	    (*context->deliver)
 		(
 		    context,
-		    DELIVER_WORD,
+		    st->s4 ? DELIVER_WORD_NOBREAK : DELIVER_WORD,
 		    mkstringu(context->encoding_write, context->prechop.data, context->prechop.ix),
 		    NULL
 		    );
 	    break;
 
 	case SPACE:
-	    context->deliver(context, DELIVER_SPACE, space_string, NULL);
+	    if (!st->s3)
+		context->deliver(context, DELIVER_SPACE, space_string, NULL);
 	    break;
 	}
 
@@ -159,10 +167,11 @@ extern void sgml_fmt_word_chopper(SGMLCTX *context, USTRING input)
     for (ix = 0; ix < input.bytes; ix++)
     {
 	UCHARACTER c = input.ptr[ix];
-	int ctype;
-	chop_state new_state;
-	BOOL deliver = FALSE;
-	BOOL ideo;
+	int ctype;		/* the type of this character */
+	chop_state new_state;	/* the state after this character */
+	BOOL deliver = FALSE;	/* shall er deliver the inhand data */
+	BOOL ideo;		/* is this character ideographic */
+	BOOL nobreak = FALSE;	/* we'd like this letter to stick to the last one */
 	
 	eol_sm(st, c, &context->line);
 
@@ -170,16 +179,20 @@ extern void sgml_fmt_word_chopper(SGMLCTX *context, USTRING input)
 	new_state = decode_ctype(ctype);
 	ideo = unictype_is_ideograph((UCS2)c);
 
-	/* if changing between ideo and non-ideo then always create new word */
-	if (ideo != st->s3)
-	    deliver = TRUE;
-	
+
 	if (new_state == SPACE)
 	{
 	    if (c > ' ')	/* SPACE > ' ' means nbsp or ideographic so maintain */
 		new_state = LETTER;
 	    else
 		c = ' ';
+	}
+
+	/* if changing between ideo and non-ideo then always create new word */
+	if (st->s1 != SPACE && new_state != SPACE)
+	{
+	    if (ideo != st->s3)
+		deliver = TRUE;
 	}
 
 	/* then check for whether word splitting should occur */
@@ -200,6 +213,7 @@ extern void sgml_fmt_word_chopper(SGMLCTX *context, USTRING input)
 
 	    case MARK:
 	    case PEND:
+		nobreak = TRUE;
 		break;
 		
 	    case SPACE:
@@ -215,6 +229,7 @@ extern void sgml_fmt_word_chopper(SGMLCTX *context, USTRING input)
 	    case PSTART:
 	    case PEND:
 	    case MARK:
+		nobreak = TRUE;
 		break;
 
 	    case SPACE:
@@ -234,6 +249,7 @@ extern void sgml_fmt_word_chopper(SGMLCTX *context, USTRING input)
 
 	    case MARK:
 	    case PEND:
+		nobreak = TRUE;
 		break;
 
 	    case SPACE:
@@ -253,6 +269,7 @@ extern void sgml_fmt_word_chopper(SGMLCTX *context, USTRING input)
 
 	    case PEND:
 	    case MARK:
+		nobreak = TRUE;
 		break;
 
 	    case SPACE:
@@ -279,20 +296,25 @@ extern void sgml_fmt_word_chopper(SGMLCTX *context, USTRING input)
 
 	if (deliver)
 	{
+	    /* We only want to deliver this space if either
+	     *   The non-space before it was non-ideo, or
+	     *   The current char is non-ideo
+	     */
 	    if ((chop_state)st->s1 == SPACE)
 	    {
-		context->deliver(
-		    context,
-		    DELIVER_SPACE,
-		    space_string,
-		    NULL
-		    );
+		if (!ideo || !st->s3)
+		    context->deliver(
+			context,
+			DELIVER_SPACE,
+			space_string,
+			NULL
+			);
 	    }
 	    else
 	    {
 		context->deliver(
 		    context,
-		    DELIVER_WORD,
+		    st->s4 ? DELIVER_WORD_NOBREAK : DELIVER_WORD,
 		    mkstringu(context->encoding_write, context->prechop.data, context->prechop.ix),
 		    NULL
 		    );
@@ -301,9 +323,10 @@ extern void sgml_fmt_word_chopper(SGMLCTX *context, USTRING input)
 	    context->prechop.ix = 0;
 	}
 
-
 	st->s1 = (int)new_state;
-	st->s3 = ideo;	    
+	if (new_state != SPACE)
+	    st->s3 = ideo;
+	st->s4 = nobreak;
 	
 	add_to_prechop_buffer(context, c);
     }

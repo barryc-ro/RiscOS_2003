@@ -340,9 +340,8 @@ extern void text_item_push_word(HTMLCTX * me, rid_flag xf, BOOL space)
 
     if (space)
     {
-	/* don't allow spaces attached to wide font words */
-	if ((xf & rid_flag_WIDE_FONT) == 0)
-	    xf |= rid_flag_SPACE;
+	/* set the space flag, rather than adding text */
+	xf |= rid_flag_SPACE;
 	space = FALSE;
     }
 #else

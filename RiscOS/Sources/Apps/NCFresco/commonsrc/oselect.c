@@ -209,7 +209,9 @@ void oselect_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 
 	    if ((ti->flag & rid_flag_WIDE_FONT)
 #if UNICODE
-		&& strcasecomp(encoding_default_language(rh->encoding), lang_JAPANESE) == 0
+		&& (strcasecomp(encoding_default_language(rh->encoding), lang_JAPANESE) == 0 ||
+		strcasecomp(encoding_default_language(rh->encoding), lang_CHINESE) == 0 ||
+		strcasecomp(encoding_default_language(rh->encoding), lang_KOREAN))
 #endif
 		)
 	    {

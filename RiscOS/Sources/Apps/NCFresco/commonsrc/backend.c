@@ -1024,19 +1024,32 @@ int antweb_getwebfont(antweb_doc *doc, rid_text_item *ti, int base)
 
 int antweb_getwebfont2(antweb_doc *doc, rid_flag text_flags, int font1, int base)
 {
-    int whichfont;
+    int whichfont = -1;
 
-    if ((text_flags & rid_flag_WIDE_FONT)
 #if UNICODE
-	&& strcasecomp(encoding_default_language(doc->rh->encoding), lang_JAPANESE) == 0
-#endif
-	)
+    if (text_flags & rid_flag_WIDE_FONT)
+    {
+	const char *lang = encoding_default_language(doc->rh->encoding);
+	if (strcasecomp(lang, lang_JAPANESE) == 0)
+	    whichfont = (font1 & WEBFONT_SIZE_MASK) | WEBFONT_JAPANESE;
+	else if (strcasecomp(lang, lang_CHINESE) == 0)
+	    whichfont = (font1 & WEBFONT_SIZE_MASK) | WEBFONT_CHINESE;
+	else if (strcasecomp(lang, lang_KOREAN) == 0)
+	    whichfont = (font1 & WEBFONT_SIZE_MASK) | WEBFONT_KOREAN;
+    }
+#else
+    if (text_flags & rid_flag_WIDE_FONT)
 	whichfont = (font1 & WEBFONT_SIZE_MASK) | WEBFONT_JAPANESE;
-    else if (base != -1)
-	whichfont = base;
-    else
-	whichfont = font1;
+#endif
 
+    if (whichfont == -1)
+    {
+	if (base != -1)
+	    whichfont = base;
+	else
+	    whichfont = font1;
+    }
+    
     /* pdh: autofit bodge */
     if ( gbf_active( GBF_AUTOFIT ) )
     {

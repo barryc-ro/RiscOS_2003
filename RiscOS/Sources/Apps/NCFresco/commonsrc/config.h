@@ -64,6 +64,7 @@ struct config_str
     int display_scale_image;
     int display_scales[config_SCALES];
     int display_scale_fit;
+    int display_scale_fit_mode;
     int display_width;
     int display_blending;
     wimp_box display_margin;
@@ -137,7 +138,7 @@ struct config_str
 
     int font_sizes[7];
 
-    char *font_names[16];   /* only 15 used thus far */
+    char *font_names[17];
 
     int mode_keyboard;
     int mode_cursor_toolbar;
@@ -229,6 +230,7 @@ extern struct config_str config_array;
 
 #define config_display_scale (config_array.display_scale)
 #define config_display_scale_fit (config_array.display_scale_fit)
+#define config_display_scale_fit_mode (config_array.display_scale_fit_mode)
 #define config_display_scale_image (config_array.display_scale_image)
 #define config_display_scales (config_array.display_scales)
 #define config_display_width (config_array.display_width)

@@ -495,6 +495,9 @@ os_error *feutils_open_behind_toolbar(wimp_w w)
 {
     os_error *e;
     wimp_wstate state;
+
+    STBDBG(("feutils_open_behind_toolbar: w %x\n", w));
+
     e = wimp_get_wind_state(w, &state);
     if (!e)
     {

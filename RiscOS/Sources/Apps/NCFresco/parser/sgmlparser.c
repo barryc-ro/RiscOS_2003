@@ -79,12 +79,19 @@ extern int sgml_set_encoding(SGMLCTX *context, int enc_num)
     }
     else
     {
-	PRSDBG(("sgml_set_encoding: sgmlctx %p new encoding %d\n", context, enc_num));
-	if (context->encoding)
-	    encoding_delete(context->encoding);
+	Encoding *new_enc;
 
-	context->enc_num = enc_num;
-	context->encoding = encoding_new(enc_num, FALSE);
+	PRSDBG(("sgml_set_encoding: sgmlctx %p new encoding %d\n", context, enc_num));
+
+	/* for safety check that ew can get the new encoding */
+	if ((new_enc = encoding_new(enc_num, FALSE)) != NULL)
+	{
+	    if (context->encoding)
+		encoding_delete(context->encoding);
+
+	    context->enc_num = enc_num;
+	    context->encoding = new_enc;
+	}
 #if 0
 	if (context->enc_num_write != enc_num_write)
 	{

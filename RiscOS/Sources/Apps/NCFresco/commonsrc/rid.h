@@ -149,7 +149,7 @@ typedef struct
 /* FIRST LOCATING ALL THE ORDER ASSUMPTIONS THAT EXIST, */
 /* ESPECIALLY WHEN USED AS AN ARRAY INDEX.		*/
 
-typedef SHORTISH rid_tag;
+typedef char rid_tag;
 #define rid_tag_PBREAK          0       /* Paragraph break */
 #define rid_tag_HLINE           1       /* Horizontal rule */
 #define rid_tag_TEXT            2       /* Text item */
@@ -313,7 +313,8 @@ typedef struct rid_text_item {
     SHORTISH width;             /* Display width, or -1/-2 to extend all the way across the line/unknown */
     SHORTISH pad;               /* Pad width between this and the next item IF NOT AT THE END OF A LINE */
     rid_flag flag;              /* Flags */
-    rid_tag tag;                /* Tag for the type of data */
+    rid_tag tag;                /* Tag for the type of data (only 4 bits used currently) */
+    char language;		/* Language index for this word */
     ROStyle st;                 /* Font and underline information */
     /* Extra information follows dependent on the tag value */
 } rid_text_item;

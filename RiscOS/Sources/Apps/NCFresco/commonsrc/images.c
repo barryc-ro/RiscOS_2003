@@ -830,6 +830,8 @@ static void image_handle_internal(image i, int fh, void *buffer, int from, int t
     else
     {
 	IMGDBG(("im%p: can't allocate %d-byte buffer\n", i, to ));
+
+	image_set_error(i);
 #ifndef STBWEB
 	mm_can_we_recover(FALSE);
 	image_flush( i, 0 );
@@ -1100,12 +1102,14 @@ static void image_progress(void *h, int status, int size, int so_far, int fh, in
 	    }
 	}
 
-        IMGDBG(("im%p: completed a part\n",i));
+        IMGDBG(("im%p: completed a part size %d\n",i,size));
 
         rd = 0;
 
-        i->data_so_far = 0;
+	/* set the size correctly before issuing callbacks */
         i->data_size = size;
+
+        i->data_so_far = 0;
         i->put_offset = 16;     /* make sure image restarts */
         i->flags &= ~image_flag_NO_BLOCKS;
         image_thread_start(i);
@@ -1894,7 +1898,7 @@ os_error *image_stream_end(image i, char *cfile)
 	i->file_exec_addr = ofs.execaddr;
 	i->data_size = ofs.start;
 
-	if (i->flags & image_flag_LOAD_AT_END)
+	if ( (i->flags & (image_flag_LOAD_AT_END | image_flag_ERROR)) == image_flag_LOAD_AT_END)
 	{
 	    int fh = ro_fopen(cfile, RO_OPEN_READ);
 
@@ -1928,11 +1932,11 @@ os_error *image_stream_end(image i, char *cfile)
     i->flags |= image_flag_FETCHED;
     i->flags &= ~image_flag_STREAMING;
 
-    if (res == NULL)
+    if (res == NULL && (i->flags & image_flag_ERROR) == 0)
 	i->flags |= image_flag_RENDERABLE;
     else
     {
-	usrtrc( "Image error 2 = %s\n", res);
+	usrtrc( "Image error 2 = %s\n", strsafe(res));
 
 	free_area(&i->our_area);
 	flex_free(&i->data_area);
@@ -3400,7 +3404,7 @@ static void image_drawfile_render(image i, int x, int y, int w, int h, int scale
     trfm[1] = trfm[2] = 0;
     trfm[4] = (x - i->offset_x*w/i->width) * 256;
     trfm[5] = (y - i->offset_y*h/i->height) * 256;
-    _swix(DrawFile_Render, _INR(0,4), 0, i->data_area, i->data_size, &trfm, NULL);
+    _swix(DrawFile_Render, _INR(0,4), 0, i->data_area, flex_size(&i->data_area), &trfm, NULL);
 }
 
 static void image_jpeg_render(image i, int x, int y, int w, int h, int scale_image, image_rectangle_fn plot_bg, void *handle, int ox, int oy)
@@ -3434,7 +3438,15 @@ static void image_jpeg_render(image i, int x, int y, int w, int h, int scale_ima
     if (flags == 3 && (w == 1 || h == 1))
 	flags = 0;
 
-    _swix(JPEG_PlotScaled, _INR(0,5), i->data_area, x, y, &facs, i->data_size, flags);
+#if 0
+    if (debug_get("IMGDBGN"))
+    {
+	IMGDBGN(("saving jpeg image %p-%p (%d)\n", i->data_area, (char *)i->data_area + i->data_size, i->data_size));
+	frontend_fatal_error(_swix(OS_File, _INR(0,5), 10, "<NCFresco$Dir>.^.jpeg", 0xC85, 0, i->data_area, (char *)i->data_area + i->data_size));
+    }
+#endif
+    
+    _swix(JPEG_PlotScaled, _INR(0,5), i->data_area, x, y, &facs, flex_size(&i->data_area), flags);
 }
 
 static void image_sprite_render(image i, int x, int y, int w, int h, int scale_image, image_rectangle_fn plot_bg, void *handle, int ox, int oy)

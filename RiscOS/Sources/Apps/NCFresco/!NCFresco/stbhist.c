@@ -1028,6 +1028,10 @@ void fe_history_update_current_state(fe_view v)
 	else
 	    top->last = hist;
 
+	/* update the fetching pointer in case we are reloading */
+	if (top->fetching_data.hist == top->hist_at)
+	    top->fetching_data.hist = hist;
+
 	top->hist_at = hist;
 
 	/* set new index and increment count */

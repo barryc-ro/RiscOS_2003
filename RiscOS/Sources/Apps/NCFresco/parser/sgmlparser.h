@@ -470,9 +470,10 @@ struct SGMLCTX
 #define DELIVER_UNEXPECTED      	7       /* Unexpected characters */
 #define DELIVER_SGML            	8       /* General <SGML> */
 #define DELIVER_EOL             	9       /* End of line */
-#define DELIVER_EOS             	10       /* End of stream */
+#define DELIVER_EOS             	10      /* End of stream */
+#define DELIVER_WORD_NOBREAK           	11      /* A textual word, non breaking with previous */
 
-#define NUM_DELIVER_METHODS     	11
+#define NUM_DELIVER_METHODS     	12
 
 #include "sgmlexp.h"    /* Parser exports */
 #include "sgmlimp.h"    /* Parser imports */

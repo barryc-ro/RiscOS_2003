@@ -45,10 +45,17 @@ static char *webfont_font_name(int n, char *buffer)
 	case WEBFONT_SPECIAL_TYPE_MENU:
 	    strcpy(buffer, config_font_names[13]);
 	    break;
+#endif
 	case WEBFONT_SPECIAL_TYPE_JAPANESE:
 	    strcpy(buffer, config_font_names[14]);
 	    break;
-#endif
+	case WEBFONT_SPECIAL_TYPE_CHINESE:
+	    strcpy(buffer, config_font_names[15]);
+	    break;
+	case WEBFONT_SPECIAL_TYPE_KOREAN:
+	    strcpy(buffer, config_font_names[16]);
+	    break;
+
 	default:
 	    return NULL;
 	}
@@ -167,7 +174,6 @@ os_error *webfonts_initialise( void )
 	e = NULL;
     }
 #endif
-
     return e;
 }
 
@@ -656,8 +662,10 @@ int webfont_latin(int index)
     
     switch (index & WEBFONT_SPECIAL_TYPE_MASK)
     {
-	case WEBFONT_SPECIAL_TYPE_SYMBOL:
-	case WEBFONT_SPECIAL_TYPE_JAPANESE:
+    case WEBFONT_SPECIAL_TYPE_SYMBOL:
+    case WEBFONT_SPECIAL_TYPE_JAPANESE:
+    case WEBFONT_SPECIAL_TYPE_CHINESE:
+    case WEBFONT_SPECIAL_TYPE_KOREAN:
 	    return FALSE;
 
     case WEBFONT_SPECIAL_TYPE_MENU:

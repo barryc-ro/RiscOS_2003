@@ -465,7 +465,11 @@ static os_error *fe_options_write_file(FILE *f, const char *option)
 		selected(config_encoding_user == csAutodetectJP),
 		selected(config_encoding_user == csEUCPkdFmtJapanese),
 		selected(config_encoding_user == csShiftJIS),
-		selected(config_encoding_user == csISO2022JP));
+		selected(config_encoding_user == csISO2022JP),
+		selected(config_encoding_user == csGB2312),
+		selected(config_encoding_user == csBig5),
+		selected(config_encoding_user == csEUCKR),
+		selected(config_encoding_user == csISO2022KR));
 
 	fprintf(f, msgs_lookup("options.fonts.2"),
 		checked(config_encoding_user_override),

@@ -483,7 +483,7 @@ typedef struct
 static os_error *split_message(const char *str, int width, int font_index, int *numlines, LineRec *lines)
 {
     int segwidth;
-    const char *seg = str, *splitpoint;
+    const char *seg = str;
     os_error *e = NULL;
 
     while (!e && *numlines < LINEMAX && *seg)
@@ -857,24 +857,19 @@ static char count = 0;
 
 char *rs_tmpnam(char *s)
 {
-    FILE *f;
-    BOOL present = FALSE;
+    _kernel_osfile_block fb;
+    
+    if (!s)
+	s = tmpnam_buf;
+
     do
     {
 	int sig = (time(NULL) << 8) | count++;
 
-	if (!s)
-	    s = tmpnam_buf;
-
 	sprintf(s, "<Wimp$ScrapDir>.%08x", sig);
-	f = mmfopen(s, "w");
-	if (f)
-	{
-	    mmfclose(f);
-	    present = TRUE;
-	}
     }
-    while (!present);
+    while (_kernel_osfile(17, s, &fb) != NULL);
+    
     return s;
 }
 
@@ -1026,7 +1021,7 @@ os_error *process_utf8_as_latin1(const char *text, int in_n, process_utf8_callba
     static Encoding *latin1_encoding = NULL;
 
     if (latin1_encoding == NULL)
-	latin1_encoding = encoding_new(csAcornLatin1, TRUE);
+	latin1_encoding = encoding_new(csAcornFuzzy, TRUE);
 
     return process_utf8(text, in_n, latin1_encoding, fn, handle);
 }

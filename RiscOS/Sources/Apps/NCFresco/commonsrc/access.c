@@ -2769,8 +2769,12 @@ static os_error *access_new_http(char *url, access_url_flags flags, char *ofile,
     {
 	while (!access_done_flag)
 	    d->next_fn(0, d);
-	*result = 0;
+	/* *result = 0; */
     }
+
+    /* If dns fails immediately then 'd' will have been freed already */
+    if (access_done_flag)
+	*result = 0;
 
     return NULL;
 }
@@ -2834,9 +2838,13 @@ static os_error *access_new_ftp(char *url, access_url_flags flags, char *ofile, 
 	{
 	    while (!access_done_flag)
 		d->next_fn(0, d);
-	    *result = 0;
+	    /* *result = 0; */
 	}
     }
+
+    /* If dns fails immediately then 'd' will have been freed already */
+    if (access_done_flag)
+	*result = 0;
 
     return ep;
 }
@@ -3190,6 +3198,10 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 	url_parse(url, &scheme, &netloc, &path, &params, &query, &fragment);
 	ACCDBGN(( "Cache miss... trying to fetch file\n"));
 
+	/* forcibly block all file: URLs from being referers */
+	if (referer && strncasecomp(referer, "file:", sizeof("file:")-1) == 0)
+	    referer = NULL;
+	
 	if (netloc && netloc[0] && !auth_check_allow_deny(netloc))
 	{
 	    ep = makeerror(ERR_ACCESS_DENIED);
@@ -3591,8 +3603,12 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 		    {
 			while (!access_done_flag)
 			    d->next_fn(0, d);
-			*result = 0;
+			/* *result = 0; */
 		    }
+
+		    /* If dns fails immediately then 'd' will have been freed already */
+		    if (access_done_flag)
+			*result = 0;
 		}
 	    }
 #endif /* ndef FILEONLY */

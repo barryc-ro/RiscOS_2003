@@ -154,7 +154,8 @@
 #define AUTOSCROLL_DELAY		100	/* delay before auto-scrolling takes affect */
 #define AUTOSCROLL_HOVER_AREA		8	/* space to stay within during DELAY period */
 
-#define NCFRESCO_CURRENT_PAGE		PROGRAM_NAME"$CurrentURL"
+#define NCFRESCO_CURRENT_URL		PROGRAM_NAME"$CurrentURL"
+#define NCFRESCO_CURRENT_TITLE		PROGRAM_NAME"$CurrentTitle"
 
 /* -------------------------------------------------------------------------- */
 
@@ -856,7 +857,10 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 
     /* set system variable for current page */
     if (v == main_view)
-	_kernel_setenv(NCFRESCO_CURRENT_PAGE, url);
+    {
+	_kernel_setenv(NCFRESCO_CURRENT_URL, url);
+	_kernel_setenv(NCFRESCO_CURRENT_TITLE, strsafe(title));
+    }
     
     previous_url = NULL;
     previous_mode = v->browser_mode;
@@ -1890,8 +1894,12 @@ int fe_check_download_finished(fe_view v)
 		frontend_view_redraw(top, NULL); /* put inside because of ncint:select */
 	    }
 #endif
+
+#if 0
+	    /* 04/11/97: don't do this as then OSK doesn't work */
 	    if (strncmp(top->name, TARGET_DBOX, sizeof(TARGET_DBOX)-1) == 0)
 		pointer_limit(top->box.x0, top->box.y0, top->box.x1-frontend_dx, top->box.y1-frontend_dy);
+#endif
 	}
 	else
 	{
@@ -3171,7 +3179,7 @@ static int fe_status_set_margins(fe_view v, int new_state_open)
 	}
     }
 
-    STBDBG(("fe_status_set_margins: y %d to %d dy %d\n", v->margin.y0, v->margin.y1, movement));
+    STBDBG(("fe_status_set_margins: v %p y %d to %d dy %d\n", v, v->margin.y0, v->margin.y1, movement));
 
     wimp_open_wind(&state.o);
 
@@ -4115,8 +4123,18 @@ static int fe_mouse_handler(fe_view v, wimp_mousestr *m)
 
     if (!v)
     {
-	if (m->bbits == wimp_BRIGHT)
+	switch (m->bbits)
+	{
+	case wimp_BRIGHT:
 	    fevent_handler(config_mode_mouse_adjust, main_view);
+	    break;
+	case wimp_BMID:
+	    if (keyboard_state == fe_keyboard_OFFLINE)
+		fevent_handler(fevent_STATUS_OFF, main_view);
+	    else
+		fevent_handler(config_mode_mouse_menu, main_view);
+	    break;
+	}
 
 	return FALSE;
     }
@@ -4126,12 +4144,16 @@ static int fe_mouse_handler(fe_view v, wimp_mousestr *m)
     switch (m->bbits)
     {
     case wimp_BMID:
-	if ( v->browser_mode != fe_browser_mode_DESKTOP &&
-	    v->browser_mode != fe_browser_mode_DBOX &&
-	    v->browser_mode != fe_browser_mode_APP)
+	if (keyboard_state == fe_keyboard_OFFLINE ||
+	    v->browser_mode == fe_browser_mode_DESKTOP ||
+	    v->browser_mode == fe_browser_mode_DBOX ||
+	    v->browser_mode == fe_browser_mode_APP)
+	{
+	    fevent_handler(fevent_STATUS_OFF, v);
+	}
+	else
 	{
 	    fevent_handler(config_mode_mouse_menu, v);
-/* 	    fe_status_toggle(v); */
 	}
 	break;
 
@@ -4424,6 +4446,8 @@ static void fe_keyboard_set_position(wimp_box *box, wimp_t t)
 	    state.o.box.y0 += dy;
 	    frontend_fatal_error(wimp_open_wind(&state.o));
 
+	    STBDBG(("fe_keyboard_set_position: moved dbox %p by %+d to %d/%d\n", v, dy, state.o.box.y0, state.o.box.y1));
+	    
 	    v->box = state.o.box;
 	}
     }
@@ -5081,13 +5105,15 @@ void fe_user_load(void)
 
 /* ------------------------------------------------------------------------------------------- */
 
-/*
- * I can't do anything useful here as PREQUIT is sent before the user confirms it.
- */
+/* PREQUIT on an NC is sent before the confirm shutdown box is opened
+ * and again when it is confirmed */
 
 static void fe_handle_prequit(void)
 {
-/*     fe_status_unstack_all(); */
+    if (fe_map_view())
+	fe_map_mode(NULL, NULL);
+
+    stbmenu_close();
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -5403,6 +5429,7 @@ static void setup_allocs(void)
 void fe_event_process(void)
 {
     wimp_eventstr e;
+    wimp_t sender;
 
 #if 0
     if (fe_pending_url)
@@ -5437,7 +5464,8 @@ void fe_event_process(void)
     /* do the standard poll loop    */
     if (fast_poll)
     {
-        frontend_fatal_error(wimp_poll((wimp_emask)(wimp_EMPTRLEAVE), &e));
+/* 	frontend_fatal_error((os_error *)_swix(Wimp_Poll, _INR(0,1) | _OUT(0) | _OUT(2), (wimp_emask)(wimp_EMPTRLEAVE), &e.data, &e.e, &sender)); */
+	frontend_fatal_error(wimp_poll((wimp_emask)(wimp_EMPTRLEAVE), &e));
     }
     else
     {
@@ -5450,7 +5478,8 @@ void fe_event_process(void)
                 next = next_alarm_time;
         }
 
-        frontend_fatal_error(wimp_pollidle((wimp_emask)(wimp_EMPTRLEAVE), &e, next));
+/* 	frontend_fatal_error((os_error *)_swix(Wimp_PollIdle, _INR(0,2) | _OUT(0) | _OUT(2), (wimp_emask)(wimp_EMPTRLEAVE), &e.data, next, &e.e, &sender)); */
+	frontend_fatal_error(wimp_pollidle((wimp_emask)(wimp_EMPTRLEAVE), &e, next)); 
     }
 
     switch (e.e)
@@ -5473,6 +5502,9 @@ void fe_event_process(void)
         case wimp_EOPEN:
         {
             fe_view v = find_view(e.data.o.w);
+
+	    STBDBGN(("EOPEN: v%p %d,%d %d,%d sender %x\n", v, e.data.o.box.x0, e.data.o.box.y0, e.data.o.box.x1, e.data.o.box.y1, sender));
+
 	    if (v && v->pending_mode_change)
 	    {
 		if (v->parent == NULL)
@@ -5502,7 +5534,7 @@ void fe_event_process(void)
 	    }
 	    else
 	    {
-		wimp_open_wind(&e.data.o);
+ 		wimp_open_wind(&e.data.o);
 	    }
             break;
 	}
@@ -5869,6 +5901,11 @@ static void handler(int signal)
    _swix(Wimp_ReportError, _INR(0,5), &er, wimp_EOK | (1<<8), PROGRAM_NAME, NULL, NULL, 0);
 /*    wimp_reporterror(&er, wimp_EOK, PROGRAM_NAME); */
 /*    frontend_fatal_error(&er); */
+
+   /* if a debug version then return here so that there is the chance of a backtrace */
+#if DEBUG == 0
+   exit(EXIT_FAILURE);
+#endif
 }
 
 static void signal_init(void)
@@ -6108,6 +6145,16 @@ static BOOL fe_initialise(void)
     else
 	gbf_flags &= ~GBF_AUTOFIT;
 
+    switch (config_display_scale_fit_mode)
+    {
+    case 0:
+	gbf_flags &= ~GBF_AUTOFIT_ALL_TEXT;
+	break;
+    case 1:	
+	gbf_flags |= GBF_AUTOFIT_ALL_TEXT;
+	break;
+    }
+
     gbf_init();
 
     fe_font_size_init();
@@ -6128,6 +6175,9 @@ static BOOL fe_initialise(void)
     plugin_list_read_file();
     hotlist_init();
 
+    /* init toolbar state using the buttons field of config */
+    user_status_open = config_display_control_buttons;
+    
     /* Check the licence */
     if (frontend_complain(licence_init()) != NULL)
     {

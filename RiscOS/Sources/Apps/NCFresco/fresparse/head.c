@@ -149,7 +149,8 @@ extern void startmeta (SGMLCTX * context, ELEMENT * element, VALUES * attributes
 	{
 	    int encoding = parse_content_type_header(m->content);
 
-	    if (me->rh->encoding_source == rid_encoding_source_USER)
+	    /* encoding could return 0 if it's unsupported - in which case ignore it */
+	    if (encoding && me->rh->encoding_source == rid_encoding_source_USER)
 	    {
 		/* write value into the rid header */
 		me->rh->encoding = encoding;
