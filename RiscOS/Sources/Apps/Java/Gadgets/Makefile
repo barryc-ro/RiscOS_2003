@@ -39,7 +39,7 @@ ANSILIB   = CLib:o.ansilib
 CLIB      = CLIB:o.stubs
 RLIB      = RISCOSLIB:o.risc_oslib
 ROMCSTUBS = RISCOSLIB:o.romcstubs
-ABSSYM    = RISC_OSLib:o.abssym
+ABSSYM    = RISC_OSLib:o.c_abssym
 TBOXLIB   = tbox:o.toolboxlib
 WIMPLIB   = tbox:o.wimplib
 
@@ -211,3 +211,57 @@ o.Scrollbar:	h.Scrollbar
 o.Scrollbar:	h.debug
 o.Scrollbar:	h.myswis
 o.Scrollbar:	h.Utils
+o.riscos_uti:	c.riscos_uti
+o.riscos_uti:	C:h.kernel
+o.riscos_uti:	C:h.swis
+o.riscos_uti:	tbox:h.wimp
+o.riscos_uti:	tbox:h.wimplib
+o.riscos_uti:	tbox:h.toolbox
+o.riscos_uti:	tbox:h.window
+o.riscos_uti:	tbox:h.gadgets
+o.riscos_uti:	h.riscos_utils
+o.riscos_uti:	tbox:h.toolbox
+o.TextMan:	c.TextMan
+o.TextMan:	C:h.kernel
+o.TextMan:	C:h.swis
+o.TextMan:	h.TextMan
+o.TextMan:	h.MemMan
+o.TextMan:	C:h.kernel
+o.MemMan:	c.MemMan
+o.MemMan:	C:h.swis
+o.MemMan:	C:h.kernel
+o.MemMan:	C:h.kernel
+o.MemMan:	h.MemMan
+o.MemMan:	C:h.kernel
+o.glib:	c.glib
+o.glib:	C:h.kernel
+o.glib:	C:h.swis
+o.glib:	h.glib
+o.glib:	C:h.kernel
+o.glib:	tbox:h.wimp
+o.glib:	tbox:h.toolbox
+o.glib:	tbox:h.window
+o.glib:	tbox:h.gadgets
+o.glib:	h.glibP
+o.glib:	tbox:h.toolbox
+o.glib:	tbox:h.window
+o.glib:	tbox:h.wimplib
+o.glib3:	c.glib3
+o.glib3:	C:h.kernel
+o.glib3:	C:h.swis
+o.glib3:	h.glib
+o.glib3:	C:h.kernel
+o.glib3:	tbox:h.wimp
+o.glib3:	tbox:h.toolbox
+o.glib3:	tbox:h.window
+o.glib3:	tbox:h.gadgets
+o.glib3:	h.glibP
+o.glib3:	tbox:h.toolbox
+o.glib3:	tbox:h.window
+o.glib3:	tbox:h.wimplib
+o.rmensure:	c.rmensure
+o.rmensure:	C:h.kernel
+o.rmensure:	C:h.swis
+o.rmensure:	h.rmensure
+o.string32:	c.string32
+o.string32:	h.string32
