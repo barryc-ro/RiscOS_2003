@@ -19,23 +19,23 @@ EXP_C_O = <Cexport$dir>.o
 #
 MKDIR   = cdir
 AS      = objasm
-CC      = $(MemCheckCC) cc
-CMHG    = cmhg515
+CC      = cc
+CMHG    = cmhg
 CP      = copy
-LD      = $(MemCheckLD) link
+LD      = link
 RM      = remove
 WIPE    = -wipe
 CD	= dir
 CHMOD	= access
 
 AFLAGS     = -depend !Depend ${THROWBACK} -Stamp -quit
-CFLAGS     = -c -depend !Depend ${THROWBACK} -zM ${INCLUDES} ${DFLAGS}
+CFLAGS     = -c -depend !Depend ${THROWBACK} -zM -ff ${INCLUDES} ${DFLAGS}
 CMHGFLAGS  = -p ${DFLAGS} ${THROWBACK} ${INCLUDES}
 CPFLAGS    = ~cfr~v
 WFLAGS     = ~c~vr
 CHMODFLAGS = RW/R
 
-DFLAGS     = -DPODULE_1 -DNO_FLASH_READY -DFAKE_FLASH
+#DFLAGS     = -DPODULE_2
 # DFLAGS     = -DNO_FLASH_READY -DFAKE_FLASH
 
 # DFLAGS  = -DUSE_TINY ${DEBUG}
@@ -61,13 +61,15 @@ TARGET    = aof.${COMPONENT}
 RMTARGET  = rm.${COMPONENT}
 EXPORTS   = ${EXP_C_H}.${COMPONENT}
 
-OBJS      = o.module o.header o.heap o.flashlib o.resourcefs o.swiven \
-            MemCheck:o.MC_M
-            
+OBJS      = o.module o.header o.heap o.flashlib o.swiven
+OBJSSA    = oSA.module o.header o.heap o.flashlib o.resourcefs o.swiven
+
 #
 # Rule patterns
 #
-.c.o:;      ${CC}   ${CFLAGS} -o $@ $<
+.SUFFIXES:	.o .oSA .s .c .cmhg
+.c.o:;      ${CC}   ${CFLAGS} -DDONT_BUILD_RESOURCES -o $@ $<
+.c.oSA:;    ${CC}   ${CFLAGS} -o $@ $<
 .cmhg.o:;   ${CMHG} ${CMHGFLAGS} -o $@ $< h.$*
 .s.o:;      ${AS}   ${AFLAGS} $< $@
 
@@ -115,15 +117,17 @@ rom_link:
 #
 # Relocatable module target
 #
-${RMTARGET}: ${OBJS}
-        ${LD} -rmf -o $@ ${OBJS} ${CLIB}
+${RMTARGET}: ${OBJSSA}
+        ${LD} -rmf -o $@ ${OBJSSA} ${CLIB}
         ${CHMOD} rm.${COMPONENT} ${CHMODFLAGS}
 
 # ${EXP_C_H}.${COMPONENT}:	h.${COMPONENT}
 #         ${CP} h.${COMPONENT} $@ ${CPFLAGS}
 
 o.resourcefs:
-        genres Resources.${LOCALE} -a${COMPONENT} -o $@
+	resgen resources_base $@ -via res
+
+#        genres Resources.${LOCALE} -a${COMPONENT} -o $@
 
 #
 # Dynamic dependencies:
