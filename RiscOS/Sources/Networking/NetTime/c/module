@@ -1,11 +1,18 @@
+#include <sys/types.h>
+
+#include <Global/Services.h>
+
 #include "nettime.h"
 #include "nt_nvram.h"
 #include "header.h"
+#include "rtcadjust.h"
+#include "ntp.h"
 
-static _kernel_oserror *TinyError, *err;
+static _kernel_oserror *err;
 static grabbed_event = 0;
 static transition_t callback_reason;
 void *privateword;
+static int we_are_setting;
 
 void setcallback(transition_t reason, void *pw);
 
@@ -14,14 +21,20 @@ _kernel_oserror *module_init(const char *cmd_tail, int podule, void *pw)
 {
 
   int time;
-  char ltime[8];
+  struct riscos_time ltime = { 0 };
+  _kernel_swi_regs r;
 
-  /* Try to use TinyStubs if possible. */
-  TinyError = _swix( TinySupport_Share, _IN(0), pw );
+  r.r[0] = (int) "NetTime$DST";
+  r.r[2] = -1;
+  r.r[3] = 0;
+  r.r[4] = 0;
+  _kernel_swi(OS_ReadVarVal, &r, &r);
+  if (r.r[2] == 0)
+      _swix(OS_SetVarVal, _INR(0,4), "NetTime$DST", "European", 8, 0, 0);
 
   /* Initialise DebugLib (if DEBUGLIB defined)
    */
-  debug_initialise("NetTime", "izipfs:$.netlog", "");
+  debug_initialise("NetTime", "NFS::NFSBoot.$.NetTimeLog", "");
 /*  debug_initialise_trace(FILE_OUTPUT, ""); */
   debug_atexit();
   debug_output_device(FILE_OUTPUT);
@@ -42,11 +55,18 @@ _kernel_oserror *module_init(const char *cmd_tail, int podule, void *pw)
     grabbed_event = -1;
   }
 
+  if ((err = _swix(OS_Claim, _INR(0,2), WordV, module_wordentry, pw)) != NULL)
+  {
+    _swix(OS_Release, _INR(0,2), EventV, module_evententry, pw);
+    return err;
+  }
+
   time = nvram_gettime(); /* get last stored time in seconds, host byte order */
 
   if (time) {
-    mul64(time, 100, (int *)ltime); /* convert to centiseconds */
-    _swix(Territory_SetTime, _IN(0), ltime); /* set time */
+    mul64(time, 100, (u_int32_t *)&ltime); /* convert to centiseconds */
+    if ((time & 0x80000000) == 0) ltime.h += 100;
+    set_time(&ltime);
   }
 
   machine(Init);
@@ -59,8 +79,12 @@ _kernel_oserror *module_final(int fatal, int podule, void *pw)
 {
   machine(Die);
 
-  if ( TinyError == NULL )
-    _swix( TinySupport_Die, 0 );
+  rtcadjust_final(1);
+
+  _swix(OS_RemoveTickerEvent, _INR(0,1), module_timerentry, pw);
+  _swix(OS_RemoveCallBack, _INR(0,1), module_callentry, pw);
+
+  _swix(OS_Release, _INR(0,2), WordV, module_wordentry, pw);
 
   /* Disable and release internet event */
   _swix(OS_Byte, _INR(0,1), Event_Disable, Internet_Event);
@@ -75,12 +99,21 @@ void module_service(int service, _kernel_swi_regs *r, void *pw)
 {
   switch (service)
   {
+  case Service_PreReset:
+  case Service_ShutDown:
+    rtcadjust_fixup_hardware_rtc();
+    return;
+
   case Service_PostInit:
     machine(PostInit);
     return;
 
   case Service_Dialler:
     machine(CONNECTED(r->r[2]) ? LinkUp : LinkDown);
+    return;
+
+  case Service_InternetStatus:
+    handle_dhcp(r);
     return;
 
   case Service_NCRegistry:
@@ -105,20 +138,18 @@ _kernel_oserror *module_timerhandler(_kernel_swi_regs *r, void *pw)
 int module_eventhandler(_kernel_swi_regs *r, void *pw)
 {
   /* Assumes only requested event in CMHG is Internet */
-  if ((r->r[1] != RarpReply) && (r->r[2] == sockno))	/* Pour moi? */
+  if ((r->r[2] == sockno))	/* Pour moi? */
   {
     switch (r->r[1])
     {
     case Async:
       setcallback(Response, pw);
-      break;
+      return 0;	/* Claim */
 
     case Broken:
       setcallback(Failure, pw);
-      break;
+      return 0;	/* Claim */
     }
-
-    return 0;	/* Claim */
   }
 
   return 1;	/* Don't claim */
@@ -131,6 +162,15 @@ _kernel_oserror *module_callhandler(_kernel_swi_regs *r, void *pw)
   return NULL;
 }
 
+int module_wordhandler(_kernel_swi_regs *r, void *pw)
+{
+  if (r->r[0] == 15 && !we_are_setting)
+  {
+      machine(Die);
+      rtcadjust_final(0);
+  }
+  return 1;
+}
 
 void setcallback(transition_t reason, void *pw)
 {
@@ -138,9 +178,35 @@ void setcallback(transition_t reason, void *pw)
   _swix(OS_AddCallBack, _INR(0,1), module_callentry, pw);
 }
 
+void removecallback(transition_t reason, void *pw)
+{
+  if (callback_reason == Timer)
+     _swix(OS_RemoveCallBack, _INR(0,1), module_callentry, pw);
+}
+
 _kernel_oserror *module_cmd_handler(const char *arg_string, int argc, int cmd_no, void *pw)
 {
-    _swix(OS_RemoveTickerEvent, _INR(0,1), module_timerentry, pw);
-    setcallback(LinkUp, pw);
+    switch (cmd_no)
+    {
+      case CMD_NetTime_Kick:
+        _swix(OS_RemoveTickerEvent, _INR(0,1), module_timerentry, pw);
+        setcallback(LinkUp, pw);
+        break;
+
+      case CMD_NetTime_Status:
+        print_status();
+        break;
+    }
     return NULL;
+}
+
+_kernel_oserror *set_time(const struct riscos_time *t)
+{
+    _kernel_oserror *e;
+
+    we_are_setting = 1;
+    e = _swix(Territory_SetTime, _IN(0), t);
+    we_are_setting = 0;
+
+    return e;
 }

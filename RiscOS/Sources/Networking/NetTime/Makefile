@@ -32,8 +32,8 @@ AR	= LibFile
 STRIP   = -StripDepnd
 
 ASFLAGS = -depend !Depend -Stamp -quit -module
-CCFLAGS  = -c -depend !Depend ${INCLUDES} -ffa -zM -DCOMPAT_INET4 -Wp ${DFLAGS} ${DSTFLAGS}
-# Falgs for debugging ...
+CCFLAGS  = -c ${THROWBACK} -depend !Depend ${INCLUDES} -ffa -zM -DCOMPAT_INET4 -Wp ${DFLAGS}
+# Flags for debugging ...
 #CCFLAGS  = -c -depend !Depend ${INCLUDES} -zM -DCOMPAT_INET4 -Wp -Throwback -DDEBUG
 CPFLAGS = ~cfr~v
 WFLAGS  = ~c~v
@@ -51,17 +51,13 @@ ABSSYM     = RISC_OSLib:o.AbsSym
 
 SOCKLIB	   = TCPIPLibs:o.socklibzm
 INETLIB	   = TCPIPLibs:o.inetlibzm
-
-# Uncomment this, or pass to AMU, to enable support for setting Daylight Savings
-# automatically for Europe in the years 1998-2001.
-#
-#DSTFLAGS   = -DEUROPEAN_DST_BODGE
+UNIXLIB	   = TCPIPLibs:o.unixlibzm
 
 #
 # DebugLib support.
 # Uncomment these or pass to AMU to enable debug build.
 #
-#DFLAGS	= -Throwback -fn -DDEBUGLI
+#DFLAGS	= -fn -DDEBUGLIB
 #LIBSD = <Lib$Dir>.DebugLib.o.debuglibzm
 
 
@@ -80,7 +76,8 @@ COMPONENT = NetTime
 TARGET    = aof.NetTime
 TARGETSA  = rm.NetTime
 EXPORTS   = 
-OBJS      = mul64.o machine.o module.o header.o nt_nvram.o dns.o edst.o
+OBJS      = extralong.o mul64.o machine.o module.o header.o nt_nvram.o dns.o \
+            edst.o ntp.o rtcadjust.o dhcp.o dst.o
 
 #
 # Generic rules:
@@ -114,14 +111,14 @@ resources:
         ${CP} LocalRes:Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
-${TARGETSA}: ${OBJS} ${CLIB} ${SOCKLIB} ${INETLIB} ${LIBSD}
-        ${LD} -o $@ -module ${OBJS} ${CLIB} ${SOCKLIB} ${INETLIB} ${LIBSD}
+${TARGETSA}: ${OBJS} ${CLIB} ${SOCKLIB} ${INETLIB} ${UNIXLIB} ${LIBSD}
+        ${LD} -o $@ -module ${OBJS} ${CLIB} ${SOCKLIB} ${INETLIB} ${UNIXLIB} ${LIBSD}
 
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${OBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB}
-        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB}
+${TARGET}: ${OBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB} ${UNIXLIB}
+        ${LD} -o $@ -aof ${OBJS} ${ROMCSTUBS} ${SOCKLIB} ${INETLIB} ${UNIXLIB}
 
 
 #

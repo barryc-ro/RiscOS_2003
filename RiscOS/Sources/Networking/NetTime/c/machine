@@ -10,26 +10,36 @@
 #include "nt_nvram.h"
 #include "header.h"
 #include "dns.h"
-#include "edst.h"
+#include "dst.h"
+#include "rtcadjust.h"
+#include "ntp.h"
+
 #include <string.h>
+#include <stddef.h>
 
 /*
  * Public vars
  */
 int sockno;
+static int attempts;
+static int using_ntp;
 char env_time_server[MAX_ENV_TIME_SERVER];
 struct sockaddr_in sockaddr;
+int synchronised;
 
 #ifdef DEBUGLIB
 char inet_resolvers[128];
 #endif
 
+char *states[] = {"Dormant", "NoLink", "Sleeping", "Expecting", "DNSWait"};
+
 #ifdef DEBUGLIB
 /* State and transition names for debug output - keep these in step with definitions
  * in nettime.h
  */
-char *states[] = {"Dormant", "NoLink", "Sleeping", "Expecting", "DNSWait"};
 char *transitions[] = {"NoTrans", "Init", "Die", "PostInit", "Response", "Failure", "Timer", "LinkUp", "LinkDown", "RegistryChanged", "DoDNS"};
+
+#endif
 
 #define STATENAME(i) ((((i) < 0) || ((i) > sizeof(states)/sizeof(char *))) ? \
 			"Invalid state" : states[i])
@@ -37,7 +47,6 @@ char *transitions[] = {"NoTrans", "Init", "Die", "PostInit", "Response", "Failur
 #define TRANSNAME(i) ((((i) < 0) || ((i) > sizeof(transitions)/sizeof(char *))) ? \
 			"Invalid transition" : transitions[i])
 
-#endif
 
 /*
  * Private function defs
@@ -49,7 +58,9 @@ static int local_settimeofday(void);
 static void settimer(int duration);
 static void canceltimer(void);
 static void closeconnect(void);
+static int probe(void);
 
+static state_t state = Dormant;
 
 /*
  * State machine
@@ -65,7 +76,6 @@ static void closeconnect(void);
  */
 void machine(transition_t transition)
 {
-  static state_t state = Dormant;
   transition_t next_trans;
   int status;
 
@@ -82,9 +92,12 @@ void machine(transition_t transition)
     case Dormant:
       switch(transition)
       {
-        case PostInit:
+      case PostInit:
+      case Init:
         if (isdialup())
           state = NoLink;
+        else
+          next_trans = LinkUp;
         continue;
 
       case LinkUp:
@@ -93,7 +106,6 @@ void machine(transition_t transition)
         state = DNSWait;
         continue;
 
-      case Init:
       case Die:
       case LinkDown:
         continue;
@@ -155,9 +167,12 @@ void machine(transition_t transition)
 
           case 0:
 	    /* Resolve complete - connect to server */
-            if (tryconnect(&sockaddr))
+            if (tryconnect(&sockaddr) && probe()) {
+              settimer(RETRY_TIMER);
               state = Expecting;
+            }
             else {
+              rtcadjust_suspend();
               settimer(SHORT_TIMER);
               state = Sleeping;
             }
@@ -165,6 +180,7 @@ void machine(transition_t transition)
 
 	  default:
             /* Resolve failed - retry later */
+            rtcadjust_suspend();
 	    settimer(SHORT_TIMER);
 	    state = Sleeping;
 	    continue;
@@ -196,7 +212,8 @@ void machine(transition_t transition)
       case Response:
         if (local_settimeofday())
         {
-#ifdef PERIODICAL_TIME_CHECKS
+          canceltimer();
+#ifndef NO_PERIODICAL_TIME_CHECKS
           state = Sleeping;
           settimer(LONG_TIMER);
 #else
@@ -206,16 +223,32 @@ void machine(transition_t transition)
         continue;
 
       case Failure:
+        rtcadjust_suspend();
         closeconnect();
         settimer(SHORT_TIMER);
         continue;
 
+      case Timer:
+        if (attempts > 4 || !probe()) {
+            rtcadjust_suspend();
+            closeconnect();
+            settimer(SHORT_TIMER);
+            state = Sleeping;
+        }
+        else
+            settimer(RETRY_TIMER << (attempts-1));
+        continue;
+
       case LinkDown:
+        canceltimer();
+        rtcadjust_suspend();
         closeconnect();
         state = NoLink;
         continue;
 
       case Die:
+        canceltimer();
+        rtcadjust_suspend();
         closeconnect();
         state = Dormant;
         continue;
@@ -273,40 +306,51 @@ static int tryresolve(struct sockaddr_in *sockaddr)
     return -1;
   }
 
-  /* Attempt to read from the Inet$TimeServer system variable */
+  /* Attempt to read from the Inet$NTPServer system variable */
   dprintf(("debug", "checking environment variable %s\n", ENV_TIME_SERVER2));
-  if(read_os_var(ENV_TIME_SERVER2, env_time_server, MAX_ENV_TIME_SERVER)>0)
+  if(read_os_var(ENV_NTP_SERVER, env_time_server, MAX_ENV_TIME_SERVER)>0)
   { /* we have a configured time server */
     dprintf(("debug", "read environment variable: %s\n", env_time_server));
+    using_ntp = 1;
   }
   else
   {
-    /* Attempt to read from the NetTime$Server system variable */
-    dprintf(("debug", "checking environment variable %s\n", ENV_TIME_SERVER));
-    if(read_os_var(ENV_TIME_SERVER, env_time_server, MAX_ENV_TIME_SERVER)>0)
+    using_ntp = 0;
+    /* Attempt to read from the Inet$TimeServer system variable */
+    dprintf(("debug", "checking environment variable %s\n", ENV_TIME_SERVER2));
+    if(read_os_var(ENV_TIME_SERVER2, env_time_server, MAX_ENV_TIME_SERVER)>0)
     { /* we have a configured time server */
       dprintf(("debug", "read environment variable: %s\n", env_time_server));
     }
     else
     {
-      /* Ask the Registry who we should contact */
-      dprintf(("debug", "Requesting the time server from Managed Access\n"));
-      if (_swix(NCAccessManager_Enquiry, _INR(0,2)|_OUT(0),
-                NCRegistry_TimeServerTag, env_time_server, MAX_ENV_TIME_SERVER,
-                &i))
-      {
-        dprintf(("debug", "NCAccessManager bailed! r0=%x\n", i));
-        return -1;
+      /* Attempt to read from the NetTime$Server system variable */
+      dprintf(("debug", "checking environment variable %s\n", ENV_TIME_SERVER));
+      if(read_os_var(ENV_TIME_SERVER, env_time_server, MAX_ENV_TIME_SERVER)>0)
+      { /* we have a configured time server */
+        dprintf(("debug", "read environment variable: %s\n", env_time_server));
       }
+      else
+      {
+        /* Ask the Registry who we should contact */
+        dprintf(("debug", "Requesting the time server from Managed Access\n"));
+        if (_swix(NCAccessManager_Enquiry, _INR(0,2)|_OUT(0),
+                  NCRegistry_TimeServerTag, env_time_server, MAX_ENV_TIME_SERVER,
+                  &i))
+        {
+          dprintf(("debug", "NCAccessManager bailed! r0=%x\n", i));
+          return -1;
+        }
 
-      if(i == 4) { /* packed IP address */
-        ipaddress = *(int *)env_time_server;
-        dprintf(("debug", "NCAccessManager says timeserver IP address is %08x\n", ipaddress));
-        if (ipaddress == 0) return 0;
-        sockaddr->sin_addr.s_addr = ipaddress; /* address already in network order */
-        return 0; /* complete */
-      } else {
-        dprintf(("debug", "NCAccessManager says timeserver host is %s\n", env_time_server));
+        if(i == 4) { /* packed IP address */
+          ipaddress = *(int *)env_time_server;
+          dprintf(("debug", "NCAccessManager says timeserver IP address is %08x\n", ipaddress));
+          if (ipaddress == 0) return 0;
+          sockaddr->sin_addr.s_addr = ipaddress; /* address already in network order */
+          return 0; /* complete */
+        } else {
+          dprintf(("debug", "NCAccessManager says timeserver host is %s\n", env_time_server));
+        }
       }
     }
   }
@@ -339,7 +383,6 @@ static int tryconnect(struct sockaddr_in *sa)
 {
   dialler_status_t dialler_status;
   int i;
-  struct servent *service;
 
   /*
    * Ensure that if the dialler module is around to return a status,
@@ -356,46 +399,69 @@ static int tryconnect(struct sockaddr_in *sa)
 
   dprintf(("debug", "Using time server 0x%x\n", (int)sa->sin_addr.s_addr));
 
-  if ((service=getservbyname("time", "tcp")) == NULL)
-  {
-    dprintf(("debug", "Can't find service time/tcp\n"));
-    return 0;
-  }
-
   sa->sin_family = AF_INET;
-  sa->sin_port = service->s_port;
+  sa->sin_port = ntohs(using_ntp ? 123 : 37);
 
   /* Make a non-blocking async socket */
-  sockno = socket(AF_INET, SOCK_STREAM, 0);
+  sockno = socket(AF_INET, SOCK_DGRAM, 0);
   i=1;
   socketioctl(sockno, FIONBIO, &i);
   socketioctl(sockno, FIOASYNC, &i);
 
   dprintf(("debug", "Connecting\n"));
-  if ((connect(sockno, (struct sockaddr*) sa, sizeof *sa) < 0) &&
-      (errno != EINPROGRESS) && (errno != EWOULDBLOCK))
+  if (connect(sockno, (struct sockaddr*) sa, sizeof *sa) < 0)
     {
       dprintf(("debug", "Connect error %d\n", errno));
       socketclose(sockno);
       return 0;
     }
 
+  attempts=0;
+
   dprintf(("debug", "Connect initiated on socket %d\n", sockno));
   return -1;
 }
+
+static int probe(void)
+{
+  struct ntp n;
+  size_t len = 0;
+
+  dprintf(("debug", "Sending\n"));
+  attempts++;
+
+  if (using_ntp)
+      len = ntp_construct_request(&n, sizeof n);
+
+  if (send(sockno, &n, len, 0) < 0)
+    {
+      dprintf(("debug", "Send error %d\n", errno));
+      socketclose(sockno);
+      return 0;
+    }
+
+ return -1;
+}
+
 
 
 /* Returns non-zero if read server time */
 static int local_settimeofday(void)
 {
   int time, read;
-  char ltime[8];
+  int expected;
+  struct riscos_time ltime;
+  struct ntp n;
+  int result;
+  int dst;
 
-  if ((read = socketread(sockno, (char *) &time, 4)) < 4)
+  expected = using_ntp ? sizeof n : 4;
+
+  if ((read = socketread(sockno, using_ntp ? (void *) &n : (void *) &time, expected)) < expected)
   {
-    if ((read > 0) || ((errno != EINPROGRESS) && (errno != EWOULDBLOCK)))
+    if ((read > 0) || (errno != EWOULDBLOCK))
     {
-      dprintf(("debug", "Connect error %d\n", errno));
+      dprintf(("debug", "Read error %d\n", errno));
       machine(Failure);					/* Note! */
     }
     else
@@ -407,23 +473,41 @@ static int local_settimeofday(void)
   }
   closeconnect();
 
-  /* Convert time from network in seconds to host in centiseconds */
-  time = (int) ntohl(time);
-  nvram_settime(time);
-  mul64(time, 100, (int*) ltime);
-
-  /* Set time */
-  _swix(Territory_SetTime, _IN(0), &ltime);
-  dprintf(("debug", "Set time!\n"));
-
-#ifdef EUROPEAN_DST_BODGE
-  if (edst_isdst(ltime))
-      nvram_set_dst(1);
+  if (using_ntp)
+  {
+    result = ntp_process_reply(&n, read, &ltime);
+    /* This'll be close enough for the NVRAM */
+    time = (int) ntohl(n.transmit_timestamp.secs);
+  }
   else
-      nvram_set_dst(0);
+  {
+    /* Convert time from network in seconds to host in centiseconds */
+    time = (int) ntohl(time);
+    mul64(time, 100, (u_int32_t *) &ltime);
+    /* Treat times 0x00000000-0x7FFFFFFF as 0x100000000-0x17FFFFFFF */
+    if ((time & 0x80000000) == 0) ltime.h += 100;
+    dprintf(("debug", "Set time!\n"));
+    result = -1;
+  }
+
+  if (result == -1)
+#ifdef NO_PERIODICAL_TIME_CHECKS
+    result = rtcadjust_settime(&ltime, 0);
+#else
+    result = rtcadjust_settime(&ltime, LONG_TIMER);
 #endif
 
-  return -1;
+  if (result == -1)
+  {
+    synchronised = 1;
+    nvram_settime(time);
+  }
+
+  dst = dst_isdst(&ltime);
+  if (dst != -1)
+      nvram_set_dst(dst);
+
+  return result;
 }
 
 
@@ -437,6 +521,7 @@ static void settimer(int duration)
 static void canceltimer(void)
 {
   _swix(OS_RemoveTickerEvent, _INR(0,1), module_timerentry, privateword);
+  removecallback(Timer, privateword);
 }
 
 
@@ -445,4 +530,11 @@ static void closeconnect(void)
   dprintf(("debug", "Closing socket %d\n", sockno));
   socketclose(sockno);
   sockno = -1;			/* So that we don't get any events */
+}
+
+void print_status(void)
+{
+  printf("Current time:    %s\n", riscos_to_text(current_time(), 0));
+  printf("Status:          %s\n", STATENAME(state));
+  rtcadjust_print_status();
 }
