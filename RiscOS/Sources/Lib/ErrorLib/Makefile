@@ -1,33 +1,156 @@
-# Project:   ErrorLib
+# Makefile for errorlib
+#
+# *****************************************
+# ***       C h a n g e   L i s t       ***
+# *****************************************
+# Date		Name		Description
+# ----		----		-----------
+# 1997-10-07	BAL		Created
 
-CC =		cc
-LD = 		Link
-ASM =	 	ObjAsm
-CMHG =	 	CMHG
-LB =		LibFile
-RM =		Remove
-WIPE =		-Wipe
 
-CFLAGS =	-c -depend !Depend -Itbox:,C: -UDEBUGLIB -fah -strict -throwback
-CPPFLAGS = 	-c -depend !Depend -IC: -throwback
-LDFLAGS	= 	-aif -c++
-LBFLAGS =	-c
-ASMFLAGS =	-throwback -NoCache -depend !Depend
-CMHGFLAGS = 	-depend !Depend -throwback -IC:
-WIPEFLAGS =	~C~V
+# ------------------------------------------------------------------------------
+# Paths
+#
 
-TARGET = 	Targets.ErrorLib
+EXP_HDR		= <export$dir>
+LIBDIR		= <Lib$Dir>
+EXPORT_DIR	= <Lib$Dir>.ErrorLib
 
-OBJECTS	= 	o.error
 
-.SUFFIXES:	.o .c
-.c.o:;		$(CC) $(CFLAGS) -o $@ $<
+# ------------------------------------------------------------------------------
+# Generic options
+#
 
-all: $(TARGET)
+MKDIR		= cdir
+AS		= objasm
+CP		= copy
+CC		= cc
+CM		= cmhg
+RM		= remove
+LD		= link
+LB		= libfile
+WIPE		= -wipe
+
+CCFLAGS		= -c -depend !Depend -ffah ${INCLUDES} ${DFLAGS}
+ASFLAGS		= -depend !Depend -Stamp -quit
+CPFLAGS		= ~clfnr~v
+LBFLAGS		= -c
+WFLAGS		= ~CFR~V
+
+
+# ------------------------------------------------------------------------------
+# Libraries
+#
+
+CLIB		= CLIB:o.stubs
+RLIB		= RISCOSLIB:o.risc_oslib
+RSTUBS		= RISCOSLIB:o.rstubs
+ROMSTUBS	= RISCOSLIB:o.romstubs
+ROMCSTUBS	= RISCOSLIB:o.romcstubs
+ABSSYM		= RISC_OSLib:o.AbsSym
+
+
+# ------------------------------------------------------------------------------
+# Include files
+#
+
+INCLUDES	= -Itbox:,C:
+DFLAGS		= 
+
+
+# ------------------------------------------------------------------------------
+# Program specific options:
+#
+
+COMPONENT	= errorlib
+TARGET		= errorlib
+TARGETZ		= errorlibzm
+EXPORTS		= ${EXP_HDR}.${COMPONENT}
+
+OBJS		= o.error
+
+OBJSZ		= z.error
+
+# ------------------------------------------------------------------------------
+# Rule patterns
+#
+
+.SUFFIXES: .o .z .s .h .c
+.c.o:;     ${CC} ${CCFLAGS} -o $@ $<
+.c.z:;     ${CC} ${CCFLAGS} -zm -zps1 -o $@ $<
+.s.o:;     ${AS} ${ASFLAGS} -o $@ $<
+
+
+# ------------------------------------------------------------------------------
+# Build all the library
+#
+
+all:	${TARGET} ${TARGETZ}
+
+
+# ------------------------------------------------------------------------------
+# RISC OS ROM build rules
+#
+
+export: export_${PHASE}
+
+install_rom: ${TARGET}
+	${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+	@echo ${COMPONENT}: rom module installed
 
 clean:
-	$(RM)	$(TARGET)
-	$(WIPE)	o.*		$(WIPEFLAGS)
+	${WIPE} o ${WFLAGS}
+	${WIPE} z ${WFLAGS}
+	${RM} ${TARGET}
+	${RM} ${TARGETZ}
+	@echo ${COMPONENT}: cleaned
 
-$(TARGET): $(OBJECTS)
-	$(LB) $(LBFLAGS) -o $@ $(OBJECTS)
+export_hdrs: h.errorlib dirs
+	${CP}	h.errorlib	${EXPORT_DIR}.h.errorlib ${CPFLAGS}
+	@echo ${COMPONENT}: export complete (hdrs)
+
+export_libs: ${TARGET} ${TARGETZ} dirs
+	${CP}	${TARGET}	${EXPORT_DIR}.o.${TARGET}	${CPFLAGS}
+	${CP}	${TARGETZ}	${EXPORT_DIR}.o.${TARGETZ}	${CPFLAGS}
+	@echo ${COMPONENT}: export complete (libs)
+
+local_dirs:
+	${MKDIR} o
+	${MKDIR} z
+
+dirs:
+	${MKDIR} ${LIBDIR}
+	${MKDIR} ${EXPORT_DIR}
+	${MKDIR} ${EXPORT_DIR}.h
+	${MKDIR} ${EXPORT_DIR}.o
+	${MKDIR} ${EXPORT_DIR}.z
+        
+
+# ------------------------------------------------------------------------------
+# Final link
+#
+
+${TARGET}: ${OBJS} local_dirs
+	${LB} ${LBFLAGS} -o ${TARGET} ${OBJS}
+        
+${TARGETZ}: ${OBJSZ} local_dirs
+	${LB} ${LBFLAGS} -o ${TARGETZ} ${OBJSZ}
+
+${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
+	${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
+
+
+# ------------------------------------------------------------------------------
+# Dynamic dependencies:
+o.error:	c.error
+o.error:	h.errors
+o.error:	C:h.kernel
+o.error:	C:h.swis
+o.error:	tbox:h.wimp
+o.error:	tbox:h.wimplib
+z.error:	c.error
+z.error:	h.errors
+z.error:	C:h.kernel
+z.error:	C:h.swis
+z.error:	tbox:h.wimp
+z.error:	tbox:h.wimplib
