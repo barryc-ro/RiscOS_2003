@@ -275,12 +275,6 @@ int far  MouseUnload( void )
 
    if(gfNoMouse)
       return(CLIENT_ERROR_NO_MOUSE);
-
-#if 0
-   // remove hooks
-   DeallocHook(&gpMouseReadRootHook, NULL);
-   DeallocHook(&gpMouseIntRootHook, NULL);
-#endif
    
    // undo the mouse driver things
    rc = mouTakedown();
@@ -317,297 +311,7 @@ int far  MouseLoadPreferences( PMOUPREFERENCES pPref )
    return(rc);
 }
 
-#if 0
-/*******************************************************************************
- *
- *  MouseRead
- *
- *    Get mouse data - coordinates are returned in normalized form.
- *
- * ENTRY:
- *    pMouse - pointer to mouse data
- *    puCount - number of mouse data structures to return
- *              returns number returned
- *
- * EXIT:
- *    CLIENT_STATUS_SUCCESS - no error
- *    CLIENT_ERROR_NO_MOUSE
- *
- ******************************************************************************/
-int far  MouseRead( PMOUSEDATA pMouse, PUSHORT puCount )
-{
-   USHORT ucnt;
-   PMOUSEDATA pmdwk;
-   PFNHOOK phook;
 
-   if(gfNoMouse)
-      return(CLIENT_ERROR_NO_MOUSE);
-
-   if(guMouseQueueOverflow) {
-      guMouseQueueOverflow = 0;
-      TRACE(( TC_MOU, TT_API2, "MouseRead: Queue Overflow" ));
-//      ASSERT( FALSE, 0 );
-   }
-
-   guReadingMouseQueue = 1;
-   for(ucnt=*puCount, pmdwk=pMouse; ucnt>0; ucnt--, pmdwk++) {
-
-      if(guMouseNextQueueEntry!=guMouseFirstQueueEntry) {
-
-         *pmdwk = *(gpMouseQueue+guMouseFirstQueueEntry);
-
-         /*
-          * All mouse coordinates are absolute
-          * This changes coordinates to a normalized range
-          * of (0,0) to (0xFFFF,0xFFFF)
-          */
-         TRACE(( TC_MOU, TT_API2, "MouseRead: raw X=%u Y=%u",pmdwk->X,pmdwk->Y ));
-         pmdwk->X = (USHORT)((((ULONG)pmdwk->X * 0x10000) / gWidth ) + 1);
-         pmdwk->Y = (USHORT)((((ULONG)pmdwk->Y * 0x10000) / gHeight) + 1);
-         TRACE(( TC_MOU, TT_API2, "MouseRead: cooked st=0x%x X=%04x Y=%04x",pmdwk->cMouState,pmdwk->X,pmdwk->Y ));
-         LogPrintf( LOG_CLASS, LOG_KEYBOARD, "MOUSE: st=0x%x X=%04x Y=%04x",
-                    pmdwk->cMouState,pmdwk->X,pmdwk->Y );
-
-         // call all hooks
-         for (phook=gpMouseReadRootHook; phook != NULL; phook=phook->pNext )
-             ((PLIBPROCEDURE)phook->pProcedure)(gpMouseQueue[guMouseFirstQueueEntry],sizeof(PMOUSEDATA));
-
-         ADJUP(guMouseFirstQueueEntry);
-      }
-      else
-         break;
-   }
-   guReadingMouseQueue = 0;
-   *puCount -= ucnt;
-   if(!*puCount)
-      return(CLIENT_STATUS_NO_DATA);
-   else {
-      TRACE(( TC_MOU, TT_API1, "MouseRead: count=%u",*puCount ));
-      return(CLIENT_STATUS_SUCCESS);
-   }
-}
-#endif
-
-#if 0
-/*******************************************************************************
- *
- *  MouseReadAbs
- *
- *    Get mouse data - coordinates are returned in absolute form.
- *
- * ENTRY:
- *    pMouse - pointer to mouse data
- *    puCount - number of mouse data structures to return
- *              returns number returned
- *
- * EXIT:
- *    CLIENT_STATUS_SUCCESS - no error
- *    CLIENT_ERROR_NO_MOUSE
- *
- ******************************************************************************/
-int far  MouseReadAbs( PMOUSEDATA pMouse, PUSHORT puCount )
-{
-   USHORT ucnt;
-   PMOUSEDATA pmdwk;
-   PFNHOOK phook;
-
-   if(gfNoMouse)
-      return(CLIENT_ERROR_NO_MOUSE);
-
-   if(guMouseQueueOverflow) {
-      guMouseQueueOverflow = 0;
-      TRACE(( TC_MOU, TT_API2, "MouseRead: Queue Overflow" ));
-//      ASSERT( FALSE, 0 );
-   }
-
-   guReadingMouseQueue = 1;
-   for(ucnt=*puCount, pmdwk=pMouse; ucnt>0; ucnt--, pmdwk++) {
-
-      if(guMouseNextQueueEntry!=guMouseFirstQueueEntry) {
-
-         *pmdwk = *(gpMouseQueue+guMouseFirstQueueEntry);
-
-         TRACE(( TC_MOU, TT_API2, "MouseReadAbs: st=0x%x X=%u Y=%u",pmdwk->cMouState,pmdwk->X,pmdwk->Y ));
-
-         // call all hooks
-         for (phook=gpMouseReadRootHook; phook != NULL; phook=phook->pNext )
-             ((PLIBPROCEDURE)phook->pProcedure)(gpMouseQueue[guMouseFirstQueueEntry],sizeof(PMOUSEDATA));
-
-         ADJUP(guMouseFirstQueueEntry);
-      }
-      else
-         break;
-   }
-   guReadingMouseQueue = 0;
-   *puCount -= ucnt;
-   if(!*puCount)
-      return(CLIENT_STATUS_NO_DATA);
-   else {
-      TRACE(( TC_MOU, TT_API1, "MouseReadAbs: count=%u",*puCount ));
-      return(CLIENT_STATUS_SUCCESS);
-   }
-}
-#endif
-
-#if 0
-/*******************************************************************************
- *
- *  MouseReadAvail
- *
- *    Return mouse queue status data.
- *
- * ENTRY:
- *    pMouse - pointer to mouse data
- *    nByteCount - size of mouse data buffer
- *
- * EXIT:
- *    CLIENT_STATUS_SUCCESS - no error
- *    CLIENT_ERROR_NO_MOUSE
- *
- ******************************************************************************/
-int far  MouseReadAvail( PUSHORT puCountAvail )
-{
-   MOUSEDATA data;
-    
-   if(gfNoMouse)
-      return(CLIENT_STATUS_NO_DATA);
-
-#if 1
-   while (mouGetEvent(&data) == CLIENT_STATUS_SUCCESS)
-   {
-       MousePush(&data);
-   }
-#endif
-
-   if(guMouseNextQueueEntry>=guMouseFirstQueueEntry)
-      *puCountAvail = guMouseNextQueueEntry-guMouseFirstQueueEntry;
-   else
-      *puCountAvail = gInfo.uQueueSize+guMouseNextQueueEntry-guMouseFirstQueueEntry;
-
-   //TRACE(( TC_MOU, TT_API1, "MouseReadAvail: count=%u tc=%lu mc=%lu pc=%lu", *puCountAvail,gdebugtimcount,gdebugmoucount,gdebugpushcount ));
-   if(*puCountAvail)
-   {
-/*  We want to wait 100ms (2 timer ticks) before we send the mouse button down command,
-    this is to fix scrolling error.  gfWaitEnabled is set whenever a mouse button down is queued.
-    gfWaitEnabled is cleared whenever the gMouButtonTimer expires or a mouse button up is queued. */ 
-        
-        if( gfWaitEnabled )
-        {
-            return(CLIENT_STATUS_NO_DATA);
-        }
-       return(CLIENT_STATUS_SUCCESS);
-   }
-   else
-      return(CLIENT_STATUS_NO_DATA);
-
-}
-#endif
-
-#if 0
-/*******************************************************************************
- *
- *  MousePush
- *
- *    Place mouse click on FIFO.
- *
- * ENTRY:
- *    pMouseData - mouse data to push
- *
- * EXIT:
- *    CLIENT_STATUS_SUCCESS - no error
- *    CLIENT_ERROR_NO_MOUSE
- *
- * Notes:
- *    This queues all button clicks, but will only queue a single
- *    movement-only event.  The sample (or MouseRead) rate will determine
- *    the granularity of mouse moves received.
- *
- *    This function occurs normally at mouse interrupt time.  I dont
- *    think there is a conflict with this and the MouseRead since read is
- *    reading from the front of the queue and this is adding to the end.
- *    The only thing that is looked at by both is
- *    guMouseFirstQueueEntry
- *
- *
- ******************************************************************************/
-int far MousePush( PMOUSEDATA pMouseData )
-{
-   unsigned int unexttobe;
-   int rc;
-
-   if(gfNoMouse)
-      return(CLIENT_ERROR_NO_MOUSE);
-
-//   TRACE(( TC_MOU, TT_API2, "MousePush: st=0x%x X=%u Y=%u",pMouseData->cMouState,pMouseData->X,pMouseData->Y ));
-
-   ++gdebugpushcount;
-
-   // if the last thing in the queue is movement only, then
-   // overwrite it
-   if(guMouseNextQueueEntry!=guMouseFirstQueueEntry) {
-      if((gcLastQueueState == MOU_STATUS_MOVED) &&
-         (!guReadingMouseQueue))
-         ADJDOWN(guMouseNextQueueEntry);
-   }
-
-   // determine if there is room in the queue
-   unexttobe = guMouseNextQueueEntry;
-   ADJUP(unexttobe);
-
-
-   if(unexttobe != guMouseFirstQueueEntry) {
-
-      // yes queue it and set next next
-      gcLastQueueState=pMouseData->cMouState;
-      if ( pMouseData->cMouState & ( MOU_STATUS_B1DOWN | MOU_STATUS_B2DOWN | MOU_STATUS_B3DOWN ) ) {
-         if ( guMouseDoubleClickTimerCount &&
-         (pMouseData->X >= guMouseDoubleClickLeft) && (pMouseData->X < guMouseDoubleClickRight) &&
-         (pMouseData->Y >= guMouseDoubleClickTop)  && (pMouseData->Y < guMouseDoubleClickBottom)
-              ) {
-            pMouseData->cMouState |= MOU_STATUS_DBLCLK;
-            guMouseDoubleClickTimerCount = 0;
-         }
-         else {
-            guMouseDoubleClickTimerCount = gInfo.uDoubleClickTimerGran;
-           
-            if ( pMouseData->X >= gInfo.uDoubleClickWidth )
-                guMouseDoubleClickLeft = pMouseData->X - gInfo.uDoubleClickWidth/2;
-            else
-                guMouseDoubleClickLeft = 0;
-
-            guMouseDoubleClickRight = pMouseData->X + gInfo.uDoubleClickWidth/2;
-
-            if ( pMouseData->Y >= gInfo.uDoubleClickHeight )
-                guMouseDoubleClickTop = pMouseData->Y - gInfo.uDoubleClickHeight/2;
-            else
-                guMouseDoubleClickTop = 0;
-
-            guMouseDoubleClickBottom = pMouseData->Y + gInfo.uDoubleClickHeight/2;
-         }
-
-         /* don't want to send mouse button up right away, start the timer and tell it to wait */
-         gfWaitEnabled  = TRUE;
-         gfSetMouButtonTimer = TRUE;            
-      }
-           /* if we get a mouse button up, we better not wait any longer */
-      else if( pMouseData->cMouState & (MOU_STATUS_B1UP | MOU_STATUS_B2UP | MOU_STATUS_B3UP) )
-           gfWaitEnabled = FALSE;
-
-      *(gpMouseQueue+guMouseNextQueueEntry)=*pMouseData;
-      guMouseNextQueueEntry=unexttobe;
-      rc=CLIENT_STATUS_SUCCESS;
-      goto ExitExit;
-   }
-
-   guMouseQueueOverflow = 1;
-   rc=CLIENT_ERROR_QUEUE_FULL;
-
-ExitExit:
-
-   return(rc);
-
-}
-#endif
 
 /*******************************************************************************
  *
@@ -715,29 +419,34 @@ int far  MouseSetRanges( USHORT uHoriMin, USHORT uHoriMax,
                                 USHORT uVertMin, USHORT uVertMax )
 {
     char s[9];
+    int hmin, hmax, vmin, vmax;
+
     if(gfNoMouse)
       return(CLIENT_ERROR_NO_MOUSE);
 
-   TRACE(( TC_MOU, TT_API1, "MouseSetRanges: hmin=%u hmax=%u vmin=%u vmax=%u",
+   TRACE(( TC_MOU, TT_API1, "MouseSetRanges(in): hmin=%u hmax=%u vmin=%u vmax=%u",
                                        uHoriMin,uHoriMax,uVertMin,uVertMax ));
 
-   uHoriMin = uHoriMin*2 + gOriginX;
-   uHoriMax = uHoriMax*2 + gOriginX;
-   uVertMin = (gHeight - 1 - uVertMin)*2 + gOriginY;
-   uVertMax = (gHeight - 1 - uVertMax)*2 + gOriginY;
+   hmin = uHoriMin*2 + gOriginX;
+   hmax = uHoriMax*2 + gOriginX;
+   vmin = (gHeight - 1) - uVertMax*2 + gOriginY;
+   vmax = (gHeight - 1) - uVertMin*2 + gOriginY;
    
+   TRACE(( TC_MOU, TT_API1, "MouseSetRanges(ro): hmin=%u hmax=%u vmin=%u vmax=%u",
+                                       hmin,hmax,vmin,vmax ));
+
    //  set horizontal
    //  set vertical
 
    s[0] = 1;
-   s[1] = uHoriMin;
-   s[2] = uHoriMin >> 8;
-   s[3] = uVertMin;
-   s[4] = uVertMin >> 8;
-   s[5] = uHoriMax;
-   s[6] = uHoriMax >> 8;
-   s[7] = uVertMax;
-   s[8] = uVertMax >> 8;
+   s[1] = hmin;
+   s[2] = hmin >> 8;
+   s[3] = vmin;
+   s[4] = vmin >> 8;
+   s[5] = hmax;
+   s[6] = hmax >> 8;
+   s[7] = vmax;
+   s[8] = vmax >> 8;
    _swix(OS_Word, _INR(0,1), 21, s);
   
    return(CLIENT_STATUS_SUCCESS);
@@ -897,75 +606,6 @@ int far  MouseSetInformation( PMOUINFORMATION pMouInfo )
    return(rc);
 }
 
-#if 0
-/*******************************************************************************
- *
- *  MouseAddHook
- *
- *    Hook into the mouse read and/or mouse interrupt.
- *
- * ENTRY:
- *    HookClass - type of mouse hook
- *    pProcedure - pointer to hook procedure
- *
- * EXIT:
- *    CLIENT_STATUS_SUCCESS - no error
- *
- ******************************************************************************/
-int far  MouseAddHook( MOUSEHOOKCLASS Type, PVOID fnProc )
-{
-    USHORT rc;
-
-#if 1
-    rc = CLIENT_STATUS_SUCCESS;
-#else
-   if(gfNoMouse)
-      return(CLIENT_ERROR_NO_MOUSE);
-
-   if(Type==MouseHookRead)
-      rc = AllocHook(&gpMouseReadRootHook, fnProc);
-   else
-      rc = AllocHook(&gpMouseIntRootHook, fnProc);
-#endif
-   TRACE(( TC_MOU, TT_API1, "MouseAddHook: Type=%u Hook=%lx rc=%u",Type,fnProc,rc ));
-
-   return(rc);
-}
-
-/*******************************************************************************
- *
- *  MouseRemoveHook
- *
- *    Unhook the mouse read and/or mouse interrupt.
- *
- * ENTRY:
- *    HookClass - type of mouse hook
- *    pProcedure - pointer to hook procedure
- *
- * EXIT:
- *    CLIENT_STATUS_SUCCESS - no error
- *
- ******************************************************************************/
-int far  MouseRemoveHook( MOUSEHOOKCLASS Type, PVOID fnProc )
-{
-   USHORT rc;
-
-#if 1
-    rc = CLIENT_STATUS_SUCCESS;
-#else
-   if(gfNoMouse)
-      return(CLIENT_ERROR_NO_MOUSE);
-
-   if(Type==MouseHookRead)
-      rc = DeallocHook(&gpMouseReadRootHook, fnProc);
-   else
-      rc = DeallocHook(&gpMouseIntRootHook, fnProc);
-#endif
-   TRACE(( TC_MOU, TT_API1, "MouseRemoveHook: Type=%u Hook=%lx rc=%u",Type,fnProc,rc ));
-
-   return(rc);
-}
-#endif
 /*******************************************************************************
  *
  *  mouCheck
@@ -996,7 +636,7 @@ int mouCheck( void )
 
    // restore X & Y ranges - reset call for unknown reason changes
    // .. the Y range for SVGA - BUGBUG
-   MouseSetRanges(0, gWidth-1, 0, gHeight-1);
+   //MouseSetRanges(0, gWidth-1, 0, gHeight-1);
 
    mouLoadPref();
 
@@ -1059,63 +699,6 @@ ExitExit:
 int mouAllocQueue( USHORT uEntries )
 {
     int rc=CLIENT_STATUS_SUCCESS;
-#if 0
-   PMOUSEDATA pnewq;
-   PMOUSEDATA poldq;
-   USHORT ucnt;
-   USHORT usize;
-   PMOUSEDATA pmdwk;
-
-   // add one to wants to account for dead entry
-   usize = uEntries+1;
-
-   // allocate a queue
-   pnewq = malloc(usize*sizeof(MOUSEDATA));
-   if(!pnewq) {
-      rc = CLIENT_ERROR_NO_MEMORY;
-      goto ExitExit;
-   }
-
-   memset(pnewq, 0, usize*sizeof(MOUSEDATA));
-
-   // if there already was a queue, then move data to new one and can old one
-   if(gpMouseQueue == NULL) {
-      // first queue
-      // change globals
-      gInfo.uQueueSize=usize;
-      guMouseFirstQueueEntry=0;
-      guMouseNextQueueEntry=0;
-      gpMouseQueue=pnewq;
-   }
-   else {
-
-      // copy all entries from old queue, with no interrupts please
-
-      for(ucnt=usize, pmdwk=pnewq; ucnt>0; ucnt--, pmdwk++) {
-
-         if(guMouseNextQueueEntry!=guMouseFirstQueueEntry) {
-
-            *pmdwk = *(gpMouseQueue+guMouseFirstQueueEntry);
-            ADJUP(guMouseFirstQueueEntry);
-         }
-         else
-            break;
-      }
-      // change globals
-      gInfo.uQueueSize=usize;
-      guMouseFirstQueueEntry=0;
-      guMouseNextQueueEntry=usize-ucnt;
-
-      poldq=gpMouseQueue;
-      gpMouseQueue=pnewq;
-
-      //let go of old queue
-      free(poldq);
-
-   }
-ExitExit:
-   TRACE(( TC_MOU, TT_API2, "mouAllocQueue: rc=%u", rc ));
-#endif
    return(rc);
 
 }
@@ -1202,143 +785,6 @@ void mouClearHandler( void )
    return;
 }
 
-#if 0
-/*******************************************************************************
- *
- *  mouIntHandler
- *
- *    Interrupt handler for special processing.
- *
- * ENTRY:
- *    PMOUSEDATA - pointer to mouse data
- *
- * EXIT:
- *    none
- *
- *
- ******************************************************************************/
-void  mouIntHandler( PMOUSERAWDATA pMouseRawData )
-{
-   MOUSEDATA md;
-   char cbut;
-   PFNHOOK phook;
-
-   ++gdebugmoucount;
-
-   md.cMouState = 0;
-
-   // If ButtonSwapping has been selected, swap the left and right
-   // buttons in the RAW data. Note, that on a 3-button mouse, the middle
-   // button is BUTTON3.
-
-   if ( gfMousePreferencesLoaded && gMousePreferences.fSwapButtons ) {
-       SHORT Btn1Msk, Btn2Msk, NewBtn1, NewBtn2;
-
-       Btn2Msk = pMouseRawData->ButtonState & MOU_RAW_BUTTON2 ? 0xFFFF : 0;
-       Btn1Msk = pMouseRawData->ButtonState & MOU_RAW_BUTTON1 ? 0xFFFF : 0;
-       NewBtn1 = Btn2Msk & MOU_RAW_BUTTON1;
-       NewBtn2 = Btn1Msk & MOU_RAW_BUTTON2;
-       pMouseRawData->ButtonState = ( pMouseRawData->ButtonState &
-                                      ~(MOU_RAW_BUTTON1|MOU_RAW_BUTTON2) ) |
-                                    (NewBtn1|NewBtn2);
-   }
-
-   // check for button state changes and/or movement, and
-   // queue these
-
-   // look at button 1
-   cbut=(char)pMouseRawData->ButtonState & MOU_RAW_BUTTON1;
-   if(gcLastButton1!=cbut) {
-      if(cbut)
-         md.cMouState|=MOU_STATUS_B1DOWN;
-      else
-         md.cMouState|=MOU_STATUS_B1UP;
-      gcLastButton1=cbut;
-   }
-
-   // now at button 2
-   cbut=(char)pMouseRawData->ButtonState & MOU_RAW_BUTTON2;
-   if(gcLastButton2!=cbut) {
-      if(cbut)
-         md.cMouState|=MOU_STATUS_B2DOWN;
-      else
-         md.cMouState|=MOU_STATUS_B2UP;
-      gcLastButton2=cbut;
-   }
-
-   // now at button 3
-   cbut=(char)pMouseRawData->ButtonState & MOU_RAW_BUTTON3;
-   if(gcLastButton3!=cbut) {
-      if(cbut)
-         md.cMouState|=MOU_STATUS_B3DOWN;
-      else
-         md.cMouState|=MOU_STATUS_B3UP;
-      gcLastButton3=cbut;
-   }
-
-   // set movement if any
-   if((pMouseRawData->X != guLastX) || (pMouseRawData->Y != guLastY)) {
-      md.cMouState|=MOU_STATUS_MOVED;
-      guLastX = pMouseRawData->X;
-      guLastY = pMouseRawData->Y;
-   }
-
-   // if any state changes, queue state and current position
-   if(md.cMouState) {
-      md.X = pMouseRawData->X;
-      md.Y = pMouseRawData->Y;
-      // if move only, defer move queuing until timer tick
-      if((md.cMouState == MOU_STATUS_MOVED) && gInfo.uTimerGran)
-         gMouseMoveData = md;
-      else {
-         // since button click has x and y data, throw away timer move data
-         gMouseMoveData.cMouState = 0;
-         MousePush(&md);
-      }
-   }
-
-   //
-   // call all hooks
-   //
-   for (phook=gpMouseIntRootHook; phook != NULL; phook=phook->pNext )
-       ((PLIBPROCEDURE)phook->pProcedure)(pMouseRawData);
-
-   return;
-}
-/*******************************************************************************
- *
- *  mouTimerHook
- *
- *    Called on each timer tick.
- *
- * ENTRY:
- *
- * EXIT:
- *
- * NOTE:
- *    should only be hooked if TimerGran is 1 or more; a 0 value
- *    implies that no time delays are applied
- ******************************************************************************/
-void  far mouTimerHook( void )
-{
-   ++gdebugtimcount;
-   if ( gInfo.uDoubleClickTimerGran ) {
-      if ( guMouseDoubleClickTimerCount != 0 )
-         guMouseDoubleClickTimerCount--;
-   }
-
-   if ( gInfo.uTimerGran ) {
-      if(--guMouseTimerCount == 0) {
-         if(gMouseMoveData.cMouState) {
-            MousePush(&gMouseMoveData);
-            gMouseMoveData.cMouState = 0;
-         }
-         guMouseTimerCount=gInfo.uTimerGran;
-      }
-   }
-}
-#endif
-
 /*******************************************************************************
  *
  *  mouLoadPref
@@ -1364,35 +810,5 @@ void mouLoadPref( void )
       TRACE( (TC_MOU, TT_API2, "mouLoadPref: No Mouse Tracking Changes") );
    }
 }
-
-
-/*******************************************************************************
- *
- *  mouButtonTimerHook
- *
- *    Called on each timer tick.
- *
- * ENTRY:
- *
- * EXIT:
- *
- * NOTE:   This is the timer used for the delay in sending a mouse button down message
- *          2 timer ticks = 110ms.  When timer expires tell it not to wait any longer.
- *
- ******************************************************************************/
-
-#if 0
-void  far mouButtonTimerHook( void )
-{
-    if( gfSetMouButtonTimer ){
-        guMouButtonTimer    = 2;
-        gfSetMouButtonTimer = FALSE;
-    }
-    else if( guMouButtonTimer <= 0 )
-        gfWaitEnabled = FALSE;
-    else
-        --guMouButtonTimer;    
-}
-#endif
 
 

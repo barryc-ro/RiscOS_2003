@@ -8,15 +8,9 @@
 #ifndef __sessionp_h
 # define __sessionp_h
 
-typedef struct arg_element arg_element;
-
-struct arg_element
-{
-    arg_element *next;
-
-    char *name;
-    char *value;
-};
+#ifndef __utils_h
+#include "utils.h"
+#endif
 
 struct icaclient_session_
 {

@@ -51,6 +51,23 @@ extern void rma_free(void *ptr);
 
 /* --------------------------------------------------------------------------------------------- */
 
+typedef struct arg_element arg_element;
+
+struct arg_element
+{
+    arg_element *next;
+
+    char *name;
+    char *value;
+};
+
+extern void parse_args(arg_element **pargs, const char *s);
+extern void free_elements(arg_element **pargs);
+extern void add_element(arg_element **pargs, char *name, char *value);
+extern char *extract_and_expand(const char *in, int len);
+
+/* --------------------------------------------------------------------------------------------- */
+
 #endif
 
 /* eof utils.h */

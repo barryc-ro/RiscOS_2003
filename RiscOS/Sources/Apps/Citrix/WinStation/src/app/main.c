@@ -33,6 +33,7 @@
 #include "session.h"
 #include "main.h"
 #include "server.h"
+#include "clientname.h"
 
 #include "icaclient.h"
 
@@ -176,6 +177,7 @@ static int scrap_ref = -1;
 
 static int task_handle = 0;
 static BOOL running = TRUE;
+static BOOL run_as_home_url = FALSE;		// this is set from the cli options stuff
 
 #define quitting_NO		0
 #define quitting_SELF		1
@@ -294,7 +296,7 @@ static void signal_setup(void)
 
 void main_close_session(icaclient_session sess)
 {
-    TRACE((TC_UI, TT_API1, "main_close_session: %p suspenable %d", sess, cli_suspendable));
+    TRACE((TC_UI, TT_API1, "main_close_session: %p suspendable %d", sess, cli_suspendable));
     if (sess)
     {
 	if (current_session == sess)
@@ -321,7 +323,7 @@ static void kill_current_session(void)
 
 static void connection_state(int event)
 {
-    TRACE((TC_UI, TT_API1, "connection_state: event %d current_session %p printinfo_state %d splash_state %d dial_state %d connectopen_state %d",
+    DTRACE((TC_UI, TT_API1, "connection_state: event %d current_session %p printinfo_state %d splash_state %d dial_state %d connectopen_state %d",
 	   event, current_session, printinfo_state, splash_state, dial_state, connectopen_state));
 
     /* the new plan is that the connection process is driven from the
@@ -1547,6 +1549,8 @@ static void process_args(int argc, char *argv[])
 
 		    if (i+1 < argc && argv[i+1][0] != '-')
 			cli_postfile = strdup(argv[++i]);
+
+		    run_as_home_url = compare_with_browser_home(cli_filename);
 		}
 		break;
 	    } /* switch */
@@ -1558,9 +1562,9 @@ static void process_args(int argc, char *argv[])
 
 static void process_options(const char *val)
 {
-    char *s = strdup(val);
+    char *ss = strdup(val), *s;
 
-    if ((s = strtok(s, " ")) != NULL)
+    if ((s = strtok(ss, " ")) != NULL)
     {
 	int argc = 0;
 	char *argv[MAX_OPTION_ARGS];
@@ -1573,7 +1577,7 @@ static void process_options(const char *val)
 	process_args(argc, argv);
     }
     
-    free(s);
+    free(ss);
 }
 
 /* --------------------------------------------------------------------------------------------- */
@@ -1730,6 +1734,18 @@ int main(int argc, char *argv[])
 
     	if (event_code != 0)
     	    TRACE((TC_UI, TT_API1, "(7) Poll: %d running %d quitting %d", event_code, running, quitting));
+    }
+
+    /* check and see if we were the startup application */
+    run_as_home_url = compare_with_browser_home(cli_filename);
+
+    if (run_as_home_url && !cli_suspendable)
+    {
+	char *s = getenv( HANGUP_VAR );
+
+	TRACE((TC_UI, TT_API1, "Hanging up"));
+
+	_swix(OS_CLI, _IN(0), s ? s : HANGUP_DEFAULT);
     }
 
     return EXIT_SUCCESS;

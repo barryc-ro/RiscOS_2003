@@ -4225,6 +4225,12 @@ void SetMode(int colorcaps, int xres, int yres)
     LOGERR(_swix(OS_RemoveCursors, 0));
 
     MouseSetScreenOrigin(screen_dc->data.origin.x * 2, screen_dc->data.origin.y * 2);
+
+    /* set up mouse bounds so that we don't use the safe area */
+
+    MouseSetRanges( 0, xres-1, 0, yres-1 );
+    //MouseSetRanges( screen_dc->data.origin.x * 2, screen_dc->data.origin.x * 2 + screen_dc->data.width * 2,
+//		   screen_dc->data.origin.y * 2, screen_dc->data.origin.y * 2 + screen_dc->data.height * 2 );
 }
 
 /* ---------------------------------------------------------------------------------------------------- */

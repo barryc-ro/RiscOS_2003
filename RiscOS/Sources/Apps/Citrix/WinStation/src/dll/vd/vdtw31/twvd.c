@@ -631,8 +631,10 @@ DriverInfo( PVD pVd, PDLLINFO pVdInfo )
         /*
          *  Max resolution
          */
-        pCaps->ResCaps.HRes = 1280;
-        pCaps->ResCaps.VRes = 1024;
+        //pCaps->ResCaps.HRes = 1280;
+        //pCaps->ResCaps.VRes = 1024;
+        pCaps->ResCaps.HRes = MAX_DESIREDHRES;
+        pCaps->ResCaps.VRes = MAX_DESIREDVRES;
 
 	/* set pref to the first in the list */
 	pPref->ResCaps.HRes   = PrefHRes;

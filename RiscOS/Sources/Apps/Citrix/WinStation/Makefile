@@ -893,16 +893,16 @@ MODULEWRAP_ROM=	src/app/ModuleWrap.oz
 MODULEWRAP_RAM=	src/app/ModuleWrap.or
 
 APPSRC=		src/app/connect.c src/app/main.c \
-		src/app/session.c src/app/utils.c src/app/server.c
+		src/app/session.c src/app/utils.c src/app/server.c src/app/clientname.c
 
 APPOBJS=	src/app/connect.o src/app/main.o \
-		src/app/session.o src/app/utils.o src/app/server.o
+		src/app/session.o src/app/utils.o src/app/server.o src/app/clientname.o
 
 APPOBJSD=	src/app/connect.od src/app/main.od \
-		src/app/session.od src/app/utils.od src/app/server.od
+		src/app/session.od src/app/utils.od src/app/server.od src/app/clientname.od
 
 APPOBJSZ=	src/app/connect.oz src/app/main.oz \
-		src/app/session.oz src/app/utils.oz src/app/server.oz
+		src/app/session.oz src/app/utils.oz src/app/server.oz src/app/clientname.oz
 
 ${APP}: ${APPOBJS} ${APPLIBS} ${BASELIBS} local_dirs
 	${LD} ${LDFLAGS} -o ${APP} ${APPOBJS} ${APPLIBS} ${BASELIBS}

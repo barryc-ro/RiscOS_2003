@@ -446,15 +446,45 @@ KbdReadScan( int * pScanCode, int * pShiftState )
 	    return CLIENT_STATUS_NO_DATA;
 
 	// check for hotkeys
-	if ((k->flags & KeyWatch_Event_KEY_GOING_UP) == 0 &&
-	    (Hotkey = KbdCheckHotkey( k->scan_code, shift_state )) != 0)
+	if ((k->flags & KeyWatch_Event_KEY_GOING_UP) == 0)
 	{
-	    LogPrintf( LOG_CLASS, LOG_KEYBOARD, "KEYBOARD: Hotkey (%02X)", Hotkey );
+	    if ( (Hotkey = KbdCheckHotkey( k->scan_code, shift_state )) != 0)
+	    {
+		LogPrintf( LOG_CLASS, LOG_KEYBOARD, "KEYBOARD: Hotkey (%02X)", Hotkey );
 
-	    return Hotkey;
+		return Hotkey;
+	    }
+
+	    // this is a really nasty way of making the Windows keys work
+	    // current investigation can't tell what PS/2 scan codes they generate as the terminal server
+	    // doesn't seem to respond to any sscan code in the way you would expect from a windows key.
+	    // Therefore KeyWatch generates E0, 7E and E0, 7F for the two keys and we convert them
+	    // here into HTOKEY_CTRL_ESC which does the same as the Windows key anyway
+	    if (k->flags & KeyWatch_Event_PS2_EXTENDED)
+	    {
+		if (k->scan_code == 0x7E || k->scan_code == 0x7F)
+		{
+		    return HOTKEY_CTRL_ESC;
+		}
+	    }
 	}
 
 	*pScanCode = k->scan_code;
+
+#ifdef DEBUG
+	if ( (k->scan_code & 0x7F) == 0x52 )
+	{
+	    static int counter = 0;
+
+	    *pScanCode = ( (counter) & 0x7F ) | ( k->scan_code & 0x80 );
+
+	    if (k->scan_code & 0x80)
+		counter++;
+	    
+	    TRACE((TC_KEY, TT_API1, "Extension: scan %x", *pScanCode));
+	}
+#endif
+
 	*pShiftState = shift_state;
     }
 

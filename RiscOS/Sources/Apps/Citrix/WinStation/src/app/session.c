@@ -51,6 +51,7 @@
 #include "version.h"
 
 #include "resource.h"
+#include "clientname.h"
 
 /* --------------------------------------------------------------------------------------------- */
 
@@ -64,9 +65,6 @@ typedef struct _OVERRIDELIST
 } OVERRIDELIST, * POVERRIDELIST;
 
 /* --------------------------------------------------------------------------------------------- */
-
-#define ENV_CLIENTNAME  APP_NAME "$ClientName"           // CLIENTNAME environment name
-#define INET_HOSTNAME	"Inet$HostName"
 
 #define MAX_ERRORMSG    500                    // maximum error msg length
 
@@ -91,7 +89,6 @@ extern FILEPATH gszLoadDllFileName;        // name of last DLL loaded
 /* --------------------------------------------------------------------------------------------- */
 
 static void session__close(icaclient_session sess);
-static void free_elements(arg_element **pargs);
 
 /* --------------------------------------------------------------------------------------------- */
 
@@ -598,22 +595,11 @@ static int session_abort(icaclient_session sess, int rc)
 static int session__open(icaclient_session sess)
 {
     int rc;
-    char *pEnvVar;
 
     TRACE((TC_UI, TT_API1, "session__open: %p", sess));
 
-    // determine the client name from environment variable first
-    // then use Win32 computername and then the default from the
-    // resource file
-    pEnvVar = getenv(ENV_CLIENTNAME);
-    if (pEnvVar == NULL)
-	pEnvVar = getenv(INET_HOSTNAME);
-
-    // use time stamp to creat an unique client name
-    if (pEnvVar == NULL)
-	sprintf(gszClientName, "Internet%08u", clock() & 0xffffff);
-    else
-	lstrcpy(gszClientName, pEnvVar);
+    // determine the best client name to use
+    clientname(gszClientName, sizeof(gszClientName));
 
     connect_status(sess, client_to_ids(CLIENT_STATUS_LOADING_STACK));
 
@@ -696,139 +682,6 @@ static void session__close(icaclient_session sess)
     srvWFEngUnload( (PMINIDLL)NULL );  // Call the WFEngUnload API
 
     connect_close(sess);
-}
-
-/* --------------------------------------------------------------------------------------------- */
-
-#define GSTRANS_BUFSIZE	1024
-
-static char *extract_and_expand(const char *in, int len)
-{
-    char *out, *o, *translated;
-    const char *s;
-    int i, n, flags;
-    
-    TRACE((TC_UI, TT_API4, "extract_and_expand: %p %d", in, len));
-
-    if (len == -1)
-	len = strlen(in);
-
-    if (len == 0)
-	return NULL;
-
-    TRACE((TC_UI, TT_API4, "extract_and_expand: '%.*s'", len, in));
-
-    /* unescaped length will never be greater than input length */
-    if ((out = malloc(len + 1)) == NULL)
-	return NULL;
-
-    /* unescape string to 'out' */
-    o = out;
-    s = in;
-    for (i = 0; i < len; i++)
-    {
-	int c = *s++;
-	if (c == '%' && i < len - 2)
-	{
-	    char bytes[3];
-	    bytes[0] = *s++;
-	    bytes[1] = *s++;
-	    bytes[2] = 0;
-	    *o++ = (char)strtoul(bytes, 0, 16);
-	    i += 2;
-	}
-	else
-	{
-	    *o++ = c;
-	}
-    }
-    *o++ = 0;
-    
-    TRACE((TC_UI, TT_API1, "extract_and_expand: out '%s'", out));
-
-    /* allocate buffer for GSTrans */
-    translated = calloc(GSTRANS_BUFSIZE, 1);
-
-    if (_swix(OS_GSTrans, _INR(0,2) | _OUT(2) | _OUT(_FLAGS),
-	      out, translated, GSTRANS_BUFSIZE | (1<<30) | (1U<<31),	/* don't convert |<nn>, don't strip double quotes */
-		 &n, &flags) != NULL ||
-	n == GSTRANS_BUFSIZE ||
-	(flags & _C) != 0)
-    {
-	/* on error or overflow then return original 'out' string */
-	free(translated);
-	return realloc(out, o - out);
-    }
-
-    TRACE((TC_UI, TT_API1, "extract_and_expand: translated '%s' n %d", translated, n));
-
-    free(out);
-    
-    /* ensure termination and trim string */
-    translated[n] = 0;
-    translated = realloc(translated, n+1);
-
-    TRACE((TC_UI, TT_API1, "extract_and_expand: translated '%s' n %d", translated, n));
-
-    return translated;
-}
-
-/*
- * If this function changes from putting the last element on the head of the list then
- *  open_url's fresco patch needs changing
- *  something needs to take account of the duplication of Address fields that can occur.
- */
-
-static void add_element(arg_element **pargs, char *name, char *value)
-{
-    arg_element *el = calloc(sizeof(*el), 1);
-
-    el->name = name;
-    el->value = value;
-
-    el->next = *pargs;
-    *pargs = el;
-
-    TRACE((TC_UI, TT_API1, "add_element: '%s' = '%s'", name, value));
-}
-
-static void free_elements(arg_element **pargs)
-{
-    while (*pargs)
-    {
-	arg_element *a = *pargs;
-
-	*pargs = a->next;
-
-	free(a->name);
-	free(a->value);
-	free(a);
-    }
-}
-
-static void parse_args(arg_element **pargs, const char *s)
-{
-    do
-    {
-	const char *start = s + 1;
-	const char *equals = strchr(start, '=');
-	const char *end = strchr(start, '&');
-	
-	char *name, *value;
-	    
-	/* only use equals if within the start - end gap */
-	if (end && equals > end)
-	    equals = NULL;
-	    
-	name = extract_and_expand(start, equals ? equals - start : end ? end - start : -1);
-	value = equals ? extract_and_expand(equals + 1, end ? end - (equals + 1) : -1) : NULL;
-
-	/* this call takes over the name and value strings so they don't need freeing */
-	add_element(pargs, name, value);
-	
-	s = end;
-    }
-    while (s);
 }
 
 /* --------------------------------------------------------------------------------------------- */
@@ -950,7 +803,7 @@ icaclient_session session_open_url(const char *url, const char *bfile)
     if (sess)
 	sess->arg_list = arg_list;
     else
-	free_elements(&sess->arg_list);
+	free_elements(&arg_list);
     
     free(description);
 
