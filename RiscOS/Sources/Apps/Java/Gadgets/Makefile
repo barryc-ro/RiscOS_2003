@@ -88,7 +88,7 @@ clean:
         ${WIPE} map ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
-${ROM_MODULE}: ${OBJS} ${TBOXLIB} $(WIMPLIB) # ${ROMCSTUBS}
+${ROM_MODULE}: ${OBJS} ${TBOXLIB} $(WIMPLIB) ${ROMCSTUBS}
         ${MKDIR} aof
         ${LD} -o $@ -aof -via objs ${TBOXLIB} $(WIMPLIB) ${ROMCSTUBS}
 
