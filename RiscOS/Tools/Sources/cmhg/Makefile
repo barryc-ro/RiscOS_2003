@@ -107,19 +107,3 @@ ${TARGET}: ${OBJS} ${LIBS} local_dirs
 	${SQUEEZE} ${COMPONENT}
 
 # Dynamic dependencies:
-o.cmhg:	c.cmhg
-o.cmhg:	h.outaof
-o.cmhg:	C:CLX.h.fname
-o.cmhg:	C:h.swis
-o.cmhg:	C:h.kernel
-o.cmhg:	h.throwback
-o.cmhg:	VersionNum
-o.outaof:	c.outaof
-o.outaof:	h.outaof
-o.outaof:	C:CLX.h.aof
-o.outaof:	C:CLX.h.chunkfmt
-o.veneers: s.veneers
-o.throwback:	c.throwback
-o.throwback:	C:h.swis
-o.throwback:	C:h.kernel
-o.throwback:	h.throwback
