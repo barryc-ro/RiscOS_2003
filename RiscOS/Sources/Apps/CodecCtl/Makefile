@@ -31,6 +31,7 @@ LD      = link
 RM      = remove
 WIPE    = -wipe
 STRIP   = stripdepnd
+NOP     = |
 
 AFLAGS = -depend !Depend -Stamp -quit
 CFLAGS  = -c -depend !Depend ${INCLUDES} ${THROWBACK} -wp -fk
@@ -130,7 +131,7 @@ install_rom: ${ROM_MODULE}
         @echo ${COMPONENT}: rom module installed
 
 ram:    ${MODULE}
-        @echo ${COMPONENT}: soft-load module installed
+        @echo ${COMPONENT}: soft-load module built
 
 clean:
         ${WIPE} abs ${WFLAGS}
@@ -166,24 +167,35 @@ resources:
         ${MKDIR} ${RESAPP}
         Set CodecCtlRes$Path Resources.RCA.${LOCALE}.,Resources.RCA.UK.
         TokenCheck CodecCtlRes:Messages
-        ${CP} CodecCtlRes:!BootROM ${RESAPP}.!Boot ${CPFLAGS}
-        ${CP} CodecCtlRes:!RunROM  ${RESAPP}.!Run ${CPFLAGS}
+        ${CP} CodecCtlRes:!BootROM ${RESAPP}.!Boot    ${CPFLAGS}
+        ${CP} CodecCtlRes:!RunROM  ${RESAPP}.!Run     ${CPFLAGS}
         ${CP} CodecCtlRes:Messages ${RESAPP}.Messages ${CPFLAGS}
-        ${CP} CodecCtlRes:Res      ${RESAPP}.Res ${CPFLAGS}
+        ${CP} CodecCtlRes:Res      ${RESAPP}.Res      ${CPFLAGS}
         Unset CodecCtlRes$Path
         @echo ${COMPONENT}: resource files copied
 
-install: ${FILES}
+install: install_${TYPE}
+        ${NOP}
+
+install_: install_app
+        ${NOP}
+
+install_mod: ${MODULE}
+        ${MKDIR} ${INSTDIR}
+        ${CP} ${MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
+        @echo ${COMPONENT}: soft-load module installed
+
+install_app: ${FILES}
         ${MKDIR} ${INSTDIR}
         Set CodecCtlRes$Path Resources.RCA.${LOCALE}.,Resources.RCA.UK.
         TokenCheck CodecCtlRes:Messages
-        ${CP} CodecCtlRes:!Boot ${INSTDIR}.!Boot ${CPFLAGS}
-        ${CP} CodecCtlRes:!Run  ${INSTDIR}.!Run ${CPFLAGS}
-        ${CP} CodecCtlRes:Messages ${INSTDIR}.Messages ${CPFLAGS}
-        ${CP} CodecCtlRes:Res      ${INSTDIR}.Res ${CPFLAGS}
+        ${CP} CodecCtlRes:!Boot    ${INSTDIR}.!Boot     ${CPFLAGS}
+        ${CP} CodecCtlRes:!Run     ${INSTDIR}.!Run      ${CPFLAGS}
+        ${CP} CodecCtlRes:Messages ${INSTDIR}.Messages  ${CPFLAGS}
+        ${CP} CodecCtlRes:Res      ${INSTDIR}.Res       ${CPFLAGS}
         Unset CodecCtlRes$Path
         ${CP} ${APP}               ${INSTDIR}.!RunImage ${CPFLAGS}
-        @echo ${COMPONENT}: Application installed to ${INSTDIR}
+        @echo ${COMPONENT}: application installed to ${INSTDIR}
 #
 # Static dependencies
 #
