@@ -9,6 +9,14 @@
 #
 
 #
+# Available build options (pass in OPTIONS)
+#
+#
+# -DMINIMUM_OPTIONS_LENGTH=4
+#    Sets the length of options check.  Set this to 4 to disable the
+#    length checks.  Defaults to 64 (what the DHCP standard requires)
+
+#
 # Paths
 #
 EXP_HDR = <cexport$dir>
@@ -16,18 +24,7 @@ EXP_HDR = <cexport$dir>
 #
 # Generic options:
 #
-AWK     = awk
-MKDIR   = mkdir -p
-AS      = objasm
-CC      = cc
-CMHG    = cmhg
-CP      = copy
-LD      = link
-RM      = remove
-MODSQZ  = modsqz
-WIPE    = -wipe
-CD	= dir
-TOUCH   = create
+include Makefiles:StdTools
 
 COMPONENT = DHCP
 CMHGNAME  = DHCPhdr
@@ -36,38 +33,18 @@ EXPORTS = ${EXP_HDR}.h.${COMPONENT}
 
 DEPENDS = -depend !Depend ${THROWBACK}
 
-#
-# Internet version compatibility
-#
-#COMPAT = -DCOMPAT_INET4
-
-
-DEFINES = ${COMPAT} ${OPTIONS} -UTRACE
+DEFINES = ${OPTIONS} -UTRACE
 
 AFLAGS = ${DEPENDS} -Stamp -quit
 CFLAGS  = -ffcah -c -zM -zps1 -wp ${DEFINES} ${INCLUDES} ${DEPENDS}
 CMHGFLAGS = -p ${DEPENDS}
-
-CPFLAGS = ~cfr~v
-WFLAGS  = ~c~v
 
 DIRS = o._dirs
 
 #
 # Libraries
 #
-CLIB      = CLIB:o.stubs
-RLIB      = RISCOSLIB:o.risc_oslib
-RSTUBS    = RISCOSLIB:o.rstubs
-ROMSTUBS  = RISCOSLIB:o.romstubs
-ROMCSTUBS = RISCOSLIB:o.romcstubs
-ABSSYM    = RISC_OSLib:o.AbsSym
-RPCLIB    = TCPIPLibs:rpc.o.rpc_datazm TCPIPLibs:rpc.o.rpclibzm
-INETLIB   = TCPIPLibs:o.inetlibzm
-SOCKLIB   = TCPIPLibs:o.socklib5zm
-UNIXLIB   = TCPIPLibs:o.unixlibzm
-ASMUTILS  = C:AsmUtils.o.AsmUtilsZM
-
+include Makefiles:ModuleLibs
 
 #
 # Include files
@@ -139,18 +116,18 @@ clean:
 #
 # Target 
 #
-${TARGET}: ${XTARGET} ${OBJS} ${UNIXLIB} ${INETLIB} ${SOCKLIB} ${DIRS}
-	${MKDIR} rm
-        ${LD} -o $@ -rmf ${OBJS} ${UNIXLIB} ${INETLIB} ${SOCKLIB} ${CLIB} ${ASMUTILS}
+${TARGET}: ${XTARGET} ${OBJS} ${NET5LIBS} ${CLIB} ${ASMUTILS} ${DIRS}
+        ${MKDIR} rm
+        ${LD} -o $@ -rmf ${OBJS} ${NET5LIBS} ${CLIB} ${ASMUTILS}
         $(MODSQZ) $@
         Access $@ RW/R
 
 #
 # ROM Target 
 #
-${ROMTARGET}: ${OBJS} ${UNIXLIB} ${INETLIB} ${SOCKLIB} ${DIRS}
+${ROMTARGET}: ${OBJS} ${NET5LIBS} ${ROMCSTUBS} ${ASMUTILS} ${DIRS}
 	${MKDIR} aof
-        ${LD} -o $@ -aof ${OBJS} ${UNIXLIB} ${INETLIB} ${SOCKLIB} ${ROMCSTUBS} ${ASMUTILS}
+        ${LD} -o $@ -aof ${OBJS} ${NET5LIBS} ${ROMCSTUBS} ${ASMUTILS}
 
 #
 # Final link for the ROM Image (using given base address)
