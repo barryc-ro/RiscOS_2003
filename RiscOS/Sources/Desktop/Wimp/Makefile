@@ -29,8 +29,8 @@ LD      = link
 CP      = copy
 RM      = remove
 WIPE    = -wipe
-ASFLAGS = -ABSolute -NOWarn -depend !Depend ${THROWBACK} ${OPTS} -o $@
-LDFLAGS = -bin -o $@
+ASFLAGS = -NOWarn -depend !Depend ${THROWBACK} ${OPTS} -cpu 3 -o $@
+LDFLAGS = -rmf -o $@
 CPFLAGS = ~cfr~v
 WFLAGS  = ~cfr~v
 
@@ -88,7 +88,6 @@ ${OBJECT}: ${SOURCE}
 
 ${TARGET}: ${OBJECT}
         ${LD} ${LDFLAGS} ${OBJECT}
-        SetType $@ Module
         Access $@ rw/r
 
 ${EXP_HDR}.Wimp: hdr.Wimp
