@@ -126,6 +126,8 @@ extern void generic_start (SGMLCTX * context, ELEMENT * element, VALUES * attrib
 extern void generic_finish (SGMLCTX * context, ELEMENT * element);
 extern void report_start (SGMLCTX * context, ELEMENT * element, VALUES * attributes);
 extern void report_finish (SGMLCTX * context, ELEMENT * element);
+extern void incomplete_start (SGMLCTX * context, ELEMENT * element, VALUES * attributes);
+extern void incomplete_finish (SGMLCTX * context, ELEMENT * element);
 
 /* builders.c */
 /* Out of date: No more than MAX_STRING character should result from formatting. */

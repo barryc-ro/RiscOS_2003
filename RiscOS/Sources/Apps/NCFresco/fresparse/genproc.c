@@ -185,5 +185,3 @@ extern void report_finish (SGMLCTX * context, ELEMENT * element)
 #endif
 }
 
-
-

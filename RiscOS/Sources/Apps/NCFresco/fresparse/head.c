@@ -162,7 +162,6 @@ extern void startmeta (SGMLCTX * context, ELEMENT * element, VALUES * attributes
 	m->name = valuestringdup(&attributes->value[HTML_META_NAME]);
 	m->httpequiv = valuestringdup(&attributes->value[HTML_META_HTTP_EQUIV]);
 	m->content = valuestringdup(&attributes->value[HTML_META_CONTENT]);
-
 	rid_meta_connect(rh, m);
     }
 }

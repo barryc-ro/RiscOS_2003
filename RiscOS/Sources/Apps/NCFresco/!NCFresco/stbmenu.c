@@ -17,6 +17,7 @@
 #include "memwatch.h"
 #include "rcolours.h"
 #include "webfonts.h"
+#include "util.h"
 
 #include "interface.h"
 #include "stbview.h"
@@ -432,6 +433,7 @@ void frontend_menu_raise(fe_menu mh, int x, int y)
         state.o.y = -mh->highlight*line_space;
         frontend_fatal_error(wimp_open_wind(&state.o));
 #endif
+	sound_event(snd_MENU_SHOW);
     }
 }
 
@@ -548,6 +550,7 @@ void stbmenu_close(void)
 {
     if (current_menu)
     {
+	sound_event(snd_MENU_HIDE);
 #if OPEN_AS_MENU
 	frontend_fatal_error(wimp_create_menu((wimp_menustr *) -1, 0, 0));
 #else

@@ -749,7 +749,7 @@ static void tb_bar_custom_exit_fn(void)
 
 static void tb_bar_details_entry_fn(fe_view v)
 {
-    frontend_open_url("ncfrescointernal:openpanel?name=info", v, TARGET_INFO, NULL, fe_open_url_NO_CACHE);
+    fe_open_version(v);
 }
 
 /* --------------------------------------------------------------------------*/

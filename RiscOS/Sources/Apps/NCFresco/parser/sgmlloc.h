@@ -5,7 +5,7 @@
 /* elements.c */
 /*extern void sgml_free_attributes(VALUE *values);*/
 extern BOOL default_attributes(SGMLCTX *context, ELEMENT *element, VALUES *values);
-extern void ensure_pre_requisites (SGMLCTX *context, ELEMENT *element);
+extern ELEMENT *ensure_pre_requisites (SGMLCTX *context, ELEMENT *element);
 extern void ensure_post_requisites (SGMLCTX *context, ELEMENT *element);
 /*extern void special_container_open_actions(SGMLCTX *context, ELEMENT *element);*/
 /*extern void special_container_close_actions(SGMLCTX *context, ELEMENT *element);*/
@@ -102,6 +102,9 @@ extern void reset_lexer_state(SGMLCTX *context);
 extern char *elements_name(SGMLCTX *context, int ix);
 extern void push_stack(SGMLCTX *context, ELEMENT *element);
 extern void pop_stack(SGMLCTX *context);
+extern STACK_ITEM *find_element_in_stack (SGMLCTX *context, ELEMENT *element);
+extern void pull_stack_item_to_top (SGMLCTX *context, STACK_ITEM *item);
+extern void pull_stack_item_to_top_correcting_effects (SGMLCTX *context, STACK_ITEM *item);
 extern void clear_inhand(SGMLCTX *context);
 extern void reset_tokeniser_state(SGMLCTX *context);
 extern void add_to_buffer(BUFFER *buffer, char input);

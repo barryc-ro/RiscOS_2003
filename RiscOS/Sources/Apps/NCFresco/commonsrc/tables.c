@@ -1624,13 +1624,6 @@ static void table_deliver (SGMLCTX *context, int reason, STRING item, ELEMENT *e
 	break;
 
     case DELIVER_PRE_OPEN_MARKUP:
-	if (element->flags & FLAG_DONT_STACK)
-	{
-	    PRSDBGN(("table_deliver(): passing PRE_OPEN for dont_stack item <%s>\n", element->name.ptr));
-	    context->force_deliver = TRUE;
-	    (*context->dlist->this_fn) (context, reason, item, element);
-	    break;
-	}
 
 	PRSDBGN(("table_deliver(): removing table_deliver for pre open <%s>\n", element->name.ptr));
 	sgml_remove_deliver(context, &table_deliver);
@@ -1669,13 +1662,6 @@ static void table_deliver (SGMLCTX *context, int reason, STRING item, ELEMENT *e
 	break;
 
     case DELIVER_PRE_CLOSE_MARKUP:
-	if (element->flags & FLAG_DONT_STACK)
-	{
-	    PRSDBGN(("table_deliver(): passing PRE_CLOSE for dont_stack item <%s>\n", element->name.ptr));
-	    context->force_deliver = TRUE;
-	    (*context->dlist->this_fn) (context, reason, item, element);
-	    break;
-	}
 
 	PRSDBGN(("table_deliver(): removing table_deliver before closing <%s>\n", element->name.ptr));
 	sgml_remove_deliver(context, &table_deliver);
@@ -2116,7 +2102,7 @@ extern void startcaption(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 				   NULL,
 				   NULL);
 
-    PACK(context->tos->effects_active, STYLE_ALIGN, STYLE_ALIGN_CENTER);
+    SET_EFFECTS(context->tos, STYLE_ALIGN, STYLE_ALIGN_CENTER);
 
     TABDBG(("Caption entered\n"));
 }
@@ -2874,13 +2860,13 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     me->rh->curstream = &cell->stream;
 
     rid_getprop(table, cell->cell.x, cell->cell.y, rid_PROP_HALIGN, &tag);
-    PACK(context->tos->effects_active, STYLE_ALIGN, tag);
+    SET_EFFECTS(context->tos, STYLE_ALIGN, tag);
     /* SJM: added bold in headers */
     if (cell->flags & rid_cf_HEADER)
 	add_bold_to_font(context);
     /* SJM: ensure no indent is carried into cell */
-    PACK(context->tos->effects_active, STYLE_INDENT, 0);
-    PACK(context->tos->effects_active, STYLE_RINDENT, 0);
+    SET_EFFECTS(context->tos, STYLE_INDENT, 0);
+    SET_EFFECTS(context->tos, STYLE_RINDENT, 0);
 
     switch (tag)
     {
@@ -2895,9 +2881,9 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
 	break;
     case STYLE_ALIGN_CHAR:
 	TABDBG(("Choosing character alignment for cell\n"));
-	/*PACK(context->tos->effects_active, STYLE_ALIGN, STYLE_ALIGN_LEFT);*/
+	/*SET_EFFECTS(context->tos, STYLE_ALIGN, STYLE_ALIGN_LEFT);*/
 	rid_getprop(table, cell->cell.x, cell->cell.y, rid_PROP_CH, &tag);
-	PACK(context->tos->effects_active, TABLE_ALIGN_CHAR, tag);
+	SET_EFFECTS(context->tos, TABLE_ALIGN_CHAR, tag);
 	break;
     default:
 	TABDBG(("** CONFUSED HORIZONTAL CHARACTER ALIGNMENT %d **\n", tag));
@@ -2905,7 +2891,7 @@ static void start_tdth(SGMLCTX *context, ELEMENT *element, VALUES *attributes)
     }
 
     rid_getprop(table, cell->cell.x, cell->cell.y, rid_PROP_VALIGN, &tag);
-    PACK(context->tos->effects_active, STYLE_VALIGN, tag);
+    SET_EFFECTS(context->tos, STYLE_VALIGN, tag);
 
     switch (tag)
     {

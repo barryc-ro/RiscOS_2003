@@ -33,7 +33,7 @@ extern void startblockquote (SGMLCTX * context, ELEMENT * element, VALUES * attr
     generic_start (context, element, attributes);
 
 #ifndef STBWEB
-    PACK(context->tos->effects_active, STYLE_WF_INDEX, WEBFONT_BLOCK);
+    SET_EFFECTS(context->tos, STYLE_WF_INDEX, WEBFONT_BLOCK);
 #endif
 #ifdef STBWEB
     text_item_push_word(htmlctxof(context), rid_flag_LINE_BREAK, FALSE);
@@ -62,7 +62,7 @@ extern void startdiv (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 extern void startcenter (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 {
     generic_start (context, element, attributes);
-    PACK(context->tos->effects_active, STYLE_ALIGN, STYLE_ALIGN_CENTER);
+    SET_EFFECTS(context->tos, STYLE_ALIGN, STYLE_ALIGN_CENTER);
 }
 
 extern void startcentre (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
@@ -81,7 +81,7 @@ extern void startpre (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 #ifdef STBWEB
     add_fixed_to_font(context);
 #else
-    PACK(context->tos->effects_active, STYLE_WF_INDEX, WEBFONT_PRE);
+    SET_EFFECTS(context->tos, STYLE_WF_INDEX, WEBFONT_PRE);
 #endif
 
     /* These need active action to cancel */
@@ -108,7 +108,7 @@ static void starthN (SGMLCTX * context, ELEMENT * element, VALUES * attributes, 
 {
     generic_start (context, element, attributes);
 
-    PACK(context->tos->effects_active, STYLE_WF_INDEX, N);
+    SET_EFFECTS(context->tos, STYLE_WF_INDEX, N);
     std_lcr_align(context, &attributes->value[HTML_H1_ALIGN]);
 }
 

@@ -102,6 +102,7 @@ static void select_menu_callback(fe_menu mh, void *handle, int item, int right)
 	}
     }
 
+    sound_event(snd_MENU_SELECT);
     antweb_update_item( (antweb_doc*)tis->select->doc, &(tis->base));
 }
 #endif /* BUILDERS */
@@ -339,6 +340,8 @@ char *oselect_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, i
 	    else
 		sel->options->flags |= rid_if_SELECTED;
 	}
+
+	sound_event(snd_MENU_SELECT);
 	antweb_update_item(doc, ti);
     }
     else
@@ -366,3 +369,5 @@ void oselect_astext(rid_text_item *ti, rid_header *rh, FILE *f)
 {
     fputs("[Selection menu]", f);
 }
+
+/* eof oselect.c */

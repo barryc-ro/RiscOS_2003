@@ -38,6 +38,9 @@
 
 #include "htmlparser.h"
 
+#include "glue.h"
+#include "sgmlexp.h"
+
 /*****************************************************************************/
 
 extern void select_pre_mode(HTMLCTX *me)
@@ -113,7 +116,7 @@ extern void bump_current_indent(SGMLCTX *context)
     if (x < (256 - INDENT_WIDTH - rx) )
     {
 	x += INDENT_WIDTH;
-	PACK(context->tos->effects_active, STYLE_INDENT, x);
+	SET_EFFECTS(context->tos, STYLE_INDENT, x);
 	PRSDBGN(("bump_current_indent(%p): now %d\n", context, x));
     }
     else
@@ -130,7 +133,7 @@ extern void bump_current_rindent(SGMLCTX *context)
     if (rx < (256 - INDENT_WIDTH - x) )
     {
 	rx += INDENT_WIDTH;
-	PACK(context->tos->effects_active, STYLE_RINDENT, rx);
+	SET_EFFECTS(context->tos, STYLE_RINDENT, rx);
 	PRSDBGN(("bump_current_rindent(%p): now %d\n", context, rx));
     }
     else
@@ -143,30 +146,22 @@ extern void bump_current_rindent(SGMLCTX *context)
 
 extern void add_fixed_to_font(SGMLCTX *context)
 {
-    BITS x = UNPACK(context->tos->effects_active, STYLE_WF_INDEX);
-    if ((x & WEBFONT_FLAG_SPECIAL) == 0)
-	x |= WEBFONT_FLAG_FIXED;
-    PACK(context->tos->effects_active, STYLE_WF_INDEX, x);
-    PRSDBGN(("add_fixed_to_font(%p)\n", context));
+    if ((UNPACK(context->tos->effects_active, STYLE_WF_INDEX) & WEBFONT_FLAG_SPECIAL) == 0)
+	SET_EFFECTS_WF_FLAG(context->tos, WEBFONT_FLAG_FIXED);
+    PRSDBGN(("add_fixed_to_font(%p: %08x)\n", context, context->tos->effects_active[0]));
 }
 
 extern void add_bold_to_font(SGMLCTX *context)
 {
-    BITS x = UNPACK(context->tos->effects_active, STYLE_WF_INDEX);
-    if ((x & WEBFONT_FLAG_SPECIAL) == 0)
-	x |= WEBFONT_FLAG_BOLD;
-    PACK(context->tos->effects_active, STYLE_WF_INDEX, x);
+    if ((UNPACK(context->tos->effects_active, STYLE_WF_INDEX) & WEBFONT_FLAG_SPECIAL) == 0)
+	SET_EFFECTS_WF_FLAG(context->tos, WEBFONT_FLAG_BOLD);
     PRSDBGN(("add_bold_to_font(%p)\n", context));
 }
 
 extern void add_italic_to_font(SGMLCTX *context)
 {
-    BITS x = UNPACK(context->tos->effects_active, STYLE_WF_INDEX);
-
-    if ((x & WEBFONT_FLAG_SPECIAL) == 0)
-	x ^= WEBFONT_FLAG_ITALIC;    /* pdh: was "|=" */
-
-    PACK(context->tos->effects_active, STYLE_WF_INDEX, x);
+    if ((UNPACK(context->tos->effects_active, STYLE_WF_INDEX) & WEBFONT_FLAG_SPECIAL) == 0)
+	SET_EFFECTS_WF_FLAG(context->tos, WEBFONT_FLAG_ITALIC);
     PRSDBGN(("add_italic_to_font(%p)\n", context));
 }
 
@@ -174,13 +169,13 @@ extern void add_italic_to_font(SGMLCTX *context)
 
 extern void add_underline(SGMLCTX *context)
 {
-    PACK(context->tos->effects_active, STYLE_UNDERLINE, STYLE_UNDERLINE);
+    SET_EFFECTS_FLAG(context->tos, STYLE_UNDERLINE);
     PRSDBGN(("add_underline(%p)\n", context));
 }
 
 extern void add_strike(SGMLCTX *context)
 {
-    PACK(context->tos->effects_active, STYLE_STRIKE, STYLE_STRIKE);
+    SET_EFFECTS_FLAG(context->tos, STYLE_STRIKE);
     PRSDBGN(("add_strike(%p)\n", context));
 }
 
@@ -191,8 +186,10 @@ extern void set_font_size(SGMLCTX *context, int size)
     int x = UNPACK(context->tos->effects_active, STYLE_WF_INDEX);
     x &= ~WEBFONT_SIZE_MASK;
     x |= (size - 1) << WEBFONT_SIZE_SHIFT;
-    PACK(context->tos->effects_active, STYLE_WF_INDEX, x);
+    SET_EFFECTS(context->tos, STYLE_WF_SIZE, x);
 }
+
+/*****************************************************************************/
 
 /* This can set the SPECIAL bit and the FIXED bit.
  */
@@ -208,7 +205,7 @@ extern void set_font_type(SGMLCTX *context, int type)
     
     x |= type;
     
-    PACK(context->tos->effects_active, STYLE_WF_INDEX, x);
+    SET_EFFECTS(context->tos, STYLE_WF_INDEX, x);
 }
 
 /*****************************************************************************/
@@ -221,21 +218,21 @@ extern void std_lcr_align(SGMLCTX *context, VALUE *align)
 	switch (align->u.i)
 	{
 	case HTML_H1_ALIGN_LEFT:
-	    PACK(context->tos->effects_active, STYLE_ALIGN, STYLE_ALIGN_LEFT);
+	    SET_EFFECTS(context->tos, STYLE_ALIGN, STYLE_ALIGN_LEFT);
 	    PRSDBGN(("std_lcr_align(%p,%p): LEFT alignment\n", context, align));
 	    break;
 	case HTML_H1_ALIGN_CENTER:
 	case HTML_H1_ALIGN_CENTRE:
 	    PRSDBGN(("std_lcr_align(%p,%p): CENTER alignment\n", context, align));
-	    PACK(context->tos->effects_active, STYLE_ALIGN, STYLE_ALIGN_CENTER);
+	    SET_EFFECTS(context->tos, STYLE_ALIGN, STYLE_ALIGN_CENTER);
 	    break;
 	case HTML_H1_ALIGN_RIGHT:
 	    PRSDBGN(("std_lcr_align(%p,%p): RIGHT alignment\n", context, align));
-	    PACK(context->tos->effects_active, STYLE_ALIGN, STYLE_ALIGN_RIGHT);
+	    SET_EFFECTS(context->tos, STYLE_ALIGN, STYLE_ALIGN_RIGHT);
 	    break;
 	case HTML_H1_ALIGN_JUSTIFY:
 	    PRSDBGN(("std_lcr_align(%p,%p): JUSTIFY alignment\n", context, align));
-	    PACK(context->tos->effects_active, STYLE_ALIGN, STYLE_ALIGN_JUSTIFY);
+	    SET_EFFECTS(context->tos, STYLE_ALIGN, STYLE_ALIGN_JUSTIFY);
 	    break;
 	}
 
@@ -1134,7 +1131,7 @@ extern void push_fake_search_form(HTMLCTX * me, VALUE *prompt)
 
   SJM: Currently this is only called from the <BR> code. We don't want it to
   push a break if the previous word has line break set.
-
+  
   */
 
 extern void text_item_push_break(HTMLCTX * me)
@@ -1160,9 +1157,9 @@ extern void text_item_push_break(HTMLCTX * me)
 	rid_text_item_text *ti = mm_calloc(1, sizeof(*ti));
 
 	PRSDBG(("line break\n"));
-
+     
 	nb = (rid_text_item *) ti;
-
+     
 	nb->tag = rid_tag_TEXT;
 	nb->flag |= rid_flag_LINE_BREAK | rid_flag_EXPLICIT_BREAK;
 	nb->aref = me->aref;	/* Current anchor, or NULL */
@@ -1177,7 +1174,7 @@ extern void text_item_push_break(HTMLCTX * me)
 	flexmem_shift();
 
 	rid_text_item_connect(me->rh->curstream, nb);
-
+    
     }
     else
     {
@@ -1286,7 +1283,7 @@ extern void text_item_push_bullet(HTMLCTX * me, int item_type)
     nbb->item_type = item_type;
 
 #if 0
-    PACK(me->sgmlctx->tos->outer->effects_active, LIST_ITEM_NUM, nbb->list_no + 1);
+    SET_EFFECTS(me->sgmlctx->tos->outer, LIST_ITEM_NUM, nbb->list_no + 1);
 
     PRSDBG(("list item number before push %x\n",
 	    UNPACK(me->sgmlctx->tos->outer->effects_active, LIST_ITEM_NUM)));

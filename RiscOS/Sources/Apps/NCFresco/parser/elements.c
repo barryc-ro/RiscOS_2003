@@ -170,12 +170,14 @@ static char *action_names [8] =
 };
 #endif
 
-extern void ensure_pre_requisites (SGMLCTX *context, ELEMENT *element)
+extern ELEMENT *ensure_pre_requisites (SGMLCTX *context, ELEMENT *element)
 {
     VALUES dummy_values;
     BOOL had_enclosing = FALSE, init_dummy = FALSE;
     ACT_ELEM *req;
     const BOOL old_apply = context->applying_rules;
+    BOOL ok = TRUE, can_invent_within = FALSE;
+    ELEMENT *invent = NULL;
 
     context->applying_rules = TRUE;
 
@@ -198,24 +200,35 @@ extern void ensure_pre_requisites (SGMLCTX *context, ELEMENT *element)
 		had_enclosing = TRUE;
 	    if (! had_enclosing)
 	    {
-		PRSDBGN(("ensure_pre_requisites(%s): %s not contained in %s\n",
-			element->name.ptr,element->name.ptr, other_elem->name.ptr));
-		if (! init_dummy)
-		    init_dummy = default_attributes(context, other_elem, &dummy_values);
-		sgml_note_missing_open (context, other_elem);
-		perform_element_open (context, other_elem, &dummy_values);
-		had_enclosing = FALSE;
+                if (element->group != other_elem->group || invent == NULL || can_invent_within)
+                {
+
+		    PRSDBGN(("ensure_pre_requisites(%s): %s not contained in %s\n",
+			     element->name.ptr,element->name.ptr, other_elem->name.ptr));
+		    if (! init_dummy)
+		        init_dummy = default_attributes(context, other_elem, &dummy_values);
+		    sgml_note_missing_open (context, other_elem);
+		    perform_element_open (context, other_elem, &dummy_values);
+		    had_enclosing = FALSE;
+                }
+                else
+                    ok = FALSE;
 	    }
 	    break;
 	case ENCLOSED_WITHIN:
 	    if ( !is_element_open (context, tag) )
 	    {
-		PRSDBGN(("ensure_pre_requisites(%s): %s not contained in %s\n",
-			element->name.ptr, element->name.ptr, other_elem->name.ptr));
-		if (! init_dummy)
-		    init_dummy = default_attributes(context, other_elem, &dummy_values);
-		sgml_note_missing_open (context, other_elem);
-		perform_element_open (context, other_elem, &dummy_values);
+                if (element->group != other_elem->group || invent == NULL || can_invent_within)
+                {
+		    PRSDBGN(("ensure_pre_requisites(%s): %s not contained in %s\n",
+			     element->name.ptr, element->name.ptr, other_elem->name.ptr));
+		    if (! init_dummy)
+		        init_dummy = default_attributes(context, other_elem, &dummy_values);
+		    sgml_note_missing_open (context, other_elem);
+		    perform_element_open (context, other_elem, &dummy_values);
+                }
+                else
+                    ok = FALSE;
 	    }
 	    break;
 	case PRECEEDED_BY:
@@ -271,10 +284,18 @@ extern void ensure_pre_requisites (SGMLCTX *context, ELEMENT *element)
 		}
 	    }
 	    break;
+        case INVENT_ONLY_WITHIN:
+            can_invent_within = can_invent_within || is_element_open (context, tag);
+            break;
+        case REPLACE_WITH:
+            invent = other_elem;
+            break;
 	}
     }
 
     context->applying_rules = old_apply;
+
+    return ok ? element : invent;
 }
 
 extern void ensure_post_requisites (SGMLCTX *context, ELEMENT *element)
@@ -318,6 +339,13 @@ extern void ensure_post_requisites (SGMLCTX *context, ELEMENT *element)
     }
     
     context->applying_rules = old_apply;
+}
+
+static BOOL is_bad_close (SGMLCTX *context, ELEMENT *element)
+{
+    ACT_ELEM *req = (&context->elements[context->tos->element])->requirements;
+
+    return req->action==REPLACES_BAD && req->element == element->id;
 }
 
 /*****************************************************************************
@@ -474,7 +502,7 @@ static void special_container_close_actions(SGMLCTX *context, ELEMENT *element)
 
 extern void perform_element_open(SGMLCTX *context, ELEMENT *element, VALUES *values)
 {
-    ELEMENT *other;
+    ELEMENT *other, *bad;
     BOOL nests;
 
     PRSDBGN(("<@%s>\n", element->name.ptr));
@@ -506,7 +534,16 @@ extern void perform_element_open(SGMLCTX *context, ELEMENT *element, VALUES *val
 #endif
     }
 
-    ensure_pre_requisites (context, element);
+    bad = ensure_pre_requisites (context, element);
+
+    if (element->id != bad->id)
+    {
+        /* element has been remapped to a 'bad' variant */
+        PRSDBG(("perform_element_open(%s): bad - opening %s instead\n", 
+                element->name.ptr, bad->name.ptr));
+        perform_element_open (context, bad, values);
+        return;
+    }
 
     context->deliver(context, DELIVER_PRE_OPEN_MARKUP, empty_string, element);
 
@@ -554,19 +591,9 @@ extern void perform_element_open(SGMLCTX *context, ELEMENT *element, VALUES *val
 
     if (nests)
     {
-	/* Special case for forms that dont want to be seen to stack
-	 * but still need their special container actions (I think) */
-	if ((element->flags & FLAG_DONT_STACK) == 0)
-	{
-	    /* ### THE PUSH HAPPENS HERE ### */
-	    push_stack (context, element);
-	    element_set_bit (context->tos->elements_open, element->id);
-	}
-	else
-	{
-	    element_set_bit (context->dont_stack_elements_open, element->id);
-	    PRSDBG(("perform_element_open(): no stack item\n"));
-	}
+	/* ### THE PUSH HAPPENS HERE ### */
+	push_stack (context, element);
+	element_set_bit (context->tos->elements_open, element->id);
 
 	if ( (element->flags & FLAG_CONTAINER) != 0 )
 	    special_container_open_actions (context, element);
@@ -588,13 +615,13 @@ extern void perform_element_open(SGMLCTX *context, ELEMENT *element, VALUES *val
 	context->tos->matching_mode = 0;
     }
 
-    /* element_set_bit (context->elements_seen, element->id); */
     element_set_bit (context->tos->elements_seen, element->id);
 
     if (context->dlist == NULL || context->force_deliver)
     {
 	/* Call the element specific actions */
 	(*element->element_open) (context, element, values);
+
 	context->force_deliver = FALSE;
     }
 
@@ -603,6 +630,58 @@ extern void perform_element_open(SGMLCTX *context, ELEMENT *element, VALUES *val
 }
 
 /*****************************************************************************/
+
+static void force_close_to_matching (SGMLCTX *context, ELEMENT *element)
+{
+    while (TRUE)
+    {
+        STACK_ITEM *nos;
+
+        for (nos = context->tos; nos != NULL; nos = nos->outer) 
+        {
+            if (nos->element == element->id)
+                 break;
+
+            if ((context->elements[nos->element].flags & FLAG_DONT_FORCE_CLOSE) == 0)
+                 break;
+        }
+        /* nos now points to the first stack element that we can force close or it points to
+           our element.
+         */
+
+        if (!element_bit_set (nos->elements_open, element->id)) break;
+        
+        pull_stack_item_to_top (context, nos);
+
+        if (nos->element == element->id) 
+        {
+            /* We've reached the element we wanted to close */
+
+            perform_element_close (context, element); break;
+        }
+        else
+        {
+            int *phantom = &context->tos->element;
+            ELEMENT *elem = &context->elements[*phantom];
+            BOOL b = (elem->flags & FLAG_CONTAINER) != 0 &&
+                     (element->flags & FLAG_FULL_UNWIND) == 0;
+         
+	    if (element->group != HTML_GROUP_NONE) b &= elem->group == element->group;
+            /* Note that this means an element may be closed */
+            /* when it's *NOT* the context->tos element. */
+         
+            PRSDBG(("perform_element_close(%s): force closing element </%s>\n",
+             element->name.ptr, elem->name.ptr));
+            perform_element_close(context, elem);
+            *phantom = - *phantom;
+            sgml_note_missing_close(context, elem);
+            PRSDBG(("perform_element_close(%s): done force close </%s>\n",
+                    element->name.ptr, elem->name.ptr));
+    	    /* Leave this in: Borris: 10/9/96 */
+            if (b) break;
+        }
+    }
+}
 
 extern void perform_element_close(SGMLCTX *context, ELEMENT *element)
 {
@@ -629,8 +708,8 @@ extern void perform_element_close(SGMLCTX *context, ELEMENT *element)
 	sgml_note_message(context, "No closing markup expected for <%s>", element->name.ptr);
 #endif
     }
-    else if ( context->tos->element == element->id || -context->tos->element == element->id ||
-	      ((element->flags & FLAG_DONT_STACK) && element_bit_set (context->dont_stack_elements_open, element->id)) )
+    else if ( context->tos->element == element->id || -context->tos->element == element->id )
+                /* DL: DONT_STACK rule abolished */
     {
 	sgml_note_good_close(context, element);
 
@@ -647,93 +726,44 @@ extern void perform_element_close(SGMLCTX *context, ELEMENT *element)
 	    context->force_deliver = FALSE;
 	}
 
-	if ((element->flags & FLAG_DONT_STACK) == 0)
-	{
-	    /* ### THE POP HAPPENS HERE ### */
-	    pop_stack (context);
-	}
-	else
-	{
-	    element_bit_clear (context->dont_stack_elements_open, element->id);
-	}
+	/* ### THE POP HAPPENS HERE ### */
+	pop_stack (context);
 
 	report_finish(context, element);
 
 	/* Post space/break stuff */
 	(*context->deliver) (context, DELIVER_POST_CLOSE_MARKUP, empty_string, element);
     }
+    else if (is_bad_close (context, element))
+    {
+        PRSDBG(("perform_element_close(%s): bad - closing %s instead\n", 
+                element->name.ptr, &context->elements[context->tos->element].name.ptr));
+
+        perform_element_close (context, &context->elements[context->tos->element]);
+    }   
     else if ( element_bit_set (context->tos->elements_open, element->id) )
     {
-	if ( (element->flags & FLAG_OUT_OF_ORDER_CLOSE) != 0 )
-	{
-	    /* This is for </P> mainly */
-	    STACK_ITEM *item = context->tos;
-#if SGML_REPORTING
-	    sgml_note_message (context, "Suggest a better nesting for <%s>", element->name.ptr);
-#endif
-	    while ( item != NULL && item->element != element->id )
-		item = item->outer;
+        /* DL: removed old OUT_OF_ORDER_CLOSE - obsolete experiment ? */
 
-	    if (item != NULL)
-		item->element = - item->element;
-	}
-	else
-	{
-	    /*note_message(context, "Popping to match closing </%s>", element->name.ptr);*/
-	    PRSDBG(("Popping to match closing </%s>\n", element->name.ptr));
-
-	    if (element->group == HTML_GROUP_NONE)
+            ASSERT(context->tos != NULL);
+      
+	    if (element->flags & FLAG_OUT_OF_ORDER_CLOSE)
 	    {
-		ASSERT(context->tos != NULL);
-
-		while (element_bit_set (context->tos->elements_open, element->id))
-		{
-		    int *phantom = &context->tos->element;
-		    ELEMENT *elem = &context->elements[*phantom];
-		    BOOL b = (elem->flags & FLAG_CONTAINER) != 0 &&
-			(element->flags & FLAG_FULL_UNWIND) == 0;
-
-		    /* Note that this means an element may be closed */
-		    /* when it's *NOT* the context->tos element. */
-
-		    PRSDBGN(("perform_element_close(%s): phantom closing ungrouped element </%s>\n",
-			    element->name.ptr, elem->name.ptr));
-		    perform_element_close(context, elem);
-		    *phantom = - *phantom;
-		    sgml_note_missing_close(context, elem);
-		    PRSDBGN(("perform_element_close(%s): done phantom close </%s>\n",
-			    element->name.ptr, elem->name.ptr));
-#if 1	/* Leave this in: Borris: 10/9/96 */
-		    if (b)
-			break;
-#endif
-		}
-	    }
-	    else
-	    {
-		while ( element_bit_set (context->tos->elements_open, element->id) )
-		{
-		    int *phantom = &context->tos->element;
-		    ELEMENT *elem = &context->elements[*phantom];
-		    BOOL b = (elem->flags & FLAG_CONTAINER) != 0 &&
-			(element->flags & FLAG_FULL_UNWIND) == 0;
-
-		    b &= elem->group == element->group;
-		    if (elem->id != element->id)
-		    {
-			PRSDBGN(("perform_element_close(%s): phantom closing </%s>\n",
-				element->name.ptr, elem->name.ptr));
-			sgml_note_missing_close(context, elem);
-		    }
-		    perform_element_close(context, elem);
-		    *phantom = - *phantom;
-#if 1	/* Leave this in: Borris: 10/9/96 */
-		    if (b)
-			break;
-#endif
-		}
-	    }
-	}
+                /* The following replaces the phantom close scheme with a reordered close */
+                  STACK_ITEM *matching_close = find_element_in_stack (context, element);
+  
+                if (matching_close != NULL)
+                {
+                    PRSDBG(("perform_element_close(%s): pulling close to top of stack\n",
+                            element->name.ptr));
+                    pull_stack_item_to_top_correcting_effects (context, matching_close);
+                    perform_element_close (context, element);
+                    sgml_note_missing_close (context, element);
+                }
+                /* Otherwise we saw it earlier and the elements_open is lying */
+            }
+            else if (element_bit_set (context->tos->elements_open, element->id))
+                force_close_to_matching (context, element);
     }
     else
     {

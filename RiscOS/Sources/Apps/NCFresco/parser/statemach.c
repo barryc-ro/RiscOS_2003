@@ -237,6 +237,30 @@ extern void state_comment_pre_initial (SGMLCTX *context, char input)
 /* new scheme that correctly parses correct comments
  * and doesn't try and do anything clever with bad comments.
  * except we will handle arbitrary numbers of dashes.
+ *
+ * DL: now for some support for bad comments. If we reach the end of
+ * the stream with a comment open, we backtrack to the first ">" following
+ * the comment open. This is not 'correct' but is probably friendly in
+ * many circumstances. 
+ * The method is to drop a global anchor (the inhand index) when a ">" is 
+ * swallowed but we are not ready to close the comment. The anchor is set to -1
+ * when there is no such. The recovery is performed in sgml_stream_finished
+ * where the characters after the anchor are fed in again, from a closed stat.
+ * Any changes to this part of the state machine should consider the effects
+ * on comment recovery.
+
+    Here is the state machine just for comments:
+
+      "<!"        "-"      "-"         "-"         "-"
+       ---> maybe ---> pre ---> dash_1 ---> dash_2 ---> maybe
+              |         |        | |
+              +---------+        +-+
+                   ?              ?
+
+    Note the change to the state machine to allow several comments in one bit of
+    SGML - the comment_wait_close state is no longer reached.
+    The anchor is cleared on entering maybe and dropped on the first > while in dash_1 or dash_2.
+
  */
 
 /* <!-- ... -- */
@@ -248,6 +272,9 @@ extern void state_comment_wait_close (SGMLCTX *context, char input)
 	{ context->state = state_comment_wait_close; }
 	else
 	{ context->state = state_comment_wait_dash_1; }
+        /* DL: I can't see how this is correct - got to get to waiting for
+           new comment start somehow!
+         */
 }
 
 /* <!-- ... - */
@@ -255,8 +282,14 @@ extern void state_comment_wait_dash_2 (SGMLCTX *context, char input)
 {
 	if ( input =='-' )
 	{
+#if 0
+	    context->state = state_comment_maybe /* state_comment_wait_close */;
+#else
 	    context->state = state_comment_wait_close;
+#endif
 	}
+	else if ( input == '>' && context->comment_anchor == -1 )
+        { context->comment_anchor = context->inhand.ix; }
 	else
 	{
 	    context->state = state_comment_wait_dash_1;
@@ -268,7 +301,9 @@ extern void state_comment_wait_dash_1 (SGMLCTX *context, char input)
 {
 	if ( input =='-' )
 	{ context->state = state_comment_wait_dash_2; }
-	else
+	else if ( input == '>' && context->comment_anchor == -1 )
+        { context->comment_anchor = context->inhand.ix; }
+        else
 	{ ; }
 }
 
@@ -277,6 +312,7 @@ extern void state_comment_pre_initial (SGMLCTX *context, char input)
 {
 	if ( input =='-' )
 	{
+            context->comment_anchor = -1;
 	    context->state = state_comment_wait_dash_1;
 	}
 	else if ( input =='>' )

@@ -2112,21 +2112,23 @@ static os_error *access_new_file(const char *file, int ft, char *url, access_url
 	d->data.file.size = ro_get_extent(fh);
 	d->data.file.last_modified = file_last_modified(file);
 
-	/* if this is an image then immediately process the first 256 bytes of the image to get the size */
+	/* if it is a priority item then fetch the whole thing right now (eg background image) */
 	if (flags & access_PRIORITY)
 	{
 	    d->data.file.chunk = d->data.file.size;
 	    if (!access_file_fetch(d))
 		d = NULL;
 	}
+	/* if this is an image then immediately process the first few bytes of the image to get the size */
 	else if (flags & access_IMAGE)
 	{
-	    d->data.file.chunk = 256;
+	    d->data.file.chunk = 2048;
 	    if (access_file_fetch(d))
 		d->data.file.chunk = FILE_INITIAL_CHUNK;
 	    else
 		d = NULL;
 	}
+	/* otherwise schedule a read for sometime later */
 	else
 	{
 	    d->data.file.chunk = FILE_INITIAL_CHUNK;
@@ -2779,14 +2781,43 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 		    ep = ensure_modem_line();
 		}
 	    }
-
-	    if (ep)
-	    {
-		/* do nothing, tidying up will happen at end of function */
-	    }
-	    else
 #endif
-		if (path_is_directory(cfile))
+	    /* if no errors in ensuring modem line trhen check object and file type */
+	    if (!ep)
+	    {
+		int obj_type;
+		ft = file_and_object_type(cfile, &obj_type);
+
+		/* if file is not found try looking for file of correct filetype without extension */
+		if (obj_type == 0)
+		{
+		    char *slash = strrchr(cfile, '/');
+		    char *dot = strrchr(cfile, '.');
+
+		    if (slash && (dot == NULL || dot < slash))
+		    {
+			*slash = 0;
+			
+			if (suffix_to_file_type(slash+1) == (ft = file_and_object_type(cfile, &obj_type)) )
+			    ep = NULL;
+			else
+			    ep = makeerror(ERR_CANT_READ_FILE);
+		    }
+		    else
+		    {
+			ep = makeerror(ERR_CANT_READ_FILE);
+		    }
+		}
+
+		/* if an image fs then guess whether we should treat it as a file or directory */
+		if (!ep && obj_type == 3 && !frontend_can_handle_file_type(ft) && !frontend_plugin_handle_file_type(ft))
+		    ft = FILETYPE_DIRECTORY;
+	    }
+	    
+	    if (ep || ft == -1)
+	    {
+	    }
+	    else if (ft == FILETYPE_DIRECTORY)
 	    {
 		char *path;
 
@@ -2824,79 +2855,49 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 		/* cfile will be freed at end of section */
 		*result = NULL;
 	    }
-	    else /* if (!path_is_directory(cfile)) */
+	    else if (ft == FILETYPE_URL)
 	    {
-		ft = file_type(cfile);
-
-		/* if file is not found try looking for file of correct filetype without extension */
-		if (ft == -1)
+		char new_url[256];
+		FILE *fh;
+		
+		fh = fopen(cfile, "r");
+		if (fh && (fgets(new_url, sizeof(new_url), fh)))
 		{
-		    char *slash = strrchr(cfile, '/');
-		    char *dot = strrchr(cfile, '.');
-
-		    if (slash && (dot == NULL || dot < slash))
-		    {
-			*slash = 0;
-			
-			if (suffix_to_file_type(slash+1) == (ft = file_type(cfile)) )
-			    ep = NULL;
-			else
-			    ep = makeerror(ERR_CANT_READ_FILE);
-		    }
-		    else
-		    {
-			ep = makeerror(ERR_CANT_READ_FILE);
-		    }
-		}
-
-		if (ft == -1)
-		{
-		    /* error will be reported */
-		}
-		else if (ft == FILETYPE_URL)
-		{
-		    char new_url[256];
-		    FILE *fh;
-
-		    fh = fopen(cfile, "r");
-		    if (fh && (fgets(new_url, sizeof(new_url), fh)))
-		    {
-			d = mm_calloc(1, sizeof(*d));
-
-			d->access_type = access_type_FILE;
-			d->flags = flags;
-			d->url = strdup(url);
-			d->ofile = strdup(ofile);
-
-			d->progress = progress;
-			d->complete = complete;
-			d->h = h;
-			access_link(d);
-
-			ep = access_url(new_url, d->flags, d->ofile, NULL, referer,
-					&access_redirect_progress, &access_redirect_complete,
-					d, &(d->redirect));
-		    }
-		    else
-		    {
-			ep = makeerror(ERR_CANT_READ_FILE);
-		    }
-
-		    if (fh)
-			fclose(fh);
-		}
-		else if (ft != FILETYPE_HTML && ft != FILETYPE_GOPHER && ft != FILETYPE_TEXT && !image_type_test(ft))
-		{
-		    access_progress_flush(h, cfile, url, progress);
-		    complete(h, status_COMPLETED_FILE, cfile, url);
+		    d = mm_calloc(1, sizeof(*d));
 		    
-		    *result = NULL;
+		    d->access_type = access_type_FILE;
+		    d->flags = flags;
+		    d->url = strdup(url);
+		    d->ofile = strdup(ofile);
+			
+		    d->progress = progress;
+		    d->complete = complete;
+		    d->h = h;
+		    access_link(d);
+
+		    ep = access_url(new_url, d->flags, d->ofile, NULL, referer,
+				    &access_redirect_progress, &access_redirect_complete,
+				    d, &(d->redirect));
 		}
-		else if (ft != -1)
+		else
 		{
-		    ep = access_new_file(cfile, ft, url, flags, ofile, progress, complete, h, result);
+		    ep = makeerror(ERR_CANT_READ_FILE);
 		}
-	    } /* end !path_is_directory(cfile) */
+
+		if (fh)
+		    fclose(fh);
+	    }
+	    else if (ft != FILETYPE_HTML && ft != FILETYPE_GOPHER && ft != FILETYPE_TEXT && !image_type_test(ft))
+	    {
+		access_progress_flush(h, cfile, url, progress);
+		complete(h, status_COMPLETED_FILE, cfile, url);
+		    
+		*result = NULL;
+	    }
+	    else 
+	    {
+		ep = access_new_file(cfile, ft, url, flags, ofile, progress, complete, h, result);
+	    }
 
 	    mm_free(cfile);
 	}
@@ -3220,7 +3221,7 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 	    mm_free(new_url);
 	}
 #if INTERNAL_URLS
-	else if (strcasecomp(scheme, "ncfrescointernal") == 0)
+	else if (strcasecomp(scheme, "ncfrescointernal") == 0 || strcasecomp(scheme, "ncint") == 0)
 	{
 	    ep = access_new_internal(url, path, query, flags, ofile, bfile, referer,
 				    progress, complete, h, result);
@@ -3478,12 +3479,13 @@ void access_set_header_info(char *url, unsigned date, unsigned last_modified, un
 #endif
 
 #ifdef STBWEB
-void access_get_header_info(char *url, unsigned *date, unsigned *last_modified, unsigned *expires)
+BOOL access_get_header_info(char *url, unsigned *date, unsigned *last_modified, unsigned *expires)
 {
 #ifndef FILEONLY
     if (cache->get_header_info)
-	cache->get_header_info(url, date, last_modified, expires);
+	return cache->get_header_info(url, date, last_modified, expires);
 #endif
+    return FALSE;
 }
 #endif
 
@@ -3510,7 +3512,7 @@ BOOL access_is_scheme_supported(const char *scheme)
 	return TRUE;
 
 #if INTERNAL_URLS
-    if (strcasecomp(scheme, "ncfrescointernal") == 0)
+    if (strcasecomp(scheme, "ncfrescointernal") == 0 || strcasecomp(scheme, "ncint") == 0)
 	return TRUE;
 #endif
 

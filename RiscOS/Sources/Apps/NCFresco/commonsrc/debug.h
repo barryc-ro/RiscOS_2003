@@ -91,6 +91,16 @@ extern void init_usrtrc(void);
 #define DEBUG		2
 
 #endif
+
+/* DL: stderr is a pain for the checkers, so DBGOUT and DBGERR introduced instead */
+#ifdef CHECKER
+#define DBGOUT stdout
+#define DBGERR stderr
+#else
+#define DBGOUT stderr
+#define DBGERR stderr
+#endif
+
 /* -------------------------------------------------------------------------------- */
 
 #if DEBUG

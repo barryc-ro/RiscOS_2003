@@ -247,16 +247,17 @@ extern void startfont (SGMLCTX * context, ELEMENT * element, VALUES * attributes
 
 	no = rh_find_colour( me->rh, thecolour );
 
-	PACK( context->tos->effects_active, STYLE_COLOURNO, no );
+	SET_EFFECTS( context->tos, STYLE_COLOURNO, no );
     }
 
     if (attributes->value[HTML_FONT_FACE].type == value_string)
     {
 	char *font = stringdup(attributes->value[HTML_FONT_FACE].u.s);
+#ifndef BUILDERS
 	int index = webfont_lookup(font);
 
 	set_font_type(context, index);
-
+#endif
 	mm_free(font);
     }
 }
@@ -363,6 +364,113 @@ extern void finisha (SGMLCTX * context, ELEMENT * element)
     me->aref = NULL;
 }
 
+/*****************************************************************************/
+/* For now here are the start and finish handlers for 'bad' markup           */
+
+extern void startbadoption (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
+{
+    generic_start (context, element, attributes);
+}
+
+extern void finishbadoption (SGMLCTX * context, ELEMENT * element)
+{
+    generic_finish (context, element);
+}
+
+extern void startbadli (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
+{
+    startli (context, element, attributes); /* Si reckons this is safe */
+}
+
+extern void finishbadli (SGMLCTX * context, ELEMENT * element)
+{
+    finishli (context, element);
+}
+
+extern void startbaddt (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
+{
+    generic_start (context, element, attributes);
+}
+
+extern void finishbaddt (SGMLCTX * context, ELEMENT * element)
+{
+    generic_finish (context, element);
+}
+
+extern void startbaddd (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
+{
+    generic_start (context, element, attributes);
+}
+
+extern void finishbaddd (SGMLCTX * context, ELEMENT * element)
+{
+    generic_finish (context, element);
+}
+
+extern void startbadcaption (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
+{
+    generic_start (context, element, attributes);
+}
+
+extern void finishbadcaption (SGMLCTX * context, ELEMENT * element)
+{
+    generic_finish (context, element);
+}
+
+extern void startbadcol (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
+{
+    generic_start (context, element, attributes);
+}
+
+extern void startbadcolgroup (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
+{
+    generic_start (context, element, attributes);
+}
+
+extern void finishbadcolgroup (SGMLCTX * context, ELEMENT * element)
+{
+    generic_finish (context, element);
+}
+
+extern void startbadtd (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
+{
+    generic_start (context, element, attributes);
+}
+
+extern void finishbadtd (SGMLCTX * context, ELEMENT * element)
+{
+    generic_finish (context, element);
+}
+
+extern void startbadth (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
+{
+    generic_start (context, element, attributes);
+}
+
+extern void finishbadth (SGMLCTX * context, ELEMENT * element)
+{
+    generic_finish (context, element);
+}
+
+extern void startbadtr (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
+{
+    generic_start (context, element, attributes);
+}
+
+extern void finishbadtr (SGMLCTX * context, ELEMENT * element)
+{
+    generic_finish (context, element);
+}
+
+extern void startbadwbr (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
+{
+    generic_start (context, element, attributes);
+}
+
+extern void startbadparam (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
+{
+    generic_start (context, element, attributes);
+}
 
 
 /* eof special.c */

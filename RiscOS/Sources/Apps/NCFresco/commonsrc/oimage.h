@@ -1,7 +1,7 @@
 /* > oimage.h
-
+ *
  * Exported headers from oimage.c
-
+ *
  */
 
 

@@ -34,11 +34,23 @@ and shift 8).
 
 #else
 
+#if 0
+/* No longer use directly: */
 #define PACK(ptr, item, value) \
     pack_fn(ptr, item##_SHIFT, item##_MASK, value)
+#endif
 
 #define UNPACK(ptr, item) \
     unpack_fn(ptr, item##_SHIFT, item##_MASK)
+
+#define SET_EFFECTS_FLAG(ptr, item) \
+    set_effects_fn (ptr, item##_SHIFT, item##_MASK, item)
+
+#define SET_EFFECTS(ptr, item, value) \
+    set_effects_fn (ptr, item##_SHIFT, item##_MASK, value)
+
+#define SET_EFFECTS_WF_FLAG(ptr, item) \
+    set_effects_wf_flag_fn (ptr, item)
 
 #endif
 
@@ -47,6 +59,11 @@ and shift 8).
 First word - ROStyle overlay.
 
 IF these are not kept in sync, then incorrect results *will* be obtained.
+
+        IIII IIII FFFF FTEB CCCC XSSS VVVA AAbU
+
+where U: underline, b: bold, A: align, V: valign, S: sub/sup, X: strike-through, C: colour
+      B: webfont bold, E: webfont italic, T: webfont fixed, F: webfont size, I: indent
 
 */
 

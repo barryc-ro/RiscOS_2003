@@ -40,40 +40,7 @@
 
 #############################################################################
 
-copyright = '(C) Copyright ANT Limited 1996. All rights reserved.'
-
-logmsg = """
-
-Revision 1.1.2.3  1997/02/24 21:30:28  smiddle
-Various changes
-
-Revision 1.8  1997/02/24 16:28:26  borris
-Merged diffs from Si into BORRIS_970218
-
-Revision 1.1.2.2  1997/02/18 20:40:31  smiddle
-Modified and new files from the great merge
-
-Revision 1.7  1996/07/05 02:40:46  fresco
-Modified attrgen.py so that enumeration items are not forced to upper
-case. Warings when user might have got it wrong. Added $ and $E processing.
-
-Revision 1.6  1996/06/26 17:52:22  fresco
-Some table changes. Attribute enumerations from 1, not 0
-
-Revision 1.5  1996/06/18 10:46:12  fresco
-Made attrgen.py winge if expected token is empty. Improved attribute
-delivery - each attribute now tagged with its original position so the
-order of the attributes can be preserved.
-
-Revision 1.4  1996/06/17 02:32:19  fresco
-sgml_free_stack() added. sgml_free_context() filled in. Back to counting
-attributes and enumerations from zero. fixup.c uses longs to cast pointers
-in to, rather than ints (keeps axp gcc happy as long and ptrs are 64 bit,
-but int is 32 bit, so warns about loss of information). Few more header
-files now included.
-
-
-"""
+copyright = '(C) Copyright ANT Limited 1996, 1997. All rights reserved.'
 
 #############################################################################
 

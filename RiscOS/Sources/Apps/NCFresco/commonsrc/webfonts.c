@@ -83,10 +83,27 @@ os_error *webfonts_init_font(int n)
 	e = font_find(buffer, size * 16, size * 16, 0, 0, &(item->handle));
     }
 
+#ifdef STBWEB
     if (e == NULL)
     {
 	e = font_readinfo(item->handle, &fi);
     }
+#else
+    if (e == NULL)
+    {
+        /* We want to make max_up and max_down depend *only* on the point
+         * size, *not* on the bounding box of the font, otherwise we get
+         * different answers for medium and bold fonts!
+         */
+
+        int fsizeos = (size * 180 + 71)/72;         /* points to OS units */
+
+        fsizeos = (fsizeos*5)/4;                    /* fudge factor */
+
+        fi.miny = - ( fsizeos/4 );
+        fi.maxy = fi.miny + fsizeos;
+    }
+#endif
 
     if (e == NULL)
     {
@@ -156,6 +173,7 @@ os_error *webfonts_tidyup(void)
     return e2;
 }
 
+#if 1 /*daf #ifdef STBWEB */ /*pdh*/
 int webfont_font_width(int f, const char *s)
 {
     webfont *wf = &webfonts[f];
@@ -174,6 +192,7 @@ int webfont_font_width(int f, const char *s)
 
     return result;
 }
+#endif
 
 /* Take a width either in OS units or in chars and return the value in the other for a string of TTY chars */
 

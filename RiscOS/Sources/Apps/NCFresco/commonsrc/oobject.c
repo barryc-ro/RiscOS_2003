@@ -286,6 +286,7 @@ void oobject_dispose(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 
 char *oobject_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, int y, wimp_bbits bb)
 {
+#ifndef BUILDERS
     rid_text_item_object *tio = (rid_text_item_object *) ti;
     rid_object_item *obj = tio->object;
     switch (obj->type)
@@ -356,6 +357,7 @@ char *oobject_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, i
 	break;
     }
 
+#endif
     return "";			/* Follow links, no fuss at all */
 }
 

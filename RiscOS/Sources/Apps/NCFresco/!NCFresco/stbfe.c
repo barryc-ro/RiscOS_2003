@@ -1619,7 +1619,7 @@ void frontend_frame_layout(fe_view v, int nframes, fe_frame_info *info, int refr
     if (!v || v->magic != ANTWEB_VIEW_MAGIC)
 	return;
     
-  /* get rid of the old layout before creating the new one */
+    /* get rid of the old layout before creating the new one */
     if (refresh_only)
         child = v->children;
     else
@@ -1654,14 +1654,15 @@ void frontend_frame_layout(fe_view v, int nframes, fe_frame_info *info, int refr
                 coords_offsetbox(&box, -v->margin.x0, -v->margin.y1, &box);
 		*/
 
-            frontend_complain(fe_new_view(v, &box, ip, TRUE, &vv));
-            if (ip->src)
+            if (frontend_complain(fe_new_view(v, &box, ip, TRUE, &vv)) == NULL && vv)
 	    {
-                os_error *e = frontend_open_url(ip->src, vv, NULL, NULL, fe_open_url_FROM_FRAME);
-		if (e && e->errnum != ANTWEB_ERROR_BASE + ERR_NO_SUCH_FRAG)
-		    frontend_complain(e);
-/* 		if (vv->fetching) */
-/* 		    backend_set_margin(vv->fetching, &vv->backend_margin); */
+		vv->frame_index = i;
+		if (ip->src)
+		{
+		    os_error *e = frontend_open_url(ip->src, vv, NULL, NULL, fe_open_url_FROM_FRAME);
+		    if (e && e->errnum != ANTWEB_ERROR_BASE + ERR_NO_SUCH_FRAG)
+			frontend_complain(e);
+		}
 	    }
 	}
     }
@@ -2021,6 +2022,37 @@ os_error *fe_offline_page(fe_view v)
 	e = frontend_open_url(url, v, NULL, NULL, 0);
 
     return e;
+}
+
+void fe_open_info(fe_view v, be_item ti, int x, int y)
+{
+    if (v->displaying)
+    {
+	char *link, *title;
+	char buffer[1024];
+	int len;
+	    
+	strcpy(buffer, "ncfrescointernal:openpanel?name=info&source=");
+	fe_frame_specifier_create(v, buffer, sizeof(buffer));
+
+	if (ti &&
+	    backend_item_pos_info(v->displaying, ti, &x, &y, NULL, &link, NULL, &title) == NULL &&
+	    link)
+	{
+	    int len = strlen(buffer);
+
+	    strcat(buffer, "&url=");
+	    len += url_escape_cat(buffer + len, link, sizeof(buffer) - len);
+	    if (title)
+	    {
+		len += sprintf(buffer + len, "&title=");
+		len += url_escape_cat(buffer + len, title, sizeof(buffer) - len);
+	    }		    
+	}
+
+	STBDBG(("right click: complete url '%s'\n", buffer));
+	frontend_open_url(buffer, NULL, TARGET_INFO, NULL, fe_open_url_NO_CACHE);
+    }
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -2602,6 +2634,8 @@ os_error *fe_status_info_level(fe_view v, int level)
 
 os_error *fe_status_unstack(fe_view source_v)
 {
+    fe_view top = source_v ? fe_find_top(source_v) : main_view; 
+
     if (!fe_passwd_abort() &&
 	!tb_status_unstack())
     {
@@ -2613,7 +2647,7 @@ os_error *fe_status_unstack(fe_view source_v)
             fe_history_move(source_v, history_PREV);
     }	
 
-    tb_status_update_fades(source_v);
+    tb_status_update_fades(top);
     
     return NULL;
 }
@@ -2816,7 +2850,10 @@ static void fe_update_page_info(fe_view v)
     while (v && !title);
 
     tb_status_set_message(status_type_HELP, NULL);
-    tb_status_set_message(status_type_URL, strncasecomp(url, "ncfrescointernal:", sizeof("ncfrescointernal:")-1) == 0 ? NULL : url);
+    tb_status_set_message(status_type_URL,
+			  strncasecomp(url, "ncfrescointernal:", sizeof("ncfrescointernal:")-1) == 0 ||
+			  strncasecomp(url, "ncint:", sizeof("ncint:")-1) == 0 ?
+			  NULL : url);
     tb_status_set_message(status_type_TITLE, title);
 }
 
@@ -3454,31 +3491,14 @@ static int fe_mouse_handler(fe_view v, wimp_mousestr *m)
 	{
 	    wimp_wstate state;
 	    be_item ti;
-	    char *link, *title;
-	    char buffer[1024];
 	    
-	    strcpy(buffer, "ncfrescointernal:openpanel?name=info");
-
 	    wimp_get_wind_state(m->w, &state);
 	    coords_point_toworkarea((coords_pointstr *)&m->x, (coords_cvtstr *)&state.o.box);
 
-	    if (backend_doc_locate_item(v->displaying, &m->x, &m->y, &ti) == NULL && 
-		backend_item_pos_info(v->displaying, ti, &m->x, &m->y, NULL, &link, NULL, &title) == NULL &&
-		link)
-	    {
-		int len;
+	    ti = NULL;
+	    backend_doc_locate_item(v->displaying, &m->x, &m->y, &ti);
 
-		strcat(buffer, "&url=");
-		len = strlen(buffer);
-		len += url_escape_cat(buffer + len, link, sizeof(buffer) - len);
-		if (title)
-		{
-		    len += sprintf(buffer + len, "&title=");
-		    len += url_escape_cat(buffer + len, title, sizeof(buffer) - len);
-		}		    
-	    }
-
-	    frontend_open_url(buffer, v, TARGET_INFO, NULL, fe_open_url_NO_CACHE);
+	    fe_open_info(v, ti, m->x, m->y);
 	}
 	break;
     }
@@ -3678,6 +3698,10 @@ static void fe_doc_bounce(wimp_msgdataopen *dataopen)
     STBDBG(("fe_doc_bounce(): size %x\n", dataopen->size));
     STBDBG(("fe_doc_bounce(): type %x\n", dataopen->type));
     STBDBG(("fe_doc_bounce(): name '%s'\n", dataopen->name));
+
+    /* work-around problem with MovieFS KickStart module */
+    if (dataopen->type == 0x13)
+	dataopen->type = file_type_real(dataopen->name);
 
     if (frontend_can_handle_file_type(dataopen->type))
     {
@@ -4021,8 +4045,7 @@ static void fe_handle_openurl(wimp_msgstr *msg)
 
     url_parse(url, &scheme, NULL, NULL, NULL, NULL, NULL);
 
-    if (/* strcasecomp(scheme, "ncfrescointernal") == 0 || */
-	access_is_scheme_supported(scheme))
+    if (access_is_scheme_supported(scheme))
     {
 	fe__handle_openurl(msg, url, target, body_file);
     }

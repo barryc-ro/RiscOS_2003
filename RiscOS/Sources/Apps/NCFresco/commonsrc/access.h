@@ -91,7 +91,7 @@ extern void access_remove(char *url);
 extern void access_insert(char *url, char *file, cache_flags flags);
 extern char *access_scrapfile(void);
 extern void access_set_header_info(char *url, unsigned date, unsigned last_modified, unsigned expires);
-extern void access_get_header_info(char *url, unsigned *date, unsigned *last_modified, unsigned *expires);
+extern BOOL access_get_header_info(char *url, unsigned *date, unsigned *last_modified, unsigned *expires);
 
 /* Give the init function the number of files that can be cached */
 extern os_error *access_init(int size);
@@ -136,7 +136,7 @@ typedef struct
     void (*flush)(void);
     void (*optimise)(void);
 
-    void (*get_header_info)(char *url, unsigned *date, unsigned *last_modified, unsigned *expires);
+    BOOL (*get_header_info)(char *url, unsigned *date, unsigned *last_modified, unsigned *expires);
 } cache_functions;
 
 extern cache_functions old_cache_functions;

@@ -5,6 +5,8 @@
 
 extern void pack_fn(BITS *ptr, unsigned shift, unsigned mask, BITS value);
 extern BITS unpack_fn(BITS *ptr, unsigned shift, unsigned mask);
+extern void set_effects_fn (STACK_ITEM *ptr, unsigned shift, unsigned mask, BITS value);
+extern void set_effects_wf_flag_fn (STACK_ITEM *ptr, BITS value);
 
 
 /*****************************************************************************

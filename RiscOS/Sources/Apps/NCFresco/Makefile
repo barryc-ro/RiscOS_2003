@@ -3,6 +3,13 @@
 # Although currently targeted at UN*X type make's, the intention is that
 # this file be movable to a RISC OS compilation host if desired.
 #
+# DL: BE WARNED THIS IS A COLLECTION OF SCRIPTS MASQUERADING AS A MAKEFILE:
+# IT CONTAINS NO SOURCE DEPENDENCIRES SO DO NOT RELY ON IT FOR RECOMPILATION PURPOSES.
+# IF YOU TOUCH A HEADER FILE YOU *MUST* DO "make clean".
+#
+#############################################################################
+#
+#
 #############################################################################
 #
 # Support targets:
@@ -34,7 +41,7 @@
 #
 #############################################################################
 
-POSS_TARGETS=	br bu BUILDERS BUILDERS_RISCOS BUILDERS_UNIX CHECKERS_UNIX clean \
+POSS_TARGETS=	br bu cu BUILDERS BUILDERS_RISCOS BUILDERS_UNIX CHECKERS_UNIX clean \
 		depends DIST FIXME FRESCO FRESCO_RISCOS HTML hr hu \
 		HTMLCHECK HTMLCHECK_RISCOS HTMLCHECK_UNIX links    \
 		memlib mu \
@@ -98,8 +105,8 @@ BASE_INCS=	-I.. -I../commonsrc -I../fresparse -I../parser
 RISCOS_INCS=	-I../RISC_OSLib -I../include/unix -I../tcpiplibs $(BASE_INCS)  -I../memlib -J../clib
 #RISCOS_INCS=	-I../RISC_OSLib -I../tcpiplibs $(BASE_INCS) -I../clib
 # -Fn *includes* function names (at least for this option set)
-#RISCOS_CFLAGS=	-DRISCOS $(RISCOS_INCS) -fa -apcs 3/26 -Fn
-RISCOS_CFLAGS=	-DRISCOS $(RISCOS_INCS) -ffa -DCOMPAT_INET4
+RISCOS_CFLAGS=	-DRISCOS $(RISCOS_INCS) -fa -apcs 3/26 -Fn
+# RISCOS_CFLAGS=	-DRISCOS $(RISCOS_INCS) -ffa -DCOMPAT_INET4
 RISCOS_VPATH=	$(BASE_VPATH)
 RISCOS_OBJS=	$(BASE_OBJS)
 RISCOS_LIBS=	../RISC_OSLib/risc_oslib \
@@ -164,19 +171,21 @@ PC_CFLAGS =     -apcs 3/26/hardfp
 
 FRESCO_INCS=	-I../\!Fresco
 # Don't forget the -Fn above
-#FRESCO_CFLAGS=	-DFRESCO $(FRESCO_INCS) -DDEVELOPMENT=0 -DSGML_REPORTING=0 -DOLD_COMMENTS=1 -DUSE_MARGINS=1 -DMEMLIB=1
-FRESCO_CFLAGS=	-DFRESCO $(FRESCO_INCS) -DDEVELOPMENT=1 -DSGML_REPORTING=0 -DOLD_COMMENTS=1 -DUSE_MARGINS=1 -DMEMLIB=1
+#FRESCO_CFLAGS=	-DFRESCO $(FRESCO_INCS) -DDEVELOPMENT=0 -DSGML_REPORTING=0 -DOLD_COMMENTS=0 -DUSE_MARGINS=1 -DMEMLIB=1
+FRESCO_CFLAGS=	-DFRESCO $(FRESCO_INCS) -DDEVELOPMENT=1 -DSGML_REPORTING=0 -DOLD_COMMENTS=0 -DUSE_MARGINS=1 -DMEMLIB=1
 FRESCO_VPATH=	../!Fresco
 FRESCO_OBJS=	configgui.o fontmenu.o frontend.o guibits.o guidata.o \
 		guimenu.o hotlist.o picker.o savedoc.o statusbar.o \
-		listfonts2.o \
+		listfonts2.o history.o \
 		$(SGML_OBJS) $(HTML_OBJS) $(COMM_OBJS)
 FRESCO_LIBS=    ../webimage/webimage ../memlib/memlib
 
 # ----------------------------------------------------------------------
 
+# Consider changing to OLD_COMMENTS=0
+
 NCFRESCO_INCS=	-I../\!NCFresco
-NCFRESCO_BASECFLAGS= -wp -DSTBWEB $(NCFRESCO_INCS) -DOLD_COMMENTS=1 -DSGML_PC_UNDEF_KEYS -DUSE_MARGINS=1 -DMEMLIB=1 -DCOMPAT_INET4
+NCFRESCO_BASECFLAGS= -wp -DSTBWEB $(NCFRESCO_INCS) -DOLD_COMMENTS=0 -DSGML_PC_UNDEF_KEYS -DUSE_MARGINS=1 -DMEMLIB=1 -DCOMPAT_INET4
 
 # Production flag set
 # NCFRESCO_CFLAGS= $(NCFRESCO_BASECFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -DSGML_REPORTING=0 -DNDEBUG
@@ -231,24 +240,27 @@ BUILDERS_OBJS=	tables.o memwatch.o myassert.o bldrs.o debug.o rid.o \
 		$(SGML_OBJS) $(HTML_OBJS) dump.o tablesize.o backend.o \
 		obreak.o obullet.o oimage.o oinput.o oselect.o otable.o \
 		otext.o otextarea.o basic2.o stream.o object.o config.o \
-		oobject.o objects.o usrtrc.o textplot.o rectplot.o
+		oobject.o objects.o usrtrc.o textplot.o rectplot.o \
+		coalesce.o fvpr.o
 BUILDERS_LIBS=	-lefence
-CHECKERS_CFLAGS=-DCHECKER -DBUILDERS $(BUILDERS_INCS)  -DDEVELOPMENT=1 -DSGML_REPORTING=0
+CHECKERS_CFLAGS=-DCHECKER -DBUILDERS $(BUILDERS_INCS)  -DDEVELOPMENT=2 -DSGML_REPORTING=1
 CHECKERS_OBJS=	tables.o memwatch.o myassert.o debug.o rid.o \
 		$(SGML_OBJS) $(HTML_OBJS) dump.o tablesize.o backend.o \
 		obreak.o obullet.o oimage.o oinput.o oselect.o otable.o \
 		otext.o otextarea.o basic2.o stream.o object.o config.o \
-		oobject.o objects.o usrtrc.o textplot.o rectplot.o
+		oobject.o objects.o usrtrc.o textplot.o rectplot.o \
+		coalesce.o fvpr.o
+CHECKERS_LIBS=
 
 HTMLCHECK_INCS=	-I../stdalone
 HTMLCHECK_CFLAGS= -DHTMLCHECK $(HTMLCHECK_INCS) -DDEVELOPMENT=1 -DSGML_REPORTING=1
 HTMLCHECK_VPATH= ../stdalone
 HTMLCHECK_OBJS=	$(SGML_OBJS) htmlcheck.o debug.o memwatch.o myassert.o \
-		reports.o htmldefs.o baseprocs.o deliver.o
+		reports.o htmldefs.o baseprocs.o deliver.o usrtrc.o
 HTMLCHECK_LIBS=
 
 MOST_INCS=	-I../unix  -I../RISC_OSLib -I../\!Fresco -I../tcpiplibs -I../memlib
-MOST_CFLAGS=	-DMOST $(MOST_INCS) -DDEVELOPMENT=2 -DSGML_REPORTING=1 -DUSE_MARGINS=1
+MOST_CFLAGS=	-DMOST $(MOST_INCS) -DDEVELOPMENT=2 -DSGML_REPORTING=1 -DUSE_MARGINS=1 -DOLD_COMMENTS=0
 MOST_VPATH=	$(FRESCO_VPATH):../commonsrc
 MOST_OBJS=	$(FRESCO_OBJS)
 MOST_LIBS=
@@ -322,20 +334,16 @@ BUILDERS_UNIX:	$(PREDEPS)
 		CFLAGS="$(BUILDERS_CFLAGS) $(UNIX_CFLAGS)"
 		$(POSTACTS)
 
-# HTML is just symbolic. Historically, "make HTML" has been run
-# manually when necessary. It normally is only required after
-# a "make realclean" which should be rare itself.
-# CHECKERS_UNIX:	$(PREDEPS) HTML
 CHECKERS_UNIX:	$(PREDEPS)
 		@echo "Making CHECKERS for UNIX"
 		@cd ./cunix; $(MAKE) CHECKERS_UNIX \
-		LIBS="$(BUILDERS_LIBS) $(UNIX_LIBS)" \
+		LIBS="$(CHECKERS_LIBS) $(UNIX_LIBS)" \
 		OBJS="$(CHECKERS_OBJS) $(UNIX_OBJS)" \
 		VPATH="$(BUILDERS_VPATH):$(UNIX_VPATH)" \
-		CFLAGS="$(CHECKERS_CFLAGS) $(UNIX_CFLAGS)"
+		CFLAGS="$(DEFALSO) $(CHECKERS_CFLAGS) $(UNIX_CFLAGS)"
 		$(POSTACTS)
 
-cu:		CHECKERS_UNIX
+cu: CHECKERS_UNIX
 
 # A circular dependency spanning two executions of make is
 # used to ensure that builddate.h is always out of date. The
@@ -369,7 +377,7 @@ clean:		sanity
 		-@cd ./ncfresco ; $(RM) *.o *,ff8 *,fd3
 		-@cd ./stdalone; $(RM) *.o htmlcheck
 		-@cd ./bunix ; $(RM) *.o builders
-		-@cd ./cunix ; $(RM) builders parse_check format_check check_all
+		-@cd ./cunix ; $(RM) *.o builders parse_check format_check check_all
 		-@cd ./hriscos ; $(RM) *.o htmlcheck,ff8
 		-@cd ./\!Fresco ; $(RM) *,ff8 *,fd3
 		-@cd ./\!NCFresco ; $(RM) *,ff8 *,fd3

@@ -123,7 +123,10 @@ enum
     POST_CLEAR_SEEN_FLAG = 5,
     SHOULD_CONTAIN = 6,
     QUIETLY_CLOSE_ANY_OPEN = 7,
-    CONTAINER_ENCLOSED_WITHIN = 8
+    CONTAINER_ENCLOSED_WITHIN = 8,
+    INVENT_ONLY_WITHIN = 9,
+    REPLACE_WITH = 10,
+    REPLACES_BAD = 11
 };
 
 /* Flags for an element */
@@ -155,7 +158,7 @@ enum
 #define FLAG_AUTO_CLOSE			0X00800000
 #define FLAG_FULL_UNWIND		0X01000000
 #define FLAG_MANUAL_BREAK		0X02000000
-#define FLAG_DONT_STACK			0X04000000
+#define FLAG_DONT_FORCE_CLOSE	0X04000000
 
 #define FLAG_BLOCK			(FLAG_BLOCK_LEVEL)
 #define FLAG_HEADING               	(FLAG_HEADING_ITEM | FLAG_BLOCK)
@@ -270,6 +273,7 @@ struct STACK_ITEM
     BITS elements_open[words_of_elements_bitpack],
 	 elements_seen[words_of_elements_bitpack];
     BITS effects_active[words_of_effects_bitpack];
+    BITS effects_applied[words_of_effects_bitpack];
     STACK_ITEM *inner, *outer;
 };
 
@@ -391,6 +395,7 @@ struct SGMLCTX
     int line;
     BUFFER inhand;
     BUFFER prechop;
+    int comment_anchor; /* DL for bad comment recovery */
     state_fn state;
 
     /* Client callback routines */

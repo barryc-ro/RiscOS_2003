@@ -61,7 +61,9 @@ extern void sgml_feed_characters(SGMLCTX *context, const char *buffer, int bytes
 	/* optionally convert undefined keys to PC keymap */
 	const char c = convert_undefined_key_code(*buffer);
 	add_char_to_inhand(context, c);
-/*	PRSDBGN(("sgml_feed_characters(): '%c' in state '%s'\n", c, get_state_name(context->state))); */
+#if 0
+	PRSDBGN(("sgml_feed_characters(): '%c' in '%s'\n", c, get_state_name(context->state)));
+#endif
 	(*context->state) (context, c);
     }
 }
@@ -79,25 +81,42 @@ extern void sgml_stream_finished (SGMLCTX *context)
 {
     static STRING s = { NULL, 0 };
     
-    PRSDBGN(("SGML stream (%p) finished. Flushing chopper\n", context));
-
     ASSERT(context->magic == SGML_MAGIC);
 
-    /* Flush existing chopped stuff */
-    (*context->chopper) (context, s);
-    
-    while (context->tos != NULL && context->tos->outer != NULL )
+    if ((context->state == state_comment_wait_dash_1 || context->state == state_comment_wait_dash_2) 
+        && context->comment_anchor != -1)
     {
-	ELEMENT *closing = &context->elements[context->tos->element];
+        int stream_end = context->inhand.ix; context->inhand.ix = context->comment_anchor;
+        do_got_element (context);
 
-	PRSDBGN(("End of document implies </%s>", closing->name.ptr));
-	sgml_note_missing_close(context, closing);
+        PRSDBG(("End of document suggests missing comment close - backtracking\n"));
+        sgml_note_missing_close(context, &context->elements[context->tos->element]);
+        PRSDBG(("Recovering in %s\n", get_state_name (context->state)));
 
-	perform_element_close(context, closing);
+        sgml_feed_characters (context, &context->inhand.data [context->comment_anchor], stream_end - context->comment_anchor);
+
+        sgml_stream_finished (context);
     }
-
-    /* Finally, announce end of stream */
-    (*context->deliver) (context, DELIVER_EOS, empty_string, NULL);
+    else
+    {
+        PRSDBGN(("SGML stream (%p) finished in %s. Flushing chopper\n", context, get_state_name (context->state)));
+    
+        /* Flush existing chopped stuff */
+        (*context->chopper) (context, s);
+        
+        while (context->tos != NULL && context->tos->outer != NULL )
+        {
+    	   ELEMENT *closing = &context->elements[context->tos->element];
+    
+    	   PRSDBG(("End of document implies </%s>", closing->name.ptr));
+    	   sgml_note_missing_close(context, closing);
+    
+    	   perform_element_close(context, closing);
+        }
+    
+        /* Finally, announce end of stream */
+        (*context->deliver) (context, DELIVER_EOS, empty_string, NULL);
+   }
 }
 
 

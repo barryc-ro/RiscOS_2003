@@ -88,7 +88,7 @@ static void adjust_font(SGMLCTX * context, int by)
     if (size >= 0 && size <= 6)
     {
         x = (x &~ WEBFONT_SIZE_MASK) | (size << WEBFONT_SIZE_SHIFT);
-	PACK(context->tos->effects_active, STYLE_WF_INDEX, x);
+	SET_EFFECTS(context->tos, STYLE_WF_SIZE, x);
     }
 }
 
@@ -97,7 +97,7 @@ extern void startsub (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
     generic_start (context, element, attributes);
 
     adjust_font(context, -1);
-    PACK(context->tos->effects_active, STYLE_SUB, STYLE_SUB);
+    SET_EFFECTS_FLAG (context->tos, STYLE_SUB);
 }
 
 extern void startsup (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
@@ -105,7 +105,7 @@ extern void startsup (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
     generic_start (context, element, attributes);
 
     adjust_font(context, -1);
-    PACK(context->tos->effects_active, STYLE_SUP, STYLE_SUP);
+    SET_EFFECTS_FLAG (context->tos, STYLE_SUP);
 }
 
 extern void startbig (SGMLCTX * context, ELEMENT * element, VALUES * attributes)

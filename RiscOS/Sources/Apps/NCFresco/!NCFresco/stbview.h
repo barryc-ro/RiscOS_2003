@@ -144,6 +144,7 @@ struct _frontend_view
     int is_selected;		/* this view is the selected one */
 
     int open_transient;
+    int frame_index;		/* frame number from 0 */
 };
 
 #define fe_keyboard_UNKNOWN	(-1)

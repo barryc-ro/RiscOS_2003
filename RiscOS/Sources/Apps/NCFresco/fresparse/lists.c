@@ -59,8 +59,8 @@ extern void startol (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
     if (type == 0)
         type = rid_bullet_ol_1;
 
-    PACK(context->tos->effects_active, LIST_ITEM_TYPE, type);
-    PACK(context->tos->effects_active, LIST_ITEM_NUM, start);
+    SET_EFFECTS(context->tos, LIST_ITEM_TYPE, type);
+    SET_EFFECTS(context->tos, LIST_ITEM_NUM, start);
 }
 
 extern void startul (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
@@ -85,8 +85,8 @@ extern void startul (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
             type = HTML_UL_TYPE_DISC;
     }
 
-    PACK(context->tos->effects_active, LIST_ITEM_TYPE, type);
-    PACK(context->tos->effects_active, LIST_ITEM_NUM, 0);
+    SET_EFFECTS(context->tos, LIST_ITEM_TYPE, type);
+    SET_EFFECTS(context->tos, LIST_ITEM_NUM, 0);
 }
 
 extern void startmenu (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
@@ -95,7 +95,7 @@ extern void startmenu (SGMLCTX * context, ELEMENT * element, VALUES * attributes
 
     bump_current_indent(context);
 
-    PACK(context->tos->effects_active, LIST_ITEM_NUM, 0);
+    SET_EFFECTS(context->tos, LIST_ITEM_NUM, 0);
 }
 
 extern void startdir (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
@@ -111,12 +111,12 @@ extern void startdl (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
     if ( attributes->value[HTML_DL_COMPACT].type == value_void )
     {
         PRSDBG(("This DL is compact\n"));
-        PACK( context->tos->effects_active, LIST_ITEM_TYPE, TRUE );
+        SET_EFFECTS( context->tos, LIST_ITEM_TYPE, TRUE );
     }
     else
     {
         PRSDBG(("This DL isn't compact\n" ));
-        PACK( context->tos->effects_active, LIST_ITEM_TYPE, FALSE );
+        SET_EFFECTS( context->tos, LIST_ITEM_TYPE, FALSE );
     }
 }
 
@@ -152,7 +152,7 @@ extern void startli (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 	    PRSDBG(("Unpacked current list item number as %d\n", x-1));
 	}
 
-	PACK(context->tos->outer->effects_active, LIST_ITEM_NUM, x);
+	SET_EFFECTS(context->tos->outer, LIST_ITEM_NUM, x);
 
         /* check for type from the element */
         {
@@ -192,10 +192,10 @@ extern void startli (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 
 	if (oldindent >= INDENT_WIDTH)
 	{
-	    PACK(context->tos->effects_active, STYLE_INDENT, oldindent - INDENT_WIDTH);
+	    SET_EFFECTS(context->tos, STYLE_INDENT, oldindent - INDENT_WIDTH);
 	}
 	text_item_push_bullet(me, item_type);
-	PACK(context->tos->effects_active, STYLE_INDENT, oldindent);
+	SET_EFFECTS(context->tos, STYLE_INDENT, oldindent);
     }
 #endif
 
@@ -209,8 +209,8 @@ extern void startdd (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
     {
 /*	BITS x;
 	x = UNPACK(context->tos->outer->effects_active, STYLE_INDENT);
-	PACK(context->tos->effects_active, STYLE_INDENT, x + INDENT_WIDTH);
-	PACK(context->tos->effects_active, STYLE_WF_INDEX, WEBFONT_DD);*/
+	SET_EFFECTS(context->tos, STYLE_INDENT, x + INDENT_WIDTH);
+	SET_EFFECTS(context->tos, STYLE_WF_INDEX, WEBFONT_DD);*/
 #if 0 /* ndef STBWEB */
 	bump_current_indent(context);
 #endif
@@ -245,12 +245,12 @@ extern void startdt (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
 	if (x >= INDENT_WIDTH)
 	{
 	    x -= INDENT_WIDTH;
-	    PACK(context->tos->effects_active, STYLE_INDENT, x);
+	    SET_EFFECTS(context->tos, STYLE_INDENT, x);
 	}
 /*      add_bold_to_font(context); */
 #else
-	PACK(context->tos->effects_active, STYLE_INDENT, x + 2);
-	PACK(context->tos->effects_active, STYLE_WF_INDEX, WEBFONT_DT);
+	SET_EFFECTS(context->tos, STYLE_INDENT, x + 2);
+	SET_EFFECTS(context->tos, STYLE_WF_INDEX, WEBFONT_DT);
 #endif
 
 	PRSDBG(("startdt(): set indent to %d\n", UNPACK(context->tos->effects_active, STYLE_INDENT)));

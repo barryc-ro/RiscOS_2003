@@ -5,6 +5,14 @@
 #ifndef __interface_h
 #define __interface_h
 
+#ifndef __os_h
+#include "os.h"
+#endif
+
+#ifndef __wimp_h
+#include "wimp.h"
+#endif
+
 /* Describe the interface between the front and back of Fresco */
 
 /***************************************************************************/

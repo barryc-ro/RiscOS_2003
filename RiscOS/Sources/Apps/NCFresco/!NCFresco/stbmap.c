@@ -14,6 +14,7 @@
 
 #include "interface.h"
 #include "debug.h"
+#include "util.h"
 
 #include "stbfe.h"
 #include "stbutils.h"
@@ -44,8 +45,6 @@ static void fe_map_update_position_to(int x, int y)
 }
 
 /* ----------------------------------------------------------------------------- */
-
-#if 1
 
 #define MAX_SPEED       64
 #define REPEAT_DELAY    40
@@ -157,91 +156,22 @@ void fe_map_check_pointer_move(const wimp_mousestr *m)
     m = m;
 }
 
-#else
-
-static int map_latch_x = 0;
-static int map_latch_y = 0;
-static int map_time_next = 0;
-
-
-void fe_map_event_handler(int event, fe_view v)
-{
-    int x = 0, y = 0;
-    wimp_mousestr m;
-
-    wimp_get_point_info(&m);
-    switch (event)
-    {
-        case fevent_MAP_SELECT:
-            if (map_latch_x || map_latch_y)
-            {
-                map_latch_x = map_latch_y = 0;
-            }
-            else
-            {
-                fe_view v = map_view;
-                fe_map_mode(NULL, NULL);
-                fe_fake_click(v, m.x, m.y);
-            }
-            break;
-
-        case fevent_MAP_STOP:
-            if (map_latch_x || map_latch_y)
-                map_latch_x = map_latch_y = 0;
-            else
-                fe_map_mode(NULL, NULL);
-            break;
-
-        case fevent_MAP_CANCEL:
-            map_latch_x = map_latch_y = 0;
-            fe_map_mode(NULL, NULL);
-            break;
-
-        default:
-            if (event & fevent_MAP_MOVE_MASK)
-            {
-                if (event & fevent_MAP_MOVE_LEFT)
-                    x = -1;
-                if (event & fevent_MAP_MOVE_RIGHT)
-                    x = +1;
-                if (event & fevent_MAP_MOVE_UP)
-                    y = +1;
-                if (event & fevent_MAP_MOVE_DOWN)
-                    y = -1;
-            }
-            break;
-    }
-
-    if (x || y)
-    {
-        map_latch_x = 4*x;
-        map_latch_y = 4*y;
-        fe_map_update_position_to(m.x + x*2, m.y + y*2);
-    }
-}
-
-void fe_map_check_pointer_move(const wimp_mousestr *m)
-{
-    int timenow = alarm_timenow();
-    if ((map_latch_x || map_latch_y) && timenow > map_time_next)
-    {
-        fe_map_update_position_to(m->x + map_latch_x*2, m->y + map_latch_y*2);
-        map_time_next = timenow + 4;
-    }
-}
-
-#endif
-
 void fe_map_mode(fe_view v, be_item ti)
 {
     map_view = v;
     map_item = ti;
 
     if (v)
+    {
         fe_set_pointer(1U<<31);
+	sound_event(snd_MODE_MAP_START);
+    }
     else
+    {
         fe_set_pointer(0);
-
+	sound_event(snd_MODE_MAP_END);
+    }
+    
     STBDBG(("stbmap: mode v %p item %p\n", v, ti));
 }
 

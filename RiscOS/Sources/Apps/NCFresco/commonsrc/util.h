@@ -48,6 +48,7 @@ char *optimise_string( char *s );
 int suffix_to_file_type(const char *suffix);
 int mime_to_file_type(const char *mime);
 
+extern int file_and_object_type(const char *fname, int *obj_type);
 extern int file_type_real(const char *fname);
 int file_type(const char *fname);
 extern int file_last_modified(const char *fname);
@@ -158,5 +159,63 @@ typedef enum
 extern input_key_action lookup_key_action(int key);
 extern int cmos_op(int bit_start, int n_bits, int new_val, BOOL write);
 extern int nvram_op(const char *tag, int bit_start, int n_bits, int new_val, BOOL write);
+
+typedef enum
+{
+    snd_TOOLBAR_SHOW,
+    snd_TOOLBAR_HIDE,
+    snd_TOOLBAR_SHOW_SUB,
+    snd_TOOLBAR_HIDE_SUB,
+
+    snd_HISTORY_SHOW,
+    snd_HISTORY_BACK,
+    snd_HISTORY_FORWARD,
+
+    snd_HOTLIST_SHOW,
+    snd_HOTLIST_ADD,
+    snd_HOTLIST_REMOVE,
+
+    snd_GO_HOME,
+    snd_STOP,
+    snd_RELOAD,
+
+    snd_HELP_SHOW,
+    snd_PASSWORD_SHOW,
+
+    snd_SCROLL_LINE,
+    snd_SCROLL_PAGE,
+    snd_SCROLL_LIMIT,
+    snd_SCROLL_HAND_START,
+    snd_SCROLL_HAND_END,
+
+    snd_CHANGE_FRAME,
+    snd_CHANGE_HIGHLIGHT,
+
+    snd_WARN_NO_SCROLL,
+    snd_WARN_NO_FIELD,
+    snd_WARN_BAD_KEY,
+
+    snd_MENU_SHOW,
+    snd_MENU_HIDE,
+    snd_MENU_SELECT,
+
+    snd_CHECKBOX_TOGGLE,
+    snd_RADIO_TOGGLE,
+    snd_FORM_SUBMIT,
+    snd_FORM_RESET,
+
+    snd_LINK_FOLLOW,
+
+    snd_MODE_MAP_START,
+    snd_MODE_MAP_END,
+
+    snd_ERROR
+} sound_event_t;
+
+#if STBWEB
+extern void sound_event(sound_event_t event_num);
+#else
+#define sound_event(e) /*NOT_USED(e)*/
+#endif
 
 /* eof util.h */

@@ -82,6 +82,18 @@ typedef struct webfont {
 
 #endif
 
+/* DL: The following extra masks are for use with SET_EFFECTS
+       to achieve finer control over which effects are recorded
+       as 'applied'. The naming is to allow macro pasting.
+ */
+
+#define STYLE_WF_SIZE_SHIFT STYLE_WF_INDEX_SHIFT
+#define STYLE_WF_SIZE_MASK  WEBFONT_SIZE_MASK
+
+/* Defined above now */
+/* #define WEBFONT_COUNT	((WEBFONT_SIZES << WEBFONT_SIZE_SHIFT)) */
+/* #define WEBFONT_COUNT	(WEBFONT_SYMBOL(7)) */
+
 extern webfont webfonts[WEBFONT_COUNT];
 
 extern os_error *webfonts_init_font(int n);

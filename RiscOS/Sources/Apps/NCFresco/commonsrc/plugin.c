@@ -1266,7 +1266,7 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 
 		    /* set HELPER flag in case they didn't */
 		    if (pp->priv_flags & plugin_priv_HELPER)
-			opening->flags |= plugin_opening_HELPER;
+			pp->opening_flags |= plugin_opening_HELPER;
 		    
 		    /* were we waiting to send a reformat message */
 		    if (pp->pending_reshape)
@@ -1294,7 +1294,9 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 			mm_free(url);
 		    }
 
-		    frontend_view_status(pp->doc ? pp->doc->parent : pp->helper.parent, sb_status_PLUGIN, pp, (pp->opening_flags & plugin_opening_BUSY) != 0, pp->play_state, 1, 0);
+		    frontend_view_status(pp->doc ? pp->doc->parent : pp->helper.parent, sb_status_PLUGIN, pp,
+					 (pp->opening_flags & plugin_opening_BUSY) != 0, pp->play_state,
+					 pp->opening_flags & plugin_opening_HELPER, 0);
 
 		    break;
 		}
@@ -1314,7 +1316,9 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 	    if (closed->flags & plugin_closed_ERROR_MSG)
 		frontend_complain((os_error *)&closed->errnum);
 
-	    frontend_view_status(pp->doc ? pp->doc->parent : pp->helper.parent, sb_status_PLUGIN, pp, FALSE, pp->play_state, 0, 1);
+	    frontend_view_status(pp->doc ? pp->doc->parent : pp->helper.parent, sb_status_PLUGIN, pp,
+				 FALSE, pp->play_state,
+				 0, pp->opening_flags & plugin_opening_HELPER);
 	    break;
 	}
 
@@ -1523,7 +1527,8 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 	    else
 		pp->opening_flags &= ~plugin_opening_BUSY;
 
-	    frontend_view_status(pp->doc ? pp->doc->parent : pp->helper.parent, sb_status_PLUGIN, pp, (pp->opening_flags & plugin_opening_BUSY) != 0, pp->play_state, 0, 0);
+	    frontend_view_status(pp->doc ? pp->doc->parent : pp->helper.parent, sb_status_PLUGIN, pp,
+				 (pp->opening_flags & plugin_opening_BUSY) != 0, pp->play_state, 0, 0);
 
 	    break;
 	}

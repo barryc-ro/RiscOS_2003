@@ -8,6 +8,7 @@
  */
 
 
+#include <ctype.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -32,6 +33,10 @@
 #include "stbopen.h"
 #include "stbutils.h"
 #include "stbtb.h"
+
+/* ----------------------------------------------------------------------------------------------------- */
+
+static fe_view get_source_view(const char *query, BOOL default_top);
 
 /* ----------------------------------------------------------------------------------------------------- */
 
@@ -68,29 +73,10 @@ static os_error *fe_version_write_file(FILE *f, be_doc doc, const char *query)
     fputs(msgs_lookup("versionT"), f);
     fprintf(f, msgs_lookup("version1"), fresco_version);
 
-    if (qlink)
-    {
-	char *link = qlink;
-
-	if (strncasecomp(qlink, "ncfrescointernal:", sizeof("ncfrescointernal:")-1) == 0)
-	    link = extract_value(qlink, "url=");
-	
-	if (link)
-	    fprintf(f, msgs_lookup("version3a"), link);
-
-	if (qtitle)
-	    fprintf(f, msgs_lookup("version2"), qtitle);
-
-	if (link != qlink)
-	    mm_free(link);
-    }
-    else
+    if (doc)
     {
 	char *url, *title;
 	const char *s;
-
-	if (doc == NULL)
-	    return NULL;
 
 	url = title = NULL;
 	backend_doc_info(doc, NULL, NULL, &url, &title);
@@ -98,7 +84,9 @@ static os_error *fe_version_write_file(FILE *f, be_doc doc, const char *query)
 	if (title)
 	    fprintf(f, msgs_lookup("version2"), title);
 
-	if (url && strncasecomp(qlink, "ncfrescointernal:", sizeof("ncfrescointernal:")-1) != 0)
+	if (url &&
+	    strncasecomp(url, "ncfrescointernal:", sizeof("ncfrescointernal:")-1) != 0 &&
+	    strncasecomp(url, "ncint:", sizeof("ncint:")-1) != 0)
 	    fprintf(f, msgs_lookup("version3"), url);
 
 	if ((s = backend_check_meta(doc, "last-modified")) != NULL)
@@ -115,6 +103,25 @@ static os_error *fe_version_write_file(FILE *f, be_doc doc, const char *query)
 
 	if ((s = backend_check_meta(doc, "copyright")) != NULL)
 	    fprintf(f, msgs_lookup("version8"), s);
+    }
+
+    if (qlink)
+    {
+	char *link = qlink;
+
+	if (qlink &&
+	    (strncasecomp(qlink, "ncfrescointernal:", sizeof("ncfrescointernal:")-1) == 0 ||
+	    strncasecomp(qlink, "ncint:", sizeof("ncint:")-1) == 0))
+	    link = extract_value(qlink, "url=");
+	
+	if (link)
+	    fprintf(f, msgs_lookup("version3a"), link);
+
+	if (qtitle)
+	    fprintf(f, msgs_lookup("version2"), qtitle);
+
+	if (link != qlink)
+	    mm_free(link);
     }
 
     fputs(msgs_lookup("versionF"), f);
@@ -381,16 +388,17 @@ static void fe_handle_playmovie(const char *query)
 static char *find__string = NULL;
 static int find__backwards;
 static int find__casesense;
-static fe_view find__v = NULL;
 
 static int internal_decode_find(const char *query)
 {
-    char *text, *dir, *casesense, *s;
+    char *text, *dir, *casesense, *s, *source;
     BOOL cancel;
-    
-    if (!find__v || find__v->magic != ANTWEB_VIEW_MAGIC)
-	return fe_internal_url_ERROR;
+    fe_view v;
 
+    source = extract_value(query, "source=");
+    v = get_source_view(source, TRUE);
+    mm_free(source);
+    
     s = extract_value(query, "action=");
     cancel = strcasestr(s, "cancel") != 0;
     mm_free(s);
@@ -409,13 +417,13 @@ static int internal_decode_find(const char *query)
 	cases = casesense && strcmp(casesense, "sense") == 0;
 
         uudecode(auth_code, (unsigned char *)buffer, sizeof(buffer));
-	if (find__v->browser_mode == fe_browser_mode_HISTORY && cases && back && strcmp(buffer, text) == 0)
+	if (v->browser_mode == fe_browser_mode_HISTORY && cases && back && strcmp(buffer, text) == 0)
 	{
 	    ncreg_decode();
 	}
 	else
 	{
-	    fe_find(find__v, text, back, cases);
+	    fe_find(v, text, back, cases);
 	}
     
 	mm_free(text);
@@ -423,20 +431,17 @@ static int internal_decode_find(const char *query)
 	mm_free(casesense);
     }
 
-    find__v = NULL;
-
     return fe_internal_url_NO_ACTION;
 }
 
-static os_error *fe_find_write_file(FILE *f)
+static os_error *fe_find_write_file(FILE *f, const char *query)
 {
-    if (!find__v)
-	return NULL;
-
+    char *source = extract_value(query, "source=");
+    
     fputs(msgs_lookup("findT"), f);
     fputc('\n', f);
 
-    fprintf(f, msgs_lookup("find1"));
+    fprintf(f, msgs_lookup("find1"), strsafe(source));
     fprintf(f, msgs_lookup("find2"), strsafe(find__string), checked(find__casesense));
     fprintf(f, msgs_lookup("find3"), checked(!find__backwards),
         checked(find__backwards));
@@ -444,6 +449,8 @@ static os_error *fe_find_write_file(FILE *f)
     fputs(msgs_lookup("findF"), f);
     fputc('\n', f);
 
+    mm_free(source);
+    
     return NULL;
 }
 
@@ -470,6 +477,7 @@ os_error *fe_find_open(fe_view v)
     if (fe_find_possible(v))
     {
         wimp_box bb;
+	char buffer[1024];
 
         frontend_view_bounds(v, &bb);
 
@@ -478,9 +486,10 @@ os_error *fe_find_open(fe_view v)
         bb.x0 = -1000;		/* Get the first on the line ignoring margins */
         backend_doc_locate_item(v->displaying, &bb.x0, &bb.y1, &v->find_last_item);
 
-	/* store the frame that we started in */
-	find__v = v;	
-	e = frontend_open_url("ncfrescointernal:openpanel?name=find", v, TARGET_DBOX, NULL, fe_open_url_NO_CACHE);
+	strcpy(buffer, "ncfrescointernal:openpanel?name=find&source=");
+	fe_frame_specifier_create(v, buffer, sizeof(buffer));
+
+	e = frontend_open_url(buffer, NULL, TARGET_DBOX, NULL, fe_open_url_NO_CACHE);
     }
     return e;
 }
@@ -763,9 +772,15 @@ static fe_view get_source_view(const char *query, BOOL default_top)
     /* which view are we pulling data from */
     if (source == NULL)
 	v = default_top ? main_view : fe_selected_view();
+    else if (source[0] == '_' && isdigit(source[1]))
+	v = fe_frame_specifier_decode(main_view, source);
     else
 	v = fe_find_target(main_view, source);
 
+    /* if it is a transient then fall back to main view */
+    if (v && v->open_transient)
+	v = main_view;
+    
     mm_free(source);
 
     return v;
@@ -787,18 +802,6 @@ static char *get_url(fe_view v)
 }
 /* ----------------------------------------------------------------------------------------------------- */
 
-#if 0
-typedef struct
-{
-    char *name;
-    openpanel_fn fn;
-    BOOL default_top_frame;
-} openpanel_info;
-
-static openpanel_info openpanel_array[] =
-{
-};
-#endif
 /*
  * New internal URL handlers
  */
@@ -829,9 +832,6 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 
 		strcpy(s, config_document_handler_related);
 
-/* 		if (s[related_len-1] != '?' && s[related_len-1] != '&') */
-/* 		    strcat(s, "?"); */
-/* 		strcat(s, "url="); */
 		url_escape_cat(s, match, total_len);
 
 		*new_url = s;
@@ -864,7 +864,7 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	else if (strcasecomp(panel_name, "find") == 0)
 	{
 	    tb_status_button(fevent_OPEN_FIND, TRUE);
-	    e = fe_find_write_file(f);
+	    e = fe_find_write_file(f, query);
 	}
 	else if (strcasecomp(panel_name, "historyalpha") == 0)
 	{
@@ -891,7 +891,7 @@ static int internal_url_openpanel(const char *query, const char *bfile, const ch
 	}    
 	else if (strcasecomp(panel_name, "info") == 0)
 	{
-	    v = get_source_view(query, TRUE);
+	    v = get_source_view(query, FALSE);
 	    tb_status_button(fevent_INFO_PAGE, TRUE);
 	    e = fe_version_write_file(f, v ? v->displaying : NULL, query);
 	}
@@ -964,7 +964,7 @@ static int internal_url_loadurl(const char *query, const char *bfile, const char
     if (remove)
 	fe_dispose_view(fe_locate_view(remove));
 
-    tb_status_button(fevent_OPEN_URL, TRUE);
+    tb_status_button(fevent_OPEN_URL, FALSE);
        
     mm_free(url);
     mm_free(nocache);
@@ -1408,38 +1408,37 @@ int frontend_internal_url(const char *path, const char *query, const char *bfile
 
 /* ------------------------------------------------------------------------------------------- */
 
-/* Old style open-via-temporary-file functions */
-
 os_error *fe_open_version(fe_view v)
 {
-    return frontend_open_url("ncfrescointernal:openpanel?name=info", v, TARGET_INFO, NULL, fe_open_url_NO_CACHE);
+    fe_open_info(v, NULL, 0, 0);
+    return NULL;
 }
 
 os_error *fe_display_options_open(fe_view v)
 {
-    return frontend_open_url("ncfrescointernal:openpanel?name=displayoptions", v, TARGET_DBOX, NULL, fe_open_url_NO_CACHE);
+    return frontend_open_url("ncfrescointernal:openpanel?name=displayoptions", NULL, TARGET_DBOX, NULL, fe_open_url_NO_CACHE);
 }
 
 
 os_error *fe_print_options_open(fe_view v)
 {
-    return frontend_open_url("ncfrescointernal:openpanel?name=printoptions", v, TARGET_DBOX, NULL, fe_open_url_NO_CACHE);
+    return frontend_open_url("ncfrescointernal:openpanel?name=printoptions", NULL, TARGET_DBOX, NULL, fe_open_url_NO_CACHE);
 }
 
 
 os_error *fe_hotlist_open(fe_view v)
 {
-    return frontend_open_url("ncfrescointernal:openpanel?name=favs", v, TARGET_FAVS, NULL, fe_open_url_NO_CACHE);
+    return frontend_open_url("ncfrescointernal:openpanel?name=favs", NULL, TARGET_FAVS, NULL, fe_open_url_NO_CACHE);
 }
 
 os_error *fe_hotlist_and_url_open(fe_view v)
 {
-    return frontend_open_url("ncfrescointernal:openpanel?name=urlfavs", v, TARGET_FAVS, NULL, fe_open_url_NO_CACHE);
+    return frontend_open_url("ncfrescointernal:openpanel?name=urlfavs", NULL, TARGET_FAVS, NULL, fe_open_url_NO_CACHE);
 }
 
 os_error *fe_url_open(fe_view v)
 {
-    return frontend_open_url("ncfrescointernal:openpanel?name=url", v, TARGET_OPEN, NULL, fe_open_url_NO_CACHE);
+    return frontend_open_url("ncfrescointernal:openpanel?name=url", NULL, TARGET_OPEN, NULL, fe_open_url_NO_CACHE);
 }
 
 void fe_show_mem_dump(void)

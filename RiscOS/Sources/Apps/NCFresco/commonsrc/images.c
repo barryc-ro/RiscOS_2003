@@ -490,7 +490,7 @@ static void image_put_bytes(char *buf, int buf_len, void *h)
 
     i->flags |= image_flag_CHANGED;
 
-    IMGDBGN(("put_bytes: out: flags %x\n", i->flags));
+    IMGDBGN(("im%p: put_bytes: out: flags %x\n", i, i->flags));
 }
 
 static void image_seek_fn(int pos, void *h)
@@ -507,7 +507,7 @@ static BOOL image_rec_fn(image_rec *ir, void *h)
     image i = (image) h;
     int size;
 
-    IMGDBGN(("Given image_rec %p\n", ir));
+    IMGDBGN(("img: im %p given image_rec %p\n", i, ir));
 
     /* if we want OS jpeg and the OS can handle it, then abort transfer */
     if (ir->format == webformat_JPEG && !ir->interlaced && ir->jfif &&
@@ -521,6 +521,10 @@ static BOOL image_rec_fn(image_rec *ir, void *h)
     }
 
     size = ir->size;
+
+
+    IMGDBG(("im%p: rec_fn: fmt %d size %dx%d logical size %dx%d\n", i,
+            ir->format, ir->x, ir->y, ir->x_logical, ir->y_logical));
 
     if (i->our_area)
     {
@@ -561,8 +565,6 @@ static BOOL image_rec_fn(image_rec *ir, void *h)
 
     if (ir->x != ir->x_logical || ir->y != ir->y_logical)
 	i->flags |= image_flag_USE_LOGICAL;
-
-    IMGDBG(("img: size %dx%d logical size %dx%d\n", ir->x, ir->y, ir->x_logical, ir->y_logical));
 
     if (ir->interlaced)
 	i->flags |= image_flag_INTERLACED;
@@ -689,7 +691,8 @@ static int image_thread_process(image i, int fh, int from, int to)
     }
 
 #if NEW_WEBIMAGE == 2
-    if (i->tt->status == thread_DEAD && (from_base == 0 || i->plotter != plotter_SPRITE))
+    /* only check this if the thread has died, we were reading from the start and no sprite has been created */
+    if (i->tt->status == thread_DEAD && (from_base == 0 || i->plotter != plotter_SPRITE) && i->our_area == NULL)
     {
 	BOOL success;
 
@@ -940,7 +943,8 @@ static void image_progress(void *h, int status, int size, int so_far, int fh, in
 
         i->data_so_far = 0;
         i->data_size = size;
-        i->flags |= image_flag_NO_BLOCKS;
+        i->put_offset = 16;     /* make sure image restarts */
+        i->flags &= ~image_flag_NO_BLOCKS;
         image_thread_start(i);
     }
 
@@ -1465,7 +1469,7 @@ os_error *image_find(char *url, char *ref, int flags, image_callback cb, void *h
 	i->id.s.name = i->sname;
 	i->plotter = plotter_SPRITE;
 	i->find_flags = flags;
-	
+
 	if (sprite_readsize(i->their_area, &i->id, &info) == NULL)
 	{
 	    i->width = info.width;
@@ -3137,7 +3141,7 @@ void image_render(image i, int x, int y, int w, int h, int scale_image, image_re
 	return;
     }
 
-    IMGDBG(("Asked to render image handle 0x%p at %d,%d plotter %d\n", i, x, y, i->plotter));
+    IMGDBG(("im%p: rendering at %d,%d plotter %d\n", i, x, y, i->plotter));
 
     plotter = i->plotter;
     if ( (i->flags & (image_flag_FETCHED | image_flag_RENDERABLE)) == image_flag_FETCHED )

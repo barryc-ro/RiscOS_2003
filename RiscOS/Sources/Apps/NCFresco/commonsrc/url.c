@@ -563,7 +563,7 @@ int url_escape_cat(char *buffer, const char *in, int len)
     len -= sl;
     len--;
     if (len <= 0)
-	return;
+	return 0;
 
     buffer += sl;
 

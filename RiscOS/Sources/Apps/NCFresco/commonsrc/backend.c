@@ -488,7 +488,7 @@ os_error *antweb_handle_url(be_doc doc, rid_aref_item *aref, const char *query, 
 		ti = rid_scanf(ti);
 	    }
 	}
-		
+
 	backend_activate_link(doc, ti, 0);
     }
     else
@@ -628,12 +628,17 @@ os_error *backend_item_pos_info(be_doc doc, be_item ti, int *px, int *py, int *f
 	    *px = xx;
 	    *py = yy;
 
+            /* amazingly this didn't seem to get called before
+             *
+             * pdh: moved out of "if" below, as we always need imh in order
+             * to set be_item_info_IMAGE ... Fresco uses this to know whether
+             * to offer an Image-> submenu eg Image->Save
+             */
+	    if (object_table[ti->tag].imh != NULL)
+	        imh = (object_table[ti->tag].imh)(ti, doc, object_image_HANDLE);
+
 	    if (((rid_text_item_image *)ti)->usemap)
 	    {
-		/* amazingly this didn't seem to get called before*/
-		if (object_table[ti->tag].imh != NULL)
-		    imh = (object_table[ti->tag].imh)(ti, doc, object_image_HANDLE);
-
 		f |= be_item_info_USEMAP;
 
 		if (link || title)
@@ -2284,10 +2289,11 @@ extern rid_pos_item *be_formater_loop_core( rid_header *rh, rid_text_stream *st,
 		FMTDBGN(("Add left floater with width %d\n", fl.ti->width));
 		width += fl.ti->width;
 	    }
+
 	    if (fr.ti)
 	    {
 		TASSERT(fr.ti->width >= 0);
-		FMTDBGN(("Add right floater with width %d\n", fl.ti->width));
+		FMTDBGN(("Add right floater with width %d\n", fr.ti->width));
 		width += fr.ti->width;
 	    }
 
@@ -2914,6 +2920,10 @@ void be_document_reformat_tail(antweb_doc *doc, rid_text_item *oti, int user_wid
 
     FMTDBG(("Line pos item 'new' is %p\n", new));
 
+    /* SJM: this seems to happen, I don't know why */
+    if (new == NULL)
+	return;
+    
     /* Zero all existing widest and height values in nested items */
     rid_zero_widest_height_from_item(ti);
 
@@ -3850,9 +3860,12 @@ static void be_doc_fetch_bg(antweb_doc *doc)
 
     BEDBG((stderr, "be_doc_fetch_bg(): doc %p\n", doc));
 
+    /* record time at which we started fetching */
+    doc->start_time = clock();
+
     url = url_join(BASE(doc), doc->rh->tile.src);
 
-    image_find(url, BASE(doc), doc->flags & doc_flag_FROM_HISTORY ? 0 : image_find_flag_CHECK_EXPIRE,
+    image_find(url, BASE(doc), (doc->flags & doc_flag_FROM_HISTORY ? 0 : image_find_flag_CHECK_EXPIRE) | image_find_flag_URGENT,
 	       &antweb_doc_background_change, doc, render_get_colour(render_colour_BACK, doc),
 	       (image*) &(doc->rh->tile.im));
 
@@ -3949,12 +3962,12 @@ static void antweb_doc_progress(void *h, int status, int size, int so_far, int f
 
 	    PPDBG(("pparse from progress done\n"));
 
-                    /* pdh: only do this if it's not already been done */
-		    if ( (doc->rh->bgt & rid_bgt_IMAGE)
-		         && (doc->rh->tile.im == NULL) )
-		    {
-			be_doc_fetch_bg(doc);
-		    }
+	    /* pdh: only do this if it's not already been done */
+	    if ( (doc->rh->bgt & rid_bgt_IMAGE)
+		 && (doc->rh->tile.im == NULL) )
+	    {
+		be_doc_fetch_bg(doc);
+	    }
 
             /* If the last item is a table, we must still be within the */
             /* table, so redisplaying it probably isn't a bad thing to do */
@@ -3974,12 +3987,6 @@ static void antweb_doc_progress(void *h, int status, int size, int so_far, int f
 		{
 		    BOOL waiting_for_bg = FALSE;
 
-		    /* if we have an image and it isn't fetching then start fetching it*/
-		    if ((doc->rh->bgt & rid_bgt_IMAGE) && doc->rh->tile.im == NULL)
-		    {
-			be_doc_fetch_bg(doc);
-			doc->start_time = clock();
-		    }
 #if 1
 		    /* if we have an image possibly fetching see if it is here */
 		    if (doc->rh->tile.im)
@@ -4228,8 +4235,8 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
 	    rid_meta_connect(doc->rh, m);
 	}
     }
-#endif    
-    
+#endif
+
     /* pdh: @@@@ FIXME
      * This doesn't belong here (there may be images arriving) but I can't
      * see some pages without it!
@@ -4252,7 +4259,7 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
         doc->ph = NULL;
 
 	/* SJM: temporary hack to try and see pages... */
-	fvpr_progress_stream_flush(&doc->rh->stream);
+/* 	fvpr_progress_stream_flush(&doc->rh->stream); */
 
 	if ((doc->flags & doc_flag_DISPLAYING) == 0)
 	{
@@ -4307,10 +4314,12 @@ static access_complete_flags antweb_doc_complete(void *h, int status, char *cfil
     {
 	BEDBG((stderr, "Got document of type 0x%03x, passing to the front end.\n", ft));
 
+#ifndef BUILDERS
 	if (frontend_plugin_handle_file_type(ft))
 	    plugin_helper(doc->url, ft, NULL, doc->parent, cfile);
 	else
 	    frontend_pass_doc(doc->parent, doc->url, cfile, ft);
+#endif
 
 	BEDBG((stderr, "Returned from frontend\n"));
 
@@ -4505,7 +4514,7 @@ extern os_error *backend_open_url(fe_view v, be_doc *docp,
 
 #ifndef BUILDERS
     backend_doc_set_flags(new, -1, flags);
-    
+
     if (config_display_links_underlined)
 	new->flags |= doc_flag_UL_LINKS;
 #endif
@@ -5098,10 +5107,10 @@ const char *backend_check_meta(be_doc doc, const char *name)
 
     if (strcasecomp(name, "expires") == 0)
     {
-	unsigned expires;
-	access_get_header_info(doc->url, NULL, NULL, &expires);
-	if (expires == UINT_MAX)
+	unsigned expires = UINT_MAX;
+	if (!access_get_header_info(doc->url, NULL, NULL, &expires) || expires == UINT_MAX)
 	    return NULL;
+
 	strftime(rbuf, sizeof(rbuf), TIME_FORMAT, gmtime(&expires));
 	return rbuf;
     }
@@ -5109,9 +5118,9 @@ const char *backend_check_meta(be_doc doc, const char *name)
     if (strcasecomp(name, "last-modified") == 0)
     {
 	unsigned last_modified;
-	access_get_header_info(doc->url, NULL, &last_modified, NULL);
-	if (last_modified == 0)
+	if (!access_get_header_info(doc->url, NULL, &last_modified, NULL) || last_modified == 0)
 	    return NULL;
+
 	strftime(rbuf, sizeof(rbuf), TIME_FORMAT, gmtime(&last_modified));
 	return rbuf;
     }
@@ -5268,6 +5277,8 @@ extern void backend_plugin_action(be_doc doc, be_item item, int action)
 {
     plugin pp = NULL;
 
+#ifndef BUILDERS
+
     if (item && item->tag == rid_tag_OBJECT)
     {
 	rid_text_item_object *tio = (rid_text_item_object *) item;
@@ -5282,12 +5293,17 @@ extern void backend_plugin_action(be_doc doc, be_item item, int action)
     else
 	plugin_send_abort(pp);
 
+#endif
+
     NOT_USED(doc);
 }
 
 extern void backend_plugin_info(be_doc doc, void *pp, int *flags, int *state)
 {
+#ifndef BUILDERS
     plugin_get_info(pp, flags, state);
+#endif
+
     NOT_USED(doc);
 }
 
@@ -5312,7 +5328,7 @@ extern be_item backend_locate_id(be_doc doc, const char *id)
 		    last_aref = ti->aref;
 		}
 		break;
-		
+
 	    case rid_tag_INPUT:
 		if (strcmp(((rid_text_item_input *)ti)->input->base.id, id) == 0)
 		    return ti;

@@ -102,6 +102,7 @@ static void oinput_update_box(rid_text_item *ti, wimp_box *box)
     }
 }
 
+#ifndef BUILDERS
 static int string_length_upto(const char *str, int offset)
 {
     font_string fs;
@@ -114,11 +115,13 @@ static int string_length_upto(const char *str, int offset)
 
     return fs.x;
 }
+#endif
 
 /*
  * Returns the actual start plot point of a string taking into account the scrolling
  */
 
+#ifndef BUILDERS
 static int get_string_start(const char *str, int text_input_offset, int boxx, int boxw, int numbers)
 {
     int x1, x2, slen, plotx;
@@ -160,6 +163,7 @@ static int get_string_start(const char *str, int text_input_offset, int boxx, in
 
     return plotx;
 }
+#endif
 
 static int text_displayable_width(int xsize, antweb_doc *doc)
 {
@@ -610,6 +614,7 @@ char *oinput_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
 		}
 	    }
 
+	    sound_event(snd_FORM_SUBMIT);
 	    antweb_submit_form(doc, ii->base.parent, bb & wimp_BRIGHT);
 	}
 
@@ -660,10 +665,12 @@ char *oinput_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
 	}
 	break;
     case rid_it_CHECK:
+	sound_event(snd_CHECKBOX_TOGGLE);
 	ii->data.radio.tick = !ii->data.radio.tick;
 	redraw = TRUE;
 	break;
     case rid_it_RADIO:
+	sound_event(snd_RADIO_TOGGLE);
 	if (ii->data.radio.tick == FALSE)
 	{
 	    ii->data.radio.tick = TRUE;
@@ -685,6 +692,8 @@ char *oinput_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
 	}
 	break;
     case rid_it_SUBMIT:
+	sound_event(snd_FORM_SUBMIT);
+
 	for (ife = ii->base.parent->kids; ife; ife = ife->next)
 	{
 	    if (ife->tag == rid_form_element_INPUT)
@@ -713,6 +722,8 @@ char *oinput_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
 	break;
 
     case rid_it_RESET:
+	sound_event(snd_FORM_RESET);
+
 	ii->data.button.tick = TRUE;
 	antweb_update_item(doc, ti);
 
@@ -996,6 +1007,10 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 		    redraw = TRUE;
 		    used = TRUE;
 		}
+		else
+		{
+		    sound_event(snd_WARN_BAD_KEY);
+		}
 	    }
 	    else 
 	    {
@@ -1006,6 +1021,10 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 		    ii->data.str[i] = key;
 		    doc->text_input_offset++;
 		    redraw = TRUE;
+		}
+		else
+		{
+		    sound_event(snd_WARN_BAD_KEY);
 		}
 		used = TRUE;
 	    }
@@ -1052,6 +1071,7 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 		    if (ife == NULL)
 		    {
 			/* No passwords, the only text item is this one and only the first submit button 'ticked' */
+			sound_event(snd_FORM_SUBMIT);
 			antweb_submit_form(doc, ii->base.parent, 0);	/* No such thing as a right click here */
 			if (first)
 			    first->data.button.tick = 0;

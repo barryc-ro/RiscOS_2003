@@ -60,7 +60,7 @@ extern void startcite (SGMLCTX * context, ELEMENT * element, VALUES * attributes
 #if 1 /* pdh: was ifdef STBWEB */
     add_italic_to_font(context);
 #else
-    PACK(context->tos->effects_active, STYLE_WF_INDEX, WEBFONT_CITE);
+    SET_EFFECTS(context->tos, STYLE_WF_INDEX, WEBFONT_CITE);
 #endif
 }
 

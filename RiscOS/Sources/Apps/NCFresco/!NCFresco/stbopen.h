@@ -23,6 +23,8 @@ extern fe_view fe_find_top(fe_view v);
 extern fe_view fe_find_window(fe_view start, wimp_w w);
 extern fe_view fe_find_target(fe_view start, const char *target);
 extern fe_view fe_find_top_popup(fe_view v);
+extern fe_view fe_frame_specifier_decode(fe_view top, const char *spec);
+extern char *fe_frame_specifier_create(fe_view v, char *buf, int len);
 
 extern os_error *fe_show_file_in_frame(fe_view v, char *file, char *frame);
 extern os_error *fe_show_file(fe_view v, char *file, int no_history);

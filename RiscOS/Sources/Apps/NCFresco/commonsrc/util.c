@@ -162,7 +162,7 @@ int set_file_type(const char *fname, int ft)
     return (os_file(&osf) == NULL);
 }
 
-int file_type_real(const char *fname)
+int file_and_object_type(const char *fname, int *obj_type)
 {
     os_filestr ofs;
     os_error *ep;
@@ -176,6 +176,9 @@ int file_type_real(const char *fname)
     if (ep)
 	return -1;
 
+    if (obj_type)
+	*obj_type = ofs.action;
+    
     if (ofs.action == 2)
 	return FILETYPE_DIRECTORY;
 
@@ -195,6 +198,12 @@ int file_type_real(const char *fname)
 	return -1;
 
     return r.r[2];
+}
+
+
+int file_type_real(const char *fname)
+{
+    return file_and_object_type(fname, NULL);
 }
 
 /* return last modified time in unix style */
@@ -749,6 +758,13 @@ int nvram_op(const char *tag, int bit_start, int n_bits, int new_val, BOOL write
     }
 
     return bit_start == -1 ? 0 : cmos_op(bit_start, n_bits, new_val, write);
+}
+
+/* trigger an event */
+
+void sound_event(sound_event_t event_num)
+{
+/*     _swix(SoundFX_Play, _INR(0,1), 0, event_num); */
 }
 
 #endif

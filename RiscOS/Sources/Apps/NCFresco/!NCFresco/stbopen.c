@@ -25,6 +25,56 @@
 
 /* ------------------------------------------------------------------------------------------- */
 
+char *fe_frame_specifier_create(fe_view v, char *buf, int len)
+{
+    char dig[8];
+    sprintf(dig, "_%d", v->frame_index);
+
+    if (v->parent)
+	fe_frame_specifier_create(v->parent, buf, len - strlen(buf));
+
+    strlencat(buf, dig, len);
+
+    return buf;
+}
+
+fe_view fe_frame_specifier_decode(fe_view top, const char *spec)
+{
+    char *ss = strdup(spec), *s;
+    fe_view v;
+    
+    s = strtok(ss, "_");
+    v = NULL;
+
+    STBDBG(("framespec_decode: from %p for '%s'\n", top, spec));
+    if (s)
+    {
+	do
+	{
+	    int index = atoi(s);
+
+	    STBDBG(("framespec_decode: index %d", index));
+
+	    if (v == NULL)
+		v = top;
+	    else
+		v = v->children;
+	    
+	    while (index--)
+		v = v->next;
+
+	    STBDBG((" yields %p\n", v));
+	}
+	while ((s = strtok(NULL, "_")) != NULL);
+    }
+    
+    mm_free(ss);
+
+    return v;
+}
+
+/* ------------------------------------------------------------------------------------------- */
+
 fe_view fe_find_target(fe_view start, const char *target)
 {
     fe_view v;
@@ -179,7 +229,11 @@ os_error *frontend_open_url(char *url, fe_view parent, char *target, char *bfile
 
     /* Special targets open up a transient window */
     if (target && parent == NULL && strncmp(target, "__", 2) == 0 && strcasecomp(target, "__top") != 0)
-	parent = fe_dbox_view(target);
+    {
+	parent = fe_find_target(main_view, target);
+	if (!parent)
+	    parent = fe_dbox_view(target);
+    }
     
     /* don't check recursion unless this was initiated from a frameset */
     if (parent && (flags & fe_open_url_FROM_FRAME) && check_recursion(parent->parent, url))

@@ -154,11 +154,11 @@ static void history_event_handler(int event, fe_view v)
             break;
 
     case fevent_HISTORY_SHOW_ALPHA:
-	frontend_complain(frontend_open_url("ncfrescointernal:openpanel?name=historyalpha", v, TARGET_HISTORY, NULL, fe_open_url_NO_CACHE));
+	frontend_complain(frontend_open_url("ncfrescointernal:openpanel?name=historyalpha", NULL, TARGET_HISTORY, NULL, fe_open_url_NO_CACHE));
 	break;
 
     case fevent_HISTORY_SHOW_RECENT:
-	frontend_complain(frontend_open_url("ncfrescointernal:openpanel?name=historyrecent", v, TARGET_HISTORY, NULL, fe_open_url_NO_CACHE));
+	frontend_complain(frontend_open_url("ncfrescointernal:openpanel?name=historyrecent", NULL, TARGET_HISTORY, NULL, fe_open_url_NO_CACHE));
 	break;
     }
 }

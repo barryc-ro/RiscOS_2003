@@ -507,7 +507,7 @@ static void cache_insert(char *url, char *file, cache_flags flags)
 
     if (file == NULL)
 	return;
-    
+
     osf.action = 5;
     osf.name = file;
     if (os_file(&osf) != NULL)
@@ -554,8 +554,10 @@ static void cache_insert(char *url, char *file, cache_flags flags)
     /* dump out the cache details */
     if (config_cache_keep_uptodate)
     {
-        cache_dump_dir_write(dir->dir_num);
-        if (first_dir != -1 && first_dir != dir->dir_num)
+        if ( dir )
+            cache_dump_dir_write(dir->dir_num);
+
+        if ( first_dir != -1 && (!dir || first_dir != dir->dir_num) )
             cache_dump_dir_write(first_dir);			/* this used to be dir->dir_num */
     }
 }
@@ -615,7 +617,7 @@ static void cache_header_info(char *url, unsigned date, unsigned last_modified, 
     }
 }
 
-static void cache_get_header_info(char *url, unsigned *date, unsigned *last_modified, unsigned *expires)
+static BOOL cache_get_header_info(char *url, unsigned *date, unsigned *last_modified, unsigned *expires)
 {
     cache_item *cc = cache_ptr_from_url(url, NULL);
     if (cc)
@@ -626,7 +628,10 @@ static void cache_get_header_info(char *url, unsigned *date, unsigned *last_modi
 	     *last_modified = cc->header.last_modified;
 	if (expires)
 	    *expires = cc->header.expires;
+
+	return TRUE;
     }
+    return FALSE;
 }
 
 /* ---------------------------------------------------------------------------------------- */
@@ -734,6 +739,7 @@ static void cache_dump_dir_read(int dir)
                 /* insert into cache structure */
                 if (url && strncmp(url, "file:", sizeof("file:")-1) != 0
 #ifdef STBWEB
+                    && strncmp(url, "ncint:", sizeof("ncint:")-1) != 0
                     && strncmp(url, "ncfrescointernal:", sizeof("ncfrescointernal:")-1) != 0
 #endif
                     )
@@ -1075,7 +1081,7 @@ static os_error *cache_init(int size)
     os_error *e;
 
     MemCheck_RegisterMiscBlock((void *)0x10c, 4);
-    
+
     if (size == 0)
 	size = config_cache_items;
 
@@ -1164,7 +1170,7 @@ cache_functions cachefs_cache_functions =
 
     cache_flush,
     cache_optimise,
-    
+
     cache_get_header_info
 };
 

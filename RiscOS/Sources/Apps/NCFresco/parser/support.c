@@ -23,14 +23,34 @@ STRING empty_string = { NULL, 0 },
 
 static char char_decode[256];
 
+/* DL: Not sure the following should be available from this module,
+   but it is necessary to define the policy with effects this early.
+ */
+#include "webfonts.h"
+
+#define STYLE_XOR_MASK (WEBFONT_FLAG_ITALIC << STYLE_WF_INDEX_SHIFT)
+
+#define STYLE_OR_MASK  (~STYLE_XOR_MASK)
+/*
+                       ((WEBFONT_FLAG_BOLD << STYLE_WF_INDEX_SHIFT) | \
+                       (WEBFONT_FLAG_FIXED << STYLE_WF_INDEX_SHIFT) | \
+                       (STYLE_BOLD << STYLE_BOLD_SHIFT) | \
+                       (STYLE_UNDERLINE << STYLE_UNDERLINE_SHIFT) | \
+                       (STYLE_STRIKE << STYLE_STRIKE_SHIFT))
+ */
+
 /*****************************************************************************/
+
+#define DEBUG_STACK 1
 
 #if DEBUG
 static void dump_stack(SGMLCTX *ctx)
 {
     STACK_ITEM *item = ctx->tos;
 
+#if !DEBUG_STACK
     return;
+#endif
 
     PRSDBG(("dump_stack(%p): tos %p\n", ctx, item));
 
@@ -46,8 +66,13 @@ static void dump_stack(SGMLCTX *ctx)
 
     while (item != NULL)
     {
+#if 0
 	PRSDBG(("This %p, outer %p(%p), inner %p(%p)\n",
 		item, item->outer, &item->outer, item->inner, &item->inner));
+#else
+	PRSDBG(("This %p, fx %08x, outer %p, inner %p: %s\n", 
+		item, item->effects_active[0], item->outer, item->inner, ctx->elements[abs (item->element)].name.ptr));
+#endif
 	item = item->inner;
     }
 }
@@ -600,6 +625,7 @@ extern void clear_stack_item(STACK_ITEM *stack)
     memset( &stack->elements_open, 0, sizeof(stack->elements_open) );
     memset( &stack->elements_seen, 0, sizeof(stack->elements_seen) );
     memset( &stack->effects_active, 0, sizeof(stack->effects_active) );
+    memset( &stack->effects_applied, 0, sizeof(stack->effects_applied) );
 }
 
 extern void clear_stack(SGMLCTX *context)
@@ -707,7 +733,7 @@ extern void push_stack(SGMLCTX *context, ELEMENT *element)
 
     PRSDBGN(("push_stack(%p, %s)\n", context, element->name.ptr));
 
-#if DEBUG
+#if 0
     dump_stack(context);
 #endif
 
@@ -721,6 +747,8 @@ extern void push_stack(SGMLCTX *context, ELEMENT *element)
 	from->inner->outer = from;
 	from->inner->inner = NULL;
     }
+    else
+        memset( &from->inner->effects_applied, 0, sizeof(&from->inner->effects_applied) );
 
     to = from->inner;
 
@@ -733,15 +761,15 @@ extern void push_stack(SGMLCTX *context, ELEMENT *element)
 
     ta = to->inner;		/* NULL if new bottom of stack */
     tb = to->outer;
-    *to = *from;
-
+    *to = *from;                /* <--- Old stack item gets copied into new stack item */
+    memset( &to->effects_applied, 0, sizeof(&to->effects_applied) );
     to->element = element->id;
     to->inner = ta;
     to->outer = tb;
 
     context->tos = to;
 
-#if 0
+#if DEBUG
     PRSDBGN(("push_stack(): tos %p, inner %p, outer %p\n", to, to->inner, to->outer));
     dump_stack(context);
 #endif
@@ -780,6 +808,110 @@ extern void pop_stack(SGMLCTX *context)
 	sgml_note_stack_underflow(context);
     }
 }
+
+/*****************************************************************************/
+
+extern STACK_ITEM *find_element_in_stack (SGMLCTX *context, ELEMENT *element)
+{
+    STACK_ITEM *tos;
+
+    for (tos = context -> tos; tos != NULL; tos = tos->outer) 
+        if (tos->element == element->id) break;
+
+    return tos;
+}
+
+static void apply_effects (BITS *new, BITS *old, BITS *fx, BITS *app, BITS *mask)
+{
+    int i;
+    new[0] = (new[0] & ~mask[0]) | ((old[0] | (fx[0] & app[0])) & STYLE_OR_MASK  & mask[0])
+                                 | ((old[0] ^ app[0]) & STYLE_XOR_MASK & mask[0]);
+    for (i = 1; i < words_of_effects_bitpack; i++) 
+    {
+        new[i] = (new[i] & ~mask[i]) | ((old[i] | (fx[i] & app[i])) & mask[i]);
+    }
+}
+
+static void apply_effects_without (STACK_ITEM *item, STACK_ITEM *tos)
+/*  This describes the logic for correcting the effect of out of order closes.
+    At this stage, it copes only with boolean flags and propagates
+    these forward as if the item had not been there.
+ */
+{
+    BITS *prior = item->outer->effects_active;
+    BITS *mask  = item->effects_applied;
+    STACK_ITEM *next;
+    for (next=item->inner; next != NULL && next->outer != tos; next=next->inner) 
+    {
+        BITS *this  = next->effects_active;
+#if DEBUG_STACK
+        PRSDBG(("Before apply_effects: prior %08x this %08x fx %08x app %08x mask %08x\n",
+                 prior[0], this[0], next->effects_active[0], next->effects_applied[0], mask[0]));
+#endif
+        apply_effects (this, prior, next->effects_active, next->effects_applied, mask);
+#if DEBUG_STACK
+        PRSDBG(("After apply_effects: this: %08x\n", this[0]));
+#endif
+    
+        prior = this;
+    }
+}
+
+extern void pull_stack_item_to_top (SGMLCTX *context, STACK_ITEM *item)
+{
+    ASSERT (context->tos != NULL);
+
+    if (item != NULL && item != context->tos) 
+    {
+        STACK_ITEM *tos   = context->tos;
+        STACK_ITEM *inner = tos->inner;
+        STACK_ITEM *above = item->outer;
+        STACK_ITEM *below = item->inner;
+
+        /*  We must get the elements_seen vaguely right - since
+            the close appears instead of the expected we can use the
+            TOS context to get the effect of elements_seen if everything
+            had correctly unstacked. This will not be correct where there
+            is a 'post clear seen' flag intervening, but if it was relevant
+            it would be hard to make sense of it anyway.
+         */
+
+        memcpy (item->elements_seen, tos->elements_seen, sizeof (item->elements_seen));
+#if 1
+        PRSDBG(("Stack before pull of %p:\n", item));
+        dump_stack (context);
+#endif
+        if (above != NULL) above->inner = below;
+        if (below != NULL) below->outer = above;
+    
+        item->outer = tos;
+        item->inner = inner;
+
+        tos->inner = item;
+    
+        if (inner != NULL) inner->outer = item;
+
+        context->tos = item;
+#if 1
+        PRSDBG(("Stack after pull:\n"));
+        dump_stack (context);
+#endif
+    }
+}
+
+extern void pull_stack_item_to_top_correcting_effects (SGMLCTX *context, STACK_ITEM *item)
+{
+    ASSERT (context->tos != NULL);
+
+    if (item != NULL && item != context->tos) 
+    {
+        memcpy (item->effects_active, context->tos->effects_active, sizeof (item->effects_active));
+        apply_effects_without (item, context->tos);
+
+        pull_stack_item_to_top (context, item);
+    }
+}
+
 
 /*****************************************************************************/
 
@@ -948,6 +1080,26 @@ extern BITS unpack_fn(BITS *ptr, unsigned shift, unsigned mask)
     r &= mask;
 
     return r;
+}
+
+extern void set_effects_fn (STACK_ITEM *st, unsigned shift, unsigned mask, BITS value)
+{
+    pack_fn (st->effects_active, shift, mask, value);
+    pack_fn (st->effects_applied, shift, mask, mask);
+    PRSDBGN(("set_effects_fn(): st: %p shift: %d mask: %08x value: %08x\n -> %08x %08x %08x\n", 
+             st, shift, mask, value, st->effects_active[0], st->effects_active[1], st->effects_active[2]));
+}
+
+extern void set_effects_wf_flag_fn (STACK_ITEM *st, BITS value)
+{
+    BITS v;
+    v = unpack_fn (st->effects_active, STYLE_WF_INDEX_SHIFT, STYLE_WF_INDEX_MASK);
+    v |= (value & (STYLE_OR_MASK >> STYLE_WF_INDEX_SHIFT));
+    v ^= (value & (STYLE_XOR_MASK >> STYLE_WF_INDEX_SHIFT));
+    pack_fn (st->effects_active, STYLE_WF_INDEX_SHIFT, STYLE_WF_INDEX_MASK, v);
+    pack_fn (st->effects_applied, STYLE_WF_INDEX_SHIFT, STYLE_WF_INDEX_MASK, value);
+    PRSDBGN(("set_effects_wf_flag_fn(): st: %p value: %08x\n -> %08x %08x %08x\n", 
+             st, value, st->effects_active[0], st->effects_active[1], st->effects_active[2]));
 }
 
 /*****************************************************************************/
