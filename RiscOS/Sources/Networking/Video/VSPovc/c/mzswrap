@@ -43,6 +43,12 @@ Date	  Who	  Description of change
                   STB<ipaddress> (eg. STB5320aa88).  This fixes a potential bug
                   caused by name duplication in the name.
 
+20/10/98   CP     Modified to use OLD read_pos() if necessary so that it can be
+                  integrated with older baselines (eg. Elmsdale).
+
+                  Removed a watchdogtimer start which doesn't have a matching stop.
+
+
 ***************************************************************************/
 
 #include <stdio.h>
@@ -254,6 +260,9 @@ static void initposition(mkd_pos *pos, int ptype)
 /*ARGS_USED*/
 static void ovs_callbackhandler(dvoid  *argv, mzs_notify reason)
 {
+#if !defined(NDEBUG) && defined(SOS)
+    SetSystemVariable("OVCdebug$open", "ovs_callbackhandler called/n");
+#endif
     endofstream = 1;
 }
 
@@ -290,6 +299,10 @@ _kernel_oserror *ovs_startstream(int argc, char **argv, int handle, int loop, in
     {
 	skipcnt = MktGenHdrLen;
     }
+
+#if !defined(NDEBUG) && defined(SOS)
+    SetSystemVariable("OVCdebug$open", "ovs_openstream called/n");
+#endif
 
     name = argv[0];
     is_dumpmode = 0;
@@ -347,15 +360,23 @@ _kernel_oserror *ovs_startstream(int argc, char **argv, int handle, int loop, in
     set_watchdog_timer();
     Fire_Up_MediaNet();
     clr_watchdog_timer();
+
+#if !defined(NDEBUG) && defined(SOS)
+    SetSystemVariable("OVCdebug$open", "OMN started/n");
+#endif
+
     if (mn_started)
     {
 	mnidle_timer = MNIDLE_TIMEOUT;
     }
 
-    set_watchdog_timer();
+/*    set_watchdog_timer(); 20oct98:CP:no timer termination, so could wreak havoc! */
 
     /* initialise ORB environment */
     yoEnvInit(&evs);
+#if !defined(NDEBUG) && defined(SOS)
+    SetSystemVariable("OVCdebug$open", "yoEnvInit/n");
+#endif
     /*
      * query the content service to get the asset cookie and segment info
      * corresponding to the requested video tag file
@@ -363,17 +384,39 @@ _kernel_oserror *ovs_startstream(int argc, char **argv, int handle, int loop, in
     fobj = (mza_LgCtntMgmt) yoBind( mza_LgCtntMgmt__id, (char *)0, (yoRefData *)0, (char *)0);
     sts = ovsQuery( fobj, &evs, name, TRUE, &cookie, &asset_bitrate, &asset_len);
     yoRelease ((dvoid *)fobj);
+
+#if !defined(NDEBUG) && defined(SOS)
+    SetSystemVariable("OVCdebug$open", "yoRelease/n");
+#endif
+
     if (sts == FALSE)
     {
 	 err = 1;
 	 yoEnvFree(&evs);
 	 goto out;
     }
+
+
      /* construct a control circuit address */
+    /* 4nov98:CP:
+       let's just get this right....this bit of code:
+
+       reads variable OMN_ADDR into udpadr
+       scans the string for values which it stores in ipadr and prtno
+       puts STB IP address into ipadr (which has just been filled in...)
+       sets up udpadr to be <ipadr>:<prtno>
+
+       So, all it does is read the OMN port used by the server, and use this to
+       set up the control channel.
+
+       Ummm.
+    */
     read_sysvar("OMN_ADDR", udpadr, sizeof(udpadr));
     sscanf(udpadr, "UDP:%[^:]:%d", ipadr, &prtno);
     (void) read_my_ip_address(ipadr);
-    sprintf(udpadr, "%s:%d", ipadr, prtno);
+    sprintf(udpadr, "\"%s:%d\"", ipadr, prtno); /* 4nov98:CP:added quotes */
+
+
 
     /* Build a client unique id from hostname and time */
     /*
@@ -384,13 +427,9 @@ _kernel_oserror *ovs_startstream(int argc, char **argv, int handle, int loop, in
      * use of Freeway etc.                                *
      */
       read_sysvar("Inet$LocalAddr", cidbuffer+3, sizeof(cidbuffer)-3);
-//    prtime(tbuf, time(0) - boottime);
-//    strcat(cidbuffer, "/");
-//    strcat(cidbuffer, tbuf);
       cidbuffer[0] = 'S';
       cidbuffer[1] = 'T';
       cidbuffer[2] = 'B';
-//    strcpy(cidbuffer, "SNAFU");
 
     cid._maximum = cid._length = strlen(cidbuffer) + 1;
     cid._buffer = (ub1 *)cidbuffer;
@@ -414,7 +453,7 @@ _kernel_oserror *ovs_startstream(int argc, char **argv, int handle, int loop, in
     /* build data circuit - asymmetric persistant point-to-point
      * downstream-only real time channel from the video pump to the stb
      */
-    sprintf(udpadr, "%s:%d", ipadr, udpport);
+    sprintf(udpadr, "\"%s:%d\"", ipadr, udpport); /* 4nov98:CP:added quotes */
 
     props1 = mzc_propPersistantConnect | mzc_propDown | mzc_propData |
 	    mzc_propIsochronousData | mzc_propPointcast;
@@ -427,7 +466,7 @@ _kernel_oserror *ovs_startstream(int argc, char **argv, int handle, int loop, in
     spec[1]._u.req._u.asym.downchnl._u.req.props = props1;
     spec[1]._u.req._u.asym.downchnl._u.req.bitrate = asset_bitrate;
 
-    if (destadr[0] != 0)
+    if (destadr[0] != 0)  /* value found in suitable file, eg. SysEnv.DestAdrs */
     {
 	strcpy(tbuf, destadr);
 	d = strchr(tbuf, ':');
@@ -445,9 +484,13 @@ _kernel_oserror *ovs_startstream(int argc, char **argv, int handle, int loop, in
     specs._buffer = &spec[0];
 
     /* bind to session factory, then
-
      * allocate session
      */
+
+#if !defined(NDEBUG) && defined(SOS)
+    SetSystemVariable("OVCdebug$open", "Binding/n");
+#endif
+
 
     zfac = (mzz_factory) yoBind(mzz_factory__id, (char *)0, (yoRefData *)0, (char *)0);
     ses = mzz_factory_AllocateSessionEx(zfac, &evs, mzz_sessNull, &cid, &specs);
@@ -471,6 +514,9 @@ _kernel_oserror *ovs_startstream(int argc, char **argv, int handle, int loop, in
     ovs_initmpegpvc();
     ovs_initstream(handle, skipcnt);
 
+#if !defined(NDEBUG) && defined(SOS)
+    SetSystemVariable("OVCdebug$open", "Prep play/n");
+#endif
     /* prepare stream to play from start_point to end_point at the given bitrate.
      * playNow starts the movie immediately
      */
@@ -518,14 +564,21 @@ _kernel_oserror *ovs_startstream(int argc, char **argv, int handle, int loop, in
 	mzscl_stream_setCallback(streamRef, &evs, (mzs_stream_cliCallbackHdlr)ovs_callbackhandler, (dvoid *)0);
     }
 
+#if !defined(NDEBUG) && defined(SOS)
+    SetSystemVariable("OVCdebug$open", "callback set/n");
+#endif
     (void) ovs_playcontrol_init();
     currentop = 6;
 
 #ifndef NDEBUG
-   _swix(OS_WriteC, _IN(0), 12); /* clear text screen & reset cursor to home */
-#endif
+//   _swix(OS_WriteC, _IN(0), 12); /* clear text screen & reset cursor to home */
     printf("requested video OK\n");
+#endif
 out:
+
+#if !defined(NDEBUG) && defined(SOS)
+    SetSystemVariable("OVCdebug$open", "finished/n");
+#endif
     return (ovs_error(err));
 }
 
@@ -848,6 +901,7 @@ Outputs: unsigned int number of seconds elapsed into movie
 
 ***************************************************************************/
 
+#ifndef USEOLDREAD_POS
 unsigned int read_pos(void)
 {
    char buffer[25];
@@ -935,6 +989,36 @@ unsigned int read_pos(void)
 
    return npt;
 }
+#else
+unsigned int read_pos(void)
+{
+    mkd_pos pos;
+    mzs_state status;
+    sb4 rate;
+    unsigned int npt = 0;
+
+    pos = mzs_stream_getPos(streamRef, &evs, streamInst, &status, &rate);
+
+    if (status != mzs_statePause && status != mzs_stateStream)
+    {
+        endofstream = 1;
+        return (0);
+    }
+
+    if (pos._u.mkd_posTimePos.mkd_posTimeHour > 0)
+    {
+        npt += pos._u.mkd_posTimePos.mkd_posTimeHour * SECONDS_PER_HOUR;
+    }
+
+    if (pos._u.mkd_posTimePos.mkd_posTimeMinute > 0)
+    {
+        npt += pos._u.mkd_posTimePos.mkd_posTimeMinute * SECONDS_PER_MINUTE;
+    }
+
+    npt += pos._u.mkd_posTimePos.mkd_posTimeSecond;
+    return (npt);
+}
+#endif
 
 
 /******* local_npt  ********************************************************

@@ -6,6 +6,10 @@
 #
 # EOS - sets series of system variables detailing what caused video to stop
 #       (OVCdebug$*)
+#
+# SOS - same as EOS but for start of stream
+#
+# USEOLDREAD_POS - forces old read_pos() routine to be used.
 
 VPATH=@ rts.src.vid
 
@@ -17,9 +21,9 @@ CC = cc
 CMHG=cmhg
 OBJASM=objasm
 
-CFLAGS = -c -zM -ffa -wp -throwback -DRISCOS -DSYSTEM -I$(INCLUDES) -DNDEBUG
-#CFLAGS = -c -zM -ffa -wp -throwback -DRISCOS -DSYSTEM -I$(INCLUDES)
-INCLUDES=C:,mx_pri:,mx_pub:,mx_inc:,rts:
+#CFLAGS = -c -zM -ffa -wp -throwback -DRISCOS -DSYSTEM -I$(INCLUDES) -DNDEBUG -D#USEOLDREAD_POS
+CFLAGS = -c -zM -ffa -wp -throwback -DRISCOS -DSYSTEM -I$(INCLUDES) -DSOS -DUSEOLDREAD_POS
+INCLUDES=C:,mx_pri:,mx_pub:,mx_inc:,rts:,TCPIPlibs:
 
 IDLLIB= @.fromidl.lib.libidl
 YOLIB= @.mx.src.yo.lib.libyo
@@ -47,7 +51,7 @@ o.vspc   :  amu.makefile c.vspc h.mzswrap h.module h.vspc debug.h
 
 o.smnudp :  amu.makefile c.smnudp module.h
 
-o.mzswrap:  amu.makefile c.mzswrap h.mzswrap h.module h.vspc
+o.mzswrap:  amu.makefile c.mzswrap h.mzswrap h.module h.vspc h.debug
 
 o.mzscl  :  amu.makefile c.mzscl
 
