@@ -38,6 +38,7 @@
 #include "stbtb.h"
 #include "frameutils.h"
 #include "memflex.h"
+#include "printing.h"
 
 /* ----------------------------------------------------------------------------------------------------- */
 
@@ -295,27 +296,31 @@ static int internal_decode_print_options(const char *query, char **url)
 	if (config_print_scale < 5)
 	    config_print_scale = 5;
 #endif
+	int old_bw = config_print_nocol;
+	int old_orient = config_print_sideways;
 
 	if ((s = extract_value(query, "orient=")) != NULL)
 	{
 	    config_print_sideways = strcmp(s, "side") == 0;
 	    mm_free(s);
+
+	    nvram_write(NVRAM_PRINT_ORIENTATION_TAG, config_print_sideways);
 	}
 
 	if ((s = extract_value(query, "color=")) != NULL)
 	{
-	    int old_bw = config_print_nocol;
-	    
 	    config_print_nocol = strcmp(s, "bw") == 0;
 	    mm_free(s);
-	    nvram_write(NVRAM_PRINT_COLOUR_TAG, !config_print_nocol);
 
-	    /* If PPrimer fails then reset the NVRAM */
-	    if (frontend_complain(_swix(PPrimer_ChangePrinter, 0)) != NULL)
-	    {
-		config_print_nocol = old_bw;
-		nvram_write(NVRAM_PRINT_COLOUR_TAG, !config_print_nocol);
-	    }
+	    nvram_write(NVRAM_PRINT_COLOUR_TAG, !config_print_nocol);
+	}
+
+	if ((old_bw != config_print_nocol || old_orient != config_print_sideways) && 
+	    frontend_complain(_swix(PPrimer_ChangePrinter, 0)) != NULL)
+	{
+	    /* If PPrimer fails then reset the colour NVRAM bits */
+	    config_print_nocol = old_bw;
+	    nvram_write(NVRAM_PRINT_COLOUR_TAG, !config_print_nocol);
 	}
 	
 #if 0
@@ -328,6 +333,10 @@ static int internal_decode_print_options(const char *query, char **url)
 	print__ul = strstr(query, "f=ul") != 0;
 #endif
     }
+
+    /* return the print head - ignore errors */
+    awp_command(printer_command_RETURN_HEAD);
+
 
     if (print)
 #if 1
@@ -359,6 +368,9 @@ static os_error *fe_print_options_write_file(FILE *f)
     fprintf(f, msgs_lookup("print.7"), checked(print__ul));
 #endif
     fputs(msgs_lookup("print.F"), f);
+
+    /* center the print head - ignore errors */
+    awp_command(printer_command_CENTRE_HEAD);
 
     return NULL;
 }

@@ -3271,7 +3271,7 @@ os_error *fe_status_unstack(fe_view source_v)
 	{
 	    if (strncmp(v->name, TARGET_DBOX, sizeof(TARGET_DBOX)-1) != 0) /* can't close external dboxes */
 	    {
-		fe_internal_deleting_view(v);
+/* 		fe_internal_deleting_view(v); */
 		fe_dispose_view(v);
 	    }
 	}
@@ -4387,6 +4387,7 @@ static void fe_keyboard__open(void)
 	n = sprintf(buffer, "NCKeyboard %s",
 		    keyboard_state == fe_keyboard_ONLINE ? " -extension browser" : "");
 
+	memset(&box, 0, sizeof(box));
 	if (tb_is_status_showing())
 	    tb_status_box(&box);
 
@@ -4620,6 +4621,7 @@ static void fe_url_bounce(wimp_msgstr *msg)
 	    char tag[32], *s;
 	    strcpy(tag, "noscheme_");
 	    strlencat(tag, scheme, sizeof(tag));
+	    strlencat(tag, ":", sizeof(tag));
 	    strlwr(tag);
 	    
 	    s = msgs_lookup(tag);
@@ -4987,6 +4989,9 @@ static void read_nvram(void)
     /* Update from NVRAM */
     if (nvram_read(NVRAM_PRINT_COLOUR_TAG, &t))
 	config_print_nocol = !t;
+
+    if (nvram_read(NVRAM_PRINT_ORIENTATION_TAG, &t))
+	config_print_sideways = t;
 
     if (nvram_read(NVRAM_FONTS_TAG, &t))
 	fe_font_size_set(t, TRUE);
@@ -5917,6 +5922,9 @@ static BOOL fe_initialise(void)
     /* Init the NVRAM based configuration */
     if (nvram_read(NVRAM_PRINT_COLOUR_TAG, &t))
 	config_print_nocol = !t;
+
+    if (nvram_read(NVRAM_PRINT_ORIENTATION_TAG, &t))
+	config_print_sideways = t;
 
     if (nvram_read(NVRAM_FONTS_TAG, &config_display_scale))
 	config_display_scale = config_display_scales[config_display_scale];

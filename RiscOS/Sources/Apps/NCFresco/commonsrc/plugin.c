@@ -1767,7 +1767,10 @@ int plugin_message_handler(wimp_eventstr *e, void *handle)
 		    /* if we tried as a helper then pass to frontend and remove */
 		    if (pp->priv_flags & plugin_priv_HELPER)
 		    {
-			frontend_pass_doc(pp->helper.parent, pp->objd.data, pp->helper.cfile, pp->objd.data_ftype);
+			/* remove the call to pass_doc - if the plugin
+                           has failed then anything else is unlikely
+                           to work either */
+/* 			frontend_pass_doc(pp->helper.parent, pp->objd.data, pp->helper.cfile, pp->objd.data_ftype); */
 			plugin_destroy(pp);
 			pp = NULL;
 		    }

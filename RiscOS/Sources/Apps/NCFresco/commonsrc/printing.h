@@ -15,3 +15,10 @@ os_error *awp_print_document(be_doc doc, int scale, int flags, int copies);
 #define PRINT_MIN_SCALE		10
 
 void awp_free_pages(be_doc doc);
+
+#ifdef STBWEB
+#define printer_command_CENTRE_HEAD	0
+#define printer_command_RETURN_HEAD	1
+#define printer_command_CLEAN_HEAD	2
+extern os_error *awp_command(int cmd_no);
+#endif

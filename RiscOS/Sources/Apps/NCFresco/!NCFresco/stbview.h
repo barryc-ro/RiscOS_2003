@@ -186,6 +186,7 @@ struct _frontend_view
 #define NVRAM_BEEPS_TAG		"BrowserBeepStatus"
 #define NVRAM_SCALING_TAG	"BrowserScaling"
 #define NVRAM_PRINT_COLOUR_TAG	"PrinterColour"
+#define NVRAM_PRINT_ORIENTATION_TAG	"PrinterOrientation"
 
 /* ----------------------------------------------------------------------------- */
 

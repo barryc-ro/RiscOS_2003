@@ -49,6 +49,10 @@
 
 #define MP2OS	(72000/180)
 
+#ifndef PDriver_Command
+#define PDriver_Command	0x8015E
+#endif
+
 typedef struct _awp_job_str *awp_job;
 
 /* Check pagination */
@@ -728,5 +732,23 @@ os_error *awp_print_document(be_doc doc, int scale, int flags, int copies)
 
     return ep;
 }
+
+#ifdef STBWEB
+/* New SWI that sends a command direct to the printer */
+os_error *awp_command(int cmd_no)
+{
+    int job;
+    os_error *e;
+
+    e = awp_open_printer(&job);
+    if (!e)
+    {
+	e = (os_error *)_swix(PDriver_Command, _INR(0,1), cmd_no, job);
+
+	awp_close_printer(job);
+    }
+    return e;
+}
+#endif
 
 /* eof commonsrc/printing.c */
