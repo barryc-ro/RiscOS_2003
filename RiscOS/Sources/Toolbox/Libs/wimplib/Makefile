@@ -23,7 +23,7 @@ AAsmflags = -depend !Depend -quit -CloseExec -To $@ -From
         @.o.wpollidle @.o.wplotic @.o.wsetmode @.o.wsetpal @.o.wreadpal @.o.wsetcol @.o.wsendm \
         @.o.wtextop @.o.wprocessk @.o.!!version @.o.wspriteop @.o.wbasesp @.o.wblockcpy \
         @.o.wslotsize @.o.wtextcol @.o.wcommw @.o.wtransbl @.o.wsysinfo @.o.wresizeic @.o.wsetfon \
-        @.o.wgetmenu @.o.waddmsg @.o.wremmsg @.o.wsetcolm 
+        @.o.wgetmenu @.o.waddmsg @.o.wremmsg @.o.wsetcolm @.o.wopenw2 @.o.wgetwst2 @.o.wforcere2
         LibFile $(LibFileflags) @.o.winit @.o.wcreatew @.o.wcreatei \
         @.o.wdeletew @.o.wdeletei @.o.wclosew @.o.wopenw @.o.wpoll @.o.wgetrec @.o.wredraww \
         @.o.wupdatew @.o.wdragbox @.o.wgeticst @.o.wgetpoi @.o.wgetwinf @.o.wgetwst @.o.wseticst \
@@ -32,7 +32,8 @@ AAsmflags = -depend !Depend -quit -CloseExec -To $@ -From
         @.o.wreporte @.o.wgetwino @.o.wpollidle @.o.wplotic @.o.wsetmode @.o.wsetpal @.o.wreadpal \
         @.o.wsetcol @.o.wsendm @.o.wtextop @.o.wprocessk @.o.!!version @.o.wspriteop @.o.wbasesp \
         @.o.wblockcpy @.o.wslotsize @.o.wtextcol @.o.wcommw @.o.wtransbl @.o.wsysinfo @.o.wresizeic \
-        @.o.wsetfon @.o.wgetmenu @.o.waddmsg @.o.wremmsg @.o.wsetcolm 
+        @.o.wsetfon @.o.wgetmenu @.o.waddmsg @.o.wremmsg @.o.wsetcolm @.o.wopenw2 @.o.wgetwst2 \
+        @.o.wforcere2
 
 
 # User-editable dependencies:
@@ -157,6 +158,12 @@ clean:
         objasm $(objasmflags) -from @.s.wremmsg -to @.o.wremmsg
 @.o.wsetcolm:   @.s.wsetcolm
         objasm $(objasmflags) -from @.s.wsetcolm -to @.o.wsetcolm
+@.o.wopenw2:   @.s.wopenw2
+        objasm $(objasmflags) -from @.s.wopenw2 -to @.o.wopenw2
+@.o.wgetwst2:  @.s.wgetwst2
+        objasm $(objasmflags) -from @.s.wgetwst2 -to @.o.wgetwst2
+@.o.wforcere2: @.s.wforcere2
+        objasm $(objasmflags) -from @.s.wforcere2 -to @.o.wforcere2
 
 
 # Dynamic dependencies:
@@ -217,3 +224,4 @@ o.wgetmenu: s.wgetmenu
 o.waddmsg: s.waddmsg
 o.wremmsg: s.wremmsg
 o.wsetcolm: s.wsetcolm
+o.wforcere2: s.wforcere2
