@@ -78,6 +78,12 @@ resources-: resources_common
         TokenCheck LocalRes:Messages
         print LocalRes:CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
 
+BBETYPE = kernel
+bbe-kernel: bbe-generic-resources-get-alias
+        BBE_Export_Dir Resources.${LOCALE}.${USERIF}
+        BBE_Export_File Resources.${LOCALE}.Messages
+        BBE_Export_File Resources.${LOCALE}.CmdHelp
+
 ${TARGET}: ${SOURCE} s.TMOSHelp
         ${MKDIR} rm.${MACHINE}
         ${AS} ${ASFLAGS} ${SOURCE}
