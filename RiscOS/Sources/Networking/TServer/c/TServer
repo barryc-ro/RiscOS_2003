@@ -41,10 +41,11 @@
 #include "socklib.h"
 #include "arpa/telnet.h"
 
+#include "swis.h"
 #include "Global/RISCOS.h"
+#include "Global/Services.h"
 #include "wimp.h"
 #include "wimplib.h"
-#include "swis.h"
 
 #include "DebugLib/DebugLib.h"
 
@@ -127,41 +128,34 @@ _kernel_oserror *module_init(const char *cmd_tail, int podule_base, void *pw)
 
     /* create socket */
     sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock < 0) {
-        xperror ("opening stream socket");
-        return (_kernel_oserror*) "    opening";
-    }
+    if (sock < 0) return &_inet_error;
 
     /* make the socket generate events */
-    if (socketioctl(sock, FIOASYNC, &i) < 0) {
-        xperror("socketioctl");
-        return (_kernel_oserror*) "    socketioctl";
-    }
+    if (socketioctl(sock, FIOASYNC, &i) < 0) e = &_inet_error;
 
     /* mark the socket as non-blocking */
-    if (socketioctl(sock, FIONBIO, &i) < 0) {
-        xperror("socketioctl");
-        return (_kernel_oserror*) "    socketioctl";
-    }
+    if (!e && socketioctl(sock, FIONBIO, &i) < 0) e = &_inet_error;
 
     /* resuse the address so that if we start again we don't fail */
-    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &i, sizeof i);
+    if (!e && setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &i, sizeof i))
+        e = &_inet_error;
 
     /* name socket using wildcards */
     server.sin_family = AF_INET;
     server.sin_addr.s_addr = INADDR_ANY;
     server.sin_port = htons(23);
-    if (bind(sock, (struct sockaddr*) &server, sizeof server)) {
-        xperror ("binding stream socket");
-        return (_kernel_oserror*) "    building";
-    }
+    if (!e && bind(sock, (struct sockaddr*) &server, sizeof server))
+        e = &_inet_error;
 
     /* start accepting connections */
-    listen (sock, 5);
+    if (!e && listen (sock, 5)) e = &_inet_error;
 
     /* claim the internet event */
-    e = _swix (OS_Claim, _INR(0, 2), EventV, internetv_entry, pw);
+    if (!e) _swix (OS_Claim, _INR(0, 2), EventV, internetv_entry, pw);
     if (!e) _kernel_osbyte (Event_Enable, Event_Internet, 0);
+
+    /* if there was an error, close the socket */
+    if (e) socketclose (sock);
 
     return e;
 }
@@ -198,12 +192,15 @@ _kernel_oserror *module_final(int fatal, int podule, void *pw)
     if (child) {
         WimpPollBlock b;
         b.user_message.hdr.size = sizeof b.user_message.hdr;
-        b.user_message.hdr.action_code = TaskWindow_Morite;
+        b.user_message.hdr.action_code = Wimp_MQuit;
         wimp_send_message (Wimp_EUserMessage, &b, child, 0, 0);
     }
 
     /* if we started as a wimp task, stop ourselves */
-    if (task_id) wimp_close_down (task_id);
+    if (task_id) {
+        wimp_close_down (task_id);
+        task_id = 0;
+    }
 
     /* disable and deregister for the internet event */
     _kernel_osbyte (Event_Disable, Event_Internet, 0);
@@ -237,18 +234,15 @@ _kernel_oserror *module_final(int fatal, int podule, void *pw)
 * Returns
 *  0 to claim, 1 to pass on.
 *****************************************************************************/
+
 int internetv(_kernel_swi_regs *r, void *pw)
 {
     NOTUSED(pw);
 
-    if (r->r[0] != Event_Internet) return 1;
+    if (r->r[1] != 1 || (r->r[2] != sock && r->r[2] != msgsock)) return 1;
 
-    /* set the pollword to our socket if it's for us.   */
-    if (r->r[1] == 1 && (r->r[2] == sock || r->r[2] == msgsock)) {
-        pollword = r->r[2];
-        return 0;
-    }
-
+    /* set the pollword to our socket if it's for us. */
+    pollword = r->r[2];
     return 1;
 }
 
@@ -260,7 +254,7 @@ int internetv(_kernel_swi_regs *r, void *pw)
 * Description of the function
 *  handle service calls for the module
 *
-* Assumptionso
+* Assumptions
 *  if r->r[0] = 0 then the call was claimed, otherwise passed on.
 *
 * Inputs
@@ -279,16 +273,75 @@ void module_services(int service_number, _kernel_swi_regs *r, void *pw)
 {
     NOTUSED(pw);
 
-    switch (service_number)
-    {
-        case Service_Memory:
-            /* if it's our CAO, claim the service call to leave our memory */
-            if (r->r[2] == (int) __module_header) {
-                r->r[1] = 0;
-                wimp_slot_size (TServer_SlotSize, -1, 0, 0, 0);
-            }
-            break;
+    switch (service_number) {
+
+    /* if it's our CAO, claim the service call to leave our memory */
+    case Service_Memory:
+        if (r->r[2] == (int) __module_header) r->r[1] = 0;
+        break;
+
+    /* if we haven't started yet then return the star command to start us and
+    claim the service */
+    case Service_StartWimp:
+        if (task_id == 0) {
+            task_id = -1;
+            r->r[0] = (int) "Desktop_TServer";
+            r->r[1] = 0;
+        }
+        break;
+
+    /* if the wimp starts without issuing our start command clear the -1
+    condition */
+    case Service_StartedWimp:
+        if (task_id == -1) task_id = 0;
+        break;
+
+    /* upon reset, zero task_id so that we can get started again */
+    case Service_Reset:
+        task_id = 0;
+        break;
+
+    default:
+        break;
     }
+}
+
+/*****************************************************************************
+* FunctionName
+*  module_services
+*
+* Description of the function
+*  handle service calls for the module
+*
+* Assumptions
+*  if r->r[0] = 0 then the call was claimed, otherwise passed on.
+*
+* Inputs
+*  int service_number:  the number of the service call
+*  _kernel_swi_regs* r: the state of the registers when the call was made
+*  void* pw:            the private word for this module
+*
+* Outputs
+*  _kernel_swi_regs* r: the state of the registers to return
+*
+* Returns
+*  void
+*****************************************************************************/
+
+_kernel_oserror *commands(const char *arg_string, int argc, int cmd_no, void *pw)
+{
+    switch (cmd_no) {
+
+    case CMD_Desktop_TServer:
+        /* Don't start the task if it's already started */
+        if (task_id == -1 || task_id == 0) {
+            wimp_slot_size (TServer_SlotSize, -1, 0, 0, 0);
+            _swix (OS_Module, _INR(0, 2), Module_Enter, Module_Title, 0);
+        }
+        break;
+    }
+
+    return 0;
 }
 
 /* Turn stack limit checking back on again */
@@ -668,6 +721,9 @@ int main (int argc, char* argv[]) {
     int messages[3] = {TaskWindow_Output, TaskWindow_Ego, 0};
     NOTUSED(argc);
     NOTUSED(argv);
+
+    /* don't attempt to start the task again */
+    if (task_id != -1) return 0;
 
     wimp_initialise (310, "TServer", messages, 0, &task_id);
 
