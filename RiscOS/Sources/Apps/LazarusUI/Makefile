@@ -131,6 +131,7 @@ resources: translate
 	@echo ** Exporting non-translatable resource files
 	SetMacro LazUILocalRes$path Resources.$(USERIF).$(LOCALE).,Resources.$(USERIF).UK.
         $(CP) LazUILocalRes:$(APP).!BootNet $(RESAPP).!BootNet $(CPFLAGS)
+        $(CP) LazUILocalRes:$(APP) $(RESAPP) $(CPFLAGS)
         $(CP) LazUILocalRes:$(APP).!Run $(RESAPP).!Run $(CPFLAGS)
         $(CP) LazUILocalRes:$(APP).Palette $(RESAPP).Palette $(CPFLAGS)
         $(CP) LazUILocalRes:NVRAM.$(MACHINE).Tags $(RESRES).NVRAM.Tags $(CPFLAGS)
