@@ -80,6 +80,7 @@ static bool write_values(sc_bootblock_data_struct* main_bb, sc_bootblock_data_st
 static bool validate_values(sc_bootblock_data_struct* main_bb, sc_bootblock_data_struct* default_bb, int flags, const char* const filename);
 bool read_exclusions_file(const char* const filename);
 static void free_upgrade_file_flags(s_upgrade_file_flags* flags);
+static bool has_default_bootblock_been_written(void);
 
 char* exclusions_filename = NULL;
 
@@ -379,7 +380,7 @@ bool parse_line(char* line, sc_bootblock_data_struct* main_bb, sc_bootblock_data
 
 
 
-
+static bool can_write_to_bootblock = false;
 
 /* This routine is the main routine that is called when reading in a
     Configuration Update file. It is called from the ConfigurationUpdate_
@@ -399,6 +400,9 @@ bool read_configuration_file(const char* const memory_area, const int memory_are
 
   /* Reset the upgrade_file_flags structure. */
   free_upgrade_file_flags(&upgrade_file_flags);
+
+  /* Ensure that the default bootblock has not yet been written to. */
+  can_write_to_bootblock = has_default_bootblock_been_written();
 
   /* Parse a configuration file. */
   default_bootblock = (sc_bootblock_data_struct*)rmalloc(sizeof(sc_bootblock_data_struct), "Default bootblock");
@@ -572,19 +576,31 @@ static int match_values(const char* const target, const char* const tag, const c
         }
         else
         {
-          if (strcmp(target, "BBDEFAULT") == 0) /* A main bootblock tag */
+#ifdef PROTECT_DEFAULT_BOOTBLOCK
+          if (can_write_to_bootblock)
           {
-            target_bb = default_bb;
-            target_type = E_TARGET_TYPE_DEFAULT_BB;
+#endif /* PROTECT_DEFAULT_BOOTBLOCK */
+            if (strcmp(target, "BBDEFAULT") == 0) /* A main bootblock tag */
+            {
+              target_bb = default_bb;
+              target_type = E_TARGET_TYPE_DEFAULT_BB;
+            }
+            else
+            {
+              char error_string[255];
+              sprintf(error_string, "Unrecognised target %s", target);
+              append_error(error_string, E_ERROR_UNRECOGNISED_TARGET, line_number);
+              dprintf(("", "match_values(): Error: Unrecognised target on line %d\n", line_number));
+              return (-1);
+            }
+#ifdef PROTECT_DEFAULT_BOOTBLOCK
           }
           else
           {
-            char error_string[255];
-            sprintf(error_string, "Unrecognised target %s", target);
-            append_error(error_string, E_ERROR_UNRECOGNISED_TARGET, line_number);
-            dprintf(("", "match_values(): Error: Unrecognised target on line %d\n", line_number));
+            dprintf(("", "match_values(): Error: Default Bootblock has already been written.\n"));
             return (-1);
           }
+#endif /* PROTECT_DEFAULT_BOOTBLOCK */
         }
 
         /* Search through the tag cache in the bootblock structure for this tag. */
@@ -635,34 +651,52 @@ static int match_values(const char* const target, const char* const tag, const c
 /* This routine writes all the correct values back to NVRAM and bootblocks. */
 bool write_values(sc_bootblock_data_struct* main_bb, sc_bootblock_data_struct* default_bb, int flags_bitfield)
 {
+  int nci_tag_number = 0;
   dprintf(("", "write_values(): flags_bitfield is %d\n", flags_bitfield));
   /* Do main bootblock */
   if (flags_bitfield & (1L << 0))
   {
     char* bootblock = NULL;
-
     dprintf(("", "write_values(): Writing default bootblock values\n"));
-    bootblock = create_bootblock(default_bb);
-    if (!bootblock)
+
+    /* Prevent it from being written if the BOOTBLOCK_WRITTEN tag is non-zero or not present. */
+#ifdef PROTECT_DEFAULT_BOOTBLOCK
+    if (can_write_to_bootblock)
     {
-      dprintf(("", "write_values(): Error creating default bootblock\n"));
-    }
-    else
-    {
-      display_bootblock_image(bootblock, SIZE_OF_BOOTBLOCK);
-      /* Write the default bootblock to the NVRAM. */
-      if (!write_nvram_value("BootBlockDefault", bootblock, SIZE_OF_BOOTBLOCK, true))
+#endif /* PROTECT_DEFAULT_BOOTBLOCK */
+      bootblock = create_bootblock(default_bb);
+      if (!bootblock)
       {
-        dprintf(("", "write_values(): Error attempting to write default bootblock to NVRAM\n"));
+        dprintf(("", "write_values(): Error creating default bootblock\n"));
       }
       else
       {
-        dprintf(("", "write_values(): Default bootblock successfully written to NVRAM.\n"));
+        display_bootblock_image(bootblock, SIZE_OF_BOOTBLOCK);
+        /* Write the default bootblock to the NVRAM. */
+        if (!write_nvram_value("BootBlockDefault", bootblock, SIZE_OF_BOOTBLOCK, true))
+        {
+          dprintf(("", "write_values(): Error attempting to write default bootblock to NVRAM\n"));
+        }
+        else
+        {
+          dprintf(("", "write_values(): Default bootblock successfully written to NVRAM.\n"));
+        }
+        /* Free the memory */
+        rmfree((unsigned char*)bootblock);
       }
-      /* Free the memory */
-      rmfree((unsigned char*)bootblock);
+      service_configurationchanged((int)(flags_bitfield));
+#ifdef PROTECT_DEFAULT_BOOTBLOCK
     }
-    service_configurationchanged((int)(flags_bitfield));
+    else
+    {
+      char error_string[255];
+      dprintf(("", "write_values(): Not writing default bootblock because it is protected (Bootblock_written tag is %s)\n", default_bb->tag_cache->tag[nci_tag_number].val));
+      sprintf(error_string, "Default Bootblock has already been written");
+      append_error(error_string, E_ERROR_DEFAULT_BOOTBLOCK_PROTECTED, -1);
+      dprintf(("", "match_values(): Error: Bootblock has already been written.\n"));
+            return (-1);
+    }
+#endif /* PROTECT_DEFAULT_BOOTBLOCK */
   }
 
   if (flags_bitfield & (1L << 1))
@@ -760,7 +794,7 @@ bool validate_values(sc_bootblock_data_struct* main_bb, sc_bootblock_data_struct
 
 
 
-
+/* This routine frees all the memory used in the upgrade_file_flags structure. */
 static void free_upgrade_file_flags(s_upgrade_file_flags* flags)
 {
   flags->session_id = 0;
@@ -771,6 +805,43 @@ static void free_upgrade_file_flags(s_upgrade_file_flags* flags)
   }
   flags->return_url = NULL;
   flags->incremental_update = false;
+}
+
+
+
+
+/* This routine is a quick hack to work out if the default bootblock has
+already been written to. It reads the BOOTBLOCK_WRITTEN tag and if it has a
+value of non-0 then it returns false. Unfortunatenly to do this it has to
+read the default bootblock from NVRAM, a wasteful procedure. */
+
+static bool has_default_bootblock_been_written(void)
+{
+  int error;
+  bool return_value = true;
+  sc_bootblock_data_struct* default_bootblock = NULL;
+
+  default_bootblock = (sc_bootblock_data_struct*)rmalloc(sizeof(sc_bootblock_data_struct), "Default bootblock");
+  initialise_sc_bootblock_data_struct(default_bootblock);
+  error = read_bootblock_from_nvram(default_bootblock, "BootBlockDefault");
+  if (error <= 0)
+  {
+    dprintf(("", "has_default_bootblock_been_written(): Error %d whilst reading default Bootblock\n", error));
+  }
+  else
+  {
+    int nci_tag_number = return_struct_position_from_ncitag_number(NCIBootblockWrittenTag, default_bootblock);
+    dprintf(("", "has_default_bootblock_been_written(): Tag has length %d and value of %s\n", default_bootblock->tag_cache->tag[nci_tag_number].bytes, default_bootblock->tag_cache->tag[nci_tag_number].val));
+    if (default_bootblock->tag_cache->tag[nci_tag_number].bytes > 0 && strcmp(default_bootblock->tag_cache->tag[nci_tag_number].val, "0") == 0)
+    {
+      dprintf(("", "has_default_bootblock_been_written(): Bootblock tag has not yet been written to.\n"));
+      return_value = false;
+    }
+  }
+  free_sc_bootblock_data_struct(default_bootblock);
+  rmfree((unsigned char*)default_bootblock);
+
+  return (return_value);
 }
 
 

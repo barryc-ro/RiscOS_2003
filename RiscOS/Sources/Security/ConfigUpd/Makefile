@@ -109,6 +109,7 @@ resources:
         TokenCheck LocalRes:Messages
         ${MKDIR} ${RESDIR}.${COMPONENT}
         ${CP} LocalRes:* ${RESDIR}.${COMPONENT}.* ${CPFLAGS}
+        ${CP} Test.* ${RESDIR}.${COMPONENT}.* ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
 
