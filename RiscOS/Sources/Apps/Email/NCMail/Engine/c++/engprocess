@@ -41,7 +41,7 @@
 Account *POPaccount, *SMTPaccount;
 Mailbox *inbox;
 SendQMailbox *outbox;
-bool newmail = false, reprocess = false;
+bool newmail = false, reprocess = false, processpending;
 
 void ProcessDone(bool changed);
 
@@ -82,7 +82,7 @@ ELib_rcode POPAccountDisconnect(void)
     popprocessstate.disconnectobj = new MBoxOpCB_disconnect((MBoxCBHandlerFn) MBoxCallback, (void *) pop);
     return POPaccount->Disconnect(popprocessstate.disconnectobj);
   }
-  else if (state & DISCONNECT)
+  else /* if (state & DISCONNECT) */
     popprocessstate.context = disconnected;
 
   return ELIB_COMPLETED;
@@ -98,7 +98,7 @@ ELib_rcode SMTPAccountDisconnect(void)
     smtpprocessstate.disconnectobj = new MBoxOpCB_disconnect((MBoxCBHandlerFn) MBoxCallback, (void *) smtp);
     return SMTPaccount->Disconnect(smtpprocessstate.disconnectobj);
   }
-  else if (state & DISCONNECT)
+  else /* if (state & DISCONNECT) */
     smtpprocessstate.context = disconnected;
 
   return ELIB_COMPLETED;
@@ -578,44 +578,57 @@ void DoPOPProcess(void)
       RemoveObj((MBoxOpCB**) &popprocessstate.connectobj);
       popstatus = acctconnected;
 
-      if (state & RETRIEVEMSG)
-      {
-        state &= ~PROCESSPOP;
-        retrievestate.context = readytoretrieve;
-      }
+      if (state & MARKDELETE)
+        popprocessstate.context = readytoexpunge;
+
       else
       {
         popprocessstate.context = idle;
-        markstate.context = idle;
-        popprocessstate.expungeobj = new MBoxOpCB_expunge((MBoxCBHandlerFn) MBoxCallback, (void *) pop);
-        rc = inbox->Expunge(popprocessstate.expungeobj);
-        dprintf(("Eng", "Expunging POP mailbox, rc=%d\n",rc));
+        popprocessstate.processobj = new MBoxOpCB_process((MBoxCBHandlerFn) MBoxCallback, (void *) pop);
+        rc = inbox->Process(popprocessstate.processobj);
+        dprintf(("Eng", "Processing POP mailbox, rc=%d\n",rc));
 
         if (rc < 0)
         {
-          ourmboxin->flags |= MBOXINCOMPLETE;
-          popprocessstate.context = readytoprocess;
+          if (state & RETRIEVEMSG)
+          {
+            state &= ~PROCESSPOP;
+            retrievestate.context = readytoretrieve;
+          }
+          else
+          {
+            statusret.rc = rc;
+            popprocessstate.context = processfailure;
+          }
         }
       }
 
       break;
 
-    case readytoprocess :
+    case readytoexpunge :
 
-      dprintf(("Eng", "POP context = readytoprocess\n"));
-      if (popprocessstate.expungeobj)
-        popprocessstate.changed = popprocessstate.expungeobj->mailbox_changed;
-      RemoveObj((MBoxOpCB**) &popprocessstate.expungeobj);
-
+      dprintf(("Eng", "POP context = readytoexpunge\n"));
+      if (popprocessstate.processobj)
+        popprocessstate.changed = popprocessstate.processobj->mailbox_changed;
+      RemoveObj((MBoxOpCB**) &popprocessstate.processobj);
       popprocessstate.context = idle;
-      popprocessstate.processobj = new MBoxOpCB_process((MBoxCBHandlerFn) MBoxCallback, (void *) pop);
-      rc = inbox->Process(popprocessstate.processobj);
-      dprintf(("Eng", "Processing POP mailbox, rc=%d\n",rc));
+      markstate.context = idle;
+      popprocessstate.expungeobj = new MBoxOpCB_expunge((MBoxCBHandlerFn) MBoxCallback, (void *) pop);
+      rc = inbox->Expunge(popprocessstate.expungeobj);
+      dprintf(("Eng", "Expunging POP mailbox, rc=%d\n",rc));
 
       if (rc < 0)
       {
-        statusret.rc = rc;
-        popprocessstate.context = processfailure;
+        if (state & RETRIEVEMSG)
+        {
+          state &= ~PROCESSPOP;
+          retrievestate.context = readytoretrieve;
+        }
+        else
+        {
+          ourmboxin->flags |= MBOXINCOMPLETE;
+          popprocessstate.context = done;
+        }
       }
 
       break;
@@ -675,16 +688,33 @@ void DoPOPProcess(void)
 
       break;
 
+    case expunged :
+
+      dprintf(("Eng", "POP context = expunged\n"));
+      /* only set changed if Process hasn't already set it */
+      if ((popprocessstate.expungeobj) && (!popprocessstate.changed))
+        popprocessstate.changed = popprocessstate.expungeobj->mailbox_changed;
+      RemoveObj((MBoxOpCB**) &popprocessstate.expungeobj);
+
+      dprintf(("Eng", "Mailbox has %schanged\n",(popprocessstate.changed) ? "" : "not "));
+      if (state & RETRIEVEMSG)
+      {
+        state &= ~PROCESSPOP;
+        retrievestate.context = readytoretrieve;
+        if (popprocessstate.changed)
+          processpending = true;
+        else
+          StartReconnectCount();
+      }
+
+      else
+        popprocessstate.context = done;
+
+      break;
+      
     case done :
 
       dprintf(("Eng", "POP context = done\n"));
-      /* only set changed if expunge hasn't already set it */
-      if ((popprocessstate.processobj) && (!popprocessstate.changed))
-        popprocessstate.changed = popprocessstate.processobj->mailbox_changed;
-      RemoveObj((MBoxOpCB**) &popprocessstate.processobj);
-      popprocessstate.context = idle;
-
-      dprintf(("Eng", "Mailbox has %schanged\n",(popprocessstate.changed) ? "" : "not "));
       if (popprocessstate.changed)
       {
         popprocessstate.getnumobj = new MBoxOpCB_getnummsgs((MBoxCBHandlerFn) MBoxCallback, (void *) pop);
@@ -936,35 +966,27 @@ void DoMark(void)
           }
           else
           {
-            markstate.setobj = new MBoxOpCB_setflags((MBoxCBHandlerFn) MBoxCallback, 0);
-
             markstate.msg = msg;
-            rc = msg->mboxobj->SetFlags(markstate.setobj, Message::Delete, Message::Set);
-            if (rc < 0)
-            {
-              /* mailbox has signalled an error in marking */
-              dprintf(("Eng", "***ERROR*** Error calling SetFlags, rc=%d\n",rc));
-              markstate.ret.rc = rc;
-              markstate.context = markfailure;
-            }
+            markstate.context = marking;
           }
         }
       }
-      
-      else
-      {
-        /* mark as read process */
 
-        markstate.setobj = new MBoxOpCB_setflags((MBoxCBHandlerFn) MBoxCallback, 0);
-        markstate.context = idle;
-        rc = markstate.msg->mboxobj->SetFlags(markstate.setobj, Message::Read, Message::Set);
-        if (rc < 0)
-        {
-          /* mailbox has signalled an error in marking */
-          dprintf(("Eng", "Error calling SetFlags, rc=%d\n",rc));
-          markstate.context = markfailure;
-          markstate.ret.rc = rc;
-        }
+      else
+        markstate.context = marking;
+
+      break;
+
+    case marking :
+
+      markstate.setobj = new MBoxOpCB_setflags((MBoxCBHandlerFn) MBoxCallback, 0);
+      rc = markstate.msg->mboxobj->SetFlags(markstate.setobj, (state & MARKDELETE) ? Message::Delete : Message::Read, Message::Set);
+      if (rc < 0)
+      {
+        /* mailbox has signalled an error in marking */
+        dprintf(("Eng", "***ERROR*** Error calling SetFlags, rc=%d\n",rc));
+        markstate.ret.rc = rc;
+        markstate.context = markfailure;
       }
 
       break;
@@ -1009,9 +1031,6 @@ void DoMark(void)
     
       break;
     }
-    case readytodisplay :
-
-      break;
 
   }
 
