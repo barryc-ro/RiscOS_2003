@@ -74,7 +74,8 @@ BOOL isp_dialup_user_request = FALSE;		/* } isp_dialup_redial_needed to cause a 
 /* local flags that trigger a dialup when time() is connection->RetryTime */
 static BOOL isp_dialup_redial_needed = FALSE;      /* this should only be cleared when the complete send/receive cycle has happened */
 static BOOL isp_dialup_watermark_reached = FALSE;  /* this can be cleared after each complete document has been sent */
-
+                                                   /*>>>RCM says rename this, as it is set when a documents RequestTX flag is set*/
+                                                   /*>>>    ie when watermark reached or scan complete and document should be sent immediatly*/
 
 BOOL user_request_cancel_fax = FALSE;
 
@@ -84,14 +85,15 @@ BOOL user_request_cancel_fax = FALSE;
 
 struct
 {
-    int use;	/* initialised to -1 meaning rest of structure un-initialised */
-	int errors_before; 
+    int using_now;      /* -1=dormant, 0..(ISP_LIST_SIZE-1) if active */
+    int use_next;	/* initialised to -1 meaning rest of structure un-initialised */
+	int errors_before;
     PhoneConnection Connection[ISP_LIST_SIZE];
     char           *PhoneNumber[ISP_LIST_SIZE];
 
 
 }
-isp_dialup = { -1 };
+isp_dialup = { -1, -1 };
 
 
 
@@ -206,16 +208,10 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 
 									/*int documentId = NewDocumentId();*/
 					                interactive = (strcmp(messageData->data.lx_sq_new_document.number, setup_configuredNAN) == 0);
-#if 1
-		{
-			char buffer[256];
-			sprintf(buffer, "NAN is '%s'", setup_configuredNAN);
-			LogFileIF_Message(buffer);
 
-			sprintf(buffer, "Configured fax number is '%s'", setup_fax_number);
-			LogFileIF_Message(buffer);
-		}
-#endif
+                                    LogFileIF_show_string(LOG_DEBUG, "Configured NAN", setup_configuredNAN);
+			                        LogFileIF_show_string(LOG_DEBUG, "Configured fax number", setup_fax_number);
+
 									/* treat empty number as setup_configuredNAN */
 									if (messageData->data.lx_sq_new_document.number[0] == '\0')
 										interactive = TRUE;
@@ -651,12 +647,14 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 								    	}
 								    }
 #if SUPPORT_EMAIL
-								    if (email_flag == TRUE)
+								    if ((email_flag == TRUE) && (isp_dialup.use_next >= 0) && (isp_dialup.use_next < ISP_LIST_SIZE))
 								    {
 					                	SetupIF_Read_Phone_Config(); /*>>>will do for now*/
 					                	SetupIF_Read_Email_Config(); /*>>>will do for now*/
+
+                                        isp_dialup.using_now = isp_dialup.use_next;
 #if SUPPORT_ADDRESSBOOK
-										numconvert_internal_to_display(isp_dialup.PhoneNumber[isp_dialup.use],  /* in - internal format */
+										numconvert_internal_to_display(isp_dialup.PhoneNumber[isp_dialup.using_now],  /* in - internal format */
 										                               show_number,                             /* out - display format */
 										                               sizeof(show_number),
 										                               setup_international_access_code,		/* ip:	International prefix, eg "00" */
@@ -665,7 +663,7 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 										                               setup_fax_area_code                  /* ac:	Area code, e.g. "1223" */
 										                              );
 
-								    	numconvert_internal_to_dial(isp_dialup.PhoneNumber[isp_dialup.use],	/* in - internal format */
+								    	numconvert_internal_to_dial(isp_dialup.PhoneNumber[isp_dialup.using_now],	/* in - internal format */
 								    	                            dial_number,        				    /* out - dialler format */
 								    	                            sizeof(dial_number),
 					                                                setup__tonepulse,                     	/* pulse/tone */
@@ -678,8 +676,8 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 					                                                setup_fax_area_code                     /* ac:	Area code, e.g. "1223" */
 					                                               );
 #else
-                                        strcpy(show_number, isp_dialup.PhoneNumber[isp_dialup.use]);
-					                	strcpy(dial_number, isp_dialup.PhoneNumber[isp_dialup.use]);
+                                        strcpy(show_number, isp_dialup.PhoneNumber[isp_dialup.using_now]);
+					                	strcpy(dial_number, isp_dialup.PhoneNumber[isp_dialup.using_now]);
 #endif
 
 					                	isp_dialup.errors_before = 0;
@@ -711,7 +709,7 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 										}
 										/* no need to call Create_Originator_File() as MimeIF builds that data into email headers */
 										/*REPORT: ISPDial<number>*/
-										Log_TxConnecting(RouteISP, &isp_dialup.Connection[isp_dialup.use], show_number);
+										Log_TxConnecting(RouteISP, &isp_dialup.Connection[isp_dialup.using_now], show_number);
 
 										nextstate = txISPCONNECTING;
 								    }
@@ -816,16 +814,19 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 
 							case RX_SQ_SENDING_PAGE:
 							    {
+									messageDataBlock *sendMessage;
 #if 0
 	/*>>>SQ_SC_SENDING_PAGE is a better name than SQ_SC_SENDING_FAX???*/
-									messageDataBlock *sendMessage;
 
 									/* poke animation */
 									StateKicker_SendMessage(Screen_StateMachine, SQ_SC_SENDING_PAGE, &sendMessage);
-								    sendMessage->data.sq_sc_sending_page.pid = transmit_document->ProcessId;
+								    sendMessage->data.sq_sc_sending_page.pid     = transmit_document->ProcessId;
+								    sendMessage->data.sq_sc_sending_page.sending = transmit_document->SendCount + 1;
 #else
 									/* poke animation */
-									StateKicker_SendMessage(Screen_StateMachine, SQ_SC_SENDING_FAX, NULL);
+									StateKicker_SendMessage(Screen_StateMachine, SQ_SC_SENDING_FAX, &sendMessage);
+									sendMessage->data.sq_sc_sending_fax.pid     = transmit_document->ProcessId;
+									sendMessage->data.sq_sc_sending_fax.sending = transmit_document->SendCount + 1;
 #endif
 								}
 								break;
@@ -910,7 +911,7 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 							/* Error: unable to connect to ISP */
 							case RX_SQ_ERROR:
 								Screen_ReportError("Title_RX_SQ_ERROR", messageData);
-								Log_TxConnectingError(RouteISP, &isp_dialup.Connection[isp_dialup.use], messageData);
+								Log_TxConnectingError(RouteISP, &isp_dialup.Connection[isp_dialup.using_now], messageData);
 								isp_dialup.errors_before += 1;
 								/* we may get more errors before RX_SQ_GOING_IDLE */
 								break;
@@ -918,13 +919,14 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 							case RX_SQ_GOING_IDLE:
 								/* the send has just completed (ie there is was an error) */
 								/* count a failed dialup, calculate when the next attempt should be */
-								Log_TxConnectingFailed(RouteISP, &isp_dialup.Connection[isp_dialup.use]);
+								Log_TxConnectingFailed(RouteISP, &isp_dialup.Connection[isp_dialup.using_now]);
+								isp_dialup.using_now = -1;    /* dormant */
 	                    		nextstate = txIDLE;
-/*>>>is this correct, given that we start a receive next?*/
 								break;
 
                             case RX_SQ_CONNECTED:
-					            Log_TxConnected(RouteISP, &isp_dialup.Connection[isp_dialup.use]);	/* log successful connection to ISP */
+					            Log_TxConnected(RouteISP, &isp_dialup.Connection[isp_dialup.using_now]);	/* log successful connection to ISP */
+					            isp_dialup.use_next = -1;   /* if call fails now, reset retry counters, retry with first number */ 
 								nextstate = txISPCONNECTED;
 								break;
 						}
@@ -1004,16 +1006,16 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 #endif
 								Screen_ReportError("Title_RX_SQ_ERROR", messageData);
 								if (transmit_document)
-									Log_TxConnectedErrorSendingDoc(RouteISP, &isp_dialup.Connection[isp_dialup.use], messageData, transmit_document);
+									Log_TxConnectedErrorSendingDoc(RouteISP, &isp_dialup.Connection[isp_dialup.using_now], messageData, transmit_document);
 								else
 									Log_TxConnectedError(RouteISP, messageData);
 								break;
 
 							case RX_SQ_GOING_IDLE:
-								/* the send has just completed */
+								/* the send (if any) and retrieve (if any) has just completed */
 	                    		nextstate = txIDLE;
-/*>>>is this correct, given that we start a receive next?*/
-								Log_TxDisconnected(RouteISP, &isp_dialup.Connection[isp_dialup.use]);
+								Log_TxDisconnected(RouteISP, &isp_dialup.Connection[isp_dialup.using_now]);
+								isp_dialup.using_now = -1; /* dormant */
 								break;
 
                         }
@@ -1093,7 +1095,7 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
 				    	sendMessage->data.this_document.pid = encoding_document->ProcessId;
 				    	sendMessage->data.this_document.loText = 1;
 				    	sendMessage->data.this_document.hiText = 0;
-				    	sendMessage->data.this_document.loPage = 1;
+				    	sendMessage->data.this_document.loPage = encoding_document->SendCount + 1;
 				    	sendMessage->data.this_document.hiPage = encoding_document->ScanCount;
 				    	sendMessage->data.this_document.pageStream = (encoding_document->ScanState != ScanCOMPLETE);
 						strcpy(sendMessage->data.this_document.directory, encoding_document->Directory);
@@ -1156,7 +1158,7 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
  * The following procedures allow EnoteIF, LogFileIF and PrintQ (return receipt)
  * to add a new document to the SendQ.
  *
- *  SendQ_ExtIF_NewDocument      - create a new document (with email address)
+ *  SendQ_ExtIF_NewDocument      - create a new document (with email address and flags: hardcopy_required, request_receipt)
  *  SendQ_ExtIF_Subject          - add email subject field
  *  SendQ_ExtIF_FileComplete     - a page has been added to it
  *  SendQ_ExtIF_FileTake         - move given file into document
@@ -1176,10 +1178,9 @@ extern void SendQ_MessageHandler(int messageNumber, messageDataBlock *messageDat
  *
  * Returns: document pid (non-zero) and document directory name on success
  *
- *
  * Returns: zero on failure
  */
-extern unsigned int SendQ_ExtIF_NewDocument(char *p_directory, const char *email_address, BOOL hardcopy_required, BOOL request_receipt)
+extern unsigned int SendQ_ExtIF_NewDocument(char *p_directory, const char *email_realname, const char *email_address, BOOL hardcopy_required, BOOL request_receipt)
 {
     Document document;
 	
@@ -1192,7 +1193,13 @@ extern unsigned int SendQ_ExtIF_NewDocument(char *p_directory, const char *email
 			{
 				document->ScanState = ScanRUNNING;	/* in progress */
 
-				strcpy(document->AddressRecord.EmailAddress, email_address);
+                /* email realname and address (if any) become ContactName and EmailAddress */
+                if (email_realname)
+                    strcpy(document->AddressRecord.ContactName, email_realname);
+
+                if (email_address)
+				    strcpy(document->AddressRecord.EmailAddress, email_address);
+
 				document->SendRoute = RouteISP;
 				document->AddressRecord.SearchFlags = document->AddressRecord.OneShotFlags = 0;
                 document->HardCopyRequired = hardcopy_required;
@@ -1244,7 +1251,10 @@ extern void SendQ_ExtIF_FileTake(unsigned int destination_pid, const char *sourc
 }
 
 
-extern void SendQ_ExtIF_DocumentComplete(unsigned int pid)
+/*
+ *
+ */
+extern void SendQ_ExtIF_DocumentComplete(unsigned int pid, BOOL request_tx)
 {
 	Document document;
 
@@ -1257,10 +1267,10 @@ extern void SendQ_ExtIF_DocumentComplete(unsigned int pid)
         if (document->AddressRecord.EmailAddress[0] == '\0')
             document->Cancelled = TRUE;
 
-		/*>>>do we set TxRequest???*/
-#if 1
-		document->RequestTx = 1;				/* requesting */
-#endif
+        if (request_tx)
+        {
+            document->RequestTx = 1;				/* requesting */
+        }
 	}
 }
 
@@ -1599,7 +1609,7 @@ static void Log_TxConnected(enum _SendRoute route, PhoneConnection *connection)
 
 		/*>>>Report connection to ISP*/
 		/*REPORT <connection->TimeConnect> Connected to ISP*/
-	    LogFileIF_Message("Connected OK");
+	    LogFileIF_show(LOG_VERBOSE, "Connected OK");
 	}
 }
 
@@ -1716,7 +1726,7 @@ static void Log_TxSendDocument(enum _SendRoute route, Document document)
     {
         time_t now = time(NULL);
 
-        document->Connection.TimeDial    = isp_dialup.Connection[isp_dialup.use].TimeDial;  /* do we care? */
+        document->Connection.TimeDial    = isp_dialup.Connection[isp_dialup.using_now].TimeDial;  /* do we care? */
         document->Connection.TimeConnect = now;
         document->Connection.TimeEnd     = now;
     }
@@ -2020,7 +2030,7 @@ extern void SendQ_QueueWalker(BOOL isp_unavailable)
 				            			break;
 
 				            		case RouteISP:
-				            			/* don't use connection_impossible(RouteISP, &isp_dialup.Connection[isp_dialup.use] as our   */
+				            			/* don't use connection_impossible(RouteISP, &isp_dialup.Connection[isp_dialup.use_next] as our   */
 				            			/* caller uses it and always leaves structure isp_dialup looking as if connection would work */
 										if (isp_unavailable)
 				            			{
@@ -2110,7 +2120,7 @@ static void SendQ_NextDocument(BOOL *p_email_flag, Document *p_document)
 {
 
 	if (isp_dialup_timer_request || isp_dialup_user_request ||
-	    ((isp_dialup_redial_needed || isp_dialup_watermark_reached) && connection_requested_now(RouteISP, &isp_dialup.Connection[isp_dialup.use]))
+	    ((isp_dialup_redial_needed || isp_dialup_watermark_reached) && connection_requested_now(RouteISP, &isp_dialup.Connection[isp_dialup.use_next]))
 	   )
 	{
 		*p_email_flag = TRUE;
@@ -2311,6 +2321,36 @@ extern BOOL SendQ_Page_ClassTypeSize(unsigned int pid, unsigned int pageNum,
 
 
 /*
+ * Return the current scan count for a document
+ *
+ * This routine is valid for both streaming and non-streaming document sends.
+ *
+ * Used by RemXfer to querry the current highest page number
+ * that it can send whilst streaming.
+ *
+ * In:
+ *   Process Id of document
+ *
+ * Out:
+ *  =0 - document not found or no pages scanned
+ *  >0 - number of complete pages scanned (and hence highest page
+ *       available to be sent
+ */
+extern unsigned int SendQ_QuerryTx_hiPage(unsigned int pid)
+{
+    Document document;
+
+    if ((document = document_from_pid(pid)) != NULL)
+    {
+        return(document->ScanCount);
+    }
+
+    return(0);
+}
+
+
+
+/*
  * Examine the SendQ plus various flags to determine
  * whether a document send or email retrieve should
  * be attempted.
@@ -2319,69 +2359,71 @@ extern void SendQ_TickerHandler(void)
 {
 	BOOL isp_unavailable = FALSE;	/* optomistic arn't we */
 
-   	if (isp_dialup.use <= -1)
-   	{
-   		/* initialise ISP PhoneNumbers & RetryLimits etc */
-   		int i;
-   		time_t now = time(NULL);
-   		
-   		for (i = 0; i < ISP_LIST_SIZE; i++)
-   		{
-   		    switch (i)
-   		    {
-   		        case 0:
-                    isp_dialup.Connection[i].RetryLimit = &setup_ISP_PrimaryRedialCount;
-                    isp_dialup.PhoneNumber[i] = setup_ISP_PrimaryPhoneNumber;
-                    break;
-
-                case 1:
-                    isp_dialup.Connection[i].RetryLimit = &setup_ISP_SecondaryRedialCount;
-                    isp_dialup.PhoneNumber[i] = setup_ISP_SecondaryPhoneNumber;
-                    break;
-
-                default:
-                    /* SHOULD NEVER HAPPEN - ISP_LIST_SIZE is 2 ie 0..1 are valid indexices */
-                    isp_dialup.Connection[i].RetryLimit = 0;    /* don't dial */
-                    isp_dialup.PhoneNumber[i] = setup_ISP_PrimaryPhoneNumber;
-                    break;
-            }
-   			isp_dialup.Connection[i].RetryCount = 0;	/* haven't tried this number yet */
-   			isp_dialup.Connection[i].RetryTime  = now;
-        }
-
-        /* start with the Primary route (first number) */
-		isp_dialup.use = 0;
-	}
-
-    /*
-     * If the current number is viable, stay with it,
-     * else consider the next number available.
-     */
-    while (isp_dialup.use < ISP_LIST_SIZE)
+    if (isp_dialup.using_now <= -1)
     {
-		if (connection_impossible(RouteISP, &isp_dialup.Connection[isp_dialup.use]))
-		{
-			/* try alternate ISP phone number */
-			isp_dialup.use++;
-	    }
-	    else
-	    {
-	        /* we have a number we can use */
-	        break;
-	    }
-    }
+        /* not accessing ISP at the moment */
     
-	if (isp_dialup.use >= ISP_LIST_SIZE)
-	{
-		/* unable to contact ISP by any of the known routes */
-		/*>>>send by direct routing if available */
-		isp_dialup.use = -1;	/* initialisation required */
-		isp_unavailable = TRUE;
-	}
-
+       	if (isp_dialup.use_next <= -1)
+       	{
+       		/* initialise ISP PhoneNumbers, RetryCounts & RetryLimits etc */
+       		int i;
+       		time_t now = time(NULL);
+       		
+       		for (i = 0; i < ISP_LIST_SIZE; i++)
+       		{
+       		    switch (i)
+       		    {
+                    default:
+                        /* SHOULD NEVER HAPPEN - ISP_LIST_SIZE is 2 ie 0..1 are valid indexices */
+                        /* drop into... */
+       		        case 0:
+                        isp_dialup.Connection[i].RetryLimit = &setup_ISP_PrimaryRedialCount;
+                        isp_dialup.PhoneNumber[i] = setup_ISP_PrimaryPhoneNumber;
+                        break;
+    
+                    case 1:
+                        isp_dialup.Connection[i].RetryLimit = &setup_ISP_SecondaryRedialCount;
+                        isp_dialup.PhoneNumber[i] = setup_ISP_SecondaryPhoneNumber;
+                        break;
+                }
+       			isp_dialup.Connection[i].RetryCount = 0;	/* haven't tried this number yet */
+       			isp_dialup.Connection[i].RetryTime  = now;
+            }
+    
+            /* start with the Primary route (first number) */
+    		isp_dialup.use_next = 0;
+    	}
+    
+        /*
+         * If the first number is viable, stay with it,
+         * else consider the next number available.
+         */
+        isp_dialup.use_next = 0;    /* The user may increment the retry count for the first number while we are waiting to try */
+                                    /* the second number. Zeroing this index, allows us to try the first number again. */
+        while (isp_dialup.use_next < ISP_LIST_SIZE)
+        {
+    		if (connection_impossible(RouteISP, &isp_dialup.Connection[isp_dialup.use_next]))
+    		{
+    			/* try alternate ISP phone number */
+    			isp_dialup.use_next++;
+    	    }
+    	    else
+    	    {
+    	        /* we have a number we can use */
+    	        break;
+    	    }
+        }
+        
+    	if (isp_dialup.use_next >= ISP_LIST_SIZE)
+    	{
+    		/* unable to contact ISP by any of the known routes - send by direct routing if available */
+    		isp_dialup.use_next = -1;	/* initialisation required */
+    		isp_unavailable = TRUE;
+    	}
+    }
 #if 0
     /* redundent */
-	if (isp_dialup.use == -1)
+	if (isp_dialup.use_next == -1)
     	isp_unavailable = TRUE;	/* despite our best efforts, the ISP is un-useable */
 #endif
 
@@ -2394,9 +2436,12 @@ extern void SendQ_TickerHandler(void)
 
 		if (isp_unavailable)
 		{
-		    /* incase a direct fax was rerouted as email */
+            /* MUST clear all the ISP_DIALUP_xxxx flags that SendQ_NextDocument looks at */    
+            isp_dialup_timer_request = FALSE;
 			isp_dialup_user_request = FALSE;
-			isp_dialup_watermark_reached = FALSE;	
+
+            isp_dialup_redial_needed = FALSE;
+            isp_dialup_watermark_reached = FALSE;   /* incase a direct fax was rerouted as email */   
 		}
 		
         SendQ_NextDocument(&email_flag, &send_next);
@@ -2650,7 +2695,8 @@ extern int readvareval(const char *name)
   _kernel_swi(OS_ReadVarVal, &r, &r);
 
   /* Check validity of result and set return value to 0 if invalid (R2 = 4 if valid) */
-  if (r.r[2] = 0) result = 0;
+  if (r.r[2] == 0)
+    result = 0;
 
   return (result);
 }
@@ -2738,6 +2784,7 @@ void test_emailsend(void)
 }
 #endif
 #endif
+
 
 /* end of SendQ.c */
 
