@@ -20,6 +20,7 @@ RM      = remove
 WIPE    = -wipe
 CD	= dir
 CHMOD	= access
+STRIP   = -stripdepnd
 
 AFLAGS     = -depend !Depend ${THROWBACK} -Stamp -quit
 CFLAGS     = -c -Wa -depend !Depend ${THROWBACK} -ff ${INCLUDES} ${OPTS}
@@ -84,21 +85,27 @@ all: ${TARGET}
 # RISC OS ROM build rules:
 #
 
-resources: ${TARGET}
-	${MKDIR} ${RESDIR}.^.Apps.${APP}
-        ${CP} ${TARGET} ${RESDIR}.^.Apps.${APP}.${COMPONENT} ${CPFLAGS}
-        ${CP} Resources.* ${RESDIR}.^.Apps.${APP}.* ${CPFLAGS}
+install:   ${TARGET}
+	${MKDIR} ${APP}
+        ${CP} ${TARGET} ${APP}.${COMPONENT} ${CPFLAGS}
+        ${CP} Resources.* ${APP}.* ${CPFLAGS}
         @echo ${COMPONENT}: all complete
+        
+        
 
 clean:
-        ${WIPE} o.*       ${WFLAGS}
-        ${WIPE} aof.*       ${WFLAGS}
+        ${WIPE} o.*        ${WFLAGS}
+        ${WIPE} aof.*      ${WFLAGS}
         ${WIPE} rm.*       ${WFLAGS}
-        ${WIPE} install.* ${WFLAGS}
+        ${WIPE} install.*  ${WFLAGS}
+        ${WIPE} ${APP}     ${WFLAGS}
         ${RM} ${TARGET}
+        ${RM} ${APP}
         ${RM} o
         ${RM} aof
         ${RM} rm
+        @echo Stripping dependencies from makefile...
+        ${STRIP}
         @echo ${COMPONENT}: cleaned
 
 dirs:
