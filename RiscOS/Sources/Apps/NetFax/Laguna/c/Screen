@@ -6,7 +6,6 @@
  * Started 22 July 1997
  */
 
-//#define DEBUGLIB 1
 
 #include "StdTypes.h"
 
@@ -17,6 +16,7 @@
 #include <stddef.h>
 #include "kernel.h"
 
+#include "FileOps.h"
 #include "PageList.h"
 #include "StateKicker.h"
 #include "Screen.h"
@@ -28,7 +28,7 @@
 #include "AddrBookIF.h"
 #include "QuStruct.h"
 #include "SendQ.h"
-#include "FileOps.h"
+#include "LogFileIF.h"
 
 
 /* Screen component priorities (lowest at top) */
@@ -46,6 +46,7 @@ typedef enum s1_priority { /* Status line 1 */
 
    S1_RM_SC_INCOMING,
    S1_PQ_SC_NEW_DOCUMENT,
+   S1_PQ_SC_DOCUMENT_DETAILS,
    S1_PQ_SC_NEW_PAGE,
    S1_PQ_SC_PAGE_COMPLETE,
    S1_PQ_SC_DOCUMENT_COMPLETE,
@@ -88,6 +89,7 @@ typedef enum s2_priority { /* Status line 2 */
 
    S2_RM_SC_INCOMING,
    S2_PQ_SC_NEW_DOCUMENT,
+   S2_PQ_SC_DOCUMENT_DETAILS,
    S2_PQ_SC_NEW_PAGE,
    S2_PQ_SC_PAGE_COMPLETE,
    S2_PQ_SC_DOCUMENT_COMPLETE,
@@ -127,6 +129,7 @@ typedef enum t_priority { /* Title */
 
    T_RM_SC_INCOMING,
 //   T_PQ_SC_NEW_DOCUMENT,
+//   T_PQ_SC_DOCUMENT_DETAILS,
 //   T_PQ_SC_NEW_PAGE,
 //   T_PQ_SC_PAGE_COMPLETE,
    T_PQ_SC_DOCUMENT_COMPLETE,
@@ -166,6 +169,7 @@ typedef enum a_priority { /* Animation */
 
    A_RM_SC_INCOMING,
    A_PQ_SC_NEW_DOCUMENT,
+//   A_PQ_SC_DOCUMENT_DETAILS,
    A_PQ_SC_NEW_PAGE,
    A_PQ_SC_PAGE_COMPLETE,
    A_PQ_SC_DOCUMENT_COMPLETE,
@@ -198,6 +202,7 @@ typedef enum a_priority { /* Animation */
 
 #define Screen_Remote_Modem 0
 #define Screen_Local_Modem 1
+#define Screen_Refresh 2
 #define Screen_Anim_Left 1
 #define Screen_Anim_Middle 2
 #define Screen_Anim_Right 4
@@ -206,13 +211,23 @@ typedef enum a_priority { /* Animation */
 #define Screen_BufSize 32 /* Big enough for "TokTooLong" and "decide" and stringified int */
 
 static int Screen_pri_s[2][2] = {0}; /* Priority for status lines [line][port] */
-static char Screen_tok_s[2][2][Screen_BufSize]; /* Token for status lines [line][port][token] */
+static char Screen_tok_s[2][2][Screen_BufSize] = {0}; /* Token for status lines [line][port][token] */
 static int Screen_pri_t[2] = {0}; /* Priority for title [port] */
-static char Screen_tok_t[2][Screen_BufSize]; /* Token for title [port][token] */
+static char Screen_tok_t[2][Screen_BufSize] = {"Home_Title", "Home_Title"}; /* Token for title [port][token] */
 static int Screen_pri_a[2] = {0}; /* Priority for animation [port] */
-static char Screen_tok_a[2][Screen_BufSize]; /* Token for animation [port][token] */
+static char Screen_tok_a[2][Screen_BufSize] = {"idle", "idle"}; /* Token for animation [port][token] */
 static char Screen_flags_a[2] = {0}; /* Flags for animation [port] */
-static char Screen_param_s[2][2][2][Screen_BufSize]; /* Token for status lines [line][port][parnum][param] */
+static char Screen_param_s[2][2][2][Screen_BufSize] = {0}; /* Params for status lines [line][port][parnum][param] */
+
+#if 1    /* New window stacking scheme - JBeranek */
+  #define IconHigh_Start    0x4e702
+  static WimpCaret stored_caret;
+#if 1
+/*RCM*/
+int popup_count = 0;
+BOOL restore_to_saved_caret = FALSE;
+#endif
+#endif
 
 /*
  * Stuff for squirrelling information away
@@ -237,6 +252,7 @@ static SQTx sqtx, sqtx2;
 typedef struct sqrx {
    int currpage;
    Context context;
+   char contact[Screen_BufSize];
 } SQRx;
 
 static SQRx sqrx, sqrx2;
@@ -263,7 +279,8 @@ extern int global_routing;
 
 
 #define SPRITE_QUERRYROUTE "decide_0"
-#define SPRITE_REPORTERROR "decide_0"	/*>>>will do until John sells us a better one*/
+#define SPRITE_QUERRYCANCEL "decide_0"
+#define SPRITE_REPORTERROR "confirm_1"
 
 
 enum _HL_RC { OK = 0, Error_MultipleNAN };
@@ -272,6 +289,7 @@ typedef enum _HL_RC HL_RC;
 extern int HWM_Check(void); /*eh??*/
 
 static void Screen_AnswerRoute(int DecideAction, int UserChoice);
+static void Screen_AnswerCancel(int DecideAction, int UserChoice);
 
 /*
  * Action messages from LocXfer and RemXfer
@@ -476,7 +494,6 @@ This blows up!
         /* if the processId supplied matches that for the scan, we are streaming */
         /* about to try a SQ_RX_DIAL_FAX or SQ_RX_DIAL_DAYTONA, stash the number and contact name away */
         /* then wait for RM_SC_DIALLING before triggering animations */
-        //@@ Huh, why wait?
         case SQ_SC_CONTEXT_DIRECT:
             /* Lodge context, so that RemModem can report dial progress without knowing who we are calling */
             sqtx.context = Direct;
@@ -565,7 +582,10 @@ This blows up!
             ui_deregister_animation(1);
             ui_deregister_animation(2);
             ui_deregister_animation(4);
+            ui_home_set_sprite(2, "blank_c");
             ui_home_set_sprite(2, "dialerror");
+            ui_home_set_sprite(4, "blank_a");
+            ui_home_set_sprite(4, "dialerror_r");
             ui_home_set_status(1, "TxFax_NoCon", NULL, NULL);
             ui_home_set_status(2, "TxFax_Try", NULL, NULL);
             break;
@@ -584,7 +604,7 @@ This blows up!
                                   , sqtx.contact, sqtx.number);
             }
             Screen_set_status2 (Screen_Remote_Modem, S2_SQ_SC_SENDING_DOCUMENT, "Send_Starting", "", "");
-            sqtx2.currpage = 1;
+            /*sqtx2.currpage = 1; RCM says not needed as SQ_SC_SENDING_FAX now has page number*/
 #if 0
             switch (sqtx.mode)
             {
@@ -611,6 +631,7 @@ This blows up!
 //x            ui_register_animation(4, "faxtx");
             Screen_set_animation (Screen_Remote_Modem, A_SQ_SC_SENDING_FAX, "faxtx", Screen_Anim_Right);
 //x            ui_home_set_status(1, "TxFax_Name", NULL, NULL);    /*>>>supply number/name*/
+            sqtx2.currpage = messageData->data.sq_sc_sending_fax.sending;
         {
             char number[10]; /* Big enough for 2^32! */
             sprintf (number, "%i", sqtx2.currpage);
@@ -632,7 +653,7 @@ This blows up!
             sprintf (number, "%i", sqtx2.currpage);
             Screen_set_status2 (Screen_Remote_Modem, S2_SQ_SC_PAGE_SENT, "Send_PageSent", number, "");
         }
-            ++sqtx2.currpage;
+            /*++sqtx2.currpage; RCM says not needed as SQ_SC_SENDING_FAX now has page number*/
             break;
 
         case SQ_SC_SENDING_EMAIL:
@@ -709,6 +730,7 @@ This blows up!
 
 /* PrintQ - Incoming call */
         case RM_SC_INCOMING:
+            LogFileIF_show(LOG_DEBUG, "RM_SC_INCOMING");
             sqrx.context = Direct;
 #if 0
             pqrx.pid = 0;    /* NYA */
@@ -732,6 +754,7 @@ This blows up!
             break;
 
         case PQ_SC_NEW_DOCUMENT:
+            LogFileIF_show(LOG_DEBUG, "PQ_SC_NEW_DOCUMENT");
             sqrx.currpage = 1;
 #if 0
             pqrx.pid = messageData->data.new_document_dir.pid;
@@ -753,9 +776,14 @@ This blows up!
 
         /* issued for incoming email and zmodem documents */
         case PQ_SC_DOCUMENT_DETAILS:
+            LogFileIF_show(LOG_DEBUG, "PQ_SC_DOCUMENT_DETAILS");
+//y all this is new
+            strxcpy (sqrx.contact, messageData->data.pq_sc_document_details.ContactName, sizeof (sqrx.contact));
+            Screen_set_status1 (Screen_Remote_Modem, S1_PQ_SC_DOCUMENT_DETAILS, "Recv_Details", sqrx.contact, "");
             break;
 
         case PQ_SC_NEW_PAGE:
+            LogFileIF_show(LOG_DEBUG, "PQ_SC_NEW_PAGE");
 //x            ui_deregister_animation(1);
 //x            ui_deregister_animation(2);
 //x            ui_home_set_sprite(2, "idle_1"); /* look to the right */
@@ -773,12 +801,13 @@ This blows up!
             break;
 
         case PQ_SC_PAGE_COMPLETE:
+            LogFileIF_show(LOG_DEBUG, "PQ_SC_PAGE_COMPLETE");
 //x            ui_deregister_animation(1);
 //x            ui_deregister_animation(2);
 //x            ui_home_set_sprite(2, "idle_1"); /* look to the right */
 //x            ui_register_animation(4, "faxrx");
-            if (sqrx.context == Direct)
-               Screen_set_animation (Screen_Remote_Modem, A_PQ_SC_PAGE_COMPLETE, "faxrx", Screen_Anim_Right);
+//y Why reissue this?            if (sqrx.context == Direct)
+//y               Screen_set_animation (Screen_Remote_Modem, A_PQ_SC_PAGE_COMPLETE, "faxrx", Screen_Anim_Right);
 //x            ui_home_set_status(1, "RxFax_Name", NULL, NULL);    /*>>>supply number*/
 //x            ui_home_set_status(2, NULL, NULL, NULL); //@@changed to put page num in 2
             sqrx.currpage = messageData->data.sq_sc_document_complete.ScanCount;
@@ -792,6 +821,7 @@ This blows up!
             break;
 
         case PQ_SC_DOCUMENT_COMPLETE:
+            LogFileIF_show(LOG_DEBUG, "PQ_SC_DOCUMENT_COMPLETE");
 //x            ui_window_title("RxFax_Title"); /* Paranoia */
 //yup it's paranoia            Screen_set_title (Screen_Remote_Modem, T_PQ_SC_DOCUMENT_COMPLETE, "RxFax_Title");
 //x            ui_deregister_animation(1);
@@ -883,7 +913,7 @@ This blows up!
 
         case PQ_SC_CONTEXT:
 //y all this is new
-            sqrx2.currpage = 1;
+            /*sqrx2.currpage = 1; RCM says not needed as PQ_SC_PRINTING_FAX now has page number*/
             Screen_set_animation (Screen_Local_Modem, A_PQ_SC_CONTEXT, "wake", Screen_Anim_Middle);
             Screen_set_title (Screen_Local_Modem, T_PQ_SC_CONTEXT, "Print_Title"); //y was Printing_Title and was in PQ_SC_PRINTING_FAX
             Screen_set_status2 (Screen_Local_Modem, S2_PQ_SC_CONTEXT, "Print_OffHook", "", "");
@@ -900,6 +930,7 @@ This blows up!
 //x            ui_home_set_status(1, NULL, NULL, NULL);
 //x            ui_home_set_status(2, NULL, NULL, NULL); //@@Changed to say something on line 2
             Screen_set_status1 (Screen_Local_Modem, S1_PQ_SC_PRINTING_FAX, "", "", "");
+            sqrx2.currpage = messageData->data.pq_sc_printing_fax.sending;
         {
             char number[10]; /* Big enough for 2^32! */
             sprintf (number, "%i", sqrx2.currpage);
@@ -917,7 +948,7 @@ This blows up!
             sprintf (number, "%i", sqrx2.currpage);
             Screen_set_status2 (Screen_Local_Modem, S2_PQ_SC_PAGE_SENT, "Print_PageSent", number, "");
         }
-            ++sqrx2.currpage;
+            /*++sqrx2.currpage; RCM says not needed as PQ_SC_PRINTING_FAX now has page number*/
             break;
 
         case PQ_SC_PRINTING_COMPLETE:
@@ -971,27 +1002,128 @@ This blows up!
     }
 }
 
-#if SUPPORT_UI
+
+void popup_prepare(void)
+{
+    if (popup_count == 0)
+    {
+        int stack_pos;
+
+        ui_stack_position(&stack_pos);
+
+        restore_to_saved_caret = (stack_pos != -1);
+
+        if (restore_to_saved_caret)
+        {
+            wimp_get_caret_position (&stored_caret);
+        }
+    }
+
+    popup_count++;
+}
+
+
+void popup_close(void)
+{
+    popup_count--;
+
+    ui_open_window(1, Home_WindowHandle, NULL, "Home_SK1", "Home_SK2", "Home_SK3", "Home_SK4", -1);
+
+    /* If our display was closed ... */
+    if (restore_to_saved_caret)
+    {
+        /* ... go to the back, and start IconHigh in the right window */
+        ui_stack_back();
+
+        _swix(IconHigh_Start, _INR(0,2), 8, stored_caret.window_handle, stored_caret.icon_handle);
+    }
+
+    Screen_set_title (Screen_Refresh, T_IDLE, "");
+}
+
+
+static struct
+{
+    int state;
+    char title_tag[128];
+    _kernel_oserror error;
+} ReportError = {0};
+
+
 static void error_finished(int ConfirmAction)
 {
 	switch (ConfirmAction)
 	{
 		case ConfirmAction_Finished:
-			/*>>>> must reopen our original window */
-    		ui_open_window(1, Home_WindowHandle, NULL, "Home_SK1", "Home_SK2", "Home_SK3", "Home_SK4", -1);
-    		break;
+            popup_close();
+            break;
     }
 }
 
-
+#if SUPPORT_UI
 
 extern void Screen_ReportError(char *Title_Tag, messageDataBlock *messageData)
 {
-    ErrorLight_On();
-    ui_confirm_window(Title_Tag, "Line1_ERROR", messageData->data.os_error.err.errmess, "", SPRITE_REPORTERROR, error_finished);
-}
+#if 1
+    /* new code to look up error numbers in messages file */
+    const char *message_text = NULL;
+  /*const*/ char *generic_token = NULL;
+    char specific_token[256];
 
+    specific_token[0] = '\0';
+
+    switch (messageData->data.os_error.ctx)
+    {
+        case ctx_Dialler_RCError:
+            sprintf(specific_token, "DI%03d", messageData->data.os_error.rc);
+            generic_token = "DIrc";
+            break;
+
+        case ctx_Fax_RCError:
+            sprintf(specific_token, "FX%03d", messageData->data.os_error.rc);
+            generic_token = "FXrc";
+            break;
+    }
+
+    /* look up the error eg lookup_message_token("FX003") */
+    if (specific_token[0] != '\0')
+        message_text = lookup_message_token(&message_block, specific_token);
+
+    /* if not found,   lookup_message_token("FXrc") */
+    if ((message_text == NULL) && (generic_token != NULL))
+        message_text = lookup_message_token(&message_block, generic_token);
+
+    /* now print the text into the error buffer */
+    /* message_text may be "Fax error (%d)" */
+    if (message_text)
+        sprintf(messageData->data.os_error.err.errmess, message_text, messageData->data.os_error.rc);
+
+#endif
+    ErrorLight_On();
+
+#if 1   /* New window stacking scheme - JBeranek */
+    popup_prepare();
+    ui_confirm_window(Title_Tag, "Line1_ERROR", messageData->data.os_error.err.errmess, "", SPRITE_REPORTERROR, error_finished);
+#else  /* Old scheme */
+    /* MUST check ui_currently_open_win, so as not to pull the rug out from under !Address, !Setup etc */
+    if (ui_currently_open_win == Home_WindowHandle)
+    {
+        ReportError.state = 2;  /*open*/
+        ui_confirm_window(Title_Tag, "Line1_ERROR", messageData->data.os_error.err.errmess, "", SPRITE_REPORTERROR, error_finished);
+    }
+    else
+    {
+        ReportError.state = 1;  /*pending*/
+
+        /* stash the error box title and error message for later reporting */
+        ReportError.title_tag[0] = '\0';
+        strncat(ReportError.title_tag, Title_Tag, sizeof(ReportError.title_tag));
+        ReportError.error = messageData->data.os_error.err;
+    }
+#endif
+}
 #else
+
 
 // Lookup_Message_Token
 // uses MessageTrans to translate message tokens
@@ -1012,7 +1144,8 @@ void Lookup_Message_Token(char* Token,char* result)
   _kernel_oserror *e;
   
   	//now open 'messages' file
-	//had to use SWIs 'cos I couldn't get Neil's message library to work!
+	//had to use SWIs 'cos I couldn't get Neil's message library to work
+	//because it uses the message block created by toolbox.
 	//ne	  
 	r.r[0] = (int)desc;
 	r.r[1] = (int)"<Daytona$Dir>.Messages";
@@ -1039,6 +1172,8 @@ void Lookup_Message_Token(char* Token,char* result)
 	  }       
 }
 
+
+
 // Fax_ReportError must cope with the following errors:
 //
 //	RX_PQ_ERROR/RX_SQ_ERROR (printing/sending to remote fax)
@@ -1058,6 +1193,7 @@ extern void Fax_ReportError(int local_error,char *Title_Tag, messageDataBlock *m
   char directory[256];
   char filename[256];
   
+  //char text[256] = NULL;
   char text[256] = NULL;
   char temp[256];
   
@@ -1115,7 +1251,7 @@ extern void Fax_ReportError(int local_error,char *Title_Tag, messageDataBlock *m
 	  fprintf(fp,"-");
 	  fprintf(fp,"\n\n");
 	  //lookup title - e.g 'error sending document'  		    
-	  Lookup_Message_Token(Title_Tag,text);       
+	  Lookup_Message_Token(Title_Tag,text);
 	  fprintf(fp,"\t%s\n\n",text);
 	  //now look up error: what type is it?
 	  if(!strncmp(messageData->data.os_error.err.errmess,"Fax",3))
@@ -1171,23 +1307,6 @@ extern void Fax_ReportError(int local_error,char *Title_Tag, messageDataBlock *m
 }
 
 
-//This function is called instead of FaxReportError when there is a problem with the local fax machine
-//flash & BEEP!
-extern void Local_ReportError(void)
-{
- _kernel_swi_regs  r;
-  
-  dprintf((NULL,"Local fax error"));
-  ErrorLight_On();
- 
-  r.r[0] = 0;
-  r.r[1] = DaytonaHW_LED_Active;
-  r.r[2] = 200;    /* on for two seconds */
-  r.r[3] = 25;
-  r.r[4] = 25;
-  _kernel_swi(DaytonaHW_LED, &r, &r);
-  
-}
 #endif
 
 /*
@@ -1204,11 +1323,27 @@ static struct
     unsigned int ProcessId;
 } QuerryRoute = { 0 };
 
-
-extern void Screen_QuerryRoute(unsigned int ProcessId)
+extern void Screen_QuerryRoute(unsigned int ProcessId, const char *ContactName)
 {
+#if 1   /* New window stacking scheme - JBeranek */
+    int stack_pos;
+#endif
+
     QuerryRoute.ProcessId = ProcessId;
 
+#if 1   /* New window stacking scheme - JBeranek */
+    popup_prepare();
+
+#if 1   /* Print the recipient in the confirm wondow - SForrest */
+    if (ContactName[0] == '\0') /* If there's a contact name then specify the receipient in the confirm window */
+        ui_decide_window("DelOpt_Title", "DelOpt_SK1", "DelOpt_SK2", "outfax_1", "", "", SPRITE_QUERRYROUTE, Screen_AnswerRoute, 0);
+    else
+        ui_decide_window("DelOpt_Title", "DelOpt_SK1", "DelOpt_SK2", "outfax_2", (char*)ContactName, "", SPRITE_QUERRYROUTE, Screen_AnswerRoute, 0);
+#else
+    ui_decide_window("DelOpt_Title", "DelOpt_SK1", "DelOpt_SK2", "outfax_1", "", "", SPRITE_QUERRYROUTE, Screen_AnswerRoute, 0);    /* pass 0 as default */
+#endif
+
+#else   /* Old scheme */
     if (ui_currently_open_win == Home_WindowHandle)
     {
         ui_decide_window("DelOpt_Title", "DelOpt_SK1", "DelOpt_SK2", "outfax_1", "", "", SPRITE_QUERRYROUTE, Screen_AnswerRoute, 0);    /* pass 0 as default */
@@ -1218,6 +1353,7 @@ extern void Screen_QuerryRoute(unsigned int ProcessId)
     {
         QuerryRoute.state = 1; /*pending*/
     }
+#endif
 }
 
 
@@ -1234,47 +1370,139 @@ static void Screen_AnswerRoute(int DecideAction, int UserChoice)
 	switch (DecideAction)
 	{
 		case DecideAction_Finished:
+		    {
+                messageDataBlock *sendMessage;
+
+                popup_close();
+
+                StateKicker_SendMessage(SendQ_MessageHandler, SC_SQ_ROUTING, &sendMessage);
+                sendMessage->data.deliveryoptions.pid = QuerryRoute.ProcessId;
+
+                switch (UserChoice)
+                {
+                    case 1:
+                        sendMessage->data.deliveryoptions.route = RouteDIRECT;
+                        break;
+
+                    case 2:
+                        sendMessage->data.deliveryoptions.route = RouteISP;
+                        break;
+
+                    default:
+                        sendMessage->data.deliveryoptions.route = RouteUNKNOWN;
+                        break;
+                }
+            }
+            break;
+        }
+
+      /* deliver the queued messages */
+      while (StateKicker_Deliver() > 1)
+          /* null statement */;
+}
+
+
+/*
+ * Ask user to confirm that a fax should be cancelled
+ *
+ * result messages are sent by Screen_AnswerCancel below
+ */
+static struct
+{
+    int state;
+    unsigned int ProcessId;
+} QuerryCancel = { 0 };
+
+extern void Screen_QuerryCancel(unsigned int ProcessId)
+{
+#if 1   /* New window stacking scheme - JBeranek */
+    int stack_pos;
+#endif
+
+    QuerryCancel.ProcessId = ProcessId;
+
+#if 1   /* New window stacking scheme - JBeranek */
+    popup_prepare();
+    /* N.B.  The following sqtx.contact works because a fax can ONLY be cancelled when scanning */
+    ui_decide_window("Cancel_Send_Title", "Yes", "No", *sqtx.contact ? "Cancel_Send_2" : "Cancel_Send_1", sqtx.contact, "", SPRITE_QUERRYCANCEL, Screen_AnswerCancel, 0);   /* pass 0 as default */
+#else   /* Old scheme */
+    if (ui_currently_open_win == Home_WindowHandle)
+    {
+        /* N.B.  The following sqtx.contact works because a fax can ONLY be cancelled when scanning */
+        ui_decide_window("Cancel_Send_Title", "Yes", "No",*sqtx.contact ? "Cancel_Send_2" : "Cancel_Send_1" , sqtx.contact, "", SPRITE_QUERRYCANCEL, Screen_AnswerCancel, 0);   /* pass 0 as default */
+        QuerryCancel.state = 2;    /*open*/
+    }
+    else
+    {
+        QuerryCancel.state = 1; /*pending*/
+    }
+#endif
+}
+
+
+/*
+ * return user choice to SendQ_MessageHandler
+ *
+ * sends message:
+ *   SC_SQ_CANCEL_CONFIRMED - soft-key 1 pressed
+ *   SC_SQ_CANCEL_REVOKED   - soft-key 2 pressed
+ *   SC_SQ_CANCEL_REVOKED   - timeout
+ */
+static void Screen_AnswerCancel(int DecideAction, int UserChoice)
+{
+	switch (DecideAction)
+	{
+		case DecideAction_Finished:
 			{
-			    messageDataBlock *sendMessage;
-			
-			    QuerryRoute.state = 0;    /*closed*/
+                messageDataBlock *sendMessage;
 
-			    /*>>>> must reopen our original window */
-			    ui_open_window(1, Home_WindowHandle, NULL, "Home_SK1", "Home_SK2", "Home_SK3", "Home_SK4", -1);
-			
-			
-			    StateKicker_SendMessage(SendQ_MessageHandler, SC_SQ_ROUTING, &sendMessage);
-			    sendMessage->data.deliveryoptions.pid = QuerryRoute.ProcessId;
-			
-			    switch (UserChoice)
-			    {
-			        case 1:
-			            sendMessage->data.deliveryoptions.route = RouteDIRECT;
-			            break;
-			
-			        case 2:
-			            sendMessage->data.deliveryoptions.route = RouteISP;
-			            break;
-			
-			        default:
-			            sendMessage->data.deliveryoptions.route = RouteUNKNOWN;
-			            break;
-			    }
-			}
-			break;
-	}
+                popup_close();
 
+                switch (UserChoice)
+                {
+                    case 1:
+                        StateKicker_SendMessage(SendQ_MessageHandler, SC_SQ_CANCEL_CONFIRMED, &sendMessage);
+                        sendMessage->data.sc_sq_cancel_confirmed.pid = QuerryCancel.ProcessId;
+                        break;
 
-
+                    case 2:
+                    default:
+                        StateKicker_SendMessage(SendQ_MessageHandler, SC_SQ_CANCEL_REVOKED, &sendMessage);
+                        sendMessage->data.sc_sq_cancel_revoked.pid = QuerryCancel.ProcessId;
+                        break;
+                }
+            }
+            break;
+    }
 
     /* deliver the queued messages */
     while (StateKicker_Deliver() > 1)
         /* null statement */;
 }
 
+
 extern void Screen_Force_Open(void)
 {
-/*QuerryRoute.state = 1;*/
+#if 1   /* New window stacking scheme - JBeranek */
+#if 1
+    if (popup_count == 0)
+    {
+        /* not already displaying a popup, so open the home window */
+        ui_open_window(1, Home_WindowHandle, NULL, "Home_SK1", "Home_SK2", "Home_SK3", "Home_SK4", -1);
+        Screen_set_title (Screen_Refresh, T_IDLE, "");
+    }
+  /*else                                                  */
+
+  /*    already displaying a popup, to leave it on screen */
+
+    restore_to_saved_caret = FALSE; /* we've just been told we are the front window */
+#else
+     ui_open_window(1, Home_WindowHandle, NULL, "Home_SK1", "Home_SK2", "Home_SK3", "Home_SK4", -1);
+     Screen_set_title (Screen_Refresh, T_IDLE, "");
+#endif
+#else
+         /* open any pending DeliveryOptions or CancelFax windows, else open the home screen */
+
     if (QuerryRoute.state == 1 /*pending*/)
     {
         ui_decide_window("DelOpt_Title", "DelOpt_SK1", "DelOpt_SK2", "outfax_1", "", "", SPRITE_QUERRYROUTE, Screen_AnswerRoute, 0);    /* pass 0 as default */
@@ -1282,8 +1510,28 @@ extern void Screen_Force_Open(void)
     }
     else
     {
-         ui_open_window(1, Home_WindowHandle, NULL, "Home_SK1", "Home_SK2", "Home_SK3", "Home_SK4", -1);
+        if (QuerryCancel.state == 1 /*pending*/)
+        {
+            /* N.B.  The following sqtx.contact works because a fax can ONLY be cancelled when scanning */
+            ui_decide_window("Cancel_Send_Title", "Yes", "No", *sqtx.contact ? "Cancel_Send_2" : "Cancel_Send_1", sqtx.contact, "", SPRITE_QUERRYCANCEL, Screen_AnswerCancel, 0);   /* pass 0 as default */
+            QuerryCancel.state = 2;    /*open*/
+        }
+        else
+        {
+            if (ReportError.state == 1 /*pending*/)
+            {
+                ErrorLight_On();    /* repeat the error light */
+                ui_confirm_window(ReportError.title_tag, "Line1_ERROR", ReportError.error.errmess, "", SPRITE_REPORTERROR, error_finished);
+                ReportError.state = 2;  /*open*/
+            }
+            else
+            {
+                ui_open_window(1, Home_WindowHandle, NULL, "Home_SK1", "Home_SK2", "Home_SK3", "Home_SK4", -1);
+                Screen_set_title (Screen_Refresh, T_IDLE, "");
+            }
+        }
     }
+#endif
 }
 
 #if 1
@@ -1293,10 +1541,9 @@ extern void Screen_Force_Open(void)
  */
 extern void Screen_LocalFax_NotConnected(void)
 {
-  
-#if SUPPORT_UI    
+#if SUPPORT_UI  
 //@@ TBD new scheme!
-      ui_deregister_animation(10);
+      ui_deregister_animation(10); //@@ This looks wrong to me (10 = 8 + 2; maybe better as 4 + 2)
       ui_register_animation(1, "plug");
 
       if (ui_currently_open_win != Home_WindowHandle)
@@ -1308,7 +1555,10 @@ extern void Screen_LocalFax_NotConnected(void)
         ui_window_title("Title_8_0");
         ui_window_softkeys("Okay", NULL, NULL, NULL);
       }
+      ui_home_set_sprite(2, "blank_c");
       ui_home_set_sprite(2, "exclaim");
+      ui_home_set_sprite(4, "blank_a");
+      ui_home_set_sprite(4, "exclaim_r");
       ui_home_set_status(1, "Line1_8_0", NULL, NULL);
       ui_home_set_status(2, "Line2_8_0", NULL, NULL);
 #else
@@ -1325,10 +1575,10 @@ extern void Screen_LocalFax_NotConnected(void)
       _kernel_swi(DaytonaHW_LED, &r, &r);
       
       Buzzer_On(200);   
-#endif         
+#endif              
 }
+#endif
 
-#endif      
 extern void ErrorLight_On(void)
 {
     _kernel_swi_regs  r;
@@ -1387,15 +1637,15 @@ static void Screen_set_title (const int port, const T_Priority pri, const char *
 {
    int winner;
 
-   Screen_pri_t[port] = pri;
-   if (strlen (token) >= sizeof (Screen_tok_t[0]))
-      strcpy (Screen_tok_t[port], "TokTooLong");
-   else
-      strcpy (Screen_tok_t[port], token);
+   if (port != Screen_Refresh) {
+      Screen_pri_t[port] = pri;
+      if (strlen (token) >= sizeof (Screen_tok_t[0]))
+         strcpy (Screen_tok_t[port], "TokTooLong");
+      else
+         strcpy (Screen_tok_t[port], token);
+   }
 
    winner = Screen_pri_t[0] < Screen_pri_t[1];
-   if (Screen_pri_t[winner] == 0 && Screen_tok_t[winner][0] == '\0')
-      winner = 1 - winner; /* If both priorities are zero, try to pick port which has a defined title! */
    ui_window_title (Screen_tok_t[winner]);
 }
 
@@ -1405,8 +1655,8 @@ static void Screen_set_anim_side (const int side, const int interfere, /*const i
       winner = Screen_flags_a[Screen_Local_Modem] & side
                ? Screen_Local_Modem : Screen_Remote_Modem;
 
-   if (Screen_flags_a[winner] & side /* Check where there is any active anim on this side */
-      && (Screen_flags_a[winner] & Screen_Anim_Middle) == 0) { /* If it has a middle it has no side */
+   if (Screen_flags_a[winner] & side) { /* Check where there is any active anim on this side */
+//      && (Screen_flags_a[winner] & Screen_Anim_Middle) == 0) { /* If it has a middle it has no side */
 
       ui_register_animation (side | Screen_flags_a[winner] & Screen_Anim_OneShot/*oneshot*/, Screen_tok_a[winner]);
 
@@ -1414,7 +1664,7 @@ static void Screen_set_anim_side (const int side, const int interfere, /*const i
 
       /* No active anim on this side */
       ui_deregister_animation (side);
-      ui_home_set_sprite(side, "");
+//no longer need to do this as don't overlap      ui_home_set_sprite(side, "");
 
    }
 }
@@ -1432,6 +1682,8 @@ static void Screen_set_animation (const int port, const A_Priority pri, const ch
 
    if (strlen (token) >= sizeof (Screen_tok_a[0]))
       strcpy (Screen_tok_a[port], "decide");
+   else if (*token == '\0')
+      strcpy (Screen_tok_a[port], "idle");
    else
       strcpy (Screen_tok_a[port], token);
 
@@ -1514,18 +1766,21 @@ static void Screen_set_animation (const int port, const A_Priority pri, const ch
 
          case Screen_Anim_Left:
 
+            /* Need to blank in case moving from bigger to smaller */
             ui_deregister_animation(Screen_Anim_Middle);
             ui_home_set_sprite(Screen_Anim_Middle, "idle_2");
             break;
 
          case Screen_Anim_Right:
 
+            /* Need to blank in case moving from bigger to smaller */
             ui_deregister_animation(Screen_Anim_Middle);
             ui_home_set_sprite(Screen_Anim_Middle, "idle_1");
             break;
 
          case Screen_Anim_Left | Screen_Anim_Right:
 
+            /* Need to blank in case moving from bigger to smaller */
             ui_deregister_animation(Screen_Anim_Middle);
             ui_home_set_sprite(Screen_Anim_Middle, "idle_0");
             break;
