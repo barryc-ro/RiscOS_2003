@@ -123,6 +123,20 @@
 ; 03-Nov-98  TMD  2.60		Put back VideoStats to how it was before I put in and removed AudioStats
 ; 04-Nov-98  TMD  2.61		Fix unknown SWI handler so Audio_Stats and Audio_SoundVolume don't barf, and
 ;				 reenable InitL64002OnModuleInit as that wasn't the problem.
+; 10-Nov-98  TMD  2.62		Fix bug in AudioDoStreamSync - might do syncing when in prefilling, or
+;				 might not do syncing when it should.
+; 11-Nov-98  TMD  2.63		Record start and end times for receiving audio data, and total audio bytes received.
+; 12-Nov-98  TMD  2.64		(Conditionally) increase audio-to-stream thresholds to 16K +/- 8K (including data received
+;				 but not yet delivered to L64002) instead of 4K +/- 1K.
+; 18-Nov-98  TMD  2.65		Read variables to determine audio prefill size and low/high water thresholds
+; 19-Nov-98  TMD  2.66		Timeout of audio packet header send, and count occurences of this.
+; 19-Nov-98  TMD  2.67		(Conditionally) check amount of space in audio channel buffer before sending PES packet header.
+; 25-Nov-98  TMD  2.68		Fix aspect ratio for reserved values, and initialise current value.
+; 26-Nov-98  TMD  2.69		Increase audio buffer free space allowance to 64 bytes for packet header stuffing.
+;				Record minimum and maximum delay between audio packets arriving.
+; 26-Nov-98  TMD  2.70		Record first time that audio played frame slow, and first packet header send timeout
+; 26-Nov-98  TMD  2.71		Restructure code that sends audio packet headers so can give up and try later.
+; 27-Nov-98  TMD  2.72		Removed some debugging code which is now obsolete.
 ;
 
 	LEADR	Module_LoadAddr
@@ -204,9 +218,6 @@ FudgeQSIF SETL	{TRUE}			; if image is SIF or lower resolution, scale to 2 x xres
 	GBLL	AudioSquawkFix1		; attempt to fix audio squawk problem by padding video packet headers to a
 AudioSquawkFix1 SETL {TRUE}		; multiple of 8 bytes.
 
-	GBLL	AudioSquawkFix2		; attempt to fix audio squawk problem by padding audio packet headers to a
-AudioSquawkFix2 SETL {TRUE}		; multiple of 8 bytes.
-
 	GBLL	AudioDebug
 AudioDebug SETL {FALSE}			; capture audio data to a memory block
 
@@ -218,6 +229,17 @@ CheckAspectRatio SETL {TRUE}		; adjust picture size to cope with 16:9 and 2.21:1
 
 	GBLL	InitL64002OnModuleInit
 InitL64002OnModuleInit SETL {FALSE}	; call InitL64002 to set screen to black on module initialisation
+
+	GBLL	AudioStats
+AudioStats SETL {TRUE}			; gather statistics on arrival of audio data
+
+	GBLL	BigAudioThresholds
+BigAudioThresholds SETL {TRUE}		; start with more audio data buffered, and use a larger threshold range
+
+	GBLL	CheckAudioFullnessForHeaders
+CheckAudioFullnessForHeaders SETL {TRUE} ; when sending audio PES header, check audio channel buffer to see
+					; if lots of room (shouldn't be necessary, since the data isn't going
+					; into the channel buffer)
 
 ; Structure of a PTS list entry
 
@@ -397,6 +419,19 @@ AudioBufferChecks	#	4	; number of checks on audio buffer fullness
 AudioDiscardedDataCount #	4	; number of bytes of audio data flushed out of audio channel buffer on last
 					;  MPEGVideo_ResetStream call, to be used to compute total audio discard on subsequent
 					;  MPEGAudio_ResetStream call. Reset to -1 on OpenStream or after MPEGAudio_ResetStream
+AudioPreFillSize	#	4	; amount of prefilling needed
+AudioBufferLowWaterMark	#	4	; if we have less than this, play audio slowly
+AudioBufferHighWaterMark #	4	; if we have more than this, play audio fast
+AudioPacketSendTimeouts	#	4	; number of times the code to send an audio packet header timed out
+
+ [ AudioStats
+AudioStartTime		#	4	; time when first data was received
+AudioLastTime		#	4	; time when last data was received
+AudioAmountReceived	#	4	; amount of audio data received
+AudioMaxTimeDifference	#	4	; maximum delay between one lot of audio data and next
+AudioTimeOffsetToFirstSlow #	4	; time offset from first audio data arriving to first audio slow frame
+ ]
+
  [ AllowSyncOnIFrames
 SyncMode		#	4	; 0 when syncing on I-frames disabled
 					; 1 when syncing on I-frames is enabled, but had no PTSs yet
@@ -541,12 +576,18 @@ MessageFile_Open  #	4
 Module_WorkspaceSize * :INDEX: @
 
 VideoPreFillSize	*	200*1024	; amount to send before starting - goes up to 224K for MPEG 2
-AudioPreFillSize	*	4096
+ [ BigAudioThresholds
+DefaultAudioBufferLowWaterMark	*	8*1024
+DefaultAudioBufferHighWaterMark *	24*1024
+DefaultAudioPreFillSize		*	16*1024
+ |
+DefaultAudioBufferLowWaterMark	*	3*1024
+DefaultAudioBufferHighWaterMark *	5*1024
+DefaultAudioPreFillSize		*	4*1024
+ ]
 
 ; The following are 1st guesses
 
-AudioBufferLowWaterMark *	&0C00		; 3 K
-AudioBufferHighWaterMark *	&1400		; 5 K
 AudioResyncRepeat *		10		; 10cs between successive attempts at going fast or slow
 
 	GBLL	debug
@@ -586,7 +627,7 @@ Mod_Title
 	=	"MPEG2Video", 0
 
 Mod_HelpStr
-	=	"MPEG2Video", TAB, "2.61 (04 Nov 1998)", 0
+	=	"MPEG2Video", TAB, "2.72 (27 Nov 1998)", 0
 	ALIGN
 
 Mod_SWITable
@@ -2243,6 +2284,10 @@ VideoOutputVarName
 	STR	r0, CurrentVerticalSize
 	MOV	r0, #0
 	STR	r0, CurrentTVFormat
+ [ CheckAspectRatio
+	MOV	r0, #2		; 4:3
+	STR	r0, CurrentAspectRatio
+ ]
 
 ; now read addresses of various buffer registers
 
@@ -2330,16 +2375,6 @@ VideoOutputVarName
 debug SETL {FALSE}
 
 ; **************************************************************************
-
-Delay	Entry "r0,r1"
-	MOV	r1, r0
-	SWI	XOS_ReadMonotonicTime
-	ADD	r1, r1, r0
-10
-	SWI	XOS_ReadMonotonicTime
-	CMP	r0, r1
-	BMI	%BT10
-	EXIT
 
  [ CountUnderruns
 VideoEnabledIRQs * IR_PictureStartCodeDetect :OR: IR_BeginVerticalBlank :OR: IR_BeginActiveVideo
@@ -3276,7 +3311,7 @@ SetupScreenMode Entry "r2-r7"
  [ CheckAspectRatio
 	ADR	r4, AspectRatios
 	CMP	r3, #5				; if outside range
-	MOVCS	r3, #1				; then pretend it's 4:3
+	MOVCS	r3, #2				; then pretend it's 4:3 (used to be erroneously 1)
 	LDR	r4, [r4, r3, LSL #2]		; get word with num (bits 15:0) den (bits 31:16)
 	MOV	r5, r4, LSR #16			; denominator
 	BIC	r4, r4, r5, LSL #16		; numerator
@@ -4895,6 +4930,24 @@ VideoInfo_Code Entry "r8"
 	LDR	r0, AudioSlows
 	DREG	r0, "AudioSlows = "
 
+ [ AudioStats
+	LDR	r0, AudioAmountReceived
+	DREG	r0, "Audio data received = "
+	LDR	r0, AudioStartTime
+	LDR	r1, AudioLastTime
+	SUB	r0, r1, r0
+	DREG	r0, "...in time "
+
+	LDR	r0, AudioMaxTimeDifference
+	DREG	r0, "Maximum time between audio packets = "
+
+        LDR	r0, AudioTimeOffsetToFirstSlow
+	DREG	r0, "Time offset to first audio slow = "
+ ]
+	LDR	r0, AudioPacketSendTimeouts
+	DREG	r0, "Number of timeouts on audio packet header sends = "
+
+
 	LDR	r0, VideoSkips
 	DREG	r0, "Video skips = "
 	LDR	r0, VideoRepeats
@@ -5477,6 +5530,7 @@ AudioOpenStream Entry "r1,r2, r11"
 	STR	r0, AudioMuted
 	STR	r0, DualMonoChannelSpecifier	; default (stereo)
 	STR	r0, AudioFlags			; default
+	STR	r0, AudioPacketSendTimeouts
 
 	MOV	r0, #-1
 	STR	r0, AudioDiscardedDataCount
@@ -5493,11 +5547,35 @@ AudioOpenStream Entry "r1,r2, r11"
 	LDRNE	r0, [r2, #AudioStructure_DualChannelSpecifier]
 	STRNE	r0, DualMonoChannelSpecifier	; override default
 50
+	MOV	r1, #&FFFFFFFF			; maximum value
+        ADR	r0, AudioBufferPreFillString
+	BL	ReadNumericVariable
+	LDRVS	r0, =DefaultAudioPreFillSize
+	STR	r0, AudioPreFillSize
+
+        ADR	r0, AudioBufferLowWaterMarkString
+	BL	ReadNumericVariable
+	LDRVS	r0, =DefaultAudioBufferLowWaterMark
+	STR	r0, AudioBufferLowWaterMark
+
+        ADR	r0, AudioBufferHighWaterMarkString
+	BL	ReadNumericVariable
+	LDRVS	r0, =DefaultAudioBufferHighWaterMark
+	STR	r0, AudioBufferHighWaterMark
+
 	BL	AudioReset
 
 	MOV	r0, r12
 	CLRV
 	EXIT
+
+AudioBufferPreFillString
+	=	"MPEG2$AudioBufferPreFill", 0
+AudioBufferLowWaterMarkString
+	=	"MPEG2$AudioBufferLowWaterMark", 0
+AudioBufferHighWaterMarkString
+	=	"MPEG2$AudioBufferHighWaterMark", 0
+	ALIGN
 
 ; **************************************************************************
 ;
@@ -5540,8 +5618,6 @@ AudioFullPackets Entry "r0,r11"
 	LDR	r4, [r0, #PacketDescriptor_FullLength]
 	TST	r1, #PacketDescriptorFlags_PTSValid
 
-  [ AudioSquawkFix2
-
 ; Bug 4-20 on the L64002 bug sheet describes something similar sounding to the audio squawk problem, albeit with
 ; serial input of data. It claims it only happens if the PES packet header is not a multiple of 8 bytes.
 ; So try padding audio packet headers (using MPEG2 PES packet header) to 16 bytes.
@@ -5578,35 +5654,6 @@ AudioFullPackets Entry "r0,r11"
 	MOV	r3, #&FF
 	BL	AudioSendDebug				; 2 further padding bytes
 	BL	AudioSendDebug
- |
-	ADDEQ	r4, r4, #1				; add on one for 0F byte if no PTS
-	ADDNE	r4, r4, #5				; add on five for PTS
-	MOV	r3, r4, LSR #8
-	BL	AudioSendDebug				; send hi byte of length
-	AND	r3, r4, #&FF
-	BL	AudioSendDebug				; send lo byte of length
-	MOVEQ	r3, #&0F				; no PTS, so send terminating code
-	BEQ	%FT30
-
-	LDR	r4, [r0, #PacketDescriptor_PTS]		; get bits 31..0 of PTS
-	LDR	r5, [r0, #PacketDescriptor_PTS+4]	; get bit 32 of PTS
-	MOV	r3, r4, LSR #29				; r3 = bits 31..29 in bits 2..0
-	ORR	r3, r3, r5, LSL #3			; r3 = bits 32..29 in bits 3..0
-	ORR	r3, r3, #&21				; OR in 2 in top nibble indicating PTS, and force bit 0 to 1 (marker)
-	BL	AudioSendDebug
-	MOV	r3, r4, LSR #22				; r3 = bits 29..22 in bits 7..0
-	BL	AudioSendDebug				; (only stores bottom 8 bits)
-	MOV	r3, r4, LSR #14				; r3 = bits 21..14 in bits 7..0
-	ORR	r3, r3, #1				; force bit 0 to 1 (marker)
-	BL	AudioSendDebug
-	MOV	r3, r4, LSR #7				; r3 = bits 14..7 in bits 7..0
-	BL	AudioSendDebug
-	MOV	r3, r4, LSL #1				; r3 = bits 6..0 in bits 7..1
-	ORR	r3, r3, #1
-30
-	BL	AudioSendDebug
- ]
-
 40
 	LDR	r0, AudioCaptureBlockLength
 	RSBS	r11, r0, #AudioCaptureBlockMaxLen	; bytes free
@@ -5637,12 +5684,36 @@ AudioFullPackets Entry "r0,r11"
 	TEQ	r0, #0					; if nothing on list
 	STREQ	r2, AudioPacketListHeadPtr		; then point head at new packets
 	STRNE	r2, [r0, #PacketDescriptor_Link]	; else tail!link = packet
+ [ AudioStats
+	SWI	XOS_ReadMonotonicTime			; read current time
+	LDR	lr, AudioStartTime			; if start time not yet recorded (0)
+	TEQ	lr, #0
+	STREQ	r0, AudioStartTime			; then first lot of audio data, so save start time
+	BEQ	%FT70
+	Push	"r0"					; save new lasttime
+	LDR	lr, AudioLastTime			; if not first, then calculate how long since last data
+	SUB	r0, r0, lr
+	LDR	lr, AudioMaxTimeDifference		; adjust max...
+	CMP	r0, lr
+	STRHI	r0, AudioMaxTimeDifference
+	Pull	"r0"
+70
+	STR	r0, AudioLastTime			; always store last time audio data received
+	LDR	lr, AudioAmountReceived			; load count of bytes received
+ ]
 80
+ [ AudioStats
+	LDR	r0, [r2, #PacketDescriptor_Length]	; for each packet, add length onto total count
+	ADD	lr, lr, r0
+ ]
 	LDR	r0, [r2, #PacketDescriptor_Link]	; go down list of packets to end
 	TEQ	r0, #0
 	MOVNE	r2, r0
 	BNE	%BT80
 
+ [ AudioStats
+	STR	lr, AudioAmountReceived			; save total bytes received
+ ]
 	STR	r2, AudioPacketListTailPtr		; store new tail pointer
 	Pull	"r0"
 	TEQP	r0, #0					; restore IRQ state
@@ -5881,6 +5952,12 @@ AudioReset Entry "r0"
 	STR	r0, AudioResyncDelay
 	STR	r0, AudioLastPTS +0			; zero LastPTS record
 	STR	r0, AudioLastPTS +4
+ [ AudioStats
+	STR	r0, AudioStartTime
+	STR	r0, AudioLastTime
+	STR	r0, AudioAmountReceived
+	STR	r0, AudioMaxTimeDifference
+ ]
 
  [ VetSCRValues
 	STR	r0, VetSCRState				; indicate awaiting first SCR
@@ -5895,7 +5972,9 @@ AudioReset Entry "r0"
 
 	MOV	r0, #-1			; set audio sample rate to unknown
 	STR	r0, AudioSampleRate
-
+ [ AudioStats
+	STR	r0, AudioTimeOffsetToFirstSlow
+ ]
 	MOV	r0, #&80000001		; indicate pre-buffering, but would otherwise be playing normal speed
 	STR	r0, AudioSpeedSetting
 
@@ -6233,8 +6312,15 @@ AudioDoStreamSync Entry "r0-r2"
 	EXIT	NE
 
 	LDR	r0, AudioSpeedSetting
+ [ {TRUE}
+; TMD fix bug 10-Nov-98 - LS is wrong since it is true if C=0 or Z=1, but carry not affected by
+; TEQ r0, #0, and we want the signed comparison anyway!
+	CMP	r0, #0				; if paused (0) or pre-filling (bit 31 set)
+	EXIT	LE				; then exit
+ |
 	TEQ	r0, #0				; if paused (0) or pre-filling (bit 31 set)
 	EXIT	LS				; then exit
+ ]
 
 	LDR	r0, AudioStreamFlags
 	TST	r0, #StreamFlags_SyncToStream	; if not syncing to stream
@@ -6247,17 +6333,23 @@ AudioDoStreamSync Entry "r0-r2"
 
 	BL	AudioGetBufferFullness		; returned in r2
 	STR	r2, LastAudioBufferFullness
+ [ BigAudioThresholds
+	LDR	lr, AudioAmountReceived
+	ADD	r2, r2, lr			; add on amount received
+	LDR	lr, AudioAmountSent
+	SUB	r2, r2, lr			; but take off what's already sent
+ ]
 	LDR	lr, AudioBufferChecks
 	ADD	lr, lr, #1
 	STR	lr, AudioBufferChecks
 
-	LDR	r1, =AudioBufferLowWaterMark
+	LDR	r1, AudioBufferLowWaterMark
 	CMP	r2, r1
 	MOVCC	r1, #AudioResyncRepeat-1
 	STRCC	r1, AudioResyncDelay
 	BLCC	AudioPlaySlowFrame
 
-	LDR	r1, =AudioBufferHighWaterMark
+	LDR	r1, AudioBufferHighWaterMark
 	CMP	r2, r1
 	MOVCS	r1, #AudioResyncRepeat-1
 	STRCS	r1, AudioResyncDelay
@@ -6300,6 +6392,16 @@ AudioPlaySlowFrame Entry "r0"
 	ORR	lr, lr, #I_bit
 	TEQP	lr, #0				; disable IRQs round access
 
+ [ AudioStats
+	LDR	r0, AudioTimeOffsetToFirstSlow
+	CMP	r0, #-1
+	BNE	%FT10
+	SWI	XOS_ReadMonotonicTime
+	LDR	lr, AudioStartTime
+	SUB	r0, r0, lr			; offset from time of first audio packet
+	STR	r0, AudioTimeOffsetToFirstSlow
+10
+ ]
 	ReadRegI r0, AudioTrickModes
 	AND	r0, r0, #AudioTrickModes_ValidBits :AND: :NOT: AudioTrickModes_PausePlayFastSlowBits
 	ORR	r0, r0, #AudioTrickModes_Slow
@@ -6320,120 +6422,131 @@ AudioPlaySlowFrame Entry "r0"
 ;
 
 AudioSendNewPacketIfNecessary Entry "r1-r5, r11"
-;	BL	CheckForSyncWord
-;	EXIT	NE
 	LDR	r1, [r0, #PacketDescriptor_Flags]
 	TST	r1, #PacketDescriptorFlags_MPEGStart	; is it start of an MPEG packet?
 	EXIT	EQ					; [no, so no packet header required, exit EQ => try to send data]
 
-	LDR	r11, L64002_Registers
+	TST	r1, #PacketDescriptorFlags_AudioPacketHeaderStuffing
+	BNE	%FT40
 
-	ReadReg	r2, Status0
-	TST	r2, #L64002_Status0_AudioChannelReady
-	BNE	%FT10					; [is some space free in buffer]
+; we've just come in to this packet, so prepare packet header for stuffing
 
-	CMP	pc, #0					; set NE, ie not OK to continue
-	EXIT
+; Bug 4-20 on the L64002 bug sheet describes something similar sounding to the audio squawk problem, albeit with
+; serial input of data. It claims it only happens if the PES packet header is not a multiple of 8 bytes.
+; So try padding audio packets to a multiple of 8 bytes.
+; Unfortunately MPEG 1 system stream format packet header stuffing bytes get discarded in the holding register and don't
+; make it into the system buffer, so we have to use MPEG 2 PES packet header instead.
+; This takes the form: 00 00 01 C0 lenhi lenlo flags1(80) flags2(00 if no PTS or 80 if PTS) hdrlen
+; followed by hdrlen bytes of flags and stuffing (not looked at by L64002)
+; in our case we set hdrlen to 7 then add either (5 PTS + 2 FF) or 7 FF
 
-10
-	LDR	r2, L64002_Audio_Data_Write
-	MOV	r3, #0
-	BL	AudioWaitAndSendByte			; send 1st byte of start code
-	BL	AudioWaitAndSendByte			; send 2nd byte of start code
-	MOV	r3, #1
-	BL	AudioWaitAndSendByte			; send 3rd byte of start code
-	MOV	r3, #&C0
-	BL	AudioWaitAndSendByte			; send 4th byte of start code
-	LDR	r4, [r0, #PacketDescriptor_FullLength]
+	MOV	lr, #&FFFFFF07
+	STR	lr, [r0, #PacketDescriptor_PTS+8]
+	MOV	lr, #&FFFFFFFF
+	STR	lr, [r0, #PacketDescriptor_PTS+12]
+	MOV	lr, #&00800000				; flags1 byte is 80, flags2 byte is 00 for no PTS
 	TST	r1, #PacketDescriptorFlags_PTSValid
+	STREQ	lr, [r0, #PacketDescriptor_PTS+4]	; no PTS
 	BEQ	%FT30
-	MOV	r3, pc
-	ORR	lr, r3, #I_bit
+
+	ADD	r4, r0, #PacketDescriptor_PTS
+	LDMIA	r4, {r4, r5}				; r4 = bits 31..0 of PTS; r5 = bit 32 of PTS
+	ORR	lr, lr, #&80000000			; if PTS then set flags2 byte to 80
+	STR	lr, [r0, #PacketDescriptor_PTS+4]	; store it *after* reading real PTS
+
+	MOV	lr, r4, LSR #29				; lr = bits 31..29 in bits 2..0
+	ORR	lr, lr, r5, LSL #3			; lr = bits 32..29 in bits 3..0
+	ORR	lr, lr, #&21				; OR in 2 in top nibble indicating PTS, and force bit 0 to 1 (marker)
+	STRB	lr, [r0, #PacketDescriptor_PTS+9]	; store in packet header block
+	MOV	lr, r4, LSR #22				; lr = bits 29..22 in bits 7..0
+	STRB	lr, [r0, #PacketDescriptor_PTS+10]	; (only stores bottom 8 bits)
+	MOV	lr, r4, LSR #14				; lr = bits 21..14 in bits 7..0
+	ORR	lr, lr, #1				; force bit 0 to 1 (marker)
+	STRB	lr, [r0, #PacketDescriptor_PTS+11]
+	MOV	lr, r4, LSR #7				; lr = bits 14..7 in bits 7..0
+	STRB	lr, [r0, #PacketDescriptor_PTS+12]
+	MOV	lr, r4, LSL #1				; lr = bits 6..0 in bits 7..1
+	ORR	lr, lr, #1
+	STRB	lr, [r0, #PacketDescriptor_PTS+13]
+
+	MOV	r5, pc
+	ORR	lr, r5, #I_bit
 	TEQP	lr, #0
 	LDR	lr, AudioPTSInCount			; increment count of PTS's coming in
 	ADD	lr, lr, #1
 	STR	lr, AudioPTSInCount
-	TEQP	r3, #0
+	TEQP	r5, #0
+
 30
- [ AudioSquawkFix2
+	LDR	lr, =&C0010000
+	STR	lr, [r0, #PacketDescriptor_PTS+0]	; audio packet start code
 
-; Bug 4-20 on the L64002 bug sheet describes something similar sounding to the audio squawk problem, albeit with
-; serial input of data. It claims it only happens if the PES packet header is not a multiple of 8 bytes.
-; So try padding audio packet headers (using MPEG2 PES packet header) to 16 bytes.
+	LDR	r4, [r0, #PacketDescriptor_FullLength]
+	ADD	r4, r4, #16-6				; add on length of new header, not including
+							; start code or packet length
+	MOV	lr, r4, LSR #8
+	STRB	lr, [r0, #PacketDescriptor_PTS+4]	; store len hi
+	STRB	r4, [r0, #PacketDescriptor_PTS+5]	; store len lo
 
-	ADD	r4, r4, #10				; add on ten for flags1, flags2, hdrlen, then either 7 pad or 5 PTS+2 pad
-	MOV	r3, r4, LSR #8
-	BL	AudioWaitAndSendByte			; send hi byte of length
-	AND	r3, r4, #&FF
-	BL	AudioWaitAndSendByte			; send lo byte of length
-	MOV	r3, #&80				; flags1 (&80)
-	BL	AudioWaitAndSendByte
-	MOVEQ	r3, #&00				; flags2 (&00 if no PTS, &80 if is)
-	BL	AudioWaitAndSendByte
-	MOV	r3, #7					; header len
-	BL	AudioWaitAndSendByte
+	ORR	r1, r1, #PacketDescriptorFlags_AudioPacketHeaderStuffing
+	STR	r1, [r0, #PacketDescriptor_Flags]	; indicate in middle of sending
+	MOV	r3, #16					; number of bytes to do
+	STR	r3, [r0, #PacketDescriptor_BSn]
 
-	MOVEQ	r3, #&FF				; pad with FF if no PTS
-	LDRNE	r4, [r0, #PacketDescriptor_PTS]		; get bits 31..0 of PTS
-	LDRNE	r5, [r0, #PacketDescriptor_PTS+4]	; get bit 32 of PTS
-	MOVNE	r3, r4, LSR #29				; r3 = bits 31..29 in bits 2..0
-	ORRNE	r3, r3, r5, LSL #3			; r3 = bits 32..29 in bits 3..0
-	ORRNE	r3, r3, #&21				; OR in 2 in top nibble indicating PTS, and force bit 0 to 1 (marker)
-	BL	AudioWaitAndSendByte
-	MOVNE	r3, r4, LSR #22				; r3 = bits 29..22 in bits 7..0
-	BL	AudioWaitAndSendByte			; (only stores bottom 8 bits)
-	MOVNE	r3, r4, LSR #14				; r3 = bits 21..14 in bits 7..0
-	ORRNE	r3, r3, #1				; force bit 0 to 1 (marker)
-	BL	AudioWaitAndSendByte
-	MOVNE	r3, r4, LSR #7				; r3 = bits 14..7 in bits 7..0
-	BL	AudioWaitAndSendByte
-	MOVNE	r3, r4, LSL #1				; r3 = bits 6..0 in bits 7..1
-	ORRNE	r3, r3, #1
-	BL	AudioWaitAndSendByte
-	MOV	r3, #&FF
-	BL	AudioWaitAndSendByte			; 2 further padding bytes
-	BL	AudioWaitAndSendByte
+; and drop thru to...
+
+40
+; in middle of sending audio packet header stored in PTS/DTS data; BSn holds no. of bytes still to do
+
+	LDR	r11, L64002_Registers
+	LDR	r2, L64002_Audio_Data_Write
+	LDR	r4, [r0, #PacketDescriptor_BSn]		; number of bytes still to do
+	ADD	r3, r0, #PacketDescriptor_PTS + 16	; r3 -> after end of block
+	SUB	r3, r3, r4				; move back to start of data still to send
 50
- |
-	ADDEQ	r4, r4, #1				; add on one for 0F byte if no PTS
-	ADDNE	r4, r4, #5				; add on five for PTS
-	MOV	r3, r4, LSR #8
-	BL	AudioWaitAndSendByte			; send hi byte of length
-	AND	r3, r4, #&FF
-	BL	AudioWaitAndSendByte			; send lo byte of length
-	MOVEQ	r3, #&0F				; no PTS, so send terminating code
-	BEQ	%FT50
+	ReadReg	lr, Status0
+	TST	lr, #L64002_Status0_AudioChannelReady
+	STREQ	r4, [r0, #PacketDescriptor_BSn]		; store amount still to do
+	BEQ	%FT60					; not ready to accept more data
+	LDRB	lr, [r3], #1
+	STRB	lr, [r2]
+	SUBS	r4, r4, #1
+	BNE	%BT50
 
-	LDR	r4, [r0, #PacketDescriptor_PTS]		; get bits 31..0 of PTS
-	LDR	r5, [r0, #PacketDescriptor_PTS+4]	; get bit 32 of PTS
-	MOV	r3, r4, LSR #29				; r3 = bits 31..29 in bits 2..0
-	ORR	r3, r3, r5, LSL #3			; r3 = bits 32..29 in bits 3..0
-	ORR	r3, r3, #&21				; OR in 2 in top nibble indicating PTS, and force bit 0 to 1 (marker)
-	BL	AudioWaitAndSendByte
-	MOV	r3, r4, LSR #22				; r3 = bits 29..22 in bits 7..0
-	BL	AudioWaitAndSendByte			; (only stores bottom 8 bits)
-	MOV	r3, r4, LSR #14				; r3 = bits 21..14 in bits 7..0
-	ORR	r3, r3, #1				; force bit 0 to 1 (marker)
-	BL	AudioWaitAndSendByte
-	MOV	r3, r4, LSR #7				; r3 = bits 14..7 in bits 7..0
-	BL	AudioWaitAndSendByte
-	MOV	r3, r4, LSL #1				; r3 = bits 6..0 in bits 7..1
-	ORR	r3, r3, #1
-50
-	BL	AudioWaitAndSendByte
- ]
-	BIC	r1, r1, #PacketDescriptorFlags_MPEGStart ; clear MPEG start bit, so if run out of buffer part way thru,
-	STR	r1, [r0, #PacketDescriptor_Flags]	; we don't send hdr again
+	BIC	r1, r1, #PacketDescriptorFlags_MPEGStart ; clear MPEG start bit
+	BIC	r1, r1, #PacketDescriptorFlags_AudioPacketHeaderStuffing ; and clear packet stuffing bit just in case
+	STR	r1, [r0, #PacketDescriptor_Flags]	; so if run out of buffer part way thru, we don't send hdr again
 	TEQ	r0, r0					; set EQ state, so we attempt to send data
 	EXIT
 
-AudioWaitAndSendByte Entry
+; exit indicating not completely sent packet header
+
+60
+	CMP	pc, #0					; set NE, ie not OK to continue
+	EXIT
+
+  [ {FALSE} ; no longer used
+AudioWaitAndSendByte
+	Push	"r0, lr"
+	MOV	r0, #1024				; check if read to accept audio data 1024 times
 10
 	ReadReg	lr, Status0
-	TST	lr, #L64002_Status0_AudioChannelReady
-	BEQ	%BT10
+	TST	lr, #L64002_Status0_AudioChannelReady	; if ready to accept data
+	BNE	%FT20					; then skip
+	SUBS	r0, r0, #1				; else decrement count
+	BNE	%BT10					; if not expired, try again
+	LDR	r0, AudioPacketSendTimeouts		; increment number of timeouts
+	ADD	r0, r0, #1
+	STR	r0, AudioPacketSendTimeouts
+	Pull	"r0, lr"
+	CMP	pc, #0					; set NE so we will try again later, but it's really
+							; broken since we've sent part of the header
+	EXIT						; exit from AudioSendNewPacketIfNecessary
+
+20
 	STRB	r3, [r2]
-	EXITS
+	Pull	"r0, pc",,^
+  ] ; {FALSE}
 
  ] ; UseWholePackets
 
@@ -6485,7 +6598,10 @@ AudioSendData Entry "r0-r4"
 	TEQ	r3, #0
 	BEQ	%FT20
 
-	LDR	r3, =AudioPreFillSize
+ [ BigAudioThresholds
+	LDR	lr, AudioAmountReceived			; use amount received not amount sent, since prefillsize > buffer size
+ ]
+	LDR	r3, AudioPreFillSize
 	CMP	lr, r3
 	MOVCS	lr, #0
 	STRCS	lr, AudioPreFilling
