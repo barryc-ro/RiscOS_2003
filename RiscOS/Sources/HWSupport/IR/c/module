@@ -53,8 +53,9 @@
                     initialises (this screwed-up the progress bar on NTSC
                     TV STBs).
 05/02/99 SAR   2.11 Fix IR standby issue for iMagic
-10/02/1999 NDT 2.12 Fixed key press in standby bug.  Rationalised the way
+10/02/99 NDT   2.12 Fixed key press in standby bug.  Rationalised the way
                     the module deals with key up and key down events.
+26/01/00 KJB   2.16 Added STB-400 support, with front panel buttons.
  */
 
 #include <stdio.h>
@@ -102,8 +103,13 @@
 #define PODULE_NUMBER		 0
 #define PODULE_READINFO_EASILOGICAL 0x200
 
+#define STB400_IR_ADDRESS        (volatile unsigned *)0x0302BF00
+
 /* Macro for getting the IR RC5 code including the toggle bit */
-#define IR_READ ((int)*ir_address)
+#define IR_READ ((unsigned char)*ir_address)
+
+/* Macro for getting it, plus the front panel */
+#define IR_PANEL_READ ((unsigned short)*ir_address)
 
 #define IN_STANDBY ((0x80&*(volatile char*)0x0320000c)!=0)
 
@@ -162,8 +168,8 @@ typedef struct _Mapping {
 Mapping IRmappings[IRMAPPINGS_SIZE] ;
 
 typedef struct _Default {
-  int  rc5 ;
-  int  handset ;
+  char  rc5 ;
+  char  handset ;
   Mapping mapping ;
 } Default ;
 
@@ -209,6 +215,17 @@ const Default defaults[] = {
 
 #define NUM_DEFAULTS (sizeof defaults / sizeof (Default))
 
+const unsigned char panel_table[8] = {
+    ONLINE_CODE,      /* Standby */
+    81,               /* Down */
+    86,               /* Right */
+    80,               /* Up */
+    85,               /* Left */
+    87,               /* Select */
+    NULL_CODE,
+    NULL_CODE
+} ;
+
 _kernel_swi_regs regs ;
 _kernel_oserror *e ;
 _kernel_oserror err ;
@@ -218,7 +235,13 @@ char osword_block[9] ;
 #endif
 
 int last_code = NULL_CODE ;
+unsigned int current_panel = 0xFF;
 int done_key_up = TRUE ;
+
+#define WANT_STANDBY 0
+#define WANT_ONLINE 1
+#define WANT_TOGGLE 2
+int wanted_state;
 
 #ifdef MOUSE
 int last_fire = 0 ;
@@ -237,7 +260,9 @@ FILE *outfile;
 int keyv_ok = 0 ;
 int on_keyv = 0 ;
 
-volatile char *ir_address;
+volatile unsigned int *ir_address;
+int have_panel;
+
 _kernel_oserror err_UnknownIRHardware = { 0, "Unknown IR hardware" };
 
 
@@ -325,6 +350,9 @@ _kernel_oserror *IR_modinit (const char *cmd_tail, int podule_base, void *pw)
    * since the IR hardware moved to a different address on MPEG 2 machines.
    */
 
+  ir_address = NULL;                            /* don't know yet */
+  have_panel = 0;
+
   regs.r[2] = (int) podule_header_buffer;
   regs.r[3] = (int) PODULE_NUMBER;
   e = _kernel_swi (Podule_ReadHeader, &regs, &regs);
@@ -342,18 +370,24 @@ _kernel_oserror *IR_modinit (const char *cmd_tail, int podule_base, void *pw)
       case PRODUCT_TYPE_STB2_MPEG2:		/* STB 2 with MPEG 2        */
       	   ir_offset = MPEG2_IR_OFFSET;
       	   break;
-      default:
-           return (&err_UnknownIRHardware);
+
+      default:                                  /* Assume STB 400 */
+           ir_address = STB400_IR_ADDRESS;
+           have_panel = 1;
+           break;
   }
 
-  /* Now read address of base of EASI space for podule */
-  regs.r[0] = PODULE_READINFO_EASILOGICAL;
-  regs.r[1] = (int)&ir_address;		/* address to return value into */
-  regs.r[2] = 4;
-  regs.r[3] = PODULE_NUMBER;
-  e = _kernel_swi (Podule_ReadInfo, &regs, &regs);
-  if (e) return (e);
-  ir_address += ir_offset;
+  if (!ir_address)
+  {
+    /* Now read address of base of EASI space for podule */
+    regs.r[0] = PODULE_READINFO_EASILOGICAL;
+    regs.r[1] = (int)&ir_address;		/* address to return value into */
+    regs.r[2] = sizeof ir_address;
+    regs.r[3] = PODULE_NUMBER;
+    e = _kernel_swi (Podule_ReadInfo, &regs, &regs);
+    if (e) return (e);
+    ir_address += ir_offset / sizeof *ir_address;
+  }
 
 #else
 
@@ -421,7 +455,7 @@ _kernel_oserror *IR_keyv_handler (_kernel_swi_regs *r, void *pw)
   if (r->r[0] == 4)	/* Enable / flush drivers */
   {
     int code;
-    
+
     /* Read the code from the micro */
     while ( (code = IR_READ) != IR_READ );
 
@@ -454,18 +488,20 @@ void IR_service_handler (int service_number, _kernel_swi_regs *r, void *pw)
 #ifdef DEBUG
       fprintf(OUTFILE, "IR:Service_Sleep, state=%d\n", r->r[0]);
 #endif
-  
+
+      wanted_state = WANT_ONLINE;
+
   /* 16/7/97:CP:added callback goof-proofing */
       if(callback_activeG == FALSE)
       {
         /* no callback pending, so set one up */
         callback_activeG = TRUE;
-  
+
         regs.r[0] = (int) IR_callback_entry;
         regs.r[1] = (int) pw;
         _kernel_swi(OS_AddCallBack, &regs, &regs);
       }
-  
+
       r->r[1] = 0;	/* Claim the service */
     }
 #ifdef DEBUG
@@ -479,11 +515,13 @@ void IR_service_handler (int service_number, _kernel_swi_regs *r, void *pw)
      */
     if( (r->r[0]&1)!=0 && last_code == ONLINE_CODE )
     {
+      wanted_state = WANT_ONLINE;
+
       if(callback_activeG == FALSE)
       {
         /* no callback pending, so set one up */
         callback_activeG = TRUE;
-  
+
         regs.r[0] = (int) IR_callback_entry;
         regs.r[1] = (int) pw;
         _kernel_swi(OS_AddCallBack, &regs, &regs);
@@ -512,12 +550,14 @@ _kernel_oserror *IR_callback_handler (_kernel_swi_regs *r, void *pw)
       case STATE_ON:
       case STATE_FATAL:
         /* We're on. */
-        if(last_code == STANDBY_CODE) /* Should we be off? */
+        if(wanted_state == WANT_STANDBY ||
+           wanted_state == WANT_TOGGLE) /* Should we be off? */
           _kernel_swi(STBState_Standby, &regs, &regs);
         break;
       default:
         /* We're off. */
-        if(last_code == ONLINE_CODE) /* Should we be on? */
+        if(wanted_state == WANT_ONLINE ||
+           wanted_state == WANT_TOGGLE) /* Should we be on? */
           _kernel_swi(STBState_Standby, &regs, &regs);
         break;
       }
@@ -563,11 +603,66 @@ void do_key_up(void)
   done_key_up = TRUE;
 }
 
+/*************************************************************************/
+void process_panel(unsigned int new_panel, void *pw)
+{
+  int i;
+
+  /* The panel gives us a straightforward 8 bits of button down info.
+   * (0 for down, 1 for up)
+   */
+
+  if (new_panel == current_panel)
+    return;
+
+  for (i=0; i<7; i++)
+  {
+    if (((current_panel >> i) & 1) != (new_panel >> i) & 1)
+    {
+      unsigned int code, key;
+
+      code = panel_table[i];
+      switch (code)
+      {
+      case NULL_CODE:
+        break;
+
+      case ONLINE_CODE:
+        if (!((new_panel >> i) & 1))
+        {
+          wanted_state = WANT_TOGGLE;
+
+          if(callback_activeG == FALSE)
+          {
+            /* no callback pending, so set one up */
+             callback_activeG = TRUE;
+
+             regs.r[0] = (int) IR_callback_entry;
+             regs.r[1] = (int) pw;
+
+             _kernel_swi(OS_AddCallBack, &regs, &regs);
+          }
+        }
+        break;
+
+      default:
+        if (IRmappings[code].type == KEY)
+        {
+          key = IRmappings[code].action.key;
+          fake_key (key, (new_panel >> i) & 1 ? KEYUP : KEYDOWN);
+        }
+        break;
+      }
+    }
+  }
+
+  current_panel = new_panel;
+}
 
 /*************************************************************************/
 _kernel_oserror *IR_callevery_handler (_kernel_swi_regs *r, void *pw)
 {
-  int code;
+  unsigned int code;
   /* We need our own copy of this because we're in an interrupt handler. */
   _kernel_swi_regs regs;
 #ifdef MOUSE
@@ -575,9 +670,17 @@ _kernel_oserror *IR_callevery_handler (_kernel_swi_regs *r, void *pw)
 #endif
 
   /* Read twice to ensure value has settled */
-  while ( (code = IR_READ) != IR_READ );
+  if (have_panel)
+    while ( (code = IR_PANEL_READ) != IR_PANEL_READ );
+  else
+    while ( (code = IR_READ) != IR_READ );
 
-  _kernel_swi (OS_ReadMonotonicTime, &regs, &regs);
+  if (have_panel)
+  {
+    /* Panel state is in top 8 bits - IR is in bottom 8 */
+    process_panel(code >> 8, pw);
+    code &= 0xFF;
+  }
 
 /* 11/8/97:CP:Standby multiple keypress fix
 
@@ -600,7 +703,7 @@ last key pressed.  Code 8C means go into standby.  Code 0C means come out
 of standby.  Think about the key sequence ...8C 8C 12 12 0C 0C...
 
 */
- 
+
   /* We only do anything if the code changed. */
   if ( code != last_code )
   {
@@ -613,13 +716,13 @@ of standby.  Think about the key sequence ...8C 8C 12 12 0C 0C...
 
     /* Release the previous key */
     do_key_up();
-    
+
     /* Record the code for later */
     last_code=code;
-    
+
     /* Mask off the toggle bit */
     code &= ~TOGGLE_BIT;
-    
+
     switch (code)
     {
     case NULL_CODE: /* A bit pointless really */
@@ -631,6 +734,8 @@ of standby.  Think about the key sequence ...8C 8C 12 12 0C 0C...
       printf("Standby SWI called\n");
       gets(&dummy);
 #endif
+
+      wanted_state = (last_code == STANDBY_CODE) ? WANT_STANDBY : WANT_ONLINE;
 
       /* 16/7/97:CP:added goof-proofing around callback */
       if(callback_activeG == FALSE)
