@@ -6,6 +6,7 @@
 # Date       Name   Description
 # ----       ----   -----------
 # 06-Jan-94  AMcC   Created
+# 10-Dec-97  SNB    Added resize source file
 #
 
 #
@@ -58,6 +59,7 @@ OBJS =\
  o.hide\
  o.main\
  o.miscop\
+ o.resize\
  o.show\
  o.task
 
