@@ -139,17 +139,17 @@ icons.h.hsv_i: Resources.HSV.Templates
 #
 #
 all: ${RAM_MODULE} o.dirs
-        @echo ${COMPONENT}: Module built (RAM)
+        @echo ${FULL_COMPONENT}: Module built (RAM)
 
 ramtrace: ${DBG_MODULE} o.dirs
-        @echo ${COMPONENT}: Module built (TRACE)
+        @echo ${FULL_COMPONENT}: Module built (TRACE)
 
 rom: ${ROM_MODULE} o.dirs
-        @echo ${COMPONENT}: Module built (ROM)
+        @echo ${FULL_COMPONENT}: Module built (ROM)
 
 install_rom: ${ROM_MODULE}
         ${CP} ${ROM_MODULE} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
-        @echo ${COMPONENT}: Module installed (ROM)
+        @echo ${FULL_COMPONENT}: Module installed (ROM)
 
 resources: ${RESOURCEFILES}
         ${MKDIR} ${RESDIR}
@@ -165,7 +165,7 @@ resources: ${RESOURCEFILES}
         ${CP} Resources.Messages        ${RESDIR}.Messages       ${CPFLAGS}
         ${CP} Resources.Sprites         ${RESDIR}.Sprites        ${CPFLAGS}
         ${CP} Resources.Templates       ${RESDIR}.Templates      ${CPFLAGS}
-        @echo ${COMPONENT}: resource files copied to Messages module
+        @echo ${FULL_COMPONENT}: resource files copied to Messages module
 
 clean:
         ${WIPE} o ${WFLAGS}
@@ -176,7 +176,7 @@ clean:
         ${WIPE} h.header ${WFLAGS}
         ${WIPE} linked ${WFLAGS}
         ${WIPE} icons ${WFLAGS}
-        @echo ${COMPONENT}: cleaned
+        @echo ${FULL_COMPONENT}: cleaned
 
 o.dirs:
         ${MKDIR} o
@@ -187,8 +187,8 @@ o.dirs:
         create $@
 
 export:
-        ${CP} hdr.ColourPick ${EXP_HDR}.ColourPick
-        @echo ${COMPONENT}: export complete
+        ${CP} hdr.ColourPick ${EXP_HDR}.ColourPick ${CPFLAGS}
+        @echo ${FULL_COMPONENT}: export complete
 
 
 #
