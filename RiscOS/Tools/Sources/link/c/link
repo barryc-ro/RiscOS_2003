@@ -395,6 +395,8 @@ static int32 elfouthdrsize;
 static char **elfshstrtaba;
 static char *elfshstrtab;
 static int32 elfshstrtabsize;
+static Elf32_Phdr *elfproghdr;
+static Elf32_Shdr *elfshtab;
 
 /* All ELF files that we generate will be in the same format.  The first
  * few sections are fixed down to OUTELF_FIRST_PROG.  Then the sections
@@ -419,7 +421,7 @@ static int32 elfshstrtabsize;
 #define ELFRELSECTION(n)       (OUTELF_FIRST_PROG + 0 + 2 * (n))
 #define ELFSECTION(n)          (OUTELF_FIRST_PROG + 1 + 2 * (n))
 /* The following macro gives a section header pointer for the given section number in the ELF output file */
-#define ELFSECTIONHEADER(shn)  (((Elf32_Shdr *) (elfouthdr + 1)) + (shn))
+#define ELFSECTIONHEADER(shn)  (elfshtab + (shn))
 
 /* A structure for representing an ELF section that has been mapped into memory */
 typedef struct {
@@ -439,6 +441,11 @@ typedef enum {
       elfsym_OTHER,
       elfsym__MAX
 } elf_sym_class;
+
+/* The segment numbers for ELF program output */
+#define OUTELFPROG_RO (0)
+#define OUTELFPROG_RW (1)
+#define OUTELFPROG_ZI (2)
 #endif
 
 static struct aentry *entryarea, *outentryarea;
@@ -1605,7 +1612,8 @@ static void write_elf_header(struct oventry *ov)
 {
   Elf32_Shdr *sections;
   int32 i, j;
-  int32 shstrtabsize, hdrtotal, commentsize;
+  int32 shstrtabsize, hdrtotal, progtotal, secttotal, commentsize;
+  Elf32_Off phoffset, shoffset;
   char *shstrtab, *psh, *comment;
 
   if (ov == &root) {
@@ -1618,11 +1626,52 @@ static void write_elf_header(struct oventry *ov)
       + 1 /* symbol table */
       + 1 /* comment section */
       ;
-    hdrtotal = sizeof(Elf32_Ehdr) + nsections * sizeof(Elf32_Shdr);
+    int32 nsegments =
+        ov->noofoutareas /* One for each output area - we may merge segments later during header fix up */
+      ;
+    progtotal = sizeof(Elf32_Phdr) * nsegments;
+    secttotal = sizeof(Elf32_Shdr) * nsections;
+    hdrtotal = sizeof(Elf32_Ehdr);
+
     elfshstrtaba = (char **) halloc(nsections * sizeof(char *));
     for (i=0; i<nsections; ++i) elfshstrtaba[i] = NULL;
-    elfouthdr = (Elf32_Ehdr *) halloc(hdrtotal);
-    sections = (Elf32_Shdr *) (elfouthdr + 1);
+
+    /* Allocate enough memory for all possible outputs */
+    elfouthdr = (Elf32_Ehdr *) halloc(hdrtotal + secttotal + progtotal);
+
+    /* Sort out where the section header and program header tables are going to go.
+     * progtotal is set to zero if the program header table isn't going to be output.
+     * secttotal is set to zero if the section header table isn't going to be output.
+     * However, the memory pointed to by elfshtab and elfproghdr is always valid - we
+     * construct the data anyway but simply don't write it anywhere.
+     */
+    if (plinkflag) {
+      /* Partially linked output keeps everything except the program header table */
+      elfshtab = (Elf32_Shdr *) (elfouthdr + 1);
+      elfproghdr = (Elf32_Phdr *) (elfshtab + nsections);
+      phoffset = 0;
+      shoffset = sizeof(*elfouthdr);
+      hdrtotal += secttotal;
+      progtotal = 0;
+    }
+    else {
+      /* Executables dispense with the section header table, string tables and symbol tables,
+       * unless debugging stuff is being retained
+       */
+      elfproghdr = (Elf32_Phdr *) (elfouthdr + 1);
+      phoffset = sizeof(*elfouthdr);
+      elfshtab = (Elf32_Shdr *) (elfproghdr + nsegments);
+      if (debugflag) {
+        hdrtotal += progtotal + secttotal;
+        shoffset = phoffset + progtotal;
+      }
+      else {
+        hdrtotal += progtotal;
+        secttotal = 0;
+        shoffset = 0;
+      }
+    }
+    sections = elfshtab;
     elfouthdr->e_ident[EI_MAG0] = ELFMAG0;
     elfouthdr->e_ident[EI_MAG1] = ELFMAG1;
     elfouthdr->e_ident[EI_MAG2] = ELFMAG2;
@@ -1632,19 +1681,20 @@ static void write_elf_header(struct oventry *ov)
     elfouthdr->e_ident[EI_VERSION] = EV_CURRENT;
     for (i = EI_PAD; i < EI_NIDENT; ++i)
       elfouthdr->e_ident[i] = 0;
-    elfouthdr->e_type = tvs(ET_REL);
+    elfouthdr->e_ident[7] = 97;
+    elfouthdr->e_type = tvs(plinkflag ? ET_REL : ET_EXEC);
     elfouthdr->e_machine = tvs(EM_ARM);
     elfouthdr->e_version = tv(EV_CURRENT);
     elfouthdr->e_entry = tv(0);
-    elfouthdr->e_phoff = tv(0);
-    elfouthdr->e_shoff = tv(sizeof(Elf32_Ehdr));
+    elfouthdr->e_phoff = tv(phoffset);
+    elfouthdr->e_shoff = tv(shoffset);
     elfouthdr->e_flags = tv(0);
-    elfouthdr->e_ehsize = tvs(sizeof(Elf32_Ehdr));
-    elfouthdr->e_phentsize = tvs(0);
-    elfouthdr->e_phnum = tvs(0);
-    elfouthdr->e_shentsize = tvs(sizeof(Elf32_Shdr));
-    elfouthdr->e_shnum = tvs(nsections);
-    elfouthdr->e_shstrndx = tvs(OUTELF_SHSTRT);
+    elfouthdr->e_ehsize = sizeof(Elf32_Ehdr);
+    elfouthdr->e_phentsize = tvs(phoffset ? sizeof(Elf32_Phdr) : 0);
+    elfouthdr->e_phnum = tvs(progtotal / sizeof(Elf32_Phdr));
+    elfouthdr->e_shentsize = tvs(shoffset ? sizeof(Elf32_Shdr) : 0);
+    elfouthdr->e_shnum = tvs(shoffset ? nsections : 0);
+    elfouthdr->e_shstrndx = tvs(shoffset ? OUTELF_SHSTRT : SHN_UNDEF);
     init_elf_section(sections, OUTELF_NULL, SHT_NULL, "", 0);
     init_elf_section(sections, OUTELF_COMMENT, SHT_PROGBITS, ".comment", 0)->sh_addralign = tv(0);
     init_elf_section(sections, OUTELF_SHSTRT, SHT_STRTAB, ".shstrtab", 0);
@@ -1660,38 +1710,53 @@ static void write_elf_header(struct oventry *ov)
        */
       Elf32_Shdr *s;
       Elf32_Word sh_flags;
-      struct sym tsym;
+      int32 stype = SHT_PROGBITS;
       struct aentry *aep = ov->outareas[i];
       char *name = salloc((strlen(aep->h->name) + 5L));
       sprintf(name, ".rel%s", aep->h->name);
       sh_flags = SHF_ALLOC;
       if (!(aep->attrs & AOF_RONLYAT)) sh_flags |= SHF_WRITE;
+      if (aep->attrs & AOF_0INITAT) stype = SHT_NOBITS;
       if (aep->attrs & AOF_CODEAT) sh_flags |= SHF_EXECINSTR;
       if (aep->attrs & AOF_COMDEFAT) sh_flags |= SHF_COMDEF;
+      if (aep == outentryarea) {
+          sh_flags |= SHF_ENTRYSECT;
+          if (!plinkflag) {
+              /* Applications store the vaddr corresponding to the entry point */
+              elfouthdr->e_flags = tv(hv(elfouthdr->e_flags) | EF_ARM_HASENTRY);
+              elfouthdr->e_entry = tv(outentryarea->base + entryoffset);
+          }
+          else {
+              /* Partially linked output stores the offset within the marked section */
+              elfouthdr->e_flags = tv(hv(elfouthdr->e_flags) | EF_ARM_HASENTRY);
+              elfouthdr->e_entry = tv(entryoffset);
+          }
+      }
       init_elf_section(sections, ELFRELSECTION(i), SHT_REL, name, 0);
-      s = init_elf_section(sections, ELFSECTION(i), SHT_PROGBITS, name + 4, sh_flags);
+      s = init_elf_section(sections, ELFSECTION(i), stype, name + 4, sh_flags);
       s->sh_addralign = tv(1L<<(aep->attrs & AOF_ALMASK));
       aep->elfsection = ELFSECTION(i);
-      zmem((char *) &tsym, sizeof(tsym));
-//      tsym.value = 0;
-//      tsym.area = aep;
-//      tsym.flags = SYM_LOCALDEFAT | SYM_STT_SECTION;
-//      aep->elfsectionsym = globinsert(elfshstrtaba[i], &tsym, aep->oep->objectid);
     }
-    /* Construct the section header string table */
-    for (j = 0, i = 0; elfshstrtaba[i]; ++i) {
-      j += 1L + strlen(elfshstrtaba[i]);
+    /* Construct the section header string table if necessary */
+    if (shoffset) {
+      for (j = 0, i = 0; elfshstrtaba[i]; ++i) {
+        j += 1L + strlen(elfshstrtaba[i]);
+      }
+      shstrtabsize = (j + 3 & ~3);
+      sections[OUTELF_SHSTRT].sh_offset = tv(hdrtotal);
+      sections[OUTELF_SHSTRT].sh_size = tv(j);
+      elfshstrtab = shstrtab = halloc(j);
+      elfshstrtabsize = j;
+      strtsize += j * 2; /* HACK.  Account for shared strings here */
+      zmem(shstrtab + j - 4, 4);
+      for (i = 0, psh = shstrtab; elfshstrtaba[i]; ++i) {
+        strcpy(psh, elfshstrtaba[i]);
+        psh = strchr(psh, '\0') + 1;
+      }
     }
-    shstrtabsize = (j + 3 & ~3);
-    sections[OUTELF_SHSTRT].sh_offset = tv(hdrtotal);
-    sections[OUTELF_SHSTRT].sh_size = tv(j);
-    elfshstrtab = shstrtab = halloc(j);
-    elfshstrtabsize = j;
-    strtsize += j * 2; /* HACK.  Account for shared strings here */
-    zmem(shstrtab + j - 4, 4);
-    for (i = 0, psh = shstrtab; elfshstrtaba[i]; ++i) {
-      strcpy(psh, elfshstrtaba[i]);
-      psh = strchr(psh, '\0') + 1;
+    else {
+      elfshstrtabsize = shstrtabsize = 0;
+      shstrtab = elfshstrtab = "";
     }
     /* Done. shstrsize[shstrtabsize] constructed ready to write to file */
     /* Construct the information string to put in the comment section */
@@ -1706,9 +1771,10 @@ static void write_elf_header(struct oventry *ov)
     /* OK - write out the first bits of the file */
     elfouthdrsize = hdrtotal;
     writebytes(0, (char *) elfouthdr, hdrtotal);
-    writebytes(fout.currentpos, shstrtab, shstrtabsize);
+    if (shstrtabsize) {
+      writebytes(fout.currentpos, shstrtab, shstrtabsize);
+    }
     writebytes(fout.currentpos, comment, commentsize);
-
   }
 
   areaoutposn = fout.currentpos;
@@ -1722,8 +1788,104 @@ static void fix_up_elf_globals(void)
    */
 }
 
+/* qsort auxiliary to determine sort order of program segments based
+ * on their virtual load address fields
+ */
+static int elf_qsort_aux(const void *o1, const void *o2)
+{
+  const Elf32_Phdr *p1 = o1;
+  const Elf32_Phdr *p2 = o2;
+  Elf32_Sword diff = (hv(p1->p_vaddr) - hv(p2->p_vaddr));
+
+  /* Please don't try to change this to "return diff".
+   * It won't work if sizeof(int) != sizeof(Elf32_Sword)
+   */
+  if (diff < 0) return -1;
+  if (diff > 0) return 1;
+  return 0;
+}
+
 static void fix_up_elf_header(void)
 {
+    unsigned32 nsecs;
+    int32 i;
+
+    if (!plinkflag) {
+        /* Set up the program header table */
+        int32 i;
+        struct oventry *ov = &root;
+        int32 noofsegs = ov->noofoutareas;
+
+        for (i = 0; i < noofsegs; ++i) {
+            Elf32_Phdr *p = elfproghdr + i;
+            Elf32_Shdr *s = ELFSECTIONHEADER(ELFSECTION(i));
+            Elf32_Word stype = hv(s->sh_type);
+            Elf32_Word flags = PF_R | PF_ARM_ABS;
+            Elf32_Word sflags = hv(s->sh_flags);
+
+            p->p_type = tv(PT_LOAD);
+            p->p_paddr = tv(0);
+            p->p_offset = s->sh_offset;
+            p->p_memsz = tv(ov->outareas[i]->areasiz);
+            p->p_filesz = (stype == SHT_NOBITS) ? tv(0) : p->p_memsz;
+            p->p_vaddr = tv(ov->outareas[i]->base);
+            s->sh_addr = p->p_vaddr;
+            if (sflags & SHF_EXECINSTR) flags |= PF_X;
+            if (sflags & SHF_WRITE) flags |= PF_W;
+            p->p_flags = tv(flags);
+            p->p_align = s->sh_addralign;
+        }
+
+        if (i > 1) {
+          /* Program header table entries must be sorted by increaseing vaddr */
+          qsort(elfproghdr, (size_t) i, sizeof(*elfproghdr), elf_qsort_aux);
+        }
+
+        /* Now try to merge segments */
+        for (i = 0; i < (noofsegs - 1); ++i) {
+          Elf32_Phdr *pi = elfproghdr + i, *pnext = pi + 1;
+
+          if (pi->p_flags != pnext->p_flags) continue; /* can only merge segments with matching RWXA flags */
+          if (hv(pi->p_vaddr) + hv(pi->p_memsz) != hv(pnext->p_vaddr)) continue; /* not consecutive in memory */
+          if (hv(pi->p_offset) + hv(pi->p_filesz) != hv(pnext->p_offset)) continue; /* not consecutive in file */
+          if (hv(pnext->p_filesz) > 0 && hv(pi->p_memsz) != hv(pi->p_filesz)) continue; /* partial zero init of pi */
+
+          /* Update the size fields. */
+          pi->p_memsz = tv(hv(pi->p_memsz) + hv(pnext->p_memsz));
+          pi->p_filesz = tv(hv(pi->p_filesz) + hv(pnext->p_filesz));
+
+          /* Shift down the later segments in the table */
+          if (i < noofsegs - 2) {
+            memmove(pnext, pnext+1, sizeof(*pnext) * (size_t) (noofsegs - i - 2));
+          }
+
+          /* Reduce the counts and make sure we process pi again as we may be able to merge the next
+           * segment too.
+           */
+          elfouthdr->e_phnum = tvs((int32) tvs(elfouthdr->e_phnum) - 1);
+          --i;
+          --noofsegs;
+        }
+    }
+
+    /* Knock out empty section header entries, but note you cannot compress
+     * them as other section headers will refer to the entry indices.
+     */
+    nsecs = tvs(elfouthdr->e_shnum);
+    for (i = 1; i < nsecs; ++i) {
+      Elf32_Shdr *s = ELFSECTIONHEADER(i);
+      if (hv(s->sh_size) == 0) {
+        s->sh_name = tv(0);
+        s->sh_type = tv(SHT_NULL);
+        s->sh_flags = tv(0);
+        s->sh_entsize = tv(0);
+        s->sh_link = tv(SHN_UNDEF);
+        s->sh_info = tv(0);
+        s->sh_offset = tv(0);
+        s->sh_addralign = tv(0);
+      }
+    }
+
     writebytes(0, (char *) elfouthdr, elfouthdrsize);
 }
 
@@ -5101,7 +5263,14 @@ static int32 map_areas(struct oventry *ov, int32 base)
         }
         else
         {
-            /* Don't support anything but partial linking */
+            dor = (rw_baseflag ? data_base : tor + textsize);
+            bor = dor + datasize;
+            if (rw_baseflag &&
+                ((dor >= tor && dor < tor+textsize) ||
+                 (dor <  tor && (bor+bsssize) > tor)))
+            {
+                msg(err_base_overlap(data_base, base));
+            }
         }
 #endif
     }
@@ -5852,6 +6021,30 @@ static void load2(struct aentry *aep)
         fprintf(stderr, ".\n");
         errcount[0]++;
     }
+
+#ifdef TARGET_HAS_ELF
+    if (output_type == ELF && (aep->attrs & AOF_0INITAT) && aep->areasiz > 0)
+    {
+        Elf32_Shdr *section = ELFSECTIONHEADER(lastoutarea->elfsection);
+        int32 prevareasize = lastoutarea->areasiz;
+
+        /* Set the size of this section */
+        section->sh_size = prevareasize;
+        /* Set the size and offset of the relocation section for this section */
+        section[-1].sh_offset = tv(fout.currentpos);
+        writereloclist( &elfreloclist );
+        section[-1].sh_size = tv(fout.currentpos - hv(section[-1].sh_offset));
+        listinit( &elfreloclist, sizeof( Elf32_Rel ));
+        areaoutposn = fout.currentpos;
+        relocposn = areaoutposn + aep->areasiz;
+
+        section[2].sh_offset = tv(fout.currentpos);
+        section[2].sh_size = tv(aep->areasiz);
+        lastoutarea = aep->h->h_un.areaval;
+        return;
+    }
+
+#endif
     if (aep->areasiz <= 0 || (aep->attrs & AOF_0INITAT)) return;
 
     mark_stack();
@@ -6029,6 +6222,7 @@ nostrback:
         {
 #ifdef TARGET_HAS_ELF
             Elf32_Shdr *section = ELFSECTIONHEADER(lastoutarea->elfsection);
+            int32 prevareasize = lastoutarea->areasiz;
 #endif
             if (!is_elf) {
                 areaoutposn += lastoutarea->relocs * sizeof(aof_reloc);
@@ -6043,12 +6237,13 @@ nostrback:
                     /* file pointer should be in correct place (after area) */
                     /* End the previous section and write its relocation table */
                     relocposn = fout.currentpos;
-                    section->sh_size = tv(relocposn - hv(section->sh_offset));
+                    section->sh_size = prevareasize; /* tv(relocposn - hv(section->sh_offset)); */
                     section[-1].sh_offset = tv(relocposn);
                     writereloclist( &elfreloclist );
                     section[-1].sh_size = tv(fout.currentpos - hv(section[-1].sh_offset));
                     /* Set the start offset for the next area */
                     section[2].sh_offset = tv(fout.currentpos);
+                    section[2].sh_size = tv(lastoutarea->areasiz);
                     listinit( &elfreloclist, sizeof( Elf32_Rel ));
                     areaoutposn = fout.currentpos;
                     relocposn = areaoutposn + lastoutarea->areasiz;
@@ -6062,6 +6257,15 @@ nostrback:
                     listinit( &aofreloclist, sizeof( aof_reloc ) );
                     relocposn = areaoutposn + lastoutarea->areasiz;
                 }
+            }
+            else if (is_elf)
+            {
+                /* We need this information in order to generate the program table */
+                section->sh_size = prevareasize;
+                section[-1].sh_offset = tv(fout.currentpos);
+                section[-1].sh_size = tv(fout.currentpos - hv(section[-1].sh_offset));
+                section[2].sh_offset = tv(fout.currentpos);
+                section[2].sh_size = tv(lastoutarea->areasiz);
             }
         }
 #ifdef LINKING_ON_ACORN_RISC_OS
@@ -6130,7 +6334,6 @@ so that we can generate a diagnostic for unlinked components.
                 struct hentry *h;
                 struct __link_list *set;
                 struct __head_list *hd;
-                assert(!is_elf);
                 for (set = aep->area__link_list; set; set = set->chain) {
                         struct __link_list *next;
                         sy = set->sy;
@@ -6780,6 +6983,7 @@ static void write_symt(void)
                 if ((v & SYM_REFDEFMASK) == SYM_DEFAT) bind = STB_LOCAL; else bind = STB_GLOBAL;
                 if (v & SYM_WEAKAT) bind = STB_WEAK;
                 if (v & SYM_DATAAT) type = STT_OBJECT;
+                if (aep && !(aep->attrs & (AOF_CODEAT|AOF_DEBUGAT))) type = STT_OBJECT;
                 if (gs->symval.flags & SYM_STT_FILE) {
                     type = STT_FILE;
                     bind = STB_LOCAL;
@@ -7103,7 +7307,7 @@ again_for_shl_liby_chunk:
     if (output_type == ELF) {
         Elf32_Shdr *lastsection = ELFSECTIONHEADER(lastoutarea->elfsection);
         relocposn = fout.currentpos;
-        lastsection->sh_size = tv(relocposn - hv(lastsection->sh_offset));
+        /* lastsection->sh_size = tv(relocposn - hv(lastsection->sh_offset)); */
         lastsection[-1].sh_offset = tv(relocposn);
         writereloclist( &elfreloclist );
         lastsection[-1].sh_size = tv(fout.currentpos - hv(lastsection[-1].sh_offset));
@@ -7148,6 +7352,9 @@ again_for_shl_liby_chunk:
     else if (shl_flag && ov != &root)
     {   write_eft(ov);
         if (shl_flag == 2) ov = &root;
+    }
+    else if (ov == &root && output_type == ELF && !plinkflag) {
+        write_symt();
     }
 
 #ifdef TARGET_HAS_AOF
@@ -7208,7 +7415,7 @@ again_for_shl_liby_chunk:
 #endif
 
     /* do this last (involves a seek back to the start of the file) */
-    if (plinkflag && ov == &root) fix_up_header();
+    if ((plinkflag || output_type == ELF) && ov == &root) fix_up_header();
 
 #ifdef LINKING_ON_ACORN_RISC_OS
     /* Check to make sure all the linker sets have been patched up.  We can
@@ -8068,7 +8275,6 @@ static struct fentry **parse_cmd(char **argv, struct fentry **nextfile)
             {
                 if (output_type) msg(fatal_multout);
                 output_type = ELF;
-                plinkflag = 1;
                 continue;
             }
 #endif
@@ -8205,6 +8411,12 @@ static struct fentry **parse_cmd(char **argv, struct fentry **nextfile)
 #else
             goto defolt;
 #endif
+        case 'p':
+             if (ap[1] == 0 || CiStrEQ(ap, "partial")) {
+               plinkflag = 1;
+               continue;
+             }
+             break;
         case 'q':
             if (!*++argv) msg(fatal_noarg(ap));
             qflag = getnum(*argv, fatal_badwork);
