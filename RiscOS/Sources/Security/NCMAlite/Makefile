@@ -94,9 +94,10 @@ RLIB       = RISCOSLIB:o.risc_oslib
 RSTUBS     = RISCOSLIB:o.rstubs
 ROMSTUBS   = RISCOSLIB:o.romstubs
 ROMCSTUBS  = RISCOSLIB:o.romcstubs
-ABSSYM     = RISC_OSLib:o.AbsSym
+ABSSYM     = RISC_OSLib:o.c_AbsSym
 SOCKLIB	   = TCPIPLibs:o.socklib5 
 INETLIB	   = TCPIPLibs:o.inetlib
+LIBS       = <Lib$Dir>.tboxlibs.o.wimplib
 
 
 #
@@ -120,7 +121,7 @@ EXPORTS   =
 BASEOBJS  = module.o header.o vectors.o ncma_cmds.o ncma_swis.o \
 	  dynalloc.o ncma_ncma.o machine.o ncma_url.o ncma_scard.o \
 	  ncma_utils.o ncma_dial.o kprintf.o  \
-	  ncma_bootb.o  \
+	  ncma_bootb.o task.o \
 	  ncma_tags.o  ncma_cache.o ncma_uid.o ncma_net.o \
 	  usermode.o areacode.o dbugzm.o ncma_fx.o
 
@@ -175,8 +176,8 @@ resources:
 #
 # Executable target (static link)
 #
-${TARGETSA}: ${NOTROMOBJS} ${CLIB} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB}
-        ${LD} -o $@ -module ${NOTROMOBJS} ${CLIB} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB}
+${TARGETSA}: ${NOTROMOBJS} ${CLIB} ${LIBS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB}
+        ${LD} -o $@ -module ${NOTROMOBJS} ${CLIB} ${LIBS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB}
 
 #
 # Exported interface headers
@@ -185,8 +186,8 @@ ${TARGETSA}: ${NOTROMOBJS} ${CLIB} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB}
 #
 # ROM target (re-linked at ROM Image build time)
 #
-${TARGET}: ${ROMOBJS} ${ROMCSTUBS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB}
-        ${LD} -o $@ -aof ${ROMOBJS} ${ROMCSTUBS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB}
+${TARGET}: ${ROMOBJS} ${ROMCSTUBS} ${LIBS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB}
+        ${LD} -o $@ -aof ${ROMOBJS} ${ROMCSTUBS} ${LIBS} ${LIBSD} ${SOCKLIB} ${INETLIB} ${RLIB}
 
 
 #
