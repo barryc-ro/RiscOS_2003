@@ -80,65 +80,68 @@ LIBS = ${DEBUGLIB} \
        ${TCPIPLIBS} \
        ${ASMUTILS}
 
-ROM_OBJS =	\
- o.Buffers	\
- o.CallOut	\
- o.Generic	\
- o.Headers	\
- o.LVFCtrl	\
- o.Module	\
- o.MoreInfo	\
- o.Options	\
- o.Play		\
- o.Response	\
- o.Setup	\
- o.Session	\
- o.Status	\
- o.TearDown	\
- o.URLutils	\
- o.Utils	\
+ROM_OBJS =		\
+ o.Buffers		\
+ o.CallOut		\
+ o.Generic		\
+ o.Headers		\
+ o.LVFCtrl		\
+ o.Module		\
+ o.MoreInfo		\
+ o.Options		\
+ o.Parameters		\
+ o.Play			\
+ o.Response		\
+ o.Setup		\
+ o.Session		\
+ o.Status		\
+ o.TearDown		\
+ o.URLutils		\
+ o.Utils		\
  o.LVFGHdr
 
 # oSL -> Soft Load
 
-RAM_OBJS =	\
- oSL.Buffers	\
- oSL.CallOut	\
- oSL.Generic	\
- oSL.Headers	\
- oSL.LVFCtrl	\
- oSL.Module	\
- oSL.MoreInfo	\
- oSL.Options	\
- oSL.Play	\
- oSL.Response	\
- oSL.Setup	\
- oSL.Session	\
- oSL.Status	\
- oSL.TearDown	\
- oSL.URLutils	\
- oSL.Utils	\
+RAM_OBJS =		\
+ oSL.Buffers		\
+ oSL.CallOut		\
+ oSL.Generic		\
+ oSL.Headers		\
+ oSL.LVFCtrl		\
+ oSL.Module		\
+ oSL.MoreInfo		\
+ oSL.Options		\
+ oSL.Parameters		\
+ oSL.Play		\
+ oSL.Response		\
+ oSL.Setup		\
+ oSL.Session		\
+ oSL.Status		\
+ oSL.TearDown		\
+ oSL.URLutils		\
+ oSL.Utils		\
  o.LVFGHdr
 
 # oSLd -> Soft Load deug
 
-DBG_OBJS =	\
- oSLd.Buffers	\
- oSLd.CallOut	\
- oSLd.Generic	\
- oSLd.Headers	\
- oSLd.LVFCtrl	\
- oSLd.Module	\
- oSLd.MoreInfo	\
- oSLd.Options	\
- oSLd.Play	\
- oSLd.Response	\
- oSLd.Setup	\
- oSLd.Session	\
- oSLd.Status	\
- oSLd.TearDown	\
- oSLd.URLutils	\
- oSLd.Utils	\
+DBG_OBJS =		\
+ oSLd.Buffers		\
+ oSLd.CallOut		\
+ oSLd.Generic		\
+ oSLd.Headers		\
+ oSLd.LVFCtrl		\
+ oSLd.Module		\
+ oSLd.MoreInfo		\
+ oSLd.Options		\
+ oSLD.Parameters	\
+ oSLd.Play		\
+ oSLd.Response		\
+ oSLd.Setup		\
+ oSLd.Session		\
+ oSLd.Status		\
+ oSLd.TearDown		\
+ oSLd.URLutils		\
+ oSLd.Utils		\
  o.LVFGHdr
 
 # Defining TRACE just does debuglib based message outputting. Defining
