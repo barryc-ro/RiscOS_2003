@@ -25,7 +25,7 @@ HDIR   = <CExport$dir>
 
 # Generic options:
 #
-MKDIR    = mkdir -p
+MKDIR    = do mkdir -p
 AC       = access
 AS       = aasm
 CP       = copy
@@ -138,11 +138,9 @@ export: ${OPTIONS} ${EXPORTS} Dirs
         @echo ${COMPONENT}: export complete
 
 Dirs:
-        ${MKDIR} <build$dir>.Export.C.h
-        ${MKDIR} <build$dir>.Export.C.o
-        ${MKDIR} <build$dir>.Export.Hdr.Global
-        ${MKDIR} <build$dir>.Export.Hdr.Interface
-        ${MKDIR} <build$dir>.Export.Hdr.Interface2
+        ${MKDIR} ${HDRDIR}
+        ${MKDIR} ${HDRDIR}.^.Interface
+        ${MKDIR} ${HDRDIR}.^.Interface2
         ${MKDIR} ${HDRDIR}.CPU
         ${MKDIR} ${HDRDIR}.FDC
         ${MKDIR} ${HDRDIR}.IO
@@ -150,6 +148,8 @@ Dirs:
         ${MKDIR} ${HDRDIR}.Machine
         ${MKDIR} ${HDRDIR}.MEMM
         ${MKDIR} ${HDRDIR}.VIDC
+        ${MKDIR} ${HDIR}.h
+        ${MKDIR} ${HDIR}.o
         ${MKDIR} ${HDIR}.Global.h
         ${MKDIR} ${HDIR}.Interface.h
         ${MKDIR} ${HDIR}.Interface2.h
