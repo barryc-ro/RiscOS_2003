@@ -1331,7 +1331,10 @@ Proc_RegList    SETS    "R0-R5,R7-R11"          ; NB: assume only LR stacked ini
         BL      getfontheaderptr                ; error if master font lost
         BVS     %FT99
 
-; TODO: Call GetPixels1Header to read the master font nchunks
+; DONE: Call GetPixels1Header to read the master font nchunks
+        MOV     R6,R7
+        BL      GetPixels1Header
+        BVS     %FT99                           ; will return error if no outlines
 
         LDR     R1,[R7,#hdr1_nchunks]           ; R7 -> master font header
       [ debugbrk
@@ -1601,19 +1604,41 @@ readpixoblock Entry "R0-R4,R7"                  ; stack accessed directly
         CMP     R4,#0
         BNE     %FT20                           ; read from file
 
+        LDRB    R14,[R7,#hdr4_leafname-hdr4_leafname]
+        TEQ     R14,#'x'
+        MOVEQ   R0,#8                           ; 8 chunks for x90y45 files
+        BEQ     %FT55
+
         LDRB    R0,[R6,#hdr_masterfont]         ; must be a slave font here
         BL      getfontheaderptr                ; error if master font lost
-        LDRVC   R0,[R7,#hdr1_nchunks]           ; R7 -> master font header
         BVS     %FT90
 
+        MOV     R14,R7                          ; R14 -> master font header
         LDR     R7,[SP,#5*4]
-        ADD     R7,R6,R7
+        ADD     R7,R6,R7                        ; R7 -> slave font + hdr1/4_leafname
+        LDRB    R0,[R7,#hdr4_leafname-hdr4_leafname]
       [ debugbrk
+        ASSERT  leaf_4bpp = 2
+        ASSERT  leaf_fromdisc = 8
+        CMP     R0,#leaf_4bpp
+        BLO     %FT40
+        CMP     R0,#leaf_fromdisc
+        BLO     %FT50
+40
+        BreakPt "reservepixoblock_forslave: strange data type"
+50
+      ]
+        TEQ     R0,#leaf_4bpp
+        LDREQ   R0,[R14,#hdr4_nchunks]
+        LDRNE   R0,[R14,#hdr1_nchunks]
+      [ debugbrk
+        CMP     R0,#0
+        BreakPt "reservepixoblock_forslave: master hdr_nchunks zero",EQ
         LDR     R14,[R7,#hdr1_nchunks-hdr1_leafname]
         CMP     R14,#0
         BreakPt "reservepixoblock_forslave: hdr_nchunks non-zero",NE
       ]
-        STR     R0,[R7,#hdr1_nchunks-hdr1_leafname]
+55      STR     R0,[R7,#hdr1_nchunks-hdr1_leafname]
 
         RSB     R0,R0,#0                        ; In: R0 -ve => no file offsets required
         BL      reservepixoblock                ; In: R6 -> font header, R7 -> font header + hdr1/4_leafname
@@ -1625,11 +1650,13 @@ readpixoblock Entry "R0-R4,R7"                  ; stack accessed directly
 ; Now we need to allocate a pixo block of the right size to contain the chunk file offsets and pointers
 ; We'll also need to open the file handle
 
-20      SUB     R7,R7,R6                        ; convert to offset now so it's relocated correctly
+20      ;SUB     R7,R7,R6                        ; convert to offset now so it's relocated correctly
 
         MOV     R0,R3
         BL      reservepixoblock                ; Out: [R0]->pixo block, R6 relocated
         MOVVC   R8,R0                           ; R8 -> new pixo block
+
+        SUB     R7,R7,R6
 
       [ debugcc
         LDR     R14,[R6,#hdr_xsize]
@@ -2493,7 +2520,7 @@ copylp6
 
         DiscardOrSetBlockEnd R6, pixelboxptr, R1,R14
 
-        Debug   cc,"Scaled pixel block size =",R14
+        Debug   cc,"Scaled pixel block size =",R1
 
         STRVS   R0,[sp]
         EXIT
@@ -3784,9 +3811,26 @@ convertloop
 
         BL      getcharheader           ; [charflags] => 8- or 12-bit coords
                                         ; R3 updated
+      [ {FALSE}
+        ; 1) - I can't believe this is faster than just blatting what is
+        ;      probably a very small sprite
+        ; 2) - It won't work in a task window because the ****ing task window
+        ;      module intercepts VDU codes even when output is redirected to
+        ;      a sprite!!!!
         Debug   sp,"os_writeI+16 in"
         SWIVC   XOS_WriteI+16           ; CLG - don't forget this!
         Debug   sp,"os_writeI+16 out"
+      |
+        BVS     %FT08
+        LDR     R2,sprite_area          ; R2 -> sprite area
+        MOV     R1,#0
+        LDR     R14,[R2,#saEnd]
+        ADD     R14,R2,R14              ; R14 -> end of sprite area (and sprite)
+        ADD     R2,R2,#saExten+spPalette; R2 -> start of sprite data
+05      CMP     R2,R14                  ; blat it to zeroes
+        STRLO   R1,[R2],#4
+        BLO     %BT05
+      ]
         MOVVC   R2,#0                   ; R2,R3,R4 = matrix,inptr,charcode
         BLVC    drawchar                ; uses [scratchblock]
       [ debugcc
@@ -3838,7 +3882,7 @@ go_stripoff
 
         BLVC    stripoff                ; this CAN return "Font Cache Full" if I got it wrong earlier
 
-        MOVVS   R4,#0                   ; if error, treat character as null
+08      MOVVS   R4,#0                   ; if error, treat character as null
 
         LDR     R2,[sp,#0*4]            ; R2 -> character data
         TEQ     R4,#0
@@ -4499,6 +4543,9 @@ outputtosprite  Entry "R4-R5,R7,R9-R11"
         STR     R7,[R2,#saExten]!       ; R2 -> sprite definition
         MOV     R14,#"x"                ; noddy sprite name
         STR     R14,[R2,#spName]
+        MOV     R14,#0
+        STR     R14,[R2,#spName+4]
+        STR     R14,[R2,#spName+8]
         SUB     R14,R3,#1               ; R14 = width (words - 1)
         STR     R14,[R2,#spWidth]
         SUB     R14,R1,#1               ; R14 = height (rows - 1)
