@@ -29,6 +29,14 @@ SQFLAGS =
 COMPONENT = MPTMail
 TARGET    = aof.${COMPONENT}
 
+# Binary Build Environment augmenting rules
+BBETYPE   = local
+bbe-local: bbe-generic
+  BBE_Export_Dir abs
+  BBE_Export_Dir Docs
+  BBE_Export_File !MkRes
+
+
 #
 # Generic rules:
 #
