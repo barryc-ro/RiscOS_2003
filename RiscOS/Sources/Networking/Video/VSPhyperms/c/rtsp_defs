@@ -13,6 +13,7 @@
 
 #include "rtsp_defs.h"
 #include "vsp_types.h"
+#include "NECstruct.h"
 
 /* strings should be allocated based on their entire string including escape
  * characters (i.e. \ or %s etc.) then body lengths calculated after filling
@@ -43,7 +44,14 @@ const char *RTSP_play_response =
       "CSeq: %s\r\n"
       "Range:npt=%s-%s\r\n"
       "Speed: %s\r\n";
-      
+#if 0
+/* removed support for extra headers in setup as used by OVS */
+const char *RTSP_header_Range          = "Range:";
+const char *RTSP_header_Speed          = "Speed:";
+const char *RTSP_header_x_playNow      = "x-playNow";
+#endif
+const char *RTSP_header_Authorization  = "Authorization:";
+
 typedef struct
 {
     const server_response_type server_response;
@@ -452,7 +460,7 @@ bool parse_time_reference(const char* query, const char** next,
 }
 
 /* parses npt=<time reference> */
-int parse_position(const char* query, const char* next,
+int parse_position(const char* query, const char** next,
                                          position_type *from, position_type *to)
 {
     const char* npt = "npt=";
@@ -515,6 +523,11 @@ int parse_position(const char* query, const char* next,
         parsed = false;
     }
     
+    if (next)
+    {
+        (*next) = query;
+    }
+    
     return (parsed == true);
 }
 
@@ -538,6 +551,117 @@ bool parse_server_address(const char *query, struct in_addr *addr)
         }
     }
     return ret_val;
+}
+
+/* this method is shared by the following two methods */
+static int parse_Header(const char* query, const char** next)
+{
+    int ret_val = false;
+   
+    if ((NULL != query)&&(NULL != next))
+    {
+        int count = 0; /* beats pointer arith. */
+       
+        while ((query[count] != '\0')&&(query[count] != '\r')&&(query[count] != '\n'))
+        {
+            count++;
+           
+            if (count > AuthorizationSize)
+            {
+                count = 0;
+                break;
+            }
+       }
+       
+       if (count > 0)
+       {   
+           (*next) = query;
+           ret_val = true;
+       }
+   }
+   return ret_val;
+}
+
+/* this method returns the pointer to the character imediately following CRLF | LFCR | CR | LF*/
+int parse_GetNextHeader(const char* query, const char** next)
+{
+    if (parse_Header(query, next))
+    {    
+        while (((**next) == '\r')||((**next) == '\n'))
+        {
+            (*next)++; 
+        }
+        return true;
+    }
+    else
+    {
+        return false;
+    }      
+}
+
+/* this copies the block between the authorization string and the next CRLF if it is less than
+ * size of the text area of the presentation request */
+int parse_Authorisation(const char* query, const char** next, char** malloced_block)
+{    
+    if ((next)&&(malloced_block)&&(true == parse_Header(query, next)))
+    {
+        int size = (int)(*next) - (int)(query);
+        (*malloced_block) = my_malloc(size);
+        
+        if (*malloced_block)
+        {
+            memcpy((*malloced_block), query, size);         
+        }        
+        return true;
+    }
+    else
+    {
+        return false;
+    }
+}
+
+/* this parses the headers expected in the extras parameters unknown headers are ignored */
+int parse_extras(const char* query, char** auth)
+{
+    int parsed = 1;
+    
+    while ((NULL != query) && ('\0' != (*query)))
+    {
+        if (0 == strncmp(query, RTSP_header_Authorization, strlen(RTSP_header_Authorization)))
+        {
+            query += strlen(RTSP_header_Authorization);
+            
+            while (isspace(*query))
+            {
+                if (((*query) == '\r') || ((*query) == '\n'))
+                {
+                    parsed = 0;
+                    break;
+                }
+                
+                query++;
+            }
+
+            if ((1 == parsed) && (!parse_Authorisation(query, &query, auth)))
+            {
+                parsed = 0;
+                break;
+            }
+        }
+#ifdef DEBUGLIB        
+        dprintf(("","parsing next header remaining (%s)\n", query));
+#endif        
+        if (!parse_GetNextHeader(query, &query))
+        {
+#ifdef DEBUGLIB
+            dprintf(("","failed to get next header\n"));
+#endif
+            parsed = 0;
+            break;
+        }
+        break;
+    } 
+    return parsed;
 }
 
 /* this parses an URL as defined in the URL module (1215,220/FS) next refers
@@ -677,7 +801,7 @@ _kernel_oserror* parse_URL_server(const char *query, const char** next,
     return err;
 }
 
-/********************************************** video control methods ************/
+/********************************************* video control methods ************/
 
 _kernel_oserror* VideoControlInformNewStatus(ULINT identity)
 {
@@ -687,7 +811,7 @@ _kernel_oserror* VideoControlInformNewStatus(ULINT identity)
 _kernel_oserror* VideoControlInformPrepareForData(ULINT identity, ULINT client, int* handle)
 {
      _kernel_oserror *err = NULL;
-     /* because I control the playback rate of the decoder the speed as a string is not used
+     /* because this module controls the playback rate of the decoder the speed as a string is not used
       though it is specified as necessary */
      
      err = _swix(VideoControl_ProtocolNotify, _INR(0,4), 0, identity, 0, 1, "1");
@@ -749,11 +873,20 @@ const char* get_TIME(position_type* pos)
     return time;
 }
 
+static void print_position_type(const char* str, position_type* pos)
+{
+    if (pos->denom == 0)
+        printf( " %s   (%s)\n", str, get_TIME(pos));
+    else
+        printf( " %s  (%i/%i)\n", str, pos->numer, pos->denom);
+}
+
 void parse_test_entry(const char* margv[], int margc)
 {
     const char* url = "URL";
     const char* speed = "speed";
     const char* position = "position";
+    const char* extras = "extras";
     
     if (margc > 1)
     {
@@ -804,9 +937,14 @@ void parse_test_entry(const char* margv[], int margc)
             bool forward = true;
             int denominator = 0, numerator = 0;
             
-            parse_speed(margv[1], NULL, &forward, &numerator, &denominator);
-            
-            printf("speed [forward (%s), %i/%i]\n", (forward)?"TRUE":"FALSE", numerator, denominator);
+            if (parse_speed(margv[1], NULL, &forward, &numerator, &denominator))
+            {            
+                printf("speed [forward (%s), %i/%i]\n", (forward)?"TRUE":"FALSE", numerator, denominator);
+            }
+            else
+            {
+                printf("failed to parse speed header\n");
+            }
         }
         else
         if (0 == strncmp(margv[0], position, strlen(position)))
@@ -817,15 +955,96 @@ void parse_test_entry(const char* margv[], int margc)
             success = parse_position(margv[1], NULL, &from, &to);
             
             printf("position [success = (%i)]\n", success);
-            if (from.denom ==0)
-                printf(" from (%s)\n", get_TIME(&from));
-            else
-                printf(" from (%i/%i)\n", from.numer, from.denom);
-            
-            if (to.denom == 0)
-                printf(" to   (%s)\n", get_TIME(&to));
-            else
-                printf(" to  (%i/%i)\n", to.numer, to.denom);
+            print_position_type("from", &from);
+            print_position_type("to", &to);
+        }
+        else
+        if (0 == strncmp(margv[0], extras, strlen(extras)))
+        {
+            const char* query = margv[1];
+            while ((NULL != query) && ('\0' != (*query)))
+            {
+#if 0
+/* removed support for OVS like tags */
+                if (0 == strncmp(query, RTSP_header_Range, strlen(RTSP_header_Range)))
+                {
+                    position_type from, to;
+                    
+                    query += strlen(RTSP_header_Range);
+                    
+                    if (parse_position(query, &query, &from, &to))
+                    {
+                        printf(" parsed Range header\n");
+                        print_position_type("from", &from);
+                        print_position_type("to", &to);
+                        
+                    }
+                    else
+                    {
+                        printf(" parsing range header failed\n");
+                        break;
+                    }
+                    
+                }
+                else
+                if (0 == strncmp(query, RTSP_header_Speed, strlen(RTSP_header_Speed)))
+                {
+                    bool forward = true;
+                    int denominator = 0, numerator = 0;
+                    
+                    query += strlen(RTSP_header_Speed);
+                    
+                    if (parse_speed(query, &query, &forward, &numerator, &denominator))
+                    {
+                        printf("speed [forward (%s), %i/%i]\n", (forward)?"TRUE":"FALSE", numerator, denominator);
+                    }
+                    else
+                    {
+                        printf("failed to parse speed header\n");
+                        break;
+                    }
+                }
+                else
+#endif
+                if (0 == strncmp(query, RTSP_header_Authorization, strlen(RTSP_header_Authorization)))
+                {
+                    char *auth = NULL;
+                    
+                    query += strlen(RTSP_header_Authorization);
+                    
+                    if (parse_Authorisation(query, &query, &auth))
+                    {
+                        printf("authorization (%s)\n", auth?auth:"NULL");
+                        
+                        if (auth)
+                        {
+                            my_free(auth);
+                        }
+                    }
+                    else
+                    {
+                        printf("failed to parse Authorization (ptr = (%p))\n", auth);
+                        break;
+                    }
+                }
+#if 0
+                else
+                if (0 == strncmp(query, RTSP_header_x_playNow, strlen(RTSP_header_x_playNow)))
+                {
+                    query += strlen(RTSP_header_x_playNow);
+                    
+                    printf("play now set to true\n");
+                }
+#endif                
+                printf("parsing next header remaining (%s)\n", query);
+                
+                if (!parse_GetNextHeader(query, &query))
+                {
+                    printf("failed to get next header\n");
+                    break;
+                }
+                break;
+            }
         }
     }
     else

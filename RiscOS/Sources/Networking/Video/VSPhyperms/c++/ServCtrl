@@ -398,7 +398,7 @@ Server::setSocketError(int socket_result)
 
         if ((result != ErrorOccurred)&&(socket_result < 0)) {
 #ifdef DEBUGLIB
-                if (Debug(debug_servercontrol)) Debug("tcp errno = %i", errno);
+                if (Debug(debug_servercontrol)) Debug("tcp errno = %i\n", errno);
 #endif
                 switch (errno) {
                         default:
@@ -654,7 +654,7 @@ Server::get_scenelist_response(size_t *number, SceneInformationDescriptor *buffe
 }
 
 error_flag
-Server::fill_assetpresentation_request(int size, ULINT init_value, PlayElementRequest playlist[], size_t play_size, struct in_addr ipaddr, ULINT port)
+Server::fill_assetpresentation_request(int size, ULINT init_value, PlayElementRequest playlist[], size_t play_size, struct in_addr ipaddr, ULINT port, const char* auth)
 {
   AssetPresentationRequest request;
   int i;
@@ -687,7 +687,9 @@ Server::fill_assetpresentation_request(int size, ULINT init_value, PlayElementRe
   if (Debug(debug_always))
     	Debug("STB LOG: timestamp in centiseconds %i",systime);
 #endif
-  request.RFU[0] = request.RFU[1] = request.RFU[2] = request.RFU[3] = 0;
+  request.extension_flags = (NULL != auth) ? 0x01:0x00; /* authorisation contained */
+
+  request.RFU[0] = request.RFU[1] = request.RFU[2] = 0;
 
   if (hton_structure(&request, map_AssetPresentationRequest, AssetPresentationRequest) == ErrorOccurred) {
          MakeError(IP_SendFail);
@@ -719,11 +721,52 @@ Server::fill_assetpresentation_request(int size, ULINT init_value, PlayElementRe
 }
 
 error_flag
-Server::send_assetpresentation_request(ULINT init_value, PlayElementRequest playlist[], size_t play_size, struct in_addr ipaddr, ULINT port)
+Server::send_assetpresentation_request(ULINT init_value, PlayElementRequest playlist[], size_t play_size, struct in_addr ipaddr, ULINT port, char* auth)
 {
-   int request_length = sizeof(AssetPresentationRequest)-8 + (play_size * sizeof(PlayElementRequest));
+   int request_length = sizeof(AssetPresentationRequest)-8 +
+                               (play_size * sizeof(PlayElementRequest)) +
+                               ATMByteSize + (auth ? AuthorizationSize:0);
+#ifdef DEBUGLIB
+   if (Debug(debug_servercontrol))
+   {
+       Debug("sending asset presentation request auth (%s) @ (%p)\n", auth?auth:"NULL", auth); 
+   }
+#endif
+   fill_assetpresentation_request(request_length, init_value, playlist, play_size, ipaddr, port, auth);
 
-   return fill_assetpresentation_request(request_length, init_value, playlist, play_size, ipaddr, port);
+   if (!ErrorExists())
+   {
+       UBYTE ATMaddress[ATMByteSize];
+       UBYTE authorization[AuthorizationSize];
+       
+       memset(ATMaddress, 0, ATMByteSize);
+
+       if (NULL != auth)
+       {   
+           int size = strlen(auth);
+           
+           memset(authorization, 0, AuthorizationSize);
+
+           if (size >= AuthorizationSize)
+           {
+               size = AuthorizationSize -1; /* space for NULL */
+           }
+           
+           memcpy(authorization, auth, size);
+       }
+       
+       if (ErrorOccurred == SendData(ATMaddress, ATMByteSize))
+       {
+           MakeError(IP_SendFail);
+       }
+       else
+       if ((NULL != auth) &&
+           (ErrorOccurred == SendData(authorization, AuthorizationSize)))
+       {
+           MakeError(IP_SendFail);
+       }
+   }
+   return ErrorState();
 }
 
 error_flag
@@ -734,40 +777,40 @@ Server::get_assetpresentation_response(struct in_addr *ipaddr, ULINT *port, ULIN
     AssetPresentationResponse response;
     size_t buffersize;
     UCHAR *buffer;
-  
+
     UCHAR event;
     while (PeekHeaderWait(&event) != ErrorOccurred){
       	if ((event == COMMAND_assetpres_response)||(asyncInetEventHandler(&event) == ErrorOccurred))
       		break;
     }
-  
+
     if (ErrorExists())
     	return ErrorOccurred;
-  
+
     if (GetData((void*)&header, sizeof(PacketHeader)) == ErrorOccurred)
     	return ErrorOccurred;	//Null
-  
+
     if (ntoh_structure(&header, map_PacketHeader, PacketHeader) == ErrorOccurred) {
       	return MakeError(IP_ReadFail);
     }
-  
+
     if (header.command_number != COMMAND_assetpres_response) {
       	return MakeError(VSP_BadErr);
     }
       // certification code
     if (GetData((void*)&response, sizeof(AssetPresentationResponse)) == ErrorOccurred)
     	return ErrorOccurred;	//Null
-  
+
     if (ntoh_structure(&response, map_AssetPresentationResponse, AssetPresentationResponse) == ErrorOccurred) {
       	return MakeError(IP_ReadFail);
     }
-  
+
     if (response.certification_code != certification_code++){
     	return MakeError(VSP_ServerCertError);
     }
-  
+
     buffersize = (size_t)(header.command_length) - sizeof(AssetPresentationResponse);
-  
+
     if (buffersize != 0) {	// get scene information
      	if ( (buffer = new UCHAR[buffersize]) == NULL)
           {
@@ -781,20 +824,20 @@ Server::get_assetpresentation_response(struct in_addr *ipaddr, ULINT *port, ULIN
     		buffer = NULL;
     	}
     } // scene info exists
-  
+
     ipaddr->s_addr = (u_long) response.server_IP;
     *port = response.server_port;
     //if (response.datagram_size != 0)
     	*dgram_size = assetresponse_dgram_size = response.datagram_size;
     //else
     //	*dgram_size = assetresponse_dgram_size = SocketDescriptor.getDgramSize();
-  
+
     (*bitrate) = response.bit_rate;
-    
+
     (*fast_playback_ratio) = (ULINT)response.ff_ratio;
-    
+
     (*trick_modes) |= response.fast_playback;
-  
+
     if (response.video_status != 0)
     {
     	(*trick_modes) |=  trick_jump_most_rec;
@@ -809,7 +852,7 @@ Server::get_assetpresentation_response(struct in_addr *ipaddr, ULINT *port, ULIN
     {
 #ifdef DEBUGLIB
         if (Debug(debug_servercontrol))
-            Debug("more info datablock = (%8.8X)\n", (*datablock));
+            Debug("more info datablock = (%8.8X), trick modes (%x)\n", (*datablock), (*trick_modes));
 #endif
         int header_length = 0;
         int body_length = 0;
@@ -817,7 +860,7 @@ Server::get_assetpresentation_response(struct in_addr *ipaddr, ULINT *port, ULIN
 
         const RTSP_status *status_block = RTSP_get_status((server_response_type)response.result);
         char* trick_play_description = RTSP_get_alloc_tricks_array(*trick_modes);
-        
+
         if (!trick_play_description)
         {
             MakeError(VSP_Alloc);
@@ -825,16 +868,16 @@ Server::get_assetpresentation_response(struct in_addr *ipaddr, ULINT *port, ULIN
         else
         {
             if (status) (*status) = status_block->status_value;
-            
+
             _swix(OS_ReadMonotonicTime, _OUT(0), &systime);
-            
+
             char num_strings[8][16]; /* for printing numeric values */
-            
+
             sprintf(num_strings[2], "%u",  header.interface_number);// session number
             sprintf(num_strings[3], "%u",  systime);// version number
             sprintf(num_strings[4], "%u.%u.%u.%u", ((response.server_IP>>24)& 0xff),((response.server_IP>>16)& 0xff),
                     ((response.server_IP>>8)& 0xff),(response.server_IP& 0xff));// ipaddress
-            
+
             if (0xFFFFFFFF == (*stream_time))
             {
                 sprintf(num_strings[5], "live");
@@ -845,7 +888,7 @@ Server::get_assetpresentation_response(struct in_addr *ipaddr, ULINT *port, ULIN
             }
             sprintf(num_strings[6], "%2i",  response.ff_ratio);                 // fast playback ratio
             sprintf(num_strings[7], "%.3f", ((double)response.bit_rate)/1000); // bitrate
-            
+
             body_length = strlen(RTSP_describe_body) +
                           strlen(num_strings[2]) +
                           strlen(num_strings[3]) +
@@ -857,35 +900,35 @@ Server::get_assetpresentation_response(struct in_addr *ipaddr, ULINT *port, ULIN
                           RTSP_content_type_length +
                           RTSP_content_disk_status +
                           RTSP_content_video_type;
-            
+
             sprintf(num_strings[0], "%u",  response.certification_code);//CSeq
             sprintf(num_strings[1], "%u",  body_length);                 /* calculate the length of the body */
-            
+
             header_length = strlen(RTSP_describe_header) +
                             strlen(status_block->number) +
                             strlen(status_block->message) +
                             strlen(num_strings[0] +
                             strlen(num_strings[1]));
-            
+
             if ((*datablock) != NULL)
             {
                 my_free (*datablock);
                 (*datablock) = NULL;
             }
-            
+
             (*datablock) = (char*)my_malloc(header_length + body_length + 1);
-            
+
             if (*datablock)
             {
                 const char* content_type = RTSP_get_encoding_type(response.encoding_type);
-            
+
                 // add the header to the response block
                 sprintf((*datablock), RTSP_describe_header,
                         status_block->number,
                         status_block->message,
                         num_strings[0],
                         num_strings[1]);
-            
+
                 // add the body to the block
                 sprintf((*datablock) + strlen(*datablock), RTSP_describe_body,
                         num_strings[2],
@@ -901,7 +944,7 @@ Server::get_assetpresentation_response(struct in_addr *ipaddr, ULINT *port, ULIN
 #ifdef DEBUGLIB
                 if (Debug(debug_servercontrol))
                     Debug("more info size = (%i)\n%s\n", strlen(*datablock), (*datablock));
-#endif      
+#endif
             }
             else
             {
@@ -1193,7 +1236,7 @@ Server::ReadDataToDebug(void)
     	}
 
     	if (size == -1)
-    		Debug("data errno %i", errno);
+    		Debug("data errno %i\n", errno);
 
   	return size_total;
   }
@@ -1368,7 +1411,7 @@ Server::SendAck(ULINT MAX_storableBlocks, ULINT MAX_complete_block, ACK_type dat
    		int size = SocketDescriptor.write((void*)&ack, sizeof(ACK_Block));
   		if (size < 0){
 #ifdef DEBUGLIB
-  	  		if (Debug(debug_servercontrol)) Debug("error sending ACK %i", errno);
+  	  		if (Debug(debug_servercontrol)) Debug("error sending ACK %i\n", errno);
 #endif
      			setSocketError(size);
 
@@ -1397,7 +1440,7 @@ Server::SendNak(ULINT BlockStart, LINT DatagramStart, ULINT BlockEnd, LINT Datag
 
   		if (size < 0){
 #ifdef DEBUGLIB
-  	  		if (Debug(debug_servercontrol)) Debug("error sending NAK %i", errno);
+  	  		if (Debug(debug_servercontrol)) Debug("error sending NAK %i\n", errno);
 #endif
   			if (ErrorNum() == IP_NoBuffer){
   				RemoveErr();

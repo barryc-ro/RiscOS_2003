@@ -298,7 +298,7 @@ Interface::RTSP_Register()
 
     int ctrlflags =         MPEGCtrl_MCOS_VideoPresent        |
                             MPEGCtrl_MCOS_AudioPresent        |
-                            //MPEGCtrl_MCOS_AudioToStreamSyncOn |
+                            ((EnvFlagsWord & flags_audiosync) ? MPEGCtrl_MCOS_AudioToStreamSyncOn : 0) |
                             MPEGCtrl_MCOS_ReservedSetToOne    |
                             //MPEGCtrl_MCOS_EnableOVSTrickPlay  |
                             MPEGCtrl_MCOS_AutoReset;
@@ -1013,7 +1013,7 @@ error_flag
 Interface::Protocol_Setup(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
 {
     PlayElementRequest *play_elements = NULL;
-    Server *server = NULL;
+    InternetObject *server = NULL;
     const char* sub_query;
     struct in_addr address;
     int port, assets;
@@ -1021,7 +1021,13 @@ Interface::Protocol_Setup(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
 
     err = parse_URL_server((char*)regs->r[2], &sub_query, &address, &port, &play_elements, &assets);
 
-    if (!err)
+    /* if transport parse that in favour */
+
+    if (err)
+    {
+        (*non_fatal) = AddError(new ErrorBlk(err));
+    }
+    else
     {
         if (port == 0) port = EnvPortNum;
 
@@ -1031,17 +1037,32 @@ Interface::Protocol_Setup(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
         }
         else
         {
-            server = new Server(&address, port, EnvTCPtimeout);
-        }
-    }
+#ifdef DEBUGLIB
+            // one of three types of server multicast address, TCP (ethernet), TCP (ATM)
+            if (Debug(debug_RTSP))
+            {
+                Debug("got server address (%x) multicast (%d)\n", ntohl(address.s_addr), IN_MULTICAST(ntohl(address.s_addr)));
+            }
+#endif
+            if (IN_MULTICAST(ntohl(address.s_addr)))
+            {
+               server = new InternetObject(&address, port);
+            }
+            else
+            {
+                server = (InternetObject*) new Server(&address, port, EnvTCPtimeout);
+            }
 
-    if (err)
-    {
-        (*non_fatal) = AddError(new ErrorBlk(err));
-    }
-    else
-    {
-        if (server == NULL)
+#ifdef DEBUGLIB
+            // one of three types of server multicast address, TCP (ethernet), TCP (ATM)
+            if (Debug(debug_RTSP))
+            {
+                Debug("got server @ (%p)\n", server);
+            }
+#endif
+        }
+
+        if ((server == NULL)||(NULL != (*non_fatal) ))
         {
             if (NULL == (*non_fatal))
             {
@@ -1059,38 +1080,66 @@ Interface::Protocol_Setup(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
             {
                 Stream *stream = NULL;
 
-                if (assets <= 0)
+                if (server->InternetObjectType() == server_ip_address) // if multicast server
                 {
-                    if (!(*non_fatal))
-                    {
-                        (*non_fatal) = AddError(new ErrorBlk(VSP_InvalidValue));
-                    }
+                    stream = new Stream(EnvINETtimeout, server, 0/*MPEG_id*/, EnvSourceRecvSpace,
+                                                        EnvNumCastBlocks, EnvBufferBlocks, EnvTCPtimeout, pw, regs->r[1]);
                 }
                 else
                 {
-                    stream = new Stream(EnvINETtimeout, init_block_val, 0, play_elements, assets,
-                                            server, EnvNumBlocks, EnvSourceRecvSpace,
-                                            EnvBufferBlocks, pw, EnvFlagsWord, 0, regs->r[1]);
-                    if (stream)
+                    char* auth = NULL;
+
+                    if ((NULL != regs->r[4])&&('\0' != (*(char*)regs->r[4])))
                     {
-                        if (stream->ErrorExists())
-                        {
-                            (*non_fatal) = AddError(&stream->ReturnCopyOfError());
-                            delete stream; stream = NULL;
-                        }
-                        else
-                        {
-                            if (CurrentStreams.Add(stream, &(regs->r[1]) ) == ErrorOccurred)
-                            {
-                                (*non_fatal) = AddError(&CurrentStreams.ReturnCopyOfError());
-                            } // this sets the handle as well.
+                        parse_extras((const char*)regs->r[4], &auth);
 #ifdef DEBUGLIB
-                            if (Debug(debug_RTSP))
-                            {
-                                Debug("loaded id = (%i)\n", regs->r[1]);
-                            }
-#endif
+                        if (Debug(debug_RTSP))
+                        {
+                            Debug("parsed auth = (%s)\n", auth?auth:"NULL");
                         }
+#endif
+                    }
+
+                    if (assets <= 0)
+                    {
+                        if (!(*non_fatal))
+                        {
+                            (*non_fatal) = AddError(new ErrorBlk(VSP_InvalidValue));
+                        }
+                    }
+                    else
+                    {
+                        stream = new Stream(EnvINETtimeout, init_block_val, 0/*MPEG_id*/, play_elements, assets,
+                                        (Server*)server, EnvNumBlocks, EnvSourceRecvSpace,
+                                        EnvBufferBlocks, pw, EnvFlagsWord, 0, regs->r[1], auth);
+                    }
+
+                    if (auth)
+                    {
+                        my_free(auth);
+                        auth = NULL;
+                    }
+                }
+
+                if (stream)
+                {
+                    if (stream->ErrorExists())
+                    {
+                        (*non_fatal) = AddError(&stream->ReturnCopyOfError());
+                        delete stream; stream = NULL;
+                    }
+                    else
+                    {
+                        if (CurrentStreams.Add(stream, &(regs->r[1]) ) == ErrorOccurred)
+                        {
+                            (*non_fatal) = AddError(&CurrentStreams.ReturnCopyOfError());
+                        } // this sets the handle as well.
+#ifdef DEBUGLIB
+                        if (Debug(debug_RTSP))
+                        {
+                            Debug("loaded id = (%i)\n", regs->r[1]);
+                        }
+#endif
                     }
                 }
             }
@@ -1118,14 +1167,14 @@ Interface::Protocol_Options(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
     {
         int i = 0;
         int* params = (int*)regs->r[2];
-        
+
 
         while (params[i] != -1)
         {
 #ifdef DEBUGLIB
             if (Debug(debug_RTSP))
                 Debug("setting [r0(%i)] param(%i)\n", regs->r[0], params[i]);
-#endif 
+#endif
             if (params[i] == 18) /* normal play time */
             {
                if (tmp->ReadNPT((ULINT*)&params[i+2]) == ErrorOccurred)
@@ -1206,7 +1255,7 @@ error_flag
 Interface::Protocol_Play(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
 {
     Stream *tmp;
-
+    
     if (CurrentStreams.identify((ListObject**)&tmp, regs->r[1]) == ErrorOccurred)
     {
         regs->r[0] = -1;    // as per spec, if we cannot find the stream
@@ -1224,7 +1273,7 @@ Interface::Protocol_Play(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
             bool forward;
             ULINT numerator, denominator;
 
-            if (!parse_position((char*)regs->r[2], NULL, &from, &to))
+            if (0 == parse_position((char*)regs->r[2], NULL, &from, &to))
             {
                 from.numer = TIME_undef;
                 from.denom = 0;
@@ -1233,12 +1282,13 @@ Interface::Protocol_Play(_kernel_swi_regs *regs, ErrorBlk **non_fatal)
                 to.denom = 0;
             }
 
-            if (!parse_speed((char*)regs->r[3], NULL, &forward, (int*)&numerator, (int*)&denominator))
+            if (0 == parse_speed((char*)regs->r[3], NULL, &forward, (int*)&numerator, (int*)&denominator))
             {
                 forward = true;
                 numerator = 1;
                 denominator = 1;
             }
+            
 #ifdef DEBUGLIB
             if (Debug(debug_RTSP))
             {
