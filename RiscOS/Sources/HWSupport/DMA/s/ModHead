@@ -40,7 +40,7 @@ Init
         TEQ     r2, #0
         BNE     %FT01
 
-        MOV     r0, #6
+        MOV     r0, #ModHandReason_Claim
         LDR     r3, =max_running_work
         SWI     XOS_Module                      ; Claim workspace.
         EXIT    VS
@@ -81,6 +81,46 @@ InitWS
         STR     r0, UnsafePageTable
         STR     r0, UnsafePageCount
 
+      [ HAL
+
+        STR     r0, DMAQueues
+        STR     r0, ChannelBlock                ; Don't free anything silly in error cases.
+        STR     r0, VectorTramps
+
+        CallHAL DMAEnumeratePhysical
+        TEQ     r0, #0
+        ADREQ   r0, ErrorBlock_DMA_BadHard
+        PullEnv EQ
+        DoError EQ                              ; Error if hardware doesn't do DMA.
+        STR     r0, DMADevices
+        STR     r1, PhysicalChannels
+        ASSERT  DMAQSize=16
+        MOV     r0, #ModHandReason_Claim        ; Create and initialise DMA queues.
+        MOV     r3, r1, LSL #4
+        SWI     XOS_Module
+        EXIT    VS
+        STR     r2, DMAQueues
+        MOV     r4, #0
+10      SUBS    r3, r3, #4
+        STRCS   r4, [r2, r3]
+        BCS     %BT10
+
+        CallHAL DMAEnumerateLogical
+        STR     r0, LogicalList
+        STR     r1, LogicalChannels
+        ASSERT  LCBSize=32
+        MOV     r0, #ModHandReason_Claim        ; Create and initialise logical channel table.
+        MOV     r3, r1, LSL #5
+        SWI     XOS_Module
+        EXIT    VS
+        STR     r2, ChannelBlock
+20      SUBS    r1, r1, #1
+        STRCS   r4, [r2], #LCBSize
+        BCS     %BT20
+        ; V will be clear
+
+      |
+
         ADR     r1, ChannelBlock + lcb_Flags    ; Initialise logical channel table.
         MOV     r2, #NoLogicalChannels
 10
@@ -95,6 +135,8 @@ InitWS
         STRCS   r0, [r1], #4                    ; Zero all pointers.
         BCS     %BT20
 
+      ]
+
  [ debugtab
         MOV     r0, #0
         DebugTabInit r0,r1,lr
@@ -107,10 +149,23 @@ InitWS
 ; InitHardware
 ;
 ;       Out:    r0 corrupted
+;     [ HAL
+;               r1-r6 corrupted
+;     ]
 ;
 ;       Initialise DMA hardware.
 ;
 InitHardware
+      [ HAL
+        Entry
+        ; Check for bad hardware now done in InitWS
+        LDR     r4, DMADevices
+        LDR     r5, PhysicalChannels
+01      LDR     r0, [r4], #4
+        CallHAL DMAActivate
+        SUBS    r5, r5, #1
+        BGT     %BT01
+      |
         Entry   "r1,r2"
 
         MOV     r0, #2                          ; Read system information.
@@ -125,39 +180,76 @@ InitHardware
 
         IOMDBase r1
 
-        IRQOff  lr, r2
+        IRQOff  r2, lr
         LDRB    r0, [r1, #IOMD_DMAMSK]          ; Disable all but sound channels.
         BIC     r0, r0, #IOMD_DMA_IO0 :OR: IOMD_DMA_IO1 :OR: IOMD_DMA_IO2 :OR: IOMD_DMA_IO3
         STRB    r0, [r1, #IOMD_DMAMSK]
         SetPSR  lr
 
- [ :LNOT: IOMD
-        STRB    r0, [r1, #IOMD_DMASTA]
-        STRB    r0, [r1, #IOMD_DMAREQ]
- ]
-
         MOV     r0, #&0C                        ; Channels 2 and 3 are external peripherals.
         STRB    r0, [r1, #IOMD_DMAEXT]
+      ]
 
- [ IOMD
         BL      ClaimVectors
- ]
 
         EXIT
 
         MakeErrorBlock  DMA_BadHard
 
-
- [ IOMD
-
 ;---------------------------------------------------------------------------
 ; ClaimVectors
 ;
 ;       Out:    r0 corrupted
+;     [ HAL
+;               r1-r6 corrupted
+;     ]
 ;
 ;       Claim device vectors for DMA interrupts.
 ;
 ClaimVectors
+      [ HAL
+        Entry
+        ; Create an array of trampolines
+        LDR     r4, DMADevices
+        LDR     r5, PhysicalChannels
+        MOV     r0, #ModHandReason_Claim
+        MOV     r3, r5, LSL #3
+        ADD     r3, r3, #4                      ; size of block is 2*PhysicalChannels+1 words
+        SWI     XOS_Module
+        EXIT    VS
+        STR     r2, VectorTramps
+
+        ADR     lr, DMAInterruptCommon          ; first word is address of common IRQ handler
+        STR     lr, [r2], #4
+        MOV     r6, r2                          ; r6 = base address for IRQ handlers
+        MOV     r3, r5
+        LDR     r0, =&E3A02000                  ; MOV R2, #0
+        LDR     r1, =&E51FF010                  ; LDR PC, [PC, #-16]
+01      STMIA   r2!, {r0,r1}
+        ADD     r0, r0, #1                      ; increment constant to assign to R2
+        ADD     r1, r1, #8                      ; PC-relative address is 8 bytes more distant
+        SUBS    r3, r3, #1
+        BGT     %BT01
+
+        ; Synchronise code areas for trampolines
+        MOV     r0, #1
+        MOV     r1, r6
+        SUB     r2, r2, #4
+        SWI     XOS_SynchroniseCodeAreas
+
+        ; Claim device vectors
+01      LDR     r0, [r4], #4                    ; r0 -> HAL device
+        MOV     r1, #0                          ; r1 = interrupt number (always 0)
+        MOV     r2, r6                          ; r2 -> trampoline
+        MOV     r3, r12                         ; r3 = module ws ptr
+        CallHAL DMAClaim
+        ADD     r6, r6, #2*4                    ; point at next trampoline
+        SUBS    r5, r5, #1
+        BGT     %BT01
+        ; V will be clear
+
+        EXIT
+      |
         Entry   "r1,r2"
 
         MOV     r0, #IOMD_DMAChannel0_DevNo
@@ -178,6 +270,7 @@ ClaimVectors
         SWIVC   XOS_ClaimDeviceVector
 
         EXIT
+      ]
 
 ;---------------------------------------------------------------------------
 ; ReleaseVectors
@@ -208,8 +301,6 @@ ReleaseVectors
 
         EXIT
 
- ]
-
 ;---------------------------------------------------------------------------
 ;       Service handler.
 ;
@@ -217,31 +308,37 @@ ServiceTable
         DCD     0                          ; flags
         DCD     Service2 - Module_BaseAddr
         DCD     Service_Reset              ; &27
+      [ HAL
+        DCD     Service_PreReset           ; &45
+      ]
  [ standalone
         DCD     Service_ResourceFSStarting ; &60
  ]
- [ MemManager
         DCD     Service_PagesUnsafe        ; &8E
         DCD     Service_PagesSafe          ; &8F
- ]
         DCD     0                          ; terminator
 
         DCD     ServiceTable - Module_BaseAddr
 Service
         MOV     r0, r0
         TEQ     r1, #Service_Reset
+      [ HAL
+        TEQNE   r1, #Service_PreReset
+      ]
  [ standalone
         TEQNE   r1, #Service_ResourceFSStarting
  ]
- [ MemManager
         TEQNE   r1, #Service_PagesUnsafe
         TEQNE   r1, #Service_PagesSafe
- ]
         MOVNE   pc, lr
 
 Service2
         LDR     r12, [r12]
 
+        TEQ     r1, #Service_PagesUnsafe
+        BEQ     DMAPagesUnsafe
+        TEQ     r1, #Service_PagesSafe
+        BEQ     DMAPagesSafe
  [ standalone
         TEQ     r1, #Service_ResourceFSStarting
         BNE     %FT10
@@ -252,12 +349,20 @@ Service2
         EXIT
 10
  ]
- [ MemManager
-        TEQ     r1, #Service_PagesUnsafe
-        BEQ     DMAPagesUnsafe
-        TEQ     r1, #Service_PagesSafe
-        BEQ     DMAPagesSafe
- ]
+      [ HAL
+        TEQ     r1, #Service_PreReset
+        BNE     %FT10
+
+        Entry   "r0-r5"
+        LDR     r4, DMADevices
+        LDR     r5, PhysicalChannels
+01      LDR     r0, [r4], #4
+        CallHAL DMAReset
+        SUBS    r5, r5, #1
+        BGT     %BT01
+        EXIT
+10
+      ]
 
         Debug   mod,"Service_Reset"
 
@@ -305,16 +410,22 @@ ShutDown
 
         Debug   mod,"Shutdown"
 
- [ DeregisterOnFinalise
         BL      DeregisterChannels
- |
-        BL      FreePageTables
- ]
         BL      FreeBuffers
 
- [ IOMD
         BL      ReleaseVectors
- ]
+
+      [ HAL
+        LDR     r2, ChannelBlock
+        TEQ     r2, #0
+        MOVNE   r0, #ModHandReason_Free
+        SWINE   XOS_Module
+
+        LDR     r2, DMAQueues
+        TEQ     r2, #0
+        MOVNE   r0, #ModHandReason_Free
+        SWINE   XOS_Module
+      ]
 
  [ international
         LDR     r0, message_file_open           ; Close the message file if it's open.
@@ -330,8 +441,6 @@ ShutDown
 
         SETV
         EXIT                                    ; Flags ignored by Die, V must be set for Init
-
- [ DeregisterOnFinalise
 
 ;---------------------------------------------------------------------------
 ;       Deregister all registered logical DMA channels, purge their queues
@@ -355,8 +464,6 @@ DeregisterChannels
         STR     lr, [r8, #lcb_Flags]
         BL      DMAPurge                        ; Purge the queue of requests for this channel.
         B       %BT10
-
- ]
 
 ;---------------------------------------------------------------------------
 ;       Free any page tables attached to DMA requests.
