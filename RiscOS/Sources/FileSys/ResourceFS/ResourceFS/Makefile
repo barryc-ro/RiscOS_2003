@@ -49,10 +49,20 @@ clean:
         ${RM} ${TARGET}
         @echo ${COMPONENT}: cleaned
 
-resources:
-        ${MKDIR} ${RESDIR}.${COMPONENT}
-        ${CP} Resources.${LOCALE}.Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
+resources: resources-${CMDHELP}
         @echo ${COMPONENT}: resource files copied
+
+resources_common:
+        ${MKDIR} ${RESDIR}.${COMPONENT}
+        TokenCheck LocalRes:Messages
+        ${CP} LocalRes:Messages  ${RESDIR}.${COMPONENT}.Messages  ${CPFLAGS}
+
+resources-None: resources_common
+	@
+
+resources-: resources_common
+        TokenCheck LocalRes:Messages
+	print LocalRes:CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
 
 ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}
@@ -61,27 +71,3 @@ ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
 
 # Dynamic dependencies:
-rm.ResourceFS: Hdr:ListOpts
-rm.ResourceFS: Hdr:Macros
-rm.ResourceFS: Hdr:System
-rm.ResourceFS: Hdr:SWIs
-rm.ResourceFS: Hdr:CPU.Generic26
-rm.ResourceFS: Hdr:IO.GenericIO
-rm.ResourceFS: Hdr:RISCOS
-rm.ResourceFS: Hdr:ModHand
-rm.ResourceFS: Hdr:Services
-rm.ResourceFS: Hdr:CMOS
-rm.ResourceFS: Hdr:Proc
-rm.ResourceFS: Hdr:FSNumbers
-rm.ResourceFS: Hdr:HighFSI
-rm.ResourceFS: Hdr:LowFSi
-rm.ResourceFS: Hdr:NewErrors
-rm.ResourceFS: Hdr:Variables
-rm.ResourceFS: Hdr:Wimp
-rm.ResourceFS: Hdr:ResourceFS
-rm.ResourceFS: Hdr:UpCall
-rm.ResourceFS: Hdr:MsgTrans
-rm.ResourceFS: Hdr:Territory
-rm.ResourceFS: Version
-rm.ResourceFS: Hdr:NDRDebug
-rm.ResourceFS: s.MsgCode
