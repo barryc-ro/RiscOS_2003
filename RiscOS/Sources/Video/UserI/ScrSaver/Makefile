@@ -91,10 +91,10 @@ clean:
 resources: ${APPTARGET}
         ${MKDIR} ${RESDIR}.ScrSaver
         ${CP} ${APPTARGET}                               ${RESDIR}.ScrSaver.!RunImage  ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.${SYSTEM}.!Run         ${RESDIR}.ScrSaver.!Run       ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.${SYSTEM}.Messages     ${RESDIR}.ScrSaver.Messages   ${CPFLAGS}
-        ${CP} Resources.${LOCALE}.${SYSTEM}.Templates    ${RESDIR}.ScrSaver.Templates  ${CPFLAGS}
-        ${SHRINK} Resources.${LOCALE}.${SYSTEM}.Sprites  ${RESDIR}.ScrSaver.Sprites
+        ${CP} Resources.${LOCALE}.${UserIF}.!Run         ${RESDIR}.ScrSaver.!Run       ${CPFLAGS}
+        ${CP} Resources.${LOCALE}.${UserIF}.Messages     ${RESDIR}.ScrSaver.Messages   ${CPFLAGS}
+        ${CP} Resources.${LOCALE}.${UserIF}.Templates    ${RESDIR}.ScrSaver.Templates  ${CPFLAGS}
+        ${SHRINK} Resources.${LOCALE}.${UserIF}.Sprites  ${RESDIR}.ScrSaver.Sprites
         @echo ${COMPONENT}: resource files copied
 
 #
