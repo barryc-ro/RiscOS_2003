@@ -289,14 +289,14 @@ ${MSGSF}: LocalRes:Messages
 	TokenCheck LocalRes:Messages
 	resgen messages_file ${MSGSF} LocalRes:Messages Resources.VideoCtrl.${COMPONENT}.Messages
 
-${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${LIBS} ${CLIB}
+${RAM_MODULE}: ${RAM_OBJS} ${MSGSF} ${LIBS} ${CLIB} ${DIRS}
 	@echo
 	${MKDIR} rm
 	${LD} -o $@ -module ${RAM_OBJS} ${MSGSF} ${LIBS} ${CLIB}
 	${MODSQZ} $@
 	Access $@ RW/R
 
-${DBG_MODULE}: ${DBG_OBJS} ${MSGSF} ${LIBS} ${CLIB}
+${DBG_MODULE}: ${DBG_OBJS} ${MSGSF} ${LIBS} ${CLIB} ${DIRS}
 	@echo
 	${MKDIR} rm
 	${LD} -o $@ -module ${DBG_OBJS} ${MSGSF} ${LIBS} ${CLIB}

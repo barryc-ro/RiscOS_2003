@@ -26,6 +26,8 @@
 #include <swis.h>
 #include <sys/errno.h>
 
+#include "VersionNum"
+
 #ifdef TRACE2
   #define TRACE
 #endif
@@ -106,6 +108,21 @@ static _kernel_oserror * module_prism_register          (void);
 
 static void              module_check_os_version        (void);
 static void              module_atexit                  (void);
+
+/* PRISM direct-call interface */
+
+static PRISM_DECLARE_FUNCTION_2(_kernel_oserror *, ComponentInfo, uint32_t /*tag*/, uintptr_t */*result*/)
+
+static const struct
+{
+  void (*function)(void);
+  uint32_t stack_words;
+} static_CreateVeneerTable[] =
+{
+  PRISM_FUNCTION_DESCRIPTOR(ComponentInfo)    /*  0 */
+};
+static void (**global_Veneers)(void);
+
 
 /**************************************************************/
 /* module_try_to_register()                                   */
@@ -225,6 +242,87 @@ static _kernel_oserror * module_register(void)
 }
 
 /**************************************************************/
+/* ComponentInfo                                              */
+/*                                                            */
+/* Returns information about the PRISM component              */
+/*                                                            */
+/* Assumptions                                                */
+/*  NONE                                                      */
+/*                                                            */
+/* Inputs                                                     */
+/*  tag:    information index value                           */
+/*                                                            */
+/* Outputs                                                    */
+/*  result: value associated with tag                         */
+/*                                                            */
+/* Returns                                                    */
+/*  NULL if successful; otherwise pointer to error block      */
+/**************************************************************/
+
+static _kernel_oserror *ComponentInfo(uint32_t tag, uintptr_t *result)
+{
+  switch (tag)
+  {
+    case 0: /* Protocol name and version */
+    {
+      const char *string = NULL;
+      size_t len;
+      RetError(read_message("V00", &string, &len));
+      * (const char **) result = string;
+      return NULL;
+    }
+
+    case 1: /* Integer protocol version */
+    {
+      *result = 601; /* latest supported MediaBase version */
+      return NULL;
+    }
+
+    case 2: /* Module name and version */
+    {
+      * (const char **) result = Module_ComponentName " " Module_HelpVersion;
+      return NULL;
+    }
+
+    case 3: /* Integer module version * 100 */
+    {
+      *result = Module_Version;
+      return NULL;
+    }
+
+    case 4: /* Copyright string */
+    {
+      const char *string = NULL;
+      size_t len;
+      RetError(read_message("C00", &string, &len));
+      * (const char **) result = string;
+      return NULL;
+    }
+
+    case 5: /* Short-form string */
+    {
+      static char info[80];
+      if (info[0] == '\0')
+      {
+        const char *buffer = NULL;
+        size_t len;
+        unsigned int year;
+        RetError(read_message("S00", &buffer, &len));
+        sscanf(Module_Date, "%*u %*s %u", &year);
+        snprintf(info, sizeof info, buffer, Module_FullVersion, Module_Date, year);
+      }
+      * (const char **) result = info;
+      return NULL;
+    }
+
+    default:
+    {
+      return make_error(prism_ERROR_INVALID_PARAMETERS, 1, "ComponentInfo");
+    }
+  }
+}
+
+/**************************************************************/
 /* module_prism_try_to_register()                             */
 /*                                                            */
 /* Attempts to register with PRISM. Exits if already          */
@@ -234,8 +332,6 @@ static _kernel_oserror * module_register(void)
 
 static _kernel_oserror * module_prism_try_to_register(void)
 {
-  _kernel_oserror * e;
-
   dprintf(("", "module_prism_try_to_register: Called\n"));
 
   if (prism_registered)
@@ -244,20 +340,36 @@ static _kernel_oserror * module_prism_try_to_register(void)
     return NULL;
   }
 
-  e = _swix(PRISM_ComponentRegister,
-            _INR(0,4),
+  RetError(_swix(PRISM_ComponentRegister,
+                 _INR(0,1),
 
-            0,
-            RTSPMB_00,
-            RTSPMB_PRISMID,
-            Module_VersionNumber,
-            Module_Help " © Pace 2000 (" Module_Date ")");
+                 0,
+                 RTSPMB_PRISMID));
 
-  if (e == NULL) prism_registered = true;
+  RetError(_swix(PRISM_CreateVeneers,
+                 _INR(0,4)|_OUT(1),
+
+                 1,
+                 static_CreateVeneerTable,
+                 sizeof(static_CreateVeneerTable) / sizeof(*static_CreateVeneerTable),
+                 module_wsp,
+                 RTSPMB_PRISMID,
+
+                 &global_Veneers));
+
+  RetError(_swix(PRISM_ComponentNotify,
+                 _INR(0,3),
+
+                 0,
+                 RTSPMB_PRISMID,
+                 PRISM_Notify_DeclareInformation,
+                 global_Veneers[0]));
+
+  prism_registered = true;
 
   dprintf(("", "module_prism_try_to_register: Finished, prism_registered = %d\n", prism_registered));
 
-  return e;
+  return NULL;
 }
 
 /**************************************************************/
@@ -270,8 +382,6 @@ static _kernel_oserror * module_prism_try_to_register(void)
 
 static _kernel_oserror * module_prism_try_to_deregister(void)
 {
-  _kernel_oserror * e;
-
   dprintf(("", "module_prism_try_to_deregister: Called\n"));
 
   if (prism_registered == false)
@@ -280,19 +390,24 @@ static _kernel_oserror * module_prism_try_to_deregister(void)
     return NULL;
   }
 
-  e = _swix(PRISM_ComponentDeregister,
-            _INR(0,2),
+  RetError(_swix(PRISM_FreeVeneers,
+                 _INR(0,2),
 
-            0,
-            RTSPMB_00,
-            RTSPMB_PRISMID);
+                 0,
+                 global_Veneers,
+                 RTSPMB_PRISMID));
+
+  RetError(_swix(PRISM_ComponentDeregister,
+                 _INR(0,1),
+
+                 0,
+                 RTSPMB_PRISMID));
 
   prism_registered = false;
 
-  dprintf(("", "module_prism_try_to_deregister: Finished, e = %p\n", e));
-  if (e) dprintf(("", "module_prism_try_to_register: '%s'\n", e->errmess));
+  dprintf(("", "module_prism_try_to_deregister: Finished.\n"));
 
-  return e;
+  return NULL;
 }
 
 /**************************************************************/
@@ -587,6 +702,8 @@ static void module_atexit(void)
 {
   dprintf(("", "module_atexit: Called\n"));
 
+  /* Ensure pending callbacks are cancelled */
+
   if (callback_pending_flag == true)
   {
     (void) _swix(OS_RemoveCallBack,
@@ -618,6 +735,7 @@ static void module_atexit(void)
   /* the module, leaving EventV claimed would prove catastrophic.   */
 
   module_disable_internet_event();
+  module_prism_try_to_deregister();
   module_release_event_vector();
 
   /* Now we can start shutting the rest down. Stuff here may start */
@@ -626,7 +744,6 @@ static void module_atexit(void)
   /* (but hopefully reliable!) stuff first, above.                 */
 
   module_try_to_deregister();
-  module_prism_try_to_deregister();
   session_free_list();
 
   /* Send the "dying" service call for PRISM */
