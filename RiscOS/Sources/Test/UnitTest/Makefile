@@ -67,10 +67,11 @@ ABSSYM     = RISC_OSLib:o.AbsSym
 EVENTLIB   = Tbox:o.eventlib
 TOOLBOXLIB = Tbox:o.toolboxlib
 WIMPLIB	   = Tbox:o.wimplib
+ASMUTILS   = C:AsmUtils.o.AsmUtils
 #
 # Include files
 #
-INCLUDES = -ITbox: -IC: -ITCPIPLibs:
+INCLUDES = -ITbox: -IC: -ITCPIPLibs: -IC:AsmUtils
 
 
 # Program specific options:
@@ -88,7 +89,7 @@ BASEOBJS  = ${OM}.Display ${OM}.DRAMTest ${OM}.InputTest \
             ${OM}.CPUType ${OM}.IOControl ${OM}.MemSrcNCOS \
             ${OM}.ROMChksum TCPIPLibs:o.Unixlib TCPIPLibs:o.Inetlib TCPIPLibs:o.Socklib5
             
-Module    = ${OM}.header ${OM}.module ${OM}.usermode ${OM}.UnitTest
+Module    = ${OM}.header ${OM}.module ${OM}.UnitTest
 
 Applic    = ${OM}.AppMain
 
@@ -176,7 +177,7 @@ resources: ${TARGET}
 # Target
 #
 ${TARGET}: ${OBJS} dirs
-        ${LD} ${LDFLAGS} -o $@ ${OBJS} ${CLIB}
+        ${LD} ${LDFLAGS} -o $@ ${OBJS} ${ASMUTILS} ${CLIB}
         @echo ${COMPONENT}: link stage complete
         ${CRUNCH} ${BFLAGS} @.b.TestCard @.${CRUNCHED}.TestCard
         ${CRUNCH} ${BFLAGS} @.b.Gen_lib @.${CRUNCHED}.Gen_lib
