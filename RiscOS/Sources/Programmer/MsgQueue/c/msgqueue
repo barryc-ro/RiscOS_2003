@@ -24,6 +24,7 @@
 #include "utils.h"
 
 #undef DEVELOPMENT
+#undef CORRUPTION_CHECK
 
 #define TRUE 1
 #define FALSE 0
@@ -78,6 +79,10 @@ static BlockOfQueues *head = NULL;
  * don't want one caller registering at the same time as another caller deregistering.
  */
 static int mutex = 0;
+
+#ifdef CORRUPTION_CHECK
+static int corruption_allowance = 64;
+#endif
 
 extern unsigned int enter_critical(void);
 extern void restore_critical(int old_state);
@@ -242,7 +247,13 @@ extern _kernel_oserror *messagequeue_register(messagequeue_register_args *args)
     {
         regs.r[0] = regs.r[4] = regs.r[6] = regs.r[7] = 0;
         regs.r[1] = regs.r[3] = -1;
+
+        #ifdef CORRUPTION_CHECK
+        regs.r[2] = regs.r[5] = queuesize + corruption_allowance;
+        #else
         regs.r[2] = regs.r[5] = queuesize;
+        #endif
+
         regs.r[8] = (int)"MsgQ";
         if ((_kernel_swi(OS_DynamicArea,&regs,&regs)) == NULL)
         {
@@ -264,7 +275,11 @@ extern _kernel_oserror *messagequeue_register(messagequeue_register_args *args)
 
     if (p2 == NULL)
     {
+        #ifdef CORRUPTION_CHECK
+        if ((p2 = malloc(queuesize + corruption_allowance)) == NULL)
+        #else
         if ((p2 = malloc(queuesize)) == NULL)
+        #endif
         {
              if (prev != NULL)
              {
@@ -307,6 +322,12 @@ extern _kernel_oserror *messagequeue_register(messagequeue_register_args *args)
     printf("Queue handle %d\n",i);
     printf("head: %d, 0x%x\n",(int)p->qslots[i].head,(int)p->qslots[i].head);
     printf("tail: %d, 0x%x\n",(int)p->qslots[i].tail,(int)p->qslots[i].tail);
+    #endif
+
+    #ifdef CORRUPTION_CHECK
+    memset(p2,0xff,queuesize + corruption_allowance);
+    /* Corruption allowance portion should never change.  Check after       */
+    /* each operation and if it does change, report corruption detection.   */
     #endif
 
     mutex = 0;  /* We're finished. Allow the next caller in when it next calls. */
@@ -410,6 +431,11 @@ extern _kernel_oserror *messagequeue_send(messagequeue_send_args *args)
   char str_msgsize[12];
   int mq_handle;
   void *message;
+  #ifdef CORRUPTION_CHECK
+  _kernel_oserror ce;
+  int i;
+  char *p
+  #endif
 
     mq_handle = args->in.mq_handle;
     message = args->in.buffer;
@@ -531,7 +557,7 @@ extern _kernel_oserror *messagequeue_send(messagequeue_send_args *args)
     }
 
 
-    if (((int)old_startof_freespace + TIMESTAMP_OFFSET * 4) <= (int)q->tail)
+    if (((int)old_startof_freespace + TIMESTAMP_OFFSET * 4) < (int)q->tail)
     {
         *((int *)((int)old_startof_freespace + TIMESTAMP_OFFSET * 4)) = INVALID_TIMESTAMP;
     }
@@ -578,7 +604,7 @@ extern _kernel_oserror *messagequeue_send(messagequeue_send_args *args)
     /* We're ok if an interrupt happens here.  SWI_receive won't dispatch until
        it sees a valid timestamp in the message at the startof_dispatch point. */
 
-     if (((int)old_startof_freespace + TIMESTAMP_OFFSET * 4) <= (int)q->tail)
+     if (((int)old_startof_freespace + TIMESTAMP_OFFSET * 4) < (int)q->tail)
      {
          *((int *)(old_startof_freespace + TIMESTAMP_OFFSET)) = timestamp;
      }
@@ -605,6 +631,20 @@ extern _kernel_oserror *messagequeue_send(messagequeue_send_args *args)
     #ifdef DEVELOPMENT
     printf("start of freespace after send: %d, 0x%x\n",(int)q->startof_freespace,(int)q->startof_freespace);
     #endif
+
+    #ifdef CORRUPTION_CHECK
+    p = (char *)q->tail;
+    for (i = 0; i < corruption_allowance; i++)
+    {
+         if (*(p+i) != 0xff)
+         {
+             printf("Possible corruption detected at end of send(), handle: %d, i: %d\n",mq_handle,i);
+             sprintf(ce.errmess,"Possible corruption detected at end of send(), handle: %d, i: %d, value: 0x%x\n",mq_handle,i,(int)(*(p+i)));
+             return &ce;
+         }
+    }
+    #endif
+
 
     return NULL;
 }
@@ -640,10 +680,19 @@ extern _kernel_oserror *messagequeue_receive(messagequeue_receive_args *args)
   int flags;
   void *buffer;
   int sizeof_buffer;
+  #ifdef CORRUPTION_CHECK
+  int h,i;
+  _kernel_oserror e;
+  char *p;
+  #endif
 
     flags = args->in.flags;
     buffer = args->in.buffer;
     sizeof_buffer = args->in.size_of_buffer;
+
+    #ifdef CORRUPTION_CHECK
+    h = args->in.mq_handle;
+    #endif
 
     n = args->in.mq_handle;
     if ((current = (findq(&n))) == NULL)
@@ -754,6 +803,19 @@ extern _kernel_oserror *messagequeue_receive(messagequeue_receive_args *args)
           q->pollword = *((int *)(q->startof_dispatch)); /* size of next message */
     }
     restore_critical(old_state);
+
+    #ifdef CORRUPTION_CHECK
+    p = (char *)q->tail;
+    for (i = 0; i < corruption_allowance; i++)
+    {
+         if (*(p+i) != 0xff)
+         {
+             printf("Possible corruption detected at end of receive(), handle: %d, i: %d\n",h,i);
+             sprintf(e.errmess,"Possible corruption detected at end of receive(), handle: %d, i: %d, value: 0x%x\n",h,i,(int)(*(p+i)));
+             return &e;
+         }
+    }
+    #endif
 
     return NULL;
 }
