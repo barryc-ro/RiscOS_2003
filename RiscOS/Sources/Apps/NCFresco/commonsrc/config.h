@@ -39,7 +39,6 @@ struct config_str
     char *help_file;
     char *cookie_file;
     char *history_file;
-    char *encoding_path;
 
     int auth_file_crypt;
     char *animation_name;
@@ -210,8 +209,6 @@ extern struct config_str config_array;
 #define config_help_file (config_array.help_file)
 #define config_cookie_file (config_array.cookie_file)
 #define config_history_file (config_array.history_file)
-
-#define config_encoding_path (config_array.encoding_path)
 
 #define config_auth_file_crypt (config_array.auth_file_crypt)
 #define config_doc_default (config_array.doc_default)

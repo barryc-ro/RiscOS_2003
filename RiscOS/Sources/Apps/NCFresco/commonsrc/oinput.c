@@ -54,6 +54,10 @@
 #include "oimage.h"
 #include "gbf.h"
 
+#if UNICODE
+#include "Unicode/utf8.h"
+#endif
+
 /* ---------------------------------------------------------------------- */
 
 #ifndef Wimp_TextOp
@@ -147,33 +151,18 @@ static char *button_text(rid_input_item *ii)
     return s;
 }
 
-#ifndef BUILDERS
-static int string_length_upto(const char *str, int offset)
-{
-    font_string fs;
-    fs.s = (char *)str;
-    fs.x = fs.y = (1 << 30);
-    fs.split = -1;
-    fs.term = offset;
-
-    font_strwidth(&fs);
-
-    return fs.x;
-}
-#endif
-
 /*
  * Returns the actual start plot point of a string taking into account the scrolling
  */
 
 #ifndef BUILDERS
-static int get_string_start(const char *str, int text_input_offset, int boxx, int boxw, int numbers)
+static int get_string_start(int whichfont, const char *str, int text_input_offset, int boxx, int boxw, int numbers)
 {
     int x1, x2, slen, plotx;
 
     slen = strlen(str);
-    x1 = string_length_upto(str, slen) / MILIPOINTS_PER_OSUNIT;			/* length of string */
-    x2 = string_length_upto(str, text_input_offset) / MILIPOINTS_PER_OSUNIT;	/* length to caret */
+    x1 = webfont_font_width_n(whichfont, str, slen);			/* length of string */
+    x2 = webfont_font_width_n(whichfont, str, text_input_offset);	/* length to caret */
     plotx = boxx;
 
     if (numbers)
@@ -231,13 +220,65 @@ static int oinput_image_renderable(rid_input_item *ii, void *im, antweb_doc *doc
     if (fl & image_flag_REALTHING)
 	return TRUE;
 
-#if 0
-    /* welaways have some alt text now for the image buttons */
-    if (tii->alt == NULL && ((doc->flags & doc_flag_DEFER_IMAGES) != 0 || (ii->hh.type == value_none && ii->ww.type == value_none)))
-	return TRUE;
+    return FALSE;
+}
+
+static int insert_char(rid_input_item *ii, int pos, int c)
+{
+    char *str = ii->data.str;
+    int len, clen, nchars;
+
+    nchars = len = strlen(str);
+    clen = 1;
+#if UNICODE
+    if (config_encoding_internal == 1)
+    {
+	nchars = UTF8_strlen(str);
+	clen = UTF8_codelen(c);
+    }
+#endif
+
+    if (nchars + 1 > ii->max_len)
+	return 0;
+    
+    memmove(str + pos + clen, str + pos, len - pos + 1); /* +1 to move the NUL also */
+#if UNICODE
+    if (config_encoding_internal == 1)
+	UCS4_to_UTF8(str + pos, c);
 #endif
     
-    return FALSE;
+    return clen;
+}
+
+static int delete_char(rid_input_item *ii, int pos)
+{
+    char *str = ii->data.str;
+    int len = strlen(str);
+    int clen = UTF8_seqlen(str[pos]);
+
+    memmove(str + pos, str + (pos + clen), len - (pos + clen) + 1); /* +1 to move the NUL also */
+    
+    return clen;
+}
+
+static int move_point(rid_input_item *ii, int pos, int dir)
+{
+#if UNICODE
+    char *s = ii->data.str + pos;
+    if (config_encoding_internal == 1)
+    {
+	if (dir < 0)
+	    s = UTF8_prev(s);
+	else if (dir > 0)
+	    s = UTF8_next(s);
+    }
+    else
+	s += dir;
+    
+    return s - ii->data.str;
+#else
+    return pos + dir;
+#endif
 }
 
 /* ---------------------------------------------------------------------- */
@@ -304,7 +345,8 @@ void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
 	else
 	{
 	    int n = ii->flags & rid_if_NUMBERS ? (ii->xsize == -1 ? DEFAULT_XSIZE : ii->xsize) : text_displayable_width(ii->xsize, doc);
- 	    ti->width = webfont_tty_width(n, 1) + 2*INPUT_TEXT_BORDER_X + (ii->flags & rid_if_NUMBERS ? (n-1)*NUMBERS_SPACING_X : 0);
+  	    ti->width = webfont_nominal_width(whichfont, n) + 2*INPUT_TEXT_BORDER_X + (ii->flags & rid_if_NUMBERS ? (n-1)*NUMBERS_SPACING_X : 0);
+/*  	    ti->width = webfont_tty_width(n, 1) + 2*INPUT_TEXT_BORDER_X + (ii->flags & rid_if_NUMBERS ? (n-1)*NUMBERS_SPACING_X : 0); */
 	}
 
 	ti->max_up = webfonts[whichfont].max_up + INPUT_TEXT_BORDER_Y;
@@ -365,7 +407,7 @@ void oinput_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, in
 		ti->max_down = (int)ii->hh.u.f - ti->max_up;
 	    }
 #else
-	    ti->width = webfont_tty_width(strlen(t), 1) + INPUT_BUTTON_BORDER_X*2;
+	    ti->width = webfont_font_width(WEBFONT_BUTTON, t) + INPUT_BUTTON_BORDER_X*2;
 	    ti->max_up = webfonts[WEBFONT_BUTTON].max_up + INPUT_BUTTON_BORDER_Y;
 	    ti->max_down = webfonts[WEBFONT_BUTTON].max_down + INPUT_BUTTON_BORDER_Y;
 #endif
@@ -500,13 +542,6 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
     {
 	int has_caret;
 	whichfont = WEBFONT_TTY;
-#if 0
-	if ( gbf_active( GBF_AUTOFIT ) && gbf_active( GBF_AUTOFIT_ALL_TEXT ) &&
-	     doc->scale_value < 100 )
-	{
-	    whichfont -= (1<<WEBFONT_SIZE_SHIFT);
-	}
-#endif
 	plotx = hpos + 10;
 
 	slen = strlen(ii->data.str);
@@ -519,12 +554,6 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	    ii->base.colours.back != -1 ? ii->base.colours.back | render_colour_RGB :
 	    render_colour_WRITE;
 
-	if (fs->lf != webfonts[whichfont].handle)
-	{
-	    fs->lf = webfonts[whichfont].handle;
-	    font_setfont(fs->lf);
-	}
-
 	if (fs->lfc != fg || fs->lbc != bg)
 	{
 	    fs->lfc = fg;
@@ -534,7 +563,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 
 	if (has_caret)
 	{
-	    plotx = get_string_start(ii->data.str, doc->selection.data.text.input_offset,
+	    plotx = get_string_start(whichfont, ii->data.str, doc->selection.data.text.input_offset,
 				     plotx, ii->base.display->width - 2*INPUT_TEXT_BORDER_X,
 				     ii->flags & rid_if_NUMBERS);
 	}
@@ -542,7 +571,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 #ifdef STBWEB
 	if (ii->flags & rid_if_NUMBERS)
 	{
-	    int i, char_width = webfont_tty_width(1, TRUE);
+	    int i, char_width = webfont_nominal_width(whichfont, 1); /* webfont_tty_width(1, TRUE) */
 	    int n = ii->xsize != -1 ? ii->xsize : DEFAULT_XSIZE;
 	    int bg1 = ii->base.colours.back == -1 ? render_colour_WRITE : ii->base.colours.back | render_colour_RGB;
 
@@ -610,12 +639,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 		else
 		    str = ii->data.str;
 
-		_swix(Font_Paint, _INR(1,5), str,
-		      (ii->flags & rid_if_NUMBERS ? (1<<5) | 0x800 : 0), /* add blending for numbers as the bg changes colour */
-		      plotx * MILIPOINTS_PER_OSUNIT,
-		      bline * MILIPOINTS_PER_OSUNIT,
-		      coords);
-
+		render_text_full(doc, whichfont, str, plotx, bline, ii->flags & rid_if_NUMBERS ? coords : NULL, -1);
 		bbc_gwindow(g->x0, g->y0, g->x1-dx, g->y1-dy);
 	    }
 	}
@@ -709,12 +733,6 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	    plotx = INPUT_BUTTON_BORDER_X;
 	}
 
-	if (fs->lf != wf->handle)
-	{
-	    fs->lf = wf->handle;
-	    font_setfont(fs->lf);
-	}
-
 	if (fs->lfc != fg || fs->lbc != bg)
 	{
 	    fs->lfc = fg;
@@ -740,17 +758,12 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	RENDBG(("oinput_redraw: wf_index %x wf->handle %d split %d width %d\n", ti->st.wf_index, wf->handle, split, width));
 
 	/* plot the main string */
-	_swix(Font_Paint, _INR(1,4)|_IN(7),
-	      t, font_OSCOORDS + (config_display_blending && ii->data.button.im ? 0x800 : 0) + (1<<7),
-	      hpos + plotx, bline,
-	      split);
+	render_text_full(doc, whichfont, t, hpos + plotx, bline, NULL, split);
 
 	/* write ... if didn't fit */
 	if (split != t_len)
 	{
-	    _swix(Font_Paint, _INR(1,4),
-		  "...", font_OSCOORDS + (config_display_blending && ii->data.button.im ? 0x800 : 0),
-		  hpos + plotx + width, bline);
+	    render_text_full(doc, whichfont, "...", hpos + plotx + width, bline, NULL, split);
 	}
 	break;
     }
@@ -897,13 +910,9 @@ char *oinput_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
 	    x-=INPUT_TEXT_BORDER_X;
 
 	    /* take into account scrolled strings */
-
 	    if (be_item_has_caret(doc, ti))
 	    {
-/* 		if (doc->selection.data.text.input_offset < 0) */
-/* 		    doc->selection.data.text.input_offset = len; */
-
-		x = get_string_start(ii->data.str, doc->selection.data.text.input_offset,
+		x = get_string_start(WEBFONT_TTY, ii->data.str, doc->selection.data.text.input_offset,
 				     x, ii->base.display->width - 2*INPUT_TEXT_BORDER_X,
 				     ii->flags & rid_if_NUMBERS);
 	    }
@@ -913,18 +922,8 @@ char *oinput_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
 	    coords[3] = 0;
 	    coords[4] = -1;
 
-	    r.r[0] = (int) (long) webfonts[WEBFONT_TTY].handle;
-	    r.r[1] = (int) (long) ii->data.str;
-	    r.r[2] = (1 << 17) | (1 << 8) | (1 << 7) | (ii->flags & rid_if_NUMBERS ? (1<<5) : 0);
-	    r.r[3] = x * MILIPOINTS_PER_OSUNIT;
-	    r.r[4] = 0;
-	    r.r[5] = (int) coords; /* only used if NUMBERS is set */
-	    r.r[7] = len;
-
-	    ep = os_swix(Font_ScanString, &r);
-
-	    /* This now always sets the caret */
-	    text_input_offset = ep ? strlen(ii->data.str) : ((char *) (long) r.r[1]) - ii->data.str;
+	    text_input_offset = webfont_get_offset(WEBFONT_TTY, ii->data.str, x,
+						   ii->flags & rid_if_NUMBERS ? coords : NULL, len);
 
 	    LNKDBG(( "Caret set to item %p, offset %d\n", ti, text_input_offset));
 
@@ -1183,12 +1182,8 @@ BOOL oinput_caret(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int repos)
 	    antweb_update_item(doc, ti);
 
 	stream_find_item_location(ti, &cx, &cy);
-	ep = font_setfont(webfonts[WEBFONT_TTY].handle);
-	if (ep)
-	    break;
-
-	x1 = string_length_upto(ii->data.str, doc->selection.data.text.input_offset) / MILIPOINTS_PER_OSUNIT;
-	x2 = string_length_upto(ii->data.str, slen) / MILIPOINTS_PER_OSUNIT;
+	x1 = webfont_font_width_n(WEBFONT_TTY, ii->data.str, doc->selection.data.text.input_offset);
+	x2 = webfont_font_width_n(WEBFONT_TTY, ii->data.str, slen);
 
 	if (ii->flags & rid_if_NUMBERS)
 	{
@@ -1256,9 +1251,6 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 
     LNKDBG(( "oinput_key(): key %d tag %d text_input_offset %d\n", key, ii->tag, doc->selection.data.text.input_offset));
 
-/*     if (doc->selection.data.text.input_offset < 0) */
-/* 	doc->selection.data.text.input_offset = strlen(ii->data.str); */
-
     i = doc->selection.data.text.input_offset;
 
     switch (ii->tag)
@@ -1267,10 +1259,15 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
     case rid_it_PASSWD:
 	len = strlen(ii->data.str);
 
-	if (key >= 32 && key < 256 && key != 127)
+	if (key >= 32 && key != 127
+#if !UNICODE
+	    && key < 256
+#endif
+	    )
 	{
 	    if (ii->flags & rid_if_NUMBERS)
 	    {
+		/* since numbers are all ascii don't do special code for now */
 		if ( isdigit(key) ||
 		    ((ii->flags & rid_if_PBX) && (key == '#' || key == ',' || key == '*')) )
 		{
@@ -1300,14 +1297,22 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 	    }
 	    else
 	    {
-		if (len+1 <= ii->max_len)	/* 15/8/96: DAF: < to <= */
+#if 1
+		int offset = insert_char(ii, i, key);
+		if (offset > 0)
 		{
-		    memmove(ii->data.str + i + 1, ii->data.str + i, (len + 1 - i));
-
-		    ii->data.str[i] = key;
-		    doc->selection.data.text.input_offset++;
+		    doc->selection.data.text.input_offset += offset;
 		    redraw = TRUE;
 		}
+#else
+		if (len+1 <= ii->max_len)	/* 15/8/96: DAF: < to <= */
+		{
+ 		    memmove(ii->data.str + i + 1, ii->data.str + i, (len + 1 - i));
+ 		    ii->data.str[i] = key;
+ 		    doc->selection.data.text.input_offset++;
+		    redraw = TRUE;
+		}
+#endif
 		else
 		{
 		    sound_event(snd_WARN_BAD_KEY);
@@ -1317,7 +1322,12 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 	}
 	else
 	{
-	    int action = lookup_key_action(key);
+	    int action;
+#if UNICODE
+	    if (key < 0)
+		key = -key;
+#endif
+	    action = lookup_key_action(key);
 	    switch (action)
 	    {
 	    case key_action_NEWLINE:
@@ -1393,8 +1403,10 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 	    case key_action_DELETE_LEFT:
 		if (i > 0)
 		{
-		    memmove(ii->data.str + i - 1, ii->data.str + i, (len + 1 - i));
-		    doc->selection.data.text.input_offset--;
+		    doc->selection.data.text.input_offset = move_point(ii, i, -1);
+		    delete_char(ii, doc->selection.data.text.input_offset);
+/* 		    memmove(ii->data.str + i - 1, ii->data.str + i, (len + 1 - i)); */
+/* 		    doc->selection.data.text.input_offset--; */
 		    used = redraw = TRUE;
 		}
 		break;
@@ -1413,18 +1425,20 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 	    case key_action_DELETE_RIGHT:
 		if (i < len)
 		{
-		    memmove(ii->data.str + i, ii->data.str + i + 1, (len - i));
+		    delete_char(ii, i);
+/* 		    memmove(ii->data.str + i, ii->data.str + i + 1, (len - i)); */
 		    used = redraw = TRUE;
 		}
 		break;
 
 	    case key_action_LEFT:
 		used = TRUE;
-		/* deliberate fuall-through */
+		/* deliberate fall-through */
 	    case key_action_LEFT_OR_OFF:
 		if (i > 0)
 		{
-		    doc->selection.data.text.input_offset--;
+		    doc->selection.data.text.input_offset = move_point(ii, i, -1);
+/* 		    doc->selection.data.text.input_offset--; */
 		    used = redraw = TRUE;
 		}
 		break;
@@ -1435,7 +1449,8 @@ BOOL oinput_key(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int key)
 	    case key_action_RIGHT_OR_OFF:
 		if (i < (ii->flags & rid_if_NUMBERS ? len-1 : len))
 		{
-		    doc->selection.data.text.input_offset++;
+		    doc->selection.data.text.input_offset = move_point(ii, i, +1);
+/* 		    doc->selection.data.text.input_offset++; */
 		    used = redraw = TRUE;
 		}
 		break;
@@ -1635,7 +1650,6 @@ void oinput_asdraw(rid_text_item *ti, antweb_doc *doc, int fh,
 /*
  */
 
-#if 1
 int oinput_update_highlight(rid_text_item *ti, antweb_doc *doc, int reason, wimp_box *box)
 {
     rid_input_item *ii = ((rid_text_item_input *) ti)->input;
@@ -1677,69 +1691,5 @@ int oinput_update_highlight(rid_text_item *ti, antweb_doc *doc, int reason, wimp
     }
     return !own_hl;
 }
-#else
-void oinput_update_highlight(rid_text_item *ti, antweb_doc *doc)
-{
-    wimp_box trim;
-    BOOL update_full = FALSE;
 
-    memset(&trim, 0, sizeof(trim));
-
-    switch (ti->tag)
-    {
-    case rid_tag_INPUT:
-    {
-#ifdef STBWEB
-	update_full = TRUE;
-#else
-	rid_input_item *ii = ((rid_text_item_input *) ti)->input;
-	update_full = ((ii->tag == rid_it_SUBMIT || ii->tag ==  rid_it_RESET || ii->tag == rid_it_BUTTON) &&
-	    ii->data.button.im_sel) ||
-	    ii->tag == rid_it_CHECK || ii->tag == rid_it_RADIO;
-#endif
-	break;
-    }
-    case rid_tag_SELECT:
-    {
-#ifdef STBWEB
-	update_full = TRUE;
-#else
-	rid_select_item *sel = ((rid_text_item_select *)ti)->select;
-	update_full = sel->base.colours.select != -1;
-#endif
-	break;
-    }
-    case rid_tag_TEXTAREA:
-    {
-#ifdef STBWEB
-	update_full = 1;
-#else
-	rid_textarea_item *ta = ((rid_text_item_textarea *)ti)->area;
-	update_full = ta->base.colours.select != -1;
-#endif
-	break;
-    }
-    }
-
-    if (update_full)
-	antweb_update_item_trim(doc, ti, &trim, FALSE);
-    else
-    {
-	trim.x0 = ti->width - 4;
-	antweb_update_item_trim(doc, ti, &trim, TRUE);
-	trim.x0 = 0;
-
-	trim.y0 = ti->max_up + ti->max_down - 4;
-	antweb_update_item_trim(doc, ti, &trim, TRUE);
-	trim.y0 = 0;
-
-	trim.x1 = - (ti->width - 4);
-	antweb_update_item_trim(doc, ti, &trim, TRUE);
-	trim.x1 = 0;
-
-	trim.y1 = - (ti->max_up + ti->max_down - 4);
-	antweb_update_item_trim(doc, ti, &trim, TRUE);
-    }
-}
-#endif
 /* eof oinput.c */

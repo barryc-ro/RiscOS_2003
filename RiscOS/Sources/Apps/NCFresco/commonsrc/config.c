@@ -383,11 +383,6 @@ config_item citems[] = {
       (void *)offsetof(struct config_str, history_file),
       "Where to store the persistent history",
       "<"PROGRAM_NAME"$Dir>.History" },
-{ config_FILE,
-      "files.encoding",
-      (void *)offsetof(struct config_str, encoding_path),
-      "Path to encoding files",
-      "<"PROGRAM_NAME"$Dir>.Encodings" },
 
 { config_COMMENT, NULL, NULL, "", NULL },
 

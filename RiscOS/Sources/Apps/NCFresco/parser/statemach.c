@@ -464,7 +464,9 @@ static void state_find_entity(SGMLCTX *context, UCHARACTER input)
 #endif
 /*printf("entity '%.*s' -- ", min(MAXSTRING, context->inhand.ix), context->inhand.data);*/
                 entity_recognition(context);
+	PRSDBG(("state_find_entity: done recog\n"));
                 context->state = get_state_proc(context);
+	PRSDBG(("state_find_entity: got state %p\n", context->state));
                 if (input != ';')
                 {
         		add_char_to_inhand(context, input);

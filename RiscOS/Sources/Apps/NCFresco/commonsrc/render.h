@@ -28,7 +28,8 @@ int render_cell_background_colour(int c);
 
 int render_background( be_item ti, be_doc doc );
 int render_caret_colour(be_doc doc, int back, int cursor);
-extern int render_text(be_doc doc, const char *text, int x, int y);
+extern int render_text(be_doc doc, int font_index, const char *text, int x, int y);
+extern int render_text_full(be_doc doc, int font_index, const char *text, int x, int y, int *coords, int n);
 extern void *render_sprite_locate(const char *sprite, void **sptr_out);
 extern void render_plinth_from_list(int bcol, wimp_paletteword *cols, int flags, int x, int y, int w, int h, be_doc doc);
 

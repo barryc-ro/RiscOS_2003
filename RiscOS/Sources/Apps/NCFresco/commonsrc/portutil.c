@@ -724,6 +724,20 @@ char *skip_space(const char *s)
     return (char *)s;
 }
 
+char *skip_space_or_comma(const char *s)
+{
+    if (s) while (isspace(*s) || *s == ',')
+	s++;
+    return (char *)s;
+}
+
+char *skip_to_space_or_comma(const char *s)
+{
+    if (s) while (!isspace(*s) && *s != ',')
+	s++;
+    return (char *)s;
+}
+
 /* ---------------------------------------------------------------------------------------------------- */
 
 #if 0

@@ -101,11 +101,14 @@ static void oimage_size_alt_text(antweb_doc *doc, const char *alt, const rid_std
 	wf = &webfonts[whichfont];
 /* 	wf = &webfonts[ALT_FONT]; */
 
-	font_setfont(wf->handle);
-
         /* if no width given then use what we need */
         if (/* defer_images ||  */req_ww->type == value_none)
         {
+#if 1
+	    fs.x = webfont_font_width(whichfont, alt ? alt : NONE_STRING);
+#else
+	    font_setfont(wf->handle);
+
 	    fs.x = 1 << 30;
 	    fs.y = 1 << 30;
 	    fs.split = -1;
@@ -115,7 +118,7 @@ static void oimage_size_alt_text(antweb_doc *doc, const char *alt, const rid_std
 	    font_strwidth(&fs);
 
 	    fs.x /= MILIPOINTS_PER_OSUNIT;
-
+#endif
 	    imw = fs.x + PLINTH_PAD;
 	    imh = (/* defer_images ||  */req_hh->type != value_absunit)
 	             ? (wf->max_up + wf->max_down + PLINTH_PAD*2)
@@ -141,7 +144,7 @@ static void oimage_size_alt_text(antweb_doc *doc, const char *alt, const rid_std
 
 	    if (ww > PLINTH_PAD)
 	    {
-		write_text_in_box_height(alt, ww - PLINTH_PAD, wf->handle, &height);
+		write_text_in_box_height(alt, ww - PLINTH_PAD, whichfont, &height);
 		imh = height + PLINTH_PAD;
 	    }
 	    else
@@ -283,10 +286,11 @@ void oimage_render_text(rid_text_item *ti, antweb_doc *doc, object_font_state *f
     {
 	wimp_box box;
 	int whichfont;
-	struct webfont *wf;
+/* 	struct webfont *wf; */
 	int tfc;
 
 	whichfont = antweb_getwebfont(doc, ti, ALT_FONT);
+#if 0
  	wf = &webfonts[whichfont];
 /* 	wf = &webfonts[ALT_FONT]; */
 
@@ -295,7 +299,7 @@ void oimage_render_text(rid_text_item *ti, antweb_doc *doc, object_font_state *f
 	    fs->lf = wf->handle;
 	    font_setfont(fs->lf);
 	}
-
+#endif
 	if (fs->lfc != (tfc = render_link_colour(ti, doc) ) || fs->lbc != render_colour_BACK)
 	{
 	    fs->lfc = tfc;
@@ -308,7 +312,7 @@ void oimage_render_text(rid_text_item *ti, antweb_doc *doc, object_font_state *f
 	box.x1 = bbox->x1 - PLINTH_PAD/2;
 	box.y0 = bbox->y0 + PLINTH_PAD/2;
 	box.y1 = bbox->y1 - PLINTH_PAD/2;
-	write_text_in_box(fs->lf, text, &box);
+	write_text_in_box(whichfont, text, &box);
     }
 }
 #endif

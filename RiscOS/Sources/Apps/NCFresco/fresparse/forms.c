@@ -14,6 +14,10 @@
 #include "htmlparser.h"
 #include "webfonts.h"
 
+#if UNICODE
+#include "Unicode/charsets.h"
+#endif
+
 /* extern void translate_escaped_text(char *src, char *dest, int len); */
 
 extern void startform (SGMLCTX * context, ELEMENT * element, VALUES * attributes)
@@ -252,7 +256,12 @@ extern void startinput (SGMLCTX * context, ELEMENT * element, VALUES * attribute
 	break;
     case rid_it_TEXT:
     case rid_it_PASSWD:
-	in->data.str = mm_malloc(in->max_len + 1); /* SJM: Add 1 for the terminating null, was added to max_len originally */
+#if UNICODE
+	if (context->enc_num_write == csUTF8)
+	    in->data.str = mm_malloc(in->max_len*6 + 1); /* allocate maximum possible in UTF8 */
+	else
+#endif
+	    in->data.str = mm_malloc(in->max_len + 1); /* SJM: Add 1 for the terminating null, was added to max_len originally */
 	if (in->value)
 	{
 /* 	    translate_escaped_text(in->value, in->data.str, in->max_len + 1); */ /* add one here as len is len of output buffer */
@@ -263,11 +272,13 @@ extern void startinput (SGMLCTX * context, ELEMENT * element, VALUES * attribute
 	    in->data.str[0] = 0;
 	}
 
+#ifdef STBWEB
 	/* we've used WIDTH as a pixel width and some morons out there use WIDTH when they mean SIZE
 	 * so WIDTH is only understood if SIZE is also specified
 	 */
 	if (in->ww.type != value_none && in->xsize == -1)
 	    in->ww.type = value_none;
+#endif
 	break;
     case rid_it_IMAGE:
     {
@@ -291,7 +302,7 @@ extern void startinput (SGMLCTX * context, ELEMENT * element, VALUES * attribute
 #endif
 
 #if UNICODE
-	if (webfont_need_wide_font(in->value, strlen(in->value)))
+	if (in->value && webfont_need_wide_font(in->value, strlen(in->value)))
 	    nb->flag |= rid_flag_WIDE_FONT;
 #endif
 

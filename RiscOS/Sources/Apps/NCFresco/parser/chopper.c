@@ -86,7 +86,6 @@ typedef enum
     UNDECIDED,			/* first three as old state machine */
     LETTER,
     SPACE,
-    IDEO,
     PSTART,
     PEND,
     MARK
@@ -112,8 +111,6 @@ static chop_state decode_ctype(int ctype)
 	return LETTER;
     case unictype_MARK:
 	return MARK;
-    case unictype_IDEOGRAPH:
-	return IDEO;
     }
     return LETTER;
 }
@@ -137,7 +134,6 @@ extern void sgml_fmt_word_chopper(SGMLCTX *context, USTRING input)
 	case LETTER:
 	case PSTART:
 	case PEND:
-	case IDEO:
 	case MARK:
 	    ASSERT(context->prechop.ix > 0);
 
@@ -166,12 +162,27 @@ extern void sgml_fmt_word_chopper(SGMLCTX *context, USTRING input)
 	int ctype;
 	chop_state new_state;
 	BOOL deliver = FALSE;
+	BOOL ideo;
 	
 	eol_sm(st, c, &context->line);
 
 	ctype = unictype_lookup((UCS2)c);
 	new_state = decode_ctype(ctype);
+	ideo = unictype_is_ideograph((UCS2)c);
 
+	/* if changing between ideo and non-ideo then always create new word */
+	if (ideo != st->s3)
+	    deliver = TRUE;
+	
+	if (new_state == SPACE)
+	{
+	    if (c > ' ')	/* SPACE > ' ' means nbsp or ideographic so maintain */
+		new_state = LETTER;
+	    else
+		c = ' ';
+	}
+
+	/* then check for whether word splitting should occur */
 	switch ((chop_state)st->s1)
 	{
 	case UNDECIDED:
@@ -181,14 +192,17 @@ extern void sgml_fmt_word_chopper(SGMLCTX *context, USTRING input)
 	case LETTER:			/* in a word */
 	    switch (new_state)
 	    {
-	    case LETTER:
 	    case PSTART:
-	    case PEND:
+	    case LETTER:
+		if (ideo)
+		    deliver = TRUE;
+		break;
+
 	    case MARK:
+	    case PEND:
 		break;
 		
 	    case SPACE:
-	    case IDEO:
 		deliver = TRUE;
 		break;
 	    }
@@ -206,9 +220,6 @@ extern void sgml_fmt_word_chopper(SGMLCTX *context, USTRING input)
 	    case SPACE:
 		deliver = TRUE;
 		break;
-
-	    case IDEO:	
-		break;
 	    }
 	    break;
 	    
@@ -217,15 +228,15 @@ extern void sgml_fmt_word_chopper(SGMLCTX *context, USTRING input)
 	    {
 	    case LETTER:
 	    case PSTART:
-	    case PEND:
+		if (ideo)
+		    deliver = TRUE;
+		break;
+
 	    case MARK:
+	    case PEND:
 		break;
 
 	    case SPACE:
-		deliver = TRUE;
-		break;
-		
-	    case IDEO:
 		deliver = TRUE;
 		break;
 	    }
@@ -236,15 +247,15 @@ extern void sgml_fmt_word_chopper(SGMLCTX *context, USTRING input)
 	    {
 	    case LETTER:
 	    case PSTART:
+		if (ideo)
+		    deliver = TRUE;
+		break;
+
 	    case PEND:
 	    case MARK:
 		break;
 
 	    case SPACE:
-		deliver = TRUE;
-		break;
-
-	    case IDEO:
 		deliver = TRUE;
 		break;
 	    }
@@ -261,26 +272,6 @@ extern void sgml_fmt_word_chopper(SGMLCTX *context, USTRING input)
 		break;
 
 	    case SPACE:
-		break;
-
-	    case IDEO:
-		deliver = TRUE;
-		break;
-	    }
-	    break;
-	    
-	case IDEO:
-	    switch (new_state)
-	    {
-	    case PEND:
-	    case MARK:
-		break;
-		
-	    case LETTER:
-	    case PSTART:
-	    case SPACE:
-	    case IDEO:
-		deliver = TRUE;
 		break;
 	    }
 	    break;
@@ -309,11 +300,11 @@ extern void sgml_fmt_word_chopper(SGMLCTX *context, USTRING input)
 
 	    context->prechop.ix = 0;
 	}
-	
-	st->s1 = (int)new_state;
-	if (new_state == SPACE)
-	    c = ' ';
 
+
+	st->s1 = (int)new_state;
+	st->s3 = ideo;	    
+	
 	add_to_prechop_buffer(context, c);
     }
 }

@@ -90,6 +90,8 @@ void otext_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     whichfont = antweb_getwebfont(doc, ti, -1);
     wf = &webfonts[whichfont];
 
+    RENDBGN(("otext: enc %d lang '%s' f %d f1 %d\n", doc->rh->encoding, encoding_default_language(doc->rh->encoding), whichfont, ti->st.wf_index));
+
     if (str_len == 0)
     {
 	ti->width = 0;
@@ -102,18 +104,12 @@ void otext_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     else
     {
 #if NEW_BREAKS
-	int width2;
+	int width = webfont_font_width(whichfont, s);
 
-	_swix(Font_ScanString, _INR(0,6) | _OUT(3),
-	      wf->handle, s, (1<<8),
-	      INT_MAX, INT_MAX,
-	      NULL, NULL, 
-	      &width2);
-
-	ti->width = (width2 + MILIPOINTS_PER_OSUNIT/2) / MILIPOINTS_PER_OSUNIT;
+	ti->width = width;
 	ti->pad = ti->flag & rid_flag_SPACE ? wf->space_width : 0;
 
-	DBG(("otext: scanstring '%s' str_len %d width %d pad %d\n", s, str_len, ti->width, ti->pad));
+	RENDBGN(("otext: scanstring '%s' str_len %d width %d pad %d font %d enc %d\n", s, str_len, ti->width, ti->pad, whichfont, doc->rh->encoding));
 #else
 	int flags; 
 	int width1, width2;
@@ -239,10 +235,10 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
 
     /* quick exit if there is no text to display */
     /* removed because it upsets the highligt box drawing */
-#if 1
+
     if (rh->texts.data[tit->data_off] == 0)
 	return;
-#endif
+
     tfc = render_text_link_colour(ti, doc);
     tbc = render_background(ti, doc);
 
@@ -258,12 +254,6 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
     }
 #endif
 
-    if (fs->lf != wf->handle)
-    {
-	fs->lf = wf->handle;
-	font_setfont(fs->lf);
-    }
-
     if ( fs->lfc != tfc || fs->lbc != tbc )
     {
 	fs->lfc = tfc;
@@ -278,13 +268,11 @@ void otext_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos, 
 
     flexmem_noshift();
 
-    RENDBG(("otext_redraw: fg %08x bg %08x text '%s' w %d vlink=%08x - %08x\n", tfc, tbc, rh->texts.data + tit->data_off, ti->width, doc->rh->colours.vlink, render_get_colour(render_colour_CREF, doc).word));
+    RENDBGN(("otext_redraw: font %d fg %08x bg %08x text '%s' w %d vlink=%08x - %08x\n", whichfont, tfc, tbc, rh->texts.data + tit->data_off, ti->width, doc->rh->colours.vlink, render_get_colour(render_colour_CREF, doc).word));
 
-#if 0
-    dump_data(rh->texts.data + tit->data_off, strlen(rh->texts.data + tit->data_off));
-#endif
+    /* dump_data(rh->texts.data + tit->data_off, strlen(rh->texts.data + tit->data_off)); */
 
-    no_text = !render_text(doc, rh->texts.data + tit->data_off, hpos, b);
+    no_text = !render_text(doc, whichfont, rh->texts.data + tit->data_off, hpos, b);
 
     if (ti->pad)
 	no_text = FALSE;
@@ -367,9 +355,8 @@ void otext_astext(rid_text_item *ti, rid_header *rh, FILE *f)
 {
     rid_text_item_text *tit = (rid_text_item_text *) ti;
 
-#if 0
-    fprintf(stderr, "rh = 0x%p, texts = 0x%p, data = 0x%p\n", rh, &(rh->texts), rh->texts.data);
-#endif
+/*  fprintf(stderr, "rh = 0x%p, texts = 0x%p, data = 0x%p\n", rh, &(rh->texts), rh->texts.data); */
+
     flexmem_noshift();
     fputs(rh->texts.data + tit->data_off, f);
     flexmem_shift();
@@ -437,14 +424,6 @@ void otext_asdraw(rid_text_item *ti, antweb_doc *doc, int fh,
 
 int otext_update_highlight(rid_text_item *ti, antweb_doc *doc, int reason, wimp_box *box)
 {
-#if 0
-    if (box)
-    {
-	memset(box, 0, sizeof(*box));
-
-	box->x1 = ti->pad + 2;
-    }
-#else
     if (box)
     {
 	int d = config_display_highlight_width*2 + 4;
@@ -457,7 +436,7 @@ int otext_update_highlight(rid_text_item *ti, antweb_doc *doc, int reason, wimp_
 	    box->x1 = d;
 	box->y0 = -d;
     }
-#endif
+
     return FALSE;
 }
 

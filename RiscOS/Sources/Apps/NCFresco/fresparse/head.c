@@ -158,7 +158,7 @@ extern void startmeta (SGMLCTX * context, ELEMENT * element, VALUES * attributes
 		DBG(("set_encoding META %d\n", encoding));
 		
 		/* set stream to have encoding updated */
-		sgml_set_encoding(context, encoding);
+		me->rh->encoding_write = sgml_set_encoding(context, encoding);
 	    }
 	    else
 	    {

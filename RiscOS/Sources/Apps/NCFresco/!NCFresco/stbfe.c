@@ -2747,12 +2747,68 @@ os_error *fe_paste_url(fe_view v)
 /* key handlers */
 /* ------------------------------------------------------------------------------------------- */
 
+#if 0
+static int get_input_encoding(void)
+{
+    static int encoding_list[] =
+    {
+	csISOLatin1,
+	csAcornLatin1,
+	csISOLatin2,
+	csISOLatin3,
+	csISOLatin4,
+	csISOLatinCyrillic,
+	csISOLatinArabic,
+	csISOLatinGreek,
+	csISOLatinHebrew
+    };
+    int alphabet = 101;
+    int encoding = csISOLatin1;
+
+    _swix(Territory_Alphabet, _IN(0), _OUT(0), -1, &alphabet);
+
+    alphabet -= 100;
+
+    if (alphabet >= 0 && alphabet < sizeof(encoding_list)/sizeof(encoding_list[0]))
+	encoding = encoding_list[alphabet];
+
+    return encoding;
+}
+#endif
+
+static int convert_key_latin1(int key)
+{
+    static unsigned short keys[] =
+    {
+	0xFFFD, 0x0174, 0x0175, 0xFFFD, 0xFFFD, 0x0176, 0x0177, 0xFFFD,
+	0xFFFD, 0xFFFD, 0xFFFD, 0xFFFD, 0x2026, 0x2122, 0x2030, 0x2022,
+	0x2018, 0x2019, 0x2039, 0x203A, 0x201C, 0x201D, 0x201E, 0x2013,
+	0x2014, 0x2212, 0x0152, 0x0153, 0x2020, 0x2021, 0xFB01, 0xFB02
+    };
+
+    if (key >= 128 && key < 160)
+	key = keys[key-128];
+
+    return key;    
+}
+
 BOOL fe_writeable_handle_keys(fe_view v, int key)
 {
     int used = FALSE;
 
     if (v && v->displaying)
-        backend_doc_key(v->displaying, key, &used);
+    {
+	int k;
+	
+	/* Need to translate this keycode to UCS4 - unles a function key */
+	if (key > 256 && key < 512)
+	    k = -key;
+	else
+	    k = convert_key_latin1(key);
+	
+	if (k != 0xFFFD)
+	    backend_doc_key(v->displaying, k, &used);
+    }
 
     STBDBG(("fe_writeable_handle_keys: v %p key %d used %d\n", v, key, used));
 
@@ -5331,7 +5387,7 @@ static void check_error(void)
 
 /* ------------------------------------------------------------------------------------------- */
 
-#if DEBUG
+#if DEBUG && 0
 extern void *my_kernel_alloc(unsigned int size);
 
 static void setup_allocs(void)
@@ -5769,7 +5825,7 @@ void fe_event_process(void)
     dbgpoll();
     mm_poll();
 
-#if DEBUG
+#if 0
     {
 	extern int stack_extensions;
 	static int old_stack_extensions = 0;
@@ -6174,7 +6230,7 @@ int main(int argc, char **argv)
 {
     int init_ok;
 
-#if DEBUG
+#if DEBUG && 0
     setup_allocs();
 #endif
     

@@ -560,6 +560,8 @@ static void fmt_deliver_eos(SGMLCTX *context, int reason, STRING item, ELEMENT *
   SJM: 11/05/97: separated out the routines to do tab expansions and concatenation
   to ensure TEXTAREA and OPTION are expanded and fixed memory leaks due to not always
   freeing the item passed in.
+
+  Then added new textarea code.
   
   */
 
@@ -576,7 +578,6 @@ static void pre_deliver_word(SGMLCTX *context, int reason, STRING item, ELEMENT 
 	    rid_textarea_item *tai;
 	    STRING null;
 
-#if NEW_TEXTAREA
 	    STRING text;
 	    int off;
 	    tai = htmlctx->form->last_text;
@@ -596,25 +597,6 @@ static void pre_deliver_word(SGMLCTX *context, int reason, STRING item, ELEMENT 
 		flexmem_shift();
 	    }
 	    string_free(&text);
-#else
-	    rid_textarea_line *tal;
-	    tai = htmlctx->form->last_text;
-	    tal = mm_calloc(1, sizeof(*tal));
-
-	    null.bytes = 0;
-	    tal->text = get_tab_expanded_string(item, null).ptr;
-
-	    if (tai->default_lines)
-	    {
-		tai->def_last_line->next = tal;
-		tal->prev = tai->def_last_line;
-		tai->def_last_line = tal;
-	    }
-	    else
-	    {
-		tai->default_lines = tai->def_last_line = tal;
-	    }
-#endif
 	}
 	else
 	{
@@ -623,51 +605,6 @@ static void pre_deliver_word(SGMLCTX *context, int reason, STRING item, ELEMENT 
 	}
 	string_free(&item);
     }
-#if 0
-    /* SJM: guess what, this bit never seems to get used, finishoption() does all the work instead */
-    else if (context->tos->element == HTML_SELECT)
-    {
-	if (htmlctx->form && htmlctx->form->last_select && htmlctx->form->last_select->last_option)
-	{
-	    rid_option_item *opt = htmlctx->form->last_select->last_option;
-	    STRING current;
-	    
-	    PRSDBG(("Option line='%.*s'\n", 
-		    htmlctx->inhand_string.bytes,
-		    htmlctx->inhand_string.ptr));
-
-#if 1
-	    current.bytes = opt->text ? strlen(opt->text) : /*NULL*/ 0;
-	    current.ptr = opt->text;
-
-	    /* strip space from start and end of OPTION string */
-	    opt->text = get_tab_expanded_string(string_strip_space(item), current).ptr;
-
-	    mm_free(current.ptr);
-#else
-	    if (opt->text)
-	    {
-		int len;
-		char *new_text;
-
-		len = strlen(opt->text) + item.bytes + 1;
-
-		new_text = mm_malloc(len);
-		strcpy(new_text, opt->text);
-		strncat(new_text, item.ptr, item.bytes);
-		new_text[len-1] = 0;
-		mm_free(opt->text);
-		opt->text = new_text;
-	    }
-	    else
-	    {
-		opt->text = stringdup(item);
-	    }
-#endif
-	}
-	string_free(&item);
-    }
-#endif
     else if (htmlctx->inhand_reason == DELIVER_WORD)
     {
 	/* Need to free new data once used. Need to expand */

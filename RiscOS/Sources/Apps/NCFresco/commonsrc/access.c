@@ -117,6 +117,10 @@ extern void translate_escaped_text(char *in, char *out, int len);
 #define LOCK_FILES 0
 #endif
 
+#ifndef FANCY_RESOLVE
+#define FANCY_RESOLVE 1
+#endif
+
 #ifndef POLL_INTERVAL
 #define POLL_INTERVAL	10	/* centi-seconds */
 #endif
@@ -465,7 +469,7 @@ static void access_redial_alarm(int at, void *h)
 
 /* ------------------------------------------------------------------------------------- */
 
-#ifndef FILEONLY
+#if !defined(FILEONLY) && FANCY_RESOLVE
 /*
 Fancy DNS resolving
 
@@ -580,6 +584,8 @@ static BOOL access_try_fancy_resolve(access_handle d, const char *prefix)
 
     return TRUE;
 }
+#else
+#define access_try_fancy_resolve(d, prefix) FALSE
 #endif
 
 /* ------------------------------------------------------------------------------------- */
@@ -1158,6 +1164,8 @@ static void access_http_dns_alarm(int at, void *h)
     }
     else if (access_try_fancy_resolve(d, "www."))
     {
+	/* will try again with different host - clear header */
+	ep = NULL;
     }
     else
     {
@@ -1854,6 +1862,8 @@ static void access_gopher_dns_alarm(int at, void *h)
     }
     else if (access_try_fancy_resolve(d, "gopher."))
     {
+	/* will try again with different host - clear header */
+	ep = NULL;
     }
     else
     {
@@ -2031,6 +2041,8 @@ static void access_ftp_dns_alarm(int at, void *h)
     }
     else if (access_try_fancy_resolve(d, "ftp."))
     {
+	/* will try again with different host - clear header */
+	ep = NULL;
     }
     else
     {
@@ -4100,6 +4112,38 @@ BOOL access_was_directory( access_handle d )
 int access_get_ftype(access_handle d)
 {
     return d ? d->ftype : -1;
+}
+
+int access_get_encoding(access_handle d)
+{
+    int enc = 0;
+#if UNICODE
+    if (d)
+    {
+	switch (d->access_type)
+	{
+	case access_type_HTTP:
+	{
+	    http_header_item *list = access_get_headers(d);
+    
+	    for (; list; list = list->next)
+	    {
+		if (strcasecomp(list->key, "CONTENT-TYPE") == 0)
+		{
+		    enc = parse_content_type_header(list->value);
+		    break;
+		}
+	    }
+	    break;
+	}
+
+	case access_type_FILE:
+	    access_get_header_info(d->url, NULL, NULL, NULL, &enc);
+	    break;
+	}
+    }
+#endif    
+    return 0;
 }
 
 /* eof access.c */

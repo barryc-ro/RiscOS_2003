@@ -36,6 +36,10 @@
 #include "object.h"
 #include "gbf.h"
 
+#if UNICODE
+#include "Unicode/languages.h"
+#endif
+
 /* Option to use current font rather than fixed font */
 #ifndef SELECT_CURRENT_FONT
 #ifdef STBWEB
@@ -154,56 +158,24 @@ void oselect_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 
     line_space = wf->max_up + wf->max_down;
 
-#if 1
     /* This is better? */
     if (sel->flags & rid_sf_MULTIPLE)
 	width = webfont_font_width(whichfont, "<None>");
     else
 	width = 0;
-#else
-    /* This isn't quite right but it will do for now */
-    width = webfont_tty_width(6, 1); /* Length of '<none>' in chars */
-#endif
     
-/*     if (font_setfont(wf->handle) != 0) */
-/* 	return; */
-
     height = 0;
 
     for(oi = sel->options; oi; oi = oi->next)
     {
-	/* @@@@ Borris asks if this will get freed correctly. 15/10/96 */
-
-        /* #*$@ Peter discovers that it doesn't. 9/6/97 */
-
+	/* oi->text pointers never get freed as they are copies of other pointers which are */
 	if (oi->text == NULL)
-#if 0
-	    oi->text = strdup("");
-#else
-	oi->text = "";
-#endif
+	    oi->text = "";
 
-	/* Start at the end; while not before the start and on a space; work backwards */
-	/* SJM. this is now done in the parser */
-/* 	for(i = strlen(oi->text)-1; i>=0 && isspace(oi->text[i]); i--) */
-/* 	    oi->text[i] = 0; */
-
-#if 1
-	fs.x = webfont_font_width(wf->handle, oi->text);
+	fs.x = webfont_font_width(whichfont, oi->text);
 	if (width < fs.x)
 	    width = fs.x;
-#else
-	fs.s = oi->text;
-	fs.x = fs.y = fs.term = (1 << 30);
-	fs.split = -1;
 
-	if (font_strwidth(&fs) == NULL)
-	{
-	    if (width < (fs.x / MILIPOINTS_PER_OSUNIT))
-		width = (fs.x / MILIPOINTS_PER_OSUNIT);
-	}
-#endif
-	
 	BENDBG(("oselect_size: ti %p font %d %s opt '%s' size %d (max %d)\n", ti, whichfont, ti->flag & rid_flag_WIDE_FONT ? "WIDE" : "NARROW", oi->text, fs.x, width));
 	
 	height ++;
@@ -221,7 +193,7 @@ void oselect_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
                 mm_free( sel->items );
 
             sel->items = mm_calloc(sizeof(fe_menu_item), height);
-
+	    
             for(i=0, oi = sel->options; oi; i++, oi = oi->next)
             {
                 fe_menu_item *ii = ((fe_menu_item*)sel->items) + i;
@@ -233,8 +205,18 @@ void oselect_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
                 }
                 else
                     oi->flags &= ~rid_if_SELECTED;
-            }
-        }
+	    }
+
+	    if ((ti->flag & rid_flag_WIDE_FONT)
+#if UNICODE
+		&& strcasecomp(encoding_default_language(rh->encoding), lang_JAPANESE) == 0
+#endif
+		)
+	    {
+		((fe_menu_item*)sel->items)[0].flags |= fe_menu_flag_WIDE;
+		BENDBG(("oselect_size: set wide font flag\n"));
+	    }
+	}
 
         /* pdh: in view of the fact we may come through here twice on the same
          * select item (if it straddles a packet boundary) it's unwise to do
@@ -343,12 +325,6 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 
     whichfont = antweb_getwebfont(doc, ti, BASE_FONT);
     
-    if (fs->lf != webfonts[whichfont].handle)
-    {
-	fs->lf = webfonts[whichfont].handle;
-	font_setfont(fs->lf);
-    }
-
     if (fs->lfc != fg || fs->lbc != bg)
     {
 	fs->lfc = fg;
@@ -356,19 +332,10 @@ void oselect_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos
 	render_set_font_colours(fg, bg, doc);
     }
 
-    fstr.s = str;
-    fstr.x = fstr.y = fstr.term = (1 << 30);
-    fstr.split = -1;
+    fstr.x = webfont_font_width(whichfont, str);
 
-    font_strwidth(&fstr);
+    render_text(doc, whichfont, str, hpos + ((ti->width - (sel->flags & rid_if_NOPOPUP ? 0 : GRIGHT_SIZE) - fstr.x) >> 1), bline);
 
-#if 1
-    render_text(doc, str, hpos + ((ti->width - (sel->flags & rid_if_NOPOPUP ? 0 : GRIGHT_SIZE) - (fstr.x / MILIPOINTS_PER_OSUNIT)) >> 1), bline);
-#else
-    font_paint(str, font_OSCOORDS,
-	       hpos + ((ti->width - (sel->flags & rid_if_NOPOPUP ? 0 : GRIGHT_SIZE) - (fstr.x / MILIPOINTS_PER_OSUNIT)) >> 1),
-	       bline);
-#endif
     if ((sel->flags & rid_if_NOPOPUP) == 0)
 	render_plot_icon("gright",
 			 hpos + ti->width - GRIGHT_SIZE - SELECT_SPACE_X,

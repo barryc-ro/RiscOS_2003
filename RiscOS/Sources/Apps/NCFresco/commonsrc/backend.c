@@ -131,6 +131,10 @@
 #include "rectplot.h"
 #endif
 
+#if UNICODE
+#include "Unicode/encoding.h"
+#include "Unicode/languages.h"
+#endif
 
 #ifndef ITERATIVE_PANIC
 #define ITERATIVE_PANIC 0
@@ -1022,7 +1026,11 @@ int antweb_getwebfont2(antweb_doc *doc, rid_flag text_flags, int font1, int base
 {
     int whichfont;
 
-    if (text_flags & rid_flag_WIDE_FONT)
+    if ((text_flags & rid_flag_WIDE_FONT)
+#if UNICODE
+	&& strcasecomp(encoding_default_language(doc->rh->encoding), lang_JAPANESE) == 0
+#endif
+	)
 	whichfont = (font1 & WEBFONT_SIZE_MASK) | WEBFONT_JAPANESE;
     else if (base != -1)
 	whichfont = base;
@@ -1049,7 +1057,7 @@ int antweb_getwebfont2(antweb_doc *doc, rid_flag text_flags, int font1, int base
 #if UNICODE && defined(RISCOS)
     /* if we are claiming a wide font then set it to the appropriate encoding */
     if (text_flags)
-	webfont_set_wide_format(webfonts[whichfont].handle);
+	webfont_set_wide_format(whichfont);
 #endif
 
     return whichfont;
@@ -3284,29 +3292,34 @@ static void antweb_doc_progress2(void *h, int status, int size, int so_far, int 
 	    if (config_encoding_user_override)
 		encoding_source = rid_encoding_source_USER_FIXED;
 	    else
-#if 0
 	    {
+#if 1
 		int enc = access_get_encoding(doc->ah);
 		if (enc)
 		{
-		    encoding = 
+		    encoding = enc;
+		    encoding_source = rid_encoding_source_HTTP;
 		}
-#endif
-	    {
+#else
 		http_header_item *list = access_get_headers(doc->ah);
 	    
 		for (; list; list = list->next)
 		{
 		    if (strcasecomp(list->key, "CONTENT-TYPE") == 0)
 		    {
-			int encoding = parse_content_type_header(list->value);
-			encoding_source = rid_encoding_source_HTTP;
+			int enc = parse_content_type_header(list->value);
 
-			DBG(("set_encoding HTTP %d\n", encoding));
-
+			if (enc)
+			{
+			    encoding = enc;
+			    encoding_source = rid_encoding_source_HTTP;
+			    
+			    DBG(("set_encoding HTTP %d\n", encoding));
+			}
 			break;
 		    }
 		}
+#endif
 	    }
 #endif
 	    PPDBG(("About to make a new parser stream\n"));

@@ -104,7 +104,7 @@ extern os_error *webfonts_initialise(void);
 extern os_error *webfonts_reinitialise(void);
 
 extern os_error *webfonts_tidyup(void);
-extern int webfont_tty_width(int w, int in_chars);
+/* extern int webfont_tty_width(int w, int in_chars); */
 extern os_error *webfont_declare_printer_fonts(void);
 extern os_error *webfont_drawfile_fontlist(int fh, int *writeptr);
 extern int webfont_font_width(int f, const char *s);
@@ -117,3 +117,7 @@ extern int webfont_font_width_n(int f, const char *s, int n);
 extern int webfont_split_point(int f, const char *s, int width);
 extern int webfont_need_wide_font(const char *s, int n_bytes);
 extern void webfont_set_wide_format(int fh);
+extern int webfont_get_offset(int f, const char *s, int x, const int *coords, int len);
+extern int webfont_split_point_char(int f, const char *s, int width, int c, int *segwidth);
+extern int webfont_latin(int index);
+extern int webfont_nominal_width(int font_index, int n_chars);

@@ -287,25 +287,12 @@ extern STRING mkstringu(void *encoding, UCHARACTER *ptr, int n)
 	    PRSDBG(("mkstringu: src '%s'\n", usafe(u)));
 	}
 #endif
-	    
-	/* find space needed */
-	switch (config_encoding_internal)
-	{
-	case 0:
-	    s.bytes = n;
-	    break;
-	case 3:
-	    s.bytes = n*2;
-	    break;
-	case 4:
-	    s.bytes = n*3;
-	    break;
-	default:
-	    for (i = 0; i < n; i++)
-		s.bytes += UTF8_codelen(ptr[i]);
-	    break;
-	}
 
+	for (i = 0; i < n; i++)
+	    encoding_write(encoding, ptr[i], NULL, &s.bytes);
+
+	s.bytes = -s.bytes;
+	
 	/* allocate space */
 	if ( (s.ptr = mm_malloc(s.bytes+1)) == NULL )
 	{
@@ -317,28 +304,7 @@ extern STRING mkstringu(void *encoding, UCHARACTER *ptr, int n)
 	    char *ss = s.ptr;
 	    int bufsize = s.bytes;
 	    for (i = 0; i < n; i++)
-	    {
-		switch (config_encoding_internal)
-		{
-		case 1:
-		case 2:
-		    ss = UCS4_to_UTF8(ss, ptr[i]);
-		    break;
-
-		case 0:
-		case 3:
-		case 4:
-		    encoding_write(encoding, ptr[i], &ss, &bufsize);
-		    break;
-		}
-	    }
-
-	    if (s.bytes != ss - s.ptr)
-	    {
-		s.bytes = ss - s.ptr;
-		s.ptr = mm_realloc(s.ptr, s.bytes+1);
-	    }
-	    PRSDBGN(("mkstringu: written %d chars\n", ss - s.ptr));
+		encoding_write(encoding, ptr[i], &ss, &bufsize);
 
 	    /* ensure terminated for safety */
 	    s.ptr[s.bytes] = 0;
@@ -1488,6 +1454,8 @@ static void add_to_ubuffer(UBUFFER *buffer, UCHARACTER input)
     ASSERT( buffer->max >= buffer->ix );
     ASSERT( buffer->ix >= 0 );
 
+    /* PRSDBGN(("add_to_ubuffer: %p in %x (max %d ix %d)\n", buffer, input, buffer->max, buffer->ix)); */
+
     if (buffer->max == buffer->ix)
     {
 	void *newptr = mm_realloc( buffer->data, (buffer->max + 256)*sizeof(buffer->data[0]) );
@@ -1501,6 +1469,8 @@ static void add_to_ubuffer(UBUFFER *buffer, UCHARACTER input)
     }
 
     buffer->data[ buffer->ix++ ] = input;
+
+    /* PRSDBGN(("add_to_ubuffer: out\n")); */
 }
 
 extern void add_to_buffer(BUFFER *buffer, const char *input, int len)
@@ -1563,9 +1533,9 @@ extern void push_inhand(SGMLCTX *context)
     s.bytes = context->inhand.ix;
 
 #if 0
-    /* SJM: removed because of problems with elements within PRE zone stripping newlines */
     PRSDBG(("push_inhand: bytes %d (%02x) strip initial nl %d cr %d\n", s.bytes, s.ptr[0], context->strip_initial_nl, context->strip_initial_cr));
     
+    /* SJM: removed because of problems with elements within PRE zone stripping newlines */
     while ((context->strip_initial_nl || context->strip_initial_cr) && s.bytes > 0)
     {
 	if (context->strip_initial_nl && s.ptr[0] == '\n')
@@ -1625,13 +1595,15 @@ extern void push_inhand(SGMLCTX *context)
 	(*context->chopper) (context, s);
 
     context->inhand.ix = 0;
+
+    /* PRSDBGN(("push_inhand: out\n")); */
 }
 
 extern void push_bar_last_inhand(SGMLCTX *context)
 {
     ASSERT(context->magic == SGML_MAGIC);
 
-    PRSDBG(("push_bar_last_inhand: bytes %d strip initial nl %d cr %d\n", context->inhand.ix, context->strip_initial_nl, context->strip_initial_cr));
+    /* PRSDBG(("push_bar_last_inhand: bytes %d strip initial nl %d cr %d\n", context->inhand.ix, context->strip_initial_nl, context->strip_initial_cr)); */
 
 #if 0
     context->strip_initial_nl = context->strip_initial_cr = 0;
@@ -1652,6 +1624,7 @@ extern void push_bar_last_inhand(SGMLCTX *context)
 	context->inhand.ix = 1;
     }
 
+    /* PRSDBGN(("push_bar_last_inhand: out\n")); */
 }
 
 /*****************************************************************************/

@@ -329,13 +329,20 @@ extern void text_item_push_word(HTMLCTX * me, rid_flag xf, BOOL space)
 	    me, xf, space, space ? "WITH SPACE" : "WITHOUT SPACE", bytes, ptr ? ptr : "**NULL**",
 	    bytes, ptr));
 
+#if UNICODE
+    if (webfont_need_wide_font(ptr, bytes))
+	xf |= rid_flag_WIDE_FONT;
+#endif
+    
 #if NEW_BREAKS
     if (me->no_break && GET_BREAK(xf) == rid_break_CAN)
 	SET_BREAK(xf, rid_break_MUST_NOT);
 
     if (space)
     {
-	xf |= rid_flag_SPACE;
+	/* don't allow spaces attached to wide font words */
+	if ((xf & rid_flag_WIDE_FONT) == 0)
+	    xf |= rid_flag_SPACE;
 	space = FALSE;
     }
 #else
@@ -349,11 +356,6 @@ extern void text_item_push_word(HTMLCTX * me, rid_flag xf, BOOL space)
     }
 #endif
 
-#if UNICODE
-    if (webfont_need_wide_font(ptr, bytes))
-	xf |= rid_flag_WIDE_FONT;
-#endif
-    
 #if DEBUG
     flexmem_noshift();
     PRSDBG(("PUSH WORD '%.*s'\n", bytes, ptr));
@@ -463,6 +465,8 @@ extern void text_item_push_word(HTMLCTX * me, rid_flag xf, BOOL space)
 	me->aref->first = nb;
     GET_ROSTYLE(nb->st);
 
+    PRSDBGN(("text_item_push_word: wide %d flags %x font %x\n", nb->flag & rid_flag_WIDE_FONT ? 1 : 0, nb->st.flags, nb->st.wf_index));
+    
     /* pdh: bodge warning: only one level of right indent supported */
     rindent = UNPACK(me->sgmlctx->tos->effects_active, STYLE_RINDENT);
     if ( rindent != 0 )

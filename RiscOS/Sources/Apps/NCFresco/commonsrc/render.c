@@ -14,6 +14,7 @@
 
 /* Bits of code to help with rendering */
 
+#include <limits.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -32,11 +33,14 @@
 #include "access.h"
 #include "url.h"
 
+#include "consts.h"
 #include "memwatch.h"
 #include "render.h"
 #include "rcolours.h"
 /*#include "fastfont.h"*/
 #include "version.h"
+#include "webfonts.h"
+#include "util.h"
 
 #if UNICODE
 #include "utf8.h"
@@ -268,30 +272,6 @@ wimp_paletteword render_get_colour(int colour, be_doc doc)
         break;
 #endif
 
-#if 0
-	/* old way was to use the ALINK colour for the highlight - new is to just use whatever we configured */
-    case render_colour_HIGHLIGHT:
-	if (doc &&
-	    (doc->flags & doc_flag_DOC_COLOURS) &&
-	    doc->rh &&
-	    (doc->rh->bgt & rid_bgt_ACOL) )
-	{
-            wimp_paletteword col;
-
-	    pw.word = doc->rh->colours.alink;
-
-            col = render_get_colour(render_colour_AREF, doc);
-            if (colour_distance(pw, col) < 64*64)
-                pw.word = col.word ^ 0xffffff00;
-
-            col = render_get_colour(render_colour_BACK, doc);
-            if (colour_distance(pw, col) < 64*64)
-                pw.word = col.word ^ 0xffffff00;
-
-	    return pw;
-	}
-#endif
-
     case render_colour_ACTIVATED:
 	if (doc &&
 	    (doc->flags & doc_flag_DOC_COLOURS) &&
@@ -380,17 +360,11 @@ static int render__text_link_colour(rid_text_item *ti, antweb_doc *doc, BOOL all
     /* if not a link */
     else if (ti->aref == NULL || ti->aref->href == NULL || (ti->aref->flags & rid_aref_LABEL))
     {
-/* 	if ( allow_font_colour && (no = RID_COLOUR(ti)) != 0 && doc && (doc->flags & doc_flag_DOC_COLOURS) ) */
-/* 	    rcol = render_colour_RGB | doc->rh->extracolourarray[no]; */
-/* 	else */
-	    rcol = render_colour_PLAIN;
+	rcol = render_colour_PLAIN;
     }
     /* if it is a link */
     else
     {
-#if 0
-	rcol = render_colour_AREF;
-#else
 	rid_aref_item *aref = ti->aref;
 
 	rcol = render_colour_AREF;
@@ -400,10 +374,7 @@ static int render__text_link_colour(rid_text_item *ti, antweb_doc *doc, BOOL all
     	    char *linkval;
 
             linkval = url_join(BASE(doc), aref->href);
-/*
-            if (linkval && (frag = strrchr(linkval, '#')) != NULL)
-                *frag = 0;
- */
+
 	    if (linkval && frontend_test_history(linkval))
                 aref->flags |= (rid_aref_IN_CACHE | rid_aref_CHECKED_CACHE);
             else
@@ -415,7 +386,6 @@ static int render__text_link_colour(rid_text_item *ti, antweb_doc *doc, BOOL all
 
         if (aref->flags & rid_aref_IN_CACHE)
 	    rcol = render_colour_CREF;
-#endif
     }
     return rcol;
 }
@@ -466,44 +436,12 @@ int render_background(rid_text_item *ti, antweb_doc *doc )
     if ( ti && ti->line )
     {
         struct rid_text_stream *st = ti->line->st;
-#if 1
+
         if ( st->bgcolour )
             return render_colour_RGB | ( st->bgcolour & ~1 );
         /* wonder whether cc realises that render_colour_RGB has its bottom
          * bit set?
          */
-#else
-        if ( st && st->parent )
-        {
-            /* The shin-bone's connected to the ... ankle-bone */
-            void *parent = st->parent;
-            rid_table_props *props = NULL;
-
-            switch ( st->partype )
-            {
-            case rid_pt_CAPTION:
-                {
-                    rid_table_caption *caption = (rid_table_caption*)parent;
-
-                    if ( caption )
-                        props = caption->props;
-                }
-                break;
-            case rid_pt_CELL:
-                {
-                    rid_table_cell *cell = (rid_table_cell*)parent;
-                    if ( cell )
-                        props = cell->props;
-                }
-                break;
-            }
-
-            /* YCGLIYT I'm recursing all the way up to find a colour */
-            if ( props
-                 && ( props->flags & rid_tpf_BGCOLOR ) )
-                    return render_colour_RGB | props->bgcolor;
-        }
-#endif
     }
 
     if ( doc && doc->rh && ( doc->rh->bgt & rid_bgt_COLOURS) )
@@ -626,21 +564,59 @@ int render_caret_colour(be_doc doc, int back, int cursor)
 	    colourtran_returnGCOL(fg_rgb, &fg);
 
 	    h = (1<<26) | (1<<27) | ((fg ^ bg) << 16);
+
+	    RENDBGN(("bg rgb %08x col %d\nfg rgb %08x col %d\nheight %x\n", bg_rgb.word, bg, fg_rgb.word, fg, h));
 	}
-#if 0
-	fprintf(stderr, "bg rgb %08x col %d\nfg rgb %08x col %d\nheight %x\n", bg_rgb.word, bg, fg_rgb.word, fg, h);
-#endif
     }
     return h;
 }
 
-int render_text(be_doc doc, const char *text, int x, int y)
+int render_text(be_doc doc, int font_index, const char *text, int x, int y)
 {
-    int flags = 0;
+    return render_text_full(doc, font_index, text, x, y, NULL, -1);
+}
+
+typedef struct
+{
+    int fh;
+    int flags;
+    int x, y;
+    int *coords;
+} paint_info;
+
+static os_error *paint_fn(const char *text, BOOL last, void *handle)
+{
+    paint_info *pi = handle;
+    os_error *e;
+
+    e = (os_error *)_swix(Font_Paint, _INR(0,5),
+			  pi->fh, text, pi->flags, pi->x, pi->y, pi->coords);
+
+    if (!e && !last)
+    {
+	int w, h;
+	
+	e = (os_error *)_swix(Font_ScanString, _INR(0,4) | _OUTR(3,4),
+			      pi->fh, text, pi->flags, INT_MAX, INT_MAX, &w, &h);
+	
+	pi->x += w;
+	pi->y += h;
+    }
+
+    return e;
+}
+
+int render_text_full(be_doc doc, int font_index, const char *text, int x, int y, int *coords, int n)
+{
+    int flags, fh;
 
     if (text == NULL || *text == 0)
 	return FALSE;
 
+#if 1
+    flags = 1<<11;
+#else
+    flags = 0;
     /* do we need font blending? */
     if (config_display_blending &&
 	doc && (doc->flags & doc_flag_DOC_COLOURS))
@@ -653,45 +629,43 @@ int render_text(be_doc doc, const char *text, int x, int y)
 	    flags |= 1<<11;
 	}
     }
+#endif
+    
+    if (coords)
+	flags |= (1<<5);
+
+    fh = 0;
+    if (font_index != -1)
+    {
+	fh = webfonts[font_index].handle;
+	flags |= 1<<8;
+    }
 
 #if UNICODE
-    switch (config_encoding_internal)
+    if (config_encoding_internal == 1 /* doc && doc->rh->encoding_write == csUTF8 */ && font_index != -1 && webfont_latin(font_index))
     {
-    case 0:			/* latin1 */
-    case 1:			/* utf8 */
-    case 3:			/* sjis */
-    case 4:			/* euc */
-	font_paint((char *)text, flags, x*400, y*400);
-	break;
-	
-    case 2:			/* utf8, plot as unicode */
-    {
-	const char *utf8 = text;
-	while (*utf8)
-	{
-	    char buf[256*2];
-	    int out = 0;
-	
-	    while (out < sizeof(buf)-2 && *utf8)
-	    {
-		UCS4 c;
-		utf8 += UTF8_to_UCS4(utf8, &c);
-		buf[out++] = c >> 8;
-		buf[out++] = c & 0xff;
+	/* we have a utf8 stream which we want to display through an 8 bit font */
+	paint_info pi;
 
-		RENDBG(("render_text: 0x%04x '%c'\n", c, c < 256 && c >= 32 && c != 127 ? c : '.'));
-	    }
-	    buf[out++] = 0;
-	    buf[out++] = 0;
-    
-	    font_paint(buf, flags, x*400, y*400);
-	}
-	break;
+	RENDBG(("render_text_full: font_index %d latin %d\n", font_index, webfont_latin(font_index)));
+	
+	pi.fh = fh;
+	pi.flags = flags;
+	pi.x = x * MILIPOINTS_PER_OSUNIT;
+	pi.y = y * MILIPOINTS_PER_OSUNIT;
+	pi.coords = coords;
+
+	process_utf8_as_latin1(text, n, paint_fn, &pi);
     }
-    }
-#else
-    font_paint((char *)text, flags, x*400, y*400);
+    else
 #endif
+    {
+	if (n >= 0)
+	    flags |= 1<<7;
+    
+	_swix(Font_Paint, _INR(0,5) | _IN(7), fh, text, flags, x * MILIPOINTS_PER_OSUNIT, y * MILIPOINTS_PER_OSUNIT, coords, n);
+    }
+
     return TRUE;
 }
 

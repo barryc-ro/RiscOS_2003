@@ -66,7 +66,7 @@ static int getwebfont(fe_menu mh)
 #if UNICODE
     /* if we are claiming a wide font then always set it to Unicode encoding */
     if (mh->flags & fe_menu_flag_WIDE)
-	webfont_set_wide_format(webfonts[whichfont].handle);
+	webfont_set_wide_format(whichfont);
 #endif
 
     return whichfont;
@@ -130,13 +130,15 @@ static void fe_menu_redo_window(wimp_redrawstr *rr, fe_menu mh, int update)
     int lfc;
     int width;
     webfont *wf;
+    int whichfont;
 
     ox = r.box.x0 - r.scx;
     oy = r.box.y1 - r.scy;
 
     width = r.box.x1 - r.box.x0 - 2*X_BORDER;
 
-    wf = &webfonts[getwebfont(mh)];
+    whichfont = getwebfont(mh);
+    wf = &webfonts[whichfont];
     line_space = mh->line_space;
 
     more = TRUE;
@@ -161,9 +163,6 @@ static void fe_menu_redo_window(wimp_redrawstr *rr, fe_menu mh, int update)
 	    bbc_rectanglefill(ox - X_BORDER, oy - mh->n*line_space - Y_BORDER, width + 2*X_BORDER-1, Y_BORDER-1);
 	}
 	
-	if (font_setfont(wf->handle) != NULL)
-	    continue;
-
 	for (h=0, i=0; i < mh->n && (h-line_space) >= top; h -= line_space, i++)
 	    ;
 
@@ -208,25 +207,9 @@ static void fe_menu_redo_window(wimp_redrawstr *rr, fe_menu mh, int update)
 	    bbc_rectanglefill(ox, h + oy - line_space, width, line_space-1);
 
 	    /* draw the text itself */
-#if 1
-	    render_text(NULL, mh->items[i].name, ox, h + oy - wf->max_up);
-#else
-	    font_paint(mh->items[i].name, font_OSCOORDS, ox, h + oy - wf->max_up);
-#endif
-	    
-#if 0
-	    /* draw the selection box */
-	    if (i == mh->highlight/*  && pointer_mode == pointermode_OFF */)
-	    {
-		colourtran_setGCOL(config_colours[col_HIGHLIGHT], 0, 0, &junk);
-
-		bbc_rectangle(ox-2, h + oy - line_space, width+4-1, line_space-1);
-		bbc_rectangle(ox, h + oy - line_space+2, width-1, line_space-4-1);
-	    }
-#endif
+	    render_text(NULL, whichfont, mh->items[i].name, ox, h + oy - wf->max_up);
 	}
 
-#if 1
 	/* draw the selection box - inefficient */
 	if (mh->highlight >= 0 && mh->highlight < mh->n)
 	{
@@ -235,7 +218,6 @@ static void fe_menu_redo_window(wimp_redrawstr *rr, fe_menu mh, int update)
 				    ox - X_BORDER_HL, hh + oy - line_space - Y_BORDER_HL,
 				    width + X_BORDER_HL*2, line_space + Y_BORDER_HL*2, NULL);
 	}
-#endif
 
 	fe_anti_twitter(&r.g);
 	wimp_get_rectangle(&r, &more);
@@ -383,30 +365,21 @@ static void fe_menu_move_highlight(fe_menu mh, int dir)
     }
 }
 
-static int get_widest_entry(webfont *wf, fe_menu_item *items, int n)
+static int get_widest_entry(int whichfont, fe_menu_item *items, int n)
 {
     int i, widest;
     fe_menu_item *item;
 
-    font_setfont(wf->handle);
     widest = 0;
 
     for (i = 0, item = items; i < n; i++, item++)
     {
-	font_string fs;
-
-	fs.s = strsafe(item->name);
-	fs.x = fs.y = fs.term = (1 << 30);
-	fs.split = -1;
-
-	if (font_strwidth(&fs) == NULL)
-	{
-	    if (widest < fs.x)
-		widest = fs.x;
-	}
+	int w = webfont_font_width(whichfont, strsafe(item->name));
+	if (widest < w)
+	    widest = w;
     }
 
-    return widest / 400; /* MILIPOINTS_PER_OSUNIT; */
+    return widest;
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -556,13 +529,13 @@ fe_menu frontend_menu_create(fe_view v, be_menu_callback cb, void *handle, int n
 
     wf = &webfonts[wf_index];
 
-    menu->width = get_widest_entry(wf, items, n);
+    menu->width = get_widest_entry(wf_index, items, n);
     menu->parent = v;
     menu->line_space = get_line_space(wf);
 
     fe_menu_window(menu);
 
-    STBDBG(("stbmenu: create mh %p w %x\n", menu, menu->wh));
+    STBDBG(("stbmenu: create mh %p w %x flags 0x%x\n", menu, menu->wh, menu->flags));
 
     return menu;
 }

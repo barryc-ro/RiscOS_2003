@@ -127,6 +127,69 @@ static SGMLBACK def_callback =
 
 #endif
 
+#if UNICODE
+static void html_feed_characters(HTMLCTX *htmlctx, const char *buffer, int bytes)
+{
+    SGMLCTX *context = htmlctx->sgmlctx;
+    
+    if (context->enc_num == csAutodetectJP)
+    {
+	int left = bytes;
+	int state = autojp_consume_string(&context->autodetect.enc_num, &context->autodetect.state, buffer, &left);
+
+	switch (state)
+	{
+	case autojp_ASCII:
+	    /* pass through as is */
+	    PRSDBG(("sgml_feed_characters: ASCII pass through '%.*s'\n", bytes, buffer));
+	    break;
+
+	case autojp_DECIDED:
+	    PRSDBG(("sgml_feed_characters: DECIDED %d pass through '%.*s' '%.*s'\n",
+		    context->autodetect.enc_num, 
+		    context->autodetect.inhand.ix,
+		    context->autodetect.inhand.data,
+		    bytes, buffer));
+
+	    DBG(("set_encoding AUTODETECT %d (inhand %d)\n", context->autodetect.enc_num, context->autodetect.inhand.ix));
+
+	    /* set the encoding */
+	    htmlctx->rh->encoding_write = sgml_set_encoding(context, context->autodetect.enc_num);
+
+	    /* process the stuff pending */
+	    if (context->autodetect.inhand.ix)
+	    {
+		/* recurse in case we hit a META tag and need to change encoding again */
+		sgml_feed_characters(context, 
+				     context->autodetect.inhand.data,
+				     context->autodetect.inhand.ix);
+
+		/* mark buffer as used */
+		context->autodetect.inhand.ix = 0;
+	    }
+	    
+ 	    /* tell frontend encoding */
+	    htmlctx->rh->encoding = context->autodetect.enc_num;
+	    break;
+	
+	case autojp_UNDECIDED:
+	    PRSDBG(("sgml_feed_characters: UNDECIDED pass through '%.*s' adding last %d to inhand\n", bytes - left, buffer, left));
+
+	    /* add the undecided stuff to inhand */
+	    add_to_buffer(&context->autodetect.inhand, buffer + bytes - left, left);
+
+	    /* process the safe part of the buffer */
+	    bytes = bytes - left;
+	    break;
+	}
+    }
+
+    sgml_feed_characters( htmlctx->sgmlctx, buffer, bytes );
+}
+#else
+#define html_feed_characters(a,b,c) sgml_feed_characters((a)->sgmlctx, b, c)
+#endif
+
 /*****************************************************************************/
 
 /*	Character handling
@@ -137,7 +200,7 @@ static void HTRISCOS_put_character (HTMLCTX * me, char c)
 {
     PRSDBG(("HTRISCOS_put_character()\n"));
 
-    sgml_feed_characters( me->sgmlctx, &c, 1 );
+    html_feed_characters( me, &c, 1 );
 }
 
 /*	String handling
@@ -147,7 +210,7 @@ static void HTRISCOS_put_string (HTMLCTX * me, const char* s)
 {
     PRSDBG(("HTRISCOS_put_string()\n"));
     
-    sgml_feed_characters( me->sgmlctx, s, strlen(s) );
+    html_feed_characters( me, s, strlen(s) );
 }
 
 
@@ -155,7 +218,7 @@ static void HTRISCOS_write (HTMLCTX * me, const char* s, int l)
 {
     PRSDBG(("HTRISCOS_write()\n"));
 
-    sgml_feed_characters( me->sgmlctx, s, l );
+    html_feed_characters( me, s, l );
 }
 
 /*****************************************************************************/
@@ -325,6 +388,10 @@ static SGMLCTX * SGML_new(HTMLCTX *me, int encoding)
 	case 0:
 	    enc = csAcornLatin1;
 	    break;
+	case 1:
+	case 2:
+	    enc = csUTF8;
+	    break;
 	case 3:
 	    enc = csShiftJIS;
 	    break;
@@ -336,14 +403,18 @@ static SGMLCTX * SGML_new(HTMLCTX *me, int encoding)
 	PRSDBG(("set_encoding: write encoding set to %d\n", enc));
 	
 	if (enc)
+	{
 	    context->encoding_write = encoding_new(enc, TRUE);
+	    context->enc_num_write = enc;
+	}
     }
 
-    if ((config_encoding_internal == 0 || config_encoding_internal == 3 || config_encoding_internal == 4) &&
-	context->encoding_write == NULL)
+    if (context->encoding_write == NULL)
     {
 	PRSDBG(("set_encoding: write encoding default to ASCII\n"));
+
 	context->encoding_write = encoding_new(csASCII, TRUE);
+	context->enc_num_write = csASCII;
     }
 #endif
     
@@ -384,6 +455,7 @@ static HTMLCTX *create_new_html(int encoding)
 
     htmlctx->sgmlctx = sgmlctx;
     htmlctx->rh->encoding = sgmlctx->enc_num;
+    htmlctx->rh->encoding_write = sgmlctx->enc_num_write;
     
     return htmlctx;
 }

@@ -63,6 +63,21 @@ static char *title_or_url(const hotlist_item *item)
     return item->title ? item->title : item->url;
 }
 
+static int get_format(void)
+{
+#if UNICODE
+    return config_encoding_internal == 0 ? 1 : 2;
+#else
+    return 1;
+#endif
+}
+
+#if UNICODE
+static void latin1_to_utf8(char **ps)
+{
+    static int need_to_write_me;
+}
+#endif
 /* ---------------------------------------------------------------------- */
 
 static int hotlist__compare_alpha(const void *o1, const void *o2)
@@ -374,7 +389,13 @@ static void hotlist__read(FILE *in)
 
 	url = xfgets(in);
 	title = xfgets(in);
-
+#if UNICODE
+	if (info.format == 1 && config_encoding_internal == 1)
+	{
+	    latin1_to_utf8(&url);
+	    latin1_to_utf8(&title);
+	}
+#endif
 	if (info.record_size >= 3)
 	    fskipline(in);
 
@@ -397,7 +418,7 @@ static void hotlist__read(FILE *in)
 static void hotlist__write_header(FILE *in)
 {
     fprintf(in, "# "PROGRAM_NAME" favorites\n");
-    fprintf(in, "Format: 1\n");
+    fprintf(in, "Format: %d\n", get_format());
     fprintf(in, "Record: 4\n");
     fprintf(in, "Data\n");
 }
@@ -461,7 +482,7 @@ static BOOL hotlist__write_nvram(void)
     data = mm_calloc(size, 1);
 
     /* write header */
-    data[0] = 1;		/* format */
+    data[0] = get_format();	/* format */
     data[1] = 4;		/* record size */
     used = 2;
     
@@ -570,6 +591,13 @@ static BOOL hotlist__read_nvram(void)
 
 	    STBDBG(("hotlist__read_nvram: '%s' '%s' 0x%08x\n", url, title, last_used));
 
+#if UNICODE
+	    if (info.format == 1 && config_encoding_internal == 1)
+	    {
+		latin1_to_utf8(&url);
+		latin1_to_utf8(&title);
+	    }
+#endif
 	    if (url)
 		hotlist__add(strdup(url), strdup(title), last_used, FALSE);
 	}

@@ -2016,8 +2016,9 @@ int tb_status_redraw(wimp_redrawstr *r)
                         (config_display_blending ? 0x800: 0) | (1<<8) | (1<<9),
                         x0, y0 + 4000);
 
-                    _swix(Font_ScanString, _INR(0,2) | _OUT(3), status_line_font, prefix,
-                        (1<<8) | (1<<9), &width);
+		    /* must use own routine since webfont only takes index */
+		    _swix(Font_ScanString, _INR(0,2) | _OUT(3), status_line_font, prefix,
+                         (1<<8) | (1<<9), &width);
                 }
 
                 _swix(Font_Paint, _INR(1,4), msg,

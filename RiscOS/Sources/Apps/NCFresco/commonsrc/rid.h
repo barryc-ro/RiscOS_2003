@@ -165,7 +165,8 @@ typedef SHORTISH rid_tag;
 #define rid_tag_LAST_TAG        11	/* ie 0...N-1 is tag range */
 #define rid_tag_MASK            0xf
 
-typedef SHORTISH rid_flag;
+/* typedef SHORTISH rid_flag; */
+typedef unsigned short rid_flag;
 
 #if NEW_BREAKS
 
@@ -1010,6 +1011,7 @@ typedef struct rid_header {
     
     rid_encoding_source encoding_source;
     int encoding;			/* encoding number actually in use (from Unicode/charsets.h) */
+    int encoding_write;			/* encoding number of data stored in the rid_header and text zones (utf8 or AcornLatin1) */
 } rid_header;
 
 typedef struct {

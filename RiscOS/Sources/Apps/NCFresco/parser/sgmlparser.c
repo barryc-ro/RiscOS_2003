@@ -56,17 +56,22 @@ static int sgml_handle_char(void *handle, UCS4 c)
 {
     SGMLCTX *context = handle;
 
-/*   PRSDBG(("sgml_handle_char: %04x %c\n", c, c >= 0x20 && c <= 0x7E ? c : 0x20)); */
+/*  PRSDBG(("sgml_handle_char: %04x %c\n", c, c >= 0x20 && c <= 0x7E ? c : 0x20)); */
     
     add_char_to_inhand(context, (UCS2) c);
 
     (*context->state)(context, (UCS2) c);
 
+/*  PRSDBG(("sgml_handle_char: out %d/%d\n", context->pending_close, context->pending_enc_num)); */
+
     return context->pending_close || context->pending_enc_num;
 }
 
-extern void sgml_set_encoding(SGMLCTX *context, int enc_num)
+extern int sgml_set_encoding(SGMLCTX *context, int enc_num)
 {
+/*  int new_size = encoding_max_char_size(enc_num); */
+    int enc_num_write = /* new_size == 1 ||  */config_encoding_internal == 0 ? csAcornLatin1 : csUTF8;
+    
     if (context->encoding_threaded)
     {
 	PRSDBG(("sgml_set_encoding: sgmlctx %p new encoding %d PENDING\n", context, enc_num));
@@ -80,10 +85,25 @@ extern void sgml_set_encoding(SGMLCTX *context, int enc_num)
 
 	context->enc_num = enc_num;
 	context->encoding = encoding_new(enc_num, FALSE);
+#if 0
+	if (context->enc_num_write != enc_num_write)
+	{
+	    if (context->encoding_write)
+		encoding_delete(context->encoding_write);
 
-	/* inform htmlparser that the encoding has changed */
-	
+	    context->enc_num_write = enc_num_write;
+	    context->encoding_write = encoding_new(enc_num_write, TRUE);
+
+	    if (context->encoding_write == NULL)
+	    {
+		context->encoding_write = encoding_new(csASCII, TRUE);
+		context->enc_num_write = csASCII;
+	    }
+	}
+#endif
     }
+
+    return enc_num_write;
 }
 
 extern void sgml_feed_characters_ascii(SGMLCTX *context, const char *buffer, int bytes)
@@ -118,57 +138,6 @@ extern void sgml_feed_characters(SGMLCTX *context, const char *buffer, int bytes
 
     PRSDBGN(("sgml_feed_characters(): '%.*s' enc %d\n", bytes, buffer, context->enc_num));
 
-    if (context->enc_num == csAutodetectJP)
-    {
-	int left = bytes;
-	int state = autojp_consume_string(&context->autodetect.enc_num, &context->autodetect.state, buffer, &left);
-
-	switch (state)
-	{
-	case autojp_ASCII:
-	    /* pass through as is */
-	    PRSDBG(("sgml_feed_characters: ASCII pass through '%.*s'\n", bytes, buffer));
-	    break;
-
-	case autojp_DECIDED:
-	    PRSDBG(("sgml_feed_characters: DECIDED %d pass through '%.*s' '%.*s'\n",
-		    context->autodetect.enc_num, 
-		    context->autodetect.inhand.ix,
-		    context->autodetect.inhand.data,
-		    bytes, buffer));
-
-	    DBG(("set_encoding AUTODETECT %d\n", context->autodetect.enc_num));
-
-	    /* set the encoding */
-	    sgml_set_encoding(context, context->autodetect.enc_num);
-
-	    /* process the stuff pending */
-	    if (context->autodetect.inhand.ix)
-	    {
-		/* recurse in case we hit a META tag and need to change encoding again */
-		sgml_feed_characters(context, 
-				     context->autodetect.inhand.data,
-				     context->autodetect.inhand.ix);
-
-		/* mark buffer as used */
-		context->autodetect.inhand.ix = 0;
-	    }
-	    
-/* 	    tell frontend encoding somehow ?? */
-	    break;
-	
-	case autojp_UNDECIDED:
-	    PRSDBG(("sgml_feed_characters: UNDECIDED pass through '%.*s' adding last %d to inhand\n", bytes - left, buffer, left));
-
-	    /* add the undecided stuff to inhand */
-	    add_to_buffer(&context->autodetect.inhand, buffer + bytes - left, left);
-
-	    /* process the safe part of the buffer */
-	    bytes = bytes - left;
-	    break;
-	}
-    }
-    
     context->encoding_threaded++;
     consumed = encoding_read(context->encoding, sgml_handle_char, buffer, bytes, context);
     context->encoding_threaded--;
@@ -185,6 +154,7 @@ extern void sgml_feed_characters(SGMLCTX *context, const char *buffer, int bytes
     
 	/* restart the encoding if necessary */
 	/* note we can only change encoding once so this is good enough */
+	PRSDBG(("sgml_feed_characters: set from pending %d left to do\n", bytes - consumed));
 	if (consumed < bytes)
 	{
 	    context->encoding_threaded++;
@@ -404,16 +374,16 @@ extern void sgml_recursion_warning_post(SGMLCTX *context)
 
  */
 
-extern void sgml_install_deliver(SGMLCTX *context, sgml_deliver_fn new)
+extern void sgml_install_deliver(SGMLCTX *context, sgml_deliver_fn new_fn)
 {
     sgml_deliver_list *dp = mm_calloc(1, sizeof(*dp));
 
     PINC_INSTALL_DELIVER;
 
-    PRSDBGN(("sgml_install_deliver(%p, %p)\n", context, new));
+    PRSDBGN(("sgml_install_deliver(%p, %p)\n", context, new_fn));
 
     dp->this_fn = context->deliver;
-    context->deliver = new;
+    context->deliver = new_fn;
     dp->previous = context->dlist;
     context->dlist = dp;
 }

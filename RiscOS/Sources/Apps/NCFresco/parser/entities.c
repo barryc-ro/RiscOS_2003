@@ -35,12 +35,14 @@ char *entity_names[] =
   "aring",      /* small a, ring */
   "atilde",     /* small a, tilde */
   "auml",       /* small a, dieresis or umlaut mark */
+  "bdquo",	/* double low quote */
   "brvbar",     /* broken (vertical) bar */
   "ccedil",     /* small c, cedilla */
   "cedil",      /* cedilla */
   "cent",       /* cent sign */
   "copy",       /* copyright sign */
   "curren",     /* general currency sign */
+  "dagger",
   "deg",        /* degree sign */
   "divide",     /* divide sign */
   "eacute",     /* small e, acute accent */
@@ -59,6 +61,9 @@ char *entity_names[] =
   "iquest",     /* inverted question mark */
   "iuml",       /* small i, dieresis or umlaut mark */
   "laquo",      /* angle quotation mark, left */
+  "ldquo",	/* double quote, left */
+  "lsaquo",     /* single angle quotation mark, left */
+  "lsquo",	/* single quote, left */
   "lt",        	/* greater than */
   "macr",       /* macron */
   "micro",      /* micro sign */
@@ -75,11 +80,15 @@ char *entity_names[] =
   "otilde",     /* small o, tilde */
   "ouml",       /* small o, dieresis or umlaut mark */
   "para",       /* pilcrow (paragraph sign) */
+  "permil",			/* per mille */
   "plusmn",     /* plus-or-minus sign */
   "pound",      /* pound sterling sign */
   "quot",       /* double quote sign - June 94 */
-  "raquo",      /* angle quotation mark, right */
+  "raquo",	/* angle quotation mark, right */
+  "rdquo",	/* double quote, right */
   "reg",        /* registered sign */
+  "rsaquo",     /* single angle quotation mark, right */
+  "rsquo",	/* single quote, right */
   "sect",       /* section sign */
   "shy",        /* soft hyphen */
   "sup1",       /* superscript one */
@@ -104,7 +113,7 @@ char *entity_names[] =
 **	This MUST match exactly the table above
 **	lower case / upper case
 */
-static char ISO_Latin1[] = {
+static UCHARACTER ISO_Latin1[] = {
 	'\341', '\301', /* small a, acute accent */
 	'\342', '\302', /* small a, circumflex accent */
 	'\264', '\264', /* acute accent */
@@ -114,12 +123,22 @@ static char ISO_Latin1[] = {
 	'\345', '\305', /* small a, ring */
 	'\343', '\303', /* small a, tilde */
 	'\344', '\304', /* small a, dieresis or umlaut mark */
+#if UNICODE
+	8222, 8222,	/* double quote, low */
+#else
+	150, 150,	/* double quote, low */
+#endif
 	'\246', '\246', /* broken (vertical) bar */
 	'\347', '\307', /* small c, cedilla */
 	'\270', '\270', /* cedilla */
 	'\242', '\242', /* cent sign */
 	'\251', '\251', /* copyright sign */
 	'\244', '\244', /* general currency sign */
+#if UNICODE
+	8224, 8225,	/* dagger, Dagger */
+#else
+	156, 157,	/* dagger, Dagger */
+#endif
 	'\260', '\260', /* degree sign */
 	'\367', '\367', /* divide sign */
 	'\351', '\311', /* small e, acute accent */
@@ -138,6 +157,18 @@ static char ISO_Latin1[] = {
 	'\277', '\277', /* inverted question mark */
 	'\357', '\317', /* small i, dieresis or umlaut mark */
 	'\253', '\253', /* angle quotation mark, left */
+#if UNICODE
+	8220, 8220,	/* double quote, left */
+#else
+	148, 148,	/* double quote, left */
+#endif
+#if UNICODE
+	8249, 8249,	/* single angle quotation mark, left */
+	8216, 8216,	/* single quote, left */
+#else
+	146, 146,	/* single angle quotation mark, left */
+	144, 144,	/* single quote, left */
+#endif
 	'\074', '\074',	/* less than */
 	'\257', '\257', /* macron */
 	'\265', '\265', /* micro sign */
@@ -154,11 +185,29 @@ static char ISO_Latin1[] = {
 	'\365', '\325', /* small o, tilde */
 	'\366', '\326', /* small o, dieresis or umlaut mark */
 	'\266', '\266', /* pilcrow (paragraph sign) */
+#if UNICODE
+	8240, 8240,		/* permille */
+#else
+	142, 142
+#endif
 	'\261', '\261', /* plus-or-minus sign */
 	'\243', '\243', /* pound sterling sign */
 	'\042', '\042', /* double quote sign - June 94 */
 	'\273', '\273', /* angle quotation mark, right */
+#if UNICODE
+	8221, 8221,	/* double quote, right */
+#else
+	149, 149,	/* double quote, right */
+#endif
 	'\256', '\256', /* registered sign */
+
+#if UNICODE
+	8250, 8250,	/* single angle quotation mark, right */
+	8217, 8217,	/* single quote, right */
+#else
+	147, 147,	/* single angle quotation mark, right */
+	145, 145,	/* single quote, right */
+#endif
 	'\247', '\247', /* section sign */
 	'\255', '\255', /* soft hyphen */
 	'\271', '\271', /* superscript one */
@@ -167,7 +216,11 @@ static char ISO_Latin1[] = {
 	'\337', '\337', /* small sharp s, German (sz ligature) */
 	'\376', '\336', /* small thorn, Icelandic */
 	'\327', '\327', /* multiply sign */
+#if UNICODE
+	8482, 8482,	/* trademark sign */
+#else
 	'\215', '\215', /* trademark sign */
+#endif
 	'\372', '\332', /* small u, acute accent */
 	'\373', '\333', /* small u, circumflex accent */
 	'\371', '\331', /* small u, grave accent */
@@ -178,7 +231,19 @@ static char ISO_Latin1[] = {
 	'\377', '\337' /* small y, dieresis or umlaut mark */
 };
 
-#if !UNICODE
+#if UNICODE
+
+/* An excerpt from the Micorsoft.cp1252 table */
+
+static UCHARACTER pc_translate_keys[32] =
+{
+    0xFFFD, 0xFFFD, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
+    0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0xFFFD, 0xFFFD, 0xFFFD, 
+    0xFFFD, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
+    0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0xFFFD, 0xFFFD, 0x0178
+};
+
+#else
 /*
  * keys with names below have been translated to the appropriate key
  * in the PC/Mac keyset.
@@ -219,6 +284,7 @@ static char pc_translate_keys[32] =
     ' ',    /* 158: */
     ' '     /* 159: */
 };
+#endif
 
 char convert_undefined_key_code(char c)
 {
@@ -226,7 +292,6 @@ char convert_undefined_key_code(char c)
 	return pc_translate_keys[c-128];
     return c;
 }
-#endif
 
 /*****************************************************************************/
 
@@ -337,6 +402,7 @@ extern int sgml_translation(SGMLCTX *context, UCHARACTER *in_ptr, int in_bytes, 
 	{
 	    UCHARACTER *end;
 	    long x;
+	    int base;
 
 	    PRSDBG(("Trying to do numeric entity\n"));
 
@@ -346,22 +412,30 @@ extern int sgml_translation(SGMLCTX *context, UCHARACTER *in_ptr, int in_bytes, 
 		in_ptr++;
 	    }
 
-	    x = in_bytes >= 1 ? ustrtol(in_ptr, &end, 10) : (end = in_ptr, -1);
+	    base = 10;
+	    if (in_bytes > 0 && in_ptr[0] == 'x')
+	    {
+		in_bytes--;
+		in_ptr++;
+		base = 16;
+	    }
+
+	    x = in_bytes >= 1 ? ustrtol(in_ptr, &end, base) : (end = in_ptr, -1);
 
 	    if (end != in_ptr &&
 		x > 0 &&
 		x != 127 &&
 #if !UNICODE
 		x < 256 &&
-		(x >= 32 || (x < 256 && isspace((char)x)))
-#else
 		(x >= 32 || isspace((char)x))
+#else
+		(x >= 32 || (x < 256 && isspace((char)x)))
 #endif
 		)
 	    {
-#if !UNICODE
-		if (gbf_active(GBF_TRANSLATE_UNDEF_CHARS))
-		    x = convert_undefined_key_code((int)x);
+#ifdef STBWEB
+		/* unfortunately we still need this whether unicode tables in use or not */
+		x = convert_undefined_key_code((int)x);
 #endif
 		*out_ptr++ = (UCHARACTER) x;
 		out_bytes++;
@@ -409,19 +483,22 @@ extern int sgml_translation(SGMLCTX *context, UCHARACTER *in_ptr, int in_bytes, 
 
 		if (matchp != NULL)
 		{
-		    const int len = strlen( *matchp );
-		    in_ptr += len;
-		    in_bytes -= len;
-		    if (in_bytes > 0 && *in_ptr == ';')
+		    int len = strlen( *matchp );
+		    BOOL semicolon = in_bytes > len && in_ptr[len] == ';';
+
+		    if (semicolon || (rules & SGMLTRANS_STRICT) == 0)
 		    {
-			in_ptr++;
-			in_bytes--;
+			if (semicolon)
+			    len++;
+
+			in_ptr += len;
+			in_bytes -= len;
+
+			*out_ptr++ = ISO_Latin1[ (matchp - entity_names)*2 + (upper_case ? 1 : 0) ];
+			out_bytes++;
+
+			used = TRUE;
 		    }
-
-		    *out_ptr++ = ISO_Latin1[ (matchp - entity_names)*2 + (upper_case ? 1 : 0) ];
-		    out_bytes++;
-
-		    used = TRUE;
 		}
 	    }
 
@@ -461,13 +538,13 @@ extern int sgml_translation(SGMLCTX *context, UCHARACTER *in_ptr, int in_bytes, 
 
 extern void entity_recognition(SGMLCTX *context)
 {
-    const int new_entity = sgml_translation(context,
+    const int len = sgml_translation(context,
 				     context->inhand.data,
 				     context->inhand.ix,
 				     SGMLTRANS_AMPERSAND |
 				     SGMLTRANS_HASH |
 				     SGMLTRANS_WARNINGS);
-    context->inhand.ix = new_entity;
+    context->inhand.ix = len;
 
     push_inhand(context);
 }

@@ -101,7 +101,8 @@ extern int parse_http_header(char *header_data, const char *tags[], name_value_p
 extern int parse_content_type_header(const char *value);
 
 extern char *skip_space(const char *s);
-
+extern char *skip_space_or_comma(const char *s);
+extern char *skip_to_space_or_comma(const char *s);
 
 extern int pmatch2(char *s, char *p);
 extern int pattern_match(char *s, char *pat, int cs);
@@ -344,6 +345,16 @@ extern void mmfclose(FILE *f);
 
 #ifdef FRESCO
 int mkdir( const char *dir, int mode );
+#endif
+
+#if UNICODE
+
+#include "Unicode/encoding.h"
+
+typedef os_error *(*process_utf8_callback_fn)(const char *text, BOOL last, void *handle);
+extern os_error *process_utf8_as_latin1(const char *text, int in_n, process_utf8_callback_fn fn, void *handle);
+extern os_error *process_utf8(const char *text, int in_n, Encoding *enc, process_utf8_callback_fn fn, void *handle);
+
 #endif
 
 /* eof util.h */
