@@ -1,87 +1,46 @@
-# Makefile for CMHG
+# Makefile for deccf
 #
 # ***********************************
 # ***    C h a n g e   L i s t    ***
 # ***********************************
 # Date       Name         Description
 # ----       ----         -----------
-# 16-Oct-98  SJM          Created.
-# 09-Nov-99  NB           Added install phase for FrontEnd res.
+# 01-Mar-01  SNB          Created
 #
+
+# Build option:
+# OPTIONS = -DUSE32BIT     switches the default to 32-bit veneers
 
 #
 # Paths
 #
-LIBDIR	= ${INSTDIR}.Library.Acorn
-INSTAPP    = ${INSTDIR}.Apps.!CMHG
+COMPONENT = cmhg
+TARGET    = cmhg
 
-#
-# Generic options:
-#
-MKDIR   = mkdir -p
-AS      = objasm
-CP      = copy
-CC      = cc
-CM      = cmhg
-RM      = remove
-LD      = link
-LB      = libfile
-TOUCH   = create
-WIPE    = -wipe
-SQUEEZE = squeeze
+CFLAGS    = -Wpc -ffah -IC:CLX -DDDE ${OPTIONS}
+DIRS      = o._dirs
 
-# Uncomment his macro to make 32-bit code generation the default option
-#USEAPCS    = -DUSE32BIT
-
-CCFLAGS = -c -depend !Depend -ffah ${INCLUDES} ${DFLAGS} ${THROWBACK} ${USEAPCS}
-ASFLAGS = -depend !Depend -Stamp -quit ${THROWBACK} -NOWarn
-CPFLAGS = ~cfr~v
-LBFLAGS = -c
-WFLAGS  = ~CFR~V
-
-#
-# Libraries
-#
-CLIB      = CLIB:o.stubs
-RLIB      = RISCOSLIB:o.risc_oslib
-RSTUBS    = RISCOSLIB:o.rstubs
-ROMSTUBS  = RISCOSLIB:o.romstubs
-ROMCSTUBS = RISCOSLIB:o.romcstubs
-ABSSYM    = RISC_OSLib:o.AbsSym
-CLXLIB    = C:CLX.o.clxlib
-
-#
-# Include files
-#
-INCLUDES  = -IC: -IC:CLX
-DFLAGS    = -DDDE
+INSTAPP   = ${INSTDIR}.Apps.!CMHG
+LIBDIR    = ${INSTDIR}.Library.Acorn
 
 #
 # Program specific options:
 #
-COMPONENT  = cmhg
-TARGET     = ${COMPONENT}
-SOURCE     =
-EXPORTS    =
+OBJS       = cmhg.o outaof.o throwback.o veneers.o veneers32.o
+LIBS       = ${CLXLIB} ${CLIB}
 
-OBJS=	o.cmhg o.outaof o.veneers o.veneers32 o.throwback
+include Makefiles:StdTools
+include Makefiles:AppLibs
 
-LIBS=	${CLXLIB} ${CLIB}
-
-DIRS    = o._dirs
-
-#
-# Rule patterns
-#
-.c.o:;     ${CC} ${CCFLAGS} -o $@ $<
-.s.o:;     ${AS} ${ASFLAGS} -o $@ $<
-.cmhg.o:;  ${CM} ${CMFLAGS} -o $@ $<
-.cmhg.h:;  ${CM} ${CMFLAGS} -d $@ $<
+.SUFFIXES:
+.SUFFIXES: .o .s .c
+.c.o:; ${CC} ${CFLAGS} -o $@ $<
+.s.o:; ${AS} ${ASLAGS} -o $@ $<
 
 #
 # build a the library:
 #
-all:	${TARGET}
+all:    ${TARGET}
 
 #
 # RISC OS ROM build rules:
@@ -93,13 +52,17 @@ export: export_${PHASE}
 
 install_rom: ${TARGET}
         @echo ${COMPONENT}: rom module installed
-
+        
 install_tool: ${TARGET}
+	${MKDIR} ${LIBDIR}.Docs
 	${CP} ${TARGET} ${LIBDIR}.${TARGET} ${CPFLAGS}
-	${CP} Docs.${TARGET} ${LIBDIR}.Docs.${TARGET} ${CPFLAGS}
-	@echo ${COMPONENT}: tool and docs installed in library
+	@echo ${COMPONENT}: tool installed in library
 
-install: install_tool install_dirs
+install: install_resources install_tool
+	@echo ${COMPONENT}: install complete
+
+install_resources:
+	${MKDIR} ${INSTAPP}
 	${CP} LocalRes:!Boot ${INSTAPP}.!Boot ${CPFLAGS}
 	${CP} LocalRes:!Run ${INSTAPP}.!Run ${CPFLAGS}
 	${CP} LocalRes:!Help ${INSTAPP}.!Help ${CPFLAGS}
@@ -108,22 +71,18 @@ install: install_tool install_dirs
 	${CP} LocalRes:Messages ${INSTAPP}.Messages ${CPFLAGS}
 	${CP} LocalRes:Templates ${INSTAPP}.Templates ${CPFLAGS}
 	${CC} -C++ -E >${INSTAPP}.Desc LocalRes:Desc
+	${TIDYDESC}  ${INSTAPP}.Desc ${INSTAPP}.Desc
 	@echo ${COMPONENT}: FrontEnd app install in '${INSTAPP}'
-
-install_dirs:
-	${MKDIR} ${INSTAPP}
-	${MKDIR} ${INSTAPP}
-	${MKDIR} ${LIBDIR}.Docs
 
 clean:
         ${WIPE} o ${WFLAGS}
         ${RM} ${COMPONENT}
         @echo ${COMPONENT}: cleaned
 
-export_hdrs:
+export_hdrs: 
 	@echo ${COMPONENT}: export complete (hdrs)
 
-export_libs:
+export_libs: 
         @echo ${COMPONENT}: export complete (libs)
 
 ${DIRS}:
@@ -135,6 +94,8 @@ ${DIRS}:
 #
 ${TARGET}: ${OBJS} ${LIBS} ${DIRS}
         ${LD} ${LDFLAGS} -o ${COMPONENT} ${OBJS} ${LIBS}
-	${SQUEEZE} ${COMPONENT}
+        ${SQZ} ${SQZFLAGS} $@
+        ${CHMOD} a+rx $@
+
 
 # Dynamic dependencies:

@@ -1,4 +1,4 @@
-COMPONENT=cmhg
+COMPONENT=armcmhg
 
 # Note CLXPATH should be set in the environment
 #CLXPATH=/usr/local/riscos/clx
