@@ -12,9 +12,11 @@ Pace.
 #include "touchscr.h"
 #include "display.h"
 
+#include "driver.h"
 #include "module.h"
 #include "Global/RISCOS.h"
 #include "Global/IOCtl.h"
+#include "Global/HALEntries.h"
 
 #include "swis.h"
 
@@ -24,12 +26,7 @@ extern "C" {
 
 extern "C" void ______main();
 
-int main(void)
-{
-  ______main();
-  return 0;
-}
-
+int Driver(_kernel_swi_regs *r, void *pw);
 
 // local function prototypes
 static PRESSURE_STATUS pressure_gradient(unsigned int current_pressure,
@@ -38,22 +35,62 @@ static PRESSURE_STATUS pressure_gradient(unsigned int current_pressure,
 static void inform_kernel(unsigned int x, unsigned int y);
 
 // local macros
-#define LEFT_MOUSE_BUTTON(states)       (states && 0x00000100)
-#define MIDDLE_MOUSE_BUTTON(states)     (states && 0x00000010)
-#define RIGHT_MOUSE_BUTTON(states)      (states && 0x00000001)
+#define LEFT_MOUSE_BUTTON(states)       (states & 0x00000004)
+#define MIDDLE_MOUSE_BUTTON(states)     (states & 0x00000002)
+#define RIGHT_MOUSE_BUTTON(states)      (states & 0x00000001)
 
 #define BYTE_1(x)     ((x) & 0x000000ff)
 #define BYTE_2(x)    (((x) & 0x0000ff00) >> 8)
 
 
 // these are defined here, but mouse button values may be already be defined in a .h file.
-#define LEFT_MOUSE_BUTTON_KEYCODE    9
-#define MIDDLE_MOUSE_BUTTON_KEYCODE  10
+#define LEFT_MOUSE_BUTTON_KEYCODE   0x70
+#define MIDDLE_MOUSE_BUTTON_KEYCODE  0x71
 
 
 
 display     display_device;      // create a display object
 touchscreen tscreen;             // create a touchscreen object
+
+int pointerv_handler(_kernel_swi_regs *r, void *pw)
+{
+#ifdef TEST
+     return Driver(r, pw);
+#else
+
+     switch (r->r[0])
+     {
+        case 0:
+          if (r->r[1] != POINTER_TYPE)
+            return 1;
+          return Driver(r, pw);
+        case 1:
+        {
+          pointer_record *record_ptr = NULL;
+          int record_size = sizeof(pointer_record) + strlen(POINTER_NAME);
+          _swix(OS_Module, _IN(0)|_IN(3)|_OUT(2), 6, record_size, &record_ptr);
+          if (record_ptr)
+          {
+              record_ptr->next = (pointer_record *) r->r[1];
+              record_ptr->device_flags = 0;
+              record_ptr->device_type = POINTER_TYPE;
+              strcpy(&record_ptr->device_name, POINTER_NAME);
+              r->r[1] = (int) record_ptr;
+              return 1;
+          }
+        }
+        case 2:
+          /* Should activate and deactivate here. Kernel bug - doesn't call on boot? */
+          break;
+        default:
+          break;
+
+     }
+
+     return 1;
+
+#endif
+}
 
 /*************************************************************************************
    Driver currently runs off PointerV. Its operation is quite straight forward,
@@ -68,10 +105,11 @@ int Driver(_kernel_swi_regs *r, void *pw)
      static PRESSURE_LEVEL     last_pressure = ZERO;
      static PRESSURE_LEVEL     current_pressure;
      static PRESSURE_STATUS    status;
-     static unsigned int       button, button_states;
+     static bool               left_down = false, middle_down = false;
 
      (void)r;
      (void)pw;
+
 
      current_pressure = tscreen.pressure_measure.get_pressure_level();
      status = pressure_gradient(current_pressure, last_pressure);
@@ -89,8 +127,14 @@ int Driver(_kernel_swi_regs *r, void *pw)
         // here we need to convert the measured x and y data to a screen position
         display_position = display_device.translate_position(touched_position);
 
+#ifdef TEST
         // inform the os where the screen was pressed
         inform_kernel(display_position.x, display_position.y);
+#else
+        r->r[2] = display_position.x;
+        r->r[3] = display_position.y;
+        r->r[4] = 0x6F736241; /* Magic word: "Abso" - indicates absolute coordinates */
+#endif
 
 
 
@@ -100,57 +144,63 @@ int Driver(_kernel_swi_regs *r, void *pw)
            {
               // left mouse button down
               _swix(OS_CallAVector, _INR(0, 1) | _IN(9), KeyV_KeyDown, LEFT_MOUSE_BUTTON_KEYCODE, KeyV);
+              left_down = true;
            }
 
 
            else if(current_pressure == FIRM)
            {
-                // need to read to see if left mouse button is down,
-                _swix(OS_Mouse, _OUT(2), button_states);
-                if(LEFT_MOUSE_BUTTON(button_states))        // if it is then lift it
+                // need to lift  left mouse button if moving from LIGHT
+                if(left_down)
                 {
                    _swix(OS_CallAVector, _INR(0, 1) | _IN(9), KeyV_KeyUp, LEFT_MOUSE_BUTTON_KEYCODE, KeyV);
+                   left_down = false;
                 }
 
                 _swix(OS_CallAVector, _INR(0, 1) | _IN(9), KeyV_KeyDown, MIDDLE_MOUSE_BUTTON_KEYCODE, KeyV);
+                middle_down = true;
            }
         }
 
              // if the applied tscreen.pressure has decreased
         else if(status == DECREASING)
         {
-             if(current_pressure == LIGHT)
-             {
-                // middle mouse button up
-                _swix(OS_CallAVector, _INR(0, 1) | _IN(9), KeyV_KeyUp, MIDDLE_MOUSE_BUTTON_KEYCODE, KeyV);
-             }
+           if(middle_down)
+           {
+              _swix(OS_CallAVector, _INR(0, 1) | _IN(9), KeyV_KeyUp, MIDDLE_MOUSE_BUTTON_KEYCODE, KeyV);
+              middle_down = false;
+           }
 
-             else
-             {
-                 // here will need to check if the middle mouse button is down,
-                 _swix(OS_Mouse, _OUT(2), button_states);
-                 if(MIDDLE_MOUSE_BUTTON(button_states))      // if it is then lift it
-                 {
-                    _swix(OS_CallAVector, _INR(0, 1) | _IN(9), KeyV_KeyUp, MIDDLE_MOUSE_BUTTON_KEYCODE, KeyV);
-                 }
+           if (left_down)
+           {
+               // left mouse button up
+               _swix(OS_CallAVector, _INR(0, 1) | _IN(9), KeyV_KeyUp, LEFT_MOUSE_BUTTON_KEYCODE, KeyV);
+               left_down = false;
+           }
 
-                 // left mouse button up
-                 _swix(OS_CallAVector, _INR(0, 1) | _IN(9), KeyV_KeyUp, LEFT_MOUSE_BUTTON_KEYCODE, KeyV);
-             }
-
-
-          }
+        }
 
      }
 
      else  // this code executes when screen is not being touched at all
      {
            // report all mouse buttons to be in the up state
-           _swix(OS_CallAVector, _INR(0, 1) | _IN(9), KeyV_KeyUp, LEFT_MOUSE_BUTTON_KEYCODE, KeyV);
+           if(middle_down)
+           {
+              _swix(OS_CallAVector, _INR(0, 1) | _IN(9), KeyV_KeyUp, MIDDLE_MOUSE_BUTTON_KEYCODE, KeyV);
+              middle_down = false;
+           }
+
+           if (left_down)
+           {
+              // left mouse button up
+              _swix(OS_CallAVector, _INR(0, 1) | _IN(9), KeyV_KeyUp, LEFT_MOUSE_BUTTON_KEYCODE, KeyV);
+              left_down = false;
+           }
 
      }
 
-     return 0;
+     return 1;
 }
 
 
@@ -158,43 +208,16 @@ int Driver(_kernel_swi_regs *r, void *pw)
 PRESSURE_STATUS pressure_gradient(unsigned int current_pressure,
                                   unsigned int last_pressure)
 {
-         PRESSURE_STATUS status = STATIC;
-
-         if(current_pressure != last_pressure)
-         {
-            status = INCREASING;
-
-            switch(current_pressure)
-            {
-                   case ZERO:
-                     status = DECREASING;
-                     break;
-
-                   case VLIGHT:
-                     if(last_pressure != ZERO)
-                     {
-                        status = DECREASING;
-                     }
-                     break;
-
-                   case LIGHT:
-                     if(last_pressure == FIRM)
-                     {
-                        status = DECREASING;
-                     }
-                     break;
-
-                   case FIRM:
-                     status = INCREASING;
-                     break;
-
-            }
-         }
-         return status;
-
+         if (current_pressure == last_pressure)
+             return STATIC;
+         else if (current_pressure < last_pressure)
+             return DECREASING;
+         else
+             return INCREASING;
 }
 
 
+#ifdef TEST
 // inform the os of the new mouse position
 void inform_kernel(unsigned int x, unsigned int y)
 {
@@ -210,19 +233,32 @@ void inform_kernel(unsigned int x, unsigned int y)
 
 
 }
+#endif
 
+static struct { int errno; char errmess[8]; } BadHardError = { 0x603, "BadHard" };
 
 /*************************************************************************************
    module_initialise claims the vector TickerV
 **************************************************************************************/
 _kernel_oserror *module_initialise(const char *cmd_tail, int podule_base, void *pw)
 {
+  _kernel_oserror *e;
+  unsigned int flags;
+
   (void)cmd_tail;
   (void)podule_base;
 
   ______main();
 
-  return _swix(OS_Claim, _INR(0, 2), TickerV, tickerv_entry, pw);
+  e = _swix(OS_Hardware, _INR(8,9)|_OUT(0), 0, EntryNo_HAL_TouchscreenType, &flags);
+  if (e || (flags & 0xFF) == 0)
+    return _swix(MessageTrans_ErrorLookup, _INR(0,2), &BadHardError, 0, 0);
+
+#ifdef TEST
+  return _swix(OS_Claim, _INR(0, 2), TickerV, pointerv_entry, pw);
+#else
+  return _swix(OS_Claim, _INR(0, 2), PointerV, pointerv_entry, pw);
+#endif
 }
 
 
@@ -233,9 +269,12 @@ _kernel_oserror *module_finalise(int fatal, int podule, void *pw)
 {
   (void)fatal;
   (void)podule;
-  (void)pw;
 
-  return _swix(OS_Release, _INR(0, 2), TickerV, tickerv_entry, pw);
+#ifdef TEST
+  return _swix(OS_Release, _INR(0, 2), TickerV, pointerv_entry, pw);
+#else
+  return _swix(OS_Release, _INR(0, 2), PointerV, pointerv_entry, pw);
+#endif
 
 }
 
