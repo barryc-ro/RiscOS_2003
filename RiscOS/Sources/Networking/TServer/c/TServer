@@ -242,7 +242,12 @@ int internetv(_kernel_swi_regs *r, void *pw)
     if (r->r[1] != 1 || (r->r[2] != sock && r->r[2] != msgsock)) return 1;
 
     /* set the pollword to our socket if it's for us. */
-    pollword = r->r[2];
+    if (r->r[2] == sock) pollword |= TServer_PollWord_RecvSock;
+    else if (r->r[2] == msgsock) pollword |= TServer_PollWord_MsgSock;
+
+    dprintf(("", "Internet event received on socket %d, pollword set to %x\n",
+        r->r[2], pollword));
+
     return 1;
 }
 
@@ -339,9 +344,27 @@ _kernel_oserror *commands(const char *arg_string, int argc, int cmd_no, void *pw
             _swix (OS_Module, _INR(0, 2), Module_Enter, Module_Title, 0);
         }
         break;
+
+    case CMD_TServer_DebugItStart:
+        if (task_id != -1 && task_id != 0)
+            return _swix (DebugIt_Register, _INR(0,3),
+
+                1,                          /* we'll specify the pollword */
+                task_id,                    /* task handle */
+                &pollword,
+                TServer_PollWord_DebugIt);  /* bit within pollword */
+        break;
+
+    case CMD_TServer_DebugItStop:
+        return _swix (DebugIt_DeRegister, _IN(1), task_id);
+        break;
     }
 
     return 0;
+
+    NOTUSED(pw);
+    NOTUSED(argc);
+    NOTUSED(arg_string);
 }
 
 /* Turn stack limit checking back on again */
@@ -557,11 +580,13 @@ static void pollword_nonzero (WimpPollBlock* block)
     int rval = 0;
     int temp = pollword;
 
+    dprintf (("","pollword is: %x\n", pollword));
+
     /* zero the pollword as soon as possible */
     pollword = 0;
 
     /* If we receive a message on our listening socket: */
-    if (temp == sock) {
+    if (temp & TServer_PollWord_RecvSock) {
 
         char buf[256];
 
@@ -588,9 +613,10 @@ static void pollword_nonzero (WimpPollBlock* block)
         /* start the taskwindow */
         sprintf (buf, "TaskWindow -name TServerTW -ctrl -txt 1 -task %d", task_id);
         wimp_start_task (buf, 0);
+    }
 
     /* If we receive a message on our comms socket: */
-    } else if (temp == msgsock) {
+    if (temp & TServer_PollWord_MsgSock) {
         static char recvbuf[RECVBUFSIZE];
 
         /* Read the data */
@@ -609,7 +635,7 @@ static void pollword_nonzero (WimpPollBlock* block)
             /* we're going to write data directly into the message block */
             char* iptr = block->user_message.data.bytes + 4;
 
-            /* loop through the recieved data passing the characters through
+            /* loop through the received data passing the characters through
             the state machine */
             for (i = 0; i < rval; ++i) {
                 int c = recv_char (recvbuf[i]);
@@ -624,6 +650,28 @@ static void pollword_nonzero (WimpPollBlock* block)
                 block->user_message.data.bytes - 4;
             wimp_send_message (Wimp_EUserMessage, block, child, 0, 0);
         }
+    }
+
+    /* If we receive a debugit message, send the data on */
+    if (temp & TServer_PollWord_DebugIt && msgsock != -1) {
+        int size;
+        static char block[258];
+
+        do {
+            /* if we get an error, set size to zero so that we stop */
+            if (_swix (DebugIt_GetString, _IN(1) | _OUT(0), block, &size))
+                size = 0;
+
+            /* only send data if there is some! */
+            if (size > 0) {
+
+                /* terminate with a CR */
+                block[size] = '\r';
+                block[size+1] = '\n';
+                socketwrite(msgsock, block, size + 2);
+            }
+
+        } while (size > 0);
     }
 }
 
@@ -733,6 +781,8 @@ int main (int argc, char* argv[]) {
             &block,
             &pollword,
             &event_code);
+
+        dprintf(("", "Wimp event %d\n", event_code));
 
         switch (event_code) {
         case Wimp_EPollWordNonZero: pollword_nonzero (&block); break;
