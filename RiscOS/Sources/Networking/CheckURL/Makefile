@@ -77,7 +77,6 @@ ROM_OBJS =	\
  o.File		\
  o.Generic	\
  o.Module	\
- o.ParseURL	\
  o.URLutils	\
  o.Utils	\
  o.${CMHG_HDR}
@@ -90,7 +89,6 @@ RAM_OBJS =	\
  oSL.File	\
  oSL.Generic	\
  oSL.Module	\
- oSL.ParseURL	\
  oSL.URLutils	\
  oSL.Utils	\
  o.${CMHG_HDR}
@@ -103,7 +101,6 @@ DBG_OBJS =	\
  oSLd.File	\
  oSLd.Generic	\
  oSLd.Module	\
- oSLd.ParseURL	\
  oSLd.URLutils	\
  oSLd.Utils	\
  o.${CMHG_HDR}
