@@ -61,8 +61,8 @@ clean:
 	@echo ${COMPONENT}: cleaned
 
 local_clean:
-        @echo ${COMPONENT}: cleaned local resources directory
         ${WIPE} Translated ${WFLAGS}
+        @echo ${COMPONENT}: cleaned local resources directory
 
 dirs:
         @echo ** Creating directory structure
@@ -70,7 +70,6 @@ dirs:
         ${MKDIR} ${RESAPP}
         ${MKDIR} ${RESRES}
         ${MKDIR} ${RESRES}.NVRAM
-        ${MKDIR} ${RESRES}.Wimp
         IfThere Resources.${USERIF}.${LOCALE}.${APP} Then \
 	  ${CP} Resources.${USERIF}.${LOCALE}.${APP} ${RESAPP} T~V~CFQR
 	${CP} Resources.${USERIF}.UK.${APP} ${RESAPP} T~V~CFQR
@@ -130,10 +129,6 @@ resources: translate
           ${CP} Resources.${USERIF}.${LOCALE}.NVRAM.Tags ${RESRES}.NVRAM.Tags ${CPFLAGS} \
         Else \
           ${CP} Resources.${USERIF}.UK.NVRAM.Tags ${RESRES}.NVRAM.Tags ${CPFLAGS}
-        IfThere Resources.${USERIF}.${LOCALE}.Wimp Then \
-          ${CP} Resources.${USERIF}.${LOCALE}.Wimp.Sprites ${RESRES}.Wimp.Sprites ${CPFLAGS} \
-        Else \
-          ${CP} Resources.${USERIF}.UK.Wimp.Sprites ${RESRES}.Wimp.Sprites ${CPFLAGS}
         @echo $(COMPONENT): resource files copied
         
 # Dynamic dependencies:
