@@ -59,7 +59,7 @@ all: ${FILES}
 rom: ${ROM_MODULE}
         @echo ${COMPONENT}: Module built (ROM}
 
-install: ${FILES}
+install: ${FILES} resources-BAS
         ${MKDIR} ${INSTDIR}.${APP}
         |
         ${CP} ${RDIR}.!Boot      ${INSTDIR}.${APP}.!Boot     ${CPFLAGS}
@@ -78,6 +78,7 @@ install_rom: ${ROM_MODULE}
         @echo ${COMPONENT}: Module installed {ROM}
 
 resources-BAS: LocalRes:ROM.!RunLink
+        ${MKDIR} <resource$dir>.Apps
 	${MKDIR} ${RESAPP}
         ${MKDIR} ${RESDIR}
         |
@@ -90,7 +91,9 @@ resources-BAS: LocalRes:ROM.!RunLink
 resources-RES: 
         ${MKDIR} ${RESDIR}
 
-resources: resources-${TYPE}
+resources:
+        ${MKDIR} <resource$dir>.Resources
+        ${MKDIR} ${RESDIR}
         ${CP} LocalRes:Messages      ${RESDIR}.Messages  ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied to Messages module
 
