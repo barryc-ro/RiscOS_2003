@@ -49,7 +49,7 @@ DFLAGS   = -DUserIF_${USERIF}
 COMPONENT = STBSplash
 TARGET    = aof.${COMPONENT}
 RAMTARGET = rm.${COMPONENT}
-OBJS      = o.dynamiclib o.main o.ModHead
+OBJS      = o.dynamiclib o.main o.icon o.error o.ModHead
 EXPORTS   =
 RDIR      = ${RESDIR}.${COMPONENT}
 
@@ -63,23 +63,23 @@ RDIR      = ${RESDIR}.${COMPONENT}
 #
 # build a relocatable module:
 #
-all: ${RAMTARGET}
+all: ${RAMTARGET} dirs
 
 #
 # RISC OS ROM build rules:
 #
-rom: ${TARGET}
+rom: ${TARGET} dirs
         @echo ${COMPONENT}: rom module built
 
 export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
 
-install_rom: ${TARGET}
+install_rom: ${TARGET} dirs
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
 clean:
-        ${WIPE} o.* ${WFLAGS}
+        ${WIPE} o ${WFLAGS}
         ${WIPE} linked ${WFLAGS}
         ${RM} h.ModHead
         ${RM} ${TARGET}
@@ -93,6 +93,10 @@ resources:
 	@echo ${COMPONENT}: resource files copied
 	@echo
 
+dirs:
+        ${MKDIR} o
+        ${MKDIR} linked
+        
 #
 # ROM target (re-linked at ROM Image build time)
 #
@@ -103,7 +107,6 @@ ${TARGET}: ${OBJS} ${ROMCSTUBS}
 # Final link for the ROM Image (using given base address)
 #
 rom_link:
-        ${MKDIR} linked
         ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${TARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom_link complete

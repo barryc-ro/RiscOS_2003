@@ -2,14 +2,20 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include "stdbool.h"
+
 #include "kernel.h"
 #include "swis.h"
 #include "os.h"
 #include "bbc.h"
+#include "Global.Sprite.h"
+#include "Global.Services.h"
 
 #include "main.h"
 #include "dynamiclib.h"
+#include "error.h"
 #include "ModHead.h"
+#include "icon.h"
 
 /* Configuration parameters */
 #ifdef UserIF_STB400
@@ -32,6 +38,7 @@
 
 #define STARTUP_TIMEOUT                 1000 /* 10 seconds */
 #define STARTUP_IMAGE                   "Resources:$.Resources.STBSplash.STB"
+/* #define STARTUP_IMAGE "ADFS::Malcolm.$.Work.Current.STBSplash.graphics.STB" */
 #define STARTUP_TEXT                    ""
 #define STARTUP_DISABLE_VARIABLE        "STBSplash$Disable"
 #define BOOT_ERROR_VARIABLE             "Boot$Error"
@@ -41,19 +48,16 @@
 #define JPEG_Info 0x49980
 #define JPEG_PlotScaled 0x49982
 #define NH_AntiTwitter 0x838C0
-#define SERVICE_REPORTERROR 0x57
 
 #define UNUSED(x) x=x
 
-static _kernel_oserror *plot_splash(const char *t);
 static _kernel_oserror *set_up_font(char *fontname, int backcol, int forecol,
   int x_size, int y_size);
 static _kernel_oserror *display_text(char *text, int x, int y, int orient,
   int *size_ok);
-static _kernel_oserror *set_up_dynamic_area(const char *t);
-static _kernel_oserror *create_sprite_splash(const char *filename, int filelen);
-static _kernel_oserror *create_jpeg_splash(const char *filename, int filelen);
-static _kernel_oserror *create_jpeg_splash_sub(const char *name, int filelen);
+static _kernel_oserror *create_sprite_splash( dynamiclib_str *graphics, imageinfo_str *image_info, const char *filename, int filelen);
+static _kernel_oserror *create_jpeg_splash( dynamiclib_str *graphics, imageinfo_str *image_info, const char *filename, int filelen);
+static _kernel_oserror *create_jpeg_splash_sub( dynamiclib_str *graphics, imageinfo_str *image_info, const char *name, int filelen);
 static _kernel_oserror *reset_everything(void);
 static _kernel_oserror *fonts_to_os(int x, int y, int *result);
 static void read_system_variables(void);
@@ -61,16 +65,17 @@ static int convert_to_int(char *in);
 static _kernel_oserror *plot_sprite_translated(int x, int y);
 static _kernel_oserror *read_mode_variable(int r0, int r1, int *res);
 static _kernel_oserror *read_mode_variables(void);
-//static _kernel_oserror *plot_blank_splash(int x, int y);
 static int compare(const char *s1, const char *s2);
-static _kernel_oserror *copy_error(_kernel_oserror *err);
-static void set_async_error(_kernel_oserror *err);
+static void boxZero( box *b );
+static _kernel_oserror *display( char *arg_string );
+static void imagePosition( imageinfo_str *image_info );
+static _kernel_oserror *position( _kernel_swi_regs *r );
 
 static imageinfo_str  image_info;
-static environment_str screen_info;
 static misc_str misc_info;
-static _kernel_oserror async_error_buf[1], *async_err=NULL;
 
+/* Globals */
+environment_str screen_info;
 dynamiclib_str  graphics, temp_jpeg;
 
 /* These should be in a header file somewhere */
@@ -89,7 +94,14 @@ static int callback_status=0;
 /* This flag is set when the splash screen gets disabled (ie: on Service_Error) */
 #define SPLASH_ENABLED 1
 #define SPLASH_DISABLED 0
+
 static int splash_status = SPLASH_ENABLED;
+static bool callbackModeFlag = false;
+
+static void boxZero( box *b )
+{
+  b->x0 = b->y0 = b->x1 = b->y1 = 0;
+}
 
 /* When the callafter goes off, just set up a callback. */
 _kernel_oserror *callafter_handler(_kernel_swi_regs *r, void *pw)
@@ -108,7 +120,7 @@ _kernel_oserror *callafter_handler(_kernel_swi_regs *r, void *pw)
 _kernel_oserror *callback_handler(_kernel_swi_regs *r, void *pw)
 {
   _kernel_swi_regs regs;
-  _kernel_oserror *err;
+  _kernel_oserror *err = NULL;
 
   UNUSED(pw);
   UNUSED(r);
@@ -145,7 +157,7 @@ _kernel_oserror *callback_handler(_kernel_swi_regs *r, void *pw)
   if(regs.r[2]<-1 || regs.r[2]>0)
   {
     /* The splash screen is disabled when Boot$Error is non-empty. */
-    return NULL;                          /* Exit (to Desktop) to report error in Boot$Error */
+    return NULL;            /* Exit (to Desktop) to report error in Boot$Error */
   }
 
   /* Check if the Inet$Error variable is a non-empty string */
@@ -164,6 +176,7 @@ _kernel_oserror *callback_handler(_kernel_swi_regs *r, void *pw)
       regs.r[3]=0;
       regs.r[4]=4;
       _kernel_swi(OS_SetVarVal, &regs, &regs);
+      free((char *)regs.r[1]);
       return NULL;                        /* Exit (to Desktop) to report error in Boot$Error */
     }
     free((char *)regs.r[1]);
@@ -175,16 +188,20 @@ _kernel_oserror *callback_handler(_kernel_swi_regs *r, void *pw)
     return NULL;
 
   /* Load the graphic */
-  err = set_up_dynamic_area(STARTUP_IMAGE);
+  err = set_up_dynamic_area( &graphics, &image_info, STARTUP_IMAGE);
 
   if(err==NULL)
   {
-    /* Plot it with default text. */
+    /* Clear any previous graphic */
+    err = icon_clear( BLANK, &image_info.sprite );
+    if(err) error_setAsync(err);
+
+    /* Plot it with default text, even if clear failed */
     err = plot_splash(STARTUP_TEXT);
   }
 
   if(err)
-    set_async_error(err);
+    error_setAsync(err);
 
   return NULL;
 }
@@ -194,7 +211,7 @@ _kernel_oserror *callback_handler(_kernel_swi_regs *r, void *pw)
 _kernel_oserror *MyInit ( const char *cmd_tail, int podule_base, void *pw )
 {
   _kernel_swi_regs regs;
-  _kernel_oserror *err;
+  _kernel_oserror *err = NULL;
 
   UNUSED(cmd_tail);
   UNUSED(podule_base);
@@ -208,6 +225,20 @@ _kernel_oserror *MyInit ( const char *cmd_tail, int podule_base, void *pw )
 
   err=_kernel_swi(OS_CallAfter, &regs, &regs);
   if (err == NULL) callback_status = CALLAFTER_ACTIVE;
+
+  /*** Read the information about the mode ***/
+  err = read_mode_variables();
+  if(err) return err;
+
+  /* Initialise splash graphic bounding boxes etc */
+  boxZero( &image_info.sprite );
+  image_info.centreX = image_info.centreY = true;
+  image_info.width = image_info.height = 0;
+  icon_boxPosition( &image_info.sprite, image_info.centreX, image_info.centreY );
+
+  err = icon_init();
+  if( !err ) err = error_init();
+
   return(err);
 }
 
@@ -215,7 +246,7 @@ _kernel_oserror *MyInit ( const char *cmd_tail, int podule_base, void *pw )
 
 _kernel_oserror *MyFinal(int fatal, int podule, void *pw)
 {
-  _kernel_oserror *err;
+  _kernel_oserror *err = NULL;
   _kernel_swi_regs regs;
 
   /* Free the dynamic areas if allocated */
@@ -252,16 +283,59 @@ _kernel_oserror *MyFinal(int fatal, int podule, void *pw)
       return err;
     callback_status &= ~CALLBACK_ACTIVE;
   }
+
+  /* Stop a pending mode change callback */
+  if( callbackModeFlag )
+  {
+    regs.r[0]=(int)callbackModeEntry;
+    regs.r[1]=(int)pw;
+    err=_kernel_swi( OS_RemoveCallBack, &regs, &regs);
+    if( !err ) callbackModeFlag = false;
+  }
+
+  /* free icon related resources */
+  icon_reset();
+
   return 0;
+}
+
+_kernel_oserror *callbackModeHandler( _kernel_swi_regs *r, void *pw)
+{
+  _kernel_oserror *err = NULL;
+
+  callbackModeFlag = false;
+  boxZero( &image_info.sprite );
+  err = read_mode_variables();
+  if( !err ) err = plot_splash( NULL );
+  if( !err ) err = icon_mode();
+
+  if( err ) error_setAsync( err );
+  
+  return NULL;
 }
 
 /* Module service call handler */
 void MyService(int service, _kernel_swi_regs *r, void *pw)
 {
+  _kernel_oserror *err = NULL;
+
   switch (service)
   {
+    case (Service_ModeChange):
+    {
+      _kernel_swi_regs regs;
+      regs.r[0]=(int)callbackModeEntry;
+      regs.r[1]=(int)pw;
+      err = _kernel_swi(OS_AddCallBack, &regs, &regs);
+      if( err )
+        error_setAsync( err );
+      else
+        callbackModeFlag = true;
+      break;
+    }
+
     /* Disable the splash screen if an error box is open */
-    case (SERVICE_REPORTERROR):
+    case (Service_WimpReportError):
     {
       if (r->r[0] == 1)
         splash_status = SPLASH_DISABLED;
@@ -272,29 +346,65 @@ void MyService(int service, _kernel_swi_regs *r, void *pw)
   }
 }
 
-/* The command handler ***************************************************/
-_kernel_oserror *cmd_handler(const char *arg_string, int argc, int cmd_no,
-  void *pw)
+static _kernel_oserror *display( char *arg_string )
 {
+  _kernel_oserror *err = NULL;
+
+  /* Clear any old stuff from the screen */
+  if( graphics.allocated ) err = icon_clear( BLANK, &image_info.sprite );
+  if( !err ) icon_clear( BLANK, NULL );
+
+  /* Plot the graphics */
+  if( !err ) err = plot_splash(arg_string);
+  if( !err ) err = icon_redraw( NULL );
+
+  return err;
+}
+
+/* The command handler ***************************************************/
+_kernel_oserror *cmd_handler(const char *arg_string, int argc, int cmd_no, void *pw)
+{
+  _kernel_oserror *err = NULL;
+
+  char *c, *cmd, length;
+
+  /* Ensure that the arg_string is zero terminated and remove the const-ness */
+  for( c = (char *) arg_string; *c > 31; c++ );
+  length = c - arg_string;
+  cmd = malloc( length + 1 );
+  if( cmd == NULL ) return error_make( ERROR_MEMORY );
+  memcpy( cmd, arg_string, length );
+  cmd[ length ] = 0;
+
   switch (cmd_no)
   {
     case CMD_STBSplash_Display:
-      return plot_splash(arg_string);
-
+      err = display( cmd );
+      break;
+      
     case CMD_STBSplash_Graphic:
-      return set_up_dynamic_area(arg_string);
+      err = set_up_dynamic_area( &graphics, &image_info, cmd );
+      break;
 
     case CMD_STBSplash_Reset:
-      return reset_everything();
+      err = reset_everything();
+      break;
 
     case CMD_STBSplash_Error:
-      {
-        _kernel_oserror *err = async_err;
-        async_err = NULL;
-        return err;
-      }
-  }
+      err = error_async;
+      error_async = NULL;
+      break;
 
+    case CMD_STBSplash_IconSprites:
+      err = icon_sprite( cmd );
+      break;
+
+    case CMD_STBSplash_NextSprite:
+      err = icon_add( cmd );
+      break;
+  }
+  free( cmd );
+  
   return 0;
 }
 
@@ -302,21 +412,17 @@ _kernel_oserror *cmd_handler(const char *arg_string, int argc, int cmd_no,
       Dynamic stuff
 **************************/
 
-static _kernel_oserror *set_up_dynamic_area(const char *filename)
+_kernel_oserror *set_up_dynamic_area( dynamiclib_str *graphics, imageinfo_str *image_info, const char *filename)
 {
   _kernel_swi_regs r;
-  _kernel_oserror *err;
+  _kernel_oserror *err = NULL;
   int filelen, filetype;
-  const char *tmp;
+  const char *tmp = NULL;
   int filename_len;
 
   /* Free the dynamic area if it's already allocated. */
-  if (graphics.allocated)
-    dynamiclib_free(&graphics);
-
-  /*** Read the information about the mode ***/
-  err = read_mode_variables();
-  if(err) return err;
+  if (graphics->allocated )
+    dynamiclib_free( graphics );
 
   /* Read the catalogue information */
   r.r[0] = 17;
@@ -324,8 +430,8 @@ static _kernel_oserror *set_up_dynamic_area(const char *filename)
   err=_kernel_swi(OS_File, &r, &r);
 
   /* If we got an error or it's not a file */
-  if(err!=NULL || r.r[0] != 1)
-    return err;
+  if( err ) return err;
+  if( r.r[0] != 1 ) return error_make( ERROR_FILETYPE );
 
   /* Extract the type and length. */
   filelen = r.r[4];
@@ -333,34 +439,34 @@ static _kernel_oserror *set_up_dynamic_area(const char *filename)
     ? (r.r[2] & 0x000fff00) >> 8 /* Typed file */
     : 0; /* Untyped file */
 
-  graphics.type = 0;
+  graphics->type = 0;
 
   if (filetype == 0xff9) /* A sprite file */
-    graphics.type = 1;
+    graphics->type = 1;
   else
   if (filetype == 0xc85) /* A JPEG file */
-    graphics.type = 2;
+    graphics->type = 2;
 
   /* Find the end of the filename. */
   for(filename_len = 0; filename[filename_len]>=32; filename_len++)
     /* nothing */;
 
-  if (graphics.type == 0 && filename_len > 4)
+  if (graphics->type == 0 && filename_len > 4)
   {
     tmp = filename + filename_len - 4;
 
     if (compare(tmp, "/jpg"))
-      graphics.type = 2;
+      graphics->type = 2;
   }
 
-  switch(graphics.type)
+  switch(graphics->type)
   {
     case 1: /* A sprite file */
-      err=create_sprite_splash(filename, filelen);
+      err=create_sprite_splash( graphics, image_info, filename, filelen);
       break;
 
     case 2: /* A JPEG file */
-      err=create_jpeg_splash(filename, filelen);
+      err=create_jpeg_splash( graphics, image_info, filename, filelen);
       break;
 
     default:
@@ -368,87 +474,112 @@ static _kernel_oserror *set_up_dynamic_area(const char *filename)
       return NULL;
   }
 
+  if( !err ) if( image_info ) imagePosition( image_info );
+  
   /* Free the graphics area if we got an error. */
   if(err)
   {
-    err = copy_error(err);
-    if (graphics.allocated)
-      dynamiclib_free(&graphics);
+    err = error_copy(err);
+    if (graphics->allocated)
+      dynamiclib_free( graphics );
   }
+
   return err;
 }
 
-static _kernel_oserror *
-create_sprite_splash(const char *filename, int filelen)
+static void imagePosition( imageinfo_str *image_info )
 {
-  _kernel_oserror *err;
+  if( image_info->centreX )
+  {
+    image_info->sprite.x0 = ( (screen_info.width  << screen_info.x_eig) - image_info->width) / 2;
+    image_info->sprite.x1 = image_info->sprite.x0 + image_info->width;
+  }
+
+  if( image_info->centreY )
+  {
+    image_info->sprite.y0 = ( (screen_info.height << screen_info.y_eig) - image_info->height) / 2;
+    image_info->sprite.y1 = image_info->sprite.y0 + image_info->height;
+  }
+  icon_boxPosition( &image_info->sprite, image_info->centreX, image_info->centreY );
+}
+
+static _kernel_oserror *
+create_sprite_splash( dynamiclib_str *graphics, imageinfo_str *image_info, const char *filename, int filelen)
+{
+  _kernel_oserror *err = NULL;
   _kernel_swi_regs r;
   char name[25];
   int x_eig, y_eig;
   /*** Set up the sprite area ***/
 
-  image_info.size = filelen;
+  if( image_info) image_info->size = filelen;
 
-  strcpy(graphics.name, "Splash screen");
-  graphics.size = filelen + 1024; /* Size of the area */
+  strcpy(graphics->name, "Splash screen");
+  graphics->size = filelen + 1024; /* Size of the area */
 
-  err=dynamiclib_alloc(&graphics);
+  err=dynamiclib_alloc( graphics );
   if(err)
     return err;
 
-  graphics.area[0] = graphics.size; /* Size of area */
-  graphics.area[2] = 16;/* Offset to first sprite */
+  graphics->area[0] = graphics->size; /* Size of area */
+  graphics->area[2] = 16;/* Offset to first sprite */
   /* Initialise sprite area (user sprite area) */
   r.r[0] = 256 + 9;
-  r.r[1] = (int) graphics.area;
+  r.r[1] = (int) graphics->area;
   err = _kernel_swi(OS_SpriteOp, &r, &r);
   if(err)
     return err;
 
   /*** Load the given sprite file into the area ***/
   r.r[0] = 256 + 10;
-  r.r[1] = (int) graphics.area;
+  r.r[1] = (int) graphics->area;
   r.r[2] = (int) filename;
   err = _kernel_swi(OS_SpriteOp, &r, &r);
   if(err)
     return err;
 
-  /*** Read the information about the sprite ***/
-  r.r[0] = 256 + 13;
-  r.r[1] = (int) graphics.area;
-  r.r[2] = (int) name;
-  r.r[3] = sizeof(name);
-  r.r[4] = 1; /* Sprite index */
-  err=_kernel_swi(OS_SpriteOp, &r, &r);
-  if(err)
-    return err;
+  if( image_info )
+  {
+    /*** Read the information about the sprite ***/
+    r.r[0] = 256 + 13;
+    r.r[1] = (int) graphics->area;
+    r.r[2] = (int) name;
+    r.r[3] = sizeof(name);
+    r.r[4] = 1; /* Sprite index */
+    err=_kernel_swi(OS_SpriteOp, &r, &r);
+    if(err)
+      return err;
 
-  strcpy(image_info.name, name);
+   strcpy(image_info->name, name);
 
-  r.r[0] = 256 + 40;
-  r.r[1] = (int) graphics.area;
-  r.r[2] = (int) image_info.name;
-  err=_kernel_swi(OS_SpriteOp, &r, &r);
-  if(err)
-    return err;
-
-  image_info.mode = r.r[6];
-  err=read_mode_variable(image_info.mode, 4, &x_eig);
-  if(err)
-    return err;
-  err=read_mode_variable(image_info.mode, 5, &y_eig);
-  if(err)
-    return err;
-  image_info.width = r.r[3] << x_eig;
-  image_info.height = r.r[4] << y_eig;
+    r.r[0] = 256 + 40;
+    r.r[1] = (int) graphics->area;
+    r.r[2] = (int) image_info->name;
+    err=_kernel_swi(OS_SpriteOp, &r, &r);
+    if(err)
+      return err;
+  
+    image_info->mode = r.r[6];
+    err=read_mode_variable(image_info->mode, 4, &x_eig);
+    if(err)
+      return err;
+    err=read_mode_variable(image_info->mode, 5, &y_eig);
+    if(err)
+      return err;
+    image_info->width = r.r[3] << x_eig;
+    image_info->height = r.r[4] << y_eig;
+  }
 
   return err;
 }
 
 static _kernel_oserror *
-create_jpeg_splash(const char *filename, int filelen)
+create_jpeg_splash( dynamiclib_str *graphics, imageinfo_str *image_info, const char *filename, int filelen)
 {
-  _kernel_oserror *err;
+  _kernel_oserror *err = NULL;
+
+  if( image_info == NULL ) return error_make( ERROR_FILETYPE );
+  
   strcpy(temp_jpeg.name, "Splash temp");
   temp_jpeg.size = filelen; /* Size of the area */
 
@@ -458,20 +589,20 @@ create_jpeg_splash(const char *filename, int filelen)
 
   if(err==NULL)
   {
-    err=copy_error(create_jpeg_splash_sub(filename, filelen));
+    err=error_copy(create_jpeg_splash_sub( graphics, image_info, filename, filelen));
     dynamiclib_free(&temp_jpeg);
   }
   return err;
 }
 
 static _kernel_oserror *
-create_jpeg_splash_sub(const char *filename, int jpegs)
+create_jpeg_splash_sub( dynamiclib_str *graphics, imageinfo_str *image_info, const char *filename, int jpegs)
 {
-  _kernel_oserror *err, *err2;
+  _kernel_oserror *err = NULL, *err2 = NULL;
   _kernel_swi_regs r, saved;
   int width, height, mode, size_needed;
   int scale[4];
-  int *palette;
+  int *palette = NULL;
 
   r.r[0] = 255;
   r.r[1] = (int) filename;
@@ -490,26 +621,29 @@ create_jpeg_splash_sub(const char *filename, int jpegs)
   if(err)
     return err;
 
-  width = r.r[2];
-  height = r.r[3];
+  width  = r.r[2];  /* in pixels */
+  height = r.r[3];  /* in pixels */
+printf( "In pixels width %d, height %d\n", width, height );
+  image_info->width  = width  << 1;     /* OS coordinates */
+  image_info->height = height << 1;     /* OS coordinates */
 
   /*** Create sprite of the correct size ***/
 
   /* Each row is an integer number or words long. */
   size_needed = ( (width * screen_info.bpp + 31) / 32) * height * 4;
 
-  strcpy(graphics.name, "Splash screen");
-  graphics.size = size_needed + 1024; /* Size of the area */
-  image_info.size = size_needed;
+  strcpy(graphics->name, "Splash screen");
+  graphics->size = size_needed + 1024; /* Size of the area */
+  image_info->size = size_needed;
 
-  err = dynamiclib_alloc(&graphics);
+  err = dynamiclib_alloc( graphics );
   if(err)
     return err;
 
-  graphics.area[0] = graphics.size;
-  graphics.area[2] = 16;
+  graphics->area[0] = graphics->size;
+  graphics->area[2] = 16;
   r.r[0] = 256 + 9;
-  r.r[1] = (int) graphics.area;
+  r.r[1] = (int) graphics->area;
   err = _kernel_swi(OS_SpriteOp, &r, &r);
   if(err)
     return err;
@@ -520,9 +654,10 @@ create_jpeg_splash_sub(const char *filename, int jpegs)
     return err;
 
   /* Sort out scaling */
+
   width = (width << 1) >> screen_info.x_eig;
   height = (height << 1) >> screen_info.y_eig;
-
+printf( "Sort out scaling gives width %d, height %d\n", width, height );
   scale[0] = 2;
   scale[1] = 2;
   scale[2] = 1 << screen_info.x_eig;
@@ -530,15 +665,13 @@ create_jpeg_splash_sub(const char *filename, int jpegs)
 
   /*** Set the image_info structure data up ***/
 
-  strcpy(image_info.name, "splash");
-  image_info.width = width << screen_info.x_eig;
-  image_info.height = height << screen_info.y_eig;
-  image_info.mode = mode;
+  strcpy(image_info->name, "splash");
+  image_info->mode = mode;
 
   /*** Create the new sprite ***/
   r.r[0] = 256 + 15;
-  r.r[1] = (int) graphics.area;
-  r.r[2] = (int) image_info.name;
+  r.r[1] = (int) graphics->area;
+  r.r[2] = (int) image_info->name;
   r.r[3] = screen_info.bpp <= 8 ? 1 : 0;
   r.r[4] = width;
   r.r[5] = height;
@@ -559,6 +692,8 @@ create_jpeg_splash_sub(const char *filename, int jpegs)
       return err;
 
     palette = malloc(r.r[3]);
+    if( palette == NULL ) return error_make( ERROR_MEMORY );
+    
     r.r[2] = (int) palette;
     err = _kernel_swi(ColourTrans_ReadPalette, &r, &r);
     if (err)
@@ -568,8 +703,8 @@ create_jpeg_splash_sub(const char *filename, int jpegs)
     }
 
     /*** Write it to sprite ***/
-    r.r[0] = (int) graphics.area;
-    r.r[1] = (int) image_info.name;
+    r.r[0] = (int) graphics->area;
+    r.r[1] = (int) image_info->name;
     r.r[2] = (int) palette;
     r.r[3] = 0;
     r.r[4] = 0;
@@ -582,8 +717,8 @@ create_jpeg_splash_sub(const char *filename, int jpegs)
   /*** Switch output to the new sprite ***/
 
   r.r[0] = 256 + 60;
-  r.r[1] = (int) graphics.area;
-  r.r[2] = (int) image_info.name;
+  r.r[1] = (int) graphics->area;
+  r.r[2] = (int) image_info->name;
   r.r[3] = 0;
   err = _kernel_swi(OS_SpriteOp, &r, &saved);
   if (err)
@@ -608,47 +743,55 @@ create_jpeg_splash_sub(const char *filename, int jpegs)
     return err?err:err2;
 
   /* Pretend it's a sprite */
-  graphics.type = 1;
+  graphics->type = 1;
   return 0;
 }
 
 static _kernel_oserror *reset_everything(void)
 {
-  if (graphics.allocated)
-    return dynamiclib_free(&graphics);
-  return 0;
+  _kernel_oserror *err = NULL;
+
+  if (graphics.allocated) err = dynamiclib_free(&graphics);
+
+  if( !err ) err = icon_reset();
+
+  return err;
 }
 
 /**************************
        Display stuff
 **************************/
 
-static _kernel_oserror *plot_splash(const char *text_in)
+_kernel_oserror *plot_splash( char *text_in)
 {
   _kernel_swi_regs r;
-  _kernel_oserror *err;
-  char text[256];
-  int text_x, text_y, x, y, size_okay, adjusted_x_size, adjusted_y_size;
-  int scale[4];
-  char *tt;
+  _kernel_oserror *err = NULL;
+  int text_x, text_y, /* x, y,*/  size_okay, adjusted_x_size, adjusted_y_size;
+/*  int scale[4]; */
+  char *tt = NULL;
 
-  /*** Strip the text of any quotes ***/
+  static char *text = NULL;
 
-  if (text_in[0] == '"')
-    text_in++;
+  /* If new text, replace the old */
+  if( text_in )
+  {
+    /** Strip the text of any quotes **/
+    if ( *text_in == '"')
+    {
+      text_in++;
+      for( tt=text_in; *tt; tt++ );
+      if( *--tt == '"' ) *tt = 0;
+    }
 
-  sprintf(text, "%.255s", text_in);
-
-  tt = strrchr(text, '"');
-
-  if (tt)
-    *tt = 0;
-
-  /*** Read the information about the mode again (it might have changed!) ***/
-
-  err = read_mode_variables();
-  if(err) return err;
-
+    free( text );
+    text = malloc( strlen( text_in ) + 1 );
+    if( text == NULL ) return error_make( ERROR_MEMORY );
+    strcpy( text, text_in );
+  
+    tt = strrchr(text, '"');
+    if (tt) *tt = 0;
+  }
+  
   read_system_variables();
 
   /*** Plot the splash, either a sprite or a JPEG ***/
@@ -658,30 +801,22 @@ static _kernel_oserror *plot_splash(const char *text_in)
 
   if(graphics.type==0)
   {
-    /* Some random numbers... */
-    image_info.width = 436*2;
-    image_info.height = 287*2;
+    image_info.width  = screen_info.width  << screen_info.x_eig;
+    image_info.height = screen_info.height << screen_info.y_eig;
   }
-
-  x = ( (screen_info.width << screen_info.x_eig) - image_info.width) / 2;
-  y = ( (screen_info.height << screen_info.y_eig) - image_info.height) / 2;
 
   switch(graphics.type)
   {
-//  case 0: /* Blank */
-//    err = plot_blank_splash(x, y);
-//    if(err)
-//      return err;
-//    break;
 
   case 1: /* Sprite */
 
-    err = plot_sprite_translated(x, y);
+    err = plot_sprite_translated( image_info.sprite.x0, image_info.sprite.y0 );
     if(err)
       return err;
     break;
 
-  case 2: /* JPEG */
+/*  JPEG
+  case 2:
     scale[0] = 2;
     scale[1] = 2;
     scale[2] = 1 << screen_info.x_eig;
@@ -689,7 +824,7 @@ static _kernel_oserror *plot_splash(const char *text_in)
 
     r.r[0] = (int) graphics.area;
     r.r[1] = x;
-    r.r[2] = y;
+    r.r[2] = y; 
     r.r[3] = (int) scale;
     r.r[4] = image_info.size;
     r.r[5] = 0;
@@ -698,6 +833,7 @@ static _kernel_oserror *plot_splash(const char *text_in)
     if (err)
       return err;
     break;
+*/
 
   default: /* Just in case */
     return 0;
@@ -730,14 +866,15 @@ static _kernel_oserror *plot_splash(const char *text_in)
 
     err = display_text(text, text_x, text_y, misc_info.text_alignment,
                        &size_okay);
-    err = copy_error(err);
+    if( err ) return err;
+
+    err = error_copy(err);
 
     /* Make sure we lose the font in either case. */
     r.r[0] = misc_info.fonthandle;
     _kernel_swi(Font_LoseFont, &r, &r);
 
-    if(err)
-      return err;
+    if(err) return err;
 
     if (!size_okay) /* Probably too big to fit the box */
     {
@@ -757,7 +894,7 @@ static _kernel_oserror *set_up_font(char *fontname, int backcol, int forecol,
   int x_size, int y_size)
 {
   _kernel_swi_regs r;
-  _kernel_oserror *err;
+  _kernel_oserror *err = NULL;
 
   r.r[0] = 0;
   r.r[1] = (int) fontname;
@@ -776,7 +913,7 @@ static _kernel_oserror *set_up_font(char *fontname, int backcol, int forecol,
     err = _kernel_swi(ColourTrans_SetFontColours, &r, &r);
     if(err)
     {
-      err = copy_error(err);
+      err = error_copy(err);
 
       /* Make sure we lose the font if we return an error. */
       r.r[0] = misc_info.fonthandle;
@@ -803,7 +940,7 @@ static _kernel_oserror *display_text(char *text, int x, int y, int orient,
   int *size_okay)
 {
   _kernel_swi_regs r, p;
-  _kernel_oserror *err;
+  _kernel_oserror *err = NULL;
   int width, height, success;
   char text_local[256];
   int output[16];
@@ -905,7 +1042,7 @@ static _kernel_oserror *display_text(char *text, int x, int y, int orient,
 static _kernel_oserror *fonts_to_os(int x, int y, int *result)
 {
   _kernel_swi_regs r;
-  _kernel_oserror *err;
+  _kernel_oserror *err = NULL;
 
   r.r[1] = x;
   r.r[2] = y;
@@ -1000,40 +1137,60 @@ static void read_system_variables(void)
 static int convert_to_int(char *in)
 {
   int out;
-  char *rest;
 
-  out = (int) strtol(in, &rest, 16);
+  out = (int) strtol(in, NULL, 16);
 
   return(out);
 }
 
 static _kernel_oserror *plot_sprite_translated(int x, int y)
 {
-  int *pal;
-  int scale[4];
   _kernel_swi_regs r;
-  _kernel_oserror *err;
+  _kernel_oserror *err = NULL;
 
-  r.r[0] = 0x100;
+  r.r[0] = 0x100 + SpriteReason_SelectSprite;
   r.r[1] = (int) graphics.area;
   r.r[2] = (int) image_info.name;
+  err = _kernel_swi(OS_SpriteOp, &r, &r);
+  if( err ) return err;
+  err = plot_sprite_translatedPtr( graphics.area, (int *) r.r[2], x, y, 1, 1);
+  return err;
+}
+
+_kernel_oserror *plot_sprite_translatedPtr( int *area, int *sprite, int x, int y, int xScale, int yScale)
+{
+  int *pal = NULL;
+  int scale[4];
+  _kernel_swi_regs r;
+  _kernel_oserror *err = NULL;
+
+  /* Scaling */
+  r.r[0] = 0x200;
+  r.r[1] = (int) area;
+  r.r[2] = (int) sprite;
   r.r[3] = r.r[4] = r.r[5] = 0;
   r.r[6] = (int) scale;
   r.r[7] = 0;
   err = _kernel_swi(Wimp_ReadPixTrans, &r, &r);
   if (err)
     return err;
+  scale[0] *= xScale;
+  scale[1] *= yScale;
 
-  r.r[0] = (int) graphics.area;
-  r.r[1] = (int) image_info.name;
+  /* pallette */
+  r.r[0] = (int) area;
+  r.r[1] = (int) sprite;
   r.r[2] = r.r[3] = -1;
   r.r[4] = 0;
-  r.r[5] = 16;
+  r.r[5] = 16+1;
   err = _kernel_swi(ColourTrans_GenerateTable, &r, &r);
   if (err)
     return err;
 
+  /* May have returned zero size, in which case malloc returns NULL
+     and the 2nd call wastes a bit of time but no harm is done */
   pal = malloc(r.r[4]);
+
   r.r[4] = (int) pal;
   err = _kernel_swi(ColourTrans_GenerateTable, &r, &r);
   if (err)
@@ -1042,23 +1199,25 @@ static _kernel_oserror *plot_sprite_translated(int x, int y)
       return err;
   }
 
-  r.r[0] = 256 + 52;
-  r.r[1] = (int) graphics.area;
-  r.r[2] = (int) image_info.name;
+  /* and plot it */
+  r.r[0] = 0x200 + SpriteReason_PutSpriteScaled; /* 52 */
+  r.r[1] = (int) area;
+  r.r[2] = (int) sprite;
   r.r[3] = x;
   r.r[4] = y;
-  r.r[5] = 32;
+  r.r[5] = 32+8;
   r.r[6] = (int) scale;
   r.r[7] = (int) pal;
   err = _kernel_swi(OS_SpriteOp, &r, &r);
   free(pal);
+
   return err;
 }
 
 static _kernel_oserror *read_mode_variable(int r0, int r1, int *res)
 {
   _kernel_swi_regs r;
-  _kernel_oserror *err;
+  _kernel_oserror *err = NULL;
 
   r.r[0] = r0;
   r.r[1] = r1;
@@ -1071,7 +1230,7 @@ static _kernel_oserror *read_mode_variable(int r0, int r1, int *res)
 static _kernel_oserror *read_mode_variables(void)
 {
   int log2_bpp;
-  _kernel_oserror *err;
+  _kernel_oserror *err = NULL;
 
   err = read_mode_variable(-1, 4, &screen_info.x_eig);
   if(err) return err;
@@ -1093,79 +1252,87 @@ static _kernel_oserror *read_mode_variables(void)
   return err;
 }
 
-//static _kernel_oserror *plot_blank_splash(int x, int y)
-//{
-//  _kernel_swi_regs r;
-//  _kernel_oserror *err;
-//  char *taskname = "Splash Screen";
-//  int handle;
-//
-//  err = _swix(ColourTrans_SetGCOL, _INR(0,4), DEFAULT_CHOSEN_BACK << 8, 0, 0, 0, 0);
-//  if(err)
-//    return err;
-//
-//  r.r[0] = 3;
-//  err = _kernel_swi(Wimp_ReadSysInfo, &r, &r);
-//  if (r.r[0] == 0)
-//  {
-//    err = bbc_rectanglefill(x, y, image_info.width - 1, image_info.height - 1);
-//  }
-//  else
-//  {
-//    r.r[0] = 310;
-//    r.r[1] = 0x4B534154;
-//    r.r[2] = (int) taskname;
-//    err    = _kernel_swi(Wimp_Initialise, &r, &r);
-//    if (err) return(err);
-//    handle = r.r[1];
-//
-//    err = bbc_rectanglefill(x, y, image_info.width - 1, image_info.height - 1);
-//    if (err) return(err);
-//
-//    r.r[0] = handle;
-//    r.r[1] = 0x4B534154;
-//    err    = _kernel_swi(Wimp_CloseDown, &r, &r);
-//  }
-//
-//  return(err);
-//}
-
 /* Return 1 (true) if the strings are the same (ignoring case).
  * Return 0 otherwise.
  */
 static int compare(const char *s1, const char *s2)
 {
-  for(; tolower(*s1)==tolower(*s2); s1++, s2++)
-    if(*s2 == 0) /* Have we reached the end? */
-      return 1;
-  /* The strings are different */
-  return 0;
+  for(; tolower(*s1)==tolower(*s2); s1++, s2++);
+  return( *s2 == 0);
 }
 
-/* Copy the error into an internal buffer (unless it's already there).
- * Give it NULL and it returns NULL.
- */
-static _kernel_oserror *copy_error(_kernel_oserror *err)
+static _kernel_oserror *position( _kernel_swi_regs *r )
 {
-  static _kernel_oserror error_buffer[1];
+  /* Clear the old position */
+  icon_clear( BLANK, &image_info.sprite );
 
-  if(err==NULL || err==error_buffer)
-    return err;
-  memcpy(error_buffer, err, sizeof(error_buffer));
-  return error_buffer;
+  image_info.centreX = r->r[0] == -1;
+
+  if( !image_info.centreX )
+  {
+    image_info.sprite.x0 = r->r[0] - image_info.width / 2;
+    image_info.sprite.x1 = r->r[0] + image_info.width / 2;
+  }
+
+  image_info.centreY = r->r[1] == -1;
+
+  if( !image_info.centreY )
+  {
+    image_info.sprite.y0 = r->r[1] - image_info.height / 2;
+    image_info.sprite.y1 = r->r[1] + image_info.height / 2;
+  }
+  
+  /* Force on screen and centre as needed */
+  icon_boxPosition( &image_info.sprite, image_info.centreX, image_info.centreY );
+
+  plot_splash( NULL );
+  icon_redraw( NULL );
+
+  return NULL;
 }
 
-/* Set the asynchronous error
+/*
+ * SWI handler code
+ * ================
+ *
+ * swi_offset contains the offset of the SWI into your SWI chunk.
+ * r points to the registers passed to the SWI.
+ *
+ * Return NULL if the SWI is handled successfully; otherwise return
+ * a pointer to an error block which describes the error.
+ * The veneer code sets the 'V' bit if the returned value is non-NULL.
+ * The special value error_BAD_SWI may be returned if you do not
+ * implement a SWI; the veneer will arrange for the appropriate
+ * standard internationalised error 'SWI value out of range for
+ * module STBSplash' to be returned.
+ * The handler may update any of its input registers (R0-R9).
+ * pw is the private word pointer ('R12') value passed into the
+ * SWI handler entry veneer.
  */
-static void set_async_error(_kernel_oserror *err)
+
+_kernel_oserror *swi_handler(int swi_offset, _kernel_swi_regs *r, void *pw)
 {
-  if(err)
+  _kernel_oserror *err = NULL;
+
+  pw = pw;
+  
+  swi_offset += STBSplash_00;
+  switch( swi_offset )
   {
-    memcpy(async_error_buf, err, sizeof(async_error_buf));
-    async_err = async_error_buf;
+    case STBSplash_IconBox:
+      err = icon_swiBox( r );
+      break;
+
+    case STBSplash_Position:
+      err = position( r );
+      break;
+
+    default:
+      err = error_BAD_SWI;
+      break;
   }
-  else
-  {
-    async_err = NULL;
-  }
+
+  return err;
 }
+
+/* End of STBSplash:main.c */
