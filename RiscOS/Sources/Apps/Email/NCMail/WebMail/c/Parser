@@ -26,6 +26,7 @@
 
 /* ---------------------------------- PRE-PROCESSOR DIRECTIVES ---------------------------------- */
 
+static void file_get_string(FILE *file, char *string, int32 max_len, int32 extra_terminator);
 
 /* -------------------------------------- GLOBAL VARIABLES -------------------------------------- */
 
@@ -49,64 +50,72 @@
 /*                                                                      */
 /* Returns:    TRUE for success.                                        */
 /************************************************************************/
-bool parser_parse_file(uint32 page_type, char *template_file, char *output_file, void *handle)
+bool parser_parse_file(char *template_file, char *output_file, ncmui_cbf_parser func, void *handle)
 {
   FILE		*in = NULL;
   FILE		*out = NULL;
   int32		 c = 'a';
+  bool		 rc = true;
 
-  dprintf(("UI_0", "Parsing file of type: %d\n", page_type));
-
-  /* Open the template file */
-  in = fopen(template_file, "r");
-  if (in == NULL)
+  if (func == NULL)
   {
-    error_report(ERROR_ParserOpenTemplateFail,
-                 nb_messagetrans_lookup(config_block, "ERROR_ParserOpenTemplateFail"));
-    return(false);
+    /* No callback passed */
+    rc = false;
   }
   else
   {
-    /* Open the Output file */
-    out = fopen(output_file, "w");
-    if (out == NULL)
+    /* Open the template file */
+    in = fopen(template_file, "r");
+    if (in == NULL)
     {
-      error_report(ERROR_ParserWriteOpenFileFail,
-                   nb_messagetrans_lookup(config_block, "ERROR_ParserWriteOpenFileFail"));
-      return(false);
+      error_report(ERROR_ParserOpenTemplateFail,
+                   nb_messagetrans_lookup(config_block, "ERROR_ParserOpenTemplateFail"));
+      rc = false;
     }
     else
     {
-      /* Lock the file to stop CacheFS deleting it */
-      nb_file_lock(1, output_file, NULL);
-      /* OK, now that we have successfully opened both files, loop around until we find an
-       * Active Comment
-       */
-      do
+      /* Open the Output file */
+      out = fopen(output_file, "w");
+      if (out == NULL)
       {
-        c = fgetc(in);
-        /* Check to see if we have retrieved the EOF marker */
-        if (!feof(in))
+        error_report(ERROR_ParserWriteOpenFileFail,
+                     nb_messagetrans_lookup(config_block, "ERROR_ParserWriteOpenFileFail"));
+        rc = false;
+      }
+      else
+      {
+        /* Lock the file to stop CacheFS deleting it */
+        nb_file_lock(1, output_file, NULL);
+        /* OK, now that we have successfully opened both files, loop around until we find an
+         * Active Comment
+         */
+        do
         {
-          /* OK, so now check for Active Comment and act accordingly */
-          if (c != Active_Comment_Open)
+          c = fgetc(in);
+          /* Check to see if we have retrieved the EOF marker */
+          if (!feof(in))
           {
-            fprintf(out, "%c", c);
-          }
-          else
-          {
-            parser_active_comment_found(page_type, in, out, handle);
+            /* OK, so now check for Active Comment and act accordingly */
+            if (c != Active_Comment_Open)
+            {
+              fprintf(out, "%c", c);
+            }
+            else
+            {
+              parser_active_comment_found(in, out, func, handle);
+            }
           }
         }
-      }
-      while (!feof(in));
+        while (!feof(in));
 
-      fclose(out);
-      nb_file_set_filetype(1, output_file, NULL, NB_FileType_HTML);
+        /* Close the generated file, and set the filetype */
+        fclose(out);
+        nb_file_set_filetype(1, output_file, NULL, NB_FileType_HTML);
+      }
+      fclose(in);
     }
-    fclose(in);
   }
-  return(true);
+  return(rc);
 }
 
 
@@ -124,64 +133,16 @@ bool parser_parse_file(uint32 page_type, char *template_file, char *output_file,
 /* Returns:    void.                                                    */
 /*                                                                      */
 /************************************************************************/
-void parser_active_comment_found(uint32 page_type, FILE *in, FILE *out, void *handle)
+void parser_active_comment_found(FILE *in, FILE *out, ncmui_cbf_parser func, void *handle)
 {
-  char string[200];
+  char string[Active_Comment_Max_Length];
 
   /* Retrieve AC */
-  file_get_string(in, string, 40, Active_Comment_Close);
+  file_get_string(in, string, (Active_Comment_Max_Length - 1), Active_Comment_Close);
   dprintf(("UI_0", "*** Comment found: %s\n", string));
 
-  switch(page_type)
-  {
-    case(PageType_Inbox):
-    {
-      inbox_active_comment_found(string, out);
-      break;
-    }
-    case(PageType_Advanced):
-    {
-      advanced_active_comment_found(string, out);
-      break;
-    }
-    case(PageType_ReadMsg):
-    {
-      readmsg_active_comment_found(string, out, (MessageDescriptor *) handle);
-      break;
-    }
-    case(PageType_PopUp):
-    case(PageType_PopUp_1):
-    case(PageType_PopUp_2):
-    {
-      popup_active_comment_found(string, out, handle);
-      break;
-    }
-    case(PageType_SendMsg):
-    {
-      sendmsg_active_comment_found(string, out, (MessageDescriptor *) handle);
-      break;
-    }
-    case(PageType_UserSel):
-    {
-      usersel_active_comment_found(string, out, handle);
-      break;
-    }
-    case(PageType_Info):
-    {
-      info_active_comment_found(string, out, handle);
-      break;
-    }
-    case(PageType_Exit):
-    {
-      exit_active_comment_found(string, out, handle);
-      break;
-    }
-    default:
-    {
-      fprintf(out, "Unknown Page Type %d\n", page_type);
-      break;
-    }
-  }
+  /* Call the callback function */
+  func(string, out, handle);
 }
 
 
@@ -200,7 +161,7 @@ void parser_active_comment_found(uint32 page_type, FILE *in, FILE *out, void *ha
 /* Returns:    text in pointer, plus void.                              */
 /*                                                                      */
 /************************************************************************/
-void file_get_string(FILE *file, char *string, int32 max_len, int32 extra_terminator)
+static void file_get_string(FILE *file, char *string, int32 max_len, int32 extra_terminator)
 {
   int32		 counter;
   int32		 c;
