@@ -242,7 +242,7 @@ install_HTTP_s:
 
 # WebFTP install
 
-install_WebFTP:
+install_WebFTP: install_dir
         ${CP} rm.WebFTP ${INSTDIR}.${TARGET} ${CPFLAGS}
         @echo ${COMPONENT}: files installed
 
