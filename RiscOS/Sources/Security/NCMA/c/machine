@@ -13,6 +13,9 @@
 #include "ncma_url.h"
 #include "ncma_utils.h"
 #include "ncma_dial.h"
+#include "ncma_cron.h"
+#include "ncma_exec.h"
+#include "ncma_smurf.h"
 #include "vectors.h"
 
 #include "DBUG.h"
@@ -48,7 +51,10 @@ char *trans_string(NCMA_TRANS trans)
     "Trans_NCMASurf",
     "Trans_URLDownloadMin",
     "Trans_URLDownloadMax",
-    "Trans_URLDownloadSched"
+    "Trans_URLDownloadSched",
+    "Trans_URLDownloadNak",
+    "Trans_URLConnect",
+    "Trans_URLConnectNak"
   };
 
 
@@ -73,7 +79,8 @@ char *state_string(NCMA_STATE state)
     "State_NCMANewPIN",
     "State_NCMAMismatch",
     "State_NCMABooted",
-    "State_NCMADownload"
+    "State_NCMADownload",
+    "State_NCMAConnect"
   };
 
   return(s_table[state]);
@@ -109,7 +116,6 @@ NCMA_STATE machine(NCMA_TRANS trans)
     	 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: smartcard removed\n");
     	 unlock_cache();
     	 if(ncma_started) {
-    	     //ncma_url_open("file:/ncma:splash.html");
     	     ncma_url_open(URL_PATH(splash.html));
     	     return(State_NCMANoCard);
     	 } else return(State_NCMAInit);
@@ -148,7 +154,6 @@ NCMA_STATE machine(NCMA_TRANS trans)
 	   	DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: Managed access starting\n");
 		if(!smartcard_present()) {
 		    DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: no smartcard - fetching splash screen\n");
-		    //ncma_url_open("file:/ncma:splash.html");
 		    ncma_url_open(URL_PATH(splash.html));
 		    return(State_NCMANoCard);
 		}
@@ -157,14 +162,12 @@ NCMA_STATE machine(NCMA_TRANS trans)
 		if(smartcard_pin_protected()) {
 		    card_attempts = smartcard_blocked();
 		    DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: smartcard PIN protected (%d attempts) - fetching page\n", card_attempts);
-		    //ncma_url_open("file:/ncma:pin.html");
 		    ncma_url_open(URL_PATH(pin.html));
 		    return(State_NCMAPin);
 		}
 
 		if(!smartcard_valid()) {
 		    DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: invalid smartcard - bailing\n");
-		    //ncma_url_open("file:/ncma:damaged.html");
 		    ncma_url_open(URL_PATH(damaged.html));
 		    return(State_NCMABadCard);
 		}
@@ -172,11 +175,8 @@ NCMA_STATE machine(NCMA_TRANS trans)
 		if(cache_smartcard()<0) {
 		    DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: smartcard content caching failed\n");
 		}
-
-		if(ncma_dial()<0) {
-		    DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: dial initiation failed\n");
-		}
-		return(State_NCMADiallingISP);
+		ncma_url_open(URL_PATH(connect.html));
+		return(State_NCMAConnect);
 
 
 	 }
@@ -194,7 +194,6 @@ NCMA_STATE machine(NCMA_TRANS trans)
     	     case Trans_CardRemoved: /* user has removed bad card */
 
     	     	  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: invalid smartcard removed\n");
-    	     	  //ncma_url_open("file:/ncma:splash.html");
     	     	  ncma_url_open(URL_PATH(splash.html));
     	     	  return(State_NCMANoCard);
     	 }
@@ -218,14 +217,16 @@ NCMA_STATE machine(NCMA_TRANS trans)
 	    	 if(registry_status_asserted(BB_STATUS_LOCKED)) { /* PIN protected */
 	    	    card_attempts = smartcard_blocked();
  		    DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: smartcard PIN protected (%d attempts) - fetching page\n", card_attempts);
-		    //ncma_url_open("file:/ncma:pin.html");
 		    ncma_url_open(URL_PATH(pin.html));
 		    return(State_NCMAPin);
 		}
 		else if(registry_status_cleared(BB_STATUS_LOCKED)) { /* no PIN */
 		   DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: smartcard has no PIN\n");
-		    /* dial_isp */
-		    return(State_NCMADiallingISP);
+		   if(cache_smartcard()<0) {
+		      DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: smartcard content caching failed\n");
+		   }
+		   ncma_url_open(URL_PATH(connect.html));
+		   return(State_NCMAConnect);
 		}
 
 		break;
@@ -233,7 +234,6 @@ NCMA_STATE machine(NCMA_TRANS trans)
             case Trans_CardBad: /* bad card */
 
             	 DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: bad card re-inserted\n");
-            	 //ncma_url_open("file:/ncma:damaged.html");
             	 ncma_url_open(URL_PATH(damaged.html));
             	 return(State_NCMABadCard);
          }
@@ -326,6 +326,34 @@ NCMA_STATE machine(NCMA_TRANS trans)
 
 /*********************************************************************************
 
+    STATE_NCMACONNECT
+
+ *********************************************************************************/
+    case State_NCMAConnect:
+
+    	 switch(trans) {
+	 	case Trans_URLConnect:
+
+		     if(ncma_dial()<0) {
+		       DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: dial initiation failed\n");
+		       ncma_url_open(URL_PATH(connect.html));
+		       return(State_NCMAConnect);
+		     }
+
+		     return(State_NCMADiallingISP);
+                     break;
+
+                case Trans_URLConnectNak:
+                     prevent_shutdown = 0;
+                     shutdown_nc();
+                     return(State_NCMAShutdown);
+                     break;
+         }
+         break;
+
+
+/*********************************************************************************
+
     STATE_NCMADIALLINGISP
 
  *********************************************************************************/
@@ -335,35 +363,34 @@ NCMA_STATE machine(NCMA_TRANS trans)
 
     	     case Trans_DialBad: /* Don't know what to do here! Not in the CIS!! */
     	     	  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: dial failed - bummer\n");
-    	     	  ncma_url_open(URL_PATH(disconnect.html));
-    	     	  return(State_NCMADiallingISP);
+    	     	  ncma_url_open(URL_PATH(connect.html));
+    	     	  return(State_NCMAConnect);
+    	     	  break;
 
     	     case Trans_DialOK: /* dial succeeded */
     	     	  DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: dial succeeded - setting cron job\n");
-#if 0
-/* this is what we'll do eventually */
 
     	     	  ncma_cron_kick(); /* setup scheduled update */
     	     	  ncma_network_init(); /* set resolver variables */
 
+    	     	  if(ncma_mount_smurfs()>0) { /* smurfs are go */
 
-    	     	  ncma_build_user_url(); /* bind user URL to ncma: access method */
-    	     	  ncma_mount_smurfs();
-
-   	     	  if(ui_present()) {
-    	     	      ncma_exec_fullboot();
-    	     	      ncma_url_open("file:/UI:index.html"); /* display top level menu */
+     	     	     if(ui_present()) {
+     	     	        DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: top level UI detected - fullbooting\n");
+      	     	        ncma_exec_fullboot();
+      	     	        ncma_url_open("file:/UI:index.html"); /* display top level menu */
+      	     	        return(State_NCMABooted);
+      	     	    } else {
+      	     	        DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: no top level UI - prompting for download\n");
+      	     	        ncma_url_open(URL_PATH(download.html));
+      	     	        return(State_NCMADownload);
+      	     	    }
+      	     	  } else { /* no smurfs - just fetch the URL */
+      	     	      DBUG_PRINTF(DBUG_LVL_DIAG, "NCMA_machine: no SMURFS capability - falling back to s/card URL\n");
+    	     	      ncma_url_scard();
     	     	      return(State_NCMABooted);
-    	     	  } else {
-    	     	      ncma_url_open(URL_PATH(download.html));
-    	     	      return(State_NCMADownload);
     	     	  }
-#else
-/* but for now... */
-       	   	  ncma_network_init();
-    	     	  ncma_url_scard();
-    	     	  return(State_NCMABooted);
-#endif
+    	     	  break;
     	 }
     	 break;
 
@@ -388,12 +415,29 @@ NCMA_STATE machine(NCMA_TRANS trans)
 
  *********************************************************************************/
     case State_NCMADownload:
-    	 /* need to parse for min, max, sched download & run ncma_exec */
-         return(State_NCMADownload);
 
+         switch(trans) {
 
+             case Trans_URLDownloadMin:
+             	  ncma_url_open(URL_PATH(transfer.html));
+             	  ncma_exec_fastboot();
+             	  return(State_NCMABooted);
+             	  break;
 
+             case Trans_URLDownloadMax:
+             	  ncma_url_open(URL_PATH(transfer.html));
+             	  ncma_exec_fullboot();
+             	  return(State_NCMABooted);
+             	  break;
 
+             case Trans_URLDownloadSched:
+             case Trans_URLDownloadNak:
+             	  prevent_shutdown = 0;
+             	  shutdown_nc();
+             	  return(State_NCMAShutdown);
+		  break;
+	 }
+	 break;
 
  /*********************************************************************************
 
@@ -497,10 +541,8 @@ NCMA_STATE machine(NCMA_TRANS trans)
         		DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: smartcard content caching failed\n");
         	      }
 
-        	      if(ncma_dial()<0) {
-        		DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: dial initiation failed\n");
-        	      }
-        	      return(State_NCMADiallingISP);
+		      ncma_url_open(URL_PATH(connect.html));
+        	      return(State_NCMAConnect);
 
 	     	  }
     	 }
@@ -525,10 +567,8 @@ NCMA_STATE machine(NCMA_TRANS trans)
         	     DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: smartcard content caching failed\n");
         	  }
 
-        	  if(ncma_dial()<0) {
-        	    DBUG_PRINTF(DBUG_LVL_ERROR, "NCMA_machine: dial initiation failed\n");
-        	  }
-        	  return(State_NCMADiallingISP);
+		  ncma_url_open(URL_PATH(connect.html));
+        	  return(State_NCMAConnect);
 
 	 }
 	 break;

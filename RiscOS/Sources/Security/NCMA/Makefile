@@ -80,14 +80,15 @@ TARGETSA  = rm.NCMA
 EXPORTS   = 
 BASEOBJS  = module.o header.o vectors.o DBUG.o ncma_cmds.o ncma_swis.o \
 	  dynalloc.o ncma_ncma.o machine.o ncma_url.o ncma_scard.o \
-	  ncma_utils.o ncma_dial.o 
+	  ncma_utils.o ncma_dial.o kprintf.o ncma_smurf.o ncma_cron.o \
+	  ncma_exec.o
 
 ROMOBJS = oz.resources ${BASEOBJS}
 NOTROMOBJS = o.resources ${BASEOBJS}
 
 RESDIR = <resource$dir>.Resources.${COMPONENT}
 
-NOTROMRESDEP = html.badpin html.change html.damaged html.disconnect html.download \
+NOTROMRESDEP = html.badpin html.change html.connect html.damaged html.disconnect html.download \
 	html.mismatch html.moved html.newpin html.notMA html.notNC html.pin \
 	html.poweroff html.SCprobs html.splash html.transfer html.unblock \
 	html.toplevel html.welcome
@@ -164,106 +165,3 @@ rom_link:
 
 
 # Dynamic dependencies:
-o.header:	cmhg.header
-o.header:	h.cmhg_defs
-o.vectors:	c.vectors
-o.vectors:	C:h.kernel
-o.vectors:	C:h.swis
-o.vectors:	h.ncma_ncma
-o.vectors:	h.machine
-o.vectors:	h.vectors
-o.vectors:	h.module
-o.vectors:	h.DBUG
-o.vectors:	h.scinter
-o.DBUG:	c.DBUG
-o.DBUG:	H.DBUG
-o.ncma_cmds:	c.ncma_cmds
-o.ncma_cmds:	C:h.kernel
-o.ncma_cmds:	C:h.swis
-o.ncma_cmds:	h.ncma_cmds
-o.ncma_cmds:	h.ncma_ncma
-o.ncma_cmds:	h.ncma_utils
-o.ncma_cmds:	h.ncma_url
-o.ncma_cmds:	h.ncma_scard
-o.ncma_cmds:	h.machine
-o.ncma_cmds:	h.vectors
-o.ncma_cmds:	h.DBUG
-o.ncma_swis:	c.ncma_swis
-o.ncma_swis:	C:h.kernel
-o.ncma_swis:	C:h.swis
-o.ncma_swis:	h.ncma_swis
-o.ncma_swis:	h.ncma_ncma
-o.ncma_swis:	h.ncma_scard
-o.ncma_swis:	h.dynalloc
-o.ncma_swis:	h.module
-o.ncma_swis:	h.DBUG
-o.dynalloc:	c.dynalloc
-o.dynalloc:	C:h.kernel
-o.dynalloc:	C:h.swis
-o.dynalloc:	h.dynalloc
-o.dynalloc:	h.DBUG
-o.ncma_ncma:	c.ncma_ncma
-o.ncma_ncma:	C:h.kernel
-o.ncma_ncma:	h.ncma_ncma
-o.ncma_ncma:	h.ncma_url
-o.ncma_ncma:	h.dynalloc
-o.ncma_ncma:	h.module
-o.ncma_ncma:	h.DBUG
-o.ncma_ncma:	C:h.kernel
-o.ncma_ncma:	C:h.swis
-o.ncma_ncma:	h.machine
-o.ncma_ncma:	h.vectors
-o.machine:	c.machine
-o.machine:	C:h.kernel
-o.machine:	C:h.swis
-o.machine:	h.machine
-o.machine:	h.module
-o.machine:	h.ncma_ncma
-o.machine:	h.ncma_scard
-o.machine:	h.ncma_url
-o.machine:	h.ncma_utils
-o.machine:	h.ncma_dial
-o.machine:	h.vectors
-o.machine:	h.DBUG
-o.ncma_url:	c.ncma_url
-o.ncma_url:	C:h.kernel
-o.ncma_url:	C:h.swis
-o.ncma_url:	h.ncma_ncma
-o.ncma_url:	h.ncma_url
-o.ncma_url:	h.ncma_scard
-o.ncma_url:	h.DBUG
-o.ncma_scard:	c.ncma_scard
-o.ncma_scard:	C:h.kernel
-o.ncma_scard:	C:h.swis
-o.ncma_scard:	h.ncma_scard
-o.ncma_scard:	h.ncma_url
-o.ncma_scard:	h.ncma_utils
-o.ncma_scard:	h.dynalloc
-o.ncma_scard:	h.usermode
-o.ncma_scard:	C:h.kernel
-o.ncma_scard:	h.machine
-o.ncma_scard:	h.vectors
-o.ncma_scard:	h.DBUG
-o.ncma_utils:	c.ncma_utils
-o.ncma_utils:	C:h.kernel
-o.ncma_utils:	C:h.swis
-o.ncma_utils:	h.ncma_utils
-o.ncma_utils:	h.ncma_scard
-o.ncma_utils:	h.ncma_ncma
-o.ncma_utils:	h.DBUG
-o.ncma_dial:	c.ncma_dial
-o.ncma_dial:	C:h.kernel
-o.ncma_dial:	C:h.swis
-o.ncma_dial:	h.ncma_dial
-o.module:	c.module
-o.module:	C:h.kernel
-o.module:	C:h.swis
-o.module:	h.module
-o.module:	h.DBUG
-o.module:	h.machine
-o.module:	h.vectors
-o.module:	h.ncma_cmds
-o.module:	h.ncma_swis
-o.module:	h.ncma_ncma
-o.module:	h.ncma_scard
-o.module:	h.dynalloc
