@@ -17,7 +17,7 @@
 # Paths
 #
 HDRDIR = <hdr$dir>.Global
-HDIR   = <CExport$dir>.h
+HDIR   = <CExport$dir>
 
 # Generic options:
 #
@@ -89,21 +89,21 @@ EXPORTS   = \
  ${HDRDIR}.UpCall \
  ${HDRDIR}.VIDC.VIDC1a \
  ${HDRDIR}.VIDC.VIDC20 \
- ${HDIR}.Global.AUN \
- ${HDIR}.Global.Countries \
- ${HDIR}.Global.Devices \
- ${HDIR}.Global.DrawObj \
- ${HDIR}.Global.DrawTags \
- ${HDIR}.Global.FileTypes \
- ${HDIR}.Global.FreeWay \
- ${HDIR}.Global.FSNumbers \
- ${HDIR}.Global.OsWords \
- ${HDIR}.Global.PDriverReg \
- ${HDIR}.Global.PDumperReg \
- ${HDIR}.Global.PoduleReg \
- ${HDIR}.Global.Services \
- ${HDIR}.Global.SWIs \
- ${HDIR}.Global.Upcall
+ ${HDIR}.Global.h.AUN \
+ ${HDIR}.Global.h.Countries \
+ ${HDIR}.Global.h.Devices \
+ ${HDIR}.Global.h.DrawObj \
+ ${HDIR}.Global.h.DrawTags \
+ ${HDIR}.Global.h.FileTypes \
+ ${HDIR}.Global.h.FreeWay \
+ ${HDIR}.Global.h.FSNumbers \
+ ${HDIR}.Global.h.OsWords \
+ ${HDIR}.Global.h.PDriverReg \
+ ${HDIR}.Global.h.PDumperReg \
+ ${HDIR}.Global.h.PoduleReg \
+ ${HDIR}.Global.h.Services \
+ ${HDIR}.Global.h.SWIs \
+ ${HDIR}.Global.h.Upcall
 
 #
 # Generic rules:
@@ -129,6 +129,7 @@ Dirs:
         ${MKDIR} ${HDRDIR}.MEMM
         ${MKDIR} ${HDRDIR}.VIDC
         ${MKDIR} ${HDIR}.Global
+        ${MKDIR} ${HDIR}.Global.h
 
 clean:
          @echo ${COMPONENT}: NOT cleaning imported headers
@@ -156,23 +157,23 @@ ${HDRDIR}.SWIs:       Import.Global.SWIs;           ${CP} Import.Global.SWIs    
 ${HDRDIR}.UpCall:     Import.Global.UpCall;         ${CP} Import.Global.UpCall     $@ ${CPFLAGS}
 
 # The C versions
-${HDIR}.Global.AUN:        Import.Global.AUN;            perl perl.Hdr2H Import.Global.AUN        $@
-${HDIR}.Global.Countries:  Import.Global.Countries;      perl perl.Hdr2H Import.Global.Countries  $@
-${HDIR}.Global.Devices:    Import.Global.Devices;        perl perl.Hdr2H Import.Global.Devices    $@
-${HDIR}.Global.DrawObj:    Import.Global.DrawObj;        perl perl.Hdr2H Import.Global.DrawObj    $@
-${HDIR}.Global.DrawTags:   Import.Global.DrawTags;       perl perl.Hdr2H Import.Global.DrawTags   $@
-${HDIR}.Global.FileTypes:  Import.Global.FileTypes;      perl perl.Hdr2H Import.Global.FileTypes  $@
-${HDIR}.Global.FreeWay:    Import.Global.FreeWay;        perl perl.Hdr2H Import.Global.FreeWay    $@
-${HDIR}.Global.FSNumbers:  Import.Global.FSNumbers;      perl perl.Hdr2H Import.Global.FSNumbers  $@
+${HDIR}.Global.h.AUN:        Import.Global.AUN;            perl perl.Hdr2H Import.Global.AUN        $@
+${HDIR}.Global.h.Countries:  Import.Global.Countries;      perl perl.Hdr2H Import.Global.Countries  $@
+${HDIR}.Global.h.Devices:    Import.Global.Devices;        perl perl.Hdr2H Import.Global.Devices    $@
+${HDIR}.Global.h.DrawObj:    Import.Global.DrawObj;        perl perl.Hdr2H Import.Global.DrawObj    $@
+${HDIR}.Global.h.DrawTags:   Import.Global.DrawTags;       perl perl.Hdr2H Import.Global.DrawTags   $@
+${HDIR}.Global.h.FileTypes:  Import.Global.FileTypes;      perl perl.Hdr2H Import.Global.FileTypes  $@
+${HDIR}.Global.h.FreeWay:    Import.Global.FreeWay;        perl perl.Hdr2H Import.Global.FreeWay    $@
+${HDIR}.Global.h.FSNumbers:  Import.Global.FSNumbers;      perl perl.Hdr2H Import.Global.FSNumbers  $@
 # NewErrors still has a few problems.  Partial support is there.
-${HDIR}.Global.OsWords:    Import.Global.OsWords;        perl perl.Hdr2H Import.Global.OsWords    $@
-${HDIR}.Global.PDriverReg: Import.Global.PDriverReg;     perl perl.Hdr2H Import.Global.PDriverReg $@
-${HDIR}.Global.PDumperReg: Import.Global.PDumperReg;     perl perl.Hdr2H Import.Global.PDumperReg $@
-${HDIR}.Global.PoduleReg:  Import.Global.PoduleReg;      perl perl.Hdr2H Import.Global.PoduleReg  $@
+${HDIR}.Global.h.OsWords:    Import.Global.OsWords;        perl perl.Hdr2H Import.Global.OsWords    $@
+${HDIR}.Global.h.PDriverReg: Import.Global.PDriverReg;     perl perl.Hdr2H Import.Global.PDriverReg $@
+${HDIR}.Global.h.PDumperReg: Import.Global.PDumperReg;     perl perl.Hdr2H Import.Global.PDumperReg $@
+${HDIR}.Global.h.PoduleReg:  Import.Global.PoduleReg;      perl perl.Hdr2H Import.Global.PoduleReg  $@
 # PrintTypes is just full of comments
-${HDIR}.Global.Services:   Import.Global.Services;       perl perl.Hdr2H Import.Global.Services   $@
-${HDIR}.Global.SWIs:       Import.Global.SWIs;           perl perl.Hdr2H Import.Global.SWIs       $@
-${HDIR}.Global.UpCall:     Import.Global.UpCall;         perl perl.Hdr2H Import.Global.UpCall     $@
+${HDIR}.Global.h.Services:   Import.Global.Services;       perl perl.Hdr2H Import.Global.Services   $@
+${HDIR}.Global.h.SWIs:       Import.Global.SWIs;           perl perl.Hdr2H Import.Global.SWIs       $@
+${HDIR}.Global.h.UpCall:     Import.Global.UpCall;         perl perl.Hdr2H Import.Global.UpCall     $@
 
 # Machine/hardware specific headers:
 ${HDRDIR}.Machine.<Machine>: hdr.Machine.<Machine>; ${CP} hdr.Machine.<Machine>    $@ ${CPFLAGS}
