@@ -64,20 +64,3 @@ HelpTokens: ${TOKENS} HelpTexts
         ${TOKENISE} ${TOKENS} HelpTexts $@
 
 # Dynamic dependencies:
-rm.BootNet: Hdr:ListOpts
-rm.BootNet: Hdr:Macros
-rm.BootNet: Hdr:System
-rm.BootNet: Hdr:SWIs
-rm.BootNet: Hdr:CPU.Generic26
-rm.BootNet: Hdr:IO.GenericIO
-rm.BootNet: Hdr:RISCOS
-rm.BootNet: Hdr:CMOS
-rm.BootNet: Hdr:ModHand
-rm.BootNet: Hdr:Debug
-rm.BootNet: Hdr:Tokens
-rm.BootNet: Hdr:FSNumbers
-rm.BootNet: Hdr:NewErrors
-rm.BootNet: Hdr:MsgTrans
-rm.BootNet: Time+Date
-rm.BootNet: Commands
-rm.BootNet: HelpTokens
