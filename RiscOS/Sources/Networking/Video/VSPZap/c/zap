@@ -1,0 +1,358 @@
+/*
+ * zap
+ *
+ * ZAP Interface functions
+ */
+
+#include "types.h"
+#include "vsp.h"
+#include "zap.h"
+#include "misc.h"
+#include <kernel.h>
+#include <swis.h>
+
+extern _kernel_oserror *zap_error();
+extern _kernel_oserror *zap_closestream(void);
+extern char macadr[6];
+extern int do_debug, playpaused;
+extern int zap_keepalive_timer, alive_timeout;
+
+int session_in_progress = 0;
+int current_channel = 0;
+int session_id = 0;
+int tcounter;
+char rxbuf[128];
+char txbuf[64];
+int response_read;
+#define MAX_PROGS 128
+int programs_allowed[MAX_PROGS];
+int nallowed = 0;
+int cur_allowed = 0;
+
+_kernel_oserror *zap_startstream(int argc, char **argv, int handle)
+{
+    int i, vpi, vci, program, rsp = 0;
+    int newchannel = -1;
+
+    for (i = 1; i < argc; i++) {
+         if (caseless_strcmp(argv[i], "-channel") == 0 && ++i < argc) {
+            newchannel = atoi(argv[i]);
+            if (newchannel == CHANNEL_UP) {
+                if (nallowed <= 1) {
+                    zap_keepalive_timer = alive_timeout;
+                    return (zap_error(rspOk, 0));
+                }
+                for (;;) {
+                    if (++cur_allowed == MAX_PROGS)
+                        cur_allowed = 0;
+                    if (programs_allowed[cur_allowed] == 1) {
+                        newchannel = cur_allowed;
+                        break;
+                    }
+                }
+            }
+            else if (newchannel == CHANNEL_DOWN) {
+                if (nallowed <= 1) {
+                    zap_keepalive_timer = alive_timeout;
+                    return (zap_error(rspOk, 0));
+                }
+                for (;;) {
+                    if (--cur_allowed < 0)
+                        cur_allowed = MAX_PROGS - 1;
+                    if (programs_allowed[cur_allowed] == 1) {
+                        newchannel = cur_allowed;
+                        break;
+                    }
+                }
+            }
+            break;
+        }
+    }
+    if (newchannel == -1)
+        return (zap_error(rspBadChannel, 1));
+
+    if (do_debug)
+        printf("\n\n\n\n\n\n\n\n        NEW CHANNEL %d, SESSION_IN_PROGRESS=%d\n", newchannel, session_in_progress);
+
+    if (!session_in_progress) {
+        tcounter = 1;
+        cur_allowed = 0;
+        nallowed = 0;
+        memset((char *)programs_allowed, 0, sizeof(programs_allowed));
+        zap_initccppvc();
+        rsp = ZAPrequestchannel(newchannel, PRIVILEGE, &program, &vpi, &vci);
+        if (rsp == rspOk) {
+            session_in_progress = 1;
+            current_channel = program;
+            cur_allowed = current_channel;
+            zap_initmpegpvc(vpi, vci);
+            zap_initstream(handle);
+            zap_keepalive_timer = alive_timeout;
+            return (zap_error(rsp, 0));
+        }
+    }
+    else {
+        zap_initstream(handle);
+        if (newchannel > 0) {
+            rsp = ZAPrequestchannel(newchannel, 0, &program, (int *)0, (int *)0);
+            switch (rsp) {
+                case rspEntitlementFailure:
+                case rspBcProgramOutOfService:
+                case rspBadChannel:
+                case rspRedirect:
+                         zap_keepalive_timer = alive_timeout;
+                         current_channel = program;
+                         cur_allowed = current_channel;
+                         return (zap_error(rsp, 0));
+                default:
+                         break;
+            }
+        }
+        else
+            rsp = ZAPrequestchannel(newchannel, PRIVILEGE, &program, (int *)0, (int *)0);
+        if (rsp == rspOk) {
+            zap_keepalive_timer = alive_timeout;
+            current_channel = program;
+            cur_allowed = current_channel;
+            return (zap_error(rsp, 0));
+        }
+    }
+    return (zap_error(rsp, 1));
+}
+
+_kernel_oserror *zap_closestream(void)
+{
+    if (session_in_progress) {
+        session_in_progress = 0;
+        (void) ZAPrequestchannel(0, 0, (int *)0, (int *)0, (int *)0);
+    }
+    return (zap_error(0, 0));
+}
+
+int ZAPrequestchannel(int progid, unsigned int progtype, int *bpi, int *vpi, int *vci)
+{
+    int rxbytes, ret, retries, pdlen, cnt, pid;
+    unsigned int programid, transaction_id, rtype;
+    char msg_buf[128], *pp;
+
+    if (vpi)
+        *vpi = 0;
+    if (vci)
+        *vci = 0;
+    /* Construct Msg header */
+    transaction_id = (tcounter << 16) | TRANSACTIONID_VAL;
+    transaction_id &= ~0xf0000000;
+    if (progtype != 0)
+        programid = progid | progtype;
+    else
+        programid = progid;
+    tcounter++;
+    for (retries = 0; retries < MAX_RETRIES; retries++) {
+        msg_buf[0] = 0x11;  /* protocol discriminator */
+        msg_buf[1] = 0x04;  /* DSMCC SDB CCP */
+        msg_buf[2] = 0x0;
+        msg_buf[3] = 0x01;  /* ProgramSelectRequest */
+        msg_buf[4] = (transaction_id >> 24) & 255;
+        msg_buf[5] = (transaction_id >> 16) & 255;
+        msg_buf[6] = (transaction_id >> 8) & 255;
+        msg_buf[7] = transaction_id & 255;
+        msg_buf[8] = 0xff;     /* reserved */
+        msg_buf[9] = 0;
+        msg_buf[10] = 0;
+        msg_buf[11] = 18;    /* message length */
+        /* Construct Msg body */
+        msg_buf[12] = macadr[0] & 0xff;
+        msg_buf[13] = macadr[1] & 0xff;
+        msg_buf[14] = macadr[2] & 0xff;
+        msg_buf[15] = macadr[3] & 0xff;
+        msg_buf[16] = macadr[4] & 0xff;
+        msg_buf[17] = macadr[5] & 0xff;
+        msg_buf[18] = (session_id >> 24) & 255;
+        msg_buf[19] = (session_id >> 16) & 255;
+        msg_buf[20] = (session_id >> 8) & 255;
+        msg_buf[21] = session_id & 255;
+        msg_buf[22] = 0xff;
+        msg_buf[23] = 0xff;
+        msg_buf[24] = (programid >> 24) & 255;
+        msg_buf[25] = (programid >> 16) & 255;
+        msg_buf[26] = (programid >> 8) & 255;
+        msg_buf[27] = programid & 255;
+        msg_buf[28] = 0;    /* private data length */
+        msg_buf[29] = 0;
+
+        if ((rxbytes = ZAPtransaction(msg_buf, sizeof(msg_buf), 30)) != 0 &&
+             msg_buf[SESSIONID_OFFSET+0] == macadr[0] &&
+             msg_buf[SESSIONID_OFFSET+1] == macadr[1] &&
+             msg_buf[SESSIONID_OFFSET+2] == macadr[2] &&
+             msg_buf[SESSIONID_OFFSET+3] == macadr[3] &&
+             msg_buf[SESSIONID_OFFSET+4] == macadr[4] &&
+             msg_buf[SESSIONID_OFFSET+5] == macadr[5]) {
+             break;
+        }
+    }
+    if (retries == MAX_RETRIES)
+        return (rspTimedout);
+    ret = msg_buf[RESPONSETYPE_OFFSET] & 0xff;
+    if (bpi != 0) {
+        /* return network-provided broadcast program id */
+        programid = (msg_buf[PROGID_OFFSET+0] << 24) |
+                    (msg_buf[PROGID_OFFSET+1] << 16) |
+                    (msg_buf[PROGID_OFFSET+2] << 8)  |
+                    msg_buf[PROGID_OFFSET+3];
+        *bpi = programid & ~0xf0000000;
+
+        if (do_debug)
+            printf("       RECEIVED bpi=%x\n", *bpi);
+    }
+    pdlen = (msg_buf[PDATA_OFFSET] << 8) | msg_buf[PDATA_OFFSET+1];
+
+    if (do_debug)
+        printf("            PDLEN = %d\n", pdlen);
+
+    if (pdlen == 0)  /* private data not present */
+        return (ret);
+    pp = &msg_buf[PDATA_OFFSET+2];
+
+    if (do_debug) {
+        printf("        ");
+        for (cnt = 0; cnt < pdlen; cnt++)
+            printf("%x ", pp[cnt] & 255);
+        printf("\n");
+    }
+
+    while (pdlen > 0) {
+        rtype = (*pp << 8) | *(pp+1);
+        rtype &= 0xffff;
+
+        if (do_debug)
+            printf("            RESOURCE TYPE = %x (%x, %x)\n", rtype, *pp & 255, *(pp+1) & 255);
+
+        pp += 2; pdlen -= 2;
+        switch (rtype) {
+            case ATM_VC:
+                if (do_debug)
+                    printf("            ATM_VC: ");
+
+                if (vpi != 0 && vci != 0) {
+                    /* return network provided vpi, vci values */
+                    *vpi = (*pp << 8) | *(pp+1);
+                    *vci = (*(pp+2) << 8) | *(pp+3);
+
+                    if (do_debug)
+                        printf("vpi=%d, vci=%d", *vpi, *vci);
+                }
+
+                if (do_debug)
+                    printf("\n");
+
+                pp += 4; pdlen -= 4;
+                continue;
+
+            case SDB_ENTITLE:
+                if (do_debug)
+                    printf("            SDB_ENTITLE: ");
+                cnt = (*pp << 8) | *(pp+1); /* get exclude count */
+
+                if (do_debug)
+                    printf("exc %d, ", cnt);
+
+                if (cnt < 0 || cnt > 20)
+                    return (ret);
+
+                pp += 2; pdlen -= 2;
+                pp += (cnt * 4); pdlen -= (cnt * 4);    /* skip over exclude count */
+                cnt = (*pp << 8) | *(pp+1); /* get include count */
+
+                if (do_debug)
+                    printf("inc %d, ", cnt);
+
+                if (cnt < 0 || cnt > 20)
+                    return (ret);
+
+                pp += 2; pdlen -= 2;
+                nallowed = cnt;
+                for (cnt = 0; cnt < nallowed; cnt++) {
+                    pid = (*pp << 24) | (*(pp+1) << 16) | (*(pp+2) << 8) | *(pp+3);
+
+                    if (do_debug)
+                        printf("%x ", pid);
+
+                    if (pid < MAX_PROGS)
+                        programs_allowed[pid] = 1;
+
+                    pp += 4; pdlen -= 4;
+                }
+                continue;
+         }
+    }
+    return (ret);
+}
+
+int ZAPtransaction(char *buf, int bufsize, int len)
+{
+    int i;
+
+    response_read = 0;
+    memcpy(txbuf, buf, len);
+
+    if (do_debug) {
+        printf("\n\n\n            SEND %d: ", len);
+        for (i=0; i<len; i++) printf("%x ", txbuf[i]&0xff); printf("\n");
+    }
+
+    (void) ZAPwrite(txbuf, len);
+    return (ZAPread(buf, bufsize, 5));
+}
+
+int ZAPread(char *buf, int bufsize, int timeout)
+{
+    int timenow, rx;
+
+    timenow = time(0);
+    while (response_read == 0) {
+        if (time(0) >= timenow + timeout)
+            break;
+        user_mode_donothing();
+    }
+    rx = response_read;
+    if (rx > 0) {
+        int f;
+        memcpy(buf, rxbuf, rx > bufsize ? bufsize : rx);
+
+        if (do_debug) {
+            printf("      RECEIVE %d: ", rx);
+            for (f = 0; f < rx; f++) printf("%x ", rxbuf[f]&0xff); printf("\n");
+        }
+    }
+    return (rx);
+}
+
+void ZAPresponse(u_char *msg_buf, int len)
+{
+    memcpy(rxbuf, msg_buf, len);
+    response_read = len;
+    return;
+}
+
+int ZAPkeepalive(void)
+{
+    int program, ret;
+
+    ret = ZAPrequestchannel(current_channel, ALIVE, &program, (int *)0, (int *)0);
+    if (ret != rspOk)
+        return (ret);
+    if (program != current_channel)
+        return (rspBadChannel);
+    return(ret);
+}
+
+_kernel_oserror *zap_playcontrol(int do_fast_scan, int val)
+{
+    if (do_fast_scan)
+        return ((_kernel_oserror *)0);
+    if (val == 0)
+        playpaused = 1;
+    else
+        playpaused = 0;
+    return ((_kernel_oserror *)0);
+}
