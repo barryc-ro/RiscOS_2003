@@ -36,6 +36,11 @@
  * of the headers).
  *
  * A little bit of tidying up, more comments etc.
+ *
+ * 1998-05-06: BAL
+ * Email receive changed significantly.  In particular, messages no longer
+ * deleted until they have been printed.  Automatically redials if it knows
+ * there are more messages on the server to be downloaded.
  */
 
 
@@ -127,8 +132,8 @@ typedef struct
 
     NFE_header message_header;
 
-    char         **delete_list;
-    unsigned int   delete_list_size;
+    list_handle  delete_list;
+    list_handle  print_list;
 
     UID_MSG_LIST *uid_list;
     int           uid_list_areanum;
@@ -136,21 +141,28 @@ typedef struct
 
     unsigned int header_index;
     unsigned int message_index;
-    unsigned int delete_index;
     unsigned int page_index;
     unsigned int retry;
 
     document_handle document_handle;
     message_t       *message;
 
-    list_handle      download_list;
-    list_iterator_t  download_list_iter;
+    list_iterator_t  document_list_iter;
 
     list_iterator_t  message_list_iter;
 
     char *document_directory;
     char *message_filename;
 } pop3_data_t;
+
+typedef struct
+{
+    list_item_handle  item_handle;
+
+    unsigned int  pid;
+    message_t **  message;
+    int           index;
+} print_info_t;
 
 /* POP3 email retreive */
 static pop3_data_t pop3;
@@ -203,7 +215,7 @@ static void RemXfer_SendRCError(void (*StateMachine)(int messageNumber, messageD
 static void *  create_dynamic_area (const size_t       size,
                                     const char *const  name,
                                     int *const         area_number);
-                                    
+
 static _kernel_oserror *  remove_dynamic_area (const int  area_number);
 
 static void  free_header (NFE_header *  header);
@@ -219,6 +231,8 @@ static int compare_message_id (const void *  key,
 static int  delete_next_message (void);
 
 static int  get_next_message (void);
+
+static document_handle  next_document_to_print (void);
 
 static void  free_pop3_resources (void);
 
@@ -239,6 +253,20 @@ static int do_missing_page_reports (const NFE_address *const  from);
 static void  finish_download_session (void);
 
 static void  wipe_pop3_directory (void);
+
+static void  add_msg_to_delete_list (const char *const  unique_id);
+
+static void  free_delete_info (void *  data);
+
+static int  add_doc_to_print_list (const unsigned int  pid);
+
+static void  free_print_info (void *  data);
+
+static void  print_confirmed (unsigned int  pid);
+
+static int  match_pid (void *const  list_item,
+                       void *const  search_data);
+
 #endif /*support_email*/
 
 
@@ -293,7 +321,7 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
             case RM_RX_INCOMING_VOICE:
                 /* we can't handle this, so hangup */
                 StateKicker_SendMessage(RemModem_StateMachine, RX_RM_HANGUP, NULL);
-                return;        
+                return;
         }
     }
 #endif
@@ -305,7 +333,7 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
         {
                 case SQ_RX_DIAL_FAX:
                 case SQ_RX_DIAL_DAYTONA:
-#if SUPPORT_EMAIL				
+#if SUPPORT_EMAIL
                 case SQ_RX_DIAL_ISP:
 #if SUPPORT_LAN
                 case SQ_RX_DIAL_LAN:
@@ -322,6 +350,18 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                     return;
         }
     }
+
+    /* Handle asynchronous messages that can occur in any state */
+    switch (messageNumber)
+    {
+        case PQ_RX_PRINT_CONFIRMED:
+            print_confirmed (messageData->data.pq_rx_print_confirmed.pid);
+            return;
+
+        default:
+            break;
+    }
+
 
     /* main state machine and message decoder */
     switch (state)
@@ -1524,6 +1564,7 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                 }
 
                 case P3_RX_REGISTER_DONE:
+                    emailrx_tidy ();
                 /*StateKicker_SendMessage(PrintQ_MessageHandler, RX_PQ_POP3_LOGON, NULL)*/
                     Pop3IF_Logon(setup_username, setup_password, setup_pop3_server);
                     nextstate = INCOMING_8b;
@@ -1597,8 +1638,20 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                     {
 /*>>>                       StateKicker_SendMessage (PrintQ_MessageHandler, RX_PQ_POP3_NO_MESSAGES, NULL);
 */                      Pop3IF_ReleaseData();
+#if 0
                         Pop3IF_Disconnect();
                         nextstate = INCOMING_8o;
+#else
+                        if (start_message_download ())
+                        {
+                            /* Out of memory */
+                            nextstate = INCOMING_9c;
+                        }
+                        else
+                        {
+                            nextstate = INCOMING_8i;
+                        }
+#endif
                         break;
                     }
 
@@ -1671,7 +1724,6 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 
                 case P3_RX_LIST_UNIQUEIDS_DONE:
                     Pop3IF_ReleaseData();
-                    pop3.delete_index = 0;
                     if (delete_next_message ())
                     {
                         nextstate = INCOMING_8e;
@@ -1720,11 +1772,6 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                     }
                     else
                     {
-                        /* Destroy old delete list */
-                        free (pop3.delete_list);
-                        pop3.delete_list = NULL;
-                        pop3.delete_list_size = 0;
-                        pop3.delete_index = 0;
                         if (pop3.number_messages > 0)
                         {
                             Pop3IF_ListMessages (pop3.message_list, pop3.number_messages);
@@ -1734,8 +1781,20 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                         {
                             remove_dynamic_area (pop3.uid_list_areanum);
                             pop3.uid_list = NULL;
+#if 1
+                            if (start_message_download ())
+                            {
+                                /* Out of memory */
+                                nextstate = INCOMING_9c;
+                            }
+                            else
+                            {
+                                nextstate = INCOMING_8i;
+                            }
+#else
                             Pop3IF_Disconnect ();
                             nextstate = INCOMING_8o;
+#endif
                         }
                     }
                     break;
@@ -1789,19 +1848,6 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                         break;
                     }
 
-                    /* Create new delete list */
-                    pop3.delete_list = malloc (pop3.number_messages * sizeof (char *));
-                    if (pop3.delete_list == NULL)
-                    {
-                        free_pop3_resources ();
-                        Pop3IF_ReleaseData();
-                        Pop3IF_Disconnect();
-                        nextstate = INCOMING_9c;
-                        break;
-                    }
-
-                    pop3.delete_list_size = 0;
-                    pop3.delete_index = 0;
                     pop3.header_index = 0;
                     pop3.retry = 0;
                     Pop3IF_ReleaseData();
@@ -1975,13 +2021,7 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                             /* Check if message should be marked for deletion immediately */
                             if (delete_message)
                             {
-                                pop3.delete_list[pop3.delete_list_size] = malloc (strlen (unique_id) + 1);
-                                if (pop3.delete_list[pop3.delete_list_size] != NULL)
-                                {
-                                    strcpy (pop3.delete_list[pop3.delete_list_size],
-                                            unique_id);
-                                    ++pop3.delete_list_size;
-                                }
+                                add_msg_to_delete_list (unique_id);
                             }
 
                             ++pop3.header_index;
@@ -2060,13 +2100,8 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
             switch (messageNumber)
             {
                 case RX_RX_GET_DOCUMENT:
-                    if ((pop3.download_list_iter.finished) (&pop3.download_list_iter))
-                    {
-                        finish_download_session ();
-                        nextstate = INCOMING_8o;
-                    }
-
-                    else
+                    pop3.document_handle = next_document_to_print ();
+                    if (pop3.document_handle)
                     {
                         messageDataBlock *sendMessage;
 
@@ -2074,6 +2109,11 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                         sendMessage->data.rx_pq_new_document.Source = PqRxISP;
 
                         nextstate = INCOMING_8j;
+                    }
+                    else
+                    {
+                        finish_download_session ();
+                        nextstate = INCOMING_8o;
                     }
                     break;
 
@@ -2124,30 +2164,21 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                     strcpy (pop3.document_directory,
                             messageData->data.new_document_dir.directory);
 
-                    pop3.document_handle = (pop3.download_list_iter.current) (&pop3.download_list_iter);
-
                     list_initialise_iterator (&pop3.message_list_iter,
                                               emailrx_get_doc_msg_list (pop3.document_handle));
 
-                    (void) (pop3.message_list_iter.reset) (&pop3.message_list_iter);
+                    M_list_reset (pop3.message_list_iter);
 
                     pop3.page_index = 0;
 
+                    if (add_doc_to_print_list (messageData->data.new_document_dir.pid))
                     {
-                        AddrFile_FillAddressRecord(messageData->data.new_document_dir.pid,
-                            /* serial number */    pop3.message_header.details.serial_num,
-                            /* company name  */    pop3.message_header.config.organisation,
-                            /* contact name  */    pop3.message_header.from.real_name,
-                            /* fax number    */    pop3.message_header.config.fax_num,     /* NB email format */
-                            /* voice number  */    pop3.message_header.config.phone_num,   /* NB email format */
-                            /* email address */    pop3.message_header.from.address,
-                            /* software rev. */    pop3.message_header.details.software_rev_major, pop3.message_header.details.software_rev_minor,
-                            /* device class  */    pop3.message_header.details.device_class,
-                            /* receipt_to    */    pop3.message_header.return_receipt_to.real_name,
-                            /* receipt_to    */    pop3.message_header.return_receipt_to.address
-                                                  );
+                        RemXfer_SendRCError(PrintQ_MessageHandler, RX_PQ_ERROR, "Not enough memory to print document.", 2);
+                        free_pop3_resources ();
+                        Pop3IF_Disconnect();
+                        nextstate = INCOMING_9c;
+                        break;
                     }
-                    StateKicker_SendMessage(PrintQ_MessageHandler, RX_PQ_DOCUMENT_DETAILS, NULL);
 
                     StateKicker_SendMessage (RemXfer_StateMachine,
                                              RX_RX_GET_MESSAGE,
@@ -2302,6 +2333,7 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                     messageDataBlock *send_message;
 
                     pop3.retry = 0;
+                    emailrx_message_downloaded (pop3.message);
 
                     /* It is absolutely vital that the header structure is cleared before each message fetch
                      * otherwise data from the previous fetch could be picked up.
@@ -2341,6 +2373,31 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                 {
                     messageDataBlock *send_message;
 
+                    /* Now have a valid header for this document.  If this
+                     * is the first time that a part of this document has been
+                     * seen then send the details of the sender to the address
+                     * book.
+                     */
+                    if (emailrx_is_document_new (pop3.document_handle))
+                    {
+                        print_info_t *  print_info = list_tail (pop3.print_list);
+
+                        AddrFile_FillAddressRecord(print_info->pid,
+                            /* serial number */    pop3.message_header.details.serial_num,
+                            /* company name  */    pop3.message_header.config.organisation,
+                            /* contact name  */    pop3.message_header.from.real_name,
+                            /* fax number    */    pop3.message_header.config.fax_num,     /* NB email format */
+                            /* voice number  */    pop3.message_header.config.phone_num,   /* NB email format */
+                            /* email address */    pop3.message_header.from.address,
+                            /* software rev. */    pop3.message_header.details.software_rev_major, pop3.message_header.details.software_rev_minor,
+                            /* device class  */    pop3.message_header.details.device_class,
+                            /* receipt_to    */    pop3.message_header.return_receipt_to.real_name,
+                            /* receipt_to    */    pop3.message_header.return_receipt_to.address
+                                                  );
+
+                        StateKicker_SendMessage(PrintQ_MessageHandler, RX_PQ_DOCUMENT_DETAILS, NULL);
+                    }
+
                     StateKicker_SendMessage (MimeDecode_StateMachine,
                                              RX_MD_DECODE_MSG,
                                              &send_message);
@@ -2373,54 +2430,46 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
 
                 case MD_RX_PAGE_COMPLETE:
                 {
-                        messageDataBlock *sendMessage;
+                    messageDataBlock *sendMessage;
 
-                        /* You mustn't use pop3.page_index at this point.
-                         * pop3.page_index is invalid between RX_MD_DECODE_MSG and MD_RX_DECODE_MSG_DONE.
-                         */
+                    /* You mustn't use pop3.page_index at this point.
+                     * pop3.page_index is invalid between RX_MD_DECODE_MSG and MD_RX_DECODE_MSG_DONE.
+                     */
 
-                        set_filetypeDN (pop3.document_directory,
-                                        messageData->data.md_rx_page_complete.pageNum,
-                                        messageData->data.md_rx_page_complete.fileType);    /*>>>should this be done by PrintQ???*/
-                        StateKicker_SendMessage (PrintQ_MessageHandler, RX_PQ_PAGE_COMPLETE, &sendMessage);
-                        sendMessage->data.rx_pq_page_complete.pageNum   = messageData->data.md_rx_page_complete.pageNum;
-                        sendMessage->data.rx_pq_page_complete.pageClass = messageData->data.md_rx_page_complete.pageClass;
-                        sendMessage->data.rx_pq_page_complete.pageType  = messageData->data.md_rx_page_complete.pageType;
-                        sendMessage->data.rx_pq_page_complete.fileType  = messageData->data.md_rx_page_complete.fileType; /* FILETYPE_TIFF, FILETYPE_TEXT or FILETYPE_CONFIG */
+                    set_filetypeDN (pop3.document_directory,
+                                    messageData->data.md_rx_page_complete.pageNum,
+                                    messageData->data.md_rx_page_complete.fileType);    /*>>>should this be done by PrintQ???*/
+                    StateKicker_SendMessage (PrintQ_MessageHandler, RX_PQ_PAGE_COMPLETE, &sendMessage);
+                    sendMessage->data.rx_pq_page_complete.pageNum   = messageData->data.md_rx_page_complete.pageNum;
+                    sendMessage->data.rx_pq_page_complete.pageClass = messageData->data.md_rx_page_complete.pageClass;
+                    sendMessage->data.rx_pq_page_complete.pageType  = messageData->data.md_rx_page_complete.pageType;
+                    sendMessage->data.rx_pq_page_complete.fileType  = messageData->data.md_rx_page_complete.fileType; /* FILETYPE_TIFF, FILETYPE_TEXT or FILETYPE_CONFIG */
 
-                        nextstate = INCOMING_8n;
-                        break;
+                    nextstate = INCOMING_8n;
+                    break;
                 }
 
                 case MD_RX_DECODE_MSG_DONE:
                 {
-                    /* Check to see if a delivery recepit should be generated for this email
-                     * and if so place a tokenised file in the PrintQ.
-                     */
+                    print_info_t *  print_info = list_tail (pop3.print_list);
 
                     /* Delete the original message */
 #ifndef PRESERVE_POP3
                     _swix (OS_File, _INR (0, 1), 6, pop3.message_filename);
 #endif
 
-                    /* Mark the message for deletion from the server on the next connection */
-                    pop3.delete_list[pop3.delete_list_size] = malloc (strlen (pop3.message->unique_id) + 1);
-                    if (pop3.delete_list[pop3.delete_list_size] != NULL)
-                    {
-                        strcpy (pop3.delete_list[pop3.delete_list_size], pop3.message->unique_id);
-                        ++pop3.delete_list_size;
-                    }
-                    /* If the above allocation fails then don't panic: all it means is that the message won't
-                     * get deleted, and may end up getting downloaded and printed twice.
+                    pop3.message->flags.bits.printing = 1;
+                    /* Add this message to the current document's list of
+                     * messages being printed.
                      */
-
+                    print_info->message[print_info->index++] = M_list_current (pop3.message_list_iter);
                     free (pop3.message_filename);
                     pop3.message_filename = NULL;
 
                     pop3.page_index = messageData->data.message_decoded.next_page;
 
                     ++pop3.message_index;
-                    (void) (pop3.message_list_iter.next) (&pop3.message_list_iter);
+                    M_list_next (pop3.message_list_iter);
                     StateKicker_SendMessage (RemXfer_StateMachine,
                                              RX_RX_GET_MESSAGE,
                                              NULL);
@@ -2478,6 +2527,7 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                 {
                     StateKicker_SendMessage(Screen_StateMachine, RX_SC_POP3_DOWNLOAD_COMPLETE, NULL);   /* thumbs up, download complete */
                     StateKicker_SendMessage(RemModem_StateMachine, RX_RM_HANGUP, NULL);
+                    emailrx_tidy ();
                     nextstate = IDLE;
                     break;
                 }
@@ -2564,7 +2614,7 @@ extern void RemXfer_StateMachine(int messageNumber, messageDataBlock *messageDat
                     break;
             }
             break;
-/*SUPPORT_EMAIL*/ 
+/*SUPPORT_EMAIL*/
 #endif
     } /* switch (state) */
 
@@ -2601,8 +2651,6 @@ static States get_message (void)
     }
     else
     {
-        char  delivery_conf_report_filename[257];
-
         /* No more messages for this document */
         pop3.retry = 0;
 
@@ -2620,18 +2668,23 @@ static States get_message (void)
         /* Check if a delivery confirmation report is required for this
          * document.
          */
-        sprintf (delivery_conf_report_filename,
-                 "%s.%d",
-                 pop3.document_directory,
-                 pop3.page_index);
-
-        if (emailrx_printed_page_report (pop3.document_handle,
-                                         delivery_conf_report_filename,
-                                         &pop3.message_header) == 1)
+        if (emailrx_need_printed_page_report (pop3.document_handle))
         {
-            send_file_report_to_printq (PageClass_SendReceipt,
-                                        PageType_SendReceipt,
-                                        delivery_conf_report_filename);
+            char  delivery_conf_report_filename[257];
+
+            sprintf (delivery_conf_report_filename,
+                     "%s.%d",
+                     pop3.document_directory,
+                     pop3.page_index);
+
+            if (emailrx_printed_page_report (pop3.document_handle,
+                                             delivery_conf_report_filename,
+                                             &pop3.message_header) == 0)
+            {
+                send_file_report_to_printq (PageClass_SendReceipt,
+                                            PageType_SendReceipt,
+                                            delivery_conf_report_filename);
+            }
         }
 
         StateKicker_SendMessage (PrintQ_MessageHandler,
@@ -2642,7 +2695,6 @@ static States get_message (void)
         pop3.document_directory = NULL;
 
         /* Move onto the next document */
-        (void) (pop3.download_list_iter.next) (&pop3.download_list_iter);
         StateKicker_SendMessage (RemXfer_StateMachine,
                                  RX_RX_GET_DOCUMENT,
                                  NULL);
@@ -3067,7 +3119,7 @@ static int compare_message_id (const void *  key,
 /* -----------------------------------------------------------------------------
    delete_next_message
 
-   Delete the next message in the POP3 delete message.  Skips messages that are
+   Delete the next message in the POP3 delete list.  Skips messages that are
    no longer on the server (ie. that have been deleted behind our back).
 
    Returns
@@ -3077,18 +3129,28 @@ static int compare_message_id (const void *  key,
 
 static int  delete_next_message (void)
 {
-    int           message_exists;
-    unsigned int  message_id;
+    char *            unique_id;
+    int               message_exists;
+    unsigned int      message_id;
+    list_item_handle  item;
+    list_iterator_t   i;
 
 
-    while (pop3.delete_index < pop3.delete_list_size)
+    list_initialise_iterator (&i,
+                              pop3.delete_list);
+
+    while (!M_list_finished (i))
     {
-        message_exists = messageid_from_uid (
-                             pop3.delete_list[pop3.delete_index],
-                             &message_id);
+        unique_id = M_list_current (i);
 
-        free (pop3.delete_list[pop3.delete_index]);
-        ++pop3.delete_index;
+        message_exists = messageid_from_uid (unique_id,
+                                             &message_id);
+
+        item = M_list_current_item (i);
+        M_list_next (i);
+
+        list_remove_item (pop3.delete_list,
+                          item);
 
         if (message_exists)
         {
@@ -3128,12 +3190,12 @@ static int  get_next_message (void)
 
     sprintf (pop3.message_filename, "%s.%d", POP3_DIR, pop3.message_index);
 
-    while (!(pop3.message_list_iter.finished) (&pop3.message_list_iter))
+    while (!M_list_finished (pop3.message_list_iter))
     {
-        pop3.message =
-            (pop3.message_list_iter.current) (&pop3.message_list_iter);
+        pop3.message = M_list_current (pop3.message_list_iter);
 
-        if (messageid_from_uid (pop3.message->unique_id,
+        if (pop3.message->flags.bits.download &&
+            messageid_from_uid (pop3.message->unique_id,
                                 &message_id))
         {
             /* Increase the size of the message slightly to attempt to cope
@@ -3154,7 +3216,7 @@ static int  get_next_message (void)
                 (unsigned int) ((double) pop3.message->size * 1.02);
 
             /* Message still exists on server, so download it */
-            if (pop3.message->flags & MessageFlags_PartialDownload)
+            if (pop3.message->flags.bits.partial)
             {
                 Pop3IF_GetXLinesOfMessage (pop3.message_filename,
                                            pop3.message->size,
@@ -3172,11 +3234,50 @@ static int  get_next_message (void)
         }
 
         /* Try the next message */
-        (pop3.message_list_iter.next) (&pop3.message_list_iter);
+        M_list_next (pop3.message_list_iter);
     }
 
     /* No more messages for this document */
     return 0;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   next_document_to_print
+
+   Get the document handle of the next document to print.
+
+   Returns
+   no more documents: NULL
+   more documents:    document handle of next document
+ */
+
+static document_handle  next_document_to_print (void)
+{
+    int              found = 0;
+    document_handle  document = NULL;
+
+    while (!M_list_finished (pop3.document_list_iter) && !found)
+    {
+        document = M_list_current (pop3.document_list_iter);
+        if (emailrx_document_requires_printing (document))
+        {
+            found = 1;
+        }
+
+        M_list_next (pop3.document_list_iter);
+    }
+
+    if (found)
+    {
+        return document;
+    }
+    else
+    {
+        return NULL;
+    }
 }
 
 
@@ -3213,19 +3314,13 @@ static void  free_pop3_resources (void)
         pop3.uid_list_size = 0;
     }
 
-    if (pop3.delete_list != NULL)
+#if 0
+    if (pop3.document_list != NULL)
     {
-        free (pop3.delete_list);
-        pop3.delete_list = NULL;
-        pop3.delete_list_size = 0;
-        pop3.delete_index = 0;
+        list_destroy (pop3.document_list);
+        pop3.document_list = NULL;
     }
-
-    if (pop3.download_list != NULL)
-    {
-        list_destroy (pop3.download_list);
-        pop3.download_list = NULL;
-    }
+#endif
 
     if (pop3.message_filename != NULL)
     {
@@ -3263,8 +3358,11 @@ static int  start_message_download (void)
      * be checked each time.
      */
 
-    remove_dynamic_area (pop3.message_headers_areanum);
-    pop3.message_headers = NULL;
+    if (pop3.message_headers)
+    {
+        remove_dynamic_area (pop3.message_headers_areanum);
+        pop3.message_headers = NULL;
+    }
     #if 0
     /* Pop3 directory is created in main.c */
     #else
@@ -3275,7 +3373,6 @@ static int  start_message_download (void)
     /* Find free space on RAM disc so that emailrx_build_dl_list knows
      * how much work it can do.  Bit brain dead at the moment in that
      * the free space could change after it has been read.
-     * Knocks 10k off the free space for safety's sake.
      */
     _swix (OS_FSControl,
            _INR (0, 1) | _OUT (0),
@@ -3292,12 +3389,23 @@ static int  start_message_download (void)
 #endif
 #endif
 
-    pop3.download_list = emailrx_build_dl_list (free_space);
-
-#ifdef TEST
-    if (pop3.download_list)
+    if (emailrx_decide_download (free_space) == 1)
     {
-        emailrx_dump_doc_list_to_file (pop3.download_list,
+        /* A document had to be 'split', so we should reconnect as soon as
+         * possible to download the rest of the document.
+         */
+
+        StateKicker_SendMessage (PrintQ_MessageHandler,
+                                 RX_PQ_MAIL_WAITING,
+                                 NULL);
+    }
+
+
+#if 0
+#ifdef TEST
+    if (pop3.document_list)
+    {
+        emailrx_dump_doc_list_to_file (pop3.document_list,
                                        "ADFS::4.$.dllist");
     }
 
@@ -3306,7 +3414,7 @@ static int  start_message_download (void)
 #endif
 
 
-    if (pop3.download_list == NULL)
+    if (pop3.document_list == NULL)
     {
         messageDataBlock *send_message;
 
@@ -3320,15 +3428,15 @@ static int  start_message_download (void)
         Pop3IF_Disconnect();
         return 1;
     }
+#endif
 
     pop3.message_index = 0;
 
-    list_initialise_iterator (&pop3.download_list_iter,
-                              pop3.download_list);
+    list_initialise_iterator (&pop3.document_list_iter,
+                              emailrx_get_doc_list ());
 
-    pop3.document_handle =
-        (pop3.download_list_iter.reset) (&pop3.download_list_iter);
-    if (pop3.document_handle != NULL)
+    pop3.document_handle = M_list_reset (pop3.document_list_iter);
+    if (pop3.document_handle)
     {
         StateKicker_SendMessage (Screen_StateMachine,
                                  RX_SC_POP3_DOWNLOAD_START,
@@ -3510,13 +3618,13 @@ static void  send_file_report_to_printq (const PageClasses  page_class,
 
 static int do_missing_page_reports (const NFE_address *const  from)
 {
-    char          remote_report_filename[257];
+    char          remote_report_pathname[257];
     char *        local_report;
     int           rc;
     unsigned int  pid;
 
 
-    pid = SendQ_ExtIF_NewDocument (remote_report_filename,
+    pid = SendQ_ExtIF_NewDocument (remote_report_pathname,
                                    from->real_name,
                                    from->address,
                                    FALSE,           /* don't print a hardcopy */
@@ -3525,19 +3633,19 @@ static int do_missing_page_reports (const NFE_address *const  from)
     SendQ_ExtIF_Subject (pid,
                          "Missing page report");
 
-    strcat (remote_report_filename,
-            "RemMissing");
+    strcat (remote_report_pathname,
+            ".Missing");
 
     local_report = emailrx_generate_missing_page_report (pop3.document_handle,
-                                                         remote_report_filename,
+                                                         remote_report_pathname,
                                                          &pop3.message_header);
     if (local_report != NULL)
     {
         /* may need different class and type */
         SendQ_ExtIF_FileComplete (pid,
-                                  "RemMissing",
-                                  PageClass_Text,
-                                  PageType_Text_ENote,
+                                  "Missing",
+                                  PageClass_SendReceipt,
+                                  PageType_SendReceipt,
                                   FILETYPE_TEXT);
     }
 
@@ -3582,8 +3690,10 @@ static void  finish_download_session (void)
     remove_dynamic_area (pop3.uid_list_areanum);
     pop3.uid_list = NULL;
 
-    list_destroy (pop3.download_list);
-    pop3.download_list = NULL;
+#if 0
+    list_destroy (pop3.document_list);
+    pop3.document_list = NULL;
+#endif
 
     Pop3IF_ReleaseData();
     Pop3IF_Disconnect();
@@ -3608,6 +3718,198 @@ static void  wipe_pop3_directory (void)
            POP3_DIR,
            0x3);
 #endif
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   add_msg_to_delete_list
+
+   Add a message to the list of messages to be deleted from the server.
+
+   Inputs
+   unique_id: unique ID of message
+ */
+
+static void  add_msg_to_delete_list (const char *const  unique_id)
+{
+    char *  delete_info;
+
+    if (pop3.delete_list == NULL)
+    {
+        pop3.delete_list = list_create (free_delete_info);
+        if (pop3.delete_list == NULL)
+        {
+            return;
+        }
+    }
+
+    delete_info = malloc (strlen (unique_id) + 1);
+    if (delete_info)
+    {
+        strcpy (delete_info,
+                unique_id);
+
+        if (list_add_item (pop3.delete_list,
+                           delete_info) == NULL)
+        {
+            free (delete_info);
+        }
+    }
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   free_delete_info
+ */
+
+static void  free_delete_info (void *  data)
+{
+    free (data);
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   add_doc_to_print_list
+
+   Add a new entry to the list of documents being printed.
+
+   Inputs
+   pid: pid supplied by PrintQ to be associated with document
+
+   Returns
+   success: 0
+   failure: 1
+ */
+
+static int  add_doc_to_print_list (const unsigned int  pid)
+{
+    int             number_messages;
+    print_info_t *  print_info;
+
+
+    if (pop3.print_list == NULL)
+    {
+        pop3.print_list = list_create (free_print_info);
+        if (pop3.print_list == NULL)
+        {
+            return 1;
+        }
+    }
+
+    print_info = malloc (sizeof (print_info_t));
+    if (print_info == NULL)
+    {
+        return 1;
+    }
+
+    print_info->item_handle = list_add_item (pop3.print_list,
+                                             print_info);
+    if (print_info->item_handle == NULL)
+    {
+        free (print_info);
+        return 1;
+    }
+
+    number_messages = emailrx_get_number_messages (pop3.document_handle,
+                                                   MessageFlags_Download,
+                                                   MessageFlags_Download);
+    if (number_messages == 0)
+    {
+        free (print_info);
+        return 0;
+    }
+
+    print_info->message = malloc (sizeof (message_t *) * number_messages);
+    if (print_info->message == NULL)
+    {
+        free (print_info);
+        return 1;
+    }
+
+    print_info->pid   = pid;
+    print_info->index = 0;
+
+    return 0;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   print_confirmed
+
+   When a print is confirmed as finished by the PrintQ, check if the printed
+   document originated as email, and if so update our internal information
+   about the document and mark the message(s) for deletion from the server.
+
+   Inputs
+   pid: pid supplied by PrintQ associated with document
+ */
+
+static void  print_confirmed (unsigned int  pid)
+{
+    print_info_t *  print_info;
+
+    print_info = list_find_item (pop3.print_list,
+                                 match_pid,
+                                 &pid);
+    if (print_info)
+    {
+        int  i;
+
+        for (i = 0; i < print_info->index; ++i)
+        {
+            emailrx_message_printed (print_info->message[i]);
+
+            /* Mark the message for deletion from the server on the next
+             * connection.
+             */
+            add_msg_to_delete_list (print_info->message[i]->unique_id);
+        }
+
+        list_remove_item (pop3.print_list,
+                          print_info->item_handle);
+    }
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   free_print_info
+ */
+
+static void  free_print_info (void *  data)
+{
+    print_info_t *  print_info = (print_info_t *) data;
+
+    if (print_info->message)
+    {
+        free (print_info->message);
+    }
+    free (print_info);
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   match_pid
+ */
+
+static int  match_pid (void *const  list_item,
+                       void *const  search_data)
+{
+    const unsigned int    pid        = *(unsigned int *) search_data;
+    const print_info_t *  print_info = (print_info_t *) list_item;
+
+    return (pid == print_info->pid);
 }
 
 /*SUPPORT_EMAIL*/

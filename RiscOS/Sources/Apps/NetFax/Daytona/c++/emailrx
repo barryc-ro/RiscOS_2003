@@ -12,7 +12,7 @@
  *
  * 1998-03-03: BAL
  * Corrected 'success' return code in
- * netfax_fax_document_t::printed_page_report (from 1 to 0).
+ * netfax_fax_document_t::printed_page_report (from 1 toadd 0).
  *
  * 1998-03-04: BAL
  * There was some confusion in the spec. about the significance of document
@@ -40,6 +40,13 @@
  * message had never been seen before.  It is now always incremented when a
  * message is added to the document list, even if that message has been seen
  * before.
+ *
+ * 1998-05-06: BAL
+ * No longer have separate document and download lists: everything is now
+ * controlled by setting flags, which has the bonus of considerably simplifying
+ * code in certain areas.  Added new document flags to assist with fixing cover
+ * sheet problems, not deleting messages before they've been printed, missing
+ * page reports etc.
  */
 
 
@@ -83,6 +90,13 @@
 #define MessageBufferSize     1024
 #define ReportsPath           ("Daytona:Reports")
 
+#define MessageFlags_Download        0x00000001
+#define MessageFlags_Downloaded      0x00000002
+#define MessageFlags_Printing        0x00000004
+#define MessageFlags_Printed         0x00000008
+#define MessageFlags_JustPrinted     0x00000010
+#define MessageFlags_Partial         0x00000020
+
 
 
 
@@ -105,16 +119,6 @@ enum bool
     true
 };
 
-/* Can't use an enum for this because Iwant it to be char to hopefully save
- * space when its used for arrays.
- */
-typedef char  page_state;
-enum
-{
-    PageState_Unseen,
-    PageState_Seen
-};
-
 struct netfax_document_id
 {
     unsigned int  device_class;
@@ -129,12 +133,7 @@ class document_t
         document_t (const NFE_header &  header,
                     bool &              success);
 
-        document_t (const document_t &  document,
-                    bool &              success);
-
         ~document_t (void);
-
-        virtual document_t *copy (void);
 
         virtual int operator== (const netfax_document_id &) const
             { return 0; }
@@ -155,17 +154,20 @@ class document_t
 
         void remove_from_list (list_handle list);
 
-        virtual int add_to_download (list_handle   download_list,
-                                     unsigned int  &free_space,
+        virtual int add_to_download (unsigned int  &free_space,
                                      unsigned int  &largest_message);
 
         list_handle get_message_list (void);
 
-        virtual int get_number_messages (void);
+        virtual int  get_number_messages (const unsigned int  flags_mask,
+                                          const unsigned int  flags_match);
 
-        virtual int need_missing_page_report (void)
+        virtual int  get_number_pages (const unsigned int  flags_mask,
+                                       const unsigned int  flags_match);
+
+        virtual bool  need_missing_page_report (void)
         {
-            return 0;
+            return false;
         }
 
         virtual char *  generate_missing_page_report (
@@ -178,12 +180,22 @@ class document_t
             return NULL;
         }
 
-        virtual int printed_page_report (FILE *const         file,
-                                         const NFE_header &  header);
+        virtual bool  need_printed_page_report (void);
+
+        virtual int  printed_page_report (FILE *const         file,
+                                          const NFE_header &  header);
 
         virtual int cover_sheet (char *const         report,
                                  size_t              report_size,
                                  const NFE_header &  header);
+
+        virtual void  tidy (void);
+
+        virtual void  update_flags (void);
+
+        virtual bool  requires_printing (void);
+
+        virtual bool  is_new (void);
 
 #ifdef TEST
         virtual void  dump_to_file (FILE *const  file);
@@ -194,9 +206,15 @@ class document_t
     // Data
     protected:
         list_item_handle  item_handle;
-        unsigned int      document_size;
         list_handle       message_list;
         NFE_msg_class     message_class;
+        char *            return_receipt_address;
+
+        struct
+        {
+            bool  printing_required : 1;
+            bool  is_new            : 1;
+        } flags;
 };
 
 class netfax_document_t : public document_t
@@ -205,11 +223,6 @@ class netfax_document_t : public document_t
     public:
         netfax_document_t (const NFE_header &  header,
                            bool &              success);
-
-        netfax_document_t (const netfax_document_t &  document,
-                           bool &                     success);
-
-        virtual document_t *copy (void);
 
         int operator== (const netfax_document_id &  id) const;
 
@@ -240,44 +253,40 @@ class netfax_fax_document_t : public netfax_document_t
         netfax_fax_document_t (const NFE_header &  header,
                                bool &              success);
 
-        netfax_fax_document_t (const netfax_fax_document_t &  document,
-                               bool &                         success);
-
-        virtual document_t *copy (void);
-
         virtual message_t *add_message (const unsigned int      size,
                                         const char *const       unique_id,
                                         const NFE_message_id &  nf_message_id);
 
-        virtual message_t *add_message (
-                               const unsigned int      size,
-                               const char *const       unique_id,
-                               const NFE_message_id &  nf_message_id,
-                               bool &                  delete_message);
+        virtual message_t *  add_message (
+                                 const unsigned int      size,
+                                 const char *const       unique_id,
+                                 const NFE_message_id &  nf_message_id,
+                                 bool &                  delete_message);
 
-        void remove_message (const message_t &  message);
+        void  remove_message (const message_t &  message);
 
-        int add_to_download (list_handle   download_list,
-                             unsigned int  &free_space,
-                             unsigned int  &largest_message);
+        int  add_to_download (unsigned int  &free_space,
+                              unsigned int  &largest_message);
 
-        int get_number_messages (void);
+        virtual int  get_number_pages (const unsigned int  flags_mask,
+                                       const unsigned int  flags_match);
 
-        int need_missing_page_report (void)
-        {
-            return (connection_count > g_missing_page_threshold);
-        }
+        virtual bool  need_missing_page_report (void);
 
         char *  generate_missing_page_report (
                     char *const         remote_report_filename,
                     const NFE_header &  header);
 
-        int printed_page_report (FILE *const         file,
-                                 const NFE_header &  header);
+        virtual bool  need_printed_page_report (void);
 
-        int cover_sheet (char *const         report,
-                         size_t              report_size,
-                         const NFE_header &  header);
+        int  printed_page_report (FILE *const         file,
+                                  const NFE_header &  header);
+
+        int  cover_sheet (char *const         report,
+                          size_t              report_size,
+                          const NFE_header &  header);
+
+        virtual void  tidy (void);
 
 #ifdef TEST
         virtual void  dump_to_file (FILE *const  file);
@@ -292,12 +301,20 @@ class netfax_fax_document_t : public netfax_document_t
                                         size_t              report_size,
                                         const NFE_header &  header);
 
-        void page_range (unsigned int &  first_page,
-                         unsigned int &  last_page);
+        int page_range (char *const         string,
+                        size_t              max_len,
+                        const unsigned int  first_page,
+                        const unsigned int  last_page);
 
-        int page_list (const page_state  page_list_seen_state,
-                       char *const       string,
-                       size_t            max_len);
+        int page_list (char *const         string,
+                       size_t              max_len,
+                       const unsigned int  flags_mask,
+                       const unsigned int  flags_match);
+
+        int get_number_missing_pages (void);
+
+        int missing_page_list (char *const  string,
+                               size_t       max_len);
 
     // Data
     protected:
@@ -305,14 +322,12 @@ class netfax_fax_document_t : public netfax_document_t
         {
             bool  split_download     : 1;
             bool  exact_number_pages : 1;
-        } flags;
+            bool  physically_split   : 1;
+            bool  dsc                : 1;
+        } nf_fax_flags;
 
-        unsigned int  number_messages;
         unsigned int  connection_count;
         unsigned int  total_number_pages;
-        unsigned int  number_pages;    // number pages seen so far
-        unsigned int  number_pages_remaining;
-        page_state *  page_seen;
 };
 
 
@@ -374,31 +389,36 @@ document_t::document_t (const NFE_header  &header,
     success = true;
 
     item_handle   = NULL;
-    document_size = 0;
     message_class = header.msg_class;
 
+    flags.printing_required = false;
+    flags.is_new            = true;
+
+    if (header.return_receipt_to.address != NULL)
+    {
+        return_receipt_address =
+            (char *) malloc (strlen (header.return_receipt_to.address) + 1);
+        if (return_receipt_address == NULL)
+        {
+            success = false;
+        }
+        else
+        {
+            strcpy (return_receipt_address,
+                    header.return_receipt_to.address);
+        }
+    }
+    else
+    {
+        return_receipt_address = NULL;
+    }
+
     // Create empty list of messages for this document
     message_list = list_create (free_message);
-    if (message_list == NULL)    // list creation failed
+    if (message_list == NULL)
+    {
         success = false;
-}
-
-
-
-
-document_t::document_t (const document_t  &document,
-                        bool              &success)
-{
-    success = true;
-
-    item_handle = NULL;
-    document_size = document.document_size;
-    message_class = document.message_class;
-
-    // Create empty list of messages for this document
-    message_list = list_create (free_message);
-    if (message_list == NULL)    // list creation failed
-        success = false;
+    }
 }
 
 
@@ -406,26 +426,11 @@ document_t::document_t (const document_t  &document,
 
 document_t::~document_t (void)
 {
-    list_destroy (message_list);
-}
-
-
-
-
-document_t *document_t::copy (void)
-{
-    bool  success;
-
-    document_t *new_document = new document_t (*this,
-                                               success);
-
-    if (new_document && !success)
+    if (return_receipt_address != NULL)
     {
-        delete new_document;
-        new_document = NULL;
+        free (return_receipt_address);
     }
-
-    return new_document;
+    list_destroy (message_list);
 }
 
 
@@ -447,7 +452,6 @@ void document_t::remove_from_list (list_handle list)
     list_remove_item (list,
                       this->item_handle);
 
-    // Can you delete an object from within one of its member functions?
     delete this;
 }
 
@@ -465,7 +469,9 @@ message_t *document_t::add_message (
     message_t *  message = add_message_common (size,
                                                unique_id);
     if (message == NULL)
+    {
         return NULL;
+    }
 
 
     // Unknown messages and SMTP error reports (which is what is being dealt
@@ -478,8 +484,8 @@ message_t *document_t::add_message (
     message->nf_message_id.exact_num_pages = TRUE;
     message->nf_message_id.iap_username    = NULL;
 
+    message->flags.bits.partial = 1;
     message->lines              = PartialDownloadLines;
-    message->flags              = MessageFlags_PartialDownload;
 
     // Add message to document's message list.  For these types of message
     // there is only ever one message per document.
@@ -492,8 +498,6 @@ message_t *document_t::add_message (
         return NULL;
     }
     message->item_handle = message_item_handle;
-
-    document_size   = size;
 
     return message;
 }
@@ -521,51 +525,66 @@ void document_t::remove_message (const message_t &message)
 {
     list_remove_item (message_list,
                       message.item_handle);
-    document_size -= message.size;
 }
 
 
 
 
-int document_t::add_to_download (list_handle   download_list,
-                                 unsigned int  &free_space,
+/* -----------------------------------------------------------------------------
+   document_t::add_to_download
+
+   Check whether a document should be included in the download and if so,
+   flag it to indicate this.
+
+   Inputs
+   free_space:      free space in message store (bytes)
+   largest_message: largest email message in this download so far (bytes)
+
+   Outputs
+   free_space
+   largest_message
+
+   Returns
+   0: document dealt with succesfully: either added to download or ignored if
+      it's already been downloaded
+   1: document needs downloading but there's not enough free space
+ */
+
+int document_t::add_to_download (unsigned int  &free_space,
                                  unsigned int  &largest_message)
 {
     // Only one message per document for all documents except netfax fax
     // documents
     message_t *  message = (message_t *) list_head (message_list);
+    int          rc = 0;
 
-    if (check_free_space (message->size,
-                          free_space,
-                          largest_message))
+    message->flags.bits.download = 0;
+
+    if (message->flags.bits.downloaded == 0)
     {
-        document_t *download_document = copy ();
-        if (download_document == NULL ||
-            download_document->add_to_list (download_list) == NULL)
+        if (check_free_space (message->size,
+                              free_space,
+                              largest_message))
         {
-            return -1;    // fatal error, out of memory
+            message->flags.bits.download = 1;
+            flags.printing_required = true;
+
+            update_free_space (message->size,
+                               free_space,
+                               largest_message);
+
         }
-
-
-        if (download_document->add_message (
-                message->size,
-                message->unique_id,
-                message->nf_message_id) == NULL)
+        else
         {
-            return 1;    // fatal error, out of memory
+            // This document will be left on the server.  Flag this so that we
+            // can automatically reconnect when there is more space available.
+
+            rc = 1;
         }
-
-        remove_message (*message);
-
-        update_free_space (message->size,
-                           free_space,
-                           largest_message);
-
-        remove_from_list (document_list);
     }
 
     // added document successfully: continue building download list
-    return 0;
+    return rc;
 }
 
 
@@ -579,21 +598,94 @@ list_handle document_t::get_message_list (void)
 
 
 
-int document_t::get_number_messages (void)
-{
-    // All documents have at most 1 message, except for netfax fax documents
+/* -----------------------------------------------------------------------------
+   document_t::get_number_pages
 
-    if (list_head (message_list) == NULL)
-        return 0;
-    else
-        return 1;
+   Get the number messages document which have a certain set of flags.
+
+   Returns
+   number of pages
+ */
+
+int  document_t::get_number_messages (const unsigned int  flags_mask,
+                                      const unsigned int  flags_match)
+{
+    int              number_messages = 0;
+    message_t *      message;
+    list_iterator_t  i;
+
+    list_initialise_iterator (&i,
+                              message_list);
+
+    for (message = (message_t *) M_list_reset (i);
+         !M_list_finished (i);
+         message = (message_t *) M_list_next (i))
+    {
+        if ((message->flags.value & flags_mask) == flags_match)
+        {
+            ++number_messages;
+        }
+    }
+
+    return number_messages;
 }
 
 
 
 
 /* -----------------------------------------------------------------------------
-+
+   document_t::get_number_pages
+
+   Get the number of pages in a document that are within messages with a
+   certain set of flags.
+
+   Returns
+   number of pages
+ */
+
+int  document_t::get_number_pages (const unsigned int  flags_mask,
+                                   const unsigned int  flags_match)
+{
+    message_t *      message;
+
+
+    message = (message_t *) list_head (message_list);
+    if (message &&
+        (message->flags.value & flags_mask) == flags_match)
+    {
+        return 1;
+    }
+
+    return 0;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   document_t::need_printed_page_report
+
+   Decide whether a printed page report is needed for a document.
+
+   Returns:
+   true:  printed page report required
+   false: printed page report not required
+ */
+
+bool  document_t::need_printed_page_report (void)
+{
+    if (return_receipt_address != NULL)
+    {
+        return true;
+    }
+
+    return false;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
    document_t::printed_page_report
 
    Generate tokens for printed page reports that are common to all types of
@@ -606,7 +698,6 @@ int document_t::get_number_messages (void)
    Returns
    success: 0
    failure: -1
--
  */
 
 int document_t::printed_page_report (FILE *const         file,
@@ -710,6 +801,101 @@ int document_t::cover_sheet (char *const         report,
 
 
 
+void document_t::tidy (void)
+{
+    if (get_number_messages (MessageFlags_Printed,
+                             0) == 0)
+    {
+        remove_from_list (document_list);
+    }
+    else
+    {
+        update_flags ();
+    }
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   document_t::update_flags
+
+   Update a document's flags after a stage of processing has been completed.
+
+   Documents which have been downloaded have their download flag cleared since
+   they won't need to be downloaded again.
+
+   Documents which have their printed flag set have their just printed flag
+   cleared.
+ */
+
+void  document_t::update_flags (void)
+{
+    message_t *      message;
+    list_iterator_t  i;
+
+    flags.printing_required = false;
+
+    list_initialise_iterator (&i,
+                              message_list);
+
+    for (message = (message_t *) M_list_reset (i);
+         !M_list_finished (i);
+         message = (message_t *) M_list_next (i))
+    {
+        if (message->flags.bits.downloaded)
+        {
+            message->flags.bits.download = 0;
+        }
+
+        if (message->flags.bits.printed)
+        {
+            message->flags.bits.just_printed = 0;
+        }
+    }
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   document_t::requires_printing
+
+   Determine whether any printing needs to take place for a document.  This
+   could be part of the document itself or a missing page report for the
+   document etc.
+ */
+
+bool  document_t::requires_printing (void)
+{
+    return (bool) flags.printing_required;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   document_t::is_new
+
+   Determine whether this is the first time this document has been seen.
+   'Seen' is defined by calling this method, so the first time it's called
+   the document will be unseen, and then seen for all subsequent calls.
+ */
+
+bool  document_t::is_new (void)
+{
+    if (flags.is_new)
+    {
+        flags.is_new = false;
+        return true;
+    }
+
+    return false;
+}
+
+
+
+
 netfax_document_t::netfax_document_t (const NFE_header &  header,
                                       bool &              success)
     : document_t (header,
@@ -723,44 +909,6 @@ netfax_document_t::netfax_document_t (const NFE_header &  header,
     document_id.document_number = header.id.doc_num;
 
     netfax_message_class        = header.netfax_msg_class;
-}
-
-
-
-
-netfax_document_t::netfax_document_t (const netfax_document_t &  document,
-                                      bool &                     success)
-    : document_t (document,
-                  success)
-{
-    memcpy (document_id.serial_num,
-            document.document_id.serial_num,
-            SERIAL_LEN);
-
-    document_id.device_class    = document.document_id.device_class;
-    document_id.document_number = document.document_id.document_number;
-
-    netfax_message_class        = document.netfax_message_class;
-}
-
-
-
-
-document_t *netfax_document_t::copy (void)
-{
-    bool  success;
-
-    netfax_document_t *new_document =
-        new netfax_document_t ((netfax_document_t &) *this,
-                               success);
-
-    if (new_document && !success)
-    {
-        delete new_document;
-        new_document = NULL;
-    }
-
-    return new_document;
 }
 
 
@@ -793,8 +941,7 @@ message_t *netfax_document_t::add_message (
     // All types of netfax messages must always have meaningful information in
     // the netfax message id, so just copy the netfax message id.
     message->nf_message_id = nf_message_id;
-
-    message->flags = 0;
+    message->nf_message_id = nf_message_id;
 
     // Add message to document's message list.  There is no concept of pages
     // or ordering for these netfax message classes so just add the message
@@ -808,8 +955,6 @@ message_t *netfax_document_t::add_message (
         return NULL;
     }
     message->item_handle = message_item_handle;
-
-    document_size   += size;
 
     return message;
 }
@@ -838,54 +983,13 @@ netfax_fax_document_t::netfax_fax_document_t (const NFE_header &  header,
     : netfax_document_t (header,
                          success)
 {
-    flags.split_download     = false;
-    flags.exact_number_pages = (bool) header.id.exact_num_pages;
+    nf_fax_flags.split_download     = false;
+    nf_fax_flags.exact_number_pages = (bool) header.id.exact_num_pages;
+    nf_fax_flags.physically_split   = false;
+    nf_fax_flags.dsc                = false;
 
-    number_messages        = 0;
     connection_count       = 0;
     total_number_pages     = 0;
-    number_pages           = 0;
-//     number_pages_remaining = header.id.msg_num_pages;
-    number_pages_remaining = 0;
-    page_seen              = NULL;
-}
-
-
-
-
-netfax_fax_document_t::netfax_fax_document_t (
-    const netfax_fax_document_t &  document,
-    bool                        &  success)
-    : netfax_document_t (document,
-                         success)
-{
-    flags                  = document.flags;
-    number_messages        = 0;
-    connection_count       = document.connection_count;
-    total_number_pages     = 0;
-    number_pages           = 0;
-    number_pages_remaining = document.number_pages_remaining;
-    page_seen              = NULL;
-}
-
-
-
-
-document_t *netfax_fax_document_t::copy (void)
-{
-    bool  success;
-
-    netfax_fax_document_t *new_document =
-        new netfax_fax_document_t ((netfax_fax_document_t &) *this,
-                                   success);
-
-    if (new_document && !success)
-    {
-        delete new_document;
-        new_document = NULL;
-    }
-
-    return new_document;
 }
 
 
@@ -935,8 +1039,6 @@ message_t *netfax_fax_document_t::add_message (
         // in the netfax message id, so just copy the netfax message id.
         message->nf_message_id = nf_message_id;
 
-        message->flags = 0;
-
         // Add message to document's message list.  Fax messages must be ordered
         // by page number
         list_item_handle message_item_handle =
@@ -949,11 +1051,6 @@ message_t *netfax_fax_document_t::add_message (
         }
 
         message->item_handle = message_item_handle;
-
-        // Added message to document's message list successfully -
-        // can now update document information.
-        document_size   += size;
-        number_messages += 1;
     }
     else
     {
@@ -971,29 +1068,6 @@ message_t *netfax_fax_document_t::add_message (
 
     if (nf_message_id.msg_num_pages > total_number_pages)
     {
-        page_state *  temp_page_seen;
-        unsigned int  delta_number_pages;
-
-        temp_page_seen =
-            realloc (page_seen,
-                     nf_message_id.msg_num_pages * sizeof (page_seen));
-
-        if (temp_page_seen == NULL)
-            goto no_mem;
-
-        page_seen = temp_page_seen;
-
-        for (int i = total_number_pages;
-             i < nf_message_id.msg_num_pages;
-             i++)
-        {
-            page_seen[i] = PageState_Unseen;
-        }
-
-        delta_number_pages = nf_message_id.msg_num_pages -
-                             total_number_pages;
-
-        // number_pages_remaining += delta_number_pages;
         total_number_pages = nf_message_id.msg_num_pages;
     }
 
@@ -1007,32 +1081,9 @@ message_t *netfax_fax_document_t::add_message (
         // complete message as we can get all the info we need from the
         // headers).
 
-        flags.exact_number_pages = true;
-    }
-    else
-    {
-        // Be careful when incrementing the number of pages in a document.  It
-        // is possible for a message to be added to the document list, selected
-        // for download (therefore moved from the document list to the download
-        // list), but not actually get processed - ie. when the PrintQ aborts
-        // a job before it is complete.  Then the message is seen again on the
-        // next connection - it's not in the document list anymore so it's
-        // added again, but we have previously taken account of the pages
-        // contained in it, so we don't want to add these again.
-
-        for (int i = nf_message_id.first_page_num - 1;
-             i < nf_message_id.last_page_num;
-             i++)
-        {
-            if (page_seen[i] == PageState_Unseen)
-            {
-                page_seen[i] = PageState_Seen;
-                ++number_pages;
-            }
-        }
-
-        number_pages_remaining += (nf_message_id.last_page_num -
-                                   nf_message_id.first_page_num) + 1;
+        nf_fax_flags.exact_number_pages = true;
+        nf_fax_flags.dsc                = true;
+        flags.printing_required         = true;
     }
 
     return message;
@@ -1059,88 +1110,68 @@ void netfax_fax_document_t::remove_message (const message_t &  message)
 {
     list_remove_item (message_list,
                       message.item_handle);
-    document_size -= message.size;
-    --number_messages;
 }
 
 
 
 
-int netfax_fax_document_t::add_to_download (list_handle     download_list,
-                                            unsigned int &  free_space,
+/* -----------------------------------------------------------------------------
+   netfax_fax_document_t::add_to_download
+
+   Check whether a document should be included in the download and if so,
+   flag it to indicate this.
+
+   Inputs
+   free_space:      free space in message store (bytes)
+   largest_message: largest email message in this download so far (bytes)
+
+   Outputs
+   free_space
+   largest_message
+
+   Returns
+   0: document dealt with succesfully: either added to download or ignored if
+      it's already been downloaded
+   1: document needs downloading but there's not enough free space
+   2: document needs downloading but there's only enough free space for part of
+      it to be downloaded
+ */
+
+int netfax_fax_document_t::add_to_download (unsigned int &  free_space,
                                             unsigned int &  largest_message)
 {
-    netfax_fax_document_t *  download_document;
-
-    // Document size confirmation is a special case.
-    //
-    // The only time that you would want to print one of these out is if
-    // you had already downloaded and printed all other parts of this
-    // document in a previous session.
-
-    if (flags.exact_number_pages &&
-        number_pages_remaining == 0 &&
-        number_messages == 0)
+    if (++connection_count == g_missing_page_threshold &&
+        get_number_missing_pages () > 0)
     {
-        download_document = (netfax_fax_document_t *) copy ();
-
-        if (download_document == NULL ||
-            download_document->add_to_list (download_list) == NULL)
-        {
-            return -1;    // fatal error, out of memory
-        }
+        flags.printing_required = true;
     }
-    else
+
+    int              rc = 0;
+    list_iterator_t  message_iterator;
+    bool             download = false;
+
+    // Iterate over the message list for this document, adding as many
+    // messages from it to the download list as possible.
+
+    list_initialise_iterator (&message_iterator,
+                              message_list);
+
+    message_t *  message =
+        (message_t *) (message_iterator.reset) (&message_iterator);
+
+    while (!(message_iterator.finished) (&message_iterator))
     {
-        list_iterator_t  message_iterator;
-        bool             document_created = false;
+        message->flags.bits.download = 0;
 
-        // Iterate over the message list for this document, adding as many
-        // messages from it to the download list as possible.
-
-        list_initialise_iterator (&message_iterator,
-                                  message_list);
-
-        message_t *  message =
-            (message_t *) (message_iterator.reset) (&message_iterator);
-
-        while (!(message_iterator.finished) (&message_iterator))
+        if (message->flags.bits.downloaded == 0)
         {
             if (check_free_space (message->size,
                                   free_space,
                                   largest_message))
             {
-                if (!document_created)
-                {
-                    download_document = (netfax_fax_document_t *) copy ();
-
-                    if (download_document == NULL ||
-                        download_document->add_to_list (download_list) == NULL)
-                    {
-                        return -1;    // fatal error, out of memory
-                    }
-
-                    document_created = true;
-                }
-
-                if (download_document->add_message (
-                        message->size,
-                        message->unique_id,
-                        message->nf_message_id) == NULL)
-                {
-                    return -1;    // fatal error, out of memory
-                }
-
-                // Remove this message from the list of messages for this
-                // document in the document list.
-                if (number_pages_remaining > 0)
-                {
-                    number_pages_remaining -=
-                        (message->nf_message_id.last_page_num -
-                         message->nf_message_id.first_page_num) + 1;
-                }
-
-                remove_message (*message);
+                message->flags.bits.download = 1;
+                flags.printing_required      = true;
+                download                     = true;
 
                 update_free_space (message->size,
                                    free_space,
@@ -1152,10 +1183,10 @@ int netfax_fax_document_t::add_to_download (list_handle     download_list,
                 // this document.
                 //
                 // 1. If some messages for this document have already been
-                // added to the download list then don't add anything more
-                // to the download list: just download what we already have,
-                // disconnect, then reconnect to get the rest of the
-                // document and any others we have space for.
+                // marked for download then don't mark anything more for
+                // download: just download what we already have, disconnect,
+                // then reconnect to get the rest of the document and any others
+                // we have space for.
                 //
                 // 2. If no messages for this document have been added to
                 // the download list then just skip the rest of the messages
@@ -1172,70 +1203,110 @@ int netfax_fax_document_t::add_to_download (list_handle     download_list,
                 // document could appear to fall into category 2. above and
                 // we would end up with pyhsically split documents.
 
-                if (document_created || flags.split_download)
+                if (download || nf_fax_flags.split_download)
                 {
                     // not enough space to add this document: don't add anything
                     // else to the download list.
-                    download_document->flags.split_download = true;
-                    flags.split_download = true;
-                    return 1;
+                    nf_fax_flags.split_download = true;
+                    return 2;
                 }
                 else
                 {
-                    // skip this document and try the next
+                    // Skip this document and try the next.  This document will
+                    // be left on the server, so flag this so that we can
+                    // automatically reconnect when there's more space available
+                    rc = 1;
                     break;    // break out of enclosing while loop
                 }
             }
-
-            message = (message_t *) (message_iterator.next) (&message_iterator);
-
         }
 
-        // A split download situation also occurs if the number of pages in the
-        // part of the document to be downloaded is less than the minimum
-        // number of pages known to exist for that document (ie. not all the
-        // document has arrived on the server yet).
-
-        if (document_created &&
-            (download_document->number_pages < total_number_pages ||
-             flags.split_download))
-        {
-            download_document->flags.split_download = true;
-        }
+        message = (message_t *) (message_iterator.next) (&message_iterator);
     }
 
-    // If more pages are expected for this document then indicate
-    // this by leaving the document in the document list with an
-    // empty list of messages.
-    if (number_messages == 0)
+    // A split download situation also occurs if the number of pages in the
+    // part of the document to be downloaded is less than the minimum
+    // number of pages known to exist for that document (ie. not all the
+    // document has arrived on the server yet).
+
+    if (download &&
+        get_number_pages (0,
+                          0) < total_number_pages)
     {
-        if (number_pages_remaining == 0 && flags.exact_number_pages)
-        {
-            remove_from_list (document_list);
-        }
-        else
-        {
-            ++connection_count;
-        }
+        nf_fax_flags.split_download = true;
+        nf_fax_flags.physically_split = true;
     }
 
-    // added document successfully: continue building download list
-    return 0;
-}
 
-
-
-
-int netfax_fax_document_t::get_number_messages (void)
-{
-    return number_messages;
+    // dealt with document successfully: continue deciding download
+    return rc;
 }
 
 
 
 
 /* -----------------------------------------------------------------------------
-+
+   netfax_fax_document_t::get_number_pages
+
+   Get the number of pages in a NetFax fax document that are within messages
+   with a certain set of flags.
+
+   Returns
+   number of pages
+ */
+
+int  netfax_fax_document_t::get_number_pages (const unsigned int  flags_mask,
+                                              const unsigned int  flags_match)
+{
+    int              number_pages = 0;
+    message_t *      message;
+    list_iterator_t  i;
+
+    list_initialise_iterator (&i,
+                              message_list);
+
+    for (message = (message_t *) M_list_reset (i);
+         !M_list_finished (i);
+         message = (message_t *) M_list_next (i))
+    {
+        if ((message->flags.value & flags_mask) == flags_match)
+        {
+            number_pages += (message->nf_message_id.last_page_num -
+                             message->nf_message_id.last_page_num) + 1;
+        }
+    }
+
+    return number_pages;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   netfax_fax_document_t::need_missing_page_report
+
+   Decide whether a missing page report is required for a NetFax fax document.
+
+   Returns
+   true:  missing page report required
+   false: missing page report not required
+ */
+
+bool  netfax_fax_document_t::need_missing_page_report (void)
+{
+    if (connection_count == g_missing_page_threshold &&
+        get_number_missing_pages () > 0)
+    {
+        return true;
+    }
+
+    return false;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
    netfax_fax_document_t::generate_missing_page_report
 
    Generate a missing page report for a NetFax fax document.
@@ -1251,7 +1322,6 @@ int netfax_fax_document_t::get_number_messages (void)
    Returns
    success: pointer to local report - client's responsibility to free
    failure: NULL
--
  */
 
 char *  netfax_fax_document_t::generate_missing_page_report (
@@ -1264,9 +1334,8 @@ char *  netfax_fax_document_t::generate_missing_page_report (
 
     // Missing pages list
     *pages_list = '\0';
-    if (page_list (PageState_Unseen,
-                   pages_list,
-                   sizeof (pages_list)))
+    if (missing_page_list (pages_list,
+                           sizeof (pages_list)))
     {
         return NULL;
     }
@@ -1307,6 +1376,7 @@ char *  netfax_fax_document_t::generate_missing_page_report (
                                                    (int) false);
     if (full_address == NULL)
     {
+        fclose (file);
         return NULL;
     }
 
@@ -1321,6 +1391,7 @@ char *  netfax_fax_document_t::generate_missing_page_report (
                  pages_list,
                  header.date_hdr) < 0)
     {
+        fclose (file);
         free (full_address);
         return NULL;
     }
@@ -1333,14 +1404,49 @@ char *  netfax_fax_document_t::generate_missing_page_report (
                           0,
                           TRUE);
 
-    NFE_CONTEXT context;
+    unsigned int  body_len;
+    char *        body;
 
-    if (date_processed.WriteOut (context,
-                                 0,
-                                 file) != NFE_COMPLETED)
+    if (date_processed.GetBodyLen (body_len) != NFE_COMPLETED)
     {
+        fclose (file);
         return NULL;
     }
+
+    body = new char[body_len + 2];
+    if (body == NULL)
+    {
+        fclose (file);
+        return NULL;
+    }
+
+    ++body_len;
+    if (date_processed.GetUnfoldedBody (body,
+                                        body_len) != NFE_COMPLETED)
+    {
+        delete[] body;
+        fclose (file);
+        return NULL;
+    }
+
+    if (fputs (body,
+               file))
+    {
+        delete[] body;
+        fclose (file);
+        return NULL;
+    }
+
+    delete[] body;
+
+    if (fputs ("\n[END]\n",
+               file))
+    {
+        fclose (file);
+        return NULL;
+    }
+
+    fclose (file);
 
     return local_report;
 }
@@ -1349,7 +1455,27 @@ char *  netfax_fax_document_t::generate_missing_page_report (
 
 
 /* -----------------------------------------------------------------------------
-+
+   netfax_fax_document_t::need_printed_page_report
+
+   Decide whether a printed page report is required for this document.
+ */
+
+bool  netfax_fax_document_t::need_printed_page_report (void)
+{
+    if (return_receipt_address != NULL &&
+        get_number_messages (MessageFlags_JustPrinted,
+                             MessageFlags_JustPrinted) > 0)
+    {
+        return true;
+    }
+
+    return false;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
    netfax_fax_document_t::printed_page_report
 
    Generate tokens for printed page reports that are specific to NetFax fax
@@ -1363,7 +1489,6 @@ char *  netfax_fax_document_t::generate_missing_page_report (
    Returns
    success: 0
    failure: -1
--
  */
 
 int netfax_fax_document_t::printed_page_report (FILE *const         file,
@@ -1378,13 +1503,14 @@ int netfax_fax_document_t::printed_page_report (FILE *const         file,
     char pages_list[MaxParamSize + 1];
     *pages_list = '\0';
 
-    // This is a not very elegant at the moment.  There's no reason (apart
+    // This is not very elegant at the moment.  There's no reason (apart
     // from lack of time) why page_list should not be modified so it can write
     // to a file, thereby not being constrained by arbitrary maximium size;
 
-    if (page_list (PageState_Seen,
-                   pages_list,
-                   sizeof (pages_list)))
+    if (page_list (pages_list,
+                   sizeof (pages_list),
+                   MessageFlags_JustPrinted,
+                   MessageFlags_JustPrinted))
     {
         return -1;
     }
@@ -1406,7 +1532,7 @@ int netfax_fax_document_t::cover_sheet (char *const         report,
                                         size_t              report_size,
                                         const NFE_header &  header)
 {
-    if (number_messages == 0)
+    if (nf_fax_flags.dsc)
     {
         // document size confirmation required
         return document_size_confirmation (report,
@@ -1414,7 +1540,10 @@ int netfax_fax_document_t::cover_sheet (char *const         report,
                                            header);
     }
 
-    else if (!flags.exact_number_pages || flags.split_download)
+//     else if (!nf_fax_flags.exact_number_pages || nf_fax_flags.split_download)
+    else if (nf_fax_flags.physically_split &&
+             get_number_messages (MessageFlags_Printing | MessageFlags_Printed,
+                                  0) > 0)
     {
         // cover sheet required
         return page_range_report (report,
@@ -1451,8 +1580,6 @@ int netfax_fax_document_t::page_range_report (char *const         report,
     char                 param[4][MaxParamSize + 1];
     char                 buffer[MessageBufferSize + 1];
     const char *         read_only_buffer;
-    unsigned int         first_page;
-    unsigned int         last_page;
     int                  coversheet_type;
     int                  string_len;
     _kernel_oserror *    e;
@@ -1464,38 +1591,34 @@ int netfax_fax_document_t::page_range_report (char *const         report,
     // '\0' terminator.
 
     if (--report_size < 1)
+    {
         return 1;
+    }
     report[0] = '\0';
 
 
-    page_range (first_page,
-                last_page);
-
-    // Decide what type of cover sheet is required
-    int page_count = 0;
-
-    for (int i = first_page; i <= last_page; i++)
+    if (get_number_pages (MessageFlags_Printing | MessageFlags_Printed,
+                          0) == 1)
     {
-        if (page_seen[i] == PageState_Seen)
+        if (nf_fax_flags.exact_number_pages)
         {
-            if (++page_count > 1)
-                break;
-        }
-    }
-
-    if (page_count == 1)
-    {
-        if (flags.exact_number_pages)
             coversheet_type = SinglePage_Exact;
+        }
         else
+        {
             coversheet_type = SinglePage_Unknown;
+        }
     }
     else
     {
-        if (flags.exact_number_pages)
+        if (nf_fax_flags.exact_number_pages)
+        {
             coversheet_type = MultiPage_Exact;
+        }
         else
+        {
             coversheet_type = MultiPage_Unknown;
+        }
     }
 
     // Generate cover sheet title
@@ -1515,15 +1638,21 @@ int netfax_fax_document_t::page_range_report (char *const         report,
                &string_len);
 
     if (e != NULL)
+    {
         return 1;
+    }
 
     if (report_size < string_len)
+    {
         return 1;
+    }
     strncat (report, read_only_buffer, string_len);
     report_size -= string_len;
 
     if (report_size < 2)
+    {
         return 1;
+    }
     strcat (report, "\n\n");
     report_size -= 2;
 
@@ -1535,7 +1664,9 @@ int netfax_fax_document_t::page_range_report (char *const         report,
     char *full_address = emailrx_construct_full_address (&header.from,
                                                          (int) true);
     if (full_address == NULL)
+    {
         return 1;
+    }
 
     e = _swix (MessageTrans_GSLookup,
                _INR (0, 7) | _OUT (3),
@@ -1554,90 +1685,67 @@ int netfax_fax_document_t::page_range_report (char *const         report,
     free (full_address);
 
     if (e != NULL)
+    {
         return 1;
+    }
 
     if (report_size < string_len)
+    {
         return 0;
+    }
     strncat (report, buffer, string_len);
     report_size -= string_len;
 
     if (report_size < 2)
+    {
         return 0;
+    }
     strcat (report, "\n\n");
     report_size -= 2;
 
-    // Create body text of cover sheet
-    switch (coversheet_type)
+    param[0][0] = '\0';
+    if (page_list (param[0],
+                   MaxParamSize + 1,
+                   MessageFlags_Printing | MessageFlags_Printed,
+                   0))
     {
-        case SinglePage_Exact:
-        case SinglePage_Unknown:
-            sprintf (param[0],
-                     "%d",
-                     first_page);
-
-            sprintf (param[1],
-                     "%d",
-                     total_number_pages);
-
-            e = _swix (MessageTrans_Lookup,
-                       _INR (0, 7) | _OUT (3),
-
-                       report_templates,
-                       coversheet_token[coversheet_type],
-                       buffer,
-                       sizeof (buffer),
-                       param[0],
-                       param[1],
-                       0,
-                       0,
-
-                       &string_len);
-            break;
-
-        case MultiPage_Exact:
-        case MultiPage_Unknown:
-            param[0][0] = '\0';
-
-            if (page_list (PageState_Seen,
-                           param[0],
-                           MaxParamSize + 1))
-            {
-                return -1;
-            }
-
-            sprintf (param[1],
-                     "%d",
-                     total_number_pages);
-
-            e = _swix (MessageTrans_Lookup,
-                       _INR (0, 7) | _OUT (3),
-
-                       report_templates,
-                       coversheet_token[coversheet_type],
-                       buffer,
-                       sizeof (buffer),
-                       param[0],
-                       param[1],
-                       0,
-                       0,
-
-                       &string_len);
-            break;
-
-       default:
-            return 1;
+        return -1;
     }
 
+    sprintf (param[1],
+             "%d",
+             total_number_pages);
+
+    e = _swix (MessageTrans_Lookup,
+               _INR (0, 7) | _OUT (3),
+
+               report_templates,
+               coversheet_token[coversheet_type],
+               buffer,
+               sizeof (buffer),
+               param[0],
+               param[1],
+               0,
+               0,
+
+               &string_len);
+
     if (e != NULL)
+    {
         return 1;
+    }
 
     if (report_size < string_len)
+    {
         return 0;
+    }
     strncat (report, buffer, string_len);
     report_size -= string_len;
 
     if (report_size < 1)
+    {
         return 0;
+    }
     strcat (report, "\n");
     report_size -= 1;
 
@@ -1649,7 +1757,6 @@ int netfax_fax_document_t::page_range_report (char *const         report,
 
 
 /* -----------------------------------------------------------------------------
-+
    generate_doc_size_conf
 
    Generate a document size conformation report
@@ -1662,7 +1769,6 @@ int netfax_fax_document_t::page_range_report (char *const         report,
    Returns
    success: 0
    failure: 1
--
  */
 
 int netfax_fax_document_t::document_size_confirmation (
@@ -1697,18 +1803,27 @@ int netfax_fax_document_t::document_size_confirmation (
     // report size by one so that all checks automatically take account of a
     // '\0' terminator.
     if (--report_size < 1)
+    {
         return 1;
+    }
     report[0] = '\0';
 
     // Decide what type of dsc is required
     if (total_number_pages == 1)
+    {
         dsc_type = SinglePage_Now_SinglePage;
+    }
     else
     {
-        if (number_pages == 1)
+        if (get_number_pages (MessageFlags_Printing | MessageFlags_Printed,
+                              0) == 1)
+        {
             dsc_type = SinglePage_Now_MultiPage;
+        }
         else
+        {
             dsc_type = MultiPage;
+        }
     }
 
     // Generate dsc title
@@ -1728,15 +1843,21 @@ int netfax_fax_document_t::document_size_confirmation (
                &string_len);
 
     if (e != NULL)
+    {
         return 1;
+    }
 
     if (report_size < string_len)
+    {
         return 1;
+    }
     strncat (report, read_only_buffer, string_len);
     report_size -= string_len;
 
     if (report_size < 2)
+    {
         return 1;
+    }
     strcat (report, "\n\n");
     report_size -= 2;
 
@@ -1748,7 +1869,9 @@ int netfax_fax_document_t::document_size_confirmation (
     char *full_address = emailrx_construct_full_address (&header.from,
                                                          (int) true);
     if (full_address == NULL)
+    {
         return 1;
+    }
 
     e = _swix (MessageTrans_GSLookup,
                _INR (0, 7) | _OUT (3),
@@ -1767,15 +1890,21 @@ int netfax_fax_document_t::document_size_confirmation (
     free (full_address);
 
     if (e != NULL)
+    {
         return 1;
+    }
 
     if (report_size < string_len)
+    {
         return 0;
+    }
     strncat (report, buffer, string_len);
     report_size -= string_len;
 
     if (report_size < 2)
+    {
         return 0;
+    }
     strcat (report, "\n\n");
     report_size -= 2;
 
@@ -1822,7 +1951,8 @@ int netfax_fax_document_t::document_size_confirmation (
         case MultiPage:
             sprintf (param[0],
                      "%d",
-                     number_pages);
+                     get_number_pages (0,
+                                       0));
 
             sprintf (param[1],
                      "%d",
@@ -1848,15 +1978,21 @@ int netfax_fax_document_t::document_size_confirmation (
     }
 
     if (e != NULL)
+    {
         return 1;
+    }
 
     if (report_size < string_len)
+    {
         return 0;
+    }
     strncat (report, buffer, string_len);
     report_size -= string_len;
 
     if (report_size < 1)
+    {
         return 0;
+    }
     strcat (report, "\n");
     report_size -= 1;
 
@@ -1867,148 +2003,338 @@ int netfax_fax_document_t::document_size_confirmation (
 
 
 /* -----------------------------------------------------------------------------
-+
    page_range
 
-   Get the first and last page number of the document
+   Concatenate a page range onto the end of a string.  Can be used to build a
+   list of the form:
+
+   1, 3-5, 8-13, 15, 17
+
+   Inputs
+   string:     buffer to hold generated list
+   max_len:    maximum length of string excluding 0 terminator
+   first_page: first page in range
+   last_page:  last page in range
 
    Outputs
-   first_page: first page number (0 == no pages)
-   last_page:  last page number (0 == no pages)
--
- */
+   string: generated list
 
-void netfax_fax_document_t::page_range (
-         unsigned int &  first_page,
-         unsigned int &  last_page)
+   Returns
+   0: success
+   1: failure (length of list exceeds max_len)
+  */
+
+int netfax_fax_document_t::page_range (char *const         string,
+                                       size_t              max_len,
+                                       const unsigned int  first_page,
+                                       const unsigned int  last_page)
 {
-    message_t *  message;
+    char    page_range[10];
+    size_t  len = strlen (string);
 
-    message = (message_t *) list_head (message_list);
-    if (message == NULL)
-        first_page = 0;
-    else
-        first_page = message->nf_message_id.first_page_num;
 
-    message = (message_t *) list_tail (message_list);
-    if (message == NULL)
-        last_page = 0;
+    if (first_page == last_page)
+    {
+        sprintf (page_range,
+                 "%u",
+                 first_page);
+    }
     else
-        last_page = message->nf_message_id.last_page_num;
+    {
+        sprintf (page_range,
+                 "%u-%u",
+                 first_page,
+                 last_page);
+    }
+
+    if (len > 0)
+    {
+        if (max_len - len < 2)
+        {
+            return 1;
+        }
+
+        strcat (string,
+                ", ");
+        len += 2;
+    }
+
+    if (max_len - len < strlen (page_range))
+    {
+        return 1;
+    }
+    strcat (string,
+            page_range);
+
+    return 0;
 }
 
 
 
 
 /* -----------------------------------------------------------------------------
-+
-   page_list
+   netfax_fax_document_t::get_number_missing_pages
 
-   Concatenate a 0 terminated list of pages (seen or unseen) onto the end of a 0
-   terminated string using the array of seen pages.  Blocks of pages are
-   written as ranges and individual pages are written as individual numbers.
-   eg. a generated list may look like:
+   Find the number of pages missing from a NetFax fax document.
+
+   Returns
+   number of pages
+ */
+
+int netfax_fax_document_t::get_number_missing_pages (void)
+{
+    int              number_missing_pages = 0;
+    unsigned int     last_page = 0;
+    message_t        *message;
+    list_iterator_t  i;
+
+
+    list_initialise_iterator (&i,
+                              message_list);
+
+    for (message = (message_t *) M_list_reset (i);
+         !M_list_finished (i);
+         message = (message_t *) M_list_next (i))
+    {
+        if (message->nf_message_id.first_page_num - last_page > 1)
+        {
+            number_missing_pages += (message->nf_message_id.first_page_num -
+                                     last_page) + 1;
+        }
+
+        last_page = message->nf_message_id.last_page_num;
+    }
+
+    // Special case: if any pages at the end of the document are missing then
+    // the above loop will not catch them.
+
+    if (last_page < total_number_pages)
+    {
+        number_missing_pages += (total_number_pages - last_page) + 1;
+    }
+
+
+    return number_missing_pages;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   missing_page_list
+
+   Generate a list of pages missing from a document.  The list is of
+   the form:
 
    1, 3-5, 8-13, 15, 17
 
-   Assumes that there will never be more than 9999 pages in a single document.
-
    Inputs
-   page_list_seen_state: add pages with this state to list
-   string:               0 terminated string to concatenate list onto.
-   max_len:              maximum allowed length of page list
+   string:      buffer to hold generated list
+   max_len:     maximum length of string excluding 0 terminator
+
+   Outputs
+   string: generated list
 
    Returns
    0: success
-   1: failure (size of list exceeds max_len)
--
- */
+   1: failure (length of list exceeds max_len)
+  */
 
-int netfax_fax_document_t::page_list (const page_state  page_list_seen_state,
-                                      char *const       string,
-                                      size_t            max_len)
+int netfax_fax_document_t::missing_page_list (char *const  string,
+                                              size_t       max_len)
 {
-    char          page_range[10];
-    unsigned int  first_page = 0;
-    size_t        page_range_len;
-    bool          first_in_list = true;
-    page_state    previous_page_seen_state;
+    unsigned int     last_page = 0;
+    message_t        *message;
+    list_iterator_t  i;
 
 
-    previous_page_seen_state = page_seen[first_page];
+    *string = '\0';
 
-    int i = 0;
+    list_initialise_iterator (&i,
+                              message_list);
 
-    while (i < total_number_pages)
+    for (message = (message_t *) M_list_reset (i);
+         !M_list_finished (i);
+         message = (message_t *) M_list_next (i))
     {
-        // Find next page with state we're interested in
-        while (i < total_number_pages)
+        if (message->nf_message_id.first_page_num - last_page > 1)
         {
-            if (page_seen[i] == page_list_seen_state)
-                break;
-
-            i++;
+            if (page_range (string,
+                            max_len,
+                            last_page + 1,
+                            message->nf_message_id.first_page_num - 1))
+            {
+                return 1;
+            }
         }
 
-        first_page = i;
+        last_page = message->nf_message_id.last_page_num;
+    }
 
-        // Find last page in this block with state we're interested in
-        // and add page range for block to list
-        while (i < total_number_pages)
+    // Special case: if any pages at the end of the document are missing then
+    // the above loop will not catch them.
+
+    if (last_page < total_number_pages)
+    {
+        if (page_range (string,
+                        max_len,
+                        last_page + 1,
+                        total_number_pages))
         {
-            if (i == total_number_pages - 1 ||
-                page_seen[i + 1] != page_list_seen_state)
+            return 1;
+        }
+    }
+
+
+    return 0;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   page_list
+
+   Generate a list of pages from messages with specified flags.  The list is of
+   the form:
+
+   1, 3-5, 8-13, 15, 17
+
+   Inputs
+   string:      buffer to hold generated list
+   max_len:     maximum length of string excluding 0 terminator
+   flags_mask:  mask to apply to message flags
+   flags_match: flags to match after mask has been applied
+
+   Outputs
+   string: generated list
+
+   Returns
+   0: success
+   1: failure (length of list exceeds max_len)
+  */
+
+int netfax_fax_document_t::page_list (char *const         string,
+                                      size_t              max_len,
+                                      const unsigned int  flags_mask,
+                                      const unsigned int  flags_match)
+{
+    bool             found;
+    unsigned int     first_page;
+    unsigned int     last_page;
+    message_t *      message;
+    list_iterator_t  i;
+
+
+    *string = '\0';
+
+    list_initialise_iterator (&i,
+                              message_list);
+
+    message = (message_t *) M_list_reset (i);
+
+    while (!M_list_finished (i))
+    {
+        found = false;
+
+        // Find next message with flags we're looking for.
+        while (!M_list_finished (i) && !found)
+        {
+            if ((message->flags.value & flags_mask) == flags_match)
             {
-                if (i > first_page)
-                {
-                    sprintf (page_range,
-                             "%u-%u",
-                             first_page + 1,
-                             i + 1);
-                }
-                else
-                {
-                    sprintf (page_range,
-                             "%u",
-                             first_page + 1);
-                }
-
-                // The list is comma separated, so write a comma to the list
-                // before writing the page range / number - except for the
-                // first page in the list.
-                if (first_in_list)
-                    first_in_list = false;
-                else
-                {
-                    if (max_len < 2)
-                        return 1;
-
-                    strcat (string,
-                            ", ");
-                    max_len -= 2;
-                }
-
-                page_range_len = strlen (page_range);
-                if (max_len < page_range_len)
-                    return 1;
-
-                strncat (string,
-                         page_range,
-                         page_range_len);
-                max_len -= page_range_len;
-
-                // know that next page does not have required state, so restart
-                // at the page after that
-                i += 2;
-
-                break;
+                first_page = message->nf_message_id.first_page_num;
+                last_page = message->nf_message_id.last_page_num;
+                found = true;
             }
 
-            i++;
+            message = (message_t *) M_list_next (i);
+        }
+
+        if (found)
+        {
+            found = false;
+
+            // Find last message in this 'block' with the flags we're looking
+            // for. Missing pages also terminate a block.
+            while (!M_list_finished (i) && !found)
+            {
+                if (message->nf_message_id.first_page_num - last_page > 1 ||
+                    (message->flags.value & flags_mask) != flags_match)
+                {
+                    found = true;
+                }
+                else
+                {
+                    last_page = message->nf_message_id.last_page_num;
+                    message = (message_t *) M_list_next (i);
+                }
+            }
+
+            if (page_range (string,
+                            max_len,
+                            first_page,
+                            last_page))
+            {
+                return 1;
+            }
         }
     }
 
     return 0;
+}
+
+
+
+
+#if 0
+void netfax_fax_document_t::message_printed (void)
+{
+    unsigned int     last_page = 1;
+    message_t *      message;
+    list_iterator_t  i;
+
+    list_initialise_iterator (&i,
+                              message_list);
+
+    for (message = (message_t *) M_list_reset (i);
+         !M_list_finished (i);
+         message = (message_t *) M_list_next (i))
+    {
+        if (!message->flags.bits.printed ||
+            message->nf_message_id.first_page_num - last_page > 1)
+        {
+            return;
+        }
+
+        last_page = message->nf_message_id.last_page_num;
+    }
+
+    // All messages in document have been printed.  If no more are expected then
+    // this document can be deleted.
+    if (total_number_pages == last_page && nf_fax_flags.exact_number_pages)
+    {
+        flags.delete_pending = true;
+    }
+}
+#endif
+
+
+
+
+void netfax_fax_document_t::tidy (void)
+{
+    if (connection_count < g_missing_page_threshold ||
+        get_number_messages (MessageFlags_Printed,
+                             0) > 0)
+    {
+        // There are still messages waiting to be printed or the threshold for
+        // reporting missing pages has not yet been reached.
+        update_flags ();
+    }
+    else
+    {
+        remove_from_list (document_list);
+    }
 }
 
 
@@ -2022,12 +2348,10 @@ extern "C"
 {
 
 /* -----------------------------------------------------------------------------
-+
    emailrx_initialise
 
    Initialise the email receive code.  Must be called before any other emailrx
    functions.
--
  */
 
 extern int emailrx_initialise (void)
@@ -2080,12 +2404,10 @@ extern int emailrx_initialise (void)
 
 
 /* -----------------------------------------------------------------------------
-+
    emailrx_finalise
 
    Close down the email receive code.  Must be called before shutdown or
    resources will be leaked.  May be attached to atexit.
--
  */
 
 extern void emailrx_finalise (void)
@@ -2109,7 +2431,6 @@ extern void emailrx_finalise (void)
 
 
 /* -----------------------------------------------------------------------------
-+
     emailrx_new_message
 
     Add a new message to the document list.  Tries to cope with low memory
@@ -2140,7 +2461,6 @@ extern void emailrx_finalise (void)
     0: message dealt with successfully (NB. not necessarily added)
     1: couldn't add message but managed to recover some memory
     2: couldn't add message and couldn't recover memory
--
  */
 
 extern int emailrx_new_message (const unsigned int        size,
@@ -2233,74 +2553,72 @@ no_mem:
       */
 
     if (truncate_doc_list () > 0)    /* was able to free space */
+    {
         return 1;
+    }
     else
+    {
         return 2;
+    }
 }
 
 
 
 
 /* -----------------------------------------------------------------------------
-+
-   emailrx_build_dl_list
+   emailrx_decide_download
 
    Build the list of documents to download given an amount of free space.
 
    Inputs
    free_space: amount of free workspace available in bytes
--
+
+   Returns
+   0: all messages on server dealt with successfully
+   1: not enough space to download all messages; reconnect ASAP
  */
 
-extern list_handle emailrx_build_dl_list (unsigned int free_space)
+extern int  emailrx_decide_download (unsigned int  free_space)
 {
+    int              rc = 0;
     unsigned int     largest_message = 0;
-    list_handle      download_list;
-    list_iterator_t  document_iterator;
+    list_iterator_t  i;
     document_t *     document;
 
 
-    download_list = list_create (free_document);
-    if (download_list == NULL)
-        return NULL;
-
-    list_initialise_iterator (&document_iterator,
+    list_initialise_iterator (&i,
                               document_list);
 
-    document = (document_t *) (document_iterator.reset) (&document_iterator);
-
-    while (!(document_iterator.finished) (&document_iterator))
+    for (document = (document_t *) M_list_reset (i);
+         !M_list_finished (i);
+         document = (document_t *) M_list_next (i))
     {
-        switch (document->add_to_download (download_list,
-                                           free_space,
+        switch (document->add_to_download (free_space,
                                            largest_message))
         {
-            case 0:
-                // added document successfully: continue building download list
+            case 1:
+                // document couldn't be added to download due to lack of memory
+                rc = 1;
                 break;
 
-            case 1:
-                // not enough free space for document: stop creating download
-                // list and make do with what we've already got
-                return download_list;
+            case 2:
+                // not enough free space for whole of document: don't try to add
+                // anything else to the download, just make do with what we've
+                // already got (so we don't interleave documents).
+                return 1;
 
             default:
-                // out of workspace: abandon entire download
-                list_destroy (download_list);
-                return NULL;
+                break;
         }
-
-        document = (document_t *) (document_iterator.next) (&document_iterator);
     }
 
-    return download_list;
+    return rc;
 }
 
 
 
 
 /* -----------------------------------------------------------------------------
-+
    emailrx_need_missing_page_report
 
    Decide whether a missing page report needs to be generated for a document.
@@ -2314,19 +2632,22 @@ extern list_handle emailrx_build_dl_list (unsigned int free_space)
    Returns
    0: missing page report not required
    1: missing page report required
--
  */
 
 extern int emailrx_need_missing_page_report (const document_handle    document)
 {
-    return ((document_t *) document)->need_missing_page_report ();
+    if (((document_t *) document)->need_missing_page_report ())
+    {
+        return 1;
+    }
+
+    return 0;
 }
 
 
 
 
 /* -----------------------------------------------------------------------------
-+
    emailrx_generate_missing_page_report
 
    Generate a missing page report for a document.
@@ -2342,7 +2663,6 @@ extern int emailrx_need_missing_page_report (const document_handle    document)
    Returns
    -1: error
     0: success
--
  */
 
 extern char *  emailrx_generate_missing_page_report (
@@ -2359,24 +2679,47 @@ extern char *  emailrx_generate_missing_page_report (
 
 
 /* -----------------------------------------------------------------------------
-+
+   emailrx_need_printed_page_report
+
+   Decide whether a printed page report is required for a document.
+
+   Inputs
+   document: document to test
+
+   Returns
+   printed page report not required: 0
+   printed page report required:     1
+ */
+
+extern int  emailrx_need_printed_page_report (const document_handle    document)
+{
+    if (((document_t *) document)->need_printed_page_report ())
+    {
+        return 1;
+    }
+
+    return 0;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
    emailrx_printed_page_report
 
-   Decide whether a printed page report needs to be generated for a document,
-   and if so generate it and dump it in a file.
+   Generate a printed page report for a document, dumping it in a file.
 
    Currently assumes that there will never be more than 9999 pages in a single
    document.
 
    Inputs
-   document_info:      document handle as returned by document iterator
-   filename:           name of file to dump printed page report in
+   document: document handle as returned by document iterator
+   filename: name of file to dump printed page report in
+   header:   email message header information
 
    Returns
-   -1: error
-    0: printed page report not required
-    1: printed page report required
--
+   -1: failure
+    0: success
  */
 
 extern int emailrx_printed_page_report (
@@ -2384,50 +2727,42 @@ extern int emailrx_printed_page_report (
                const char *const        filename,
                const NFE_header *const  header)
 {
-    if (header->return_receipt_to.address == NULL)
+    FILE *  file;
+
+    file = fopen (filename,
+                  "w");
+    if (file == NULL)
     {
-        return 0;
+        return -1;
     }
-    else
+
+
+    if (fprintf (file,
+                 "[TOKENISED]\n") < 0)
     {
-        FILE *  file;
-
-        file = fopen (filename,
-                      "w");
-        if (file == NULL)
-        {
-            return -1;
-        }
-
-
-        if (fprintf (file,
-                     "[TOKENISED]\n") < 0)
-        {
-            fclose (file);
-            return -1;
-        }
-
-        if (((document_t *) document)->printed_page_report (file,
-                                                            *header) != 0)
-        {
-            fclose (file);
-            return -1;
-        }
-
-        fprintf (file,
-                 "[END]\n");
-
         fclose (file);
-
-        return 1;
+        return -1;
     }
+
+    if (((document_t *) document)->printed_page_report (file,
+                                                        *header) != 0)
+    {
+        fclose (file);
+        return -1;
+    }
+
+    fprintf (file,
+             "[END]\n");
+
+    fclose (file);
+
+    return 0;
 }
 
 
 
 
 /* -----------------------------------------------------------------------------
-+
    emailrx_cover_sheet
 
    Decide if some sort of cover sheet needs to be printed out for a document.
@@ -2446,7 +2781,6 @@ extern int emailrx_printed_page_report (
    -1: error
     0: cover sheet not required
     1: cover sheet required
--
  */
 
 extern int emailrx_cover_sheet (const document_handle    document,
@@ -2478,14 +2812,12 @@ extern int emailrx_cover_sheet (const document_handle    document,
 
 
 /* -----------------------------------------------------------------------------
-+
    emailrx_destory_dl_list
 
    Destroy a document list.
 
    Inputs
    download_list: the handle of the list to destroy
--
  */
 
 extern void emailrx_destroy_dl_list (list_handle download_list)
@@ -2497,7 +2829,6 @@ extern void emailrx_destroy_dl_list (list_handle download_list)
 
 
 /* -----------------------------------------------------------------------------
-+
    emailrx_get_doc_list
 
    Get the list handle of the document list.
@@ -2515,7 +2846,6 @@ extern list_handle emailrx_get_doc_list (void)
 
 
 /* -----------------------------------------------------------------------------
-+
    emailrx_get_doc_msg_list
 
    Return the message list handle for a document.
@@ -2525,7 +2855,6 @@ extern list_handle emailrx_get_doc_list (void)
 
    Returns
    list handle
--
  */
 
 extern list_handle emailrx_get_doc_msg_list (
@@ -2540,7 +2869,6 @@ extern list_handle emailrx_get_doc_msg_list (
 
 
 /* -----------------------------------------------------------------------------
-+
    emailrx_check_supported
 
    Given a message class and netfax message class for an entity, decide if
@@ -2563,7 +2891,6 @@ extern list_handle emailrx_get_doc_msg_list (
    not supported at all: EmailSupport_None
    partially supported : EmailSupport_Partial
    fully supported:      EmaiLSupport_Full
--
  */
 
 extern int emailrx_check_supported (const NFE_msg_class     message_class,
@@ -2623,7 +2950,6 @@ extern int emailrx_check_supported (const NFE_msg_class     message_class,
 
 
 /* -----------------------------------------------------------------------------
-+
    emailrx_construct_full_address
 
    Combine a real name and email address into a single 0 terminated string of
@@ -2642,7 +2968,6 @@ extern int emailrx_check_supported (const NFE_msg_class     message_class,
    Returns
    success: pointer to malloc'd from string (client must free)
    failure: NULL
--
  */
 
 extern char *emailrx_construct_full_address (const NFE_address *const  address,
@@ -2723,7 +3048,6 @@ extern char *emailrx_construct_full_address (const NFE_address *const  address,
 
 
 /* -----------------------------------------------------------------------------
-+
    emailrx_generate_report_from_message
 
    Generate a report from a message token and up to four parameters.
@@ -2738,7 +3062,6 @@ extern char *emailrx_construct_full_address (const NFE_address *const  address,
    Returns
    success: pointer to report - client's responsibility to free
    failure: NULL
--
  */
 
 extern char *emailrx_generate_report_from_message (char *  message_token,
@@ -2814,13 +3137,138 @@ extern char *emailrx_generate_report_from_message (char *  message_token,
 
 
 
+/* -----------------------------------------------------------------------------
+   emailrx_message_downloaded
+
+   Mark a message as downloaded.
+
+   Inputs
+   message: pointer to message
+ */
+
+extern void  emailrx_message_downloaded (message_t *const  message)
+{
+    message->flags.bits.downloaded      = 1;
+    message->flags.bits.download        = 0;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   emailrx_message_printed
+
+   Mark a message as printed.
+
+   Inputs
+   message: pointer to message
+ */
+
+extern void  emailrx_message_printed (message_t  *const  message)
+{
+    message->flags.bits.printing     = 0;
+    message->flags.bits.printed      = 1;
+    message->flags.bits.just_printed = 1;
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   emailrx_tidy
+
+   Tidy the document list: clears temporary flags and deletes
+   completed documents from the list (NB. not from the server).
+ */
+
+extern void  emailrx_tidy (void)
+{
+    document_t *     document;
+    list_iterator_t  i;
+
+
+    list_initialise_iterator (&i,
+                              document_list);
+
+    for (document = (document_t *) M_list_reset (i);
+         !M_list_finished (i);
+         document = (document_t *) M_list_next (i))
+    {
+        document->tidy ();
+    }
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   emailrx_document_requires_printing
+
+   Decide whether any printing needs to be done for a document at this moment.
+
+   Returns:
+   0: no printing required
+   1: printing required
+ */
+
+extern int  emailrx_document_requires_printing (document_handle  document)
+{
+    return (int) ((document_t *) document)->requires_printing ();
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   emailrx_is_document_new
+
+   Determine whether this document is new.
+
+   Returns:
+   0: document is old
+   1: document is new
+ */
+
+extern int  emailrx_is_document_new (document_handle  document)
+{
+    return (int) ((document_t *) document)->is_new ();
+}
+
+
+
+
+/* -----------------------------------------------------------------------------
+   emailrx_get_number_messages
+
+   Get the number of messages in a document whose flags are in a specified
+   state.
+
+   Inputs
+   document:    document handle
+   flags_mask:  mask to apply to flags before checking in they match
+   flags_match: flags to match
+
+   Returns
+   number of messages
+ */
+
+extern int  emailrx_get_number_messages (document_handle     document,
+                                         const unsigned int  flags_mask,
+                                         const unsigned int  flags_match)
+{
+    return ((document_t *) document)->get_number_messages (flags_mask,
+                                                           flags_match);
+}
+
+
+
+
 }    // end of C interface functions
 
 
 
 
 /* -----------------------------------------------------------------------------
-+
    create_doc
 
    Create a new document of the appropriate type according to the message
@@ -2832,7 +3280,6 @@ extern char *emailrx_generate_report_from_message (char *  message_token,
    Returns
    success: pointer to document object
    failure: NULL
--
  */
 
 static document_t *create_doc (const NFE_header &  header)
@@ -2845,13 +3292,15 @@ static document_t *create_doc (const NFE_header &  header)
     {
         case NFE_MC_NETFAX_DATA:
             if (header.netfax_msg_class & NFE_NFMC_FAX)
+            {
                 document = new netfax_fax_document_t (header,
                                                       success);
-
+            }
             else
+            {
                 document = new netfax_document_t (header,
                                                   success);
-
+            }
             break;
 
         default:
@@ -2873,7 +3322,6 @@ static document_t *create_doc (const NFE_header &  header)
 
 
 /* -----------------------------------------------------------------------------
-+
    match_doc
 
    Document matching routine for document list searching.
@@ -2885,7 +3333,6 @@ static document_t *create_doc (const NFE_header &  header)
    Returns
    1: match
    0: no match
--
  */
 
 static int match_doc (void *const  data1,
@@ -2999,7 +3446,6 @@ static int compare_page_nums (void *const  data1,
 
 
 /* -----------------------------------------------------------------------------
-+
    free_document
 
    Deallocate storage for a document when a document is removed
@@ -3007,7 +3453,6 @@ static int compare_page_nums (void *const  data1,
 
    Inputs:
    document: pointer to document
--
  */
 
 static void free_document (void *  document)
@@ -3018,7 +3463,6 @@ static void free_document (void *  document)
 
 
 /* -----------------------------------------------------------------------------
-+
    free_message
 
    Deallocate storage for message information when a message is removed
@@ -3026,7 +3470,6 @@ static void free_document (void *  document)
 
    Inputs
    message_info: pointer to message information
--
  */
 
 static void free_message (void *  message)
@@ -3038,7 +3481,6 @@ static void free_message (void *  message)
 
 
 /* -----------------------------------------------------------------------------
-+
    truncate_doc_list
 
    Remove approximately 2/3 of the document list.  Used as an emergency
@@ -3049,7 +3491,6 @@ static void free_message (void *  message)
    Returns
    failure: -1 (not able to recover any memory)
    success: number messages in truncated document list
--
  */
 
 static int truncate_doc_list (void)
@@ -3067,7 +3508,8 @@ static int truncate_doc_list (void)
 
     while (!(document_iterator.finished) (&document_iterator))
     {
-        message_count += document->get_number_messages ();
+        message_count += document->get_number_messages (0,
+                                                        0);
 
         document = (document_t *) (document_iterator.next) (&document_iterator);
     }
@@ -3085,7 +3527,8 @@ static int truncate_doc_list (void)
 
     while (!(document_iterator.finished) (&document_iterator))
     {
-        message_count += document->get_number_messages ();
+        message_count += document->get_number_messages (0,
+                                                        0);
         if (message_count > one_third_number_messages)
             break;
 
@@ -3106,7 +3549,6 @@ static int truncate_doc_list (void)
 
 
 /* -----------------------------------------------------------------------------
-+
    check_free_space
 
    Check if there is enough free space to add a message to the download list.
@@ -3119,7 +3561,6 @@ static int truncate_doc_list (void)
    Returns
    true:  enough free space to add message
    false: not enough free space to add message
--
  */
 
 static bool check_free_space (const unsigned int  message_size,
@@ -3129,9 +3570,13 @@ static bool check_free_space (const unsigned int  message_size,
     unsigned int  temp_largest_message;
 
     if (message_size > largest_message)
+    {
         temp_largest_message = message_size;
+    }
     else
+    {
         temp_largest_message = largest_message;
+    }
 
     return (bool) (free_space - message_size >
                       (unsigned int) ((double) temp_largest_message * 0.75));
@@ -3141,7 +3586,6 @@ static bool check_free_space (const unsigned int  message_size,
 
 
 /* -----------------------------------------------------------------------------
-+
    update_free_space
 
    Update the amount of free space given the size of a message that has been
@@ -3155,7 +3599,6 @@ static bool check_free_space (const unsigned int  message_size,
    Outputs
    free_space:      free space after adding message
    largest_message: possibly updated largest message
--
  */
 
 static void update_free_space (const unsigned int  message_size,
@@ -3172,7 +3615,6 @@ static void update_free_space (const unsigned int  message_size,
 
 
 /* -----------------------------------------------------------------------------
-+
    add_message_common
 
    Common code used when adding a new message to a document regardless of the
@@ -3185,17 +3627,18 @@ static void update_free_space (const unsigned int  message_size,
 
    Returns
    success: pointer to message structure
-   failure: NULL
--
+   failure: NULL-
  */
 
-static message_t *add_message_common (const unsigned int  size,
-                                      const char *const   unique_id)
+static message_t *  add_message_common (const unsigned int  size,
+                                        const char *const   unique_id)
 {
     /* Create new message information structure */
     message_t *  message = (message_t *) malloc (sizeof (message_t));
     if (message == NULL)
+    {
         return NULL;
+    }
 
     message->size = size;
 
@@ -3206,6 +3649,7 @@ static message_t *add_message_common (const unsigned int  size,
         return NULL;
     }
     strcpy (message->unique_id, unique_id);
+    message->flags.value = 0;
 
     return message;
 }
@@ -3217,7 +3661,6 @@ static message_t *add_message_common (const unsigned int  size,
 void document_t::dump_to_file (FILE *const  file)
 {
     fprintf (file, "========================================\n");
-    fprintf (file, "Document size: %u\n", document_size);
     fprintf (file, "Message class: %u\n", message_class);
 }
 
@@ -3234,23 +3677,24 @@ void netfax_fax_document_t::dump_to_file (FILE *const  file)
     netfax_document_t::dump_to_file (file);
 
     fprintf (file, "Split download: %s\n",
-             flags.split_download ? "Yes" : "No");
+             nf_fax_flags.split_download ? "Yes" : "No");
 
     fprintf (file, "Connection count: %u\n", connection_count);
     fprintf (file, "Total number pages: %u\n", total_number_pages);
-    fprintf (file, "Number pages: %u\n", number_pages);
-    fprintf (file, "Number pages remaining: %u\n", number_pages_remaining);
+    fprintf (file, "Number pages seen: %u\n", get_number_pages (0, 0));
     fprintf (file, "Exact number pages: %s\n",
-             flags.exact_number_pages ? "Yes" : "No");
+             nf_fax_flags.exact_number_pages ? "Yes" : "No");
 
     fprintf (file, "Pages seen:");
-    for (int i = 0; i < number_pages; ++i)
+#if 0
+    for (int i = 0; i < total_number_pages; ++i)
     {
         if (page_seen[i] == PageState_Seen)
         {
             fprintf (file, " %d", i + 1);
         }
     }
+#endif
 
     fprintf (file, "\n\n");
 }
