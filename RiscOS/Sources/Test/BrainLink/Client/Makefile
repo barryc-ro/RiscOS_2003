@@ -155,6 +155,7 @@ resources:
 	${CP} LocalRes:!Run        ${RESAPP}.!Run       ${CPFLAGS}
 	${CP} LocalRes:!Sprites22  ${RESAPP}.!Sprites22 ${CPFLAGS}
 	${CP} LocalRes:Res         ${RESAPP}.Res        ${CPFLAGS}
+	${CP} LocalRes:Messages    ${RESAPP}.Messages   ${CPFLAGS}
 	@echo ${COMPONENT}: resource files copied.
 
 install: all
@@ -165,6 +166,7 @@ install: all
 	${CP} LocalRes:Res        ${INSTALLDIR}.Res        ${CPFLAGS}
 	${CP} LocalRes:!Help      ${INSTALLDIR}.!Help      ${CPFLAGS}
 	${CP} ${APP}              ${INSTALLDIR}.!RunImage  ${CPFLAGS}
+	${CP} LocalRes:Messages   ${INSTALLDIR}.Messages   ${CPFLAGS}
 	@echo ${COMPONENT}: installed to ${INSTALLDIR}
 
 # -----------------------------------------------------------------------------
