@@ -10,6 +10,7 @@
 #				o${BUILD}
 # 1999-02-01    SBF             Added STB3 targets, plus call to StripDepnd tool
 # 1999-02-02    NCE             Added TestCard BASIC Prog
+# 1999-02-04    SBF             Added wipe rule to remove o${BUILD} on clean all
 
 
 #
@@ -84,7 +85,8 @@ BOCA      = ${BASEOBJS} ${Module} ${OM}.FaultCodes ${OM}.SCardTest ${OM}.storedi
 Morris2   = ${BASEOBJS} ${Applic} ${OM}.FlashCheck ${OM}.Serial ${OM}.bufman ${OM}.serial_lib \
             ${OM}.CheckIC ${OM}.serflash ${OM}.ledtest
             
-STB3      = ${BASEOBJS} ${Applic} ${OM}.serial_lib ${OM}.IRRemote ${OM}.Graphics \
+STB3      = ${BASEOBJS} ${Applic} ${OM}.serial_lib ${OM}.IRRemote ${OM}.MouseTest
+            ${OM}.Graphics \
 
 
 OBJS      = ${STB3}
@@ -116,6 +118,7 @@ clean:
 
 clean_all: clean
 	${WIPE}	${APP}	${WFLAGS}
+        ${WIPE} o${BUILD} ${WFLAGS}
 	@echo ${COMPONENT}: cleaned all
 
 install:
