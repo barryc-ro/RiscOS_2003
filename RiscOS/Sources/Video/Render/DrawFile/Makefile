@@ -88,13 +88,13 @@ resources: resources-${CMDHELP}
 
 resources_common:
         ${MKDIR} ${RESDIR}.${COMPONENT}
-        ${CP} Resources.Messages       ${RESDIR}.${COMPONENT}.Messages       ${CPFLAGS}
+        ${CP} LocalRes:Messages       ${RESDIR}.${COMPONENT}.Messages       ${CPFLAGS}
 
 resources-None: resources_common
 	@
 
 resources-: resources_common
-	print Resources.CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
+	print LocalRes:CmdHelp { >> ${RESDIR}.${COMPONENT}.Messages }
 
 #
 # ROM target (re-linked at ROM Image build time)
@@ -154,8 +154,8 @@ RM.310.DrawFile: ${OBJS_310} ${RESOURCES310} ${OSLIB} CLib:o.Stubs ${ASMUTILS}
 
 # Static dependencies:
 
-o.Message310: Resources.Message310
-   ResGen Messages o.Message310 Resources.Message310 Resources.DrawFile.Messages
+o.Message310: LocalRes:Message310
+   ResGen Messages o.Message310 LocalRes:Message310 Resources.DrawFile.Messages
 
 #General rules
 .SUFFIXES:      .cmhg .h .c .debug .o .oSA .Resources .s .asm .i .def
