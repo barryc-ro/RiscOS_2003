@@ -53,10 +53,10 @@ _swix (OHCIEmulator_ReleaseDeviceVector, _INR(1,2), FUNCTION, WS)
 
 #ifdef ALBA2
 #define DevNo_USB 30
-static volatile int* const ohci_base = (volatile int*) 0xf9020000;
+static volatile int*ohci_base = (volatile int*) 0x80020000;
 #else
 #define DevNo_USB 34 /* L7205 */
-static volatile int* const ohci_base = (volatile int*) 0xf99f6000;
+static volatile int*ohci_base = (volatile int*) 0x88000000;
 #endif
 
 #define OREAD(ADDRESS) (ohci_base[(ADDRESS) / 4])
@@ -137,6 +137,28 @@ static void* vtophys (volatile void* v)
 
 
     return block.physical;
+}
+
+static void* phystov (volatile void* p)
+{
+    struct {
+        uint32_t    page;
+        void*       logical;
+        void*       physical;
+    } block;
+    block.physical = (void *) p;
+
+    _swix (OS_Memory,
+
+        _INR (0, 2),
+
+        (1<<10) | (1<<12),
+        &block,
+        1
+        );
+
+
+    return block.logical;
 }
 
 
@@ -287,6 +309,12 @@ _kernel_oserror *module_init(const char *cmd_tail, int podule_base, void *pw)
     dprintf (("Module", "Starting Module\n"));
 
     callx_init (pw);
+
+    e = _swix(OS_Memory, _INR(0,2)|_OUT(3), 13, ohci_base, 256, &ohci_base);
+#ifndef ALBA2
+    if (e) { ohci_base = (volatile int *)0xf99f6000; e = 0; }
+#endif
+    if (e) return e;
 
     /* HCCA must be 256 byte aligned */
     hccap = (OHCI_Hcca*) (((uintptr_t) &hcca[1]) & ~0xff);
@@ -655,8 +683,7 @@ _kernel_oserror* set_config_cb (_kernel_swi_regs* r, void* pw, void* data)
     NOTUSED(pw);
     NOTUSED(data);
 
-    edp[2].head.pointer.normal = tda[2];
-    edp[2].skip = 0;
+    edp[2].skip = 1;
 
     tdp[2].dataToggle = 2; /* force DATA0 */
     tdp[2].errorCount = 0;
@@ -671,6 +698,9 @@ _kernel_oserror* set_config_cb (_kernel_swi_regs* r, void* pw, void* data)
     tdp[3].conditionCode = OHCI_CC_NOT_ACCESSED;
     tdp[3].errorCount = 0;
 
+    edp[2].head.pointer.normal = tda[2];
+    edp[2].skip = 0;
+
     w = OREAD(OHCI_COMMAND_STATUS);
     OWRITE(OHCI_COMMAND_STATUS, w | OHCI_CLF);
 
@@ -684,8 +714,7 @@ _kernel_oserror* set_address_cb (_kernel_swi_regs* r, void* pw, void* data)
     NOTUSED(pw);
     NOTUSED(data);
 
-    edp[1].head.pointer.normal = tda[1];
-    edp[1].skip = 0;
+    edp[1].skip = 1;
 
     tdp[1].nextTD = tda[3];
     tdp[1].currentBuffer = vtophys (&setAddress);
@@ -699,6 +728,9 @@ _kernel_oserror* set_address_cb (_kernel_swi_regs* r, void* pw, void* data)
     tdp[3].dataToggle = 3; /* force DATA1 */
     tdp[3].conditionCode = OHCI_CC_NOT_ACCESSED;
     tdp[3].errorCount = 0;
+
+    edp[1].head.pointer.normal = tda[1];
+    edp[1].skip = 0;
 
     w = OREAD(OHCI_COMMAND_STATUS);
     OWRITE(OHCI_COMMAND_STATUS, w | OHCI_CLF);
@@ -783,6 +815,10 @@ static void read_mouse_data (void)
     relx += mouse_data.relx;
     rely -= mouse_data.rely;
     data_received++;
+    _swix(OS_CallAVector, _INR(0,3) | _IN(9),
+                          PointerReason_Report, PointerDevice_USB,
+                          mouse_data.relx, -mouse_data.rely,
+                          PointerV);
     dprintf(("",
      "%d, mouse_data.rely = %d, relx = %d, rely = %d, buttons = %x\n",
         mouse_data.relx, mouse_data.rely, relx, rely, mouse_data.buttons));
@@ -851,55 +887,70 @@ _kernel_oserror *usb_irq_handler(_kernel_swi_regs *r, void *pw)
         OWRITE(OHCI_INTERRUPT_STATUS, OHCI_WDH);
         dprintf(("", "writeback done, condition = %d\n",
             tdp[0].conditionCode));
-        switch (port_state) {
-        case port_default:
-                if (tdp[3].conditionCode == OHCI_CC_NO_ERROR &&
-                    port_state == port_default
-                ) {
-                    port_state = port_address;
-                    /* configure device */
-                    callx_add_callafter (USB_DELAY_CONFIG, set_config_cb, 0);
-                }
-            break;
-        case port_address:
-            if (tdp[3].conditionCode == OHCI_CC_NO_ERROR &&
-                port_state == port_address
-            ) {
-                port_state = port_configured;
-                /* activate keyboard operation */
-                edp[0].skip = 0;
-                edp[0].head.flags.halted = 0;
-                tdp[0].conditionCode = OHCI_CC_NOT_ACCESSED;
-
-                /* select ourselves as a pointer */
-                callx_add_callback (pointer_cb, (void*) PointerDevice_USB);
-            }
-            break;
-        case port_configured:
-
+        while (dh)
+        {
             /* transfer 0 is for the report interrupt */
-            if (dh == tda[0] || (dh == tda[2] && tdp[2].nextTD == tda[0])) {
-                read_key_data ();
+            if (dh == tda[0]) {
+                if (tdp[0].conditionCode == OHCI_CC_NO_ERROR)
+                    read_key_data ();
                 tdp[0].conditionCode = OHCI_CC_NOT_ACCESSED;
                 tdp[0].currentBuffer = (char*) vtophys (&data);
+                edp[0].skip = 1;
                 edp[0].tailPointer = 0;
                 edp[0].head.pointer.normal = tda[0];
+                if (port_state == port_configured)
+                    edp[0].skip = 0;
             }
 
             /* transfer 5 is for the mouse */
-            if (dh == tda[5] || (dh == tda[2] && tdp[2].nextTD == tda[5])) {
-                read_mouse_data ();
+            else if (dh == tda[5]) {
+                if (tdp[5].conditionCode == OHCI_CC_NO_ERROR)
+                    read_mouse_data ();
                 tdp[5].conditionCode = OHCI_CC_NOT_ACCESSED;
                 tdp[5].currentBuffer = (char*) vtophys (&mouse_data);
+                edp[3].skip = 1;
                 edp[3].tailPointer = 0;
                 edp[3].head.pointer.normal = tda[5];
+                if (port_state == port_configured)
+                    edp[3].skip = 0;
             }
 
             /* transfer 2 is for the *usbrequest (or LEDs) */
-            if (dh == tda[2] || (dh == tda[0] && tdp[0].nextTD == tda[2]))
-                request_complete = 1;
+            else if (dh == tda[2]) {
+                if (tdp[2].conditionCode == OHCI_CC_NO_ERROR)
+                    request_complete = 1;
+            }
+            /* transfer 3 is for address or configuration setup */
+            else if (dh == tda[3]) {
+                switch (port_state) {
+                case port_default:
+                    if (tdp[3].conditionCode == OHCI_CC_NO_ERROR) {
+                        port_state = port_address;
+                        /* configure device */
+                        callx_add_callafter (USB_DELAY_CONFIG, set_config_cb, 0);
+                    }
+                    break;
+                case port_address:
+                    if (tdp[3].conditionCode == OHCI_CC_NO_ERROR) {
+                        port_state = port_configured;
+                        /* activate keyboard operation */
+                        tdp[0].conditionCode = OHCI_CC_NOT_ACCESSED;
+                        edp[0].head.flags.halted = 0;
+                        edp[0].skip = 0;
+                        /* activate mouse operation */
+                        tdp[5].conditionCode = OHCI_CC_NOT_ACCESSED;
+                        edp[3].head.flags.halted = 0;
+                        edp[3].skip = 0;
 
-            break;
+                        /* select ourselves as a pointer */
+                        callx_add_callback (pointer_cb, (void*) PointerDevice_USB);
+                    }
+                    break;
+                }
+            }
+
+            dh = phystov(dh);
+            dh = dh->nextTD;
         }
     }
 
@@ -926,6 +977,7 @@ _kernel_oserror *usb_irq_handler(_kernel_swi_regs *r, void *pw)
 
                 port_state = port_detached;
                 edp[0].skip = 1;
+                edp[3].skip = 1;
             }
 
 
@@ -940,6 +992,8 @@ _kernel_oserror *usb_irq_handler(_kernel_swi_regs *r, void *pw)
             tdp[1].conditionCode = OHCI_CC_NOT_ACCESSED;
             tdp[2].conditionCode = OHCI_CC_NOT_ACCESSED;
             tdp[3].conditionCode = OHCI_CC_NOT_ACCESSED;
+            tdp[4].conditionCode = OHCI_CC_NOT_ACCESSED;
+            tdp[5].conditionCode = OHCI_CC_NOT_ACCESSED;
             port_state = port_default;
             callx_add_callafter (USB_DELAY_ADDRESS, set_address_cb, 0);
 
