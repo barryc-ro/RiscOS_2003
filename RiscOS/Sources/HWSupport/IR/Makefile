@@ -11,7 +11,7 @@
 #
 # Generic options:
 #
-MKDIR   = cdir
+MKDIR   = do mkdir -p
 AS      = objasm
 CC      = cc
 CMHG    = cmhg
@@ -70,6 +70,7 @@ export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
 
 install: rm.IR
+        ${MKDIR} ${INSTDIR}
         ${CP} rm.IR ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: ram module installed
 
