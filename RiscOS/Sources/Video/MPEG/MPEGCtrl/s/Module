@@ -41,6 +41,9 @@
 ; 10-Mar-97  TMD  0.42		Don't do MODE12 on the error from (De)RegisterProgramElementHandler SWIs
 ; 16-May-97  TMD  0.43		(Conditionally) support MPEG-2 Program Streams
 ; 13-Oct-98  TMD  0.44		Added MPEGControl_SetAudioParameters SWI.
+; 18-Nov-98  TMD  0.45		Added count of how many misaligned start codes we got
+; 20-Nov-98  TMD  0.46		Make SelectProgram do a ResetStream, and stop sending data through if program
+;				 zero is selected.
 ;
 
         LEADR   Module_LoadAddr
@@ -109,6 +112,8 @@ CSH_LastTime            #       4                       ; last time data was rec
 CSH_DataReceived        #       4                       ; amount of data received
 CSH_DataReturned	#	4			; amount of data returned
 CSH_EndOfStreamReceived	#	4			; 0 normally, 1 when end of stream code has been received
+CSH_SyncLosses		#	4			; number of times system stream had discontinuity
+CSH_TooShortPackets	#	4			; number of packets whose header exceeded the packet length
 
  [ DataRateStats
 DataCountPeriod         *       300                     ; seconds in 1 period
@@ -197,7 +202,7 @@ Mod_Title
         =       "MPEGControl", 0
 
 Mod_HelpStr
-        =       "MPEGControl", TAB, "0.44 (13 Oct 1998)"
+        =       "MPEGControl", TAB, "0.46 (20 Nov 1998)"
  [ OnlyAllowSystemStreams
 	=	" (System streams only version)"
  ]
@@ -405,6 +410,8 @@ OpenStream Entry "r0-r2"
         STR     r0, [r1, #CSH_DataReceived]
 	STR	r0, [r1, #CSH_DataReturned]
 	STR	r0, [r1, #CSH_EndOfStreamReceived]	; haven't had end of stream marker yet
+	STR	r0, [r1, #CSH_SyncLosses]		; no loss of system stream sync yet
+	STR	r0, [r1, #CSH_TooShortPackets]		; no short packets yet
  [ CoroutineStackCopied
 	STR	r0, [r1, #CSH_CoroutineStackCopy]	; no block allocated yet
 	STR	r0, [r1, #CSH_CoroutineStackBlockSize]	; no space in it
@@ -666,7 +673,9 @@ debug   SETL    {FALSE}
         ADD     r4, r3, r4
 
         LDR     lr, [r1, #CSH_StreamFlags]              ; if not in the process of closing the stream
-        TST     lr, #StreamFlags_StreamClosing          ; then call the coroutines to parse the buffer
+							; and haven't selected program zero (no program)
+        TST     lr, #StreamFlags_StreamClosing :OR: StreamFlags_NoProgramSelected
+						        ; then call the coroutines to parse the buffer
         BLEQ    CallCoroutines                          ; otherwise effectively junk any data in the buffer
 
         MOV     r3, pc
@@ -767,8 +776,16 @@ CloseStream Entry "r0"
 ;
 ; out:	-
 
-SelectProgram ROUT
-	MOV	pc, lr
+SelectProgram Entry "r0-r3"
+	LDR	r0, [r1, #CSH_StreamFlags]
+	TEQ	r2, #0
+	ORREQ	r0, r0, #StreamFlags_NoProgramSelected ; if zero then don't allow any data through
+	BICNE	r0, r0, #StreamFlags_NoProgramSelected ; else allow anything through
+						       ; (we only accept stream codes &C0 and &E0 anyway)
+	STR	r0, [r1, #CSH_StreamFlags]
+	AND	r0, r0, #StreamFlags_VideoPresent :OR: StreamFlags_AudioPresent
+	BL	ResetStream
+	EXIT
 
 ; **************************************************************************
 ;
@@ -1177,7 +1194,7 @@ vidaudpacketcontinue
         BL      sendvidaudblock
         MOV     r3, r7                                  ; start from end of video block data
 errorcontinue
-        BL      getnextstartcode
+        BL      getnextstartcodecheckloss
         B       notallvideo
 
  [ SupportMPEG2PS
@@ -1221,8 +1238,11 @@ badlength
         Push    "r0"
         MOV     r0, r11                                 ; r0 -> packet
         BL      FreePackets                             ; free it (possibly also freeing buffer)
+	LDR	r0, [r1, #CSH_TooShortPackets]		; increment count of too-short packets
+	ADD	r0, r0, #1
+	STR	r0, [r1, #CSH_TooShortPackets]
         Pull    "r0"
-        B       errorcontinue
+        B       errorcontinue				; will typically cause a loss of sync too
  |
 badlength
         SWI     XOS_WriteI + 22
@@ -1353,8 +1373,16 @@ packettoskip
         ORR     r6, r7, r6, LSL #8      ; r6 = length to go
 
 	BL	skipbytes
-        BL      getnextstartcode
+        BL      getnextstartcodecheckloss
         B       notallvideo
+
+getnextstartcodecheckloss Entry
+	BL	getnextstartcode
+	TEQ	r8, #0			; did we find the next start code straight after
+	LDRNE	r8, [r1, #CSH_SyncLosses] ; if not, increment no. of sync losses
+	ADDNE	r8, r8, #1
+	STRNE	r8, [r1, #CSH_SyncLosses]
+	EXIT
 
 skipbytes Entry
 10
@@ -1366,9 +1394,20 @@ skipbytes Entry
         BL      nextbuffer
         B       %BT10
 
+; getnextstartcode searches for the next start code (ie 2 or more 00 bytes followed by 01 xx)
+; On exit:
+;	r7 = xx code
+;	r8 = 0 => found the start code as first thing
+;	     1 => found other stuff first
+
 getnextstartcode
         Push    "lr"
+	MOVS	r8, #0			; indicate we found start code straight away (NB may be
+					; more than two leading 00 bytes, but this is valid)
 getnextstartcodeloop
+	MOVNE	r8, #1			; don't execute this first time thru, but all branches
+					; to here are with NE set, so indicate didn't find start code
+					; straight away
         BL      getbyte                 ; look for 1st zero of start code
         TEQ     r7, #0
         BNE     getnextstartcodeloop
@@ -1701,6 +1740,16 @@ CtrlInfo_Code Entry
         LDR     r0, [r1, #CSH_DataReturned]
         BL      DecimalOutput
         DLINE   ""
+
+	DLINE	"Number of sync losses = ", cc
+	LDR	r0, [r1, #CSH_SyncLosses]
+	BL	DecimalOutput
+	DLINE	""
+
+	DLINE	"Number of short packets = ", cc
+	LDR	r0, [r1, #CSH_TooShortPackets]
+	BL	DecimalOutput
+	DLINE	""
 
         CLRV
         EXIT
