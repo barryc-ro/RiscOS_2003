@@ -94,6 +94,7 @@ translate: dirs
         ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.MA.badurl -o ${RESAPP}.HTML.MA.badurl
         ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.MA.badurldbox -o ${RESAPP}.HTML.MA.badurldbox
         ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.MA.connect -o ${RESAPP}.HTML.MA.connect
+	${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.MAD.connect -o ${RESAPP}.HTML.MAD.connect
         ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.MA.correct -o ${RESAPP}.HTML.MA.correct
         ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.MA.damaged -o ${RESAPP}.HTML.MA.damaged
         ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.MA.invalid -o ${RESAPP}.HTML.MA.invalid
@@ -110,7 +111,6 @@ translate: dirs
         ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.Setup.Acknow -o ${RESAPP}.HTML.Setup.Acknow
         ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.Setup.BSD -o ${RESAPP}.HTML.Setup.BSD
         ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.Setup.IntroWel -o ${RESAPP}.HTML.Setup.IntroWel
-	${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.SetupD.IntroWel -o ${RESAPP}.HTML.SetupD.IntroWel
         ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.Setup.Options -o ${RESAPP}.HTML.Setup.Options
         ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.Setup.Printing -o ${RESAPP}.HTML.Setup.Printing
         ${TRANSLATE} $(TRANSFLAGS) -m ${MAPPINGS} -i TranslateRes:$(APP).HTML.Setup.Printing2 -o ${RESAPP}.HTML.Setup.Printing2
