@@ -74,6 +74,7 @@ OBJS = \
  o.quits \
  o.output \
  o.serial_lib \
+ o.buffering \
 
 OBJSZ = \
  oz.debug \
@@ -81,6 +82,7 @@ OBJSZ = \
  oz.quits \
  oz.output \
  oz.serial_lib \
+ oz.buffering \
 
 LIBS = \
  ${PDEBUG} \
