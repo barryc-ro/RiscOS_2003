@@ -52,21 +52,6 @@ static int hotlist_count = 0;
 
 /* ---------------------------------------------------------------------- */
 
-static char *xfgets_without_nl(FILE *in)
-{
-    char buffer[1024];
-    int len;
-
-    if (fgets(buffer, sizeof(buffer), in) == NULL)
-	return NULL;
-
-    len = strlen(buffer);
-    if (len > 0 && buffer[len-1] == '\n')
-	buffer[len-1] = '\0';
-
-    return len <= 1 ? NULL : strdup(buffer);
-}
-
 static char *title_or_url(const hotlist_item *item)
 {
     return item->title ? item->title : item->url;
@@ -335,7 +320,7 @@ static void hotlist__read_header(FILE *in, hotlist_info *info)
 
     while (!feof(in) && !ferror(in))
     {
-	char *s = xfgets_without_nl(in);
+	char *s = xfgets(in);
 	if (s[0] != '#')
 	{
 	    if (strncmp(s, "Format:", sizeof("Format:")-1) == 0)
@@ -374,15 +359,15 @@ static void hotlist__read(FILE *in)
 	char *url, *title;
 	int i, last_used = 0;
 
-	url = xfgets_without_nl(in);
-	title = xfgets_without_nl(in);
+	url = xfgets(in);
+	title = xfgets(in);
 
 	if (info.record_size >= 3)
-	    mm_free(xfgets_without_nl(in));
+	    fskipline(in);
 
 	if (info.record_size >= 4)
 	{
-	    char *s = xfgets_without_nl(in);
+	    char *s = xfgets(in);
 	    last_used = (time_t)strtoul(s, NULL, 16);
 	    mm_free(s);
 	}
@@ -392,7 +377,7 @@ static void hotlist__read(FILE *in)
 
 	/* skip any extra unused records */
 	for (i = 4; i < info.record_size; i++)
-	    mm_free(xfgets_without_nl(in));
+	    fskipline(in);
     }
     hotlist__sort();
 }

@@ -92,6 +92,11 @@
 #include "hierprof/HierProf.h"
 #endif
 
+#ifdef Trace_TRACE
+#include "Trace/Trace.h"
+#include "Trace/Stacker.h"
+#endif
+
 #ifndef NEW_WEBIMAGE
 #define NEW_WEBIMAGE	1
 #endif
@@ -1002,7 +1007,10 @@ int frontend_view_visit(fe_view v, be_doc doc, char *url, char *title)
 	else
 	{
 	    /* reset all values if NCBROWSERMODE header not set */
-	    v->scrolling = fe_scrolling_AUTO;
+	    /* for top level only reset to no scrolling */
+	    if (v->parent == NULL)
+		v->scrolling = fe_scrolling_NO; 
+
 	    v->fast_load = FALSE;
 	    v->dont_add_to_history = FALSE;
 	    v->transient_position = fe_position_UNSET;
@@ -1146,12 +1154,13 @@ fe_view fe_dbox_view(const char *name)
     info.scrolling = fe_scrolling_NO;
     info.margin = margin_box;
 
-    adjust_box_for_toolbar(&info.margin);
+/*   adjust_box_for_toolbar(&info.margin); */
 
     if (use_toolbox)
 	tb_menu_hide();
 #if 1
     box = screen_box;
+    box.y1 = box.y0;
 #else
     if (strcasecomp(name, TARGET_PASSWORD) == 0 ||
 	strcasecomp(name, TARGET_DBOX) == 0)
@@ -1559,7 +1568,12 @@ static int fe_transient_set_size(fe_view v)
     }
 
     case fe_position_FULLSCREEN:
-	/* do nothing */
+	v->box = screen_box;
+	if (!config_display_control_top)
+	    v->margin.y1 -= tb_status_height();
+	else
+	    v->margin.y0 += tb_status_height();
+	changed = TRUE;
 	break;
 
     case fe_position_COORDS:
@@ -1757,7 +1771,7 @@ int fe_check_download_finished(fe_view v)
 	{
 	    BOOL changed = fe_transient_set_size(top);
 
- 	    feutils_resize_window(&top->w, &top->margin, &top->box, &top->x_scroll_bar, &top->y_scroll_bar, 0, 0, fe_scrolling_NO, fe_bg_colour(top));
+ 	    feutils_resize_window(&top->w, &top->margin, &top->box, &top->x_scroll_bar, &top->y_scroll_bar, v->doc_width, -v->doc_height, fe_scrolling_NO, fe_bg_colour(top));
 
 	    if (changed)
 	    {
@@ -2580,22 +2594,25 @@ os_error *fe_abort_fetch(fe_view v)
 
 /* ------------------------------------------------------------------------------------------- */
 
+#define INFO_BUFSIZE	2048
+
 void fe_open_info(fe_view v, be_item ti, int x, int y, BOOL toggle)
 {
     if (v->displaying)
     {
 	char *link, *title;
-	char buffer[1024];
+	char *buffer;
 	fe_view current;
 	char *current_url = NULL;
 
 	if ((current = fe_locate_view(TARGET_INFO)) != NULL)
 	    backend_doc_info(current->displaying, NULL, NULL, &current_url, NULL);
 
+	buffer = mm_malloc(INFO_BUFSIZE);
 	strcpy(buffer, "ncint:openpanel?name=info&source=");
 
 	/* add the specifier for this buffer */
-	fe_frame_specifier_create(v, buffer, sizeof(buffer));
+	fe_frame_specifier_create(v, buffer, INFO_BUFSIZE);
 
 	if (ti &&
 	    backend_item_pos_info(v->displaying, ti, &x, &y, NULL, &link, NULL, &title) == NULL &&
@@ -2604,15 +2621,16 @@ void fe_open_info(fe_view v, be_item ti, int x, int y, BOOL toggle)
 	    int len;
 
 	    /* add the url of any link to be displayed */
-	    strcat(buffer, "&url=");
+	    strlencat(buffer, "&url=", INFO_BUFSIZE);
 	    len = strlen(buffer);
-	    len += url_escape_cat(buffer + len, link, sizeof(buffer) - len);
+	    url_escape_cat(buffer + len, link, INFO_BUFSIZE - len);
 
 	    /* add any TITLE shown in the link */
 	    if (title)
 	    {
-		len += sprintf(buffer + len, "&title=");
-		len += url_escape_cat(buffer + len, title, sizeof(buffer) - len);
+		strlencat(buffer, "&title=", INFO_BUFSIZE);
+		len = strlen(buffer);
+		url_escape_cat(buffer + len, title, INFO_BUFSIZE - len);
 	    }
 	}
 
@@ -2634,6 +2652,8 @@ void fe_open_info(fe_view v, be_item ti, int x, int y, BOOL toggle)
 	    else if (current)
 		fe_dispose_view(current);
 	}
+
+	mm_free(buffer);
     }
 }
 
@@ -4782,6 +4802,39 @@ static void fe_handle_service_message(wimp_msgstr *msg)
     }
 }
 
+#define ERROR_BUFSIZE	512
+
+static void check_error(void)
+{
+    if (pending_error.errnum)
+    {
+	char *buf = mm_malloc(ERROR_BUFSIZE);
+	int n;
+
+	n = sprintf(buf, "ncint:openpanel?name=error&error=E%x&message=", pending_error.errnum);
+	url_escape_cat(buf+n, pending_error.errmess, ERROR_BUFSIZE-n);
+
+	if (pending_error_retry)
+	{
+	    strcat(buf, "&again=");
+	    n = strlen(buf);
+	    url_escape_cat(buf+n, pending_error_retry, ERROR_BUFSIZE-n);
+	}
+
+	frontend_open_url(buf, NULL, TARGET_ERROR, 0, 0);
+
+	/* clear error flag */
+	pending_error.errnum = 0;
+	mm_free(buf);
+    }
+
+    if (pending_error_retry)
+    {
+	mm_free(pending_error_retry);
+	pending_error_retry = NULL;
+    }
+}
+
 /* ------------------------------------------------------------------------------------------- */
 /* Main event process loop  */
 /* ------------------------------------------------------------------------------------------- */
@@ -5163,34 +5216,10 @@ void fe_event_process(void)
             break;
     }
 
-    if (pending_error.errnum)
-    {
-	char buf[512];
-	int n;
-
-	n = sprintf(buf, "ncint:openpanel?name=error&error=E%x&message=", pending_error.errnum);
-	url_escape_cat(buf+n, pending_error.errmess, sizeof(buf)-n);
-
-	if (pending_error_retry)
-	{
-	    strcat(buf, "&again=");
-	    n = strlen(buf);
-	    url_escape_cat(buf+n, pending_error_retry, sizeof(buf)-n);
-	}
-
-	frontend_open_url(buf, NULL, TARGET_ERROR, 0, 0);
-
-	/* clear error flag */
-	pending_error.errnum = 0;
-    }
-
-    if (pending_error_retry)
-    {
-	mm_free(pending_error_retry);
-	pending_error_retry = NULL;
-    }
+    check_error();
 
     dbgpoll();
+    mm_poll();
 }
 
 /* ------------------------------------------------------------------------------------------- */
@@ -5564,6 +5593,13 @@ int main(int argc, char **argv)
     MemCheck_SetStoreMallocFunctions(TRUE);
     MemCheck_SetChecking(0,0);
 
+#ifdef Trace_TRACE
+/*     Trace_SetHandlers(Trace_Stacker_StartHandler, Trace_Stacker_StopHandler); */
+    Trace_IgnoreFunctions("*dbg *dbgn caller");
+/*     Trace_InterceptAllFunctions(); */
+/*   Trace_Stacker_SetOutputFunction((Trace_Stacker_outputfn)vfdbg, db_sess); */
+#endif
+    
     init_usrtrc();
 
     progname = argv[0];

@@ -135,8 +135,8 @@ void oobject_size_allocate(rid_text_item *ti, rid_header *rh, antweb_doc *doc, i
 	height = get_value(ti, &obj->userheight, 0, fwidth);
 
 	if (obj->state.plugin.pp == NULL &&
-	    (obj->classid_ftype != -1 || obj->data_ftype != -1))
-/* 	    width > 0 && height > 0) */
+	    (obj->classid_ftype != -1 || obj->data_ftype != -1) &&
+	    !gbf_active(GBF_LOW_MEMORY))
 	{
 	    obj->state.plugin.pp = plugin_new(obj, doc, ti);
 	    

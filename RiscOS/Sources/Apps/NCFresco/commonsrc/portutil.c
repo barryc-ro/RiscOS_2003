@@ -766,6 +766,20 @@ extern void translate_escaped_text(char *src, char *dest, int len)
     dest[new_len] = 0;
 }
 
+extern char *strdup_unescaped(const char *src)
+{
+    char *dest = strdup(src);
+    int new_len;
+
+    new_len = sgml_translation(NULL,
+			       dest,
+			       strlen(dest), SGMLTRANS_PERCENT | SGMLTRANS_HASH );
+    dest[new_len] = 0;
+
+    return strtrim(dest);
+}
+
+
 #ifdef STBWEB
 extern void translate_escaped_form_text(char *src, char *dest, int len)
 {
@@ -1393,5 +1407,97 @@ extern input_key_action lookup_key_action(int key)
 }
 
 /*****************************************************************************/
+
+char *strcatx_with_leeway(char *s, const char *s1, int leeway)
+{
+    char *new_s = NULL;
+    int slen, actuallen, newlen;
+    
+    if (s)
+    {
+	slen = strlen(s);
+	actuallen = (slen + 1 + leeway) &~ leeway;
+    }
+    else
+    {
+	slen = actuallen = 0;
+    }
+    
+    newlen = slen + (s1 ? strlen(s1) : 0) + 1;
+
+ /*  DBG(("strcatx: s %p s1 %p leeway %d: slen %d s1len %d newlen %d (%d) actuallen %d\n", s, s1, leeway, slen, strlen(s1), newlen, (newlen + leeway) &~ leeway, actuallen)); */
+
+    /* treat empty string as null string */
+    if (newlen == 1)
+	newlen = 0;
+
+    if (newlen > actuallen)
+    {
+	new_s = mm_realloc(s, (newlen + leeway) &~ leeway);
+	if (!new_s)
+	    return s;
+
+	s = new_s;
+    }
+    
+    if (s1)
+	strcpy(s + slen, s1);
+
+    return s;
+}
+
+#define LEEWAY 63		/* must be power of 2 minus 1 */
+
+char *strcatx1(char *s, const char *s1)
+{
+    return strcatx_with_leeway(s, s1, LEEWAY);
+}
+
+char *strcatx(char *s, const char *s1)
+{
+    return strcatx_with_leeway(s, s1, 0);
+}
+
+char *strtrim(char *s)
+{
+    return mm_realloc(s, strlen(s)+1);
+}
+
+char *xfgets(FILE *in)
+{
+    char *s = NULL;
+    BOOL finished = FALSE;
+
+    do
+    {
+	int blen;
+	char buffer[128];
+
+	if (fgets(buffer, sizeof(buffer), in) == NULL)
+	    return s;
+
+	blen = strlen(buffer);
+	if (buffer[blen-1] == '\n')
+	{
+	    buffer[blen-1] = '\0';
+	    finished = TRUE;
+	}
+	
+	s = strcatx(s, buffer);
+
+/* 	DBG(("xfgets: read '%s' finished %d gives %s\n", buffer, finished, s)); */
+    }
+    while (!finished && !feof(in) && !ferror(in));
+
+    return s;
+}
+
+void fskipline(FILE *in)
+{
+    int c;
+    do
+	c = fgetc(in);
+    while (c != EOF && c != '\n');
+}
 
 /* eof portutil.c */

@@ -256,13 +256,15 @@ static gopherentry gopherentries[] =
   "telnet", "icontype:telnet",
   "unknown","icontype:,xxx"};
 
+#define URL_LEEWAY	1023
+
 char *url_join(const char *base, const char *url)
 {
     char *bscheme, *bnetloc, *bpath, *bparams, *bquery, *bfragment;
     char *scheme, *netloc, *path, *params, *query, *fragment;
     char *uscheme, *unetloc, *upath, *uquery;
     char *result;
-    char buffer[MAX_URL_LEN];
+    char *buffer = NULL;	/* SJM: changed from auto */
 
     if ( !strncasecomp( url, "internal-gopher-", 16 ) )
     {
@@ -343,15 +345,20 @@ char *url_join(const char *base, const char *url)
 	/* If we got here then we have a relative path */
 	char *p;
 
-	p = strrchr(bpath, '/');
-	if (p != NULL)
-	    *p = 0;
-
+	if (bpath)
+	{
+	    p = strrchr(bpath, '/');
+	    if (p != NULL)
+		*p = 0;
+	}
+#if 1
+	buffer = strcatx_with_leeway(buffer, bpath, URL_LEEWAY);
+#else
 	if (bpath && bpath[0])
 	    strcpy(buffer, bpath); /* No '/' on the end */
 	else
 	    buffer[0] = 0;	/* No '/' on the end */
-
+#endif
 	p = path;
 
 	while (p && *p)
@@ -364,15 +371,18 @@ char *url_join(const char *base, const char *url)
 
 	    if (p[0] == '.' && p[1] == '.' && p[2] == 0)
 	    {
-		char *s = strrchr(buffer, '/');
-		if (s)
-		    *s = 0;
-		/* No '/' on the end */
+		if (buffer)
+		{
+		    char *s = strrchr(buffer, '/');
+		    if (s)
+			*s = 0;
+		    /* No '/' on the end */
+		}
 	    }
 	    else if (p[0] != '.' || p[1] != 0) /* The '/' has by now been turned to a 0 */
 	    {
-		strcat(buffer, "/");
-		strcat(buffer, p);
+		buffer = strcatx_with_leeway(buffer, "/", URL_LEEWAY);
+		buffer = strcatx_with_leeway(buffer, p, URL_LEEWAY);
 		/* No '/' on the end */
 	    }
 
@@ -380,9 +390,9 @@ char *url_join(const char *base, const char *url)
 	}
 
 	if ((p)	||		/* We stopped because *p was zero.  This happens when we have a trailing '/' */
-	    (buffer[0] == 0))	/* Can't leave it empty */
+	    (buffer == NULL || buffer[0] == 0))	/* Can't leave it empty */
 	{
-	    strcat(buffer, "/");
+	    buffer = strcatx_with_leeway(buffer, "/", URL_LEEWAY);
 	}
 
 	upath = buffer;
@@ -402,6 +412,8 @@ char *url_join(const char *base, const char *url)
     url_free_parts(bscheme, bnetloc, bpath, bparams, bquery, bfragment);
     url_free_parts(scheme, netloc, path, params, query, fragment);
 
+    mm_free(buffer);
+    
     return result;
 }
 
@@ -423,21 +435,22 @@ void url_free_parts(char *scheme, char *netloc, char *path, char *params, char *
 
 extern char *url_path_trans(const char *s, int topath)
 {
-    char buffer[MAX_FILE_NAME];
+    char *buffer;		/* SJM: changed to mallocing space needed */
     char *p;
     const char *q;
 
-    p = buffer;
     q = s;
 
     if (topath)
     {
+	p = buffer = mm_malloc(strlen(q) + 1 + 1);
 	*p++ = '/';
     }
     else
     {
 	if (*q == '/')
 	    q++;
+	p = buffer = mm_malloc(strlen(q) + 1);
     }
 
     while (*q)
@@ -467,7 +480,7 @@ extern char *url_path_trans(const char *s, int topath)
 
     *p = 0;
 
-    return strdup(buffer);
+    return buffer;
 }
 
 
@@ -558,7 +571,7 @@ char *url_leaf_name(const char *url)
 
 char *url_escape_chars(const char *s, const char *escapes)
 {
-    char buffer[1024];
+    char *buffer = mm_malloc(strlen(s)*3 + 1);	/* SJM: changed auto to malloc - this is max_size */
     char c;
     char *outp;
 
@@ -580,7 +593,7 @@ char *url_escape_chars(const char *s, const char *escapes)
 
     *outp = 0;
 
-    return strdup(buffer);
+    return strtrim(buffer); /* trim to exact length */
 }
 
 #define URL_UNRESERVED_CHARS	"$-_.+!*'(),"

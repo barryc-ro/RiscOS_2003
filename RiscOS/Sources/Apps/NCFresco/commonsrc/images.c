@@ -60,6 +60,7 @@
 #include "unwind.h"
 
 #include "files.h"
+#include "gbf.h"
 
 /* ------------------------------------------------------------------------- */
 
@@ -771,8 +772,10 @@ static void image_handle_internal(image i, int fh, void *buffer, int from, int t
     else
     {
 	IMGDBG(("im%p: can't allocate %d-byte buffer\n", i, to ));
+#ifndef STBWEB
 	mm_can_we_recover(FALSE);
 	image_flush( i, 0 );
+#endif
     }
 
     if (i->plotter == plotter_UNKNOWN)
@@ -1567,7 +1570,7 @@ os_error *image_find(char *url, char *ref, int flags, image_callback cb, void *h
 	i->url = strdup(url);
 	i->hash = hash;
 	i->flags = image_flag_WAITING;
-	if (flags & image_find_flag_DEFER)
+	if ((flags & image_find_flag_DEFER) || !gbf_active(GBF_LOW_MEMORY))
 	    i->flags |= image_flag_DEFERRED;
 
 	set_default_image(i, (flags & image_find_flag_DEFER) ? SPRITE_NAME_DEFERRED : SPRITE_NAME_UNKNOWN, TRUE);
@@ -1982,30 +1985,60 @@ os_error *image_loose(image i, image_callback cb, void *h)
     return NULL;
 }
 
+#if ITERATIVE_PANIC
+/* if we have an animation then trim back to a normal image */
+static BOOL image_trim_animation(image i)
+{
+    if (i->frames > 1 && i->our_area)
+    {
+	int sprite_size = ((sprite_header *)(i->our_area + 1))->next;
+	int area_size = sprite_size + sizeof(sprite_area) + FLEX_FUDGE;
+
+	i->frames = 1;
+	i->our_area->number = 1;
+	i->our_area->size = area_size;
+	i->our_area->freeoff = sprite_size + sizeof(sprite_area);
+
+	flex_extend((flex_ptr) &(i->our_area), area_size);
+
+	/* get rid of the cache */
+	free_area(&i->cache_area);
+
+	/* and reset appropriate variables */
+	i->cache_frame = -1;
+	i->cur_frame = -1;
+	i->cache_mask = 0;
+	
+	flexmem_noshift();
+	strncpy(i->sname, ((sprite_header *) (i->our_area + 1))->name, 12);
+	flexmem_shift();
+	
+	return TRUE;
+    }
+    return FALSE;
+}
+#endif /* ITERATIVE_PANIC */
+
 int image_memory_panic(void)
 {
     image i;
     int freed = FALSE;
 
-    IMGDBG(( "Image memory panic called\n"));
+    IMGDBG(( "Image memory panic called from %s/%s/%s\n", caller(1), caller(2), caller(3)));
 
+    do_memory_panic = FALSE;
+
+#if ITERATIVE_PANIC
+    for (i=image_list; i != NULL && !freed; i = i->next)
+    {
+	freed = image_trim_animation(i);
+    }
+#endif /* ITERATIVE_PANIC */
+    
     for (i=image_list; i != NULL; i = i->next)
     {
-	/* if we have an animation then trim back to a normal image */
-	if (i->frames > 1 && i->our_area)
-	{
-	    int sprite_size = ((sprite_header *)(i->our_area + 1))->next;
-
-	    i->frames = 1;
-	    i->our_area->number = 1;
-	    i->our_area->size = sprite_size + sizeof(sprite_area) + FLEX_FUDGE;
-	    i->our_area->freeoff = sprite_size + sizeof(sprite_area);
-
-	    flex_extend((flex_ptr) &(i->our_area), i->our_area->size);
-	    freed = TRUE;
-	}
 	/* If we already have the image then dispose of it */
-	else if (i->our_area || i->cache_area || i->data_area)
+	if (i->our_area || i->cache_area || i->data_area)
 	{
 	    freed = TRUE;
 
@@ -2027,10 +2060,16 @@ int image_memory_panic(void)
 	    i->flags = image_flag_WAITING | image_flag_DEFERRED | image_flag_TO_RELOAD;
 
 	    set_default_image(i, SPRITE_NAME_DEFERRED, FALSE);
+
+#ifdef STBWEB
+	    /* SJM: keep display up to date */
+	    image_issue_callbacks(i, image_cb_status_REDRAW, NULL);
+#endif /* STBWEB */
+#if ITERATIVE_PANIC
+	    break;
+#endif /* ITERATIVE_PANIC */
 	}
     }
-
-    do_memory_panic = FALSE;
 
     return freed;
 }
@@ -2731,7 +2770,9 @@ static os_error *image_init_cache_sprite(image i, int w, int h, int limit, image
     if (flex_alloc((flex_ptr) &(i->cache_area), size + FLEX_FUDGE) == FALSE)
     {
         IMGDBG(("im%p: flex_alloc FAILED in init_cache_sprite\n", i ));
+#ifndef STBWEB
         image_memory_panic();
+#endif
 /*         image_flush( i, image_find_flag_DEFER ); */
 /*         mm_can_we_recover(FALSE); */
 	return makeerror(ERR_NO_MEMORY);

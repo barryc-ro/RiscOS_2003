@@ -3295,6 +3295,7 @@ os_error *backend_goto_fragment(be_doc doc, char *frag)
     if (frag)
     {
         rid_text_item *first;
+	wimp_box bb;
 
 	ai = doc->rh->aref_list;
 
@@ -3310,18 +3311,15 @@ os_error *backend_goto_fragment(be_doc doc, char *frag)
 	    return doc->ah || doc->ph ? NULL : makeerror(ERR_NO_SUCH_FRAG); /* only give error if document fully downloaded */
 #endif
 
-        first = ai && ai->first ? ai->first : doc->rh->stream.text_list;
+        first = ai && ai->first ? ai->first : NULL;
+	bb.y1 = 0;
 	if (first)
-	{
-	    wimp_box bb;
+	    backend_doc_item_bbox(doc, first, &bb);
 
-	    if (backend_doc_item_bbox(doc, first, &bb) == 0)
-	    {
-		BENDBG(( "Ensuring item visable, top at %d\n", bb.y1));
-		/* doesn't need margin adjustment, done in doc_item_bbox */
-		frontend_view_ensure_visable(doc->parent, 0, bb.y1, bb.y1);
-	    }
-    	}
+	BENDBG(( "backend_goto_fragment: ensuring item %p (aref %p) visable, top at %d\n", first, ai, bb.y1));
+
+	/* doesn't need margin adjustment, done in doc_item_bbox */
+	frontend_view_ensure_visable(doc->parent, 0, bb.y1, bb.y1);
     }
 
     return NULL;
@@ -4031,9 +4029,11 @@ extern pparse_details *be_lookup_parser(int ft)
     return &file_parsers[i];
 }
 
+#define PPARSE_BUFSIZE	4096
+
 static void be_pparse_doc(antweb_doc *doc, int fh, int from, int to)
 {
-    char buffer[4096];
+    char *buffer;		/* changed from auto to malloc */
     os_gbpbstr gpb;
     os_error *ep;
     int len;
@@ -4043,6 +4043,8 @@ static void be_pparse_doc(antweb_doc *doc, int fh, int from, int to)
     if (doc->rh == NULL)
 	doc->rh = (((pparse_details*)doc->pd)->rh)(doc->ph);
 
+    buffer = mm_malloc(PPARSE_BUFSIZE);
+    
     rh = doc->rh;
     rh->doc = doc;
 
@@ -4050,7 +4052,7 @@ static void be_pparse_doc(antweb_doc *doc, int fh, int from, int to)
     PPDBG(("Old last item is 0x%p\n", ti));
     while (from < to)
     {
-	len = (to-from) > sizeof(buffer) ? sizeof(buffer) : (to-from);
+	len = (to-from) > PPARSE_BUFSIZE ? PPARSE_BUFSIZE : (to-from);
 
 	gpb.action = 3;
 	gpb.file_handle = fh;
@@ -4076,6 +4078,8 @@ static void be_pparse_doc(antweb_doc *doc, int fh, int from, int to)
 	from += len;
     }
 
+    mm_free(buffer);
+    
 #if USE_MARGINS
 #if DEBUG
     if ((rh->margin.left != -1 && rh->margin.left*2 != doc->margin.x0) ||

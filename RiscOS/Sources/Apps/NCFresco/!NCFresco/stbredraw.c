@@ -640,6 +640,7 @@ int frontend_view_margins(fe_view v, wimp_box *box)
 #if USE_MARGINS
     *box = v->backend_margin;
 
+#if 0
     /* zero margin where the toolbar is touching if not a frame */
     if (v->parent == NULL && use_toolbox && tb_is_status_showing())
     {
@@ -648,6 +649,7 @@ int frontend_view_margins(fe_view v, wimp_box *box)
 	else
 	    box->y0 = 0;
     }
+#endif
 #else
     *box = v->margin;
 

@@ -523,7 +523,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 	    ta_box.y1 = bline+ti->max_up-8;
 	    if (coords_intersection(&ta_box, g, &gwind_box))
 	    {
-		char buf[256];
+		char buf[128];
 		char *str;
 		int coords[8];
 
@@ -535,7 +535,7 @@ void oinput_redraw(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int hpos,
 
 		if (ii->tag == rid_it_PASSWD)
 		{
-		    if (slen >= sizeof(buf)) /* safe but inaccurate (if we have > 256 char passwords) */
+		    if (slen >= sizeof(buf)) /* safe but inaccurate (if we have > 128 char passwords) */
 			slen = sizeof(buf)-1;
 		    memset(buf, config_display_char_password, slen);
 		    buf[slen] = 0;

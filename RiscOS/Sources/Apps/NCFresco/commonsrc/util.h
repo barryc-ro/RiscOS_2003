@@ -6,6 +6,10 @@
 #include "stdlib.h"
 #endif
 
+#ifndef __stdio_h
+#include "stdio.h"
+#endif
+
 #ifndef __wimp_h
 #include "wimp.h"
 #endif
@@ -27,12 +31,16 @@
 
 extern char *strdup(const char *s);
 extern char *strndup(const char *s, size_t maxlen);
-extern char *strcatx(char **s1, const char *s2);
 extern int strncasecomp(const char *a, const char *b, size_t n);
 extern int strcasecomp(const char *s1, const char *s2);
 extern char *strcasestr(const char *s1, const char *s2);
 extern BOOL strnearly( const char *s1, size_t len1,
                        const char *s2, size_t len2, size_t hownear );
+
+extern char *strcatx_with_leeway(char *s, const char *s1, int leeway);
+extern char *strcatx1(char *s, const char *s1);
+extern char *strcatx(char *s, const char *s1);
+extern char *strtrim(char *s);
 
 /* Copy a string without overrunning but make sure it is terminated */
 void strncpysafe(char *s1, const char *s2, int n);
@@ -41,6 +49,7 @@ void strlencat(char *s1, const char *s2, int len);
 
 extern char *strdup_gstrans(const char *input);
 extern BOOL gstrans_not_null(const char *input);
+extern char *strdup_unescaped(const char *src);
 
 unsigned int string_hash(const char *s);
 
@@ -290,5 +299,8 @@ extern char *rs_tmpnam(char *s);
  */
 os_error *wimp_set_wind_flags( wimp_w w, wimp_wflags bic, wimp_wflags eor );
 
+
+extern char *xfgets(FILE *in);
+extern void fskipline(FILE *in);
 
 /* eof util.h */

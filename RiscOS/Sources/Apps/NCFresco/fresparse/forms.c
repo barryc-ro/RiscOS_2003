@@ -254,6 +254,12 @@ extern void startinput (SGMLCTX * context, ELEMENT * element, VALUES * attribute
 	{
 	    in->data.str[0] = 0;
 	}
+
+	/* we've used WIDTH as a pixel width and some morons out there use WIDTH when they mean SIZE
+	 * so WIDTH is only understood if SIZE is also specified
+	 */
+	if (in->ww.type != value_none && in->xsize == -1)
+	    in->ww.type = value_none;
 	break;
     case rid_it_IMAGE:
     {

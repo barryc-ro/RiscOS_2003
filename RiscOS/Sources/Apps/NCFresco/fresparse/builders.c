@@ -1324,17 +1324,19 @@ extern void text_item_push_bullet(HTMLCTX * me, int item_type)
 extern void pseudo_html(HTMLCTX *ctx, const char *fmt, ...)
 {
     SGMLCTX *context = ctx->sgmlctx;
-    char buffer[MAXSTRING + 32];
+    char *buffer;
     va_list arglist;
 
     PRSDBG(("pseudo_html(%s)\n", fmt));
 
+    buffer = mm_malloc(MAXSTRING + 32);	/* SJM: changed to malloc from auto */
+    
     va_start(arglist, fmt);
     vsprintf(buffer, fmt, arglist);
 
     PRSDBG(("pseudo_html(): %s\n", buffer));
 
-    ASSERT(strlen(buffer) < sizeof(buffer));
+    ASSERT(strlen(buffer) < (MAXSTRING+32));
 
     sgml_recursion_warning_pre(context);
 
@@ -1346,6 +1348,8 @@ extern void pseudo_html(HTMLCTX *ctx, const char *fmt, ...)
     sgml_recursion_warning_post(context);
     va_end(arglist);
 
+    mm_free(buffer);
+    
     PRSDBG(("pseudo_html(): recursion finished\n"));
 }
 

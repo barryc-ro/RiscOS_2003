@@ -32,13 +32,14 @@ extern void *mm_realloc(void *x, size_t y);
 extern int mm_can_we_recover(int abort);
 extern void mm_free(void *x);
 
-void mm_check(void);
-void mm_summary(void);
-void mm_dump(void);
-
-void mm__check(FILE *f);
-void mm__summary(FILE *f);
-void mm__dump(FILE *f);
+extern void mm_poll(void);
+extern void mm_check(void);
+extern void mm_summary(void);
+extern void mm_dump(void);
+ 
+extern void mm__check(FILE *f);
+extern void mm__summary(FILE *f);
+extern void mm__dump(FILE *f);
 
 #if !defined(__MemCheck_MemCheck_h)
 # include "memcheck/MemCheck.h"

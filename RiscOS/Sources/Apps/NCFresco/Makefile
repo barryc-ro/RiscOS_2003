@@ -97,7 +97,7 @@ COMM_OBJS=	Serial.o access.o auth.o backend.o bittabs.o config.o \
 		tablesize.o oobject.o objects.o plugin.o pluginfile.o \
 		files.o fvpr.o remote.o coalesce.o keyhl.o \
 		buildtime.o format.o colspan.o loformat.o cs2.o \
-		highlight.o frameutils.o csgraph.o
+		highlight.o frameutils.o csgraph.o rdebug.o
 
 BASE_VPATH=	..:../commonsrc:../fresparse:../parser
 BASE_INCS=	-I.. -I../commonsrc -I../fresparse -I../parser
@@ -266,7 +266,7 @@ PLOTCHECK_OBJS=	tables.o memwatch.o bldrs.o debug.o rid.o \
 		otext.o otextarea.o basic2.o stream.o object.o config.o \
 		oobject.o objects.o usrtrc.o rectplot.o \
 		coalesce.o fvpr.o gbf.o format.o keyhl.o colspan.o \
-		loformat.o cs2.o oscaff.o csgraph.o
+		loformat.o cs2.o oscaff.o csgraph.o rdebug.o
 
 #PLOTCHECK_LIBS=
 PLOTCHECK_LIBS=-L/usr/local/lib/gcc-lib/sparc-sun-solaris2.3/2.7.1/ -lgcc
@@ -743,11 +743,11 @@ NCFRESCO_BUILD_INCS=		-I$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib \
 				-I$(RISCOS_BUILD_EXPORT)/C \
 				-J$(RISCOS_BUILD_EXPORT)/Lib/CLib
 
-NCFRESCO_BASE_CFLAGS=		-wp -DSTBWEB -DSTBWEB_BUILD -DOLD_COMMENTS=0 -DUSE_MARGINS=1 -DMEMLIB=1 -DCOMPAT_INET4 $(NCFRESCO_INCS) -DFRAMES=1
+NCFRESCO_BASE_CFLAGS=		-wp -DSTBWEB -DSTBWEB_BUILD -DOLD_COMMENTS=0 -DUSE_MARGINS=1 -DMEMLIB=1 -DCOMPAT_INET4 $(NCFRESCO_INCS) -DFRAMES=1 -DITERATIVE_PANIC=1
 
 # several alternative flag sets
 NCFRESCO_PRODUCTION_CFLAGS=	$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -DSGML_REPORTING=0 -DNDEBUG
-NCFRESCO_DEBUG_CFLAGS=		$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=2 -Fn -DSGML_REPORTING=1 -DREMOTE_DEBUG
+NCFRESCO_DEBUG_CFLAGS=		$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=2 -Fn -DSGML_REPORTING=1 -DREMOTE_DEBUG -DTrace_TRACE
 NCFRESCO_MEMCHECK_CFLAGS=	$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=2 -DMEMWATCH=0 -Fn -DSGML_REPORTING=1 -zpc1 -DMemCheck_MEMCHECK -fw -g
 NCFRESCO_HIERPROF_CFLAGS=	$(NCFRESCO_BASE_CFLAGS) -DDEVELOPMENT=0 -DMEMWATCH=0 -Fn -DSGML_REPORTING=0 -DNDEBUG -DHierProf_PROFILE
 
@@ -756,7 +756,7 @@ NCFRESCO_ANT_CFLAGS=		$(NCFRESCO_PRODUCTION_CFLAGS) -DRISCOS -fa -DSTBWEB_ROM=0 
 				$(BASE_INCS) $(NCFRESCO_BUILD_INCS)
 
 
-NCFRESCO_BUILD_CFLAGS=		$(NCFRESCO_DEBUG_CFLAGS) -DRISCOS -fa -Fn -DSTBWEB_ROM=0 \
+NCFRESCO_BUILD_CFLAGS=		$(NCFRESCO_PRODUCTION_CFLAGS) -DRISCOS -fa -Fn -DSTBWEB_ROM=0 \
 				$(BASE_INCS) $(NCFRESCO_BUILD_INCS)
 
 NCFRESCO_ROM_CFLAGS=		$(NCFRESCO_PRODUCTION_CFLAGS) -DRISCOS -fa -zM -zps1 -DSTBWEB_ROM=1 \
@@ -791,13 +791,14 @@ NCFRESCO_RAM_OBJS=		$(NCFRESCO_BASE_OBJS) rlib_alloc.o ModuleWrap.o
 
 NCFRESCO_ANT_LIBS=		../webimage/webimage1
 
-NCFRESCO_BUILD_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1da.o \
+NCFRESCO_BUILD_LIBS=		$(RISCOS_BUILD_EXPORT)/Lib/WebImage/webimage1ff.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/CLib/stubs.o \
 				../RISC_OSLib/risc_oslib \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/inetlib.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/TCPIPLibs/socklib.o \
 				$(RISCOS_BUILD_EXPORT)/Lib/MemLib/memlib.o \
-				$(RISCOS_BUILD_EXPORT)/Lib/debug/remote.o
+				$(RISCOS_BUILD_EXPORT)/Lib/debug/remote.o \
+				$(RISCOS_BUILD_EXPORT)/Lib/Trace/T_PL.o
 
 #				$(RISCOS_BUILD_EXPORT)/Lib/RISC_OSLib/risc_oslib.o \
 

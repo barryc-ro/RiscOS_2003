@@ -25,9 +25,15 @@
 #include "interface.h"
 #include "version.h"
 #include "flexwrap.h"
+#include "gbf.h"
 
 #if MEMLIB
+
+#ifdef STBWEB_BUILD
+#include "memheap.h"
+#else
 #include "../memlib/memheap.h"
+#endif
 
 /* ISTR that ANSI sez you shouldn't do this... */
 
@@ -106,9 +112,32 @@ static int mm_no_more_memory(void)
 extern int antweb_doc_abort_all(void);
 
 /* Return 1 if more memory was made by freeing images
- * Return 2 if mroe memory was made by aborting documents
+ * Return 2 if more memory was made by aborting documents
  * Return 0 and give error if no memory can be freed.
  */
+
+#if ITERATIVE_PANIC
+
+#define EMERGENCY_MEMORY_STASH	(128*1024)
+#define EMERGENCY_MEMORY_UNIT	(EMERGENCY_MEMORY_STASH/8)
+
+static void *emergency_memory = NULL;
+
+extern void mm_poll(void)
+{
+    /* bring stash back to full size */
+    if (emergency_memory == NULL)
+    {
+	flex_alloc(&emergency_memory, EMERGENCY_MEMORY_STASH);
+    }
+    else
+    {
+	int size = flex_size(&emergency_memory);
+	if (size < EMERGENCY_MEMORY_STASH)
+	    if (flex_extend(&emergency_memory, EMERGENCY_MEMORY_STASH))
+		gbf_flags &= ~GBF_LOW_MEMORY;
+    }
+}
 
 extern int mm_can_we_recover(int abort)
 {
@@ -117,20 +146,26 @@ extern int mm_can_we_recover(int abort)
     if (image_memory_panic())
 	r = 1;			/* recovered through discarding images */
 
-#ifdef STBWEB
     if (r == 0 && antweb_doc_abort_all())
 	r = 2;			/* recovered through abort transfers */
-#endif
 
+    if (r == 0 && emergency_memory)
+    {
+	int size = flex_size(&emergency_memory);
+	if (size && flex_extend(&emergency_memory, size - EMERGENCY_MEMORY_UNIT))
+	    r = 3;
+    }
+    
     if (r == 0)			/* if can't recover any memory */
     {
-#ifdef STBWEB
 	if (abort)
-#endif
 	    mm_no_more_memory();
 
  	return 0;
     }
+
+    gbf_flags |= GBF_LOW_MEMORY;
+    
 				/* if recovered some memory then give message */
     strcpy(panicerr.errmess, msgs_lookup("memlow"));
     panicerr.errnum = 0;
@@ -140,6 +175,37 @@ extern int mm_can_we_recover(int abort)
 
     return r;
 }
+
+#else /* ITERATIVE_PANIC */
+
+extern void mm_poll(void)
+{
+}
+
+extern int mm_can_we_recover(int abort)
+{
+    int r = 0;
+
+    if (image_memory_panic())
+	r = 1;			/* recovered through discarding images */
+
+    if (r == 0)			/* if can't recover any memory */
+    {
+	mm_no_more_memory();
+
+ 	return 0;
+    }
+				/* if recovered some memory then give message */
+    strcpy(panicerr.errmess, msgs_lookup("memlow"));
+    panicerr.errnum = 0;
+
+    frontend_complain(&panicerr);
+
+    return r;
+}
+#endif /* ITERATIVE_PANIC */
+
+/* ====================================================================== */
 
 #if MEMWATCH >= 2
 
@@ -214,6 +280,23 @@ void *mm_malloc(size_t x)
 	DBG(("mm_malloc: item size 0x%x '%s' '%s'", x, caller(1), caller(2)));
 #endif
 
+#if ITERATIVE_PANIC
+    do
+    {
+	newptr = malloc(x + sizeof(mm_chain) + sizeof(mm_tail));
+
+	if (newptr)
+	    break;
+#if MEMWATCH >= 3
+	if (x >= MEMWATCH_MIN_INTEREST)
+	    DBG((" = %p\n", newptr ? newptr - 1 : NULL));
+#endif
+    }
+    while (mm_can_we_recover(TRUE));
+
+    if (newptr == NULL)
+	mm_no_more_memory();
+#else /* ITERATIVE_PANIC */
     newptr = malloc(x + sizeof(mm_chain) + sizeof(mm_tail));
 
 #if MEMWATCH >= 3
@@ -229,7 +312,8 @@ void *mm_malloc(size_t x)
 	if (newptr == NULL)
 	    mm_no_more_memory();
     }
-
+#endif /* ITERATIVE_PANIC */
+    
     newptr->size = x;
     newptr->magic = MM_MAGIC_HEAD;
 #if MEMWATCH >= 4 && 0
@@ -263,6 +347,24 @@ void *mm_calloc(size_t x, size_t y)
     if (size >= MEMWATCH_MIN_INTEREST)
 	DBG(("mm_calloc: item size 0x%x '%s' '%s'", size, caller(1), caller(2)));
 #endif
+
+#if ITERATIVE_PANIC
+    do
+    {
+	new = calloc(1, size + sizeof(mm_chain) + sizeof(mm_tail));
+
+#if MEMWATCH >= 3
+	if (size >= MEMWATCH_MIN_INTEREST)
+	    DBG((" = %p\n", new ? new - 1 : NULL));
+#endif
+	if (new)
+	    break;
+    }
+    while (mm_can_we_recover(TRUE));
+
+    if (new == NULL)
+	mm_no_more_memory();
+#else /* ITERATIVE_PANIC */
     new = calloc(1, size + sizeof(mm_chain) + sizeof(mm_tail));
 
 #if MEMWATCH >= 3
@@ -277,7 +379,7 @@ void *mm_calloc(size_t x, size_t y)
 	if (new == NULL)
 	    mm_no_more_memory();
     }
-
+#endif /* ITERATIVE_PANIC */
     new->size = size;
     new->magic = MM_MAGIC_HEAD;
 
@@ -325,6 +427,19 @@ void *mm_realloc(void *x, size_t y)
     tail = MM_TAIL(m);
     tail->magic = 0;
 
+#if ITERATIVE_PANIC
+    do
+    {
+	m = realloc(m, y + sizeof(mm_chain) + sizeof(mm_tail));
+
+	if (m)
+	    break;
+    }
+    while (mm_can_we_recover(TRUE));
+
+    if (m == NULL)
+	mm_no_more_memory();
+#else /* ITERATIVE_PANIC */
 /* Borris: put the &&0 in - 9/9/96 */
 #if MEMZERO && 0
 #error Realloc does not zero memory
@@ -339,7 +454,7 @@ void *mm_realloc(void *x, size_t y)
 	if (m == NULL)
 	    mm_no_more_memory();
     }
-
+#endif /* ITERATIVE_PANIC */
     m->size = y;
 
     tail = MM_TAIL(m);
@@ -524,6 +639,7 @@ void mm__dump(FILE *f)
     mm__summary(f);
 }
 
+/* ====================================================================== */
 #else
 /* SJM: changed these back to plain alloc names as they will be #define's anyawy if MemLib is defined  */
 
@@ -532,6 +648,24 @@ extern void *mm_malloc(size_t x)
     void *p;
     CHECKVAR;
 
+#if ITERATIVE_PANIC
+    do
+    {
+	CHECKOFF;
+	p=malloc(x);
+	CHECKON;
+    
+	if (p)
+	{
+	    mc_add_block(p,x);
+	    return p;
+	}
+
+	if (x == 0)
+	    return NULL;
+    }
+    while (mm_can_we_recover(TRUE));
+#else /* ITERATIVE_PANIC */
     CHECKOFF;
     p=malloc(x);
     CHECKON;
@@ -556,7 +690,7 @@ extern void *mm_malloc(size_t x)
         mc_add_block(p,x);
 	return p;
     }
-
+#endif /* ITERATIVE_PANIC */
     mm_no_more_memory();
 
     return NULL;
@@ -601,6 +735,28 @@ extern void *mm_realloc(void *x, size_t y)
     void *p;
     CHECKVAR;
 
+#if ITERATIVE_PANIC
+    do
+    {
+	CHECKOFF;
+	p=realloc(x, y);
+	CHECKON;
+
+	if (p)
+	{
+	    if ( x )
+	    {
+		mc_del_block(x);
+	    }
+	    mc_add_block(p,y);
+	    return p;
+	}
+
+	if (y == 0)
+	    return NULL;
+    }
+    while (mm_can_we_recover(TRUE));
+#else /* ITERATIVE_PANIC */
     CHECKOFF;
     p=realloc(x, y);
     CHECKON;
@@ -608,7 +764,9 @@ extern void *mm_realloc(void *x, size_t y)
     if (p)
     {
         if ( x )
+	{
             mc_del_block(x);
+	}
         mc_add_block(p,y);
  	return p;
     }
@@ -625,11 +783,13 @@ extern void *mm_realloc(void *x, size_t y)
     if (p)
     {
         if ( x )
+	{
             mc_del_block(x);
+	}
         mc_add_block(p,y);
 	return p;
     }
-
+#endif /* ITERATIVE_PANIC */
     mm_no_more_memory();
 
     return NULL;

@@ -81,6 +81,7 @@ void *heapda_realloc(void *oldptr, unsigned int size_request)
     os_error *e;
     int size;
     void *newptr;
+    int old_heap_size = heap__size, old_da_size = da_size;
 
     STBDBG(("heapda_realloc: %p to %d (heap %d da %d)\n", oldptr, size_request, heap__size, da_size));
     
@@ -125,7 +126,19 @@ void *heapda_realloc(void *oldptr, unsigned int size_request)
 
 	/* if we can't extend DA then return NULL */
 	if (adjust == 0)
+	{
+	    /* reset to what we started with */
+	    frontend_fatal_error((os_error *)_swix(OS_Heap, _INR(0,1)|_IN(3), 5, heap__base, old_heap_size - heap__size));
+	    heap__size = old_heap_size;
+
+	    adjust = old_da_size - da_size;
+	    DynamicArea_Realloc(heap__da, &adjust);
+	    da_size += adjust;
+	    
+	    STBDBG(("heapda_realloc: failed (heap %d da %d)\n", heap__size, da_size));
+
 	    return NULL;
+	}
 
 	/* adjust heap to match da */
 	frontend_fatal_error((os_error *)_swix(OS_Heap, _INR(0,1)|_IN(3), 5, heap__base, da_size - heap__size));

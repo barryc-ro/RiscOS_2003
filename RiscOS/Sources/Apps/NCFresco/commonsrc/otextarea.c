@@ -126,7 +126,7 @@ void otextarea_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 
     rid_textarea_item *tai;
     font_string fs;
-    char buffer[MAX_TEXT_LINE];
+    char *buffer;		/* SJM: changed from auto to malloc */
     int i;
 
     if ( !GETFONTUSED( doc, WEBFONT_TTY ) )
@@ -139,9 +139,13 @@ void otextarea_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
 
     otextarea_copy_defaults(tai);
 
-    for(i=0; i < tai->cols; i++)
-	buffer[i] = ' ';
-    buffer[i] =0;
+    buffer = mm_malloc(tai->cols + 1);
+    memset(buffer, ' ', tai->cols);
+    buffer[tai->cols] = 0;
+    
+/*     for(i=0; i < tai->cols; i++) */
+/* 	buffer[i] = ' '; */
+/*     buffer[i] =0; */
 
     fs.s = buffer;
     fs.x = fs.y = (1 << 30);
@@ -156,6 +160,8 @@ void otextarea_size(rid_text_item *ti, rid_header *rh, antweb_doc *doc)
     ti->max_up = webfonts[WEBFONT_TTY].max_up + 10;
     ti->max_down = tai->rows * (webfonts[WEBFONT_TTY].max_up + webfonts[WEBFONT_TTY].max_down) -
 	webfonts[WEBFONT_TTY].max_up + 10;
+
+    mm_free(buffer);
 #endif /* BUILDERS */
 }
 

@@ -317,12 +317,15 @@ static HTMLCTX *create_new_html(void)
 
 /*****************************************************************************/
 
+#define FREAD_BUFSIZE	4096
+
 static rid_header *parse_some_file(char *fname, char *url, int ft)
 {
     void *h;
     FILE *fp;
-    char buffer[1024];
+    char *buffer;
     pparse_details *ppd;
+    rid_header *rh;
 
     for(ppd = file_parsers; ppd->ftype != -1 && ppd->ftype != ft; ppd++)
 	;
@@ -347,19 +350,25 @@ static rid_header *parse_some_file(char *fname, char *url, int ft)
 	return 0;
     }
 
+    buffer = mm_malloc(FREAD_BUFSIZE);
+    
     while (!feof(fp))
     {
 	int n;
 
-	if ((n = fread(buffer, 1, sizeof(buffer), fp)) != 0)
+	if ((n = fread(buffer, 1, FREAD_BUFSIZE, fp)) != 0)
 	{
 	    ppd->data(h, buffer, n, 1);
 	}
     }
 
+    mm_free(buffer);
+    
     fclose(fp);
 
-    return ppd->close(h, fname);
+    rh = ppd->close(h, fname);
+
+    return rh;
 }
 
 static rid_header *parse_html_file(char *fname, char *url)
@@ -736,7 +745,7 @@ static void pparse_gopher_put_line(HTMLCTX* me, char *buffer)
 {
     char type;
     char *entry, *object, *site = NULL, *port = NULL, *goplus = NULL;
-    char newurl[1024];
+    char *newurl;
     int n;
     int ft;
     char ibuf[32];
@@ -794,6 +803,8 @@ static void pparse_gopher_put_line(HTMLCTX* me, char *buffer)
 	    site ? site : "<None>",
 	    port ? port : "<None>" );
 #endif
+    newurl = mm_malloc(1024);
+
     newurl[0] = 0;
 
     switch (type)
@@ -927,7 +938,7 @@ static void pparse_gopher_put_line(HTMLCTX* me, char *buffer)
     if (object)
 	mm_free(object);
 
-
+    mm_free(newurl);
 }
 
 static int pparse_gopher_data(void *h, char *buffer, int len, int more)

@@ -563,7 +563,7 @@ int feutils_check_window_bars(wimp_box *extent, wimp_openstr *op, int *old_x_scr
     BOOL x_scroll_bar = config_display_frames_scrollbars && width >= MIN_WIN_WIDTH && extent->x1 - extent->x0 > width + (*old_y_scroll_bar ? toolsprite_width : 0);
     BOOL y_scroll_bar = config_display_frames_scrollbars && height >= MIN_WIN_HEIGHT && extent->y1 - extent->y0 > height + (*old_x_scroll_bar ? toolsprite_height : 0);
 
-    STBDBG(("feutils_check_window_bars\n"));
+    STBDBG(("feutils_check_window_bar from %s/%s\n", caller(1), caller(2)));
 
     if (x_scroll_bar != *old_x_scroll_bar || y_scroll_bar != *old_y_scroll_bar)
     {
@@ -1072,7 +1072,7 @@ os_error *frontend_complain(os_error *e)
     {
 #if DEVELOPMENT
         usrtrc("complain %x '%s'\n", e->errnum, e->errmess);
-        usrtrc("by '%s' from '%s'\n", caller(1), caller(2));
+        usrtrc("by '%s' from '%s' from '%s'\n", caller(1), caller(2), caller(3));
 #endif
 
 #if 1

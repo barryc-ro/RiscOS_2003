@@ -590,6 +590,8 @@ static int auth_read_allow_file(char *fname, allow_item **head)
 	}
     }
 
+    fclose(f);
+    
     return 1;
 }
 

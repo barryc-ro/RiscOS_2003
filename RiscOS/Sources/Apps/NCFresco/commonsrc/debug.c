@@ -6,155 +6,55 @@
 #include <string.h>
 #include "debug.h"
 
-#ifndef BUILDERS
-#include "swis.h"
-#include "wimp.h"
-#endif
-
-#define DBGPROTO(x) extern void x(const char *fmt, ...)
-
-#ifdef REMOTE_DEBUG
-
-static void dbglist(void);
-
-#include "debug/remote.h"
-
-static debug_session *db_sess = NULL;
-
-static void cleanup(void)
-{
-    remote_debug_close(db_sess);
-}
-
-static int debug_cmd_handler(int argc, char *argv[], void *handle)
-{
-    int handled = -1;
-
-    if (strcasecomp(argv[0], "show") == 0)
-    {
-	if (argc == 2)
-	{
-#if MEMLIB
-	    extern char   *flexptr__base;
-	    extern char   *flexptr__free;
-	    extern char   *flexptr__slot;
-	    extern void   *heap__base;
-	    extern void malloc_stats(void);
-	    extern int malloc_size, malloc_da, heap__size, heap__da, flex__da;
-#endif /* MEMLIB */
-	    if (strcasecomp(argv[1], "dbg") == 0)
-	    {
-		dbglist();
-		handled = 1;
-	    }
-#ifdef STBWEB
-	    else if (strcasecomp(argv[1], "heap") == 0)
-	    {
-		heap__dump(NULL);
-		handled = 1;
-	    }
-#endif /* STBWEB */
-	    else if (strcasecomp(argv[1], "flex") == 0)
-	    {
-#if MEMLIB
-		DBG(("flex: free %p slot %p usage %dK\n", flexptr__free, flexptr__slot, (flexptr__slot - flexptr__base)/1024));
-#endif /* MEMLIB */
-		handled = 1;
-	    }
-	    else if (strcasecomp(argv[1], "mm") == 0)
-	    {
-		mm__dump(NULL);
-#if MEMLIB
-		malloc_stats();
-		DBG(("mall: msize %dK\n", malloc_size/1024));
-#endif /* MEMLIB */
-		handled = 1;
-	    }
-	    else if (strcasecomp(argv[1], "mem") == 0)
-	    {
-		int us = -1, next = -1, free;
-
-		wimp_slotsize(&us, &next, &free);
-		DBG(("slot: size %dK total free %dK\n", us/1024, free/1024));
-
-#if MEMLIB
-		DBG(("flex: area %dK size %dK top %dK\n", _swi(OS_ReadDynamicArea, _IN(0) | _RETURN(1), flex__da)/1024, (flexptr__slot - flexptr__base)/1024, (flexptr__free - flexptr__base)/1024));
-		DBG(("heap: area %dK size %dK top %dK\n", _swi(OS_ReadDynamicArea, _IN(0) | _RETURN(1), heap__da)/1024, heap__size/1024, ((int *)heap__base)[3]/1024));
-		DBG(("mall: area %dK size %dK top -\n", _swi(OS_ReadDynamicArea, _IN(0) | _RETURN(1), malloc_da)/1024, malloc_size/1024));
-#endif /* MEMLIB */
-
-		handled = 1;
-	    }
-	}
-    }
-    else if (strcasecomp(argv[0], "openurl") == 0)
-    {
-	if (argc == 2)
-	{
-	    frontend_open_url(argv[1], NULL, NULL, NULL, 0);
-	    handled = 1;
-	}
-    }
-    else if (argc == 2)
-	handled = debug_set(argv[0], atoi(argv[1]));
-
-    return handled;
-    handle = handle;
-}
-
-#define DBGFNDEF(x,y) extern void x(const char *fmts, ...) \
-{ if (dbg_conf[y].present) \
-{ va_list arglist; va_start(arglist, fmts); if (db_sess) debug_vprintf(db_sess, fmts, arglist); else vfprintf(stderr, fmts, arglist);\
-va_end(arglist); } }
-
-void dbg(const char *fmts, ...)
-{
-    va_list arglist;
-    va_start(arglist, fmts);
-    if (db_sess)
-	debug_vprintf(db_sess, fmts, arglist);
-    else
-	vfprintf(stderr, fmts, arglist);
-    va_end(arglist);
-}
-
-void fdbg(void *f, const char *fmts, ...)
-{
-    va_list arglist;
-    va_start(arglist, fmts);
-    if (f == NULL && db_sess)
-	debug_vprintf(db_sess, fmts, arglist);
-    else
-	vfprintf(f ? f : stderr, fmts, arglist);
-    va_end(arglist);
-}
-
-#else /* REMOTE_DEBUG */
-
-#define DBGFNDEF(x,y) extern void x(const char *fmts, ...) \
-{ if (dbg_conf[y].present) \
-{ va_list arglist; va_start(arglist, fmts); vfprintf(stderr, fmts, arglist); \
-fflush(stderr);	va_end(arglist); } }
-
-void dbg(const char *fmts, ...)
-{
-    va_list arglist;
-    va_start(arglist, fmts);
-    vfprintf(stderr, fmts, arglist);
-    va_end(arglist);
-}
-
-
-/* Really should have better untangling of DEBUG and REMOTE_DEBUG !!! */
-void fdbg(void *f, const char *fmts, ...)
-{
-}
-
-#endif /* REMOTE_DEBUG */
+/* ----------------------------------------------------------------------------- */
 
 #if DEBUG
 
+/* The basic debug routine template */
+
+#define DBGFNDEF(x,y) extern void x(const char *fmts, ...) \
+{ if (dbg_conf[y].present) \
+{ va_list arglist; va_start(arglist, fmts); vfdbg(NULL, fmts, arglist); \
+va_end(arglist); } }
+
+/* ----------------------------------------------------------------------------- */
+
+/* debugging routines that only depend on DEBUG state */
+
+void dbg(const char *fmts, ...)
+{
+    va_list arglist;
+    va_start(arglist, fmts);
+
+    vfdbg(NULL, fmts, arglist);
+
+    va_end(arglist);
+}
+
+void fdbg(void *f, const char *fmts, ...)
+{
+    va_list arglist;
+    va_start(arglist, fmts);
+
+    vfdbg(f, fmts, arglist);
+
+    va_end(arglist);
+}
+
+void vfdbg(void *f, const char *fmts, void *arglist)
+{
+#ifdef REMOTE_DEBUG
+    if (f == NULL && db_sess)
+	debug_vprintf(db_sess, fmts, arglist);
+    else
+#endif
+	vfprintf(f ? f : stderr, fmts, arglist);
+}
+
+/* ----------------------------------------------------------------------------- */
+
 #if 0
+#define DBGPROTO(x) extern void x(const char *fmt, ...)
 #pragma -v1
 DBGPROTO(tabdbg);
 DBGPROTO(prsdbg);
@@ -250,7 +150,9 @@ enum
     layn
 };
 
-static void dbglist(void)
+/* ----------------------------------------------------------------------------- */
+
+extern void dbglist(void)
 {
     TABDBG(("Table debugging present\n"));
     TABDBGN(("Excessive Table debugging present\n"));
@@ -295,17 +197,9 @@ extern void dbginit(void)
 	ptr++;
     }
 
+    rdebug_open();
+
     dbglist();
-    
-#ifdef REMOTE_DEBUG
-    if (!db_sess)
-    {
-	remote_debug_open("NCFresco", &db_sess);
-	if (db_sess)
-	    remote_debug_register_cmd_handler(db_sess, debug_cmd_handler, NULL);
-	atexit(cleanup);
-    }
-#endif
 }
 
 extern int debug_set(const char *feature, int enable)
@@ -343,9 +237,7 @@ extern int debug_get(const char *feature)
 
 extern void dbgpoll(void)
 {
-#ifdef REMOTE_DEBUG
-    debug_poll(db_sess);
-#endif
+    rdebug_poll();
 }
 
 /* **** N.B.  These don't need semi-colons at the end as they define functions */
@@ -380,6 +272,8 @@ DBGFNDEF(lnkdbgn, lnkn)
 DBGFNDEF(laydbg, lay)
 DBGFNDEF(laydbgn, layn)
     
+/* ----------------------------------------------------------------------------- */
+
 #else	/* DEBUG */
 
 extern void dbginit(void)
@@ -390,6 +284,8 @@ extern void dbginit(void)
 extern void dbgpoll(void)
 {
 }
+
+/* ----------------------------------------------------------------------------- */
 
 #endif /* DEBUG */
 

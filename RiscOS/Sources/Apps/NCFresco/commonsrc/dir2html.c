@@ -38,7 +38,7 @@
 #endif
 #endif
 
-static char *d2h_fmt_title = "Index of %s";
+/* static char *d2h_fmt_title = "Index of %s"; */
 #ifdef STBWEB
 static char *d2h_fmt_footer = "Listing generated %s\n";
 #else
@@ -64,16 +64,30 @@ extern os_error *dir2html(char *path, char *filename, int flags)
     os_error *ep = NULL;
     os_gbpbstr gps;
     FILE *fh;
-    d2h_finfo info;
-    char buffer[256];
+    d2h_finfo *info;
     int plen;
     time_t now;
+    char *ppath;
 
+    info = mm_malloc(sizeof(*info));
+    
+#if 1
+    /* SJM: made safe from long filenames */
+    plen = strlen(path);
+    ppath = mm_malloc(plen + 2);
+    strcpy(ppath, path);
+    if (ppath[plen-1] != '.')
+    {
+	ppath[plen++] = '.';
+	ppath[plen] = 0;
+    }
+#else
     strcpy(buffer, path);
     plen = strlen(buffer);
     if (buffer[plen-1] != '.')
 	buffer[plen++] = '.';
     buffer[plen] = 0;
+#endif
 
 #if 0
     fprintf(stderr, "Reading directory %s into file %s\n", buffer, filename);
@@ -82,27 +96,32 @@ extern os_error *dir2html(char *path, char *filename, int flags)
     fh = fopen(filename, "w");
     if (fh)
     {
-	char lbuffer[256];
+/* 	char lbuffer[256]; */
 	char *newpath;
 	char *url;
 
 	gps.action = 10;
 	gps.file_handle = (int) (long) path;
-	gps.data_addr = &info;
+	gps.data_addr = info;
 	gps.seq_point = 0;
-	gps.buf_len = sizeof(info);
+	gps.buf_len = sizeof(*info);
 	gps.wild_fld = "*";
 
-	newpath = url_riscos_to_path(buffer);
-#if DIR2HTML_UNIX_PATH
-	sprintf(lbuffer, d2h_fmt_title, newpath);
-#else
-	sprintf(lbuffer, d2h_fmt_title, path);
-#endif
+	newpath = url_riscos_to_path(ppath);
+/* #if DIR2HTML_UNIX_PATH */
+/* 	sprintf(lbuffer, d2h_fmt_title, newpath); */
+/* #else */
+/* 	sprintf(lbuffer, d2h_fmt_title, path); */
+/* #endif */
 	url = url_unparse("file", 0, newpath, 0, 0, 0);
 
-	fprintf(fh, "<head><title>%s</title><base href=\"%s\"></head>\r\n", lbuffer, url);
-	fprintf(fh, "<body><h1>%s</h1><p><pre>\r\n", lbuffer);
+#if DIR2HTML_UNIX_PATH
+	fprintf(fh, "<head><title>Index of %s</title><base href=\"%s\"></head>\r\n", newpath, url);
+	fprintf(fh, "<body><h1>Index of %s</h1><p><pre>\r\n", newpath);
+#else
+	fprintf(fh, "<head><title>Index of %s</title><base href=\"%s\"></head>\r\n", path, url);
+	fprintf(fh, "<body><h1>Index of %s</h1><p><pre>\r\n", path);
+#endif
 	fprintf(fh, "<img src=\"icontype:blank\"> Name                     Last modified     Size<hr>\r\n");
 	fprintf(fh, "<img src=\"icontype:back\"> <a href=\"../\">../</a>                     Parent directory\r\n");
 
@@ -135,39 +154,43 @@ extern os_error *dir2html(char *path, char *filename, int flags)
 		char *name;
 		int llen;
 		os_regset r;
+		char *path_and_name;
 
 #if 0
-		fprintf(stderr, "Info on %s\n", info.name);
+		fprintf(stderr, "Info on %s\n", info->name);
 #endif
-		strcpy(buffer + plen, info.name);
+		path_and_name = mm_malloc(plen + strlen(info->name) + 1);
+		strcpy(path_and_name, ppath);
+		strcpy(path_and_name + plen, info->name);
+/* 		strcpy(buffer + plen, info->name); */
 
-		newpath = url_riscos_to_path(buffer);
+		newpath = url_riscos_to_path(path_and_name);
 		url = url_unparse("file", 0, newpath, 0, 0, 0);
 
-		if (info.otype == 2)
+		if (info->otype == 2)
 		{
 		    strcpy(iconname, "directory");
 		    strcpy(sizeinfo, "&lt;DIR&gt;");
 		}
 		else
 		{
-		    sprintf(iconname, ",%03x", file_type(buffer));
-		    if (info.len > (2 << 20))
+		    sprintf(iconname, ",%03x", file_type(path_and_name));
+		    if (info->len > (2 << 20))
 		    {
-			sprintf(sizeinfo, "%4dM", info.len >> 20);
+			sprintf(sizeinfo, "%4dM", info->len >> 20);
 		    }
-		    else if (info.len > (2 << 10))
+		    else if (info->len > (2 << 10))
 		    {
-			sprintf(sizeinfo, "%4dK", info.len >> 10);
+			sprintf(sizeinfo, "%4dK", info->len >> 10);
 		    }
 		    else
 		    {
-			sprintf(sizeinfo, "%4d ", info.len);
+			sprintf(sizeinfo, "%4d ", info->len);
 		    }
 		}
 
-		*((int*)datetmp) = info.exec;
-		datetmp[4] = info.load & 0xff;
+		*((int*)datetmp) = info->exec;
+		datetmp[4] = info->load & 0xff;
 
 		r.r[0] = (int) (long) datetmp;
 		r.r[1] = (int) (long) dateinfo;
@@ -176,12 +199,12 @@ extern os_error *dir2html(char *path, char *filename, int flags)
 
 		os_swix(OS_ConvertDateAndTime, &r);
 
-		llen = strlen(info.name);
+		llen = strlen(info->name);
 #if DIR2HTML_UNIX_PATH
 		name = strrchr(newpath, '/');
 		if (name) name++; else name = newpath;
 #else
-		name = info.name;
+		name = info->name;
 #endif
 
 		fprintf(fh, "<img src=\"icontype:%s\"> <a href=\"%s\">%s</a>%s%s  %s\r\n",
@@ -190,6 +213,7 @@ extern os_error *dir2html(char *path, char *filename, int flags)
 
 		mm_free(url);
 		mm_free(newpath);
+		mm_free(path_and_name);
 #if 0
 		fprintf(stderr, "Done processing\n");
 #endif
@@ -203,8 +227,11 @@ extern os_error *dir2html(char *path, char *filename, int flags)
 #endif
 	fprintf(fh, "<hr>");
 	now = time(NULL);
-	strftime(buffer, sizeof(buffer), msgs_lookup("dirdate"), localtime(&now));
-	fprintf(fh, d2h_fmt_footer, buffer);
+	{
+	    char buffer[32];
+	    strftime(buffer, sizeof(buffer), msgs_lookup("dirdate"), localtime(&now));
+	    fprintf(fh, d2h_fmt_footer, buffer);
+	}
 	fprintf(fh, "</pre></body>\r\n");
 
 	fclose(fh);
@@ -222,5 +249,9 @@ extern os_error *dir2html(char *path, char *filename, int flags)
 #if 0
     fprintf(stderr, "Dir2html finnished\n");
 #endif
+
+    mm_free(ppath);
+    mm_free(info);
+
     return ep;
 }

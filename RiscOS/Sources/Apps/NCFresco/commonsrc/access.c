@@ -2001,17 +2001,21 @@ static int access_ftp_check_pw(char *netloc, char **userp, char **pwdp, char **h
 
 #endif /*ndef FILEONLY */
 
+#define COPY_DATA_SIZE 4096
+
 static void access_copy_data(int inf, int outf, int start, int end)
 {
     os_gbpbstr gps;
-    char buffer[1024];
+    char *buffer;
     int len;
 
+    buffer = mm_malloc(COPY_DATA_SIZE);	/* SJM: from auto to malloc */
+    
     while (start < end)
     {
 	len = end - start;
-	if (len > sizeof(buffer))
-	    len = sizeof(buffer);
+	if (len > COPY_DATA_SIZE)
+	    len = COPY_DATA_SIZE;
 
 	gps.action = 3;
 	gps.file_handle = inf;
@@ -2031,6 +2035,8 @@ static void access_copy_data(int inf, int outf, int start, int end)
 
 	start += len;
     }
+
+    mm_free(buffer);
 }
 
 /* Returns TRUE if there is more data to come
@@ -2932,11 +2938,11 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 	    }
 	    else if (ft == FILETYPE_URL)
 	    {
-		char new_url[256];
+		char *new_url;	/* SJM removed auto array */
 		FILE *fh;
 
 		fh = fopen(cfile, "r");
-		if (fh && (fgets(new_url, sizeof(new_url), fh)))
+		if (fh && (new_url = xfgets(fh)) != NULL)
 		{
 		    d = mm_calloc(1, sizeof(*d));
 
@@ -2953,6 +2959,8 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 		    ep = access_url(new_url, d->flags, d->ofile, NULL, referer,
 				    &access_redirect_progress, &access_redirect_complete,
 				    d, &(d->redirect));
+
+		    mm_free(new_url);
 		}
 		else
 		{
@@ -2988,7 +2996,9 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 
 	    if (path[0] == ',')
 	    {
-		sprintf(sname, "small_%s", path+1);
+		strcpy(sname, "small_");
+		strlencat(sname, path+1, sizeof(sname));
+/* 		sprintf(sname, "small_%s", path+1); */
 	    }
 	    else if (path[0] == '.')
 	    {
@@ -3002,8 +3012,8 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 	    }
 	    else
 	    {
-		strcpy(sname, path);
-		strcat(sname, "icon");
+		strncpysafe(sname, path, sizeof(sname));
+		strlencat(sname, "icon", sizeof(sname));
 	    }
 
 	    ep = access_write_wimp_icon(sname, cfile);
@@ -3024,8 +3034,8 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 		fl = 0;
 	    }
 
-    	        if (fl & access_OURS)
-    		    cache->not_ours(cfile);
+	    if (fl & access_OURS)
+		cache->not_ours(cfile);
 
 	    if ((fl & access_CACHE) == 0)
 		cache->remove(url);
@@ -3037,8 +3047,6 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 #ifndef FILEONLY
 	else if (strcasecomp(scheme, "http") == 0)
 	{
-	    char buffer[1000];
-
 	    if (config_proxy_http_on &&
 		config_proxy_http &&
 		!access_match_host(netloc, config_proxy_http_ignore))
@@ -3047,14 +3055,13 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 	    }
 	    else
 	    {
-		write_buf(buffer, path, params, query);
+		char *buffer = url_unparse(NULL, NULL, path, params, query, NULL);
 		ep = access_new_http(url, flags, ofile, bfile, referer, progress, complete, h, result, netloc, buffer);
+		mm_free(buffer);
 	    }
 	}
 	else if (strcasecomp(scheme, "https") == 0)
 	{
-	    char buffer[1000];
-
 	    flags |= access_SECURE;
 
 	    /* pdh: Fixed this to support a different proxy for https */
@@ -3067,8 +3074,9 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 	    }
 	    else
 	    {
-		write_buf(buffer, path, params, query);
+		char *buffer = url_unparse(NULL, NULL, path, params, query, NULL);
 		ep = access_new_http(url, flags, ofile, bfile, referer, progress, complete, h, result, netloc, buffer);
+		mm_free(buffer);
 	    }
 	}
 	else if (strcasecomp(scheme, "gopher") == 0)
@@ -3124,7 +3132,8 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 		}
 		else
 		{
-		    char buffer[1000];
+		    char *buffer = NULL;
+
 		    ACCDBGN(( "Making new access object\n"));
 		    d = mm_calloc(1, sizeof(*d));
 
@@ -3142,12 +3151,13 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 
 		    if (path && path[0] && path[1])
 		    {
-			translate_escaped_text(path + 2, buffer, sizeof(buffer));
+			buffer = strcatx1(strdup_unescaped(path + 2), NULL);
+/* 			translate_escaped_text(path + 2, buffer, sizeof(buffer)); */
 			d->data.gopher.gopher_tag = path[1];
 		    }
 		    else
 		    {
-			buffer[0] = 0;
+/* 			buffer[0] = 0; */
 			d->data.gopher.gopher_tag = '1';
 		    }
 
@@ -3155,20 +3165,20 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 		    {
 			char *eq;
 
-			strcat(buffer, "\t");
+			buffer = strcatx1(buffer, "\t");
 
 			eq = strchr(query, '=');
 			if (eq)
 			{
-			    strcat(buffer, eq+1);
+			    buffer = strcatx1(buffer, eq+1);
 			}
 			else
 			{
-			    strcat(buffer, query);
+			    buffer = strcatx1(buffer, query);
 			}
 		    }
 
-		    d->request_string = strdup(buffer);
+		    d->request_string = strtrim(buffer);
 
 		    *result = d;
 
@@ -3218,17 +3228,26 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 
 		if (r == auth_lookup_SUCCESS)
 		{
-		    char nlbuf[512];
-
-		    sprintf(nlbuf, "%s%s%s@%s",
-			    user,
-			    passwd ? ":" : "",
-			    passwd ? passwd : "",
-			    at+1 );
+		    char *nlbuf;
+		    nlbuf = strcatx1(NULL, user);
+		    if (passwd)
+		    {
+			nlbuf = strcatx1(nlbuf, ":");
+			nlbuf = strcatx1(nlbuf, passwd);
+		    }
+		    nlbuf = strcatx1(nlbuf, "@");
+		    nlbuf = strcatx1(nlbuf, at+1);
+		    
+/* 		    sprintf(nlbuf, "%s%s%s@%s", */
+/* 			    user, */
+/* 			    passwd ? ":" : "", */
+/* 			    passwd ? passwd : "", */
+/* 			    at+1 ); */
 		    ACCDBGN(( "Password lookup succeded, new netloc is '%s'\n", nlbuf));
 		    ep = access_new_ftp(url, flags, ofile, referer,
 					progress, complete, h,
 					result, nlbuf, path);
+		    mm_free(nlbuf);
 		}
 		else
 		{
@@ -3250,14 +3269,14 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 
 	else if (strcasecomp(scheme, "mailto") == 0 && config_proxy_mailto_on && config_proxy_mailto)
 	{
-	    char buffer[1000];
+	    char *buffer;
 	    char *scheme1, *netloc1, *path1, *params1, *query1, *frag1;
 	    char *new_url;
 
 	    url_parse(config_proxy_mailto, &scheme1, &netloc1, &path1, &params1, &query1, &frag1);
 	    new_url = url_unparse(scheme1, netloc1, path1 ? path1 : "/", params1, query1, frag1);
 
-	    strcpy(buffer, new_url);
+	    buffer = strcatx1(NULL, new_url);
 
 	    /* ensure current URL ends with & or ? before adding query information */
 	    switch (buffer[strlen(buffer)-1])
@@ -3267,22 +3286,22 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 	    case '=':
 		break;
 	    default:
-		strcat(buffer, "?");
+		buffer = strcatx1(buffer, "?");
 		break;
 	    }
 
 	    /* add on the mailto details */
 	    if (path)
 	    {
-		strcat(buffer, "to=");
-		strcat(buffer, path);
+		buffer = strcatx1(buffer, "to=");
+		buffer = strcatx1(buffer, path);
 	    }
 
 	    if (query)
 	    {
 		if (path)
-		    strcat(buffer, "&");
-		strcat(buffer, query);
+		    buffer = strcatx1(buffer, "&");
+		buffer = strcatx1(buffer, query);
 	    }
 
 	    /* fetch direct or via proxy? */
@@ -3301,6 +3320,7 @@ os_error *access_url(char *url, access_url_flags flags, char *ofile, char *bfile
 
 	    url_free_parts(scheme1, netloc1, path1, params1, query1, frag1);
 	    mm_free(new_url);
+	    mm_free(buffer);
 	}
 #if INTERNAL_URLS
 	else if (strcasecomp(scheme, "ncfrescointernal") == 0 || strcasecomp(scheme, "ncint") == 0)

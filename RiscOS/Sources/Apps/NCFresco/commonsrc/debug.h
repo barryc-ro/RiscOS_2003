@@ -112,6 +112,14 @@ extern int debug_set(const char *feature, int enable);
 extern int debug_get(const char *feature);
 #endif
 
+/* -------------------------------------------------------------------------------- */
+
+#if DEBUG && defined(REMOTE_DEBUG)
+extern void *db_sess;
+extern void rdebug_open(void);
+extern void rdebug_poll(void);
+#endif
+
 /*****************************************************************************/
 
 /* Basic level debugging functions */
@@ -135,6 +143,7 @@ extern int debug_get(const char *feature);
 #define LAYDBG(x)
 #define DBG(x)
 #define FDBG(x)
+#define VFDBG(x)
 
 #else	/* DEBUG < 1 */
 
@@ -155,6 +164,7 @@ extern int debug_get(const char *feature);
 #define LAYDBG(x)	laydbg x
 #define DBG(x)		dbg x
 #define FDBG(x)		fdbg x
+#define VFDBG(x)	vfdbg x
 
 /* -v1 and -v0 are NorCroft printf() checking indicators */
 #ifdef __acorn
@@ -177,6 +187,7 @@ DBGPROTO(lnkdbg);
 DBGPROTO(laydbg);
 DBGPROTO(dbg);
 extern void fdbg(void * /* FILE * */ f, const char *fmt, ...);
+extern void vfdbg(void * /* FILE * */ f, const char *fmt, void * /* va_list */arglist);
 #ifdef __acorn
 #pragma -v0
 #endif
