@@ -17,38 +17,71 @@ EXP_HDR = <export$dir>
 # Generic options:
 #
 MKDIR   = cdir
-AS      = aasm
+AS      = objasm
 CP      = copy
+LD      = link
 RM      = remove
+WIPE    = -wipe
+
 CCFLAGS = -c -depend !Depend -IC:
-ASFLAGS = -depend !Depend -Stamp -quit -module -To $@ -From
+ASFLAGS = -depend !Depend -Stamp
 CPFLAGS = ~cfr~v
+WFLAGS  = ~c~v
+Linkflags = -rmf -o $@
+
+#
+# Libraries
+#
+
+AsmUtilLib = C:AsmUtils.o.AsmUtilszm
 
 #
 # Program specific options:
 #
 COMPONENT = ITable
 SOURCE    = s.ITable
-TARGET    = rm.ITable
+TARGET    = rm.${COMPONENT}
 EXPORTS   = ${EXP_HDR}.${COMPONENT}
 
 RESDIR = <resource$dir>.Resources.${COMPONENT}
 
 #
+# Rule patterns
+#
+.SUFFIXES:	.d_o .o .s .c .c++ .i .cmhg .inst .io
+
+.c++.o:;    ${C++} ${CFLAGS} ${DFLAGS} -o $@ $<
+.c.o:;      ${CC} ${CFLAGS} ${DFLAGS} -o $@ $<
+.c++.d_o:;  ${C++} ${CFLAGS} ${DFLAGS} -o $@ $<
+.c.d_o:;    ${CC} ${CFLAGS} ${DFLAGS} -o $@ $<
+.cmhg.o:;   ${CMHG} -o $@ $<
+.s.o:;      ${AS} ${AFLAGS} $< $@
+.c++.i:;    ${C++} ${CFLAGS} ${DFLAGS} -c -C -E $< >> $@
+.c.i:;      ${CC} ${CFLAGS} ${DFLAGS} -c -C -E $< >> $@
+.inst.io:;  ${C++} ${CFLAGS} ${DFLAGS} -W -o $@ $<
+
+#
+# Objects
+#
+OBJS	=	\
+o.itable
+
+#
 # Generic rules:
 #
-rom: ${TARGET}
+rom: ${TARGET} ${OBJS} dirs
         @echo ${COMPONENT}: rom module built
 
 export: ${EXPORTS}
         @echo ${COMPONENT}: export complete
 
-install_rom: ${TARGET}
+install_rom: ${TARGET} dirs
         ${CP} ${TARGET} ${INSTDIR}.${COMPONENT} ${CPFLAGS}
         @echo ${COMPONENT}: rom module installed
 
 clean:
         ${RM} ${TARGET}
+	${WIPE} o ${WFLAGS}
         @echo ${COMPONENT}: cleaned
 
 resources:
@@ -57,8 +90,11 @@ resources:
         ${CP} Tables.8desktop ${RESDIR}.Tables.8desktop ${CPFLAGS}
         @echo ${COMPONENT}: resource files copied
 
-${TARGET}: ${SOURCE}
-        ${AS} ${ASFLAGS} ${SOURCE}
+dirs:
+	${MKDIR} o
+
+${TARGET}: ${OBJS}
+	${LD} ${Linkflags} ${OBJS} ${AsmUtilLib}
 
 ${EXP_HDR}.${COMPONENT}: hdr.${COMPONENT}
         ${CP} hdr.${COMPONENT} $@ ${CPFLAGS}
