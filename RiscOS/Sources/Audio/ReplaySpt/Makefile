@@ -75,8 +75,8 @@ EXPORTS   = h.replay hdr.replay o.replay
 #
 .c.o:;      ${CC} ${CFLAGS} -o $@ $< -DROM=0
 .c.oz:;     ${CC} ${CFLAGS} -o $@ $< -DROM=1
-.cmhg.o:;   ${CMHG} -o $@ $<
-.cmhg.h:;   ${CMHG} -d h.$* $<
+.cmhg.o:;   ${CMHG} -p -o $@ $<
+.cmhg.h:;   ${CMHG} -p -d h.$* $<
 .s.o:;      ${AS} ${AFLAGS} $< $@  -Predefine "ROM SETL {FALSE}"
 .s.oz:;     ${AS} ${AFLAGS} $< $@  -Predefine "ROM SETL {TRUE}"
 
@@ -168,86 +168,3 @@ rm.${COMPONENT}: ${OBJS} ${CLIB}
         ${LD} -o $@ -module ${OBJS} ${CLIB}
 
 # Dynamic dependencies:
-o.stream:	c.stream
-o.stream:	C:h.swis
-o.stream:	C:h.kernel
-o.stream:	OS:h.osfind
-o.stream:	OS:h.types
-o.stream:	OS:h.os
-o.stream:	OS:h.fileswitch
-o.stream:	OS:h.osargs
-o.stream:	OS:h.osgbpb
-o.stream:	OS:h.macros
-o.stream:	h.utils
-o.stream:	h.stream
-o.stream:	OS:h.osfile
-o.stream:	h.msgs
-o.stream:	C:h.replay
-o.stream:	OS:h.osspriteop
-o.stream:	h.stream
-o.utils:	c.utils
-o.utils:	h.msgs
-o.utils:	OS:h.os
-o.utils:	OS:h.types
-o.utils:	h.stream
-o.utils:	OS:h.osfile
-o.utils:	OS:h.fileswitch
-o.utils:	h.utils
-o.veneers: s.veneers
-o.veneers: os:hdr.macros
-o.veneers: hdr:soundfile
-o.veneers: OS:Hdr.Types
-o.veneers: OS:Hdr.OS
-o.veneers: OS:Hdr.OSGBPB
-o.veneers: OS:Hdr.FileSwitch
-o.soundplay:	c.soundplay
-o.soundplay:	C:h.swis
-o.soundplay:	C:h.kernel
-o.soundplay:	C:h.kernel
-o.soundplay:	OS:h.osmodule
-o.soundplay:	OS:h.types
-o.soundplay:	OS:h.os
-o.soundplay:	C:h.replay
-o.soundplay:	OS:h.osspriteop
-o.soundplay:	C:h.soundfile
-o.soundplay:	OS:h.osgbpb
-o.soundplay:	OS:h.fileswitch
-o.soundplay:	h.msgs
-o.soundplay:	h.play
-o.soundplay:	h.soundplay
-o.soundplay:	h.utils
-o.soundplay:	h.stream
-o.soundplay:	OS:h.osfile
-oz.resources: s.resources
-oz.resources: hdr:ListOpts
-oz.resources: hdr:Macros
-oz.resources: hdr:System
-oz.resources: Hdr:SWIs
-oz.resources: Hdr:CPU.Generic26
-oz.resources: Hdr:IO.GenericIO
-oz.resources: Hdr:RISCOS
-oz.resources: hdr:ModHand
-oz.resources: hdr:MsgTrans
-oz.resources: hdr:ResourceFS
-oz.resources: hdr:Proc
-oz.resources: hdr.CVars
-oz.main:	c.main
-oz.main:	C:h.swis
-oz.main:	C:h.kernel
-oz.main:	OS:h.os
-oz.main:	OS:h.types
-oz.main:	OS:h.resourcefs
-oz.main:	OS:h.fileswitch
-oz.main:	h.modhdr
-oz.main:	h.main
-oz.main:	C:h.replay
-oz.main:	OS:h.osspriteop
-oz.main:	h.msgs
-oz.main:	h.resources
-oz.main:	h.soundplay
-oz.main:	C:h.soundfile
-oz.main:	OS:h.osgbpb
-oz.main:	h.play
-oz.main:	h.utils
-oz.main:	h.stream
-oz.main:	OS:h.osfile
