@@ -61,6 +61,8 @@ _kernel_oserror* reset_cb (_kernel_swi_regs* r, void* pw, void* data);
 _kernel_oserror* pointer_cb (_kernel_swi_regs* r, void* pw, void* data);
 _kernel_oserror* set_address_cb (_kernel_swi_regs* r, void* pw, void* data);
 _kernel_oserror* set_config_cb (_kernel_swi_regs* r, void* pw, void* data);
+static void read_key_data (void);
+static void read_mouse_data (void);
 
 static enum state {
     port_detached,
@@ -233,12 +235,14 @@ static OHCI_TD td[7];
 static OHCI_TD* tdp;
 static void* tda[6]; /* physical addresses */
 
+/* statistics */
 static volatile int sofs = 0;
 static volatile int wdh = 0;
 static volatile int rhsc = 0;
 static volatile int resets = 0;
 static volatile int data_received = 0;
 static volatile int request_complete = 0;
+
 static int prev_pointer = 0;
 static int state = 0;
 
@@ -396,7 +400,6 @@ _kernel_oserror *module_init(const char *cmd_tail, int podule_base, void *pw)
 
     if (!e) e = _swix (OS_Claim, _INR(0,2), PointerV, pointerv_entry, pw);
 
-
     if (!e) e = _swix (OS_Pointer, _IN(0) | _OUT(0), 0, &prev_pointer);
 
     /* enable periodic list processing */
@@ -406,6 +409,9 @@ _kernel_oserror *module_init(const char *cmd_tail, int podule_base, void *pw)
     /* enable hc interrupts */
     OWRITE(OHCI_INTERRUPT_DISABLE, OHCI_ALL_INTRS);
     OWRITE(OHCI_INTERRUPT_ENABLE, OHCI_MIE |  OHCI_WDH | OHCI_RHSC | OHCI_SF);
+
+    /* force a port reset so that we latch on (after a delay) */
+    callx_add_callafter (USB_DELAY_RESET, reset_cb, 0);
 
     return e;
 }
@@ -432,6 +438,13 @@ _kernel_oserror *module_final(int fatal, int podule, void *pw)
     w = sofs;
     while (sofs == w && clock () - t < 1);
     RELEASE(usb_irq_entry, pw);
+
+    /* turn off any keys that are pressed */
+    memset (&data, 0, sizeof data);
+    memset (&mouse_data, 0, sizeof mouse_data);
+    read_key_data ();
+    read_mouse_data ();
+    _swix (OS_Pointer, _INR(0,1), 1, prev_pointer);
 
     return 0;
 }
@@ -584,7 +597,7 @@ _kernel_oserror *module_commands(const char *arg_string, int argc, int cmd_no, v
     return 0;
 }
 
-/* Callback function to set the pointer type */
+/* Callback function to set the pointer type and declare keybaord */
 _kernel_oserror* pointer_cb (_kernel_swi_regs* r, void* pw, void* cur_pointer)
 {
     NOTUSED(r);
@@ -789,6 +802,11 @@ _kernel_oserror *usb_irq_handler(_kernel_swi_regs *r, void *pw)
 
     if (w & OHCI_WDH) {
         OHCI_TD* dh = hccap->donehead.pointer;
+
+        /* we have to clear the bottom bit of the RDH because it signifies
+        that there are other interrupts */
+        dh = (OHCI_TD*) ((int) dh & ~1);
+
         wdh++;
         OWRITE(OHCI_INTERRUPT_STATUS, OHCI_WDH);
         dprintf(("", "writeback done, condition = %d\n",
@@ -828,7 +846,7 @@ _kernel_oserror *usb_irq_handler(_kernel_swi_regs *r, void *pw)
                 edp[0].head.pointer.normal = tda[0];
             }
 
-            /* transfer 4 is for the mouse */
+            /* transfer 5 is for the mouse */
             if (dh == tda[5] || (dh == tda[2] && tdp[2].nextTD == tda[5])) {
                 read_mouse_data ();
                 tdp[5].conditionCode = OHCI_CC_NOT_ACCESSED;
@@ -840,6 +858,7 @@ _kernel_oserror *usb_irq_handler(_kernel_swi_regs *r, void *pw)
             /* transfer 2 is for the *usbrequest (or LEDs) */
             if (dh == tda[2] || (dh == tda[0] && tdp[0].nextTD == tda[2]))
                 request_complete = 1;
+
             break;
         }
     }
