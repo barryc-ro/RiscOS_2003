@@ -95,8 +95,7 @@ PROLOGS = \
         prolog.OldLatin1 \
         prolog.PSepilog \
         prolog.PSprolog \
-        prolog_z.Level1.PSprolog2 \
-        prolog_z.Level2.PSprolog2 \
+        prolog_z.PSprolog2 \
         prolog_z.PStprolog \
         prolog.Selwyn \
         prolog.Sidney
@@ -114,14 +113,6 @@ PSFILES = \
         ${LDIR}.ps.Resources.Templates \
         ${DDIR}.ps.Adobe.Special \
         ${DDIR}.ps.Adobe.Standard \
-        $(DDIR).ps.Paper.a0 \
-        $(DDIR).ps.Paper.a1 \
-        $(DDIR).ps.Paper.a2 \
-        $(DDIR).ps.Paper.a3 \
-        $(DDIR).ps.Paper.a4 \
-        $(DDIR).ps.Paper.a5 \
-        $(DDIR).ps.Paper.legal \
-        $(DDIR).ps.Paper.letter \
         ${PROLOGS}
 
 FILES = \
@@ -136,19 +127,6 @@ FILES = \
         ${DDIR}.Palettes.0 \
         ${DDIR}.Palettes.1 \
         ${DDIR}.Palettes.2 \
-        ${DDIR}.Palettes.3 \
-        ${DDIR}.Palettes.4 \
-        ${DDIR}.Palettes.5 \
-        ${DDIR}.Palettes.6 \
-        ${DDIR}.Palettes.7 \
-        ${DDIR}.Palettes.8 \
-        ${DDIR}.Palettes.9 \
-        ${DDIR}.Palettes.10 \
-        ${DDIR}.Palettes.11 \
-        ${DDIR}.Palettes.12 \
-        ${DDIR}.Palettes.13 \
-        ${DDIR}.Palettes.14 \
-        ${DDIR}.Palettes.20 \
         ${LDIR}.PaperRO \
         ${LDIR}.Template3D \
         ${LDIR}.Templates \
@@ -168,19 +146,6 @@ RESFILES =\
         ${DDIR}.Palettes.0 \
         ${DDIR}.Palettes.1 \
         ${DDIR}.Palettes.2 \
-        ${DDIR}.Palettes.3 \
-        ${DDIR}.Palettes.4 \
-        ${DDIR}.Palettes.5 \
-        ${DDIR}.Palettes.6 \
-        ${DDIR}.Palettes.7 \
-        ${DDIR}.Palettes.8 \
-        ${DDIR}.Palettes.9 \
-        ${DDIR}.Palettes.10 \
-        ${DDIR}.Palettes.11 \
-        ${DDIR}.Palettes.12 \
-        ${DDIR}.Palettes.13 \
-        ${DDIR}.Palettes.14 \
-        ${DDIR}.Palettes.20 \
         util.SetPrint \
         sources.DummyDP \
         ${DDIR}.dp.PrData \
@@ -202,14 +167,6 @@ RESFILES =\
         ${DDIR}.ps.Resources.PaperRO \
         ${DDIR}.ps.Adobe.Special \
         ${DDIR}.ps.Adobe.Standard \
-        $(DDIR).ps.Paper.a0 \
-        $(DDIR).ps.Paper.a1 \
-        $(DDIR).ps.Paper.a2 \
-        $(DDIR).ps.Paper.a3 \
-        $(DDIR).ps.Paper.a4 \
-        $(DDIR).ps.Paper.a5 \
-        $(DDIR).ps.Paper.legal \
-        $(DDIR).ps.Paper.letter \
         ${PROLOGS}
 
 #
@@ -240,11 +197,8 @@ install: ${DISC_FILES}
         ${MKDIR} ${INSTDIR}.lj.Resources
         ${MKDIR} ${INSTDIR}.ps.Resources
         ${MKDIR} ${INSTDIR}.ps.Adobe
-        ${MKDIR} ${INSTDIR}.ps.Paper
         ${MKDIR} ${INSTDIR}.ps.Printers
         ${MKDIR} ${INSTDIR}.ps.PSFiles
-        ${MKDIR} ${INSTDIR}.ps.PSFiles.Level1
-        ${MKDIR} ${INSTDIR}.ps.PSFiles.Level2
         ${MKDIR} ${INSTDIR}.Remote
         ${MKDIR} ${INSTDIR}.Palettes
         |
@@ -255,11 +209,8 @@ install: ${DISC_FILES}
         Access ${INSTDIR}.lj.Resources WR/r
         Access ${INSTDIR}.ps.Resources WR/r
         Access ${INSTDIR}.ps.Adobe WR/r
-        Access ${INSTDIR}.ps.Paper WR/r
         Access ${INSTDIR}.ps.Printers WR/r
         Access ${INSTDIR}.ps.PSFiles WR/r
-        Access ${INSTDIR}.ps.PSFiles.Level1 WR/r
-        Access ${INSTDIR}.ps.PSFiles.Level2 WR/r
         Access ${INSTDIR}.Remote WR/wr
         Access ${INSTDIR}.Palettes WR/r
         |
@@ -278,19 +229,6 @@ install: ${DISC_FILES}
         CPFDL ${DDIR}.Palettes.0 Palettes.0
         CPFDL ${DDIR}.Palettes.1 Palettes.1
         CPFDL ${DDIR}.Palettes.2 Palettes.2
-        CPFDL ${DDIR}.Palettes.3 Palettes.3
-        CPFDL ${DDIR}.Palettes.4 Palettes.4
-        CPFDL ${DDIR}.Palettes.5 Palettes.5
-        CPFDL ${DDIR}.Palettes.6 Palettes.6
-        CPFDL ${DDIR}.Palettes.7 Palettes.7
-        CPFDL ${DDIR}.Palettes.8 Palettes.8
-        CPFDL ${DDIR}.Palettes.9 Palettes.9
-        CPFDL ${DDIR}.Palettes.10 Palettes.10
-        CPFDL ${DDIR}.Palettes.11 Palettes.11
-        CPFDL ${DDIR}.Palettes.12 Palettes.12
-        CPFDL ${DDIR}.Palettes.13 Palettes.13
-        CPFDL ${DDIR}.Palettes.14 Palettes.14
-        CPFDL ${DDIR}.Palettes.20 Palettes.20
         CPFDL ${LDIR}.PaperRO    PaperRO
         CPFDL util.SetPrint      SetPrint
         CPFDL ${LDIR}.Templates  Templates
@@ -330,19 +268,10 @@ install: ${DISC_FILES}
         CPFDL ${LDIR}.ps.Resources.Template3D ps.Resources.Template3D
         CPFDL ${DDIR}.ps.Adobe.Special        ps.Adobe.Special
         CPFDL ${DDIR}.ps.Adobe.Standard       ps.Adobe.Standard
-        CPFDL ${DDIR}.ps.Paper.a0             ps.Paper.a0
-        CPFDL ${DDIR}.ps.Paper.a1             ps.Paper.a1
-        CPFDL ${DDIR}.ps.Paper.a2             ps.Paper.a2
-        CPFDL ${DDIR}.ps.Paper.a3             ps.Paper.a3
-        CPFDL ${DDIR}.ps.Paper.a4             ps.Paper.a4
-        CPFDL ${DDIR}.ps.Paper.a5             ps.Paper.a5
-        CPFDL ${DDIR}.ps.Paper.legal          ps.Paper.legal
-        CPFDL ${DDIR}.ps.Paper.letter         ps.Paper.letter
         CPFDL prolog.OldLatin1                ps.PSFiles.OldLatin1
         CPFDL prolog.PSepilog                 ps.PSFiles.PSepilog
         CPFDL prolog.PSprolog                 ps.PSFiles.PSprolog
-        CPFDL prolog_z.Level1.PSprolog2       ps.PSFiles.Level1.PSprolog2
-        CPFDL prolog_z.Level2.PSprolog2       ps.PSFiles.Level2.PSprolog2
+        CPFDL prolog_z.PSprolog2              ps.PSFiles.PSprolog2
         CPFDL prolog_z.PStprolog              ps.PSFiles.PStprolog
         CPFDL prolog.Selwyn                   ps.PSFiles.Selwyn
         CPFDL prolog.Sidney                   ps.PSFiles.Sidney
@@ -385,8 +314,6 @@ clean:
         ${WIPE} crunched.* ${WFLAGS}
         ${WIPE} squished.* ${WFLAGS}
         ${WIPE} prolog_z.* ${WFLAGS}
-        ${WIPE} prolog_z.Level1.* ${WFLAGS}
-        ${WIPE} prolog_z.Level2.* ${WFLAGS}
         ${RM} ${ROM_MODULE}
         ${RM} rm.PrintersD
         ${RM} s.Version
@@ -411,12 +338,6 @@ ${LDIR}.!RunLink: sources.!RunLink
 util.SetPrint: s.SetPrint
         ${AS} ${ASFLAGS} -from s.SetPrint -to $@
         settype $@ FFC
-
-prolog_z.Level1.PSprolog2: prolog.PSprolog2 \
-    ; ${PSSHRINK} -in prolog.PSprolog2 -out $@ -type FFF -level 1
-
-prolog_z.Level2.PSprolog2: prolog.PSprolog2 \
-    ; ${PSSHRINK} -in prolog.PSprolog2 -out $@ -type FFF -level 2
 
 #----------------------------------------------------------------------------
 # Printer Manager (front-end): !Printers.!RunImage - DISC
@@ -523,6 +444,17 @@ i.SupportPS: ${SDIR}.SupportPS h.values
 
 #----------------------------------------------------------------------------
 # Dynamic dependencies:
+util.SetPrint: Hdr:ListOpts
+util.SetPrint: Hdr:Macros
+util.SetPrint: Hdr:System
+util.SetPrint: Hdr:SWIs
+util.SetPrint: Hdr:CPU.Generic26
+util.SetPrint: Hdr:IO.GenericIO
+util.SetPrint: Hdr:RISCOS
+util.SetPrint: Hdr:ModHand
+util.SetPrint: Hdr:Services
+util.SetPrint: Hdr:Proc
+util.SetPrint: Hdr:Variables
 rm.Printers: s.AppName
 rm.Printers: Hdr:ListOpts
 rm.Printers: Hdr:Macros
@@ -537,14 +469,3 @@ rm.Printers: Hdr:Proc
 rm.Printers: Hdr:ResourceFS
 rm.Printers: s.Version
 rm.Printers: s.ResFiles
-util.SetPrint: Hdr:ListOpts
-util.SetPrint: Hdr:Macros
-util.SetPrint: Hdr:System
-util.SetPrint: Hdr:SWIs
-util.SetPrint: Hdr:CPU.Generic26
-util.SetPrint: Hdr:IO.GenericIO
-util.SetPrint: Hdr:RISCOS
-util.SetPrint: Hdr:ModHand
-util.SetPrint: Hdr:Services
-util.SetPrint: Hdr:Proc
-util.SetPrint: Hdr:Variables
