@@ -86,6 +86,11 @@ END
       my $val=&bin2dec($1);                     # Convert 2_0101010 style binaries into denary
       s/2\_([01]+)/$val/;
     }
+    # The following two are for Hdr.IO.IOMD's two base 4 declarations!
+    s/4\_0+\s?$/0/g;
+    if (/\s4\_0+[01]\s?$/) {
+      s/\s+4\_0+([01])(\s*)?$/ \1/g;
+    }
     s/([\dA-Fa-f])(\<\<)(\d)/\1 \2 \3/g;	# Insert spaces in 1<<2 (--> 1 << 2)
     s/([\dA-Fa-f])(\>\>)(\d)/\1 \2 \3/g;        # As above, for >>
     s/(\:SH[RL]\:)/ \1 /g;			# Spaces around :SHR: and :SHL:
@@ -130,9 +135,10 @@ END
       next;
     } elsif(/\A\s+[AV]RegI?\s+/) { # MPEG headers
       next;
-    } elsif(/\A($TOKEN)\s+([\*\#]|EQU)\s+\(?($NUMBER|$TOKEN|$SYMBOL)(?:$OPTIONALOP)\)?/) {
+    } elsif(/\A($TOKEN)\s+([\*\#]|EQU)\s+\(?($NUMBER|$TOKEN|$SYMBOL)(?:$OPTIONALOP)\)?\Z/) {
       my($define, $type, $value, $shiftop, $places)=($1, $2, $3, $4, $5);
       my $hexconst;
+      
       $value=~s/^\&/0x/;
       $places=~s/^\&/0x/;
       if (substr($value,0,2) eq "0x") {
@@ -193,39 +199,128 @@ END
       $do_hex=($value=~s/\&/0x/);
       $current=eval($value);
       $swibasesym="";
+      $errorbasesym="";
       next;
-    } elsif(/^\s+\^\s+($TOKEN)\s*$/) {
-      $swibasesym=$1;
-      $current=0;
+    } elsif(/^\s+\^\s+($NUMBER)\s+(.*)$/) {
+      my ($value, $rest)=($1, $2);
+      $swibasesym="";
+      $do_hex=($value=~s/\&/0x/);
+      if ($rest =~ /\+\s+\(fsnumber_DeviceFS\s+\:SHL\:\s+8\)/) {
+        # Special case match for Register.NewErrors
+        $dohex=($value =~ s/\&/0x/);
+        $errorbasesym = "(($value) + (fsnumber_DeviceFS << 8))";
+        $swibasesym = $errorbasesym;
+        $value='&0';
+      }
+      else {
+        $errorbasesym="";
+        die "Extra calculation on numeric $value: >>$rest<<\n";
+      }
+      $prefix="";
+      $current=eval($value);
+      next;
+    } elsif(/^\s+\^\s+($TOKEN)($OPTIONALOP)?\s*$/) {
+      my ($value, $op) = ($1, $2);
+      if ($value =~ /^ErrorBase/) {
+        $prefix=$value;
+        $errorbasesym=$value;
+        $current=0;
+        $do_hex=1;
+        if ($op) {
+          $do_hex=($op=~s/\&/0x/);
+          $errorbasesym = '(('.$errorbasesym.') '.$op.')';
+          $swibasesym="";
+        }
+        else {
+        }
+      }
+      else {
+        $prefix=$value;
+        $swibasesym=$value;
+        $current=0;
+        $do_hex=1;
+        if ($op) {
+          $do_hex=($op=~s/\&/0x/);
+          $swibasesym = '(('.$swibasesym.') '.$op.')';
+        }
+        else {
+        }
+
+        #$swibasesym=$value;
+        #$current=0;
+        #die "Unsupported (calculated SWI base)\n$_" if $op;
+      }
+      next;
     } elsif(/\A\s+GBL[LSA]\s+$TOKEN\s*\Z/) { # We can ignore these
       next;
     } elsif(/\A($TOKEN)\s+SETS\s+($STRING|$TOKEN)/) {
       my ($define, $value)=($1, $2);
       printf(OUT "#define %-40s %s\n", $define, $value);
+      next;
     } elsif(/\A($TOKEN)\s+SET[AL]\s+/) {
       next;
     } elsif(/\A\s+ASSERT\s+/) {
       # Ignore asserts - we assume the assembler deals with them.
       next;
-    } elsif(/\A\s+AddError2?\s+($TOKEN)\s*,\s*($STRING)\s*(?:,\s*($NUMBER|$TOKEN)\s*)?\Z/) {
-      my($define, $msg, $value)=($1, $2, $3);
-      if(defined($value)) {
-        printf(OUT "#define %-40s %s\n", "ErrorNumber_$define", $value);
-      } else {
-        if($do_hex) {
-          printf(OUT "#define %-40s 0x%x\n", "ErrorNumber_$define", $current);
-        } else {
-          printf(OUT "#define %-40s %d\n", "ErrorNumber_$define", $current);
-        };
-        $current+=1;
-      };
-      printf(OUT "#define %-40s %s\n", "ErrorString_$define", $msg);
     } elsif(/^\s+END\s*$/) {
       next;
-    } elsif(/RISCOS_StringConversionSWI_Base/) { # Hdr:RISCOS specific
+#    } elsif(/RISCOS_StringConversionSWI_Base/) { # Hdr:RISCOS specific
+#      next;
+    } elsif (/^ErrorBase_(\S+)\s+\*\s+&00010000\s*\+\s*\(\s*(\S+)\s*\:SHL\:\s*(\S+)\s*\)\s*$/) {
+      printf(OUT "#define ErrorBase_%-30s (0x00010000 + (%s << %s))\n", $1, $2, $3);
       next;
-    } else {
+    }
+    
+    my ($define, $msg, $value, $optionalop);
+    if(/\A\s+AddError2?\s+($TOKEN)\s*,\s*($STRING|(?:\$$TOKEN))\s*(?:,\s*($NUMBER|$TOKEN|@)($OPTIONALOP)?\s*)?\Z/) {
+      ($define, $msg, $value, $optionalop)=($1, $2, $3, $4);
+      if ($value eq '@') { $value = $current; $do_hex = 1;}
+    }
+    elsif(/\A\s+AddError2?\s+($TOKEN)\s*,\s*($STRING|(?:\$$TOKEN))\s*(?:,\s*($NUMBER|$TOKEN|@)\s*(.*)\s*)?\Z/) {
+      ($define, $msg, $value, $optionalop)=($1, $2, $3, $4);
+      die "Matched a previously unrecognised complicated declaration:\n$define<\n$msg<\n$value<\n$optionalop<\n";
+      $define = undef;
+    }
+    elsif(/\A\s+AddFSError\s+($TOKEN)\s*,\s*($TOKEN)\s*,\s*($TOKEN)\s*,\s*($TOKEN)\s*\Z/) {
+      my ($class,$baseerr,$fsname,$fsnumber,$string,$stringb,$val)=($1,$2,$3,$4);
+      $define = "$class$baseerr";
+      $msg = "\"\" ErrorString_$baseerr" . "_Pre \"$fsname\" ErrorString_$baseerr" . "_Post\"";
+      $val = "ErrorNumber_$baseerr" . "_Pre";
+      $optionalop = " :AND: $value";
+      $value = "((0x10000 + (($fsnumber) << 8) + ErrorNumber_$baseerr" . "_Pre))";
+    }
+    else {
       warn("$infile:$.: Unrecognised line: $_");
+      next;
+    }
+    
+    if (defined($define)) {
+      #die "Got a symbol: $msg, $define, $value, $optionalop\n" if $msg =~ /^\$/;
+      $msg =~ s/^\$//;
+      # print "\nAddError link:\n$define<<\n$msg<<\n$value<<\n$optionalop<<\n";
+      if(defined($value)) {
+        $value =~ s/\&/0x/g;
+        printf(OUT "#define %-40s %s\n", "ErrorNumber_$define", $value);
+      } else {
+        if ($errorbasesym) {
+          if($do_hex) {
+            printf(OUT "#define %-40s (%s + 0x%x)\n", "ErrorNumber_$define", $errorbasesym, $current);
+          } else {
+            printf(OUT "#define %-40s (%s + %d)\n", "ErrorNumber_$define", $errorbasesym, $current);
+          };
+        }
+        else {
+          if($do_hex) {
+            printf(OUT "#define %-40s 0x%x\n", "ErrorNumber_$define", $current);
+          } else {
+            printf(OUT "#define %-40s %d\n", "ErrorNumber_$define", $current);
+          };
+        }
+        $current+=1;
+      };
+      $msg =~ s/^\$(.*)$/\1/;
+      printf(OUT "#define %-40s %s\n", "ErrorString_$define", $msg);
+      next;
     }
   };
   close(IN);
