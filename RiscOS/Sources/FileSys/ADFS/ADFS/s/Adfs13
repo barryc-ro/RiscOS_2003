@@ -173,6 +173,8 @@ DoSwiSetIDEController   ROUT
 
         Push    "R0,R7-R8,LR"
 
+ [ :LNOT: TwinIDEHardware
+
 ; Ignore all this if no drives configured
 
         LDRB    R0,WinIDEDrives
@@ -223,6 +225,8 @@ DoSwiSetIDEController   ROUT
         ASSERT  WinIDEMaxDrives = 2
         STRB    R0,WinIDEDriveState+0
         STRB    R0,WinIDEDriveState+1
+
+ ]
 
 90
         Pull    "R0,R7-R8,LR"
@@ -474,6 +478,110 @@ DoSwiWinPowerControl    ROUT
         Pull    "R3-R5,IDE,LR"
         ORRS    PC,LR,#V_bit
 
+ [ UseIdentify :LOR: AutoDetectIDE
+
+;*********************************************************************
+
+; this routine identifies a given drive
+
+; Entry
+
+;   R0 = physical drive number (0/1/2/3)
+;   R3 = buffer ptr
+
+; exit
+
+;   R0 = command status (0 or a disc error no.)
+
+;   if other error, V set, R0 -> error block
+
+IdentifyDrive ROUT
+	Push	"R1-R5,LR"
+
+; have to construct a parameter block; use the stack
+
+	MOV	R1, #0
+	MOV	r2, #0
+
+	Push	"R1-R2"
+
+	MOV	r1, #&a0
+	ORR	r1, r1, r0, LSL #4
+	STRB	r1, [sp, #5]
+	MOV	r1, #IDECmdIdentify
+	STRB	r1, [sp, #6]
+
+	TSTS	r0, #2
+
+	MOVEQ	r0, #1<<24		; read
+	MOVNE	r0, #(1<<24)+(1<<26)	; read
+	MOV	r2, sp
+	MOV	r4, #512
+	MOV	r5, #0
+
+	BL	DoSwiIDEUserOp
+
+ [ DebugA
+	DREG	r4, "r4: "
+ ]
+
+	TEQS	r4, #0
+	MOVNE	r0, #-1
+	ADD	sp, sp, #8
+
+	Pull	"R1-R5,PC"
+
+;*********************************************************************
+
+; this routine identifies a given drive, assuming it's ATAPI
+
+; Entry
+
+;   R0 = physical drive number (0/1)
+;   R3 = buffer ptr
+
+; exit
+
+;   R0 = command status (0 or a disc error no.)
+
+;   if other error, V set, R0 -> error block
+
+IdentifyPacketDrive ROUT
+	Push	"R1-R5,LR"
+
+; have to construct a parameter block; use the stack
+
+	MOV	R1, #0
+	MOV	r2, #0
+
+	Push	"R1-R2"
+
+	MOV	r1, #&a0
+	ORR	r1, r1, r0, LSL #4
+	STRB	r1, [sp, #5]
+	MOV	r1, #IDECmdIdentifyPacket
+	STRB	r1, [sp, #6]
+
+	MOV	r0, #1<<24	; read
+	MOV	r2, sp
+	MOV	r4, #512
+	MOV	r5, #0
+
+	BL	DoSwiIDEUserOp
+
+ [ DebugA
+	DREG	r4, "r4: "
+ ]
+
+	TEQS	r4, #0
+	MOVNE	r0, #-1
+
+	ADD	sp, sp, #8
+
+	Pull	"R1-R5,PC"
+
+ ]
+
 ;*********************************************************************
 
 DoSwiIDEUserOp  ROUT
@@ -490,6 +598,13 @@ DoSwiIDEUserOp  ROUT
 ;              01 => read
 ;              10 => write
 ;              11 reserved
+
+ [ TwinIDEHardware
+; 	  b26 = port number
+;		0 - primary port
+;		1 - secondary port
+ ]
+
 ;    R2 -> parameter block for command and results
 ;    R3 -> buffer
 ;    R4 = length to transfer
@@ -511,7 +626,7 @@ DoSwiIDEUserOp  ROUT
 ;    IRQ state: preserved but IRQs enabled during call
 
  [ Debug21
-	
+
         DLINE   "DoSwiIDEUserOp",cc
  ]
 
@@ -549,7 +664,15 @@ DoSwiIDEUserOp  ROUT
 
 ; Set IDE -> IDE controller
 
-        LDR     IDE,WinIDEPtr                   ; IDE -> IDE controller
+ [ TwinIDEHardware
+	; now need to select the appropriate physical device
+	TSTS	R7, #1<<26
+	LDREQ	IDE, WinIDEPrimaryPtr		; 0 -> primary
+	LDRNE	IDE, WinIDESecondaryPtr		; 1 -> secondary
+	STR	IDE, WinIDEPtr			; now we have selected the active controller.  be happy
+ |
+        LDR     IDE, WinIDEPtr                  ; IDE -> IDE controller
+ ]
 
 ; Check if user wants to issue command or reset controller
 ; R7 = original R0
@@ -581,12 +704,12 @@ DoSwiIDEUserOp  ROUT
 ; R6 -> data transfer routine
 
  [ Debug21
-	
+
         DLINE   "Installing transfer code..."
  ]
         BL      WinIDEInstallTransferCode       ; install RAM code (R1->R0)
  [ Debug21
-	
+
         DLINE   "Installation successful"
  ]
 
@@ -692,7 +815,7 @@ DoSwiIDEUserOp  ROUT
 ; DRQ and data transfer requested: move data
 
  [ Debug21
-	
+
         DLINE   "Moving data",cc
  ]
 
@@ -798,6 +921,78 @@ DoSwiIDEUserOp  ROUT
         ORRS    PC,LR,#V_bit
 
 ;*********************************************************************
+
+ [ AutoDetectIDE :LAND: TwinIDEHardware
+
+; DoSwiIDEDeviceInfo
+
+; entry:
+
+; r0 = flags/reason code.  any non-zero value will result in BadParmsErr
+
+; R1 = physical device (0-3)
+
+; on exit
+
+; R0 = preserved
+
+; R1 = type of device:
+;       0 - no device
+;       1 - non-packet
+;       2 - packet device
+
+; R2 = ADFS drive number of device, if applicable.  otherwise undefined
+
+; R3 = pointer to device id info for this device, or zero
+
+DoSwiIDEDeviceInfo ROUT
+	Push	"R0,LR"
+
+	; check that the reason code/flags is zero
+
+	TEQS	r0, #0
+
+	BEQ	%FT10			; ok if zero
+
+05
+	ADRL	r0, BadParmsErrBlk	; return bad parameters error
+	BL	copy_error
+	STR	r0, [SP]
+
+	Pull	"R0,LR"
+	ORRS	PC, LR, #V_bit
+
+10
+	; check the drive number is valid
+
+	CMPS	r1, #WinIDEMaxDrives
+	BHS	%BT05			; if greater than or equal then bugger off
+
+	; drive number checked
+
+	ADR	r3, WinIDEDeviceMappings
+	LDRB	r2, [r3, r1]		; get drive number (also gives type)
+
+	ADR	r3, WinIDEDeviceIds
+	ADD	r3, r3, r1, LSL #9	; point to device info
+
+	TEQS	r2, #WinIDEATAPIDevice	; is it atapi
+	MOVEQ	r1, #2
+	BEQ	%FT90
+
+	TEQS	r2, #WinIDENoDevice
+	MOVEQ	r1, #0
+	MOVEQ	r3, #0			; no device, so no info
+	MOVNE	r1, #1			; ATA device
+
+90
+
+	Pull	"R0,LR"
+	BICS	PC, LR, #V_bit
+
+ ]
+
+;*********************************************************************
  [ IDEPower
 WinIDEcontrol   ROUT
 ;
@@ -824,7 +1019,7 @@ WinIDEcontrol   ROUT
         AND     LR, R1, #PortableControl_IDEEnable ; Get IDE enable bit
         TEQ     LR, R0                          ; Any change
         Pull    "R2,PC",EQ,^                    ; No then exit
-                 
+
         MOV     R2, PC                          ; Save CPU mode
         ORR     LR, R2, #SVC_mode
         TEQP    LR, #0                          ; Switch to SVC mode
@@ -890,7 +1085,7 @@ WinLowLevelIDE  ROUT
 
  [ IDEPower
 ;
-; Ensure power is on, 
+; Ensure power is on,
 ;
         Push    "R0, R1"
         MOV     R0, #1
@@ -905,9 +1100,48 @@ WinLowLevelIDE  ROUT
         BLVS    copy_error              ; (R0->R0)
         BVS     %FT15                   ; ... and branch
 
+ [ TwinIDEHardware
+	; have to map drive to device
+	MOV	r0, r2, LSR #(32-3)
+	sbaddr	lr, WinIDEDriveMappings
+ [ Debug21
+	Push	"R0"
+	DLINE	"drive mappings: "
+	LDRB	r0, [lr, #0]
+	DREG	r0, "0: "
+	LDRB	r0, [lr, #1]
+	DREG	r0, "1: "
+	LDRB	r0, [lr, #2]
+	DREG	r0, "2: "
+	LDRB	r0, [lr, #3]
+	DREG	r0, "3: "
+	Pull    "R0"
+ ]
+ [ Debug21
+	DREG	r0, "logical device: "
+ ]
+	LDRB	r0, [lr, r0]
+; now have physical drive in r0
+	STRB	r0, WinIDEPhysDriveNum	; store the physical drive number
+
+ [ Debug21
+	DREG	r0, "Physical device: "
+ ]
+	TSTS	r0, #2
+	LDREQ	IDE, WinIDEPrimaryPtr
+	LDRNE	IDE, WinIDESecondaryPtr
+
+ [ Debug21
+	DREG	IDE, "IDE set to: "
+ ]
+	STR	IDE, WinIDEPtr
+
+ |
 ; Set IDE -> IDE controller
 
         LDR     IDE,WinIDEPtr                   ; IDE -> IDE controller
+ ]
+
 
 ; Save drive number
 
@@ -926,6 +1160,10 @@ WinLowLevelIDE  ROUT
 
         LDRB    LR,WinIDEIRQDevNo
         TEQS    LR,#0                   ; got controller?
+ [ TwinIDEHardware
+	LDRNEB	LR,WinIDEIRQDevNo2
+	TEQNES	LR, #0
+ ]
         MOVEQ   R0,#BadDriveErr         ; if not, return error
         BEQ     %FT30
 
@@ -979,6 +1217,9 @@ WinLowLevelIDE  ROUT
 ; R0 = drive number (0/1)
 
         sbaddr  R8,WinIDEDriveState             ; R8 -> drive states
+ [ TwinIDEHardware
+	LDRB	r0, WinIDEPhysDriveNum		; physical drive to init
+ ]
         LDRB    R9,[R8,R0]                      ; get this drive's state
         CLRV                                    ; as, on init, VS => error
         TEQS    R9,#WinIDEDriveStateActive      ; drive fully initialised?
@@ -1186,7 +1427,7 @@ WinIDEInitDrive ROUT
         MOV     R5,#WinIDETimeoutIdle           ; R5 = short timeout
         BL      WinIDEWaitReady                 ; (R0,R5->R0,V) ignore error
  [ Debug21
-	
+
         BVC     %FT01
         DLINE   "*Not* "
 01
@@ -1476,7 +1717,7 @@ WinIDEOpSpecify ROUT
         Push    "LR"
 
  [ Debug21
-	
+
         DLINE   "WinIDEOpSpecify"
  ]
 
@@ -1644,12 +1885,12 @@ WinIDEReadWriteSecs     ROUT
 ; Install code in RAM to move data into/out of the IDE controller
 
  [ Debug21
-	
+
         DLINE   "Installing transfer code"
  ]
         BL      WinIDEInstallTransferCode       ; (R1->R0)
  [ Debug21
-	
+
         DLINE   "Installation complete"
  ]
 
@@ -1699,5 +1940,377 @@ WinIDEReadWriteSecs     ROUT
         Pull    "PC"
 
 ;*********************************************************************
+
+ [ AutoDetectIDE
+
+AutoDetect1
+	= "Finding ATA/ATAPI devices...",0
+
+AutoDetectATA
+	= "ATA   ",0
+
+AutoDetectATAPI
+	= "ATAPI ",0
+
+ALIGN
+
+; ====================================================================
+
+; ProbeIDEDevices
+
+; the job of this routine is to locate all the IDE devices, and
+; fill in the mappings of drives to devices
+
+ProbeIDEDevices ROUT
+	Push	"R0-R3,R5-R11, LR"
+
+	BL	ReadCMOSTimeout		; (->R2) get the timeout
+
+	MOV	R0, #100
+	MUL	R9, R2, R0		; timeout now in cs
+
+	MOV	lr, #WinIDENoDevice
+	ADR	r0, WinIDEDeviceMappings
+
+	STRB	lr, [r0, #0]
+	STRB	lr, [r0, #1]
+
+ [ WinIDEMaxDrives=4
+	STRB	lr, [r0, #2]
+	STRB	lr, [r0, #3]
+ ]
+
+	ADRL	r0, WinIDEDriveMappings
+
+	STRB	lr, [r0, #0]
+	STRB	lr, [r0, #1]
+
+ [ WinIDEMaxDrives=4
+	STRB	lr, [r0, #2]
+	STRB	lr, [r0, #3]
+ ]
+
+; print a message, saying what we're doing
+	ADR	r0, AutoDetect1
+	SWI	XOS_Write0
+	SWI	XOS_NewLine
+
+; the method used is to wait for a set time, until a drive becomes DRDY
+; and not BSY
+
+	MOV	R4, #0  ; number of ATA drives found
+	MOV	R6, #4  ; logical device
+	MOV	R5, #0	; current physical device
+
+	LDR	IDE, WinIDEPtr	; set up ptr to IDE controller
+
+; we have to wait until the IDE controller becomes ready...
+
+	SWI	XOS_ReadMonotonicTime	; ->R0
+
+	BVS	%FT90			; if an error occurs, assume no drives
+
+	MOV	R10, R0			; store the initial time
+
+	MOV	r0, #4
+	STR	R0, IDERegDigOutput	; reset the drive
+
+	MOV	r0, #5*2
+	BL	DoMicroDelay
+
+	MOV	r0, #0
+	STR	r0, IDERegDigOutput
+
+	MOV	r0, #2048*2
+	BL	DoMicroDelay
+
+10
+	; we select drive r5
+
+	LDRB	R0, IDERegAltStatus	; get contents of alternate status register
+
+	; if BSY, or DRQ are set then round we go again
+
+	TSTS	R0, #IDEStatusBSY+IDEStatusDRQ
+	BNE	%FT70
+
+	; here BSY=0, DRQ=0, so select drive.
+
+	MOV	R0, r5, LSL #4		; select drive.  other bits obsolete, so ignore 'em
+	ORR	R0, R0, #IDEDrvHeadMagicBits
+
+	STRB	R0, IDERegDrvHead	; and store value
+
+	; now wait for a little while
+
+	MOV	R0, #1*2
+	BL	DoMicroDelay		; wait a suitable length of time
+
+	; now get the status again
+
+	LDRB	R0, IDERegAltStatus
+
+	; want BSY=0, DRQ=0
+
+	TSTS	R0, #IDEStatusBSY+IDEStatusDRQ
+	BNE	%FT70
+
+	; check for DRDY
+
+	TSTS	r0, #IDEStatusDRDY
+
+	BEQ	%FT40	; ATA drive not ready, or might be ATAPI?
+
+	MOV	lr, r5, LSL #3
+
+; now do an Identify on the device
+
+	ADR	r3, WinIDEDeviceIds
+	ASSERT	SzWinIDEId=512
+	ADD	r3, r3, r5, LSL #9
+	MOV	r0, r5
+
+	BL	IdentifyDrive
+
+	TEQS	r0, #0
+
+	BEQ	%FT20
+
+	ADRL	r0, NoDriveString
+	SWI	XOS_Write0
+
+	B	%FT35
+
+20
+
+	; now sp->id information for this drive
+
+	ADR	r0, WinIDEDeviceIds
+	ASSERT	SzWinIDEId=512
+	ADD	r0, r0, r5, LSL #9
+	MOV	r1, r5
+	MOV	r2, r6
+
+	BL	PrintDeviceInfo
+
+; now we have to set up the mappings
+	ADRL	lr, WinIDEDeviceMappings	; set mapping from device to drive
+	STRB	r6, [lr, r5]
+
+	SUB	r6, r6, #4
+
+	ADRL	lr, WinIDEDriveMappings		; set mapping from drive to device
+	STRB	r5, [lr, r6]
+
+	ADD	r6, r6, #5
+	ADD	r4, r4, #1
+
+  	SWI	XOS_NewLine
+
+35
+
+	ADD	R5, R5, #1
+	CMPS	R5, #WinIDEMaxDrives-1
+	BHI	%FT90
+
+	B	%BT10
+
+40
+
+	ADR	r3, WinIDEDeviceIds
+	ASSERT	SzWinIDEId=512
+	ADD	r3, r3, r5, LSL #9
+	MOV	r0, r5
+
+	BL	IdentifyPacketDrive
+
+ [ DebugA
+	DREG	r0, "returned: "
+ ]
+
+	CMPS	r0, #-1
+	BNE	%FT60
+
+	ADRL	r0, NoDriveString
+	SWI	XOS_Write0
+
+	B	%FT65
+
+60
+	TEQS	r0, #0
+	BNE	%FT70		; error, don't give up yet!
+
+	ADR	r0, WinIDEDeviceIds
+	ASSERT	SzWinIDEId=512
+	ADD	r0, r0, r5, LSL #9
+	MOV	r1, r5
+	MVN	r2, #0
+
+	BL	PrintDeviceInfo
+
+  	SWI	XOS_NewLine
+
+	ADR	lr, WinIDEDeviceMappings
+	MOV	r0, #WinIDEATAPIDevice
+	STR	r0, [lr, r5]
+
+65
+	ADD	R5, R5, #1
+	CMPS	R5, #WinIDEMaxDrives-1
+
+	BHI	%FT90
+
+	B	%BT10
+
+
+70
+	SWI	XOS_ReadMonotonicTime	; get the current time
+	BVS	%FT90
+
+	SUB	R0, R0, R10
+
+	CMPS	R0, R9			; check for timeout elapsed
+	BLE	%FT80			; back around we go
+
+	ADRL	r0, NoDriveString
+	SWI	XOS_Write0
+
+	B	%BT65
+
+80
+
+	CMPS	R5, #WinIDEMaxDrives-1
+	BLS	%BT10
+
+90
+
+	Pull	"R0-R3,R5-R11, PC",,^
+
+; ========================================================
+
+; this routine outputs a string from an ATA/ATAPI device
+; identify.  each of the strings in the identify device
+; data is held in an unusual form, where alternate characters
+; are swapped; strings are padded with spaces to fill the
+; field.
+
+; for instance, the string "FUJITSU" would be represented
+; as "UFIJST U", plus any padding with further spaces
+
+; it is assumed that the name is a multiple of 2 chars in length,
+; and is at least 2 characters.  all the padding spaces are
+; printed in the message.
+
+; entry
+
+; R0 -> string
+; R1  = number of characters
+
+
+PrintATAName	ROUT
+	Push	"R0-R3, LR"
+
+	MOV	R2, R0
+10
+	LDRB	R0, [R2, #1]
+	SWI	XOS_WriteC
+	BVS	%FT90
+	LDRB	R0, [R2], #2	; get next thing and advance the pointer
+	SWI	XOS_WriteC
+	BVS	%FT90
+
+; now check if we've nothing left to do
+	SUBS	R1, R1, #2
+	BGT	%BT10		; go round again if we have more to do
+
+	CLRV
+90
+	Pull	"R0-R3, PC"
+
+
+; ========================================================
+
+; PrintDeviceInfo
+
+; this rountine prints information about a given device; the
+
+; entry:
+
+; r0 -> ATA/ATAPI information structure
+; r1  = device no
+; r2  = ADFS drive no, or -1 if not an adfs drive (ie ATAPI)
+
+PrintDeviceInfo	ROUT
+	Push	"R0-R4, LR"
+
+	SUB	sp, sp, #8	; size of buffer for output values
+
+	MOV	r4, r0
+	MOV	r3, r2
+	MOV	r0, r1
+
+	MOV	r1, sp
+	MOV	r2, #8
+
+	CMPS	r3, #-1
+	BNE	%FT10
+
+	ADR	r0, ATAPIString
+	SWI	XOS_Write0
+	BVS	%FT90
+
+	B	%FT20
+
+10
+	MOV	r0, r3
+	MOV	r1, sp
+	MOV	r2, #8
+	SWI	XOS_ConvertCardinal1
+	SWIVC	XOS_Write0
+	BLVC	%FT99		; pad with spaces
+
+	BVS	%FT90
+	ADR	r0, ATAString
+	SWI	XOS_Write0
+	BVS	%FT90
+
+20
+; finally, we print the device name
+
+	ADD	r0, r4, #WinIDEIdModelNo
+	MOV	r1, #40		; length of the string
+	BL	PrintATAName
+
+90
+	ADD	sp, sp, #8
+	Pull	"R0-R4, PC",,^
+
+; subroutine to pad with spaces
+99
+	Push	"LR"
+;	ADD	R2, R2, #1
+
+	MOV	r0, #" "
+01
+	SWI	XOS_WriteC
+	BVS	%FT02
+	SUBS	R2, R2, #1
+	BNE	%BT01
+
+02
+	Pull	"PC",,^
+
+ATAPIString
+	DCB	"-       ATAPI   ",0
+
+ATAString
+	DCB	"ATA     ",0
+
+NoDriveString
+	DCB	"-       -",10,13,0
+
+	ALIGN
+
+ ]
 
         END
