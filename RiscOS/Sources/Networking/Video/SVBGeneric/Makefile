@@ -283,6 +283,8 @@ ${DBG_MODULE}: ${DBG_OBJS} ${MSGSF} ${LIBS} ${CLIB}
 # Specialised static dependencies
 #
 
+o.SVBGHdr h.SVBGHdr: VersionNum
+
 o.CallOut oSL.CallOut oSLd.CallOut: SVBGHdr.h
 
 o.Module oSL.Module oSLd.Module: SVBGHdr.h
