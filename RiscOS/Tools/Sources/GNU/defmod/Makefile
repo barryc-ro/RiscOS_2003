@@ -82,7 +82,10 @@ LIBS=${CLIB}
 .SUFFIXES: .o .c .y .s
 .c.o:;     ${CC} ${CCFLAGS} -o $@ $<
 .s.o:;     ${AS} ${ASFLAGS} -o $@ $<
-.y.c:;     ${YACC} ${YACCFLAGS} -o $@ $<
+
+
+c.defmod: sources.y.defmod
+        ${YACC} ${YACCFLAGS} -o $@ sources.y.defmod
 
 o.defmod: c.defmod
 	${CC} ${CCFLAGS} ${YACCDEFS} -o $@ c.defmod

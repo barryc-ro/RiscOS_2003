@@ -1,6 +1,6 @@
 /*defmod.y---grammar for a .swi file*/
 
-/*OSLib---efficient, type-safe, transparent, extensible,
+/*OSLib---efficient, type-safe, transparent, extensible,\n"
    register-safe A P I coverage of RISC O S*/
 /*Copyright © 1994 Jonathan Coxhead*/
 
@@ -20,40 +20,46 @@
    Foundation, Inc, 675 Mass Ave, Cambridge, MA 02139, U S A.
 */
 
+/* Revision History:
+JRC            Original Release
+TV    990418   Modification originally devised by Tom Hughes:
+               Allows Constants to be declared
+*/
+
 %{ /*C declarations*/
 
    /*From CLib*/
-#include <ctype.h>
-#include <stddef.h>
-#include <stdlib.h>
-#include <string.h>
-#include "swis.h"
+   #include <ctype.h>
+   #include <stddef.h>
+   #include <stdlib.h>
+   #include <string.h>
+   #include <swis.h>
 
    /*From OSLib*/
-#include "fileswitch.h"
-#include "macros.h"
-#include "os.h"
-#include "osfind.h"
+   #include "fileswitch.h"
+   #include "macros.h"
+   #include "os.h"
+   #include "osfind.h"
 
    /*From Support*/
-#include "hostfs.h"
-#include "lookup.h"
-#include "trace.h"
+   #include "hostfs.h"
+   #include "lookup.h"
+   #include "trace.h"
 
    /*Local*/
-#include "asmhelp.h"
-#include "chelp.h"
-#include "def.h"
-#include "cheader.h"
-#include "hdr.h"
-#include "main.h"
-#include "objasm.h"
-#include "cstrong.h"
+   #include "asmhelp.h"
+   #include "chelp.h"
+   #include "def.h"
+   #include "cheader.h"
+   #include "hdr.h"
+   #include "main.h"
+   #include "objasm.h"
+   #include "cstrong.h"
 
-#include "VersionNum"
+   #include "VersionNum"
 
-   static char *strstrc (char *, const char *, char);
-   static char *strcatw (char *, const char *, const char *);
+   static char *strstrc (char *, char *, char);
+   static char *strcatw (char *, char *, char *);
 
    static lookup_t needses, consts, types, swis;
    static char Title [256],
@@ -66,9 +72,11 @@
 
    static int yylex (void);
 
-   static void yyerror (const char *);
+   static void yyerror (char *);
 
-   int yydebug;
+   static int yyparse(void);    /* TV 990128 */
+
+   extern int yydebug;
 
    static int Line_No = 1;
 
@@ -103,8 +111,8 @@
       exit_condition_LIST exit_condition absent_part description
       description_OPTION
 
-%type <type_defn> type toid typed_var_LIST typed_var toided_var_LIST
-      toided_var
+%type <type_defn> base_type base_type_OPTION type toid typed_var_LIST
+      typed_var toided_var_LIST toided_var
 
 %type <description> wordchar_SEQUENCE word word_SEQUENCE word_SEQUENCE_OPTION
       DESCRIPTION DESCRIPTION_OPTION
@@ -228,6 +236,34 @@ type_defn:
       }
    };
 
+base_type:
+   COLON ID
+   {  /*Use it verbatim, but check the type does exist (and find out if
+         it's a struct type or not).*/
+      os_error *error;
+      def_t t;
+
+      if ((error = lookup (types, $2, (void **) &t)) != NULL &&
+            error->errnum != os_GLOBAL_NO_ANY)
+      {  yyerror (error->errmess);
+         YYERROR;
+      }
+
+      $$.tag = def_TYPE_ID;
+      $$.name = NULL;
+      if (error != NULL)
+      {  /*have to make an optimistic assumption*/
+         $$.value = def_VALUE_VARIABLE;
+         if (Verbose)
+            fprintf (stderr, "warning: type \"%s\" undefined at line "
+                  "%d\n", $2, Line_No);
+      }
+      else
+         $$.value = t != NULL? t->value: def_VALUE_VARIABLE;
+      $$.description = NULL;
+      strcpy ($$.data AS id, $2);
+   };
+
 type:
    INT
    {$$.tag = def_TYPE_INT;   $$.name = NULL;
@@ -269,15 +305,21 @@ type:
    DATA
    {$$.tag = def_TYPE_DATA; $$.name = NULL; $$.value = def_VALUE_VARIABLE;
          $$.description = NULL;} |
-   STRUCT OPEN typed_var_LIST ellipsis_OPTION CLOSE
-   {  $$ = $3;
+   STRUCT base_type_OPTION OPEN typed_var_LIST ellipsis_OPTION CLOSE
+   {  $$ = $4;
       $$.tag = def_TYPE_STRUCT;
-      if ($4)
+      if ($5)
          $$.value = def_VALUE_VARIABLE;
-      else if ($3.value == def_VALUE_REGISTER)
+      else if ($4.value == def_VALUE_REGISTER)
          $$.value = def_VALUE_FIXED;
       $$.description = NULL;
-      $$.data AS list.ellipsis = $4;
+      if ($2.tag != def_TYPE_VOID)
+      {  $$.data AS list.base = qalloc (def_sizeof_TYPE ($2.tag));
+         memcpy ($$.data AS list.base, &$2, def_sizeof_TYPE ($2.tag));
+      }
+      else
+         $$.data AS list.base = NULL;
+      $$.data AS list.ellipsis = $5;
    } |
    UNION OPEN toided_var_LIST CLOSE
    {  $$ = $3;
@@ -390,6 +432,7 @@ entry_condition:
          $$.inputs [$1] = qalloc (def_sizeof_TYPE ($3.tag));
          memcpy ($$.inputs [$1], &$3, def_sizeof_TYPE ($3.tag));
       } |
+/*   REG CONSTANT NUM description_OPTION  */    /* TV 990418 */
    REG CONSTANT const description_OPTION
       {  $$ = $4;
          if ($$.starred_swi)
@@ -472,7 +515,7 @@ exit_condition:
 
 description:
    DESCRIPTION
-      {  tracef("DESCRIPTION \"%s\"\n" _ $1);
+      {  tracef ("DESCRIPTION \"%s\"\n" _ $1);
          $$ = Empty;
          $$.description = EMPTY ($1)? NULL: qstrdup ($1);
          $$.starred_swi = TRUE;
@@ -492,19 +535,19 @@ space: spacechar {} | nl {};
 ws_item: space {} | comment {};
 comment: '/' '/' commentchar_SEQUENCE_OPTION nl {};
 
-TITLE:  t i t l e   ws {tracef("TITLE\n");};
-AUTHOR: a u t h o r ws {tracef("AUTHOR\n");};
-NEEDS:  n e e d s   ws {tracef("NEEDS\n");};
-CONST:  c o n s t   ws {tracef("CONST\n");};
-TYPE:   t y p e     ws {tracef("TYPE\n");};
-SWI:    s w i       ws {tracef("SWI\n");};
+TITLE:  t i t l e   ws {tracef ("TITLE\n");};
+AUTHOR: a u t h o r ws {tracef ("AUTHOR\n");};
+NEEDS:  n e e d s   ws {tracef ("NEEDS\n");};
+CONST:  c o n s t   ws {tracef ("CONST\n");};
+TYPE:   t y p e     ws {tracef ("TYPE\n");};
+SWI:    s w i       ws {tracef ("SWI\n");};
 
-NUMBER: n u m b e r ws {tracef("NUMBER\n");};
-ENTRY:  e n t r y   ws {tracef("ENTRY\n");};
-EXIT:   e x i t     ws {tracef("EXIT\n");};
-ABSENT: a b s e n t ws {tracef("ABSENT\n");};
+NUMBER: n u m b e r ws {tracef ("NUMBER\n");};
+ENTRY:  e n t r y   ws {tracef ("ENTRY\n");};
+EXIT:   e x i t     ws {tracef ("EXIT\n");};
+ABSENT: a b s e n t ws {tracef ("ABSENT\n");};
 
-FLAGS:  f l a g s   ws {tracef("FLAGS\n");};
+FLAGS:  f l a g s   ws {tracef ("FLAGS\n");};
 
 CONTAINS:             '='     ws {};
 REFERENCES:           '-' '>' ws {};
@@ -761,6 +804,7 @@ escapedchar: '\'' {$$ = '\'';} | '"' {$$ = '"';} |
 EMPTY:;
 
 /*option*/
+base_type_OPTION: base_type | EMPTY {$$.tag = def_TYPE_VOID;};
 commentchar_SEQUENCE_OPTION: commentchar_SEQUENCE {} | EMPTY {};
 condition_part_OPTION: condition_part | EMPTY {$$ = Empty;};
 decl_SERIES_OPTION: decl_SERIES | EMPTY;
@@ -854,7 +898,9 @@ decl_SERIES: decl {} | decl_SERIES SEMICOLON decl {};
 %%
 /*More C code*/
 
-char *strstrc (char *s, const char *s1, char c)
+int yydebug = 0;
+
+char *strstrc (char *s, char *s1, char c)
    /*s = s1 + c;*/
 
 {  int len = strlen (s1);
@@ -866,7 +912,7 @@ char *strstrc (char *s, const char *s1, char c)
    return s;
 }
 
-char *strcatw (char *s, const char *s1, const char *s2)
+char *strcatw (char *s, char *s1, char *s2)
    /*s = s1 + ' ' + s2;*/
 
 {  int len = strlen (s1);
@@ -890,7 +936,7 @@ void *qalloc (size_t t)
    return p;
 }
 
-char *qstrdup (const char *s)
+char *qstrdup (char *s)
 
 {  char *dup = qalloc (strlen (s) + 1);
 
@@ -943,10 +989,10 @@ int main (int argc, char *argv [])
    int i;
    enum {None, Objasm, C_Header, C_Plus_Plus_Header, C_Help, Library, Hdr,
          Asm_Help, C_Strong, Asm_Strong} option = None;
+   enum {APCS26, APCS32} mode = APCS26;
    char *output = NULL;
-   bool apcs32 = FALSE;
 
-   trace_initialise("Trace$To");
+   trace_initialise ("Trace$To");
 
    if ((error = lookup_new (&needses, 16)) != NULL ||
          (error = lookup_new (&consts, 16)) != NULL ||
@@ -981,26 +1027,20 @@ int main (int argc, char *argv [])
          Verbose = TRUE;
       else if (strcmp (argv [i], "-o") == 0)
          output = argv [++i];
-      else if (strcmp (argv [i], "-32bit") == 0)
-         apcs32 = TRUE;
-      else if (strcmp (argv [i], "-26bit") == 0)
-         apcs32 = FALSE;
-      else if (strcmp (argv [i], "-help") == 0
-               || strcmp (argv [i], "-?") == 0)
-      {  if ((error = xos_pretty_print ("DefMod "
+      else if (strcmp (argv [i], "-help") == 0)
+      {  if ((error = xos_pretty_print ("DefMod, "
                Module_FullVersion " [" Module_Date "]\r"
-               "Copyright © Jonathan Coxhead, 1994.\r"
+               ". Copyright © Jonathan Coxhead, 1994.\r"
                "DefMod comes with ABSOLUTELY NO WARRANTY.\r"
                "This is free software, and you are welcome to redistribute it "
                "under certain conditions. See the file Copying for details.\r"
-               "Usage: DefMod <type> [-v] [-help] [-26bit|-32bit] "
+               "Usage: DefMod <type> [-v] [-help] "
                      "[-o <output-dir> | > <output-file>] "
                      "[-byte_wide <byte-wide-file>] "
+                     "[-26bit | -32bit] "
                      "< <module-interface-file>\r"
                "Purpose: generate output from a module interface file\r"
                "-v\t\t"             "verbose\r"
-               "-26bit\t\t"         "generate APCS-R compliant code\r"
-               "-32bit\t\t"         "generate APCS 3/32 compliant code\r"
                "-o\t\t"             "is required when generating a "
                                     "directory\r"
                "<output-dir>\t"     "directory to create\r"
@@ -1009,6 +1049,8 @@ int main (int argc, char *argv [])
                                     "types defined elsewhere\r"
                "<byte-wide-file>\t" "file containing whitespace-separated "
                                     "names of byte-wide types\r"
+               "-26bit\t\t"         "generate 26 bit code\r"
+               "-32bit\t\t"         "generate 32 bit code\r"
 
                "<type> is one of:\r"
                "\t-asmhelp\t"       "SrcEdit assembler help file\r"
@@ -1080,6 +1122,14 @@ int main (int argc, char *argv [])
          if ((error = xosfind_close (f)) != NULL)
             goto finish;
       }
+      else if (strcmp (argv [i], "-26bit") == 0)
+      {
+         mode = APCS26;
+      }
+      else if (strcmp (argv [i], "-32bit") == 0)
+      {
+         mode = APCS32;
+      }
 
       i++;
    }
@@ -1095,7 +1145,8 @@ int main (int argc, char *argv [])
    switch (option)
    {  case Objasm:
          if ((error = objasm_output (stdout, Title, Author, needses,
-               consts, types, swis, /*separate?*/ FALSE, SKIP, apcs32)) != NULL)
+               consts, types, swis, /*separate?*/ FALSE,
+               mode == APCS32, SKIP)) != NULL)
             goto finish;
       break;
 
@@ -1126,7 +1177,8 @@ int main (int argc, char *argv [])
       case Library:
          if (output != NULL)
             if ((error = objasm_output (SKIP, Title, Author, needses,
-                  consts, types, swis, /*separate?*/ TRUE, output, apcs32)) !=
+                  consts, types, swis, /*separate?*/ TRUE,
+                  mode == APCS32, output)) !=
                   NULL)
                goto finish;
       break;
@@ -1146,12 +1198,12 @@ int main (int argc, char *argv [])
    }
 
 finish:
-   trace_terminate();
+   trace_terminate ();
    if (error == NULL)
-      exit (Parse_Error? EXIT_FAILURE: EXIT_SUCCESS);
+      exit (Parse_Error? 1: 0);
    else
    {  fprintf (stderr, "%s\n", error->errmess);
-      exit (EXIT_FAILURE);
+      exit (1);
 }  }
 
 int yylex (void)
@@ -1179,7 +1231,7 @@ int yylex (void)
       );
 }
 
-void yyerror (const char *s)
+void yyerror (char *s)
 
 {  os_error error;
 
