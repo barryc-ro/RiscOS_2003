@@ -35,6 +35,12 @@ TARGET    = aof.ncfre-${TYPE}
 
 ABSSYM    = RISC_OSLib:o.c_abssym
 
+BBETYPE = fresco
+bbe-fresco: bbe-generic
+  BBE_Export_Dir bin
+  ${CP} VersionNum ${BBEDIR}.VersionNum ${CPFLAGS}
+  ${CP} VERSION ${BBEDIR}.VERSION ${CPFLAGS}
+
 #
 # Generic rules:
 #
