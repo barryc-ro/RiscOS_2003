@@ -17,6 +17,7 @@
 # 24-Aug 99  SBF    Added export of C headers, and support for StripDepnd tool
 # 25-Aug 99  SBF    Created "Register.Keyboard"; added this to makefile
 # 11-Jan-00  BJGA   Exports Global.IO.h.GenericIO
+# 28-Jan-00  BJGA   Exports Global.IO.h.IOMD
 
 #
 # Paths
@@ -130,6 +131,7 @@ EXPORTS   = \
  ${HDIR}.Global.h.Tokens \
  ${HDIR}.Global.h.IOCtl \
  ${HDIR}.Global.IO.h.GenericIO \
+ ${HDIR}.Global.IO.h.IOMD \
 
 #
 # Derived assembler header files
@@ -265,6 +267,7 @@ ${HDIR}.Global.h.Sprite:     Hdr.Sprite ${HDR2H};         perl ${HDR2H} Hdr.Spri
 ${HDIR}.Global.h.Tokens:     Hdr.Tokens ${HDR2H};         perl ${HDR2H} Hdr.Tokens     $@
 ${HDIR}.Global.h.CMOS:       Hdr.CMOS ${HDR2H};           perl ${HDR2H} Hdr.CMOS       $@
 ${HDIR}.Global.IO.h.GenericIO: Hdr.IO.GenericIO ${HDR2H}; perl ${HDR2H} Hdr.IO.GenericIO $@
+${HDIR}.Global.IO.h.IOMD:    Hdr.IO.IOMD ${HDR2H};        perl ${HDR2H} Hdr.IO.IOMD    $@
 
 
 # C headers:
