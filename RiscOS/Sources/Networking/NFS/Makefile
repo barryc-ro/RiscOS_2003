@@ -257,7 +257,7 @@ ${ROMTARGET}: ${OBJS} ${HDRS} ${RPCLIB} ${UNIXLIB} ${INETLIB} ${SOCKLIB} ${ASMLI
 #
 # Final link for the ROM Image (using given base address)
 #
-rom_link:
+rom_link: ${ROMTARGET}
         ${MKDIR} linked
         ${LD} -o linked.${COMPONENT} -rmf -base ${ADDRESS} ${ROMTARGET} ${ABSSYM}
         ${CP} linked.${COMPONENT} ${LINKDIR}.${COMPONENT} ${CPFLAGS}
