@@ -823,4 +823,19 @@ void view_dump(const char *name)
 
 /* ------------------------------------------------------------------------------------------- */
 
+void fe_save_text(fe_view v)
+{
+    if (v->displaying)
+    {
+	char buffer[128];
+	char *s = "<Wimp$ScrapDir>.NCFtext";
+#if DEBUG
+	backend_doc_saver_text(s, v->displaying);
+	sprintf(buffer, "filer_run %s", s);
+#endif
+    }
+}
+
+/* ------------------------------------------------------------------------------------------- */
+
 /* eof stbopen.c*/

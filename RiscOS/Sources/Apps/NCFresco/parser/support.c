@@ -182,6 +182,21 @@ extern int strcmpu(const UCHARACTER *a, const char *b)
     }
     /*NOTREACHED*/
 }
+extern int strncmpu(const UCHARACTER *a, const char *b, int n)
+{
+    const UCHARACTER *p;
+    const char *q;
+
+    for(p=a, q=b;; p++, q++) {
+	int diff;
+ 	if (p == a+n) return 0;	 /*   Match up to n characters */
+	diff = *p - *q;
+	if (*p >= 256) return diff;
+	if (!(*p && *q)) return diff;
+	if (diff) return diff;
+    }
+    /*NOTREACHED*/
+}
 #endif
 
 /*****************************************************************************/

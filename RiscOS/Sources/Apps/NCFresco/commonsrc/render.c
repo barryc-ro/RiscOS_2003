@@ -653,13 +653,13 @@ int render_text_full(be_doc doc, int font_index, const char *text, int x, int y,
     }
 
 #if UNICODE
+    RENDBG(("render_text_full: font_index %d latin %d\n", font_index, webfont_latin(font_index)));
+	
     if (config_encoding_internal == 1 /* doc && doc->rh->encoding_write == csUTF8 */ && font_index != -1 && webfont_latin(font_index))
     {
 	/* we have a utf8 stream which we want to display through an 8 bit font */
 	paint_info pi;
 
-	RENDBG(("render_text_full: font_index %d latin %d\n", font_index, webfont_latin(font_index)));
-	
 	pi.fh = fh;
 	pi.flags = flags;
 	pi.x = x * MILIPOINTS_PER_OSUNIT;

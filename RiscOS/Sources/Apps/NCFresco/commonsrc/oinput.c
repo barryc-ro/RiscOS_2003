@@ -916,15 +916,18 @@ char *oinput_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
 	    int coords[8];
 	    int text_input_offset;
 	    int whichfont = antweb_getwebfont(doc, ti, WEBFONT_TTY);
+	    BOOL update = (ii->flags & rid_if_NUMBERS) != 0;
 
 	    x-=INPUT_TEXT_BORDER_X;
 
 	    /* take into account scrolled strings */
 	    if (be_item_has_caret(doc, ti))
 	    {
-		x = get_string_start(whichfont, ii->data.str, doc->selection.data.text.input_offset,
-				     x, ii->base.display->width - 2*INPUT_TEXT_BORDER_X,
+		int xoffset = get_string_start(whichfont, ii->data.str, doc->selection.data.text.input_offset,
+				     0, ii->base.display->width - 2*INPUT_TEXT_BORDER_X,
 				     ii->flags & rid_if_NUMBERS);
+		x -= xoffset;
+		update = TRUE;
 	    }
 
 	    coords[0] = coords[1] = 0;
@@ -940,7 +943,7 @@ char *oinput_click(rid_text_item *ti, rid_header *rh, antweb_doc *doc, int x, in
 	    antweb_place_caret(doc, ti, text_input_offset);
 
 	    /* with numbers - if the focus is repositioned then it needs redrawing */
-	    if (ii->flags & rid_if_NUMBERS)
+	    if (update)
 		antweb_update_item(doc, ti);
 	}
 	break;

@@ -611,6 +611,7 @@ extern int sgml_translation(SGMLCTX *context, UCHARACTER *in_ptr, int in_bytes, 
 {
 #if DEBUG
     UCHARACTER *orig_ptr = in_ptr;
+    USTRING ds;
 #endif
     UCHARACTER *out_ptr;
     int out_bytes;
@@ -630,8 +631,12 @@ extern int sgml_translation(SGMLCTX *context, UCHARACTER *in_ptr, int in_bytes, 
     /* Someone is triggering this. They shouldn't */
     ASSERT(in_ptr != NULL);
 
+#if DEBUG
+    ds.ptr = in_ptr;
+    ds.bytes = in_bytes;
+#endif
     PRSDBGN(("sgml_translation('%.*s', %d, 0x%x)\n",
-	    in_bytes, in_ptr, in_bytes, rules));
+	    in_bytes, usafe(ds), in_bytes, rules));
 
     for (out_ptr = in_ptr, out_bytes = 0; in_bytes > 0; in_bytes--)
     {
@@ -709,10 +714,14 @@ extern int sgml_translation(SGMLCTX *context, UCHARACTER *in_ptr, int in_bytes, 
 
 #if SGML_REPORTING
 	    if ( !used && (rules & SGMLTRANS_WARNINGS) != 0 )
+	    {
+		ds.ptr = in_ptr - 1;
+		ds.bytes = in_bytes;
 		sgml_note_message(context,
 				  "Unrecognised character entity (&entity;) name '%.*s'",
 				  min(MAXSTRING, in_bytes),
-				  in_ptr - 1);
+				  usafe(ds));
+	    }
 #endif
 	}
 	else if (c == '&' && (rules & SGMLTRANS_AMPERSAND) != 0)
@@ -737,13 +746,14 @@ extern int sgml_translation(SGMLCTX *context, UCHARACTER *in_ptr, int in_bytes, 
 		{
 		    if ((rules & SGMLTRANS_STRICT) || matchp->match == case_EXACT)
 		    {
-			if (strcmpu(in_ptr, matchp->name) == 0)
+			int namelen = strlen(matchp->name);
+			if (strncmpu(in_ptr, matchp->name, namelen) == 0)
 			    upper_case = FALSE;
 			else
 			{
 			    if (matchp->name_upper)
 			    {
-				if (strcmpu(in_ptr, matchp->name_upper) == 0)
+				if (strncmpu(in_ptr, matchp->name_upper, strlen(matchp->name_upper)) == 0)
 				    upper_case = TRUE;
 				else
 				    matchp = NULL;
@@ -751,7 +761,7 @@ extern int sgml_translation(SGMLCTX *context, UCHARACTER *in_ptr, int in_bytes, 
 			    else if (matchp->match == case_UPPER_FIRST)
 			    {
 				if (in_ptr[0] < 128 && isupper(in_ptr[0]) && 
-				    strcmpu(&in_ptr[1], &matchp->name[1]) == 0)
+				    strncmpu(&in_ptr[1], &matchp->name[1], namelen-1) == 0)
 				    upper_case = TRUE;
 				else
 				    matchp = NULL;
@@ -798,10 +808,13 @@ extern int sgml_translation(SGMLCTX *context, UCHARACTER *in_ptr, int in_bytes, 
 
 #if SGML_REPORTING
 	    if (! used && (rules & SGMLTRANS_WARNINGS) != 0 )
+	    {
+		ds.ptr = in_ptr - 1;
+		ds.bytes = in_bytes;
 		sgml_note_message(context,
 				  "Unrecognised character entity (&entity;) name '%.*s'",
-				  min(MAXSTRING, in_bytes),
-				  in_ptr - 1);
+				  min(MAXSTRING, in_bytes), usafe(ds));
+	    }
 #endif
        	}
 #if 0
@@ -824,9 +837,12 @@ extern int sgml_translation(SGMLCTX *context, UCHARACTER *in_ptr, int in_bytes, 
 	}
     }
 
-    PRSDBGN(("sgml_translation() returns '%.*s', %d bytes\n",
-	     out_bytes, orig_ptr, out_bytes));
-
+#if DEBUG
+    ds.ptr = orig_ptr;
+    ds.bytes = out_bytes;
+    PRSDBGN(("sgml_translation() returns '%.*s', %d bytes\n", out_bytes, usafe(ds), out_bytes));
+#endif
+    
     return out_bytes;
 }
 

@@ -83,7 +83,7 @@ os_error *webfonts_init_font(int n)
     os_error *e;
     char buffer[256];
     webfont *item = webfonts + n;
-    int size;
+    int size, xsize, ysize, extra_index;
 
     e = NULL;
 
@@ -100,17 +100,43 @@ os_error *webfonts_init_font(int n)
     if (size == 7)
 	return NULL;
 
-    size = config_font_sizes[size];
-#ifdef STBWEB
-    if ((n & (WEBFONT_SPECIAL_TYPE_MASK|WEBFONT_FLAG_SPECIAL)) != (WEBFONT_SPECIAL_TYPE_MENU|WEBFONT_FLAG_SPECIAL))
-#endif
-	size = size*config_display_scale/100;
+    size = config_font_sizes[size] * 16;
 
-/*   DBG(("Font index %d, size %d, name %s\n", n, size, buffer)); */
+    /* don't scale the MENU font with the general scaling */
+    if ((n & (WEBFONT_SPECIAL_TYPE_MASK|WEBFONT_FLAG_SPECIAL)) != (WEBFONT_SPECIAL_TYPE_MENU|WEBFONT_FLAG_SPECIAL))
+	size = size * config_display_scale / 100;
+
+    /* check for per font information */
+    extra_index = -1;
+    if (n & WEBFONT_FLAG_SPECIAL)
+    {
+	int nn = n & WEBFONT_SPECIAL_TYPE_MASK;
+	if (nn >= WEBFONT_SPECIAL_TYPE_JAPANESE && nn <= WEBFONT_SPECIAL_TYPE_HEBREW)
+	    extra_index = 3 + ((nn - WEBFONT_SPECIAL_TYPE_JAPANESE) >> WEBFONT_SPECIAL_TYPE_SHIFT);
+    }
+    else
+    {
+	int nn = (n & WEBFONT_FLAG_MASK) >> WEBFONT_FLAG_SHIFT;
+	extra_index = nn >> 2;	/* get rid of bold and italic */
+    }
+
+    if (extra_index != -1)
+    {
+	xsize = size * config_font_scales[extra_index] / 100;
+	ysize = xsize * config_font_aspects[extra_index] / 100;
+    }
+    else
+	xsize = ysize = size;
+
+    DBG(("Font index %d, extra %d scale %d%% aspect %d%% size %d, xsize %d, ysize %d, name %s\n",
+	 n, extra_index,
+	 extra_index != -1 ? config_font_scales[extra_index] : -1,
+	 extra_index != -1 ? config_font_aspects[extra_index] : -1,
+	 size, xsize, ysize, buffer));
 
     if (e == NULL)
     {
-	e = font_find(buffer, size * 16, size * 16, 0, 0, &(item->handle));
+	e = font_find(buffer, xsize, ysize, 0, 0, &(item->handle));
     }
 
     if (e == NULL)
@@ -119,7 +145,7 @@ os_error *webfonts_init_font(int n)
          * size, *not* on the bounding box of the font, otherwise we get
          * different answers for medium and bold fonts!
          */
-	int fsizeos = (size * 180 + 71)/72;         /* points to OS units */
+	int fsizeos = (ysize * 180/16 + 71)/72;         /* points to OS units */
 
 	if (config_display_leading_percent)
 	    fsizeos += fsizeos * config_display_leading / 100;
@@ -174,7 +200,7 @@ os_error *webfonts_initialise( void )
     if ( !e )
         e = webfont_find_font( WEBFONT_TTY );
 
-#if 1
+#if 0
     /* nasty hack to ensure that japanese font is always open */
     if (!e && config_encoding_internal != 0)
     {
@@ -265,11 +291,14 @@ static os_error *scanstring_fn(const char *text, BOOL last, void *handle)
     os_error *e;
     int w, h;
 
+    /* DBG(("scanstring_fn: +\n")); */
+    
     e = (os_error *)_swix(Font_ScanString, _INR(0,4) | _IN(7) | _OUTR(3,4),
 			  si->fh, text, si->flags,
 			  INT_MAX, INT_MAX,
 			  si->n,
 			  &w, &h);
+    /* DBG(("scanstring_fn: -\n")); */
     if (!e)
     {
 	si->w += w;
@@ -685,6 +714,9 @@ void webfont_set_wide_format(int index)
 	2,			/* jis */
 	4,			/* korean */
     };
+
+    /*RENDBG(("webfont_set_wide_format: index %d\n", index));*/
+    
     _swix(Font_WideFormat, _INR(0,1), webfonts[index].handle, format[config_encoding_internal]);
 }
 

@@ -6338,6 +6338,8 @@ static BOOL fe_initialise(void)
     plugin_list_read_file();
     hotlist_init();
 
+    keywatch_from_handset = config_mode_keyboard == 0;
+    
     /* init toolbar state using the buttons field of config */
     user_status_open = config_display_control_buttons;
     
@@ -6436,9 +6438,6 @@ int __root_stack_size = 4*1024;
 /* extern int disable_stack_extension; */
 #endif
 
-#undef DBG
-#define DBG(a) usrtrc(a) 
-
 int main(int argc, char **argv)
 {
     int init_ok;
@@ -6479,17 +6478,12 @@ int main(int argc, char **argv)
 /*   Trace_Stacker_SetOutputFunction((Trace_Stacker_outputfn)vfdbg, db_sess); */
 #endif
     
-    DBG(("main\n"));
-
     init_usrtrc();
-
-    DBG(("main0\n"));
 
     progname = argv[0];
     argv++;
     argc--;
 
-    DBG(("main1\n"));
 #if STBWEB_ROM
     use_toolbox = TRUE;
 #else
@@ -6499,12 +6493,9 @@ int main(int argc, char **argv)
     }
 #endif
 
-    DBG(("main2\n"));
     os_cli("pointer 0");
 
-    DBG(("fe_initialise+\n"));
     init_ok = fe_initialise();
-    DBG(("fe_initialise-\n"));
     
     if (init_ok)
     {

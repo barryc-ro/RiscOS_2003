@@ -405,10 +405,14 @@ static void misc_event_handler(int event, fe_view v)
 
     case fevent_SCALING_ON:
 	fe_scaling_set(1);
-	break;
+	break;  
 
     case fevent_SPECIAL_SELECT:
 	fe_special_select(v);
+	break;
+
+    case fevent_SAVE_TEXT:
+	fe_save_text(v);
 	break;
     }
 }
