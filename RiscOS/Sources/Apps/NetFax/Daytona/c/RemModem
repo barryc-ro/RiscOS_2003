@@ -2,10 +2,28 @@
  * RemModem.c - Remote modem (remote fax machine, Daytona or ISP) state machine
  *
  * Author: Ben Laughton
- * History: 1997-07-20: BAL: created
- *          1997-08-01: MGR: revised
- *          1997-09-26: SBF: revised further
- *          1998-02-20: SBF: added PPP timeout code
+ * History:
+ *
+ * 1997-07-20: BAL
+ * Created.
+ *
+ * 1997-08-01: MGR
+ * Revised.
+ *
+ * 1997-09-26: SBF
+ * Revised further.
+ *
+ * 1998-02-20: SBF
+ * Added PPP timeout code.
+ *
+ * 1998-03-03: BAL
+ * Fixed bugs in PPP timeout code.  If you got unlucky then the PPP connection
+ * could succeed, but then timeout just afterwards.  Also, If PPP did timeout
+ * it would:
+ * a) Try to start the answer script again immediately without trying to hangup
+ *    first.
+ * b) Not reset the 'poll PPP' flag.
+ * c) Get stuck in the 'PPP connecting' state.
  */
 
 
@@ -740,7 +758,7 @@ static _kernel_oserror *incoming_rx_connected (const int input,
 
         case RX_RM_HANGUP:
             e = dialler_start_hangup_script ();
-			StateKicker_SendMessage(Screen_StateMachine, RM_SC_INCOMING_COMPLETE, NULL);	/* terminate incoming call animation */
+            StateKicker_SendMessage(Screen_StateMachine, RM_SC_INCOMING_COMPLETE, NULL);	/* terminate incoming call animation */
             ActiveLight_Off();
             *state = Incoming_RxFinished; /*@@ Must be careful not to leave script running if error */
             /*RCM says: RM_RX_GOING_IDLE will be issued by Incoming_RxFinished*/
@@ -1128,12 +1146,11 @@ static _kernel_oserror *outgoing_ppp_connecting (const int input,
 
     switch (input)
     {
-#if 1
         case RM_RM_POLL_PPP:
         {
-            int ppp_state;
-            static int timeout_set = 0;
-            static int ppp_timeout = 0;
+            int         ppp_state;
+            static int  timeout_set = 0;
+            static int  ppp_timeout = 0;
 
             if (!timeout_set)
             {
@@ -1146,55 +1163,46 @@ static _kernel_oserror *outgoing_ppp_connecting (const int input,
             e = get_ppp_state (&ppp_state);
             if (e == NULL && ppp_state == 1)
             {
-                /* IP layer is up */
+                /* PPP connection established */
+
                 timeout_set = 0; /* reset timeout flag for next time */
                 ppp_poll_status = 0;
-               	ActiveLight_On();
+                ActiveLight_On();
                 StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_TXCONNECTED, NULL);
+
                 *state = Outgoing_TxConnected;
             }
-
-            /* Timeout (failure) condition; the failure is presumed identical to a Dialler failure, so the code is the
-               same as for the dial failure above */
-            if (clock() > ppp_timeout)
+            else if (clock() > ppp_timeout)
             {
-              /* Reset timeout flag */
-              timeout_set = 0;
+                /* PPP connection timedout */
 
-              /* Report error */
-              RemModem_SendRCError(RemXfer_StateMachine, RM_RX_ERROR, "PPP connection timed out", PPP_Connection_Error);
-
-              /* Reset remote modem to known state - ready to answer incoming call */
-              e = RemoteModem_ResetModem();
-              e = dialler_start_answer_script (1,    /* force modem reset before executing script */
-                                               answer_script,
-                                               fax_hangup_script,
-                                               remote_modem_data->serial_input_stream,
-                                               remote_modem_data->serial_output_stream);
-
-              /* Tell RemXfer & Screen about the failure */
-              StateKicker_SendMessage(RemXfer_StateMachine, RM_RX_GOING_IDLE, NULL);
-              StateKicker_SendMessage(Screen_StateMachine, RM_SC_DIAL_COMPLETE, NULL);
-            }
-            break;
-        }
-#else
-        case RM_RM_POLL_PPP:
-        {
-            int ppp_state;
-
-            e = get_ppp_state (&ppp_state);
-            if (e == NULL && ppp_state == 1)
-            {
-                /* IP layer is ip */
+                /* Reset timeout flag */
+                timeout_set = 0;
                 ppp_poll_status = 0;
-               	ActiveLight_On();
-                StateKicker_SendMessage (RemXfer_StateMachine, RM_RX_TXCONNECTED, NULL);
-                *state = Outgoing_TxConnected;
+
+                /* Although PPP has timedout we are still connected */
+                e = dialler_start_hangup_script ();
+
+                /* Report error */
+                RemModem_SendRCError(RemXfer_StateMachine, RM_RX_ERROR, "PPP connection timed out", PPP_Connection_Error);
+
+                /* Tell RemXfer & Screen about the failure */
+                StateKicker_SendMessage(RemXfer_StateMachine, RM_RX_GOING_IDLE, NULL);
+                StateKicker_SendMessage(Screen_StateMachine, RM_SC_DIAL_COMPLETE, NULL);
+
+                ActiveLight_Off();
+
+                *state = Outgoing_TxFinished;
+            }
+            else
+            {
+                /* PPP in process of connecting */
+
+                *state = Outgoing_PPPConnecting;
             }
             break;
         }
-#endif
+
         default:
             *state = Outgoing_PPPConnecting;
             break;
