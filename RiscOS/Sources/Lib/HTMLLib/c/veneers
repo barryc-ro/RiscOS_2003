@@ -196,12 +196,9 @@ HStream *HtmlGetStream(void *streamtok, char **document, int size, unsigned int 
   utf_chunk_start = st->utf_ptr - st->utf_buffer;
   old_chars_read = st->chars_read;
 
-  /* Yuckery! Give us 16K of free space by shifting flex stuff, then lock the
-     flex stuff */
-  oldflexstate = flex_set_budge(1);
-  free(malloc(16384));
-  flex_set_budge(0);
-  
+  /* Turn flex budging off to prevent grief as we read the source document */
+  oldflexstate = flex_set_budge(0);
+
 retry_with_more_memory:
 
   n = st->encoding->read(st->encoding, ucs_out, *document + st->sizesofar, size - ntotal, st);
@@ -229,8 +226,6 @@ retry_with_more_memory:
 /* Set up our environment first */
   __html_set_memory_context(st->memcontext);
 
-  current=st->Stream;
-
   doc = start = st->utf_buffer;
   st->sizesofar += n;
   end = st->utf_ptr;
@@ -240,16 +235,7 @@ retry_with_more_memory:
   if (st->type == TYPE_HTMLFILE) {
 /* HTML Parser */
 
-    if (current == NULL) {
-      current=return_val=__html_stream_parse(st, &doc, st->url, size, NULL);
-      if (current)
-          firsttoken=0;
-      /*if (current) flags |= HTML_GOT_MORE;*/
-    }
-    else {
-      while (current->next != NULL) current=current->next;
-      return_val=current;
-    }
+    return_val=current=st->current;
 
     while (doc < end && *doc != '\0') {
       char *olddoc = doc;
@@ -269,7 +255,10 @@ retry_with_more_memory:
          * also table-stuff needs a bit of context in order to operate properly
          */
         table_prev_info realcurrent;
-        realcurrent=table_skip_current(current);
+
+        realcurrent = __html_find_current_object(st, current);
+
+        realcurrent=table_skip_current(realcurrent);
 
         st->isendtag=0;
         if (realcurrent.prevnextptr != NULL)
@@ -358,17 +347,22 @@ retry_with_more_memory:
     if (st->usingframes)
       StripNoframes(return_val);
 
+    if (return_val)
+    {
+        current = return_val;
+        while (current->next)
+            current = current->next;
 
+        st->current = current;
+    }
   }
   else { /* plain text */
-    table_skip_current(NULL);
-    if (current == NULL) {
-      current=return_val=__html_return_text_token(doc,size);
-    }
-    else {
-      while (current->next != NULL) current=current->next;
-      return_val=current->next=__html_return_text_token(doc,size);
-    }
+    table_prev_info dummy = { NULL, NULL };
+    table_skip_current(dummy);
+    return_val=__html_return_text_token(doc,size);
+    if (st->current)
+      st->current->next = return_val;
+    st->current = return_val;
     /*if (return_val) flags |= HTML_GOT_MORE;*/
     doc+=size;
   }
@@ -616,6 +610,7 @@ static int count_utf(void *h, UCS4 c)
     #ifdef UNIFONT
     *ip -= UTF8_codelen(c);
     #else
+    NOT_USED(c);
     *ip -= 1;
     #endif
 
