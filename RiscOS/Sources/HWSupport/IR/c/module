@@ -30,7 +30,17 @@
 
 21/7/97   CP   remove pending callbacks when module exits.
 
-2.04 released.
+               2.04 released.
+
+30/7/97   CP   Moved where Callback_ActiveG is changed slightly to minimise
+               chances of callback stacking.
+
+6/8/97    CP   Changed callevery handler so that STBState_Standby is called
+               for _every_ Standby press! (Previously, the module expected a
+               total reset, so never bothered to scan for a second, "turn
+               back on" Standby keypress.... :-(  ).  IR micro does strange
+               things too...
+
  */
 
 #include <stdio.h>
@@ -251,6 +261,8 @@ void IR_modfinal (void)
     regs.r[0] = (int) IR_callback_entry;
     regs.r[1] = (int) private_word_pointer;
     _kernel_swi(OS_RemoveCallBack, &regs, &regs);
+
+    callback_activeG = FALSE;
   }
 }
 
@@ -262,6 +274,9 @@ _kernel_oserror *IR_modinit (char *cmd_tail, int podule_base, void *pw)
   int ir_offset;
 
   private_word_pointer = pw;
+
+     _swix(OS_WriteC, _IN(0), 22);
+     _swix(OS_WriteC, _IN(0), 12);
 
 #ifdef DEBUG
 #  ifdef DEBUGFILE
@@ -314,13 +329,18 @@ _kernel_oserror *IR_modinit (char *cmd_tail, int podule_base, void *pw)
   regs.r[1] = (int) IR_callevery_entry ;
   regs.r[2] = (int) private_word_pointer ;
   if ((e = _kernel_swi (OS_CallEvery, &regs, &regs)) != NULL)
+  {
     return (e) ;
+  }
 
   regs.r[0] = KeyV ;
   regs.r[1] = (int) IR_keyv_entry ;
   regs.r[2] = (int) private_word_pointer ;
   if ((e = _kernel_swi (OS_Claim, &regs, &regs)) != NULL)
+  {
     return (e);
+  }
+
   on_keyv = 1 ;
 
   regs.r[0] = 0 ; /* kbd present */
@@ -389,11 +409,11 @@ void IR_service_handler (int service_number, _kernel_swi_regs *r, void *pw)
     if(callback_activeG == FALSE)
     {
       /* no callback pending, so set one up */
+       callback_activeG = TRUE;
+
        regs.r[0] = (int) IR_callback_entry;
        regs.r[1] = (int) private_word_pointer;
        _kernel_swi(OS_AddCallBack, &regs, &regs);
-
-       callback_activeG = TRUE;
     }
 
     r->r[1] = 0;	/* Claim the service */
@@ -432,63 +452,123 @@ int IR_callevery_handler (_kernel_swi_regs *r, void *pw)
   /* Read twice to ensure value has settled */
   while ( (code = IR_READ) != IR_READ );
 
-  _kernel_swi (OS_ReadMonotonicTime, &regs, &regs) ;
 
-  if (code == STANDBY_CODE && last_code != STANDBY_CODE)
+  _kernel_swi (OS_ReadMonotonicTime, &regs, &regs);
+
+
+/* 11/8/97:CP:Standby multiple keypress fix
+
+IR micro does strange things with standby mode - it has its own state
+machine.  When standby is first pressed, it will send 8C from then on, until
+it is pressed again, when it will send a continuous stream of 0C until the
+"awake" line is asserted (toggled?).
+
+So watch for byte xC, and process that based on the following (think about
+the key sequence xx xx xx 8C 8C 8C 8C 0C 0C 0C ):
+                         ^           ^
+                         |           |
+                       stdby       stdby
+
+
+if (code toggle bit set) and (last_code != Standby code (0C))
+{
+  standby just pressed; call STBState_Standby, set last_code to Standby code
+}
+
+if (code toggle bit set) and (last_code == Standby)
+{
+   standby still active; do nothing
+}
+
+if (code toggle bit clear) and (last_code == Standby)
+{
+  standby over - call STBState_Standby
+}
+
+
+
+*/
+  if( (code & ~TOGGLE_BIT) == 0xc)
   {
-    _kernel_swi(STBState_State, &regs, &regs);
-    if ((regs.r[0] == STATE_ON) || (regs.r[0] == STATE_FATAL) || (regs.r[0] == STATE_INIT))
+    char dummy;
+
+    printf("Received standby button %x\n", code);
+    gets(&dummy);
+
+    if( (  (code & TOGGLE_BIT) && (last_code != STANDBY_CODE) ) ||
+        ( !(code & TOGGLE_BIT) && (last_code == STANDBY_CODE) ) )
     {
 
-      /* 16/7/97:CP:added goof-proofing around callback */
-      if(callback_activeG == FALSE)
-      {
-        /* no callback pending, so set one up */
-         regs.r[0] = (int) IR_callback_entry;
-         regs.r[1] = (int) private_word_pointer;
-         _kernel_swi(OS_AddCallBack, &regs, &regs);
+       printf("Standby SWI called\n");
+       gets(&dummy);
 
-         callback_activeG = TRUE;
+   /* 16/7/97:CP:added goof-proofing around callback */
+       if(callback_activeG == FALSE)
+       {
+         /* no callback pending, so set one up */
+          callback_activeG = TRUE;
+
+          regs.r[0] = (int) IR_callback_entry;
+          regs.r[1] = (int) private_word_pointer;
+
+          _kernel_swi(OS_AddCallBack, &regs, &regs);
+       }
+
+    }
+
+    last_code = code;
+  }
+
+
+
+  else
+  {
+      /* Clear toggle bit */
+      code &= ~TOGGLE_BIT;
+
+      if (code != NULL_CODE)
+      {
+        switch (IRmappings[code].type)
+        {
+          case KEY:
+            if (code != last_code)
+            {
+
+              fake_key (IRmappings[last_code].action.key, KEYUP) ;
+
+              if (IRmappings[last_code].modifier)
+              {
+                fake_key (IRmappings[last_code].modifier, KEYUP) ;
+              }
+
+              if (IRmappings[code].modifier)
+              {
+                fake_key (IRmappings[code].modifier, KEYDOWN) ;
+              }
+
+              fake_key (IRmappings[code].action.key, KEYDOWN) ;
+
+            }
+            break ;
+
+        } /* Switch */
+
+        last_code = code ;
+        last_time = regs.r[0] ;
       }
 
-      last_code = STANDBY_CODE;
-    }
-  }
+      else if (last_code != NULL_CODE)
+      {
+         fake_key (IRmappings[last_code].action.key, KEYUP) ;
 
-  /* Clear toggle bit */
-  code &= ~TOGGLE_BIT;
+         if (IRmappings[last_code].modifier)
+         {
+           fake_key (IRmappings[last_code].modifier, KEYUP) ;
+         }
 
-  if (code != NULL_CODE)
-  {
-    switch (IRmappings[code].type)
-    {
-      case KEY:
-        if (code != last_code)
-        {
-          fake_key (IRmappings[last_code].action.key, KEYUP) ;
-          if (IRmappings[last_code].modifier)
-            fake_key (IRmappings[last_code].modifier, KEYUP) ;
-
-          if (IRmappings[code].modifier)
-            fake_key (IRmappings[code].modifier, KEYDOWN) ;
-          fake_key (IRmappings[code].action.key, KEYDOWN) ;
-
-        }
-        break ;
-
-    } /* Switch */
-
-    last_code = code ;
-    last_time = regs.r[0] ;
-  }
-  else if (last_code != NULL_CODE)
-  {
-    fake_key (IRmappings[last_code].action.key, KEYUP) ;
-    if (IRmappings[last_code].modifier)
-      fake_key (IRmappings[last_code].modifier, KEYUP) ;
-
-    last_code = NULL_CODE;
-    last_time = -1 ;
+        last_code = NULL_CODE;
+        last_time = -1 ;
+      }
   }
 
 #ifdef MOUSE
