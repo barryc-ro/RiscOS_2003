@@ -53,19 +53,3 @@ ${TARGET}: ${SOURCE}
         ${AS} ${ASFLAGS} ${SOURCE}
 
 # Dynamic dependencies:
-rm.Jordan.RTCAdjust: Hdr:ListOpts
-rm.Jordan.RTCAdjust: Hdr:Macros
-rm.Jordan.RTCAdjust: Hdr:System
-rm.Jordan.RTCAdjust: Hdr:SWIs
-rm.Jordan.RTCAdjust: Hdr:CPU.Generic26
-rm.Jordan.RTCAdjust: Hdr:IO.GenericIO
-rm.Jordan.RTCAdjust: Hdr:RISCOS
-rm.Jordan.RTCAdjust: Hdr:CMOS
-rm.Jordan.RTCAdjust: Hdr:ModHand
-rm.Jordan.RTCAdjust: Hdr:Services
-rm.Jordan.RTCAdjust: Hdr:Proc
-rm.Jordan.RTCAdjust: Hdr:FSNumbers
-rm.Jordan.RTCAdjust: Hdr:NewErrors
-rm.Jordan.RTCAdjust: Hdr:IIC
-rm.Jordan.RTCAdjust: Hdr:ExtraLong
-rm.Jordan.RTCAdjust: Hdr:MsgTrans
