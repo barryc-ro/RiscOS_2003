@@ -20,8 +20,10 @@ DBG_MODULE = rm.${COMPONENT}D
 #
 # -DDNS_SUPPORT_ADDRESS_TO_NAME     - include the domain name retrieval code
 # -DDNS_SUPPORT_NAME_TO_ADDRESS     - include the name->IP address code
+# -DINHIBIT_AUTO_START              - wait for a prod before doing anything
+# -DINHIBIT_CMOS_EDITOR             - stop editor running (for STB400)
 #
-# Neither are included by default.
+# None of these are included by default.
 
 
 #

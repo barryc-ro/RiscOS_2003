@@ -1,7 +1,7 @@
 /*
  * IPConfig (module.c)
  *
- * Copyright (C) Element 14 Ltd. 1999
+ * Copyright (C) Pace Micro Technology plc. 2000
  *
  */
 
@@ -13,6 +13,9 @@
 
 #include "kernel.h"
 #include "swis.h"
+
+#include "Global/Services.h"
+#include "Global/RISCOS.h"
 
 #include "sys/dcistructs.h"
 #include "sys/types.h"
@@ -45,19 +48,6 @@ static void read_device_name(char *buf, struct ether_addr *macadr);
  */
 static void establish_addresses(void);
 
-
-/* These services do not appear to be declared in any C header files */
-#ifdef TRACE
-#  ifndef Service_Reset
-#    define Service_Reset 0x27
-#  endif
-#  ifndef Service_FSRedeclare
-#    define Service_FSRedeclare 0x40
-#  endif
-#endif
-#ifndef Service_PostInit
-#  define Service_PostInit 0x73
-#endif
 
 /* TRACE builds have several differences.  They claim FSCV and they contain a
  * handful of useful *-commands for debugging - notably *IPConfig_Log to show
@@ -99,9 +89,6 @@ static int ifcnt = 0;
  * call
  */
 static volatile int fscontrolv_claimed = 0;
-enum {
-	FSControlV  = 15
-};
 
 static void claim_fscv(void)
 {
@@ -109,7 +96,7 @@ static void claim_fscv(void)
 		#ifdef TRACE
 		module_printf(stderr, "Claiming FSCV\n");
 		#endif
-		fscontrolv_claimed = !_swix(OS_Claim, _INR(0,2), FSControlV, fsboot, module_wsp);
+		fscontrolv_claimed = !_swix(OS_Claim, _INR(0,2), FSCV, fsboot, module_wsp);
 	}
 }
 
@@ -119,7 +106,7 @@ static void release_fscv(void)
 		#ifdef TRACE
 		module_printf(stderr, "Releasing FSCV\n");
 		#endif
-		fscontrolv_claimed = !!_swix(OS_Release, _INR(0,2), FSControlV, fsboot, module_wsp);
+		fscontrolv_claimed = !!_swix(OS_Release, _INR(0,2), FSCV, fsboot, module_wsp);
 	}
 }
 #endif
@@ -207,6 +194,31 @@ static _kernel_oserror *module_set_command_options(const char *cmd_tail)
 	return 0;
 }
 
+static int module_sysvar_status(void)
+{
+	return (cli_state & (flag_SYSVAR|flag_IGNORE_VAR)) == flag_SYSVAR;
+}
+
+static int module_check_sysvar(void)
+{
+	if (getenv(SYSVAR_INHIBIT_CONFIG)) {
+		module_set_flags(flag_SYSVAR);
+	}
+
+	return module_sysvar_status();
+}
+
+static void module_init_sysvar(void)
+{
+#ifdef INHIBIT_AUTO_START
+        if (!getenv(SYSVAR_INHIBIT_CONFIG)) {
+                _kernel_setenv(SYSVAR_INHIBIT_CONFIG, "(automatically set by " Module_Title ")");
+        }
+#endif
+        module_check_sysvar();
+}
+
+
 /* ========== Configuration editor veneer code ========== */
 
 /* module_start_editor guards the only entry point into editconfig.c.  It clears the
@@ -238,8 +250,10 @@ static void module_start_editor(void *pw)
 	}
 
 	module_clear_flags(flag_RUN_EDITOR);
+#ifndef INHIBIT_CMOS_EDITOR
 	editconfig_service(pw, &macadr);
-	/*NOTREACHED*/
+        /*NOTREACHED*/ /* iff INHIBIT_CMOS_EDITOR is unset and not a trace build */
+#endif
 }
 
 
@@ -281,7 +295,12 @@ static void setcallback(void)
 {
 	if (callbackflag == 0) {
 		int opts = module_read_command_options();
-		if ((ifcnt == 0 && !(opts & flag_NO_DO_BOOT)) || (opts & flag_FORCE_BOOT)) {
+		if (module_sysvar_status()) {
+			#ifdef TRACE
+			module_printf(stderr, Module_Title ": (setcallback) " SYSVAR_INHIBIT_CONFIG " set\n");
+			#endif
+		}
+		else if ((ifcnt == 0 && !(opts & flag_NO_DO_BOOT)) || (opts & flag_FORCE_BOOT)) {
 			if (_swix(OS_AddCallBack, _INR(0,1), callb_entry, module_wsp) == NULL) {
 				#ifdef TRACE
 				module_printf(stderr, Module_Title ": (setcallback) just set a callback\n");
@@ -391,6 +410,8 @@ static _kernel_oserror *module_init_sub(const char *cmd_tail)
 	if (e != NULL) {
 		return e;
 	}
+
+        module_init_sysvar();
 
 	opts = module_read_command_options();
 	if (opts<0) {
@@ -824,7 +845,7 @@ void module_service(int sn, _kernel_swi_regs *r, void *pw)
 			/* An interface has just gone UP, so set the callback to investigate
 			 * new status of modules.
 			 */
-			if (r->r[2] == 0 && ifcnt == 0) {
+			if (r->r[2] == 0 && ifcnt == 0 && !module_check_sysvar()) {
 				setcallback();
 			}
 			break;
@@ -833,7 +854,10 @@ void module_service(int sn, _kernel_swi_regs *r, void *pw)
 			release_fscv();
 			claim_fscv();
 			#endif
-			if (module_read_command_options() & flag_RUN_EDITOR) {
+			if (module_check_sysvar()) {
+				/* Inhibit behaviour if the system variable exists */
+			}
+			else if (module_read_command_options() & flag_RUN_EDITOR) {
 				module_start_editor(pw);
 				/* will not return in non-TRACE builds */
 			}
@@ -871,14 +895,22 @@ void module_service(int sn, _kernel_swi_regs *r, void *pw)
 	}
 }
 
-#ifdef TRACE
-/* All *-commands are present only in non-TRACE builds. */
 _kernel_oserror *module_commands(const char *arg_string, int argc, int cmd_no, void *pw)
 {
 	(void) arg_string;
 	(void) argc;
+	(void) pw;
 
 	switch (cmd_no) {
+		default:
+			break;
+		case CMD_IPConfig_Start:
+			/* Examine our status and start now */
+			module_set_flags(flag_IGNORE_VAR);
+			setcallback();
+			break;
+#ifdef TRACE
+		/* All the other *-commands are present only in non-TRACE builds. */
 		case CMD_IPConfig_Configure:
 			module_start_editor(pw);
 			break;
@@ -899,13 +931,11 @@ _kernel_oserror *module_commands(const char *arg_string, int argc, int cmd_no, v
 		case CMD_IPConfig_Log:
 			module_printf(stderr, NULL);
 			break;
-		default:
-			break;
+#endif
 	}
 
 	return 0;
 }
-#endif
 
 #ifdef TRACE
 /* This is the routine called when the kernel boots the current filing system
