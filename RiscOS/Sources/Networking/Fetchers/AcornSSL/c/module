@@ -135,6 +135,7 @@ _kernel_oserror *module_init(CMHG_CONST char *cmd_tail, int podule_base, void *p
 	e = _swix(ResourceFS_RegisterFiles, _IN(0), messages_file());
         #endif
 	if (e == NULL) {
+	        int kill_mem = 0;
 		if (getenv(Module_Title "$Path")) {
 			e = messages_file_open(Module_Title ":Messages");
 		}
@@ -143,7 +144,10 @@ _kernel_oserror *module_init(CMHG_CONST char *cmd_tail, int podule_base, void *p
 		}
 
 		if (e == NULL) e = memory_initialise();
-		if (e == NULL) e = acornssl_initialise();
+		if (e == NULL) {
+		        kill_mem = 1;
+		        e = acornssl_initialise();
+		}
 
 		/* Must resend service call on a callback because HTTP module cannot talk to us
 		 * whilst out init code is still executing, so the checks it is carrying out for
@@ -155,6 +159,7 @@ _kernel_oserror *module_init(CMHG_CONST char *cmd_tail, int podule_base, void *p
 		#ifndef ROM
 		if (e != NULL) (void) _swix(ResourceFS_DeregisterFiles, _IN(0), messages_file());
 		#endif
+		if (e != NULL && kill_mem) memory_finalise();
 	}
 
 
@@ -207,15 +212,18 @@ _kernel_oserror *module_kill(int fatal, int podule, void *pw)
 	if(!__ROM) _swix(0xa2c41, 0);
 	#endif
 
+	memory_finalise();
 	return NULL;
 }
 
 
 #ifdef TRACE
-static const char *swinames[] = {
-        	"CS", "DS",
-                "Ioctl", "Socket", "Connect", "Shutdown", "Close", "Getsockopt", "Write", "Recv"
-};
+static const char *swiname(int swi_offset)
+{
+        static char buffer[64];
+	_swix(OS_SWINumberToString, _INR(0,2),HTTPS_00 + swi_offset, buffer, sizeof(buffer));
+	return buffer;
+}
 #endif
 
 /*************************************************************/
@@ -236,12 +244,18 @@ _kernel_oserror *swi_handler(int swi_offset, _kernel_swi_regs *r, void *pw)
 
 	(void) pw;
 
-	DEBUG(("SWI HTTPS_%s called.\n", swi_offset>=((sizeof(swinames)/sizeof(char*)))?"UNKNOWN":swinames[swi_offset]));
+	DEBUG(("SWI %s called.\n", swiname(swi_offset)));
 
 	if (swi_offset == (HTTPS_Socket - HTTPS_00)) {
+	        const char *const cfile = (r->r[0] == PF_INET) ? NULL : (const char *) r->r[1];
+	        const char *const kfile = (r->r[0] == PF_INET) ? NULL : (const char *) r->r[2];
+
 	        DEBUG(("HTTPS_Socket called.  Creating new session ..\n"));
-	        s = new_session();
+	        DEBUG(("  Certificate file: %s\n", cfile ? cfile : "<<NONE SET>>"));
+	        DEBUG(("  Key file: %s\n", kfile ? kfile : "<<NONE SET>>"));
+	        s = new_session(cfile, kfile);
 		if (s == NULL) {
+		        DEBUG(("Unable to create a new session\n"));
 		        return make_error(HTTPS_ERROR_BAD_SESSION, 0);
 		}
 	        s->id = (unsigned) s;
@@ -355,10 +369,11 @@ _kernel_oserror *return_error(int status_code)
 /* RISC OS 3.1 SVC mode realloc is broken, so we must provide our own */
 void *module_realloc(void *ptr, size_t size)
 {
+	if (!clibrary_realloc_routine_is_buggy) return realloc(ptr, size);
+
         #ifdef TRACE
         protocol_debug("module_realloc(%p, %d)\n", ptr, size);
         #endif
-	if (!clibrary_realloc_routine_is_buggy) return realloc(ptr, size);
 
         if (ptr == NULL) {
                 return malloc(size);

@@ -18,6 +18,8 @@
 #include "sys/errno.h"
 #include "SSLHdr.h"
 #include "utils.h"
+#include "bio.h"
+#include "err.h"
 #include "module.h"
 #include "sys/types.h"
 #include "socklib.h"
@@ -43,8 +45,18 @@ void acornssl_init_mem_functions(enum mem_scheme m)
 #define SHUTDOWN(s) {shutdown(s,2);socketclose(s);}
 
 static SSL_METHOD *meth = NULL;
-static BIO *outputsink;
+extern BIO *outputsink;
+BIO *outputsink;
 
+static void print_stuff(BIO *bio, SSL *s, int full);
+#ifdef TRACE
+static void acornssl_TRACE_dump_ciphers(void);
+#endif
+
+static void set_cipher_list(SSL_CTX *ctx)
+{
+	SSL_CTX_set_cipher_list(ctx, "!ADH:!HIGH:!MEDIUM:+EXP:RC4+RSA:RC2+RSA:LOW:+SSLv2");
+}
 
 
 int acornssl_ioctl(Session *_s, unsigned long op, void *data)
@@ -149,6 +161,8 @@ int acornssl_shutdown(Session *_s, int how)
 int acornssl_close(Session *_s)
 {
 	/* _s has already been validated by the SWI veneers */
+	print_stuff(outputsink, _s->con, 1);
+	BIO_flush(outputsink);
 	kill_session(_s);
 	return 0;
 }
@@ -243,6 +257,11 @@ int acornssl_write(Session *_s, const void *ptr, size_t amt)
 				/* Internal error */
 				DEBUG(("SSL_ERROR_SSL\n"));
 				errno = ECONNABORTED;
+#ifdef TRACE
+				ERR_print_errors(outputsink);
+				print_stuff(outputsink, con, 1);
+				BIO_flush(outputsink);
+#endif
 				return -1;
 		}
 	}
@@ -378,6 +397,11 @@ int acornssl_recv(Session *_s, void *ptr, size_t max, int flags)
 				/* Internal error */
 				DEBUG(("R SSL_ERROR_SSL\n"));
 				errno = ECONNABORTED;
+#ifdef TRACE
+				ERR_print_errors(outputsink);
+				print_stuff(outputsink, con, 1);
+				BIO_flush(outputsink);
+#endif
 				return -1;
 		}
 	}
@@ -403,27 +427,132 @@ void acornssl_destroy_session(Session *ses)
 	if (ses->s != -1) SHUTDOWN(ses->s);
 }
 
-int acornssl_init_session(Session *ses)
+
+#ifdef DOING_CERTS
+/* should be X509 * but we can just have them as char *. */
+static int acornssl_verify_callback(int ok, X509_STORE_CTX *ctx)
 {
+	char buf[256];
+	X509 *err_cert;
+	int err,depth;
+
+	err_cert=X509_STORE_CTX_get_current_cert(ctx);
+	err=	X509_STORE_CTX_get_error(ctx);
+	depth=	X509_STORE_CTX_get_error_depth(ctx);
+
+	X509_NAME_oneline(X509_get_subject_name(err_cert),buf,256);
+	BIO_printf(bio_err,"depth=%d %s\n",depth,buf);
+	if (!ok) {
+		BIO_printf(bio_err,"verify error:num=%d:%s\n",err,
+			X509_verify_cert_error_string(err));
+		if (verify_depth >= depth) {
+			ok=1;
+			verify_error=X509_V_OK;
+		}
+		else {
+			ok=0;
+			verify_error=X509_V_ERR_CERT_CHAIN_TOO_LONG;
+		}
+	}
+	switch (ctx->error) {
+	case X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT:
+		X509_NAME_oneline(X509_get_issuer_name(ctx->current_cert),buf,256);
+		BIO_printf(bio_err,"issuer= %s\n",buf);
+		break;
+	case X509_V_ERR_CERT_NOT_YET_VALID:
+	case X509_V_ERR_ERROR_IN_CERT_NOT_BEFORE_FIELD:
+		BIO_printf(bio_err,"notBefore=");
+		ASN1_UTCTIME_print(bio_err,X509_get_notBefore(ctx->current_cert));
+		BIO_printf(bio_err,"\n");
+		break;
+	case X509_V_ERR_CERT_HAS_EXPIRED:
+	case X509_V_ERR_ERROR_IN_CERT_NOT_AFTER_FIELD:
+		BIO_printf(bio_err,"notAfter=");
+		ASN1_UTCTIME_print(bio_err,X509_get_notAfter(ctx->current_cert));
+		BIO_printf(bio_err,"\n");
+		break;
+		}
+	BIO_printf(bio_err,"verify return:%d\n",ok);
+	return(ok);
+}
+#endif
+
+#ifdef DOING_CERTS
+int set_cert_stuff(SSL_CTX *ctx, const char *cert_file, const char *key_file)
+{
+	if (cert_file != NULL) {
+		SSL *ssl;
+		X509 *x509;
+
+		if (SSL_CTX_use_certificate_file(ctx,cert_file,	SSL_FILETYPE_PEM) <= 0) {
+			BIO_printf(bio_err,"unable to set certificate file\n");
+			ERR_print_errors(bio_err);
+			return(0);
+		}
+		if (key_file == NULL) key_file=cert_file;
+		if (SSL_CTX_use_PrivateKey_file(ctx,key_file, SSL_FILETYPE_PEM) <= 0) {
+			BIO_printf(bio_err,"unable to set public key file\n");
+			ERR_print_errors(bio_err);
+			return(0);
+		}
+
+		ssl=SSL_new(ctx);
+		x509=SSL_get_certificate(ssl);
+
+		if (x509 != NULL) {
+			EVP_PKEY_copy_parameters(X509_get_pubkey(x509),
+				SSL_get_privatekey(ssl));
+		}
+		SSL_free(ssl);
+
+		/* If we are using DSA, we can copy the parameters from
+		 * the private key */
+
+
+		/* Now we know that a key and cert have been set against
+		 * the SSL context */
+		if (!SSL_CTX_check_private_key(ctx)) {
+			BIO_printf(bio_err,"Private key does not match the certificate public key\n");
+			return(0);
+		}
+	}
+	return(1);
+}
+#endif
+
+
+int acornssl_init_session(Session *ses, const char *cert_file, const char *key_file)
+{
+        DEBUG(("acornssl_init_session: Initialising session\n"));
+
 	ses->verify_depth = 0;
 	ses->verify_error = X509_V_OK;
 	ses->ctx = SSL_CTX_new(meth);
-	if (ses->ctx == NULL) return 0;
-	/*SSL_CTX_set_verify(ctx, verify, verify_callback);*/
+	if (ses->ctx == NULL) {
+	        DEBUG(("acornssl_init_session: SSL_CTX_new failed\n"));
+	        return 0;
+	}
 	#ifdef DOING_CERTS
-	if (!set_cert_stuff(ses->ctx, NULL, NULL)) {
+	SSL_CTX_set_verify(ctx, verify, acornssl_verify_callback);
+	if (!set_cert_stuff(ses->ctx, cert_file, key_file)) {
 		SSL_CTX_free(ses->ctx);
 		ses->ctx = NULL;
 		return 0;
 	}
+	#else
+	(void) cert_file;
+	(void) key_file;
+	set_cipher_list(ses->ctx);
 	#endif
 
+        DEBUG(("acornssl_init_session: Loading verify locations and paths\n"));
 	if (!SSL_CTX_load_verify_locations(ses->ctx, NULL, NULL) ||
 			(!SSL_CTX_set_default_verify_paths(ses->ctx))) {
 		SSL_CTX_free(ses->ctx);
 		ses->ctx = NULL;
 		return 0;
 	}
+        DEBUG(("acornssl_init_session: SSL_new\n"));
 	ses->con = (SSL *) SSL_new(ses->ctx);
 	if (!ses->con) {
 		SSL_CTX_free(ses->ctx);
@@ -431,7 +560,8 @@ int acornssl_init_session(Session *ses)
 		return 0;
 	}
 
-	ses->s = socket(AF_INET, SOCK_STREAM, 0);
+        DEBUG(("acornssl_init_session: Creating the socket\n"));
+	ses->s = socket(PF_INET, SOCK_STREAM, 0);
 	if (ses->s < 0) {
 		SSL_free(ses->con);
 		SSL_CTX_free(ses->ctx);
@@ -455,10 +585,22 @@ _kernel_oserror *acornssl_initialise(void)
 {
 	SSLeay_add_ssl_algorithms();
 	SSL_load_error_strings();
+#ifdef TRACE
+	{
+	        FILE *f = fopen("parallel:", "wb");
+		if (f) outputsink = BIO_new_fp(f, BIO_NOCLOSE);
+		else if ((f = fopen("RAM:$.SSLDebug", "w")) != NULL) {
+			outputsink = BIO_new_fp(f, BIO_NOCLOSE);
+		}
+		else outputsink = BIO_new(BIO_s_null());
+	}
+#else
 	outputsink = BIO_new(BIO_s_null());
+#endif
 	if (outputsink == NULL) {
 		return make_error(HTTPS_ERROR_SSL_NO_INIT, 0);
 	}
+
 
 #if !defined(NO_SSL2) && !defined(NO_SSL3)
 	meth = SSLv23_client_method();
@@ -468,6 +610,9 @@ _kernel_oserror *acornssl_initialise(void)
 	meth = SSLv2_client_method();
 #endif
 
+#ifdef TRACE
+	acornssl_TRACE_dump_ciphers();
+#endif
 	return NULL;
 }
 
@@ -567,3 +712,32 @@ void acornssl_command_dump(Session *s, int full)
 		BIO_free(bio);
 	}
 }
+
+#ifdef TRACE
+static void acornssl_TRACE_dump_ciphers(void)
+{
+        SSL_CTX *ctx = SSL_CTX_new(SSLv23_client_method());
+	SSL *s;
+	STACK *sk;
+
+        if (!ctx) return;
+        /* String syntax in SSLeay:doc.ssl-ciph/d */
+	set_cipher_list(ctx);
+        BIO_printf(outputsink, ":: Cipher List:\n");
+        s = SSL_new(ctx);
+        if (s) {
+		char buf[256];
+                int i;
+                sk = SSL_get_ciphers(s);
+                for (i=0; i<sk_num(sk); i++) {
+                        BIO_puts(outputsink, SSL_CIPHER_description(
+                        	(SSL_CIPHER *) sk_value(sk, i),
+                                buf,256));
+                }
+                SSL_free(s);
+        }
+        SSL_CTX_free(ctx);
+        BIO_printf(outputsink, ":: End of Cipher list\n");
+        BIO_flush(outputsink);
+}
+#endif
